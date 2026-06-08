@@ -1,0 +1,11 @@
+description = "Run the Plan2Agent MVP harness on an idea or approved spec."
+prompt = """
+Use the Plan2Agent p2a-harness skill for the following input:
+
+{{args}}
+
+Rules:
+- Do not edit files.
+- Do not run mutating commands.
+- Produce spec, task graph, and review output only.
+"""

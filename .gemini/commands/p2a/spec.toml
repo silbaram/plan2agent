@@ -1,0 +1,8 @@
+description = "Create a Plan2Agent spec from intake output and answers."
+prompt = """
+Use the Plan2Agent p2a-spec skill for the following context:
+
+{{args}}
+
+Return product_spec_markdown, implementation_spec_markdown, spec_json, and open_decisions.
+"""

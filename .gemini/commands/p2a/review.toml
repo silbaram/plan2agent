@@ -1,0 +1,8 @@
+description = "Review Plan2Agent planning artifacts before implementation."
+prompt = """
+Use the Plan2Agent p2a-review skill for the following planning artifacts:
+
+{{args}}
+
+Return blocking issues, non-blocking risks, missing acceptance criteria, oversized tasks, dependency issues, and recommended changes.
+"""
