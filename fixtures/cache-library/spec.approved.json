@@ -1,7 +1,7 @@
 {
   "schema_version": "p2a.spec.v1",
-  "project_id": "p2a-cache",
-  "source_intake": "fixtures/p2a-cache/intake.answered.json",
+  "project_id": "cache-library",
+  "source_intake": "fixtures/cache-library/intake.answered.json",
   "product": {
     "problem": "Developers need a small embeddable cache library that provides predictable TTL expiration and LRU eviction without running a Redis server.",
     "target_users": [

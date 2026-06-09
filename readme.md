@@ -103,7 +103,7 @@ Fixtures, schemas, and checks:
 
 ```text
 fixtures/
-  p2a-cache/
+  cache-library/
     input.md
     intake.blocked.json
     intake.answered.json

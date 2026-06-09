@@ -1,4 +1,4 @@
-# Fixture: p2a-cache
+# Fixture: cache-library
 
 Idea: Redis처럼 TTL과 LRU eviction을 지원하는 embeddable in-memory cache library를 만들고 싶다.
 
