@@ -1,4 +1,4 @@
-description = "Run the Plan2Agent MVP harness on an idea or approved spec."
+description = "Run the gated Plan2Agent harness on an idea, answers, or approved spec."
 prompt = """
 Use the Plan2Agent p2a-harness skill for the following input:
 
@@ -7,5 +7,8 @@ Use the Plan2Agent p2a-harness skill for the following input:
 Rules:
 - Do not edit files.
 - Do not run mutating commands.
-- Produce spec, task graph, and review output only.
+- Follow the stage-to-subagent mapping in the skill.
+- Stop at intake if any needs_user_decision is open.
+- Stop before task graph unless spec_json.approval is approved and open_decisions is empty.
+- Return the named state sections required by the harness.
 """

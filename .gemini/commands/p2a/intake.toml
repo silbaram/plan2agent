@@ -1,8 +1,8 @@
-description = "Run Plan2Agent intake on a one-sentence idea."
+description = "Run Plan2Agent intake on a one-sentence idea or resume answered decisions."
 prompt = """
-Use the Plan2Agent p2a-intake skill for the following idea:
+Use the Plan2Agent p2a-intake skill for the following idea or resume context:
 
 {{args}}
 
-Return known facts, assumptions, clarification questions, and needs_user_decision.
+Return intake_json conforming to schemas/intake.schema.json and a table of open needs_user_decision items when blocked.
 """

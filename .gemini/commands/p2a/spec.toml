@@ -1,8 +1,8 @@
-description = "Create a Plan2Agent spec from intake output and answers."
+description = "Create a Plan2Agent product and implementation spec from answered intake."
 prompt = """
 Use the Plan2Agent p2a-spec skill for the following context:
 
 {{args}}
 
-Return product_spec_markdown, implementation_spec_markdown, spec_json, and open_decisions.
+Return product_spec_markdown, implementation_plan_markdown, spec_json conforming to schemas/spec.schema.json, and open_decisions. Keep approval as draft until explicitly approved.
 """

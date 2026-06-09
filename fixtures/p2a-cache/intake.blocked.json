@@ -1,0 +1,113 @@
+{
+  "schema_version": "p2a.intake.v1",
+  "idea": "Redis처럼 TTL과 LRU eviction을 지원하는 embeddable in-memory cache library를 만들고 싶다.",
+  "summary": "사용자는 Redis의 일부 캐시 동작처럼 TTL 만료와 LRU 기반 eviction을 제공하는 embeddable in-memory cache library를 만들고 싶어 한다.",
+  "known_facts": [
+    "The product is a library, not an end-user application.",
+    "The library should support TTL expiration.",
+    "The library should support LRU eviction.",
+    "The user wants Redis-like behavior as a reference point."
+  ],
+  "assumptions": [
+    {
+      "id": "A-1",
+      "statement": "The first version can be single-process and in-memory only.",
+      "risk": "high",
+      "confirmation_needed": true
+    },
+    {
+      "id": "A-2",
+      "statement": "A small, predictable API is more important than matching every Redis command.",
+      "risk": "medium",
+      "confirmation_needed": true
+    }
+  ],
+  "clarifying_questions": [
+    {
+      "id": "CQ-1",
+      "question": "Which runtime or language should the cache library target first?",
+      "why_it_matters": "The runtime determines packaging, concurrency assumptions, timers, and test harness.",
+      "blocks": ["spec.product.screens_or_interfaces", "spec.implementation.architecture"]
+    },
+    {
+      "id": "CQ-2",
+      "question": "Should Redis-like mean API compatibility, behavior similarity, or only conceptual similarity?",
+      "why_it_matters": "API compatibility would dramatically expand scope and acceptance tests.",
+      "blocks": ["spec.product.goals", "spec.product.non_goals"]
+    }
+  ],
+  "needs_user_decision": [
+    {
+      "id": "ND-1",
+      "question": "Which runtime should v1 target?",
+      "options": [
+        {
+          "id": "node-ts",
+          "label": "TypeScript/Node.js",
+          "description": "Ship as an npm package with TypeScript types."
+        },
+        {
+          "id": "python",
+          "label": "Python",
+          "description": "Ship as a PyPI package with Pythonic cache APIs."
+        }
+      ],
+      "impact": "Determines package format, timer behavior, public API shape, and test tooling.",
+      "default": "node-ts",
+      "status": "open"
+    },
+    {
+      "id": "ND-2",
+      "question": "Should v1 include network server or distributed behavior?",
+      "options": [
+        {
+          "id": "single-process",
+          "label": "Single process only",
+          "description": "Embeddable in-memory cache with no network server."
+        },
+        {
+          "id": "networked",
+          "label": "Network server",
+          "description": "Expose Redis-like operations over a socket or HTTP boundary."
+        }
+      ],
+      "impact": "Networked behavior changes architecture, durability expectations, and task graph size.",
+      "default": "single-process",
+      "status": "open"
+    },
+    {
+      "id": "ND-3",
+      "question": "What should v1 optimize for?",
+      "options": [
+        {
+          "id": "simple-deterministic",
+          "label": "Simple and deterministic",
+          "description": "Prioritize correctness, deterministic tests, and clear APIs."
+        },
+        {
+          "id": "max-throughput",
+          "label": "Maximum throughput",
+          "description": "Prioritize benchmark performance and advanced data structures."
+        }
+      ],
+      "impact": "Determines acceptance criteria and whether benchmark tasks are blocking.",
+      "default": "simple-deterministic",
+      "status": "open"
+    }
+  ],
+  "evidence": [
+    {
+      "source_id": "USER-1",
+      "title": "Original product idea",
+      "url": "",
+      "used_for": "Identified TTL, LRU eviction, and Redis-like cache intent."
+    },
+    {
+      "source_id": "WEB-1",
+      "title": "Redis key expiration and eviction behavior reference",
+      "url": "https://redis.io/docs/latest/develop/reference/eviction/",
+      "used_for": "Grounded the distinction between conceptual Redis-like behavior and full API/server compatibility."
+    }
+  ],
+  "status": "blocked_on_user"
+}

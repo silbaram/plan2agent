@@ -1,11 +1,11 @@
 ---
 name: p2a-task-graph
 description: Converts an approved implementation plan into schema-compatible small dependency-aware tasks for agent execution.
-tools:
-  - Read
-  - Grep
-  - Glob
-model: sonnet
+capabilities:
+  - read
+  - search
+access: read-only
+tier: standard
 ---
 
 You are the Plan2Agent task graph specialist.

@@ -1,0 +1,200 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://plan2agent.local/schemas/spec.schema.json",
+  "title": "Plan2Agent Product and Implementation Spec",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "project_id",
+    "source_intake",
+    "product",
+    "implementation",
+    "open_decisions",
+    "approval",
+    "evidence"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "p2a.spec.v1"
+    },
+    "project_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "source_intake": {
+      "type": "string",
+      "minLength": 1
+    },
+    "product": {
+      "type": "object",
+      "required": [
+        "problem",
+        "target_users",
+        "goals",
+        "non_goals",
+        "core_flows",
+        "screens_or_interfaces",
+        "data_model_draft",
+        "external_integrations",
+        "success_criteria",
+        "constraints"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "problem": {
+          "type": "string",
+          "minLength": 1
+        },
+        "target_users": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "goals": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "non_goals": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "core_flows": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "screens_or_interfaces": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "data_model_draft": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "external_integrations": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "success_criteria": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "constraints": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "implementation": {
+      "type": "object",
+      "required": [
+        "architecture",
+        "interfaces",
+        "data_flow",
+        "dependencies",
+        "edge_cases",
+        "verification"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "architecture": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "interfaces": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "data_flow": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "dependencies": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "edge_cases": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "verification": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "open_decisions": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^ND-[0-9]+$"
+      }
+    },
+    "approval": {
+      "type": "string",
+      "enum": [
+        "draft",
+        "approved"
+      ]
+    },
+    "evidence": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "source_id",
+          "title",
+          "url",
+          "used_for"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "source_id": {
+            "type": "string",
+            "pattern": "^(WEB|USER|LOCAL)-[0-9]+$"
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1
+          },
+          "url": {
+            "type": "string"
+          },
+          "used_for": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    }
+  }
+}

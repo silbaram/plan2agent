@@ -9,16 +9,19 @@ Break an approved implementation spec into tasks that an agent or developer can 
 
 ## Inputs
 
-- Approved product spec.
-- Approved implementation plan.
+- `spec_json` conforming to `schemas/spec.schema.json`.
+- `spec_json.approval: approved`.
+- `spec_json.open_decisions: []`.
 - Known constraints.
 
 ## Output
 
-Return a `task_graph_json` object with:
+Return a `task_graph_json` object conforming to `schemas/task-graph.schema.json` with:
 
+- `schema_version`: `p2a.task_graph.v1`
 - `projectId`
 - `version`
+- `sourceSpec`
 - `tasks`
 
 Each task must include:
@@ -33,10 +36,16 @@ Each task must include:
 - `suggestedAgentPrompt`
 - `sourceSpecRefs`
 
+## Validation Gates
+
+- Reject task breakdown if the spec is not approved.
+- Reject task breakdown if any unresolved decision remains.
+- Dependencies must reference task ids in the same graph.
+- The dependency graph must be acyclic.
+
 ## Rules
 
 - Use `todo` as the default status.
-- Dependencies must reference task ids.
 - Split oversized tasks before returning.
 - Do not include implementation code.
 - Do not edit files or run commands.

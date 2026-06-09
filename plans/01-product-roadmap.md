@@ -314,9 +314,7 @@ Plan2Agent 개발은 아래 흐름을 기본 협업 방식으로 둔다.
 
 ## 15. 다음 개발 액션
 
-1. `spec_json` schema 초안을 작성한다.
-2. `task_graph_json` schema 초안을 작성한다.
-3. `p2a-harness` skill이 단계별 subagent를 호출하도록 실제 skill 내용을 보강한다.
-4. 한 문장 아이디어를 명세로 바꾸는 질문 플로우를 fixture로 만든다.
-5. 명세를 task graph로 바꾸는 분할 규칙을 fixture로 만든다.
-6. v1 UI 또는 CLI 프로토타입 방식을 결정한다.
+1. fixture coverage를 cache library 외 product domain으로 확장한다.
+2. `scripts/sync_cli_assets.py`, `scripts/check_cli_parity.py`, `scripts/run_fixtures.py`를 CI에 연결한다.
+3. v1 UI 또는 CLI 프로토타입 방식을 결정한다.
+4. v2 agent 실행 로그, worktree 분리, 결과 diff 연결 방식을 설계한다.
