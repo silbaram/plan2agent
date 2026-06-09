@@ -38,7 +38,7 @@ CLAUDE_TOOL_MAP = {
 GEMINI_TOOL_MAP = {
     "read": ["read_file"],
     "search": ["grep_search"],
-    "web": ["google_web_search"],
+    "web": ["google_web_search", "web_fetch"],
 }
 CLAUDE_TIER_MODEL = {"light": "haiku", "standard": "sonnet", "heavy": "opus"}
 CODEX_TIER_EFFORT = {"light": "low", "standard": "medium", "heavy": "high"}

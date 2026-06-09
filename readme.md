@@ -130,7 +130,7 @@ scripts/
 | --- | --- | --- | --- |
 | `capabilities: read` | `tools: Read` | `tools: read_file` | per-tool list 없음 |
 | `capabilities: search` | `tools: Grep`, `Glob` | `tools: grep_search` | per-tool list 없음 |
-| `capabilities: web` | `tools: WebSearch`, `WebFetch` | `tools: google_web_search` | 별도 custom-agent web flag를 생성하지 않음 |
+| `capabilities: web` | `tools: WebSearch`, `WebFetch` | `tools: google_web_search`, `web_fetch` | 별도 custom-agent web flag를 생성하지 않음 |
 | `access: read-only` | tool set으로 암시 | `kind: local` | `sandbox_mode = "read-only"` |
 | `tier: standard` | `model: sonnet` | `temperature: 0.2`, `max_turns: 10` | `model_reasoning_effort = "medium"` |
 
