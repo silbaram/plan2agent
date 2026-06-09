@@ -1,8 +1,8 @@
 {
   "schema_version": "p2a.task_graph.v1",
-  "projectId": "p2a-cache",
+  "projectId": "cache-library",
   "version": "1",
-  "sourceSpec": "fixtures/p2a-cache/spec.approved.json",
+  "sourceSpec": "fixtures/cache-library/spec.approved.json",
   "tasks": [
     {
       "id": "task-001",
@@ -15,7 +15,7 @@
         "Type checking and tests can be run with documented commands"
       ],
       "targetArea": "package-scaffold",
-      "suggestedAgentPrompt": "Scaffold the TypeScript package for the approved p2a-cache spec. Do not implement cache behavior yet.",
+      "suggestedAgentPrompt": "Scaffold the TypeScript package for the approved cache-library spec. Do not implement cache behavior yet.",
       "sourceSpecRefs": ["implementation.dependencies", "product.constraints"]
     },
     {
