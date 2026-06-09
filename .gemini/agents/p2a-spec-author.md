@@ -6,6 +6,7 @@ tools:
   - read_file
   - grep_search
   - google_web_search
+  - web_fetch
 temperature: 0.2
 max_turns: 10
 ---

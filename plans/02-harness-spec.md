@@ -150,13 +150,13 @@ scripts/run_fixtures.py         # fixture/golden validation
 | --- | --- | --- | --- |
 | `capabilities: read` | `Read` | `read_file` | per-tool list 없음 |
 | `capabilities: search` | `Grep`, `Glob` | `grep_search` | per-tool list 없음 |
-| `capabilities: web` | `WebSearch`, `WebFetch` | `google_web_search` | 별도 custom-agent web flag 생성 없음 |
+| `capabilities: web` | `WebSearch`, `WebFetch` | `google_web_search`, `web_fetch` | 별도 custom-agent web flag 생성 없음 |
 | `access: read-only` | tool set으로 암시 | `kind: local` | `sandbox_mode = "read-only"` |
 | `tier: light` | `model: haiku` | `temperature: 0.1`, `max_turns: 6` | `model_reasoning_effort = "low"` |
 | `tier: standard` | `model: sonnet` | `temperature: 0.2`, `max_turns: 10` | `model_reasoning_effort = "medium"` |
 | `tier: heavy` | `model: opus` | `temperature: 0.2`, `max_turns: 20` | `model_reasoning_effort = "high"` |
 
-Gemini target fields use the documented subagent keys `kind`, `tools`, `temperature`, and `max_turns`; Gemini web capability maps to documented `google_web_search`. Codex custom agents document required `name`/`description`/`developer_instructions` plus config overrides such as `model_reasoning_effort` and `sandbox_mode`; no per-agent web-search flag is emitted.
+Gemini target fields use the documented subagent keys `kind`, `tools`, `temperature`, and `max_turns`; Gemini web capability maps to documented `google_web_search` and `web_fetch`. Codex custom agents document required `name`/`description`/`developer_instructions` plus config overrides such as `model_reasoning_effort` and `sandbox_mode`; no per-agent web-search flag is emitted.
 
 ## 11. CLI별 차이와 하네스 정책
 
