@@ -1,0 +1,106 @@
+{
+  "schema_version": "p2a.spec.v1",
+  "project_id": "p2a-cache",
+  "source_intake": "fixtures/p2a-cache/intake.answered.json",
+  "product": {
+    "problem": "Developers need a small embeddable cache library that provides predictable TTL expiration and LRU eviction without running a Redis server.",
+    "target_users": [
+      "TypeScript/Node.js application developers",
+      "Library users who need deterministic in-process caching for tests and production services"
+    ],
+    "goals": [
+      "Expose a small TypeScript API for get, set, delete, has, clear, and stats operations",
+      "Support per-entry TTL expiration",
+      "Support capacity-limited LRU eviction",
+      "Provide deterministic tests for TTL and eviction behavior"
+    ],
+    "non_goals": [
+      "No Redis protocol compatibility",
+      "No network server",
+      "No distributed replication",
+      "No persistence or disk snapshots in v1"
+    ],
+    "core_flows": [
+      "A caller creates a cache with maxSize and optional defaultTtlMs",
+      "A caller sets a key and later gets it before TTL expiry",
+      "Expired entries are treated as missing and removed lazily",
+      "When capacity is exceeded, the least recently used entry is evicted"
+    ],
+    "screens_or_interfaces": [
+      "TypeScript class or factory API exported from an npm package",
+      "Public type definitions for cache options, stats, and entry metadata"
+    ],
+    "data_model_draft": [
+      "CacheEntry: key, value, expiresAt, previous pointer, next pointer",
+      "CacheOptions: maxSize, defaultTtlMs, clock",
+      "CacheStats: size, hits, misses, evictions, expirations"
+    ],
+    "external_integrations": [
+      "No runtime service integrations",
+      "Optional package manager integration through npm metadata"
+    ],
+    "success_criteria": [
+      "All public API operations have deterministic unit tests",
+      "TTL expiration works with an injected clock in tests",
+      "LRU order updates on get and set",
+      "Capacity overflow evicts exactly one least-recently-used live entry"
+    ],
+    "constraints": [
+      "TypeScript/Node.js first",
+      "Single-process in-memory only",
+      "Correctness and deterministic behavior before benchmarks"
+    ]
+  },
+  "implementation": {
+    "architecture": [
+      "Use a Map for O(1) key lookup and a doubly linked list for recency ordering",
+      "Use lazy TTL cleanup on get, has, set, and capacity enforcement",
+      "Inject a clock function so tests can advance time deterministically"
+    ],
+    "interfaces": [
+      "Cache<K, V>.get(key): V | undefined",
+      "Cache<K, V>.set(key, value, options?): void",
+      "Cache<K, V>.delete(key): boolean",
+      "Cache<K, V>.has(key): boolean",
+      "Cache<K, V>.clear(): void",
+      "Cache<K, V>.stats(): CacheStats"
+    ],
+    "data_flow": [
+      "set inserts or updates an entry, computes expiresAt, moves the entry to most-recent position, then enforces capacity",
+      "get checks expiry, records hit or miss, removes expired entries, and moves live entries to most-recent position",
+      "capacity enforcement evicts from the least-recent side until size is within maxSize"
+    ],
+    "dependencies": [
+      "TypeScript compiler",
+      "Node.js test runner or equivalent deterministic unit test framework"
+    ],
+    "edge_cases": [
+      "TTL of zero expires immediately",
+      "Updating an existing key refreshes value, TTL, and recency",
+      "Expired least-recent entries are removed before evicting live entries",
+      "maxSize must be positive"
+    ],
+    "verification": [
+      "Unit tests for set/get/delete/has/clear",
+      "Unit tests for TTL with injected clock",
+      "Unit tests for LRU order after get and set",
+      "Unit tests for stats counters"
+    ]
+  },
+  "open_decisions": [],
+  "approval": "approved",
+  "evidence": [
+    {
+      "source_id": "USER-1",
+      "title": "Answered intake decisions",
+      "url": "",
+      "used_for": "Confirmed TypeScript/Node.js, single-process scope, and deterministic correctness priority."
+    },
+    {
+      "source_id": "WEB-1",
+      "title": "Redis eviction reference",
+      "url": "https://redis.io/docs/latest/develop/reference/eviction/",
+      "used_for": "Kept Redis as behavior inspiration while explicitly excluding protocol/server compatibility."
+    }
+  ]
+}

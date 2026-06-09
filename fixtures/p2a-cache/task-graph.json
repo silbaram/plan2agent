@@ -1,0 +1,68 @@
+{
+  "schema_version": "p2a.task_graph.v1",
+  "projectId": "p2a-cache",
+  "version": "1",
+  "sourceSpec": "fixtures/p2a-cache/spec.approved.json",
+  "tasks": [
+    {
+      "id": "task-001",
+      "title": "Scaffold TypeScript package",
+      "description": "Create package metadata, TypeScript configuration, source entry point, and test command for the cache library.",
+      "status": "todo",
+      "dependencies": [],
+      "acceptanceCriteria": [
+        "Package exposes a TypeScript source entry point",
+        "Type checking and tests can be run with documented commands"
+      ],
+      "targetArea": "package-scaffold",
+      "suggestedAgentPrompt": "Scaffold the TypeScript package for the approved p2a-cache spec. Do not implement cache behavior yet.",
+      "sourceSpecRefs": ["implementation.dependencies", "product.constraints"]
+    },
+    {
+      "id": "task-002",
+      "title": "Implement cache core data structures",
+      "description": "Implement Map-backed lookup and doubly linked recency list with injectable clock and option validation.",
+      "status": "todo",
+      "dependencies": ["task-001"],
+      "acceptanceCriteria": [
+        "Cache rejects non-positive maxSize",
+        "Entries can be inserted, updated, removed, and moved to most-recent position",
+        "Clock injection is available for deterministic tests"
+      ],
+      "targetArea": "cache-core",
+      "suggestedAgentPrompt": "Implement the internal cache core data structures from the approved spec, including clock injection and option validation.",
+      "sourceSpecRefs": ["implementation.architecture", "implementation.edge_cases"]
+    },
+    {
+      "id": "task-003",
+      "title": "Implement public cache API",
+      "description": "Expose get, set, delete, has, clear, and stats methods with TypeScript types.",
+      "status": "todo",
+      "dependencies": ["task-002"],
+      "acceptanceCriteria": [
+        "Public methods match the approved interface list",
+        "stats reports size, hits, misses, evictions, and expirations",
+        "Type declarations are exported"
+      ],
+      "targetArea": "public-api",
+      "suggestedAgentPrompt": "Implement the public TypeScript cache API from the approved spec using the existing core data structures.",
+      "sourceSpecRefs": ["implementation.interfaces", "product.screens_or_interfaces"]
+    },
+    {
+      "id": "task-004",
+      "title": "Add deterministic TTL and LRU tests",
+      "description": "Create unit tests for TTL expiry, LRU recency updates, capacity eviction, and stats counters.",
+      "status": "todo",
+      "dependencies": ["task-003"],
+      "acceptanceCriteria": [
+        "TTL tests advance an injected clock instead of sleeping",
+        "LRU tests prove get and set move entries to most-recent position",
+        "Capacity overflow evicts the least-recent live entry",
+        "Stats counter behavior is covered"
+      ],
+      "targetArea": "tests",
+      "suggestedAgentPrompt": "Add deterministic tests for TTL, LRU, capacity eviction, and stats according to the approved spec.",
+      "sourceSpecRefs": ["implementation.verification", "product.success_criteria"]
+    }
+  ]
+}

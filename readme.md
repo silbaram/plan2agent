@@ -2,18 +2,19 @@
 
 Plan2Agent(P2A)는 사용자의 한 문장 아이디어를 출발점으로 삼아, 대화로 기획을 보강하고, 개발 가능한 명세와 task graph로 분해하는 planning harness다.
 
-현재 v1 하네스는 코드 변경을 자동 실행하지 않는다. Claude Code, Codex, Gemini CLI가 공통 skill과 subagent를 사용해 `idea -> spec -> task graph -> review` 흐름을 read-only로 수행하도록 구성되어 있다.
+현재 v1 하네스는 코드 변경을 자동 실행하지 않는다. Claude Code, Codex, Gemini CLI가 공통 skill과 subagent를 사용해 `idea -> intake -> spec -> task graph -> review` 흐름을 read-only로 수행하도록 구성되어 있다.
 
 ## 현재 범위
 
 v1에서 하는 일:
 
 - 한 문장 아이디어를 구조화한다.
-- 부족한 정보를 질문 목록으로 만든다.
-- 제품 명세와 구현 명세를 생성한다.
-- 구현 가능한 task graph로 분해한다.
+- 부족한 정보를 schema-compatible 질문과 `needs_user_decision`으로 만든다.
+- 승인 게이트를 지켜 제품 명세와 구현 명세를 생성한다.
+- 승인된 구현 명세를 구현 가능한 task graph로 분해한다.
 - task별 agent 실행 prompt 초안을 만든다.
-- 명세와 task graph의 누락, 과대 task, 의존성 오류를 검토한다.
+- 명세와 task graph의 누락, 과대 task, 의존성 오류, gate 위반을 검토한다.
+- 4개 CLI 구성의 mirror drift를 검사한다.
 
 v1에서 하지 않는 일:
 
@@ -31,15 +32,24 @@ v1에서 하지 않는 일:
 
 ## 하네스 구조
 
-공통 skill 원본:
+Canonical 원본은 `.agents/skills/`와 CLI-중립 `.agents/agents/`다. `.agents/agents/*.md` frontmatter는 `capabilities`, `access`, `tier`만 사용하고 특정 CLI의 `tools`/`model` 문법을 넣지 않는다. `.claude/`, `.codex/`, `.gemini/` 아래 agent/skill mirror는 `scripts/sync_cli_assets.py`로 생성되는 산출물이므로 직접 수정하지 않는다. Gemini command shim은 수동 관리 대상이다.
+
+공통 canonical 원본:
 
 ```text
-.agents/skills/
-  p2a-harness/
-  p2a-intake/
-  p2a-spec/
-  p2a-task-breakdown/
-  p2a-review/
+.agents/
+  skills/
+    p2a-harness/
+    p2a-intake/
+    p2a-spec/
+    p2a-task-breakdown/
+    p2a-review/
+  agents/
+    p2a-requirements.md
+    p2a-spec-author.md
+    p2a-implementation-planner.md
+    p2a-task-graph.md
+    p2a-quality-reviewer.md
 ```
 
 Claude Code용 구성:
@@ -48,6 +58,7 @@ Claude Code용 구성:
 .claude/
   agents/
     p2a-requirements.md
+    p2a-spec-author.md
     p2a-implementation-planner.md
     p2a-task-graph.md
     p2a-quality-reviewer.md
@@ -64,6 +75,7 @@ Codex용 구성:
 ```text
 .codex/agents/
   p2a-requirements.toml
+  p2a-spec-author.toml
   p2a-implementation-planner.toml
   p2a-task-graph.toml
   p2a-quality-reviewer.toml
@@ -75,6 +87,7 @@ Gemini CLI용 구성:
 .gemini/
   agents/
     p2a-requirements.md
+    p2a-spec-author.md
     p2a-implementation-planner.md
     p2a-task-graph.md
     p2a-quality-reviewer.md
@@ -86,26 +99,107 @@ Gemini CLI용 구성:
     review.toml
 ```
 
+Fixtures, schemas, and checks:
+
+```text
+fixtures/
+  p2a-cache/
+    input.md
+    intake.blocked.json
+    intake.answered.json
+    spec.approved.json
+    task-graph.json
+    review-report.md
+schemas/
+  intake.schema.json
+  spec.schema.json
+  task-graph.schema.json
+scripts/
+  sync_cli_assets.py
+  check_cli_parity.py
+  validate_artifacts.py
+  run_fixtures.py
+```
+
+
+## CLI-neutral agent mapping
+
+`.agents/agents/*.md`는 중립 metadata를 갖고, sync 스크립트가 CLI별 native 설정으로 변환한다.
+
+| Neutral metadata | Claude target | Gemini target | Codex target |
+| --- | --- | --- | --- |
+| `capabilities: read` | `tools: Read` | `tools: read_file` | per-tool list 없음 |
+| `capabilities: search` | `tools: Grep`, `Glob` | `tools: grep_search` | per-tool list 없음 |
+| `capabilities: web` | `tools: WebSearch`, `WebFetch` | `tools: google_web_search` | 별도 custom-agent web flag를 생성하지 않음 |
+| `access: read-only` | tool set으로 암시 | `kind: local` | `sandbox_mode = "read-only"` |
+| `tier: standard` | `model: sonnet` | `temperature: 0.2`, `max_turns: 10` | `model_reasoning_effort = "medium"` |
+
+Codex custom agent 공식 스키마는 `name`, `description`, `developer_instructions`를 필수로 하고 `model_reasoning_effort`, `sandbox_mode` 등 config key override를 허용하지만, per-agent web search flag는 문서화된 필드로 확인되지 않아 생성하지 않는다. 따라서 agent 본문은 web 사용을 “where the CLI provides it”로 표현한다.
+
 ## 역할
 
 Subagents:
 
 | 이름 | 역할 |
 | --- | --- |
-| `p2a-requirements` | 아이디어를 known facts, assumptions, clarification questions로 정리 |
-| `p2a-implementation-planner` | 승인된 제품 명세를 구현 계획으로 변환 |
-| `p2a-task-graph` | 구현 계획을 dependency-aware task graph로 분해 |
-| `p2a-quality-reviewer` | 명세, 계획, task graph의 누락과 실행 리스크 검토 |
+| `p2a-requirements` | 아이디어를 `intake_json`의 known facts, assumptions, clarification questions, `needs_user_decision`으로 정리 |
+| `p2a-spec-author` | answered intake를 제품 명세와 `spec_json.product`로 변환 |
+| `p2a-implementation-planner` | 승인 가능한 제품 명세를 구현 계획과 `spec_json.implementation`으로 변환 |
+| `p2a-task-graph` | 승인된 구현 계획을 dependency-aware `task_graph_json`으로 분해 |
+| `p2a-quality-reviewer` | 명세, 계획, task graph의 누락, gate 위반, 의존성 오류, 실행 리스크 검토 |
 
 Skills:
 
 | 이름 | 역할 |
 | --- | --- |
-| `p2a-harness` | 전체 workflow 실행 |
-| `p2a-intake` | 초기 아이디어 분석과 질문 생성 |
-| `p2a-spec` | 제품/구현 명세 생성 |
-| `p2a-task-breakdown` | task graph 생성 |
-| `p2a-review` | 산출물 검토 |
+| `p2a-harness` | 전체 workflow orchestration, 단계→subagent 매핑, 승인 gate, resume 규칙 관리 |
+| `p2a-intake` | 초기 아이디어 분석과 schema-compatible 질문 생성 |
+| `p2a-spec` | 제품/구현 명세 생성과 승인 상태 추적 |
+| `p2a-task-breakdown` | 승인된 spec을 task graph로 분해 |
+| `p2a-review` | 산출물 검토와 blocking issue 보고 |
+
+## 표준 산출물 계약
+
+하네스는 중간 상태를 다음 이름으로 전달한다.
+
+| Artifact | Schema | 생성 단계 | 다음 단계로 넘어가는 조건 |
+| --- | --- | --- | --- |
+| `intake_json` | `schemas/intake.schema.json` | Intake | `status: ready_for_spec` |
+| `product_spec_markdown` | Markdown | Product Spec | 사용자 검토 가능 |
+| `implementation_plan_markdown` | Markdown | Implementation Plan | 사용자 검토 가능 |
+| `spec_json` | `schemas/spec.schema.json` | Spec | `approval: approved` and `open_decisions: []` |
+| `task_graph_json` | `schemas/task-graph.schema.json` | Task Breakdown | dependency ids valid and DAG acyclic |
+| `review_report` | Markdown/JSON-compatible sections | Review | no blocking issues |
+
+
+## Evidence와 Web citation 규칙
+
+Intake와 spec 단계가 web lookup 또는 외부 문서를 사용하면 결과 JSON의 `evidence` 배열에 source를 남긴다. Web lookup은 해당 CLI가 제공하는 경우에만 사용한다.
+
+- `USER-n`: 사용자가 직접 제공한 요구사항, 답변, pasted artifact
+- `LOCAL-n`: 저장소 또는 로컬 파일에서 읽은 근거
+- `WEB-n`: web lookup으로 확인한 prior art, API, integration, domain behavior
+
+모든 `WEB-n` 항목은 `title`, `url`, `used_for`를 포함해야 하며, web 근거가 질문·가정·제품 결정·integration 선택에 영향을 주면 주변 rationale에서 `source_id`를 언급한다.
+
+## 승인 게이트와 재개 규칙
+
+1. **Gate A — Intake decisions**
+   - `needs_user_decision.status`가 하나라도 `open` 또는 `deferred`이면 intake에서 멈춘다.
+   - 제품 명세는 확정하지 않고, 사용자에게 open/deferred decision만 질문한다.
+
+2. **Gate B — Spec approval**
+   - `spec_json.approval`이 `approved`가 아니거나 `open_decisions`가 남아 있으면 task graph를 만들지 않는다.
+
+3. **Gate C — Task graph validation**
+   - 모든 dependency는 같은 graph 안의 task id를 참조해야 한다.
+   - dependency graph는 cycle이 없어야 한다.
+   - 모든 task는 acceptance criteria와 source spec reference를 가져야 한다.
+
+4. **Resume**
+   - 사용자가 `ND-1`, `ND-4`처럼 기존 decision에 답하면 해당 decision의 `answer`를 채우고 `status`를 `answered`로 바꾼다.
+   - 변경된 artifact의 downstream 산출물만 다시 만든다.
+   - Markdown artifact만 주어진 경우 다음 단계로 넘어가기 전에 대응 JSON 계약을 재구성한다.
 
 ## 구동 방식
 
@@ -135,9 +229,9 @@ claude
 
 ```text
 /p2a-intake <한 문장 아이디어>
-/p2a-spec <intake 결과와 사용자 답변>
-/p2a-task-breakdown <승인된 구현 명세>
-/p2a-review <spec과 task graph>
+/p2a-spec <intake_json과 사용자 답변>
+/p2a-task-breakdown <승인된 spec_json>
+/p2a-review <spec_json과 task_graph_json>
 ```
 
 Claude Code의 project skills는 `.claude/skills/`에서 읽히고, project subagents는 `.claude/agents/`에서 읽힌다. 새 디렉터리가 처음 추가된 경우 Claude Code 재시작이 필요할 수 있다.
@@ -155,8 +249,8 @@ Codex subagent까지 명시적으로 쓰려면 다음처럼 요청한다.
 
 ```text
 Use the $p2a-harness skill.
-Spawn p2a-requirements, p2a-implementation-planner, p2a-task-graph, and p2a-quality-reviewer only for read-only planning.
-Wait for the agents and return a consolidated spec, task graph, and review report.
+Spawn p2a-requirements, p2a-spec-author, p2a-implementation-planner, p2a-task-graph, and p2a-quality-reviewer only for read-only planning.
+Stop at each approval gate and return the named state artifacts.
 ```
 
 Codex custom agents는 `.codex/agents/*.toml`에 정의되어 있다. Codex는 subagent를 자동으로 spawn하지 않으므로, 병렬 또는 subagent 작업이 필요하면 prompt에서 명시해야 한다.
@@ -180,40 +274,40 @@ Codex custom agents는 `.codex/agents/*.toml`에 정의되어 있다. Codex는 s
 
 ```text
 /p2a:intake <한 문장 아이디어>
-/p2a:spec <intake 결과와 사용자 답변>
-/p2a:task-breakdown <승인된 구현 명세>
-/p2a:review <spec과 task graph>
+/p2a:spec <intake_json과 사용자 답변>
+/p2a:task-breakdown <승인된 spec_json>
+/p2a:review <spec_json과 task_graph_json>
 ```
 
 Gemini CLI에서 `.gemini/commands/p2a/harness.toml`은 `/p2a:harness` 명령이 된다. 하위 디렉터리의 `/`는 command namespace에서 `:`로 변환된다.
 
-## 표준 워크플로우
+## 검증 스크립트
 
-1. Idea
-   - 사용자가 한 문장으로 만들고 싶은 제품이나 기능을 설명한다.
+CLI mirror 생성/동기화:
 
-2. Intake
-   - `p2a-intake` 또는 `p2a-requirements`가 known facts, assumptions, clarification questions, `needs_user_decision`을 만든다.
+```bash
+python3 scripts/sync_cli_assets.py
+```
 
-3. Product Spec
-   - 사용자의 답변과 명시된 가정을 바탕으로 `p2a-spec`이 제품 명세와 구현 명세를 만든다.
+CLI mirror drift 확인:
 
-4. Approval Gate
-   - 명세가 구현 가능한 수준인지 사용자가 승인한다.
-   - 승인 전에는 task graph를 확정하지 않는다.
+```bash
+python3 scripts/check_cli_parity.py
+```
 
-5. Task Breakdown
-   - `p2a-task-breakdown` 또는 `p2a-task-graph`가 구현 명세를 task graph로 분해한다.
+Fixture/golden output 확인:
 
-6. Review
-   - `p2a-review` 또는 `p2a-quality-reviewer`가 누락된 결정, 과대한 task, 불명확한 acceptance criteria, 의존성 오류를 검토한다.
+```bash
+python3 scripts/run_fixtures.py
+```
 
-7. Final Planning Output
-   - 최종 산출물은 Markdown 명세, 구현 계획, task graph JSON, review report다.
+artifact gate 확인:
 
-8. Implementation Handoff
-   - v1에서는 여기서 멈춘다.
-   - 실제 agent 실행, 코드 변경, worktree 분리, 결과 diff 연결은 v2 이후 범위다.
+```bash
+python3 scripts/validate_artifacts.py --intake path/to/intake.json
+python3 scripts/validate_artifacts.py --spec path/to/spec.json
+python3 scripts/validate_artifacts.py --task-graph path/to/task-graph.json --require-approved-spec path/to/spec.json
+```
 
 ## Task Graph 기준
 
@@ -221,18 +315,25 @@ Gemini CLI에서 `.gemini/commands/p2a/harness.toml`은 `/p2a:harness` 명령이
 
 ```json
 {
-  "id": "task-001",
-  "title": "Define product spec schema",
-  "description": "Create the first JSON schema for Plan2Agent product specs.",
-  "status": "todo",
-  "dependencies": [],
-  "acceptanceCriteria": [
-    "Schema includes problem, target_users, goals, non_goals, core_flows, constraints",
-    "Unknown required fields can be marked as needs_user_decision"
-  ],
-  "targetArea": "spec-schema",
-  "suggestedAgentPrompt": "Create a Plan2Agent product spec JSON schema. Do not implement unrelated app code.",
-  "sourceSpecRefs": ["spec.product"]
+  "schema_version": "p2a.task_graph.v1",
+  "projectId": "example-project",
+  "version": "1",
+  "sourceSpec": "example-spec",
+  "tasks": [
+    {
+      "id": "task-001",
+      "title": "Define product spec schema",
+      "description": "Create the first JSON schema for Plan2Agent product specs.",
+      "status": "todo",
+      "dependencies": [],
+      "acceptanceCriteria": [
+        "Schema includes problem, target_users, goals, non_goals, core_flows, constraints"
+      ],
+      "targetArea": "spec-schema",
+      "suggestedAgentPrompt": "Create a Plan2Agent product spec JSON schema. Do not implement unrelated app code.",
+      "sourceSpecRefs": ["spec.product"]
+    }
+  ]
 }
 ```
 
@@ -253,9 +354,6 @@ Gemini CLI에서 `.gemini/commands/p2a/harness.toml`은 `/p2a:harness` 명령이
 
 ## 다음 고도화 작업
 
-- `spec_json` schema 작성
-- `task_graph_json` schema 작성
-- `p2a-harness`가 역할별 subagent 사용 순서를 더 명확히 지시하도록 보강
-- intake/spec/task-breakdown/review fixture 작성
+- fixture coverage를 여러 product domain으로 확장
+- 생성된 CLI asset drift check를 CI에 연결
 - v2에서 agent 실행 로그, worktree 분리, 결과 diff 연결 추가
-

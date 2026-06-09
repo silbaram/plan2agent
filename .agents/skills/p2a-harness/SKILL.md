@@ -1,34 +1,70 @@
 ---
 name: p2a-harness
-description: Use when turning a one-sentence product idea into a Plan2Agent spec, implementation plan, task graph, and review report.
+description: Use when turning a one-sentence product idea into a gated Plan2Agent intake, spec, implementation plan, task graph, and review report.
 ---
 
 # Plan2Agent Harness
 
-Use this workflow to convert an early product idea into development-ready planning artifacts.
+Use this workflow to convert an early product idea into development-ready planning artifacts. The harness is an orchestrator, not a checklist: it decides which Plan2Agent role owns each stage, enforces approval gates, and resumes from the latest completed artifact.
 
 ## Inputs
 
 - A one-sentence product or feature idea.
-- Optional clarification answers, constraints, audience, or existing specs.
+- Optional clarification answers, constraints, audience, or existing artifacts.
+- Optional resume point such as `resume_from: intake`, `resume_from: spec`, or answered decision ids like `ND-1`.
 
-## Process
+## Stage to Role Mapping
 
-1. Intake: identify known facts, unknowns, assumptions, and blocking decisions.
-2. Spec: create a product spec only after important assumptions are explicit.
-3. Implementation plan: turn the approved product spec into a build plan.
-4. Task graph: split the plan into agent-executable tasks with dependencies.
-5. Review: find missing decisions, oversized tasks, unclear acceptance criteria, and unsafe execution assumptions.
+| Stage | Skill | Subagent owner | Input artifact | Output artifact |
+| --- | --- | --- | --- | --- |
+| 1. Intake | `p2a-intake` | `p2a-requirements` | raw idea and notes | `intake_json` (`p2a.intake.v1`) |
+| 2. Product spec | `p2a-spec` | `p2a-spec-author` | intake plus answered decisions | `product_spec_markdown`, `spec_json` (`p2a.spec.v1`) |
+| 3. Implementation plan | `p2a-spec` | `p2a-implementation-planner` | approved product spec | `implementation_plan_markdown`, updated `spec_json` |
+| 4. Task graph | `p2a-task-breakdown` | `p2a-task-graph` | approved implementation spec | `task_graph_json` (`p2a.task_graph.v1`) |
+| 5. Review | `p2a-review` | `p2a-quality-reviewer` | spec and task graph | `review_report` |
 
-## Output
+If the CLI cannot spawn subagents automatically, run the matching skill locally and preserve the same input/output contracts.
 
-Return these sections:
+## Approval Gates
 
-- `clarifying_questions`
+- **Gate A — Intake decisions:** If any `needs_user_decision.status` is `open` or `deferred`, stop after intake and ask only those decisions. Do not produce a product spec except as a clearly labeled sketch.
+- **Gate B — Spec approval:** If `spec_json.approval` is not `approved` or `spec_json.open_decisions` is non-empty, stop before task graph generation.
+- **Gate C — Task graph validation:** Before final output, check that every dependency references a task id, the graph is acyclic, and every task has acceptance criteria.
+- **Gate D — Review blockers:** If review finds blocking issues, return the blockers and the artifact section that must be revised instead of claiming the plan is ready.
+
+## Resume Rules
+
+- When the user answers decisions such as `ND-1` or `ND-4`, merge the answers into `intake_json.needs_user_decision[*].answer`, set those decisions to `answered`, and recompute `intake_json.status`.
+- Resume from the earliest stage whose input changed. For example, changed intake answers invalidate spec, implementation plan, task graph, and review.
+- Carry forward stable artifact ids (`project_id`, `source_intake`, `sourceSpec`) so later stages can trace their source.
+- If an artifact is pasted in Markdown only, reconstruct the matching JSON contract before advancing to the next gate.
+
+## State Passing Contract
+
+Return intermediate artifacts in fenced code blocks named exactly:
+
+- `intake_json`
 - `product_spec_markdown`
 - `implementation_plan_markdown`
+- `spec_json`
 - `task_graph_json`
 - `review_report`
+
+`intake_json`, `spec_json`, and `task_graph_json` must conform to `schemas/intake.schema.json`, `schemas/spec.schema.json`, and `schemas/task-graph.schema.json` respectively. `intake_json.evidence` and `spec_json.evidence` carry all user, local, and web sources used by the run.
+
+## Evidence and Citation Contract
+
+- Use `USER-n` for user-provided source material, `LOCAL-n` for repository/local artifacts, and `WEB-n` for web lookup sources.
+- Every `WEB-n` evidence item must include an `https://` or `http://` URL, title, and short `used_for` rationale.
+- If web lookup materially affects a question, assumption, product decision, or integration choice, include the source in `evidence` and refer to its `source_id` in nearby rationale text.
+- Do not use web lookup for implementation execution; it is only allowed for read-only prior-art or domain grounding.
+
+## Output Modes
+
+- **Blocked intake:** Return `intake_json` plus a concise `needs_user_decision` table. Stop.
+- **Draft spec:** Return product and implementation specs with `approval: draft`. Stop before task graph.
+- **Approved planning output:** Return all six state sections after gates pass.
+- **Resume output:** Return only regenerated downstream sections plus a short changelog of which decisions were applied.
 
 ## Rules
 
