@@ -73,6 +73,8 @@ If a CLI cannot spawn subagents automatically, the active model executes the sam
 - **Gate C — Task graph validation:** Before final output, check that every dependency references a task id, the graph is acyclic, and every task has acceptance criteria.
 - **Gate D — Review blockers:** If review finds blocking issues, return the blockers and the artifact section that must be revised instead of claiming the plan is ready.
 
+Each gate is a review checkpoint: persist the stage's artifact files, present a readable summary with per-item rationale, invite both free-form feedback and structured approval, revise and re-present on feedback, and advance only on explicit approval.
+
 ## 5. Resume Contract
 
 - When the user answers decisions such as `ND-1` or `ND-4`, merge the answers into `intake_json.needs_user_decision[*].answer`, set those decisions to `answered`, and recompute `intake_json.status`.
@@ -94,6 +96,8 @@ The harness passes intermediate artifacts with these exact names:
 | `review_report` | Markdown/JSON-compatible sections | no blocking issues |
 
 Schema validation is intentionally complemented by `scripts/validate_artifacts.py`, which performs gate checks that are easier to express procedurally: open/deferred decision blocking, spec/intake `open_decisions` traceability, approved-spec requirement, missing dependency ids, duplicate task ids, and cycle detection.
+
+The harness orchestrator also persists each artifact as a file under `artifacts/<project_id>/` (`intake.json`, `intake.md`, `product-spec.md`, `implementation-plan.md`, `spec.json`, `task-graph.json`, `review-report.md`) so the user can review artifacts at each gate and run `scripts/validate_artifacts.py` against them. Subagents remain read-only; only the orchestrator writes files.
 
 
 ## 7. Evidence and Citation Convention
@@ -138,6 +142,7 @@ scripts/run_fixtures.py         # fixture/golden validation
 - 입력과 출력 형식을 명시한다.
 - 불명확하면 질문 목록을 만들고, 임의 구현을 시작하지 않는다.
 - 코드 변경, shell 실행, dependency 설치는 v1 skill에서 금지한다.
+- 단, 하네스 오케스트레이터는 planning 산출물(.md/.json)을 `artifacts/<project_id>/`에 기록할 수 있다. 소스코드 변경·의존성 설치·shell 실행(구현)·git 조작은 여전히 금지하고 subagent는 read-only를 유지한다.
 - 산출물은 Markdown과 JSON을 모두 고려하되, 내부 원본은 JSON으로 본다.
 - 하네스 skill은 단계→subagent 매핑, gate, resume, state passing contract를 포함한다.
 

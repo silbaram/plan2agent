@@ -29,6 +29,7 @@ Return:
 - `spec_json` conforming to `schemas/spec.schema.json`
 - `open_decisions`
 - `evidence` inside `spec_json`, preserving intake sources and adding any new `WEB-n` or `LOCAL-n` sources
+- The harness persists these as `product-spec.md`, `implementation-plan.md`, and `spec.json` under `artifacts/<project_id>/` for file-based review at Gate B.
 
 ## Required Spec Fields
 
@@ -61,6 +62,7 @@ Return:
 - Use `approval: draft` until the user explicitly approves the product and implementation spec.
 - Use `approval: approved` only when `open_decisions` is empty and the user has approved the spec.
 - Do not advance to task breakdown while `approval` is `draft`.
+- Present the written product and implementation specs as files and request explicit user approval before advancing past Gate B.
 
 ## Rules
 

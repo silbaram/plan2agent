@@ -32,6 +32,20 @@ If the CLI cannot spawn subagents automatically, run the matching skill locally 
 - **Gate C — Task graph validation:** Before final output, check that every dependency references a task id, the graph is acyclic, and every task has acceptance criteria.
 - **Gate D — Review blockers:** If review finds blocking issues, return the blockers and the artifact section that must be revised instead of claiming the plan is ready.
 
+Each gate is a review checkpoint, not a one-shot hand-off. At every gate: (1) persist the stage's artifact files, (2) present a readable summary with per-item rationale and recommendations, (3) explicitly invite both open-ended feedback and structured answers or approval, (4) revise the artifacts and re-present them when the user responds, and (5) advance only after the user explicitly approves. Never infer approval from silence.
+
+## Analysis and Decision Presentation
+
+Before asking the user to decide anything, present a written analysis — do not jump straight to a list of options.
+
+The analysis must include:
+
+- A restatement of the idea and the scope you inferred, separating what is clear from what is unknown.
+- Each assumption with its risk level and the reasoning behind it.
+- For every `needs_user_decision`: the question, why it matters, each option with its concrete trade-offs, a recommended option with explicit rationale grounded in the stated goals, constraints, and any prior art, and which downstream artifacts or decisions it blocks.
+
+Write this analysis into `intake.md` and summarize it in the conversation. Treat decision-making as a dialogue: invite the user to correct your understanding and give free-form feedback, not only to pick options. Do not collapse several distinct high-impact decisions into a single multi-select that hides their individual rationale; ask in small, clearly explained batches.
+
 ## Resume Rules
 
 - When the user answers decisions such as `ND-1` or `ND-4`, merge the answers into `intake_json.needs_user_decision[*].answer`, set those decisions to `answered`, and recompute `intake_json.status`.
@@ -52,6 +66,20 @@ Return intermediate artifacts in fenced code blocks named exactly:
 
 `intake_json`, `spec_json`, and `task_graph_json` must conform to `schemas/intake.schema.json`, `schemas/spec.schema.json`, and `schemas/task-graph.schema.json` respectively. `intake_json.evidence` and `spec_json.evidence` carry all user, local, and web sources used by the run.
 
+## Artifact Persistence
+
+In addition to the inline state sections, the harness orchestrator writes each artifact to a file so the user can open and review it before any gate. Use a stable `project_id` (kebab-case, derived from the idea or carried forward) and keep all files for one run under `artifacts/<project_id>/`:
+
+- `intake.json` — the `intake_json` artifact
+- `intake.md` — the human-readable analysis and decision rationale described in Analysis and Decision Presentation
+- `product-spec.md` — the `product_spec_markdown` artifact
+- `implementation-plan.md` — the `implementation_plan_markdown` artifact
+- `spec.json` — the `spec_json` artifact
+- `task-graph.json` — the `task_graph_json` artifact
+- `review-report.md` — the `review_report` artifact
+
+Write the files for a stage before stopping at its gate, and tell the user the file paths. Only the harness orchestrator writes files; subagents stay read-only and return their content for the orchestrator to persist. Continue to surface the inline named sections as well so resume and paste-in still work.
+
 ## Evidence and Citation Contract
 
 - Use `USER-n` for user-provided source material, `LOCAL-n` for repository/local artifacts, and `WEB-n` for web lookup sources.
@@ -61,16 +89,16 @@ Return intermediate artifacts in fenced code blocks named exactly:
 
 ## Output Modes
 
-- **Blocked intake:** Return `intake_json` plus a concise `needs_user_decision` table. Stop.
-- **Draft spec:** Return product and implementation specs with `approval: draft`. Stop before task graph.
-- **Approved planning output:** Return all six state sections after gates pass.
-- **Resume output:** Return only regenerated downstream sections plus a short changelog of which decisions were applied.
+- **Blocked intake:** Write `intake.json` and `intake.md`, present the analysis narrative and per-decision recommendations, invite feedback and answers, and stop at Gate A.
+- **Draft spec:** Write `product-spec.md`, `implementation-plan.md`, and `spec.json` with `approval: draft`, present them for file-based review, and stop at Gate B before the task graph.
+- **Approved planning output:** Write all artifact files and return the state sections after gates pass.
+- **Resume output:** Regenerate only the downstream artifact files and sections, plus a short changelog of which decisions were applied.
 
 ## Rules
 
-- Do not edit source code.
-- Do not run shell commands.
-- Do not install dependencies.
+- You MAY create or update Plan2Agent planning artifacts (`.md` / `.json`) under `artifacts/<project_id>/`.
+- Do NOT edit application or source code, install dependencies, run shell commands for implementation, or perform git operations.
+- Subagents remain strictly read-only; only the harness orchestrator persists artifact files.
 - Do not claim that implementation happened.
 - Mark unresolved decisions as `needs_user_decision`.
 - Keep tasks small enough for one agent or developer to complete independently.

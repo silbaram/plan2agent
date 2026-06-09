@@ -27,7 +27,9 @@ Return an `intake_json` object conforming to `schemas/intake.schema.json` with:
 - `evidence`: source objects with `source_id`, `title`, `url`, and `used_for`
 - `status`: `blocked_on_user` when any decision is `open` or `deferred`, otherwise `ready_for_spec`
 
-Also include a short Markdown table for open or deferred `needs_user_decision` items when `status` is `blocked_on_user`.
+- Also produce a human-readable analysis (persisted by the harness as `intake.md`) containing the restated understanding, each assumption with its reasoning, and for every `needs_user_decision` the option trade-offs, a recommended option with rationale, and the downstream artifacts it blocks.
+
+When `status` is `blocked_on_user`, lead with the analysis narrative (understanding, assumptions with reasoning, and per-decision trade-offs and recommendations). A Markdown decision table may supplement it but must not replace the explanation.
 
 ## Decision IDs
 
@@ -43,3 +45,4 @@ Also include a short Markdown table for open or deferred `needs_user_decision` i
 - Do not design the full implementation yet.
 - If prior-art or domain lookup changes a question or assumption, add a `WEB-n` item to `evidence` and cite the source id in the rationale.
 - Do not edit files or run commands.
+- Do not write files yourself; return your structured content and analysis so the harness orchestrator can persist the artifacts.
