@@ -171,6 +171,17 @@ Skills:
 | `task_graph_json` | `schemas/task-graph.schema.json` | Task Breakdown | dependency ids valid and DAG acyclic |
 | `review_report` | Markdown/JSON-compatible sections | Review | no blocking issues |
 
+### 산출물 파일 저장
+
+하네스 오케스트레이터는 각 단계 산출물을 `artifacts/<project_id>/` 아래 파일로 기록해 사용자가 게이트 전에 파일로 검토할 수 있게 한다.
+
+- `intake.json`, `intake.md`
+- `product-spec.md`, `implementation-plan.md`, `spec.json`
+- `task-graph.json`
+- `review-report.md`
+
+subagent는 read-only를 유지하며, 파일 기록은 하네스 오케스트레이터만 수행한다. `scripts/validate_artifacts.py`로 이 파일들을 그대로 검증할 수 있다.
+
 
 ## Evidence와 Web citation 규칙
 
@@ -349,6 +360,7 @@ python3 scripts/validate_artifacts.py --task-graph path/to/task-graph.json --req
 - v1 하네스는 read-only planning이다.
 - 어떤 skill이나 subagent도 코드 변경을 지시하지 않는다.
 - dependency 설치, shell 실행, git 조작은 v1 workflow에 포함하지 않는다.
+- 하네스 오케스트레이터는 planning 산출물(.md/.json)을 `artifacts/<project_id>/`에만 기록할 수 있다. 소스코드 변경, 의존성 설치, shell 실행(구현 목적), git 조작은 계속 금지하며, subagent는 read-only를 유지한다.
 - 불명확한 요구사항은 임의 구현하지 않고 `needs_user_decision`으로 남긴다.
 - 실제 구현은 task graph 승인 이후 별도 단계에서 수행한다.
 
