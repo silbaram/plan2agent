@@ -97,7 +97,7 @@ The harness passes intermediate artifacts with these exact names:
 
 Schema validation is intentionally complemented by `scripts/validate_artifacts.py`, which performs gate checks that are easier to express procedurally: open/deferred decision blocking, spec/intake `open_decisions` traceability, approved-spec requirement, missing dependency ids, duplicate task ids, and cycle detection.
 
-The harness orchestrator also persists each artifact as a file under `artifacts/<project_id>/` (`intake.json`, `intake.md`, `product-spec.md`, `implementation-plan.md`, `spec.json`, `task-graph.json`, `review-report.md`) so the user can review artifacts at each gate and run `scripts/validate_artifacts.py` against them. Subagents remain read-only; only the orchestrator writes files.
+The harness orchestrator also persists each artifact as a file under `artifacts/<project_id>/` (`intake.json`, `intake.md`, `product-spec.md`, `implementation-plan.md`, `spec.json`, `task-graph.json`, `review-report.md`) so the user can review artifacts at each gate and run `scripts/validate_artifacts.py` against them. Subagents remain read-only; only the orchestrator writes files. `artifacts/<project_id>/` outputs are committed to git as planning history for file-based versioning.
 
 
 ## 7. Evidence and Citation Convention
