@@ -302,10 +302,7 @@ CLI mirror 생성/동기화:
 python3 scripts/sync_cli_assets.py
 ```
 
-CLI mirror drift 확인:
-
-검사 항목에는 agent mirror 동기화, skill mirror byte 비교, Gemini command shim 내용 검사(skill 이름, `{{args}}`, 필수 필드)가 포함된다.
-
+CLI mirror drift 확인(검사 항목: agent mirror 동기화, skill mirror byte 비교, Gemini command shim 내용 검사(skill 이름, `{{args}}`, 필수 필드)):
 
 ```bash
 python3 scripts/check_cli_parity.py

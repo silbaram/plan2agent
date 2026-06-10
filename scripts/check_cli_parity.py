@@ -38,7 +38,7 @@ def check_gemini_command(command: str, skill: str) -> str | None:
         return f"missing Gemini command shim {label}"
 
     try:
-        data = tomllib.loads(path.read_text())
+        data = tomllib.loads(path.read_text(encoding="utf-8"))
     except tomllib.TOMLDecodeError as exc:
         return f"invalid TOML in Gemini command shim {label}: {exc}"
 
