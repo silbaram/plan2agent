@@ -5,7 +5,7 @@ Use the Plan2Agent p2a-harness skill for the following input:
 {{args}}
 
 Rules:
-- Do not edit files.
+- Only write Plan2Agent planning artifacts under artifacts/<project_id>/; never edit source code.
 - Do not run mutating commands.
 - Follow the stage-to-subagent mapping in the skill.
 - Stop at intake if any needs_user_decision is open.

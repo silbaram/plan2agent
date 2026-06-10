@@ -182,6 +182,8 @@ Skills:
 
 subagent는 read-only를 유지하며, 파일 기록은 하네스 오케스트레이터만 수행한다. `scripts/validate_artifacts.py`로 이 파일들을 그대로 검증할 수 있다.
 
+`artifacts/<project_id>/` 산출물은 git에 커밋해 기획 이력(파일 기반 versioning)으로 보존한다.
+
 
 ## Evidence와 Web citation 규칙
 
@@ -301,6 +303,9 @@ python3 scripts/sync_cli_assets.py
 ```
 
 CLI mirror drift 확인:
+
+검사 항목에는 agent mirror 동기화, skill mirror byte 비교, Gemini command shim 내용 검사(skill 이름, `{{args}}`, 필수 필드)가 포함된다.
+
 
 ```bash
 python3 scripts/check_cli_parity.py

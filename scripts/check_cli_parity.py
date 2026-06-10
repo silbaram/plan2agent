@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import subprocess
 import sys
+import tomllib
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -16,12 +17,44 @@ AGENTS = [
     "p2a-task-graph",
     "p2a-quality-reviewer",
 ]
-GEMINI_COMMANDS = ["harness", "intake", "spec", "task-breakdown", "review"]
+GEMINI_COMMANDS = {
+    "harness": "p2a-harness",
+    "intake": "p2a-intake",
+    "spec": "p2a-spec",
+    "task-breakdown": "p2a-task-breakdown",
+    "review": "p2a-review",
+}
 
 
 def fail(message: str) -> int:
     print(f"parity failed: {message}", file=sys.stderr)
     return 1
+
+
+def check_gemini_command(command: str, skill: str) -> str | None:
+    path = ROOT / ".gemini" / "commands" / "p2a" / f"{command}.toml"
+    label = str(path.relative_to(ROOT))
+    if not path.exists():
+        return f"missing Gemini command shim {label}"
+
+    try:
+        data = tomllib.loads(path.read_text())
+    except tomllib.TOMLDecodeError as exc:
+        return f"invalid TOML in Gemini command shim {label}: {exc}"
+
+    description = data.get("description")
+    if not isinstance(description, str) or not description.strip():
+        return f"Gemini command shim {label} has missing or empty description"
+
+    prompt = data.get("prompt")
+    if not isinstance(prompt, str) or not prompt.strip():
+        return f"Gemini command shim {label} has missing or empty prompt"
+    if skill not in prompt:
+        return f"Gemini command shim {label} prompt must include skill name {skill}"
+    if "{{args}}" not in prompt:
+        return f"Gemini command shim {label} prompt must include {{{{args}}}}"
+
+    return None
 
 
 def main() -> int:
@@ -55,10 +88,10 @@ def main() -> int:
         if missing:
             return fail(f"missing agent mirrors for {agent}: {', '.join(missing)}")
 
-    for command in GEMINI_COMMANDS:
-        path = ROOT / ".gemini" / "commands" / "p2a" / f"{command}.toml"
-        if not path.exists():
-            return fail(f"missing Gemini command shim {path.relative_to(ROOT)}")
+    for command, skill in GEMINI_COMMANDS.items():
+        error = check_gemini_command(command, skill)
+        if error:
+            return fail(error)
 
     print("Plan2Agent CLI parity passed")
     return 0
