@@ -46,6 +46,8 @@ v1 제외 범위:
 
 v2 이후 후보:
 
+- Gate D를 통과한 기획 산출물을 실제 개발 대상 프로젝트 디렉터리로 인계
+- 개발 대상 프로젝트에 AI 개발 도구(skill, subagent, command shim, task CLI)를 복사하고 초기 개발 환경 세팅
 - task별 agent 세션 실행 및 로그 관리
 - 코드 변경 결과와 task 연결
 - 기획 변경 diff 기반 task 재생성
@@ -180,6 +182,8 @@ v1 권장 범위:
 
 v2 이후 범위:
 
+- 확정된 기획 산출물을 개발 대상 프로젝트에 배치한다.
+- 개발 대상 프로젝트에 Plan2Agent 개발 도구를 설치하거나 복사한다.
 - task별 agent 세션 생성
 - worktree 또는 branch 분리
 - 실행 로그 저장
@@ -195,7 +199,31 @@ v2 이후 범위:
 권장 기본값:
 
 - v1은 agent 실행을 하지 않는다.
-- v2 첫 연동 대상은 Codex로 둔다.
+- v2의 첫 목표는 개발 대상 프로젝트에 산출물과 AI 개발 도구를 인계하는 부트스트랩 도구로 둔다.
+- agent 자동 실행의 첫 연동 대상은 Codex로 둔다.
+
+## 8-1. v2 개발 인계와 환경 세팅
+
+v2의 첫 고도화 목표는 v1 하네스가 만든 산출물을 실제 개발 프로젝트로 옮기고, 그 프로젝트 안에서 AI agent가 바로 task를 실행할 수 있도록 개발 도구를 설치하는 것이다.
+
+핵심 흐름:
+
+1. Gate D를 통과한 `artifacts/<project_id>/` 산출물을 선택한다.
+2. 사용자가 지정한 개발 대상 디렉터리로 산출물을 복사하거나 이동한다.
+3. 대상 프로젝트 안에 `plan2agent/` 또는 `.plan2agent/` 작업 디렉터리를 만든다.
+4. `product-spec.md`, `implementation-plan.md`, `spec.json`, `task-graph.json`, `review-report.md`를 대상 프로젝트에 배치한다.
+5. Codex, Claude Code, Gemini CLI에서 사용할 skill, subagent, command shim을 대상 프로젝트에 복사한다.
+6. task 실행, 상태 변경, 검증 명령을 대상 프로젝트 기준으로 사용할 수 있게 초기 설정 파일을 만든다.
+
+v2 부트스트랩 도구가 만들어야 할 결과:
+
+- 대상 프로젝트 안에 기획 산출물 디렉터리 생성
+- 대상 프로젝트 안에 AI 개발 도구 디렉터리 생성
+- task graph 기준의 개발 시작 명령 안내
+- 대상 프로젝트의 패키지 매니저, 테스트 명령, lint 명령을 기록하는 설정 파일
+- 복사된 도구와 산출물의 출처를 기록하는 manifest
+
+이 기능은 agent 자동 실행보다 먼저 구현한다. 이유는 자동 실행을 붙이기 전에, 어떤 프로젝트 디렉터리에서 어떤 산출물과 어떤 도구를 기준으로 개발하는지가 안정적으로 정해져야 하기 때문이다.
 
 ## 9. 변경 추적 방식
 
@@ -305,6 +333,8 @@ Plan2Agent 개발은 아래 흐름을 기본 협업 방식으로 둔다.
 
 ## 14. 고도화 백로그
 
+- v2: 기획 산출물 개발 프로젝트 인계 도구
+- v2: AI 개발 도구(skill, subagent, command shim) 복사와 개발 환경 부트스트랩
 - v2: task별 agent 세션 실행과 로그 관리
 - v2: 코드 변경 결과와 task 연결
 - v2: 기획 변경 diff 기반 재작업 task 생성
@@ -318,4 +348,5 @@ Plan2Agent 개발은 아래 흐름을 기본 협업 방식으로 둔다.
 2. `scripts/sync_cli_assets.mjs`, `scripts/check_cli_parity.mjs`, `scripts/run_fixtures.mjs`를 CI에 연결한다.
 3. 완료: v1 프로토타입은 Node.js CLI로 결정했고, UI(task board)는 v2 백로그로 둔다.
 4. 완료: §3의 task 상태와 의존성 관리는 `scripts/p2a_tasks.mjs`로 충족한다.
-5. v2 agent 실행 로그, worktree 분리, 결과 diff 연결 방식을 설계한다.
+5. `plans/03-v2-development-handoff.md` 기준으로 v2 개발 인계/환경 세팅 도구를 설계한다.
+6. v2 agent 실행 로그, worktree 분리, 결과 diff 연결 방식을 설계한다.
