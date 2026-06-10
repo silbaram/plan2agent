@@ -48,6 +48,7 @@ v2 이후 후보:
 
 - Gate D를 통과한 기획 산출물을 실제 개발 대상 프로젝트 디렉터리로 인계
 - 개발 대상 프로젝트에 AI 개발 도구(skill, subagent, command shim, task CLI)를 복사하고 초기 개발 환경 세팅
+- 복잡한 task 실행을 위해 `team-bigfive`의 Team Big Five 실행 패턴을 Codex, Claude Code, Gemini CLI용 skill/subagent로 이식하고 Plan2Agent task와 연결
 - task별 agent 세션 실행 및 로그 관리
 - 코드 변경 결과와 task 연결
 - 기획 변경 diff 기반 task 재생성
@@ -184,6 +185,7 @@ v2 이후 범위:
 
 - 확정된 기획 산출물을 개발 대상 프로젝트에 배치한다.
 - 개발 대상 프로젝트에 Plan2Agent 개발 도구를 설치하거나 복사한다.
+- 대상 프로젝트에는 선택적으로 `team-bigfive`의 팀 실행 패턴을 CLI별 adapter로 설치해 복잡한 task의 협업 실행과 상호 검증에 활용한다.
 - task별 agent 세션 생성
 - worktree 또는 branch 분리
 - 실행 로그 저장
@@ -213,7 +215,8 @@ v2의 첫 고도화 목표는 v1 하네스가 만든 산출물을 실제 개발 
 3. 대상 프로젝트 안에 `plan2agent/` 또는 `.plan2agent/` 작업 디렉터리를 만든다.
 4. `product-spec.md`, `implementation-plan.md`, `spec.json`, `task-graph.json`, `review-report.md`를 대상 프로젝트에 배치한다.
 5. Codex, Claude Code, Gemini CLI에서 사용할 skill, subagent, command shim을 대상 프로젝트에 복사한다.
-6. task 실행, 상태 변경, 검증 명령을 대상 프로젝트 기준으로 사용할 수 있게 초기 설정 파일을 만든다.
+6. 선택한 CLI에는 `team-bigfive` 기반 팀 실행 adapter를 함께 설치해 여러 agent가 협업해야 하는 task 실행에 사용할 수 있게 한다.
+7. task 실행, 상태 변경, 검증 명령을 대상 프로젝트 기준으로 사용할 수 있게 초기 설정 파일을 만든다.
 
 v2 부트스트랩 도구가 만들어야 할 결과:
 
@@ -222,6 +225,7 @@ v2 부트스트랩 도구가 만들어야 할 결과:
 - task graph 기준의 개발 시작 명령 안내
 - 대상 프로젝트의 패키지 매니저, 테스트 명령, lint 명령을 기록하는 설정 파일
 - 복사된 도구와 산출물의 출처를 기록하는 manifest
+- 선택 설치된 외부 실행 하네스(`team-bigfive` 등)의 버전, 출처, CLI별 adapter, 사용 조건 기록
 
 이 기능은 agent 자동 실행보다 먼저 구현한다. 이유는 자동 실행을 붙이기 전에, 어떤 프로젝트 디렉터리에서 어떤 산출물과 어떤 도구를 기준으로 개발하는지가 안정적으로 정해져야 하기 때문이다.
 
@@ -335,6 +339,7 @@ Plan2Agent 개발은 아래 흐름을 기본 협업 방식으로 둔다.
 
 - v2: 기획 산출물 개발 프로젝트 인계 도구
 - v2: AI 개발 도구(skill, subagent, command shim) 복사와 개발 환경 부트스트랩
+- v2: `team-bigfive` 기반 Codex/Claude Code/Gemini CLI 팀 실행 하네스 선택 통합
 - v2: task별 agent 세션 실행과 로그 관리
 - v2: 코드 변경 결과와 task 연결
 - v2: 기획 변경 diff 기반 재작업 task 생성
