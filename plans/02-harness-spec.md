@@ -95,9 +95,9 @@ The harness passes intermediate artifacts with these exact names:
 | `task_graph_json` | `schemas/task-graph.schema.json` | dependency ids valid and DAG acyclic |
 | `review_report` | Markdown/JSON-compatible sections | no blocking issues |
 
-Schema validation is intentionally complemented by `scripts/validate_artifacts.py`, which performs gate checks that are easier to express procedurally: open/deferred decision blocking, spec/intake `open_decisions` traceability, approved-spec requirement, missing dependency ids, duplicate task ids, and cycle detection.
+Schema validation is intentionally complemented by `scripts/validate_artifacts.mjs`, which performs gate checks that are easier to express procedurally: open/deferred decision blocking, spec/intake `open_decisions` traceability, approved-spec requirement, missing dependency ids, duplicate task ids, and cycle detection.
 
-The harness orchestrator also persists each artifact as a file under `artifacts/<project_id>/` (`intake.json`, `intake.md`, `product-spec.md`, `implementation-plan.md`, `spec.json`, `task-graph.json`, `review-report.md`) so the user can review artifacts at each gate and run `scripts/validate_artifacts.py` against them. Subagents remain read-only; only the orchestrator writes files. `artifacts/<project_id>/` outputs are committed to git as planning history for file-based versioning.
+The harness orchestrator also persists each artifact as a file under `artifacts/<project_id>/` (`intake.json`, `intake.md`, `product-spec.md`, `implementation-plan.md`, `spec.json`, `task-graph.json`, `review-report.md`) so the user can review artifacts at each gate and run `scripts/validate_artifacts.mjs` against them. Subagents remain read-only; only the orchestrator writes files. `artifacts/<project_id>/` outputs are committed to git as planning history for file-based versioning.
 
 
 ## 7. Evidence and Citation Convention
@@ -121,17 +121,18 @@ Intake and spec artifacts include an `evidence` array so web-grounded or local-s
 .gemini/agents/                 # generated Gemini subagents
 .gemini/commands/p2a/           # Gemini command shims
 schemas/                        # artifact JSON schemas
-scripts/sync_cli_assets.py      # generate CLI mirrors from canonical sources
-scripts/check_cli_parity.py     # mirror drift check
-scripts/validate_artifacts.py   # schema, gate, and graph validation
-scripts/run_fixtures.py         # fixture/golden validation
+scripts/sync_cli_assets.mjs      # generate CLI mirrors from canonical sources
+scripts/check_cli_parity.mjs     # mirror drift check
+scripts/validate_artifacts.mjs   # schema, gate, and graph validation
+scripts/run_fixtures.mjs         # fixture/golden validation
+scripts/p2a_tasks.mjs            # task status and dependency management CLI
 ```
 
 구조 판단:
 
 - v1 skill 원본은 `.agents/skills`에 둔다.
 - CLI-neutral agent 원본은 `.agents/agents`에 둔다.
-- `.claude/agents`, `.codex/agents`, `.gemini/agents`는 `scripts/sync_cli_assets.py`가 생성하는 target별 산출물이다.
+- `.claude/agents`, `.codex/agents`, `.gemini/agents`는 `scripts/sync_cli_assets.mjs`가 생성하는 target별 산출물이다.
 - Gemini CLI의 `.gemini/commands`는 skill 자체가 아니라 invocation shortcut으로만 둔다.
 
 ## 9. 공통 Skill 내용 규칙
@@ -149,7 +150,7 @@ scripts/run_fixtures.py         # fixture/golden validation
 
 ## 10. Target Renderer Mapping
 
-`sync_cli_assets.py`는 `.agents/agents/*.md`의 중립 metadata를 CLI별 native agent 파일로 렌더링한다. Claude도 예외 없이 생성 대상이며, canonical 파일을 바이트 복사하지 않는다.
+`sync_cli_assets.mjs`는 `.agents/agents/*.md`의 중립 metadata를 CLI별 native agent 파일로 렌더링한다. Claude도 예외 없이 생성 대상이며, canonical 파일을 바이트 복사하지 않는다.
 
 | Neutral metadata | Claude target | Gemini target | Codex target |
 | --- | --- | --- | --- |
@@ -189,10 +190,11 @@ Gemini target fields use the documented subagent keys `kind`, `tools`, `temperat
 2. Claude Code mirror가 필요한 skill은 `.claude/skills`에 동일하게 반영한다.
 3. subagent 역할 변경은 `.codex/agents`, `.claude/agents`, `.gemini/agents`에 같은 역할명으로 반영한다.
 4. Gemini CLI shortcut 변경은 `.gemini/commands/p2a/*.toml`에 반영한다.
-5. Schema 변경은 `schemas/*.schema.json`과 `scripts/validate_artifacts.py`에 반영한다.
-6. CLI agent mirror는 canonical `.agents/agents` sources에서 `scripts/sync_cli_assets.py`의 target renderer로 생성하고 `scripts/check_cli_parity.py`로 검증한다.
-7. Fixture/golden output은 `fixtures/<name>/`에 추가하고 `scripts/run_fixtures.py`로 검증한다.
-8. 각 CLI에서 "idea -> intake -> spec -> task graph -> review" 흐름을 read-only로 수동 검증한다.
+5. Schema 변경은 `schemas/*.schema.json`과 `scripts/validate_artifacts.mjs`에 반영한다.
+6. CLI agent mirror는 canonical `.agents/agents` sources에서 `scripts/sync_cli_assets.mjs`의 target renderer로 생성하고 `scripts/check_cli_parity.mjs`로 검증한다.
+7. Fixture/golden output은 `fixtures/<name>/`에 추가하고 `scripts/run_fixtures.mjs`로 검증한다.
+8. Gate D 이후 task 상태와 의존성 관리는 `scripts/p2a_tasks.mjs`로 수행한다.
+9. 각 CLI에서 "idea -> intake -> spec -> task graph -> review" 흐름을 read-only로 수동 검증한다.
 
 ## 13. 산출물 Acceptance Criteria
 
@@ -212,6 +214,8 @@ Gemini target fields use the documented subagent keys `kind`, `tools`, `temperat
 ## 14. 현재 보완 필요 항목
 
 - fixture coverage를 cache library 외 product domain으로 확장한다.
+- 완료: Python stdlib scripts를 Node.js ESM scripts로 대체하고 `scripts/check_cli_parity.mjs`, `scripts/run_fixtures.mjs`, `scripts/validate_artifacts.mjs` 검증 경로를 확정했다.
+- 완료: task 상태와 의존성 관리는 `scripts/p2a_tasks.mjs`로 제공한다.
 - CLI mirror drift check와 fixture runner를 CI에 연결한다.
 - v2에서 agent 실행 로그, worktree 분리, 결과 diff 연결을 설계한다.
 

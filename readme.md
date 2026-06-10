@@ -32,7 +32,7 @@ v1에서 하지 않는 일:
 
 ## 하네스 구조
 
-Canonical 원본은 `.agents/skills/`와 CLI-중립 `.agents/agents/`다. `.agents/agents/*.md` frontmatter는 `capabilities`, `access`, `tier`만 사용하고 특정 CLI의 `tools`/`model` 문법을 넣지 않는다. `.claude/`, `.codex/`, `.gemini/` 아래 agent/skill mirror는 `scripts/sync_cli_assets.py`로 생성되는 산출물이므로 직접 수정하지 않는다. Gemini command shim은 수동 관리 대상이다.
+Canonical 원본은 `.agents/skills/`와 CLI-중립 `.agents/agents/`다. `.agents/agents/*.md` frontmatter는 `capabilities`, `access`, `tier`만 사용하고 특정 CLI의 `tools`/`model` 문법을 넣지 않는다. `.claude/`, `.codex/`, `.gemini/` 아래 agent/skill mirror는 `scripts/sync_cli_assets.mjs`로 생성되는 산출물이므로 직접 수정하지 않는다. Gemini command shim은 수동 관리 대상이다.
 
 공통 canonical 원본:
 
@@ -115,10 +115,11 @@ schemas/
   spec.schema.json
   task-graph.schema.json
 scripts/
-  sync_cli_assets.py
-  check_cli_parity.py
-  validate_artifacts.py
-  run_fixtures.py
+  sync_cli_assets.mjs
+  check_cli_parity.mjs
+  validate_artifacts.mjs
+  run_fixtures.mjs
+  p2a_tasks.mjs
 ```
 
 
@@ -180,7 +181,7 @@ Skills:
 - `task-graph.json`
 - `review-report.md`
 
-subagent는 read-only를 유지하며, 파일 기록은 하네스 오케스트레이터만 수행한다. `scripts/validate_artifacts.py`로 이 파일들을 그대로 검증할 수 있다.
+subagent는 read-only를 유지하며, 파일 기록은 하네스 오케스트레이터만 수행한다. `scripts/validate_artifacts.mjs`로 이 파일들을 그대로 검증할 수 있다.
 
 `artifacts/<project_id>/` 산출물은 git에 커밋해 기획 이력(파일 기반 versioning)으로 보존한다.
 
@@ -299,28 +300,55 @@ Gemini CLI에서 `.gemini/commands/p2a/harness.toml`은 `/p2a:harness` 명령이
 CLI mirror 생성/동기화:
 
 ```bash
-python3 scripts/sync_cli_assets.py
+node scripts/sync_cli_assets.mjs
 ```
 
 CLI mirror drift 확인(검사 항목: agent mirror 동기화, skill mirror byte 비교, Gemini command shim 내용 검사(skill 이름, `{{args}}`, 필수 필드)):
 
 ```bash
-python3 scripts/check_cli_parity.py
+node scripts/check_cli_parity.mjs
 ```
 
 Fixture/golden output 확인:
 
 ```bash
-python3 scripts/run_fixtures.py
+node scripts/run_fixtures.mjs
 ```
 
 artifact gate 확인:
 
 ```bash
-python3 scripts/validate_artifacts.py --intake path/to/intake.json
-python3 scripts/validate_artifacts.py --spec path/to/spec.json
-python3 scripts/validate_artifacts.py --task-graph path/to/task-graph.json --require-approved-spec path/to/spec.json
+node scripts/validate_artifacts.mjs --intake path/to/intake.json
+node scripts/validate_artifacts.mjs --spec path/to/spec.json
+node scripts/validate_artifacts.mjs --task-graph path/to/task-graph.json --require-approved-spec path/to/spec.json
 ```
+
+## Task 관리
+
+Gate D까지 통과해 `artifacts/<project_id>/task-graph.json`이 확정되면 Node.js task CLI로 개발 진행 상태를 관리한다. 기본 사용법은 다음과 같다.
+
+```bash
+node scripts/p2a_tasks.mjs <command> --graph artifacts/<project_id>/task-graph.json [task-id]
+```
+
+명령:
+
+- `list`: 전체 task의 `id`, `title`, `status`, `dependencies`, ready 여부를 표로 출력한다.
+- `ready`: 모든 dependency가 `done`이고 자신의 상태가 `todo`인 task만 출력한다.
+- `show <task-id>`: acceptance criteria와 source spec refs를 포함한 task 전체 JSON을 출력한다.
+- `prompt <task-id>`: `suggestedAgentPrompt`에 acceptance criteria를 덧붙여 agent CLI에 바로 붙여넣을 수 있는 실행 prompt를 출력한다.
+- `start <task-id>`: 모든 dependency가 `done`인 `todo` task만 `in_progress`로 바꾼다.
+- `done <task-id>`: `in_progress` task만 `done`으로 바꾼다.
+- `block <task-id>`: task를 `blocked`로 표시한다.
+- `todo <task-id>`: task를 `todo`로 되돌린다.
+
+개발 진행 루프:
+
+1. 기획 완료 후 `node scripts/p2a_tasks.mjs ready --graph artifacts/<project_id>/task-graph.json`로 실행 가능한 task를 고른다.
+2. `node scripts/p2a_tasks.mjs prompt --graph artifacts/<project_id>/task-graph.json <task-id>`로 실행 prompt를 만든다.
+3. 해당 prompt를 Claude Code, Codex, Gemini CLI 같은 agent CLI에 붙여넣어 구현 작업을 수행한다.
+4. 작업을 시작할 때 `start`, 검증 후 `done`, 막히면 `block`으로 상태를 기록한다.
+5. 각 전이는 저장 전에 task graph 전체를 `scripts/validate_artifacts.mjs`의 검증 로직으로 재검증하므로 잘못된 graph는 기록되지 않는다.
 
 ## Task Graph 기준
 

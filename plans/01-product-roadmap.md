@@ -34,7 +34,7 @@ v1 포함 범위:
 - 제품/기능 명세 Markdown 생성
 - 구현 단계 도출
 - agent 실행 가능한 task 분할
-- task 상태와 의존성 관리
+- task 상태와 의존성 관리 (`scripts/p2a_tasks.mjs` Node.js CLI로 충족)
 
 v1 제외 범위:
 
@@ -315,6 +315,7 @@ Plan2Agent 개발은 아래 흐름을 기본 협업 방식으로 둔다.
 ## 15. 다음 개발 액션
 
 1. fixture coverage를 cache library 외 product domain으로 확장한다.
-2. `scripts/sync_cli_assets.py`, `scripts/check_cli_parity.py`, `scripts/run_fixtures.py`를 CI에 연결한다.
-3. v1 UI 또는 CLI 프로토타입 방식을 결정한다.
-4. v2 agent 실행 로그, worktree 분리, 결과 diff 연결 방식을 설계한다.
+2. `scripts/sync_cli_assets.mjs`, `scripts/check_cli_parity.mjs`, `scripts/run_fixtures.mjs`를 CI에 연결한다.
+3. 완료: v1 프로토타입은 Node.js CLI로 결정했고, UI(task board)는 v2 백로그로 둔다.
+4. 완료: §3의 task 상태와 의존성 관리는 `scripts/p2a_tasks.mjs`로 충족한다.
+5. v2 agent 실행 로그, worktree 분리, 결과 diff 연결 방식을 설계한다.
