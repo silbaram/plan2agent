@@ -78,7 +78,7 @@ function printTaskTable(tasks, tasksById) {
 }
 
 function resolveSourceSpecPath(graph, graphPath, specPath = null) {
-  if (specPath) return specPath;
+  if (specPath) return path.resolve(specPath);
   if (path.isAbsolute(graph.sourceSpec)) return graph.sourceSpec;
 
   const graphRelativePath = path.resolve(path.dirname(graphPath), graph.sourceSpec);
@@ -88,6 +88,18 @@ function resolveSourceSpecPath(graph, graphPath, specPath = null) {
   if (existsSync(rootRelativePath)) return rootRelativePath;
 
   return graphRelativePath;
+}
+
+function formatDisplayPath(filePath) {
+  const relativePath = path.relative(ROOT, filePath);
+  const isRootRelative = relativePath
+    && relativePath !== '..'
+    && !relativePath.startsWith(`..${path.sep}`)
+    && !path.isAbsolute(relativePath);
+  const displayPath = isRootRelative
+    ? relativePath
+    : filePath;
+  return displayPath.split(path.sep).join('/');
 }
 
 function getByDotPath(data, dotPath) {
@@ -128,18 +140,19 @@ function printSpecContext(task, spec) {
   }
 }
 
-function readSpecForPrompt(specPath) {
+function readSpecForPrompt(specPath, displayPath = specPath) {
   try {
     return JSON.parse(readFileSync(specPath, 'utf8'));
   } catch (error) {
-    console.error(`warning: could not read source spec ${specPath}: ${error.message}`);
+    console.error(`warning: could not read source spec ${displayPath}: ${error.message}`);
     return null;
   }
 }
 
 function printPrompt(task, graph, graphPath, specPath = null) {
   const sourceSpecPath = resolveSourceSpecPath(graph, graphPath, specPath);
-  const spec = readSpecForPrompt(sourceSpecPath);
+  const displaySourceSpecPath = formatDisplayPath(sourceSpecPath);
+  const spec = readSpecForPrompt(sourceSpecPath, displaySourceSpecPath);
 
   console.log(task.suggestedAgentPrompt.trimEnd());
   console.log('');
@@ -155,7 +168,7 @@ function printPrompt(task, graph, graphPath, specPath = null) {
   console.log('');
   printSpecContext(task, spec);
   console.log('');
-  console.log(`전체 명세: ${sourceSpecPath}`);
+  console.log(`Full spec: ${displaySourceSpecPath}`);
 }
 
 function transitionTask(graph, task, command) {
