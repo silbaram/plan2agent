@@ -177,6 +177,9 @@ function buildPlan(paths, args, artifactsRoot, targetRoot) {
   const artifactFiles = plan
     .filter((item) => item.targetRelative.startsWith(`${ARTIFACT_TARGET_DIR}${path.sep}`) || item.targetRelative.startsWith(`${ARTIFACT_TARGET_DIR}/`))
     .map((item) => normalizePath(item.targetRelative));
+  const schemaFiles = plan
+    .filter((item) => item.targetRelative.startsWith(`schemas${path.sep}`) || item.targetRelative.startsWith('schemas/'))
+    .map((item) => normalizePath(item.targetRelative));
 
   const manifest = {
     schema_version: 'p2a.handoff.v1',
@@ -189,6 +192,7 @@ function buildPlan(paths, args, artifactsRoot, targetRoot) {
     externalHarnesses: [],
     artifactFiles,
     toolFiles: ['scripts/p2a_tasks.mjs', 'scripts/validate_artifacts.mjs'],
+    schemaFiles,
     notes: [`task-graph.sourceSpec rebased to ${REBASED_SOURCE_SPEC}`],
   };
 
