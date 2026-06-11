@@ -12,8 +12,10 @@ import {
   unlinkSync,
   writeFileSync,
 } from 'node:fs';
+import { createInterface } from 'node:readline/promises';
 import path from 'node:path';
 import process from 'node:process';
+import { Readable } from 'node:stream';
 import { fileURLToPath } from 'node:url';
 import {
   loadJson,
@@ -324,6 +326,109 @@ function cleanupMovedSources(plan, artifactsRoot) {
   }
 }
 
+function isCancel(input) {
+  const trimmed = input.trim();
+  return trimmed === '' || trimmed.toLowerCase() === 'q';
+}
+
+async function askRequired(rl, label, description) {
+  const input = await rl.question(`${label} - ${description} (빈 입력/q=취소): `);
+  if (isCancel(input)) return null;
+  return input.trim();
+}
+
+async function askMode(rl) {
+  console.log('mode - 산출물 처리 방식');
+  console.log('1) copy   원본 유지 [기본값]');
+  console.log('2) move   원본 제거');
+  while (true) {
+    const input = await rl.question('번호 선택 [1] (빈 입력/q=취소): ');
+    if (input.trim().toLowerCase() === 'q') return null;
+    if (input.trim() === '' || input.trim() === '1') return 'copy';
+    if (input.trim() === '2') return 'move';
+    console.log('1-2 사이의 번호를 입력하세요.');
+  }
+}
+
+async function askYesNo(rl, label, description, defaultValue) {
+  const suffix = defaultValue ? 'Y/n' : 'y/N';
+  while (true) {
+    const input = await rl.question(`${label} - ${description} (${suffix}): `);
+    const normalized = input.trim().toLowerCase();
+    if (normalized === 'q' || (normalized === '' && defaultValue === null)) return null;
+    if (normalized === '') return defaultValue;
+    if (normalized === 'y' || normalized === 'yes') return true;
+    if (normalized === 'n' || normalized === 'no') return false;
+    console.log('y 또는 n을 입력하세요.');
+  }
+}
+
+async function buildInteractiveArgv(rl) {
+  const projectId = await askRequired(rl, 'project-id', '프로젝트 식별자');
+  if (!projectId) return null;
+  const artifacts = await askRequired(rl, 'artifacts', '원본 산출물 디렉터리 (예: artifacts/<id>)');
+  if (!artifacts) return null;
+  const target = await askRequired(rl, 'target', '개발 대상 디렉터리');
+  if (!target) return null;
+  const mode = await askMode(rl);
+  if (!mode) return null;
+  const includeIntake = await askYesNo(rl, 'include-intake?', 'gate-a-intake 산출물도 포함', false);
+  if (includeIntake === null) return null;
+  const overwrite = await askYesNo(rl, 'overwrite?', '기존 대상 파일 덮어쓰기 허용', false);
+  if (overwrite === null) return null;
+  const dryRun = await askYesNo(rl, 'dry-run first?', '먼저 계획만 출력(권장)', true);
+  if (dryRun === null) return null;
+
+  const argv = ['--project-id', projectId, '--artifacts', artifacts, '--target', target, '--mode', mode];
+  if (includeIntake) argv.push('--include-intake');
+  if (overwrite) argv.push('--overwrite');
+  if (dryRun) argv.push('--dry-run');
+  return argv;
+}
+
+function createQuestioner() {
+  if (process.stdin.isTTY) return createInterface({ input: process.stdin, output: process.stdout });
+
+  const answers = readFileSync(0, 'utf8').split(/\r?\n/);
+  return {
+    async question(prompt) {
+      const answer = answers.length ? answers.shift() : '';
+      const rl = createInterface({ input: Readable.from([`${answer}\n`]), output: process.stdout });
+      try {
+        return await rl.question(prompt);
+      } finally {
+        rl.close();
+      }
+    },
+    close() {},
+  };
+}
+
+export async function interactiveMain() {
+  const rl = createQuestioner();
+  try {
+    const argv = await buildInteractiveArgv(rl);
+    if (!argv) return 0;
+    return main(argv);
+  } catch (error) {
+    const prefix = error instanceof ValidationError ? 'handoff gate validation failed' : 'p2a handoff interactive failed';
+    console.error(`${prefix}: ${error.message}`);
+    return 1;
+  } finally {
+    rl.close();
+  }
+}
+
+function shouldRunInteractive(argv) {
+  if (argv.includes('--help') || argv.includes('-h')) return false;
+  if (argv.includes('--interactive') || argv.includes('-i')) return true;
+  return argv.length === 0 && process.stdin.isTTY;
+}
+
+function isDirectEntry() {
+  return process.argv[1] && __filename === path.resolve(process.argv[1]);
+}
+
 export function main(argv = process.argv.slice(2)) {
   try {
     const args = parseArgs(argv);
@@ -357,4 +462,14 @@ export function main(argv = process.argv.slice(2)) {
   }
 }
 
-process.exitCode = main();
+if (isDirectEntry()) {
+  const argv = process.argv.slice(2);
+  if (argv.length === 0 && !process.stdin.isTTY) {
+    console.log(usage());
+    process.exitCode = 0;
+  } else if (shouldRunInteractive(argv)) {
+    process.exitCode = await interactiveMain();
+  } else {
+    process.exitCode = main(argv);
+  }
+}
