@@ -269,18 +269,26 @@ v1 권장 방식:
 plans/
   01-product-roadmap.md
   02-harness-spec.md
-specs/
-  <project-id>.md
-  <project-id>.json
-tasks/
-  <project-id>.tasks.json
-runs/
-  <run-id>.json
+artifacts/
+  <project_id>/
+    open-questions.md              # 선택, top-level
+    gate-a-intake/
+      intake.json
+      intake.md
+    gate-b-spec/
+      product-spec.md
+      implementation-plan.md
+      spec.json
+    gate-c-task-graph/
+      task-graph.json
+    gate-d-review/
+      review-report.md
 ```
 
-고도화 시 결정할 내용:
+결정된 내용과 고도화 시 결정할 내용:
 
-- `specs/`, `tasks/`, `runs/` 디렉터리를 v1부터 만들지 정한다.
+- 결정됨: v1은 `artifacts/<project_id>/gate-*` 구조를 사용한다.
+- `runs/` 실행 로그 디렉터리는 v2 agent 실행 로그 관리 항목으로 둔다.
 - 프로젝트 단위를 어떻게 식별할지 정한다.
 - PostgreSQL 도입 시점을 정한다.
 
@@ -292,29 +300,23 @@ runs/
 
 ## 11. 프론트엔드 선택
 
-현재 후보:
+현재 기준:
 
-- TLDraw: 자유로운 캔버스 기반 기획에 적합하다.
-- React Flow: task graph, 흐름도, 의존성 표현에 적합하다.
-- 일반 task board: v1 task 관리 화면을 가장 빠르게 만들 수 있다.
+- v1에는 웹 UI가 없으며 Node.js CLI로 제공한다.
+- 한 문장 입력, 대화형 보강, 명세 검토, task graph 검증과 task 상태 관리는 CLI와 파일 산출물로 처리한다.
+- UI(task board)는 v2 백로그로 둔다.
 
-v1 권장 방향:
+v2·v3 후보:
 
-- 한 문장 입력과 대화형 보강 화면을 먼저 만든다.
-- 생성된 명세를 Markdown preview로 보여준다.
-- 생성된 task를 board 또는 list로 관리한다.
-- task 의존성을 보여줘야 할 때 React Flow를 붙인다.
+- v2 일반 task board: task 상태와 진행 상황을 화면에서 관리한다.
+- v2 React Flow: task graph, 흐름도, 의존성 표현이 필요할 때 붙인다.
+- v3 TLDraw: 자유로운 캔버스 기반 기획 입력에 사용한다.
 
-v1에서 TLDraw를 미루는 이유:
+결정된 내용:
 
-- 현재 핵심은 자유로운 캔버스 편집이 아니라, 기획을 개발 가능한 task로 바꾸는 하네스다.
-- 캔버스 입력은 schema와 task 분할 규칙이 안정된 뒤 붙이는 편이 낫다.
-
-고도화 시 결정할 내용:
-
-- v1 UI를 task board 중심으로 만들지, graph 중심으로 만들지 정한다.
-- React Flow를 v1에 바로 포함할지 정한다.
-- TLDraw를 v2 기능으로 명시할지 정한다.
+- v1 UI를 task board 중심으로 만들지, graph 중심으로 만들지에 대한 판단은 완료됐다. v1은 UI 없이 Node.js CLI로 제공한다.
+- React Flow는 v1에 포함하지 않고 v2 후보로 둔다.
+- TLDraw는 v1·v2 범위가 아니라 v3 캔버스 기반 시각 기획 입력 후보로 둔다.
 
 ## 12. 작업 방식
 
