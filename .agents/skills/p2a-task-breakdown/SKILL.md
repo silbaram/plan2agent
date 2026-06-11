@@ -21,7 +21,7 @@ Return a `task_graph_json` object conforming to `schemas/task-graph.schema.json`
 - `schema_version`: `p2a.task_graph.v1`
 - `projectId`
 - `version`
-- `sourceSpec`
+- `sourceSpec` (use the Gate B folder path, for example `artifacts/<project_id>/gate-b-spec/spec.json`, when the source is a persisted artifact)
 - `tasks`
 
 Each task must include:
