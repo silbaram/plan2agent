@@ -174,12 +174,13 @@ Skills:
 
 ### 산출물 파일 저장
 
-하네스 오케스트레이터는 각 단계 산출물을 `artifacts/<project_id>/` 아래 파일로 기록해 사용자가 게이트 전에 파일로 검토할 수 있게 한다.
+하네스 오케스트레이터는 각 단계 산출물을 `artifacts/<project_id>/` 아래 gate별 폴더에 기록해 사용자가 게이트 전에 파일로 검토할 수 있게 한다.
 
-- `intake.json`, `intake.md`
-- `product-spec.md`, `implementation-plan.md`, `spec.json`
-- `task-graph.json`
-- `review-report.md`
+- `open-questions.md` — 선택적 cross-gate index
+- `gate-a-intake/intake.json`, `gate-a-intake/intake.md`
+- `gate-b-spec/product-spec.md`, `gate-b-spec/implementation-plan.md`, `gate-b-spec/spec.json`
+- `gate-c-task-graph/task-graph.json`
+- `gate-d-review/review-report.md`
 
 subagent는 read-only를 유지하며, 파일 기록은 하네스 오케스트레이터만 수행한다. `scripts/validate_artifacts.mjs`로 이 파일들을 그대로 검증할 수 있다.
 
@@ -318,17 +319,17 @@ node scripts/run_fixtures.mjs
 artifact gate 확인:
 
 ```bash
-node scripts/validate_artifacts.mjs --intake path/to/intake.json
-node scripts/validate_artifacts.mjs --spec path/to/spec.json
-node scripts/validate_artifacts.mjs --task-graph path/to/task-graph.json --require-approved-spec path/to/spec.json
+node scripts/validate_artifacts.mjs --intake artifacts/<project_id>/gate-a-intake/intake.json
+node scripts/validate_artifacts.mjs --spec artifacts/<project_id>/gate-b-spec/spec.json
+node scripts/validate_artifacts.mjs --task-graph artifacts/<project_id>/gate-c-task-graph/task-graph.json --require-approved-spec artifacts/<project_id>/gate-b-spec/spec.json
 ```
 
 ## Task 관리
 
-Gate D까지 통과해 `artifacts/<project_id>/task-graph.json`이 확정되면 Node.js task CLI로 개발 진행 상태를 관리한다. 기본 사용법은 다음과 같다.
+Gate D까지 통과해 `artifacts/<project_id>/gate-c-task-graph/task-graph.json`이 확정되면 Node.js task CLI로 개발 진행 상태를 관리한다. 기본 사용법은 다음과 같다.
 
 ```bash
-node scripts/p2a_tasks.mjs <command> --graph artifacts/<project_id>/task-graph.json [task-id]
+node scripts/p2a_tasks.mjs <command> --graph artifacts/<project_id>/gate-c-task-graph/task-graph.json [task-id]
 ```
 
 명령:
@@ -344,8 +345,8 @@ node scripts/p2a_tasks.mjs <command> --graph artifacts/<project_id>/task-graph.j
 
 개발 진행 루프:
 
-1. 기획 완료 후 `node scripts/p2a_tasks.mjs ready --graph artifacts/<project_id>/task-graph.json`로 실행 가능한 task를 고른다.
-2. `node scripts/p2a_tasks.mjs prompt --graph artifacts/<project_id>/task-graph.json <task-id>`로 실행 prompt를 만든다.
+1. 기획 완료 후 `node scripts/p2a_tasks.mjs ready --graph artifacts/<project_id>/gate-c-task-graph/task-graph.json`로 실행 가능한 task를 고른다.
+2. `node scripts/p2a_tasks.mjs prompt --graph artifacts/<project_id>/gate-c-task-graph/task-graph.json <task-id>`로 실행 prompt를 만든다.
 3. 해당 prompt를 Claude Code, Codex, Gemini CLI 같은 agent CLI에 붙여넣어 구현 작업을 수행한다.
 4. 작업을 시작할 때 `start`, 검증 후 `done`, 막히면 `block`으로 상태를 기록한다.
 5. 각 전이는 저장 전에 task graph 전체를 `scripts/validate_artifacts.mjs`의 검증 로직으로 재검증하므로 잘못된 graph는 기록되지 않는다.
