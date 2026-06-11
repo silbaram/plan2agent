@@ -169,6 +169,10 @@ function buildPlan(paths, args, artifactsRoot, targetRoot) {
   }
 
   pushArtifact(plan, path.join(ROOT, 'scripts', 'p2a_tasks.mjs'), targetRoot, path.join('scripts', 'p2a_tasks.mjs'));
+  pushArtifact(plan, path.join(ROOT, 'scripts', 'validate_artifacts.mjs'), targetRoot, path.join('scripts', 'validate_artifacts.mjs'));
+  for (const schemaFile of ['intake.schema.json', 'spec.schema.json', 'task-graph.schema.json', 'review.schema.json']) {
+    pushArtifact(plan, path.join(ROOT, 'schemas', schemaFile), targetRoot, path.join('schemas', schemaFile));
+  }
 
   const artifactFiles = plan
     .filter((item) => item.targetRelative.startsWith(`${ARTIFACT_TARGET_DIR}${path.sep}`) || item.targetRelative.startsWith(`${ARTIFACT_TARGET_DIR}/`))
@@ -181,10 +185,10 @@ function buildPlan(paths, args, artifactsRoot, targetRoot) {
     targetProject: targetRoot,
     handoffMode: args.mode,
     createdAt: new Date().toISOString(),
-    includedTools: ['p2a_tasks'],
+    includedTools: ['p2a_tasks', 'validate_artifacts'],
     externalHarnesses: [],
     artifactFiles,
-    toolFiles: ['scripts/p2a_tasks.mjs'],
+    toolFiles: ['scripts/p2a_tasks.mjs', 'scripts/validate_artifacts.mjs'],
     notes: [`task-graph.sourceSpec rebased to ${REBASED_SOURCE_SPEC}`],
   };
 
