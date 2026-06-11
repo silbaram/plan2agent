@@ -4,10 +4,75 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
-import { fileURLToPath } from 'node:url';
-import { validateTaskGraphData, ValidationError } from './validate_artifacts.mjs';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const __filename = fileURLToPath(import.meta.url);
+
+class LocalValidationError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = 'ValidationError';
+  }
+}
+
+function assertType(value, type, label) {
+  if (type === 'array') {
+    if (!Array.isArray(value)) throw new LocalValidationError(`${label} must be array`);
+    return;
+  }
+  if (typeof value !== type || value === null || Array.isArray(value)) throw new LocalValidationError(`${label} must be ${type}`);
+}
+
+function detectCycles(graph) {
+  const visiting = new Set();
+  const visited = new Set();
+
+  function visit(node, stack) {
+    if (visiting.has(node)) throw new LocalValidationError(`task graph contains a dependency cycle: ${[...stack, node].join(' -> ')}`);
+    if (visited.has(node)) return;
+    visiting.add(node);
+    for (const dependency of graph.get(node)) visit(dependency, [...stack, node]);
+    visiting.delete(node);
+    visited.add(node);
+  }
+
+  for (const node of graph.keys()) visit(node, []);
+}
+
+function fallbackValidateTaskGraphData(data) {
+  assertType(data, 'object', '$');
+  for (const key of ['schema_version', 'projectId', 'version', 'sourceSpec']) assertType(data[key], 'string', `$.${key}`);
+  if (data.schema_version !== 'p2a.task_graph.v1') throw new LocalValidationError('$.schema_version must equal "p2a.task_graph.v1"');
+  assertType(data.tasks, 'array', '$.tasks');
+  if (data.tasks.length === 0) throw new LocalValidationError('$.tasks must contain at least 1 item');
+
+  const taskIds = data.tasks.map((task, index) => {
+    assertType(task, 'object', `$.tasks[${index}]`);
+    for (const key of ['id', 'title', 'description', 'status', 'targetArea', 'suggestedAgentPrompt']) assertType(task[key], 'string', `$.tasks[${index}].${key}`);
+    for (const key of ['dependencies', 'acceptanceCriteria', 'sourceSpecRefs']) assertType(task[key], 'array', `$.tasks[${index}].${key}`);
+    if (!/^task-[0-9]+$/.test(task.id)) throw new LocalValidationError(`$.tasks[${index}].id must match task-[0-9]+`);
+    if (!['todo', 'blocked', 'in_progress', 'done'].includes(task.status)) throw new LocalValidationError(`$.tasks[${index}].status is unsupported`);
+    if (task.acceptanceCriteria.length === 0) throw new LocalValidationError(`$.tasks[${index}].acceptanceCriteria must contain at least 1 item`);
+    if (task.sourceSpecRefs.length === 0) throw new LocalValidationError(`$.tasks[${index}].sourceSpecRefs must contain at least 1 item`);
+    return task.id;
+  });
+
+  if (taskIds.length !== new Set(taskIds).size) throw new LocalValidationError('task ids must be unique');
+  const taskIdSet = new Set(taskIds);
+  const graph = new Map();
+  for (const task of data.tasks) {
+    const unknownDependencies = task.dependencies.filter((dependency) => !taskIdSet.has(dependency));
+    if (unknownDependencies.length) throw new LocalValidationError(`${task.id} has unknown dependencies: ${JSON.stringify(unknownDependencies)}`);
+    graph.set(task.id, [...task.dependencies]);
+  }
+  detectCycles(graph);
+  return data;
+}
+
+const VALIDATOR_PATH = path.join(path.dirname(__filename), 'validate_artifacts.mjs');
+const validators = existsSync(VALIDATOR_PATH) ? await import(pathToFileURL(VALIDATOR_PATH).href) : null;
+const validateTaskGraphData = validators?.validateTaskGraphData ?? fallbackValidateTaskGraphData;
+const ValidationError = validators?.ValidationError ?? LocalValidationError;
 const ROOT = path.resolve(path.dirname(__filename), '..');
 const VALID_TRANSITIONS = new Set(['start', 'done', 'block', 'todo']);
 
