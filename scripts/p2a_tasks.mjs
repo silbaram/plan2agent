@@ -2,14 +2,28 @@
 /** Manage Plan2Agent task graph status and dependency workflow. */
 
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { createInterface } from 'node:readline/promises';
 import path from 'node:path';
 import process from 'node:process';
+import { Readable } from 'node:stream';
 import { fileURLToPath } from 'node:url';
 import { validateTaskGraphData, ValidationError } from './validate_artifacts.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const ROOT = path.resolve(path.dirname(__filename), '..');
 const VALID_TRANSITIONS = new Set(['start', 'done', 'block', 'todo']);
+const DEFAULT_GRAPH_PATH = '.plan2agent/artifacts/task-graph.json';
+const INTERACTIVE_COMMANDS = [
+  { command: 'list', description: '전체 task와 진행 상태표' },
+  { command: 'ready', description: '지금 시작 가능한 task' },
+  { command: 'show', description: 'task 상세 JSON' },
+  { command: 'prompt', description: '실행 프롬프트 뽑기' },
+  { command: 'start', description: 'task 시작(in_progress)' },
+  { command: 'done', description: '완료 처리' },
+  { command: 'block', description: '차단' },
+  { command: 'todo', description: 'todo로 되돌리기' },
+];
+const TASK_ID_COMMANDS = new Set(['show', 'prompt', 'start', 'done', 'block', 'todo']);
 
 function usage() {
   return [
@@ -193,6 +207,117 @@ function saveValidatedGraph(graphPath, graph) {
   writeFileSync(graphPath, `${JSON.stringify(graph, null, 2)}\n`, 'utf8');
 }
 
+function isCancel(input) {
+  const trimmed = input.trim();
+  return trimmed === '' || trimmed.toLowerCase() === 'q';
+}
+
+async function askRequired(rl, label, description, defaultValue = null) {
+  const defaultLabel = defaultValue ? ` [${defaultValue}]` : '';
+  const input = await rl.question(`${label}${defaultLabel} - ${description}: `);
+  if (input.trim().toLowerCase() === 'q') return null;
+  if (input.trim() === '') return defaultValue;
+  return input.trim();
+}
+
+async function askMenu(rl, title, items, formatItem) {
+  console.log(title);
+  items.forEach((item, index) => console.log(formatItem(item, index + 1)));
+  while (true) {
+    const input = await rl.question('번호 선택 (빈 입력/q=취소): ');
+    if (isCancel(input)) return null;
+    const selected = Number.parseInt(input.trim(), 10);
+    if (Number.isInteger(selected) && selected >= 1 && selected <= items.length) return items[selected - 1];
+    console.log(`1-${items.length} 사이의 번호를 입력하세요.`);
+  }
+}
+
+function interactiveGraphDefault() {
+  return existsSync(DEFAULT_GRAPH_PATH) ? DEFAULT_GRAPH_PATH : null;
+}
+
+async function buildInteractiveArgv(rl) {
+  const selected = await askMenu(
+    rl,
+    'Plan2Agent task 명령을 선택하세요.',
+    INTERACTIVE_COMMANDS,
+    (item, number) => `${number}) ${item.command.padEnd(6)} ${item.description}`,
+  );
+  if (!selected) return null;
+
+  const graphPath = await askRequired(
+    rl,
+    'graph',
+    'task graph JSON 경로',
+    interactiveGraphDefault(),
+  );
+  if (!graphPath) return null;
+
+  const argv = [selected.command, '--graph', graphPath];
+  if (TASK_ID_COMMANDS.has(selected.command)) {
+    const graph = loadGraph(graphPath);
+    validateTaskGraphData(graph);
+    const task = await askMenu(
+      rl,
+      'task를 선택하세요.',
+      graph.tasks,
+      (item, number) => `${number}) ${item.id}  [${item.status}]  ${item.title}`,
+    );
+    if (!task) return null;
+
+    if (selected.command === 'prompt') {
+      const specPath = await rl.question('spec [자동 해석] - source spec JSON 경로(Enter=--spec 생략): ');
+      if (specPath.trim().toLowerCase() === 'q') return null;
+      if (specPath.trim() !== '') argv.push('--spec', specPath.trim());
+    }
+    argv.push(task.id);
+  }
+  return argv;
+}
+
+function createQuestioner() {
+  if (process.stdin.isTTY) return createInterface({ input: process.stdin, output: process.stdout });
+
+  const answers = readFileSync(0, 'utf8').split(/\r?\n/);
+  return {
+    async question(prompt) {
+      const answer = answers.length ? answers.shift() : '';
+      const rl = createInterface({ input: Readable.from([`${answer}\n`]), output: process.stdout });
+      try {
+        return await rl.question(prompt);
+      } finally {
+        rl.close();
+      }
+    },
+    close() {},
+  };
+}
+
+export async function interactiveMain() {
+  const rl = createQuestioner();
+  try {
+    const argv = await buildInteractiveArgv(rl);
+    if (!argv) return 0;
+    return main(argv);
+  } catch (error) {
+    const prefix = error instanceof ValidationError ? 'task graph validation failed' : 'p2a task interactive failed';
+    console.error(`${prefix}: ${error.message}`);
+    return 1;
+  } finally {
+    rl.close();
+  }
+}
+
+function shouldRunInteractive(argv) {
+  if (argv.includes('--help') || argv.includes('-h')) return false;
+  if (argv.includes('--interactive') || argv.includes('-i')) return true;
+  return argv.length === 0 && process.stdin.isTTY;
+}
+
+function isDirectEntry() {
+  return process.argv[1] && __filename === path.resolve(process.argv[1]);
+}
+
 export function main(argv = process.argv.slice(2)) {
   let args;
   try {
@@ -231,4 +356,14 @@ export function main(argv = process.argv.slice(2)) {
   return 0;
 }
 
-process.exitCode = main();
+if (isDirectEntry()) {
+  const argv = process.argv.slice(2);
+  if (argv.length === 0 && !process.stdin.isTTY) {
+    console.log(usage());
+    process.exitCode = 0;
+  } else if (shouldRunInteractive(argv)) {
+    process.exitCode = await interactiveMain();
+  } else {
+    process.exitCode = main(argv);
+  }
+}
