@@ -106,7 +106,7 @@ function targetPath(targetRoot, relativePath) {
   return resolved;
 }
 
-function validateGates(artifactsRoot) {
+function validateGates(artifactsRoot, projectId) {
   const paths = {
     specJson: path.join(artifactsRoot, 'gate-b-spec', 'spec.json'),
     productSpec: path.join(artifactsRoot, 'gate-b-spec', 'product-spec.md'),
@@ -123,20 +123,63 @@ function validateGates(artifactsRoot) {
   assertFile(paths.productSpec, 'gate-b-spec/product-spec.md');
   assertFile(paths.implementationPlan, 'gate-b-spec/implementation-plan.md');
   const spec = validateSpec(paths.specJson);
+  assertProjectId('spec.project_id', spec.project_id, projectId);
   if (spec.approval !== 'approved') throw new ValidationError('handoff requires spec.approval to be "approved"');
   if (spec.open_decisions.length !== 0) throw new ValidationError('handoff requires spec.open_decisions to be empty');
 
   assertFile(paths.taskGraph, 'gate-c-task-graph/task-graph.json');
-  validateTaskGraph(paths.taskGraph, paths.specJson);
+  const taskGraph = validateTaskGraph(paths.taskGraph, paths.specJson);
+  assertProjectId('taskGraph.projectId', taskGraph.projectId, projectId);
 
   assertFile(paths.reviewReport, 'gate-d-review/review-report.md');
   assertFile(paths.reviewJson, 'gate-d-review/review.json');
   const review = validateReview(paths.reviewJson);
+  assertProjectId('review.projectId', review.projectId, projectId);
   if (review.blocking_issues.length !== 0) {
     throw new ValidationError(`handoff blocked by review.json blocking_issues: ${JSON.stringify(review.blocking_issues)}`);
   }
+  validateReviewReferences(review, artifactsRoot, paths);
 
   return paths;
+}
+
+function assertProjectId(label, actual, expected) {
+  if (actual !== expected) {
+    throw new ValidationError(`${label} must match --project-id ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`);
+  }
+}
+
+function normalizeReference(reference) {
+  return String(reference).replace(/\\/g, '/').replace(/^\.\//, '');
+}
+
+function artifactRelativeRef(artifactsRoot, filePath) {
+  return normalizePath(path.relative(artifactsRoot, filePath));
+}
+
+function reviewReferenceMatches(reference, artifactsRoot, filePath) {
+  if (path.isAbsolute(reference) && path.resolve(reference) === path.resolve(filePath)) return true;
+  const normalized = normalizeReference(reference);
+  const expectedRelative = artifactRelativeRef(artifactsRoot, filePath);
+  const projectRelative = `${path.basename(artifactsRoot)}/${expectedRelative}`;
+  const artifactsRelative = `artifacts/${projectRelative}`;
+  return normalized === expectedRelative
+    || normalized === projectRelative
+    || normalized === artifactsRelative;
+}
+
+function validateReviewReferences(review, artifactsRoot, paths) {
+  const checks = [
+    ['sourceSpec', paths.specJson],
+    ['sourceTaskGraph', paths.taskGraph],
+  ];
+  for (const [field, expectedPath] of checks) {
+    if (!reviewReferenceMatches(review[field], artifactsRoot, expectedPath)) {
+      throw new ValidationError(
+        `review.json ${field} must reference ${artifactRelativeRef(artifactsRoot, expectedPath)}, got ${JSON.stringify(review[field])}`,
+      );
+    }
+  }
 }
 
 function pushArtifact(plan, source, targetRoot, targetRelative, options = {}) {
@@ -446,7 +489,7 @@ export function main(argv = process.argv.slice(2)) {
       throw new Error(`--target must be a directory path, but a non-directory exists: ${targetRoot}`);
     }
 
-    const paths = validateGates(artifactsRoot);
+    const paths = validateGates(artifactsRoot, args.projectId);
     const plan = buildPlan(paths, args, artifactsRoot, targetRoot);
     assertNoConflicts(plan, args.overwrite);
     printPlan(plan, args, artifactsRoot, targetRoot);

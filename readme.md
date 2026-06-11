@@ -176,7 +176,7 @@ Skills:
 
 하네스 오케스트레이터는 각 단계 산출물을 `artifacts/<project_id>/` 아래 gate별 폴더에 기록해 사용자가 게이트 전에 파일로 검토할 수 있게 한다.
 
-- `open-questions.md` — 선택적 cross-gate index
+- `open-questions.md` — Gate A가 `blocked_on_user`이거나 open/deferred decision이 있을 때 필수인 cross-gate index
 - `gate-a-intake/intake.json`, `gate-a-intake/intake.md`
 - `gate-b-spec/product-spec.md`, `gate-b-spec/implementation-plan.md`, `gate-b-spec/spec.json`
 - `gate-c-task-graph/task-graph.json`

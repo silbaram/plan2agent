@@ -271,7 +271,7 @@ plans/
   02-harness-spec.md
 artifacts/
   <project_id>/
-    open-questions.md              # 선택, top-level
+    open-questions.md              # Gate A blocked/open decision이 있으면 필수, top-level
     gate-a-intake/
       intake.json
       intake.md

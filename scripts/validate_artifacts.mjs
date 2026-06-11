@@ -193,6 +193,8 @@ export function validateTaskGraphData(data, requireApprovedSpec = null) {
 
   const graph = new Map();
   for (const task of tasks) {
+    validateNonBlankStrings(task.acceptanceCriteria, `${task.id}.acceptanceCriteria`);
+    validateNonBlankStrings(task.sourceSpecRefs, `${task.id}.sourceSpecRefs`);
     const unknownDependencies = task.dependencies.filter((dependency) => !taskIdSet.has(dependency));
     if (unknownDependencies.length) {
       throw new ValidationError(`${task.id} has unknown dependencies: ${JSON.stringify(unknownDependencies)}`);
@@ -204,12 +206,28 @@ export function validateTaskGraphData(data, requireApprovedSpec = null) {
   return data;
 }
 
+function validateNonBlankStrings(values, label) {
+  for (const [index, value] of values.entries()) {
+    if (value.trim().length === 0) {
+      throw new ValidationError(`${label}[${index}] must not be blank`);
+    }
+  }
+}
+
 export function validateTaskGraph(filePath, requireApprovedSpec = null) {
   return validateTaskGraphData(loadJson(filePath), requireApprovedSpec);
 }
 
-export function validateReview(filePath) {
-  return validateAgainstSchema(filePath, 'review');
+export function validateReview(filePath, expectedSources = null) {
+  const data = validateAgainstSchema(filePath, 'review');
+  if (expectedSources) {
+    for (const [field, expected] of Object.entries(expectedSources)) {
+      if (data[field] !== expected) {
+        throw new ValidationError(`review.${field} must reference ${JSON.stringify(expected)}, got ${JSON.stringify(data[field])}`);
+      }
+    }
+  }
+  return data;
 }
 
 export function detectCycles(graph) {
@@ -242,7 +260,7 @@ export function validateFixtureDir(fixturePath) {
     ['spec.approved.json', (artifactPath) => validateSpec(artifactPath, path.join(fixturePath, 'intake.answered.json'))],
     ['task-graph.json', (artifactPath) => validateTaskGraph(artifactPath, path.join(fixturePath, 'spec.approved.json'))],
     ['review-report.md', () => null],
-    ['review.json', (artifactPath) => validateReview(artifactPath)],
+    ['review.json', (artifactPath) => validateReview(artifactPath, { sourceSpec: 'spec.approved.json', sourceTaskGraph: 'task-graph.json' })],
   ];
   for (const [filename, validator] of required) {
     const artifactPath = path.join(fixturePath, filename);

@@ -71,7 +71,7 @@ Return intermediate artifacts in fenced code blocks named exactly:
 
 In addition to the inline state sections, the harness orchestrator writes each artifact to a file so the user can open and review it before any gate. Use a stable `project_id` (kebab-case, derived from the idea or carried forward) and keep all files for one run under `artifacts/<project_id>/` using gate-specific folders:
 
-- `open-questions.md` — optional cross-gate index for unresolved or answered questions; keep it at the top level when present
+- `open-questions.md` — required when `intake_json.status` is `blocked_on_user` or any `needs_user_decision` is `open`/`deferred`; keep it at the top level as the cross-gate decision index
 - `gate-a-intake/intake.json` — the `intake_json` artifact
 - `gate-a-intake/intake.md` — the human-readable analysis and decision rationale described in Analysis and Decision Presentation
 - `gate-b-spec/product-spec.md` — the `product_spec_markdown` artifact
@@ -81,7 +81,7 @@ In addition to the inline state sections, the harness orchestrator writes each a
 - `gate-d-review/review-report.md` — the `review_report` artifact
 - `gate-d-review/review.json` — the `review_json` artifact
 
-The orchestrator writes each stage's outputs into its matching `gate-*` folder before stopping at that gate, and tells the user the file paths. `open-questions.md`, when used, remains directly under `artifacts/<project_id>/` because it is a cross-gate index. Only the harness orchestrator writes files; subagents stay read-only and return their content for the orchestrator to persist. Continue to surface the inline named sections as well so resume and paste-in still work.
+The orchestrator writes each stage's outputs into its matching `gate-*` folder before stopping at that gate, and tells the user the file paths. `open-questions.md` remains directly under `artifacts/<project_id>/` because it is a cross-gate index. When Gate A is blocked, write or update `open-questions.md` in the same turn as `gate-a-intake/intake.json` and `gate-a-intake/intake.md`; do not treat it as optional while unresolved decisions exist. Only the harness orchestrator writes files; subagents stay read-only and return their content for the orchestrator to persist. Continue to surface the inline named sections as well so resume and paste-in still work.
 
 ## Evidence and Citation Contract
 
@@ -92,7 +92,7 @@ The orchestrator writes each stage's outputs into its matching `gate-*` folder b
 
 ## Output Modes
 
-- **Blocked intake:** Write `gate-a-intake/intake.json` and `gate-a-intake/intake.md`, present the analysis narrative and per-decision recommendations, invite feedback and answers, and stop at Gate A.
+- **Blocked intake:** Write `gate-a-intake/intake.json`, `gate-a-intake/intake.md`, and top-level `open-questions.md`; present the analysis narrative and per-decision recommendations, invite feedback and answers, and stop at Gate A.
 - **Draft spec:** Write `gate-b-spec/product-spec.md`, `gate-b-spec/implementation-plan.md`, and `gate-b-spec/spec.json` with `approval: draft`, present them for file-based review, and stop at Gate B before the task graph.
 - **Approved planning output:** Write all artifact files and return the state sections after gates pass.
 - **Resume output:** Regenerate only the downstream artifact files and sections, plus a short changelog of which decisions were applied.
