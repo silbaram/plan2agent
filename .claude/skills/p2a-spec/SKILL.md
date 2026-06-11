@@ -29,7 +29,7 @@ Return:
 - `spec_json` conforming to `schemas/spec.schema.json`
 - `open_decisions`
 - `evidence` inside `spec_json`, preserving intake sources and adding any new `WEB-n` or `LOCAL-n` sources
-- The harness persists these as `product-spec.md`, `implementation-plan.md`, and `spec.json` under `artifacts/<project_id>/` for file-based review at Gate B.
+- The harness persists these as `gate-b-spec/product-spec.md`, `gate-b-spec/implementation-plan.md`, and `gate-b-spec/spec.json` under `artifacts/<project_id>/` for file-based review at Gate B. Set `spec_json.source_intake` to the Gate A folder path, for example `artifacts/<project_id>/gate-a-intake/intake.json`, when the source is a persisted artifact.
 
 ## Required Spec Fields
 

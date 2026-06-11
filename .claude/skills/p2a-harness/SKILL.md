@@ -50,7 +50,7 @@ Write this analysis into `intake.md` and summarize it in the conversation. Treat
 
 - When the user answers decisions such as `ND-1` or `ND-4`, merge the answers into `intake_json.needs_user_decision[*].answer`, set those decisions to `answered`, and recompute `intake_json.status`.
 - Resume from the earliest stage whose input changed. For example, changed intake answers invalidate spec, implementation plan, task graph, and review.
-- Carry forward stable artifact ids (`project_id`, `source_intake`, `sourceSpec`) so later stages can trace their source.
+- Carry forward stable artifact ids (`project_id`, `source_intake`, `sourceSpec`) so later stages can trace their source. Use the gate-folder paths for cross-artifact references, for example `artifacts/<project_id>/gate-a-intake/intake.json` for `source_intake` and `artifacts/<project_id>/gate-b-spec/spec.json` for `sourceSpec`.
 - If an artifact is pasted in Markdown only, reconstruct the matching JSON contract before advancing to the next gate.
 
 ## State Passing Contract
@@ -68,17 +68,18 @@ Return intermediate artifacts in fenced code blocks named exactly:
 
 ## Artifact Persistence
 
-In addition to the inline state sections, the harness orchestrator writes each artifact to a file so the user can open and review it before any gate. Use a stable `project_id` (kebab-case, derived from the idea or carried forward) and keep all files for one run under `artifacts/<project_id>/`:
+In addition to the inline state sections, the harness orchestrator writes each artifact to a file so the user can open and review it before any gate. Use a stable `project_id` (kebab-case, derived from the idea or carried forward) and keep all files for one run under `artifacts/<project_id>/` using gate-specific folders:
 
-- `intake.json` — the `intake_json` artifact
-- `intake.md` — the human-readable analysis and decision rationale described in Analysis and Decision Presentation
-- `product-spec.md` — the `product_spec_markdown` artifact
-- `implementation-plan.md` — the `implementation_plan_markdown` artifact
-- `spec.json` — the `spec_json` artifact
-- `task-graph.json` — the `task_graph_json` artifact
-- `review-report.md` — the `review_report` artifact
+- `open-questions.md` — optional cross-gate index for unresolved or answered questions; keep it at the top level when present
+- `gate-a-intake/intake.json` — the `intake_json` artifact
+- `gate-a-intake/intake.md` — the human-readable analysis and decision rationale described in Analysis and Decision Presentation
+- `gate-b-spec/product-spec.md` — the `product_spec_markdown` artifact
+- `gate-b-spec/implementation-plan.md` — the `implementation_plan_markdown` artifact
+- `gate-b-spec/spec.json` — the `spec_json` artifact
+- `gate-c-task-graph/task-graph.json` — the `task_graph_json` artifact
+- `gate-d-review/review-report.md` — the `review_report` artifact
 
-Write the files for a stage before stopping at its gate, and tell the user the file paths. Only the harness orchestrator writes files; subagents stay read-only and return their content for the orchestrator to persist. Continue to surface the inline named sections as well so resume and paste-in still work.
+The orchestrator writes each stage's outputs into its matching `gate-*` folder before stopping at that gate, and tells the user the file paths. `open-questions.md`, when used, remains directly under `artifacts/<project_id>/` because it is a cross-gate index. Only the harness orchestrator writes files; subagents stay read-only and return their content for the orchestrator to persist. Continue to surface the inline named sections as well so resume and paste-in still work.
 
 ## Evidence and Citation Contract
 
@@ -89,8 +90,8 @@ Write the files for a stage before stopping at its gate, and tell the user the f
 
 ## Output Modes
 
-- **Blocked intake:** Write `intake.json` and `intake.md`, present the analysis narrative and per-decision recommendations, invite feedback and answers, and stop at Gate A.
-- **Draft spec:** Write `product-spec.md`, `implementation-plan.md`, and `spec.json` with `approval: draft`, present them for file-based review, and stop at Gate B before the task graph.
+- **Blocked intake:** Write `gate-a-intake/intake.json` and `gate-a-intake/intake.md`, present the analysis narrative and per-decision recommendations, invite feedback and answers, and stop at Gate A.
+- **Draft spec:** Write `gate-b-spec/product-spec.md`, `gate-b-spec/implementation-plan.md`, and `gate-b-spec/spec.json` with `approval: draft`, present them for file-based review, and stop at Gate B before the task graph.
 - **Approved planning output:** Write all artifact files and return the state sections after gates pass.
 - **Resume output:** Regenerate only the downstream artifact files and sections, plus a short changelog of which decisions were applied.
 
