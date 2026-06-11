@@ -21,7 +21,7 @@ Use this workflow to convert an early product idea into development-ready planni
 | 2. Product spec | `p2a-spec` | `p2a-spec-author` | intake plus answered decisions | `product_spec_markdown`, `spec_json` (`p2a.spec.v1`) |
 | 3. Implementation plan | `p2a-spec` | `p2a-implementation-planner` | approved product spec | `implementation_plan_markdown`, updated `spec_json` |
 | 4. Task graph | `p2a-task-breakdown` | `p2a-task-graph` | approved implementation spec | `task_graph_json` (`p2a.task_graph.v1`) |
-| 5. Review | `p2a-review` | `p2a-quality-reviewer` | spec and task graph | `review_report` |
+| 5. Review | `p2a-review` | `p2a-quality-reviewer` | spec and task graph | `review_report`, `review_json` (`p2a.review.v1`) |
 
 If the CLI cannot spawn subagents automatically, run the matching skill locally and preserve the same input/output contracts.
 
@@ -63,8 +63,9 @@ Return intermediate artifacts in fenced code blocks named exactly:
 - `spec_json`
 - `task_graph_json`
 - `review_report`
+- `review_json`
 
-`intake_json`, `spec_json`, and `task_graph_json` must conform to `schemas/intake.schema.json`, `schemas/spec.schema.json`, and `schemas/task-graph.schema.json` respectively. `intake_json.evidence` and `spec_json.evidence` carry all user, local, and web sources used by the run.
+`intake_json`, `spec_json`, `task_graph_json`, and `review_json` must conform to `schemas/intake.schema.json`, `schemas/spec.schema.json`, `schemas/task-graph.schema.json`, and `schemas/review.schema.json` respectively. `intake_json.evidence` and `spec_json.evidence` carry all user, local, and web sources used by the run.
 
 ## Artifact Persistence
 
@@ -78,6 +79,7 @@ In addition to the inline state sections, the harness orchestrator writes each a
 - `gate-b-spec/spec.json` — the `spec_json` artifact
 - `gate-c-task-graph/task-graph.json` — the `task_graph_json` artifact
 - `gate-d-review/review-report.md` — the `review_report` artifact
+- `gate-d-review/review.json` — the `review_json` artifact
 
 The orchestrator writes each stage's outputs into its matching `gate-*` folder before stopping at that gate, and tells the user the file paths. `open-questions.md`, when used, remains directly under `artifacts/<project_id>/` because it is a cross-gate index. Only the harness orchestrator writes files; subagents stay read-only and return their content for the orchestrator to persist. Continue to surface the inline named sections as well so resume and paste-in still work.
 

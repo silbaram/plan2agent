@@ -1,21 +1,25 @@
 #!/usr/bin/env node
 /** Manage Plan2Agent task graph status and dependency workflow. */
 
-import { readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import path from 'node:path';
 import process from 'node:process';
+import { fileURLToPath } from 'node:url';
 import { validateTaskGraphData, ValidationError } from './validate_artifacts.mjs';
 
+const __filename = fileURLToPath(import.meta.url);
+const ROOT = path.resolve(path.dirname(__filename), '..');
 const VALID_TRANSITIONS = new Set(['start', 'done', 'block', 'todo']);
 
 function usage() {
   return [
-    'Usage: node scripts/p2a_tasks.mjs <command> --graph <path> [task-id]',
+    'Usage: node scripts/p2a_tasks.mjs <command> --graph <path> [--spec <path>] [task-id]',
     '',
     'Commands:',
     '  list                 Show all tasks with readiness.',
     '  ready                Show ready todo tasks.',
     '  show <task-id>       Show the full task JSON.',
-    '  prompt <task-id>     Print suggestedAgentPrompt plus acceptance criteria.',
+    '  prompt <task-id>     Print suggestedAgentPrompt, acceptance criteria, task description, referenced spec context, and full spec path.',
     '  start <task-id>      Mark a ready todo task in_progress.',
     '  done <task-id>       Mark an in_progress task done.',
     '  block <task-id>      Mark a task blocked.',
@@ -27,12 +31,16 @@ function parseArgs(argv) {
   const [command, ...rest] = argv;
   if (!command || command === '--help' || command === '-h') return { help: true };
   let graphPath = null;
+  let specPath = null;
   const positional = [];
   for (let index = 0; index < rest.length; index += 1) {
     const arg = rest[index];
     if (arg === '--graph') {
       graphPath = rest[++index];
       if (!graphPath) throw new Error('--graph requires a path');
+    } else if (arg === '--spec') {
+      specPath = rest[++index];
+      if (!specPath) throw new Error('--spec requires a path');
     } else if (arg.startsWith('--')) {
       throw new Error(`unknown option: ${arg}`);
     } else {
@@ -40,7 +48,7 @@ function parseArgs(argv) {
     }
   }
   if (!graphPath) throw new Error('--graph is required');
-  return { command, graphPath, taskId: positional[0], extra: positional.slice(1) };
+  return { command, graphPath, specPath, taskId: positional[0], extra: positional.slice(1) };
 }
 
 function loadGraph(graphPath) {
@@ -69,11 +77,85 @@ function printTaskTable(tasks, tasksById) {
   }
 }
 
-function printPrompt(task) {
+function resolveSourceSpecPath(graph, graphPath, specPath = null) {
+  if (specPath) return specPath;
+  if (path.isAbsolute(graph.sourceSpec)) return graph.sourceSpec;
+
+  const graphRelativePath = path.resolve(path.dirname(graphPath), graph.sourceSpec);
+  if (existsSync(graphRelativePath)) return graphRelativePath;
+
+  const rootRelativePath = path.resolve(ROOT, graph.sourceSpec);
+  if (existsSync(rootRelativePath)) return rootRelativePath;
+
+  return graphRelativePath;
+}
+
+function getByDotPath(data, dotPath) {
+  return dotPath.split('.').reduce((current, part) => {
+    if (current && typeof current === 'object' && Object.hasOwn(current, part)) return current[part];
+    return undefined;
+  }, data);
+}
+
+function formatSpecValue(value, indent = '  ') {
+  if (Array.isArray(value)) return value.map((item) => `${indent}- ${formatScalar(item)}`);
+  if (value && typeof value === 'object') {
+    return JSON.stringify(value, null, 2).split('\n').map((line) => `${indent}${line}`);
+  }
+  return [`${indent}- ${formatScalar(value)}`];
+}
+
+function formatScalar(value) {
+  if (typeof value === 'string') return value;
+  return JSON.stringify(value);
+}
+
+function printSpecContext(task, spec) {
+  console.log('Referenced spec context:');
+  for (const sourceSpecRef of task.sourceSpecRefs) {
+    if (!spec) {
+      console.log(`- ${sourceSpecRef}`);
+      continue;
+    }
+
+    const value = getByDotPath(spec, sourceSpecRef);
+    console.log(`- ${sourceSpecRef}:`);
+    if (value === undefined) {
+      console.log('  - Not found in source spec.');
+    } else {
+      for (const line of formatSpecValue(value)) console.log(line);
+    }
+  }
+}
+
+function readSpecForPrompt(specPath) {
+  try {
+    return JSON.parse(readFileSync(specPath, 'utf8'));
+  } catch (error) {
+    console.error(`warning: could not read source spec ${specPath}: ${error.message}`);
+    return null;
+  }
+}
+
+function printPrompt(task, graph, graphPath, specPath = null) {
+  const sourceSpecPath = resolveSourceSpecPath(graph, graphPath, specPath);
+  const spec = readSpecForPrompt(sourceSpecPath);
+
   console.log(task.suggestedAgentPrompt.trimEnd());
   console.log('');
   console.log('Acceptance criteria:');
   for (const criterion of task.acceptanceCriteria) console.log(`- ${criterion}`);
+
+  if (task.description) {
+    console.log('');
+    console.log('Task description:');
+    console.log(task.description);
+  }
+
+  console.log('');
+  printSpecContext(task, spec);
+  console.log('');
+  console.log(`전체 명세: ${sourceSpecPath}`);
 }
 
 function transitionTask(graph, task, command) {
@@ -119,7 +201,7 @@ export function main(argv = process.argv.slice(2)) {
     } else if (args.command === 'show') {
       console.log(JSON.stringify(requireTask(graph, args.taskId), null, 2));
     } else if (args.command === 'prompt') {
-      printPrompt(requireTask(graph, args.taskId));
+      printPrompt(requireTask(graph, args.taskId), graph, args.graphPath, args.specPath);
     } else if (VALID_TRANSITIONS.has(args.command)) {
       const task = requireTask(graph, args.taskId);
       transitionTask(graph, task, args.command);

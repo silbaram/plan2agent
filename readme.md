@@ -337,7 +337,7 @@ node scripts/p2a_tasks.mjs <command> --graph artifacts/<project_id>/gate-c-task-
 - `list`: 전체 task의 `id`, `title`, `status`, `dependencies`, ready 여부를 표로 출력한다.
 - `ready`: 모든 dependency가 `done`이고 자신의 상태가 `todo`인 task만 출력한다.
 - `show <task-id>`: acceptance criteria와 source spec refs를 포함한 task 전체 JSON을 출력한다.
-- `prompt <task-id>`: `suggestedAgentPrompt`에 acceptance criteria를 덧붙여 agent CLI에 바로 붙여넣을 수 있는 실행 prompt를 출력한다.
+- `prompt <task-id>`: `suggestedAgentPrompt`에 acceptance criteria, task description, 참조 spec 섹션, 전체 명세 경로를 덧붙여 agent CLI에 바로 붙여넣을 수 있는 실행 prompt를 출력한다.
 - `start <task-id>`: 모든 dependency가 `done`인 `todo` task만 `in_progress`로 바꾼다.
 - `done <task-id>`: `in_progress` task만 `done`으로 바꾼다.
 - `block <task-id>`: task를 `blocked`로 표시한다.
