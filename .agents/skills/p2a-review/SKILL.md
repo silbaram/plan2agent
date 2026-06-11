@@ -15,7 +15,9 @@ Review planning artifacts before implementation starts.
 
 ## Output
 
-Return `review_report` with:
+Return `review_report` and `review_json` (schema `p2a.review.v1`) with the same finding sections. `review_json.blocking_issues` must be an empty array when the review passes with no blockers.
+
+`review_json` includes `schema_version`, `projectId`, `sourceSpec`, `sourceTaskGraph`, and:
 
 - `blocking_issues`
 - `non_blocking_risks`

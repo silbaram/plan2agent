@@ -12,6 +12,7 @@ const SCHEMA_PATHS = {
   intake: path.join(ROOT, 'schemas', 'intake.schema.json'),
   spec: path.join(ROOT, 'schemas', 'spec.schema.json'),
   task_graph: path.join(ROOT, 'schemas', 'task-graph.schema.json'),
+  review: path.join(ROOT, 'schemas', 'review.schema.json'),
 };
 
 export class ValidationError extends Error {
@@ -207,6 +208,10 @@ export function validateTaskGraph(filePath, requireApprovedSpec = null) {
   return validateTaskGraphData(loadJson(filePath), requireApprovedSpec);
 }
 
+export function validateReview(filePath) {
+  return validateAgainstSchema(filePath, 'review');
+}
+
 export function detectCycles(graph) {
   const visiting = new Set();
   const visited = new Set();
@@ -237,6 +242,7 @@ export function validateFixtureDir(fixturePath) {
     ['spec.approved.json', (artifactPath) => validateSpec(artifactPath, path.join(fixturePath, 'intake.answered.json'))],
     ['task-graph.json', (artifactPath) => validateTaskGraph(artifactPath, path.join(fixturePath, 'spec.approved.json'))],
     ['review-report.md', () => null],
+    ['review.json', (artifactPath) => validateReview(artifactPath)],
   ];
   for (const [filename, validator] of required) {
     const artifactPath = path.join(fixturePath, filename);
@@ -256,6 +262,7 @@ function parseArgs(argv) {
     if (arg === '--intake') args.intake = argv[++index];
     else if (arg === '--spec') args.spec = argv[++index];
     else if (arg === '--task-graph') args.taskGraph = argv[++index];
+    else if (arg === '--review') args.review = argv[++index];
     else if (arg === '--require-approved-spec') args.requireApprovedSpec = argv[++index];
     else if (arg === '--fixture-dir') args.fixtureDir.push(argv[++index]);
     else throw new ValidationError(`unrecognized argument: ${arg}`);
@@ -270,6 +277,7 @@ export function main(argv = process.argv.slice(2)) {
     if (args.intake) validateIntake(args.intake);
     if (args.spec) validateSpec(args.spec, args.intake ?? null);
     if (args.taskGraph) validateTaskGraph(args.taskGraph, args.requireApprovedSpec ?? null);
+    if (args.review) validateReview(args.review);
     for (const fixtureDir of args.fixtureDir) validateFixtureDir(fixtureDir);
   } catch (error) {
     if (error instanceof SyntaxError || error instanceof ValidationError || error.code) {

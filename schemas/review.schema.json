@@ -1,0 +1,86 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://plan2agent.local/schemas/review.schema.json",
+  "title": "Plan2Agent Review Artifact",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "projectId",
+    "sourceSpec",
+    "sourceTaskGraph",
+    "blocking_issues",
+    "non_blocking_risks",
+    "missing_tests_or_acceptance_criteria",
+    "oversized_tasks",
+    "dependency_issues",
+    "schema_or_gate_issues",
+    "evidence_or_citation_issues",
+    "recommended_changes"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "p2a.review.v1"
+    },
+    "projectId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "sourceSpec": {
+      "type": "string",
+      "minLength": 1
+    },
+    "sourceTaskGraph": {
+      "type": "string",
+      "minLength": 1
+    },
+    "blocking_issues": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "non_blocking_risks": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "missing_tests_or_acceptance_criteria": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "oversized_tasks": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "dependency_issues": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "schema_or_gate_issues": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "evidence_or_citation_issues": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "recommended_changes": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  }
+}
