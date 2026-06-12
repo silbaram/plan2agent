@@ -345,6 +345,7 @@ Plan2Agent 개발은 아래 흐름을 기본 협업 방식으로 둔다.
 - v2: task별 agent 세션 실행과 로그 관리
 - v2: 코드 변경 결과와 task 연결
 - v2: 기획 변경 diff 기반 재작업 task 생성
+- v2: 반복/고도화 개발 아키텍처는 `plans/04-iterative-development.md` 기준으로 구체화한다.
 - v2: worktree 또는 branch 기반 task 격리
 - v3: 캔버스 기반 시각 기획 입력
 - v3: pgvector 또는 Neo4j 기반 plan-code 계보 추적
