@@ -57,6 +57,38 @@ Return:
 - edge_cases
 - verification
 
+## Recommended Markdown Section Skeleton
+
+Use this as a narrative-first soft template, not a fixed blank form. Each section should contain explanatory prose first, with tables only as supporting structure; a table must not replace the explanation. Keep JSON field names and schema unchanged. Render section titles and labels in the user's language while preserving the underlying English JSON field names.
+
+Each Markdown section should state the corresponding `spec_json` field in one line so the JSON-to-Markdown mapping is explicit. Optional helper sections, such as an overview diagram or unresolved Gate B decisions, may be added, but they must not replace the field-mapped sections below.
+
+`product-spec.md` mirrors `spec_json.product` in field order, one section per field:
+
+1. problem
+2. target_users
+3. goals
+4. non_goals
+5. core_flows
+6. screens_or_interfaces
+7. data_model_draft
+8. external_integrations
+9. success_criteria
+10. constraints
+
+Suggested Korean section labels for product specs: 문제 정의, 대상 사용자, 목표, 비목표, 핵심 흐름, 인터페이스, 데이터 모델, 외부 연동, 성공 기준, 제약.
+
+`implementation-plan.md` mirrors `spec_json.implementation` in field order, one section per field:
+
+1. architecture
+2. interfaces
+3. data_flow
+4. dependencies
+5. edge_cases
+6. verification
+
+Suggested Korean section labels for implementation plans: 아키텍처, 인터페이스, 데이터 흐름, 의존성, 엣지 케이스, 검증.
+
 ## Approval Contract
 
 - Use `approval: draft` until the user explicitly approves the product and implementation spec.

@@ -18,3 +18,4 @@ Rules:
 - Keep plans decision-complete enough for task breakdown.
 - Preserve unresolved choices in `open_decisions`; do not generate a task graph while they remain.
 - Identify interfaces, data flow, dependencies, edge cases, and verification needs.
+- Structure `implementation_plan_markdown` with the standard section skeleton where sections mirror `spec_json.implementation` fields.
