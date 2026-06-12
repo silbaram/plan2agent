@@ -46,6 +46,16 @@ The analysis must include:
 
 Write this analysis into `intake.md` and summarize it in the conversation. Treat decision-making as a dialogue: invite the user to correct your understanding and give free-form feedback, not only to pick options. Do not collapse several distinct high-impact decisions into a single multi-select that hides their individual rationale; ask in small, clearly explained batches.
 
+`intake.md` should follow this recommended soft template, mapping each narrative section to the matching `intake_json` field without changing JSON field names:
+
+1. **Understanding** — restate the idea and inferred scope from `known_facts`, separating what is clear from what remains unknown.
+2. **Assumptions** — cover `assumptions` using each item's `id`, `statement`, `risk`, reasoning, and `confirmation_needed`.
+3. **Decisions** — cover `needs_user_decision` with the question, why it matters, options and concrete trade-offs, recommended option and rationale, downstream artifacts or decisions it blocks, and status.
+4. **Clarifying questions** — cover `clarifying_questions` with each `id`, question, and current handling or default.
+5. **Next** — state `status` and what is needed from the user.
+
+This is a narrative-first recommended structure, not a blank form. Preserve the existing requirements for explanation, evidence, trade-off analysis, and recommendations. Tables may help scan the content, but they are supplemental and must not replace the written explanation. Render section headings and labels in the user's language when appropriate (for example Korean: `1. 이해`, `2. 가정`, `3. 결정`, `4. 소프트 질문`, `5. 다음`), while preserving the English JSON field names such as `assumptions` and the label meaning of **Assumptions/가정**; do not rename it to a different concept such as "proposal."
+
 ## Resume Rules
 
 - When the user answers decisions such as `ND-1` or `ND-4`, merge the answers into `intake_json.needs_user_decision[*].answer`, set those decisions to `answered`, and recompute `intake_json.status`.
