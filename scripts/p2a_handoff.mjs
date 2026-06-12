@@ -374,10 +374,128 @@ function isCancel(input) {
   return trimmed === '' || trimmed.toLowerCase() === 'q';
 }
 
-async function askRequired(rl, label, description) {
-  const input = await rl.question(`${label} - ${description} (빈 입력/q=취소): `);
-  if (isCancel(input)) return null;
+async function askRequired(rl, label, description, defaultValue = null) {
+  const defaultLabel = defaultValue ? ` [${defaultValue}]` : '';
+  const input = await rl.question(`${label}${defaultLabel} - ${description}: `);
+  if (input.trim().toLowerCase() === 'q') return null;
+  if (input.trim() === '') return defaultValue;
   return input.trim();
+}
+
+async function askMenu(rl, title, items, formatItem) {
+  console.log(title);
+  items.forEach((item, index) => console.log(formatItem(item, index + 1)));
+  while (true) {
+    const input = await rl.question('번호 선택 (빈 입력/q=취소): ');
+    if (isCancel(input)) return null;
+    const selected = Number.parseInt(input.trim(), 10);
+    if (Number.isInteger(selected) && selected >= 1 && selected <= items.length) return items[selected - 1];
+    console.log(`1-${items.length} 사이의 번호를 입력하세요.`);
+  }
+}
+
+function safeReadJson(filePath) {
+  try {
+    return JSON.parse(readFileSync(filePath, 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
+function gateExists(projectDir, gate, files) {
+  return files.every((file) => existsSync(path.join(projectDir, gate, file)));
+}
+
+function listProjects(artifactsBase) {
+  try {
+    return readdirSync(artifactsBase, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .filter((entry) => existsSync(path.join(artifactsBase, entry.name, 'gate-b-spec', 'spec.json')))
+      .map((entry) => ({ projectId: entry.name, dir: path.join(artifactsBase, entry.name) }));
+  } catch {
+    return [];
+  }
+}
+
+function probeGateStatus(projectDir) {
+  try {
+    const a = gateExists(projectDir, 'gate-a-intake', ['intake.json', 'intake.md']);
+    const b = gateExists(projectDir, 'gate-b-spec', ['spec.json', 'product-spec.md', 'implementation-plan.md']);
+    const c = gateExists(projectDir, 'gate-c-task-graph', ['task-graph.json']);
+    const d = gateExists(projectDir, 'gate-d-review', ['review-report.md', 'review.json']);
+    const spec = safeReadJson(path.join(projectDir, 'gate-b-spec', 'spec.json'));
+    const review = safeReadJson(path.join(projectDir, 'gate-d-review', 'review.json'));
+    const approved = spec ? spec.approval === 'approved' : false;
+    const openDecisions = Array.isArray(spec?.open_decisions) ? spec.open_decisions.length : null;
+    const blocking = Array.isArray(review?.blocking_issues) ? review.blocking_issues.length : null;
+    const ready = a && b && c && d && approved && openDecisions === 0 && blocking === 0;
+    return { a, b, c, d, approved, openDecisions, blocking, ready };
+  } catch {
+    return { a: false, b: false, c: false, d: false, approved: false, openDecisions: null, blocking: null, ready: false };
+  }
+}
+
+function formatGateStatus(status, key) {
+  return `${key.toUpperCase()}${status[key] ? '✅' : '⬜'}`;
+}
+
+function formatProjectItem(item, number) {
+  if (item.manual) return `${number}) 직접 입력`;
+  const status = item.status;
+  const gates = ['a', 'b', 'c', 'd'].map((key) => formatGateStatus(status, key)).join(' ');
+  const detail = status.ready
+    ? `blocker ${status.blocking} · 인계가능`
+    : '미완';
+  return `${number}) ${item.projectId.padEnd(20)} ${gates} · ${detail}`;
+}
+
+async function pickProject(rl, artifactsBase) {
+  const projects = listProjects(artifactsBase).map((project) => ({
+    ...project,
+    status: probeGateStatus(project.dir),
+  }));
+  if (projects.length === 0) return 'manual';
+
+  const selected = await askMenu(
+    rl,
+    'Plan2Agent 프로젝트를 선택하세요.',
+    [...projects, { manual: true }],
+    formatProjectItem,
+  );
+  if (!selected) return null;
+  if (selected.manual) return 'manual';
+  return { projectId: selected.projectId, artifactsRoot: selected.dir };
+}
+
+function readinessProblems(status) {
+  const problems = [];
+  const missing = [];
+  if (!status.a) missing.push('A');
+  if (!status.b) missing.push('B');
+  if (!status.c) missing.push('C');
+  if (!status.d) missing.push('D');
+  if (missing.length) problems.push(`게이트 누락: ${missing.join(', ')}`);
+  if (!status.approved) problems.push('미승인(spec.approval != approved)');
+  if (status.openDecisions === null) problems.push('열린 결정 수 확인 불가');
+  if (status.openDecisions > 0) problems.push(`open_decisions ${status.openDecisions}개`);
+  if (status.blocking === null) problems.push('리뷰없음/검토 상태 확인 불가');
+  if (status.blocking > 0) problems.push(`blocking_issues ${status.blocking}개`);
+  return problems;
+}
+
+async function chooseReadyProject(rl, artifactsBase) {
+  while (true) {
+    const picked = await pickProject(rl, artifactsBase);
+    if (!picked || picked === 'manual') return picked;
+
+    const status = probeGateStatus(picked.artifactsRoot);
+    if (status.ready) return picked;
+
+    console.log(`인계 준비가 아직 완료되지 않았습니다: ${readinessProblems(status).join(', ')}`);
+    const retry = await askYesNo(rl, '다른 프로젝트 선택할까요?', '준비된 프로젝트 다시 선택', true);
+    if (retry) continue;
+    return null;
+  }
 }
 
 async function askMode(rl) {
@@ -406,11 +524,35 @@ async function askYesNo(rl, label, description, defaultValue) {
   }
 }
 
+function defaultArtifactsBase() {
+  const artifactsBase = path.resolve(process.cwd(), 'artifacts');
+  try {
+    if (!existsSync(artifactsBase) || !lstatSync(artifactsBase).isDirectory() || readdirSync(artifactsBase).length === 0) {
+      return null;
+    }
+    return artifactsBase;
+  } catch {
+    return null;
+  }
+}
+
 async function buildInteractiveArgv(rl) {
-  const projectId = await askRequired(rl, 'project-id', '프로젝트 식별자');
-  if (!projectId) return null;
-  const artifacts = await askRequired(rl, 'artifacts', '원본 산출물 디렉터리 (예: artifacts/<id>)');
-  if (!artifacts) return null;
+  let projectId;
+  let artifacts;
+  const artifactsBase = defaultArtifactsBase();
+  const picked = artifactsBase ? await chooseReadyProject(rl, artifactsBase) : 'manual';
+  if (!picked) return null;
+
+  if (picked === 'manual') {
+    projectId = await askRequired(rl, 'project-id', '프로젝트 식별자');
+    if (!projectId) return null;
+    artifacts = await askRequired(rl, 'artifacts', '원본 산출물 디렉터리 (예: artifacts/<id>)', path.join('artifacts', projectId));
+    if (!artifacts) return null;
+  } else {
+    projectId = picked.projectId;
+    artifacts = picked.artifactsRoot;
+  }
+
   const target = await askRequired(rl, 'target', '개발 대상 디렉터리');
   if (!target) return null;
   const mode = await askMode(rl);
@@ -419,14 +561,31 @@ async function buildInteractiveArgv(rl) {
   if (includeIntake === null) return null;
   const overwrite = await askYesNo(rl, 'overwrite?', '기존 대상 파일 덮어쓰기 허용', false);
   if (overwrite === null) return null;
-  const dryRun = await askYesNo(rl, 'dry-run first?', '먼저 계획만 출력(권장)', true);
-  if (dryRun === null) return null;
 
   const argv = ['--project-id', projectId, '--artifacts', artifacts, '--target', target, '--mode', mode];
   if (includeIntake) argv.push('--include-intake');
   if (overwrite) argv.push('--overwrite');
-  if (dryRun) argv.push('--dry-run');
   return argv;
+}
+
+function argvValue(argv, option) {
+  const index = argv.indexOf(option);
+  return index === -1 ? null : argv[index + 1];
+}
+
+function printNextSteps(targetRoot) {
+  console.log(`✅ 인계 완료 — ${targetRoot}`);
+  console.log(`다음: cd ${targetRoot}`);
+  console.log('      node scripts/p2a_tasks.mjs ready --graph .plan2agent/artifacts/task-graph.json');
+
+  try {
+    const config = JSON.parse(readFileSync(path.join(targetRoot, '.plan2agent', 'project.config.json'), 'utf8'));
+    if (['testCommand', 'lintCommand', 'typecheckCommand'].some((key) => config[key] === null)) {
+      console.log('참고: .plan2agent/project.config.json 의 test/lint/typecheck 명령을 채우세요.');
+    }
+  } catch {
+    // Best-effort hint only.
+  }
 }
 
 function createQuestioner() {
@@ -452,7 +611,19 @@ export async function interactiveMain() {
   try {
     const argv = await buildInteractiveArgv(rl);
     if (!argv) return 0;
-    return main(argv);
+
+    const previewCode = main([...argv, '--dry-run']);
+    if (previewCode !== 0) return previewCode;
+
+    const go = await askYesNo(rl, '이대로 실제 인계?', '위 계획대로 실행', false);
+    if (!go) {
+      console.log('취소됨');
+      return 0;
+    }
+
+    const code = main(argv);
+    if (code === 0) printNextSteps(argvValue(argv, '--target'));
+    return code;
   } catch (error) {
     const prefix = error instanceof ValidationError ? 'handoff gate validation failed' : 'p2a handoff interactive failed';
     console.error(`${prefix}: ${error.message}`);
