@@ -5,6 +5,7 @@ import {
   existsSync,
   lstatSync,
   mkdirSync,
+  readFileSync,
   renameSync,
   writeFileSync,
 } from 'node:fs';
@@ -24,6 +25,7 @@ const ROOT = path.resolve(path.dirname(__filename), '..');
 const GATE_DIRS = ['gate-a-intake', 'gate-b-spec', 'gate-c-task-graph', 'gate-d-review'];
 const STATUS_ORDER = ['todo', 'in_progress', 'done', 'blocked'];
 const DEFAULT_ITERATION_ID = 'v1-mvp';
+const INIT_REBASED_SOURCE_SPEC = '../gate-b-spec/spec.json';
 
 function usage() {
   return [
@@ -210,6 +212,7 @@ function buildPlan(paths, iterationId, facts) {
       from: path.join(paths.artifactRoot, gate),
       to: path.join(paths.iterationRoot, gate),
     })),
+    movedTaskGraph: paths.movedTaskGraph,
     writes: [
       { path: paths.statusMd, description: 'write root iteration index status.md' },
       { path: paths.currentSpec, description: 'write thin current-spec.json pointer' },
@@ -223,19 +226,30 @@ function printPlan(plan, dryRun) {
   for (const move of plan.moves) {
     console.log(`- move ${toRelativeFromRoot(move.from)} -> ${toRelativeFromRoot(move.to)}`);
   }
+  console.log(`- rebase task-graph.sourceSpec -> ${INIT_REBASED_SOURCE_SPEC}: ${toRelativeFromRoot(plan.movedTaskGraph)}`);
   for (const write of plan.writes) {
     console.log(`- ${write.description}: ${toRelativeFromRoot(write.path)}`);
   }
 }
 
+function rebaseMovedTaskGraphSourceSpec(source) {
+  const sourceText = readFileSync(source, 'utf8');
+  const rewritten = sourceText.replace(/(\"sourceSpec\"\s*:\s*)\"(?:[^\"\\]|\\.)*\"/, `$1${JSON.stringify(INIT_REBASED_SOURCE_SPEC)}`);
+  if (rewritten === sourceText) throw new Error(`could not rebase sourceSpec in ${source}`);
+  writeFileSync(source, rewritten);
+  return sourceText;
+}
+
 function applyPlan(paths, iterationId, plan) {
   const moved = [];
+  let originalMovedTaskGraph = null;
   try {
     mkdirSync(paths.iterationRoot, { recursive: true });
     for (const move of plan.moves) {
       renameSync(move.from, move.to);
       moved.push(move);
     }
+    originalMovedTaskGraph = rebaseMovedTaskGraphSourceSpec(paths.movedTaskGraph);
     const movedFacts = validateMoved(paths);
     const projectId = projectIdFrom(paths.artifactRoot, movedFacts.spec, movedFacts.taskGraph);
     mkdirSync(paths.maintenanceRoot, { recursive: true });
@@ -243,6 +257,9 @@ function applyPlan(paths, iterationId, plan) {
     writeFileSync(paths.currentSpec, `${JSON.stringify(currentSpecPointer(projectId, iterationId), null, 2)}\n`);
     writeFileSync(paths.maintenanceReadme, maintenanceReadme());
   } catch (error) {
+    if (originalMovedTaskGraph !== null && existsSync(paths.movedTaskGraph)) {
+      writeFileSync(paths.movedTaskGraph, originalMovedTaskGraph);
+    }
     for (const move of moved.reverse()) {
       if (existsSync(move.to) && !existsSync(move.from)) renameSync(move.to, move.from);
     }
