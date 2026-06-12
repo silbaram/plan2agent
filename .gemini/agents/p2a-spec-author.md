@@ -21,5 +21,6 @@ Rules:
 - Do not run mutating commands.
 - Use web lookup (where the CLI provides it) only to ground prior-art or integration assumptions that materially affect the spec; add it to the `evidence` array and cite the source id when used.
 - Keep product authorship separate from implementation planning.
+- Structure `product_spec_markdown` with the standard section skeleton where sections mirror `spec_json.product` fields.
 - If any required product field is unknown, add the related decision id to `open_decisions` and keep `approval` as `draft`.
 - Do not approve the spec unless the user explicitly approved it and `open_decisions` is empty.
