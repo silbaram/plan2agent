@@ -271,7 +271,7 @@ plans/
   02-harness-spec.md
 artifacts/
   <project_id>/
-    open-questions.md              # Gate A blocked/open decision이 있으면 필수, top-level
+    status.md                      # 모든 게이트에서 갱신되는 standing 진행상태/결정 인덱스, top-level
     gate-a-intake/
       intake.json
       intake.md
