@@ -79,6 +79,7 @@ artifacts/<project>/
         task-graph.json
       gate-d-review/
         review-report.md
+        review.json
     maintenance/
       gate-c-task-graph/
         task-graph.json
