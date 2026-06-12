@@ -32,7 +32,7 @@ If the CLI cannot spawn subagents automatically, run the matching skill locally 
 - **Gate C — Task graph validation:** Before final output, check that every dependency references a task id, the graph is acyclic, and every task has acceptance criteria.
 - **Gate D — Review blockers:** If review finds blocking issues, return the blockers and the artifact section that must be revised instead of claiming the plan is ready.
 
-Each gate is a review checkpoint, not a one-shot hand-off. At every gate: (1) persist the stage's artifact files, (2) present a readable summary with per-item rationale and recommendations, (3) explicitly invite both open-ended feedback and structured answers or approval, (4) revise the artifacts and re-present them when the user responds, and (5) advance only after the user explicitly approves. Never infer approval from silence.
+Each gate is a review checkpoint, not a one-shot hand-off. At every gate: (1) persist the stage's artifact files **and refresh top-level `status.md`** (progress line, this gate's section, open decisions, next action, change-log entry), (2) present a readable summary with per-item rationale and recommendations, (3) explicitly invite both open-ended feedback and structured answers or approval, (4) revise the artifacts and re-present them when the user responds, and (5) advance only after the user explicitly approves. Never infer approval from silence.
 
 ## Analysis and Decision Presentation
 
@@ -81,7 +81,7 @@ Return intermediate artifacts in fenced code blocks named exactly:
 
 In addition to the inline state sections, the harness orchestrator writes each artifact to a file so the user can open and review it before any gate. Use a stable `project_id` (kebab-case, derived from the idea or carried forward) and keep all files for one run under `artifacts/<project_id>/` using gate-specific folders:
 
-- `open-questions.md` — required when `intake_json.status` is `blocked_on_user` or any `needs_user_decision` is `open`/`deferred`; keep it at the top level as the cross-gate decision index
+- `status.md` — top-level standing progress status and decision index. Refresh it at every gate transition.
 - `gate-a-intake/intake.json` — the `intake_json` artifact
 - `gate-a-intake/intake.md` — the human-readable analysis and decision rationale described in Analysis and Decision Presentation
 - `gate-b-spec/product-spec.md` — the `product_spec_markdown` artifact
@@ -91,7 +91,21 @@ In addition to the inline state sections, the harness orchestrator writes each a
 - `gate-d-review/review-report.md` — the `review_report` artifact
 - `gate-d-review/review.json` — the `review_json` artifact
 
-The orchestrator writes each stage's outputs into its matching `gate-*` folder before stopping at that gate, and tells the user the file paths. `open-questions.md` remains directly under `artifacts/<project_id>/` because it is a cross-gate index. When Gate A is blocked, write or update `open-questions.md` in the same turn as `gate-a-intake/intake.json` and `gate-a-intake/intake.md`; do not treat it as optional while unresolved decisions exist. Only the harness orchestrator writes files; subagents stay read-only and return their content for the orchestrator to persist. Continue to surface the inline named sections as well so resume and paste-in still work.
+The orchestrator writes each stage's outputs into its matching `gate-*` folder before stopping at that gate, and tells the user the file paths. `status.md` remains directly under `artifacts/<project_id>/` because it is the standing cross-gate progress and decision index. Whenever the orchestrator writes any gate artifact, refresh `status.md` in the same turn; do not treat it as a Gate-A-only or optional file. Only the harness orchestrator writes files; subagents stay read-only and return their content for the orchestrator to persist. Continue to surface the inline named sections as well so resume and paste-in still work.
+
+### `status.md` Standing Document
+
+`status.md` should mirror the narrative-first pattern used by `intake.md`: it is a readable standing document, not a blank form. Preserve English JSON field names when referencing source fields, but render headings and labels in the user's language when appropriate (for example Korean: `1. 진행 상태`, `2. 게이트별`, `3. 열린 결정`, `4. 다음`, `5. 변경 이력`). Use this standard skeleton:
+
+1. **Progress line** — show the current gate marker across `[A] → [B] → [C] → [D]`, indicating which gates are complete, current, blocked, or pending.
+2. **Per-gate sections** — summarize each gate's latest state and point to the canonical artifact files for that gate.
+3. **Open decisions / questions** — preserve the former cross-gate question-index content here, including unresolved decisions, answered decisions that affect downstream work, and follow-up questions.
+4. **Next** — state exactly one next action needed from the user or orchestrator.
+5. **Change log** — append dated bullets for each gate transition or decision/status update.
+
+### Facts From Tools
+
+Do not retype gate status facts from memory. Pull gate status, task counts, `ready` / `in_progress` state, approval state, and blocking counts from the artifacts and tools: `spec.json` (`approval`, `open_decisions`), `task-graph.json`, `p2a_tasks` (`list` / `ready`), `validate_artifacts`, and `review.json.blocking_issues`. If a fact cannot be derived from those sources, mark it as unknown or pending rather than inventing it.
 
 ## Evidence and Citation Contract
 
@@ -102,16 +116,17 @@ The orchestrator writes each stage's outputs into its matching `gate-*` folder b
 
 ## Output Modes
 
-- **Blocked intake:** Write `gate-a-intake/intake.json`, `gate-a-intake/intake.md`, and top-level `open-questions.md`; present the analysis narrative and per-decision recommendations, invite feedback and answers, and stop at Gate A.
-- **Draft spec:** Write `gate-b-spec/product-spec.md`, `gate-b-spec/implementation-plan.md`, and `gate-b-spec/spec.json` with `approval: draft`, present them for file-based review, and stop at Gate B before the task graph.
-- **Approved planning output:** Write all artifact files and return the state sections after gates pass.
-- **Resume output:** Regenerate only the downstream artifact files and sections, plus a short changelog of which decisions were applied.
+- **Blocked intake:** Write `gate-a-intake/intake.json` and `gate-a-intake/intake.md`, refresh top-level `status.md`, present the analysis narrative and per-decision recommendations, invite feedback and answers, and stop at Gate A.
+- **Draft spec:** Write `gate-b-spec/product-spec.md`, `gate-b-spec/implementation-plan.md`, and `gate-b-spec/spec.json` with `approval: draft`, refresh top-level `status.md`, present them for file-based review, and stop at Gate B before the task graph.
+- **Approved planning output:** Write all artifact files, refresh top-level `status.md`, and return the state sections after gates pass.
+- **Resume output:** Regenerate only the downstream artifact files and sections, refresh top-level `status.md`, plus a short changelog of which decisions were applied.
 
 ## Rules
 
 - You MAY create or update Plan2Agent planning artifacts (`.md` / `.json`) under `artifacts/<project_id>/`.
 - Do NOT edit application or source code, install dependencies, run shell commands for implementation, or perform git operations.
 - Subagents remain strictly read-only; only the harness orchestrator persists artifact files.
+- Refresh `status.md` in the same turn as every gate artifact write, using facts pulled from the artifacts and tools rather than memory.
 - Do not claim that implementation happened.
 - Mark unresolved decisions as `needs_user_decision`.
 - Keep tasks small enough for one agent or developer to complete independently.

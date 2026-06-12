@@ -116,7 +116,7 @@ function validateGates(artifactsRoot, projectId) {
     reviewJson: path.join(artifactsRoot, 'gate-d-review', 'review.json'),
     intakeJson: path.join(artifactsRoot, 'gate-a-intake', 'intake.json'),
     intakeMd: path.join(artifactsRoot, 'gate-a-intake', 'intake.md'),
-    openQuestions: path.join(artifactsRoot, 'open-questions.md'),
+    statusDoc: path.join(artifactsRoot, 'status.md'),
   };
 
   assertFile(paths.specJson, 'gate-b-spec/spec.json');
@@ -208,9 +208,9 @@ function buildPlan(paths, args, artifactsRoot, targetRoot) {
     pushArtifact(plan, paths.intakeMd, targetRoot, path.join(ARTIFACT_TARGET_DIR, 'intake.md'));
   }
 
-  if (existsSync(paths.openQuestions)) {
-    assertFile(paths.openQuestions, 'open-questions.md');
-    pushArtifact(plan, paths.openQuestions, targetRoot, path.join(ARTIFACT_TARGET_DIR, 'open-questions.md'));
+  if (existsSync(paths.statusDoc)) {
+    assertFile(paths.statusDoc, 'status.md');
+    pushArtifact(plan, paths.statusDoc, targetRoot, path.join(ARTIFACT_TARGET_DIR, 'status.md'));
   }
 
   pushArtifact(plan, path.join(ROOT, 'scripts', 'p2a_tasks.mjs'), targetRoot, path.join('scripts', 'p2a_tasks.mjs'));

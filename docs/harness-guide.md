@@ -86,11 +86,11 @@ Review에서 blocking issue가 나오면 하네스는 계획이 준비됐다고 
 
 ## 3. 산출물 파일과 데이터 계약
 
-하네스 오케스트레이터는 안정적인 kebab-case `project_id`를 사용하고, 한 번의 run에 속한 파일을 모두 `artifacts/<project_id>/` 아래의 gate별 폴더에 둔다. Subagent는 read-only이며 파일을 직접 쓰지 않는다. 파일 기록은 하네스 오케스트레이터만 수행한다. Gate A가 `blocked_on_user`이거나 open/deferred decision이 남아 있으면 열린 질문과 답변 상태를 모아 보는 `open-questions.md`를 최상위에 반드시 둔다.
+하네스 오케스트레이터는 안정적인 kebab-case `project_id`를 사용하고, 한 번의 run에 속한 파일을 모두 `artifacts/<project_id>/` 아래의 gate별 폴더에 둔다. Subagent는 read-only이며 파일을 직접 쓰지 않는다. 파일 기록은 하네스 오케스트레이터만 수행한다. 모든 게이트 전환마다 진행 상태와 열린 결정, 다음 액션을 모아 보는 standing 문서 `status.md`를 최상위에 갱신한다.
 
 ```text
 artifacts/<project_id>/
-├── open-questions.md
+├── status.md
 ├── gate-a-intake/
 │   ├── intake.json
 │   └── intake.md
@@ -106,7 +106,7 @@ artifacts/<project_id>/
 
 | 파일 저장 위치 | 역할 |
 | --- | --- |
-| `open-questions.md` | 게이트 횡단 질문 인덱스다. Gate A가 막혔거나 open/deferred decision이 있으면 필수이며, 열린 질문, 답변된 결정, 후속 확인 항목을 한곳에서 추적한다. |
+| `status.md` | 모든 게이트에서 갱신되는 standing 진행상태 및 결정 인덱스다. progress line, 게이트별 정본 파일 링크, 열린 결정, 단일 다음 액션, 변경 이력을 한곳에서 추적한다. |
 | `gate-a-intake/intake.json` | `intake_json` 구조화 산출물이다. 원문 아이디어, known facts, assumptions, clarifying questions, `needs_user_decision`, evidence, intake status를 담는다. |
 | `gate-a-intake/intake.md` | 사용자가 읽는 intake 분석 문서다. 이해한 범위, 가정과 위험, decision별 trade-off와 추천, downstream block 정보를 설명한다. |
 | `gate-b-spec/product-spec.md` | 사용자 검토용 제품 명세다. 문제, 대상 사용자, 목표, non-goals, 핵심 흐름, 인터페이스, 성공 기준 등을 Markdown으로 정리한다. |
