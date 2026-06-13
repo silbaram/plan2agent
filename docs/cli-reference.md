@@ -58,6 +58,12 @@ node scripts/validate_artifacts.mjs \
   --intake artifacts/<project_id>/gate-a-intake/intake.json
 
 node scripts/validate_artifacts.mjs \
+  --status artifacts/<project_id>/status.md
+
+node scripts/validate_artifacts.mjs \
+  --artifact-root artifacts/<project_id>
+
+node scripts/validate_artifacts.mjs \
   --intake artifacts/<project_id>/gate-a-intake/intake.json \
   --spec artifacts/<project_id>/gate-b-spec/spec.json
 
@@ -69,10 +75,19 @@ node scripts/validate_artifacts.mjs \
   --review artifacts/<project_id>/gate-d-review/review.json
 
 node scripts/validate_artifacts.mjs \
+  --review artifacts/<project_id>/gate-d-review/review.json \
+  --require-review-pass
+
+node scripts/validate_artifacts.mjs \
+  --artifact-root artifacts/<project_id> \
+  --project-id <project_id> \
+  --require-handoff-ready
+
+node scripts/validate_artifacts.mjs \
   --fixture-dir fixtures/cache-library
 ```
 
-`--require-approved-spec`는 task graph가 승인된 spec을 기준으로 생성됐는지 확인할 때 함께 사용한다.
+`--status`는 top-level `status.md` standing document의 최소 구조를 확인한다. `--artifact-root`는 `artifacts/<project_id>/` 아래 Gate A-D bundle을 한 번에 검증한다. `--require-handoff-ready`를 함께 쓰면 Gate B-D가 모두 통과되어 인계 가능한 상태인지까지 확인한다. `--review`는 review artifact가 schema에 맞는지 확인한다. `--require-review-pass`를 함께 쓰면 Gate D 통과 조건인 `review.blocking_issues: []`까지 확인한다. `--require-approved-spec`는 task graph가 승인된 spec을 기준으로 생성됐는지 확인할 때 함께 사용한다.
 
 ## 3. 개발 진행 — `p2a_tasks.mjs`
 
@@ -176,7 +191,14 @@ node scripts/validate_artifacts.mjs \
   --spec artifacts/<project_id>/gate-b-spec/spec.json \
   --task-graph artifacts/<project_id>/gate-c-task-graph/task-graph.json \
   --require-approved-spec artifacts/<project_id>/gate-b-spec/spec.json \
-  --review artifacts/<project_id>/gate-d-review/review.json
+  --review artifacts/<project_id>/gate-d-review/review.json \
+  --require-review-pass \
+  --status artifacts/<project_id>/status.md
+
+node scripts/validate_artifacts.mjs \
+  --artifact-root artifacts/<project_id> \
+  --project-id <project_id> \
+  --require-handoff-ready
 
 node scripts/p2a_handoff.mjs \
   --project-id <project_id> \

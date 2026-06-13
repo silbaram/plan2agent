@@ -322,8 +322,12 @@ artifact gate 확인:
 
 ```bash
 node scripts/validate_artifacts.mjs --intake artifacts/<project_id>/gate-a-intake/intake.json
+node scripts/validate_artifacts.mjs --status artifacts/<project_id>/status.md
+node scripts/validate_artifacts.mjs --artifact-root artifacts/<project_id>
 node scripts/validate_artifacts.mjs --spec artifacts/<project_id>/gate-b-spec/spec.json
 node scripts/validate_artifacts.mjs --task-graph artifacts/<project_id>/gate-c-task-graph/task-graph.json --require-approved-spec artifacts/<project_id>/gate-b-spec/spec.json
+node scripts/validate_artifacts.mjs --review artifacts/<project_id>/gate-d-review/review.json --require-review-pass
+node scripts/validate_artifacts.mjs --artifact-root artifacts/<project_id> --project-id <project_id> --require-handoff-ready
 ```
 
 ## Task 관리

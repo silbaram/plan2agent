@@ -19,9 +19,8 @@ import { Readable } from 'node:stream';
 import { fileURLToPath } from 'node:url';
 import {
   loadJson,
-  validateReview,
-  validateSpec,
-  validateTaskGraph,
+  validateArtifactRoot,
+  validateHandoffReadyArtifactRoot,
   ValidationError,
 } from './validate_artifacts.mjs';
 
@@ -107,79 +106,7 @@ function targetPath(targetRoot, relativePath) {
 }
 
 function validateGates(artifactsRoot, projectId) {
-  const paths = {
-    specJson: path.join(artifactsRoot, 'gate-b-spec', 'spec.json'),
-    productSpec: path.join(artifactsRoot, 'gate-b-spec', 'product-spec.md'),
-    implementationPlan: path.join(artifactsRoot, 'gate-b-spec', 'implementation-plan.md'),
-    taskGraph: path.join(artifactsRoot, 'gate-c-task-graph', 'task-graph.json'),
-    reviewReport: path.join(artifactsRoot, 'gate-d-review', 'review-report.md'),
-    reviewJson: path.join(artifactsRoot, 'gate-d-review', 'review.json'),
-    intakeJson: path.join(artifactsRoot, 'gate-a-intake', 'intake.json'),
-    intakeMd: path.join(artifactsRoot, 'gate-a-intake', 'intake.md'),
-    statusDoc: path.join(artifactsRoot, 'status.md'),
-  };
-
-  assertFile(paths.specJson, 'gate-b-spec/spec.json');
-  assertFile(paths.productSpec, 'gate-b-spec/product-spec.md');
-  assertFile(paths.implementationPlan, 'gate-b-spec/implementation-plan.md');
-  const spec = validateSpec(paths.specJson);
-  assertProjectId('spec.project_id', spec.project_id, projectId);
-  if (spec.approval !== 'approved') throw new ValidationError('handoff requires spec.approval to be "approved"');
-  if (spec.open_decisions.length !== 0) throw new ValidationError('handoff requires spec.open_decisions to be empty');
-
-  assertFile(paths.taskGraph, 'gate-c-task-graph/task-graph.json');
-  const taskGraph = validateTaskGraph(paths.taskGraph, paths.specJson);
-  assertProjectId('taskGraph.projectId', taskGraph.projectId, projectId);
-
-  assertFile(paths.reviewReport, 'gate-d-review/review-report.md');
-  assertFile(paths.reviewJson, 'gate-d-review/review.json');
-  const review = validateReview(paths.reviewJson);
-  assertProjectId('review.projectId', review.projectId, projectId);
-  if (review.blocking_issues.length !== 0) {
-    throw new ValidationError(`handoff blocked by review.json blocking_issues: ${JSON.stringify(review.blocking_issues)}`);
-  }
-  validateReviewReferences(review, artifactsRoot, paths);
-
-  return paths;
-}
-
-function assertProjectId(label, actual, expected) {
-  if (actual !== expected) {
-    throw new ValidationError(`${label} must match --project-id ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`);
-  }
-}
-
-function normalizeReference(reference) {
-  return String(reference).replace(/\\/g, '/').replace(/^\.\//, '');
-}
-
-function artifactRelativeRef(artifactsRoot, filePath) {
-  return normalizePath(path.relative(artifactsRoot, filePath));
-}
-
-function reviewReferenceMatches(reference, artifactsRoot, filePath) {
-  if (path.isAbsolute(reference) && path.resolve(reference) === path.resolve(filePath)) return true;
-  const normalized = normalizeReference(reference);
-  const expectedRelative = artifactRelativeRef(artifactsRoot, filePath);
-  const projectRelative = `${path.basename(artifactsRoot)}/${expectedRelative}`;
-  const artifactsRelative = `artifacts/${projectRelative}`;
-  return normalized === expectedRelative
-    || normalized === projectRelative
-    || normalized === artifactsRelative;
-}
-
-function validateReviewReferences(review, artifactsRoot, paths) {
-  const checks = [
-    ['sourceSpec', paths.specJson],
-    ['sourceTaskGraph', paths.taskGraph],
-  ];
-  for (const [field, expectedPath] of checks) {
-    if (!reviewReferenceMatches(review[field], artifactsRoot, expectedPath)) {
-      throw new ValidationError(
-        `review.json ${field} must reference ${artifactRelativeRef(artifactsRoot, expectedPath)}, got ${JSON.stringify(review[field])}`,
-      );
-    }
-  }
+  return validateHandoffReadyArtifactRoot(artifactsRoot, { projectId }).paths;
 }
 
 function pushArtifact(plan, source, targetRoot, targetRelative, options = {}) {
@@ -208,10 +135,8 @@ function buildPlan(paths, args, artifactsRoot, targetRoot) {
     pushArtifact(plan, paths.intakeMd, targetRoot, path.join(ARTIFACT_TARGET_DIR, 'intake.md'));
   }
 
-  if (existsSync(paths.statusDoc)) {
-    assertFile(paths.statusDoc, 'status.md');
-    pushArtifact(plan, paths.statusDoc, targetRoot, path.join(ARTIFACT_TARGET_DIR, 'status.md'));
-  }
+  assertFile(paths.statusDoc, 'status.md');
+  pushArtifact(plan, paths.statusDoc, targetRoot, path.join(ARTIFACT_TARGET_DIR, 'status.md'));
 
   pushArtifact(plan, path.join(ROOT, 'scripts', 'p2a_tasks.mjs'), targetRoot, path.join('scripts', 'p2a_tasks.mjs'));
   pushArtifact(plan, path.join(ROOT, 'scripts', 'validate_artifacts.mjs'), targetRoot, path.join('scripts', 'validate_artifacts.mjs'));
@@ -394,18 +319,6 @@ async function askMenu(rl, title, items, formatItem) {
   }
 }
 
-function safeReadJson(filePath) {
-  try {
-    return JSON.parse(readFileSync(filePath, 'utf8'));
-  } catch {
-    return null;
-  }
-}
-
-function gateExists(projectDir, gate, files) {
-  return files.every((file) => existsSync(path.join(projectDir, gate, file)));
-}
-
 function listProjects(artifactsBase) {
   try {
     return readdirSync(artifactsBase, { withFileTypes: true })
@@ -419,19 +332,25 @@ function listProjects(artifactsBase) {
 
 function probeGateStatus(projectDir) {
   try {
-    const a = gateExists(projectDir, 'gate-a-intake', ['intake.json', 'intake.md']);
-    const b = gateExists(projectDir, 'gate-b-spec', ['spec.json', 'product-spec.md', 'implementation-plan.md']);
-    const c = gateExists(projectDir, 'gate-c-task-graph', ['task-graph.json']);
-    const d = gateExists(projectDir, 'gate-d-review', ['review-report.md', 'review.json']);
-    const spec = safeReadJson(path.join(projectDir, 'gate-b-spec', 'spec.json'));
-    const review = safeReadJson(path.join(projectDir, 'gate-d-review', 'review.json'));
+    const validation = validateArtifactRoot(projectDir);
+    const spec = validation.spec;
+    const review = validation.review;
     const approved = spec ? spec.approval === 'approved' : false;
     const openDecisions = Array.isArray(spec?.open_decisions) ? spec.open_decisions.length : null;
     const blocking = Array.isArray(review?.blocking_issues) ? review.blocking_issues.length : null;
-    const ready = a && b && c && d && approved && openDecisions === 0 && blocking === 0;
-    return { a, b, c, d, approved, openDecisions, blocking, ready };
+    return {
+      statusDoc: true,
+      a: validation.gates.a.present,
+      b: validation.gates.b.present,
+      c: validation.gates.c.present,
+      d: validation.gates.d.present,
+      approved,
+      openDecisions,
+      blocking,
+      ready: validation.readyForHandoff,
+    };
   } catch {
-    return { a: false, b: false, c: false, d: false, approved: false, openDecisions: null, blocking: null, ready: false };
+    return { statusDoc: false, a: false, b: false, c: false, d: false, approved: false, openDecisions: null, blocking: null, ready: false };
   }
 }
 
@@ -474,6 +393,7 @@ function readinessProblems(status) {
   if (!status.b) missing.push('B');
   if (!status.c) missing.push('C');
   if (!status.d) missing.push('D');
+  if (!status.statusDoc) problems.push('status.md 누락/검증 실패');
   if (missing.length) problems.push(`게이트 누락: ${missing.join(', ')}`);
   if (!status.approved) problems.push('미승인(spec.approval != approved)');
   if (status.openDecisions === null) problems.push('열린 결정 수 확인 불가');

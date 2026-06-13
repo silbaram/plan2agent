@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /** Validate Plan2Agent JSON artifacts and golden fixtures with Node.js stdlib only. */
 
-import { readFileSync } from 'node:fs';
+import { existsSync, lstatSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -14,6 +14,17 @@ const SCHEMA_PATHS = {
   task_graph: path.join(ROOT, 'schemas', 'task-graph.schema.json'),
   review: path.join(ROOT, 'schemas', 'review.schema.json'),
 };
+const GATE_PATHS = {
+  statusDoc: 'status.md',
+  intakeJson: path.join('gate-a-intake', 'intake.json'),
+  intakeMd: path.join('gate-a-intake', 'intake.md'),
+  productSpec: path.join('gate-b-spec', 'product-spec.md'),
+  implementationPlan: path.join('gate-b-spec', 'implementation-plan.md'),
+  specJson: path.join('gate-b-spec', 'spec.json'),
+  taskGraph: path.join('gate-c-task-graph', 'task-graph.json'),
+  reviewReport: path.join('gate-d-review', 'review-report.md'),
+  reviewJson: path.join('gate-d-review', 'review.json'),
+};
 
 export class ValidationError extends Error {
   constructor(message) {
@@ -24,6 +35,11 @@ export class ValidationError extends Error {
 
 export function loadJson(filePath) {
   return JSON.parse(readFileSync(filePath, 'utf8'));
+}
+
+function assertFile(filePath, label) {
+  if (!existsSync(filePath)) throw new ValidationError(`${label} is missing: ${filePath}`);
+  if (!lstatSync(filePath).isFile()) throw new ValidationError(`${label} must be a file: ${filePath}`);
 }
 
 function schemaTypeMatches(instance, expectedType) {
@@ -218,7 +234,7 @@ export function validateTaskGraph(filePath, requireApprovedSpec = null) {
   return validateTaskGraphData(loadJson(filePath), requireApprovedSpec);
 }
 
-export function validateReview(filePath, expectedSources = null) {
+export function validateReview(filePath, expectedSources = null, options = {}) {
   const data = validateAgainstSchema(filePath, 'review');
   if (expectedSources) {
     for (const [field, expected] of Object.entries(expectedSources)) {
@@ -227,7 +243,181 @@ export function validateReview(filePath, expectedSources = null) {
       }
     }
   }
+  if (options.requirePass) validateReviewPassData(data);
   return data;
+}
+
+export function validateReviewPass(filePath, expectedSources = null) {
+  return validateReview(filePath, expectedSources, { requirePass: true });
+}
+
+function validateReviewPassData(data) {
+  if (data.blocking_issues.length !== 0) {
+    throw new ValidationError(`review cannot pass Gate D while blocking_issues is non-empty: ${JSON.stringify(data.blocking_issues)}`);
+  }
+}
+
+export function validateStatusDoc(filePath) {
+  const text = readFileSync(filePath, 'utf8');
+  const required = [
+    ['Progress line', /Progress:/i],
+    ['Gate A section', /Gate A/i],
+    ['Gate B section', /Gate B/i],
+    ['Gate C section', /Gate C/i],
+    ['Gate D section', /Gate D/i],
+    ['section 1 heading', /^##\s+1\./m],
+    ['section 2 heading', /^##\s+2\./m],
+    ['section 3 heading', /^##\s+3\./m],
+    ['section 4 heading', /^##\s+4\./m],
+    ['section 5 heading', /^##\s+5\./m],
+  ];
+  for (const [label, pattern] of required) {
+    if (!pattern.test(text)) throw new ValidationError(`status.md missing ${label}`);
+  }
+  return text;
+}
+
+function artifactPaths(artifactRoot) {
+  const root = path.resolve(artifactRoot);
+  return Object.fromEntries(
+    Object.entries(GATE_PATHS).map(([key, relativePath]) => [key, path.join(root, relativePath)]),
+  );
+}
+
+function filesExist(paths, keys) {
+  return keys.map((key) => paths[key]).filter((filePath) => existsSync(filePath));
+}
+
+function requireGateFiles(paths, keys, gateLabel) {
+  const missing = keys.filter((key) => !existsSync(paths[key]));
+  if (missing.length) {
+    throw new ValidationError(`${gateLabel} is incomplete; missing ${missing.map((key) => GATE_PATHS[key]).join(', ')}`);
+  }
+  for (const key of keys) assertFile(paths[key], GATE_PATHS[key]);
+}
+
+function normalizePath(filePath) {
+  return filePath.split(path.sep).join('/');
+}
+
+function normalizeReference(reference) {
+  return String(reference).replace(/\\/g, '/').replace(/^\.\//, '');
+}
+
+function artifactRelativeRef(artifactRoot, filePath) {
+  return normalizePath(path.relative(artifactRoot, filePath));
+}
+
+function artifactReferenceMatches(reference, artifactRoot, filePath) {
+  if (path.isAbsolute(reference) && path.resolve(reference) === path.resolve(filePath)) return true;
+  const normalized = normalizeReference(reference);
+  const expectedRelative = artifactRelativeRef(artifactRoot, filePath);
+  const projectRelative = `${path.basename(artifactRoot)}/${expectedRelative}`;
+  const artifactsRelative = `artifacts/${projectRelative}`;
+  return normalized === expectedRelative
+    || normalized === projectRelative
+    || normalized === artifactsRelative;
+}
+
+function validateReviewReferencesForRoot(review, artifactRoot, paths) {
+  const checks = [
+    ['sourceSpec', paths.specJson],
+    ['sourceTaskGraph', paths.taskGraph],
+  ];
+  for (const [field, expectedPath] of checks) {
+    if (!artifactReferenceMatches(review[field], artifactRoot, expectedPath)) {
+      throw new ValidationError(
+        `review.json ${field} must reference ${artifactRelativeRef(artifactRoot, expectedPath)}, got ${JSON.stringify(review[field])}`,
+      );
+    }
+  }
+}
+
+function assertProjectId(label, actual, expected) {
+  if (expected && actual !== expected) {
+    throw new ValidationError(`${label} must match project id ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`);
+  }
+}
+
+export function validateArtifactRoot(artifactRoot, options = {}) {
+  const root = path.resolve(artifactRoot);
+  if (!existsSync(root)) throw new ValidationError(`artifact root is missing: ${root}`);
+  if (!lstatSync(root).isDirectory()) throw new ValidationError(`artifact root must be a directory: ${root}`);
+
+  const paths = artifactPaths(root);
+  assertFile(paths.statusDoc, GATE_PATHS.statusDoc);
+  validateStatusDoc(paths.statusDoc);
+
+  requireGateFiles(paths, ['intakeJson', 'intakeMd'], 'Gate A');
+  const intake = validateIntake(paths.intakeJson);
+  const result = {
+    artifactRoot: root,
+    paths,
+    gates: {
+      a: { present: true, valid: true, passed: intake.status === 'ready_for_spec' },
+      b: { present: false, valid: false, passed: false },
+      c: { present: false, valid: false, passed: false },
+      d: { present: false, valid: false, passed: false },
+    },
+    intake,
+    spec: null,
+    taskGraph: null,
+    review: null,
+    readyForHandoff: false,
+  };
+
+  const gateBKeys = ['productSpec', 'implementationPlan', 'specJson'];
+  const gateBExisting = filesExist(paths, gateBKeys);
+  if (gateBExisting.length) {
+    requireGateFiles(paths, gateBKeys, 'Gate B');
+    const spec = validateSpec(paths.specJson, paths.intakeJson);
+    assertProjectId('spec.project_id', spec.project_id, options.projectId);
+    result.spec = spec;
+    result.gates.b = { present: true, valid: true, passed: spec.approval === 'approved' && spec.open_decisions.length === 0 };
+  }
+
+  const gateCKeys = ['taskGraph'];
+  const gateCExisting = filesExist(paths, gateCKeys);
+  if (gateCExisting.length) {
+    if (!result.spec) throw new ValidationError('Gate C cannot be validated before Gate B spec exists');
+    requireGateFiles(paths, gateCKeys, 'Gate C');
+    const taskGraph = validateTaskGraph(paths.taskGraph, paths.specJson);
+    assertProjectId('taskGraph.projectId', taskGraph.projectId, options.projectId);
+    result.taskGraph = taskGraph;
+    result.gates.c = { present: true, valid: true, passed: true };
+  }
+
+  const gateDKeys = ['reviewReport', 'reviewJson'];
+  const gateDExisting = filesExist(paths, gateDKeys);
+  if (gateDExisting.length) {
+    if (!result.taskGraph) throw new ValidationError('Gate D cannot be validated before Gate C task graph exists');
+    requireGateFiles(paths, gateDKeys, 'Gate D');
+    const review = options.requireReviewPass || options.requireHandoffReady
+      ? validateReviewPass(paths.reviewJson)
+      : validateReview(paths.reviewJson);
+    assertProjectId('review.projectId', review.projectId, options.projectId);
+    validateReviewReferencesForRoot(review, root, paths);
+    result.review = review;
+    result.gates.d = { present: true, valid: true, passed: review.blocking_issues.length === 0 };
+  }
+
+  result.readyForHandoff = result.gates.b.passed && result.gates.c.passed && result.gates.d.passed;
+  if (options.requireHandoffReady && !result.readyForHandoff) {
+    const missing = [];
+    if (!result.gates.b.present) missing.push('Gate B');
+    if (!result.gates.c.present) missing.push('Gate C');
+    if (!result.gates.d.present) missing.push('Gate D');
+    const reasons = [];
+    if (missing.length) reasons.push(`missing ${missing.join(', ')}`);
+    if (result.spec && !result.gates.b.passed) reasons.push('spec is not approved or open_decisions is non-empty');
+    if (result.review && !result.gates.d.passed) reasons.push('review blocking_issues is non-empty');
+    throw new ValidationError(`artifact root is not handoff-ready: ${reasons.join('; ') || 'unknown gate state'}`);
+  }
+  return result;
+}
+
+export function validateHandoffReadyArtifactRoot(artifactRoot, options = {}) {
+  return validateArtifactRoot(artifactRoot, { ...options, requireHandoffReady: true, requireReviewPass: true });
 }
 
 export function detectCycles(graph) {
@@ -255,12 +445,13 @@ export function detectCycles(graph) {
 
 export function validateFixtureDir(fixturePath) {
   const required = [
+    ['status.md', (artifactPath) => validateStatusDoc(artifactPath)],
     ['intake.blocked.json', (artifactPath) => validateIntake(artifactPath)],
     ['intake.answered.json', (artifactPath) => validateIntake(artifactPath)],
     ['spec.approved.json', (artifactPath) => validateSpec(artifactPath, path.join(fixturePath, 'intake.answered.json'))],
     ['task-graph.json', (artifactPath) => validateTaskGraph(artifactPath, path.join(fixturePath, 'spec.approved.json'))],
     ['review-report.md', () => null],
-    ['review.json', (artifactPath) => validateReview(artifactPath, { sourceSpec: 'spec.approved.json', sourceTaskGraph: 'task-graph.json' })],
+    ['review.json', (artifactPath) => validateReviewPass(artifactPath, { sourceSpec: 'spec.approved.json', sourceTaskGraph: 'task-graph.json' })],
   ];
   for (const [filename, validator] of required) {
     const artifactPath = path.join(fixturePath, filename);
@@ -278,10 +469,15 @@ function parseArgs(argv) {
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === '--intake') args.intake = argv[++index];
+    else if (arg === '--status') args.status = argv[++index];
+    else if (arg === '--artifact-root') args.artifactRoot = argv[++index];
+    else if (arg === '--project-id') args.projectId = argv[++index];
     else if (arg === '--spec') args.spec = argv[++index];
     else if (arg === '--task-graph') args.taskGraph = argv[++index];
     else if (arg === '--review') args.review = argv[++index];
     else if (arg === '--require-approved-spec') args.requireApprovedSpec = argv[++index];
+    else if (arg === '--require-handoff-ready') args.requireHandoffReady = true;
+    else if (arg === '--require-review-pass') args.requireReviewPass = true;
     else if (arg === '--fixture-dir') args.fixtureDir.push(argv[++index]);
     else throw new ValidationError(`unrecognized argument: ${arg}`);
   }
@@ -292,10 +488,23 @@ export function main(argv = process.argv.slice(2)) {
   let args;
   try {
     args = parseArgs(argv);
+    if (args.status) validateStatusDoc(args.status);
+    if (args.artifactRoot) {
+      validateArtifactRoot(args.artifactRoot, {
+        projectId: args.projectId,
+        requireHandoffReady: args.requireHandoffReady,
+        requireReviewPass: args.requireReviewPass,
+      });
+    } else if (args.requireHandoffReady) {
+      throw new ValidationError('--require-handoff-ready requires --artifact-root');
+    }
     if (args.intake) validateIntake(args.intake);
     if (args.spec) validateSpec(args.spec, args.intake ?? null);
     if (args.taskGraph) validateTaskGraph(args.taskGraph, args.requireApprovedSpec ?? null);
-    if (args.review) validateReview(args.review);
+    if (args.requireReviewPass && !args.review && !args.fixtureDir.length && !args.artifactRoot) {
+      throw new ValidationError('--require-review-pass requires --review');
+    }
+    if (args.review) validateReview(args.review, null, { requirePass: args.requireReviewPass });
     for (const fixtureDir of args.fixtureDir) validateFixtureDir(fixtureDir);
   } catch (error) {
     if (error instanceof SyntaxError || error instanceof ValidationError || error.code) {
