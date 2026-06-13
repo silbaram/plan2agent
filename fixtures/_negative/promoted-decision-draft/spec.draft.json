@@ -1,0 +1,127 @@
+{
+  "schema_version": "p2a.spec.v1",
+  "project_id": "webhook-api-service",
+  "source_intake": "fixtures/webhook-api-service/intake.answered.json",
+  "product": {
+    "problem": "Backend teams need a small webhook ingestion service that safely receives partner callbacks, normalizes incoming events, and reliably hands them to internal processing.",
+    "target_users": [
+      "Backend engineers integrating partner webhook providers",
+      "Platform teams that need a reusable ingestion boundary before internal queue processing"
+    ],
+    "goals": [
+      "Expose one HTTP endpoint for partner webhook ingestion",
+      "Normalize accepted payloads into a stable internal event envelope",
+      "Deliver events to a provider-neutral queue adapter with bounded retry and dead-letter handling"
+    ],
+    "non_goals": [
+      "No provider-specific queue SDK in v1",
+      "No multi-tenant admin UI",
+      "No historical replay dashboard"
+    ],
+    "core_flows": [
+      "A partner sends a webhook request to the ingestion endpoint",
+      "The service validates the request using the pending authenticity decision before parsing the payload",
+      "The service normalizes the payload into an internal event envelope",
+      "The queue adapter accepts the event or the service retries according to the bounded policy"
+    ],
+    "screens_or_interfaces": [
+      "POST /webhooks/:partner endpoint",
+      "Queue adapter interface for enqueue and dead-letter operations",
+      "Configuration object for partner settings and retry settings"
+    ],
+    "data_model_draft": [
+      "WebhookRequest: partner id, headers, raw body, receivedAt",
+      "NormalizedEvent: eventId, partner, eventType, payload, receivedAt",
+      "DeliveryAttempt: eventId, attemptNumber, nextDelayMs, error"
+    ],
+    "external_integrations": [
+      "Partner webhook sender",
+      "Provider-neutral internal queue adapter",
+      "Dead-letter adapter for exhausted events"
+    ],
+    "success_criteria": [
+      "Accepted requests produce normalized event envelopes",
+      "Transient queue failures are retried with a bounded policy",
+      "Exhausted delivery attempts are sent to the dead-letter path",
+      "The pending authenticity decision must be resolved before approval"
+    ],
+    "constraints": [
+      "TypeScript/Node.js HTTP service",
+      "Provider-neutral queue adapter in v1",
+      "No concrete cloud provider dependency in v1"
+    ]
+  },
+  "implementation": {
+    "architecture": [
+      "Use a small TypeScript HTTP service with request body access before JSON parsing",
+      "Separate request validation, payload normalization, queue delivery, retry policy, and dead-letter handling into modules",
+      "Keep queue integration behind an adapter interface so tests can use deterministic fakes"
+    ],
+    "interfaces": [
+      "POST /webhooks/:partner",
+      "verifyRequest(partner, headers, rawBody): VerificationResult",
+      "normalizeEvent(partner, payload, receivedAt): NormalizedEvent",
+      "QueueAdapter.enqueue(event): Promise<void>",
+      "DeadLetterAdapter.record(event, attempts, error): Promise<void>"
+    ],
+    "data_flow": [
+      "HTTP handler reads raw body and partner id",
+      "Request validation applies the pending authenticity decision",
+      "Normalizer maps provider payload to a stable internal event envelope",
+      "Delivery service calls QueueAdapter.enqueue and applies bounded retry on transient failures"
+    ],
+    "dependencies": [
+      "TypeScript compiler",
+      "Node.js HTTP framework or minimal server",
+      "Test runner with fake queue and fake clock support"
+    ],
+    "edge_cases": [
+      "Missing authenticity proof",
+      "Malformed JSON payload",
+      "Duplicate event id",
+      "Queue adapter transient failure",
+      "Retry exhaustion"
+    ],
+    "verification": [
+      "Unit tests for the selected authenticity mechanism after ND-4 is resolved",
+      "Unit tests for payload normalization",
+      "Unit tests for bounded retry and dead-letter behavior",
+      "Handler tests for accepted, rejected, and malformed webhook requests"
+    ]
+  },
+  "clarifying_question_disposition": [
+    {
+      "id": "CQ-1",
+      "status": "promoted_to_decision",
+      "rationale": "Webhook authenticity affects security and endpoint semantics, so it must block approval until the user chooses the mechanism.",
+      "affects": [
+        "spec.product.external_integrations",
+        "spec.implementation.interfaces",
+        "spec.implementation.verification"
+      ],
+      "promoted_decision_id": "ND-4"
+    },
+    {
+      "id": "CQ-2",
+      "status": "answered",
+      "rationale": "The retry guarantee is resolved by the selected bounded retry plus dead-letter intake decision.",
+      "affects": [
+        "spec.implementation.data_flow",
+        "spec.implementation.edge_cases"
+      ],
+      "resolved_by": "ND-3 answer: Bounded retry plus dead-letter path"
+    }
+  ],
+  "open_decisions": [
+    "ND-4"
+  ],
+  "approval": "draft",
+  "evidence": [
+    {
+      "source_id": "USER-1",
+      "title": "Answered intake decisions with unresolved Gate B authenticity decision",
+      "url": "",
+      "used_for": "Confirmed TypeScript runtime, provider-neutral queue integration, and bounded retry behavior while leaving webhook authenticity unresolved."
+    }
+  ]
+}

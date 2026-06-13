@@ -1,0 +1,62 @@
+{
+  "schema_version": "p2a.negative_fixtures.v1",
+  "expected_pass": [
+    {
+      "id": "promoted-decision-draft-spec-is-valid",
+      "description": "A draft spec with an unresolved CQ-promoted ND decision is a valid Gate B stopped state.",
+      "args": [
+        "--spec",
+        "fixtures/_negative/promoted-decision-draft/spec.draft.json"
+      ]
+    },
+    {
+      "id": "review-blocked-schema-is-valid",
+      "description": "A review with blocking issues is schema-valid before Gate D pass is required.",
+      "args": [
+        "--review",
+        "fixtures/_negative/review-blocked/review.blocked.json"
+      ]
+    }
+  ],
+  "expected_failure": [
+    {
+      "id": "approval-audit-required-for-approved-gate-b",
+      "description": "An approved Gate B artifact root must include a Gate B approval audit block in status.md.",
+      "args": [
+        "--artifact-root",
+        "fixtures/_negative/missing-approval-audit"
+      ],
+      "expected_message": "status.md missing Gate B approval audit"
+    },
+    {
+      "id": "promoted-decision-missing-open-decision-fails",
+      "description": "An unresolved promoted CQ decision must remain in open_decisions until resolved.",
+      "args": [
+        "--spec",
+        "fixtures/_negative/promoted-decision-draft/spec.invalid-missing-open-decision.json"
+      ],
+      "expected_message": "promoted decision ND-4 must be in open_decisions until it has a resolution"
+    },
+    {
+      "id": "promoted-decision-draft-blocks-task-graph",
+      "description": "Task graph validation with --require-approved-spec must reject the draft spec.",
+      "args": [
+        "--task-graph",
+        "fixtures/_negative/promoted-decision-draft/task-graph.json",
+        "--require-approved-spec",
+        "fixtures/_negative/promoted-decision-draft/spec.draft.json"
+      ],
+      "expected_message": "task graph generation is blocked until spec.approval is approved"
+    },
+    {
+      "id": "review-blocker-fails-gate-d-pass",
+      "description": "Gate D pass validation must reject reviews with blocking issues.",
+      "args": [
+        "--review",
+        "fixtures/_negative/review-blocked/review.blocked.json",
+        "--require-review-pass"
+      ],
+      "expected_message": "review cannot pass Gate D while blocking_issues is non-empty"
+    }
+  ]
+}

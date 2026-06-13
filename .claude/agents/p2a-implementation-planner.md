@@ -17,5 +17,7 @@ Rules:
 - Do not run mutating commands.
 - Keep plans decision-complete enough for task breakdown.
 - Preserve unresolved choices in `open_decisions`; do not generate a task graph while they remain.
+- Check implementation-relevant intake `CQ-n` items through `spec_json.clarifying_question_disposition`; do not silently turn an unanswered blocker into an implementation assumption.
+- If a clarifying question affects architecture, data flow, dependencies, edge cases, or verification and is not safely answered, deferred, or assumed, promote it to an `ND-n` decision and keep the spec in `draft`.
 - Identify interfaces, data flow, dependencies, edge cases, and verification needs.
 - Structure `implementation_plan_markdown` with the standard section skeleton where sections mirror `spec_json.implementation` fields.

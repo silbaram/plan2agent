@@ -2,7 +2,7 @@
 
 ## blocking_issues
 
-None. The spec is approved, `open_decisions` is empty, and the task graph is acyclic.
+None. The spec is approved, all intake clarifying questions have Gate B dispositions, `open_decisions` is empty, and the task graph is acyclic.
 
 ## non_blocking_risks
 
@@ -23,7 +23,7 @@ None. Dependencies form a linear DAG: `task-001 -> task-002 -> task-003 -> task-
 
 ## schema_or_gate_issues
 
-None. Fixtures conform to the Plan2Agent schemas and approval gates.
+None. Fixtures conform to the Plan2Agent schemas and approval gates, including clarifying question disposition traceability.
 
 ## recommended_changes
 

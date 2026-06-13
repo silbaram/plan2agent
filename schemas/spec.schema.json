@@ -9,6 +9,7 @@
     "source_intake",
     "product",
     "implementation",
+    "clarifying_question_disposition",
     "open_decisions",
     "approval",
     "evidence"
@@ -157,6 +158,66 @@
       "items": {
         "type": "string",
         "pattern": "^ND-[0-9]+$"
+      }
+    },
+    "clarifying_question_disposition": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "status",
+          "rationale",
+          "affects"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^CQ-[0-9]+$"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "answered",
+              "assumed",
+              "deferred_non_goal",
+              "promoted_to_decision"
+            ]
+          },
+          "rationale": {
+            "type": "string",
+            "minLength": 1
+          },
+          "affects": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "resolved_by": {
+            "type": "string",
+            "minLength": 1
+          },
+          "assumption": {
+            "type": "string",
+            "minLength": 1
+          },
+          "non_goal": {
+            "type": "string",
+            "minLength": 1
+          },
+          "promoted_decision_id": {
+            "type": "string",
+            "pattern": "^ND-[0-9]+$"
+          },
+          "resolution": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
       }
     },
     "approval": {

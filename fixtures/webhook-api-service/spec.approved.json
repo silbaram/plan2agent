@@ -1,0 +1,136 @@
+{
+  "schema_version": "p2a.spec.v1",
+  "project_id": "webhook-api-service",
+  "source_intake": "fixtures/webhook-api-service/intake.answered.json",
+  "product": {
+    "problem": "Backend teams need a small webhook ingestion service that safely receives partner callbacks, normalizes incoming events, and reliably hands them to internal processing.",
+    "target_users": [
+      "Backend engineers integrating partner webhook providers",
+      "Platform teams that need a reusable ingestion boundary before internal queue processing"
+    ],
+    "goals": [
+      "Expose one HTTP endpoint for partner webhook ingestion",
+      "Verify inbound webhook authenticity with HMAC SHA-256 signatures",
+      "Normalize accepted payloads into a stable internal event envelope",
+      "Deliver events to a provider-neutral queue adapter with bounded retry and dead-letter handling"
+    ],
+    "non_goals": [
+      "No provider-specific queue SDK in v1",
+      "No multi-tenant admin UI",
+      "No historical replay dashboard",
+      "No long-term event storage beyond the dead-letter path"
+    ],
+    "core_flows": [
+      "A partner sends a signed webhook request to the ingestion endpoint",
+      "The service verifies timestamp tolerance and HMAC signature before parsing the payload",
+      "The service normalizes the payload into an internal event envelope with provider, event type, event id, and received timestamp",
+      "The queue adapter accepts the event or the service retries according to the bounded policy",
+      "Exhausted deliveries are written to the dead-letter path for manual inspection"
+    ],
+    "screens_or_interfaces": [
+      "POST /webhooks/:partner endpoint",
+      "Queue adapter interface for enqueue and dead-letter operations",
+      "Configuration object for partner secrets, timestamp tolerance, and retry settings"
+    ],
+    "data_model_draft": [
+      "WebhookRequest: partner id, headers, raw body, receivedAt",
+      "NormalizedEvent: eventId, partner, eventType, payload, receivedAt",
+      "DeliveryAttempt: eventId, attemptNumber, nextDelayMs, error",
+      "DeadLetterRecord: normalized event, attempts, final error"
+    ],
+    "external_integrations": [
+      "Partner webhook sender using shared-secret HMAC signatures",
+      "Provider-neutral internal queue adapter",
+      "Dead-letter adapter for exhausted events"
+    ],
+    "success_criteria": [
+      "Unsigned or incorrectly signed requests are rejected",
+      "Accepted requests produce normalized event envelopes",
+      "Transient queue failures are retried with a bounded policy",
+      "Exhausted delivery attempts are sent to the dead-letter path",
+      "Signature, normalization, retry, and dead-letter paths have deterministic tests"
+    ],
+    "constraints": [
+      "TypeScript/Node.js HTTP service",
+      "Provider-neutral queue adapter in v1",
+      "HMAC SHA-256 signatures with timestamp tolerance",
+      "No concrete cloud provider dependency in v1"
+    ]
+  },
+  "implementation": {
+    "architecture": [
+      "Use a small TypeScript HTTP service with request body access before JSON parsing for signature verification",
+      "Separate request verification, payload normalization, queue delivery, retry policy, and dead-letter handling into modules",
+      "Keep queue integration behind an adapter interface so tests can use deterministic fakes"
+    ],
+    "interfaces": [
+      "POST /webhooks/:partner",
+      "verifySignature(partner, headers, rawBody): VerificationResult",
+      "normalizeEvent(partner, payload, receivedAt): NormalizedEvent",
+      "QueueAdapter.enqueue(event): Promise<void>",
+      "DeadLetterAdapter.record(event, attempts, error): Promise<void>"
+    ],
+    "data_flow": [
+      "HTTP handler reads raw body and partner id",
+      "Verifier checks timestamp tolerance and HMAC SHA-256 signature",
+      "Normalizer maps provider payload to a stable internal event envelope",
+      "Delivery service calls QueueAdapter.enqueue and applies bounded retry on transient failures",
+      "DeadLetterAdapter records exhausted deliveries with final error context"
+    ],
+    "dependencies": [
+      "TypeScript compiler",
+      "Node.js HTTP framework or minimal server",
+      "Node.js crypto APIs",
+      "Test runner with fake queue and fake clock support"
+    ],
+    "edge_cases": [
+      "Missing signature header",
+      "Expired timestamp",
+      "Malformed JSON payload",
+      "Duplicate event id",
+      "Queue adapter transient failure",
+      "Retry exhaustion"
+    ],
+    "verification": [
+      "Unit tests for valid and invalid HMAC signatures",
+      "Unit tests for timestamp tolerance",
+      "Unit tests for payload normalization",
+      "Unit tests for bounded retry and dead-letter behavior",
+      "Handler tests for accepted, rejected, and malformed webhook requests"
+    ]
+  },
+  "clarifying_question_disposition": [
+    {
+      "id": "CQ-1",
+      "status": "promoted_to_decision",
+      "rationale": "Webhook authenticity affects security and endpoint semantics, so it is tracked as a formal Gate B decision.",
+      "affects": [
+        "spec.product.external_integrations",
+        "spec.implementation.interfaces",
+        "spec.implementation.verification"
+      ],
+      "promoted_decision_id": "ND-4",
+      "resolution": "Use HMAC SHA-256 signatures with shared partner secrets and timestamp tolerance in v1"
+    },
+    {
+      "id": "CQ-2",
+      "status": "answered",
+      "rationale": "The retry guarantee is resolved by the selected bounded retry plus dead-letter intake decision.",
+      "affects": [
+        "spec.implementation.data_flow",
+        "spec.implementation.edge_cases"
+      ],
+      "resolved_by": "ND-3 answer: Bounded retry plus dead-letter path"
+    }
+  ],
+  "open_decisions": [],
+  "approval": "approved",
+  "evidence": [
+    {
+      "source_id": "USER-1",
+      "title": "Answered intake decisions and Gate B signature decision",
+      "url": "",
+      "used_for": "Confirmed TypeScript runtime, provider-neutral queue adapter, bounded retry behavior, and HMAC SHA-256 signature verification."
+    }
+  ]
+}

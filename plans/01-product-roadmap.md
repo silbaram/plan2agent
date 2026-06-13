@@ -352,9 +352,10 @@ Plan2Agent 개발은 아래 흐름을 기본 협업 방식으로 둔다.
 
 ## 15. 다음 개발 액션
 
-1. fixture coverage를 cache library 외 product domain으로 확장한다.
-2. `scripts/sync_cli_assets.mjs`, `scripts/check_cli_parity.mjs`, `scripts/run_fixtures.mjs`를 CI에 연결한다.
-3. 완료: v1 프로토타입은 Node.js CLI로 결정했고, UI(task board)는 v2 백로그로 둔다.
-4. 완료: §3의 task 상태와 의존성 관리는 `scripts/p2a_tasks.mjs`로 충족한다.
-5. `plans/03-v2-development-handoff.md` 기준으로 v2 개발 인계/환경 세팅 도구를 설계한다.
-6. v2 agent 실행 로그, worktree 분리, 결과 diff 연결 방식을 설계한다.
+1. 완료: fixture coverage를 cache library 외 API/integration domain으로 확장했다(`fixtures/webhook-api-service`).
+2. 완료: e2e artifact-root golden fixture를 추가했다(`fixtures/_e2e/webhook-api-service`).
+3. CI 검증 연결은 사용자 관리 항목으로 둔다.
+4. 완료: v1 프로토타입은 Node.js CLI로 결정했고, UI(task board)는 v2 백로그로 둔다.
+5. 완료: §3의 task 상태와 의존성 관리는 `scripts/p2a_tasks.mjs`로 충족한다.
+6. `plans/03-v2-development-handoff.md` 기준으로 v2 개발 인계/환경 세팅 도구를 설계한다.
+7. v2 agent 실행 로그, worktree 분리, 결과 diff 연결 방식을 설계한다.

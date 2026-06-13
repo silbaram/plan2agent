@@ -28,11 +28,24 @@ If the CLI cannot spawn subagents automatically, run the matching skill locally 
 ## Approval Gates
 
 - **Gate A — Intake decisions:** If any `needs_user_decision.status` is `open` or `deferred`, stop after intake and ask only those decisions. Do not produce a product spec except as a clearly labeled sketch.
-- **Gate B — Spec approval:** If `spec_json.approval` is not `approved` or `spec_json.open_decisions` is non-empty, stop before task graph generation.
+- **Gate B — Spec approval:** If `spec_json.approval` is not `approved` or `spec_json.open_decisions` is non-empty, stop before task graph generation. When Gate B is approved, `status.md` must include a Gate B approval audit block.
 - **Gate C — Task graph validation:** Before final output, check that every dependency references a task id, the graph is acyclic, and every task has acceptance criteria.
 - **Gate D — Review blockers:** If review finds blocking issues, return the blockers and the artifact section that must be revised instead of claiming the plan is ready.
 
 Each gate is a review checkpoint, not a one-shot hand-off. At every gate: (1) persist the stage's artifact files **and refresh top-level `status.md`** (progress line, this gate's section, open decisions, next action, change-log entry), (2) present a readable summary with per-item rationale and recommendations, (3) explicitly invite both open-ended feedback and structured answers or approval, (4) revise the artifacts and re-present them when the user responds, and (5) advance only after the user explicitly approves. Never infer approval from silence.
+
+## Clarifying Question Disposition
+
+`clarifying_questions` (`CQ-n`) are lightweight intake prompts. They do not block Gate A by themselves, but every intake `CQ-n` must be explicitly disposed in `spec_json.clarifying_question_disposition` before Gate B can pass.
+
+Use exactly one disposition per intake `CQ-n`:
+
+- `answered` — the spec incorporates a user answer or an already-resolved decision; include `resolved_by`.
+- `assumed` — the spec proceeds with a low-risk explicit assumption; include `assumption`.
+- `deferred_non_goal` — the question is intentionally out of v1 scope; include `non_goal`.
+- `promoted_to_decision` — the question is high-impact and must be tracked as a formal decision; include `promoted_decision_id`.
+
+Do not put raw `CQ-n` ids in `spec_json.open_decisions`. If a clarifying question blocks product or implementation correctness, promote it to an `ND-n` decision. An unresolved promoted decision remains in `open_decisions` and keeps the spec in `draft`; a resolved promoted decision records `resolution` in the disposition and is removed from `open_decisions`.
 
 ## Analysis and Decision Presentation
 
@@ -102,6 +115,19 @@ The orchestrator writes each stage's outputs into its matching `gate-*` folder b
 3. **Open decisions / questions** — preserve the former cross-gate question-index content here, including unresolved decisions, answered decisions that affect downstream work, and follow-up questions.
 4. **Next** — state exactly one next action needed from the user or orchestrator.
 5. **Change log** — append dated bullets for each gate transition or decision/status update.
+
+When Gate B is approved, include this approval audit block in the Gate B section of `status.md` and keep it in sync if the approved spec changes:
+
+```md
+#### Gate B approval audit
+
+- Approved by: user
+- Approved at: YYYY-MM-DD
+- Approved artifacts: `gate-b-spec/product-spec.md`, `gate-b-spec/implementation-plan.md`, `gate-b-spec/spec.json`
+- Approval note: <short note describing the decision/resolution basis for approval>
+```
+
+Use the actual approver label and date available in the conversation. If the exact person is unknown, use `user`; do not invent names.
 
 ### Facts From Tools
 

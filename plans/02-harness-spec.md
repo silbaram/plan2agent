@@ -69,7 +69,7 @@ If a CLI cannot spawn subagents automatically, the active model executes the sam
 ## 4. Approval Gates
 
 - **Gate A — Intake decisions:** If any `needs_user_decision.status` is `open` or `deferred`, stop after intake and ask only those decisions. Do not produce a product spec except as a clearly labeled sketch.
-- **Gate B — Spec approval:** If `spec_json.approval` is not `approved` or `spec_json.open_decisions` is non-empty, stop before task graph generation.
+- **Gate B — Spec approval:** If any intake `CQ-n` is not disposed in `spec_json.clarifying_question_disposition`, `spec_json.approval` is not `approved`, or `spec_json.open_decisions` is non-empty, stop before task graph generation.
 - **Gate C — Task graph validation:** Before final output, check that every dependency references a task id, the graph is acyclic, and every task has acceptance criteria.
 - **Gate D — Review blockers:** If review finds blocking issues, return the blockers and the artifact section that must be revised instead of claiming the plan is ready.
 
@@ -91,11 +91,11 @@ The harness passes intermediate artifacts with these exact names:
 | `intake_json` | `schemas/intake.schema.json` | `status: ready_for_spec` |
 | `product_spec_markdown` | Markdown | user review |
 | `implementation_plan_markdown` | Markdown | user review |
-| `spec_json` | `schemas/spec.schema.json` | `approval: approved` and `open_decisions: []` |
+| `spec_json` | `schemas/spec.schema.json` | all `CQ-n` dispositions recorded, `approval: approved`, and `open_decisions: []` |
 | `task_graph_json` | `schemas/task-graph.schema.json` | dependency ids valid and DAG acyclic |
 | `review_report` | Markdown/JSON-compatible sections | no blocking issues |
 
-Schema validation is intentionally complemented by `scripts/validate_artifacts.mjs`, which performs gate checks that are easier to express procedurally: open/deferred decision blocking, spec/intake `open_decisions` traceability, approved-spec requirement, missing dependency ids, duplicate task ids, and cycle detection.
+Schema validation is intentionally complemented by `scripts/validate_artifacts.mjs`, which performs gate checks that are easier to express procedurally: open/deferred decision blocking, `CQ-n` disposition coverage, spec/intake `open_decisions` traceability including promoted clarifying-question decisions, approved-spec requirement, missing dependency ids, duplicate task ids, and cycle detection.
 
 The harness orchestrator also persists each artifact as a file under `artifacts/<project_id>/` using gate-specific folders (`gate-a-intake/intake.json`, `gate-a-intake/intake.md`, `gate-b-spec/product-spec.md`, `gate-b-spec/implementation-plan.md`, `gate-b-spec/spec.json`, `gate-c-task-graph/task-graph.json`, `gate-d-review/review-report.md`) plus top-level `status.md` as a standing progress and decision index refreshed at every gate transition, so the user can review artifacts at each gate and run `scripts/validate_artifacts.mjs` against them. Subagents remain read-only; only the orchestrator writes files, and neither the harness nor subagents perform git operations. The user may commit `artifacts/<project_id>/` outputs to git as planning history for file-based versioning.
 
@@ -207,16 +207,19 @@ Gemini target fields use the documented subagent keys `kind`, `tools`, `temperat
 - 어떤 skill이나 subagent도 v1에서 코드 변경을 지시하지 않는다.
 - `intake_json`, `spec_json`, `task_graph_json`은 schema 파일을 가진다.
 - task graph는 최소 필드 `id`, `title`, `description`, `dependencies`, `acceptanceCriteria`, `targetArea`, `suggestedAgentPrompt`, `sourceSpecRefs`를 가진다.
-- validation script가 schema subset, dependency id, duplicate id, cycle, unresolved decision gate, spec/intake decision traceability를 검사한다.
+- validation script가 schema subset, dependency id, duplicate id, cycle, unresolved decision gate, `CQ-n` disposition coverage, spec/intake decision traceability를 검사한다.
 - fixture/golden output이 intake blocked, intake answered, approved spec, task graph, review report path를 포함한다.
 - CLI mirror 생성 스크립트가 CLI-중립 canonical `.agents/agents` source에서 Claude/Codex/Gemini target을 재생성한다.
 
 ## 14. 현재 보완 필요 항목
 
-- fixture coverage를 cache library 외 product domain으로 확장한다.
+- 완료: fixture coverage를 cache library 외 API/integration domain으로 확장했다(`fixtures/webhook-api-service`).
+- 완료: draft/negative fixture coverage를 추가해 unresolved promoted decision, promoted decision의 `open_decisions` 누락 실패, Gate D blocker 실패 흐름을 고정했다(`fixtures/_negative`).
+- 완료: end-to-end artifact-root golden fixture를 추가해 `--artifact-root --require-handoff-ready` 검증을 고정했다(`fixtures/_e2e/webhook-api-service`).
+- 완료: Gate B 승인 audit log를 `status.md`에 기록하고 validator가 확인하도록 했다.
 - 완료: Python stdlib scripts를 Node.js ESM scripts로 대체하고 `scripts/check_cli_parity.mjs`, `scripts/run_fixtures.mjs`, `scripts/validate_artifacts.mjs` 검증 경로를 확정했다.
 - 완료: task 상태와 의존성 관리는 `scripts/p2a_tasks.mjs`로 제공한다.
-- CLI mirror drift check와 fixture runner를 CI에 연결한다.
+- CLI mirror drift check와 fixture runner의 CI 연결은 사용자 관리 항목으로 둔다.
 - v2에서 agent 실행 로그, worktree 분리, 결과 diff 연결을 설계한다.
 
 ## 15. 공식 레퍼런스

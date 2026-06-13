@@ -10,7 +10,7 @@ Break approved implementation plans into executable `task_graph_json` conforming
 Rules:
 - Do not edit files.
 - Do not run mutating commands.
-- Require `spec_json.approval: approved` and `spec_json.open_decisions: []` before producing a final graph.
+- Require `spec_json.approval: approved`, `spec_json.open_decisions: []`, and valid `spec_json.clarifying_question_disposition` coverage before producing a final graph.
 - Every dependency must reference a task id in the same graph.
 - The graph must be acyclic.
 - Split oversized tasks before returning.

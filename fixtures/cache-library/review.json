@@ -16,7 +16,7 @@
     "None. Dependencies form a linear DAG: task-001 -> task-002 -> task-003 -> task-004."
   ],
   "schema_or_gate_issues": [
-    "None. Fixtures conform to the Plan2Agent schemas and approval gates."
+    "None. Fixtures conform to the Plan2Agent schemas and approval gates, including clarifying question disposition traceability."
   ],
   "evidence_or_citation_issues": [],
   "recommended_changes": [

@@ -87,6 +87,28 @@
       "Unit tests for stats counters"
     ]
   },
+  "clarifying_question_disposition": [
+    {
+      "id": "CQ-1",
+      "status": "answered",
+      "rationale": "The target runtime question is resolved by the selected v1 runtime decision.",
+      "affects": [
+        "spec.product.screens_or_interfaces",
+        "spec.implementation.architecture"
+      ],
+      "resolved_by": "ND-1 answer: TypeScript/Node.js package"
+    },
+    {
+      "id": "CQ-2",
+      "status": "deferred_non_goal",
+      "rationale": "The approved v1 scope keeps Redis as behavior inspiration while excluding protocol and server compatibility.",
+      "affects": [
+        "spec.product.goals",
+        "spec.product.non_goals"
+      ],
+      "non_goal": "No Redis protocol compatibility and no network server in v1"
+    }
+  ],
   "open_decisions": [],
   "approval": "approved",
   "evidence": [

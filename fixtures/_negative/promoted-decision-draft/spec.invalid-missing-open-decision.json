@@ -1,0 +1,85 @@
+{
+  "schema_version": "p2a.spec.v1",
+  "project_id": "webhook-api-service",
+  "source_intake": "fixtures/webhook-api-service/intake.answered.json",
+  "product": {
+    "problem": "Backend teams need a webhook ingestion service with a pending authenticity decision.",
+    "target_users": [
+      "Backend engineers"
+    ],
+    "goals": [
+      "Receive partner webhooks"
+    ],
+    "non_goals": [
+      "No provider-specific queue SDK in v1"
+    ],
+    "core_flows": [
+      "Receive a webhook request after Gate B decisions are resolved"
+    ],
+    "screens_or_interfaces": [
+      "POST /webhooks/:partner"
+    ],
+    "data_model_draft": [
+      "WebhookRequest"
+    ],
+    "external_integrations": [
+      "Partner webhook sender"
+    ],
+    "success_criteria": [
+      "The pending authenticity decision must be resolved before approval"
+    ],
+    "constraints": [
+      "TypeScript/Node.js HTTP service"
+    ]
+  },
+  "implementation": {
+    "architecture": [
+      "Separate request validation from payload normalization"
+    ],
+    "interfaces": [
+      "verifyRequest(partner, headers, rawBody): VerificationResult"
+    ],
+    "data_flow": [
+      "Request validation applies the pending authenticity decision"
+    ],
+    "dependencies": [
+      "TypeScript compiler"
+    ],
+    "edge_cases": [
+      "Missing authenticity proof"
+    ],
+    "verification": [
+      "Tests are defined after ND-4 is resolved"
+    ]
+  },
+  "clarifying_question_disposition": [
+    {
+      "id": "CQ-1",
+      "status": "promoted_to_decision",
+      "rationale": "Webhook authenticity affects security and must block approval.",
+      "affects": [
+        "spec.implementation.interfaces"
+      ],
+      "promoted_decision_id": "ND-4"
+    },
+    {
+      "id": "CQ-2",
+      "status": "answered",
+      "rationale": "Retry behavior is resolved by the intake decision.",
+      "affects": [
+        "spec.implementation.data_flow"
+      ],
+      "resolved_by": "ND-3 answer: Bounded retry plus dead-letter path"
+    }
+  ],
+  "open_decisions": [],
+  "approval": "draft",
+  "evidence": [
+    {
+      "source_id": "USER-1",
+      "title": "Negative fixture for missing promoted open decision",
+      "url": "",
+      "used_for": "Proves unresolved promoted CQ decisions cannot disappear from open_decisions."
+    }
+  ]
+}

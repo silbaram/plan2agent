@@ -1,0 +1,66 @@
+{
+  "schema_version": "p2a.spec.v1",
+  "project_id": "missing-approval-audit",
+  "source_intake": "../gate-a-intake/intake.json",
+  "product": {
+    "problem": "A validator needs to reject approved Gate B status without approval audit metadata.",
+    "target_users": [
+      "Plan2Agent maintainers"
+    ],
+    "goals": [
+      "Exercise missing approval audit validation"
+    ],
+    "non_goals": [
+      "No implementation work"
+    ],
+    "core_flows": [
+      "Validate artifact root and fail on missing approval audit"
+    ],
+    "screens_or_interfaces": [
+      "validate_artifacts.mjs --artifact-root"
+    ],
+    "data_model_draft": [
+      "status.md approval audit block"
+    ],
+    "external_integrations": [
+      "None"
+    ],
+    "success_criteria": [
+      "Artifact root validation fails with status.md missing Gate B approval audit"
+    ],
+    "constraints": [
+      "Keep fixture minimal"
+    ]
+  },
+  "implementation": {
+    "architecture": [
+      "Use validator status document checks"
+    ],
+    "interfaces": [
+      "validateArtifactRoot"
+    ],
+    "data_flow": [
+      "Load spec, detect approval, inspect status.md"
+    ],
+    "dependencies": [
+      "Node.js standard library"
+    ],
+    "edge_cases": [
+      "Approved spec without status approval audit"
+    ],
+    "verification": [
+      "Negative fixture expects status.md missing Gate B approval audit"
+    ]
+  },
+  "clarifying_question_disposition": [],
+  "open_decisions": [],
+  "approval": "approved",
+  "evidence": [
+    {
+      "source_id": "USER-1",
+      "title": "Negative fixture setup",
+      "url": "",
+      "used_for": "Confirms this fixture is intended to fail audit validation."
+    }
+  ]
+}

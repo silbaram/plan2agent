@@ -1,0 +1,11 @@
+{
+  "schema_version": "p2a.e2e_fixtures.v1",
+  "cases": [
+    {
+      "id": "webhook-api-service-handoff-ready",
+      "description": "Complete artifact-root layout for a webhook API service that must pass handoff readiness.",
+      "artifact_root": "fixtures/_e2e/webhook-api-service",
+      "project_id": "webhook-api-service"
+    }
+  ]
+}

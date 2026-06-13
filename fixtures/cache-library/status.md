@@ -19,6 +19,14 @@ The fixture represents a complete Plan2Agent planning run for the cache-library 
 - 정본 파일: `spec.approved.json`
 - 상태: `approved`
 - `open_decisions`: []
+- `clarifying_question_disposition`: `CQ-1` answered, `CQ-2` deferred_non_goal
+
+#### Gate B approval audit
+
+- Approved by: user
+- Approved at: 2026-06-13
+- Approved artifacts: `spec.approved.json`
+- Approval note: Approved after resolving all intake decisions and disposing `CQ-1`/`CQ-2`.
 
 ### Gate C - Task graph validation
 

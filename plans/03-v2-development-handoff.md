@@ -132,6 +132,7 @@ node scripts/p2a_handoff.mjs \
 - `spec.json`이 존재한다.
 - `task-graph.json`이 존재한다.
 - `review-report.md`가 존재한다.
+- intake의 모든 `CQ-n`이 `spec.json.clarifying_question_disposition`에서 처분되어 있다.
 - `spec.json.approval`이 `approved`다.
 - `spec.json.open_decisions`가 비어 있다.
 - `task-graph.json`은 schema 검증을 통과한다.

@@ -12,6 +12,7 @@ Break an approved implementation spec into tasks that an agent or developer can 
 - `spec_json` conforming to `schemas/spec.schema.json`.
 - `spec_json.approval: approved`.
 - `spec_json.open_decisions: []`.
+- Every intake `CQ-n` has a valid `spec_json.clarifying_question_disposition`.
 - Known constraints.
 
 ## Output
@@ -40,6 +41,7 @@ Each task must include:
 
 - Reject task breakdown if the spec is not approved.
 - Reject task breakdown if any unresolved decision remains.
+- Reject task breakdown if Gate B clarifying question dispositions are missing or invalid.
 - Dependencies must reference task ids in the same graph.
 - The dependency graph must be acyclic.
 

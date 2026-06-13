@@ -1,0 +1,24 @@
+{
+  "schema_version": "p2a.review.v1",
+  "projectId": "webhook-api-service",
+  "sourceSpec": "fixtures/webhook-api-service/spec.approved.json",
+  "sourceTaskGraph": "fixtures/webhook-api-service/task-graph.json",
+  "blocking_issues": [
+    "task-002 does not yet define a concrete replay-safe handling path for duplicate event ids."
+  ],
+  "non_blocking_risks": [
+    "Provider-neutral queue behavior may need concrete adapter examples in a later implementation phase."
+  ],
+  "missing_tests_or_acceptance_criteria": [
+    "Duplicate event id handling must be represented in acceptance criteria before Gate D can pass."
+  ],
+  "oversized_tasks": [],
+  "dependency_issues": [],
+  "schema_or_gate_issues": [
+    "Gate D must remain blocked while blocking_issues is non-empty."
+  ],
+  "evidence_or_citation_issues": [],
+  "recommended_changes": [
+    "Add duplicate event id acceptance criteria to the relevant task before claiming handoff readiness."
+  ]
+}

@@ -1,0 +1,88 @@
+{
+  "schema_version": "p2a.task_graph.v1",
+  "projectId": "webhook-api-service",
+  "version": "1",
+  "sourceSpec": "fixtures/webhook-api-service/spec.approved.json",
+  "tasks": [
+    {
+      "id": "task-001",
+      "title": "Scaffold TypeScript webhook service",
+      "description": "Create the TypeScript service scaffold, HTTP endpoint shell, configuration shape, and test command.",
+      "status": "todo",
+      "dependencies": [],
+      "acceptanceCriteria": [
+        "Service exposes a POST /webhooks/:partner route shell",
+        "Configuration includes partner secrets, timestamp tolerance, and retry settings",
+        "Tests can run with documented commands"
+      ],
+      "targetArea": "service-scaffold",
+      "suggestedAgentPrompt": "Scaffold the TypeScript webhook ingestion service from the approved spec. Do not implement verification or delivery behavior yet.",
+      "sourceSpecRefs": [
+        "product.screens_or_interfaces",
+        "implementation.dependencies"
+      ]
+    },
+    {
+      "id": "task-002",
+      "title": "Implement HMAC webhook verification",
+      "description": "Implement request timestamp and HMAC SHA-256 signature verification using raw request bodies.",
+      "status": "todo",
+      "dependencies": [
+        "task-001"
+      ],
+      "acceptanceCriteria": [
+        "Missing or invalid signatures are rejected",
+        "Expired timestamps are rejected",
+        "Valid signatures pass verification with deterministic tests"
+      ],
+      "targetArea": "webhook-verification",
+      "suggestedAgentPrompt": "Implement the HMAC SHA-256 webhook verification module and tests according to the approved spec.",
+      "sourceSpecRefs": [
+        "product.external_integrations",
+        "implementation.interfaces",
+        "implementation.verification"
+      ]
+    },
+    {
+      "id": "task-003",
+      "title": "Normalize accepted webhook events",
+      "description": "Parse accepted webhook payloads and map them into the internal normalized event envelope.",
+      "status": "todo",
+      "dependencies": [
+        "task-002"
+      ],
+      "acceptanceCriteria": [
+        "Malformed JSON is rejected with a deterministic error path",
+        "Accepted payloads produce NormalizedEvent objects",
+        "Event id, partner, event type, payload, and receivedAt are preserved"
+      ],
+      "targetArea": "event-normalization",
+      "suggestedAgentPrompt": "Implement normalized event mapping for accepted webhook requests and add tests for malformed and valid payloads.",
+      "sourceSpecRefs": [
+        "product.data_model_draft",
+        "implementation.data_flow"
+      ]
+    },
+    {
+      "id": "task-004",
+      "title": "Implement queue delivery retry and dead-letter handling",
+      "description": "Deliver normalized events through the provider-neutral queue adapter with bounded retry and dead-letter fallback.",
+      "status": "todo",
+      "dependencies": [
+        "task-003"
+      ],
+      "acceptanceCriteria": [
+        "Transient queue failures are retried according to the bounded policy",
+        "Exhausted deliveries are written to the dead-letter adapter",
+        "Retry and dead-letter behavior is covered with fake adapters"
+      ],
+      "targetArea": "queue-delivery",
+      "suggestedAgentPrompt": "Implement queue delivery, bounded retry, and dead-letter handling using the approved provider-neutral adapter interfaces.",
+      "sourceSpecRefs": [
+        "implementation.data_flow",
+        "implementation.edge_cases",
+        "product.success_criteria"
+      ]
+    }
+  ]
+}

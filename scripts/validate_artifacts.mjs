@@ -42,6 +42,30 @@ function assertFile(filePath, label) {
   if (!lstatSync(filePath).isFile()) throw new ValidationError(`${label} must be a file: ${filePath}`);
 }
 
+function resolveExistingFileReference(reference, baseDir) {
+  if (!reference || typeof reference !== 'string') return null;
+  const candidates = path.isAbsolute(reference)
+    ? [reference]
+    : [
+        path.resolve(process.cwd(), reference),
+        path.resolve(baseDir, reference),
+      ];
+  return candidates.find((candidate) => existsSync(candidate) && lstatSync(candidate).isFile()) ?? null;
+}
+
+function resolveSpecSourceIntake(specPath, specReference = loadJson(specPath)) {
+  return resolveExistingFileReference(specReference.source_intake, path.dirname(specPath));
+}
+
+function requireSpecSourceIntake(specPath, specReference = loadJson(specPath)) {
+  if (!specReference.source_intake) return null;
+  const sourceIntakePath = resolveSpecSourceIntake(specPath, specReference);
+  if (!sourceIntakePath) {
+    throw new ValidationError(`spec.source_intake cannot be resolved to a file: ${JSON.stringify(specReference.source_intake)}`);
+  }
+  return sourceIntakePath;
+}
+
 function schemaTypeMatches(instance, expectedType) {
   if (expectedType === 'object') return instance !== null && typeof instance === 'object' && !Array.isArray(instance);
   if (expectedType === 'array') return Array.isArray(instance);
@@ -158,40 +182,124 @@ export function validateIntake(filePath) {
 
 export function validateSpec(filePath, intakePath = null) {
   const data = validateAgainstSchema(filePath, 'spec');
+  const intake = intakePath ? validateIntake(intakePath) : null;
   validateEvidence(data.evidence, 'spec');
+  validateClarifyingQuestionDisposition(data, intake);
   if (data.approval === 'approved' && data.open_decisions.length) {
     throw new ValidationError('approved specs must not contain open_decisions');
   }
 
-  if (intakePath) {
-    const intake = validateIntake(intakePath);
+  if (intake) {
     const intakeDecisions = new Map(intake.needs_user_decision.map((decision) => [decision.id, decision.status]));
-    const unknownDecisions = data.open_decisions.filter((decisionId) => !intakeDecisions.has(decisionId));
+    const promotedDecisions = new Set(
+      data.clarifying_question_disposition
+        .filter((item) => item.status === 'promoted_to_decision')
+        .map((item) => item.promoted_decision_id),
+    );
+    const promotedDecisionIds = [...promotedDecisions];
+    const collidingPromotedDecisions = promotedDecisionIds.filter((decisionId) => intakeDecisions.has(decisionId));
+    if (collidingPromotedDecisions.length) {
+      throw new ValidationError(`spec.clarifying_question_disposition promoted_decision_id must not reuse intake decision ids: ${JSON.stringify(collidingPromotedDecisions)}`);
+    }
+    const unknownDecisions = data.open_decisions.filter((decisionId) => !intakeDecisions.has(decisionId) && !promotedDecisions.has(decisionId));
     if (unknownDecisions.length) {
-      throw new ValidationError(`spec.open_decisions references unknown intake decisions: ${JSON.stringify(unknownDecisions)}`);
+      throw new ValidationError(`spec.open_decisions references unknown decisions: ${JSON.stringify(unknownDecisions)}`);
     }
     const unresolvedDecisions = new Set(
       [...intakeDecisions.entries()]
         .filter(([, status]) => status === 'open' || status === 'deferred')
         .map(([decisionId]) => decisionId),
     );
+    for (const item of data.clarifying_question_disposition) {
+      if (item.status === 'promoted_to_decision' && !item.resolution) {
+        unresolvedDecisions.add(item.promoted_decision_id);
+      }
+    }
     const specOpenDecisions = new Set(data.open_decisions);
     const expected = [...unresolvedDecisions].sort();
     const got = [...specOpenDecisions].sort();
     if (JSON.stringify(expected) !== JSON.stringify(got)) {
       throw new ValidationError(
-        `spec.open_decisions must exactly match unresolved intake decisions: expected ${JSON.stringify(expected)}, got ${JSON.stringify(got)}`,
+        `spec.open_decisions must exactly match unresolved decisions: expected ${JSON.stringify(expected)}, got ${JSON.stringify(got)}`,
       );
     }
   }
   return data;
 }
 
+function validateClarifyingQuestionDisposition(spec, intake = null) {
+  const dispositions = spec.clarifying_question_disposition;
+  const dispositionIds = dispositions.map((item) => item.id);
+  if (dispositionIds.length !== new Set(dispositionIds).size) {
+    throw new ValidationError('spec.clarifying_question_disposition id values must be unique');
+  }
+  const openDecisions = new Set(spec.open_decisions);
+  const detailFields = ['resolved_by', 'assumption', 'non_goal', 'promoted_decision_id', 'resolution'];
+  const allowedDetailFields = new Map([
+    ['answered', new Set(['resolved_by'])],
+    ['assumed', new Set(['assumption'])],
+    ['deferred_non_goal', new Set(['non_goal'])],
+    ['promoted_to_decision', new Set(['promoted_decision_id', 'resolution'])],
+  ]);
+  const promotedDecisionIds = dispositions
+    .filter((item) => item.status === 'promoted_to_decision')
+    .map((item) => item.promoted_decision_id);
+  if (promotedDecisionIds.length !== new Set(promotedDecisionIds).size) {
+    throw new ValidationError('spec.clarifying_question_disposition promoted_decision_id values must be unique');
+  }
+
+  for (const item of dispositions) {
+    validateNonBlankStrings(item.affects, `${item.id}.affects`);
+    const allowedFields = allowedDetailFields.get(item.status);
+    const disallowedFields = detailFields.filter((field) => Object.hasOwn(item, field) && !allowedFields.has(field));
+    if (disallowedFields.length) {
+      throw new ValidationError(`${item.id} disposition status ${item.status} does not allow fields: ${JSON.stringify(disallowedFields)}`);
+    }
+    if (item.status === 'answered' && !item.resolved_by) {
+      throw new ValidationError(`${item.id} disposition status answered requires resolved_by`);
+    }
+    if (item.status === 'assumed' && !item.assumption) {
+      throw new ValidationError(`${item.id} disposition status assumed requires assumption`);
+    }
+    if (item.status === 'deferred_non_goal' && !item.non_goal) {
+      throw new ValidationError(`${item.id} disposition status deferred_non_goal requires non_goal`);
+    }
+    if (item.status === 'promoted_to_decision') {
+      if (!item.promoted_decision_id) {
+        throw new ValidationError(`${item.id} disposition status promoted_to_decision requires promoted_decision_id`);
+      }
+      const isOpen = openDecisions.has(item.promoted_decision_id);
+      if (isOpen && item.resolution) {
+        throw new ValidationError(`${item.id} promoted decision ${item.promoted_decision_id} has resolution but is still listed in open_decisions`);
+      }
+      if (!isOpen && !item.resolution) {
+        throw new ValidationError(`${item.id} promoted decision ${item.promoted_decision_id} must be in open_decisions until it has a resolution`);
+      }
+    }
+  }
+
+  if (intake) {
+    const intakeCqIds = intake.clarifying_questions.map((question) => question.id);
+    const intakeCqSet = new Set(intakeCqIds);
+    const unknown = dispositionIds.filter((id) => !intakeCqSet.has(id));
+    if (unknown.length) {
+      throw new ValidationError(`spec.clarifying_question_disposition references unknown intake clarifying questions: ${JSON.stringify(unknown)}`);
+    }
+    const dispositionSet = new Set(dispositionIds);
+    const missing = intakeCqIds.filter((id) => !dispositionSet.has(id));
+    if (missing.length) {
+      throw new ValidationError(`spec.clarifying_question_disposition is missing intake clarifying questions: ${JSON.stringify(missing)}`);
+    }
+  }
+}
+
 export function validateTaskGraphData(data, requireApprovedSpec = null) {
   const schema = loadJson(SCHEMA_PATHS.task_graph);
   validateSchema(data, schema);
   if (requireApprovedSpec) {
-    const spec = validateSpec(requireApprovedSpec);
+    const specReference = loadJson(requireApprovedSpec);
+    const sourceIntakePath = requireSpecSourceIntake(requireApprovedSpec, specReference);
+    const spec = validateSpec(requireApprovedSpec, sourceIntakePath);
     if (spec.approval !== 'approved') {
       throw new ValidationError('task graph generation is blocked until spec.approval is approved');
     }
@@ -270,6 +378,22 @@ export function validateStatusDoc(filePath) {
     ['section 3 heading', /^##\s+3\./m],
     ['section 4 heading', /^##\s+4\./m],
     ['section 5 heading', /^##\s+5\./m],
+  ];
+  for (const [label, pattern] of required) {
+    if (!pattern.test(text)) throw new ValidationError(`status.md missing ${label}`);
+  }
+  return text;
+}
+
+export function validateStatusApprovalAudit(filePath, spec) {
+  if (spec.approval !== 'approved') return null;
+  const text = readFileSync(filePath, 'utf8');
+  const required = [
+    ['Gate B approval audit', /^#{3,6}\s+Gate B approval audit\s*$/im],
+    ['Approved by field', /Approved by:\s*\S+/i],
+    ['Approved at field', /Approved at:\s*\d{4}-\d{2}-\d{2}/i],
+    ['Approved artifacts field', /Approved artifacts:\s*\S+/i],
+    ['Approval note field', /Approval note:\s*\S+/i],
   ];
   for (const [label, pattern] of required) {
     if (!pattern.test(text)) throw new ValidationError(`status.md missing ${label}`);
@@ -372,6 +496,7 @@ export function validateArtifactRoot(artifactRoot, options = {}) {
     requireGateFiles(paths, gateBKeys, 'Gate B');
     const spec = validateSpec(paths.specJson, paths.intakeJson);
     assertProjectId('spec.project_id', spec.project_id, options.projectId);
+    validateStatusApprovalAudit(paths.statusDoc, spec);
     result.spec = spec;
     result.gates.b = { present: true, valid: true, passed: spec.approval === 'approved' && spec.open_decisions.length === 0 };
   }
@@ -462,6 +587,10 @@ export function validateFixtureDir(fixturePath) {
     }
     validator(artifactPath);
   }
+  validateStatusApprovalAudit(
+    path.join(fixturePath, 'status.md'),
+    loadJson(path.join(fixturePath, 'spec.approved.json')),
+  );
 }
 
 function parseArgs(argv) {
@@ -499,7 +628,7 @@ export function main(argv = process.argv.slice(2)) {
       throw new ValidationError('--require-handoff-ready requires --artifact-root');
     }
     if (args.intake) validateIntake(args.intake);
-    if (args.spec) validateSpec(args.spec, args.intake ?? null);
+    if (args.spec) validateSpec(args.spec, args.intake ?? requireSpecSourceIntake(args.spec));
     if (args.taskGraph) validateTaskGraph(args.taskGraph, args.requireApprovedSpec ?? null);
     if (args.requireReviewPass && !args.review && !args.fixtureDir.length && !args.artifactRoot) {
       throw new ValidationError('--require-review-pass requires --review');

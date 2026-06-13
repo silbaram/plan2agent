@@ -1,0 +1,24 @@
+{
+  "schema_version": "p2a.task_graph.v1",
+  "projectId": "webhook-api-service",
+  "version": "draft-blocked",
+  "sourceSpec": "fixtures/_negative/promoted-decision-draft/spec.draft.json",
+  "tasks": [
+    {
+      "id": "task-001",
+      "title": "Scaffold webhook service after Gate B approval",
+      "description": "Placeholder task graph used to prove draft specs cannot pass approved-spec validation.",
+      "status": "todo",
+      "dependencies": [],
+      "acceptanceCriteria": [
+        "This task graph is schema-valid but must not be accepted while the source spec is draft"
+      ],
+      "targetArea": "gate-validation",
+      "suggestedAgentPrompt": "Do not execute this task graph until Gate B approval is complete.",
+      "sourceSpecRefs": [
+        "approval",
+        "open_decisions"
+      ]
+    }
+  ]
+}

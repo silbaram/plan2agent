@@ -106,12 +106,43 @@ Fixtures, schemas, and checks:
 ```text
 fixtures/
   cache-library/
+    status.md
     input.md
     intake.blocked.json
     intake.answered.json
     spec.approved.json
     task-graph.json
     review-report.md
+    review.json
+  webhook-api-service/
+    status.md
+    input.md
+    intake.blocked.json
+    intake.answered.json
+    spec.approved.json
+    task-graph.json
+    review-report.md
+    review.json
+  _e2e/
+    manifest.json
+    webhook-api-service/
+      status.md
+      gate-a-intake/
+      gate-b-spec/
+      gate-c-task-graph/
+      gate-d-review/
+  _negative/
+    manifest.json
+    missing-approval-audit/
+      status.md
+      gate-a-intake/
+      gate-b-spec/
+    promoted-decision-draft/
+      spec.draft.json
+      spec.invalid-missing-open-decision.json
+      task-graph.json
+    review-blocked/
+      review.blocked.json
 schemas/
   intake.schema.json
   spec.schema.json
@@ -170,7 +201,7 @@ Skills:
 | `intake_json` | `schemas/intake.schema.json` | Intake | `status: ready_for_spec` |
 | `product_spec_markdown` | Markdown | Product Spec | 사용자 검토 가능 |
 | `implementation_plan_markdown` | Markdown | Implementation Plan | 사용자 검토 가능 |
-| `spec_json` | `schemas/spec.schema.json` | Spec | `approval: approved` and `open_decisions: []` |
+| `spec_json` | `schemas/spec.schema.json` | Spec | 모든 `CQ-n` disposition 완료, `approval: approved`, `open_decisions: []` |
 | `task_graph_json` | `schemas/task-graph.schema.json` | Task Breakdown | dependency ids valid and DAG acyclic |
 | `review_report` | Markdown/JSON-compatible sections | Review | no blocking issues |
 
@@ -206,7 +237,9 @@ Intake와 spec 단계가 web lookup 또는 외부 문서를 사용하면 결과 
    - 제품 명세는 확정하지 않고, 사용자에게 open/deferred decision만 질문한다.
 
 2. **Gate B — Spec approval**
+   - intake의 모든 `CQ-n`은 `spec_json.clarifying_question_disposition`에서 처분되어야 한다.
    - `spec_json.approval`이 `approved`가 아니거나 `open_decisions`가 남아 있으면 task graph를 만들지 않는다.
+   - 승인된 Gate B가 있는 artifact root 또는 fixture는 `status.md`에 `Gate B approval audit` block을 기록해야 한다.
 
 3. **Gate C — Task graph validation**
    - 모든 dependency는 같은 graph 안의 task id를 참조해야 한다.
@@ -318,6 +351,8 @@ Fixture/golden output 확인:
 node scripts/run_fixtures.mjs
 ```
 
+`run_fixtures.mjs`는 일반 fixture set을 통과 검증하고, `fixtures/_e2e/manifest.json`의 artifact-root fixture는 handoff-ready 상태인지 확인한다. 승인된 Gate B가 있는 status 문서는 `Gate B approval audit` block까지 확인한다. `fixtures/_negative/manifest.json`에 정의된 중단/실패 fixture는 기대한 실패 메시지가 나오는지 확인한다.
+
 artifact gate 확인:
 
 ```bash
@@ -329,6 +364,8 @@ node scripts/validate_artifacts.mjs --task-graph artifacts/<project_id>/gate-c-t
 node scripts/validate_artifacts.mjs --review artifacts/<project_id>/gate-d-review/review.json --require-review-pass
 node scripts/validate_artifacts.mjs --artifact-root artifacts/<project_id> --project-id <project_id> --require-handoff-ready
 ```
+
+`--spec`은 `--intake`를 함께 주면 그 intake를 사용하고, 없으면 `spec.source_intake`를 실제 파일로 자동 연결해 Gate B의 `clarifying_question_disposition` 추적성까지 검사한다. `spec.source_intake`가 명시됐지만 파일로 해석되지 않으면 실패한다. raw `CQ-n`은 `open_decisions`에 넣지 않고, blocker가 되면 `ND-n`으로 승격해 추적한다.
 
 ## Task 관리
 
@@ -403,6 +440,5 @@ node scripts/p2a_tasks.mjs <command> --graph artifacts/<project_id>/gate-c-task-
 
 ## 다음 고도화 작업
 
-- fixture coverage를 여러 product domain으로 확장
-- 생성된 CLI asset drift check를 CI에 연결
+- CLI asset drift check와 fixture runner의 CI 연결은 사용자 관리 항목으로 유지
 - v2에서 agent 실행 로그, worktree 분리, 결과 diff 연결 추가

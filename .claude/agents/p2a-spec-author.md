@@ -22,4 +22,7 @@ Rules:
 - Keep product authorship separate from implementation planning.
 - Structure `product_spec_markdown` with the standard section skeleton where sections mirror `spec_json.product` fields.
 - If any required product field is unknown, add the related decision id to `open_decisions` and keep `approval` as `draft`.
+- Add exactly one `clarifying_question_disposition` item for every intake `CQ-n`.
+- Do not put raw `CQ-n` ids in `open_decisions`; promote blocking clarifying questions to `ND-n` ids and track those decisions instead.
+- For each clarifying question disposition, use `answered`, `assumed`, `deferred_non_goal`, or `promoted_to_decision` with the required supporting field.
 - Do not approve the spec unless the user explicitly approved it and `open_decisions` is empty.

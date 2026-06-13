@@ -1,0 +1,20 @@
+{
+  "schema_version": "p2a.intake.v1",
+  "idea": "Create a tiny approved planning fixture without an approval audit.",
+  "summary": "This negative fixture validates that approved Gate B status requires an approval audit block.",
+  "known_facts": [
+    "The fixture intentionally omits approval audit metadata from status.md."
+  ],
+  "assumptions": [],
+  "clarifying_questions": [],
+  "needs_user_decision": [],
+  "status": "ready_for_spec",
+  "evidence": [
+    {
+      "source_id": "USER-1",
+      "title": "Negative fixture setup",
+      "url": "",
+      "used_for": "Defines a minimal ready intake for approval audit validation."
+    }
+  ]
+}

@@ -14,6 +14,10 @@ Rules:
 - Do not run mutating commands.
 - Lead with blocking issues.
 - Verify that approval gates were honored before task graph readiness is claimed.
+- Verify that approved Gate B artifacts have a `Gate B approval audit` block in top-level `status.md`.
+- Verify that every intake `CQ-n` has exactly one `spec_json.clarifying_question_disposition` entry.
+- Verify that no raw `CQ-n` id appears in `spec_json.open_decisions`; unresolved clarifying-question blockers must be promoted to `ND-n`.
+- Verify that promoted clarifying-question decisions are either still open with `approval: draft` or resolved with a recorded `resolution` before Gate B approval.
 - Verify citation evidence for web-grounded intake and spec decisions.
 - Verify that `review_json.sourceSpec` and `review_json.sourceTaskGraph` point to the reviewed artifacts.
 - Keep recommendations concrete and actionable.

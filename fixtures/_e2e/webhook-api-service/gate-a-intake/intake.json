@@ -1,0 +1,117 @@
+{
+  "schema_version": "p2a.intake.v1",
+  "idea": "Build a webhook ingestion API that validates partner webhooks, normalizes payloads, and retries delivery to an internal queue.",
+  "summary": "The product is a backend webhook ingestion service for receiving partner HTTP callbacks, validating authenticity, normalizing payloads, and delivering events to an internal queue with bounded retry handling.",
+  "known_facts": [
+    "The product is an API service, not an end-user UI.",
+    "The service must receive partner webhooks.",
+    "Webhook payloads must be validated and normalized.",
+    "Delivery to an internal queue should support retries."
+  ],
+  "assumptions": [
+    {
+      "id": "A-1",
+      "statement": "The first version can expose a single HTTP webhook endpoint.",
+      "risk": "medium",
+      "confirmation_needed": true
+    },
+    {
+      "id": "A-2",
+      "statement": "The internal queue can be represented by an adapter interface in the plan rather than a concrete cloud provider.",
+      "risk": "medium",
+      "confirmation_needed": true
+    }
+  ],
+  "clarifying_questions": [
+    {
+      "id": "CQ-1",
+      "question": "How should inbound webhook authenticity be verified?",
+      "why_it_matters": "Signature verification affects security, partner onboarding, endpoint interfaces, and acceptance tests.",
+      "blocks": [
+        "spec.product.external_integrations",
+        "spec.implementation.interfaces",
+        "spec.implementation.verification"
+      ]
+    },
+    {
+      "id": "CQ-2",
+      "question": "What delivery retry guarantee should v1 provide?",
+      "why_it_matters": "Retry behavior determines data flow, edge cases, and task graph sequencing.",
+      "blocks": [
+        "spec.implementation.data_flow",
+        "spec.implementation.edge_cases"
+      ]
+    }
+  ],
+  "needs_user_decision": [
+    {
+      "id": "ND-1",
+      "question": "Which runtime should v1 target?",
+      "options": [
+        {
+          "id": "node-ts",
+          "label": "TypeScript/Node.js",
+          "description": "Implement a typed HTTP service with Node.js tooling."
+        },
+        {
+          "id": "python",
+          "label": "Python",
+          "description": "Implement an ASGI or WSGI service with Python tooling."
+        }
+      ],
+      "impact": "Determines framework choice, package layout, typing, and test tooling.",
+      "default": "node-ts",
+      "status": "answered",
+      "answer": "TypeScript/Node.js HTTP service"
+    },
+    {
+      "id": "ND-2",
+      "question": "How concrete should the queue integration be in v1?",
+      "options": [
+        {
+          "id": "adapter",
+          "label": "Queue adapter",
+          "description": "Define an internal queue adapter interface without binding to a vendor."
+        },
+        {
+          "id": "specific-provider",
+          "label": "Specific provider",
+          "description": "Target one provider such as SQS or Pub/Sub in the first version."
+        }
+      ],
+      "impact": "Determines external dependencies, test doubles, and deployment assumptions.",
+      "default": "adapter",
+      "status": "answered",
+      "answer": "Use a provider-neutral queue adapter interface"
+    },
+    {
+      "id": "ND-3",
+      "question": "What retry behavior should v1 implement?",
+      "options": [
+        {
+          "id": "bounded-dlq",
+          "label": "Bounded retry plus DLQ",
+          "description": "Retry transient queue failures with a bounded policy and send exhausted events to a dead-letter path."
+        },
+        {
+          "id": "single-attempt",
+          "label": "Single attempt",
+          "description": "Attempt delivery once and rely on upstream webhook retries."
+        }
+      ],
+      "impact": "Determines reliability guarantees, task graph size, and test cases.",
+      "default": "bounded-dlq",
+      "status": "answered",
+      "answer": "Bounded retry plus dead-letter path"
+    }
+  ],
+  "evidence": [
+    {
+      "source_id": "USER-1",
+      "title": "Original product idea and answered intake decisions",
+      "url": "",
+      "used_for": "Confirmed TypeScript runtime, provider-neutral queue integration, and bounded retry behavior."
+    }
+  ],
+  "status": "ready_for_spec"
+}
