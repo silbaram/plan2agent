@@ -1,6 +1,6 @@
 # Plan2Agent 제품 기준과 고도화 로드맵
 
-이 문서는 Plan2Agent(P2A)의 제품 방향, MVP 범위, 산출물 구조, task 분할 기준, 고도화 로드맵, v2 handoff, 반복/고도화 개발 구조를 정의하는 단일 정본이다. 앞으로 기능을 추가하거나 하네스를 고도화할 때 이 문서를 제품 기준으로 사용한다. 2026-06-13 기준으로 v2 handoff와 반복/고도화 개발 설계도 이 문서에서 함께 관리한다.
+이 문서는 Plan2Agent(P2A)의 제품 방향, MVP 범위, 산출물 구조, task 분할 기준, 고도화 로드맵, v2 handoff, 반복/고도화 개발 구조를 정의하는 제품 정본이다. 앞으로 기능을 추가하거나 하네스를 고도화할 때 이 문서를 제품 기준으로 사용한다. 반복/고도화 개발의 상세 구현 계약은 `docs/iteration-spec.md`에서 관리한다.
 
 ## 1. 프로젝트 기본 정보
 
@@ -408,6 +408,8 @@ v2 handoff의 확장 완료 기준:
 
 반복/고도화 개발은 v1의 greenfield 흐름 이후, 이미 만들어진 산출물과 대상 프로젝트 위에 작은 기능, 개선, 수정, 재작업을 계속 얹는 구조다.
 
+상세 구현 계약은 `docs/iteration-spec.md`를 정본으로 본다. 이 섹션은 제품 로드맵 관점의 요약과 현재 구현 상태만 유지한다.
+
 현재 구현 상태:
 
 - 완료: `scripts/p2a_iteration.mjs init`으로 greenfield `artifacts/<project_id>/gate-*` 구조를 `iterations/<iteration_id>/gate-*` 구조로 변환한다.
@@ -604,6 +606,7 @@ plans/
   01-product-roadmap.md
 docs/
   harness-spec.md
+  iteration-spec.md
 artifacts/
   <project_id>/
     status.md                      # 모든 게이트에서 갱신되는 standing 진행상태/결정 인덱스, top-level

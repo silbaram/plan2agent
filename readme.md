@@ -29,6 +29,7 @@ v1에서 하지 않는 일:
 
 - [제품 기준과 고도화 로드맵](plans/01-product-roadmap.md)
 - [하네스 구현 기준](docs/harness-spec.md)
+- [반복/고도화 개발 스펙](docs/iteration-spec.md)
 - [CLI 사용자 가이드](docs/cli-reference.md)
 
 ## 하네스 구조

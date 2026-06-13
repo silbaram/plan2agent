@@ -193,7 +193,7 @@ function currentSpecPointer(projectId, iterationId) {
     composed_from: [iterationId],
     active_iteration: iterationId,
     effective_spec_ref: `iterations/${iterationId}/gate-b-spec/spec.json`,
-    note: '반복 1개라 이 반복 spec이 곧 현재 유효 spec. 다중 반복 조합 규칙은 plans/04 §6 piece3에서 정식화.',
+    note: '반복 1개라 이 반복 spec이 곧 현재 유효 spec. 다중 반복 조합 규칙은 docs/iteration-spec.md에서 정식화.',
   };
 }
 
