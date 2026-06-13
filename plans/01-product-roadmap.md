@@ -1,6 +1,6 @@
 # Plan2Agent 제품 기준과 고도화 로드맵
 
-이 문서는 Plan2Agent(P2A)의 제품 방향, MVP 범위, 산출물 구조, task 분할 기준, 고도화 로드맵을 정의한다. 앞으로 기능을 추가하거나 하네스를 고도화할 때 이 문서를 제품 기준으로 사용한다.
+이 문서는 Plan2Agent(P2A)의 제품 방향, MVP 범위, 산출물 구조, task 분할 기준, 고도화 로드맵, v2 handoff, 반복/고도화 개발 구조를 정의하는 단일 정본이다. 앞으로 기능을 추가하거나 하네스를 고도화할 때 이 문서를 제품 기준으로 사용한다. 2026-06-13 기준으로 v2 handoff와 반복/고도화 개발 설계도 이 문서에서 함께 관리한다.
 
 ## 1. 프로젝트 기본 정보
 
@@ -206,7 +206,16 @@ v2 이후 범위:
 
 ## 8-1. v2 개발 인계와 환경 세팅
 
-v2의 첫 고도화 목표는 v1 하네스가 만든 산출물을 실제 개발 프로젝트로 옮기고, 그 프로젝트 안에서 AI agent가 바로 task를 실행할 수 있도록 개발 도구를 설치하는 것이다.
+v2의 첫 고도화 목표는 v1 하네스가 만든 산출물을 실제 개발 프로젝트로 옮기고, 그 프로젝트 안에서 AI agent가 바로 task를 실행할 수 있도록 개발 도구를 설치하는 것이다. 이 단계는 agent 자동 실행의 전제 조건이며, 자동 실행 자체는 포함하지 않는다.
+
+현재 구현 상태:
+
+- 완료: Gate D 통과 여부 확인, 원본 `artifacts/<project_id>/` 검증, 산출물 copy/move, `--include-intake`, `--overwrite`, `--dry-run`, `.plan2agent/artifacts/` 생성, `manifest.json`, `project.config.json`, `p2a_tasks.mjs`, `validate_artifacts.mjs`, schema 복사.
+- 완료: `task-graph.sourceSpec`를 대상 프로젝트 기준 `spec.json`으로 rebase한다.
+- 완료: 대상 프로젝트의 package manager와 test/lint/typecheck 명령을 best-effort로 감지해 `project.config.json`에 기록한다.
+- 미구현: `--tools codex,claude,gemini` 기반 skill/subagent/command shim 복사.
+- 미구현: `--include-team-bigfive` 기반 Team Big Five adapter 선택 설치.
+- 제외: AI agent 자동 실행, 코드 변경 자동 생성, 테스트 자동 실행/수집, PR 생성, branch/worktree 자동 생성, 여러 agent 병렬 실행 조율.
 
 핵심 흐름:
 
@@ -218,6 +227,72 @@ v2의 첫 고도화 목표는 v1 하네스가 만든 산출물을 실제 개발 
 6. 선택한 CLI에는 `team-bigfive` 기반 팀 실행 adapter를 함께 설치해 여러 agent가 협업해야 하는 task 실행에 사용할 수 있게 한다.
 7. task 실행, 상태 변경, 검증 명령을 대상 프로젝트 기준으로 사용할 수 있게 초기 설정 파일을 만든다.
 
+대상 프로젝트 구조:
+
+```text
+<target-project>/
+  .plan2agent/
+    artifacts/
+      product-spec.md
+      implementation-plan.md
+      spec.json
+      task-graph.json
+      review-report.md
+      review.json
+      status.md
+    team-harnesses/
+      team-bigfive/
+        source-manifest.json
+        adaptation-notes.md
+    manifest.json
+    project.config.json
+  .agents/
+    skills/
+    agents/
+  .codex/
+    agents/
+  .claude/
+    skills/
+    agents/
+  .claude-plugin/
+    team-bigfive/
+  .gemini/
+    agents/
+    commands/
+      p2a/
+  scripts/
+    p2a_tasks.mjs
+    validate_artifacts.mjs
+  schemas/
+```
+
+초기 CLI:
+
+```bash
+node scripts/p2a_handoff.mjs \
+  --project-id <project_id> \
+  --artifacts artifacts/<project_id> \
+  --target /path/to/target-project \
+  --mode copy
+```
+
+현재 구현된 옵션:
+
+- `--project-id`: 인계할 Plan2Agent 프로젝트 id
+- `--artifacts`: 원본 산출물 디렉터리
+- `--target`: 개발 대상 프로젝트 디렉터리
+- `--mode copy|move`: 산출물 복사 또는 이동 방식
+- `--include-intake`: intake 산출물도 함께 인계
+- `--overwrite`: 기존 대상 파일 덮어쓰기 허용
+- `--dry-run`: 실제 파일 쓰기 없이 계획만 출력
+
+목표 확장 옵션:
+
+- `--tools codex,claude,gemini`: 복사할 AI 도구 범위
+- `--include-team-bigfive`: 선택한 CLI용 `team-bigfive` 기반 팀 실행 adapter 설치
+- `--team-bigfive-source`: `team-bigfive` 원본 경로 또는 Git URL
+- `--team-bigfive-targets codex,claude,gemini`: Team Big Five adapter 설치 대상 CLI
+
 v2 부트스트랩 도구가 만들어야 할 결과:
 
 - 대상 프로젝트 안에 기획 산출물 디렉터리 생성
@@ -227,7 +302,266 @@ v2 부트스트랩 도구가 만들어야 할 결과:
 - 복사된 도구와 산출물의 출처를 기록하는 manifest
 - 선택 설치된 외부 실행 하네스(`team-bigfive` 등)의 버전, 출처, CLI별 adapter, 사용 조건 기록
 
-이 기능은 agent 자동 실행보다 먼저 구현한다. 이유는 자동 실행을 붙이기 전에, 어떤 프로젝트 디렉터리에서 어떤 산출물과 어떤 도구를 기준으로 개발하는지가 안정적으로 정해져야 하기 때문이다.
+인계 도구가 파일을 쓰기 전에 확인할 조건:
+
+- `spec.json`이 존재한다.
+- `task-graph.json`이 존재한다.
+- `review-report.md`와 `review.json`이 존재한다.
+- intake의 모든 `CQ-n`이 `spec.json.clarifying_question_disposition`에서 처분되어 있다.
+- `spec.json.approval`이 `approved`다.
+- `spec.json.open_decisions`가 비어 있다.
+- `task-graph.json`은 schema 검증을 통과한다.
+- task dependency는 같은 graph 안의 task id만 참조한다.
+- task graph에 cycle이 없다.
+- `review.json.blocking_issues`가 비어 있다.
+- 승인된 Gate B가 있으면 `status.md`에 Gate B approval audit block이 있다.
+
+Manifest 계약:
+
+```json
+{
+  "schema_version": "p2a.handoff.v1",
+  "projectId": "example-project",
+  "sourceArtifacts": "artifacts/example-project",
+  "targetProject": "/path/to/target-project",
+  "handoffMode": "copy",
+  "createdAt": "2026-06-13T00:00:00.000Z",
+  "includedTools": ["p2a_tasks", "validate_artifacts"],
+  "externalHarnesses": [],
+  "artifactFiles": [
+    ".plan2agent/artifacts/product-spec.md",
+    ".plan2agent/artifacts/implementation-plan.md",
+    ".plan2agent/artifacts/spec.json",
+    ".plan2agent/artifacts/task-graph.json",
+    ".plan2agent/artifacts/review-report.md",
+    ".plan2agent/artifacts/review.json",
+    ".plan2agent/artifacts/status.md"
+  ],
+  "toolFiles": [
+    "scripts/p2a_tasks.mjs",
+    "scripts/validate_artifacts.mjs"
+  ]
+}
+```
+
+`project.config.json`은 대상 프로젝트의 개발 명령을 기록한다.
+
+```json
+{
+  "schema_version": "p2a.project_config.v1",
+  "packageManager": "npm",
+  "installCommand": "npm install",
+  "testCommand": "npm test",
+  "lintCommand": "npm run lint",
+  "typecheckCommand": "npm run typecheck",
+  "taskGraph": ".plan2agent/artifacts/task-graph.json",
+  "teamBigFive": {
+    "enabled": false
+  },
+  "notes": ["TODO: 사용자 확인"]
+}
+```
+
+Team Big Five 선택 통합:
+
+- `team-bigfive`는 확정된 task를 여러 agent가 협업해 구현하고 검증할 때 사용하는 실행 하네스다.
+- Plan2Agent는 아이디어를 명세와 task graph로 변환하고, `team-bigfive`는 복잡한 task 실행을 돕는다.
+- 원본은 Claude Code plugin 구조이므로 Codex/Gemini에는 직접 복사하지 않고 CLI-native skill/subagent/command shim 형태로 변환한다.
+- `_workspace/`는 실행 감사 추적용이고 `.plan2agent/artifacts/`는 승인된 기획 원본이다. 두 디렉터리를 섞지 않는다.
+- 외부 하네스 버전과 출처는 manifest에 기록한다.
+
+인계 후 개발 진행 흐름:
+
+1. `node scripts/p2a_tasks.mjs ready --graph .plan2agent/artifacts/task-graph.json`로 시작 가능한 task를 확인한다.
+2. `node scripts/p2a_tasks.mjs prompt --graph .plan2agent/artifacts/task-graph.json <task-id>`로 agent prompt를 만든다.
+3. 단일 agent에 적합한 task는 Codex, Claude Code, Gemini CLI 중 설치된 도구로 구현한다.
+4. 여러 영역이 맞물리는 task는 선택한 CLI에서 Team Big Five kickoff prompt로 팀 실행을 시작한다.
+5. 대상 프로젝트의 test, lint, typecheck 명령으로 검증한다.
+6. 통과하면 `done`, 막히면 `block`으로 task 상태를 기록한다.
+
+안전 기준:
+
+- 기본 동작은 복사다. 이동은 사용자가 명시한 경우에만 허용한다.
+- 대상 프로젝트 밖으로 파일을 쓰지 않는다.
+- `--overwrite` 없이는 기존 파일을 덮어쓰지 않는다.
+- `.env`, credential, local secret 파일은 복사 대상에 포함하지 않는다.
+- 도구 복사는 Plan2Agent가 관리하는 skill, subagent, command shim, task CLI로 제한한다.
+- 외부 하네스 설치는 사용자가 명시한 경우에만 수행하고, 출처와 버전을 manifest에 기록한다.
+- package install이나 shell 기반 개발 명령 실행은 인계 도구의 기본 동작에 포함하지 않는다.
+
+v2 handoff의 1차 완료 기준:
+
+- Gate D 통과 산출물만 인계할 수 있다.
+- 대상 프로젝트에 `.plan2agent/artifacts/`가 생성된다.
+- 대상 프로젝트에 `p2a_tasks.mjs`, `validate_artifacts.mjs`, schema가 복사된다.
+- 대상 프로젝트에서 `p2a_tasks.mjs ready`와 `p2a_tasks.mjs prompt`를 실행할 수 있다.
+- `manifest.json`과 `project.config.json`이 생성된다.
+- `--dry-run`으로 파일 변경 계획을 먼저 확인할 수 있다.
+- 기존 파일 충돌 시 명확한 오류를 내고 중단한다.
+
+v2 handoff의 확장 완료 기준:
+
+- 대상 프로젝트에 선택한 AI 도구 skill/subagent/command shim이 복사된다.
+- `--include-team-bigfive` 사용 시 선택한 CLI에서 Team Big Five adapter의 skill/agent/command 파일을 인식할 수 있는 구조로 설치된다.
+
+## 8-2. 반복/고도화 개발 아키텍처
+
+반복/고도화 개발은 v1의 greenfield 흐름 이후, 이미 만들어진 산출물과 대상 프로젝트 위에 작은 기능, 개선, 수정, 재작업을 계속 얹는 구조다.
+
+현재 구현 상태:
+
+- 완료: `scripts/p2a_iteration.mjs init`으로 greenfield `artifacts/<project_id>/gate-*` 구조를 `iterations/<iteration_id>/gate-*` 구조로 변환한다.
+- 완료: 변환 시 `status.md`를 반복 인덱스로 재작성하고, `current-spec.json` 포인터와 lazy `maintenance/README.md`를 생성한다.
+- 완료: 이동된 spec/task graph/review를 다시 검증하고, `task-graph.sourceSpec`를 반복 구조 기준으로 rebase한다.
+- 미구현: active iteration을 `p2a_tasks.mjs`와 `p2a_handoff.mjs`가 자동 인식하는 기능.
+- 미구현: 여러 완료 반복을 조합하는 `current-spec.json` composition.
+- 미구현: baseline-aware intake/spec skill.
+- 미구현: 반복 open/close 명령과 archived 동결.
+- 미구현: 구조적 diff 기반 재작업 task 자동 생성.
+
+반복 단위:
+
+- 분절 단위는 `iteration`이다.
+- 반복 하나는 기능 반복 또는 고도화 반복 하나다.
+- 닫힌 반복은 append-only로 보존하고, 변경/누락/재작업은 다음 반복의 새 task로 남긴다.
+- 반복 하나는 대략 10~50 task 안에 들어오게 하고, 큰 기능은 여러 반복으로 나눈다.
+- `core`, `cluster`, `starter` 같은 영역은 반복 분절 축이 아니라 task의 `targetArea` 태그로 둔다.
+
+생명주기:
+
+```text
+open iteration -> task 실행 -> 모든 task done -> 사용자 close -> archived -> next iteration open
+```
+
+규칙:
+
+- 동시에 열린 기능 반복은 1개다.
+- 작은 fix, 문서 수정, 패치성 변경은 상시 `maintenance` 반복에 append한다.
+- 반복 전환은 암묵적으로 일어나지 않는다. 모든 task done과 사용자 close가 모두 만족될 때만 마감한다.
+- 마감 시 해당 반복을 `archived`로 동결하고, 루트 `status.md` 반복 인덱스에 표시한다.
+- 마감 시 필요하면 개발 대상 프로젝트로 재인계하고 git 커밋으로 산출물 기준점을 남긴다.
+- 병렬 반복, branch별 반복, worktree별 반복은 후속 고도화로 둔다.
+
+반복 개발 산출물 구조:
+
+```text
+artifacts/<project>/
+  status.md                         # 반복 인덱스 + 현재 활성 포인터
+  current-spec.json                 # 현재 유효 spec 조합본 또는 초기 포인터
+  iterations/
+    <iter-id>/
+      gate-a-intake/
+        intake.json
+        intake.md
+      gate-b-spec/
+        product-spec.md
+        implementation-plan.md
+        spec.json
+      gate-c-task-graph/
+        task-graph.json
+      gate-d-review/
+        review-report.md
+        review.json
+    maintenance/
+      README.md
+      gate-c-task-graph/
+        task-graph.json
+```
+
+`status.md`는 기존 v1의 standing 진행상태/결정 인덱스 역할을 확장해 반복 인덱스와 현재 활성 포인터를 함께 갖는다. `current-spec.json`은 모든 완료 반복의 유효 spec을 조합한 현재 기준이며, 다음 intake/spec 단계가 baseline으로 읽는 파일이다. 현재 구현은 첫 반복 하나를 가리키는 thin pointer까지만 제공한다.
+
+교차 반복 의존성:
+
+- 각 반복의 `dependencies`는 같은 반복 안의 task id만 참조한다.
+- 이전 반복은 생명주기상 전부 done인 baseline으로 전제한다.
+- “v1 위에 짓는다”, “starter 배포 구조를 전제로 한다” 같은 문맥은 task `description`과 `sourceSpecRefs`로 기록한다.
+- `sourceSpecRefs`는 `current-spec.json`의 안정적인 spec 항목 id 또는 반복 spec 항목을 가리킨다.
+- 반복 간 dependency를 `dependencies`에 직접 넣지 않는다. 그래야 기존 task graph schema와 validator를 유지할 수 있다.
+
+반복 개발 흐름:
+
+```text
+현재 유효 spec(current-spec.json)
+  + 변경 아이디어
+      |
+      v
+baseline-aware Gate A/B 재실행
+      |
+      v
+다음 반복 생성
+  - delta spec
+  - 새 task graph
+  - 과거 done 보존
+      |
+      v
+status.md/current-spec.json 갱신
+      |
+      v
+p2a_handoff --overwrite
+      |
+      v
+대상 프로젝트 .plan2agent 동기화
+      |
+      v
+p2a_tasks로 이어서 개발
+```
+
+구현 조각 순서:
+
+| 순서 | 조각 | 상태 | 이유 |
+| --- | --- | --- | --- |
+| 1 | 레이아웃/인덱스 규약 + greenfield migration | 부분 완료 | `p2a_iteration.mjs init`으로 초기 migration은 가능하다. |
+| 2 | `status.md` 반복 인덱스 | 부분 완료 | 초기 active pointer는 생성하지만 open/close/archived 상태 전이는 없다. |
+| 3 | `current-spec.json` 조합 규칙 | 미구현 | 현재는 첫 반복을 가리키는 thin pointer다. |
+| 4 | `p2a_tasks` 활성 반복 인식 | 미구현 | task 상태 변경이 현재 반복 graph에 적용되어야 한다. |
+| 5 | baseline-aware intake/spec skill | 미구현 | 현재 유효 spec + 변경 아이디어 -> 다음 반복 delta를 만드는 핵심 신규 기능이다. |
+| 6 | handoff 적응 | 미구현 | 활성 반복 산출물과 current-effective view를 대상 프로젝트로 덮어쓴다. |
+| 7 | 반복 open/close 명령 | 미구현 | 반복 생성, 마감, archived 표시, 다음 반복 open을 자동화한다. |
+
+초기 migration 명령:
+
+```bash
+node scripts/p2a_iteration.mjs init \
+  --artifacts artifacts/<project_id> \
+  --iteration-id v1-mvp
+```
+
+migration 규칙:
+
+1. 기존 `gate-a-intake/`, `gate-b-spec/`, `gate-c-task-graph/`, `gate-d-review/`를 `iterations/v1-mvp/` 아래로 이동한다.
+2. 루트 `status.md`는 standing 진행상태 문서에서 반복 인덱스로 확장한다.
+3. 루트 `current-spec.json`은 `iterations/v1-mvp/gate-b-spec/spec.json`을 기준으로 생성한다.
+4. `v1-mvp` 반복은 active로 시작하고, 후속 close 명령이 생기면 archived/closed 상태로 동결한다.
+5. 다음 기능 추가는 새 반복을 열고, 작은 fix는 `iterations/maintenance/gate-c-task-graph/task-graph.json`에 append한다.
+6. 후속 도구는 루트 `status.md`의 활성 반복 graph 경로를 읽어 `p2a_tasks`와 handoff 입력을 결정한다.
+
+## 8-3. agent 실행 결과 추적 후속 설계
+
+agent 실행 결과 추적은 handoff와 반복 구조가 안정된 뒤 붙인다. 이 항목은 아직 별도 구현이 없으며, 아래 계약을 설계해야 한다.
+
+후속 범위:
+
+- task별 branch 또는 worktree 생성
+- agent 실행 세션 생성
+- Plan2Agent task를 Codex, Claude Code, Gemini CLI별 kickoff prompt로 자동 변환
+- 실행 로그 저장
+- 변경 파일과 task 연결
+- test, lint, typecheck 결과 수집
+- 실패 task의 재시도 기록
+- PR 생성 또는 변경 요약 생성
+
+task가 실제 agent 실행 결과와 연결되는 시점에는 task 또는 run log에 다음 필드를 추가한다.
+
+- `runId`
+- `resultSummary`
+- `changedFiles`
+- `verification`
+- `startedAt`
+- `completedAt`
+- `agentTool`
+- `workspaceRef`
+
+이 기능은 agent 자동 실행보다 먼저 구현한 handoff, 그리고 반복별 task graph 기준이 안정되어야 일관되게 추적할 수 있다.
 
 ## 9. 변경 추적 방식
 
@@ -268,7 +602,8 @@ v1 권장 방식:
 ```text
 plans/
   01-product-roadmap.md
-  02-harness-spec.md
+docs/
+  harness-spec.md
 artifacts/
   <project_id>/
     status.md                      # 모든 게이트에서 갱신되는 standing 진행상태/결정 인덱스, top-level
@@ -345,7 +680,7 @@ Plan2Agent 개발은 아래 흐름을 기본 협업 방식으로 둔다.
 - v2: task별 agent 세션 실행과 로그 관리
 - v2: 코드 변경 결과와 task 연결
 - v2: 기획 변경 diff 기반 재작업 task 생성
-- v2: 반복/고도화 개발 아키텍처는 `plans/04-iterative-development.md` 기준으로 구체화한다.
+- v2: 반복/고도화 개발 아키텍처
 - v2: worktree 또는 branch 기반 task 격리
 - v3: 캔버스 기반 시각 기획 입력
 - v3: pgvector 또는 Neo4j 기반 plan-code 계보 추적
@@ -357,5 +692,6 @@ Plan2Agent 개발은 아래 흐름을 기본 협업 방식으로 둔다.
 3. CI 검증 연결은 사용자 관리 항목으로 둔다.
 4. 완료: v1 프로토타입은 Node.js CLI로 결정했고, UI(task board)는 v2 백로그로 둔다.
 5. 완료: §3의 task 상태와 의존성 관리는 `scripts/p2a_tasks.mjs`로 충족한다.
-6. `plans/03-v2-development-handoff.md` 기준으로 v2 개발 인계/환경 세팅 도구를 설계한다.
-7. v2 agent 실행 로그, worktree 분리, 결과 diff 연결 방식을 설계한다.
+6. 부분 완료: v2 개발 인계/환경 세팅은 §8-1 기준으로 관리한다. 현재 구현은 산출물/검증 도구 인계까지이며, AI 도구 복사와 Team Big Five adapter 설치가 남아 있다.
+7. 부분 완료: 반복/고도화 개발 구조는 §8-2 기준으로 관리한다. 현재 구현은 greenfield -> iteration 초기 migration까지이며, active iteration 인식과 open/close 자동화가 남아 있다.
+8. 미완료: v2 agent 실행 로그, worktree 분리, 결과 diff 연결 방식은 §8-3 기준으로 별도 설계/구현한다.
