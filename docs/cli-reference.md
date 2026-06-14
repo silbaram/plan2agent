@@ -94,6 +94,10 @@ node scripts/p2a_iteration.mjs validate \
   --artifacts artifacts/<project_id> \
   --require-close-ready
 
+node scripts/p2a_iteration.mjs validate \
+  --artifacts artifacts/<project_id> \
+  --allow-planning
+
 node scripts/p2a_iteration.mjs close \
   --artifacts artifacts/<project_id>
 
@@ -105,11 +109,18 @@ node scripts/p2a_iteration.mjs open \
 node scripts/p2a_iteration.mjs draft \
   --artifacts artifacts/<project_id>
 
-node scripts/p2a_iteration.mjs compose \
+node scripts/p2a_iteration.mjs promote-spec \
   --artifacts artifacts/<project_id>
+
+node scripts/p2a_iteration.mjs diff-tasks \
+  --artifacts artifacts/<project_id>
+
+node scripts/p2a_iteration.mjs compose \
+  --artifacts artifacts/<project_id> \
+  [--allow-conflicts]
 ```
 
-`--status`는 top-level `status.md` standing document의 최소 구조를 확인한다. `--artifact-root`는 `artifacts/<project_id>/` 아래 Gate A-D bundle을 한 번에 검증하며, 승인된 Gate B spec이 있으면 `status.md`의 `Gate B approval audit` block도 확인한다. `--spec`은 `--intake`가 있으면 그 intake를 사용하고, 없으면 `spec.source_intake`를 실제 파일로 자동 연결해 Gate B traceability를 검사한다. `spec.source_intake`가 명시됐지만 파일로 해석되지 않으면 실패한다. 이 검사는 모든 intake `CQ-n`이 `spec.clarifying_question_disposition`에 처분됐는지, `open_decisions`가 unresolved intake decision과 CQ에서 승격된 decision을 정확히 반영하는지 확인한다. `--require-handoff-ready`를 함께 쓰면 Gate B-D가 모두 통과되어 인계 가능한 상태인지까지 확인한다. `--review`는 review artifact가 schema에 맞는지 확인한다. `--require-review-pass`를 함께 쓰면 Gate D 통과 조건인 `review.blocking_issues: []`까지 확인한다. `--require-approved-spec`는 task graph가 승인된 spec을 기준으로 생성됐는지 확인할 때 함께 사용하며, spec의 `source_intake`가 명시됐지만 파일로 해석되지 않으면 실패한다. `p2a_iteration.mjs validate`는 반복 구조의 active iteration 포인터, active Gate B-D 산출물, task dependency, review blocker, current-spec composition을 검증한다. `--require-close-ready`를 붙이면 모든 active task가 `done`인지까지 확인한다. `p2a_iteration.mjs close`는 close-ready active 반복을 archived metadata로 표시하고 다음 `open`의 baseline으로 고정한다. `p2a_iteration.mjs open`은 close-ready active 반복 위에 다음 반복 skeleton을 만들고 active pointer를 새 반복으로 옮긴다. `p2a_iteration.mjs draft`는 open 상태의 baseline pointer와 변경 아이디어를 읽어 active 반복의 Gate A/B delta draft를 만든다. `p2a_iteration.mjs compose`는 approved + close-ready 반복 spec들을 `current-spec.json`의 effective view로 조합한다.
+`--status`는 top-level `status.md` standing document의 최소 구조를 확인한다. `--artifact-root`는 `artifacts/<project_id>/` 아래 Gate A-D bundle을 한 번에 검증하며, 승인된 Gate B spec이 있으면 `status.md`의 `Gate B approval audit` block도 확인한다. `--spec`은 `--intake`가 있으면 그 intake를 사용하고, 없으면 `spec.source_intake`를 실제 파일로 자동 연결해 Gate B traceability를 검사한다. `spec.source_intake`가 명시됐지만 파일로 해석되지 않으면 실패한다. 이 검사는 모든 intake `CQ-n`이 `spec.clarifying_question_disposition`에 처분됐는지, `open_decisions`가 unresolved intake decision과 CQ에서 승격된 decision을 정확히 반영하는지 확인한다. `--require-handoff-ready`를 함께 쓰면 Gate B-D가 모두 통과되어 인계 가능한 상태인지까지 확인한다. `--review`는 review artifact가 schema에 맞는지 확인한다. `--require-review-pass`를 함께 쓰면 Gate D 통과 조건인 `review.blocking_issues: []`까지 확인한다. `--require-approved-spec`는 task graph가 승인된 spec을 기준으로 생성됐는지 확인할 때 함께 사용하며, spec의 `source_intake`가 명시됐지만 파일로 해석되지 않으면 실패한다. `p2a_iteration.mjs validate`는 반복 구조의 active iteration 포인터, active Gate B-D 산출물, task dependency, review blocker, current-spec composition을 검증한다. `--allow-planning`/`--stage`는 Gate A-ready나 Gate B draft 상태를 planning state로 검증한다. `--require-close-ready`를 붙이면 모든 active task가 `done`인지까지 확인하고, `--audit-archive`는 close 시점의 존재 여부/hash로 archived artifact 변경을 감지한다. `p2a_iteration.mjs close`는 close-ready active 반복을 archived metadata로 표시한다. `p2a_iteration.mjs open`은 archived active 반복을 baseline으로 다음 반복 skeleton을 만들고, 닫힌 반복이 2개 이상이면 먼저 composed current-spec을 요구한다. `p2a_iteration.mjs draft`는 Gate A-only 초기 반복의 Gate B 초안 또는 baseline 기반 Gate A/B delta draft를 만든다. `p2a_iteration.mjs promote-spec`는 approved active spec을 current-spec에 기록한다. `p2a_iteration.mjs diff-tasks`는 active spec과 baseline의 field 차이로 Gate C task graph 초안을 만든다. `p2a_iteration.mjs compose`는 approved + close-ready 반복 spec들을 `current-spec.json`의 effective view로 조합하며, conflict는 기본적으로 쓰기 전에 실패하고 `--allow-conflicts`일 때만 `open_decisions`로 기록한다.
 
 ## 3. 개발 진행 — `p2a_tasks.mjs`
 
@@ -290,7 +301,7 @@ node scripts/run_fixtures.mjs
 
 ### 워크플로우 D — 반복 열기와 Gate A/B 초안 생성
 
-기존 active 반복의 모든 task가 `done`이면 반복을 close한 뒤 다음 반복을 열고 baseline-aware Gate A/B draft를 생성할 수 있다.
+기존 active 반복의 모든 task가 `done`이면 반복을 close하고, 닫힌 반복이 2개 이상일 때는 compose로 current-effective 기준을 갱신한 뒤 다음 반복을 열어 baseline-aware Gate A/B draft를 생성할 수 있다.
 
 ```bash
 node scripts/p2a_iteration.mjs validate \
@@ -308,13 +319,32 @@ node scripts/p2a_iteration.mjs open \
 node scripts/p2a_iteration.mjs draft \
   --artifacts artifacts/<project_id>
 
+node scripts/p2a_iteration.mjs validate \
+  --artifacts artifacts/<project_id> \
+  --allow-planning
+
 node scripts/validate_artifacts.mjs \
   --intake artifacts/<project_id>/iterations/iter-002/gate-a-intake/intake.json \
   --spec artifacts/<project_id>/iterations/iter-002/gate-b-spec/spec.json
 
-# Gate B 승인, Gate C task graph, Gate D review까지 완료한 뒤:
+# Gate B 승인 후:
+node scripts/p2a_iteration.mjs promote-spec \
+  --artifacts artifacts/<project_id>
+
+node scripts/p2a_iteration.mjs diff-tasks \
+  --artifacts artifacts/<project_id>
+
+# Gate C task graph 실행과 Gate D review까지 완료한 뒤:
+node scripts/p2a_iteration.mjs close \
+  --artifacts artifacts/<project_id>
+
 node scripts/p2a_iteration.mjs compose \
   --artifacts artifacts/<project_id>
+
+node scripts/p2a_iteration.mjs open \
+  --artifacts artifacts/<project_id> \
+  --iteration-id iter-003 \
+  --idea "다음 변경 아이디어"
 ```
 
 ---

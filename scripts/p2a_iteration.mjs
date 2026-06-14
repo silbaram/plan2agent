@@ -10,6 +10,7 @@ import {
   renameSync,
   writeFileSync,
 } from 'node:fs';
+import { createHash } from 'node:crypto';
 import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -20,6 +21,7 @@ import {
   validateReviewPass,
   validateSpec,
   validateTaskGraph,
+  validateTaskGraphData,
   ValidationError,
 } from './validate_artifacts.mjs';
 import {
@@ -34,7 +36,8 @@ const GATE_DIRS = ['gate-a-intake', 'gate-b-spec', 'gate-c-task-graph', 'gate-d-
 const STATUS_ORDER = ['todo', 'in_progress', 'done', 'blocked'];
 const DEFAULT_ITERATION_ID = 'v1-mvp';
 const INIT_REBASED_SOURCE_SPEC = '../gate-b-spec/spec.json';
-const COMMANDS = new Set(['init', 'current', 'validate', 'close', 'open', 'draft', 'compose']);
+const COMMANDS = new Set(['init', 'current', 'validate', 'close', 'open', 'draft', 'promote-spec', 'diff-tasks', 'compose']);
+const VALIDATE_STAGES = new Set(['ready', 'gate-a', 'gate-b-draft', 'gate-b-approved']);
 const PRODUCT_FIELDS = [
   'problem',
   'target_users',
@@ -62,11 +65,13 @@ function usage() {
     'Usage:',
     '  node scripts/p2a_iteration.mjs init --artifacts <greenfield-project-dir> [--iteration-id v1-mvp] [--dry-run]',
     '  node scripts/p2a_iteration.mjs current --artifacts <iterative-project-dir> [--json]',
-    '  node scripts/p2a_iteration.mjs validate --artifacts <iterative-project-dir> [--require-close-ready]',
+    '  node scripts/p2a_iteration.mjs validate --artifacts <iterative-project-dir> [--require-close-ready] [--allow-planning] [--stage ready|gate-a|gate-b-draft|gate-b-approved] [--audit-archive]',
     '  node scripts/p2a_iteration.mjs close --artifacts <iterative-project-dir> [--iteration-id active]',
     '  node scripts/p2a_iteration.mjs open --artifacts <iterative-project-dir> --iteration-id <id> --idea <text>',
     '  node scripts/p2a_iteration.mjs draft --artifacts <iterative-project-dir> [--idea <text>] [--force]',
-    '  node scripts/p2a_iteration.mjs compose --artifacts <iterative-project-dir>',
+    '  node scripts/p2a_iteration.mjs promote-spec --artifacts <iterative-project-dir>',
+    '  node scripts/p2a_iteration.mjs diff-tasks --artifacts <iterative-project-dir> [--force]',
+    '  node scripts/p2a_iteration.mjs compose --artifacts <iterative-project-dir> [--allow-conflicts]',
     '',
     'Commands:',
     '  init                  Convert a greenfield artifact root into iterations/<id>/gate-*.',
@@ -75,6 +80,8 @@ function usage() {
     '  close                 Mark the active close-ready iteration as closed/archived metadata.',
     '  open                  Create a new active iteration skeleton from the current baseline.',
     '  draft                 Generate baseline-aware Gate A/B draft artifacts for the active planning iteration.',
+    '  promote-spec          Record an approved active Gate B spec and initialize current-spec when needed.',
+    '  diff-tasks            Generate a task graph draft from active spec changes against the baseline.',
     '  compose               Rebuild current-spec.json as a composed effective spec view.',
     '',
     'Common options:',
@@ -90,6 +97,9 @@ function usage() {
     '',
     'validate options:',
     '  --require-close-ready  Require every active iteration task to be done.',
+    '  --allow-planning      Accept Gate A/B planning states instead of requiring Gate B-D readiness.',
+    '  --stage <stage>       Validate a specific stage: ready, gate-a, gate-b-draft, gate-b-approved.',
+    '  --audit-archive       Verify hashes recorded when iterations were closed.',
     '',
     'close options:',
     '  --iteration-id active|<id>  Iteration to close. Default: active. Only active is supported for now.',
@@ -101,6 +111,12 @@ function usage() {
     'draft options:',
     '  --idea <text>         Override the change idea stored by open.',
     '  --force               Overwrite existing Gate A/B draft files.',
+    '',
+    'diff-tasks options:',
+    '  --force               Overwrite existing Gate C task graph.',
+    '',
+    'compose options:',
+    '  --allow-conflicts     Write current-spec open_decisions when composition conflicts are detected.',
   ].join('\n');
 }
 
@@ -114,6 +130,10 @@ function parseArgs(argv) {
     json: false,
     force: false,
     requireCloseReady: false,
+    allowPlanning: false,
+    stage: null,
+    auditArchive: false,
+    allowConflicts: false,
   };
   const command = argv[0];
   if (!command) throw new Error(`missing command\n\n${usage()}`);
@@ -138,7 +158,7 @@ function parseArgs(argv) {
       args.idea = argv[++index];
       if (!args.idea) throw new Error('--idea requires a value');
     } else if (arg === '--force') {
-      if (command !== 'draft') throw new Error('--force is only supported by draft');
+      if (command !== 'draft' && command !== 'diff-tasks') throw new Error('--force is only supported by draft and diff-tasks');
       args.force = true;
     } else if (arg === '--dry-run') {
       if (command !== 'init') throw new Error('--dry-run is only supported by init');
@@ -149,6 +169,19 @@ function parseArgs(argv) {
     } else if (arg === '--require-close-ready') {
       if (command !== 'validate') throw new Error('--require-close-ready is only supported by validate');
       args.requireCloseReady = true;
+    } else if (arg === '--allow-planning') {
+      if (command !== 'validate') throw new Error('--allow-planning is only supported by validate');
+      args.allowPlanning = true;
+    } else if (arg === '--stage') {
+      if (command !== 'validate') throw new Error('--stage is only supported by validate');
+      args.stage = argv[++index];
+      if (!VALIDATE_STAGES.has(args.stage)) throw new Error(`--stage must be one of ${[...VALIDATE_STAGES].join(', ')}`);
+    } else if (arg === '--audit-archive') {
+      if (command !== 'validate') throw new Error('--audit-archive is only supported by validate');
+      args.auditArchive = true;
+    } else if (arg === '--allow-conflicts') {
+      if (command !== 'compose') throw new Error('--allow-conflicts is only supported by compose');
+      args.allowConflicts = true;
     } else if (arg.startsWith('--')) {
       throw new Error(`unknown option: ${arg}`);
     } else {
@@ -287,6 +320,43 @@ function writeJson(filePath, value) {
   writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
 }
 
+function fileSha256(filePath) {
+  return createHash('sha256').update(readFileSync(filePath)).digest('hex');
+}
+
+function optionalArtifactHash(artifactRoot, reference) {
+  const filePath = resolveArtifactFileReference(reference, artifactRoot);
+  return existsSync(filePath) && lstatSync(filePath).isFile() ? fileSha256(filePath) : null;
+}
+
+function artifactAuditEntry(artifactRoot, reference) {
+  const hash = optionalArtifactHash(artifactRoot, reference);
+  return hash
+    ? { present: true, sha256: hash }
+    : { present: false, sha256: null };
+}
+
+function closedIterationArtifactRefs(iterationId) {
+  return [
+    `iterations/${iterationId}/gate-a-intake/intake.json`,
+    `iterations/${iterationId}/gate-a-intake/intake.md`,
+    `iterations/${iterationId}/gate-b-spec/product-spec.md`,
+    `iterations/${iterationId}/gate-b-spec/implementation-plan.md`,
+    sourceSpecRef(iterationId),
+    taskGraphRef(iterationId),
+    `iterations/${iterationId}/gate-d-review/review-report.md`,
+    reviewRef(iterationId),
+  ];
+}
+
+function artifactHashes(artifactRoot, references) {
+  const hashes = {};
+  for (const reference of references) {
+    hashes[reference] = artifactAuditEntry(artifactRoot, reference);
+  }
+  return hashes;
+}
+
 function cloneJson(value) {
   return JSON.parse(JSON.stringify(value));
 }
@@ -415,7 +485,7 @@ function currentSpecForOpen(currentSpec, nextIterationId, previousIterationId, i
   };
 }
 
-function closeRecord(iterationId, closedAt, taskGraph, effectiveSpecRef) {
+function closeRecord(iterationId, closedAt, taskGraph, effectiveSpecRef, artifactRoot) {
   return {
     iteration_id: iterationId,
     status: 'archived',
@@ -426,6 +496,7 @@ function closeRecord(iterationId, closedAt, taskGraph, effectiveSpecRef) {
     review_ref: reviewRef(iterationId),
     task_count: taskGraph.tasks?.length ?? 0,
     task_status_counts: countStatuses(taskGraph.tasks ?? []),
+    artifact_hashes: artifactHashes(artifactRoot, closedIterationArtifactRefs(iterationId)),
   };
 }
 
@@ -448,6 +519,37 @@ function currentSpecForClose(currentSpec, iterationId, record) {
     ));
   }
   return nextCurrentSpec;
+}
+
+function assertArchivedBaselineForOpen(currentSpec, artifactRoot, iterationId) {
+  if (currentSpec.pending_iteration) {
+    throw new ValidationError('open requires no pending_iteration; finish or discard the active planning iteration first');
+  }
+
+  const metadata = loadOptionalIterationMetadata(artifactRoot, iterationId);
+  if (metadata?.status !== 'archived') {
+    throw new ValidationError(`open requires active iteration ${JSON.stringify(iterationId)} to be archived by \`p2a_iteration close\``);
+  }
+
+  const closedIterations = currentSpec.closed_iterations ?? [];
+  if (!Array.isArray(closedIterations)) {
+    throw new ValidationError('open requires current-spec.json closed_iterations to be an array');
+  }
+  const closedRecord = closedIterations.find((closed) => closed?.iteration_id === iterationId);
+  if (!closedRecord) {
+    throw new ValidationError(`open requires active iteration ${JSON.stringify(iterationId)} to be recorded in current-spec.json.closed_iterations`);
+  }
+  if (closedRecord.status && closedRecord.status !== 'archived') {
+    throw new ValidationError(`open requires closed iteration ${JSON.stringify(iterationId)} status archived`);
+  }
+  if (currentSpec.last_closed_iteration?.iteration_id !== iterationId) {
+    throw new ValidationError(`open requires active iteration ${JSON.stringify(iterationId)} to be current-spec.json.last_closed_iteration`);
+  }
+
+  if (closedIterations.length > 1 && currentSpec.effective_spec_ref !== 'current-spec.json') {
+    throw new ValidationError('open requires current-spec.json composition after multiple closed iterations; run `p2a_iteration compose` first');
+  }
+  validateCurrentSpecCompositionData(currentSpec, artifactRoot, { requireNoOpenDecisions: true });
 }
 
 function maintenanceReadme() {
@@ -574,14 +676,14 @@ function activePendingIteration(state) {
   if (pending.iteration_id !== state.activeIteration) {
     throw new Error(`current-spec.json.pending_iteration.iteration_id must match active_iteration ${JSON.stringify(state.activeIteration)}`);
   }
-  if (!pending.baseline_effective_spec_ref) {
-    throw new Error('current-spec.json.pending_iteration.baseline_effective_spec_ref is required for baseline-aware draft generation');
-  }
   return pending;
 }
 
-function assertWritableDraftFiles(files, artifactRoot, force) {
-  const existing = Object.values(files).filter((filePath) => existsSync(filePath));
+function assertWritableDraftFiles(files, artifactRoot, force, options = {}) {
+  const allowExisting = new Set(options.allowExisting ?? []);
+  const existing = Object.entries(files)
+    .filter(([key, filePath]) => !allowExisting.has(key) && existsSync(filePath))
+    .map(([, filePath]) => filePath);
   if (existing.length && !force) {
     const summary = existing.map((filePath) => artifactRelativePath(artifactRoot, filePath)).join(', ');
     throw new Error(`Gate A/B draft files already exist: ${summary}. Re-run with --force to overwrite them.`);
@@ -715,6 +817,114 @@ function buildDeltaSpec({ projectId, iterationId, idea, baselineSpec, baselineSp
   };
 }
 
+function buildInitialSpec({ projectId, iterationId, idea, intake }) {
+  const facts = asStringArray(intake.known_facts);
+  const assumptions = Array.isArray(intake.assumptions)
+    ? intake.assumptions
+        .map((assumption) => assumption?.statement)
+        .filter((statement) => typeof statement === 'string' && statement.trim().length > 0)
+    : [];
+  const clarifyingQuestions = Array.isArray(intake.clarifying_questions) ? intake.clarifying_questions : [];
+  return {
+    schema_version: 'p2a.spec.v1',
+    project_id: projectId,
+    source_intake: '../gate-a-intake/intake.json',
+    product: {
+      problem: intake.summary || idea,
+      target_users: [
+        'Primary users and stakeholders described by the Gate A intake.',
+      ],
+      goals: appendUnique(facts.slice(0, 6), [
+        `Deliver the first iteration scope for ${iterationId}: ${idea}`,
+      ]),
+      non_goals: [
+        'Do not expand beyond the approved first-iteration scope without opening a follow-up decision.',
+        'Do not treat unresolved clarification questions as final requirements until they are explicitly approved or converted into assumptions.',
+      ],
+      core_flows: [
+        `A target user follows the first-iteration flow implied by the idea: ${idea}`,
+        'The system accepts the primary input or trigger described by the intake and returns the expected first-iteration outcome.',
+        'Operators or developers can verify the first-iteration behavior through the planned verification surface.',
+      ],
+      screens_or_interfaces: [
+        'Primary user-facing, developer-facing, or service-facing interface required by the first iteration.',
+        'Configuration or setup surface needed to run the first iteration safely.',
+        'Verification or observability surface needed to confirm first-iteration behavior.',
+      ],
+      data_model_draft: [
+        'Core entities, inputs, outputs, and state required by the first iteration.',
+        'Identifiers, timestamps, ownership fields, or status fields needed to support the first-iteration workflow.',
+      ],
+      external_integrations: [
+        'External systems explicitly named by the intake.',
+        'No additional external integration unless required by approved assumptions or decisions.',
+      ],
+      success_criteria: [
+        'The first-iteration workflow can be executed end to end from the primary interface.',
+        'The implementation satisfies the approved intake facts and explicitly documented assumptions.',
+        'Unresolved clarification questions are either answered before approval or tracked as open decisions.',
+        'Verification covers the main success path and at least one relevant failure or edge case.',
+      ],
+      constraints: appendUnique(assumptions, [
+        'Keep the first iteration narrowly scoped to the approved intake.',
+        'Prefer additive implementation choices that do not block future iterations.',
+        'Document any risky assumption before Gate B approval.',
+      ]),
+    },
+    implementation: {
+      architecture: [
+        'Implement the smallest architecture that can satisfy the first-iteration workflow and verification criteria.',
+        'Separate core domain behavior from integration, configuration, and verification concerns where the target project structure supports it.',
+      ],
+      interfaces: [
+        'Define the primary interface contract needed by the first iteration.',
+        'Define any setup, configuration, or operational contract needed to run and verify the first iteration.',
+      ],
+      data_flow: [
+        'Primary input enters through the selected interface, is validated, and is transformed into the first-iteration output or state change.',
+        'Errors and unsupported cases return a predictable result and are visible to tests or verification steps.',
+      ],
+      dependencies: [
+        'Use the target project runtime and dependency conventions.',
+        'Add new dependencies only when they are required by the approved first-iteration scope.',
+      ],
+      edge_cases: [
+        'Required input is missing, malformed, or outside the approved first-iteration scope.',
+        'Repeated or duplicate execution should have a documented behavior.',
+        'Downstream or integration failure should not leave the system in an ambiguous state.',
+      ],
+      verification: [
+        'Unit or contract tests for the primary first-iteration behavior.',
+        'Regression tests for any existing behavior touched by the first iteration.',
+        'A documented manual or automated verification step for the end-to-end workflow.',
+      ],
+    },
+    clarifying_question_disposition: clarifyingQuestions.map((question) => ({
+      id: question.id,
+      status: 'assumed',
+      rationale: 'Initial Gate B draft keeps this question as an explicit implementation assumption unless the user overrides it before approval.',
+      affects: question.blocks,
+      assumption: question.question,
+    })),
+    open_decisions: [],
+    approval: 'draft',
+    evidence: [
+      {
+        source_id: 'LOCAL-1',
+        title: 'Gate A intake',
+        url: '../gate-a-intake/intake.json',
+        used_for: `Generated initial Gate B draft for ${iterationId}.`,
+      },
+      {
+        source_id: 'USER-1',
+        title: 'Initial product idea',
+        url: '',
+        used_for: idea,
+      },
+    ],
+  };
+}
+
 function renderIntakeMarkdown(intake) {
   return `# Intake\n\n` +
     `## Idea\n\n${intake.idea}\n\n` +
@@ -769,6 +979,35 @@ function currentSpecForDraft(currentSpec, iterationId, idea, draftedAt, artifact
   };
 }
 
+function currentSpecForPromotedSpec(currentSpec, iterationId, promotedAt, artifacts) {
+  const next = {
+    ...currentSpec,
+    active_iteration: iterationId,
+    gate_b_promoted_at: promotedAt,
+  };
+  const activeSpecRef = sourceSpecRef(iterationId);
+  const hasNoEffectiveSpec = !currentSpec.effective_spec_ref;
+
+  if (hasNoEffectiveSpec) {
+    next.composed_from = appendUnique(currentSpec.composed_from, [iterationId]);
+    next.effective_spec_ref = activeSpecRef;
+  } else if (currentSpec.effective_spec_ref === activeSpecRef) {
+    next.effective_spec_ref = activeSpecRef;
+  }
+  if (next.pending_iteration?.iteration_id === iterationId) {
+    next.pending_iteration = {
+      ...next.pending_iteration,
+      status: 'gate_b_approved',
+      promoted_at: promotedAt,
+      artifacts: {
+        ...next.pending_iteration.artifacts,
+        ...artifacts,
+      },
+    };
+  }
+  return next;
+}
+
 function iterationMetadataForDraft(metadata, idea, draftedAt, artifacts) {
   return {
     ...metadata,
@@ -776,6 +1015,21 @@ function iterationMetadataForDraft(metadata, idea, draftedAt, artifacts) {
     idea,
     drafted_at: draftedAt,
     draft_artifacts: artifacts,
+  };
+}
+
+function iterationMetadataForPromotedSpec(metadata, projectId, iterationId, promotedAt, artifacts) {
+  return {
+    ...(metadata ?? {
+      schema_version: 'p2a.iteration_metadata.v1',
+      project_id: projectId,
+      iteration_id: iterationId,
+    }),
+    project_id: metadata?.project_id ?? projectId,
+    iteration_id: metadata?.iteration_id ?? iterationId,
+    status: 'gate_b_approved',
+    promoted_at: promotedAt,
+    approved_spec_artifacts: artifacts,
   };
 }
 
@@ -828,6 +1082,68 @@ function taskGraphRef(iterationId) {
 
 function reviewRef(iterationId) {
   return `iterations/${iterationId}/gate-d-review/review.json`;
+}
+
+function titleFromSpecRef(specRef) {
+  return specRef
+    .split('.')
+    .map((part) => part.replace(/_/g, ' '))
+    .join(' ');
+}
+
+function fieldValueChanged(baselineSpec, activeSpec, section, field) {
+  if (!baselineSpec) return true;
+  return !jsonEqual(baselineSpec[section]?.[field], activeSpec[section]?.[field]);
+}
+
+function collectSpecFieldChanges(baselineSpec, activeSpec) {
+  const changes = [];
+  for (const field of PRODUCT_FIELDS) {
+    if (fieldValueChanged(baselineSpec, activeSpec, 'product', field)) {
+      changes.push({ section: 'product', field, specRef: `product.${field}` });
+    }
+  }
+  for (const field of IMPLEMENTATION_FIELDS) {
+    if (fieldValueChanged(baselineSpec, activeSpec, 'implementation', field)) {
+      changes.push({ section: 'implementation', field, specRef: `implementation.${field}` });
+    }
+  }
+  return changes;
+}
+
+function taskGraphFromSpecChanges({ projectId, iterationId, activeSpec, baselineSpec, baselineRef }) {
+  const changes = collectSpecFieldChanges(baselineSpec, activeSpec);
+  const taskChanges = changes.length ? changes : [{ section: 'implementation', field: 'verification', specRef: 'implementation.verification' }];
+  return {
+    schema_version: 'p2a.task_graph.v1',
+    projectId,
+    version: iterationId,
+    sourceSpec: '../gate-b-spec/spec.json',
+    tasks: taskChanges.map((change, index) => {
+      const taskId = `task-${String(index + 1).padStart(3, '0')}`;
+      const title = `Implement ${titleFromSpecRef(change.specRef)}`;
+      const baselineLabel = baselineRef ? `baseline ${baselineRef}` : 'no prior baseline';
+      return {
+        id: taskId,
+        title,
+        description: `Implement and verify the active iteration change for ${change.specRef} against ${baselineLabel}.`,
+        status: 'todo',
+        dependencies: [],
+        acceptanceCriteria: [
+          `Implementation reflects active spec field ${change.specRef}.`,
+          'Relevant tests or verification steps are added or updated.',
+          'No unrelated behavior changes are introduced.',
+        ],
+        targetArea: change.specRef,
+        suggestedAgentPrompt: [
+          `Use the active Plan2Agent spec for ${projectId} iteration ${iterationId}.`,
+          `Implement the change described by ${change.specRef}.`,
+          'Keep the change scoped to this task and update tests or verification artifacts as needed.',
+        ].join('\n'),
+        sourceSpecRefs: [change.specRef],
+      };
+    }),
+  };
 }
 
 function iterationMetadataPath(artifactRoot, iterationId) {
@@ -1242,13 +1558,136 @@ function loadReadyIterationFacts(artifactRoot) {
   return { state, spec, taskGraph, review };
 }
 
+function activeIntakePath(state) {
+  return path.join(state.iterationRoot, 'gate-a-intake', 'intake.json');
+}
+
+function validateActiveSpecWithOptionalIntake(state) {
+  const intakePath = activeIntakePath(state);
+  return existsSync(intakePath)
+    ? validateSpec(state.specPath, intakePath)
+    : validateSpec(state.specPath);
+}
+
+function inferPlanningStage(state) {
+  if (existsSync(state.taskGraphPath) && existsSync(state.reviewPath) && existsSync(state.specPath)) return 'ready';
+  if (existsSync(state.specPath)) {
+    const spec = validateActiveSpecWithOptionalIntake(state);
+    return spec.approval === 'approved' ? 'gate-b-approved' : 'gate-b-draft';
+  }
+  return 'gate-a';
+}
+
+function validatePlanningIteration(args) {
+  const state = resolveIterationState(args.artifacts, { requireReady: false });
+  validateCurrentSpecCompositionData(state.currentSpec, state.artifactRoot, { requireNoOpenDecisions: true });
+  const stage = args.stage ?? inferPlanningStage(state);
+  if (stage === 'ready') return validateIteration({ ...args, stage: null, allowPlanning: false });
+
+  const pendingStatus = state.currentSpec.pending_iteration?.status;
+  const allowedPendingStatuses = new Set(['active_planning', 'gate_a_ready', 'gate_b_draft', 'gate_b_approved']);
+  if (pendingStatus && !allowedPendingStatuses.has(pendingStatus)) {
+    throw new ValidationError(`current-spec.json pending_iteration.status is not a planning status: ${JSON.stringify(pendingStatus)}`);
+  }
+  if (state.currentSpec.pending_iteration && state.currentSpec.pending_iteration.iteration_id !== state.activeIteration) {
+    throw new ValidationError(`current-spec.json pending_iteration.iteration_id must match active_iteration ${JSON.stringify(state.activeIteration)}`);
+  }
+
+  const intakePath = activeIntakePath(state);
+  if (stage === 'gate-a') {
+    assertFile(intakePath, `iterations/${state.activeIteration}/gate-a-intake/intake.json`);
+    const intake = validateIntake(intakePath);
+    console.log(`Plan2Agent planning iteration validation passed: ${toRelativeFromRoot(state.artifactRoot)}`);
+    console.log(`- active iteration: ${state.activeIteration}`);
+    console.log(`- stage: gate-a`);
+    console.log(`- intake: status=${intake.status}`);
+    console.log('- Gate B-D artifacts are pending');
+    return 0;
+  }
+
+  if (stage !== 'gate-b-draft' && stage !== 'gate-b-approved') {
+    throw new Error(`unsupported planning validation stage: ${stage}`);
+  }
+  assertFile(state.specPath, `iterations/${state.activeIteration}/gate-b-spec/spec.json`);
+  const spec = validateActiveSpecWithOptionalIntake(state);
+  if (stage === 'gate-b-approved' && spec.approval !== 'approved') {
+    throw new ValidationError(`--stage gate-b-approved requires spec.approval approved, got ${JSON.stringify(spec.approval)}`);
+  }
+  if (stage === 'gate-b-draft' && spec.approval === 'approved') {
+    throw new ValidationError('--stage gate-b-draft expected a non-approved spec; use --stage gate-b-approved for approved Gate B');
+  }
+
+  console.log(`Plan2Agent planning iteration validation passed: ${toRelativeFromRoot(state.artifactRoot)}`);
+  console.log(`- active iteration: ${state.activeIteration}`);
+  console.log(`- stage: ${stage}`);
+  console.log(`- spec: approval=${spec.approval}`);
+  console.log('- Gate C/D artifacts are pending');
+  return 0;
+}
+
+function maintenanceTaskGraphPath(artifactRoot) {
+  return path.join(artifactRoot, 'iterations', 'maintenance', 'gate-c-task-graph', 'task-graph.json');
+}
+
+function validateMaintenanceTaskGraphIfPresent(artifactRoot) {
+  const graphPath = maintenanceTaskGraphPath(artifactRoot);
+  if (!existsSync(graphPath)) return null;
+  const graph = validateTaskGraph(graphPath);
+  return { graphPath, graph };
+}
+
+function auditArchivedIterations(currentSpec, artifactRoot) {
+  const closedIterations = currentSpec.closed_iterations ?? [];
+  if (!Array.isArray(closedIterations)) {
+    throw new ValidationError('current-spec.json closed_iterations must be an array when present');
+  }
+  for (const closed of closedIterations) {
+    if (!closed?.iteration_id) throw new ValidationError('current-spec.json closed_iterations entries must include iteration_id');
+    if (!closed.artifact_hashes || typeof closed.artifact_hashes !== 'object' || Array.isArray(closed.artifact_hashes)) {
+      throw new ValidationError(`closed iteration ${closed.iteration_id} is missing artifact_hashes; re-close or migrate audit metadata`);
+    }
+    for (const [reference, expectedAudit] of Object.entries(closed.artifact_hashes)) {
+      const filePath = resolveArtifactFileReference(reference, artifactRoot);
+      if (typeof expectedAudit === 'string') {
+        assertFile(filePath, `closed iteration artifact ${reference}`);
+        const actualHash = fileSha256(filePath);
+        if (actualHash !== expectedAudit) {
+          throw new ValidationError(`closed iteration ${closed.iteration_id} artifact changed after close: ${reference}`);
+        }
+        continue;
+      }
+      if (!expectedAudit || typeof expectedAudit !== 'object' || Array.isArray(expectedAudit)) {
+        throw new ValidationError(`closed iteration ${closed.iteration_id} artifact audit entry is invalid: ${reference}`);
+      }
+      if (expectedAudit.present === false) {
+        if (existsSync(filePath)) {
+          throw new ValidationError(`closed iteration ${closed.iteration_id} artifact appeared after close: ${reference}`);
+        }
+        continue;
+      }
+      if (expectedAudit.present !== true || typeof expectedAudit.sha256 !== 'string') {
+        throw new ValidationError(`closed iteration ${closed.iteration_id} artifact audit entry is invalid: ${reference}`);
+      }
+      assertFile(filePath, `closed iteration artifact ${reference}`);
+      const actualHash = fileSha256(filePath);
+      if (actualHash !== expectedAudit.sha256) {
+        throw new ValidationError(`closed iteration ${closed.iteration_id} artifact changed after close: ${reference}`);
+      }
+    }
+  }
+  return closedIterations.length;
+}
+
 function validateIteration(args) {
+  if (args.allowPlanning || args.stage) return validatePlanningIteration(args);
   const state = resolveIterationState(args.artifacts);
   validateCurrentSpecCompositionData(state.currentSpec, state.artifactRoot, { requireNoOpenDecisions: true });
-  const spec = validateSpec(state.specPath);
+  const spec = validateActiveSpecWithOptionalIntake(state);
   const taskGraph = validateTaskGraph(state.taskGraphPath, state.specPath);
   validateReviewPass(state.reviewPath);
   if (args.requireCloseReady) assertCloseReadyTasks(taskGraph);
+  const maintenance = validateMaintenanceTaskGraphIfPresent(state.artifactRoot);
+  const archivedAuditCount = args.auditArchive ? auditArchivedIterations(state.currentSpec, state.artifactRoot) : null;
 
   const statusCounts = countStatuses(taskGraph.tasks);
   console.log(`Plan2Agent iteration validation passed: ${toRelativeFromRoot(state.artifactRoot)}`);
@@ -1257,6 +1696,8 @@ function validateIteration(args) {
   console.log(`- task graph: ${taskGraph.tasks.length} task(s), todo ${statusCounts.todo}·in_progress ${statusCounts.in_progress}·done ${statusCounts.done}·blocked ${statusCounts.blocked}`);
   console.log('- review: no blocking issues');
   if (args.requireCloseReady) console.log('- close-ready: all tasks done');
+  if (maintenance) console.log(`- maintenance: ${maintenance.graph.tasks.length} task(s) valid`);
+  if (archivedAuditCount !== null) console.log(`- archived audit: ${archivedAuditCount} closed iteration(s) verified`);
   return 0;
 }
 
@@ -1278,6 +1719,7 @@ function close(args) {
     closedAt,
     facts.taskGraph,
     facts.state.currentSpec.effective_spec_ref,
+    artifactRoot,
   );
   const metadata = iterationMetadataForClose(
     loadOptionalIterationMetadata(artifactRoot, facts.state.activeIteration),
@@ -1311,12 +1753,113 @@ function close(args) {
   return 0;
 }
 
+function activeSpecArtifacts(artifactRoot, iterationId) {
+  const iterationRoot = path.join(artifactRoot, 'iterations', iterationId);
+  return {
+    spec_ref: sourceSpecRef(iterationId),
+    product_spec_ref: artifactRelativePath(artifactRoot, path.join(iterationRoot, 'gate-b-spec', 'product-spec.md')),
+    implementation_plan_ref: artifactRelativePath(artifactRoot, path.join(iterationRoot, 'gate-b-spec', 'implementation-plan.md')),
+  };
+}
+
+function promoteSpec(args) {
+  const artifactRoot = normalizeArtifactPath(args.artifacts);
+  const state = resolveIterationState(artifactRoot, { requireReady: false });
+  assertFile(state.specPath, `iterations/${state.activeIteration}/gate-b-spec/spec.json`);
+  const spec = validateActiveSpecWithOptionalIntake(state);
+  if (spec.approval !== 'approved') {
+    throw new ValidationError(`promote-spec requires spec.approval approved, got ${JSON.stringify(spec.approval)}`);
+  }
+  if (spec.open_decisions.length) {
+    throw new ValidationError('promote-spec requires spec.open_decisions to be empty');
+  }
+
+  const promotedAt = new Date().toISOString();
+  const artifacts = activeSpecArtifacts(state.artifactRoot, state.activeIteration);
+  writeJson(
+    state.currentSpecPath,
+    currentSpecForPromotedSpec(state.currentSpec, state.activeIteration, promotedAt, artifacts),
+  );
+  writeJson(
+    iterationMetadataPath(state.artifactRoot, state.activeIteration),
+    iterationMetadataForPromotedSpec(
+      loadOptionalIterationMetadata(state.artifactRoot, state.activeIteration),
+      state.projectId,
+      state.activeIteration,
+      promotedAt,
+      artifacts,
+    ),
+  );
+
+  const promotedState = resolveIterationState(artifactRoot, { requireReady: false });
+  console.log(`Plan2Agent active spec promoted: ${toRelativeFromRoot(state.specPath)}`);
+  console.log(`- active iteration: ${state.activeIteration}`);
+  console.log(`- approval: ${spec.approval}`);
+  console.log(`- effective spec: ${promotedState.currentSpec.effective_spec_ref ?? 'unchanged'}`);
+  return 0;
+}
+
+function loadDiffBaseline(state) {
+  const activeSpecRef = sourceSpecRef(state.activeIteration);
+  const pendingBaselineRef = state.currentSpec.pending_iteration?.baseline_effective_spec_ref;
+  let baselineRef = pendingBaselineRef && normalizeDisplayPath(pendingBaselineRef) !== activeSpecRef
+    ? pendingBaselineRef
+    : null;
+  if (!baselineRef && state.currentSpec.effective_spec_ref && normalizeDisplayPath(state.currentSpec.effective_spec_ref) !== activeSpecRef) {
+    baselineRef = state.currentSpec.effective_spec_ref;
+  }
+  if (!baselineRef) return { baselineSpec: null, baselineRef: null };
+
+  const baselinePath = resolveArtifactFileReference(baselineRef, state.artifactRoot);
+  assertFile(baselinePath, `diff baseline ${baselineRef}`);
+  return {
+    baselineSpec: loadEffectiveBaselineSpec(baselinePath),
+    baselineRef,
+  };
+}
+
+function diffTasks(args) {
+  const artifactRoot = normalizeArtifactPath(args.artifacts);
+  const state = resolveIterationState(artifactRoot, { requireReady: false });
+  assertFile(state.specPath, `iterations/${state.activeIteration}/gate-b-spec/spec.json`);
+  const activeSpec = validateActiveSpecWithOptionalIntake(state);
+  if (activeSpec.approval !== 'approved') {
+    throw new ValidationError(`diff-tasks requires approved active spec, got ${JSON.stringify(activeSpec.approval)}`);
+  }
+  if (activeSpec.open_decisions.length) {
+    throw new ValidationError('diff-tasks requires active spec.open_decisions to be empty');
+  }
+
+  const taskGraphPath = state.taskGraphPath;
+  if (existsSync(taskGraphPath) && !args.force) {
+    throw new Error(`task graph already exists: ${taskGraphPath}; use --force to overwrite`);
+  }
+  const { baselineSpec, baselineRef } = loadDiffBaseline(state);
+  const graph = taskGraphFromSpecChanges({
+    projectId: state.projectId,
+    iterationId: state.activeIteration,
+    activeSpec,
+    baselineSpec,
+    baselineRef,
+  });
+  validateTaskGraphData(graph, state.specPath);
+  mkdirSync(path.dirname(taskGraphPath), { recursive: true });
+  writeJson(taskGraphPath, graph);
+
+  console.log(`Plan2Agent diff task graph generated: ${toRelativeFromRoot(taskGraphPath)}`);
+  console.log(`- active iteration: ${state.activeIteration}`);
+  console.log(`- baseline: ${baselineRef ?? 'none'}`);
+  console.log(`- tasks: ${graph.tasks.length}`);
+  return 0;
+}
+
 function open(args) {
   const artifactRoot = normalizeArtifactPath(args.artifacts);
   assertSafeIterationId(args.iterationId);
   const idea = args.idea.trim();
   const facts = loadReadyIterationFacts(artifactRoot);
   assertCloseReadyTasks(facts.taskGraph);
+  assertArchivedBaselineForOpen(facts.state.currentSpec, artifactRoot, facts.state.activeIteration);
 
   if (facts.state.activeIteration === args.iterationId) {
     throw new Error(`--iteration-id must differ from current active iteration ${JSON.stringify(facts.state.activeIteration)}`);
@@ -1371,31 +1914,46 @@ function draft(args) {
   const metadata = loadIterationMetadata(state.iterationRoot);
   const idea = draftIdea(args, pending, metadata);
   const baselineSpecRef = pending.baseline_effective_spec_ref;
-  const baselineSpecPath = resolveArtifactFileReference(baselineSpecRef, artifactRoot);
-  assertFile(baselineSpecPath, 'current-spec.json pending_iteration.baseline_effective_spec_ref');
-  if (path.resolve(baselineSpecPath) !== path.resolve(state.effectiveSpecPath)) {
-    throw new Error(`pending baseline spec ${baselineSpecRef} must match current effective spec ${state.currentSpec.effective_spec_ref}`);
+  let baselineIteration = pending.baseline_iteration ?? metadata.baseline?.iteration_id ?? 'none';
+  let baselineSpec = null;
+  if (baselineSpecRef) {
+    const baselineSpecPath = resolveArtifactFileReference(baselineSpecRef, artifactRoot);
+    assertFile(baselineSpecPath, 'current-spec.json pending_iteration.baseline_effective_spec_ref');
+    if (path.resolve(baselineSpecPath) !== path.resolve(state.effectiveSpecPath)) {
+      throw new Error(`pending baseline spec ${baselineSpecRef} must match current effective spec ${state.currentSpec.effective_spec_ref}`);
+    }
+    baselineIteration = pending.baseline_iteration ?? metadata.baseline?.iteration_id ?? 'unknown';
+    baselineSpec = loadEffectiveBaselineSpec(baselineSpecPath);
   }
-  const baselineIteration = pending.baseline_iteration ?? metadata.baseline?.iteration_id ?? 'unknown';
-  const baselineSpec = loadEffectiveBaselineSpec(baselineSpecPath);
   const projectId = state.projectId;
   const files = draftArtifactPaths(state.iterationRoot);
-  assertWritableDraftFiles(files, artifactRoot, args.force);
+  const initialIntakePath = activeIntakePath(state);
+  const initialIntake = baselineSpecRef ? null : validateIntake(initialIntakePath);
+  assertWritableDraftFiles(files, artifactRoot, args.force, baselineSpecRef ? {} : { allowExisting: ['intakeJson', 'intakeMd'] });
 
-  const intake = buildDeltaIntake({
-    projectId,
-    iterationId: state.activeIteration,
-    idea,
-    baselineIteration,
-    baselineSpecRef,
-  });
-  const spec = buildDeltaSpec({
-    projectId,
-    iterationId: state.activeIteration,
-    idea,
-    baselineSpec,
-    baselineSpecRef,
-  });
+  const intake = baselineSpecRef
+    ? buildDeltaIntake({
+        projectId,
+        iterationId: state.activeIteration,
+        idea,
+        baselineIteration,
+        baselineSpecRef,
+      })
+    : initialIntake;
+  const spec = baselineSpecRef
+    ? buildDeltaSpec({
+        projectId,
+        iterationId: state.activeIteration,
+        idea,
+        baselineSpec,
+        baselineSpecRef,
+      })
+    : buildInitialSpec({
+        projectId,
+        iterationId: state.activeIteration,
+        idea,
+        intake: initialIntake,
+      });
   const artifacts = {
     intake_ref: artifactRelativePath(artifactRoot, files.intakeJson),
     spec_ref: artifactRelativePath(artifactRoot, files.specJson),
@@ -1404,21 +1962,23 @@ function draft(args) {
   };
   const draftedAt = new Date().toISOString();
 
-  writeJson(files.intakeJson, intake);
-  writeFileSync(files.intakeMd, renderIntakeMarkdown(intake), 'utf8');
+  if (baselineSpecRef) {
+    writeJson(files.intakeJson, intake);
+    writeFileSync(files.intakeMd, renderIntakeMarkdown(intake), 'utf8');
+  }
   writeFileSync(files.productSpecMd, renderProductSpecMarkdown(spec, {
     iterationId: state.activeIteration,
     idea,
-    baselineSpecRef,
+    baselineSpecRef: baselineSpecRef ?? 'none',
   }), 'utf8');
   writeFileSync(files.implementationPlanMd, renderImplementationPlanMarkdown(spec, {
     iterationId: state.activeIteration,
     idea,
-    baselineSpecRef,
+    baselineSpecRef: baselineSpecRef ?? 'none',
   }), 'utf8');
   writeJson(files.specJson, spec);
 
-  validateIntake(files.intakeJson);
+  if (baselineSpecRef) validateIntake(files.intakeJson);
   validateSpec(files.specJson, files.intakeJson);
   writeJson(
     path.join(state.iterationRoot, 'iteration.json'),
@@ -1430,13 +1990,13 @@ function draft(args) {
   );
   writeFileSync(
     state.statusPath,
-    draftStatusMarkdown(projectId, state.activeIteration, baselineIteration, idea, pending.opened_at, draftedAt, baselineSpecRef),
+    draftStatusMarkdown(projectId, state.activeIteration, baselineIteration, idea, pending.opened_at, draftedAt, baselineSpecRef ?? 'none'),
     'utf8',
   );
 
   console.log(`Plan2Agent iteration draft generated: ${toRelativeFromRoot(state.iterationRoot)}`);
   console.log(`- active iteration: ${state.activeIteration}`);
-  console.log(`- baseline spec: ${baselineSpecRef}`);
+  console.log(`- baseline spec: ${baselineSpecRef ?? 'none'}`);
   console.log(`- intake: ${artifacts.intake_ref}`);
   console.log(`- spec: ${artifacts.spec_ref} (approval=draft)`);
   console.log('Gate A/B artifacts validated; Gate C/D are still pending.');
@@ -1449,9 +2009,17 @@ function compose(args) {
   const { sources, skipped } = collectCompositionSources(artifactRoot, state.currentSpec);
   const composedCurrentSpec = buildComposedCurrentSpec(state.currentSpec, sources, skipped);
   validateCurrentSpecCompositionData(composedCurrentSpec, artifactRoot);
+  if (composedCurrentSpec.open_decisions.length && !args.allowConflicts) {
+    throw new ValidationError(
+      `current-spec composition has unresolved open_decisions: ${JSON.stringify(composedCurrentSpec.open_decisions.map((decision) => decision.id))}; rerun with --allow-conflicts to write the conflict decisions`,
+    );
+  }
   writeJson(state.currentSpecPath, composedCurrentSpec);
   if (composedCurrentSpec.open_decisions.length) {
-    throw new ValidationError(`current-spec composition has unresolved open_decisions: ${JSON.stringify(composedCurrentSpec.open_decisions.map((decision) => decision.id))}`);
+    console.log(`Plan2Agent current spec composed with conflicts: ${toRelativeFromRoot(state.currentSpecPath)}`);
+    console.log(`- open decisions: ${composedCurrentSpec.open_decisions.map((decision) => decision.id).join(', ')}`);
+    console.log('- resolve current-spec.json open_decisions before opening the next iteration');
+    return 0;
   }
 
   console.log(`Plan2Agent current spec composed: ${toRelativeFromRoot(state.currentSpecPath)}`);
@@ -1477,6 +2045,8 @@ export function main(argv = process.argv.slice(2)) {
     if (args.command === 'close') return close(args);
     if (args.command === 'open') return open(args);
     if (args.command === 'draft') return draft(args);
+    if (args.command === 'promote-spec') return promoteSpec(args);
+    if (args.command === 'diff-tasks') return diffTasks(args);
     if (args.command === 'compose') return compose(args);
     throw new Error(`unknown command: ${args.command}`);
   } catch (error) {

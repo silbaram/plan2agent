@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /** Run Plan2Agent fixture/golden validation for positive, e2e, iteration, and negative fixture cases. */
 
-import { cpSync, existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
@@ -234,7 +234,7 @@ function validateIterationCurrentFixtureCases() {
       checks += 1;
       const blockedOpenOutput = `${result.stdout ?? ''}${result.stderr ?? ''}`;
       if (result.status === 0 || !blockedOpenOutput.includes('incomplete tasks')) {
-        console.error(`iteration open fixture did not require close-ready baseline: ${caseData.id}`);
+        console.error(`iteration open fixture did not reject incomplete active baseline: ${caseData.id}`);
         writeResultOutput(result);
         return { status: 1, checks };
       }
@@ -300,6 +300,15 @@ function validateIterationCurrentFixtureCases() {
         return { status: result.status ?? 1, checks };
       }
 
+      result = runIteration(['open', '--artifacts', artifactRoot, '--iteration-id', 'iter-skip-close', '--idea', 'Should not open before close']);
+      checks += 1;
+      const skipCloseOpenOutput = `${result.stdout ?? ''}${result.stderr ?? ''}`;
+      if (result.status === 0 || !skipCloseOpenOutput.includes('archived by `p2a_iteration close`')) {
+        console.error(`iteration open fixture did not require archived close metadata: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: 1, checks };
+      }
+
       result = runIteration(['close', '--artifacts', artifactRoot]);
       checks += 1;
       if (result.status !== 0 || !result.stdout.includes('iteration closed')) {
@@ -309,9 +318,12 @@ function validateIterationCurrentFixtureCases() {
       }
       const closedMetadata = JSON.parse(readFileSync(path.join(artifactRoot, 'iterations', state.activeIteration, 'iteration.json'), 'utf8'));
       const closedCurrentSpec = JSON.parse(readFileSync(path.join(artifactRoot, 'current-spec.json'), 'utf8'));
+      const closedSpecAudit = closedMetadata.close?.artifact_hashes?.['iterations/v1-mvp/gate-b-spec/spec.json'];
       if (
         closedMetadata.status !== 'archived'
         || closedMetadata.close?.iteration_id !== state.activeIteration
+        || closedSpecAudit?.present !== true
+        || typeof closedSpecAudit?.sha256 !== 'string'
         || closedCurrentSpec.active_iteration !== state.activeIteration
         || closedCurrentSpec.last_closed_iteration?.iteration_id !== state.activeIteration
         || !closedCurrentSpec.closed_iterations?.some((closed) => closed.iteration_id === state.activeIteration)
@@ -320,6 +332,37 @@ function validateIterationCurrentFixtureCases() {
         console.error(JSON.stringify({ closedMetadata, closedCurrentSpec }, null, 2));
         return { status: 1, checks };
       }
+
+      result = runIteration(['validate', '--artifacts', artifactRoot, '--require-close-ready', '--audit-archive']);
+      checks += 1;
+      if (result.status !== 0 || !result.stdout.includes('archived audit: 1 closed iteration(s) verified')) {
+        console.error(`iteration archive audit fixture check failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: result.status ?? 1, checks };
+      }
+
+      const lateArtifactRef = 'iterations/v1-mvp/gate-d-review/late-note.md';
+      const lateArtifactPath = path.join(artifactRoot, lateArtifactRef);
+      const auditCurrentSpec = JSON.parse(readFileSync(state.currentSpecPath, 'utf8'));
+      auditCurrentSpec.closed_iterations[0].artifact_hashes[lateArtifactRef] = { present: false, sha256: null };
+      writeFileSync(state.currentSpecPath, `${JSON.stringify(auditCurrentSpec, null, 2)}\n`, 'utf8');
+      result = runIteration(['validate', '--artifacts', artifactRoot, '--require-close-ready', '--audit-archive']);
+      checks += 1;
+      if (result.status !== 0) {
+        console.error(`iteration archive audit should accept missing artifact marker: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: result.status ?? 1, checks };
+      }
+      writeFileSync(lateArtifactPath, '# Late note\n', 'utf8');
+      result = runIteration(['validate', '--artifacts', artifactRoot, '--require-close-ready', '--audit-archive']);
+      checks += 1;
+      const lateAuditOutput = `${result.stdout ?? ''}${result.stderr ?? ''}`;
+      if (result.status === 0 || !lateAuditOutput.includes('artifact appeared after close')) {
+        console.error(`iteration archive audit did not reject artifact appearance after close: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: 1, checks };
+      }
+      unlinkSync(lateArtifactPath);
 
       result = runIteration(['open', '--artifacts', artifactRoot, '--iteration-id', 'iter-002', '--idea', 'Add follow-up webhook delivery dashboard']);
       checks += 1;
@@ -394,13 +437,62 @@ function validateIterationCurrentFixtureCases() {
         return { status: 1, checks };
       }
 
+      result = runIteration(['validate', '--artifacts', artifactRoot, '--allow-planning']);
+      checks += 1;
+      if (result.status !== 0 || !result.stdout.includes('stage: gate-b-draft')) {
+        console.error(`iteration planning validate did not accept Gate B draft fixture: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: result.status ?? 1, checks };
+      }
+
       const approvedDraftSpec = JSON.parse(readFileSync(draftSpecPath, 'utf8'));
       approvedDraftSpec.approval = 'approved';
       writeFileSync(draftSpecPath, `${JSON.stringify(approvedDraftSpec, null, 2)}\n`, 'utf8');
       const iter2TaskGraphPath = path.join(artifactRoot, 'iterations', 'iter-002', 'gate-c-task-graph', 'task-graph.json');
       const iter2ReviewPath = path.join(artifactRoot, 'iterations', 'iter-002', 'gate-d-review', 'review.json');
       const iter2ReviewReportPath = path.join(artifactRoot, 'iterations', 'iter-002', 'gate-d-review', 'review-report.md');
-      writeFileSync(iter2TaskGraphPath, `${JSON.stringify(closedBaselineTaskGraph, null, 2)}\n`, 'utf8');
+
+      result = runIteration(['promote-spec', '--artifacts', artifactRoot]);
+      checks += 1;
+      if (result.status !== 0 || !result.stdout.includes('active spec promoted')) {
+        console.error(`iteration promote-spec fixture check failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: result.status ?? 1, checks };
+      }
+      const promotedIter2CurrentSpec = JSON.parse(readFileSync(state.currentSpecPath, 'utf8'));
+      if (
+        promotedIter2CurrentSpec.effective_spec_ref !== 'iterations/v1-mvp/gate-b-spec/spec.json'
+        || JSON.stringify(promotedIter2CurrentSpec.composed_from) !== JSON.stringify(['v1-mvp'])
+        || promotedIter2CurrentSpec.pending_iteration?.status !== 'gate_b_approved'
+      ) {
+        console.error(`iteration promote-spec should preserve baseline composition before compose: ${caseData.id}`);
+        console.error(JSON.stringify(promotedIter2CurrentSpec, null, 2));
+        return { status: 1, checks };
+      }
+
+      result = runIteration(['validate', '--artifacts', artifactRoot, '--stage', 'gate-b-approved']);
+      checks += 1;
+      if (result.status !== 0 || !result.stdout.includes('stage: gate-b-approved')) {
+        console.error(`iteration planning validate did not accept promoted Gate B fixture: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: result.status ?? 1, checks };
+      }
+
+      result = runIteration(['diff-tasks', '--artifacts', artifactRoot]);
+      checks += 1;
+      if (result.status !== 0 || !result.stdout.includes('diff task graph generated')) {
+        console.error(`iteration diff-tasks fixture check failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: result.status ?? 1, checks };
+      }
+      const iter2TaskGraph = JSON.parse(readFileSync(iter2TaskGraphPath, 'utf8'));
+      if (iter2TaskGraph.sourceSpec !== '../gate-b-spec/spec.json' || !iter2TaskGraph.tasks.length) {
+        console.error(`iteration diff-tasks wrote invalid task graph fixture: ${caseData.id}`);
+        console.error(JSON.stringify(iter2TaskGraph, null, 2));
+        return { status: 1, checks };
+      }
+      for (const task of iter2TaskGraph.tasks) task.status = 'done';
+      writeFileSync(iter2TaskGraphPath, `${JSON.stringify(iter2TaskGraph, null, 2)}\n`, 'utf8');
       cpSync(closedBaselineReviewPath, iter2ReviewPath);
       cpSync(closedBaselineReviewReportPath, iter2ReviewReportPath);
 
@@ -411,6 +503,74 @@ function validateIterationCurrentFixtureCases() {
         writeResultOutput(result);
         return { status: result.status ?? 1, checks };
       }
+
+      result = runIteration(['open', '--artifacts', artifactRoot, '--iteration-id', 'iter-skip-close-2', '--idea', 'Should not open iter-003 before iter-002 close']);
+      checks += 1;
+      const skipIter2CloseOpenOutput = `${result.stdout ?? ''}${result.stderr ?? ''}`;
+      if (result.status === 0 || !skipIter2CloseOpenOutput.includes('open requires no pending_iteration')) {
+        console.error(`iteration open fixture did not require iter-002 archived close metadata: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: 1, checks };
+      }
+
+      result = runIteration(['close', '--artifacts', artifactRoot]);
+      checks += 1;
+      if (result.status !== 0 || !result.stdout.includes('iteration closed')) {
+        console.error(`iteration close iter-002 fixture check failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: result.status ?? 1, checks };
+      }
+      const iter2ClosedCurrentSpec = JSON.parse(readFileSync(state.currentSpecPath, 'utf8'));
+      if (
+        iter2ClosedCurrentSpec.last_closed_iteration?.iteration_id !== 'iter-002'
+        || !iter2ClosedCurrentSpec.closed_iterations?.some((closed) => closed.iteration_id === 'iter-002')
+      ) {
+        console.error(`iteration close iter-002 did not persist closed metadata: ${caseData.id}`);
+        console.error(JSON.stringify(iter2ClosedCurrentSpec, null, 2));
+        return { status: 1, checks };
+      }
+
+      result = runIteration(['open', '--artifacts', artifactRoot, '--iteration-id', 'iter-before-compose', '--idea', 'Should not open before composition']);
+      checks += 1;
+      const beforeComposeOpenOutput = `${result.stdout ?? ''}${result.stderr ?? ''}`;
+      if (result.status === 0 || !beforeComposeOpenOutput.includes('run `p2a_iteration compose` first')) {
+        console.error(`iteration open fixture did not require composition after multiple closes: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: 1, checks };
+      }
+
+      const iter2MetadataPath = path.join(artifactRoot, 'iterations', 'iter-002', 'iteration.json');
+      const originalIter2MetadataText = readFileSync(iter2MetadataPath, 'utf8');
+      const currentSpecBeforeConflictCompose = readFileSync(state.currentSpecPath, 'utf8');
+      const conflictIter2Metadata = JSON.parse(originalIter2MetadataText);
+      conflictIter2Metadata.baseline.effective_spec_ref = 'iterations/non-existent/gate-b-spec/spec.json';
+      writeFileSync(iter2MetadataPath, `${JSON.stringify(conflictIter2Metadata, null, 2)}\n`, 'utf8');
+      result = runIteration(['compose', '--artifacts', artifactRoot]);
+      checks += 1;
+      const conflictComposeOutput = `${result.stdout ?? ''}${result.stderr ?? ''}`;
+      if (
+        result.status === 0
+        || !conflictComposeOutput.includes('rerun with --allow-conflicts')
+        || readFileSync(state.currentSpecPath, 'utf8') !== currentSpecBeforeConflictCompose
+      ) {
+        console.error(`iteration compose conflict fixture did not fail without mutating current-spec: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: 1, checks };
+      }
+      result = runIteration(['compose', '--artifacts', artifactRoot, '--allow-conflicts']);
+      checks += 1;
+      const allowedConflictComposeCurrentSpec = JSON.parse(readFileSync(state.currentSpecPath, 'utf8'));
+      if (
+        result.status !== 0
+        || !result.stdout.includes('current spec composed with conflicts')
+        || !allowedConflictComposeCurrentSpec.open_decisions?.length
+      ) {
+        console.error(`iteration compose --allow-conflicts fixture did not write conflict decisions: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: result.status ?? 1, checks };
+      }
+      writeFileSync(state.currentSpecPath, currentSpecBeforeConflictCompose, 'utf8');
+      writeFileSync(iter2MetadataPath, originalIter2MetadataText, 'utf8');
 
       result = runIteration(['compose', '--artifacts', artifactRoot]);
       checks += 1;
@@ -426,6 +586,7 @@ function validateIterationCurrentFixtureCases() {
         || JSON.stringify(composedCurrentSpec.composed_from) !== JSON.stringify(['v1-mvp', 'iter-002'])
         || composedCurrentSpec.source_specs?.length !== 2
         || !composedCurrentSpec.closed_iterations?.some((closed) => closed.iteration_id === 'v1-mvp')
+        || !composedCurrentSpec.closed_iterations?.some((closed) => closed.iteration_id === 'iter-002')
         || !composedCurrentSpec.effective_product
         || !composedCurrentSpec.effective_implementation
         || !Array.isArray(composedCurrentSpec.superseded_refs)
@@ -434,6 +595,40 @@ function validateIterationCurrentFixtureCases() {
         console.error(`iteration compose did not write expected current-spec composition: ${caseData.id}`);
         console.error(JSON.stringify(composedCurrentSpec, null, 2));
         return { status: 1, checks };
+      }
+
+      const maintenanceGraphPath = path.join(artifactRoot, 'iterations', 'maintenance', 'gate-c-task-graph', 'task-graph.json');
+      mkdirSync(path.dirname(maintenanceGraphPath), { recursive: true });
+      writeFileSync(maintenanceGraphPath, `${JSON.stringify({
+        schema_version: 'p2a.task_graph.v1',
+        projectId: caseData.project_id,
+        version: 'maintenance',
+        sourceSpec: '../../../current-spec.json',
+        tasks: [
+          {
+            id: 'task-001',
+            title: 'Update maintenance note',
+            description: 'Fixture maintenance task used to verify maintenance graph validation.',
+            status: 'todo',
+            dependencies: [],
+            acceptanceCriteria: ['Maintenance graph validates inside the iterative root.'],
+            targetArea: 'maintenance',
+            suggestedAgentPrompt: 'Validate the maintenance graph path and schema.',
+            sourceSpecRefs: ['effective_product.problem'],
+          },
+        ],
+      }, null, 2)}\n`, 'utf8');
+
+      result = runIteration(['validate', '--artifacts', artifactRoot, '--audit-archive']);
+      checks += 1;
+      if (
+        result.status !== 0
+        || !result.stdout.includes('archived audit: 2 closed iteration(s) verified')
+        || !result.stdout.includes('maintenance: 1 task(s) valid')
+      ) {
+        console.error(`iteration archive audit after compose fixture check failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: result.status ?? 1, checks };
       }
 
       result = runIteration(['current', '--artifacts', artifactRoot, '--json']);
@@ -551,6 +746,36 @@ function validateIterationCurrentFixtureCases() {
         console.error(`iteration draft from composed baseline Gate A/B validation failed: ${caseData.id}`);
         writeResultOutput(result);
         return { status: result.status ?? 1, checks };
+      }
+
+      const approvedIter3Spec = JSON.parse(readFileSync(iter3SpecPath, 'utf8'));
+      approvedIter3Spec.approval = 'approved';
+      writeFileSync(iter3SpecPath, `${JSON.stringify(approvedIter3Spec, null, 2)}\n`, 'utf8');
+      result = runIteration(['promote-spec', '--artifacts', artifactRoot]);
+      checks += 1;
+      if (result.status !== 0 || !result.stdout.includes('active spec promoted')) {
+        console.error(`iteration promote-spec after compose fixture check failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: result.status ?? 1, checks };
+      }
+
+      result = runIteration(['validate', '--artifacts', artifactRoot, '--stage', 'gate-b-approved']);
+      checks += 1;
+      if (result.status !== 0 || !result.stdout.includes('stage: gate-b-approved')) {
+        console.error(`iteration planning validate after composed promote-spec failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: result.status ?? 1, checks };
+      }
+
+      const promotedIter3CurrentSpec = JSON.parse(readFileSync(state.currentSpecPath, 'utf8'));
+      if (
+        JSON.stringify(promotedIter3CurrentSpec.composed_from) !== JSON.stringify(['v1-mvp', 'iter-002'])
+        || promotedIter3CurrentSpec.source_specs?.length !== 2
+        || promotedIter3CurrentSpec.pending_iteration?.status !== 'gate_b_approved'
+      ) {
+        console.error(`iteration promote-spec after compose should preserve composed source set: ${caseData.id}`);
+        console.error(JSON.stringify(promotedIter3CurrentSpec, null, 2));
+        return { status: 1, checks };
       }
 
       const currentSpec = JSON.parse(readFileSync(state.currentSpecPath, 'utf8'));
