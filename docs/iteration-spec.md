@@ -9,7 +9,14 @@
 - 구현됨: `scripts/p2a_iteration.mjs init`으로 greenfield `artifacts/<project_id>/gate-*` 산출물을 `iterations/<iter-id>/gate-*` 구조로 변환한다.
 - 구현됨: 변환 시 루트 `status.md`, `current-spec.json`, lazy `iterations/maintenance/README.md`를 생성한다.
 - 구현됨: 이동된 spec, task graph, review를 다시 검증하고 `task-graph.sourceSpec`를 반복 구조 기준으로 rebase한다.
-- 미구현: 새 반복 open/close 명령, archived 동결, active iteration 자동 인식, `current-spec.json` 다중 조합, baseline-aware intake/spec, 반복 구조 handoff 적응.
+- 구현됨: `p2a_iteration.mjs current`와 `p2a_tasks.mjs --artifacts`가 active iteration을 자동 인식한다.
+- 구현됨: `p2a_iteration.mjs validate`가 active 반복 구조, Gate B-D readiness, close-ready task 완료 조건을 검증한다.
+- 구현됨: `p2a_iteration.mjs open`이 close-ready baseline 위에 새 active 반복 skeleton과 metadata를 생성한다.
+- 구현됨: `p2a_iteration.mjs draft`가 `current-spec.json.pending_iteration`의 baseline과 변경 아이디어로 Gate A/B delta draft 산출물을 생성한다.
+- 구현됨: `p2a_iteration.mjs compose`가 approved + close-ready 반복 spec들을 `current-spec.json` effective view로 조합한다.
+- 구현됨: `p2a_handoff.mjs --iteration-id active`가 반복 구조 active 산출물과 `current-spec.json`을 대상 프로젝트로 인계한다.
+- 구현됨: `p2a_iteration.mjs close`가 close-ready active 반복을 archived metadata로 표시하고 다음 `open`의 baseline으로 고정한다.
+- 미구현: archived append-only 감사/동결.
 - 미구현: 구조적 diff 기반 재작업 task 생성, agent 실행 로그, worktree 분리, 결과 diff 연결.
 
 ## 1. 배경과 목적
@@ -98,7 +105,7 @@ artifacts/<project>/
 
 `status.md`는 기존 v1의 standing 진행상태/결정 인덱스 역할을 확장해 반복 인덱스와 현재 활성 포인터를 함께 갖는다. `current-spec.json`은 모든 완료 반복의 유효 spec을 조합한 현재 기준이며, 다음 intake/spec 단계가 baseline으로 읽는 파일이다.
 
-현재 구현은 첫 반복 하나를 가리키는 thin pointer만 만든다. 다중 반복 composition은 아직 구현되지 않았다.
+현재 구현은 첫 반복에서는 thin pointer를 만들고, 반복이 2개 이상 close-ready 상태가 되면 `p2a_iteration.mjs compose`로 `current-spec.json` 조합본을 생성한다.
 
 ### 2-4. `maintenance`는 작은 변경의 집이다
 
@@ -217,7 +224,33 @@ node scripts/p2a_iteration.mjs init \
 4. `iterations/maintenance/README.md`를 만든다. 빈 task graph는 `schemas/task-graph.schema.json`의 최소 task 수 제약을 위반하므로 만들지 않는다.
 5. 이동된 spec, task graph, review를 다시 검증한다.
 
-### 6-2. 후속 명령 후보
+```bash
+node scripts/p2a_iteration.mjs current --artifacts artifacts/<project_id>
+```
+
+`current`는 active iteration id, task graph 경로, current spec 경로를 출력해 `p2a_tasks`와 후속 handoff가 같은 기준을 읽게 한다.
+
+```bash
+node scripts/p2a_iteration.mjs validate \
+  --artifacts artifacts/<project_id>
+```
+
+`validate`는 루트 `status.md`와 `current-spec.json`의 active pointer 일치, active iteration Gate B-D 산출물, task graph dependency, Gate D review blocker 여부를 확인한다.
+
+```bash
+node scripts/p2a_iteration.mjs validate \
+  --artifacts artifacts/<project_id> \
+  --require-close-ready
+```
+
+`--require-close-ready`는 모든 active iteration task가 `done`인지 추가로 확인한다.
+
+```bash
+node scripts/p2a_iteration.mjs close \
+  --artifacts artifacts/<project_id>
+```
+
+`close`는 active 반복의 Gate B-D 통과, `review.json.blocking_issues: []`, 모든 task `done`을 재확인한 뒤 `iterations/<iter-id>/iteration.json`을 `status: "archived"`로 갱신한다. 루트 `current-spec.json`에는 `last_closed_iteration`과 `closed_iterations`가 기록되고, `status.md` 반복 인덱스에는 close 시점이 남는다. active pointer는 닫힌 반복에 그대로 유지되므로 곧바로 다음 `open`이 close-ready baseline을 읽을 수 있다. `--iteration-id active`가 기본값이며, 현재 구현은 active 반복 close만 지원한다.
 
 ```bash
 node scripts/p2a_iteration.mjs open \
@@ -226,31 +259,45 @@ node scripts/p2a_iteration.mjs open \
   --idea "<change idea>"
 ```
 
-후속 `open`은 `current-spec.json`과 변경 아이디어를 baseline-aware intake/spec 입력으로 사용해야 한다.
+`open`은 현재 active 반복이 close-ready일 때만 새 반복 skeleton을 생성한다. 새 반복에는 `iteration.json`, `README.md`, Gate A-D 디렉터리, Gate A/B 작성 위치 안내가 생기며, 루트 `status.md`와 `current-spec.json.active_iteration`은 새 반복을 가리킨다. 이 시점에는 baseline-aware spec 자동 생성은 하지 않으므로 Gate B-D JSON 산출물이 생기기 전까지 `validate`는 실패한다.
 
 ```bash
-node scripts/p2a_iteration.mjs close \
-  --artifacts artifacts/<project_id> \
-  --iteration-id <iter-id>
+node scripts/p2a_iteration.mjs draft \
+  --artifacts artifacts/<project_id>
 ```
 
-후속 `close`는 다음을 확인해야 한다.
+`draft`는 `open`으로 저장된 `current-spec.json.pending_iteration.idea`와 `baseline_effective_spec_ref`를 읽어 active 반복의 Gate A/B 초안을 생성한다.
 
-- 해당 반복의 Gate B-D가 통과됐다.
-- task graph의 모든 task가 `done`이거나 사용자가 명시적으로 남긴 `deferred`/`non-goal` 상태로 처분됐다. 현재 task schema에는 `deferred`가 없으므로 v1에서는 모든 task `done`을 기본 조건으로 둔다.
-- `review.json.blocking_issues`가 비어 있다.
-- `current-spec.json` composition을 갱신할 수 있다.
-- 루트 `status.md` 반복 인덱스가 archived 상태와 close 시점을 기록한다.
+생성 산출물:
+
+- `iterations/<iter-id>/gate-a-intake/intake.json`
+- `iterations/<iter-id>/gate-a-intake/intake.md`
+- `iterations/<iter-id>/gate-b-spec/spec.json`
+- `iterations/<iter-id>/gate-b-spec/product-spec.md`
+- `iterations/<iter-id>/gate-b-spec/implementation-plan.md`
+
+기본 동작은 기존 Gate A/B 파일이 있으면 중단한다. 변경 아이디어를 덮어 쓰려면 `--idea "<change idea>"`, 기존 초안을 재생성하려면 `--force`를 명시한다. 생성된 `spec.json`은 `approval: "draft"`이므로 Gate C task graph 생성 전 사용자 검토와 승인 단계가 필요하다. `current-spec.json.effective_spec_ref`는 계속 baseline spec을 가리키고, 새 반복 spec은 `pending_iteration.artifacts.spec_ref`에 기록된다.
 
 ```bash
-node scripts/p2a_iteration.mjs current --artifacts artifacts/<project_id>
+node scripts/p2a_iteration.mjs compose \
+  --artifacts artifacts/<project_id>
 ```
 
-후속 `current`는 active iteration id, task graph 경로, current spec 경로를 출력해 `p2a_tasks`와 `p2a_handoff`가 같은 기준을 읽게 한다.
+`compose`는 반복 디렉터리들을 순서대로 읽어 approved + close-ready 상태인 반복만 `current-spec.json`의 current-effective view로 조합한다. 포함 조건은 다음과 같다.
+
+- `gate-b-spec/spec.json`이 존재하고 `approval: "approved"`이며 `open_decisions`가 비어 있다.
+- `gate-c-task-graph/task-graph.json`이 존재하고 모든 task가 `done`이다.
+- `gate-d-review/review.json`이 존재하고 `blocking_issues`가 비어 있다.
+
+조합 결과는 `effective_spec_ref: "current-spec.json"`로 바뀌며, 다음 `open`/`draft`는 개별 반복 spec이 아니라 `effective_product`와 `effective_implementation`을 baseline으로 읽는다. `close`가 기록한 metadata가 있으면 source status는 `archived`로 보존된다. non-active source는 `source_specs.status: "archived"`로 추론하고, active source는 task 완료 여부에 따라 `close-ready` 또는 `active`로 기록한다.
+
+### 6-2. 후속 명령 후보
+
+후속 `close` 고도화는 archived 반복의 append-only 감사, `deferred`/`non-goal` 같은 task 처분 상태 지원, close 시점의 자동 composition 갱신이다. 현재 task schema에는 `deferred`가 없으므로 v1 close 조건은 모든 task `done`이다.
 
 ## 7. `current-spec.json` 계약
 
-현재 구현은 thin pointer다.
+초기 상태는 thin pointer다.
 
 ```json
 {
@@ -263,7 +310,27 @@ node scripts/p2a_iteration.mjs current --artifacts artifacts/<project_id>
 }
 ```
 
-후속 composition 구현에서는 다음 필드를 추가한다.
+`open`과 `draft` 중인 반복은 `pending_iteration`을 함께 기록한다.
+
+```json
+{
+  "pending_iteration": {
+    "iteration_id": "iter-002",
+    "status": "gate_b_draft",
+    "idea": "변경 아이디어",
+    "baseline_iteration": "v1-mvp",
+    "baseline_effective_spec_ref": "iterations/v1-mvp/gate-b-spec/spec.json",
+    "artifacts": {
+      "intake_ref": "iterations/iter-002/gate-a-intake/intake.json",
+      "spec_ref": "iterations/iter-002/gate-b-spec/spec.json"
+    }
+  }
+}
+```
+
+이 단계의 `effective_spec_ref`는 새 draft가 아니라 안정된 baseline을 유지한다. 새 draft는 승인과 Gate C/D 검증을 통과한 뒤 후속 close/composition 단계에서 current-effective view로 반영한다.
+
+`compose` 이후에는 다음 필드가 추가된다.
 
 ```json
 {
@@ -276,54 +343,60 @@ node scripts/p2a_iteration.mjs current --artifacts artifacts/<project_id>
     {
       "iteration_id": "v1-mvp",
       "spec_ref": "iterations/v1-mvp/gate-b-spec/spec.json",
-      "status": "archived"
+      "status": "archived",
+      "approval": "approved"
     }
   ],
   "effective_product": {},
   "effective_implementation": {},
-  "overrides": [],
-  "superseded_refs": []
+  "superseded_refs": [],
+  "open_decisions": [],
+  "composition_conflicts": []
 }
 ```
 
 조합 규칙:
 
 - archived 반복은 history로 보존한다.
-- 최신 반복이 명시적으로 대체한 spec 항목은 `superseded_refs`에 기록한다.
+- 최신 반복이 대체한 spec field는 `superseded_refs`에 `superseded_ref`와 `replaced_by_ref`로 기록한다.
 - `effective_product`와 `effective_implementation`은 다음 intake/spec가 읽을 현재 기준이다.
-- 모호한 충돌은 자동 병합하지 않고 다음 반복의 `needs_user_decision` 또는 spec `open_decisions`로 올린다.
+- 모호한 충돌은 자동 병합하지 않고 `current-spec.json.open_decisions`에 composition decision으로 올린다. `validate`와 다음 `draft`는 unresolved composition decision이 있으면 실패한다.
 
 ## 8. 검증 계약
 
-반복 구조 validator는 후속 구현에서 다음을 확인해야 한다.
+반복 구조 validator는 `p2a_iteration.mjs validate`에서 시작한다. 현재 구현은 다음을 확인한다.
 
 - 루트 `status.md`가 active iteration을 가리킨다.
 - `current-spec.json.active_iteration`이 실제 `iterations/<id>/`와 일치한다.
-- active iteration의 Gate A-D 산출물이 기존 `validate_artifacts.mjs` 검증을 통과한다.
-- archived iteration은 append-only로 취급한다.
+- active iteration의 Gate B-D 산출물이 존재하고 기존 JSON schema 검증을 통과한다.
 - 반복 내부 task dependencies는 같은 반복 안의 task id만 참조한다.
-- `maintenance` task graph가 존재하면 일반 task graph schema를 통과한다.
 - close 대상 반복은 `review.json.blocking_issues: []`이고 task가 모두 완료 상태다.
+- `current-spec.json`이 composition 형태이면 `source_specs`, `composed_from`, `effective_product`, `effective_implementation`, `open_decisions` 상태를 검증한다.
 
-기존 `validate_artifacts.mjs --artifact-root`는 greenfield root 구조를 검증한다. 반복 구조 검증은 별도 옵션을 추가하거나 `p2a_iteration.mjs` 내부 validator로 시작한다.
+기존 `validate_artifacts.mjs --artifact-root`는 greenfield root 구조를 검증한다. 반복 구조 검증은 `p2a_iteration.mjs validate`가 담당한다.
 
-후보 명령:
+현재 명령:
 
 ```bash
-node scripts/validate_artifacts.mjs \
-  --iteration-root artifacts/<project_id> \
-  --require-active-ready
+node scripts/p2a_iteration.mjs validate \
+  --artifacts artifacts/<project_id>
+
+node scripts/p2a_iteration.mjs validate \
+  --artifacts artifacts/<project_id> \
+  --require-close-ready
 ```
+
+후속 validator 확장은 archived iteration append-only 감사와 maintenance task graph 검증이다.
 
 ## 9. handoff 적응
 
-기존 `p2a_handoff.mjs`는 greenfield `artifacts/<project_id>/gate-*` root를 전제로 한다. 반복 구조에서는 다음 중 하나를 선택해야 한다.
+기존 `p2a_handoff.mjs`는 greenfield `artifacts/<project_id>/gate-*` root를 계속 지원한다. 반복 구조 root(`current-spec.json` + `iterations/`)를 넘기면 기본값은 active 반복 인계다.
 
 1. `--iteration-id <id>`를 명시해 특정 반복을 인계한다.
 2. `current-spec.json.active_iteration`과 루트 `status.md`를 읽어 active 반복을 자동 선택한다.
 3. 대상 프로젝트에는 `.plan2agent/artifacts/`에 active 반복 산출물을 배치하고, `.plan2agent/current-spec.json`도 함께 배치한다.
 
-권장 기본값은 active 반복 자동 선택이다. 다만 명령형 재현성을 위해 `--iteration-id` override를 제공한다.
+기본값은 `--iteration-id active`다. 다만 명령형 재현성을 위해 특정 iteration id override도 제공한다.
 
 ```bash
 node scripts/p2a_handoff.mjs \
@@ -333,6 +406,19 @@ node scripts/p2a_handoff.mjs \
   --iteration-id active \
   --overwrite
 ```
+
+반복 handoff는 active 반복의 Gate B-D가 인계 가능한 상태인지 검증한 뒤 다음을 쓴다.
+
+- `.plan2agent/artifacts/product-spec.md`
+- `.plan2agent/artifacts/implementation-plan.md`
+- `.plan2agent/artifacts/spec.json`
+- `.plan2agent/artifacts/task-graph.json`
+- `.plan2agent/artifacts/review-report.md`
+- `.plan2agent/artifacts/review.json`
+- `.plan2agent/artifacts/status.md`
+- `.plan2agent/current-spec.json`
+
+`--include-intake`를 붙이면 active 반복의 Gate A intake도 `.plan2agent/artifacts/`로 함께 복사한다. 반복 history 보존을 위해 iterative root에서는 `--mode move`를 지원하지 않고 `copy`만 허용한다.
 
 ## 10. 비목표와 후속 고도화
 
@@ -352,13 +438,15 @@ node scripts/p2a_handoff.mjs \
 | 순서 | 조각 | 상태 | 이유 |
 | --- | --- | --- | --- |
 | 1 | 레이아웃/인덱스 규약 + greenfield migration | 부분 완료 | `p2a_iteration.mjs init`으로 초기 migration은 가능하다. |
-| 2 | `status.md` 반복 인덱스 | 부분 완료 | 초기 active pointer는 생성하지만 open/close/archived 상태 전이는 없다. |
-| 3 | `current-spec.json` 조합 규칙 | 미구현 | baseline-aware intake/spec의 입력 기준을 고정해야 한다. |
-| 4 | `p2a_tasks` active iteration 인식 | 미구현 | task 상태 변경이 현재 반복 graph에 적용되어야 한다. |
-| 5 | baseline-aware intake/spec skill | 미구현 | 현재 유효 spec + 변경 아이디어 -> 다음 반복 delta를 만드는 핵심 신규 기능이다. |
-| 6 | handoff 적응 | 미구현 | 활성 반복 산출물과 current-effective view를 대상 프로젝트로 덮어쓴다. |
-| 7 | 반복 open/close 명령 | 미구현 | 반복 생성, 마감, archived 표시, 다음 반복 open을 자동화한다. |
-| 8 | 반복 fixture/golden | 미구현 | 다회차 회귀를 고정하려면 greenfield -> init -> open/close fixture가 필요하다. |
+| 2 | `status.md` 반복 인덱스 | 부분 완료 | init/open/close 전이는 기록한다. 전체 반복 history 누적 렌더링과 append-only 감사는 후속이다. |
+| 3 | `current-spec.json` 조합 규칙 | 완료 | `p2a_iteration.mjs compose`가 approved + close-ready 반복들을 current-effective view로 조합한다. |
+| 4 | `p2a_tasks` active iteration 인식 | 완료 | `--artifacts`가 active 반복 graph를 찾아 task 조회와 상태 변경에 사용한다. |
+| 4-1 | 반복 구조 validator | 완료 | `p2a_iteration.mjs validate`가 active 반복 구조와 close-ready 조건을 검증한다. |
+| 4-2 | 반복 open skeleton | 완료 | `p2a_iteration.mjs open`이 close-ready baseline 위에 새 반복 디렉터리와 metadata를 만든다. |
+| 5 | baseline-aware Gate A/B draft | 부분 완료 | `p2a_iteration.mjs draft`가 current-spec baseline + 변경 아이디어로 delta intake/spec 초안을 만든다. 구조적 diff/질문 고도화는 후속이다. |
+| 6 | handoff 적응 | 완료 | `p2a_handoff.mjs`가 active 반복 산출물과 current-effective view를 대상 프로젝트로 복사한다. |
+| 7 | 반복 open/close 명령 | 완료 | 반복 생성, close-ready 마감, archived metadata 표시, 다음 반복 open을 자동화한다. |
+| 8 | 반복 fixture/golden | 완료 | greenfield -> init -> current -> tasks ready -> close -> open -> validate/current root 흐름과 draft/compose/handoff 회귀를 고정했다. |
 
 ## 12. 검증 메모
 

@@ -1,18 +1,20 @@
 #!/usr/bin/env node
 /** Manage Plan2Agent task graph status and dependency workflow. */
 
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { createInterface } from 'node:readline/promises';
 import path from 'node:path';
 import process from 'node:process';
 import { Readable } from 'node:stream';
 import { fileURLToPath } from 'node:url';
 import { validateTaskGraphData, ValidationError } from './validate_artifacts.mjs';
+import { resolveIterationState } from './p2a_iteration_state.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const ROOT = path.resolve(path.dirname(__filename), '..');
 const VALID_TRANSITIONS = new Set(['start', 'done', 'block', 'todo']);
 const DEFAULT_GRAPH_PATH = '.plan2agent/artifacts/task-graph.json';
+const DEFAULT_ARTIFACT_CANDIDATES = ['.', '.plan2agent', '.plan2agent/artifacts'];
 const INTERACTIVE_COMMANDS = [
   { command: 'list', description: '전체 task와 진행 상태표' },
   { command: 'ready', description: '지금 시작 가능한 task' },
@@ -27,7 +29,9 @@ const TASK_ID_COMMANDS = new Set(['show', 'prompt', 'start', 'done', 'block', 't
 
 function usage() {
   return [
-    'Usage: node scripts/p2a_tasks.mjs <command> --graph <path> [--spec <path>] [task-id]',
+    'Usage:',
+    '  node scripts/p2a_tasks.mjs <command> --graph <path> [--spec <path>] [task-id]',
+    '  node scripts/p2a_tasks.mjs <command> --artifacts <iterative-project-dir> [task-id]',
     '',
     'Commands:',
     '  list                 Show all tasks with readiness.',
@@ -38,6 +42,11 @@ function usage() {
     '  done <task-id>       Mark an in_progress task done.',
     '  block <task-id>      Mark a task blocked.',
     '  todo <task-id>       Mark a task todo.',
+    '',
+    'Options:',
+    '  --graph <path>       Task graph JSON path.',
+    '  --artifacts <dir>    Iterative artifact root; uses the active iteration task graph.',
+    '  --spec <path>        Spec JSON path for prompt context. Only supported with --graph.',
   ].join('\n');
 }
 
@@ -45,6 +54,7 @@ function parseArgs(argv) {
   const [command, ...rest] = argv;
   if (!command || command === '--help' || command === '-h') return { help: true };
   let graphPath = null;
+  let artifactsPath = null;
   let specPath = null;
   const positional = [];
   for (let index = 0; index < rest.length; index += 1) {
@@ -52,6 +62,9 @@ function parseArgs(argv) {
     if (arg === '--graph') {
       graphPath = rest[++index];
       if (!graphPath) throw new Error('--graph requires a path');
+    } else if (arg === '--artifacts') {
+      artifactsPath = rest[++index];
+      if (!artifactsPath) throw new Error('--artifacts requires a directory');
     } else if (arg === '--spec') {
       specPath = rest[++index];
       if (!specPath) throw new Error('--spec requires a path');
@@ -61,8 +74,21 @@ function parseArgs(argv) {
       positional.push(arg);
     }
   }
-  if (!graphPath) throw new Error('--graph is required');
-  return { command, graphPath, specPath, taskId: positional[0], extra: positional.slice(1) };
+  if (graphPath && artifactsPath) throw new Error('--graph and --artifacts cannot be used together');
+  if (!graphPath && !artifactsPath) throw new Error('--graph or --artifacts is required');
+  if (artifactsPath && specPath) throw new Error('--spec is only supported with --graph; --artifacts uses the active iteration spec');
+  return { command, graphPath, artifactsPath, specPath, taskId: positional[0], extra: positional.slice(1), iterationState: null };
+}
+
+function resolveTaskInputs(args) {
+  if (!args.artifactsPath) return args;
+  const iterationState = resolveIterationState(args.artifactsPath);
+  return {
+    ...args,
+    graphPath: iterationState.taskGraphPath,
+    specPath: iterationState.specPath,
+    iterationState,
+  };
 }
 
 function loadGraph(graphPath) {
@@ -236,6 +262,33 @@ function interactiveGraphDefault() {
   return existsSync(DEFAULT_GRAPH_PATH) ? DEFAULT_GRAPH_PATH : null;
 }
 
+function isIterativeArtifactRoot(candidate) {
+  return existsSync(path.join(candidate, 'current-spec.json')) && existsSync(path.join(candidate, 'iterations'));
+}
+
+function interactiveArtifactsDefault() {
+  for (const candidate of DEFAULT_ARTIFACT_CANDIDATES) {
+    if (isIterativeArtifactRoot(candidate)) return candidate;
+  }
+
+  const projectDefaults = listArtifactProjectDefaults();
+  return projectDefaults.length === 1 ? projectDefaults[0] : null;
+}
+
+function listArtifactProjectDefaults() {
+  const artifactsRoot = path.join(process.cwd(), 'artifacts');
+  if (!existsSync(artifactsRoot)) return [];
+  try {
+    return readdirSync(artifactsRoot, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => path.join('artifacts', entry.name))
+      .filter((candidate) => isIterativeArtifactRoot(candidate))
+      .sort();
+  } catch {
+    return [];
+  }
+}
+
 async function buildInteractiveArgv(rl) {
   const selected = await askMenu(
     rl,
@@ -245,15 +298,41 @@ async function buildInteractiveArgv(rl) {
   );
   if (!selected) return null;
 
-  const graphPath = await askRequired(
+  const source = await askMenu(
     rl,
-    'graph',
-    'task graph JSON 경로',
-    interactiveGraphDefault(),
+    'task 기준을 선택하세요.',
+    [
+      { mode: 'artifacts', label: 'active artifacts', description: '반복 artifact 루트에서 active iteration을 자동 인식' },
+      { mode: 'graph', label: 'graph file', description: 'task graph JSON 경로 직접 입력' },
+    ],
+    (item, number) => `${number}) ${item.label.padEnd(16)} ${item.description}`,
   );
-  if (!graphPath) return null;
+  if (!source) return null;
 
-  const argv = [selected.command, '--graph', graphPath];
+  let argv;
+  let graphPath;
+  if (source.mode === 'artifacts') {
+    const artifactsPath = await askRequired(
+      rl,
+      'artifacts',
+      '반복 artifact 루트',
+      interactiveArtifactsDefault(),
+    );
+    if (!artifactsPath) return null;
+    const iterationState = resolveIterationState(artifactsPath);
+    graphPath = iterationState.taskGraphPath;
+    argv = [selected.command, '--artifacts', artifactsPath];
+  } else {
+    graphPath = await askRequired(
+      rl,
+      'graph',
+      'task graph JSON 경로',
+      interactiveGraphDefault(),
+    );
+    if (!graphPath) return null;
+    argv = [selected.command, '--graph', graphPath];
+  }
+
   if (TASK_ID_COMMANDS.has(selected.command)) {
     const graph = loadGraph(graphPath);
     validateTaskGraphData(graph);
@@ -265,7 +344,7 @@ async function buildInteractiveArgv(rl) {
     );
     if (!task) return null;
 
-    if (selected.command === 'prompt') {
+    if (selected.command === 'prompt' && source.mode === 'graph') {
       const specPath = await rl.question('spec [자동 해석] - source spec JSON 경로(Enter=--spec 생략): ');
       if (specPath.trim().toLowerCase() === 'q') return null;
       if (specPath.trim() !== '') argv.push('--spec', specPath.trim());
@@ -327,6 +406,7 @@ export function main(argv = process.argv.slice(2)) {
       return 0;
     }
     if (args.extra?.length) throw new Error(`unexpected extra argument(s): ${args.extra.join(', ')}`);
+    args = resolveTaskInputs(args);
 
     const graph = loadGraph(args.graphPath);
     validateTaskGraphData(graph);

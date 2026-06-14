@@ -21,14 +21,19 @@ import {
   loadJson,
   validateArtifactRoot,
   validateHandoffReadyArtifactRoot,
+  validateReviewPass,
+  validateSpec,
+  validateTaskGraph,
   ValidationError,
 } from './validate_artifacts.mjs';
+import { resolveIterationState } from './p2a_iteration_state.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const ROOT = path.resolve(path.dirname(__filename), '..');
 const VALID_MODES = new Set(['copy', 'move']);
 const ARTIFACT_TARGET_DIR = path.join('.plan2agent', 'artifacts');
 const REBASED_SOURCE_SPEC = 'spec.json';
+const DEFAULT_ITERATION_ID = 'active';
 
 function usage() {
   return [
@@ -36,6 +41,7 @@ function usage() {
     '',
     'Options:',
     '  --mode copy|move     Copy artifacts by default; move removes source files after successful write.',
+    '  --iteration-id <id>  Use iterative artifacts. Default: active when --artifacts is an iterative root.',
     '  --include-intake     Include gate-a-intake/intake.json and intake.md.',
     '  --overwrite          Allow replacing existing target files.',
     '  --dry-run            Validate and print the handoff plan without writing files.',
@@ -46,6 +52,8 @@ function usage() {
 function parseArgs(argv) {
   const args = {
     mode: 'copy',
+    iterationId: DEFAULT_ITERATION_ID,
+    iterationIdProvided: false,
     includeIntake: false,
     overwrite: false,
     dryRun: false,
@@ -68,6 +76,10 @@ function parseArgs(argv) {
       args.mode = argv[++index];
       if (!args.mode) throw new Error('--mode requires copy or move');
       if (!VALID_MODES.has(args.mode)) throw new Error(`--mode must be copy or move, got ${JSON.stringify(args.mode)}`);
+    } else if (arg === '--iteration-id') {
+      args.iterationId = argv[++index];
+      if (!args.iterationId) throw new Error('--iteration-id requires active or an iteration id');
+      args.iterationIdProvided = true;
     } else if (arg === '--include-intake') {
       args.includeIntake = true;
     } else if (arg === '--overwrite') {
@@ -109,6 +121,109 @@ function validateGates(artifactsRoot, projectId) {
   return validateHandoffReadyArtifactRoot(artifactsRoot, { projectId }).paths;
 }
 
+function isIterativeArtifactRoot(artifactsRoot) {
+  return existsSync(path.join(artifactsRoot, 'current-spec.json'))
+    && existsSync(path.join(artifactsRoot, 'iterations'))
+    && lstatSync(path.join(artifactsRoot, 'iterations')).isDirectory();
+}
+
+function assertSafeIterationId(iterationId) {
+  if (iterationId === DEFAULT_ITERATION_ID) return;
+  if (iterationId.includes('/') || iterationId.includes('\\') || iterationId === '.' || iterationId === '..') {
+    throw new ValidationError(`--iteration-id must be "active" or a single path segment, got ${JSON.stringify(iterationId)}`);
+  }
+  if (!/^[A-Za-z0-9._-]+$/.test(iterationId)) {
+    throw new ValidationError(`--iteration-id may only contain letters, numbers, dots, underscores, and hyphens, got ${JSON.stringify(iterationId)}`);
+  }
+}
+
+function iterationGatePaths(artifactsRoot, iterationId, currentSpecPath) {
+  const iterationRoot = path.join(artifactsRoot, 'iterations', iterationId);
+  return {
+    statusDoc: path.join(artifactsRoot, 'status.md'),
+    currentSpec: currentSpecPath,
+    intakeJson: path.join(iterationRoot, 'gate-a-intake', 'intake.json'),
+    intakeMd: path.join(iterationRoot, 'gate-a-intake', 'intake.md'),
+    productSpec: path.join(iterationRoot, 'gate-b-spec', 'product-spec.md'),
+    implementationPlan: path.join(iterationRoot, 'gate-b-spec', 'implementation-plan.md'),
+    specJson: path.join(iterationRoot, 'gate-b-spec', 'spec.json'),
+    taskGraph: path.join(iterationRoot, 'gate-c-task-graph', 'task-graph.json'),
+    reviewReport: path.join(iterationRoot, 'gate-d-review', 'review-report.md'),
+    reviewJson: path.join(iterationRoot, 'gate-d-review', 'review.json'),
+  };
+}
+
+function assertProjectId(label, actual, expected) {
+  if (actual !== expected) {
+    throw new ValidationError(`${label} must match project id ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`);
+  }
+}
+
+function assertNoCurrentSpecOpenDecisions(currentSpec) {
+  const openDecisions = currentSpec.open_decisions ?? [];
+  if (!Array.isArray(openDecisions)) {
+    throw new ValidationError('current-spec.json open_decisions must be an array when present');
+  }
+  if (openDecisions.length) {
+    throw new ValidationError(`current-spec.json has unresolved open_decisions: ${JSON.stringify(openDecisions.map((decision) => decision.id ?? decision))}`);
+  }
+}
+
+function validateIterationHandoffSource(artifactsRoot, projectId, iterationIdArg) {
+  assertSafeIterationId(iterationIdArg);
+  const state = iterationIdArg === DEFAULT_ITERATION_ID
+    ? resolveIterationState(artifactsRoot)
+    : resolveIterationState(artifactsRoot, { requireReady: false });
+  const iterationId = iterationIdArg === DEFAULT_ITERATION_ID ? state.activeIteration : iterationIdArg;
+  const paths = iterationGatePaths(artifactsRoot, iterationId, state.currentSpecPath);
+
+  assertFile(paths.statusDoc, 'status.md');
+  assertFile(paths.currentSpec, 'current-spec.json');
+  assertNoCurrentSpecOpenDecisions(state.currentSpec);
+  assertFile(paths.productSpec, `iterations/${iterationId}/gate-b-spec/product-spec.md`);
+  assertFile(paths.implementationPlan, `iterations/${iterationId}/gate-b-spec/implementation-plan.md`);
+  assertFile(paths.specJson, `iterations/${iterationId}/gate-b-spec/spec.json`);
+  assertFile(paths.taskGraph, `iterations/${iterationId}/gate-c-task-graph/task-graph.json`);
+  assertFile(paths.reviewReport, `iterations/${iterationId}/gate-d-review/review-report.md`);
+  assertFile(paths.reviewJson, `iterations/${iterationId}/gate-d-review/review.json`);
+
+  const spec = validateSpec(paths.specJson);
+  if (spec.approval !== 'approved') throw new ValidationError('handoff requires spec.approval to be approved');
+  if (spec.open_decisions.length) throw new ValidationError('handoff requires spec.open_decisions to be empty');
+  assertProjectId('spec.project_id', spec.project_id, projectId);
+
+  const taskGraph = validateTaskGraph(paths.taskGraph, paths.specJson);
+  assertProjectId('taskGraph.projectId', taskGraph.projectId, projectId);
+  const review = validateReviewPass(paths.reviewJson);
+  assertProjectId('review.projectId', review.projectId, projectId);
+
+  return {
+    kind: 'iteration',
+    iterationId,
+    paths,
+    currentSpecPath: paths.currentSpec,
+  };
+}
+
+function resolveHandoffSource(artifactsRoot, args) {
+  const iterative = isIterativeArtifactRoot(artifactsRoot);
+  if (iterative) {
+    if (args.mode === 'move') {
+      throw new Error('--mode move is not supported for iterative artifact roots; use copy to keep iteration history intact');
+    }
+    return validateIterationHandoffSource(artifactsRoot, args.projectId, args.iterationId);
+  }
+  if (args.iterationIdProvided) {
+    throw new Error('--iteration-id requires an iterative artifact root with current-spec.json and iterations/');
+  }
+  return {
+    kind: 'greenfield',
+    iterationId: null,
+    paths: validateGates(artifactsRoot, args.projectId),
+    currentSpecPath: null,
+  };
+}
+
 function pushArtifact(plan, source, targetRoot, targetRelative, options = {}) {
   plan.push({
     type: options.type ?? 'copy',
@@ -119,7 +234,7 @@ function pushArtifact(plan, source, targetRoot, targetRelative, options = {}) {
   });
 }
 
-function buildPlan(paths, args, artifactsRoot, targetRoot) {
+function buildPlan(paths, args, artifactsRoot, targetRoot, sourceInfo) {
   const plan = [];
   pushArtifact(plan, paths.productSpec, targetRoot, path.join(ARTIFACT_TARGET_DIR, 'product-spec.md'));
   pushArtifact(plan, paths.implementationPlan, targetRoot, path.join(ARTIFACT_TARGET_DIR, 'implementation-plan.md'));
@@ -137,8 +252,12 @@ function buildPlan(paths, args, artifactsRoot, targetRoot) {
 
   assertFile(paths.statusDoc, 'status.md');
   pushArtifact(plan, paths.statusDoc, targetRoot, path.join(ARTIFACT_TARGET_DIR, 'status.md'));
+  if (sourceInfo.currentSpecPath) {
+    pushArtifact(plan, sourceInfo.currentSpecPath, targetRoot, path.join('.plan2agent', 'current-spec.json'));
+  }
 
   pushArtifact(plan, path.join(ROOT, 'scripts', 'p2a_tasks.mjs'), targetRoot, path.join('scripts', 'p2a_tasks.mjs'));
+  pushArtifact(plan, path.join(ROOT, 'scripts', 'p2a_iteration_state.mjs'), targetRoot, path.join('scripts', 'p2a_iteration_state.mjs'));
   pushArtifact(plan, path.join(ROOT, 'scripts', 'validate_artifacts.mjs'), targetRoot, path.join('scripts', 'validate_artifacts.mjs'));
   for (const schemaFile of ['intake.schema.json', 'spec.schema.json', 'task-graph.schema.json', 'review.schema.json']) {
     pushArtifact(plan, path.join(ROOT, 'schemas', schemaFile), targetRoot, path.join('schemas', schemaFile));
@@ -150,20 +269,31 @@ function buildPlan(paths, args, artifactsRoot, targetRoot) {
   const schemaFiles = plan
     .filter((item) => item.targetRelative.startsWith(`schemas${path.sep}`) || item.targetRelative.startsWith('schemas/'))
     .map((item) => normalizePath(item.targetRelative));
+  const toolFiles = [
+    'scripts/p2a_tasks.mjs',
+    'scripts/p2a_iteration_state.mjs',
+    'scripts/validate_artifacts.mjs',
+  ];
 
   const manifest = {
     schema_version: 'p2a.handoff.v1',
     projectId: args.projectId,
     sourceArtifacts: artifactsRoot,
+    sourceLayout: sourceInfo.kind,
+    sourceIterationId: sourceInfo.iterationId,
     targetProject: targetRoot,
     handoffMode: args.mode,
     createdAt: new Date().toISOString(),
-    includedTools: ['p2a_tasks', 'validate_artifacts'],
+    includedTools: ['p2a_tasks', 'p2a_iteration_state', 'validate_artifacts'],
     externalHarnesses: [],
     artifactFiles,
-    toolFiles: ['scripts/p2a_tasks.mjs', 'scripts/validate_artifacts.mjs'],
+    currentSpecFile: sourceInfo.currentSpecPath ? '.plan2agent/current-spec.json' : null,
+    toolFiles,
     schemaFiles,
-    notes: [`task-graph.sourceSpec rebased to ${REBASED_SOURCE_SPEC}`],
+    notes: [
+      `task-graph.sourceSpec rebased to ${REBASED_SOURCE_SPEC}`,
+      sourceInfo.kind === 'iteration' ? `iteration handoff source: ${sourceInfo.iterationId}` : 'greenfield handoff source',
+    ],
   };
 
   const projectConfig = buildProjectConfig(targetRoot);
@@ -250,10 +380,12 @@ function assertNoConflicts(plan, overwrite) {
   if (conflicts.length) throw new Error(`target file(s) already exist; rerun with --overwrite to replace: ${conflicts.join(', ')}`);
 }
 
-function printPlan(plan, args, artifactsRoot, targetRoot) {
+function printPlan(plan, args, artifactsRoot, targetRoot, sourceInfo) {
   console.log(`Plan2Agent handoff ${args.dryRun ? 'dry run' : 'plan'}`);
   console.log(`projectId: ${args.projectId}`);
   console.log(`mode: ${args.mode}`);
+  console.log(`sourceLayout: ${sourceInfo.kind}`);
+  if (sourceInfo.iterationId) console.log(`sourceIterationId: ${sourceInfo.iterationId}`);
   console.log(`sourceArtifacts: ${artifactsRoot}`);
   console.log(`targetProject: ${targetRoot}`);
   console.log('writes:');
@@ -580,10 +712,10 @@ export function main(argv = process.argv.slice(2)) {
       throw new Error(`--target must be a directory path, but a non-directory exists: ${targetRoot}`);
     }
 
-    const paths = validateGates(artifactsRoot, args.projectId);
-    const plan = buildPlan(paths, args, artifactsRoot, targetRoot);
+    const sourceInfo = resolveHandoffSource(artifactsRoot, args);
+    const plan = buildPlan(sourceInfo.paths, args, artifactsRoot, targetRoot, sourceInfo);
     assertNoConflicts(plan, args.overwrite);
-    printPlan(plan, args, artifactsRoot, targetRoot);
+    printPlan(plan, args, artifactsRoot, targetRoot, sourceInfo);
     if (args.dryRun) return 0;
     writePlan(plan);
     if (args.mode === 'move') cleanupMovedSources(plan, artifactsRoot);

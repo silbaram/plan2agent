@@ -415,10 +415,15 @@ v2 handoff의 확장 완료 기준:
 - 완료: `scripts/p2a_iteration.mjs init`으로 greenfield `artifacts/<project_id>/gate-*` 구조를 `iterations/<iteration_id>/gate-*` 구조로 변환한다.
 - 완료: 변환 시 `status.md`를 반복 인덱스로 재작성하고, `current-spec.json` 포인터와 lazy `maintenance/README.md`를 생성한다.
 - 완료: 이동된 spec/task graph/review를 다시 검증하고, `task-graph.sourceSpec`를 반복 구조 기준으로 rebase한다.
-- 미구현: active iteration을 `p2a_tasks.mjs`와 `p2a_handoff.mjs`가 자동 인식하는 기능.
-- 미구현: 여러 완료 반복을 조합하는 `current-spec.json` composition.
-- 미구현: baseline-aware intake/spec skill.
-- 미구현: 반복 open/close 명령과 archived 동결.
+- 완료: `p2a_iteration.mjs current`와 `p2a_tasks.mjs --artifacts`가 active iteration을 자동 인식한다.
+- 완료: `p2a_iteration.mjs validate`가 active 반복 구조, Gate B-D readiness, close-ready task 완료 조건을 검증한다.
+- 완료: `p2a_iteration.mjs open`이 close-ready baseline 위에 새 active 반복 skeleton과 metadata를 생성한다.
+- 완료: `p2a_iteration.mjs draft`가 current-spec baseline과 변경 아이디어로 Gate A/B delta draft 산출물을 생성한다.
+- 완료: `p2a_iteration.mjs compose`가 approved + close-ready 반복 spec들을 `current-spec.json` effective view로 조합한다.
+- 완료: `p2a_handoff.mjs --iteration-id active`가 반복 구조 active 산출물과 `current-spec.json`을 대상 프로젝트로 인계한다.
+- 완료: `p2a_iteration.mjs close`가 close-ready active 반복을 archived metadata로 표시하고 다음 `open`의 baseline으로 고정한다.
+- 미구현: 구조적 diff와 사용자 질문 재생성을 포함한 baseline-aware intake/spec 고도화.
+- 미구현: archived append-only 감사/동결.
 - 미구현: 구조적 diff 기반 재작업 task 자동 생성.
 
 반복 단위:
@@ -470,7 +475,7 @@ artifacts/<project>/
         task-graph.json
 ```
 
-`status.md`는 기존 v1의 standing 진행상태/결정 인덱스 역할을 확장해 반복 인덱스와 현재 활성 포인터를 함께 갖는다. `current-spec.json`은 모든 완료 반복의 유효 spec을 조합한 현재 기준이며, 다음 intake/spec 단계가 baseline으로 읽는 파일이다. 현재 구현은 첫 반복 하나를 가리키는 thin pointer까지만 제공한다.
+`status.md`는 기존 v1의 standing 진행상태/결정 인덱스 역할을 확장해 반복 인덱스와 현재 활성 포인터를 함께 갖는다. `current-spec.json`은 모든 완료 반복의 유효 spec을 조합한 현재 기준이며, 다음 intake/spec 단계가 baseline으로 읽는 파일이다. 현재 구현은 첫 반복 thin pointer와 approved + close-ready 반복들을 조합하는 `compose` 명령을 제공한다.
 
 교차 반복 의존성:
 
@@ -513,12 +518,14 @@ p2a_tasks로 이어서 개발
 | 순서 | 조각 | 상태 | 이유 |
 | --- | --- | --- | --- |
 | 1 | 레이아웃/인덱스 규약 + greenfield migration | 부분 완료 | `p2a_iteration.mjs init`으로 초기 migration은 가능하다. |
-| 2 | `status.md` 반복 인덱스 | 부분 완료 | 초기 active pointer는 생성하지만 open/close/archived 상태 전이는 없다. |
-| 3 | `current-spec.json` 조합 규칙 | 미구현 | 현재는 첫 반복을 가리키는 thin pointer다. |
-| 4 | `p2a_tasks` 활성 반복 인식 | 미구현 | task 상태 변경이 현재 반복 graph에 적용되어야 한다. |
-| 5 | baseline-aware intake/spec skill | 미구현 | 현재 유효 spec + 변경 아이디어 -> 다음 반복 delta를 만드는 핵심 신규 기능이다. |
-| 6 | handoff 적응 | 미구현 | 활성 반복 산출물과 current-effective view를 대상 프로젝트로 덮어쓴다. |
-| 7 | 반복 open/close 명령 | 미구현 | 반복 생성, 마감, archived 표시, 다음 반복 open을 자동화한다. |
+| 2 | `status.md` 반복 인덱스 | 부분 완료 | init/open/close 전이는 기록한다. 전체 반복 history 누적 렌더링과 append-only 감사는 후속이다. |
+| 3 | `current-spec.json` 조합 규칙 | 완료 | `p2a_iteration.mjs compose`가 approved + close-ready 반복들을 current-effective view로 조합한다. |
+| 4 | `p2a_tasks` 활성 반복 인식 | 완료 | `--artifacts`가 active 반복 graph를 찾아 task 조회와 상태 변경에 사용한다. |
+| 4-1 | 반복 구조 validator | 완료 | `p2a_iteration.mjs validate`가 active 반복 구조와 close-ready 조건을 검증한다. |
+| 4-2 | 반복 open skeleton | 완료 | `p2a_iteration.mjs open`이 close-ready baseline 위에 새 반복 디렉터리와 metadata를 만든다. |
+| 5 | baseline-aware Gate A/B draft | 부분 완료 | `p2a_iteration.mjs draft`가 current-spec baseline + 변경 아이디어로 delta intake/spec 초안을 만든다. 구조적 diff/질문 고도화는 후속이다. |
+| 6 | handoff 적응 | 완료 | `p2a_handoff.mjs`가 active 반복 산출물과 current-effective view를 대상 프로젝트로 복사한다. |
+| 7 | 반복 open/close 명령 | 완료 | 반복 생성, close-ready 마감, archived metadata 표시, 다음 반복 open을 자동화한다. |
 
 초기 migration 명령:
 
@@ -533,7 +540,7 @@ migration 규칙:
 1. 기존 `gate-a-intake/`, `gate-b-spec/`, `gate-c-task-graph/`, `gate-d-review/`를 `iterations/v1-mvp/` 아래로 이동한다.
 2. 루트 `status.md`는 standing 진행상태 문서에서 반복 인덱스로 확장한다.
 3. 루트 `current-spec.json`은 `iterations/v1-mvp/gate-b-spec/spec.json`을 기준으로 생성한다.
-4. `v1-mvp` 반복은 active로 시작하고, 후속 close 명령이 생기면 archived/closed 상태로 동결한다.
+4. `v1-mvp` 반복은 active로 시작하고, `p2a_iteration close`로 close-ready 검증 후 archived metadata를 기록한다.
 5. 다음 기능 추가는 새 반복을 열고, 작은 fix는 `iterations/maintenance/gate-c-task-graph/task-graph.json`에 append한다.
 6. 후속 도구는 루트 `status.md`의 활성 반복 graph 경로를 읽어 `p2a_tasks`와 handoff 입력을 결정한다.
 
@@ -696,5 +703,5 @@ Plan2Agent 개발은 아래 흐름을 기본 협업 방식으로 둔다.
 4. 완료: v1 프로토타입은 Node.js CLI로 결정했고, UI(task board)는 v2 백로그로 둔다.
 5. 완료: §3의 task 상태와 의존성 관리는 `scripts/p2a_tasks.mjs`로 충족한다.
 6. 부분 완료: v2 개발 인계/환경 세팅은 §8-1 기준으로 관리한다. 현재 구현은 산출물/검증 도구 인계까지이며, AI 도구 복사와 Team Big Five adapter 설치가 남아 있다.
-7. 부분 완료: 반복/고도화 개발 구조는 §8-2 기준으로 관리한다. 현재 구현은 greenfield -> iteration 초기 migration까지이며, active iteration 인식과 open/close 자동화가 남아 있다.
+7. 부분 완료: 반복/고도화 개발 구조는 §8-2 기준으로 관리한다. 현재 구현은 greenfield -> iteration 초기 migration, `p2a_tasks` active iteration 인식, 반복 구조 validator, open/close, Gate A/B draft 생성, current-spec composition, active iteration handoff까지이며, 구조적 diff와 archived 감사가 남아 있다.
 8. 미완료: v2 agent 실행 로그, worktree 분리, 결과 diff 연결 방식은 §8-3 기준으로 별도 설계/구현한다.
