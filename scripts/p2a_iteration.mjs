@@ -36,7 +36,8 @@ const GATE_DIRS = ['gate-a-intake', 'gate-b-spec', 'gate-c-task-graph', 'gate-d-
 const STATUS_ORDER = ['todo', 'in_progress', 'done', 'blocked'];
 const DEFAULT_ITERATION_ID = 'v1-mvp';
 const INIT_REBASED_SOURCE_SPEC = '../gate-b-spec/spec.json';
-const COMMANDS = new Set(['init', 'current', 'validate', 'close', 'open', 'draft', 'promote-spec', 'diff-tasks', 'compose']);
+const COMMANDS = new Set(['init', 'current', 'validate', 'close', 'open', 'draft', 'promote-spec', 'diff-tasks', 'compose', 'maintenance']);
+const MAINTENANCE_ACTIONS = new Set(['add']);
 const VALIDATE_STAGES = new Set(['ready', 'gate-a', 'gate-b-draft', 'gate-b-approved']);
 const PRODUCT_FIELDS = [
   'problem',
@@ -72,6 +73,7 @@ function usage() {
     '  node scripts/p2a_iteration.mjs promote-spec --artifacts <iterative-project-dir>',
     '  node scripts/p2a_iteration.mjs diff-tasks --artifacts <iterative-project-dir> [--force]',
     '  node scripts/p2a_iteration.mjs compose --artifacts <iterative-project-dir> [--allow-conflicts]',
+    '  node scripts/p2a_iteration.mjs maintenance add --artifacts <iterative-project-dir> --title <text> --accept <text> [--accept <text> ...] [--description <text>] [--area <text>] [--prompt <text>] [--ref <value> ...] [--depends <task-id> ...] [--dry-run]',
     '',
     'Commands:',
     '  init                  Convert a greenfield artifact root into iterations/<id>/gate-*.',
@@ -83,6 +85,7 @@ function usage() {
     '  promote-spec          Record an approved active Gate B spec and initialize current-spec when needed.',
     '  diff-tasks            Generate a task graph draft from active spec changes against the baseline.',
     '  compose               Rebuild current-spec.json as a composed effective spec view.',
+    '  maintenance           Manage the always-on maintenance task graph (currently: add).',
     '',
     'Common options:',
     '  --artifacts <dir>     Artifact directory. Required.',
@@ -117,6 +120,16 @@ function usage() {
     '',
     'compose options:',
     '  --allow-conflicts     Write current-spec open_decisions when composition conflicts are detected.',
+    '',
+    'maintenance add options:',
+    '  --title <text>        Task title. Required.',
+    '  --accept <text>       Acceptance criterion. Required; repeat for multiple criteria.',
+    '  --description <text>  Task description. Defaults to --title.',
+    '  --area <text>         Task targetArea. Defaults to maintenance.',
+    '  --prompt <text>       suggestedAgentPrompt. Defaults to a generated scoped prompt.',
+    '  --ref <value>         sourceSpecRefs entry. Repeatable; defaults to maintenance.',
+    '  --depends <task-id>   Dependency task id. Repeatable; defaults to none.',
+    '  --dry-run            Print the task and graph path without writing files.',
   ].join('\n');
 }
 
@@ -134,14 +147,29 @@ function parseArgs(argv) {
     stage: null,
     auditArchive: false,
     allowConflicts: false,
+    action: null,
+    title: null,
+    description: null,
+    area: 'maintenance',
+    prompt: null,
+    acceptanceCriteria: [],
+    sourceSpecRefs: [],
+    dependencies: [],
   };
   const command = argv[0];
   if (!command) throw new Error(`missing command\n\n${usage()}`);
   if (command === '--help' || command === '-h') return { ...args, help: true };
   if (!COMMANDS.has(command)) throw new Error(`unknown command: ${command}\n\n${usage()}`);
   args.command = command;
+  let startIndex = 1;
+  if (command === 'maintenance') {
+    args.action = argv[1];
+    if (!args.action) throw new Error(`maintenance requires an action: ${[...MAINTENANCE_ACTIONS].join(', ')}`);
+    if (!MAINTENANCE_ACTIONS.has(args.action)) throw new Error(`unsupported maintenance action: ${args.action}`);
+    startIndex = 2;
+  }
 
-  for (let index = 1; index < argv.length; index += 1) {
+  for (let index = startIndex; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === '--help' || arg === '-h') {
       args.help = true;
@@ -161,7 +189,7 @@ function parseArgs(argv) {
       if (command !== 'draft' && command !== 'diff-tasks') throw new Error('--force is only supported by draft and diff-tasks');
       args.force = true;
     } else if (arg === '--dry-run') {
-      if (command !== 'init') throw new Error('--dry-run is only supported by init');
+      if (command !== 'init' && !(command === 'maintenance' && args.action === 'add')) throw new Error('--dry-run is only supported by init and maintenance add');
       args.dryRun = true;
     } else if (arg === '--json') {
       if (command !== 'current') throw new Error('--json is only supported by current');
@@ -182,6 +210,37 @@ function parseArgs(argv) {
     } else if (arg === '--allow-conflicts') {
       if (command !== 'compose') throw new Error('--allow-conflicts is only supported by compose');
       args.allowConflicts = true;
+    } else if (arg === '--title') {
+      if (command !== 'maintenance' || args.action !== 'add') throw new Error('--title is only supported by maintenance add');
+      args.title = argv[++index];
+      if (!args.title) throw new Error('--title requires a value');
+    } else if (arg === '--accept') {
+      if (command !== 'maintenance' || args.action !== 'add') throw new Error('--accept is only supported by maintenance add');
+      const value = argv[++index];
+      if (!value) throw new Error('--accept requires a value');
+      args.acceptanceCriteria.push(value);
+    } else if (arg === '--description') {
+      if (command !== 'maintenance' || args.action !== 'add') throw new Error('--description is only supported by maintenance add');
+      args.description = argv[++index];
+      if (!args.description) throw new Error('--description requires a value');
+    } else if (arg === '--area') {
+      if (command !== 'maintenance' || args.action !== 'add') throw new Error('--area is only supported by maintenance add');
+      args.area = argv[++index];
+      if (!args.area) throw new Error('--area requires a value');
+    } else if (arg === '--prompt') {
+      if (command !== 'maintenance' || args.action !== 'add') throw new Error('--prompt is only supported by maintenance add');
+      args.prompt = argv[++index];
+      if (!args.prompt) throw new Error('--prompt requires a value');
+    } else if (arg === '--ref') {
+      if (command !== 'maintenance' || args.action !== 'add') throw new Error('--ref is only supported by maintenance add');
+      const value = argv[++index];
+      if (!value) throw new Error('--ref requires a value');
+      args.sourceSpecRefs.push(value);
+    } else if (arg === '--depends') {
+      if (command !== 'maintenance' || args.action !== 'add') throw new Error('--depends is only supported by maintenance add');
+      const value = argv[++index];
+      if (!value) throw new Error('--depends requires a value');
+      args.dependencies.push(value);
     } else if (arg.startsWith('--')) {
       throw new Error(`unknown option: ${arg}`);
     } else {
@@ -192,6 +251,10 @@ function parseArgs(argv) {
   if (!args.help && !args.artifacts) throw new Error(`--artifacts is required\n\n${usage()}`);
   if (command === 'open' && !args.iterationIdProvided) throw new Error('--iteration-id is required for open');
   if (command === 'open' && (!args.idea || args.idea.trim().length === 0)) throw new Error('--idea is required for open');
+  if (command === 'maintenance' && args.action === 'add') {
+    if (!args.title || args.title.trim().length === 0) throw new Error('--title is required for maintenance add');
+    if (!args.acceptanceCriteria.length) throw new Error('--accept is required for maintenance add');
+  }
   return args;
 }
 
@@ -1636,6 +1699,70 @@ function validateMaintenanceTaskGraphIfPresent(artifactRoot) {
   return { graphPath, graph };
 }
 
+function initialMaintenanceTaskGraph(projectId) {
+  return {
+    schema_version: 'p2a.task_graph.v1',
+    projectId,
+    version: 'maintenance',
+    sourceSpec: '../../../current-spec.json',
+    tasks: [],
+  };
+}
+
+function nextMaintenanceTaskId(tasks) {
+  const max = tasks.reduce((highest, task) => {
+    const match = typeof task.id === 'string' ? task.id.match(/^task-([0-9]+)$/) : null;
+    return match ? Math.max(highest, Number.parseInt(match[1], 10)) : highest;
+  }, 0);
+  return `task-${String(max + 1).padStart(3, '0')}`;
+}
+
+function suggestedMaintenancePrompt(title, projectId) {
+  return `Apply the maintenance fix "${title}" in project ${projectId}. ` +
+    'Keep the change minimal and scoped to this fix, and add or update tests/verification as needed.';
+}
+
+function addMaintenanceTask(args) {
+  const state = resolveIterationState(args.artifacts, { requireReady: false });
+  const graphPath = maintenanceTaskGraphPath(state.artifactRoot);
+  const graph = existsSync(graphPath)
+    ? loadJson(graphPath)
+    : initialMaintenanceTaskGraph(state.projectId);
+  const task = {
+    id: nextMaintenanceTaskId(graph.tasks ?? []),
+    title: args.title,
+    description: args.description ?? args.title,
+    status: 'todo',
+    dependencies: args.dependencies,
+    acceptanceCriteria: args.acceptanceCriteria,
+    targetArea: args.area,
+    suggestedAgentPrompt: args.prompt ?? suggestedMaintenancePrompt(args.title, state.projectId),
+    sourceSpecRefs: args.sourceSpecRefs.length ? args.sourceSpecRefs : ['maintenance'],
+  };
+
+  graph.tasks.push(task);
+  validateTaskGraphData(graph);
+
+  if (args.dryRun) {
+    console.log('Plan2Agent maintenance task dry run:');
+    console.log(`- graph: ${toRelativeFromRoot(graphPath)}`);
+    console.log(`- task: ${JSON.stringify(task, null, 2)}`);
+    return 0;
+  }
+
+  mkdirSync(path.dirname(graphPath), { recursive: true });
+  writeJson(graphPath, graph);
+  console.log(`Plan2Agent maintenance task added: ${task.id}`);
+  console.log(`- graph: ${toRelativeFromRoot(graphPath)}`);
+  console.log(`- tasks: ${graph.tasks.length}`);
+  return 0;
+}
+
+function maintenance(args) {
+  if (args.action === 'add') return addMaintenanceTask(args);
+  throw new Error(`unsupported maintenance action: ${args.action}`);
+}
+
 function auditArchivedIterations(currentSpec, artifactRoot) {
   const closedIterations = currentSpec.closed_iterations ?? [];
   if (!Array.isArray(closedIterations)) {
@@ -2048,6 +2175,7 @@ export function main(argv = process.argv.slice(2)) {
     if (args.command === 'promote-spec') return promoteSpec(args);
     if (args.command === 'diff-tasks') return diffTasks(args);
     if (args.command === 'compose') return compose(args);
+    if (args.command === 'maintenance') return maintenance(args);
     throw new Error(`unknown command: ${args.command}`);
   } catch (error) {
     if (error instanceof SyntaxError || error instanceof ValidationError || error.code || error.message) {

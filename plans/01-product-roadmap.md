@@ -427,6 +427,7 @@ v2 handoff의 확장 완료 기준:
 - 완료: `p2a_handoff.mjs --iteration-id active`가 반복 구조 active 산출물과 `current-spec.json`을 대상 프로젝트로 인계한다.
 - 완료: `p2a_iteration.mjs close`가 close-ready active 반복을 archived metadata로 표시하고 다음 `open`의 close 조건으로 고정한다.
 - 완료: `p2a_iteration.mjs validate --audit-archive`가 close 시점 존재 여부/hash로 archived artifact 변경을 감지한다.
+- 완료: `p2a_iteration.mjs maintenance add`가 상시 maintenance task graph를 lazy 생성/append한다.
 - 부분 완료: 구조적 diff와 사용자 질문 재생성을 포함한 baseline-aware intake/spec 고도화.
 - 부분 완료: 구조적 diff 기반 재작업 task 자동 생성. 현재는 field-level `diff-tasks` 초안이며 semantic diff는 후속이다.
 - 미구현: agent 실행 로그, worktree 분리, 결과 diff 연결.
@@ -548,7 +549,7 @@ migration 규칙:
 2. 루트 `status.md`는 standing 진행상태 문서에서 반복 인덱스로 확장한다.
 3. 루트 `current-spec.json`은 `iterations/v1-mvp/gate-b-spec/spec.json`을 기준으로 생성한다.
 4. `v1-mvp` 반복은 active로 시작하고, `p2a_iteration close`로 close-ready 검증 후 archived metadata를 기록한다.
-5. 다음 기능 추가는 새 반복을 열고, 작은 fix는 `iterations/maintenance/gate-c-task-graph/task-graph.json`에 append한다.
+5. 다음 기능 추가는 새 반복을 열고, 작은 fix는 `p2a_iteration.mjs maintenance add`로 `iterations/maintenance/gate-c-task-graph/task-graph.json`에 append한다.
 6. 후속 도구는 루트 `status.md`의 활성 반복 graph 경로를 읽어 `p2a_tasks`와 handoff 입력을 결정한다.
 
 ## 8-3. agent 실행 결과 추적 후속 설계

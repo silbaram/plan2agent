@@ -598,33 +598,100 @@ function validateIterationCurrentFixtureCases() {
       }
 
       const maintenanceGraphPath = path.join(artifactRoot, 'iterations', 'maintenance', 'gate-c-task-graph', 'task-graph.json');
-      mkdirSync(path.dirname(maintenanceGraphPath), { recursive: true });
-      writeFileSync(maintenanceGraphPath, `${JSON.stringify({
-        schema_version: 'p2a.task_graph.v1',
-        projectId: caseData.project_id,
-        version: 'maintenance',
-        sourceSpec: '../../../current-spec.json',
-        tasks: [
-          {
-            id: 'task-001',
-            title: 'Update maintenance note',
-            description: 'Fixture maintenance task used to verify maintenance graph validation.',
-            status: 'todo',
-            dependencies: [],
-            acceptanceCriteria: ['Maintenance graph validates inside the iterative root.'],
-            targetArea: 'maintenance',
-            suggestedAgentPrompt: 'Validate the maintenance graph path and schema.',
-            sourceSpecRefs: ['effective_product.problem'],
-          },
-        ],
-      }, null, 2)}\n`, 'utf8');
+      result = runIteration([
+        'maintenance',
+        'add',
+        '--artifacts',
+        artifactRoot,
+        '--title',
+        'Update maintenance note',
+        '--description',
+        'Fixture maintenance task used to verify maintenance graph validation.',
+        '--accept',
+        'Maintenance graph validates inside the iterative root.',
+        '--prompt',
+        'Validate the maintenance graph path and schema.',
+        '--ref',
+        'effective_product.problem',
+      ]);
+      checks += 1;
+      if (result.status !== 0 || !result.stdout.includes('Plan2Agent maintenance task added: task-001') || !existsSync(maintenanceGraphPath)) {
+        console.error(`iteration maintenance add lazy-create fixture check failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: result.status ?? 1, checks };
+      }
+
+      result = runIteration([
+        'maintenance',
+        'add',
+        '--artifacts',
+        artifactRoot,
+        '--title',
+        'Fix maintenance typo',
+        '--accept',
+        'Typo is fixed.',
+      ]);
+      checks += 1;
+      if (result.status !== 0 || !result.stdout.includes('Plan2Agent maintenance task added: task-002')) {
+        console.error(`iteration maintenance add append fixture check failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: result.status ?? 1, checks };
+      }
+
+      const maintenanceGraphAfterAddsText = readFileSync(maintenanceGraphPath, 'utf8');
+      const maintenanceGraphAfterAdds = JSON.parse(maintenanceGraphAfterAddsText);
+      if (
+        maintenanceGraphAfterAdds.tasks?.length !== 2
+        || maintenanceGraphAfterAdds.version !== 'maintenance'
+        || maintenanceGraphAfterAdds.sourceSpec !== '../../../current-spec.json'
+        || JSON.stringify(maintenanceGraphAfterAdds.tasks[0].sourceSpecRefs) !== JSON.stringify(['effective_product.problem'])
+        || JSON.stringify(maintenanceGraphAfterAdds.tasks[1].sourceSpecRefs) !== JSON.stringify(['maintenance'])
+      ) {
+        console.error(`iteration maintenance add wrote unexpected graph: ${caseData.id}`);
+        console.error(JSON.stringify(maintenanceGraphAfterAdds, null, 2));
+        return { status: 1, checks };
+      }
+
+      result = runIteration([
+        'maintenance',
+        'add',
+        '--artifacts',
+        artifactRoot,
+        '--title',
+        'Missing accept should fail',
+      ]);
+      checks += 1;
+      if (result.status === 0 || readFileSync(maintenanceGraphPath, 'utf8') !== maintenanceGraphAfterAddsText) {
+        console.error(`iteration maintenance add missing --accept negative check failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: 1, checks };
+      }
+
+      result = runIteration([
+        'maintenance',
+        'add',
+        '--artifacts',
+        artifactRoot,
+        '--title',
+        'Unknown dependency should fail',
+        '--accept',
+        'Unknown dependency is rejected.',
+        '--depends',
+        'task-999',
+      ]);
+      checks += 1;
+      if (result.status === 0 || readFileSync(maintenanceGraphPath, 'utf8') !== maintenanceGraphAfterAddsText) {
+        console.error(`iteration maintenance add unknown dependency negative check failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: 1, checks };
+      }
 
       result = runIteration(['validate', '--artifacts', artifactRoot, '--audit-archive']);
       checks += 1;
       if (
         result.status !== 0
         || !result.stdout.includes('archived audit: 2 closed iteration(s) verified')
-        || !result.stdout.includes('maintenance: 1 task(s) valid')
+        || !result.stdout.includes('maintenance: 2 task(s) valid')
       ) {
         console.error(`iteration archive audit after compose fixture check failed: ${caseData.id}`);
         writeResultOutput(result);
