@@ -1,0 +1,8 @@
+description = "Author a Gate C task graph draft from a Plan2Agent context bundle."
+prompt = """
+Use the Plan2Agent p2a-task-author skill for the following context:
+
+{{args}}
+
+Run or use the provided p2a.task_context.v1 context, write only iterations/<active_iteration>/gate-c-task-graph/task-graph.draft.json, never write canonical task-graph.json, and hand off validation, audit, and promote-tasks instructions for human approval.
+"""
