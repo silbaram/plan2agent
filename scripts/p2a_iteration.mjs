@@ -21,6 +21,7 @@ import {
   validateReviewPass,
   validateSpec,
   validateTaskGraph,
+  validateTaskContextData,
   validateTaskGraphData,
   ValidationError,
 } from './validate_artifacts.mjs';
@@ -1774,6 +1775,7 @@ function context(args) {
     },
     spec_field_changes: contextSpecFieldChanges(state),
   };
+  validateTaskContextData(contextData);
   console.log(JSON.stringify(contextData, null, 2));
   return 0;
 }

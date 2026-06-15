@@ -12,6 +12,7 @@ const SCHEMA_PATHS = {
   intake: path.join(ROOT, 'schemas', 'intake.schema.json'),
   spec: path.join(ROOT, 'schemas', 'spec.schema.json'),
   task_graph: path.join(ROOT, 'schemas', 'task-graph.schema.json'),
+  task_context: path.join(ROOT, 'schemas', 'task-context.schema.json'),
   review: path.join(ROOT, 'schemas', 'review.schema.json'),
 };
 const GATE_PATHS = {
@@ -71,6 +72,7 @@ function schemaTypeMatches(instance, expectedType) {
   if (expectedType === 'array') return Array.isArray(instance);
   if (expectedType === 'string') return typeof instance === 'string';
   if (expectedType === 'boolean') return typeof instance === 'boolean';
+  if (expectedType === 'null') return instance === null;
   throw new ValidationError(`unsupported schema type ${JSON.stringify(expectedType)} at $`);
 }
 
@@ -85,12 +87,14 @@ export function validateSchema(instance, schema, instancePath = '$') {
 
   const expectedType = schema.type;
   if (expectedType) {
-    const supported = new Set(['object', 'array', 'string', 'boolean']);
-    if (!supported.has(expectedType)) {
+    const supported = new Set(['object', 'array', 'string', 'boolean', 'null']);
+    const expectedTypes = Array.isArray(expectedType) ? expectedType : [expectedType];
+    const unsupported = expectedTypes.filter((type) => !supported.has(type));
+    if (unsupported.length) {
       throw new ValidationError(`unsupported schema type ${JSON.stringify(expectedType)} at ${instancePath}`);
     }
-    if (!schemaTypeMatches(instance, expectedType)) {
-      throw new ValidationError(`${instancePath} must be ${expectedType}`);
+    if (!expectedTypes.some((type) => schemaTypeMatches(instance, type))) {
+      throw new ValidationError(`${instancePath} must be ${expectedTypes.join(' or ')}`);
     }
   }
 
@@ -291,6 +295,11 @@ function validateClarifyingQuestionDisposition(spec, intake = null) {
       throw new ValidationError(`spec.clarifying_question_disposition is missing intake clarifying questions: ${JSON.stringify(missing)}`);
     }
   }
+}
+
+export function validateTaskContextData(data) {
+  validateSchema(data, loadJson(SCHEMA_PATHS.task_context));
+  return data;
 }
 
 export function validateTaskGraphData(data, requireApprovedSpec = null) {

@@ -7,7 +7,7 @@ import path from 'node:path';
 import process from 'node:process';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { validateTaskGraphData } from './validate_artifacts.mjs';
+import { validateTaskContextData, validateTaskGraphData } from './validate_artifacts.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const ROOT = path.resolve(path.dirname(__filename), '..');
@@ -917,6 +917,10 @@ function validateIterationCurrentFixtureCases() {
           || !taskContext.effective_spec
           || !taskContext.existing_tasks
         ) {
+          throw new Error('context JSON contract mismatch');
+        }
+        validateTaskContextData(taskContext);
+        if (taskContext.idea === undefined || taskContext.baseline_effective_spec_ref === undefined) {
           throw new Error('context JSON contract mismatch');
         }
       } catch (error) {
