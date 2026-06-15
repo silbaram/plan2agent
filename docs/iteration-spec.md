@@ -15,7 +15,7 @@
 | greenfield -> iteration 변환 | `p2a_iteration.mjs init` | 기존 `gate-*` 산출물을 `iterations/<iter-id>/gate-*`로 이동하고, 이동된 spec/task/review를 재검증한다. |
 | root index 생성 | `status.md`, `current-spec.json`, `iterations/maintenance/README.md` | active iteration marker와 thin current-spec pointer를 생성한다. |
 | active iteration 해석 | `p2a_iteration.mjs current` | `current-spec.json.active_iteration`과 `status.md` marker를 대조하고 active 경로를 출력한다. |
-| task CLI 반복 적응 | `p2a_tasks.mjs --artifacts` | active 반복의 `task-graph.json`을 자동 선택해 ready/prompt/start/done 전이를 수행한다. |
+| task CLI 반복 적응 | `p2a_tasks.mjs --artifacts` | active 반복의 `task-graph.json`을 자동 선택해 ready/prompt/start/done 전이를 수행하고, `--maintenance`로 maintenance 레인도 선택할 수 있다. |
 | Gate B-D ready 검증 | `p2a_iteration.mjs validate` | active 반복의 approved spec, task graph, review pass, task dependency를 검증한다. |
 | close-ready 검증 | `p2a_iteration.mjs validate --require-close-ready` | active 반복의 모든 task가 `done`인지 추가 확인한다. |
 | planning stage 검증 | `p2a_iteration.mjs validate --allow-planning`, `--stage` | Gate A-ready, Gate B draft, Gate B approved 상태를 Gate B-D 누락 실패 없이 검증한다. |
@@ -38,7 +38,7 @@
 | baseline-aware Gate A/B | 초기 Gate A-only 초안과 baseline 기반 delta 초안을 만든다. | 구조적 질문 재생성, 사용자 답변 재사용/재처분 로직이 필요하다. |
 | 구조적 diff task | spec field 단위 차이로 task graph 초안을 만든다. | 의미 기반 diff, task 병합/분할, 기존 task 재사용 판단이 필요하다. |
 | archived close | close artifact 존재 여부/hash 기록과 `--audit-archive` 검증을 제공한다. | 기본 검증에 감사 강제, 감사 manifest migration, 정책 문서화가 필요하다. |
-| maintenance 반복 | lazy README, `maintenance add` task 생성, 존재하는 task graph 검증을 제공한다. | handoff 정책, active/maintenance task 선택 UX가 필요하다. |
+| maintenance 반복 | lazy README, `maintenance add` task 생성, 존재하는 task graph 검증을 제공한다. | handoff 정책이 필요하다. |
 
 ### 0-3. 미구현 / 후속 고도화
 
