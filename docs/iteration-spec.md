@@ -24,6 +24,7 @@
 | 다음 반복 open | `p2a_iteration.mjs open` | archived + composed baseline 위에 새 active 반복 skeleton과 `pending_iteration`을 생성한다. |
 | Gate A/B draft | `p2a_iteration.mjs draft` | Gate A-only 초기 반복은 Gate B 초안을 만들고, baseline이 있는 반복은 delta Gate A/B 초안을 생성한다. |
 | Gate B 승인 반영 | `p2a_iteration.mjs promote-spec` | approved active spec을 기록하고, 초기 반복처럼 baseline이 없던 경우 `effective_spec_ref`를 설정한다. |
+| agent 저작 Gate C backbone | `p2a_iteration.mjs context`, `validate --stage gate-c-draft`, `promote-tasks` | task 작성용 context JSON 출력, draft task graph 검증, 사람 승인 audit 이후 canonical task graph 승격을 제공한다. 설계 정본은 `plans/02-agent-authored-task-gate.md`다. |
 | diff 기반 task graph 초안 | `p2a_iteration.mjs diff-tasks` | active spec과 baseline spec의 field 차이로 Gate C task graph 초안을 생성한다. |
 | current-spec composition | `p2a_iteration.mjs compose` | approved + close-ready 반복들을 `effective_product`, `effective_implementation`으로 조합한다. |
 | maintenance graph 생성/검증 | `p2a_iteration.mjs maintenance add`, `validate` | maintenance task graph를 lazy 생성/append하고, 존재하면 schema/dependency를 검증한다. |
@@ -37,6 +38,7 @@
 | `status.md` 반복 인덱스 | init/open/close 시점의 현재 상태를 렌더링한다. | 전체 반복 history 누적 렌더링과 close/handoff 기준점 기록이 필요하다. |
 | baseline-aware Gate A/B | 초기 Gate A-only 초안과 baseline 기반 delta 초안을 만든다. | 구조적 질문 재생성, 사용자 답변 재사용/재처분 로직이 필요하다. |
 | 구조적 diff task | spec field 단위 차이로 task graph 초안을 만든다. | 의미 기반 diff, task 병합/분할, 기존 task 재사용 판단이 필요하다. |
+| agent 저작 task gate | 결정적 backbone(`context`, `gate-c-draft` 검증, `promote-tasks`)만 구현됐다. 설계 정본은 `plans/02-agent-authored-task-gate.md`다. | `p2a-task-author` 스킬, draft meta, maintenance draft 승격, 정식 task-context schema가 필요하다. |
 | archived close | close artifact 존재 여부/hash 기록과 `--audit-archive` 검증을 제공한다. | 기본 검증에 감사 강제, 감사 manifest migration, 정책 문서화가 필요하다. |
 | maintenance 반복 | lazy README, `maintenance add` task 생성, 존재하는 task graph 검증을 제공한다. | handoff 정책이 필요하다. |
 

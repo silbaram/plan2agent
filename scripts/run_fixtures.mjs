@@ -7,6 +7,7 @@ import path from 'node:path';
 import process from 'node:process';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { validateTaskGraphData } from './validate_artifacts.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const ROOT = path.resolve(path.dirname(__filename), '..');
@@ -902,6 +903,107 @@ function validateIterationCurrentFixtureCases() {
       ) {
         console.error(`iteration promote-spec after compose should preserve composed source set: ${caseData.id}`);
         console.error(JSON.stringify(promotedIter3CurrentSpec, null, 2));
+        return { status: 1, checks };
+      }
+
+      result = runIteration(['context', '--artifacts', artifactRoot]);
+      checks += 1;
+      try {
+        const taskContext = JSON.parse(result.stdout);
+        if (
+          result.status !== 0
+          || taskContext.schema_version !== 'p2a.task_context.v1'
+          || taskContext.active_iteration !== 'iter-003'
+          || !taskContext.effective_spec
+          || !taskContext.existing_tasks
+        ) {
+          throw new Error('context JSON contract mismatch');
+        }
+      } catch (error) {
+        console.error(`iteration context fixture check failed: ${caseData.id}`);
+        console.error(error.message);
+        writeResultOutput(result);
+        return { status: 1, checks };
+      }
+
+      const iter3TaskGraphPath = path.join(artifactRoot, 'iterations', 'iter-003', 'gate-c-task-graph', 'task-graph.json');
+      const iter3DraftPath = path.join(artifactRoot, 'iterations', 'iter-003', 'gate-c-task-graph', 'task-graph.draft.json');
+      const iter3Draft = JSON.parse(JSON.stringify(iter2TaskGraph));
+      iter3Draft.version = 'iter-003-draft';
+      iter3Draft.sourceSpec = '../gate-b-spec/spec.json';
+      iter3Draft.tasks = iter3Draft.tasks.slice(0, 2).map((task, index) => ({
+        ...task,
+        id: `task-${String(index + 1).padStart(3, '0')}`,
+        status: 'todo',
+        dependencies: index === 0 ? [] : ['task-001'],
+      }));
+      writeFileSync(iter3DraftPath, `${JSON.stringify(iter3Draft, null, 2)}\n`, 'utf8');
+      result = runIteration(['validate', '--artifacts', artifactRoot, '--stage', 'gate-c-draft']);
+      checks += 1;
+      if (result.status !== 0 || !result.stdout.includes('gate-c draft valid')) {
+        console.error(`iteration gate-c-draft positive fixture check failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: result.status ?? 1, checks };
+      }
+
+      const cycleDraft = JSON.parse(JSON.stringify(iter3Draft));
+      cycleDraft.tasks[0].dependencies = [cycleDraft.tasks[1].id];
+      cycleDraft.tasks[1].dependencies = [cycleDraft.tasks[0].id];
+      writeFileSync(iter3DraftPath, `${JSON.stringify(cycleDraft, null, 2)}\n`, 'utf8');
+      result = runIteration(['validate', '--artifacts', artifactRoot, '--stage', 'gate-c-draft']);
+      checks += 1;
+      const cycleDraftOutput = `${result.stdout ?? ''}${result.stderr ?? ''}`;
+      if (result.status === 0 || !cycleDraftOutput.includes('dependency cycle')) {
+        console.error(`iteration gate-c-draft cycle fixture check failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: 1, checks };
+      }
+      writeFileSync(iter3DraftPath, `${JSON.stringify(iter3Draft, null, 2)}\n`, 'utf8');
+
+      result = runIteration(['promote-tasks', '--artifacts', artifactRoot]);
+      checks += 1;
+      const promoteTasksNoAuditOutput = `${result.stdout ?? ''}${result.stderr ?? ''}`;
+      if (
+        result.status === 0
+        || !promoteTasksNoAuditOutput.includes('Gate C approval audit block required')
+        || existsSync(iter3TaskGraphPath)
+        || !existsSync(iter3DraftPath)
+      ) {
+        console.error(`iteration promote-tasks missing audit fixture check failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: 1, checks };
+      }
+
+      writeFileSync(
+        path.join(artifactRoot, 'status.md'),
+        `${readFileSync(path.join(artifactRoot, 'status.md'), 'utf8')}\n#### Gate C approval audit\n- Approved by: user\n- Approved at: 2026-06-15\n- Approved source: gate-c-task-graph/task-graph.draft.json (agent-authored)\n- Authoring agent: codex / p2a-task-author\n- Approval note: Fixture reviewed the Gate C draft task graph.\n`,
+        'utf8',
+      );
+      result = runIteration(['promote-tasks', '--artifacts', artifactRoot]);
+      checks += 1;
+      const promotedDraftPath = `${iter3DraftPath}.promoted`;
+      if (
+        result.status !== 0
+        || !result.stdout.includes('Plan2Agent tasks promoted')
+        || !existsSync(iter3TaskGraphPath)
+        || existsSync(iter3DraftPath)
+        || !existsSync(promotedDraftPath)
+      ) {
+        console.error(`iteration promote-tasks positive fixture check failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: result.status ?? 1, checks };
+      }
+      const promotedTaskGraph = JSON.parse(readFileSync(iter3TaskGraphPath, 'utf8'));
+      try {
+        validateTaskGraphData(promotedTaskGraph, iter3SpecPath);
+      } catch (error) {
+        console.error(`iteration promoted task graph did not validate: ${caseData.id}`);
+        console.error(error.message);
+        return { status: 1, checks };
+      }
+      if (promotedTaskGraph.version !== 'iter-003') {
+        console.error(`iteration promote-tasks did not remove -draft version suffix: ${caseData.id}`);
+        console.error(JSON.stringify(promotedTaskGraph, null, 2));
         return { status: 1, checks };
       }
 
