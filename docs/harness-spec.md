@@ -1,8 +1,10 @@
 # Plan2Agent 하네스 구현 기준
 
-참고 기준일: 2026-06-09
+참고 기준일: 2026-06-15
 
 이 문서는 Plan2Agent v1 하네스의 구현 기준이다. Claude Code, Codex, Gemini CLI에서 같은 역할과 절차를 제공하기 위해 skill, subagent, command scaffold의 경로, 역할, 안전 정책, 승인 게이트, 재개 규칙, 검증 기준을 정의한다.
+
+문서 홈: [Plan2Agent Docs](README.md) · 사용자 시작점: [Quickstart](quickstart.md)
 
 Plan2Agent의 핵심 가치는 기획 변경이 개발 가능한 명세와 task로 연결되고, 그 과정이 시맨틱 문서로 남는 순환 시스템을 만드는 것이다. 이 하네스는 그 순환 중 "아이디어를 명세와 task graph로 바꾸는 단계"를 먼저 고정한다.
 
@@ -18,13 +20,14 @@ v1 책임:
 - 구현 가능한 task graph로 분해한다.
 - task별 agent 실행 prompt 초안을 만든다.
 - task graph를 검토해 누락, 과대 task, 의존성 오류, gate 위반을 찾는다.
+- 반복 구조에서 semantic diff task 초안과 파일 기반 실행 로그를 관리한다.
 - CLI별 mirror drift를 검사한다.
 
 v1 제외:
 
 - Claude Code, Codex, Gemini CLI의 실제 자동 실행
-- 병렬 worktree 생성
-- 코드 diff 자동 분석
+- PTY 기반 agent orchestration
+- code-aware spec 역생성 또는 코드 diff 자동 병합
 - task 결과 자동 병합
 - DB 또는 지식 그래프 저장소
 
@@ -220,7 +223,7 @@ Gemini target fields use the documented subagent keys `kind`, `tools`, `temperat
 - 완료: Python stdlib scripts를 Node.js ESM scripts로 대체하고 `scripts/check_cli_parity.mjs`, `scripts/run_fixtures.mjs`, `scripts/validate_artifacts.mjs` 검증 경로를 확정했다.
 - 완료: task 상태와 의존성 관리는 `scripts/p2a_tasks.mjs`로 제공한다.
 - CLI mirror drift check와 fixture runner의 CI 연결은 사용자 관리 항목으로 둔다.
-- v2에서 agent 실행 로그, worktree 분리, 결과 diff 연결을 설계한다.
+- 완료: `p2a_runs.mjs`로 파일 기반 agent 실행 로그, branch/worktree 격리 기준, changed files, verification 결과를 기록한다. PTY 기반 agent 자동 실행과 PR 생성은 후속이다.
 
 ## 15. 공식 레퍼런스
 

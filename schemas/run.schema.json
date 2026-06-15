@@ -1,0 +1,95 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://plan2agent.local/schemas/run.schema.json",
+  "title": "Plan2Agent Agent Run",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "runId",
+    "projectId",
+    "taskId",
+    "taskTitle",
+    "iterationId",
+    "sourceLayout",
+    "taskGraphRef",
+    "sourceSpecRef",
+    "agentTool",
+    "workspaceRef",
+    "workspacePath",
+    "isolation",
+    "status",
+    "startedAt",
+    "updatedAt",
+    "finishedAt",
+    "changedFiles",
+    "verification",
+    "notes"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {"const": "p2a.run.v1"},
+    "runId": {"type": "string", "pattern": "^run-[A-Za-z0-9._-]+$"},
+    "projectId": {"type": "string", "minLength": 1},
+    "taskId": {"type": "string", "pattern": "^task-[0-9]+$"},
+    "taskTitle": {"type": "string", "minLength": 1},
+    "iterationId": {"type": ["string", "null"]},
+    "sourceLayout": {"type": "string", "enum": ["iteration", "maintenance", "handoff", "graph"]},
+    "taskGraphRef": {"type": "string", "minLength": 1},
+    "sourceSpecRef": {"type": "string", "minLength": 1},
+    "agentTool": {"type": "string", "minLength": 1},
+    "workspaceRef": {"type": "string", "minLength": 1},
+    "workspacePath": {"type": "string", "minLength": 1},
+    "isolation": {
+      "type": "object",
+      "required": ["mode", "branch", "worktree", "baseRef", "created", "createCommand", "createExitCode", "createOutputTail"],
+      "additionalProperties": false,
+      "properties": {
+        "mode": {"type": "string", "enum": ["none", "branch", "worktree"]},
+        "branch": {"type": ["string", "null"]},
+        "worktree": {"type": ["string", "null"]},
+        "baseRef": {"type": ["string", "null"]},
+        "created": {"type": "boolean"},
+        "createCommand": {"type": ["string", "null"]},
+        "createExitCode": {"type": ["integer", "null"]},
+        "createOutputTail": {"type": ["string", "null"]}
+      }
+    },
+    "status": {"type": "string", "enum": ["started", "finished", "failed", "blocked"]},
+    "startedAt": {"type": "string", "minLength": 1},
+    "updatedAt": {"type": "string", "minLength": 1},
+    "finishedAt": {"type": ["string", "null"]},
+    "changedFiles": {"type": "array", "items": {"type": "string", "minLength": 1}},
+    "verification": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "type",
+          "command",
+          "status",
+          "exitCode",
+          "durationMs",
+          "startedAt",
+          "finishedAt",
+          "stdoutTail",
+          "stderrTail",
+          "source"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "type": {"type": "string", "enum": ["test", "lint", "typecheck", "custom"]},
+          "command": {"type": "string", "minLength": 1},
+          "status": {"type": "string", "enum": ["passed", "failed", "skipped", "not_run"]},
+          "exitCode": {"type": ["integer", "null"]},
+          "durationMs": {"type": ["integer", "null"], "minimum": 0},
+          "startedAt": {"type": ["string", "null"]},
+          "finishedAt": {"type": ["string", "null"]},
+          "stdoutTail": {"type": ["string", "null"]},
+          "stderrTail": {"type": ["string", "null"]},
+          "source": {"type": "string", "enum": ["config", "command", "manual"]}
+        }
+      }
+    },
+    "notes": {"type": "array", "items": {"type": "string", "minLength": 1}}
+  }
+}

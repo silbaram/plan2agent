@@ -1,8 +1,10 @@
 # Plan2Agent 반복/고도화 개발 스펙
 
-참고 기준일: 2026-06-14
+참고 기준일: 2026-06-15
 
 이 문서는 Plan2Agent(P2A)가 MVP 이후 기존 프로젝트에 기능을 이어 추가하는 반복/고도화 개발 구조를 정의한다. `plans/01-product-roadmap.md`는 제품 방향과 상태 요약을 담고, 이 문서는 다회차 기획과 개발 운영에 필요한 구현 계약을 더 자세히 고정한다.
+
+문서 홈: [Plan2Agent Docs](README.md) · 사용자 시작점: [Quickstart](quickstart.md)
 
 ## 0. 구현 범위 요약
 
@@ -16,40 +18,41 @@
 | root index 생성 | `status.md`, `current-spec.json`, `iterations/maintenance/README.md` | active iteration marker와 thin current-spec pointer를 생성한다. |
 | active iteration 해석 | `p2a_iteration.mjs current` | `current-spec.json.active_iteration`과 `status.md` marker를 대조하고 active 경로를 출력한다. |
 | task CLI 반복 적응 | `p2a_tasks.mjs --artifacts` | active 반복의 `task-graph.json`을 자동 선택해 ready/prompt/start/done 전이를 수행하고, `--maintenance`로 maintenance 레인도 선택할 수 있다. |
+| agent run 추적 | `p2a_runs.mjs start/verify/finish` | `runs/`에 task별 runId, changedFiles, verification, agentTool, workspaceRef, branch/worktree 격리 기준을 기록한다. |
 | Gate B-D ready 검증 | `p2a_iteration.mjs validate` | active 반복의 approved spec, task graph, review pass, task dependency를 검증한다. |
 | close-ready 검증 | `p2a_iteration.mjs validate --require-close-ready` | active 반복의 모든 task가 `done`인지 추가 확인한다. |
 | planning stage 검증 | `p2a_iteration.mjs validate --allow-planning`, `--stage` | Gate A-ready, Gate B draft, Gate B approved 상태를 Gate B-D 누락 실패 없이 검증한다. |
 | 반복 close | `p2a_iteration.mjs close` | close-ready active 반복을 `archived` metadata로 표시하고 `current-spec.json.closed_iterations`에 기록한다. |
-| archived 감사 | `p2a_iteration.mjs validate --audit-archive` | close 시 기록한 artifact 존재 여부/hash와 현재 파일 상태를 비교해 닫힌 반복 변경을 감지한다. |
+| archived 감사 | `p2a_iteration.mjs validate` | close 시 기록한 artifact 존재 여부/hash와 현재 파일 상태를 기본 검증으로 비교한다. legacy/migration 상황은 `--skip-archive-audit`로 우회한다. |
 | 다음 반복 open | `p2a_iteration.mjs open` | archived + composed baseline 위에 새 active 반복 skeleton과 `pending_iteration`을 생성한다. |
 | Gate A/B draft | `p2a_iteration.mjs draft` | Gate A-only 초기 반복은 Gate B 초안을 만들고, baseline이 있는 반복은 delta Gate A/B 초안을 생성한다. |
 | Gate B 승인 반영 | `p2a_iteration.mjs promote-spec` | approved active spec을 기록하고, 초기 반복처럼 baseline이 없던 경우 `effective_spec_ref`를 설정한다. |
 | agent 저작 Gate C backbone | `p2a_iteration.mjs context`, `validate --stage gate-c-draft`, `promote-tasks` | task 작성용 context JSON 출력, draft task graph 검증, 사람 승인 audit 이후 canonical task graph 승격을 제공한다. 상세 계약은 §10이다. |
-| diff 기반 task graph 초안 | `p2a_iteration.mjs diff-tasks` | active spec과 baseline spec의 field 차이로 Gate C task graph 초안을 생성한다. |
+| diff 기반 task graph 초안 | `p2a_iteration.mjs diff-tasks` | active spec과 baseline spec의 field 차이를 semantic group으로 병합/분할해 Gate C task graph 초안을 생성한다. |
 | current-spec composition | `p2a_iteration.mjs compose` | approved + close-ready 반복들을 `effective_product`, `effective_implementation`으로 조합한다. |
 | maintenance graph 생성/검증 | `p2a_iteration.mjs maintenance add`, `validate` | maintenance task graph를 lazy 생성/append하고, 존재하면 schema/dependency를 검증한다. |
-| 반복 handoff | `p2a_handoff.mjs --iteration-id active` | active 반복 산출물과 `.plan2agent/current-spec.json`을 대상 프로젝트에 복사한다. |
+| 반복 handoff | `p2a_handoff.mjs --iteration-id active` | active 반복 산출물, `.plan2agent/current-spec.json`, maintenance graph를 대상 프로젝트에 복사하고 handoff 기준점을 기록한다. |
 | 회귀 fixture | `scripts/run_fixtures.mjs` | greenfield -> init -> current -> tasks ready -> close -> open -> validate/current, draft/compose/handoff 흐름을 검증한다. |
 
 ### 0-2. 부분 구현
 
 | 범위 | 현재 구현 | 남은 구현 |
 | --- | --- | --- |
-| `status.md` 반복 인덱스 | init/open/close 시점의 현재 상태를 렌더링한다. | 전체 반복 history 누적 렌더링과 close/handoff 기준점 기록이 필요하다. |
+| `status.md` 반복 인덱스 | 전체 반복 history, close audit, handoff audit, maintenance 요약을 누적 렌더링한다. | 더 풍부한 사용자용 diff/요약은 후속 UX 항목이다. |
 | baseline-aware Gate A/B | 초기 Gate A-only 초안과 baseline 기반 delta 초안을 만든다. | 구조적 질문 재생성, 사용자 답변 재사용/재처분 로직이 필요하다. |
-| 구조적 diff task | spec field 단위 차이로 task graph 초안을 만든다. | 의미 기반 diff, task 병합/분할, 기존 task 재사용 판단이 필요하다. |
-| agent 저작 task gate | backbone(`context`, `gate-c-draft` 검증, `promote-tasks`), `p2a-task-author` 스킬, 정식 `task-context` schema(producer-side 검증)가 구현됐다. 상세 계약은 §10이다. | provenance sidecar(`task-graph.draft.meta.json`)와 maintenance draft 승격(`--scope maintenance`/`maintenance add --from-draft`)이 남았다. |
-| archived close | close artifact 존재 여부/hash 기록과 `--audit-archive` 검증을 제공한다. | 기본 검증에 감사 강제, 감사 manifest migration, 정책 문서화가 필요하다. |
-| maintenance 반복 | lazy README, `maintenance add` task 생성, 존재하는 task graph 검증을 제공한다. | handoff 정책이 필요하다. |
+| 구조적 diff task | spec field 차이를 semantic group으로 병합/분할하고, 완료 task overlap은 rework로 표시하며, `--force` 시 미완료 active task id/status를 재사용한다. | code-aware/LLM 기반 의미 판단은 후속 실행 레이어에서 다룬다. |
+| agent 저작 task gate | backbone(`context`, `gate-c-draft` 검증, `promote-tasks`), `p2a-task-author` 스킬, 정식 `task-context` schema, provenance sidecar가 구현됐다. 상세 계약은 §10이다. | maintenance draft 승격(`--scope maintenance`/`maintenance add --from-draft`)은 낮은 우선순위 후속이다. |
+| archived close | close artifact 존재 여부/hash 기록과 기본 validate-time archive audit을 제공한다. | 기존 pre-audit artifact migration은 필요할 때 `--skip-archive-audit`로 우회한다. |
+| maintenance 반복 | lazy README, `maintenance add` task 생성, 존재하는 task graph 검증, handoff 시 별도 `.plan2agent/maintenance/task-graph.json` 복사를 제공한다. | maintenance 전용 UX는 후속이다. |
+| agent 실행 추적 | `p2a_runs.mjs`가 `runs/run-index.json`과 `runs/<runId>.json`을 관리하고, test/lint/typecheck 실행 결과와 git changed files를 수집한다. | PTY 기반 자동 agent orchestration, PR 생성, 병렬 실행 scheduler는 후속이다. |
 
 ### 0-3. 미구현 / 후속 고도화
 
 | 우선순위 | 항목 | 이유 |
 | --- | --- | --- |
-| P2 | 의미 기반 재작업 task 생성 | 현재 `diff-tasks`는 field 단위 초안이므로, 변경 의미를 이해해 task를 병합/분할하는 고도화가 필요하다. |
-| P2 | maintenance task graph 정식 운영 | 작은 fix를 기능 반복과 분리하는 생성 CLI는 구현됐고, handoff 정책과 UX가 더 필요하다. |
-| P2 | archived 감사 정책 강화 | `--audit-archive`는 존재 여부/hash 검증까지 구현됐지만 기본 검증 강제와 migration 정책이 남아 있다. |
-| P3 | agent 실행 로그, worktree 분리, 결과 diff 연결 | 계획과 실제 코드 변경의 계보 추적을 위한 후속 실행 레이어다. |
+| P2 | maintenance task graph 정식 운영 | 생성/검증/handoff 정책은 구현됐고, maintenance 전용 UX가 더 필요하다. |
+| P2 | archived 감사 정책 강화 | 기본 검증 강제는 구현됐고, 대규모 legacy migration 도구는 필요 시 후속이다. |
+| P3 | agent 자동 실행 orchestration, PR 생성, 병렬 실행 scheduler | run log와 선택적 branch/worktree 생성은 구현됐고, agent를 직접 구동·감시하는 실행기는 후속이다. |
 | P3 | brownfield code-aware intake, 병렬/branch/worktree별 반복 | 파일 기반 단일 반복 루프가 안정된 뒤 확장한다. |
 
 ## 1. 배경과 목적
@@ -349,7 +352,7 @@ node scripts/p2a_iteration.mjs diff-tasks \
   --artifacts artifacts/<project_id>
 ```
 
-`diff-tasks`는 approved active spec과 baseline spec을 field 단위로 비교해 `iterations/<iter-id>/gate-c-task-graph/task-graph.json` 초안을 생성한다. 초기 반복처럼 baseline이 없으면 active spec 전체를 구현 대상으로 보고 task를 만든다. 기존 task graph가 있으면 중단하며, 재생성하려면 `--force`를 명시한다.
+`diff-tasks`는 approved active spec과 baseline spec을 field 단위로 비교한 뒤, 변경을 requirements/security/integration/api/ui/data/delivery/architecture/verification semantic group으로 병합/분할해 `iterations/<iter-id>/gate-c-task-graph/task-graph.json` 초안을 생성한다. 초기 반복처럼 baseline이 없으면 active spec 전체를 구현 대상으로 보고 semantic group을 만든다. 닫힌 반복의 완료 task와 `sourceSpecRefs`가 겹치면 새 task title을 `Rework ...`로 표시하고 description/prompt에 이전 task overlap을 남긴다. implementation group이 있으면 verification task가 후속 dependency로 붙으며, clarifying question disposition과 사용자 답변 재처분 검토는 requirements/verification task acceptance에 포함된다. 기존 task graph가 있으면 중단하며, 재생성하려면 `--force`를 명시한다. `--force`는 기존 active graph의 미완료 task와 semantic group이 겹칠 때 task id/status를 재사용한다.
 
 ```bash
 node scripts/p2a_iteration.mjs maintenance add \
@@ -523,7 +526,7 @@ node scripts/p2a_iteration.mjs validate \
 - `current-spec.json.pending_iteration.status`가 `gate_a_ready`, `active_planning`, `gate_b_draft` 중 하나다.
 - Gate B-D 누락은 실패가 아니라 pending 상태로 보고한다.
 
-후속 validator 확장은 archived audit 기본 강제, maintenance handoff 정책 검증, semantic diff 결과 검증이다.
+후속 validator 확장은 legacy archive migration과 agent 실행 결과 audit이다.
 
 ## 9. handoff 적응
 
@@ -555,13 +558,17 @@ node scripts/p2a_handoff.mjs \
 - `.plan2agent/artifacts/status.md`
 - `.plan2agent/current-spec.json`
 
-`--include-intake`를 붙이면 active 반복의 Gate A intake도 `.plan2agent/artifacts/`로 함께 복사한다. 반복 history 보존을 위해 iterative root에서는 `--mode move`를 지원하지 않고 `copy`만 허용한다.
+`--include-intake`를 붙이면 active 반복의 Gate A intake도 `.plan2agent/artifacts/`로 함께 복사한다. 반복 history 보존을 위해 iterative root에서는 `--mode move`를 지원하지 않고 `copy`만 허용한다. maintenance task graph가 있으면 active graph와 병합하지 않고 `.plan2agent/maintenance/task-graph.json`으로 별도 복사한다.
+
+`--tools codex,claude,gemini|all`은 반복 handoff에도 동일하게 적용된다. 산출물과 `current-spec.json`을 복사한 뒤 대상 프로젝트에 공통 `.agents/skills`, `.agents/agents`와 선택한 CLI별 `.codex`, `.claude`, `.gemini` P2A 자산을 설치하고, 설치 목록을 `.plan2agent/manifest.json`에 기록한다.
+
+`--include-team-bigfive`도 반복 handoff에 동일하게 적용된다. `--team-bigfive-source`가 local directory이면 source manifest에 파일 목록과 SHA-256을 기록하고, Git URL이면 fetch 없이 URL provenance만 기록한다. 선택 target별 adapter entrypoint는 `.agents/.codex/.claude/.gemini` 아래에 생성되며, 외부 하네스 기록은 `.plan2agent/manifest.json.externalHarnesses`와 `.plan2agent/project.config.json.teamBigFive`에 남긴다.
 
 ## 10. Agent 저작 task 게이트
 
-상태: **부분 구현**. backbone(`context` / `validate --stage gate-c-draft` / `promote-tasks`), 저작 스킬(`p2a-task-author`), 정식 context 스키마(`p2a.task_context.v1`)가 구현됐고, 일부 후속(maintenance Phase 1, provenance sidecar)이 남았다.
+상태: **부분 구현**. backbone(`context` / `validate --stage gate-c-draft` / `promote-tasks`), 저작 스킬(`p2a-task-author`), 정식 context 스키마(`p2a.task_context.v1`), provenance sidecar가 구현됐고, maintenance Phase 1이 남았다.
 
-이 문서는 agent가 task를 저작하고 사람이 게이트에서 확정하는 흐름의 구현 계약을 정의한다. 반복/고도화 개발의 정본 계약은 `docs/iteration-spec.md`이며, 이 문서는 그 위에 붙는 "Agent 저작 task 게이트" 기능의 설계 정본이다. `diff-tasks`의 field 단위 기계적 초안을 의미 기반 agent 저작으로 끌어올리되, Plan2Agent의 추적성과 승인 게이트를 보존하는 것이 목표다.
+이 문서는 agent가 task를 저작하고 사람이 게이트에서 확정하는 흐름의 구현 계약을 정의한다. 반복/고도화 개발의 정본 계약은 `docs/iteration-spec.md`이며, 이 문서는 그 위에 붙는 "Agent 저작 task 게이트" 기능의 설계 정본이다. `diff-tasks`는 deterministic semantic fallback으로 유지하고, agent 저작 경로는 더 깊은 맥락 판단과 사람 승인 게이트를 붙이는 확장 경로다.
 
 
 | 조각 | 명령/파일 | 상태 |
@@ -571,18 +578,18 @@ node scripts/p2a_handoff.mjs \
 | 승인 게이트 | `p2a_iteration.mjs promote-tasks` + `status.md` Gate C approval audit | ✅ 구현 |
 | 저작 스킬 | `.agents/skills/p2a-task-author/SKILL.md` (+ `.claude` mirror, Gemini shim) | ✅ 구현 |
 | 회귀 테스트 | `run_fixtures`(context/gate-c-draft/promote) + `check_cli_parity`(skill mirror) | ✅ |
-| provenance sidecar | `task-graph.draft.meta.json` | ⛔ 남음 (선택) |
+| provenance sidecar | `task-graph.draft.meta.json` | ✅ 구현 |
 | 정식 context 스키마 | `schemas/task-context.schema.json` + `validateTaskContextData` (context가 출력 전 자기검증) | ✅ 구현 |
 | `context --scope maintenance` | — | ⛔ 남음 (현재 `feature`만) |
 | Phase 1 (maintenance 파일럿 + fix/기능 분류) | `maintenance add --from-draft` | ⛔ 남음 (우선순위 낮음) |
 | `validate`-time audit 강제(승격된 정본) | — | △ 미구현 (선택) |
 
-남은 핵심은 없다. backbone + 저작 스킬로 "AI가 초안 저작 -> 사람 게이트 확정 -> 정본 승격"이 끝에서 끝까지 동작한다. 남은 항목은 선택적 마감(provenance/스키마/maintenance 파일럿)이다.
+남은 핵심은 없다. backbone + 저작 스킬로 "AI가 초안 저작 -> 사람 게이트 확정 -> 정본 승격"이 끝에서 끝까지 동작한다. 남은 항목은 maintenance 파일럿이다.
 
 ### 10-1. 목적과 위치
 
-- 문제: `docs/iteration-spec.md`의 `diff-tasks`는 spec field 차이를 그대로 task로 펼치는 기계적 초안이라 task 병합/분할, 기존 task 재사용 판단을 하지 못한다.
-- 해법: 기획층(Gate C)에 **agent 저작 + 사람 승인 게이트**를 추가한다. agent는 현재 기준 맥락을 읽어 task 초안을 쓰고, 사람이 게이트에서 승격을 확정한다.
+- 문제: deterministic `diff-tasks`는 spec field 차이를 semantic group으로 병합/분할하고 rework/reuse를 표시하지만, code-aware 판단이나 복잡한 task 재구성까지 맡기지는 않는다.
+- 해법: 기획층(Gate C)에 **agent 저작 + 사람 승인 게이트**를 추가한다. agent는 현재 기준 맥락을 읽어 richer task 초안을 쓰고, 사람이 게이트에서 승격을 확정한다.
 - 불변: 실행층(`p2a_tasks`)과 `schemas/task-graph.schema.json`은 바꾸지 않는다. agent 출력도 기존 `p2a.task_graph.v1`을 따른다.
 - 로드맵 연결: `plans/01-product-roadmap.md` §13의 "task graph 확정 시 사용자 승인"을 명시적 게이트로 구체화하고, §14의 "기획 변경 diff 기반 재작업 task 생성" 구현 계약을 제공한다.
 
@@ -601,7 +608,7 @@ node scripts/p2a_handoff.mjs \
 | `iterations/<iter-id>/gate-c-task-graph/task-graph.draft.json` | agent 저작 초안. 기존 `p2a.task_graph.v1` schema를 그대로 따른다. `version`은 `"<iter-id>-draft"` 같은 초안 표식을 권장한다. |
 | `iterations/<iter-id>/gate-c-task-graph/task-graph.json` | 승인 후 승격된 정본. 실행/handoff 대상은 이 파일뿐이다. |
 | `iterations/<iter-id>/gate-c-task-graph/task-graph.draft.json.promoted` | 승격 후 history로 보존되는 직전 초안. (`promote-tasks`가 rename으로 남긴다.) |
-| `iterations/<iter-id>/gate-c-task-graph/task-graph.draft.meta.json` (선택, 미구현) | provenance sidecar. authoring agent, context bundle hash, source idea, base task-graph hash를 기록한다. schema를 건드리지 않으려고 provenance는 정본 밖에 둔다. |
+| `iterations/<iter-id>/gate-c-task-graph/task-graph.draft.meta.json` | provenance sidecar. draft hash, source spec hash, source idea, baseline ref, Gate C approval audit을 기록한다. schema를 건드리지 않으려고 provenance는 정본 밖에 둔다. |
 | `status.md`의 Gate C approval audit block | 승인 사실과 근거. §10-6 형식을 따른다. |
 
 ### 10-4. 컨텍스트 번들 계약
@@ -653,7 +660,7 @@ node scripts/p2a_iteration.mjs context \
 | `promote-tasks` | iterative root | active 반복의 `task-graph.draft.json`을 검증(approved spec 포함)하고 Gate C approval audit을 확인한 뒤 `task-graph.json`으로 승격 | draft 없음, draft 검증 실패, audit block 없음 |
 | `maintenance add --from-draft <file>` (미구현) | maintenance 초안 파일 | 초안 task들을 검증 후 maintenance graph에 append (§10-8 Phase 1) | 초안 검증 실패, 사람 confirm 취소 |
 
-`promote-tasks`는 baseline-aware 안전 조건(기존 정본의 `done` task id 보존 등)을 후속에서 강화한다. v1 계약은 schema/추적성/audit 확인까지다. 승격 시 `version`의 `-draft` 접미사를 제거하고, 직전 초안은 `task-graph.draft.json.promoted`로 보존한다.
+`promote-tasks`는 baseline-aware 안전 조건(기존 정본의 `done` task id 보존 등)을 후속에서 강화한다. v1 계약은 schema/추적성/audit 확인까지다. 승격 시 `version`의 `-draft` 접미사를 제거하고, provenance sidecar를 `task-graph.draft.meta.json`에 기록하며, 직전 초안은 `task-graph.draft.json.promoted`로 보존한다.
 
 ### 10-6. Gate C 승인 게이트
 
@@ -698,7 +705,7 @@ node scripts/p2a_iteration.mjs context \
 
 Phase 1 흐름: `context --scope maintenance` -> agent가 maintenance task 초안 작성 -> 사람 확인 -> `maintenance add --from-draft`로 검증 후 append. ungated maintenance 특성상 별도 정본/초안 분리 없이 append 직전 사람 confirm을 게이트로 둔다. 단, maintenance는 본질적으로 코드-side 활동이라 planning-side 저작의 실익이 작아 우선순위를 낮춘다(이관된 fix/기능 경계 분류 포함).
 
-Phase 2 흐름: `context` -> `p2a-task-author`가 `task-graph.draft.json` 저작 -> 사람 검토 + Gate C approval audit 기록 -> `promote-tasks`로 정본 승격 -> Gate D review -> `p2a_tasks` 실행. `diff-tasks`는 기계적 fallback으로 남기되, 후속에서 정본 대신 `task-graph.draft.json`으로 쓰도록 라우팅해 두 경로를 같은 게이트로 모은다.
+Phase 2 흐름: `context` -> `p2a-task-author`가 `task-graph.draft.json` 저작 -> 사람 검토 + Gate C approval audit 기록 -> `promote-tasks`로 정본 승격 -> Gate D review -> `p2a_tasks` 실행. `diff-tasks`는 deterministic semantic fallback으로 남고, agent-authored draft 경로는 같은 Gate C approval/promotion 계약으로 수렴한다.
 
 ### 10-9. 가드레일
 
@@ -706,7 +713,7 @@ Phase 2 흐름: `context` -> `p2a-task-author`가 `task-graph.draft.json` 저작
 - 추적성 완화 금지: `sourceSpecRefs` 최소 1 제약을 agent 출력에도 적용한다.
 - 실행층 불변: 저작/승격 로직을 `p2a_tasks` 상태 전이 명령에 넣지 않는다.
 - 초안 격리: `task-graph.draft.json`은 승격 전까지 `p2a_tasks`/`p2a_handoff` 대상이 아니다.
-- 비목표 경계 유지: `docs/iteration-spec.md` §11의 "비목표와 후속 고도화"가 정의한 "구조적 diff 기반 재작업 task 자동 생성", "task 자동 연결"은 여전히 비목표다. 본 설계는 사람 게이트를 거치는 agent 초안이며, 자동 생성이나 자동 병합이 아니다.
+- 비목표 경계 유지: deterministic `diff-tasks`와 agent-authored draft는 모두 Gate C approval/promotion을 거친다. 자동 정본 승격, 자동 병합, agent 자동 실행 orchestration은 여전히 비목표다.
 
 ### 10-10. 검증/회귀 계획
 
@@ -719,13 +726,11 @@ Phase 2 흐름: `context` -> `p2a-task-author`가 `task-graph.draft.json` 저작
 이 문서의 비목표:
 
 - 기존 코드베이스를 자동으로 읽고 spec을 역생성하는 brownfield code-aware intake
-- 구조적 diff 기반 재작업 task 자동 생성
-- 이전 spec/새 spec 구조적 diff 계산과 task 자동 연결
-- 병렬 반복, branch별 반복, worktree별 반복
-- agent 자동 실행, 실행 로그 수집, 결과 diff 자동 병합
+- 병렬 반복 scheduler, branch별 반복, worktree별 반복 planning lane
+- agent 자동 실행, PTY 제어, PR 생성, 결과 diff 자동 병합
 - DB, pgvector, Neo4j 기반 plan-code 계보 저장
 
-후속 고도화는 이 문서의 iteration 레이아웃, `status.md` 반복 인덱스, `current-spec.json` current-effective view를 전제로 붙인다. 구조적 diff와 코드 변경 연결은 반복 단위가 안정된 뒤 자동화한다.
+후속 고도화는 이 문서의 iteration 레이아웃, `status.md` 반복 인덱스, `current-spec.json` current-effective view, semantic `diff-tasks`, 파일 기반 run log를 전제로 붙인다. code-aware spec 역생성, PTY 기반 agent orchestration, PR 생성, 결과 자동 병합은 실행 레이어가 필요해 별도 단계로 둔다.
 
 ## 12. 구현 조각 순서
 
@@ -733,7 +738,7 @@ Phase 2 흐름: `context` -> `p2a-task-author`가 `task-graph.draft.json` 저작
 | --- | --- | --- | --- |
 | 1 | 레이아웃/인덱스 규약 + greenfield migration | 완료 | `p2a_iteration.mjs init`으로 Gate B-D까지 있는 greenfield bundle을 반복 구조로 변환한다. |
 | 1-1 | Gate A-only artifact 반복 동기화 | 부분 완료 | `lightweight-embedded-redis`처럼 Gate A만 있는 artifact는 반복 구조에서 해석/검증/draft 가능하다. 자동 migration 명령은 아직 없다. |
-| 2 | `status.md` 반복 인덱스 | 부분 완료 | init/open/close 전이는 기록한다. 전체 반복 history 누적 렌더링과 append-only 감사는 후속이다. |
+| 2 | `status.md` 반복 인덱스 | 완료 | 전체 반복 history, close audit, handoff audit, maintenance 요약을 누적 렌더링한다. |
 | 3 | `current-spec.json` 조합 규칙 | 완료 | `p2a_iteration.mjs compose`가 approved + close-ready 반복들을 current-effective view로 조합한다. |
 | 4 | `p2a_tasks` active iteration 인식 | 완료 | `--artifacts`가 active 반복 graph를 찾아 task 조회와 상태 변경에 사용한다. |
 | 4-1 | Gate B-D 반복 구조 validator | 완료 | `p2a_iteration.mjs validate`가 active 반복 구조와 close-ready 조건을 검증한다. |
@@ -741,14 +746,14 @@ Phase 2 흐름: `context` -> `p2a-task-author`가 `task-graph.draft.json` 저작
 | 4-3 | 반복 open skeleton | 완료 | `p2a_iteration.mjs open`이 archived + composed baseline 위에 새 반복 디렉터리와 metadata를 만든다. |
 | 5 | baseline-aware Gate A/B draft | 부분 완료 | `draft`가 Gate A-only 초기 Gate B 초안과 baseline 기반 delta intake/spec 초안을 만든다. 질문 재생성 고도화는 후속이다. |
 | 5-1 | Gate B 승인 반영 | 완료 | `promote-spec`가 approved active spec을 기록하고, 후속 반복에서는 baseline/composition pointer를 보존한다. |
-| 5-2 | diff 기반 task graph 초안 | 부분 완료 | `diff-tasks`가 spec field 차이로 Gate C task graph 초안을 만든다. 의미 기반 task 병합/분할은 후속이다. |
-| 6 | handoff 적응 | 완료 | `p2a_handoff.mjs`가 active 반복 산출물과 current-effective view를 대상 프로젝트로 복사한다. |
+| 5-2 | diff 기반 task graph 초안 | 완료 | `diff-tasks`가 spec field 차이를 semantic group으로 병합/분할하고 rework/reuse/verification dependency를 기록한 Gate C task graph 초안을 만든다. |
+| 6 | handoff 적응 | 완료 | `p2a_handoff.mjs`가 active 반복 산출물, current-effective view, maintenance graph를 대상 프로젝트로 복사하고 handoff 기준점을 기록한다. |
 | 7 | 반복 open/close 명령 | 완료 | 반복 생성, close-ready 마감, archived metadata 표시, composed baseline 기준 다음 반복 open을 자동화한다. |
 | 8 | 반복 fixture/golden | 완료 | greenfield -> init -> current -> tasks ready -> close -> open -> validate/current root 흐름과 draft/compose/handoff 회귀를 고정했다. |
-| 9 | archived append-only 감사 | 부분 완료 | close 시 artifact 존재 여부/hash를 기록하고 `validate --audit-archive`로 변경을 감지한다. 기본 강제와 migration 정책은 후속이다. |
-| 10 | 구조적 diff 기반 재작업 task 생성 | 부분 완료 | `diff-tasks`가 field-level task 후보를 생성한다. semantic diff와 재작업 판단은 후속이다. |
-| 11 | maintenance task graph 운영 | 부분 완료 | `maintenance add`가 graph를 lazy 생성/append하고 validate가 schema/dependency를 검증한다. handoff 정책은 후속이다. |
-| 12 | agent 실행 추적 | 미구현 | task 실행 로그, worktree 분리, 결과 diff 연결은 후속 실행 레이어다. |
+| 9 | archived append-only 감사 | 완료 | close 시 artifact 존재 여부/hash를 기록하고 기본 `validate`에서 변경을 감지한다. legacy/migration은 `--skip-archive-audit`로 우회한다. |
+| 10 | 구조적 diff 기반 재작업 task 생성 | 완료 | `diff-tasks`가 semantic group, 완료 task overlap 기반 rework, `--force` 미완료 task reuse, question disposition 재처분 acceptance를 생성한다. |
+| 11 | maintenance task graph 운영 | 완료 | `maintenance add`가 graph를 lazy 생성/append하고 validate가 schema/dependency를 검증하며 handoff 시 별도 maintenance graph로 복사한다. |
+| 12 | agent 실행 추적 | 완료 | `p2a_runs.mjs`가 run-index/run log, task별 runId, changedFiles, verification, agentTool, workspaceRef, 선택적 branch/worktree 격리 생성, test/lint/typecheck 결과 수집을 제공한다. |
 
 ## 13. 검증 메모
 

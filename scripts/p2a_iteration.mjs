@@ -67,7 +67,7 @@ function usage() {
     'Usage:',
     '  node scripts/p2a_iteration.mjs init --artifacts <greenfield-project-dir> [--iteration-id v1-mvp] [--dry-run]',
     '  node scripts/p2a_iteration.mjs current --artifacts <iterative-project-dir> [--json]',
-    '  node scripts/p2a_iteration.mjs validate --artifacts <iterative-project-dir> [--require-close-ready] [--allow-planning] [--stage ready|gate-a|gate-b-draft|gate-b-approved|gate-c-draft] [--audit-archive]',
+    '  node scripts/p2a_iteration.mjs validate --artifacts <iterative-project-dir> [--require-close-ready] [--allow-planning] [--stage ready|gate-a|gate-b-draft|gate-b-approved|gate-c-draft] [--skip-archive-audit]',
     '  node scripts/p2a_iteration.mjs close --artifacts <iterative-project-dir> [--iteration-id active]',
     '  node scripts/p2a_iteration.mjs open --artifacts <iterative-project-dir> --iteration-id <id> --idea <text>',
     '  node scripts/p2a_iteration.mjs draft --artifacts <iterative-project-dir> [--idea <text>] [--force]',
@@ -107,7 +107,8 @@ function usage() {
     '  --require-close-ready  Require every active iteration task to be done.',
     '  --allow-planning      Accept Gate A/B planning states instead of requiring Gate B-D readiness.',
     '  --stage <stage>       Validate a specific stage: ready, gate-a, gate-b-draft, gate-b-approved, gate-c-draft.',
-    '  --audit-archive       Verify hashes recorded when iterations were closed.',
+    '  --audit-archive       Verify hashes recorded when iterations were closed. This is now the default.',
+    '  --skip-archive-audit  Skip closed-iteration hash verification for legacy/migration cases.',
     '',
     'close options:',
     '  --iteration-id active|<id>  Iteration to close. Default: active. Only active is supported for now.',
@@ -157,6 +158,7 @@ function parseArgs(argv) {
     allowPlanning: false,
     stage: null,
     auditArchive: false,
+    skipArchiveAudit: false,
     allowConflicts: false,
     action: null,
     title: null,
@@ -218,6 +220,9 @@ function parseArgs(argv) {
     } else if (arg === '--audit-archive') {
       if (command !== 'validate') throw new Error('--audit-archive is only supported by validate');
       args.auditArchive = true;
+    } else if (arg === '--skip-archive-audit') {
+      if (command !== 'validate') throw new Error('--skip-archive-audit is only supported by validate');
+      args.skipArchiveAudit = true;
     } else if (arg === '--allow-conflicts') {
       if (command !== 'compose') throw new Error('--allow-conflicts is only supported by compose');
       args.allowConflicts = true;
@@ -371,6 +376,32 @@ function taskSummary(taskGraph) {
   return `${taskGraph.tasks?.length ?? 0}(todo ${counts.todo}·in_progress ${counts.in_progress}·done ${counts.done}·blocked ${counts.blocked})`;
 }
 
+function taskSummaryIfPresent(filePath) {
+  if (!existsSync(filePath)) return '0 (graph 미생성)';
+  try {
+    return taskSummary(loadJson(filePath));
+  } catch {
+    return 'graph invalid';
+  }
+}
+
+function gateSummaryIfPresent(artifactRoot, iterationId) {
+  const specPath = path.join(artifactRoot, sourceSpecRef(iterationId));
+  const taskGraphPath = path.join(artifactRoot, taskGraphRef(iterationId));
+  const reviewPath = path.join(artifactRoot, reviewRef(iterationId));
+  if (!existsSync(specPath)) return 'A/B/C/D 대기';
+  try {
+    const spec = validateSpec(specPath);
+    if (!existsSync(taskGraphPath)) return spec.approval === 'approved' ? 'B✅ C/D 대기' : `B⚠️(${spec.approval}) C/D 대기`;
+    const taskGraph = validateTaskGraph(taskGraphPath, specPath);
+    if (!existsSync(reviewPath)) return `${spec.approval === 'approved' ? 'B✅' : `B⚠️(${spec.approval})`} C✅ D 대기`;
+    const review = validateReview(reviewPath);
+    return gateSummary(spec, taskGraph, review);
+  } catch {
+    return 'gate invalid';
+  }
+}
+
 function normalizeDisplayPath(reference) {
   return String(reference).split(path.sep).join('/');
 }
@@ -429,6 +460,110 @@ function artifactHashes(artifactRoot, references) {
     hashes[reference] = artifactAuditEntry(artifactRoot, reference);
   }
   return hashes;
+}
+
+function statusIterationIds(artifactRoot, currentSpec) {
+  const ids = [];
+  const add = (iterationId) => {
+    if (typeof iterationId === 'string' && iterationId && iterationId !== 'maintenance' && !ids.includes(iterationId)) {
+      ids.push(iterationId);
+    }
+  };
+  for (const iterationId of currentSpec.composed_from ?? []) add(iterationId);
+  for (const closed of currentSpec.closed_iterations ?? []) add(closed?.iteration_id);
+  add(currentSpec.last_closed_iteration?.iteration_id);
+  add(currentSpec.pending_iteration?.iteration_id);
+  add(currentSpec.active_iteration);
+
+  const iterationsRoot = path.join(artifactRoot, 'iterations');
+  if (existsSync(iterationsRoot) && lstatSync(iterationsRoot).isDirectory()) {
+    for (const entry of readdirSync(iterationsRoot, { withFileTypes: true })) {
+      if (entry.isDirectory()) add(entry.name);
+    }
+  }
+  return ids;
+}
+
+function statusForIterationId(currentSpec, iterationId) {
+  const pending = currentSpec.pending_iteration;
+  if (pending?.iteration_id === iterationId) return pending.status ?? 'active_planning';
+  const closed = (currentSpec.closed_iterations ?? []).find((record) => record?.iteration_id === iterationId);
+  if (closed) return closed.status ?? 'archived';
+  if (iterationId === currentSpec.active_iteration) return 'active';
+  return 'archived';
+}
+
+function statusMaintenanceSummary(artifactRoot) {
+  const graphPath = maintenanceTaskGraphPath(artifactRoot);
+  return taskSummaryIfPresent(graphPath);
+}
+
+function renderClosedIterationAudit(currentSpec) {
+  const closed = currentSpec.closed_iterations ?? [];
+  if (!closed.length) return '아직 close된 반복이 없습니다.\n';
+  const rows = [
+    '| 반복 | closed_at | effective spec | artifact audit |',
+    '| --- | --- | --- | --- |',
+  ];
+  for (const record of closed) {
+    const auditCount = record.artifact_hashes && typeof record.artifact_hashes === 'object'
+      ? Object.keys(record.artifact_hashes).length
+      : 0;
+    rows.push(`| ${record.iteration_id} | ${record.closed_at ?? 'unknown'} | ${record.effective_spec_ref ?? 'unknown'} | ${auditCount} file(s) |`);
+  }
+  return `${rows.join('\n')}\n`;
+}
+
+function renderHandoffAudit(currentSpec) {
+  const handoffs = currentSpec.handoff_records ?? [];
+  if (!handoffs.length) return '아직 handoff 기록이 없습니다.\n';
+  const rows = [
+    '| handed_off_at | 반복 | 대상 | mode | 도구 | maintenance |',
+    '| --- | --- | --- | --- | --- | --- |',
+  ];
+  for (const record of handoffs) {
+    rows.push(`| ${record.handed_off_at ?? 'unknown'} | ${record.iteration_id ?? 'unknown'} | ${record.target_project ?? 'unknown'} | ${record.mode ?? 'copy'} | ${(record.ai_tool_targets ?? []).join(', ') || 'none'} | ${record.maintenance_included ? 'included' : 'not included'} |`);
+  }
+  return `${rows.join('\n')}\n`;
+}
+
+export function renderIterationIndexMarkdown(artifactRoot, currentSpec) {
+  const projectId = currentSpec.project_id ?? path.basename(artifactRoot);
+  const activeIteration = currentSpec.active_iteration;
+  const rows = [
+    '| 반복 | 상태 | task | 게이트 | 위치 |',
+    '| --- | --- | --- | --- | --- |',
+  ];
+  for (const iterationId of statusIterationIds(artifactRoot, currentSpec)) {
+    rows.push(`| ${iterationId} | ${statusForIterationId(currentSpec, iterationId)} | ${taskSummaryIfPresent(path.join(artifactRoot, taskGraphRef(iterationId)))} | ${gateSummaryIfPresent(artifactRoot, iterationId)} | iterations/${iterationId}/ |`);
+  }
+  rows.push(`| maintenance | 상시 active | ${statusMaintenanceSummary(artifactRoot)} | task graph only | iterations/maintenance/ |`);
+
+  const pending = currentSpec.pending_iteration;
+  const pendingBlock = pending
+    ? `## 열린 변경 아이디어\n- iteration: ${pending.iteration_id}\n- status: ${pending.status ?? 'active_planning'}\n- opened_at: ${pending.opened_at ?? 'unknown'}\n- drafted_at: ${pending.drafted_at ?? 'not drafted'}\n- idea: ${pending.idea ?? 'not recorded'}\n\n`
+    : '';
+
+  return `# ${projectId} — 반복 인덱스 (Iteration Index)\n\n` +
+    `<!-- p2a:active-iteration=${activeIteration} -->\n\n` +
+    `> 정본: iterations/<iter-id>/gate-*, current-spec.json\n` +
+    `> 반복 history, close 기준점, handoff 기준점을 누적 렌더링합니다.\n\n` +
+    `## 현재\n` +
+    `- 활성 기능 반복: ${activeIteration} (${statusForIterationId(currentSpec, activeIteration)})\n` +
+    `- maintenance: iterations/maintenance (상시)\n` +
+    `- current-spec: current-spec.json (effective → ${currentSpec.effective_spec_ref ?? 'not set'})\n\n` +
+    pendingBlock +
+    `## 반복 목록\n${rows.join('\n')}\n\n` +
+    `## Close Audit\n${renderClosedIterationAudit(currentSpec)}\n` +
+    `## Handoff Audit\n${renderHandoffAudit(currentSpec)}\n` +
+    `## 다음\n` +
+    `- 새 기능 → \`p2a_iteration open --iteration-id <next> --idea <text>\`\n` +
+    `- 작은 fix → \`p2a_iteration maintenance add ...\`\n` +
+    `- 검증 → \`p2a_iteration validate --artifacts <dir>\` (closed iteration archive audit 기본 수행)\n`;
+}
+
+function writeIterationStatus(artifactRoot, currentSpec) {
+  writeFileSync(path.join(artifactRoot, 'status.md'), renderIterationIndexMarkdown(artifactRoot, currentSpec), 'utf8');
 }
 
 function cloneJson(value) {
@@ -1158,11 +1293,73 @@ function reviewRef(iterationId) {
   return `iterations/${iterationId}/gate-d-review/review.json`;
 }
 
-function titleFromSpecRef(specRef) {
-  return specRef
-    .split('.')
-    .map((part) => part.replace(/_/g, ' '))
-    .join(' ');
+const SEMANTIC_AREAS = [
+  {
+    id: 'requirements',
+    label: 'requirements and question disposition',
+    fields: ['problem', 'target_users', 'goals', 'non_goals', 'success_criteria', 'constraints', 'clarifying_question_disposition'],
+    keywords: ['requirement', 'decision', 'question', 'answer', 'assumption', 'scope', 'goal', 'success', 'constraint', 'non-goal'],
+  },
+  {
+    id: 'security',
+    label: 'security and authorization',
+    fields: [],
+    keywords: ['auth', 'authorization', 'authentication', 'permission', 'secret', 'signature', 'hmac', 'token', 'credential'],
+  },
+  {
+    id: 'integration',
+    label: 'external integration',
+    fields: ['external_integrations'],
+    keywords: ['integration', 'provider', 'external', 'third-party', 'oauth', 'webhook provider'],
+  },
+  {
+    id: 'api',
+    label: 'interface and API contract',
+    fields: ['interfaces'],
+    keywords: ['api', 'endpoint', 'http', 'request', 'response', 'contract', 'interface', 'header', 'webhook', 'cli', 'command'],
+  },
+  {
+    id: 'ui',
+    label: 'user-facing workflow and view',
+    fields: ['screens_or_interfaces'],
+    keywords: ['dashboard', 'screen', 'view', 'page', 'chart', 'report', 'table', 'form', 'ui'],
+  },
+  {
+    id: 'data',
+    label: 'data model and data flow',
+    fields: ['data_model_draft', 'data_flow'],
+    keywords: ['data', 'schema', 'model', 'event', 'payload', 'record', 'state', 'storage', 'database', 'db'],
+  },
+  {
+    id: 'delivery',
+    label: 'delivery workflow and reliability',
+    fields: ['core_flows', 'edge_cases'],
+    keywords: ['delivery', 'queue', 'retry', 'idempotency', 'dead-letter', 'background', 'worker', 'async', 'schedule'],
+  },
+  {
+    id: 'architecture',
+    label: 'architecture and dependencies',
+    fields: ['architecture', 'dependencies'],
+    keywords: ['architecture', 'dependency', 'dependencies', 'runtime', 'module', 'service', 'component'],
+  },
+  {
+    id: 'verification',
+    label: 'verification and regression coverage',
+    fields: ['verification'],
+    keywords: ['test', 'tests', 'verification', 'verify', 'coverage', 'lint', 'typecheck', 'acceptance', 'regression'],
+  },
+  {
+    id: 'misc',
+    label: 'supporting implementation detail',
+    fields: [],
+    keywords: [],
+  },
+];
+
+const SEMANTIC_AREA_ORDER = SEMANTIC_AREAS.map((area) => area.id);
+
+function semanticAreaById(areaId) {
+  return SEMANTIC_AREAS.find((area) => area.id === areaId) ?? SEMANTIC_AREAS[SEMANTIC_AREAS.length - 1];
 }
 
 function fieldValueChanged(baselineSpec, activeSpec, section, field) {
@@ -1185,38 +1382,439 @@ function collectSpecFieldChanges(baselineSpec, activeSpec) {
   return changes;
 }
 
-function taskGraphFromSpecChanges({ projectId, iterationId, activeSpec, baselineSpec, baselineRef }) {
-  const changes = collectSpecFieldChanges(baselineSpec, activeSpec);
-  const taskChanges = changes.length ? changes : [{ section: 'implementation', field: 'verification', specRef: 'implementation.verification' }];
+function specValueText(value) {
+  if (typeof value === 'string') return value.trim();
+  if (value === null || value === undefined) return '';
+  return JSON.stringify(value);
+}
+
+function normalizeSpecValueItems(value) {
+  if (Array.isArray(value)) {
+    return value.map(specValueText).filter((item) => item.length > 0);
+  }
+  const text = specValueText(value);
+  return text.length ? [text] : [];
+}
+
+function valueHasContent(value) {
+  return normalizeSpecValueItems(value).length > 0;
+}
+
+function changedItemSet(baselineValue, activeValue) {
+  const baselineItems = normalizeSpecValueItems(baselineValue);
+  const activeItems = normalizeSpecValueItems(activeValue);
+  const baselineSet = new Set(baselineItems);
+  const activeSet = new Set(activeItems);
+  return {
+    added: activeItems.filter((item) => !baselineSet.has(item)),
+    removed: baselineItems.filter((item) => !activeSet.has(item)),
+  };
+}
+
+function changeTypeForValues(baselineValue, activeValue) {
+  const baselineHasContent = valueHasContent(baselineValue);
+  const activeHasContent = valueHasContent(activeValue);
+  if (!baselineHasContent && activeHasContent) return 'added';
+  if (baselineHasContent && !activeHasContent) return 'removed';
+  return 'changed';
+}
+
+function summarizeValue(value, limit = 160) {
+  const text = normalizeSpecValueItems(value).join('; ').replace(/\s+/g, ' ').trim();
+  if (text.length <= limit) return text;
+  return `${text.slice(0, limit - 3)}...`;
+}
+
+function detailedSpecChange(baselineSpec, activeSpec, section, field) {
+  const baselineValue = baselineSpec?.[section]?.[field];
+  const activeValue = activeSpec?.[section]?.[field];
+  const { added, removed } = changedItemSet(baselineValue, activeValue);
+  const specRef = section === 'spec' ? field : `${section}.${field}`;
+  return {
+    section,
+    field,
+    specRef,
+    changeType: changeTypeForValues(baselineValue, activeValue),
+    addedValues: added,
+    removedValues: removed,
+    activeSummary: summarizeValue(activeValue),
+    baselineSummary: summarizeValue(baselineValue),
+  };
+}
+
+function collectDetailedSpecChanges(baselineSpec, activeSpec) {
+  const changes = [];
+  for (const field of PRODUCT_FIELDS) {
+    if (fieldValueChanged(baselineSpec, activeSpec, 'product', field)) {
+      changes.push(detailedSpecChange(baselineSpec, activeSpec, 'product', field));
+    }
+  }
+  for (const field of IMPLEMENTATION_FIELDS) {
+    if (fieldValueChanged(baselineSpec, activeSpec, 'implementation', field)) {
+      changes.push(detailedSpecChange(baselineSpec, activeSpec, 'implementation', field));
+    }
+  }
+  const activeDisposition = activeSpec.clarifying_question_disposition ?? [];
+  const baselineDisposition = baselineSpec?.clarifying_question_disposition ?? [];
+  if ((activeDisposition.length || baselineDisposition.length) && !jsonEqual(baselineDisposition, activeDisposition)) {
+    changes.push(detailedSpecChange(
+      { spec: { clarifying_question_disposition: baselineDisposition } },
+      { spec: { clarifying_question_disposition: activeDisposition } },
+      'spec',
+      'clarifying_question_disposition',
+    ));
+  }
+  return changes;
+}
+
+function keywordHits(text, keywords) {
+  const lower = text.toLowerCase();
+  return keywords.filter((keyword) => lower.includes(keyword)).length;
+}
+
+function semanticAreaScore(area, change) {
+  if (area.id === 'verification' && change.specRef === 'implementation.verification') return 100;
+  if (area.id === 'requirements' && change.specRef === 'clarifying_question_disposition') return 100;
+  const corpus = [
+    change.section,
+    change.field,
+    change.specRef,
+    change.activeSummary,
+    change.baselineSummary,
+    ...change.addedValues,
+    ...change.removedValues,
+  ].join(' ');
+  let score = 0;
+  if (area.fields.includes(change.field)) score += 4;
+  score += keywordHits(corpus, area.keywords);
+  return score;
+}
+
+function semanticAreaForChange(change) {
+  let bestArea = semanticAreaById('misc');
+  let bestScore = -1;
+  for (const area of SEMANTIC_AREAS) {
+    if (area.id === 'misc') continue;
+    const score = semanticAreaScore(area, change);
+    if (score > bestScore) {
+      bestArea = area;
+      bestScore = score;
+    }
+  }
+  return bestScore > 0 ? bestArea : semanticAreaById('misc');
+}
+
+function normalizeRefs(refs) {
+  return [...new Set((refs ?? []).filter((ref) => typeof ref === 'string' && ref.trim().length > 0))];
+}
+
+function refsOverlap(leftRefs, rightRefs) {
+  const right = new Set(normalizeRefs(rightRefs));
+  return normalizeRefs(leftRefs).some((ref) => right.has(ref));
+}
+
+function dispositionAffectsChangedRefs(disposition, changedRefs) {
+  const affects = normalizeRefs(disposition?.affects);
+  if (!affects.length) return false;
+  return affects.some((ref) => (
+    changedRefs.has(ref)
+    || [...changedRefs].some((changedRef) => changedRef.startsWith(`${ref}.`) || ref.startsWith(`${changedRef}.`))
+  ));
+}
+
+function questionDispositionReviewChange(activeSpec, changes) {
+  const dispositions = Array.isArray(activeSpec.clarifying_question_disposition)
+    ? activeSpec.clarifying_question_disposition
+    : [];
+  if (!dispositions.length) return null;
+  const changedRefs = new Set(changes.map((change) => change.specRef));
+  const impacted = dispositions.filter((disposition) => dispositionAffectsChangedRefs(disposition, changedRefs));
+  if (!impacted.length) return null;
+  const ids = impacted.map((disposition) => disposition.id).filter(Boolean).join(', ');
+  return {
+    section: 'spec',
+    field: 'clarifying_question_disposition',
+    specRef: 'clarifying_question_disposition',
+    changeType: 'review',
+    addedValues: [`Re-dispose or confirm user question answers affected by changed refs: ${ids}`],
+    removedValues: [],
+    activeSummary: ids,
+    baselineSummary: '',
+  };
+}
+
+function semanticGroupsFromChanges(activeSpec, detailedChanges) {
+  const changes = [...detailedChanges];
+  const dispositionReview = questionDispositionReviewChange(activeSpec, changes);
+  if (dispositionReview && !changes.some((change) => change.specRef === 'clarifying_question_disposition')) {
+    changes.push(dispositionReview);
+  }
+  if (!changes.length) {
+    changes.push({
+      section: 'implementation',
+      field: 'verification',
+      specRef: 'implementation.verification',
+      changeType: 'unchanged',
+      addedValues: ['Confirm the active spec has no semantic changes against the selected baseline.'],
+      removedValues: [],
+      activeSummary: '',
+      baselineSummary: '',
+    });
+  }
+
+  const groupsByArea = new Map();
+  for (const change of changes) {
+    const area = semanticAreaForChange(change);
+    if (!groupsByArea.has(area.id)) {
+      groupsByArea.set(area.id, {
+        areaId: area.id,
+        label: area.label,
+        changes: [],
+      });
+    }
+    groupsByArea.get(area.id).changes.push(change);
+  }
+
+  return [...groupsByArea.values()].sort((left, right) => (
+    SEMANTIC_AREA_ORDER.indexOf(left.areaId) - SEMANTIC_AREA_ORDER.indexOf(right.areaId)
+  ));
+}
+
+function taskIdNumber(task) {
+  const match = typeof task?.id === 'string' ? task.id.match(/^task-([0-9]+)$/) : null;
+  return match ? Number.parseInt(match[1], 10) : 0;
+}
+
+function formatTaskId(number) {
+  return `task-${String(number).padStart(3, '0')}`;
+}
+
+function nextTaskIdAllocator(existingTasks) {
+  let next = existingTasks.reduce((highest, task) => Math.max(highest, taskIdNumber(task)), 0) + 1;
+  return () => formatTaskId(next++);
+}
+
+function groupSourceRefs(group) {
+  return normalizeRefs(group.changes.map((change) => change.specRef));
+}
+
+function reusableTaskScore(group, task) {
+  if (!task || task.status === 'done') return 0;
+  const groupRefs = groupSourceRefs(group);
+  const taskRefs = normalizeRefs(task.sourceSpecRefs);
+  let score = 0;
+  for (const ref of groupRefs) {
+    if (taskRefs.includes(ref)) score += 4;
+  }
+  if (task.targetArea === group.areaId) score += 6;
+  if (typeof task.title === 'string' && task.title.toLowerCase().includes(group.label.split(' ')[0])) score += 1;
+  return score;
+}
+
+function findReusableTask(group, existingTasks, usedTaskIds) {
+  let best = null;
+  let bestScore = 0;
+  for (const task of existingTasks) {
+    if (usedTaskIds.has(task.id)) continue;
+    const score = reusableTaskScore(group, task);
+    if (score > bestScore) {
+      best = task;
+      bestScore = score;
+    }
+  }
+  return bestScore > 0 ? best : null;
+}
+
+function matchingCompletedTasks(group, historicalTasks) {
+  const groupRefs = groupSourceRefs(group);
+  return historicalTasks
+    .filter((task) => task.status === 'done' && refsOverlap(groupRefs, task.sourceSpecRefs))
+    .slice(0, 5);
+}
+
+function conciseList(values, limit = 4) {
+  const items = normalizeRefs(values);
+  const visible = items.slice(0, limit);
+  const suffix = items.length > visible.length ? `, +${items.length - visible.length} more` : '';
+  return `${visible.join(', ')}${suffix}`;
+}
+
+function changeSummaryLines(group) {
+  const lines = [];
+  for (const change of group.changes) {
+    const additions = change.addedValues.slice(0, 2).map((item) => `added "${summarizeValue(item, 100)}"`);
+    const removals = change.removedValues.slice(0, 1).map((item) => `removed "${summarizeValue(item, 100)}"`);
+    const detail = [...additions, ...removals].join('; ');
+    lines.push(`${change.specRef} (${change.changeType}${detail ? `: ${detail}` : ''})`);
+  }
+  return lines;
+}
+
+function historicalTaskSummary(tasks) {
+  return tasks
+    .map((task) => `${task.iterationId ? `${task.iterationId}/` : ''}${task.id} ${task.title}`)
+    .join('; ');
+}
+
+function semanticTaskTitle(group, reworkTasks) {
+  if (group.areaId === 'verification') return 'Verify semantic change set';
+  const verb = reworkTasks.length ? 'Rework' : 'Implement';
+  return `${verb} ${group.label}`;
+}
+
+function semanticTaskDescription(group, baselineRef, reworkTasks, reusableTask) {
+  const baselineLabel = baselineRef ? `baseline ${baselineRef}` : 'no prior baseline';
+  const lines = [
+    `Semantic diff group "${group.label}" covers ${conciseList(groupSourceRefs(group))} against ${baselineLabel}.`,
+    `Changed refs: ${changeSummaryLines(group).join(' | ')}`,
+  ];
+  if (reworkTasks.length) {
+    lines.push(`Rework previous completed task(s): ${historicalTaskSummary(reworkTasks)}.`);
+  }
+  if (reusableTask) {
+    lines.push(`Reuses existing active task id ${reusableTask.id} while refreshing its semantic scope.`);
+  }
+  if (group.areaId === 'requirements') {
+    lines.push('Regenerate or re-dispose affected user questions and answers before implementation scope is treated as final.');
+  }
+  return lines.join(' ');
+}
+
+function semanticTaskAcceptance(group, reworkTasks) {
+  if (group.areaId === 'verification') {
+    return [
+      'All semantic implementation tasks in this diff graph have automated or documented verification.',
+      'Regression coverage exists for any reworked completed task overlap.',
+      'Clarifying question disposition and reused user answers remain consistent with the approved active spec.',
+    ];
+  }
+  const criteria = [
+    `Active spec refs are implemented together: ${conciseList(groupSourceRefs(group), 8)}.`,
+    'Related changed fields are handled as one semantic change, not as isolated field edits.',
+    'Relevant tests or verification notes are added or updated for this semantic area.',
+  ];
+  if (reworkTasks.length) {
+    criteria.push('Previously completed overlapping work is reused where valid and deliberately revised where the active spec changed behavior.');
+  }
+  if (group.areaId === 'requirements') {
+    criteria.push('Affected clarifying questions, assumptions, and user answers are re-disposed or explicitly confirmed.');
+  }
+  return criteria;
+}
+
+function semanticTaskPrompt({ projectId, iterationId, group, reworkTasks }) {
+  const refs = conciseList(groupSourceRefs(group), 8);
+  const reworkLine = reworkTasks.length
+    ? `Re-evaluate these completed task overlaps before editing: ${historicalTaskSummary(reworkTasks)}.`
+    : 'No completed task overlap was detected for this semantic group.';
+  return [
+    `Use the approved active Plan2Agent spec for ${projectId} iteration ${iterationId}.`,
+    `Work on semantic area "${group.label}" covering refs: ${refs}.`,
+    reworkLine,
+    'Keep the change scoped to this task, preserve unrelated baseline behavior, and update tests or verification artifacts as needed.',
+  ].join('\n');
+}
+
+function buildSemanticTask({ projectId, iterationId, group, taskId, status, dependencies, baselineRef, historicalTasks, reusableTask }) {
+  const reworkTasks = matchingCompletedTasks(group, historicalTasks);
+  return {
+    id: taskId,
+    title: semanticTaskTitle(group, reworkTasks),
+    description: semanticTaskDescription(group, baselineRef, reworkTasks, reusableTask),
+    status,
+    dependencies,
+    acceptanceCriteria: semanticTaskAcceptance(group, reworkTasks),
+    targetArea: group.areaId,
+    suggestedAgentPrompt: semanticTaskPrompt({ projectId, iterationId, group, reworkTasks }),
+    sourceSpecRefs: groupSourceRefs(group),
+  };
+}
+
+function addSyntheticVerificationGroup(groups) {
+  if (groups.some((group) => group.areaId === 'verification')) return groups;
+  if (!groups.some((group) => group.areaId !== 'verification')) return groups;
+  return [
+    ...groups,
+    {
+      areaId: 'verification',
+      label: semanticAreaById('verification').label,
+      changes: [{
+        section: 'implementation',
+        field: 'verification',
+        specRef: 'implementation.verification',
+        changeType: 'review',
+        addedValues: ['Verify the semantic diff task set and regression coverage.'],
+        removedValues: [],
+        activeSummary: '',
+        baselineSummary: '',
+      }],
+    },
+  ];
+}
+
+function semanticTasksFromGroups({ projectId, iterationId, groups, baselineRef, existingTaskGraph, historicalTasks }) {
+  const existingTasks = existingTaskGraph?.tasks ?? [];
+  const nextTaskId = nextTaskIdAllocator(existingTasks);
+  const usedTaskIds = new Set();
+  const taskSlots = [];
+
+  for (const group of groups) {
+    const reusableTask = findReusableTask(group, existingTasks, usedTaskIds);
+    const taskId = reusableTask?.id ?? nextTaskId();
+    if (reusableTask) usedTaskIds.add(reusableTask.id);
+    taskSlots.push({
+      group,
+      taskId,
+      status: reusableTask?.status ?? 'todo',
+      reusableTask,
+    });
+  }
+
+  const requirementsTaskIds = taskSlots
+    .filter((slot) => slot.group.areaId === 'requirements')
+    .map((slot) => slot.taskId);
+  const implementationTaskIds = taskSlots
+    .filter((slot) => slot.group.areaId !== 'verification')
+    .map((slot) => slot.taskId);
+
+  return taskSlots.map((slot) => {
+    let dependencies = [];
+    if (slot.group.areaId === 'verification') {
+      dependencies = implementationTaskIds.filter((taskId) => taskId !== slot.taskId);
+    } else if (slot.group.areaId !== 'requirements') {
+      dependencies = requirementsTaskIds.filter((taskId) => taskId !== slot.taskId);
+    }
+    return buildSemanticTask({
+      projectId,
+      iterationId,
+      group: slot.group,
+      taskId: slot.taskId,
+      status: slot.status,
+      dependencies,
+      baselineRef,
+      historicalTasks,
+      reusableTask: slot.reusableTask,
+    });
+  });
+}
+
+function taskGraphFromSpecChanges({ projectId, iterationId, activeSpec, baselineSpec, baselineRef, existingTaskGraph = null, historicalTasks = [] }) {
+  const detailedChanges = collectDetailedSpecChanges(baselineSpec, activeSpec);
+  const groups = addSyntheticVerificationGroup(semanticGroupsFromChanges(activeSpec, detailedChanges));
+  const tasks = semanticTasksFromGroups({
+    projectId,
+    iterationId,
+    groups,
+    baselineRef,
+    existingTaskGraph,
+    historicalTasks,
+  });
   return {
     schema_version: 'p2a.task_graph.v1',
     projectId,
     version: iterationId,
     sourceSpec: '../gate-b-spec/spec.json',
-    tasks: taskChanges.map((change, index) => {
-      const taskId = `task-${String(index + 1).padStart(3, '0')}`;
-      const title = `Implement ${titleFromSpecRef(change.specRef)}`;
-      const baselineLabel = baselineRef ? `baseline ${baselineRef}` : 'no prior baseline';
-      return {
-        id: taskId,
-        title,
-        description: `Implement and verify the active iteration change for ${change.specRef} against ${baselineLabel}.`,
-        status: 'todo',
-        dependencies: [],
-        acceptanceCriteria: [
-          `Implementation reflects active spec field ${change.specRef}.`,
-          'Relevant tests or verification steps are added or updated.',
-          'No unrelated behavior changes are introduced.',
-        ],
-        targetArea: change.specRef,
-        suggestedAgentPrompt: [
-          `Use the active Plan2Agent spec for ${projectId} iteration ${iterationId}.`,
-          `Implement the change described by ${change.specRef}.`,
-          'Keep the change scoped to this task and update tests or verification artifacts as needed.',
-        ].join('\n'),
-        sourceSpecRefs: [change.specRef],
-      };
-    }),
+    tasks,
   };
 }
 
@@ -1559,9 +2157,10 @@ function applyPlan(paths, iterationId, plan) {
     originalMovedTaskGraph = rebaseMovedTaskGraphSourceSpec(paths.movedTaskGraph);
     const movedFacts = validateMoved(paths);
     const projectId = projectIdFrom(paths.artifactRoot, movedFacts.spec, movedFacts.taskGraph);
+    const currentSpec = currentSpecPointer(projectId, iterationId);
     mkdirSync(paths.maintenanceRoot, { recursive: true });
-    writeFileSync(paths.statusMd, statusMarkdown(projectId, iterationId, movedFacts.spec, movedFacts.taskGraph, movedFacts.review));
-    writeFileSync(paths.currentSpec, `${JSON.stringify(currentSpecPointer(projectId, iterationId), null, 2)}\n`);
+    writeJson(paths.currentSpec, currentSpec);
+    writeIterationStatus(paths.artifactRoot, currentSpec);
     writeFileSync(paths.maintenanceReadme, maintenanceReadme());
   } catch (error) {
     if (originalMovedTaskGraph !== null && existsSync(paths.movedTaskGraph)) {
@@ -1716,6 +2315,50 @@ function gateCTaskGraphDraftPath(state) {
   return path.join(path.dirname(state.taskGraphPath), 'task-graph.draft.json');
 }
 
+function gateCTaskGraphDraftMetaPath(state) {
+  return path.join(path.dirname(state.taskGraphPath), 'task-graph.draft.meta.json');
+}
+
+function parseGateCApprovalAudit(statusPath) {
+  const text = readFileSync(statusPath, 'utf8');
+  const headingMatch = text.match(/^#{3,6}\s+Gate C approval audit\s*$/im);
+  if (!headingMatch) return null;
+  const tail = text.slice(headingMatch.index + headingMatch[0].length);
+  const nextHeading = tail.search(/^#{1,6}\s+/m);
+  const block = nextHeading === -1 ? tail : tail.slice(0, nextHeading);
+  const get = (label) => {
+    const match = block.match(new RegExp(`^\\s*-\\s*${label}:\\s*(.+?)\\s*$`, 'im'));
+    return match ? match[1].trim() : null;
+  };
+  return {
+    approved_by: get('Approved by'),
+    approved_at: get('Approved at'),
+    approved_source: get('Approved source'),
+    authoring_agent: get('Authoring agent'),
+    approval_note: get('Approval note'),
+  };
+}
+
+function taskDraftProvenance(state, draftPath, promotedAt) {
+  const existingMetaPath = gateCTaskGraphDraftMetaPath(state);
+  const existingMeta = existsSync(existingMetaPath) ? loadJson(existingMetaPath) : null;
+  return {
+    ...(existingMeta ?? {}),
+    schema_version: 'p2a.task_graph_draft_meta.v1',
+    project_id: state.projectId,
+    iteration_id: state.activeIteration,
+    draft_ref: artifactRelativePath(state.artifactRoot, draftPath),
+    canonical_task_graph_ref: artifactRelativePath(state.artifactRoot, state.taskGraphPath),
+    source_spec_ref: sourceSpecRef(state.activeIteration),
+    baseline_effective_spec_ref: state.currentSpec.effective_spec_ref ?? null,
+    source_idea: state.currentSpec.pending_iteration?.idea ?? null,
+    draft_sha256: fileSha256(draftPath),
+    source_spec_sha256: existsSync(state.specPath) ? fileSha256(state.specPath) : null,
+    promoted_at: promotedAt,
+    gate_c_approval_audit: parseGateCApprovalAudit(state.statusPath),
+  };
+}
+
 function summarizeTask(task) {
   return {
     id: task.id,
@@ -1840,6 +2483,7 @@ function addMaintenanceTask(args) {
 
   mkdirSync(path.dirname(graphPath), { recursive: true });
   writeJson(graphPath, graph);
+  writeIterationStatus(state.artifactRoot, state.currentSpec);
   console.log(`Plan2Agent maintenance task added: ${task.id}`);
   console.log(`- graph: ${toRelativeFromRoot(graphPath)}`);
   console.log(`- tasks: ${graph.tasks.length}`);
@@ -1902,7 +2546,7 @@ function validateIteration(args) {
   validateReviewPass(state.reviewPath);
   if (args.requireCloseReady) assertCloseReadyTasks(taskGraph);
   const maintenance = validateMaintenanceTaskGraphIfPresent(state.artifactRoot);
-  const archivedAuditCount = args.auditArchive ? auditArchivedIterations(state.currentSpec, state.artifactRoot) : null;
+  const archivedAuditCount = args.skipArchiveAudit ? null : auditArchivedIterations(state.currentSpec, state.artifactRoot);
 
   const statusCounts = countStatuses(taskGraph.tasks);
   console.log(`Plan2Agent iteration validation passed: ${toRelativeFromRoot(state.artifactRoot)}`);
@@ -1913,6 +2557,7 @@ function validateIteration(args) {
   if (args.requireCloseReady) console.log('- close-ready: all tasks done');
   if (maintenance) console.log(`- maintenance: ${maintenance.graph.tasks.length} task(s) valid`);
   if (archivedAuditCount !== null) console.log(`- archived audit: ${archivedAuditCount} closed iteration(s) verified`);
+  else console.log('- archived audit: skipped');
   return 0;
 }
 
@@ -1944,21 +2589,10 @@ function close(args) {
     record,
   );
 
+  const nextCurrentSpec = currentSpecForClose(facts.state.currentSpec, facts.state.activeIteration, record);
   writeJson(iterationMetadataPath(artifactRoot, facts.state.activeIteration), metadata);
-  writeJson(facts.state.currentSpecPath, currentSpecForClose(facts.state.currentSpec, facts.state.activeIteration, record));
-  writeFileSync(
-    facts.state.statusPath,
-    closeStatusMarkdown(
-      facts.state.projectId,
-      facts.state.activeIteration,
-      facts.spec,
-      facts.taskGraph,
-      facts.review,
-      closedAt,
-      facts.state.currentSpec.effective_spec_ref,
-    ),
-    'utf8',
-  );
+  writeJson(facts.state.currentSpecPath, nextCurrentSpec);
+  writeIterationStatus(artifactRoot, nextCurrentSpec);
 
   console.log(`Plan2Agent iteration closed: ${toRelativeFromRoot(facts.state.iterationRoot)}`);
   console.log(`- active iteration: ${facts.state.activeIteration}`);
@@ -1991,10 +2625,8 @@ function promoteSpec(args) {
 
   const promotedAt = new Date().toISOString();
   const artifacts = activeSpecArtifacts(state.artifactRoot, state.activeIteration);
-  writeJson(
-    state.currentSpecPath,
-    currentSpecForPromotedSpec(state.currentSpec, state.activeIteration, promotedAt, artifacts),
-  );
+  const nextCurrentSpec = currentSpecForPromotedSpec(state.currentSpec, state.activeIteration, promotedAt, artifacts);
+  writeJson(state.currentSpecPath, nextCurrentSpec);
   writeJson(
     iterationMetadataPath(state.artifactRoot, state.activeIteration),
     iterationMetadataForPromotedSpec(
@@ -2005,6 +2637,7 @@ function promoteSpec(args) {
       artifacts,
     ),
   );
+  writeIterationStatus(state.artifactRoot, nextCurrentSpec);
 
   const promotedState = resolveIterationState(artifactRoot, { requireReady: false });
   console.log(`Plan2Agent active spec promoted: ${toRelativeFromRoot(state.specPath)}`);
@@ -2041,6 +2674,9 @@ function promoteTasks(args) {
   const draft = loadJson(draftPath);
   validateTaskGraphData(draft, state.specPath);
   assertGateCApprovalAudit(state.statusPath);
+  const promotedAt = new Date().toISOString();
+  const metaPath = gateCTaskGraphDraftMetaPath(state);
+  writeJson(metaPath, taskDraftProvenance(state, draftPath, promotedAt));
 
   const promoted = {
     ...draft,
@@ -2048,10 +2684,12 @@ function promoteTasks(args) {
   };
   writeJson(state.taskGraphPath, promoted);
   renameSync(draftPath, `${draftPath}.promoted`);
+  writeIterationStatus(state.artifactRoot, state.currentSpec);
 
   console.log(`Plan2Agent tasks promoted: ${promoted.tasks.length} task(s)`);
   console.log(`- graph: ${toRelativeFromRoot(state.taskGraphPath)}`);
   console.log('- promoted from: task-graph.draft.json');
+  console.log(`- provenance: ${toRelativeFromRoot(metaPath)}`);
   return 0;
 }
 
@@ -2074,6 +2712,50 @@ function loadDiffBaseline(state) {
   };
 }
 
+function loadExistingTaskGraphIfPresent(taskGraphPath) {
+  if (!existsSync(taskGraphPath)) return null;
+  const graph = loadJson(taskGraphPath);
+  validateTaskGraphData(graph);
+  return graph;
+}
+
+function historicalCompletedTasks(state) {
+  const tasks = [];
+  const seenGraphRefs = new Set();
+  const addTasksFromGraphRef = (graphRef, iterationId) => {
+    if (!graphRef || seenGraphRefs.has(graphRef)) return;
+    seenGraphRefs.add(graphRef);
+    const graphPath = resolveArtifactFileReference(graphRef, state.artifactRoot);
+    if (!existsSync(graphPath) || !lstatSync(graphPath).isFile()) return;
+    const graph = loadJson(graphPath);
+    validateTaskGraphData(graph);
+    for (const task of graph.tasks ?? []) {
+      if (task.status === 'done') tasks.push({ ...task, iterationId });
+    }
+  };
+
+  for (const closed of state.currentSpec.closed_iterations ?? []) {
+    const iterationId = closed?.iteration_id;
+    if (!iterationId) continue;
+    addTasksFromGraphRef(closed.task_graph_ref ?? taskGraphRef(iterationId), iterationId);
+  }
+  for (const source of state.currentSpec.source_specs ?? []) {
+    const iterationId = source?.iteration_id;
+    if (!iterationId) continue;
+    addTasksFromGraphRef(taskGraphRef(iterationId), iterationId);
+  }
+  return tasks;
+}
+
+function semanticGraphStats(graph) {
+  const tasks = graph.tasks ?? [];
+  return {
+    groups: normalizeRefs(tasks.map((task) => task.targetArea)),
+    rework: tasks.filter((task) => task.title.startsWith('Rework ') || task.description.includes('Rework previous completed task')).length,
+    reused: tasks.filter((task) => task.description.includes('Reuses existing active task id')).length,
+  };
+}
+
 function diffTasks(args) {
   const artifactRoot = normalizeArtifactPath(args.artifacts);
   const state = resolveIterationState(artifactRoot, { requireReady: false });
@@ -2091,20 +2773,27 @@ function diffTasks(args) {
     throw new Error(`task graph already exists: ${taskGraphPath}; use --force to overwrite`);
   }
   const { baselineSpec, baselineRef } = loadDiffBaseline(state);
+  const existingTaskGraph = args.force ? loadExistingTaskGraphIfPresent(taskGraphPath) : null;
   const graph = taskGraphFromSpecChanges({
     projectId: state.projectId,
     iterationId: state.activeIteration,
     activeSpec,
     baselineSpec,
     baselineRef,
+    existingTaskGraph,
+    historicalTasks: historicalCompletedTasks(state),
   });
   validateTaskGraphData(graph, state.specPath);
   mkdirSync(path.dirname(taskGraphPath), { recursive: true });
   writeJson(taskGraphPath, graph);
 
+  const stats = semanticGraphStats(graph);
   console.log(`Plan2Agent diff task graph generated: ${toRelativeFromRoot(taskGraphPath)}`);
   console.log(`- active iteration: ${state.activeIteration}`);
   console.log(`- baseline: ${baselineRef ?? 'none'}`);
+  console.log(`- semantic groups: ${stats.groups.join(', ')}`);
+  console.log(`- rework groups: ${stats.rework}`);
+  console.log(`- reused active tasks: ${stats.reused}`);
   console.log(`- tasks: ${graph.tasks.length}`);
   return 0;
 }
@@ -2143,16 +2832,9 @@ function open(args) {
   writeFileSync(path.join(iterationRoot, 'gate-a-intake', 'README.md'), gateReadme('Gate A intake', args.iterationId), 'utf8');
   writeFileSync(path.join(iterationRoot, 'gate-b-spec', 'README.md'), gateReadme('Gate B spec', args.iterationId), 'utf8');
 
-  writeFileSync(
-    facts.state.currentSpecPath,
-    `${JSON.stringify(currentSpecForOpen(facts.state.currentSpec, args.iterationId, facts.state.activeIteration, idea, openedAt), null, 2)}\n`,
-    'utf8',
-  );
-  writeFileSync(
-    facts.state.statusPath,
-    openStatusMarkdown(projectId, args.iterationId, facts.state.activeIteration, facts.taskGraph, idea, openedAt, effectiveSpecRef),
-    'utf8',
-  );
+  const nextCurrentSpec = currentSpecForOpen(facts.state.currentSpec, args.iterationId, facts.state.activeIteration, idea, openedAt);
+  writeJson(facts.state.currentSpecPath, nextCurrentSpec);
+  writeIterationStatus(artifactRoot, nextCurrentSpec);
 
   const openedState = resolveIterationState(artifactRoot, { requireReady: false });
   console.log(`Plan2Agent iteration opened: ${toRelativeFromRoot(openedState.iterationRoot)}`);
@@ -2240,15 +2922,9 @@ function draft(args) {
     path.join(state.iterationRoot, 'iteration.json'),
     iterationMetadataForDraft(metadata, idea, draftedAt, artifacts),
   );
-  writeJson(
-    state.currentSpecPath,
-    currentSpecForDraft(state.currentSpec, state.activeIteration, idea, draftedAt, artifacts),
-  );
-  writeFileSync(
-    state.statusPath,
-    draftStatusMarkdown(projectId, state.activeIteration, baselineIteration, idea, pending.opened_at, draftedAt, baselineSpecRef ?? 'none'),
-    'utf8',
-  );
+  const nextCurrentSpec = currentSpecForDraft(state.currentSpec, state.activeIteration, idea, draftedAt, artifacts);
+  writeJson(state.currentSpecPath, nextCurrentSpec);
+  writeIterationStatus(state.artifactRoot, nextCurrentSpec);
 
   console.log(`Plan2Agent iteration draft generated: ${toRelativeFromRoot(state.iterationRoot)}`);
   console.log(`- active iteration: ${state.activeIteration}`);
@@ -2271,6 +2947,7 @@ function compose(args) {
     );
   }
   writeJson(state.currentSpecPath, composedCurrentSpec);
+  writeIterationStatus(state.artifactRoot, composedCurrentSpec);
   if (composedCurrentSpec.open_decisions.length) {
     console.log(`Plan2Agent current spec composed with conflicts: ${toRelativeFromRoot(state.currentSpecPath)}`);
     console.log(`- open decisions: ${composedCurrentSpec.open_decisions.map((decision) => decision.id).join(', ')}`);

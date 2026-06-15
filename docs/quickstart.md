@@ -1,0 +1,392 @@
+# Plan2Agent Quickstart
+
+Plan2Agent는 한 문장 아이디어를 승인 가능한 제품/구현 명세와 실행 가능한 task graph로 바꾸고, 이후 개발 handoff와 agent 실행 결과 추적까지 이어주는 파일 기반 planning harness다.
+
+이 문서는 처음 사용하는 사람이 전체 제품 흐름을 빠르게 이해하고 바로 명령을 실행할 수 있도록 만든 사용자용 시작 페이지다. 세부 옵션은 [CLI 사용자 가이드](cli-reference.md), 반복 구조의 정식 계약은 [반복/고도화 개발 스펙](iteration-spec.md)을 본다.
+
+문서 홈: [Plan2Agent Docs](README.md)
+
+## 한눈에 보기
+
+| 원하는 일 | 사용하는 것 | 결과 |
+| --- | --- | --- |
+| 아이디어를 기획 산출물로 만들기 | P2A skills/subagents | `artifacts/<project_id>/gate-*` |
+| 산출물 검증하기 | `validate_artifacts.mjs`, `run_fixtures.mjs` | schema/gate 오류 조기 발견 |
+| 다음 반복 열기 | `p2a_iteration.mjs` | `iterations/<iter-id>/`와 `current-spec.json` |
+| 변경분 task 만들기 | `diff-tasks`, `context`, `promote-tasks` | semantic task graph 또는 agent-authored task graph |
+| 대상 프로젝트로 넘기기 | `p2a_handoff.mjs` | `.plan2agent/`와 실행 CLI 설치 |
+| 개발 task 실행 관리 | `p2a_tasks.mjs` | ready/prompt/start/done 상태 전이 |
+| agent 실행 결과 기록 | `p2a_runs.mjs` | `runs/run-index.json`, `runs/<runId>.json` |
+
+```text
+Idea
+  -> Gate A intake
+  -> Gate B product spec + implementation plan
+  -> Gate C task graph
+  -> Gate D review
+  -> handoff to target project
+  -> task execution + run logs
+  -> next iteration
+```
+
+## 설치 후 첫 확인
+
+저장소 루트에서 다음 명령이 통과하면 기본 schema, fixture, CLI mirror 상태가 맞다.
+
+```bash
+node scripts/run_fixtures.mjs
+node scripts/check_cli_parity.mjs
+```
+
+개별 artifact root를 검증할 때는 다음을 사용한다.
+
+```bash
+node scripts/validate_artifacts.mjs \
+  --artifact-root artifacts/<project_id> \
+  --project-id <project_id> \
+  --require-handoff-ready
+```
+
+## 제품 흐름
+
+### 1. 기획 생성
+
+P2A 하네스는 다음 gate를 지킨다.
+
+| Gate | 의미 | 통과 조건 |
+| --- | --- | --- |
+| Gate A | intake 결정 | high-impact decision이 답변됨 |
+| Gate B | 제품/구현 spec 승인 | `approval: approved`, `open_decisions: []` |
+| Gate C | task graph 확정 | dependency 유효, cycle 없음, acceptance 있음 |
+| Gate D | review 통과 | blocking issue 없음 |
+
+생성되는 기본 파일 구조:
+
+```text
+artifacts/<project_id>/
+  status.md
+  gate-a-intake/
+    intake.json
+    intake.md
+  gate-b-spec/
+    product-spec.md
+    implementation-plan.md
+    spec.json
+  gate-c-task-graph/
+    task-graph.json
+  gate-d-review/
+    review-report.md
+    review.json
+```
+
+### 2. 반복 구조로 전환
+
+초기 planning bundle이 Gate B-D까지 준비되면 반복 구조로 전환한다.
+
+```bash
+node scripts/p2a_iteration.mjs init \
+  --artifacts artifacts/<project_id> \
+  --iteration-id v1-mvp
+```
+
+현재 활성 반복을 확인한다.
+
+```bash
+node scripts/p2a_iteration.mjs current \
+  --artifacts artifacts/<project_id>
+```
+
+반복 구조가 생기면 정본은 다음 파일들이다.
+
+```text
+artifacts/<project_id>/
+  status.md
+  current-spec.json
+  iterations/
+    v1-mvp/
+      gate-a-intake/
+      gate-b-spec/
+      gate-c-task-graph/
+      gate-d-review/
+    maintenance/
+```
+
+### 3. 새 변경 열기
+
+현재 반복의 task가 완료되고 close-ready 상태가 되면 반복을 닫는다.
+
+```bash
+node scripts/p2a_iteration.mjs validate \
+  --artifacts artifacts/<project_id> \
+  --require-close-ready
+
+node scripts/p2a_iteration.mjs close \
+  --artifacts artifacts/<project_id>
+```
+
+다음 변경을 연다.
+
+```bash
+node scripts/p2a_iteration.mjs open \
+  --artifacts artifacts/<project_id> \
+  --iteration-id iter-002 \
+  --idea "Add follow-up dashboard"
+```
+
+Gate A/B 초안을 만든다.
+
+```bash
+node scripts/p2a_iteration.mjs draft \
+  --artifacts artifacts/<project_id>
+```
+
+사용자가 Gate B를 승인한 뒤 active spec으로 반영한다.
+
+```bash
+node scripts/p2a_iteration.mjs promote-spec \
+  --artifacts artifacts/<project_id>
+```
+
+### 4. 변경분 task 만들기
+
+빠른 deterministic 경로는 `diff-tasks`다. active spec과 baseline spec의 field 차이를 semantic group으로 병합/분할하고, 이전 완료 task와 겹치면 `Rework` task로 표시한다.
+
+```bash
+node scripts/p2a_iteration.mjs diff-tasks \
+  --artifacts artifacts/<project_id>
+```
+
+agent가 Gate C task graph 초안을 저작하게 하려면 context를 뽑는다.
+
+```bash
+node scripts/p2a_iteration.mjs context \
+  --artifacts artifacts/<project_id> \
+  > task-context.json
+```
+
+agent-authored `task-graph.draft.json`을 검증하고, 사람이 Gate C approval audit을 남긴 뒤 정본으로 승격한다.
+
+```bash
+node scripts/p2a_iteration.mjs validate \
+  --artifacts artifacts/<project_id> \
+  --stage gate-c-draft
+
+node scripts/p2a_iteration.mjs promote-tasks \
+  --artifacts artifacts/<project_id>
+```
+
+### 5. 대상 프로젝트로 인계
+
+Gate B-D가 통과된 artifact를 대상 프로젝트로 넘긴다.
+
+```bash
+node scripts/p2a_handoff.mjs \
+  --project-id <project_id> \
+  --artifacts artifacts/<project_id> \
+  --target ../target-project \
+  --include-intake \
+  --tools codex,claude,gemini
+```
+
+대상 프로젝트에는 다음이 설치된다.
+
+```text
+.plan2agent/
+  artifacts/
+    spec.json
+    task-graph.json
+    review.json
+    status.md
+  current-spec.json
+  manifest.json
+  project.config.json
+scripts/
+  p2a_tasks.mjs
+  p2a_runs.mjs
+  validate_artifacts.mjs
+schemas/
+  *.schema.json
+```
+
+Team Big Five adapter도 함께 설치할 수 있다.
+
+```bash
+node scripts/p2a_handoff.mjs \
+  --project-id <project_id> \
+  --artifacts artifacts/<project_id> \
+  --target ../target-project \
+  --tools codex,claude,gemini \
+  --include-team-bigfive \
+  --team-bigfive-source /path/to/team-bigfive \
+  --team-bigfive-targets all
+```
+
+## 대상 프로젝트에서 개발하기
+
+인계 후 대상 프로젝트에서 ready task를 확인한다.
+
+```bash
+cd ../target-project
+
+node scripts/p2a_tasks.mjs ready \
+  --graph .plan2agent/artifacts/task-graph.json
+```
+
+실행 prompt를 뽑는다.
+
+```bash
+node scripts/p2a_tasks.mjs prompt \
+  --graph .plan2agent/artifacts/task-graph.json \
+  task-001
+```
+
+task를 시작 상태로 바꾼다.
+
+```bash
+node scripts/p2a_tasks.mjs start \
+  --graph .plan2agent/artifacts/task-graph.json \
+  task-001
+```
+
+agent 실행 run log를 연다.
+
+```bash
+node scripts/p2a_runs.mjs start \
+  --graph .plan2agent/artifacts/task-graph.json \
+  --task task-001 \
+  --agent-tool codex \
+  --workspace . \
+  --workspace-ref target-project \
+  --isolation branch \
+  --branch p2a/task-001
+```
+
+검증 결과를 수집한다.
+
+```bash
+node scripts/p2a_runs.mjs verify \
+  --run-id run-... \
+  --test \
+  --lint \
+  --typecheck
+```
+
+변경 파일을 기록하고 run을 닫는다.
+
+```bash
+node scripts/p2a_runs.mjs finish \
+  --run-id run-... \
+  --collect-git \
+  --status finished
+```
+
+task를 완료 처리한다.
+
+```bash
+node scripts/p2a_tasks.mjs done \
+  --graph .plan2agent/artifacts/task-graph.json \
+  task-001
+```
+
+## Maintenance task
+
+작은 fix나 문서 수정처럼 Gate A-D 전체 반복을 열기 애매한 일은 maintenance graph에 추가한다.
+
+```bash
+node scripts/p2a_iteration.mjs maintenance add \
+  --artifacts artifacts/<project_id> \
+  --title "Fix typo in API docs" \
+  --accept "Typo is corrected." \
+  --ref effective_product.problem
+```
+
+maintenance task만 조회하려면 `--maintenance`를 붙인다.
+
+```bash
+node scripts/p2a_tasks.mjs ready \
+  --artifacts artifacts/<project_id> \
+  --maintenance
+```
+
+반복 handoff 시 maintenance graph가 있으면 active graph와 병합하지 않고 `.plan2agent/maintenance/task-graph.json`으로 별도 복사된다.
+
+## 어떤 파일을 봐야 하나
+
+| 파일 | 언제 보는가 |
+| --- | --- |
+| `artifacts/<project_id>/status.md` | 현재 gate, 열린 결정, 반복 history, close/handoff audit 확인 |
+| `artifacts/<project_id>/current-spec.json` | 현재 effective spec과 active iteration 기준 확인 |
+| `iterations/<iter-id>/gate-b-spec/spec.json` | 승인된 제품/구현 spec의 구조화 원본 확인 |
+| `iterations/<iter-id>/gate-c-task-graph/task-graph.json` | 실행 가능한 task와 dependency 확인 |
+| `iterations/<iter-id>/gate-c-task-graph/task-graph.draft.meta.json` | agent-authored task graph provenance 확인 |
+| `runs/run-index.json` | task별 runId 목록과 latest run 확인 |
+| `runs/<runId>.json` | agentTool, workspaceRef, changedFiles, verification 확인 |
+| `.plan2agent/manifest.json` | handoff에서 대상 프로젝트에 설치된 파일 목록 확인 |
+| `.plan2agent/project.config.json` | test/lint/typecheck command와 run tracking 기본값 확인 |
+
+## 검증 체크리스트
+
+작업 전후 자주 쓰는 검증 명령:
+
+```bash
+node scripts/check_cli_parity.mjs
+node scripts/run_fixtures.mjs
+git diff --check
+```
+
+반복 artifact 검증:
+
+```bash
+node scripts/p2a_iteration.mjs validate \
+  --artifacts artifacts/<project_id>
+```
+
+close 가능 여부 확인:
+
+```bash
+node scripts/p2a_iteration.mjs validate \
+  --artifacts artifacts/<project_id> \
+  --require-close-ready
+```
+
+run log 검증:
+
+```bash
+node scripts/validate_artifacts.mjs \
+  --runs-dir artifacts/<project_id>/runs
+```
+
+대상 프로젝트 handoff 준비 상태:
+
+```bash
+node scripts/validate_artifacts.mjs \
+  --artifact-root artifacts/<project_id> \
+  --project-id <project_id> \
+  --require-handoff-ready
+```
+
+## 운영 원칙
+
+- 승인 전 산출물을 다음 gate 입력으로 쓰지 않는다.
+- `task-graph.json` schema는 실행 상태만 담고, agent 실행 결과는 `runs/` sidecar에 둔다.
+- 반복은 append-only에 가깝게 보존하고, 변경/누락/재작업은 새 반복의 task로 남긴다.
+- `diff-tasks`는 deterministic fallback이고, 복잡한 task 저작은 `context`와 agent-authored draft gate를 사용한다.
+- `handoff`는 파일과 실행 도구를 복사하지만 agent를 자동 실행하지 않는다.
+- `p2a_runs --create-isolation`을 쓰기 전에는 git branch/worktree 생성 정책을 확인한다.
+
+## 빠른 문제 해결
+
+| 증상 | 확인할 것 |
+| --- | --- |
+| `task graph generation is blocked` | Gate B spec의 `approval`과 `open_decisions` |
+| `Gate C approval audit block required` | `status.md`에 Gate C approval audit이 있는지 |
+| `open requires ... archived` | 이전 반복을 `close`했는지 |
+| `run-index ... does not match run file` | `runs/run-index.json`과 `runs/<runId>.json`을 수동 편집하지 않았는지 |
+| handoff 대상에서 test/lint/typecheck가 안 잡힘 | `.plan2agent/project.config.json`의 command 값을 채웠는지 |
+
+## 다음에 볼 문서
+
+- [CLI 사용자 가이드](cli-reference.md) — 명령별 사용법과 옵션 예시
+- [하네스 사용자 가이드](harness-guide.md) — Gate A-D 산출물 계약과 schema 설명
+- [반복/고도화 개발 스펙](iteration-spec.md) — 반복 구조, close/open, semantic diff, run tracking 계약
+- [하네스 구현 기준](harness-spec.md) — skill/subagent 역할과 구현 원칙

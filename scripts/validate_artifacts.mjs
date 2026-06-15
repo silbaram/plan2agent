@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /** Validate Plan2Agent JSON artifacts and golden fixtures with Node.js stdlib only. */
 
-import { existsSync, lstatSync, readFileSync } from 'node:fs';
+import { existsSync, lstatSync, readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -14,6 +14,8 @@ const SCHEMA_PATHS = {
   task_graph: path.join(ROOT, 'schemas', 'task-graph.schema.json'),
   task_context: path.join(ROOT, 'schemas', 'task-context.schema.json'),
   review: path.join(ROOT, 'schemas', 'review.schema.json'),
+  run: path.join(ROOT, 'schemas', 'run.schema.json'),
+  run_index: path.join(ROOT, 'schemas', 'run-index.schema.json'),
 };
 const GATE_PATHS = {
   statusDoc: 'status.md',
@@ -73,6 +75,8 @@ function schemaTypeMatches(instance, expectedType) {
   if (expectedType === 'string') return typeof instance === 'string';
   if (expectedType === 'boolean') return typeof instance === 'boolean';
   if (expectedType === 'null') return instance === null;
+  if (expectedType === 'number') return typeof instance === 'number' && Number.isFinite(instance);
+  if (expectedType === 'integer') return Number.isInteger(instance);
   throw new ValidationError(`unsupported schema type ${JSON.stringify(expectedType)} at $`);
 }
 
@@ -87,7 +91,7 @@ export function validateSchema(instance, schema, instancePath = '$') {
 
   const expectedType = schema.type;
   if (expectedType) {
-    const supported = new Set(['object', 'array', 'string', 'boolean', 'null']);
+    const supported = new Set(['object', 'array', 'string', 'boolean', 'null', 'number', 'integer']);
     const expectedTypes = Array.isArray(expectedType) ? expectedType : [expectedType];
     const unsupported = expectedTypes.filter((type) => !supported.has(type));
     if (unsupported.length) {
@@ -104,6 +108,15 @@ export function validateSchema(instance, schema, instancePath = '$') {
     }
     if (Object.hasOwn(schema, 'pattern') && !new RegExp(schema.pattern).test(instance)) {
       throw new ValidationError(`${instancePath} must match pattern ${JSON.stringify(schema.pattern)}`);
+    }
+  }
+
+  if (typeof instance === 'number') {
+    if (Object.hasOwn(schema, 'minimum') && instance < schema.minimum) {
+      throw new ValidationError(`${instancePath} must be >= ${schema.minimum}`);
+    }
+    if (Object.hasOwn(schema, 'maximum') && instance > schema.maximum) {
+      throw new ValidationError(`${instancePath} must be <= ${schema.maximum}`);
     }
   }
 
@@ -368,6 +381,91 @@ export function validateReviewPass(filePath, expectedSources = null) {
   return validateReview(filePath, expectedSources, { requirePass: true });
 }
 
+export function validateRunData(data) {
+  validateSchema(data, loadJson(SCHEMA_PATHS.run));
+  if (data.status === 'started' && data.finishedAt !== null) {
+    throw new ValidationError('started run must have finishedAt null');
+  }
+  if (data.status !== 'started' && data.finishedAt === null) {
+    throw new ValidationError(`${data.status} run must include finishedAt`);
+  }
+  return data;
+}
+
+export function validateRun(filePath) {
+  const data = validateRunData(loadJson(filePath));
+  const expectedName = `${data.runId}.json`;
+  if (path.basename(filePath) !== expectedName) {
+    throw new ValidationError(`run filename must be ${expectedName}`);
+  }
+  return data;
+}
+
+export function validateRunIndexData(data) {
+  validateSchema(data, loadJson(SCHEMA_PATHS.run_index));
+  const runIds = data.runs.map((run) => run.runId);
+  if (runIds.length !== new Set(runIds).size) {
+    throw new ValidationError('run-index runs[].runId values must be unique');
+  }
+  const indexedTaskIds = data.tasks.map((task) => task.taskId);
+  if (indexedTaskIds.length !== new Set(indexedTaskIds).size) {
+    throw new ValidationError('run-index tasks[].taskId values must be unique');
+  }
+  const runIdSet = new Set(runIds);
+  for (const task of data.tasks) {
+    const missing = task.runIds.filter((runId) => !runIdSet.has(runId));
+    if (missing.length) throw new ValidationError(`${task.taskId} references unknown run ids: ${JSON.stringify(missing)}`);
+    if (task.latestRunId !== null && !runIdSet.has(task.latestRunId)) {
+      throw new ValidationError(`${task.taskId} latestRunId is unknown: ${task.latestRunId}`);
+    }
+    const indexedRuns = data.runs.filter((run) => run.taskId === task.taskId).map((run) => run.runId);
+    if (JSON.stringify(indexedRuns) !== JSON.stringify(task.runIds)) {
+      throw new ValidationError(`${task.taskId} runIds must match runs[] order`);
+    }
+  }
+  const taskIdSet = new Set(indexedTaskIds);
+  const missingTasks = data.runs.map((run) => run.taskId).filter((taskId) => !taskIdSet.has(taskId));
+  if (missingTasks.length) {
+    throw new ValidationError(`run-index tasks[] is missing task ids: ${JSON.stringify([...new Set(missingTasks)])}`);
+  }
+  return data;
+}
+
+export function validateRunIndex(filePath) {
+  return validateRunIndexData(loadJson(filePath));
+}
+
+export function validateRunsDir(runsDir) {
+  if (!existsSync(runsDir)) throw new ValidationError(`runs directory is missing: ${runsDir}`);
+  if (!lstatSync(runsDir).isDirectory()) throw new ValidationError(`runs path must be a directory: ${runsDir}`);
+  const indexPath = path.join(runsDir, 'run-index.json');
+  assertFile(indexPath, 'run-index.json');
+  const index = validateRunIndex(indexPath);
+  for (const run of index.runs) {
+    const runPath = path.join(runsDir, `${run.runId}.json`);
+    assertFile(runPath, run.runRef);
+    const runData = validateRun(runPath);
+    if (run.runRef !== `${run.runId}.json`) {
+      throw new ValidationError(`run-index ${run.runId}.runRef must be ${run.runId}.json`);
+    }
+    for (const field of ['runId', 'taskId', 'iterationId', 'status', 'agentTool', 'workspaceRef', 'taskGraphRef', 'startedAt', 'finishedAt']) {
+      if (JSON.stringify(run[field]) !== JSON.stringify(runData[field])) {
+        throw new ValidationError(`run-index ${run.runId}.${field} does not match run file`);
+      }
+    }
+    if (runData.projectId !== index.projectId) {
+      throw new ValidationError(`run ${run.runId} projectId does not match run-index projectId`);
+    }
+  }
+  const indexedRunFiles = new Set(index.runs.map((run) => `${run.runId}.json`));
+  const extraRunFiles = readdirSync(runsDir)
+    .filter((entry) => entry.endsWith('.json') && entry !== 'run-index.json' && !indexedRunFiles.has(entry));
+  if (extraRunFiles.length) {
+    throw new ValidationError(`runs directory contains unindexed run file(s): ${extraRunFiles.join(', ')}`);
+  }
+  return index;
+}
+
 function validateReviewPassData(data) {
   if (data.blocking_issues.length !== 0) {
     throw new ValidationError(`review cannot pass Gate D while blocking_issues is non-empty: ${JSON.stringify(data.blocking_issues)}`);
@@ -613,6 +711,9 @@ function parseArgs(argv) {
     else if (arg === '--spec') args.spec = argv[++index];
     else if (arg === '--task-graph') args.taskGraph = argv[++index];
     else if (arg === '--review') args.review = argv[++index];
+    else if (arg === '--run') args.run = argv[++index];
+    else if (arg === '--run-index') args.runIndex = argv[++index];
+    else if (arg === '--runs-dir') args.runsDir = argv[++index];
     else if (arg === '--require-approved-spec') args.requireApprovedSpec = argv[++index];
     else if (arg === '--require-handoff-ready') args.requireHandoffReady = true;
     else if (arg === '--require-review-pass') args.requireReviewPass = true;
@@ -643,6 +744,9 @@ export function main(argv = process.argv.slice(2)) {
       throw new ValidationError('--require-review-pass requires --review');
     }
     if (args.review) validateReview(args.review, null, { requirePass: args.requireReviewPass });
+    if (args.run) validateRun(args.run);
+    if (args.runIndex) validateRunIndex(args.runIndex);
+    if (args.runsDir) validateRunsDir(args.runsDir);
     for (const fixtureDir of args.fixtureDir) validateFixtureDir(fixtureDir);
   } catch (error) {
     if (error instanceof SyntaxError || error instanceof ValidationError || error.code) {

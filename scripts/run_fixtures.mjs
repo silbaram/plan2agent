@@ -17,6 +17,7 @@ const NEGATIVE_FIXTURE_ROOT = path.join(FIXTURE_ROOT, '_negative');
 const VALIDATOR = path.join(ROOT, 'scripts', 'validate_artifacts.mjs');
 const ITERATION_CLI = path.join(ROOT, 'scripts', 'p2a_iteration.mjs');
 const TASKS_CLI = path.join(ROOT, 'scripts', 'p2a_tasks.mjs');
+const RUNS_CLI = path.join(ROOT, 'scripts', 'p2a_runs.mjs');
 const HANDOFF_CLI = path.join(ROOT, 'scripts', 'p2a_handoff.mjs');
 
 function runValidator(args) {
@@ -31,12 +32,20 @@ function runTasks(args, options = {}) {
   return spawnSync(process.execPath, [TASKS_CLI, ...args], { cwd: ROOT, encoding: 'utf8', input: options.input });
 }
 
+function runRuns(args) {
+  return spawnSync(process.execPath, [RUNS_CLI, ...args], { cwd: ROOT, encoding: 'utf8' });
+}
+
 function runHandoff(args) {
   return spawnSync(process.execPath, [HANDOFF_CLI, ...args], { cwd: ROOT, encoding: 'utf8' });
 }
 
 function runTargetTasks(targetRoot, args) {
   return spawnSync(process.execPath, [path.join(targetRoot, 'scripts', 'p2a_tasks.mjs'), ...args], { cwd: targetRoot, encoding: 'utf8' });
+}
+
+function runTargetRuns(targetRoot, args) {
+  return spawnSync(process.execPath, [path.join(targetRoot, 'scripts', 'p2a_runs.mjs'), ...args], { cwd: targetRoot, encoding: 'utf8' });
 }
 
 function writeResultOutput(result) {
@@ -133,6 +142,9 @@ function validateE2eFixtureCases() {
       }
       if (
         !existsSync(path.join(targetRoot, 'scripts', 'p2a_iteration_state.mjs'))
+        || !existsSync(path.join(targetRoot, 'scripts', 'p2a_runs.mjs'))
+        || !existsSync(path.join(targetRoot, 'schemas', 'run.schema.json'))
+        || !existsSync(path.join(targetRoot, 'schemas', 'run-index.schema.json'))
         || existsSync(path.join(targetRoot, '.plan2agent', 'current-spec.json'))
       ) {
         console.error(`greenfield handoff wrote unexpected tool/current-spec files: ${caseData.id}`);
@@ -145,6 +157,114 @@ function validateE2eFixtureCases() {
         console.error(`greenfield handoff target p2a_tasks execution failed: ${caseData.id}`);
         writeResultOutput(result);
         return { status: result.status ?? 1, checks };
+      }
+
+      result = runTargetRuns(targetRoot, ['list', '--graph', path.join(targetRoot, '.plan2agent', 'artifacts', 'task-graph.json')]);
+      checks += 1;
+      if (result.status !== 0 || !result.stdout.includes('runId')) {
+        console.error(`greenfield handoff target p2a_runs execution failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: result.status || 1, checks };
+      }
+
+      const toolTargetRoot = path.join(tempRoot, 'target-project-tools');
+      result = runHandoff([
+        '--project-id',
+        caseData.project_id,
+        '--artifacts',
+        caseData.artifact_root,
+        '--target',
+        toolTargetRoot,
+        '--tools',
+        'codex,gemini',
+      ]);
+      checks += 1;
+      if (result.status !== 0) {
+        console.error(`greenfield handoff --tools fixture check failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: result.status ?? 1, checks };
+      }
+      const expectedToolFiles = [
+        path.join('.agents', 'skills', 'p2a-harness', 'SKILL.md'),
+        path.join('.agents', 'agents', 'p2a-requirements.md'),
+        path.join('.codex', 'agents', 'p2a-task-graph.toml'),
+        path.join('.gemini', 'agents', 'p2a-task-graph.md'),
+        path.join('.gemini', 'commands', 'p2a', 'harness.toml'),
+      ];
+      const missingToolFiles = expectedToolFiles.filter((filePath) => !existsSync(path.join(toolTargetRoot, filePath)));
+      const toolManifest = JSON.parse(readFileSync(path.join(toolTargetRoot, '.plan2agent', 'manifest.json'), 'utf8'));
+      if (
+        missingToolFiles.length
+        || toolManifest.aiToolTargets.join(',') !== 'codex,gemini'
+        || !toolManifest.includedTools.includes('p2a_codex_assets')
+        || !toolManifest.includedTools.includes('p2a_gemini_assets')
+        || !toolManifest.includedTools.includes('p2a_runs')
+        || !toolManifest.toolFiles.includes('.agents/skills/p2a-harness/SKILL.md')
+        || !toolManifest.toolFiles.includes('.gemini/commands/p2a/harness.toml')
+        || !toolManifest.toolFiles.includes('scripts/p2a_runs.mjs')
+        || !toolManifest.schemaFiles.includes('schemas/run.schema.json')
+      ) {
+        console.error(`greenfield handoff --tools output mismatch: ${caseData.id}`);
+        console.error(JSON.stringify({ missingToolFiles, toolManifest }, null, 2));
+        return { status: 1, checks };
+      }
+
+      const teamSourceRoot = path.join(tempRoot, 'team-bigfive-source');
+      mkdirSync(path.join(teamSourceRoot, '_workspace'), { recursive: true });
+      writeFileSync(path.join(teamSourceRoot, 'package.json'), JSON.stringify({ name: 'team-bigfive', version: '1.2.3' }, null, 2));
+      writeFileSync(path.join(teamSourceRoot, 'README.md'), '# Team Big Five fixture\n');
+      writeFileSync(path.join(teamSourceRoot, '.env'), 'SHOULD_NOT_COPY=1\n');
+      writeFileSync(path.join(teamSourceRoot, '_workspace', 'run.log'), 'SHOULD_NOT_COPY\n');
+
+      const teamTargetRoot = path.join(tempRoot, 'target-project-team-bigfive');
+      result = runHandoff([
+        '--project-id',
+        caseData.project_id,
+        '--artifacts',
+        caseData.artifact_root,
+        '--target',
+        teamTargetRoot,
+        '--include-team-bigfive',
+        '--team-bigfive-source',
+        teamSourceRoot,
+        '--team-bigfive-targets',
+        'all',
+      ]);
+      checks += 1;
+      if (result.status !== 0) {
+        console.error(`greenfield handoff Team Big Five fixture check failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: result.status ?? 1, checks };
+      }
+      const expectedTeamFiles = [
+        path.join('.plan2agent', 'team-harnesses', 'team-bigfive', 'source-manifest.json'),
+        path.join('.plan2agent', 'team-harnesses', 'team-bigfive', 'adaptation-notes.md'),
+        path.join('.agents', 'skills', 'team-bigfive-kickoff', 'SKILL.md'),
+        path.join('.codex', 'agents', 'team-bigfive-coordinator.toml'),
+        path.join('.claude', 'skills', 'team-bigfive-kickoff', 'SKILL.md'),
+        path.join('.claude', 'agents', 'team-bigfive-coordinator.md'),
+        path.join('.claude-plugin', 'team-bigfive', 'source', 'README.md'),
+        path.join('.gemini', 'agents', 'team-bigfive-coordinator.md'),
+        path.join('.gemini', 'commands', 'p2a', 'team-bigfive.toml'),
+      ];
+      const missingTeamFiles = expectedTeamFiles.filter((filePath) => !existsSync(path.join(teamTargetRoot, filePath)));
+      const teamManifest = JSON.parse(readFileSync(path.join(teamTargetRoot, '.plan2agent', 'manifest.json'), 'utf8'));
+      const teamSourceManifest = JSON.parse(readFileSync(path.join(teamTargetRoot, '.plan2agent', 'team-harnesses', 'team-bigfive', 'source-manifest.json'), 'utf8'));
+      if (
+        missingTeamFiles.length
+        || existsSync(path.join(teamTargetRoot, '.claude-plugin', 'team-bigfive', 'source', '.env'))
+        || existsSync(path.join(teamTargetRoot, '.claude-plugin', 'team-bigfive', 'source', '_workspace', 'run.log'))
+        || !teamManifest.includedTools.includes('team_bigfive_adapter')
+        || teamManifest.externalHarnesses.length !== 1
+        || teamManifest.externalHarnesses[0].name !== 'team-bigfive'
+        || teamManifest.externalHarnesses[0].targets.join(',') !== 'codex,claude,gemini'
+        || teamManifest.externalHarnesses[0].sourceVersion !== '1.2.3'
+        || teamSourceManifest.source.fileCount !== 2
+        || teamSourceManifest.source.files.some((file) => file.path === '.env' || file.path.startsWith('_workspace/'))
+      ) {
+        console.error(`greenfield handoff Team Big Five output mismatch: ${caseData.id}`);
+        console.error(JSON.stringify({ missingTeamFiles, teamManifest, teamSourceManifest }, null, 2));
+        return { status: 1, checks };
       }
     } finally {
       rmSync(tempRoot, { recursive: true, force: true });
@@ -288,6 +408,101 @@ function validateIterationCurrentFixtureCases() {
         return { status: 1, checks };
       }
 
+      const fixtureRunId = 'run-fixture-task-001';
+      const runsDir = path.join(artifactRoot, 'runs');
+      result = runRuns([
+        'start',
+        '--artifacts',
+        artifactRoot,
+        '--task',
+        'task-001',
+        '--run-id',
+        fixtureRunId,
+        '--agent-tool',
+        'codex',
+        '--workspace',
+        artifactRoot,
+        '--workspace-ref',
+        'fixture-workspace',
+        '--isolation',
+        'branch',
+        '--branch',
+        'p2a/task-001-fixture',
+        '--changed-file',
+        'src/task-001.ts',
+        '--note',
+        'Fixture run started.',
+      ]);
+      checks += 1;
+      if (result.status !== 0 || !result.stdout.includes(`Plan2Agent run started: ${fixtureRunId}`)) {
+        console.error(`p2a_runs start fixture check failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: result.status || 1, checks };
+      }
+
+      result = runRuns([
+        'verify',
+        '--artifacts',
+        artifactRoot,
+        '--run-id',
+        fixtureRunId,
+        '--test-command',
+        `${process.execPath} -e "process.exit(0)"`,
+        '--lint-command',
+        `${process.execPath} -e "process.exit(0)"`,
+        '--typecheck-command',
+        `${process.execPath} -e "process.exit(0)"`,
+      ]);
+      checks += 1;
+      if (result.status !== 0 || !result.stdout.includes('test: passed') || !result.stdout.includes('typecheck: passed')) {
+        console.error(`p2a_runs verify fixture check failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: result.status || 1, checks };
+      }
+
+      result = runRuns([
+        'finish',
+        '--artifacts',
+        artifactRoot,
+        '--run-id',
+        fixtureRunId,
+        '--status',
+        'finished',
+        '--changed-file',
+        'test/task-001.test.ts',
+        '--note',
+        'Fixture run finished.',
+      ]);
+      checks += 1;
+      if (result.status !== 0 || !result.stdout.includes('- status: finished')) {
+        console.error(`p2a_runs finish fixture check failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: result.status || 1, checks };
+      }
+
+      result = runValidator(['--runs-dir', runsDir]);
+      checks += 1;
+      if (result.status !== 0) {
+        console.error(`p2a_runs validator fixture check failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: result.status ?? 1, checks };
+      }
+      const fixtureRun = JSON.parse(readFileSync(path.join(runsDir, `${fixtureRunId}.json`), 'utf8'));
+      const fixtureRunIndex = JSON.parse(readFileSync(path.join(runsDir, 'run-index.json'), 'utf8'));
+      if (
+        fixtureRun.agentTool !== 'codex'
+        || fixtureRun.workspaceRef !== 'fixture-workspace'
+        || fixtureRun.isolation.mode !== 'branch'
+        || fixtureRun.changedFiles.join(',') !== 'src/task-001.ts,test/task-001.test.ts'
+        || fixtureRun.verification.length !== 3
+        || !fixtureRun.verification.every((item) => item.status === 'passed')
+        || fixtureRunIndex.tasks.find((task) => task.taskId === 'task-001')?.latestRunId !== fixtureRunId
+      ) {
+        console.error(`p2a_runs wrote unexpected run log fixture: ${caseData.id}`);
+        console.error(JSON.stringify({ fixtureRun, fixtureRunIndex }, null, 2));
+        return { status: 1, checks };
+      }
+
       for (const task of updatedTaskGraph.tasks) task.status = 'done';
       writeFileSync(state.taskGraphPath, `${JSON.stringify(updatedTaskGraph, null, 2)}\n`, 'utf8');
       const closedBaselineTaskGraph = JSON.parse(JSON.stringify(updatedTaskGraph));
@@ -338,6 +553,13 @@ function validateIterationCurrentFixtureCases() {
       checks += 1;
       if (result.status !== 0 || !result.stdout.includes('archived audit: 1 closed iteration(s) verified')) {
         console.error(`iteration archive audit fixture check failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: result.status ?? 1, checks };
+      }
+      result = runIteration(['validate', '--artifacts', artifactRoot, '--require-close-ready']);
+      checks += 1;
+      if (result.status !== 0 || !result.stdout.includes('archived audit: 1 closed iteration(s) verified')) {
+        console.error(`iteration default archive audit fixture check failed: ${caseData.id}`);
         writeResultOutput(result);
         return { status: result.status ?? 1, checks };
       }
@@ -486,9 +708,42 @@ function validateIterationCurrentFixtureCases() {
         writeResultOutput(result);
         return { status: result.status ?? 1, checks };
       }
-      const iter2TaskGraph = JSON.parse(readFileSync(iter2TaskGraphPath, 'utf8'));
+      let iter2TaskGraph = JSON.parse(readFileSync(iter2TaskGraphPath, 'utf8'));
       if (iter2TaskGraph.sourceSpec !== '../gate-b-spec/spec.json' || !iter2TaskGraph.tasks.length) {
         console.error(`iteration diff-tasks wrote invalid task graph fixture: ${caseData.id}`);
+        console.error(JSON.stringify(iter2TaskGraph, null, 2));
+        return { status: 1, checks };
+      }
+      const iter2VerificationTask = iter2TaskGraph.tasks.find((task) => task.targetArea === 'verification');
+      const iter2ImplementationTaskIds = iter2TaskGraph.tasks
+        .filter((task) => task.targetArea !== 'verification')
+        .map((task) => task.id);
+      if (
+        iter2TaskGraph.tasks.length >= 16
+        || !iter2VerificationTask
+        || JSON.stringify(iter2VerificationTask.dependencies) !== JSON.stringify(iter2ImplementationTaskIds)
+        || !iter2TaskGraph.tasks.some((task) => task.title.startsWith('Rework '))
+        || !iter2TaskGraph.tasks.some((task) => task.description.includes('Rework previous completed task'))
+      ) {
+        console.error(`iteration diff-tasks did not generate expected semantic/rework graph: ${caseData.id}`);
+        console.error(JSON.stringify(iter2TaskGraph, null, 2));
+        return { status: 1, checks };
+      }
+
+      const originalSemanticTaskIds = iter2TaskGraph.tasks.map((task) => task.id);
+      result = runIteration(['diff-tasks', '--artifacts', artifactRoot, '--force']);
+      checks += 1;
+      if (result.status !== 0 || !result.stdout.includes('reused active tasks:')) {
+        console.error(`iteration diff-tasks --force reuse fixture check failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: result.status ?? 1, checks };
+      }
+      iter2TaskGraph = JSON.parse(readFileSync(iter2TaskGraphPath, 'utf8'));
+      if (
+        JSON.stringify(iter2TaskGraph.tasks.map((task) => task.id)) !== JSON.stringify(originalSemanticTaskIds)
+        || !iter2TaskGraph.tasks.some((task) => task.description.includes('Reuses existing active task id'))
+      ) {
+        console.error(`iteration diff-tasks --force did not reuse active semantic tasks: ${caseData.id}`);
         console.error(JSON.stringify(iter2TaskGraph, null, 2));
         return { status: 1, checks };
       }
@@ -820,25 +1075,38 @@ function validateIterationCurrentFixtureCases() {
       const targetManifestPath = path.join(iterationTargetRoot, '.plan2agent', 'manifest.json');
       const targetTaskGraphPath = path.join(iterationTargetRoot, '.plan2agent', 'artifacts', 'task-graph.json');
       const targetSpecPath = path.join(iterationTargetRoot, '.plan2agent', 'artifacts', 'spec.json');
+      const targetMaintenanceGraphPath = path.join(iterationTargetRoot, '.plan2agent', 'maintenance', 'task-graph.json');
       if (
         !existsSync(targetCurrentSpecPath)
         || !existsSync(targetSpecPath)
         || !existsSync(path.join(iterationTargetRoot, '.plan2agent', 'artifacts', 'intake.json'))
+        || !existsSync(targetMaintenanceGraphPath)
         || !existsSync(path.join(iterationTargetRoot, 'scripts', 'p2a_iteration_state.mjs'))
+        || !existsSync(path.join(iterationTargetRoot, 'scripts', 'p2a_runs.mjs'))
+        || !existsSync(path.join(iterationTargetRoot, 'schemas', 'run-index.schema.json'))
       ) {
         console.error(`iteration handoff did not copy active artifacts/current-spec/tools: ${caseData.id}`);
         return { status: 1, checks };
       }
       const targetManifest = JSON.parse(readFileSync(targetManifestPath, 'utf8'));
+      const targetCurrentSpec = JSON.parse(readFileSync(targetCurrentSpecPath, 'utf8'));
+      const sourceCurrentSpecAfterHandoff = JSON.parse(readFileSync(path.join(artifactRoot, 'current-spec.json'), 'utf8'));
       const targetTaskGraph = JSON.parse(readFileSync(targetTaskGraphPath, 'utf8'));
       if (
         targetManifest.sourceLayout !== 'iteration'
         || targetManifest.sourceIterationId !== 'iter-002'
         || targetManifest.currentSpecFile !== '.plan2agent/current-spec.json'
+        || JSON.stringify(targetManifest.maintenanceFiles) !== JSON.stringify(['.plan2agent/maintenance/task-graph.json'])
+        || !targetManifest.includedTools.includes('p2a_runs')
+        || !targetManifest.toolFiles.includes('scripts/p2a_runs.mjs')
+        || !targetManifest.schemaFiles.includes('schemas/run-index.schema.json')
+        || targetCurrentSpec.last_handoff?.iteration_id !== 'iter-002'
+        || targetCurrentSpec.last_handoff?.maintenance_included !== true
+        || sourceCurrentSpecAfterHandoff.last_handoff?.target_project !== iterationTargetRoot
         || targetTaskGraph.sourceSpec !== 'spec.json'
       ) {
         console.error(`iteration handoff manifest/task graph contract mismatch: ${caseData.id}`);
-        console.error(JSON.stringify({ targetManifest, targetTaskGraphSourceSpec: targetTaskGraph.sourceSpec }, null, 2));
+        console.error(JSON.stringify({ targetManifest, targetCurrentSpec, sourceCurrentSpecAfterHandoff, targetTaskGraphSourceSpec: targetTaskGraph.sourceSpec }, null, 2));
         return { status: 1, checks };
       }
 
@@ -848,6 +1116,14 @@ function validateIterationCurrentFixtureCases() {
         console.error(`iteration handoff target p2a_tasks execution failed: ${caseData.id}`);
         writeResultOutput(result);
         return { status: result.status ?? 1, checks };
+      }
+
+      result = runTargetRuns(iterationTargetRoot, ['list', '--graph', targetTaskGraphPath]);
+      checks += 1;
+      if (result.status !== 0 || !result.stdout.includes('runId')) {
+        console.error(`iteration handoff target p2a_runs execution failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: result.status || 1, checks };
       }
 
       result = runIteration(['open', '--artifacts', artifactRoot, '--iteration-id', 'iter-003', '--idea', 'Add composed baseline reporting']);
@@ -998,6 +1274,7 @@ function validateIterationCurrentFixtureCases() {
         return { status: result.status ?? 1, checks };
       }
       const promotedTaskGraph = JSON.parse(readFileSync(iter3TaskGraphPath, 'utf8'));
+      const iter3DraftMetaPath = path.join(path.dirname(iter3TaskGraphPath), 'task-graph.draft.meta.json');
       try {
         validateTaskGraphData(promotedTaskGraph, iter3SpecPath);
       } catch (error) {
@@ -1008,6 +1285,18 @@ function validateIterationCurrentFixtureCases() {
       if (promotedTaskGraph.version !== 'iter-003') {
         console.error(`iteration promote-tasks did not remove -draft version suffix: ${caseData.id}`);
         console.error(JSON.stringify(promotedTaskGraph, null, 2));
+        return { status: 1, checks };
+      }
+      const iter3DraftMeta = existsSync(iter3DraftMetaPath) ? JSON.parse(readFileSync(iter3DraftMetaPath, 'utf8')) : null;
+      if (
+        !iter3DraftMeta
+        || iter3DraftMeta.schema_version !== 'p2a.task_graph_draft_meta.v1'
+        || iter3DraftMeta.iteration_id !== 'iter-003'
+        || typeof iter3DraftMeta.draft_sha256 !== 'string'
+        || iter3DraftMeta.gate_c_approval_audit?.authoring_agent !== 'codex / p2a-task-author'
+      ) {
+        console.error(`iteration promote-tasks did not write provenance sidecar: ${caseData.id}`);
+        console.error(JSON.stringify(iter3DraftMeta, null, 2));
         return { status: 1, checks };
       }
 

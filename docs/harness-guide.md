@@ -1,6 +1,8 @@
 # Plan2Agent 하네스 사용자 가이드
 
-이 문서는 Plan2Agent(P2A) 하네스를 처음 사용하는 사용자가 한 문장 아이디어를 검토 가능한 기획 산출물로 바꾸는 흐름을 이해하도록 돕는 안내서다. 기준은 `p2a-harness` skill, 하네스 구현 기준, 그리고 저장소 readme의 최신 정책이다.
+이 문서는 Plan2Agent(P2A)의 Gate A-D 산출물, schema, evidence, approval audit을 자세히 설명하는 사용자 레퍼런스다. 처음 시작하는 흐름은 [Quickstart](quickstart.md)를 먼저 보고, 명령 예시는 [CLI 사용자 가이드](cli-reference.md)를 본다.
+
+문서 홈: [Plan2Agent Docs](README.md)
 
 ## 목차
 
@@ -536,9 +538,9 @@ node scripts/sync_cli_assets.mjs
 - 제품 방향과 로드맵은 `plans/01-product-roadmap.md`를 먼저 본다. v1은 “아이디어 입력 -> 대화 보강 -> 개발 명세 -> task graph 생성/관리”까지 담당하고, 실제 agent 자동 실행보다 실행 가능한 task를 만드는 데 집중한다.
 - 하네스 구현 기준은 `docs/harness-spec.md`를 본다. 이 문서는 단계, 역할, 승인 게이트, resume, state passing, evidence, 저장 구조, 검증 스크립트 기준을 정의한다.
 - 다회차 기획과 반복/고도화 개발 구조는 `docs/iteration-spec.md`를 본다. 이 문서는 iteration layout, `current-spec.json`, active iteration, maintenance, open/close 후보 명령을 정의한다.
-- 최신 사용 정책과 CLI별 quick start는 `readme.md`를 본다.
-- v1 한계: 코드 변경, dependency 설치, 구현 목적 shell 실행, agent 자동 실행, PTY/worktree/run log 관리는 하네스 범위가 아니다.
-- v2 로드맵 한 줄 요약: v1 산출물을 실제 개발 프로젝트로 옮기고, agent 실행 로그, worktree 분리, 결과 diff 연결 같은 실행 orchestration을 붙이는 방향이다.
+- 사용자 시작점과 문서 탐색은 `docs/README.md`와 `docs/quickstart.md`를 먼저 본다. CLI별 세부 명령은 `docs/cli-reference.md`를 본다.
+- v1 한계: 코드 변경, dependency 설치, 구현 목적 shell 실행, agent 자동 실행, PTY 기반 실행 관리는 하네스 범위가 아니다.
+- 실행 추적: handoff 이후 `p2a_runs.mjs`가 파일 기반 run log, changed files, verification, workspace/branch/worktree 참조를 기록한다. agent 자동 실행 orchestration은 후속이다.
 
 무엇을 보강했는지:
 
@@ -550,4 +552,4 @@ node scripts/sync_cli_assets.mjs
 - `fixtures/cache-library/`의 실제 JSON 발췌를 추가했다.
 - validation 실패 메시지별 원인/해결과 CLI reload/parity 관련 FAQ를 추가했다.
 - gate, skill, subagent, artifact, resume, mirror/canonical 등 핵심 용어집을 추가했다.
-- `plans/01-product-roadmap.md`, `docs/harness-spec.md`, `docs/iteration-spec.md`, `readme.md` 포인터와 v1/v2 범위를 명확히 했다.
+- `plans/01-product-roadmap.md`, `docs/README.md`, `docs/quickstart.md`, `docs/harness-spec.md`, `docs/iteration-spec.md` 포인터와 v1/v2 범위를 명확히 했다.

@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://plan2agent.local/schemas/run-index.schema.json",
+  "title": "Plan2Agent Agent Run Index",
+  "type": "object",
+  "required": ["schema_version", "projectId", "runs", "tasks"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {"const": "p2a.run_index.v1"},
+    "projectId": {"type": "string", "minLength": 1},
+    "runs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "runId",
+          "taskId",
+          "iterationId",
+          "status",
+          "agentTool",
+          "workspaceRef",
+          "taskGraphRef",
+          "runRef",
+          "startedAt",
+          "finishedAt"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "runId": {"type": "string", "pattern": "^run-[A-Za-z0-9._-]+$"},
+          "taskId": {"type": "string", "pattern": "^task-[0-9]+$"},
+          "iterationId": {"type": ["string", "null"]},
+          "status": {"type": "string", "enum": ["started", "finished", "failed", "blocked"]},
+          "agentTool": {"type": "string", "minLength": 1},
+          "workspaceRef": {"type": "string", "minLength": 1},
+          "taskGraphRef": {"type": "string", "minLength": 1},
+          "runRef": {"type": "string", "minLength": 1},
+          "startedAt": {"type": "string", "minLength": 1},
+          "finishedAt": {"type": ["string", "null"]}
+        }
+      }
+    },
+    "tasks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["taskId", "runIds", "latestRunId"],
+        "additionalProperties": false,
+        "properties": {
+          "taskId": {"type": "string", "pattern": "^task-[0-9]+$"},
+          "runIds": {"type": "array", "items": {"type": "string", "pattern": "^run-[A-Za-z0-9._-]+$"}},
+          "latestRunId": {"type": ["string", "null"]}
+        }
+      }
+    }
+  }
+}

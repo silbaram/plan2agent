@@ -2,7 +2,7 @@
 
 Plan2Agent(P2A)는 사용자의 한 문장 아이디어를 출발점으로 삼아, 대화로 기획을 보강하고, 개발 가능한 명세와 task graph로 분해하는 planning harness다.
 
-현재 v1 하네스는 코드 변경을 자동 실행하지 않는다. Claude Code, Codex, Gemini CLI가 공통 skill과 subagent를 사용해 `idea -> intake -> spec -> task graph -> review` 흐름을 read-only로 수행하도록 구성되어 있다.
+현재 v1 하네스는 코드 변경을 자동 실행하지 않는다. Claude Code, Codex, Gemini CLI가 공통 skill과 subagent를 사용해 `idea -> intake -> spec -> task graph -> review` 흐름을 수행하고, handoff 이후에는 task 상태와 agent 실행 결과를 파일 기반 sidecar로 기록한다.
 
 ## 현재 범위
 
@@ -14,20 +14,23 @@ v1에서 하는 일:
 - 승인된 구현 명세를 구현 가능한 task graph로 분해한다.
 - task별 agent 실행 prompt 초안을 만든다.
 - 명세와 task graph의 누락, 과대 task, 의존성 오류, gate 위반을 검토한다.
+- 반복 구조에서 close/open, semantic diff task, maintenance task, handoff 기준점을 관리한다.
+- 대상 프로젝트로 산출물과 실행 도구를 handoff한다.
+- agent 실행 결과를 run log로 기록한다.
 - 4개 CLI 구성의 mirror drift를 검사한다.
 
 v1에서 하지 않는 일:
 
 - 실제 코드 변경 자동 실행
 - dependency 설치 또는 shell 기반 구현 작업
-- 병렬 worktree 생성
-- 코드 diff 자동 분석
 - agent 실행 결과 자동 병합
 - DB 또는 지식 그래프 저장소 운영
 
 ## 기준 문서
 
 - [제품 기준과 고도화 로드맵](plans/01-product-roadmap.md)
+- [문서 홈](docs/README.md)
+- [제품 퀵스타트](docs/quickstart.md)
 - [하네스 구현 기준](docs/harness-spec.md)
 - [반복/고도화 개발 스펙](docs/iteration-spec.md)
 - [CLI 사용자 가이드](docs/cli-reference.md)
@@ -441,4 +444,4 @@ node scripts/p2a_tasks.mjs <command> --graph artifacts/<project_id>/gate-c-task-
 ## 다음 고도화 작업
 
 - CLI asset drift check와 fixture runner의 CI 연결은 사용자 관리 항목으로 유지
-- v2에서 agent 실행 로그, worktree 분리, 결과 diff 연결 추가
+- 완료: `p2a_runs.mjs` 기반 agent 실행 로그, branch/worktree 격리 기준, 결과 diff 연결 sidecar 추가. PTY 기반 agent 자동 실행과 PR 생성은 후속.
