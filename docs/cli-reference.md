@@ -133,7 +133,7 @@ node scripts/p2a_iteration.mjs maintenance add \
 
 ```bash
 node scripts/p2a_tasks.mjs <command> --graph <path> [--spec <path>] [task-id]
-node scripts/p2a_tasks.mjs <command> --artifacts <iterative-project-dir> [task-id]
+node scripts/p2a_tasks.mjs <command> --artifacts <iterative-project-dir> [--maintenance] [task-id]
 ```
 
 | 명령 | 설명 |
@@ -166,7 +166,7 @@ node scripts/p2a_tasks.mjs start \
   task-001
 ```
 
-반복 구조로 변환된 artifact는 active iteration을 자동 인식할 수 있다.
+반복 구조로 변환된 artifact는 active iteration을 자동 인식할 수 있다. `--maintenance`를 함께 쓰면 active 기능 반복 대신 `iterations/maintenance/gate-c-task-graph/task-graph.json` 단일 그래프를 대상으로 같은 명령을 실행한다.
 
 ```bash
 node scripts/p2a_tasks.mjs ready \
@@ -179,9 +179,18 @@ node scripts/p2a_tasks.mjs prompt \
 node scripts/p2a_tasks.mjs start \
   --artifacts artifacts/<project_id> \
   task-001
+
+node scripts/p2a_tasks.mjs ready \
+  --artifacts artifacts/<project_id> \
+  --maintenance
+
+node scripts/p2a_tasks.mjs start \
+  --artifacts artifacts/<project_id> \
+  --maintenance \
+  task-001
 ```
 
-터미널에서 인자 없이 실행하거나 `-i`/`--interactive`를 붙이면 번호 메뉴 기반 대화형 모드가 열린다. 대화형 모드에서도 active artifact 루트와 task graph 파일 입력 중 하나를 선택할 수 있다.
+터미널에서 인자 없이 실행하거나 `-i`/`--interactive`를 붙이면 번호 메뉴 기반 대화형 모드가 열린다. 대화형 모드에서도 active artifact 루트, maintenance 레인, task graph 파일 입력 중 하나를 선택할 수 있다.
 
 ```bash
 node scripts/p2a_tasks.mjs

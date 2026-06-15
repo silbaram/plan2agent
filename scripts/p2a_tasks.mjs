@@ -47,6 +47,7 @@ function usage() {
     '  --graph <path>       Task graph JSON path.',
     '  --artifacts <dir>    Iterative artifact root; uses the active iteration task graph.',
     '  --spec <path>        Spec JSON path for prompt context. Only supported with --graph.',
+    '  --maintenance        With --artifacts, operate on the maintenance task graph.',
   ].join('\n');
 }
 
@@ -56,6 +57,7 @@ function parseArgs(argv) {
   let graphPath = null;
   let artifactsPath = null;
   let specPath = null;
+  let maintenance = false;
   const positional = [];
   for (let index = 0; index < rest.length; index += 1) {
     const arg = rest[index];
@@ -68,6 +70,8 @@ function parseArgs(argv) {
     } else if (arg === '--spec') {
       specPath = rest[++index];
       if (!specPath) throw new Error('--spec requires a path');
+    } else if (arg === '--maintenance') {
+      maintenance = true;
     } else if (arg.startsWith('--')) {
       throw new Error(`unknown option: ${arg}`);
     } else {
@@ -75,14 +79,28 @@ function parseArgs(argv) {
     }
   }
   if (graphPath && artifactsPath) throw new Error('--graph and --artifacts cannot be used together');
+  if (graphPath && maintenance) throw new Error('--maintenance is only supported with --artifacts');
   if (!graphPath && !artifactsPath) throw new Error('--graph or --artifacts is required');
   if (artifactsPath && specPath) throw new Error('--spec is only supported with --graph; --artifacts uses the active iteration spec');
-  return { command, graphPath, artifactsPath, specPath, taskId: positional[0], extra: positional.slice(1), iterationState: null };
+  return { command, graphPath, artifactsPath, specPath, maintenance, taskId: positional[0], extra: positional.slice(1), iterationState: null };
 }
 
 function resolveTaskInputs(args) {
   if (!args.artifactsPath) return args;
-  const iterationState = resolveIterationState(args.artifactsPath);
+  const requireReady = !args.maintenance;
+  const iterationState = resolveIterationState(args.artifactsPath, { requireReady });
+  if (args.maintenance) {
+    const graphPath = path.join(iterationState.artifactRoot, 'iterations', 'maintenance', 'gate-c-task-graph', 'task-graph.json');
+    if (!existsSync(graphPath)) {
+      throw new Error('no maintenance task graph yet; create one with: node scripts/p2a_iteration.mjs maintenance add --artifacts <dir> --title ... --accept ...');
+    }
+    return {
+      ...args,
+      graphPath,
+      specPath: iterationState.currentSpecPath,
+      iterationState,
+    };
+  }
   return {
     ...args,
     graphPath: iterationState.taskGraphPath,
@@ -303,6 +321,7 @@ async function buildInteractiveArgv(rl) {
     'task 기준을 선택하세요.',
     [
       { mode: 'artifacts', label: 'active artifacts', description: '반복 artifact 루트에서 active iteration을 자동 인식' },
+      { mode: 'maintenance', label: 'maintenance', description: '반복 artifact 루트의 maintenance 레인' },
       { mode: 'graph', label: 'graph file', description: 'task graph JSON 경로 직접 입력' },
     ],
     (item, number) => `${number}) ${item.label.padEnd(16)} ${item.description}`,
@@ -311,7 +330,7 @@ async function buildInteractiveArgv(rl) {
 
   let argv;
   let graphPath;
-  if (source.mode === 'artifacts') {
+  if (source.mode === 'artifacts' || source.mode === 'maintenance') {
     const artifactsPath = await askRequired(
       rl,
       'artifacts',
@@ -319,9 +338,18 @@ async function buildInteractiveArgv(rl) {
       interactiveArtifactsDefault(),
     );
     if (!artifactsPath) return null;
-    const iterationState = resolveIterationState(artifactsPath);
-    graphPath = iterationState.taskGraphPath;
-    argv = [selected.command, '--artifacts', artifactsPath];
+    const requireReady = source.mode !== 'maintenance';
+    const iterationState = resolveIterationState(artifactsPath, { requireReady });
+    if (source.mode === 'maintenance') {
+      graphPath = path.join(iterationState.artifactRoot, 'iterations', 'maintenance', 'gate-c-task-graph', 'task-graph.json');
+      if (!existsSync(graphPath)) {
+        throw new Error('no maintenance task graph yet; create one with: node scripts/p2a_iteration.mjs maintenance add --artifacts <dir> --title ... --accept ...');
+      }
+      argv = [selected.command, '--artifacts', artifactsPath, '--maintenance'];
+    } else {
+      graphPath = iterationState.taskGraphPath;
+      argv = [selected.command, '--artifacts', artifactsPath];
+    }
   } else {
     graphPath = await askRequired(
       rl,

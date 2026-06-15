@@ -652,6 +652,66 @@ function validateIterationCurrentFixtureCases() {
         return { status: 1, checks };
       }
 
+      result = runTasks(['list', '--artifacts', artifactRoot, '--maintenance']);
+      checks += 1;
+      if (result.status !== 0 || !result.stdout.includes('task-001') || !result.stdout.includes('task-002')) {
+        console.error(`p2a_tasks list --artifacts --maintenance fixture check failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: result.status ?? 1, checks };
+      }
+
+      result = runTasks(['ready', '--artifacts', artifactRoot, '--maintenance']);
+      checks += 1;
+      if (result.status !== 0 || !result.stdout.includes('task-001')) {
+        console.error(`p2a_tasks ready --artifacts --maintenance fixture check failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: result.status ?? 1, checks };
+      }
+
+      const activeTaskGraphBeforeMaintenanceStartText = readFileSync(state.taskGraphPath, 'utf8');
+      result = runTasks(['start', '--artifacts', artifactRoot, '--maintenance', 'task-001']);
+      checks += 1;
+      if (result.status !== 0 || !result.stdout.includes('status is now in_progress')) {
+        console.error(`p2a_tasks start --artifacts --maintenance fixture check failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: result.status ?? 1, checks };
+      }
+      const maintenanceGraphAfterStartText = readFileSync(maintenanceGraphPath, 'utf8');
+      const maintenanceGraphAfterStart = JSON.parse(maintenanceGraphAfterStartText);
+      if (
+        maintenanceGraphAfterStart.tasks?.find((task) => task.id === 'task-001')?.status !== 'in_progress'
+        || maintenanceGraphAfterStartText === maintenanceGraphAfterAddsText
+        || readFileSync(state.taskGraphPath, 'utf8') !== activeTaskGraphBeforeMaintenanceStartText
+      ) {
+        console.error(`p2a_tasks start --artifacts --maintenance did not isolate graph writes: ${caseData.id}`);
+        console.error(JSON.stringify(maintenanceGraphAfterStart, null, 2));
+        return { status: 1, checks };
+      }
+
+      result = runTasks(['ready', '--graph', maintenanceGraphPath, '--maintenance']);
+      checks += 1;
+      const maintenanceGraphOptionOutput = `${result.stdout ?? ''}${result.stderr ?? ''}`;
+      if (result.status === 0 || !maintenanceGraphOptionOutput.includes('--maintenance is only supported with --artifacts')) {
+        console.error(`p2a_tasks fixture did not reject graph/maintenance inputs: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: 1, checks };
+      }
+
+      const freshRootParent = mkdtempSync(path.join(tmpdir(), 'p2a-no-maintenance-'));
+      const freshRoot = path.join(freshRootParent, 'artifacts');
+      cpSync(artifactRoot, freshRoot, { recursive: true });
+      rmSync(path.join(freshRoot, 'iterations', 'maintenance', 'gate-c-task-graph'), { recursive: true, force: true });
+      result = runTasks(['ready', '--artifacts', freshRoot, '--maintenance']);
+      checks += 1;
+      const missingMaintenanceOutput = `${result.stdout ?? ''}${result.stderr ?? ''}`;
+      rmSync(freshRootParent, { recursive: true, force: true });
+      if (result.status === 0 || !missingMaintenanceOutput.includes('no maintenance task graph yet; create one with:')) {
+        console.error(`p2a_tasks fixture did not report missing maintenance graph: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: 1, checks };
+      }
+      writeFileSync(maintenanceGraphPath, maintenanceGraphAfterAddsText, 'utf8');
+
       result = runIteration([
         'maintenance',
         'add',
