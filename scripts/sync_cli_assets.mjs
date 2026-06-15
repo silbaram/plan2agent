@@ -22,6 +22,68 @@ const GEMINI_TIER_CONFIG = {
   standard: { temperature: 0.2, max_turns: 10 },
   heavy: { temperature: 0.2, max_turns: 20 },
 };
+const GEMINI_COMMANDS = {
+  harness: {
+    skill: 'p2a-harness',
+    description: 'Run the gated Plan2Agent harness on an idea, answers, or approved spec.',
+    prompt: `Use the Plan2Agent p2a-harness skill for the following input:
+
+{{args}}
+
+Rules:
+- Only write Plan2Agent planning artifacts under artifacts/<project_id>/; never edit source code.
+- Do not run mutating commands.
+- Follow the stage-to-subagent mapping in the skill.
+- Stop at intake if any needs_user_decision is open.
+- Stop before task graph unless spec_json.approval is approved and open_decisions is empty.
+- Return the named state sections required by the harness.`,
+  },
+  intake: {
+    skill: 'p2a-intake',
+    description: 'Run Plan2Agent intake on a one-sentence idea or resume answered decisions.',
+    prompt: `Use the Plan2Agent p2a-intake skill for the following idea or resume context:
+
+{{args}}
+
+Return intake_json conforming to schemas/intake.schema.json and a table of open needs_user_decision items when blocked.`,
+  },
+  review: {
+    skill: 'p2a-review',
+    description: 'Review Plan2Agent planning artifacts before implementation.',
+    prompt: `Use the Plan2Agent p2a-review skill for the following planning artifacts:
+
+{{args}}
+
+Return review_report with blocking issues, non-blocking risks, missing acceptance criteria, oversized tasks, dependency issues, schema_or_gate_issues, and recommended changes.`,
+  },
+  spec: {
+    skill: 'p2a-spec',
+    description: 'Create a Plan2Agent product and implementation spec from answered intake.',
+    prompt: `Use the Plan2Agent p2a-spec skill for the following context:
+
+{{args}}
+
+Return product_spec_markdown, implementation_plan_markdown, spec_json conforming to schemas/spec.schema.json, and open_decisions. Keep approval as draft until explicitly approved.`,
+  },
+  'task-author': {
+    skill: 'p2a-task-author',
+    description: 'Author a Gate C task graph draft from a Plan2Agent context bundle.',
+    prompt: `Use the Plan2Agent p2a-task-author skill for the following context:
+
+{{args}}
+
+Run or use the provided p2a.task_context.v1 context, write only iterations/<active_iteration>/gate-c-task-graph/task-graph.draft.json, never write canonical task-graph.json, and hand off validation, audit, and promote-tasks instructions for human approval.`,
+  },
+  'task-breakdown': {
+    skill: 'p2a-task-breakdown',
+    description: 'Create a Plan2Agent task graph from an approved implementation spec.',
+    prompt: `Use the Plan2Agent p2a-task-breakdown skill for the following approved implementation spec:
+
+{{args}}
+
+Return task_graph_json conforming to schemas/task-graph.schema.json only. Do not implement tasks. Reject the request if the spec is not approved or open decisions remain.`,
+  },
+};
 
 function parseFrontmatterScalar(lines, index, rawValue) {
   let value = rawValue.trim();
@@ -163,6 +225,11 @@ function renderCodexAgent(meta, body) {
   );
 }
 
+function renderGeminiCommand(command) {
+  const escapedPrompt = command.prompt.replaceAll('"""', '\\"\\"\\"');
+  return `description = ${tomlBasicString(command.description)}\nprompt = \"\"\"\n${escapedPrompt}\n\"\"\"\n`;
+}
+
 function desiredFiles() {
   const files = [];
   for (const dirent of readdirSync(SKILL_SOURCE, { withFileTypes: true }).filter((entry) => entry.isDirectory()).sort((a, b) => a.name.localeCompare(b.name))) {
@@ -177,6 +244,10 @@ function desiredFiles() {
     files.push({ path: path.join(ROOT, '.claude', 'agents', filename), content: renderMarkdownAgent(meta, body, { target: 'claude' }) });
     files.push({ path: path.join(ROOT, '.gemini', 'agents', filename), content: renderMarkdownAgent(meta, body, { target: 'gemini' }) });
     files.push({ path: path.join(ROOT, '.codex', 'agents', `${meta.name}.toml`), content: renderCodexAgent(meta, body) });
+  }
+  for (const [commandName, command] of Object.entries(GEMINI_COMMANDS).sort(([a], [b]) => a.localeCompare(b))) {
+    if (!existsSync(path.join(SKILL_SOURCE, command.skill, 'SKILL.md'))) continue;
+    files.push({ path: path.join(ROOT, '.gemini', 'commands', 'p2a', `${commandName}.toml`), content: renderGeminiCommand(command) });
   }
   return files;
 }

@@ -9,12 +9,13 @@ import { fileURLToPath } from 'node:url';
 
 const __filename = fileURLToPath(import.meta.url);
 const ROOT = path.resolve(path.dirname(__filename), '..');
-const SKILLS = ['p2a-harness', 'p2a-intake', 'p2a-spec', 'p2a-task-breakdown', 'p2a-review'];
+const SKILLS = ['p2a-harness', 'p2a-intake', 'p2a-spec', 'p2a-task-author', 'p2a-task-breakdown', 'p2a-review'];
 const AGENTS = ['p2a-requirements', 'p2a-spec-author', 'p2a-implementation-planner', 'p2a-task-graph', 'p2a-quality-reviewer'];
 const GEMINI_COMMANDS = {
   harness: 'p2a-harness',
   intake: 'p2a-intake',
   spec: 'p2a-spec',
+  'task-author': 'p2a-task-author',
   'task-breakdown': 'p2a-task-breakdown',
   review: 'p2a-review',
 };
