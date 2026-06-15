@@ -423,6 +423,7 @@ v2 handoff의 확장 완료 기준:
 - 완료: `p2a_iteration.mjs draft`가 Gate A-only 초기 반복에서 Gate B 초안을 생성한다.
 - 완료: `p2a_iteration.mjs promote-spec`가 approved active spec을 current-spec에 기록하되, 후속 반복에서는 baseline/composition pointer를 보존한다.
 - 완료: `p2a_iteration.mjs diff-tasks`가 active spec과 baseline field 차이로 Gate C task graph 초안을 생성한다.
+- 완료: `p2a_iteration.mjs context`/`validate --stage gate-c-draft`/`promote-tasks`와 `p2a-task-author` 스킬로 agent 저작 Gate C task 게이트(초안 저작 -> 사람 승인 audit -> 정본 승격)를 제공한다. 정식 `p2a.task_context.v1` 스키마와 producer-side 검증을 포함한다. 설계 정본은 `plans/02-agent-authored-task-gate.md`다.
 - 완료: `p2a_iteration.mjs compose`가 approved + close-ready 반복 spec들을 `current-spec.json` effective view로 조합하며, conflict 기본 경로는 쓰기 전에 실패한다.
 - 완료: `p2a_handoff.mjs --iteration-id active`가 반복 구조 active 산출물과 `current-spec.json`을 대상 프로젝트로 인계한다.
 - 완료: `p2a_iteration.mjs close`가 close-ready active 반복을 archived metadata로 표시하고 다음 `open`의 close 조건으로 고정한다.

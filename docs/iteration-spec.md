@@ -38,7 +38,7 @@
 | `status.md` 반복 인덱스 | init/open/close 시점의 현재 상태를 렌더링한다. | 전체 반복 history 누적 렌더링과 close/handoff 기준점 기록이 필요하다. |
 | baseline-aware Gate A/B | 초기 Gate A-only 초안과 baseline 기반 delta 초안을 만든다. | 구조적 질문 재생성, 사용자 답변 재사용/재처분 로직이 필요하다. |
 | 구조적 diff task | spec field 단위 차이로 task graph 초안을 만든다. | 의미 기반 diff, task 병합/분할, 기존 task 재사용 판단이 필요하다. |
-| agent 저작 task gate | 결정적 backbone(`context`, `gate-c-draft` 검증, `promote-tasks`)만 구현됐다. 설계 정본은 `plans/02-agent-authored-task-gate.md`다. | `p2a-task-author` 스킬, draft meta, maintenance draft 승격, 정식 task-context schema가 필요하다. |
+| agent 저작 task gate | backbone(`context`, `gate-c-draft` 검증, `promote-tasks`), `p2a-task-author` 스킬, 정식 `task-context` schema(producer-side 검증)가 구현됐다. 설계 정본은 `plans/02-agent-authored-task-gate.md`다. | provenance sidecar(`task-graph.draft.meta.json`)와 maintenance draft 승격(`--scope maintenance`/`maintenance add --from-draft`)이 남았다. |
 | archived close | close artifact 존재 여부/hash 기록과 `--audit-archive` 검증을 제공한다. | 기본 검증에 감사 강제, 감사 manifest migration, 정책 문서화가 필요하다. |
 | maintenance 반복 | lazy README, `maintenance add` task 생성, 존재하는 task graph 검증을 제공한다. | handoff 정책이 필요하다. |
 
