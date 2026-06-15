@@ -36,9 +36,9 @@ const GATE_DIRS = ['gate-a-intake', 'gate-b-spec', 'gate-c-task-graph', 'gate-d-
 const STATUS_ORDER = ['todo', 'in_progress', 'done', 'blocked'];
 const DEFAULT_ITERATION_ID = 'v1-mvp';
 const INIT_REBASED_SOURCE_SPEC = '../gate-b-spec/spec.json';
-const COMMANDS = new Set(['init', 'current', 'validate', 'close', 'open', 'draft', 'promote-spec', 'diff-tasks', 'compose', 'maintenance']);
+const COMMANDS = new Set(['init', 'current', 'validate', 'close', 'open', 'draft', 'context', 'promote-spec', 'promote-tasks', 'diff-tasks', 'compose', 'maintenance']);
 const MAINTENANCE_ACTIONS = new Set(['add']);
-const VALIDATE_STAGES = new Set(['ready', 'gate-a', 'gate-b-draft', 'gate-b-approved']);
+const VALIDATE_STAGES = new Set(['ready', 'gate-a', 'gate-b-draft', 'gate-b-approved', 'gate-c-draft']);
 const PRODUCT_FIELDS = [
   'problem',
   'target_users',
@@ -66,11 +66,13 @@ function usage() {
     'Usage:',
     '  node scripts/p2a_iteration.mjs init --artifacts <greenfield-project-dir> [--iteration-id v1-mvp] [--dry-run]',
     '  node scripts/p2a_iteration.mjs current --artifacts <iterative-project-dir> [--json]',
-    '  node scripts/p2a_iteration.mjs validate --artifacts <iterative-project-dir> [--require-close-ready] [--allow-planning] [--stage ready|gate-a|gate-b-draft|gate-b-approved] [--audit-archive]',
+    '  node scripts/p2a_iteration.mjs validate --artifacts <iterative-project-dir> [--require-close-ready] [--allow-planning] [--stage ready|gate-a|gate-b-draft|gate-b-approved|gate-c-draft] [--audit-archive]',
     '  node scripts/p2a_iteration.mjs close --artifacts <iterative-project-dir> [--iteration-id active]',
     '  node scripts/p2a_iteration.mjs open --artifacts <iterative-project-dir> --iteration-id <id> --idea <text>',
     '  node scripts/p2a_iteration.mjs draft --artifacts <iterative-project-dir> [--idea <text>] [--force]',
+    '  node scripts/p2a_iteration.mjs context --artifacts <iterative-project-dir> [--idea <text>]',
     '  node scripts/p2a_iteration.mjs promote-spec --artifacts <iterative-project-dir>',
+    '  node scripts/p2a_iteration.mjs promote-tasks --artifacts <iterative-project-dir>',
     '  node scripts/p2a_iteration.mjs diff-tasks --artifacts <iterative-project-dir> [--force]',
     '  node scripts/p2a_iteration.mjs compose --artifacts <iterative-project-dir> [--allow-conflicts]',
     '  node scripts/p2a_iteration.mjs maintenance add --artifacts <iterative-project-dir> --title <text> --accept <text> [--accept <text> ...] [--description <text>] [--area <text>] [--prompt <text>] [--ref <value> ...] [--depends <task-id> ...] [--dry-run]',
@@ -82,7 +84,9 @@ function usage() {
     '  close                 Mark the active close-ready iteration as closed/archived metadata.',
     '  open                  Create a new active iteration skeleton from the current baseline.',
     '  draft                 Generate baseline-aware Gate A/B draft artifacts for the active planning iteration.',
+    '  context               Print JSON context for agent-authored Gate C task drafting.',
     '  promote-spec          Record an approved active Gate B spec and initialize current-spec when needed.',
+    '  promote-tasks         Promote an approved Gate C draft task graph to the canonical graph.',
     '  diff-tasks            Generate a task graph draft from active spec changes against the baseline.',
     '  compose               Rebuild current-spec.json as a composed effective spec view.',
     '  maintenance           Manage the always-on maintenance task graph (currently: add).',
@@ -101,7 +105,7 @@ function usage() {
     'validate options:',
     '  --require-close-ready  Require every active iteration task to be done.',
     '  --allow-planning      Accept Gate A/B planning states instead of requiring Gate B-D readiness.',
-    '  --stage <stage>       Validate a specific stage: ready, gate-a, gate-b-draft, gate-b-approved.',
+    '  --stage <stage>       Validate a specific stage: ready, gate-a, gate-b-draft, gate-b-approved, gate-c-draft.',
     '  --audit-archive       Verify hashes recorded when iterations were closed.',
     '',
     'close options:',
@@ -114,6 +118,12 @@ function usage() {
     'draft options:',
     '  --idea <text>         Override the change idea stored by open.',
     '  --force               Overwrite existing Gate A/B draft files.',
+    '',
+    'context options:',
+    '  --idea <text>         Override the idea included in the emitted context JSON.',
+    '',
+    'promote-tasks options:',
+    '  (none)                Requires approved spec plus Gate C approval audit in status.md.',
     '',
     'diff-tasks options:',
     '  --force               Overwrite existing Gate C task graph.',
@@ -182,7 +192,7 @@ function parseArgs(argv) {
       if (!args.iterationId) throw new Error('--iteration-id requires a value');
       args.iterationIdProvided = true;
     } else if (arg === '--idea') {
-      if (command !== 'open' && command !== 'draft') throw new Error('--idea is only supported by open and draft');
+      if (command !== 'open' && command !== 'draft' && command !== 'context') throw new Error('--idea is only supported by open, draft, and context');
       args.idea = argv[++index];
       if (!args.idea) throw new Error('--idea requires a value');
     } else if (arg === '--force') {
@@ -1657,6 +1667,15 @@ function validatePlanningIteration(args) {
   }
 
   const intakePath = activeIntakePath(state);
+  if (stage === 'gate-c-draft') {
+    const draftPath = gateCTaskGraphDraftPath(state);
+    if (!existsSync(draftPath)) throw new ValidationError(`gate-c draft not found: ${draftPath}`);
+    const draft = loadJson(draftPath);
+    validateTaskGraphData(draft);
+    console.log(`Plan2Agent gate-c draft valid: ${draft.tasks.length} task(s)`);
+    return 0;
+  }
+
   if (stage === 'gate-a') {
     assertFile(intakePath, `iterations/${state.activeIteration}/gate-a-intake/intake.json`);
     const intake = validateIntake(intakePath);
@@ -1690,6 +1709,73 @@ function validatePlanningIteration(args) {
 
 function maintenanceTaskGraphPath(artifactRoot) {
   return path.join(artifactRoot, 'iterations', 'maintenance', 'gate-c-task-graph', 'task-graph.json');
+}
+
+function gateCTaskGraphDraftPath(state) {
+  return path.join(path.dirname(state.taskGraphPath), 'task-graph.draft.json');
+}
+
+function summarizeTask(task) {
+  return {
+    id: task.id,
+    title: task.title,
+    status: task.status,
+    targetArea: task.targetArea,
+    sourceSpecRefs: task.sourceSpecRefs,
+  };
+}
+
+function summarizeTaskGraphIfPresent(graphPath) {
+  if (!existsSync(graphPath)) return [];
+  return (loadJson(graphPath).tasks ?? []).map(summarizeTask);
+}
+
+function loadContextEffectiveSpec(state) {
+  if (state.currentSpec.effective_product && state.currentSpec.effective_implementation) {
+    return {
+      product: cloneJson(state.currentSpec.effective_product),
+      implementation: cloneJson(state.currentSpec.effective_implementation),
+    };
+  }
+  const fallbackPath = existsSync(state.effectiveSpecPath) ? state.effectiveSpecPath : state.specPath;
+  const data = loadJson(fallbackPath);
+  return {
+    product: cloneJson(data.product ?? {}),
+    implementation: cloneJson(data.implementation ?? {}),
+  };
+}
+
+function contextSpecFieldChanges(state) {
+  if (!existsSync(state.specPath) || !existsSync(state.effectiveSpecPath)) return [];
+  const activeSpec = loadJson(state.specPath);
+  const baselineSpec = state.currentSpec.effective_product && state.currentSpec.effective_implementation
+    ? {
+        product: state.currentSpec.effective_product,
+        implementation: state.currentSpec.effective_implementation,
+      }
+    : loadEffectiveBaselineSpec(state.effectiveSpecPath);
+  return collectSpecFieldChanges(baselineSpec, activeSpec);
+}
+
+function context(args) {
+  const state = resolveIterationState(args.artifacts, { requireReady: false });
+  const effectiveSpec = loadContextEffectiveSpec(state);
+  const contextData = {
+    schema_version: 'p2a.task_context.v1',
+    project_id: state.projectId,
+    active_iteration: state.activeIteration,
+    scope: 'feature',
+    idea: args.idea ?? state.currentSpec.pending_iteration?.idea ?? null,
+    baseline_effective_spec_ref: state.currentSpec.effective_spec_ref ?? null,
+    effective_spec: effectiveSpec,
+    existing_tasks: {
+      active: summarizeTaskGraphIfPresent(state.taskGraphPath),
+      maintenance: summarizeTaskGraphIfPresent(maintenanceTaskGraphPath(state.artifactRoot)),
+    },
+    spec_field_changes: contextSpecFieldChanges(state),
+  };
+  console.log(JSON.stringify(contextData, null, 2));
+  return 0;
 }
 
 function validateMaintenanceTaskGraphIfPresent(artifactRoot) {
@@ -1923,6 +2009,47 @@ function promoteSpec(args) {
   console.log(`- active iteration: ${state.activeIteration}`);
   console.log(`- approval: ${spec.approval}`);
   console.log(`- effective spec: ${promotedState.currentSpec.effective_spec_ref ?? 'unchanged'}`);
+  return 0;
+}
+
+function assertGateCApprovalAudit(statusPath) {
+  const text = readFileSync(statusPath, 'utf8');
+  const required = [
+    /^#{3,6}\s+Gate C approval audit\s*$/im,
+    /Approved by:\s*\S+/i,
+    /Approved at:\s*\d{4}-\d{2}-\d{2}/i,
+    /Approved source:\s*\S+/i,
+    /Approval note:\s*\S+/i,
+  ];
+  if (!required.every((pattern) => pattern.test(text))) {
+    throw new ValidationError('Gate C approval audit block required in status.md before promote-tasks');
+  }
+}
+
+function canonicalDraftVersion(version) {
+  return typeof version === 'string' && version.endsWith('-draft')
+    ? version.slice(0, -'-draft'.length)
+    : version;
+}
+
+function promoteTasks(args) {
+  const state = resolveIterationState(args.artifacts, { requireReady: false });
+  const draftPath = gateCTaskGraphDraftPath(state);
+  if (!existsSync(draftPath)) throw new ValidationError(`gate-c draft not found; author one at ${draftPath} first`);
+  const draft = loadJson(draftPath);
+  validateTaskGraphData(draft, state.specPath);
+  assertGateCApprovalAudit(state.statusPath);
+
+  const promoted = {
+    ...draft,
+    version: canonicalDraftVersion(draft.version),
+  };
+  writeJson(state.taskGraphPath, promoted);
+  renameSync(draftPath, `${draftPath}.promoted`);
+
+  console.log(`Plan2Agent tasks promoted: ${promoted.tasks.length} task(s)`);
+  console.log(`- graph: ${toRelativeFromRoot(state.taskGraphPath)}`);
+  console.log('- promoted from: task-graph.draft.json');
   return 0;
 }
 
@@ -2172,7 +2299,9 @@ export function main(argv = process.argv.slice(2)) {
     if (args.command === 'close') return close(args);
     if (args.command === 'open') return open(args);
     if (args.command === 'draft') return draft(args);
+    if (args.command === 'context') return context(args);
     if (args.command === 'promote-spec') return promoteSpec(args);
+    if (args.command === 'promote-tasks') return promoteTasks(args);
     if (args.command === 'diff-tasks') return diffTasks(args);
     if (args.command === 'compose') return compose(args);
     if (args.command === 'maintenance') return maintenance(args);
