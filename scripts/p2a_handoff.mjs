@@ -839,6 +839,35 @@ function pushTeamBigFiveAdapter(plan, targetRoot, args) {
 const SCAFFOLD_SCRIPT_FILES = ['p2a_iteration.mjs', 'p2a_tasks.mjs', 'p2a_runs.mjs', 'p2a_iteration_state.mjs', 'validate_artifacts.mjs'];
 const SCAFFOLD_SCHEMA_FILES = ['intake.schema.json', 'spec.schema.json', 'task-graph.schema.json', 'task-context.schema.json', 'review.schema.json', 'run.schema.json', 'run-index.schema.json'];
 
+
+function renderProjectGitignore() {
+  return `# Plan2Agent: plan artifacts, scripts, schemas, and source code are tracked.
+# Run logs (machine-specific paths/timestamps) and build outputs are not.
+
+# Plan2Agent run logs
+.plan2agent/runs/
+artifacts/**/runs/
+
+# Dependencies / build outputs
+node_modules/
+build/
+dist/
+out/
+target/
+.gradle/
+
+# Editor / OS
+.idea/
+.vscode/
+.DS_Store
+
+# Env / secrets
+.env
+.env.*
+!.env.example
+`;
+}
+
 function renderPlan2AgentGuide() {
   return `# Plan2Agent Project Harness
 
@@ -897,6 +926,7 @@ function buildScaffoldPlan(args, targetRoot, createdAt = new Date().toISOString(
   };
   pushGeneratedJson(plan, targetRoot, path.join('.plan2agent', 'manifest.json'), manifest);
   pushGeneratedJson(plan, targetRoot, path.join('.plan2agent', 'project.config.json'), buildProjectConfig(targetRoot, { enabled: false }, { emptyCommands: true }));
+  pushGeneratedText(plan, targetRoot, '.gitignore', renderProjectGitignore());
   pushGeneratedText(plan, targetRoot, 'PLAN2AGENT.md', renderPlan2AgentGuide());
   return plan;
 }

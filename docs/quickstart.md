@@ -28,7 +28,7 @@ node /path/to/plan2agent/scripts/p2a_handoff.mjs scaffold \
   --tools all
 ```
 
-설치 후 `<project-dir>`에서 Claude Code/Codex/Gemini를 열고 `/p2a-harness "<한 문장 아이디어>"`를 실행한다. 산출물은 이 프로젝트의 `artifacts/<project>/gate-*`에 생성된다. 승인 후 `node scripts/p2a_iteration.mjs init --artifacts artifacts/<project>`로 반복 구조로 전환하고, `p2a_tasks.mjs`/`p2a_runs.mjs`로 개발을 추적한다. 기존 handoff는 외부에서 만든 승인 산출물을 대상 프로젝트로 옮기는 레거시/특수 흐름으로 유지된다.
+`scaffold`는 co-located 정식 진입점으로, 빈 프로젝트에 하네스와 프로젝트용 `.gitignore`를 설치한다. 설치 후 `<project-dir>`에서 Claude Code/Codex/Gemini를 열고 `/p2a-harness "<한 문장 아이디어>"`를 실행한다. 산출물은 이 프로젝트의 `artifacts/<project>/gate-*`에 생성된다. 승인 후 `node scripts/p2a_iteration.mjs init --artifacts artifacts/<project>`로 반복 구조로 전환하고, `p2a_tasks.mjs`/`p2a_runs.mjs`로 개발을 추적한다. `handoff`는 plan2agent에서 이미 기획한 승인 산출물을 별도 프로젝트로 옮기는 레거시/특수 흐름으로 유지된다.
 
 ```text
 Idea

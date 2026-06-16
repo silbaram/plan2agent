@@ -150,20 +150,27 @@ function validateScaffoldFixtureCase() {
       path.join('.codex', 'agents', 'p2a-task-graph.toml'),
       path.join('.gemini', 'commands', 'p2a', 'harness.toml'),
     ];
-    const expectedGenerated = [path.join('.plan2agent', 'project.config.json'), path.join('.plan2agent', 'manifest.json'), 'PLAN2AGENT.md'];
+    const expectedGenerated = [path.join('.plan2agent', 'project.config.json'), path.join('.plan2agent', 'manifest.json'), 'PLAN2AGENT.md', '.gitignore'];
     const missingFiles = [...expectedScripts, ...expectedSchemas, ...expectedToolFiles, ...expectedGenerated]
       .filter((filePath) => !existsSync(path.join(targetRoot, filePath)));
     const manifest = JSON.parse(readFileSync(path.join(targetRoot, '.plan2agent', 'manifest.json'), 'utf8'));
     const config = JSON.parse(readFileSync(path.join(targetRoot, '.plan2agent', 'project.config.json'), 'utf8'));
+    const gitignore = readFileSync(path.join(targetRoot, '.gitignore'), 'utf8');
+    const ignoredPlans = ['.plan2agent/artifacts', 'artifacts/<project>/gate-*', 'artifacts/**/gate-*']
+      .filter((line) => gitignore.includes(line));
     if (
       missingFiles.length
       || manifest.provenance?.mode !== 'scaffold'
       || manifest.aiToolTargets.join(',') !== 'codex,claude,gemini'
       || config.testCommand !== null
       || config.runTracking?.runsDir !== '.plan2agent/runs'
+      || !gitignore.includes('.plan2agent/runs/')
+      || !gitignore.includes('artifacts/**/runs/')
+      || !gitignore.includes('node_modules/')
+      || ignoredPlans.length
     ) {
       console.error('scaffold output mismatch');
-      console.error(JSON.stringify({ missingFiles, manifest, config }, null, 2));
+      console.error(JSON.stringify({ missingFiles, manifest, config, ignoredPlans }, null, 2));
       return { status: 1, checks };
     }
 

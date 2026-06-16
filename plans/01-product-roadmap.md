@@ -616,6 +616,8 @@ migration 규칙:
 
 agent 실행 결과 추적은 handoff와 반복 구조가 안정된 뒤 붙인다. 현재는 `scripts/p2a_runs.mjs`와 `schemas/run*.schema.json`으로 파일 기반 run log를 구현했다.
 
+co-located 모델에서는 `scaffold`가 정식 진입점이다. 빈 프로젝트에 하네스와 프로젝트용 `.gitignore`를 설치하고, 이후 기획·개발·반복을 그 프로젝트 안에서 진행한다. `handoff`는 plan2agent에서 이미 기획한 산출물을 별도 프로젝트로 옮기는 레거시/특수 흐름이다.
+
 구현된 범위:
 
 - `runs/run-index.json`와 `runs/<runId>.json` 실행 로그 저장
