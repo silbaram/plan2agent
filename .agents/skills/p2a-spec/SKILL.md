@@ -105,7 +105,7 @@ Suggested Korean section labels for implementation plans: 아키텍처, 인터�
 
 - Use `approval: draft` until the user explicitly approves the product and implementation spec.
 - Use `approval: approved` only when every intake `CQ-n` is disposed, promoted decisions are resolved, `open_decisions` is empty, and the user has approved the spec.
-- After approval, the harness must record the Gate B approval audit in top-level `status.md` with `Approved by`, `Approved at`, `Approved artifacts`, and `Approval note`.
+- After approval, the harness must record the Gate B approval audit in top-level `status.md` with `Approved by`, `Approved at`, `Approved artifacts`, and `Approval note`, while preserving the required `Progress:` line, Gate A-D sections, and numbered `## 1.` through `## 5.` structure.
 - Do not advance to task breakdown while `approval` is `draft`.
 - Present the written product and implementation specs as files and request explicit user approval before advancing past Gate B.
 

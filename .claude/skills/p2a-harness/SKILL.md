@@ -63,7 +63,7 @@ Write this analysis into `intake.md` and summarize it in the conversation. Treat
 
 1. **Understanding** — restate the idea and inferred scope from `known_facts`, separating what is clear from what remains unknown.
 2. **Assumptions** — cover `assumptions` using each item's `id`, `statement`, `risk`, reasoning, and `confirmation_needed`.
-3. **Decisions** — cover `needs_user_decision` with the question, why it matters, options and concrete trade-offs, recommended option and rationale, downstream artifacts or decisions it blocks, and status.
+3. **Decisions** — cover `needs_user_decision` with the question, why it matters, options and concrete trade-offs, recommended option and rationale, downstream artifacts or decisions it blocks, and current status (`open`, `answered`, or `deferred`). If status is `answered`, explicitly show the selected option/answer, for example `선택: <option label>` or `Selected: <option label>`.
 4. **Clarifying questions** — cover `clarifying_questions` with each `id`, question, and current handling or default.
 5. **Next** — state `status` and what is needed from the user.
 
@@ -71,7 +71,7 @@ This is a narrative-first recommended structure, not a blank form. Preserve the 
 
 ## Resume Rules
 
-- When the user answers decisions such as `ND-1` or `ND-4`, merge the answers into `intake_json.needs_user_decision[*].answer`, set those decisions to `answered`, and recompute `intake_json.status`.
+- When the user answers decisions such as `ND-1` or `ND-4`, merge the answers into `intake_json.needs_user_decision[*].answer`, set those decisions to `answered`, recompute `intake_json.status`, and refresh `gate-a-intake/intake.md` in the same turn so every answered decision is shown as answered with its selected option/answer. An answered JSON decision must never remain `open` in `intake.md`.
 - Resume from the earliest stage whose input changed. For example, changed intake answers invalidate spec, implementation plan, task graph, and review.
 - Carry forward stable artifact ids (`project_id`, `source_intake`, `sourceSpec`) so later stages can trace their source. Use the gate-folder paths for cross-artifact references, for example `artifacts/<project_id>/gate-a-intake/intake.json` for `source_intake` and `artifacts/<project_id>/gate-b-spec/spec.json` for `sourceSpec`.
 - If an artifact is pasted in Markdown only, reconstruct the matching JSON contract before advancing to the next gate.
@@ -104,11 +104,11 @@ In addition to the inline state sections, the harness orchestrator writes each a
 - `gate-d-review/review-report.md` — the `review_report` artifact
 - `gate-d-review/review.json` — the `review_json` artifact
 
-The orchestrator writes each stage's outputs into its matching `gate-*` folder before stopping at that gate, and tells the user the file paths. `status.md` remains directly under `artifacts/<project_id>/` because it is the standing cross-gate progress and decision index. Whenever the orchestrator writes any gate artifact, refresh `status.md` in the same turn; do not treat it as a Gate-A-only or optional file. Only the harness orchestrator writes files; subagents stay read-only and return their content for the orchestrator to persist. Continue to surface the inline named sections as well so resume and paste-in still work.
+The orchestrator writes each stage's outputs into its matching `gate-*` folder before stopping at that gate, and tells the user the file paths. `status.md` remains directly under `artifacts/<project_id>/` because it is the standing cross-gate progress and decision index. Whenever the orchestrator writes any gate artifact, refresh `status.md` in the same turn; do not treat it as a Gate-A-only or optional file. Likewise, whenever Gate A intake answers change, refresh both `gate-a-intake/intake.json` and `gate-a-intake/intake.md` so decision status and selected answers match exactly. Only the harness orchestrator writes files; subagents stay read-only and return their content for the orchestrator to persist. Continue to surface the inline named sections as well so resume and paste-in still work.
 
 ### `status.md` Standing Document
 
-`status.md` should mirror the narrative-first pattern used by `intake.md`: it is a readable standing document, not a blank form. Preserve English JSON field names when referencing source fields, but render headings and labels in the user's language when appropriate (for example Korean: `1. 진행 상태`, `2. 게이트별`, `3. 열린 결정`, `4. 다음`, `5. 변경 이력`). Use this standard skeleton:
+`status.md` should mirror the narrative-first pattern used by `intake.md`: it is a readable standing document, not a blank form. Preserve English JSON field names when referencing source fields, but render headings and labels in the user's language when appropriate (for example Korean: `1. 진행 상태`, `2. 게이트별`, `3. 열린 결정`, `4. 다음`, `5. 변경 이력`). Keep it valid for `scripts/validate_artifacts.mjs --status`: it must include a literal `Progress:` line, Gate A, Gate B, Gate C, and Gate D sections, plus numbered `## 1.` through `## 5.` sections. Maintain this structure on every gate transition, even when only one section changes. Use this standard skeleton:
 
 1. **Progress line** — show the current gate marker across `[A] → [B] → [C] → [D]`, indicating which gates are complete, current, blocked, or pending.
 2. **Per-gate sections** — summarize each gate's latest state and point to the canonical artifact files for that gate.
