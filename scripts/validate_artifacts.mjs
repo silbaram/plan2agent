@@ -171,7 +171,7 @@ export function validateEvidence(evidence, label) {
   }
 }
 
-export function validateIntake(filePath) {
+export function validateIntake(filePath, options = {}) {
   const data = validateAgainstSchema(filePath, 'intake');
   validateEvidence(data.evidence, 'intake');
 
@@ -194,7 +194,35 @@ export function validateIntake(filePath) {
       `intake.status must be ${JSON.stringify(expectedStatus)} when unresolved decisions are ${JSON.stringify(unresolvedDecisions)}`,
     );
   }
+  const intakeMdPath = options.intakeMdPath ?? siblingIntakeMarkdownPath(filePath);
+  if (intakeMdPath) validateIntakeMarkdownDecisionSync(data, intakeMdPath);
   return data;
+}
+
+function siblingIntakeMarkdownPath(intakePath) {
+  const candidate = path.join(path.dirname(intakePath), 'intake.md');
+  return existsSync(candidate) && lstatSync(candidate).isFile() ? candidate : null;
+}
+
+export function validateIntakeMarkdownDecisionSync(intake, intakeMdPath) {
+  const text = readFileSync(intakeMdPath, 'utf8').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+  for (const decision of intake.needs_user_decision) {
+    if (decision.status !== 'answered') continue;
+    const idPattern = new RegExp(String.raw`(^|\n)([^\n]*\b${escapeRegExp(decision.id)}\b[^\n]*)([\s\S]*?)(?=\n[^\n]*\b(?:ND|CQ|A)-\d+\b|\n#{1,6}\s+|$)`, 'i');
+    const match = text.match(idPattern);
+    if (!match) continue;
+    const block = `${match[2]}${match[3]}`;
+    const clearlyOpen = /(?:status|상태)\s*[:：-]\s*(?:`?open`?|미해결|열림)\b/i.test(block);
+    const clearlyAnswered = /(?:status|상태)\s*[:：-]\s*(?:`?answered`?|답변|완료)\b/i.test(block);
+    if (clearlyOpen && !clearlyAnswered) {
+      throw new ValidationError(`${decision.id} is answered in intake.json but intake.md still marks it open`);
+    }
+  }
+  return text;
+}
+
+function escapeRegExp(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 export function validateSpec(filePath, intakePath = null) {
@@ -580,7 +608,7 @@ export function validateArtifactRoot(artifactRoot, options = {}) {
   validateStatusDoc(paths.statusDoc);
 
   requireGateFiles(paths, ['intakeJson', 'intakeMd'], 'Gate A');
-  const intake = validateIntake(paths.intakeJson);
+  const intake = validateIntake(paths.intakeJson, { intakeMdPath: paths.intakeMd });
   const result = {
     artifactRoot: root,
     paths,
@@ -675,11 +703,16 @@ export function detectCycles(graph) {
   }
 }
 
+function optionalFixtureIntakeMd(fixturePath) {
+  const candidate = path.join(fixturePath, 'intake.md');
+  return existsSync(candidate) && lstatSync(candidate).isFile() ? candidate : null;
+}
+
 export function validateFixtureDir(fixturePath) {
   const required = [
     ['status.md', (artifactPath) => validateStatusDoc(artifactPath)],
     ['intake.blocked.json', (artifactPath) => validateIntake(artifactPath)],
-    ['intake.answered.json', (artifactPath) => validateIntake(artifactPath)],
+    ['intake.answered.json', (artifactPath) => validateIntake(artifactPath, { intakeMdPath: optionalFixtureIntakeMd(fixturePath) })],
     ['spec.approved.json', (artifactPath) => validateSpec(artifactPath, path.join(fixturePath, 'intake.answered.json'))],
     ['task-graph.json', (artifactPath) => validateTaskGraph(artifactPath, path.join(fixturePath, 'spec.approved.json'))],
     ['review-report.md', () => null],
@@ -705,6 +738,7 @@ function parseArgs(argv) {
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === '--intake') args.intake = argv[++index];
+    else if (arg === '--intake-md') args.intakeMd = argv[++index];
     else if (arg === '--status') args.status = argv[++index];
     else if (arg === '--artifact-root') args.artifactRoot = argv[++index];
     else if (arg === '--project-id') args.projectId = argv[++index];
@@ -737,7 +771,8 @@ export function main(argv = process.argv.slice(2)) {
     } else if (args.requireHandoffReady) {
       throw new ValidationError('--require-handoff-ready requires --artifact-root');
     }
-    if (args.intake) validateIntake(args.intake);
+    if (args.intake) validateIntake(args.intake, { intakeMdPath: args.intakeMd ?? undefined });
+    else if (args.intakeMd) throw new ValidationError('--intake-md requires --intake');
     if (args.spec) validateSpec(args.spec, args.intake ?? requireSpecSourceIntake(args.spec));
     if (args.taskGraph) validateTaskGraph(args.taskGraph, args.requireApprovedSpec ?? null);
     if (args.requireReviewPass && !args.review && !args.fixtureDir.length && !args.artifactRoot) {

@@ -142,7 +142,7 @@ artifacts/<project>/
         task-graph.json
 ```
 
-`status.md`는 기존 v1의 standing 진행상태/결정 인덱스 역할을 확장해 반복 인덱스와 현재 활성 포인터를 함께 갖는다. `current-spec.json`은 모든 완료 반복의 유효 spec을 조합한 현재 기준이며, 다음 intake/spec 단계가 baseline으로 읽는 파일이다.
+`status.md`는 기존 v1의 standing 진행상태/결정 인덱스 역할을 확장해 반복 인덱스와 현재 활성 포인터를 함께 갖고, 사람용 `intake.md`/`status.md`는 대응 JSON의 결정 상태·선택·진행 상태와 항상 동기화되어야 한다. `current-spec.json`은 모든 완료 반복의 유효 spec을 조합한 현재 기준이며, 다음 intake/spec 단계가 baseline으로 읽는 파일이다.
 
 현재 구현은 첫 반복에서는 thin pointer를 만들고, 반복이 2개 이상 close-ready 상태가 되면 `p2a_iteration.mjs compose`로 `current-spec.json` 조합본을 생성한다.
 

@@ -16,6 +16,16 @@
         "--review",
         "fixtures/_negative/review-blocked/review.blocked.json"
       ]
+    },
+    {
+      "id": "answered-intake-md-sync-passes",
+      "description": "An intake.md that marks answered decisions as answered is accepted by the intake cross-check.",
+      "args": [
+        "--intake",
+        "fixtures/cache-library/intake.answered.json",
+        "--intake-md",
+        "fixtures/cache-library/intake.md"
+      ]
     }
   ],
   "expected_failure": [
@@ -57,6 +67,26 @@
         "--require-review-pass"
       ],
       "expected_message": "review cannot pass Gate D while blocking_issues is non-empty"
+    },
+    {
+      "id": "stale-intake-md-open-fails",
+      "description": "An intake.md that still marks an answered decision open is rejected.",
+      "args": [
+        "--intake",
+        "fixtures/_negative/stale-intake-md/intake.json",
+        "--intake-md",
+        "fixtures/_negative/stale-intake-md/intake.md"
+      ],
+      "expected_message": "ND-1 is answered in intake.json but intake.md still marks it open"
+    },
+    {
+      "id": "status-progress-line-required",
+      "description": "A status.md without the required Progress line is rejected.",
+      "args": [
+        "--status",
+        "fixtures/_negative/missing-status-progress/status.md"
+      ],
+      "expected_message": "status.md missing Progress line"
     }
   ]
 }
