@@ -254,7 +254,7 @@ v2의 첫 고도화 목표는 v1 하네스가 만든 산출물을 실제 개발 
 현재 구현 상태:
 
 - 완료: Gate D 통과 여부 확인, 원본 `artifacts/<project_id>/` 검증, 산출물 copy/move, `--include-intake`, `--overwrite`, `--dry-run`, `.plan2agent/artifacts/` 생성, `manifest.json`, `project.config.json`, `p2a_tasks.mjs`, `validate_artifacts.mjs`, schema 복사.
-- 완료: `task-graph.sourceSpec`를 대상 프로젝트 기준 `spec.json`으로 rebase한다.
+- 완료: `task-graph.sourceSpec`를 대상 프로젝트 기준 `spec.json`으로 rebase하고, `spec.source_intake`도 `intake.json`으로 rebase한다. `intake.json`은 항상 함께 복사하며, `--include-intake`는 사람용 `intake.md` 추가 복사만 제어한다.
 - 완료: 대상 프로젝트의 package manager와 test/lint/typecheck 명령을 best-effort로 감지해 `project.config.json`에 기록한다.
 - 완료: `--tools codex,claude,gemini|all` 기반 P2A skill/subagent/command shim 복사와 manifest 기록.
 - 완료: `--include-team-bigfive`, `--team-bigfive-source`, `--team-bigfive-targets` 기반 Team Big Five adapter 선택 설치와 manifest/source-manifest 기록.
@@ -325,7 +325,7 @@ node scripts/p2a_handoff.mjs \
 - `--artifacts`: 원본 산출물 디렉터리
 - `--target`: 개발 대상 프로젝트 디렉터리
 - `--mode copy|move`: 산출물 복사 또는 이동 방식
-- `--include-intake`: intake 산출물도 함께 인계
+- `--include-intake`: 사람용 `intake.md`도 함께 인계 (`intake.json`은 `spec.source_intake` 검증을 위해 항상 인계)
 - `--overwrite`: 기존 대상 파일 덮어쓰기 허용
 - `--dry-run`: 실제 파일 쓰기 없이 계획만 출력
 - `--tools codex,claude,gemini|all`: 대상 프로젝트에 P2A AI 개발용 skill, subagent, command shim 복사

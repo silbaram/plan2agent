@@ -40,6 +40,7 @@ const TEAM_BIGFIVE_HARNESS_DIR = path.join('.plan2agent', 'team-harnesses', 'tea
 const TEAM_BIGFIVE_SOURCE_MANIFEST = path.join(TEAM_BIGFIVE_HARNESS_DIR, 'source-manifest.json');
 const TEAM_BIGFIVE_ADAPTATION_NOTES = path.join(TEAM_BIGFIVE_HARNESS_DIR, 'adaptation-notes.md');
 const REBASED_SOURCE_SPEC = 'spec.json';
+const REBASED_SOURCE_INTAKE = 'intake.json';
 const DEFAULT_ITERATION_ID = 'active';
 
 function usage() {
@@ -49,7 +50,7 @@ function usage() {
     'Options:',
     '  --mode copy|move     Copy artifacts by default; move removes source files after successful write.',
     '  --iteration-id <id>  Use iterative artifacts. Default: active when --artifacts is an iterative root.',
-    '  --include-intake     Include gate-a-intake/intake.json and intake.md.',
+    '  --include-intake     Include gate-a-intake/intake.md (intake.json is always copied for spec traceability).',
     '  --tools <list>       Copy P2A AI tool assets for codex,claude,gemini. Use comma list or all.',
     '  --include-team-bigfive',
     '                       Install Team Big Five adapter files for selected CLI targets.',
@@ -823,15 +824,15 @@ function buildPlan(paths, args, artifactsRoot, targetRoot, sourceInfo, options =
   const plan = [];
   pushArtifact(plan, paths.productSpec, targetRoot, path.join(ARTIFACT_TARGET_DIR, 'product-spec.md'));
   pushArtifact(plan, paths.implementationPlan, targetRoot, path.join(ARTIFACT_TARGET_DIR, 'implementation-plan.md'));
-  pushArtifact(plan, paths.specJson, targetRoot, path.join(ARTIFACT_TARGET_DIR, 'spec.json'));
+  pushArtifact(plan, paths.specJson, targetRoot, path.join(ARTIFACT_TARGET_DIR, 'spec.json'), { type: 'rewrite-json', transform: rebaseSpecSourceIntake });
   pushArtifact(plan, paths.taskGraph, targetRoot, path.join(ARTIFACT_TARGET_DIR, 'task-graph.json'), { type: 'rewrite-json', transform: rebaseTaskGraphSourceSpec });
   pushArtifact(plan, paths.reviewReport, targetRoot, path.join(ARTIFACT_TARGET_DIR, 'review-report.md'));
   pushArtifact(plan, paths.reviewJson, targetRoot, path.join(ARTIFACT_TARGET_DIR, 'review.json'));
 
+  assertFile(paths.intakeJson, 'gate-a-intake/intake.json');
+  pushArtifact(plan, paths.intakeJson, targetRoot, path.join(ARTIFACT_TARGET_DIR, 'intake.json'));
   if (args.includeIntake) {
-    assertFile(paths.intakeJson, 'gate-a-intake/intake.json');
     assertFile(paths.intakeMd, 'gate-a-intake/intake.md');
-    pushArtifact(plan, paths.intakeJson, targetRoot, path.join(ARTIFACT_TARGET_DIR, 'intake.json'));
     pushArtifact(plan, paths.intakeMd, targetRoot, path.join(ARTIFACT_TARGET_DIR, 'intake.md'));
   }
 
@@ -917,6 +918,7 @@ function buildPlan(paths, args, artifactsRoot, targetRoot, sourceInfo, options =
     schemaFiles,
     notes: [
       `task-graph.sourceSpec rebased to ${REBASED_SOURCE_SPEC}`,
+      `spec.source_intake rebased to ${REBASED_SOURCE_INTAKE}`,
       sourceInfo.kind === 'iteration' ? `iteration handoff source: ${sourceInfo.iterationId}` : 'greenfield handoff source',
       args.tools.length ? `AI tool assets copied for: ${args.tools.join(', ')}` : 'AI tool assets not requested',
       teamBigFivePlan.enabled ? `Team Big Five adapter installed for: ${teamBigFivePlan.targets.join(', ')}` : 'Team Big Five adapter not requested',
@@ -941,6 +943,15 @@ function buildPlan(paths, args, artifactsRoot, targetRoot, sourceInfo, options =
 
 function normalizePath(filePath) {
   return filePath.split(path.sep).join('/');
+}
+
+function rebaseSpecSourceIntake(source) {
+  const spec = loadJson(source);
+  spec.source_intake = REBASED_SOURCE_INTAKE;
+  const sourceText = readFileSync(source, 'utf8');
+  const rewritten = sourceText.replace(/(\"source_intake\"\s*:\s*)\"(?:[^\"\\]|\\.)*\"/, `$1${JSON.stringify(REBASED_SOURCE_INTAKE)}`);
+  if (rewritten === sourceText) throw new Error(`could not rebase source_intake in ${source}`);
+  return rewritten;
 }
 
 function rebaseTaskGraphSourceSpec(source) {

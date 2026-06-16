@@ -86,6 +86,27 @@ function assertCaseShape(caseData, groupName) {
   }
 }
 
+
+function assertTargetSpecSourceIntake(targetRoot, caseId, label) {
+  const artifactsDir = path.join(targetRoot, '.plan2agent', 'artifacts');
+  const targetSpecPath = path.join(artifactsDir, 'spec.json');
+  const targetTaskGraphPath = path.join(artifactsDir, 'task-graph.json');
+  const targetIntakePath = path.join(artifactsDir, 'intake.json');
+  const targetSpec = JSON.parse(readFileSync(targetSpecPath, 'utf8'));
+  if (!existsSync(targetIntakePath) || targetSpec.source_intake !== 'intake.json') {
+    console.error(`${label} handoff spec.source_intake/intake.json mismatch: ${caseId}`);
+    console.error(JSON.stringify({ source_intake: targetSpec.source_intake, intakeExists: existsSync(targetIntakePath) }, null, 2));
+    return { status: 1 };
+  }
+  const result = runValidator(['--task-graph', targetTaskGraphPath, '--require-approved-spec', targetSpecPath]);
+  if (result.status !== 0) {
+    console.error(`${label} handoff target approved spec validation failed: ${caseId}`);
+    writeResultOutput(result);
+    return { status: result.status ?? 1 };
+  }
+  return { status: 0 };
+}
+
 function assertE2eCaseShape(caseData) {
   if (!caseData || typeof caseData !== 'object') {
     throw new Error('e2e fixture case must be an object');
@@ -150,6 +171,9 @@ function validateE2eFixtureCases() {
         console.error(`greenfield handoff wrote unexpected tool/current-spec files: ${caseData.id}`);
         return { status: 1, checks };
       }
+      result = assertTargetSpecSourceIntake(targetRoot, caseData.id, 'greenfield');
+      checks += 1;
+      if (result.status !== 0) return { status: result.status, checks };
 
       result = runTargetTasks(targetRoot, ['ready', '--graph', path.join(targetRoot, '.plan2agent', 'artifacts', 'task-graph.json')]);
       checks += 1;
@@ -1049,7 +1073,12 @@ function validateIterationCurrentFixtureCases() {
         '--dry-run',
       ]);
       checks += 1;
-      if (result.status !== 0 || !result.stdout.includes('sourceIterationId: iter-002')) {
+      if (
+        result.status !== 0
+        || !result.stdout.includes('sourceIterationId: iter-002')
+        || !result.stdout.includes('copy+rewrite:')
+        || !result.stdout.includes('gate-b-spec/spec.json -> .plan2agent/artifacts/spec.json')
+      ) {
         console.error(`iteration handoff --iteration-id active dry-run fixture check failed: ${caseData.id}`);
         writeResultOutput(result);
         return { status: result.status ?? 1, checks };
@@ -1092,6 +1121,7 @@ function validateIterationCurrentFixtureCases() {
       const targetCurrentSpec = JSON.parse(readFileSync(targetCurrentSpecPath, 'utf8'));
       const sourceCurrentSpecAfterHandoff = JSON.parse(readFileSync(path.join(artifactRoot, 'current-spec.json'), 'utf8'));
       const targetTaskGraph = JSON.parse(readFileSync(targetTaskGraphPath, 'utf8'));
+      const targetSpec = JSON.parse(readFileSync(targetSpecPath, 'utf8'));
       if (
         targetManifest.sourceLayout !== 'iteration'
         || targetManifest.sourceIterationId !== 'iter-002'
@@ -1104,11 +1134,16 @@ function validateIterationCurrentFixtureCases() {
         || targetCurrentSpec.last_handoff?.maintenance_included !== true
         || sourceCurrentSpecAfterHandoff.last_handoff?.target_project !== iterationTargetRoot
         || targetTaskGraph.sourceSpec !== 'spec.json'
+        || targetSpec.source_intake !== 'intake.json'
       ) {
         console.error(`iteration handoff manifest/task graph contract mismatch: ${caseData.id}`);
-        console.error(JSON.stringify({ targetManifest, targetCurrentSpec, sourceCurrentSpecAfterHandoff, targetTaskGraphSourceSpec: targetTaskGraph.sourceSpec }, null, 2));
+        console.error(JSON.stringify({ targetManifest, targetCurrentSpec, sourceCurrentSpecAfterHandoff, targetTaskGraphSourceSpec: targetTaskGraph.sourceSpec, targetSpecSourceIntake: targetSpec.source_intake }, null, 2));
         return { status: 1, checks };
       }
+
+      result = assertTargetSpecSourceIntake(iterationTargetRoot, caseData.id, 'iteration');
+      checks += 1;
+      if (result.status !== 0) return { status: result.status, checks };
 
       result = runTargetTasks(iterationTargetRoot, ['ready', '--graph', targetTaskGraphPath]);
       checks += 1;
