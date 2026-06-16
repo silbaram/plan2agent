@@ -61,6 +61,12 @@
       "title": "Negative fixture setup",
       "url": "",
       "used_for": "Confirms this fixture is intended to fail audit validation."
+    },
+    {
+      "source_id": "WEB-1",
+      "title": "Node.js Introduction",
+      "url": "https://nodejs.org/en/learn/getting-started/introduction-to-nodejs",
+      "used_for": "Grounded the Node.js standard-library validator dependency so this fixture fails only on the missing Gate B approval audit."
     }
   ]
 }

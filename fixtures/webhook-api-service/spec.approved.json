@@ -131,6 +131,12 @@
       "title": "Answered intake decisions and Gate B signature decision",
       "url": "",
       "used_for": "Confirmed TypeScript runtime, provider-neutral queue adapter, bounded retry behavior, and HMAC SHA-256 signature verification."
+    },
+    {
+      "source_id": "WEB-1",
+      "title": "Node.js Introduction",
+      "url": "https://nodejs.org/en/learn/getting-started/introduction-to-nodejs",
+      "used_for": "Grounded the TypeScript/Node.js HTTP-service runtime choice used by the Gate B implementation plan."
     }
   ]
 }

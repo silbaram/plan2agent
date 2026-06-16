@@ -5,7 +5,15 @@ import { existsSync, lstatSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
-import { loadJson, ValidationError } from './validate_artifacts.mjs';
+import {
+  loadJson,
+  validateReviewPass,
+  validateSpec,
+  validateStatusApprovalAudit,
+  validateStatusDoc,
+  validateTaskGraph,
+  ValidationError,
+} from './validate_artifacts.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 export const ROOT = path.resolve(path.dirname(__filename), '..');
@@ -60,6 +68,82 @@ function assertSameFile(actualPath, expectedPath, label) {
   if (path.resolve(actualPath) !== path.resolve(expectedPath)) {
     throw new ValidationError(`${label} must resolve to ${expectedPath}, got ${actualPath}`);
   }
+}
+
+function normalizeReference(reference) {
+  return String(reference).replace(/\\/g, '/').replace(/^\.\//, '');
+}
+
+function normalizedRelative(fromPath, toPath) {
+  return path.relative(fromPath, toPath).split(path.sep).join('/');
+}
+
+function artifactReferenceMatches(reference, candidates) {
+  if (!reference || typeof reference !== 'string') return false;
+  if (path.isAbsolute(reference)) {
+    return candidates.some((candidate) => path.resolve(reference) === path.resolve(candidate.absolute));
+  }
+  const normalized = normalizeReference(reference);
+  return candidates.some((candidate) => candidate.refs.includes(normalized));
+}
+
+function expectedReferenceCandidates({ artifactRoot, iterationRoot, fromDir, expectedPath }) {
+  const artifactRelative = normalizedRelative(artifactRoot, expectedPath);
+  return [{
+    absolute: expectedPath,
+    refs: [
+      normalizedRelative(iterationRoot, expectedPath),
+      normalizedRelative(fromDir, expectedPath),
+      artifactRelative,
+      `${path.basename(artifactRoot)}/${artifactRelative}`,
+      `artifacts/${path.basename(artifactRoot)}/${artifactRelative}`,
+    ],
+  }];
+}
+
+function validateReviewReferences({ review, artifactRoot, iterationRoot, reviewPath, specPath, taskGraphPath }) {
+  const fromDir = path.dirname(reviewPath);
+  const checks = [
+    ['sourceSpec', specPath],
+    ['sourceTaskGraph', taskGraphPath],
+  ];
+  for (const [field, expectedPath] of checks) {
+    const candidates = expectedReferenceCandidates({ artifactRoot, iterationRoot, fromDir, expectedPath });
+    if (!artifactReferenceMatches(review[field], candidates)) {
+      throw new ValidationError(
+        `review.${field} must reference ${normalizedRelative(iterationRoot, expectedPath)}, got ${JSON.stringify(review[field])}`,
+      );
+    }
+  }
+}
+
+function validateReadyIterationArtifacts(state) {
+  const currentSpecOpenDecisions = state.currentSpec.open_decisions ?? [];
+  if (!Array.isArray(currentSpecOpenDecisions)) {
+    throw new ValidationError('ready iteration requires current-spec.json open_decisions to be an array when present');
+  }
+  if (currentSpecOpenDecisions.length) {
+    throw new ValidationError(`ready iteration requires current-spec.json open_decisions to be empty, got ${JSON.stringify(currentSpecOpenDecisions.map((decision) => decision.id ?? decision))}`);
+  }
+  const spec = validateSpec(state.specPath);
+  if (spec.approval !== 'approved') {
+    throw new ValidationError(`ready iteration requires spec.approval approved, got ${JSON.stringify(spec.approval)}`);
+  }
+  if (spec.open_decisions.length) {
+    throw new ValidationError(`ready iteration requires spec.open_decisions to be empty, got ${JSON.stringify(spec.open_decisions)}`);
+  }
+  validateStatusDoc(state.statusPath);
+  validateStatusApprovalAudit(state.statusPath, spec);
+  validateTaskGraph(state.taskGraphPath, state.specPath);
+  const review = validateReviewPass(state.reviewPath);
+  validateReviewReferences({
+    review,
+    artifactRoot: state.artifactRoot,
+    iterationRoot: state.iterationRoot,
+    reviewPath: state.reviewPath,
+    specPath: state.specPath,
+    taskGraphPath: state.taskGraphPath,
+  });
 }
 
 function parseStatusActiveIteration(statusPath) {
@@ -121,7 +205,7 @@ export function resolveIterationState(artifactPath, options = {}) {
     assertFile(taskGraphSourceSpecPath, 'task-graph.sourceSpec');
     assertSameFile(taskGraphSourceSpecPath, specPath, 'task-graph.sourceSpec');
 
-    return {
+    const state = {
       projectId: currentSpec.project_id ?? path.basename(artifactRoot),
       artifactRoot,
       statusPath,
@@ -136,6 +220,8 @@ export function resolveIterationState(artifactPath, options = {}) {
       taskGraphSourceSpecPath,
       reviewPath,
     };
+    validateReadyIterationArtifacts(state);
+    return state;
   }
 
   return {

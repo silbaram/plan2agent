@@ -171,6 +171,35 @@ export function validateEvidence(evidence, label) {
   }
 }
 
+const TECHNOLOGY_RECON_PATTERN = /\b(?:cloud|cloud service|database|db|external api|external service|framework|library|npm|package|protocol|runtime|sdk|typescript|node\.?js|python|react|redis|postgres|postgresql|mysql|sqlite|queue|kafka|rabbitmq|aws|gcp|azure)\b/i;
+
+function specTechnologyReconTriggers(spec) {
+  const candidateFields = [
+    ...(spec.product?.external_integrations ?? []),
+    ...(spec.product?.constraints ?? []),
+    ...(spec.product?.screens_or_interfaces ?? []),
+    ...(spec.implementation?.architecture ?? []),
+    ...(spec.implementation?.interfaces ?? []),
+    ...(spec.implementation?.dependencies ?? []),
+  ];
+  return candidateFields
+    .filter((item) => typeof item === 'string')
+    .filter((item) => TECHNOLOGY_RECON_PATTERN.test(item))
+    .filter((item) => !/^(?:none|n\/a|not applicable)$/i.test(item.trim()));
+}
+
+function validateTechnologyReconnaissanceEvidence(spec) {
+  if (spec.approval !== 'approved') return;
+  const triggers = specTechnologyReconTriggers(spec);
+  if (!triggers.length) return;
+  const hasWebEvidence = spec.evidence.some((item) => item.source_id.startsWith('WEB-'));
+  if (!hasWebEvidence) {
+    throw new ValidationError(
+      `approved spec with material technology choices requires WEB-n evidence from Gate B Technology Reconnaissance: ${JSON.stringify(triggers.slice(0, 3))}`,
+    );
+  }
+}
+
 export function validateIntake(filePath, options = {}) {
   const data = validateAgainstSchema(filePath, 'intake');
   validateEvidence(data.evidence, 'intake');
@@ -229,6 +258,7 @@ export function validateSpec(filePath, intakePath = null) {
   const data = validateAgainstSchema(filePath, 'spec');
   const intake = intakePath ? validateIntake(intakePath) : null;
   validateEvidence(data.evidence, 'spec');
+  validateTechnologyReconnaissanceEvidence(data);
   validateClarifyingQuestionDisposition(data, intake);
   if (data.approval === 'approved' && data.open_decisions.length) {
     throw new ValidationError('approved specs must not contain open_decisions');

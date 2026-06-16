@@ -18,8 +18,11 @@ import {
   loadJson,
   validateIntake,
   validateReview,
+  validateHandoffReadyArtifactRoot,
   validateReviewPass,
   validateSpec,
+  validateStatusApprovalAudit,
+  validateStatusDoc,
   validateTaskGraph,
   validateTaskContextData,
   validateTaskGraphData,
@@ -342,20 +345,18 @@ function preflight(paths, iterationId) {
   assertFile(paths.taskGraph, 'greenfield gate-c-task-graph/task-graph.json');
   assertFile(paths.reviewJson, 'greenfield gate-d-review/review.json');
 
-  const spec = validateSpec(paths.specJson);
-  if (spec.approval !== 'approved') {
-    throw new ValidationError(`spec.approval must be approved before init, got ${JSON.stringify(spec.approval)}`);
-  }
-  if (spec.open_decisions.length) {
-    throw new ValidationError(`spec.open_decisions must be empty before init, got ${JSON.stringify(spec.open_decisions)}`);
-  }
-  validateTaskGraph(paths.taskGraph, paths.specJson);
-  validateReview(paths.reviewJson);
+  const rootValidation = validateHandoffReadyArtifactRoot(paths.artifactRoot);
+  const gateBApprovalAudit = gateBApprovalAuditForIteration(
+    parseGateBApprovalAudit(paths.statusMd),
+    iterationId,
+    'Gate B approval preserved from greenfield status during iteration init.',
+  );
 
   return {
-    spec,
-    taskGraph: loadJson(paths.taskGraph),
-    review: loadJson(paths.reviewJson),
+    spec: rootValidation.spec,
+    taskGraph: rootValidation.taskGraph,
+    review: rootValidation.review,
+    gateBApprovalAudit,
   };
 }
 
@@ -534,6 +535,115 @@ function renderHandoffAudit(currentSpec) {
   return `${rows.join('\n')}\n`;
 }
 
+function parseApprovalAudit(statusPath, heading) {
+  if (!existsSync(statusPath)) return null;
+  const text = readFileSync(statusPath, 'utf8');
+  const headingMatch = text.match(new RegExp(`^#{3,6}\\s+${heading}\\s*$`, 'im'));
+  if (!headingMatch) return null;
+  const tail = text.slice(headingMatch.index + headingMatch[0].length);
+  const nextHeading = tail.search(/^#{1,6}\s+/m);
+  const block = nextHeading === -1 ? tail : tail.slice(0, nextHeading);
+  const get = (label) => {
+    const match = block.match(new RegExp(`^\\s*-\\s*${label}:\\s*(.+?)\\s*$`, 'im'));
+    return match ? match[1].trim() : null;
+  };
+  return {
+    approved_by: get('Approved by'),
+    approved_at: get('Approved at'),
+    approved_artifacts: parseApprovedArtifacts(get('Approved artifacts')),
+    approval_note: get('Approval note'),
+  };
+}
+
+function parseApprovedArtifacts(value) {
+  if (!value) return [];
+  return value
+    .split(',')
+    .map((item) => item.trim().replace(/^`|`$/g, ''))
+    .filter(Boolean);
+}
+
+function parseGateBApprovalAudit(statusPath) {
+  return parseApprovalAudit(statusPath, 'Gate B approval audit');
+}
+
+function gateBApprovalArtifactsForIteration(iterationId) {
+  return [
+    `iterations/${iterationId}/gate-b-spec/product-spec.md`,
+    `iterations/${iterationId}/gate-b-spec/implementation-plan.md`,
+    sourceSpecRef(iterationId),
+  ];
+}
+
+function gateBApprovalAuditForIteration(audit, iterationId, fallbackNote, approvedAtOverride = null) {
+  const approvedAt = approvedAtOverride ?? audit?.approved_at ?? new Date().toISOString().slice(0, 10);
+  return {
+    approved_by: audit?.approved_by ?? 'user',
+    approved_at: approvedAt.slice(0, 10),
+    approved_artifacts: gateBApprovalArtifactsForIteration(iterationId),
+    approval_note: audit?.approval_note ?? fallbackNote,
+  };
+}
+
+function currentSpecWithGateBApprovalAudit(currentSpec, iterationId, audit) {
+  return {
+    ...currentSpec,
+    gate_b_approval_audits: {
+      ...(currentSpec.gate_b_approval_audits ?? {}),
+      [iterationId]: audit,
+    },
+  };
+}
+
+function renderGateBApprovalAudit(currentSpec, iterationId) {
+  const audit = currentSpec.gate_b_approval_audits?.[iterationId];
+  if (!audit) return '';
+  const artifacts = Array.isArray(audit.approved_artifacts)
+    ? audit.approved_artifacts
+    : parseApprovedArtifacts(audit.approved_artifacts);
+  const artifactText = artifacts.map((item) => `\`${item}\``).join(', ');
+  return `#### Gate B approval audit\n\n` +
+    `- Approved by: ${audit.approved_by ?? 'user'}\n` +
+    `- Approved at: ${(audit.approved_at ?? new Date().toISOString()).slice(0, 10)}\n` +
+    `- Approved artifacts: ${artifactText || '`iterations/<iter-id>/gate-b-spec/spec.json`'}\n` +
+    `- Approval note: ${audit.approval_note ?? 'Gate B approved.'}\n\n`;
+}
+
+function progressForIteration(currentSpec, activeIteration) {
+  const status = statusForIterationId(currentSpec, activeIteration);
+  if (status === 'active_planning') return '[A:pending] -> [B:pending] -> [C:pending] -> [D:pending]';
+  if (status === 'gate_a_ready') return '[A:complete] -> [B:current] -> [C:pending] -> [D:pending]';
+  if (status === 'gate_b_draft') return '[A:complete] -> [B:draft] -> [C:pending] -> [D:pending]';
+  if (status === 'gate_b_approved') return '[A:complete] -> [B:approved] -> [C:pending] -> [D:pending]';
+  if (status === 'archived') return '[A:complete] -> [B:approved] -> [C:valid] -> [D:passed]';
+  return '[A:complete] -> [B:approved] -> [C:valid] -> [D:passed]';
+}
+
+function renderActiveGateSections(artifactRoot, activeIteration, currentSpec) {
+  const iterationRoot = path.join(artifactRoot, 'iterations', activeIteration);
+  const intakePath = path.join(iterationRoot, 'gate-a-intake', 'intake.json');
+  const specPath = path.join(iterationRoot, 'gate-b-spec', 'spec.json');
+  const taskGraphPath = path.join(iterationRoot, 'gate-c-task-graph', 'task-graph.json');
+  const reviewPath = path.join(iterationRoot, 'gate-d-review', 'review.json');
+  const spec = existsSync(specPath) ? loadJson(specPath) : null;
+  const taskGraph = existsSync(taskGraphPath) ? loadJson(taskGraphPath) : null;
+  const review = existsSync(reviewPath) ? loadJson(reviewPath) : null;
+  const blockerCount = Array.isArray(review?.blocking_issues) ? review.blocking_issues.length : null;
+  return `### Gate A - Intake decisions\n\n` +
+    `- 상태: ${existsSync(intakePath) ? 'present' : 'pending'}\n` +
+    `- 정본 파일: \`iterations/${activeIteration}/gate-a-intake/intake.json\`\n\n` +
+    `### Gate B - Spec approval\n\n` +
+    `- 상태: ${spec ? `approval=${spec.approval}, open_decisions=${spec.open_decisions?.length ?? 'unknown'}` : 'pending'}\n` +
+    `- 정본 파일: \`iterations/${activeIteration}/gate-b-spec/spec.json\`\n\n` +
+    renderGateBApprovalAudit(currentSpec, activeIteration) +
+    `### Gate C - Task graph validation\n\n` +
+    `- 상태: ${taskGraph ? `${taskGraph.tasks?.length ?? 0} task(s)` : 'pending'}\n` +
+    `- 정본 파일: \`iterations/${activeIteration}/gate-c-task-graph/task-graph.json\`\n\n` +
+    `### Gate D - Review blockers\n\n` +
+    `- 상태: ${review ? `blocking_issues=${blockerCount}` : 'pending'}\n` +
+    `- 정본 파일: \`iterations/${activeIteration}/gate-d-review/review.json\`\n`;
+}
+
 export function renderIterationIndexMarkdown(artifactRoot, currentSpec) {
   const projectId = currentSpec.project_id ?? path.basename(artifactRoot);
   const activeIteration = currentSpec.active_iteration;
@@ -548,25 +658,32 @@ export function renderIterationIndexMarkdown(artifactRoot, currentSpec) {
 
   const pending = currentSpec.pending_iteration;
   const pendingBlock = pending
-    ? `## 열린 변경 아이디어\n- iteration: ${pending.iteration_id}\n- status: ${pending.status ?? 'active_planning'}\n- opened_at: ${pending.opened_at ?? 'unknown'}\n- drafted_at: ${pending.drafted_at ?? 'not drafted'}\n- idea: ${pending.idea ?? 'not recorded'}\n\n`
+    ? `### 열린 변경 아이디어\n\n- iteration: ${pending.iteration_id}\n- status: ${pending.status ?? 'active_planning'}\n- opened_at: ${pending.opened_at ?? 'unknown'}\n- drafted_at: ${pending.drafted_at ?? 'not drafted'}\n- idea: ${pending.idea ?? 'not recorded'}\n\n`
     : '';
 
   return `# ${projectId} — 반복 인덱스 (Iteration Index)\n\n` +
     `<!-- p2a:active-iteration=${activeIteration} -->\n\n` +
+    `Progress: ${progressForIteration(currentSpec, activeIteration)}\n\n` +
     `> 정본: iterations/<iter-id>/gate-*, current-spec.json\n` +
     `> 반복 history, close 기준점, handoff 기준점을 누적 렌더링합니다.\n\n` +
-    `## 현재\n` +
+    `## 1. 진행 상태\n\n` +
     `- 활성 기능 반복: ${activeIteration} (${statusForIterationId(currentSpec, activeIteration)})\n` +
     `- maintenance: iterations/maintenance (상시)\n` +
     `- current-spec: current-spec.json (effective → ${currentSpec.effective_spec_ref ?? 'not set'})\n\n` +
     pendingBlock +
-    `## 반복 목록\n${rows.join('\n')}\n\n` +
-    `## Close Audit\n${renderClosedIterationAudit(currentSpec)}\n` +
-    `## Handoff Audit\n${renderHandoffAudit(currentSpec)}\n` +
-    `## 다음\n` +
+    `## 2. 게이트별\n\n` +
+    renderActiveGateSections(artifactRoot, activeIteration, currentSpec) +
+    `\n## 3. 열린 결정 / 반복 목록\n\n` +
+    `- current-spec open_decisions: ${(currentSpec.open_decisions ?? []).length}\n\n` +
+    `${rows.join('\n')}\n\n` +
+    `### Close Audit\n\n${renderClosedIterationAudit(currentSpec)}\n` +
+    `### Handoff Audit\n\n${renderHandoffAudit(currentSpec)}\n` +
+    `## 4. 다음\n\n` +
     `- 새 기능 → \`p2a_iteration open --iteration-id <next> --idea <text>\`\n` +
     `- 작은 fix → \`p2a_iteration maintenance add ...\`\n` +
-    `- 검증 → \`p2a_iteration validate --artifacts <dir>\` (closed iteration archive audit 기본 수행)\n`;
+    `- 검증 → \`p2a_iteration validate --artifacts <dir>\` (closed iteration archive audit 기본 수행)\n\n` +
+    `## 5. 변경 이력\n\n` +
+    `- status generated from current-spec.json for active iteration \`${activeIteration}\`.\n`;
 }
 
 function writeIterationStatus(artifactRoot, currentSpec) {
@@ -636,6 +753,32 @@ function validateEffectiveSections(product, implementation, label = 'current-spe
   validateImplementationShape(implementation, `${label}.effective_implementation`);
 }
 
+function currentSpecWebEvidence(currentSpec, artifactRoot) {
+  const sourceSpecs = Array.isArray(currentSpec.source_specs) ? currentSpec.source_specs : [];
+  const entries = [];
+  const seen = new Set();
+  for (const source of sourceSpecs) {
+    if (!source?.spec_ref) continue;
+    const sourcePath = resolveArtifactFileReference(source.spec_ref, artifactRoot);
+    if (!existsSync(sourcePath) || !lstatSync(sourcePath).isFile()) continue;
+    const sourceSpec = loadJson(sourcePath);
+    for (const item of sourceSpec.evidence ?? []) {
+      if (typeof item?.source_id !== 'string' || !item.source_id.startsWith('WEB-')) continue;
+      const key = `${item.url ?? ''}\n${item.title ?? ''}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      entries.push({
+        ...item,
+        used_for: `Carried forward from composed source ${source.spec_ref} (${item.source_id}): ${item.used_for}`,
+      });
+    }
+  }
+  return entries.map((item, index) => ({
+    ...item,
+    source_id: `WEB-${index + 1}`,
+  }));
+}
+
 function loadEffectiveBaselineSpec(filePath) {
   const data = loadJson(filePath);
   if (data.schema_version === 'p2a.spec.v1') return validateSpec(filePath);
@@ -652,7 +795,7 @@ function loadEffectiveBaselineSpec(filePath) {
     clarifying_question_disposition: [],
     open_decisions: [],
     approval: 'approved',
-    evidence: [],
+    evidence: currentSpecWebEvidence(data, path.dirname(filePath)),
   };
 }
 
@@ -675,8 +818,8 @@ function statusMarkdown(projectId, iterationId, spec, taskGraph, review) {
     `- 작은 fix → maintenance에 append\n`;
 }
 
-function currentSpecPointer(projectId, iterationId) {
-  return {
+function currentSpecPointer(projectId, iterationId, gateBApprovalAudit) {
+  const currentSpec = {
     schema_version: 'p2a.current_spec.v1',
     project_id: projectId,
     composed_from: [iterationId],
@@ -684,6 +827,9 @@ function currentSpecPointer(projectId, iterationId) {
     effective_spec_ref: `iterations/${iterationId}/gate-b-spec/spec.json`,
     note: '반복 1개라 이 반복 spec이 곧 현재 유효 spec. 다중 반복 조합 규칙은 docs/iteration-spec.md에서 정식화.',
   };
+  return gateBApprovalAudit
+    ? currentSpecWithGateBApprovalAudit(currentSpec, iterationId, gateBApprovalAudit)
+    : currentSpec;
 }
 
 function currentSpecForOpen(currentSpec, nextIterationId, previousIterationId, idea, openedAt) {
@@ -963,6 +1109,14 @@ function buildDeltaIntake({ projectId, iterationId, idea, baselineIteration, bas
 function buildDeltaSpec({ projectId, iterationId, idea, baselineSpec, baselineSpecRef }) {
   const product = baselineSpec.product;
   const implementation = baselineSpec.implementation;
+  const baselineWebEvidence = Array.isArray(baselineSpec.evidence)
+    ? baselineSpec.evidence
+        .filter((item) => typeof item?.source_id === 'string' && item.source_id.startsWith('WEB-'))
+        .map((item) => ({
+          ...item,
+          used_for: `Carried forward from baseline Gate B Technology Reconnaissance for iteration ${iterationId}: ${item.used_for}`,
+        }))
+    : [];
   return {
     schema_version: 'p2a.spec.v1',
     project_id: projectId,
@@ -1029,6 +1183,7 @@ function buildDeltaSpec({ projectId, iterationId, idea, baselineSpec, baselineSp
         url: '',
         used_for: `Scoped the delta spec: ${idea}`,
       },
+      ...baselineWebEvidence,
     ],
   };
 }
@@ -1195,8 +1350,8 @@ function currentSpecForDraft(currentSpec, iterationId, idea, draftedAt, artifact
   };
 }
 
-function currentSpecForPromotedSpec(currentSpec, iterationId, promotedAt, artifacts) {
-  const next = {
+function currentSpecForPromotedSpec(currentSpec, iterationId, promotedAt, artifacts, gateBApprovalAudit) {
+  let next = {
     ...currentSpec,
     active_iteration: iterationId,
     gate_b_promoted_at: promotedAt,
@@ -1220,6 +1375,9 @@ function currentSpecForPromotedSpec(currentSpec, iterationId, promotedAt, artifa
         ...artifacts,
       },
     };
+  }
+  if (gateBApprovalAudit) {
+    next = currentSpecWithGateBApprovalAudit(next, iterationId, gateBApprovalAudit);
   }
   return next;
 }
@@ -2066,6 +2224,9 @@ function buildComposedCurrentSpec(previousCurrentSpec, sources, skipped) {
   if (Array.isArray(previousCurrentSpec.closed_iterations)) {
     composedCurrentSpec.closed_iterations = previousCurrentSpec.closed_iterations;
   }
+  if (previousCurrentSpec.gate_b_approval_audits && typeof previousCurrentSpec.gate_b_approval_audits === 'object') {
+    composedCurrentSpec.gate_b_approval_audits = cloneJson(previousCurrentSpec.gate_b_approval_audits);
+  }
 
   const pending = previousCurrentSpec.pending_iteration;
   if (pending && !composedIterationIds.includes(pending.iteration_id)) {
@@ -2076,6 +2237,12 @@ function buildComposedCurrentSpec(previousCurrentSpec, sources, skipped) {
 }
 
 function validateCurrentSpecCompositionData(currentSpec, artifactRoot, options = {}) {
+  const openDecisions = currentSpec.open_decisions ?? [];
+  if (!Array.isArray(openDecisions)) throw new ValidationError('current-spec.json open_decisions must be an array');
+  if (options.requireNoOpenDecisions && openDecisions.length) {
+    throw new ValidationError(`current-spec.json has unresolved open_decisions: ${JSON.stringify(openDecisions.map((decision) => decision.id ?? decision))}`);
+  }
+
   const hasCompositionFields = Object.hasOwn(currentSpec, 'source_specs')
     || Object.hasOwn(currentSpec, 'effective_product')
     || Object.hasOwn(currentSpec, 'effective_implementation')
@@ -2108,11 +2275,6 @@ function validateCurrentSpecCompositionData(currentSpec, artifactRoot, options =
     }
   }
 
-  const openDecisions = currentSpec.open_decisions ?? [];
-  if (!Array.isArray(openDecisions)) throw new ValidationError('current-spec.json open_decisions must be an array');
-  if (options.requireNoOpenDecisions && openDecisions.length) {
-    throw new ValidationError(`current-spec.json composition has unresolved open_decisions: ${JSON.stringify(openDecisions.map((decision) => decision.id ?? decision))}`);
-  }
   return currentSpec;
 }
 
@@ -2120,6 +2282,7 @@ function buildPlan(paths, iterationId, facts) {
   const projectId = projectIdFrom(paths.artifactRoot, facts.spec, facts.taskGraph);
   return {
     projectId,
+    gateBApprovalAudit: facts.gateBApprovalAudit,
     moves: GATE_DIRS.map((gate) => ({
       from: path.join(paths.artifactRoot, gate),
       to: path.join(paths.iterationRoot, gate),
@@ -2164,7 +2327,7 @@ function applyPlan(paths, iterationId, plan) {
     originalMovedTaskGraph = rebaseMovedTaskGraphSourceSpec(paths.movedTaskGraph);
     const movedFacts = validateMoved(paths);
     const projectId = projectIdFrom(paths.artifactRoot, movedFacts.spec, movedFacts.taskGraph);
-    const currentSpec = currentSpecPointer(projectId, iterationId);
+    const currentSpec = currentSpecPointer(projectId, iterationId, plan.gateBApprovalAudit);
     mkdirSync(paths.maintenanceRoot, { recursive: true });
     writeJson(paths.currentSpec, currentSpec);
     writeIterationStatus(paths.artifactRoot, currentSpec);
@@ -2189,7 +2352,7 @@ function validateMoved(paths) {
     throw new ValidationError(`moved spec.open_decisions must be empty, got ${JSON.stringify(spec.open_decisions)}`);
   }
   const taskGraph = validateTaskGraph(paths.movedTaskGraph, paths.movedSpecJson);
-  const review = validateReview(paths.movedReviewJson);
+  const review = validateReviewPass(paths.movedReviewJson);
   return { spec, taskGraph, review };
 }
 
@@ -2206,8 +2369,9 @@ function init(args) {
 
   applyPlan(paths, args.iterationId, plan);
   validateMoved(paths);
+  resolveIterationState(artifactRoot);
   console.log(`Plan2Agent iteration init passed: ${toRelativeFromRoot(artifactRoot)} -> iterations/${args.iterationId}/`);
-  console.log('Moved artifacts revalidated: spec approved, task graph valid, review valid.');
+  console.log('Moved artifacts revalidated: spec approved, task graph valid, review passed, Gate B approval audit present.');
   console.log('Maintenance is lazy: no empty task-graph.json was created.');
   return 0;
 }
@@ -2260,6 +2424,7 @@ function inferPlanningStage(state) {
 
 function validatePlanningIteration(args) {
   const state = resolveIterationState(args.artifacts, { requireReady: false });
+  validateStatusDoc(state.statusPath);
   validateCurrentSpecCompositionData(state.currentSpec, state.artifactRoot, { requireNoOpenDecisions: true });
   const stage = args.stage ?? inferPlanningStage(state);
   if (stage === 'ready') return validateIteration({ ...args, stage: null, allowPlanning: false });
@@ -2301,6 +2466,9 @@ function validatePlanningIteration(args) {
   const spec = validateActiveSpecWithOptionalIntake(state);
   if (stage === 'gate-b-approved' && spec.approval !== 'approved') {
     throw new ValidationError(`--stage gate-b-approved requires spec.approval approved, got ${JSON.stringify(spec.approval)}`);
+  }
+  if (stage === 'gate-b-approved') {
+    validateStatusApprovalAudit(state.statusPath, spec);
   }
   if (stage === 'gate-b-draft' && spec.approval === 'approved') {
     throw new ValidationError('--stage gate-b-draft expected a non-approved spec; use --stage gate-b-approved for approved Gate B');
@@ -2713,7 +2881,19 @@ function promoteSpec(args) {
 
   const promotedAt = new Date().toISOString();
   const artifacts = activeSpecArtifacts(state.artifactRoot, state.activeIteration);
-  const nextCurrentSpec = currentSpecForPromotedSpec(state.currentSpec, state.activeIteration, promotedAt, artifacts);
+  const gateBApprovalAudit = gateBApprovalAuditForIteration(
+    null,
+    state.activeIteration,
+    'Gate B approval recorded by p2a_iteration promote-spec after approved spec with no open decisions.',
+    promotedAt,
+  );
+  const nextCurrentSpec = currentSpecForPromotedSpec(
+    state.currentSpec,
+    state.activeIteration,
+    promotedAt,
+    artifacts,
+    gateBApprovalAudit,
+  );
   writeJson(state.currentSpecPath, nextCurrentSpec);
   writeJson(
     iterationMetadataPath(state.artifactRoot, state.activeIteration),

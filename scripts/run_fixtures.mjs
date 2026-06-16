@@ -456,6 +456,50 @@ function validateIterationCurrentFixtureCases() {
         return { status: result.status ?? 1, checks };
       }
 
+      const statusText = readFileSync(path.join(artifactRoot, 'status.md'), 'utf8');
+      writeFileSync(
+        path.join(artifactRoot, 'status.md'),
+        '# broken status\n\n' +
+          '<!-- p2a:active-iteration=v1-mvp -->\n\n' +
+          '#### Gate B approval audit\n\n' +
+          '- Approved by: user\n' +
+          '- Approved at: 2026-06-16\n' +
+          '- Approved artifacts: `iterations/v1-mvp/gate-b-spec/spec.json`\n' +
+          '- Approval note: fixture intentionally breaks status structure.\n',
+        'utf8',
+      );
+      result = runIteration(['validate', '--artifacts', artifactRoot]);
+      checks += 1;
+      const brokenStatusOutput = `${result.stdout ?? ''}${result.stderr ?? ''}`;
+      if (result.status === 0 || !brokenStatusOutput.includes('status.md missing Progress line')) {
+        console.error(`iteration validate fixture did not reject broken status.md structure: ${caseData.id}`);
+        writeResultOutput(result);
+        writeFileSync(path.join(artifactRoot, 'status.md'), statusText, 'utf8');
+        return { status: 1, checks };
+      }
+      writeFileSync(path.join(artifactRoot, 'status.md'), statusText, 'utf8');
+
+      const currentSpecText = readFileSync(state.currentSpecPath, 'utf8');
+      const currentSpecWithOpenDecision = JSON.parse(currentSpecText);
+      currentSpecWithOpenDecision.open_decisions = [{
+        id: 'CD-fixture',
+        type: 'fixture',
+        question: 'Fixture open decision must block ready execution.',
+        affects: ['product.goals'],
+        status: 'open',
+      }];
+      writeFileSync(state.currentSpecPath, `${JSON.stringify(currentSpecWithOpenDecision, null, 2)}\n`, 'utf8');
+      result = runTasks(['ready', '--artifacts', artifactRoot]);
+      checks += 1;
+      const currentSpecOpenOutput = `${result.stdout ?? ''}${result.stderr ?? ''}`;
+      if (result.status === 0 || !currentSpecOpenOutput.includes('current-spec.json open_decisions')) {
+        console.error(`p2a_tasks ready fixture did not reject current-spec open_decisions: ${caseData.id}`);
+        writeResultOutput(result);
+        writeFileSync(state.currentSpecPath, currentSpecText, 'utf8');
+        return { status: 1, checks };
+      }
+      writeFileSync(state.currentSpecPath, currentSpecText, 'utf8');
+
       result = runIteration(['validate', '--artifacts', artifactRoot, '--require-close-ready']);
       checks += 1;
       const closeNotReadyOutput = `${result.stdout ?? ''}${result.stderr ?? ''}`;
@@ -782,6 +826,23 @@ function validateIterationCurrentFixtureCases() {
         return { status: result.status ?? 1, checks };
       }
 
+      const draftStatusText = readFileSync(path.join(artifactRoot, 'status.md'), 'utf8');
+      writeFileSync(
+        path.join(artifactRoot, 'status.md'),
+        '# broken planning status\n\n<!-- p2a:active-iteration=iter-002 -->\n',
+        'utf8',
+      );
+      result = runIteration(['validate', '--artifacts', artifactRoot, '--allow-planning']);
+      checks += 1;
+      const brokenPlanningStatusOutput = `${result.stdout ?? ''}${result.stderr ?? ''}`;
+      if (result.status === 0 || !brokenPlanningStatusOutput.includes('status.md missing Progress line')) {
+        console.error(`iteration planning validate did not reject broken status.md structure: ${caseData.id}`);
+        writeResultOutput(result);
+        writeFileSync(path.join(artifactRoot, 'status.md'), draftStatusText, 'utf8');
+        return { status: 1, checks };
+      }
+      writeFileSync(path.join(artifactRoot, 'status.md'), draftStatusText, 'utf8');
+
       const approvedDraftSpec = JSON.parse(readFileSync(draftSpecPath, 'utf8'));
       approvedDraftSpec.approval = 'approved';
       writeFileSync(draftSpecPath, `${JSON.stringify(approvedDraftSpec, null, 2)}\n`, 'utf8');
@@ -865,6 +926,10 @@ function validateIterationCurrentFixtureCases() {
       writeFileSync(iter2TaskGraphPath, `${JSON.stringify(iter2TaskGraph, null, 2)}\n`, 'utf8');
       cpSync(closedBaselineReviewPath, iter2ReviewPath);
       cpSync(closedBaselineReviewReportPath, iter2ReviewReportPath);
+      const iter2Review = JSON.parse(readFileSync(iter2ReviewPath, 'utf8'));
+      iter2Review.sourceSpec = '../gate-b-spec/spec.json';
+      iter2Review.sourceTaskGraph = '../gate-c-task-graph/task-graph.json';
+      writeFileSync(iter2ReviewPath, `${JSON.stringify(iter2Review, null, 2)}\n`, 'utf8');
 
       result = runIteration(['validate', '--artifacts', artifactRoot, '--require-close-ready']);
       checks += 1;

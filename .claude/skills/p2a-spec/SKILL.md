@@ -58,6 +58,19 @@ Return:
 - edge_cases
 - verification
 
+## Technology Reconnaissance
+
+During Gate B, before finalizing `implementation.architecture`, run a lightweight technology landscape scan when:
+
+- the implementation depends on a library, framework, runtime, protocol, package, database, cloud service, or external API choice;
+- the user asks for recommendations or current/latest options;
+- the agent may have stale knowledge or the ecosystem changes frequently;
+- the choice affects architecture, security, cost, licensing, deployment, performance, compatibility, or long-term maintenance.
+
+Use primary sources first: official docs, release notes, standards documents, package registries, source repositories, or vendor documentation. Use web lookup only for read-only research; do not install dependencies, run implementation commands, or treat popularity signals as sufficient proof.
+
+The Gate B output must compare viable options, explain trade-offs, recommend one option when justified, and state the rationale in the product or implementation spec section it affects. Record every material source in `spec_json.evidence` as `WEB-n` with title, URL, and `used_for`, and cite the source id near the recommendation. If the choice changes product scope or major constraints, keep `approval: draft` and add the relevant `ND-n` to `open_decisions` instead of silently choosing.
+
 `spec_json.clarifying_question_disposition` must include exactly one item for each intake `clarifying_questions[*].id`. Each item has `id`, `status`, `rationale`, and `affects`, plus the field required by its status:
 
 - `answered` requires `resolved_by`.
@@ -114,5 +127,6 @@ Suggested Korean section labels for implementation plans: 아키텍처, 인터�
 - If a required field is unknown, add the related decision id to `open_decisions` and keep approval as `draft`.
 - Keep non-goals explicit.
 - Do not invent API providers, storage engines, or UI frameworks unless the user already selected them.
+- Do not rely on stale model memory for current technology recommendations; use Technology Reconnaissance when the choice materially affects the plan.
 - Preserve intake evidence and add citation entries for web or local sources that materially affect the spec.
 - Do not edit files or run commands.

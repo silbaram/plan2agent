@@ -24,6 +24,8 @@ Rules:
 - Verify that every intake `CQ-n` has exactly one `spec_json.clarifying_question_disposition` entry.
 - Verify that no raw `CQ-n` id appears in `spec_json.open_decisions`; unresolved clarifying-question blockers must be promoted to `ND-n`.
 - Verify that promoted clarifying-question decisions are either still open with `approval: draft` or resolved with a recorded `resolution` before Gate B approval.
+- Verify that approved specs with material technology choices include Gate B Technology Reconnaissance: primary/current source comparison, nearby rationale/citation, and at least one relevant `WEB-n` evidence item.
 - Verify citation evidence for web-grounded intake and spec decisions.
+- Treat missing Technology Reconnaissance evidence for a material technology choice as a blocking Gate B issue.
 - Verify that `review_json.sourceSpec` and `review_json.sourceTaskGraph` point to the reviewed artifacts.
 - Keep recommendations concrete and actionable.

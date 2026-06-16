@@ -19,7 +19,7 @@ Use this workflow to convert an early product idea into development-ready planni
 | --- | --- | --- | --- | --- |
 | 1. Intake | `p2a-intake` | `p2a-requirements` | raw idea and notes | `intake_json` (`p2a.intake.v1`) |
 | 2. Product spec | `p2a-spec` | `p2a-spec-author` | intake plus answered decisions | `product_spec_markdown`, `spec_json` (`p2a.spec.v1`) |
-| 3. Implementation plan | `p2a-spec` | `p2a-implementation-planner` | approved product spec | `implementation_plan_markdown`, updated `spec_json` |
+| 3. Implementation plan | `p2a-spec` | `p2a-implementation-planner` | product spec draft plus Gate A constraints | `implementation_plan_markdown`, updated `spec_json` |
 | 4. Task graph | `p2a-task-breakdown` | `p2a-task-graph` | approved implementation spec | `task_graph_json` (`p2a.task_graph.v1`) |
 | 5. Review | `p2a-review` | `p2a-quality-reviewer` | spec and task graph | `review_report`, `review_json` (`p2a.review.v1`) |
 
@@ -28,7 +28,7 @@ If the CLI cannot spawn subagents automatically, run the matching skill locally 
 ## Approval Gates
 
 - **Gate A — Intake decisions:** If any `needs_user_decision.status` is `open` or `deferred`, stop after intake and ask only those decisions. Do not produce a product spec except as a clearly labeled sketch.
-- **Gate B — Spec approval:** If `spec_json.approval` is not `approved` or `spec_json.open_decisions` is non-empty, stop before task graph generation. When Gate B is approved, `status.md` must include a Gate B approval audit block.
+- **Gate B — Spec approval:** If `spec_json.approval` is not `approved` or `spec_json.open_decisions` is non-empty, stop before task graph generation. When Gate B selects or recommends a library, framework, runtime, protocol, or external service, apply the `p2a-spec` Technology Reconnaissance rules before approval. When Gate B is approved, `status.md` must include a Gate B approval audit block.
 - **Gate C — Task graph validation:** Before final output, check that every dependency references a task id, the graph is acyclic, and every task has acceptance criteria.
 - **Gate D — Review blockers:** If review finds blocking issues, return the blockers and the artifact section that must be revised instead of claiming the plan is ready.
 
@@ -46,6 +46,12 @@ Use exactly one disposition per intake `CQ-n`:
 - `promoted_to_decision` — the question is high-impact and must be tracked as a formal decision; include `promoted_decision_id`.
 
 Do not put raw `CQ-n` ids in `spec_json.open_decisions`. If a clarifying question blocks product or implementation correctness, promote it to an `ND-n` decision. An unresolved promoted decision remains in `open_decisions` and keeps the spec in `draft`; a resolved promoted decision records `resolution` in the disposition and is removed from `open_decisions`.
+
+## Gate A/B Technology Boundary
+
+Gate A identifies product scope, hard constraints, and architecture-changing choices; it does not design the full stack. If a technology choice changes the product boundary or major implementation model, such as runtime, deployment shape, persistence requirement, protocol compatibility, cloud dependency, or library-vs-service posture, ask it as a Gate A `needs_user_decision`.
+
+Gate B chooses or recommends the concrete stack within the approved Gate A constraints. Use read-only technology reconnaissance in Gate B when current ecosystem knowledge matters, compare viable options, record material sources in `spec_json.evidence`, and leave high-impact unresolved choices in `spec_json.open_decisions` instead of silently deciding.
 
 ## Analysis and Decision Presentation
 
