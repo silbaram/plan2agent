@@ -30,6 +30,7 @@ import {
   resolveIterationState,
   serializeIterationState,
 } from './p2a_iteration_state.mjs';
+import { loadRunsForArtifactRoot } from './p2a_runs.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const ROOT = path.resolve(path.dirname(__filename), '..');
@@ -71,7 +72,7 @@ function usage() {
     '  node scripts/p2a_iteration.mjs close --artifacts <iterative-project-dir> [--iteration-id active]',
     '  node scripts/p2a_iteration.mjs open --artifacts <iterative-project-dir> --iteration-id <id> --idea <text>',
     '  node scripts/p2a_iteration.mjs draft --artifacts <iterative-project-dir> [--idea <text>] [--force]',
-    '  node scripts/p2a_iteration.mjs context --artifacts <iterative-project-dir> [--idea <text>]',
+    '  node scripts/p2a_iteration.mjs context --artifacts <iterative-project-dir> [--idea <text>] [--code-root <dir>]',
     '  node scripts/p2a_iteration.mjs promote-spec --artifacts <iterative-project-dir>',
     '  node scripts/p2a_iteration.mjs promote-tasks --artifacts <iterative-project-dir>',
     '  node scripts/p2a_iteration.mjs diff-tasks --artifacts <iterative-project-dir> [--force]',
@@ -123,6 +124,7 @@ function usage() {
     '',
     'context options:',
     '  --idea <text>         Override the idea included in the emitted context JSON.',
+    '  --code-root <dir>     Code root to scan for L1 file-tree signals. Default: current working directory.',
     '',
     'promote-tasks options:',
     '  (none)                Requires approved spec plus Gate C approval audit in status.md.',
@@ -168,6 +170,7 @@ function parseArgs(argv) {
     acceptanceCriteria: [],
     sourceSpecRefs: [],
     dependencies: [],
+    codeRoot: process.cwd(),
   };
   const command = argv[0];
   if (!command) throw new Error(`missing command\n\n${usage()}`);
@@ -198,6 +201,10 @@ function parseArgs(argv) {
       if (command !== 'open' && command !== 'draft' && command !== 'context') throw new Error('--idea is only supported by open, draft, and context');
       args.idea = argv[++index];
       if (!args.idea) throw new Error('--idea requires a value');
+    } else if (arg === '--code-root') {
+      if (command !== 'context') throw new Error('--code-root is only supported by context');
+      args.codeRoot = argv[++index];
+      if (!args.codeRoot) throw new Error('--code-root requires a directory');
     } else if (arg === '--force') {
       if (command !== 'draft' && command !== 'diff-tasks') throw new Error('--force is only supported by draft and diff-tasks');
       args.force = true;
@@ -2401,6 +2408,86 @@ function contextSpecFieldChanges(state) {
   return collectSpecFieldChanges(baselineSpec, activeSpec);
 }
 
+const CODE_SIGNAL_FILE_TREE_LIMIT = 300;
+const CODE_SIGNAL_EXCLUDED_DIRS = new Set([
+  '.git',
+  'node_modules',
+  '.plan2agent',
+  'artifacts',
+  'runs',
+  'build',
+  'dist',
+  'out',
+  'target',
+  '.gradle',
+  '.idea',
+  'scripts',
+  'schemas',
+  '.claude',
+  '.codex',
+  '.gemini',
+  '.agents',
+]);
+
+function collectCodeFileTree(codeRoot, limit = CODE_SIGNAL_FILE_TREE_LIMIT) {
+  const root = path.resolve(process.cwd(), codeRoot);
+  if (!existsSync(root) || !lstatSync(root).isDirectory()) {
+    return { code_root: null, file_tree: [], truncated: false };
+  }
+  const fileTree = [];
+  let truncated = false;
+
+  function visit(dirPath) {
+    if (truncated) return;
+    const entries = readdirSync(dirPath, { withFileTypes: true })
+      .sort((left, right) => left.name.localeCompare(right.name));
+    for (const entry of entries) {
+      if (truncated) return;
+      if (entry.isDirectory()) {
+        if (!CODE_SIGNAL_EXCLUDED_DIRS.has(entry.name)) visit(path.join(dirPath, entry.name));
+        continue;
+      }
+      if (!entry.isFile()) continue;
+      const relative = normalizeDisplayPath(path.relative(root, path.join(dirPath, entry.name)));
+      if (!relative || relative.startsWith('..')) continue;
+      if (fileTree.length >= limit) {
+        truncated = true;
+        return;
+      }
+      fileTree.push(relative);
+    }
+  }
+
+  visit(root);
+  return {
+    code_root: normalizeDisplayPath(toRelativeFromRoot(root)),
+    file_tree: fileTree,
+    truncated,
+  };
+}
+
+function recentRunChanges(artifactRoot) {
+  try {
+    return loadRunsForArtifactRoot(artifactRoot).map((run) => ({
+      taskId: run.taskId,
+      runId: run.runId,
+      status: run.status,
+      changedFiles: run.changedFiles ?? [],
+      finishedAt: run.finishedAt ?? null,
+    }));
+  } catch {
+    return [];
+  }
+}
+
+function collectCodeSignals(args, state) {
+  const fileSignals = collectCodeFileTree(args.codeRoot ?? process.cwd());
+  return {
+    ...fileSignals,
+    recent_changes: recentRunChanges(state.artifactRoot),
+  };
+}
+
 function context(args) {
   const state = resolveIterationState(args.artifacts, { requireReady: false });
   const effectiveSpec = loadContextEffectiveSpec(state);
@@ -2417,6 +2504,7 @@ function context(args) {
       maintenance: summarizeTaskGraphIfPresent(maintenanceTaskGraphPath(state.artifactRoot)),
     },
     spec_field_changes: contextSpecFieldChanges(state),
+    code_signals: collectCodeSignals(args, state),
   };
   validateTaskContextData(contextData);
   console.log(JSON.stringify(contextData, null, 2));

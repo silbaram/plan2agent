@@ -221,7 +221,7 @@ function defaultRunsDirForGraph(graphPath) {
   return path.resolve(path.dirname(graphPath), '..', 'runs');
 }
 
-function resolveRunsDir(args) {
+export function resolveRunsDir(args) {
   if (args.runs) return path.resolve(args.runs);
   if (args.artifacts) return path.join(path.resolve(args.artifacts), 'runs');
   if (args.graph) return defaultRunsDirForGraph(path.resolve(args.graph));
@@ -387,7 +387,7 @@ function writeJson(filePath, data) {
   writeFileSync(filePath, `${JSON.stringify(data, null, 2)}\n`, 'utf8');
 }
 
-function readRun(runsDir, runId) {
+export function readRun(runsDir, runId) {
   const filePath = runPath(runsDir, runId);
   assertFile(filePath, runId);
   const run = loadJson(filePath);
@@ -399,6 +399,23 @@ function writeRun(runsDir, run) {
   validateRunData(run);
   writeJson(runPath(runsDir, run.runId), run);
   upsertIndexRun(runsDir, run);
+}
+
+export function loadRunsForArtifactRoot(artifactRoot) {
+  const runsDir = path.join(path.resolve(artifactRoot), 'runs');
+  if (!existsSync(runsDir) || !lstatSync(runsDir).isDirectory()) return [];
+  const indexFile = indexPath(runsDir);
+  if (!existsSync(indexFile)) return [];
+  const index = loadIndex(runsDir);
+  return index.runs
+    .map((run) => {
+      try {
+        return readRun(runsDir, run.runId);
+      } catch {
+        return null;
+      }
+    })
+    .filter(Boolean);
 }
 
 function uniqueStrings(values) {

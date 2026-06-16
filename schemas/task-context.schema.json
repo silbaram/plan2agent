@@ -3,7 +3,7 @@
   "$id": "https://plan2agent.local/schemas/task-context.schema.json",
   "title": "Plan2Agent Task Context",
   "type": "object",
-  "required": ["schema_version", "project_id", "active_iteration", "scope", "idea", "baseline_effective_spec_ref", "effective_spec", "existing_tasks", "spec_field_changes"],
+  "required": ["schema_version", "project_id", "active_iteration", "scope", "idea", "baseline_effective_spec_ref", "effective_spec", "existing_tasks", "spec_field_changes", "code_signals"],
   "additionalProperties": false,
   "properties": {
     "schema_version": {"const": "p2a.task_context.v1"},
@@ -62,6 +62,31 @@
           "section": {"type": "string", "enum": ["product", "implementation"]},
           "field": {"type": "string", "minLength": 1},
           "specRef": {"type": "string", "minLength": 1}
+        }
+      }
+    },
+    "code_signals": {
+      "type": "object",
+      "required": ["code_root", "file_tree", "truncated", "recent_changes"],
+      "additionalProperties": false,
+      "properties": {
+        "code_root": {"type": ["string", "null"]},
+        "file_tree": {"type": "array", "items": {"type": "string", "minLength": 1}},
+        "truncated": {"type": "boolean"},
+        "recent_changes": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["taskId", "runId", "status", "changedFiles", "finishedAt"],
+            "additionalProperties": false,
+            "properties": {
+              "taskId": {"type": "string", "pattern": "^task-[0-9]+$"},
+              "runId": {"type": "string", "pattern": "^run-[A-Za-z0-9._-]+$"},
+              "status": {"type": "string", "enum": ["started", "finished", "failed", "blocked"]},
+              "changedFiles": {"type": "array", "items": {"type": "string", "minLength": 1}},
+              "finishedAt": {"type": ["string", "null"]}
+            }
+          }
         }
       }
     }

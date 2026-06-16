@@ -1300,7 +1300,67 @@ function validateIterationCurrentFixtureCases() {
         return { status: 1, checks };
       }
 
-      result = runIteration(['context', '--artifacts', artifactRoot]);
+      const contextCodeRoot = path.join(tempRoot, 'context-code-root');
+      mkdirSync(path.join(contextCodeRoot, 'src'), { recursive: true });
+      mkdirSync(path.join(contextCodeRoot, '.plan2agent', 'scripts'), { recursive: true });
+      mkdirSync(path.join(contextCodeRoot, 'scripts'), { recursive: true });
+      writeFileSync(path.join(contextCodeRoot, 'src', 'Demo.kt'), 'class Demo\n', 'utf8');
+      writeFileSync(path.join(contextCodeRoot, '.plan2agent', 'scripts', 'ignored.js'), 'ignored\n', 'utf8');
+      writeFileSync(path.join(contextCodeRoot, 'scripts', 'ignored.js'), 'ignored\n', 'utf8');
+
+      const contextRunsDir = path.join(artifactRoot, 'runs');
+      mkdirSync(contextRunsDir, { recursive: true });
+      const contextRun = {
+        schema_version: 'p2a.run.v1',
+        runId: 'run-context-fixture',
+        projectId: caseData.project_id,
+        taskId: 'task-001',
+        taskTitle: 'Context fixture run',
+        iterationId: 'iter-003',
+        sourceLayout: 'iteration',
+        taskGraphRef: 'iterations/iter-003/gate-c-task-graph/task-graph.json',
+        sourceSpecRef: 'iterations/iter-003/gate-b-spec/spec.json',
+        agentTool: 'fixture',
+        workspaceRef: 'fixture-workspace',
+        workspacePath: contextCodeRoot,
+        isolation: {
+          mode: 'none',
+          branch: null,
+          worktree: null,
+          baseRef: null,
+          created: false,
+          createCommand: null,
+          createExitCode: null,
+          createOutputTail: null,
+        },
+        status: 'finished',
+        startedAt: '2026-01-01T00:00:00.000Z',
+        updatedAt: '2026-01-01T00:01:00.000Z',
+        finishedAt: '2026-01-01T00:01:00.000Z',
+        changedFiles: ['src/Demo.kt'],
+        verification: [],
+        notes: ['fixture run'],
+      };
+      writeFileSync(path.join(contextRunsDir, 'run-context-fixture.json'), `${JSON.stringify(contextRun, null, 2)}\n`, 'utf8');
+      writeFileSync(path.join(contextRunsDir, 'run-index.json'), `${JSON.stringify({
+        schema_version: 'p2a.run_index.v1',
+        projectId: caseData.project_id,
+        runs: [{
+          runId: contextRun.runId,
+          taskId: contextRun.taskId,
+          iterationId: contextRun.iterationId,
+          status: contextRun.status,
+          agentTool: contextRun.agentTool,
+          workspaceRef: contextRun.workspaceRef,
+          taskGraphRef: contextRun.taskGraphRef,
+          runRef: 'run-context-fixture.json',
+          startedAt: contextRun.startedAt,
+          finishedAt: contextRun.finishedAt,
+        }],
+        tasks: [{ taskId: contextRun.taskId, runIds: [contextRun.runId], latestRunId: contextRun.runId }],
+      }, null, 2)}\n`, 'utf8');
+
+      result = runIteration(['context', '--artifacts', artifactRoot, '--code-root', contextCodeRoot]);
       checks += 1;
       try {
         const taskContext = JSON.parse(result.stdout);
@@ -1310,12 +1370,28 @@ function validateIterationCurrentFixtureCases() {
           || taskContext.active_iteration !== 'iter-003'
           || !taskContext.effective_spec
           || !taskContext.existing_tasks
+          || !taskContext.code_signals
         ) {
           throw new Error('context JSON contract mismatch');
         }
         validateTaskContextData(taskContext);
         if (taskContext.idea === undefined || taskContext.baseline_effective_spec_ref === undefined) {
           throw new Error('context JSON contract mismatch');
+        }
+        const codeSignals = taskContext.code_signals;
+        const codeSignalKeys = Object.keys(codeSignals).sort();
+        if (JSON.stringify(codeSignalKeys) !== JSON.stringify(['code_root', 'file_tree', 'recent_changes', 'truncated'])) {
+          throw new Error('context code_signals keys mismatch');
+        }
+        if (!codeSignals.file_tree.includes('src/Demo.kt')) {
+          throw new Error('context code_signals file_tree missing src/Demo.kt');
+        }
+        if (codeSignals.file_tree.some((filePath) => filePath.includes('.plan2agent') || filePath.startsWith('scripts/'))) {
+          throw new Error('context code_signals file_tree included excluded directories');
+        }
+        const recentChange = codeSignals.recent_changes.find((change) => change.runId === 'run-context-fixture');
+        if (!recentChange || recentChange.taskId !== 'task-001' || !recentChange.changedFiles.includes('src/Demo.kt')) {
+          throw new Error('context code_signals recent_changes missing fixture run');
         }
       } catch (error) {
         console.error(`iteration context fixture check failed: ${caseData.id}`);

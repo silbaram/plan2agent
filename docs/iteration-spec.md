@@ -621,7 +621,8 @@ handoff는 active 반복의 `task-graph.sourceSpec`을 `spec.json`으로, `spec.
 ```bash
 node scripts/p2a_iteration.mjs context \
   --artifacts artifacts/<project_id> \
-  [--idea "<change idea>"]
+  [--idea "<change idea>"] \
+  [--code-root <dir>]
 ```
 
 출력 형식:
@@ -643,13 +644,22 @@ node scripts/p2a_iteration.mjs context \
   },
   "spec_field_changes": [
     { "section": "implementation", "field": "architecture", "specRef": "implementation.architecture" }
-  ]
+  ],
+  "code_signals": {
+    "code_root": ".",
+    "file_tree": ["src/Demo.kt"],
+    "truncated": false,
+    "recent_changes": [
+      { "taskId": "task-001", "runId": "run-...", "status": "finished", "changedFiles": ["src/Demo.kt"], "finishedAt": "2026-01-01T00:00:00.000Z" }
+    ]
+  }
 }
 ```
 
 - `effective_spec`은 `current-spec.json`의 effective view(또는 thin pointer가 가리키는 active spec)에서 읽는다.
 - `existing_tasks`는 중복 저작과 재사용 판단을 돕기 위해 active 반복과 maintenance graph의 task 요약을 함께 제공한다.
 - `spec_field_changes`는 baseline이 있으면 `diff-tasks`와 같은 field 비교 결과를 재사용한다.
+- `code_signals`는 L1 실제 파일 트리(`--code-root`, 하네스/빌드/의존성 디렉터리 제외, cap 적용)와 L2 run log 기반 최근 변경 파일을 제공한다. L3 git diff와 L4 코드 요약은 후속이다.
 - `context`는 어떤 파일도 쓰지 않는다.
 - 현재 `scope`는 `feature` 고정이다. `--scope maintenance`는 후속(§10 도입부 구현 현황).
 - 출력은 `schemas/task-context.schema.json`(`p2a.task_context.v1`)을 따르며, `context` 명령이 출력 전 `validateTaskContextData`로 자기검증해 무효 context를 내보내지 않는다.
