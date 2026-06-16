@@ -308,7 +308,7 @@ node scripts/p2a_tasks.mjs ready \
   --maintenance
 ```
 
-반복 handoff 시 maintenance graph가 있으면 active graph와 병합하지 않고 `.plan2agent/maintenance/task-graph.json`으로 별도 복사된다.
+반복 handoff 시 `task-graph.sourceSpec`은 `spec.json`으로, `spec.source_intake`는 `intake.json`으로 rebase되고, `intake.json`은 traceability 검증을 위해 항상 `.plan2agent/artifacts/`에 함께 복사된다. `--include-intake`는 사람용 `intake.md` 추가 복사만 제어한다. maintenance graph가 있으면 active graph와 병합하지 않고 `.plan2agent/maintenance/task-graph.json`으로 별도 복사된다.
 
 ## 어떤 파일을 봐야 하나
 
