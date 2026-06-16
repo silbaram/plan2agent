@@ -28,6 +28,9 @@ Use these context fields:
 - `spec_field_changes`
 - `idea`
 - `active_iteration`
+- `code_signals`
+
+Context의 `code_signals`(실제 파일 트리·최근 변경 파일)를 보고 **이미 있는 코드를 중복 생성하지 말고 기존 위에 증분으로** task를 작성하라.
 
 ## Output
 
