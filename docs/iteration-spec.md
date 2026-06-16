@@ -31,7 +31,8 @@
 | diff 기반 task graph 초안 | `p2a_iteration.mjs diff-tasks` | active spec과 baseline spec의 field 차이를 semantic group으로 병합/분할해 Gate C task graph 초안을 생성한다. |
 | current-spec composition | `p2a_iteration.mjs compose` | approved + close-ready 반복들을 `effective_product`, `effective_implementation`으로 조합한다. |
 | maintenance graph 생성/검증 | `p2a_iteration.mjs maintenance add`, `validate` | maintenance task graph를 lazy 생성/append하고, 존재하면 schema/dependency를 검증한다. |
-| 반복 handoff | `p2a_handoff.mjs --iteration-id active` | active 반복 산출물, `.plan2agent/current-spec.json`, maintenance graph를 대상 프로젝트에 복사하고 handoff 기준점을 기록한다. |
+| co-located scaffold | `p2a_handoff.mjs scaffold` | 새 코드 프로젝트에 반복 CLI, schema, AI 자산, project config, manifest, 시작 가이드를 설치해 프로젝트가 planning과 development loop를 직접 소유하게 한다. |
+| 반복 handoff | `p2a_handoff.mjs --iteration-id active` | 외부 planning bundle을 옮기는 레거시/특수 흐름으로 active 반복 산출물, `.plan2agent/current-spec.json`, maintenance graph를 대상 프로젝트에 복사하고 handoff 기준점을 기록한다. |
 | 회귀 fixture | `scripts/run_fixtures.mjs` | greenfield -> init -> current -> tasks ready -> close -> open -> validate/current, draft/compose/handoff 흐름을 검증한다. |
 
 ### 0-2. 부분 구현
@@ -58,6 +59,8 @@
 ## 1. 배경과 목적
 
 Plan2Agent의 핵심 가치는 기획의 변경 사항이 agent가 실행 가능한 명세와 task로 이어지고, 그 과정과 결과가 시맨틱 문서로 남는 순환 시스템을 만드는 것이다.
+
+현재 권장 v1 greenfield 흐름은 `p2a_handoff.mjs scaffold --target <project>`로 코드 프로젝트에 하네스를 설치한 뒤, 그 프로젝트가 다음 한 바퀴의 앞쪽과 뒤쪽을 모두 소유한다. 기존 handoff는 이미 다른 위치에 만들어진 planning bundle을 복사해야 하는 특수 상황에 남겨둔다.
 
 현재 v1 greenfield 흐름은 다음 한 바퀴의 앞쪽을 담당한다.
 

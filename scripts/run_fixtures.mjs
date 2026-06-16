@@ -48,6 +48,10 @@ function runTargetRuns(targetRoot, args) {
   return spawnSync(process.execPath, [path.join(targetRoot, 'scripts', 'p2a_runs.mjs'), ...args], { cwd: targetRoot, encoding: 'utf8' });
 }
 
+function runTargetIteration(targetRoot, args) {
+  return spawnSync(process.execPath, [path.join(targetRoot, 'scripts', 'p2a_iteration.mjs'), ...args], { cwd: targetRoot, encoding: 'utf8' });
+}
+
 function writeResultOutput(result) {
   if (result.stdout) process.stdout.write(result.stdout);
   if (result.stderr) process.stderr.write(result.stderr);
@@ -120,6 +124,85 @@ function assertE2eCaseShape(caseData) {
   if (!caseData.project_id || typeof caseData.project_id !== 'string') {
     throw new Error(`${caseData.id} must provide project_id`);
   }
+}
+
+
+function validateScaffoldFixtureCase() {
+  const tempRoot = mkdtempSync(path.join(tmpdir(), 'p2a-scaffold-'));
+  let checks = 0;
+  try {
+    const targetRoot = path.join(tempRoot, 'target-project');
+    let result = runHandoff(['scaffold', '--target', targetRoot, '--tools', 'all']);
+    checks += 1;
+    if (result.status !== 0) {
+      console.error('scaffold fixture check failed');
+      writeResultOutput(result);
+      return { status: result.status ?? 1, checks };
+    }
+
+    const expectedScripts = ['p2a_iteration.mjs', 'p2a_tasks.mjs', 'p2a_runs.mjs', 'p2a_iteration_state.mjs', 'validate_artifacts.mjs']
+      .map((file) => path.join('scripts', file));
+    const expectedSchemas = ['intake.schema.json', 'spec.schema.json', 'task-graph.schema.json', 'task-context.schema.json', 'review.schema.json', 'run.schema.json', 'run-index.schema.json']
+      .map((file) => path.join('schemas', file));
+    const expectedToolFiles = [
+      path.join('.agents', 'skills', 'p2a-harness', 'SKILL.md'),
+      path.join('.claude', 'skills', 'p2a-harness', 'SKILL.md'),
+      path.join('.codex', 'agents', 'p2a-task-graph.toml'),
+      path.join('.gemini', 'commands', 'p2a', 'harness.toml'),
+    ];
+    const expectedGenerated = [path.join('.plan2agent', 'project.config.json'), path.join('.plan2agent', 'manifest.json'), 'PLAN2AGENT.md'];
+    const missingFiles = [...expectedScripts, ...expectedSchemas, ...expectedToolFiles, ...expectedGenerated]
+      .filter((filePath) => !existsSync(path.join(targetRoot, filePath)));
+    const manifest = JSON.parse(readFileSync(path.join(targetRoot, '.plan2agent', 'manifest.json'), 'utf8'));
+    const config = JSON.parse(readFileSync(path.join(targetRoot, '.plan2agent', 'project.config.json'), 'utf8'));
+    if (
+      missingFiles.length
+      || manifest.provenance?.mode !== 'scaffold'
+      || manifest.aiToolTargets.join(',') !== 'codex,claude,gemini'
+      || config.testCommand !== null
+      || config.runTracking?.runsDir !== '.plan2agent/runs'
+    ) {
+      console.error('scaffold output mismatch');
+      console.error(JSON.stringify({ missingFiles, manifest, config }, null, 2));
+      return { status: 1, checks };
+    }
+
+    result = runTargetIteration(targetRoot, ['--help']);
+    checks += 1;
+    if (result.status !== 0 || !result.stdout.includes('p2a_iteration.mjs init')) {
+      console.error('scaffold target p2a_iteration --help failed');
+      writeResultOutput(result);
+      return { status: result.status ?? 1, checks };
+    }
+
+    const dryRunRoot = path.join(tempRoot, 'dry-run-target');
+    result = runHandoff(['scaffold', '--target', dryRunRoot, '--tools', 'none', '--dry-run']);
+    checks += 1;
+    if (result.status !== 0 || existsSync(dryRunRoot)) {
+      console.error('scaffold dry-run fixture failed');
+      writeResultOutput(result);
+      return { status: result.status ?? 1, checks };
+    }
+
+    result = runHandoff(['scaffold', '--target', targetRoot, '--tools', 'none']);
+    checks += 1;
+    if (result.status === 0 || !`${result.stdout}${result.stderr}`.includes('--overwrite')) {
+      console.error('scaffold conflict fixture did not require --overwrite');
+      writeResultOutput(result);
+      return { status: 1, checks };
+    }
+
+    result = runHandoff(['scaffold', '--target', targetRoot, '--tools', 'none', '--overwrite']);
+    checks += 1;
+    if (result.status !== 0) {
+      console.error('scaffold overwrite fixture failed');
+      writeResultOutput(result);
+      return { status: result.status ?? 1, checks };
+    }
+  } finally {
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+  return { status: 0, checks };
 }
 
 function validateE2eFixtureCases() {
@@ -1414,6 +1497,15 @@ export function main() {
   writeResultOutput(result);
   if (result.status !== 0) return result.status ?? 1;
 
+  let scaffoldResult;
+  try {
+    scaffoldResult = validateScaffoldFixtureCase();
+  } catch (error) {
+    console.error(`fixture validation failed: ${error.message}`);
+    return 1;
+  }
+  if (scaffoldResult.status !== 0) return scaffoldResult.status;
+
   let e2eResult;
   try {
     e2eResult = validateE2eFixtureCases();
@@ -1442,6 +1534,7 @@ export function main() {
   if (negativeResult.status !== 0) return negativeResult.status;
 
   const segments = [`${fixtureDirs.length} Plan2Agent fixture set(s)`];
+  if (scaffoldResult.checks) segments.push(`${scaffoldResult.checks} scaffold fixture check(s)`);
   if (e2eResult.checks) segments.push(`${e2eResult.checks} e2e fixture check(s)`);
   if (iterationResult.checks) segments.push(`${iterationResult.checks} iteration fixture check(s)`);
   if (negativeResult.checks) segments.push(`${negativeResult.checks} negative fixture check(s)`);
