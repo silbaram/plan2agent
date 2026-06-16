@@ -45,9 +45,17 @@ const DEFAULT_ITERATION_ID = 'active';
 
 function usage() {
   return [
-    'Usage: node scripts/p2a_handoff.mjs --project-id <id> --artifacts <path> --target <path> [options]',
+    'Usage:',
+    '  node scripts/p2a_handoff.mjs scaffold --target <project-dir> [--tools <list>] [--overwrite] [--dry-run]',
+    '  node scripts/p2a_handoff.mjs --project-id <id> --artifacts <path> --target <path> [options]',
     '',
     'Options:',
+    'Scaffold:',
+    '  scaffold             Install the full co-located P2A planning/development harness into a project.',
+    '  --target <path>      Project directory to create or update.',
+    '  --tools <list>       Copy P2A AI tool assets for codex,claude,gemini. Use comma list, all, or none. Default: all.',
+    '',
+    'Handoff options:',
     '  --mode copy|move     Copy artifacts by default; move removes source files after successful write.',
     '  --iteration-id <id>  Use iterative artifacts. Default: active when --artifacts is an iterative root.',
     '  --include-intake     Include gate-a-intake/intake.md (intake.json is always copied for spec traceability).',
@@ -97,12 +105,14 @@ function isGitUrl(value) {
 }
 
 function parseArgs(argv) {
+  const command = argv[0] === 'scaffold' ? argv.shift() : 'handoff';
   const args = {
+    command,
     mode: 'copy',
     iterationId: DEFAULT_ITERATION_ID,
     iterationIdProvided: false,
     includeIntake: false,
-    tools: [],
+    tools: command === 'scaffold' ? [...TOOL_TARGET_ORDER] : [],
     includeTeamBigFive: false,
     teamBigFiveSource: null,
     teamBigFiveTargets: null,
@@ -114,6 +124,8 @@ function parseArgs(argv) {
     const arg = argv[index];
     if (arg === '--help' || arg === '-h') {
       args.help = true;
+    } else if (command === 'scaffold' && (arg === '--project-id' || arg === '--artifacts' || arg === '--mode' || arg === '--iteration-id' || arg === '--include-intake' || arg === '--include-team-bigfive' || arg === '--team-bigfive-source' || arg === '--team-bigfive-targets')) {
+      throw new Error(`${arg} is not valid for scaffold`);
     } else if (arg === '--project-id') {
       args.projectId = argv[++index];
       if (!args.projectId) throw new Error('--project-id requires a value');
@@ -155,6 +167,10 @@ function parseArgs(argv) {
     }
   }
   if (args.help) return args;
+  if (command === 'scaffold') {
+    if (!args.target) throw new Error('--target is required');
+    return args;
+  }
   for (const required of ['projectId', 'artifacts', 'target']) {
     if (!args[required]) throw new Error(`--${required.replace(/[A-Z]/g, (match) => `-${match.toLowerCase()}`)} is required`);
   }
@@ -819,6 +835,85 @@ function pushTeamBigFiveAdapter(plan, targetRoot, args) {
   };
 }
 
+
+const SCAFFOLD_SCRIPT_FILES = ['p2a_iteration.mjs', 'p2a_tasks.mjs', 'p2a_runs.mjs', 'p2a_iteration_state.mjs', 'validate_artifacts.mjs'];
+const SCAFFOLD_SCHEMA_FILES = ['intake.schema.json', 'spec.schema.json', 'task-graph.schema.json', 'task-context.schema.json', 'review.schema.json', 'run.schema.json', 'run-index.schema.json'];
+
+function renderPlan2AgentGuide() {
+  return `# Plan2Agent Project Harness
+
+This repository owns its Plan2Agent planning and development loop in-place.
+
+## Start a greenfield plan
+
+1. Open Claude Code, Codex, or Gemini in this directory and run:
+
+   \`/p2a-harness "<one sentence idea>"\`
+
+   Planning Gates A-D write artifacts under \`artifacts/<project>/gate-*\`.
+
+2. Convert approved planning artifacts into the iteration structure:
+
+   \`node scripts/p2a_iteration.mjs init --artifacts artifacts/<project>\`
+
+3. Develop from ready tasks and track execution:
+
+   - \`node scripts/p2a_tasks.mjs ready|prompt|start|done\`
+   - \`node scripts/p2a_runs.mjs start|verify|finish\`
+
+4. Open the next iteration in this same project:
+
+   \`node scripts/p2a_iteration.mjs open|draft|context|promote-tasks\`
+`;
+}
+
+function buildScaffoldPlan(args, targetRoot, createdAt = new Date().toISOString()) {
+  const plan = [];
+  for (const file of SCAFFOLD_SCRIPT_FILES) {
+    pushArtifact(plan, path.join(ROOT, 'scripts', file), targetRoot, path.join('scripts', file));
+  }
+  for (const file of SCAFFOLD_SCHEMA_FILES) {
+    pushArtifact(plan, path.join(ROOT, 'schemas', file), targetRoot, path.join('schemas', file));
+  }
+  const toolAssetPlan = pushToolAssets(plan, targetRoot, args.tools);
+  const scriptFiles = SCAFFOLD_SCRIPT_FILES.map((file) => normalizePath(path.join('scripts', file)));
+  const schemaFiles = SCAFFOLD_SCHEMA_FILES.map((file) => normalizePath(path.join('schemas', file)));
+  const manifest = {
+    schema_version: 'p2a.handoff.v1',
+    provenance: { mode: 'scaffold', createdAt, toolkitRoot: ROOT },
+    targetProject: targetRoot,
+    createdAt,
+    includedTools: [...SCAFFOLD_SCRIPT_FILES.map((file) => file.replace(/\.mjs$/, '')), ...args.tools.map((target) => `p2a_${target}_assets`)],
+    aiToolTargets: args.tools,
+    scriptFiles,
+    schemaFiles,
+    toolFiles: [...scriptFiles, ...toolAssetPlan.files],
+    aiToolFiles: toolAssetPlan.files,
+    aiToolGroups: toolAssetPlan.groups,
+    notes: [
+      'co-located scaffold: this project owns greenfield planning, development, and iteration artifacts',
+      args.tools.length ? `AI tool assets copied for: ${args.tools.join(', ')}` : 'AI tool assets not requested',
+    ],
+  };
+  pushGeneratedJson(plan, targetRoot, path.join('.plan2agent', 'manifest.json'), manifest);
+  pushGeneratedJson(plan, targetRoot, path.join('.plan2agent', 'project.config.json'), buildProjectConfig(targetRoot, { enabled: false }, { emptyCommands: true }));
+  pushGeneratedText(plan, targetRoot, 'PLAN2AGENT.md', renderPlan2AgentGuide());
+  return plan;
+}
+
+function printScaffoldPlan(plan, args, targetRoot) {
+  console.log(`Plan2Agent scaffold ${args.dryRun ? 'dry run' : 'plan'}`);
+  console.log(`aiTools: ${args.tools.length ? args.tools.join(',') : 'none'}`);
+  console.log(`targetProject: ${targetRoot}`);
+  console.log('writes:');
+  for (const item of plan) {
+    const action = item.type === 'write-json' || item.type === 'write-text' ? 'generate' : 'copy';
+    const source = item.source ? normalizePath(path.relative(process.cwd(), item.source)) : '(generated)';
+    console.log(`- ${action}: ${source} -> ${normalizePath(item.targetRelative)}`);
+  }
+  if (args.dryRun) console.log('dry-run: no files written');
+}
+
 function buildPlan(paths, args, artifactsRoot, targetRoot, sourceInfo, options = {}) {
   const { record = null, createdAt = new Date().toISOString() } = options;
   const plan = [];
@@ -973,7 +1068,26 @@ function detectPackageManager(targetRoot) {
   return null;
 }
 
-function buildProjectConfig(targetRoot, teamBigFiveConfig = { enabled: false }) {
+function buildProjectConfig(targetRoot, teamBigFiveConfig = { enabled: false }, options = {}) {
+  if (options.emptyCommands) {
+    return {
+      schema_version: 'p2a.project_config.v1',
+      packageManager: null,
+      installCommand: null,
+      testCommand: null,
+      lintCommand: null,
+      typecheckCommand: null,
+      taskGraph: '.plan2agent/artifacts/task-graph.json',
+      runTracking: {
+        runsDir: '.plan2agent/runs',
+        defaultIsolation: 'none',
+        branchPattern: 'p2a/<taskId>-<runId>',
+        worktreePattern: '../.worktrees/<taskId>-<runId>',
+      },
+      teamBigFive: teamBigFiveConfig,
+      notes: ['TODO: fill install/test/lint/typecheck commands after project stack is chosen'],
+    };
+  }
   const packageManager = detectPackageManager(targetRoot);
   let installCommand = null;
   let testCommand = null;
@@ -1409,8 +1523,21 @@ export function main(argv = process.argv.slice(2)) {
       return 0;
     }
 
-    const artifactsRoot = path.resolve(args.artifacts);
     const targetRoot = path.resolve(args.target);
+    if (args.command === 'scaffold') {
+      if (existsSync(targetRoot) && !lstatSync(targetRoot).isDirectory()) {
+        throw new Error(`--target must be a directory path, but a non-directory exists: ${targetRoot}`);
+      }
+      const plan = buildScaffoldPlan(args, targetRoot);
+      assertNoConflicts(plan, args.overwrite);
+      printScaffoldPlan(plan, args, targetRoot);
+      if (args.dryRun) return 0;
+      writePlan(plan);
+      console.log('scaffold complete');
+      return 0;
+    }
+
+    const artifactsRoot = path.resolve(args.artifacts);
     if (!existsSync(artifactsRoot) || !lstatSync(artifactsRoot).isDirectory()) {
       throw new Error(`--artifacts must point to an existing directory: ${artifactsRoot}`);
     }
