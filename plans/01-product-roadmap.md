@@ -772,7 +772,7 @@ Plan2Agent 개발은 아래 흐름을 기본 협업 방식으로 둔다.
 
 | 단계 | 항목 |
 | --- | --- |
-| v2 | 개발 실행 계층 구성: planning harness는 read-only로 유지하고 코드 수정 `p2a-implementer`, 조율 `p2a-dev-orchestrator`, 검증 `p2a-verifier`, skill 큐레이션 `p2a-skill-curator`를 추가한다. 계획은 `plans/02-development-team-ai-agent.md` |
+| v2 | 개발 실행 계층 구성: planning harness는 read-only로 유지하고 코드 수정 `p2a-implementer`, 조율 `p2a-dev-orchestrator`, 검증 `p2a-performance-monitor`, skill 큐레이션 `p2a-skill-curator`를 추가한다. 계획은 `plans/02-development-team-ai-agent.md` |
 | v2 | PTY 기반 agent 자동 실행과 세션 감시 |
 | v2 | 실패 task 재시도 정책 자동화 |
 | v2 | PR 생성 및 리뷰 상태 연동 |
@@ -804,7 +804,7 @@ Plan2Agent 개발은 아래 흐름을 기본 협업 방식으로 둔다.
 
 다음 후보:
 
-1. 개발 실행 계층 구성: planning harness는 read-only로 유지하고, 코드를 수정하는 `p2a-implementer`/조율 `p2a-dev-orchestrator`/검증 `p2a-verifier`/skill 큐레이션 `p2a-skill-curator`를 추가한다. 상세 계획은 `plans/02-development-team-ai-agent.md`.
+1. 개발 실행 계층 구성: planning harness는 read-only로 유지하고, 코드를 수정하는 `p2a-implementer`/조율 `p2a-dev-orchestrator`/검증 `p2a-performance-monitor`/skill 큐레이션 `p2a-skill-curator`를 추가한다. 상세 계획은 `plans/02-development-team-ai-agent.md`.
 2. PTY 기반 agent 자동 실행/감시 스펙 작성과 구현
 3. PR 생성 및 리뷰 상태 연동
 4. Jira식 Task Store/API/UI 설계
