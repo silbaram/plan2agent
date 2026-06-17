@@ -61,11 +61,11 @@ Use these inputs:
 6. Update task status based on the outcome. If implementation and verification pass, mark the task done. If blocked, record the blocker instead:
 
    ```bash
-   node scripts/p2a_tasks.mjs done --artifacts <dir> --task <id>
+   node scripts/p2a_tasks.mjs done --artifacts <dir> <task-id>
    ```
 
    ```bash
-   node scripts/p2a_tasks.mjs block --artifacts <dir> --task <id> --reason <reason>
+   node scripts/p2a_tasks.mjs block --artifacts <dir> <task-id>
    ```
 
 7. Complete the retrospective gate described below.
