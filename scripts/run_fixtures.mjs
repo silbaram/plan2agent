@@ -605,11 +605,11 @@ function validateIterationCurrentFixtureCases() {
         '--run-id',
         fixtureRunId,
         '--test-command',
-        `${process.execPath} -e "process.exit(0)"`,
+        `"${process.execPath}" -e "process.exit(0)"`,
         '--lint-command',
-        `${process.execPath} -e "process.exit(0)"`,
+        `"${process.execPath}" -e "process.exit(0)"`,
         '--typecheck-command',
-        `${process.execPath} -e "process.exit(0)"`,
+        `"${process.execPath}" -e "process.exit(0)"`,
       ]);
       checks += 1;
       if (result.status !== 0 || !result.stdout.includes('test: passed') || !result.stdout.includes('typecheck: passed')) {

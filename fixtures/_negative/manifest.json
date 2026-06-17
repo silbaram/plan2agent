@@ -26,6 +26,14 @@
         "--intake-md",
         "fixtures/cache-library/intake.md"
       ]
+    },
+    {
+      "id": "technology-recon-prohibition-only-spec-is-valid",
+      "description": "An approved spec with only prohibition constraints such as No external database does not require WEB evidence.",
+      "args": [
+        "--spec",
+        "fixtures/_negative/technology-recon/prohibition-only-approved-spec.json"
+      ]
     }
   ],
   "expected_failure": [
@@ -87,6 +95,15 @@
         "fixtures/_negative/missing-status-progress/status.md"
       ],
       "expected_message": "status.md missing Progress line"
+    },
+    {
+      "id": "technology-recon-selected-dependency-requires-web",
+      "description": "An approved spec that selects PostgreSQL in architecture/dependencies still requires WEB evidence.",
+      "args": [
+        "--spec",
+        "fixtures/_negative/technology-recon/dependency-without-web-approved-spec.json"
+      ],
+      "expected_message": "approved spec with material technology choices requires WEB-n evidence"
     }
   ]
 }

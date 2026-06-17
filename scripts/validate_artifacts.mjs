@@ -171,28 +171,39 @@ export function validateEvidence(evidence, label) {
   }
 }
 
-const TECHNOLOGY_RECON_PATTERN = /\b(?:cloud|cloud service|database|db|external api|external service|framework|library|npm|package|protocol|runtime|sdk|typescript|node\.?js|python|react|redis|postgres|postgresql|mysql|sqlite|queue|kafka|rabbitmq|aws|gcp|azure)\b/i;
+const TECHNOLOGY_RECON_PATTERN = /\b(?:cloud|cloud service|database|db|external api|external service|framework|library|npm|package|protocol|runtime|sdk|typescript|node\.?js|python|react|redis|postgres|postgresql|mysql|sqlite|queue|kafka|rabbitmq|aws|gcp|azure)\b/gi;
+const TECHNOLOGY_RECON_NEGATION_PATTERN = /\b(?:no|without|avoid(?:s|ed|ing)?|prohibit(?:s|ed|ing)?|forbid(?:s|den|ding)?|exclude(?:s|d|ing)?|not|do not|don't)\b/i;
+
+function hasMaterialTechnologyReconTrigger(item) {
+  const text = item.trim();
+  if (/^(?:none|n\/a|not applicable)$/i.test(text)) return false;
+
+  for (const match of text.matchAll(TECHNOLOGY_RECON_PATTERN)) {
+    const precedingPhrase = text.slice(0, match.index).split(/[.;:,(\[\]{}]/).pop() ?? '';
+    if (!TECHNOLOGY_RECON_NEGATION_PATTERN.test(precedingPhrase)) {
+      return true;
+    }
+  }
+  return false;
+}
 
 function specTechnologyReconTriggers(spec) {
   const candidateFields = [
     ...(spec.product?.external_integrations ?? []),
-    ...(spec.product?.constraints ?? []),
-    ...(spec.product?.screens_or_interfaces ?? []),
     ...(spec.implementation?.architecture ?? []),
     ...(spec.implementation?.interfaces ?? []),
     ...(spec.implementation?.dependencies ?? []),
   ];
   return candidateFields
     .filter((item) => typeof item === 'string')
-    .filter((item) => TECHNOLOGY_RECON_PATTERN.test(item))
-    .filter((item) => !/^(?:none|n\/a|not applicable)$/i.test(item.trim()));
+    .filter((item) => hasMaterialTechnologyReconTrigger(item));
 }
 
 function validateTechnologyReconnaissanceEvidence(spec) {
   if (spec.approval !== 'approved') return;
   const triggers = specTechnologyReconTriggers(spec);
   if (!triggers.length) return;
-  const hasWebEvidence = spec.evidence.some((item) => item.source_id.startsWith('WEB-'));
+  const hasWebEvidence = (spec.evidence ?? []).some((item) => item.source_id.startsWith('WEB-'));
   if (!hasWebEvidence) {
     throw new ValidationError(
       `approved spec with material technology choices requires WEB-n evidence from Gate B Technology Reconnaissance: ${JSON.stringify(triggers.slice(0, 3))}`,
