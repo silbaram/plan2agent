@@ -74,6 +74,15 @@ Return product_spec_markdown, implementation_plan_markdown, spec_json conforming
 
 Run or use the provided p2a.task_context.v1 context, write only iterations/<active_iteration>/gate-c-task-graph/task-graph.draft.json, never write canonical task-graph.json, and hand off validation, audit, and promote-tasks instructions for human approval.`,
   },
+  'dev-execution': {
+    skill: 'p2a-dev-execution',
+    description: 'Implement a single ready Plan2Agent task and record the run.',
+    prompt: `Use the Plan2Agent p2a-dev-execution skill for the following ready task execution context:
+
+{{args}}
+
+Confirm the task is ready, start or use the run, implement only inside the target workspaceRef or worktree, run verify, finish with collected git state, update task status, and return the execution summary.`,
+  },
   'task-breakdown': {
     skill: 'p2a-task-breakdown',
     description: 'Create a Plan2Agent task graph from an approved implementation spec.',
