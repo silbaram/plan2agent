@@ -1,0 +1,88 @@
+{
+  "schema_version": "p2a.spec.v1",
+  "project_id": "technology-recon-dependency-without-web",
+  "source_intake": "fixtures/cache-library/intake.answered.json",
+  "product": {
+    "problem": "Build an API that stores submitted records durably.",
+    "target_users": [
+      "Internal operators"
+    ],
+    "goals": [
+      "Accept records and make them queryable"
+    ],
+    "non_goals": [
+      "No analytics dashboard"
+    ],
+    "core_flows": [
+      "A client submits a record and later queries it"
+    ],
+    "screens_or_interfaces": [
+      "HTTP API endpoints"
+    ],
+    "data_model_draft": [
+      "Record with id, payload, and created timestamp"
+    ],
+    "external_integrations": [
+      "None"
+    ],
+    "success_criteria": [
+      "Records can be created and fetched"
+    ],
+    "constraints": [
+      "No external queue"
+    ]
+  },
+  "implementation": {
+    "architecture": [
+      "Persist records in PostgreSQL"
+    ],
+    "interfaces": [
+      "POST /records",
+      "GET /records/:id"
+    ],
+    "data_flow": [
+      "Requests validate input, write to storage, and return persisted records"
+    ],
+    "dependencies": [
+      "PostgreSQL database"
+    ],
+    "edge_cases": [
+      "Invalid payloads return an error"
+    ],
+    "verification": [
+      "Integration tests cover create and fetch"
+    ]
+  },
+  "clarifying_question_disposition": [
+    {
+      "id": "CQ-1",
+      "status": "answered",
+      "rationale": "The target runtime question is resolved by the selected v1 runtime decision.",
+      "affects": [
+        "spec.product.screens_or_interfaces",
+        "spec.implementation.architecture"
+      ],
+      "resolved_by": "ND-1 answer: TypeScript/Node.js package"
+    },
+    {
+      "id": "CQ-2",
+      "status": "deferred_non_goal",
+      "rationale": "The approved v1 scope keeps Redis as behavior inspiration while excluding protocol and server compatibility.",
+      "affects": [
+        "spec.product.goals",
+        "spec.product.non_goals"
+      ],
+      "non_goal": "No Redis protocol compatibility and no network server in v1"
+    }
+  ],
+  "open_decisions": [],
+  "approval": "approved",
+  "evidence": [
+    {
+      "source_id": "USER-1",
+      "title": "Fixture scope",
+      "url": "",
+      "used_for": "Confirmed durable API storage is in scope."
+    }
+  ]
+}

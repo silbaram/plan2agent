@@ -1,0 +1,91 @@
+{
+  "schema_version": "p2a.spec.v1",
+  "project_id": "technology-recon-prohibition-only",
+  "source_intake": "fixtures/cache-library/intake.answered.json",
+  "product": {
+    "problem": "Build a small local checklist helper for a single developer.",
+    "target_users": [
+      "Single developer"
+    ],
+    "goals": [
+      "Track checklist items locally"
+    ],
+    "non_goals": [
+      "No sync service"
+    ],
+    "core_flows": [
+      "A user adds, completes, and removes checklist items"
+    ],
+    "screens_or_interfaces": [
+      "Simple command interface"
+    ],
+    "data_model_draft": [
+      "Checklist item with title and completed flag"
+    ],
+    "external_integrations": [
+      "No external service integrations"
+    ],
+    "success_criteria": [
+      "Checklist operations are covered by tests"
+    ],
+    "constraints": [
+      "No external database",
+      "Avoid third-party frameworks",
+      "Without a queue or worker service"
+    ]
+  },
+  "implementation": {
+    "architecture": [
+      "Keep state in memory for the fixture"
+    ],
+    "interfaces": [
+      "addItem(title)",
+      "completeItem(id)",
+      "removeItem(id)"
+    ],
+    "data_flow": [
+      "Commands mutate the in-memory checklist and return the current list"
+    ],
+    "dependencies": [
+      "None"
+    ],
+    "edge_cases": [
+      "Completing an unknown id is a no-op"
+    ],
+    "verification": [
+      "Unit tests for add, complete, and remove"
+    ]
+  },
+  "clarifying_question_disposition": [
+    {
+      "id": "CQ-1",
+      "status": "answered",
+      "rationale": "The target runtime question is resolved by the selected v1 runtime decision.",
+      "affects": [
+        "spec.product.screens_or_interfaces",
+        "spec.implementation.architecture"
+      ],
+      "resolved_by": "ND-1 answer: TypeScript/Node.js package"
+    },
+    {
+      "id": "CQ-2",
+      "status": "deferred_non_goal",
+      "rationale": "The approved v1 scope keeps Redis as behavior inspiration while excluding protocol and server compatibility.",
+      "affects": [
+        "spec.product.goals",
+        "spec.product.non_goals"
+      ],
+      "non_goal": "No Redis protocol compatibility and no network server in v1"
+    }
+  ],
+  "open_decisions": [],
+  "approval": "approved",
+  "evidence": [
+    {
+      "source_id": "USER-1",
+      "title": "Fixture scope",
+      "url": "",
+      "used_for": "Confirmed the local-only fixture scope."
+    }
+  ]
+}
