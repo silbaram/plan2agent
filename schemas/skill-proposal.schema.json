@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://plan2agent.local/schemas/skill-proposal.schema.json",
+  "title": "Plan2Agent Skill Proposal",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "proposalId",
+    "problem",
+    "recommendedChange",
+    "targetFiles",
+    "risk",
+    "status"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "p2a.skill_proposal.v1"
+    },
+    "proposalId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "sourceRunId": {
+      "type": ["string", "null"]
+    },
+    "problem": {
+      "type": "string",
+      "minLength": 1
+    },
+    "evidence": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "recommendedChange": {
+      "type": "string",
+      "minLength": 1
+    },
+    "targetFiles": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "risk": {
+      "type": "string",
+      "enum": ["low", "medium", "high"]
+    },
+    "status": {
+      "type": "string",
+      "enum": ["proposed", "approved", "rejected", "deferred"],
+      "default": "proposed"
+    },
+    "note": {
+      "type": "string"
+    }
+  }
+}
