@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /** Manage Plan2Agent task graph status and dependency workflow. */
 
-import { existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, realpathSync, readdirSync, writeFileSync } from 'node:fs';
 import { createInterface } from 'node:readline/promises';
 import path from 'node:path';
 import process from 'node:process';
@@ -422,7 +422,12 @@ function shouldRunInteractive(argv) {
 }
 
 function isDirectEntry() {
-  return process.argv[1] && __filename === path.resolve(process.argv[1]);
+  if (!process.argv[1]) return false;
+  try {
+    return realpathSync(__filename) === realpathSync(process.argv[1]);
+  } catch {
+    return __filename === path.resolve(process.argv[1]);
+  }
 }
 
 export function main(argv = process.argv.slice(2)) {

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /** Validate Plan2Agent JSON artifacts and golden fixtures with Node.js stdlib only. */
 
-import { existsSync, lstatSync, readFileSync, readdirSync } from 'node:fs';
+import { existsSync, lstatSync, readFileSync, readdirSync, realpathSync } from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -836,6 +836,15 @@ export function main(argv = process.argv.slice(2)) {
   return 0;
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1]).href) {
+function isDirectEntry() {
+  if (!process.argv[1]) return false;
+  try {
+    return realpathSync(__filename) === realpathSync(process.argv[1]);
+  } catch {
+    return import.meta.url === pathToFileURL(process.argv[1]).href;
+  }
+}
+
+if (isDirectEntry()) {
   process.exitCode = main();
 }

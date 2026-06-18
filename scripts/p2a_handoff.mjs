@@ -8,6 +8,7 @@ import {
   mkdirSync,
   readFileSync,
   readdirSync,
+  realpathSync,
   rmdirSync,
   unlinkSync,
   writeFileSync,
@@ -1542,7 +1543,12 @@ function shouldRunInteractive(argv) {
 }
 
 function isDirectEntry() {
-  return process.argv[1] && __filename === path.resolve(process.argv[1]);
+  if (!process.argv[1]) return false;
+  try {
+    return realpathSync(__filename) === realpathSync(process.argv[1]);
+  } catch {
+    return __filename === path.resolve(process.argv[1]);
+  }
 }
 
 export function main(argv = process.argv.slice(2)) {

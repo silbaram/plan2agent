@@ -6,6 +6,7 @@ import {
   lstatSync,
   mkdirSync,
   readFileSync,
+  realpathSync,
   readdirSync,
   renameSync,
   writeFileSync,
@@ -3262,6 +3263,15 @@ export function main(argv = process.argv.slice(2)) {
   }
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1]).href) {
+function isDirectEntry() {
+  if (!process.argv[1]) return false;
+  try {
+    return realpathSync(__filename) === realpathSync(process.argv[1]);
+  } catch {
+    return import.meta.url === pathToFileURL(process.argv[1]).href;
+  }
+}
+
+if (isDirectEntry()) {
   process.exitCode = main();
 }
