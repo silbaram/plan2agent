@@ -44,21 +44,23 @@ Use these inputs:
    node scripts/p2a_runs.mjs start --artifacts <dir> --task <id> --agent-tool codex
    ```
 
-3. Implement the task while obeying the writing boundaries below.
+3. Before implementing, ensure the target project has a committed git baseline. If there is pre-existing untracked or scaffolded state, commit it first; otherwise `p2a_runs finish --collect-git` records the entire untracked tree as this task's `changedFiles` instead of only the files this task changed.
 
-4. Verify the run with the required checks:
+4. Implement the task while obeying the writing boundaries below.
+
+5. Verify the run with the required checks:
 
    ```bash
    node scripts/p2a_runs.mjs verify --run-id <id> --artifacts <dir> --test --lint --typecheck
    ```
 
-5. Finish the run, collecting git state:
+6. Finish the run, collecting git state:
 
    ```bash
    node scripts/p2a_runs.mjs finish --run-id <id> --artifacts <dir> --status finished|failed|blocked --collect-git
    ```
 
-6. Update task status based on the outcome. If implementation and verification pass, mark the task done. If blocked, record the blocker instead:
+7. Update task status based on the outcome. If implementation and verification pass, mark the task done. If blocked, record the blocker instead:
 
    ```bash
    node scripts/p2a_tasks.mjs done --artifacts <dir> <task-id>
@@ -68,7 +70,7 @@ Use these inputs:
    node scripts/p2a_tasks.mjs block --artifacts <dir> <task-id>
    ```
 
-7. Complete the retrospective gate described below.
+8. Complete the retrospective gate described below.
 
 ## Writing boundaries and prohibitions
 
@@ -76,6 +78,7 @@ Use these inputs:
 - Limit writes to the run `workspaceRef` or worktree. Refuse requests to write outside that workspace.
 - Do not add or rewrite requirements by bypassing planning artifacts.
 - Do not install dependencies without grounded evidence from the approved task, existing project conventions, or explicit user approval.
+- In a co-located project where harness files live alongside app code, do not run interactive scaffolders that may overwrite or prompt in a non-empty directory, such as `npm create vite .`. Write config files manually and install only dependencies.
 - Do not access, print, or exfiltrate `.env` files, credentials, or tokens.
 - Do not hide failing verification by marking a task done.
 - Do not automatically self-modify skills or agents.
