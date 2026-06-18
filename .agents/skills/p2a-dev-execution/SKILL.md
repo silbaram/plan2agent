@@ -52,6 +52,8 @@ Use these inputs:
 
 4. Implement the task while obeying the writing boundaries below. When possible, spawn the `p2a-implementer` subagent to perform the implementation inside the isolated worktree. In Codex, that subagent is write-capable only through the `workspace-write` sandbox; Claude and Gemini mirrors remain read-only until Level 2.
 
+   The spawned `p2a-implementer` subagent performs scoped file edits only. It may optionally run local checks for self-review, but it must not call `p2a_runs verify`, `p2a_runs finish`, or `p2a_tasks done|block`. Unless lifecycle delegation is explicitly requested, those lifecycle steps belong to the main dev-execution owner running this skill.
+
 5. Verify the run with the required checks by actually executing configured or explicitly requested commands:
 
    ```bash
@@ -59,6 +61,8 @@ Use these inputs:
    ```
 
    `p2a_runs verify` must execute the configured or explicitly requested verification commands and capture their exit codes as `source: config` or `source: command`. Do not self-report verification with a manual record; do not use `source: manual` or `exitCode: null` as a substitute for executed verification.
+
+   If the user provides explicit verification commands, pass them through as explicit commands such as `--test-command`, `--lint-command`, or `--typecheck-command`. Config-only verification flags such as `--test`, `--lint`, and `--typecheck` quietly skip checks when the corresponding `project.config.json` command is empty, so use explicit commands whenever config is empty and real verification is required.
 
 6. Finish the run, collecting git state:
 
