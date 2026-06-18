@@ -275,15 +275,50 @@ node scripts/run_fixtures.mjs
 
 ## 11. 다음 개발 순서
 
+우선순위 원칙:
+
+- PR 생성/리뷰 연동은 사용자가 명시적으로 요청하기 전까지 자동화하지 않는다.
+- 기본 개발 루프는 branch/worktree, changedFiles, verification, run summary까지만 준비한다.
+- 자동 실행보다 먼저 실패와 차단 사유를 구조화한다. 그래야 retry, orchestrator, monitor gate가 안전하게 판단할 수 있다.
+
 우선순위 높은 순서:
 
-1. `plans/02` 기준으로 외부 target smoke test를 수행하고 결과 run log 샘플을 남긴다.
-2. `p2a-dev-execution`이 monitor verdict와 task done/block 연결을 더 명확히 출력하도록 사용성 개선 여부를 판단한다.
-3. `p2a-dev-orchestrator` 설계: Team Big Five의 team-lead 역할을 P2A-native로 분리할지 결정한다.
-4. PTY/session runtime 스펙 작성: Codex 우선, Claude/Gemini는 adapter layer로 확장한다.
-5. 실패 재시도 정책: retry가 요구사항 변경을 만들지 않도록 Gate B/C와 연결한다.
-6. PR 생성/리뷰 연동: run log의 changedFiles/verification을 PR body와 연결한다.
-7. code-aware spec 역생성과 result diff 병합은 execution layer가 안정된 뒤 설계한다.
+1. **실패 분류/차단 사유 표준화**
+   - 목적: `done`이 아닌 run/task 결과를 사람이 읽는 메모가 아니라 기계가 판단할 수 있는 reason code로 남긴다.
+   - 후보 reason code: `verification_failed`, `scope_violation`, `missing_dependency`, `needs_user_decision`, `environment_failure`, `test_flake`, `implementation_incomplete`, `monitor_blocked`.
+   - 산출물 후보: run log 또는 별도 sidecar에 `blockReason`, `failureClass`, `retryable`, `needsUserDecision` 같은 구조화 필드 추가.
+   - 완료 기준: `p2a_runs finish --status failed|blocked`와 `p2a_tasks block` 흐름에서 차단 사유가 일관되게 기록되고 validator/fixture가 이를 검증한다.
+
+2. **Codex 단일 task 자동 실행기**
+   - 목적: 한 번에 ready task 1개만 대상으로 `worktree 생성 -> p2a_runs start -> Codex 실행 -> verify -> monitor -> done/block`을 자동화한다.
+   - 범위: Codex 우선. Claude/Gemini 실행은 adapter layer 후속.
+   - 선행 조건: 1번의 실패 분류가 있어야 자동 실행 결과를 안전하게 종료/재시도/사용자 질문으로 나눌 수 있다.
+   - 비목표: 여러 agent 병렬 실행, PR 생성, 자동 merge.
+
+3. **`p2a-dev-orchestrator` 설계와 구현**
+   - 목적: Team Big Five의 team-lead 역할을 P2A-native로 분리한다.
+   - 판단 항목: solo로 충분한 task인지, monitor만 붙일지, 여러 contributor로 나눌지, 실패가 retry 가능한지, 사용자 결정을 요구하는지.
+   - 선행 조건: 단일 Codex 실행기가 안정적으로 task 1개를 끝낼 수 있어야 한다.
+
+4. **Hermes식 proposal/curator 루프 고도화**
+   - 목적: 실제 run에서 쌓인 proposal을 normalize, dedupe, prioritize하고 승인 대기 목록으로 정리한다.
+   - 범위: proposal 자동 적용은 계속 금지한다.
+   - 산출물 후보: proposal review digest, 승인 후보 diff 초안, 반복적으로 발생한 실패 유형 통계.
+
+5. **UI/DB 기반 task store**
+   - 목적: 파일 기반 운용이 불편해지는 시점에 task/run/proposal 검색과 대시보드를 제공한다.
+   - 착수 조건: 다중 프로젝트, 여러 명의 동시 사용, run history 증가, task 검색 불편이 실제 문제로 확인될 때.
+   - 비목표: 현재 전문 개발자 1인/소규모 dogfooding 단계에서 즉시 구현하지 않는다.
+
+6. **PR 생성/리뷰 연동**
+   - 정책: 사용자가 명시적으로 요청한 경우에만 실행한다.
+   - 기본 루프에서는 PR을 만들지 않는다. Plan2Agent는 branch, changedFiles, verification, run summary까지만 준비한다.
+   - 후속 범위: PR body 자동 작성, CI 상태 읽기, 리뷰 comment/request changes를 run/task 상태와 연결.
+   - 비목표: 자동 push, 자동 merge, 사용자 승인 없는 PR 생성.
+
+추가 후속:
+
+- code-aware spec 역생성과 result diff 병합은 execution layer와 run history가 안정된 뒤 설계한다.
 
 ## 12. 참조·라이선스
 
