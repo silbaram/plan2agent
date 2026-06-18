@@ -48,11 +48,13 @@ Use these inputs:
 
 4. Implement the task while obeying the writing boundaries below.
 
-5. Verify the run with the required checks:
+5. Verify the run with the required checks by actually executing configured or explicitly requested commands:
 
    ```bash
    node scripts/p2a_runs.mjs verify --run-id <id> --artifacts <dir> --test --lint --typecheck
    ```
+
+   `p2a_runs verify` must execute the configured or explicitly requested verification commands and capture their exit codes as `source: config` or `source: command`. Do not self-report verification with a manual record; do not use `source: manual` or `exitCode: null` as a substitute for executed verification.
 
 6. Finish the run, collecting git state:
 
@@ -60,14 +62,18 @@ Use these inputs:
    node scripts/p2a_runs.mjs finish --run-id <id> --artifacts <dir> --status finished|failed|blocked --collect-git
    ```
 
-7. Update task status based on the outcome. If implementation and verification pass, mark the task done. If blocked, record the blocker instead:
+7. Run the independent monitor gate before marking the task done. Invoke `p2a-performance-monitor` as a separate subagent when the CLI supports spawning subagents, or perform a separated read-only review pass when spawning is unavailable. Pass the target task id, acceptance criteria, and the latest run log for that task, including `verification`, `changedFiles`, `status`, and `workspaceRef`.
 
-   ```bash
-   node scripts/p2a_tasks.mjs done --artifacts <dir> <task-id>
-   ```
+   If the monitor returns `verdict: "block"`, do not mark the task done. Record the blocker and follow-up reason instead:
 
    ```bash
    node scripts/p2a_tasks.mjs block --artifacts <dir> <task-id>
+   ```
+
+   If the monitor returns `verdict: "confirm_done"`, mark the task done:
+
+   ```bash
+   node scripts/p2a_tasks.mjs done --artifacts <dir> <task-id>
    ```
 
 8. Complete the retrospective gate described below.
