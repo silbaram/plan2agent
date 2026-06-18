@@ -142,7 +142,7 @@ function validateScaffoldFixtureCase() {
 
     const expectedScripts = ['p2a_iteration.mjs', 'p2a_tasks.mjs', 'p2a_runs.mjs', 'p2a_iteration_state.mjs', 'validate_artifacts.mjs']
       .map((file) => path.join('scripts', file));
-    const expectedSchemas = ['intake.schema.json', 'spec.schema.json', 'task-graph.schema.json', 'task-context.schema.json', 'review.schema.json', 'run.schema.json', 'run-index.schema.json']
+    const expectedSchemas = ['intake.schema.json', 'spec.schema.json', 'task-graph.schema.json', 'task-context.schema.json', 'review.schema.json', 'run.schema.json', 'run-index.schema.json', 'skill-proposal.schema.json']
       .map((file) => path.join('schemas', file));
     const expectedToolFiles = [
       path.join('.agents', 'skills', 'p2a-harness', 'SKILL.md'),
@@ -254,8 +254,10 @@ function validateE2eFixtureCases() {
       if (
         !existsSync(path.join(targetRoot, 'scripts', 'p2a_iteration_state.mjs'))
         || !existsSync(path.join(targetRoot, 'scripts', 'p2a_runs.mjs'))
+        || !existsSync(path.join(targetRoot, 'schemas', 'task-context.schema.json'))
         || !existsSync(path.join(targetRoot, 'schemas', 'run.schema.json'))
         || !existsSync(path.join(targetRoot, 'schemas', 'run-index.schema.json'))
+        || !existsSync(path.join(targetRoot, 'schemas', 'skill-proposal.schema.json'))
         || existsSync(path.join(targetRoot, '.plan2agent', 'current-spec.json'))
       ) {
         console.error(`greenfield handoff wrote unexpected tool/current-spec files: ${caseData.id}`);
@@ -1284,7 +1286,9 @@ function validateIterationCurrentFixtureCases() {
         || JSON.stringify(targetManifest.maintenanceFiles) !== JSON.stringify(['.plan2agent/maintenance/task-graph.json'])
         || !targetManifest.includedTools.includes('p2a_runs')
         || !targetManifest.toolFiles.includes('scripts/p2a_runs.mjs')
+        || !targetManifest.schemaFiles.includes('schemas/task-context.schema.json')
         || !targetManifest.schemaFiles.includes('schemas/run-index.schema.json')
+        || !targetManifest.schemaFiles.includes('schemas/skill-proposal.schema.json')
         || targetCurrentSpec.last_handoff?.iteration_id !== 'iter-002'
         || targetCurrentSpec.last_handoff?.maintenance_included !== true
         || sourceCurrentSpecAfterHandoff.last_handoff?.target_project !== iterationTargetRoot

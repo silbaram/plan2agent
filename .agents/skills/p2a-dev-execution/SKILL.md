@@ -41,8 +41,10 @@ Use these inputs:
 2. Start a run unless the user provided an existing run id. When using Codex, create an isolated worktree so the write-capable implementer is confined by Codex's `workspace-write` sandbox:
 
    ```bash
-   node scripts/p2a_runs.mjs start --artifacts <dir> --task <id> --agent-tool codex --isolation worktree --create-isolation
+   node scripts/p2a_runs.mjs start --artifacts <dir> --task <id> --agent-tool codex --isolation worktree --worktree <fresh-worktree-path> --create-isolation
    ```
+
+   The worktree path must be a fresh empty path, following the `project.config.json` `runTracking.worktreePattern` convention (for example, `../.worktrees/<taskId>-<runId>`).
 
    For CLIs that do not support a write-capable implementer subagent yet (currently Claude and Gemini), fall back to the existing human-supervised main-session implementation flow instead of enabling write tools.
 
