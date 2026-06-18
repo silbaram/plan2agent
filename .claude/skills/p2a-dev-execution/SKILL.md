@@ -38,15 +38,17 @@ Use these inputs:
 
    Use the task `prompt` to understand the scoped work, acceptance criteria, target area, and relevant constraints.
 
-2. Start a run unless the user provided an existing run id:
+2. Start a run unless the user provided an existing run id. When using Codex, create an isolated worktree so the write-capable implementer is confined by Codex's `workspace-write` sandbox:
 
    ```bash
-   node scripts/p2a_runs.mjs start --artifacts <dir> --task <id> --agent-tool codex
+   node scripts/p2a_runs.mjs start --artifacts <dir> --task <id> --agent-tool codex --isolation worktree --create-isolation
    ```
+
+   For CLIs that do not support a write-capable implementer subagent yet (currently Claude and Gemini), fall back to the existing human-supervised main-session implementation flow instead of enabling write tools.
 
 3. Before implementing, ensure the target project has a committed git baseline. If there is pre-existing untracked or scaffolded state, commit it first; otherwise `p2a_runs finish --collect-git` records the entire untracked tree as this task's `changedFiles` instead of only the files this task changed.
 
-4. Implement the task while obeying the writing boundaries below.
+4. Implement the task while obeying the writing boundaries below. When possible, spawn the `p2a-implementer` subagent to perform the implementation inside the isolated worktree. In Codex, that subagent is write-capable only through the `workspace-write` sandbox; Claude and Gemini mirrors remain read-only until Level 2.
 
 5. Verify the run with the required checks by actually executing configured or explicitly requested commands:
 

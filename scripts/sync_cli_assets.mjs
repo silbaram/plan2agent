@@ -11,7 +11,7 @@ const ROOT = path.resolve(path.dirname(__filename), '..');
 const SKILL_SOURCE = path.join(ROOT, '.agents', 'skills');
 const AGENT_SOURCE = path.join(ROOT, '.agents', 'agents');
 const CAPABILITY_VALUES = new Set(['read', 'search', 'web']);
-const ACCESS_VALUES = new Set(['read-only']);
+const ACCESS_VALUES = new Set(['read-only', 'workspace-write']);
 const TIER_VALUES = new Set(['light', 'standard', 'heavy']);
 const CLAUDE_TOOL_MAP = { read: ['Read'], search: ['Grep', 'Glob'], web: ['WebSearch', 'WebFetch'] };
 const GEMINI_TOOL_MAP = { read: ['read_file'], search: ['grep_search'], web: ['google_web_search', 'web_fetch'] };
@@ -225,11 +225,12 @@ function renderMarkdownAgent(meta, body, { target }) {
 }
 
 function renderCodexAgent(meta, body) {
+  const sandbox = meta.access === 'workspace-write' ? 'workspace-write' : 'read-only';
   return (
     `name = ${tomlBasicString(meta.name)}\n` +
     `description = ${tomlBasicString(meta.description)}\n` +
     `model_reasoning_effort = "${CODEX_TIER_EFFORT[meta.tier]}"\n` +
-    'sandbox_mode = "read-only"\n' +
+    `sandbox_mode = "${sandbox}"\n` +
     'developer_instructions = ' + tomlLiteralMultiline(body, String(meta.name)) + '\n'
   );
 }
