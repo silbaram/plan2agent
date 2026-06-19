@@ -1,6 +1,6 @@
 # 개발팀 AI agent 개발 계획
 
-작성일: 2026-06-16 · 갱신일: 2026-06-18 · 상태: Level 1 완료, Codex 실행 계층 부분 구현, 자동 실행기는 후속
+작성일: 2026-06-16 · 갱신일: 2026-06-19 · 상태: Level 1 완료, Codex 실행 계층 부분 구현, 자가 발전 첫 사이클 적용, 자동 실행기는 후속
 
 Plan2Agent의 Gate A-D planning harness 다음 단계로, **승인된 task를 실제 코드 변경·검증까지 수행하는 개발 실행 계층**을 구성하는 계획서다. 이 문서는 현재 코드 상태를 기준으로 완료된 범위, 남은 범위, 안전 경계, 다음 개발 순서를 고정한다.
 
@@ -138,7 +138,7 @@ Team Big Five 역할 매핑:
 실행 모드:
 
 - **현재 기본 = solo + monitor**: `p2a-dev-execution`이 ready 확인, run start, 구현, verify, finish, monitor gate, task done/block 순서를 안내한다.
-- **Codex 구현 경로**: 가능하면 `p2a-implementer`를 isolated worktree/workspace에서 사용한다.
+- **Codex 구현 경로**: 가능하면 `p2a-implementer`를 isolated worktree/workspace에서 사용한다. 단 `p2a-implementer`는 scoped 파일 편집만 하고, `p2a_runs verify`/`finish`와 `p2a_tasks done|block` 같은 run lifecycle은 main owner(이 스킬을 도는 주체)가 전담한다(자가 발전 첫 사이클로 명확화됨).
 - **Claude/Gemini 구현 경로**: 현재는 main-session/human-supervised flow로 폴백한다. mirror 파일은 있지만 write-capable로 보지 않는다.
 - **팀 모드**: 복잡한 task의 team orchestration은 아직 Plan2Agent-native runtime이 없다. Team Big Five adapter 설치는 가능하지만 자동 실행은 하지 않는다.
 
@@ -347,3 +347,40 @@ Hermes의 self-improving loop에서 차용하는 패턴:
 
 - Hermes식 자동 self-modify는 P2A에서 금지한다.
 - P2A는 `proposal -> curator review -> human approval -> separate patch` 흐름만 허용한다.
+
+## 13. 외부 레포 흡수 현황 (Team Big Five / Hermes)
+
+§1·§12의 두 차용 컨셉을 "무엇이 흡수됐는지" 관점으로 정리한다. (✅ 완료 / 🟡 부분 / ⬜ 미착수)
+
+### Team Big Five
+| 항목 | 상태 | 비고 |
+| --- | --- | --- |
+| performance-monitor (독립 검증) | ✅ | `p2a-performance-monitor` |
+| contributor (구현자) | ✅ | `p2a-implementer` — Codex `workspace-write` 구현됨. Claude/Gemini는 read-only mirror(Level 2) |
+| debrief/evolution (회고→개선) | ✅ | dev-execution retrospective + `p2a-skill-curator` |
+| mutual monitoring (검증 강도 차등) | 🟡 | 독립 검증은 됨, "중요도별 강도 조절"은 미적용 |
+| team-lead / orchestrator | ⬜ | `p2a-dev-orchestrator` 미구현 |
+| solo/team triage | ⬜ | 모드 자동 판단 미구현 |
+| shared mental model 파일 | ⬜ | 팀 모드용 |
+| closed-loop 통신 | ⬜ | 팀 모드용 |
+
+### Hermes
+| 항목 | 상태 | 비고 |
+| --- | --- | --- |
+| skill = 반복 절차 기억 | ✅ | 스킬 시스템 전반 |
+| 자가 발전 (proposal→curator→승인→적용) | ✅ | **첫 사이클 완결**: 실제 run 회고 → `skill-proposal` → 사람 승인 → lifecycle-ownership patch 적용 |
+| staged proposal→review→approval→apply | ✅ | `skill-proposal.schema.json` + `p2a-skill-curator` |
+| 미지 기술 조사 + 근거 | ✅ | Gate B Technology Reconnaissance |
+| cross-session recall | 🟡 | run log + curator 횡단 읽기만. 세션 전체 검색·요약은 미적용 → 아래 연기 |
+
+### 남은 확장과 난이도 (현재 기준)
+- ✅ **write-capable subagent (Codex)** — 완료. Codex `workspace-write` sandbox로 confine, spike로 실증.
+- 🟡 **Level 2: Claude/Gemini write-capable** — CLI별 write permission/sandbox 모델 검증 필요(Codex와 달리 native sandbox 없음).
+- 🟡 **orchestrator / triage / SMM / closed-loop** — Codex write 토대가 생겨 착수 가능하나, 진짜 team mode는 PTY/multi-agent runtime + Level 2가 받쳐줘야 풀가동.
+- 🔴 **PTY 자동 실행/감시** — 별개 runtime/scheduler. 실행 루프가 무인-안전해진 뒤의 capstone (v2).
+- 🟡 **cross-session recall** — store/DB 단계로 연기(아래).
+
+### cross-session recall — store/DB 단계로 연기 (결정)
+파일 기반 단계에서 무리해 만들지 않고, **JIRA식 Task Store/DB(§11-5, v2) 도입 시 함께 얹는다.**
+- 이유: recall의 난관(① 관련성 검색 백엔드, ② 무-DB·결정적 제약과 충돌)이 store 도입으로 자연 해소된다(DB full-text/pgvector가 곧 index).
+- store는 백엔드만 제공하므로 그때 남는 결정 2개: (a) 검색 대상(run/proposal은 자동, 대화·세션 transcript는 별도 캡처 결정) (b) 무엇을 재사용 "교훈"으로 distill할지.
