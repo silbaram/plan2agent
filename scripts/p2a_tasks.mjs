@@ -9,6 +9,7 @@ import { Readable } from 'node:stream';
 import { fileURLToPath } from 'node:url';
 import { validateTaskGraphData, ValidationError } from './validate_artifacts.mjs';
 import { resolveIterationState } from './p2a_iteration_state.mjs';
+import { resolveRunsDir } from './p2a_run_paths.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const ROOT = path.resolve(path.dirname(__filename), '..');
@@ -229,9 +230,15 @@ function printPrompt(task, graph, graphPath, specPath = null) {
   console.log(`Full spec: ${displaySourceSpecPath}`);
 }
 
+function runsDirForTaskArgs(args) {
+  if (args.artifactsPath) return resolveRunsDir({ artifacts: args.artifactsPath });
+  if (args.graphPath) return resolveRunsDir({ graph: args.graphPath });
+  return null;
+}
+
 function latestRunFailureClass(args, taskId) {
-  if (!args.artifactsPath) return null;
-  const runsDir = path.join(path.resolve(args.artifactsPath), 'runs');
+  const runsDir = runsDirForTaskArgs(args);
+  if (!runsDir) return null;
   const indexPath = path.join(runsDir, 'run-index.json');
   if (!existsSync(indexPath) || !lstatSync(indexPath).isFile()) return null;
   try {

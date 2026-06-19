@@ -144,7 +144,7 @@ function validateScaffoldFixtureCase() {
       return { status: failureStatus(result), checks };
     }
 
-    const expectedScripts = ['p2a_iteration.mjs', 'p2a_tasks.mjs', 'p2a_runs.mjs', 'p2a_iteration_state.mjs', 'validate_artifacts.mjs']
+    const expectedScripts = ['p2a_iteration.mjs', 'p2a_tasks.mjs', 'p2a_runs.mjs', 'p2a_run_paths.mjs', 'p2a_iteration_state.mjs', 'validate_artifacts.mjs']
       .map((file) => path.join('scripts', file));
     const expectedSchemas = ['intake.schema.json', 'spec.schema.json', 'task-graph.schema.json', 'task-context.schema.json', 'review.schema.json', 'run.schema.json', 'run-index.schema.json', 'skill-proposal.schema.json']
       .map((file) => path.join('schemas', file));
@@ -275,6 +275,7 @@ function validateE2eFixtureCases() {
       if (
         !existsSync(path.join(targetRoot, 'scripts', 'p2a_iteration_state.mjs'))
         || !existsSync(path.join(targetRoot, 'scripts', 'p2a_runs.mjs'))
+        || !existsSync(path.join(targetRoot, 'scripts', 'p2a_run_paths.mjs'))
         || !existsSync(path.join(targetRoot, 'schemas', 'task-context.schema.json'))
         || !existsSync(path.join(targetRoot, 'schemas', 'run.schema.json'))
         || !existsSync(path.join(targetRoot, 'schemas', 'run-index.schema.json'))
@@ -339,6 +340,7 @@ function validateE2eFixtureCases() {
         || !toolManifest.toolFiles.includes('.agents/skills/p2a-harness/SKILL.md')
         || !toolManifest.toolFiles.includes('.gemini/commands/p2a/harness.toml')
         || !toolManifest.toolFiles.includes('scripts/p2a_runs.mjs')
+        || !toolManifest.toolFiles.includes('scripts/p2a_run_paths.mjs')
         || !toolManifest.schemaFiles.includes('schemas/run.schema.json')
       ) {
         console.error(`greenfield handoff --tools output mismatch: ${caseData.id}`);
@@ -710,6 +712,64 @@ function validateIterationCurrentFixtureCases() {
         console.error(`p2a_tasks block did not mirror latest run failure class: ${caseData.id}`);
         writeResultOutput(result);
         return { status: failureStatus(result), checks };
+      }
+
+      const graphBlockedRunId = 'run-fixture-graph-blocked';
+      result = runRuns(['start', '--graph', state.taskGraphPath, '--task', 'task-001', '--run-id', graphBlockedRunId, '--agent-tool', 'codex', '--workspace-ref', 'fixture-workspace']);
+      checks += 1;
+      if (result.status !== 0) {
+        console.error(`p2a_runs --graph blocked fixture start failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: failureStatus(result), checks };
+      }
+
+      result = runRuns(['finish', '--graph', state.taskGraphPath, '--run-id', graphBlockedRunId, '--status', 'blocked', '--failure-class', 'missing_dependency']);
+      checks += 1;
+      if (result.status !== 0 || !result.stdout.includes('failure: missing_dependency retryable=after_fix needsUserDecision=true source=owner')) {
+        console.error(`p2a_runs --graph blocked fixture did not record missing_dependency failure: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: failureStatus(result), checks };
+      }
+
+      result = runTasks(['block', '--graph', state.taskGraphPath, 'task-001']);
+      checks += 1;
+      if (result.status !== 0 || !result.stdout.includes('- blockReason: missing_dependency')) {
+        console.error(`p2a_tasks block --graph did not mirror latest run failure class: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: failureStatus(result), checks };
+      }
+      const graphBlockedTaskGraph = JSON.parse(readFileSync(state.taskGraphPath, 'utf8'));
+      if (graphBlockedTaskGraph.tasks.find((task) => task.id === 'task-001')?.blockReason !== 'missing_dependency') {
+        console.error(`p2a_tasks block --graph did not persist blockReason: ${caseData.id}`);
+        console.error(JSON.stringify(graphBlockedTaskGraph.tasks.find((task) => task.id === 'task-001'), null, 2));
+        return { status: 1, checks };
+      }
+
+      const finishedFailureFlagRunId = 'run-fixture-finished-with-failure-flag';
+      result = runRuns(['start', '--artifacts', artifactRoot, '--task', 'task-001', '--run-id', finishedFailureFlagRunId, '--agent-tool', 'codex', '--workspace-ref', 'fixture-workspace']);
+      checks += 1;
+      if (result.status !== 0) {
+        console.error(`p2a_runs finished failure flag fixture start failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: failureStatus(result), checks };
+      }
+
+      result = runRuns(['finish', '--artifacts', artifactRoot, '--run-id', finishedFailureFlagRunId, '--status', 'finished', '--failure-class', 'verification_failed']);
+      checks += 1;
+      const explicitFinishedFailureOutput = `${result.stdout ?? ''}${result.stderr ?? ''}`;
+      if (result.status === 0 || !explicitFinishedFailureOutput.includes('failure options are only valid when the run finishes as failed or blocked (got finished)')) {
+        console.error(`p2a_runs did not reject explicit finished status with failure options: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: 1, checks };
+      }
+
+      result = runRuns(['finish', '--artifacts', artifactRoot, '--run-id', finishedFailureFlagRunId, '--failure-class', 'verification_failed']);
+      checks += 1;
+      const derivedFinishedFailureOutput = `${result.stdout ?? ''}${result.stderr ?? ''}`;
+      if (result.status === 0 || !derivedFinishedFailureOutput.includes('failure options are only valid when the run finishes as failed or blocked (got finished)')) {
+        console.error(`p2a_runs did not reject derived finished status with failure options: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: 1, checks };
       }
 
       const otherRunId = 'run-fixture-other';
@@ -1687,6 +1747,75 @@ function validateIterationCurrentFixtureCases() {
   return { status: 0, checks };
 }
 
+function validateInvalidFailedRunFixtureCase() {
+  const runsDir = mkdtempSync(path.join(tmpdir(), 'p2a-invalid-runs-'));
+  const now = '2026-06-19T00:00:00.000Z';
+  const runId = 'run-invalid-failed-without-failure';
+  const run = {
+    schema_version: 'p2a.run.v1',
+    runId,
+    projectId: 'fixture-project',
+    taskId: 'task-001',
+    taskTitle: 'Invalid failed run fixture',
+    iterationId: 'v1-mvp',
+    sourceLayout: 'iteration',
+    taskGraphRef: 'iterations/v1-mvp/gate-c-task-graph/task-graph.json',
+    sourceSpecRef: '../gate-b-spec/spec.json',
+    agentTool: 'codex',
+    workspaceRef: 'fixture-workspace',
+    workspacePath: '.',
+    isolation: {
+      mode: 'none',
+      branch: null,
+      worktree: null,
+      baseRef: null,
+      created: false,
+      createCommand: null,
+      createExitCode: null,
+      createOutputTail: null,
+    },
+    status: 'failed',
+    startedAt: now,
+    updatedAt: now,
+    finishedAt: now,
+    changedFiles: [],
+    verification: [],
+    notes: [],
+  };
+  const index = {
+    schema_version: 'p2a.run_index.v1',
+    projectId: 'fixture-project',
+    runs: [{
+      runId,
+      taskId: 'task-001',
+      iterationId: 'v1-mvp',
+      status: 'failed',
+      agentTool: 'codex',
+      workspaceRef: 'fixture-workspace',
+      taskGraphRef: 'iterations/v1-mvp/gate-c-task-graph/task-graph.json',
+      runRef: `${runId}.json`,
+      startedAt: now,
+      finishedAt: now,
+    }],
+    tasks: [{ taskId: 'task-001', runIds: [runId], latestRunId: runId }],
+  };
+
+  try {
+    writeFileSync(path.join(runsDir, `${runId}.json`), `${JSON.stringify(run, null, 2)}\n`, 'utf8');
+    writeFileSync(path.join(runsDir, 'run-index.json'), `${JSON.stringify(index, null, 2)}\n`, 'utf8');
+    const result = runValidator(['--runs-dir', runsDir]);
+    const output = `${result.stdout ?? ''}${result.stderr ?? ''}`;
+    if (result.status === 0 || !output.includes('failed run must include failure')) {
+      console.error('negative fixture invalid failed run without failure was not rejected by validator');
+      writeResultOutput(result);
+      return { status: result.status === 0 ? 1 : failureStatus(result), checks: 1 };
+    }
+    return { status: 0, checks: 1 };
+  } finally {
+    rmSync(runsDir, { recursive: true, force: true });
+  }
+}
+
 function validateNegativeFixtureCases() {
   const manifest = loadNegativeFixtureManifest();
   const expectedPass = manifest.expected_pass ?? [];
@@ -1724,6 +1853,10 @@ function validateNegativeFixtureCases() {
       return { status: 1, checks };
     }
   }
+
+  const invalidRunResult = validateInvalidFailedRunFixtureCase();
+  checks += invalidRunResult.checks;
+  if (invalidRunResult.status !== 0) return { status: invalidRunResult.status, checks };
 
   return { status: 0, checks };
 }

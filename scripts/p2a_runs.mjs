@@ -15,6 +15,7 @@ import {
   ValidationError,
 } from './validate_artifacts.mjs';
 import { resolveIterationState } from './p2a_iteration_state.mjs';
+import { DEFAULT_RUNS_DIR, resolveRunsDir } from './p2a_run_paths.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const ROOT = path.resolve(path.dirname(__filename), '..');
@@ -36,7 +37,6 @@ const FAILURE_DEFAULTS = {
 const VERIFICATION_TYPES = new Set(['test', 'lint', 'typecheck', 'custom']);
 const VERIFICATION_STATUSES = new Set(['passed', 'failed', 'skipped', 'not_run']);
 const DEFAULT_HANDOFF_GRAPH = path.join('.plan2agent', 'artifacts', 'task-graph.json');
-const DEFAULT_RUNS_DIR = path.join('.plan2agent', 'runs');
 const OUTPUT_TAIL_LIMIT = 4000;
 
 function usage() {
@@ -191,6 +191,7 @@ function parseArgs(argv) {
   }
   if (args.command === 'finish') {
     const status = args.status ?? null;
+    if (status === 'finished') assertFailureOptionsAllowed(args, status);
     if ((status === 'failed' || status === 'blocked') && !args.failureClass) {
       throw new Error(`--failure-class is required when --status is failed or blocked. Choose one of: ${[...FAILURE_CLASSES].join(', ')}`);
     }
@@ -262,17 +263,6 @@ function displayPath(filePath, root = process.cwd()) {
 
 function artifactRelativePath(artifactRoot, filePath) {
   return normalizePath(path.relative(artifactRoot, filePath));
-}
-
-function defaultRunsDirForGraph(graphPath) {
-  return path.resolve(path.dirname(graphPath), '..', 'runs');
-}
-
-export function resolveRunsDir(args) {
-  if (args.runs) return path.resolve(args.runs);
-  if (args.artifacts) return path.join(path.resolve(args.artifacts), 'runs');
-  if (args.graph) return defaultRunsDirForGraph(path.resolve(args.graph));
-  return path.resolve(DEFAULT_RUNS_DIR);
 }
 
 function loadTaskGraph(graphPath) {
@@ -631,7 +621,18 @@ function collectGitChangedFiles(workspacePath) {
     .filter(Boolean);
 }
 
+function hasFailureOptions(args) {
+  return Boolean(args.failureClass || args.retryable || args.needsUserDecision !== null || args.failureSource);
+}
+
+function assertFailureOptionsAllowed(args, status) {
+  if (hasFailureOptions(args) && status !== 'failed' && status !== 'blocked') {
+    throw new Error(`failure options are only valid when the run finishes as failed or blocked (got ${status})`);
+  }
+}
+
 function buildFailure(args, status) {
+  assertFailureOptionsAllowed(args, status);
   if (status !== 'failed' && status !== 'blocked') return null;
   if (!args.failureClass) {
     throw new Error(`--failure-class is required when finishing with status ${status}. Choose one of: ${[...FAILURE_CLASSES].join(', ')}`);
