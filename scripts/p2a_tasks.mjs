@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /** Manage Plan2Agent task graph status and dependency workflow. */
 
-import { existsSync, readFileSync, realpathSync, readdirSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, readFileSync, realpathSync, readdirSync, writeFileSync } from 'node:fs';
 import { createInterface } from 'node:readline/promises';
 import path from 'node:path';
 import process from 'node:process';
@@ -229,7 +229,27 @@ function printPrompt(task, graph, graphPath, specPath = null) {
   console.log(`Full spec: ${displaySourceSpecPath}`);
 }
 
-function transitionTask(graph, task, command) {
+function latestRunFailureClass(args, taskId) {
+  if (!args.artifactsPath) return null;
+  const runsDir = path.join(path.resolve(args.artifactsPath), 'runs');
+  const indexPath = path.join(runsDir, 'run-index.json');
+  if (!existsSync(indexPath) || !lstatSync(indexPath).isFile()) return null;
+  try {
+    const index = JSON.parse(readFileSync(indexPath, 'utf8'));
+    const taskEntry = index.tasks?.find((entry) => entry.taskId === taskId);
+    const runId = taskEntry?.latestRunId;
+    if (!runId) return null;
+    const runPath = path.join(runsDir, `${runId}.json`);
+    if (!existsSync(runPath) || !lstatSync(runPath).isFile()) return null;
+    const run = JSON.parse(readFileSync(runPath, 'utf8'));
+    return run.failure?.class ?? null;
+  } catch (error) {
+    console.error(`warning: could not read latest run failure for ${taskId}: ${error.message}`);
+    return null;
+  }
+}
+
+function transitionTask(graph, task, command, args = {}) {
   const tasksById = taskMap(graph);
   if (command === 'start') {
     if (task.status !== 'todo') throw new Error(`${task.id} must be todo before start; current status is ${task.status}`);
@@ -241,9 +261,15 @@ function transitionTask(graph, task, command) {
     task.status = 'done';
   } else if (command === 'block') {
     task.status = 'blocked';
+    const failureClass = latestRunFailureClass(args, task.id);
+    if (failureClass) task.blockReason = failureClass;
   } else if (command === 'todo') {
     task.status = 'todo';
   }
+}
+
+function clearBlockReasonIfUnblocked(task, command) {
+  if (command === 'done' || command === 'todo' || command === 'start') delete task.blockReason;
 }
 
 function saveValidatedGraph(graphPath, graph) {
@@ -455,9 +481,11 @@ export function main(argv = process.argv.slice(2)) {
       printPrompt(requireTask(graph, args.taskId), graph, args.graphPath, args.specPath);
     } else if (VALID_TRANSITIONS.has(args.command)) {
       const task = requireTask(graph, args.taskId);
-      transitionTask(graph, task, args.command);
+      transitionTask(graph, task, args.command, args);
+      clearBlockReasonIfUnblocked(task, args.command);
       saveValidatedGraph(args.graphPath, graph);
       console.log(`${task.id} status is now ${task.status}`);
+      if (args.command === 'block' && task.blockReason) console.log(`- blockReason: ${task.blockReason}`);
     } else {
       throw new Error(`unknown command: ${args.command}`);
     }
