@@ -4,12 +4,14 @@
  *
  * The hook provides an app-level workspace boundary for Claude's Write/Edit
  * tools and best-effort Bash screening. Bash command-string screening is not
- * airtight: shell syntax, variable expansion, subprocess behavior, and tool
- * semantics can hide writes. On macOS/Linux, enable Claude Code's OS-level
- * sandboxed Bash as the stronger Part B boundary for subprocesses.
+ * airtight: shell syntax, variable expansion, subprocess behavior, interpreter
+ * strings, and tool semantics can hide writes. On macOS/Linux, Claude Code's
+ * OS-level sandboxed Bash is the actual Part B boundary for subprocesses; on
+ * Windows this app-level screen leaves residual risk and should not be treated
+ * as a complete sandbox.
  */
 
-import { realpathSync } from 'node:fs';
+import { existsSync, realpathSync } from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
 
@@ -43,17 +45,23 @@ function readStdin() {
   });
 }
 
-function realpathBestEffort(filePath) {
-  try {
-    return realpathSync.native(filePath);
-  } catch {
-    return path.resolve(filePath);
+function canonicalizePath(filePath) {
+  const absolute = path.resolve(filePath);
+  const tail = [];
+  let current = absolute;
+  while (!existsSync(current)) {
+    const parent = path.dirname(current);
+    if (parent === current) break;
+    tail.unshift(path.basename(current));
+    current = parent;
   }
+  const realBase = realpathSync.native(current);
+  return tail.length ? path.join(realBase, ...tail) : realBase;
 }
 
 function workspaceRootFromEvent(event) {
   const cwd = typeof event.cwd === 'string' && event.cwd.trim() ? event.cwd : process.cwd();
-  return realpathBestEffort(cwd);
+  return canonicalizePath(cwd);
 }
 
 function hasWindowsDrivePrefix(value) {
@@ -65,10 +73,11 @@ function resolveToolPath(rawPath, workspaceRoot) {
   const expanded = rawPath.startsWith('~/') || rawPath.startsWith('~\\')
     ? path.join(process.env.HOME || process.env.USERPROFILE || '', rawPath.slice(2))
     : rawPath;
+  if (process.platform !== 'win32' && hasWindowsDrivePrefix(expanded)) return expanded;
   const absolute = path.isAbsolute(expanded) || hasWindowsDrivePrefix(expanded)
     ? expanded
     : path.resolve(workspaceRoot, expanded);
-  return realpathBestEffort(absolute);
+  return canonicalizePath(absolute);
 }
 
 function normalizeForContainment(filePath) {
@@ -78,6 +87,7 @@ function normalizeForContainment(filePath) {
 }
 
 function isPathInsideWorkspace(candidatePath, workspaceRoot) {
+  if (process.platform !== 'win32' && hasWindowsDrivePrefix(candidatePath)) return false;
   const candidate = normalizeForContainment(candidatePath);
   const root = normalizeForContainment(workspaceRoot);
   if (candidate === root) return true;
@@ -125,16 +135,29 @@ function shellTokens(command) {
 function tokenLooksExternalPath(token, workspaceRoot) {
   if (!token || token.startsWith('-')) return false;
   if (!(token.startsWith('/') || token.startsWith('~/') || token.startsWith('~\\') || hasWindowsDrivePrefix(token))) return false;
-  const resolved = resolveToolPath(token, workspaceRoot);
-  return resolved ? !isPathInsideWorkspace(resolved, workspaceRoot) : true;
+  try {
+    const resolved = resolveToolPath(token, workspaceRoot);
+    return resolved ? !isPathInsideWorkspace(resolved, workspaceRoot) : true;
+  } catch {
+    return true;
+  }
 }
 
 function checkBash(command, workspaceRoot) {
   if (typeof command !== 'string' || !command.trim()) return 'missing Bash command';
   const compact = command.replace(/\s+/g, ' ').trim();
-  const destructive = /(^|[;&|()\s])(rm|rmdir|mv|cp|install|mkdir|touch|chmod|chown|ln|tee|truncate|dd|sed|perl|python(?:3)?|node|bash|sh|zsh|pwsh|powershell)(\s|$)/i;
+  const destructive = /(^|[;&|()\s])(rm|rmdir|mv|cp|install|mkdir|touch|chmod|chown|ln|tee|truncate|dd|sed|perl|python(?:\d+(?:\.\d+)?)?|node|bash|sh|zsh|pwsh|powershell)(\s|$)/i;
   if (!destructive.test(compact) && !/[>]{1,2}/.test(compact)) return null;
   const tokens = shellTokens(compact);
+  const writeCapableInterpreter = tokens.some((token) => /^(?:.*[\/])?(?:node|python(?:\d+(?:\.\d+)?)?|perl|ruby|php)(?:\.exe)?$/i.test(token));
+  if (writeCapableInterpreter) {
+    const embeddedPathPattern = /(?:^|[^\w.~/-])((?:~[\/]|[a-zA-Z]:[\\/]|\/)[^'\"\s;|&<>)]*)/g;
+    for (const embeddedPath of compact.matchAll(embeddedPathPattern)) {
+      if (tokenLooksExternalPath(embeddedPath[1], workspaceRoot)) {
+        return `Bash interpreter argument contains an outside-workspace path: ${embeddedPath[1]}`;
+      }
+    }
+  }
   for (const token of tokens) {
     if (tokenLooksExternalPath(token, workspaceRoot)) {
       return `Bash command appears to target outside the workspace: ${token}`;
@@ -156,10 +179,20 @@ try {
 
 const toolName = event.tool_name;
 const toolInput = event.tool_input && typeof event.tool_input === 'object' ? event.tool_input : {};
-const workspaceRoot = workspaceRootFromEvent(event);
+let workspaceRoot;
+try {
+  workspaceRoot = workspaceRootFromEvent(event);
+} catch (error) {
+  deny(`Plan2Agent confinement hook could not canonicalize workspace root: ${error.message}`);
+}
 
 if (toolName === 'Write' || toolName === 'Edit') {
-  const candidate = resolveToolPath(toolInput.file_path, workspaceRoot);
+  let candidate;
+  try {
+    candidate = resolveToolPath(toolInput.file_path, workspaceRoot);
+  } catch (error) {
+    deny(`${toolName} blocked: could not canonicalize ${toolInput.file_path}: ${error.message}`);
+  }
   if (!candidate) deny(`${toolName} call is missing tool_input.file_path`);
   if (!isPathInsideWorkspace(candidate, workspaceRoot)) {
     deny(`${toolName} blocked: ${toolInput.file_path} resolves outside workspace ${workspaceRoot}`);

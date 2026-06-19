@@ -878,37 +878,58 @@ target/
 `;
 }
 
-function buildClaudeProjectSettings() {
+const CLAUDE_COARSE_DENY_PREFIXES = [
+  { prefix: '/etc', rules: ['Edit(//etc/**)', 'Write(//etc/**)'], keepForWorkspace: true },
+  { prefix: '/bin', rules: ['Edit(//bin/**)', 'Write(//bin/**)'], keepForWorkspace: true },
+  { prefix: '/sbin', rules: ['Edit(//sbin/**)', 'Write(//sbin/**)'], keepForWorkspace: true },
+  { prefix: '/usr', rules: ['Edit(//usr/**)', 'Write(//usr/**)'] },
+  { prefix: '/var', rules: ['Edit(//var/**)', 'Write(//var/**)'] },
+];
+
+function pathIsAtOrUnder(child, parent) {
+  const relative = path.relative(parent, child);
+  return relative === '' || (relative && !relative.startsWith('..') && !path.isAbsolute(relative));
+}
+
+function claudeCoarseDenyRules(targetRoot) {
+  const target = path.resolve(targetRoot);
+  const deny = [
+    'Edit(~/**)',
+    'Write(~/**)',
+  ];
+  const omitted = [];
+  for (const entry of CLAUDE_COARSE_DENY_PREFIXES) {
+    const prefix = path.resolve(entry.prefix);
+    if (!entry.keepForWorkspace && pathIsAtOrUnder(target, prefix)) {
+      omitted.push(entry.prefix);
+      continue;
+    }
+    deny.push(...entry.rules);
+  }
+  deny.push(
+    'Edit(//System/**)',
+    'Write(//System/**)',
+    'Edit(//Applications/**)',
+    'Write(//Applications/**)',
+    'Edit(//Program Files/**)',
+    'Write(//Program Files/**)',
+    'Edit(//Program Files (x86)/**)',
+    'Write(//Program Files (x86)/**)',
+    'Edit(//Windows/**)',
+    'Write(//Windows/**)',
+    'Bash(rm -rf /)',
+    'Bash(rm -rf ~)',
+    'Bash(rm -rf ~/**)',
+    'Bash(sudo *)',
+  );
+  return { deny, omitted };
+}
+
+function buildClaudeProjectSettings(targetRoot = process.cwd()) {
+  const coarse = claudeCoarseDenyRules(targetRoot);
   return {
     permissions: {
-      deny: [
-        'Edit(~/**)',
-        'Write(~/**)',
-        'Edit(//etc/**)',
-        'Write(//etc/**)',
-        'Edit(//bin/**)',
-        'Write(//bin/**)',
-        'Edit(//sbin/**)',
-        'Write(//sbin/**)',
-        'Edit(//usr/**)',
-        'Write(//usr/**)',
-        'Edit(//var/**)',
-        'Write(//var/**)',
-        'Edit(//System/**)',
-        'Write(//System/**)',
-        'Edit(//Applications/**)',
-        'Write(//Applications/**)',
-        'Edit(//Program Files/**)',
-        'Write(//Program Files/**)',
-        'Edit(//Program Files (x86)/**)',
-        'Write(//Program Files (x86)/**)',
-        'Edit(//Windows/**)',
-        'Write(//Windows/**)',
-        'Bash(rm -rf /)',
-        'Bash(rm -rf ~)',
-        'Bash(rm -rf ~/**)',
-        'Bash(sudo *)',
-      ],
+      deny: coarse.deny,
     },
     hooks: {
       PreToolUse: [
@@ -937,6 +958,8 @@ function buildClaudeLocalSettings() {
       },
     };
   }
+  // Claude Code sandbox.enabled currently applies to macOS/Linux only.
+  // On Windows, Plan2Agent installs app-level deny rules and hooks, not an OS sandbox.
   return {};
 }
 
@@ -977,6 +1000,7 @@ function buildScaffoldPlan(args, targetRoot, createdAt = new Date().toISOString(
     pushArtifact(plan, path.join(ROOT, 'schemas', file), targetRoot, path.join('schemas', file));
   }
   const toolAssetPlan = pushToolAssets(plan, targetRoot, args.tools);
+  const claudeCoarseDeny = args.tools.includes('claude') ? claudeCoarseDenyRules(targetRoot) : { omitted: [] };
   const scriptFiles = SCAFFOLD_SCRIPT_FILES.map((file) => normalizePath(path.join('scripts', file)));
   const schemaFiles = SCAFFOLD_SCHEMA_FILES.map((file) => normalizePath(path.join('schemas', file)));
   const manifest = {
@@ -997,13 +1021,14 @@ function buildScaffoldPlan(args, targetRoot, createdAt = new Date().toISOString(
     ],
   };
   if (args.tools.includes('claude')) {
-    pushGeneratedJson(plan, targetRoot, path.join('.claude', 'settings.json'), buildClaudeProjectSettings());
+    pushGeneratedJson(plan, targetRoot, path.join('.claude', 'settings.json'), buildClaudeProjectSettings(targetRoot));
     pushGeneratedJson(plan, targetRoot, path.join('.claude', 'settings.local.json'), buildClaudeLocalSettings());
   }
   pushGeneratedJson(plan, targetRoot, path.join('.plan2agent', 'manifest.json'), manifest);
   pushGeneratedJson(plan, targetRoot, path.join('.plan2agent', 'project.config.json'), buildProjectConfig(targetRoot, { enabled: false }, { emptyCommands: true }));
   pushGeneratedText(plan, targetRoot, '.gitignore', renderProjectGitignore());
   pushGeneratedText(plan, targetRoot, 'PLAN2AGENT.md', renderPlan2AgentGuide());
+  plan.scaffoldWarnings = claudeCoarseDeny.omitted.map((prefix) => `Claude coarse deny ${prefix}/** omitted because targetProject is under that prefix; the PreToolUse hook enforces the workspace boundary instead.`);
   return plan;
 }
 
@@ -1011,6 +1036,9 @@ function printScaffoldPlan(plan, args, targetRoot) {
   console.log(`Plan2Agent scaffold ${args.dryRun ? 'dry run' : 'plan'}`);
   console.log(`aiTools: ${args.tools.length ? args.tools.join(',') : 'none'}`);
   console.log(`targetProject: ${targetRoot}`);
+  if (plan.scaffoldWarnings?.length) {
+    for (const warning of plan.scaffoldWarnings) console.warn(`warning: ${warning}`);
+  }
   console.log('writes:');
   for (const item of plan) {
     const action = item.type === 'write-json' || item.type === 'write-text' ? 'generate' : 'copy';
