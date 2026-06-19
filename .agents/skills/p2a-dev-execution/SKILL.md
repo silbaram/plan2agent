@@ -70,9 +70,13 @@ Use these inputs:
    node scripts/p2a_runs.mjs finish --run-id <id> --artifacts <dir> --status finished|failed|blocked --collect-git
    ```
 
+   When finishing with `--status failed` or `--status blocked`, include `--failure-class <class>` so the run records a structured `failure` object. The supported classes are `verification_failed`, `test_flake`, `scope_violation`, `missing_dependency`, `environment_failure`, `implementation_incomplete`, and `other`. The CLI fills `retryable`, `needsUserDecision`, and `source` from the class defaults; use `--retryable`, `--needs-user-decision`, or `--failure-source` only when the default is wrong. Use `--failure-class other` only as an escape hatch and always include at least one `--note` explaining why no more specific class applies.
+
+   Only classify a failure as `test_flake` when there is concrete evidence such as a failing verification command passing on rerun without code or environment changes. Without that evidence, use `verification_failed` for verification failures.
+
 7. Run the independent monitor gate before marking the task done. Invoke `p2a-performance-monitor` as a separate subagent when the CLI supports spawning subagents, or perform a separated read-only review pass when spawning is unavailable. Pass the target task id, acceptance criteria, and the latest run log for that task, including `verification`, `changedFiles`, `status`, and `workspaceRef`.
 
-   If the monitor returns `verdict: "block"`, do not mark the task done. Record the blocker and follow-up reason instead:
+   If the monitor returns `verdict: "block"`, do not mark the task done. First finish the run as blocked with `--failure-source monitor` and a failure class derived from the monitor verdict details: `unmet_acceptance` maps to `implementation_incomplete`, `verification_concerns` maps to `verification_failed`, and `scope_concerns` maps to `scope_violation`. Then record the blocker and follow-up reason:
 
    ```bash
    node scripts/p2a_tasks.mjs block --artifacts <dir> <task-id>

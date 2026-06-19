@@ -27,38 +27,153 @@
   ],
   "additionalProperties": false,
   "properties": {
-    "schema_version": {"const": "p2a.run.v1"},
-    "runId": {"type": "string", "pattern": "^run-[A-Za-z0-9._-]+$"},
-    "projectId": {"type": "string", "minLength": 1},
-    "taskId": {"type": "string", "pattern": "^task-[0-9]+$"},
-    "taskTitle": {"type": "string", "minLength": 1},
-    "iterationId": {"type": ["string", "null"]},
-    "sourceLayout": {"type": "string", "enum": ["iteration", "maintenance", "handoff", "graph"]},
-    "taskGraphRef": {"type": "string", "minLength": 1},
-    "sourceSpecRef": {"type": "string", "minLength": 1},
-    "agentTool": {"type": "string", "minLength": 1},
-    "workspaceRef": {"type": "string", "minLength": 1},
-    "workspacePath": {"type": "string", "minLength": 1},
+    "schema_version": {
+      "const": "p2a.run.v1"
+    },
+    "runId": {
+      "type": "string",
+      "pattern": "^run-[A-Za-z0-9._-]+$"
+    },
+    "projectId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "taskId": {
+      "type": "string",
+      "pattern": "^task-[0-9]+$"
+    },
+    "taskTitle": {
+      "type": "string",
+      "minLength": 1
+    },
+    "iterationId": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "sourceLayout": {
+      "type": "string",
+      "enum": [
+        "iteration",
+        "maintenance",
+        "handoff",
+        "graph"
+      ]
+    },
+    "taskGraphRef": {
+      "type": "string",
+      "minLength": 1
+    },
+    "sourceSpecRef": {
+      "type": "string",
+      "minLength": 1
+    },
+    "agentTool": {
+      "type": "string",
+      "minLength": 1
+    },
+    "workspaceRef": {
+      "type": "string",
+      "minLength": 1
+    },
+    "workspacePath": {
+      "type": "string",
+      "minLength": 1
+    },
     "isolation": {
       "type": "object",
-      "required": ["mode", "branch", "worktree", "baseRef", "created", "createCommand", "createExitCode", "createOutputTail"],
+      "required": [
+        "mode",
+        "branch",
+        "worktree",
+        "baseRef",
+        "created",
+        "createCommand",
+        "createExitCode",
+        "createOutputTail"
+      ],
       "additionalProperties": false,
       "properties": {
-        "mode": {"type": "string", "enum": ["none", "branch", "worktree"]},
-        "branch": {"type": ["string", "null"]},
-        "worktree": {"type": ["string", "null"]},
-        "baseRef": {"type": ["string", "null"]},
-        "created": {"type": "boolean"},
-        "createCommand": {"type": ["string", "null"]},
-        "createExitCode": {"type": ["integer", "null"]},
-        "createOutputTail": {"type": ["string", "null"]}
+        "mode": {
+          "type": "string",
+          "enum": [
+            "none",
+            "branch",
+            "worktree"
+          ]
+        },
+        "branch": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "worktree": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "baseRef": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "created": {
+          "type": "boolean"
+        },
+        "createCommand": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "createExitCode": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "createOutputTail": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
       }
     },
-    "status": {"type": "string", "enum": ["started", "finished", "failed", "blocked"]},
-    "startedAt": {"type": "string", "minLength": 1},
-    "updatedAt": {"type": "string", "minLength": 1},
-    "finishedAt": {"type": ["string", "null"]},
-    "changedFiles": {"type": "array", "items": {"type": "string", "minLength": 1}},
+    "status": {
+      "type": "string",
+      "enum": [
+        "started",
+        "finished",
+        "failed",
+        "blocked"
+      ]
+    },
+    "startedAt": {
+      "type": "string",
+      "minLength": 1
+    },
+    "updatedAt": {
+      "type": "string",
+      "minLength": 1
+    },
+    "finishedAt": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "changedFiles": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
     "verification": {
       "type": "array",
       "items": {
@@ -77,19 +192,169 @@
         ],
         "additionalProperties": false,
         "properties": {
-          "type": {"type": "string", "enum": ["test", "lint", "typecheck", "custom"]},
-          "command": {"type": "string", "minLength": 1},
-          "status": {"type": "string", "enum": ["passed", "failed", "skipped", "not_run"]},
-          "exitCode": {"type": ["integer", "null"]},
-          "durationMs": {"type": ["integer", "null"], "minimum": 0},
-          "startedAt": {"type": ["string", "null"]},
-          "finishedAt": {"type": ["string", "null"]},
-          "stdoutTail": {"type": ["string", "null"]},
-          "stderrTail": {"type": ["string", "null"]},
-          "source": {"type": "string", "enum": ["config", "command", "manual"]}
+          "type": {
+            "type": "string",
+            "enum": [
+              "test",
+              "lint",
+              "typecheck",
+              "custom"
+            ]
+          },
+          "command": {
+            "type": "string",
+            "minLength": 1
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "passed",
+              "failed",
+              "skipped",
+              "not_run"
+            ]
+          },
+          "exitCode": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "durationMs": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "startedAt": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "finishedAt": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "stdoutTail": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "stderrTail": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "config",
+              "command",
+              "manual"
+            ]
+          }
         }
       }
     },
-    "notes": {"type": "array", "items": {"type": "string", "minLength": 1}}
-  }
+    "notes": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "failure": {
+      "type": "object",
+      "required": [
+        "class",
+        "retryable",
+        "needsUserDecision",
+        "source"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "class": {
+          "type": "string",
+          "enum": [
+            "verification_failed",
+            "test_flake",
+            "scope_violation",
+            "missing_dependency",
+            "environment_failure",
+            "implementation_incomplete",
+            "other"
+          ]
+        },
+        "retryable": {
+          "type": "string",
+          "enum": [
+            "yes",
+            "no",
+            "after_fix"
+          ]
+        },
+        "needsUserDecision": {
+          "type": "boolean"
+        },
+        "source": {
+          "type": "string",
+          "enum": [
+            "owner",
+            "monitor",
+            "implementer"
+          ]
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "enum": [
+              "failed",
+              "blocked"
+            ]
+          }
+        },
+        "required": [
+          "status"
+        ]
+      },
+      "then": {
+        "required": [
+          "failure"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "enum": [
+              "started",
+              "finished"
+            ]
+          }
+        },
+        "required": [
+          "status"
+        ]
+      },
+      "then": {
+        "not": {
+          "required": [
+            "failure"
+          ]
+        }
+      }
+    }
+  ]
 }

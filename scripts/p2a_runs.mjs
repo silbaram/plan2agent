@@ -21,6 +21,18 @@ const ROOT = path.resolve(path.dirname(__filename), '..');
 const COMMANDS = new Set(['start', 'record', 'verify', 'finish', 'list', 'show', 'validate']);
 const ISOLATION_MODES = new Set(['none', 'branch', 'worktree']);
 const RUN_STATUSES = new Set(['started', 'finished', 'failed', 'blocked']);
+const FAILURE_CLASSES = new Set(['verification_failed', 'test_flake', 'scope_violation', 'missing_dependency', 'environment_failure', 'implementation_incomplete', 'other']);
+const FAILURE_RETRYABLE = new Set(['yes', 'no', 'after_fix']);
+const FAILURE_SOURCES = new Set(['owner', 'monitor', 'implementer']);
+const FAILURE_DEFAULTS = {
+  verification_failed: { retryable: 'after_fix', needsUserDecision: false, source: 'owner' },
+  test_flake: { retryable: 'yes', needsUserDecision: false, source: 'owner' },
+  scope_violation: { retryable: 'no', needsUserDecision: true, source: 'owner' },
+  missing_dependency: { retryable: 'after_fix', needsUserDecision: true, source: 'owner' },
+  environment_failure: { retryable: 'yes', needsUserDecision: false, source: 'owner' },
+  implementation_incomplete: { retryable: 'after_fix', needsUserDecision: false, source: 'owner' },
+  other: { retryable: 'no', needsUserDecision: true, source: 'owner' },
+};
 const VERIFICATION_TYPES = new Set(['test', 'lint', 'typecheck', 'custom']);
 const VERIFICATION_STATUSES = new Set(['passed', 'failed', 'skipped', 'not_run']);
 const DEFAULT_HANDOFF_GRAPH = path.join('.plan2agent', 'artifacts', 'task-graph.json');
@@ -34,7 +46,7 @@ function usage() {
     '  node scripts/p2a_runs.mjs start --graph <task-graph.json> --task <task-id> --agent-tool <tool> [--runs <dir>] [options]',
     '  node scripts/p2a_runs.mjs record --run-id <run-id> (--artifacts <dir>|--runs <dir>|--graph <path>) [--changed-file <path> ...] [--verification <type:status:command>] [--note <text>]',
     '  node scripts/p2a_runs.mjs verify --run-id <run-id> (--artifacts <dir>|--runs <dir>|--graph <path>) [--test] [--lint] [--typecheck] [--test-command <cmd>] [--lint-command <cmd>] [--typecheck-command <cmd>] [--verify-command <type:cmd>]',
-    '  node scripts/p2a_runs.mjs finish --run-id <run-id> (--artifacts <dir>|--runs <dir>|--graph <path>) [--status finished|failed|blocked] [--changed-file <path> ...] [--collect-git] [--note <text>]',
+    '  node scripts/p2a_runs.mjs finish --run-id <run-id> (--artifacts <dir>|--runs <dir>|--graph <path>) [--status finished|failed|blocked] [--failure-class <class>] [--retryable yes|no|after_fix] [--needs-user-decision true|false] [--failure-source owner|monitor|implementer] [--changed-file <path> ...] [--collect-git] [--note <text>]',
     '  node scripts/p2a_runs.mjs list (--artifacts <dir>|--runs <dir>|--graph <path>) [--json]',
     '  node scripts/p2a_runs.mjs show --run-id <run-id> (--artifacts <dir>|--runs <dir>|--graph <path>)',
     '  node scripts/p2a_runs.mjs validate (--artifacts <dir>|--runs <dir>|--graph <path>) [--run-id <run-id>]',
@@ -57,6 +69,11 @@ function usage() {
     '  --changed-file <path>   Changed file to attach to the run. Repeatable.',
     '  --collect-git           Add changed files from git status in the workspace.',
     '  --note <text>           Append a run note. Repeatable.',
+    '  --failure-class <class> Failure class for failed/blocked finish. One of: verification_failed, test_flake, scope_violation, missing_dependency, environment_failure, implementation_incomplete, other.',
+    '  --retryable <value>     Override failure retryability: yes, no, after_fix.',
+    '  --needs-user-decision <true|false>',
+    '                          Override whether the failure needs a user decision.',
+    '  --failure-source <src>  Override failure source: owner, monitor, implementer.',
     '  --verification <type:status:command>',
     '                          Manually record a verification result. type: test/lint/typecheck/custom.',
     '  --test, --lint, --typecheck',
@@ -95,6 +112,10 @@ function parseArgs(argv) {
     manualVerification: [],
     verifyRequests: [],
     status: null,
+    failureClass: null,
+    retryable: null,
+    needsUserDecision: null,
+    failureSource: null,
     collectGit: false,
     json: false,
     help: false,
@@ -130,7 +151,20 @@ function parseArgs(argv) {
     else if (arg === '--lint-command') args.verifyRequests.push({ type: 'lint', command: requiredValue(argv, ++index, '--lint-command'), source: 'command' });
     else if (arg === '--typecheck-command') args.verifyRequests.push({ type: 'typecheck', command: requiredValue(argv, ++index, '--typecheck-command'), source: 'command' });
     else if (arg === '--verify-command') args.verifyRequests.push(parseVerifyCommand(requiredValue(argv, ++index, '--verify-command')));
-    else if (arg === '--status') {
+    else if (arg === '--failure-class') {
+      args.failureClass = requiredValue(argv, ++index, '--failure-class');
+      if (!FAILURE_CLASSES.has(args.failureClass)) throw new Error(`--failure-class must be one of ${[...FAILURE_CLASSES].join(', ')}`);
+    } else if (arg === '--retryable') {
+      args.retryable = requiredValue(argv, ++index, '--retryable');
+      if (!FAILURE_RETRYABLE.has(args.retryable)) throw new Error(`--retryable must be one of ${[...FAILURE_RETRYABLE].join(', ')}`);
+    } else if (arg === '--needs-user-decision') {
+      const value = requiredValue(argv, ++index, '--needs-user-decision');
+      if (!['true', 'false'].includes(value)) throw new Error('--needs-user-decision must be true or false');
+      args.needsUserDecision = value === 'true';
+    } else if (arg === '--failure-source') {
+      args.failureSource = requiredValue(argv, ++index, '--failure-source');
+      if (!FAILURE_SOURCES.has(args.failureSource)) throw new Error(`--failure-source must be one of ${[...FAILURE_SOURCES].join(', ')}`);
+    } else if (arg === '--status') {
       args.status = requiredValue(argv, ++index, '--status');
       if (!RUN_STATUSES.has(args.status) || args.status === 'started') throw new Error('--status must be finished, failed, or blocked');
     } else if (arg === '--json') args.json = true;
@@ -151,7 +185,20 @@ function parseArgs(argv) {
     if (!args.taskId) throw new Error('--task is required for start');
     if (!args.agentTool) throw new Error('--agent-tool is required for start');
     if (args.runs && !args.graph && !args.artifacts) throw new Error('start requires --artifacts or --graph so the task can be resolved');
-  } else if (['record', 'verify', 'finish', 'show'].includes(args.command) && !args.runId) {
+  }
+  if (args.command !== 'finish' && (args.failureClass || args.retryable || args.needsUserDecision !== null || args.failureSource)) {
+    throw new Error('failure options are only supported with finish');
+  }
+  if (args.command === 'finish') {
+    const status = args.status ?? null;
+    if ((status === 'failed' || status === 'blocked') && !args.failureClass) {
+      throw new Error(`--failure-class is required when --status is failed or blocked. Choose one of: ${[...FAILURE_CLASSES].join(', ')}`);
+    }
+    if (args.failureClass === 'other' && args.notes.length === 0) {
+      throw new Error('--failure-class other requires at least one --note explaining why the failure could not be classified');
+    }
+  }
+  if (['record', 'verify', 'finish', 'show'].includes(args.command) && !args.runId) {
     throw new Error(`--run-id is required for ${args.command}`);
   }
   return args;
@@ -584,6 +631,20 @@ function collectGitChangedFiles(workspacePath) {
     .filter(Boolean);
 }
 
+function buildFailure(args, status) {
+  if (status !== 'failed' && status !== 'blocked') return null;
+  if (!args.failureClass) {
+    throw new Error(`--failure-class is required when finishing with status ${status}. Choose one of: ${[...FAILURE_CLASSES].join(', ')}`);
+  }
+  const defaults = FAILURE_DEFAULTS[args.failureClass];
+  return {
+    class: args.failureClass,
+    retryable: args.retryable ?? defaults.retryable,
+    needsUserDecision: args.needsUserDecision ?? defaults.needsUserDecision,
+    source: args.failureSource ?? defaults.source,
+  };
+}
+
 function deriveFinishStatus(run, requestedStatus) {
   if (requestedStatus) return requestedStatus;
   return run.verification.some((item) => item.status === 'failed') ? 'failed' : 'finished';
@@ -643,6 +704,7 @@ function recordRun(args) {
   console.log(`Plan2Agent run recorded: ${run.runId}`);
   console.log(`- changedFiles: ${run.changedFiles.length}`);
   console.log(`- verification: ${run.verification.length}`);
+  if (run.failure) console.log(`- failure: ${run.failure.class} retryable=${run.failure.retryable} needsUserDecision=${run.failure.needsUserDecision} source=${run.failure.source}`);
   return 0;
 }
 
@@ -673,6 +735,9 @@ function finishRun(args) {
   run.changedFiles = uniqueStrings([...run.changedFiles, ...changedFiles]);
   run.notes = uniqueStrings([...run.notes, ...args.notes]);
   run.status = deriveFinishStatus(run, args.status);
+  const failure = buildFailure(args, run.status);
+  if (failure) run.failure = failure;
+  else delete run.failure;
   const now = new Date().toISOString();
   run.updatedAt = now;
   run.finishedAt = now;
@@ -681,6 +746,7 @@ function finishRun(args) {
   console.log(`- status: ${run.status}`);
   console.log(`- changedFiles: ${run.changedFiles.length}`);
   console.log(`- verification: ${run.verification.length}`);
+  if (run.failure) console.log(`- failure: ${run.failure.class} retryable=${run.failure.retryable} needsUserDecision=${run.failure.needsUserDecision} source=${run.failure.source}`);
   return run.status === 'failed' ? 1 : 0;
 }
 

@@ -81,6 +81,12 @@ function schemaTypeMatches(instance, expectedType) {
 }
 
 export function validateSchema(instance, schema, instancePath = '$') {
+  if (schema.allOf) {
+    for (const [index, subschema] of schema.allOf.entries()) {
+      validateSchemaComposition(instance, subschema, `${instancePath}.allOf[${index}]`, instancePath);
+    }
+  }
+
   if (Object.hasOwn(schema, 'const') && instance !== schema.const) {
     throw new ValidationError(`${instancePath} must equal ${JSON.stringify(schema.const)}`);
   }
@@ -129,6 +135,10 @@ export function validateSchema(instance, schema, instancePath = '$') {
     }
   }
 
+  if (schema.not && schemaMatches(instance, schema.not)) {
+    throw new ValidationError(`${instancePath} must not match forbidden schema`);
+  }
+
   if (instance !== null && typeof instance === 'object' && !Array.isArray(instance)) {
     const required = schema.required ?? [];
     const missing = required.filter((key) => !Object.hasOwn(instance, key));
@@ -150,6 +160,26 @@ export function validateSchema(instance, schema, instancePath = '$') {
       }
     }
   }
+}
+
+function schemaMatches(instance, schema) {
+  try {
+    validateSchema(instance, schema);
+    return true;
+  } catch (error) {
+    if (error instanceof ValidationError) return false;
+    throw error;
+  }
+}
+
+function validateSchemaComposition(instance, schema, schemaPath, instancePath) {
+  if (schema.if) {
+    const matched = schemaMatches(instance, schema.if);
+    if (matched && schema.then) validateSchema(instance, schema.then, instancePath);
+    if (!matched && schema.else) validateSchema(instance, schema.else, instancePath);
+    return;
+  }
+  validateSchema(instance, schema, schemaPath);
 }
 
 export function validateAgainstSchema(filePath, schemaName) {
@@ -451,7 +481,17 @@ export function validateReviewPass(filePath, expectedSources = null) {
 }
 
 export function validateRunData(data) {
-  validateSchema(data, loadJson(SCHEMA_PATHS.run));
+  try {
+    validateSchema(data, loadJson(SCHEMA_PATHS.run));
+  } catch (error) {
+    if (error instanceof ValidationError && data?.status && ['failed', 'blocked'].includes(data.status) && !data.failure) {
+      throw new ValidationError(`${data.status} run must include failure with class, retryable, needsUserDecision, and source`);
+    }
+    if (error instanceof ValidationError && data?.failure && ['started', 'finished'].includes(data.status)) {
+      throw new ValidationError(`${data.status} run must not include failure`);
+    }
+    throw error;
+  }
   if (data.status === 'started' && data.finishedAt !== null) {
     throw new ValidationError('started run must have finishedAt null');
   }

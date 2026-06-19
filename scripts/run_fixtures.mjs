@@ -661,6 +661,83 @@ function validateIterationCurrentFixtureCases() {
         return { status: failureStatus(result), checks };
       }
 
+      const failedRunId = 'run-fixture-failed';
+      result = runRuns(['start', '--artifacts', artifactRoot, '--task', 'task-001', '--run-id', failedRunId, '--agent-tool', 'codex', '--workspace-ref', 'fixture-workspace']);
+      checks += 1;
+      if (result.status !== 0) {
+        console.error(`p2a_runs failed fixture start failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: failureStatus(result), checks };
+      }
+
+      result = runRuns(['finish', '--artifacts', artifactRoot, '--run-id', failedRunId, '--status', 'failed']);
+      checks += 1;
+      const missingFailureOutput = `${result.stdout ?? ''}${result.stderr ?? ''}`;
+      if (result.status === 0 || !missingFailureOutput.includes('--failure-class is required')) {
+        console.error(`p2a_runs did not reject failed finish without failure class: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: 1, checks };
+      }
+
+      result = runRuns(['finish', '--artifacts', artifactRoot, '--run-id', failedRunId, '--status', 'failed', '--failure-class', 'verification_failed']);
+      checks += 1;
+      if (result.status !== 1 || !result.stdout.includes('failure: verification_failed retryable=after_fix needsUserDecision=false source=owner')) {
+        console.error(`p2a_runs failed fixture did not record verification_failed defaults: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: 1, checks };
+      }
+
+      const blockedRunId = 'run-fixture-blocked';
+      result = runRuns(['start', '--artifacts', artifactRoot, '--task', 'task-001', '--run-id', blockedRunId, '--agent-tool', 'codex', '--workspace-ref', 'fixture-workspace']);
+      checks += 1;
+      if (result.status !== 0) {
+        console.error(`p2a_runs blocked fixture start failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: failureStatus(result), checks };
+      }
+
+      result = runRuns(['finish', '--artifacts', artifactRoot, '--run-id', blockedRunId, '--status', 'blocked', '--failure-class', 'implementation_incomplete', '--failure-source', 'monitor']);
+      checks += 1;
+      if (result.status !== 0 || !result.stdout.includes('failure: implementation_incomplete retryable=after_fix needsUserDecision=false source=monitor')) {
+        console.error(`p2a_runs blocked fixture did not record monitor implementation_incomplete failure: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: failureStatus(result), checks };
+      }
+
+      result = runTasks(['block', '--artifacts', artifactRoot, 'task-001']);
+      checks += 1;
+      if (result.status !== 0 || !result.stdout.includes('- blockReason: implementation_incomplete')) {
+        console.error(`p2a_tasks block did not mirror latest run failure class: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: failureStatus(result), checks };
+      }
+
+      const otherRunId = 'run-fixture-other';
+      result = runRuns(['start', '--artifacts', artifactRoot, '--task', 'task-001', '--run-id', otherRunId, '--agent-tool', 'codex', '--workspace-ref', 'fixture-workspace']);
+      checks += 1;
+      if (result.status !== 0) {
+        console.error(`p2a_runs other fixture start failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: failureStatus(result), checks };
+      }
+
+      result = runRuns(['finish', '--artifacts', artifactRoot, '--run-id', otherRunId, '--status', 'failed', '--failure-class', 'other']);
+      checks += 1;
+      const otherMissingNoteOutput = `${result.stdout ?? ''}${result.stderr ?? ''}`;
+      if (result.status === 0 || !otherMissingNoteOutput.includes('requires at least one --note')) {
+        console.error(`p2a_runs did not reject other without note: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: 1, checks };
+      }
+
+      result = runRuns(['finish', '--artifacts', artifactRoot, '--run-id', otherRunId, '--status', 'failed', '--failure-class', 'other', '--note', 'Fixture cannot classify this failure.']);
+      checks += 1;
+      if (result.status !== 1 || !result.stdout.includes('failure: other retryable=no needsUserDecision=true source=owner')) {
+        console.error(`p2a_runs other fixture did not record defaults with note: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: 1, checks };
+      }
+
       result = runValidator(['--runs-dir', runsDir]);
       checks += 1;
       if (result.status !== 0) {
@@ -677,7 +754,7 @@ function validateIterationCurrentFixtureCases() {
         || fixtureRun.changedFiles.join(',') !== 'src/task-001.ts,test/task-001.test.ts'
         || fixtureRun.verification.length !== 3
         || !fixtureRun.verification.every((item) => item.status === 'passed')
-        || fixtureRunIndex.tasks.find((task) => task.taskId === 'task-001')?.latestRunId !== fixtureRunId
+        || fixtureRunIndex.tasks.find((task) => task.taskId === 'task-001')?.latestRunId !== otherRunId
       ) {
         console.error(`p2a_runs wrote unexpected run log fixture: ${caseData.id}`);
         console.error(JSON.stringify({ fixtureRun, fixtureRunIndex }, null, 2));
