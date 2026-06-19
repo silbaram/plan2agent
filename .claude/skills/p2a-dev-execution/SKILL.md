@@ -46,11 +46,11 @@ Use these inputs:
 
    The worktree path must be a fresh empty path, following the `project.config.json` `runTracking.worktreePattern` convention (for example, `../.worktrees/<taskId>-<runId>`).
 
-   Codex uses sandbox confinement, and Claude can use a write-capable implementer with foreground human approval (deterministic confinement is Level 2 step 2). Gemini is still read-only, so use the main-session fallback for Gemini.
+   Codex uses sandbox confinement; Claude can run unattended with `permissionMode` auto/background when scaffold confinement is present (deny rules + PreToolUse hook, plus OS sandbox on macOS/Linux), and otherwise requires foreground supervision. Gemini is still read-only, so use the main-session fallback for Gemini.
 
 3. Before implementing, ensure the target project has a committed git baseline. If there is pre-existing untracked or scaffolded state, commit it first; otherwise `p2a_runs finish --collect-git` records the entire untracked tree as this task's `changedFiles` instead of only the files this task changed.
 
-4. Implement the task while obeying the writing boundaries below. When possible, spawn the `p2a-implementer` subagent to perform the implementation inside the isolated worktree. Codex uses the `workspace-write` sandbox; Claude can use a write-capable implementer with foreground human approval (deterministic confinement is Level 2 step 2). Gemini remains read-only, so use the main-session fallback for Gemini.
+4. Implement the task while obeying the writing boundaries below. When possible, spawn the `p2a-implementer` subagent to perform the implementation inside the isolated worktree. Codex uses the `workspace-write` sandbox; Claude can run unattended with `permissionMode` auto/background when scaffold confinement is present (deny rules + PreToolUse hook, plus OS sandbox on macOS/Linux), and otherwise requires foreground supervision. Gemini remains read-only, so use the main-session fallback for Gemini.
 
    The spawned `p2a-implementer` subagent performs scoped file edits only. It may optionally run local checks for self-review, but it must not call `p2a_runs verify`, `p2a_runs finish`, or `p2a_tasks done|block`. Unless lifecycle delegation is explicitly requested, those lifecycle steps belong to the main dev-execution owner running this skill.
 

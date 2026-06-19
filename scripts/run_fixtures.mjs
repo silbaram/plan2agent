@@ -151,30 +151,47 @@ function validateScaffoldFixtureCase() {
     const expectedToolFiles = [
       path.join('.agents', 'skills', 'p2a-harness', 'SKILL.md'),
       path.join('.claude', 'skills', 'p2a-harness', 'SKILL.md'),
+      path.join('.claude', 'hooks', 'p2a-confine-workspace.mjs'),
       path.join('.codex', 'agents', 'p2a-task-graph.toml'),
       path.join('.gemini', 'commands', 'p2a', 'harness.toml'),
     ];
-    const expectedGenerated = [path.join('.plan2agent', 'project.config.json'), path.join('.plan2agent', 'manifest.json'), 'PLAN2AGENT.md', '.gitignore'];
+    const expectedGenerated = [
+      path.join('.claude', 'settings.json'),
+      path.join('.claude', 'settings.local.json'),
+      path.join('.plan2agent', 'project.config.json'),
+      path.join('.plan2agent', 'manifest.json'),
+      'PLAN2AGENT.md',
+      '.gitignore',
+    ];
     const missingFiles = [...expectedScripts, ...expectedSchemas, ...expectedToolFiles, ...expectedGenerated]
       .filter((filePath) => !existsSync(path.join(targetRoot, filePath)));
     const manifest = JSON.parse(readFileSync(path.join(targetRoot, '.plan2agent', 'manifest.json'), 'utf8'));
     const config = JSON.parse(readFileSync(path.join(targetRoot, '.plan2agent', 'project.config.json'), 'utf8'));
+    const claudeSettings = JSON.parse(readFileSync(path.join(targetRoot, '.claude', 'settings.json'), 'utf8'));
+    const claudeLocalSettings = JSON.parse(readFileSync(path.join(targetRoot, '.claude', 'settings.local.json'), 'utf8'));
     const gitignore = readFileSync(path.join(targetRoot, '.gitignore'), 'utf8');
     const ignoredPlans = ['.plan2agent/artifacts', 'artifacts/<project>/gate-*', 'artifacts/**/gate-*']
       .filter((line) => gitignore.includes(line));
+    const expectedSandboxEnabled = process.platform === 'darwin' || process.platform === 'linux';
     if (
       missingFiles.length
       || manifest.provenance?.mode !== 'scaffold'
       || manifest.aiToolTargets.join(',') !== 'codex,claude,gemini'
       || config.testCommand !== null
       || config.runTracking?.runsDir !== '.plan2agent/runs'
+      || !claudeSettings.permissions?.deny?.includes('Edit(~/**)')
+      || claudeSettings.hooks?.PreToolUse?.[0]?.matcher !== 'Write|Edit|Bash'
+      || claudeSettings.hooks?.PreToolUse?.[0]?.hooks?.[0]?.command !== 'node .claude/hooks/p2a-confine-workspace.mjs'
+      || (expectedSandboxEnabled && claudeLocalSettings.sandbox?.filesystem?.allowWrite?.[0] !== '.')
+      || (!expectedSandboxEnabled && Object.keys(claudeLocalSettings).length !== 0)
       || !gitignore.includes('.plan2agent/runs/')
       || !gitignore.includes('artifacts/**/runs/')
+      || !gitignore.includes('.claude/settings.local.json')
       || !gitignore.includes('node_modules/')
       || ignoredPlans.length
     ) {
       console.error('scaffold output mismatch');
-      console.error(JSON.stringify({ missingFiles, manifest, config, ignoredPlans }, null, 2));
+      console.error(JSON.stringify({ missingFiles, manifest, config, claudeSettings, claudeLocalSettings, ignoredPlans }, null, 2));
       return { status: 1, checks };
     }
 

@@ -446,6 +446,12 @@ function selectedToolAssetSpecs(toolTargets) {
         target: path.join('.claude', 'agents'),
         filter: isP2aTopLevelAsset,
       },
+      {
+        key: 'claude-hooks',
+        source: path.join('.claude', 'hooks'),
+        target: path.join('.claude', 'hooks'),
+        filter: isP2aTopLevelAsset,
+      },
     );
   }
   if (toolTargets.includes('gemini')) {
@@ -866,7 +872,72 @@ target/
 .env
 .env.*
 !.env.example
+
+# Claude Code local machine settings
+.claude/settings.local.json
 `;
+}
+
+function buildClaudeProjectSettings() {
+  return {
+    permissions: {
+      deny: [
+        'Edit(~/**)',
+        'Write(~/**)',
+        'Edit(//etc/**)',
+        'Write(//etc/**)',
+        'Edit(//bin/**)',
+        'Write(//bin/**)',
+        'Edit(//sbin/**)',
+        'Write(//sbin/**)',
+        'Edit(//usr/**)',
+        'Write(//usr/**)',
+        'Edit(//var/**)',
+        'Write(//var/**)',
+        'Edit(//System/**)',
+        'Write(//System/**)',
+        'Edit(//Applications/**)',
+        'Write(//Applications/**)',
+        'Edit(//Program Files/**)',
+        'Write(//Program Files/**)',
+        'Edit(//Program Files (x86)/**)',
+        'Write(//Program Files (x86)/**)',
+        'Edit(//Windows/**)',
+        'Write(//Windows/**)',
+        'Bash(rm -rf /)',
+        'Bash(rm -rf ~)',
+        'Bash(rm -rf ~/**)',
+        'Bash(sudo *)',
+      ],
+    },
+    hooks: {
+      PreToolUse: [
+        {
+          matcher: 'Write|Edit|Bash',
+          hooks: [
+            {
+              type: 'command',
+              command: 'node .claude/hooks/p2a-confine-workspace.mjs',
+            },
+          ],
+        },
+      ],
+    },
+  };
+}
+
+function buildClaudeLocalSettings() {
+  if (process.platform === 'darwin' || process.platform === 'linux') {
+    return {
+      sandbox: {
+        enabled: true,
+        filesystem: {
+          allowWrite: ['.'],
+        },
+      },
+    };
+  }
+  return {};
 }
 
 function renderPlan2AgentGuide() {
@@ -925,6 +996,10 @@ function buildScaffoldPlan(args, targetRoot, createdAt = new Date().toISOString(
       args.tools.length ? `AI tool assets copied for: ${args.tools.join(', ')}` : 'AI tool assets not requested',
     ],
   };
+  if (args.tools.includes('claude')) {
+    pushGeneratedJson(plan, targetRoot, path.join('.claude', 'settings.json'), buildClaudeProjectSettings());
+    pushGeneratedJson(plan, targetRoot, path.join('.claude', 'settings.local.json'), buildClaudeLocalSettings());
+  }
   pushGeneratedJson(plan, targetRoot, path.join('.plan2agent', 'manifest.json'), manifest);
   pushGeneratedJson(plan, targetRoot, path.join('.plan2agent', 'project.config.json'), buildProjectConfig(targetRoot, { enabled: false }, { emptyCommands: true }));
   pushGeneratedText(plan, targetRoot, '.gitignore', renderProjectGitignore());
