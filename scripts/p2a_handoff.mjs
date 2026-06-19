@@ -843,7 +843,7 @@ function pushTeamBigFiveAdapter(plan, targetRoot, args) {
 }
 
 
-const SCAFFOLD_SCRIPT_FILES = ['p2a_iteration.mjs', 'p2a_tasks.mjs', 'p2a_runs.mjs', 'p2a_iteration_state.mjs', 'validate_artifacts.mjs'];
+const SCAFFOLD_SCRIPT_FILES = ['p2a_iteration.mjs', 'p2a_tasks.mjs', 'p2a_runs.mjs', 'p2a_run_paths.mjs', 'p2a_iteration_state.mjs', 'validate_artifacts.mjs'];
 const SCAFFOLD_SCHEMA_FILES = ['intake.schema.json', 'spec.schema.json', 'task-graph.schema.json', 'task-context.schema.json', 'review.schema.json', 'run.schema.json', 'run-index.schema.json', 'skill-proposal.schema.json'];
 
 
@@ -1098,6 +1098,7 @@ function buildPlan(paths, args, artifactsRoot, targetRoot, sourceInfo, options =
 
   pushArtifact(plan, path.join(ROOT, 'scripts', 'p2a_tasks.mjs'), targetRoot, path.join('scripts', 'p2a_tasks.mjs'));
   pushArtifact(plan, path.join(ROOT, 'scripts', 'p2a_runs.mjs'), targetRoot, path.join('scripts', 'p2a_runs.mjs'));
+  pushArtifact(plan, path.join(ROOT, 'scripts', 'p2a_run_paths.mjs'), targetRoot, path.join('scripts', 'p2a_run_paths.mjs'));
   pushArtifact(plan, path.join(ROOT, 'scripts', 'p2a_iteration_state.mjs'), targetRoot, path.join('scripts', 'p2a_iteration_state.mjs'));
   pushArtifact(plan, path.join(ROOT, 'scripts', 'validate_artifacts.mjs'), targetRoot, path.join('scripts', 'validate_artifacts.mjs'));
   for (const schemaFile of ['intake.schema.json', 'spec.schema.json', 'task-graph.schema.json', 'task-context.schema.json', 'review.schema.json', 'run.schema.json', 'run-index.schema.json', 'skill-proposal.schema.json']) {
@@ -1115,12 +1116,13 @@ function buildPlan(paths, args, artifactsRoot, targetRoot, sourceInfo, options =
   const toolFiles = [
     'scripts/p2a_tasks.mjs',
     'scripts/p2a_runs.mjs',
+    'scripts/p2a_run_paths.mjs',
     'scripts/p2a_iteration_state.mjs',
     'scripts/validate_artifacts.mjs',
     ...toolAssetPlan.files,
     ...teamBigFivePlan.files,
   ];
-  const includedTools = ['p2a_tasks', 'p2a_runs', 'p2a_iteration_state', 'validate_artifacts'];
+  const includedTools = ['p2a_tasks', 'p2a_runs', 'p2a_run_paths', 'p2a_iteration_state', 'validate_artifacts'];
   for (const target of args.tools) includedTools.push(`p2a_${target}_assets`);
   if (teamBigFivePlan.enabled) includedTools.push('team_bigfive_adapter');
 
