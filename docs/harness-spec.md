@@ -130,6 +130,8 @@ scripts/check_cli_parity.mjs     # mirror drift check
 scripts/validate_artifacts.mjs   # schema, gate, and graph validation
 scripts/run_fixtures.mjs         # fixture/golden validation
 scripts/p2a_tasks.mjs            # task status and dependency management CLI
+scripts/p2a_runs.mjs             # task run log and verification tracking CLI
+scripts/p2a_execute.mjs          # supervised single-task lifecycle runner
 ```
 
 구조 판단:
@@ -225,6 +227,7 @@ Gemini target fields use the documented subagent keys `kind`, `tools`, `temperat
 - 완료: task 상태와 의존성 관리는 `scripts/p2a_tasks.mjs`로 제공한다.
 - CLI mirror drift check와 fixture runner의 CI 연결은 사용자 관리 항목으로 둔다.
 - 완료: `p2a_runs.mjs`로 파일 기반 agent 실행 로그, branch/worktree 격리 기준, changed files, verification 결과를 기록한다. PTY 기반 agent 자동 실행과 PR 생성은 후속이다.
+- 완료: `p2a_execute.mjs`로 ready task 1건의 plan/start/finish/status를 묶는 Phase 1 감독형 실행기를 제공한다. Codex/Claude 구현 세션 자체는 foreground 감독형으로 유지한다.
 
 ## 15. 공식 레퍼런스
 

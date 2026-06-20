@@ -18,6 +18,7 @@ const VALIDATOR = path.join(ROOT, 'scripts', 'validate_artifacts.mjs');
 const ITERATION_CLI = path.join(ROOT, 'scripts', 'p2a_iteration.mjs');
 const TASKS_CLI = path.join(ROOT, 'scripts', 'p2a_tasks.mjs');
 const RUNS_CLI = path.join(ROOT, 'scripts', 'p2a_runs.mjs');
+const EXECUTE_CLI = path.join(ROOT, 'scripts', 'p2a_execute.mjs');
 const HANDOFF_CLI = path.join(ROOT, 'scripts', 'p2a_handoff.mjs');
 
 function runValidator(args) {
@@ -36,6 +37,10 @@ function runRuns(args) {
   return spawnSync(process.execPath, [RUNS_CLI, ...args], { cwd: ROOT, encoding: 'utf8' });
 }
 
+function runExecute(args) {
+  return spawnSync(process.execPath, [EXECUTE_CLI, ...args], { cwd: ROOT, encoding: 'utf8' });
+}
+
 function runHandoff(args) {
   return spawnSync(process.execPath, [HANDOFF_CLI, ...args], { cwd: ROOT, encoding: 'utf8' });
 }
@@ -46,6 +51,10 @@ function runTargetTasks(targetRoot, args) {
 
 function runTargetRuns(targetRoot, args) {
   return spawnSync(process.execPath, [path.join(targetRoot, 'scripts', 'p2a_runs.mjs'), ...args], { cwd: targetRoot, encoding: 'utf8' });
+}
+
+function runTargetExecute(targetRoot, args) {
+  return spawnSync(process.execPath, [path.join(targetRoot, 'scripts', 'p2a_execute.mjs'), ...args], { cwd: targetRoot, encoding: 'utf8' });
 }
 
 function runTargetIteration(targetRoot, args) {
@@ -144,7 +153,7 @@ function validateScaffoldFixtureCase() {
       return { status: failureStatus(result), checks };
     }
 
-    const expectedScripts = ['p2a_iteration.mjs', 'p2a_tasks.mjs', 'p2a_runs.mjs', 'p2a_run_paths.mjs', 'p2a_iteration_state.mjs', 'validate_artifacts.mjs']
+    const expectedScripts = ['p2a_iteration.mjs', 'p2a_tasks.mjs', 'p2a_runs.mjs', 'p2a_execute.mjs', 'p2a_run_paths.mjs', 'p2a_iteration_state.mjs', 'validate_artifacts.mjs']
       .map((file) => path.join('scripts', file));
     const expectedSchemas = ['intake.schema.json', 'spec.schema.json', 'task-graph.schema.json', 'task-context.schema.json', 'review.schema.json', 'run.schema.json', 'run-index.schema.json', 'skill-proposal.schema.json']
       .map((file) => path.join('schemas', file));
@@ -275,6 +284,7 @@ function validateE2eFixtureCases() {
       if (
         !existsSync(path.join(targetRoot, 'scripts', 'p2a_iteration_state.mjs'))
         || !existsSync(path.join(targetRoot, 'scripts', 'p2a_runs.mjs'))
+        || !existsSync(path.join(targetRoot, 'scripts', 'p2a_execute.mjs'))
         || !existsSync(path.join(targetRoot, 'scripts', 'p2a_run_paths.mjs'))
         || !existsSync(path.join(targetRoot, 'schemas', 'task-context.schema.json'))
         || !existsSync(path.join(targetRoot, 'schemas', 'run.schema.json'))
@@ -301,6 +311,14 @@ function validateE2eFixtureCases() {
       checks += 1;
       if (result.status !== 0 || !result.stdout.includes('runId')) {
         console.error(`greenfield handoff target p2a_runs execution failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: failureStatus(result), checks };
+      }
+
+      result = runTargetExecute(targetRoot, ['plan', '--graph', path.join(targetRoot, '.plan2agent', 'artifacts', 'task-graph.json'), '--task', 'task-001', '--run-id', 'run-target-execute-plan']);
+      checks += 1;
+      if (result.status !== 0 || !result.stdout.includes('Plan2Agent supervised task execution')) {
+        console.error(`greenfield handoff target p2a_execute execution failed: ${caseData.id}`);
         writeResultOutput(result);
         return { status: failureStatus(result), checks };
       }
@@ -337,9 +355,11 @@ function validateE2eFixtureCases() {
         || !toolManifest.includedTools.includes('p2a_codex_assets')
         || !toolManifest.includedTools.includes('p2a_gemini_assets')
         || !toolManifest.includedTools.includes('p2a_runs')
+        || !toolManifest.includedTools.includes('p2a_execute')
         || !toolManifest.toolFiles.includes('.agents/skills/p2a-harness/SKILL.md')
         || !toolManifest.toolFiles.includes('.gemini/commands/p2a/harness.toml')
         || !toolManifest.toolFiles.includes('scripts/p2a_runs.mjs')
+        || !toolManifest.toolFiles.includes('scripts/p2a_execute.mjs')
         || !toolManifest.toolFiles.includes('scripts/p2a_run_paths.mjs')
         || !toolManifest.schemaFiles.includes('schemas/run.schema.json')
       ) {
@@ -576,6 +596,176 @@ function validateIterationCurrentFixtureCases() {
         return { status: 1, checks };
       }
 
+      const executeGraphPath = path.join(tempRoot, 'p2a-execute', 'gate-c-task-graph', 'task-graph.json');
+      mkdirSync(path.dirname(executeGraphPath), { recursive: true });
+      writeFileSync(executeGraphPath, readFileSync(state.taskGraphPath, 'utf8'), 'utf8');
+      result = runExecute([
+        'plan',
+        '--graph',
+        executeGraphPath,
+        '--spec',
+        state.specPath,
+        '--task',
+        'task-001',
+        '--run-id',
+        'run-execute-fixture',
+      ]);
+      checks += 1;
+      if (result.status !== 0 || !result.stdout.includes('Plan2Agent supervised task execution')) {
+        console.error(`p2a_execute plan fixture check failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: failureStatus(result), checks };
+      }
+
+      result = runExecute([
+        'start',
+        '--graph',
+        executeGraphPath,
+        '--spec',
+        state.specPath,
+        '--task',
+        'task-001',
+        '--run-id',
+        'run-execute-fixture',
+        '--agent-tool',
+        'codex',
+        '--workspace',
+        artifactRoot,
+        '--workspace-ref',
+        'fixture-workspace',
+      ]);
+      checks += 1;
+      if (result.status !== 0 || !result.stdout.includes('Manual launcher prompt')) {
+        console.error(`p2a_execute start fixture check failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: failureStatus(result), checks };
+      }
+
+      result = runExecute([
+        'finish',
+        '--graph',
+        executeGraphPath,
+        '--run-id',
+        'run-execute-fixture',
+        '--test-command',
+        `"${process.execPath}" -e "process.exit(0)"`,
+        '--changed-file',
+        'src/execute-fixture.ts',
+      ]);
+      checks += 1;
+      if (result.status !== 0 || !result.stdout.includes('task-001 status is now done')) {
+        console.error(`p2a_execute finish fixture check failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: failureStatus(result), checks };
+      }
+      const executeFinishedGraph = JSON.parse(readFileSync(executeGraphPath, 'utf8'));
+      const executeFinishedRun = JSON.parse(readFileSync(path.join(tempRoot, 'p2a-execute', 'runs', 'run-execute-fixture.json'), 'utf8'));
+      if (
+        executeFinishedGraph.tasks.find((task) => task.id === 'task-001')?.status !== 'done'
+        || executeFinishedRun.status !== 'finished'
+        || executeFinishedRun.changedFiles.join(',') !== 'src/execute-fixture.ts'
+      ) {
+        console.error(`p2a_execute finish wrote unexpected state: ${caseData.id}`);
+        console.error(JSON.stringify({ executeFinishedGraph, executeFinishedRun }, null, 2));
+        return { status: 1, checks };
+      }
+
+      const executeFailedGraphPath = path.join(tempRoot, 'p2a-execute-failed', 'gate-c-task-graph', 'task-graph.json');
+      mkdirSync(path.dirname(executeFailedGraphPath), { recursive: true });
+      writeFileSync(executeFailedGraphPath, readFileSync(state.taskGraphPath, 'utf8'), 'utf8');
+      result = runExecute([
+        'start',
+        '--graph',
+        executeFailedGraphPath,
+        '--spec',
+        state.specPath,
+        '--task',
+        'task-001',
+        '--run-id',
+        'run-execute-fixture-failed',
+        '--agent-tool',
+        'codex',
+        '--workspace',
+        artifactRoot,
+        '--workspace-ref',
+        'fixture-workspace',
+      ]);
+      checks += 1;
+      if (result.status !== 0) {
+        console.error(`p2a_execute failed-path start fixture check failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: failureStatus(result), checks };
+      }
+
+      result = runExecute([
+        'finish',
+        '--graph',
+        executeFailedGraphPath,
+        '--run-id',
+        'run-execute-fixture-failed',
+        '--test-command',
+        `"${process.execPath}" -e "process.exit(1)"`,
+      ]);
+      checks += 1;
+      const executeFailedOutput = `${result.stdout ?? ''}${result.stderr ?? ''}`;
+      if (result.status !== 1 || !executeFailedOutput.includes('- blockReason: verification_failed')) {
+        console.error(`p2a_execute failed-path finish fixture check failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: 1, checks };
+      }
+
+      const executeSkippedGraphPath = path.join(tempRoot, 'p2a-execute-not-in-progress', 'gate-c-task-graph', 'task-graph.json');
+      mkdirSync(path.dirname(executeSkippedGraphPath), { recursive: true });
+      writeFileSync(executeSkippedGraphPath, readFileSync(state.taskGraphPath, 'utf8'), 'utf8');
+      result = runRuns([
+        'start',
+        '--graph',
+        executeSkippedGraphPath,
+        '--task',
+        'task-001',
+        '--run-id',
+        'run-execute-fixture-not-in-progress',
+        '--agent-tool',
+        'codex',
+        '--workspace',
+        artifactRoot,
+        '--workspace-ref',
+        'fixture-workspace',
+      ]);
+      checks += 1;
+      if (result.status !== 0) {
+        console.error(`p2a_execute not-in-progress fixture run start failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: failureStatus(result), checks };
+      }
+
+      result = runExecute([
+        'finish',
+        '--graph',
+        executeSkippedGraphPath,
+        '--run-id',
+        'run-execute-fixture-not-in-progress',
+        '--test-command',
+        `"${process.execPath}" -e "process.exit(0)"`,
+      ]);
+      checks += 1;
+      const executeSkippedOutput = `${result.stdout ?? ''}${result.stderr ?? ''}`;
+      if (result.status !== 1 || !executeSkippedOutput.includes('task transition skipped: task-001 must be in_progress')) {
+        console.error(`p2a_execute not-in-progress finish fixture check failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: 1, checks };
+      }
+      const executeSkippedGraph = JSON.parse(readFileSync(executeSkippedGraphPath, 'utf8'));
+      const executeSkippedRun = JSON.parse(readFileSync(path.join(tempRoot, 'p2a-execute-not-in-progress', 'runs', 'run-execute-fixture-not-in-progress.json'), 'utf8'));
+      if (
+        executeSkippedGraph.tasks.find((task) => task.id === 'task-001')?.status !== 'todo'
+        || executeSkippedRun.status !== 'finished'
+      ) {
+        console.error(`p2a_execute not-in-progress fixture wrote unexpected state: ${caseData.id}`);
+        console.error(JSON.stringify({ executeSkippedGraph, executeSkippedRun }, null, 2));
+        return { status: 1, checks };
+      }
+
       result = runTasks(['start', '--artifacts', artifactRoot, 'task-001']);
       checks += 1;
       if (result.status !== 0) {
@@ -661,6 +851,79 @@ function validateIterationCurrentFixtureCases() {
         console.error(`p2a_runs finish fixture check failed: ${caseData.id}`);
         writeResultOutput(result);
         return { status: failureStatus(result), checks };
+      }
+
+      const collectGitWorkspace = path.join(tempRoot, 'collect-git-workspace');
+      mkdirSync(path.join(collectGitWorkspace, 'src'), { recursive: true });
+      writeFileSync(path.join(collectGitWorkspace, 'src', 'tracked.txt'), 'before\n', 'utf8');
+      result = spawnSync('git', ['init'], { cwd: collectGitWorkspace, encoding: 'utf8' });
+      checks += 1;
+      if (result.status !== 0) {
+        console.error(`collect-git fixture git init failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: failureStatus(result), checks };
+      }
+      result = spawnSync('git', ['add', 'src/tracked.txt'], { cwd: collectGitWorkspace, encoding: 'utf8' });
+      checks += 1;
+      if (result.status !== 0) {
+        console.error(`collect-git fixture git add failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: failureStatus(result), checks };
+      }
+      result = spawnSync('git', ['-c', 'user.email=p2a@example.invalid', '-c', 'user.name=P2A Fixture', 'commit', '-m', 'initial'], { cwd: collectGitWorkspace, encoding: 'utf8' });
+      checks += 1;
+      if (result.status !== 0) {
+        console.error(`collect-git fixture git commit failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: failureStatus(result), checks };
+      }
+      writeFileSync(path.join(collectGitWorkspace, 'src', 'tracked.txt'), 'after\n', 'utf8');
+
+      const collectGitRunId = 'run-fixture-collect-git';
+      result = runRuns([
+        'start',
+        '--artifacts',
+        artifactRoot,
+        '--task',
+        'task-001',
+        '--run-id',
+        collectGitRunId,
+        '--agent-tool',
+        'codex',
+        '--workspace',
+        collectGitWorkspace,
+        '--workspace-ref',
+        'collect-git-workspace',
+      ]);
+      checks += 1;
+      if (result.status !== 0) {
+        console.error(`p2a_runs collect-git fixture start failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: failureStatus(result), checks };
+      }
+      result = runRuns([
+        'finish',
+        '--artifacts',
+        artifactRoot,
+        '--run-id',
+        collectGitRunId,
+        '--status',
+        'finished',
+        '--workspace',
+        collectGitWorkspace,
+        '--collect-git',
+      ]);
+      checks += 1;
+      if (result.status !== 0 || !result.stdout.includes('- changedFiles: 1')) {
+        console.error(`p2a_runs collect-git fixture finish failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: failureStatus(result), checks };
+      }
+      const collectGitRun = JSON.parse(readFileSync(path.join(runsDir, `${collectGitRunId}.json`), 'utf8'));
+      if (collectGitRun.changedFiles.join(',') !== 'src/tracked.txt') {
+        console.error(`p2a_runs collect-git fixture wrote unexpected changed files: ${caseData.id}`);
+        console.error(JSON.stringify(collectGitRun, null, 2));
+        return { status: 1, checks };
       }
 
       const failedRunId = 'run-fixture-failed';
@@ -1427,6 +1690,7 @@ function validateIterationCurrentFixtureCases() {
         || !existsSync(targetMaintenanceGraphPath)
         || !existsSync(path.join(iterationTargetRoot, 'scripts', 'p2a_iteration_state.mjs'))
         || !existsSync(path.join(iterationTargetRoot, 'scripts', 'p2a_runs.mjs'))
+        || !existsSync(path.join(iterationTargetRoot, 'scripts', 'p2a_execute.mjs'))
         || !existsSync(path.join(iterationTargetRoot, 'schemas', 'run-index.schema.json'))
       ) {
         console.error(`iteration handoff did not copy active artifacts/current-spec/tools: ${caseData.id}`);
@@ -1443,7 +1707,9 @@ function validateIterationCurrentFixtureCases() {
         || targetManifest.currentSpecFile !== '.plan2agent/current-spec.json'
         || JSON.stringify(targetManifest.maintenanceFiles) !== JSON.stringify(['.plan2agent/maintenance/task-graph.json'])
         || !targetManifest.includedTools.includes('p2a_runs')
+        || !targetManifest.includedTools.includes('p2a_execute')
         || !targetManifest.toolFiles.includes('scripts/p2a_runs.mjs')
+        || !targetManifest.toolFiles.includes('scripts/p2a_execute.mjs')
         || !targetManifest.schemaFiles.includes('schemas/task-context.schema.json')
         || !targetManifest.schemaFiles.includes('schemas/run-index.schema.json')
         || !targetManifest.schemaFiles.includes('schemas/skill-proposal.schema.json')
@@ -1474,6 +1740,14 @@ function validateIterationCurrentFixtureCases() {
       checks += 1;
       if (result.status !== 0 || !result.stdout.includes('runId')) {
         console.error(`iteration handoff target p2a_runs execution failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: failureStatus(result), checks };
+      }
+
+      result = runTargetExecute(iterationTargetRoot, ['status', '--graph', targetTaskGraphPath, '--task', 'task-001']);
+      checks += 1;
+      if (result.status !== 0 || !result.stdout.includes('Plan2Agent execution status')) {
+        console.error(`iteration handoff target p2a_execute execution failed: ${caseData.id}`);
         writeResultOutput(result);
         return { status: failureStatus(result), checks };
       }

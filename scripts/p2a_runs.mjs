@@ -605,18 +605,18 @@ function runVerificationCommand(spec, workspacePath) {
 }
 
 function collectGitChangedFiles(workspacePath) {
-  const result = gitCommandResult(['status', '--short'], workspacePath);
+  const result = gitCommandResult(['status', '--porcelain=v1'], workspacePath);
   if (result.status !== 0) {
     throw new Error(`git status failed while collecting changed files: ${gitResultToTail(result)}`);
   }
   return result.stdout
     .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean)
+    .filter((line) => line.trim())
     .map((line) => {
-      const renamed = line.match(/^.. (.+?) -> (.+)$/);
+      const pathField = line.slice(3);
+      const renamed = pathField.match(/^(.+?) -> (.+)$/);
       if (renamed) return renamed[2];
-      return line.slice(3).trim();
+      return pathField.trim();
     })
     .filter(Boolean);
 }

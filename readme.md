@@ -156,6 +156,8 @@ scripts/
   validate_artifacts.mjs
   run_fixtures.mjs
   p2a_tasks.mjs
+  p2a_runs.mjs
+  p2a_execute.mjs
 ```
 
 
@@ -389,13 +391,13 @@ node scripts/p2a_tasks.mjs <command> --graph artifacts/<project_id>/gate-c-task-
 - `block <task-id>`: task를 `blocked`로 표시한다.
 - `todo <task-id>`: task를 `todo`로 되돌린다.
 
-개발 진행 루프:
+감독형 개발 진행 루프:
 
-1. 기획 완료 후 `node scripts/p2a_tasks.mjs ready --graph artifacts/<project_id>/gate-c-task-graph/task-graph.json`로 실행 가능한 task를 고른다.
-2. `node scripts/p2a_tasks.mjs prompt --graph artifacts/<project_id>/gate-c-task-graph/task-graph.json <task-id>`로 실행 prompt를 만든다.
-3. 해당 prompt를 Claude Code, Codex, Gemini CLI 같은 agent CLI에 붙여넣어 구현 작업을 수행한다.
-4. 작업을 시작할 때 `start`, 검증 후 `done`, 막히면 `block`으로 상태를 기록한다.
-5. 각 전이는 저장 전에 task graph 전체를 `scripts/validate_artifacts.mjs`의 검증 로직으로 재검증하므로 잘못된 graph는 기록되지 않는다.
+1. 기획 완료 후 `node scripts/p2a_execute.mjs plan --graph artifacts/<project_id>/gate-c-task-graph/task-graph.json --task <task-id>`로 단일 task 실행 계획을 확인한다.
+2. `node scripts/p2a_execute.mjs start --graph artifacts/<project_id>/gate-c-task-graph/task-graph.json --task <task-id> --agent-tool codex`로 run을 열고 task를 `in_progress`로 바꾼다.
+3. 출력된 manual launcher prompt를 Claude Code, Codex, Gemini CLI 같은 agent CLI에 붙여넣어 구현 작업을 수행한다.
+4. `node scripts/p2a_execute.mjs finish --graph artifacts/<project_id>/gate-c-task-graph/task-graph.json --run-id <run-id> --test --lint --typecheck`로 검증, run finish, task `done`/`blocked` 전이를 기록한다.
+5. 세부 제어가 필요하면 `p2a_tasks.mjs`와 `p2a_runs.mjs`를 직접 사용한다. 각 전이는 저장 전에 task graph 전체를 `scripts/validate_artifacts.mjs`의 검증 로직으로 재검증하므로 잘못된 graph는 기록되지 않는다.
 
 ## Task Graph 기준
 
@@ -445,3 +447,4 @@ node scripts/p2a_tasks.mjs <command> --graph artifacts/<project_id>/gate-c-task-
 
 - CLI asset drift check와 fixture runner의 CI 연결은 사용자 관리 항목으로 유지
 - 완료: `p2a_runs.mjs` 기반 agent 실행 로그, branch/worktree 격리 기준, 결과 diff 연결 sidecar 추가. PTY 기반 agent 자동 실행과 PR 생성은 후속.
+- 완료: `p2a_execute.mjs` 기반 감독형 단일 task 실행기 Phase 1 추가. PTY+Electron 감독 GUI는 후속.

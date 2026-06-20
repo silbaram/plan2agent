@@ -33,8 +33,8 @@
 | --- | --- | --- |
 | baseline-aware 질문 재생성 UX | Gate A/B delta draft는 가능 | 기존 사용자 답변 재사용, 질문 재생성/재처분 UX 고도화 |
 | maintenance 운영 UX | maintenance task graph 생성/검증/handoff 가능 | maintenance draft 승격, 별도 사용자 UX |
-| 개발 실행 계층 (개발팀 AI agent) | 부분 구현 — `p2a-implementer`(Codex workspace-write·Claude deny+hook+macOS sandbox confinement), 독립 `p2a-performance-monitor`, `p2a-skill-curator`+proposal schema, 실패 분류(C-①), 자가발전 1사이클. 상세 `plans/02` | 감독형 단일 task 실행기(semi-auto→PTY+Electron), `p2a-dev-orchestrator` |
-| agent 자동 실행 | 실행 prompt·run log·실패 분류(C-①) 가능. 실행 모드는 **감독형 확정**(구독 요금제) | 감독형 실행기(semi-auto→PTY+Electron) 미구현; 무인 실행·scheduler는 전용 API 키 도입 시 |
+| 개발 실행 계층 (개발팀 AI agent) | 부분 구현 — `p2a-implementer`(Codex workspace-write·Claude deny+hook+macOS sandbox confinement), 독립 `p2a-performance-monitor`, `p2a-skill-curator`+proposal schema, 실패 분류(C-①), 자가발전 1사이클, 감독형 단일 task 실행기 Phase 1. 상세 `plans/02` | PTY+Electron 감독 GUI, `p2a-dev-orchestrator` |
+| agent 자동 실행 | 실행 prompt·run log·실패 분류(C-①)와 Phase 1 semi-auto 실행 가능. 실행 모드는 **감독형 확정**(구독 요금제) | PTY+Electron 감독 GUI 미구현; 무인 실행·scheduler는 전용 API 키 도입 시 |
 | PR/리뷰 연동 | 변경 파일과 검증 결과 기록 가능 | PR 생성, 리뷰 상태 연동, 변경 요약 자동화 |
 | code-aware 고도화 | spec 기반 semantic diff는 가능 | 기존 코드베이스 분석 기반 spec 역생성, 결과 diff 자동 병합 |
 | 제품 UI/Task Store | 파일 기반 CLI가 정본 | Jira식 DB/API/UI, 외부 issue tracker adapter |
@@ -773,8 +773,8 @@ Plan2Agent 개발은 아래 흐름을 기본 협업 방식으로 둔다.
 
 | 단계 | 항목 |
 | --- | --- |
-| v2 | 개발 실행 계층 구성 **(부분 구현)**: `p2a-implementer`(Codex write·Claude confinement), 검증 `p2a-performance-monitor`, skill 큐레이션 `p2a-skill-curator`, 실패 분류(C-①), 자가발전 1사이클 완료. 남은: 조율 `p2a-dev-orchestrator`, 감독형 실행기. planning harness는 read-only 유지. 상세 `plans/02-development-team-ai-agent.md` |
-| v2 | 감독형 agent 실행기(semi-auto → PTY+Electron 감독 GUI). 무인(headless) 실행·세션 감시는 전용 API 키 도입 시 (LD-9, `plans/02`) |
+| v2 | 개발 실행 계층 구성 **(부분 구현)**: `p2a-implementer`(Codex write·Claude confinement), 검증 `p2a-performance-monitor`, skill 큐레이션 `p2a-skill-curator`, 실패 분류(C-①), 자가발전 1사이클, 감독형 단일 task 실행기 Phase 1 완료. 남은: PTY+Electron 감독 GUI, 조율 `p2a-dev-orchestrator`. planning harness는 read-only 유지. 상세 `plans/02-development-team-ai-agent.md` |
+| v2 | 감독형 agent 실행기(Phase 1 semi-auto 완료 → Phase 2 PTY+Electron 감독 GUI). 무인(headless) 실행·세션 감시는 전용 API 키 도입 시 (LD-9, `plans/02`) |
 | v2 | 실패 task 재시도 정책 자동화 |
 | v2 | PR 생성 및 리뷰 상태 연동 |
 | v2 | 병렬 실행 scheduler |
@@ -796,7 +796,7 @@ Plan2Agent 개발은 아래 흐름을 기본 협업 방식으로 둔다.
 7. §8-3의 agent 실행 로그, worktree/branch 격리 기준, 결과 diff 연결의 파일 기반 1차 구현은 `p2a_runs.mjs`로 완료했다.
 8. 사용자용 문서 진입점과 CLI/하네스/반복 계약 문서를 `docs/` 아래에 정리했다.
 9. Gate B 승인 audit와 Technology Reconnaissance 근거 검증을 하네스에 반영하고, status.md 구조(Progress/1~5 섹션/Gate A-D) 검증을 추가했다. 기술 선택 false-positive를 막는 negation 처리와 negative fixture(`fixtures/_negative/technology-recon`)를 포함한다.
-10. 개발 실행 계층(개발팀 AI agent)을 부분 구현했다: `p2a-implementer`(Codex workspace-write·Claude deny+hook+macOS sandbox confinement), 독립 `p2a-performance-monitor`, `p2a-skill-curator`+proposal schema, 실패 분류(C-①), 자가발전 1사이클. 실행 모드는 구독 요금제로 인해 **감독형**으로 확정(무인은 전용 API 키 시). Gemini는 read-only 고정. 상세·결정은 `plans/02-development-team-ai-agent.md`.
+10. 개발 실행 계층(개발팀 AI agent)을 부분 구현했다: `p2a-implementer`(Codex workspace-write·Claude deny+hook+macOS sandbox confinement), 독립 `p2a-performance-monitor`, `p2a-skill-curator`+proposal schema, 실패 분류(C-①), 자가발전 1사이클, 감독형 단일 task 실행기 Phase 1(`p2a_execute.mjs`). 실행 모드는 구독 요금제로 인해 **감독형**으로 확정(무인은 전용 API 키 시). Gemini는 read-only 고정. 상세·결정은 `plans/02-development-team-ai-agent.md`.
 
 부분 완료:
 
@@ -805,7 +805,7 @@ Plan2Agent 개발은 아래 흐름을 기본 협업 방식으로 둔다.
 
 다음 후보:
 
-1. 개발 실행 계층 **이어서 구현**: implementer/monitor/curator/C-①는 완료. 다음은 **감독형 단일 task 실행기 Phase 1(semi-auto, 기존 CLI)** → Phase 2(PTY+Electron 감독 GUI), 이어서 조율 `p2a-dev-orchestrator`. planning harness는 read-only 유지. 상세 `plans/02-development-team-ai-agent.md`.
+1. 개발 실행 계층 **이어서 구현**: implementer/monitor/curator/C-①와 **감독형 단일 task 실행기 Phase 1(`p2a_execute.mjs`)**는 완료. 다음은 **Phase 2(PTY+Electron 감독 GUI)**, 이어서 조율 `p2a-dev-orchestrator`. planning harness는 read-only 유지. 상세 `plans/02-development-team-ai-agent.md`.
 2. Gate D 이후 구조 선택 단계: planning이 handoff-ready가 되면 **반복 구조**(`p2a_iteration init`, 기본 권장)와 **단독 구조**(평면 `gate-*` 유지 + `--graph` 직접 구현) 중 사용자에게 명시적으로 묻는다. `p2a-harness`의 Approved planning output 모드와 `PLAN2AGENT.md`/`harness-guide`에 반영하되, 스킬은 init을 직접 실행하지 않고 명령만 안내한다(read-only 경계 유지).
 3. PTY+Electron 감독 GUI(감독형 실행기 Phase 2) — node-pty/xterm로 live watch+승인, 기존 CLI 구동. (무인 실행/scheduler는 전용 API 키 시)
 4. PR 생성 및 리뷰 상태 연동

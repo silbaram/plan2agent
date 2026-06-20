@@ -623,7 +623,7 @@ Use this skill only after Plan2Agent handoff has installed approved artifacts un
 ## Inputs
 
 - A Plan2Agent task id from \`.plan2agent/artifacts/task-graph.json\`.
-- The task prompt from \`node scripts/p2a_tasks.mjs prompt --graph .plan2agent/artifacts/task-graph.json <task-id>\`.
+- The task prompt from \`node scripts/p2a_execute.mjs start --graph .plan2agent/artifacts/task-graph.json --task <task-id>\` or \`node scripts/p2a_tasks.mjs prompt --graph .plan2agent/artifacts/task-graph.json <task-id>\`.
 - Optional verification commands from \`.plan2agent/project.config.json\`.
 
 ## Workflow
@@ -632,7 +632,7 @@ Use this skill only after Plan2Agent handoff has installed approved artifacts un
 2. Split the work into five lanes: coordination, implementation plan, code changes, review, and verification.
 3. Keep all work tied to the task id and source spec refs.
 4. Do not edit approved Plan2Agent artifacts except through the task/status CLIs.
-5. Track execution with \`node scripts/p2a_runs.mjs start/verify/finish\` so runId, changed files, verification, agent tool, and workspace reference are preserved.
+5. Track execution with \`node scripts/p2a_execute.mjs start/finish/status\` or the lower-level \`node scripts/p2a_runs.mjs start/verify/finish\` so runId, changed files, verification, agent tool, and workspace reference are preserved.
 6. Before marking the task done, run or request the configured test, lint, and typecheck commands when available.
 
 ## Output
@@ -653,7 +653,7 @@ Coordinate complex tasks through five lanes:
 - review: inspect behavioral regressions, missing tests, and scope drift.
 - verification: run or request test/lint/typecheck commands from project.config.json.
 
-Do not modify .plan2agent/artifacts/* directly. Use scripts/p2a_tasks.mjs for task state changes and scripts/p2a_runs.mjs for run start/verify/finish records. Do not run package install, destructive git commands, or external network operations unless the user explicitly approves them. When finished, report the run id, changed files, verification commands, results, and any remaining blockers. Target adapter: ${target}.`;
+Do not modify .plan2agent/artifacts/* directly. Use scripts/p2a_execute.mjs for supervised task lifecycle records, or scripts/p2a_tasks.mjs and scripts/p2a_runs.mjs for lower-level task state and run records. Do not run package install, destructive git commands, or external network operations unless the user explicitly approves them. When finished, report the run id, changed files, verification commands, results, and any remaining blockers. Target adapter: ${target}.`;
 }
 
 function tomlString(value) {
@@ -843,7 +843,7 @@ function pushTeamBigFiveAdapter(plan, targetRoot, args) {
 }
 
 
-const SCAFFOLD_SCRIPT_FILES = ['p2a_iteration.mjs', 'p2a_tasks.mjs', 'p2a_runs.mjs', 'p2a_run_paths.mjs', 'p2a_iteration_state.mjs', 'validate_artifacts.mjs'];
+const SCAFFOLD_SCRIPT_FILES = ['p2a_iteration.mjs', 'p2a_tasks.mjs', 'p2a_runs.mjs', 'p2a_execute.mjs', 'p2a_run_paths.mjs', 'p2a_iteration_state.mjs', 'validate_artifacts.mjs'];
 const SCAFFOLD_SCHEMA_FILES = ['intake.schema.json', 'spec.schema.json', 'task-graph.schema.json', 'task-context.schema.json', 'review.schema.json', 'run.schema.json', 'run-index.schema.json', 'skill-proposal.schema.json'];
 
 
@@ -982,6 +982,7 @@ This repository owns its Plan2Agent planning and development loop in-place.
 
 3. Develop from ready tasks and track execution:
 
+   - \`node scripts/p2a_execute.mjs plan|start|finish|status\`
    - \`node scripts/p2a_tasks.mjs ready|prompt|start|done\`
    - \`node scripts/p2a_runs.mjs start|verify|finish\`
 
@@ -1098,6 +1099,7 @@ function buildPlan(paths, args, artifactsRoot, targetRoot, sourceInfo, options =
 
   pushArtifact(plan, path.join(ROOT, 'scripts', 'p2a_tasks.mjs'), targetRoot, path.join('scripts', 'p2a_tasks.mjs'));
   pushArtifact(plan, path.join(ROOT, 'scripts', 'p2a_runs.mjs'), targetRoot, path.join('scripts', 'p2a_runs.mjs'));
+  pushArtifact(plan, path.join(ROOT, 'scripts', 'p2a_execute.mjs'), targetRoot, path.join('scripts', 'p2a_execute.mjs'));
   pushArtifact(plan, path.join(ROOT, 'scripts', 'p2a_run_paths.mjs'), targetRoot, path.join('scripts', 'p2a_run_paths.mjs'));
   pushArtifact(plan, path.join(ROOT, 'scripts', 'p2a_iteration_state.mjs'), targetRoot, path.join('scripts', 'p2a_iteration_state.mjs'));
   pushArtifact(plan, path.join(ROOT, 'scripts', 'validate_artifacts.mjs'), targetRoot, path.join('scripts', 'validate_artifacts.mjs'));
@@ -1116,13 +1118,14 @@ function buildPlan(paths, args, artifactsRoot, targetRoot, sourceInfo, options =
   const toolFiles = [
     'scripts/p2a_tasks.mjs',
     'scripts/p2a_runs.mjs',
+    'scripts/p2a_execute.mjs',
     'scripts/p2a_run_paths.mjs',
     'scripts/p2a_iteration_state.mjs',
     'scripts/validate_artifacts.mjs',
     ...toolAssetPlan.files,
     ...teamBigFivePlan.files,
   ];
-  const includedTools = ['p2a_tasks', 'p2a_runs', 'p2a_run_paths', 'p2a_iteration_state', 'validate_artifacts'];
+  const includedTools = ['p2a_tasks', 'p2a_runs', 'p2a_execute', 'p2a_run_paths', 'p2a_iteration_state', 'validate_artifacts'];
   for (const target of args.tools) includedTools.push(`p2a_${target}_assets`);
   if (teamBigFivePlan.enabled) includedTools.push('team_bigfive_adapter');
 
@@ -1582,9 +1585,9 @@ function argvValue(argv, option) {
 function printNextSteps(targetRoot) {
   console.log(`✅ 인계 완료 — ${targetRoot}`);
   console.log(`다음: cd ${targetRoot}`);
-  console.log('      node scripts/p2a_tasks.mjs ready --graph .plan2agent/artifacts/task-graph.json');
-  console.log('      node scripts/p2a_runs.mjs start --graph .plan2agent/artifacts/task-graph.json --task <task-id> --agent-tool <tool>');
-  console.log('      node scripts/p2a_runs.mjs verify --run-id <run-id>');
+  console.log('      node scripts/p2a_execute.mjs plan --graph .plan2agent/artifacts/task-graph.json --task <task-id>');
+  console.log('      node scripts/p2a_execute.mjs start --graph .plan2agent/artifacts/task-graph.json --task <task-id> --agent-tool <tool>');
+  console.log('      node scripts/p2a_execute.mjs finish --graph .plan2agent/artifacts/task-graph.json --run-id <run-id> --test --lint --typecheck');
 
   try {
     const config = JSON.parse(readFileSync(path.join(targetRoot, '.plan2agent', 'project.config.json'), 'utf8'));
