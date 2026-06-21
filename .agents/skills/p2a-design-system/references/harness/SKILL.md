@@ -1,3 +1,8 @@
+---
+name: harness-design-system
+description: Use when designing or implementing Harness UI screens, prototypes, and components for the Electron-based AI CLI orchestrator, including settings, palettes, dashboards, modals, agent-state visualizations, dot-character states, provider tints, and native-feeling app chrome.
+---
+
 # Harness Design System — Skill Manifest
 
 Use this design system when designing screens for **Harness**, the Electron-based AI CLI orchestrator (Codex / Claude Code / Gemini CLI / Aider hub).
