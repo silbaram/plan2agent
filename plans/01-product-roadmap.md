@@ -33,8 +33,8 @@
 | --- | --- | --- |
 | baseline-aware 질문 재생성 UX | Gate A/B delta draft는 가능 | 기존 사용자 답변 재사용, 질문 재생성/재처분 UX 고도화 |
 | maintenance 운영 UX | maintenance task graph 생성/검증/handoff 가능 | maintenance draft 승격, 별도 사용자 UX |
-| 개발 실행 계층 (개발팀 AI agent) | 부분 구현 — `p2a-implementer`(Codex workspace-write·Claude deny+hook+macOS sandbox confinement), 독립 `p2a-performance-monitor`, `p2a-skill-curator`+proposal schema, 실패 분류(C-①), 자가발전 1사이클, 감독형 단일 task 실행기 Phase 1. 상세 `plans/02` | PTY+Electron 감독 GUI, `p2a-dev-orchestrator` |
-| agent 자동 실행 | 실행 prompt·run log·실패 분류(C-①)와 Phase 1 semi-auto 실행 가능. 실행 모드는 **감독형 확정**(구독 요금제) | PTY+Electron 감독 GUI 미구현; 무인 실행·scheduler는 전용 API 키 도입 시 |
+| 개발 실행 계층 (개발팀 AI agent) | 부분 구현 — `p2a-implementer`(Codex workspace-write·Claude deny+hook+macOS sandbox confinement), 독립 `p2a-performance-monitor`, `p2a-skill-curator`+proposal schema, 실패 분류(C-①), 자가발전 1사이클, 감독형 단일 task 실행기 Phase 1. 상세 `plans/02`, GUI MVP 상세 `plans/03` | PTY+Electron 감독 GUI, `p2a-dev-orchestrator` |
+| agent 자동 실행 | 실행 prompt·run log·실패 분류(C-①)와 Phase 1 semi-auto 실행 가능. 실행 모드는 **감독형 확정**(구독 요금제) | PTY+Electron 감독 GUI 미구현(상세 `plans/03`); 무인 실행·scheduler는 전용 API 키 도입 시 |
 | PR/리뷰 연동 | 변경 파일과 검증 결과 기록 가능 | PR 생성, 리뷰 상태 연동, 변경 요약 자동화 |
 | code-aware 고도화 | spec 기반 semantic diff는 가능 | 기존 코드베이스 분석 기반 spec 역생성, 결과 diff 자동 병합 |
 | 제품 UI/Task Store | 파일 기반 CLI가 정본 | Jira식 DB/API/UI, 외부 issue tracker adapter |

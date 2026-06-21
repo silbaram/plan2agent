@@ -1,0 +1,206 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>harness · command palette</title>
+<link rel="stylesheet" href="../design-system/harness.css">
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+<script type="text/babel" src="../design-system/dot-character.jsx"></script>
+<style>
+  body { background: var(--bg-0); margin: 0; min-height: 100vh; }
+  .frame {
+    width: 1200px; max-width: 100%;
+    margin: 24px auto;
+    background: var(--bg-1);
+    border: 1px solid var(--border-1);
+    border-radius: var(--r-3);
+    overflow: hidden;
+    box-shadow: 0 24px 64px -16px rgb(0 0 0 / 0.5);
+    position: relative;
+    height: 760px;
+  }
+  .titlebar { display: flex; align-items: center; height: 36px; padding: 0 14px; background: var(--bg-0); border-bottom: 1px solid var(--border-1); gap: 14px; }
+  .lights { display: flex; gap: 7px; flex-shrink: 0; }
+  .lights span { width: 11px; height: 11px; border-radius: 50%; }
+
+  /* dimmed background underneath */
+  .dim {
+    position: absolute; inset: 36px 0 0 0;
+    background: var(--bg-1);
+    opacity: 0.6;
+    pointer-events: none;
+  }
+  .dim-content {
+    padding: 28px 36px;
+    color: var(--fg-3);
+    font-family: var(--font-mono); font-size: 12px;
+  }
+
+  .palette {
+    position: absolute;
+    top: 100px; left: 50%;
+    transform: translateX(-50%);
+    width: 720px;
+    background: var(--bg-2);
+    border: 1px solid var(--border-3);
+    border-radius: var(--r-3);
+    box-shadow: 0 32px 80px -16px rgb(0 0 0 / 0.7), 0 0 0 1px rgb(255 91 46 / 0.08);
+    overflow: hidden;
+  }
+  .pal-input-wrap {
+    display: flex; align-items: center; gap: 12px;
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--border-1);
+  }
+  .pal-prompt {
+    color: var(--accent); font-family: var(--font-mono); font-size: 14px; font-weight: 600;
+  }
+  .pal-input {
+    flex: 1; background: transparent; color: var(--fg-1); border: 0; outline: none;
+    font-family: var(--font-sans); font-size: 16px;
+  }
+  .pal-input::placeholder { color: var(--fg-4); }
+  .pal-shortcut { font-family: var(--font-mono); font-size: 11px; color: var(--fg-3); }
+
+  .pal-section {
+    padding: 8px 0;
+    border-bottom: 1px solid var(--border-1);
+  }
+  .pal-section:last-child { border-bottom: 0; }
+  .pal-label {
+    padding: 6px 20px 4px;
+    font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase;
+    color: var(--fg-3); font-weight: 500;
+  }
+  .pal-row {
+    display: flex; align-items: center; gap: 14px;
+    padding: 9px 20px;
+    cursor: pointer;
+  }
+  .pal-row:hover { background: var(--bg-3); }
+  .pal-row.selected {
+    background: var(--bg-4);
+    border-left: 2px solid var(--accent);
+    padding-left: 18px;
+  }
+  .pal-icon {
+    width: 18px; height: 18px;
+    display: inline-flex; align-items: center; justify-content: center;
+    color: var(--fg-3);
+  }
+  .pal-icon svg { width: 14px; height: 14px; stroke: currentColor; fill: none; stroke-width: 1.5; }
+  .pal-title { flex: 1; font-size: 13px; color: var(--fg-1); }
+  .pal-title em { color: var(--accent); font-style: normal; font-weight: 600; }
+  .pal-desc { font-family: var(--font-mono); font-size: 11px; color: var(--fg-3); }
+  .pal-key { display: inline-flex; gap: 3px; }
+  .pal-key kbd {
+    border: 1px solid var(--border-2); padding: 2px 6px; border-radius: 3px;
+    font-family: var(--font-mono); font-size: 10px; color: var(--fg-2); background: var(--bg-2);
+  }
+
+  .pal-footer {
+    display: flex; align-items: center; gap: 18px;
+    padding: 8px 20px;
+    background: var(--bg-1);
+    border-top: 1px solid var(--border-1);
+    font-family: var(--font-mono); font-size: 10px; color: var(--fg-3);
+  }
+  .pal-footer .hint { display: inline-flex; align-items: center; gap: 6px; }
+</style>
+</head>
+<body>
+<div class="frame">
+  <div class="titlebar">
+    <div class="lights"><span style="background:#FF5F57"></span><span style="background:#FEBC2E"></span><span style="background:#28C840"></span></div>
+    <span style="font-family:var(--font-mono); font-size:11px; color:var(--fg-3);">harness</span>
+    <span style="font-family:var(--font-mono); font-size:11px; color:var(--fg-4);">·</span>
+    <span style="font-family:var(--font-mono); font-size:11px; color:var(--fg-2);">~/projects/checkout-api</span>
+  </div>
+
+  <div class="dim">
+    <div class="dim-content">
+      [activity bar] · [sessions sidebar] · [transcript canvas] · [inspector] — content dimmed while palette is open
+    </div>
+  </div>
+
+  <div class="palette">
+    <div class="pal-input-wrap">
+      <span class="pal-prompt">/</span>
+      <input class="pal-input" value="ref" autofocus />
+      <span class="pal-shortcut">⌘K</span>
+    </div>
+
+    <div class="pal-section">
+      <div class="pal-label">slash commands</div>
+      <div class="pal-row selected">
+        <span class="pal-icon"><svg viewBox="0 0 24 24"><path d="M4 4h16v16H4z M8 8l8 8 M16 8l-8 8"/></svg></span>
+        <span class="pal-title">/<em>ref</em>actor <span style="color:var(--fg-3);">— 코드 리팩토링 시작</span></span>
+        <span class="pal-desc">claude code</span>
+        <span class="pal-key"><kbd>↵</kbd></span>
+      </div>
+      <div class="pal-row">
+        <span class="pal-icon"><svg viewBox="0 0 24 24"><path d="M3 3h18v18H3z M3 9h18 M9 3v18"/></svg></span>
+        <span class="pal-title">/<em>ref</em>resh-tools <span style="color:var(--fg-3);">— MCP 도구 목록 새로고침</span></span>
+        <span class="pal-desc">global</span>
+      </div>
+      <div class="pal-row">
+        <span class="pal-icon"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 6v6l4 2"/></svg></span>
+        <span class="pal-title">/<em>re</em>sume <span style="color:var(--fg-3);">— 마지막 세션 이어서</span></span>
+        <span class="pal-desc">⌘⇧R</span>
+      </div>
+    </div>
+
+    <div class="pal-section">
+      <div class="pal-label">recent sessions</div>
+      <div class="pal-row" id="row-r1">
+        <span class="pal-icon" id="dot-r1"></span>
+        <span class="pal-title">checkout 401 fix <span style="color:var(--fg-3);">— claude code · 14:22</span></span>
+        <span class="pal-desc">+8 −3</span>
+      </div>
+      <div class="pal-row" id="row-r2">
+        <span class="pal-icon" id="dot-r2"></span>
+        <span class="pal-title">cart total bug <span style="color:var(--fg-3);">— codex · 13:54</span></span>
+        <span class="pal-desc">done</span>
+      </div>
+      <div class="pal-row" id="row-r3">
+        <span class="pal-icon" id="dot-r3"></span>
+        <span class="pal-title">draft README <span style="color:var(--fg-3);">— gemini · 11:30</span></span>
+        <span class="pal-desc">paused</span>
+      </div>
+    </div>
+
+    <div class="pal-section">
+      <div class="pal-label">files</div>
+      <div class="pal-row">
+        <span class="pal-icon"><svg viewBox="0 0 24 24"><path d="M6 3h7l5 5v11a2 2 0 01-2 2H6a2 2 0 01-2-2V5a2 2 0 012-2zM13 3v5h5"/></svg></span>
+        <span class="pal-title">app/auth/<em>ref</em>resh.ts</span>
+        <span class="pal-desc">42 lines</span>
+      </div>
+      <div class="pal-row">
+        <span class="pal-icon"><svg viewBox="0 0 24 24"><path d="M6 3h7l5 5v11a2 2 0 01-2 2H6a2 2 0 01-2-2V5a2 2 0 012-2zM13 3v5h5"/></svg></span>
+        <span class="pal-title">tests/auth/<em>ref</em>resh.test.ts</span>
+        <span class="pal-desc">128 lines</span>
+      </div>
+    </div>
+
+    <div class="pal-footer">
+      <span class="hint"><kbd style="border:1px solid var(--border-2); padding:1px 5px; border-radius:3px;">↑↓</kbd> navigate</span>
+      <span class="hint"><kbd style="border:1px solid var(--border-2); padding:1px 5px; border-radius:3px;">↵</kbd> run</span>
+      <span class="hint"><kbd style="border:1px solid var(--border-2); padding:1px 5px; border-radius:3px;">⌘↵</kbd> run in new session</span>
+      <span style="margin-left:auto;">9 results · 0.4ms</span>
+    </div>
+  </div>
+</div>
+
+<script type="text/babel">
+  const r1 = document.getElementById("dot-r1");
+  const r2 = document.getElementById("dot-r2");
+  const r3 = document.getElementById("dot-r3");
+  if (r1) ReactDOM.createRoot(r1).render(<DotChar state="tool" size={1.5} />);
+  if (r2) ReactDOM.createRoot(r2).render(<DotChar state="done" size={1.5} />);
+  if (r3) ReactDOM.createRoot(r3).render(<DotChar state="sleep" size={1.5} />);
+</script>
+</body>
+</html>

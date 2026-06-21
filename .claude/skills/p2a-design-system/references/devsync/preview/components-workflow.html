@@ -1,0 +1,432 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Workflow steppers</title>
+<link rel="stylesheet" href="../colors_and_type.css">
+<script src="https://unpkg.com/lucide@latest"></script>
+<style>
+  *, *::before, *::after { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body {
+    background: var(--ds-bg-1);
+    color: var(--ds-fg-1);
+    font-family: var(--ds-font-sans);
+    font-size: var(--ds-text-sm);
+    padding: 28px 28px 64px;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* ---- page scaffolding ---- */
+  .page { max-width: 1180px; margin: 0 auto; }
+  .page-head {
+    display: flex; align-items: flex-end; justify-content: space-between;
+    gap: 16px; margin-bottom: 28px;
+    padding-bottom: 16px; border-bottom: 1px solid var(--ds-border-1);
+  }
+  .page-head h1 { margin: 0; }
+  .page-head p { margin: 6px 0 0; max-width: 560px; }
+
+  .theme-toggle {
+    display: inline-flex; align-items: center; gap: 6px;
+    height: var(--ds-h-control); padding: 0 10px;
+    background: var(--ds-bg-2); border: 1px solid var(--ds-border-2);
+    border-radius: var(--ds-radius-sm); color: var(--ds-fg-2);
+    font-family: var(--ds-font-sans); font-size: 12px; font-weight: 500;
+    cursor: pointer; transition: background var(--ds-dur-fast) var(--ds-ease), color var(--ds-dur-fast) var(--ds-ease);
+  }
+  .theme-toggle:hover { background: var(--ds-bg-3); color: var(--ds-fg-1); }
+  .theme-toggle i { width: 14px; height: 14px; }
+  .theme-toggle .ico { display: inline-flex; }
+
+  section.block { margin-bottom: 36px; }
+  .block-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 14px; }
+  .block-head .ds-label { margin: 0; }
+  .block-head .hint { font-family: var(--ds-font-mono); font-size: 11px; color: var(--ds-fg-3); }
+
+  .panel {
+    background: var(--ds-bg-2); border: 1px solid var(--ds-border-1);
+    border-radius: var(--ds-radius-md); padding: 22px 24px;
+  }
+  .panel + .panel { margin-top: 12px; }
+  .panel-title {
+    display: flex; align-items: center; gap: 8px; margin-bottom: 18px;
+    color: var(--ds-fg-2); font-size: 12px; font-weight: 500;
+  }
+  .panel-title i { width: 14px; height: 14px; color: var(--ds-fg-3); }
+  .panel-title .spacer { flex: 1; }
+  .panel-title .ds-num { color: var(--ds-fg-3); font-size: 11px; }
+
+  /* =========================================================
+     VARIANT 1 — Chevron pipeline bar (CI/CD)
+     ========================================================= */
+  .chevron-bar { display: flex; align-items: stretch; gap: 3px; }
+  .chev {
+    flex: 1; min-width: 0; position: relative;
+    display: flex; flex-direction: column; justify-content: center; gap: 3px;
+    padding: 11px 18px 11px 30px;
+    background: var(--ds-bg-3);
+    color: var(--ds-fg-3);
+    clip-path: polygon(0 0, calc(100% - 15px) 0, 100% 50%, calc(100% - 15px) 100%, 0 100%, 15px 50%);
+  }
+  .chev:first-child { padding-left: 18px; clip-path: polygon(0 0, calc(100% - 15px) 0, 100% 50%, calc(100% - 15px) 100%, 0 100%); }
+  .chev:last-child  { clip-path: polygon(0 0, 100% 0, 100% 100%, 0 100%, 15px 50%); }
+  .chev .chev-top { display: flex; align-items: center; gap: 7px; }
+  .chev .chev-ico { width: 15px; height: 15px; flex: none; }
+  .chev .chev-name { font-size: 12.5px; font-weight: 600; letter-spacing: -0.01em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .chev .chev-meta { font-family: var(--ds-font-mono); font-size: 10.5px; opacity: 0.85; padding-left: 22px; white-space: nowrap; }
+
+  .chev[data-state="done"]    { background: var(--ds-bg-3); color: var(--ds-fg-2); }
+  .chev[data-state="done"] .chev-ico { color: var(--ds-success-1); }
+  .chev[data-state="active"]  { background: var(--ds-accent-1); color: var(--ds-fg-on-accent); }
+  .chev[data-state="active"] .chev-ico { color: var(--ds-fg-on-accent); }
+  .chev[data-state="upcoming"]{ background: var(--ds-bg-3); color: var(--ds-fg-4); }
+  .chev[data-state="upcoming"] .chev-ico { color: var(--ds-fg-4); }
+  .chev[data-state="failed"]  { background: var(--ds-danger-1); color: #fff; }
+  .chev[data-state="failed"] .chev-ico { color: #fff; }
+  .chev[data-state="skipped"] { background: var(--ds-bg-3); color: var(--ds-fg-4); }
+  .chev[data-state="skipped"] .chev-name { text-decoration: line-through; text-decoration-thickness: 1px; }
+
+  /* spinner for running state */
+  .spin { animation: spin 0.9s linear infinite; transform-origin: center; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* =========================================================
+     VARIANT 2 — Numbered node line (PR review)
+     ========================================================= */
+  .node-line { display: flex; align-items: flex-start; }
+  .node {
+    display: flex; flex-direction: column; align-items: center; gap: 9px;
+    flex: none; width: 132px; text-align: center;
+  }
+  .node-dot {
+    width: 30px; height: 30px; border-radius: var(--ds-radius-pill);
+    display: grid; place-items: center; flex: none;
+    border: 1.5px solid var(--ds-border-2); background: var(--ds-bg-2);
+    color: var(--ds-fg-3); font-family: var(--ds-font-mono); font-size: 12px; font-weight: 600;
+  }
+  .node-dot i { width: 15px; height: 15px; }
+  .node-label { font-size: 12px; font-weight: 600; color: var(--ds-fg-2); letter-spacing: -0.01em; }
+  .node-sub { font-family: var(--ds-font-mono); font-size: 10.5px; color: var(--ds-fg-3); }
+  .connector {
+    flex: 1; height: 1.5px; margin-top: 14px; min-width: 24px;
+    background: var(--ds-border-2); position: relative;
+  }
+  .connector::after {
+    content: ""; position: absolute; right: -1px; top: 50%; transform: translateY(-50%);
+    border-left: 5px solid var(--ds-border-2); border-top: 4px solid transparent; border-bottom: 4px solid transparent;
+  }
+  .node[data-state="done"] .node-dot     { background: var(--ds-success-bg); border-color: var(--ds-success-border); color: var(--ds-success-1); }
+  .node[data-state="done"] .node-label   { color: var(--ds-fg-1); }
+  .node[data-state="active"] .node-dot   { background: var(--ds-accent-1); border-color: var(--ds-accent-1); color: var(--ds-fg-on-accent); box-shadow: var(--ds-shadow-focus); }
+  .node[data-state="active"] .node-label { color: var(--ds-fg-1); }
+  .node[data-state="failed"] .node-dot   { background: var(--ds-danger-bg); border-color: var(--ds-danger-border); color: var(--ds-danger-1); }
+  .node[data-state="failed"] .node-label { color: var(--ds-fg-1); }
+  .connector[data-fill="done"] { background: var(--ds-success-1); }
+  .connector[data-fill="done"]::after { border-left-color: var(--ds-success-1); }
+  .connector[data-fill="active"] { background: linear-gradient(90deg, var(--ds-accent-1), var(--ds-border-2)); }
+
+  /* =========================================================
+     VARIANT 3 — Vertical timeline (release / deploy)
+     ========================================================= */
+  .timeline { display: flex; flex-direction: column; }
+  .tl-row { display: grid; grid-template-columns: 28px 1fr; gap: 14px; }
+  .tl-rail { display: flex; flex-direction: column; align-items: center; }
+  .tl-node {
+    width: 26px; height: 26px; border-radius: var(--ds-radius-pill); flex: none;
+    display: grid; place-items: center; margin-top: 1px;
+    border: 1.5px solid var(--ds-border-2); background: var(--ds-bg-2); color: var(--ds-fg-3);
+  }
+  .tl-node i { width: 13px; height: 13px; }
+  .tl-stem { width: 1.5px; flex: 1; min-height: 26px; background: var(--ds-border-2); margin: 3px 0; }
+  .tl-row:last-child .tl-stem { display: none; }
+  .tl-body { padding-bottom: 22px; }
+  .tl-row:last-child .tl-body { padding-bottom: 0; }
+  .tl-head { display: flex; align-items: center; gap: 10px; }
+  .tl-title { font-size: 13px; font-weight: 600; color: var(--ds-fg-1); letter-spacing: -0.01em; }
+  .tl-time { margin-left: auto; font-family: var(--ds-font-mono); font-size: 11px; color: var(--ds-fg-3); }
+  .tl-desc { margin-top: 4px; font-size: 12px; color: var(--ds-fg-3); line-height: 1.5; }
+  .tl-meta-row { display: flex; align-items: center; gap: 8px; margin-top: 9px; }
+
+  .tl-row[data-state="done"] .tl-node   { background: var(--ds-success-bg); border-color: var(--ds-success-border); color: var(--ds-success-1); }
+  .tl-row[data-state="done"] .tl-stem   { background: var(--ds-success-border); }
+  .tl-row[data-state="active"] .tl-node { background: var(--ds-accent-1); border-color: var(--ds-accent-1); color: var(--ds-fg-on-accent); box-shadow: var(--ds-shadow-focus); }
+  .tl-row[data-state="failed"] .tl-node { background: var(--ds-danger-bg); border-color: var(--ds-danger-border); color: var(--ds-danger-1); }
+  .tl-row[data-state="upcoming"] .tl-node { color: var(--ds-fg-4); }
+  .tl-row[data-state="upcoming"] .tl-title { color: var(--ds-fg-3); }
+
+  /* =========================================================
+     VARIANT 4 — Compact inline (one row)
+     ========================================================= */
+  .inline-flow { display: inline-flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+  .inline-step { display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0 9px; border-radius: var(--ds-radius-sm); font-size: 11.5px; font-weight: 500; white-space: nowrap; }
+  .inline-step i { width: 13px; height: 13px; }
+  .inline-step .dot { width: 6px; height: 6px; border-radius: var(--ds-radius-pill); flex: none; }
+  .inline-sep { color: var(--ds-fg-4); display: inline-flex; }
+  .inline-sep i { width: 13px; height: 13px; }
+  .inline-step[data-state="done"]     { background: var(--ds-success-bg); color: var(--ds-success-fg); }
+  .inline-step[data-state="done"] i   { color: var(--ds-success-1); }
+  .inline-step[data-state="active"]   { background: var(--ds-accent-bg); color: var(--ds-accent-fg); border: 1px solid var(--ds-accent-border); }
+  .inline-step[data-state="active"] .dot { background: var(--ds-accent-1); }
+  .inline-step[data-state="upcoming"] { background: var(--ds-bg-3); color: var(--ds-fg-4); }
+  .inline-step[data-state="upcoming"] .dot { background: var(--ds-fg-4); }
+  .inline-step[data-state="failed"]   { background: var(--ds-danger-bg); color: var(--ds-danger-fg); }
+  .inline-step[data-state="failed"] i { color: var(--ds-danger-1); }
+
+  /* shared bits */
+  .avatar { width: 18px; height: 18px; border-radius: var(--ds-radius-pill); display: grid; place-items: center; font-family: var(--ds-font-mono); font-size: 9px; font-weight: 600; color: #fff; flex: none; letter-spacing: 0; }
+  .pill-meta { display: inline-flex; align-items: center; gap: 5px; height: 20px; padding: 0 7px; background: var(--ds-bg-3); border: 1px solid var(--ds-border-1); border-radius: var(--ds-radius-xs); font-family: var(--ds-font-mono); font-size: 10px; color: var(--ds-fg-3); }
+  .pill-meta i { width: 11px; height: 11px; }
+  .legend { display: flex; flex-wrap: wrap; gap: 16px; }
+  .legend-item { display: inline-flex; align-items: center; gap: 7px; font-size: 11.5px; color: var(--ds-fg-3); }
+  .legend-sw { width: 11px; height: 11px; border-radius: var(--ds-radius-xs); flex: none; }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <div class="page-head">
+    <div>
+      <h1 class="ds-h2">Workflow steppers</h1>
+      <p class="ds-body" style="color: var(--ds-fg-3);">Sequential progress with directional connectors — pipelines, review flows, and release timelines. Four orientations, five states.</p>
+    </div>
+    <button class="theme-toggle" id="themeBtn" type="button">
+      <span class="ico"></span><span class="lbl">Light</span>
+    </button>
+  </div>
+
+  <!-- LEGEND -->
+  <section class="block">
+    <div class="legend">
+      <span class="legend-item"><span class="legend-sw" style="background: var(--ds-success-1);"></span>Done</span>
+      <span class="legend-item"><span class="legend-sw" style="background: var(--ds-accent-1);"></span>Active / running</span>
+      <span class="legend-item"><span class="legend-sw" style="background: var(--ds-bg-4); border: 1px solid var(--ds-border-2);"></span>Upcoming</span>
+      <span class="legend-item"><span class="legend-sw" style="background: var(--ds-danger-1);"></span>Failed</span>
+      <span class="legend-item"><span class="legend-sw" style="background: repeating-linear-gradient(45deg, var(--ds-bg-4), var(--ds-bg-4) 2px, transparent 2px, transparent 4px); border: 1px solid var(--ds-border-2);"></span>Skipped</span>
+    </div>
+  </section>
+
+  <!-- VARIANT 1 -->
+  <section class="block">
+    <div class="block-head">
+      <span class="ds-label">Chevron pipeline</span>
+      <span class="hint">CI/CD · arrow-segmented bar</span>
+    </div>
+
+    <div class="panel">
+      <div class="panel-title">
+        <i data-lucide="git-branch"></i>
+        <span>feat/auth-flow → main</span>
+        <span class="spacer"></span>
+        <span class="ds-num">#1847 · running</span>
+      </div>
+      <div class="chevron-bar">
+        <div class="chev" data-state="done">
+          <div class="chev-top"><i class="chev-ico" data-lucide="circle-check"></i><span class="chev-name">Checkout</span></div>
+          <div class="chev-meta">4s</div>
+        </div>
+        <div class="chev" data-state="done">
+          <div class="chev-top"><i class="chev-ico" data-lucide="circle-check"></i><span class="chev-name">Build</span></div>
+          <div class="chev-meta">1m 12s</div>
+        </div>
+        <div class="chev" data-state="active">
+          <div class="chev-top"><i class="chev-ico spin" data-lucide="loader-circle"></i><span class="chev-name">Test</span></div>
+          <div class="chev-meta">312 / 480 · 0:48</div>
+        </div>
+        <div class="chev" data-state="upcoming">
+          <div class="chev-top"><i class="chev-ico" data-lucide="circle"></i><span class="chev-name">Scan</span></div>
+          <div class="chev-meta">queued</div>
+        </div>
+        <div class="chev" data-state="upcoming">
+          <div class="chev-top"><i class="chev-ico" data-lucide="circle"></i><span class="chev-name">Deploy</span></div>
+          <div class="chev-meta">queued</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-title">
+        <i data-lucide="git-branch"></i>
+        <span>hotfix/rate-limit → main</span>
+        <span class="spacer"></span>
+        <span class="ds-num" style="color: var(--ds-danger-fg);">#1846 · failed</span>
+      </div>
+      <div class="chevron-bar">
+        <div class="chev" data-state="done">
+          <div class="chev-top"><i class="chev-ico" data-lucide="circle-check"></i><span class="chev-name">Checkout</span></div>
+          <div class="chev-meta">3s</div>
+        </div>
+        <div class="chev" data-state="done">
+          <div class="chev-top"><i class="chev-ico" data-lucide="circle-check"></i><span class="chev-name">Build</span></div>
+          <div class="chev-meta">58s</div>
+        </div>
+        <div class="chev" data-state="failed">
+          <div class="chev-top"><i class="chev-ico" data-lucide="circle-x"></i><span class="chev-name">Test</span></div>
+          <div class="chev-meta">12 failed · 0:41</div>
+        </div>
+        <div class="chev" data-state="skipped">
+          <div class="chev-top"><i class="chev-ico" data-lucide="minus"></i><span class="chev-name">Scan</span></div>
+          <div class="chev-meta">skipped</div>
+        </div>
+        <div class="chev" data-state="skipped">
+          <div class="chev-top"><i class="chev-ico" data-lucide="minus"></i><span class="chev-name">Deploy</span></div>
+          <div class="chev-meta">skipped</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- VARIANT 2 -->
+  <section class="block">
+    <div class="block-head">
+      <span class="ds-label">Numbered node line</span>
+      <span class="hint">PR review · circles + connectors</span>
+    </div>
+    <div class="panel">
+      <div class="panel-title">
+        <i data-lucide="git-pull-request"></i>
+        <span>Add OAuth device flow</span>
+        <span class="spacer"></span>
+        <span class="ds-num">3 of 5</span>
+      </div>
+      <div class="node-line">
+        <div class="node" data-state="done">
+          <div class="node-dot"><i data-lucide="check"></i></div>
+          <div><div class="node-label">Opened</div><div class="node-sub">Mar 12</div></div>
+        </div>
+        <div class="connector" data-fill="done"></div>
+        <div class="node" data-state="done">
+          <div class="node-dot"><i data-lucide="check"></i></div>
+          <div><div class="node-label">CI passed</div><div class="node-sub">Mar 12</div></div>
+        </div>
+        <div class="connector" data-fill="done"></div>
+        <div class="node" data-state="active">
+          <div class="node-dot">3</div>
+          <div><div class="node-label">In review</div><div class="node-sub">2 approvals</div></div>
+        </div>
+        <div class="connector" data-fill="active"></div>
+        <div class="node" data-state="upcoming">
+          <div class="node-dot">4</div>
+          <div><div class="node-label">Approved</div><div class="node-sub">—</div></div>
+        </div>
+        <div class="connector"></div>
+        <div class="node" data-state="upcoming">
+          <div class="node-dot">5</div>
+          <div><div class="node-label">Merged</div><div class="node-sub">—</div></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- VARIANT 3 -->
+  <section class="block">
+    <div class="block-head">
+      <span class="ds-label">Vertical timeline</span>
+      <span class="hint">Release · staged deploy</span>
+    </div>
+    <div class="panel" style="max-width: 560px;">
+      <div class="panel-title">
+        <i data-lucide="rocket"></i>
+        <span>Release v2.14.0</span>
+        <span class="spacer"></span>
+        <span class="ds-num">in progress</span>
+      </div>
+      <div class="timeline">
+        <div class="tl-row" data-state="done">
+          <div class="tl-rail"><div class="tl-node"><i data-lucide="check"></i></div><div class="tl-stem"></div></div>
+          <div class="tl-body">
+            <div class="tl-head"><span class="tl-title">Tag cut</span><span class="tl-time">09:02</span></div>
+            <div class="tl-desc">Tagged <span class="ds-code-inline">v2.14.0</span> at <span class="ds-code-inline">a3f9c12</span>.</div>
+          </div>
+        </div>
+        <div class="tl-row" data-state="done">
+          <div class="tl-rail"><div class="tl-node"><i data-lucide="check"></i></div><div class="tl-stem"></div></div>
+          <div class="tl-body">
+            <div class="tl-head"><span class="tl-title">Staging deploy</span><span class="tl-time">09:14</span></div>
+            <div class="tl-desc">47 / 47 smoke tests passing.</div>
+            <div class="tl-meta-row">
+              <span class="pill-meta"><i data-lucide="timer"></i>11m 40s</span>
+              <span class="avatar" style="background: var(--ds-chart-3);">JC</span>
+            </div>
+          </div>
+        </div>
+        <div class="tl-row" data-state="active">
+          <div class="tl-rail"><div class="tl-node"><i class="spin" data-lucide="loader-circle"></i></div><div class="tl-stem"></div></div>
+          <div class="tl-body">
+            <div class="tl-head"><span class="tl-title">Canary · 10%</span><span class="tl-time">now</span></div>
+            <div class="tl-desc">Rolling out to canary fleet. Error rate within budget.</div>
+            <div class="tl-meta-row">
+              <span class="pill-meta"><i data-lucide="activity"></i>0.02% err</span>
+              <span class="pill-meta"><i data-lucide="server"></i>3 / 30 nodes</span>
+            </div>
+          </div>
+        </div>
+        <div class="tl-row" data-state="upcoming">
+          <div class="tl-rail"><div class="tl-node"><i data-lucide="circle"></i></div><div class="tl-stem"></div></div>
+          <div class="tl-body">
+            <div class="tl-head"><span class="tl-title">Full production</span><span class="tl-time">—</span></div>
+            <div class="tl-desc">Promote to 100% after canary holds 30m.</div>
+          </div>
+        </div>
+        <div class="tl-row" data-state="upcoming">
+          <div class="tl-rail"><div class="tl-node"><i data-lucide="circle"></i></div></div>
+          <div class="tl-body">
+            <div class="tl-head"><span class="tl-title">Post-deploy checks</span><span class="tl-time">—</span></div>
+            <div class="tl-desc">Verify dashboards, close release.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- VARIANT 4 -->
+  <section class="block">
+    <div class="block-head">
+      <span class="ds-label">Compact inline</span>
+      <span class="hint">Dense rows · table cells, headers</span>
+    </div>
+    <div class="panel">
+      <div style="display:flex; flex-direction: column; gap: 16px;">
+        <div class="inline-flow">
+          <span class="inline-step" data-state="done"><i data-lucide="check"></i>Lint</span>
+          <span class="inline-sep"><i data-lucide="chevron-right"></i></span>
+          <span class="inline-step" data-state="done"><i data-lucide="check"></i>Build</span>
+          <span class="inline-sep"><i data-lucide="chevron-right"></i></span>
+          <span class="inline-step" data-state="active"><span class="dot"></span>Test</span>
+          <span class="inline-sep"><i data-lucide="chevron-right"></i></span>
+          <span class="inline-step" data-state="upcoming"><span class="dot"></span>Deploy</span>
+        </div>
+        <div class="inline-flow">
+          <span class="inline-step" data-state="done"><i data-lucide="check"></i>Triage</span>
+          <span class="inline-sep"><i data-lucide="chevron-right"></i></span>
+          <span class="inline-step" data-state="done"><i data-lucide="check"></i>In progress</span>
+          <span class="inline-sep"><i data-lucide="chevron-right"></i></span>
+          <span class="inline-step" data-state="failed"><i data-lucide="x"></i>QA failed</span>
+          <span class="inline-sep"><i data-lucide="chevron-right"></i></span>
+          <span class="inline-step" data-state="upcoming"><span class="dot"></span>Done</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+</div>
+
+<script>
+  lucide.createIcons();
+  const btn = document.getElementById('themeBtn');
+  const root = document.documentElement;
+  function sync() {
+    const dark = root.getAttribute('data-theme') === 'dark';
+    btn.querySelector('.lbl').textContent = dark ? 'Light' : 'Dark';
+    btn.querySelector('.ico').innerHTML = '<i data-lucide="' + (dark ? 'sun' : 'moon') + '"></i>';
+    lucide.createIcons();
+  }
+  btn.addEventListener('click', () => {
+    root.setAttribute('data-theme', root.getAttribute('data-theme') === 'dark' ? 'light' : 'dark');
+    sync();
+  });
+  sync();
+</script>
+</body>
+</html>

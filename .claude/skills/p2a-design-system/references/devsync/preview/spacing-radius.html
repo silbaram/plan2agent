@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<title>Radius scale</title>
+<link rel="stylesheet" href="../colors_and_type.css">
+<style>
+  html, body { margin: 0; }
+  body {
+    background: var(--ds-bg-1);
+    padding: 20px;
+    box-sizing: border-box;
+    color: var(--ds-fg-1);
+    font-family: var(--ds-font-sans);
+  }
+  *, *::before, *::after { box-sizing: border-box; }
+  .row { display: flex; gap: 12px; align-items: stretch; }
+  .col { display: flex; flex-direction: column; gap: 8px; }
+  .swatch {
+    border-radius: var(--ds-radius-sm);
+    border: 1px solid var(--ds-border-1);
+    overflow: hidden;
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-end;
+    height: 88px;
+  }
+  .swatch .lbl {
+    padding: 6px 8px;
+    font-family: var(--ds-font-mono);
+    font-size: 10px;
+    color: var(--ds-fg-1);
+    background: rgba(15,23,42,0.55);
+    backdrop-filter: blur(4px);
+    display: flex;
+    justify-content: space-between;
+    line-height: 1.3;
+  }
+  [data-theme="light"] .swatch .lbl { background: rgba(255,255,255,0.7); color: var(--ds-fg-1); border-top: 1px solid var(--ds-border-1); }
+  .scale { display: grid; grid-template-columns: repeat(11, 1fr); gap: 4px; }
+</style>
+</head>
+<body>
+
+<div style="display:flex; gap: 20px; align-items: center;">
+
+    <div style="display:flex; flex-direction: column; align-items: center; gap: 8px;">
+      <div style="width: 80px; height: 60px; background: var(--ds-bg-3); border: 1px solid var(--ds-border-2); border-radius: 2px;"></div>
+      <div style="font-family: var(--ds-font-mono); font-size: 11px; color: var(--ds-fg-1);">2px</div>
+      <div style="font-family: var(--ds-font-sans); font-size: 10px; color: var(--ds-fg-3);">status dots, ticks</div>
+    </div>
+    <div style="display:flex; flex-direction: column; align-items: center; gap: 8px;">
+      <div style="width: 80px; height: 60px; background: var(--ds-bg-3); border: 1px solid var(--ds-border-2); border-radius: 4px;"></div>
+      <div style="font-family: var(--ds-font-mono); font-size: 11px; color: var(--ds-fg-1);">4px</div>
+      <div style="font-family: var(--ds-font-sans); font-size: 10px; color: var(--ds-fg-3);">buttons, inputs, badges</div>
+    </div>
+    <div style="display:flex; flex-direction: column; align-items: center; gap: 8px;">
+      <div style="width: 80px; height: 60px; background: var(--ds-bg-3); border: 1px solid var(--ds-border-2); border-radius: 6px;"></div>
+      <div style="font-family: var(--ds-font-mono); font-size: 11px; color: var(--ds-fg-1);">6px</div>
+      <div style="font-family: var(--ds-font-sans); font-size: 10px; color: var(--ds-fg-3);">cards, panels, modals</div>
+    </div>
+  <div style="margin-left: 20px; max-width: 240px;">
+    <div class="ds-label" style="margin-bottom: 6px;">RULE</div>
+    <div style="font-size: 12px; color: var(--ds-fg-2); line-height: 1.45;">
+      Radius caps at <b style="color: var(--ds-fg-1);">6px</b>. No pills except status dots and avatars. Never round corners to feel friendly.
+    </div>
+  </div>
+</div>
+
+</body>
+</html>

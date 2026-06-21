@@ -83,6 +83,15 @@ Run or use the provided p2a.task_context.v1 context, write only iterations/<acti
 
 Confirm the task is ready, start or use the run, implement only inside the target workspaceRef or worktree, run verify, finish with collected git state, update task status, and return the execution summary.`,
   },
+  'design-system': {
+    skill: 'p2a-design-system',
+    description: 'Design or implement Plan2Agent GUI screens using the P2A design system.',
+    prompt: `Use the Plan2Agent p2a-design-system skill for the following GUI design or implementation request:
+
+{{args}}
+
+Read the packaged Harness and DevSync references inside the p2a-design-system skill before acting. Use Harness as the primary visual language, DevSync for dense developer-tool primitives, and preserve P2A operator workflows for gates, tasks, runs, PTY sessions, approvals, and verification.`,
+  },
   'task-breakdown': {
     skill: 'p2a-task-breakdown',
     description: 'Create a Plan2Agent task graph from an approved implementation spec.',
@@ -240,12 +249,33 @@ function renderGeminiCommand(command) {
   return `description = ${tomlBasicString(command.description)}\nprompt = \"\"\"\n${escapedPrompt}\n\"\"\"\n`;
 }
 
+function relativeFileList(sourceRoot) {
+  const files = [];
+  function visit(directory) {
+    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+      const absolute = path.join(directory, entry.name);
+      const relative = path.relative(sourceRoot, absolute);
+      if (entry.isDirectory()) visit(absolute);
+      else if (entry.isFile()) files.push(relative);
+    }
+  }
+  visit(sourceRoot);
+  return files.sort((a, b) => a.localeCompare(b));
+}
+
 function desiredFiles() {
   const files = [];
   for (const dirent of readdirSync(SKILL_SOURCE, { withFileTypes: true }).filter((entry) => entry.isDirectory()).sort((a, b) => a.name.localeCompare(b.name))) {
-    const source = path.join(SKILL_SOURCE, dirent.name, 'SKILL.md');
-    if (existsSync(source)) {
-      files.push({ path: path.join(ROOT, '.claude', 'skills', dirent.name, 'SKILL.md'), content: readFileSync(source), binary: true });
+    const skillRoot = path.join(SKILL_SOURCE, dirent.name);
+    const skillFile = path.join(skillRoot, 'SKILL.md');
+    if (existsSync(skillFile)) {
+      for (const relativeFile of relativeFileList(skillRoot)) {
+        const source = path.join(skillRoot, relativeFile);
+        files.push({
+          path: path.join(ROOT, '.claude', 'skills', dirent.name, relativeFile),
+          content: readFileSync(source),
+        });
+      }
     }
   }
   for (const filename of readdirSync(AGENT_SOURCE).filter((name) => name.endsWith('.md')).sort()) {

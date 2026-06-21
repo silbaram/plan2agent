@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<title>Control heights</title>
+<link rel="stylesheet" href="../colors_and_type.css">
+<style>
+  html, body { margin: 0; }
+  body {
+    background: var(--ds-bg-1);
+    padding: 20px;
+    box-sizing: border-box;
+    color: var(--ds-fg-1);
+    font-family: var(--ds-font-sans);
+  }
+  *, *::before, *::after { box-sizing: border-box; }
+  .row { display: flex; gap: 12px; align-items: stretch; }
+  .col { display: flex; flex-direction: column; gap: 8px; }
+  .swatch {
+    border-radius: var(--ds-radius-sm);
+    border: 1px solid var(--ds-border-1);
+    overflow: hidden;
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-end;
+    height: 88px;
+  }
+  .swatch .lbl {
+    padding: 6px 8px;
+    font-family: var(--ds-font-mono);
+    font-size: 10px;
+    color: var(--ds-fg-1);
+    background: rgba(15,23,42,0.55);
+    backdrop-filter: blur(4px);
+    display: flex;
+    justify-content: space-between;
+    line-height: 1.3;
+  }
+  [data-theme="light"] .swatch .lbl { background: rgba(255,255,255,0.7); color: var(--ds-fg-1); border-top: 1px solid var(--ds-border-1); }
+  .scale { display: grid; grid-template-columns: repeat(11, 1fr); gap: 4px; }
+</style>
+</head>
+<body>
+
+<div style="display:flex; gap: 24px; align-items: flex-end;">
+
+    <div style="display:flex; flex-direction: column; align-items: center; gap: 8px;">
+      <div style="width: 80px; height: 24px; background: var(--ds-bg-3); border: 1px solid var(--ds-border-2); border-radius: var(--ds-radius-sm); display:flex; align-items:center; justify-content:center; font-family: var(--ds-font-mono); font-size: 11px; color: var(--ds-fg-2);">24px</div>
+      <div style="font-family: var(--ds-font-sans); font-size: 10px; color: var(--ds-fg-3); text-align: center;">sm · compact rows</div>
+    </div>
+    <div style="display:flex; flex-direction: column; align-items: center; gap: 8px;">
+      <div style="width: 80px; height: 28px; background: var(--ds-bg-3); border: 1px solid var(--ds-border-2); border-radius: var(--ds-radius-sm); display:flex; align-items:center; justify-content:center; font-family: var(--ds-font-mono); font-size: 11px; color: var(--ds-fg-2);">28px</div>
+      <div style="font-family: var(--ds-font-sans); font-size: 10px; color: var(--ds-fg-3); text-align: center;">base · default</div>
+    </div>
+    <div style="display:flex; flex-direction: column; align-items: center; gap: 8px;">
+      <div style="width: 80px; height: 36px; background: var(--ds-bg-3); border: 1px solid var(--ds-border-2); border-radius: var(--ds-radius-sm); display:flex; align-items:center; justify-content:center; font-family: var(--ds-font-mono); font-size: 11px; color: var(--ds-fg-2);">36px</div>
+      <div style="font-family: var(--ds-font-sans); font-size: 10px; color: var(--ds-fg-3); text-align: center;">lg · forms</div>
+    </div>
+    <div style="display:flex; flex-direction: column; align-items: center; gap: 8px;">
+      <div style="width: 80px; height: 48px; background: var(--ds-bg-3); border: 1px solid var(--ds-border-2); border-radius: var(--ds-radius-sm); display:flex; align-items:center; justify-content:center; font-family: var(--ds-font-mono); font-size: 11px; color: var(--ds-fg-2);">48px</div>
+      <div style="font-family: var(--ds-font-sans); font-size: 10px; color: var(--ds-fg-3); text-align: center;">topbar</div>
+    </div>
+  <div style="margin-left: 12px; max-width: 220px;">
+    <div class="ds-label" style="margin-bottom: 6px;">DENSITY</div>
+    <div style="font-size: 12px; color: var(--ds-fg-2); line-height: 1.45;">
+      28px is the default control height — dense by web norms, intentional for data-heavy product surfaces.
+    </div>
+  </div>
+</div>
+
+</body>
+</html>

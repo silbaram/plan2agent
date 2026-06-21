@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="ko"><head><meta charset="utf-8"><title>brand · dot character</title>
+<link rel="stylesheet" href="_card.css">
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+<script type="text/babel" src="../design-system/dot-character.jsx"></script>
+</head><body>
+<div class="card">
+  <div class="card-header">
+    <span class="card-title">dot character</span>
+    <span class="card-sub">8×8 sprite · 9 states</span>
+  </div>
+  <div class="card-desc">시그니처 모티프. 큰 머리 + 작은 몸의 chibi 비율, 큰 반짝이는 눈, 양 볼의 vermilion blush가 마스코트 정체성을 만든다. CSS box-shadow로만 그려져 가볍고, 4fps step animation으로 살아있는 듯한 인상을 준다.</div>
+
+  <div class="label">9 states</div>
+  <div id="states-grid" style="display:grid; grid-template-columns:repeat(3, 1fr); gap:12px; margin-bottom:32px;"></div>
+
+  <div class="label">size scale</div>
+  <div id="sizes" style="display:flex; align-items:flex-end; gap:24px; padding:24px; border:1px solid var(--border-1); border-radius:var(--r-2); margin-bottom:24px;"></div>
+
+  <div class="label">in context</div>
+  <div style="display:flex; flex-direction:column; gap:8px; padding:16px; border:1px solid var(--border-1); border-radius:var(--r-2); background:var(--bg-2);">
+    <div id="ctx-row-1" style="display:flex; align-items:center; gap:12px; padding:8px 10px;"></div>
+    <div id="ctx-row-2" style="display:flex; align-items:center; gap:12px; padding:8px 10px; background:var(--bg-3); border-left:2px solid var(--accent);"></div>
+    <div id="ctx-row-3" style="display:flex; align-items:center; gap:12px; padding:8px 10px;"></div>
+  </div>
+</div>
+
+<script type="text/babel">
+const STATES = [
+  { state: "idle",     desc: "대기 — 깜빡 + 숨" },
+  { state: "thinking", desc: "사고 — ? + 좌우 시선" },
+  { state: "typing",   desc: "응답 — 입 벌리고 통통" },
+  { state: "tool",     desc: "도구 — ★ + ^ ^ 눈" },
+  { state: "skill",    desc: "스킬 — 하트 눈 + 빅 스마일" },
+  { state: "sleep",    desc: "일시 정지 — z z" },
+  { state: "error",    desc: "실패 — x x + 식은땀" },
+  { state: "done",     desc: "완료 — ^ ^ + ✦" },
+  { state: "waiting",  desc: "입력 대기 — 위 보기" },
+];
+
+function StateCard({ state, desc }) {
+  return (
+    <div style={{
+      padding: "18px 14px",
+      border: "1px solid var(--border-1)",
+      borderRadius: "var(--r-2)",
+      background: "var(--bg-1)",
+      display: "flex", flexDirection: "column", alignItems: "center", gap: 10,
+    }}>
+      <DotChar state={state} size={4} />
+      <div style={{ textAlign: "center" }}>
+        <div style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--fg-1)", marginBottom: 2 }}>{state}</div>
+        <div style={{ fontSize: 11, color: "var(--fg-3)" }}>{desc}</div>
+      </div>
+    </div>
+  );
+}
+
+function SizeRow() {
+  return [1.5, 2, 3, 4, 6, 8].map(sz => (
+    <div key={sz} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 6 }}>
+      <DotChar state="tool" size={sz} />
+      <span style={{ fontFamily: "var(--font-mono)", fontSize: 10, color: "var(--fg-3)" }}>{sz}px</span>
+    </div>
+  ));
+}
+
+function CtxRow1() {
+  return (
+    <>
+      <DotChar state="thinking" size={2} />
+      <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 18, height: 18, border: "1px solid #D97757", color: "#D97757", fontFamily: "var(--font-mono)", fontSize: 10, fontWeight: 600 }}>C</span>
+      <span style={{ fontSize: 13, color: "var(--fg-2)" }}>claude code</span>
+      <span style={{ marginLeft: "auto", fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--fg-3)" }}>thinking…</span>
+    </>
+  );
+}
+
+function CtxRow2() {
+  return (
+    <>
+      <DotChar state="tool" size={2} />
+      <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 18, height: 18, border: "1px solid #A8B1A0", color: "#A8B1A0", fontFamily: "var(--font-mono)", fontSize: 10, fontWeight: 600 }}>O</span>
+      <span style={{ fontSize: 13, color: "var(--fg-1)" }}>codex</span>
+      <span style={{ marginLeft: "auto", fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--accent)" }}>edit_file()</span>
+    </>
+  );
+}
+
+function CtxRow3() {
+  return (
+    <>
+      <DotChar state="done" size={2} />
+      <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 18, height: 18, border: "1px solid #6B9BB8", color: "#6B9BB8", fontFamily: "var(--font-mono)", fontSize: 10, fontWeight: 600 }}>G</span>
+      <span style={{ fontSize: 13, color: "var(--fg-3)" }}>gemini</span>
+      <span style={{ marginLeft: "auto", fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--fg-3)" }}>done · 00:04:12</span>
+    </>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("states-grid")).render(
+  <>{STATES.map(s => <StateCard key={s.state} {...s} />)}</>
+);
+ReactDOM.createRoot(document.getElementById("sizes")).render(<><SizeRow /></>);
+ReactDOM.createRoot(document.getElementById("ctx-row-1")).render(<CtxRow1 />);
+ReactDOM.createRoot(document.getElementById("ctx-row-2")).render(<CtxRow2 />);
+ReactDOM.createRoot(document.getElementById("ctx-row-3")).render(<CtxRow3 />);
+</script>
+</body></html>

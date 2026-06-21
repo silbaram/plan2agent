@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="ko"><head><meta charset="utf-8"><title>component · controls</title>
+<link rel="stylesheet" href="_card.css">
+</head><body>
+<div class="card">
+  <div class="card-header">
+    <span class="card-title">controls</span>
+    <span class="card-sub">button · input · kbd · pill · toggle · tab</span>
+  </div>
+  <div class="card-desc">기본 버튼, 입력 필드, 단축키, 탭. 액센트는 primary CTA에만.</div>
+
+  <div class="label">buttons</div>
+  <div style="display:flex; flex-wrap:wrap; gap:10px; padding:18px; border:1px solid var(--border-1); border-radius:var(--r-2); margin-bottom:24px;">
+    <button style="padding:7px 14px; background:var(--accent); color:#0F0F0D; border:0; border-radius:var(--r-1); font-family:var(--font-sans); font-size:12px; font-weight:600; cursor:pointer;">apply changes</button>
+    <button style="padding:7px 14px; background:var(--bg-3); color:var(--fg-1); border:1px solid var(--border-2); border-radius:var(--r-1); font-family:var(--font-sans); font-size:12px; font-weight:500; cursor:pointer;">cancel</button>
+    <button style="padding:7px 14px; background:transparent; color:var(--fg-2); border:1px solid var(--border-2); border-radius:var(--r-1); font-family:var(--font-sans); font-size:12px; cursor:pointer;">view diff</button>
+    <button style="padding:7px 12px; background:transparent; color:var(--fg-3); border:0; border-radius:var(--r-1); font-family:var(--font-sans); font-size:12px; cursor:pointer;">skip</button>
+    <button style="padding:7px 14px; background:transparent; color:#E5654B; border:1px solid #2A1612; border-radius:var(--r-1); font-family:var(--font-sans); font-size:12px; font-weight:500; cursor:pointer;">stop session</button>
+    <button disabled style="padding:7px 14px; background:var(--bg-2); color:var(--fg-4); border:1px solid var(--border-1); border-radius:var(--r-1); font-family:var(--font-sans); font-size:12px; cursor:not-allowed;">disabled</button>
+  </div>
+
+  <div class="label">inputs</div>
+  <div style="display:flex; flex-direction:column; gap:10px; padding:18px; border:1px solid var(--border-1); border-radius:var(--r-2); margin-bottom:24px;">
+    <input type="text" placeholder="search sessions, files, agents…" style="padding:8px 12px; background:var(--bg-2); color:var(--fg-1); border:1px solid var(--border-2); border-radius:var(--r-1); font-family:var(--font-sans); font-size:13px; outline:none;" />
+    <textarea placeholder="claude에게 메시지를 보내세요…" rows="3" style="padding:10px 12px; background:var(--bg-2); color:var(--fg-1); border:1px solid var(--border-2); border-radius:var(--r-1); font-family:var(--font-sans); font-size:13px; outline:none; resize:vertical;"></textarea>
+    <div style="display:flex; align-items:center; gap:8px; padding:8px 12px; background:var(--bg-2); border:1px solid var(--accent); border-radius:var(--r-1);">
+      <span style="color:var(--accent); font-family:var(--font-mono); font-size:12px;">/</span>
+      <input style="flex:1; background:transparent; color:var(--fg-1); border:0; outline:none; font-family:var(--font-mono); font-size:13px;" value="search" />
+      <span style="font-family:var(--font-mono); font-size:11px; color:var(--fg-3);">slash command</span>
+    </div>
+  </div>
+
+  <div class="label">keyboard</div>
+  <div style="display:flex; flex-wrap:wrap; gap:14px; padding:18px; border:1px solid var(--border-1); border-radius:var(--r-2); margin-bottom:24px; align-items:center; font-family:var(--font-mono); font-size:11px; color:var(--fg-3);">
+    <span style="display:inline-flex; gap:4px;"><kbd style="border:1px solid var(--border-2); padding:2px 6px; border-radius:3px; background:var(--bg-2); color:var(--fg-1);">⌘</kbd><kbd style="border:1px solid var(--border-2); padding:2px 6px; border-radius:3px; background:var(--bg-2); color:var(--fg-1);">K</kbd></span>
+    <span>command palette</span>
+    <span style="margin-left:24px; display:inline-flex; gap:4px;"><kbd style="border:1px solid var(--border-2); padding:2px 6px; border-radius:3px; background:var(--bg-2); color:var(--fg-1);">⌘</kbd><kbd style="border:1px solid var(--border-2); padding:2px 6px; border-radius:3px; background:var(--bg-2); color:var(--fg-1);">↵</kbd></span>
+    <span>send</span>
+    <span style="margin-left:24px; display:inline-flex; gap:4px;"><kbd style="border:1px solid var(--border-2); padding:2px 6px; border-radius:3px; background:var(--bg-2); color:var(--fg-1);">⌘</kbd><kbd style="border:1px solid var(--border-2); padding:2px 6px; border-radius:3px; background:var(--bg-2); color:var(--fg-1);">\</kbd></span>
+    <span>toggle inspector</span>
+  </div>
+
+  <div class="label">pills · tags</div>
+  <div style="display:flex; flex-wrap:wrap; gap:8px; padding:18px; border:1px solid var(--border-1); border-radius:var(--r-2); margin-bottom:24px; align-items:center;">
+    <span style="display:inline-flex; align-items:center; gap:6px; padding:3px 9px; background:var(--bg-2); border:1px solid var(--border-2); border-radius:999px; font-family:var(--font-mono); font-size:11px;"><span style="width:5px; height:5px; background:#8FB66B; border-radius:50%;"></span>connected</span>
+    <span style="display:inline-flex; align-items:center; gap:6px; padding:3px 9px; background:var(--bg-2); border:1px solid var(--border-2); border-radius:999px; font-family:var(--font-mono); font-size:11px;">sonnet 4.5</span>
+    <span style="display:inline-flex; align-items:center; gap:6px; padding:3px 9px; background:var(--bg-2); border:1px solid #FF5B2E; color:#FF5B2E; border-radius:999px; font-family:var(--font-mono); font-size:11px;">running · 4 tools</span>
+    <span style="display:inline-flex; align-items:center; gap:6px; padding:3px 9px; background:var(--bg-2); border:1px solid var(--border-2); border-radius:999px; font-family:var(--font-mono); font-size:11px;">27.9k ↓↑ 3.1k</span>
+    <span style="display:inline-flex; align-items:center; gap:6px; padding:3px 9px; background:#15212A; border:1px solid #15212A; color:#6B9BB8; border-radius:999px; font-family:var(--font-mono); font-size:11px;">mcp · github</span>
+  </div>
+
+  <div class="label">tabs</div>
+  <div style="border:1px solid var(--border-1); border-radius:var(--r-2);">
+    <div style="display:flex; height:32px; border-bottom:1px solid var(--border-1); font-size:12px;">
+      <div style="display:flex; align-items:center; gap:8px; padding:0 14px; background:var(--bg-1); border-right:1px solid var(--border-1); color:var(--fg-1);">session.ts<span style="color:var(--fg-4);">×</span></div>
+      <div style="display:flex; align-items:center; gap:8px; padding:0 14px; background:var(--bg-2); border-right:1px solid var(--border-1); color:var(--fg-3);">auth.ts</div>
+      <div style="display:flex; align-items:center; gap:8px; padding:0 14px; background:var(--bg-2); border-right:1px solid var(--border-1); color:var(--fg-3);">refresh.ts <span style="color:#FF5B2E;">●</span></div>
+      <div style="flex:1; background:var(--bg-2);"></div>
+    </div>
+    <div style="padding:18px; font-family:var(--font-mono); font-size:12px; color:var(--fg-3);">
+      <span style="color:var(--accent);">●</span> active tab gets bg-1 (canvas color), inactive bg-2. dirty indicator: vermilion dot before close ×.
+    </div>
+  </div>
+</div>
+</body></html>

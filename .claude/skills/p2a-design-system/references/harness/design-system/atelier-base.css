@@ -1,0 +1,242 @@
+/* =========================================================
+   Atelier Design System — colors, type, spacing, motion
+   Link this file from every HTML in the system.
+   ========================================================= */
+
+@font-face {
+  font-family: "NanumSquareNeo";
+  src: url("./fonts/NanumSquareNeo-Variable.ttf") format("truetype-variations"),
+       url("./fonts/NanumSquareNeo-Variable.ttf") format("truetype");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+/* JetBrains Mono via CDN — used for indexes, timestamps, code */
+@import url("https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&display=swap");
+
+:root {
+  /* ---------- Color: raw palette ---------- */
+  --ink:        #0E0E0C;
+  --ink-2:      #25241F;
+  --paper:      #F6F4EE;
+  --paper-pure: #FCFBF7;
+  --mute:       #8A8780;
+  --mute-2:     #B6B2A8;
+  --rule:       #E4E0D6;
+  --accent:     #FF5B2E;
+  --accent-ink: #0E0E0C;
+
+  /* ---------- Color: semantic ---------- */
+  --bg-1:   var(--paper);       /* page background */
+  --bg-2:   var(--paper-pure);  /* lifted card */
+  --bg-inv: var(--ink);         /* inverse surface */
+
+  --fg-1:   var(--ink);         /* primary text */
+  --fg-2:   var(--ink-2);       /* secondary text */
+  --fg-3:   var(--mute);        /* tertiary / meta */
+  --fg-4:   var(--mute-2);      /* placeholder */
+  --fg-inv: var(--paper);       /* text on dark */
+
+  --border:    var(--rule);
+  --focus:     var(--accent);
+  --link:      var(--ink);
+  --link-hover: var(--accent);
+
+  /* ---------- Typography: families ---------- */
+  --font-sans: "NanumSquareNeo", -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo",
+               "Malgun Gothic", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+
+  /* ---------- Typography: scale ---------- */
+  --t-display:  96px;
+  --t-h1:       56px;
+  --t-h2:       32px;
+  --t-h3:       22px;
+  --t-body:     16px;
+  --t-small:    13px;
+  --t-mono-s:   12px;
+
+  --lh-tight:   1.0;
+  --lh-snug:    1.15;
+  --lh-base:    1.55;
+  --lh-loose:   1.75;
+
+  --w-light:    300;
+  --w-regular:  400;
+  --w-bold:     700;
+
+  --tracking-tight:  -0.02em;
+  --tracking-normal: 0;
+  --tracking-wide:   0.06em;
+
+  /* ---------- Spacing (4px base) ---------- */
+  --s-1:   4px;
+  --s-2:   8px;
+  --s-3:   12px;
+  --s-4:   16px;
+  --s-5:   24px;
+  --s-6:   32px;
+  --s-7:   48px;
+  --s-8:   64px;
+  --s-9:   96px;
+  --s-10:  128px;
+
+  /* ---------- Layout ---------- */
+  --container:   1440px;
+  --reading:     720px;
+  --gutter:      24px;
+  --page-pad:    96px;
+  --topbar-h:    56px;
+
+  /* ---------- Radii ---------- */
+  --r-0:    0px;
+  --r-1:    4px;
+  --r-2:    12px;
+  --r-pill: 999px;
+
+  /* ---------- Shadows ---------- */
+  --shadow-1: 0 1px 2px rgb(14 14 12 / 0.04);
+  --shadow-2: 0 12px 32px -8px rgb(14 14 12 / 0.12);
+
+  /* ---------- Motion ---------- */
+  --ease-out:    cubic-bezier(0.2, 0.7, 0.1, 1);
+  --ease-in-out: cubic-bezier(0.7, 0, 0.3, 1);
+  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+
+  --dur-fast: 120ms;
+  --dur-base: 280ms;
+  --dur-slow: 600ms;
+}
+
+/* ---------- Dark mode (optional, opt-in) ---------- */
+[data-theme="dark"] {
+  --bg-1: var(--ink);
+  --bg-2: #1A1916;
+  --bg-inv: var(--paper);
+
+  --fg-1: var(--paper);
+  --fg-2: #D7D3C8;
+  --fg-3: #8A8780;
+  --fg-4: #4D4B45;
+  --fg-inv: var(--ink);
+
+  --border: #2A2925;
+  --link: var(--paper);
+}
+
+/* =========================================================
+   Element resets & semantic defaults
+   ========================================================= */
+
+*, *::before, *::after { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: var(--bg-1);
+  color: var(--fg-1);
+  font-family: var(--font-sans);
+  font-size: var(--t-body);
+  line-height: var(--lh-base);
+  font-weight: var(--w-regular);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+::selection { background: var(--accent); color: var(--accent-ink); }
+
+h1, h2, h3, h4, p { margin: 0; }
+
+.t-display {
+  font-size: var(--t-display);
+  line-height: var(--lh-tight);
+  letter-spacing: var(--tracking-tight);
+  font-weight: var(--w-light);
+}
+
+h1, .t-h1 {
+  font-size: var(--t-h1);
+  line-height: var(--lh-tight);
+  letter-spacing: var(--tracking-tight);
+  font-weight: var(--w-light);
+}
+
+h2, .t-h2 {
+  font-size: var(--t-h2);
+  line-height: var(--lh-snug);
+  letter-spacing: var(--tracking-tight);
+  font-weight: var(--w-bold);
+}
+
+h3, .t-h3 {
+  font-size: var(--t-h3);
+  line-height: var(--lh-snug);
+  font-weight: var(--w-bold);
+}
+
+p, .t-body {
+  font-size: var(--t-body);
+  line-height: var(--lh-base);
+}
+
+.t-small {
+  font-size: var(--t-small);
+  line-height: var(--lh-base);
+  color: var(--fg-3);
+}
+
+.t-mono, code, kbd, pre {
+  font-family: var(--font-mono);
+  font-size: var(--t-mono-s);
+  letter-spacing: var(--tracking-normal);
+}
+
+.t-index {
+  font-family: var(--font-mono);
+  font-size: var(--t-mono-s);
+  color: var(--fg-3);
+  font-feature-settings: "tnum";
+}
+
+a {
+  color: var(--link);
+  text-decoration: none;
+  background-image: linear-gradient(var(--link-hover), var(--link-hover));
+  background-size: 0% 1px;
+  background-position: 0 100%;
+  background-repeat: no-repeat;
+  transition: background-size var(--dur-base) var(--ease-out),
+              color var(--dur-fast) var(--ease-out);
+}
+@media (hover: hover) {
+  a:hover { color: var(--link-hover); background-size: 100% 1px; }
+}
+
+hr {
+  border: 0;
+  border-top: 1px solid var(--border);
+  margin: var(--s-6) 0;
+}
+
+button {
+  font-family: inherit;
+  font-size: inherit;
+  color: inherit;
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+}
+
+input, textarea, select {
+  font-family: inherit;
+  font-size: inherit;
+  color: inherit;
+}
+
+:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}

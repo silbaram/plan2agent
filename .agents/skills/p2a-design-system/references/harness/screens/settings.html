@@ -1,0 +1,281 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>harness · settings</title>
+<link rel="stylesheet" href="../design-system/harness.css">
+<style>
+  body { background: var(--bg-0); margin: 0; min-height: 100vh; }
+  .frame {
+    width: 1200px; max-width: 100%;
+    margin: 24px auto;
+    background: var(--bg-1);
+    border: 1px solid var(--border-1);
+    border-radius: var(--r-3);
+    overflow: hidden;
+    box-shadow: 0 24px 64px -16px rgb(0 0 0 / 0.5);
+  }
+  .titlebar {
+    display: flex; align-items: center; height: 36px; padding: 0 14px;
+    background: var(--bg-0); border-bottom: 1px solid var(--border-1); gap: 14px;
+  }
+  .lights { display: flex; gap: 7px; flex-shrink: 0; }
+  .lights span { width: 11px; height: 11px; border-radius: 50%; }
+  .body { display: flex; min-height: 720px; }
+  .nav { width: 220px; flex-shrink: 0; padding: 18px 0; border-right: 1px solid var(--border-1); background: var(--bg-2); }
+  .nav-section { padding: 0 18px; margin-bottom: 16px; }
+  .nav-item {
+    display: flex; align-items: center; gap: 10px;
+    padding: 7px 18px; font-size: 13px; color: var(--fg-2); cursor: pointer;
+    border-left: 2px solid transparent;
+  }
+  .nav-item:hover { background: var(--bg-3); color: var(--fg-1); }
+  .nav-item.active { color: var(--fg-1); background: var(--bg-3); border-left-color: var(--accent); font-weight: 500; }
+  .pane { flex: 1; padding: 28px 36px; overflow: auto; }
+  h1 { font-size: 24px; font-weight: 700; letter-spacing: -0.01em; margin: 0 0 4px; }
+  .pane-sub { color: var(--fg-3); font-size: 13px; margin-bottom: 28px; }
+  .group {
+    border: 1px solid var(--border-1);
+    border-radius: var(--r-2);
+    margin-bottom: 18px;
+    overflow: hidden;
+  }
+  .group-header { padding: 12px 18px; border-bottom: 1px solid var(--border-1); background: var(--bg-2); display: flex; align-items: baseline; gap: 10px; }
+  .group-title { font-size: 13px; font-weight: 600; }
+  .group-sub { font-size: 11px; color: var(--fg-3); font-family: var(--font-mono); }
+  .row {
+    display: grid; grid-template-columns: 220px 1fr auto;
+    gap: 24px; align-items: center;
+    padding: 14px 18px; border-bottom: 1px solid var(--border-1);
+  }
+  .row:last-child { border-bottom: 0; }
+  .row-label { font-size: 13px; }
+  .row-desc { font-size: 11px; color: var(--fg-3); margin-top: 2px; }
+  .row-control { color: var(--fg-2); font-size: 13px; }
+  input[type="text"], select {
+    background: var(--bg-2); color: var(--fg-1); border: 1px solid var(--border-2);
+    border-radius: var(--r-1); padding: 6px 10px; font-family: var(--font-sans); font-size: 12px;
+    outline: none; min-width: 200px;
+  }
+  .key {
+    background: var(--bg-2); color: var(--fg-2); border: 1px solid var(--border-2);
+    border-radius: var(--r-1); padding: 6px 10px; font-family: var(--font-mono); font-size: 11px;
+    min-width: 240px; display: inline-block;
+  }
+  .btn { padding: 6px 12px; border-radius: var(--r-1); font-size: 12px; font-family: var(--font-sans); cursor: pointer; }
+  .btn-primary { background: var(--accent); color: #0F0F0D; border: 0; font-weight: 600; }
+  .btn-ghost { background: transparent; color: var(--fg-2); border: 1px solid var(--border-2); }
+  .toggle {
+    width: 32px; height: 18px; border-radius: 999px; background: var(--bg-4);
+    position: relative; cursor: pointer; transition: background 200ms;
+  }
+  .toggle::after {
+    content: ""; position: absolute; top: 2px; left: 2px;
+    width: 14px; height: 14px; border-radius: 50%; background: var(--fg-2);
+    transition: all 200ms;
+  }
+  .toggle.on { background: var(--accent); }
+  .toggle.on::after { left: 16px; background: #0F0F0D; }
+  .pill {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 3px 9px; border: 1px solid var(--border-2); background: var(--bg-2);
+    border-radius: 999px; font-family: var(--font-mono); font-size: 11px; color: var(--fg-2);
+  }
+  .pill .dot { width: 5px; height: 5px; border-radius: 50%; background: #8FB66B; }
+  .provider-row { display: flex; align-items: center; gap: 12px; padding: 12px 18px; border-bottom: 1px solid var(--border-1); }
+  .provider-row:last-child { border-bottom: 0; }
+  .mark { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; font-family: var(--font-mono); font-size: 11px; font-weight: 600; flex-shrink: 0; }
+  .provider-name { font-size: 13px; font-weight: 500; }
+  .provider-meta { font-family: var(--font-mono); font-size: 11px; color: var(--fg-3); }
+</style>
+</head>
+<body>
+<div class="frame">
+  <div class="titlebar">
+    <div class="lights"><span style="background:#FF5F57"></span><span style="background:#FEBC2E"></span><span style="background:#28C840"></span></div>
+    <span style="font-family:var(--font-mono); font-size:11px; color:var(--fg-3);">harness</span>
+    <span style="font-family:var(--font-mono); font-size:11px; color:var(--fg-4);">·</span>
+    <span style="font-family:var(--font-mono); font-size:11px; color:var(--fg-2);">settings</span>
+  </div>
+  <div class="body">
+    <nav class="nav">
+      <div class="nav-section">
+        <div class="t-micro" style="margin-bottom:8px;">general</div>
+      </div>
+      <div class="nav-item">appearance</div>
+      <div class="nav-item active">providers</div>
+      <div class="nav-item">keybindings</div>
+      <div class="nav-item">terminal</div>
+      <div class="nav-item">notifications</div>
+      <div class="nav-section" style="margin-top:24px;">
+        <div class="t-micro" style="margin-bottom:8px;">extensions</div>
+      </div>
+      <div class="nav-item">mcp servers</div>
+      <div class="nav-item">skills</div>
+      <div class="nav-item">slash commands</div>
+      <div class="nav-section" style="margin-top:24px;">
+        <div class="t-micro" style="margin-bottom:8px;">data</div>
+      </div>
+      <div class="nav-item">storage &amp; cache</div>
+      <div class="nav-item">privacy</div>
+      <div class="nav-item">about</div>
+    </nav>
+
+    <main class="pane">
+      <h1>providers</h1>
+      <div class="pane-sub">AI 모델 제공자 설정. API 키, 기본 모델, 토큰 한도를 관리합니다.</div>
+
+      <div class="group">
+        <div class="group-header">
+          <span class="group-title">connected providers</span>
+          <span class="group-sub">5 of 6 configured</span>
+        </div>
+        <div class="provider-row">
+          <span class="mark" style="border:1px solid #D97757; color:#D97757;">C</span>
+          <div style="flex:1;">
+            <div class="provider-name">claude</div>
+            <div class="provider-meta">sonnet 4.5 · opus 4 · haiku 4.5</div>
+          </div>
+          <span class="pill"><span class="dot"></span>connected</span>
+          <button class="btn btn-ghost">manage</button>
+        </div>
+        <div class="provider-row">
+          <span class="mark" style="border:1px solid #A8B1A0; color:#A8B1A0;">O</span>
+          <div style="flex:1;">
+            <div class="provider-name">codex (openai)</div>
+            <div class="provider-meta">gpt-5 · gpt-4.1</div>
+          </div>
+          <span class="pill"><span class="dot"></span>connected</span>
+          <button class="btn btn-ghost">manage</button>
+        </div>
+        <div class="provider-row">
+          <span class="mark" style="border:1px solid #6B9BB8; color:#6B9BB8;">G</span>
+          <div style="flex:1;">
+            <div class="provider-name">gemini</div>
+            <div class="provider-meta">2.5 pro · flash · nano</div>
+          </div>
+          <span class="pill"><span class="dot"></span>connected</span>
+          <button class="btn btn-ghost">manage</button>
+        </div>
+        <div class="provider-row">
+          <span class="mark" style="border:1px solid #B89968; color:#B89968;">A</span>
+          <div style="flex:1;">
+            <div class="provider-name">aider</div>
+            <div class="provider-meta">via claude · via gpt-4</div>
+          </div>
+          <span class="pill"><span class="dot"></span>connected</span>
+          <button class="btn btn-ghost">manage</button>
+        </div>
+        <div class="provider-row">
+          <span class="mark" style="border:1px solid var(--border-3); color:var(--fg-4);">U</span>
+          <div style="flex:1;">
+            <div class="provider-name" style="color:var(--fg-3);">cursor</div>
+            <div class="provider-meta">not configured</div>
+          </div>
+          <button class="btn btn-primary">connect</button>
+        </div>
+      </div>
+
+      <div class="group">
+        <div class="group-header">
+          <span class="group-title">defaults</span>
+          <span class="group-sub">새 세션의 기본값</span>
+        </div>
+        <div class="row">
+          <div>
+            <div class="row-label">default agent</div>
+            <div class="row-desc">⌘N으로 새 세션 시작 시 사용할 에이전트</div>
+          </div>
+          <div class="row-control">
+            <select>
+              <option>claude code · sonnet 4.5</option>
+              <option>codex · gpt-5</option>
+              <option>gemini · 2.5 pro</option>
+            </select>
+          </div>
+          <div></div>
+        </div>
+        <div class="row">
+          <div>
+            <div class="row-label">claude api key</div>
+            <div class="row-desc">~/Library/Application Support/harness/keys.enc</div>
+          </div>
+          <div class="row-control">
+            <span class="key">sk-ant-••••••••••••••••••a3f2</span>
+          </div>
+          <button class="btn btn-ghost">rotate</button>
+        </div>
+        <div class="row">
+          <div>
+            <div class="row-label">openai api key</div>
+            <div class="row-desc">codex가 사용</div>
+          </div>
+          <div class="row-control">
+            <span class="key">sk-proj-••••••••••••••••••8c11</span>
+          </div>
+          <button class="btn btn-ghost">rotate</button>
+        </div>
+        <div class="row">
+          <div>
+            <div class="row-label">monthly budget cap</div>
+            <div class="row-desc">한도 도달 시 자동으로 sleep 상태로 전환</div>
+          </div>
+          <div class="row-control">
+            <input type="text" value="$200.00" style="min-width:120px; font-family:var(--font-mono);"/>
+          </div>
+          <div></div>
+        </div>
+        <div class="row">
+          <div>
+            <div class="row-label">parallel agents</div>
+            <div class="row-desc">동시에 실행되는 에이전트 수 제한</div>
+          </div>
+          <div class="row-control">
+            <input type="text" value="5" style="min-width:60px; font-family:var(--font-mono); text-align:center;"/>
+          </div>
+          <div></div>
+        </div>
+      </div>
+
+      <div class="group">
+        <div class="group-header">
+          <span class="group-title">behavior</span>
+        </div>
+        <div class="row">
+          <div>
+            <div class="row-label">auto-apply low-risk edits</div>
+            <div class="row-desc">읽기 전용·import 정렬·import 추가 같은 변경은 즉시 적용</div>
+          </div>
+          <div></div>
+          <div class="toggle on"></div>
+        </div>
+        <div class="row">
+          <div>
+            <div class="row-label">require approval for shell</div>
+            <div class="row-desc">셸 명령은 항상 승인 후 실행</div>
+          </div>
+          <div></div>
+          <div class="toggle on"></div>
+        </div>
+        <div class="row">
+          <div>
+            <div class="row-label">stream provider responses</div>
+            <div class="row-desc">토큰 단위로 점진적 표시</div>
+          </div>
+          <div></div>
+          <div class="toggle on"></div>
+        </div>
+        <div class="row">
+          <div>
+            <div class="row-label">analytics</div>
+            <div class="row-desc">사용 통계를 anthropic에 전송</div>
+          </div>
+          <div></div>
+          <div class="toggle"></div>
+        </div>
+      </div>
+    </main>
+  </div>
+</div>
+</body>
+</html>

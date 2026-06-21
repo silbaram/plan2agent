@@ -1,0 +1,221 @@
+/* =========================================================
+   Harness — design tokens for the AI CLI harness tool
+   Built on Atelier's foundations, recast for a dark terminal IDE.
+   ========================================================= */
+
+@font-face {
+  font-family: "NanumSquareNeo";
+  src: url("./fonts/NanumSquareNeo-Variable.ttf") format("truetype-variations"),
+       url("./fonts/NanumSquareNeo-Variable.ttf") format("truetype");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+@import url("https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap");
+
+:root {
+  /* ---------- Surface palette (dark-first) ----------
+     Warm-leaning near-blacks. Avoid pure #000; pure black
+     reads cheap on OLED and clashes with the ink-on-paper
+     warmth Atelier inherits.                                */
+  --bg-0:       #0A0A09;   /* deepest — app chrome edge */
+  --bg-1:       #0F0F0D;   /* default canvas */
+  --bg-2:       #15140F;   /* sidebar / panel */
+  --bg-3:       #1B1A14;   /* lifted card / hover */
+  --bg-4:       #232118;   /* input / pressed */
+  --bg-5:       #2D2A1F;   /* selected row */
+
+  /* Foreground — paper-warm grayscale */
+  --fg-1:       #EFEAD8;   /* primary — NanumSquare body */
+  --fg-2:       #C4BFAE;   /* secondary */
+  --fg-3:       #8A8780;   /* tertiary, meta */
+  --fg-4:       #5C5A52;   /* placeholder, disabled */
+  --fg-5:       #3A3933;   /* hairline labels */
+
+  /* Borders — almost imperceptible */
+  --border-1:   #25241D;   /* default rule */
+  --border-2:   #34322A;   /* hover/active */
+  --border-3:   #4A4738;   /* focus ring */
+
+  /* Brand accent — vermilion carried over from Atelier,
+     slightly hotter for dark surfaces */
+  --accent:     #FF5B2E;
+  --accent-hi:  #FF8054;
+  --accent-lo:  #C2421F;
+  --accent-ink: #0E0E0C;
+
+  /* Status colors — muted, terminal-grade */
+  --ok:         #8FB66B;
+  --ok-bg:      #1F2818;
+  --warn:       #E0A647;
+  --warn-bg:    #2A2113;
+  --err:        #E5654B;
+  --err-bg:     #2A1612;
+  --info:       #6B9BB8;
+  --info-bg:    #15212A;
+
+  /* Agent provider tints — used as 1px accents, never fills */
+  --p-claude:   #D97757;
+  --p-codex:    #A8B1A0;
+  --p-gemini:   #6B9BB8;
+  --p-cursor:   #C4BFAE;
+  --p-aider:    #B89968;
+
+  /* ---------- Typography ---------- */
+  --font-sans: "NanumSquareNeo", -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo",
+               "Malgun Gothic", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+
+  /* Scale — denser than gallery; this is a working tool */
+  --t-display:  40px;   /* hero numbers, project name */
+  --t-h1:       24px;   /* page title */
+  --t-h2:       18px;   /* section title */
+  --t-h3:       14px;   /* card title, sidebar header */
+  --t-body:     13px;   /* default reading */
+  --t-small:    12px;   /* meta, captions */
+  --t-mono:     12px;   /* code, terminal */
+  --t-mono-s:   11px;   /* indexes, timestamps */
+  --t-micro:    10px;   /* uppercase labels, badges */
+
+  --lh-tight:   1.1;
+  --lh-snug:    1.3;
+  --lh-base:    1.5;
+  --lh-loose:   1.7;
+
+  --w-light:    300;
+  --w-regular:  400;
+  --w-medium:   500;
+  --w-bold:     700;
+
+  --tracking-tight:  -0.01em;
+  --tracking-normal: 0;
+  --tracking-wide:   0.04em;
+  --tracking-caps:   0.08em;
+
+  /* ---------- Spacing (4px base) ---------- */
+  --s-0:   2px;
+  --s-1:   4px;
+  --s-2:   8px;
+  --s-3:   12px;
+  --s-4:   16px;
+  --s-5:   24px;
+  --s-6:   32px;
+  --s-7:   48px;
+  --s-8:   64px;
+
+  /* ---------- Layout ---------- */
+  --titlebar-h:     36px;   /* macOS chrome traffic-light row */
+  --activitybar-w:  48px;   /* leftmost icon rail */
+  --sidebar-w:      260px;  /* file/session tree */
+  --inspector-w:    320px;  /* right panel */
+  --statusbar-h:    24px;   /* bottom strip */
+  --tab-h:          32px;
+
+  /* ---------- Radii — leans flat, IDE-feel ---------- */
+  --r-0:    0px;
+  --r-1:    3px;    /* buttons, inputs, chips */
+  --r-2:    6px;    /* panels, cards */
+  --r-3:    10px;   /* modals */
+  --r-pill: 999px;
+
+  /* ---------- Shadows ---------- */
+  --shadow-1: 0 1px 0 rgb(0 0 0 / 0.4);
+  --shadow-2: 0 4px 16px -4px rgb(0 0 0 / 0.5);
+  --shadow-3: 0 12px 48px -8px rgb(0 0 0 / 0.6);
+  --glow-accent: 0 0 0 1px var(--accent), 0 0 16px -2px rgb(255 91 46 / 0.3);
+
+  /* ---------- Motion ---------- */
+  --ease-out:    cubic-bezier(0.2, 0.7, 0.1, 1);
+  --ease-in-out: cubic-bezier(0.7, 0, 0.3, 1);
+  --ease-step:   steps(4, end);     /* for dot character animation */
+
+  --dur-fast:   100ms;
+  --dur-base:   200ms;
+  --dur-slow:   400ms;
+  --dur-blink:  900ms;   /* dot character idle blink */
+
+  /* ---------- Dot character grid ---------- */
+  --dot-size:    2px;
+  --dot-gap:     1px;
+  --dot-on:      var(--fg-1);
+  --dot-dim:     var(--fg-4);
+  --dot-accent:  var(--accent);
+}
+
+/* =========================================================
+   Resets & defaults
+   ========================================================= */
+
+*, *::before, *::after { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: var(--bg-1);
+  color: var(--fg-1);
+  font-family: var(--font-sans);
+  font-size: var(--t-body);
+  line-height: var(--lh-base);
+  font-weight: var(--w-regular);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+  font-feature-settings: "ss01", "tnum";
+}
+
+::selection { background: var(--accent); color: var(--accent-ink); }
+
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: var(--border-1);
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:hover { background: var(--border-2); background-clip: padding-box; border: 2px solid transparent; }
+
+h1, h2, h3, h4, p { margin: 0; }
+
+/* ---------- Type utility classes ---------- */
+.t-display { font-size: var(--t-display); line-height: var(--lh-tight); letter-spacing: var(--tracking-tight); font-weight: var(--w-light); }
+.t-h1      { font-size: var(--t-h1);      line-height: var(--lh-snug);  letter-spacing: var(--tracking-tight); font-weight: var(--w-bold); }
+.t-h2      { font-size: var(--t-h2);      line-height: var(--lh-snug);  font-weight: var(--w-bold); }
+.t-h3      { font-size: var(--t-h3);      line-height: var(--lh-snug);  font-weight: var(--w-bold); }
+.t-body    { font-size: var(--t-body);    line-height: var(--lh-base);  font-weight: var(--w-regular); }
+.t-small   { font-size: var(--t-small);   line-height: var(--lh-base);  color: var(--fg-3); }
+.t-mono    { font-family: var(--font-mono); font-size: var(--t-mono); }
+.t-mono-s  { font-family: var(--font-mono); font-size: var(--t-mono-s); color: var(--fg-3); font-feature-settings: "tnum"; }
+.t-micro   { font-size: var(--t-micro); letter-spacing: var(--tracking-caps); text-transform: uppercase; color: var(--fg-3); font-weight: var(--w-medium); }
+
+/* ---------- Hairline rule helpers ---------- */
+.rule-b { border-bottom: 1px solid var(--border-1); }
+.rule-t { border-top: 1px solid var(--border-1); }
+.rule-r { border-right: 1px solid var(--border-1); }
+.rule-l { border-left: 1px solid var(--border-1); }
+
+/* ---------- Focus ---------- */
+:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 1px;
+}
+
+button {
+  font-family: inherit;
+  font-size: inherit;
+  color: inherit;
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+}
+
+input, textarea, select {
+  font-family: inherit;
+  font-size: inherit;
+  color: inherit;
+  background: transparent;
+  border: 0;
+  outline: 0;
+}

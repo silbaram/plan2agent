@@ -1,0 +1,92 @@
+/* Shared preview card chrome — every preview/*.html links this */
+@import url("../design-system/harness.css");
+
+html, body {
+  background: #18170F;
+  margin: 0;
+  font-family: var(--font-sans);
+  color: var(--fg-1);
+  font-size: var(--t-body);
+  min-height: 100vh;
+}
+
+.card {
+  max-width: 720px;
+  margin: 24px auto;
+  background: var(--bg-1);
+  border: 1px solid var(--border-1);
+  border-radius: var(--r-2);
+  padding: 28px;
+  box-shadow: 0 24px 64px -16px rgb(0 0 0 / 0.4);
+}
+
+.card-header {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  padding-bottom: 14px;
+  margin-bottom: 22px;
+  border-bottom: 1px solid var(--border-1);
+}
+.card-title {
+  font-size: var(--t-h2);
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+.card-sub {
+  font-family: var(--font-mono);
+  font-size: var(--t-mono-s);
+  color: var(--fg-3);
+  margin-left: auto;
+}
+.card-desc {
+  font-size: var(--t-small);
+  color: var(--fg-3);
+  margin-bottom: 22px;
+  max-width: 60ch;
+}
+
+.label {
+  font-size: var(--t-micro);
+  letter-spacing: var(--tracking-caps);
+  text-transform: uppercase;
+  color: var(--fg-3);
+  font-weight: 500;
+  margin-bottom: 10px;
+}
+
+.swatch-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 10px;
+}
+.swatch {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-1);
+  border-radius: var(--r-1);
+}
+.swatch-chip {
+  width: 36px;
+  height: 36px;
+  border-radius: var(--r-1);
+  border: 1px solid var(--border-2);
+  flex-shrink: 0;
+}
+.swatch-name {
+  font-family: var(--font-mono);
+  font-size: var(--t-mono-s);
+  color: var(--fg-1);
+}
+.swatch-value {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--fg-3);
+}
+.swatch-use {
+  margin-left: auto;
+  font-size: var(--t-small);
+  color: var(--fg-3);
+}

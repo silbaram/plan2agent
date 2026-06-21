@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="ko"><head><meta charset="utf-8"><title>color · foreground</title>
+<link rel="stylesheet" href="_card.css">
+</head><body>
+<div class="card">
+  <div class="card-header">
+    <span class="card-title">foreground</span>
+    <span class="card-sub">--fg-1 → --fg-5</span>
+  </div>
+  <div class="card-desc">paper-warm grayscale. fg-1만 진하게 쓰고, fg-2부터는 위계를 표현하는 데만.</div>
+
+  <div class="label">text on bg-1</div>
+  <div style="background:var(--bg-1); border:1px solid var(--border-1); border-radius:var(--r-2); padding:18px 20px; margin-bottom:16px;">
+    <div style="color:#EFEAD8; font-size:18px; font-weight:700; margin-bottom:6px;">primary · 한민의 작업</div>
+    <div style="color:#C4BFAE; font-size:14px; margin-bottom:6px;">secondary · 보조 텍스트와 부가 정보</div>
+    <div style="color:#8A8780; font-size:13px; margin-bottom:6px;">tertiary · 메타데이터, 타임스탬프, 카운트</div>
+    <div style="color:#5C5A52; font-size:13px; margin-bottom:6px;">placeholder · 비활성화·힌트</div>
+    <div style="color:#3A3933; font-size:11px; letter-spacing:0.08em; text-transform:uppercase;">hairline · 거의 보이지 않는 라벨</div>
+  </div>
+
+  <div class="label">tokens</div>
+  <table style="width:100%; border-collapse:collapse; font-family:var(--font-mono); font-size:11px;">
+    <tbody>
+      <tr><td style="padding:8px 0; color:#EFEAD8;">--fg-1</td><td style="padding:8px 0; color:#8A8780;">#EFEAD8</td><td style="padding:8px 0; color:#8A8780;">primary text</td></tr>
+      <tr><td style="padding:8px 0; color:#C4BFAE;">--fg-2</td><td style="padding:8px 0; color:#8A8780;">#C4BFAE</td><td style="padding:8px 0; color:#8A8780;">secondary text</td></tr>
+      <tr><td style="padding:8px 0; color:#8A8780;">--fg-3</td><td style="padding:8px 0; color:#8A8780;">#8A8780</td><td style="padding:8px 0; color:#8A8780;">tertiary · meta</td></tr>
+      <tr><td style="padding:8px 0; color:#5C5A52;">--fg-4</td><td style="padding:8px 0; color:#8A8780;">#5C5A52</td><td style="padding:8px 0; color:#8A8780;">placeholder · disabled</td></tr>
+      <tr><td style="padding:8px 0; color:#3A3933;">--fg-5</td><td style="padding:8px 0; color:#8A8780;">#3A3933</td><td style="padding:8px 0; color:#8A8780;">hairline labels</td></tr>
+    </tbody>
+  </table>
+</div>
+</body></html>

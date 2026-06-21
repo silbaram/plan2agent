@@ -1,0 +1,362 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>harness · cost</title>
+<link rel="stylesheet" href="../design-system/harness.css">
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+<script type="text/babel" src="../design-system/dot-character.jsx"></script>
+<style>
+  body { background: var(--bg-0); margin: 0; min-height: 100vh; }
+  .frame {
+    width: 1200px; max-width: 100%; margin: 24px auto;
+    background: var(--bg-1); border: 1px solid var(--border-1); border-radius: var(--r-3);
+    overflow: hidden; box-shadow: 0 24px 64px -16px rgb(0 0 0 / 0.5);
+  }
+  .titlebar { display: flex; align-items: center; height: 36px; padding: 0 14px; background: var(--bg-0); border-bottom: 1px solid var(--border-1); gap: 14px; }
+  .lights { display: flex; gap: 7px; flex-shrink: 0; }
+  .lights span { width: 11px; height: 11px; border-radius: 50%; }
+  .body { padding: 32px 40px 40px; }
+
+  .pane-head { display: flex; align-items: flex-end; justify-content: space-between; margin-bottom: 28px; }
+  h1 { font-size: 24px; font-weight: 700; margin: 0 0 4px; letter-spacing: -0.01em; }
+  .h-sub { color: var(--fg-3); font-family: var(--font-mono); font-size: 12px; }
+  .range-pills { display: flex; border: 1px solid var(--border-2); border-radius: var(--r-1); overflow: hidden; }
+  .range-pills button {
+    background: transparent; color: var(--fg-3); border: 0;
+    padding: 6px 12px; font-family: var(--font-mono); font-size: 11px; cursor: pointer;
+    border-right: 1px solid var(--border-2);
+  }
+  .range-pills button:last-child { border-right: 0; }
+  .range-pills button.active { background: var(--bg-3); color: var(--fg-1); }
+
+  /* hero strip */
+  .hero {
+    display: grid; grid-template-columns: 2fr 1fr 1fr 1fr;
+    gap: 1px;
+    background: var(--border-1);
+    border: 1px solid var(--border-1);
+    border-radius: var(--r-2);
+    margin-bottom: 28px;
+    overflow: hidden;
+  }
+  .stat { padding: 22px 26px; background: var(--bg-1); }
+  .stat-label { font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--fg-3); margin-bottom: 8px; font-weight: 500; }
+  .stat-value { font-family: var(--font-sans); font-weight: 300; letter-spacing: -0.02em; line-height: 1; }
+  .stat-value.big { font-size: 40px; }
+  .stat-value.med { font-size: 24px; }
+  .stat-meta { font-family: var(--font-mono); font-size: 11px; color: var(--fg-3); margin-top: 8px; }
+  .accent { color: var(--accent); }
+
+  /* daily bar chart */
+  .chart {
+    margin-bottom: 28px;
+    border: 1px solid var(--border-1); border-radius: var(--r-2);
+  }
+  .chart-head { padding: 14px 20px; border-bottom: 1px solid var(--border-1); display: flex; align-items: baseline; gap: 14px; background: var(--bg-2); }
+  .chart-title { font-size: 13px; font-weight: 600; }
+  .chart-legend { margin-left: auto; display: flex; gap: 14px; font-family: var(--font-mono); font-size: 11px; color: var(--fg-3); }
+  .chart-legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .chart-legend i { width: 10px; height: 10px; display: inline-block; }
+  .chart-body { padding: 22px 24px; }
+  .bars { display: grid; grid-template-columns: repeat(14, 1fr); gap: 10px; align-items: end; height: 200px; margin-bottom: 8px; }
+  .bar-stack { display: flex; flex-direction: column; align-items: stretch; height: 100%; justify-content: flex-end; gap: 1px; position: relative; }
+  .bar-stack:hover .bar-tip { opacity: 1; }
+  .bar-stack .bar-tip {
+    position: absolute; bottom: 105%; left: 50%; transform: translateX(-50%);
+    background: var(--bg-4); border: 1px solid var(--border-3); border-radius: var(--r-1);
+    padding: 4px 8px; font-family: var(--font-mono); font-size: 10px; color: var(--fg-1);
+    white-space: nowrap; opacity: 0; pointer-events: none; transition: opacity 100ms;
+  }
+  .bar-axis { display: grid; grid-template-columns: repeat(14, 1fr); gap: 10px; font-family: var(--font-mono); font-size: 10px; color: var(--fg-3); text-align: center; }
+
+  /* breakdown grid */
+  .grid {
+    display: grid; grid-template-columns: 2fr 1fr;
+    gap: 18px;
+  }
+  .panel { border: 1px solid var(--border-1); border-radius: var(--r-2); overflow: hidden; }
+  .panel-head { padding: 14px 20px; border-bottom: 1px solid var(--border-1); background: var(--bg-2); display: flex; align-items: baseline; gap: 14px; }
+  .panel-title { font-size: 13px; font-weight: 600; }
+  .panel-sub { font-family: var(--font-mono); font-size: 11px; color: var(--fg-3); }
+
+  /* provider table */
+  .ptable { width: 100%; border-collapse: collapse; }
+  .ptable th { text-align: left; padding: 10px 20px; font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--fg-3); font-weight: 500; border-bottom: 1px solid var(--border-1); background: var(--bg-1); }
+  .ptable th.num { text-align: right; }
+  .ptable td { padding: 14px 20px; border-bottom: 1px solid var(--border-1); font-size: 13px; }
+  .ptable tr:last-child td { border-bottom: 0; }
+  .ptable td.num { text-align: right; font-family: var(--font-mono); font-feature-settings: "tnum"; }
+  .ptable td.num .accent { color: var(--accent); }
+  .pcell { display: flex; align-items: center; gap: 10px; }
+  .pmark { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; font-family: var(--font-mono); font-size: 11px; font-weight: 600; flex-shrink: 0; }
+  .pname { font-weight: 500; }
+  .pmeta { font-family: var(--font-mono); font-size: 11px; color: var(--fg-3); }
+
+  /* budget panel */
+  .budget-body { padding: 20px; }
+  .budget-row { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 8px; font-size: 13px; }
+  .budget-bar { height: 6px; background: var(--bg-3); border-radius: 999px; overflow: hidden; margin-bottom: 4px; }
+  .budget-bar-fill { height: 100%; background: var(--accent); }
+  .budget-meta { font-family: var(--font-mono); font-size: 11px; color: var(--fg-3); margin-bottom: 22px; }
+  .alerts { padding-top: 16px; border-top: 1px solid var(--border-1); }
+  .alert {
+    display: flex; align-items: flex-start; gap: 10px;
+    padding: 10px 12px; margin-bottom: 8px;
+    border: 1px solid var(--border-1); border-radius: var(--r-1);
+    font-size: 12px;
+  }
+  .alert.warn { border-color: #2A2113; background: #1A1610; }
+  .alert.warn .dot { background: #E0A647; }
+  .alert .dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; margin-top: 6px; }
+  .alert-title { font-weight: 500; margin-bottom: 2px; color: var(--fg-1); }
+  .alert-meta { font-family: var(--font-mono); font-size: 11px; color: var(--fg-3); }
+
+  /* expensive sessions */
+  .sess-row { display: grid; grid-template-columns: auto 1fr auto auto; gap: 14px; padding: 12px 20px; border-bottom: 1px solid var(--border-1); align-items: center; }
+  .sess-row:last-child { border-bottom: 0; }
+  .sess-name { font-size: 13px; font-weight: 500; }
+  .sess-meta { font-family: var(--font-mono); font-size: 11px; color: var(--fg-3); margin-top: 2px; }
+  .sess-tok { font-family: var(--font-mono); font-size: 11px; color: var(--fg-2); text-align: right; }
+  .sess-cost { font-family: var(--font-mono); font-size: 13px; color: var(--fg-1); text-align: right; min-width: 80px; }
+</style>
+</head>
+<body>
+<div class="frame">
+  <div class="titlebar">
+    <div class="lights"><span style="background:#FF5F57"></span><span style="background:#FEBC2E"></span><span style="background:#28C840"></span></div>
+    <span style="font-family:var(--font-mono); font-size:11px; color:var(--fg-3);">harness</span>
+    <span style="font-family:var(--font-mono); font-size:11px; color:var(--fg-4);">·</span>
+    <span style="font-family:var(--font-mono); font-size:11px; color:var(--fg-2);">cost &amp; usage</span>
+  </div>
+
+  <div class="body">
+    <div class="pane-head">
+      <div>
+        <h1>cost &amp; usage</h1>
+        <div class="h-sub">2026-04-20 → 2026-05-03 · 14 days</div>
+      </div>
+      <div class="range-pills">
+        <button>day</button>
+        <button>week</button>
+        <button class="active">14d</button>
+        <button>month</button>
+        <button>all</button>
+      </div>
+    </div>
+
+    <div class="hero">
+      <div class="stat">
+        <div class="stat-label">total spend · 14d</div>
+        <div class="stat-value big"><span class="accent">$84.27</span></div>
+        <div class="stat-meta">↓ 12% vs prev period · projected month: $158</div>
+      </div>
+      <div class="stat">
+        <div class="stat-label">tokens in</div>
+        <div class="stat-value med">3.42<span style="font-size:14px; color:var(--fg-3); margin-left:4px;">M</span></div>
+        <div class="stat-meta">avg 244k / day</div>
+      </div>
+      <div class="stat">
+        <div class="stat-label">tokens out</div>
+        <div class="stat-value med">412<span style="font-size:14px; color:var(--fg-3); margin-left:4px;">k</span></div>
+        <div class="stat-meta">avg 29.4k / day</div>
+      </div>
+      <div class="stat">
+        <div class="stat-label">sessions</div>
+        <div class="stat-value med">71</div>
+        <div class="stat-meta">5.1 / day · 47 distinct</div>
+      </div>
+    </div>
+
+    <div class="chart">
+      <div class="chart-head">
+        <span class="chart-title">daily spend by provider</span>
+        <span class="panel-sub">USD · stacked</span>
+        <div class="chart-legend">
+          <span><i style="background:#D97757;"></i>claude</span>
+          <span><i style="background:#A8B1A0;"></i>codex</span>
+          <span><i style="background:#6B9BB8;"></i>gemini</span>
+          <span><i style="background:#B89968;"></i>aider</span>
+        </div>
+      </div>
+      <div class="chart-body" id="chart-body">
+        <!-- bars rendered via JS for clean values -->
+      </div>
+    </div>
+
+    <div class="grid">
+      <div class="panel">
+        <div class="panel-head">
+          <span class="panel-title">by provider</span>
+          <span class="panel-sub">14d</span>
+        </div>
+        <table class="ptable">
+          <thead>
+            <tr><th>provider</th><th>model</th><th class="num">tokens in</th><th class="num">tokens out</th><th class="num">spend</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><div class="pcell"><span class="pmark" style="border:1px solid #D97757; color:#D97757;">C</span><div><div class="pname">claude</div></div></div></td>
+              <td><span class="pmeta">sonnet 4.5</span></td>
+              <td class="num">2.18M</td>
+              <td class="num">241k</td>
+              <td class="num"><span class="accent">$48.92</span></td>
+            </tr>
+            <tr>
+              <td><div class="pcell"><span class="pmark" style="border:1px solid #D97757; color:#D97757;">C</span><div><div class="pname">claude</div></div></div></td>
+              <td><span class="pmeta">opus 4</span></td>
+              <td class="num">86k</td>
+              <td class="num">12k</td>
+              <td class="num">$14.84</td>
+            </tr>
+            <tr>
+              <td><div class="pcell"><span class="pmark" style="border:1px solid #A8B1A0; color:#A8B1A0;">O</span><div><div class="pname">codex</div></div></div></td>
+              <td><span class="pmeta">gpt-5</span></td>
+              <td class="num">521k</td>
+              <td class="num">88k</td>
+              <td class="num">$11.18</td>
+            </tr>
+            <tr>
+              <td><div class="pcell"><span class="pmark" style="border:1px solid #6B9BB8; color:#6B9BB8;">G</span><div><div class="pname">gemini</div></div></div></td>
+              <td><span class="pmeta">2.5 pro</span></td>
+              <td class="num">428k</td>
+              <td class="num">52k</td>
+              <td class="num">$6.71</td>
+            </tr>
+            <tr>
+              <td><div class="pcell"><span class="pmark" style="border:1px solid #B89968; color:#B89968;">A</span><div><div class="pname">aider</div></div></div></td>
+              <td><span class="pmeta">via sonnet 4.5</span></td>
+              <td class="num">204k</td>
+              <td class="num">19k</td>
+              <td class="num">$2.62</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head">
+          <span class="panel-title">monthly budget</span>
+          <span class="panel-sub">may 2026</span>
+        </div>
+        <div class="budget-body">
+          <div class="budget-row">
+            <span style="color:var(--fg-2);">spent</span>
+            <span style="font-family:var(--font-mono); font-weight:500; color:var(--fg-1);">$84.27 / $200.00</span>
+          </div>
+          <div class="budget-bar"><div class="budget-bar-fill" style="width:42.1%;"></div></div>
+          <div class="budget-meta">42% · 16 days remaining · projected $158</div>
+
+          <div class="alerts">
+            <div class="t-micro" style="margin-bottom:10px;">alerts</div>
+            <div class="alert warn">
+              <span class="dot"></span>
+              <div>
+                <div class="alert-title">opus 4 spend trending high</div>
+                <div class="alert-meta">3-day avg: $4.20 · was $1.80</div>
+              </div>
+            </div>
+            <div class="alert">
+              <span class="dot" style="background:var(--fg-3);"></span>
+              <div>
+                <div class="alert-title">budget threshold: 80% → notify</div>
+                <div class="alert-meta">hit ~ may 18 at current rate</div>
+              </div>
+            </div>
+            <div class="alert">
+              <span class="dot" style="background:var(--fg-3);"></span>
+              <div>
+                <div class="alert-title">budget threshold: 100% → pause</div>
+                <div class="alert-meta">all sessions auto-sleep</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel" style="margin-top:18px;">
+      <div class="panel-head">
+        <span class="panel-title">most expensive sessions</span>
+        <span class="panel-sub">14d</span>
+      </div>
+      <div id="sess-list"></div>
+    </div>
+  </div>
+</div>
+
+<script type="text/babel">
+  // ---- daily bar chart ----
+  const days = [
+    { d: "04/20", c: 1.20, o: 0.40, g: 0.30, a: 0.10 },
+    { d: "04/21", c: 2.84, o: 0.80, g: 0.61, a: 0.20 },
+    { d: "04/22", c: 6.10, o: 1.40, g: 0.45, a: 0.30 },
+    { d: "04/23", c: 5.20, o: 0.92, g: 0.80, a: 0.18 },
+    { d: "04/24", c: 4.80, o: 0.60, g: 0.50, a: 0.40 },
+    { d: "04/25", c: 1.40, o: 0.20, g: 0.18, a: 0.05 },
+    { d: "04/26", c: 0.90, o: 0.10, g: 0.10, a: 0.02 },
+    { d: "04/27", c: 7.20, o: 1.80, g: 0.92, a: 0.31 },
+    { d: "04/28", c: 8.40, o: 2.10, g: 1.20, a: 0.42 },
+    { d: "04/29", c: 3.10, o: 0.50, g: 0.42, a: 0.10 },
+    { d: "04/30", c: 4.60, o: 0.80, g: 0.62, a: 0.18 },
+    { d: "05/01", c: 5.80, o: 1.20, g: 0.71, a: 0.22 },
+    { d: "05/02", c: 6.40, o: 1.50, g: 0.80, a: 0.28 },
+    { d: "05/03", c: 4.20, o: 0.70, g: 0.41, a: 0.18 },
+  ];
+  const max = Math.max(...days.map(x => x.c + x.o + x.g + x.a));
+  const total = (x) => x.c + x.o + x.g + x.a;
+
+  const Bars = () => (
+    <>
+      <div className="bars">
+        {days.map(x => {
+          const t = total(x);
+          return (
+            <div key={x.d} className="bar-stack">
+              <div className="bar-tip">{x.d} · ${t.toFixed(2)}</div>
+              <div style={{ background: "#B89968", height: `${(x.a/max)*100}%` }} />
+              <div style={{ background: "#6B9BB8", height: `${(x.g/max)*100}%` }} />
+              <div style={{ background: "#A8B1A0", height: `${(x.o/max)*100}%` }} />
+              <div style={{ background: "#D97757", height: `${(x.c/max)*100}%` }} />
+            </div>
+          );
+        })}
+      </div>
+      <div className="bar-axis">
+        {days.map(x => <span key={x.d}>{x.d}</span>)}
+      </div>
+    </>
+  );
+
+  ReactDOM.createRoot(document.getElementById("chart-body")).render(<Bars />);
+
+  // ---- expensive sessions ----
+  const sessions = [
+    { state: "done",  name: "checkout 401 fix",         meta: "claude · sonnet 4.5 · 04/28 · 1h 42m",  tok: "248k ↓↑ 31k", cost: "$3.42" },
+    { state: "tool",  name: "auth refactor sweep",      meta: "claude · opus 4 · 04/27 · 2h 18m",      tok: "182k ↓↑ 22k", cost: "$2.84" },
+    { state: "done",  name: "migrate to react server",  meta: "codex · gpt-5 · 04/29 · 58m",            tok: "412k ↓↑ 14k", cost: "$1.92" },
+    { state: "done",  name: "draft API spec v2",        meta: "gemini · 2.5 pro · 05/01 · 1h 12m",     tok: "298k ↓↑ 18k", cost: "$1.41" },
+    { state: "sleep", name: "test coverage push",       meta: "aider · sonnet 4.5 · 04/26 · paused",   tok: "104k ↓↑ 9k",  cost: "$0.94" },
+    { state: "done",  name: "explore checkout repo",    meta: "claude · sonnet 4.5 · 04/22 · 24m",     tok: "84k ↓↑ 6k",   cost: "$0.62" },
+  ];
+
+  const SessRow = ({ s }) => (
+    <div className="sess-row">
+      <DotChar state={s.state} size={2} />
+      <div>
+        <div className="sess-name">{s.name}</div>
+        <div className="sess-meta">{s.meta}</div>
+      </div>
+      <div className="sess-tok">{s.tok}</div>
+      <div className="sess-cost">{s.cost}</div>
+    </div>
+  );
+
+  ReactDOM.createRoot(document.getElementById("sess-list")).render(
+    <>{sessions.map((s, i) => <SessRow key={i} s={s} />)}</>
+  );
+</script>
+</body>
+</html>
