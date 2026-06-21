@@ -1,6 +1,6 @@
 # 개발팀 AI agent 개발 계획
 
-작성일: 2026-06-16 · 갱신일: 2026-06-20 · 상태: Level 1 완료, Codex 실행 계층 부분 구현, 자가 발전 첫 사이클 적용, Claude 자율 confinement 구현(deny+hook+macOS sandbox, Level 2 step 2), 실패 분류(C-①) 완료, 감독형 단일 task 실행기 Phase 1 완료, 실행기는 감독형 방향(구독 로그인 — 무인은 API 키 도입 시 보류)
+작성일: 2026-06-16 · 갱신일: 2026-06-21 · 상태: Level 1 완료, Codex 실행 계층 부분 구현, 자가 발전 첫 사이클 적용, Claude 자율 confinement 구현(deny+hook+macOS sandbox, Level 2 step 2), 실패 분류(C-①) 완료, 감독형 단일 task 실행기 Phase 1 완료, Phase 2 PTY+Electron GUI MVP 범위 확정, 실행기는 감독형 방향(구독 로그인 — 무인은 API 키 도입 시 보류)
 
 Plan2Agent의 Gate A-D planning harness 다음 단계로, **승인된 task를 실제 코드 변경·검증까지 수행하는 개발 실행 계층**을 구성하는 계획서다. 이 문서는 현재 코드 상태를 기준으로 완료된 범위, 남은 범위, 안전 경계, 다음 개발 순서를 고정한다.
 
