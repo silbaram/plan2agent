@@ -5,10 +5,43 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>P2A GUI MVP - 온보딩 프로토타입</title>
   <link rel="stylesheet" href="../../.agents/skills/p2a-design-system/references/harness/design-system/harness.css">
-  <link rel="stylesheet" href="./prototype.css?v=overview-clean">
+  <link rel="stylesheet" href="./prototype.css?v=session-top-menu">
 </head>
 <body>
   <main class="p2a-app overview-simple" aria-label="P2A GUI 온보딩 프로토타입" data-i18n-aria-label="app.label">
+    <nav class="app-menubar" aria-label="앱 메뉴바" data-i18n-aria-label="menubar.label">
+      <div class="app-menubar__menus" role="menubar">
+        <button class="app-menu-item app-menu-item--brand" type="button" role="menuitem" data-i18n="menubar.app">Plan2Agent</button>
+        <button class="app-menu-item" type="button" role="menuitem" data-i18n="menubar.file">파일</button>
+        <button class="app-menu-item" type="button" role="menuitem" data-i18n="menubar.edit">편집</button>
+        <button class="app-menu-item" type="button" role="menuitem" data-i18n="menubar.view">보기</button>
+        <button class="app-menu-item app-menu-item--compact-hide" type="button" role="menuitem" data-i18n="menubar.project">프로젝트</button>
+        <button class="app-menu-item app-menu-item--compact-hide" type="button" role="menuitem" data-i18n="menubar.run">실행</button>
+        <button class="app-menu-item app-menu-item--compact-hide" type="button" role="menuitem" data-i18n="menubar.agent">Agent</button>
+        <div class="app-menu app-menu--session">
+          <button class="app-menu-item" id="session-menu-toggle" type="button" role="menuitem" aria-expanded="false" aria-controls="session-menu-body" data-i18n="menubar.session">세션</button>
+          <div class="app-menu-dropdown" id="session-menu-body" role="menu" hidden>
+            <button class="menu-row" type="button" role="menuitem" data-detail="session-detail" data-i18n="terminalSidebar.viewSessionDetail">세션 상세 보기</button>
+            <button class="menu-row" type="button" role="menuitem" data-detail="session-command" data-i18n="terminalSidebar.viewCommand">초기 명령 보기</button>
+            <button class="menu-row" id="copy-session-command" type="button" role="menuitem" data-i18n="terminalSidebar.copyCommand">초기 명령 복사</button>
+            <button class="menu-row menu-row--switch" id="raw-log-toggle" type="button" role="menuitem" aria-pressed="false">
+              <span>
+                <strong data-i18n="terminalSidebar.rawLogStore">원문 로그 저장</strong>
+                <small id="raw-log-state" class="mono">Off</small>
+              </span>
+              <span class="toggle-track" aria-hidden="true"></span>
+            </button>
+            <button class="menu-row" id="raw-log-view" type="button" role="menuitem" data-detail="raw-log" disabled data-i18n="terminalSidebar.viewRawLog">원문 로그 보기</button>
+          </div>
+        </div>
+        <button class="app-menu-item app-menu-item--optional" type="button" role="menuitem" data-i18n="menubar.window">창</button>
+        <button class="app-menu-item app-menu-item--optional" type="button" role="menuitem" data-i18n="menubar.help">도움말</button>
+      </div>
+      <div class="app-menubar__meta">
+        <span class="mono">⌘K</span>
+        <span data-i18n="menubar.palette">명령 팔레트</span>
+      </div>
+    </nav>
     <header class="titlebar">
       <div class="traffic" aria-hidden="true">
         <span></span>
@@ -167,7 +200,7 @@
           </button>
         </div>
 
-        <div class="terminal-sidebar-section terminal-session">
+        <div class="terminal-sidebar-section terminal-session-meta">
           <div class="terminal-section-head">
             <div class="label" data-i18n="terminalSidebar.sessionLabel">세션</div>
             <span class="pill pill--info" data-i18n="terminalSidebar.sessionActive">active</span>
@@ -181,25 +214,6 @@
             <dd class="mono" data-i18n="terminalSidebar.sessionValue">Gate A · active</dd>
           </dl>
 
-          <details class="session-menu">
-            <summary>
-              <span data-i18n="terminalSidebar.sessionMenu">세션 메뉴</span>
-              <span class="mono">⌄</span>
-            </summary>
-            <div class="session-menu__body">
-              <button class="menu-row" type="button" data-detail="session-detail" data-i18n="terminalSidebar.viewSessionDetail">세션 상세 보기</button>
-              <button class="menu-row" type="button" data-detail="session-command" data-i18n="terminalSidebar.viewCommand">초기 명령 보기</button>
-              <button class="menu-row" id="copy-session-command" type="button" data-i18n="terminalSidebar.copyCommand">초기 명령 복사</button>
-              <button class="menu-row menu-row--switch" id="raw-log-toggle" type="button" aria-pressed="false">
-                <span>
-                  <strong data-i18n="terminalSidebar.rawLogStore">원문 로그 저장</strong>
-                  <small id="raw-log-state" class="mono">Off</small>
-                </span>
-                <span class="toggle-track" aria-hidden="true"></span>
-              </button>
-              <button class="menu-row" id="raw-log-view" type="button" data-detail="raw-log" disabled data-i18n="terminalSidebar.viewRawLog">원문 로그 보기</button>
-            </div>
-          </details>
         </div>
 
         <div class="summary-actions">
@@ -632,11 +646,25 @@
     const rawLogState = document.querySelector("#raw-log-state");
     const rawLogViewButton = document.querySelector("#raw-log-view");
     const copySessionCommandButton = document.querySelector("#copy-session-command");
+    const sessionMenuToggle = document.querySelector("#session-menu-toggle");
+    const sessionMenuBody = document.querySelector("#session-menu-body");
 
     const copy = {
       "document.title": { ko: "P2A GUI MVP - 온보딩 프로토타입", en: "P2A GUI MVP - onboarding prototype" },
       "app.label": { ko: "P2A GUI 온보딩 프로토타입", en: "P2A GUI onboarding prototype" },
       "language.label": { ko: "언어 선택", en: "Language" },
+      "menubar.label": { ko: "앱 메뉴바", en: "App menu bar" },
+      "menubar.app": { ko: "Plan2Agent", en: "Plan2Agent" },
+      "menubar.file": { ko: "파일", en: "File" },
+      "menubar.edit": { ko: "편집", en: "Edit" },
+      "menubar.view": { ko: "보기", en: "View" },
+      "menubar.project": { ko: "프로젝트", en: "Project" },
+      "menubar.run": { ko: "실행", en: "Run" },
+      "menubar.agent": { ko: "Agent", en: "Agent" },
+      "menubar.session": { ko: "세션", en: "Session" },
+      "menubar.window": { ko: "창", en: "Window" },
+      "menubar.help": { ko: "도움말", en: "Help" },
+      "menubar.palette": { ko: "명령 팔레트", en: "Command palette" },
       "titlebar.subtitle": { ko: "2A-0 온보딩 프로토타입", en: "2A-0 onboarding prototype" },
       "titlebar.readonly": { ko: "읽기 전용 하네스", en: "read-only harness" },
       "titlebar.noSchema": { ko: "스키마 변경 없음", en: "no schema changes" },
@@ -1325,10 +1353,16 @@ How should initial authentication start?</pre>
       modal.hidden = false;
     }
 
+    function closeSessionMenu() {
+      sessionMenuToggle.setAttribute("aria-expanded", "false");
+      sessionMenuBody.hidden = true;
+    }
+
     document.querySelectorAll("[data-detail]").forEach((button) => {
       button.addEventListener("click", () => {
         const detail = detailTemplates[button.dataset.detail];
         if (!detail) return;
+        closeSessionMenu();
         openDetail(detail);
       });
     });
@@ -1336,6 +1370,22 @@ How should initial authentication start?</pre>
     rawLogToggle.addEventListener("click", () => {
       rawLogEnabled = !rawLogEnabled;
       renderRawLogState();
+    });
+
+    sessionMenuToggle.addEventListener("click", () => {
+      const expanded = sessionMenuToggle.getAttribute("aria-expanded") === "true";
+      sessionMenuToggle.setAttribute("aria-expanded", String(!expanded));
+      sessionMenuBody.hidden = expanded;
+    });
+
+    document.addEventListener("click", (event) => {
+      if (sessionMenuBody.hidden || event.target.closest(".app-menu--session")) return;
+      closeSessionMenu();
+    });
+
+    document.addEventListener("keydown", (event) => {
+      if (event.key !== "Escape") return;
+      closeSessionMenu();
     });
 
     copySessionCommandButton.addEventListener("click", async () => {
