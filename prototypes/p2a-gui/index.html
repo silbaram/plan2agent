@@ -33,7 +33,7 @@
 
     <section class="workspace">
       <nav class="rail" aria-label="주요 메뉴" data-i18n-aria-label="rail.label">
-        <button class="rail__item rail__item--active" type="button" aria-label="개요" data-i18n-aria-label="rail.overview">
+        <button class="rail__item rail__item--active" type="button" aria-label="개요" data-i18n-aria-label="rail.overview" data-tab="overview" aria-current="page">
           <span>Ov</span>
           <small data-i18n="rail.overview">개요</small>
         </button>
@@ -49,7 +49,7 @@
           <span>Ar</span>
           <small data-i18n="rail.artifacts">산출물</small>
         </button>
-        <button class="rail__item" type="button" aria-label="터미널" data-i18n-aria-label="rail.terminal">
+        <button class="rail__item" type="button" aria-label="터미널" data-i18n-aria-label="rail.terminal" data-tab="terminal">
           <span>Te</span>
           <small data-i18n="rail.terminal">터미널</small>
         </button>
@@ -59,7 +59,7 @@
         </button>
       </nav>
 
-      <aside class="sidebar" aria-label="최근 프로젝트" data-i18n-aria-label="sidebar.label">
+      <aside class="sidebar view-pane" aria-label="최근 프로젝트" data-i18n-aria-label="sidebar.label" data-panel="overview">
         <div class="panel-head">
           <div>
             <div class="label" data-i18n="sidebar.kicker">최근 프로젝트</div>
@@ -111,7 +111,57 @@
         </div>
       </aside>
 
-      <section class="content" aria-label="프로젝트 감지" data-i18n-aria-label="content.label">
+      <aside class="sidebar view-pane sidebar--terminal" aria-label="Gate A 세션" data-i18n-aria-label="terminalSidebar.label" data-panel="terminal" hidden>
+        <div class="panel-head">
+          <div>
+            <div class="label" data-i18n="terminalSidebar.kicker">Gate 세션</div>
+            <h1 data-i18n="terminalSidebar.title">Gate A 대화</h1>
+          </div>
+          <span class="pill pill--info" data-i18n="terminalSidebar.pill">입력 대기</span>
+        </div>
+
+        <div class="terminal-session-list" aria-label="Gate A 세션 목록" data-i18n-aria-label="terminalSidebar.sessionList">
+          <button class="terminal-session terminal-session--active" type="button">
+            <span class="status status--planning"></span>
+            <span>
+              <strong data-i18n="terminalSidebar.sessionActive">Gate A intake</strong>
+              <small class="mono">codex · iter-002 · 00:08:12</small>
+            </span>
+          </button>
+          <button class="terminal-session" type="button">
+            <span class="status status--ready"></span>
+            <span>
+              <strong data-i18n="terminalSidebar.sessionDone">Gate A 완료본</strong>
+              <small class="mono">iter-001 · ready_for_spec</small>
+            </span>
+          </button>
+        </div>
+
+        <div class="terminal-command">
+          <div class="label" data-i18n="terminalSidebar.commandLabel">세션 명령</div>
+          <pre>codex
+Use the $p2a-harness skill on this idea:
+팀이 공유하는 북마크 API를 만들고 싶다.</pre>
+        </div>
+
+        <div class="terminal-sidebar-section">
+          <div class="label" data-i18n="terminalSidebar.scopeLabel">쓰기 범위</div>
+          <dl class="compact-dl">
+            <dt data-i18n="terminalSidebar.cwd">cwd</dt>
+            <dd class="mono">/Users/qoo10/projects/bookmark-api</dd>
+            <dt data-i18n="terminalSidebar.outputs">산출물</dt>
+            <dd class="mono">artifacts/bookmark-api/gate-a-intake/</dd>
+            <dt data-i18n="terminalSidebar.rawLog">원문 로그</dt>
+            <dd data-i18n="terminalSidebar.rawLogValue">기본 저장 안 함</dd>
+          </dl>
+        </div>
+
+        <div class="summary-actions">
+          <button class="btn btn--ghost" type="button" data-i18n="terminalSidebar.openArtifacts">산출물 보기</button>
+        </div>
+      </aside>
+
+      <section class="content view-pane" aria-label="프로젝트 감지" data-i18n-aria-label="content.label" data-panel="overview">
         <div class="content-head">
           <div>
             <div class="label" data-i18n="content.kicker">프로젝트 감지</div>
@@ -275,7 +325,116 @@
         </div>
       </section>
 
-      <aside class="inspector" aria-label="인스펙터" data-i18n-aria-label="inspector.label">
+      <section class="content content--terminal view-pane" aria-label="Gate A 터미널" data-i18n-aria-label="terminal.label" data-panel="terminal" hidden>
+        <div class="terminal-topline">
+          <div>
+            <div class="label" data-i18n="terminal.kicker">Terminal · Gate A</div>
+            <h2 data-i18n="terminal.title">AI agent와 intake 질문 답변</h2>
+          </div>
+          <div class="terminal-topline__meta">
+            <span class="pill pill--info" data-i18n="terminal.mode">대화 모드</span>
+            <span class="mono">run draft-gate-a-002</span>
+          </div>
+        </div>
+
+        <div class="terminal-shell" aria-label="Gate A 대화 transcript" data-i18n-aria-label="terminal.transcriptLabel">
+          <div class="terminal-shell__bar">
+            <span class="mono">bookmark-api</span>
+            <span class="sep"></span>
+            <span class="mono">Gate A intake</span>
+            <span class="sep"></span>
+            <span class="mono">codex</span>
+            <span class="terminal-shell__spacer"></span>
+            <span class="mono">00:08:12</span>
+            <span class="sep"></span>
+            <span class="mono">waiting</span>
+          </div>
+
+          <div class="agent-chip">
+            <div class="dot-char dot-char--waiting" aria-hidden="true">
+              <span></span><span></span><span></span><span></span>
+              <span></span><span></span><span></span><span></span>
+              <span></span><span></span><span></span><span></span>
+              <span></span><span></span><span></span><span></span>
+            </div>
+            <div>
+              <strong data-i18n="terminal.agentName">codex · p2a-harness</strong>
+              <small class="mono" data-i18n="terminal.agentState">waiting for answer</small>
+            </div>
+          </div>
+
+          <div class="terminal-transcript">
+            <div class="console-row console-row--system">
+              <span class="console-prefix">$</span>
+              <div>
+                <span class="mono">codex</span>
+                <p data-i18n="terminal.lineCommand">Use the $p2a-harness skill on this idea: 팀이 공유하는 북마크 API를 만들고 싶다.</p>
+              </div>
+            </div>
+            <div class="console-row console-row--agent">
+              <span class="console-prefix">◆</span>
+              <div>
+                <div class="console-row__meta">
+                  <strong data-i18n="terminal.agent">agent</strong>
+                  <span class="mono">11:41:08</span>
+                </div>
+                <p data-i18n="terminal.lineIntro">Gate A intake를 시작합니다. 제품 경계와 막히는 결정을 먼저 확인하겠습니다.</p>
+              </div>
+            </div>
+            <div class="console-row console-row--tool">
+              <span class="console-prefix">└</span>
+              <div>
+                <span class="mono">skill p2a-intake</span>
+                <small data-i18n="terminal.lineSkill">known facts, assumptions, needs_user_decision 초안 생성</small>
+              </div>
+            </div>
+            <div class="console-row console-row--agent console-row--question">
+              <span class="console-prefix">?</span>
+              <div>
+                <div class="console-row__meta">
+                  <strong>ND-1</strong>
+                  <span class="mono">open</span>
+                </div>
+                <p data-i18n="terminal.question1">북마크 공개 범위는 어떻게 시작할까요? 팀 전체 공유만 할지, 개인/팀 범위를 동시에 둘지 결정이 필요합니다.</p>
+              </div>
+            </div>
+            <div class="console-row console-row--user">
+              <span class="console-prefix">›</span>
+              <div>
+                <div class="console-row__meta">
+                  <strong data-i18n="terminal.user">사용자</strong>
+                  <span class="mono">11:43:22</span>
+                </div>
+                <p data-i18n="terminal.answer1">MVP는 팀 전체 공유만 하고, 개인 범위는 후속으로 두자.</p>
+              </div>
+            </div>
+            <div class="console-row console-row--agent console-row--question">
+              <span class="console-prefix">?</span>
+              <div>
+                <div class="console-row__meta">
+                  <strong>ND-2</strong>
+                  <span class="mono">open</span>
+                </div>
+                <p data-i18n="terminal.question2">초기 인증은 어떻게 둘까요? 사내 SSO를 붙일지, 로컬 사용자 토큰으로 시작할지 선택이 필요합니다.</p>
+              </div>
+            </div>
+            <div class="console-row console-row--input">
+              <span class="console-prefix">›</span>
+              <div>
+                <p><span data-i18n="terminal.inputDraft">답변 입력 대기</span><span class="cursor-block" aria-hidden="true"></span></p>
+              </div>
+            </div>
+          </div>
+
+          <div class="message-agent">
+            <label for="agent-message" data-i18n="terminal.messageLabel">Message agent</label>
+            <textarea id="agent-message" rows="2" data-i18n-placeholder="terminal.messagePlaceholder" placeholder="답변을 입력하면 PTY stdin으로 전달됩니다."></textarea>
+            <button class="btn btn--primary" type="button" data-i18n="terminal.send">전송</button>
+          </div>
+        </div>
+      </section>
+
+      <aside class="inspector view-pane" aria-label="인스펙터" data-i18n-aria-label="inspector.label" data-panel="overview">
         <div class="panel-head">
           <div>
             <div class="label" data-i18n="inspector.kicker">상태 근거</div>
@@ -310,14 +469,73 @@
           <button id="inspector-secondary-action" class="btn btn--ghost" type="button">산출물 근거 보기</button>
         </div>
       </aside>
+
+      <aside class="inspector inspector--terminal view-pane" aria-label="Gate A 인스펙터" data-i18n-aria-label="terminalInspector.label" data-panel="terminal" hidden>
+        <div class="panel-head">
+          <div>
+            <div class="label" data-i18n="terminalInspector.kicker">Gate A 진행</div>
+            <h2 data-i18n="terminalInspector.title">질문 답변 대기</h2>
+          </div>
+          <span class="pill pill--warn" data-i18n="terminalInspector.pill">막힘</span>
+        </div>
+
+        <div class="gate-progress">
+          <div class="gate-progress__item gate-progress__item--done">
+            <span class="mono">01</span>
+            <strong data-i18n="terminalInspector.step1">아이디어 정리</strong>
+          </div>
+          <div class="gate-progress__item gate-progress__item--active">
+            <span class="mono">02</span>
+            <strong data-i18n="terminalInspector.step2">사용자 결정</strong>
+          </div>
+          <div class="gate-progress__item">
+            <span class="mono">03</span>
+            <strong data-i18n="terminalInspector.step3">intake 저장</strong>
+          </div>
+        </div>
+
+        <div class="decision-list" aria-label="열린 결정" data-i18n-aria-label="terminalInspector.decisionsLabel">
+          <div class="decision-row decision-row--answered">
+            <span class="mono">ND-1</span>
+            <div>
+              <strong data-i18n="terminalInspector.nd1Title">공개 범위</strong>
+              <small data-i18n="terminalInspector.nd1State">답변됨 · 팀 전체 공유</small>
+            </div>
+          </div>
+          <div class="decision-row decision-row--open">
+            <span class="mono">ND-2</span>
+            <div>
+              <strong data-i18n="terminalInspector.nd2Title">초기 인증</strong>
+              <small data-i18n="terminalInspector.nd2State">열림 · 답변 필요</small>
+            </div>
+          </div>
+        </div>
+
+        <div class="terminal-sidebar-section">
+          <div class="label" data-i18n="terminalInspector.artifactLabel">예상 산출물</div>
+          <dl class="compact-dl">
+            <dt>JSON</dt>
+            <dd class="mono">gate-a-intake/intake.json</dd>
+            <dt>Markdown</dt>
+            <dd class="mono">gate-a-intake/intake.md</dd>
+            <dt data-i18n="terminalInspector.status">상태</dt>
+            <dd class="mono">blocked_on_user</dd>
+          </dl>
+        </div>
+
+        <div class="inspector-actions">
+          <button class="btn" type="button" data-i18n="terminalInspector.primary">대화 계속</button>
+          <button class="btn btn--ghost" type="button" data-i18n="terminalInspector.secondary">intake 경로 복사</button>
+        </div>
+      </aside>
     </section>
 
     <footer class="statusbar">
-      <span class="mono" data-i18n="status.branch">브랜치 main</span>
+      <span id="status-left" class="mono" data-i18n="status.branch">브랜치 main</span>
       <span class="sep"></span>
-      <span class="mono">cwd /Users/qoo10/projects/bookmark-api</span>
+      <span id="status-cwd" class="mono">cwd /Users/qoo10/projects/bookmark-api</span>
       <span class="statusbar__spacer"></span>
-      <span class="mono" data-i18n="status.localOnly">GUI 로컬 설정만 사용</span>
+      <span id="status-right" class="mono" data-i18n="status.localOnly">GUI 로컬 설정만 사용</span>
     </footer>
 
     <div class="modal" id="detail-modal" hidden>
@@ -338,9 +556,14 @@
   <script>
     const agentSelect = document.querySelector("#agent-tool");
     const langButtons = [...document.querySelectorAll("[data-lang]")];
+    const railTabs = [...document.querySelectorAll("[data-tab]")];
+    const viewPanes = [...document.querySelectorAll("[data-panel]")];
     const summaryState = document.querySelector("#summary-state");
     const summaryAction = document.querySelector("#summary-action");
     const summaryAgent = document.querySelector("#summary-agent");
+    const statusLeft = document.querySelector("#status-left");
+    const statusCwd = document.querySelector("#status-cwd");
+    const statusRight = document.querySelector("#status-right");
     const stateTitle = document.querySelector("#state-title");
     const statePill = document.querySelector("#state-pill");
     const inspectorTitle = document.querySelector("#inspector-title");
@@ -447,9 +670,61 @@
       "inspector.evidenceLabel": { ko: "현재 상태 판단 근거", en: "Current state evidence" },
       "status.branch": { ko: "브랜치 main", en: "branch main" },
       "status.localOnly": { ko: "GUI 로컬 설정만 사용", en: "GUI local config only" },
+      "status.terminalLeft": { ko: "Gate A 대화 세션", en: "Gate A conversation session" },
+      "status.terminalCwd": { ko: "cwd /Users/qoo10/projects/bookmark-api", en: "cwd /Users/qoo10/projects/bookmark-api" },
+      "status.terminalRight": { ko: "PTY 입력은 agent stdin으로만 전달", en: "PTY input forwards only to agent stdin" },
       "modal.kicker": { ko: "세부내용", en: "details" },
       "modal.title": { ko: "세부내용", en: "Details" },
       "modal.close": { ko: "닫기", en: "Close" },
+      "terminalSidebar.label": { ko: "Gate A 세션", en: "Gate A sessions" },
+      "terminalSidebar.kicker": { ko: "Gate 세션", en: "gate sessions" },
+      "terminalSidebar.title": { ko: "Gate A 대화", en: "Gate A conversation" },
+      "terminalSidebar.pill": { ko: "입력 대기", en: "waiting" },
+      "terminalSidebar.sessionList": { ko: "Gate A 세션 목록", en: "Gate A session list" },
+      "terminalSidebar.sessionActive": { ko: "Gate A intake", en: "Gate A intake" },
+      "terminalSidebar.sessionDone": { ko: "Gate A 완료본", en: "Completed Gate A" },
+      "terminalSidebar.commandLabel": { ko: "세션 명령", en: "Session command" },
+      "terminalSidebar.scopeLabel": { ko: "쓰기 범위", en: "Write scope" },
+      "terminalSidebar.cwd": { ko: "cwd", en: "cwd" },
+      "terminalSidebar.outputs": { ko: "산출물", en: "Outputs" },
+      "terminalSidebar.rawLog": { ko: "원문 로그", en: "Raw log" },
+      "terminalSidebar.rawLogValue": { ko: "기본 저장 안 함", en: "not stored by default" },
+      "terminalSidebar.openArtifacts": { ko: "산출물 보기", en: "View artifacts" },
+      "terminal.label": { ko: "Gate A 터미널", en: "Gate A terminal" },
+      "terminal.kicker": { ko: "Terminal · Gate A", en: "Terminal · Gate A" },
+      "terminal.title": { ko: "AI agent와 intake 질문 답변", en: "Answer intake questions with the AI agent" },
+      "terminal.mode": { ko: "대화 모드", en: "conversation mode" },
+      "terminal.transcriptLabel": { ko: "Gate A 대화 transcript", en: "Gate A conversation transcript" },
+      "terminal.agentName": { ko: "codex · p2a-harness", en: "codex · p2a-harness" },
+      "terminal.agentState": { ko: "답변 대기 중", en: "waiting for answer" },
+      "terminal.lineCommand": { ko: "Use the $p2a-harness skill on this idea: 팀이 공유하는 북마크 API를 만들고 싶다.", en: "Use the $p2a-harness skill on this idea: Build a shared bookmark API for the team." },
+      "terminal.agent": { ko: "agent", en: "agent" },
+      "terminal.lineIntro": { ko: "Gate A intake를 시작합니다. 제품 경계와 막히는 결정을 먼저 확인하겠습니다.", en: "Starting Gate A intake. I will check product boundaries and blocking decisions first." },
+      "terminal.lineSkill": { ko: "known facts, assumptions, needs_user_decision 초안 생성", en: "drafting known facts, assumptions, and needs_user_decision" },
+      "terminal.question1": { ko: "북마크 공개 범위는 어떻게 시작할까요? 팀 전체 공유만 할지, 개인/팀 범위를 동시에 둘지 결정이 필요합니다.", en: "How should bookmark visibility start? We need to decide between team-wide sharing only or both personal and team scopes." },
+      "terminal.user": { ko: "사용자", en: "user" },
+      "terminal.answer1": { ko: "MVP는 팀 전체 공유만 하고, 개인 범위는 후속으로 두자.", en: "For the MVP, keep only team-wide sharing and defer personal scope." },
+      "terminal.question2": { ko: "초기 인증은 어떻게 둘까요? 사내 SSO를 붙일지, 로컬 사용자 토큰으로 시작할지 선택이 필요합니다.", en: "How should initial authentication work? Choose between company SSO and local user tokens." },
+      "terminal.inputDraft": { ko: "답변 입력 대기", en: "waiting for answer" },
+      "terminal.messageLabel": { ko: "Message agent", en: "Message agent" },
+      "terminal.messagePlaceholder": { ko: "답변을 입력하면 PTY stdin으로 전달됩니다.", en: "Type an answer to forward it to PTY stdin." },
+      "terminal.send": { ko: "전송", en: "Send" },
+      "terminalInspector.label": { ko: "Gate A 인스펙터", en: "Gate A inspector" },
+      "terminalInspector.kicker": { ko: "Gate A 진행", en: "Gate A progress" },
+      "terminalInspector.title": { ko: "질문 답변 대기", en: "Waiting for answer" },
+      "terminalInspector.pill": { ko: "막힘", en: "blocked" },
+      "terminalInspector.step1": { ko: "아이디어 정리", en: "Idea framing" },
+      "terminalInspector.step2": { ko: "사용자 결정", en: "User decisions" },
+      "terminalInspector.step3": { ko: "intake 저장", en: "Persist intake" },
+      "terminalInspector.decisionsLabel": { ko: "열린 결정", en: "Open decisions" },
+      "terminalInspector.nd1Title": { ko: "공개 범위", en: "Visibility scope" },
+      "terminalInspector.nd1State": { ko: "답변됨 · 팀 전체 공유", en: "answered · team-wide sharing" },
+      "terminalInspector.nd2Title": { ko: "초기 인증", en: "Initial auth" },
+      "terminalInspector.nd2State": { ko: "열림 · 답변 필요", en: "open · answer required" },
+      "terminalInspector.artifactLabel": { ko: "예상 산출물", en: "Expected artifacts" },
+      "terminalInspector.status": { ko: "상태", en: "Status" },
+      "terminalInspector.primary": { ko: "대화 계속", en: "Continue conversation" },
+      "terminalInspector.secondary": { ko: "intake 경로 복사", en: "Copy intake path" },
     };
 
     const states = {
@@ -575,6 +850,7 @@
     };
 
     let currentState = "execution-ready";
+    let currentTab = "overview";
     let currentLocale = localStorage.getItem("p2aGuiLocale") || "ko";
 
     function localized(value) {
@@ -601,11 +877,39 @@
       document.querySelectorAll("[data-i18n-title]").forEach((element) => {
         element.setAttribute("title", copyText(element.dataset.i18nTitle));
       });
+      document.querySelectorAll("[data-i18n-placeholder]").forEach((element) => {
+        element.setAttribute("placeholder", copyText(element.dataset.i18nPlaceholder));
+      });
       langButtons.forEach((button) => {
         const active = button.dataset.lang === currentLocale;
         button.classList.toggle("lang-switch__item--active", active);
         button.setAttribute("aria-pressed", String(active));
       });
+    }
+
+    function renderTab() {
+      viewPanes.forEach((pane) => {
+        pane.hidden = pane.dataset.panel !== currentTab;
+      });
+      railTabs.forEach((button) => {
+        const active = button.dataset.tab === currentTab;
+        button.classList.toggle("rail__item--active", active);
+        if (active) {
+          button.setAttribute("aria-current", "page");
+        } else {
+          button.removeAttribute("aria-current");
+        }
+      });
+
+      if (currentTab === "terminal") {
+        statusLeft.textContent = copyText("status.terminalLeft");
+        statusCwd.textContent = copyText("status.terminalCwd");
+        statusRight.textContent = copyText("status.terminalRight");
+      } else {
+        statusLeft.textContent = copyText("status.branch");
+        statusCwd.textContent = "cwd /Users/qoo10/projects/bookmark-api";
+        statusRight.textContent = copyText("status.localOnly");
+      }
     }
 
     function renderState() {
@@ -653,6 +957,13 @@
         localStorage.setItem("p2aGuiLocale", currentLocale);
         renderStaticCopy();
         renderState();
+        renderTab();
+      });
+    });
+    railTabs.forEach((button) => {
+      button.addEventListener("click", () => {
+        currentTab = button.dataset.tab;
+        renderTab();
       });
     });
     stateCards.forEach((card) => {
@@ -688,6 +999,7 @@
 
     renderStaticCopy();
     renderState();
+    renderTab();
   </script>
 </body>
 </html>

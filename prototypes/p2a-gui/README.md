@@ -13,5 +13,6 @@
 - 상태 근거 중심 Inspector / state evidence Inspector
 - 진행 단계 흐름도 / progress flow diagram
 - Overview 상태판과 다음 행동 요약 / Overview status board and next-action summary
+- Terminal Gate A 질문 답변 mock / Terminal Gate A Q&A mock
 
 화면은 `.agents/skills/p2a-design-system`에 포함된 Harness design token을 링크합니다.
