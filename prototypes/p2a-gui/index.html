@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>P2A GUI MVP - 온보딩 프로토타입 / onboarding prototype</title>
   <link rel="stylesheet" href="../../.agents/skills/p2a-design-system/references/harness/design-system/harness.css">
-  <link rel="stylesheet" href="./prototype.css?v=handoff-tooltip">
+  <link rel="stylesheet" href="./prototype.css?v=overview-clean">
 </head>
 <body>
   <main class="p2a-app overview-simple" aria-label="P2A GUI 온보딩 프로토타입">
@@ -266,35 +266,6 @@
               <button class="btn" type="button" data-route="tasks">Tasks에서 열기 / Open in Tasks</button>
             </div>
 
-            <div class="handoff-panel" aria-label="담당 탭 안내">
-              <div class="handoff-panel__head">
-                <span class="mono">담당 탭 안내 / tab handoff</span>
-                <div class="surface-actions">
-                  <span class="pill">OV는 상태판 / status only</span>
-                  <button class="help-btn help-btn--right" type="button" aria-label="담당 탭 도움말" data-tooltip="OV는 전체 상태만 보여줍니다. 실행, 검증, PTY 입력은 Tasks, Terminal, Runs에서 처리합니다.">?</button>
-                </div>
-              </div>
-              <div class="handoff-list">
-                <button class="handoff-row" type="button" data-route="primary" data-tooltip="실제 앱에서는 해당 탭으로 이동합니다. 이 정적 프로토타입은 화면 구조만 보여줍니다.">
-                  <span class="tab-chip mono" id="primary-tab">Tasks</span>
-                  <span>
-                    <strong id="primary-action">ready task 상세 확인</strong>
-                  </span>
-                </button>
-                <button class="handoff-row" type="button" data-route="secondary" data-tooltip="실행성 조작은 담당 탭에서만 노출합니다.">
-                  <span class="tab-chip mono" id="secondary-tab">Terminal</span>
-                  <span>
-                    <strong id="secondary-action">PTY 실행은 Terminal에서 시작</strong>
-                  </span>
-                </button>
-                <button class="handoff-row" type="button" data-route="runs" data-tooltip="결과와 판단 근거는 Runs 탭에서 확인합니다.">
-                  <span class="tab-chip mono" id="result-tab">Runs</span>
-                  <span>
-                    <strong id="result-action">run 결과 확인</strong>
-                  </span>
-                </button>
-              </div>
-            </div>
           </section>
 
         </div>
@@ -365,17 +336,6 @@
     const summaryState = document.querySelector("#summary-state");
     const summaryAction = document.querySelector("#summary-action");
     const summaryAgent = document.querySelector("#summary-agent");
-    const primaryTab = document.querySelector("#primary-tab");
-    const primaryAction = document.querySelector("#primary-action");
-    const secondaryTab = document.querySelector("#secondary-tab");
-    const secondaryAction = document.querySelector("#secondary-action");
-    const resultTab = document.querySelector("#result-tab");
-    const resultAction = document.querySelector("#result-action");
-    const handoffRows = {
-      primary: document.querySelector('[data-route="primary"]'),
-      secondary: document.querySelector('[data-route="secondary"]'),
-      result: document.querySelector('[data-route="runs"]'),
-    };
     const stateTitle = document.querySelector("#state-title");
     const statePill = document.querySelector("#state-pill");
     const inspectorTitle = document.querySelector("#inspector-title");
@@ -402,11 +362,6 @@
         summary: "실행 준비됨",
         action: "Tasks 탭에서 확인",
         flowIndex: 5,
-        destination: {
-          primary: ["Tasks", "ready task 상세 확인", "실행 준비와 완료 기준 확인 / review readiness and criteria"],
-          secondary: ["Terminal", "PTY 실행은 Terminal에서 시작", "Overview에서는 실행하지 않음 / no execution from Overview"],
-          result: ["Runs", "run 결과 확인", "done 또는 blocked 판단 근거 확인 / review result evidence"],
-        },
         evidence: {
           rows: [
             ["Ready task", "task-3", "dependencies done"],
@@ -423,11 +378,6 @@
         summary: "기획 진행 중",
         action: "Artifacts 탭에서 확인",
         flowIndex: 3,
-        destination: {
-          primary: ["Artifacts", "Gate 산출물 확인", "intake, spec, task graph 상태 확인 / review planning artifacts"],
-          secondary: ["Tasks", "ready task 생성 후 확인", "아직 실행 시작 없음 / no run start yet"],
-          result: ["Runs", "이전 run 확인", "기존 결과만 조회 / read existing run history"],
-        },
         evidence: {
           rows: [
             ["현재 Gate", "Gate B/C", "spec 또는 task graph 검토 중"],
@@ -444,11 +394,6 @@
         summary: "설치만 됨",
         action: "Artifacts 탭에서 확인",
         flowIndex: 1,
-        destination: {
-          primary: ["Artifacts", "기획 산출물 없음 확인", "현재는 하네스만 감지됨 / harness detected, no artifacts"],
-          secondary: ["Terminal", "기획 시작 안내 확인", "필요한 CLI 안내는 Terminal 탭 / command guidance belongs to Terminal"],
-          result: ["Tasks", "task 생성 후 확인", "task graph 생성 전 / before task graph exists"],
-        },
         evidence: {
           rows: [
             ["하네스", "installed", "P2A 파일 구조 감지"],
@@ -465,11 +410,6 @@
         summary: "P2A 없음",
         action: "Terminal 탭에서 안내",
         flowIndex: 0,
-        destination: {
-          primary: ["Terminal", "설치 command guidance 확인", "Overview에서는 설치 실행 없음 / setup is not run from Overview"],
-          secondary: ["Settings", "대상 프로젝트 확인", "recent project와 agent CLI 확인 / check project and agent"],
-          result: ["Overview", "설치 후 상태 재감지", "파일 watcher로 상태 갱신 / reload from file changes"],
-        },
         evidence: {
           rows: [
             ["Manifest", "missing", ".plan2agent/manifest.json 없음"],
@@ -487,11 +427,6 @@
         action: "Terminal 탭에서 진단",
         flowIndex: 0,
         flowIssue: true,
-        destination: {
-          primary: ["Terminal", "validate guidance 확인", "검증 실행은 담당 탭에서만 / validation belongs to Terminal"],
-          secondary: ["Settings", "앱 bundle 기준 확인", "GUI local config와 source version 확인 / inspect local config"],
-          result: ["Runs", "최근 실패 기록 확인", "기존 run 결과만 조회 / read existing runs"],
-        },
         evidence: {
           rows: [
             ["Source version", "mismatch", "앱 bundle과 다름"],
@@ -509,11 +444,6 @@
         action: "Terminal 탭에서 진단",
         flowIndex: 0,
         flowIssue: true,
-        destination: {
-          primary: ["Terminal", "diagnose guidance 확인", "복구 실행은 Overview에서 하지 않음 / no repair from Overview"],
-          secondary: ["Artifacts", "누락 산출물 위치 확인", "읽을 수 있는 파일만 표시 / read available files"],
-          result: ["Overview", "복구 후 상태 재감지", "외부 변경을 다시 읽음 / reload after external changes"],
-        },
         evidence: {
           rows: [
             ["필수 파일", "missing", "generated asset 누락"],
@@ -559,18 +489,6 @@
       });
       inspectorPrimaryAction.textContent = state.evidence.actions[0];
       inspectorSecondaryAction.textContent = state.evidence.actions[1];
-      primaryTab.textContent = state.destination.primary[0];
-      primaryAction.textContent = state.destination.primary[1];
-      handoffRows.primary.dataset.tooltip = state.destination.primary[2];
-      handoffRows.primary.setAttribute("aria-label", `${state.destination.primary[0]}: ${state.destination.primary[1]}. ${state.destination.primary[2]}`);
-      secondaryTab.textContent = state.destination.secondary[0];
-      secondaryAction.textContent = state.destination.secondary[1];
-      handoffRows.secondary.dataset.tooltip = state.destination.secondary[2];
-      handoffRows.secondary.setAttribute("aria-label", `${state.destination.secondary[0]}: ${state.destination.secondary[1]}. ${state.destination.secondary[2]}`);
-      resultTab.textContent = state.destination.result[0];
-      resultAction.textContent = state.destination.result[1];
-      handoffRows.result.dataset.tooltip = state.destination.result[2];
-      handoffRows.result.setAttribute("aria-label", `${state.destination.result[0]}: ${state.destination.result[1]}. ${state.destination.result[2]}`);
       flowNodes.forEach((node) => {
         const index = Number(node.dataset.flowIndex);
         node.classList.remove("flow-node--done", "flow-node--active", "flow-node--pending", "flow-node--issue");
