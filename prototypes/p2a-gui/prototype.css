@@ -195,6 +195,10 @@
   grid-template-columns: var(--activitybar-w) minmax(238px, 280px) minmax(580px, 1fr) minmax(300px, 340px);
 }
 
+.workspace--tasks {
+  grid-template-columns: var(--activitybar-w) minmax(0, 1fr) minmax(300px, 340px);
+}
+
 .rail,
 .sidebar,
 .content,
@@ -891,6 +895,452 @@ pre {
 .task-row small {
   color: var(--fg-3);
   margin-top: 2px;
+}
+
+.task-head-actions {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.task-graph-panel {
+  min-width: 0;
+  margin-bottom: 14px;
+  overflow: hidden;
+  border: 1px solid var(--border-1);
+  border-radius: var(--r-2);
+  background: var(--bg-2);
+}
+
+.task-graph-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 13px 14px;
+  border-bottom: 1px solid var(--border-1);
+}
+
+.task-graph-head h3 {
+  margin: 0;
+  font-size: var(--t-h3);
+  line-height: var(--lh-snug);
+}
+
+.task-graph-head__right {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.task-graph-legend {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  color: var(--fg-3);
+  font-size: var(--t-mono-s);
+}
+
+.task-graph-legend > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--fg-4);
+}
+
+.status-dot--done {
+  background: var(--ok);
+}
+
+.status-dot--ready {
+  background: var(--accent);
+}
+
+.status-dot--blocked {
+  background: var(--warn);
+}
+
+.task-graph-meta {
+  display: grid;
+  grid-template-columns: minmax(88px, 0.75fr) minmax(220px, 1.5fr) minmax(80px, 0.6fr) minmax(90px, 0.6fr);
+  gap: 0;
+  border-bottom: 1px solid var(--border-1);
+  background: var(--bg-2);
+}
+
+.task-graph-meta > div {
+  min-width: 0;
+  padding: 10px 12px;
+  border-right: 1px solid var(--border-1);
+}
+
+.task-graph-meta > div:last-child {
+  border-right: 0;
+}
+
+.task-graph-meta span,
+.task-graph-meta strong {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.task-graph-meta span {
+  color: var(--fg-3);
+  font-size: var(--t-micro);
+  letter-spacing: var(--tracking-caps);
+  text-transform: uppercase;
+}
+
+.task-graph-meta strong {
+  margin-top: 4px;
+  color: var(--fg-1);
+  font-size: var(--t-mono-s);
+}
+
+.task-graph-canvas {
+  position: relative;
+  min-height: 320px;
+  overflow: hidden;
+  background: var(--bg-1);
+}
+
+.task-graph-lines {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+.task-graph-line {
+  fill: none;
+  stroke-width: 2;
+  stroke: var(--border-3);
+  marker-end: url(#task-graph-arrow);
+}
+
+.task-graph-lines marker path {
+  fill: var(--border-3);
+}
+
+.task-graph-line--done {
+  stroke: color-mix(in srgb, var(--ok) 72%, var(--border-3));
+}
+
+.task-graph-line--blocked {
+  stroke: color-mix(in srgb, var(--warn) 72%, var(--border-3));
+}
+
+.task-graph-node {
+  position: absolute;
+  z-index: 1;
+  width: min(220px, 27%);
+  min-width: 160px;
+  min-height: 70px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 5px 8px;
+  align-content: center;
+  padding: 10px 12px;
+  border: 1px solid var(--border-2);
+  border-left: 2px solid var(--fg-4);
+  border-radius: var(--r-1);
+  background: var(--bg-2);
+  color: var(--fg-2);
+  text-align: left;
+}
+
+.task-graph-node:hover,
+.task-graph-node:focus-visible {
+  border-color: var(--border-3);
+  background: var(--bg-3);
+}
+
+.task-graph-node[aria-current="true"] {
+  border-color: color-mix(in srgb, var(--accent) 58%, var(--border-2));
+  border-left-color: var(--accent);
+  background: var(--bg-3);
+}
+
+.task-graph-node strong,
+.task-graph-node small,
+.task-node-state {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.task-graph-node strong {
+  color: var(--fg-1);
+  font-size: var(--t-mono-s);
+}
+
+.task-graph-node small {
+  grid-column: 1 / -1;
+  color: var(--fg-2);
+  font-size: var(--t-small);
+}
+
+.task-node-state {
+  color: var(--fg-3);
+  font-size: var(--t-mono-s);
+  font-family: var(--font-mono);
+}
+
+.task-graph-node--done {
+  border-left-color: var(--ok);
+}
+
+.task-graph-node--done .task-node-state {
+  color: var(--ok);
+}
+
+.task-graph-node--ready {
+  border-left-color: var(--accent);
+}
+
+.task-graph-node--ready .task-node-state {
+  color: var(--accent);
+}
+
+.task-graph-node--blocked {
+  border-left-color: var(--warn);
+}
+
+.task-graph-node--blocked .task-node-state {
+  color: var(--warn);
+}
+
+.task-graph-node--task1 {
+  left: 24px;
+  top: 40px;
+}
+
+.task-graph-node--task2 {
+  left: 24px;
+  bottom: 40px;
+}
+
+.task-graph-node--task3 {
+  left: 40%;
+  top: 50%;
+  transform: translateY(-50%);
+}
+
+.task-graph-node--task4 {
+  right: 24px;
+  top: 50%;
+  transform: translateY(-50%);
+}
+
+.task-detail-surface {
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--border-1);
+  border-radius: var(--r-2);
+  background: var(--bg-2);
+}
+
+.task-detail-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 13px 14px;
+  border-bottom: 1px solid var(--border-1);
+}
+
+.task-detail-head h3 {
+  margin: 0;
+  font-size: var(--t-h3);
+  line-height: var(--lh-snug);
+}
+
+.task-work-brief {
+  padding: 14px;
+  border-bottom: 1px solid var(--border-1);
+}
+
+.task-work-brief p {
+  max-width: 720px;
+  margin: 8px 0 0;
+  color: var(--fg-1);
+  font-size: var(--t-body);
+  line-height: 1.55;
+}
+
+.task-work-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(260px, 0.85fr);
+  gap: 0;
+  border-bottom: 1px solid var(--border-1);
+}
+
+.task-detail-block {
+  min-width: 0;
+  padding: 14px;
+}
+
+.task-detail-block + .task-detail-block {
+  border-left: 1px solid var(--border-1);
+}
+
+.task-block-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.task-block-head .mono {
+  color: var(--fg-3);
+  font-size: var(--t-mono-s);
+}
+
+.criteria-list {
+  margin: 0;
+  padding-left: 18px;
+  color: var(--fg-2);
+  font-size: var(--t-small);
+  line-height: 1.55;
+}
+
+.criteria-list li {
+  margin-bottom: 8px;
+}
+
+.criteria-list li:last-child {
+  margin-bottom: 0;
+}
+
+.file-list {
+  display: grid;
+  gap: 7px;
+}
+
+.file-list span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--fg-2);
+  font-size: var(--t-mono-s);
+}
+
+.task-verify-panel {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 14px;
+  align-items: center;
+  padding: 14px;
+}
+
+.task-verify-panel p {
+  margin: 7px 0 0;
+  color: var(--fg-2);
+  font-size: var(--t-small);
+  line-height: 1.5;
+}
+
+.task-verify-panel code {
+  min-width: 0;
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  border: 1px solid var(--border-1);
+  border-radius: var(--r-1);
+  background: var(--bg-1);
+  color: var(--fg-1);
+  padding: 8px 10px;
+}
+
+.task-notes-panel {
+  min-width: 0;
+  padding: 14px;
+  border-top: 1px solid var(--border-1);
+}
+
+.task-notes-panel .inspector-list {
+  margin-top: 0;
+}
+
+.readiness-list {
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border-1);
+}
+
+.readiness-row {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+  padding: 10px 14px;
+  border-left: 2px solid transparent;
+}
+
+.readiness-row > .mono {
+  color: var(--fg-3);
+  font-size: var(--t-mono-s);
+}
+
+.readiness-row strong,
+.readiness-row small {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.readiness-row strong {
+  color: var(--fg-1);
+  font-size: var(--t-small);
+}
+
+.readiness-row small {
+  color: var(--fg-3);
+  margin-top: 2px;
+  font-size: var(--t-small);
+}
+
+.readiness-row--ok {
+  border-left-color: var(--ok);
+}
+
+.readiness-row--warn {
+  border-left-color: var(--warn);
+}
+
+.inspector-list {
+  display: grid;
+  gap: 8px;
+  margin: 9px 0 0;
+  padding: 0 0 0 16px;
+  color: var(--fg-2);
+  font-size: var(--t-small);
+  line-height: 1.45;
 }
 
 .dot-char {
@@ -1748,14 +2198,38 @@ pre {
     grid-template-columns: var(--activitybar-w) minmax(220px, 260px) minmax(0, 1fr);
   }
 
+  .workspace.workspace--tasks {
+    grid-template-columns: var(--activitybar-w) minmax(0, 1fr);
+  }
+
   .inspector {
     display: none;
   }
 
   .summary-strip,
+  .task-work-grid,
+  .task-verify-panel,
   .state-grid,
   .split {
     grid-template-columns: 1fr;
+  }
+
+  .task-detail-block + .task-detail-block {
+    border-left: 0;
+    border-top: 1px solid var(--border-1);
+  }
+
+  .task-graph-node {
+    width: min(200px, 27%);
+    min-width: 150px;
+  }
+
+  .task-graph-meta {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .task-graph-meta > div:nth-child(2n) {
+    border-right: 0;
   }
 }
 
@@ -1833,6 +2307,60 @@ pre {
 
   .summary-strip {
     grid-template-columns: 1fr 1fr;
+  }
+
+  .task-work-grid,
+  .task-verify-panel {
+    grid-template-columns: 1fr;
+  }
+
+  .task-graph-head {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .task-graph-head__right {
+    justify-content: flex-start;
+  }
+
+  .task-graph-meta {
+    grid-template-columns: 1fr;
+  }
+
+  .task-graph-meta > div {
+    border-right: 0;
+    border-bottom: 1px solid var(--border-1);
+  }
+
+  .task-graph-meta > div:last-child {
+    border-bottom: 0;
+  }
+
+  .task-graph-canvas {
+    min-height: 0;
+    display: grid;
+    gap: 10px;
+    padding: 14px;
+  }
+
+  .task-graph-lines {
+    display: none;
+  }
+
+  .task-graph-node,
+  .task-graph-node--task1,
+  .task-graph-node--task2,
+  .task-graph-node--task3,
+  .task-graph-node--task4 {
+    position: static;
+    width: 100%;
+    min-width: 0;
+    transform: none;
+  }
+
+  .task-detail-head {
+    flex-direction: column;
+    align-items: flex-start;
   }
 
   .flow-track {

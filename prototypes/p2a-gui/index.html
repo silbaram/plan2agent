@@ -70,7 +70,7 @@
           <span>Ov</span>
           <small data-i18n="rail.overview">개요</small>
         </button>
-        <button class="rail__item" type="button" aria-label="작업" data-i18n-aria-label="rail.tasks">
+        <button class="rail__item" type="button" aria-label="작업" data-i18n-aria-label="rail.tasks" data-tab="tasks">
           <span>Ta</span>
           <small data-i18n="rail.tasks">작업</small>
         </button>
@@ -385,6 +385,154 @@
         </div>
       </section>
 
+      <section class="content content--tasks view-pane" aria-label="작업 상세" data-i18n-aria-label="tasks.label" data-panel="tasks" hidden>
+        <div class="content-head">
+          <div>
+            <div class="label" data-i18n="tasks.kicker">Tasks · iter-002</div>
+            <h2 data-i18n="tasks.title">작업 연결 그래프</h2>
+          </div>
+          <div class="task-head-actions">
+            <span class="pill pill--ok" data-i18n="tasks.ready">ready</span>
+            <button class="btn btn--primary" type="button" data-route="terminal" data-i18n="tasks.openTerminal">터미널에서 실행 준비</button>
+          </div>
+        </div>
+
+        <section class="task-graph-panel" aria-label="작업 연결 그래프" data-i18n-aria-label="tasksGraph.label">
+          <div class="task-graph-head">
+            <div>
+              <div class="label" data-i18n="tasksGraph.kicker">dependency graph</div>
+              <h3 data-i18n="tasksGraph.title">실행 대기 작업</h3>
+            </div>
+            <div class="task-graph-head__right">
+              <span class="pill pill--ok" data-i18n="tasksGraph.readyPill">1 ready</span>
+              <div class="task-graph-legend" aria-label="작업 상태 범례" data-i18n-aria-label="tasksGraph.legendLabel">
+                <span><i class="status-dot status-dot--done"></i><span data-i18n="tasksGraph.done">done</span></span>
+                <span><i class="status-dot status-dot--ready"></i><span data-i18n="tasksGraph.ready">ready</span></span>
+                <span><i class="status-dot status-dot--blocked"></i><span data-i18n="tasksGraph.blocked">blocked</span></span>
+              </div>
+            </div>
+          </div>
+
+          <div class="task-graph-meta" aria-label="task graph metadata" data-i18n-aria-label="tasksGraph.metaLabel">
+            <div>
+              <span data-i18n="tasksGraph.iteration">iteration</span>
+              <strong class="mono">iter-002</strong>
+            </div>
+            <div>
+              <span data-i18n="tasksGraph.graph">graph</span>
+              <strong class="mono">gate-c-task-graph/task-graph.json</strong>
+            </div>
+            <div>
+              <span data-i18n="tasksGraph.readyCount">ready</span>
+              <strong class="mono">1 / 4</strong>
+            </div>
+            <div>
+              <span data-i18n="tasksGraph.selected">selected</span>
+              <strong class="mono">task-3</strong>
+            </div>
+          </div>
+
+          <div class="task-graph-canvas" role="list" aria-label="task dependency graph" data-i18n-aria-label="tasksGraph.canvasLabel">
+            <svg class="task-graph-lines" viewBox="0 0 1000 320" preserveAspectRatio="none" aria-hidden="true" focusable="false">
+              <defs>
+                <marker id="task-graph-arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                  <path d="M 0 0 L 8 4 L 0 8 z"></path>
+                </marker>
+              </defs>
+              <path class="task-graph-line task-graph-line--done" d="M 250 78 C 320 78 335 143 400 154"></path>
+              <path class="task-graph-line task-graph-line--done" d="M 250 242 C 320 242 335 177 400 166"></path>
+              <path class="task-graph-line task-graph-line--blocked" d="M 612 160 C 650 160 680 160 720 160"></path>
+            </svg>
+
+            <button class="task-graph-node task-graph-node--done task-graph-node--task1" type="button" role="listitem">
+              <span class="task-node-state" data-i18n="tasksGraph.done">done</span>
+              <strong class="mono">task-1</strong>
+              <small data-i18n="tasksGraph.task1">북마크 모델 스키마</small>
+            </button>
+
+            <button class="task-graph-node task-graph-node--done task-graph-node--task2" type="button" role="listitem">
+              <span class="task-node-state" data-i18n="tasksGraph.done">done</span>
+              <strong class="mono">task-2</strong>
+              <small data-i18n="tasksGraph.task2">저장소 인터페이스</small>
+            </button>
+
+            <button class="task-graph-node task-graph-node--ready task-graph-node--task3" type="button" role="listitem" aria-current="true">
+              <span class="task-node-state" data-i18n="tasksGraph.ready">ready</span>
+              <strong class="mono">task-3</strong>
+              <small data-i18n="tasksGraph.task3">북마크 필터 구현</small>
+            </button>
+
+            <button class="task-graph-node task-graph-node--blocked task-graph-node--task4" type="button" role="listitem">
+              <span class="task-node-state" data-i18n="tasksGraph.blocked">blocked</span>
+              <strong class="mono">task-4</strong>
+              <small data-i18n="tasksGraph.task4">인증 컨텍스트 연결</small>
+            </button>
+          </div>
+
+        </section>
+
+        <section class="task-detail-surface" aria-label="선택 작업" data-i18n-aria-label="tasks.selectedLabel">
+          <div class="task-detail-head">
+            <div>
+              <div class="label" data-i18n="tasks.selectedKicker">task-3</div>
+              <h3 data-i18n="tasks.selectedTitle">북마크 필터 구현</h3>
+            </div>
+          </div>
+
+          <section class="task-work-brief">
+            <div class="label" data-i18n="tasks.goalLabel">해야 할 일</div>
+            <p data-i18n="tasks.goalBody">북마크 목록 API에서 tag, owner, createdAfter 조건을 조합해 필요한 북마크만 반환하게 한다.</p>
+          </section>
+
+          <div class="task-work-grid">
+            <section class="task-detail-block">
+              <div class="task-block-head">
+                <div class="label" data-i18n="tasks.criteriaLabel">완료 기준</div>
+                <span class="mono">3</span>
+              </div>
+              <ol class="criteria-list">
+                <li data-i18n="tasks.criteria1">GET /bookmarks가 tag, owner, createdAfter query를 조합해 필터링한다.</li>
+                <li data-i18n="tasks.criteria2">필터가 없으면 기존 전체 목록 동작을 유지한다.</li>
+                <li data-i18n="tasks.criteria3">Repository 단위 테스트가 빈 결과와 복합 필터를 포함한다.</li>
+              </ol>
+            </section>
+
+            <section class="task-detail-block">
+              <div class="task-block-head">
+                <div class="label" data-i18n="tasks.filesLabel">수정 파일</div>
+                <span class="mono">4</span>
+              </div>
+              <div class="file-list">
+                <span class="mono">src/main/kotlin/bookmarks/BookmarkController.kt</span>
+                <span class="mono">src/main/kotlin/bookmarks/BookmarkRepository.kt</span>
+                <span class="mono">src/test/kotlin/bookmarks/BookmarkRepositoryTest.kt</span>
+                <span class="mono">docs/api/bookmarks.md</span>
+              </div>
+            </section>
+          </div>
+
+          <section class="task-verify-panel">
+            <div>
+              <div class="label" data-i18n="tasks.verifyLabel">검증</div>
+              <p data-i18n="tasks.verifyBody">필터 없음, 단일 필터, 복합 필터 테스트를 실행하고 기존 목록 동작이 유지되는지 확인한다.</p>
+            </div>
+            <code class="mono">./gradlew test</code>
+          </section>
+
+          <section class="task-notes-panel">
+            <div class="task-block-head">
+              <div class="label" data-i18n="tasksInspector.notesLabel">implementation notes</div>
+              <span class="mono">3</span>
+            </div>
+            <ul class="inspector-list">
+              <li data-i18n="tasksInspector.note1">Controller는 query parsing만 담당한다.</li>
+              <li data-i18n="tasksInspector.note2">Repository 필터는 null-safe 조건으로 유지한다.</li>
+              <li data-i18n="tasksInspector.note3">인증 컨텍스트는 task-4에서 연결한다.</li>
+            </ul>
+          </section>
+        </section>
+      </section>
+
       <section class="content content--terminal view-pane" aria-label="Gate A 터미널" data-i18n-aria-label="terminal.label" data-panel="terminal" hidden>
         <div class="terminal-topline">
           <div>
@@ -530,6 +678,56 @@
         </div>
       </aside>
 
+      <aside class="inspector inspector--tasks view-pane" aria-label="작업 인스펙터" data-i18n-aria-label="tasksInspector.label" data-panel="tasks" hidden>
+        <div class="panel-head">
+          <div>
+            <div class="label" data-i18n="tasksInspector.kicker">task readiness</div>
+            <h2 data-i18n="tasksInspector.title">실행 전 점검</h2>
+          </div>
+          <span class="pill pill--ok" data-i18n="tasks.ready">ready</span>
+        </div>
+
+        <div class="readiness-list" aria-label="실행 준비 점검" data-i18n-aria-label="tasksInspector.readinessLabel">
+          <div class="readiness-row readiness-row--ok">
+            <span class="mono">01</span>
+            <div>
+              <strong data-i18n="tasksInspector.checkDeps">의존성 완료</strong>
+              <small data-i18n="tasksInspector.checkDepsMeta">task-1, task-2 done</small>
+            </div>
+          </div>
+          <div class="readiness-row readiness-row--ok">
+            <span class="mono">02</span>
+            <div>
+              <strong data-i18n="tasksInspector.checkCriteria">완료 기준 있음</strong>
+              <small data-i18n="tasksInspector.checkCriteriaMeta">3 acceptance criteria</small>
+            </div>
+          </div>
+          <div class="readiness-row readiness-row--warn">
+            <span class="mono">03</span>
+            <div>
+              <strong data-i18n="tasksInspector.checkRun">실행 기록 없음</strong>
+              <small data-i18n="tasksInspector.checkRunMeta">new run required</small>
+            </div>
+          </div>
+        </div>
+
+        <div class="terminal-sidebar-section">
+          <div class="label" data-i18n="tasksInspector.verificationLabel">verification</div>
+          <dl class="compact-dl">
+            <dt data-i18n="tasksInspector.command">command</dt>
+            <dd class="mono">./gradlew test</dd>
+            <dt data-i18n="tasksInspector.timeout">timeout</dt>
+            <dd class="mono">120s</dd>
+            <dt data-i18n="tasksInspector.latest">latest</dt>
+            <dd data-i18n="tasksInspector.latestValue">아직 실행 안 됨</dd>
+          </dl>
+        </div>
+
+        <div class="inspector-actions">
+          <button class="btn btn--ghost" type="button" data-i18n="tasksInspector.secondary">task graph 열기</button>
+        </div>
+      </aside>
+
       <aside class="inspector inspector--terminal view-pane" aria-label="Gate A 인스펙터" data-i18n-aria-label="terminalInspector.label" data-panel="terminal" hidden>
         <div class="panel-head">
           <div>
@@ -618,6 +816,7 @@
     const langButtons = [...document.querySelectorAll("[data-lang]")];
     const railTabs = [...document.querySelectorAll("[data-tab]")];
     const viewPanes = [...document.querySelectorAll("[data-panel]")];
+    const workspace = document.querySelector(".workspace");
     const documentRows = [...document.querySelectorAll("[data-document]")];
     const summaryState = document.querySelector("#summary-state");
     const summaryAction = document.querySelector("#summary-action");
@@ -742,6 +941,61 @@
       "task.title": { ko: "task-3 - 북마크 필터 구현", en: "task-3 - implement bookmark filtering" },
       "task.meta": { ko: "할 일, 의존성 완료, 완료 기준 있음", en: "todo, dependencies done, acceptance criteria present" },
       "task.open": { ko: "작업에서 열기", en: "Open in Tasks" },
+      "tasks.label": { ko: "작업 그래프", en: "Task graph" },
+      "tasks.kicker": { ko: "Tasks · iter-002", en: "Tasks · iter-002" },
+      "tasks.title": { ko: "작업 연결 그래프", en: "Task dependency graph" },
+      "tasks.ready": { ko: "ready", en: "ready" },
+      "tasks.openTerminal": { ko: "터미널에서 실행 준비", en: "Prepare in Terminal" },
+      "tasksGraph.label": { ko: "작업 연결 그래프", en: "Task dependency graph" },
+      "tasksGraph.kicker": { ko: "dependency graph", en: "dependency graph" },
+      "tasksGraph.title": { ko: "실행 대기 작업", en: "Ready tasks" },
+      "tasksGraph.readyPill": { ko: "1 ready", en: "1 ready" },
+      "tasksGraph.legendLabel": { ko: "작업 상태 범례", en: "Task status legend" },
+      "tasksGraph.done": { ko: "done", en: "done" },
+      "tasksGraph.ready": { ko: "ready", en: "ready" },
+      "tasksGraph.blocked": { ko: "blocked", en: "blocked" },
+      "tasksGraph.metaLabel": { ko: "task graph metadata", en: "task graph metadata" },
+      "tasksGraph.iteration": { ko: "iteration", en: "iteration" },
+      "tasksGraph.graph": { ko: "graph", en: "graph" },
+      "tasksGraph.readyCount": { ko: "ready", en: "ready" },
+      "tasksGraph.selected": { ko: "selected", en: "selected" },
+      "tasksGraph.canvasLabel": { ko: "task dependency graph", en: "task dependency graph" },
+      "tasksGraph.task1": { ko: "북마크 모델 스키마", en: "Bookmark model schema" },
+      "tasksGraph.task2": { ko: "저장소 인터페이스", en: "Repository interface" },
+      "tasksGraph.task3": { ko: "북마크 필터 구현", en: "Implement bookmark filtering" },
+      "tasksGraph.task4": { ko: "인증 컨텍스트 연결", en: "Connect auth context" },
+      "tasks.selectedLabel": { ko: "선택 작업", en: "Selected task" },
+      "tasks.selectedKicker": { ko: "task-3", en: "task-3" },
+      "tasks.selectedTitle": { ko: "북마크 필터 구현", en: "Implement bookmark filtering" },
+      "tasks.goalLabel": { ko: "해야 할 일", en: "Work to implement" },
+      "tasks.goalBody": { ko: "북마크 목록 API에서 tag, owner, createdAfter 조건을 조합해 필요한 북마크만 반환하게 한다.", en: "Update the bookmark list API so tag, owner, and createdAfter filters can be combined to return only matching bookmarks." },
+      "tasks.criteriaLabel": { ko: "완료 기준", en: "Acceptance criteria" },
+      "tasks.criteria1": { ko: "GET /bookmarks가 tag, owner, createdAfter query를 조합해 필터링한다.", en: "GET /bookmarks filters by combined tag, owner, and createdAfter queries." },
+      "tasks.criteria2": { ko: "필터가 없으면 기존 전체 목록 동작을 유지한다.", en: "When filters are absent, the existing full-list behavior remains." },
+      "tasks.criteria3": { ko: "Repository 단위 테스트가 빈 결과와 복합 필터를 포함한다.", en: "Repository unit tests cover empty results and combined filters." },
+      "tasks.filesLabel": { ko: "수정 파일", en: "Files to change" },
+      "tasks.verifyLabel": { ko: "검증", en: "Verification" },
+      "tasks.verifyBody": { ko: "필터 없음, 단일 필터, 복합 필터 테스트를 실행하고 기존 목록 동작이 유지되는지 확인한다.", en: "Run no-filter, single-filter, and combined-filter tests, then confirm the existing list behavior still works." },
+      "tasksInspector.label": { ko: "작업 인스펙터", en: "Task inspector" },
+      "tasksInspector.kicker": { ko: "task readiness", en: "task readiness" },
+      "tasksInspector.title": { ko: "실행 전 점검", en: "Pre-run checks" },
+      "tasksInspector.readinessLabel": { ko: "실행 준비 점검", en: "Readiness checks" },
+      "tasksInspector.checkDeps": { ko: "의존성 완료", en: "Dependencies complete" },
+      "tasksInspector.checkDepsMeta": { ko: "task-1, task-2 done", en: "task-1, task-2 done" },
+      "tasksInspector.checkCriteria": { ko: "완료 기준 있음", en: "Acceptance criteria present" },
+      "tasksInspector.checkCriteriaMeta": { ko: "3 acceptance criteria", en: "3 acceptance criteria" },
+      "tasksInspector.checkRun": { ko: "실행 기록 없음", en: "No run yet" },
+      "tasksInspector.checkRunMeta": { ko: "new run required", en: "new run required" },
+      "tasksInspector.verificationLabel": { ko: "verification", en: "verification" },
+      "tasksInspector.command": { ko: "command", en: "command" },
+      "tasksInspector.timeout": { ko: "timeout", en: "timeout" },
+      "tasksInspector.latest": { ko: "latest", en: "latest" },
+      "tasksInspector.latestValue": { ko: "아직 실행 안 됨", en: "not run yet" },
+      "tasksInspector.notesLabel": { ko: "implementation notes", en: "implementation notes" },
+      "tasksInspector.note1": { ko: "Controller는 query parsing만 담당한다.", en: "Controller handles query parsing only." },
+      "tasksInspector.note2": { ko: "Repository 필터는 null-safe 조건으로 유지한다.", en: "Repository filters stay null-safe." },
+      "tasksInspector.note3": { ko: "인증 컨텍스트는 task-4에서 연결한다.", en: "Auth context is connected in task-4." },
+      "tasksInspector.secondary": { ko: "task graph 열기", en: "Open task graph" },
       "inspector.label": { ko: "인스펙터", en: "Inspector" },
       "inspector.kicker": { ko: "상태 근거", en: "state evidence" },
       "inspector.helpLabel": { ko: "상태 근거 도움말", en: "State evidence help" },
@@ -749,6 +1003,8 @@
       "inspector.evidenceLabel": { ko: "현재 상태 판단 근거", en: "Current state evidence" },
       "status.branch": { ko: "브랜치 main", en: "branch main" },
       "status.localOnly": { ko: "GUI 로컬 설정만 사용", en: "GUI local config only" },
+      "status.tasksLeft": { ko: "task-3 ready", en: "task-3 ready" },
+      "status.tasksRight": { ko: "실행은 Terminal PTY에서 시작", en: "execution starts in Terminal PTY" },
       "status.terminalLeft": { ko: "Gate A 대화 세션", en: "Gate A conversation session" },
       "status.terminalCwd": { ko: "cwd /Users/qoo10/projects/bookmark-api", en: "cwd /Users/qoo10/projects/bookmark-api" },
       "status.terminalRight": { ko: "PTY 입력은 agent stdin으로만 전달", en: "PTY input forwards only to agent stdin" },
@@ -1257,6 +1513,7 @@ How should initial authentication start?</pre>
     }
 
     function renderTab() {
+      workspace.classList.toggle("workspace--tasks", currentTab === "tasks");
       viewPanes.forEach((pane) => {
         pane.hidden = pane.dataset.panel !== currentTab;
       });
@@ -1274,6 +1531,10 @@ How should initial authentication start?</pre>
         statusLeft.textContent = copyText("status.terminalLeft");
         statusCwd.textContent = copyText("status.terminalCwd");
         statusRight.textContent = copyText("status.terminalRight");
+      } else if (currentTab === "tasks") {
+        statusLeft.textContent = copyText("status.tasksLeft");
+        statusCwd.textContent = "cwd /Users/qoo10/projects/bookmark-api";
+        statusRight.textContent = copyText("status.tasksRight");
       } else {
         statusLeft.textContent = copyText("status.branch");
         statusCwd.textContent = "cwd /Users/qoo10/projects/bookmark-api";
@@ -1341,6 +1602,13 @@ How should initial authentication start?</pre>
         stateCards.forEach((item) => item.classList.remove("state-card--selected"));
         card.classList.add("state-card--selected");
         renderState();
+      });
+    });
+
+    document.querySelectorAll("[data-route]").forEach((button) => {
+      button.addEventListener("click", () => {
+        currentTab = button.dataset.route;
+        renderTab();
       });
     });
 
