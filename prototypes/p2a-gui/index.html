@@ -167,23 +167,39 @@
           </button>
         </div>
 
-        <div class="terminal-sidebar-section">
-          <div class="label" data-i18n="terminalSidebar.scopeLabel">CLI 세션 맥락</div>
+        <div class="terminal-sidebar-section terminal-session">
+          <div class="terminal-section-head">
+            <div class="label" data-i18n="terminalSidebar.sessionLabel">세션</div>
+            <span class="pill pill--info" data-i18n="terminalSidebar.sessionActive">active</span>
+          </div>
           <dl class="compact-dl">
             <dt data-i18n="terminalSidebar.agentCli">agent CLI</dt>
             <dd class="mono">codex</dd>
-            <dt data-i18n="terminalSidebar.cwd">cwd</dt>
-            <dd class="mono">/Users/qoo10/projects/bookmark-api</dd>
-            <dt data-i18n="terminalSidebar.rawLog">원문 로그</dt>
-            <dd data-i18n="terminalSidebar.rawLogValue">기본 저장 안 함</dd>
+            <dt data-i18n="terminalSidebar.model">model</dt>
+            <dd class="mono">gpt-5-codex</dd>
+            <dt data-i18n="terminalSidebar.session">session</dt>
+            <dd class="mono" data-i18n="terminalSidebar.sessionValue">Gate A · active</dd>
           </dl>
-        </div>
 
-        <div class="terminal-command">
-          <div class="label" data-i18n="terminalSidebar.commandLabel">세션 명령</div>
-          <pre>codex
-Use the $p2a-harness skill on this idea:
-팀이 공유하는 북마크 API를 만들고 싶다.</pre>
+          <details class="session-menu">
+            <summary>
+              <span data-i18n="terminalSidebar.sessionMenu">세션 메뉴</span>
+              <span class="mono">⌄</span>
+            </summary>
+            <div class="session-menu__body">
+              <button class="menu-row" type="button" data-detail="session-detail" data-i18n="terminalSidebar.viewSessionDetail">세션 상세 보기</button>
+              <button class="menu-row" type="button" data-detail="session-command" data-i18n="terminalSidebar.viewCommand">초기 명령 보기</button>
+              <button class="menu-row" id="copy-session-command" type="button" data-i18n="terminalSidebar.copyCommand">초기 명령 복사</button>
+              <button class="menu-row menu-row--switch" id="raw-log-toggle" type="button" aria-pressed="false">
+                <span>
+                  <strong data-i18n="terminalSidebar.rawLogStore">원문 로그 저장</strong>
+                  <small id="raw-log-state" class="mono">Off</small>
+                </span>
+                <span class="toggle-track" aria-hidden="true"></span>
+              </button>
+              <button class="menu-row" id="raw-log-view" type="button" data-detail="raw-log" disabled data-i18n="terminalSidebar.viewRawLog">원문 로그 보기</button>
+            </div>
+          </details>
         </div>
 
         <div class="summary-actions">
@@ -612,6 +628,10 @@ Use the $p2a-harness skill on this idea:
     const detailTitle = document.querySelector("#detail-title");
     const detailKicker = document.querySelector("#detail-kicker");
     const detailBody = document.querySelector("#detail-body");
+    const rawLogToggle = document.querySelector("#raw-log-toggle");
+    const rawLogState = document.querySelector("#raw-log-state");
+    const rawLogViewButton = document.querySelector("#raw-log-view");
+    const copySessionCommandButton = document.querySelector("#copy-session-command");
 
     const copy = {
       "document.title": { ko: "P2A GUI MVP - 온보딩 프로토타입", en: "P2A GUI MVP - onboarding prototype" },
@@ -726,13 +746,21 @@ Use the $p2a-harness skill on this idea:
       "terminalSidebar.statusDoc": { ko: "전체 진행 상태와 열린 결정", en: "overall progress and open decisions" },
       "terminalSidebar.intakeMd": { ko: "질문, 답변, 결정 근거", en: "questions, answers, and rationale" },
       "terminalSidebar.intakeJson": { ko: "schema-compatible intake", en: "schema-compatible intake" },
-      "terminalSidebar.commandLabel": { ko: "세션 명령", en: "Session command" },
-      "terminalSidebar.scopeLabel": { ko: "CLI 세션 맥락", en: "CLI session context" },
+      "terminalSidebar.sessionLabel": { ko: "세션", en: "Session" },
+      "terminalSidebar.sessionActive": { ko: "active", en: "active" },
       "terminalSidebar.agentCli": { ko: "agent CLI", en: "agent CLI" },
-      "terminalSidebar.cwd": { ko: "cwd", en: "cwd" },
-      "terminalSidebar.outputs": { ko: "산출물", en: "Outputs" },
-      "terminalSidebar.rawLog": { ko: "원문 로그", en: "Raw log" },
-      "terminalSidebar.rawLogValue": { ko: "기본 저장 안 함", en: "not stored by default" },
+      "terminalSidebar.model": { ko: "model", en: "model" },
+      "terminalSidebar.session": { ko: "session", en: "session" },
+      "terminalSidebar.sessionValue": { ko: "Gate A · active", en: "Gate A · active" },
+      "terminalSidebar.sessionMenu": { ko: "세션 메뉴", en: "Session menu" },
+      "terminalSidebar.viewSessionDetail": { ko: "세션 상세 보기", en: "View session details" },
+      "terminalSidebar.viewCommand": { ko: "초기 명령 보기", en: "View initial command" },
+      "terminalSidebar.copyCommand": { ko: "초기 명령 복사", en: "Copy initial command" },
+      "terminalSidebar.commandCopied": { ko: "복사됨", en: "Copied" },
+      "terminalSidebar.rawLogStore": { ko: "원문 로그 저장", en: "Store raw log" },
+      "terminalSidebar.rawLogOn": { ko: "On · 백엔드 저장", en: "On · backend storage" },
+      "terminalSidebar.rawLogOff": { ko: "Off · 저장 안 함", en: "Off · not stored" },
+      "terminalSidebar.viewRawLog": { ko: "원문 로그 보기", en: "View raw log" },
       "terminalSidebar.openArtifacts": { ko: "Artifacts 전체 보기", en: "Open all Artifacts" },
       "terminal.label": { ko: "Gate A 터미널", en: "Gate A terminal" },
       "terminal.kicker": { ko: "Terminal · Gate A", en: "Terminal · Gate A" },
@@ -872,6 +900,15 @@ Use the $p2a-harness skill on this idea:
       },
     };
 
+    const sessionCommandText = {
+      ko: `codex
+Use the $p2a-harness skill on this idea:
+팀이 공유하는 북마크 API를 만들고 싶다.`,
+      en: `codex
+Use the $p2a-harness skill on this idea:
+Build a shared bookmark API for the team.`,
+    };
+
     const detailTemplates = {
       "local-config": {
         kicker: { ko: "GUI 로컬 설정", en: "GUI local config" },
@@ -889,6 +926,82 @@ Use the $p2a-harness skill on this idea:
   "defaultAgentTool": "codex",
   "lastOpenedAt": "2026-06-21T12:00:00.000Z"
 }</pre>`,
+        },
+      },
+      "session-detail": {
+        kicker: { ko: "세션 상세", en: "session details" },
+        title: { ko: "Gate A agent 세션", en: "Gate A agent session" },
+        body: {
+          ko: `<dl>
+  <dt>agent CLI</dt>
+  <dd><code>codex</code></dd>
+  <dt>model</dt>
+  <dd><code>gpt-5-codex</code></dd>
+  <dt>session</dt>
+  <dd><code>draft-gate-a-002</code></dd>
+  <dt>cwd</dt>
+  <dd><code>/Users/qoo10/projects/bookmark-api</code></dd>
+  <dt>skill</dt>
+  <dd><code>p2a-harness</code></dd>
+  <dt>원문 로그</dt>
+  <dd>메뉴에서 저장 옵션을 켠 세션만 백엔드에 저장</dd>
+</dl>`,
+          en: `<dl>
+  <dt>agent CLI</dt>
+  <dd><code>codex</code></dd>
+  <dt>model</dt>
+  <dd><code>gpt-5-codex</code></dd>
+  <dt>session</dt>
+  <dd><code>draft-gate-a-002</code></dd>
+  <dt>cwd</dt>
+  <dd><code>/Users/qoo10/projects/bookmark-api</code></dd>
+  <dt>skill</dt>
+  <dd><code>p2a-harness</code></dd>
+  <dt>raw log</dt>
+  <dd>Stored by the backend only when enabled from the menu</dd>
+</dl>`,
+        },
+      },
+      "session-command": {
+        kicker: { ko: "초기 명령", en: "initial command" },
+        title: { ko: "agent 세션을 시작한 명령", en: "Command that opened the agent session" },
+        body: () => `<pre>${localized(sessionCommandText)}</pre>`,
+      },
+      "raw-log": {
+        variant: "log",
+        kicker: { ko: "원문 로그", en: "raw log" },
+        title: { ko: "저장된 CLI 원문 입출력", en: "Stored raw CLI input and output" },
+        body: {
+          ko: `<article class="document-viewer">
+<div class="document-viewer__meta">
+  <span class="mono">runs/draft-gate-a-002/raw.log</span>
+  <span class="pill pill--warn">옵션 저장</span>
+</div>
+<pre class="document-viewer__body">[11:40:57] stdin  $ codex
+[11:40:58] stdin  Use the $p2a-harness skill on this idea:
+[11:40:58] stdin  팀이 공유하는 북마크 API를 만들고 싶다.
+
+[11:41:08] agent  Gate A intake를 시작합니다. 제품 경계와 막히는 결정을 먼저 확인하겠습니다.
+[11:41:13] tool   skill p2a-intake
+[11:41:21] agent  ND-1 북마크 공개 범위는 어떻게 시작할까요?
+[11:43:22] user   MVP는 팀 전체 공유만 하고, 개인 범위는 후속으로 두자.
+[11:44:03] agent  ND-2 초기 인증은 어떻게 둘까요?</pre>
+</article>`,
+          en: `<article class="document-viewer">
+<div class="document-viewer__meta">
+  <span class="mono">runs/draft-gate-a-002/raw.log</span>
+  <span class="pill pill--warn">optional storage</span>
+</div>
+<pre class="document-viewer__body">[11:40:57] stdin  $ codex
+[11:40:58] stdin  Use the $p2a-harness skill on this idea:
+[11:40:58] stdin  Build a shared bookmark API for the team.
+
+[11:41:08] agent  Starting Gate A intake. I will check product boundaries and blocking decisions first.
+[11:41:13] tool   skill p2a-intake
+[11:41:21] agent  ND-1 How should bookmark visibility start?
+[11:43:22] user   Keep only team-wide sharing for the MVP and defer personal scope.
+[11:44:03] agent  ND-2 How should initial authentication work?</pre>
+</article>`,
         },
       },
       status: {
@@ -1067,6 +1180,7 @@ How should initial authentication start?</pre>
     let currentState = "execution-ready";
     let currentTab = "overview";
     let currentLocale = localStorage.getItem("p2aGuiLocale") || "ko";
+    let rawLogEnabled = false;
 
     function localized(value) {
       if (typeof value === "string") return value;
@@ -1075,6 +1189,17 @@ How should initial authentication start?</pre>
 
     function copyText(key) {
       return localized(copy[key] || key);
+    }
+
+    function initialCommandText() {
+      return localized(sessionCommandText);
+    }
+
+    function renderRawLogState() {
+      rawLogToggle.setAttribute("aria-pressed", String(rawLogEnabled));
+      rawLogState.textContent = copyText(rawLogEnabled ? "terminalSidebar.rawLogOn" : "terminalSidebar.rawLogOff");
+      rawLogViewButton.disabled = !rawLogEnabled;
+      rawLogViewButton.setAttribute("aria-disabled", String(!rawLogEnabled));
     }
 
     function renderStaticCopy() {
@@ -1100,6 +1225,7 @@ How should initial authentication start?</pre>
         button.classList.toggle("lang-switch__item--active", active);
         button.setAttribute("aria-pressed", String(active));
       });
+      renderRawLogState();
     }
 
     function renderTab() {
@@ -1205,6 +1331,23 @@ How should initial authentication start?</pre>
         if (!detail) return;
         openDetail(detail);
       });
+    });
+
+    rawLogToggle.addEventListener("click", () => {
+      rawLogEnabled = !rawLogEnabled;
+      renderRawLogState();
+    });
+
+    copySessionCommandButton.addEventListener("click", async () => {
+      try {
+        await navigator.clipboard.writeText(initialCommandText());
+      } catch (error) {
+        // Browser clipboard permissions vary in static prototype previews.
+      }
+      copySessionCommandButton.textContent = copyText("terminalSidebar.commandCopied");
+      window.setTimeout(() => {
+        copySessionCommandButton.textContent = copyText("terminalSidebar.copyCommand");
+      }, 1200);
     });
 
     function openDocument(button) {
