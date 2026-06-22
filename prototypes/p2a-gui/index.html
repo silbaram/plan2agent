@@ -153,31 +153,18 @@
 
         <div class="gate-doc-section" aria-label="현재 Gate 문서" data-i18n-aria-label="terminalSidebar.docsLabel">
           <div class="label" data-i18n="terminalSidebar.docsKicker">현재 Gate 문서</div>
-          <button class="gate-doc-row" type="button">
+          <button class="gate-doc-row" type="button" data-document="status" title="문서 열기" data-i18n-title="terminalSidebar.openDocHint">
             <strong class="mono">status.md</strong>
             <small data-i18n="terminalSidebar.statusDoc">전체 진행 상태와 열린 결정</small>
           </button>
-          <button class="gate-doc-row gate-doc-row--active" type="button">
+          <button class="gate-doc-row gate-doc-row--active" type="button" data-document="intake-md" title="문서 열기" data-i18n-title="terminalSidebar.openDocHint">
             <strong class="mono">gate-a-intake/intake.md</strong>
             <small data-i18n="terminalSidebar.intakeMd">질문, 답변, 결정 근거</small>
           </button>
-          <button class="gate-doc-row" type="button">
+          <button class="gate-doc-row" type="button" data-document="intake-json" title="문서 열기" data-i18n-title="terminalSidebar.openDocHint">
             <strong class="mono">gate-a-intake/intake.json</strong>
             <small data-i18n="terminalSidebar.intakeJson">schema-compatible intake</small>
           </button>
-        </div>
-
-        <div class="doc-peek">
-          <div class="label" data-i18n="terminalSidebar.peekLabel">문서 빠른 보기</div>
-          <div class="doc-peek__head">
-            <strong class="mono">intake.md</strong>
-            <span class="pill pill--warn">ND-2</span>
-          </div>
-          <pre data-i18n="terminalSidebar.peekBody">## Gate A - Intake decisions
-
-- ND-1 공개 범위: 팀 전체 공유로 답변됨
-- ND-2 초기 인증: 답변 필요
-- 다음: agent에게 인증 방식을 답변</pre>
         </div>
 
         <div class="terminal-sidebar-section">
@@ -601,6 +588,7 @@ Use the $p2a-harness skill on this idea:
     const langButtons = [...document.querySelectorAll("[data-lang]")];
     const railTabs = [...document.querySelectorAll("[data-tab]")];
     const viewPanes = [...document.querySelectorAll("[data-panel]")];
+    const documentRows = [...document.querySelectorAll("[data-document]")];
     const summaryState = document.querySelector("#summary-state");
     const summaryAction = document.querySelector("#summary-action");
     const summaryAgent = document.querySelector("#summary-agent");
@@ -734,14 +722,10 @@ Use the $p2a-harness skill on this idea:
       "terminalSidebar.gateDState": { ko: "task graph 후", en: "after task graph" },
       "terminalSidebar.docsLabel": { ko: "현재 Gate 문서", en: "Current Gate documents" },
       "terminalSidebar.docsKicker": { ko: "현재 Gate 문서", en: "current Gate documents" },
+      "terminalSidebar.openDocHint": { ko: "더블클릭으로 문서 열기", en: "Double-click to open document" },
       "terminalSidebar.statusDoc": { ko: "전체 진행 상태와 열린 결정", en: "overall progress and open decisions" },
       "terminalSidebar.intakeMd": { ko: "질문, 답변, 결정 근거", en: "questions, answers, and rationale" },
       "terminalSidebar.intakeJson": { ko: "schema-compatible intake", en: "schema-compatible intake" },
-      "terminalSidebar.peekLabel": { ko: "문서 빠른 보기", en: "document quick view" },
-      "terminalSidebar.peekBody": {
-        ko: "## Gate A - Intake decisions\n\n- ND-1 공개 범위: 팀 전체 공유로 답변됨\n- ND-2 초기 인증: 답변 필요\n- 다음: agent에게 인증 방식을 답변",
-        en: "## Gate A - Intake decisions\n\n- ND-1 visibility scope: answered as team-wide sharing\n- ND-2 initial auth: answer required\n- Next: answer the auth approach to the agent"
-      },
       "terminalSidebar.commandLabel": { ko: "세션 명령", en: "Session command" },
       "terminalSidebar.scopeLabel": { ko: "CLI 세션 맥락", en: "CLI session context" },
       "terminalSidebar.agentCli": { ko: "agent CLI", en: "agent CLI" },
@@ -907,6 +891,177 @@ Use the $p2a-harness skill on this idea:
 }</pre>`,
         },
       },
+      status: {
+        variant: "document",
+        kicker: { ko: "status.md", en: "status.md" },
+        title: { ko: "전체 진행 상태와 열린 결정", en: "Overall progress and open decisions" },
+        body: {
+          ko: `<article class="document-viewer">
+<div class="document-viewer__meta">
+  <span class="mono">artifacts/bookmark-api/status.md</span>
+  <span class="pill pill--warn">Gate A</span>
+</div>
+<pre class="document-viewer__body">Progress: Gate A blocked_on_user
+
+## 1. 진행 상태
+- 현재 Gate: Gate A - Intake decisions
+- active iteration: iter-002
+- agent CLI: codex
+
+## 2. 게이트별
+- Gate A: 진행 중, 사용자 결정 대기
+- Gate B: Gate A 완료 후 시작
+- Gate C: 대기
+- Gate D: 대기
+
+## 3. 열린 결정
+- ND-2 초기 인증: 사내 SSO 또는 로컬 사용자 토큰 중 선택 필요
+
+## 4. 다음
+- Terminal 세션에서 ND-2 답변을 agent에게 전달
+- intake.json과 intake.md를 같은 턴에 갱신</pre>
+</article>`,
+          en: `<article class="document-viewer">
+<div class="document-viewer__meta">
+  <span class="mono">artifacts/bookmark-api/status.md</span>
+  <span class="pill pill--warn">Gate A</span>
+</div>
+<pre class="document-viewer__body">Progress: Gate A blocked_on_user
+
+## 1. Progress
+- Current Gate: Gate A - Intake decisions
+- active iteration: iter-002
+- agent CLI: codex
+
+## 2. Gates
+- Gate A: in progress, waiting on user decision
+- Gate B: starts after Gate A
+- Gate C: pending
+- Gate D: pending
+
+## 3. Open decisions
+- ND-2 initial auth: choose company SSO or local user tokens
+
+## 4. Next
+- Answer ND-2 in the Terminal session
+- Refresh intake.json and intake.md in the same turn</pre>
+</article>`,
+        },
+      },
+      "intake-md": {
+        variant: "document",
+        kicker: { ko: "gate-a-intake/intake.md", en: "gate-a-intake/intake.md" },
+        title: { ko: "Gate A intake 문서", en: "Gate A intake document" },
+        body: {
+          ko: `<article class="document-viewer">
+<div class="document-viewer__meta">
+  <span class="mono">artifacts/bookmark-api/gate-a-intake/intake.md</span>
+  <span class="pill pill--warn">ND-2</span>
+</div>
+<pre class="document-viewer__body"># Gate A - Intake
+
+## 이해한 내용
+팀이 공유하는 북마크 API를 만든다. MVP는 팀 전체 공유를 기준으로 한다.
+
+## 확인된 결정
+- ND-1 공개 범위
+  - 선택: 팀 전체 공유만 MVP에 포함
+  - 후속: 개인 범위는 다음 iteration으로 보류
+
+## 열린 결정
+- ND-2 초기 인증
+  - 옵션 A: 사내 SSO
+  - 옵션 B: 로컬 사용자 토큰
+  - 추천: 로컬 사용자 토큰으로 MVP를 시작하고 SSO는 Gate B에서 확장점으로 남김
+
+## 다음 질문
+초기 인증을 어떤 방식으로 시작할까요?</pre>
+</article>`,
+          en: `<article class="document-viewer">
+<div class="document-viewer__meta">
+  <span class="mono">artifacts/bookmark-api/gate-a-intake/intake.md</span>
+  <span class="pill pill--warn">ND-2</span>
+</div>
+<pre class="document-viewer__body"># Gate A - Intake
+
+## Understanding
+Build a bookmark API shared by the team. The MVP starts with team-wide sharing.
+
+## Answered decisions
+- ND-1 visibility scope
+  - Selected: team-wide sharing only for the MVP
+  - Later: defer personal scope to a future iteration
+
+## Open decisions
+- ND-2 initial auth
+  - Option A: company SSO
+  - Option B: local user tokens
+  - Recommended: start with local user tokens and leave SSO as a Gate B extension point
+
+## Next question
+How should initial authentication start?</pre>
+</article>`,
+        },
+      },
+      "intake-json": {
+        variant: "document",
+        kicker: { ko: "gate-a-intake/intake.json", en: "gate-a-intake/intake.json" },
+        title: { ko: "Gate A intake JSON", en: "Gate A intake JSON" },
+        body: {
+          ko: `<article class="document-viewer">
+<div class="document-viewer__meta">
+  <span class="mono">artifacts/bookmark-api/gate-a-intake/intake.json</span>
+  <span class="pill pill--warn">blocked_on_user</span>
+</div>
+<pre class="document-viewer__body">{
+  "schema_version": "p2a.intake.v1",
+  "project_id": "bookmark-api",
+  "status": "blocked_on_user",
+  "summary": "팀 공유 북마크 API MVP",
+  "needs_user_decision": [
+    {
+      "id": "ND-1",
+      "status": "answered",
+      "question": "북마크 공개 범위",
+      "answer": "MVP는 팀 전체 공유만 포함"
+    },
+    {
+      "id": "ND-2",
+      "status": "open",
+      "question": "초기 인증 방식",
+      "options": ["company_sso", "local_user_tokens"]
+    }
+  ]
+}</pre>
+</article>`,
+          en: `<article class="document-viewer">
+<div class="document-viewer__meta">
+  <span class="mono">artifacts/bookmark-api/gate-a-intake/intake.json</span>
+  <span class="pill pill--warn">blocked_on_user</span>
+</div>
+<pre class="document-viewer__body">{
+  "schema_version": "p2a.intake.v1",
+  "project_id": "bookmark-api",
+  "status": "blocked_on_user",
+  "summary": "Team shared bookmark API MVP",
+  "needs_user_decision": [
+    {
+      "id": "ND-1",
+      "status": "answered",
+      "question": "Bookmark visibility scope",
+      "answer": "MVP includes team-wide sharing only"
+    },
+    {
+      "id": "ND-2",
+      "status": "open",
+      "question": "Initial authentication method",
+      "options": ["company_sso", "local_user_tokens"]
+    }
+  ]
+}</pre>
+</article>`,
+        },
+      },
     };
 
     let currentState = "execution-ready";
@@ -1040,6 +1195,7 @@ Use the $p2a-harness skill on this idea:
       detailTitle.textContent = localized(detail.title);
       const body = typeof detail.body === "function" ? detail.body() : detail.body;
       detailBody.innerHTML = localized(body);
+      modal.dataset.variant = detail.variant || "";
       modal.hidden = false;
     }
 
@@ -1051,9 +1207,31 @@ Use the $p2a-harness skill on this idea:
       });
     });
 
+    function openDocument(button) {
+      const detail = detailTemplates[button.dataset.document];
+      if (!detail) return;
+      openDetail(detail);
+    }
+
+    documentRows.forEach((button) => {
+      button.addEventListener("click", () => {
+        documentRows.forEach((item) => item.classList.remove("gate-doc-row--active"));
+        button.classList.add("gate-doc-row--active");
+      });
+      button.addEventListener("dblclick", () => openDocument(button));
+      button.addEventListener("keydown", (event) => {
+        if (event.key !== "Enter" && event.key !== " ") return;
+        event.preventDefault();
+        documentRows.forEach((item) => item.classList.remove("gate-doc-row--active"));
+        button.classList.add("gate-doc-row--active");
+        openDocument(button);
+      });
+    });
+
     document.querySelectorAll("[data-close-modal]").forEach((button) => {
       button.addEventListener("click", () => {
         modal.hidden = true;
+        modal.dataset.variant = "";
       });
     });
 
