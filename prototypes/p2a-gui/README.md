@@ -9,7 +9,8 @@
 - 최근 프로젝트 local config 형태 / recent project local config shape
 - `defaultAgentTool` 선택 / `defaultAgentTool` selection
 - 읽기 전용 하네스 경계 / read-only harness boundaries
-- 요약 중심 화면과 도움말 툴팁 / summary-first layout and help tooltips
+- 단순 Overview와 도움말 툴팁 / simple Overview layout and help tooltips
+- 상태 근거 중심 Inspector / state evidence Inspector
 - 진행 단계 흐름도 / progress flow diagram
 - Overview 상태판과 담당 탭 이동 안내 / Overview status board and owner-tab handoff
 

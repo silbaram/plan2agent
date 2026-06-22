@@ -5,10 +5,10 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>P2A GUI MVP - 온보딩 프로토타입 / onboarding prototype</title>
   <link rel="stylesheet" href="../../.agents/skills/p2a-design-system/references/harness/design-system/harness.css">
-  <link rel="stylesheet" href="./prototype.css">
+  <link rel="stylesheet" href="./prototype.css?v=overview-simple">
 </head>
 <body>
-  <main class="p2a-app summary-mode" aria-label="P2A GUI 온보딩 프로토타입">
+  <main class="p2a-app overview-simple" aria-label="P2A GUI 온보딩 프로토타입">
     <header class="titlebar">
       <div class="traffic" aria-hidden="true">
         <span></span>
@@ -21,7 +21,6 @@
         <span class="muted">2A-0 온보딩 프로토타입 / onboarding prototype</span>
       </div>
       <div class="titlebar__meta">
-        <button class="mode-toggle" type="button" id="summary-toggle" aria-pressed="true">요약 모드 / Summary</button>
         <span class="mono">읽기 전용 하네스 / read-only harness</span>
         <span class="sep"></span>
         <span class="mono">스키마 변경 없음 / no schema changes</span>
@@ -41,6 +40,10 @@
         <button class="rail__item" type="button" aria-label="실행 기록 / Runs">
           <span>Ru</span>
           <small>실행 / Runs</small>
+        </button>
+        <button class="rail__item" type="button" aria-label="산출물 / Artifacts">
+          <span>Ar</span>
+          <small>산출물 / Artifacts</small>
         </button>
         <button class="rail__item" type="button" aria-label="터미널 / Terminal">
           <span>Te</span>
@@ -303,55 +306,36 @@
       <aside class="inspector" aria-label="인스펙터">
         <div class="panel-head">
           <div>
-            <div class="label">인스펙터 / inspector</div>
-            <h2>실행 준비 상태 / Run readiness</h2>
+            <div class="label">상태 근거 / state evidence</div>
+            <h2 id="inspector-title">실행 준비됨 / Execution ready</h2>
           </div>
           <div class="surface-actions">
-            <span class="pill pill--ok">정상 / clean</span>
-            <button class="help-btn help-btn--right" type="button" aria-label="인스펙터 도움말" data-tooltip="오른쪽 인스펙터는 선택한 task/run의 요약만 보여줍니다. 상세 실행은 담당 탭에서 확인합니다.">?</button>
+            <span id="inspector-pill" class="pill pill--ok">준비됨 / ready</span>
+            <button class="help-btn help-btn--right" type="button" aria-label="상태 근거 도움말" data-tooltip="Overview 오른쪽은 현재 상태의 판단 근거만 짧게 보여줍니다. 상세 실행과 파일 내용은 담당 탭에서 확인합니다.">?</button>
           </div>
         </div>
 
-        <div class="inspector-summary">
-          <div>
-            <span>task</span>
-            <strong class="mono">task-3</strong>
+        <div class="evidence-list" aria-label="현재 상태 판단 근거">
+          <div class="evidence-row">
+            <span id="evidence-label-1">Ready task</span>
+            <strong id="evidence-value-1" class="mono">task-3</strong>
+            <small id="evidence-note-1">dependencies done</small>
           </div>
-          <div>
-            <span>run schema</span>
-            <strong class="mono">p2a.run.v1</strong>
+          <div class="evidence-row">
+            <span id="evidence-label-2">Gate</span>
+            <strong id="evidence-value-2" class="mono">A-D passed</strong>
+            <small id="evidence-note-2">review clean</small>
           </div>
-          <div>
-            <span>agent</span>
-            <strong class="mono" id="agent-tool-summary-compact">codex</strong>
+          <div class="evidence-row">
+            <span id="evidence-label-3">최근 검증</span>
+            <strong id="evidence-value-3" class="mono">not run</strong>
+            <small id="evidence-note-3">Terminal에서 확인</small>
           </div>
         </div>
 
-        <div class="kv detail-heavy">
-          <span>소스 구조 / Source layout</span>
-          <strong class="mono">iteration</strong>
-          <span>활성 반복 / Active iteration</span>
-          <strong class="mono">v1-mvp</strong>
-          <span>태스크 그래프 / Task graph</span>
-          <strong class="mono">gate-c-task-graph/task-graph.json</strong>
-          <span>실행 스키마 / Run schema</span>
-          <strong class="mono">p2a.run.v1</strong>
-          <span>AI CLI / Agent tool</span>
-          <strong class="mono" id="agent-tool-summary">codex</strong>
-        </div>
-
-        <div class="verification detail-heavy">
-          <div class="label">최근 검증 상태 / latest verification state</div>
-          <div class="verify-row">
-            <span>test</span>
-            <strong class="mono">미실행 / not run</strong>
-            <em>Terminal</em>
-          </div>
-          <div class="verify-row">
-            <span>lint</span>
-            <strong class="mono">미실행 / not run</strong>
-            <em>Terminal</em>
-          </div>
+        <div class="inspector-actions">
+          <button id="inspector-primary-action" class="btn" type="button">Tasks에서 열기 / Open in Tasks</button>
+          <button id="inspector-secondary-action" class="btn btn--ghost" type="button">Artifacts 근거 보기 / View artifacts</button>
         </div>
       </aside>
     </section>
@@ -380,11 +364,7 @@
   </main>
 
   <script>
-    const app = document.querySelector(".p2a-app");
     const agentSelect = document.querySelector("#agent-tool");
-    const agentSummary = document.querySelector("#agent-tool-summary");
-    const agentSummaryCompact = document.querySelector("#agent-tool-summary-compact");
-    const summaryToggle = document.querySelector("#summary-toggle");
     const summaryState = document.querySelector("#summary-state");
     const summaryAction = document.querySelector("#summary-action");
     const summaryAgent = document.querySelector("#summary-agent");
@@ -399,6 +379,15 @@
     const resultNote = document.querySelector("#result-note");
     const stateTitle = document.querySelector("#state-title");
     const statePill = document.querySelector("#state-pill");
+    const inspectorTitle = document.querySelector("#inspector-title");
+    const inspectorPill = document.querySelector("#inspector-pill");
+    const inspectorPrimaryAction = document.querySelector("#inspector-primary-action");
+    const inspectorSecondaryAction = document.querySelector("#inspector-secondary-action");
+    const evidenceRows = [1, 2, 3].map((index) => ({
+      label: document.querySelector(`#evidence-label-${index}`),
+      value: document.querySelector(`#evidence-value-${index}`),
+      note: document.querySelector(`#evidence-note-${index}`),
+    }));
     const stateCards = [...document.querySelectorAll(".state-card")];
     const flowNodes = [...document.querySelectorAll(".flow-node")];
     const modal = document.querySelector("#detail-modal");
@@ -419,6 +408,14 @@
           secondary: ["Terminal", "PTY 실행은 Terminal에서 시작", "Overview에서는 실행하지 않음 / no execution from Overview"],
           result: ["Runs", "run 결과 확인", "done 또는 blocked 판단 근거 확인 / review result evidence"],
         },
+        evidence: {
+          rows: [
+            ["Ready task", "task-3", "dependencies done"],
+            ["Gate", "A-D passed", "review clean"],
+            ["최근 검증", "not run", "Terminal에서 확인"],
+          ],
+          actions: ["Tasks에서 열기 / Open in Tasks", "Artifacts 근거 보기 / View artifacts"],
+        },
       },
       planning: {
         title: "기획 진행 중 / Planning in progress",
@@ -431,6 +428,14 @@
           primary: ["Artifacts", "Gate 산출물 확인", "intake, spec, task graph 상태 확인 / review planning artifacts"],
           secondary: ["Tasks", "ready task 생성 후 확인", "아직 실행 시작 없음 / no run start yet"],
           result: ["Runs", "이전 run 확인", "기존 결과만 조회 / read existing run history"],
+        },
+        evidence: {
+          rows: [
+            ["현재 Gate", "Gate B/C", "spec 또는 task graph 검토 중"],
+            ["Ready task", "none", "task graph 승인 전"],
+            ["다음 위치", "Artifacts", "산출물 상태 확인"],
+          ],
+          actions: ["Artifacts에서 열기 / Open Artifacts", "Tasks 상태 보기 / View Tasks"],
         },
       },
       empty: {
@@ -445,6 +450,14 @@
           secondary: ["Terminal", "기획 시작 안내 확인", "필요한 CLI 안내는 Terminal 탭 / command guidance belongs to Terminal"],
           result: ["Tasks", "task 생성 후 확인", "task graph 생성 전 / before task graph exists"],
         },
+        evidence: {
+          rows: [
+            ["하네스", "installed", "P2A 파일 구조 감지"],
+            ["기획 산출물", "none", "artifact root 없음"],
+            ["다음 위치", "Artifacts", "import 또는 planning 안내 확인"],
+          ],
+          actions: ["Artifacts에서 열기 / Open Artifacts", "Terminal 안내 보기 / View guidance"],
+        },
       },
       missing: {
         title: "P2A 없음 / No P2A",
@@ -457,6 +470,14 @@
           primary: ["Terminal", "설치 command guidance 확인", "Overview에서는 설치 실행 없음 / setup is not run from Overview"],
           secondary: ["Settings", "대상 프로젝트 확인", "recent project와 agent CLI 확인 / check project and agent"],
           result: ["Overview", "설치 후 상태 재감지", "파일 watcher로 상태 갱신 / reload from file changes"],
+        },
+        evidence: {
+          rows: [
+            ["Manifest", "missing", ".plan2agent/manifest.json 없음"],
+            ["Scripts", "missing", "P2A lifecycle script 없음"],
+            ["다음 위치", "Terminal", "setup command guidance"],
+          ],
+          actions: ["Terminal 안내 보기 / View guidance", "Settings 확인 / Check Settings"],
         },
       },
       outdated: {
@@ -472,6 +493,14 @@
           secondary: ["Settings", "앱 bundle 기준 확인", "GUI local config와 source version 확인 / inspect local config"],
           result: ["Runs", "최근 실패 기록 확인", "기존 run 결과만 조회 / read existing runs"],
         },
+        evidence: {
+          rows: [
+            ["Source version", "mismatch", "앱 bundle과 다름"],
+            ["하네스 변경", "none", "GUI는 갱신 실행 안 함"],
+            ["다음 위치", "Terminal", "validate guidance"],
+          ],
+          actions: ["Terminal 안내 보기 / View guidance", "Settings 확인 / Check Settings"],
+        },
       },
       broken: {
         title: "설치 깨짐 / Broken install",
@@ -485,6 +514,14 @@
           primary: ["Terminal", "diagnose guidance 확인", "복구 실행은 Overview에서 하지 않음 / no repair from Overview"],
           secondary: ["Artifacts", "누락 산출물 위치 확인", "읽을 수 있는 파일만 표시 / read available files"],
           result: ["Overview", "복구 후 상태 재감지", "외부 변경을 다시 읽음 / reload after external changes"],
+        },
+        evidence: {
+          rows: [
+            ["필수 파일", "missing", "generated asset 누락"],
+            ["복구 실행", "none", "GUI는 repair 실행 안 함"],
+            ["다음 위치", "Terminal", "diagnose guidance"],
+          ],
+          actions: ["Terminal 안내 보기 / View guidance", "Artifacts 확인 / Check Artifacts"],
         },
       },
     };
@@ -507,14 +544,22 @@
     function renderState() {
       const tool = agentSelect.value;
       const state = states[currentState];
-      agentSummary.textContent = tool;
-      agentSummaryCompact.textContent = tool;
       summaryAgent.textContent = tool;
       summaryState.textContent = state.summary;
       summaryAction.textContent = state.action;
       stateTitle.textContent = state.title;
       statePill.textContent = state.pill;
       statePill.className = state.pillClass;
+      inspectorTitle.textContent = state.title;
+      inspectorPill.textContent = state.pill;
+      inspectorPill.className = state.pillClass;
+      state.evidence.rows.forEach((row, index) => {
+        evidenceRows[index].label.textContent = row[0];
+        evidenceRows[index].value.textContent = row[1];
+        evidenceRows[index].note.textContent = row[2];
+      });
+      inspectorPrimaryAction.textContent = state.evidence.actions[0];
+      inspectorSecondaryAction.textContent = state.evidence.actions[1];
       primaryTab.textContent = state.destination.primary[0];
       primaryAction.textContent = state.destination.primary[1];
       primaryNote.textContent = state.destination.primary[2];
@@ -544,12 +589,6 @@
     }
 
     agentSelect.addEventListener("change", renderState);
-    summaryToggle.addEventListener("click", () => {
-      const nextSummary = !app.classList.contains("summary-mode");
-      app.classList.toggle("summary-mode", nextSummary);
-      summaryToggle.setAttribute("aria-pressed", String(nextSummary));
-      summaryToggle.textContent = nextSummary ? "요약 모드 / Summary" : "전체 보기 / Full";
-    });
     stateCards.forEach((card) => {
       card.addEventListener("click", () => {
         currentState = card.dataset.state;
