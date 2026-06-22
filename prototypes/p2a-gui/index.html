@@ -114,27 +114,82 @@
       <aside class="sidebar view-pane sidebar--terminal" aria-label="Gate A 세션" data-i18n-aria-label="terminalSidebar.label" data-panel="terminal" hidden>
         <div class="panel-head">
           <div>
-            <div class="label" data-i18n="terminalSidebar.kicker">Gate 세션</div>
-            <h1 data-i18n="terminalSidebar.title">Gate A 대화</h1>
+            <div class="label" data-i18n="terminalSidebar.kicker">Gate 탐색</div>
+            <h1 data-i18n="terminalSidebar.title">Gate A intake</h1>
           </div>
-          <span class="pill pill--info" data-i18n="terminalSidebar.pill">입력 대기</span>
+          <span class="pill pill--info" data-i18n="terminalSidebar.pill">대화 중</span>
         </div>
 
-        <div class="terminal-session-list" aria-label="Gate A 세션 목록" data-i18n-aria-label="terminalSidebar.sessionList">
-          <button class="terminal-session terminal-session--active" type="button">
-            <span class="status status--planning"></span>
+        <div class="gate-nav-list" aria-label="Gate 진행 목록" data-i18n-aria-label="terminalSidebar.gateList">
+          <button class="gate-nav-row gate-nav-row--active" type="button">
+            <span class="mono">A</span>
             <span>
-              <strong data-i18n="terminalSidebar.sessionActive">Gate A intake</strong>
-              <small class="mono">codex · iter-002 · 00:08:12</small>
+              <strong data-i18n="terminalSidebar.gateA">Gate A intake</strong>
+              <small data-i18n="terminalSidebar.gateAState">질문 답변 진행 중</small>
             </span>
           </button>
-          <button class="terminal-session" type="button">
-            <span class="status status--ready"></span>
+          <button class="gate-nav-row" type="button">
+            <span class="mono">B</span>
             <span>
-              <strong data-i18n="terminalSidebar.sessionDone">Gate A 완료본</strong>
-              <small class="mono">iter-001 · ready_for_spec</small>
+              <strong data-i18n="terminalSidebar.gateB">Gate B spec</strong>
+              <small data-i18n="terminalSidebar.gateBState">intake 완료 후</small>
             </span>
           </button>
+          <button class="gate-nav-row" type="button">
+            <span class="mono">C</span>
+            <span>
+              <strong data-i18n="terminalSidebar.gateC">Gate C task graph</strong>
+              <small data-i18n="terminalSidebar.gateCState">spec 승인 후</small>
+            </span>
+          </button>
+          <button class="gate-nav-row" type="button">
+            <span class="mono">D</span>
+            <span>
+              <strong data-i18n="terminalSidebar.gateD">Gate D review</strong>
+              <small data-i18n="terminalSidebar.gateDState">task graph 후</small>
+            </span>
+          </button>
+        </div>
+
+        <div class="gate-doc-section" aria-label="현재 Gate 문서" data-i18n-aria-label="terminalSidebar.docsLabel">
+          <div class="label" data-i18n="terminalSidebar.docsKicker">현재 Gate 문서</div>
+          <button class="gate-doc-row" type="button">
+            <strong class="mono">status.md</strong>
+            <small data-i18n="terminalSidebar.statusDoc">전체 진행 상태와 열린 결정</small>
+          </button>
+          <button class="gate-doc-row gate-doc-row--active" type="button">
+            <strong class="mono">gate-a-intake/intake.md</strong>
+            <small data-i18n="terminalSidebar.intakeMd">질문, 답변, 결정 근거</small>
+          </button>
+          <button class="gate-doc-row" type="button">
+            <strong class="mono">gate-a-intake/intake.json</strong>
+            <small data-i18n="terminalSidebar.intakeJson">schema-compatible intake</small>
+          </button>
+        </div>
+
+        <div class="doc-peek">
+          <div class="label" data-i18n="terminalSidebar.peekLabel">문서 빠른 보기</div>
+          <div class="doc-peek__head">
+            <strong class="mono">intake.md</strong>
+            <span class="pill pill--warn">ND-2</span>
+          </div>
+          <pre data-i18n="terminalSidebar.peekBody">## Gate A - Intake decisions
+
+- ND-1 공개 범위: 팀 전체 공유로 답변됨
+- ND-2 초기 인증: 답변 필요
+- 다음: agent에게 인증 방식을 답변</pre>
+        </div>
+
+        <div class="terminal-sidebar-section">
+          <div class="label" data-i18n="terminalSidebar.scopeLabel">CLI 세션 맥락</div>
+          <dl class="compact-dl">
+            <dt data-i18n="terminalSidebar.agentCli">agent CLI</dt>
+            <dd class="mono">codex</dd>
+            <dt data-i18n="terminalSidebar.cwd">cwd</dt>
+            <dd class="mono">/Users/qoo10/projects/bookmark-api</dd>
+            <dt data-i18n="terminalSidebar.rawLog">원문 로그</dt>
+            <dd data-i18n="terminalSidebar.rawLogValue">기본 저장 안 함</dd>
+          </dl>
         </div>
 
         <div class="terminal-command">
@@ -144,20 +199,8 @@ Use the $p2a-harness skill on this idea:
 팀이 공유하는 북마크 API를 만들고 싶다.</pre>
         </div>
 
-        <div class="terminal-sidebar-section">
-          <div class="label" data-i18n="terminalSidebar.scopeLabel">쓰기 범위</div>
-          <dl class="compact-dl">
-            <dt data-i18n="terminalSidebar.cwd">cwd</dt>
-            <dd class="mono">/Users/qoo10/projects/bookmark-api</dd>
-            <dt data-i18n="terminalSidebar.outputs">산출물</dt>
-            <dd class="mono">artifacts/bookmark-api/gate-a-intake/</dd>
-            <dt data-i18n="terminalSidebar.rawLog">원문 로그</dt>
-            <dd data-i18n="terminalSidebar.rawLogValue">기본 저장 안 함</dd>
-          </dl>
-        </div>
-
         <div class="summary-actions">
-          <button class="btn btn--ghost" type="button" data-i18n="terminalSidebar.openArtifacts">산출물 보기</button>
+          <button class="btn btn--ghost" type="button" data-i18n="terminalSidebar.openArtifacts">Artifacts 전체 보기</button>
         </div>
       </aside>
 
@@ -676,20 +719,37 @@ Use the $p2a-harness skill on this idea:
       "modal.kicker": { ko: "세부내용", en: "details" },
       "modal.title": { ko: "세부내용", en: "Details" },
       "modal.close": { ko: "닫기", en: "Close" },
-      "terminalSidebar.label": { ko: "Gate A 세션", en: "Gate A sessions" },
-      "terminalSidebar.kicker": { ko: "Gate 세션", en: "gate sessions" },
-      "terminalSidebar.title": { ko: "Gate A 대화", en: "Gate A conversation" },
-      "terminalSidebar.pill": { ko: "입력 대기", en: "waiting" },
-      "terminalSidebar.sessionList": { ko: "Gate A 세션 목록", en: "Gate A session list" },
-      "terminalSidebar.sessionActive": { ko: "Gate A intake", en: "Gate A intake" },
-      "terminalSidebar.sessionDone": { ko: "Gate A 완료본", en: "Completed Gate A" },
+      "terminalSidebar.label": { ko: "Gate A 세션", en: "Gate A session" },
+      "terminalSidebar.kicker": { ko: "Gate 탐색", en: "gate navigator" },
+      "terminalSidebar.title": { ko: "Gate A intake", en: "Gate A intake" },
+      "terminalSidebar.pill": { ko: "대화 중", en: "active" },
+      "terminalSidebar.gateList": { ko: "Gate 진행 목록", en: "Gate progress list" },
+      "terminalSidebar.gateA": { ko: "Gate A intake", en: "Gate A intake" },
+      "terminalSidebar.gateAState": { ko: "질문 답변 진행 중", en: "questions in progress" },
+      "terminalSidebar.gateB": { ko: "Gate B spec", en: "Gate B spec" },
+      "terminalSidebar.gateBState": { ko: "intake 완료 후", en: "after intake" },
+      "terminalSidebar.gateC": { ko: "Gate C task graph", en: "Gate C task graph" },
+      "terminalSidebar.gateCState": { ko: "spec 승인 후", en: "after spec approval" },
+      "terminalSidebar.gateD": { ko: "Gate D review", en: "Gate D review" },
+      "terminalSidebar.gateDState": { ko: "task graph 후", en: "after task graph" },
+      "terminalSidebar.docsLabel": { ko: "현재 Gate 문서", en: "Current Gate documents" },
+      "terminalSidebar.docsKicker": { ko: "현재 Gate 문서", en: "current Gate documents" },
+      "terminalSidebar.statusDoc": { ko: "전체 진행 상태와 열린 결정", en: "overall progress and open decisions" },
+      "terminalSidebar.intakeMd": { ko: "질문, 답변, 결정 근거", en: "questions, answers, and rationale" },
+      "terminalSidebar.intakeJson": { ko: "schema-compatible intake", en: "schema-compatible intake" },
+      "terminalSidebar.peekLabel": { ko: "문서 빠른 보기", en: "document quick view" },
+      "terminalSidebar.peekBody": {
+        ko: "## Gate A - Intake decisions\n\n- ND-1 공개 범위: 팀 전체 공유로 답변됨\n- ND-2 초기 인증: 답변 필요\n- 다음: agent에게 인증 방식을 답변",
+        en: "## Gate A - Intake decisions\n\n- ND-1 visibility scope: answered as team-wide sharing\n- ND-2 initial auth: answer required\n- Next: answer the auth approach to the agent"
+      },
       "terminalSidebar.commandLabel": { ko: "세션 명령", en: "Session command" },
-      "terminalSidebar.scopeLabel": { ko: "쓰기 범위", en: "Write scope" },
+      "terminalSidebar.scopeLabel": { ko: "CLI 세션 맥락", en: "CLI session context" },
+      "terminalSidebar.agentCli": { ko: "agent CLI", en: "agent CLI" },
       "terminalSidebar.cwd": { ko: "cwd", en: "cwd" },
       "terminalSidebar.outputs": { ko: "산출물", en: "Outputs" },
       "terminalSidebar.rawLog": { ko: "원문 로그", en: "Raw log" },
       "terminalSidebar.rawLogValue": { ko: "기본 저장 안 함", en: "not stored by default" },
-      "terminalSidebar.openArtifacts": { ko: "산출물 보기", en: "View artifacts" },
+      "terminalSidebar.openArtifacts": { ko: "Artifacts 전체 보기", en: "Open all Artifacts" },
       "terminal.label": { ko: "Gate A 터미널", en: "Gate A terminal" },
       "terminal.kicker": { ko: "Terminal · Gate A", en: "Terminal · Gate A" },
       "terminal.title": { ko: "AI agent와 intake 질문 답변", en: "Answer intake questions with the AI agent" },
