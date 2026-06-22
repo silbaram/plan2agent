@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>P2A GUI MVP - 온보딩 프로토타입 / onboarding prototype</title>
   <link rel="stylesheet" href="../../.agents/skills/p2a-design-system/references/harness/design-system/harness.css">
-  <link rel="stylesheet" href="./prototype.css?v=overview-simple">
+  <link rel="stylesheet" href="./prototype.css?v=handoff-tooltip">
 </head>
 <body>
   <main class="p2a-app overview-simple" aria-label="P2A GUI 온보딩 프로토타입">
@@ -279,21 +279,18 @@
                   <span class="tab-chip mono" id="primary-tab">Tasks</span>
                   <span>
                     <strong id="primary-action">ready task 상세 확인</strong>
-                    <small id="primary-note">실행 준비와 완료 기준 확인 / review readiness and criteria</small>
                   </span>
                 </button>
                 <button class="handoff-row" type="button" data-route="secondary" data-tooltip="실행성 조작은 담당 탭에서만 노출합니다.">
                   <span class="tab-chip mono" id="secondary-tab">Terminal</span>
                   <span>
                     <strong id="secondary-action">PTY 실행은 Terminal에서 시작</strong>
-                    <small id="secondary-note">Overview에서는 실행하지 않음 / no execution from Overview</small>
                   </span>
                 </button>
                 <button class="handoff-row" type="button" data-route="runs" data-tooltip="결과와 판단 근거는 Runs 탭에서 확인합니다.">
                   <span class="tab-chip mono" id="result-tab">Runs</span>
                   <span>
                     <strong id="result-action">run 결과 확인</strong>
-                    <small id="result-note">done 또는 blocked 판단 근거 확인 / review result evidence</small>
                   </span>
                 </button>
               </div>
@@ -370,13 +367,15 @@
     const summaryAgent = document.querySelector("#summary-agent");
     const primaryTab = document.querySelector("#primary-tab");
     const primaryAction = document.querySelector("#primary-action");
-    const primaryNote = document.querySelector("#primary-note");
     const secondaryTab = document.querySelector("#secondary-tab");
     const secondaryAction = document.querySelector("#secondary-action");
-    const secondaryNote = document.querySelector("#secondary-note");
     const resultTab = document.querySelector("#result-tab");
     const resultAction = document.querySelector("#result-action");
-    const resultNote = document.querySelector("#result-note");
+    const handoffRows = {
+      primary: document.querySelector('[data-route="primary"]'),
+      secondary: document.querySelector('[data-route="secondary"]'),
+      result: document.querySelector('[data-route="runs"]'),
+    };
     const stateTitle = document.querySelector("#state-title");
     const statePill = document.querySelector("#state-pill");
     const inspectorTitle = document.querySelector("#inspector-title");
@@ -562,13 +561,16 @@
       inspectorSecondaryAction.textContent = state.evidence.actions[1];
       primaryTab.textContent = state.destination.primary[0];
       primaryAction.textContent = state.destination.primary[1];
-      primaryNote.textContent = state.destination.primary[2];
+      handoffRows.primary.dataset.tooltip = state.destination.primary[2];
+      handoffRows.primary.setAttribute("aria-label", `${state.destination.primary[0]}: ${state.destination.primary[1]}. ${state.destination.primary[2]}`);
       secondaryTab.textContent = state.destination.secondary[0];
       secondaryAction.textContent = state.destination.secondary[1];
-      secondaryNote.textContent = state.destination.secondary[2];
+      handoffRows.secondary.dataset.tooltip = state.destination.secondary[2];
+      handoffRows.secondary.setAttribute("aria-label", `${state.destination.secondary[0]}: ${state.destination.secondary[1]}. ${state.destination.secondary[2]}`);
       resultTab.textContent = state.destination.result[0];
       resultAction.textContent = state.destination.result[1];
-      resultNote.textContent = state.destination.result[2];
+      handoffRows.result.dataset.tooltip = state.destination.result[2];
+      handoffRows.result.setAttribute("aria-label", `${state.destination.result[0]}: ${state.destination.result[1]}. ${state.destination.result[2]}`);
       flowNodes.forEach((node) => {
         const index = Number(node.dataset.flowIndex);
         node.classList.remove("flow-node--done", "flow-node--active", "flow-node--pending", "flow-node--issue");

@@ -830,7 +830,7 @@ pre {
 }
 
 .handoff-row strong,
-.handoff-row small {
+.handoff-row > span:not(.tab-chip) {
   display: block;
   min-width: 0;
   overflow: hidden;
@@ -841,14 +841,6 @@ pre {
   color: var(--fg-1);
   font-size: var(--t-small);
   white-space: nowrap;
-}
-
-.handoff-row small {
-  color: var(--fg-3);
-  font-size: var(--t-small);
-  display: -webkit-box;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
 }
 
 .tab-chip {
