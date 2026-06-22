@@ -3,12 +3,12 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>P2A GUI MVP - 온보딩 프로토타입 / onboarding prototype</title>
+  <title>P2A GUI MVP - 온보딩 프로토타입</title>
   <link rel="stylesheet" href="../../.agents/skills/p2a-design-system/references/harness/design-system/harness.css">
   <link rel="stylesheet" href="./prototype.css?v=overview-clean">
 </head>
 <body>
-  <main class="p2a-app overview-simple" aria-label="P2A GUI 온보딩 프로토타입">
+  <main class="p2a-app overview-simple" aria-label="P2A GUI 온보딩 프로토타입" data-i18n-aria-label="app.label">
     <header class="titlebar">
       <div class="traffic" aria-hidden="true">
         <span></span>
@@ -18,58 +18,62 @@
       <div class="titlebar__project">
         <span class="dot dot--active"></span>
         <span>P2A GUI</span>
-        <span class="muted">2A-0 온보딩 프로토타입 / onboarding prototype</span>
+        <span class="muted" data-i18n="titlebar.subtitle">2A-0 온보딩 프로토타입</span>
       </div>
       <div class="titlebar__meta">
-        <span class="mono">읽기 전용 하네스 / read-only harness</span>
+        <div class="lang-switch" role="group" aria-label="언어 선택" data-i18n-aria-label="language.label">
+          <button class="lang-switch__item lang-switch__item--active" type="button" data-lang="ko" aria-pressed="true">한글</button>
+          <button class="lang-switch__item" type="button" data-lang="en" aria-pressed="false">EN</button>
+        </div>
+        <span class="mono" data-i18n="titlebar.readonly">읽기 전용 하네스</span>
         <span class="sep"></span>
-        <span class="mono">스키마 변경 없음 / no schema changes</span>
+        <span class="mono" data-i18n="titlebar.noSchema">스키마 변경 없음</span>
       </div>
     </header>
 
     <section class="workspace">
-      <nav class="rail" aria-label="주요 메뉴">
-        <button class="rail__item rail__item--active" type="button" aria-label="개요 / Overview">
-          <span>Ov</span>
-          <small>개요 / Overview</small>
+      <nav class="rail" aria-label="주요 메뉴" data-i18n-aria-label="rail.label">
+        <button class="rail__item rail__item--active" type="button" aria-label="개요" data-i18n-aria-label="rail.overview">
+          <span data-i18n="rail.overviewMark">01</span>
+          <small data-i18n="rail.overview">개요</small>
         </button>
-        <button class="rail__item" type="button" aria-label="작업 / Tasks">
-          <span>Ta</span>
-          <small>작업 / Tasks</small>
+        <button class="rail__item" type="button" aria-label="작업" data-i18n-aria-label="rail.tasks">
+          <span data-i18n="rail.tasksMark">02</span>
+          <small data-i18n="rail.tasks">작업</small>
         </button>
-        <button class="rail__item" type="button" aria-label="실행 기록 / Runs">
-          <span>Ru</span>
-          <small>실행 / Runs</small>
+        <button class="rail__item" type="button" aria-label="실행 기록" data-i18n-aria-label="rail.runs">
+          <span data-i18n="rail.runsMark">03</span>
+          <small data-i18n="rail.runs">실행 기록</small>
         </button>
-        <button class="rail__item" type="button" aria-label="산출물 / Artifacts">
-          <span>Ar</span>
-          <small>산출물 / Artifacts</small>
+        <button class="rail__item" type="button" aria-label="산출물" data-i18n-aria-label="rail.artifacts">
+          <span data-i18n="rail.artifactsMark">04</span>
+          <small data-i18n="rail.artifacts">산출물</small>
         </button>
-        <button class="rail__item" type="button" aria-label="터미널 / Terminal">
-          <span>Te</span>
-          <small>터미널 / Terminal</small>
+        <button class="rail__item" type="button" aria-label="터미널" data-i18n-aria-label="rail.terminal">
+          <span data-i18n="rail.terminalMark">05</span>
+          <small data-i18n="rail.terminal">터미널</small>
         </button>
-        <button class="rail__item rail__item--bottom" type="button" aria-label="설정 / Settings">
-          <span>Se</span>
-          <small>설정 / Settings</small>
+        <button class="rail__item rail__item--bottom" type="button" aria-label="설정" data-i18n-aria-label="rail.settings">
+          <span data-i18n="rail.settingsMark">06</span>
+          <small data-i18n="rail.settings">설정</small>
         </button>
       </nav>
 
-      <aside class="sidebar" aria-label="최근 프로젝트">
+      <aside class="sidebar" aria-label="최근 프로젝트" data-i18n-aria-label="sidebar.label">
         <div class="panel-head">
           <div>
-            <div class="label">최근 프로젝트 / recent projects</div>
-            <h1>프로젝트 열기 / Open project</h1>
+            <div class="label" data-i18n="sidebar.kicker">최근 프로젝트</div>
+            <h1 data-i18n="sidebar.title">프로젝트 열기</h1>
           </div>
-          <button class="btn btn--primary" type="button">폴더 열기 / Open folder</button>
+          <button class="btn btn--primary" type="button" data-i18n="sidebar.openFolder">폴더 열기</button>
         </div>
 
         <div class="field">
-          <label for="project-path">선택한 폴더 / Selected folder</label>
+          <label for="project-path" data-i18n="sidebar.selectedFolder">선택한 폴더</label>
           <input id="project-path" value="/Users/qoo10/projects/bookmark-api" readonly>
         </div>
 
-        <div class="recent-list" aria-label="최근 프로젝트 목록">
+        <div class="recent-list" aria-label="최근 프로젝트 목록" data-i18n-aria-label="sidebar.recentList">
           <button class="recent recent--active" type="button">
             <span class="status status--ready"></span>
             <span>
@@ -94,7 +98,7 @@
         </div>
 
         <div class="local-config detail-heavy">
-          <div class="label">GUI 로컬 설정 / GUI local config</div>
+          <div class="label" data-i18n="sidebar.localConfig">GUI 로컬 설정</div>
           <pre>{
   "path": "/Users/qoo10/projects/bookmark-api",
   "defaultAgentTool": "codex",
@@ -103,151 +107,151 @@
         </div>
 
         <div class="summary-actions">
-          <button class="btn btn--ghost" type="button" data-detail="local-config">로컬 설정 보기 / Local config</button>
+          <button class="btn btn--ghost" type="button" data-detail="local-config" data-i18n="sidebar.viewLocalConfig">로컬 설정 보기</button>
         </div>
       </aside>
 
-      <section class="content" aria-label="프로젝트 감지">
+      <section class="content" aria-label="프로젝트 감지" data-i18n-aria-label="content.label">
         <div class="content-head">
           <div>
-            <div class="label">프로젝트 감지 / project detection</div>
-            <h2>P2A 상태를 읽고 필요한 명령만 안내 / Read state, guide commands</h2>
+            <div class="label" data-i18n="content.kicker">프로젝트 감지</div>
+            <h2 data-i18n="content.title">P2A 상태를 읽고 필요한 명령만 안내</h2>
           </div>
           <div class="agent-select">
-            <label for="agent-tool">기본 실행 AI CLI / Default agent CLI</label>
-            <select id="agent-tool" aria-label="기본 실행 AI CLI">
+            <label for="agent-tool" data-i18n="agent.label">기본 실행 AI CLI</label>
+            <select id="agent-tool" aria-label="기본 실행 AI CLI" data-i18n-aria-label="agent.label">
               <option value="codex" selected>codex</option>
               <option value="claude">claude</option>
             </select>
           </div>
         </div>
 
-        <div class="summary-strip" aria-label="요약">
+        <div class="summary-strip" aria-label="요약" data-i18n-aria-label="summary.label">
           <div>
-            <span>현재 상태 / State</span>
+            <span data-i18n="summary.state">현재 상태</span>
             <strong id="summary-state">실행 준비됨</strong>
           </div>
           <div>
-            <span>다음 행동 / Next action</span>
-            <strong id="summary-action">ready task 실행</strong>
+            <span data-i18n="summary.action">다음 행동</span>
+            <strong id="summary-action">준비 작업 실행</strong>
           </div>
           <div>
-            <span>기본 AI CLI / Agent</span>
+            <span data-i18n="summary.agent">기본 AI CLI</span>
             <strong id="summary-agent">codex</strong>
           </div>
           <div>
-            <span>하네스 변경 / Harness writes</span>
-            <strong>없음 / none</strong>
+            <span data-i18n="summary.harnessWrites">하네스 변경</span>
+            <strong data-i18n="summary.none">없음</strong>
           </div>
         </div>
 
-        <div class="state-grid detail-heavy" role="list" aria-label="감지 상태">
+        <div class="state-grid detail-heavy" role="list" aria-label="감지 상태" data-i18n-aria-label="states.label">
           <button class="state-card state-card--selected" type="button" data-state="execution-ready" role="listitem">
             <span class="state-card__marker state-card__marker--ready"></span>
             <span>
-              <strong>실행 준비됨 / Execution ready</strong>
-              <small>ready task 또는 run history가 있음 / ready task or run history exists</small>
+              <strong data-i18n="states.executionReady.title">실행 준비됨</strong>
+              <small data-i18n="states.executionReady.desc">준비 작업 또는 실행 기록이 있음</small>
             </span>
-            <em>실행 가능 · Ready to run</em>
+            <em data-i18n="states.executionReady.meta">실행 가능</em>
           </button>
           <button class="state-card" type="button" data-state="planning" role="listitem">
             <span class="state-card__marker state-card__marker--planning"></span>
             <span>
-              <strong>기획 진행 중 / Planning in progress</strong>
-              <small>gate 산출물은 있고 ready task는 없음 / gate artifacts exist, no ready task</small>
+              <strong data-i18n="states.planning.title">기획 진행 중</strong>
+              <small data-i18n="states.planning.desc">게이트 산출물은 있고 준비 작업은 없음</small>
             </span>
-            <em>검토 필요 · Review gates</em>
+            <em data-i18n="states.planning.meta">검토 필요</em>
           </button>
           <button class="state-card" type="button" data-state="empty" role="listitem">
             <span class="state-card__marker state-card__marker--empty"></span>
             <span>
-              <strong>설치만 됨 / Installed empty</strong>
-              <small>하네스는 있고 기획 산출물은 없음 / harness exists, no planning artifacts</small>
+              <strong data-i18n="states.empty.title">설치만 됨</strong>
+              <small data-i18n="states.empty.desc">하네스는 있고 기획 산출물은 없음</small>
             </span>
-            <em>기획 안내 · Planning guide</em>
+            <em data-i18n="states.empty.meta">기획 안내</em>
           </button>
           <button class="state-card" type="button" data-state="missing" role="listitem">
             <span class="state-card__marker state-card__marker--missing"></span>
             <span>
-              <strong>P2A 없음 / No P2A</strong>
-              <small>manifest와 scripts를 찾지 못함 / manifest and scripts not found</small>
+              <strong data-i18n="states.missing.title">P2A 없음</strong>
+              <small data-i18n="states.missing.desc">매니페스트와 스크립트를 찾지 못함</small>
             </span>
-            <em>설치 안내 · Setup guide</em>
+            <em data-i18n="states.missing.meta">설치 안내</em>
           </button>
           <button class="state-card" type="button" data-state="outdated" role="listitem">
             <span class="state-card__marker state-card__marker--warn"></span>
             <span>
-              <strong>하네스 버전 다름 / Outdated harness</strong>
-              <small>설치된 source가 앱 bundle과 다름 / installed source differs from app bundle</small>
+              <strong data-i18n="states.outdated.title">하네스 버전 다름</strong>
+              <small data-i18n="states.outdated.desc">설치 원본이 앱 번들과 다름</small>
             </span>
-            <em>검증 안내 · Validate guide</em>
+            <em data-i18n="states.outdated.meta">검증 안내</em>
           </button>
           <button class="state-card" type="button" data-state="broken" role="listitem">
             <span class="state-card__marker state-card__marker--err"></span>
             <span>
-              <strong>설치 깨짐 / Broken install</strong>
-              <small>필수 generated asset 누락 / required generated assets are missing</small>
+              <strong data-i18n="states.broken.title">설치 깨짐</strong>
+              <small data-i18n="states.broken.desc">필수 생성 산출물 누락</small>
             </span>
-            <em>진단 안내 · Diagnose guide</em>
+            <em data-i18n="states.broken.meta">진단 안내</em>
           </button>
         </div>
 
         <div class="split">
-          <section class="surface" aria-label="선택한 프로젝트 개요">
+          <section class="surface" aria-label="선택한 프로젝트 개요" data-i18n-aria-label="surface.label">
             <div class="surface__head">
               <div>
-                <div class="label">선택한 프로젝트 / selected project</div>
-                <h3 id="state-title">실행 준비됨 / Execution ready</h3>
+                <div class="label" data-i18n="surface.kicker">선택한 프로젝트</div>
+                <h3 id="state-title">실행 준비됨</h3>
               </div>
               <div class="surface-actions">
-                <span id="state-pill" class="pill pill--ok">준비됨 / ready</span>
-                <button class="help-btn" type="button" aria-label="선택한 프로젝트 도움말" data-tooltip="현재 감지 상태만 요약합니다. 실행과 검증은 담당 탭에서 처리합니다.">?</button>
+                <span id="state-pill" class="pill pill--ok">준비됨</span>
+                <button class="help-btn" type="button" aria-label="선택한 프로젝트 도움말" data-i18n-aria-label="surface.helpLabel" data-i18n-tooltip="surface.helpTooltip" data-tooltip="현재 감지 상태만 요약합니다. 실행과 검증은 담당 탭에서 처리합니다.">?</button>
               </div>
             </div>
 
-            <div class="progress-flow" aria-label="진행 단계">
+            <div class="progress-flow" aria-label="진행 단계" data-i18n-aria-label="flow.label">
               <div class="flow-head">
                 <div>
-                  <div class="label">진행 단계 / progress</div>
-                  <h4>감지에서 실행 준비까지 / detection to ready task</h4>
+                  <div class="label" data-i18n="flow.kicker">진행 단계</div>
+                  <h4 data-i18n="flow.title">감지에서 실행 준비까지</h4>
                 </div>
-                <button class="help-btn help-btn--right" type="button" aria-label="진행 단계 도움말" data-tooltip="기존 P2A 파일 상태를 읽어서 현재 위치만 표시합니다. Gate 산출물이나 task graph는 수정하지 않습니다.">?</button>
+                <button class="help-btn help-btn--right" type="button" aria-label="진행 단계 도움말" data-i18n-aria-label="flow.helpLabel" data-i18n-tooltip="flow.helpTooltip" data-tooltip="기존 P2A 파일 상태를 읽어서 현재 위치만 표시합니다. 게이트 산출물이나 작업 그래프는 수정하지 않습니다.">?</button>
               </div>
               <div class="flow-track" role="list">
-                <button class="flow-node" type="button" data-flow-index="0" role="listitem" title="프로젝트 폴더와 P2A 파일 구조를 확인합니다.">
+                <button class="flow-node" type="button" data-flow-index="0" role="listitem" title="프로젝트 폴더와 P2A 파일 구조를 확인합니다." data-i18n-title="flow.node1.title">
                   <span class="mono">01</span>
-                  <strong>폴더 감지</strong>
-                  <small>detect</small>
+                  <strong data-i18n="flow.node1.label">폴더 감지</strong>
+                  <small data-i18n="flow.node1.meta">P2A 구조</small>
                 </button>
                 <span class="flow-link" aria-hidden="true"></span>
-                <button class="flow-node" type="button" data-flow-index="1" role="listitem" title="하네스 설치 여부만 표시합니다. OV에서 설치를 실행하지 않습니다.">
+                <button class="flow-node" type="button" data-flow-index="1" role="listitem" title="하네스 설치 여부만 표시합니다. 개요에서 설치를 실행하지 않습니다." data-i18n-title="flow.node2.title">
                   <span class="mono">02</span>
-                  <strong>설치 확인</strong>
-                  <small>installed</small>
+                  <strong data-i18n="flow.node2.label">설치 확인</strong>
+                  <small data-i18n="flow.node2.meta">설치됨</small>
                 </button>
                 <span class="flow-link" aria-hidden="true"></span>
-                <button class="flow-node" type="button" data-flow-index="2" role="listitem" title="intake 산출물 존재 여부를 표시합니다.">
+                <button class="flow-node" type="button" data-flow-index="2" role="listitem" title="인테이크 산출물 존재 여부를 표시합니다." data-i18n-title="flow.node3.title">
                   <span class="mono">03</span>
-                  <strong>Gate A</strong>
-                  <small>intake</small>
+                  <strong data-i18n="flow.node3.label">게이트 A</strong>
+                  <small data-i18n="flow.node3.meta">인테이크</small>
                 </button>
                 <span class="flow-link" aria-hidden="true"></span>
-                <button class="flow-node" type="button" data-flow-index="3" role="listitem" title="spec과 task graph 진행 상태를 표시합니다.">
+                <button class="flow-node" type="button" data-flow-index="3" role="listitem" title="명세와 작업 그래프 진행 상태를 표시합니다." data-i18n-title="flow.node4.title">
                   <span class="mono">04</span>
-                  <strong>Gate B/C</strong>
-                  <small>spec · tasks</small>
+                  <strong data-i18n="flow.node4.label">게이트 B/C</strong>
+                  <small data-i18n="flow.node4.meta">명세 · 작업</small>
                 </button>
                 <span class="flow-link" aria-hidden="true"></span>
-                <button class="flow-node" type="button" data-flow-index="4" role="listitem" title="review 상태와 막힌 지점을 표시합니다.">
+                <button class="flow-node" type="button" data-flow-index="4" role="listitem" title="검토 상태와 막힌 지점을 표시합니다." data-i18n-title="flow.node5.title">
                   <span class="mono">05</span>
-                  <strong>Gate D</strong>
-                  <small>review</small>
+                  <strong data-i18n="flow.node5.label">게이트 D</strong>
+                  <small data-i18n="flow.node5.meta">검토</small>
                 </button>
                 <span class="flow-link" aria-hidden="true"></span>
-                <button class="flow-node" type="button" data-flow-index="5" role="listitem" title="ready task가 있으면 Tasks 탭에서 상세 확인합니다.">
+                <button class="flow-node" type="button" data-flow-index="5" role="listitem" title="준비 작업이 있으면 작업 탭에서 상세 확인합니다." data-i18n-title="flow.node6.title">
                   <span class="mono">06</span>
-                  <strong>실행 준비</strong>
-                  <small>ready task</small>
+                  <strong data-i18n="flow.node6.label">실행 준비</strong>
+                  <small data-i18n="flow.node6.meta">작업</small>
                 </button>
               </div>
             </div>
@@ -260,10 +264,10 @@
                 <span></span><span></span><span></span><span></span>
               </div>
               <div>
-                <strong>task-3 - 북마크 필터 구현 / implement bookmark filtering</strong>
-                <small>todo, 의존성 완료, 완료 기준 있음 / dependencies done, acceptance criteria present</small>
+                <strong data-i18n="task.title">task-3 - 북마크 필터 구현</strong>
+                <small data-i18n="task.meta">할 일, 의존성 완료, 완료 기준 있음</small>
               </div>
-              <button class="btn" type="button" data-route="tasks">Tasks에서 열기 / Open in Tasks</button>
+              <button class="btn" type="button" data-route="tasks" data-i18n="task.open">작업에서 열기</button>
             </div>
 
           </section>
@@ -271,49 +275,49 @@
         </div>
       </section>
 
-      <aside class="inspector" aria-label="인스펙터">
+      <aside class="inspector" aria-label="인스펙터" data-i18n-aria-label="inspector.label">
         <div class="panel-head">
           <div>
-            <div class="label">상태 근거 / state evidence</div>
-            <h2 id="inspector-title">실행 준비됨 / Execution ready</h2>
+            <div class="label" data-i18n="inspector.kicker">상태 근거</div>
+            <h2 id="inspector-title">실행 준비됨</h2>
           </div>
           <div class="surface-actions">
-            <span id="inspector-pill" class="pill pill--ok">준비됨 / ready</span>
-            <button class="help-btn help-btn--right" type="button" aria-label="상태 근거 도움말" data-tooltip="Overview 오른쪽은 현재 상태의 판단 근거만 짧게 보여줍니다. 상세 실행과 파일 내용은 담당 탭에서 확인합니다.">?</button>
+            <span id="inspector-pill" class="pill pill--ok">준비됨</span>
+            <button class="help-btn help-btn--right" type="button" aria-label="상태 근거 도움말" data-i18n-aria-label="inspector.helpLabel" data-i18n-tooltip="inspector.helpTooltip" data-tooltip="개요 오른쪽은 현재 상태의 판단 근거만 짧게 보여줍니다. 상세 실행과 파일 내용은 담당 탭에서 확인합니다.">?</button>
           </div>
         </div>
 
-        <div class="evidence-list" aria-label="현재 상태 판단 근거">
+        <div class="evidence-list" aria-label="현재 상태 판단 근거" data-i18n-aria-label="inspector.evidenceLabel">
           <div class="evidence-row">
-            <span id="evidence-label-1">Ready task</span>
+            <span id="evidence-label-1">준비 작업</span>
             <strong id="evidence-value-1" class="mono">task-3</strong>
-            <small id="evidence-note-1">dependencies done</small>
+            <small id="evidence-note-1">의존성 완료</small>
           </div>
           <div class="evidence-row">
-            <span id="evidence-label-2">Gate</span>
-            <strong id="evidence-value-2" class="mono">A-D passed</strong>
-            <small id="evidence-note-2">review clean</small>
+            <span id="evidence-label-2">게이트</span>
+            <strong id="evidence-value-2" class="mono">A-D 통과</strong>
+            <small id="evidence-note-2">검토 통과</small>
           </div>
           <div class="evidence-row">
             <span id="evidence-label-3">최근 검증</span>
-            <strong id="evidence-value-3" class="mono">not run</strong>
-            <small id="evidence-note-3">Terminal에서 확인</small>
+            <strong id="evidence-value-3" class="mono">미실행</strong>
+            <small id="evidence-note-3">터미널에서 확인</small>
           </div>
         </div>
 
         <div class="inspector-actions">
-          <button id="inspector-primary-action" class="btn" type="button">Tasks에서 열기 / Open in Tasks</button>
-          <button id="inspector-secondary-action" class="btn btn--ghost" type="button">Artifacts 근거 보기 / View artifacts</button>
+          <button id="inspector-primary-action" class="btn" type="button">작업에서 열기</button>
+          <button id="inspector-secondary-action" class="btn btn--ghost" type="button">산출물 근거 보기</button>
         </div>
       </aside>
     </section>
 
     <footer class="statusbar">
-      <span class="mono">브랜치 / branch main</span>
+      <span class="mono" data-i18n="status.branch">브랜치 main</span>
       <span class="sep"></span>
       <span class="mono">cwd /Users/qoo10/projects/bookmark-api</span>
       <span class="statusbar__spacer"></span>
-      <span class="mono">GUI local config only / GUI 로컬 설정만 사용</span>
+      <span class="mono" data-i18n="status.localOnly">GUI 로컬 설정만 사용</span>
     </footer>
 
     <div class="modal" id="detail-modal" hidden>
@@ -321,10 +325,10 @@
       <section class="modal__panel" role="dialog" aria-modal="true" aria-labelledby="detail-title">
         <header class="modal__head">
           <div>
-            <div class="label" id="detail-kicker">세부내용 / details</div>
-            <h2 id="detail-title">세부내용 / Details</h2>
+            <div class="label" id="detail-kicker" data-i18n="modal.kicker">세부내용</div>
+            <h2 id="detail-title" data-i18n="modal.title">세부내용</h2>
           </div>
-          <button class="btn btn--ghost" type="button" data-close-modal>닫기 / Close</button>
+          <button class="btn btn--ghost" type="button" data-close-modal data-i18n="modal.close">닫기</button>
         </header>
         <div class="modal__body" id="detail-body"></div>
       </section>
@@ -333,6 +337,7 @@
 
   <script>
     const agentSelect = document.querySelector("#agent-tool");
+    const langButtons = [...document.querySelectorAll("[data-lang]")];
     const summaryState = document.querySelector("#summary-state");
     const summaryAction = document.querySelector("#summary-action");
     const summaryAgent = document.querySelector("#summary-agent");
@@ -354,141 +359,280 @@
     const detailKicker = document.querySelector("#detail-kicker");
     const detailBody = document.querySelector("#detail-body");
 
+    const copy = {
+      "document.title": { ko: "P2A GUI MVP - 온보딩 프로토타입", en: "P2A GUI MVP - onboarding prototype" },
+      "app.label": { ko: "P2A GUI 온보딩 프로토타입", en: "P2A GUI onboarding prototype" },
+      "language.label": { ko: "언어 선택", en: "Language" },
+      "titlebar.subtitle": { ko: "2A-0 온보딩 프로토타입", en: "2A-0 onboarding prototype" },
+      "titlebar.readonly": { ko: "읽기 전용 하네스", en: "read-only harness" },
+      "titlebar.noSchema": { ko: "스키마 변경 없음", en: "no schema changes" },
+      "rail.label": { ko: "주요 메뉴", en: "Primary navigation" },
+      "rail.overview": { ko: "개요", en: "Overview" },
+      "rail.overviewMark": { ko: "01", en: "01" },
+      "rail.tasks": { ko: "작업", en: "Tasks" },
+      "rail.tasksMark": { ko: "02", en: "02" },
+      "rail.runs": { ko: "실행 기록", en: "Runs" },
+      "rail.runsMark": { ko: "03", en: "03" },
+      "rail.artifacts": { ko: "산출물", en: "Artifacts" },
+      "rail.artifactsMark": { ko: "04", en: "04" },
+      "rail.terminal": { ko: "터미널", en: "Terminal" },
+      "rail.terminalMark": { ko: "05", en: "05" },
+      "rail.settings": { ko: "설정", en: "Settings" },
+      "rail.settingsMark": { ko: "06", en: "06" },
+      "sidebar.label": { ko: "최근 프로젝트", en: "Recent projects" },
+      "sidebar.kicker": { ko: "최근 프로젝트", en: "recent projects" },
+      "sidebar.title": { ko: "프로젝트 열기", en: "Open project" },
+      "sidebar.openFolder": { ko: "폴더 열기", en: "Open folder" },
+      "sidebar.selectedFolder": { ko: "선택한 폴더", en: "Selected folder" },
+      "sidebar.recentList": { ko: "최근 프로젝트 목록", en: "Recent project list" },
+      "sidebar.localConfig": { ko: "GUI 로컬 설정", en: "GUI local config" },
+      "sidebar.viewLocalConfig": { ko: "로컬 설정 보기", en: "Local config" },
+      "content.label": { ko: "프로젝트 감지", en: "Project detection" },
+      "content.kicker": { ko: "프로젝트 감지", en: "project detection" },
+      "content.title": { ko: "P2A 상태를 읽고 필요한 명령만 안내", en: "Read P2A state and guide required commands" },
+      "agent.label": { ko: "기본 실행 AI CLI", en: "Default agent CLI" },
+      "summary.label": { ko: "요약", en: "Summary" },
+      "summary.state": { ko: "현재 상태", en: "State" },
+      "summary.action": { ko: "다음 행동", en: "Next action" },
+      "summary.agent": { ko: "기본 AI CLI", en: "Agent" },
+      "summary.harnessWrites": { ko: "하네스 변경", en: "Harness writes" },
+      "summary.none": { ko: "없음", en: "none" },
+      "states.label": { ko: "감지 상태", en: "Detection states" },
+      "states.executionReady.title": { ko: "실행 준비됨", en: "Execution ready" },
+      "states.executionReady.desc": { ko: "준비 작업 또는 실행 기록이 있음", en: "ready task or run history exists" },
+      "states.executionReady.meta": { ko: "실행 가능", en: "Ready to run" },
+      "states.planning.title": { ko: "기획 진행 중", en: "Planning in progress" },
+      "states.planning.desc": { ko: "게이트 산출물은 있고 준비 작업은 없음", en: "gate artifacts exist, no ready task" },
+      "states.planning.meta": { ko: "검토 필요", en: "Review gates" },
+      "states.empty.title": { ko: "설치만 됨", en: "Installed empty" },
+      "states.empty.desc": { ko: "하네스는 있고 기획 산출물은 없음", en: "harness exists, no planning artifacts" },
+      "states.empty.meta": { ko: "기획 안내", en: "Planning guide" },
+      "states.missing.title": { ko: "P2A 없음", en: "No P2A" },
+      "states.missing.desc": { ko: "매니페스트와 스크립트를 찾지 못함", en: "manifest and scripts not found" },
+      "states.missing.meta": { ko: "설치 안내", en: "Setup guide" },
+      "states.outdated.title": { ko: "하네스 버전 다름", en: "Outdated harness" },
+      "states.outdated.desc": { ko: "설치 원본이 앱 번들과 다름", en: "installed source differs from app bundle" },
+      "states.outdated.meta": { ko: "검증 안내", en: "Validate guide" },
+      "states.broken.title": { ko: "설치 깨짐", en: "Broken install" },
+      "states.broken.desc": { ko: "필수 생성 산출물 누락", en: "required generated assets are missing" },
+      "states.broken.meta": { ko: "진단 안내", en: "Diagnose guide" },
+      "surface.label": { ko: "선택한 프로젝트 개요", en: "Selected project overview" },
+      "surface.kicker": { ko: "선택한 프로젝트", en: "selected project" },
+      "surface.helpLabel": { ko: "선택한 프로젝트 도움말", en: "Selected project help" },
+      "surface.helpTooltip": { ko: "현재 감지 상태만 요약합니다. 실행과 검증은 담당 탭에서 처리합니다.", en: "Summarizes only the current detected state. Execution and verification stay in their owner tabs." },
+      "flow.label": { ko: "진행 단계", en: "Progress" },
+      "flow.kicker": { ko: "진행 단계", en: "progress" },
+      "flow.title": { ko: "감지에서 실행 준비까지", en: "Detection to ready task" },
+      "flow.helpLabel": { ko: "진행 단계 도움말", en: "Progress help" },
+      "flow.helpTooltip": { ko: "기존 P2A 파일 상태를 읽어서 현재 위치만 표시합니다. 게이트 산출물이나 작업 그래프는 수정하지 않습니다.", en: "Reads existing P2A files and shows the current position only. Gate artifacts and task graphs are not modified." },
+      "flow.node1.label": { ko: "폴더 감지", en: "Detect folder" },
+      "flow.node1.meta": { ko: "P2A 구조", en: "P2A structure" },
+      "flow.node1.title": { ko: "프로젝트 폴더와 P2A 파일 구조를 확인합니다.", en: "Checks the project folder and P2A file structure." },
+      "flow.node2.label": { ko: "설치 확인", en: "Check install" },
+      "flow.node2.meta": { ko: "하네스", en: "harness" },
+      "flow.node2.title": { ko: "하네스 설치 여부만 표시합니다. 개요에서 설치를 실행하지 않습니다.", en: "Shows only whether the harness is installed. Overview does not run setup." },
+      "flow.node3.label": { ko: "게이트 A", en: "Gate A" },
+      "flow.node3.meta": { ko: "인테이크", en: "intake" },
+      "flow.node3.title": { ko: "인테이크 산출물 존재 여부를 표시합니다.", en: "Shows whether intake artifacts exist." },
+      "flow.node4.label": { ko: "게이트 B/C", en: "Gate B/C" },
+      "flow.node4.meta": { ko: "명세 · 작업", en: "spec · tasks" },
+      "flow.node4.title": { ko: "명세와 작업 그래프 진행 상태를 표시합니다.", en: "Shows spec and task graph progress." },
+      "flow.node5.label": { ko: "게이트 D", en: "Gate D" },
+      "flow.node5.meta": { ko: "검토", en: "review" },
+      "flow.node5.title": { ko: "검토 상태와 막힌 지점을 표시합니다.", en: "Shows review state and blockers." },
+      "flow.node6.label": { ko: "실행 준비", en: "Ready" },
+      "flow.node6.meta": { ko: "작업", en: "task" },
+      "flow.node6.title": { ko: "준비 작업이 있으면 작업 탭에서 상세 확인합니다.", en: "If a ready task exists, review details in Tasks." },
+      "task.title": { ko: "task-3 - 북마크 필터 구현", en: "task-3 - implement bookmark filtering" },
+      "task.meta": { ko: "할 일, 의존성 완료, 완료 기준 있음", en: "todo, dependencies done, acceptance criteria present" },
+      "task.open": { ko: "작업에서 열기", en: "Open in Tasks" },
+      "inspector.label": { ko: "인스펙터", en: "Inspector" },
+      "inspector.kicker": { ko: "상태 근거", en: "state evidence" },
+      "inspector.helpLabel": { ko: "상태 근거 도움말", en: "State evidence help" },
+      "inspector.helpTooltip": { ko: "개요 오른쪽은 현재 상태의 판단 근거만 짧게 보여줍니다. 상세 실행과 파일 내용은 담당 탭에서 확인합니다.", en: "The right side of Overview shows only compact evidence for the current state. Execution details and files stay in their owner tabs." },
+      "inspector.evidenceLabel": { ko: "현재 상태 판단 근거", en: "Current state evidence" },
+      "status.branch": { ko: "브랜치 main", en: "branch main" },
+      "status.localOnly": { ko: "GUI 로컬 설정만 사용", en: "GUI local config only" },
+      "modal.kicker": { ko: "세부내용", en: "details" },
+      "modal.title": { ko: "세부내용", en: "Details" },
+      "modal.close": { ko: "닫기", en: "Close" },
+    };
+
     const states = {
       "execution-ready": {
-        title: "실행 준비됨 / Execution ready",
-        pill: "준비됨 / ready",
+        title: { ko: "실행 준비됨", en: "Execution ready" },
+        pill: { ko: "준비됨", en: "ready" },
         pillClass: "pill pill--ok",
-        summary: "실행 준비됨",
-        action: "Tasks 탭에서 확인",
+        summary: { ko: "실행 준비됨", en: "Execution ready" },
+        action: { ko: "작업 탭에서 확인", en: "Review in Tasks" },
         flowIndex: 5,
         evidence: {
           rows: [
-            ["Ready task", "task-3", "dependencies done"],
-            ["Gate", "A-D passed", "review clean"],
-            ["최근 검증", "not run", "Terminal에서 확인"],
+            [{ ko: "준비 작업", en: "Ready task" }, "task-3", { ko: "의존성 완료", en: "dependencies done" }],
+            [{ ko: "게이트", en: "Gate" }, { ko: "A-D 통과", en: "A-D passed" }, { ko: "검토 통과", en: "review clean" }],
+            [{ ko: "최근 검증", en: "Latest verification" }, { ko: "미실행", en: "not run" }, { ko: "터미널에서 확인", en: "check in Terminal" }],
           ],
-          actions: ["Tasks에서 열기 / Open in Tasks", "Artifacts 근거 보기 / View artifacts"],
+          actions: [{ ko: "작업에서 열기", en: "Open in Tasks" }, { ko: "산출물 근거 보기", en: "View artifacts" }],
         },
       },
       planning: {
-        title: "기획 진행 중 / Planning in progress",
-        pill: "기획 중 / planning",
+        title: { ko: "기획 진행 중", en: "Planning in progress" },
+        pill: { ko: "기획 중", en: "planning" },
         pillClass: "pill pill--info",
-        summary: "기획 진행 중",
-        action: "Artifacts 탭에서 확인",
+        summary: { ko: "기획 진행 중", en: "Planning in progress" },
+        action: { ko: "산출물 탭에서 확인", en: "Review in Artifacts" },
         flowIndex: 3,
         evidence: {
           rows: [
-            ["현재 Gate", "Gate B/C", "spec 또는 task graph 검토 중"],
-            ["Ready task", "none", "task graph 승인 전"],
-            ["다음 위치", "Artifacts", "산출물 상태 확인"],
+            [{ ko: "현재 게이트", en: "Current gate" }, { ko: "게이트 B/C", en: "Gate B/C" }, { ko: "명세 또는 작업 그래프 검토 중", en: "spec or task graph under review" }],
+            [{ ko: "준비 작업", en: "Ready task" }, { ko: "없음", en: "none" }, { ko: "작업 그래프 승인 전", en: "before task graph approval" }],
+            [{ ko: "다음 위치", en: "Next location" }, { ko: "산출물", en: "Artifacts" }, { ko: "산출물 상태 확인", en: "review artifact state" }],
           ],
-          actions: ["Artifacts에서 열기 / Open Artifacts", "Tasks 상태 보기 / View Tasks"],
+          actions: [{ ko: "산출물에서 열기", en: "Open Artifacts" }, { ko: "작업 상태 보기", en: "View Tasks" }],
         },
       },
       empty: {
-        title: "설치만 됨 / Installed empty",
-        pill: "비어 있음 / empty",
+        title: { ko: "설치만 됨", en: "Installed empty" },
+        pill: { ko: "비어 있음", en: "empty" },
         pillClass: "pill",
-        summary: "설치만 됨",
-        action: "Artifacts 탭에서 확인",
+        summary: { ko: "설치만 됨", en: "Installed empty" },
+        action: { ko: "산출물 탭에서 확인", en: "Review in Artifacts" },
         flowIndex: 1,
         evidence: {
           rows: [
-            ["하네스", "installed", "P2A 파일 구조 감지"],
-            ["기획 산출물", "none", "artifact root 없음"],
-            ["다음 위치", "Artifacts", "import 또는 planning 안내 확인"],
+            [{ ko: "하네스", en: "Harness" }, { ko: "설치됨", en: "installed" }, { ko: "P2A 파일 구조 감지", en: "P2A file structure detected" }],
+            [{ ko: "기획 산출물", en: "Planning artifacts" }, { ko: "없음", en: "none" }, { ko: "산출물 루트 없음", en: "no artifact root" }],
+            [{ ko: "다음 위치", en: "Next location" }, { ko: "산출물", en: "Artifacts" }, { ko: "가져오기 또는 기획 안내 확인", en: "review import or planning guidance" }],
           ],
-          actions: ["Artifacts에서 열기 / Open Artifacts", "Terminal 안내 보기 / View guidance"],
+          actions: [{ ko: "산출물에서 열기", en: "Open Artifacts" }, { ko: "터미널 안내 보기", en: "View guidance" }],
         },
       },
       missing: {
-        title: "P2A 없음 / No P2A",
-        pill: "설치 안내 / setup",
+        title: { ko: "P2A 없음", en: "No P2A" },
+        pill: { ko: "설치 안내", en: "setup" },
         pillClass: "pill pill--warn",
-        summary: "P2A 없음",
-        action: "Terminal 탭에서 안내",
+        summary: { ko: "P2A 없음", en: "No P2A" },
+        action: { ko: "터미널 탭에서 안내", en: "Use Terminal guidance" },
         flowIndex: 0,
         evidence: {
           rows: [
-            ["Manifest", "missing", ".plan2agent/manifest.json 없음"],
-            ["Scripts", "missing", "P2A lifecycle script 없음"],
-            ["다음 위치", "Terminal", "setup command guidance"],
+            [{ ko: "매니페스트", en: "Manifest" }, { ko: "없음", en: "missing" }, { ko: ".plan2agent/manifest.json 없음", en: ".plan2agent/manifest.json missing" }],
+            [{ ko: "스크립트", en: "Scripts" }, { ko: "없음", en: "missing" }, { ko: "P2A 생명주기 스크립트 없음", en: "P2A lifecycle scripts missing" }],
+            [{ ko: "다음 위치", en: "Next location" }, { ko: "터미널", en: "Terminal" }, { ko: "설치 명령 안내", en: "setup command guidance" }],
           ],
-          actions: ["Terminal 안내 보기 / View guidance", "Settings 확인 / Check Settings"],
+          actions: [{ ko: "터미널 안내 보기", en: "View guidance" }, { ko: "설정 확인", en: "Check Settings" }],
         },
       },
       outdated: {
-        title: "하네스 버전 다름 / Outdated harness",
-        pill: "검증 / validate",
+        title: { ko: "하네스 버전 다름", en: "Outdated harness" },
+        pill: { ko: "검증", en: "validate" },
         pillClass: "pill pill--warn",
-        summary: "버전 다름",
-        action: "Terminal 탭에서 진단",
+        summary: { ko: "버전 다름", en: "Version mismatch" },
+        action: { ko: "터미널 탭에서 진단", en: "Diagnose in Terminal" },
         flowIndex: 0,
         flowIssue: true,
         evidence: {
           rows: [
-            ["Source version", "mismatch", "앱 bundle과 다름"],
-            ["하네스 변경", "none", "GUI는 갱신 실행 안 함"],
-            ["다음 위치", "Terminal", "validate guidance"],
+            [{ ko: "원본 버전", en: "Source version" }, { ko: "불일치", en: "mismatch" }, { ko: "앱 번들과 다름", en: "differs from app bundle" }],
+            [{ ko: "하네스 변경", en: "Harness writes" }, { ko: "없음", en: "none" }, { ko: "GUI는 갱신 실행 안 함", en: "GUI does not run upgrades" }],
+            [{ ko: "다음 위치", en: "Next location" }, { ko: "터미널", en: "Terminal" }, { ko: "검증 안내", en: "validate guidance" }],
           ],
-          actions: ["Terminal 안내 보기 / View guidance", "Settings 확인 / Check Settings"],
+          actions: [{ ko: "터미널 안내 보기", en: "View guidance" }, { ko: "설정 확인", en: "Check Settings" }],
         },
       },
       broken: {
-        title: "설치 깨짐 / Broken install",
-        pill: "문제 / broken",
+        title: { ko: "설치 깨짐", en: "Broken install" },
+        pill: { ko: "문제", en: "broken" },
         pillClass: "pill pill--err",
-        summary: "설치 깨짐",
-        action: "Terminal 탭에서 진단",
+        summary: { ko: "설치 깨짐", en: "Broken install" },
+        action: { ko: "터미널 탭에서 진단", en: "Diagnose in Terminal" },
         flowIndex: 0,
         flowIssue: true,
         evidence: {
           rows: [
-            ["필수 파일", "missing", "generated asset 누락"],
-            ["복구 실행", "none", "GUI는 repair 실행 안 함"],
-            ["다음 위치", "Terminal", "diagnose guidance"],
+            [{ ko: "필수 파일", en: "Required files" }, { ko: "없음", en: "missing" }, { ko: "생성 산출물 누락", en: "generated assets missing" }],
+            [{ ko: "복구 실행", en: "Repair action" }, { ko: "없음", en: "none" }, { ko: "GUI는 복구를 실행하지 않음", en: "GUI does not run repair" }],
+            [{ ko: "다음 위치", en: "Next location" }, { ko: "터미널", en: "Terminal" }, { ko: "진단 안내", en: "diagnose guidance" }],
           ],
-          actions: ["Terminal 안내 보기 / View guidance", "Artifacts 확인 / Check Artifacts"],
+          actions: [{ ko: "터미널 안내 보기", en: "View guidance" }, { ko: "산출물 확인", en: "Check Artifacts" }],
         },
       },
     };
 
     const detailTemplates = {
       "local-config": {
-        kicker: "GUI 로컬 설정 / GUI local config",
-        title: "프로젝트별 설정은 앱 local config에만 저장",
-        body: `<p>최근 프로젝트 경로와 <code>defaultAgentTool</code>은 GUI 앱 설정에만 저장합니다. <code>.plan2agent/</code>, <code>scripts/</code>, <code>schemas/</code>에는 쓰지 않습니다.</p>
+        kicker: { ko: "GUI 로컬 설정", en: "GUI local config" },
+        title: { ko: "프로젝트별 설정은 앱 로컬 설정에만 저장", en: "Project settings are stored only in app local config" },
+        body: {
+          ko: `<p>최근 프로젝트 경로와 <code>defaultAgentTool</code>은 GUI 앱 설정에만 저장합니다. <code>.plan2agent/</code>, <code>scripts/</code>, <code>schemas/</code>에는 쓰지 않습니다.</p>
 <pre>{
   "path": "/Users/qoo10/projects/bookmark-api",
   "defaultAgentTool": "codex",
   "lastOpenedAt": "2026-06-21T12:00:00.000Z"
 }</pre>`,
+          en: `<p>Recent project paths and <code>defaultAgentTool</code> are stored only in the GUI app settings. They are not written to <code>.plan2agent/</code>, <code>scripts/</code>, or <code>schemas/</code>.</p>
+<pre>{
+  "path": "/Users/qoo10/projects/bookmark-api",
+  "defaultAgentTool": "codex",
+  "lastOpenedAt": "2026-06-21T12:00:00.000Z"
+}</pre>`,
+        },
       },
     };
 
     let currentState = "execution-ready";
+    let currentLocale = localStorage.getItem("p2aGuiLocale") || "ko";
+
+    function localized(value) {
+      if (typeof value === "string") return value;
+      return value[currentLocale] || value.ko || "";
+    }
+
+    function copyText(key) {
+      return localized(copy[key] || key);
+    }
+
+    function renderStaticCopy() {
+      document.documentElement.lang = currentLocale;
+      document.title = copyText("document.title");
+      document.querySelectorAll("[data-i18n]").forEach((element) => {
+        element.textContent = copyText(element.dataset.i18n);
+      });
+      document.querySelectorAll("[data-i18n-aria-label]").forEach((element) => {
+        element.setAttribute("aria-label", copyText(element.dataset.i18nAriaLabel));
+      });
+      document.querySelectorAll("[data-i18n-tooltip]").forEach((element) => {
+        element.dataset.tooltip = copyText(element.dataset.i18nTooltip);
+      });
+      document.querySelectorAll("[data-i18n-title]").forEach((element) => {
+        element.setAttribute("title", copyText(element.dataset.i18nTitle));
+      });
+      langButtons.forEach((button) => {
+        const active = button.dataset.lang === currentLocale;
+        button.classList.toggle("lang-switch__item--active", active);
+        button.setAttribute("aria-pressed", String(active));
+      });
+    }
 
     function renderState() {
       const tool = agentSelect.value;
       const state = states[currentState];
       summaryAgent.textContent = tool;
-      summaryState.textContent = state.summary;
-      summaryAction.textContent = state.action;
-      stateTitle.textContent = state.title;
-      statePill.textContent = state.pill;
+      summaryState.textContent = localized(state.summary);
+      summaryAction.textContent = localized(state.action);
+      stateTitle.textContent = localized(state.title);
+      statePill.textContent = localized(state.pill);
       statePill.className = state.pillClass;
-      inspectorTitle.textContent = state.title;
-      inspectorPill.textContent = state.pill;
+      inspectorTitle.textContent = localized(state.title);
+      inspectorPill.textContent = localized(state.pill);
       inspectorPill.className = state.pillClass;
       state.evidence.rows.forEach((row, index) => {
-        evidenceRows[index].label.textContent = row[0];
-        evidenceRows[index].value.textContent = row[1];
-        evidenceRows[index].note.textContent = row[2];
+        evidenceRows[index].label.textContent = localized(row[0]);
+        evidenceRows[index].value.textContent = localized(row[1]);
+        evidenceRows[index].note.textContent = localized(row[2]);
       });
-      inspectorPrimaryAction.textContent = state.evidence.actions[0];
-      inspectorSecondaryAction.textContent = state.evidence.actions[1];
+      inspectorPrimaryAction.textContent = localized(state.evidence.actions[0]);
+      inspectorSecondaryAction.textContent = localized(state.evidence.actions[1]);
       flowNodes.forEach((node) => {
         const index = Number(node.dataset.flowIndex);
         node.classList.remove("flow-node--done", "flow-node--active", "flow-node--pending", "flow-node--issue");
@@ -509,6 +653,14 @@
     }
 
     agentSelect.addEventListener("change", renderState);
+    langButtons.forEach((button) => {
+      button.addEventListener("click", () => {
+        currentLocale = button.dataset.lang;
+        localStorage.setItem("p2aGuiLocale", currentLocale);
+        renderStaticCopy();
+        renderState();
+      });
+    });
     stateCards.forEach((card) => {
       card.addEventListener("click", () => {
         currentState = card.dataset.state;
@@ -519,9 +671,10 @@
     });
 
     function openDetail(detail) {
-      detailKicker.textContent = detail.kicker;
-      detailTitle.textContent = detail.title;
-      detailBody.innerHTML = typeof detail.body === "function" ? detail.body() : detail.body;
+      detailKicker.textContent = localized(detail.kicker);
+      detailTitle.textContent = localized(detail.title);
+      const body = typeof detail.body === "function" ? detail.body() : detail.body;
+      detailBody.innerHTML = localized(body);
       modal.hidden = false;
     }
 
@@ -539,6 +692,7 @@
       });
     });
 
+    renderStaticCopy();
     renderState();
   </script>
 </body>

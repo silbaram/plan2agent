@@ -7,6 +7,7 @@
 - 프로젝트 감지 상태 / project detection states
 - 최근 프로젝트 local config 형태 / recent project local config shape
 - `defaultAgentTool` 선택 / `defaultAgentTool` selection
+- 한글/영문 UI 전환 / Korean-English UI switching
 - 읽기 전용 하네스 경계 / read-only harness boundaries
 - 단순 Overview와 도움말 툴팁 / simple Overview layout and help tooltips
 - 상태 근거 중심 Inspector / state evidence Inspector
