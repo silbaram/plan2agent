@@ -359,6 +359,23 @@ GUI local config:
 - CLI에서 `p2a_execute.mjs start`로 하던 시작 흐름을 GUI에서 수행할 수 있다.
 - start 이후 task graph와 run index가 기존 CLI 계약과 같은 상태로 갱신된다.
 
+### 2F. Automated smoke / regression
+
+목적: GUI의 mutating lifecycle 버튼 뒤에서 호출되는 main-process 실행 계약을 자동 테스트로 고정한다.
+
+포함:
+
+- 임시 P2A 프로젝트에 실제 `scripts/`와 `schemas/` runtime을 구성한다.
+- ready task 기준 `startRun`을 호출해 `p2a_execute start` 결과, run record 생성, task `in_progress` 전환을 검증한다.
+- 같은 run 기준 `finishRun`을 호출해 custom verification, changed files, note, run `finished`, task `done` 전환을 검증한다.
+- `loadProjectSnapshot`으로 GUI workbench가 갱신 후 같은 run/task 상태를 읽는지 검증한다.
+- `p2a_execute` 누락, not-ready task start, verification 실패 후 run `failed`/task `blocked` 전환 같은 실패 path를 검증한다.
+
+완료 기준:
+
+- `npm test`에서 start -> finish -> snapshot reload 회귀 테스트가 통과한다.
+- 실패 출력, run 파일, task graph 상태가 기존 CLI 계약을 우회하지 않고 검증된다.
+
 ## 5. MVP 전체 포함 범위
 
 - Project onboarding / detection.
@@ -427,7 +444,8 @@ GUI local config:
 7. `2C-2` supervisor controls: Message agent, stdin passthrough, stop, kill, blocked/failed note flow를 단일 active session에 한정해 구현한다.
 8. `2D` finish/verification: 기존 `p2a_execute`, `p2a_runs`, `p2a_tasks` lifecycle을 GUI command action으로 연결한다.
 9. `2E` start run: ready task를 GUI에서 시작하고 생성된 run을 자동 선택한다.
-10. smoke: scaffold된 작은 target 프로젝트에서 ready task 1건을 end-to-end 실행하고 CLI 표시와 GUI 표시가 일치하는지 확인한다.
+10. `2F` automated smoke / regression: start -> finish -> snapshot reload 파일 상태 전이를 Vitest로 고정한다.
+11. smoke: scaffold된 작은 target 프로젝트에서 ready task 1건을 end-to-end 실행하고 CLI 표시와 GUI 표시가 일치하는지 확인한다.
 
 현재 진행:
 
@@ -442,6 +460,7 @@ GUI local config:
 | `2C-2` supervisor controls | done | Message agent 입력, xterm passthrough 모드, stop/kill 분리, blocked/failed 세션 메모 UI, `terminal:kill` typed IPC를 단일 active session에 한정해 구현 |
 | `2D` finish/verification | done | 선택 run 기준 `execution:finishRun` typed IPC, `p2a_execute finish` main-process 실행, test/lint/typecheck/custom verification 옵션, collect git, changed files/note, command output, run verification/failure/changed files 표시를 기존 lifecycle에 연결 |
 | `2E` start run | done | 선택 ready task 기준 `execution:startRun` typed IPC, `p2a_execute start` main-process 실행, Tasks inspector와 Terminal 탭 start action, command output, 성공 후 run 자동 선택과 Terminal handoff를 연결 |
+| `2F` automated smoke / regression | done | Vitest에서 임시 P2A 프로젝트에 실제 scripts/schemas runtime을 구성하고 `startRun` -> `finishRun` -> `loadProjectSnapshot` 경로와 start/verification 실패 path의 task/run 파일 상태 전이를 검증 |
 | smoke | done | scaffold된 작은 target 프로젝트에서 GUI로 `Start run` -> fake `codex` PTY `Start session`/`Message agent`/`Stop` -> `custom:true` verification -> `Finish run`까지 실행해 task/run 상태가 `done`/`finished`로 갱신됨을 packaged 앱에서 확인 |
 
 ## 9. 첫 smoke 기준
