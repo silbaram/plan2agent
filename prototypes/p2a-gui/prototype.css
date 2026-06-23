@@ -1249,7 +1249,7 @@ pre {
 .task-verify-panel {
   min-width: 0;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr);
   gap: 14px;
   align-items: center;
   padding: 14px;
@@ -1260,19 +1260,6 @@ pre {
   color: var(--fg-2);
   font-size: var(--t-small);
   line-height: 1.5;
-}
-
-.task-verify-panel code {
-  min-width: 0;
-  max-width: 220px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  border: 1px solid var(--border-1);
-  border-radius: var(--r-1);
-  background: var(--bg-1);
-  color: var(--fg-1);
-  padding: 8px 10px;
 }
 
 .task-notes-panel {
@@ -1385,6 +1372,14 @@ pre {
 .btn:hover {
   color: var(--fg-1);
   background: var(--bg-4);
+}
+
+.btn:disabled,
+.btn[aria-disabled="true"] {
+  cursor: not-allowed;
+  color: var(--fg-4);
+  border-color: var(--border-1);
+  background: transparent;
 }
 
 .btn--primary {
@@ -2325,6 +2320,10 @@ pre {
 
   .task-graph-meta {
     grid-template-columns: 1fr;
+  }
+
+  .task-graph-meta > div:nth-child(2) {
+    display: none;
   }
 
   .task-graph-meta > div {

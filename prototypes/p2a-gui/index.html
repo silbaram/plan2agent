@@ -392,8 +392,7 @@
             <h2 data-i18n="tasks.title">작업 연결 그래프</h2>
           </div>
           <div class="task-head-actions">
-            <span class="pill pill--ok" data-i18n="tasks.ready">ready</span>
-            <button class="btn btn--primary" type="button" data-route="terminal" data-i18n="tasks.openTerminal">터미널에서 실행 준비</button>
+            <button id="task-open-terminal" class="btn btn--primary" type="button" data-route="terminal" data-i18n="tasks.openTerminal">터미널에서 실행 준비</button>
           </div>
         </div>
 
@@ -428,7 +427,7 @@
             </div>
             <div>
               <span data-i18n="tasksGraph.selected">selected</span>
-              <strong class="mono">task-3</strong>
+              <strong id="task-selected-meta" class="mono">task-3</strong>
             </div>
           </div>
 
@@ -444,25 +443,25 @@
               <path class="task-graph-line task-graph-line--blocked" d="M 612 160 C 650 160 680 160 720 160"></path>
             </svg>
 
-            <button class="task-graph-node task-graph-node--done task-graph-node--task1" type="button" role="listitem">
+            <button class="task-graph-node task-graph-node--done task-graph-node--task1" type="button" role="listitem" data-task-id="task-1">
               <span class="task-node-state" data-i18n="tasksGraph.done">done</span>
               <strong class="mono">task-1</strong>
               <small data-i18n="tasksGraph.task1">북마크 모델 스키마</small>
             </button>
 
-            <button class="task-graph-node task-graph-node--done task-graph-node--task2" type="button" role="listitem">
+            <button class="task-graph-node task-graph-node--done task-graph-node--task2" type="button" role="listitem" data-task-id="task-2">
               <span class="task-node-state" data-i18n="tasksGraph.done">done</span>
               <strong class="mono">task-2</strong>
               <small data-i18n="tasksGraph.task2">저장소 인터페이스</small>
             </button>
 
-            <button class="task-graph-node task-graph-node--ready task-graph-node--task3" type="button" role="listitem" aria-current="true">
+            <button class="task-graph-node task-graph-node--ready task-graph-node--task3" type="button" role="listitem" data-task-id="task-3" aria-current="true">
               <span class="task-node-state" data-i18n="tasksGraph.ready">ready</span>
               <strong class="mono">task-3</strong>
               <small data-i18n="tasksGraph.task3">북마크 필터 구현</small>
             </button>
 
-            <button class="task-graph-node task-graph-node--blocked task-graph-node--task4" type="button" role="listitem">
+            <button class="task-graph-node task-graph-node--blocked task-graph-node--task4" type="button" role="listitem" data-task-id="task-4">
               <span class="task-node-state" data-i18n="tasksGraph.blocked">blocked</span>
               <strong class="mono">task-4</strong>
               <small data-i18n="tasksGraph.task4">인증 컨텍스트 연결</small>
@@ -474,23 +473,23 @@
         <section class="task-detail-surface" aria-label="선택 작업" data-i18n-aria-label="tasks.selectedLabel">
           <div class="task-detail-head">
             <div>
-              <div class="label" data-i18n="tasks.selectedKicker">task-3</div>
-              <h3 data-i18n="tasks.selectedTitle">북마크 필터 구현</h3>
+              <div id="task-detail-kicker" class="label" data-i18n="tasks.selectedKicker">task-3</div>
+              <h3 id="task-detail-title" data-i18n="tasks.selectedTitle">북마크 필터 구현</h3>
             </div>
           </div>
 
           <section class="task-work-brief">
             <div class="label" data-i18n="tasks.goalLabel">해야 할 일</div>
-            <p data-i18n="tasks.goalBody">북마크 목록 API에서 tag, owner, createdAfter 조건을 조합해 필요한 북마크만 반환하게 한다.</p>
+            <p id="task-goal-body" data-i18n="tasks.goalBody">북마크 목록 API에서 tag, owner, createdAfter 조건을 조합해 필요한 북마크만 반환하게 한다.</p>
           </section>
 
           <div class="task-work-grid">
             <section class="task-detail-block">
               <div class="task-block-head">
                 <div class="label" data-i18n="tasks.criteriaLabel">완료 기준</div>
-                <span class="mono">3</span>
+                <span id="task-criteria-count" class="mono">3</span>
               </div>
-              <ol class="criteria-list">
+              <ol id="task-criteria-list" class="criteria-list">
                 <li data-i18n="tasks.criteria1">GET /bookmarks가 tag, owner, createdAfter query를 조합해 필터링한다.</li>
                 <li data-i18n="tasks.criteria2">필터가 없으면 기존 전체 목록 동작을 유지한다.</li>
                 <li data-i18n="tasks.criteria3">Repository 단위 테스트가 빈 결과와 복합 필터를 포함한다.</li>
@@ -500,9 +499,9 @@
             <section class="task-detail-block">
               <div class="task-block-head">
                 <div class="label" data-i18n="tasks.filesLabel">수정 파일</div>
-                <span class="mono">4</span>
+                <span id="task-files-count" class="mono">4</span>
               </div>
-              <div class="file-list">
+              <div id="task-files-list" class="file-list">
                 <span class="mono">src/main/kotlin/bookmarks/BookmarkController.kt</span>
                 <span class="mono">src/main/kotlin/bookmarks/BookmarkRepository.kt</span>
                 <span class="mono">src/test/kotlin/bookmarks/BookmarkRepositoryTest.kt</span>
@@ -513,18 +512,17 @@
 
           <section class="task-verify-panel">
             <div>
-              <div class="label" data-i18n="tasks.verifyLabel">검증</div>
-              <p data-i18n="tasks.verifyBody">필터 없음, 단일 필터, 복합 필터 테스트를 실행하고 기존 목록 동작이 유지되는지 확인한다.</p>
+              <div class="label" data-i18n="tasks.verifyLabel">검증 범위</div>
+              <p id="task-verify-body" data-i18n="tasks.verifyBody">필터 없음, 단일 필터, 복합 필터 테스트를 실행하고 기존 목록 동작이 유지되는지 확인한다.</p>
             </div>
-            <code class="mono">./gradlew test</code>
           </section>
 
           <section class="task-notes-panel">
             <div class="task-block-head">
               <div class="label" data-i18n="tasksInspector.notesLabel">implementation notes</div>
-              <span class="mono">3</span>
+              <span id="task-notes-count" class="mono">3</span>
             </div>
-            <ul class="inspector-list">
+            <ul id="task-notes-list" class="inspector-list">
               <li data-i18n="tasksInspector.note1">Controller는 query parsing만 담당한다.</li>
               <li data-i18n="tasksInspector.note2">Repository 필터는 null-safe 조건으로 유지한다.</li>
               <li data-i18n="tasksInspector.note3">인증 컨텍스트는 task-4에서 연결한다.</li>
@@ -684,10 +682,10 @@
             <div class="label" data-i18n="tasksInspector.kicker">task readiness</div>
             <h2 data-i18n="tasksInspector.title">실행 전 점검</h2>
           </div>
-          <span class="pill pill--ok" data-i18n="tasks.ready">ready</span>
+          <span id="task-inspector-pill" class="pill pill--ok" data-i18n="tasks.ready">ready</span>
         </div>
 
-        <div class="readiness-list" aria-label="실행 준비 점검" data-i18n-aria-label="tasksInspector.readinessLabel">
+        <div id="task-readiness-list" class="readiness-list" aria-label="실행 준비 점검" data-i18n-aria-label="tasksInspector.readinessLabel">
           <div class="readiness-row readiness-row--ok">
             <span class="mono">01</span>
             <div>
@@ -715,16 +713,12 @@
           <div class="label" data-i18n="tasksInspector.verificationLabel">verification</div>
           <dl class="compact-dl">
             <dt data-i18n="tasksInspector.command">command</dt>
-            <dd class="mono">./gradlew test</dd>
+            <dd id="task-verification-command" class="mono">./gradlew test</dd>
             <dt data-i18n="tasksInspector.timeout">timeout</dt>
-            <dd class="mono">120s</dd>
+            <dd id="task-verification-timeout" class="mono">120s</dd>
             <dt data-i18n="tasksInspector.latest">latest</dt>
-            <dd data-i18n="tasksInspector.latestValue">아직 실행 안 됨</dd>
+            <dd id="task-verification-latest" data-i18n="tasksInspector.latestValue">아직 실행 안 됨</dd>
           </dl>
-        </div>
-
-        <div class="inspector-actions">
-          <button class="btn btn--ghost" type="button" data-i18n="tasksInspector.secondary">task graph 열기</button>
         </div>
       </aside>
 
@@ -817,6 +811,24 @@
     const railTabs = [...document.querySelectorAll("[data-tab]")];
     const viewPanes = [...document.querySelectorAll("[data-panel]")];
     const workspace = document.querySelector(".workspace");
+    const taskGraphNodes = [...document.querySelectorAll("[data-task-id]")];
+    const taskOpenTerminalButton = document.querySelector("#task-open-terminal");
+    const taskSelectedMeta = document.querySelector("#task-selected-meta");
+    const taskDetailKicker = document.querySelector("#task-detail-kicker");
+    const taskDetailTitle = document.querySelector("#task-detail-title");
+    const taskGoalBody = document.querySelector("#task-goal-body");
+    const taskCriteriaCount = document.querySelector("#task-criteria-count");
+    const taskCriteriaList = document.querySelector("#task-criteria-list");
+    const taskFilesCount = document.querySelector("#task-files-count");
+    const taskFilesList = document.querySelector("#task-files-list");
+    const taskVerifyBody = document.querySelector("#task-verify-body");
+    const taskNotesCount = document.querySelector("#task-notes-count");
+    const taskNotesList = document.querySelector("#task-notes-list");
+    const taskInspectorPill = document.querySelector("#task-inspector-pill");
+    const taskReadinessList = document.querySelector("#task-readiness-list");
+    const taskVerificationCommand = document.querySelector("#task-verification-command");
+    const taskVerificationTimeout = document.querySelector("#task-verification-timeout");
+    const taskVerificationLatest = document.querySelector("#task-verification-latest");
     const documentRows = [...document.querySelectorAll("[data-document]")];
     const summaryState = document.querySelector("#summary-state");
     const summaryAction = document.querySelector("#summary-action");
@@ -974,7 +986,7 @@
       "tasks.criteria2": { ko: "필터가 없으면 기존 전체 목록 동작을 유지한다.", en: "When filters are absent, the existing full-list behavior remains." },
       "tasks.criteria3": { ko: "Repository 단위 테스트가 빈 결과와 복합 필터를 포함한다.", en: "Repository unit tests cover empty results and combined filters." },
       "tasks.filesLabel": { ko: "수정 파일", en: "Files to change" },
-      "tasks.verifyLabel": { ko: "검증", en: "Verification" },
+      "tasks.verifyLabel": { ko: "검증 범위", en: "Verification scope" },
       "tasks.verifyBody": { ko: "필터 없음, 단일 필터, 복합 필터 테스트를 실행하고 기존 목록 동작이 유지되는지 확인한다.", en: "Run no-filter, single-filter, and combined-filter tests, then confirm the existing list behavior still works." },
       "tasksInspector.label": { ko: "작업 인스펙터", en: "Task inspector" },
       "tasksInspector.kicker": { ko: "task readiness", en: "task readiness" },
@@ -995,7 +1007,6 @@
       "tasksInspector.note1": { ko: "Controller는 query parsing만 담당한다.", en: "Controller handles query parsing only." },
       "tasksInspector.note2": { ko: "Repository 필터는 null-safe 조건으로 유지한다.", en: "Repository filters stay null-safe." },
       "tasksInspector.note3": { ko: "인증 컨텍스트는 task-4에서 연결한다.", en: "Auth context is connected in task-4." },
-      "tasksInspector.secondary": { ko: "task graph 열기", en: "Open task graph" },
       "inspector.label": { ko: "인스펙터", en: "Inspector" },
       "inspector.kicker": { ko: "상태 근거", en: "state evidence" },
       "inspector.helpLabel": { ko: "상태 근거 도움말", en: "State evidence help" },
@@ -1461,7 +1472,124 @@ How should initial authentication start?</pre>
       },
     };
 
+    const graphTasks = {
+      "task-1": {
+        status: "done",
+        title: { ko: "북마크 모델 스키마", en: "Bookmark model schema" },
+        goal: { ko: "북마크 저장에 필요한 모델 필드와 기본 제약 조건을 정리한다.", en: "Define the bookmark model fields and baseline constraints required for storage." },
+        criteria: [
+          { ko: "Bookmark 모델에 id, url, title, owner, tag, createdAt 필드가 있다.", en: "Bookmark model includes id, url, title, owner, tag, and createdAt fields." },
+          { ko: "빈 URL과 owner는 저장 전에 거부된다.", en: "Empty URL and owner values are rejected before persistence." },
+        ],
+        files: [
+          "src/main/kotlin/bookmarks/Bookmark.kt",
+          "src/test/kotlin/bookmarks/BookmarkTest.kt",
+        ],
+        verifyBody: { ko: "모델 생성과 필수 필드 검증 테스트가 통과했는지 확인한다.", en: "Confirm model creation and required-field validation tests pass." },
+        notes: [
+          { ko: "API 응답 필드명은 기존 문서와 맞춘다.", en: "Keep API response field names aligned with existing docs." },
+          { ko: "DB migration은 별도 task로 분리하지 않는다.", en: "Do not split DB migration into a separate task." },
+        ],
+        readiness: [
+          [{ ko: "완료됨", en: "Completed" }, { ko: "model tests passed", en: "model tests passed" }, "ok"],
+          [{ ko: "검증 기록 있음", en: "Verification recorded" }, { ko: "run-002 · pass", en: "run-002 · pass" }, "ok"],
+          [{ ko: "재실행 불필요", en: "No rerun needed" }, { ko: "task closed", en: "task closed" }, "ok"],
+        ],
+        verification: { command: "./gradlew test", timeout: "120s", latest: { ko: "통과 · run-002", en: "passed · run-002" } },
+      },
+      "task-2": {
+        status: "done",
+        title: { ko: "저장소 인터페이스", en: "Repository interface" },
+        goal: { ko: "북마크 저장소가 목록 조회와 조건 기반 조회를 확장할 수 있는 형태로 정리한다.", en: "Shape the bookmark repository so list and conditional queries can be extended safely." },
+        criteria: [
+          { ko: "기본 목록 조회가 기존 응답 순서를 유지한다.", en: "Base list queries keep the existing response order." },
+          { ko: "필터 조건을 받을 수 있는 repository 메서드가 준비된다.", en: "Repository methods can accept filter inputs." },
+        ],
+        files: [
+          "src/main/kotlin/bookmarks/BookmarkRepository.kt",
+          "src/test/kotlin/bookmarks/BookmarkRepositoryTest.kt",
+        ],
+        verifyBody: { ko: "기본 목록 조회와 repository 경계 테스트가 통과했는지 확인한다.", en: "Confirm base list queries and repository boundary tests pass." },
+        notes: [
+          { ko: "Controller 로직을 repository에 섞지 않는다.", en: "Do not mix controller logic into the repository." },
+          { ko: "필터 구현은 task-3에서 처리한다.", en: "Filter implementation stays in task-3." },
+        ],
+        readiness: [
+          [{ ko: "완료됨", en: "Completed" }, { ko: "repository contract ready", en: "repository contract ready" }, "ok"],
+          [{ ko: "의존성 없음", en: "No dependencies" }, { ko: "standalone task", en: "standalone task" }, "ok"],
+          [{ ko: "검증 기록 있음", en: "Verification recorded" }, { ko: "run-003 · pass", en: "run-003 · pass" }, "ok"],
+        ],
+        verification: { command: "./gradlew test", timeout: "120s", latest: { ko: "통과 · run-003", en: "passed · run-003" } },
+      },
+      "task-3": {
+        status: "ready",
+        title: { ko: "북마크 필터 구현", en: "Implement bookmark filtering" },
+        goal: { ko: "북마크 목록 API에서 tag, owner, createdAfter 조건을 조합해 필요한 북마크만 반환하게 한다.", en: "Update the bookmark list API so tag, owner, and createdAfter filters can be combined to return only matching bookmarks." },
+        criteria: [
+          { ko: "GET /bookmarks가 tag, owner, createdAfter query를 조합해 필터링한다.", en: "GET /bookmarks filters by combined tag, owner, and createdAfter queries." },
+          { ko: "필터가 없으면 기존 전체 목록 동작을 유지한다.", en: "When filters are absent, the existing full-list behavior remains." },
+          { ko: "Repository 단위 테스트가 빈 결과와 복합 필터를 포함한다.", en: "Repository unit tests cover empty results and combined filters." },
+        ],
+        files: [
+          "src/main/kotlin/bookmarks/BookmarkController.kt",
+          "src/main/kotlin/bookmarks/BookmarkRepository.kt",
+          "src/test/kotlin/bookmarks/BookmarkRepositoryTest.kt",
+          "docs/api/bookmarks.md",
+        ],
+        verifyBody: { ko: "필터 없음, 단일 필터, 복합 필터 테스트를 실행하고 기존 목록 동작이 유지되는지 확인한다.", en: "Run no-filter, single-filter, and combined-filter tests, then confirm the existing list behavior still works." },
+        notes: [
+          { ko: "Controller는 query parsing만 담당한다.", en: "Controller handles query parsing only." },
+          { ko: "Repository 필터는 null-safe 조건으로 유지한다.", en: "Repository filters stay null-safe." },
+          { ko: "인증 컨텍스트는 task-4에서 연결한다.", en: "Auth context is connected in task-4." },
+        ],
+        readiness: [
+          [{ ko: "의존성 완료", en: "Dependencies complete" }, { ko: "task-1, task-2 done", en: "task-1, task-2 done" }, "ok"],
+          [{ ko: "완료 기준 있음", en: "Acceptance criteria present" }, { ko: "3 acceptance criteria", en: "3 acceptance criteria" }, "ok"],
+          [{ ko: "실행 기록 없음", en: "No run yet" }, { ko: "new run required", en: "new run required" }, "warn"],
+        ],
+        verification: { command: "./gradlew test", timeout: "120s", latest: { ko: "아직 실행 안 됨", en: "not run yet" } },
+      },
+      "task-4": {
+        status: "blocked",
+        title: { ko: "인증 컨텍스트 연결", en: "Connect auth context" },
+        goal: { ko: "북마크 필터에 로그인 사용자 컨텍스트를 연결해 owner 기본값을 안전하게 적용한다.", en: "Connect the signed-in user context to bookmark filtering so owner defaults are applied safely." },
+        criteria: [
+          { ko: "사용자 컨텍스트가 없으면 owner 기본 필터를 적용하지 않는다.", en: "When user context is absent, no default owner filter is applied." },
+          { ko: "명시적 owner query는 권한 정책과 함께 검증된다.", en: "Explicit owner query values are checked against the authorization policy." },
+        ],
+        files: [
+          "src/main/kotlin/bookmarks/BookmarkController.kt",
+          "src/main/kotlin/security/UserContext.kt",
+          "src/test/kotlin/bookmarks/BookmarkControllerTest.kt",
+        ],
+        verifyBody: { ko: "인증 컨텍스트 결정이 끝난 뒤 owner 기본값과 권한 테스트를 실행한다.", en: "After the auth-context decision, run owner-default and authorization tests." },
+        notes: [
+          { ko: "ND-2 초기 인증 결정이 필요하다.", en: "ND-2 initial-auth decision is required." },
+          { ko: "task-3 필터 동작을 변경하지 않는다.", en: "Do not change task-3 filtering behavior." },
+        ],
+        readiness: [
+          [{ ko: "의존성 대기", en: "Waiting on dependency" }, { ko: "task-3 not run yet", en: "task-3 not run yet" }, "warn"],
+          [{ ko: "결정 필요", en: "Decision required" }, { ko: "ND-2 initial auth", en: "ND-2 initial auth" }, "warn"],
+          [{ ko: "실행 불가", en: "Cannot run" }, { ko: "blocked", en: "blocked" }, "warn"],
+        ],
+        verification: { command: "./gradlew test", timeout: "120s", latest: { ko: "blocked", en: "blocked" } },
+      },
+    };
+
+    const taskStatusLabels = {
+      done: { ko: "done", en: "done" },
+      ready: { ko: "ready", en: "ready" },
+      blocked: { ko: "blocked", en: "blocked" },
+    };
+
+    const taskStatusPillClass = {
+      done: "pill pill--ok",
+      ready: "pill pill--ok",
+      blocked: "pill pill--warn",
+    };
+
     let currentState = "execution-ready";
+    let selectedTaskId = "task-3";
     let currentTab = "overview";
     let currentLocale = localStorage.getItem("p2aGuiLocale") || "ko";
     let rawLogEnabled = false;
@@ -1512,6 +1640,80 @@ How should initial authentication start?</pre>
       renderRawLogState();
     }
 
+    function renderTextList(container, values, itemClass) {
+      container.textContent = "";
+      values.forEach((value) => {
+        const item = document.createElement(itemClass === "mono" ? "span" : "li");
+        if (itemClass) item.className = itemClass;
+        item.textContent = localized(value);
+        container.appendChild(item);
+      });
+    }
+
+    function renderReadinessRows(task) {
+      taskReadinessList.textContent = "";
+      task.readiness.forEach((row, index) => {
+        const item = document.createElement("div");
+        item.className = `readiness-row readiness-row--${row[2]}`;
+
+        const number = document.createElement("span");
+        number.className = "mono";
+        number.textContent = String(index + 1).padStart(2, "0");
+
+        const body = document.createElement("div");
+        const title = document.createElement("strong");
+        title.textContent = localized(row[0]);
+        const meta = document.createElement("small");
+        meta.textContent = localized(row[1]);
+
+        body.append(title, meta);
+        item.append(number, body);
+        taskReadinessList.appendChild(item);
+      });
+    }
+
+    function renderTaskSelection() {
+      const task = graphTasks[selectedTaskId];
+      if (!task) return;
+
+      taskGraphNodes.forEach((node) => {
+        const selected = node.dataset.taskId === selectedTaskId;
+        if (selected) {
+          node.setAttribute("aria-current", "true");
+        } else {
+          node.removeAttribute("aria-current");
+        }
+      });
+
+      const statusLabel = localized(taskStatusLabels[task.status]);
+      taskSelectedMeta.textContent = selectedTaskId;
+      taskDetailKicker.textContent = selectedTaskId;
+      taskDetailTitle.textContent = localized(task.title);
+      taskGoalBody.textContent = localized(task.goal);
+      taskCriteriaCount.textContent = String(task.criteria.length);
+      renderTextList(taskCriteriaList, task.criteria);
+      taskFilesCount.textContent = String(task.files.length);
+      renderTextList(taskFilesList, task.files, "mono");
+      taskVerifyBody.textContent = localized(task.verifyBody);
+      taskNotesCount.textContent = String(task.notes.length);
+      renderTextList(taskNotesList, task.notes);
+
+      taskInspectorPill.className = taskStatusPillClass[task.status];
+      taskInspectorPill.textContent = statusLabel;
+      renderReadinessRows(task);
+      taskVerificationCommand.textContent = task.verification.command;
+      taskVerificationTimeout.textContent = task.verification.timeout;
+      taskVerificationLatest.textContent = localized(task.verification.latest);
+
+      const canRun = task.status === "ready";
+      taskOpenTerminalButton.disabled = !canRun;
+      taskOpenTerminalButton.setAttribute("aria-disabled", String(!canRun));
+
+      if (currentTab === "tasks") {
+        statusLeft.textContent = `${selectedTaskId} ${statusLabel}`;
+      }
+    }
+
     function renderTab() {
       workspace.classList.toggle("workspace--tasks", currentTab === "tasks");
       viewPanes.forEach((pane) => {
@@ -1532,7 +1734,8 @@ How should initial authentication start?</pre>
         statusCwd.textContent = copyText("status.terminalCwd");
         statusRight.textContent = copyText("status.terminalRight");
       } else if (currentTab === "tasks") {
-        statusLeft.textContent = copyText("status.tasksLeft");
+        const task = graphTasks[selectedTaskId];
+        statusLeft.textContent = `${selectedTaskId} ${localized(taskStatusLabels[task.status])}`;
         statusCwd.textContent = "cwd /Users/qoo10/projects/bookmark-api";
         statusRight.textContent = copyText("status.tasksRight");
       } else {
@@ -1586,6 +1789,7 @@ How should initial authentication start?</pre>
         currentLocale = button.dataset.lang;
         localStorage.setItem("p2aGuiLocale", currentLocale);
         renderStaticCopy();
+        renderTaskSelection();
         renderState();
         renderTab();
       });
@@ -1602,6 +1806,13 @@ How should initial authentication start?</pre>
         stateCards.forEach((item) => item.classList.remove("state-card--selected"));
         card.classList.add("state-card--selected");
         renderState();
+      });
+    });
+    taskGraphNodes.forEach((node) => {
+      node.addEventListener("click", () => {
+        selectedTaskId = node.dataset.taskId;
+        renderTaskSelection();
+        renderTab();
       });
     });
 
@@ -1697,6 +1908,7 @@ How should initial authentication start?</pre>
     });
 
     renderStaticCopy();
+    renderTaskSelection();
     renderState();
     renderTab();
   </script>
