@@ -930,6 +930,12 @@ export default function App() {
                 : "not runnable"}
           </span>
         </div>
+        {startResult && (
+          <div className="command-output command-output--compact">
+            <pre>{outputPreview(startResult.stdout)}</pre>
+            <pre>{outputPreview(startResult.stderr)}</pre>
+          </div>
+        )}
       </>
     );
   }

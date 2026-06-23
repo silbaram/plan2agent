@@ -1674,6 +1674,10 @@ h3 {
   overflow-wrap: anywhere;
 }
 
+.command-output--compact pre {
+  max-height: 96px;
+}
+
 .verification-list {
   display: grid;
   gap: 8px;
