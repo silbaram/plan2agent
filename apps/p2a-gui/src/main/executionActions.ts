@@ -2,14 +2,18 @@ import { spawn } from "node:child_process";
 import { existsSync, statSync } from "node:fs";
 import path from "node:path";
 import type {
+  AgentTool,
   ExecutionCommandResult,
   ExecutionCustomVerificationCommand,
   ExecutionFinishRunRequest,
+  ExecutionStartRunRequest,
   FailureClass,
   VerificationType,
 } from "../shared/ipc";
+import { AGENT_TOOLS } from "../shared/ipc";
 
 const OUTPUT_LIMIT = 1024 * 128;
+const VALID_AGENT_TOOLS = new Set<AgentTool>(AGENT_TOOLS);
 const VALID_FAILURE_CLASSES = new Set<FailureClass>([
   "verification_failed",
   "test_flake",
@@ -25,6 +29,13 @@ const VALID_VERIFICATION_TYPES = new Set<VerificationType>([
   "typecheck",
   "custom",
 ]);
+
+type ExecutionCommand = {
+  cwd: string;
+  scriptPath: string;
+  displayCommand: string;
+  args: string[];
+};
 
 function assertDirectory(targetPath: string, label: string): string {
   if (typeof targetPath !== "string" || targetPath.trim().length === 0) {
@@ -85,6 +96,53 @@ function shellQuote(value: string): string {
   return `'${value.replaceAll("'", "'\\''")}'`;
 }
 
+function normalizeTaskId(taskId: string): string {
+  if (typeof taskId !== "string" || taskId.trim().length === 0) {
+    throw new Error("task id is required");
+  }
+  const normalized = taskId.trim();
+  if (!/^[A-Za-z0-9._:-]+$/.test(normalized)) {
+    throw new Error(`task id contains unsupported characters: ${taskId}`);
+  }
+  return normalized;
+}
+
+function normalizeRunId(runId: string | null | undefined): string | null {
+  if (!runId) return null;
+  const normalized = runId.trim();
+  if (!/^run-[A-Za-z0-9._-]+$/.test(normalized)) {
+    throw new Error(`run id must match run-[A-Za-z0-9._-]+: ${runId}`);
+  }
+  return normalized;
+}
+
+function resolveExecutionContext(request: {
+  projectRoot: string;
+  artifactRoot: string;
+  taskGraphPath: string | null;
+}): {
+  projectRoot: string;
+  artifactRoot: string;
+  scriptPath: string;
+  sourceArgs: string[];
+} {
+  const projectRoot = assertDirectory(request.projectRoot, "project root");
+  const artifactRoot = assertDirectory(request.artifactRoot, "artifact root");
+  const scriptPath = assertFile(path.join(projectRoot, "scripts", "p2a_execute.mjs"), "p2a_execute");
+  const taskGraphPath = optionalFile(request.taskGraphPath, projectRoot);
+  const sourceArgs =
+    existsSync(path.join(artifactRoot, "current-spec.json")) || !taskGraphPath
+      ? ["--artifacts", artifactRoot]
+      : ["--graph", taskGraphPath];
+
+  return {
+    projectRoot,
+    artifactRoot,
+    scriptPath,
+    sourceArgs,
+  };
+}
+
 function normalizeCustomCommands(
   commands: ExecutionCustomVerificationCommand[],
 ): ExecutionCustomVerificationCommand[] {
@@ -111,18 +169,39 @@ function appendVerificationArgs(args: string[], request: ExecutionFinishRunReque
   }
 }
 
-export function buildFinishRunCommand(request: ExecutionFinishRunRequest): {
-  cwd: string;
-  scriptPath: string;
-  displayCommand: string;
-  args: string[];
-} {
-  const projectRoot = assertDirectory(request.projectRoot, "project root");
-  const artifactRoot = assertDirectory(request.artifactRoot, "artifact root");
-  const scriptPath = assertFile(path.join(projectRoot, "scripts", "p2a_execute.mjs"), "p2a_execute");
-  const taskGraphPath = optionalFile(request.taskGraphPath, projectRoot);
-  if (!/^run-[A-Za-z0-9._-]+$/.test(request.runId)) {
-    throw new Error(`run id must match run-[A-Za-z0-9._-]+: ${request.runId}`);
+export function buildStartRunCommand(request: ExecutionStartRunRequest): ExecutionCommand {
+  const context = resolveExecutionContext(request);
+  const taskId = normalizeTaskId(request.taskId);
+  const runId = normalizeRunId(request.runId);
+  if (!VALID_AGENT_TOOLS.has(request.agentTool)) {
+    throw new Error(`unsupported agent tool: ${String(request.agentTool)}`);
+  }
+
+  const args = [
+    "start",
+    ...context.sourceArgs,
+    "--task",
+    taskId,
+    "--agent-tool",
+    request.agentTool,
+    "--workspace",
+    context.projectRoot,
+  ];
+  if (runId) args.push("--run-id", runId);
+
+  return {
+    cwd: context.projectRoot,
+    scriptPath: context.scriptPath,
+    displayCommand: ["node", "scripts/p2a_execute.mjs", ...args].map(shellQuote).join(" "),
+    args,
+  };
+}
+
+export function buildFinishRunCommand(request: ExecutionFinishRunRequest): ExecutionCommand {
+  const context = resolveExecutionContext(request);
+  const runId = normalizeRunId(request.runId);
+  if (!runId) {
+    throw new Error("run id is required");
   }
   if (request.status === "blocked" && !request.failureClass) {
     throw new Error("blocked finish requires a failure class");
@@ -131,11 +210,7 @@ export function buildFinishRunCommand(request: ExecutionFinishRunRequest): {
     throw new Error(`unsupported failure class: ${String(request.failureClass)}`);
   }
 
-  const sourceArgs =
-    existsSync(path.join(artifactRoot, "current-spec.json")) || !taskGraphPath
-      ? ["--artifacts", artifactRoot]
-      : ["--graph", taskGraphPath];
-  const args = ["finish", ...sourceArgs, "--run-id", request.runId];
+  const args = ["finish", ...context.sourceArgs, "--run-id", runId];
   appendVerificationArgs(args, request);
   if (request.status !== "auto") args.push("--status", request.status);
   if (request.failureClass) args.push("--failure-class", request.failureClass);
@@ -148,8 +223,8 @@ export function buildFinishRunCommand(request: ExecutionFinishRunRequest): {
   }
 
   return {
-    cwd: projectRoot,
-    scriptPath,
+    cwd: context.projectRoot,
+    scriptPath: context.scriptPath,
     displayCommand: ["node", "scripts/p2a_execute.mjs", ...args].map(shellQuote).join(" "),
     args,
   };
@@ -161,7 +236,14 @@ function appendChunk(current: string, chunk: Buffer): string {
 }
 
 export function finishRun(request: ExecutionFinishRunRequest): Promise<ExecutionCommandResult> {
-  const command = buildFinishRunCommand(request);
+  return runExecutionCommand(buildFinishRunCommand(request));
+}
+
+export function startRun(request: ExecutionStartRunRequest): Promise<ExecutionCommandResult> {
+  return runExecutionCommand(buildStartRunCommand(request));
+}
+
+function runExecutionCommand(command: ExecutionCommand): Promise<ExecutionCommandResult> {
   const startedAtDate = new Date();
   const startedAt = startedAtDate.toISOString();
 

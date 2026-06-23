@@ -38,7 +38,7 @@ import type {
 type OpenState = "idle" | "loading" | "canceled" | "error";
 type WatchState = "idle" | "watching" | "refreshing" | "error";
 type ConfigState = "loading" | "ready" | "error";
-type FinishState = "idle" | "running" | "error";
+type ExecutionActionState = "idle" | "running" | "error";
 
 const failureClassOptions: FailureClass[] = [
   "verification_failed",
@@ -61,6 +61,7 @@ const steps = [
   ["2C-1", "Real PTY session", "done"],
   ["2C-2", "Supervisor controls", "done"],
   ["2D", "Finish verification", "done"],
+  ["2E", "Start run", "done"],
   ["smoke", "End-to-end smoke", "done"],
 ] as const;
 
@@ -216,7 +217,8 @@ export default function App() {
   const [lastWatchEvent, setLastWatchEvent] = useState<ProjectWatchEvent | null>(null);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
-  const [finishState, setFinishState] = useState<FinishState>("idle");
+  const [startState, setStartState] = useState<ExecutionActionState>("idle");
+  const [finishState, setFinishState] = useState<ExecutionActionState>("idle");
   const [finishStatus, setFinishStatus] = useState<ExecutionFinishStatus>("auto");
   const [finishFailureClass, setFinishFailureClass] =
     useState<FailureClass>("verification_failed");
@@ -228,6 +230,7 @@ export default function App() {
   const [collectGit, setCollectGit] = useState(true);
   const [changedFilesInput, setChangedFilesInput] = useState("");
   const [finishNoteInput, setFinishNoteInput] = useState("");
+  const [startResult, setStartResult] = useState<ExecutionCommandResult | null>(null);
   const [finishResult, setFinishResult] = useState<ExecutionCommandResult | null>(null);
 
   useEffect(() => {
@@ -256,7 +259,7 @@ export default function App() {
   async function loadProjectPath(
     rootPath: string,
     options: { quiet?: boolean; remember?: boolean } = {},
-  ) {
+  ): Promise<ProjectSnapshot | null> {
     if (options.quiet) {
       setWatchState("refreshing");
     } else {
@@ -271,12 +274,14 @@ export default function App() {
       setWatchState("watching");
       if (!options.quiet) setOpenState("idle");
       if (options.remember) void refreshConfig();
+      return snapshot;
     } catch {
       if (options.quiet) {
         setWatchState("error");
       } else {
         setOpenState("error");
       }
+      return null;
     }
   }
 
@@ -327,6 +332,10 @@ export default function App() {
       nextRuns.some((run) => run.runId === current) ? current : nextSelectedRunId,
     );
   }, [projectSnapshot?.generatedAt, projectSnapshot?.rootPath]);
+
+  useEffect(() => {
+    setStartResult(null);
+  }, [projectSnapshot?.rootPath, selectedTaskId]);
 
   async function openProjectFolder() {
     setOpenState("loading");
@@ -397,13 +406,41 @@ export default function App() {
     setSelectedTaskId(run.taskId);
   }
 
+  function executionSourcePreviewArgs(): string[] {
+    if (!artifact) return [];
+    if (artifact.activeIteration || !artifact.taskGraphPath) {
+      return ["--artifacts", artifact.rootPath];
+    }
+    return ["--graph", joinDisplayPath(projectSnapshot?.rootPath ?? "", artifact.taskGraphPath)];
+  }
+
+  function startPreviewCommand(): string {
+    if (!artifact || !selectedTask || !projectSnapshot) return "select a ready task";
+    const args = [
+      "node",
+      "scripts/p2a_execute.mjs",
+      "start",
+      ...executionSourcePreviewArgs(),
+      "--task",
+      selectedTask.id,
+      "--agent-tool",
+      projectSnapshot.defaultAgentTool,
+      "--workspace",
+      projectSnapshot.rootPath,
+    ];
+    return args.map(quoteCommandPart).join(" ");
+  }
+
   function finishPreviewCommand(): string {
     if (!artifact || !selectedRun) return "select a run";
-    const sourceArgs =
-      artifact.activeIteration || !artifact.taskGraphPath
-        ? ["--artifacts", artifact.rootPath]
-        : ["--graph", joinDisplayPath(projectSnapshot?.rootPath ?? "", artifact.taskGraphPath)];
-    const args = ["node", "scripts/p2a_execute.mjs", "finish", ...sourceArgs, "--run-id", selectedRun.runId];
+    const args = [
+      "node",
+      "scripts/p2a_execute.mjs",
+      "finish",
+      ...executionSourcePreviewArgs(),
+      "--run-id",
+      selectedRun.runId,
+    ];
     if (verifyTest) args.push("--test");
     if (verifyLint) args.push("--lint");
     if (verifyTypecheck) args.push("--typecheck");
@@ -416,6 +453,47 @@ export default function App() {
     }
     if (collectGit) args.push("--collect-git");
     return args.map(quoteCommandPart).join(" ");
+  }
+
+  async function startSelectedTask() {
+    if (!projectSnapshot || !artifact || !selectedTask || !selectedTask.ready) return;
+    setStartState("running");
+    setStartResult(null);
+
+    try {
+      const result = await window.p2a.execution.startRun({
+        projectRoot: projectSnapshot.rootPath,
+        artifactRoot: artifact.rootPath,
+        taskGraphPath: artifact.taskGraphPath,
+        taskId: selectedTask.id,
+        agentTool: projectSnapshot.defaultAgentTool,
+      });
+      setStartResult(result);
+      setStartState(result.exitCode === 0 ? "idle" : "error");
+
+      const refreshed = await loadProjectPath(projectSnapshot.rootPath, { quiet: true });
+      const refreshedTask = primaryArtifact(refreshed)?.tasks.find(
+        (task) => task.id === selectedTask.id,
+      );
+      setSelectedTaskId(selectedTask.id);
+      if (result.exitCode === 0 && refreshedTask?.latestRunId) {
+        setSelectedRunId(refreshedTask.latestRunId);
+        setActiveTab("terminal");
+      }
+    } catch (error) {
+      setStartState("error");
+      setStartResult({
+        command: startPreviewCommand(),
+        args: [],
+        cwd: projectSnapshot.rootPath,
+        exitCode: 1,
+        stdout: "",
+        stderr: error instanceof Error ? error.message : String(error),
+        startedAt: new Date().toISOString(),
+        finishedAt: new Date().toISOString(),
+        durationMs: 0,
+      });
+    }
   }
 
   async function finishSelectedRun() {
@@ -743,6 +821,119 @@ export default function App() {
     );
   }
 
+  function renderStartRunPanel() {
+    const canStart =
+      Boolean(projectSnapshot && artifact && selectedTask) &&
+      Boolean(selectedTask?.ready) &&
+      startState !== "running";
+
+    return (
+      <section className="workbench-panel start-run-panel">
+        <div className="section-head">
+          <div>
+            <div className="label">start / run</div>
+            <h3>{selectedTask?.id ?? "No task selected"}</h3>
+          </div>
+          <span className={`status-badge status-badge--${selectedTask?.status ?? "todo"}`}>
+            {selectedTask ? (selectedTask.ready ? "ready" : statusLabel(selectedTask.status)) : "none"}
+          </span>
+        </div>
+
+        <div className="finish-panel__body start-run-panel__body">
+          <div className="finish-panel__controls">
+            <div className="detail-list detail-list--embedded">
+              <div>
+                <span>task</span>
+                <strong className="mono">{selectedTask?.id ?? "none"}</strong>
+              </div>
+              <div>
+                <span>agent</span>
+                <strong className="mono">{projectSnapshot?.defaultAgentTool ?? "codex"}</strong>
+              </div>
+              <div>
+                <span>workspace</span>
+                <strong className="mono">{formatPath(projectSnapshot?.rootPath)}</strong>
+              </div>
+              <div>
+                <span>target</span>
+                <strong>{selectedTask?.targetArea ?? "none"}</strong>
+              </div>
+            </div>
+          </div>
+
+          <div className="finish-panel__result">
+            <div className="command-preview">
+              <span className="mono">cwd {formatPath(projectSnapshot?.rootPath)}</span>
+              <code>{startResult?.command ?? startPreviewCommand()}</code>
+            </div>
+            <div className="finish-actions">
+              <button
+                className="terminal-control terminal-control--primary"
+                type="button"
+                onClick={startSelectedTask}
+                disabled={!canStart}
+              >
+                {startState === "running" ? "Starting" : "Start run"}
+              </button>
+              <span className="mono">
+                {startResult
+                  ? `exit ${startResult.exitCode} · ${formatMilliseconds(startResult.durationMs)}`
+                  : selectedTask?.ready
+                    ? "ready"
+                    : "not runnable"}
+              </span>
+            </div>
+            {startResult && (
+              <div className="command-output">
+                <pre>{outputPreview(startResult.stdout)}</pre>
+                <pre>{outputPreview(startResult.stderr)}</pre>
+              </div>
+            )}
+          </div>
+        </div>
+      </section>
+    );
+  }
+
+  function renderStartRunInspectorAction() {
+    const canStart =
+      Boolean(projectSnapshot && artifact && selectedTask) &&
+      Boolean(selectedTask?.ready) &&
+      startState !== "running";
+
+    return (
+      <>
+        <div className="section-head section-head--tight">
+          <div>
+            <div className="label">run</div>
+            <h3>Start task</h3>
+          </div>
+        </div>
+        <div className="command-preview command-preview--compact">
+          <span className="mono">cwd {formatPath(projectSnapshot?.rootPath)}</span>
+          <code>{startResult?.command ?? startPreviewCommand()}</code>
+        </div>
+        <div className="finish-actions finish-actions--stacked">
+          <button
+            className="terminal-control terminal-control--primary"
+            type="button"
+            onClick={startSelectedTask}
+            disabled={!canStart}
+          >
+            {startState === "running" ? "Starting" : "Start run"}
+          </button>
+          <span className="mono">
+            {startResult
+              ? `exit ${startResult.exitCode} · ${formatMilliseconds(startResult.durationMs)}`
+              : selectedTask?.ready
+                ? "ready"
+                : "not runnable"}
+          </span>
+        </div>
+      </>
+    );
+  }
+
   function renderFinishPanel() {
     const canFinish =
       Boolean(projectSnapshot && artifact && selectedRun) &&
@@ -921,6 +1112,8 @@ export default function App() {
   function renderTerminalTab() {
     return (
       <>
+        {renderStartRunPanel()}
+
         <TerminalSurface
           cwd={projectSnapshot?.rootPath}
           command={onboarding?.primaryAction.command ?? projectSnapshot?.commands[0]?.command}
@@ -1088,6 +1281,8 @@ export default function App() {
             <strong className="mono">{selectedTask.latestRunId ?? "none"}</strong>
           </div>
         </div>
+
+        {renderStartRunInspectorAction()}
 
         <div className="section-head section-head--tight">
           <div>

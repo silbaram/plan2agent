@@ -2,8 +2,8 @@ import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { buildFinishRunCommand } from "./executionActions";
-import type { ExecutionFinishRunRequest } from "../shared/ipc";
+import { buildFinishRunCommand, buildStartRunCommand } from "./executionActions";
+import type { ExecutionFinishRunRequest, ExecutionStartRunRequest } from "../shared/ipc";
 
 async function createProject() {
   const projectRoot = await mkdtemp(path.join(tmpdir(), "p2a-execution-"));
@@ -32,7 +32,54 @@ function requestFor(projectRoot: string, artifactRoot: string): ExecutionFinishR
   };
 }
 
+function startRequestFor(projectRoot: string, artifactRoot: string): ExecutionStartRunRequest {
+  return {
+    projectRoot,
+    artifactRoot,
+    taskGraphPath: null,
+    taskId: "task-001",
+    agentTool: "codex",
+  };
+}
+
 describe("execution action helpers", () => {
+  it("builds a p2a_execute start command from a selected ready task", async () => {
+    const { projectRoot, artifactRoot } = await createProject();
+    try {
+      const command = buildStartRunCommand(startRequestFor(projectRoot, artifactRoot));
+
+      expect(command.cwd).toBe(projectRoot);
+      expect(command.displayCommand).toContain("p2a_execute.mjs start");
+      expect(command.args).toEqual([
+        "start",
+        "--artifacts",
+        artifactRoot,
+        "--task",
+        "task-001",
+        "--agent-tool",
+        "codex",
+        "--workspace",
+        projectRoot,
+      ]);
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("can pass a stable run id when starting a task", async () => {
+    const { projectRoot, artifactRoot } = await createProject();
+    try {
+      const command = buildStartRunCommand({
+        ...startRequestFor(projectRoot, artifactRoot),
+        runId: "run-gui-task-001",
+      });
+
+      expect(command.args.slice(-2)).toEqual(["--run-id", "run-gui-task-001"]);
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
   it("builds a p2a_execute finish command from typed GUI input", async () => {
     const { projectRoot, artifactRoot } = await createProject();
     try {

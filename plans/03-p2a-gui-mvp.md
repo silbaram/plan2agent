@@ -343,6 +343,22 @@ GUI local config:
 - CLI에서 `p2a_execute.mjs finish`로 하던 마무리 흐름을 GUI에서 수행할 수 있다.
 - done/blocked 상태가 task graph와 기존 run log schema에 일관되게 기록된다.
 
+### 2E. Start Run 연결
+
+목적: ready task를 기존 `p2a_execute start` lifecycle에 연결해 GUI에서 run record를 만들고 task를 `in_progress`로 전환한다.
+
+포함:
+
+- selected ready task 기준 `p2a_execute.mjs start` 실행.
+- agent tool, workspace, source graph/artifact command preview 표시.
+- run 생성 결과와 command output 표시.
+- 성공 후 프로젝트 reload, 생성된 run 자동 선택, Terminal 탭 handoff.
+
+완료 기준:
+
+- CLI에서 `p2a_execute.mjs start`로 하던 시작 흐름을 GUI에서 수행할 수 있다.
+- start 이후 task graph와 run index가 기존 CLI 계약과 같은 상태로 갱신된다.
+
 ## 5. MVP 전체 포함 범위
 
 - Project onboarding / detection.
@@ -352,6 +368,7 @@ GUI local config:
 - task list와 task detail.
 - run history와 run detail.
 - read-only artifact viewer.
+- ready task start와 run record 생성.
 - 단일 active PTY session.
 - Supervisor communication.
 - verification 실행과 결과 표시.
@@ -409,7 +426,8 @@ GUI local config:
 6. `2C-1` real PTY session: Electron main에서 `node-pty`로 agent CLI를 실행하고, typed IPC stream으로 renderer xterm에 연결한다.
 7. `2C-2` supervisor controls: Message agent, stdin passthrough, stop, kill, blocked/failed note flow를 단일 active session에 한정해 구현한다.
 8. `2D` finish/verification: 기존 `p2a_execute`, `p2a_runs`, `p2a_tasks` lifecycle을 GUI command action으로 연결한다.
-9. smoke: scaffold된 작은 target 프로젝트에서 ready task 1건을 end-to-end 실행하고 CLI 표시와 GUI 표시가 일치하는지 확인한다.
+9. `2E` start run: ready task를 GUI에서 시작하고 생성된 run을 자동 선택한다.
+10. smoke: scaffold된 작은 target 프로젝트에서 ready task 1건을 end-to-end 실행하고 CLI 표시와 GUI 표시가 일치하는지 확인한다.
 
 현재 진행:
 
@@ -423,7 +441,8 @@ GUI local config:
 | `2C-1` real PTY session | done | Electron main `node-pty` session manager, agent tool command mapping, typed IPC start/input/resize/stop/data/exit stream, preload terminal API, xterm start/stop controls, renderer stdin forwarding, native module external 설정 추가 |
 | `2C-2` supervisor controls | done | Message agent 입력, xterm passthrough 모드, stop/kill 분리, blocked/failed 세션 메모 UI, `terminal:kill` typed IPC를 단일 active session에 한정해 구현 |
 | `2D` finish/verification | done | 선택 run 기준 `execution:finishRun` typed IPC, `p2a_execute finish` main-process 실행, test/lint/typecheck/custom verification 옵션, collect git, changed files/note, command output, run verification/failure/changed files 표시를 기존 lifecycle에 연결 |
-| smoke | done | scaffold된 작은 target 프로젝트에서 CLI로 started run을 준비한 뒤 GUI에서 `custom:true` verification과 finish를 수행해 task/run 상태가 `done`/`finished`로 갱신됨을 확인. fake `codex` PATH 스텁으로 source 앱과 packaged 앱의 `Start session`/`Message agent`/`Stop` PTY smoke도 통과 |
+| `2E` start run | done | 선택 ready task 기준 `execution:startRun` typed IPC, `p2a_execute start` main-process 실행, Tasks inspector와 Terminal 탭 start action, command output, 성공 후 run 자동 선택과 Terminal handoff를 연결 |
+| smoke | done | scaffold된 작은 target 프로젝트에서 GUI로 `Start run` -> fake `codex` PTY `Start session`/`Message agent`/`Stop` -> `custom:true` verification -> `Finish run`까지 실행해 task/run 상태가 `done`/`finished`로 갱신됨을 packaged 앱에서 확인 |
 
 ## 9. 첫 smoke 기준
 

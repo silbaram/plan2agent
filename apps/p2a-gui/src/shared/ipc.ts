@@ -13,6 +13,7 @@ export const IPC_CHANNELS = {
   terminalKill: "terminal:kill",
   terminalData: "terminal:data",
   terminalExit: "terminal:exit",
+  executionStartRun: "execution:startRun",
   executionFinishRun: "execution:finishRun",
 } as const;
 
@@ -323,6 +324,15 @@ export type ExecutionCustomVerificationCommand = {
   command: string;
 };
 
+export type ExecutionStartRunRequest = {
+  projectRoot: string;
+  artifactRoot: string;
+  taskGraphPath: string | null;
+  taskId: string;
+  agentTool: AgentTool;
+  runId?: string | null;
+};
+
 export type ExecutionFinishRunRequest = {
   projectRoot: string;
   artifactRoot: string;
@@ -378,6 +388,7 @@ export type P2AApi = {
     onExit: (callback: (event: TerminalSessionExitEvent) => void) => () => void;
   };
   execution: {
+    startRun: (request: ExecutionStartRunRequest) => Promise<ExecutionCommandResult>;
     finishRun: (request: ExecutionFinishRunRequest) => Promise<ExecutionCommandResult>;
   };
 };

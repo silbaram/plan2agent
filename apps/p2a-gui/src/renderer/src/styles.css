@@ -1518,6 +1518,10 @@ h3 {
   background: var(--border-1);
 }
 
+.start-run-panel__body {
+  grid-template-columns: minmax(220px, 0.75fr) minmax(320px, 1.25fr);
+}
+
 .finish-panel__controls,
 .finish-panel__result {
   display: grid;
@@ -1628,10 +1632,19 @@ h3 {
   overflow-wrap: anywhere;
 }
 
+.command-preview--compact code {
+  max-height: 96px;
+}
+
 .finish-actions {
   display: flex;
   align-items: center;
   gap: 10px;
+}
+
+.finish-actions--stacked {
+  align-items: flex-start;
+  flex-wrap: wrap;
 }
 
 .finish-actions span {
@@ -1744,6 +1757,10 @@ h3 {
 .detail-list {
   display: grid;
   gap: 8px;
+}
+
+.detail-list--embedded {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 .detail-list div {

@@ -5,6 +5,7 @@ import {
   IPC_CHANNELS,
   type AgentTool,
   type ExecutionFinishRunRequest,
+  type ExecutionStartRunRequest,
   type ProjectOpenResult,
   type ProjectLoadOptions,
   type ProjectWatchEvent,
@@ -24,7 +25,7 @@ import {
   setDefaultAgentTool,
 } from "./localConfig";
 import { PtySessionManager } from "./ptySessionManager";
-import { finishRun } from "./executionActions";
+import { finishRun, startRun } from "./executionActions";
 import { loadProjectSnapshot } from "./projectLoader";
 
 declare const MAIN_WINDOW_VITE_DEV_SERVER_URL: string | undefined;
@@ -238,6 +239,12 @@ function registerIpcHandlers(): void {
       throw new Error("terminal:kill requires session id");
     }
     ptySessions.kill(event.sender, request.sessionId);
+  });
+  ipcMain.handle(IPC_CHANNELS.executionStartRun, (_event, request: ExecutionStartRunRequest) => {
+    if (!request || typeof request.taskId !== "string") {
+      throw new Error("execution:startRun requires a task id");
+    }
+    return startRun(request);
   });
   ipcMain.handle(IPC_CHANNELS.executionFinishRun, (_event, request: ExecutionFinishRunRequest) => {
     if (!request || typeof request.runId !== "string") {

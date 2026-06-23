@@ -4,6 +4,7 @@ import {
   type AgentTool,
   type ExecutionCommandResult,
   type ExecutionFinishRunRequest,
+  type ExecutionStartRunRequest,
   type GuiConfigSnapshot,
   type P2AApi,
   type ProjectLoadOptions,
@@ -83,6 +84,8 @@ const p2aApi: P2AApi = {
     },
   },
   execution: {
+    startRun: (request: ExecutionStartRunRequest) =>
+      ipcRenderer.invoke(IPC_CHANNELS.executionStartRun, request) as Promise<ExecutionCommandResult>,
     finishRun: (request: ExecutionFinishRunRequest) =>
       ipcRenderer.invoke(IPC_CHANNELS.executionFinishRun, request) as Promise<ExecutionCommandResult>,
   },
