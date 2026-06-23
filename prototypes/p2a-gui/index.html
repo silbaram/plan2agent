@@ -221,10 +221,10 @@
       <aside class="sidebar view-pane sidebar--runs" aria-label="실행 이력" data-i18n-aria-label="runsSidebar.label" data-panel="runs" hidden>
         <div class="panel-head">
           <div>
-            <div class="label" data-i18n="runsSidebar.kicker">실행 이력</div>
-            <h1 data-i18n="runsSidebar.title">최근 runs</h1>
+            <div class="label" data-i18n="runsSidebar.kicker">프로젝트 run index</div>
+            <h1 data-i18n="runsSidebar.title">전체 runs</h1>
           </div>
-          <span class="pill pill--info" data-i18n="runsSidebar.pill">4 runs</span>
+          <span class="pill pill--info" data-i18n="runsSidebar.pill">5 runs</span>
         </div>
 
         <div class="run-filter-row" aria-label="실행 상태 필터" data-i18n-aria-label="runsSidebar.filtersLabel">
@@ -234,39 +234,52 @@
           <button class="run-filter" type="button" data-run-filter="open" data-i18n="runsSidebar.filterOpen">open</button>
         </div>
 
+        <div class="run-scope-row" aria-label="run scope 필터" data-i18n-aria-label="runsSidebar.scopeFiltersLabel">
+          <button class="run-scope run-scope--active" type="button" data-run-scope="all" data-i18n="runsSidebar.scopeAll">all scopes</button>
+          <button class="run-scope" type="button" data-run-scope="task" data-i18n="runsSidebar.scopeTask">task</button>
+          <button class="run-scope" type="button" data-run-scope="gate" data-i18n="runsSidebar.scopeGate">gate</button>
+        </div>
+
         <div class="run-list" aria-label="run 목록" data-i18n-aria-label="runsSidebar.listLabel">
           <button class="run-row run-row--active" type="button" data-run-id="run-005" aria-current="true">
             <span class="run-row__state run-row__state--passed"></span>
             <span>
               <strong class="mono">run-005</strong>
-              <small data-i18n="runsSidebar.run005Meta">task-3 · 통과 · 13:42</small>
+              <small data-i18n="runsSidebar.run005Meta">task · task-3 · 통과 · 13:42</small>
             </span>
           </button>
           <button class="run-row" type="button" data-run-id="run-004">
             <span class="run-row__state run-row__state--failed"></span>
             <span>
               <strong class="mono">run-004</strong>
-              <small data-i18n="runsSidebar.run004Meta">task-3 · 실패 · 13:07</small>
+              <small data-i18n="runsSidebar.run004Meta">task · task-3 · 실패 · 13:07</small>
             </span>
           </button>
           <button class="run-row" type="button" data-run-id="run-003">
             <span class="run-row__state run-row__state--passed"></span>
             <span>
               <strong class="mono">run-003</strong>
-              <small data-i18n="runsSidebar.run003Meta">task-2 · 통과 · 어제</small>
+              <small data-i18n="runsSidebar.run003Meta">task · task-2 · 통과 · 어제</small>
             </span>
           </button>
           <button class="run-row" type="button" data-run-id="run-002">
             <span class="run-row__state run-row__state--passed"></span>
             <span>
               <strong class="mono">run-002</strong>
-              <small data-i18n="runsSidebar.run002Meta">task-1 · 통과 · 어제</small>
+              <small data-i18n="runsSidebar.run002Meta">task · task-1 · 통과 · 어제</small>
+            </span>
+          </button>
+          <button class="run-row" type="button" data-run-id="run-001">
+            <span class="run-row__state run-row__state--open"></span>
+            <span>
+              <strong class="mono">run-001</strong>
+              <small data-i18n="runsSidebar.run001Meta">gate · Gate A · open · 11:44</small>
             </span>
           </button>
         </div>
 
         <div class="terminal-sidebar-section">
-          <div class="label" data-i18n="runsSidebar.scopeLabel">run 저장 위치</div>
+          <div class="label" data-i18n="runsSidebar.scopeLabel">프로젝트 run store</div>
           <dl class="compact-dl">
             <dt data-i18n="runsSidebar.project">project</dt>
             <dd class="mono">bookmark-api</dd>
@@ -637,12 +650,12 @@
             <strong id="run-summary-status">통과</strong>
           </div>
           <div>
-            <span data-i18n="runs.summaryTask">작업</span>
+            <span data-i18n="runs.summaryTask">대상</span>
             <strong id="run-summary-task" class="mono">task-3</strong>
           </div>
           <div>
-            <span data-i18n="runs.summaryAgent">agent</span>
-            <strong id="run-summary-agent" class="mono">codex</strong>
+            <span data-i18n="runs.summaryAgent">scope</span>
+            <strong id="run-summary-agent" class="mono">task</strong>
           </div>
           <div>
             <span data-i18n="runs.summaryDuration">소요 시간</span>
@@ -658,6 +671,18 @@
             </div>
             <pre id="run-command" class="run-command-line">node scripts/p2a_execute.mjs run --task-id task-3 --agent codex</pre>
             <dl class="run-meta-grid">
+              <div>
+                <dt data-i18n="runs.recordPath">record</dt>
+                <dd id="run-record-path" class="mono">artifacts/bookmark-api/runs/run-005.json</dd>
+              </div>
+              <div>
+                <dt data-i18n="runs.scope">scope</dt>
+                <dd id="run-scope" class="mono">task</dd>
+              </div>
+              <div>
+                <dt data-i18n="runs.target">target</dt>
+                <dd id="run-target" class="mono">task-3</dd>
+              </div>
               <div>
                 <dt data-i18n="runs.cwd">cwd</dt>
                 <dd id="run-cwd" class="mono">/Users/qoo10/projects/bookmark-api</dd>
@@ -1092,6 +1117,7 @@ BookmarkControllerTest > keeps full list without filters PASSED</pre>
     const taskGraphNodes = [...document.querySelectorAll("[data-task-id]")];
     const runRows = [...document.querySelectorAll("[data-run-id]")];
     const runFilters = [...document.querySelectorAll("[data-run-filter]")];
+    const runScopeFilters = [...document.querySelectorAll("[data-run-scope]")];
     const taskOpenTerminalButton = document.querySelector("#task-open-terminal");
     const taskSelectedMeta = document.querySelector("#task-selected-meta");
     const taskDetailKicker = document.querySelector("#task-detail-kicker");
@@ -1119,6 +1145,9 @@ BookmarkControllerTest > keeps full list without filters PASSED</pre>
     const runSummaryDuration = document.querySelector("#run-summary-duration");
     const runStartedAt = document.querySelector("#run-started-at");
     const runCommand = document.querySelector("#run-command");
+    const runRecordPath = document.querySelector("#run-record-path");
+    const runScope = document.querySelector("#run-scope");
+    const runTarget = document.querySelector("#run-target");
     const runCwd = document.querySelector("#run-cwd");
     const runModel = document.querySelector("#run-model");
     const runSession = document.querySelector("#run-session");
@@ -1353,20 +1382,25 @@ BookmarkControllerTest > keeps full list without filters PASSED</pre>
       "status.runsLeft": { ko: "run-005 passed", en: "run-005 passed" },
       "status.runsRight": { ko: "검증 결과 확인 후 finish 판단", en: "review verification before finish" },
       "runsSidebar.label": { ko: "실행 이력", en: "Run history" },
-      "runsSidebar.kicker": { ko: "실행 이력", en: "run history" },
-      "runsSidebar.title": { ko: "최근 runs", en: "Recent runs" },
-      "runsSidebar.pill": { ko: "4 runs", en: "4 runs" },
+      "runsSidebar.kicker": { ko: "프로젝트 run index", en: "project run index" },
+      "runsSidebar.title": { ko: "전체 runs", en: "All runs" },
+      "runsSidebar.pill": { ko: "5 runs", en: "5 runs" },
       "runsSidebar.filtersLabel": { ko: "실행 상태 필터", en: "Run status filters" },
       "runsSidebar.filterAll": { ko: "All", en: "All" },
       "runsSidebar.filterPassed": { ko: "passed", en: "passed" },
       "runsSidebar.filterFailed": { ko: "failed", en: "failed" },
       "runsSidebar.filterOpen": { ko: "open", en: "open" },
+      "runsSidebar.scopeFiltersLabel": { ko: "run scope 필터", en: "Run scope filters" },
+      "runsSidebar.scopeAll": { ko: "all scopes", en: "all scopes" },
+      "runsSidebar.scopeTask": { ko: "task", en: "task" },
+      "runsSidebar.scopeGate": { ko: "gate", en: "gate" },
       "runsSidebar.listLabel": { ko: "run 목록", en: "Run list" },
-      "runsSidebar.run005Meta": { ko: "task-3 · 통과 · 13:42", en: "task-3 · passed · 13:42" },
-      "runsSidebar.run004Meta": { ko: "task-3 · 실패 · 13:07", en: "task-3 · failed · 13:07" },
-      "runsSidebar.run003Meta": { ko: "task-2 · 통과 · 어제", en: "task-2 · passed · yesterday" },
-      "runsSidebar.run002Meta": { ko: "task-1 · 통과 · 어제", en: "task-1 · passed · yesterday" },
-      "runsSidebar.scopeLabel": { ko: "run 저장 위치", en: "Run storage" },
+      "runsSidebar.run005Meta": { ko: "task · task-3 · 통과 · 13:42", en: "task · task-3 · passed · 13:42" },
+      "runsSidebar.run004Meta": { ko: "task · task-3 · 실패 · 13:07", en: "task · task-3 · failed · 13:07" },
+      "runsSidebar.run003Meta": { ko: "task · task-2 · 통과 · 어제", en: "task · task-2 · passed · yesterday" },
+      "runsSidebar.run002Meta": { ko: "task · task-1 · 통과 · 어제", en: "task · task-1 · passed · yesterday" },
+      "runsSidebar.run001Meta": { ko: "gate · Gate A · open · 11:44", en: "gate · Gate A · open · 11:44" },
+      "runsSidebar.scopeLabel": { ko: "프로젝트 run store", en: "Project run store" },
       "runsSidebar.project": { ko: "project", en: "project" },
       "runsSidebar.iteration": { ko: "iteration", en: "iteration" },
       "runsSidebar.path": { ko: "path", en: "path" },
@@ -1376,10 +1410,13 @@ BookmarkControllerTest > keeps full list without filters PASSED</pre>
       "runs.title": { ko: "실행 결과 검토", en: "Review run result" },
       "runs.summaryLabel": { ko: "선택한 run 요약", en: "Selected run summary" },
       "runs.summaryStatus": { ko: "상태", en: "Status" },
-      "runs.summaryTask": { ko: "작업", en: "Task" },
-      "runs.summaryAgent": { ko: "agent", en: "agent" },
+      "runs.summaryTask": { ko: "대상", en: "Target" },
+      "runs.summaryAgent": { ko: "scope", en: "scope" },
       "runs.summaryDuration": { ko: "소요 시간", en: "Duration" },
       "runs.commandLabel": { ko: "실행 명령", en: "Run command" },
+      "runs.recordPath": { ko: "record", en: "record" },
+      "runs.scope": { ko: "scope", en: "scope" },
+      "runs.target": { ko: "target", en: "target" },
       "runs.cwd": { ko: "cwd", en: "cwd" },
       "runs.model": { ko: "model", en: "model" },
       "runs.session": { ko: "session", en: "session" },
@@ -1403,7 +1440,7 @@ BookmarkControllerTest > keeps full list without filters PASSED</pre>
       "runsInspector.markDone": { ko: "Mark done", en: "Mark done" },
       "runsInspector.markBlocked": { ko: "Mark blocked", en: "Mark blocked" },
       "runsInspector.nextLabel": { ko: "다음 위치", en: "Next location" },
-      "runsInspector.task": { ko: "task", en: "task" },
+      "runsInspector.task": { ko: "target", en: "target" },
       "runsInspector.nextTask": { ko: "next", en: "next" },
       "runsInspector.state": { ko: "state", en: "state" },
       "runsInspector.openTask": { ko: "작업에서 보기", en: "Open in Tasks" },
@@ -1601,7 +1638,10 @@ Build a shared bookmark API for the team.`,
         status: "passed",
         statusLabel: { ko: "통과", en: "passed" },
         pillClass: "pill pill--ok",
+        scope: "task",
         taskId: "task-3",
+        target: "task-3",
+        recordPath: "artifacts/bookmark-api/runs/run-005.json",
         agent: "codex",
         duration: "05:48",
         startedAt: "2026-06-21 13:42",
@@ -1650,10 +1690,14 @@ BookmarkControllerTest > keeps full list without filters PASSED`,
         record: {
           ko: `{
   "run_id": "run-005",
+  "scope": "task",
+  "target": { "task_id": "task-3" },
+  "iteration": "iter-002",
   "task_id": "task-3",
   "status": "passed",
   "agent_cli": "codex",
   "model": "gpt-5-codex",
+  "record_path": "artifacts/bookmark-api/runs/run-005.json",
   "command": "node scripts/p2a_execute.mjs run --task-id task-3 --agent codex",
   "verification": {
     "command": "./gradlew test",
@@ -1670,10 +1714,14 @@ BookmarkControllerTest > keeps full list without filters PASSED`,
 }`,
           en: `{
   "run_id": "run-005",
+  "scope": "task",
+  "target": { "task_id": "task-3" },
+  "iteration": "iter-002",
   "task_id": "task-3",
   "status": "passed",
   "agent_cli": "codex",
   "model": "gpt-5-codex",
+  "record_path": "artifacts/bookmark-api/runs/run-005.json",
   "command": "node scripts/p2a_execute.mjs run --task-id task-3 --agent codex",
   "verification": {
     "command": "./gradlew test",
@@ -1694,7 +1742,10 @@ BookmarkControllerTest > keeps full list without filters PASSED`,
         status: "failed",
         statusLabel: { ko: "실패", en: "failed" },
         pillClass: "pill pill--err",
+        scope: "task",
         taskId: "task-3",
+        target: "task-3",
+        recordPath: "artifacts/bookmark-api/runs/run-004.json",
         agent: "codex",
         duration: "03:19",
         startedAt: "2026-06-21 13:07",
@@ -1739,8 +1790,12 @@ Expected 2 results but received 3`,
         record: {
           ko: `{
   "run_id": "run-004",
+  "scope": "task",
+  "target": { "task_id": "task-3" },
+  "iteration": "iter-002",
   "task_id": "task-3",
   "status": "failed",
+  "record_path": "artifacts/bookmark-api/runs/run-004.json",
   "verification": {
     "command": "./gradlew test",
     "exit_code": 1,
@@ -1750,8 +1805,12 @@ Expected 2 results but received 3`,
 }`,
           en: `{
   "run_id": "run-004",
+  "scope": "task",
+  "target": { "task_id": "task-3" },
+  "iteration": "iter-002",
   "task_id": "task-3",
   "status": "failed",
+  "record_path": "artifacts/bookmark-api/runs/run-004.json",
   "verification": {
     "command": "./gradlew test",
     "exit_code": 1,
@@ -1765,7 +1824,10 @@ Expected 2 results but received 3`,
         status: "passed",
         statusLabel: { ko: "통과", en: "passed" },
         pillClass: "pill pill--ok",
+        scope: "task",
         taskId: "task-2",
+        target: "task-2",
+        recordPath: "artifacts/bookmark-api/runs/run-003.json",
         agent: "codex",
         duration: "04:11",
         startedAt: "2026-06-20 17:28",
@@ -1808,15 +1870,23 @@ BookmarkRepositoryTest > keeps base order PASSED`,
         record: {
           ko: `{
   "run_id": "run-003",
+  "scope": "task",
+  "target": { "task_id": "task-2" },
+  "iteration": "iter-002",
   "task_id": "task-2",
   "status": "passed",
+  "record_path": "artifacts/bookmark-api/runs/run-003.json",
   "verification": { "command": "./gradlew test", "exit_code": 0 },
   "finish_recommendation": "done"
 }`,
           en: `{
   "run_id": "run-003",
+  "scope": "task",
+  "target": { "task_id": "task-2" },
+  "iteration": "iter-002",
   "task_id": "task-2",
   "status": "passed",
+  "record_path": "artifacts/bookmark-api/runs/run-003.json",
   "verification": { "command": "./gradlew test", "exit_code": 0 },
   "finish_recommendation": "done"
 }`,
@@ -1826,7 +1896,10 @@ BookmarkRepositoryTest > keeps base order PASSED`,
         status: "passed",
         statusLabel: { ko: "통과", en: "passed" },
         pillClass: "pill pill--ok",
+        scope: "task",
         taskId: "task-1",
+        target: "task-1",
+        recordPath: "artifacts/bookmark-api/runs/run-002.json",
         agent: "codex",
         duration: "03:54",
         startedAt: "2026-06-20 16:41",
@@ -1869,17 +1942,113 @@ BookmarkTest > rejects empty url PASSED`,
         record: {
           ko: `{
   "run_id": "run-002",
+  "scope": "task",
+  "target": { "task_id": "task-1" },
+  "iteration": "iter-002",
   "task_id": "task-1",
   "status": "passed",
+  "record_path": "artifacts/bookmark-api/runs/run-002.json",
   "verification": { "command": "./gradlew test", "exit_code": 0 },
   "finish_recommendation": "done"
 }`,
           en: `{
   "run_id": "run-002",
+  "scope": "task",
+  "target": { "task_id": "task-1" },
+  "iteration": "iter-002",
   "task_id": "task-1",
   "status": "passed",
+  "record_path": "artifacts/bookmark-api/runs/run-002.json",
   "verification": { "command": "./gradlew test", "exit_code": 0 },
   "finish_recommendation": "done"
+}`,
+        },
+      },
+      "run-001": {
+        status: "open",
+        statusLabel: { ko: "open", en: "open" },
+        pillClass: "pill pill--warn",
+        scope: "gate",
+        taskId: null,
+        target: "Gate A",
+        recordPath: "artifacts/bookmark-api/runs/run-001.json",
+        agent: "codex",
+        duration: "08:12",
+        startedAt: "2026-06-20 11:44",
+        command: "node scripts/p2a_gate.mjs run --gate A --agent codex",
+        cwd: "/Users/qoo10/projects/bookmark-api",
+        model: "gpt-5-codex",
+        session: "draft-gate-a-002",
+        exitCode: "waiting",
+        verifyCommand: "node scripts/p2a_validate.mjs artifacts/bookmark-api/gate-a-intake/intake.json",
+        verifyDuration: "6s",
+        verifyResult: { ko: "사용자 결정 대기", en: "waiting on user decision" },
+        output: {
+          ko: `Gate A intake updated
+ND-1 visibility scope answered
+ND-2 initial auth remains open`,
+          en: `Gate A intake updated
+ND-1 visibility scope answered
+ND-2 initial auth remains open`,
+        },
+        files: [
+          ["artifacts/bookmark-api/status.md", "+8 -2"],
+          ["artifacts/bookmark-api/gate-a-intake/intake.md", "+31 -0"],
+          ["artifacts/bookmark-api/gate-a-intake/intake.json", "+42 -0"],
+        ],
+        notes: [
+          { ko: "Gate A 세션 기록도 같은 project run store에 저장한다.", en: "Gate A session records are stored in the same project run store." },
+          { ko: "task_id 대신 gate target으로 연결한다.", en: "It links by gate target instead of task_id." },
+          { ko: "ND-2 답변 전까지 finish 상태는 open이다.", en: "The finish state stays open until ND-2 is answered." },
+        ],
+        checks: [
+          [{ ko: "문서 갱신", en: "Documents updated" }, "intake.md · intake.json", "ok"],
+          [{ ko: "열린 결정", en: "Open decision" }, "ND-2 initial auth", "warn"],
+          [{ ko: "task 연결 없음", en: "No task link" }, { ko: "scope gate", en: "scope gate" }, "ok"],
+        ],
+        finishStatus: "open",
+        finishCommand: "node scripts/p2a_gate.mjs finish --run-id run-001 --status open --gate A",
+        blockedCommand: "node scripts/p2a_gate.mjs finish --run-id run-001 --status blocked_on_user --gate A",
+        decisionSummary: { ko: "이 run은 task 실행이 아니라 Gate A 대화 세션입니다. ND-2 답변 전까지 open 상태로 남깁니다.", en: "This run is a Gate A conversation session, not a task execution. It stays open until ND-2 is answered." },
+        nextTask: "Gate A",
+        nextState: { ko: "ND-2 초기 인증 답변 대기", en: "waiting for ND-2 initial auth answer" },
+        docs: [
+          { detail: "run-record", label: "run", path: "runs/run-001.json", state: "open" },
+          { detail: "intake-md", label: "intake", path: "gate-a-intake/intake.md", state: "ND-2" },
+          { detail: "status", label: "status", path: "status.md", state: "blocked_on_user" },
+        ],
+        record: {
+          ko: `{
+  "run_id": "run-001",
+  "scope": "gate",
+  "target": { "gate": "A" },
+  "iteration": "iter-002",
+  "status": "open",
+  "agent_cli": "codex",
+  "model": "gpt-5-codex",
+  "record_path": "artifacts/bookmark-api/runs/run-001.json",
+  "outputs": [
+    "artifacts/bookmark-api/status.md",
+    "artifacts/bookmark-api/gate-a-intake/intake.md",
+    "artifacts/bookmark-api/gate-a-intake/intake.json"
+  ],
+  "open_decisions": ["ND-2"]
+}`,
+          en: `{
+  "run_id": "run-001",
+  "scope": "gate",
+  "target": { "gate": "A" },
+  "iteration": "iter-002",
+  "status": "open",
+  "agent_cli": "codex",
+  "model": "gpt-5-codex",
+  "record_path": "artifacts/bookmark-api/runs/run-001.json",
+  "outputs": [
+    "artifacts/bookmark-api/status.md",
+    "artifacts/bookmark-api/gate-a-intake/intake.md",
+    "artifacts/bookmark-api/gate-a-intake/intake.json"
+  ],
+  "open_decisions": ["ND-2"]
 }`,
         },
       },
@@ -2049,7 +2218,7 @@ BookmarkTest > rejects empty url PASSED`,
           const run = runRecords[selectedRunId];
           return `<article class="document-viewer">
 <div class="document-viewer__meta">
-  <span class="mono">artifacts/bookmark-api/runs/${selectedRunId}.json</span>
+  <span class="mono">${run.recordPath}</span>
   <span class="${run.pillClass}">${localized(run.statusLabel)}</span>
 </div>
 <pre class="document-viewer__body">${localized(run.record)}</pre>
@@ -2554,6 +2723,7 @@ How should initial authentication start?</pre>
     let selectedTaskId = "task-3";
     let selectedRunId = "run-005";
     let selectedRunFilter = "all";
+    let selectedRunScope = "all";
     let currentTab = "overview";
     let currentLocale = localStorage.getItem("p2aGuiLocale") || "ko";
     let rawLogEnabled = false;
@@ -2714,14 +2884,19 @@ How should initial authentication start?</pre>
     }
 
     function runMatchesFilter(run) {
-      if (selectedRunFilter === "all") return true;
-      if (selectedRunFilter === "open") return run.status !== "passed";
-      return run.status === selectedRunFilter;
+      const statusMatches = selectedRunFilter === "all"
+        || (selectedRunFilter === "open" && run.status !== "passed" && run.status !== "failed")
+        || run.status === selectedRunFilter;
+      const scopeMatches = selectedRunScope === "all" || run.scope === selectedRunScope;
+      return statusMatches && scopeMatches;
     }
 
     function renderRunFilterState() {
       runFilters.forEach((button) => {
         button.classList.toggle("run-filter--active", button.dataset.runFilter === selectedRunFilter);
+      });
+      runScopeFilters.forEach((button) => {
+        button.classList.toggle("run-scope--active", button.dataset.runScope === selectedRunScope);
       });
       runRows.forEach((row) => {
         const run = runRecords[row.dataset.runId];
@@ -2748,11 +2923,14 @@ How should initial authentication start?</pre>
       runDetailPill.textContent = localized(run.statusLabel);
       runDetailId.textContent = selectedRunId;
       runSummaryStatus.textContent = localized(run.statusLabel);
-      runSummaryTask.textContent = run.taskId;
-      runSummaryAgent.textContent = run.agent;
+      runSummaryTask.textContent = run.target;
+      runSummaryAgent.textContent = run.scope;
       runSummaryDuration.textContent = run.duration;
       runStartedAt.textContent = run.startedAt;
       runCommand.textContent = run.command;
+      runRecordPath.textContent = run.recordPath;
+      runScope.textContent = run.scope;
+      runTarget.textContent = run.target;
       runCwd.textContent = run.cwd;
       runModel.textContent = run.model;
       runSession.textContent = run.session;
@@ -2784,7 +2962,7 @@ How should initial authentication start?</pre>
       renderRunChecks(run);
       runFinishCommand.textContent = run.finishCommand;
       runDecisionSummary.textContent = localized(run.decisionSummary);
-      runInspectorTask.textContent = run.taskId;
+      runInspectorTask.textContent = run.target;
       runInspectorNext.textContent = run.nextTask;
       runInspectorState.textContent = localized(run.nextState);
 
@@ -2793,8 +2971,19 @@ How should initial authentication start?</pre>
       runMarkDoneButton.setAttribute("aria-disabled", String(!canMarkDone));
 
       if (currentTab === "runs") {
-        statusLeft.textContent = `${selectedRunId} ${run.status}`;
+        statusLeft.textContent = `${selectedRunId} ${run.scope}:${run.target}`;
       }
+    }
+
+    function keepSelectedRunVisible() {
+      if (runMatchesFilter(runRecords[selectedRunId])) return;
+      const nextRow = runRows.find((row) => runMatchesFilter(runRecords[row.dataset.runId]));
+      if (nextRow) {
+        selectedRunId = nextRow.dataset.runId;
+        return;
+      }
+      selectedRunFilter = "all";
+      selectedRunScope = "all";
     }
 
     function setActionTarget(button, target) {
@@ -2868,7 +3057,7 @@ How should initial authentication start?</pre>
         statusRight.textContent = copyText("status.terminalRight");
       } else if (currentTab === "runs") {
         const run = runRecords[selectedRunId];
-        statusLeft.textContent = `${selectedRunId} ${run.status}`;
+        statusLeft.textContent = `${selectedRunId} ${run.scope}:${run.target}`;
         statusCwd.textContent = "cwd /Users/qoo10/projects/bookmark-api";
         statusRight.textContent = copyText("status.runsRight");
       } else if (currentTab === "tasks") {
@@ -2967,22 +3156,29 @@ How should initial authentication start?</pre>
     runFilters.forEach((button) => {
       button.addEventListener("click", () => {
         selectedRunFilter = button.dataset.runFilter;
-        if (!runMatchesFilter(runRecords[selectedRunId])) {
-          const nextRow = runRows.find((row) => runMatchesFilter(runRecords[row.dataset.runId]));
-          if (nextRow) selectedRunId = nextRow.dataset.runId;
-        }
+        keepSelectedRunVisible();
+        renderRunSelection();
+        renderTab();
+      });
+    });
+    runScopeFilters.forEach((button) => {
+      button.addEventListener("click", () => {
+        selectedRunScope = button.dataset.runScope;
+        keepSelectedRunVisible();
         renderRunSelection();
         renderTab();
       });
     });
 
     runMarkDoneButton.addEventListener("click", () => {
+      const run = runRecords[selectedRunId];
+      runFinishCommand.textContent = run.finishCommand;
       runDecisionSummary.textContent = copyText("runsInspector.summaryDone");
     });
 
     runMarkBlockedButton.addEventListener("click", () => {
       const run = runRecords[selectedRunId];
-      runFinishCommand.textContent = `node scripts/p2a_execute.mjs finish --run-id ${selectedRunId} --status blocked --task-id ${run.taskId}`;
+      runFinishCommand.textContent = run.blockedCommand || `node scripts/p2a_execute.mjs finish --run-id ${selectedRunId} --status blocked --task-id ${run.taskId}`;
       runDecisionSummary.textContent = copyText("runsInspector.summaryBlocked");
     });
 

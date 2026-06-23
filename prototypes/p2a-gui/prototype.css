@@ -1932,7 +1932,29 @@ pre {
   border-bottom: 1px solid var(--border-1);
 }
 
+.run-scope-row {
+  display: grid;
+  grid-template-columns: 1.2fr 1fr 1fr;
+  gap: 6px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border-1);
+}
+
 .run-filter {
+  min-width: 0;
+  height: 26px;
+  border: 1px solid var(--border-1);
+  border-radius: var(--r-1);
+  background: transparent;
+  color: var(--fg-3);
+  font-size: var(--t-mono-s);
+  font-family: var(--font-mono);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.run-scope {
   min-width: 0;
   height: 26px;
   border: 1px solid var(--border-1);
@@ -1948,7 +1970,10 @@ pre {
 
 .run-filter:hover,
 .run-filter:focus-visible,
-.run-filter--active {
+.run-filter--active,
+.run-scope:hover,
+.run-scope:focus-visible,
+.run-scope--active {
   border-color: var(--border-2);
   background: var(--bg-3);
   color: var(--fg-1);
@@ -2131,7 +2156,7 @@ pre {
 
 .run-meta-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1.4fr) minmax(120px, 0.6fr) minmax(150px, 0.8fr);
+  grid-template-columns: minmax(0, 1.3fr) minmax(70px, 0.45fr) minmax(86px, 0.55fr) minmax(0, 1.25fr) minmax(110px, 0.6fr) minmax(130px, 0.8fr);
   gap: 0;
   margin: 12px 0 0;
   border: 1px solid var(--border-1);
