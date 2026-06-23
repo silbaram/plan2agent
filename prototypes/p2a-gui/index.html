@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>P2A GUI MVP - 온보딩 프로토타입</title>
   <link rel="stylesheet" href="../../.agents/skills/p2a-design-system/references/harness/design-system/harness.css">
-  <link rel="stylesheet" href="./prototype.css?v=session-top-menu">
+  <link rel="stylesheet" href="./prototype.css?v=embedded-docs">
 </head>
 <body>
   <main class="p2a-app overview-simple" aria-label="P2A GUI 온보딩 프로토타입" data-i18n-aria-label="app.label">
@@ -15,6 +15,7 @@
         <button class="app-menu-item" type="button" role="menuitem" data-i18n="menubar.file">파일</button>
         <button class="app-menu-item" type="button" role="menuitem" data-i18n="menubar.edit">편집</button>
         <button class="app-menu-item" type="button" role="menuitem" data-i18n="menubar.view">보기</button>
+        <button class="app-menu-item app-menu-item--compact-hide" type="button" role="menuitem" data-detail="artifact-index" data-i18n="menubar.documents">문서</button>
         <button class="app-menu-item app-menu-item--compact-hide" type="button" role="menuitem" data-i18n="menubar.project">프로젝트</button>
         <button class="app-menu-item app-menu-item--compact-hide" type="button" role="menuitem" data-i18n="menubar.run">실행</button>
         <button class="app-menu-item app-menu-item--compact-hide" type="button" role="menuitem" data-i18n="menubar.agent">Agent</button>
@@ -74,19 +75,15 @@
           <span>Ta</span>
           <small data-i18n="rail.tasks">작업</small>
         </button>
-        <button class="rail__item" type="button" aria-label="실행 기록" data-i18n-aria-label="rail.runs">
+        <button class="rail__item rail__item--disabled" type="button" aria-label="실행 기록" data-i18n-aria-label="rail.runs" disabled aria-disabled="true" data-i18n-title="rail.runsDisabled" title="다음 프로토타입에서 연결">
           <span>Ru</span>
           <small data-i18n="rail.runs">실행 기록</small>
-        </button>
-        <button class="rail__item" type="button" aria-label="산출물" data-i18n-aria-label="rail.artifacts">
-          <span>Ar</span>
-          <small data-i18n="rail.artifacts">산출물</small>
         </button>
         <button class="rail__item" type="button" aria-label="터미널" data-i18n-aria-label="rail.terminal" data-tab="terminal">
           <span>Te</span>
           <small data-i18n="rail.terminal">터미널</small>
         </button>
-        <button class="rail__item rail__item--bottom" type="button" aria-label="설정" data-i18n-aria-label="rail.settings">
+        <button class="rail__item rail__item--bottom rail__item--disabled" type="button" aria-label="설정" data-i18n-aria-label="rail.settings" disabled aria-disabled="true" data-i18n-title="rail.settingsDisabled" title="MVP 설정 화면 준비 중">
           <span>Se</span>
           <small data-i18n="rail.settings">설정</small>
         </button>
@@ -217,7 +214,7 @@
         </div>
 
         <div class="summary-actions">
-          <button class="btn btn--ghost" type="button" data-i18n="terminalSidebar.openArtifacts">Artifacts 전체 보기</button>
+          <button class="btn btn--ghost" type="button" data-detail="artifact-index" data-i18n="terminalSidebar.openArtifacts">문서 브라우저</button>
         </div>
       </aside>
 
@@ -366,6 +363,25 @@
               </div>
             </div>
 
+            <section class="doc-strip doc-strip--compact" aria-label="상태 근거 문서" data-i18n-aria-label="overviewDocs.label">
+              <div class="doc-strip__head">
+                <div>
+                  <div class="label" data-i18n="overviewDocs.kicker">근거 문서</div>
+                  <h4 data-i18n="overviewDocs.title">현재 상태를 만든 파일 4건</h4>
+                </div>
+                <button class="btn btn--ghost" type="button" data-detail="artifact-index" data-i18n="overviewDocs.browse">문서 브라우저</button>
+              </div>
+              <p class="doc-strip__summary">
+                <span class="mono">status.md</span>
+                <span class="sep"></span>
+                <span class="mono">spec.json</span>
+                <span class="sep"></span>
+                <span class="mono">task-graph.json</span>
+                <span class="sep"></span>
+                <span class="mono">review-report.md</span>
+              </p>
+            </section>
+
             <div class="task-row">
               <div class="dot-char" aria-hidden="true">
                 <span></span><span></span><span></span><span></span>
@@ -481,6 +497,14 @@
           <section class="task-work-brief">
             <div class="label" data-i18n="tasks.goalLabel">해야 할 일</div>
             <p id="task-goal-body" data-i18n="tasks.goalBody">북마크 목록 API에서 tag, owner, createdAfter 조건을 조합해 필요한 북마크만 반환하게 한다.</p>
+          </section>
+
+          <section class="task-doc-strip" aria-label="선택 작업 연결 문서" data-i18n-aria-label="tasks.docsLabel">
+            <div>
+              <div class="label" data-i18n="tasks.docsKicker">연결 문서</div>
+              <small id="task-doc-summary" data-i18n="tasks.docsSummary">task-3 근거 문서 3건</small>
+            </div>
+            <div id="task-doc-list" class="doc-chip-list" aria-label="선택 작업 문서 목록" data-i18n-aria-label="tasks.docsListLabel"></div>
           </section>
 
           <div class="task-work-grid">
@@ -671,8 +695,8 @@
         </div>
 
         <div class="inspector-actions">
-          <button id="inspector-primary-action" class="btn" type="button">작업에서 열기</button>
-          <button id="inspector-secondary-action" class="btn btn--ghost" type="button">산출물 근거 보기</button>
+          <button id="inspector-primary-action" class="btn" type="button" data-route="tasks">작업에서 열기</button>
+          <button id="inspector-secondary-action" class="btn btn--ghost" type="button" data-detail="artifact-index">문서 근거 보기</button>
         </div>
       </aside>
 
@@ -680,7 +704,7 @@
         <div class="panel-head">
           <div>
             <div class="label" data-i18n="tasksInspector.kicker">task readiness</div>
-            <h2 data-i18n="tasksInspector.title">실행 전 점검</h2>
+            <h2 data-i18n="tasksInspector.title">실행 가능 여부</h2>
           </div>
           <span id="task-inspector-pill" class="pill pill--ok" data-i18n="tasks.ready">ready</span>
         </div>
@@ -689,22 +713,22 @@
           <div class="readiness-row readiness-row--ok">
             <span class="mono">01</span>
             <div>
-              <strong data-i18n="tasksInspector.checkDeps">의존성 완료</strong>
+              <strong data-i18n="tasksInspector.checkDeps">실행 가능</strong>
               <small data-i18n="tasksInspector.checkDepsMeta">task-1, task-2 done</small>
             </div>
           </div>
           <div class="readiness-row readiness-row--ok">
             <span class="mono">02</span>
             <div>
-              <strong data-i18n="tasksInspector.checkCriteria">완료 기준 있음</strong>
-              <small data-i18n="tasksInspector.checkCriteriaMeta">3 acceptance criteria</small>
+              <strong data-i18n="tasksInspector.checkCriteria">검증 준비</strong>
+              <small data-i18n="tasksInspector.checkCriteriaMeta">./gradlew test</small>
             </div>
           </div>
           <div class="readiness-row readiness-row--warn">
             <span class="mono">03</span>
             <div>
-              <strong data-i18n="tasksInspector.checkRun">실행 기록 없음</strong>
-              <small data-i18n="tasksInspector.checkRunMeta">new run required</small>
+              <strong data-i18n="tasksInspector.checkRun">최근 run 없음</strong>
+              <small data-i18n="tasksInspector.checkRunMeta">새 세션 필요</small>
             </div>
           </div>
         </div>
@@ -764,20 +788,20 @@
         </div>
 
         <div class="terminal-sidebar-section">
-          <div class="label" data-i18n="terminalInspector.artifactLabel">예상 산출물</div>
+          <div class="label" data-i18n="terminalInspector.artifactLabel">연결 문서</div>
           <dl class="compact-dl">
             <dt>JSON</dt>
-            <dd class="mono">gate-a-intake/intake.json</dd>
+            <dd><button class="path-button mono" type="button" data-detail="intake-json">gate-a-intake/intake.json</button></dd>
             <dt>Markdown</dt>
-            <dd class="mono">gate-a-intake/intake.md</dd>
+            <dd><button class="path-button mono" type="button" data-detail="intake-md">gate-a-intake/intake.md</button></dd>
             <dt data-i18n="terminalInspector.status">상태</dt>
             <dd class="mono">blocked_on_user</dd>
           </dl>
         </div>
 
         <div class="inspector-actions">
-          <button class="btn" type="button" data-i18n="terminalInspector.primary">대화 계속</button>
-          <button class="btn btn--ghost" type="button" data-i18n="terminalInspector.secondary">intake 경로 복사</button>
+          <button id="terminal-continue" class="btn" type="button" data-i18n="terminalInspector.primary">대화 계속</button>
+          <button id="copy-intake-path" class="btn btn--ghost" type="button" data-i18n="terminalInspector.secondary">intake 경로 복사</button>
         </div>
       </aside>
     </section>
@@ -824,6 +848,8 @@
     const taskVerifyBody = document.querySelector("#task-verify-body");
     const taskNotesCount = document.querySelector("#task-notes-count");
     const taskNotesList = document.querySelector("#task-notes-list");
+    const taskDocSummary = document.querySelector("#task-doc-summary");
+    const taskDocList = document.querySelector("#task-doc-list");
     const taskInspectorPill = document.querySelector("#task-inspector-pill");
     const taskReadinessList = document.querySelector("#task-readiness-list");
     const taskVerificationCommand = document.querySelector("#task-verification-command");
@@ -857,6 +883,9 @@
     const rawLogState = document.querySelector("#raw-log-state");
     const rawLogViewButton = document.querySelector("#raw-log-view");
     const copySessionCommandButton = document.querySelector("#copy-session-command");
+    const agentMessage = document.querySelector("#agent-message");
+    const terminalContinueButton = document.querySelector("#terminal-continue");
+    const copyIntakePathButton = document.querySelector("#copy-intake-path");
     const sessionMenuToggle = document.querySelector("#session-menu-toggle");
     const sessionMenuBody = document.querySelector("#session-menu-body");
 
@@ -869,6 +898,7 @@
       "menubar.file": { ko: "파일", en: "File" },
       "menubar.edit": { ko: "편집", en: "Edit" },
       "menubar.view": { ko: "보기", en: "View" },
+      "menubar.documents": { ko: "문서", en: "Documents" },
       "menubar.project": { ko: "프로젝트", en: "Project" },
       "menubar.run": { ko: "실행", en: "Run" },
       "menubar.agent": { ko: "Agent", en: "Agent" },
@@ -883,9 +913,11 @@
       "rail.overview": { ko: "개요", en: "Overview" },
       "rail.tasks": { ko: "작업", en: "Tasks" },
       "rail.runs": { ko: "실행 기록", en: "Runs" },
+      "rail.runsDisabled": { ko: "다음 프로토타입에서 연결", en: "Connected in the next prototype" },
       "rail.artifacts": { ko: "산출물", en: "Artifacts" },
       "rail.terminal": { ko: "터미널", en: "Terminal" },
       "rail.settings": { ko: "설정", en: "Settings" },
+      "rail.settingsDisabled": { ko: "MVP 설정 화면 준비 중", en: "Settings screen is being prepared" },
       "sidebar.label": { ko: "최근 프로젝트", en: "Recent projects" },
       "sidebar.kicker": { ko: "최근 프로젝트", en: "recent projects" },
       "sidebar.title": { ko: "프로젝트 열기", en: "Open project" },
@@ -950,6 +982,14 @@
       "flow.node6.label": { ko: "실행 준비", en: "Ready" },
       "flow.node6.meta": { ko: "작업", en: "task" },
       "flow.node6.title": { ko: "준비 작업이 있으면 작업 탭에서 상세 확인합니다.", en: "If a ready task exists, review details in Tasks." },
+      "overviewDocs.label": { ko: "상태 근거 문서", en: "State evidence documents" },
+      "overviewDocs.kicker": { ko: "근거 문서", en: "evidence documents" },
+      "overviewDocs.title": { ko: "현재 상태를 만든 파일 4건", en: "4 files behind this state" },
+      "overviewDocs.browse": { ko: "문서 브라우저", en: "Document browser" },
+      "overviewDocs.statusState": { ko: "현재 상태", en: "current state" },
+      "overviewDocs.specState": { ko: "승인됨", en: "approved" },
+      "overviewDocs.graphState": { ko: "ready 1", en: "ready 1" },
+      "overviewDocs.reviewState": { ko: "통과", en: "passed" },
       "task.title": { ko: "task-3 - 북마크 필터 구현", en: "task-3 - implement bookmark filtering" },
       "task.meta": { ko: "할 일, 의존성 완료, 완료 기준 있음", en: "todo, dependencies done, acceptance criteria present" },
       "task.open": { ko: "작업에서 열기", en: "Open in Tasks" },
@@ -988,16 +1028,20 @@
       "tasks.filesLabel": { ko: "수정 파일", en: "Files to change" },
       "tasks.verifyLabel": { ko: "검증 범위", en: "Verification scope" },
       "tasks.verifyBody": { ko: "필터 없음, 단일 필터, 복합 필터 테스트를 실행하고 기존 목록 동작이 유지되는지 확인한다.", en: "Run no-filter, single-filter, and combined-filter tests, then confirm the existing list behavior still works." },
+      "tasks.docsLabel": { ko: "선택 작업 연결 문서", en: "Selected task linked documents" },
+      "tasks.docsKicker": { ko: "연결 문서", en: "linked documents" },
+      "tasks.docsSummary": { ko: "task-3 근거 문서 3건", en: "3 linked documents for task-3" },
+      "tasks.docsListLabel": { ko: "선택 작업 문서 목록", en: "Selected task document list" },
       "tasksInspector.label": { ko: "작업 인스펙터", en: "Task inspector" },
       "tasksInspector.kicker": { ko: "task readiness", en: "task readiness" },
-      "tasksInspector.title": { ko: "실행 전 점검", en: "Pre-run checks" },
+      "tasksInspector.title": { ko: "실행 가능 여부", en: "Run readiness" },
       "tasksInspector.readinessLabel": { ko: "실행 준비 점검", en: "Readiness checks" },
-      "tasksInspector.checkDeps": { ko: "의존성 완료", en: "Dependencies complete" },
+      "tasksInspector.checkDeps": { ko: "실행 가능", en: "Runnable" },
       "tasksInspector.checkDepsMeta": { ko: "task-1, task-2 done", en: "task-1, task-2 done" },
-      "tasksInspector.checkCriteria": { ko: "완료 기준 있음", en: "Acceptance criteria present" },
-      "tasksInspector.checkCriteriaMeta": { ko: "3 acceptance criteria", en: "3 acceptance criteria" },
-      "tasksInspector.checkRun": { ko: "실행 기록 없음", en: "No run yet" },
-      "tasksInspector.checkRunMeta": { ko: "new run required", en: "new run required" },
+      "tasksInspector.checkCriteria": { ko: "검증 준비", en: "Verification ready" },
+      "tasksInspector.checkCriteriaMeta": { ko: "./gradlew test", en: "./gradlew test" },
+      "tasksInspector.checkRun": { ko: "최근 run 없음", en: "No recent run" },
+      "tasksInspector.checkRunMeta": { ko: "새 세션 필요", en: "new session required" },
       "tasksInspector.verificationLabel": { ko: "verification", en: "verification" },
       "tasksInspector.command": { ko: "command", en: "command" },
       "tasksInspector.timeout": { ko: "timeout", en: "timeout" },
@@ -1056,7 +1100,7 @@
       "terminalSidebar.rawLogOn": { ko: "On · 백엔드 저장", en: "On · backend storage" },
       "terminalSidebar.rawLogOff": { ko: "Off · 저장 안 함", en: "Off · not stored" },
       "terminalSidebar.viewRawLog": { ko: "원문 로그 보기", en: "View raw log" },
-      "terminalSidebar.openArtifacts": { ko: "Artifacts 전체 보기", en: "Open all Artifacts" },
+      "terminalSidebar.openArtifacts": { ko: "문서 브라우저", en: "Document browser" },
       "terminal.label": { ko: "Gate A 터미널", en: "Gate A terminal" },
       "terminal.kicker": { ko: "Terminal · Gate A", en: "Terminal · Gate A" },
       "terminal.title": { ko: "AI agent와 intake 질문 답변", en: "Answer intake questions with the AI agent" },
@@ -1088,10 +1132,11 @@
       "terminalInspector.nd1State": { ko: "답변됨 · 팀 전체 공유", en: "answered · team-wide sharing" },
       "terminalInspector.nd2Title": { ko: "초기 인증", en: "Initial auth" },
       "terminalInspector.nd2State": { ko: "열림 · 답변 필요", en: "open · answer required" },
-      "terminalInspector.artifactLabel": { ko: "예상 산출물", en: "Expected artifacts" },
+      "terminalInspector.artifactLabel": { ko: "연결 문서", en: "Linked documents" },
       "terminalInspector.status": { ko: "상태", en: "Status" },
       "terminalInspector.primary": { ko: "대화 계속", en: "Continue conversation" },
       "terminalInspector.secondary": { ko: "intake 경로 복사", en: "Copy intake path" },
+      "terminalInspector.pathCopied": { ko: "복사됨", en: "Copied" },
     };
 
     const states = {
@@ -1108,7 +1153,7 @@
             [{ ko: "게이트", en: "Gate" }, { ko: "A-D 통과", en: "A-D passed" }, { ko: "검토 통과", en: "review clean" }],
             [{ ko: "최근 검증", en: "Latest verification" }, { ko: "미실행", en: "not run" }, { ko: "터미널에서 확인", en: "check in Terminal" }],
           ],
-          actions: [{ ko: "작업에서 열기", en: "Open in Tasks" }, { ko: "산출물 근거 보기", en: "View artifacts" }],
+          actions: [{ ko: "작업에서 열기", en: "Open in Tasks" }, { ko: "문서 근거 보기", en: "View documents" }],
         },
       },
       planning: {
@@ -1116,15 +1161,15 @@
         pill: { ko: "기획 중", en: "planning" },
         pillClass: "pill pill--info",
         summary: { ko: "기획 진행 중", en: "Planning in progress" },
-        action: { ko: "산출물 탭에서 확인", en: "Review in Artifacts" },
+        action: { ko: "문서 근거 확인", en: "Review documents" },
         flowIndex: 3,
         evidence: {
           rows: [
             [{ ko: "현재 게이트", en: "Current gate" }, { ko: "게이트 B/C", en: "Gate B/C" }, { ko: "명세 또는 작업 그래프 검토 중", en: "spec or task graph under review" }],
             [{ ko: "준비 작업", en: "Ready task" }, { ko: "없음", en: "none" }, { ko: "작업 그래프 승인 전", en: "before task graph approval" }],
-            [{ ko: "다음 위치", en: "Next location" }, { ko: "산출물", en: "Artifacts" }, { ko: "산출물 상태 확인", en: "review artifact state" }],
+            [{ ko: "다음 위치", en: "Next location" }, { ko: "문서", en: "Documents" }, { ko: "명세와 작업 그래프 확인", en: "review spec and task graph" }],
           ],
-          actions: [{ ko: "산출물에서 열기", en: "Open Artifacts" }, { ko: "작업 상태 보기", en: "View Tasks" }],
+          actions: [{ ko: "문서 브라우저", en: "Document browser" }, { ko: "작업 상태 보기", en: "View Tasks" }],
         },
       },
       empty: {
@@ -1132,15 +1177,15 @@
         pill: { ko: "비어 있음", en: "empty" },
         pillClass: "pill",
         summary: { ko: "설치만 됨", en: "Installed empty" },
-        action: { ko: "산출물 탭에서 확인", en: "Review in Artifacts" },
+        action: { ko: "터미널 안내 확인", en: "Review Terminal guidance" },
         flowIndex: 1,
         evidence: {
           rows: [
             [{ ko: "하네스", en: "Harness" }, { ko: "설치됨", en: "installed" }, { ko: "P2A 파일 구조 감지", en: "P2A file structure detected" }],
             [{ ko: "기획 산출물", en: "Planning artifacts" }, { ko: "없음", en: "none" }, { ko: "산출물 루트 없음", en: "no artifact root" }],
-            [{ ko: "다음 위치", en: "Next location" }, { ko: "산출물", en: "Artifacts" }, { ko: "가져오기 또는 기획 안내 확인", en: "review import or planning guidance" }],
+            [{ ko: "다음 위치", en: "Next location" }, { ko: "터미널", en: "Terminal" }, { ko: "가져오기 또는 기획 안내 확인", en: "review import or planning guidance" }],
           ],
-          actions: [{ ko: "산출물에서 열기", en: "Open Artifacts" }, { ko: "터미널 안내 보기", en: "View guidance" }],
+          actions: [{ ko: "문서 브라우저", en: "Document browser" }, { ko: "터미널 안내 보기", en: "View guidance" }],
         },
       },
       missing: {
@@ -1190,7 +1235,7 @@
             [{ ko: "복구 실행", en: "Repair action" }, { ko: "없음", en: "none" }, { ko: "GUI는 복구를 실행하지 않음", en: "GUI does not run repair" }],
             [{ ko: "다음 위치", en: "Next location" }, { ko: "터미널", en: "Terminal" }, { ko: "진단 안내", en: "diagnose guidance" }],
           ],
-          actions: [{ ko: "터미널 안내 보기", en: "View guidance" }, { ko: "산출물 확인", en: "Check Artifacts" }],
+          actions: [{ ko: "터미널 안내 보기", en: "View guidance" }, { ko: "문서 브라우저", en: "Document browser" }],
         },
       },
     };
@@ -1203,6 +1248,8 @@ Use the $p2a-harness skill on this idea:
 Use the $p2a-harness skill on this idea:
 Build a shared bookmark API for the team.`,
     };
+
+    const intakePath = "artifacts/bookmark-api/gate-a-intake/intake.md";
 
     const detailTemplates = {
       "local-config": {
@@ -1262,6 +1309,67 @@ Build a shared bookmark API for the team.`,
         title: { ko: "agent 세션을 시작한 명령", en: "Command that opened the agent session" },
         body: () => `<pre>${localized(sessionCommandText)}</pre>`,
       },
+      "artifact-index": {
+        variant: "document",
+        kicker: { ko: "문서 브라우저", en: "document browser" },
+        title: { ko: "프로젝트 문서 근거", en: "Project document evidence" },
+        body: {
+          ko: `<div class="document-browser">
+  <button class="document-browser-row" type="button" data-detail="status">
+    <span class="mono">status.md</span>
+    <strong>현재 상태와 열린 결정</strong>
+    <small class="mono">artifacts/bookmark-api/status.md</small>
+  </button>
+  <button class="document-browser-row" type="button" data-detail="spec-doc">
+    <span class="mono">spec.json</span>
+    <strong>Gate B 승인 명세</strong>
+    <small class="mono">gate-b-spec/spec.json</small>
+  </button>
+  <button class="document-browser-row" type="button" data-detail="task-graph-doc">
+    <span class="mono">task-graph.json</span>
+    <strong>Gate C 작업 그래프</strong>
+    <small class="mono">gate-c-task-graph/task-graph.json</small>
+  </button>
+  <button class="document-browser-row" type="button" data-detail="review-doc">
+    <span class="mono">review-report.md</span>
+    <strong>Gate D 검토 결과</strong>
+    <small class="mono">gate-d-review/review-report.md</small>
+  </button>
+  <button class="document-browser-row" type="button" data-detail="intake-md">
+    <span class="mono">intake.md</span>
+    <strong>Gate A 질문과 답변</strong>
+    <small class="mono">gate-a-intake/intake.md</small>
+  </button>
+</div>`,
+          en: `<div class="document-browser">
+  <button class="document-browser-row" type="button" data-detail="status">
+    <span class="mono">status.md</span>
+    <strong>Current state and open decisions</strong>
+    <small class="mono">artifacts/bookmark-api/status.md</small>
+  </button>
+  <button class="document-browser-row" type="button" data-detail="spec-doc">
+    <span class="mono">spec.json</span>
+    <strong>Gate B approved spec</strong>
+    <small class="mono">gate-b-spec/spec.json</small>
+  </button>
+  <button class="document-browser-row" type="button" data-detail="task-graph-doc">
+    <span class="mono">task-graph.json</span>
+    <strong>Gate C task graph</strong>
+    <small class="mono">gate-c-task-graph/task-graph.json</small>
+  </button>
+  <button class="document-browser-row" type="button" data-detail="review-doc">
+    <span class="mono">review-report.md</span>
+    <strong>Gate D review result</strong>
+    <small class="mono">gate-d-review/review-report.md</small>
+  </button>
+  <button class="document-browser-row" type="button" data-detail="intake-md">
+    <span class="mono">intake.md</span>
+    <strong>Gate A questions and answers</strong>
+    <small class="mono">gate-a-intake/intake.md</small>
+  </button>
+</div>`,
+        },
+      },
       "raw-log": {
         variant: "log",
         kicker: { ko: "원문 로그", en: "raw log" },
@@ -1296,6 +1404,161 @@ Build a shared bookmark API for the team.`,
 [11:41:21] agent  ND-1 How should bookmark visibility start?
 [11:43:22] user   Keep only team-wide sharing for the MVP and defer personal scope.
 [11:44:03] agent  ND-2 How should initial authentication work?</pre>
+</article>`,
+        },
+      },
+      "spec-doc": {
+        variant: "document",
+        kicker: { ko: "gate-b-spec/spec.json", en: "gate-b-spec/spec.json" },
+        title: { ko: "Gate B 승인 명세", en: "Gate B approved spec" },
+        body: {
+          ko: `<article class="document-viewer">
+<div class="document-viewer__meta">
+  <span class="mono">artifacts/bookmark-api/gate-b-spec/spec.json</span>
+  <span class="pill pill--ok">approved</span>
+</div>
+<pre class="document-viewer__body">{
+  "project_id": "bookmark-api",
+  "iteration": "iter-002",
+  "product_scope": "팀 공유 북마크 API MVP",
+  "in_scope": [
+    "팀 전체 공유 북마크 저장",
+    "tag, owner, createdAfter 필터",
+    "목록 API와 repository 테스트"
+  ],
+  "out_of_scope": [
+    "개인 북마크 범위",
+    "사내 SSO",
+    "권한 정책 UI"
+  ],
+  "acceptance_summary": "필터 조합이 기존 목록 동작을 깨지 않고 동작한다."
+}</pre>
+</article>`,
+          en: `<article class="document-viewer">
+<div class="document-viewer__meta">
+  <span class="mono">artifacts/bookmark-api/gate-b-spec/spec.json</span>
+  <span class="pill pill--ok">approved</span>
+</div>
+<pre class="document-viewer__body">{
+  "project_id": "bookmark-api",
+  "iteration": "iter-002",
+  "product_scope": "Team shared bookmark API MVP",
+  "in_scope": [
+    "Store team-wide shared bookmarks",
+    "tag, owner, and createdAfter filters",
+    "List API and repository tests"
+  ],
+  "out_of_scope": [
+    "Personal bookmark scope",
+    "Company SSO",
+    "Authorization policy UI"
+  ],
+  "acceptance_summary": "Combined filters work without breaking existing list behavior."
+}</pre>
+</article>`,
+        },
+      },
+      "task-graph-doc": {
+        variant: "document",
+        kicker: { ko: "gate-c-task-graph/task-graph.json", en: "gate-c-task-graph/task-graph.json" },
+        title: { ko: "Gate C 작업 그래프", en: "Gate C task graph" },
+        body: {
+          ko: `<article class="document-viewer">
+<div class="document-viewer__meta">
+  <span class="mono">artifacts/bookmark-api/gate-c-task-graph/task-graph.json</span>
+  <span class="pill pill--ok">1 ready</span>
+</div>
+<pre class="document-viewer__body">{
+  "iteration": "iter-002",
+  "tasks": [
+    { "id": "task-1", "status": "done", "title": "북마크 모델 스키마" },
+    { "id": "task-2", "status": "done", "title": "저장소 인터페이스" },
+    {
+      "id": "task-3",
+      "status": "ready",
+      "title": "북마크 필터 구현",
+      "depends_on": ["task-1", "task-2"]
+    },
+    {
+      "id": "task-4",
+      "status": "blocked",
+      "title": "인증 컨텍스트 연결",
+      "depends_on": ["task-3", "ND-2"]
+    }
+  ]
+}</pre>
+</article>`,
+          en: `<article class="document-viewer">
+<div class="document-viewer__meta">
+  <span class="mono">artifacts/bookmark-api/gate-c-task-graph/task-graph.json</span>
+  <span class="pill pill--ok">1 ready</span>
+</div>
+<pre class="document-viewer__body">{
+  "iteration": "iter-002",
+  "tasks": [
+    { "id": "task-1", "status": "done", "title": "Bookmark model schema" },
+    { "id": "task-2", "status": "done", "title": "Repository interface" },
+    {
+      "id": "task-3",
+      "status": "ready",
+      "title": "Implement bookmark filtering",
+      "depends_on": ["task-1", "task-2"]
+    },
+    {
+      "id": "task-4",
+      "status": "blocked",
+      "title": "Connect auth context",
+      "depends_on": ["task-3", "ND-2"]
+    }
+  ]
+}</pre>
+</article>`,
+        },
+      },
+      "review-doc": {
+        variant: "document",
+        kicker: { ko: "gate-d-review/review-report.md", en: "gate-d-review/review-report.md" },
+        title: { ko: "Gate D 검토 결과", en: "Gate D review result" },
+        body: {
+          ko: `<article class="document-viewer">
+<div class="document-viewer__meta">
+  <span class="mono">artifacts/bookmark-api/gate-d-review/review-report.md</span>
+  <span class="pill pill--ok">passed</span>
+</div>
+<pre class="document-viewer__body"># Gate D review
+
+## 결과
+승인. task-3은 실행 가능하다.
+
+## 확인한 사항
+- task-1과 task-2가 완료되어 필터 구현의 선행 조건이 충족됨
+- task-4는 ND-2 인증 결정 전까지 blocked 유지
+- verification command는 ./gradlew test로 충분함
+
+## 실행 시 주의
+- Controller는 query parsing만 담당
+- Repository 필터는 null-safe 조건 유지
+- 인증 컨텍스트 연결은 task-4에서 처리</pre>
+</article>`,
+          en: `<article class="document-viewer">
+<div class="document-viewer__meta">
+  <span class="mono">artifacts/bookmark-api/gate-d-review/review-report.md</span>
+  <span class="pill pill--ok">passed</span>
+</div>
+<pre class="document-viewer__body"># Gate D review
+
+## Result
+Approved. task-3 can be executed.
+
+## Checked
+- task-1 and task-2 are complete, so filter implementation is unblocked
+- task-4 stays blocked until the ND-2 auth decision
+- verification command ./gradlew test is sufficient
+
+## Execution notes
+- Controller handles query parsing only
+- Repository filters stay null-safe
+- Auth context is handled in task-4</pre>
 </article>`,
         },
       },
@@ -1491,9 +1754,9 @@ How should initial authentication start?</pre>
           { ko: "DB migration은 별도 task로 분리하지 않는다.", en: "Do not split DB migration into a separate task." },
         ],
         readiness: [
-          [{ ko: "완료됨", en: "Completed" }, { ko: "model tests passed", en: "model tests passed" }, "ok"],
-          [{ ko: "검증 기록 있음", en: "Verification recorded" }, { ko: "run-002 · pass", en: "run-002 · pass" }, "ok"],
-          [{ ko: "재실행 불필요", en: "No rerun needed" }, { ko: "task closed", en: "task closed" }, "ok"],
+          [{ ko: "상태 완료", en: "Done state" }, { ko: "task closed", en: "task closed" }, "ok"],
+          [{ ko: "최근 run", en: "Latest run" }, { ko: "run-002 · pass", en: "run-002 · pass" }, "ok"],
+          [{ ko: "실행 비활성", en: "Run disabled" }, { ko: "rerun not needed", en: "rerun not needed" }, "ok"],
         ],
         verification: { command: "./gradlew test", timeout: "120s", latest: { ko: "통과 · run-002", en: "passed · run-002" } },
       },
@@ -1515,9 +1778,9 @@ How should initial authentication start?</pre>
           { ko: "필터 구현은 task-3에서 처리한다.", en: "Filter implementation stays in task-3." },
         ],
         readiness: [
-          [{ ko: "완료됨", en: "Completed" }, { ko: "repository contract ready", en: "repository contract ready" }, "ok"],
-          [{ ko: "의존성 없음", en: "No dependencies" }, { ko: "standalone task", en: "standalone task" }, "ok"],
-          [{ ko: "검증 기록 있음", en: "Verification recorded" }, { ko: "run-003 · pass", en: "run-003 · pass" }, "ok"],
+          [{ ko: "상태 완료", en: "Done state" }, { ko: "repository contract ready", en: "repository contract ready" }, "ok"],
+          [{ ko: "최근 run", en: "Latest run" }, { ko: "run-003 · pass", en: "run-003 · pass" }, "ok"],
+          [{ ko: "실행 비활성", en: "Run disabled" }, { ko: "rerun not needed", en: "rerun not needed" }, "ok"],
         ],
         verification: { command: "./gradlew test", timeout: "120s", latest: { ko: "통과 · run-003", en: "passed · run-003" } },
       },
@@ -1543,9 +1806,9 @@ How should initial authentication start?</pre>
           { ko: "인증 컨텍스트는 task-4에서 연결한다.", en: "Auth context is connected in task-4." },
         ],
         readiness: [
-          [{ ko: "의존성 완료", en: "Dependencies complete" }, { ko: "task-1, task-2 done", en: "task-1, task-2 done" }, "ok"],
-          [{ ko: "완료 기준 있음", en: "Acceptance criteria present" }, { ko: "3 acceptance criteria", en: "3 acceptance criteria" }, "ok"],
-          [{ ko: "실행 기록 없음", en: "No run yet" }, { ko: "new run required", en: "new run required" }, "warn"],
+          [{ ko: "실행 가능", en: "Runnable" }, { ko: "task-1, task-2 done", en: "task-1, task-2 done" }, "ok"],
+          [{ ko: "검증 준비", en: "Verification ready" }, { ko: "./gradlew test", en: "./gradlew test" }, "ok"],
+          [{ ko: "최근 run 없음", en: "No recent run" }, { ko: "새 세션 필요", en: "new session required" }, "warn"],
         ],
         verification: { command: "./gradlew test", timeout: "120s", latest: { ko: "아직 실행 안 됨", en: "not run yet" } },
       },
@@ -1568,9 +1831,9 @@ How should initial authentication start?</pre>
           { ko: "task-3 필터 동작을 변경하지 않는다.", en: "Do not change task-3 filtering behavior." },
         ],
         readiness: [
-          [{ ko: "의존성 대기", en: "Waiting on dependency" }, { ko: "task-3 not run yet", en: "task-3 not run yet" }, "warn"],
-          [{ ko: "결정 필요", en: "Decision required" }, { ko: "ND-2 initial auth", en: "ND-2 initial auth" }, "warn"],
-          [{ ko: "실행 불가", en: "Cannot run" }, { ko: "blocked", en: "blocked" }, "warn"],
+          [{ ko: "실행 대기", en: "Waiting to run" }, { ko: "task-3 not run yet", en: "task-3 not run yet" }, "warn"],
+          [{ ko: "막힌 결정", en: "Blocking decision" }, { ko: "ND-2 initial auth", en: "ND-2 initial auth" }, "warn"],
+          [{ ko: "실행 비활성", en: "Run disabled" }, { ko: "blocked", en: "blocked" }, "warn"],
         ],
         verification: { command: "./gradlew test", timeout: "120s", latest: { ko: "blocked", en: "blocked" } },
       },
@@ -1586,6 +1849,56 @@ How should initial authentication start?</pre>
       done: "pill pill--ok",
       ready: "pill pill--ok",
       blocked: "pill pill--warn",
+    };
+
+    const taskDocumentLinks = {
+      "task-1": [
+        { detail: "spec-doc", label: { ko: "명세", en: "Spec" }, path: "gate-b-spec/spec.json", state: { ko: "model scope", en: "model scope" } },
+        { detail: "task-graph-doc", label: { ko: "작업 그래프", en: "Task graph" }, path: "gate-c-task-graph/task-graph.json", state: { ko: "done", en: "done" } },
+        { detail: "review-doc", label: { ko: "검토", en: "Review" }, path: "gate-d-review/review-report.md", state: { ko: "passed", en: "passed" } },
+      ],
+      "task-2": [
+        { detail: "spec-doc", label: { ko: "명세", en: "Spec" }, path: "gate-b-spec/spec.json", state: { ko: "repository scope", en: "repository scope" } },
+        { detail: "task-graph-doc", label: { ko: "작업 그래프", en: "Task graph" }, path: "gate-c-task-graph/task-graph.json", state: { ko: "done", en: "done" } },
+        { detail: "review-doc", label: { ko: "검토", en: "Review" }, path: "gate-d-review/review-report.md", state: { ko: "passed", en: "passed" } },
+      ],
+      "task-3": [
+        { detail: "spec-doc", label: { ko: "명세", en: "Spec" }, path: "gate-b-spec/spec.json", state: { ko: "filter scope", en: "filter scope" } },
+        { detail: "task-graph-doc", label: { ko: "작업 그래프", en: "Task graph" }, path: "gate-c-task-graph/task-graph.json", state: { ko: "ready", en: "ready" } },
+        { detail: "review-doc", label: { ko: "검토", en: "Review" }, path: "gate-d-review/review-report.md", state: { ko: "passed", en: "passed" } },
+      ],
+      "task-4": [
+        { detail: "intake-md", label: { ko: "인테이크", en: "Intake" }, path: "gate-a-intake/intake.md", state: { ko: "ND-2 open", en: "ND-2 open" } },
+        { detail: "task-graph-doc", label: { ko: "작업 그래프", en: "Task graph" }, path: "gate-c-task-graph/task-graph.json", state: { ko: "blocked", en: "blocked" } },
+        { detail: "review-doc", label: { ko: "검토", en: "Review" }, path: "gate-d-review/review-report.md", state: { ko: "waiting", en: "waiting" } },
+      ],
+    };
+
+    const stateActionTargets = {
+      "execution-ready": {
+        primary: { type: "route", value: "tasks" },
+        secondary: { type: "detail", value: "artifact-index" },
+      },
+      planning: {
+        primary: { type: "detail", value: "artifact-index" },
+        secondary: { type: "route", value: "tasks" },
+      },
+      empty: {
+        primary: { type: "detail", value: "artifact-index" },
+        secondary: { type: "route", value: "terminal" },
+      },
+      missing: {
+        primary: { type: "route", value: "terminal" },
+        secondary: { type: "detail", value: "artifact-index" },
+      },
+      outdated: {
+        primary: { type: "route", value: "terminal" },
+        secondary: { type: "detail", value: "artifact-index" },
+      },
+      broken: {
+        primary: { type: "route", value: "terminal" },
+        secondary: { type: "detail", value: "artifact-index" },
+      },
     };
 
     let currentState = "execution-ready";
@@ -1672,6 +1985,41 @@ How should initial authentication start?</pre>
       });
     }
 
+    function renderTaskDocuments() {
+      const docs = taskDocumentLinks[selectedTaskId] || [];
+      taskDocSummary.textContent = currentLocale === "ko"
+        ? `${selectedTaskId} 근거 문서 ${docs.length}건`
+        : `${docs.length} linked documents for ${selectedTaskId}`;
+      taskDocList.textContent = "";
+
+      docs.forEach((doc) => {
+        const button = document.createElement("button");
+        button.className = "doc-chip";
+        button.type = "button";
+        button.dataset.detail = doc.detail;
+
+        const label = document.createElement("strong");
+        label.textContent = localized(doc.label);
+
+        const path = document.createElement("small");
+        path.className = "mono";
+        path.textContent = doc.path;
+
+        const state = document.createElement("em");
+        state.textContent = localized(doc.state);
+
+        button.append(label, path, state);
+        taskDocList.appendChild(button);
+      });
+    }
+
+    function setActionTarget(button, target) {
+      button.removeAttribute("data-route");
+      button.removeAttribute("data-detail");
+      if (!target) return;
+      button.dataset[target.type] = target.value;
+    }
+
     function renderTaskSelection() {
       const task = graphTasks[selectedTaskId];
       if (!task) return;
@@ -1697,6 +2045,7 @@ How should initial authentication start?</pre>
       taskVerifyBody.textContent = localized(task.verifyBody);
       taskNotesCount.textContent = String(task.notes.length);
       renderTextList(taskNotesList, task.notes);
+      renderTaskDocuments();
 
       taskInspectorPill.className = taskStatusPillClass[task.status];
       taskInspectorPill.textContent = statusLabel;
@@ -1764,6 +2113,9 @@ How should initial authentication start?</pre>
       });
       inspectorPrimaryAction.textContent = localized(state.evidence.actions[0]);
       inspectorSecondaryAction.textContent = localized(state.evidence.actions[1]);
+      const targets = stateActionTargets[currentState] || stateActionTargets["execution-ready"];
+      setActionTarget(inspectorPrimaryAction, targets.primary);
+      setActionTarget(inspectorSecondaryAction, targets.secondary);
       flowNodes.forEach((node) => {
         const index = Number(node.dataset.flowIndex);
         node.classList.remove("flow-node--done", "flow-node--active", "flow-node--pending", "flow-node--issue");
@@ -1816,11 +2168,11 @@ How should initial authentication start?</pre>
       });
     });
 
-    document.querySelectorAll("[data-route]").forEach((button) => {
-      button.addEventListener("click", () => {
-        currentTab = button.dataset.route;
-        renderTab();
-      });
+    document.addEventListener("click", (event) => {
+      const button = event.target.closest("[data-route]");
+      if (!button || button.disabled || button.getAttribute("aria-disabled") === "true") return;
+      currentTab = button.dataset.route;
+      renderTab();
     });
 
     function openDetail(detail) {
@@ -1837,13 +2189,13 @@ How should initial authentication start?</pre>
       sessionMenuBody.hidden = true;
     }
 
-    document.querySelectorAll("[data-detail]").forEach((button) => {
-      button.addEventListener("click", () => {
-        const detail = detailTemplates[button.dataset.detail];
-        if (!detail) return;
-        closeSessionMenu();
-        openDetail(detail);
-      });
+    document.addEventListener("click", (event) => {
+      const button = event.target.closest("[data-detail]");
+      if (!button || button.disabled || button.getAttribute("aria-disabled") === "true") return;
+      const detail = detailTemplates[button.dataset.detail];
+      if (!detail) return;
+      closeSessionMenu();
+      openDetail(detail);
     });
 
     rawLogToggle.addEventListener("click", () => {
@@ -1864,6 +2216,10 @@ How should initial authentication start?</pre>
 
     document.addEventListener("keydown", (event) => {
       if (event.key !== "Escape") return;
+      if (!modal.hidden) {
+        modal.hidden = true;
+        modal.dataset.variant = "";
+      }
       closeSessionMenu();
     });
 
@@ -1879,6 +2235,22 @@ How should initial authentication start?</pre>
       }, 1200);
     });
 
+    terminalContinueButton.addEventListener("click", () => {
+      agentMessage.focus();
+    });
+
+    copyIntakePathButton.addEventListener("click", async () => {
+      try {
+        await navigator.clipboard.writeText(intakePath);
+      } catch (error) {
+        // Browser clipboard permissions vary in static prototype previews.
+      }
+      copyIntakePathButton.textContent = copyText("terminalInspector.pathCopied");
+      window.setTimeout(() => {
+        copyIntakePathButton.textContent = copyText("terminalInspector.secondary");
+      }, 1200);
+    });
+
     function openDocument(button) {
       const detail = detailTemplates[button.dataset.document];
       if (!detail) return;
@@ -1889,8 +2261,8 @@ How should initial authentication start?</pre>
       button.addEventListener("click", () => {
         documentRows.forEach((item) => item.classList.remove("gate-doc-row--active"));
         button.classList.add("gate-doc-row--active");
+        openDocument(button);
       });
-      button.addEventListener("dblclick", () => openDocument(button));
       button.addEventListener("keydown", (event) => {
         if (event.key !== "Enter" && event.key !== " ") return;
         event.preventDefault();
