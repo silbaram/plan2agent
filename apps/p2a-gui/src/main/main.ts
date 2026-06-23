@@ -4,6 +4,7 @@ import path from "node:path";
 import {
   IPC_CHANNELS,
   type AgentTool,
+  type ArtifactFileReadRequest,
   type ExecutionFinishRunRequest,
   type ExecutionStartRunRequest,
   type ProjectOpenResult,
@@ -26,6 +27,7 @@ import {
 } from "./localConfig";
 import { PtySessionManager } from "./ptySessionManager";
 import { finishRun, startRun } from "./executionActions";
+import { readArtifactFile } from "./artifactFiles";
 import { loadProjectSnapshot } from "./projectLoader";
 
 declare const MAIN_WINDOW_VITE_DEV_SERVER_URL: string | undefined;
@@ -227,6 +229,9 @@ function registerIpcHandlers(): void {
       return setDefaultAgentTool(guiConfigPath(), rootPath, agentTool);
     },
   );
+  ipcMain.handle(IPC_CHANNELS.artifactReadFile, (_event, request: ArtifactFileReadRequest) => {
+    return readArtifactFile(request);
+  });
   ipcMain.handle(IPC_CHANNELS.terminalStart, (event, request: TerminalSessionStartRequest) => {
     return ptySessions.start(event.sender, request);
   });

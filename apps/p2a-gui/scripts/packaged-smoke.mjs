@@ -280,6 +280,18 @@ async function runUiSmoke({ executablePath, projectRoot, userDataRoot }) {
     await page.locator(".recent-row__main", { hasText: projectName }).click();
     await page.getByText("Execution ready").first().waitFor({ state: "visible", timeout: 15_000 });
 
+    await page.getByRole("button", { name: "Artifacts" }).click();
+    await page.getByText("Artifact documents").waitFor({ state: "visible", timeout: 15_000 });
+    await page.locator(".artifact-document-row", { hasText: "gate-b-spec/spec.json" })
+      .getByRole("button", { name: "Open" })
+      .click();
+    await page.getByRole("dialog", { name: "Spec" }).waitFor({
+      state: "visible",
+      timeout: 15_000,
+    });
+    await page.getByText("p2a.spec.v1").waitFor({ state: "visible", timeout: 15_000 });
+    await page.getByRole("button", { name: "Close artifact viewer" }).click();
+
     await page.getByRole("button", { name: "Settings" }).click();
     await page.getByText("Project defaults").waitFor({ state: "visible", timeout: 15_000 });
     await assertInputValue(

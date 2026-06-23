@@ -24,6 +24,7 @@ import {
 import { TerminalSurface } from "./TerminalSurface";
 import type {
   AgentTool,
+  ArtifactFileReadResult,
   ArtifactSummary,
   DiagnosticSeverity,
   ExecutionCommandResult,
@@ -43,6 +44,20 @@ type OpenState = "idle" | "loading" | "canceled" | "error";
 type WatchState = "idle" | "watching" | "refreshing" | "error";
 type ConfigState = "loading" | "ready" | "error";
 type ExecutionActionState = "idle" | "running" | "error";
+type ArtifactFileState =
+  | { status: "idle" }
+  | { status: "loading"; document: ArtifactDocument }
+  | { status: "ready"; document: ArtifactDocument; file: ArtifactFileReadResult }
+  | { status: "error"; document: ArtifactDocument; message: string };
+
+type ArtifactDocument = {
+  id: string;
+  label: string;
+  group: "status" | "gate" | "task" | "run";
+  relativePath: string;
+  meta: string;
+  state: string;
+};
 
 const failureClassOptions: FailureClass[] = [
   "verification_failed",
@@ -66,6 +81,7 @@ const steps = [
   ["2C-2", "Supervisor controls", "done"],
   ["2D", "Finish verification", "done"],
   ["2E", "Start run", "done"],
+  ["2K", "Artifact viewer", "done"],
   ["smoke", "End-to-end smoke", "done"],
 ] as const;
 
@@ -73,6 +89,7 @@ const navItems = [
   ["overview", "Overview", Activity],
   ["tasks", "Tasks", Layers],
   ["runs", "Runs", History],
+  ["artifacts", "Artifacts", FileJson],
   ["terminal", "Terminal", TerminalSquare],
   ["settings", "Settings", Settings],
 ] as const;
@@ -92,6 +109,12 @@ function formatPath(value: string | null | undefined): string {
 
 function formatCount(value: number): string {
   return new Intl.NumberFormat("en-US").format(value);
+}
+
+function formatBytes(value: number): string {
+  if (value < 1024) return `${value} B`;
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
+  return `${(value / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 function formatTime(value: string | null | undefined): string {
@@ -178,6 +201,77 @@ function joinDisplayPath(rootPath: string, relativePath: string): string {
   return `${rootPath.replace(/\/$/, "")}/${relativePath}`;
 }
 
+function projectRelativeArtifactPath(artifact: ArtifactSummary, relativePath: string): string {
+  if (relativePath.startsWith("/") || artifact.relativePath === ".") return relativePath;
+  if (relativePath === artifact.relativePath || relativePath.startsWith(`${artifact.relativePath}/`)) {
+    return relativePath;
+  }
+  return `${artifact.relativePath}/${relativePath}`;
+}
+
+function artifactDocumentId(artifact: ArtifactSummary, relativePath: string): string {
+  return `${artifact.rootPath}:${relativePath}`;
+}
+
+function buildArtifactDocuments(artifact: ArtifactSummary | null): ArtifactDocument[] {
+  if (!artifact) return [];
+
+  const documents: ArtifactDocument[] = [];
+  const seenPaths = new Set<string>();
+  const addDocument = (
+    label: string,
+    group: ArtifactDocument["group"],
+    relativePath: string | null,
+    meta: string,
+    state: string,
+  ) => {
+    if (!relativePath || seenPaths.has(relativePath)) return;
+    seenPaths.add(relativePath);
+    documents.push({
+      id: artifactDocumentId(artifact, relativePath),
+      label,
+      group,
+      relativePath,
+      meta,
+      state,
+    });
+  };
+
+  addDocument("Status", "status", artifact.statusPath, "markdown", artifact.statusPath ? "present" : "missing");
+
+  for (const validation of artifact.validations) {
+    addDocument(
+      validation.label,
+      validation.id === "task-graph" ? "task" : "gate",
+      validation.relativePath,
+      validation.id,
+      validation.status,
+    );
+  }
+
+  for (const run of artifact.runs) {
+    addDocument(
+      run.runId,
+      "run",
+      projectRelativeArtifactPath(artifact, run.runRef),
+      run.taskId,
+      run.status,
+    );
+  }
+
+  return documents;
+}
+
+function formatArtifactPreview(file: ArtifactFileReadResult): string {
+  if (file.kind !== "json") return file.content;
+
+  try {
+    return JSON.stringify(JSON.parse(file.content), null, 2);
+  } catch {
+    return file.content;
+  }
+}
+
 function statusTextFor(snapshot: ProjectSnapshot | null, openState: OpenState): string {
   if (openState === "loading") return "loading project";
   if (openState === "canceled") return "folder selection canceled";
@@ -212,6 +306,7 @@ function impactText(action: OnboardingAction): string {
 function tabCopy(tab: ActiveTab): { label: string; title: string } {
   if (tab === "tasks") return { label: "task graph", title: "Tasks" };
   if (tab === "runs") return { label: "run history", title: "Runs" };
+  if (tab === "artifacts") return { label: "artifact review", title: "Artifacts" };
   if (tab === "terminal") return { label: "terminal guidance", title: "Terminal" };
   if (tab === "settings") return { label: "settings", title: "Settings" };
   return { label: "project loader", title: "Overview" };
@@ -228,6 +323,11 @@ export default function App() {
   const [lastWatchEvent, setLastWatchEvent] = useState<ProjectWatchEvent | null>(null);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
+  const [selectedArtifactRootPath, setSelectedArtifactRootPath] = useState<string | null>(null);
+  const [selectedArtifactDocumentId, setSelectedArtifactDocumentId] = useState<string | null>(null);
+  const [artifactFileState, setArtifactFileState] = useState<ArtifactFileState>({
+    status: "idle",
+  });
   const [startState, setStartState] = useState<ExecutionActionState>("idle");
   const [finishState, setFinishState] = useState<ExecutionActionState>("idle");
   const [finishStatus, setFinishStatus] = useState<ExecutionFinishStatus>("auto");
@@ -313,6 +413,17 @@ export default function App() {
   const artifact = primaryArtifact(projectSnapshot);
   const tasks = artifact?.tasks ?? [];
   const runs = artifact?.runs ?? [];
+  const selectedArtifact =
+    projectSnapshot?.artifacts.find((item) => item.rootPath === selectedArtifactRootPath) ??
+    artifact;
+  const artifactDocuments = useMemo(
+    () => buildArtifactDocuments(selectedArtifact ?? null),
+    [selectedArtifact],
+  );
+  const selectedArtifactDocument =
+    artifactDocuments.find((document) => document.id === selectedArtifactDocumentId) ??
+    artifactDocuments[0] ??
+    null;
   const onboarding = projectSnapshot?.onboarding ?? null;
   const onboardingActions = onboarding
     ? [onboarding.primaryAction, ...onboarding.secondaryActions]
@@ -343,6 +454,23 @@ export default function App() {
       nextRuns.some((run) => run.runId === current) ? current : nextSelectedRunId,
     );
   }, [projectSnapshot?.generatedAt, projectSnapshot?.rootPath]);
+
+  useEffect(() => {
+    const nextArtifacts = projectSnapshot?.artifacts ?? [];
+    const nextArtifact =
+      nextArtifacts.find((item) => item.rootPath === selectedArtifactRootPath) ??
+      nextArtifacts[0] ??
+      null;
+    setSelectedArtifactRootPath(nextArtifact?.rootPath ?? null);
+  }, [projectSnapshot?.generatedAt, projectSnapshot?.rootPath, selectedArtifactRootPath]);
+
+  useEffect(() => {
+    setSelectedArtifactDocumentId((current) =>
+      artifactDocuments.some((document) => document.id === current)
+        ? current
+        : artifactDocuments[0]?.id ?? null,
+    );
+  }, [artifactDocuments]);
 
   useEffect(() => {
     setStartResult(null);
@@ -415,6 +543,30 @@ export default function App() {
   function selectRun(run: WorkbenchRun) {
     setSelectedRunId(run.runId);
     setSelectedTaskId(run.taskId);
+  }
+
+  async function openArtifactDocument(document: ArtifactDocument | null) {
+    if (!projectSnapshot || !document) return;
+
+    setSelectedArtifactDocumentId(document.id);
+    setArtifactFileState({ status: "loading", document });
+    try {
+      const file = await window.p2a.artifact.readFile({
+        projectRoot: projectSnapshot.rootPath,
+        relativePath: document.relativePath,
+      });
+      setArtifactFileState({ status: "ready", document, file });
+    } catch (error) {
+      setArtifactFileState({
+        status: "error",
+        document,
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  function closeArtifactViewer() {
+    setArtifactFileState({ status: "idle" });
   }
 
   function executionSourcePreviewArgs(): string[] {
@@ -712,6 +864,194 @@ export default function App() {
             )}
           </div>
         </section>
+      </>
+    );
+  }
+
+  function renderArtifactViewer() {
+    if (artifactFileState.status === "idle") return null;
+
+    const document = artifactFileState.document;
+    const file = artifactFileState.status === "ready" ? artifactFileState.file : null;
+
+    return (
+      <div className="artifact-viewer-backdrop" role="presentation" onClick={closeArtifactViewer}>
+        <section
+          className="artifact-viewer"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="artifact-viewer-title"
+          onClick={(event) => event.stopPropagation()}
+        >
+          <div className="artifact-viewer__head">
+            <div>
+              <div className="label">{document.group}</div>
+              <h3 id="artifact-viewer-title">{document.label}</h3>
+              <span className="mono">{document.relativePath}</span>
+            </div>
+            <button
+              className="icon-button"
+              type="button"
+              onClick={closeArtifactViewer}
+              aria-label="Close artifact viewer"
+            >
+              <X size={15} strokeWidth={1.8} aria-hidden="true" />
+            </button>
+          </div>
+
+          {artifactFileState.status === "loading" && (
+            <div className="empty-panel artifact-viewer__empty">
+              <FileJson size={18} strokeWidth={1.7} aria-hidden="true" />
+              <span>Loading document.</span>
+            </div>
+          )}
+
+          {artifactFileState.status === "error" && (
+            <div className="diagnostic diagnostic--error">
+              <AlertTriangle size={14} strokeWidth={1.7} aria-hidden="true" />
+              <span>{artifactFileState.message}</span>
+            </div>
+          )}
+
+          {file && (
+            <>
+              <div className="artifact-viewer__meta">
+                <span className="mono">{file.kind}</span>
+                <span className="mono">{formatBytes(file.sizeBytes)}</span>
+                <span className="mono">{formatDateTime(file.modifiedAt)}</span>
+              </div>
+              <pre className={`artifact-viewer__content artifact-viewer__content--${file.kind}`}>
+                {formatArtifactPreview(file)}
+              </pre>
+            </>
+          )}
+        </section>
+      </div>
+    );
+  }
+
+  function renderArtifactsTab() {
+    return (
+      <>
+        <section className="workbench-panel">
+          <div className="section-head">
+            <div>
+              <div className="label">artifacts</div>
+              <h3>Artifact roots</h3>
+            </div>
+            <span className="section-meta mono">
+              {projectSnapshot ? `${projectSnapshot.artifacts.length} roots` : "no project"}
+            </span>
+          </div>
+          {projectSnapshot && projectSnapshot.artifacts.length > 0 ? (
+            <div className="artifact-root-list">
+              {projectSnapshot.artifacts.map((item) => (
+                <button
+                  className={`artifact-root-card${
+                    selectedArtifact?.rootPath === item.rootPath ? " artifact-root-card--selected" : ""
+                  }`}
+                  key={item.rootPath}
+                  type="button"
+                  onClick={() => setSelectedArtifactRootPath(item.rootPath)}
+                >
+                  <span>
+                    <strong>{item.projectId}</strong>
+                    <em className="mono">{item.relativePath}</em>
+                  </span>
+                  <span className="artifact-root-card__meta">
+                    <em>{item.activeIteration ?? "no iteration"}</em>
+                    <em>{formatCount(item.taskCounts.total)} tasks</em>
+                    <em>{formatCount(item.runCount)} runs</em>
+                  </span>
+                </button>
+              ))}
+            </div>
+          ) : (
+            <div className="empty-panel">
+              <FileJson size={18} strokeWidth={1.7} aria-hidden="true" />
+              <span>No artifact root detected.</span>
+            </div>
+          )}
+        </section>
+
+        <section className="workbench-panel">
+          <div className="section-head">
+            <div>
+              <div className="label">documents</div>
+              <h3>Artifact documents</h3>
+            </div>
+            <span className="section-meta mono">{artifactDocuments.length} files</span>
+          </div>
+          {artifactDocuments.length > 0 ? (
+            <div className="artifact-document-list">
+              {artifactDocuments.map((document) => (
+                <div
+                  className={`artifact-document-row${
+                    selectedArtifactDocument?.id === document.id
+                      ? " artifact-document-row--selected"
+                      : ""
+                  }`}
+                  key={document.id}
+                  onDoubleClick={() => void openArtifactDocument(document)}
+                >
+                  <button
+                    className="artifact-document-row__main"
+                    type="button"
+                    onClick={() => setSelectedArtifactDocumentId(document.id)}
+                    aria-current={
+                      selectedArtifactDocument?.id === document.id ? "true" : undefined
+                    }
+                  >
+                    <span className="mono">{document.group}</span>
+                    <strong>{document.label}</strong>
+                    <small className="mono">{document.relativePath}</small>
+                  </button>
+                  <span className={`validation-chip validation-chip--${document.state}`}>
+                    {document.state}
+                  </span>
+                  <span className="mono artifact-document-row__meta">{document.meta}</span>
+                  <button
+                    className="artifact-document-row__open"
+                    type="button"
+                    onClick={() => void openArtifactDocument(document)}
+                  >
+                    Open
+                  </button>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="empty-panel">
+              <FileJson size={18} strokeWidth={1.7} aria-hidden="true" />
+              <span>No readable artifact document detected.</span>
+            </div>
+          )}
+        </section>
+
+        {selectedArtifact && (
+          <section className="workbench-panel">
+            <div className="section-head">
+              <div>
+                <div className="label">validation</div>
+                <h3>Schema state</h3>
+              </div>
+            </div>
+            <div className="validation-strip" aria-label="Artifact schema validation">
+              {selectedArtifact.validations.map((validation) => (
+                <span
+                  className={`validation-chip validation-chip--${validation.status}`}
+                  key={validation.id}
+                  title={validation.errors.join("\n") || validation.relativePath || validation.label}
+                >
+                  {validation.label}
+                  <span className="mono">{validation.status}</span>
+                </span>
+              ))}
+            </div>
+          </section>
+        )}
+
+        {renderArtifactViewer()}
       </>
     );
   }
@@ -1347,6 +1687,7 @@ export default function App() {
   function renderActiveTab() {
     if (activeTab === "tasks") return renderTasksTab();
     if (activeTab === "runs") return renderRunsTab();
+    if (activeTab === "artifacts") return renderArtifactsTab();
     if (activeTab === "terminal") return renderTerminalTab();
     if (activeTab === "settings") return renderSettingsTab();
     return renderOverviewTab();
@@ -1438,6 +1779,107 @@ export default function App() {
             </div>
           )}
         </div>
+      </>
+    );
+  }
+
+  function renderArtifactInspector() {
+    if (!selectedArtifact) {
+      return (
+        <div className="inspector-empty">
+          <FileJson size={18} strokeWidth={1.7} aria-hidden="true" />
+          <span>No artifact selected.</span>
+        </div>
+      );
+    }
+
+    return (
+      <>
+        <div className="section-head">
+          <div>
+            <div className="label">selected artifact</div>
+            <h3>{selectedArtifact.projectId}</h3>
+          </div>
+          <span className="section-meta mono">
+            {selectedArtifact.activeIteration ?? "no iteration"}
+          </span>
+        </div>
+
+        <div className="detail-list">
+          <div>
+            <span>root</span>
+            <strong className="mono">{selectedArtifact.relativePath}</strong>
+          </div>
+          <div>
+            <span>task graph</span>
+            <strong className="mono">{formatPath(selectedArtifact.taskGraphPath)}</strong>
+          </div>
+          <div>
+            <span>source spec</span>
+            <strong className="mono">{formatPath(selectedArtifact.sourceSpec)}</strong>
+          </div>
+          <div>
+            <span>documents</span>
+            <strong className="mono">{formatCount(artifactDocuments.length)}</strong>
+          </div>
+        </div>
+
+        {selectedArtifactDocument && (
+          <>
+            <div className="section-head section-head--tight">
+              <div>
+                <div className="label">document</div>
+                <h3>{selectedArtifactDocument.label}</h3>
+              </div>
+              <button
+                className="secondary-action secondary-action--compact"
+                type="button"
+                onClick={() => void openArtifactDocument(selectedArtifactDocument)}
+              >
+                Open
+              </button>
+            </div>
+            <div className="detail-list">
+              <div>
+                <span>group</span>
+                <strong className="mono">{selectedArtifactDocument.group}</strong>
+              </div>
+              <div>
+                <span>state</span>
+                <strong className="mono">{selectedArtifactDocument.state}</strong>
+              </div>
+              <div>
+                <span>path</span>
+                <strong className="mono">{selectedArtifactDocument.relativePath}</strong>
+              </div>
+            </div>
+          </>
+        )}
+
+        {selectedArtifact.diagnostics.length > 0 && (
+          <>
+            <div className="section-head section-head--tight">
+              <div>
+                <div className="label">diagnostics</div>
+                <h3>Artifact checks</h3>
+              </div>
+            </div>
+            <div className="diagnostic-list">
+              {selectedArtifact.diagnostics.map((diagnostic, index) => {
+                const Icon = diagnosticIcon(diagnostic.severity);
+                return (
+                  <div
+                    className={`diagnostic diagnostic--${diagnostic.severity}`}
+                    key={`${diagnostic.message}-${index}`}
+                  >
+                    <Icon size={14} strokeWidth={1.7} aria-hidden="true" />
+                    <span>{diagnostic.message}</span>
+                  </div>
+                );
+              })}
+            </div>
+          </>
+        )}
       </>
     );
   }
@@ -1817,6 +2259,7 @@ export default function App() {
   function renderInspector() {
     if (activeTab === "tasks") return renderTaskInspector();
     if (activeTab === "runs") return renderRunInspector();
+    if (activeTab === "artifacts") return renderArtifactInspector();
     if (activeTab === "terminal") return renderTerminalInspector();
     if (activeTab === "settings") return renderSettingsInspector();
     return renderOverviewInspector();

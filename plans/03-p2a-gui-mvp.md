@@ -446,6 +446,26 @@ GUI local config:
 - `npm test`에서 local config 보존 규칙 단위 테스트가 통과한다.
 - packaged smoke 기준에서 Settings 탭 진입이 막혀 있지 않다.
 
+### 2K. Read-only artifact viewer
+
+목적: Artifacts 탭에서 Gate A-D 산출물, task graph, run index, run record를 파일 기반 정본 그대로 탐색하고 read-only로 확인할 수 있게 한다.
+
+포함:
+
+- activity rail에 Artifacts 탭을 추가한다.
+- artifact root 목록과 선택된 root의 문서 목록을 중앙 화면에 표시한다.
+- status, intake, spec, task graph, review, run index, run record 경로를 중복 없이 보여준다.
+- 문서 row 선택과 double-click/Open 버튼으로 read-only viewer dialog를 연다.
+- JSON 문서는 보기 좋게 pretty print하고 Markdown/text 문서는 원문을 그대로 표시한다.
+- renderer가 직접 파일을 읽지 않고 main process IPC가 project root 내부 relative path만 읽도록 제한한다.
+- artifact file read 보안 경계와 packaged smoke의 Artifacts 탭 진입을 테스트로 고정한다.
+
+완료 기준:
+
+- Artifacts 탭에서 spec/task graph 같은 주요 문서를 열어 내용을 확인할 수 있다.
+- project root 밖 파일을 읽는 artifact IPC 요청이 거부된다.
+- packaged smoke가 Artifacts 탭에서 문서 viewer를 열고 닫는 흐름을 검증한다.
+
 ## 5. MVP 전체 포함 범위
 
 - Project onboarding / detection.
@@ -519,7 +539,8 @@ GUI local config:
 12. `2H` start run failure UX: start 실패를 사용자용 원인으로 분류하고 단위 테스트로 고정한다.
 13. `2I` finish run / verification failure UX: finish 실패를 사용자용 원인으로 분류하고 Runs/Terminal에 표시한다.
 14. `2J` Settings tab activation: 프로젝트별 기본 agent와 local config 상태를 독립 탭에서 확인하고 조정할 수 있게 한다.
-15. smoke: scaffold된 작은 target 프로젝트에서 ready task 1건을 end-to-end 실행하고 CLI 표시와 GUI 표시가 일치하는지 확인한다.
+15. `2K` read-only artifact viewer: Artifacts 탭에서 산출물 문서를 탐색하고 read-only viewer로 확인한다.
+16. smoke: scaffold된 작은 target 프로젝트에서 ready task 1건을 end-to-end 실행하고 CLI 표시와 GUI 표시가 일치하는지 확인한다.
 
 현재 진행:
 
@@ -539,6 +560,7 @@ GUI local config:
 | `2H` start run failure UX | done | `summarizeStartRunFailure` helper와 단위 테스트를 추가하고 Tasks inspector/Terminal start panel에 실패 원인과 다음 확인 지점을 표시 |
 | `2I` finish run / verification failure UX | done | `summarizeFinishRunFailure` helper와 단위 테스트를 추가하고 Terminal finish panel/Runs inspector에 failure class, failed verification, stderr tail을 앞쪽에 표시 |
 | `2J` Settings tab activation | done | Settings 탭을 열 수 있게 하고 프로젝트 기본 agent, local config, recent project, runtime diagnostics를 실제 상태와 연결. recent project 제한/unsupported agent 거부 단위 테스트 추가 |
+| `2K` read-only artifact viewer | done | Artifacts 탭, artifact root/document 목록, read-only viewer dialog, artifact file read IPC, root 경계 단위 테스트, packaged smoke 문서 열기 검증 추가 |
 | smoke | done | scaffold된 작은 target 프로젝트에서 GUI로 `Start run` -> fake `codex` PTY `Start session`/`Message agent`/`Stop` -> `custom:true` verification -> `Finish run`까지 실행해 task/run 상태가 `done`/`finished`로 갱신됨을 packaged 앱에서 확인 |
 
 ## 9. 첫 smoke 기준

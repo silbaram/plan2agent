@@ -2,6 +2,8 @@ import { contextBridge, ipcRenderer } from "electron";
 import {
   IPC_CHANNELS,
   type AgentTool,
+  type ArtifactFileReadRequest,
+  type ArtifactFileReadResult,
   type ExecutionCommandResult,
   type ExecutionFinishRunRequest,
   type ExecutionStartRunRequest,
@@ -52,6 +54,10 @@ const p2aApi: P2AApi = {
         ipcRenderer.removeListener(IPC_CHANNELS.projectChanged, listener);
       };
     },
+  },
+  artifact: {
+    readFile: (request: ArtifactFileReadRequest) =>
+      ipcRenderer.invoke(IPC_CHANNELS.artifactReadFile, request) as Promise<ArtifactFileReadResult>,
   },
   terminal: {
     start: (request: TerminalSessionStartRequest) =>

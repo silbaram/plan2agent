@@ -6,6 +6,7 @@ export const IPC_CHANNELS = {
   projectChanged: "project:changed",
   projectForgetRecent: "project:forgetRecent",
   projectSetDefaultAgentTool: "project:setDefaultAgentTool",
+  artifactReadFile: "artifact:readFile",
   terminalStart: "terminal:start",
   terminalInput: "terminal:input",
   terminalResize: "terminal:resize",
@@ -267,6 +268,21 @@ export type ProjectWatchEvent = {
   changedAt: string;
 };
 
+export type ArtifactFileKind = "json" | "markdown" | "text";
+
+export type ArtifactFileReadRequest = {
+  projectRoot: string;
+  relativePath: string;
+};
+
+export type ArtifactFileReadResult = {
+  relativePath: string;
+  kind: ArtifactFileKind;
+  content: string;
+  sizeBytes: number;
+  modifiedAt: string;
+};
+
 export type TerminalSessionStartRequest = {
   cwd: string;
   agentTool: AgentTool;
@@ -377,6 +393,9 @@ export type P2AApi = {
       agentTool: AgentTool,
     ) => Promise<GuiConfigSnapshot>;
     onChanged: (callback: (event: ProjectWatchEvent) => void) => () => void;
+  };
+  artifact: {
+    readFile: (request: ArtifactFileReadRequest) => Promise<ArtifactFileReadResult>;
   };
   terminal: {
     start: (request: TerminalSessionStartRequest) => Promise<TerminalSessionInfo>;
