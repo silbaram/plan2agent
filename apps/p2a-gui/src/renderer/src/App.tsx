@@ -79,6 +79,13 @@ const navItems = [
 
 type ActiveTab = (typeof navItems)[number][0];
 
+const settingsCommands = [
+  ["typecheck", "npm run typecheck"],
+  ["test", "npm test"],
+  ["package", "npm run package"],
+  ["packaged smoke", "npm run smoke:packaged"],
+] as const;
+
 function formatPath(value: string | null | undefined): string {
   return value ?? "none";
 }
@@ -1193,10 +1200,155 @@ export default function App() {
     );
   }
 
+  function renderSettingsTab() {
+    return (
+      <>
+        <section className="workbench-panel">
+          <div className="section-head">
+            <div>
+              <div className="label">settings</div>
+              <h3>Project defaults</h3>
+            </div>
+            <span className={`config-chip config-chip--${configState}`}>{configState}</span>
+          </div>
+          <div className="settings-grid">
+            <div className="detail-list">
+              <div>
+                <span>project</span>
+                <strong>{projectSnapshot?.name ?? "none"}</strong>
+              </div>
+              <div>
+                <span>root</span>
+                <strong className="mono">{formatPath(projectSnapshot?.rootPath)}</strong>
+              </div>
+              <div>
+                <span>artifact</span>
+                <strong className="mono">{formatPath(artifact?.relativePath)}</strong>
+              </div>
+              <div>
+                <span>state</span>
+                <strong>{projectSnapshot?.stateLabel ?? "not loaded"}</strong>
+              </div>
+            </div>
+
+            <label className="settings-control">
+              <span>default agent</span>
+              <select
+                className="agent-select mono"
+                value={projectSnapshot?.defaultAgentTool ?? "codex"}
+                onChange={(event) => changeDefaultAgentTool(event.target.value as AgentTool)}
+                disabled={!projectSnapshot}
+                aria-label="Settings default agent tool"
+              >
+                {AGENT_TOOLS.map((agentTool) => (
+                  <option key={agentTool} value={agentTool}>
+                    {agentTool}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+        </section>
+
+        <section className="workbench-panel">
+          <div className="section-head">
+            <div>
+              <div className="label">local config</div>
+              <h3>GUI state</h3>
+            </div>
+            <span className="section-meta mono">
+              {guiConfig ? `${guiConfig.recentProjects.length} recent` : "not loaded"}
+            </span>
+          </div>
+          <div className="detail-list">
+            <div>
+              <span>config file</span>
+              <strong className="mono">{formatPath(guiConfig?.configPath)}</strong>
+            </div>
+            <div>
+              <span>schema</span>
+              <strong className="mono">{guiConfig?.schemaVersion ?? "none"}</strong>
+            </div>
+            <div>
+              <span>watch</span>
+              <strong>{watchState}</strong>
+            </div>
+            <div>
+              <span>last change</span>
+              <strong className="mono">{formatTime(lastWatchEvent?.changedAt)}</strong>
+            </div>
+          </div>
+        </section>
+
+        <section className="workbench-panel">
+          <div className="section-head">
+            <div>
+              <div className="label">recent</div>
+              <h3>Projects</h3>
+            </div>
+          </div>
+          <div className="settings-recent-list">
+            {guiConfig && guiConfig.recentProjects.length > 0 ? (
+              guiConfig.recentProjects.map((project) => (
+                <div
+                  className={`recent-row${
+                    project.rootPath === projectSnapshot?.rootPath ? " recent-row--active" : ""
+                  }`}
+                  key={project.rootPath}
+                >
+                  <button
+                    className="recent-row__main"
+                    type="button"
+                    onClick={() => openRecentProject(project.rootPath)}
+                  >
+                    <strong>{project.name}</strong>
+                    <span className="mono">{project.rootPath}</span>
+                  </button>
+                  <span className="settings-agent mono">{project.defaultAgentTool}</span>
+                  <button
+                    className="recent-row__forget"
+                    type="button"
+                    onClick={() => forgetRecentProject(project.rootPath)}
+                    aria-label={`Forget ${project.name}`}
+                  >
+                    <X size={13} strokeWidth={1.8} aria-hidden="true" />
+                  </button>
+                </div>
+              ))
+            ) : (
+              <div className="empty-panel">
+                <FolderOpen size={18} strokeWidth={1.7} aria-hidden="true" />
+                <span>No recent projects.</span>
+              </div>
+            )}
+          </div>
+        </section>
+
+        <section className="workbench-panel">
+          <div className="section-head">
+            <div>
+              <div className="label">verification</div>
+              <h3>Developer commands</h3>
+            </div>
+          </div>
+          <div className="settings-command-list">
+            {settingsCommands.map(([label, command]) => (
+              <div className="command-card" key={label}>
+                <strong>{label}</strong>
+                <code>{command}</code>
+              </div>
+            ))}
+          </div>
+        </section>
+      </>
+    );
+  }
+
   function renderActiveTab() {
     if (activeTab === "tasks") return renderTasksTab();
     if (activeTab === "runs") return renderRunsTab();
     if (activeTab === "terminal") return renderTerminalTab();
+    if (activeTab === "settings") return renderSettingsTab();
     return renderOverviewTab();
   }
 
@@ -1600,10 +1752,73 @@ export default function App() {
     );
   }
 
+  function renderSettingsInspector() {
+    return (
+      <>
+        <div className="section-head">
+          <div>
+            <div className="label">settings</div>
+            <h3>Runtime</h3>
+          </div>
+        </div>
+        <div className="detail-list">
+          <div>
+            <span>app</span>
+            <strong className="mono">{runtimeInfo?.appVersion ?? "unknown"}</strong>
+          </div>
+          <div>
+            <span>electron</span>
+            <strong className="mono">{runtimeInfo?.electronVersion ?? "unknown"}</strong>
+          </div>
+          <div>
+            <span>node</span>
+            <strong className="mono">{runtimeInfo?.nodeVersion ?? "unknown"}</strong>
+          </div>
+          <div>
+            <span>platform</span>
+            <strong className="mono">{runtimeInfo?.platform ?? "unknown"}</strong>
+          </div>
+        </div>
+
+        <div className="section-head section-head--tight">
+          <div>
+            <div className="label">config</div>
+            <h3>Local file</h3>
+          </div>
+        </div>
+        <div className="ref-list">
+          <code>{formatPath(guiConfig?.configPath)}</code>
+        </div>
+
+        <div className="section-head section-head--tight">
+          <div>
+            <div className="label">status</div>
+            <h3>Diagnostics</h3>
+          </div>
+        </div>
+        <div className="diagnostic-list">
+          <div className={`diagnostic diagnostic--${configState === "error" ? "error" : "ok"}`}>
+            <Settings size={14} strokeWidth={1.7} aria-hidden="true" />
+            <span>local config {configState}</span>
+          </div>
+          <div className={`diagnostic diagnostic--${projectSnapshot ? "ok" : "warn"}`}>
+            <FolderOpen size={14} strokeWidth={1.7} aria-hidden="true" />
+            <span>{projectSnapshot ? "project loaded" : "no project loaded"}</span>
+          </div>
+          <div className="diagnostic diagnostic--ok">
+            <CheckCircle2 size={14} strokeWidth={1.7} aria-hidden="true" />
+            <span className="mono">npm run smoke:packaged</span>
+          </div>
+        </div>
+      </>
+    );
+  }
+
   function renderInspector() {
     if (activeTab === "tasks") return renderTaskInspector();
     if (activeTab === "runs") return renderRunInspector();
     if (activeTab === "terminal") return renderTerminalInspector();
+    if (activeTab === "settings") return renderSettingsInspector();
     return renderOverviewInspector();
   }
 
@@ -1634,7 +1849,6 @@ export default function App() {
               className={`rail__item${activeTab === id ? " rail__item--active" : ""}`}
               key={id}
               type="button"
-              disabled={id === "settings"}
               onClick={() => setActiveTab(id)}
               aria-current={activeTab === id ? "page" : undefined}
             >

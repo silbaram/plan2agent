@@ -57,4 +57,53 @@ describe("local GUI config", () => {
       await rm(userDataPath, { recursive: true, force: true });
     }
   });
+
+  it("limits recent projects to the most recent eight entries", async () => {
+    const userDataPath = await mkdtemp(path.join(tmpdir(), "p2a-gui-config-"));
+    const configPath = configPathForUserData(userDataPath);
+
+    try {
+      for (let index = 0; index < 10; index += 1) {
+        await rememberRecentProject(configPath, {
+          rootPath: `/tmp/project-${index}`,
+          name: `project-${index}`,
+        });
+      }
+
+      const snapshot = await loadGuiConfig(configPath);
+      expect(snapshot.recentProjects).toHaveLength(8);
+      expect(snapshot.recentProjects.map((project) => project.name)).toEqual([
+        "project-9",
+        "project-8",
+        "project-7",
+        "project-6",
+        "project-5",
+        "project-4",
+        "project-3",
+        "project-2",
+      ]);
+    } finally {
+      await rm(userDataPath, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects unsupported default agent tools without changing stored settings", async () => {
+    const userDataPath = await mkdtemp(path.join(tmpdir(), "p2a-gui-config-"));
+    const configPath = configPathForUserData(userDataPath);
+
+    try {
+      await rememberRecentProject(configPath, {
+        rootPath: "/tmp/project-a",
+        name: "project-a",
+      });
+      await setDefaultAgentTool(configPath, "/tmp/project-a", "claude");
+
+      await expect(
+        setDefaultAgentTool(configPath, "/tmp/project-a", "unsupported" as never),
+      ).rejects.toThrow("Unsupported agent tool");
+      expect(await readDefaultAgentTool(configPath, "/tmp/project-a")).toBe("claude");
+    } finally {
+      await rm(userDataPath, { recursive: true, force: true });
+    }
+  });
 });

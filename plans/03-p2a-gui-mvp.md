@@ -427,6 +427,25 @@ GUI local config:
 - `npm test`에서 finish failure classification 단위 테스트가 통과한다.
 - Runs/Terminal에서 실패 진단과 raw output 또는 verification tail을 함께 확인할 수 있다.
 
+### 2J. Settings tab activation
+
+목적: Settings 탭을 실제 탭으로 열어 프로젝트별 기본 agent, 로컬 GUI config, 최근 프로젝트, 런타임 정보를 한곳에서 확인하고 조정할 수 있게 한다.
+
+포함:
+
+- activity rail의 Settings 탭을 활성화한다.
+- 현재 프로젝트의 root/artifact/state와 default agent 선택을 Settings 중앙 화면에 표시한다.
+- GUI local config 파일, schema version, watcher 상태, 최근 프로젝트 목록을 표시한다.
+- 최근 프로젝트별 default agent를 함께 보여주고 open/forget 조작을 제공한다.
+- app/electron/node/platform 같은 런타임 진단은 오른쪽 inspector로 분리한다.
+- local config의 recent project 정렬/제한과 unsupported agent 거부를 단위 테스트로 고정한다.
+
+완료 기준:
+
+- Settings 탭에서 프로젝트별 default agent를 변경할 수 있고 최근 프로젝트 config와 일관되게 보인다.
+- `npm test`에서 local config 보존 규칙 단위 테스트가 통과한다.
+- packaged smoke 기준에서 Settings 탭 진입이 막혀 있지 않다.
+
 ## 5. MVP 전체 포함 범위
 
 - Project onboarding / detection.
@@ -499,7 +518,8 @@ GUI local config:
 11. `2G` packaged app smoke: packaged Electron 앱에서 recent project -> start -> finish -> runs 상태를 자동 검증한다.
 12. `2H` start run failure UX: start 실패를 사용자용 원인으로 분류하고 단위 테스트로 고정한다.
 13. `2I` finish run / verification failure UX: finish 실패를 사용자용 원인으로 분류하고 Runs/Terminal에 표시한다.
-14. smoke: scaffold된 작은 target 프로젝트에서 ready task 1건을 end-to-end 실행하고 CLI 표시와 GUI 표시가 일치하는지 확인한다.
+14. `2J` Settings tab activation: 프로젝트별 기본 agent와 local config 상태를 독립 탭에서 확인하고 조정할 수 있게 한다.
+15. smoke: scaffold된 작은 target 프로젝트에서 ready task 1건을 end-to-end 실행하고 CLI 표시와 GUI 표시가 일치하는지 확인한다.
 
 현재 진행:
 
@@ -518,6 +538,7 @@ GUI local config:
 | `2G` packaged app smoke | done | `npm run smoke:packaged`로 packaged 앱을 실행하고 recent project -> Tasks `Start run` -> Terminal `Finish run` -> Runs 상태와 task/run 파일 상태를 자동 검증 |
 | `2H` start run failure UX | done | `summarizeStartRunFailure` helper와 단위 테스트를 추가하고 Tasks inspector/Terminal start panel에 실패 원인과 다음 확인 지점을 표시 |
 | `2I` finish run / verification failure UX | done | `summarizeFinishRunFailure` helper와 단위 테스트를 추가하고 Terminal finish panel/Runs inspector에 failure class, failed verification, stderr tail을 앞쪽에 표시 |
+| `2J` Settings tab activation | done | Settings 탭을 열 수 있게 하고 프로젝트 기본 agent, local config, recent project, runtime diagnostics를 실제 상태와 연결. recent project 제한/unsupported agent 거부 단위 테스트 추가 |
 | smoke | done | scaffold된 작은 target 프로젝트에서 GUI로 `Start run` -> fake `codex` PTY `Start session`/`Message agent`/`Stop` -> `custom:true` verification -> `Finish run`까지 실행해 task/run 상태가 `done`/`finished`로 갱신됨을 packaged 앱에서 확인 |
 
 ## 9. 첫 smoke 기준
