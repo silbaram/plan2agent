@@ -1,8 +1,25 @@
 # P2A GUI MVP 계획
 
-작성일: 2026-06-23 · 상태: 실제 개발 계획 재정리 · 작업 브랜치: `p2a-gui-mvp` · 연결 문서: `plans/02-development-team-ai-agent.md`, `.agents/skills/p2a-design-system/SKILL.md`
+작성일: 2026-06-23 · 상태: GUI MVP 개발 완료 · 작업 브랜치: `p2a-gui-mvp` · 연결 문서: `plans/02-development-team-ai-agent.md`, `.agents/skills/p2a-design-system/SKILL.md`
 
-이 문서는 Plan2Agent Phase 2의 **PTY+Electron 감독 GUI**를 제품 MVP로 고정한다. 목표는 완전한 multi-agent orchestration이 아니라, 현재 구현된 파일 기반 하네스와 감독형 단일 task 실행기 Phase 1을 데스크톱 UI에서 읽고, 사람이 보기 편하게 감독할 수 있게 만드는 것이다.
+이 문서는 Plan2Agent Phase 2의 **PTY+Electron 감독 GUI** 제품 MVP 범위와 완료 상태를 정리한다. 목표는 완전한 multi-agent orchestration이 아니라, 현재 구현된 파일 기반 하네스와 감독형 단일 task 실행기 Phase 1을 데스크톱 UI에서 읽고, 사람이 보기 편하게 감독할 수 있게 만드는 것이다.
+
+## 현재 상태
+
+P2A GUI MVP는 `p2a-gui-mvp` 브랜치에서 구현 완료 상태다. 정적 프로토타입 검토에서 출발해 실제 Electron 앱으로 전환했고, 프로젝트 파일 로딩, task/run/artifact 표시, PTY 세션, start/finish lifecycle, 한글/영문 전환, artifact viewer, packaged smoke까지 연결했다.
+
+최종 안정화 커밋:
+
+- `8376498 Harden GUI IPC and locale polish`
+
+검증 완료:
+
+- `npm run typecheck`
+- `npm test`
+- `npm run package`
+- `npm run smoke:packaged -- --skip-package`
+
+현재 문서의 목적은 신규 화면을 더 설계하는 것이 아니라, **완료된 MVP 범위와 후속 개발 판단 기준을 고정**하는 것이다.
 
 ## 기술스택 추천
 
@@ -540,8 +557,10 @@ GUI local config:
 - CLI와 GUI가 같은 파일을 읽고 같은 상태 전이를 만든다.
 - GUI는 내부 하네스 구현 파일을 쓰지 않는다.
 - 실패는 badge 하나로 숨기지 않고 output, exit code, reason을 보여준다.
+- Electron main process는 sender별 active project root를 보관하고, renderer가 넘긴 `projectRoot`, `cwd`, `artifactRoot`, `taskGraphPath`를 active project scope 안에서 다시 검증한다.
+- artifact viewer는 read-only dialog이며 Escape 닫기, focus 순환, 닫은 뒤 focus 복구를 지원한다.
 
-## 8. 우선 구현 순서
+## 8. 구현 순서 및 완료 현황
 
 1. `2B-0` Electron MVP skeleton: `apps/p2a-gui`에 Electron Forge + Vite + React + TypeScript 앱을 만든다. main/preload/renderer entry, CSP, typed IPC shell, Harness token CSS를 먼저 고정한다.
 2. `2B-1` read-only project loader: folder picker, recent projects, project detection, active iteration 계산, artifact schema validation을 구현한다.
@@ -559,7 +578,8 @@ GUI local config:
 14. `2J` Settings tab activation: 프로젝트별 기본 agent와 local config 상태를 독립 탭에서 확인하고 조정할 수 있게 한다.
 15. `2K` read-only artifact viewer: Artifacts 탭에서 산출물 문서를 탐색하고 read-only viewer로 확인한다.
 16. `2L` Korean / English UI locale: Settings에서 화면 언어를 전환하고 주요 workbench copy를 확인한다.
-17. smoke: scaffold된 작은 target 프로젝트에서 ready task 1건을 end-to-end 실행하고 CLI 표시와 GUI 표시가 일치하는지 확인한다.
+17. `2M` Final hardening / review fixes: IPC active project scope, i18n fallback, artifact viewer 접근성, packaged smoke 안정성을 보강한다.
+18. smoke: scaffold된 작은 target 프로젝트에서 ready task 1건을 end-to-end 실행하고 CLI 표시와 GUI 표시가 일치하는지 확인한다.
 
 현재 진행:
 
@@ -581,7 +601,17 @@ GUI local config:
 | `2J` Settings tab activation | done | Settings 탭을 열 수 있게 하고 프로젝트 기본 agent, local config, recent project, runtime diagnostics를 실제 상태와 연결. recent project 제한/unsupported agent 거부 단위 테스트 추가 |
 | `2K` read-only artifact viewer | done | Artifacts 탭, artifact root/document 목록, read-only viewer dialog, artifact file read IPC, root 경계 단위 테스트, packaged smoke 문서 열기 검증 추가 |
 | `2L` Korean / English UI locale | done | local config locale 저장, Settings 언어 선택, 주요 workbench copy dictionary, Terminal supervisor copy 전달, packaged smoke 언어 전환 검증 추가 |
+| `2M` Final hardening / review fixes | done | sender별 active project root 기반 IPC scope 검증, artifact/terminal/execution 경로 재검증, 사용자 표시 fallback i18n 보강, 실패 진단 locale copy 적용, artifact viewer keyboard/focus 접근성 보강, active project scope 단위 테스트 추가 |
 | smoke | done | scaffold된 작은 target 프로젝트에서 GUI로 `Start run` -> fake `codex` PTY `Start session`/`Message agent`/`Stop` -> `custom:true` verification -> `Finish run`까지 실행해 task/run 상태가 `done`/`finished`로 갱신됨을 packaged 앱에서 확인 |
+
+최종 검증 결과:
+
+| 명령 | 상태 | 비고 |
+| --- | --- | --- |
+| `npm run typecheck` | pass | TypeScript main/preload/renderer 타입 검증 |
+| `npm test` | pass | 7 test files, 43 tests |
+| `npm run package` | pass | Electron Forge darwin arm64 package 생성 |
+| `npm run smoke:packaged -- --skip-package` | pass | packaged 앱 기준 recent project -> artifact viewer -> language switch -> start/finish -> runs 확인 |
 
 ## 9. 첫 smoke 기준
 
@@ -613,7 +643,7 @@ GUI local config:
 
 ## 11. 완료 정의
 
-MVP 완료는 아래가 모두 충족될 때다.
+MVP 완료는 아래 조건이 충족된 상태로 본다.
 
 - P2A 미설치 프로젝트를 감지하고 setup CLI 명령을 명확히 안내한다.
 - 외부 planning bundle import CLI 명령을 명확히 안내한다.
@@ -623,4 +653,19 @@ MVP 완료는 아래가 모두 충족될 때다.
 - raw PTY transcript와 supervisor event를 저장하지 않는다.
 - verification을 실행하고 결과를 기존 run schema에 기록/표시한다.
 - task를 done 또는 blocked로 마무리한다.
-- `node scripts/run_fixtures.mjs`와 GUI smoke가 모두 통과한다.
+- GUI local config에서 기본 agent와 UI locale을 관리한다.
+- Artifacts 탭에서 주요 산출물을 read-only viewer로 확인한다.
+- renderer가 넘긴 프로젝트/파일/실행 경로는 main process에서 active project scope 기준으로 재검증한다.
+- `npm run typecheck`, `npm test`, `npm run package`, `npm run smoke:packaged -- --skip-package`가 통과한다.
+
+## 12. 후속 개발 후보
+
+MVP 이후에는 새 화면을 늘리기보다 실제 사용 중 반복적으로 필요한 기능만 추가한다.
+
+| 후보 | 우선순위 | 이유 |
+| --- | --- | --- |
+| 실제 프로젝트 dogfooding 결과 반영 | 높음 | GUI MVP는 파일 기반 하네스를 실제 프로젝트에서 반복 사용하는 흐름으로 검증해야 한다. |
+| PR 준비 / main 병합 검토 | 높음 | `p2a-gui-mvp` 브랜치의 구현 범위를 안정화하고 리뷰 가능한 단위로 고정한다. |
+| raw PTY transcript opt-in 저장 | 중간 | 기본 저장은 제외지만, 디버깅을 위해 사용자가 켠 경우에만 저장하는 옵션은 검토 가능하다. |
+| multi-project workspace manager | 낮음 | MVP는 단일 프로젝트 감독에 집중한다. 여러 프로젝트 관리는 사용 패턴이 확인된 뒤 설계한다. |
+| supervisor event schema 확장 | 낮음 | run schema 확장은 MVP 제외다. approval/deny/stop/kill 영속화가 실제 분석에 필요할 때 별도 설계한다. |
