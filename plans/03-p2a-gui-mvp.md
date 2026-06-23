@@ -1,8 +1,63 @@
 # P2A GUI MVP 계획
 
-작성일: 2026-06-21 · 상태: 범위 확정 초안 · 연결 문서: `plans/02-development-team-ai-agent.md`, `.agents/skills/p2a-design-system/SKILL.md`
+작성일: 2026-06-23 · 상태: 실제 개발 계획 재정리 · 작업 브랜치: `p2a-gui-mvp` · 연결 문서: `plans/02-development-team-ai-agent.md`, `.agents/skills/p2a-design-system/SKILL.md`
 
 이 문서는 Plan2Agent Phase 2의 **PTY+Electron 감독 GUI**를 제품 MVP로 고정한다. 목표는 완전한 multi-agent orchestration이 아니라, 현재 구현된 파일 기반 하네스와 감독형 단일 task 실행기 Phase 1을 데스크톱 UI에서 읽고, 사람이 보기 편하게 감독할 수 있게 만드는 것이다.
+
+## 기술스택 추천
+
+**최종 추천: Electron Forge + Vite + React + TypeScript + xterm.js + node-pty.**
+
+P2A GUI는 일반 웹앱이 아니라 로컬 프로젝트 파일을 읽고, agent CLI를 PTY로 실행하고, 사용자가 같은 화면에서 감독하는 데스크톱 앱이다. 따라서 renderer UI보다 **main process / preload / IPC / PTY process lifecycle**이 제품의 핵심이다. MVP는 이 경계를 먼저 고정한 뒤, 기존 정적 프로토타입을 React 컴포넌트로 이식한다.
+
+| 영역 | 추천 스택 | 결정 이유 |
+| --- | --- | --- |
+| Desktop runtime | Electron | main process가 Node.js API와 OS 기능을 다룰 수 있고, renderer는 웹 UI로 분리된다. 파일 접근, native dialog, PTY spawn, app lifecycle이 모두 필요하다. |
+| Scaffold / packaging | Electron Forge + Vite + TypeScript template | Electron 공식 생태계 안에서 main/preload/renderer를 Vite로 빌드한다. 단, Forge Vite plugin은 experimental 표시가 있으므로 버전을 고정하고 smoke test를 둔다. |
+| Renderer UI | React + TypeScript | 프로토타입의 workbench UI를 컴포넌트화하기 쉽고, task/run/artifact 상태를 타입으로 관리할 수 있다. SSR/Next.js는 desktop renderer에 필요 없다. |
+| UI primitives | Radix Primitives + local Harness/P2A CSS tokens | Dialog, Menu, Tooltip, Tabs, Select 같은 접근성 구현은 Radix를 쓰고, 색/간격/밀도는 p2a-design-system 토큰을 따른다. |
+| Icons | lucide-react | 기존 디자인 지침과 맞는 16px outline icon을 React 컴포넌트로 사용한다. |
+| Terminal renderer | `@xterm/xterm`, `@xterm/addon-fit`, `@xterm/addon-web-links` | terminal surface, resize, link handling을 검증된 terminal UI로 처리한다. terminal 출력은 untrusted data로 보고 DOM에 직접 주입하지 않는다. |
+| PTY execution | `node-pty` | Codex/Claude/Gemini CLI가 실제 터미널처럼 동작해야 하므로 pseudo terminal이 필요하다. `node-pty`는 Electron main process에서만 사용한다. |
+| IPC boundary | Electron `contextBridge` + typed IPC channels | renderer는 임의 shell/file API를 직접 호출하지 않는다. preload가 허용된 API만 노출한다. |
+| Artifact validation | Ajv + 기존 `schemas/*.schema.json` | P2A는 이미 JSON Schema를 단일 계약으로 쓰므로 Zod로 중복 모델을 만들지 않고 기존 schema를 검증한다. |
+| App state | React reducer/context + TanStack Query optional | MVP 초기 selection/session UI state는 reducer로 충분하다. 파일 watcher invalidation과 async read cache가 복잡해지는 시점에 TanStack Query를 도입한다. |
+| Markdown/JSON viewer | read-only renderer component | artifact 내용은 HTML 실행 없이 표시한다. 외부 링크는 Electron shell 정책을 거쳐 별도 열기로 처리한다. |
+| Testing | Vitest + Playwright smoke | artifact parser/IPC contract는 Vitest, 실제 창/탭/terminal render smoke는 Playwright로 검증한다. |
+
+추천하지 않는 선택:
+
+- Tauri: 앱 크기는 장점이지만, MVP 핵심인 Node 기반 CLI bridge, `node-pty`, 기존 Node scripts와의 결합을 위해 Rust sidecar/IPC를 더 설계해야 한다. 후속 경량화 후보로 남긴다.
+- Web app only: 로컬 파일, PTY, agent CLI 실행을 안전하게 처리할 수 없다.
+- 정적 HTML 유지: 프로토타입에는 충분했지만 실제 실행 상태, IPC, 파일 watcher, terminal lifecycle을 유지하기 어렵다.
+- DB/API 서버 우선: MVP의 단일 진실원은 기존 P2A artifact와 run 파일이다. 서버/DB는 multi-project/multi-user 이후에 검토한다.
+
+기술 근거:
+
+- Electron process model은 main process가 Node.js API와 앱 lifecycle을 담당하고 renderer가 UI를 담당하는 구조다. Preload와 `contextBridge`로 renderer에 제한된 API를 노출한다.
+- Electron IPC는 main/renderer 책임 분리 때문에 desktop 기능 호출의 핵심 경계다. renderer에 `ipcRenderer` 전체를 노출하지 않고 필요한 API만 노출해야 한다.
+- Electron 보안 가이드는 Node integration 제한, context isolation, CSP, IPC sender 검증을 권고한다.
+- Electron native module 문서는 Electron ABI 때문에 native module rebuild가 필요하다고 설명한다. `node-pty` 때문에 이 리스크를 MVP 초기에 검증해야 한다.
+- xterm.js 문서는 ESM import, CSS import, addon 방식, link handling, terminal 보안 주의점을 제공한다.
+- node-pty는 Node.js에서 pseudoterminal file descriptor로 프로세스를 fork하고 read/write/resize 가능한 terminal object를 제공한다.
+- Vite는 빠른 dev server/HMR과 production build를 제공한다. Electron Forge Vite template은 main/preload/renderer Vite entry를 구성한다.
+
+참고 공식 문서:
+
+- Electron process model: <https://www.electronjs.org/docs/latest/tutorial/process-model>
+- Electron IPC: <https://www.electronjs.org/docs/latest/tutorial/ipc>
+- Electron security: <https://www.electronjs.org/docs/latest/tutorial/security>
+- Electron native modules: <https://www.electronjs.org/docs/latest/tutorial/using-native-node-modules>
+- Electron Forge Vite plugin: <https://www.electronforge.io/config/plugins/vite>
+- Electron Forge Vite + TypeScript template: <https://www.electronforge.io/templates/vite-+-typescript>
+- Vite guide: <https://vite.dev/guide/>
+- React TypeScript guide: <https://react.dev/learn/typescript>
+- xterm.js docs: <https://xtermjs.org/docs/>
+- xterm.js import/addons/link/security guides: <https://xtermjs.org/docs/guides/import/>, <https://xtermjs.org/docs/guides/using-addons/>, <https://xtermjs.org/docs/guides/link-handling/>, <https://xtermjs.org/docs/guides/security/>
+- node-pty: <https://github.com/microsoft/node-pty>
+- Radix Primitives: <https://www.radix-ui.com/primitives/docs/overview/introduction>
+- lucide-react: <https://lucide.dev/guide/react>
+- Ajv: <https://ajv.js.org/>
 
 ## 0. 현재 결론
 
@@ -346,13 +401,15 @@ GUI local config:
 
 ## 8. 우선 구현 순서
 
-1. `2A-0` project onboarding prototype: detection states와 Open/Setup/Import/Validate guidance UX.
-2. `2A-1` workbench static prototype: p2a-design-system 기반 화면 뼈대.
-3. `2B` read-only Electron shell: 실제 project detection과 project files reader.
-4. `2B-1` harness onboarding guidance: scaffold/handoff/validate 명령 안내.
-5. `2C` PTY execution: node-pty + xterm + supervisor input.
-6. `2D` finish/verification: existing lifecycle 연결.
-7. smoke: 이미 scaffold된 작은 target 프로젝트에서 ready task 1건 end-to-end 실행.
+1. `2B-0` Electron MVP skeleton: `apps/p2a-gui`에 Electron Forge + Vite + React + TypeScript 앱을 만든다. main/preload/renderer entry, CSP, typed IPC shell, Harness token CSS를 먼저 고정한다.
+2. `2B-1` read-only project loader: folder picker, recent projects, project detection, active iteration 계산, artifact schema validation을 구현한다.
+3. `2B-2` read-only workbench: 정적 프로토타입의 Overview / Tasks / Runs / Terminal shell을 React 컴포넌트로 이식하고 실제 artifact reader에 연결한다.
+4. `2B-3` harness onboarding guidance: No P2A / import / validate 상태에서 CLI 명령 preview와 reload flow를 제공한다. GUI는 scaffold/import/repair를 직접 실행하지 않는다.
+5. `2C-0` terminal surface: `@xterm/xterm` 렌더러, fit addon, link handling, scrollback, resize를 먼저 붙이고 mock PTY stream으로 검증한다.
+6. `2C-1` real PTY session: Electron main에서 `node-pty`로 agent CLI를 실행하고, typed IPC stream으로 renderer xterm에 연결한다.
+7. `2C-2` supervisor controls: Message agent, stdin passthrough, stop, kill, blocked/failed note flow를 단일 active session에 한정해 구현한다.
+8. `2D` finish/verification: 기존 `p2a_execute`, `p2a_runs`, `p2a_tasks` lifecycle을 GUI command action으로 연결한다.
+9. smoke: scaffold된 작은 target 프로젝트에서 ready task 1건을 end-to-end 실행하고 CLI 표시와 GUI 표시가 일치하는지 확인한다.
 
 ## 9. 첫 smoke 기준
 
@@ -374,7 +431,7 @@ GUI local config:
 
 | ID | 결정 | 현재 값 | 비고 |
 | --- | --- | --- | --- |
-| GUI-D1 | 첫 구현 stack | Electron + React + xterm.js + node-pty | 확정. 기존 디자인 reference가 React/HTML 중심이고 PTY 감독 UI가 필요하다 |
+| GUI-D1 | 첫 구현 stack | Electron Forge + Vite + React + TypeScript + xterm.js + node-pty | 확정. main/preload/renderer 경계와 PTY 감독 UI가 필요하다 |
 | GUI-D2 | 실행 agent CLI 선택 | `defaultAgentTool: codex` | 프로젝트별 선택값은 GUI local config에 저장한다. `claude`는 provider adapter가 준비된 경우 선택 가능 |
 | GUI-D3 | run event schema 확장 | MVP 제외 | 기존 `run.schema.json`을 유지한다. supervisor message, approval/deny event, raw PTY transcript 저장은 후속 기능으로 둔다 |
 | GUI-D4 | project open 방식 | folder picker + recent projects + detection states | recent project path와 `defaultAgentTool`은 GUI local config에만 저장한다 |
