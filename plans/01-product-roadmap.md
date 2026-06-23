@@ -760,7 +760,7 @@ Plan2Agent 개발은 아래 흐름을 기본 협업 방식으로 둔다.
 | 우선순위 | 항목 |
 | --- | --- |
 | P1 | Team Big Five 감독형 orchestration: `p2a-dev-orchestrator`, solo/team 판단, 역할별 실행 계획 |
-| P1 | orchestrator와 GUI/CLI 실행 lifecycle 연결: run log, monitor gate, blocked/retry 판단 |
+| P1 | orchestrator와 CLI 실행 lifecycle 연결: run sidecar, monitor gate, blocked/retry 판단 |
 | P2 | Hermes 고도화: run history digest, proposal queue, 반복 실패 유형 요약 |
 | P2 | 실패 task 재시도 정책 자동화 |
 | P2 | PR 생성 및 리뷰 상태 연동 |
@@ -775,7 +775,7 @@ Plan2Agent 개발은 아래 흐름을 기본 협업 방식으로 둔다.
 다음 후보:
 
 1. `p2a-dev-orchestrator` 개발 계획 확정과 MVP 구현. 상세는 `plans/02-1-p2a-dev-orchestrator.md`.
-2. orchestrator 결과를 GUI/CLI start/finish lifecycle, run log, monitor gate와 연결.
+2. orchestrator 결과를 CLI start/finish lifecycle, run sidecar, monitor gate와 연결.
 3. Hermes cross-session recall과 proposal queue 설계.
 4. PR 생성 및 리뷰 상태 연동.
 5. code-aware spec 역생성과 결과 diff 자동 병합.

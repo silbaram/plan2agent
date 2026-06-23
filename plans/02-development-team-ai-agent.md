@@ -115,7 +115,7 @@ multi-agent scheduler나 PR 생성기는 아직 없다. 대신 **Codex(native sa
 
 | 항목 | 미루는 이유 |
 | --- | --- |
-| `p2a-dev-orchestrator` | 다음 개발 범위. 감독형 GUI를 기반으로 먼저 계획/triage/runtime contract를 만든다 |
+| `p2a-dev-orchestrator` | 다음 개발 범위. CLI-first로 계획/triage/run sidecar/monitor gate 계약을 먼저 만든다 |
 | Claude 무인 자율 모드 전환(permissionMode auto/background) | Claude confinement(deny+hook+macOS sandbox)은 완료. 무인 자율 전환은 실기 cross-OS spike 후 사람이 결정 |
 | multi-agent scheduler | 별도 runtime/scheduler 설계 필요 |
 | PR 생성/리뷰 연동 | run log와 task 상태가 안정된 뒤 붙인다 |
