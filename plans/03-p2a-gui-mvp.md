@@ -248,7 +248,7 @@ GUI local config:
 - task, run, artifact 상태가 CLI 결과와 일치한다.
 - 앱에서 파일을 수정하지 않는 것이 보장된다.
 
-### 2B-1. Harness onboarding guidance
+### 2B-3. Harness onboarding guidance
 
 목적: detection 결과에 따라 P2A 설치, planning bundle import, harness validate에 필요한 CLI 명령을 GUI에서 명확히 안내한다. 이 단계는 하네스 파일을 직접 변경하지 않는 diagnostic/guidance subflow다.
 
@@ -410,6 +410,20 @@ GUI local config:
 7. `2C-2` supervisor controls: Message agent, stdin passthrough, stop, kill, blocked/failed note flow를 단일 active session에 한정해 구현한다.
 8. `2D` finish/verification: 기존 `p2a_execute`, `p2a_runs`, `p2a_tasks` lifecycle을 GUI command action으로 연결한다.
 9. smoke: scaffold된 작은 target 프로젝트에서 ready task 1건을 end-to-end 실행하고 CLI 표시와 GUI 표시가 일치하는지 확인한다.
+
+현재 진행:
+
+| 단계 | 상태 | 결과 |
+| --- | --- | --- |
+| `2B-0` Electron MVP skeleton | done | `apps/p2a-gui`에 Electron Forge/Vite/React/TypeScript 앱, typed preload IPC, 초기 workbench shell, package lock 생성. `npm run typecheck`, `npm run package` 통과 |
+| `2B-1` read-only project loader | done | `project:load` typed IPC, read-only detection snapshot, artifact/gate/task/run summary, command guidance UI, file watcher auto-refresh, Ajv schema validation, recent projects, GUI local config, 프로젝트별 default agent 선택, loader/config unit test 추가 |
+| `2B-2` read-only workbench | done | Overview/Tasks/Runs/Terminal rail 전환, task graph row/detail, dependency flow, run history row/detail, selected task agent prompt, terminal guidance를 실제 artifact reader 데이터에 연결 |
+| `2B-3` harness onboarding guidance | done | No P2A / installed empty / planning in progress / broken install / execution ready 상태별 onboarding stage, primary action, cwd, target, impact, command preview, readiness checks를 snapshot과 Overview에 연결 |
+| `2C-0` terminal surface | done | `@xterm/xterm` renderer, xterm CSS, fit addon, web links addon, fixed terminal pane sizing, scrollback, resize observer, stdin-disabled mock PTY stream을 Terminal 탭에 연결 |
+| `2C-1` real PTY session | done | Electron main `node-pty` session manager, agent tool command mapping, typed IPC start/input/resize/stop/data/exit stream, preload terminal API, xterm start/stop controls, renderer stdin forwarding, native module external 설정 추가 |
+| `2C-2` supervisor controls | done | Message agent 입력, xterm passthrough 모드, stop/kill 분리, blocked/failed 세션 메모 UI, `terminal:kill` typed IPC를 단일 active session에 한정해 구현 |
+| `2D` finish/verification | done | 선택 run 기준 `execution:finishRun` typed IPC, `p2a_execute finish` main-process 실행, test/lint/typecheck/custom verification 옵션, collect git, changed files/note, command output, run verification/failure/changed files 표시를 기존 lifecycle에 연결 |
+| smoke | done | scaffold된 작은 target 프로젝트에서 CLI로 started run을 준비한 뒤 GUI에서 `custom:true` verification과 finish를 수행해 task/run 상태가 `done`/`finished`로 갱신됨을 확인. fake `codex` PATH 스텁으로 source 앱과 packaged 앱의 `Start session`/`Message agent`/`Stop` PTY smoke도 통과 |
 
 ## 9. 첫 smoke 기준
 
