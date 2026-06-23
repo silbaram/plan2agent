@@ -1,4 +1,4 @@
-import { watch, type FSWatcher } from "node:fs";
+import { mkdirSync, watch, type FSWatcher } from "node:fs";
 import { app, BrowserWindow, dialog, ipcMain, session } from "electron";
 import path from "node:path";
 import {
@@ -49,6 +49,20 @@ const IGNORED_WATCH_SEGMENTS = new Set([
   "node_modules",
   "out",
 ]);
+
+function applyEnvironmentOverrides(): void {
+  const userDataPath = process.env.P2A_GUI_USER_DATA_DIR;
+  if (userDataPath && userDataPath.trim().length > 0) {
+    const resolvedUserDataPath = path.resolve(userDataPath);
+    mkdirSync(resolvedUserDataPath, { recursive: true });
+    app.setPath("userData", resolvedUserDataPath);
+  }
+
+  const remoteDebuggingPort = process.env.P2A_GUI_REMOTE_DEBUGGING_PORT;
+  if (remoteDebuggingPort && /^[0-9]+$/.test(remoteDebuggingPort)) {
+    app.commandLine.appendSwitch("remote-debugging-port", remoteDebuggingPort);
+  }
+}
 
 function runtimeInfo(): RuntimeInfo {
   return {
@@ -268,6 +282,8 @@ function installContentSecurityPolicy(): void {
     });
   });
 }
+
+applyEnvironmentOverrides();
 
 app.whenReady().then(() => {
   installContentSecurityPolicy();

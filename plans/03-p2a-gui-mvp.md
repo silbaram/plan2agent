@@ -376,6 +376,23 @@ GUI local config:
 - `npm test`에서 start -> finish -> snapshot reload 회귀 테스트가 통과한다.
 - 실패 출력, run 파일, task graph 상태가 기존 CLI 계약을 우회하지 않고 검증된다.
 
+### 2G. Packaged app smoke
+
+목적: packaged Electron 앱에서 renderer UI, preload IPC, main-process execution action, 기존 P2A CLI lifecycle이 실제 창 기준으로 연결되는지 검증한다.
+
+포함:
+
+- `npm run package`로 packaged 앱을 만든다.
+- 격리된 `P2A_GUI_USER_DATA_DIR`에 recent project config를 심어 native folder dialog 없이 임시 P2A 프로젝트를 연다.
+- Playwright Electron으로 packaged executable을 실행한다.
+- UI에서 recent project 클릭, Tasks 탭, `Start run`, Terminal/finish controls, `Finish run`, Runs 탭 상태를 확인한다.
+- smoke 종료 후 task graph와 run record 파일이 `done`/`finished`와 custom verification `passed`로 기록됐는지 확인한다.
+
+완료 기준:
+
+- `npm run smoke:packaged`가 package 생성부터 UI start/finish flow와 파일 상태 검증까지 통과한다.
+- packaged 앱 기준으로 renderer 버튼, preload API, main IPC, CLI bridge가 끊기지 않는다.
+
 ## 5. MVP 전체 포함 범위
 
 - Project onboarding / detection.
@@ -445,7 +462,8 @@ GUI local config:
 8. `2D` finish/verification: 기존 `p2a_execute`, `p2a_runs`, `p2a_tasks` lifecycle을 GUI command action으로 연결한다.
 9. `2E` start run: ready task를 GUI에서 시작하고 생성된 run을 자동 선택한다.
 10. `2F` automated smoke / regression: start -> finish -> snapshot reload 파일 상태 전이를 Vitest로 고정한다.
-11. smoke: scaffold된 작은 target 프로젝트에서 ready task 1건을 end-to-end 실행하고 CLI 표시와 GUI 표시가 일치하는지 확인한다.
+11. `2G` packaged app smoke: packaged Electron 앱에서 recent project -> start -> finish -> runs 상태를 자동 검증한다.
+12. smoke: scaffold된 작은 target 프로젝트에서 ready task 1건을 end-to-end 실행하고 CLI 표시와 GUI 표시가 일치하는지 확인한다.
 
 현재 진행:
 
@@ -461,6 +479,7 @@ GUI local config:
 | `2D` finish/verification | done | 선택 run 기준 `execution:finishRun` typed IPC, `p2a_execute finish` main-process 실행, test/lint/typecheck/custom verification 옵션, collect git, changed files/note, command output, run verification/failure/changed files 표시를 기존 lifecycle에 연결 |
 | `2E` start run | done | 선택 ready task 기준 `execution:startRun` typed IPC, `p2a_execute start` main-process 실행, Tasks inspector와 Terminal 탭 start action, command output, 성공 후 run 자동 선택과 Terminal handoff를 연결 |
 | `2F` automated smoke / regression | done | Vitest에서 임시 P2A 프로젝트에 실제 scripts/schemas runtime을 구성하고 `startRun` -> `finishRun` -> `loadProjectSnapshot` 경로와 start/verification 실패 path의 task/run 파일 상태 전이를 검증 |
+| `2G` packaged app smoke | done | `npm run smoke:packaged`로 packaged 앱을 실행하고 recent project -> Tasks `Start run` -> Terminal `Finish run` -> Runs 상태와 task/run 파일 상태를 자동 검증 |
 | smoke | done | scaffold된 작은 target 프로젝트에서 GUI로 `Start run` -> fake `codex` PTY `Start session`/`Message agent`/`Stop` -> `custom:true` verification -> `Finish run`까지 실행해 task/run 상태가 `done`/`finished`로 갱신됨을 packaged 앱에서 확인 |
 
 ## 9. 첫 smoke 기준

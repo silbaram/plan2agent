@@ -28,6 +28,15 @@ cd apps/p2a-gui
 npm run package
 ```
 
+Run a packaged app smoke test:
+
+```bash
+cd apps/p2a-gui
+npm run smoke:packaged
+```
+
+The packaged smoke command builds the app, launches the packaged Electron executable with an isolated GUI config directory, opens a temporary P2A project from the recent-project list, starts a run, finishes it with a custom verification command, and checks the resulting task/run files. Use `npm run smoke:packaged -- --skip-package` to reuse an existing package, or add `-- --keep-temp` to inspect the temporary project after the run.
+
 ## Use
 
 1. Start the app with `npm start`.
@@ -49,6 +58,8 @@ npm test
 ```
 
 The tests cover project loading, local config, terminal command helpers, execution command construction, and an automated smoke path that creates a temporary P2A project, runs `startRun`, runs `finishRun`, and reloads the project snapshot. Failure paths cover missing `p2a_execute`, not-ready task start, and verification failure recording.
+
+The packaged smoke test uses `P2A_GUI_USER_DATA_DIR` to isolate recent-project config from the developer's normal app data.
 
 ## MVP limitations
 
