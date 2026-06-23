@@ -4,40 +4,36 @@
 
 ## 0. 현재 완료 현황
 
-기준일: 2026-06-21
+기준일: 2026-06-23
 
-이 문서에서 완료로 보는 범위는 "기획 산출물 생성 -> task graph 관리 -> 반복 개발 구조 -> 대상 프로젝트 handoff -> agent 실행 결과 추적"까지다. 실제 Codex/Claude/Gemini CLI를 Plan2Agent가 직접 구동하고 감시하는 자동 실행기는 아직 후속이다.
+완료 상태는 기능 단위로 짧게 유지한다. 세부 구현 이력과 검증 로그는 하위 계획 문서와 커밋 기록에서 관리한다.
 
-완료된 큰 축:
+완료된 기능 요약:
 
-| 축 | 완료된 내용 | 주요 구현 |
-| --- | --- | --- |
-| 기획 하네스 | 한 문장 아이디어를 intake, spec, task graph, review 산출물로 정리하는 Gate A-D 흐름. Gate B는 명시 승인과 함께 승인 audit, 기술 선택 시 Technology Reconnaissance 근거를 요구한다 | `.agents/skills`, `.agents/agents`, schema, fixture, Gate B approval audit, Technology Reconnaissance 근거 검증 |
-| CLI/검증 기반 | 산출물 검증, fixture 회귀, CLI mirror drift 검증 | `validate_artifacts.mjs`, `run_fixtures.mjs`, `check_cli_parity.mjs` |
-| task 상태 관리 | 승인된 task graph에서 ready/prompt/start/done 흐름과 의존성 기반 진행 관리 | `p2a_tasks.mjs` |
-| co-located scaffold | 새 코드 프로젝트에 기획+개발 하네스 전체를 1회 설치하고 같은 디렉터리에서 Gate A-D부터 반복까지 진행 | `p2a_handoff.mjs scaffold`, `PLAN2AGENT.md`, `manifest.json`, `project.config.json` |
-| 개발 프로젝트 handoff | 외부에서 만든 Gate D 통과 산출물과 실행 도구를 대상 프로젝트 `.plan2agent/`로 복사하는 레거시/특수 흐름 | `p2a_handoff.mjs`, `manifest.json`, `project.config.json` |
-| AI 도구 설치 | Codex, Claude, Gemini용 P2A skill/agent/command shim 선택 복사 | `--tools codex,claude,gemini|all` |
-| Team Big Five adapter | Team Big Five 실행 패턴을 선택한 CLI target에 adapter로 설치 | `--include-team-bigfive`, `--team-bigfive-source`, `--team-bigfive-targets` |
-| 반복 개발 구조 | greenfield 산출물을 iteration 구조로 변환하고 close/open/current-spec composition을 관리 | `p2a_iteration.mjs init/current/validate/open/close/compose` |
-| baseline draft와 승인 반영 | Gate A-only 또는 baseline 기반 Gate A/B draft를 만들고 승인 spec을 current-spec에 기록 | `draft`, `promote-spec` |
-| semantic diff task | spec field 변경을 semantic group으로 묶고 rework/reuse/verification task 초안을 생성 | `diff-tasks` |
-| agent-authored task gate | agent가 Gate C task 초안을 쓰고 사람이 승인한 뒤 정본 승격 | `context`, `validate --stage gate-c-draft`, `promote-tasks`, `p2a-task-author` |
-| maintenance lane | Gate A/B/D 없이 상시 maintenance task graph를 lazy 생성/append하고 handoff | `maintenance add`, maintenance handoff |
-| agent 실행 결과 추적 | task별 run log, changedFiles, verification, agentTool, workspaceRef, branch/worktree 격리 기준 기록 | `p2a_runs.mjs`, `schemas/run*.schema.json` |
-| 문서화 | 사용자 시작점과 CLI/하네스/반복 계약 문서 정리 | `docs/README.md`, `docs/quickstart.md`, `docs/cli-reference.md` |
+| 기능 | 완료 범위 |
+| --- | --- |
+| 기획 하네스 | 아이디어를 intake, spec, task graph, review 산출물로 정리하는 Gate A-D 흐름 |
+| 검증 기반 | 산출물 검증, fixture 회귀, CLI mirror drift 검증 |
+| task 관리 | ready/prompt/start/done/block 상태와 의존성 기반 진행 관리 |
+| scaffold/handoff | 새 코드 프로젝트에 P2A 하네스 설치, 외부 기획 산출물 인계 |
+| AI 도구 설치 | Codex, Claude, Gemini용 skill/agent/command shim 선택 복사 |
+| Team Big Five adapter 설치 | 선택 CLI에 kickoff adapter와 source manifest 설치. 실제 팀 runtime은 제외 |
+| 반복 개발 구조 | iteration init/current/validate/open/close/compose, active 반복 인식 |
+| diff 기반 task 생성 | spec 변경을 semantic group으로 묶어 재작업 task 초안 생성 |
+| run 추적 | task별 run log, changedFiles, verification, workspaceRef, branch/worktree 격리 기록 |
+| 감독형 GUI MVP | 프로젝트 로딩, task/run/artifact 표시, PTY 세션, start/finish lifecycle, 한글/영문 UI |
 
-부분 완료 또는 후속으로 남은 축:
+남은 개발 축:
 
 | 축 | 현재 상태 | 남은 범위 |
 | --- | --- | --- |
-| baseline-aware 질문 재생성 UX | Gate A/B delta draft는 가능 | 기존 사용자 답변 재사용, 질문 재생성/재처분 UX 고도화 |
-| maintenance 운영 UX | maintenance task graph 생성/검증/handoff 가능 | maintenance draft 승격, 별도 사용자 UX |
-| 개발 실행 계층 (개발팀 AI agent) | 부분 구현 — `p2a-implementer`(Codex workspace-write·Claude deny+hook+macOS sandbox confinement), 독립 `p2a-performance-monitor`, `p2a-skill-curator`+proposal schema, 실패 분류(C-①), 자가발전 1사이클, 감독형 단일 task 실행기 Phase 1. 상세 `plans/02`, GUI MVP 상세 `plans/03` | PTY+Electron 감독 GUI, `p2a-dev-orchestrator` |
-| agent 자동 실행 | 실행 prompt·run log·실패 분류(C-①)와 Phase 1 semi-auto 실행 가능. 실행 모드는 **감독형 확정**(구독 요금제) | PTY+Electron 감독 GUI 미구현(상세 `plans/03`); 무인 실행·scheduler는 전용 API 키 도입 시 |
+| baseline-aware 질문 UX | Gate A/B delta draft 기반 있음 | 기존 답변 재사용, 질문 재생성/재처분 UX |
+| maintenance 운영 UX | maintenance task 생성/검증/handoff 가능 | draft 승격과 전용 UX |
+| Team Big Five orchestration | adapter 설치만 완료 | `p2a-dev-orchestrator`, solo/team 판단, 팀 세션 조율 |
+| Hermes 고도화 | proposal -> curator -> 승인 -> 적용 첫 사이클 완료 | cross-session recall, run history 기반 개선 후보 큐 |
 | PR/리뷰 연동 | 변경 파일과 검증 결과 기록 가능 | PR 생성, 리뷰 상태 연동, 변경 요약 자동화 |
-| code-aware 고도화 | spec 기반 semantic diff는 가능 | 기존 코드베이스 분석 기반 spec 역생성, 결과 diff 자동 병합 |
-| 제품 UI/Task Store | 파일 기반 CLI가 정본 | Jira식 DB/API/UI, 외부 issue tracker adapter |
+| code-aware 고도화 | spec 기반 semantic diff 가능 | 코드베이스 분석 기반 spec 역생성, 결과 diff 병합 |
+| Task Store/DB | 파일 기반 CLI/GUI가 정본 | 검색, 다중 프로젝트, 외부 issue tracker adapter |
 
 ## 1. 프로젝트 기본 정보
 
@@ -711,20 +707,20 @@ artifacts/
 
 현재 기준:
 
-- v1에는 웹 UI가 없으며 Node.js CLI로 제공한다.
-- 한 문장 입력, 대화형 보강, 명세 검토, task graph 검증과 task 상태 관리는 CLI와 파일 산출물로 처리한다.
-- UI(task board)는 v2 백로그로 둔다.
+- v1의 정본은 Node.js CLI와 파일 산출물이다.
+- 감독형 실행 GUI MVP는 내부 데스크톱 앱으로 완료됐다.
+- 별도 Task Store/DB UI는 다중 프로젝트, 검색, 외부 issue tracker가 필요해질 때 후속으로 둔다.
 
 v2·v3 후보:
 
-- v2 일반 task board: task 상태와 진행 상황을 화면에서 관리한다.
-- v2 React Flow: task graph, 흐름도, 의존성 표현이 필요할 때 붙인다.
+- v2 Task Store/DB: task/run/proposal 검색과 다중 프로젝트 관리.
+- v2 React Flow 고도화: 큰 task graph의 흐름도와 의존성 표현이 필요할 때 붙인다.
 - v3 TLDraw: 자유로운 캔버스 기반 기획 입력에 사용한다.
 
 결정된 내용:
 
-- v1 UI를 task board 중심으로 만들지, graph 중심으로 만들지에 대한 판단은 완료됐다. v1은 UI 없이 Node.js CLI로 제공한다.
-- React Flow는 v1에 포함하지 않고 v2 후보로 둔다.
+- v1 정본은 CLI/파일이고, GUI는 이를 읽고 감독하는 표면이다.
+- React Flow 고도화는 v1 정본에 포함하지 않고 후속 후보로 둔다.
 - TLDraw는 v1·v2 범위가 아니라 v3 캔버스 기반 시각 기획 입력 후보로 둔다.
 
 ## 12. 작업 방식
@@ -749,68 +745,39 @@ Plan2Agent 개발은 아래 흐름을 기본 협업 방식으로 둔다.
 
 ## 14. 고도화 백로그
 
-완료된 백로그:
-
-| 항목 | 상태 | 구현 기준 |
-| --- | --- | --- |
-| 기획 산출물 개발 프로젝트 인계 도구 | 완료 | `p2a_handoff.mjs`가 Gate D 산출물과 실행 도구를 대상 프로젝트로 복사한다. |
-| AI 개발 도구 복사와 개발 환경 부트스트랩 | 완료 | `--tools`가 P2A skill/subagent/command shim을 선택 복사하고 manifest에 기록한다. |
-| Team Big Five CLI adapter 선택 통합 | 완료 | `--include-team-bigfive`와 target/source 옵션으로 adapter와 source manifest를 설치한다. |
-| task별 실행 로그 관리 | 완료 | `p2a_runs.mjs`가 run-index/run log를 관리한다. |
-| 코드 변경 결과와 task 연결 | 완료 | run log sidecar가 `changedFiles`, verification, workspaceRef를 task별로 연결한다. |
-| 기획 변경 diff 기반 재작업 task 생성 | 완료 | `diff-tasks`가 semantic group, rework/reuse, verification dependency를 생성한다. |
-| 반복/고도화 개발 아키텍처 | 완료 | iteration init/current/validate/open/close/compose/handoff와 status history가 구현됐다. |
-| worktree 또는 branch 기반 task 격리 기준 | 완료 | `p2a_runs.mjs --isolation branch|worktree`, `--create-isolation`로 기록/선택 생성한다. |
+완료된 개발은 §0의 기능 요약을 기준으로 본다. 이 절은 남은 고도화 순서만 관리한다.
 
 부분 완료:
 
 | 항목 | 현재 상태 | 남은 범위 |
 | --- | --- | --- |
-| baseline-aware intake/spec 고도화 | `draft`가 초기 Gate B 초안과 baseline 기반 delta 초안을 만든다. | 질문 재생성 UX와 사용자 답변 재사용/재처분 고도화 |
-| maintenance task 운영 | lazy 생성/append, 검증, handoff는 가능하다. | maintenance draft 승격과 전용 UX |
+| baseline-aware intake/spec | delta draft와 diff-task 기반 있음 | 질문 재생성 UX와 답변 재사용/재처분 |
+| maintenance task 운영 | lazy 생성/append, 검증, handoff 가능 | maintenance draft 승격과 전용 UX |
+| Hermes식 자가발전 | proposal -> curator -> 승인 -> 적용 첫 사이클 완료 | cross-session recall과 개선 후보 큐 |
 
 후속 백로그:
 
-| 단계 | 항목 |
+| 우선순위 | 항목 |
 | --- | --- |
-| v2 | 개발 실행 계층 구성 **(부분 구현)**: `p2a-implementer`(Codex write·Claude confinement), 검증 `p2a-performance-monitor`, skill 큐레이션 `p2a-skill-curator`, 실패 분류(C-①), 자가발전 1사이클, 감독형 단일 task 실행기 Phase 1 완료. 남은: PTY+Electron 감독 GUI, 조율 `p2a-dev-orchestrator`. planning harness는 read-only 유지. 상세 `plans/02-development-team-ai-agent.md` |
-| v2 | 감독형 agent 실행기(Phase 1 semi-auto 완료 → Phase 2 PTY+Electron 감독 GUI). 무인(headless) 실행·세션 감시는 전용 API 키 도입 시 (LD-9, `plans/02`) |
-| v2 | 실패 task 재시도 정책 자동화 |
-| v2 | PR 생성 및 리뷰 상태 연동 |
-| v2 | 병렬 실행 scheduler |
-| v2 | code-aware spec 역생성과 결과 diff 자동 병합 |
-| v2 | Jira식 Task Store/API/UI와 외부 issue tracker adapter |
-| v3 | 캔버스 기반 시각 기획 입력 |
-| v3 | pgvector 또는 Neo4j 기반 plan-code 계보 추적 |
+| P1 | Team Big Five 감독형 orchestration: `p2a-dev-orchestrator`, solo/team 판단, 역할별 실행 계획 |
+| P1 | orchestrator와 GUI/CLI 실행 lifecycle 연결: run log, monitor gate, blocked/retry 판단 |
+| P2 | Hermes 고도화: run history digest, proposal queue, 반복 실패 유형 요약 |
+| P2 | 실패 task 재시도 정책 자동화 |
+| P2 | PR 생성 및 리뷰 상태 연동 |
+| P2 | code-aware spec 역생성과 결과 diff 자동 병합 |
+| P3 | Task Store/DB와 외부 issue tracker adapter |
+| P3 | pgvector 또는 Neo4j 기반 plan-code 계보 추적 |
 
 ## 15. 현재 개발 액션 정리
 
-완료된 액션:
-
-1. fixture coverage를 cache library 외 API/integration domain으로 확장했다(`fixtures/webhook-api-service`).
-2. e2e artifact-root golden fixture를 추가했다(`fixtures/_e2e/webhook-api-service`).
-3. v1 프로토타입은 Node.js CLI로 결정했고, UI(task board)는 후속 백로그로 둔다.
-4. §3의 task 상태와 의존성 관리는 `scripts/p2a_tasks.mjs`로 충족한다.
-5. §8-1의 개발 인계/환경 세팅은 완료됐다. 산출물/검증 도구 인계, P2A AI 도구 복사, Team Big Five adapter 선택 설치까지 포함한다.
-6. §8-2의 반복/고도화 개발 구조는 파일 기반 1차 구현을 완료했다. greenfield migration, planning stage validator, active iteration 인식, open/close, Gate A/B draft, promote-spec, semantic diff-tasks, current-spec composition, archive audit, status history/handoff audit, maintenance handoff, agent task provenance sidecar를 포함한다.
-7. §8-3의 agent 실행 로그, worktree/branch 격리 기준, 결과 diff 연결의 파일 기반 1차 구현은 `p2a_runs.mjs`로 완료했다.
-8. 사용자용 문서 진입점과 CLI/하네스/반복 계약 문서를 `docs/` 아래에 정리했다.
-9. Gate B 승인 audit와 Technology Reconnaissance 근거 검증을 하네스에 반영하고, status.md 구조(Progress/1~5 섹션/Gate A-D) 검증을 추가했다. 기술 선택 false-positive를 막는 negation 처리와 negative fixture(`fixtures/_negative/technology-recon`)를 포함한다.
-10. 개발 실행 계층(개발팀 AI agent)을 부분 구현했다: `p2a-implementer`(Codex workspace-write·Claude deny+hook+macOS sandbox confinement), 독립 `p2a-performance-monitor`, `p2a-skill-curator`+proposal schema, 실패 분류(C-①), 자가발전 1사이클, 감독형 단일 task 실행기 Phase 1(`p2a_execute.mjs`). 실행 모드는 구독 요금제로 인해 **감독형**으로 확정(무인은 전용 API 키 시). Gemini는 read-only 고정. 상세·결정은 `plans/02-development-team-ai-agent.md`.
-
-부분 완료:
-
-1. baseline-aware 질문 재생성 UX는 `draft`와 `diff-tasks`의 기반은 있지만, 기존 답변 재사용/재처분 UX는 후속이다.
-2. maintenance lane은 task graph 생성/검증/handoff는 가능하지만, maintenance draft 승격과 전용 UX는 후속이다.
+완료된 액션은 §0의 기능 요약으로 접었다.
 
 다음 후보:
 
-1. 개발 실행 계층 **이어서 구현**: implementer/monitor/curator/C-①와 **감독형 단일 task 실행기 Phase 1(`p2a_execute.mjs`)**는 완료. 다음은 **Phase 2(PTY+Electron 감독 GUI)**, 이어서 조율 `p2a-dev-orchestrator`. planning harness는 read-only 유지. 상세 `plans/02-development-team-ai-agent.md`.
-2. Gate D 이후 구조 선택 단계: planning이 handoff-ready가 되면 **반복 구조**(`p2a_iteration init`, 기본 권장)와 **단독 구조**(평면 `gate-*` 유지 + `--graph` 직접 구현) 중 사용자에게 명시적으로 묻는다. `p2a-harness`의 Approved planning output 모드와 `PLAN2AGENT.md`/`harness-guide`에 반영하되, 스킬은 init을 직접 실행하지 않고 명령만 안내한다(read-only 경계 유지).
-3. PTY+Electron 감독 GUI(감독형 실행기 Phase 2) — node-pty/xterm로 live watch+승인, 기존 CLI 구동. (무인 실행/scheduler는 전용 API 키 시)
-4. PR 생성 및 리뷰 상태 연동
-5. Jira식 Task Store/API/UI 설계
-6. code-aware spec 역생성과 결과 diff 자동 병합
-7. 병렬 실행 scheduler
+1. `p2a-dev-orchestrator` 개발 계획 확정과 MVP 구현. 상세는 `plans/02-1-p2a-dev-orchestrator.md`.
+2. orchestrator 결과를 GUI/CLI start/finish lifecycle, run log, monitor gate와 연결.
+3. Hermes cross-session recall과 proposal queue 설계.
+4. PR 생성 및 리뷰 상태 연동.
+5. code-aware spec 역생성과 결과 diff 자동 병합.
 
 CI 검증 연결은 사용자 관리 항목으로 둔다.
