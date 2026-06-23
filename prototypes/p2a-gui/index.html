@@ -75,7 +75,7 @@
           <span>Ta</span>
           <small data-i18n="rail.tasks">작업</small>
         </button>
-        <button class="rail__item rail__item--disabled" type="button" aria-label="실행 기록" data-i18n-aria-label="rail.runs" disabled aria-disabled="true" data-i18n-title="rail.runsDisabled" title="다음 프로토타입에서 연결">
+        <button class="rail__item" type="button" aria-label="실행 기록" data-i18n-aria-label="rail.runs" data-tab="runs">
           <span>Ru</span>
           <small data-i18n="rail.runs">실행 기록</small>
         </button>
@@ -215,6 +215,70 @@
 
         <div class="summary-actions">
           <button class="btn btn--ghost" type="button" data-detail="artifact-index" data-i18n="terminalSidebar.openArtifacts">문서 브라우저</button>
+        </div>
+      </aside>
+
+      <aside class="sidebar view-pane sidebar--runs" aria-label="실행 이력" data-i18n-aria-label="runsSidebar.label" data-panel="runs" hidden>
+        <div class="panel-head">
+          <div>
+            <div class="label" data-i18n="runsSidebar.kicker">실행 이력</div>
+            <h1 data-i18n="runsSidebar.title">최근 runs</h1>
+          </div>
+          <span class="pill pill--info" data-i18n="runsSidebar.pill">4 runs</span>
+        </div>
+
+        <div class="run-filter-row" aria-label="실행 상태 필터" data-i18n-aria-label="runsSidebar.filtersLabel">
+          <button class="run-filter run-filter--active" type="button" data-run-filter="all" data-i18n="runsSidebar.filterAll">All</button>
+          <button class="run-filter" type="button" data-run-filter="passed" data-i18n="runsSidebar.filterPassed">passed</button>
+          <button class="run-filter" type="button" data-run-filter="failed" data-i18n="runsSidebar.filterFailed">failed</button>
+          <button class="run-filter" type="button" data-run-filter="open" data-i18n="runsSidebar.filterOpen">open</button>
+        </div>
+
+        <div class="run-list" aria-label="run 목록" data-i18n-aria-label="runsSidebar.listLabel">
+          <button class="run-row run-row--active" type="button" data-run-id="run-005" aria-current="true">
+            <span class="run-row__state run-row__state--passed"></span>
+            <span>
+              <strong class="mono">run-005</strong>
+              <small data-i18n="runsSidebar.run005Meta">task-3 · 통과 · 13:42</small>
+            </span>
+          </button>
+          <button class="run-row" type="button" data-run-id="run-004">
+            <span class="run-row__state run-row__state--failed"></span>
+            <span>
+              <strong class="mono">run-004</strong>
+              <small data-i18n="runsSidebar.run004Meta">task-3 · 실패 · 13:07</small>
+            </span>
+          </button>
+          <button class="run-row" type="button" data-run-id="run-003">
+            <span class="run-row__state run-row__state--passed"></span>
+            <span>
+              <strong class="mono">run-003</strong>
+              <small data-i18n="runsSidebar.run003Meta">task-2 · 통과 · 어제</small>
+            </span>
+          </button>
+          <button class="run-row" type="button" data-run-id="run-002">
+            <span class="run-row__state run-row__state--passed"></span>
+            <span>
+              <strong class="mono">run-002</strong>
+              <small data-i18n="runsSidebar.run002Meta">task-1 · 통과 · 어제</small>
+            </span>
+          </button>
+        </div>
+
+        <div class="terminal-sidebar-section">
+          <div class="label" data-i18n="runsSidebar.scopeLabel">run 저장 위치</div>
+          <dl class="compact-dl">
+            <dt data-i18n="runsSidebar.project">project</dt>
+            <dd class="mono">bookmark-api</dd>
+            <dt data-i18n="runsSidebar.iteration">iteration</dt>
+            <dd class="mono">iter-002</dd>
+            <dt data-i18n="runsSidebar.path">path</dt>
+            <dd class="mono">artifacts/bookmark-api/runs</dd>
+          </dl>
+        </div>
+
+        <div class="summary-actions">
+          <button class="btn btn--ghost" type="button" data-detail="run-record" data-i18n="runsSidebar.openRunRecord">run 기록 보기</button>
         </div>
       </aside>
 
@@ -555,6 +619,135 @@
         </section>
       </section>
 
+      <section class="content content--runs view-pane" aria-label="실행 결과" data-i18n-aria-label="runs.label" data-panel="runs" hidden>
+        <div class="runs-topline">
+          <div>
+            <div class="label" data-i18n="runs.kicker">Runs · iter-002</div>
+            <h2 data-i18n="runs.title">실행 결과 검토</h2>
+          </div>
+          <div class="runs-topline__meta">
+            <span id="run-detail-pill" class="pill pill--ok">통과</span>
+            <span id="run-detail-id" class="mono">run-005</span>
+          </div>
+        </div>
+
+        <div class="run-summary-strip" aria-label="선택한 run 요약" data-i18n-aria-label="runs.summaryLabel">
+          <div>
+            <span data-i18n="runs.summaryStatus">상태</span>
+            <strong id="run-summary-status">통과</strong>
+          </div>
+          <div>
+            <span data-i18n="runs.summaryTask">작업</span>
+            <strong id="run-summary-task" class="mono">task-3</strong>
+          </div>
+          <div>
+            <span data-i18n="runs.summaryAgent">agent</span>
+            <strong id="run-summary-agent" class="mono">codex</strong>
+          </div>
+          <div>
+            <span data-i18n="runs.summaryDuration">소요 시간</span>
+            <strong id="run-summary-duration" class="mono">05:48</strong>
+          </div>
+        </div>
+
+        <div class="run-detail-surface">
+          <section class="run-block run-block--command">
+            <div class="task-block-head">
+              <div class="label" data-i18n="runs.commandLabel">실행 명령</div>
+              <span id="run-started-at" class="mono">2026-06-21 13:42</span>
+            </div>
+            <pre id="run-command" class="run-command-line">node scripts/p2a_execute.mjs run --task-id task-3 --agent codex</pre>
+            <dl class="run-meta-grid">
+              <div>
+                <dt data-i18n="runs.cwd">cwd</dt>
+                <dd id="run-cwd" class="mono">/Users/qoo10/projects/bookmark-api</dd>
+              </div>
+              <div>
+                <dt data-i18n="runs.model">model</dt>
+                <dd id="run-model" class="mono">gpt-5-codex</dd>
+              </div>
+              <div>
+                <dt data-i18n="runs.session">session</dt>
+                <dd id="run-session" class="mono">task-3-filter-005</dd>
+              </div>
+            </dl>
+          </section>
+
+          <section class="run-block run-block--verification">
+            <div class="task-block-head">
+              <div class="label" data-i18n="runs.verificationLabel">검증 결과</div>
+              <span id="run-exit-code" class="mono">exit 0</span>
+            </div>
+            <div class="verification-grid">
+              <div>
+                <span data-i18n="runs.verifyCommand">command</span>
+                <strong id="run-verify-command" class="mono">./gradlew test</strong>
+              </div>
+              <div>
+                <span data-i18n="runs.verifyDuration">duration</span>
+                <strong id="run-verify-duration" class="mono">42s</strong>
+              </div>
+              <div>
+                <span data-i18n="runs.verifyResult">result</span>
+                <strong id="run-verify-result">통과</strong>
+              </div>
+            </div>
+            <pre id="run-output" class="run-log-snippet">BUILD SUCCESSFUL in 42s
+BookmarkRepositoryTest > filters by tag and owner PASSED
+BookmarkControllerTest > keeps full list without filters PASSED</pre>
+          </section>
+
+          <section class="run-block run-block--files">
+            <div class="task-block-head">
+              <div class="label" data-i18n="runs.changedFilesLabel">변경 파일</div>
+              <span id="run-file-count" class="mono">4 files</span>
+            </div>
+            <div id="run-changed-files" class="changed-file-list">
+              <div><span class="mono">src/main/kotlin/bookmarks/BookmarkController.kt</span><strong>+18 -3</strong></div>
+              <div><span class="mono">src/main/kotlin/bookmarks/BookmarkRepository.kt</span><strong>+22 -4</strong></div>
+              <div><span class="mono">src/test/kotlin/bookmarks/BookmarkRepositoryTest.kt</span><strong>+34 -1</strong></div>
+              <div><span class="mono">docs/api/bookmarks.md</span><strong>+9 -0</strong></div>
+            </div>
+          </section>
+
+          <section class="run-block run-block--notes">
+            <div class="task-block-head">
+              <div class="label" data-i18n="runs.notesLabel">작업 요약</div>
+              <span id="run-notes-count" class="mono">3</span>
+            </div>
+            <ul id="run-notes-list" class="inspector-list">
+              <li>query parsing은 Controller에만 추가했다.</li>
+              <li>Repository 필터는 null-safe 조건으로 유지했다.</li>
+              <li>task-4 인증 컨텍스트는 건드리지 않았다.</li>
+            </ul>
+          </section>
+        </div>
+
+        <section class="run-doc-strip" aria-label="run 연결 문서" data-i18n-aria-label="runs.docsLabel">
+          <div>
+            <div class="label" data-i18n="runs.docsKicker">연결 문서</div>
+            <strong id="run-doc-summary">run-005 근거 3건</strong>
+          </div>
+          <div id="run-doc-list" class="doc-chip-list">
+            <button class="doc-chip" type="button" data-detail="run-record">
+              <strong>run</strong>
+              <small class="mono">runs/run-005.json</small>
+              <em>passed</em>
+            </button>
+            <button class="doc-chip" type="button" data-detail="task-graph-doc">
+              <strong>task graph</strong>
+              <small class="mono">gate-c-task-graph/task-graph.json</small>
+              <em>task-3</em>
+            </button>
+            <button class="doc-chip" type="button" data-detail="review-doc">
+              <strong>review</strong>
+              <small class="mono">gate-d-review/review-report.md</small>
+              <em>passed</em>
+            </button>
+          </div>
+        </section>
+      </section>
+
       <section class="content content--terminal view-pane" aria-label="Gate A 터미널" data-i18n-aria-label="terminal.label" data-panel="terminal" hidden>
         <div class="terminal-topline">
           <div>
@@ -746,6 +939,67 @@
         </div>
       </aside>
 
+      <aside class="inspector inspector--runs view-pane" aria-label="실행 판단" data-i18n-aria-label="runsInspector.label" data-panel="runs" hidden>
+        <div class="panel-head">
+          <div>
+            <div class="label" data-i18n="runsInspector.kicker">finish decision</div>
+            <h2 data-i18n="runsInspector.title">마무리 판단</h2>
+          </div>
+          <span id="run-inspector-pill" class="pill pill--ok">passed</span>
+        </div>
+
+        <div id="run-decision-list" class="readiness-list" aria-label="run 마무리 점검" data-i18n-aria-label="runsInspector.checksLabel">
+          <div class="readiness-row readiness-row--ok">
+            <span class="mono">01</span>
+            <div>
+              <strong>검증 통과</strong>
+              <small>./gradlew test · exit 0</small>
+            </div>
+          </div>
+          <div class="readiness-row readiness-row--ok">
+            <span class="mono">02</span>
+            <div>
+              <strong>변경 파일 확인</strong>
+              <small>4 files · expected scope</small>
+            </div>
+          </div>
+          <div class="readiness-row readiness-row--ok">
+            <span class="mono">03</span>
+            <div>
+              <strong>blocker 없음</strong>
+              <small>task-3 done 가능</small>
+            </div>
+          </div>
+        </div>
+
+        <div class="finish-panel">
+          <div class="label" data-i18n="runsInspector.finishLabel">마무리 명령</div>
+          <pre id="run-finish-command" class="finish-command">node scripts/p2a_execute.mjs finish --run-id run-005 --status done --task-id task-3</pre>
+          <p id="run-decision-summary" data-i18n="runsInspector.summaryPassed">검증이 통과했고 변경 범위가 task-3에 맞아 done 처리할 수 있습니다.</p>
+          <div class="finish-actions">
+            <button id="run-mark-done" class="btn btn--primary" type="button" data-i18n="runsInspector.markDone">Mark done</button>
+            <button id="run-mark-blocked" class="btn btn--ghost" type="button" data-i18n="runsInspector.markBlocked">Mark blocked</button>
+          </div>
+        </div>
+
+        <div class="terminal-sidebar-section">
+          <div class="label" data-i18n="runsInspector.nextLabel">다음 위치</div>
+          <dl class="compact-dl">
+            <dt data-i18n="runsInspector.task">task</dt>
+            <dd id="run-inspector-task" class="mono">task-3</dd>
+            <dt data-i18n="runsInspector.nextTask">next</dt>
+            <dd id="run-inspector-next" class="mono">task-4</dd>
+            <dt data-i18n="runsInspector.state">state</dt>
+            <dd id="run-inspector-state">task-4는 ND-2 대기</dd>
+          </dl>
+        </div>
+
+        <div class="inspector-actions">
+          <button class="btn" type="button" data-route="tasks" data-i18n="runsInspector.openTask">작업에서 보기</button>
+          <button class="btn btn--ghost" type="button" data-route="terminal" data-i18n="runsInspector.openTerminal">터미널 열기</button>
+        </div>
+      </aside>
+
       <aside class="inspector inspector--terminal view-pane" aria-label="Gate A 인스펙터" data-i18n-aria-label="terminalInspector.label" data-panel="terminal" hidden>
         <div class="panel-head">
           <div>
@@ -836,6 +1090,8 @@
     const viewPanes = [...document.querySelectorAll("[data-panel]")];
     const workspace = document.querySelector(".workspace");
     const taskGraphNodes = [...document.querySelectorAll("[data-task-id]")];
+    const runRows = [...document.querySelectorAll("[data-run-id]")];
+    const runFilters = [...document.querySelectorAll("[data-run-filter]")];
     const taskOpenTerminalButton = document.querySelector("#task-open-terminal");
     const taskSelectedMeta = document.querySelector("#task-selected-meta");
     const taskDetailKicker = document.querySelector("#task-detail-kicker");
@@ -855,6 +1111,37 @@
     const taskVerificationCommand = document.querySelector("#task-verification-command");
     const taskVerificationTimeout = document.querySelector("#task-verification-timeout");
     const taskVerificationLatest = document.querySelector("#task-verification-latest");
+    const runDetailPill = document.querySelector("#run-detail-pill");
+    const runDetailId = document.querySelector("#run-detail-id");
+    const runSummaryStatus = document.querySelector("#run-summary-status");
+    const runSummaryTask = document.querySelector("#run-summary-task");
+    const runSummaryAgent = document.querySelector("#run-summary-agent");
+    const runSummaryDuration = document.querySelector("#run-summary-duration");
+    const runStartedAt = document.querySelector("#run-started-at");
+    const runCommand = document.querySelector("#run-command");
+    const runCwd = document.querySelector("#run-cwd");
+    const runModel = document.querySelector("#run-model");
+    const runSession = document.querySelector("#run-session");
+    const runExitCode = document.querySelector("#run-exit-code");
+    const runVerifyCommand = document.querySelector("#run-verify-command");
+    const runVerifyDuration = document.querySelector("#run-verify-duration");
+    const runVerifyResult = document.querySelector("#run-verify-result");
+    const runOutput = document.querySelector("#run-output");
+    const runFileCount = document.querySelector("#run-file-count");
+    const runChangedFiles = document.querySelector("#run-changed-files");
+    const runNotesCount = document.querySelector("#run-notes-count");
+    const runNotesList = document.querySelector("#run-notes-list");
+    const runDocSummary = document.querySelector("#run-doc-summary");
+    const runDocList = document.querySelector("#run-doc-list");
+    const runInspectorPill = document.querySelector("#run-inspector-pill");
+    const runDecisionList = document.querySelector("#run-decision-list");
+    const runFinishCommand = document.querySelector("#run-finish-command");
+    const runDecisionSummary = document.querySelector("#run-decision-summary");
+    const runMarkDoneButton = document.querySelector("#run-mark-done");
+    const runMarkBlockedButton = document.querySelector("#run-mark-blocked");
+    const runInspectorTask = document.querySelector("#run-inspector-task");
+    const runInspectorNext = document.querySelector("#run-inspector-next");
+    const runInspectorState = document.querySelector("#run-inspector-state");
     const documentRows = [...document.querySelectorAll("[data-document]")];
     const summaryState = document.querySelector("#summary-state");
     const summaryAction = document.querySelector("#summary-action");
@@ -1063,6 +1350,64 @@
       "status.terminalLeft": { ko: "Gate A 대화 세션", en: "Gate A conversation session" },
       "status.terminalCwd": { ko: "cwd /Users/qoo10/projects/bookmark-api", en: "cwd /Users/qoo10/projects/bookmark-api" },
       "status.terminalRight": { ko: "PTY 입력은 agent stdin으로만 전달", en: "PTY input forwards only to agent stdin" },
+      "status.runsLeft": { ko: "run-005 passed", en: "run-005 passed" },
+      "status.runsRight": { ko: "검증 결과 확인 후 finish 판단", en: "review verification before finish" },
+      "runsSidebar.label": { ko: "실행 이력", en: "Run history" },
+      "runsSidebar.kicker": { ko: "실행 이력", en: "run history" },
+      "runsSidebar.title": { ko: "최근 runs", en: "Recent runs" },
+      "runsSidebar.pill": { ko: "4 runs", en: "4 runs" },
+      "runsSidebar.filtersLabel": { ko: "실행 상태 필터", en: "Run status filters" },
+      "runsSidebar.filterAll": { ko: "All", en: "All" },
+      "runsSidebar.filterPassed": { ko: "passed", en: "passed" },
+      "runsSidebar.filterFailed": { ko: "failed", en: "failed" },
+      "runsSidebar.filterOpen": { ko: "open", en: "open" },
+      "runsSidebar.listLabel": { ko: "run 목록", en: "Run list" },
+      "runsSidebar.run005Meta": { ko: "task-3 · 통과 · 13:42", en: "task-3 · passed · 13:42" },
+      "runsSidebar.run004Meta": { ko: "task-3 · 실패 · 13:07", en: "task-3 · failed · 13:07" },
+      "runsSidebar.run003Meta": { ko: "task-2 · 통과 · 어제", en: "task-2 · passed · yesterday" },
+      "runsSidebar.run002Meta": { ko: "task-1 · 통과 · 어제", en: "task-1 · passed · yesterday" },
+      "runsSidebar.scopeLabel": { ko: "run 저장 위치", en: "Run storage" },
+      "runsSidebar.project": { ko: "project", en: "project" },
+      "runsSidebar.iteration": { ko: "iteration", en: "iteration" },
+      "runsSidebar.path": { ko: "path", en: "path" },
+      "runsSidebar.openRunRecord": { ko: "run 기록 보기", en: "View run record" },
+      "runs.label": { ko: "실행 결과", en: "Run result" },
+      "runs.kicker": { ko: "Runs · iter-002", en: "Runs · iter-002" },
+      "runs.title": { ko: "실행 결과 검토", en: "Review run result" },
+      "runs.summaryLabel": { ko: "선택한 run 요약", en: "Selected run summary" },
+      "runs.summaryStatus": { ko: "상태", en: "Status" },
+      "runs.summaryTask": { ko: "작업", en: "Task" },
+      "runs.summaryAgent": { ko: "agent", en: "agent" },
+      "runs.summaryDuration": { ko: "소요 시간", en: "Duration" },
+      "runs.commandLabel": { ko: "실행 명령", en: "Run command" },
+      "runs.cwd": { ko: "cwd", en: "cwd" },
+      "runs.model": { ko: "model", en: "model" },
+      "runs.session": { ko: "session", en: "session" },
+      "runs.verificationLabel": { ko: "검증 결과", en: "Verification result" },
+      "runs.verifyCommand": { ko: "command", en: "command" },
+      "runs.verifyDuration": { ko: "duration", en: "duration" },
+      "runs.verifyResult": { ko: "result", en: "result" },
+      "runs.changedFilesLabel": { ko: "변경 파일", en: "Changed files" },
+      "runs.notesLabel": { ko: "작업 요약", en: "Work summary" },
+      "runs.docsLabel": { ko: "run 연결 문서", en: "Run linked documents" },
+      "runs.docsKicker": { ko: "연결 문서", en: "linked documents" },
+      "runsInspector.label": { ko: "실행 판단", en: "Run decision" },
+      "runsInspector.kicker": { ko: "finish decision", en: "finish decision" },
+      "runsInspector.title": { ko: "마무리 판단", en: "Finish decision" },
+      "runsInspector.checksLabel": { ko: "run 마무리 점검", en: "Run finish checks" },
+      "runsInspector.finishLabel": { ko: "마무리 명령", en: "Finish command" },
+      "runsInspector.summaryPassed": { ko: "검증이 통과했고 변경 범위가 task에 맞아 done 처리할 수 있습니다.", en: "Verification passed and the change scope matches the task, so this can be marked done." },
+      "runsInspector.summaryFailed": { ko: "검증이 실패했습니다. 수정 후 같은 task로 다시 실행해야 합니다.", en: "Verification failed. Fix the issue and rerun the same task." },
+      "runsInspector.summaryDone": { ko: "done 처리 명령을 준비했습니다.", en: "Prepared the done finish command." },
+      "runsInspector.summaryBlocked": { ko: "blocked 처리 명령을 준비했습니다.", en: "Prepared the blocked finish command." },
+      "runsInspector.markDone": { ko: "Mark done", en: "Mark done" },
+      "runsInspector.markBlocked": { ko: "Mark blocked", en: "Mark blocked" },
+      "runsInspector.nextLabel": { ko: "다음 위치", en: "Next location" },
+      "runsInspector.task": { ko: "task", en: "task" },
+      "runsInspector.nextTask": { ko: "next", en: "next" },
+      "runsInspector.state": { ko: "state", en: "state" },
+      "runsInspector.openTask": { ko: "작업에서 보기", en: "Open in Tasks" },
+      "runsInspector.openTerminal": { ko: "터미널 열기", en: "Open Terminal" },
       "modal.kicker": { ko: "세부내용", en: "details" },
       "modal.title": { ko: "세부내용", en: "Details" },
       "modal.close": { ko: "닫기", en: "Close" },
@@ -1251,6 +1596,295 @@ Build a shared bookmark API for the team.`,
 
     const intakePath = "artifacts/bookmark-api/gate-a-intake/intake.md";
 
+    const runRecords = {
+      "run-005": {
+        status: "passed",
+        statusLabel: { ko: "통과", en: "passed" },
+        pillClass: "pill pill--ok",
+        taskId: "task-3",
+        agent: "codex",
+        duration: "05:48",
+        startedAt: "2026-06-21 13:42",
+        command: "node scripts/p2a_execute.mjs run --task-id task-3 --agent codex",
+        cwd: "/Users/qoo10/projects/bookmark-api",
+        model: "gpt-5-codex",
+        session: "task-3-filter-005",
+        exitCode: "exit 0",
+        verifyCommand: "./gradlew test",
+        verifyDuration: "42s",
+        verifyResult: { ko: "통과", en: "passed" },
+        output: {
+          ko: `BUILD SUCCESSFUL in 42s
+BookmarkRepositoryTest > filters by tag and owner PASSED
+BookmarkControllerTest > keeps full list without filters PASSED`,
+          en: `BUILD SUCCESSFUL in 42s
+BookmarkRepositoryTest > filters by tag and owner PASSED
+BookmarkControllerTest > keeps full list without filters PASSED`,
+        },
+        files: [
+          ["src/main/kotlin/bookmarks/BookmarkController.kt", "+18 -3"],
+          ["src/main/kotlin/bookmarks/BookmarkRepository.kt", "+22 -4"],
+          ["src/test/kotlin/bookmarks/BookmarkRepositoryTest.kt", "+34 -1"],
+          ["docs/api/bookmarks.md", "+9 -0"],
+        ],
+        notes: [
+          { ko: "query parsing은 Controller에만 추가했다.", en: "Query parsing was added only to the Controller." },
+          { ko: "Repository 필터는 null-safe 조건으로 유지했다.", en: "Repository filters stayed null-safe." },
+          { ko: "task-4 인증 컨텍스트는 건드리지 않았다.", en: "task-4 auth context was left untouched." },
+        ],
+        checks: [
+          [{ ko: "검증 통과", en: "Verification passed" }, "./gradlew test · exit 0", "ok"],
+          [{ ko: "변경 파일 확인", en: "Changed files reviewed" }, { ko: "4 files · expected scope", en: "4 files · expected scope" }, "ok"],
+          [{ ko: "blocker 없음", en: "No blocker" }, { ko: "task-3 done 가능", en: "task-3 can be marked done" }, "ok"],
+        ],
+        finishStatus: "done",
+        finishCommand: "node scripts/p2a_execute.mjs finish --run-id run-005 --status done --task-id task-3",
+        decisionSummary: { ko: "검증이 통과했고 변경 범위가 task-3에 맞아 done 처리할 수 있습니다.", en: "Verification passed and the change scope matches task-3, so it can be marked done." },
+        nextTask: "task-4",
+        nextState: { ko: "task-4는 ND-2 대기", en: "task-4 is waiting on ND-2" },
+        docs: [
+          { detail: "run-record", label: "run", path: "runs/run-005.json", state: "passed" },
+          { detail: "task-graph-doc", label: "task graph", path: "gate-c-task-graph/task-graph.json", state: "task-3" },
+          { detail: "review-doc", label: "review", path: "gate-d-review/review-report.md", state: "passed" },
+        ],
+        record: {
+          ko: `{
+  "run_id": "run-005",
+  "task_id": "task-3",
+  "status": "passed",
+  "agent_cli": "codex",
+  "model": "gpt-5-codex",
+  "command": "node scripts/p2a_execute.mjs run --task-id task-3 --agent codex",
+  "verification": {
+    "command": "./gradlew test",
+    "exit_code": 0,
+    "duration": "42s"
+  },
+  "changed_files": [
+    "src/main/kotlin/bookmarks/BookmarkController.kt",
+    "src/main/kotlin/bookmarks/BookmarkRepository.kt",
+    "src/test/kotlin/bookmarks/BookmarkRepositoryTest.kt",
+    "docs/api/bookmarks.md"
+  ],
+  "finish_recommendation": "done"
+}`,
+          en: `{
+  "run_id": "run-005",
+  "task_id": "task-3",
+  "status": "passed",
+  "agent_cli": "codex",
+  "model": "gpt-5-codex",
+  "command": "node scripts/p2a_execute.mjs run --task-id task-3 --agent codex",
+  "verification": {
+    "command": "./gradlew test",
+    "exit_code": 0,
+    "duration": "42s"
+  },
+  "changed_files": [
+    "src/main/kotlin/bookmarks/BookmarkController.kt",
+    "src/main/kotlin/bookmarks/BookmarkRepository.kt",
+    "src/test/kotlin/bookmarks/BookmarkRepositoryTest.kt",
+    "docs/api/bookmarks.md"
+  ],
+  "finish_recommendation": "done"
+}`,
+        },
+      },
+      "run-004": {
+        status: "failed",
+        statusLabel: { ko: "실패", en: "failed" },
+        pillClass: "pill pill--err",
+        taskId: "task-3",
+        agent: "codex",
+        duration: "03:19",
+        startedAt: "2026-06-21 13:07",
+        command: "node scripts/p2a_execute.mjs run --task-id task-3 --agent codex",
+        cwd: "/Users/qoo10/projects/bookmark-api",
+        model: "gpt-5-codex",
+        session: "task-3-filter-004",
+        exitCode: "exit 1",
+        verifyCommand: "./gradlew test",
+        verifyDuration: "38s",
+        verifyResult: { ko: "실패", en: "failed" },
+        output: {
+          ko: `BUILD FAILED in 38s
+BookmarkRepositoryTest > filters by createdAfter FAILED
+Expected 2 results but received 3`,
+          en: `BUILD FAILED in 38s
+BookmarkRepositoryTest > filters by createdAfter FAILED
+Expected 2 results but received 3`,
+        },
+        files: [
+          ["src/main/kotlin/bookmarks/BookmarkRepository.kt", "+16 -2"],
+          ["src/test/kotlin/bookmarks/BookmarkRepositoryTest.kt", "+21 -0"],
+        ],
+        notes: [
+          { ko: "createdAfter 경계 조건이 누락되어 실패했다.", en: "The createdAfter boundary condition was missing." },
+          { ko: "run-005에서 같은 task를 다시 실행해 통과했다.", en: "The same task passed later in run-005." },
+        ],
+        checks: [
+          [{ ko: "검증 실패", en: "Verification failed" }, "./gradlew test · exit 1", "warn"],
+          [{ ko: "수정 필요", en: "Fix required" }, { ko: "createdAfter boundary", en: "createdAfter boundary" }, "warn"],
+          [{ ko: "후속 run 있음", en: "Later run exists" }, "run-005 · passed", "ok"],
+        ],
+        finishStatus: "blocked",
+        finishCommand: "node scripts/p2a_execute.mjs finish --run-id run-004 --status blocked --task-id task-3",
+        decisionSummary: { ko: "검증이 실패했습니다. run-005가 이 실패를 해결한 최신 run입니다.", en: "Verification failed. run-005 is the latest run that resolved this failure." },
+        nextTask: "task-3",
+        nextState: { ko: "최신 run-005 확인 필요", en: "review latest run-005" },
+        docs: [
+          { detail: "run-record", label: "run", path: "runs/run-004.json", state: "failed" },
+          { detail: "task-graph-doc", label: "task graph", path: "gate-c-task-graph/task-graph.json", state: "task-3" },
+        ],
+        record: {
+          ko: `{
+  "run_id": "run-004",
+  "task_id": "task-3",
+  "status": "failed",
+  "verification": {
+    "command": "./gradlew test",
+    "exit_code": 1,
+    "failure": "createdAfter boundary returned too many rows"
+  },
+  "superseded_by": "run-005"
+}`,
+          en: `{
+  "run_id": "run-004",
+  "task_id": "task-3",
+  "status": "failed",
+  "verification": {
+    "command": "./gradlew test",
+    "exit_code": 1,
+    "failure": "createdAfter boundary returned too many rows"
+  },
+  "superseded_by": "run-005"
+}`,
+        },
+      },
+      "run-003": {
+        status: "passed",
+        statusLabel: { ko: "통과", en: "passed" },
+        pillClass: "pill pill--ok",
+        taskId: "task-2",
+        agent: "codex",
+        duration: "04:11",
+        startedAt: "2026-06-20 17:28",
+        command: "node scripts/p2a_execute.mjs run --task-id task-2 --agent codex",
+        cwd: "/Users/qoo10/projects/bookmark-api",
+        model: "gpt-5-codex",
+        session: "task-2-repository-003",
+        exitCode: "exit 0",
+        verifyCommand: "./gradlew test",
+        verifyDuration: "35s",
+        verifyResult: { ko: "통과", en: "passed" },
+        output: {
+          ko: `BUILD SUCCESSFUL in 35s
+BookmarkRepositoryTest > keeps base order PASSED`,
+          en: `BUILD SUCCESSFUL in 35s
+BookmarkRepositoryTest > keeps base order PASSED`,
+        },
+        files: [
+          ["src/main/kotlin/bookmarks/BookmarkRepository.kt", "+14 -6"],
+          ["src/test/kotlin/bookmarks/BookmarkRepositoryTest.kt", "+18 -0"],
+        ],
+        notes: [
+          { ko: "기본 목록 조회 순서를 유지했다.", en: "Base list ordering was preserved." },
+          { ko: "task-3 필터 입력을 받을 수 있는 경계를 만들었다.", en: "Prepared the boundary for task-3 filter inputs." },
+        ],
+        checks: [
+          [{ ko: "검증 통과", en: "Verification passed" }, "./gradlew test · exit 0", "ok"],
+          [{ ko: "task 완료", en: "Task complete" }, { ko: "task-2 already done", en: "task-2 already done" }, "ok"],
+          [{ ko: "후속 작업", en: "Follow-up task" }, "task-3", "ok"],
+        ],
+        finishStatus: "done",
+        finishCommand: "node scripts/p2a_execute.mjs finish --run-id run-003 --status done --task-id task-2",
+        decisionSummary: { ko: "이미 done 처리된 선행 작업입니다.", en: "This predecessor task has already been marked done." },
+        nextTask: "task-3",
+        nextState: { ko: "task-3 실행 가능", en: "task-3 is runnable" },
+        docs: [
+          { detail: "run-record", label: "run", path: "runs/run-003.json", state: "passed" },
+          { detail: "task-graph-doc", label: "task graph", path: "gate-c-task-graph/task-graph.json", state: "done" },
+        ],
+        record: {
+          ko: `{
+  "run_id": "run-003",
+  "task_id": "task-2",
+  "status": "passed",
+  "verification": { "command": "./gradlew test", "exit_code": 0 },
+  "finish_recommendation": "done"
+}`,
+          en: `{
+  "run_id": "run-003",
+  "task_id": "task-2",
+  "status": "passed",
+  "verification": { "command": "./gradlew test", "exit_code": 0 },
+  "finish_recommendation": "done"
+}`,
+        },
+      },
+      "run-002": {
+        status: "passed",
+        statusLabel: { ko: "통과", en: "passed" },
+        pillClass: "pill pill--ok",
+        taskId: "task-1",
+        agent: "codex",
+        duration: "03:54",
+        startedAt: "2026-06-20 16:41",
+        command: "node scripts/p2a_execute.mjs run --task-id task-1 --agent codex",
+        cwd: "/Users/qoo10/projects/bookmark-api",
+        model: "gpt-5-codex",
+        session: "task-1-model-002",
+        exitCode: "exit 0",
+        verifyCommand: "./gradlew test",
+        verifyDuration: "31s",
+        verifyResult: { ko: "통과", en: "passed" },
+        output: {
+          ko: `BUILD SUCCESSFUL in 31s
+BookmarkTest > rejects empty url PASSED`,
+          en: `BUILD SUCCESSFUL in 31s
+BookmarkTest > rejects empty url PASSED`,
+        },
+        files: [
+          ["src/main/kotlin/bookmarks/Bookmark.kt", "+28 -0"],
+          ["src/test/kotlin/bookmarks/BookmarkTest.kt", "+24 -0"],
+        ],
+        notes: [
+          { ko: "북마크 모델 필드와 기본 검증을 추가했다.", en: "Added bookmark model fields and baseline validation." },
+          { ko: "저장소 구현은 task-2로 넘겼다.", en: "Repository implementation was left to task-2." },
+        ],
+        checks: [
+          [{ ko: "검증 통과", en: "Verification passed" }, "./gradlew test · exit 0", "ok"],
+          [{ ko: "task 완료", en: "Task complete" }, { ko: "task-1 already done", en: "task-1 already done" }, "ok"],
+          [{ ko: "후속 작업", en: "Follow-up task" }, "task-2", "ok"],
+        ],
+        finishStatus: "done",
+        finishCommand: "node scripts/p2a_execute.mjs finish --run-id run-002 --status done --task-id task-1",
+        decisionSummary: { ko: "이미 done 처리된 선행 작업입니다.", en: "This predecessor task has already been marked done." },
+        nextTask: "task-2",
+        nextState: { ko: "task-2 완료됨", en: "task-2 is complete" },
+        docs: [
+          { detail: "run-record", label: "run", path: "runs/run-002.json", state: "passed" },
+          { detail: "task-graph-doc", label: "task graph", path: "gate-c-task-graph/task-graph.json", state: "done" },
+        ],
+        record: {
+          ko: `{
+  "run_id": "run-002",
+  "task_id": "task-1",
+  "status": "passed",
+  "verification": { "command": "./gradlew test", "exit_code": 0 },
+  "finish_recommendation": "done"
+}`,
+          en: `{
+  "run_id": "run-002",
+  "task_id": "task-1",
+  "status": "passed",
+  "verification": { "command": "./gradlew test", "exit_code": 0 },
+  "finish_recommendation": "done"
+}`,
+        },
+      },
+    };
+
     const detailTemplates = {
       "local-config": {
         kicker: { ko: "GUI 로컬 설정", en: "GUI local config" },
@@ -1405,6 +2039,21 @@ Build a shared bookmark API for the team.`,
 [11:43:22] user   Keep only team-wide sharing for the MVP and defer personal scope.
 [11:44:03] agent  ND-2 How should initial authentication work?</pre>
 </article>`,
+        },
+      },
+      "run-record": {
+        variant: "document",
+        kicker: { ko: "runs/run.json", en: "runs/run.json" },
+        title: { ko: "선택한 run 기록", en: "Selected run record" },
+        body: () => {
+          const run = runRecords[selectedRunId];
+          return `<article class="document-viewer">
+<div class="document-viewer__meta">
+  <span class="mono">artifacts/bookmark-api/runs/${selectedRunId}.json</span>
+  <span class="${run.pillClass}">${localized(run.statusLabel)}</span>
+</div>
+<pre class="document-viewer__body">${localized(run.record)}</pre>
+</article>`;
         },
       },
       "spec-doc": {
@@ -1903,6 +2552,8 @@ How should initial authentication start?</pre>
 
     let currentState = "execution-ready";
     let selectedTaskId = "task-3";
+    let selectedRunId = "run-005";
+    let selectedRunFilter = "all";
     let currentTab = "overview";
     let currentLocale = localStorage.getItem("p2aGuiLocale") || "ko";
     let rawLogEnabled = false;
@@ -2013,6 +2664,139 @@ How should initial authentication start?</pre>
       });
     }
 
+    function renderRunDocuments(run) {
+      runDocSummary.textContent = currentLocale === "ko"
+        ? `${selectedRunId} 근거 ${run.docs.length}건`
+        : `${run.docs.length} evidence documents for ${selectedRunId}`;
+      runDocList.textContent = "";
+
+      run.docs.forEach((doc) => {
+        const button = document.createElement("button");
+        button.className = "doc-chip";
+        button.type = "button";
+        button.dataset.detail = doc.detail;
+
+        const label = document.createElement("strong");
+        label.textContent = doc.label;
+
+        const path = document.createElement("small");
+        path.className = "mono";
+        path.textContent = doc.path;
+
+        const state = document.createElement("em");
+        state.textContent = doc.state;
+
+        button.append(label, path, state);
+        runDocList.appendChild(button);
+      });
+    }
+
+    function renderRunChecks(run) {
+      runDecisionList.textContent = "";
+      run.checks.forEach((row, index) => {
+        const item = document.createElement("div");
+        item.className = `readiness-row readiness-row--${row[2]}`;
+
+        const number = document.createElement("span");
+        number.className = "mono";
+        number.textContent = String(index + 1).padStart(2, "0");
+
+        const body = document.createElement("div");
+        const title = document.createElement("strong");
+        title.textContent = localized(row[0]);
+        const meta = document.createElement("small");
+        meta.textContent = localized(row[1]);
+
+        body.append(title, meta);
+        item.append(number, body);
+        runDecisionList.appendChild(item);
+      });
+    }
+
+    function runMatchesFilter(run) {
+      if (selectedRunFilter === "all") return true;
+      if (selectedRunFilter === "open") return run.status !== "passed";
+      return run.status === selectedRunFilter;
+    }
+
+    function renderRunFilterState() {
+      runFilters.forEach((button) => {
+        button.classList.toggle("run-filter--active", button.dataset.runFilter === selectedRunFilter);
+      });
+      runRows.forEach((row) => {
+        const run = runRecords[row.dataset.runId];
+        row.hidden = !runMatchesFilter(run);
+      });
+    }
+
+    function renderRunSelection() {
+      const run = runRecords[selectedRunId];
+      if (!run) return;
+
+      renderRunFilterState();
+      runRows.forEach((row) => {
+        const selected = row.dataset.runId === selectedRunId;
+        row.classList.toggle("run-row--active", selected);
+        if (selected) {
+          row.setAttribute("aria-current", "true");
+        } else {
+          row.removeAttribute("aria-current");
+        }
+      });
+
+      runDetailPill.className = run.pillClass;
+      runDetailPill.textContent = localized(run.statusLabel);
+      runDetailId.textContent = selectedRunId;
+      runSummaryStatus.textContent = localized(run.statusLabel);
+      runSummaryTask.textContent = run.taskId;
+      runSummaryAgent.textContent = run.agent;
+      runSummaryDuration.textContent = run.duration;
+      runStartedAt.textContent = run.startedAt;
+      runCommand.textContent = run.command;
+      runCwd.textContent = run.cwd;
+      runModel.textContent = run.model;
+      runSession.textContent = run.session;
+      runExitCode.textContent = run.exitCode;
+      runVerifyCommand.textContent = run.verifyCommand;
+      runVerifyDuration.textContent = run.verifyDuration;
+      runVerifyResult.textContent = localized(run.verifyResult);
+      runOutput.textContent = localized(run.output);
+      runFileCount.textContent = currentLocale === "ko"
+        ? `${run.files.length} files`
+        : `${run.files.length} files`;
+      runChangedFiles.textContent = "";
+      run.files.forEach(([path, delta]) => {
+        const row = document.createElement("div");
+        const pathEl = document.createElement("span");
+        pathEl.className = "mono";
+        pathEl.textContent = path;
+        const deltaEl = document.createElement("strong");
+        deltaEl.textContent = delta;
+        row.append(pathEl, deltaEl);
+        runChangedFiles.appendChild(row);
+      });
+      runNotesCount.textContent = String(run.notes.length);
+      renderTextList(runNotesList, run.notes);
+      renderRunDocuments(run);
+
+      runInspectorPill.className = run.pillClass;
+      runInspectorPill.textContent = localized(run.statusLabel);
+      renderRunChecks(run);
+      runFinishCommand.textContent = run.finishCommand;
+      runDecisionSummary.textContent = localized(run.decisionSummary);
+      runInspectorTask.textContent = run.taskId;
+      runInspectorNext.textContent = run.nextTask;
+      runInspectorState.textContent = localized(run.nextState);
+
+      const canMarkDone = run.finishStatus === "done" && run.status === "passed";
+      runMarkDoneButton.disabled = !canMarkDone;
+      runMarkDoneButton.setAttribute("aria-disabled", String(!canMarkDone));
+
+      if (currentTab === "runs") {
+        statusLeft.textContent = `${selectedRunId} ${run.status}`;
+      }
+    }
+
     function setActionTarget(button, target) {
       button.removeAttribute("data-route");
       button.removeAttribute("data-detail");
@@ -2082,6 +2866,11 @@ How should initial authentication start?</pre>
         statusLeft.textContent = copyText("status.terminalLeft");
         statusCwd.textContent = copyText("status.terminalCwd");
         statusRight.textContent = copyText("status.terminalRight");
+      } else if (currentTab === "runs") {
+        const run = runRecords[selectedRunId];
+        statusLeft.textContent = `${selectedRunId} ${run.status}`;
+        statusCwd.textContent = "cwd /Users/qoo10/projects/bookmark-api";
+        statusRight.textContent = copyText("status.runsRight");
       } else if (currentTab === "tasks") {
         const task = graphTasks[selectedTaskId];
         statusLeft.textContent = `${selectedTaskId} ${localized(taskStatusLabels[task.status])}`;
@@ -2142,6 +2931,7 @@ How should initial authentication start?</pre>
         localStorage.setItem("p2aGuiLocale", currentLocale);
         renderStaticCopy();
         renderTaskSelection();
+        renderRunSelection();
         renderState();
         renderTab();
       });
@@ -2166,6 +2956,34 @@ How should initial authentication start?</pre>
         renderTaskSelection();
         renderTab();
       });
+    });
+    runRows.forEach((row) => {
+      row.addEventListener("click", () => {
+        selectedRunId = row.dataset.runId;
+        renderRunSelection();
+        renderTab();
+      });
+    });
+    runFilters.forEach((button) => {
+      button.addEventListener("click", () => {
+        selectedRunFilter = button.dataset.runFilter;
+        if (!runMatchesFilter(runRecords[selectedRunId])) {
+          const nextRow = runRows.find((row) => runMatchesFilter(runRecords[row.dataset.runId]));
+          if (nextRow) selectedRunId = nextRow.dataset.runId;
+        }
+        renderRunSelection();
+        renderTab();
+      });
+    });
+
+    runMarkDoneButton.addEventListener("click", () => {
+      runDecisionSummary.textContent = copyText("runsInspector.summaryDone");
+    });
+
+    runMarkBlockedButton.addEventListener("click", () => {
+      const run = runRecords[selectedRunId];
+      runFinishCommand.textContent = `node scripts/p2a_execute.mjs finish --run-id ${selectedRunId} --status blocked --task-id ${run.taskId}`;
+      runDecisionSummary.textContent = copyText("runsInspector.summaryBlocked");
     });
 
     document.addEventListener("click", (event) => {
@@ -2281,6 +3099,7 @@ How should initial authentication start?</pre>
 
     renderStaticCopy();
     renderTaskSelection();
+    renderRunSelection();
     renderState();
     renderTab();
   </script>
