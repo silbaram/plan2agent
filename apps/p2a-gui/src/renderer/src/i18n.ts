@@ -74,6 +74,49 @@ export const uiCopy = {
       openProject: "프로젝트 열기",
       reload: "새로고침",
     },
+    impact: {
+      writes_project: "프로젝트 쓰기",
+      reads_project: "프로젝트 읽기",
+      guidance_only: "안내 전용",
+    },
+    onboarding: {
+      titles: {
+        install_p2a: "P2A 설치 필요",
+        import_plan: "기획 가져오기",
+        continue_planning: "기획 진행 중",
+        repair_validate: "검증 필요",
+        execution_ready: "실행 준비",
+      },
+      summaries: {
+        install_p2a: "선택한 폴더에서 P2A 하네스나 산출물을 찾지 못했습니다.",
+        import_plan: "하네스 표식은 있지만 아직 기획 산출물 루트가 없습니다.",
+        continue_planning: "기획 산출물은 있지만 실행 가능한 작업이나 실행 이력이 아직 없습니다.",
+        repair_validate: "P2A 파일은 있지만 하나 이상의 산출물 확인이 실패했습니다.",
+        execution_ready: "선택한 산출물 루트에 실행 가능한 작업 또는 실행 기록이 있습니다.",
+      },
+      actions: {
+        install_p2a: {
+          label: "P2A 설치",
+          description: "외부 터미널에서 이 프로젝트에 P2A 하네스를 준비합니다.",
+        },
+        import_plan: {
+          label: "기획 가져오기",
+          description: "승인된 기획 산출물 묶음을 이 작업공간으로 가져옵니다.",
+        },
+        validate_artifacts: {
+          label: "산출물 검증",
+          description: "프로젝트 파일을 바꾸지 않고 기획 산출물을 검증합니다.",
+        },
+        inspect_tasks: {
+          label: "작업 확인",
+          description: "읽기 전용 화면에서 실행 가능한 작업과 실행 이력을 확인합니다.",
+        },
+        open_terminal: {
+          label: "터미널 열기",
+          description: "선택한 agent CLI 세션을 감독하기 위한 터미널 화면으로 이동합니다.",
+        },
+      },
+    },
     projectState: {
       no_p2a: "P2A 없음",
       installed_empty: "설치됨, 문서 없음",
@@ -276,6 +319,49 @@ export const uiCopy = {
       loadFailed: "project load failed",
       openProject: "Open project",
       reload: "Reload",
+    },
+    impact: {
+      writes_project: "writes project",
+      reads_project: "reads project",
+      guidance_only: "guidance only",
+    },
+    onboarding: {
+      titles: {
+        install_p2a: "Install P2A",
+        import_plan: "Import plan",
+        continue_planning: "Planning in progress",
+        repair_validate: "Repair / validate",
+        execution_ready: "Execution ready",
+      },
+      summaries: {
+        install_p2a: "No harness markers or planning artifacts were found.",
+        import_plan: "Harness markers exist, but no planning artifact root was found.",
+        continue_planning: "Planning artifacts exist, but no ready task or run history is available yet.",
+        repair_validate: "P2A files were found, but one or more artifact checks failed.",
+        execution_ready: "A ready task or run record is available in the selected artifact root.",
+      },
+      actions: {
+        install_p2a: {
+          label: "Install P2A",
+          description: "Prepare the P2A harness for this project from an external terminal.",
+        },
+        import_plan: {
+          label: "Import plan",
+          description: "Import an approved planning artifact bundle into this workspace.",
+        },
+        validate_artifacts: {
+          label: "Validate artifacts",
+          description: "Validate planning artifacts without changing project files.",
+        },
+        inspect_tasks: {
+          label: "Inspect tasks",
+          description: "Inspect ready tasks and run history in this read-only workbench.",
+        },
+        open_terminal: {
+          label: "Open terminal",
+          description: "Move to the terminal surface for supervising the selected agent CLI.",
+        },
+      },
     },
     projectState: {
       no_p2a: "No P2A",

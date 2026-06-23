@@ -311,10 +311,12 @@ function runForTaskText(task: WorkbenchTask): string {
   return task.latestRunId ?? `${task.runIds.length} runs`;
 }
 
-function impactText(action: OnboardingAction): string {
-  if (action.impact === "writes_project") return "writes project";
-  if (action.impact === "reads_project") return "reads project";
-  return "guidance only";
+function impactText(action: OnboardingAction, copy: UiCopy): string {
+  return copy.impact[action.impact];
+}
+
+function onboardingActionCopy(action: OnboardingAction, copy: UiCopy) {
+  return copy.onboarding.actions[action.id];
 }
 
 export default function App() {
@@ -720,14 +722,17 @@ export default function App() {
   }
 
   function renderOnboardingAction(action: OnboardingAction, variant: "primary" | "secondary") {
+    const actionCopy = onboardingActionCopy(action, copy);
     return (
       <article className={`onboarding-action onboarding-action--${variant}`} key={action.id}>
         <div className="onboarding-action__head">
           <div>
-            <strong>{action.label}</strong>
-            <span>{action.description}</span>
+            <strong>{actionCopy.label}</strong>
+            <span>{actionCopy.description}</span>
           </div>
-          <em className={`impact-badge impact-badge--${action.impact}`}>{impactText(action)}</em>
+          <em className={`impact-badge impact-badge--${action.impact}`}>
+            {impactText(action, copy)}
+          </em>
         </div>
         <dl className="onboarding-action__meta">
           <dt>cwd</dt>
@@ -752,14 +757,14 @@ export default function App() {
         <div className="section-head">
           <div>
               <div className="label">{copy.overview.onboarding}</div>
-            <h3>{onboarding.title}</h3>
+              <h3>{copy.onboarding.titles[onboarding.stage]}</h3>
           </div>
           <span className={`state-pill state-pill--${projectSnapshot?.state ?? "idle"}`}>
             {projectStateLabel(projectSnapshot, copy)}
           </span>
         </div>
         <div className="onboarding-body">
-          <p>{onboarding.summary}</p>
+          <p>{copy.onboarding.summaries[onboarding.stage]}</p>
           <div className="onboarding-actions">
             {renderOnboardingAction(onboarding.primaryAction, "primary")}
             {onboarding.secondaryActions.map((action) => renderOnboardingAction(action, "secondary"))}
@@ -1751,7 +1756,7 @@ export default function App() {
             <div className="section-head">
               <div>
                 <div className="label">{copy.overview.nextAction}</div>
-                <h3>{onboarding.primaryAction.label}</h3>
+                <h3>{onboardingActionCopy(onboarding.primaryAction, copy).label}</h3>
               </div>
             </div>
             <div className="detail-list">
@@ -1761,7 +1766,7 @@ export default function App() {
               </div>
               <div>
                 <span>{copy.overview.impact}</span>
-                <strong>{impactText(onboarding.primaryAction)}</strong>
+                <strong>{impactText(onboarding.primaryAction, copy)}</strong>
               </div>
               <div>
                 <span>{copy.tasks.target}</span>
