@@ -16,12 +16,13 @@ import {
   X,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import { AGENT_TOOLS } from "../../shared/ipc";
+import { AGENT_TOOLS, DEFAULT_UI_LOCALE, UI_LOCALES } from "../../shared/ipc";
 import {
   summarizeFinishRunFailure,
   summarizeStartRunFailure,
 } from "../../shared/executionFailure";
 import { TerminalSurface } from "./TerminalSurface";
+import { localeNames, uiCopy, type UiCopy } from "./i18n";
 import type {
   AgentTool,
   ArtifactFileReadResult,
@@ -35,6 +36,7 @@ import type {
   ProjectSnapshot,
   ProjectWatchEvent,
   RuntimeInfo,
+  UiLocale,
   VerificationType,
   WorkbenchRun,
   WorkbenchTask,
@@ -86,12 +88,12 @@ const steps = [
 ] as const;
 
 const navItems = [
-  ["overview", "Overview", Activity],
-  ["tasks", "Tasks", Layers],
-  ["runs", "Runs", History],
-  ["artifacts", "Artifacts", FileJson],
-  ["terminal", "Terminal", TerminalSquare],
-  ["settings", "Settings", Settings],
+  ["overview", Activity],
+  ["tasks", Layers],
+  ["runs", History],
+  ["artifacts", FileJson],
+  ["terminal", TerminalSquare],
+  ["settings", Settings],
 ] as const;
 
 type ActiveTab = (typeof navItems)[number][0];
@@ -159,8 +161,11 @@ function formatMilliseconds(value: number | null | undefined): string {
   return `${(value / 1000).toFixed(1)}s`;
 }
 
-function statusLabel(value: string): string {
-  return value.replace(/_/g, " ");
+function statusLabel(value: string, copy: UiCopy): string {
+  return (
+    copy.status[value as keyof UiCopy["status"]] ??
+    value.replace(/_/g, " ")
+  );
 }
 
 function parseListInput(value: string): string[] {
@@ -272,11 +277,15 @@ function formatArtifactPreview(file: ArtifactFileReadResult): string {
   }
 }
 
-function statusTextFor(snapshot: ProjectSnapshot | null, openState: OpenState): string {
-  if (openState === "loading") return "loading project";
-  if (openState === "canceled") return "folder selection canceled";
-  if (openState === "error") return "project load failed";
-  return snapshot ? snapshot.stateLabel : "read-only shell ready";
+function statusTextFor(
+  snapshot: ProjectSnapshot | null,
+  openState: OpenState,
+  copy: UiCopy,
+): string {
+  if (openState === "loading") return copy.app.loadingProject;
+  if (openState === "canceled") return copy.app.folderCanceled;
+  if (openState === "error") return copy.app.loadFailed;
+  return snapshot ? snapshot.stateLabel : copy.app.readOnlyShellReady;
 }
 
 function diagnosticIcon(severity: DiagnosticSeverity) {
@@ -301,15 +310,6 @@ function impactText(action: OnboardingAction): string {
   if (action.impact === "writes_project") return "writes project";
   if (action.impact === "reads_project") return "reads project";
   return "guidance only";
-}
-
-function tabCopy(tab: ActiveTab): { label: string; title: string } {
-  if (tab === "tasks") return { label: "task graph", title: "Tasks" };
-  if (tab === "runs") return { label: "run history", title: "Runs" };
-  if (tab === "artifacts") return { label: "artifact review", title: "Artifacts" };
-  if (tab === "terminal") return { label: "terminal guidance", title: "Terminal" };
-  if (tab === "settings") return { label: "settings", title: "Settings" };
-  return { label: "project loader", title: "Overview" };
 }
 
 export default function App() {
@@ -433,10 +433,12 @@ export default function App() {
   const selectedTaskRuns = selectedTask
     ? runs.filter((run) => selectedTask.runIds.includes(run.runId))
     : [];
-  const tab = tabCopy(activeTab);
+  const locale = guiConfig?.locale ?? DEFAULT_UI_LOCALE;
+  const copy = uiCopy[locale];
+  const tab = copy.tabs[activeTab];
   const statusText = useMemo(() => {
-    return statusTextFor(projectSnapshot, openState);
-  }, [openState, projectSnapshot]);
+    return statusTextFor(projectSnapshot, openState, copy);
+  }, [copy, openState, projectSnapshot]);
   const statusClass = openState === "idle" && projectSnapshot ? projectSnapshot.state : openState;
 
   useEffect(() => {
@@ -528,6 +530,16 @@ export default function App() {
         ...projectSnapshot,
         defaultAgentTool: agentTool,
       });
+    } catch {
+      setConfigState("error");
+    }
+  }
+
+  async function changeUiLocale(locale: UiLocale) {
+    try {
+      const config = await window.p2a.config.setLocale(locale);
+      setGuiConfig(config);
+      setConfigState("ready");
     } catch {
       setConfigState("error");
     }
@@ -761,15 +773,15 @@ export default function App() {
       <>
         <div className="summary-grid" aria-label="Project summary">
           <div>
-            <span>project</span>
-            <strong>{projectSnapshot?.projectId ?? projectSnapshot?.name ?? "none"}</strong>
+            <span>{copy.overview.project}</span>
+            <strong>{projectSnapshot?.projectId ?? projectSnapshot?.name ?? copy.common.none}</strong>
           </div>
           <div>
-            <span>state</span>
-            <strong>{projectSnapshot?.stateLabel ?? "not loaded"}</strong>
+            <span>{copy.overview.state}</span>
+            <strong>{projectSnapshot?.stateLabel ?? copy.common.none}</strong>
           </div>
           <div>
-            <span>ready tasks</span>
+            <span>{copy.overview.readyTasks}</span>
             <strong>
               {artifact
                 ? `${formatCount(artifact.taskCounts.ready)} / ${formatCount(artifact.taskCounts.total)}`
@@ -777,7 +789,7 @@ export default function App() {
             </strong>
           </div>
           <div>
-            <span>runs</span>
+            <span>{copy.overview.runs}</span>
             <strong>{artifact ? formatCount(artifact.runCount) : "0"}</strong>
           </div>
         </div>
@@ -787,8 +799,8 @@ export default function App() {
         <section className="workbench-panel">
           <div className="section-head">
             <div>
-              <div className="label">artifacts</div>
-              <h3>Detected planning roots</h3>
+              <div className="label">{copy.overview.artifacts}</div>
+              <h3>{copy.overview.detectedRoots}</h3>
             </div>
           </div>
           {projectSnapshot && projectSnapshot.artifacts.length > 0 ? (
@@ -835,7 +847,7 @@ export default function App() {
           ) : (
             <div className="empty-panel">
               <FileJson size={18} strokeWidth={1.7} aria-hidden="true" />
-              <span>No artifact root detected.</span>
+              <span>{copy.common.noArtifactRoot}</span>
             </div>
           )}
         </section>
@@ -843,8 +855,8 @@ export default function App() {
         <section className="workbench-panel">
           <div className="section-head">
             <div>
-              <div className="label">filesystem</div>
-              <h3>Read-only checks</h3>
+              <div className="label">{copy.overview.filesystem}</div>
+              <h3>{copy.overview.readOnlyChecks}</h3>
             </div>
           </div>
           <div className="check-grid">
@@ -852,14 +864,16 @@ export default function App() {
               <div className={`check-row check-row--${check.exists ? "present" : "missing"}`} key={check.id}>
                 <ShieldCheck size={14} strokeWidth={1.7} aria-hidden="true" />
                 <span>{check.label}</span>
-                <em className="mono">{check.exists ? "present" : "missing"}</em>
+                <em className="mono">
+                  {check.exists ? copy.status.present : copy.status.missing}
+                </em>
                 <small className="mono">{check.relativePath}</small>
               </div>
             ))}
             {!projectSnapshot && (
               <div className="empty-panel empty-panel--inline">
                 <FileJson size={18} strokeWidth={1.7} aria-hidden="true" />
-                <span>No folder selected.</span>
+                <span>{copy.common.noFolderSelected}</span>
               </div>
             )}
           </div>
@@ -893,7 +907,7 @@ export default function App() {
               className="icon-button"
               type="button"
               onClick={closeArtifactViewer}
-              aria-label="Close artifact viewer"
+              aria-label={copy.common.closeArtifactViewer}
             >
               <X size={15} strokeWidth={1.8} aria-hidden="true" />
             </button>
@@ -902,7 +916,7 @@ export default function App() {
           {artifactFileState.status === "loading" && (
             <div className="empty-panel artifact-viewer__empty">
               <FileJson size={18} strokeWidth={1.7} aria-hidden="true" />
-              <span>Loading document.</span>
+              <span>{copy.artifacts.loadingDocument}</span>
             </div>
           )}
 
@@ -936,11 +950,13 @@ export default function App() {
         <section className="workbench-panel">
           <div className="section-head">
             <div>
-              <div className="label">artifacts</div>
-              <h3>Artifact roots</h3>
+              <div className="label">{copy.overview.artifacts}</div>
+              <h3>{copy.artifacts.roots}</h3>
             </div>
             <span className="section-meta mono">
-              {projectSnapshot ? `${projectSnapshot.artifacts.length} roots` : "no project"}
+              {projectSnapshot
+                ? `${projectSnapshot.artifacts.length} roots`
+                : copy.common.noProject}
             </span>
           </div>
           {projectSnapshot && projectSnapshot.artifacts.length > 0 ? (
@@ -959,9 +975,9 @@ export default function App() {
                     <em className="mono">{item.relativePath}</em>
                   </span>
                   <span className="artifact-root-card__meta">
-                    <em>{item.activeIteration ?? "no iteration"}</em>
-                    <em>{formatCount(item.taskCounts.total)} tasks</em>
-                    <em>{formatCount(item.runCount)} runs</em>
+                    <em>{item.activeIteration ?? copy.common.none}</em>
+                    <em>{formatCount(item.taskCounts.total)} {copy.nav.tasks}</em>
+                    <em>{formatCount(item.runCount)} {copy.nav.runs}</em>
                   </span>
                 </button>
               ))}
@@ -969,7 +985,7 @@ export default function App() {
           ) : (
             <div className="empty-panel">
               <FileJson size={18} strokeWidth={1.7} aria-hidden="true" />
-              <span>No artifact root detected.</span>
+              <span>{copy.common.noArtifactRoot}</span>
             </div>
           )}
         </section>
@@ -977,10 +993,12 @@ export default function App() {
         <section className="workbench-panel">
           <div className="section-head">
             <div>
-              <div className="label">documents</div>
-              <h3>Artifact documents</h3>
+              <div className="label">{copy.artifacts.documents}</div>
+              <h3>{copy.artifacts.artifactDocuments}</h3>
             </div>
-            <span className="section-meta mono">{artifactDocuments.length} files</span>
+            <span className="section-meta mono">
+              {artifactDocuments.length} {copy.artifacts.files}
+            </span>
           </div>
           {artifactDocuments.length > 0 ? (
             <div className="artifact-document-list">
@@ -1015,7 +1033,7 @@ export default function App() {
                     type="button"
                     onClick={() => void openArtifactDocument(document)}
                   >
-                    Open
+                    {copy.common.open}
                   </button>
                 </div>
               ))}
@@ -1023,7 +1041,7 @@ export default function App() {
           ) : (
             <div className="empty-panel">
               <FileJson size={18} strokeWidth={1.7} aria-hidden="true" />
-              <span>No readable artifact document detected.</span>
+              <span>{copy.artifacts.noReadableDocument}</span>
             </div>
           )}
         </section>
@@ -1032,8 +1050,8 @@ export default function App() {
           <section className="workbench-panel">
             <div className="section-head">
               <div>
-                <div className="label">validation</div>
-                <h3>Schema state</h3>
+                <div className="label">{copy.artifacts.validation}</div>
+                <h3>{copy.artifacts.schemaState}</h3>
               </div>
             </div>
             <div className="validation-strip" aria-label="Artifact schema validation">
@@ -1062,10 +1080,12 @@ export default function App() {
         <section className="workbench-panel">
           <div className="section-head">
             <div>
-              <div className="label">tasks</div>
-              <h3>Task graph</h3>
+              <div className="label">{copy.tasks.tasks}</div>
+              <h3>{copy.tasks.taskGraph}</h3>
             </div>
-            <span className="section-meta mono">{artifact?.taskGraphPath ?? "no task graph"}</span>
+            <span className="section-meta mono">
+              {artifact?.taskGraphPath ?? copy.tasks.noTaskGraph}
+            </span>
           </div>
           {tasks.length > 0 ? (
             <div className="task-table" role="list" aria-label="Task graph rows">
@@ -1081,7 +1101,7 @@ export default function App() {
                 >
                   <span className="task-row__id mono">{task.id}</span>
                   <span className={`status-badge status-badge--${task.status}`}>
-                    {task.ready ? "ready" : statusLabel(task.status)}
+                    {task.ready ? copy.status.ready : statusLabel(task.status, copy)}
                   </span>
                   <span className="task-row__main">
                     <strong>{task.title}</strong>
@@ -1095,7 +1115,7 @@ export default function App() {
           ) : (
             <div className="empty-panel">
               <FileJson size={18} strokeWidth={1.7} aria-hidden="true" />
-              <span>No task graph loaded.</span>
+              <span>{copy.tasks.noTasks}</span>
             </div>
           )}
         </section>
@@ -1119,7 +1139,7 @@ export default function App() {
                     onClick={() => selectTask(task)}
                   >
                     <span className="mono">{task.id}</span>
-                    <strong>{statusLabel(task.status)}</strong>
+                    <strong>{statusLabel(task.status, copy)}</strong>
                   </button>
                   {index < tasks.length - 1 && <span className="dependency-edge mono">→</span>}
                 </div>
@@ -1136,10 +1156,10 @@ export default function App() {
       <section className="workbench-panel">
         <div className="section-head">
           <div>
-            <div className="label">runs</div>
-            <h3>Run history</h3>
+            <div className="label">{copy.runs.runs}</div>
+            <h3>{copy.runs.runHistory}</h3>
           </div>
-          <span className="section-meta mono">{artifact?.runIndexPath ?? "no run index"}</span>
+          <span className="section-meta mono">{artifact?.runIndexPath ?? copy.runs.noRunIndex}</span>
         </div>
         {runs.length > 0 ? (
           <div className="run-table" role="list" aria-label="Run history rows">
@@ -1153,7 +1173,7 @@ export default function App() {
               >
                 <span className="run-row__id mono">{run.runId}</span>
                 <span className={`status-badge status-badge--${run.status}`}>
-                  {statusLabel(run.status)}
+                  {statusLabel(run.status, copy)}
                 </span>
                 <span className="mono">{run.taskId}</span>
                 <span className="mono">{run.agentTool}</span>
@@ -1165,7 +1185,7 @@ export default function App() {
         ) : (
           <div className="empty-panel">
             <History size={18} strokeWidth={1.7} aria-hidden="true" />
-            <span>No run history loaded.</span>
+            <span>{copy.runs.noRuns}</span>
           </div>
         )}
       </section>
@@ -1183,10 +1203,14 @@ export default function App() {
         <div className="section-head">
           <div>
             <div className="label">start / run</div>
-            <h3>{selectedTask?.id ?? "No task selected"}</h3>
+            <h3>{selectedTask?.id ?? copy.tasks.noTaskSelected}</h3>
           </div>
           <span className={`status-badge status-badge--${selectedTask?.status ?? "todo"}`}>
-            {selectedTask ? (selectedTask.ready ? "ready" : statusLabel(selectedTask.status)) : "none"}
+            {selectedTask
+              ? selectedTask.ready
+                ? copy.status.ready
+                : statusLabel(selectedTask.status, copy)
+              : copy.common.none}
           </span>
         </div>
 
@@ -1195,7 +1219,7 @@ export default function App() {
             <div className="detail-list detail-list--embedded">
               <div>
                 <span>task</span>
-                <strong className="mono">{selectedTask?.id ?? "none"}</strong>
+                <strong className="mono">{selectedTask?.id ?? copy.common.none}</strong>
               </div>
               <div>
                 <span>agent</span>
@@ -1207,7 +1231,7 @@ export default function App() {
               </div>
               <div>
                 <span>target</span>
-                <strong>{selectedTask?.targetArea ?? "none"}</strong>
+                <strong>{selectedTask?.targetArea ?? copy.common.none}</strong>
               </div>
             </div>
           </div>
@@ -1224,14 +1248,14 @@ export default function App() {
                 onClick={startSelectedTask}
                 disabled={!canStart}
               >
-                {startState === "running" ? "Starting" : "Start run"}
+                {startState === "running" ? copy.common.loading : copy.common.startRun}
               </button>
               <span className="mono">
                 {startResult
                   ? `exit ${startResult.exitCode} · ${formatMilliseconds(startResult.durationMs)}`
                   : selectedTask?.ready
-                    ? "ready"
-                    : "not runnable"}
+                    ? copy.status.ready
+                    : copy.common.notRunnable}
               </span>
             </div>
             {renderStartFailureDiagnostic()}
@@ -1258,7 +1282,7 @@ export default function App() {
         <div className="section-head section-head--tight">
           <div>
             <div className="label">run</div>
-            <h3>Start task</h3>
+            <h3>{copy.common.startTask}</h3>
           </div>
         </div>
         <div className="command-preview command-preview--compact">
@@ -1272,14 +1296,14 @@ export default function App() {
             onClick={startSelectedTask}
             disabled={!canStart}
           >
-            {startState === "running" ? "Starting" : "Start run"}
+            {startState === "running" ? copy.common.loading : copy.common.startRun}
           </button>
           <span className="mono">
             {startResult
               ? `exit ${startResult.exitCode} · ${formatMilliseconds(startResult.durationMs)}`
               : selectedTask?.ready
-                ? "ready"
-                : "not runnable"}
+                ? copy.status.ready
+                : copy.common.notRunnable}
           </span>
         </div>
         {renderStartFailureDiagnostic(true)}
@@ -1328,10 +1352,10 @@ export default function App() {
         <div className="section-head">
           <div>
             <div className="label">finish / verification</div>
-            <h3>{selectedRun?.runId ?? "No run selected"}</h3>
+            <h3>{selectedRun?.runId ?? copy.runs.noRunSelected}</h3>
           </div>
           <span className={`status-badge status-badge--${selectedRun?.status ?? "todo"}`}>
-            {selectedRun ? statusLabel(selectedRun.status) : "none"}
+            {selectedRun ? statusLabel(selectedRun.status, copy) : copy.common.none}
           </span>
         </div>
 
@@ -1500,6 +1524,7 @@ export default function App() {
           agentTool={projectSnapshot?.defaultAgentTool ?? "codex"}
           taskId={selectedTask?.id}
           taskPrompt={selectedTask?.suggestedAgentPrompt}
+          locale={locale}
         />
 
         {renderFinishPanel()}
@@ -1546,16 +1571,16 @@ export default function App() {
         <section className="workbench-panel">
           <div className="section-head">
             <div>
-              <div className="label">settings</div>
-              <h3>Project defaults</h3>
+              <div className="label">{copy.settings.settings}</div>
+              <h3>{copy.settings.projectDefaults}</h3>
             </div>
             <span className={`config-chip config-chip--${configState}`}>{configState}</span>
           </div>
           <div className="settings-grid">
             <div className="detail-list">
               <div>
-                <span>project</span>
-                <strong>{projectSnapshot?.name ?? "none"}</strong>
+                <span>{copy.overview.project}</span>
+                <strong>{projectSnapshot?.name ?? copy.common.none}</strong>
               </div>
               <div>
                 <span>root</span>
@@ -1566,13 +1591,13 @@ export default function App() {
                 <strong className="mono">{formatPath(artifact?.relativePath)}</strong>
               </div>
               <div>
-                <span>state</span>
-                <strong>{projectSnapshot?.stateLabel ?? "not loaded"}</strong>
+                <span>{copy.overview.state}</span>
+                <strong>{projectSnapshot?.stateLabel ?? copy.common.none}</strong>
               </div>
             </div>
 
             <label className="settings-control">
-              <span>default agent</span>
+              <span>{copy.settings.defaultAgent}</span>
               <select
                 className="agent-select mono"
                 value={projectSnapshot?.defaultAgentTool ?? "codex"}
@@ -1587,34 +1612,50 @@ export default function App() {
                 ))}
               </select>
             </label>
+
+            <label className="settings-control">
+              <span>{copy.settings.language}</span>
+              <select
+                className="agent-select"
+                value={locale}
+                onChange={(event) => void changeUiLocale(event.target.value as UiLocale)}
+                aria-label={copy.settings.interfaceLanguage}
+              >
+                {UI_LOCALES.map((item) => (
+                  <option key={item} value={item}>
+                    {localeNames[item]}
+                  </option>
+                ))}
+              </select>
+            </label>
           </div>
         </section>
 
         <section className="workbench-panel">
           <div className="section-head">
             <div>
-              <div className="label">local config</div>
-              <h3>GUI state</h3>
+              <div className="label">{copy.settings.localConfig}</div>
+              <h3>{copy.settings.guiState}</h3>
             </div>
             <span className="section-meta mono">
-              {guiConfig ? `${guiConfig.recentProjects.length} recent` : "not loaded"}
+              {guiConfig ? `${guiConfig.recentProjects.length} recent` : copy.common.none}
             </span>
           </div>
           <div className="detail-list">
             <div>
-              <span>config file</span>
+              <span>{copy.settings.configFile}</span>
               <strong className="mono">{formatPath(guiConfig?.configPath)}</strong>
             </div>
             <div>
-              <span>schema</span>
-              <strong className="mono">{guiConfig?.schemaVersion ?? "none"}</strong>
+              <span>{copy.settings.schema}</span>
+              <strong className="mono">{guiConfig?.schemaVersion ?? copy.common.none}</strong>
             </div>
             <div>
-              <span>watch</span>
+              <span>{copy.settings.watch}</span>
               <strong>{watchState}</strong>
             </div>
             <div>
-              <span>last change</span>
+              <span>{copy.settings.lastChange}</span>
               <strong className="mono">{formatTime(lastWatchEvent?.changedAt)}</strong>
             </div>
           </div>
@@ -1623,8 +1664,8 @@ export default function App() {
         <section className="workbench-panel">
           <div className="section-head">
             <div>
-              <div className="label">recent</div>
-              <h3>Projects</h3>
+              <div className="label">{copy.settings.recent}</div>
+              <h3>{copy.settings.projects}</h3>
             </div>
           </div>
           <div className="settings-recent-list">
@@ -1658,7 +1699,7 @@ export default function App() {
             ) : (
               <div className="empty-panel">
                 <FolderOpen size={18} strokeWidth={1.7} aria-hidden="true" />
-                <span>No recent projects.</span>
+                <span>{copy.settings.noRecentProjects}</span>
               </div>
             )}
           </div>
@@ -1667,8 +1708,8 @@ export default function App() {
         <section className="workbench-panel">
           <div className="section-head">
             <div>
-              <div className="label">verification</div>
-              <h3>Developer commands</h3>
+              <div className="label">{copy.settings.verification}</div>
+              <h3>{copy.settings.developerCommands}</h3>
             </div>
           </div>
           <div className="settings-command-list">
@@ -1860,8 +1901,8 @@ export default function App() {
           <>
             <div className="section-head section-head--tight">
               <div>
-                <div className="label">diagnostics</div>
-                <h3>Artifact checks</h3>
+                <div className="label">{copy.artifacts.diagnostics}</div>
+                <h3>{copy.artifacts.artifactChecks}</h3>
               </div>
             </div>
             <div className="diagnostic-list">
@@ -1889,7 +1930,7 @@ export default function App() {
       return (
         <div className="inspector-empty">
           <FileJson size={18} strokeWidth={1.7} aria-hidden="true" />
-          <span>No task selected.</span>
+          <span>{copy.tasks.noTaskSelected}</span>
         </div>
       );
     }
@@ -1898,30 +1939,30 @@ export default function App() {
       <>
         <div className="section-head">
           <div>
-            <div className="label">selected task</div>
+            <div className="label">{copy.tasks.selectedTask}</div>
             <h3>{selectedTask.id}</h3>
           </div>
           <span className={`status-badge status-badge--${selectedTask.status}`}>
-            {selectedTask.ready ? "ready" : statusLabel(selectedTask.status)}
+            {selectedTask.ready ? copy.status.ready : statusLabel(selectedTask.status, copy)}
           </span>
         </div>
 
         <div className="detail-list">
           <div>
-            <span>title</span>
+            <span>{copy.tasks.title}</span>
             <strong>{selectedTask.title}</strong>
           </div>
           <div>
-            <span>target</span>
+            <span>{copy.tasks.target}</span>
             <strong className="mono">{selectedTask.targetArea}</strong>
           </div>
           <div>
-            <span>dependencies</span>
+            <span>{copy.tasks.dependencies}</span>
             <strong className="mono">{dependencyText(selectedTask)}</strong>
           </div>
           <div>
-            <span>latest run</span>
-            <strong className="mono">{selectedTask.latestRunId ?? "none"}</strong>
+            <span>{copy.tasks.latestRun}</span>
+            <strong className="mono">{selectedTask.latestRunId ?? copy.common.none}</strong>
           </div>
         </div>
 
@@ -1929,8 +1970,8 @@ export default function App() {
 
         <div className="section-head section-head--tight">
           <div>
-            <div className="label">acceptance</div>
-            <h3>Criteria</h3>
+            <div className="label">{copy.tasks.acceptance}</div>
+            <h3>{copy.tasks.criteria}</h3>
           </div>
         </div>
         <ul className="criteria-list">
@@ -1941,8 +1982,8 @@ export default function App() {
 
         <div className="section-head section-head--tight">
           <div>
-            <div className="label">prompt</div>
-            <h3>Agent handoff</h3>
+            <div className="label">{copy.tasks.prompt}</div>
+            <h3>{copy.tasks.agentHandoff}</h3>
           </div>
         </div>
         <pre className="inspector-code">{selectedTask.suggestedAgentPrompt}</pre>
@@ -1951,8 +1992,8 @@ export default function App() {
           <>
             <div className="section-head section-head--tight">
               <div>
-                <div className="label">runs</div>
-                <h3>Task history</h3>
+                <div className="label">{copy.runs.runs}</div>
+                <h3>{copy.tasks.taskHistory}</h3>
               </div>
             </div>
             <div className="linked-run-list">
@@ -1964,7 +2005,7 @@ export default function App() {
                   onClick={() => selectRun(run)}
                 >
                   <span className="mono">{run.runId}</span>
-                  <strong>{statusLabel(run.status)}</strong>
+                  <strong>{statusLabel(run.status, copy)}</strong>
                 </button>
               ))}
             </div>
@@ -1979,7 +2020,7 @@ export default function App() {
       return (
         <div className="inspector-empty">
           <History size={18} strokeWidth={1.7} aria-hidden="true" />
-          <span>No run selected.</span>
+          <span>{copy.runs.noRunSelected}</span>
         </div>
       );
     }
@@ -1988,39 +2029,39 @@ export default function App() {
       <>
         <div className="section-head">
           <div>
-            <div className="label">selected run</div>
+            <div className="label">{copy.runs.selectedRun}</div>
             <h3>{selectedRun.runId}</h3>
           </div>
           <span className={`status-badge status-badge--${selectedRun.status}`}>
-            {statusLabel(selectedRun.status)}
+            {statusLabel(selectedRun.status, copy)}
           </span>
         </div>
         {renderRunFailureSummary(selectedRun)}
         <div className="detail-list">
           <div>
-            <span>task</span>
+            <span>{copy.runs.task}</span>
             <strong className="mono">{selectedRun.taskId}</strong>
           </div>
           <div>
-            <span>agent</span>
+            <span>{copy.runs.agent}</span>
             <strong className="mono">{selectedRun.agentTool}</strong>
           </div>
           <div>
-            <span>started</span>
+            <span>{copy.runs.started}</span>
             <strong className="mono">{formatDateTime(selectedRun.startedAt)}</strong>
           </div>
           <div>
-            <span>duration</span>
+            <span>{copy.runs.duration}</span>
             <strong className="mono">
               {formatDuration(selectedRun.startedAt, selectedRun.finishedAt)}
             </strong>
           </div>
           <div>
-            <span>verification</span>
+            <span>{copy.runs.verification}</span>
             <strong className="mono">{verificationSummary(selectedRun)}</strong>
           </div>
           <div>
-            <span>changed files</span>
+            <span>{copy.runs.changedFiles}</span>
             <strong className="mono">{selectedRun.changedFiles.length}</strong>
           </div>
         </div>
@@ -2028,8 +2069,8 @@ export default function App() {
           <>
             <div className="section-head section-head--tight">
               <div>
-                <div className="label">verification</div>
-                <h3>Results</h3>
+                <div className="label">{copy.runs.verification}</div>
+                <h3>{copy.runs.results}</h3>
               </div>
             </div>
             <div className="verification-list">
@@ -2057,8 +2098,8 @@ export default function App() {
           <>
             <div className="section-head section-head--tight">
               <div>
-                <div className="label">failure</div>
-                <h3>Classification</h3>
+                <div className="label">{copy.runs.failure}</div>
+                <h3>{copy.runs.classification}</h3>
               </div>
             </div>
             <div className="detail-list">
@@ -2081,8 +2122,8 @@ export default function App() {
           <>
             <div className="section-head section-head--tight">
               <div>
-                <div className="label">changes</div>
-                <h3>Files</h3>
+                <div className="label">{copy.runs.changes}</div>
+                <h3>{copy.runs.files}</h3>
               </div>
             </div>
             <div className="ref-list">
@@ -2094,8 +2135,8 @@ export default function App() {
         )}
         <div className="section-head section-head--tight">
           <div>
-            <div className="label">refs</div>
-            <h3>Run files</h3>
+            <div className="label">{copy.runs.refs}</div>
+            <h3>{copy.runs.runFiles}</h3>
           </div>
         </div>
         <div className="ref-list">
@@ -2275,8 +2316,8 @@ export default function App() {
         </div>
         <div className="titlebar__project">
           <span className="dot dot--active" />
-          <strong>{projectSnapshot?.name ?? "P2A GUI"}</strong>
-          <span>{projectSnapshot?.stateLabel ?? "Read-only project loader"}</span>
+          <strong>{projectSnapshot?.name ?? copy.app.titleFallback}</strong>
+          <span>{projectSnapshot?.stateLabel ?? copy.app.readOnlyShellReady}</span>
         </div>
         <div className="titlebar__meta mono">
           <span>{runtimeInfo ? `electron ${runtimeInfo.electronVersion}` : "electron"}</span>
@@ -2287,7 +2328,7 @@ export default function App() {
 
       <section className="workspace">
         <nav className="rail" aria-label="Primary navigation">
-          {navItems.map(([id, label, Icon]) => (
+          {navItems.map(([id, Icon]) => (
             <button
               className={`rail__item${activeTab === id ? " rail__item--active" : ""}`}
               key={id}
@@ -2296,7 +2337,7 @@ export default function App() {
               aria-current={activeTab === id ? "page" : undefined}
             >
               <Icon size={16} strokeWidth={1.7} aria-hidden="true" />
-              <span>{label}</span>
+              <span>{copy.nav[id]}</span>
             </button>
           ))}
         </nav>
@@ -2304,15 +2345,15 @@ export default function App() {
         <aside className="sidebar">
           <div className="panel-head">
             <div>
-              <div className="label">project</div>
-              <h1>{projectSnapshot ? projectSnapshot.name : "Open P2A project"}</h1>
+              <div className="label">{copy.overview.project}</div>
+              <h1>{projectSnapshot ? projectSnapshot.name : copy.app.openProject}</h1>
             </div>
           </div>
 
           <div className="action-stack">
             <button className="primary-action" type="button" onClick={openProjectFolder}>
               <FolderOpen size={16} strokeWidth={1.7} aria-hidden="true" />
-              <span>Open folder</span>
+              <span>{copy.app.openProject}</span>
             </button>
             <button
               className="secondary-action"
@@ -2321,15 +2362,15 @@ export default function App() {
               disabled={!projectSnapshot || openState === "loading"}
             >
               <RefreshCw size={15} strokeWidth={1.7} aria-hidden="true" />
-              <span>Reload</span>
+              <span>{copy.app.reload}</span>
             </button>
           </div>
 
           <section className="recent-panel">
             <div className="panel-head panel-head--compact">
               <div>
-                <div className="label">recent</div>
-                <h3>Projects</h3>
+                <div className="label">{copy.settings.recent}</div>
+                <h3>{copy.settings.projects}</h3>
               </div>
               <span className={`config-chip config-chip--${configState}`}>{configState}</span>
             </div>
@@ -2362,7 +2403,9 @@ export default function App() {
                 ))
               ) : (
                 <div className="empty-inline empty-inline--compact">
-                  {configState === "loading" ? "Loading recent projects." : "No recent projects."}
+                  {configState === "loading"
+                    ? copy.common.loading
+                    : copy.settings.noRecentProjects}
                 </div>
               )}
             </div>
@@ -2371,13 +2414,13 @@ export default function App() {
           <dl className="compact-dl">
             <dt>selected path</dt>
             <dd className="mono">{formatPath(projectSnapshot?.rootPath)}</dd>
-            <dt>state</dt>
-            <dd>{projectSnapshot?.stateLabel ?? "not loaded"}</dd>
+            <dt>{copy.overview.state}</dt>
+            <dd>{projectSnapshot?.stateLabel ?? copy.common.none}</dd>
             <dt>artifact root</dt>
             <dd className="mono">{formatPath(artifact?.relativePath)}</dd>
             <dt>mode</dt>
             <dd>read-only</dd>
-            <dt>agent</dt>
+            <dt>{copy.runs.agent}</dt>
             <dd className="compact-dl__control">
               <select
                 className="agent-select mono"
@@ -2393,9 +2436,9 @@ export default function App() {
                 ))}
               </select>
             </dd>
-            <dt>watch</dt>
+            <dt>{copy.settings.watch}</dt>
             <dd>{watchState}</dd>
-            <dt>last change</dt>
+            <dt>{copy.settings.lastChange}</dt>
             <dd className="mono">{formatTime(lastWatchEvent?.changedAt)}</dd>
           </dl>
 
@@ -2417,7 +2460,7 @@ export default function App() {
           <div className="content-head">
             <div>
               <div className="label">{tab.label}</div>
-              <h2>{projectSnapshot ? tab.title : "Select a project folder"}</h2>
+              <h2>{projectSnapshot ? tab.title : copy.app.openProject}</h2>
             </div>
             <span className={`state-pill state-pill--${statusClass}`}>{statusText}</span>
           </div>

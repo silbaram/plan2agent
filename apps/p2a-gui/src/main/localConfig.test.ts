@@ -9,6 +9,7 @@ import {
   readDefaultAgentTool,
   rememberRecentProject,
   setDefaultAgentTool,
+  setUiLocale,
 } from "./localConfig";
 
 describe("local GUI config", () => {
@@ -102,6 +103,23 @@ describe("local GUI config", () => {
         setDefaultAgentTool(configPath, "/tmp/project-a", "unsupported" as never),
       ).rejects.toThrow("Unsupported agent tool");
       expect(await readDefaultAgentTool(configPath, "/tmp/project-a")).toBe("claude");
+    } finally {
+      await rm(userDataPath, { recursive: true, force: true });
+    }
+  });
+
+  it("stores the selected UI locale", async () => {
+    const userDataPath = await mkdtemp(path.join(tmpdir(), "p2a-gui-config-"));
+    const configPath = configPathForUserData(userDataPath);
+
+    try {
+      expect((await loadGuiConfig(configPath)).locale).toBe("ko");
+      expect((await setUiLocale(configPath, "en")).locale).toBe("en");
+
+      await expect(setUiLocale(configPath, "fr" as never)).rejects.toThrow(
+        "Unsupported locale",
+      );
+      expect((await loadGuiConfig(configPath)).locale).toBe("en");
     } finally {
       await rm(userDataPath, { recursive: true, force: true });
     }

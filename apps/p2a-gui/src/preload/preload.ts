@@ -22,6 +22,7 @@ import {
   type TerminalSessionResizeRequest,
   type TerminalSessionStartRequest,
   type TerminalSessionStopRequest,
+  type UiLocale,
 } from "../shared/ipc";
 
 const p2aApi: P2AApi = {
@@ -31,6 +32,8 @@ const p2aApi: P2AApi = {
   },
   config: {
     get: () => ipcRenderer.invoke(IPC_CHANNELS.configGet) as Promise<GuiConfigSnapshot>,
+    setLocale: (locale: UiLocale) =>
+      ipcRenderer.invoke(IPC_CHANNELS.configSetLocale, locale) as Promise<GuiConfigSnapshot>,
   },
   project: {
     openFolder: () =>

@@ -16,6 +16,7 @@ import {
   type TerminalSessionStartRequest,
   type TerminalSessionStopRequest,
   type RuntimeInfo,
+  type UiLocale,
 } from "../shared/ipc";
 import {
   configPathForUserData,
@@ -24,6 +25,7 @@ import {
   readDefaultAgentTool,
   rememberRecentProject,
   setDefaultAgentTool,
+  setUiLocale,
 } from "./localConfig";
 import { PtySessionManager } from "./ptySessionManager";
 import { finishRun, startRun } from "./executionActions";
@@ -182,6 +184,9 @@ function createMainWindow(): void {
 function registerIpcHandlers(): void {
   ipcMain.handle(IPC_CHANNELS.appGetRuntimeInfo, () => runtimeInfo());
   ipcMain.handle(IPC_CHANNELS.configGet, () => loadGuiConfig(guiConfigPath()));
+  ipcMain.handle(IPC_CHANNELS.configSetLocale, (_event, locale: UiLocale) => {
+    return setUiLocale(guiConfigPath(), locale);
+  });
   ipcMain.handle(IPC_CHANNELS.projectOpenFolder, async (event): Promise<ProjectOpenResult> => {
     const result = await dialog.showOpenDialog({
       properties: ["openDirectory"],

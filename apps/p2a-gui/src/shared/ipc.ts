@@ -1,6 +1,7 @@
 export const IPC_CHANNELS = {
   appGetRuntimeInfo: "app:getRuntimeInfo",
   configGet: "config:get",
+  configSetLocale: "config:setLocale",
   projectOpenFolder: "project:openFolder",
   projectLoad: "project:load",
   projectChanged: "project:changed",
@@ -20,8 +21,11 @@ export const IPC_CHANNELS = {
 
 export const AGENT_TOOLS = ["codex", "claude", "gemini", "aider", "cursor"] as const;
 export const DEFAULT_AGENT_TOOL: AgentTool = "codex";
+export const UI_LOCALES = ["ko", "en"] as const;
+export const DEFAULT_UI_LOCALE: UiLocale = "ko";
 
 export type AgentTool = (typeof AGENT_TOOLS)[number];
+export type UiLocale = (typeof UI_LOCALES)[number];
 
 export type RuntimeInfo = {
   appVersion: string;
@@ -240,6 +244,7 @@ export type RecentProject = {
 export type GuiConfigSnapshot = {
   schemaVersion: "p2a.gui_config.v1";
   configPath: string;
+  locale: UiLocale;
   recentProjects: RecentProject[];
 };
 
@@ -383,6 +388,7 @@ export type P2AApi = {
   };
   config: {
     get: () => Promise<GuiConfigSnapshot>;
+    setLocale: (locale: UiLocale) => Promise<GuiConfigSnapshot>;
   };
   project: {
     openFolder: () => Promise<ProjectOpenResult>;

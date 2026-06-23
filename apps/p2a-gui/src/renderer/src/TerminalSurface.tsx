@@ -2,7 +2,9 @@ import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { Terminal } from "@xterm/xterm";
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { AgentTool, TerminalSessionInfo } from "../../shared/ipc";
+import { DEFAULT_UI_LOCALE } from "../../shared/ipc";
+import { uiCopy } from "./i18n";
+import type { AgentTool, TerminalSessionInfo, UiLocale } from "../../shared/ipc";
 
 type TerminalSurfaceProps = {
   cwd: string | null | undefined;
@@ -10,6 +12,7 @@ type TerminalSurfaceProps = {
   agentTool: AgentTool;
   taskId: string | null | undefined;
   taskPrompt: string | null | undefined;
+  locale?: UiLocale;
 };
 
 type TerminalStatus =
@@ -67,7 +70,7 @@ function createIdleTranscript({
   agentTool,
   taskId,
   taskPrompt,
-}: Required<TerminalSurfaceProps>): string[] {
+}: Required<Omit<TerminalSurfaceProps, "locale">>): string[] {
   const promptPreview = taskPrompt
     ? taskPrompt.split(/\s+/).slice(0, 18).join(" ")
     : "no selected task prompt";
@@ -93,7 +96,9 @@ export function TerminalSurface({
   agentTool,
   taskId,
   taskPrompt,
+  locale = DEFAULT_UI_LOCALE,
 }: TerminalSurfaceProps) {
+  const copy = uiCopy[locale];
   const hostRef = useRef<HTMLDivElement | null>(null);
   const terminalRef = useRef<Terminal | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
@@ -397,7 +402,7 @@ export function TerminalSurface({
         <strong className="mono">node-pty</strong>
         <span className="mono">{status}</span>
         <span className="mono">{inputMode}</span>
-        <span className="mono">last {lastExitText}</span>
+        <span className="mono">{copy.terminal.lastExit} {lastExitText}</span>
         <span className="xterm-panel__spacer" />
         <button
           className="terminal-control"
@@ -405,7 +410,7 @@ export function TerminalSurface({
           onClick={startSession}
           disabled={!canStartSession}
         >
-          Start session
+          {copy.terminal.startSession}
         </button>
         <button
           className="terminal-control"
@@ -413,7 +418,7 @@ export function TerminalSurface({
           onClick={stopSession}
           disabled={!activeSession || isSessionChanging}
         >
-          Stop
+          {copy.terminal.stop}
         </button>
         <button
           className="terminal-control terminal-control--danger"
@@ -421,19 +426,21 @@ export function TerminalSurface({
           onClick={killSession}
           disabled={!activeSession || isSessionChanging}
         >
-          Kill
+          {copy.terminal.kill}
         </button>
-        <span className="mono">{size.cols && size.rows ? `${size.cols}x${size.rows}` : "fitting"}</span>
+        <span className="mono">
+          {size.cols && size.rows ? `${size.cols}x${size.rows}` : copy.terminal.fitting}
+        </span>
       </div>
       <div className="xterm-host" ref={hostRef} />
       <div className="supervisor-panel">
         <div className="supervisor-panel__compose">
           <div className="supervisor-panel__head">
             <div>
-              <div className="label">supervisor input</div>
-              <strong>Message agent</strong>
+              <div className="label">{copy.terminal.supervisorInput}</div>
+              <strong>{copy.terminal.messageAgent}</strong>
             </div>
-            <div className="terminal-mode-toggle" role="group" aria-label="Terminal input mode">
+            <div className="terminal-mode-toggle" role="group" aria-label={copy.terminal.inputMode}>
               <button
                 className={
                   inputMode === "message"
@@ -443,7 +450,7 @@ export function TerminalSurface({
                 type="button"
                 onClick={() => setInputMode("message")}
               >
-                Message
+                {copy.terminal.message}
               </button>
               <button
                 className={
@@ -454,7 +461,7 @@ export function TerminalSurface({
                 type="button"
                 onClick={() => setInputMode("passthrough")}
               >
-                Passthrough
+                {copy.terminal.passthrough}
               </button>
             </div>
           </div>
@@ -465,9 +472,11 @@ export function TerminalSurface({
               onChange={(event) => setMessageText(event.target.value)}
               disabled={!activeSession || status !== "running"}
               placeholder={
-                activeSession ? "Ask or answer the agent." : "Start a session to message the agent."
+                activeSession
+                  ? copy.terminal.askAgentPlaceholder
+                  : copy.terminal.startSessionPlaceholder
               }
-              aria-label="Message agent"
+              aria-label={copy.terminal.messageAgent}
             />
             <button
               className="terminal-control terminal-control--primary"
@@ -475,7 +484,7 @@ export function TerminalSurface({
               onClick={sendMessageAgent}
               disabled={!canSendMessage}
             >
-              Send message
+              {copy.terminal.sendMessage}
             </button>
           </div>
         </div>
@@ -483,8 +492,8 @@ export function TerminalSurface({
         <div className="supervisor-panel__notes">
           <div className="supervisor-panel__head">
             <div>
-              <div className="label">session note</div>
-              <strong>Blocked / failed</strong>
+              <div className="label">{copy.terminal.sessionNote}</div>
+              <strong>{copy.terminal.blockedFailed}</strong>
             </div>
           </div>
           <div className="supervisor-message-row">
@@ -493,8 +502,8 @@ export function TerminalSurface({
               value={noteText}
               onChange={(event) => setNoteText(event.target.value)}
               disabled={status === "idle"}
-              placeholder="Reason or next action."
-              aria-label="Session note"
+              placeholder={copy.terminal.reasonPlaceholder}
+              aria-label={copy.terminal.sessionNote}
             />
             <div className="supervisor-note-actions">
               <button
@@ -503,7 +512,7 @@ export function TerminalSurface({
                 onClick={() => recordSessionNote("blocked")}
                 disabled={!canRecordNote}
               >
-                Blocked note
+                {copy.terminal.blockedNote}
               </button>
               <button
                 className="terminal-control terminal-control--danger"
@@ -511,13 +520,13 @@ export function TerminalSurface({
                 onClick={() => recordSessionNote("failed")}
                 disabled={!canRecordNote}
               >
-                Failed note
+                {copy.terminal.failedNote}
               </button>
             </div>
           </div>
         </div>
 
-        <div className="supervisor-event-list" aria-label="Supervisor notes">
+        <div className="supervisor-event-list" aria-label={copy.terminal.supervisorNotes}>
           {supervisorNotes.length > 0 ? (
             supervisorNotes.map((note) => (
               <div className={`supervisor-event supervisor-event--${note.kind}`} key={note.id}>
@@ -527,7 +536,7 @@ export function TerminalSurface({
               </div>
             ))
           ) : (
-            <div className="supervisor-empty">No supervisor notes.</div>
+            <div className="supervisor-empty">{copy.terminal.noSupervisorNotes}</div>
           )}
         </div>
       </div>

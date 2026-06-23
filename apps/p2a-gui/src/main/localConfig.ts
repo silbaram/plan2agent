@@ -3,9 +3,12 @@ import path from "node:path";
 import {
   AGENT_TOOLS,
   DEFAULT_AGENT_TOOL,
+  DEFAULT_UI_LOCALE,
+  UI_LOCALES,
   type AgentTool,
   type GuiConfigSnapshot,
   type RecentProject,
+  type UiLocale,
 } from "../shared/ipc";
 
 const GUI_CONFIG_SCHEMA_VERSION = "p2a.gui_config.v1" as const;
@@ -18,6 +21,7 @@ type ProjectSetting = {
 
 type GuiConfigFile = {
   schemaVersion: typeof GUI_CONFIG_SCHEMA_VERSION;
+  locale: UiLocale;
   recentProjects: Array<{
     rootPath: string;
     name: string;
@@ -29,6 +33,7 @@ type GuiConfigFile = {
 function defaultConfig(): GuiConfigFile {
   return {
     schemaVersion: GUI_CONFIG_SCHEMA_VERSION,
+    locale: DEFAULT_UI_LOCALE,
     recentProjects: [],
     projectSettings: {},
   };
@@ -40,6 +45,10 @@ export function configPathForUserData(userDataPath: string): string {
 
 function isAgentTool(value: unknown): value is AgentTool {
   return typeof value === "string" && AGENT_TOOLS.includes(value as AgentTool);
+}
+
+function isUiLocale(value: unknown): value is UiLocale {
+  return typeof value === "string" && UI_LOCALES.includes(value as UiLocale);
 }
 
 function normalizeConfig(parsed: unknown): GuiConfigFile {
@@ -74,6 +83,7 @@ function normalizeConfig(parsed: unknown): GuiConfigFile {
 
   return {
     schemaVersion: GUI_CONFIG_SCHEMA_VERSION,
+    locale: isUiLocale(raw.locale) ? raw.locale : DEFAULT_UI_LOCALE,
     recentProjects,
     projectSettings,
   };
@@ -98,6 +108,7 @@ function toSnapshot(configPath: string, config: GuiConfigFile): GuiConfigSnapsho
   return {
     schemaVersion: GUI_CONFIG_SCHEMA_VERSION,
     configPath,
+    locale: config.locale,
     recentProjects: config.recentProjects.map((project): RecentProject => ({
       ...project,
       defaultAgentTool:
@@ -108,6 +119,19 @@ function toSnapshot(configPath: string, config: GuiConfigFile): GuiConfigSnapsho
 
 export async function loadGuiConfig(configPath: string): Promise<GuiConfigSnapshot> {
   return toSnapshot(configPath, await readConfig(configPath));
+}
+
+export async function setUiLocale(
+  configPath: string,
+  locale: UiLocale,
+): Promise<GuiConfigSnapshot> {
+  if (!isUiLocale(locale)) {
+    throw new Error(`Unsupported locale: ${String(locale)}`);
+  }
+  const config = await readConfig(configPath);
+  config.locale = locale;
+  await writeConfig(configPath, config);
+  return toSnapshot(configPath, config);
 }
 
 export async function rememberRecentProject(
