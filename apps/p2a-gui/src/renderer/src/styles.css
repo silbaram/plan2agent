@@ -1189,6 +1189,29 @@ h3 {
   color: var(--err);
 }
 
+.execution-failure__body {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.execution-failure__body strong {
+  color: var(--fg-1);
+  font-size: 12px;
+}
+
+.execution-failure__body small,
+.execution-failure__body em {
+  color: var(--fg-3);
+  font-size: 11px;
+  font-style: normal;
+  overflow-wrap: anywhere;
+}
+
+.execution-failure--compact {
+  padding: 8px;
+}
+
 .command-card {
   display: grid;
   gap: 6px;

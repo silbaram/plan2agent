@@ -17,6 +17,10 @@ import {
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { AGENT_TOOLS } from "../../shared/ipc";
+import {
+  summarizeFinishRunFailure,
+  summarizeStartRunFailure,
+} from "../../shared/executionFailure";
 import { TerminalSurface } from "./TerminalSurface";
 import type {
   AgentTool,
@@ -883,6 +887,7 @@ export default function App() {
                     : "not runnable"}
               </span>
             </div>
+            {renderStartFailureDiagnostic()}
             {startResult && (
               <div className="command-output">
                 <pre>{outputPreview(startResult.stdout)}</pre>
@@ -930,6 +935,7 @@ export default function App() {
                 : "not runnable"}
           </span>
         </div>
+        {renderStartFailureDiagnostic(true)}
         {startResult && (
           <div className="command-output command-output--compact">
             <pre>{outputPreview(startResult.stdout)}</pre>
@@ -937,6 +943,26 @@ export default function App() {
           </div>
         )}
       </>
+    );
+  }
+
+  function renderStartFailureDiagnostic(compact = false) {
+    const failure = summarizeStartRunFailure(startResult);
+    if (!failure) return null;
+
+    return (
+      <div
+        className={`diagnostic diagnostic--error execution-failure${
+          compact ? " execution-failure--compact" : ""
+        }`}
+      >
+        <AlertTriangle size={14} strokeWidth={1.7} aria-hidden="true" />
+        <span className="execution-failure__body">
+          <strong>{failure.title}</strong>
+          <small>{failure.detail}</small>
+          <em>{failure.nextAction}</em>
+        </span>
+      </div>
     );
   }
 
@@ -1103,6 +1129,7 @@ export default function App() {
                 <span>failure class other requires a note.</span>
               </div>
             )}
+            {renderFinishFailureDiagnostic()}
             {finishResult && (
               <div className="command-output">
                 <pre>{outputPreview(finishResult.stdout)}</pre>
@@ -1147,6 +1174,22 @@ export default function App() {
           )}
         </section>
       </>
+    );
+  }
+
+  function renderFinishFailureDiagnostic() {
+    const failure = summarizeFinishRunFailure(finishResult);
+    if (!failure) return null;
+
+    return (
+      <div className="diagnostic diagnostic--error execution-failure">
+        <AlertTriangle size={14} strokeWidth={1.7} aria-hidden="true" />
+        <span className="execution-failure__body">
+          <strong>{failure.title}</strong>
+          <small>{failure.detail}</small>
+          <em>{failure.nextAction}</em>
+        </span>
+      </div>
     );
   }
 
@@ -1358,6 +1401,7 @@ export default function App() {
             {statusLabel(selectedRun.status)}
           </span>
         </div>
+        {renderRunFailureSummary(selectedRun)}
         <div className="detail-list">
           <div>
             <span>task</span>
@@ -1466,6 +1510,30 @@ export default function App() {
           <code>{selectedRun.runRef}</code>
         </div>
       </>
+    );
+  }
+
+  function renderRunFailureSummary(run: WorkbenchRun) {
+    const failedVerification = run.verification.find(
+      (verification) => verification.status === "failed",
+    );
+    if (!run.failure && !failedVerification) return null;
+
+    return (
+      <div className="diagnostic diagnostic--error execution-failure">
+        <AlertTriangle size={14} strokeWidth={1.7} aria-hidden="true" />
+        <span className="execution-failure__body">
+          <strong>
+            {run.failure ? `failure ${run.failure.class}` : "verification failed"}
+          </strong>
+          <small>
+            {failedVerification
+              ? `${failedVerification.type}: ${failedVerification.command}`
+              : `retryable ${run.failure?.retryable ?? "unknown"}`}
+          </small>
+          <em>{outputPreview(failedVerification?.stderrTail)}</em>
+        </span>
+      </div>
     );
   }
 

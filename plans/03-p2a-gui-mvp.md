@@ -393,6 +393,40 @@ GUI local config:
 - `npm run smoke:packaged`가 package 생성부터 UI start/finish flow와 파일 상태 검증까지 통과한다.
 - packaged 앱 기준으로 renderer 버튼, preload API, main IPC, CLI bridge가 끊기지 않는다.
 
+### 2H. Start run failure UX
+
+목적: `Start run` 실패 시 exit code와 raw output만 보여주지 않고, 사용자가 바로 확인할 수 있는 실패 원인과 다음 확인 지점을 함께 표시한다.
+
+포함:
+
+- start command output을 `p2a_execute` 누락, task not ready, run 중복, artifact validation, missing file, unsupported agent, unknown으로 분류한다.
+- 분류 로직은 renderer와 테스트에서 공유 가능한 helper로 둔다.
+- Tasks inspector와 Terminal start panel의 command output 위에 짧은 실패 진단을 표시한다.
+- raw stdout/stderr는 기존처럼 그대로 노출한다.
+- 분류 helper에 단위 테스트를 추가한다.
+
+완료 기준:
+
+- `npm test`에서 start failure classification 단위 테스트가 통과한다.
+- 실패 진단이 기존 command output을 숨기지 않고 같은 실행 표면에서 보인다.
+
+### 2I. Finish run / verification failure UX
+
+목적: `Finish run` 또는 verification 실패 시 사용자가 run 실패 원인, blocked/failed 상태, 핵심 stderr를 Runs/Terminal 표면에서 바로 확인할 수 있게 한다.
+
+포함:
+
+- finish command output을 verification failed, failure class required, run not found, task transition skipped, missing verification command, artifact validation, missing file, unknown으로 분류한다.
+- 분류 로직은 start failure helper와 같은 shared helper에 둔다.
+- Terminal finish panel의 command output 위에 짧은 실패 진단을 표시한다.
+- Runs inspector에서 failed/blocked run의 failure class와 failed verification command/stderr를 앞쪽에 표시한다.
+- 분류 helper에 단위 테스트를 추가한다.
+
+완료 기준:
+
+- `npm test`에서 finish failure classification 단위 테스트가 통과한다.
+- Runs/Terminal에서 실패 진단과 raw output 또는 verification tail을 함께 확인할 수 있다.
+
 ## 5. MVP 전체 포함 범위
 
 - Project onboarding / detection.
@@ -463,7 +497,9 @@ GUI local config:
 9. `2E` start run: ready task를 GUI에서 시작하고 생성된 run을 자동 선택한다.
 10. `2F` automated smoke / regression: start -> finish -> snapshot reload 파일 상태 전이를 Vitest로 고정한다.
 11. `2G` packaged app smoke: packaged Electron 앱에서 recent project -> start -> finish -> runs 상태를 자동 검증한다.
-12. smoke: scaffold된 작은 target 프로젝트에서 ready task 1건을 end-to-end 실행하고 CLI 표시와 GUI 표시가 일치하는지 확인한다.
+12. `2H` start run failure UX: start 실패를 사용자용 원인으로 분류하고 단위 테스트로 고정한다.
+13. `2I` finish run / verification failure UX: finish 실패를 사용자용 원인으로 분류하고 Runs/Terminal에 표시한다.
+14. smoke: scaffold된 작은 target 프로젝트에서 ready task 1건을 end-to-end 실행하고 CLI 표시와 GUI 표시가 일치하는지 확인한다.
 
 현재 진행:
 
@@ -480,6 +516,8 @@ GUI local config:
 | `2E` start run | done | 선택 ready task 기준 `execution:startRun` typed IPC, `p2a_execute start` main-process 실행, Tasks inspector와 Terminal 탭 start action, command output, 성공 후 run 자동 선택과 Terminal handoff를 연결 |
 | `2F` automated smoke / regression | done | Vitest에서 임시 P2A 프로젝트에 실제 scripts/schemas runtime을 구성하고 `startRun` -> `finishRun` -> `loadProjectSnapshot` 경로와 start/verification 실패 path의 task/run 파일 상태 전이를 검증 |
 | `2G` packaged app smoke | done | `npm run smoke:packaged`로 packaged 앱을 실행하고 recent project -> Tasks `Start run` -> Terminal `Finish run` -> Runs 상태와 task/run 파일 상태를 자동 검증 |
+| `2H` start run failure UX | done | `summarizeStartRunFailure` helper와 단위 테스트를 추가하고 Tasks inspector/Terminal start panel에 실패 원인과 다음 확인 지점을 표시 |
+| `2I` finish run / verification failure UX | done | `summarizeFinishRunFailure` helper와 단위 테스트를 추가하고 Terminal finish panel/Runs inspector에 failure class, failed verification, stderr tail을 앞쪽에 표시 |
 | smoke | done | scaffold된 작은 target 프로젝트에서 GUI로 `Start run` -> fake `codex` PTY `Start session`/`Message agent`/`Stop` -> `custom:true` verification -> `Finish run`까지 실행해 task/run 상태가 `done`/`finished`로 갱신됨을 packaged 앱에서 확인 |
 
 ## 9. 첫 smoke 기준
