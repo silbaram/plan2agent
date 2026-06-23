@@ -730,7 +730,11 @@ export default function App() {
           <dt>target</dt>
           <dd className="mono">{action.targetPath}</dd>
         </dl>
-        {action.command ? <code>{action.command}</code> : <span className="onboarding-action__empty">No external command.</span>}
+        {action.command ? (
+          <code>{action.command}</code>
+        ) : (
+          <span className="onboarding-action__empty">{copy.common.noExternalCommand}</span>
+        )}
       </article>
     );
   }
@@ -742,11 +746,11 @@ export default function App() {
       <section className="workbench-panel onboarding-panel">
         <div className="section-head">
           <div>
-            <div className="label">onboarding</div>
+              <div className="label">{copy.overview.onboarding}</div>
             <h3>{onboarding.title}</h3>
           </div>
           <span className={`state-pill state-pill--${projectSnapshot?.state ?? "idle"}`}>
-            {projectSnapshot?.stateLabel ?? "not loaded"}
+            {projectSnapshot?.stateLabel ?? copy.common.none}
           </span>
         </div>
         <div className="onboarding-body">
@@ -812,14 +816,14 @@ export default function App() {
                       <strong>{item.projectId}</strong>
                       <span className="mono">{item.relativePath}</span>
                     </div>
-                    <span className="mono">{item.activeIteration ?? "no iteration"}</span>
+                    <span className="mono">{item.activeIteration ?? copy.common.none}</span>
                   </div>
                   <div className="task-counts" aria-label="Task counts">
-                    <span>ready {formatCount(item.taskCounts.ready)}</span>
-                    <span>todo {formatCount(item.taskCounts.todo)}</span>
-                    <span>in progress {formatCount(item.taskCounts.inProgress)}</span>
-                    <span>blocked {formatCount(item.taskCounts.blocked)}</span>
-                    <span>done {formatCount(item.taskCounts.done)}</span>
+                    <span>{copy.status.ready} {formatCount(item.taskCounts.ready)}</span>
+                    <span>{copy.status.todo} {formatCount(item.taskCounts.todo)}</span>
+                    <span>{copy.status.in_progress} {formatCount(item.taskCounts.inProgress)}</span>
+                    <span>{copy.status.blocked} {formatCount(item.taskCounts.blocked)}</span>
+                    <span>{copy.status.done} {formatCount(item.taskCounts.done)}</span>
                   </div>
                   <div className="gate-strip" aria-label="Gate status">
                     {item.gates.map((gate) => (
@@ -1124,8 +1128,8 @@ export default function App() {
           <section className="workbench-panel">
             <div className="section-head">
               <div>
-                <div className="label">dependencies</div>
-                <h3>Execution order</h3>
+                <div className="label">{copy.tasks.dependencies}</div>
+                <h3>{copy.tasks.executionOrder}</h3>
               </div>
             </div>
             <div className="dependency-flow">
@@ -1351,7 +1355,7 @@ export default function App() {
       <section className="workbench-panel finish-panel">
         <div className="section-head">
           <div>
-            <div className="label">finish / verification</div>
+            <div className="label">{copy.terminal.finishRun}</div>
             <h3>{selectedRun?.runId ?? copy.runs.noRunSelected}</h3>
           </div>
           <span className={`status-badge status-badge--${selectedRun?.status ?? "todo"}`}>
@@ -1363,7 +1367,7 @@ export default function App() {
           <div className="finish-panel__controls">
             <div className="form-grid form-grid--two">
               <label className="field-label">
-                <span>final status</span>
+                <span>{copy.terminal.finalStatus}</span>
                 <select
                   className="agent-select mono"
                   value={finishStatus}
@@ -1377,7 +1381,7 @@ export default function App() {
               </label>
 
               <label className="field-label">
-                <span>failure class</span>
+                <span>{copy.terminal.failureClass}</span>
                 <select
                   className="agent-select mono"
                   value={finishFailureClass}
@@ -1393,7 +1397,7 @@ export default function App() {
               </label>
             </div>
 
-            <div className="check-options" aria-label="Verification options">
+            <div className="check-options" aria-label={copy.terminal.verificationOptions}>
               <label>
                 <input
                   type="checkbox"
@@ -1433,7 +1437,7 @@ export default function App() {
                 className="agent-select mono"
                 value={customVerifyType}
                 onChange={(event) => setCustomVerifyType(event.target.value as VerificationType)}
-                aria-label="Custom verification type"
+                aria-label={copy.terminal.customVerificationType}
               >
                 {verificationTypeOptions.map((type) => (
                   <option key={type} value={type}>
@@ -1446,13 +1450,13 @@ export default function App() {
                 value={customVerifyCommand}
                 onChange={(event) => setCustomVerifyCommand(event.target.value)}
                 placeholder="npm run smoke"
-                aria-label="Custom verification command"
+                aria-label={copy.terminal.customVerificationCommand}
               />
             </div>
 
             <div className="form-grid form-grid--two">
               <label className="field-label">
-                <span>changed files</span>
+                <span>{copy.runs.changedFiles}</span>
                 <textarea
                   className="supervisor-textarea"
                   value={changedFilesInput}
@@ -1461,7 +1465,7 @@ export default function App() {
                 />
               </label>
               <label className="field-label">
-                <span>note</span>
+                <span>{copy.common.note}</span>
                 <textarea
                   className="supervisor-textarea"
                   value={finishNoteInput}
@@ -1484,20 +1488,20 @@ export default function App() {
                 onClick={finishSelectedRun}
                 disabled={!canFinish || !hasRequiredNote}
               >
-                {finishState === "running" ? "Running" : "Finish run"}
+                {finishState === "running" ? copy.common.running : copy.terminal.finishRun}
               </button>
               <span className="mono">
                 {finishResult
                   ? `exit ${finishResult.exitCode} · ${formatMilliseconds(finishResult.durationMs)}`
                   : selectedRun?.status === "started"
-                    ? "ready"
-                    : "not runnable"}
+                    ? copy.status.ready
+                    : copy.common.notRunnable}
               </span>
             </div>
             {noteRequired && !hasRequiredNote && (
               <div className="diagnostic diagnostic--warn">
                 <AlertTriangle size={14} strokeWidth={1.7} aria-hidden="true" />
-                <span>failure class other requires a note.</span>
+                <span>{copy.terminal.failureClassOtherNote}</span>
               </div>
             )}
             {renderFinishFailureDiagnostic()}
@@ -1532,8 +1536,8 @@ export default function App() {
         <section className="workbench-panel">
           <div className="section-head">
             <div>
-              <div className="label">agent prompt</div>
-              <h3>{selectedTask?.id ?? "No task selected"}</h3>
+              <div className="label">{copy.tasks.prompt}</div>
+              <h3>{selectedTask?.id ?? copy.tasks.noTaskSelected}</h3>
             </div>
           </div>
           {selectedTask ? (
@@ -1541,7 +1545,7 @@ export default function App() {
           ) : (
             <div className="empty-panel">
               <FileJson size={18} strokeWidth={1.7} aria-hidden="true" />
-              <span>Select a task to preview its agent prompt.</span>
+              <span>{copy.tasks.selectTaskPrompt}</span>
             </div>
           )}
         </section>
@@ -1741,21 +1745,21 @@ export default function App() {
           <>
             <div className="section-head">
               <div>
-                <div className="label">next action</div>
+                <div className="label">{copy.overview.nextAction}</div>
                 <h3>{onboarding.primaryAction.label}</h3>
               </div>
             </div>
             <div className="detail-list">
               <div>
-                <span>stage</span>
+                <span>{copy.overview.stage}</span>
                 <strong className="mono">{onboarding.stage}</strong>
               </div>
               <div>
-                <span>impact</span>
+                <span>{copy.overview.impact}</span>
                 <strong>{impactText(onboarding.primaryAction)}</strong>
               </div>
               <div>
-                <span>target</span>
+                <span>{copy.tasks.target}</span>
                 <strong className="mono">{onboarding.primaryAction.targetPath}</strong>
               </div>
               <div>
@@ -1767,8 +1771,8 @@ export default function App() {
               <>
                 <div className="section-head section-head--tight">
                   <div>
-                    <div className="label">command</div>
-                    <h3>External terminal</h3>
+                    <div className="label">{copy.common.command}</div>
+                    <h3>{copy.common.externalTerminal}</h3>
                   </div>
                 </div>
                 <pre className="inspector-code">{onboarding.primaryAction.command}</pre>
@@ -1779,8 +1783,8 @@ export default function App() {
 
         <div className="section-head">
           <div>
-            <div className="label">diagnostics</div>
-            <h3>Load result</h3>
+            <div className="label">{copy.settings.diagnostics}</div>
+            <h3>{copy.common.loadResult}</h3>
           </div>
         </div>
 
@@ -1816,7 +1820,7 @@ export default function App() {
           {!projectSnapshot && (
             <div className="diagnostic diagnostic--warn">
               <CircleDot size={14} strokeWidth={1.7} aria-hidden="true" />
-              <span>Open a folder to run detection.</span>
+              <span>{copy.common.openFolderToDetect}</span>
             </div>
           )}
         </div>
@@ -1829,7 +1833,7 @@ export default function App() {
       return (
         <div className="inspector-empty">
           <FileJson size={18} strokeWidth={1.7} aria-hidden="true" />
-          <span>No artifact selected.</span>
+          <span>{copy.artifacts.noArtifactSelected}</span>
         </div>
       );
     }
@@ -1838,21 +1842,21 @@ export default function App() {
       <>
         <div className="section-head">
           <div>
-            <div className="label">selected artifact</div>
+            <div className="label">{copy.artifacts.selectedArtifact}</div>
             <h3>{selectedArtifact.projectId}</h3>
           </div>
           <span className="section-meta mono">
-            {selectedArtifact.activeIteration ?? "no iteration"}
+            {selectedArtifact.activeIteration ?? copy.common.none}
           </span>
         </div>
 
         <div className="detail-list">
           <div>
-            <span>root</span>
+            <span>{copy.common.root}</span>
             <strong className="mono">{selectedArtifact.relativePath}</strong>
           </div>
           <div>
-            <span>task graph</span>
+            <span>{copy.tasks.taskGraph}</span>
             <strong className="mono">{formatPath(selectedArtifact.taskGraphPath)}</strong>
           </div>
           <div>
@@ -1860,7 +1864,7 @@ export default function App() {
             <strong className="mono">{formatPath(selectedArtifact.sourceSpec)}</strong>
           </div>
           <div>
-            <span>documents</span>
+            <span>{copy.artifacts.documents}</span>
             <strong className="mono">{formatCount(artifactDocuments.length)}</strong>
           </div>
         </div>
@@ -1869,7 +1873,7 @@ export default function App() {
           <>
             <div className="section-head section-head--tight">
               <div>
-                <div className="label">document</div>
+                <div className="label">{copy.artifacts.document}</div>
                 <h3>{selectedArtifactDocument.label}</h3>
               </div>
               <button
@@ -1877,20 +1881,20 @@ export default function App() {
                 type="button"
                 onClick={() => void openArtifactDocument(selectedArtifactDocument)}
               >
-                Open
+                {copy.common.open}
               </button>
             </div>
             <div className="detail-list">
               <div>
-                <span>group</span>
+                <span>{copy.common.group}</span>
                 <strong className="mono">{selectedArtifactDocument.group}</strong>
               </div>
               <div>
-                <span>state</span>
+                <span>{copy.overview.state}</span>
                 <strong className="mono">{selectedArtifactDocument.state}</strong>
               </div>
               <div>
-                <span>path</span>
+                <span>{copy.common.path}</span>
                 <strong className="mono">{selectedArtifactDocument.relativePath}</strong>
               </div>
             </div>
@@ -2177,8 +2181,8 @@ export default function App() {
       <>
         <div className="section-head">
           <div>
-            <div className="label">session</div>
-            <h3>Execution boundary</h3>
+            <div className="label">{copy.terminal.session}</div>
+            <h3>{copy.terminal.executionBoundary}</h3>
           </div>
         </div>
         <div className="detail-list">
@@ -2187,22 +2191,22 @@ export default function App() {
             <strong className="mono">{formatPath(projectSnapshot?.rootPath)}</strong>
           </div>
           <div>
-            <span>agent</span>
+            <span>{copy.runs.agent}</span>
             <strong className="mono">{projectSnapshot?.defaultAgentTool ?? "codex"}</strong>
           </div>
           <div>
-            <span>task</span>
-            <strong className="mono">{selectedTask?.id ?? "none"}</strong>
+            <span>{copy.runs.task}</span>
+            <strong className="mono">{selectedTask?.id ?? copy.common.none}</strong>
           </div>
           <div>
-            <span>mode</span>
+            <span>{copy.common.mode}</span>
             <strong>supervised node-pty</strong>
           </div>
         </div>
         <div className="section-head section-head--tight">
           <div>
-            <div className="label">boundary</div>
-            <h3>Terminal APIs</h3>
+            <div className="label">{copy.terminal.boundary}</div>
+            <h3>{copy.terminal.terminalApis}</h3>
           </div>
         </div>
         <div className="api-list">
@@ -2240,33 +2244,35 @@ export default function App() {
       <>
         <div className="section-head">
           <div>
-            <div className="label">settings</div>
-            <h3>Runtime</h3>
+            <div className="label">{copy.settings.settings}</div>
+            <h3>{copy.settings.runtime}</h3>
           </div>
         </div>
         <div className="detail-list">
           <div>
             <span>app</span>
-            <strong className="mono">{runtimeInfo?.appVersion ?? "unknown"}</strong>
+            <strong className="mono">{runtimeInfo?.appVersion ?? copy.common.unknown}</strong>
           </div>
           <div>
             <span>electron</span>
-            <strong className="mono">{runtimeInfo?.electronVersion ?? "unknown"}</strong>
+            <strong className="mono">
+              {runtimeInfo?.electronVersion ?? copy.common.unknown}
+            </strong>
           </div>
           <div>
             <span>node</span>
-            <strong className="mono">{runtimeInfo?.nodeVersion ?? "unknown"}</strong>
+            <strong className="mono">{runtimeInfo?.nodeVersion ?? copy.common.unknown}</strong>
           </div>
           <div>
             <span>platform</span>
-            <strong className="mono">{runtimeInfo?.platform ?? "unknown"}</strong>
+            <strong className="mono">{runtimeInfo?.platform ?? copy.common.unknown}</strong>
           </div>
         </div>
 
         <div className="section-head section-head--tight">
           <div>
             <div className="label">config</div>
-            <h3>Local file</h3>
+            <h3>{copy.settings.localFile}</h3>
           </div>
         </div>
         <div className="ref-list">
@@ -2276,7 +2282,7 @@ export default function App() {
         <div className="section-head section-head--tight">
           <div>
             <div className="label">status</div>
-            <h3>Diagnostics</h3>
+            <h3>{copy.settings.diagnostics}</h3>
           </div>
         </div>
         <div className="diagnostic-list">
@@ -2286,7 +2292,7 @@ export default function App() {
           </div>
           <div className={`diagnostic diagnostic--${projectSnapshot ? "ok" : "warn"}`}>
             <FolderOpen size={14} strokeWidth={1.7} aria-hidden="true" />
-            <span>{projectSnapshot ? "project loaded" : "no project loaded"}</span>
+            <span>{projectSnapshot ? "project loaded" : copy.common.noProject}</span>
           </div>
           <div className="diagnostic diagnostic--ok">
             <CheckCircle2 size={14} strokeWidth={1.7} aria-hidden="true" />
@@ -2412,14 +2418,14 @@ export default function App() {
           </section>
 
           <dl className="compact-dl">
-            <dt>selected path</dt>
+            <dt>{copy.common.selectedPath}</dt>
             <dd className="mono">{formatPath(projectSnapshot?.rootPath)}</dd>
             <dt>{copy.overview.state}</dt>
             <dd>{projectSnapshot?.stateLabel ?? copy.common.none}</dd>
-            <dt>artifact root</dt>
+            <dt>{copy.common.artifactRoot}</dt>
             <dd className="mono">{formatPath(artifact?.relativePath)}</dd>
-            <dt>mode</dt>
-            <dd>read-only</dd>
+            <dt>{copy.common.mode}</dt>
+            <dd>{copy.common.readOnly}</dd>
             <dt>{copy.runs.agent}</dt>
             <dd className="compact-dl__control">
               <select
@@ -2443,7 +2449,7 @@ export default function App() {
           </dl>
 
           <section className="mini-panel">
-            <div className="label">milestones</div>
+            <div className="label">{copy.common.milestones}</div>
             <div className="mini-step-list">
               {steps.map(([id, title, state]) => (
                 <div className={`mini-step mini-step--${state}`} key={id}>
