@@ -15,11 +15,12 @@ import {
   TerminalSquare,
   X,
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { AGENT_TOOLS, DEFAULT_UI_LOCALE, UI_LOCALES } from "../../shared/ipc";
 import {
   summarizeFinishRunFailure,
   summarizeStartRunFailure,
+  type ExecutionFailureSummary,
 } from "../../shared/executionFailure";
 import { TerminalSurface } from "./TerminalSurface";
 import { localeNames, uiCopy, type UiCopy } from "./i18n";
@@ -105,12 +106,17 @@ const settingsCommands = [
   ["packaged smoke", "npm run smoke:packaged"],
 ] as const;
 
-function formatPath(value: string | null | undefined): string {
-  return value ?? "none";
+const localeTags: Record<UiLocale, string> = {
+  ko: "ko-KR",
+  en: "en-US",
+};
+
+function formatPath(value: string | null | undefined, copy: UiCopy): string {
+  return value ?? copy.common.none;
 }
 
-function formatCount(value: number): string {
-  return new Intl.NumberFormat("en-US").format(value);
+function formatCount(value: number, locale: UiLocale): string {
+  return new Intl.NumberFormat(localeTags[locale]).format(value);
 }
 
 function formatBytes(value: number): string {
@@ -119,11 +125,11 @@ function formatBytes(value: number): string {
   return `${(value / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-function formatTime(value: string | null | undefined): string {
-  if (!value) return "none";
+function formatTime(value: string | null | undefined, locale: UiLocale, copy: UiCopy): string {
+  if (!value) return copy.common.none;
   const date = new Date(value);
-  if (!Number.isFinite(date.getTime())) return "invalid";
-  return new Intl.DateTimeFormat("en-US", {
+  if (!Number.isFinite(date.getTime())) return copy.common.invalid;
+  return new Intl.DateTimeFormat(localeTags[locale], {
     hour: "2-digit",
     minute: "2-digit",
     second: "2-digit",
@@ -131,11 +137,11 @@ function formatTime(value: string | null | undefined): string {
   }).format(date);
 }
 
-function formatDateTime(value: string | null | undefined): string {
-  if (!value) return "none";
+function formatDateTime(value: string | null | undefined, locale: UiLocale, copy: UiCopy): string {
+  if (!value) return copy.common.none;
   const date = new Date(value);
-  if (!Number.isFinite(date.getTime())) return "invalid";
-  return new Intl.DateTimeFormat("en-US", {
+  if (!Number.isFinite(date.getTime())) return copy.common.invalid;
+  return new Intl.DateTimeFormat(localeTags[locale], {
     month: "short",
     day: "2-digit",
     hour: "2-digit",
@@ -144,19 +150,25 @@ function formatDateTime(value: string | null | undefined): string {
   }).format(date);
 }
 
-function formatDuration(startedAt: string | null | undefined, finishedAt: string | null | undefined): string {
-  if (!startedAt || !finishedAt) return "open";
+function formatDuration(
+  startedAt: string | null | undefined,
+  finishedAt: string | null | undefined,
+  copy: UiCopy,
+): string {
+  if (!startedAt || !finishedAt) return copy.common.openState;
   const started = new Date(startedAt).getTime();
   const finished = new Date(finishedAt).getTime();
-  if (!Number.isFinite(started) || !Number.isFinite(finished) || finished < started) return "none";
+  if (!Number.isFinite(started) || !Number.isFinite(finished) || finished < started) {
+    return copy.common.none;
+  }
   const totalSeconds = Math.round((finished - started) / 1000);
   const minutes = Math.floor(totalSeconds / 60);
   const seconds = totalSeconds % 60;
   return `${minutes}m ${seconds.toString().padStart(2, "0")}s`;
 }
 
-function formatMilliseconds(value: number | null | undefined): string {
-  if (typeof value !== "number" || !Number.isFinite(value)) return "none";
+function formatMilliseconds(value: number | null | undefined, copy: UiCopy): string {
+  if (typeof value !== "number" || !Number.isFinite(value)) return copy.common.none;
   if (value < 1000) return `${value}ms`;
   return `${(value / 1000).toFixed(1)}s`;
 }
@@ -180,20 +192,20 @@ function parseListInput(value: string): string[] {
     });
 }
 
-function verificationSummary(run: WorkbenchRun | null): string {
-  if (!run || run.verification.length === 0) return "none";
+function verificationSummary(run: WorkbenchRun | null, copy: UiCopy): string {
+  if (!run || run.verification.length === 0) return copy.common.none;
   const counts = run.verification.reduce<Record<string, number>>((summary, item) => {
     summary[item.status] = (summary[item.status] ?? 0) + 1;
     return summary;
   }, {});
   return Object.entries(counts)
-    .map(([status, count]) => `${status}:${count}`)
+    .map(([status, count]) => `${statusLabel(status, copy)}:${count}`)
     .join(", ");
 }
 
-function outputPreview(value: string | null | undefined): string {
-  if (!value) return "none";
-  return value.trim() || "none";
+function outputPreview(value: string | null | undefined, copy: UiCopy): string {
+  if (!value) return copy.common.none;
+  return value.trim() || copy.common.none;
 }
 
 function quoteCommandPart(value: string): string {
@@ -218,7 +230,7 @@ function artifactDocumentId(artifact: ArtifactSummary, relativePath: string): st
   return `${artifact.rootPath}:${relativePath}`;
 }
 
-function buildArtifactDocuments(artifact: ArtifactSummary | null): ArtifactDocument[] {
+function buildArtifactDocuments(artifact: ArtifactSummary | null, copy: UiCopy): ArtifactDocument[] {
   if (!artifact) return [];
 
   const documents: ArtifactDocument[] = [];
@@ -242,7 +254,13 @@ function buildArtifactDocuments(artifact: ArtifactSummary | null): ArtifactDocum
     });
   };
 
-  addDocument("Status", "status", artifact.statusPath, "markdown", artifact.statusPath ? "present" : "missing");
+  addDocument(
+    copy.artifacts.groups.status,
+    "status",
+    artifact.statusPath,
+    "markdown",
+    artifact.statusPath ? "present" : "missing",
+  );
 
   for (const validation of artifact.validations) {
     addDocument(
@@ -303,12 +321,37 @@ function primaryArtifact(snapshot: ProjectSnapshot | null): ArtifactSummary | nu
   return snapshot?.artifacts[0] ?? null;
 }
 
-function dependencyText(task: WorkbenchTask): string {
-  return task.dependencies.length ? task.dependencies.join(", ") : "none";
+function dependencyText(task: WorkbenchTask, copy: UiCopy): string {
+  return task.dependencies.length ? task.dependencies.join(", ") : copy.common.none;
 }
 
-function runForTaskText(task: WorkbenchTask): string {
-  return task.latestRunId ?? `${task.runIds.length} runs`;
+function runForTaskText(task: WorkbenchTask, locale: UiLocale, copy: UiCopy): string {
+  return task.latestRunId ?? `${formatCount(task.runIds.length, locale)} ${copy.runs.runs}`;
+}
+
+function artifactGroupLabel(group: ArtifactDocument["group"], copy: UiCopy): string {
+  return copy.artifacts.groups[group];
+}
+
+function localizedExecutionFailure(
+  failure: ExecutionFailureSummary,
+  phase: "start" | "finish",
+  copy: UiCopy,
+): ExecutionFailureSummary {
+  if (failure.kind === "unknown") {
+    return {
+      ...failure,
+      title:
+        phase === "start"
+          ? copy.executionFailure.unknownStartTitle
+          : copy.executionFailure.unknownFinishTitle,
+      detail: failure.detail || copy.executionFailure.unknownDetail,
+      nextAction: copy.executionFailure.unknownNextAction,
+    };
+  }
+
+  const localized = copy.executionFailure[failure.kind];
+  return localized ? { ...failure, ...localized } : failure;
 }
 
 function impactText(action: OnboardingAction, copy: UiCopy): string {
@@ -350,6 +393,9 @@ export default function App() {
   const [finishNoteInput, setFinishNoteInput] = useState("");
   const [startResult, setStartResult] = useState<ExecutionCommandResult | null>(null);
   const [finishResult, setFinishResult] = useState<ExecutionCommandResult | null>(null);
+  const artifactViewerRef = useRef<HTMLElement | null>(null);
+  const artifactViewerCloseButtonRef = useRef<HTMLButtonElement | null>(null);
+  const artifactViewerReturnFocusRef = useRef<HTMLElement | null>(null);
 
   useEffect(() => {
     window.p2a.app
@@ -420,12 +466,14 @@ export default function App() {
   const artifact = primaryArtifact(projectSnapshot);
   const tasks = artifact?.tasks ?? [];
   const runs = artifact?.runs ?? [];
+  const locale = guiConfig?.locale ?? DEFAULT_UI_LOCALE;
+  const copy = uiCopy[locale];
   const selectedArtifact =
     projectSnapshot?.artifacts.find((item) => item.rootPath === selectedArtifactRootPath) ??
     artifact;
   const artifactDocuments = useMemo(
-    () => buildArtifactDocuments(selectedArtifact ?? null),
-    [selectedArtifact],
+    () => buildArtifactDocuments(selectedArtifact ?? null, copy),
+    [copy, selectedArtifact],
   );
   const selectedArtifactDocument =
     artifactDocuments.find((document) => document.id === selectedArtifactDocumentId) ??
@@ -440,8 +488,6 @@ export default function App() {
   const selectedTaskRuns = selectedTask
     ? runs.filter((run) => selectedTask.runIds.includes(run.runId))
     : [];
-  const locale = guiConfig?.locale ?? DEFAULT_UI_LOCALE;
-  const copy = uiCopy[locale];
   const tab = copy.tabs[activeTab];
   const statusText = useMemo(() => {
     return statusTextFor(projectSnapshot, openState, copy);
@@ -564,21 +610,24 @@ export default function App() {
     setSelectedTaskId(run.taskId);
   }
 
-  async function openArtifactDocument(document: ArtifactDocument | null) {
-    if (!projectSnapshot || !document) return;
+  async function openArtifactDocument(artifactDocument: ArtifactDocument | null) {
+    if (!projectSnapshot || !artifactDocument) return;
 
-    setSelectedArtifactDocumentId(document.id);
-    setArtifactFileState({ status: "loading", document });
+    if (window.document.activeElement instanceof HTMLElement) {
+      artifactViewerReturnFocusRef.current = window.document.activeElement;
+    }
+    setSelectedArtifactDocumentId(artifactDocument.id);
+    setArtifactFileState({ status: "loading", document: artifactDocument });
     try {
       const file = await window.p2a.artifact.readFile({
         projectRoot: projectSnapshot.rootPath,
-        relativePath: document.relativePath,
+        relativePath: artifactDocument.relativePath,
       });
-      setArtifactFileState({ status: "ready", document, file });
+      setArtifactFileState({ status: "ready", document: artifactDocument, file });
     } catch (error) {
       setArtifactFileState({
         status: "error",
-        document,
+        document: artifactDocument,
         message: error instanceof Error ? error.message : String(error),
       });
     }
@@ -586,6 +635,51 @@ export default function App() {
 
   function closeArtifactViewer() {
     setArtifactFileState({ status: "idle" });
+  }
+
+  const artifactViewerOpen = artifactFileState.status !== "idle";
+
+  useEffect(() => {
+    if (!artifactViewerOpen) return undefined;
+
+    window.requestAnimationFrame(() => {
+      artifactViewerCloseButtonRef.current?.focus();
+    });
+
+    return () => {
+      artifactViewerReturnFocusRef.current?.focus();
+      artifactViewerReturnFocusRef.current = null;
+    };
+  }, [artifactViewerOpen]);
+
+  function handleArtifactViewerKeyDown(event: KeyboardEvent<HTMLElement>) {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      closeArtifactViewer();
+      return;
+    }
+    if (event.key !== "Tab") return;
+
+    const focusableElements = Array.from(
+      artifactViewerRef.current?.querySelectorAll<HTMLElement>(
+        'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
+      ) ?? [],
+    ).filter((element) => !element.hasAttribute("disabled") && element.tabIndex >= 0);
+    if (focusableElements.length === 0) {
+      event.preventDefault();
+      return;
+    }
+
+    const firstElement = focusableElements[0];
+    const lastElement = focusableElements[focusableElements.length - 1];
+    const activeElement = window.document.activeElement;
+    if (event.shiftKey && activeElement === firstElement) {
+      event.preventDefault();
+      lastElement.focus();
+    } else if (!event.shiftKey && activeElement === lastElement) {
+      event.preventDefault();
+      firstElement.focus();
+    }
   }
 
   function executionSourcePreviewArgs(): string[] {
@@ -597,7 +691,7 @@ export default function App() {
   }
 
   function startPreviewCommand(): string {
-    if (!artifact || !selectedTask || !projectSnapshot) return "select a ready task";
+    if (!artifact || !selectedTask || !projectSnapshot) return copy.tasks.selectReadyTask;
     const args = [
       "node",
       "scripts/p2a_execute.mjs",
@@ -614,7 +708,7 @@ export default function App() {
   }
 
   function finishPreviewCommand(): string {
-    if (!artifact || !selectedRun) return "select a run";
+    if (!artifact || !selectedRun) return copy.runs.selectRun;
     const args = [
       "node",
       "scripts/p2a_execute.mjs",
@@ -798,13 +892,16 @@ export default function App() {
             <span>{copy.overview.readyTasks}</span>
             <strong>
               {artifact
-                ? `${formatCount(artifact.taskCounts.ready)} / ${formatCount(artifact.taskCounts.total)}`
+                ? `${formatCount(artifact.taskCounts.ready, locale)} / ${formatCount(
+                    artifact.taskCounts.total,
+                    locale,
+                  )}`
                 : "0 / 0"}
             </strong>
           </div>
           <div>
             <span>{copy.overview.runs}</span>
-            <strong>{artifact ? formatCount(artifact.runCount) : "0"}</strong>
+            <strong>{artifact ? formatCount(artifact.runCount, locale) : "0"}</strong>
           </div>
         </div>
 
@@ -829,11 +926,11 @@ export default function App() {
                     <span className="mono">{item.activeIteration ?? copy.common.none}</span>
                   </div>
                   <div className="task-counts" aria-label="Task counts">
-                    <span>{copy.status.ready} {formatCount(item.taskCounts.ready)}</span>
-                    <span>{copy.status.todo} {formatCount(item.taskCounts.todo)}</span>
-                    <span>{copy.status.in_progress} {formatCount(item.taskCounts.inProgress)}</span>
-                    <span>{copy.status.blocked} {formatCount(item.taskCounts.blocked)}</span>
-                    <span>{copy.status.done} {formatCount(item.taskCounts.done)}</span>
+                    <span>{copy.status.ready} {formatCount(item.taskCounts.ready, locale)}</span>
+                    <span>{copy.status.todo} {formatCount(item.taskCounts.todo, locale)}</span>
+                    <span>{copy.status.in_progress} {formatCount(item.taskCounts.inProgress, locale)}</span>
+                    <span>{copy.status.blocked} {formatCount(item.taskCounts.blocked, locale)}</span>
+                    <span>{copy.status.done} {formatCount(item.taskCounts.done, locale)}</span>
                   </div>
                   <div className="gate-strip" aria-label="Gate status">
                     {item.gates.map((gate) => (
@@ -851,7 +948,7 @@ export default function App() {
                         title={validation.errors.join("\n") || validation.relativePath || validation.label}
                       >
                         {validation.label}
-                        <span className="mono">{validation.status}</span>
+                        <span className="mono">{statusLabel(validation.status, copy)}</span>
                       </span>
                     ))}
                   </div>
@@ -906,19 +1003,22 @@ export default function App() {
       <div className="artifact-viewer-backdrop" role="presentation" onClick={closeArtifactViewer}>
         <section
           className="artifact-viewer"
+          ref={artifactViewerRef}
           role="dialog"
           aria-modal="true"
           aria-labelledby="artifact-viewer-title"
+          onKeyDown={handleArtifactViewerKeyDown}
           onClick={(event) => event.stopPropagation()}
         >
           <div className="artifact-viewer__head">
             <div>
-              <div className="label">{document.group}</div>
+              <div className="label">{artifactGroupLabel(document.group, copy)}</div>
               <h3 id="artifact-viewer-title">{document.label}</h3>
               <span className="mono">{document.relativePath}</span>
             </div>
             <button
               className="icon-button"
+              ref={artifactViewerCloseButtonRef}
               type="button"
               onClick={closeArtifactViewer}
               aria-label={copy.common.closeArtifactViewer}
@@ -946,7 +1046,7 @@ export default function App() {
               <div className="artifact-viewer__meta">
                 <span className="mono">{file.kind}</span>
                 <span className="mono">{formatBytes(file.sizeBytes)}</span>
-                <span className="mono">{formatDateTime(file.modifiedAt)}</span>
+                <span className="mono">{formatDateTime(file.modifiedAt, locale, copy)}</span>
               </div>
               <pre className={`artifact-viewer__content artifact-viewer__content--${file.kind}`}>
                 {formatArtifactPreview(file)}
@@ -969,7 +1069,7 @@ export default function App() {
             </div>
             <span className="section-meta mono">
               {projectSnapshot
-                ? `${projectSnapshot.artifacts.length} roots`
+                ? `${formatCount(projectSnapshot.artifacts.length, locale)} ${copy.artifacts.roots}`
                 : copy.common.noProject}
             </span>
           </div>
@@ -990,8 +1090,8 @@ export default function App() {
                   </span>
                   <span className="artifact-root-card__meta">
                     <em>{item.activeIteration ?? copy.common.none}</em>
-                    <em>{formatCount(item.taskCounts.total)} {copy.nav.tasks}</em>
-                    <em>{formatCount(item.runCount)} {copy.nav.runs}</em>
+                    <em>{formatCount(item.taskCounts.total, locale)} {copy.nav.tasks}</em>
+                    <em>{formatCount(item.runCount, locale)} {copy.nav.runs}</em>
                   </span>
                 </button>
               ))}
@@ -1034,12 +1134,12 @@ export default function App() {
                       selectedArtifactDocument?.id === document.id ? "true" : undefined
                     }
                   >
-                    <span className="mono">{document.group}</span>
+                    <span className="mono">{artifactGroupLabel(document.group, copy)}</span>
                     <strong>{document.label}</strong>
                     <small className="mono">{document.relativePath}</small>
                   </button>
                   <span className={`validation-chip validation-chip--${document.state}`}>
-                    {document.state}
+                    {statusLabel(document.state, copy)}
                   </span>
                   <span className="mono artifact-document-row__meta">{document.meta}</span>
                   <button
@@ -1076,7 +1176,7 @@ export default function App() {
                   title={validation.errors.join("\n") || validation.relativePath || validation.label}
                 >
                   {validation.label}
-                  <span className="mono">{validation.status}</span>
+                  <span className="mono">{statusLabel(validation.status, copy)}</span>
                 </span>
               ))}
             </div>
@@ -1121,8 +1221,8 @@ export default function App() {
                     <strong>{task.title}</strong>
                     <small>{task.description}</small>
                   </span>
-                  <span className="task-row__meta mono">{dependencyText(task)}</span>
-                  <span className="task-row__meta mono">{runForTaskText(task)}</span>
+                  <span className="task-row__meta mono">{dependencyText(task, copy)}</span>
+                  <span className="task-row__meta mono">{runForTaskText(task, locale, copy)}</span>
                 </button>
               ))}
             </div>
@@ -1191,8 +1291,8 @@ export default function App() {
                 </span>
                 <span className="mono">{run.taskId}</span>
                 <span className="mono">{run.agentTool}</span>
-                <span className="mono">{formatDateTime(run.startedAt)}</span>
-                <span className="mono">{formatDuration(run.startedAt, run.finishedAt)}</span>
+                <span className="mono">{formatDateTime(run.startedAt, locale, copy)}</span>
+                <span className="mono">{formatDuration(run.startedAt, run.finishedAt, copy)}</span>
               </button>
             ))}
           </div>
@@ -1232,19 +1332,19 @@ export default function App() {
           <div className="finish-panel__controls">
             <div className="detail-list detail-list--embedded">
               <div>
-                <span>task</span>
+                <span>{copy.runs.task}</span>
                 <strong className="mono">{selectedTask?.id ?? copy.common.none}</strong>
               </div>
               <div>
-                <span>agent</span>
+                <span>{copy.runs.agent}</span>
                 <strong className="mono">{projectSnapshot?.defaultAgentTool ?? "codex"}</strong>
               </div>
               <div>
-                <span>workspace</span>
-                <strong className="mono">{formatPath(projectSnapshot?.rootPath)}</strong>
+                <span>{copy.common.workspace}</span>
+                <strong className="mono">{formatPath(projectSnapshot?.rootPath, copy)}</strong>
               </div>
               <div>
-                <span>target</span>
+                <span>{copy.tasks.target}</span>
                 <strong>{selectedTask?.targetArea ?? copy.common.none}</strong>
               </div>
             </div>
@@ -1252,7 +1352,7 @@ export default function App() {
 
           <div className="finish-panel__result">
             <div className="command-preview">
-              <span className="mono">cwd {formatPath(projectSnapshot?.rootPath)}</span>
+              <span className="mono">cwd {formatPath(projectSnapshot?.rootPath, copy)}</span>
               <code>{startResult?.command ?? startPreviewCommand()}</code>
             </div>
             <div className="finish-actions">
@@ -1266,7 +1366,7 @@ export default function App() {
               </button>
               <span className="mono">
                 {startResult
-                  ? `exit ${startResult.exitCode} · ${formatMilliseconds(startResult.durationMs)}`
+                  ? `exit ${startResult.exitCode} · ${formatMilliseconds(startResult.durationMs, copy)}`
                   : selectedTask?.ready
                     ? copy.status.ready
                     : copy.common.notRunnable}
@@ -1275,8 +1375,8 @@ export default function App() {
             {renderStartFailureDiagnostic()}
             {startResult && (
               <div className="command-output">
-                <pre>{outputPreview(startResult.stdout)}</pre>
-                <pre>{outputPreview(startResult.stderr)}</pre>
+                <pre>{outputPreview(startResult.stdout, copy)}</pre>
+                <pre>{outputPreview(startResult.stderr, copy)}</pre>
               </div>
             )}
           </div>
@@ -1300,7 +1400,7 @@ export default function App() {
           </div>
         </div>
         <div className="command-preview command-preview--compact">
-          <span className="mono">cwd {formatPath(projectSnapshot?.rootPath)}</span>
+          <span className="mono">cwd {formatPath(projectSnapshot?.rootPath, copy)}</span>
           <code>{startResult?.command ?? startPreviewCommand()}</code>
         </div>
         <div className="finish-actions finish-actions--stacked">
@@ -1314,7 +1414,7 @@ export default function App() {
           </button>
           <span className="mono">
             {startResult
-              ? `exit ${startResult.exitCode} · ${formatMilliseconds(startResult.durationMs)}`
+              ? `exit ${startResult.exitCode} · ${formatMilliseconds(startResult.durationMs, copy)}`
               : selectedTask?.ready
                 ? copy.status.ready
                 : copy.common.notRunnable}
@@ -1323,8 +1423,8 @@ export default function App() {
         {renderStartFailureDiagnostic(true)}
         {startResult && (
           <div className="command-output command-output--compact">
-            <pre>{outputPreview(startResult.stdout)}</pre>
-            <pre>{outputPreview(startResult.stderr)}</pre>
+            <pre>{outputPreview(startResult.stdout, copy)}</pre>
+            <pre>{outputPreview(startResult.stderr, copy)}</pre>
           </div>
         )}
       </>
@@ -1332,8 +1432,9 @@ export default function App() {
   }
 
   function renderStartFailureDiagnostic(compact = false) {
-    const failure = summarizeStartRunFailure(startResult);
-    if (!failure) return null;
+    const parsedFailure = summarizeStartRunFailure(startResult);
+    if (!parsedFailure) return null;
+    const failure = localizedExecutionFailure(parsedFailure, "start", copy);
 
     return (
       <div
@@ -1438,7 +1539,7 @@ export default function App() {
                   checked={collectGit}
                   onChange={(event) => setCollectGit(event.target.checked)}
                 />
-                collect git
+                {copy.terminal.collectGit}
               </label>
             </div>
 
@@ -1480,7 +1581,7 @@ export default function App() {
                   className="supervisor-textarea"
                   value={finishNoteInput}
                   onChange={(event) => setFinishNoteInput(event.target.value)}
-                  placeholder="verification note"
+                  placeholder={copy.terminal.verificationNotePlaceholder}
                 />
               </label>
             </div>
@@ -1488,7 +1589,7 @@ export default function App() {
 
           <div className="finish-panel__result">
             <div className="command-preview">
-              <span className="mono">cwd {formatPath(projectSnapshot?.rootPath)}</span>
+              <span className="mono">cwd {formatPath(projectSnapshot?.rootPath, copy)}</span>
               <code>{finishResult?.command ?? finishPreviewCommand()}</code>
             </div>
             <div className="finish-actions">
@@ -1502,7 +1603,7 @@ export default function App() {
               </button>
               <span className="mono">
                 {finishResult
-                  ? `exit ${finishResult.exitCode} · ${formatMilliseconds(finishResult.durationMs)}`
+                  ? `exit ${finishResult.exitCode} · ${formatMilliseconds(finishResult.durationMs, copy)}`
                   : selectedRun?.status === "started"
                     ? copy.status.ready
                     : copy.common.notRunnable}
@@ -1517,8 +1618,8 @@ export default function App() {
             {renderFinishFailureDiagnostic()}
             {finishResult && (
               <div className="command-output">
-                <pre>{outputPreview(finishResult.stdout)}</pre>
-                <pre>{outputPreview(finishResult.stderr)}</pre>
+                <pre>{outputPreview(finishResult.stdout, copy)}</pre>
+                <pre>{outputPreview(finishResult.stderr, copy)}</pre>
               </div>
             )}
           </div>
@@ -1564,8 +1665,9 @@ export default function App() {
   }
 
   function renderFinishFailureDiagnostic() {
-    const failure = summarizeFinishRunFailure(finishResult);
-    if (!failure) return null;
+    const parsedFailure = summarizeFinishRunFailure(finishResult);
+    if (!parsedFailure) return null;
+    const failure = localizedExecutionFailure(parsedFailure, "finish", copy);
 
     return (
       <div className="diagnostic diagnostic--error execution-failure">
@@ -1597,12 +1699,12 @@ export default function App() {
                 <strong>{projectSnapshot?.name ?? copy.common.none}</strong>
               </div>
               <div>
-                <span>root</span>
-                <strong className="mono">{formatPath(projectSnapshot?.rootPath)}</strong>
+                <span>{copy.common.root}</span>
+                <strong className="mono">{formatPath(projectSnapshot?.rootPath, copy)}</strong>
               </div>
               <div>
-                <span>artifact</span>
-                <strong className="mono">{formatPath(artifact?.relativePath)}</strong>
+                <span>{copy.common.artifactRoot}</span>
+                <strong className="mono">{formatPath(artifact?.relativePath, copy)}</strong>
               </div>
               <div>
                 <span>{copy.overview.state}</span>
@@ -1652,13 +1754,15 @@ export default function App() {
               <h3>{copy.settings.guiState}</h3>
             </div>
             <span className="section-meta mono">
-              {guiConfig ? `${guiConfig.recentProjects.length} recent` : copy.common.none}
+              {guiConfig
+                ? `${formatCount(guiConfig.recentProjects.length, locale)} ${copy.settings.recent}`
+                : copy.common.none}
             </span>
           </div>
           <div className="detail-list">
             <div>
               <span>{copy.settings.configFile}</span>
-              <strong className="mono">{formatPath(guiConfig?.configPath)}</strong>
+              <strong className="mono">{formatPath(guiConfig?.configPath, copy)}</strong>
             </div>
             <div>
               <span>{copy.settings.schema}</span>
@@ -1670,7 +1774,7 @@ export default function App() {
             </div>
             <div>
               <span>{copy.settings.lastChange}</span>
-              <strong className="mono">{formatTime(lastWatchEvent?.changedAt)}</strong>
+              <strong className="mono">{formatTime(lastWatchEvent?.changedAt, locale, copy)}</strong>
             </div>
           </div>
         </section>
@@ -1803,7 +1907,7 @@ export default function App() {
             <div className={`diagnostic diagnostic--${watchState === "error" ? "error" : "ok"}`}>
               <RefreshCw size={14} strokeWidth={1.7} aria-hidden="true" />
               <span>
-                watch {watchState}
+                {copy.settings.watch} {watchState}
                 {lastWatchEvent?.relativePath ? ` · ${lastWatchEvent.relativePath}` : ""}
               </span>
             </div>
@@ -1811,8 +1915,10 @@ export default function App() {
           <div className={`diagnostic diagnostic--${configState === "error" ? "error" : "ok"}`}>
             <Settings size={14} strokeWidth={1.7} aria-hidden="true" />
             <span>
-              local config {configState}
-              {guiConfig ? ` · ${guiConfig.recentProjects.length} recent` : ""}
+              {copy.settings.localConfig} {configState}
+              {guiConfig
+                ? ` · ${formatCount(guiConfig.recentProjects.length, locale)} ${copy.settings.recent}`
+                : ""}
             </span>
           </div>
           {(projectSnapshot?.diagnostics ?? []).map((diagnostic, index) => {
@@ -1867,15 +1973,15 @@ export default function App() {
           </div>
           <div>
             <span>{copy.tasks.taskGraph}</span>
-            <strong className="mono">{formatPath(selectedArtifact.taskGraphPath)}</strong>
+            <strong className="mono">{formatPath(selectedArtifact.taskGraphPath, copy)}</strong>
           </div>
           <div>
-            <span>source spec</span>
-            <strong className="mono">{formatPath(selectedArtifact.sourceSpec)}</strong>
+            <span>{copy.common.sourceSpec}</span>
+            <strong className="mono">{formatPath(selectedArtifact.sourceSpec, copy)}</strong>
           </div>
           <div>
             <span>{copy.artifacts.documents}</span>
-            <strong className="mono">{formatCount(artifactDocuments.length)}</strong>
+            <strong className="mono">{formatCount(artifactDocuments.length, locale)}</strong>
           </div>
         </div>
 
@@ -1897,11 +2003,11 @@ export default function App() {
             <div className="detail-list">
               <div>
                 <span>{copy.common.group}</span>
-                <strong className="mono">{selectedArtifactDocument.group}</strong>
+                <strong className="mono">{artifactGroupLabel(selectedArtifactDocument.group, copy)}</strong>
               </div>
               <div>
                 <span>{copy.overview.state}</span>
-                <strong className="mono">{selectedArtifactDocument.state}</strong>
+                <strong className="mono">{statusLabel(selectedArtifactDocument.state, copy)}</strong>
               </div>
               <div>
                 <span>{copy.common.path}</span>
@@ -1972,7 +2078,7 @@ export default function App() {
           </div>
           <div>
             <span>{copy.tasks.dependencies}</span>
-            <strong className="mono">{dependencyText(selectedTask)}</strong>
+            <strong className="mono">{dependencyText(selectedTask, copy)}</strong>
           </div>
           <div>
             <span>{copy.tasks.latestRun}</span>
@@ -2062,17 +2168,17 @@ export default function App() {
           </div>
           <div>
             <span>{copy.runs.started}</span>
-            <strong className="mono">{formatDateTime(selectedRun.startedAt)}</strong>
+            <strong className="mono">{formatDateTime(selectedRun.startedAt, locale, copy)}</strong>
           </div>
           <div>
             <span>{copy.runs.duration}</span>
             <strong className="mono">
-              {formatDuration(selectedRun.startedAt, selectedRun.finishedAt)}
+              {formatDuration(selectedRun.startedAt, selectedRun.finishedAt, copy)}
             </strong>
           </div>
           <div>
             <span>{copy.runs.verification}</span>
-            <strong className="mono">{verificationSummary(selectedRun)}</strong>
+            <strong className="mono">{verificationSummary(selectedRun, copy)}</strong>
           </div>
           <div>
             <span>{copy.runs.changedFiles}</span>
@@ -2094,12 +2200,12 @@ export default function App() {
                   key={`${verification.type}-${verification.command}-${index}`}
                 >
                   <span className="mono">{verification.type}</span>
-                  <strong>{verification.status}</strong>
-                  <em className="mono">{formatMilliseconds(verification.durationMs)}</em>
+                  <strong>{statusLabel(verification.status, copy)}</strong>
+                  <em className="mono">{formatMilliseconds(verification.durationMs, copy)}</em>
                   <code>{verification.command}</code>
                   {(verification.stdoutTail || verification.stderrTail) && (
                     <pre>
-                      {outputPreview(verification.stdoutTail)}
+                      {outputPreview(verification.stdoutTail, copy)}
                       {verification.stderrTail ? `\n${verification.stderrTail}` : ""}
                     </pre>
                   )}
@@ -2118,16 +2224,18 @@ export default function App() {
             </div>
             <div className="detail-list">
               <div>
-                <span>class</span>
+                <span>{copy.runs.classification}</span>
                 <strong className="mono">{selectedRun.failure.class}</strong>
               </div>
               <div>
-                <span>retryable</span>
+                <span>{copy.runs.retryable}</span>
                 <strong className="mono">{selectedRun.failure.retryable}</strong>
               </div>
               <div>
-                <span>decision</span>
-                <strong>{selectedRun.failure.needsUserDecision ? "needed" : "not needed"}</strong>
+                <span>{copy.runs.decision}</span>
+                <strong>
+                  {selectedRun.failure.needsUserDecision ? copy.runs.needed : copy.runs.notNeeded}
+                </strong>
               </div>
             </div>
           </>
@@ -2173,14 +2281,16 @@ export default function App() {
         <AlertTriangle size={14} strokeWidth={1.7} aria-hidden="true" />
         <span className="execution-failure__body">
           <strong>
-            {run.failure ? `failure ${run.failure.class}` : "verification failed"}
+            {run.failure
+              ? `${copy.runs.failure} ${run.failure.class}`
+              : copy.executionFailure.verification_failed.title}
           </strong>
           <small>
             {failedVerification
               ? `${failedVerification.type}: ${failedVerification.command}`
-              : `retryable ${run.failure?.retryable ?? "unknown"}`}
+              : `${copy.runs.retryable} ${run.failure?.retryable ?? copy.common.unknown}`}
           </small>
-          <em>{outputPreview(failedVerification?.stderrTail)}</em>
+          <em>{outputPreview(failedVerification?.stderrTail, copy)}</em>
         </span>
       </div>
     );
@@ -2198,7 +2308,7 @@ export default function App() {
         <div className="detail-list">
           <div>
             <span>cwd</span>
-            <strong className="mono">{formatPath(projectSnapshot?.rootPath)}</strong>
+            <strong className="mono">{formatPath(projectSnapshot?.rootPath, copy)}</strong>
           </div>
           <div>
             <span>{copy.runs.agent}</span>
@@ -2286,7 +2396,7 @@ export default function App() {
           </div>
         </div>
         <div className="ref-list">
-          <code>{formatPath(guiConfig?.configPath)}</code>
+          <code>{formatPath(guiConfig?.configPath, copy)}</code>
         </div>
 
         <div className="section-head section-head--tight">
@@ -2298,11 +2408,11 @@ export default function App() {
         <div className="diagnostic-list">
           <div className={`diagnostic diagnostic--${configState === "error" ? "error" : "ok"}`}>
             <Settings size={14} strokeWidth={1.7} aria-hidden="true" />
-            <span>local config {configState}</span>
+            <span>{copy.settings.localConfig} {configState}</span>
           </div>
           <div className={`diagnostic diagnostic--${projectSnapshot ? "ok" : "warn"}`}>
             <FolderOpen size={14} strokeWidth={1.7} aria-hidden="true" />
-            <span>{projectSnapshot ? "project loaded" : copy.common.noProject}</span>
+            <span>{projectSnapshot ? copy.common.projectLoaded : copy.common.noProject}</span>
           </div>
           <div className="diagnostic diagnostic--ok">
             <CheckCircle2 size={14} strokeWidth={1.7} aria-hidden="true" />
@@ -2429,11 +2539,11 @@ export default function App() {
 
           <dl className="compact-dl">
             <dt>{copy.common.selectedPath}</dt>
-            <dd className="mono">{formatPath(projectSnapshot?.rootPath)}</dd>
+            <dd className="mono">{formatPath(projectSnapshot?.rootPath, copy)}</dd>
             <dt>{copy.overview.state}</dt>
             <dd>{projectStateLabel(projectSnapshot, copy)}</dd>
             <dt>{copy.common.artifactRoot}</dt>
-            <dd className="mono">{formatPath(artifact?.relativePath)}</dd>
+            <dd className="mono">{formatPath(artifact?.relativePath, copy)}</dd>
             <dt>{copy.common.mode}</dt>
             <dd>{copy.common.readOnly}</dd>
             <dt>{copy.runs.agent}</dt>
@@ -2455,7 +2565,7 @@ export default function App() {
             <dt>{copy.settings.watch}</dt>
             <dd>{watchState}</dd>
             <dt>{copy.settings.lastChange}</dt>
-            <dd className="mono">{formatTime(lastWatchEvent?.changedAt)}</dd>
+            <dd className="mono">{formatTime(lastWatchEvent?.changedAt, locale, copy)}</dd>
           </dl>
 
           <section className="mini-panel">

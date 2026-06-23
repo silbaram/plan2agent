@@ -109,7 +109,7 @@ export function TerminalSurface({
   const [status, setStatus] = useState<TerminalStatus>("idle");
   const [inputMode, setInputMode] = useState<TerminalInputMode>("message");
   const [activeSession, setActiveSession] = useState<TerminalSessionInfo | null>(null);
-  const [lastExitText, setLastExitText] = useState<string>("none");
+  const [lastExitText, setLastExitText] = useState<string | null>(null);
   const [messageText, setMessageText] = useState<string>("");
   const [noteText, setNoteText] = useState<string>("");
   const [supervisorNotes, setSupervisorNotes] = useState<SupervisorNote[]>([]);
@@ -332,7 +332,7 @@ export function TerminalSurface({
     terminal.reset();
     terminal.write(`\x1b[38;5;172m[session]\x1b[0m starting ${agentTool} in ${normalizedCwd}\r\n`);
     setStatus("starting");
-    setLastExitText("none");
+    setLastExitText(null);
     setSupervisorNotes([]);
 
     try {
@@ -402,7 +402,7 @@ export function TerminalSurface({
         <strong className="mono">node-pty</strong>
         <span className="mono">{status}</span>
         <span className="mono">{inputMode}</span>
-        <span className="mono">{copy.terminal.lastExit} {lastExitText}</span>
+        <span className="mono">{copy.terminal.lastExit} {lastExitText ?? copy.common.none}</span>
         <span className="xterm-panel__spacer" />
         <button
           className="terminal-control"

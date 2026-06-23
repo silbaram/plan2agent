@@ -31,6 +31,13 @@ import { PtySessionManager } from "./ptySessionManager";
 import { finishRun, startRun } from "./executionActions";
 import { readArtifactFile } from "./artifactFiles";
 import { loadProjectSnapshot } from "./projectLoader";
+import {
+  requireActiveProjectRootMatch,
+  scopeArtifactReadRequest,
+  scopeExecutionFinishRunRequest,
+  scopeExecutionStartRunRequest,
+  scopeTerminalStartRequest,
+} from "./activeProjectScope";
 
 declare const MAIN_WINDOW_VITE_DEV_SERVER_URL: string | undefined;
 declare const MAIN_WINDOW_VITE_NAME: string;
@@ -44,6 +51,7 @@ const PRODUCTION_CONTENT_SECURITY_POLICY =
 let activeProjectWatcher: FSWatcher | null = null;
 let activeProjectRoot: string | null = null;
 let activeProjectDebounce: ReturnType<typeof setTimeout> | null = null;
+const activeProjectRootsBySender = new Map<number, string>();
 const ptySessions = new PtySessionManager();
 
 const IGNORED_WATCH_SEGMENTS = new Set([
@@ -94,6 +102,14 @@ async function rememberSnapshotProject(snapshot: Awaited<ReturnType<typeof loadP
     rootPath: snapshot.rootPath,
     name: snapshot.name,
   });
+}
+
+function setActiveProjectForSender(sender: Electron.WebContents, rootPath: string): void {
+  activeProjectRootsBySender.set(sender.id, path.resolve(rootPath));
+}
+
+function activeProjectRootForSender(sender: Electron.WebContents): string | null {
+  return activeProjectRootsBySender.get(sender.id) ?? null;
 }
 
 function closeProjectWatcher(): void {
@@ -167,8 +183,10 @@ function createMainWindow(): void {
   mainWindow.once("ready-to-show", () => {
     mainWindow.show();
   });
+  const mainWindowWebContentsId = mainWindow.webContents.id;
   mainWindow.on("closed", () => {
-    ptySessions.stopAllForSender(mainWindow.webContents.id);
+    ptySessions.stopAllForSender(mainWindowWebContentsId);
+    activeProjectRootsBySender.delete(mainWindowWebContentsId);
     closeProjectWatcher();
   });
 
@@ -196,6 +214,7 @@ function registerIpcHandlers(): void {
     const snapshot = selectedPath ? await loadProjectSnapshotWithConfig(selectedPath) : null;
     if (snapshot) {
       await rememberSnapshotProject(snapshot);
+      setActiveProjectForSender(event.sender, snapshot.rootPath);
       startProjectWatcher(snapshot.rootPath, event.sender);
     }
 
@@ -215,6 +234,7 @@ function registerIpcHandlers(): void {
       if (options.remember) {
         await rememberSnapshotProject(snapshot);
       }
+      setActiveProjectForSender(event.sender, snapshot.rootPath);
       startProjectWatcher(snapshot.rootPath, event.sender);
       return snapshot;
     },
@@ -227,18 +247,27 @@ function registerIpcHandlers(): void {
   });
   ipcMain.handle(
     IPC_CHANNELS.projectSetDefaultAgentTool,
-    async (_event, rootPath: string, agentTool: AgentTool) => {
+    async (event, rootPath: string, agentTool: AgentTool) => {
       if (typeof rootPath !== "string" || rootPath.trim().length === 0) {
         throw new Error("project:setDefaultAgentTool requires a root path");
       }
-      return setDefaultAgentTool(guiConfigPath(), rootPath, agentTool);
+      const activeRoot = requireActiveProjectRootMatch(
+        activeProjectRootForSender(event.sender),
+        rootPath,
+      );
+      return setDefaultAgentTool(guiConfigPath(), activeRoot, agentTool);
     },
   );
-  ipcMain.handle(IPC_CHANNELS.artifactReadFile, (_event, request: ArtifactFileReadRequest) => {
-    return readArtifactFile(request);
+  ipcMain.handle(IPC_CHANNELS.artifactReadFile, (event, request: ArtifactFileReadRequest) => {
+    return readArtifactFile(
+      scopeArtifactReadRequest(activeProjectRootForSender(event.sender), request),
+    );
   });
   ipcMain.handle(IPC_CHANNELS.terminalStart, (event, request: TerminalSessionStartRequest) => {
-    return ptySessions.start(event.sender, request);
+    return ptySessions.start(
+      event.sender,
+      scopeTerminalStartRequest(activeProjectRootForSender(event.sender), request),
+    );
   });
   ipcMain.handle(IPC_CHANNELS.terminalInput, (event, request: TerminalSessionInputRequest) => {
     if (!request || typeof request.sessionId !== "string" || typeof request.data !== "string") {
@@ -264,17 +293,21 @@ function registerIpcHandlers(): void {
     }
     ptySessions.kill(event.sender, request.sessionId);
   });
-  ipcMain.handle(IPC_CHANNELS.executionStartRun, (_event, request: ExecutionStartRunRequest) => {
+  ipcMain.handle(IPC_CHANNELS.executionStartRun, (event, request: ExecutionStartRunRequest) => {
     if (!request || typeof request.taskId !== "string") {
       throw new Error("execution:startRun requires a task id");
     }
-    return startRun(request);
+    return startRun(
+      scopeExecutionStartRunRequest(activeProjectRootForSender(event.sender), request),
+    );
   });
-  ipcMain.handle(IPC_CHANNELS.executionFinishRun, (_event, request: ExecutionFinishRunRequest) => {
+  ipcMain.handle(IPC_CHANNELS.executionFinishRun, (event, request: ExecutionFinishRunRequest) => {
     if (!request || typeof request.runId !== "string") {
       throw new Error("execution:finishRun requires a run id");
     }
-    return finishRun(request);
+    return finishRun(
+      scopeExecutionFinishRunRequest(activeProjectRootForSender(event.sender), request),
+    );
   });
 }
 
@@ -309,6 +342,7 @@ app.whenReady().then(() => {
 
 app.on("window-all-closed", () => {
   ptySessions.stopAll();
+  activeProjectRootsBySender.clear();
   if (process.platform !== "darwin") {
     app.quit();
   }

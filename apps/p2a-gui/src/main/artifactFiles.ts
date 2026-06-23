@@ -40,7 +40,11 @@ function resolveProjectFile(projectRoot: string, relativePath: string): string {
 export async function readArtifactFile(
   request: ArtifactFileReadRequest,
 ): Promise<ArtifactFileReadResult> {
-  const relativePath = request.relativePath.split(path.sep).join("/");
+  if (!request) {
+    throw new Error("artifact:readFile requires a request");
+  }
+  const rawRelativePath = typeof request.relativePath === "string" ? request.relativePath : "";
+  const relativePath = rawRelativePath.split(/[\\/]/).join("/");
   const filePath = resolveProjectFile(request.projectRoot, relativePath);
   const fileStat = await stat(filePath);
 
