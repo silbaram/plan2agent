@@ -74,6 +74,13 @@ export const uiCopy = {
       openProject: "프로젝트 열기",
       reload: "새로고침",
     },
+    projectState: {
+      no_p2a: "P2A 없음",
+      installed_empty: "설치됨, 문서 없음",
+      planning_in_progress: "기획 진행 중",
+      execution_ready: "실행 준비",
+      broken_install: "설치 오류",
+    },
     overview: {
       project: "프로젝트",
       state: "상태",
@@ -269,6 +276,13 @@ export const uiCopy = {
       loadFailed: "project load failed",
       openProject: "Open project",
       reload: "Reload",
+    },
+    projectState: {
+      no_p2a: "No P2A",
+      installed_empty: "Installed empty",
+      planning_in_progress: "Planning in progress",
+      execution_ready: "Execution ready",
+      broken_install: "Broken install",
     },
     overview: {
       project: "project",

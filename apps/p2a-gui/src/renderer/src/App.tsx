@@ -285,7 +285,12 @@ function statusTextFor(
   if (openState === "loading") return copy.app.loadingProject;
   if (openState === "canceled") return copy.app.folderCanceled;
   if (openState === "error") return copy.app.loadFailed;
-  return snapshot ? snapshot.stateLabel : copy.app.readOnlyShellReady;
+  return snapshot ? projectStateLabel(snapshot, copy) : copy.app.readOnlyShellReady;
+}
+
+function projectStateLabel(snapshot: ProjectSnapshot | null, copy: UiCopy): string {
+  if (!snapshot) return copy.common.none;
+  return copy.projectState[snapshot.state];
 }
 
 function diagnosticIcon(severity: DiagnosticSeverity) {
@@ -750,7 +755,7 @@ export default function App() {
             <h3>{onboarding.title}</h3>
           </div>
           <span className={`state-pill state-pill--${projectSnapshot?.state ?? "idle"}`}>
-            {projectSnapshot?.stateLabel ?? copy.common.none}
+            {projectStateLabel(projectSnapshot, copy)}
           </span>
         </div>
         <div className="onboarding-body">
@@ -782,7 +787,7 @@ export default function App() {
           </div>
           <div>
             <span>{copy.overview.state}</span>
-            <strong>{projectSnapshot?.stateLabel ?? copy.common.none}</strong>
+            <strong>{projectStateLabel(projectSnapshot, copy)}</strong>
           </div>
           <div>
             <span>{copy.overview.readyTasks}</span>
@@ -1596,7 +1601,7 @@ export default function App() {
               </div>
               <div>
                 <span>{copy.overview.state}</span>
-                <strong>{projectSnapshot?.stateLabel ?? copy.common.none}</strong>
+                <strong>{projectStateLabel(projectSnapshot, copy)}</strong>
               </div>
             </div>
 
@@ -2323,7 +2328,7 @@ export default function App() {
         <div className="titlebar__project">
           <span className="dot dot--active" />
           <strong>{projectSnapshot?.name ?? copy.app.titleFallback}</strong>
-          <span>{projectSnapshot?.stateLabel ?? copy.app.readOnlyShellReady}</span>
+          <span>{projectSnapshot ? projectStateLabel(projectSnapshot, copy) : copy.app.readOnlyShellReady}</span>
         </div>
         <div className="titlebar__meta mono">
           <span>{runtimeInfo ? `electron ${runtimeInfo.electronVersion}` : "electron"}</span>
@@ -2421,7 +2426,7 @@ export default function App() {
             <dt>{copy.common.selectedPath}</dt>
             <dd className="mono">{formatPath(projectSnapshot?.rootPath)}</dd>
             <dt>{copy.overview.state}</dt>
-            <dd>{projectSnapshot?.stateLabel ?? copy.common.none}</dd>
+            <dd>{projectStateLabel(projectSnapshot, copy)}</dd>
             <dt>{copy.common.artifactRoot}</dt>
             <dd className="mono">{formatPath(artifact?.relativePath)}</dd>
             <dt>{copy.common.mode}</dt>

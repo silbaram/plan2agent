@@ -278,7 +278,7 @@ async function runUiSmoke({ executablePath, projectRoot, userDataRoot }) {
     page = await waitForAppPage(browser);
     await page.waitForLoadState("domcontentloaded");
     await page.locator(".recent-row__main", { hasText: projectName }).click();
-    await page.getByText("Execution ready").first().waitFor({ state: "visible", timeout: 15_000 });
+    await page.getByText("실행 준비").first().waitFor({ state: "visible", timeout: 15_000 });
 
     await page.getByRole("button", { name: "문서" }).click();
     await page.getByText("산출물 문서").waitFor({ state: "visible", timeout: 15_000 });
