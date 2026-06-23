@@ -127,6 +127,32 @@
           </button>
         </div>
 
+        <div class="iteration-section" aria-label="반복 선택" data-i18n-aria-label="iteration.label">
+          <div class="iteration-section__head">
+            <div>
+              <div class="label" data-i18n="iteration.kicker">선택된 반복</div>
+              <strong><span class="mono">bookmark-api</span> · <span id="iteration-selected-title" class="mono">iter-002</span></strong>
+            </div>
+            <span id="iteration-selected-pill" class="pill pill--ok">활성</span>
+          </div>
+          <div class="iteration-list" role="list">
+            <button class="iteration-row iteration-row--active" type="button" role="listitem" data-iteration-id="iter-002" aria-current="true">
+              <span class="status status--ready"></span>
+              <span>
+                <strong class="mono">iter-002</strong>
+                <small data-i18n="iteration.iter002Meta">활성 · 준비 작업 1 · run 5건</small>
+              </span>
+            </button>
+            <button class="iteration-row iteration-row--disabled" type="button" role="listitem" data-iteration-id="iter-001" disabled aria-disabled="true" title="이전 반복은 이력 보기 전용입니다." data-i18n-title="iteration.iter001Disabled">
+              <span class="status status--closed"></span>
+              <span>
+                <strong class="mono">iter-001</strong>
+                <small data-i18n="iteration.iter001Meta">종료 · 이력 보기 전용</small>
+              </span>
+            </button>
+          </div>
+        </div>
+
         <div class="local-config detail-heavy">
           <div class="label" data-i18n="sidebar.localConfig">GUI 로컬 설정</div>
           <pre>{
@@ -221,8 +247,8 @@
       <aside class="sidebar view-pane sidebar--runs" aria-label="실행 이력" data-i18n-aria-label="runsSidebar.label" data-panel="runs" hidden>
         <div class="panel-head">
           <div>
-            <div class="label" data-i18n="runsSidebar.kicker">프로젝트 run index</div>
-            <h1 data-i18n="runsSidebar.title">전체 runs</h1>
+            <div class="label" data-i18n="runsSidebar.kicker">선택 반복 run index</div>
+            <h1 data-i18n="runsSidebar.title">현재 반복 runs</h1>
           </div>
           <span class="pill pill--info" data-i18n="runsSidebar.pill">5 runs</span>
         </div>
@@ -279,12 +305,12 @@
         </div>
 
         <div class="terminal-sidebar-section">
-          <div class="label" data-i18n="runsSidebar.scopeLabel">프로젝트 run store</div>
+          <div class="label" data-i18n="runsSidebar.scopeLabel">선택 반복 run store</div>
           <dl class="compact-dl">
             <dt data-i18n="runsSidebar.project">project</dt>
             <dd class="mono">bookmark-api</dd>
             <dt data-i18n="runsSidebar.iteration">iteration</dt>
-            <dd class="mono">iter-002</dd>
+            <dd id="runs-store-iteration" class="mono">iter-002</dd>
             <dt data-i18n="runsSidebar.path">path</dt>
             <dd class="mono">artifacts/bookmark-api/runs</dd>
           </dl>
@@ -324,8 +350,8 @@
             <strong id="summary-agent">codex</strong>
           </div>
           <div>
-            <span data-i18n="summary.harnessWrites">하네스 변경</span>
-            <strong data-i18n="summary.none">없음</strong>
+            <span data-i18n="summary.iteration">활성 반복</span>
+            <strong id="summary-iteration" class="mono">iter-002</strong>
           </div>
         </div>
 
@@ -481,7 +507,7 @@
       <section class="content content--tasks view-pane" aria-label="작업 상세" data-i18n-aria-label="tasks.label" data-panel="tasks" hidden>
         <div class="content-head">
           <div>
-            <div class="label" data-i18n="tasks.kicker">Tasks · iter-002</div>
+            <div id="tasks-context-label" class="label">Tasks · bookmark-api · iter-002</div>
             <h2 data-i18n="tasks.title">작업 연결 그래프</h2>
           </div>
           <div class="task-head-actions">
@@ -508,7 +534,7 @@
           <div class="task-graph-meta" aria-label="task graph metadata" data-i18n-aria-label="tasksGraph.metaLabel">
             <div>
               <span data-i18n="tasksGraph.iteration">iteration</span>
-              <strong class="mono">iter-002</strong>
+              <strong id="task-graph-iteration" class="mono">iter-002</strong>
             </div>
             <div>
               <span data-i18n="tasksGraph.graph">graph</span>
@@ -635,7 +661,7 @@
       <section class="content content--runs view-pane" aria-label="실행 결과" data-i18n-aria-label="runs.label" data-panel="runs" hidden>
         <div class="runs-topline">
           <div>
-            <div class="label" data-i18n="runs.kicker">Runs · iter-002</div>
+            <div id="runs-context-label" class="label">Runs · bookmark-api · iter-002</div>
             <h2 data-i18n="runs.title">실행 결과 검토</h2>
           </div>
           <div class="runs-topline__meta">
@@ -776,7 +802,7 @@ BookmarkControllerTest > keeps full list without filters PASSED</pre>
       <section class="content content--terminal view-pane" aria-label="Gate A 터미널" data-i18n-aria-label="terminal.label" data-panel="terminal" hidden>
         <div class="terminal-topline">
           <div>
-            <div class="label" data-i18n="terminal.kicker">Terminal · Gate A</div>
+            <div id="terminal-context-label" class="label">Terminal · bookmark-api · iter-002 · Gate A</div>
             <h2 data-i18n="terminal.title">AI agent와 intake 질문 답변</h2>
           </div>
           <div class="terminal-topline__meta">
@@ -788,6 +814,8 @@ BookmarkControllerTest > keeps full list without filters PASSED</pre>
         <div class="terminal-shell" aria-label="Gate A 대화 transcript" data-i18n-aria-label="terminal.transcriptLabel">
           <div class="terminal-shell__bar">
             <span class="mono">bookmark-api</span>
+            <span class="sep"></span>
+            <span id="terminal-shell-iteration" class="mono">iter-002</span>
             <span class="sep"></span>
             <span class="mono">Gate A intake</span>
             <span class="sep"></span>
@@ -1118,6 +1146,16 @@ BookmarkControllerTest > keeps full list without filters PASSED</pre>
     const runRows = [...document.querySelectorAll("[data-run-id]")];
     const runFilters = [...document.querySelectorAll("[data-run-filter]")];
     const runScopeFilters = [...document.querySelectorAll("[data-run-scope]")];
+    const iterationRows = [...document.querySelectorAll("[data-iteration-id]")];
+    const iterationSelectedTitle = document.querySelector("#iteration-selected-title");
+    const iterationSelectedPill = document.querySelector("#iteration-selected-pill");
+    const summaryIteration = document.querySelector("#summary-iteration");
+    const tasksContextLabel = document.querySelector("#tasks-context-label");
+    const runsContextLabel = document.querySelector("#runs-context-label");
+    const terminalContextLabel = document.querySelector("#terminal-context-label");
+    const terminalShellIteration = document.querySelector("#terminal-shell-iteration");
+    const taskGraphIteration = document.querySelector("#task-graph-iteration");
+    const runsStoreIteration = document.querySelector("#runs-store-iteration");
     const taskOpenTerminalButton = document.querySelector("#task-open-terminal");
     const taskSelectedMeta = document.querySelector("#task-selected-meta");
     const taskDetailKicker = document.querySelector("#task-detail-kicker");
@@ -1242,6 +1280,11 @@ BookmarkControllerTest > keeps full list without filters PASSED</pre>
       "sidebar.recentList": { ko: "최근 프로젝트 목록", en: "Recent project list" },
       "sidebar.localConfig": { ko: "GUI 로컬 설정", en: "GUI local config" },
       "sidebar.viewLocalConfig": { ko: "로컬 설정 보기", en: "Local config" },
+      "iteration.label": { ko: "반복 선택", en: "Iteration selector" },
+      "iteration.kicker": { ko: "선택된 반복", en: "selected iteration" },
+      "iteration.iter002Meta": { ko: "활성 · 준비 작업 1 · run 5건", en: "active · ready task 1 · 5 runs" },
+      "iteration.iter001Meta": { ko: "종료 · 이력 보기 전용", en: "closed · history only" },
+      "iteration.iter001Disabled": { ko: "이전 반복은 이력 보기 전용입니다.", en: "Previous iterations are read-only history." },
       "content.label": { ko: "프로젝트 감지", en: "Project detection" },
       "content.kicker": { ko: "프로젝트 감지", en: "project detection" },
       "content.title": { ko: "P2A 상태를 읽고 필요한 명령만 안내", en: "Read P2A state and guide required commands" },
@@ -1251,6 +1294,7 @@ BookmarkControllerTest > keeps full list without filters PASSED</pre>
       "summary.action": { ko: "다음 행동", en: "Next action" },
       "summary.agent": { ko: "기본 AI CLI", en: "Agent" },
       "summary.harnessWrites": { ko: "하네스 변경", en: "Harness writes" },
+      "summary.iteration": { ko: "활성 반복", en: "active iteration" },
       "summary.none": { ko: "없음", en: "none" },
       "states.label": { ko: "감지 상태", en: "Detection states" },
       "states.executionReady.title": { ko: "실행 준비됨", en: "Execution ready" },
@@ -1382,8 +1426,8 @@ BookmarkControllerTest > keeps full list without filters PASSED</pre>
       "status.runsLeft": { ko: "run-005 passed", en: "run-005 passed" },
       "status.runsRight": { ko: "검증 결과 확인 후 finish 판단", en: "review verification before finish" },
       "runsSidebar.label": { ko: "실행 이력", en: "Run history" },
-      "runsSidebar.kicker": { ko: "프로젝트 run index", en: "project run index" },
-      "runsSidebar.title": { ko: "전체 runs", en: "All runs" },
+      "runsSidebar.kicker": { ko: "선택 반복 run index", en: "selected iteration run index" },
+      "runsSidebar.title": { ko: "현재 반복 runs", en: "Current iteration runs" },
       "runsSidebar.pill": { ko: "5 runs", en: "5 runs" },
       "runsSidebar.filtersLabel": { ko: "실행 상태 필터", en: "Run status filters" },
       "runsSidebar.filterAll": { ko: "All", en: "All" },
@@ -1400,7 +1444,7 @@ BookmarkControllerTest > keeps full list without filters PASSED</pre>
       "runsSidebar.run003Meta": { ko: "task · task-2 · 통과 · 어제", en: "task · task-2 · passed · yesterday" },
       "runsSidebar.run002Meta": { ko: "task · task-1 · 통과 · 어제", en: "task · task-1 · passed · yesterday" },
       "runsSidebar.run001Meta": { ko: "gate · Gate A · open · 11:44", en: "gate · Gate A · open · 11:44" },
-      "runsSidebar.scopeLabel": { ko: "프로젝트 run store", en: "Project run store" },
+      "runsSidebar.scopeLabel": { ko: "선택 반복 run store", en: "Selected iteration run store" },
       "runsSidebar.project": { ko: "project", en: "project" },
       "runsSidebar.iteration": { ko: "iteration", en: "iteration" },
       "runsSidebar.path": { ko: "path", en: "path" },
@@ -1633,11 +1677,32 @@ Build a shared bookmark API for the team.`,
 
     const intakePath = "artifacts/bookmark-api/gate-a-intake/intake.md";
 
+    const projectContext = {
+      id: "bookmark-api",
+      path: "/Users/qoo10/projects/bookmark-api",
+    };
+
+    const iterations = {
+      "iter-002": {
+        label: "iter-002",
+        stateLabel: { ko: "활성", en: "active" },
+        pillClass: "pill pill--ok",
+        selectable: true,
+      },
+      "iter-001": {
+        label: "iter-001",
+        stateLabel: { ko: "종료", en: "closed" },
+        pillClass: "pill",
+        selectable: false,
+      },
+    };
+
     const runRecords = {
       "run-005": {
         status: "passed",
         statusLabel: { ko: "통과", en: "passed" },
         pillClass: "pill pill--ok",
+        iteration: "iter-002",
         scope: "task",
         taskId: "task-3",
         target: "task-3",
@@ -1742,6 +1807,7 @@ BookmarkControllerTest > keeps full list without filters PASSED`,
         status: "failed",
         statusLabel: { ko: "실패", en: "failed" },
         pillClass: "pill pill--err",
+        iteration: "iter-002",
         scope: "task",
         taskId: "task-3",
         target: "task-3",
@@ -1824,6 +1890,7 @@ Expected 2 results but received 3`,
         status: "passed",
         statusLabel: { ko: "통과", en: "passed" },
         pillClass: "pill pill--ok",
+        iteration: "iter-002",
         scope: "task",
         taskId: "task-2",
         target: "task-2",
@@ -1896,6 +1963,7 @@ BookmarkRepositoryTest > keeps base order PASSED`,
         status: "passed",
         statusLabel: { ko: "통과", en: "passed" },
         pillClass: "pill pill--ok",
+        iteration: "iter-002",
         scope: "task",
         taskId: "task-1",
         target: "task-1",
@@ -1968,6 +2036,7 @@ BookmarkTest > rejects empty url PASSED`,
         status: "open",
         statusLabel: { ko: "open", en: "open" },
         pillClass: "pill pill--warn",
+        iteration: "iter-002",
         scope: "gate",
         taskId: null,
         target: "Gate A",
@@ -2720,6 +2789,7 @@ How should initial authentication start?</pre>
     };
 
     let currentState = "execution-ready";
+    let selectedIterationId = "iter-002";
     let selectedTaskId = "task-3";
     let selectedRunId = "run-005";
     let selectedRunFilter = "all";
@@ -2884,11 +2954,12 @@ How should initial authentication start?</pre>
     }
 
     function runMatchesFilter(run) {
+      const iterationMatches = run.iteration === selectedIterationId;
       const statusMatches = selectedRunFilter === "all"
         || (selectedRunFilter === "open" && run.status !== "passed" && run.status !== "failed")
         || run.status === selectedRunFilter;
       const scopeMatches = selectedRunScope === "all" || run.scope === selectedRunScope;
-      return statusMatches && scopeMatches;
+      return iterationMatches && statusMatches && scopeMatches;
     }
 
     function renderRunFilterState() {
@@ -2993,6 +3064,34 @@ How should initial authentication start?</pre>
       button.dataset[target.type] = target.value;
     }
 
+    function renderIterationContext() {
+      const iteration = iterations[selectedIterationId] || iterations["iter-002"];
+      const contextLabel = `${projectContext.id} · ${iteration.label}`;
+
+      iterationRows.forEach((row) => {
+        const rowIteration = iterations[row.dataset.iterationId];
+        const selected = row.dataset.iterationId === selectedIterationId;
+        row.classList.toggle("iteration-row--active", selected);
+        row.classList.toggle("iteration-row--disabled", Boolean(rowIteration && !rowIteration.selectable));
+        if (selected) {
+          row.setAttribute("aria-current", "true");
+        } else {
+          row.removeAttribute("aria-current");
+        }
+      });
+
+      iterationSelectedTitle.textContent = iteration.label;
+      iterationSelectedPill.textContent = localized(iteration.stateLabel);
+      iterationSelectedPill.className = iteration.pillClass;
+      summaryIteration.textContent = iteration.label;
+      tasksContextLabel.textContent = `Tasks · ${contextLabel}`;
+      runsContextLabel.textContent = `Runs · ${contextLabel}`;
+      terminalContextLabel.textContent = `Terminal · ${contextLabel} · Gate A`;
+      terminalShellIteration.textContent = iteration.label;
+      taskGraphIteration.textContent = iteration.label;
+      runsStoreIteration.textContent = iteration.label;
+    }
+
     function renderTaskSelection() {
       const task = graphTasks[selectedTaskId];
       if (!task) return;
@@ -3037,6 +3136,8 @@ How should initial authentication start?</pre>
     }
 
     function renderTab() {
+      const iteration = iterations[selectedIterationId] || iterations["iter-002"];
+      const contextLabel = `${projectContext.id} · ${iteration.label}`;
       workspace.classList.toggle("workspace--tasks", currentTab === "tasks");
       viewPanes.forEach((pane) => {
         pane.hidden = pane.dataset.panel !== currentTab;
@@ -3052,22 +3153,22 @@ How should initial authentication start?</pre>
       });
 
       if (currentTab === "terminal") {
-        statusLeft.textContent = copyText("status.terminalLeft");
-        statusCwd.textContent = copyText("status.terminalCwd");
+        statusLeft.textContent = `${contextLabel} · Gate A`;
+        statusCwd.textContent = `cwd ${projectContext.path}`;
         statusRight.textContent = copyText("status.terminalRight");
       } else if (currentTab === "runs") {
         const run = runRecords[selectedRunId];
-        statusLeft.textContent = `${selectedRunId} ${run.scope}:${run.target}`;
-        statusCwd.textContent = "cwd /Users/qoo10/projects/bookmark-api";
+        statusLeft.textContent = `${contextLabel} · ${selectedRunId} ${run.scope}:${run.target}`;
+        statusCwd.textContent = `cwd ${projectContext.path}`;
         statusRight.textContent = copyText("status.runsRight");
       } else if (currentTab === "tasks") {
         const task = graphTasks[selectedTaskId];
-        statusLeft.textContent = `${selectedTaskId} ${localized(taskStatusLabels[task.status])}`;
-        statusCwd.textContent = "cwd /Users/qoo10/projects/bookmark-api";
+        statusLeft.textContent = `${contextLabel} · ${selectedTaskId} ${localized(taskStatusLabels[task.status])}`;
+        statusCwd.textContent = `cwd ${projectContext.path}`;
         statusRight.textContent = copyText("status.tasksRight");
       } else {
-        statusLeft.textContent = copyText("status.branch");
-        statusCwd.textContent = "cwd /Users/qoo10/projects/bookmark-api";
+        statusLeft.textContent = `${copyText("status.branch")} · ${contextLabel}`;
+        statusCwd.textContent = `cwd ${projectContext.path}`;
         statusRight.textContent = copyText("status.localOnly");
       }
     }
@@ -3119,6 +3220,7 @@ How should initial authentication start?</pre>
         currentLocale = button.dataset.lang;
         localStorage.setItem("p2aGuiLocale", currentLocale);
         renderStaticCopy();
+        renderIterationContext();
         renderTaskSelection();
         renderRunSelection();
         renderState();
@@ -3137,6 +3239,17 @@ How should initial authentication start?</pre>
         stateCards.forEach((item) => item.classList.remove("state-card--selected"));
         card.classList.add("state-card--selected");
         renderState();
+      });
+    });
+    iterationRows.forEach((row) => {
+      row.addEventListener("click", () => {
+        const iteration = iterations[row.dataset.iterationId];
+        if (!iteration || !iteration.selectable) return;
+        selectedIterationId = row.dataset.iterationId;
+        keepSelectedRunVisible();
+        renderIterationContext();
+        renderRunSelection();
+        renderTab();
       });
     });
     taskGraphNodes.forEach((node) => {
@@ -3294,6 +3407,7 @@ How should initial authentication start?</pre>
     });
 
     renderStaticCopy();
+    renderIterationContext();
     renderTaskSelection();
     renderRunSelection();
     renderState();

@@ -409,7 +409,8 @@ select,
   border-bottom: 1px solid var(--border-1);
 }
 
-.recent {
+.recent,
+.iteration-row {
   width: 100%;
   display: grid;
   grid-template-columns: 12px minmax(0, 1fr);
@@ -419,13 +420,27 @@ select,
   border-left: 2px solid transparent;
 }
 
-.recent--active {
+.recent--active,
+.iteration-row--active {
   background: var(--bg-3);
   border-left-color: var(--accent);
 }
 
+.iteration-row:disabled,
+.iteration-row[aria-disabled="true"] {
+  cursor: default;
+  opacity: 0.66;
+}
+
+.iteration-row:disabled strong,
+.iteration-row[aria-disabled="true"] strong {
+  color: var(--fg-2);
+}
+
 .recent strong,
-.recent small {
+.recent small,
+.iteration-row strong,
+.iteration-row small {
   display: block;
   min-width: 0;
   overflow: hidden;
@@ -433,10 +448,34 @@ select,
   white-space: nowrap;
 }
 
-.recent small {
+.recent small,
+.iteration-row small {
   color: var(--fg-3);
   font-size: var(--t-mono-s);
   margin-top: 2px;
+}
+
+.iteration-section {
+  border-bottom: 1px solid var(--border-1);
+}
+
+.iteration-section__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 12px 14px 8px;
+}
+
+.iteration-section__head strong {
+  display: block;
+  margin-top: 3px;
+  color: var(--fg-1);
+  font-size: var(--t-mono-s);
+}
+
+.iteration-list {
+  padding: 0 0 8px;
 }
 
 .status,
@@ -455,6 +494,10 @@ select,
 .status--planning,
 .state-card__marker--planning {
   background: var(--info);
+}
+
+.status--closed {
+  background: var(--fg-4);
 }
 
 .status--missing,
