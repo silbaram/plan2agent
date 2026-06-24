@@ -577,10 +577,10 @@ function readMonitorVerdict(source, sidecar) {
   assertFile(verdictPath, 'monitor verdict');
   const data = loadJson(verdictPath);
   const verdict = typeof data === 'string' ? data : data?.verdict;
-  if (!verdict || typeof verdict !== 'string') {
+  if (typeof verdict !== 'string' || !verdict.trim()) {
     throw new Error(`monitor verdict must be a JSON string or object with a verdict field: ${displayPath(verdictPath)}`);
   }
-  return verdict;
+  return verdict.trim();
 }
 
 function applyMonitorGate(args, source) {

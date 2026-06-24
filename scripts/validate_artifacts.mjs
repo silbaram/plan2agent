@@ -729,6 +729,9 @@ export function validateProposalDraftApprovalData(data) {
   if (data.autoApplyPerformed !== false) {
     throw new ValidationError('proposal draft approval autoApplyPerformed must be false');
   }
+  if (!data.maintenanceTask.sourceSpecRefs.includes(`proposal-draft-approval:${data.approvalId}`)) {
+    throw new ValidationError('proposal draft approval maintenanceTask.sourceSpecRefs must reference approvalId');
+  }
   if (!data.maintenanceTask.sourceSpecRefs.includes(`proposal-patch-draft:${data.draftId}`)) {
     throw new ValidationError('proposal draft approval maintenanceTask.sourceSpecRefs must reference draftId');
   }

@@ -1099,6 +1099,18 @@ function buildProposalDraftApproval(draft, draftFilePath, maintenancePlan, appro
   });
 }
 
+function assertExistingApprovalMatches(filePath, approval) {
+  if (!existsSync(filePath)) return;
+  assertFile(filePath, 'approval output');
+  const existing = validateProposalDraftApprovalData(loadJson(filePath));
+  const expectedFields = ['approvalId', 'draftId', 'candidateId', 'approvedBy', 'approvalNote', 'autoApplyPerformed'];
+  const mismatchedFields = expectedFields.filter((field) => JSON.stringify(existing[field]) !== JSON.stringify(approval[field]));
+  if (existing.maintenanceTask.taskId !== approval.maintenanceTask.taskId) mismatchedFields.push('maintenanceTask.taskId');
+  if (mismatchedFields.length) {
+    throw new Error(`existing approval output does not match requested approval: ${mismatchedFields.join(', ')}`);
+  }
+}
+
 function writeApproval(filePath, approval, overwrite = false) {
   const existed = existsSync(filePath);
   if (existed && !overwrite) return { action: 'skipped', filePath };
@@ -1276,6 +1288,7 @@ function runApproveDraft(args) {
   const requestedFilePath = args.output ? path.resolve(args.output) : null;
   if (requestedFilePath) assertApprovalOutputPath(proposalsDir, requestedFilePath);
   const filePath = requestedFilePath ?? approvalPath(proposalsDir, approval.approvalId);
+  if (!args.dryRun && !args.overwrite) assertExistingApprovalMatches(filePath, approval);
 
   const taskGraphAction = args.dryRun
     ? 'dry-run'

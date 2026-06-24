@@ -921,7 +921,7 @@ function validateIterationCurrentFixtureCases() {
         console.error(JSON.stringify({ executeMonitorSidecar }, null, 2));
         return { status: 1, checks };
       }
-      writeFileSync(path.join(tempRoot, 'p2a-execute-monitor', 'runs', executeMonitorSidecar.monitorGate.verdictPath), '{"verdict":"unmet_acceptance"}\n', 'utf8');
+      writeFileSync(path.join(tempRoot, 'p2a-execute-monitor', 'runs', executeMonitorSidecar.monitorGate.verdictPath), '{"verdict":" unmet_acceptance "}\n', 'utf8');
       result = runExecute([
         'finish',
         '--graph',
@@ -1172,6 +1172,7 @@ function validateIterationCurrentFixtureCases() {
         || executeMonitorApproval.candidateId !== executeMonitorPatchDraft.candidateId
         || executeMonitorApproval.autoApplyPerformed !== false
         || !executeMonitorMaintenanceTask
+        || !executeMonitorMaintenanceTask.sourceSpecRefs.includes(`proposal-draft-approval:${executeMonitorApproval.approvalId}`)
         || !executeMonitorMaintenanceTask.sourceSpecRefs.includes(`proposal-patch-draft:${executeMonitorPatchDraft.draftId}`)
       ) {
         console.error(`p2a_proposals approve-draft wrote unexpected approval/task: ${caseData.id}`);
@@ -1185,6 +1186,57 @@ function validateIterationCurrentFixtureCases() {
         console.error(`proposal draft approval validator fixture check failed: ${caseData.id}`);
         writeResultOutput(result);
         return { status: failureStatus(result), checks };
+      }
+      const invalidApprovalMissingSelfRefPath = path.join(tempRoot, 'p2a-execute-monitor', 'proposal-draft-approval-missing-self-ref.json');
+      const invalidApprovalMissingSelfRef = JSON.parse(JSON.stringify(executeMonitorApproval));
+      invalidApprovalMissingSelfRef.maintenanceTask.sourceSpecRefs = invalidApprovalMissingSelfRef.maintenanceTask.sourceSpecRefs
+        .filter((ref) => ref !== `proposal-draft-approval:${executeMonitorApproval.approvalId}`);
+      writeFileSync(invalidApprovalMissingSelfRefPath, `${JSON.stringify(invalidApprovalMissingSelfRef, null, 2)}\n`, 'utf8');
+      result = runValidator(['--proposal-draft-approval', invalidApprovalMissingSelfRefPath]);
+      checks += 1;
+      const invalidApprovalOutput = `${result.stdout ?? ''}${result.stderr ?? ''}`;
+      if (result.status === 0 || !invalidApprovalOutput.includes('must reference approvalId')) {
+        console.error(`proposal draft approval missing self-ref negative fixture failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: 1, checks };
+      }
+
+      const executeApprovalConflictArtifactRoot = path.join(tempRoot, 'p2a-execute-approval-conflict-artifacts');
+      cpSync(artifactRoot, executeApprovalConflictArtifactRoot, { recursive: true });
+      const executeApprovalConflictPath = path.join(tempRoot, 'p2a-execute-monitor', 'proposal-draft-approval-conflict.json');
+      const executeApprovalConflict = JSON.parse(JSON.stringify(executeMonitorApproval));
+      const conflictApprovalId = 'proposal-draft-approval-000000000000';
+      executeApprovalConflict.approvalId = conflictApprovalId;
+      executeApprovalConflict.maintenanceTask.sourceSpecRefs = executeApprovalConflict.maintenanceTask.sourceSpecRefs
+        .map((ref) => ref.startsWith('proposal-draft-approval:') ? `proposal-draft-approval:${conflictApprovalId}` : ref);
+      writeFileSync(executeApprovalConflictPath, `${JSON.stringify(executeApprovalConflict, null, 2)}\n`, 'utf8');
+      result = runProposals([
+        'approve-draft',
+        '--draft',
+        executeMonitorPatchDraftPath,
+        '--artifacts',
+        executeApprovalConflictArtifactRoot,
+        '--approved-by',
+        'fixture-reviewer',
+        '--approval-note',
+        'Fixture approval',
+        '--proposals',
+        executeMonitorProposalsDir,
+        '--output',
+        executeApprovalConflictPath,
+      ]);
+      checks += 1;
+      const approvalConflictOutput = `${result.stdout ?? ''}${result.stderr ?? ''}`;
+      const approvalConflictGraphPath = path.join(executeApprovalConflictArtifactRoot, 'iterations', 'maintenance', 'gate-c-task-graph', 'task-graph.json');
+      if (
+        result.status === 0
+        || !approvalConflictOutput.includes('existing approval output does not match requested approval')
+        || existsSync(approvalConflictGraphPath)
+      ) {
+        console.error(`p2a_proposals approve-draft output preflight fixture failed: ${caseData.id}`);
+        writeResultOutput(result);
+        console.error(JSON.stringify({ approvalConflictGraphExists: existsSync(approvalConflictGraphPath) }, null, 2));
+        return { status: 1, checks };
       }
       const executeFinishTraceArtifactRoot = path.join(tempRoot, 'p2a-execute-approval-finish-trace-artifacts');
       cpSync(executeMonitorApprovalArtifactRoot, executeFinishTraceArtifactRoot, { recursive: true });
