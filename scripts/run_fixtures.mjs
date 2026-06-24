@@ -1140,7 +1140,7 @@ function validateIterationCurrentFixtureCases() {
 
       const executeMonitorApprovalPath = path.join(tempRoot, 'p2a-execute-monitor', 'proposal-draft-approval.json');
       const executeMonitorApprovalArtifactRoot = path.join(tempRoot, 'p2a-execute-monitor-approval-artifacts');
-      mkdirSync(executeMonitorApprovalArtifactRoot, { recursive: true });
+      cpSync(artifactRoot, executeMonitorApprovalArtifactRoot, { recursive: true });
       result = runProposals([
         'approve-draft',
         '--draft',
@@ -1185,6 +1185,201 @@ function validateIterationCurrentFixtureCases() {
         console.error(`proposal draft approval validator fixture check failed: ${caseData.id}`);
         writeResultOutput(result);
         return { status: failureStatus(result), checks };
+      }
+      const executeFinishTraceArtifactRoot = path.join(tempRoot, 'p2a-execute-approval-finish-trace-artifacts');
+      cpSync(executeMonitorApprovalArtifactRoot, executeFinishTraceArtifactRoot, { recursive: true });
+
+      result = runExecute([
+        'plan',
+        '--artifacts',
+        executeMonitorApprovalArtifactRoot,
+        '--approval',
+        executeMonitorApprovalPath,
+        '--run-id',
+        'run-approved-proposal-fixture',
+        '--agent-tool',
+        'codex',
+        '--workspace',
+        executeMonitorApprovalArtifactRoot,
+      ]);
+      checks += 1;
+      if (
+        result.status !== 0
+        || !result.stdout.includes('Plan2Agent supervised task execution')
+        || !result.stdout.includes('- source: maintenance')
+        || !result.stdout.includes(`- proposalApproval: ${executeMonitorApproval.approvalId}`)
+        || !result.stdout.includes('--approval')
+      ) {
+        console.error(`p2a_execute approval plan fixture failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: failureStatus(result), checks };
+      }
+
+      result = runExecute([
+        'start',
+        '--artifacts',
+        executeMonitorApprovalArtifactRoot,
+        '--approval',
+        executeMonitorApprovalPath,
+        '--run-id',
+        'run-approved-proposal-fixture',
+        '--agent-tool',
+        'codex',
+        '--workspace',
+        executeMonitorApprovalArtifactRoot,
+      ]);
+      checks += 1;
+      if (
+        result.status !== 0
+        || !result.stdout.includes('Plan2Agent run started: run-approved-proposal-fixture')
+        || !result.stdout.includes(`Approved proposal: ${executeMonitorApproval.approvalId}`)
+      ) {
+        console.error(`p2a_execute approval start fixture failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: failureStatus(result), checks };
+      }
+
+      const executeApprovedRunPath = path.join(executeMonitorApprovalArtifactRoot, 'runs', 'run-approved-proposal-fixture.json');
+      const executeApprovedStartedRun = JSON.parse(readFileSync(executeApprovedRunPath, 'utf8'));
+      if (
+        executeApprovedStartedRun.sourceLayout !== 'maintenance'
+        || executeApprovedStartedRun.taskId !== executeMonitorApproval.maintenanceTask.taskId
+        || !executeApprovedStartedRun.notes.includes(`proposalApproval=${executeMonitorApproval.approvalId}`)
+        || !executeApprovedStartedRun.notes.includes(`proposalPatchDraft=${executeMonitorPatchDraft.draftId}`)
+      ) {
+        console.error(`p2a_execute approval start wrote unexpected run trace: ${caseData.id}`);
+        console.error(JSON.stringify({ executeApprovedStartedRun }, null, 2));
+        return { status: 1, checks };
+      }
+
+      result = runExecute([
+        'status',
+        '--artifacts',
+        executeMonitorApprovalArtifactRoot,
+        '--approval',
+        executeMonitorApprovalPath,
+      ]);
+      checks += 1;
+      if (
+        result.status !== 0
+        || !result.stdout.includes('Plan2Agent execution status')
+        || !result.stdout.includes(`- proposalApproval: ${executeMonitorApproval.approvalId}`)
+        || !result.stdout.includes('- runId: run-approved-proposal-fixture')
+      ) {
+        console.error(`p2a_execute approval status fixture failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: failureStatus(result), checks };
+      }
+
+      const executeMismatchedRunId = 'run-approved-proposal-mismatch';
+      const executeMismatchedTaskId = 'task-999';
+      writeFileSync(
+        path.join(executeMonitorApprovalArtifactRoot, 'runs', `${executeMismatchedRunId}.json`),
+        `${JSON.stringify({
+          ...executeApprovedStartedRun,
+          runId: executeMismatchedRunId,
+          taskId: executeMismatchedTaskId,
+          taskTitle: 'Unrelated fixture task',
+        }, null, 2)}\n`,
+        'utf8'
+      );
+      result = runExecute([
+        'status',
+        '--artifacts',
+        executeMonitorApprovalArtifactRoot,
+        '--approval',
+        executeMonitorApprovalPath,
+        '--run-id',
+        executeMismatchedRunId,
+      ]);
+      checks += 1;
+      if (
+        result.status === 0
+        || !result.stderr.includes(`status refused: run ${executeMismatchedRunId} belongs to ${executeMismatchedTaskId}, not approval task ${executeMonitorApproval.maintenanceTask.taskId}`)
+      ) {
+        console.error(`p2a_execute approval status mismatch fixture failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: 1, checks };
+      }
+
+      result = runExecute([
+        'finish',
+        '--artifacts',
+        executeMonitorApprovalArtifactRoot,
+        '--approval',
+        executeMonitorApprovalPath,
+        '--run-id',
+        'run-approved-proposal-fixture',
+        '--status',
+        'finished',
+      ]);
+      checks += 1;
+      if (result.status !== 0 || !result.stdout.includes('Marking task done')) {
+        console.error(`p2a_execute approval finish fixture failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: failureStatus(result), checks };
+      }
+      const executeApprovedFinishedRun = JSON.parse(readFileSync(executeApprovedRunPath, 'utf8'));
+      const executeApprovedFinishedGraph = JSON.parse(readFileSync(executeMonitorMaintenanceGraphPath, 'utf8'));
+      const executeApprovedFinishedTask = executeApprovedFinishedGraph.tasks.find((task) => task.id === executeMonitorApproval.maintenanceTask.taskId);
+      if (
+        executeApprovedFinishedRun.status !== 'finished'
+        || executeApprovedFinishedTask?.status !== 'done'
+      ) {
+        console.error(`p2a_execute approval finish wrote unexpected final state: ${caseData.id}`);
+        console.error(JSON.stringify({ executeApprovedFinishedRun, executeApprovedFinishedTask }, null, 2));
+        return { status: 1, checks };
+      }
+
+      const executeFinishTraceRunId = 'run-approval-finish-trace';
+      result = runExecute([
+        'start',
+        '--artifacts',
+        executeFinishTraceArtifactRoot,
+        '--maintenance',
+        '--task',
+        executeMonitorApproval.maintenanceTask.taskId,
+        '--run-id',
+        executeFinishTraceRunId,
+        '--agent-tool',
+        'codex',
+        '--workspace',
+        executeFinishTraceArtifactRoot,
+      ]);
+      checks += 1;
+      if (result.status !== 0 || !result.stdout.includes(`Plan2Agent run started: ${executeFinishTraceRunId}`)) {
+        console.error(`p2a_execute approval finish trace start fixture failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: failureStatus(result), checks };
+      }
+
+      result = runExecute([
+        'finish',
+        '--artifacts',
+        executeFinishTraceArtifactRoot,
+        '--approval',
+        executeMonitorApprovalPath,
+        '--run-id',
+        executeFinishTraceRunId,
+        '--status',
+        'finished',
+      ]);
+      checks += 1;
+      if (result.status !== 0 || !result.stdout.includes('Marking task done')) {
+        console.error(`p2a_execute approval finish trace fixture failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: failureStatus(result), checks };
+      }
+      const executeFinishTraceRunPath = path.join(executeFinishTraceArtifactRoot, 'runs', `${executeFinishTraceRunId}.json`);
+      const executeFinishTraceRun = JSON.parse(readFileSync(executeFinishTraceRunPath, 'utf8'));
+      if (
+        !executeFinishTraceRun.notes.includes(`proposalApproval=${executeMonitorApproval.approvalId}`)
+        || !executeFinishTraceRun.notes.includes(`proposalPatchDraft=${executeMonitorPatchDraft.draftId}`)
+        || !executeFinishTraceRun.notes.includes(`proposalCandidate=${executeMonitorApproval.candidateId}`)
+      ) {
+        console.error(`p2a_execute approval finish did not write proposal trace: ${caseData.id}`);
+        console.error(JSON.stringify({ executeFinishTraceRun }, null, 2));
+        return { status: 1, checks };
       }
 
       const executeFailedGraphPath = path.join(tempRoot, 'p2a-execute-failed', 'gate-c-task-graph', 'task-graph.json');

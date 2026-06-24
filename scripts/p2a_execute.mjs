@@ -6,7 +6,7 @@ import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { loadJson, validateOrchestrationPlanData, validateRunData, validateTaskGraphData, ValidationError } from './validate_artifacts.mjs';
+import { loadJson, validateOrchestrationPlanData, validateProposalDraftApprovalData, validateRunData, validateTaskGraphData, ValidationError } from './validate_artifacts.mjs';
 import { resolveIterationState } from './p2a_iteration_state.mjs';
 import { resolveRunsDir } from './p2a_run_paths.mjs';
 
@@ -43,6 +43,7 @@ function usage() {
     '',
     'Start/plan options:',
     '  --task <task-id>     Task to execute. If omitted, there must be exactly one ready task.',
+    '  --approval <path>    Proposal draft approval JSON; selects its maintenance task and implies --maintenance.',
     '  --agent-tool <tool>  Agent/CLI tool label for the run. Default: codex.',
     '  --run-id <run-id>    Stable run id for start; generated when omitted.',
     '  --workspace <dir>    Workspace path for implementation/verification. Default: cwd.',
@@ -84,6 +85,7 @@ function parseArgs(argv) {
     spec: null,
     maintenance: false,
     taskId: null,
+    approval: null,
     agentTool: 'codex',
     runId: null,
     workspace: null,
@@ -115,6 +117,7 @@ function parseArgs(argv) {
     else if (arg === '--spec') args.spec = requiredValue(argv, ++index, '--spec');
     else if (arg === '--maintenance') args.maintenance = true;
     else if (arg === '--task') args.taskId = requiredValue(argv, ++index, '--task');
+    else if (arg === '--approval') args.approval = requiredValue(argv, ++index, '--approval');
     else if (arg === '--agent-tool') args.agentTool = requiredValue(argv, ++index, '--agent-tool');
     else if (arg === '--run-id') args.runId = requiredValue(argv, ++index, '--run-id');
     else if (arg === '--workspace') args.workspace = requiredValue(argv, ++index, '--workspace');
@@ -165,10 +168,16 @@ function parseArgs(argv) {
     if (existsSync(DEFAULT_HANDOFF_GRAPH)) args.graph = DEFAULT_HANDOFF_GRAPH;
     else throw new Error('--artifacts or --graph is required');
   }
+  if (args.approval) {
+    if (!args.artifacts) throw new Error('--approval requires --artifacts');
+    if (args.graph) throw new Error('--approval is only supported with --artifacts');
+    if (args.taskId) throw new Error('--approval and --task cannot be combined');
+    args.maintenance = true;
+  }
   if (args.spec && args.artifacts) throw new Error('--spec is only supported with --graph; --artifacts uses the active iteration spec');
   if (args.maintenance && !args.artifacts) throw new Error('--maintenance is only supported with --artifacts');
   if (args.command === 'finish' && !args.runId) throw new Error('--run-id is required for finish');
-  if (args.command === 'status' && !args.taskId && !args.runId) throw new Error('--task or --run-id is required for status');
+  if (args.command === 'status' && !args.taskId && !args.runId && !args.approval) throw new Error('--task, --approval, or --run-id is required for status');
   if ((args.command === 'plan' || args.command === 'status') && args.verifyOptions.length) {
     throw new Error('verification options are only supported with finish');
   }
@@ -323,6 +332,46 @@ function requireTask(source, taskId) {
   return task;
 }
 
+function readProposalDraftApproval(filePath) {
+  assertFile(filePath, 'proposal draft approval');
+  return validateProposalDraftApprovalData(loadJson(filePath));
+}
+
+function validateApprovalTaskLink(source, approval) {
+  if (source.sourceLayout !== 'maintenance') {
+    throw new Error('--approval must resolve against the maintenance task graph');
+  }
+  const task = requireTask(source, approval.maintenanceTask.taskId);
+  const refs = task.sourceSpecRefs ?? [];
+  const requiredRefs = [
+    `proposal-draft-approval:${approval.approvalId}`,
+    `proposal-patch-draft:${approval.draftId}`,
+    `proposal-candidate:${approval.candidateId}`,
+  ];
+  const missingRefs = requiredRefs.filter((ref) => !refs.includes(ref));
+  if (missingRefs.length) {
+    throw new Error(`approval maintenance task ${task.id} is missing sourceSpecRefs: ${missingRefs.join(', ')}`);
+  }
+  return task;
+}
+
+function resolveApprovalSelection(args, source) {
+  if (!args.approval) return { approval: null, approvalPath: null, taskId: args.taskId };
+  const approvalPath = path.resolve(args.approval);
+  const approval = readProposalDraftApproval(approvalPath);
+  const task = validateApprovalTaskLink(source, approval);
+  return { approval, approvalPath, taskId: task.id };
+}
+
+function approvalRunNotes(approval) {
+  if (!approval) return [];
+  return [
+    `proposalApproval=${approval.approvalId}`,
+    `proposalPatchDraft=${approval.draftId}`,
+    `proposalCandidate=${approval.candidateId}`,
+  ];
+}
+
 function uniqueStrings(values) {
   const seen = new Set();
   const output = [];
@@ -419,7 +468,11 @@ function sourceRunArgs(args) {
   return ['--graph', args.graph];
 }
 
-function startRunArgs(args, task, runId, defaults) {
+function sourceSelectionArgs(args, taskId) {
+  return args.approval ? ['--approval', args.approval] : ['--task', taskId];
+}
+
+function startRunArgs(args, task, runId, defaults, approval = null) {
   const runArgs = [
     'start',
     ...sourceRunArgs(args),
@@ -440,11 +493,11 @@ function startRunArgs(args, task, runId, defaults) {
   if (args.baseRef) runArgs.push('--base-ref', args.baseRef);
   if (args.createIsolation) runArgs.push('--create-isolation');
   for (const changedFile of args.changedFiles) runArgs.push('--changed-file', changedFile);
-  for (const note of args.notes) runArgs.push('--note', note);
+  for (const note of uniqueStrings([...approvalRunNotes(approval), ...args.notes])) runArgs.push('--note', note);
   return runArgs;
 }
 
-function finishRunArgs(args, finalStatus) {
+function finishRunArgs(args, finalStatus, approval = null) {
   const runArgs = ['finish', ...sourceRunArgs(args), '--run-id', args.runId];
   if (finalStatus) runArgs.push('--status', finalStatus);
   if (args.failureClass) runArgs.push('--failure-class', args.failureClass);
@@ -454,7 +507,7 @@ function finishRunArgs(args, finalStatus) {
   if (args.collectGit) runArgs.push('--collect-git');
   if (args.workspace) runArgs.push('--workspace', args.workspace);
   for (const changedFile of args.changedFiles) runArgs.push('--changed-file', changedFile);
-  for (const note of args.notes) runArgs.push('--note', note);
+  for (const note of uniqueStrings([...approvalRunNotes(approval), ...args.notes])) runArgs.push('--note', note);
   return runArgs;
 }
 
@@ -560,12 +613,17 @@ function latestRunIdForTask(runsDir, taskId) {
   return index.tasks?.find((task) => task.taskId === taskId)?.latestRunId ?? null;
 }
 
-function printExecutionPlan(args, source, task, runId = null, defaults = null) {
+function printExecutionPlan(args, source, task, runId = null, defaults = null, approvalLink = null) {
   console.log('Plan2Agent supervised task execution');
   console.log(`- project: ${source.projectId}`);
   console.log(`- source: ${source.sourceLayout}`);
   console.log(`- task: ${task.id} - ${task.title}`);
   console.log(`- graph: ${displayPath(source.graphPath)}`);
+  if (approvalLink?.approval) {
+    console.log(`- proposalApproval: ${approvalLink.approval.approvalId}`);
+    console.log(`- patchDraft: ${approvalLink.approval.draftId}`);
+    console.log(`- approvalFile: ${displayPath(approvalLink.approvalPath)}`);
+  }
   if (runId) console.log(`- runId: ${runId}`);
   if (defaults) {
     console.log(`- agentTool: ${args.agentTool}`);
@@ -585,8 +643,7 @@ function printExecutionPlan(args, source, task, runId = null, defaults = null) {
   const startArgs = [
     'start',
     ...sourceRunArgs(args),
-    '--task',
-    task.id,
+    ...sourceSelectionArgs(args, task.id),
     '--agent-tool',
     args.agentTool,
   ];
@@ -594,15 +651,19 @@ function printExecutionPlan(args, source, task, runId = null, defaults = null) {
   if (args.orchestrationPlan) startArgs.push('--orchestration-plan', args.orchestrationPlan);
   console.log(`- ${commandLine('p2a_execute.mjs', startArgs)}`);
   if (runId) {
-    console.log(`- ${commandLine('p2a_execute.mjs', ['finish', ...sourceRunArgs(args), '--run-id', runId, '--test', '--lint', '--typecheck'])}`);
+    console.log(`- ${commandLine('p2a_execute.mjs', ['finish', ...sourceRunArgs(args), ...(args.approval ? ['--approval', args.approval] : []), '--run-id', runId, '--test', '--lint', '--typecheck'])}`);
   }
 }
 
-function printLauncherPrompt(source, task, runId) {
+function printLauncherPrompt(source, task, runId, approvalLink = null) {
   console.log('');
   console.log('Manual launcher prompt');
   console.log('---');
   console.log(`Implement Plan2Agent task ${task.id} for run ${runId}.`);
+  if (approvalLink?.approval) {
+    console.log(`Approved proposal: ${approvalLink.approval.approvalId}`);
+    console.log(`Patch draft: ${approvalLink.approval.draftId}`);
+  }
   console.log('');
   console.log('Boundaries:');
   console.log('- Make only code/test/doc changes required by this task and its acceptance criteria.');
@@ -631,10 +692,11 @@ function expectedFailureFinishStatus(result, requestedStatus) {
 
 function runPlan(args) {
   const source = resolveSource(args);
-  const task = selectReadyTask(source, args.taskId);
+  const approvalLink = resolveApprovalSelection(args, source);
+  const task = selectReadyTask(source, approvalLink.taskId);
   const runId = args.runId ?? generatedRunId(task.id);
   const defaults = resolveStartDefaults(args, source, task, runId);
-  printExecutionPlan(args, source, task, runId, defaults);
+  printExecutionPlan(args, source, task, runId, defaults, approvalLink);
   console.log('');
   console.log(`Prompt preview command: ${commandLine('p2a_tasks.mjs', promptArgs(source, task.id))}`);
   return 0;
@@ -642,17 +704,18 @@ function runPlan(args) {
 
 function runStart(args) {
   const source = resolveSource(args);
-  const task = selectReadyTask(source, args.taskId);
+  const approvalLink = resolveApprovalSelection(args, source);
+  const task = selectReadyTask(source, approvalLink.taskId);
   const runId = args.runId ?? generatedRunId(task.id);
   assertSafeRunId(runId);
   const defaults = resolveStartDefaults(args, source, task, runId);
   const orchestrationPlan = args.orchestrationPlan ? readOrchestrationPlan(path.resolve(args.orchestrationPlan)) : null;
   if (orchestrationPlan) validateOrchestrationPlanForTask(orchestrationPlan, source, task);
 
-  printExecutionPlan(args, source, task, runId, defaults);
+  printExecutionPlan(args, source, task, runId, defaults, approvalLink);
   console.log('');
   console.log('Starting run...');
-  const runResult = runScript('p2a_runs.mjs', startRunArgs(args, task, runId, defaults));
+  const runResult = runScript('p2a_runs.mjs', startRunArgs(args, task, runId, defaults, approvalLink.approval));
   printChildResult(runResult);
   if (runResult.status !== 0) return runResult.status ?? 1;
   const sidecarPath = attachOrchestrationPlan(orchestrationPlan, source, runId);
@@ -667,37 +730,47 @@ function runStart(args) {
     return taskResult.status ?? 1;
   }
 
-  printLauncherPrompt(source, task, runId);
+  printLauncherPrompt(source, task, runId, approvalLink);
   console.log('');
   console.log('Finish command:');
-  console.log(commandLine('p2a_execute.mjs', ['finish', ...sourceRunArgs(args), '--run-id', runId, '--test', '--lint', '--typecheck']));
+  console.log(commandLine('p2a_execute.mjs', ['finish', ...sourceRunArgs(args), ...(args.approval ? ['--approval', args.approval] : []), '--run-id', runId, '--test', '--lint', '--typecheck']));
   return 0;
 }
 
 function runStatus(args) {
   const source = resolveSource(args);
-  const taskId = args.taskId ?? (args.runId ? readRun(source.runsDir, args.runId).taskId : null);
+  const approvalLink = resolveApprovalSelection(args, source);
+  const explicitRun = args.runId ? readRun(source.runsDir, args.runId) : null;
+  const taskId = approvalLink.taskId ?? explicitRun?.taskId ?? null;
   const task = taskId ? requireTask(source, taskId) : null;
-  const runId = args.runId ?? (task ? latestRunIdForTask(source.runsDir, task.id) : null);
+  const runId = explicitRun?.runId ?? (task ? latestRunIdForTask(source.runsDir, task.id) : null);
+  const run = runId ? (explicitRun ?? readRun(source.runsDir, runId)) : null;
+  if (approvalLink.taskId && run && run.taskId !== approvalLink.taskId) {
+    console.error(`status refused: run ${run.runId} belongs to ${run.taskId}, not approval task ${approvalLink.taskId}`);
+    return 1;
+  }
   console.log('Plan2Agent execution status');
   console.log(`- project: ${source.projectId}`);
+  if (approvalLink.approval) {
+    console.log(`- proposalApproval: ${approvalLink.approval.approvalId}`);
+    console.log(`- patchDraft: ${approvalLink.approval.draftId}`);
+  }
   if (task) {
     console.log(`- task: ${task.id} - ${task.title}`);
     console.log(`- taskStatus: ${task.status}`);
     if (task.blockReason) console.log(`- blockReason: ${task.blockReason}`);
   }
-  if (!runId) {
+  if (!run) {
     console.log('- latestRun: none');
     return 0;
   }
-  const run = readRun(source.runsDir, runId);
   console.log(`- runId: ${run.runId}`);
   console.log(`- runStatus: ${run.status}`);
   console.log(`- agentTool: ${run.agentTool}`);
   console.log(`- workspaceRef: ${run.workspaceRef}`);
   console.log(`- changedFiles: ${run.changedFiles.length}`);
   console.log(`- verification: ${run.verification.map((item) => `${item.type}:${item.status}`).join(', ') || '-'}`);
-  const sidecar = readOrchestrationSidecar(source.runsDir, runId);
+  const sidecar = readOrchestrationSidecar(source.runsDir, run.runId);
   if (sidecar) {
     console.log(`- orchestration: ${sidecar.mode} ${sidecar.planId}`);
     if (sidecar.monitorGate.required) console.log(`- monitorGate: ${sidecar.monitorGate.verdictPath}`);
@@ -708,6 +781,14 @@ function runStatus(args) {
 
 function runFinish(args) {
   const source = resolveSource(args);
+  const approvalLink = resolveApprovalSelection(args, source);
+  if (approvalLink.taskId) {
+    const existingRun = readRun(source.runsDir, args.runId);
+    if (existingRun.taskId !== approvalLink.taskId) {
+      console.error(`finish refused: run ${existingRun.runId} belongs to ${existingRun.taskId}, not approval task ${approvalLink.taskId}`);
+      return 1;
+    }
+  }
   let verificationFailed = false;
   if (verifyRequested(args)) {
     console.log('Running verification...');
@@ -733,7 +814,7 @@ function runFinish(args) {
   if (finalFailureClass && !args.failureClass) args.failureClass = finalFailureClass;
 
   console.log('Finishing run...');
-  const finishResult = runScript('p2a_runs.mjs', finishRunArgs(args, requestedStatus));
+  const finishResult = runScript('p2a_runs.mjs', finishRunArgs(args, requestedStatus, approvalLink.approval));
   printChildResult(finishResult);
   if (!expectedFailureFinishStatus(finishResult, requestedStatus)) return finishResult.status ?? 1;
 

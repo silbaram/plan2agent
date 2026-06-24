@@ -1600,6 +1600,7 @@ function printNextSteps(targetRoot) {
   console.log('      node scripts/p2a_proposals.mjs curate --review .plan2agent/proposals/reviews/<review-id>.json');
   console.log('      node scripts/p2a_proposals.mjs draft-patch --curation .plan2agent/proposals/curations/<curation-id>.json --candidate-id <candidate-id>');
   console.log('      node scripts/p2a_proposals.mjs approve-draft --draft .plan2agent/proposals/patch-drafts/<draft-id>.json --artifacts <iterative-artifact-root> --approved-by <name>');
+  console.log('      node scripts/p2a_execute.mjs plan --artifacts <iterative-artifact-root> --approval .plan2agent/proposals/approvals/<approval-id>.json');
 
   try {
     const config = JSON.parse(readFileSync(path.join(targetRoot, '.plan2agent', 'project.config.json'), 'utf8'));

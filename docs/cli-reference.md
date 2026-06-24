@@ -223,6 +223,27 @@ node scripts/p2a_execute.mjs start \
   --create-isolation
 ```
 
+승인된 proposal patch draft는 approval artifact로 maintenance task를 자동 선택할 수 있다. `--approval`은 `--artifacts`와 함께 쓰며 maintenance task graph를 사용한다.
+
+```bash
+node scripts/p2a_execute.mjs plan \
+  --artifacts artifacts/<project_id> \
+  --approval artifacts/<project_id>/proposals/approvals/proposal-draft-approval-<hash>.json
+
+node scripts/p2a_execute.mjs start \
+  --artifacts artifacts/<project_id> \
+  --approval artifacts/<project_id>/proposals/approvals/proposal-draft-approval-<hash>.json \
+  --agent-tool codex
+
+node scripts/p2a_execute.mjs finish \
+  --artifacts artifacts/<project_id> \
+  --approval artifacts/<project_id>/proposals/approvals/proposal-draft-approval-<hash>.json \
+  --run-id run-... \
+  --test \
+  --lint \
+  --typecheck
+```
+
 `start`는 run을 먼저 만들고 task를 `in_progress`로 바꾼 뒤 manual launcher prompt를 출력한다. `finish`는 verification이 실패하면 기본 failure class를 `verification_failed`로 기록하고 task를 `blocked`로 전이한다. 실패 class를 직접 지정하려면 `--status failed|blocked --failure-class <class>`를 넘긴다.
 
 ## 5. 감독형 오케스트레이션 계획 — `p2a_orchestrate.mjs`
@@ -433,6 +454,8 @@ node scripts/p2a_proposals.mjs validate \
 `draft-patch`는 curation candidate 1건을 `proposals/patch-drafts/<draftId>.json`으로 바꾼다. patch draft에는 targetFiles, intendedChanges, verificationPlan, risks가 들어가지만 실제 파일 diff를 만들거나 적용하지 않는다. `approvalRequired: true`, `autoApplyAllowed: false`가 validator에서 강제된다.
 
 `approve-draft`는 사람이 승인한 patch draft를 `proposals/approvals/<approvalId>.json`으로 기록하고, `iterations/maintenance/gate-c-task-graph/task-graph.json`에 maintenance task를 append한다. 이 명령도 대상 파일을 수정하지 않으며, approval artifact에는 `autoApplyPerformed: false`가 강제된다. 같은 draft를 다시 승인하면 기존 maintenance task를 재사용해 task 중복을 피한다.
+
+승인된 항목 실행은 `p2a_execute --approval <approval.json>`로 이어간다. 이 옵션은 approval artifact의 `maintenanceTask.taskId`와 task graph의 `sourceSpecRefs`를 대조한 뒤 해당 maintenance task를 plan/start/status/finish 대상으로 선택하고, start run note에 proposal approval/draft/candidate id를 기록한다.
 
 MVP 제약:
 

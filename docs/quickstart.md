@@ -315,6 +315,19 @@ node scripts/p2a_proposals.mjs approve-draft \
 
 `approve-draft`는 대상 파일을 자동 수정하지 않는다. 승인 기록을 남기고 maintenance task graph에 후속 실행 task를 추가한다.
 
+승인된 proposal은 approval artifact로 바로 실행 흐름에 넘길 수 있다. task id를 다시 찾지 않아도 `p2a_execute`가 maintenance task를 확인한다.
+
+```bash
+node scripts/p2a_execute.mjs plan \
+  --artifacts artifacts/<project_id> \
+  --approval artifacts/<project_id>/proposals/approvals/proposal-draft-approval-<hash>.json
+
+node scripts/p2a_execute.mjs start \
+  --artifacts artifacts/<project_id> \
+  --approval artifacts/<project_id>/proposals/approvals/proposal-draft-approval-<hash>.json \
+  --agent-tool codex
+```
+
 세부 제어가 필요하면 저수준 명령을 직접 사용할 수 있다.
 
 ```bash
