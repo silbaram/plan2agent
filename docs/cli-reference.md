@@ -268,12 +268,15 @@ node scripts/p2a_execute.mjs finish \
 
 `p2a_orchestrate.mjs`는 ready task 1건을 대상으로 deterministic heuristic을 적용해 `solo`, `solo_monitor`, `team` 중 하나의 실행 계획을 만든다. 이 도구는 agent를 자동 실행하지 않는다. owner가 foreground agent 세션을 열고, 생성된 role prompt와 monitor gate를 보며 감독형으로 실행한다.
 
+team mode의 기본 전략은 single-provider다. `--reviewer-tool`을 생략하면 reviewer도 implementer와 같은 provider를 쓴다. Gemini는 write-required implementer로 쓰지 않고, 사용자가 `--reviewer-tool gemini`를 명시한 경우에만 read-only reviewer/monitor 보조로 배정한다. plan에는 `providerStrategy`와 `providerCapabilities`가 함께 기록되어 이 제한을 검증할 수 있다.
+
 `team` mode는 명시적인 다중 영역 task에만 보수적으로 추천한다. `targetArea`에서 복수 영역을 의도할 때는 `api+ui`, `api,ui`, `api&ui`, `api and ui`처럼 comma/plus/ampersand/`and`를 쓴다. `auth/login` 같은 slash 표기는 단일 영역 label로 취급한다.
 
 ```bash
 node scripts/p2a_orchestrate.mjs plan \
   --graph .plan2agent/artifacts/task-graph.json \
   --task task-001 \
+  --agent-tool codex \
   --output .plan2agent/orchestration/task-001.json
 
 node scripts/p2a_orchestrate.mjs handoff \
@@ -634,7 +637,7 @@ node scripts/p2a_execute.mjs finish \
   --collect-git
 ```
 
-`start`가 출력한 prompt를 Claude Code, Codex, Gemini CLI 같은 agent CLI에 붙여넣고 구현한다. `finish`는 검증 결과를 run log에 기록하고 task를 `done` 또는 `blocked`로 전이한다.
+`start`가 출력한 prompt를 Claude Code 또는 Codex 같은 write-capable agent CLI에 붙여넣고 구현한다. Gemini CLI는 현재 review/monitor 같은 read-only 보조로만 사용한다. `finish`는 검증 결과를 run log에 기록하고 task를 `done` 또는 `blocked`로 전이한다.
 
 ### 워크플로우 C — CLI mirror와 fixture 회귀 확인
 

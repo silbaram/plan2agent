@@ -19,6 +19,7 @@ const FINISH_STATUSES = new Set(['finished', 'failed', 'blocked']);
 const FAILURE_CLASSES = new Set(['verification_failed', 'test_flake', 'scope_violation', 'missing_dependency', 'environment_failure', 'implementation_incomplete', 'other']);
 const FAILURE_RETRYABLE = new Set(['yes', 'no', 'after_fix']);
 const FAILURE_SOURCES = new Set(['owner', 'monitor', 'implementer']);
+const IMPLEMENTER_AGENT_TOOLS = new Set(['codex', 'claude', 'manual']);
 const DEFAULT_HANDOFF_GRAPH = path.join('.plan2agent', 'artifacts', 'task-graph.json');
 const DEFAULT_PROJECT_CONFIG = path.join('.plan2agent', 'project.config.json');
 
@@ -45,7 +46,7 @@ function usage() {
     'Start/plan options:',
     '  --task <task-id>     Task to execute. If omitted, there must be exactly one ready task.',
     '  --approval <path>    Proposal draft approval JSON; selects its maintenance task and implies --maintenance.',
-    '  --agent-tool <tool>  Agent/CLI tool label for the run. Default: codex.',
+    '  --agent-tool <tool>  Write implementer label: codex, claude, or manual. Default: codex.',
     '  --run-id <run-id>    Stable run id for start; generated when omitted.',
     '  --workspace <dir>    Workspace path for implementation/verification. Default: cwd.',
     '  --workspace-ref <r>  Human-readable workspace reference.',
@@ -179,6 +180,9 @@ function parseArgs(argv) {
   if (args.maintenance && !args.artifacts) throw new Error('--maintenance is only supported with --artifacts');
   if (args.command === 'finish' && !args.runId) throw new Error('--run-id is required for finish');
   if (args.command === 'status' && !args.taskId && !args.runId && !args.approval) throw new Error('--task, --approval, or --run-id is required for status');
+  if (['plan', 'start'].includes(args.command) && !IMPLEMENTER_AGENT_TOOLS.has(args.agentTool)) {
+    throw new Error('--agent-tool for implementation must be one of codex, claude, or manual; Gemini is read-only and may only be used as a reviewer/monitor in p2a_orchestrate plans');
+  }
   if ((args.command === 'plan' || args.command === 'status') && args.verifyOptions.length) {
     throw new Error('verification options are only supported with finish');
   }

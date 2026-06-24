@@ -386,7 +386,7 @@ Gate D review가 blocking issue 없이 끝나면 `artifacts/<project_id>/gate-c-
 1. `node scripts/p2a_tasks.mjs ready --graph artifacts/<project_id>/gate-c-task-graph/task-graph.json`로 지금 시작할 수 있는 task를 확인한다.
 2. 실행할 task를 정한 뒤 `node scripts/p2a_tasks.mjs start --graph artifacts/<project_id>/gate-c-task-graph/task-graph.json <task-id>`로 상태를 `in_progress`로 바꾼다. dependency가 완료되지 않은 task는 시작할 수 없다.
 3. `node scripts/p2a_tasks.mjs prompt --graph artifacts/<project_id>/gate-c-task-graph/task-graph.json <task-id>`로 agent CLI에 붙여넣을 prompt를 만든다. 출력에는 task의 `suggestedAgentPrompt`와 acceptance criteria가 포함된다.
-4. Claude Code, Codex, Gemini CLI 등 구현용 agent 세션에서 prompt를 실행하고, 코드 변경과 검증은 해당 작업 브랜치에서 수행한다.
+4. Claude Code 또는 Codex 같은 write-capable agent 세션에서 prompt를 실행하고, 코드 변경과 검증은 해당 작업 브랜치에서 수행한다. Gemini CLI는 현재 review/monitor 같은 read-only 보조로만 사용한다.
 5. acceptance criteria와 필요한 테스트가 통과하면 `node scripts/p2a_tasks.mjs done --graph artifacts/<project_id>/gate-c-task-graph/task-graph.json <task-id>`로 완료 처리한다. 막히면 `block`, 재시도해야 하면 `todo`로 상태를 기록한다.
 6. 다시 `ready`를 확인해 다음 dependency-unblocked task를 선택한다.
 

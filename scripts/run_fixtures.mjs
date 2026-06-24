@@ -698,11 +698,50 @@ function validateIterationCurrentFixtureCases() {
       const executeOrchestrationPlan = JSON.parse(readFileSync(executeOrchestrationPlanPath, 'utf8'));
       if (
         executeOrchestrationPlan.mode !== 'solo'
+        || executeOrchestrationPlan.providerStrategy.mode !== 'single_provider'
+        || executeOrchestrationPlan.providerStrategy.primaryProvider !== 'codex'
+        || executeOrchestrationPlan.providerCapabilities.find((capability) => capability.provider === 'gemini')?.writeAllowed !== false
         || executeOrchestrationPlan.monitorGate.required
         || executeOrchestrationPlan.monitorGate.verdictPath !== null
       ) {
         console.error(`p2a_orchestrate default fixture should stay solo: ${caseData.id}`);
         console.error(JSON.stringify({ executeOrchestrationPlan }, null, 2));
+        return { status: 1, checks };
+      }
+
+      result = runOrchestrate([
+        'plan',
+        '--graph',
+        executeGraphPath,
+        '--spec',
+        state.specPath,
+        '--task',
+        'task-001',
+        '--agent-tool',
+        'gemini',
+      ]);
+      checks += 1;
+      if (result.status === 0 || !result.stderr.includes('Gemini is read-only in P2A orchestration')) {
+        console.error(`p2a_orchestrate should reject Gemini as write implementer: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: 1, checks };
+      }
+
+      result = runExecute([
+        'plan',
+        '--graph',
+        executeGraphPath,
+        '--spec',
+        state.specPath,
+        '--task',
+        'task-001',
+        '--agent-tool',
+        'gemini',
+      ]);
+      checks += 1;
+      if (result.status === 0 || !result.stderr.includes('Gemini is read-only')) {
+        console.error(`p2a_execute should reject Gemini as write implementer: ${caseData.id}`);
+        writeResultOutput(result);
         return { status: 1, checks };
       }
 
@@ -984,12 +1023,39 @@ function validateIterationCurrentFixtureCases() {
       const executeMonitorPlan = JSON.parse(readFileSync(executeMonitorPlanPath, 'utf8'));
       if (
         executeMonitorPlan.mode !== 'team'
+        || executeMonitorPlan.providerStrategy.mode !== 'single_provider'
+        || executeMonitorPlan.roles.find((role) => role.roleId === 'reviewer')?.agentTool !== 'codex'
         || !executeMonitorPlan.monitorGate.required
         || !executeMonitorPlan.riskFlags.includes('multi_area')
       ) {
         console.error(`p2a_orchestrate monitor fixture should use explicit multi-area team mode: ${caseData.id}`);
         console.error(JSON.stringify({ executeMonitorPlan }, null, 2));
         return { status: 1, checks };
+      }
+
+      result = runOrchestrate([
+        'plan',
+        '--graph',
+        executeMonitorGraphPath,
+        '--spec',
+        state.specPath,
+        '--task',
+        'task-001',
+        '--reviewer-tool',
+        'gemini',
+      ]);
+      checks += 1;
+      const explicitGeminiReviewerPlan = result.status === 0 ? JSON.parse(result.stdout) : null;
+      if (
+        result.status !== 0
+        || explicitGeminiReviewerPlan.providerStrategy.mode !== 'single_provider_with_read_only_reviewer'
+        || explicitGeminiReviewerPlan.roles.find((role) => role.roleId === 'reviewer')?.agentTool !== 'gemini'
+        || explicitGeminiReviewerPlan.roles.find((role) => role.roleId === 'reviewer')?.requiresWrite !== false
+      ) {
+        console.error(`p2a_orchestrate should allow Gemini as explicit read-only reviewer: ${caseData.id}`);
+        writeResultOutput(result);
+        console.error(JSON.stringify({ explicitGeminiReviewerPlan }, null, 2));
+        return { status: failureStatus(result), checks };
       }
 
       result = runExecute([

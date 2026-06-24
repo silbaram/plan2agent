@@ -557,12 +557,51 @@ export function validateOrchestrationPlanData(data) {
   if (roleIds.length !== new Set(roleIds).size) {
     throw new ValidationError('orchestration plan roleId values must be unique');
   }
+  const providerCapabilities = new Map(data.providerCapabilities.map((capability) => [capability.provider, capability]));
+  if (providerCapabilities.size !== data.providerCapabilities.length) {
+    throw new ValidationError('orchestration plan providerCapabilities[].provider values must be unique');
+  }
+  for (const provider of ['codex', 'claude', 'gemini', 'manual']) {
+    if (!providerCapabilities.has(provider)) {
+      throw new ValidationError(`orchestration plan providerCapabilities is missing ${provider}`);
+    }
+  }
   const roleIdSet = new Set(roleIds);
   const unknownPromptRoles = data.handoffPrompts
     .map((prompt) => prompt.roleId)
     .filter((roleId) => !roleIdSet.has(roleId));
   if (unknownPromptRoles.length) {
     throw new ValidationError(`orchestration plan handoffPrompts reference unknown roleId values: ${JSON.stringify([...new Set(unknownPromptRoles)])}`);
+  }
+  for (const role of data.roles) {
+    const capability = providerCapabilities.get(role.agentTool);
+    if (!capability) throw new ValidationError(`orchestration plan role ${role.roleId} uses provider without capability entry: ${role.agentTool}`);
+    if (!capability.roles.includes(role.role)) {
+      throw new ValidationError(`orchestration plan role ${role.roleId} assigns ${role.role} to unsupported provider ${role.agentTool}`);
+    }
+    if (role.requiresWrite && !capability.writeAllowed) {
+      throw new ValidationError(`orchestration plan role ${role.roleId} requires write but provider ${role.agentTool} is read-only`);
+    }
+  }
+  const implementer = data.roles.find((role) => role.roleId === 'implementer');
+  const reviewer = data.roles.find((role) => role.roleId === 'reviewer');
+  if (implementer && data.providerStrategy.implementationProvider !== implementer.agentTool) {
+    throw new ValidationError('orchestration plan providerStrategy.implementationProvider must match implementer agentTool');
+  }
+  if ((reviewer?.agentTool ?? null) !== data.providerStrategy.reviewProvider) {
+    throw new ValidationError('orchestration plan providerStrategy.reviewProvider must match reviewer agentTool');
+  }
+  if (data.providerStrategy.mixedProviderImplementation !== false) {
+    throw new ValidationError('orchestration plan mixedProviderImplementation must remain false');
+  }
+  if (data.providerStrategy.mode === 'single_provider' && data.providerStrategy.reviewProvider && ![data.providerStrategy.primaryProvider, 'manual'].includes(data.providerStrategy.reviewProvider)) {
+    throw new ValidationError('orchestration plan single_provider mode cannot use a different reviewProvider');
+  }
+  if (data.providerStrategy.mode === 'single_provider_with_read_only_reviewer') {
+    const reviewerCapability = data.providerStrategy.reviewProvider ? providerCapabilities.get(data.providerStrategy.reviewProvider) : null;
+    if (!reviewerCapability || reviewerCapability.writeAllowed || data.providerStrategy.reviewProvider === data.providerStrategy.primaryProvider) {
+      throw new ValidationError('orchestration plan single_provider_with_read_only_reviewer requires a different read-only reviewProvider');
+    }
   }
   if (data.monitorGate.required) {
     if (!data.monitorGate.verdictPath) {

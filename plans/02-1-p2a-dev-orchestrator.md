@@ -1,8 +1,8 @@
 # 02-1 p2a-dev-orchestrator 개발 계획
 
-작성일: 2026-06-23 · 상태: MVP 1차 구현 완료, 오케스트레이션 runtime 1단계 완료, 감독형 scheduler 2단계 완료, GUI runtime/scheduler 표시 완료, O7 Hermes proposal queue/review/curation/patch draft/approval execution bridge 완료 · 상위 문서: `plans/02-development-team-ai-agent.md` · 연결 문서: `plans/01-product-roadmap.md`, `plans/03-p2a-gui-mvp.md`
+작성일: 2026-06-23 · 상태: MVP 1차 구현 완료, 오케스트레이션 runtime 1단계 완료, 감독형 scheduler 2단계 완료, GUI runtime/scheduler 표시 완료, O7 Hermes proposal queue/review/curation/patch draft/approval execution bridge 완료, provider-native team orchestration 후속 방향 확정 · 상위 문서: `plans/02-development-team-ai-agent.md` · 연결 문서: `plans/01-product-roadmap.md`, `plans/03-p2a-gui-mvp.md`
 
-이 문서는 Team Big Five의 `team-lead` 역할을 Plan2Agent-native로 구현하기 위한 최소 개발 계획이다. 목표는 여러 agent를 무인으로 돌리는 것이 아니라, 기존 CLI-first 하네스 위에서 **어떤 task를 solo/team으로 처리할지 판단하고, 역할별 실행 계획, shared mental model, communication log, 검증 흐름을 파일로 남기는 것**이다. 최신 GUI는 task/run/artifact와 PTY 실행에 더해 orchestration mode/role/runtime/monitor gate를 읽고, 사람이 수행한 role 상태만 기록한다.
+이 문서는 Team Big Five의 `team-lead` 역할을 Plan2Agent-native로 구현하기 위한 최소 개발 계획이다. 목표는 여러 agent를 무인으로 돌리는 것이 아니라, 기존 CLI-first 하네스 위에서 **어떤 task를 solo/team으로 처리할지 판단하고, 역할별 실행 계획, shared mental model, communication log, 검증 흐름을 파일로 남기는 것**이다. 최신 GUI는 task/run/artifact와 PTY 실행에 더해 orchestration mode/role/runtime/monitor gate를 읽고, 사람이 수행한 role 상태만 기록한다. 후속 개발은 generic multi-provider terminal coordinator가 아니라 provider별 공식 기능을 활용하는 provider-native team orchestration으로 진행한다.
 
 ## 0. 이번 브랜치 구현 상태
 
@@ -21,7 +21,8 @@
 
 후속으로 남김:
 
-- 감독형 multi-session PTY coordinator. 사용자가 공식 CLI/앱 세션을 foreground로 열고, p2a는 다음 role/prompt/상태 기록을 조율한다.
+- provider capability matrix. Claude, Codex, Gemini가 어떤 role을 공식 기능으로 수행할 수 있는지 구조화한다.
+- provider-native team runner adapter. Claude는 native agent teams/subagents, Codex는 skills/custom agents/명시 subagent prompt, Gemini는 extensions/custom commands/GEMINI.md 기반 planning/review/monitor 보조로 둔다.
 - 실제 적용 patch 생성.
 - agent-generated orchestration plan.
 
@@ -43,7 +44,8 @@
 아직 후속으로 남긴 것:
 
 - agent-generated orchestration plan.
-- 감독형 multi-session PTY coordinator.
+- provider capability matrix와 provider-native team runner adapter.
+- 일반 multi-provider PTY session coordinator는 후순위로 둔다.
 - 자동 role/monitor 호출은 API 키 기반 별도 설계 전까지 제외한다.
 - 실패 시 retry/ask/blocked 판단 규칙.
 
@@ -206,10 +208,40 @@ MVP에서 하지 않는 것:
 - scaffold/handoff 대상 프로젝트에 CLI와 schema가 포함된다.
 - fixture가 monitor-blocked run에서 proposal을 생성하고 digest/review/curation/patch-draft까지 확인한다.
 
+### O8. Provider-native team orchestration adapter
+
+목적: `team` mode를 여러 회사 CLI를 동시에 섞는 터미널 조율 문제가 아니라, 선택한 provider의 공식 team/subagent/skill 기능을 활용하는 감독형 실행 흐름으로 고정한다. 기본값은 single-provider team이다.
+
+범위:
+
+- provider capability matrix를 추가한다.
+- `team` plan에 `providerStrategy`, role capability, 실행 표면을 기록한다.
+- Claude adapter는 Claude Code의 agent teams/subagents를 native team runner로 사용한다. agent teams가 experimental/off이면 subagent/foreground prompt로 폴백한다.
+- Codex adapter는 Codex skills, custom agents, 명시 subagent prompt를 사용한다. Codex는 subagent를 자동으로 spawn하지 않으므로 prompt에 명시 요청을 포함한다.
+- Gemini adapter는 Gemini CLI extensions, custom commands, `GEMINI.md` context를 사용하되 planning/review/monitor read-only 역할에 한정한다. 구현자 role에는 기본 배정하지 않는다.
+- mixed-provider implementation은 기본값에서 제외한다. provider를 섞는 경우는 사람이 명시한 review/monitor 보조 역할로만 허용한다.
+- GUI는 여러 터미널을 자동으로 여는 대신 provider 선택, role prompt, next-role, mark-role, monitor gate를 명확히 보여준다.
+
+완료 기준:
+
+- `claude`, `codex`, `gemini` capability matrix가 scaffold/handoff와 orchestrator plan에서 같은 기준으로 쓰인다.
+- `team` plan 생성 시 implementer/reviewer/monitor role이 provider capability를 위반하지 않는다.
+- Gemini는 write-required role에 배정되지 않는다.
+- Claude team plan은 native team 또는 subagent runner prompt를 제공한다.
+- Codex team plan은 custom agent/subagent 명시 실행 prompt를 제공한다.
+- fixture가 provider별 role assignment와 Gemini write 금지를 검증한다.
+- 문서가 single-provider 기본값, mixed-provider 후순위, 무인 실행 금지를 명시한다.
+
+비목표:
+
+- P2A가 Codex/Claude/Gemini 프로세스를 자동으로 여러 개 띄우는 기능.
+- browser/background loop, 계정/세션/rate limit 우회.
+- 여러 provider가 같은 파일을 동시에 수정하는 mixed-provider implementation.
+
 후속:
 
 - Hermes 고도화는 store/DB 단계로 연기한다. 실제 적용 patch 생성, skipped-verification rationale 표준화, 반복 failureClass/source/targetFiles 통계, cross-session recall, 검색/DB 저장은 지금 구현하지 않고 나중에 방향을 다시 논의한다.
-- GUI supervised scheduler 표면은 완료했다. API 요금제 기반 완전 자동 개발은 비용상 보류한다. 다음 구현 축은 구독 로그인 기반 공식 CLI/앱을 사람이 foreground에서 사용하고, p2a가 multi-session role/prompt/상태만 조율하는 감독형 coordinator다. 무인 실행, browser/background loop, 계정/세션/rate limit 우회, 자동 role/monitor 호출은 계속 제외한다.
+- GUI supervised scheduler 표면은 완료했다. API 요금제 기반 완전 자동 개발은 비용상 보류한다. 다음 구현 축은 provider-native team orchestration adapter다. 공식 CLI/앱은 사람이 foreground에서 사용하고, p2a는 provider 선택, role/prompt/order/state, monitor gate만 조율한다. 무인 실행, browser/background loop, 계정/세션/rate limit 우회, 자동 role/monitor 호출은 계속 제외한다.
 
 ## 5. Team Big Five 완료 판단
 
@@ -225,7 +257,9 @@ MVP 완료:
 완성형 완료:
 
 - team mode에서 실패/retry/ask-user 판단이 일관되게 동작한다.
-- 여러 session을 병렬/순차로 안전하게 조율하는 scheduler가 있다.
+- provider capability matrix가 role 배정을 안전하게 제한한다.
+- Claude/Codex/Gemini별 provider-native team runner adapter가 있다.
+- single-provider team이 기본값이고, mixed-provider implementation은 기본값에서 제외된다.
 
 ## 6. Hermes와의 관계
 
@@ -252,11 +286,30 @@ MVP 연결:
 | MVP planner | deterministic CLI heuristic |
 | triage 기본값 | `targetArea`의 명시 다중 영역(comma/plus/ampersand/`and`)은 `team`, acceptance criteria 6개 이상은 `solo_monitor`, 의존성 2개 이상은 risk flag만 기록하고 monitor gate를 강제하지 않음 |
 | orchestrator agent 역할 | plan review/proposal. 자동 적용 없음 |
-| team mode 기본 agent | Codex contributor + monitor. Claude는 사용자가 선택한 경우 |
-| Gemini 역할 | read-only reviewer/planner |
+| team mode 기본 전략 | single-provider team. 선택 provider의 공식 기능을 우선 사용하고, mixed-provider implementation은 기본값에서 제외 |
+| Claude team 전략 | Claude Code native agent teams/subagents를 우선 사용. experimental team 기능이 꺼져 있으면 foreground subagent/prompt로 폴백 |
+| Codex team 전략 | Codex skills/custom agents/명시 subagent prompt를 사용. Codex subagent는 자동 spawn이 아니라 explicit request 기반 |
+| Gemini 역할 | planning/review/monitor read-only 보조. write-required implementer에는 기본 배정하지 않음 |
 | GUI 편집 여부 | plan/runtime 임의 편집은 제외. Runs 화면은 read-only 표시와 수동 `mark-role` 기록만 |
 | API 기반 자동 개발 | 비용상 보류. API 키 기반 runner는 현재 개발하지 않음 |
 | 구독 CLI/앱 사용 | 공식 CLI/앱을 사람이 foreground에서 사용한다. p2a는 prompt/role/order/state를 조율하고, 사용자가 승인한 입력과 상태 기록만 수행 |
 | 금지 자동화 | browser/background loop, 세션 쿠키·토큰 재사용, 여러 계정 로테이션, rate limit 우회, 자동 role/monitor 호출, 무인 headless 실행 |
 | supervised scheduler | `next-role`, `role-prompt`, `mark-role`은 프로세스를 실행하지 않고 prompt/상태만 다룬다 |
 | Hermes queue/review/curation/patch draft/approval execution bridge | `p2a_proposals.mjs` deterministic mining/review/curation/draft-patch/approve-draft + `p2a_execute --approval` 감독형 실행 연결. 자동 적용 없음 |
+
+## 8. Provider 공식 기능 기준
+
+O8은 각 provider가 공식적으로 제공하는 확장 지점을 사용한다. 이 표는 구현 판단의 현재 기준이다.
+
+| Provider | 공식 기능 기준 | P2A 적용 |
+| --- | --- | --- |
+| Claude Code | subagents, plugins, skills, agent teams | native team runner 우선. agent teams는 experimental이므로 사용 가능 여부를 감지하고 subagent/prompt로 폴백 |
+| Codex | skills, plugins, custom agents, subagents | Codex-native team skill과 custom agent를 만들고, subagent 사용은 prompt에서 명시한다 |
+| Gemini CLI | extensions, custom commands, `GEMINI.md`, MCP | planning/review/monitor read-only adapter. 공식 docs 기준 team/subagent runner가 확인되기 전까지 implementer 제외 |
+
+공통 원칙:
+
+- P2A는 provider의 공식 CLI/앱/확장 기능 밖으로 우회하지 않는다.
+- 구독 로그인 기반 사용은 사람이 foreground에서 승인·감독한다.
+- P2A는 role, prompt, order, runtime state, monitor gate를 기록하고 조율한다.
+- 자동 role 실행, browser/background loop, 세션 쿠키·토큰 재사용, 여러 계정 로테이션, rate limit 우회는 금지한다.

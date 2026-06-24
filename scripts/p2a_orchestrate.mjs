@@ -17,6 +17,55 @@ const RUNTIME_ROLE_STATUSES = new Set(['pending', 'active', 'blocked', 'complete
 const RUNTIME_PHASES = new Set(['initialized', 'running', 'blocked', 'ready_for_monitor', 'ready_to_finish', 'closed']);
 const DEFAULT_HANDOFF_GRAPH = path.join('.plan2agent', 'artifacts', 'task-graph.json');
 const HIGH_ACCEPTANCE_MONITOR_THRESHOLD = 6;
+const PROVIDER_CAPABILITIES = Object.freeze({
+  codex: {
+    provider: 'codex',
+    roles: ['contributor', 'reviewer', 'monitor'],
+    writeAllowed: true,
+    executionSurface: 'Codex CLI/app foreground session with skills, custom agents, and explicitly requested subagents.',
+    officialFeatures: ['skills', 'custom_agents', 'explicit_subagent_prompt'],
+    supervisionMode: 'foreground_human_supervised',
+    restrictions: [
+      'Codex subagents are not spawned automatically; the role prompt must explicitly request them.',
+      'P2A never starts Codex as a background process.',
+    ],
+  },
+  claude: {
+    provider: 'claude',
+    roles: ['contributor', 'reviewer', 'monitor'],
+    writeAllowed: true,
+    executionSurface: 'Claude Code foreground session with subagents, plugins, skills, and agent teams when enabled.',
+    officialFeatures: ['subagents', 'plugins', 'skills', 'agent_teams'],
+    supervisionMode: 'foreground_human_supervised',
+    restrictions: [
+      'Claude agent teams are experimental and may be disabled; fall back to supervised subagent or role prompts.',
+      'P2A never starts Claude Code as a background process.',
+    ],
+  },
+  gemini: {
+    provider: 'gemini',
+    roles: ['reviewer', 'monitor'],
+    writeAllowed: false,
+    executionSurface: 'Gemini CLI foreground session with extensions, custom commands, GEMINI.md context, and MCP tools.',
+    officialFeatures: ['extensions', 'custom_commands', 'GEMINI.md', 'mcp_tools'],
+    supervisionMode: 'foreground_human_supervised',
+    restrictions: [
+      'Gemini is read-only in P2A orchestration until an official write-safe team/subagent runner is verified.',
+      'Use Gemini for planning, review, or monitor support, not write-required implementation.',
+    ],
+  },
+  manual: {
+    provider: 'manual',
+    roles: ['lead', 'contributor', 'reviewer', 'monitor'],
+    writeAllowed: true,
+    executionSurface: 'Human owner action in the foreground workspace.',
+    officialFeatures: ['manual_approval', 'manual_prompt_copy', 'manual_status_recording'],
+    supervisionMode: 'foreground_human_supervised',
+    restrictions: [
+      'Manual roles require the owner to perform or record the work directly.',
+    ],
+  },
+});
 
 function usage() {
   return [
@@ -52,8 +101,8 @@ function usage() {
     '',
     'Plan options:',
     '  --task <task-id>         Task to plan. If omitted, there must be exactly one ready task.',
-    '  --agent-tool <tool>      Implementer tool label: codex, claude, gemini, or manual. Default: codex.',
-    '  --reviewer-tool <tool>   Read-only reviewer/monitor tool label. Default: gemini.',
+    '  --agent-tool <tool>      Implementer tool label: codex, claude, or manual. Default: codex.',
+    '  --reviewer-tool <tool>   Read-only reviewer tool label: codex, claude, gemini, or manual. Default: same as --agent-tool.',
     '  --output <path>          Write plan JSON to a file. Without this, JSON is printed to stdout.',
     '  --json                   With --output, also print the JSON payload.',
     '',
@@ -87,7 +136,7 @@ function parseArgs(argv) {
     maintenance: false,
     taskId: null,
     agentTool: 'codex',
-    reviewerTool: 'gemini',
+    reviewerTool: null,
     output: null,
     plan: null,
     runtime: null,
@@ -194,6 +243,99 @@ function parseArgs(argv) {
 function parseAgentTool(value, optionName) {
   if (!AGENT_TOOLS.has(value)) throw new Error(`${optionName} must be one of ${[...AGENT_TOOLS].join(', ')}`);
   return value;
+}
+
+function providerCapabilityList() {
+  return Object.values(PROVIDER_CAPABILITIES).map((capability) => ({
+    ...capability,
+    roles: [...capability.roles],
+    officialFeatures: [...capability.officialFeatures],
+    restrictions: [...capability.restrictions],
+  }));
+}
+
+function assertProviderRoleCapability(role) {
+  const capability = PROVIDER_CAPABILITIES[role.agentTool];
+  if (!capability) throw new Error(`unknown provider: ${role.agentTool}`);
+  if (!capability.roles.includes(role.role)) {
+    throw new Error(`${role.agentTool} cannot serve ${role.role} in provider-native orchestration`);
+  }
+  if (role.requiresWrite && !capability.writeAllowed) {
+    throw new Error(`${role.agentTool} is read-only in P2A orchestration; use --agent-tool codex, claude, or manual for implementation and --reviewer-tool gemini for read-only review`);
+  }
+}
+
+function providerStrategyForRoles(roles) {
+  roles.forEach(assertProviderRoleCapability);
+  const implementer = roles.find((role) => role.roleId === 'implementer');
+  const reviewer = roles.find((role) => role.roleId === 'reviewer');
+  const implementationProvider = implementer?.agentTool ?? 'manual';
+  const reviewProvider = reviewer?.agentTool ?? null;
+  const hasDifferentProviderReviewer = reviewProvider && reviewProvider !== implementationProvider && reviewProvider !== 'manual';
+  const mode = implementationProvider === 'manual'
+    ? 'manual'
+    : hasDifferentProviderReviewer
+      ? 'single_provider_with_read_only_reviewer'
+      : 'single_provider';
+  const notes = [
+    'P2A coordinates role order, prompts, runtime state, and monitor gates only.',
+    'A human owner opens the official provider CLI/app in the foreground and records observed progress.',
+    'P2A does not run background loops, browser automation, unofficial APIs, token reuse, account rotation, or rate-limit bypass.',
+  ];
+  if (implementationProvider === 'codex') {
+    notes.push('Codex team execution uses skills, custom agents, and explicit subagent prompts; subagents must be requested in the prompt.');
+  } else if (implementationProvider === 'claude') {
+    notes.push('Claude team execution uses native agent teams/subagents when available and falls back to supervised role prompts when disabled.');
+  } else if (implementationProvider === 'manual') {
+    notes.push('Manual implementation means the owner performs the write-required role directly.');
+  }
+  if (reviewProvider === 'gemini') {
+    notes.push('Gemini is assigned only to read-only review or monitor support.');
+  }
+  if (mode === 'single_provider_with_read_only_reviewer') {
+    notes.push('Mixed-provider implementation remains disabled; the non-primary provider is read-only.');
+  }
+  return {
+    mode,
+    primaryProvider: implementationProvider,
+    implementationProvider,
+    reviewProvider,
+    monitorProvider: 'manual',
+    mixedProviderImplementation: false,
+    notes,
+  };
+}
+
+function providerPromptPrefix(agentTool) {
+  if (agentTool === 'codex') {
+    return [
+      'Provider strategy: Use Codex skills/custom agents and explicitly request subagents if role separation is needed.',
+      'Do not assume Codex will spawn subagents automatically.',
+    ];
+  }
+  if (agentTool === 'claude') {
+    return [
+      'Provider strategy: Use Claude Code agent teams/subagents when enabled.',
+      'If agent teams are unavailable, run this as a supervised foreground role prompt.',
+    ];
+  }
+  if (agentTool === 'gemini') {
+    return [
+      'Provider strategy: Use Gemini CLI only for read-only planning, review, or monitor support.',
+      'Do not edit files or perform write-required implementation in this role.',
+    ];
+  }
+  return [
+    'Provider strategy: Manual owner action in the foreground workspace.',
+  ];
+}
+
+function providerAwarePrompt(agentTool, basePrompt) {
+  return [
+    ...providerPromptPrefix(agentTool),
+    '',
+    basePrompt,
+  ].join('\n');
 }
 
 function parseEnumValue(value, allowedValues, optionName) {
@@ -406,13 +548,17 @@ function buildPlan(args, source, task, now = new Date()) {
   const riskFlags = buildRiskFlags(task);
   const mode = modeForRiskFlags(riskFlags);
   const monitorRequired = mode !== 'solo';
+  if (args.agentTool === 'gemini') {
+    throw new Error('Gemini is read-only in P2A orchestration; use --agent-tool codex, claude, or manual for implementation and --reviewer-tool gemini for read-only review');
+  }
+  const reviewerTool = args.reviewerTool ?? args.agentTool;
   const roles = [
     {
       roleId: 'owner',
       role: 'lead',
       agentTool: 'manual',
       scope: 'Own the run lifecycle, approvals, verification recording, and final task state transition.',
-      prompt: `Supervise ${task.id}, start the run with p2a_execute, and only finish after verification and monitor gate policy are satisfied.`,
+      prompt: providerAwarePrompt('manual', `Supervise ${task.id}, start the run with p2a_execute, and only finish after verification and monitor gate policy are satisfied.`),
       requiresWrite: false,
     },
     {
@@ -420,7 +566,7 @@ function buildPlan(args, source, task, now = new Date()) {
       role: 'contributor',
       agentTool: args.agentTool,
       scope: 'Implement the approved ready task in the selected workspace or isolated worktree.',
-      prompt: buildTaskPrompt(task),
+      prompt: providerAwarePrompt(args.agentTool, buildTaskPrompt(task)),
       requiresWrite: args.agentTool !== 'manual',
     },
   ];
@@ -428,9 +574,9 @@ function buildPlan(args, source, task, now = new Date()) {
     roles.push({
       roleId: 'reviewer',
       role: 'reviewer',
-      agentTool: args.reviewerTool,
+      agentTool: reviewerTool,
       scope: 'Read-only review of implementation scope, acceptance coverage, and verification evidence.',
-      prompt: buildMonitorPrompt(task),
+      prompt: providerAwarePrompt(reviewerTool, buildMonitorPrompt(task)),
       requiresWrite: false,
     });
   }
@@ -440,10 +586,11 @@ function buildPlan(args, source, task, now = new Date()) {
       role: 'monitor',
       agentTool: 'manual',
       scope: 'Owner-visible monitor gate that decides whether the run can close as done.',
-      prompt: buildMonitorPrompt(task),
+      prompt: providerAwarePrompt('manual', buildMonitorPrompt(task)),
       requiresWrite: false,
     });
   }
+  const providerStrategy = providerStrategyForRoles(roles);
 
   const handoffPrompts = roles.map((role) => ({
     roleId: role.roleId,
@@ -468,6 +615,8 @@ function buildPlan(args, source, task, now = new Date()) {
       name: 'p2a_orchestrate',
       version: 'mvp-1',
     },
+    providerStrategy,
+    providerCapabilities: providerCapabilityList(),
     roles,
     acceptanceCriteria: task.acceptanceCriteria,
     verificationPlan: [
@@ -969,6 +1118,7 @@ function printSummary(plan) {
   console.log(`- project: ${plan.projectId}`);
   console.log(`- task: ${plan.taskId} - ${plan.taskTitle}`);
   console.log(`- mode: ${plan.mode}`);
+  console.log(`- providerStrategy: ${plan.providerStrategy.mode} (${plan.providerStrategy.primaryProvider})`);
   console.log(`- monitorGate: ${plan.monitorGate.required ? plan.monitorGate.verdictPath : 'not required'}`);
   console.log(`- roles: ${plan.roles.map((role) => `${role.roleId}:${role.agentTool}`).join(', ')}`);
   console.log(`- riskFlags: ${plan.riskFlags.join(', ') || '-'}`);
