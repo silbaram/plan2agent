@@ -19,6 +19,7 @@ const SCHEMA_PATHS = {
   orchestration_plan: path.join(ROOT, 'schemas', 'orchestration-plan.schema.json'),
   skill_proposal: path.join(ROOT, 'schemas', 'skill-proposal.schema.json'),
   proposal_review: path.join(ROOT, 'schemas', 'proposal-review.schema.json'),
+  proposal_curation: path.join(ROOT, 'schemas', 'proposal-curation.schema.json'),
 };
 const GATE_PATHS = {
   statusDoc: 'status.md',
@@ -653,6 +654,45 @@ export function validateProposalReview(filePath) {
   return validateProposalReviewData(loadJson(filePath));
 }
 
+export function validateProposalCurationData(data) {
+  validateSchema(data, loadJson(SCHEMA_PATHS.proposal_curation));
+  if (data.summary.totalCandidates !== data.candidates.length) {
+    throw new ValidationError('proposal curation summary.totalCandidates must match candidates length');
+  }
+  const readinessTotal = Object.values(data.summary.byReadiness).reduce((sum, count) => sum + count, 0);
+  if (readinessTotal !== data.summary.totalCandidates) {
+    throw new ValidationError('proposal curation summary.byReadiness must sum to totalCandidates');
+  }
+  const dispositionTotal = Object.values(data.summary.byRecommendedDisposition).reduce((sum, count) => sum + count, 0);
+  if (dispositionTotal !== data.summary.totalCandidates) {
+    throw new ValidationError('proposal curation summary.byRecommendedDisposition must sum to totalCandidates');
+  }
+  const candidateIds = data.candidates.map((candidate) => candidate.candidateId);
+  if (candidateIds.length !== new Set(candidateIds).size) {
+    throw new ValidationError('proposal curation candidateId values must be unique');
+  }
+  const groupIds = data.candidates.map((candidate) => candidate.groupId);
+  if (groupIds.length !== new Set(groupIds).size) {
+    throw new ValidationError('proposal curation groupId values must be unique');
+  }
+  for (const candidate of data.candidates) {
+    validateNonBlankStrings(candidate.proposalIds, `${candidate.candidateId}.proposalIds`);
+    validateNonBlankStrings(candidate.targetFiles, `${candidate.candidateId}.targetFiles`);
+    validateNonBlankStrings(candidate.sourceRunIds, `${candidate.candidateId}.sourceRunIds`);
+    if (candidate.frequency !== candidate.proposalIds.length) {
+      throw new ValidationError(`${candidate.candidateId}.frequency must match proposalIds length`);
+    }
+    if (candidate.recommendedDisposition === 'approve' && candidate.readiness !== 'patch_candidate') {
+      throw new ValidationError(`${candidate.candidateId}.readiness must be patch_candidate when recommendedDisposition is approve`);
+    }
+  }
+  return data;
+}
+
+export function validateProposalCuration(filePath) {
+  return validateProposalCurationData(loadJson(filePath));
+}
+
 export function validateRunsDir(runsDir) {
   if (!existsSync(runsDir)) throw new ValidationError(`runs directory is missing: ${runsDir}`);
   if (!lstatSync(runsDir).isDirectory()) throw new ValidationError(`runs path must be a directory: ${runsDir}`);
@@ -941,6 +981,7 @@ function parseArgs(argv) {
     else if (arg === '--orchestration-plan') args.orchestrationPlan = argv[++index];
     else if (arg === '--skill-proposal') args.skillProposal = argv[++index];
     else if (arg === '--proposal-review') args.proposalReview = argv[++index];
+    else if (arg === '--proposal-curation') args.proposalCuration = argv[++index];
     else if (arg === '--proposals-dir') args.proposalsDir = argv[++index];
     else if (arg === '--require-approved-spec') args.requireApprovedSpec = argv[++index];
     else if (arg === '--require-handoff-ready') args.requireHandoffReady = true;
@@ -979,6 +1020,7 @@ export function main(argv = process.argv.slice(2)) {
     if (args.orchestrationPlan) validateOrchestrationPlan(args.orchestrationPlan);
     if (args.skillProposal) validateSkillProposal(args.skillProposal);
     if (args.proposalReview) validateProposalReview(args.proposalReview);
+    if (args.proposalCuration) validateProposalCuration(args.proposalCuration);
     if (args.proposalsDir) validateProposalsDir(args.proposalsDir);
     for (const fixtureDir of args.fixtureDir) validateFixtureDir(fixtureDir);
   } catch (error) {

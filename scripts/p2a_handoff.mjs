@@ -844,7 +844,7 @@ function pushTeamBigFiveAdapter(plan, targetRoot, args) {
 
 
 const SCAFFOLD_SCRIPT_FILES = ['p2a_iteration.mjs', 'p2a_tasks.mjs', 'p2a_runs.mjs', 'p2a_execute.mjs', 'p2a_orchestrate.mjs', 'p2a_proposals.mjs', 'p2a_run_paths.mjs', 'p2a_iteration_state.mjs', 'validate_artifacts.mjs'];
-const SCAFFOLD_SCHEMA_FILES = ['intake.schema.json', 'spec.schema.json', 'task-graph.schema.json', 'task-context.schema.json', 'review.schema.json', 'run.schema.json', 'run-index.schema.json', 'orchestration-plan.schema.json', 'skill-proposal.schema.json', 'proposal-review.schema.json'];
+const SCAFFOLD_SCHEMA_FILES = ['intake.schema.json', 'spec.schema.json', 'task-graph.schema.json', 'task-context.schema.json', 'review.schema.json', 'run.schema.json', 'run-index.schema.json', 'orchestration-plan.schema.json', 'skill-proposal.schema.json', 'proposal-review.schema.json', 'proposal-curation.schema.json'];
 
 
 function renderProjectGitignore() {
@@ -984,7 +984,7 @@ This repository owns its Plan2Agent planning and development loop in-place.
 
    - \`node scripts/p2a_execute.mjs plan|start|finish|status\`
    - \`node scripts/p2a_orchestrate.mjs plan|handoff\`
-   - \`node scripts/p2a_proposals.mjs mine|review|digest\`
+   - \`node scripts/p2a_proposals.mjs mine|review|curate|digest\`
    - \`node scripts/p2a_tasks.mjs ready|prompt|start|done\`
    - \`node scripts/p2a_runs.mjs start|verify|finish\`
 
@@ -1107,7 +1107,7 @@ function buildPlan(paths, args, artifactsRoot, targetRoot, sourceInfo, options =
   pushArtifact(plan, path.join(ROOT, 'scripts', 'p2a_run_paths.mjs'), targetRoot, path.join('scripts', 'p2a_run_paths.mjs'));
   pushArtifact(plan, path.join(ROOT, 'scripts', 'p2a_iteration_state.mjs'), targetRoot, path.join('scripts', 'p2a_iteration_state.mjs'));
   pushArtifact(plan, path.join(ROOT, 'scripts', 'validate_artifacts.mjs'), targetRoot, path.join('scripts', 'validate_artifacts.mjs'));
-  for (const schemaFile of ['intake.schema.json', 'spec.schema.json', 'task-graph.schema.json', 'task-context.schema.json', 'review.schema.json', 'run.schema.json', 'run-index.schema.json', 'orchestration-plan.schema.json', 'skill-proposal.schema.json', 'proposal-review.schema.json']) {
+  for (const schemaFile of ['intake.schema.json', 'spec.schema.json', 'task-graph.schema.json', 'task-context.schema.json', 'review.schema.json', 'run.schema.json', 'run-index.schema.json', 'orchestration-plan.schema.json', 'skill-proposal.schema.json', 'proposal-review.schema.json', 'proposal-curation.schema.json']) {
     pushArtifact(plan, path.join(ROOT, 'schemas', schemaFile), targetRoot, path.join('schemas', schemaFile));
   }
   const toolAssetPlan = pushToolAssets(plan, targetRoot, args.tools);
@@ -1597,6 +1597,7 @@ function printNextSteps(targetRoot) {
   console.log('      node scripts/p2a_execute.mjs finish --graph .plan2agent/artifacts/task-graph.json --run-id <run-id> --test --lint --typecheck');
   console.log('      node scripts/p2a_proposals.mjs mine --graph .plan2agent/artifacts/task-graph.json');
   console.log('      node scripts/p2a_proposals.mjs review --proposals .plan2agent/proposals');
+  console.log('      node scripts/p2a_proposals.mjs curate --review .plan2agent/proposals/reviews/<review-id>.json');
 
   try {
     const config = JSON.parse(readFileSync(path.join(targetRoot, '.plan2agent', 'project.config.json'), 'utf8'));
