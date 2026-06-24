@@ -13,6 +13,7 @@ const ROOT = path.resolve(path.dirname(__filename), '..');
 const COMMANDS = new Set(['plan', 'show', 'validate', 'handoff']);
 const AGENT_TOOLS = new Set(['codex', 'claude', 'gemini', 'manual']);
 const DEFAULT_HANDOFF_GRAPH = path.join('.plan2agent', 'artifacts', 'task-graph.json');
+const HIGH_ACCEPTANCE_MONITOR_THRESHOLD = 6;
 
 function usage() {
   return [
@@ -218,12 +219,16 @@ function selectReadyTask(source, taskId = null) {
 function buildRiskFlags(task) {
   const flags = [];
   const targetArea = String(task.targetArea ?? '');
-  if (/[,+/]| and |&/i.test(targetArea)) flags.push('multi_area');
-  if (task.acceptanceCriteria.length >= 4) flags.push('high_acceptance_count');
+  if (hasExplicitMultiArea(targetArea)) flags.push('multi_area');
+  if (task.acceptanceCriteria.length >= HIGH_ACCEPTANCE_MONITOR_THRESHOLD) flags.push('high_acceptance_count');
   if (task.dependencies.length >= 2) flags.push('dependency_heavy');
-  if (flags.length) flags.push('monitor_required');
-  if (flags.includes('multi_area') || flags.includes('high_acceptance_count')) flags.push('reviewer_recommended', 'read_only_reviewer');
+  if (flags.includes('multi_area') || flags.includes('high_acceptance_count')) flags.push('monitor_required');
+  if (flags.includes('multi_area')) flags.push('reviewer_recommended', 'read_only_reviewer');
   return [...new Set(flags)];
+}
+
+function hasExplicitMultiArea(targetArea) {
+  return /[,+&]/.test(targetArea) || /\band\b/i.test(targetArea);
 }
 
 function modeForRiskFlags(flags) {
@@ -346,7 +351,7 @@ function buildPlan(args, source, task, now = new Date()) {
     handoffPrompts,
     monitorGate: {
       required: monitorRequired,
-      verdictPath: monitorRequired ? 'runs/{runId}.monitor-verdict.json' : null,
+      verdictPath: monitorRequired ? '{runId}.monitor-verdict.json' : null,
       acceptedVerdicts: monitorRequired ? ['confirm_done'] : [],
       failureClassMap: {
         block: 'implementation_incomplete',

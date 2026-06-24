@@ -222,6 +222,7 @@ MVP 연결:
 | --- | --- |
 | orchestration plan 저장 위치 | `runs/<runId>.orchestration.json`. task graph/run schema는 변경하지 않음 |
 | MVP planner | deterministic CLI heuristic |
+| triage 기본값 | `targetArea`의 명시 다중 영역(comma/plus/ampersand/`and`)은 `team`, acceptance criteria 6개 이상은 `solo_monitor`, 의존성 2개 이상은 risk flag만 기록하고 monitor gate를 강제하지 않음 |
 | orchestrator agent 역할 | plan review/proposal. 자동 적용 없음 |
 | team mode 기본 agent | Codex contributor + monitor. Claude는 사용자가 선택한 경우 |
 | Gemini 역할 | read-only reviewer/planner |

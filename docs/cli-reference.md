@@ -206,6 +206,8 @@ node scripts/p2a_execute.mjs start \
 
 `p2a_orchestrate.mjs`는 ready task 1건을 대상으로 deterministic heuristic을 적용해 `solo`, `solo_monitor`, `team` 중 하나의 실행 계획을 만든다. 이 도구는 agent를 자동 실행하지 않는다. owner가 foreground agent 세션을 열고, 생성된 role prompt와 monitor gate를 보며 감독형으로 실행한다.
 
+`team` mode는 명시적인 다중 영역 task에만 보수적으로 추천한다. `targetArea`에서 복수 영역을 의도할 때는 `api+ui`, `api,ui`, `api&ui`, `api and ui`처럼 comma/plus/ampersand/`and`를 쓴다. `auth/login` 같은 slash 표기는 단일 영역 label로 취급한다.
+
 ```bash
 node scripts/p2a_orchestrate.mjs plan \
   --graph .plan2agent/artifacts/task-graph.json \

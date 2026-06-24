@@ -665,6 +665,84 @@ function validateIterationCurrentFixtureCases() {
         writeResultOutput(result);
         return { status: failureStatus(result), checks };
       }
+      const executeOrchestrationPlan = JSON.parse(readFileSync(executeOrchestrationPlanPath, 'utf8'));
+      if (
+        executeOrchestrationPlan.mode !== 'solo'
+        || executeOrchestrationPlan.monitorGate.required
+        || executeOrchestrationPlan.monitorGate.verdictPath !== null
+      ) {
+        console.error(`p2a_orchestrate default fixture should stay solo: ${caseData.id}`);
+        console.error(JSON.stringify({ executeOrchestrationPlan }, null, 2));
+        return { status: 1, checks };
+      }
+
+      const executeSlashGraphPath = path.join(tempRoot, 'p2a-orchestrate-slash-area', 'gate-c-task-graph', 'task-graph.json');
+      mkdirSync(path.dirname(executeSlashGraphPath), { recursive: true });
+      const executeSlashGraph = JSON.parse(readFileSync(state.taskGraphPath, 'utf8'));
+      executeSlashGraph.tasks.find((task) => task.id === 'task-001').targetArea = 'auth/login';
+      writeFileSync(executeSlashGraphPath, `${JSON.stringify(executeSlashGraph, null, 2)}\n`, 'utf8');
+      const executeSlashPlanPath = path.join(tempRoot, 'p2a-orchestrate-slash-area', 'orchestration', 'task-001.json');
+      result = runOrchestrate([
+        'plan',
+        '--graph',
+        executeSlashGraphPath,
+        '--spec',
+        state.specPath,
+        '--task',
+        'task-001',
+        '--output',
+        executeSlashPlanPath,
+      ]);
+      checks += 1;
+      if (result.status !== 0) {
+        console.error(`p2a_orchestrate slash targetArea fixture failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: failureStatus(result), checks };
+      }
+      const executeSlashPlan = JSON.parse(readFileSync(executeSlashPlanPath, 'utf8'));
+      if (executeSlashPlan.mode !== 'solo' || executeSlashPlan.riskFlags.includes('multi_area')) {
+        console.error(`p2a_orchestrate slash targetArea fixture produced multi-area false positive: ${caseData.id}`);
+        console.error(JSON.stringify({ executeSlashPlan }, null, 2));
+        return { status: 1, checks };
+      }
+
+      const executeDependencyGraphPath = path.join(tempRoot, 'p2a-orchestrate-dependency-risk', 'gate-c-task-graph', 'task-graph.json');
+      mkdirSync(path.dirname(executeDependencyGraphPath), { recursive: true });
+      const executeDependencyGraph = JSON.parse(readFileSync(state.taskGraphPath, 'utf8'));
+      executeDependencyGraph.tasks.find((task) => task.id === 'task-001').status = 'done';
+      executeDependencyGraph.tasks.find((task) => task.id === 'task-002').status = 'done';
+      const executeDependencyTask = executeDependencyGraph.tasks.find((task) => task.id === 'task-003');
+      executeDependencyTask.dependencies = ['task-001', 'task-002'];
+      executeDependencyTask.status = 'todo';
+      writeFileSync(executeDependencyGraphPath, `${JSON.stringify(executeDependencyGraph, null, 2)}\n`, 'utf8');
+      const executeDependencyPlanPath = path.join(tempRoot, 'p2a-orchestrate-dependency-risk', 'orchestration', 'task-003.json');
+      result = runOrchestrate([
+        'plan',
+        '--graph',
+        executeDependencyGraphPath,
+        '--spec',
+        state.specPath,
+        '--task',
+        'task-003',
+        '--output',
+        executeDependencyPlanPath,
+      ]);
+      checks += 1;
+      if (result.status !== 0) {
+        console.error(`p2a_orchestrate dependency risk fixture failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: failureStatus(result), checks };
+      }
+      const executeDependencyPlan = JSON.parse(readFileSync(executeDependencyPlanPath, 'utf8'));
+      if (
+        executeDependencyPlan.mode !== 'solo'
+        || executeDependencyPlan.monitorGate.required
+        || !executeDependencyPlan.riskFlags.includes('dependency_heavy')
+      ) {
+        console.error(`p2a_orchestrate dependency risk fixture should not require monitor gate: ${caseData.id}`);
+        console.error(JSON.stringify({ executeDependencyPlan }, null, 2));
+        return { status: 1, checks };
+      }
 
       result = runExecute([
         'start',
@@ -736,7 +814,7 @@ function validateIterationCurrentFixtureCases() {
       mkdirSync(path.dirname(executeMonitorGraphPath), { recursive: true });
       const executeMonitorGraph = JSON.parse(readFileSync(state.taskGraphPath, 'utf8'));
       const executeMonitorTask = executeMonitorGraph.tasks.find((task) => task.id === 'task-001');
-      executeMonitorTask.targetArea = 'api/ui';
+      executeMonitorTask.targetArea = 'api+ui';
       executeMonitorTask.acceptanceCriteria.push('Monitor gate fixture coverage is recorded.');
       writeFileSync(executeMonitorGraphPath, `${JSON.stringify(executeMonitorGraph, null, 2)}\n`, 'utf8');
       const executeMonitorPlanPath = path.join(tempRoot, 'p2a-execute-monitor', 'orchestration', 'task-001.json');
@@ -756,6 +834,16 @@ function validateIterationCurrentFixtureCases() {
         console.error(`p2a_orchestrate monitor fixture plan failed: ${caseData.id}`);
         writeResultOutput(result);
         return { status: failureStatus(result), checks };
+      }
+      const executeMonitorPlan = JSON.parse(readFileSync(executeMonitorPlanPath, 'utf8'));
+      if (
+        executeMonitorPlan.mode !== 'team'
+        || !executeMonitorPlan.monitorGate.required
+        || !executeMonitorPlan.riskFlags.includes('multi_area')
+      ) {
+        console.error(`p2a_orchestrate monitor fixture should use explicit multi-area team mode: ${caseData.id}`);
+        console.error(JSON.stringify({ executeMonitorPlan }, null, 2));
+        return { status: 1, checks };
       }
 
       result = runExecute([
