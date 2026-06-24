@@ -47,6 +47,12 @@ const elements = {
   artifactPath: document.querySelector('#artifact-path'),
   artifactMeta: document.querySelector('#artifact-meta'),
   artifactContent: document.querySelector('#artifact-content'),
+  terminalState: document.querySelector('#terminal-state'),
+  terminalTitle: document.querySelector('#terminal-title'),
+  terminalCwd: document.querySelector('#terminal-cwd'),
+  terminalAgent: document.querySelector('#terminal-agent'),
+  terminalTask: document.querySelector('#terminal-task'),
+  terminalPreview: document.querySelector('#terminal-preview'),
   inspectorArtifact: document.querySelector('#inspector-artifact'),
   inspectorRuns: document.querySelector('#inspector-runs'),
   inspectorUpdated: document.querySelector('#inspector-updated'),
@@ -93,6 +99,14 @@ const stateMeta = {
     badge: 'repair',
     tone: 'error',
   },
+};
+
+const viewShortcuts = {
+  1: 'overview',
+  2: 'tasks',
+  3: 'runs',
+  4: 'artifacts',
+  5: 'terminal',
 };
 
 let currentPayload = {
@@ -195,6 +209,7 @@ function render(payload) {
   renderArtifactList(artifactCatalog.documents ?? []);
   renderTaskDetailList(taskCatalog.tasks ?? []);
   renderRunDetailList(runCatalog.runs ?? []);
+  renderTerminalPlaceholder(inspection);
 
   elements.inspectorArtifact.textContent = shortPath(inspection?.displayPaths?.artifactRoot);
   elements.inspectorRuns.textContent = `${inspection?.runs?.total ?? 0}`;
@@ -213,7 +228,7 @@ function render(payload) {
 }
 
 function setActiveView(view) {
-  activeView = ['artifacts', 'tasks', 'runs'].includes(view) ? view : 'overview';
+  activeView = ['artifacts', 'tasks', 'runs', 'terminal'].includes(view) ? view : 'overview';
   for (const button of elements.railItems) {
     const isActive = button.dataset.view === activeView;
     button.classList.toggle('active', isActive);
@@ -288,6 +303,7 @@ function renderRunDetailList(runs) {
   for (const run of runs) {
     const button = document.createElement('button');
     button.type = 'button';
+    button.dataset.runId = run.runId;
     button.className = `run-detail-row ${run.runId === selectedRunId ? 'active' : ''}`;
     button.title = `${run.runId} · ${run.taskId}`;
     button.addEventListener('click', () => selectRun(run.runId));
@@ -449,6 +465,7 @@ function renderTaskDetailList(tasks) {
   for (const task of tasks) {
     const button = document.createElement('button');
     button.type = 'button';
+    button.dataset.taskId = task.id;
     button.className = `task-detail-row ${task.id === selectedTaskId ? 'active' : ''}`;
     button.title = `${task.id} · ${task.title}`;
     button.addEventListener('click', () => selectTask(task.id));
@@ -562,6 +579,7 @@ function renderArtifactList(documents) {
   for (const artifact of documents) {
     const button = document.createElement('button');
     button.type = 'button';
+    button.dataset.artifactId = artifact.id;
     button.className = `artifact-row ${artifact.id === selectedArtifactId ? 'active' : ''}`;
     button.title = artifact.displayPath ?? artifact.path;
     button.addEventListener('click', () => selectArtifact(artifact.id));
@@ -583,6 +601,124 @@ function renderArtifactList(documents) {
     button.append(main, group);
     elements.artifactList.append(button);
   }
+}
+
+function renderTerminalPlaceholder(inspection) {
+  const agentTool = inspection?.defaultAgentTool ?? 'codex';
+  const projectRoot = inspection?.displayPaths?.projectRoot ?? currentPayload.projectPath;
+  const task = taskItems().find((item) => item.ready) ?? taskItems()[0];
+  const taskLabel = task ? `${task.id} · ${task.title}` : '-';
+
+  elements.terminalState.textContent = inspection ? 'read-only' : 'not connected';
+  elements.terminalTitle.textContent = inspection ? 'PTY not connected' : 'No project';
+  elements.terminalCwd.textContent = shortPath(projectRoot);
+  elements.terminalCwd.title = text(projectRoot);
+  elements.terminalAgent.textContent = agentTool;
+  elements.terminalTask.textContent = taskLabel;
+  elements.terminalTask.title = taskLabel;
+  elements.terminalPreview.textContent = [
+    `cwd   ${text(projectRoot)}`,
+    `agent ${agentTool}`,
+    `task  ${taskLabel}`,
+    'pty   not connected',
+  ].join('\n');
+}
+
+function isTextEditingTarget(target) {
+  if (!target || !(target instanceof HTMLElement)) return false;
+  return ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName) || target.isContentEditable;
+}
+
+function activeListConfig() {
+  if (activeView === 'artifacts') {
+    return {
+      rowSelector: '.artifact-row',
+      idAttribute: 'artifactId',
+      selectedId: selectedArtifactId,
+      select: selectArtifact,
+    };
+  }
+  if (activeView === 'tasks') {
+    return {
+      rowSelector: '.task-detail-row',
+      idAttribute: 'taskId',
+      selectedId: selectedTaskId,
+      select: selectTask,
+    };
+  }
+  if (activeView === 'runs') {
+    return {
+      rowSelector: '.run-detail-row',
+      idAttribute: 'runId',
+      selectedId: selectedRunId,
+      select: selectRun,
+    };
+  }
+  return null;
+}
+
+function activeListRows(config) {
+  if (!config) return [];
+  return [...document.querySelectorAll(config.rowSelector)];
+}
+
+function selectedListIndex(config, rows) {
+  const focusedIndex = rows.findIndex((row) => row === document.activeElement);
+  if (focusedIndex >= 0) return focusedIndex;
+  const selectedIndex = rows.findIndex((row) => row.dataset[config.idAttribute] === config.selectedId);
+  return selectedIndex >= 0 ? selectedIndex : 0;
+}
+
+function focusActiveListRow() {
+  const config = activeListConfig();
+  const rows = activeListRows(config);
+  if (!rows.length) return;
+  const index = selectedListIndex(config, rows);
+  rows[index]?.focus();
+}
+
+function handleListNavigation(event) {
+  if (!['ArrowUp', 'ArrowDown', 'Enter'].includes(event.key) || isTextEditingTarget(event.target)) return;
+  const config = activeListConfig();
+  const rows = activeListRows(config);
+  if (!config || !rows.length) return;
+
+  const panel = document.querySelector(`[data-view-panel="${activeView}"]`);
+  const target = event.target instanceof HTMLElement ? event.target : null;
+  const isInsidePanel = target ? panel?.contains(target) : false;
+  const isInsideRail = target?.closest?.('.activity-rail');
+  if (!isInsidePanel && !isInsideRail && target !== document.body) return;
+
+  const currentIndex = selectedListIndex(config, rows);
+  if (event.key === 'Enter') {
+    const row = rows[currentIndex];
+    const id = row?.dataset[config.idAttribute];
+    if (!id) return;
+    event.preventDefault();
+    config.select(id);
+    requestAnimationFrame(focusActiveListRow);
+    return;
+  }
+
+  event.preventDefault();
+  const direction = event.key === 'ArrowDown' ? 1 : -1;
+  const nextIndex = Math.max(0, Math.min(rows.length - 1, currentIndex + direction));
+  const nextRow = rows[nextIndex];
+  const nextId = nextRow?.dataset[config.idAttribute];
+  if (!nextId) return;
+  config.select(nextId);
+  requestAnimationFrame(focusActiveListRow);
+}
+
+function handleKeyboard(event) {
+  const shortcutView = viewShortcuts[event.key];
+  if ((event.metaKey || event.ctrlKey) && !event.altKey && !event.shiftKey && shortcutView) {
+    event.preventDefault();
+    setActiveView(shortcutView);
+    requestAnimationFrame(focusActiveListRow);
+    return;
+  }
+  handleListNavigation(event);
 }
 
 function renderArtifactEmpty(title, detail) {
@@ -779,6 +915,7 @@ async function copyText(value) {
 }
 
 async function boot() {
+  document.addEventListener('keydown', handleKeyboard);
   for (const button of elements.railItems) {
     button.addEventListener('click', () => setActiveView(button.dataset.view));
   }

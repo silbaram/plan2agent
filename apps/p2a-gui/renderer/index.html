@@ -27,11 +27,11 @@
 
       <div class="workbench">
         <nav class="activity-rail" aria-label="Primary">
-          <button class="rail-item active" type="button" data-view="overview" aria-pressed="true">OV</button>
-          <button class="rail-item" type="button" data-view="tasks" aria-pressed="false">TK</button>
-          <button class="rail-item" type="button" data-view="runs" aria-pressed="false">RN</button>
-          <button class="rail-item" type="button" data-view="artifacts" aria-pressed="false">AR</button>
-          <button class="rail-item" type="button" data-view="terminal" aria-pressed="false">TE</button>
+          <button class="rail-item active" type="button" data-view="overview" aria-label="Overview" title="Overview" aria-pressed="true">OV</button>
+          <button class="rail-item" type="button" data-view="tasks" aria-label="Tasks" title="Tasks" aria-pressed="false">TK</button>
+          <button class="rail-item" type="button" data-view="runs" aria-label="Runs" title="Runs" aria-pressed="false">RN</button>
+          <button class="rail-item" type="button" data-view="artifacts" aria-label="Artifacts" title="Artifacts" aria-pressed="false">AR</button>
+          <button class="rail-item" type="button" data-view="terminal" aria-label="Terminal" title="Terminal" aria-pressed="false">TE</button>
         </nav>
 
         <aside class="sidebar">
@@ -211,6 +211,36 @@
                     <div id="run-detail-notes" class="note-list"></div>
                   </section>
                 </article>
+              </div>
+            </section>
+          </section>
+
+          <section id="terminal-view" class="view-panel" data-view-panel="terminal" hidden>
+            <section class="surface terminal-workbench">
+              <div class="surface-head">
+                <h2>Terminal</h2>
+                <span id="terminal-state" class="surface-meta">not connected</span>
+              </div>
+              <div class="terminal-layout">
+                <section class="terminal-summary">
+                  <p class="eyebrow">Session scope</p>
+                  <h1 id="terminal-title">No PTY session</h1>
+                  <dl class="terminal-meta-list">
+                    <div>
+                      <dt>cwd</dt>
+                      <dd id="terminal-cwd">-</dd>
+                    </div>
+                    <div>
+                      <dt>agent</dt>
+                      <dd id="terminal-agent">codex</dd>
+                    </div>
+                    <div>
+                      <dt>task</dt>
+                      <dd id="terminal-task">-</dd>
+                    </div>
+                  </dl>
+                </section>
+                <pre id="terminal-preview" class="terminal-preview">not connected</pre>
               </div>
             </section>
           </section>
