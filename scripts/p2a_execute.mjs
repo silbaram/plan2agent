@@ -1,12 +1,12 @@
 #!/usr/bin/env node
 /** Supervise one Plan2Agent task lifecycle with the existing task/run CLIs. */
 
-import { existsSync, lstatSync, readFileSync, realpathSync } from 'node:fs';
+import { existsSync, lstatSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { loadJson, validateRunData, validateTaskGraphData, ValidationError } from './validate_artifacts.mjs';
+import { loadJson, validateOrchestrationPlanData, validateRunData, validateTaskGraphData, ValidationError } from './validate_artifacts.mjs';
 import { resolveIterationState } from './p2a_iteration_state.mjs';
 import { resolveRunsDir } from './p2a_run_paths.mjs';
 
@@ -52,6 +52,7 @@ function usage() {
     '  --worktree <path>    Worktree to record/create.',
     '  --base-ref <ref>     Git base ref for --create-isolation. Default: HEAD.',
     '  --create-isolation   Ask p2a_runs.mjs to create the branch/worktree before run start.',
+    '  --orchestration-plan <path>  Attach a p2a_orchestrate.mjs plan to the run sidecar.',
     '',
     'Finish/verification options:',
     '  --test, --lint, --typecheck',
@@ -92,6 +93,7 @@ function parseArgs(argv) {
     worktree: null,
     baseRef: 'HEAD',
     createIsolation: false,
+    orchestrationPlan: null,
     changedFiles: [],
     notes: [],
     verifyOptions: [],
@@ -124,6 +126,7 @@ function parseArgs(argv) {
     else if (arg === '--worktree') args.worktree = requiredValue(argv, ++index, '--worktree');
     else if (arg === '--base-ref') args.baseRef = requiredValue(argv, ++index, '--base-ref');
     else if (arg === '--create-isolation') args.createIsolation = true;
+    else if (arg === '--orchestration-plan') args.orchestrationPlan = requiredValue(argv, ++index, '--orchestration-plan');
     else if (arg === '--changed-file') args.changedFiles.push(requiredValue(argv, ++index, '--changed-file'));
     else if (arg === '--note') args.notes.push(requiredValue(argv, ++index, '--note'));
     else if (arg === '--test') args.verifyOptions.push('--test');
@@ -168,6 +171,9 @@ function parseArgs(argv) {
   if (args.command === 'status' && !args.taskId && !args.runId) throw new Error('--task or --run-id is required for status');
   if ((args.command === 'plan' || args.command === 'status') && args.verifyOptions.length) {
     throw new Error('verification options are only supported with finish');
+  }
+  if (args.orchestrationPlan && args.command !== 'start') {
+    throw new Error('--orchestration-plan is only supported with start');
   }
   if (args.command !== 'finish' && (args.status || args.failureClass || args.retryable || args.needsUserDecision !== null || args.failureSource || args.collectGit)) {
     throw new Error('finish options are only supported with finish');
@@ -465,6 +471,80 @@ function runPath(runsDir, runId) {
   return path.join(runsDir, `${runId}.json`);
 }
 
+function orchestrationSidecarPath(runsDir, runId) {
+  assertSafeRunId(runId);
+  return path.join(runsDir, `${runId}.orchestration.json`);
+}
+
+function readOrchestrationPlan(filePath) {
+  assertFile(filePath, 'orchestration plan');
+  return validateOrchestrationPlanData(loadJson(filePath));
+}
+
+function validateOrchestrationPlanForTask(plan, source, task) {
+  if (plan.projectId !== source.projectId) {
+    throw new Error(`orchestration plan projectId ${JSON.stringify(plan.projectId)} does not match source project ${JSON.stringify(source.projectId)}`);
+  }
+  if (plan.taskId !== task.id) {
+    throw new Error(`orchestration plan taskId ${JSON.stringify(plan.taskId)} does not match selected task ${JSON.stringify(task.id)}`);
+  }
+}
+
+function readOrchestrationSidecar(runsDir, runId) {
+  const filePath = orchestrationSidecarPath(runsDir, runId);
+  if (!existsSync(filePath)) return null;
+  assertFile(filePath, `${runId}.orchestration.json`);
+  return validateOrchestrationPlanData(loadJson(filePath));
+}
+
+function attachOrchestrationPlan(plan, source, runId) {
+  if (!plan) return null;
+  const sidecarRef = `${runId}.orchestration.json`;
+  const verdictRef = `${runId}.monitor-verdict.json`;
+  const sidecar = {
+    ...plan,
+    monitorGate: {
+      ...plan.monitorGate,
+      verdictPath: plan.monitorGate.required ? verdictRef : null,
+    },
+    runLink: {
+      runId,
+      sidecarRef,
+    },
+  };
+  validateOrchestrationPlanData(sidecar);
+  const filePath = orchestrationSidecarPath(source.runsDir, runId);
+  writeFileSync(filePath, `${JSON.stringify(sidecar, null, 2)}\n`, 'utf8');
+  return filePath;
+}
+
+function readMonitorVerdict(source, sidecar) {
+  if (!sidecar?.monitorGate?.required) return null;
+  const verdictPath = path.resolve(source.runsDir, sidecar.monitorGate.verdictPath);
+  assertFile(verdictPath, 'monitor verdict');
+  const data = loadJson(verdictPath);
+  const verdict = typeof data === 'string' ? data : data?.verdict;
+  if (!verdict || typeof verdict !== 'string') {
+    throw new Error(`monitor verdict must be a JSON string or object with a verdict field: ${displayPath(verdictPath)}`);
+  }
+  return verdict;
+}
+
+function applyMonitorGate(args, source) {
+  const sidecar = readOrchestrationSidecar(source.runsDir, args.runId);
+  if (!sidecar?.monitorGate?.required) return null;
+  const verdict = readMonitorVerdict(source, sidecar);
+  if (sidecar.monitorGate.acceptedVerdicts.includes(verdict)) {
+    return { sidecar, verdict, accepted: true };
+  }
+  const mappedFailureClass = sidecar.monitorGate.failureClassMap[verdict] ?? 'other';
+  if (!args.status || args.status === 'finished') args.status = 'blocked';
+  if (!args.failureClass) args.failureClass = mappedFailureClass;
+  if (!args.failureSource) args.failureSource = 'monitor';
+  if (args.needsUserDecision === null && verdict === 'needs_user_decision') args.needsUserDecision = 'true';
+  return { sidecar, verdict, accepted: false, failureClass: args.failureClass };
+}
+
 function readRun(runsDir, runId) {
   const filePath = runPath(runsDir, runId);
   assertFile(filePath, runId);
@@ -494,6 +574,7 @@ function printExecutionPlan(args, source, task, runId = null, defaults = null) {
     if (defaults.branch) console.log(`- branch: ${defaults.branch}`);
     if (defaults.worktree) console.log(`- worktree: ${displayPath(defaults.worktree)}`);
   }
+  if (args.orchestrationPlan) console.log(`- orchestrationPlan: ${displayPath(path.resolve(args.orchestrationPlan))}`);
   console.log('');
   console.log('Lifecycle:');
   console.log('1. start: create run and mark the task in_progress');
@@ -510,6 +591,7 @@ function printExecutionPlan(args, source, task, runId = null, defaults = null) {
     args.agentTool,
   ];
   if (runId) startArgs.push('--run-id', runId);
+  if (args.orchestrationPlan) startArgs.push('--orchestration-plan', args.orchestrationPlan);
   console.log(`- ${commandLine('p2a_execute.mjs', startArgs)}`);
   if (runId) {
     console.log(`- ${commandLine('p2a_execute.mjs', ['finish', ...sourceRunArgs(args), '--run-id', runId, '--test', '--lint', '--typecheck'])}`);
@@ -564,6 +646,8 @@ function runStart(args) {
   const runId = args.runId ?? generatedRunId(task.id);
   assertSafeRunId(runId);
   const defaults = resolveStartDefaults(args, source, task, runId);
+  const orchestrationPlan = args.orchestrationPlan ? readOrchestrationPlan(path.resolve(args.orchestrationPlan)) : null;
+  if (orchestrationPlan) validateOrchestrationPlanForTask(orchestrationPlan, source, task);
 
   printExecutionPlan(args, source, task, runId, defaults);
   console.log('');
@@ -571,6 +655,8 @@ function runStart(args) {
   const runResult = runScript('p2a_runs.mjs', startRunArgs(args, task, runId, defaults));
   printChildResult(runResult);
   if (runResult.status !== 0) return runResult.status ?? 1;
+  const sidecarPath = attachOrchestrationPlan(orchestrationPlan, source, runId);
+  if (sidecarPath) console.log(`Attached orchestration sidecar: ${displayPath(sidecarPath)}`);
 
   console.log('');
   console.log('Marking task in_progress...');
@@ -611,6 +697,11 @@ function runStatus(args) {
   console.log(`- workspaceRef: ${run.workspaceRef}`);
   console.log(`- changedFiles: ${run.changedFiles.length}`);
   console.log(`- verification: ${run.verification.map((item) => `${item.type}:${item.status}`).join(', ') || '-'}`);
+  const sidecar = readOrchestrationSidecar(source.runsDir, runId);
+  if (sidecar) {
+    console.log(`- orchestration: ${sidecar.mode} ${sidecar.planId}`);
+    if (sidecar.monitorGate.required) console.log(`- monitorGate: ${sidecar.monitorGate.verdictPath}`);
+  }
   if (run.failure) console.log(`- failure: ${run.failure.class} retryable=${run.failure.retryable} needsUserDecision=${run.failure.needsUserDecision} source=${run.failure.source}`);
   return 0;
 }
@@ -623,6 +714,18 @@ function runFinish(args) {
     const verifyResult = runScript('p2a_runs.mjs', verifyRunArgs(args));
     printChildResult(verifyResult);
     verificationFailed = verifyResult.status !== 0;
+  }
+
+  const requestedBeforeMonitor = args.status ?? (verificationFailed ? 'failed' : null);
+  if (!verificationFailed && (!requestedBeforeMonitor || requestedBeforeMonitor === 'finished')) {
+    const monitorResult = applyMonitorGate(args, source);
+    if (monitorResult) {
+      if (monitorResult.accepted) {
+        console.log(`Monitor gate accepted: ${monitorResult.verdict}`);
+      } else {
+        console.log(`Monitor gate blocked finish: ${monitorResult.verdict} -> ${monitorResult.failureClass}`);
+      }
+    }
   }
 
   const requestedStatus = args.status ?? (verificationFailed ? 'failed' : null);

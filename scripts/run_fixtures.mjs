@@ -19,6 +19,7 @@ const ITERATION_CLI = path.join(ROOT, 'scripts', 'p2a_iteration.mjs');
 const TASKS_CLI = path.join(ROOT, 'scripts', 'p2a_tasks.mjs');
 const RUNS_CLI = path.join(ROOT, 'scripts', 'p2a_runs.mjs');
 const EXECUTE_CLI = path.join(ROOT, 'scripts', 'p2a_execute.mjs');
+const ORCHESTRATE_CLI = path.join(ROOT, 'scripts', 'p2a_orchestrate.mjs');
 const HANDOFF_CLI = path.join(ROOT, 'scripts', 'p2a_handoff.mjs');
 
 function runValidator(args) {
@@ -41,6 +42,10 @@ function runExecute(args) {
   return spawnSync(process.execPath, [EXECUTE_CLI, ...args], { cwd: ROOT, encoding: 'utf8' });
 }
 
+function runOrchestrate(args) {
+  return spawnSync(process.execPath, [ORCHESTRATE_CLI, ...args], { cwd: ROOT, encoding: 'utf8' });
+}
+
 function runHandoff(args) {
   return spawnSync(process.execPath, [HANDOFF_CLI, ...args], { cwd: ROOT, encoding: 'utf8' });
 }
@@ -55,6 +60,10 @@ function runTargetRuns(targetRoot, args) {
 
 function runTargetExecute(targetRoot, args) {
   return spawnSync(process.execPath, [path.join(targetRoot, 'scripts', 'p2a_execute.mjs'), ...args], { cwd: targetRoot, encoding: 'utf8' });
+}
+
+function runTargetOrchestrate(targetRoot, args) {
+  return spawnSync(process.execPath, [path.join(targetRoot, 'scripts', 'p2a_orchestrate.mjs'), ...args], { cwd: targetRoot, encoding: 'utf8' });
 }
 
 function runTargetIteration(targetRoot, args) {
@@ -153,9 +162,9 @@ function validateScaffoldFixtureCase() {
       return { status: failureStatus(result), checks };
     }
 
-    const expectedScripts = ['p2a_iteration.mjs', 'p2a_tasks.mjs', 'p2a_runs.mjs', 'p2a_execute.mjs', 'p2a_run_paths.mjs', 'p2a_iteration_state.mjs', 'validate_artifacts.mjs']
+    const expectedScripts = ['p2a_iteration.mjs', 'p2a_tasks.mjs', 'p2a_runs.mjs', 'p2a_execute.mjs', 'p2a_orchestrate.mjs', 'p2a_run_paths.mjs', 'p2a_iteration_state.mjs', 'validate_artifacts.mjs']
       .map((file) => path.join('scripts', file));
-    const expectedSchemas = ['intake.schema.json', 'spec.schema.json', 'task-graph.schema.json', 'task-context.schema.json', 'review.schema.json', 'run.schema.json', 'run-index.schema.json', 'skill-proposal.schema.json']
+    const expectedSchemas = ['intake.schema.json', 'spec.schema.json', 'task-graph.schema.json', 'task-context.schema.json', 'review.schema.json', 'run.schema.json', 'run-index.schema.json', 'orchestration-plan.schema.json', 'skill-proposal.schema.json']
       .map((file) => path.join('schemas', file));
     const expectedToolFiles = [
       path.join('.agents', 'skills', 'p2a-harness', 'SKILL.md'),
@@ -285,10 +294,12 @@ function validateE2eFixtureCases() {
         !existsSync(path.join(targetRoot, 'scripts', 'p2a_iteration_state.mjs'))
         || !existsSync(path.join(targetRoot, 'scripts', 'p2a_runs.mjs'))
         || !existsSync(path.join(targetRoot, 'scripts', 'p2a_execute.mjs'))
+        || !existsSync(path.join(targetRoot, 'scripts', 'p2a_orchestrate.mjs'))
         || !existsSync(path.join(targetRoot, 'scripts', 'p2a_run_paths.mjs'))
         || !existsSync(path.join(targetRoot, 'schemas', 'task-context.schema.json'))
         || !existsSync(path.join(targetRoot, 'schemas', 'run.schema.json'))
         || !existsSync(path.join(targetRoot, 'schemas', 'run-index.schema.json'))
+        || !existsSync(path.join(targetRoot, 'schemas', 'orchestration-plan.schema.json'))
         || !existsSync(path.join(targetRoot, 'schemas', 'skill-proposal.schema.json'))
         || existsSync(path.join(targetRoot, '.plan2agent', 'current-spec.json'))
       ) {
@@ -319,6 +330,14 @@ function validateE2eFixtureCases() {
       checks += 1;
       if (result.status !== 0 || !result.stdout.includes('Plan2Agent supervised task execution')) {
         console.error(`greenfield handoff target p2a_execute execution failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: failureStatus(result), checks };
+      }
+
+      result = runTargetOrchestrate(targetRoot, ['plan', '--graph', path.join(targetRoot, '.plan2agent', 'artifacts', 'task-graph.json'), '--task', 'task-001']);
+      checks += 1;
+      if (result.status !== 0 || !result.stdout.includes('"schema_version": "p2a.orchestration_plan.v1"')) {
+        console.error(`greenfield handoff target p2a_orchestrate execution failed: ${caseData.id}`);
         writeResultOutput(result);
         return { status: failureStatus(result), checks };
       }
@@ -356,12 +375,15 @@ function validateE2eFixtureCases() {
         || !toolManifest.includedTools.includes('p2a_gemini_assets')
         || !toolManifest.includedTools.includes('p2a_runs')
         || !toolManifest.includedTools.includes('p2a_execute')
+        || !toolManifest.includedTools.includes('p2a_orchestrate')
         || !toolManifest.toolFiles.includes('.agents/skills/p2a-harness/SKILL.md')
         || !toolManifest.toolFiles.includes('.gemini/commands/p2a/harness.toml')
         || !toolManifest.toolFiles.includes('scripts/p2a_runs.mjs')
         || !toolManifest.toolFiles.includes('scripts/p2a_execute.mjs')
+        || !toolManifest.toolFiles.includes('scripts/p2a_orchestrate.mjs')
         || !toolManifest.toolFiles.includes('scripts/p2a_run_paths.mjs')
         || !toolManifest.schemaFiles.includes('schemas/run.schema.json')
+        || !toolManifest.schemaFiles.includes('schemas/orchestration-plan.schema.json')
       ) {
         console.error(`greenfield handoff --tools output mismatch: ${caseData.id}`);
         console.error(JSON.stringify({ missingToolFiles, toolManifest }, null, 2));
@@ -617,6 +639,33 @@ function validateIterationCurrentFixtureCases() {
         return { status: failureStatus(result), checks };
       }
 
+      const executeOrchestrationPlanPath = path.join(tempRoot, 'p2a-execute', 'orchestration', 'task-001.json');
+      result = runOrchestrate([
+        'plan',
+        '--graph',
+        executeGraphPath,
+        '--spec',
+        state.specPath,
+        '--task',
+        'task-001',
+        '--output',
+        executeOrchestrationPlanPath,
+      ]);
+      checks += 1;
+      if (result.status !== 0 || !result.stdout.includes('Plan2Agent orchestration plan')) {
+        console.error(`p2a_orchestrate plan fixture check failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: failureStatus(result), checks };
+      }
+
+      result = runValidator(['--orchestration-plan', executeOrchestrationPlanPath]);
+      checks += 1;
+      if (result.status !== 0) {
+        console.error(`orchestration plan validator fixture check failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: failureStatus(result), checks };
+      }
+
       result = runExecute([
         'start',
         '--graph',
@@ -629,6 +678,8 @@ function validateIterationCurrentFixtureCases() {
         'run-execute-fixture',
         '--agent-tool',
         'codex',
+        '--orchestration-plan',
+        executeOrchestrationPlanPath,
         '--workspace',
         artifactRoot,
         '--workspace-ref',
@@ -639,6 +690,17 @@ function validateIterationCurrentFixtureCases() {
         console.error(`p2a_execute start fixture check failed: ${caseData.id}`);
         writeResultOutput(result);
         return { status: failureStatus(result), checks };
+      }
+
+      const executeSidecarPath = path.join(tempRoot, 'p2a-execute', 'runs', 'run-execute-fixture.orchestration.json');
+      const executeSidecar = JSON.parse(readFileSync(executeSidecarPath, 'utf8'));
+      if (executeSidecar.runLink.runId !== 'run-execute-fixture') {
+        console.error(`p2a_execute start did not attach orchestration sidecar: ${caseData.id}`);
+        console.error(JSON.stringify({ executeSidecar }, null, 2));
+        return { status: 1, checks };
+      }
+      if (executeSidecar.monitorGate.required) {
+        writeFileSync(path.join(tempRoot, 'p2a-execute', 'runs', executeSidecar.monitorGate.verdictPath), '{"verdict":"confirm_done"}\n', 'utf8');
       }
 
       result = runExecute([
@@ -667,6 +729,106 @@ function validateIterationCurrentFixtureCases() {
       ) {
         console.error(`p2a_execute finish wrote unexpected state: ${caseData.id}`);
         console.error(JSON.stringify({ executeFinishedGraph, executeFinishedRun }, null, 2));
+        return { status: 1, checks };
+      }
+
+      const executeMonitorGraphPath = path.join(tempRoot, 'p2a-execute-monitor', 'gate-c-task-graph', 'task-graph.json');
+      mkdirSync(path.dirname(executeMonitorGraphPath), { recursive: true });
+      const executeMonitorGraph = JSON.parse(readFileSync(state.taskGraphPath, 'utf8'));
+      const executeMonitorTask = executeMonitorGraph.tasks.find((task) => task.id === 'task-001');
+      executeMonitorTask.targetArea = 'api/ui';
+      executeMonitorTask.acceptanceCriteria.push('Monitor gate fixture coverage is recorded.');
+      writeFileSync(executeMonitorGraphPath, `${JSON.stringify(executeMonitorGraph, null, 2)}\n`, 'utf8');
+      const executeMonitorPlanPath = path.join(tempRoot, 'p2a-execute-monitor', 'orchestration', 'task-001.json');
+      result = runOrchestrate([
+        'plan',
+        '--graph',
+        executeMonitorGraphPath,
+        '--spec',
+        state.specPath,
+        '--task',
+        'task-001',
+        '--output',
+        executeMonitorPlanPath,
+      ]);
+      checks += 1;
+      if (result.status !== 0) {
+        console.error(`p2a_orchestrate monitor fixture plan failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: failureStatus(result), checks };
+      }
+
+      result = runExecute([
+        'start',
+        '--graph',
+        executeMonitorGraphPath,
+        '--spec',
+        state.specPath,
+        '--task',
+        'task-001',
+        '--run-id',
+        'run-execute-monitor-fixture',
+        '--agent-tool',
+        'codex',
+        '--orchestration-plan',
+        executeMonitorPlanPath,
+        '--workspace',
+        artifactRoot,
+        '--workspace-ref',
+        'fixture-workspace',
+      ]);
+      checks += 1;
+      if (result.status !== 0) {
+        console.error(`p2a_execute monitor fixture start failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: failureStatus(result), checks };
+      }
+
+      result = runExecute([
+        'finish',
+        '--graph',
+        executeMonitorGraphPath,
+        '--run-id',
+        'run-execute-monitor-fixture',
+      ]);
+      checks += 1;
+      const missingVerdictOutput = `${result.stdout ?? ''}${result.stderr ?? ''}`;
+      if (result.status === 0 || !missingVerdictOutput.includes('monitor verdict')) {
+        console.error(`p2a_execute monitor fixture did not require verdict: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: 1, checks };
+      }
+
+      const executeMonitorSidecar = JSON.parse(readFileSync(path.join(tempRoot, 'p2a-execute-monitor', 'runs', 'run-execute-monitor-fixture.orchestration.json'), 'utf8'));
+      if (!executeMonitorSidecar.monitorGate.required) {
+        console.error(`p2a_execute monitor fixture did not create required monitor gate: ${caseData.id}`);
+        console.error(JSON.stringify({ executeMonitorSidecar }, null, 2));
+        return { status: 1, checks };
+      }
+      writeFileSync(path.join(tempRoot, 'p2a-execute-monitor', 'runs', executeMonitorSidecar.monitorGate.verdictPath), '{"verdict":"unmet_acceptance"}\n', 'utf8');
+      result = runExecute([
+        'finish',
+        '--graph',
+        executeMonitorGraphPath,
+        '--run-id',
+        'run-execute-monitor-fixture',
+      ]);
+      checks += 1;
+      if (result.status !== 0 || !result.stdout.includes('Monitor gate blocked finish: unmet_acceptance -> implementation_incomplete')) {
+        console.error(`p2a_execute monitor fixture did not map blocked verdict: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: failureStatus(result), checks };
+      }
+      const executeMonitorFinishedGraph = JSON.parse(readFileSync(executeMonitorGraphPath, 'utf8'));
+      const executeMonitorFinishedRun = JSON.parse(readFileSync(path.join(tempRoot, 'p2a-execute-monitor', 'runs', 'run-execute-monitor-fixture.json'), 'utf8'));
+      if (
+        executeMonitorFinishedGraph.tasks.find((task) => task.id === 'task-001')?.status !== 'blocked'
+        || executeMonitorFinishedRun.status !== 'blocked'
+        || executeMonitorFinishedRun.failure?.class !== 'implementation_incomplete'
+        || executeMonitorFinishedRun.failure?.source !== 'monitor'
+      ) {
+        console.error(`p2a_execute monitor fixture wrote unexpected blocked state: ${caseData.id}`);
+        console.error(JSON.stringify({ executeMonitorFinishedGraph, executeMonitorFinishedRun }, null, 2));
         return { status: 1, checks };
       }
 
@@ -1691,7 +1853,9 @@ function validateIterationCurrentFixtureCases() {
         || !existsSync(path.join(iterationTargetRoot, 'scripts', 'p2a_iteration_state.mjs'))
         || !existsSync(path.join(iterationTargetRoot, 'scripts', 'p2a_runs.mjs'))
         || !existsSync(path.join(iterationTargetRoot, 'scripts', 'p2a_execute.mjs'))
+        || !existsSync(path.join(iterationTargetRoot, 'scripts', 'p2a_orchestrate.mjs'))
         || !existsSync(path.join(iterationTargetRoot, 'schemas', 'run-index.schema.json'))
+        || !existsSync(path.join(iterationTargetRoot, 'schemas', 'orchestration-plan.schema.json'))
       ) {
         console.error(`iteration handoff did not copy active artifacts/current-spec/tools: ${caseData.id}`);
         return { status: 1, checks };
@@ -1708,10 +1872,13 @@ function validateIterationCurrentFixtureCases() {
         || JSON.stringify(targetManifest.maintenanceFiles) !== JSON.stringify(['.plan2agent/maintenance/task-graph.json'])
         || !targetManifest.includedTools.includes('p2a_runs')
         || !targetManifest.includedTools.includes('p2a_execute')
+        || !targetManifest.includedTools.includes('p2a_orchestrate')
         || !targetManifest.toolFiles.includes('scripts/p2a_runs.mjs')
         || !targetManifest.toolFiles.includes('scripts/p2a_execute.mjs')
+        || !targetManifest.toolFiles.includes('scripts/p2a_orchestrate.mjs')
         || !targetManifest.schemaFiles.includes('schemas/task-context.schema.json')
         || !targetManifest.schemaFiles.includes('schemas/run-index.schema.json')
+        || !targetManifest.schemaFiles.includes('schemas/orchestration-plan.schema.json')
         || !targetManifest.schemaFiles.includes('schemas/skill-proposal.schema.json')
         || targetCurrentSpec.last_handoff?.iteration_id !== 'iter-002'
         || targetCurrentSpec.last_handoff?.maintenance_included !== true

@@ -217,6 +217,7 @@ scripts/
   p2a_tasks.mjs
   p2a_runs.mjs
   p2a_execute.mjs
+  p2a_orchestrate.mjs
   validate_artifacts.mjs
 schemas/
   *.schema.json
@@ -247,13 +248,26 @@ node scripts/p2a_execute.mjs plan \
   --task task-001
 ```
 
-task를 시작하고 run log를 연다. 출력되는 manual launcher prompt를 Codex/Claude 같은 감독형 agent 세션에 붙여넣는다.
+복수 agent 역할이나 monitor gate가 필요한 task는 실행 전에 오케스트레이션 계획을 만들 수 있다.
+
+```bash
+node scripts/p2a_orchestrate.mjs plan \
+  --graph .plan2agent/artifacts/task-graph.json \
+  --task task-001 \
+  --output .plan2agent/orchestration/task-001.json
+
+node scripts/p2a_orchestrate.mjs handoff \
+  --plan .plan2agent/orchestration/task-001.json
+```
+
+task를 시작하고 run log를 연다. 출력되는 manual launcher prompt를 Codex/Claude 같은 감독형 agent 세션에 붙여넣는다. 오케스트레이션 계획을 만들지 않았다면 `--orchestration-plan` 옵션은 빼고 실행한다.
 
 ```bash
 node scripts/p2a_execute.mjs start \
   --graph .plan2agent/artifacts/task-graph.json \
   --task task-001 \
   --agent-tool codex \
+  --orchestration-plan .plan2agent/orchestration/task-001.json \
   --workspace . \
   --workspace-ref target-project
 ```

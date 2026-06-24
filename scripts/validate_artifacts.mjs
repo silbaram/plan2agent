@@ -16,6 +16,7 @@ const SCHEMA_PATHS = {
   review: path.join(ROOT, 'schemas', 'review.schema.json'),
   run: path.join(ROOT, 'schemas', 'run.schema.json'),
   run_index: path.join(ROOT, 'schemas', 'run-index.schema.json'),
+  orchestration_plan: path.join(ROOT, 'schemas', 'orchestration-plan.schema.json'),
 };
 const GATE_PATHS = {
   statusDoc: 'status.md',
@@ -544,6 +545,36 @@ export function validateRunIndex(filePath) {
   return validateRunIndexData(loadJson(filePath));
 }
 
+export function validateOrchestrationPlanData(data) {
+  validateSchema(data, loadJson(SCHEMA_PATHS.orchestration_plan));
+  const roleIds = data.roles.map((role) => role.roleId);
+  if (roleIds.length !== new Set(roleIds).size) {
+    throw new ValidationError('orchestration plan roleId values must be unique');
+  }
+  const roleIdSet = new Set(roleIds);
+  const unknownPromptRoles = data.handoffPrompts
+    .map((prompt) => prompt.roleId)
+    .filter((roleId) => !roleIdSet.has(roleId));
+  if (unknownPromptRoles.length) {
+    throw new ValidationError(`orchestration plan handoffPrompts reference unknown roleId values: ${JSON.stringify([...new Set(unknownPromptRoles)])}`);
+  }
+  if (data.monitorGate.required) {
+    if (!data.monitorGate.verdictPath) {
+      throw new ValidationError('orchestration plan monitorGate.verdictPath is required when monitorGate.required is true');
+    }
+    if (!data.monitorGate.acceptedVerdicts.length) {
+      throw new ValidationError('orchestration plan monitorGate.acceptedVerdicts must not be empty when monitorGate.required is true');
+    }
+    const hasMonitor = data.roles.some((role) => role.role === 'monitor');
+    if (!hasMonitor) throw new ValidationError('orchestration plan requires a monitor role when monitorGate.required is true');
+  }
+  return data;
+}
+
+export function validateOrchestrationPlan(filePath) {
+  return validateOrchestrationPlanData(loadJson(filePath));
+}
+
 export function validateRunsDir(runsDir) {
   if (!existsSync(runsDir)) throw new ValidationError(`runs directory is missing: ${runsDir}`);
   if (!lstatSync(runsDir).isDirectory()) throw new ValidationError(`runs path must be a directory: ${runsDir}`);
@@ -568,7 +599,7 @@ export function validateRunsDir(runsDir) {
   }
   const indexedRunFiles = new Set(index.runs.map((run) => `${run.runId}.json`));
   const extraRunFiles = readdirSync(runsDir)
-    .filter((entry) => entry.endsWith('.json') && entry !== 'run-index.json' && !indexedRunFiles.has(entry));
+    .filter((entry) => entry.endsWith('.json') && entry !== 'run-index.json' && !entry.endsWith('.orchestration.json') && !entry.endsWith('.monitor-verdict.json') && !indexedRunFiles.has(entry));
   if (extraRunFiles.length) {
     throw new ValidationError(`runs directory contains unindexed run file(s): ${extraRunFiles.join(', ')}`);
   }
@@ -829,6 +860,7 @@ function parseArgs(argv) {
     else if (arg === '--run') args.run = argv[++index];
     else if (arg === '--run-index') args.runIndex = argv[++index];
     else if (arg === '--runs-dir') args.runsDir = argv[++index];
+    else if (arg === '--orchestration-plan') args.orchestrationPlan = argv[++index];
     else if (arg === '--require-approved-spec') args.requireApprovedSpec = argv[++index];
     else if (arg === '--require-handoff-ready') args.requireHandoffReady = true;
     else if (arg === '--require-review-pass') args.requireReviewPass = true;
@@ -863,6 +895,7 @@ export function main(argv = process.argv.slice(2)) {
     if (args.run) validateRun(args.run);
     if (args.runIndex) validateRunIndex(args.runIndex);
     if (args.runsDir) validateRunsDir(args.runsDir);
+    if (args.orchestrationPlan) validateOrchestrationPlan(args.orchestrationPlan);
     for (const fixtureDir of args.fixtureDir) validateFixtureDir(fixtureDir);
   } catch (error) {
     if (error instanceof SyntaxError || error instanceof ValidationError || error.code) {
