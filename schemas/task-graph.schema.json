@@ -83,6 +83,7 @@
           },
           "targetArea": {
             "type": "string",
+            "description": "Single area label by default. When a task intentionally spans multiple areas, separate area labels with comma, plus, ampersand, or the word 'and'. Slash is treated as a literal label character, not a multi-area separator.",
             "minLength": 1
           },
           "suggestedAgentPrompt": {

@@ -1,0 +1,168 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://plan2agent.local/schemas/proposal-review.schema.json",
+  "title": "Plan2Agent Proposal Review",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "reviewId",
+    "generatedAt",
+    "sourceProposalsDir",
+    "summary",
+    "groups"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "p2a.proposal_review.v1"
+    },
+    "reviewId": {
+      "type": "string",
+      "pattern": "^proposal-review-[a-f0-9]{12}$"
+    },
+    "generatedAt": {
+      "type": "string",
+      "minLength": 1
+    },
+    "sourceProposalsDir": {
+      "type": "string",
+      "minLength": 1
+    },
+    "summary": {
+      "type": "object",
+      "required": [
+        "totalProposals",
+        "totalGroups",
+        "byStatus",
+        "byRisk",
+        "byRecommendedDisposition"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "totalProposals": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "totalGroups": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "byStatus": {
+          "type": "object",
+          "required": ["proposed", "approved", "rejected", "deferred"],
+          "additionalProperties": false,
+          "properties": {
+            "proposed": {"type": "integer", "minimum": 0},
+            "approved": {"type": "integer", "minimum": 0},
+            "rejected": {"type": "integer", "minimum": 0},
+            "deferred": {"type": "integer", "minimum": 0}
+          }
+        },
+        "byRisk": {
+          "type": "object",
+          "required": ["high", "medium", "low"],
+          "additionalProperties": false,
+          "properties": {
+            "high": {"type": "integer", "minimum": 0},
+            "medium": {"type": "integer", "minimum": 0},
+            "low": {"type": "integer", "minimum": 0}
+          }
+        },
+        "byRecommendedDisposition": {
+          "type": "object",
+          "required": ["approve", "defer", "reject", "needs_more_evidence"],
+          "additionalProperties": false,
+          "properties": {
+            "approve": {"type": "integer", "minimum": 0},
+            "defer": {"type": "integer", "minimum": 0},
+            "reject": {"type": "integer", "minimum": 0},
+            "needs_more_evidence": {"type": "integer", "minimum": 0}
+          }
+        }
+      }
+    },
+    "groups": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "groupId",
+          "proposalIds",
+          "risk",
+          "frequency",
+          "classification",
+          "targetFiles",
+          "sourceRunIds",
+          "statusSummary",
+          "recommendedDisposition",
+          "rationale",
+          "nextAction"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "groupId": {
+            "type": "string",
+            "pattern": "^group-[a-f0-9]{12}$"
+          },
+          "proposalIds": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "risk": {
+            "type": "string",
+            "enum": ["low", "medium", "high"]
+          },
+          "frequency": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "classification": {
+            "type": "string",
+            "minLength": 1
+          },
+          "targetFiles": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "sourceRunIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "statusSummary": {
+            "type": "object",
+            "required": ["proposed", "approved", "rejected", "deferred"],
+            "additionalProperties": false,
+            "properties": {
+              "proposed": {"type": "integer", "minimum": 0},
+              "approved": {"type": "integer", "minimum": 0},
+              "rejected": {"type": "integer", "minimum": 0},
+              "deferred": {"type": "integer", "minimum": 0}
+            }
+          },
+          "recommendedDisposition": {
+            "type": "string",
+            "enum": ["approve", "defer", "reject", "needs_more_evidence"]
+          },
+          "rationale": {
+            "type": "string",
+            "minLength": 1
+          },
+          "nextAction": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,184 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://plan2agent.local/schemas/proposal-curation.schema.json",
+  "title": "Plan2Agent Proposal Curation",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "curationId",
+    "generatedAt",
+    "sourceReview",
+    "sourceProposalsDir",
+    "summary",
+    "candidates"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "p2a.proposal_curation.v1"
+    },
+    "curationId": {
+      "type": "string",
+      "pattern": "^proposal-curation-[a-f0-9]{12}$"
+    },
+    "generatedAt": {
+      "type": "string",
+      "minLength": 1
+    },
+    "sourceReview": {
+      "type": "string",
+      "minLength": 1
+    },
+    "sourceProposalsDir": {
+      "type": "string",
+      "minLength": 1
+    },
+    "summary": {
+      "type": "object",
+      "required": [
+        "totalCandidates",
+        "byReadiness",
+        "byRecommendedDisposition"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "totalCandidates": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "byReadiness": {
+          "type": "object",
+          "required": ["patch_candidate", "needs_evidence", "watch", "no_action"],
+          "additionalProperties": false,
+          "properties": {
+            "patch_candidate": {"type": "integer", "minimum": 0},
+            "needs_evidence": {"type": "integer", "minimum": 0},
+            "watch": {"type": "integer", "minimum": 0},
+            "no_action": {"type": "integer", "minimum": 0}
+          }
+        },
+        "byRecommendedDisposition": {
+          "type": "object",
+          "required": ["approve", "defer", "reject", "needs_more_evidence"],
+          "additionalProperties": false,
+          "properties": {
+            "approve": {"type": "integer", "minimum": 0},
+            "defer": {"type": "integer", "minimum": 0},
+            "reject": {"type": "integer", "minimum": 0},
+            "needs_more_evidence": {"type": "integer", "minimum": 0}
+          }
+        }
+      }
+    },
+    "candidates": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "candidateId",
+          "groupId",
+          "proposalIds",
+          "classification",
+          "title",
+          "problemStatement",
+          "recommendedChange",
+          "recommendedDisposition",
+          "readiness",
+          "priority",
+          "risk",
+          "frequency",
+          "targetFiles",
+          "sourceRunIds",
+          "evidenceStrength",
+          "rationale",
+          "nextAction",
+          "separatePatchRequired"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "candidateId": {
+            "type": "string",
+            "pattern": "^candidate-[a-f0-9]{12}$"
+          },
+          "groupId": {
+            "type": "string",
+            "pattern": "^group-[a-f0-9]{12}$"
+          },
+          "proposalIds": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "classification": {
+            "type": "string",
+            "minLength": 1
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1
+          },
+          "problemStatement": {
+            "type": "string",
+            "minLength": 1
+          },
+          "recommendedChange": {
+            "type": "string",
+            "minLength": 1
+          },
+          "recommendedDisposition": {
+            "type": "string",
+            "enum": ["approve", "defer", "reject", "needs_more_evidence"]
+          },
+          "readiness": {
+            "type": "string",
+            "enum": ["patch_candidate", "needs_evidence", "watch", "no_action"]
+          },
+          "priority": {
+            "type": "string",
+            "enum": ["P0", "P1", "P2", "P3"]
+          },
+          "risk": {
+            "type": "string",
+            "enum": ["low", "medium", "high"]
+          },
+          "frequency": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "targetFiles": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "sourceRunIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "evidenceStrength": {
+            "type": "string",
+            "enum": ["strong", "medium", "weak"]
+          },
+          "rationale": {
+            "type": "string",
+            "minLength": 1
+          },
+          "nextAction": {
+            "type": "string",
+            "minLength": 1
+          },
+          "separatePatchRequired": {
+            "type": "boolean"
+          }
+        }
+      }
+    }
+  }
+}

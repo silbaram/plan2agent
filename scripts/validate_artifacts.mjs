@@ -16,6 +16,12 @@ const SCHEMA_PATHS = {
   review: path.join(ROOT, 'schemas', 'review.schema.json'),
   run: path.join(ROOT, 'schemas', 'run.schema.json'),
   run_index: path.join(ROOT, 'schemas', 'run-index.schema.json'),
+  orchestration_plan: path.join(ROOT, 'schemas', 'orchestration-plan.schema.json'),
+  skill_proposal: path.join(ROOT, 'schemas', 'skill-proposal.schema.json'),
+  proposal_review: path.join(ROOT, 'schemas', 'proposal-review.schema.json'),
+  proposal_curation: path.join(ROOT, 'schemas', 'proposal-curation.schema.json'),
+  proposal_patch_draft: path.join(ROOT, 'schemas', 'proposal-patch-draft.schema.json'),
+  proposal_draft_approval: path.join(ROOT, 'schemas', 'proposal-draft-approval.schema.json'),
 };
 const GATE_PATHS = {
   statusDoc: 'status.md',
@@ -544,6 +550,202 @@ export function validateRunIndex(filePath) {
   return validateRunIndexData(loadJson(filePath));
 }
 
+export function validateOrchestrationPlanData(data) {
+  validateSchema(data, loadJson(SCHEMA_PATHS.orchestration_plan));
+  const roleIds = data.roles.map((role) => role.roleId);
+  if (roleIds.length !== new Set(roleIds).size) {
+    throw new ValidationError('orchestration plan roleId values must be unique');
+  }
+  const roleIdSet = new Set(roleIds);
+  const unknownPromptRoles = data.handoffPrompts
+    .map((prompt) => prompt.roleId)
+    .filter((roleId) => !roleIdSet.has(roleId));
+  if (unknownPromptRoles.length) {
+    throw new ValidationError(`orchestration plan handoffPrompts reference unknown roleId values: ${JSON.stringify([...new Set(unknownPromptRoles)])}`);
+  }
+  if (data.monitorGate.required) {
+    if (!data.monitorGate.verdictPath) {
+      throw new ValidationError('orchestration plan monitorGate.verdictPath is required when monitorGate.required is true');
+    }
+    if (!data.monitorGate.acceptedVerdicts.length) {
+      throw new ValidationError('orchestration plan monitorGate.acceptedVerdicts must not be empty when monitorGate.required is true');
+    }
+    const hasMonitor = data.roles.some((role) => role.role === 'monitor');
+    if (!hasMonitor) throw new ValidationError('orchestration plan requires a monitor role when monitorGate.required is true');
+  }
+  return data;
+}
+
+export function validateOrchestrationPlan(filePath) {
+  return validateOrchestrationPlanData(loadJson(filePath));
+}
+
+export function validateSkillProposalData(data) {
+  validateSchema(data, loadJson(SCHEMA_PATHS.skill_proposal));
+  validateNonBlankStrings(data.targetFiles, `${data.proposalId}.targetFiles`);
+  if (data.evidence) validateNonBlankStrings(data.evidence, `${data.proposalId}.evidence`);
+  return data;
+}
+
+export function validateSkillProposal(filePath) {
+  return validateSkillProposalData(loadJson(filePath));
+}
+
+export function validateProposalsDir(proposalsDir) {
+  if (!existsSync(proposalsDir)) throw new ValidationError(`proposals directory is missing: ${proposalsDir}`);
+  if (!lstatSync(proposalsDir).isDirectory()) throw new ValidationError(`proposals path must be a directory: ${proposalsDir}`);
+  const proposalFiles = readdirSync(proposalsDir)
+    .filter((entry) => entry.endsWith('.json'))
+    .sort((a, b) => a.localeCompare(b));
+  const proposals = proposalFiles.map((entry) => validateSkillProposal(path.join(proposalsDir, entry)));
+  const proposalIds = proposals.map((proposal) => proposal.proposalId);
+  if (proposalIds.length !== new Set(proposalIds).size) {
+    throw new ValidationError('proposalId values must be unique within a proposals directory');
+  }
+  for (const [index, proposal] of proposals.entries()) {
+    const expectedName = `${proposal.proposalId}.json`;
+    if (proposalFiles[index] !== expectedName) {
+      throw new ValidationError(`proposal filename must be ${expectedName}, got ${proposalFiles[index]}`);
+    }
+  }
+  return proposals;
+}
+
+export function validateProposalReviewData(data) {
+  validateSchema(data, loadJson(SCHEMA_PATHS.proposal_review));
+  if (data.summary.totalGroups !== data.groups.length) {
+    throw new ValidationError('proposal review summary.totalGroups must match groups length');
+  }
+  const statusTotal = Object.values(data.summary.byStatus).reduce((sum, count) => sum + count, 0);
+  if (statusTotal !== data.summary.totalProposals) {
+    throw new ValidationError('proposal review summary.byStatus must sum to totalProposals');
+  }
+  const riskTotal = Object.values(data.summary.byRisk).reduce((sum, count) => sum + count, 0);
+  if (riskTotal !== data.summary.totalProposals) {
+    throw new ValidationError('proposal review summary.byRisk must sum to totalProposals');
+  }
+  const dispositionTotal = Object.values(data.summary.byRecommendedDisposition).reduce((sum, count) => sum + count, 0);
+  if (dispositionTotal !== data.summary.totalGroups) {
+    throw new ValidationError('proposal review summary.byRecommendedDisposition must sum to totalGroups');
+  }
+  const groupIds = data.groups.map((group) => group.groupId);
+  if (groupIds.length !== new Set(groupIds).size) {
+    throw new ValidationError('proposal review groupId values must be unique');
+  }
+  const proposalIds = [];
+  for (const group of data.groups) {
+    validateNonBlankStrings(group.proposalIds, `${group.groupId}.proposalIds`);
+    validateNonBlankStrings(group.targetFiles, `${group.groupId}.targetFiles`);
+    validateNonBlankStrings(group.sourceRunIds, `${group.groupId}.sourceRunIds`);
+    if (group.frequency !== group.proposalIds.length) {
+      throw new ValidationError(`${group.groupId}.frequency must match proposalIds length`);
+    }
+    const groupStatusTotal = Object.values(group.statusSummary).reduce((sum, count) => sum + count, 0);
+    if (groupStatusTotal !== group.proposalIds.length) {
+      throw new ValidationError(`${group.groupId}.statusSummary must sum to proposalIds length`);
+    }
+    proposalIds.push(...group.proposalIds);
+  }
+  if (proposalIds.length !== new Set(proposalIds).size) {
+    throw new ValidationError('proposal review proposalIds must appear in only one group');
+  }
+  return data;
+}
+
+export function validateProposalReview(filePath) {
+  return validateProposalReviewData(loadJson(filePath));
+}
+
+export function validateProposalCurationData(data) {
+  validateSchema(data, loadJson(SCHEMA_PATHS.proposal_curation));
+  if (data.summary.totalCandidates !== data.candidates.length) {
+    throw new ValidationError('proposal curation summary.totalCandidates must match candidates length');
+  }
+  const readinessTotal = Object.values(data.summary.byReadiness).reduce((sum, count) => sum + count, 0);
+  if (readinessTotal !== data.summary.totalCandidates) {
+    throw new ValidationError('proposal curation summary.byReadiness must sum to totalCandidates');
+  }
+  const dispositionTotal = Object.values(data.summary.byRecommendedDisposition).reduce((sum, count) => sum + count, 0);
+  if (dispositionTotal !== data.summary.totalCandidates) {
+    throw new ValidationError('proposal curation summary.byRecommendedDisposition must sum to totalCandidates');
+  }
+  const candidateIds = data.candidates.map((candidate) => candidate.candidateId);
+  if (candidateIds.length !== new Set(candidateIds).size) {
+    throw new ValidationError('proposal curation candidateId values must be unique');
+  }
+  const groupIds = data.candidates.map((candidate) => candidate.groupId);
+  if (groupIds.length !== new Set(groupIds).size) {
+    throw new ValidationError('proposal curation groupId values must be unique');
+  }
+  for (const candidate of data.candidates) {
+    validateNonBlankStrings(candidate.proposalIds, `${candidate.candidateId}.proposalIds`);
+    validateNonBlankStrings(candidate.targetFiles, `${candidate.candidateId}.targetFiles`);
+    validateNonBlankStrings(candidate.sourceRunIds, `${candidate.candidateId}.sourceRunIds`);
+    if (candidate.frequency !== candidate.proposalIds.length) {
+      throw new ValidationError(`${candidate.candidateId}.frequency must match proposalIds length`);
+    }
+    if (candidate.recommendedDisposition === 'approve' && candidate.readiness !== 'patch_candidate') {
+      throw new ValidationError(`${candidate.candidateId}.readiness must be patch_candidate when recommendedDisposition is approve`);
+    }
+  }
+  return data;
+}
+
+export function validateProposalCuration(filePath) {
+  return validateProposalCurationData(loadJson(filePath));
+}
+
+export function validateProposalPatchDraftData(data) {
+  validateSchema(data, loadJson(SCHEMA_PATHS.proposal_patch_draft));
+  if (data.approvalRequired !== true) {
+    throw new ValidationError('proposal patch draft approvalRequired must be true');
+  }
+  if (data.autoApplyAllowed !== false) {
+    throw new ValidationError('proposal patch draft autoApplyAllowed must be false');
+  }
+  validateNonBlankStrings(data.targetFiles, `${data.draftId}.targetFiles`);
+  validateNonBlankStrings(data.risks, `${data.draftId}.risks`);
+  const intendedFiles = data.intendedChanges.map((change) => change.file);
+  validateNonBlankStrings(intendedFiles, `${data.draftId}.intendedChanges.file`);
+  const targetFileSet = new Set(data.targetFiles);
+  const unknownFiles = intendedFiles.filter((file) => !targetFileSet.has(file));
+  if (unknownFiles.length) {
+    throw new ValidationError(`proposal patch draft intendedChanges reference files not in targetFiles: ${JSON.stringify([...new Set(unknownFiles)])}`);
+  }
+  for (const [index, item] of data.verificationPlan.entries()) {
+    if (item.required && typeof item.command === 'string' && item.command.trim().length === 0) {
+      throw new ValidationError(`${data.draftId}.verificationPlan[${index}].command must not be blank when present`);
+    }
+  }
+  return data;
+}
+
+export function validateProposalPatchDraft(filePath) {
+  return validateProposalPatchDraftData(loadJson(filePath));
+}
+
+export function validateProposalDraftApprovalData(data) {
+  validateSchema(data, loadJson(SCHEMA_PATHS.proposal_draft_approval));
+  if (data.autoApplyPerformed !== false) {
+    throw new ValidationError('proposal draft approval autoApplyPerformed must be false');
+  }
+  if (!data.maintenanceTask.sourceSpecRefs.includes(`proposal-draft-approval:${data.approvalId}`)) {
+    throw new ValidationError('proposal draft approval maintenanceTask.sourceSpecRefs must reference approvalId');
+  }
+  if (!data.maintenanceTask.sourceSpecRefs.includes(`proposal-patch-draft:${data.draftId}`)) {
+    throw new ValidationError('proposal draft approval maintenanceTask.sourceSpecRefs must reference draftId');
+  }
+  if (!data.maintenanceTask.sourceSpecRefs.includes(`proposal-candidate:${data.candidateId}`)) {
+    throw new ValidationError('proposal draft approval maintenanceTask.sourceSpecRefs must reference candidateId');
+  }
+  validateNonBlankStrings(data.maintenanceTask.sourceSpecRefs, `${data.approvalId}.maintenanceTask.sourceSpecRefs`);
+  return data;
+}
+
+export function validateProposalDraftApproval(filePath) {
+  return validateProposalDraftApprovalData(loadJson(filePath));
+}
+
 export function validateRunsDir(runsDir) {
   if (!existsSync(runsDir)) throw new ValidationError(`runs directory is missing: ${runsDir}`);
   if (!lstatSync(runsDir).isDirectory()) throw new ValidationError(`runs path must be a directory: ${runsDir}`);
@@ -568,7 +770,7 @@ export function validateRunsDir(runsDir) {
   }
   const indexedRunFiles = new Set(index.runs.map((run) => `${run.runId}.json`));
   const extraRunFiles = readdirSync(runsDir)
-    .filter((entry) => entry.endsWith('.json') && entry !== 'run-index.json' && !indexedRunFiles.has(entry));
+    .filter((entry) => entry.endsWith('.json') && entry !== 'run-index.json' && !entry.endsWith('.orchestration.json') && !entry.endsWith('.monitor-verdict.json') && !indexedRunFiles.has(entry));
   if (extraRunFiles.length) {
     throw new ValidationError(`runs directory contains unindexed run file(s): ${extraRunFiles.join(', ')}`);
   }
@@ -829,6 +1031,13 @@ function parseArgs(argv) {
     else if (arg === '--run') args.run = argv[++index];
     else if (arg === '--run-index') args.runIndex = argv[++index];
     else if (arg === '--runs-dir') args.runsDir = argv[++index];
+    else if (arg === '--orchestration-plan') args.orchestrationPlan = argv[++index];
+    else if (arg === '--skill-proposal') args.skillProposal = argv[++index];
+    else if (arg === '--proposal-review') args.proposalReview = argv[++index];
+    else if (arg === '--proposal-curation') args.proposalCuration = argv[++index];
+    else if (arg === '--proposal-patch-draft') args.proposalPatchDraft = argv[++index];
+    else if (arg === '--proposal-draft-approval') args.proposalDraftApproval = argv[++index];
+    else if (arg === '--proposals-dir') args.proposalsDir = argv[++index];
     else if (arg === '--require-approved-spec') args.requireApprovedSpec = argv[++index];
     else if (arg === '--require-handoff-ready') args.requireHandoffReady = true;
     else if (arg === '--require-review-pass') args.requireReviewPass = true;
@@ -863,6 +1072,13 @@ export function main(argv = process.argv.slice(2)) {
     if (args.run) validateRun(args.run);
     if (args.runIndex) validateRunIndex(args.runIndex);
     if (args.runsDir) validateRunsDir(args.runsDir);
+    if (args.orchestrationPlan) validateOrchestrationPlan(args.orchestrationPlan);
+    if (args.skillProposal) validateSkillProposal(args.skillProposal);
+    if (args.proposalReview) validateProposalReview(args.proposalReview);
+    if (args.proposalCuration) validateProposalCuration(args.proposalCuration);
+    if (args.proposalPatchDraft) validateProposalPatchDraft(args.proposalPatchDraft);
+    if (args.proposalDraftApproval) validateProposalDraftApproval(args.proposalDraftApproval);
+    if (args.proposalsDir) validateProposalsDir(args.proposalsDir);
     for (const fixtureDir of args.fixtureDir) validateFixtureDir(fixtureDir);
   } catch (error) {
     if (error instanceof SyntaxError || error instanceof ValidationError || error.code) {
