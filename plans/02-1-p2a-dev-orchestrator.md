@@ -2,7 +2,7 @@
 
 작성일: 2026-06-23 · 상태: MVP 1차 구현 완료, O7 Hermes proposal queue/review/curation/patch draft/approval execution bridge 완료 · 상위 문서: `plans/02-development-team-ai-agent.md` · 연결 문서: `plans/01-product-roadmap.md`, `plans/03-p2a-gui-mvp.md`
 
-이 문서는 Team Big Five의 `team-lead` 역할을 Plan2Agent-native로 구현하기 위한 최소 개발 계획이다. 목표는 여러 agent를 무인으로 돌리는 것이 아니라, 기존 CLI-first 하네스 위에서 **어떤 task를 solo/team으로 처리할지 판단하고, 역할별 실행 계획과 검증 흐름을 파일로 남기는 것**이다. GUI는 이 결과를 나중에 읽는 보조 표면으로 둔다.
+이 문서는 Team Big Five의 `team-lead` 역할을 Plan2Agent-native로 구현하기 위한 최소 개발 계획이다. 목표는 여러 agent를 무인으로 돌리는 것이 아니라, 기존 CLI-first 하네스 위에서 **어떤 task를 solo/team으로 처리할지 판단하고, 역할별 실행 계획과 검증 흐름을 파일로 남기는 것**이다. 최신 GUI는 task/run/artifact와 PTY 실행을 다루며, orchestration mode/role/monitor gate 표시는 후속 표면으로 둔다.
 
 ## 0. 이번 브랜치 구현 상태
 
@@ -18,7 +18,7 @@
 
 후속으로 남김:
 
-- GUI 표시.
+- GUI orchestration 표시.
 - 병렬 scheduler.
 - 실제 적용 patch 생성.
 - agent-generated orchestration plan.
@@ -63,7 +63,7 @@ MVP에서 하지 않는 것:
 - 사용자 승인 없는 dependency install, PR 생성, push, merge.
 - Gemini write 실행.
 - Hermes proposal 자동 적용.
-- GUI 표시와 편집.
+- GUI orchestration 표시와 편집.
 - agent-generated orchestration plan.
 
 ## 3. 산출물
@@ -164,7 +164,7 @@ MVP에서 하지 않는 것:
 - `git diff --check` green.
 - 기존 단일 task 실행 문서와 충돌하지 않는다.
 
-### O6. GUI 표시 후속
+### O6. GUI orchestration 표시 후속
 
 - Tasks 또는 Terminal 화면에서 orchestration mode와 역할별 handoff를 보여준다.
 - 사용자는 plan을 보고 각 agent 세션을 열 수 있다.
@@ -193,7 +193,7 @@ MVP에서 하지 않는 것:
 후속:
 
 - Hermes 고도화는 store/DB 단계로 연기한다. 실제 적용 patch 생성, skipped-verification rationale 표준화, 반복 failureClass/source/targetFiles 통계, cross-session recall, 검색/DB 저장은 지금 구현하지 않고 나중에 방향을 다시 논의한다.
-- 이번 단계의 다음 구현 축은 `plans/03-p2a-gui-mvp.md`의 PTY+Electron 감독 GUI다.
+- 이번 단계의 다음 구현 축은 GUI 자체가 아니라 shared mental model, closed-loop communication, 실제 multi-session scheduler 같은 오케스트레이션 런타임 고도화다.
 
 ## 5. Team Big Five 완료 판단
 
