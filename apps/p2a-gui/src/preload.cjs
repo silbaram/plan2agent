@@ -4,6 +4,7 @@ contextBridge.exposeInMainWorld('p2aGui', {
   getInitialState: () => ipcRenderer.invoke('p2a:get-initial-state'),
   selectProject: () => ipcRenderer.invoke('p2a:select-project'),
   reloadProject: () => ipcRenderer.invoke('p2a:reload-project'),
+  openRecentProject: (projectPath) => ipcRenderer.invoke('p2a:open-recent-project', projectPath),
   onProjectUpdated: (callback) => {
     if (typeof callback !== 'function') return () => {};
     const listener = (_event, payload) => callback(payload);

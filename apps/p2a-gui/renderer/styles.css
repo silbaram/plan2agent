@@ -328,6 +328,7 @@ h2 {
 
 .gate-list,
 .task-list,
+.recent-list,
 .command-list,
 .diagnostic-list,
 .task-table {
@@ -337,11 +338,13 @@ h2 {
 }
 
 .gate-list,
-.task-list {
+.task-list,
+.recent-list {
   padding: 0;
 }
 
 .row,
+.recent-project-row,
 .command-row,
 .diagnostic-row,
 .task-row {
@@ -349,6 +352,58 @@ h2 {
   border: 1px solid var(--border-1);
   border-radius: 4px;
   background: var(--bg-3);
+}
+
+.recent-project-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  height: auto;
+  min-height: 38px;
+  padding: 7px 8px;
+  text-align: left;
+}
+
+.recent-project-row.active {
+  border-left: 2px solid var(--accent);
+  background: var(--bg-4);
+  color: var(--fg-1);
+}
+
+.recent-main {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.recent-name,
+.recent-path {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.recent-name {
+  color: var(--fg-2);
+  font-size: 12px;
+}
+
+.recent-path,
+.recent-state {
+  color: var(--fg-3);
+  font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 10px;
+}
+
+.recent-state {
+  max-width: 88px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .row {

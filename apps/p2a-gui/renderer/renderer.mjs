@@ -8,6 +8,7 @@ const elements = {
   sidebarProject: document.querySelector('#sidebar-project'),
   sidebarSource: document.querySelector('#sidebar-source'),
   sidebarAgent: document.querySelector('#sidebar-agent'),
+  recentProjectList: document.querySelector('#recent-project-list'),
   gateList: document.querySelector('#gate-list'),
   readyTaskList: document.querySelector('#ready-task-list'),
   stateTitle: document.querySelector('#state-title'),
@@ -92,6 +93,11 @@ function browserFallbackBridge() {
       refreshedAt: new Date().toISOString(),
       trigger: 'browser',
     }),
+    openRecentProject: async () => ({
+      ...currentPayload,
+      refreshedAt: new Date().toISOString(),
+      trigger: 'browser',
+    }),
     onProjectUpdated: () => () => {},
   };
 }
@@ -122,6 +128,7 @@ function render(payload) {
   const diagnostics = inspection?.diagnostics ?? [];
   const readyTasks = inspection?.tasks?.ready ?? [];
   const allTaskSummary = inspection?.tasks;
+  const localConfig = currentPayload.localConfig ?? {};
 
   elements.titleProject.textContent = projectLabel;
   elements.sidebarState.textContent = state;
@@ -134,6 +141,7 @@ function render(payload) {
   elements.stateBadge.textContent = meta.badge;
   elements.stateBadge.className = `state-badge ${meta.tone}`;
 
+  renderRecentProjects(localConfig.recentProjects ?? [], currentPayload.projectPath);
   renderGates(inspection?.gates ?? null);
   renderReadyTasks(readyTasks);
   renderCommands(inspection?.commands ?? {});
@@ -147,7 +155,43 @@ function render(payload) {
 
   elements.statusLeft.textContent = `${state} · ${currentPayload.trigger ?? 'manual'}`;
   elements.statusCenter.textContent = `cwd: ${shortPath(inspection?.displayPaths?.projectRoot ?? currentPayload.projectPath)}`;
-  elements.statusRight.textContent = inspection ? `watcher: ${currentPayload.trigger === 'watcher' ? 'reloaded' : 'active'} · tasks ${allTaskSummary?.total ?? 0}` : 'watcher: standby';
+  elements.statusRight.textContent = inspection
+    ? `watcher: ${currentPayload.trigger === 'watcher' ? 'reloaded' : 'active'} · tasks ${allTaskSummary?.total ?? 0}`
+    : `watcher: standby · recent ${(localConfig.recentProjects ?? []).length}`;
+}
+
+function renderRecentProjects(projects, activePath) {
+  elements.recentProjectList.replaceChildren();
+  if (!projects.length) {
+    elements.recentProjectList.append(emptyNode('No recent project'));
+    return;
+  }
+  for (const project of projects.slice(0, 6)) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = `recent-project-row ${project.path === activePath ? 'active' : ''}`;
+    button.title = project.path;
+    button.addEventListener('click', async () => {
+      render(await bridge.openRecentProject(project.path));
+    });
+
+    const main = document.createElement('span');
+    main.className = 'recent-main';
+    const name = document.createElement('span');
+    name.className = 'recent-name';
+    name.textContent = text(project.projectId);
+    const projectPath = document.createElement('span');
+    projectPath.className = 'recent-path';
+    projectPath.textContent = shortPath(project.path);
+    main.append(name, projectPath);
+
+    const state = document.createElement('span');
+    state.className = 'recent-state';
+    state.textContent = text(project.state);
+
+    button.append(main, state);
+    elements.recentProjectList.append(button);
+  }
 }
 
 function renderGates(gates) {
@@ -297,6 +341,7 @@ boot().catch((error) => {
       commands: {},
       displayPaths: {},
     },
+    localConfig: { recentProjects: [] },
     refreshedAt: new Date().toISOString(),
     trigger: 'renderer',
   });

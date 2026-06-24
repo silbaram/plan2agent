@@ -155,6 +155,7 @@ GUI local config:
 - `apps/p2a-gui/src/main.mjs`가 Electron lifecycle, folder picker, `--project <dir>`, read-only reload, file watcher를 담당한다.
 - `apps/p2a-gui/src/preload.cjs`가 renderer에 제한된 IPC API만 노출한다.
 - `apps/p2a-gui/renderer/`가 프로젝트 상태, Gate, ready task, diagnostics, command preview, read model JSON을 표시한다.
+- recent projects와 마지막 프로젝트는 Electron `userData/p2a-gui-config.json`에 저장하고 앱 시작 시 복원한다.
 - Electron 개발 런타임은 Node.js `>=22.12.0`, Electron `42.5.0`으로 고정한다.
 - `.plan2agent/`, `artifacts/<project_id>`, flat handoff artifact, iterative artifact root, direct artifact root를 감지한다.
 - `no_p2a`, `installed_empty`, `planning_in_progress`, `execution_ready`, `broken_install` 상태를 판정한다.
@@ -163,7 +164,6 @@ GUI local config:
 
 아직 남은 2B 범위:
 
-- recent projects와 GUI local config 저장.
 - 실제 Markdown/JSON artifact viewer 화면.
 - tab별 상세 화면과 keyboard/focus hardening.
 - Electron packaging 정책 정리.
@@ -370,11 +370,12 @@ GUI local config:
 2. `2A-1` workbench static prototype: p2a-design-system 기반 화면 뼈대.
 3. `2B-0` read-only project inspection foundation: 실제 project detection과 project files reader. **구현 완료**
 4. `2B` read-only Electron shell 1차: folder picker, `--project`, 상태 화면, watcher, renderer 화면. **구현 완료**
-5. `2B` hardening: recent projects, local config, artifact viewer, focus/keyboard polish.
-6. `2B-1` harness onboarding guidance: scaffold/handoff/validate 명령 안내 화면.
-7. `2C` PTY execution: node-pty + xterm + supervisor input.
-8. `2D` finish/verification: existing lifecycle 연결.
-9. smoke: 이미 scaffold된 작은 target 프로젝트에서 ready task 1건 end-to-end 실행.
+5. `2B` hardening: recent projects와 local config 저장. **구현 완료**
+6. `2B` hardening: artifact viewer, focus/keyboard polish.
+7. `2B-1` harness onboarding guidance: scaffold/handoff/validate 명령 안내 화면.
+8. `2C` PTY execution: node-pty + xterm + supervisor input.
+9. `2D` finish/verification: existing lifecycle 연결.
+10. smoke: 이미 scaffold된 작은 target 프로젝트에서 ready task 1건 end-to-end 실행.
 
 ## 9. 첫 smoke 기준
 

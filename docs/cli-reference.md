@@ -192,7 +192,7 @@ node apps/p2a-gui/bin/p2a-gui-project.mjs inspect --project <project-dir> --json
 
 대표 상태는 `no_p2a`, `installed_empty`, `planning_in_progress`, `execution_ready`, `broken_install`이다. JSON 출력은 이후 Electron main/renderer가 그대로 소비할 read model의 기준으로 사용한다. `broken_install`처럼 명확한 오류 진단이 있으면 exit code 1로 종료하고, 단순 `no_p2a`는 setup guidance 상태로 exit code 0을 반환한다.
 
-Electron shell은 같은 read model을 folder picker, `--project`, file watcher로 표시한다. 개발 런타임은 Node.js `>=22.12.0`과 Electron `42.5.0`을 기준으로 고정한다.
+Electron shell은 같은 read model을 folder picker, `--project`, file watcher로 표시한다. 최근 프로젝트와 마지막으로 연 프로젝트는 Electron `userData`의 `p2a-gui-config.json`에 저장하고, 다음 실행 때 자동 복원한다. 개발 런타임은 Node.js `>=22.12.0`과 Electron `42.5.0`을 기준으로 고정한다.
 
 ```bash
 cd apps/p2a-gui
