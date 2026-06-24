@@ -22,6 +22,7 @@ const EXECUTE_CLI = path.join(ROOT, 'scripts', 'p2a_execute.mjs');
 const ORCHESTRATE_CLI = path.join(ROOT, 'scripts', 'p2a_orchestrate.mjs');
 const PROPOSALS_CLI = path.join(ROOT, 'scripts', 'p2a_proposals.mjs');
 const HANDOFF_CLI = path.join(ROOT, 'scripts', 'p2a_handoff.mjs');
+const GUI_PROJECT_CLI = path.join(ROOT, 'apps', 'p2a-gui', 'bin', 'p2a-gui-project.mjs');
 
 function runValidator(args) {
   return spawnSync(process.execPath, [VALIDATOR, ...args], { cwd: ROOT, encoding: 'utf8' });
@@ -53,6 +54,10 @@ function runProposals(args) {
 
 function runHandoff(args) {
   return spawnSync(process.execPath, [HANDOFF_CLI, ...args], { cwd: ROOT, encoding: 'utf8' });
+}
+
+function runGuiProject(args) {
+  return spawnSync(process.execPath, [GUI_PROJECT_CLI, ...args], { cwd: ROOT, encoding: 'utf8' });
 }
 
 function runTargetTasks(targetRoot, args) {
@@ -222,6 +227,104 @@ function validateScaffoldFixtureCase() {
       return { status: 1, checks };
     }
 
+    result = runGuiProject(['inspect', '--project', targetRoot, '--json']);
+    checks += 1;
+    if (result.status !== 0) {
+      console.error('gui project scaffold inspection failed');
+      writeResultOutput(result);
+      return { status: failureStatus(result), checks };
+    }
+    const scaffoldInspection = JSON.parse(result.stdout);
+    if (
+      scaffoldInspection.state !== 'installed_empty'
+      || scaffoldInspection.defaultAgentTool !== 'codex'
+      || scaffoldInspection.harness.installed !== true
+      || !scaffoldInspection.commands.setup.includes('p2a_handoff.mjs scaffold')
+    ) {
+      console.error('gui project scaffold inspection mismatch');
+      console.error(JSON.stringify({ scaffoldInspection }, null, 2));
+      return { status: 1, checks };
+    }
+
+    const coLocatedArtifactRoot = path.join(targetRoot, 'artifacts', 'webhook-api-service');
+    mkdirSync(path.dirname(coLocatedArtifactRoot), { recursive: true });
+    cpSync(path.join(E2E_FIXTURE_ROOT, 'webhook-api-service'), coLocatedArtifactRoot, { recursive: true });
+    result = runGuiProject(['inspect', '--project', targetRoot, '--json']);
+    checks += 1;
+    if (result.status !== 0) {
+      console.error('gui project co-located artifact inspection failed');
+      writeResultOutput(result);
+      return { status: failureStatus(result), checks };
+    }
+    const coLocatedInspection = JSON.parse(result.stdout);
+    if (
+      coLocatedInspection.state !== 'execution_ready'
+      || coLocatedInspection.projectId !== 'webhook-api-service'
+      || coLocatedInspection.artifactSource?.sourceLayout !== 'co_located'
+      || coLocatedInspection.tasks.total !== 4
+      || coLocatedInspection.tasks.ready[0]?.id !== 'task-001'
+      || coLocatedInspection.review?.blockingIssueCount !== 0
+    ) {
+      console.error('gui project co-located artifact inspection mismatch');
+      console.error(JSON.stringify({ coLocatedInspection }, null, 2));
+      return { status: 1, checks };
+    }
+
+    const targetRunsDir = path.join(targetRoot, '.plan2agent', 'runs');
+    mkdirSync(targetRunsDir, { recursive: true });
+    writeFileSync(path.join(targetRunsDir, 'run-index.json'), `${JSON.stringify({
+      schema_version: 'p2a.run_index.v1',
+      projectId: 'webhook-api-service',
+      runs: [
+        {
+          runId: 'run-gui-unsafe',
+          taskId: 'task-001',
+          iterationId: null,
+          status: 'started',
+          agentTool: 'codex',
+          workspaceRef: targetRoot,
+          taskGraphRef: 'artifacts/webhook-api-service/gate-c-task-graph/task-graph.json',
+          runRef: '../outside.json',
+          startedAt: '2026-06-24T00:00:00.000Z',
+          finishedAt: null,
+        },
+      ],
+      tasks: [
+        {
+          taskId: 'task-001',
+          runIds: ['run-gui-unsafe'],
+          latestRunId: 'run-gui-unsafe',
+        },
+      ],
+    }, null, 2)}\n`, 'utf8');
+    result = runGuiProject(['inspect', '--project', targetRoot, '--json']);
+    checks += 1;
+    if (result.status === 0 || !result.stdout.includes('"code": "run_ref_invalid"')) {
+      console.error('gui project unsafe runRef inspection did not fail as expected');
+      writeResultOutput(result);
+      return { status: 1, checks };
+    }
+
+    const plainRoot = path.join(tempRoot, 'plain-project');
+    mkdirSync(plainRoot, { recursive: true });
+    result = runGuiProject(['inspect', '--project', plainRoot, '--json']);
+    checks += 1;
+    if (result.status !== 0) {
+      console.error('gui project no-p2a inspection failed');
+      writeResultOutput(result);
+      return { status: failureStatus(result), checks };
+    }
+    const plainInspection = JSON.parse(result.stdout);
+    if (
+      plainInspection.state !== 'no_p2a'
+      || plainInspection.harness.installed !== false
+      || !plainInspection.commands.setup.includes('p2a_handoff.mjs scaffold')
+    ) {
+      console.error('gui project no-p2a inspection mismatch');
+      console.error(JSON.stringify({ plainInspection }, null, 2));
+      return { status: 1, checks };
+    }
+
     result = runTargetIteration(targetRoot, ['--help']);
     checks += 1;
     if (result.status !== 0 || !result.stdout.includes('p2a_iteration.mjs init')) {
@@ -318,6 +421,26 @@ function validateE2eFixtureCases() {
         || existsSync(path.join(targetRoot, '.plan2agent', 'current-spec.json'))
       ) {
         console.error(`greenfield handoff wrote unexpected tool/current-spec files: ${caseData.id}`);
+        return { status: 1, checks };
+      }
+      result = runGuiProject(['inspect', '--project', targetRoot, '--json']);
+      checks += 1;
+      if (result.status !== 0) {
+        console.error(`gui project handoff inspection failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: failureStatus(result), checks };
+      }
+      const handoffInspection = JSON.parse(result.stdout);
+      if (
+        handoffInspection.state !== 'execution_ready'
+        || handoffInspection.projectId !== caseData.project_id
+        || handoffInspection.artifactSource?.sourceLayout !== 'handoff'
+        || handoffInspection.tasks.total !== 4
+        || handoffInspection.tasks.ready[0]?.id !== 'task-001'
+        || handoffInspection.harness.installed !== true
+      ) {
+        console.error(`gui project handoff inspection mismatch: ${caseData.id}`);
+        console.error(JSON.stringify({ handoffInspection }, null, 2));
         return { status: 1, checks };
       }
       result = assertTargetSpecSourceIntake(targetRoot, caseData.id, 'greenfield');

@@ -1,0 +1,13 @@
+{
+  "name": "@plan2agent/p2a-gui",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Plan2Agent supervised GUI shell foundations.",
+  "bin": {
+    "p2a-gui-project": "./bin/p2a-gui-project.mjs"
+  },
+  "scripts": {
+    "inspect": "node ./bin/p2a-gui-project.mjs inspect"
+  }
+}
