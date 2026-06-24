@@ -17,6 +17,7 @@ const SCHEMA_PATHS = {
   run: path.join(ROOT, 'schemas', 'run.schema.json'),
   run_index: path.join(ROOT, 'schemas', 'run-index.schema.json'),
   orchestration_plan: path.join(ROOT, 'schemas', 'orchestration-plan.schema.json'),
+  skill_proposal: path.join(ROOT, 'schemas', 'skill-proposal.schema.json'),
 };
 const GATE_PATHS = {
   statusDoc: 'status.md',
@@ -575,6 +576,37 @@ export function validateOrchestrationPlan(filePath) {
   return validateOrchestrationPlanData(loadJson(filePath));
 }
 
+export function validateSkillProposalData(data) {
+  validateSchema(data, loadJson(SCHEMA_PATHS.skill_proposal));
+  validateNonBlankStrings(data.targetFiles, `${data.proposalId}.targetFiles`);
+  if (data.evidence) validateNonBlankStrings(data.evidence, `${data.proposalId}.evidence`);
+  return data;
+}
+
+export function validateSkillProposal(filePath) {
+  return validateSkillProposalData(loadJson(filePath));
+}
+
+export function validateProposalsDir(proposalsDir) {
+  if (!existsSync(proposalsDir)) throw new ValidationError(`proposals directory is missing: ${proposalsDir}`);
+  if (!lstatSync(proposalsDir).isDirectory()) throw new ValidationError(`proposals path must be a directory: ${proposalsDir}`);
+  const proposalFiles = readdirSync(proposalsDir)
+    .filter((entry) => entry.endsWith('.json'))
+    .sort((a, b) => a.localeCompare(b));
+  const proposals = proposalFiles.map((entry) => validateSkillProposal(path.join(proposalsDir, entry)));
+  const proposalIds = proposals.map((proposal) => proposal.proposalId);
+  if (proposalIds.length !== new Set(proposalIds).size) {
+    throw new ValidationError('proposalId values must be unique within a proposals directory');
+  }
+  for (const [index, proposal] of proposals.entries()) {
+    const expectedName = `${proposal.proposalId}.json`;
+    if (proposalFiles[index] !== expectedName) {
+      throw new ValidationError(`proposal filename must be ${expectedName}, got ${proposalFiles[index]}`);
+    }
+  }
+  return proposals;
+}
+
 export function validateRunsDir(runsDir) {
   if (!existsSync(runsDir)) throw new ValidationError(`runs directory is missing: ${runsDir}`);
   if (!lstatSync(runsDir).isDirectory()) throw new ValidationError(`runs path must be a directory: ${runsDir}`);
@@ -861,6 +893,8 @@ function parseArgs(argv) {
     else if (arg === '--run-index') args.runIndex = argv[++index];
     else if (arg === '--runs-dir') args.runsDir = argv[++index];
     else if (arg === '--orchestration-plan') args.orchestrationPlan = argv[++index];
+    else if (arg === '--skill-proposal') args.skillProposal = argv[++index];
+    else if (arg === '--proposals-dir') args.proposalsDir = argv[++index];
     else if (arg === '--require-approved-spec') args.requireApprovedSpec = argv[++index];
     else if (arg === '--require-handoff-ready') args.requireHandoffReady = true;
     else if (arg === '--require-review-pass') args.requireReviewPass = true;
@@ -896,6 +930,8 @@ export function main(argv = process.argv.slice(2)) {
     if (args.runIndex) validateRunIndex(args.runIndex);
     if (args.runsDir) validateRunsDir(args.runsDir);
     if (args.orchestrationPlan) validateOrchestrationPlan(args.orchestrationPlan);
+    if (args.skillProposal) validateSkillProposal(args.skillProposal);
+    if (args.proposalsDir) validateProposalsDir(args.proposalsDir);
     for (const fixtureDir of args.fixtureDir) validateFixtureDir(fixtureDir);
   } catch (error) {
     if (error instanceof SyntaxError || error instanceof ValidationError || error.code) {

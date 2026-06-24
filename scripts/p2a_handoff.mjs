@@ -843,7 +843,7 @@ function pushTeamBigFiveAdapter(plan, targetRoot, args) {
 }
 
 
-const SCAFFOLD_SCRIPT_FILES = ['p2a_iteration.mjs', 'p2a_tasks.mjs', 'p2a_runs.mjs', 'p2a_execute.mjs', 'p2a_orchestrate.mjs', 'p2a_run_paths.mjs', 'p2a_iteration_state.mjs', 'validate_artifacts.mjs'];
+const SCAFFOLD_SCRIPT_FILES = ['p2a_iteration.mjs', 'p2a_tasks.mjs', 'p2a_runs.mjs', 'p2a_execute.mjs', 'p2a_orchestrate.mjs', 'p2a_proposals.mjs', 'p2a_run_paths.mjs', 'p2a_iteration_state.mjs', 'validate_artifacts.mjs'];
 const SCAFFOLD_SCHEMA_FILES = ['intake.schema.json', 'spec.schema.json', 'task-graph.schema.json', 'task-context.schema.json', 'review.schema.json', 'run.schema.json', 'run-index.schema.json', 'orchestration-plan.schema.json', 'skill-proposal.schema.json'];
 
 
@@ -984,6 +984,7 @@ This repository owns its Plan2Agent planning and development loop in-place.
 
    - \`node scripts/p2a_execute.mjs plan|start|finish|status\`
    - \`node scripts/p2a_orchestrate.mjs plan|handoff\`
+   - \`node scripts/p2a_proposals.mjs mine|digest\`
    - \`node scripts/p2a_tasks.mjs ready|prompt|start|done\`
    - \`node scripts/p2a_runs.mjs start|verify|finish\`
 
@@ -1102,6 +1103,7 @@ function buildPlan(paths, args, artifactsRoot, targetRoot, sourceInfo, options =
   pushArtifact(plan, path.join(ROOT, 'scripts', 'p2a_runs.mjs'), targetRoot, path.join('scripts', 'p2a_runs.mjs'));
   pushArtifact(plan, path.join(ROOT, 'scripts', 'p2a_execute.mjs'), targetRoot, path.join('scripts', 'p2a_execute.mjs'));
   pushArtifact(plan, path.join(ROOT, 'scripts', 'p2a_orchestrate.mjs'), targetRoot, path.join('scripts', 'p2a_orchestrate.mjs'));
+  pushArtifact(plan, path.join(ROOT, 'scripts', 'p2a_proposals.mjs'), targetRoot, path.join('scripts', 'p2a_proposals.mjs'));
   pushArtifact(plan, path.join(ROOT, 'scripts', 'p2a_run_paths.mjs'), targetRoot, path.join('scripts', 'p2a_run_paths.mjs'));
   pushArtifact(plan, path.join(ROOT, 'scripts', 'p2a_iteration_state.mjs'), targetRoot, path.join('scripts', 'p2a_iteration_state.mjs'));
   pushArtifact(plan, path.join(ROOT, 'scripts', 'validate_artifacts.mjs'), targetRoot, path.join('scripts', 'validate_artifacts.mjs'));
@@ -1122,13 +1124,14 @@ function buildPlan(paths, args, artifactsRoot, targetRoot, sourceInfo, options =
     'scripts/p2a_runs.mjs',
     'scripts/p2a_execute.mjs',
     'scripts/p2a_orchestrate.mjs',
+    'scripts/p2a_proposals.mjs',
     'scripts/p2a_run_paths.mjs',
     'scripts/p2a_iteration_state.mjs',
     'scripts/validate_artifacts.mjs',
     ...toolAssetPlan.files,
     ...teamBigFivePlan.files,
   ];
-  const includedTools = ['p2a_tasks', 'p2a_runs', 'p2a_execute', 'p2a_orchestrate', 'p2a_run_paths', 'p2a_iteration_state', 'validate_artifacts'];
+  const includedTools = ['p2a_tasks', 'p2a_runs', 'p2a_execute', 'p2a_orchestrate', 'p2a_proposals', 'p2a_run_paths', 'p2a_iteration_state', 'validate_artifacts'];
   for (const target of args.tools) includedTools.push(`p2a_${target}_assets`);
   if (teamBigFivePlan.enabled) includedTools.push('team_bigfive_adapter');
 
@@ -1592,6 +1595,7 @@ function printNextSteps(targetRoot) {
   console.log('      node scripts/p2a_orchestrate.mjs plan --graph .plan2agent/artifacts/task-graph.json --task <task-id> --output .plan2agent/orchestration/<task-id>.json');
   console.log('      node scripts/p2a_execute.mjs start --graph .plan2agent/artifacts/task-graph.json --task <task-id> --agent-tool <tool>');
   console.log('      node scripts/p2a_execute.mjs finish --graph .plan2agent/artifacts/task-graph.json --run-id <run-id> --test --lint --typecheck');
+  console.log('      node scripts/p2a_proposals.mjs mine --graph .plan2agent/artifacts/task-graph.json');
 
   try {
     const config = JSON.parse(readFileSync(path.join(targetRoot, '.plan2agent', 'project.config.json'), 'utf8'));

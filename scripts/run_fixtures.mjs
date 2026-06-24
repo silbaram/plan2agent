@@ -20,6 +20,7 @@ const TASKS_CLI = path.join(ROOT, 'scripts', 'p2a_tasks.mjs');
 const RUNS_CLI = path.join(ROOT, 'scripts', 'p2a_runs.mjs');
 const EXECUTE_CLI = path.join(ROOT, 'scripts', 'p2a_execute.mjs');
 const ORCHESTRATE_CLI = path.join(ROOT, 'scripts', 'p2a_orchestrate.mjs');
+const PROPOSALS_CLI = path.join(ROOT, 'scripts', 'p2a_proposals.mjs');
 const HANDOFF_CLI = path.join(ROOT, 'scripts', 'p2a_handoff.mjs');
 
 function runValidator(args) {
@@ -46,6 +47,10 @@ function runOrchestrate(args) {
   return spawnSync(process.execPath, [ORCHESTRATE_CLI, ...args], { cwd: ROOT, encoding: 'utf8' });
 }
 
+function runProposals(args) {
+  return spawnSync(process.execPath, [PROPOSALS_CLI, ...args], { cwd: ROOT, encoding: 'utf8' });
+}
+
 function runHandoff(args) {
   return spawnSync(process.execPath, [HANDOFF_CLI, ...args], { cwd: ROOT, encoding: 'utf8' });
 }
@@ -64,6 +69,10 @@ function runTargetExecute(targetRoot, args) {
 
 function runTargetOrchestrate(targetRoot, args) {
   return spawnSync(process.execPath, [path.join(targetRoot, 'scripts', 'p2a_orchestrate.mjs'), ...args], { cwd: targetRoot, encoding: 'utf8' });
+}
+
+function runTargetProposals(targetRoot, args) {
+  return spawnSync(process.execPath, [path.join(targetRoot, 'scripts', 'p2a_proposals.mjs'), ...args], { cwd: targetRoot, encoding: 'utf8' });
 }
 
 function runTargetIteration(targetRoot, args) {
@@ -162,7 +171,7 @@ function validateScaffoldFixtureCase() {
       return { status: failureStatus(result), checks };
     }
 
-    const expectedScripts = ['p2a_iteration.mjs', 'p2a_tasks.mjs', 'p2a_runs.mjs', 'p2a_execute.mjs', 'p2a_orchestrate.mjs', 'p2a_run_paths.mjs', 'p2a_iteration_state.mjs', 'validate_artifacts.mjs']
+    const expectedScripts = ['p2a_iteration.mjs', 'p2a_tasks.mjs', 'p2a_runs.mjs', 'p2a_execute.mjs', 'p2a_orchestrate.mjs', 'p2a_proposals.mjs', 'p2a_run_paths.mjs', 'p2a_iteration_state.mjs', 'validate_artifacts.mjs']
       .map((file) => path.join('scripts', file));
     const expectedSchemas = ['intake.schema.json', 'spec.schema.json', 'task-graph.schema.json', 'task-context.schema.json', 'review.schema.json', 'run.schema.json', 'run-index.schema.json', 'orchestration-plan.schema.json', 'skill-proposal.schema.json']
       .map((file) => path.join('schemas', file));
@@ -295,6 +304,7 @@ function validateE2eFixtureCases() {
         || !existsSync(path.join(targetRoot, 'scripts', 'p2a_runs.mjs'))
         || !existsSync(path.join(targetRoot, 'scripts', 'p2a_execute.mjs'))
         || !existsSync(path.join(targetRoot, 'scripts', 'p2a_orchestrate.mjs'))
+        || !existsSync(path.join(targetRoot, 'scripts', 'p2a_proposals.mjs'))
         || !existsSync(path.join(targetRoot, 'scripts', 'p2a_run_paths.mjs'))
         || !existsSync(path.join(targetRoot, 'schemas', 'task-context.schema.json'))
         || !existsSync(path.join(targetRoot, 'schemas', 'run.schema.json'))
@@ -342,6 +352,14 @@ function validateE2eFixtureCases() {
         return { status: failureStatus(result), checks };
       }
 
+      result = runTargetProposals(targetRoot, ['list']);
+      checks += 1;
+      if (result.status !== 0 || !result.stdout.includes('proposalId')) {
+        console.error(`greenfield handoff target p2a_proposals execution failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: failureStatus(result), checks };
+      }
+
       const toolTargetRoot = path.join(tempRoot, 'target-project-tools');
       result = runHandoff([
         '--project-id',
@@ -376,11 +394,13 @@ function validateE2eFixtureCases() {
         || !toolManifest.includedTools.includes('p2a_runs')
         || !toolManifest.includedTools.includes('p2a_execute')
         || !toolManifest.includedTools.includes('p2a_orchestrate')
+        || !toolManifest.includedTools.includes('p2a_proposals')
         || !toolManifest.toolFiles.includes('.agents/skills/p2a-harness/SKILL.md')
         || !toolManifest.toolFiles.includes('.gemini/commands/p2a/harness.toml')
         || !toolManifest.toolFiles.includes('scripts/p2a_runs.mjs')
         || !toolManifest.toolFiles.includes('scripts/p2a_execute.mjs')
         || !toolManifest.toolFiles.includes('scripts/p2a_orchestrate.mjs')
+        || !toolManifest.toolFiles.includes('scripts/p2a_proposals.mjs')
         || !toolManifest.toolFiles.includes('scripts/p2a_run_paths.mjs')
         || !toolManifest.schemaFiles.includes('schemas/run.schema.json')
         || !toolManifest.schemaFiles.includes('schemas/orchestration-plan.schema.json')
@@ -918,6 +938,51 @@ function validateIterationCurrentFixtureCases() {
         console.error(`p2a_execute monitor fixture wrote unexpected blocked state: ${caseData.id}`);
         console.error(JSON.stringify({ executeMonitorFinishedGraph, executeMonitorFinishedRun }, null, 2));
         return { status: 1, checks };
+      }
+
+      result = runProposals([
+        'mine',
+        '--graph',
+        executeMonitorGraphPath,
+      ]);
+      checks += 1;
+      const proposalOutput = `${result.stdout ?? ''}${result.stderr ?? ''}`;
+      if (result.status !== 0 || !proposalOutput.includes('proposal-run-execute-monitor-fixture-implementation_incomplete')) {
+        console.error(`p2a_proposals mine fixture failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: failureStatus(result), checks };
+      }
+      const executeMonitorProposalsDir = path.join(tempRoot, 'p2a-execute-monitor', 'proposals');
+      const executeMonitorProposalPath = path.join(executeMonitorProposalsDir, 'proposal-run-execute-monitor-fixture-implementation_incomplete.json');
+      const executeMonitorProposal = JSON.parse(readFileSync(executeMonitorProposalPath, 'utf8'));
+      if (
+        executeMonitorProposal.sourceRunId !== 'run-execute-monitor-fixture'
+        || executeMonitorProposal.status !== 'proposed'
+        || !executeMonitorProposal.evidence.includes('monitor verdict: unmet_acceptance')
+      ) {
+        console.error(`p2a_proposals mine wrote unexpected proposal: ${caseData.id}`);
+        console.error(JSON.stringify({ executeMonitorProposal }, null, 2));
+        return { status: 1, checks };
+      }
+
+      result = runValidator(['--proposals-dir', executeMonitorProposalsDir]);
+      checks += 1;
+      if (result.status !== 0) {
+        console.error(`proposal directory validator fixture check failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: failureStatus(result), checks };
+      }
+
+      result = runProposals([
+        'digest',
+        '--proposals',
+        executeMonitorProposalsDir,
+      ]);
+      checks += 1;
+      if (result.status !== 0 || !result.stdout.includes('Plan2Agent proposal digest')) {
+        console.error(`p2a_proposals digest fixture failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: failureStatus(result), checks };
       }
 
       const executeFailedGraphPath = path.join(tempRoot, 'p2a-execute-failed', 'gate-c-task-graph', 'task-graph.json');
@@ -1942,6 +2007,7 @@ function validateIterationCurrentFixtureCases() {
         || !existsSync(path.join(iterationTargetRoot, 'scripts', 'p2a_runs.mjs'))
         || !existsSync(path.join(iterationTargetRoot, 'scripts', 'p2a_execute.mjs'))
         || !existsSync(path.join(iterationTargetRoot, 'scripts', 'p2a_orchestrate.mjs'))
+        || !existsSync(path.join(iterationTargetRoot, 'scripts', 'p2a_proposals.mjs'))
         || !existsSync(path.join(iterationTargetRoot, 'schemas', 'run-index.schema.json'))
         || !existsSync(path.join(iterationTargetRoot, 'schemas', 'orchestration-plan.schema.json'))
       ) {
@@ -1961,9 +2027,11 @@ function validateIterationCurrentFixtureCases() {
         || !targetManifest.includedTools.includes('p2a_runs')
         || !targetManifest.includedTools.includes('p2a_execute')
         || !targetManifest.includedTools.includes('p2a_orchestrate')
+        || !targetManifest.includedTools.includes('p2a_proposals')
         || !targetManifest.toolFiles.includes('scripts/p2a_runs.mjs')
         || !targetManifest.toolFiles.includes('scripts/p2a_execute.mjs')
         || !targetManifest.toolFiles.includes('scripts/p2a_orchestrate.mjs')
+        || !targetManifest.toolFiles.includes('scripts/p2a_proposals.mjs')
         || !targetManifest.schemaFiles.includes('schemas/task-context.schema.json')
         || !targetManifest.schemaFiles.includes('schemas/run-index.schema.json')
         || !targetManifest.schemaFiles.includes('schemas/orchestration-plan.schema.json')

@@ -1,0 +1,492 @@
+#!/usr/bin/env node
+/** Mine and review Plan2Agent retrospective proposal candidates from run logs. */
+
+import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
+import path from 'node:path';
+import process from 'node:process';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import {
+  loadJson,
+  validateOrchestrationPlanData,
+  validateProposalsDir,
+  validateRunData,
+  validateRunIndexData,
+  validateSkillProposal,
+  validateSkillProposalData,
+  ValidationError,
+} from './validate_artifacts.mjs';
+import { DEFAULT_RUNS_DIR, resolveRunsDir } from './p2a_run_paths.mjs';
+
+const __filename = fileURLToPath(import.meta.url);
+const COMMANDS = new Set(['mine', 'list', 'show', 'validate', 'digest']);
+const DEFAULT_PROPOSALS_DIR = path.join('.plan2agent', 'proposals');
+const DEFAULT_HANDOFF_GRAPH = path.join('.plan2agent', 'artifacts', 'task-graph.json');
+
+function usage() {
+  return [
+    'Usage:',
+    '  node scripts/p2a_proposals.mjs mine (--artifacts <dir>|--runs <dir>|--graph <path>) [--run-id <run-id>] [--proposals <dir>] [--dry-run] [--overwrite] [--json]',
+    '  node scripts/p2a_proposals.mjs list [--proposals <dir>] [--json]',
+    '  node scripts/p2a_proposals.mjs show (--proposal <path>|--proposal-id <id>) [--proposals <dir>]',
+    '  node scripts/p2a_proposals.mjs validate [--proposal <path>|--proposals <dir>]',
+    '  node scripts/p2a_proposals.mjs digest [--proposals <dir>] [--json]',
+    '',
+    'Commands:',
+    '  mine       Read run logs and orchestration sidecars, then write proposed skill-proposal JSON files.',
+    '  list       List proposal queue entries.',
+    '  show       Print one proposal JSON.',
+    '  validate   Validate one proposal or a proposal directory.',
+    '  digest     Print a compact review digest for human/curator review.',
+    '',
+    'Source options:',
+    '  --artifacts <dir>   Iterative artifact root; reads runs/ and writes proposals/ under that root by default.',
+    '  --graph <path>      Task graph JSON path; default runs path is beside the graph parent.',
+    '  --runs <dir>        Explicit runs directory.',
+    '  --proposals <dir>   Proposal queue directory. Default: sibling proposals/ beside runs/, or .plan2agent/proposals.',
+    '  --run-id <run-id>   Limit mine to one run.',
+    '',
+    '  --dry-run           Print candidates without writing files.',
+    '  --overwrite         Replace an existing proposal file with the same proposalId.',
+    '  --json              Machine-readable output for mine/list/digest.',
+    '  --help, -h          Show this help.',
+  ].join('\n');
+}
+
+function parseArgs(argv) {
+  const command = argv[0];
+  if (!command || command === '--help' || command === '-h') return { help: true };
+  if (!COMMANDS.has(command)) throw new Error(`unknown command: ${command}\n\n${usage()}`);
+
+  const args = {
+    command,
+    artifacts: null,
+    graph: null,
+    runs: null,
+    proposals: null,
+    proposal: null,
+    proposalId: null,
+    runId: null,
+    dryRun: false,
+    overwrite: false,
+    json: false,
+    help: false,
+  };
+
+  for (let index = 1; index < argv.length; index += 1) {
+    const arg = argv[index];
+    if (arg === '--help' || arg === '-h') args.help = true;
+    else if (arg === '--artifacts') args.artifacts = requiredValue(argv, ++index, '--artifacts');
+    else if (arg === '--graph') args.graph = requiredValue(argv, ++index, '--graph');
+    else if (arg === '--runs') args.runs = requiredValue(argv, ++index, '--runs');
+    else if (arg === '--proposals') args.proposals = requiredValue(argv, ++index, '--proposals');
+    else if (arg === '--proposal') args.proposal = requiredValue(argv, ++index, '--proposal');
+    else if (arg === '--proposal-id') args.proposalId = requiredValue(argv, ++index, '--proposal-id');
+    else if (arg === '--run-id') args.runId = requiredValue(argv, ++index, '--run-id');
+    else if (arg === '--dry-run') args.dryRun = true;
+    else if (arg === '--overwrite') args.overwrite = true;
+    else if (arg === '--json') args.json = true;
+    else if (arg.startsWith('--')) throw new Error(`unknown option: ${arg}`);
+    else throw new Error(`unexpected argument: ${arg}`);
+  }
+
+  if (args.help) return args;
+  const sourceCount = [args.artifacts, args.graph, args.runs].filter(Boolean).length;
+  if (sourceCount > 1) throw new Error('--artifacts, --graph, and --runs cannot be combined');
+  if (args.command === 'mine' && sourceCount === 0) {
+    if (existsSync(DEFAULT_HANDOFF_GRAPH)) args.graph = DEFAULT_HANDOFF_GRAPH;
+    else if (existsSync(DEFAULT_RUNS_DIR)) args.runs = DEFAULT_RUNS_DIR;
+    else throw new Error('--artifacts, --graph, or --runs is required for mine');
+  }
+  if (args.command === 'show' && [args.proposal, args.proposalId].filter(Boolean).length !== 1) {
+    throw new Error('show requires exactly one of --proposal or --proposal-id');
+  }
+  if (args.command === 'validate') {
+    if (args.proposalId) throw new Error('validate supports --proposal or --proposals, not --proposal-id');
+    if (args.proposal && args.proposals) throw new Error('validate supports --proposal or --proposals, not both');
+  }
+  if (args.runId) assertSafeRunId(args.runId);
+  return args;
+}
+
+function requiredValue(argv, index, optionName) {
+  const value = argv[index];
+  if (!value) throw new Error(`${optionName} requires a value`);
+  return value;
+}
+
+function assertSafeRunId(runId) {
+  if (!/^run-[A-Za-z0-9._-]+$/.test(runId ?? '')) {
+    throw new Error(`run id must match run-[A-Za-z0-9._-]+, got ${JSON.stringify(runId)}`);
+  }
+}
+
+function assertFile(filePath, label) {
+  if (!existsSync(filePath)) throw new Error(`${label} is missing: ${filePath}`);
+  if (!lstatSync(filePath).isFile()) throw new Error(`${label} must be a file: ${filePath}`);
+}
+
+function normalizePath(filePath) {
+  return filePath.split(path.sep).join('/');
+}
+
+function displayPath(filePath, root = process.cwd()) {
+  const relative = path.relative(root, filePath);
+  if (relative && !relative.startsWith('..') && !path.isAbsolute(relative)) return normalizePath(relative);
+  return normalizePath(filePath);
+}
+
+function resolveRunsDirForProposals(args) {
+  return resolveRunsDir(args);
+}
+
+function resolveProposalDir(args) {
+  if (args.proposals) return path.resolve(args.proposals);
+  if (args.artifacts || args.graph || args.runs) return path.join(path.dirname(resolveRunsDirForProposals(args)), 'proposals');
+  return path.resolve(DEFAULT_PROPOSALS_DIR);
+}
+
+function runPath(runsDir, runId) {
+  assertSafeRunId(runId);
+  return path.join(runsDir, `${runId}.json`);
+}
+
+function runIndexPath(runsDir) {
+  return path.join(runsDir, 'run-index.json');
+}
+
+function orchestrationSidecarPath(runsDir, runId) {
+  assertSafeRunId(runId);
+  return path.join(runsDir, `${runId}.orchestration.json`);
+}
+
+function proposalPath(proposalsDir, proposalId) {
+  return path.join(proposalsDir, `${proposalId}.json`);
+}
+
+function readRun(runsDir, runId) {
+  const filePath = runPath(runsDir, runId);
+  assertFile(filePath, runId);
+  return validateRunData(loadJson(filePath));
+}
+
+function readRuns(runsDir, runId = null) {
+  if (runId) return [readRun(runsDir, runId)];
+  const indexFile = runIndexPath(runsDir);
+  if (!existsSync(indexFile)) return [];
+  const index = validateRunIndexData(loadJson(indexFile));
+  return index.runs
+    .map((entry) => readRun(runsDir, entry.runId));
+}
+
+function readSidecar(runsDir, runId) {
+  const filePath = orchestrationSidecarPath(runsDir, runId);
+  if (!existsSync(filePath)) return null;
+  return validateOrchestrationPlanData(loadJson(filePath));
+}
+
+function readMonitorVerdict(runsDir, sidecar) {
+  if (!sidecar?.monitorGate?.required || !sidecar.monitorGate.verdictPath) return null;
+  const verdictPath = path.resolve(runsDir, sidecar.monitorGate.verdictPath);
+  if (!existsSync(verdictPath)) return null;
+  const data = loadJson(verdictPath);
+  const verdict = typeof data === 'string' ? data : data?.verdict;
+  return typeof verdict === 'string' && verdict.trim() ? verdict.trim() : null;
+}
+
+function safeIdPart(value) {
+  return String(value).toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^-|-$/g, '') || 'item';
+}
+
+function failedVerificationEvidence(run) {
+  return run.verification
+    .filter((item) => item.status === 'failed')
+    .map((item) => `failed verification: ${item.type} (${item.command})`);
+}
+
+function targetFilesForFailure(failureClass) {
+  const common = ['.agents/skills/p2a-dev-execution/SKILL.md', 'docs/cli-reference.md'];
+  if (failureClass === 'scope_violation') return ['.agents/agents/p2a-implementer.md', '.agents/skills/p2a-dev-execution/SKILL.md'];
+  if (failureClass === 'missing_dependency') return ['.agents/skills/p2a-harness/SKILL.md', '.agents/skills/p2a-dev-execution/SKILL.md'];
+  if (failureClass === 'implementation_incomplete') return ['.agents/agents/p2a-performance-monitor.md', '.agents/skills/p2a-dev-execution/SKILL.md'];
+  if (failureClass === 'environment_failure') return ['docs/quickstart.md', 'docs/cli-reference.md'];
+  return common;
+}
+
+function riskForFailure(failureClass) {
+  if (failureClass === 'scope_violation' || failureClass === 'missing_dependency') return 'high';
+  if (failureClass === 'environment_failure' || failureClass === 'test_flake') return 'low';
+  return 'medium';
+}
+
+function failureRecommendation(failureClass) {
+  const recommendations = {
+    verification_failed: 'Clarify verification setup or execution guidance so future runs fail earlier with actionable checks.',
+    test_flake: 'Document flaky-test handling and retry evidence requirements for future supervised runs.',
+    scope_violation: 'Tighten implementer scope boundaries and owner review prompts before future task execution.',
+    missing_dependency: 'Capture missing dependency or user-decision prerequisites before starting implementation runs.',
+    environment_failure: 'Document environment prerequisites or fallback checks needed before executing similar tasks.',
+    implementation_incomplete: 'Strengthen acceptance-coverage and monitor-gate prompts so incomplete implementations are caught earlier.',
+    other: 'Classify this failure pattern more specifically after curator review.',
+  };
+  return recommendations[failureClass] ?? recommendations.other;
+}
+
+function buildFailureProposal(run, sidecar, verdict) {
+  if (!['failed', 'blocked'].includes(run.status) || !run.failure) return null;
+  const evidence = [
+    `runId: ${run.runId}`,
+    `task: ${run.taskId} - ${run.taskTitle}`,
+    `failure: ${run.failure.class} retryable=${run.failure.retryable} needsUserDecision=${run.failure.needsUserDecision} source=${run.failure.source}`,
+    ...failedVerificationEvidence(run),
+  ];
+  if (sidecar) evidence.push(`orchestration: ${sidecar.mode} ${sidecar.planId}`);
+  if (verdict) evidence.push(`monitor verdict: ${verdict}`);
+  const proposal = {
+    schema_version: 'p2a.skill_proposal.v1',
+    proposalId: `proposal-${safeIdPart(run.runId)}-${safeIdPart(run.failure.class)}`,
+    sourceRunId: run.runId,
+    problem: `Run ${run.runId} ended ${run.status} with ${run.failure.class}.`,
+    evidence,
+    recommendedChange: failureRecommendation(run.failure.class),
+    targetFiles: targetFilesForFailure(run.failure.class),
+    risk: riskForFailure(run.failure.class),
+    status: 'proposed',
+    note: 'Generated by p2a_proposals.mjs from run failure metadata.',
+  };
+  return validateSkillProposalData(proposal);
+}
+
+function buildVerificationGapProposal(run) {
+  if (run.status !== 'finished' || run.verification.length > 0) return null;
+  const proposal = {
+    schema_version: 'p2a.skill_proposal.v1',
+    proposalId: `proposal-${safeIdPart(run.runId)}-verification-gap`,
+    sourceRunId: run.runId,
+    problem: `Run ${run.runId} finished without recorded verification.`,
+    evidence: [
+      `runId: ${run.runId}`,
+      `task: ${run.taskId} - ${run.taskTitle}`,
+      `changedFiles: ${run.changedFiles.length}`,
+      'verification: none recorded',
+    ],
+    recommendedChange: 'Require an explicit verification command, skipped-verification rationale, or owner note before closing comparable runs.',
+    targetFiles: ['.agents/skills/p2a-dev-execution/SKILL.md', 'scripts/p2a_execute.mjs', 'docs/cli-reference.md'],
+    risk: 'medium',
+    status: 'proposed',
+    note: 'Generated by p2a_proposals.mjs from a finished run with no verification evidence.',
+  };
+  return validateSkillProposalData(proposal);
+}
+
+function buildMonitorProposal(run, sidecar, verdict) {
+  if (!sidecar?.monitorGate?.required || !verdict || sidecar.monitorGate.acceptedVerdicts.includes(verdict)) return null;
+  if (run.failure?.source === 'monitor') return null;
+  const proposal = {
+    schema_version: 'p2a.skill_proposal.v1',
+    proposalId: `proposal-${safeIdPart(run.runId)}-monitor-${safeIdPart(verdict)}`,
+    sourceRunId: run.runId,
+    problem: `Monitor gate returned ${verdict} for run ${run.runId} but the run was not closed by monitor failure metadata.`,
+    evidence: [
+      `runId: ${run.runId}`,
+      `task: ${run.taskId} - ${run.taskTitle}`,
+      `orchestration: ${sidecar.mode} ${sidecar.planId}`,
+      `monitor verdict: ${verdict}`,
+    ],
+    recommendedChange: 'Review monitor gate closeout handling so rejected verdicts consistently map to blocked run metadata.',
+    targetFiles: ['scripts/p2a_execute.mjs', '.agents/agents/p2a-performance-monitor.md'],
+    risk: 'medium',
+    status: 'proposed',
+    note: 'Generated by p2a_proposals.mjs from orchestration sidecar monitor evidence.',
+  };
+  return validateSkillProposalData(proposal);
+}
+
+function proposalsForRun(runsDir, run) {
+  const sidecar = readSidecar(runsDir, run.runId);
+  const verdict = readMonitorVerdict(runsDir, sidecar);
+  return [
+    buildFailureProposal(run, sidecar, verdict),
+    buildVerificationGapProposal(run),
+    buildMonitorProposal(run, sidecar, verdict),
+  ].filter(Boolean);
+}
+
+function uniqueByProposalId(proposals) {
+  const byId = new Map();
+  for (const proposal of proposals) {
+    if (!byId.has(proposal.proposalId)) byId.set(proposal.proposalId, proposal);
+  }
+  return [...byId.values()];
+}
+
+function writeProposal(proposalsDir, proposal, overwrite = false) {
+  const filePath = proposalPath(proposalsDir, proposal.proposalId);
+  const existed = existsSync(filePath);
+  if (existed && !overwrite) return { action: 'skipped', filePath };
+  mkdirSync(proposalsDir, { recursive: true });
+  writeFileSync(filePath, `${JSON.stringify(proposal, null, 2)}\n`, 'utf8');
+  return { action: existed ? 'overwritten' : 'written', filePath };
+}
+
+function proposalFiles(proposalsDir) {
+  if (!existsSync(proposalsDir)) return [];
+  if (!lstatSync(proposalsDir).isDirectory()) throw new Error(`proposals path must be a directory: ${proposalsDir}`);
+  return readdirSync(proposalsDir)
+    .filter((entry) => entry.endsWith('.json'))
+    .sort((a, b) => a.localeCompare(b))
+    .map((entry) => path.join(proposalsDir, entry));
+}
+
+function loadProposals(proposalsDir) {
+  return proposalFiles(proposalsDir)
+    .map((filePath) => validateSkillProposal(filePath));
+}
+
+function digestForProposals(proposals) {
+  const byStatus = {};
+  const byRisk = {};
+  const bySourceRun = {};
+  for (const proposal of proposals) {
+    byStatus[proposal.status] = (byStatus[proposal.status] ?? 0) + 1;
+    byRisk[proposal.risk] = (byRisk[proposal.risk] ?? 0) + 1;
+    if (proposal.sourceRunId) bySourceRun[proposal.sourceRunId] = (bySourceRun[proposal.sourceRunId] ?? 0) + 1;
+  }
+  const priority = { high: 0, medium: 1, low: 2 };
+  return {
+    total: proposals.length,
+    byStatus,
+    byRisk,
+    sourceRunCount: Object.keys(bySourceRun).length,
+    proposed: proposals
+      .filter((proposal) => proposal.status === 'proposed')
+      .sort((a, b) => (priority[a.risk] ?? 9) - (priority[b.risk] ?? 9) || a.proposalId.localeCompare(b.proposalId))
+      .map((proposal) => ({
+        proposalId: proposal.proposalId,
+        risk: proposal.risk,
+        sourceRunId: proposal.sourceRunId ?? null,
+        problem: proposal.problem,
+      })),
+  };
+}
+
+function runMine(args) {
+  const runsDir = resolveRunsDirForProposals(args);
+  const proposalsDir = resolveProposalDir(args);
+  const runs = readRuns(runsDir, args.runId);
+  const candidates = uniqueByProposalId(runs.flatMap((run) => proposalsForRun(runsDir, run)));
+  const results = candidates.map((proposal) => {
+    if (args.dryRun) return { proposal, action: 'dry-run', filePath: proposalPath(proposalsDir, proposal.proposalId) };
+    const writeResult = writeProposal(proposalsDir, proposal, args.overwrite);
+    return { proposal, ...writeResult };
+  });
+  if (args.json) {
+    console.log(JSON.stringify({
+      runsDir: displayPath(runsDir),
+      proposalsDir: displayPath(proposalsDir),
+      candidates: results.map((result) => ({
+        proposalId: result.proposal.proposalId,
+        sourceRunId: result.proposal.sourceRunId,
+        risk: result.proposal.risk,
+        action: result.action,
+        filePath: displayPath(result.filePath),
+      })),
+    }, null, 2));
+    return 0;
+  }
+  console.log('Plan2Agent proposal mining');
+  console.log(`- runs: ${displayPath(runsDir)}`);
+  console.log(`- proposals: ${displayPath(proposalsDir)}`);
+  console.log(`- runs scanned: ${runs.length}`);
+  console.log(`- candidates: ${results.length}`);
+  for (const result of results) {
+    console.log(`- ${result.action}: ${result.proposal.proposalId} -> ${displayPath(result.filePath)}`);
+  }
+  return 0;
+}
+
+function runList(args) {
+  const proposalsDir = resolveProposalDir(args);
+  const proposals = loadProposals(proposalsDir);
+  if (args.json) {
+    console.log(JSON.stringify(proposals, null, 2));
+    return 0;
+  }
+  console.log('proposalId\tstatus\trisk\tsourceRunId\tproblem');
+  for (const proposal of proposals) {
+    console.log(`${proposal.proposalId}\t${proposal.status}\t${proposal.risk}\t${proposal.sourceRunId ?? '-'}\t${proposal.problem}`);
+  }
+  return 0;
+}
+
+function runShow(args) {
+  const filePath = args.proposal ? path.resolve(args.proposal) : proposalPath(resolveProposalDir(args), args.proposalId);
+  const proposal = validateSkillProposal(filePath);
+  console.log(JSON.stringify(proposal, null, 2));
+  return 0;
+}
+
+function runValidate(args) {
+  if (args.proposal) {
+    const proposal = validateSkillProposal(path.resolve(args.proposal));
+    console.log(`Plan2Agent proposal validation passed: ${proposal.proposalId}`);
+    return 0;
+  }
+  const proposalsDir = resolveProposalDir(args);
+  const proposals = validateProposalsDir(proposalsDir);
+  console.log(`Plan2Agent proposals validation passed: ${displayPath(proposalsDir)} (${proposals.length})`);
+  return 0;
+}
+
+function runDigest(args) {
+  const proposalsDir = resolveProposalDir(args);
+  const proposals = loadProposals(proposalsDir);
+  const digest = digestForProposals(proposals);
+  if (args.json) {
+    console.log(JSON.stringify(digest, null, 2));
+    return 0;
+  }
+  console.log('Plan2Agent proposal digest');
+  console.log(`- proposals: ${displayPath(proposalsDir)}`);
+  console.log(`- total: ${digest.total}`);
+  console.log(`- byStatus: ${JSON.stringify(digest.byStatus)}`);
+  console.log(`- byRisk: ${JSON.stringify(digest.byRisk)}`);
+  console.log(`- sourceRuns: ${digest.sourceRunCount}`);
+  console.log('Proposed queue:');
+  for (const item of digest.proposed) {
+    console.log(`- ${item.proposalId} [${item.risk}] ${item.problem}`);
+  }
+  return 0;
+}
+
+export function main(argv = process.argv.slice(2)) {
+  try {
+    const args = parseArgs(argv);
+    if (args.help) {
+      console.log(usage());
+      return 0;
+    }
+    if (args.command === 'mine') return runMine(args);
+    if (args.command === 'list') return runList(args);
+    if (args.command === 'show') return runShow(args);
+    if (args.command === 'validate') return runValidate(args);
+    if (args.command === 'digest') return runDigest(args);
+    throw new Error(`unknown command: ${args.command}`);
+  } catch (error) {
+    const prefix = error instanceof ValidationError ? 'p2a proposal validation failed' : 'p2a proposal command failed';
+    console.error(`${prefix}: ${error.message}`);
+    return 1;
+  }
+}
+
+function isDirectEntry() {
+  if (!process.argv[1]) return false;
+  try {
+    return realpathSync(__filename) === realpathSync(process.argv[1]);
+  } catch {
+    return import.meta.url === pathToFileURL(process.argv[1]).href;
+  }
+}
+
+if (isDirectEntry()) {
+  process.exitCode = main();
+}

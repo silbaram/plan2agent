@@ -1,6 +1,6 @@
 # 02-1 p2a-dev-orchestrator 개발 계획
 
-작성일: 2026-06-23 · 상태: MVP 1차 구현 완료 · 상위 문서: `plans/02-development-team-ai-agent.md` · 연결 문서: `plans/01-product-roadmap.md`, `plans/03-p2a-gui-mvp.md`
+작성일: 2026-06-23 · 상태: MVP 1차 구현 완료, O7 Hermes proposal queue MVP 완료 · 상위 문서: `plans/02-development-team-ai-agent.md` · 연결 문서: `plans/01-product-roadmap.md`, `plans/03-p2a-gui-mvp.md`
 
 이 문서는 Team Big Five의 `team-lead` 역할을 Plan2Agent-native로 구현하기 위한 최소 개발 계획이다. 목표는 여러 agent를 무인으로 돌리는 것이 아니라, 기존 CLI-first 하네스 위에서 **어떤 task를 solo/team으로 처리할지 판단하고, 역할별 실행 계획과 검증 흐름을 파일로 남기는 것**이다. GUI는 이 결과를 나중에 읽는 보조 표면으로 둔다.
 
@@ -14,12 +14,13 @@
 - monitor verdict 기반 `finish` 차단/blocked 변환.
 - `p2a-dev-orchestrator` read-only agent와 CLI mirror.
 - scaffold/handoff 복사 대상, fixture, CLI 문서 갱신.
+- `p2a_proposals.mjs`가 run failure, monitor verdict, verification gap에서 Hermes식 proposal queue를 생성·검증·요약.
 
 후속으로 남김:
 
 - GUI 표시.
 - 병렬 scheduler.
-- Hermes proposal 자동 생성/큐.
+- curator 자동 리뷰와 승인 후보 diff 초안.
 - agent-generated orchestration plan.
 
 ## 1. 현재 전제
@@ -35,12 +36,11 @@
 - `p2a-skill-curator`: Hermes식 proposal 검토 계약.
 - Team Big Five adapter 설치: CLI별 kickoff 파일 설치와 source manifest 기록.
 
-아직 없는 것:
+아직 후속으로 남긴 것:
 
-- `team-lead` 판단을 담당하는 P2A-native orchestrator.
-- solo/team mode 판단 규칙.
-- 역할별 session plan과 shared mental model 파일.
-- orchestrator 결과를 run sidecar에 남기는 계약.
+- agent-generated orchestration plan.
+- shared mental model 파일과 closed-loop communication 기록.
+- 실제 multi-session PTY scheduler.
 - 실패 시 retry/ask/blocked 판단 규칙.
 
 ## 2. MVP 목표
@@ -175,11 +175,25 @@ MVP에서 하지 않는 것:
 - solo task는 기존 단일 task 흐름을 방해하지 않는다.
 - team task는 역할별 prompt/command와 monitor gate가 한 화면에서 확인된다.
 
-### O7. Hermes 연결 후속
+### O7. Hermes proposal queue MVP
 
 - orchestration 결과에서 반복 실패, scope drift, verification gap을 proposal 후보로 만든다.
 - 자동 적용은 금지하고 `p2a-skill-curator` 검토 대상으로만 남긴다.
-- run history가 쌓인 뒤 별도 하위 계획에서 cross-session recall과 proposal queue를 설계한다.
+
+완료 기준:
+
+- `p2a_proposals.mjs mine`이 run log, orchestration sidecar, monitor verdict를 읽어 `skill-proposal` JSON을 만든다.
+- `list/show/digest/validate`로 사람이 큐를 검토할 수 있다.
+- `validate_artifacts --proposals-dir`가 proposal directory 계약을 검증한다.
+- scaffold/handoff 대상 프로젝트에 CLI와 schema가 포함된다.
+- fixture가 monitor-blocked run에서 proposal을 생성하고 digest까지 확인한다.
+
+후속:
+
+- `p2a-skill-curator` 자동 리뷰 연결.
+- 승인 후보 diff 초안.
+- cross-session recall.
+- 반복 실패 유형 통계.
 
 ## 5. Team Big Five 완료 판단
 
@@ -199,16 +213,16 @@ MVP 완료:
 
 ## 6. Hermes와의 관계
 
-Hermes는 orchestrator MVP 이후에 고도화한다. 이유는 자가발전은 실행 데이터가 쌓인 뒤 효과가 있기 때문이다.
+Hermes는 orchestrator MVP 이후에 파일 기반 queue부터 붙인다. 자동 self-modify는 계속 금지하고, 실행 데이터에서 개선 후보를 모아 사람이 승인하는 방향만 허용한다.
 
 MVP 연결:
 
-- orchestration sidecar가 나중에 proposal 후보를 만들 수 있는 입력이 된다.
-- MVP에서 proposal 자동 생성/적용은 하지 않는다.
+- orchestration sidecar와 run failure metadata가 proposal 후보 입력이 된다.
+- `p2a_proposals.mjs`가 proposal 후보를 생성하고 digest를 제공한다.
+- MVP에서 proposal 자동 적용은 하지 않는다.
 
 후속:
 
-- orchestrator run 결과를 proposal 후보로 요약.
 - curator가 normalize/dedupe/prioritize.
 - 사람 승인 후 별도 patch turn에서만 반영.
 - cross-session recall.
@@ -228,3 +242,4 @@ MVP 연결:
 | Gemini 역할 | read-only reviewer/planner |
 | GUI 편집 여부 | MVP 제외. 후속에서는 read-only 표시와 handoff 실행만 |
 | 무인 실행 | API 키 기반 별도 설계 전까지 제외 |
+| Hermes queue | `p2a_proposals.mjs` deterministic mining + 사람 승인. 자동 적용 없음 |
