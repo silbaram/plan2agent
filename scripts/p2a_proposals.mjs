@@ -178,10 +178,58 @@ function readRuns(runsDir, runId = null) {
     .map((entry) => readRun(runsDir, entry.runId));
 }
 
+function errorMessage(error) {
+  return error instanceof Error && error.message ? error.message : String(error);
+}
+
+function readRunForMining(runsDir, runId) {
+  try {
+    return { run: readRun(runsDir, runId), skipped: null };
+  } catch (error) {
+    return { run: null, skipped: { runId, reason: errorMessage(error) } };
+  }
+}
+
+function readRunsForMining(runsDir, runId = null) {
+  if (runId) {
+    const result = readRunForMining(runsDir, runId);
+    return {
+      runs: result.run ? [result.run] : [],
+      skippedRuns: result.skipped ? [result.skipped] : [],
+      totalRunRefs: 1,
+    };
+  }
+  const indexFile = runIndexPath(runsDir);
+  if (!existsSync(indexFile)) return { runs: [], skippedRuns: [], totalRunRefs: 0 };
+  const index = validateRunIndexData(loadJson(indexFile));
+  const runs = [];
+  const skippedRuns = [];
+  for (const entry of index.runs) {
+    const result = readRunForMining(runsDir, entry.runId);
+    if (result.run) runs.push(result.run);
+    else skippedRuns.push(result.skipped);
+  }
+  return { runs, skippedRuns, totalRunRefs: index.runs.length };
+}
+
 function readSidecar(runsDir, runId) {
   const filePath = orchestrationSidecarPath(runsDir, runId);
   if (!existsSync(filePath)) return null;
   return validateOrchestrationPlanData(loadJson(filePath));
+}
+
+function readSidecarForMining(runsDir, runId) {
+  try {
+    return { sidecar: readSidecar(runsDir, runId), warning: null };
+  } catch (error) {
+    return {
+      sidecar: null,
+      warning: {
+        runId,
+        reason: `orchestration sidecar ignored: ${errorMessage(error)}`,
+      },
+    };
+  }
 }
 
 function readMonitorVerdict(runsDir, sidecar) {
@@ -191,6 +239,20 @@ function readMonitorVerdict(runsDir, sidecar) {
   const data = loadJson(verdictPath);
   const verdict = typeof data === 'string' ? data : data?.verdict;
   return typeof verdict === 'string' && verdict.trim() ? verdict.trim() : null;
+}
+
+function readMonitorVerdictForMining(runsDir, runId, sidecar) {
+  try {
+    return { verdict: readMonitorVerdict(runsDir, sidecar), warning: null };
+  } catch (error) {
+    return {
+      verdict: null,
+      warning: {
+        runId,
+        reason: `monitor verdict ignored: ${errorMessage(error)}`,
+      },
+    };
+  }
 }
 
 function safeIdPart(value) {
@@ -302,13 +364,21 @@ function buildMonitorProposal(run, sidecar, verdict) {
 }
 
 function proposalsForRun(runsDir, run) {
-  const sidecar = readSidecar(runsDir, run.runId);
-  const verdict = readMonitorVerdict(runsDir, sidecar);
-  return [
-    buildFailureProposal(run, sidecar, verdict),
-    buildVerificationGapProposal(run),
-    buildMonitorProposal(run, sidecar, verdict),
-  ].filter(Boolean);
+  const warnings = [];
+  const sidecarResult = readSidecarForMining(runsDir, run.runId);
+  if (sidecarResult.warning) warnings.push(sidecarResult.warning);
+  const sidecar = sidecarResult.sidecar;
+  const verdictResult = readMonitorVerdictForMining(runsDir, run.runId, sidecar);
+  if (verdictResult.warning) warnings.push(verdictResult.warning);
+  const verdict = verdictResult.verdict;
+  return {
+    proposals: [
+      buildFailureProposal(run, sidecar, verdict),
+      buildVerificationGapProposal(run),
+      buildMonitorProposal(run, sidecar, verdict),
+    ].filter(Boolean),
+    warnings,
+  };
 }
 
 function uniqueByProposalId(proposals) {
@@ -372,8 +442,10 @@ function digestForProposals(proposals) {
 function runMine(args) {
   const runsDir = resolveRunsDirForProposals(args);
   const proposalsDir = resolveProposalDir(args);
-  const runs = readRuns(runsDir, args.runId);
-  const candidates = uniqueByProposalId(runs.flatMap((run) => proposalsForRun(runsDir, run)));
+  const runScan = readRunsForMining(runsDir, args.runId);
+  const proposalScan = runScan.runs.map((run) => proposalsForRun(runsDir, run));
+  const warnings = proposalScan.flatMap((result) => result.warnings);
+  const candidates = uniqueByProposalId(proposalScan.flatMap((result) => result.proposals));
   const results = candidates.map((proposal) => {
     if (args.dryRun) return { proposal, action: 'dry-run', filePath: proposalPath(proposalsDir, proposal.proposalId) };
     const writeResult = writeProposal(proposalsDir, proposal, args.overwrite);
@@ -383,6 +455,10 @@ function runMine(args) {
     console.log(JSON.stringify({
       runsDir: displayPath(runsDir),
       proposalsDir: displayPath(proposalsDir),
+      runsScanned: runScan.totalRunRefs,
+      runsUsable: runScan.runs.length,
+      skippedRuns: runScan.skippedRuns,
+      warnings,
       candidates: results.map((result) => ({
         proposalId: result.proposal.proposalId,
         sourceRunId: result.proposal.sourceRunId,
@@ -396,8 +472,17 @@ function runMine(args) {
   console.log('Plan2Agent proposal mining');
   console.log(`- runs: ${displayPath(runsDir)}`);
   console.log(`- proposals: ${displayPath(proposalsDir)}`);
-  console.log(`- runs scanned: ${runs.length}`);
+  console.log(`- runs scanned: ${runScan.totalRunRefs}`);
+  console.log(`- runs usable: ${runScan.runs.length}`);
+  if (runScan.skippedRuns.length) console.log(`- skipped runs: ${runScan.skippedRuns.length}`);
+  if (warnings.length) console.log(`- warnings: ${warnings.length}`);
   console.log(`- candidates: ${results.length}`);
+  for (const skipped of runScan.skippedRuns) {
+    console.warn(`warning: skipped run ${skipped.runId}: ${skipped.reason}`);
+  }
+  for (const warning of warnings) {
+    console.warn(`warning: ${warning.runId}: ${warning.reason}`);
+  }
   for (const result of results) {
     console.log(`- ${result.action}: ${result.proposal.proposalId} -> ${displayPath(result.filePath)}`);
   }

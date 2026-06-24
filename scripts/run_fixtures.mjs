@@ -965,6 +965,41 @@ function validateIterationCurrentFixtureCases() {
         return { status: 1, checks };
       }
 
+      const executeMonitorRunsDir = path.join(tempRoot, 'p2a-execute-monitor', 'runs');
+      const invalidRunId = 'run-execute-monitor-invalid';
+      const executeMonitorRunIndexPath = path.join(executeMonitorRunsDir, 'run-index.json');
+      const executeMonitorRunIndex = JSON.parse(readFileSync(executeMonitorRunIndexPath, 'utf8'));
+      const baseRunIndexEntry = executeMonitorRunIndex.runs.find((run) => run.runId === 'run-execute-monitor-fixture');
+      executeMonitorRunIndex.runs.push({
+        ...baseRunIndexEntry,
+        runId: invalidRunId,
+        runRef: `${invalidRunId}.json`,
+        status: 'finished',
+      });
+      const executeMonitorTaskIndex = executeMonitorRunIndex.tasks.find((task) => task.taskId === 'task-001');
+      executeMonitorTaskIndex.runIds.push(invalidRunId);
+      executeMonitorTaskIndex.latestRunId = invalidRunId;
+      writeFileSync(executeMonitorRunIndexPath, `${JSON.stringify(executeMonitorRunIndex, null, 2)}\n`, 'utf8');
+      writeFileSync(path.join(executeMonitorRunsDir, `${invalidRunId}.json`), `{"schema_version":"p2a.run.v1","runId":"${invalidRunId}"}\n`, 'utf8');
+
+      result = runProposals([
+        'mine',
+        '--graph',
+        executeMonitorGraphPath,
+        '--overwrite',
+      ]);
+      checks += 1;
+      const invalidRunProposalOutput = `${result.stdout ?? ''}${result.stderr ?? ''}`;
+      if (
+        result.status !== 0
+        || !invalidRunProposalOutput.includes(`warning: skipped run ${invalidRunId}`)
+        || !invalidRunProposalOutput.includes('proposal-run-execute-monitor-fixture-implementation_incomplete')
+      ) {
+        console.error(`p2a_proposals mine should skip invalid run and continue: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: failureStatus(result), checks };
+      }
+
       result = runValidator(['--proposals-dir', executeMonitorProposalsDir]);
       checks += 1;
       if (result.status !== 0) {

@@ -183,6 +183,7 @@ MVP에서 하지 않는 것:
 완료 기준:
 
 - `p2a_proposals.mjs mine`이 run log, orchestration sidecar, monitor verdict를 읽어 `skill-proposal` JSON을 만든다.
+- 손상된 run file은 `mine`에서 warning 후 skip하고 나머지 run 분석은 계속한다. 감사용 `validate`는 계속 엄격하게 실패한다.
 - `list/show/digest/validate`로 사람이 큐를 검토할 수 있다.
 - `validate_artifacts --proposals-dir`가 proposal directory 계약을 검증한다.
 - scaffold/handoff 대상 프로젝트에 CLI와 schema가 포함된다.
@@ -192,6 +193,8 @@ MVP에서 하지 않는 것:
 
 - `p2a-skill-curator` 자동 리뷰 연결.
 - 승인 후보 diff 초안.
+- docs/config-only task의 verification-gap 노이즈를 줄이기 위한 skipped-verification rationale 표준화.
+- 반복 failureClass/source/targetFiles 빈도 기반 proposal 우선순위.
 - cross-session recall.
 - 반복 실패 유형 통계.
 

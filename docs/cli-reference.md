@@ -389,7 +389,14 @@ node scripts/p2a_proposals.mjs validate \
 - `finished` run인데 verification 기록이 없는 경우
 - monitor gate가 거절 verdict를 냈지만 run failure source가 monitor로 닫히지 않은 경우
 
+`mine`은 회고 분석용 best-effort 명령이다. run file 한 건이 legacy/손상 상태라 schema 검증에 실패하면 warning으로 건너뛰고 나머지 run을 계속 처리한다. 반대로 `validate`와 `validate_artifacts --runs-dir/--proposals-dir`는 감사용 명령이므로 계속 엄격하게 실패한다.
+
 큐 파일은 `<proposalId>.json` 이름으로 저장되며 validator가 파일명과 `proposalId` 일치를 확인한다. 같은 proposal이 이미 있으면 기본은 skip이고, 다시 쓰려면 `--overwrite`를 명시한다. 실제 skill/agent 수정은 `p2a-skill-curator` 검토와 사람 승인 이후 별도 변경으로 처리한다.
+
+MVP 제약:
+
+- `finished` run에 verification 기록이 없으면 docs/config-only task처럼 의도적으로 검증을 생략한 경우도 verification-gap proposal이 생길 수 있다. 후속에서는 run schema 또는 표준 marker로 skipped-verification rationale을 기록해 이 노이즈를 줄인다.
+- `digest`는 현재 risk 기준으로만 proposal을 정렬한다. 반복 failureClass/source/targetFiles 빈도 가중치는 후속 `review`/curator 자동 리뷰에서 다룬다.
 
 ## 9. 인계 — `p2a_handoff.mjs`
 

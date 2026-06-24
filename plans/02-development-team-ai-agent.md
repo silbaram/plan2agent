@@ -331,8 +331,8 @@ node scripts/run_fixtures.mjs
 4. **Hermes식 proposal queue MVP** (✅ 완료)
    - 목적: 실제 run에서 쌓인 proposal을 normalize, dedupe, prioritize하고 승인 대기 목록으로 정리한다.
    - 범위: proposal 자동 적용은 계속 금지한다.
-   - 완료 범위: run sidecar/failureClass/monitor verdict 기반 proposal queue, list/show/validate/digest, scaffold/handoff 복사, fixture 회귀.
-   - 후속 범위: curator 자동 리뷰, 승인 후보 diff 초안, 반복적으로 발생한 실패 유형 통계.
+   - 완료 범위: run sidecar/failureClass/monitor verdict 기반 proposal queue, invalid run best-effort skip, list/show/validate/digest, scaffold/handoff 복사, fixture 회귀.
+   - 후속 범위: curator 자동 리뷰, 승인 후보 diff 초안, skipped-verification rationale 표준 필드/marker, 반복 failureClass/source/targetFiles 빈도 기반 우선순위와 통계.
 
 5. **감독형 실행기 Phase 2: PTY+Electron GUI** (다음 추천)
    - 목적: `p2a_execute`의 manual launcher와 `p2a_orchestrate` sidecar 표면을 PTY/xterm 기반 live watch + 승인 UI로 바꾼다.
