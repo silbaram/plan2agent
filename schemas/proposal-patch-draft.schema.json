@@ -1,0 +1,126 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://plan2agent.local/schemas/proposal-patch-draft.schema.json",
+  "title": "Plan2Agent Proposal Patch Draft",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "draftId",
+    "generatedAt",
+    "sourceCuration",
+    "candidateId",
+    "classification",
+    "title",
+    "status",
+    "approvalRequired",
+    "autoApplyAllowed",
+    "targetFiles",
+    "intendedChanges",
+    "verificationPlan",
+    "risks",
+    "rationale"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "p2a.proposal_patch_draft.v1"
+    },
+    "draftId": {
+      "type": "string",
+      "pattern": "^proposal-patch-draft-[a-f0-9]{12}$"
+    },
+    "generatedAt": {
+      "type": "string",
+      "minLength": 1
+    },
+    "sourceCuration": {
+      "type": "string",
+      "minLength": 1
+    },
+    "candidateId": {
+      "type": "string",
+      "pattern": "^candidate-[a-f0-9]{12}$"
+    },
+    "classification": {
+      "type": "string",
+      "minLength": 1
+    },
+    "title": {
+      "type": "string",
+      "minLength": 1
+    },
+    "status": {
+      "type": "string",
+      "enum": ["draft"]
+    },
+    "approvalRequired": {
+      "type": "boolean"
+    },
+    "autoApplyAllowed": {
+      "type": "boolean"
+    },
+    "targetFiles": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "intendedChanges": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["file", "changeType", "description"],
+        "additionalProperties": false,
+        "properties": {
+          "file": {
+            "type": "string",
+            "minLength": 1
+          },
+          "changeType": {
+            "type": "string",
+            "enum": ["update", "add", "remove", "review"]
+          },
+          "description": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    "verificationPlan": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["type", "command", "required"],
+        "additionalProperties": false,
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": ["syntax", "fixture", "parity", "validation", "custom"]
+          },
+          "command": {
+            "type": ["string", "null"]
+          },
+          "required": {
+            "type": "boolean"
+          }
+        }
+      }
+    },
+    "risks": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "rationale": {
+      "type": "string",
+      "minLength": 1
+    }
+  }
+}

@@ -1,6 +1,6 @@
 # 02-1 p2a-dev-orchestrator 개발 계획
 
-작성일: 2026-06-23 · 상태: MVP 1차 구현 완료, O7 Hermes proposal queue/review/curation MVP 완료 · 상위 문서: `plans/02-development-team-ai-agent.md` · 연결 문서: `plans/01-product-roadmap.md`, `plans/03-p2a-gui-mvp.md`
+작성일: 2026-06-23 · 상태: MVP 1차 구현 완료, O7 Hermes proposal queue/review/curation/patch draft MVP 완료 · 상위 문서: `plans/02-development-team-ai-agent.md` · 연결 문서: `plans/01-product-roadmap.md`, `plans/03-p2a-gui-mvp.md`
 
 이 문서는 Team Big Five의 `team-lead` 역할을 Plan2Agent-native로 구현하기 위한 최소 개발 계획이다. 목표는 여러 agent를 무인으로 돌리는 것이 아니라, 기존 CLI-first 하네스 위에서 **어떤 task를 solo/team으로 처리할지 판단하고, 역할별 실행 계획과 검증 흐름을 파일로 남기는 것**이다. GUI는 이 결과를 나중에 읽는 보조 표면으로 둔다.
 
@@ -14,13 +14,13 @@
 - monitor verdict 기반 `finish` 차단/blocked 변환.
 - `p2a-dev-orchestrator` read-only agent와 CLI mirror.
 - scaffold/handoff 복사 대상, fixture, CLI 문서 갱신.
-- `p2a_proposals.mjs`가 run failure, monitor verdict, verification gap에서 Hermes식 proposal queue/review/curation을 생성·검증·요약.
+- `p2a_proposals.mjs`가 run failure, monitor verdict, verification gap에서 Hermes식 proposal queue/review/curation/patch draft를 생성·검증·요약.
 
 후속으로 남김:
 
 - GUI 표시.
 - 병렬 scheduler.
-- 승인 후보 diff 초안.
+- 실제 적용 patch 생성.
 - agent-generated orchestration plan.
 
 ## 1. 현재 전제
@@ -175,7 +175,7 @@ MVP에서 하지 않는 것:
 - solo task는 기존 단일 task 흐름을 방해하지 않는다.
 - team task는 역할별 prompt/command와 monitor gate가 한 화면에서 확인된다.
 
-### O7. Hermes proposal queue/review/curation MVP
+### O7. Hermes proposal queue/review/curation/patch draft MVP
 
 - orchestration 결과에서 반복 실패, scope drift, verification gap을 proposal 후보로 만든다.
 - 자동 적용은 금지하고 `p2a-skill-curator` 검토 대상으로만 남긴다.
@@ -184,14 +184,14 @@ MVP에서 하지 않는 것:
 
 - `p2a_proposals.mjs mine`이 run log, orchestration sidecar, monitor verdict를 읽어 `skill-proposal` JSON을 만든다.
 - 손상된 run file은 `mine`에서 warning 후 skip하고 나머지 run 분석은 계속한다. 감사용 `validate`는 계속 엄격하게 실패한다.
-- `list/show/digest/review/curate/validate`로 사람이 큐와 review/curation artifact를 검토할 수 있다.
-- `validate_artifacts --proposals-dir`, `--proposal-review`, `--proposal-curation`이 proposal directory와 review/curation artifact 계약을 검증한다.
+- `list/show/digest/review/curate/draft-patch/validate`로 사람이 큐와 review/curation/patch-draft artifact를 검토할 수 있다.
+- `validate_artifacts --proposals-dir`, `--proposal-review`, `--proposal-curation`, `--proposal-patch-draft`가 proposal directory와 review/curation/patch-draft artifact 계약을 검증한다.
 - scaffold/handoff 대상 프로젝트에 CLI와 schema가 포함된다.
-- fixture가 monitor-blocked run에서 proposal을 생성하고 digest/review/curation까지 확인한다.
+- fixture가 monitor-blocked run에서 proposal을 생성하고 digest/review/curation/patch-draft까지 확인한다.
 
 후속:
 
-- 승인 후보 diff 초안.
+- 실제 적용 patch 생성.
 - docs/config-only task의 verification-gap 노이즈를 줄이기 위한 skipped-verification rationale 표준화.
 - 반복 failureClass/source/targetFiles 빈도 기반 proposal 우선순위.
 - cross-session recall.
@@ -220,7 +220,7 @@ Hermes는 orchestrator MVP 이후에 파일 기반 queue부터 붙인다. 자동
 MVP 연결:
 
 - orchestration sidecar와 run failure metadata가 proposal 후보 입력이 된다.
-- `p2a_proposals.mjs`가 proposal 후보와 review/curation artifact를 생성하고 digest를 제공한다.
+- `p2a_proposals.mjs`가 proposal 후보와 review/curation/patch-draft artifact를 생성하고 digest를 제공한다.
 - MVP에서 proposal 자동 적용은 하지 않는다.
 
 후속:
@@ -244,4 +244,4 @@ MVP 연결:
 | Gemini 역할 | read-only reviewer/planner |
 | GUI 편집 여부 | MVP 제외. 후속에서는 read-only 표시와 handoff 실행만 |
 | 무인 실행 | API 키 기반 별도 설계 전까지 제외 |
-| Hermes queue/review/curation | `p2a_proposals.mjs` deterministic mining/review/curation + 사람 승인. 자동 적용 없음 |
+| Hermes queue/review/curation/patch draft | `p2a_proposals.mjs` deterministic mining/review/curation/draft-patch + 사람 승인. 자동 적용 없음 |

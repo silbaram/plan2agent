@@ -12,6 +12,7 @@ import {
   validateProposalsDir,
   validateRunData,
   validateRunIndexData,
+  validateProposalPatchDraftData,
   validateProposalCurationData,
   validateProposalReviewData,
   validateSkillProposal,
@@ -21,7 +22,7 @@ import {
 import { DEFAULT_RUNS_DIR, resolveRunsDir } from './p2a_run_paths.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
-const COMMANDS = new Set(['mine', 'list', 'show', 'validate', 'digest', 'review', 'curate']);
+const COMMANDS = new Set(['mine', 'list', 'show', 'validate', 'digest', 'review', 'curate', 'draft-patch']);
 const DEFAULT_PROPOSALS_DIR = path.join('.plan2agent', 'proposals');
 const DEFAULT_HANDOFF_GRAPH = path.join('.plan2agent', 'artifacts', 'task-graph.json');
 
@@ -35,6 +36,7 @@ function usage() {
     '  node scripts/p2a_proposals.mjs digest [--proposals <dir>] [--json]',
     '  node scripts/p2a_proposals.mjs review [--proposals <dir>] [--output <path>] [--dry-run] [--overwrite] [--json]',
     '  node scripts/p2a_proposals.mjs curate --review <path> [--proposals <dir>] [--output <path>] [--dry-run] [--overwrite] [--json]',
+    '  node scripts/p2a_proposals.mjs draft-patch --curation <path> [--candidate-id <id>] [--proposals <dir>] [--output <path>] [--dry-run] [--overwrite] [--json]',
     '',
     'Commands:',
     '  mine       Read run logs and orchestration sidecars, then write proposed skill-proposal JSON files.',
@@ -44,6 +46,7 @@ function usage() {
     '  digest     Print a compact review digest for human/curator review.',
     '  review     Group proposals and write a deterministic curator review artifact.',
     '  curate     Turn a proposal review into approval-ready improvement candidates.',
+    '  draft-patch Create a non-applying patch draft for one curation candidate.',
     '',
     'Source options:',
     '  --artifacts <dir>   Iterative artifact root; reads runs/ and writes proposals/ under that root by default.',
@@ -51,12 +54,14 @@ function usage() {
     '  --runs <dir>        Explicit runs directory.',
     '  --proposals <dir>   Proposal queue directory. Default: sibling proposals/ beside runs/, or .plan2agent/proposals.',
     '  --review <path>     Proposal review JSON to curate.',
-    '  --output <path>     Review/curation output path. Defaults under proposals/reviews or proposals/curations.',
+    '  --curation <path>   Proposal curation JSON to draft from.',
+    '  --candidate-id <id> Candidate id for draft-patch. Required when curation has multiple candidates.',
+    '  --output <path>     Review/curation/patch-draft output path.',
     '  --run-id <run-id>   Limit mine to one run.',
     '',
     '  --dry-run           Print candidates without writing files.',
     '  --overwrite         Replace an existing proposal file with the same proposalId.',
-    '  --json              Machine-readable output for mine/list/digest/review/curate.',
+    '  --json              Machine-readable output for mine/list/digest/review/curate/draft-patch.',
     '  --help, -h          Show this help.',
   ].join('\n');
 }
@@ -75,6 +80,8 @@ function parseArgs(argv) {
     proposal: null,
     proposalId: null,
     review: null,
+    curation: null,
+    candidateId: null,
     output: null,
     runId: null,
     dryRun: false,
@@ -93,6 +100,8 @@ function parseArgs(argv) {
     else if (arg === '--proposal') args.proposal = requiredValue(argv, ++index, '--proposal');
     else if (arg === '--proposal-id') args.proposalId = requiredValue(argv, ++index, '--proposal-id');
     else if (arg === '--review') args.review = requiredValue(argv, ++index, '--review');
+    else if (arg === '--curation') args.curation = requiredValue(argv, ++index, '--curation');
+    else if (arg === '--candidate-id') args.candidateId = requiredValue(argv, ++index, '--candidate-id');
     else if (arg === '--output') args.output = requiredValue(argv, ++index, '--output');
     else if (arg === '--run-id') args.runId = requiredValue(argv, ++index, '--run-id');
     else if (arg === '--dry-run') args.dryRun = true;
@@ -119,7 +128,10 @@ function parseArgs(argv) {
   }
   if (args.command === 'curate' && !args.review) throw new Error('curate requires --review');
   if (args.review && args.command !== 'curate') throw new Error('--review is only supported by curate');
-  if (args.output && !['review', 'curate'].includes(args.command)) throw new Error('--output is only supported by review or curate');
+  if (args.command === 'draft-patch' && !args.curation) throw new Error('draft-patch requires --curation');
+  if (args.curation && args.command !== 'draft-patch') throw new Error('--curation is only supported by draft-patch');
+  if (args.candidateId && args.command !== 'draft-patch') throw new Error('--candidate-id is only supported by draft-patch');
+  if (args.output && !['review', 'curate', 'draft-patch'].includes(args.command)) throw new Error('--output is only supported by review, curate, or draft-patch');
   if (args.runId) assertSafeRunId(args.runId);
   return args;
 }
@@ -623,6 +635,10 @@ function curationPath(proposalsDir, curationId) {
   return path.join(proposalsDir, 'curations', `${curationId}.json`);
 }
 
+function patchDraftPath(proposalsDir, draftId) {
+  return path.join(proposalsDir, 'patch-drafts', `${draftId}.json`);
+}
+
 function assertReviewOutputPath(proposalsDir, filePath) {
   if (path.dirname(path.resolve(filePath)) === path.resolve(proposalsDir)) {
     throw new Error('--output must not write a review JSON directly inside the proposal queue root; use proposals/reviews/ or another directory');
@@ -632,6 +648,12 @@ function assertReviewOutputPath(proposalsDir, filePath) {
 function assertCurationOutputPath(proposalsDir, filePath) {
   if (path.dirname(path.resolve(filePath)) === path.resolve(proposalsDir)) {
     throw new Error('--output must not write a curation JSON directly inside the proposal queue root; use proposals/curations/ or another directory');
+  }
+}
+
+function assertPatchDraftOutputPath(proposalsDir, filePath) {
+  if (path.dirname(path.resolve(filePath)) === path.resolve(proposalsDir)) {
+    throw new Error('--output must not write a patch draft JSON directly inside the proposal queue root; use proposals/patch-drafts/ or another directory');
   }
 }
 
@@ -799,6 +821,98 @@ function writeCuration(filePath, curation, overwrite = false) {
   return { action: existed ? 'overwritten' : 'written', filePath };
 }
 
+function resolveProposalDirForPatchDraft(args, curationFilePath) {
+  if (args.proposals) return path.resolve(args.proposals);
+  const curationDir = path.dirname(curationFilePath);
+  if (path.basename(curationDir) === 'curations') return path.dirname(curationDir);
+  return resolveProposalDir(args);
+}
+
+function selectCurationCandidate(curation, candidateId) {
+  if (candidateId) {
+    const candidate = curation.candidates.find((item) => item.candidateId === candidateId);
+    if (!candidate) throw new Error(`candidate not found in curation: ${candidateId}`);
+    return candidate;
+  }
+  if (curation.candidates.length !== 1) {
+    throw new Error('--candidate-id is required when curation has zero or multiple candidates');
+  }
+  return curation.candidates[0];
+}
+
+function changeTypeForTargetFile(filePath) {
+  if (filePath.endsWith('.schema.json')) return 'update';
+  if (filePath.endsWith('.md') || filePath.endsWith('.toml')) return 'update';
+  if (filePath.endsWith('.mjs') || filePath.endsWith('.js')) return 'update';
+  return 'review';
+}
+
+function intendedChangeForFile(filePath, candidate) {
+  return {
+    file: filePath,
+    changeType: changeTypeForTargetFile(filePath),
+    description: `Address ${candidate.classification} by applying the candidate recommendation: ${candidate.recommendedChange}`,
+  };
+}
+
+function verificationPlanForCandidate(candidate) {
+  const plan = [
+    { type: 'syntax', command: 'node --check scripts/p2a_proposals.mjs', required: true },
+    { type: 'validation', command: 'node --check scripts/validate_artifacts.mjs', required: true },
+    { type: 'fixture', command: 'node scripts/run_fixtures.mjs', required: true },
+    { type: 'parity', command: 'node scripts/check_cli_parity.mjs', required: true },
+  ];
+  if (candidate.targetFiles.some((filePath) => filePath.endsWith('.md') || filePath.endsWith('.toml'))) {
+    plan.push({ type: 'custom', command: 'git diff --check', required: true });
+  }
+  return plan;
+}
+
+function risksForCandidate(candidate) {
+  const risks = [
+    `Risk level from curation: ${candidate.risk}.`,
+    'Patch draft is advisory only and may be incomplete until a human reviews the target files.',
+  ];
+  if (candidate.readiness !== 'patch_candidate') {
+    risks.push(`Candidate readiness is ${candidate.readiness}; collect more evidence before implementation if needed.`);
+  }
+  return risks;
+}
+
+function buildProposalPatchDraft(curation, candidate, proposalsDir, curationPathForDisplay, generatedAt = new Date().toISOString()) {
+  const draftId = `proposal-patch-draft-${stableHash({
+    curationId: curation.curationId,
+    candidateId: candidate.candidateId,
+    targetFiles: candidate.targetFiles,
+    recommendedChange: candidate.recommendedChange,
+  })}`;
+  return validateProposalPatchDraftData({
+    schema_version: 'p2a.proposal_patch_draft.v1',
+    draftId,
+    generatedAt,
+    sourceCuration: displayPath(curationPathForDisplay),
+    candidateId: candidate.candidateId,
+    classification: candidate.classification,
+    title: `Patch draft: ${candidate.title}`,
+    status: 'draft',
+    approvalRequired: true,
+    autoApplyAllowed: false,
+    targetFiles: candidate.targetFiles,
+    intendedChanges: candidate.targetFiles.map((filePath) => intendedChangeForFile(filePath, candidate)),
+    verificationPlan: verificationPlanForCandidate(candidate),
+    risks: risksForCandidate(candidate),
+    rationale: `${candidate.rationale} This draft records intended changes only; it does not modify ${displayPath(proposalsDir)} or target files.`,
+  });
+}
+
+function writePatchDraft(filePath, draft, overwrite = false) {
+  const existed = existsSync(filePath);
+  if (existed && !overwrite) return { action: 'skipped', filePath };
+  mkdirSync(path.dirname(filePath), { recursive: true });
+  writeFileSync(filePath, `${JSON.stringify(draft, null, 2)}\n`, 'utf8');
+  return { action: existed ? 'overwritten' : 'written', filePath };
+}
+
 function runMine(args) {
   const runsDir = resolveRunsDirForProposals(args);
   const proposalsDir = resolveProposalDir(args);
@@ -917,6 +1031,40 @@ function runCurate(args) {
   return 0;
 }
 
+function runDraftPatch(args) {
+  const curationFilePath = path.resolve(args.curation);
+  assertFile(curationFilePath, 'proposal curation');
+  const proposalsDir = resolveProposalDirForPatchDraft(args, curationFilePath);
+  const requestedFilePath = args.output ? path.resolve(args.output) : null;
+  if (requestedFilePath) assertPatchDraftOutputPath(proposalsDir, requestedFilePath);
+  const curation = validateProposalCurationData(loadJson(curationFilePath));
+  const candidate = selectCurationCandidate(curation, args.candidateId);
+  const draft = buildProposalPatchDraft(curation, candidate, proposalsDir, curationFilePath);
+  const filePath = requestedFilePath ?? patchDraftPath(proposalsDir, draft.draftId);
+  const writeResult = args.dryRun
+    ? { action: 'dry-run', filePath }
+    : writePatchDraft(filePath, draft, args.overwrite);
+  if (args.json) {
+    console.log(JSON.stringify({
+      proposalsDir: displayPath(proposalsDir),
+      curationFile: displayPath(curationFilePath),
+      patchDraftFile: displayPath(filePath),
+      action: writeResult.action,
+      draft,
+    }, null, 2));
+    return 0;
+  }
+  console.log('Plan2Agent proposal patch draft');
+  console.log(`- proposals: ${displayPath(proposalsDir)}`);
+  console.log(`- curation: ${displayPath(curationFilePath)}`);
+  console.log(`- patch draft: ${displayPath(filePath)}`);
+  console.log(`- action: ${writeResult.action}`);
+  console.log(`- candidate: ${candidate.candidateId}`);
+  console.log(`- target files: ${draft.targetFiles.length}`);
+  console.log(`- auto apply allowed: ${draft.autoApplyAllowed}`);
+  return 0;
+}
+
 function runList(args) {
   const proposalsDir = resolveProposalDir(args);
   const proposals = loadProposals(proposalsDir);
@@ -985,6 +1133,7 @@ export function main(argv = process.argv.slice(2)) {
     if (args.command === 'digest') return runDigest(args);
     if (args.command === 'review') return runReview(args);
     if (args.command === 'curate') return runCurate(args);
+    if (args.command === 'draft-patch') return runDraftPatch(args);
     throw new Error(`unknown command: ${args.command}`);
   } catch (error) {
     const prefix = error instanceof ValidationError ? 'p2a proposal validation failed' : 'p2a proposal command failed';

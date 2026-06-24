@@ -20,6 +20,7 @@ const SCHEMA_PATHS = {
   skill_proposal: path.join(ROOT, 'schemas', 'skill-proposal.schema.json'),
   proposal_review: path.join(ROOT, 'schemas', 'proposal-review.schema.json'),
   proposal_curation: path.join(ROOT, 'schemas', 'proposal-curation.schema.json'),
+  proposal_patch_draft: path.join(ROOT, 'schemas', 'proposal-patch-draft.schema.json'),
 };
 const GATE_PATHS = {
   statusDoc: 'status.md',
@@ -693,6 +694,35 @@ export function validateProposalCuration(filePath) {
   return validateProposalCurationData(loadJson(filePath));
 }
 
+export function validateProposalPatchDraftData(data) {
+  validateSchema(data, loadJson(SCHEMA_PATHS.proposal_patch_draft));
+  if (data.approvalRequired !== true) {
+    throw new ValidationError('proposal patch draft approvalRequired must be true');
+  }
+  if (data.autoApplyAllowed !== false) {
+    throw new ValidationError('proposal patch draft autoApplyAllowed must be false');
+  }
+  validateNonBlankStrings(data.targetFiles, `${data.draftId}.targetFiles`);
+  validateNonBlankStrings(data.risks, `${data.draftId}.risks`);
+  const intendedFiles = data.intendedChanges.map((change) => change.file);
+  validateNonBlankStrings(intendedFiles, `${data.draftId}.intendedChanges.file`);
+  const targetFileSet = new Set(data.targetFiles);
+  const unknownFiles = intendedFiles.filter((file) => !targetFileSet.has(file));
+  if (unknownFiles.length) {
+    throw new ValidationError(`proposal patch draft intendedChanges reference files not in targetFiles: ${JSON.stringify([...new Set(unknownFiles)])}`);
+  }
+  for (const [index, item] of data.verificationPlan.entries()) {
+    if (item.required && typeof item.command === 'string' && item.command.trim().length === 0) {
+      throw new ValidationError(`${data.draftId}.verificationPlan[${index}].command must not be blank when present`);
+    }
+  }
+  return data;
+}
+
+export function validateProposalPatchDraft(filePath) {
+  return validateProposalPatchDraftData(loadJson(filePath));
+}
+
 export function validateRunsDir(runsDir) {
   if (!existsSync(runsDir)) throw new ValidationError(`runs directory is missing: ${runsDir}`);
   if (!lstatSync(runsDir).isDirectory()) throw new ValidationError(`runs path must be a directory: ${runsDir}`);
@@ -982,6 +1012,7 @@ function parseArgs(argv) {
     else if (arg === '--skill-proposal') args.skillProposal = argv[++index];
     else if (arg === '--proposal-review') args.proposalReview = argv[++index];
     else if (arg === '--proposal-curation') args.proposalCuration = argv[++index];
+    else if (arg === '--proposal-patch-draft') args.proposalPatchDraft = argv[++index];
     else if (arg === '--proposals-dir') args.proposalsDir = argv[++index];
     else if (arg === '--require-approved-spec') args.requireApprovedSpec = argv[++index];
     else if (arg === '--require-handoff-ready') args.requireHandoffReady = true;
@@ -1021,6 +1052,7 @@ export function main(argv = process.argv.slice(2)) {
     if (args.skillProposal) validateSkillProposal(args.skillProposal);
     if (args.proposalReview) validateProposalReview(args.proposalReview);
     if (args.proposalCuration) validateProposalCuration(args.proposalCuration);
+    if (args.proposalPatchDraft) validateProposalPatchDraft(args.proposalPatchDraft);
     if (args.proposalsDir) validateProposalsDir(args.proposalsDir);
     for (const fixtureDir of args.fixtureDir) validateFixtureDir(fixtureDir);
   } catch (error) {
