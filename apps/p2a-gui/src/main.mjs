@@ -3,7 +3,7 @@ import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 import { app, BrowserWindow, dialog, ipcMain } from 'electron';
-import { loadJson, validateTaskGraphData } from '../../../scripts/validate_artifacts.mjs';
+import { loadJson, validateRunData, validateRunIndexData, validateTaskGraphData } from '../../../scripts/validate_artifacts.mjs';
 import { inspectProject } from './project-reader.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -296,6 +296,102 @@ function currentTaskCatalogPayload() {
   return buildTaskCatalog(currentInspection);
 }
 
+function runStatusCounts(runs) {
+  const byStatus = { started: 0, finished: 0, failed: 0, blocked: 0 };
+  for (const run of runs) byStatus[run.status] = (byStatus[run.status] ?? 0) + 1;
+  return byStatus;
+}
+
+function buildRunCatalog(inspection = currentInspection) {
+  const runsDir = inspection?.runs?.runsDir ?? null;
+  const indexPath = inspection?.runs?.indexPath ?? null;
+  if (!runsDir || !indexPath || !existsSync(indexPath)) {
+    return {
+      runsDir,
+      indexPath,
+      projectId: inspection?.projectId ?? null,
+      byStatus: runStatusCounts([]),
+      runs: [],
+      error: null,
+    };
+  }
+
+  try {
+    const index = validateRunIndexData(loadJson(indexPath));
+    const runs = index.runs.map((entry) => {
+      const runPath = path.join(runsDir, `${entry.runId}.json`);
+      try {
+        const run = validateRunData(loadJson(runPath));
+        return {
+          runId: run.runId,
+          taskId: run.taskId,
+          taskTitle: run.taskTitle,
+          status: run.status,
+          agentTool: run.agentTool,
+          iterationId: run.iterationId,
+          sourceLayout: run.sourceLayout,
+          workspaceRef: run.workspaceRef,
+          workspacePath: run.workspacePath,
+          isolation: run.isolation,
+          startedAt: run.startedAt,
+          updatedAt: run.updatedAt,
+          finishedAt: run.finishedAt,
+          changedFiles: run.changedFiles,
+          verification: run.verification,
+          notes: run.notes,
+          failure: run.failure ?? null,
+          valid: true,
+          error: null,
+        };
+      } catch (error) {
+        return {
+          runId: entry.runId,
+          taskId: entry.taskId,
+          taskTitle: null,
+          status: entry.status,
+          agentTool: entry.agentTool,
+          iterationId: entry.iterationId,
+          sourceLayout: null,
+          workspaceRef: entry.workspaceRef,
+          workspacePath: null,
+          isolation: null,
+          startedAt: entry.startedAt,
+          updatedAt: null,
+          finishedAt: entry.finishedAt,
+          changedFiles: [],
+          verification: [],
+          notes: [],
+          failure: null,
+          valid: false,
+          error: error.message,
+        };
+      }
+    }).reverse();
+
+    return {
+      runsDir,
+      indexPath,
+      projectId: index.projectId,
+      byStatus: runStatusCounts(runs),
+      runs,
+      error: null,
+    };
+  } catch (error) {
+    return {
+      runsDir,
+      indexPath,
+      projectId: inspection?.projectId ?? null,
+      byStatus: runStatusCounts([]),
+      runs: [],
+      error: error.message,
+    };
+  }
+}
+
+function currentRunCatalogPayload() {
+  return buildRunCatalog(currentInspection);
+}
+
 function readArtifactDocument(artifactId) {
   const catalog = currentArtifactCatalogPayload();
   const document = catalog.documents.find((item) => item.id === artifactId);
@@ -391,6 +487,7 @@ function scheduleProjectReload() {
       inspection: currentInspection,
       artifactCatalog: currentArtifactCatalogPayload(),
       taskCatalog: currentTaskCatalogPayload(),
+      runCatalog: currentRunCatalogPayload(),
       localConfig: publicLocalConfig(),
       refreshedAt: new Date().toISOString(),
       trigger: 'watcher',
@@ -430,6 +527,7 @@ function currentPayload(trigger = 'manual') {
       inspection: null,
       artifactCatalog: buildArtifactCatalog(null),
       taskCatalog: buildTaskCatalog(null),
+      runCatalog: buildRunCatalog(null),
       localConfig: publicLocalConfig(),
       refreshedAt: new Date().toISOString(),
       trigger,
@@ -443,6 +541,7 @@ function currentPayload(trigger = 'manual') {
     inspection: currentInspection,
     artifactCatalog: currentArtifactCatalogPayload(),
     taskCatalog: currentTaskCatalogPayload(),
+    runCatalog: currentRunCatalogPayload(),
     localConfig: publicLocalConfig(),
     refreshedAt: new Date().toISOString(),
     trigger,
@@ -463,6 +562,7 @@ ipcMain.handle('p2a:select-project', async () => {
     inspection,
     artifactCatalog: currentArtifactCatalogPayload(),
     taskCatalog: currentTaskCatalogPayload(),
+    runCatalog: currentRunCatalogPayload(),
     localConfig: publicLocalConfig(),
     refreshedAt: new Date().toISOString(),
     trigger: 'folder-picker',
@@ -481,6 +581,7 @@ ipcMain.handle('p2a:open-recent-project', async (_event, projectPath) => {
     inspection,
     artifactCatalog: currentArtifactCatalogPayload(),
     taskCatalog: currentTaskCatalogPayload(),
+    runCatalog: currentRunCatalogPayload(),
     localConfig: publicLocalConfig(),
     refreshedAt: new Date().toISOString(),
     trigger: 'recent-project',

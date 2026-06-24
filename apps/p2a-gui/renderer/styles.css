@@ -342,6 +342,7 @@ h2 {
 .recent-list,
 .artifact-list,
 .task-detail-list,
+.run-detail-list,
 .command-list,
 .diagnostic-list,
 .task-table {
@@ -354,7 +355,8 @@ h2 {
 .task-list,
 .recent-list,
 .artifact-list,
-.task-detail-list {
+.task-detail-list,
+.run-detail-list {
   padding: 0;
 }
 
@@ -362,6 +364,7 @@ h2 {
 .recent-project-row,
 .artifact-row,
 .task-detail-row,
+.run-detail-row,
 .command-row,
 .diagnostic-row,
 .task-row {
@@ -385,21 +388,31 @@ h2 {
   min-height: 0;
 }
 
-.task-detail-layout {
+.run-workbench {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.task-detail-layout,
+.run-detail-layout {
   display: grid;
   grid-template-columns: minmax(250px, 320px) minmax(0, 1fr);
   flex: 1;
   min-height: 0;
 }
 
-.task-detail-list {
+.task-detail-list,
+.run-detail-list {
   align-content: start;
   overflow: auto;
   border-right: 1px solid var(--border-1);
   background: var(--bg-2);
 }
 
-.task-detail-row {
+.task-detail-row,
+.run-detail-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
@@ -411,20 +424,24 @@ h2 {
   text-align: left;
 }
 
-.task-detail-row.active {
+.task-detail-row.active,
+.run-detail-row.active {
   border-left: 2px solid var(--accent);
   background: var(--bg-4);
   color: var(--fg-1);
 }
 
-.task-detail-main {
+.task-detail-main,
+.run-detail-main {
   display: grid;
   min-width: 0;
   gap: 2px;
 }
 
 .task-detail-row-title,
-.task-detail-row-meta {
+.task-detail-row-meta,
+.run-detail-row-title,
+.run-detail-row-meta {
   display: block;
   min-width: 0;
   overflow: hidden;
@@ -432,19 +449,23 @@ h2 {
   white-space: nowrap;
 }
 
-.task-detail-row-title {
+.task-detail-row-title,
+.run-detail-row-title {
   color: var(--fg-2);
   font-size: 12px;
 }
 
 .task-detail-row-meta,
-.task-detail-meta {
+.task-detail-meta,
+.run-detail-row-meta,
+.run-detail-meta {
   color: var(--fg-3);
   font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 10px;
 }
 
-.task-detail-preview {
+.task-detail-preview,
+.run-detail-preview {
   display: flex;
   flex-direction: column;
   min-width: 0;
@@ -453,7 +474,8 @@ h2 {
   background: var(--bg-1);
 }
 
-.task-detail-head {
+.task-detail-head,
+.run-detail-head {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
@@ -462,11 +484,13 @@ h2 {
   border-bottom: 1px solid var(--border-1);
 }
 
-.task-detail-head h1 {
+.task-detail-head h1,
+.run-detail-head h1 {
   font-size: 18px;
 }
 
-.task-detail-meta {
+.task-detail-meta,
+.run-detail-meta {
   min-height: 30px;
   overflow: hidden;
   border-bottom: 1px solid var(--border-1);
@@ -483,14 +507,16 @@ h2 {
   line-height: 1.5;
 }
 
-.task-detail-section {
+.task-detail-section,
+.run-detail-section {
   display: grid;
   gap: 8px;
   padding: 12px 14px;
   border-bottom: 1px solid var(--border-1);
 }
 
-.task-detail-section h2 {
+.task-detail-section h2,
+.run-detail-section h2 {
   margin: 0;
 }
 
@@ -533,6 +559,26 @@ h2 {
   color: var(--warn);
 }
 
+.status-pill.started {
+  border-color: color-mix(in srgb, var(--info) 60%, var(--border-2));
+  color: var(--info);
+}
+
+.status-pill.finished,
+.verification-row.passed {
+  border-color: color-mix(in srgb, var(--ok) 60%, var(--border-2));
+}
+
+.status-pill.failed,
+.verification-row.failed {
+  border-color: color-mix(in srgb, var(--err) 60%, var(--border-2));
+  color: var(--err);
+}
+
+.status-pill.finished {
+  color: var(--ok);
+}
+
 .criteria-list {
   display: grid;
   gap: 6px;
@@ -560,6 +606,105 @@ h2 {
   font-size: 11px;
   line-height: 1.5;
   white-space: pre-wrap;
+}
+
+.run-timeline {
+  display: grid;
+  gap: 7px;
+  margin: 0;
+}
+
+.run-timeline div {
+  display: grid;
+  grid-template-columns: 88px minmax(0, 1fr);
+  gap: 10px;
+}
+
+.run-timeline dt {
+  color: var(--fg-3);
+  font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 10px;
+  text-transform: uppercase;
+}
+
+.run-timeline dd {
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  color: var(--fg-2);
+  font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.changed-file-list,
+.verification-list,
+.note-list {
+  display: grid;
+  gap: 6px;
+}
+
+.changed-file-row,
+.note-row,
+.failure-box,
+.verification-row {
+  border: 1px solid var(--border-1);
+  border-radius: 4px;
+  background: var(--bg-3);
+  padding: 8px;
+  color: var(--fg-2);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.changed-file-row {
+  overflow: hidden;
+  font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.verification-row {
+  border-left: 2px solid var(--border-2);
+}
+
+.verification-row.skipped,
+.verification-row.not_run {
+  border-left-color: var(--warn);
+}
+
+.verification-row.passed {
+  border-left-color: var(--ok);
+}
+
+.verification-row.failed {
+  border-left-color: var(--err);
+}
+
+.verification-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 4px;
+}
+
+.verification-title,
+.verification-exit,
+.verification-command,
+.verification-tail {
+  min-width: 0;
+  overflow: hidden;
+  font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.verification-command,
+.verification-tail {
+  color: var(--fg-3);
 }
 
 .artifact-layout {
@@ -879,8 +1024,13 @@ h2 {
     grid-template-columns: minmax(0, 1fr);
   }
 
+  .run-detail-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
   .artifact-list,
-  .task-detail-list {
+  .task-detail-list,
+  .run-detail-list {
     max-height: 180px;
     border-right: 0;
     border-bottom: 1px solid var(--border-1);

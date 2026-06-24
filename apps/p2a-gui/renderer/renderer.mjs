@@ -31,6 +31,16 @@ const elements = {
   taskDetailCriteria: document.querySelector('#task-detail-criteria'),
   taskDetailPrompt: document.querySelector('#task-detail-prompt'),
   taskDetailSourceRefs: document.querySelector('#task-detail-source-refs'),
+  runDetailCount: document.querySelector('#run-detail-count'),
+  runDetailList: document.querySelector('#run-detail-list'),
+  runDetailTitle: document.querySelector('#run-detail-title'),
+  runDetailStatus: document.querySelector('#run-detail-status'),
+  runDetailMeta: document.querySelector('#run-detail-meta'),
+  runDetailTimeline: document.querySelector('#run-detail-timeline'),
+  runDetailChangedFiles: document.querySelector('#run-detail-changed-files'),
+  runDetailVerification: document.querySelector('#run-detail-verification'),
+  runDetailFailure: document.querySelector('#run-detail-failure'),
+  runDetailNotes: document.querySelector('#run-detail-notes'),
   artifactCount: document.querySelector('#artifact-count'),
   artifactList: document.querySelector('#artifact-list'),
   artifactTitle: document.querySelector('#artifact-title'),
@@ -90,12 +100,14 @@ let currentPayload = {
   inspection: null,
   artifactCatalog: { documents: [] },
   taskCatalog: { tasks: [] },
+  runCatalog: { runs: [] },
   refreshedAt: null,
   trigger: 'initial',
 };
 let activeView = 'overview';
 let selectedArtifactId = null;
 let selectedTaskId = null;
+let selectedRunId = null;
 let artifactRequestToken = 0;
 
 function browserFallbackBridge() {
@@ -161,6 +173,7 @@ function render(payload) {
   const localConfig = currentPayload.localConfig ?? {};
   const artifactCatalog = currentPayload.artifactCatalog ?? { documents: [] };
   const taskCatalog = currentPayload.taskCatalog ?? { tasks: [] };
+  const runCatalog = currentPayload.runCatalog ?? { runs: [] };
 
   elements.titleProject.textContent = projectLabel;
   elements.sidebarState.textContent = state;
@@ -181,6 +194,7 @@ function render(payload) {
   renderTaskTable(inspection);
   renderArtifactList(artifactCatalog.documents ?? []);
   renderTaskDetailList(taskCatalog.tasks ?? []);
+  renderRunDetailList(runCatalog.runs ?? []);
 
   elements.inspectorArtifact.textContent = shortPath(inspection?.displayPaths?.artifactRoot);
   elements.inspectorRuns.textContent = `${inspection?.runs?.total ?? 0}`;
@@ -195,10 +209,11 @@ function render(payload) {
 
   if (activeView === 'artifacts') ensureArtifactSelection();
   if (activeView === 'tasks') ensureTaskSelection();
+  if (activeView === 'runs') ensureRunSelection();
 }
 
 function setActiveView(view) {
-  activeView = ['artifacts', 'tasks'].includes(view) ? view : 'overview';
+  activeView = ['artifacts', 'tasks', 'runs'].includes(view) ? view : 'overview';
   for (const button of elements.railItems) {
     const isActive = button.dataset.view === activeView;
     button.classList.toggle('active', isActive);
@@ -210,6 +225,7 @@ function setActiveView(view) {
   }
   if (activeView === 'artifacts') ensureArtifactSelection();
   if (activeView === 'tasks') ensureTaskSelection();
+  if (activeView === 'runs') ensureRunSelection();
 }
 
 function renderRecentProjects(projects, activePath) {
@@ -252,6 +268,171 @@ function artifactDocuments() {
 
 function taskItems() {
   return currentPayload.taskCatalog?.tasks ?? [];
+}
+
+function runItems() {
+  return currentPayload.runCatalog?.runs ?? [];
+}
+
+function renderRunDetailList(runs) {
+  elements.runDetailList.replaceChildren();
+  elements.runDetailCount.textContent = `${runs.length} run${runs.length === 1 ? '' : 's'}`;
+  if (!runs.length) {
+    elements.runDetailList.append(emptyNode(currentPayload.runCatalog?.error ? 'Run index invalid' : 'No run history'));
+    if (activeView === 'runs') renderRunEmpty();
+    return;
+  }
+
+  if (selectedRunId && !runs.some((run) => run.runId === selectedRunId)) selectedRunId = null;
+
+  for (const run of runs) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = `run-detail-row ${run.runId === selectedRunId ? 'active' : ''}`;
+    button.title = `${run.runId} · ${run.taskId}`;
+    button.addEventListener('click', () => selectRun(run.runId));
+
+    const main = document.createElement('span');
+    main.className = 'run-detail-main';
+    const title = document.createElement('span');
+    title.className = 'run-detail-row-title';
+    title.textContent = `${run.runId} · ${run.taskId}`;
+    const meta = document.createElement('span');
+    meta.className = 'run-detail-row-meta';
+    meta.textContent = `${run.agentTool} · ${formatDateTime(run.startedAt)}`;
+    main.append(title, meta);
+
+    const status = document.createElement('span');
+    status.className = `status-pill ${run.status}`;
+    status.textContent = run.status;
+
+    button.append(main, status);
+    elements.runDetailList.append(button);
+  }
+}
+
+function renderRunEmpty() {
+  elements.runDetailTitle.textContent = 'No run selected';
+  elements.runDetailStatus.textContent = '-';
+  elements.runDetailStatus.className = 'status-pill';
+  elements.runDetailMeta.textContent = currentPayload.runCatalog?.error ?? '-';
+  elements.runDetailTimeline.replaceChildren(emptyNode('No timeline'));
+  elements.runDetailChangedFiles.replaceChildren(emptyNode('No changed files'));
+  elements.runDetailVerification.replaceChildren(emptyNode('No verification'));
+  elements.runDetailFailure.textContent = '-';
+  elements.runDetailNotes.replaceChildren(emptyNode('No notes'));
+}
+
+function ensureRunSelection() {
+  const runs = runItems();
+  if (!runs.length) {
+    selectedRunId = null;
+    renderRunEmpty();
+    return;
+  }
+  const selectedRun = runs.find((run) => run.runId === selectedRunId) ?? runs[0];
+  selectRun(selectedRun.runId);
+}
+
+function selectRun(runId) {
+  selectedRunId = runId;
+  renderRunDetailList(runItems());
+  const run = runItems().find((item) => item.runId === runId);
+  if (!run) {
+    renderRunEmpty();
+    return;
+  }
+
+  elements.runDetailTitle.textContent = run.taskTitle ?? run.runId;
+  elements.runDetailStatus.textContent = run.status;
+  elements.runDetailStatus.className = `status-pill ${run.status}`;
+  elements.runDetailMeta.textContent = `${run.runId} · ${run.taskId} · ${run.agentTool} · ${run.workspaceRef}`;
+  renderRunTimeline(run);
+  renderChangedFiles(run.changedFiles);
+  renderVerification(run.verification);
+  renderFailure(run);
+  renderNotes(run.notes);
+}
+
+function renderRunTimeline(run) {
+  elements.runDetailTimeline.replaceChildren();
+  const items = [
+    ['started', formatDateTime(run.startedAt)],
+    ['updated', formatDateTime(run.updatedAt)],
+    ['finished', formatDateTime(run.finishedAt)],
+    ['workspace', run.workspacePath ?? run.workspaceRef],
+    ['isolation', run.isolation?.mode ?? '-'],
+  ];
+  for (const [label, value] of items) {
+    const row = document.createElement('div');
+    const dt = document.createElement('dt');
+    const dd = document.createElement('dd');
+    dt.textContent = label;
+    dd.textContent = text(value);
+    row.append(dt, dd);
+    elements.runDetailTimeline.append(row);
+  }
+}
+
+function renderChangedFiles(files) {
+  elements.runDetailChangedFiles.replaceChildren();
+  if (!files?.length) {
+    elements.runDetailChangedFiles.append(emptyNode('No changed files'));
+    return;
+  }
+  for (const file of files) {
+    const row = document.createElement('div');
+    row.className = 'changed-file-row';
+    row.textContent = file;
+    elements.runDetailChangedFiles.append(row);
+  }
+}
+
+function renderVerification(items) {
+  elements.runDetailVerification.replaceChildren();
+  if (!items?.length) {
+    elements.runDetailVerification.append(emptyNode('No verification'));
+    return;
+  }
+  for (const item of items) {
+    const row = document.createElement('div');
+    row.className = `verification-row ${item.status}`;
+    const head = document.createElement('div');
+    head.className = 'verification-head';
+    head.append(labelNode(`${item.type} · ${item.status}`, 'verification-title'));
+    head.append(labelNode(item.exitCode === null ? 'exit -' : `exit ${item.exitCode}`, 'verification-exit'));
+    const command = labelNode(item.command, 'verification-command');
+    row.append(head, command);
+    if (item.stderrTail) row.append(labelNode(item.stderrTail, 'verification-tail'));
+    else if (item.stdoutTail) row.append(labelNode(item.stdoutTail, 'verification-tail'));
+    elements.runDetailVerification.append(row);
+  }
+}
+
+function renderFailure(run) {
+  if (!run.valid) {
+    elements.runDetailFailure.textContent = run.error ?? 'Run file is invalid.';
+    return;
+  }
+  if (!run.failure) {
+    elements.runDetailFailure.textContent = 'None';
+    return;
+  }
+  elements.runDetailFailure.textContent = `${run.failure.class} · retry ${run.failure.retryable} · source ${run.failure.source} · user decision ${run.failure.needsUserDecision}`;
+}
+
+function renderNotes(notes) {
+  elements.runDetailNotes.replaceChildren();
+  if (!notes?.length) {
+    elements.runDetailNotes.append(emptyNode('No notes'));
+    return;
+  }
+  for (const note of notes) {
+    const row = document.createElement('div');
+    row.className = 'note-row';
+    row.textContent = note;
+    elements.runDetailNotes.append(row);
+  }
 }
 
 function renderTaskDetailList(tasks) {
@@ -582,6 +763,13 @@ function formatBytes(value) {
   return `${(value / 1024).toFixed(1)} KB`;
 }
 
+function formatDateTime(value) {
+  if (!value) return '-';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleString();
+}
+
 async function copyText(value) {
   try {
     await navigator.clipboard.writeText(value);
@@ -625,6 +813,7 @@ boot().catch((error) => {
     },
     artifactCatalog: { documents: [] },
     taskCatalog: { tasks: [] },
+    runCatalog: { runs: [] },
     localConfig: { recentProjects: [] },
     refreshedAt: new Date().toISOString(),
     trigger: 'renderer',

@@ -172,6 +172,48 @@
               </div>
             </section>
           </section>
+
+          <section id="runs-view" class="view-panel" data-view-panel="runs" hidden>
+            <section class="surface run-workbench">
+              <div class="surface-head">
+                <h2>Runs</h2>
+                <span id="run-detail-count" class="surface-meta">0 runs</span>
+              </div>
+              <div class="run-detail-layout">
+                <div id="run-detail-list" class="run-detail-list"></div>
+                <article class="run-detail-preview">
+                  <div class="run-detail-head">
+                    <div>
+                      <p class="eyebrow">Read-only</p>
+                      <h1 id="run-detail-title">No run selected</h1>
+                    </div>
+                    <span id="run-detail-status" class="status-pill">-</span>
+                  </div>
+                  <div id="run-detail-meta" class="run-detail-meta">-</div>
+                  <section class="run-detail-section">
+                    <h2>Timeline</h2>
+                    <dl id="run-detail-timeline" class="run-timeline"></dl>
+                  </section>
+                  <section class="run-detail-section">
+                    <h2>Changed files</h2>
+                    <div id="run-detail-changed-files" class="changed-file-list"></div>
+                  </section>
+                  <section class="run-detail-section">
+                    <h2>Verification</h2>
+                    <div id="run-detail-verification" class="verification-list"></div>
+                  </section>
+                  <section class="run-detail-section">
+                    <h2>Failure</h2>
+                    <div id="run-detail-failure" class="failure-box">-</div>
+                  </section>
+                  <section class="run-detail-section">
+                    <h2>Notes</h2>
+                    <div id="run-detail-notes" class="note-list"></div>
+                  </section>
+                </article>
+              </div>
+            </section>
+          </section>
         </main>
 
         <aside class="inspector">
