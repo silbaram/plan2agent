@@ -235,7 +235,7 @@
               </div>
               <div class="terminal-layout">
                 <section class="terminal-summary">
-                  <p class="eyebrow">Session scope</p>
+                  <p class="eyebrow">Execution scope</p>
                   <h1 id="terminal-title">No PTY session</h1>
                   <dl class="terminal-meta-list">
                     <div>
@@ -250,9 +250,32 @@
                       <dt>task</dt>
                       <dd id="terminal-task">-</dd>
                     </div>
+                    <div>
+                      <dt>graph</dt>
+                      <dd id="terminal-graph">-</dd>
+                    </div>
                   </dl>
+                  <div class="terminal-task-list-head">
+                    <h2>Ready tasks</h2>
+                    <span id="terminal-task-count" class="surface-meta">0</span>
+                  </div>
+                  <div id="terminal-task-list" class="terminal-task-list"></div>
                 </section>
-                <pre id="terminal-preview" class="terminal-preview">not connected</pre>
+                <section class="terminal-prep">
+                  <div class="terminal-command-head">
+                    <div>
+                      <p class="eyebrow">Command preview</p>
+                      <h1 id="terminal-command-title">No command</h1>
+                    </div>
+                    <span id="terminal-command-state" class="status-pill">-</span>
+                  </div>
+                  <div id="terminal-command-list" class="terminal-command-list"></div>
+                  <section class="terminal-prep-section">
+                    <h2>Readiness</h2>
+                    <div id="terminal-check-list" class="terminal-check-list"></div>
+                  </section>
+                  <pre id="terminal-preview" class="terminal-preview">not connected</pre>
+                </section>
               </div>
             </section>
           </section>

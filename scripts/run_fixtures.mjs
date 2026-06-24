@@ -239,6 +239,7 @@ function validateScaffoldFixtureCase() {
       scaffoldInspection.state !== 'installed_empty'
       || scaffoldInspection.defaultAgentTool !== 'codex'
       || scaffoldInspection.harness.installed !== true
+      || scaffoldInspection.terminal?.state !== 'no_ready_task'
       || !scaffoldInspection.commands.setup.includes('p2a_handoff.mjs scaffold')
     ) {
       console.error('gui project scaffold inspection mismatch');
@@ -263,6 +264,10 @@ function validateScaffoldFixtureCase() {
       || coLocatedInspection.artifactSource?.sourceLayout !== 'co_located'
       || coLocatedInspection.tasks.total !== 4
       || coLocatedInspection.tasks.ready[0]?.id !== 'task-001'
+      || coLocatedInspection.terminal?.state !== 'ready'
+      || coLocatedInspection.terminal?.candidates?.[0]?.taskId !== 'task-001'
+      || !coLocatedInspection.terminal?.candidates?.[0]?.commands?.start.includes('p2a_execute.mjs start')
+      || !coLocatedInspection.terminal?.candidates?.[0]?.commands?.orchestrate.includes('p2a_orchestrate.mjs plan')
       || coLocatedInspection.review?.blockingIssueCount !== 0
     ) {
       console.error('gui project co-located artifact inspection mismatch');
@@ -318,6 +323,7 @@ function validateScaffoldFixtureCase() {
     if (
       plainInspection.state !== 'no_p2a'
       || plainInspection.harness.installed !== false
+      || plainInspection.terminal?.state !== 'no_ready_task'
       || !plainInspection.commands.setup.includes('p2a_handoff.mjs scaffold')
     ) {
       console.error('gui project no-p2a inspection mismatch');
@@ -437,6 +443,10 @@ function validateE2eFixtureCases() {
         || handoffInspection.artifactSource?.sourceLayout !== 'handoff'
         || handoffInspection.tasks.total !== 4
         || handoffInspection.tasks.ready[0]?.id !== 'task-001'
+        || handoffInspection.terminal?.state !== 'ready'
+        || handoffInspection.terminal?.candidates?.[0]?.taskId !== 'task-001'
+        || !handoffInspection.terminal?.candidates?.[0]?.commands?.start.includes('p2a_execute.mjs start')
+        || !handoffInspection.terminal?.candidates?.[0]?.commands?.orchestrate.includes('p2a_orchestrate.mjs plan')
         || handoffInspection.harness.installed !== true
       ) {
         console.error(`gui project handoff inspection mismatch: ${caseData.id}`);

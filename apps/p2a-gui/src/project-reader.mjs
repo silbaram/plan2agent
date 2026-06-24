@@ -385,6 +385,101 @@ function guidanceCommands(projectRoot, artifactRoot, projectId) {
   };
 }
 
+function safeFileStem(value) {
+  return String(value ?? 'task')
+    .replace(/[^A-Za-z0-9._-]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    || 'task';
+}
+
+function commandPath(filePath, projectRoot) {
+  if (!filePath) return null;
+  return displayPath(filePath, projectRoot);
+}
+
+function buildTerminalSourceArgs(artifactSource, projectRoot) {
+  if (!artifactSource?.taskGraphPath) return [];
+  const args = ['--graph', commandPath(artifactSource.taskGraphPath, projectRoot)];
+  if (artifactSource.specPath && fileExists(artifactSource.specPath)) {
+    args.push('--spec', commandPath(artifactSource.specPath, projectRoot));
+  }
+  return args;
+}
+
+function terminalCheck(label, state, detail) {
+  return { label, state, detail };
+}
+
+function buildTerminalCommands({ taskId, sourceArgs, agentTool }) {
+  const planPath = path.join('.plan2agent', 'orchestration', `${safeFileStem(taskId)}.json`);
+  return {
+    plan: commandPreview('p2a_execute.mjs', ['plan', ...sourceArgs, '--task', taskId, '--agent-tool', agentTool, '--workspace', '.']),
+    orchestrate: commandPreview('p2a_orchestrate.mjs', ['plan', ...sourceArgs, '--task', taskId, '--agent-tool', agentTool, '--output', planPath]),
+    handoff: commandPreview('p2a_orchestrate.mjs', ['handoff', '--plan', planPath]),
+    start: commandPreview('p2a_execute.mjs', ['start', ...sourceArgs, '--task', taskId, '--agent-tool', agentTool, '--workspace', '.']),
+  };
+}
+
+function buildTerminalPlan({ projectRoot, artifactSource, taskGraph, taskSummary, harnessInstalled, agentTool }) {
+  const sourceArgs = buildTerminalSourceArgs(artifactSource, projectRoot);
+  const hasTaskGraph = Boolean(taskGraph && artifactSource?.taskGraphPath);
+  const baseChecks = [
+    terminalCheck('harness', harnessInstalled ? 'ready' : 'blocked', harnessInstalled ? 'scripts available' : 'install or repair required'),
+    terminalCheck('task graph', hasTaskGraph ? 'ready' : 'blocked', hasTaskGraph ? commandPath(artifactSource.taskGraphPath, projectRoot) : 'missing'),
+    terminalCheck('PTY', 'pending', '2C not connected'),
+  ];
+
+  const tasksById = taskMap(taskGraph);
+  const candidates = (taskGraph?.tasks ?? [])
+    .map((task) => {
+      const blockedBy = task.dependencies.filter((dependency) => tasksById.get(dependency)?.status !== 'done');
+      const ready = task.status === 'todo' && blockedBy.length === 0;
+      const executable = ready && harnessInstalled && hasTaskGraph;
+      const checks = [
+        ...baseChecks,
+        terminalCheck('task', ready ? 'ready' : 'blocked', ready ? 'ready' : `blocked by ${blockedBy.length || task.status}`),
+        terminalCheck('supervisor', 'manual', 'approval required before start'),
+      ];
+      return {
+        taskId: task.id,
+        title: task.title,
+        status: task.status,
+        ready,
+        executable,
+        targetArea: task.targetArea,
+        blockedBy,
+        acceptanceCriteriaCount: task.acceptanceCriteria.length,
+        agentTool,
+        commands: executable
+          ? buildTerminalCommands({ taskId: task.id, sourceArgs, agentTool })
+          : null,
+        checks,
+      };
+    })
+    .filter((task) => task.ready)
+    .slice(0, 12);
+
+  return {
+    state: candidates.some((candidate) => candidate.executable) ? 'ready' : (candidates.length ? 'blocked' : 'no_ready_task'),
+    defaultAgentTool: agentTool,
+    cwd: projectRoot,
+    displayCwd: '.',
+    sourceArgs,
+    source: artifactSource
+      ? {
+          layout: artifactSource.sourceLayout,
+          taskGraphPath: artifactSource.taskGraphPath,
+          specPath: artifactSource.specPath,
+          displayTaskGraphPath: commandPath(artifactSource.taskGraphPath, projectRoot),
+          displaySpecPath: commandPath(artifactSource.specPath, projectRoot),
+        }
+      : null,
+    readyCount: taskSummary?.ready?.length ?? 0,
+    candidates,
+    checks: baseChecks,
+  };
+}
+
 function determineState({ hasP2AMarker, artifactSource, missingHarnessFiles, taskSummary, runSummary, diagnostics }) {
   if (!hasP2AMarker && !artifactSource) return 'no_p2a';
   if (hasP2AMarker && missingHarnessFiles.length) return 'broken_install';
@@ -435,6 +530,14 @@ export function inspectProject(projectPath, options = {}) {
       tasks: summarizeTasks(null),
       runs: summarizeRuns(runsDir, diagnostics),
       commands: guidanceCommands(projectRoot, null, path.basename(projectRoot)),
+      terminal: buildTerminalPlan({
+        projectRoot,
+        artifactSource: null,
+        taskGraph: null,
+        taskSummary: summarizeTasks(null),
+        harnessInstalled: false,
+        agentTool: 'codex',
+      }),
       diagnostics,
       displayPaths: {
         projectRoot: displayPath(projectRoot, ROOT),
@@ -514,6 +617,14 @@ export function inspectProject(projectPath, options = {}) {
     tasks: taskSummary,
     runs: runSummary,
     commands: guidanceCommands(projectRoot, artifactSource?.artifactRoot ?? null, projectId),
+    terminal: buildTerminalPlan({
+      projectRoot,
+      artifactSource,
+      taskGraph,
+      taskSummary,
+      harnessInstalled: hasP2AMarker && !missingHarnessFiles.length,
+      agentTool: projectConfig?.defaultAgentTool ?? 'codex',
+    }),
     diagnostics,
     displayPaths: {
       projectRoot: displayPath(projectRoot, ROOT),

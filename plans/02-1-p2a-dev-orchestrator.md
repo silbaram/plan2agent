@@ -192,11 +192,8 @@ MVP에서 하지 않는 것:
 
 후속:
 
-- 실제 적용 patch 생성.
-- docs/config-only task의 verification-gap 노이즈를 줄이기 위한 skipped-verification rationale 표준화.
-- 반복 failureClass/source/targetFiles 빈도 기반 proposal 우선순위.
-- cross-session recall.
-- 반복 실패 유형 통계.
+- Hermes 고도화는 store/DB 단계로 연기한다. 실제 적용 patch 생성, skipped-verification rationale 표준화, 반복 failureClass/source/targetFiles 통계, cross-session recall, 검색/DB 저장은 지금 구현하지 않고 나중에 방향을 다시 논의한다.
+- 이번 단계의 다음 구현 축은 `plans/03-p2a-gui-mvp.md`의 PTY+Electron 감독 GUI다.
 
 ## 5. Team Big Five 완료 판단
 
@@ -224,14 +221,11 @@ MVP 연결:
 - `p2a_proposals.mjs`가 proposal 후보와 review/curation/patch-draft/approval artifact를 생성하고 digest를 제공한다.
 - MVP에서 proposal 자동 적용은 하지 않는다.
 
-후속:
+후속 연기 결정:
 
-- curator가 normalize/dedupe/prioritize.
-- 사람 승인 후 별도 patch turn에서만 반영.
-- cross-session recall.
-- run history 검색/요약.
-- 반복 실패 유형 통계.
-- skill/prompt/template 개선 후보 큐.
+- Hermes 고도화는 현재 파일 기반 proposal bridge에서 멈춘다.
+- 이전 내용 검색, run history 요약, cross-session recall, DB/vector index, 자동 patch 적용은 지금 구현하지 않는다.
+- 나중에 UI/DB 기반 task store를 설계할 때 검색 대상, transcript 저장 여부, 교훈 distillation 방식, SQLite full-text/vector index 선택을 다시 논의한다.
 
 ## 7. 열린 결정
 

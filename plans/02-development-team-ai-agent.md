@@ -342,7 +342,7 @@ node scripts/run_fixtures.mjs
    - 목적: 실제 run에서 쌓인 proposal을 normalize, dedupe, prioritize하고 승인 대기 목록으로 정리한다.
    - 범위: proposal 자동 적용은 계속 금지한다.
    - 완료 범위: run sidecar/failureClass/monitor verdict 기반 proposal queue, invalid run best-effort skip, list/show/validate/digest/review/curate/draft-patch/approve-draft, proposal-review/curation/patch-draft/approval schema, maintenance task 연결, `p2a_execute --approval` 실행 연결, scaffold/handoff 복사, fixture 회귀.
-   - 후속 범위: 실제 적용 patch 생성, skipped-verification rationale 표준 필드/marker, 반복 failureClass/source/targetFiles 통계 고도화.
+   - 결정: Hermes 고도화는 여기서 멈춘다. 실제 적용 patch 생성, skipped-verification rationale 표준 필드/marker, 반복 failureClass/source/targetFiles 통계, cross-session recall, 검색/DB 저장은 지금 구현하지 않고 store/DB 단계에서 방향을 다시 논의한다.
 
 5. **감독형 실행기 Phase 2: PTY+Electron GUI** (다음 추천)
    - 목적: `p2a_execute`의 manual launcher와 `p2a_orchestrate` sidecar 표면을 PTY/xterm 기반 live watch + 승인 UI로 바꾼다.
@@ -390,6 +390,7 @@ Hermes의 self-improving loop에서 차용하는 패턴:
 
 - Hermes식 자동 self-modify는 P2A에서 금지한다.
 - P2A는 `proposal -> curator review -> human approval -> separate patch` 흐름만 허용한다.
+- 2026-06-24 결정: 현재 브랜치에서는 파일 기반 proposal bridge까지만 완료로 고정한다. Hermes 고도화(이전 내용 검색, cross-session recall, DB/vector index, 자동 patch 적용)는 나중에 UI/DB 기반 task store를 설계할 때 다시 논의한다.
 
 ## 13. 외부 레포 흡수 현황 (Team Big Five / Hermes)
 
@@ -423,9 +424,10 @@ Hermes의 self-improving loop에서 차용하는 패턴:
 - ✅ **Hermes proposal queue/review/curation/patch draft/approval execution bridge** — 완료. `p2a_proposals.mjs`가 run failure, monitor verdict, verification gap을 proposal JSON으로 축적하고 deterministic review/curation/patch-draft/approval/digest/validate를 제공하며, `p2a_execute --approval`이 승인 항목을 감독형 maintenance 실행으로 연결한다. 자동 적용은 계속 금지.
 - 🟡 **orchestrator / triage** — MVP 1차 완료. `p2a_orchestrate.mjs`와 run sidecar가 정본이며, SMM/closed-loop/실제 multi-session scheduler는 후속.
 - 🟡 **PTY+Electron 감독 GUI** — 감독형 실행기 Phase 2(LD-9). node-pty/xterm로 live watch+승인, 기존 CLI/하네스와 orchestration sidecar를 구동/표시(파일이 단일 진실원). headless 무인이 아니라 구독 로그인으로도 가능. (진짜 무인 실행/scheduler는 API 키 도입 시 별도 v2)
-- 🟡 **cross-session recall** — store/DB 단계로 연기(아래).
+- ⏸ **Hermes 고도화 / cross-session recall** — store/DB 단계로 연기(아래).
 
-### cross-session recall — store/DB 단계로 연기 (결정)
-파일 기반 단계에서 무리해 만들지 않고, **JIRA식 Task Store/DB(§11-5, v2) 도입 시 함께 얹는다.**
-- 이유: recall의 난관(① 관련성 검색 백엔드, ② 무-DB·결정적 제약과 충돌)이 store 도입으로 자연 해소된다(DB full-text/pgvector가 곧 index).
-- store는 백엔드만 제공하므로 그때 남는 결정 2개: (a) 검색 대상(run/proposal은 자동, 대화·세션 transcript는 별도 캡처 결정) (b) 무엇을 재사용 "교훈"으로 distill할지.
+### Hermes 고도화 / cross-session recall — store/DB 단계로 연기 (결정)
+파일 기반 단계에서 무리해 만들지 않고, **JIRA식 Task Store/DB(§11-5, v2) 도입 시 방향을 다시 논의한 뒤 함께 얹는다.**
+- 이유: recall의 난관(① 관련성 검색 백엔드, ② 무-DB·결정적 제약과 충돌, ③ 어떤 실행 대화를 저장할지의 개인정보/용량 정책)이 store 도입 시 함께 결정되어야 한다.
+- 그때 다시 정할 결정: (a) 검색 대상(run/proposal은 자동, 대화·세션 transcript는 별도 캡처 결정) (b) 무엇을 재사용 "교훈"으로 distill할지 (c) SQLite full-text만으로 갈지, vector index를 붙일지.
+- 이번 단계의 다음 추천 구현은 Hermes가 아니라 **감독형 실행기 Phase 2: PTY+Electron GUI**다.

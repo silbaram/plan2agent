@@ -161,6 +161,7 @@ GUI local config:
 - `TK` 탭이 task graph를 read-only로 읽어 task 목록과 상세 맥락을 표시한다.
 - `RN` 탭이 run index와 run JSON을 read-only로 읽어 run history와 검증 결과를 표시한다.
 - `TE` 탭이 실제 PTY 실행 전 준비 화면으로 cwd, agent, task scope를 read-only로 표시한다.
+- `TE` 탭이 ready task별 `p2a_execute plan/start`, `p2a_orchestrate plan/handoff` command preview와 readiness check를 표시한다. command는 복사만 가능하고 실행하지 않는다.
 - activity rail은 `Cmd/Ctrl+1..5` 탭 전환을 지원하고, `TK`/`RN`/`AR` 목록은 방향키와 Enter로 선택할 수 있다.
 - `OV`의 Next action 패널이 `Open P2A Project`, `Install P2A`, `Import plan`, `Validate`, `Repair harness`, `Open Tasks/Terminal`을 프로젝트 상태별로 구분해 보여준다.
 - Electron 개발 런타임은 Node.js `>=22.12.0`, Electron `42.5.0`으로 고정한다.
@@ -171,7 +172,6 @@ GUI local config:
 
 아직 남은 2B 범위:
 
-- TE의 실제 PTY 연결 전 command scope/approval 준비 화면 고도화.
 - command palette/shortcut help 같은 보조 조작 UX.
 - Electron packaging 정책 정리.
 
@@ -181,7 +181,7 @@ GUI local config:
 - 목록 이동은 `TK`/`RN`/`AR`의 현재 목록 안에서 `ArrowUp`, `ArrowDown`, `Enter`만 처리한다.
 - 선택된 row와 keyboard focus는 시각적으로 구분한다. active row는 현재 선택이고, focus outline은 키보드 위치다.
 - `TE`는 2B에서 실행 기능이 아니라 read-only 준비 화면이다. 실제 `node-pty`/`xterm.js` 연결은 2C에서 진행한다.
-- 남은 보조 UX는 command palette, shortcut help, markdown preview/search/copy, packaging 정책이다.
+- 남은 보조 UX는 command palette, shortcut help, packaging 정책이다.
 
 포함:
 
@@ -392,9 +392,10 @@ GUI local config:
 9. `2B` hardening: focus/keyboard polish와 TE 준비 화면 1차. **구현 완료**
 10. `2B-1` harness onboarding guidance: scaffold/handoff/validate 명령 안내 화면. **구현 완료**
 11. `2B` hardening: AR markdown preview/search/copy. **구현 완료**
-12. `2C` PTY execution: node-pty + xterm + supervisor input.
-13. `2D` finish/verification: existing lifecycle 연결.
-14. smoke: 이미 scaffold된 작은 target 프로젝트에서 ready task 1건 end-to-end 실행.
+12. `2C-0` Terminal command scope/readiness: ready task별 `p2a_execute`/`p2a_orchestrate` command preview와 승인 전 체크. **구현 완료**
+13. `2C` PTY execution: node-pty + xterm + supervisor input.
+14. `2D` finish/verification: existing lifecycle 연결.
+15. smoke: 이미 scaffold된 작은 target 프로젝트에서 ready task 1건 end-to-end 실행.
 
 ## 9. 첫 smoke 기준
 

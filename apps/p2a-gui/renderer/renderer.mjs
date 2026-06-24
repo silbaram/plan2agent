@@ -61,6 +61,13 @@ const elements = {
   terminalCwd: document.querySelector('#terminal-cwd'),
   terminalAgent: document.querySelector('#terminal-agent'),
   terminalTask: document.querySelector('#terminal-task'),
+  terminalGraph: document.querySelector('#terminal-graph'),
+  terminalTaskCount: document.querySelector('#terminal-task-count'),
+  terminalTaskList: document.querySelector('#terminal-task-list'),
+  terminalCommandTitle: document.querySelector('#terminal-command-title'),
+  terminalCommandState: document.querySelector('#terminal-command-state'),
+  terminalCommandList: document.querySelector('#terminal-command-list'),
+  terminalCheckList: document.querySelector('#terminal-check-list'),
   terminalPreview: document.querySelector('#terminal-preview'),
   inspectorArtifact: document.querySelector('#inspector-artifact'),
   inspectorRuns: document.querySelector('#inspector-runs'),
@@ -131,6 +138,7 @@ let activeView = 'overview';
 let selectedArtifactId = null;
 let selectedTaskId = null;
 let selectedRunId = null;
+let selectedTerminalTaskId = null;
 let artifactRequestToken = 0;
 let selectedArtifactDocument = null;
 let selectedArtifactContent = '';
@@ -220,7 +228,7 @@ function render(payload) {
   renderArtifactList(artifactCatalog.documents ?? []);
   renderTaskDetailList(taskCatalog.tasks ?? []);
   renderRunDetailList(runCatalog.runs ?? []);
-  renderTerminalPlaceholder(inspection);
+  renderTerminalPanel(inspection);
 
   elements.inspectorArtifact.textContent = shortPath(inspection?.displayPaths?.artifactRoot);
   elements.inspectorRuns.textContent = `${inspection?.runs?.total ?? 0}`;
@@ -236,6 +244,7 @@ function render(payload) {
   if (activeView === 'artifacts') ensureArtifactSelection();
   if (activeView === 'tasks') ensureTaskSelection();
   if (activeView === 'runs') ensureRunSelection();
+  if (activeView === 'terminal') ensureTerminalSelection();
 }
 
 function setActiveView(view) {
@@ -252,6 +261,11 @@ function setActiveView(view) {
   if (activeView === 'artifacts') ensureArtifactSelection();
   if (activeView === 'tasks') ensureTaskSelection();
   if (activeView === 'runs') ensureRunSelection();
+  if (activeView === 'terminal') {
+    const selectedTaskIsCandidate = terminalCandidates().some((candidate) => candidate.taskId === selectedTaskId);
+    if (selectedTaskIsCandidate) selectedTerminalTaskId = selectedTaskId;
+    ensureTerminalSelection();
+  }
 }
 
 function renderRecentProjects(projects, activePath) {
@@ -298,6 +312,10 @@ function taskItems() {
 
 function runItems() {
   return currentPayload.runCatalog?.runs ?? [];
+}
+
+function terminalCandidates() {
+  return currentPayload.inspection?.terminal?.candidates ?? [];
 }
 
 function renderRunDetailList(runs) {
@@ -531,6 +549,7 @@ function selectTask(taskId) {
     renderTaskEmpty();
     return;
   }
+  if (task.ready) selectedTerminalTaskId = task.id;
 
   elements.taskDetailTitle.textContent = task.title;
   elements.taskDetailStatus.textContent = task.ready ? 'ready' : task.status;
@@ -614,25 +633,158 @@ function renderArtifactList(documents) {
   }
 }
 
-function renderTerminalPlaceholder(inspection) {
-  const agentTool = inspection?.defaultAgentTool ?? 'codex';
-  const projectRoot = inspection?.displayPaths?.projectRoot ?? currentPayload.projectPath;
-  const task = taskItems().find((item) => item.ready) ?? taskItems()[0];
-  const taskLabel = task ? `${task.id} · ${task.title}` : '-';
+function renderTerminalPanel(inspection) {
+  const terminal = inspection?.terminal ?? null;
+  const candidates = terminal?.candidates ?? [];
+  elements.terminalState.textContent = inspection ? terminal?.state ?? 'read-only' : 'not connected';
+  elements.terminalCwd.textContent = shortPath(terminal?.displayCwd ?? inspection?.displayPaths?.projectRoot ?? currentPayload.projectPath);
+  elements.terminalCwd.title = text(terminal?.cwd ?? inspection?.projectRoot ?? currentPayload.projectPath);
+  elements.terminalAgent.textContent = terminal?.defaultAgentTool ?? inspection?.defaultAgentTool ?? 'codex';
+  elements.terminalGraph.textContent = shortPath(terminal?.source?.displayTaskGraphPath);
+  elements.terminalGraph.title = text(terminal?.source?.displayTaskGraphPath);
+  renderTerminalTaskList(candidates);
+  ensureTerminalSelection();
+}
 
-  elements.terminalState.textContent = inspection ? 'read-only' : 'not connected';
-  elements.terminalTitle.textContent = inspection ? 'PTY not connected' : 'No project';
-  elements.terminalCwd.textContent = shortPath(projectRoot);
-  elements.terminalCwd.title = text(projectRoot);
-  elements.terminalAgent.textContent = agentTool;
+function renderTerminalTaskList(candidates) {
+  elements.terminalTaskList.replaceChildren();
+  elements.terminalTaskCount.textContent = `${candidates.length}`;
+  if (!candidates.length) {
+    elements.terminalTaskList.append(emptyNode('No ready task'));
+    return;
+  }
+  if (selectedTerminalTaskId && !candidates.some((candidate) => candidate.taskId === selectedTerminalTaskId)) {
+    selectedTerminalTaskId = null;
+  }
+  for (const candidate of candidates) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.dataset.taskId = candidate.taskId;
+    button.className = `terminal-task-row ${candidate.taskId === selectedTerminalTaskId ? 'active' : ''}`;
+    button.title = `${candidate.taskId} · ${candidate.title}`;
+    button.addEventListener('click', () => selectTerminalTask(candidate.taskId));
+
+    const main = document.createElement('span');
+    main.className = 'terminal-task-main';
+    const title = document.createElement('span');
+    title.className = 'terminal-task-title';
+    title.textContent = `${candidate.taskId} · ${candidate.title}`;
+    const meta = document.createElement('span');
+    meta.className = 'terminal-task-meta';
+    meta.textContent = `${candidate.targetArea} · ${candidate.acceptanceCriteriaCount} AC`;
+    main.append(title, meta);
+
+    const status = document.createElement('span');
+    status.className = 'status-pill ready';
+    status.textContent = 'ready';
+    button.append(main, status);
+    elements.terminalTaskList.append(button);
+  }
+}
+
+function ensureTerminalSelection() {
+  const candidates = terminalCandidates();
+  if (!candidates.length) {
+    selectedTerminalTaskId = null;
+    renderTerminalEmpty();
+    return;
+  }
+  const selected = candidates.find((candidate) => candidate.taskId === selectedTerminalTaskId)
+    ?? candidates.find((candidate) => candidate.taskId === selectedTaskId)
+    ?? candidates[0];
+  selectTerminalTask(selected.taskId);
+}
+
+function selectTerminalTask(taskId) {
+  selectedTerminalTaskId = taskId;
+  renderTerminalTaskList(terminalCandidates());
+  const terminal = currentPayload.inspection?.terminal ?? null;
+  const candidate = terminalCandidates().find((item) => item.taskId === taskId);
+  if (!candidate) {
+    renderTerminalEmpty();
+    return;
+  }
+  const taskLabel = `${candidate.taskId} · ${candidate.title}`;
+  elements.terminalTitle.textContent = 'Ready task';
   elements.terminalTask.textContent = taskLabel;
   elements.terminalTask.title = taskLabel;
+  elements.terminalCommandTitle.textContent = candidate.title;
+  elements.terminalCommandState.textContent = candidate.executable ? 'ready' : 'blocked';
+  elements.terminalCommandState.className = `status-pill ${candidate.executable ? 'ready' : 'blocked'}`;
+  renderTerminalCommands(candidate.commands);
+  renderTerminalChecks(candidate.checks);
   elements.terminalPreview.textContent = [
-    `cwd   ${text(projectRoot)}`,
-    `agent ${agentTool}`,
-    `task  ${taskLabel}`,
-    'pty   not connected',
+    `cwd    ${text(terminal?.displayCwd ?? '.')}`,
+    `agent  ${candidate.agentTool}`,
+    `task   ${candidate.taskId}`,
+    `graph  ${text(terminal?.source?.displayTaskGraphPath)}`,
+    'pty    not connected',
   ].join('\n');
+}
+
+function renderTerminalEmpty() {
+  const terminal = currentPayload.inspection?.terminal ?? null;
+  elements.terminalTitle.textContent = currentPayload.inspection ? 'No ready task' : 'No project';
+  elements.terminalTask.textContent = '-';
+  elements.terminalTask.title = '-';
+  elements.terminalCommandTitle.textContent = 'No command';
+  elements.terminalCommandState.textContent = '-';
+  elements.terminalCommandState.className = 'status-pill';
+  renderTerminalCommands(null);
+  renderTerminalChecks(terminal?.checks ?? []);
+  elements.terminalPreview.textContent = [
+    `cwd    ${text(terminal?.displayCwd ?? currentPayload.projectPath)}`,
+    `agent  ${text(terminal?.defaultAgentTool ?? 'codex')}`,
+    'task   -',
+    'pty    not connected',
+  ].join('\n');
+}
+
+function renderTerminalCommands(commands) {
+  elements.terminalCommandList.replaceChildren();
+  if (!commands) {
+    elements.terminalCommandList.append(emptyNode('No command available'));
+    return;
+  }
+  const rows = [
+    ['plan', commands.plan],
+    ['orchestrate', commands.orchestrate],
+    ['handoff', commands.handoff],
+    ['start', commands.start],
+  ];
+  for (const [label, command] of rows) {
+    const row = document.createElement('div');
+    row.className = 'terminal-command-row';
+    const labelEl = document.createElement('span');
+    labelEl.className = 'terminal-command-label';
+    labelEl.textContent = label;
+    const commandEl = document.createElement('code');
+    commandEl.className = 'terminal-command-text';
+    commandEl.textContent = command;
+    commandEl.title = command;
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.textContent = 'Copy';
+    button.addEventListener('click', () => copyText(command));
+    row.append(labelEl, commandEl, button);
+    elements.terminalCommandList.append(row);
+  }
+}
+
+function renderTerminalChecks(checks) {
+  elements.terminalCheckList.replaceChildren();
+  if (!checks?.length) {
+    elements.terminalCheckList.append(emptyNode('No readiness checks'));
+    return;
+  }
+  for (const check of checks) {
+    const row = document.createElement('div');
+    row.className = `terminal-check-row ${check.state}`;
+    row.append(labelNode(check.label, 'terminal-check-label'));
+    row.append(labelNode(check.state, 'terminal-check-state'));
+    row.append(labelNode(check.detail, 'terminal-check-detail'));
+    elements.terminalCheckList.append(row);
+  }
 }
 
 function buildOnboardingActions(inspection) {
@@ -844,6 +996,14 @@ function activeListConfig() {
       idAttribute: 'runId',
       selectedId: selectedRunId,
       select: selectRun,
+    };
+  }
+  if (activeView === 'terminal') {
+    return {
+      rowSelector: '.terminal-task-row',
+      idAttribute: 'taskId',
+      selectedId: selectedTerminalTaskId,
+      select: selectTerminalTask,
     };
   }
   return null;
