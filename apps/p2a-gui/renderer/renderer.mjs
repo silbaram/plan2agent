@@ -48,6 +48,14 @@ const elements = {
   artifactPath: document.querySelector('#artifact-path'),
   artifactMeta: document.querySelector('#artifact-meta'),
   artifactContent: document.querySelector('#artifact-content'),
+  artifactPreviewMode: document.querySelector('#artifact-preview-mode'),
+  artifactRawMode: document.querySelector('#artifact-raw-mode'),
+  artifactSearch: document.querySelector('#artifact-search'),
+  artifactSearchCount: document.querySelector('#artifact-search-count'),
+  artifactSearchPrev: document.querySelector('#artifact-search-prev'),
+  artifactSearchNext: document.querySelector('#artifact-search-next'),
+  artifactCopyPath: document.querySelector('#artifact-copy-path'),
+  artifactCopyContent: document.querySelector('#artifact-copy-content'),
   terminalState: document.querySelector('#terminal-state'),
   terminalTitle: document.querySelector('#terminal-title'),
   terminalCwd: document.querySelector('#terminal-cwd'),
@@ -124,6 +132,12 @@ let selectedArtifactId = null;
 let selectedTaskId = null;
 let selectedRunId = null;
 let artifactRequestToken = 0;
+let selectedArtifactDocument = null;
+let selectedArtifactContent = '';
+let selectedArtifactParseNotice = '';
+let artifactViewMode = 'raw';
+let artifactSearchQuery = '';
+let artifactSearchIndex = 0;
 
 function browserFallbackBridge() {
   return {
@@ -900,39 +914,271 @@ function handleKeyboard(event) {
 }
 
 function renderArtifactEmpty(title, detail) {
+  selectedArtifactDocument = null;
+  selectedArtifactContent = '';
+  selectedArtifactParseNotice = '';
+  artifactViewMode = 'raw';
+  artifactSearchQuery = '';
+  artifactSearchIndex = 0;
+  elements.artifactSearch.value = '';
   elements.artifactTitle.textContent = title;
   elements.artifactPath.textContent = detail;
   elements.artifactMeta.textContent = '-';
-  elements.artifactContent.className = 'artifact-content';
-  elements.artifactContent.textContent = 'Open a P2A project and select an artifact.';
+  updateArtifactToolbar();
+  renderPlainArtifactContent('Open a P2A project and select an artifact.');
 }
 
 function renderArtifactLoading(document) {
+  selectedArtifactDocument = document ?? null;
+  selectedArtifactContent = '';
+  selectedArtifactParseNotice = '';
+  artifactSearchQuery = '';
+  artifactSearchIndex = 0;
+  elements.artifactSearch.value = '';
+  artifactViewMode = document?.format === 'markdown' ? 'preview' : 'raw';
   elements.artifactTitle.textContent = document?.label ?? 'Loading artifact';
   elements.artifactPath.textContent = document?.displayPath ?? '-';
   elements.artifactMeta.textContent = document ? `${document.group} · ${document.format}` : '-';
-  elements.artifactContent.className = 'artifact-content';
-  elements.artifactContent.textContent = 'Loading...';
+  updateArtifactToolbar();
+  renderPlainArtifactContent('Loading...');
 }
 
 function renderArtifactReadResult(result) {
   if (!result?.ok) {
+    selectedArtifactDocument = result?.document ?? null;
+    selectedArtifactContent = '';
+    selectedArtifactParseNotice = '';
     elements.artifactTitle.textContent = 'Artifact unavailable';
     elements.artifactPath.textContent = result?.code ?? '-';
     elements.artifactMeta.textContent = '-';
-    elements.artifactContent.className = 'artifact-content';
-    elements.artifactContent.textContent = result?.message ?? 'Could not read artifact.';
+    updateArtifactToolbar();
+    renderPlainArtifactContent(result?.message ?? 'Could not read artifact.');
     return;
   }
 
   const document = result.document;
   const modified = document.modifiedAt ? new Date(document.modifiedAt).toLocaleString() : '-';
+  selectedArtifactDocument = document;
+  selectedArtifactContent = result.content ?? '';
+  selectedArtifactParseNotice = result.parseError ? `JSON parse warning: ${result.parseError}\n\n` : '';
+  if (document.format !== 'markdown') artifactViewMode = 'raw';
   elements.artifactTitle.textContent = document.label;
   elements.artifactPath.textContent = document.displayPath ?? document.path;
   elements.artifactMeta.textContent = `${document.group} · ${document.format} · ${formatBytes(document.sizeBytes)} · ${modified}`;
-  elements.artifactContent.className = `artifact-content ${document.format}`;
-  const parseNotice = result.parseError ? `JSON parse warning: ${result.parseError}\n\n` : '';
-  elements.artifactContent.textContent = `${parseNotice}${result.content ?? ''}`;
+  updateArtifactToolbar();
+  renderSelectedArtifactContent();
+}
+
+function updateArtifactToolbar() {
+  const hasDocument = Boolean(selectedArtifactDocument);
+  const hasContent = Boolean(selectedArtifactContent || selectedArtifactParseNotice);
+  const canPreview = selectedArtifactDocument?.format === 'markdown';
+  if (!canPreview) artifactViewMode = 'raw';
+  elements.artifactPreviewMode.disabled = !canPreview || !hasContent;
+  elements.artifactRawMode.disabled = !hasContent;
+  elements.artifactPreviewMode.classList.toggle('active', artifactViewMode === 'preview');
+  elements.artifactRawMode.classList.toggle('active', artifactViewMode === 'raw');
+  elements.artifactPreviewMode.setAttribute('aria-pressed', artifactViewMode === 'preview' ? 'true' : 'false');
+  elements.artifactRawMode.setAttribute('aria-pressed', artifactViewMode === 'raw' ? 'true' : 'false');
+  elements.artifactSearch.disabled = !hasContent;
+  const matchCount = countMatches(artifactDisplayContent(), artifactSearchQuery.trim());
+  elements.artifactSearchPrev.disabled = matchCount < 2;
+  elements.artifactSearchNext.disabled = matchCount < 2;
+  elements.artifactCopyPath.disabled = !hasDocument;
+  elements.artifactCopyContent.disabled = !hasContent;
+}
+
+function artifactDisplayContent() {
+  return `${selectedArtifactParseNotice}${selectedArtifactContent}`;
+}
+
+function renderSelectedArtifactContent() {
+  const query = artifactSearchQuery.trim();
+  const content = artifactDisplayContent();
+  const matchCount = countMatches(content, query);
+  if (!matchCount) artifactSearchIndex = 0;
+  else if (artifactSearchIndex >= matchCount) artifactSearchIndex = 0;
+  elements.artifactSearchCount.textContent = query ? `${matchCount}` : '0';
+  elements.artifactSearchPrev.disabled = matchCount < 2;
+  elements.artifactSearchNext.disabled = matchCount < 2;
+
+  elements.artifactContent.replaceChildren();
+  elements.artifactContent.className = `artifact-content ${artifactViewMode}`;
+  if (artifactViewMode === 'preview' && selectedArtifactDocument?.format === 'markdown') {
+    renderMarkdownArtifact(elements.artifactContent, content, query);
+  } else {
+    renderHighlightedTextBlock(elements.artifactContent, content, query);
+  }
+  requestAnimationFrame(() => {
+    elements.artifactContent.querySelector('mark.active')?.scrollIntoView({ block: 'center', inline: 'nearest' });
+  });
+  updateArtifactToolbar();
+}
+
+function renderPlainArtifactContent(value) {
+  elements.artifactSearchCount.textContent = '0';
+  elements.artifactContent.className = 'artifact-content raw';
+  elements.artifactContent.replaceChildren();
+  elements.artifactContent.textContent = value;
+}
+
+function countMatches(value, query) {
+  if (!query) return 0;
+  const haystack = value.toLocaleLowerCase();
+  const needle = query.toLocaleLowerCase();
+  let count = 0;
+  let index = haystack.indexOf(needle);
+  while (index >= 0) {
+    count += 1;
+    index = haystack.indexOf(needle, index + needle.length);
+  }
+  return count;
+}
+
+function renderHighlightedTextBlock(container, value, query) {
+  const search = { query, current: 0, active: artifactSearchIndex };
+  appendHighlightedText(container, value, search);
+}
+
+function appendHighlightedText(container, value, search) {
+  if (!search.query) {
+    container.append(document.createTextNode(value));
+    return;
+  }
+  const lowerValue = value.toLocaleLowerCase();
+  const lowerQuery = search.query.toLocaleLowerCase();
+  let cursor = 0;
+  let matchIndex = lowerValue.indexOf(lowerQuery);
+  while (matchIndex >= 0) {
+    if (matchIndex > cursor) {
+      container.append(document.createTextNode(value.slice(cursor, matchIndex)));
+    }
+    const mark = document.createElement('mark');
+    mark.textContent = value.slice(matchIndex, matchIndex + search.query.length);
+    if (search.current === search.active) mark.className = 'active';
+    search.current += 1;
+    container.append(mark);
+    cursor = matchIndex + search.query.length;
+    matchIndex = lowerValue.indexOf(lowerQuery, cursor);
+  }
+  if (cursor < value.length) container.append(document.createTextNode(value.slice(cursor)));
+}
+
+function appendInlineMarkdown(container, value, search) {
+  const parts = value.split(/(`[^`]+`)/g);
+  for (const part of parts) {
+    if (!part) continue;
+    if (part.startsWith('`') && part.endsWith('`') && part.length > 1) {
+      const code = document.createElement('code');
+      appendHighlightedText(code, part.slice(1, -1), search);
+      container.append(code);
+      continue;
+    }
+    appendHighlightedText(container, part, search);
+  }
+}
+
+function renderMarkdownArtifact(container, markdown, query) {
+  const lines = markdown.split(/\r?\n/);
+  const search = { query, current: 0, active: artifactSearchIndex };
+  let paragraph = [];
+  let list = null;
+  let codeBlock = null;
+
+  const flushParagraph = () => {
+    if (!paragraph.length) return;
+    const p = document.createElement('p');
+    appendInlineMarkdown(p, paragraph.join(' '), search);
+    container.append(p);
+    paragraph = [];
+  };
+  const flushList = () => {
+    if (!list) return;
+    container.append(list.node);
+    list = null;
+  };
+  const flushCodeBlock = () => {
+    if (!codeBlock) return;
+    const pre = document.createElement('pre');
+    const code = document.createElement('code');
+    appendHighlightedText(code, codeBlock.lines.join('\n'), search);
+    pre.append(code);
+    container.append(pre);
+    codeBlock = null;
+  };
+  const flushBlocks = () => {
+    flushParagraph();
+    flushList();
+    flushCodeBlock();
+  };
+
+  for (const line of lines) {
+    const fence = line.match(/^```/);
+    if (fence) {
+      if (codeBlock) flushCodeBlock();
+      else {
+        flushParagraph();
+        flushList();
+        codeBlock = { lines: [] };
+      }
+      continue;
+    }
+    if (codeBlock) {
+      codeBlock.lines.push(line);
+      continue;
+    }
+
+    if (!line.trim()) {
+      flushParagraph();
+      flushList();
+      continue;
+    }
+
+    const heading = line.match(/^(#{1,4})\s+(.+)$/);
+    if (heading) {
+      flushParagraph();
+      flushList();
+      const level = Math.min(heading[1].length, 4);
+      const node = document.createElement(`h${level}`);
+      appendInlineMarkdown(node, heading[2], search);
+      container.append(node);
+      continue;
+    }
+
+    if (/^\s*---+\s*$/.test(line)) {
+      flushBlocks();
+      container.append(document.createElement('hr'));
+      continue;
+    }
+
+    const quote = line.match(/^>\s?(.*)$/);
+    if (quote) {
+      flushParagraph();
+      flushList();
+      const blockquote = document.createElement('blockquote');
+      appendInlineMarkdown(blockquote, quote[1], search);
+      container.append(blockquote);
+      continue;
+    }
+
+    const unordered = line.match(/^\s*[-*]\s+(.+)$/);
+    const ordered = line.match(/^\s*\d+\.\s+(.+)$/);
+    if (unordered || ordered) {
+      flushParagraph();
+      const type = ordered ? 'ol' : 'ul';
+      if (!list || list.type !== type) {
+        flushList();
+        list = { type, node: document.createElement(type) };
+      }
+      const item = document.createElement('li');
+      appendInlineMarkdown(item, unordered?.[1] ?? ordered[1], search);
+      list.node.append(item);
+      continue;
+    }
+
+    paragraph.push(line.trim());
+  }
+  flushBlocks();
 }
 
 function ensureArtifactSelection() {
@@ -1073,6 +1319,37 @@ async function copyText(value) {
 
 async function boot() {
   document.addEventListener('keydown', handleKeyboard);
+  elements.artifactPreviewMode.addEventListener('click', () => {
+    artifactViewMode = 'preview';
+    renderSelectedArtifactContent();
+  });
+  elements.artifactRawMode.addEventListener('click', () => {
+    artifactViewMode = 'raw';
+    renderSelectedArtifactContent();
+  });
+  elements.artifactSearch.addEventListener('input', () => {
+    artifactSearchQuery = elements.artifactSearch.value;
+    artifactSearchIndex = 0;
+    renderSelectedArtifactContent();
+  });
+  elements.artifactSearchPrev.addEventListener('click', () => {
+    const matches = countMatches(artifactDisplayContent(), artifactSearchQuery.trim());
+    if (matches < 2) return;
+    artifactSearchIndex = (artifactSearchIndex + matches - 1) % matches;
+    renderSelectedArtifactContent();
+  });
+  elements.artifactSearchNext.addEventListener('click', () => {
+    const matches = countMatches(artifactDisplayContent(), artifactSearchQuery.trim());
+    if (matches < 2) return;
+    artifactSearchIndex = (artifactSearchIndex + 1) % matches;
+    renderSelectedArtifactContent();
+  });
+  elements.artifactCopyPath.addEventListener('click', () => {
+    if (selectedArtifactDocument?.path) copyText(selectedArtifactDocument.path);
+  });
+  elements.artifactCopyContent.addEventListener('click', () => {
+    if (selectedArtifactContent || selectedArtifactParseNotice) copyText(artifactDisplayContent());
+  });
   for (const button of elements.railItems) {
     button.addEventListener('click', () => setActiveView(button.dataset.view));
   }

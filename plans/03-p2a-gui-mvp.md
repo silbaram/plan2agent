@@ -157,6 +157,7 @@ GUI local config:
 - `apps/p2a-gui/renderer/`가 프로젝트 상태, Gate, ready task, diagnostics, command preview, read model JSON을 표시한다.
 - recent projects와 마지막 프로젝트는 Electron `userData/p2a-gui-config.json`에 저장하고 앱 시작 시 복원한다.
 - `AR` 탭이 known artifact와 run JSON catalog를 표시하고, 선택한 문서를 read-only로 preview한다.
+- `AR` 탭은 Markdown preview/raw 전환, 문서 검색, path/content copy를 지원한다. Markdown HTML/script는 실행하지 않고 DOM text node 기반으로 렌더링한다.
 - `TK` 탭이 task graph를 read-only로 읽어 task 목록과 상세 맥락을 표시한다.
 - `RN` 탭이 run index와 run JSON을 read-only로 읽어 run history와 검증 결과를 표시한다.
 - `TE` 탭이 실제 PTY 실행 전 준비 화면으로 cwd, agent, task scope를 read-only로 표시한다.
@@ -170,7 +171,6 @@ GUI local config:
 
 아직 남은 2B 범위:
 
-- artifact viewer markdown preview 고도화와 문서 검색/복사 UX.
 - TE의 실제 PTY 연결 전 command scope/approval 준비 화면 고도화.
 - command palette/shortcut help 같은 보조 조작 UX.
 - Electron packaging 정책 정리.
@@ -391,9 +391,10 @@ GUI local config:
 8. `2B` hardening: RN 탭 run history 1차. **구현 완료**
 9. `2B` hardening: focus/keyboard polish와 TE 준비 화면 1차. **구현 완료**
 10. `2B-1` harness onboarding guidance: scaffold/handoff/validate 명령 안내 화면. **구현 완료**
-11. `2C` PTY execution: node-pty + xterm + supervisor input.
-12. `2D` finish/verification: existing lifecycle 연결.
-13. smoke: 이미 scaffold된 작은 target 프로젝트에서 ready task 1건 end-to-end 실행.
+11. `2B` hardening: AR markdown preview/search/copy. **구현 완료**
+12. `2C` PTY execution: node-pty + xterm + supervisor input.
+13. `2D` finish/verification: existing lifecycle 연결.
+14. smoke: 이미 scaffold된 작은 target 프로젝트에서 ready task 1건 end-to-end 실행.
 
 ## 9. 첫 smoke 기준
 

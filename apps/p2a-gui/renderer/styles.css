@@ -818,6 +818,70 @@ h2 {
   white-space: nowrap;
 }
 
+.artifact-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  border-bottom: 1px solid var(--border-1);
+  padding: 8px;
+  background: var(--bg-2);
+}
+
+.artifact-mode-toggle {
+  display: flex;
+  flex: 0 0 auto;
+  min-width: max-content;
+}
+
+.artifact-mode-toggle button {
+  border-radius: 0;
+  border-right: 0;
+}
+
+.artifact-mode-toggle button:first-child {
+  border-radius: 4px 0 0 4px;
+}
+
+.artifact-mode-toggle button:last-child {
+  border-right: 1px solid var(--border-2);
+  border-radius: 0 4px 4px 0;
+}
+
+.artifact-mode-toggle button.active {
+  border-color: var(--accent);
+  color: var(--fg-1);
+}
+
+.artifact-search {
+  flex: 1 1 132px;
+  min-width: 0;
+  height: 30px;
+  border: 1px solid var(--border-2);
+  border-radius: 4px;
+  background: var(--bg-3);
+  color: var(--fg-2);
+  font: inherit;
+  font-size: 12px;
+  padding: 0 9px;
+}
+
+.artifact-toolbar > .surface-meta {
+  flex: 0 0 auto;
+  min-width: 18px;
+  text-align: right;
+}
+
+.artifact-toolbar > button {
+  flex: 0 0 auto;
+}
+
+.artifact-search:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 2px;
+}
+
 .artifact-content {
   flex: 1;
   min-height: 280px;
@@ -825,12 +889,107 @@ h2 {
   overflow: auto;
   padding: 14px;
   color: var(--fg-2);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.artifact-content.raw {
+  font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 11px;
   line-height: 1.5;
   white-space: pre-wrap;
 }
 
-.artifact-content.json {
+.artifact-content h1,
+.artifact-content h2,
+.artifact-content h3,
+.artifact-content h4 {
+  margin: 14px 0 8px;
+  color: var(--fg-1);
+  font-size: 15px;
+  line-height: 1.35;
+  text-transform: none;
+}
+
+.artifact-content h1:first-child,
+.artifact-content h2:first-child,
+.artifact-content h3:first-child,
+.artifact-content h4:first-child,
+.artifact-content p:first-child,
+.artifact-content pre:first-child,
+.artifact-content blockquote:first-child,
+.artifact-content ul:first-child,
+.artifact-content ol:first-child {
+  margin-top: 0;
+}
+
+.artifact-content p {
+  margin: 0 0 10px;
+}
+
+.artifact-content ul,
+.artifact-content ol {
+  margin: 0 0 10px;
+  padding-left: 20px;
+}
+
+.artifact-content li {
+  margin: 4px 0;
+}
+
+.artifact-content code {
+  border: 1px solid var(--border-1);
+  border-radius: 3px;
+  background: var(--bg-3);
+  padding: 1px 4px;
+  color: var(--fg-2);
+  font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+}
+
+.artifact-content pre {
+  margin: 0 0 12px;
+  overflow: auto;
+  border: 1px solid var(--border-1);
+  border-radius: 4px;
+  background: var(--bg-3);
+  padding: 10px;
+  white-space: pre;
+}
+
+.artifact-content pre code {
+  border: 0;
+  background: transparent;
+  padding: 0;
+}
+
+.artifact-content blockquote {
+  margin: 0 0 10px;
+  border-left: 2px solid var(--border-2);
+  padding: 6px 10px;
+  background: var(--bg-2);
+  color: var(--fg-3);
+}
+
+.artifact-content hr {
+  border: 0;
+  border-top: 1px solid var(--border-1);
+  margin: 14px 0;
+}
+
+.artifact-content mark {
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--warn) 45%, transparent);
+  color: var(--fg-1);
+}
+
+.artifact-content mark.active {
+  outline: 1px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.artifact-content.json,
+.artifact-content.raw {
   white-space: pre;
 }
 

@@ -128,7 +128,19 @@
                     <span id="artifact-meta" class="surface-meta">-</span>
                   </div>
                   <div id="artifact-path" class="artifact-path">-</div>
-                  <pre id="artifact-content" class="artifact-content">Open a P2A project and select an artifact.</pre>
+                  <div class="artifact-toolbar">
+                    <div class="artifact-mode-toggle" role="group" aria-label="Artifact view mode">
+                      <button id="artifact-preview-mode" type="button" aria-pressed="true">Preview</button>
+                      <button id="artifact-raw-mode" type="button" aria-pressed="false">Raw</button>
+                    </div>
+                    <input id="artifact-search" class="artifact-search" type="search" aria-label="Search artifact" placeholder="Search" autocomplete="off" />
+                    <span id="artifact-search-count" class="surface-meta">0</span>
+                    <button id="artifact-search-prev" type="button">Prev</button>
+                    <button id="artifact-search-next" type="button">Next</button>
+                    <button id="artifact-copy-path" type="button">Copy path</button>
+                    <button id="artifact-copy-content" type="button">Copy content</button>
+                  </div>
+                  <div id="artifact-content" class="artifact-content" tabindex="0">Open a P2A project and select an artifact.</div>
                 </article>
               </div>
             </section>
