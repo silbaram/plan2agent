@@ -16,6 +16,7 @@ const elements = {
   stateTitle: document.querySelector('#state-title'),
   stateDetail: document.querySelector('#state-detail'),
   stateBadge: document.querySelector('#state-badge'),
+  actionSummary: document.querySelector('#action-summary'),
   commandList: document.querySelector('#command-list'),
   diagnosticCount: document.querySelector('#diagnostic-count'),
   diagnosticList: document.querySelector('#diagnostic-list'),
@@ -170,10 +171,6 @@ function shortPath(value) {
   return `...${stringValue.slice(-69)}`;
 }
 
-function commandEntries(commands = {}) {
-  return Object.entries(commands).filter(([, value]) => typeof value === 'string' && value.length);
-}
-
 function render(payload) {
   currentPayload = payload ?? currentPayload;
   const inspection = currentPayload.inspection;
@@ -203,7 +200,7 @@ function render(payload) {
   renderRecentProjects(localConfig.recentProjects ?? [], currentPayload.projectPath);
   renderGates(inspection?.gates ?? null);
   renderReadyTasks(readyTasks);
-  renderCommands(inspection?.commands ?? {});
+  renderOnboardingActions(inspection);
   renderDiagnostics(diagnostics);
   renderTaskTable(inspection);
   renderArtifactList(artifactCatalog.documents ?? []);
@@ -624,6 +621,187 @@ function renderTerminalPlaceholder(inspection) {
   ].join('\n');
 }
 
+function buildOnboardingActions(inspection) {
+  const state = inspection?.state ?? 'no_project';
+  const commands = inspection?.commands ?? {};
+  const projectRoot = inspection?.displayPaths?.projectRoot ?? currentPayload.projectPath ?? '-';
+  const artifactRoot = inspection?.displayPaths?.artifactRoot ?? '<artifact-root>';
+  const hasReadyTask = (inspection?.tasks?.ready ?? []).length > 0;
+  const actionByState = {
+    no_project: [
+      {
+        title: 'Open P2A project',
+        state: 'folder picker',
+        target: 'workspace',
+        result: 'read model',
+        buttonLabel: 'Open',
+        intent: 'openProject',
+      },
+    ],
+    no_p2a: [
+      {
+        title: 'Install P2A',
+        state: 'copy command',
+        target: projectRoot,
+        result: '.plan2agent, scripts, schemas',
+        command: commands.setup,
+        primary: true,
+      },
+      {
+        title: 'Import plan',
+        state: 'copy command',
+        target: projectRoot,
+        result: 'approved artifacts',
+        command: commands.import,
+      },
+    ],
+    installed_empty: [
+      {
+        title: 'Import plan',
+        state: 'copy command',
+        target: projectRoot,
+        result: 'approved artifacts',
+        command: commands.import,
+        primary: true,
+      },
+      {
+        title: 'Validate target',
+        state: 'copy command',
+        target: artifactRoot,
+        result: 'artifact audit',
+        command: commands.validate,
+      },
+    ],
+    planning_in_progress: [
+      {
+        title: 'Validate gates',
+        state: 'copy command',
+        target: artifactRoot,
+        result: 'missing gate check',
+        command: commands.validate,
+        primary: true,
+      },
+      {
+        title: 'Review artifacts',
+        state: 'open view',
+        target: artifactRoot,
+        result: 'read-only documents',
+        view: 'artifacts',
+        buttonLabel: 'Open',
+      },
+    ],
+    execution_ready: [
+      {
+        title: hasReadyTask ? 'Open ready task' : 'Open tasks',
+        state: 'open view',
+        target: projectRoot,
+        result: hasReadyTask ? `${inspection.tasks.ready.length} ready` : 'task graph',
+        view: 'tasks',
+        buttonLabel: 'Open',
+        primary: true,
+      },
+      {
+        title: 'Terminal scope',
+        state: 'open view',
+        target: projectRoot,
+        result: inspection?.defaultAgentTool ?? 'codex',
+        view: 'terminal',
+        buttonLabel: 'Open',
+      },
+      {
+        title: 'Validate artifacts',
+        state: 'copy command',
+        target: artifactRoot,
+        result: 'gate audit',
+        command: commands.validate,
+      },
+    ],
+    broken_install: [
+      {
+        title: 'Validate install',
+        state: 'copy command',
+        target: artifactRoot,
+        result: `${inspection?.diagnostics?.length ?? 0} diagnostics`,
+        command: commands.validate,
+        primary: true,
+      },
+      {
+        title: 'Repair harness',
+        state: 'copy command',
+        target: projectRoot,
+        result: 'missing files',
+        command: commands.setup,
+      },
+    ],
+  };
+  return actionByState[state] ?? actionByState.no_project;
+}
+
+function renderOnboardingActions(inspection) {
+  const actions = buildOnboardingActions(inspection);
+  elements.actionSummary.textContent = `${actions.length} action${actions.length === 1 ? '' : 's'}`;
+  elements.commandList.replaceChildren();
+  for (const action of actions) {
+    const row = document.createElement('div');
+    row.className = `action-row ${action.primary ? 'primary' : ''}`;
+
+    const head = document.createElement('div');
+    head.className = 'action-head';
+    head.append(labelNode(action.title, 'action-title'));
+    head.append(labelNode(action.state, 'action-state'));
+
+    const meta = document.createElement('dl');
+    meta.className = 'action-meta';
+    meta.append(actionMetaNode('target', action.target));
+    meta.append(actionMetaNode('result', action.result));
+
+    row.append(head, meta);
+    row.append(actionControlNode(action));
+    elements.commandList.append(row);
+  }
+}
+
+function actionMetaNode(label, value) {
+  const row = document.createElement('div');
+  const dt = document.createElement('dt');
+  const dd = document.createElement('dd');
+  dt.textContent = label;
+  dd.textContent = text(value);
+  dd.title = text(value);
+  row.append(dt, dd);
+  return row;
+}
+
+function actionControlNode(action) {
+  const row = document.createElement('div');
+  row.className = 'action-control';
+
+  const command = document.createElement('code');
+  command.className = 'action-command-text';
+  command.textContent = action.command ?? action.view ?? action.intent ?? '-';
+  command.title = command.textContent;
+
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.textContent = action.buttonLabel ?? 'Copy';
+  button.disabled = !action.command && !action.view && !action.intent;
+  button.addEventListener('click', async () => {
+    if (action.command) {
+      await copyText(action.command);
+      return;
+    }
+    if (action.view) {
+      setActiveView(action.view);
+      requestAnimationFrame(focusActiveListRow);
+      return;
+    }
+    if (action.intent === 'openProject') render(await bridge.selectProject());
+  });
+
+  row.append(command, button);
+  return row;
+}
+
 function isTextEditingTarget(target) {
   if (!target || !(target instanceof HTMLElement)) return false;
   return ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName) || target.isContentEditable;
@@ -810,27 +988,6 @@ function renderReadyTasks(tasks) {
     row.append(labelNode(`${task.id} · ${task.title}`, 'row-title'));
     row.append(pillNode(task.targetArea ?? 'area', 'present'));
     elements.readyTaskList.append(row);
-  }
-}
-
-function renderCommands(commands) {
-  elements.commandList.replaceChildren();
-  const entries = commandEntries(commands);
-  if (!entries.length) {
-    elements.commandList.append(emptyNode('No command preview'));
-    return;
-  }
-  for (const [name, command] of entries) {
-    const row = document.createElement('div');
-    row.className = 'command-row';
-    row.append(labelNode(name, 'command-label'));
-    row.append(labelNode(command, 'command-text'));
-    const button = document.createElement('button');
-    button.type = 'button';
-    button.textContent = 'Copy';
-    button.addEventListener('click', () => copyText(command));
-    row.append(button);
-    elements.commandList.append(row);
   }
 }
 

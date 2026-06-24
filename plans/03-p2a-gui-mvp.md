@@ -161,6 +161,7 @@ GUI local config:
 - `RN` 탭이 run index와 run JSON을 read-only로 읽어 run history와 검증 결과를 표시한다.
 - `TE` 탭이 실제 PTY 실행 전 준비 화면으로 cwd, agent, task scope를 read-only로 표시한다.
 - activity rail은 `Cmd/Ctrl+1..5` 탭 전환을 지원하고, `TK`/`RN`/`AR` 목록은 방향키와 Enter로 선택할 수 있다.
+- `OV`의 Next action 패널이 `Open P2A Project`, `Install P2A`, `Import plan`, `Validate`, `Repair harness`, `Open Tasks/Terminal`을 프로젝트 상태별로 구분해 보여준다.
 - Electron 개발 런타임은 Node.js `>=22.12.0`, Electron `42.5.0`으로 고정한다.
 - `.plan2agent/`, `artifacts/<project_id>`, flat handoff artifact, iterative artifact root, direct artifact root를 감지한다.
 - `no_p2a`, `installed_empty`, `planning_in_progress`, `execution_ready`, `broken_install` 상태를 판정한다.
@@ -389,7 +390,7 @@ GUI local config:
 7. `2B` hardening: TK 탭 task detail 1차. **구현 완료**
 8. `2B` hardening: RN 탭 run history 1차. **구현 완료**
 9. `2B` hardening: focus/keyboard polish와 TE 준비 화면 1차. **구현 완료**
-10. `2B-1` harness onboarding guidance: scaffold/handoff/validate 명령 안내 화면.
+10. `2B-1` harness onboarding guidance: scaffold/handoff/validate 명령 안내 화면. **구현 완료**
 11. `2C` PTY execution: node-pty + xterm + supervisor input.
 12. `2D` finish/verification: existing lifecycle 연결.
 13. smoke: 이미 scaffold된 작은 target 프로젝트에서 ready task 1건 end-to-end 실행.
