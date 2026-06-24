@@ -4,10 +4,19 @@
   "version": "0.1.0",
   "type": "module",
   "description": "Plan2Agent supervised GUI shell foundations.",
+  "main": "./src/main.mjs",
+  "engines": {
+    "node": ">=22.12.0"
+  },
   "bin": {
     "p2a-gui-project": "./bin/p2a-gui-project.mjs"
   },
   "scripts": {
-    "inspect": "node ./bin/p2a-gui-project.mjs inspect"
+    "start": "electron .",
+    "inspect": "node ./bin/p2a-gui-project.mjs inspect",
+    "check": "node --check ./src/main.mjs && node --check ./src/preload.cjs && node --check ./renderer/renderer.mjs && node --check ./src/project-reader.mjs && node --check ./bin/p2a-gui-project.mjs"
+  },
+  "devDependencies": {
+    "electron": "42.5.0"
   }
 }

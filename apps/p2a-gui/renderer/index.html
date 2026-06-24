@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:;" />
+    <title>Plan2Agent</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="titlebar">
+        <div class="traffic" aria-hidden="true">
+          <span></span>
+          <span></span>
+          <span></span>
+        </div>
+        <div class="title-main">
+          <strong>Plan2Agent</strong>
+          <span id="title-project">No project</span>
+        </div>
+        <div class="title-actions">
+          <button id="open-project" type="button">Open project</button>
+          <button id="reload-project" type="button">Reload</button>
+        </div>
+      </header>
+
+      <div class="workbench">
+        <nav class="activity-rail" aria-label="Primary">
+          <button class="rail-item active" type="button">OV</button>
+          <button class="rail-item" type="button">TK</button>
+          <button class="rail-item" type="button">RN</button>
+          <button class="rail-item" type="button">AR</button>
+          <button class="rail-item" type="button">TE</button>
+        </nav>
+
+        <aside class="sidebar">
+          <section class="panel-block">
+            <h2>Project</h2>
+            <dl class="meta-list">
+              <div>
+                <dt>state</dt>
+                <dd id="sidebar-state">no project</dd>
+              </div>
+              <div>
+                <dt>project</dt>
+                <dd id="sidebar-project">-</dd>
+              </div>
+              <div>
+                <dt>source</dt>
+                <dd id="sidebar-source">-</dd>
+              </div>
+              <div>
+                <dt>agent</dt>
+                <dd id="sidebar-agent">codex</dd>
+              </div>
+            </dl>
+          </section>
+
+          <section class="panel-block">
+            <h2>Gates</h2>
+            <div id="gate-list" class="gate-list"></div>
+          </section>
+
+          <section class="panel-block">
+            <h2>Ready tasks</h2>
+            <div id="ready-task-list" class="task-list"></div>
+          </section>
+        </aside>
+
+        <main class="main-pane">
+          <section class="state-surface" id="state-surface">
+            <div>
+              <p class="eyebrow">Current state</p>
+              <h1 id="state-title">Open a project</h1>
+              <p id="state-detail" class="state-detail">P2A project state will appear here.</p>
+            </div>
+            <div id="state-badge" class="state-badge neutral">idle</div>
+          </section>
+
+          <section class="grid-two">
+            <div class="surface">
+              <div class="surface-head">
+                <h2>Commands</h2>
+                <span class="surface-meta">preview only</span>
+              </div>
+              <div id="command-list" class="command-list"></div>
+            </div>
+
+            <div class="surface">
+              <div class="surface-head">
+                <h2>Diagnostics</h2>
+                <span id="diagnostic-count" class="surface-meta">0</span>
+              </div>
+              <div id="diagnostic-list" class="diagnostic-list"></div>
+            </div>
+          </section>
+
+          <section class="surface">
+            <div class="surface-head">
+              <h2>Ready tasks</h2>
+              <span id="task-summary" class="surface-meta">0 tasks</span>
+            </div>
+            <div id="task-table" class="task-table"></div>
+          </section>
+        </main>
+
+        <aside class="inspector">
+          <section class="panel-block">
+            <h2>Summary</h2>
+            <dl class="meta-list">
+              <div>
+                <dt>artifact</dt>
+                <dd id="inspector-artifact">-</dd>
+              </div>
+              <div>
+                <dt>runs</dt>
+                <dd id="inspector-runs">0</dd>
+              </div>
+              <div>
+                <dt>updated</dt>
+                <dd id="inspector-updated">-</dd>
+              </div>
+            </dl>
+          </section>
+
+          <section class="panel-block grow">
+            <h2>Read model</h2>
+            <pre id="json-preview" class="json-preview">{}</pre>
+          </section>
+        </aside>
+      </div>
+
+      <footer class="statusbar">
+        <span id="status-left">idle</span>
+        <span id="status-center">cwd: -</span>
+        <span id="status-right">watcher: standby</span>
+      </footer>
+    </div>
+
+    <script type="module" src="./renderer.mjs"></script>
+  </body>
+</html>

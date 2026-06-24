@@ -1,12 +1,12 @@
 # P2A GUI MVP 계획
 
-작성일: 2026-06-21 · 갱신일: 2026-06-24 · 상태: 범위 확정, 2B read-only 프로젝트 검사 기반 구현 · 연결 문서: `plans/02-development-team-ai-agent.md`, `.agents/skills/p2a-design-system/SKILL.md`
+작성일: 2026-06-21 · 갱신일: 2026-06-24 · 상태: 범위 확정, 2B read-only Electron shell 1차 구현 · 연결 문서: `plans/02-development-team-ai-agent.md`, `.agents/skills/p2a-design-system/SKILL.md`
 
 이 문서는 Plan2Agent Phase 2의 **PTY+Electron 감독 GUI**를 제품 MVP로 고정한다. 목표는 완전한 multi-agent orchestration이 아니라, 현재 구현된 파일 기반 하네스와 감독형 단일 task 실행기 Phase 1을 데스크톱 UI에서 읽고, 사람이 보기 편하게 감독할 수 있게 만드는 것이다.
 
 ## 0. 현재 결론
 
-P2A GUI MVP는 **단일 task 감독 실행 GUI**다. GUI는 Plan2Agent 내부 앱이며, 지금까지 개발된 CLI와 파일 기반 상태를 보기 좋은 데스크톱 표면으로 제공한다. GUI가 내부 하네스 구현(`scripts/`, `schemas/`, `.agents/`, `.claude/`, `.codex/`, `.gemini/`)을 생성, 수정, 업그레이드, 복구하지 않는다. 현재 코드는 Electron UI 전에 필요한 read-only 프로젝트 검사 모델과 CLI를 먼저 구현했다.
+P2A GUI MVP는 **단일 task 감독 실행 GUI**다. GUI는 Plan2Agent 내부 앱이며, 지금까지 개발된 CLI와 파일 기반 상태를 보기 좋은 데스크톱 표면으로 제공한다. GUI가 내부 하네스 구현(`scripts/`, `schemas/`, `.agents/`, `.claude/`, `.codex/`, `.gemini/`)을 생성, 수정, 업그레이드, 복구하지 않는다. 현재 코드는 read-only 프로젝트 검사 모델/CLI와 Electron main/preload/renderer shell 1차를 구현했다.
 
 핵심 흐름:
 
@@ -152,6 +152,10 @@ GUI local config:
 
 - `apps/p2a-gui/src/project-reader.mjs`가 선택한 프로젝트를 read-only로 검사한다.
 - `apps/p2a-gui/bin/p2a-gui-project.mjs inspect --project <dir> [--json]`가 같은 read model을 CLI로 출력한다.
+- `apps/p2a-gui/src/main.mjs`가 Electron lifecycle, folder picker, `--project <dir>`, read-only reload, file watcher를 담당한다.
+- `apps/p2a-gui/src/preload.cjs`가 renderer에 제한된 IPC API만 노출한다.
+- `apps/p2a-gui/renderer/`가 프로젝트 상태, Gate, ready task, diagnostics, command preview, read model JSON을 표시한다.
+- Electron 개발 런타임은 Node.js `>=22.12.0`, Electron `42.5.0`으로 고정한다.
 - `.plan2agent/`, `artifacts/<project_id>`, flat handoff artifact, iterative artifact root, direct artifact root를 감지한다.
 - `no_p2a`, `installed_empty`, `planning_in_progress`, `execution_ready`, `broken_install` 상태를 판정한다.
 - setup/import/validate command preview, gate/task/run 요약, 기본 agent CLI, 진단 메시지를 만든다.
@@ -159,10 +163,10 @@ GUI local config:
 
 아직 남은 2B 범위:
 
-- Electron main/preload/renderer shell.
-- folder picker, recent projects, local config 저장.
-- 파일 변경 watcher와 UI reload.
+- recent projects와 GUI local config 저장.
 - 실제 Markdown/JSON artifact viewer 화면.
+- tab별 상세 화면과 keyboard/focus hardening.
+- Electron packaging 정책 정리.
 
 포함:
 
@@ -365,11 +369,12 @@ GUI local config:
 1. `2A-0` project onboarding prototype: detection states와 Open/Setup/Import/Validate guidance UX.
 2. `2A-1` workbench static prototype: p2a-design-system 기반 화면 뼈대.
 3. `2B-0` read-only project inspection foundation: 실제 project detection과 project files reader. **구현 완료**
-4. `2B` read-only Electron shell: folder picker, local config, watcher, renderer 화면.
-5. `2B-1` harness onboarding guidance: scaffold/handoff/validate 명령 안내 화면.
-6. `2C` PTY execution: node-pty + xterm + supervisor input.
-7. `2D` finish/verification: existing lifecycle 연결.
-8. smoke: 이미 scaffold된 작은 target 프로젝트에서 ready task 1건 end-to-end 실행.
+4. `2B` read-only Electron shell 1차: folder picker, `--project`, 상태 화면, watcher, renderer 화면. **구현 완료**
+5. `2B` hardening: recent projects, local config, artifact viewer, focus/keyboard polish.
+6. `2B-1` harness onboarding guidance: scaffold/handoff/validate 명령 안내 화면.
+7. `2C` PTY execution: node-pty + xterm + supervisor input.
+8. `2D` finish/verification: existing lifecycle 연결.
+9. smoke: 이미 scaffold된 작은 target 프로젝트에서 ready task 1건 end-to-end 실행.
 
 ## 9. 첫 smoke 기준
 

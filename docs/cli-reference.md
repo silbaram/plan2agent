@@ -192,6 +192,13 @@ node apps/p2a-gui/bin/p2a-gui-project.mjs inspect --project <project-dir> --json
 
 대표 상태는 `no_p2a`, `installed_empty`, `planning_in_progress`, `execution_ready`, `broken_install`이다. JSON 출력은 이후 Electron main/renderer가 그대로 소비할 read model의 기준으로 사용한다. `broken_install`처럼 명확한 오류 진단이 있으면 exit code 1로 종료하고, 단순 `no_p2a`는 setup guidance 상태로 exit code 0을 반환한다.
 
+Electron shell은 같은 read model을 folder picker, `--project`, file watcher로 표시한다. 개발 런타임은 Node.js `>=22.12.0`과 Electron `42.5.0`을 기준으로 고정한다.
+
+```bash
+cd apps/p2a-gui
+npm start -- --project <project-dir>
+```
+
 ## 4. 감독형 단일 task 실행 — `p2a_execute.mjs`
 
 `p2a_execute.mjs`는 Phase 1 감독형 실행기다. 여러 task를 스케줄링하지 않고, ready task 1건에 대해 기존 `p2a_tasks.mjs`와 `p2a_runs.mjs` 흐름을 묶는다. Codex/Claude 구현 세션 자체는 사람이 보는 foreground에서 진행하며, 이 CLI는 run 생성, task 상태 전이, verification, finish, done/block 기록을 연결한다.
