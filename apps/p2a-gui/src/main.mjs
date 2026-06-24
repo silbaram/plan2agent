@@ -3,6 +3,7 @@ import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 import { app, BrowserWindow, dialog, ipcMain } from 'electron';
+import { loadJson, validateTaskGraphData } from '../../../scripts/validate_artifacts.mjs';
 import { inspectProject } from './project-reader.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -229,6 +230,72 @@ function currentArtifactCatalogPayload() {
   return buildArtifactCatalog(currentInspection);
 }
 
+function taskStatusCounts(tasks) {
+  const byStatus = { todo: 0, in_progress: 0, done: 0, blocked: 0 };
+  for (const task of tasks) byStatus[task.status] = (byStatus[task.status] ?? 0) + 1;
+  return byStatus;
+}
+
+function buildTaskCatalog(inspection = currentInspection) {
+  const taskGraphPath = inspection?.artifactSource?.taskGraphPath ?? null;
+  if (!taskGraphPath || !existsSync(taskGraphPath)) {
+    return {
+      taskGraphPath,
+      projectId: inspection?.projectId ?? null,
+      version: null,
+      sourceSpec: null,
+      byStatus: taskStatusCounts([]),
+      tasks: [],
+      error: null,
+    };
+  }
+
+  try {
+    const graph = validateTaskGraphData(loadJson(taskGraphPath));
+    const tasksById = new Map(graph.tasks.map((task) => [task.id, task]));
+    const tasks = graph.tasks.map((task) => {
+      const blockedBy = task.dependencies.filter((dependency) => tasksById.get(dependency)?.status !== 'done');
+      return {
+        id: task.id,
+        title: task.title,
+        description: task.description,
+        status: task.status,
+        targetArea: task.targetArea,
+        dependencies: task.dependencies,
+        blockedBy,
+        acceptanceCriteria: task.acceptanceCriteria,
+        suggestedAgentPrompt: task.suggestedAgentPrompt,
+        sourceSpecRefs: task.sourceSpecRefs,
+        blockReason: task.blockReason ?? null,
+        ready: task.status === 'todo' && blockedBy.length === 0,
+      };
+    });
+    return {
+      taskGraphPath,
+      projectId: graph.projectId,
+      version: graph.version,
+      sourceSpec: graph.sourceSpec,
+      byStatus: taskStatusCounts(tasks),
+      tasks,
+      error: null,
+    };
+  } catch (error) {
+    return {
+      taskGraphPath,
+      projectId: inspection?.projectId ?? null,
+      version: null,
+      sourceSpec: null,
+      byStatus: taskStatusCounts([]),
+      tasks: [],
+      error: error.message,
+    };
+  }
+}
+
+function currentTaskCatalogPayload() {
+  return buildTaskCatalog(currentInspection);
+}
+
 function readArtifactDocument(artifactId) {
   const catalog = currentArtifactCatalogPayload();
   const document = catalog.documents.find((item) => item.id === artifactId);
@@ -323,6 +390,7 @@ function scheduleProjectReload() {
       projectPath: currentProjectPath,
       inspection: currentInspection,
       artifactCatalog: currentArtifactCatalogPayload(),
+      taskCatalog: currentTaskCatalogPayload(),
       localConfig: publicLocalConfig(),
       refreshedAt: new Date().toISOString(),
       trigger: 'watcher',
@@ -361,6 +429,7 @@ function currentPayload(trigger = 'manual') {
       projectPath: null,
       inspection: null,
       artifactCatalog: buildArtifactCatalog(null),
+      taskCatalog: buildTaskCatalog(null),
       localConfig: publicLocalConfig(),
       refreshedAt: new Date().toISOString(),
       trigger,
@@ -373,6 +442,7 @@ function currentPayload(trigger = 'manual') {
     projectPath: currentProjectPath,
     inspection: currentInspection,
     artifactCatalog: currentArtifactCatalogPayload(),
+    taskCatalog: currentTaskCatalogPayload(),
     localConfig: publicLocalConfig(),
     refreshedAt: new Date().toISOString(),
     trigger,
@@ -392,6 +462,7 @@ ipcMain.handle('p2a:select-project', async () => {
     projectPath: currentProjectPath,
     inspection,
     artifactCatalog: currentArtifactCatalogPayload(),
+    taskCatalog: currentTaskCatalogPayload(),
     localConfig: publicLocalConfig(),
     refreshedAt: new Date().toISOString(),
     trigger: 'folder-picker',
@@ -409,6 +480,7 @@ ipcMain.handle('p2a:open-recent-project', async (_event, projectPath) => {
     projectPath: currentProjectPath,
     inspection,
     artifactCatalog: currentArtifactCatalogPayload(),
+    taskCatalog: currentTaskCatalogPayload(),
     localConfig: publicLocalConfig(),
     refreshedAt: new Date().toISOString(),
     trigger: 'recent-project',

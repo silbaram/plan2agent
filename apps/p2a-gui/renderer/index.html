@@ -133,6 +133,45 @@
               </div>
             </section>
           </section>
+
+          <section id="tasks-view" class="view-panel" data-view-panel="tasks" hidden>
+            <section class="surface task-workbench">
+              <div class="surface-head">
+                <h2>Tasks</h2>
+                <span id="task-detail-count" class="surface-meta">0 tasks</span>
+              </div>
+              <div class="task-detail-layout">
+                <div id="task-detail-list" class="task-detail-list"></div>
+                <article class="task-detail-preview">
+                  <div class="task-detail-head">
+                    <div>
+                      <p class="eyebrow">Read-only</p>
+                      <h1 id="task-detail-title">No task selected</h1>
+                    </div>
+                    <span id="task-detail-status" class="status-pill">-</span>
+                  </div>
+                  <div id="task-detail-meta" class="task-detail-meta">-</div>
+                  <p id="task-detail-description" class="task-detail-description">Open a P2A project and select a task.</p>
+                  <section class="task-detail-section">
+                    <h2>Dependencies</h2>
+                    <div id="task-detail-dependencies" class="token-list"></div>
+                  </section>
+                  <section class="task-detail-section">
+                    <h2>Acceptance criteria</h2>
+                    <div id="task-detail-criteria" class="criteria-list"></div>
+                  </section>
+                  <section class="task-detail-section">
+                    <h2>Agent prompt</h2>
+                    <pre id="task-detail-prompt" class="task-prompt">-</pre>
+                  </section>
+                  <section class="task-detail-section">
+                    <h2>Source refs</h2>
+                    <div id="task-detail-source-refs" class="token-list"></div>
+                  </section>
+                </article>
+              </div>
+            </section>
+          </section>
         </main>
 
         <aside class="inspector">

@@ -21,6 +21,16 @@ const elements = {
   diagnosticList: document.querySelector('#diagnostic-list'),
   taskSummary: document.querySelector('#task-summary'),
   taskTable: document.querySelector('#task-table'),
+  taskDetailCount: document.querySelector('#task-detail-count'),
+  taskDetailList: document.querySelector('#task-detail-list'),
+  taskDetailTitle: document.querySelector('#task-detail-title'),
+  taskDetailStatus: document.querySelector('#task-detail-status'),
+  taskDetailMeta: document.querySelector('#task-detail-meta'),
+  taskDetailDescription: document.querySelector('#task-detail-description'),
+  taskDetailDependencies: document.querySelector('#task-detail-dependencies'),
+  taskDetailCriteria: document.querySelector('#task-detail-criteria'),
+  taskDetailPrompt: document.querySelector('#task-detail-prompt'),
+  taskDetailSourceRefs: document.querySelector('#task-detail-source-refs'),
   artifactCount: document.querySelector('#artifact-count'),
   artifactList: document.querySelector('#artifact-list'),
   artifactTitle: document.querySelector('#artifact-title'),
@@ -79,11 +89,13 @@ let currentPayload = {
   projectPath: null,
   inspection: null,
   artifactCatalog: { documents: [] },
+  taskCatalog: { tasks: [] },
   refreshedAt: null,
   trigger: 'initial',
 };
 let activeView = 'overview';
 let selectedArtifactId = null;
+let selectedTaskId = null;
 let artifactRequestToken = 0;
 
 function browserFallbackBridge() {
@@ -148,6 +160,7 @@ function render(payload) {
   const allTaskSummary = inspection?.tasks;
   const localConfig = currentPayload.localConfig ?? {};
   const artifactCatalog = currentPayload.artifactCatalog ?? { documents: [] };
+  const taskCatalog = currentPayload.taskCatalog ?? { tasks: [] };
 
   elements.titleProject.textContent = projectLabel;
   elements.sidebarState.textContent = state;
@@ -167,6 +180,7 @@ function render(payload) {
   renderDiagnostics(diagnostics);
   renderTaskTable(inspection);
   renderArtifactList(artifactCatalog.documents ?? []);
+  renderTaskDetailList(taskCatalog.tasks ?? []);
 
   elements.inspectorArtifact.textContent = shortPath(inspection?.displayPaths?.artifactRoot);
   elements.inspectorRuns.textContent = `${inspection?.runs?.total ?? 0}`;
@@ -180,10 +194,11 @@ function render(payload) {
     : `watcher: standby · recent ${(localConfig.recentProjects ?? []).length}`;
 
   if (activeView === 'artifacts') ensureArtifactSelection();
+  if (activeView === 'tasks') ensureTaskSelection();
 }
 
 function setActiveView(view) {
-  activeView = view === 'artifacts' ? 'artifacts' : 'overview';
+  activeView = ['artifacts', 'tasks'].includes(view) ? view : 'overview';
   for (const button of elements.railItems) {
     const isActive = button.dataset.view === activeView;
     button.classList.toggle('active', isActive);
@@ -194,6 +209,7 @@ function setActiveView(view) {
     panel.classList.toggle('active', panel.dataset.viewPanel === activeView);
   }
   if (activeView === 'artifacts') ensureArtifactSelection();
+  if (activeView === 'tasks') ensureTaskSelection();
 }
 
 function renderRecentProjects(projects, activePath) {
@@ -232,6 +248,121 @@ function renderRecentProjects(projects, activePath) {
 
 function artifactDocuments() {
   return currentPayload.artifactCatalog?.documents ?? [];
+}
+
+function taskItems() {
+  return currentPayload.taskCatalog?.tasks ?? [];
+}
+
+function renderTaskDetailList(tasks) {
+  elements.taskDetailList.replaceChildren();
+  elements.taskDetailCount.textContent = `${tasks.length} task${tasks.length === 1 ? '' : 's'}`;
+  if (!tasks.length) {
+    elements.taskDetailList.append(emptyNode(currentPayload.taskCatalog?.error ? 'Task graph invalid' : 'No task graph'));
+    if (activeView === 'tasks') renderTaskEmpty();
+    return;
+  }
+
+  if (selectedTaskId && !tasks.some((task) => task.id === selectedTaskId)) selectedTaskId = null;
+
+  for (const task of tasks) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = `task-detail-row ${task.id === selectedTaskId ? 'active' : ''}`;
+    button.title = `${task.id} · ${task.title}`;
+    button.addEventListener('click', () => selectTask(task.id));
+
+    const main = document.createElement('span');
+    main.className = 'task-detail-main';
+    const title = document.createElement('span');
+    title.className = 'task-detail-row-title';
+    title.textContent = `${task.id} · ${task.title}`;
+    const meta = document.createElement('span');
+    meta.className = 'task-detail-row-meta';
+    meta.textContent = task.targetArea;
+    main.append(title, meta);
+
+    const status = document.createElement('span');
+    status.className = `status-pill ${task.ready ? 'ready' : task.status}`;
+    status.textContent = task.ready ? 'ready' : task.status;
+
+    button.append(main, status);
+    elements.taskDetailList.append(button);
+  }
+}
+
+function renderTaskEmpty() {
+  elements.taskDetailTitle.textContent = 'No task selected';
+  elements.taskDetailStatus.textContent = '-';
+  elements.taskDetailStatus.className = 'status-pill';
+  elements.taskDetailMeta.textContent = currentPayload.taskCatalog?.error ?? '-';
+  elements.taskDetailDescription.textContent = 'Open a P2A project and select a task.';
+  elements.taskDetailDependencies.replaceChildren(emptyNode('No dependencies'));
+  elements.taskDetailCriteria.replaceChildren(emptyNode('No acceptance criteria'));
+  elements.taskDetailPrompt.textContent = '-';
+  elements.taskDetailSourceRefs.replaceChildren(emptyNode('No source refs'));
+}
+
+function ensureTaskSelection() {
+  const tasks = taskItems();
+  if (!tasks.length) {
+    selectedTaskId = null;
+    renderTaskEmpty();
+    return;
+  }
+  const selectedTask = tasks.find((task) => task.id === selectedTaskId) ?? tasks.find((task) => task.ready) ?? tasks[0];
+  selectTask(selectedTask.id);
+}
+
+function selectTask(taskId) {
+  selectedTaskId = taskId;
+  renderTaskDetailList(taskItems());
+  const task = taskItems().find((item) => item.id === taskId);
+  if (!task) {
+    renderTaskEmpty();
+    return;
+  }
+
+  elements.taskDetailTitle.textContent = task.title;
+  elements.taskDetailStatus.textContent = task.ready ? 'ready' : task.status;
+  elements.taskDetailStatus.className = `status-pill ${task.ready ? 'ready' : task.status}`;
+  const dependencyText = task.dependencies.length
+    ? `${task.dependencies.length} dep · blocked by ${task.blockedBy.length}`
+    : 'no deps';
+  elements.taskDetailMeta.textContent = `${task.id} · ${task.targetArea} · ${dependencyText}`;
+  elements.taskDetailDescription.textContent = task.description;
+  renderTokenList(elements.taskDetailDependencies, task.dependencies, task.blockedBy);
+  renderCriteriaList(task.acceptanceCriteria);
+  elements.taskDetailPrompt.textContent = task.suggestedAgentPrompt;
+  renderTokenList(elements.taskDetailSourceRefs, task.sourceSpecRefs, []);
+}
+
+function renderTokenList(container, values, blockedValues = []) {
+  container.replaceChildren();
+  if (!values?.length) {
+    container.append(emptyNode('None'));
+    return;
+  }
+  for (const value of values) {
+    const node = document.createElement('span');
+    node.className = `token ${blockedValues.includes(value) ? 'blocked' : ''}`;
+    node.textContent = value;
+    container.append(node);
+  }
+}
+
+function renderCriteriaList(criteria) {
+  elements.taskDetailCriteria.replaceChildren();
+  if (!criteria?.length) {
+    elements.taskDetailCriteria.append(emptyNode('No acceptance criteria'));
+    return;
+  }
+  for (const item of criteria) {
+    const row = document.createElement('div');
+    row.className = 'criterion-row';
+    row.textContent = item;
+    elements.taskDetailCriteria.append(row);
+  }
 }
 
 function renderArtifactList(documents) {
@@ -493,6 +624,7 @@ boot().catch((error) => {
       displayPaths: {},
     },
     artifactCatalog: { documents: [] },
+    taskCatalog: { tasks: [] },
     localConfig: { recentProjects: [] },
     refreshedAt: new Date().toISOString(),
     trigger: 'renderer',
