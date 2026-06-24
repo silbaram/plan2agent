@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
   buildFinishRunCommand,
+  buildMarkRoleCommand,
   buildStartRunCommand,
   finishRun,
   startRun,
@@ -32,6 +33,7 @@ async function createProject() {
   await mkdir(path.join(projectRoot, "scripts"), { recursive: true });
   await mkdir(artifactRoot, { recursive: true });
   await writeFile(path.join(projectRoot, "scripts", "p2a_execute.mjs"), "");
+  await writeFile(path.join(projectRoot, "scripts", "p2a_orchestrate.mjs"), "");
   return { projectRoot, artifactRoot };
 }
 
@@ -210,6 +212,55 @@ describe("execution action helpers", () => {
         "--note",
         "verification failed",
       ]);
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("builds a supervised orchestration mark-role command", async () => {
+    const { projectRoot } = await createProject();
+    const runtimePath = path.join(projectRoot, "runs", "run-2026-task-001.orchestration-runtime.json");
+    try {
+      await mkdir(path.dirname(runtimePath), { recursive: true });
+      await writeFile(runtimePath, "{}");
+
+      const command = buildMarkRoleCommand({
+        projectRoot,
+        runtimePath: path.relative(projectRoot, runtimePath),
+        roleId: "implementer",
+        roleStatus: "complete",
+        detail: "implementation checked",
+      });
+
+      expect(command.cwd).toBe(projectRoot);
+      expect(command.displayCommand).toContain("p2a_orchestrate.mjs mark-role");
+      expect(command.args).toEqual([
+        "mark-role",
+        "--runtime",
+        "runs/run-2026-task-001.orchestration-runtime.json",
+        "--role",
+        "implementer",
+        "--role-status",
+        "complete",
+        "--detail",
+        "implementation checked",
+      ]);
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps orchestration runtime paths inside the project", async () => {
+    const { projectRoot } = await createProject();
+    try {
+      expect(() =>
+        buildMarkRoleCommand({
+          projectRoot,
+          runtimePath: "/tmp/outside-runtime.json",
+          roleId: "implementer",
+          roleStatus: "complete",
+        }),
+      ).toThrow("runtime path must stay inside project root");
     } finally {
       await rm(projectRoot, { recursive: true, force: true });
     }

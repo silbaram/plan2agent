@@ -8,6 +8,8 @@ import type {
   ExecutionFinishRunRequest,
   ExecutionStartRunRequest,
   FailureClass,
+  OrchestrationMarkRoleRequest,
+  OrchestrationRoleStatus,
   VerificationType,
 } from "../shared/ipc";
 import { AGENT_TOOLS } from "../shared/ipc";
@@ -28,6 +30,13 @@ const VALID_VERIFICATION_TYPES = new Set<VerificationType>([
   "lint",
   "typecheck",
   "custom",
+]);
+const VALID_ORCHESTRATION_ROLE_STATUSES = new Set<OrchestrationRoleStatus>([
+  "pending",
+  "active",
+  "blocked",
+  "complete",
+  "skipped",
 ]);
 
 type ExecutionCommand = {
@@ -68,6 +77,14 @@ function assertFile(targetPath: string, label: string): string {
     throw new Error(`${label} does not exist: ${normalized}`);
   }
   return normalized;
+}
+
+function assertInsideDirectory(rootPath: string, targetPath: string, label: string): string {
+  const relativePath = path.relative(rootPath, targetPath);
+  if (relativePath.startsWith("..") || path.isAbsolute(relativePath)) {
+    throw new Error(`${label} must stay inside project root`);
+  }
+  return targetPath;
 }
 
 function optionalFile(targetPath: string | null, basePath: string): string | null {
@@ -116,6 +133,28 @@ function normalizeRunId(runId: string | null | undefined): string | null {
   return normalized;
 }
 
+function normalizeRoleId(roleId: string): string {
+  if (typeof roleId !== "string" || roleId.trim().length === 0) {
+    throw new Error("role id is required");
+  }
+  const normalized = roleId.trim();
+  if (!/^[A-Za-z0-9._:-]+$/.test(normalized)) {
+    throw new Error(`role id contains unsupported characters: ${roleId}`);
+  }
+  return normalized;
+}
+
+function normalizeOptionalText(value: string | null | undefined): string | null {
+  if (typeof value !== "string") return null;
+  const normalized = value.trim();
+  return normalized.length > 0 ? normalized : null;
+}
+
+function projectRelativeCommandPath(projectRoot: string, targetPath: string): string {
+  const relativePath = path.relative(projectRoot, targetPath);
+  return relativePath.length ? relativePath.split(path.sep).join("/") : ".";
+}
+
 function resolveExecutionContext(request: {
   projectRoot: string;
   artifactRoot: string;
@@ -140,6 +179,36 @@ function resolveExecutionContext(request: {
     artifactRoot,
     scriptPath,
     sourceArgs,
+  };
+}
+
+function resolveOrchestrationContext(request: OrchestrationMarkRoleRequest): {
+  projectRoot: string;
+  runtimePath: string;
+  runtimeArg: string;
+  scriptPath: string;
+} {
+  const projectRoot = assertDirectory(request.projectRoot, "project root");
+  const scriptPath = assertFile(
+    path.join(projectRoot, "scripts", "p2a_orchestrate.mjs"),
+    "p2a_orchestrate",
+  );
+  const runtimePath = assertFile(
+    assertInsideDirectory(
+      projectRoot,
+      path.isAbsolute(request.runtimePath)
+        ? path.resolve(request.runtimePath)
+        : path.resolve(projectRoot, request.runtimePath),
+      "runtime path",
+    ),
+    "orchestration runtime",
+  );
+
+  return {
+    projectRoot,
+    runtimePath,
+    runtimeArg: projectRelativeCommandPath(projectRoot, runtimePath),
+    scriptPath,
   };
 }
 
@@ -230,6 +299,38 @@ export function buildFinishRunCommand(request: ExecutionFinishRunRequest): Execu
   };
 }
 
+export function buildMarkRoleCommand(request: OrchestrationMarkRoleRequest): ExecutionCommand {
+  const context = resolveOrchestrationContext(request);
+  const roleId = normalizeRoleId(request.roleId);
+  if (!VALID_ORCHESTRATION_ROLE_STATUSES.has(request.roleStatus)) {
+    throw new Error(`unsupported role status: ${String(request.roleStatus)}`);
+  }
+
+  const args = [
+    "mark-role",
+    "--runtime",
+    context.runtimeArg,
+    "--role",
+    roleId,
+    "--role-status",
+    request.roleStatus,
+  ];
+  const summary = normalizeOptionalText(request.summary);
+  const detail = normalizeOptionalText(request.detail);
+  if (summary) args.push("--summary", summary);
+  if (detail) args.push("--detail", detail);
+  if (request.requiresOwnerAction) args.push("--requires-owner-action");
+
+  return {
+    cwd: context.projectRoot,
+    scriptPath: context.scriptPath,
+    displayCommand: ["node", "scripts/p2a_orchestrate.mjs", ...args]
+      .map(shellQuote)
+      .join(" "),
+    args,
+  };
+}
+
 function appendChunk(current: string, chunk: Buffer): string {
   const next = current + chunk.toString("utf8");
   return next.length > OUTPUT_LIMIT ? next.slice(-OUTPUT_LIMIT) : next;
@@ -241,6 +342,10 @@ export function finishRun(request: ExecutionFinishRunRequest): Promise<Execution
 
 export function startRun(request: ExecutionStartRunRequest): Promise<ExecutionCommandResult> {
   return runExecutionCommand(buildStartRunCommand(request));
+}
+
+export function markRole(request: OrchestrationMarkRoleRequest): Promise<ExecutionCommandResult> {
+  return runExecutionCommand(buildMarkRoleCommand(request));
 }
 
 function runExecutionCommand(command: ExecutionCommand): Promise<ExecutionCommandResult> {

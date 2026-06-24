@@ -7,6 +7,7 @@ import {
   type ArtifactFileReadRequest,
   type ExecutionFinishRunRequest,
   type ExecutionStartRunRequest,
+  type OrchestrationMarkRoleRequest,
   type ProjectOpenResult,
   type ProjectLoadOptions,
   type ProjectWatchEvent,
@@ -28,7 +29,7 @@ import {
   setUiLocale,
 } from "./localConfig";
 import { PtySessionManager } from "./ptySessionManager";
-import { finishRun, startRun } from "./executionActions";
+import { finishRun, markRole, startRun } from "./executionActions";
 import { readArtifactFile } from "./artifactFiles";
 import { loadProjectSnapshot } from "./projectLoader";
 import {
@@ -36,6 +37,7 @@ import {
   scopeArtifactReadRequest,
   scopeExecutionFinishRunRequest,
   scopeExecutionStartRunRequest,
+  scopeOrchestrationMarkRoleRequest,
   scopeTerminalStartRequest,
 } from "./activeProjectScope";
 
@@ -309,6 +311,17 @@ function registerIpcHandlers(): void {
       scopeExecutionFinishRunRequest(activeProjectRootForSender(event.sender), request),
     );
   });
+  ipcMain.handle(
+    IPC_CHANNELS.orchestrationMarkRole,
+    (event, request: OrchestrationMarkRoleRequest) => {
+      if (!request || typeof request.roleId !== "string") {
+        throw new Error("orchestration:markRole requires a role id");
+      }
+      return markRole(
+        scopeOrchestrationMarkRoleRequest(activeProjectRootForSender(event.sender), request),
+      );
+    },
+  );
 }
 
 function installContentSecurityPolicy(): void {

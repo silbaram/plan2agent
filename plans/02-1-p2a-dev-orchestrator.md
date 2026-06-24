@@ -1,8 +1,8 @@
 # 02-1 p2a-dev-orchestrator 개발 계획
 
-작성일: 2026-06-23 · 상태: MVP 1차 구현 완료, 오케스트레이션 runtime 1단계 완료, O7 Hermes proposal queue/review/curation/patch draft/approval execution bridge 완료 · 상위 문서: `plans/02-development-team-ai-agent.md` · 연결 문서: `plans/01-product-roadmap.md`, `plans/03-p2a-gui-mvp.md`
+작성일: 2026-06-23 · 상태: MVP 1차 구현 완료, 오케스트레이션 runtime 1단계 완료, 감독형 scheduler 2단계 완료, GUI runtime/scheduler 표시 완료, O7 Hermes proposal queue/review/curation/patch draft/approval execution bridge 완료 · 상위 문서: `plans/02-development-team-ai-agent.md` · 연결 문서: `plans/01-product-roadmap.md`, `plans/03-p2a-gui-mvp.md`
 
-이 문서는 Team Big Five의 `team-lead` 역할을 Plan2Agent-native로 구현하기 위한 최소 개발 계획이다. 목표는 여러 agent를 무인으로 돌리는 것이 아니라, 기존 CLI-first 하네스 위에서 **어떤 task를 solo/team으로 처리할지 판단하고, 역할별 실행 계획, shared mental model, communication log, 검증 흐름을 파일로 남기는 것**이다. 최신 GUI는 task/run/artifact와 PTY 실행을 다루며, orchestration mode/role/runtime/monitor gate 표시는 후속 표면으로 둔다.
+이 문서는 Team Big Five의 `team-lead` 역할을 Plan2Agent-native로 구현하기 위한 최소 개발 계획이다. 목표는 여러 agent를 무인으로 돌리는 것이 아니라, 기존 CLI-first 하네스 위에서 **어떤 task를 solo/team으로 처리할지 판단하고, 역할별 실행 계획, shared mental model, communication log, 검증 흐름을 파일로 남기는 것**이다. 최신 GUI는 task/run/artifact와 PTY 실행에 더해 orchestration mode/role/runtime/monitor gate를 읽고, 사람이 수행한 role 상태만 기록한다.
 
 ## 0. 이번 브랜치 구현 상태
 
@@ -12,15 +12,16 @@
 - `p2a_orchestrate.mjs plan/show/validate/handoff` CLI.
 - `p2a_execute start --orchestration-plan <path>` run sidecar 연결.
 - `orchestration-runtime.schema.json`, `p2a_orchestrate init-runtime/record/runtime-status`, `p2a_execute start` runtime sidecar 자동 초기화.
+- `p2a_orchestrate next-role/role-prompt/mark-role` 감독형 scheduler. 다음 role과 prompt를 계산하고 사람이 수행한 결과만 기록한다.
 - monitor verdict 기반 `finish` 차단/blocked 변환.
 - `p2a-dev-orchestrator` read-only agent와 CLI mirror.
 - scaffold/handoff 복사 대상, fixture, CLI 문서 갱신.
+- `apps/p2a-gui` Runs 화면에서 orchestration runtime/scheduler 상태, role prompt 복사, 수동 `mark-role` 상태 기록을 제공한다.
 - `p2a_proposals.mjs`가 run failure, monitor verdict, verification gap에서 Hermes식 proposal queue/review/curation/patch draft/approval gate를 생성·검증·요약하고 `p2a_execute --approval`이 승인 항목을 감독형 maintenance 실행으로 연결.
 
 후속으로 남김:
 
-- GUI orchestration 표시.
-- 병렬 scheduler.
+- 감독형 multi-session PTY coordinator. 사용자가 공식 CLI/앱 세션을 foreground로 열고, p2a는 다음 role/prompt/상태 기록을 조율한다.
 - 실제 적용 patch 생성.
 - agent-generated orchestration plan.
 
@@ -31,18 +32,19 @@
 - `p2a_tasks.mjs`: task ready/start/done/block 상태와 의존성 관리.
 - `p2a_runs.mjs`: run log, verification, changedFiles, workspaceRef, failureClass 기록.
 - `p2a_execute.mjs`: ready task 1건의 start/finish/status lifecycle.
-- `apps/p2a-gui`: PTY 세션, task/run/artifact 표시, start/finish 감독 UI. MVP 구현의 선행 조건은 아니다.
+- `apps/p2a-gui`: PTY 세션, task/run/artifact 표시, start/finish 감독 UI, orchestration runtime/scheduler 표시와 수동 role 상태 기록. MVP 구현의 선행 조건은 아니다.
 - `p2a-implementer`: Codex/Claude 구현자 계약. Gemini는 read-only.
 - `p2a-performance-monitor`: 실행 결과 독립 검증 계약.
 - `p2a-skill-curator`: Hermes식 proposal 검토 계약.
 - Team Big Five adapter 설치: CLI별 kickoff 파일 설치와 source manifest 기록.
 - `orchestration-runtime.schema.json`: run-level shared mental model, role assignment, communication log, runtime phase 기록.
+- `p2a_orchestrate next-role/role-prompt/mark-role`: 구독 로그인 기반 사용을 위한 감독형 scheduler. 프로세스를 띄우지 않고 사람이 공식 CLI/앱에서 실행할 다음 prompt를 제공한다.
 
 아직 후속으로 남긴 것:
 
 - agent-generated orchestration plan.
-- 실제 multi-session PTY scheduler.
-- 자동 role/monitor 호출.
+- 감독형 multi-session PTY coordinator.
+- 자동 role/monitor 호출은 API 키 기반 별도 설계 전까지 제외한다.
 - 실패 시 retry/ask/blocked 판단 규칙.
 
 ## 2. MVP 목표
@@ -56,17 +58,18 @@ MVP는 아래를 개발 완료 기준으로 본다.
 | supervised CLI handoff | CLI에서 사람이 열 수 있는 agent별 session command/prompt를 출력한다 |
 | run 연결 | orchestration plan id와 역할별 session 결과를 `runs/<runId>.orchestration.json` sidecar로 추적한다 |
 | runtime 연결 | shared mental model, role assignment, communication log를 `runs/<runId>.orchestration-runtime.json` sidecar로 추적한다 |
+| supervised scheduler | runtime 상태에서 다음 role을 계산하고, role prompt를 출력하고, 사람이 수행한 role 상태 전이를 기록한다 |
 | monitor gate | finish 전에 필요한 verdict 경로와 허용 verdict, failureClass mapping을 명시한다 |
 | 안전 경계 | planning artifact 직접 수정, 무인 실행, 자동 push/merge를 금지한다 |
 
 MVP에서 하지 않는 것:
 
 - headless 무인 실행.
-- 여러 CLI 세션의 완전 자동 병렬 scheduler.
+- 여러 CLI 세션의 완전 자동 병렬 scheduler 또는 자동 role/monitor 호출.
 - 사용자 승인 없는 dependency install, PR 생성, push, merge.
 - Gemini write 실행.
 - Hermes proposal 자동 적용.
-- GUI orchestration 표시와 편집.
+- GUI에서 orchestration plan/runtime을 임의 편집하는 기능.
 - agent-generated orchestration plan.
 
 ## 3. 산출물
@@ -101,6 +104,9 @@ MVP에서 하지 않는 것:
    - `init-runtime`: run-level shared mental model과 communication log sidecar 생성.
    - `record`: 실행 중 status/question/decision/verification/monitor verdict 이벤트 기록.
    - `runtime-status`: runtime phase와 role/event 상태 표시.
+   - `next-role`: runtime 상태에서 다음 감독 대상 role 계산. 프로세스 실행 없음.
+   - `role-prompt`: 사람이 공식 CLI/앱에 붙여넣을 role prompt 출력. 프로세스 실행 없음.
+   - `mark-role`: 사람이 수행한 role 결과를 `active/complete/blocked/skipped` 상태로 기록.
 
 5. run/runtime sidecar
    - 저장 위치는 `runs/<runId>.orchestration.json`로 고정한다.
@@ -173,16 +179,17 @@ MVP에서 하지 않는 것:
 - `git diff --check` green.
 - 기존 단일 task 실행 문서와 충돌하지 않는다.
 
-### O6. GUI orchestration 표시 후속
+### O6. GUI orchestration 표시
 
-- Tasks 또는 Terminal 화면에서 orchestration mode와 역할별 handoff를 보여준다.
-- 사용자는 plan을 보고 각 agent 세션을 열 수 있다.
-- GUI는 plan을 임의 수정하지 않고 CLI/파일 상태를 읽는다.
+- Runs 화면에서 orchestration mode, runtime phase, 다음 role, monitor gate, role 상태를 보여준다.
+- 선택 role의 supervised prompt를 복사해 사람이 공식 CLI/앱에 붙여넣을 수 있다.
+- GUI는 plan/runtime을 임의 편집하지 않고, `p2a_orchestrate mark-role`을 통해 사람이 관찰한 role 상태만 기록한다.
 
 완료 기준:
 
 - solo task는 기존 단일 task 흐름을 방해하지 않는다.
-- team task는 역할별 prompt/command와 monitor gate가 한 화면에서 확인된다.
+- team task는 역할별 prompt/command, monitor gate, 다음 role hint가 Runs 화면에서 확인된다.
+- GUI action은 Codex/Claude/Gemini CLI, browser, background loop를 실행하지 않는다.
 
 ### O7. Hermes proposal queue/review/curation/patch draft/approval execution bridge
 
@@ -202,7 +209,7 @@ MVP에서 하지 않는 것:
 후속:
 
 - Hermes 고도화는 store/DB 단계로 연기한다. 실제 적용 patch 생성, skipped-verification rationale 표준화, 반복 failureClass/source/targetFiles 통계, cross-session recall, 검색/DB 저장은 지금 구현하지 않고 나중에 방향을 다시 논의한다.
-- 이번 단계의 다음 구현 축은 GUI 자체가 아니라 실제 multi-session scheduler와 자동 role/monitor 호출 같은 오케스트레이션 런타임 고도화 2단계다.
+- GUI supervised scheduler 표면은 완료했다. API 요금제 기반 완전 자동 개발은 비용상 보류한다. 다음 구현 축은 구독 로그인 기반 공식 CLI/앱을 사람이 foreground에서 사용하고, p2a가 multi-session role/prompt/상태만 조율하는 감독형 coordinator다. 무인 실행, browser/background loop, 계정/세션/rate limit 우회, 자동 role/monitor 호출은 계속 제외한다.
 
 ## 5. Team Big Five 완료 판단
 
@@ -211,6 +218,7 @@ MVP 완료:
 - `team-lead` 역할을 `p2a-dev-orchestrator`가 담당한다.
 - task triage와 역할별 실행 계획이 구조화 파일로 남는다.
 - shared mental model과 closed-loop communication log가 runtime sidecar로 남는다.
+- next-role/role-prompt/mark-role로 사람이 감독하는 role 진행 순서를 유지할 수 있다.
 - contributor와 monitor가 기존 `p2a-implementer`, `p2a-performance-monitor` 계약으로 연결된다.
 - CLI에서 사람이 감독하며 팀 실행을 진행할 수 있다.
 
@@ -246,6 +254,9 @@ MVP 연결:
 | orchestrator agent 역할 | plan review/proposal. 자동 적용 없음 |
 | team mode 기본 agent | Codex contributor + monitor. Claude는 사용자가 선택한 경우 |
 | Gemini 역할 | read-only reviewer/planner |
-| GUI 편집 여부 | MVP 제외. 후속에서는 read-only 표시와 handoff 실행만 |
-| 무인 실행 | API 키 기반 별도 설계 전까지 제외 |
+| GUI 편집 여부 | plan/runtime 임의 편집은 제외. Runs 화면은 read-only 표시와 수동 `mark-role` 기록만 |
+| API 기반 자동 개발 | 비용상 보류. API 키 기반 runner는 현재 개발하지 않음 |
+| 구독 CLI/앱 사용 | 공식 CLI/앱을 사람이 foreground에서 사용한다. p2a는 prompt/role/order/state를 조율하고, 사용자가 승인한 입력과 상태 기록만 수행 |
+| 금지 자동화 | browser/background loop, 세션 쿠키·토큰 재사용, 여러 계정 로테이션, rate limit 우회, 자동 role/monitor 호출, 무인 headless 실행 |
+| supervised scheduler | `next-role`, `role-prompt`, `mark-role`은 프로세스를 실행하지 않고 prompt/상태만 다룬다 |
 | Hermes queue/review/curation/patch draft/approval execution bridge | `p2a_proposals.mjs` deterministic mining/review/curation/draft-patch/approve-draft + `p2a_execute --approval` 감독형 실행 연결. 자동 적용 없음 |

@@ -182,7 +182,9 @@ node scripts/p2a_iteration.mjs maintenance add \
 
 ### GUI desktop app — `apps/p2a-gui`
 
-GUI는 Electron Forge + React + TypeScript 앱이다. 선택한 프로젝트의 P2A 설치 상태, task/run/artifact, PTY session, start/finish lifecycle, 한글/영문 UI를 파일 기반 CLI 계약 위에서 표시한다. GUI의 프로젝트 읽기와 실행 action은 Electron main process의 typed IPC를 거치며, renderer가 임의 파일 경로나 shell API를 직접 호출하지 않는다.
+GUI는 Electron Forge + React + TypeScript 앱이다. 선택한 프로젝트의 P2A 설치 상태, task/run/artifact, orchestration runtime/scheduler 상태, PTY session, start/finish lifecycle, 한글/영문 UI를 파일 기반 CLI 계약 위에서 표시한다. GUI의 프로젝트 읽기와 실행 action은 Electron main process의 typed IPC를 거치며, renderer가 임의 파일 경로나 shell API를 직접 호출하지 않는다. orchestration GUI action은 `p2a_orchestrate.mjs mark-role`만 호출해 사람이 관찰한 role 상태를 기록하며, Codex/Claude/Gemini CLI나 browser/background loop를 대신 실행하지 않는다.
+
+운영 원칙: API 요금제 기반 완전 자동 개발은 비용상 보류한다. 구독 로그인 기반 Codex/Claude/Gemini 사용은 공식 CLI/앱을 사람이 foreground에서 열고 승인·감독하는 방식으로 제한한다. p2a는 role, prompt, order, run state를 조율하고 기록할 뿐, browser/background loop, 세션 쿠키·토큰 재사용, 여러 계정 로테이션, rate limit 우회, 무인 headless 실행을 구현하지 않는다.
 
 ```bash
 cd apps/p2a-gui
@@ -291,9 +293,23 @@ node scripts/p2a_orchestrate.mjs record \
   --role implementer \
   --type status \
   --summary "Implementation session opened"
+
+node scripts/p2a_orchestrate.mjs next-role \
+  --runtime .plan2agent/runs/<run-id>.orchestration-runtime.json
+
+node scripts/p2a_orchestrate.mjs role-prompt \
+  --runtime .plan2agent/runs/<run-id>.orchestration-runtime.json \
+  --role implementer
+
+node scripts/p2a_orchestrate.mjs mark-role \
+  --runtime .plan2agent/runs/<run-id>.orchestration-runtime.json \
+  --role implementer \
+  --role-status complete
 ```
 
 `p2a_execute start --orchestration-plan <path>`는 원본 plan을 `runs/<runId>.orchestration.json` sidecar로 연결하고, 같은 run에 `runs/<runId>.orchestration-runtime.json`을 초기화한다. runtime sidecar에는 shared mental model, role assignment, communication log, runtime phase가 들어간다. `record`는 실행 중 질문, 상태, 결정, 검증, monitor verdict 같은 closed-loop 이벤트를 append한다.
+
+`next-role`, `role-prompt`, `mark-role`은 감독형 scheduler 명령이다. 이 명령들은 다음 role과 prompt를 계산하고 사람이 관찰한 상태 전이를 기록할 뿐, Codex/Claude/Gemini CLI, browser, background loop, unofficial API를 실행하지 않는다. 구독 로그인 기반 사용에서는 사람이 공식 CLI/앱을 직접 열어 prompt를 붙여넣고 결과를 다시 기록한다.
 
 monitor gate가 필요한 plan은 `runs/<runId>.monitor-verdict.json`에 `{"verdict":"confirm_done"}` 같은 verdict가 있어야 `finish`가 done으로 닫힌다. 허용되지 않은 verdict는 plan의 `failureClassMap`에 따라 기존 run failure class로 변환되어 blocked 흐름으로 기록된다.
 

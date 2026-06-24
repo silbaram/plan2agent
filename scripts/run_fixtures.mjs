@@ -829,6 +829,34 @@ function validateIterationCurrentFixtureCases() {
         return { status: 1, checks };
       }
 
+      result = runOrchestrate(['next-role', '--runtime', executeRuntimePath, '--json']);
+      checks += 1;
+      const executeNextRole = result.status === 0 ? JSON.parse(result.stdout) : null;
+      if (
+        result.status !== 0
+        || executeNextRole.nextRole?.roleId !== 'implementer'
+        || executeNextRole.startsProcess !== false
+        || executeNextRole.supervisedOnly !== true
+      ) {
+        console.error(`p2a_orchestrate next-role fixture check failed: ${caseData.id}`);
+        writeResultOutput(result);
+        console.error(JSON.stringify({ executeNextRole }, null, 2));
+        return { status: failureStatus(result), checks };
+      }
+
+      result = runOrchestrate(['role-prompt', '--runtime', executeRuntimePath, '--role', 'implementer']);
+      checks += 1;
+      if (
+        result.status !== 0
+        || !result.stdout.includes('Plan2Agent supervised role prompt')
+        || !result.stdout.includes('startsProcess: false')
+        || !result.stdout.includes('Do not run background loops')
+      ) {
+        console.error(`p2a_orchestrate role-prompt fixture check failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: failureStatus(result), checks };
+      }
+
       result = runOrchestrate([
         'record',
         '--runtime',
@@ -863,6 +891,33 @@ function validateIterationCurrentFixtureCases() {
         console.error(`runs dir validator did not accept orchestration runtime sidecar: ${caseData.id}`);
         writeResultOutput(result);
         return { status: failureStatus(result), checks };
+      }
+
+      result = runOrchestrate([
+        'mark-role',
+        '--runtime',
+        executeRuntimePath,
+        '--role',
+        'implementer',
+        '--role-status',
+        'complete',
+        '--summary',
+        'Implementation completed under human supervision',
+      ]);
+      checks += 1;
+      if (result.status !== 0 || !result.stdout.includes('nextRole: owner') || !result.stdout.includes('startsProcess: false')) {
+        console.error(`p2a_orchestrate mark-role solo fixture check failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: failureStatus(result), checks };
+      }
+      const executeRuntimeAfterMark = JSON.parse(readFileSync(executeRuntimePath, 'utf8'));
+      if (
+        executeRuntimeAfterMark.status.phase !== 'ready_to_finish'
+        || executeRuntimeAfterMark.sharedMentalModel.roleAssignments.find((role) => role.roleId === 'implementer')?.status !== 'complete'
+      ) {
+        console.error(`p2a_orchestrate mark-role solo wrote unexpected state: ${caseData.id}`);
+        console.error(JSON.stringify({ executeRuntimeAfterMark }, null, 2));
+        return { status: 1, checks };
       }
       if (executeSidecar.monitorGate.required) {
         writeFileSync(path.join(tempRoot, 'p2a-execute', 'runs', executeSidecar.monitorGate.verdictPath), '{"verdict":"confirm_done"}\n', 'utf8');
@@ -961,6 +1016,63 @@ function validateIterationCurrentFixtureCases() {
         console.error(`p2a_execute monitor fixture start failed: ${caseData.id}`);
         writeResultOutput(result);
         return { status: failureStatus(result), checks };
+      }
+
+      const executeMonitorRuntimePath = path.join(tempRoot, 'p2a-execute-monitor', 'runs', 'run-execute-monitor-fixture.orchestration-runtime.json');
+      result = runOrchestrate(['next-role', '--runtime', executeMonitorRuntimePath, '--json']);
+      checks += 1;
+      const executeMonitorNextRole = result.status === 0 ? JSON.parse(result.stdout) : null;
+      if (
+        result.status !== 0
+        || executeMonitorNextRole.nextRole?.roleId !== 'implementer'
+        || executeMonitorNextRole.startsProcess !== false
+      ) {
+        console.error(`p2a_orchestrate monitor next-role fixture check failed: ${caseData.id}`);
+        writeResultOutput(result);
+        console.error(JSON.stringify({ executeMonitorNextRole }, null, 2));
+        return { status: failureStatus(result), checks };
+      }
+
+      result = runOrchestrate([
+        'mark-role',
+        '--runtime',
+        executeMonitorRuntimePath,
+        '--role',
+        'implementer',
+        '--role-status',
+        'complete',
+      ]);
+      checks += 1;
+      if (result.status !== 0 || !result.stdout.includes('nextRole: reviewer') || !result.stdout.includes('startsProcess: false')) {
+        console.error(`p2a_orchestrate monitor implementer mark-role fixture failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: failureStatus(result), checks };
+      }
+
+      result = runOrchestrate([
+        'mark-role',
+        '--runtime',
+        executeMonitorRuntimePath,
+        '--role',
+        'reviewer',
+        '--role-status',
+        'complete',
+      ]);
+      checks += 1;
+      if (result.status !== 0 || !result.stdout.includes('nextRole: monitor') || !result.stdout.includes('startsProcess: false')) {
+        console.error(`p2a_orchestrate monitor reviewer mark-role fixture failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: failureStatus(result), checks };
+      }
+      const executeMonitorRuntimeAfterMarks = JSON.parse(readFileSync(executeMonitorRuntimePath, 'utf8'));
+      if (
+        executeMonitorRuntimeAfterMarks.status.phase !== 'ready_for_monitor'
+        || executeMonitorRuntimeAfterMarks.sharedMentalModel.roleAssignments.find((role) => role.roleId === 'reviewer')?.status !== 'complete'
+        || executeMonitorRuntimeAfterMarks.sharedMentalModel.roleAssignments.find((role) => role.roleId === 'monitor')?.status !== 'pending'
+      ) {
+        console.error(`p2a_orchestrate monitor scheduler wrote unexpected state: ${caseData.id}`);
+        console.error(JSON.stringify({ executeMonitorRuntimeAfterMarks }, null, 2));
+        return { status: 1, checks };
       }
 
       result = runExecute([

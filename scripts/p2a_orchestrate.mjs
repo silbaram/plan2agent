@@ -10,7 +10,7 @@ import { resolveIterationState } from './p2a_iteration_state.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const ROOT = path.resolve(path.dirname(__filename), '..');
-const COMMANDS = new Set(['plan', 'show', 'validate', 'handoff', 'init-runtime', 'record', 'runtime-status']);
+const COMMANDS = new Set(['plan', 'show', 'validate', 'handoff', 'init-runtime', 'record', 'runtime-status', 'next-role', 'role-prompt', 'mark-role']);
 const AGENT_TOOLS = new Set(['codex', 'claude', 'gemini', 'manual']);
 const RUNTIME_EVENT_TYPES = new Set(['handoff', 'status', 'question', 'answer', 'ack', 'concern', 'decision', 'blocker', 'verification', 'monitor_verdict', 'owner_note']);
 const RUNTIME_ROLE_STATUSES = new Set(['pending', 'active', 'blocked', 'complete', 'skipped']);
@@ -28,6 +28,9 @@ function usage() {
     '  node scripts/p2a_orchestrate.mjs init-runtime --plan <path> --run-id <run-id> [--output <path>] [--json]',
     '  node scripts/p2a_orchestrate.mjs record --runtime <path> --role <role-id> --type <type> --summary <text> [options]',
     '  node scripts/p2a_orchestrate.mjs runtime-status --runtime <path> [--json]',
+    '  node scripts/p2a_orchestrate.mjs next-role --runtime <path> [--json]',
+    '  node scripts/p2a_orchestrate.mjs role-prompt --runtime <path> --role <role-id> [--json]',
+    '  node scripts/p2a_orchestrate.mjs mark-role --runtime <path> --role <role-id> --role-status <status> [options]',
     '',
     'Commands:',
     '  plan                 Create a deterministic supervised orchestration plan. No task/run files are changed.',
@@ -37,6 +40,9 @@ function usage() {
     '  init-runtime         Create the run-level shared mental model and communication log sidecar.',
     '  record               Append one runtime communication event.',
     '  runtime-status       Print the runtime phase, role status, and latest communication event.',
+    '  next-role            Compute the next supervised role. Does not start any agent or CLI process.',
+    '  role-prompt          Print the prompt for a role so a human can paste it into an official CLI/app.',
+    '  mark-role            Record a human-observed role state transition.',
     '',
     'Source options:',
     '  --artifacts <dir>    Iterative artifact root; uses the active iteration task graph.',
@@ -62,6 +68,7 @@ function usage() {
     `  --role-status <status>    Update the event role status: ${[...RUNTIME_ROLE_STATUSES].join(', ')}.`,
     `  --phase <phase>           Update runtime phase: ${[...RUNTIME_PHASES].join(', ')}.`,
     '  --requires-owner-action  Mark the event as requiring owner action.',
+    '  Scheduler commands never spawn Codex, Claude, Gemini, browsers, or background agent loops.',
     '',
     '  --help, -h          Show this help.',
   ].join('\n');
@@ -161,6 +168,24 @@ function parseArgs(argv) {
     if (!args.runtime) throw new Error('--runtime is required for runtime-status');
     if (args.artifacts || args.graph || args.spec || args.maintenance || args.taskId || args.output || args.plan || args.runId || args.roleId || args.eventType || args.summary || args.detail || args.linkedRoleId || args.roleStatus || args.phase || args.requiresOwnerAction) {
       throw new Error('runtime-status only supports --runtime and --json');
+    }
+  } else if (args.command === 'next-role') {
+    if (!args.runtime) throw new Error('--runtime is required for next-role');
+    if (args.artifacts || args.graph || args.spec || args.maintenance || args.taskId || args.output || args.plan || args.runId || args.roleId || args.eventType || args.summary || args.detail || args.linkedRoleId || args.roleStatus || args.phase || args.requiresOwnerAction) {
+      throw new Error('next-role only supports --runtime and --json');
+    }
+  } else if (args.command === 'role-prompt') {
+    if (!args.runtime) throw new Error('--runtime is required for role-prompt');
+    if (!args.roleId) throw new Error('--role is required for role-prompt');
+    if (args.artifacts || args.graph || args.spec || args.maintenance || args.taskId || args.output || args.plan || args.runId || args.eventType || args.summary || args.detail || args.linkedRoleId || args.roleStatus || args.phase || args.requiresOwnerAction) {
+      throw new Error('role-prompt only supports --runtime, --role, and --json');
+    }
+  } else if (args.command === 'mark-role') {
+    if (!args.runtime) throw new Error('--runtime is required for mark-role');
+    if (!args.roleId) throw new Error('--role is required for mark-role');
+    if (!args.roleStatus) throw new Error('--role-status is required for mark-role');
+    if (args.artifacts || args.graph || args.spec || args.maintenance || args.taskId || args.output || args.plan || args.runId || args.eventType || args.linkedRoleId) {
+      throw new Error('mark-role only supports --runtime, --role, --role-status, --summary, --detail, --phase, --requires-owner-action, and --json');
     }
   }
   return args;
@@ -652,6 +677,276 @@ function inferredRuntimePhase(currentPhase, eventType) {
   return currentPhase;
 }
 
+function runtimeRoles(runtime) {
+  return runtime.sharedMentalModel.roleAssignments;
+}
+
+function findRuntimeRole(runtime, roleId) {
+  return runtimeRoles(runtime).find((role) => role.roleId === roleId) ?? null;
+}
+
+function requireRuntimeRole(runtime, roleId) {
+  const role = findRuntimeRole(runtime, roleId);
+  if (!role) throw new Error(`unknown runtime role: ${roleId}`);
+  return role;
+}
+
+function roleIsIncomplete(role) {
+  return !['complete', 'skipped'].includes(role.status);
+}
+
+function preferredRuntimeRole(runtime, roleIds) {
+  for (const roleId of roleIds) {
+    const role = findRuntimeRole(runtime, roleId);
+    if (role && roleIsIncomplete(role)) return role;
+  }
+  return null;
+}
+
+function nextRoleDecision(runtime) {
+  const owner = findRuntimeRole(runtime, 'owner') ?? runtimeRoles(runtime)[0] ?? null;
+  const blockedRole = runtimeRoles(runtime).find((role) => role.status === 'blocked');
+  if (runtime.status.phase === 'closed') {
+    return {
+      role: null,
+      reason: 'runtime_closed',
+      instruction: 'No next role. The run runtime is closed.',
+    };
+  }
+  if (runtime.status.blocked || runtime.status.phase === 'blocked' || blockedRole) {
+    return {
+      role: owner,
+      reason: blockedRole ? `role_blocked:${blockedRole.roleId}` : 'runtime_blocked',
+      instruction: 'Owner should inspect the blocker and decide whether to unblock, ask the user, or finish blocked.',
+    };
+  }
+
+  const openQuestion = runtime.sharedMentalModel.openQuestions.find((question) => question.status === 'open');
+  if (openQuestion) {
+    const targetRole = openQuestion.targetRoleId ? findRuntimeRole(runtime, openQuestion.targetRoleId) : null;
+    return {
+      role: targetRole ?? owner,
+      reason: `open_question:${openQuestion.questionId}`,
+      instruction: targetRole
+        ? `Answer the open question from ${openQuestion.askedByRoleId}.`
+        : 'Owner should route or answer the open question.',
+    };
+  }
+
+  if (runtime.status.needsUserDecision) {
+    return {
+      role: owner,
+      reason: 'owner_decision_required',
+      instruction: 'Owner should make or record the required decision before continuing.',
+    };
+  }
+
+  if (runtime.status.phase === 'ready_to_finish') {
+    return {
+      role: owner,
+      reason: 'ready_to_finish',
+      instruction: 'Owner should review the runtime, run verification/finish commands, and close the task lifecycle.',
+    };
+  }
+
+  if (runtime.status.phase === 'ready_for_monitor') {
+    const monitorRole = preferredRuntimeRole(runtime, ['monitor']);
+    if (monitorRole) {
+      return {
+        role: monitorRole,
+        reason: 'monitor_required',
+        instruction: 'Human should open the monitor role prompt in the official CLI/app and record the verdict.',
+      };
+    }
+    const reviewerRole = preferredRuntimeRole(runtime, ['reviewer']);
+    if (reviewerRole) {
+      return {
+        role: reviewerRole,
+        reason: 'reviewer_required',
+        instruction: 'Human should open the reviewer role prompt in the official CLI/app and record the result.',
+      };
+    }
+    return {
+      role: owner,
+      reason: 'monitor_not_configured',
+      instruction: 'Owner should decide whether the run is ready to finish.',
+    };
+  }
+
+  const implementerRole = preferredRuntimeRole(runtime, ['implementer']);
+  if (implementerRole) {
+    return {
+      role: implementerRole,
+      reason: 'implementation_required',
+      instruction: 'Human should open the implementer role prompt in the official CLI/app and record the result.',
+    };
+  }
+
+  const reviewerRole = preferredRuntimeRole(runtime, ['reviewer']);
+  if (reviewerRole) {
+    return {
+      role: reviewerRole,
+      reason: 'review_required',
+      instruction: 'Human should open the reviewer role prompt in the official CLI/app and record the result.',
+    };
+  }
+
+  const monitorRole = preferredRuntimeRole(runtime, ['monitor']);
+  if (monitorRole) {
+    return {
+      role: monitorRole,
+      reason: 'monitor_required',
+      instruction: 'Human should open the monitor role prompt in the official CLI/app and record the verdict.',
+    };
+  }
+
+  return {
+    role: owner,
+    reason: 'roles_complete',
+    instruction: 'Owner should finish the run lifecycle. No agent process is started by this scheduler.',
+  };
+}
+
+function schedulerHint(runtime) {
+  const decision = nextRoleDecision(runtime);
+  return {
+    schema_version: 'p2a.orchestration_scheduler_hint.v1',
+    runtimeId: runtime.runtimeId,
+    runId: runtime.runId,
+    taskId: runtime.taskId,
+    phase: runtime.status.phase,
+    supervisedOnly: true,
+    startsProcess: false,
+    nextRole: decision.role
+      ? {
+          roleId: decision.role.roleId,
+          role: decision.role.role,
+          agentTool: decision.role.agentTool,
+          status: decision.role.status,
+          command: decision.role.agentTool === 'manual' ? null : decision.role.agentTool,
+        }
+      : null,
+    reason: decision.reason,
+    instruction: decision.instruction,
+    safetyBoundary: 'Open the official CLI/app manually, paste the role prompt, then record the observed result. Do not use this scheduler to bypass subscription limits or run background automation.',
+  };
+}
+
+function handoffEventForRole(runtime, roleId) {
+  return [...runtime.communicationLog].reverse().find((event) => event.type === 'handoff' && event.roleId === roleId) ?? null;
+}
+
+function recentRuntimeEvents(runtime, limit = 5) {
+  return runtime.communicationLog.slice(-limit);
+}
+
+function buildSupervisedRolePrompt(runtime, role) {
+  const handoffEvent = handoffEventForRole(runtime, role.roleId);
+  const basePrompt = handoffEvent?.detail ?? role.scope;
+  const lines = [
+    'Plan2Agent supervised role prompt',
+    '',
+    `Run: ${runtime.runId}`,
+    `Task: ${runtime.taskId} - ${runtime.taskTitle}`,
+    `Role: ${role.roleId} (${role.role}, ${role.agentTool})`,
+    `Status: ${role.status}`,
+    '',
+    'Supervision boundary:',
+    '- A human must open the official CLI/app and paste this prompt manually.',
+    '- Do not run background loops, browser automation, unofficial APIs, token reuse, or quota/rate-limit bypass.',
+    '- Report results back to the owner, then record them with p2a_orchestrate mark-role or record.',
+    '',
+    `Objective: ${runtime.sharedMentalModel.objective}`,
+    `Current state: ${runtime.sharedMentalModel.currentState}`,
+    '',
+    'Role scope:',
+    role.scope,
+    '',
+    'Acceptance criteria:',
+    ...runtime.sharedMentalModel.acceptanceCriteria.map((criterion) => `- ${criterion}`),
+    '',
+    'Constraints:',
+    ...runtime.sharedMentalModel.constraints.map((constraint) => `- ${constraint}`),
+    '',
+    'Recent runtime events:',
+    ...recentRuntimeEvents(runtime).map((event) => `- ${event.createdAt} ${event.roleId}/${event.type}: ${event.summary}`),
+    '',
+    'Role handoff prompt:',
+    basePrompt,
+    '',
+    'Completion report:',
+    '- Summarize what was done or reviewed.',
+    '- List changed files, verification commands/results, blockers, and user decisions needed.',
+    '- Do not directly edit Plan2Agent run logs or task graph files.',
+  ];
+  return lines.join('\n');
+}
+
+function rolePromptPayload(runtime, role) {
+  return {
+    schema_version: 'p2a.orchestration_role_prompt.v1',
+    runtimeId: runtime.runtimeId,
+    runId: runtime.runId,
+    taskId: runtime.taskId,
+    role: {
+      roleId: role.roleId,
+      role: role.role,
+      agentTool: role.agentTool,
+      status: role.status,
+      command: role.agentTool === 'manual' ? null : role.agentTool,
+    },
+    supervisedOnly: true,
+    startsProcess: false,
+    prompt: buildSupervisedRolePrompt(runtime, role),
+  };
+}
+
+function markRoleDefaults(runtime, role, status) {
+  if (status === 'blocked') {
+    return {
+      eventType: 'blocker',
+      phase: 'blocked',
+      requiresOwnerAction: true,
+      summary: `${role.roleId} is blocked`,
+    };
+  }
+  if (status === 'complete') {
+    if (role.roleId === 'implementer') {
+      const reviewer = preferredRuntimeRole(runtime, ['reviewer']);
+      const monitor = preferredRuntimeRole(runtime, ['monitor']);
+      return {
+        eventType: 'status',
+        phase: reviewer ? 'running' : (monitor ? 'ready_for_monitor' : 'ready_to_finish'),
+        requiresOwnerAction: false,
+        summary: `${role.roleId} completed supervised work`,
+      };
+    }
+    if (role.roleId === 'reviewer') {
+      const monitor = preferredRuntimeRole(runtime, ['monitor']);
+      return {
+        eventType: 'status',
+        phase: monitor ? 'ready_for_monitor' : 'ready_to_finish',
+        requiresOwnerAction: false,
+        summary: `${role.roleId} completed supervised review`,
+      };
+    }
+    if (role.roleId === 'monitor') {
+      return {
+        eventType: 'monitor_verdict',
+        phase: 'ready_to_finish',
+        requiresOwnerAction: false,
+        summary: `${role.roleId} completed supervised monitor check`,
+      };
+    }
+  }
+  return {
+    eventType: 'status',
+    phase: status === 'active' ? 'running' : runtime.status.phase,
+    requiresOwnerAction: false,
+    summary: `${role.roleId} marked ${status}`,
+  };
+}
+
 function commandLine(scriptName, args) {
   return ['node', `scripts/${scriptName}`, ...args].map(shellQuote).join(' ');
 }
@@ -800,6 +1095,86 @@ function runRuntimeStatus(args) {
   return 0;
 }
 
+function runNextRole(args) {
+  const runtime = readOrchestrationRuntime(path.resolve(args.runtime));
+  const hint = schedulerHint(runtime);
+  if (args.json) {
+    process.stdout.write(`${JSON.stringify(hint, null, 2)}\n`);
+    return 0;
+  }
+  console.log('Plan2Agent supervised scheduler hint');
+  console.log(`- runtimeId: ${hint.runtimeId}`);
+  console.log(`- runId: ${hint.runId}`);
+  console.log(`- task: ${hint.taskId}`);
+  console.log(`- phase: ${hint.phase}`);
+  console.log(`- supervisedOnly: ${hint.supervisedOnly}`);
+  console.log(`- startsProcess: ${hint.startsProcess}`);
+  if (hint.nextRole) {
+    console.log(`- nextRole: ${hint.nextRole.roleId} (${hint.nextRole.role}, ${hint.nextRole.agentTool}, ${hint.nextRole.status})`);
+    console.log(`- command: ${hint.nextRole.command ?? 'manual'}`);
+  } else {
+    console.log('- nextRole: none');
+  }
+  console.log(`- reason: ${hint.reason}`);
+  console.log(`- instruction: ${hint.instruction}`);
+  console.log(`- safety: ${hint.safetyBoundary}`);
+  return 0;
+}
+
+function runRolePrompt(args) {
+  const runtime = readOrchestrationRuntime(path.resolve(args.runtime));
+  const role = requireRuntimeRole(runtime, args.roleId);
+  const payload = rolePromptPayload(runtime, role);
+  if (args.json) {
+    process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+    return 0;
+  }
+  console.log('Plan2Agent supervised role prompt');
+  console.log(`- runtimeId: ${payload.runtimeId}`);
+  console.log(`- runId: ${payload.runId}`);
+  console.log(`- role: ${payload.role.roleId} (${payload.role.agentTool})`);
+  console.log(`- command: ${payload.role.command ?? 'manual'}`);
+  console.log('- supervisedOnly: true');
+  console.log('- startsProcess: false');
+  console.log('');
+  console.log(payload.prompt);
+  return 0;
+}
+
+function runMarkRole(args) {
+  const runtimePath = path.resolve(args.runtime);
+  const runtime = readOrchestrationRuntime(runtimePath);
+  const role = requireRuntimeRole(runtime, args.roleId);
+  const defaults = markRoleDefaults(runtime, role, args.roleStatus);
+  const { runtime: updatedRuntime, event } = recordOrchestrationRuntimeEvent(runtimePath, {
+    roleId: args.roleId,
+    eventType: defaults.eventType,
+    summary: args.summary ?? defaults.summary,
+    detail: args.detail,
+    roleStatus: args.roleStatus,
+    phase: args.phase ?? defaults.phase,
+    requiresOwnerAction: args.requiresOwnerAction || defaults.requiresOwnerAction,
+  });
+  const hint = schedulerHint(updatedRuntime);
+  if (args.json) {
+    process.stdout.write(`${JSON.stringify({ runtime: updatedRuntime, event, next: hint }, null, 2)}\n`);
+    return 0;
+  }
+  console.log('Plan2Agent supervised role state recorded');
+  console.log(`- runtimeId: ${updatedRuntime.runtimeId}`);
+  console.log(`- event: ${event.eventId} ${event.type}`);
+  console.log(`- role: ${args.roleId} -> ${args.roleStatus}`);
+  console.log(`- phase: ${updatedRuntime.status.phase}`);
+  if (hint.nextRole) {
+    console.log(`- nextRole: ${hint.nextRole.roleId} (${hint.nextRole.agentTool})`);
+    console.log(`- nextCommand: ${hint.nextRole.command ?? 'manual'}`);
+  } else {
+    console.log('- nextRole: none');
+  }
+  console.log('- startsProcess: false');
+  return 0;
+}
+
 export function main(argv = process.argv.slice(2)) {
   try {
     const args = parseArgs(argv);
@@ -814,6 +1189,9 @@ export function main(argv = process.argv.slice(2)) {
     if (args.command === 'init-runtime') return runInitRuntime(args);
     if (args.command === 'record') return runRecord(args);
     if (args.command === 'runtime-status') return runRuntimeStatus(args);
+    if (args.command === 'next-role') return runNextRole(args);
+    if (args.command === 'role-prompt') return runRolePrompt(args);
+    if (args.command === 'mark-role') return runMarkRole(args);
     throw new Error(`unknown command: ${args.command}`);
   } catch (error) {
     const prefix = error instanceof ValidationError ? 'p2a orchestrate validation failed' : 'p2a orchestrate command failed';

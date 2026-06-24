@@ -3,6 +3,7 @@ import {
   AlertTriangle,
   CheckCircle2,
   CircleDot,
+  Copy,
   FileJson,
   FolderOpen,
   GitBranch,
@@ -34,6 +35,7 @@ import type {
   FailureClass,
   GuiConfigSnapshot,
   OnboardingAction,
+  OrchestrationRoleStatus,
   ProjectSnapshot,
   ProjectWatchEvent,
   RuntimeInfo,
@@ -47,6 +49,7 @@ type OpenState = "idle" | "loading" | "canceled" | "error";
 type WatchState = "idle" | "watching" | "refreshing" | "error";
 type ConfigState = "loading" | "ready" | "error";
 type ExecutionActionState = "idle" | "running" | "error";
+type PromptCopyState = "idle" | "copied" | "error";
 type ArtifactFileState =
   | { status: "idle" }
   | { status: "loading"; document: ArtifactDocument }
@@ -73,6 +76,11 @@ const failureClassOptions: FailureClass[] = [
 ];
 
 const verificationTypeOptions: VerificationType[] = ["custom", "test", "lint", "typecheck"];
+const orchestrationRoleStatusOptions: OrchestrationRoleStatus[] = [
+  "complete",
+  "blocked",
+  "skipped",
+];
 
 const steps = [
   ["2B-0", "Electron skeleton", "done"],
@@ -393,6 +401,13 @@ export default function App() {
   const [finishNoteInput, setFinishNoteInput] = useState("");
   const [startResult, setStartResult] = useState<ExecutionCommandResult | null>(null);
   const [finishResult, setFinishResult] = useState<ExecutionCommandResult | null>(null);
+  const [selectedOrchestrationRoleId, setSelectedOrchestrationRoleId] = useState<string | null>(null);
+  const [orchestrationState, setOrchestrationState] =
+    useState<ExecutionActionState>("idle");
+  const [orchestrationResult, setOrchestrationResult] =
+    useState<ExecutionCommandResult | null>(null);
+  const [orchestrationDetailInput, setOrchestrationDetailInput] = useState("");
+  const [promptCopyState, setPromptCopyState] = useState<PromptCopyState>("idle");
   const artifactViewerRef = useRef<HTMLElement | null>(null);
   const artifactViewerCloseButtonRef = useRef<HTMLButtonElement | null>(null);
   const artifactViewerReturnFocusRef = useRef<HTMLElement | null>(null);
@@ -488,6 +503,14 @@ export default function App() {
   const selectedTaskRuns = selectedTask
     ? runs.filter((run) => selectedTask.runIds.includes(run.runId))
     : [];
+  const selectedOrchestration = selectedRun?.orchestration ?? null;
+  const selectedOrchestrationRole =
+    selectedOrchestration?.roles.find((role) => role.roleId === selectedOrchestrationRoleId) ??
+    selectedOrchestration?.roles.find(
+      (role) => role.roleId === selectedOrchestration.next?.nextRole?.roleId,
+    ) ??
+    selectedOrchestration?.roles[0] ??
+    null;
   const tab = copy.tabs[activeTab];
   const statusText = useMemo(() => {
     return statusTextFor(projectSnapshot, openState, copy);
@@ -530,6 +553,20 @@ export default function App() {
   useEffect(() => {
     setStartResult(null);
   }, [projectSnapshot?.rootPath, selectedTaskId]);
+
+  useEffect(() => {
+    const roles = selectedRun?.orchestration?.roles ?? [];
+    const nextRoleId =
+      selectedRun?.orchestration?.next?.nextRole?.roleId ?? roles[0]?.roleId ?? null;
+
+    setSelectedOrchestrationRoleId((current) =>
+      roles.some((role) => role.roleId === current) ? current : nextRoleId,
+    );
+    setOrchestrationResult(null);
+    setOrchestrationState("idle");
+    setOrchestrationDetailInput("");
+    setPromptCopyState("idle");
+  }, [selectedRun?.runId, selectedRun?.orchestration?.updatedAt]);
 
   async function openProjectFolder() {
     setOpenState("loading");
@@ -803,6 +840,77 @@ export default function App() {
       setFinishState("error");
       setFinishResult({
         command: finishPreviewCommand(),
+        args: [],
+        cwd: projectSnapshot.rootPath,
+        exitCode: 1,
+        stdout: "",
+        stderr: error instanceof Error ? error.message : String(error),
+        startedAt: new Date().toISOString(),
+        finishedAt: new Date().toISOString(),
+        durationMs: 0,
+      });
+    }
+  }
+
+  function orchestrationMarkPreviewCommand(roleStatus: OrchestrationRoleStatus): string {
+    if (!selectedOrchestration?.runtimePath || !selectedOrchestrationRole) {
+      return copy.runs.noOrchestration;
+    }
+    const args = [
+      "node",
+      "scripts/p2a_orchestrate.mjs",
+      "mark-role",
+      "--runtime",
+      selectedOrchestration.runtimePath,
+      "--role",
+      selectedOrchestrationRole.roleId,
+      "--role-status",
+      roleStatus,
+    ];
+    if (orchestrationDetailInput.trim()) {
+      args.push("--detail", orchestrationDetailInput.trim());
+    }
+    return args.map(quoteCommandPart).join(" ");
+  }
+
+  async function copySelectedRolePrompt() {
+    if (!selectedOrchestrationRole?.prompt) return;
+
+    try {
+      await window.navigator.clipboard.writeText(selectedOrchestrationRole.prompt);
+      setPromptCopyState("copied");
+    } catch {
+      setPromptCopyState("error");
+    }
+  }
+
+  async function markSelectedOrchestrationRole(roleStatus: OrchestrationRoleStatus) {
+    if (
+      !projectSnapshot ||
+      !selectedOrchestration?.runtimePath ||
+      !selectedOrchestrationRole
+    ) {
+      return;
+    }
+
+    setOrchestrationState("running");
+    setOrchestrationResult(null);
+
+    try {
+      const result = await window.p2a.orchestration.markRole({
+        projectRoot: projectSnapshot.rootPath,
+        runtimePath: selectedOrchestration.runtimePath,
+        roleId: selectedOrchestrationRole.roleId,
+        roleStatus,
+        detail: orchestrationDetailInput.trim() || null,
+      });
+      setOrchestrationResult(result);
+      setOrchestrationState(result.exitCode === 0 ? "idle" : "error");
+      await loadProjectPath(projectSnapshot.rootPath, { quiet: true });
+    } catch (error) {
+      setOrchestrationState("error");
+      setOrchestrationResult({
+        command: orchestrationMarkPreviewCommand(roleStatus),
         args: [],
         cwd: projectSnapshot.rootPath,
         exitCode: 1,
@@ -1267,40 +1375,222 @@ export default function App() {
 
   function renderRunsTab() {
     return (
-      <section className="workbench-panel">
+      <>
+        <section className="workbench-panel">
+          <div className="section-head">
+            <div>
+              <div className="label">{copy.runs.runs}</div>
+              <h3>{copy.runs.runHistory}</h3>
+            </div>
+            <span className="section-meta mono">{artifact?.runIndexPath ?? copy.runs.noRunIndex}</span>
+          </div>
+          {runs.length > 0 ? (
+            <div className="run-table" role="list" aria-label="Run history rows">
+              {runs.map((run) => (
+                <button
+                  className={`run-row${selectedRunId === run.runId ? " run-row--selected" : ""}`}
+                  key={run.runId}
+                  type="button"
+                  onClick={() => selectRun(run)}
+                  role="listitem"
+                >
+                  <span className="run-row__id mono">{run.runId}</span>
+                  <span className={`status-badge status-badge--${run.status}`}>
+                    {statusLabel(run.status, copy)}
+                  </span>
+                  <span className="mono">{run.taskId}</span>
+                  <span className="mono">{run.agentTool}</span>
+                  <span className="mono">{formatDateTime(run.startedAt, locale, copy)}</span>
+                  <span className="mono">{formatDuration(run.startedAt, run.finishedAt, copy)}</span>
+                </button>
+              ))}
+            </div>
+          ) : (
+            <div className="empty-panel">
+              <History size={18} strokeWidth={1.7} aria-hidden="true" />
+              <span>{copy.runs.noRuns}</span>
+            </div>
+          )}
+        </section>
+        {renderRunOrchestrationPanel()}
+      </>
+    );
+  }
+
+  function renderRunOrchestrationPanel() {
+    if (!selectedRun) return null;
+
+    return (
+      <section className="workbench-panel orchestration-panel">
         <div className="section-head">
           <div>
-            <div className="label">{copy.runs.runs}</div>
-            <h3>{copy.runs.runHistory}</h3>
+            <div className="label">{copy.runs.orchestration}</div>
+            <h3>{selectedRun.runId}</h3>
           </div>
-          <span className="section-meta mono">{artifact?.runIndexPath ?? copy.runs.noRunIndex}</span>
+          <span className={`status-badge status-badge--${selectedOrchestration?.phase ?? "todo"}`}>
+            {selectedOrchestration?.phase ?? copy.common.none}
+          </span>
         </div>
-        {runs.length > 0 ? (
-          <div className="run-table" role="list" aria-label="Run history rows">
-            {runs.map((run) => (
-              <button
-                className={`run-row${selectedRunId === run.runId ? " run-row--selected" : ""}`}
-                key={run.runId}
-                type="button"
-                onClick={() => selectRun(run)}
-                role="listitem"
-              >
-                <span className="run-row__id mono">{run.runId}</span>
-                <span className={`status-badge status-badge--${run.status}`}>
-                  {statusLabel(run.status, copy)}
-                </span>
-                <span className="mono">{run.taskId}</span>
-                <span className="mono">{run.agentTool}</span>
-                <span className="mono">{formatDateTime(run.startedAt, locale, copy)}</span>
-                <span className="mono">{formatDuration(run.startedAt, run.finishedAt, copy)}</span>
-              </button>
-            ))}
+
+        {!selectedOrchestration ? (
+          <div className="empty-panel">
+            <Layers size={18} strokeWidth={1.7} aria-hidden="true" />
+            <span>{copy.runs.noOrchestration}</span>
           </div>
         ) : (
-          <div className="empty-panel">
-            <History size={18} strokeWidth={1.7} aria-hidden="true" />
-            <span>{copy.runs.noRuns}</span>
-          </div>
+          <>
+            <div className="detail-list detail-list--embedded orchestration-summary">
+              <div>
+                <span>{copy.common.mode}</span>
+                <strong className="mono">{selectedOrchestration.mode ?? copy.common.none}</strong>
+              </div>
+              <div>
+                <span>{copy.runs.nextRole}</span>
+                <strong className="mono">
+                  {selectedOrchestration.next?.nextRole?.roleId ?? copy.common.none}
+                </strong>
+              </div>
+              <div>
+                <span>{copy.runs.events}</span>
+                <strong className="mono">{formatCount(selectedOrchestration.eventCount, locale)}</strong>
+              </div>
+              <div>
+                <span>{copy.runs.monitorGate}</span>
+                <strong>{selectedOrchestration.monitorRequired ? copy.runs.needed : copy.runs.notNeeded}</strong>
+              </div>
+              <div>
+                <span>{copy.runs.supervision}</span>
+                <strong>{selectedOrchestration.next?.startsProcess ? copy.runs.startsProcess : copy.runs.noProcess}</strong>
+              </div>
+              <div>
+                <span>{copy.runs.lastEvent}</span>
+                <strong className="mono">
+                  {selectedOrchestration.lastEvent
+                    ? `${selectedOrchestration.lastEvent.roleId}/${selectedOrchestration.lastEvent.type}`
+                    : copy.common.none}
+                </strong>
+              </div>
+            </div>
+
+            <div className="orchestration-layout">
+              <div className="orchestration-role-list" role="list" aria-label="Orchestration roles">
+                {selectedOrchestration.roles.map((role) => (
+                  <button
+                    className={`orchestration-role${
+                      selectedOrchestrationRole?.roleId === role.roleId
+                        ? " orchestration-role--selected"
+                        : ""
+                    } orchestration-role--${role.status}`}
+                    key={role.roleId}
+                    type="button"
+                    onClick={() => {
+                      setSelectedOrchestrationRoleId(role.roleId);
+                      setPromptCopyState("idle");
+                    }}
+                    role="listitem"
+                  >
+                    <span className="mono">{role.roleId}</span>
+                    <strong>{role.role}</strong>
+                    <em className="mono">{role.agentTool}</em>
+                    <small className={`status-badge status-badge--${role.status}`}>
+                      {statusLabel(role.status, copy)}
+                    </small>
+                  </button>
+                ))}
+              </div>
+
+              <div className="orchestration-prompt">
+                <div className="orchestration-prompt__head">
+                  <div>
+                    <div className="label">{copy.runs.rolePrompt}</div>
+                    <h3>{selectedOrchestrationRole?.roleId ?? copy.common.none}</h3>
+                  </div>
+                  <button
+                    className="terminal-control"
+                    type="button"
+                    onClick={copySelectedRolePrompt}
+                    disabled={!selectedOrchestrationRole?.prompt}
+                  >
+                    <Copy size={13} strokeWidth={1.7} aria-hidden="true" />
+                    {promptCopyState === "copied"
+                      ? copy.runs.copied
+                      : promptCopyState === "error"
+                        ? copy.common.invalid
+                        : copy.runs.copyPrompt}
+                  </button>
+                </div>
+                <pre className="prompt-preview orchestration-prompt__body">
+                  {selectedOrchestrationRole?.prompt ?? copy.runs.noRolePrompt}
+                </pre>
+
+                <div className="orchestration-record">
+                  <label className="field-label">
+                    <span>{copy.runs.actionNote}</span>
+                    <textarea
+                      className="supervisor-textarea"
+                      value={orchestrationDetailInput}
+                      onChange={(event) => setOrchestrationDetailInput(event.target.value)}
+                      placeholder={copy.runs.actionNotePlaceholder}
+                    />
+                  </label>
+                  <div className="orchestration-actions" aria-label={copy.runs.recordState}>
+                    {orchestrationRoleStatusOptions.map((roleStatus) => (
+                      <button
+                        className="terminal-control"
+                        key={roleStatus}
+                        type="button"
+                        onClick={() => void markSelectedOrchestrationRole(roleStatus)}
+                        disabled={
+                          orchestrationState === "running" ||
+                          !selectedOrchestration.runtimePath ||
+                          !selectedOrchestrationRole
+                        }
+                      >
+                        {roleStatus === "complete" && (
+                          <CheckCircle2 size={13} strokeWidth={1.7} aria-hidden="true" />
+                        )}
+                        {roleStatus === "blocked" && (
+                          <AlertTriangle size={13} strokeWidth={1.7} aria-hidden="true" />
+                        )}
+                        {roleStatus === "skipped" && (
+                          <X size={13} strokeWidth={1.7} aria-hidden="true" />
+                        )}
+                        {statusLabel(roleStatus, copy)}
+                      </button>
+                    ))}
+                    <span className="mono">
+                      {orchestrationResult
+                        ? `exit ${orchestrationResult.exitCode} · ${formatMilliseconds(
+                            orchestrationResult.durationMs,
+                            copy,
+                          )}`
+                        : orchestrationState === "running"
+                          ? copy.common.running
+                          : copy.runs.recordState}
+                    </span>
+                  </div>
+                </div>
+
+                {selectedOrchestration.next && (
+                  <div className="diagnostic diagnostic--ok orchestration-hint">
+                    <ShieldCheck size={14} strokeWidth={1.7} aria-hidden="true" />
+                    <span className="execution-failure__body">
+                      <strong>{selectedOrchestration.next.reason}</strong>
+                      <small>{selectedOrchestration.next.instruction}</small>
+                      <em>{selectedOrchestration.next.safetyBoundary}</em>
+                    </span>
+                  </div>
+                )}
+
+                {orchestrationResult && (
+                  <div className="command-output command-output--compact">
+                    <pre>{outputPreview(orchestrationResult.stdout, copy)}</pre>
+                    <pre>{outputPreview(orchestrationResult.stderr, copy)}</pre>
+                  </div>
+                )}
+              </div>
+            </div>
+          </>
         )}
       </section>
     );
@@ -2185,6 +2475,36 @@ export default function App() {
             <strong className="mono">{selectedRun.changedFiles.length}</strong>
           </div>
         </div>
+        {selectedOrchestration && (
+          <>
+            <div className="section-head section-head--tight">
+              <div>
+                <div className="label">{copy.runs.orchestration}</div>
+                <h3>{selectedOrchestration.phase ?? copy.common.none}</h3>
+              </div>
+            </div>
+            <div className="detail-list">
+              <div>
+                <span>{copy.common.mode}</span>
+                <strong className="mono">{selectedOrchestration.mode ?? copy.common.none}</strong>
+              </div>
+              <div>
+                <span>{copy.runs.nextRole}</span>
+                <strong className="mono">
+                  {selectedOrchestration.next?.nextRole?.roleId ?? copy.common.none}
+                </strong>
+              </div>
+              <div>
+                <span>{copy.runs.monitorGate}</span>
+                <strong>{selectedOrchestration.monitorRequired ? copy.runs.needed : copy.runs.notNeeded}</strong>
+              </div>
+            </div>
+            <div className="ref-list">
+              {selectedOrchestration.runtimePath && <code>{selectedOrchestration.runtimePath}</code>}
+              {selectedOrchestration.planPath && <code>{selectedOrchestration.planPath}</code>}
+            </div>
+          </>
+        )}
         {selectedRun.verification.length > 0 && (
           <>
             <div className="section-head section-head--tight">
