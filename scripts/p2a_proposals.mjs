@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 /** Mine and review Plan2Agent retrospective proposal candidates from run logs. */
 
+import { createHash } from 'node:crypto';
 import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
@@ -11,6 +12,7 @@ import {
   validateProposalsDir,
   validateRunData,
   validateRunIndexData,
+  validateProposalReviewData,
   validateSkillProposal,
   validateSkillProposalData,
   ValidationError,
@@ -18,7 +20,7 @@ import {
 import { DEFAULT_RUNS_DIR, resolveRunsDir } from './p2a_run_paths.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
-const COMMANDS = new Set(['mine', 'list', 'show', 'validate', 'digest']);
+const COMMANDS = new Set(['mine', 'list', 'show', 'validate', 'digest', 'review']);
 const DEFAULT_PROPOSALS_DIR = path.join('.plan2agent', 'proposals');
 const DEFAULT_HANDOFF_GRAPH = path.join('.plan2agent', 'artifacts', 'task-graph.json');
 
@@ -30,6 +32,7 @@ function usage() {
     '  node scripts/p2a_proposals.mjs show (--proposal <path>|--proposal-id <id>) [--proposals <dir>]',
     '  node scripts/p2a_proposals.mjs validate [--proposal <path>|--proposals <dir>]',
     '  node scripts/p2a_proposals.mjs digest [--proposals <dir>] [--json]',
+    '  node scripts/p2a_proposals.mjs review [--proposals <dir>] [--output <path>] [--dry-run] [--overwrite] [--json]',
     '',
     'Commands:',
     '  mine       Read run logs and orchestration sidecars, then write proposed skill-proposal JSON files.',
@@ -37,17 +40,19 @@ function usage() {
     '  show       Print one proposal JSON.',
     '  validate   Validate one proposal or a proposal directory.',
     '  digest     Print a compact review digest for human/curator review.',
+    '  review     Group proposals and write a deterministic curator review artifact.',
     '',
     'Source options:',
     '  --artifacts <dir>   Iterative artifact root; reads runs/ and writes proposals/ under that root by default.',
     '  --graph <path>      Task graph JSON path; default runs path is beside the graph parent.',
     '  --runs <dir>        Explicit runs directory.',
     '  --proposals <dir>   Proposal queue directory. Default: sibling proposals/ beside runs/, or .plan2agent/proposals.',
+    '  --output <path>     Review output path. Default: proposals/reviews/<reviewId>.json.',
     '  --run-id <run-id>   Limit mine to one run.',
     '',
     '  --dry-run           Print candidates without writing files.',
     '  --overwrite         Replace an existing proposal file with the same proposalId.',
-    '  --json              Machine-readable output for mine/list/digest.',
+    '  --json              Machine-readable output for mine/list/digest/review.',
     '  --help, -h          Show this help.',
   ].join('\n');
 }
@@ -65,6 +70,7 @@ function parseArgs(argv) {
     proposals: null,
     proposal: null,
     proposalId: null,
+    output: null,
     runId: null,
     dryRun: false,
     overwrite: false,
@@ -81,6 +87,7 @@ function parseArgs(argv) {
     else if (arg === '--proposals') args.proposals = requiredValue(argv, ++index, '--proposals');
     else if (arg === '--proposal') args.proposal = requiredValue(argv, ++index, '--proposal');
     else if (arg === '--proposal-id') args.proposalId = requiredValue(argv, ++index, '--proposal-id');
+    else if (arg === '--output') args.output = requiredValue(argv, ++index, '--output');
     else if (arg === '--run-id') args.runId = requiredValue(argv, ++index, '--run-id');
     else if (arg === '--dry-run') args.dryRun = true;
     else if (arg === '--overwrite') args.overwrite = true;
@@ -104,6 +111,7 @@ function parseArgs(argv) {
     if (args.proposalId) throw new Error('validate supports --proposal or --proposals, not --proposal-id');
     if (args.proposal && args.proposals) throw new Error('validate supports --proposal or --proposals, not both');
   }
+  if (args.output && args.command !== 'review') throw new Error('--output is only supported by review');
   if (args.runId) assertSafeRunId(args.runId);
   return args;
 }
@@ -439,6 +447,180 @@ function digestForProposals(proposals) {
   };
 }
 
+function stableHash(value) {
+  return createHash('sha256').update(JSON.stringify(value)).digest('hex').slice(0, 12);
+}
+
+function emptyStatusSummary() {
+  return { proposed: 0, approved: 0, rejected: 0, deferred: 0 };
+}
+
+function emptyRiskSummary() {
+  return { high: 0, medium: 0, low: 0 };
+}
+
+function emptyDispositionSummary() {
+  return { approve: 0, defer: 0, reject: 0, needs_more_evidence: 0 };
+}
+
+function sortedUnique(values) {
+  return [...new Set(values.filter((value) => typeof value === 'string' && value.trim()))].sort((a, b) => a.localeCompare(b));
+}
+
+function highestRisk(proposals) {
+  if (proposals.some((proposal) => proposal.risk === 'high')) return 'high';
+  if (proposals.some((proposal) => proposal.risk === 'medium')) return 'medium';
+  return 'low';
+}
+
+function proposalClassification(proposal) {
+  const failureEvidence = (proposal.evidence ?? []).find((item) => item.startsWith('failure: '));
+  if (failureEvidence) {
+    const match = failureEvidence.match(/^failure:\s+([A-Za-z0-9._-]+)/);
+    if (match) return match[1];
+  }
+  if (proposal.proposalId.includes('verification-gap')) return 'verification_gap';
+  if (proposal.proposalId.includes('-monitor-')) return 'monitor_gate_mismatch';
+  return safeIdPart(proposal.problem);
+}
+
+function proposalGroupKey(proposal) {
+  return [
+    proposalClassification(proposal),
+    sortedUnique(proposal.targetFiles).join(','),
+    proposal.recommendedChange,
+  ].join('|');
+}
+
+function statusSummaryFor(proposals) {
+  const summary = emptyStatusSummary();
+  for (const proposal of proposals) summary[proposal.status] += 1;
+  return summary;
+}
+
+function dispositionForGroup(group) {
+  if (group.statusSummary.proposed === 0) {
+    return {
+      recommendedDisposition: 'defer',
+      rationale: 'No proposed items remain in this group.',
+      nextAction: 'Keep the group for audit history; no immediate action is required.',
+    };
+  }
+  if (group.classification === 'verification_gap') {
+    return {
+      recommendedDisposition: 'needs_more_evidence',
+      rationale: 'Verification-gap proposals can include valid docs/config-only work until skipped-verification rationale is standardized.',
+      nextAction: 'Ask the owner whether verification was intentionally skipped before approving a harness change.',
+    };
+  }
+  if (group.risk === 'high' || group.frequency >= 2) {
+    return {
+      recommendedDisposition: 'approve',
+      rationale: group.risk === 'high'
+        ? 'High-risk execution pattern should be reviewed for a corrective harness change.'
+        : `This pattern appears ${group.frequency} times and is likely worth a corrective harness change.`,
+      nextAction: 'Review targetFiles and prepare a separate patch only after human approval.',
+    };
+  }
+  return {
+    recommendedDisposition: 'defer',
+    rationale: 'Single medium/low-risk proposal should remain in the queue until more evidence appears.',
+    nextAction: 'Keep the proposal queued and re-run review after more execution history is available.',
+  };
+}
+
+function buildProposalReview(proposals, proposalsDir, generatedAt = new Date().toISOString()) {
+  const sorted = [...proposals].sort((a, b) => a.proposalId.localeCompare(b.proposalId));
+  const groupsByKey = new Map();
+  for (const proposal of sorted) {
+    const key = proposalGroupKey(proposal);
+    if (!groupsByKey.has(key)) groupsByKey.set(key, []);
+    groupsByKey.get(key).push(proposal);
+  }
+
+  const groups = [...groupsByKey.entries()].map(([key, groupProposals]) => {
+    const proposalIds = groupProposals.map((proposal) => proposal.proposalId).sort((a, b) => a.localeCompare(b));
+    const group = {
+      groupId: `group-${stableHash({ key, proposalIds })}`,
+      proposalIds,
+      risk: highestRisk(groupProposals),
+      frequency: groupProposals.length,
+      classification: proposalClassification(groupProposals[0]),
+      targetFiles: sortedUnique(groupProposals.flatMap((proposal) => proposal.targetFiles)),
+      sourceRunIds: sortedUnique(groupProposals.map((proposal) => proposal.sourceRunId).filter(Boolean)),
+      statusSummary: statusSummaryFor(groupProposals),
+      recommendedDisposition: 'defer',
+      rationale: 'Pending review.',
+      nextAction: 'Pending review.',
+    };
+    return { ...group, ...dispositionForGroup(group) };
+  }).sort((a, b) => {
+    const dispositionPriority = { approve: 0, needs_more_evidence: 1, defer: 2, reject: 3 };
+    const riskPriority = { high: 0, medium: 1, low: 2 };
+    return (dispositionPriority[a.recommendedDisposition] ?? 9) - (dispositionPriority[b.recommendedDisposition] ?? 9)
+      || (riskPriority[a.risk] ?? 9) - (riskPriority[b.risk] ?? 9)
+      || b.frequency - a.frequency
+      || a.groupId.localeCompare(b.groupId);
+  });
+
+  const byStatus = emptyStatusSummary();
+  const byRisk = emptyRiskSummary();
+  for (const proposal of sorted) {
+    byStatus[proposal.status] += 1;
+    byRisk[proposal.risk] += 1;
+  }
+  const byRecommendedDisposition = emptyDispositionSummary();
+  for (const group of groups) byRecommendedDisposition[group.recommendedDisposition] += 1;
+
+  const reviewId = `proposal-review-${stableHash({
+    proposals: sorted.map((proposal) => ({
+      proposalId: proposal.proposalId,
+      status: proposal.status,
+      risk: proposal.risk,
+      sourceRunId: proposal.sourceRunId ?? null,
+      targetFiles: sortedUnique(proposal.targetFiles),
+      recommendedChange: proposal.recommendedChange,
+    })),
+    groups: groups.map((group) => ({
+      groupId: group.groupId,
+      recommendedDisposition: group.recommendedDisposition,
+    })),
+  })}`;
+
+  return validateProposalReviewData({
+    schema_version: 'p2a.proposal_review.v1',
+    reviewId,
+    generatedAt,
+    sourceProposalsDir: displayPath(proposalsDir),
+    summary: {
+      totalProposals: sorted.length,
+      totalGroups: groups.length,
+      byStatus,
+      byRisk,
+      byRecommendedDisposition,
+    },
+    groups,
+  });
+}
+
+function reviewPath(proposalsDir, reviewId) {
+  return path.join(proposalsDir, 'reviews', `${reviewId}.json`);
+}
+
+function assertReviewOutputPath(proposalsDir, filePath) {
+  if (path.dirname(path.resolve(filePath)) === path.resolve(proposalsDir)) {
+    throw new Error('--output must not write a review JSON directly inside the proposal queue root; use proposals/reviews/ or another directory');
+  }
+}
+
+function writeReview(filePath, review, overwrite = false) {
+  const existed = existsSync(filePath);
+  if (existed && !overwrite) return { action: 'skipped', filePath };
+  mkdirSync(path.dirname(filePath), { recursive: true });
+  writeFileSync(filePath, `${JSON.stringify(review, null, 2)}\n`, 'utf8');
+  return { action: existed ? 'overwritten' : 'written', filePath };
+}
+
 function runMine(args) {
   const runsDir = resolveRunsDirForProposals(args);
   const proposalsDir = resolveProposalDir(args);
@@ -485,6 +667,38 @@ function runMine(args) {
   }
   for (const result of results) {
     console.log(`- ${result.action}: ${result.proposal.proposalId} -> ${displayPath(result.filePath)}`);
+  }
+  return 0;
+}
+
+function runReview(args) {
+  const proposalsDir = resolveProposalDir(args);
+  const requestedFilePath = args.output ? path.resolve(args.output) : null;
+  if (requestedFilePath) assertReviewOutputPath(proposalsDir, requestedFilePath);
+  const proposals = loadProposals(proposalsDir);
+  const review = buildProposalReview(proposals, proposalsDir);
+  const filePath = requestedFilePath ?? reviewPath(proposalsDir, review.reviewId);
+  const writeResult = args.dryRun
+    ? { action: 'dry-run', filePath }
+    : writeReview(filePath, review, args.overwrite);
+  if (args.json) {
+    console.log(JSON.stringify({
+      proposalsDir: displayPath(proposalsDir),
+      reviewFile: displayPath(filePath),
+      action: writeResult.action,
+      review,
+    }, null, 2));
+    return 0;
+  }
+  console.log('Plan2Agent proposal review');
+  console.log(`- proposals: ${displayPath(proposalsDir)}`);
+  console.log(`- review: ${displayPath(filePath)}`);
+  console.log(`- action: ${writeResult.action}`);
+  console.log(`- proposals total: ${review.summary.totalProposals}`);
+  console.log(`- groups total: ${review.summary.totalGroups}`);
+  console.log(`- dispositions: ${JSON.stringify(review.summary.byRecommendedDisposition)}`);
+  for (const group of review.groups) {
+    console.log(`- ${group.groupId} [${group.risk} x${group.frequency}] ${group.recommendedDisposition}: ${group.classification}`);
   }
   return 0;
 }
@@ -555,6 +769,7 @@ export function main(argv = process.argv.slice(2)) {
     if (args.command === 'show') return runShow(args);
     if (args.command === 'validate') return runValidate(args);
     if (args.command === 'digest') return runDigest(args);
+    if (args.command === 'review') return runReview(args);
     throw new Error(`unknown command: ${args.command}`);
   } catch (error) {
     const prefix = error instanceof ValidationError ? 'p2a proposal validation failed' : 'p2a proposal command failed';

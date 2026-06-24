@@ -18,6 +18,7 @@ const SCHEMA_PATHS = {
   run_index: path.join(ROOT, 'schemas', 'run-index.schema.json'),
   orchestration_plan: path.join(ROOT, 'schemas', 'orchestration-plan.schema.json'),
   skill_proposal: path.join(ROOT, 'schemas', 'skill-proposal.schema.json'),
+  proposal_review: path.join(ROOT, 'schemas', 'proposal-review.schema.json'),
 };
 const GATE_PATHS = {
   statusDoc: 'status.md',
@@ -607,6 +608,51 @@ export function validateProposalsDir(proposalsDir) {
   return proposals;
 }
 
+export function validateProposalReviewData(data) {
+  validateSchema(data, loadJson(SCHEMA_PATHS.proposal_review));
+  if (data.summary.totalGroups !== data.groups.length) {
+    throw new ValidationError('proposal review summary.totalGroups must match groups length');
+  }
+  const statusTotal = Object.values(data.summary.byStatus).reduce((sum, count) => sum + count, 0);
+  if (statusTotal !== data.summary.totalProposals) {
+    throw new ValidationError('proposal review summary.byStatus must sum to totalProposals');
+  }
+  const riskTotal = Object.values(data.summary.byRisk).reduce((sum, count) => sum + count, 0);
+  if (riskTotal !== data.summary.totalProposals) {
+    throw new ValidationError('proposal review summary.byRisk must sum to totalProposals');
+  }
+  const dispositionTotal = Object.values(data.summary.byRecommendedDisposition).reduce((sum, count) => sum + count, 0);
+  if (dispositionTotal !== data.summary.totalGroups) {
+    throw new ValidationError('proposal review summary.byRecommendedDisposition must sum to totalGroups');
+  }
+  const groupIds = data.groups.map((group) => group.groupId);
+  if (groupIds.length !== new Set(groupIds).size) {
+    throw new ValidationError('proposal review groupId values must be unique');
+  }
+  const proposalIds = [];
+  for (const group of data.groups) {
+    validateNonBlankStrings(group.proposalIds, `${group.groupId}.proposalIds`);
+    validateNonBlankStrings(group.targetFiles, `${group.groupId}.targetFiles`);
+    validateNonBlankStrings(group.sourceRunIds, `${group.groupId}.sourceRunIds`);
+    if (group.frequency !== group.proposalIds.length) {
+      throw new ValidationError(`${group.groupId}.frequency must match proposalIds length`);
+    }
+    const groupStatusTotal = Object.values(group.statusSummary).reduce((sum, count) => sum + count, 0);
+    if (groupStatusTotal !== group.proposalIds.length) {
+      throw new ValidationError(`${group.groupId}.statusSummary must sum to proposalIds length`);
+    }
+    proposalIds.push(...group.proposalIds);
+  }
+  if (proposalIds.length !== new Set(proposalIds).size) {
+    throw new ValidationError('proposal review proposalIds must appear in only one group');
+  }
+  return data;
+}
+
+export function validateProposalReview(filePath) {
+  return validateProposalReviewData(loadJson(filePath));
+}
+
 export function validateRunsDir(runsDir) {
   if (!existsSync(runsDir)) throw new ValidationError(`runs directory is missing: ${runsDir}`);
   if (!lstatSync(runsDir).isDirectory()) throw new ValidationError(`runs path must be a directory: ${runsDir}`);
@@ -894,6 +940,7 @@ function parseArgs(argv) {
     else if (arg === '--runs-dir') args.runsDir = argv[++index];
     else if (arg === '--orchestration-plan') args.orchestrationPlan = argv[++index];
     else if (arg === '--skill-proposal') args.skillProposal = argv[++index];
+    else if (arg === '--proposal-review') args.proposalReview = argv[++index];
     else if (arg === '--proposals-dir') args.proposalsDir = argv[++index];
     else if (arg === '--require-approved-spec') args.requireApprovedSpec = argv[++index];
     else if (arg === '--require-handoff-ready') args.requireHandoffReady = true;
@@ -931,6 +978,7 @@ export function main(argv = process.argv.slice(2)) {
     if (args.runsDir) validateRunsDir(args.runsDir);
     if (args.orchestrationPlan) validateOrchestrationPlan(args.orchestrationPlan);
     if (args.skillProposal) validateSkillProposal(args.skillProposal);
+    if (args.proposalReview) validateProposalReview(args.proposalReview);
     if (args.proposalsDir) validateProposalsDir(args.proposalsDir);
     for (const fixtureDir of args.fixtureDir) validateFixtureDir(fixtureDir);
   } catch (error) {

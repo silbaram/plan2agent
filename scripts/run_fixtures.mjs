@@ -173,7 +173,7 @@ function validateScaffoldFixtureCase() {
 
     const expectedScripts = ['p2a_iteration.mjs', 'p2a_tasks.mjs', 'p2a_runs.mjs', 'p2a_execute.mjs', 'p2a_orchestrate.mjs', 'p2a_proposals.mjs', 'p2a_run_paths.mjs', 'p2a_iteration_state.mjs', 'validate_artifacts.mjs']
       .map((file) => path.join('scripts', file));
-    const expectedSchemas = ['intake.schema.json', 'spec.schema.json', 'task-graph.schema.json', 'task-context.schema.json', 'review.schema.json', 'run.schema.json', 'run-index.schema.json', 'orchestration-plan.schema.json', 'skill-proposal.schema.json']
+    const expectedSchemas = ['intake.schema.json', 'spec.schema.json', 'task-graph.schema.json', 'task-context.schema.json', 'review.schema.json', 'run.schema.json', 'run-index.schema.json', 'orchestration-plan.schema.json', 'skill-proposal.schema.json', 'proposal-review.schema.json']
       .map((file) => path.join('schemas', file));
     const expectedToolFiles = [
       path.join('.agents', 'skills', 'p2a-harness', 'SKILL.md'),
@@ -311,6 +311,7 @@ function validateE2eFixtureCases() {
         || !existsSync(path.join(targetRoot, 'schemas', 'run-index.schema.json'))
         || !existsSync(path.join(targetRoot, 'schemas', 'orchestration-plan.schema.json'))
         || !existsSync(path.join(targetRoot, 'schemas', 'skill-proposal.schema.json'))
+        || !existsSync(path.join(targetRoot, 'schemas', 'proposal-review.schema.json'))
         || existsSync(path.join(targetRoot, '.plan2agent', 'current-spec.json'))
       ) {
         console.error(`greenfield handoff wrote unexpected tool/current-spec files: ${caseData.id}`);
@@ -404,6 +405,7 @@ function validateE2eFixtureCases() {
         || !toolManifest.toolFiles.includes('scripts/p2a_run_paths.mjs')
         || !toolManifest.schemaFiles.includes('schemas/run.schema.json')
         || !toolManifest.schemaFiles.includes('schemas/orchestration-plan.schema.json')
+        || !toolManifest.schemaFiles.includes('schemas/proposal-review.schema.json')
       ) {
         console.error(`greenfield handoff --tools output mismatch: ${caseData.id}`);
         console.error(JSON.stringify({ missingToolFiles, toolManifest }, null, 2));
@@ -1016,6 +1018,40 @@ function validateIterationCurrentFixtureCases() {
       checks += 1;
       if (result.status !== 0 || !result.stdout.includes('Plan2Agent proposal digest')) {
         console.error(`p2a_proposals digest fixture failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: failureStatus(result), checks };
+      }
+
+      const executeMonitorReviewPath = path.join(tempRoot, 'p2a-execute-monitor', 'proposal-review.json');
+      result = runProposals([
+        'review',
+        '--proposals',
+        executeMonitorProposalsDir,
+        '--output',
+        executeMonitorReviewPath,
+      ]);
+      checks += 1;
+      if (result.status !== 0 || !result.stdout.includes('Plan2Agent proposal review')) {
+        console.error(`p2a_proposals review fixture failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: failureStatus(result), checks };
+      }
+      const executeMonitorReview = JSON.parse(readFileSync(executeMonitorReviewPath, 'utf8'));
+      if (
+        executeMonitorReview.schema_version !== 'p2a.proposal_review.v1'
+        || executeMonitorReview.summary.totalProposals !== 1
+        || executeMonitorReview.groups[0]?.classification !== 'implementation_incomplete'
+        || executeMonitorReview.groups[0]?.recommendedDisposition !== 'defer'
+      ) {
+        console.error(`p2a_proposals review wrote unexpected review: ${caseData.id}`);
+        console.error(JSON.stringify({ executeMonitorReview }, null, 2));
+        return { status: 1, checks };
+      }
+
+      result = runValidator(['--proposal-review', executeMonitorReviewPath]);
+      checks += 1;
+      if (result.status !== 0) {
+        console.error(`proposal review validator fixture check failed: ${caseData.id}`);
         writeResultOutput(result);
         return { status: failureStatus(result), checks };
       }
@@ -2071,6 +2107,7 @@ function validateIterationCurrentFixtureCases() {
         || !targetManifest.schemaFiles.includes('schemas/run-index.schema.json')
         || !targetManifest.schemaFiles.includes('schemas/orchestration-plan.schema.json')
         || !targetManifest.schemaFiles.includes('schemas/skill-proposal.schema.json')
+        || !targetManifest.schemaFiles.includes('schemas/proposal-review.schema.json')
         || targetCurrentSpec.last_handoff?.iteration_id !== 'iter-002'
         || targetCurrentSpec.last_handoff?.maintenance_included !== true
         || sourceCurrentSpecAfterHandoff.last_handoff?.target_project !== iterationTargetRoot
