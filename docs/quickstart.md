@@ -264,7 +264,7 @@ node scripts/p2a_orchestrate.mjs handoff \
   --plan .plan2agent/orchestration/task-001.json
 ```
 
-task를 시작하고 run log를 연다. 출력되는 manual launcher prompt를 Codex/Claude 같은 감독형 agent 세션에 붙여넣는다. 오케스트레이션 계획을 만들지 않았다면 `--orchestration-plan` 옵션은 빼고 실행한다.
+task를 시작하고 run log를 연다. 출력되는 manual launcher prompt를 Codex/Claude 같은 감독형 agent 세션에 붙여넣는다. 오케스트레이션 계획을 만들지 않았다면 `--orchestration-plan` 옵션은 빼고 실행한다. 이 옵션을 넘기면 `runs/<runId>.orchestration.json`과 `runs/<runId>.orchestration-runtime.json`이 함께 생성된다.
 
 ```bash
 node scripts/p2a_execute.mjs start \

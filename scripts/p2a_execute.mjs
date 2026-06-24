@@ -7,6 +7,7 @@ import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { loadJson, validateOrchestrationPlanData, validateProposalDraftApprovalData, validateRunData, validateTaskGraphData, ValidationError } from './validate_artifacts.mjs';
+import { orchestrationRuntimePath, readOrchestrationRuntime, recordOrchestrationRuntimeEvent, writeOrchestrationRuntimeForRun } from './p2a_orchestrate.mjs';
 import { resolveIterationState } from './p2a_iteration_state.mjs';
 import { resolveRunsDir } from './p2a_run_paths.mjs';
 
@@ -568,7 +569,7 @@ function attachOrchestrationPlan(plan, source, runId) {
   validateOrchestrationPlanData(sidecar);
   const filePath = orchestrationSidecarPath(source.runsDir, runId);
   writeFileSync(filePath, `${JSON.stringify(sidecar, null, 2)}\n`, 'utf8');
-  return filePath;
+  return { filePath, sidecar };
 }
 
 function readMonitorVerdict(source, sidecar) {
@@ -596,6 +597,22 @@ function applyMonitorGate(args, source) {
   if (!args.failureSource) args.failureSource = 'monitor';
   if (args.needsUserDecision === null && verdict === 'needs_user_decision') args.needsUserDecision = 'true';
   return { sidecar, verdict, accepted: false, failureClass: args.failureClass };
+}
+
+function updateOrchestrationRuntimeAfterFinish(source, run) {
+  const runtimePath = orchestrationRuntimePath(source.runsDir, run.runId);
+  if (!existsSync(runtimePath)) return null;
+  const blocked = run.status !== 'finished';
+  const result = recordOrchestrationRuntimeEvent(runtimePath, {
+    roleId: 'owner',
+    eventType: blocked ? 'blocker' : 'status',
+    summary: `Run ${run.runId} finished with status ${run.status}`,
+    detail: run.failure ? JSON.stringify(run.failure) : null,
+    roleStatus: blocked ? 'blocked' : 'complete',
+    phase: blocked ? 'blocked' : 'closed',
+    requiresOwnerAction: run.failure?.needsUserDecision ?? false,
+  });
+  return { ...result, filePath: runtimePath };
 }
 
 function readRun(runsDir, runId) {
@@ -718,8 +735,12 @@ function runStart(args) {
   const runResult = runScript('p2a_runs.mjs', startRunArgs(args, task, runId, defaults, approvalLink.approval));
   printChildResult(runResult);
   if (runResult.status !== 0) return runResult.status ?? 1;
-  const sidecarPath = attachOrchestrationPlan(orchestrationPlan, source, runId);
-  if (sidecarPath) console.log(`Attached orchestration sidecar: ${displayPath(sidecarPath)}`);
+  const attachedOrchestration = attachOrchestrationPlan(orchestrationPlan, source, runId);
+  if (attachedOrchestration) {
+    console.log(`Attached orchestration sidecar: ${displayPath(attachedOrchestration.filePath)}`);
+    const runtime = writeOrchestrationRuntimeForRun(attachedOrchestration.sidecar, source.runsDir, runId);
+    console.log(`Initialized orchestration runtime: ${displayPath(runtime.filePath)}`);
+  }
 
   console.log('');
   console.log('Marking task in_progress...');
@@ -775,6 +796,11 @@ function runStatus(args) {
     console.log(`- orchestration: ${sidecar.mode} ${sidecar.planId}`);
     if (sidecar.monitorGate.required) console.log(`- monitorGate: ${sidecar.monitorGate.verdictPath}`);
   }
+  const runtimePath = orchestrationRuntimePath(source.runsDir, run.runId);
+  if (existsSync(runtimePath)) {
+    const runtime = readOrchestrationRuntime(runtimePath);
+    console.log(`- orchestrationRuntime: ${runtime.status.phase} events=${runtime.communicationLog.length} needsUserDecision=${runtime.status.needsUserDecision}`);
+  }
   if (run.failure) console.log(`- failure: ${run.failure.class} retryable=${run.failure.retryable} needsUserDecision=${run.failure.needsUserDecision} source=${run.failure.source}`);
   return 0;
 }
@@ -819,6 +845,12 @@ function runFinish(args) {
   if (!expectedFailureFinishStatus(finishResult, requestedStatus)) return finishResult.status ?? 1;
 
   const run = readRun(source.runsDir, args.runId);
+  try {
+    const runtimeUpdate = updateOrchestrationRuntimeAfterFinish(source, run);
+    if (runtimeUpdate) console.log(`Updated orchestration runtime: ${displayPath(runtimeUpdate.filePath)} phase=${runtimeUpdate.runtime.status.phase}`);
+  } catch (error) {
+    console.error(`warning: orchestration runtime was not updated: ${error.message}`);
+  }
   const task = requireTask(source, run.taskId);
   const runStatus = finishStatusFromRun(run);
   if (args.noTaskTransition) {

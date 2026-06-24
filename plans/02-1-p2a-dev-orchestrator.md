@@ -1,8 +1,8 @@
 # 02-1 p2a-dev-orchestrator 개발 계획
 
-작성일: 2026-06-23 · 상태: MVP 1차 구현 완료, O7 Hermes proposal queue/review/curation/patch draft/approval execution bridge 완료 · 상위 문서: `plans/02-development-team-ai-agent.md` · 연결 문서: `plans/01-product-roadmap.md`, `plans/03-p2a-gui-mvp.md`
+작성일: 2026-06-23 · 상태: MVP 1차 구현 완료, 오케스트레이션 runtime 1단계 완료, O7 Hermes proposal queue/review/curation/patch draft/approval execution bridge 완료 · 상위 문서: `plans/02-development-team-ai-agent.md` · 연결 문서: `plans/01-product-roadmap.md`, `plans/03-p2a-gui-mvp.md`
 
-이 문서는 Team Big Five의 `team-lead` 역할을 Plan2Agent-native로 구현하기 위한 최소 개발 계획이다. 목표는 여러 agent를 무인으로 돌리는 것이 아니라, 기존 CLI-first 하네스 위에서 **어떤 task를 solo/team으로 처리할지 판단하고, 역할별 실행 계획과 검증 흐름을 파일로 남기는 것**이다. 최신 GUI는 task/run/artifact와 PTY 실행을 다루며, orchestration mode/role/monitor gate 표시는 후속 표면으로 둔다.
+이 문서는 Team Big Five의 `team-lead` 역할을 Plan2Agent-native로 구현하기 위한 최소 개발 계획이다. 목표는 여러 agent를 무인으로 돌리는 것이 아니라, 기존 CLI-first 하네스 위에서 **어떤 task를 solo/team으로 처리할지 판단하고, 역할별 실행 계획, shared mental model, communication log, 검증 흐름을 파일로 남기는 것**이다. 최신 GUI는 task/run/artifact와 PTY 실행을 다루며, orchestration mode/role/runtime/monitor gate 표시는 후속 표면으로 둔다.
 
 ## 0. 이번 브랜치 구현 상태
 
@@ -11,6 +11,7 @@
 - `orchestration-plan.schema.json`과 validator 연결.
 - `p2a_orchestrate.mjs plan/show/validate/handoff` CLI.
 - `p2a_execute start --orchestration-plan <path>` run sidecar 연결.
+- `orchestration-runtime.schema.json`, `p2a_orchestrate init-runtime/record/runtime-status`, `p2a_execute start` runtime sidecar 자동 초기화.
 - monitor verdict 기반 `finish` 차단/blocked 변환.
 - `p2a-dev-orchestrator` read-only agent와 CLI mirror.
 - scaffold/handoff 복사 대상, fixture, CLI 문서 갱신.
@@ -35,12 +36,13 @@
 - `p2a-performance-monitor`: 실행 결과 독립 검증 계약.
 - `p2a-skill-curator`: Hermes식 proposal 검토 계약.
 - Team Big Five adapter 설치: CLI별 kickoff 파일 설치와 source manifest 기록.
+- `orchestration-runtime.schema.json`: run-level shared mental model, role assignment, communication log, runtime phase 기록.
 
 아직 후속으로 남긴 것:
 
 - agent-generated orchestration plan.
-- shared mental model 파일과 closed-loop communication 기록.
 - 실제 multi-session PTY scheduler.
+- 자동 role/monitor 호출.
 - 실패 시 retry/ask/blocked 판단 규칙.
 
 ## 2. MVP 목표
@@ -53,6 +55,7 @@ MVP는 아래를 개발 완료 기준으로 본다.
 | execution plan | 역할, agent tool, 작업 범위, 검증 명령, monitor gate를 구조화 JSON으로 만든다 |
 | supervised CLI handoff | CLI에서 사람이 열 수 있는 agent별 session command/prompt를 출력한다 |
 | run 연결 | orchestration plan id와 역할별 session 결과를 `runs/<runId>.orchestration.json` sidecar로 추적한다 |
+| runtime 연결 | shared mental model, role assignment, communication log를 `runs/<runId>.orchestration-runtime.json` sidecar로 추적한다 |
 | monitor gate | finish 전에 필요한 verdict 경로와 허용 verdict, failureClass mapping을 명시한다 |
 | 안전 경계 | planning artifact 직접 수정, 무인 실행, 자동 push/merge를 금지한다 |
 
@@ -95,11 +98,15 @@ MVP에서 하지 않는 것:
    - `show`: 저장된 plan 표시.
    - `validate`: schema와 task/run 참조 검증.
    - `handoff`: 역할별 agent prompt/command 출력.
+   - `init-runtime`: run-level shared mental model과 communication log sidecar 생성.
+   - `record`: 실행 중 status/question/decision/verification/monitor verdict 이벤트 기록.
+   - `runtime-status`: runtime phase와 role/event 상태 표시.
 
-5. run sidecar
+5. run/runtime sidecar
    - 저장 위치는 `runs/<runId>.orchestration.json`로 고정한다.
+   - runtime 저장 위치는 `runs/<runId>.orchestration-runtime.json`로 고정한다.
    - MVP에서는 `task-graph.schema.json`과 `run.schema.json`을 바꾸지 않는다.
-   - run log에는 필요할 때 표시용 plan id만 문자열로 남기고, 상세 계약은 sidecar가 정본이다.
+   - run log에는 필요할 때 표시용 plan id만 문자열로 남기고, 상세 계약은 sidecar들이 정본이다.
 
 ## 4. 개발 순서
 
@@ -143,12 +150,14 @@ MVP에서 하지 않는 것:
 
 - `p2a_execute start --orchestration-plan <path>` 또는 동등 옵션으로 plan id를 run에 연결한다.
 - run sidecar는 `runs/<runId>.orchestration.json`에 저장한다.
+- runtime sidecar는 `runs/<runId>.orchestration-runtime.json`에 자동 초기화한다.
 - finish 시 `monitorGate.required`가 true이면 `monitorGate.verdictPath`의 verdict를 확인한다.
 - 허용되지 않은 verdict는 `failureClassMap`에 따라 기존 failureClass로 변환한다.
 
 완료 기준:
 
 - run show/list에서 orchestration mode와 plan id를 확인할 수 있다.
+- status에서 orchestration runtime phase와 event count를 확인할 수 있다.
 - monitor gate가 필요한 run은 verdict 없이 done 처리되지 않는다.
 - `run.schema.json` 확장 없이 sidecar validation으로 계약을 검증한다.
 
@@ -193,7 +202,7 @@ MVP에서 하지 않는 것:
 후속:
 
 - Hermes 고도화는 store/DB 단계로 연기한다. 실제 적용 patch 생성, skipped-verification rationale 표준화, 반복 failureClass/source/targetFiles 통계, cross-session recall, 검색/DB 저장은 지금 구현하지 않고 나중에 방향을 다시 논의한다.
-- 이번 단계의 다음 구현 축은 GUI 자체가 아니라 shared mental model, closed-loop communication, 실제 multi-session scheduler 같은 오케스트레이션 런타임 고도화다.
+- 이번 단계의 다음 구현 축은 GUI 자체가 아니라 실제 multi-session scheduler와 자동 role/monitor 호출 같은 오케스트레이션 런타임 고도화 2단계다.
 
 ## 5. Team Big Five 완료 판단
 
@@ -201,13 +210,12 @@ MVP 완료:
 
 - `team-lead` 역할을 `p2a-dev-orchestrator`가 담당한다.
 - task triage와 역할별 실행 계획이 구조화 파일로 남는다.
+- shared mental model과 closed-loop communication log가 runtime sidecar로 남는다.
 - contributor와 monitor가 기존 `p2a-implementer`, `p2a-performance-monitor` 계약으로 연결된다.
 - CLI에서 사람이 감독하며 팀 실행을 진행할 수 있다.
 
 완성형 완료:
 
-- shared mental model 파일이 실행 중 유지된다.
-- closed-loop communication 결과가 run history에 남는다.
 - team mode에서 실패/retry/ask-user 판단이 일관되게 동작한다.
 - 여러 session을 병렬/순차로 안전하게 조율하는 scheduler가 있다.
 
@@ -232,6 +240,7 @@ MVP 연결:
 | 결정 | 기본값 |
 | --- | --- |
 | orchestration plan 저장 위치 | `runs/<runId>.orchestration.json`. task graph/run schema는 변경하지 않음 |
+| orchestration runtime 저장 위치 | `runs/<runId>.orchestration-runtime.json`. task graph/run schema는 변경하지 않음 |
 | MVP planner | deterministic CLI heuristic |
 | triage 기본값 | `targetArea`의 명시 다중 영역(comma/plus/ampersand/`and`)은 `team`, acceptance criteria 6개 이상은 `solo_monitor`, 의존성 2개 이상은 risk flag만 기록하고 monitor gate를 강제하지 않음 |
 | orchestrator agent 역할 | plan review/proposal. 자동 적용 없음 |

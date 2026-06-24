@@ -5,13 +5,16 @@ import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, writeFile
 import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { loadJson, validateOrchestrationPlanData, validateTaskGraphData, ValidationError } from './validate_artifacts.mjs';
+import { loadJson, validateOrchestrationPlanData, validateOrchestrationRuntimeData, validateTaskGraphData, ValidationError } from './validate_artifacts.mjs';
 import { resolveIterationState } from './p2a_iteration_state.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const ROOT = path.resolve(path.dirname(__filename), '..');
-const COMMANDS = new Set(['plan', 'show', 'validate', 'handoff']);
+const COMMANDS = new Set(['plan', 'show', 'validate', 'handoff', 'init-runtime', 'record', 'runtime-status']);
 const AGENT_TOOLS = new Set(['codex', 'claude', 'gemini', 'manual']);
+const RUNTIME_EVENT_TYPES = new Set(['handoff', 'status', 'question', 'answer', 'ack', 'concern', 'decision', 'blocker', 'verification', 'monitor_verdict', 'owner_note']);
+const RUNTIME_ROLE_STATUSES = new Set(['pending', 'active', 'blocked', 'complete', 'skipped']);
+const RUNTIME_PHASES = new Set(['initialized', 'running', 'blocked', 'ready_for_monitor', 'ready_to_finish', 'closed']);
 const DEFAULT_HANDOFF_GRAPH = path.join('.plan2agent', 'artifacts', 'task-graph.json');
 const HIGH_ACCEPTANCE_MONITOR_THRESHOLD = 6;
 
@@ -22,12 +25,18 @@ function usage() {
     '  node scripts/p2a_orchestrate.mjs show --plan <path>',
     '  node scripts/p2a_orchestrate.mjs validate --plan <path>',
     '  node scripts/p2a_orchestrate.mjs handoff --plan <path>',
+    '  node scripts/p2a_orchestrate.mjs init-runtime --plan <path> --run-id <run-id> [--output <path>] [--json]',
+    '  node scripts/p2a_orchestrate.mjs record --runtime <path> --role <role-id> --type <type> --summary <text> [options]',
+    '  node scripts/p2a_orchestrate.mjs runtime-status --runtime <path> [--json]',
     '',
     'Commands:',
     '  plan                 Create a deterministic supervised orchestration plan. No task/run files are changed.',
     '  show                 Print a compact plan summary.',
     '  validate             Validate an orchestration plan JSON file.',
     '  handoff              Print the owner start command and role prompts for the plan.',
+    '  init-runtime         Create the run-level shared mental model and communication log sidecar.',
+    '  record               Append one runtime communication event.',
+    '  runtime-status       Print the runtime phase, role status, and latest communication event.',
     '',
     'Source options:',
     '  --artifacts <dir>    Iterative artifact root; uses the active iteration task graph.',
@@ -41,6 +50,18 @@ function usage() {
     '  --reviewer-tool <tool>   Read-only reviewer/monitor tool label. Default: gemini.',
     '  --output <path>          Write plan JSON to a file. Without this, JSON is printed to stdout.',
     '  --json                   With --output, also print the JSON payload.',
+    '',
+    'Runtime options:',
+    '  --run-id <run-id>         Run id for init-runtime.',
+    '  --runtime <path>          Runtime sidecar path for record/status.',
+    '  --role <role-id>          Role assignment that writes the record event.',
+    `  --type <type>             Event type: ${[...RUNTIME_EVENT_TYPES].join(', ')}.`,
+    '  --summary <text>          Event summary.',
+    '  --detail <text>           Optional event detail.',
+    '  --linked-role <role-id>   Optional related role assignment.',
+    `  --role-status <status>    Update the event role status: ${[...RUNTIME_ROLE_STATUSES].join(', ')}.`,
+    `  --phase <phase>           Update runtime phase: ${[...RUNTIME_PHASES].join(', ')}.`,
+    '  --requires-owner-action  Mark the event as requiring owner action.',
     '',
     '  --help, -h          Show this help.',
   ].join('\n');
@@ -62,6 +83,16 @@ function parseArgs(argv) {
     reviewerTool: 'gemini',
     output: null,
     plan: null,
+    runtime: null,
+    runId: null,
+    roleId: null,
+    eventType: null,
+    summary: null,
+    detail: null,
+    linkedRoleId: null,
+    roleStatus: null,
+    phase: null,
+    requiresOwnerAction: false,
     json: false,
     help: false,
   };
@@ -78,6 +109,16 @@ function parseArgs(argv) {
     else if (arg === '--reviewer-tool') args.reviewerTool = parseAgentTool(requiredValue(argv, ++index, '--reviewer-tool'), '--reviewer-tool');
     else if (arg === '--output') args.output = requiredValue(argv, ++index, '--output');
     else if (arg === '--plan') args.plan = requiredValue(argv, ++index, '--plan');
+    else if (arg === '--runtime') args.runtime = requiredValue(argv, ++index, '--runtime');
+    else if (arg === '--run-id') args.runId = requiredValue(argv, ++index, '--run-id');
+    else if (arg === '--role') args.roleId = requiredValue(argv, ++index, '--role');
+    else if (arg === '--type') args.eventType = parseEnumValue(requiredValue(argv, ++index, '--type'), RUNTIME_EVENT_TYPES, '--type');
+    else if (arg === '--summary') args.summary = requiredValue(argv, ++index, '--summary');
+    else if (arg === '--detail') args.detail = requiredValue(argv, ++index, '--detail');
+    else if (arg === '--linked-role') args.linkedRoleId = requiredValue(argv, ++index, '--linked-role');
+    else if (arg === '--role-status') args.roleStatus = parseEnumValue(requiredValue(argv, ++index, '--role-status'), RUNTIME_ROLE_STATUSES, '--role-status');
+    else if (arg === '--phase') args.phase = parseEnumValue(requiredValue(argv, ++index, '--phase'), RUNTIME_PHASES, '--phase');
+    else if (arg === '--requires-owner-action') args.requiresOwnerAction = true;
     else if (arg === '--json') args.json = true;
     else if (arg.startsWith('--')) throw new Error(`unknown option: ${arg}`);
     else throw new Error(`unexpected argument: ${arg}`);
@@ -93,10 +134,33 @@ function parseArgs(argv) {
     }
     if (args.spec && args.artifacts) throw new Error('--spec is only supported with --graph; --artifacts uses the active iteration spec');
     if (args.maintenance && !args.artifacts) throw new Error('--maintenance is only supported with --artifacts');
-  } else {
+    if (args.plan || args.runtime || args.runId || args.roleId || args.eventType || args.summary || args.detail || args.linkedRoleId || args.roleStatus || args.phase || args.requiresOwnerAction) {
+      throw new Error('runtime/show options are not supported with plan');
+    }
+  } else if (['show', 'validate', 'handoff'].includes(args.command)) {
     if (!args.plan) throw new Error(`--plan is required for ${args.command}`);
-    if (args.artifacts || args.graph || args.spec || args.maintenance || args.taskId || args.output) {
+    if (args.artifacts || args.graph || args.spec || args.maintenance || args.taskId || args.output || args.runtime || args.runId || args.roleId || args.eventType || args.summary || args.detail || args.linkedRoleId || args.roleStatus || args.phase || args.requiresOwnerAction) {
       throw new Error(`${args.command} only supports --plan and --json`);
+    }
+  } else if (args.command === 'init-runtime') {
+    if (!args.plan) throw new Error('--plan is required for init-runtime');
+    if (!args.runId) throw new Error('--run-id is required for init-runtime');
+    assertSafeRunId(args.runId);
+    if (args.artifacts || args.graph || args.spec || args.maintenance || args.taskId || args.runtime || args.roleId || args.eventType || args.summary || args.detail || args.linkedRoleId || args.roleStatus || args.phase || args.requiresOwnerAction) {
+      throw new Error('init-runtime only supports --plan, --run-id, --output, and --json');
+    }
+  } else if (args.command === 'record') {
+    if (!args.runtime) throw new Error('--runtime is required for record');
+    if (!args.roleId) throw new Error('--role is required for record');
+    if (!args.eventType) throw new Error('--type is required for record');
+    if (!args.summary) throw new Error('--summary is required for record');
+    if (args.artifacts || args.graph || args.spec || args.maintenance || args.taskId || args.output || args.plan || args.runId) {
+      throw new Error('record only supports --runtime, --role, --type, --summary, --detail, --linked-role, --role-status, --phase, --requires-owner-action, and --json');
+    }
+  } else if (args.command === 'runtime-status') {
+    if (!args.runtime) throw new Error('--runtime is required for runtime-status');
+    if (args.artifacts || args.graph || args.spec || args.maintenance || args.taskId || args.output || args.plan || args.runId || args.roleId || args.eventType || args.summary || args.detail || args.linkedRoleId || args.roleStatus || args.phase || args.requiresOwnerAction) {
+      throw new Error('runtime-status only supports --runtime and --json');
     }
   }
   return args;
@@ -104,6 +168,11 @@ function parseArgs(argv) {
 
 function parseAgentTool(value, optionName) {
   if (!AGENT_TOOLS.has(value)) throw new Error(`${optionName} must be one of ${[...AGENT_TOOLS].join(', ')}`);
+  return value;
+}
+
+function parseEnumValue(value, allowedValues, optionName) {
+  if (!allowedValues.has(value)) throw new Error(`${optionName} must be one of ${[...allowedValues].join(', ')}`);
   return value;
 }
 
@@ -116,6 +185,12 @@ function requiredValue(argv, index, optionName) {
 function assertFile(filePath, label) {
   if (!existsSync(filePath)) throw new Error(`${label} is missing: ${filePath}`);
   if (!lstatSync(filePath).isFile()) throw new Error(`${label} must be a file: ${filePath}`);
+}
+
+function assertSafeRunId(runId) {
+  if (!/^run-[A-Za-z0-9._-]+$/.test(runId)) {
+    throw new Error(`run id must start with run- and contain only letters, digits, dot, underscore, or hyphen: ${runId}`);
+  }
 }
 
 function normalizePath(filePath) {
@@ -240,6 +315,35 @@ function modeForRiskFlags(flags) {
 function generatedPlanId(taskId, now) {
   const timestamp = now.toISOString().replace(/[^0-9A-Za-z]+/g, '-').replace(/^-|-$/g, '');
   return `orch-${timestamp}-${taskId}`;
+}
+
+function generatedRuntimeId(runId) {
+  assertSafeRunId(runId);
+  return `runtime-${runId}`;
+}
+
+function generatedRuntimeSlug(now) {
+  return now.toISOString().replace(/[^0-9A-Za-z]+/g, '-').replace(/^-|-$/g, '');
+}
+
+function sanitizeRuntimeToken(value) {
+  return String(value).replace(/[^0-9A-Za-z._-]+/g, '-').replace(/^-|-$/g, '') || 'event';
+}
+
+function generatedEventId(now, label, index = 0) {
+  const suffix = index > 0 ? `-${index}` : '';
+  return `event-${generatedRuntimeSlug(now)}-${sanitizeRuntimeToken(label)}${suffix}`;
+}
+
+function nextEventId(runtime, now, type) {
+  const existing = new Set(runtime.communicationLog.map((event) => event.eventId));
+  let index = runtime.communicationLog.length + 1;
+  let candidate = generatedEventId(now, type, index);
+  while (existing.has(candidate)) {
+    index += 1;
+    candidate = generatedEventId(now, type, index);
+  }
+  return candidate;
 }
 
 function buildTaskPrompt(task) {
@@ -382,6 +486,172 @@ function loadPlan(filePath) {
   return validateOrchestrationPlanData(JSON.parse(readFileSync(filePath, 'utf8')));
 }
 
+export function orchestrationRuntimePath(runsDir, runId) {
+  assertSafeRunId(runId);
+  return path.join(runsDir, `${runId}.orchestration-runtime.json`);
+}
+
+export function readOrchestrationRuntime(filePath) {
+  assertFile(filePath, 'orchestration runtime');
+  return validateOrchestrationRuntimeData(JSON.parse(readFileSync(filePath, 'utf8')));
+}
+
+function runtimeRoleStatusFor(role) {
+  if (role.roleId === 'owner' || role.roleId === 'implementer') return 'active';
+  return 'pending';
+}
+
+function runtimeRoleMap(runtimeOrPlan) {
+  const roles = runtimeOrPlan.roles ?? runtimeOrPlan.sharedMentalModel?.roleAssignments ?? [];
+  return new Map(roles.map((role) => [role.roleId, role]));
+}
+
+export function buildInitialRuntime(plan, runId, sourcePlanRef = null, now = new Date()) {
+  assertSafeRunId(runId);
+  const createdAt = now.toISOString();
+  const rolesById = runtimeRoleMap(plan);
+  const communicationLog = plan.handoffPrompts.map((prompt, index) => {
+    const role = rolesById.get(prompt.roleId);
+    return {
+      eventId: generatedEventId(now, `handoff-${prompt.roleId}`, index + 1),
+      createdAt,
+      roleId: prompt.roleId,
+      role: role.role,
+      agentTool: role.agentTool,
+      type: 'handoff',
+      summary: `Handoff prepared for ${prompt.roleId}`,
+      detail: prompt.prompt,
+      linkedRoleId: null,
+      requiresOwnerAction: false,
+    };
+  });
+  const runtime = {
+    schema_version: 'p2a.orchestration_runtime.v1',
+    runtimeId: generatedRuntimeId(runId),
+    projectId: plan.projectId,
+    taskId: plan.taskId,
+    taskTitle: plan.taskTitle,
+    runId,
+    planId: plan.planId,
+    mode: plan.mode,
+    sourcePlanRef: sourcePlanRef ?? plan.runLink?.sidecarRef ?? `${runId}.orchestration.json`,
+    createdAt,
+    updatedAt: createdAt,
+    sharedMentalModel: {
+      objective: `Complete ${plan.taskId}: ${plan.taskTitle}`,
+      currentState: `Run ${runId} is started and role handoff prompts are prepared.`,
+      constraints: [
+        'Use p2a_execute and p2a_runs for run lifecycle changes; do not edit run logs by hand.',
+        'Do not change the task graph or planning artifacts unless the owner explicitly approves it.',
+        ...plan.roles.map((role) => `${role.roleId}: ${role.scope}`),
+      ],
+      acceptanceCriteria: plan.acceptanceCriteria,
+      roleAssignments: plan.roles.map((role) => ({
+        roleId: role.roleId,
+        role: role.role,
+        agentTool: role.agentTool,
+        scope: role.scope,
+        status: runtimeRoleStatusFor(role),
+      })),
+      decisions: [],
+      openQuestions: [],
+      risks: plan.riskFlags,
+    },
+    communicationLog,
+    status: {
+      phase: 'running',
+      blocked: false,
+      needsUserDecision: false,
+      lastEventId: communicationLog.at(-1)?.eventId ?? null,
+    },
+  };
+  return validateOrchestrationRuntimeData(runtime);
+}
+
+export function writeOrchestrationRuntimeForRun(plan, runsDir, runId, now = new Date()) {
+  const sourcePlanRef = plan.runLink?.sidecarRef ?? `${runId}.orchestration.json`;
+  const runtime = buildInitialRuntime(plan, runId, sourcePlanRef, now);
+  const filePath = orchestrationRuntimePath(runsDir, runId);
+  return { filePath: writeJson(filePath, runtime), runtime };
+}
+
+function roleAssignment(runtime, roleId) {
+  const role = runtime.sharedMentalModel.roleAssignments.find((item) => item.roleId === roleId);
+  if (!role) throw new Error(`unknown runtime role: ${roleId}`);
+  return role;
+}
+
+function appendRuntimeEvent(runtime, args, now = new Date()) {
+  const role = roleAssignment(runtime, args.roleId);
+  const linkedRole = args.linkedRoleId ? roleAssignment(runtime, args.linkedRoleId) : null;
+  const createdAt = now.toISOString();
+  const event = {
+    eventId: nextEventId(runtime, now, args.eventType),
+    createdAt,
+    roleId: role.roleId,
+    role: role.role,
+    agentTool: role.agentTool,
+    type: args.eventType,
+    summary: args.summary,
+    detail: args.detail ?? null,
+    linkedRoleId: linkedRole?.roleId ?? null,
+    requiresOwnerAction: args.requiresOwnerAction || ['question', 'concern', 'blocker'].includes(args.eventType),
+  };
+  runtime.communicationLog.push(event);
+  if (args.roleStatus) role.status = args.roleStatus;
+  if (args.eventType === 'decision') {
+    runtime.sharedMentalModel.decisions.push({
+      decisionId: `decision-${event.eventId.slice('event-'.length)}`,
+      summary: event.summary,
+      rationale: event.detail,
+      createdAt,
+      roleId: role.roleId,
+    });
+  }
+  if (args.eventType === 'question') {
+    runtime.sharedMentalModel.openQuestions.push({
+      questionId: `question-${event.eventId.slice('event-'.length)}`,
+      summary: event.summary,
+      askedByRoleId: role.roleId,
+      targetRoleId: linkedRole?.roleId ?? null,
+      status: 'open',
+      answer: null,
+      createdAt,
+      answeredAt: null,
+    });
+  }
+  runtime.updatedAt = createdAt;
+  runtime.status.lastEventId = event.eventId;
+  runtime.status.phase = args.phase ?? inferredRuntimePhase(runtime.status.phase, args.eventType);
+  runtime.status.blocked = runtime.status.blocked || runtime.status.phase === 'blocked' || args.eventType === 'blocker' || args.roleStatus === 'blocked';
+  runtime.status.needsUserDecision = runtime.status.needsUserDecision || event.requiresOwnerAction;
+  return { runtime: validateOrchestrationRuntimeData(runtime), event };
+}
+
+export function recordOrchestrationRuntimeEvent(filePath, eventInput, now = new Date()) {
+  const runtime = readOrchestrationRuntime(filePath);
+  const { runtime: updatedRuntime, event } = appendRuntimeEvent(runtime, {
+    roleId: eventInput.roleId,
+    eventType: eventInput.eventType,
+    summary: eventInput.summary,
+    detail: eventInput.detail ?? null,
+    linkedRoleId: eventInput.linkedRoleId ?? null,
+    roleStatus: eventInput.roleStatus ?? null,
+    phase: eventInput.phase ?? null,
+    requiresOwnerAction: eventInput.requiresOwnerAction ?? false,
+  }, now);
+  writeJson(filePath, updatedRuntime);
+  return { runtime: updatedRuntime, event };
+}
+
+function inferredRuntimePhase(currentPhase, eventType) {
+  if (eventType === 'blocker') return 'blocked';
+  if (eventType === 'verification') return 'ready_for_monitor';
+  if (eventType === 'monitor_verdict') return 'ready_to_finish';
+  if (currentPhase === 'initialized') return 'running';
+  return currentPhase;
+}
+
 function commandLine(scriptName, args) {
   return ['node', `scripts/${scriptName}`, ...args].map(shellQuote).join(' ');
 }
@@ -462,6 +732,74 @@ function runHandoff(args) {
   return 0;
 }
 
+function runInitRuntime(args) {
+  const planPath = path.resolve(args.plan);
+  const plan = loadPlan(planPath);
+  const runtime = buildInitialRuntime(plan, args.runId, displayPath(planPath));
+  const payload = `${JSON.stringify(runtime, null, 2)}\n`;
+  if (args.output) {
+    const outputPath = writeJson(args.output, runtime);
+    console.log('Plan2Agent orchestration runtime initialized');
+    console.log(`- runtimeId: ${runtime.runtimeId}`);
+    console.log(`- runId: ${runtime.runId}`);
+    console.log(`- task: ${runtime.taskId} - ${runtime.taskTitle}`);
+    console.log(`- phase: ${runtime.status.phase}`);
+    console.log(`- events: ${runtime.communicationLog.length}`);
+    console.log(`- written: ${displayPath(outputPath)}`);
+    if (args.json) process.stdout.write(payload);
+  } else {
+    process.stdout.write(payload);
+  }
+  return 0;
+}
+
+function runRecord(args) {
+  const runtimePath = path.resolve(args.runtime);
+  const { runtime: updatedRuntime, event } = recordOrchestrationRuntimeEvent(runtimePath, {
+    roleId: args.roleId,
+    eventType: args.eventType,
+    summary: args.summary,
+    detail: args.detail,
+    linkedRoleId: args.linkedRoleId,
+    roleStatus: args.roleStatus,
+    phase: args.phase,
+    requiresOwnerAction: args.requiresOwnerAction,
+  });
+  if (args.json) {
+    process.stdout.write(`${JSON.stringify(updatedRuntime, null, 2)}\n`);
+    return 0;
+  }
+  console.log('Plan2Agent orchestration runtime event recorded');
+  console.log(`- runtimeId: ${updatedRuntime.runtimeId}`);
+  console.log(`- event: ${event.eventId} ${event.type}`);
+  console.log(`- role: ${event.roleId}`);
+  console.log(`- phase: ${updatedRuntime.status.phase}`);
+  console.log(`- needsUserDecision: ${updatedRuntime.status.needsUserDecision}`);
+  console.log(`- runtime: ${displayPath(runtimePath)}`);
+  return 0;
+}
+
+function runRuntimeStatus(args) {
+  const runtime = readOrchestrationRuntime(path.resolve(args.runtime));
+  if (args.json) {
+    process.stdout.write(`${JSON.stringify(runtime, null, 2)}\n`);
+    return 0;
+  }
+  const lastEvent = runtime.communicationLog.at(-1);
+  console.log('Plan2Agent orchestration runtime status');
+  console.log(`- runtimeId: ${runtime.runtimeId}`);
+  console.log(`- runId: ${runtime.runId}`);
+  console.log(`- task: ${runtime.taskId} - ${runtime.taskTitle}`);
+  console.log(`- mode: ${runtime.mode}`);
+  console.log(`- phase: ${runtime.status.phase}`);
+  console.log(`- blocked: ${runtime.status.blocked}`);
+  console.log(`- needsUserDecision: ${runtime.status.needsUserDecision}`);
+  console.log(`- roles: ${runtime.sharedMentalModel.roleAssignments.map((role) => `${role.roleId}:${role.status}`).join(', ')}`);
+  console.log(`- events: ${runtime.communicationLog.length}`);
+  if (lastEvent) console.log(`- lastEvent: ${lastEvent.eventId} ${lastEvent.type} ${lastEvent.roleId} - ${lastEvent.summary}`);
+  return 0;
+}
+
 export function main(argv = process.argv.slice(2)) {
   try {
     const args = parseArgs(argv);
@@ -473,6 +811,9 @@ export function main(argv = process.argv.slice(2)) {
     if (args.command === 'show') return runShow(args);
     if (args.command === 'validate') return runValidate(args);
     if (args.command === 'handoff') return runHandoff(args);
+    if (args.command === 'init-runtime') return runInitRuntime(args);
+    if (args.command === 'record') return runRecord(args);
+    if (args.command === 'runtime-status') return runRuntimeStatus(args);
     throw new Error(`unknown command: ${args.command}`);
   } catch (error) {
     const prefix = error instanceof ValidationError ? 'p2a orchestrate validation failed' : 'p2a orchestrate command failed';

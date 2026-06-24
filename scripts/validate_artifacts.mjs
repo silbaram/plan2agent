@@ -17,6 +17,7 @@ const SCHEMA_PATHS = {
   run: path.join(ROOT, 'schemas', 'run.schema.json'),
   run_index: path.join(ROOT, 'schemas', 'run-index.schema.json'),
   orchestration_plan: path.join(ROOT, 'schemas', 'orchestration-plan.schema.json'),
+  orchestration_runtime: path.join(ROOT, 'schemas', 'orchestration-runtime.schema.json'),
   skill_proposal: path.join(ROOT, 'schemas', 'skill-proposal.schema.json'),
   proposal_review: path.join(ROOT, 'schemas', 'proposal-review.schema.json'),
   proposal_curation: path.join(ROOT, 'schemas', 'proposal-curation.schema.json'),
@@ -580,6 +581,49 @@ export function validateOrchestrationPlan(filePath) {
   return validateOrchestrationPlanData(loadJson(filePath));
 }
 
+export function validateOrchestrationRuntimeData(data) {
+  validateSchema(data, loadJson(SCHEMA_PATHS.orchestration_runtime));
+  const roleAssignments = data.sharedMentalModel.roleAssignments;
+  const roleIds = roleAssignments.map((role) => role.roleId);
+  if (roleIds.length !== new Set(roleIds).size) {
+    throw new ValidationError('orchestration runtime roleAssignments[].roleId values must be unique');
+  }
+  const roleIdSet = new Set(roleIds);
+  const eventIds = data.communicationLog.map((event) => event.eventId);
+  if (eventIds.length !== new Set(eventIds).size) {
+    throw new ValidationError('orchestration runtime communicationLog[].eventId values must be unique');
+  }
+  for (const event of data.communicationLog) {
+    if (!roleIdSet.has(event.roleId)) {
+      throw new ValidationError(`orchestration runtime event ${event.eventId} references unknown roleId: ${event.roleId}`);
+    }
+    if (event.linkedRoleId !== null && !roleIdSet.has(event.linkedRoleId)) {
+      throw new ValidationError(`orchestration runtime event ${event.eventId} references unknown linkedRoleId: ${event.linkedRoleId}`);
+    }
+  }
+  for (const decision of data.sharedMentalModel.decisions) {
+    if (!roleIdSet.has(decision.roleId)) {
+      throw new ValidationError(`orchestration runtime decision ${decision.decisionId} references unknown roleId: ${decision.roleId}`);
+    }
+  }
+  for (const question of data.sharedMentalModel.openQuestions) {
+    if (!roleIdSet.has(question.askedByRoleId)) {
+      throw new ValidationError(`orchestration runtime question ${question.questionId} references unknown askedByRoleId: ${question.askedByRoleId}`);
+    }
+    if (question.targetRoleId !== null && !roleIdSet.has(question.targetRoleId)) {
+      throw new ValidationError(`orchestration runtime question ${question.questionId} references unknown targetRoleId: ${question.targetRoleId}`);
+    }
+  }
+  if (data.status.lastEventId !== null && !eventIds.includes(data.status.lastEventId)) {
+    throw new ValidationError(`orchestration runtime status.lastEventId references unknown eventId: ${data.status.lastEventId}`);
+  }
+  return data;
+}
+
+export function validateOrchestrationRuntime(filePath) {
+  return validateOrchestrationRuntimeData(loadJson(filePath));
+}
+
 export function validateSkillProposalData(data) {
   validateSchema(data, loadJson(SCHEMA_PATHS.skill_proposal));
   validateNonBlankStrings(data.targetFiles, `${data.proposalId}.targetFiles`);
@@ -767,10 +811,23 @@ export function validateRunsDir(runsDir) {
     if (runData.projectId !== index.projectId) {
       throw new ValidationError(`run ${run.runId} projectId does not match run-index projectId`);
     }
+    const runtimePath = path.join(runsDir, `${run.runId}.orchestration-runtime.json`);
+    if (existsSync(runtimePath)) {
+      const runtime = validateOrchestrationRuntime(runtimePath);
+      if (runtime.runId !== run.runId) {
+        throw new ValidationError(`orchestration runtime ${path.basename(runtimePath)} runId does not match run-index ${run.runId}`);
+      }
+      if (runtime.projectId !== index.projectId) {
+        throw new ValidationError(`orchestration runtime ${path.basename(runtimePath)} projectId does not match run-index projectId`);
+      }
+      if (runtime.taskId !== run.taskId) {
+        throw new ValidationError(`orchestration runtime ${path.basename(runtimePath)} taskId does not match run-index taskId`);
+      }
+    }
   }
   const indexedRunFiles = new Set(index.runs.map((run) => `${run.runId}.json`));
   const extraRunFiles = readdirSync(runsDir)
-    .filter((entry) => entry.endsWith('.json') && entry !== 'run-index.json' && !entry.endsWith('.orchestration.json') && !entry.endsWith('.monitor-verdict.json') && !indexedRunFiles.has(entry));
+    .filter((entry) => entry.endsWith('.json') && entry !== 'run-index.json' && !entry.endsWith('.orchestration.json') && !entry.endsWith('.orchestration-runtime.json') && !entry.endsWith('.monitor-verdict.json') && !indexedRunFiles.has(entry));
   if (extraRunFiles.length) {
     throw new ValidationError(`runs directory contains unindexed run file(s): ${extraRunFiles.join(', ')}`);
   }
@@ -1032,6 +1089,7 @@ function parseArgs(argv) {
     else if (arg === '--run-index') args.runIndex = argv[++index];
     else if (arg === '--runs-dir') args.runsDir = argv[++index];
     else if (arg === '--orchestration-plan') args.orchestrationPlan = argv[++index];
+    else if (arg === '--orchestration-runtime') args.orchestrationRuntime = argv[++index];
     else if (arg === '--skill-proposal') args.skillProposal = argv[++index];
     else if (arg === '--proposal-review') args.proposalReview = argv[++index];
     else if (arg === '--proposal-curation') args.proposalCuration = argv[++index];
@@ -1073,6 +1131,7 @@ export function main(argv = process.argv.slice(2)) {
     if (args.runIndex) validateRunIndex(args.runIndex);
     if (args.runsDir) validateRunsDir(args.runsDir);
     if (args.orchestrationPlan) validateOrchestrationPlan(args.orchestrationPlan);
+    if (args.orchestrationRuntime) validateOrchestrationRuntime(args.orchestrationRuntime);
     if (args.skillProposal) validateSkillProposal(args.skillProposal);
     if (args.proposalReview) validateProposalReview(args.proposalReview);
     if (args.proposalCuration) validateProposalCuration(args.proposalCuration);

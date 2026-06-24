@@ -173,7 +173,7 @@ function validateScaffoldFixtureCase() {
 
     const expectedScripts = ['p2a_iteration.mjs', 'p2a_tasks.mjs', 'p2a_runs.mjs', 'p2a_execute.mjs', 'p2a_orchestrate.mjs', 'p2a_proposals.mjs', 'p2a_run_paths.mjs', 'p2a_iteration_state.mjs', 'validate_artifacts.mjs']
       .map((file) => path.join('scripts', file));
-    const expectedSchemas = ['intake.schema.json', 'spec.schema.json', 'task-graph.schema.json', 'task-context.schema.json', 'review.schema.json', 'run.schema.json', 'run-index.schema.json', 'orchestration-plan.schema.json', 'skill-proposal.schema.json', 'proposal-review.schema.json', 'proposal-curation.schema.json', 'proposal-patch-draft.schema.json', 'proposal-draft-approval.schema.json']
+    const expectedSchemas = ['intake.schema.json', 'spec.schema.json', 'task-graph.schema.json', 'task-context.schema.json', 'review.schema.json', 'run.schema.json', 'run-index.schema.json', 'orchestration-plan.schema.json', 'orchestration-runtime.schema.json', 'skill-proposal.schema.json', 'proposal-review.schema.json', 'proposal-curation.schema.json', 'proposal-patch-draft.schema.json', 'proposal-draft-approval.schema.json']
       .map((file) => path.join('schemas', file));
     const expectedToolFiles = [
       path.join('.agents', 'skills', 'p2a-harness', 'SKILL.md'),
@@ -310,6 +310,7 @@ function validateE2eFixtureCases() {
         || !existsSync(path.join(targetRoot, 'schemas', 'run.schema.json'))
         || !existsSync(path.join(targetRoot, 'schemas', 'run-index.schema.json'))
         || !existsSync(path.join(targetRoot, 'schemas', 'orchestration-plan.schema.json'))
+        || !existsSync(path.join(targetRoot, 'schemas', 'orchestration-runtime.schema.json'))
         || !existsSync(path.join(targetRoot, 'schemas', 'skill-proposal.schema.json'))
         || !existsSync(path.join(targetRoot, 'schemas', 'proposal-review.schema.json'))
         || !existsSync(path.join(targetRoot, 'schemas', 'proposal-curation.schema.json'))
@@ -408,6 +409,7 @@ function validateE2eFixtureCases() {
         || !toolManifest.toolFiles.includes('scripts/p2a_run_paths.mjs')
         || !toolManifest.schemaFiles.includes('schemas/run.schema.json')
         || !toolManifest.schemaFiles.includes('schemas/orchestration-plan.schema.json')
+        || !toolManifest.schemaFiles.includes('schemas/orchestration-runtime.schema.json')
         || !toolManifest.schemaFiles.includes('schemas/proposal-review.schema.json')
         || !toolManifest.schemaFiles.includes('schemas/proposal-curation.schema.json')
         || !toolManifest.schemaFiles.includes('schemas/proposal-patch-draft.schema.json')
@@ -805,6 +807,63 @@ function validateIterationCurrentFixtureCases() {
         console.error(JSON.stringify({ executeSidecar }, null, 2));
         return { status: 1, checks };
       }
+      const executeRuntimePath = path.join(tempRoot, 'p2a-execute', 'runs', 'run-execute-fixture.orchestration-runtime.json');
+      result = runValidator(['--orchestration-runtime', executeRuntimePath]);
+      checks += 1;
+      if (result.status !== 0) {
+        console.error(`orchestration runtime validator fixture check failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: failureStatus(result), checks };
+      }
+      const executeRuntime = JSON.parse(readFileSync(executeRuntimePath, 'utf8'));
+      if (
+        executeRuntime.schema_version !== 'p2a.orchestration_runtime.v1'
+        || executeRuntime.runId !== 'run-execute-fixture'
+        || executeRuntime.planId !== executeSidecar.planId
+        || executeRuntime.sharedMentalModel.roleAssignments.length !== executeSidecar.roles.length
+        || !executeRuntime.communicationLog.some((event) => event.type === 'handoff')
+        || executeRuntime.status.phase !== 'running'
+      ) {
+        console.error(`p2a_execute start wrote unexpected orchestration runtime: ${caseData.id}`);
+        console.error(JSON.stringify({ executeRuntime, executeSidecar }, null, 2));
+        return { status: 1, checks };
+      }
+
+      result = runOrchestrate([
+        'record',
+        '--runtime',
+        executeRuntimePath,
+        '--role',
+        'implementer',
+        '--type',
+        'status',
+        '--summary',
+        'Implementation session opened',
+        '--role-status',
+        'active',
+      ]);
+      checks += 1;
+      if (result.status !== 0 || !result.stdout.includes('Plan2Agent orchestration runtime event recorded')) {
+        console.error(`p2a_orchestrate record fixture check failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: failureStatus(result), checks };
+      }
+      const executeRuntimeAfterRecord = JSON.parse(readFileSync(executeRuntimePath, 'utf8'));
+      if (
+        !executeRuntimeAfterRecord.communicationLog.some((event) => event.summary === 'Implementation session opened')
+        || executeRuntimeAfterRecord.sharedMentalModel.roleAssignments.find((role) => role.roleId === 'implementer')?.status !== 'active'
+      ) {
+        console.error(`p2a_orchestrate record wrote unexpected runtime state: ${caseData.id}`);
+        console.error(JSON.stringify({ executeRuntimeAfterRecord }, null, 2));
+        return { status: 1, checks };
+      }
+      result = runValidator(['--runs-dir', path.join(tempRoot, 'p2a-execute', 'runs')]);
+      checks += 1;
+      if (result.status !== 0) {
+        console.error(`runs dir validator did not accept orchestration runtime sidecar: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: failureStatus(result), checks };
+      }
       if (executeSidecar.monitorGate.required) {
         writeFileSync(path.join(tempRoot, 'p2a-execute', 'runs', executeSidecar.monitorGate.verdictPath), '{"verdict":"confirm_done"}\n', 'utf8');
       }
@@ -828,13 +887,17 @@ function validateIterationCurrentFixtureCases() {
       }
       const executeFinishedGraph = JSON.parse(readFileSync(executeGraphPath, 'utf8'));
       const executeFinishedRun = JSON.parse(readFileSync(path.join(tempRoot, 'p2a-execute', 'runs', 'run-execute-fixture.json'), 'utf8'));
+      const executeRuntimeAfterFinish = JSON.parse(readFileSync(executeRuntimePath, 'utf8'));
       if (
         executeFinishedGraph.tasks.find((task) => task.id === 'task-001')?.status !== 'done'
         || executeFinishedRun.status !== 'finished'
         || executeFinishedRun.changedFiles.join(',') !== 'src/execute-fixture.ts'
+        || executeRuntimeAfterFinish.status.phase !== 'closed'
+        || !executeRuntimeAfterFinish.communicationLog.some((event) => event.summary === 'Run run-execute-fixture finished with status finished')
+        || executeRuntimeAfterFinish.sharedMentalModel.roleAssignments.find((role) => role.roleId === 'owner')?.status !== 'complete'
       ) {
         console.error(`p2a_execute finish wrote unexpected state: ${caseData.id}`);
-        console.error(JSON.stringify({ executeFinishedGraph, executeFinishedRun }, null, 2));
+        console.error(JSON.stringify({ executeFinishedGraph, executeFinishedRun, executeRuntimeAfterFinish }, null, 2));
         return { status: 1, checks };
       }
 
@@ -937,14 +1000,17 @@ function validateIterationCurrentFixtureCases() {
       }
       const executeMonitorFinishedGraph = JSON.parse(readFileSync(executeMonitorGraphPath, 'utf8'));
       const executeMonitorFinishedRun = JSON.parse(readFileSync(path.join(tempRoot, 'p2a-execute-monitor', 'runs', 'run-execute-monitor-fixture.json'), 'utf8'));
+      const executeMonitorFinishedRuntime = JSON.parse(readFileSync(path.join(tempRoot, 'p2a-execute-monitor', 'runs', 'run-execute-monitor-fixture.orchestration-runtime.json'), 'utf8'));
       if (
         executeMonitorFinishedGraph.tasks.find((task) => task.id === 'task-001')?.status !== 'blocked'
         || executeMonitorFinishedRun.status !== 'blocked'
         || executeMonitorFinishedRun.failure?.class !== 'implementation_incomplete'
         || executeMonitorFinishedRun.failure?.source !== 'monitor'
+        || executeMonitorFinishedRuntime.status.phase !== 'blocked'
+        || executeMonitorFinishedRuntime.sharedMentalModel.roleAssignments.find((role) => role.roleId === 'owner')?.status !== 'blocked'
       ) {
         console.error(`p2a_execute monitor fixture wrote unexpected blocked state: ${caseData.id}`);
-        console.error(JSON.stringify({ executeMonitorFinishedGraph, executeMonitorFinishedRun }, null, 2));
+        console.error(JSON.stringify({ executeMonitorFinishedGraph, executeMonitorFinishedRun, executeMonitorFinishedRuntime }, null, 2));
         return { status: 1, checks };
       }
 
@@ -2459,6 +2525,7 @@ function validateIterationCurrentFixtureCases() {
         || !existsSync(path.join(iterationTargetRoot, 'scripts', 'p2a_proposals.mjs'))
         || !existsSync(path.join(iterationTargetRoot, 'schemas', 'run-index.schema.json'))
         || !existsSync(path.join(iterationTargetRoot, 'schemas', 'orchestration-plan.schema.json'))
+        || !existsSync(path.join(iterationTargetRoot, 'schemas', 'orchestration-runtime.schema.json'))
       ) {
         console.error(`iteration handoff did not copy active artifacts/current-spec/tools: ${caseData.id}`);
         return { status: 1, checks };
@@ -2484,6 +2551,7 @@ function validateIterationCurrentFixtureCases() {
         || !targetManifest.schemaFiles.includes('schemas/task-context.schema.json')
         || !targetManifest.schemaFiles.includes('schemas/run-index.schema.json')
         || !targetManifest.schemaFiles.includes('schemas/orchestration-plan.schema.json')
+        || !targetManifest.schemaFiles.includes('schemas/orchestration-runtime.schema.json')
         || !targetManifest.schemaFiles.includes('schemas/skill-proposal.schema.json')
         || !targetManifest.schemaFiles.includes('schemas/proposal-review.schema.json')
         || !targetManifest.schemaFiles.includes('schemas/proposal-curation.schema.json')
