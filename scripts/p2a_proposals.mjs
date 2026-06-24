@@ -13,16 +13,18 @@ import {
   validateRunData,
   validateRunIndexData,
   validateProposalPatchDraftData,
+  validateProposalDraftApprovalData,
   validateProposalCurationData,
   validateProposalReviewData,
   validateSkillProposal,
   validateSkillProposalData,
+  validateTaskGraphData,
   ValidationError,
 } from './validate_artifacts.mjs';
 import { DEFAULT_RUNS_DIR, resolveRunsDir } from './p2a_run_paths.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
-const COMMANDS = new Set(['mine', 'list', 'show', 'validate', 'digest', 'review', 'curate', 'draft-patch']);
+const COMMANDS = new Set(['mine', 'list', 'show', 'validate', 'digest', 'review', 'curate', 'draft-patch', 'approve-draft']);
 const DEFAULT_PROPOSALS_DIR = path.join('.plan2agent', 'proposals');
 const DEFAULT_HANDOFF_GRAPH = path.join('.plan2agent', 'artifacts', 'task-graph.json');
 
@@ -37,6 +39,7 @@ function usage() {
     '  node scripts/p2a_proposals.mjs review [--proposals <dir>] [--output <path>] [--dry-run] [--overwrite] [--json]',
     '  node scripts/p2a_proposals.mjs curate --review <path> [--proposals <dir>] [--output <path>] [--dry-run] [--overwrite] [--json]',
     '  node scripts/p2a_proposals.mjs draft-patch --curation <path> [--candidate-id <id>] [--proposals <dir>] [--output <path>] [--dry-run] [--overwrite] [--json]',
+    '  node scripts/p2a_proposals.mjs approve-draft --draft <path> --artifacts <iterative-project-dir> --approved-by <name> [--approval-note <text>] [--proposals <dir>] [--output <path>] [--dry-run] [--overwrite] [--json]',
     '',
     'Commands:',
     '  mine       Read run logs and orchestration sidecars, then write proposed skill-proposal JSON files.',
@@ -47,6 +50,7 @@ function usage() {
     '  review     Group proposals and write a deterministic curator review artifact.',
     '  curate     Turn a proposal review into approval-ready improvement candidates.',
     '  draft-patch Create a non-applying patch draft for one curation candidate.',
+    '  approve-draft Record human approval and append a maintenance task without applying files.',
     '',
     'Source options:',
     '  --artifacts <dir>   Iterative artifact root; reads runs/ and writes proposals/ under that root by default.',
@@ -55,13 +59,16 @@ function usage() {
     '  --proposals <dir>   Proposal queue directory. Default: sibling proposals/ beside runs/, or .plan2agent/proposals.',
     '  --review <path>     Proposal review JSON to curate.',
     '  --curation <path>   Proposal curation JSON to draft from.',
+    '  --draft <path>      Proposal patch draft JSON to approve.',
     '  --candidate-id <id> Candidate id for draft-patch. Required when curation has multiple candidates.',
-    '  --output <path>     Review/curation/patch-draft output path.',
+    '  --approved-by <name> Human approver recorded for approve-draft.',
+    '  --approval-note <text> Optional approval note recorded for approve-draft.',
+    '  --output <path>     Review/curation/patch-draft/approval output path.',
     '  --run-id <run-id>   Limit mine to one run.',
     '',
     '  --dry-run           Print candidates without writing files.',
     '  --overwrite         Replace an existing proposal file with the same proposalId.',
-    '  --json              Machine-readable output for mine/list/digest/review/curate/draft-patch.',
+    '  --json              Machine-readable output for mine/list/digest/review/curate/draft-patch/approve-draft.',
     '  --help, -h          Show this help.',
   ].join('\n');
 }
@@ -81,7 +88,10 @@ function parseArgs(argv) {
     proposalId: null,
     review: null,
     curation: null,
+    draft: null,
     candidateId: null,
+    approvedBy: null,
+    approvalNote: null,
     output: null,
     runId: null,
     dryRun: false,
@@ -101,7 +111,10 @@ function parseArgs(argv) {
     else if (arg === '--proposal-id') args.proposalId = requiredValue(argv, ++index, '--proposal-id');
     else if (arg === '--review') args.review = requiredValue(argv, ++index, '--review');
     else if (arg === '--curation') args.curation = requiredValue(argv, ++index, '--curation');
+    else if (arg === '--draft') args.draft = requiredValue(argv, ++index, '--draft');
     else if (arg === '--candidate-id') args.candidateId = requiredValue(argv, ++index, '--candidate-id');
+    else if (arg === '--approved-by') args.approvedBy = requiredValue(argv, ++index, '--approved-by');
+    else if (arg === '--approval-note') args.approvalNote = requiredValue(argv, ++index, '--approval-note');
     else if (arg === '--output') args.output = requiredValue(argv, ++index, '--output');
     else if (arg === '--run-id') args.runId = requiredValue(argv, ++index, '--run-id');
     else if (arg === '--dry-run') args.dryRun = true;
@@ -131,7 +144,15 @@ function parseArgs(argv) {
   if (args.command === 'draft-patch' && !args.curation) throw new Error('draft-patch requires --curation');
   if (args.curation && args.command !== 'draft-patch') throw new Error('--curation is only supported by draft-patch');
   if (args.candidateId && args.command !== 'draft-patch') throw new Error('--candidate-id is only supported by draft-patch');
-  if (args.output && !['review', 'curate', 'draft-patch'].includes(args.command)) throw new Error('--output is only supported by review, curate, or draft-patch');
+  if (args.command === 'approve-draft' && !args.draft) throw new Error('approve-draft requires --draft');
+  if (args.command === 'approve-draft' && !args.artifacts) throw new Error('approve-draft requires --artifacts');
+  if (args.command === 'approve-draft' && !args.approvedBy) throw new Error('approve-draft requires --approved-by');
+  if (args.draft && args.command !== 'approve-draft') throw new Error('--draft is only supported by approve-draft');
+  if (args.approvedBy && args.command !== 'approve-draft') throw new Error('--approved-by is only supported by approve-draft');
+  if (args.approvalNote && args.command !== 'approve-draft') throw new Error('--approval-note is only supported by approve-draft');
+  if (args.output && !['review', 'curate', 'draft-patch', 'approve-draft'].includes(args.command)) {
+    throw new Error('--output is only supported by review, curate, draft-patch, or approve-draft');
+  }
   if (args.runId) assertSafeRunId(args.runId);
   return args;
 }
@@ -151,6 +172,11 @@ function assertSafeRunId(runId) {
 function assertFile(filePath, label) {
   if (!existsSync(filePath)) throw new Error(`${label} is missing: ${filePath}`);
   if (!lstatSync(filePath).isFile()) throw new Error(`${label} must be a file: ${filePath}`);
+}
+
+function assertDirectory(dirPath, label) {
+  if (!existsSync(dirPath)) throw new Error(`${label} is missing: ${dirPath}`);
+  if (!lstatSync(dirPath).isDirectory()) throw new Error(`${label} must be a directory: ${dirPath}`);
 }
 
 function normalizePath(filePath) {
@@ -639,6 +665,10 @@ function patchDraftPath(proposalsDir, draftId) {
   return path.join(proposalsDir, 'patch-drafts', `${draftId}.json`);
 }
 
+function approvalPath(proposalsDir, approvalId) {
+  return path.join(proposalsDir, 'approvals', `${approvalId}.json`);
+}
+
 function assertReviewOutputPath(proposalsDir, filePath) {
   if (path.dirname(path.resolve(filePath)) === path.resolve(proposalsDir)) {
     throw new Error('--output must not write a review JSON directly inside the proposal queue root; use proposals/reviews/ or another directory');
@@ -654,6 +684,12 @@ function assertCurationOutputPath(proposalsDir, filePath) {
 function assertPatchDraftOutputPath(proposalsDir, filePath) {
   if (path.dirname(path.resolve(filePath)) === path.resolve(proposalsDir)) {
     throw new Error('--output must not write a patch draft JSON directly inside the proposal queue root; use proposals/patch-drafts/ or another directory');
+  }
+}
+
+function assertApprovalOutputPath(proposalsDir, filePath) {
+  if (path.dirname(path.resolve(filePath)) === path.resolve(proposalsDir)) {
+    throw new Error('--output must not write an approval JSON directly inside the proposal queue root; use proposals/approvals/ or another directory');
   }
 }
 
@@ -913,6 +949,164 @@ function writePatchDraft(filePath, draft, overwrite = false) {
   return { action: existed ? 'overwritten' : 'written', filePath };
 }
 
+function resolveProposalDirForApproval(args, draftFilePath) {
+  if (args.proposals) return path.resolve(args.proposals);
+  const draftDir = path.dirname(draftFilePath);
+  if (path.basename(draftDir) === 'patch-drafts') return path.dirname(draftDir);
+  return resolveProposalDir(args);
+}
+
+function maintenanceTaskGraphPathForArtifactRoot(artifactRoot) {
+  return path.join(artifactRoot, 'iterations', 'maintenance', 'gate-c-task-graph', 'task-graph.json');
+}
+
+function loadProjectIdForApproval(artifactRoot, graphPath) {
+  const currentSpecPath = path.join(artifactRoot, 'current-spec.json');
+  if (existsSync(currentSpecPath)) {
+    const currentSpec = loadJson(currentSpecPath);
+    if (typeof currentSpec.project_id === 'string' && currentSpec.project_id.trim()) return currentSpec.project_id.trim();
+    if (typeof currentSpec.projectId === 'string' && currentSpec.projectId.trim()) return currentSpec.projectId.trim();
+  }
+  if (existsSync(graphPath)) {
+    const graph = loadJson(graphPath);
+    if (typeof graph.projectId === 'string' && graph.projectId.trim()) return graph.projectId.trim();
+  }
+  return path.basename(path.resolve(artifactRoot)) || 'plan2agent-project';
+}
+
+function initialMaintenanceTaskGraph(projectId) {
+  return {
+    schema_version: 'p2a.task_graph.v1',
+    projectId,
+    version: 'maintenance',
+    sourceSpec: '../../../current-spec.json',
+    tasks: [],
+  };
+}
+
+function nextMaintenanceTaskId(tasks) {
+  const max = tasks.reduce((highest, task) => {
+    const match = typeof task.id === 'string' ? task.id.match(/^task-([0-9]+)$/) : null;
+    return match ? Math.max(highest, Number.parseInt(match[1], 10)) : highest;
+  }, 0);
+  return `task-${String(max + 1).padStart(3, '0')}`;
+}
+
+function buildProposalDraftApprovalId(draft, approvedBy, approvalNote) {
+  return `proposal-draft-approval-${stableHash({
+    draftId: draft.draftId,
+    candidateId: draft.candidateId,
+    approvedBy,
+    approvalNote: approvalNote ?? null,
+  })}`;
+}
+
+function proposalDraftApprovalRefs(draft, approvalId) {
+  return [
+    `proposal-draft-approval:${approvalId}`,
+    `proposal-patch-draft:${draft.draftId}`,
+    `proposal-candidate:${draft.candidateId}`,
+    `proposal-classification:${draft.classification}`,
+  ];
+}
+
+function verificationLine(item) {
+  const command = item.command ?? 'owner-approved skipped verification rationale';
+  return `${item.type}: ${command}`;
+}
+
+function patchDraftApprovalTask(projectId, draft, approvalId, taskId) {
+  const targetFiles = draft.targetFiles.join(', ');
+  const intendedChanges = draft.intendedChanges
+    .map((change) => `- ${change.file}: ${change.description}`)
+    .join('\n');
+  const verificationPlan = draft.verificationPlan
+    .map((item) => `- ${verificationLine(item)}`)
+    .join('\n');
+  return {
+    id: taskId,
+    title: `Apply approved proposal patch draft ${draft.draftId}`,
+    description: `Implement the human-approved proposal patch draft ${draft.draftId} for ${draft.title}. Target files: ${targetFiles}.`,
+    status: 'todo',
+    dependencies: [],
+    acceptanceCriteria: [
+      `The approved patch draft ${draft.draftId} is implemented within the recorded target files or each skipped target file has an explicit owner rationale.`,
+      'The implementation remains scoped to the approved proposal and does not broaden unrelated harness behavior.',
+      'The draft verification plan is run, or any intentionally skipped verification has an owner-approved rationale in the run notes.',
+    ],
+    targetArea: 'maintenance',
+    suggestedAgentPrompt: [
+      `Implement approved Plan2Agent proposal patch draft ${draft.draftId} in project ${projectId}.`,
+      `Approval artifact id: ${approvalId}. Candidate: ${draft.candidateId}. Source curation: ${draft.sourceCuration}.`,
+      `Target files: ${targetFiles}.`,
+      'Intended changes:',
+      intendedChanges,
+      'Verification plan:',
+      verificationPlan,
+      'Keep the change scoped to this approved proposal. Do not modify additional files unless the implementation requires it and the reason is recorded in the run notes.',
+    ].join('\n'),
+    sourceSpecRefs: proposalDraftApprovalRefs(draft, approvalId),
+  };
+}
+
+function planMaintenanceTaskForApproval(artifactRoot, draft, approvalId) {
+  const graphPath = maintenanceTaskGraphPathForArtifactRoot(artifactRoot);
+  const projectId = loadProjectIdForApproval(artifactRoot, graphPath);
+  const graph = existsSync(graphPath)
+    ? loadJson(graphPath)
+    : initialMaintenanceTaskGraph(projectId);
+  if (!Array.isArray(graph.tasks)) graph.tasks = [];
+  const draftRef = `proposal-patch-draft:${draft.draftId}`;
+  const existingTask = graph.tasks.find((task) => (task.sourceSpecRefs ?? []).includes(draftRef));
+  if (existingTask) {
+    const approvalRef = `proposal-draft-approval:${approvalId}`;
+    if (!existingTask.sourceSpecRefs.includes(approvalRef)) {
+      existingTask.sourceSpecRefs.push(approvalRef);
+      validateTaskGraphData(graph);
+      return { action: 'updated', graphPath, graph, task: existingTask, shouldWrite: true };
+    }
+    validateTaskGraphData(graph);
+    return { action: 'existing', graphPath, graph, task: existingTask, shouldWrite: false };
+  }
+  const task = patchDraftApprovalTask(projectId, draft, approvalId, nextMaintenanceTaskId(graph.tasks));
+  graph.tasks.push(task);
+  validateTaskGraphData(graph);
+  return { action: 'appended', graphPath, graph, task, shouldWrite: true };
+}
+
+function writeMaintenanceTaskGraph(graphPath, graph) {
+  mkdirSync(path.dirname(graphPath), { recursive: true });
+  writeFileSync(graphPath, `${JSON.stringify(graph, null, 2)}\n`, 'utf8');
+}
+
+function buildProposalDraftApproval(draft, draftFilePath, maintenancePlan, approvedBy, approvalNote, approvalId, approvedAt = new Date().toISOString()) {
+  return validateProposalDraftApprovalData({
+    schema_version: 'p2a.proposal_draft_approval.v1',
+    approvalId,
+    approvedAt,
+    approvedBy,
+    approvalNote: approvalNote ?? null,
+    sourceDraft: displayPath(draftFilePath),
+    draftId: draft.draftId,
+    candidateId: draft.candidateId,
+    autoApplyPerformed: false,
+    maintenanceTask: {
+      taskGraph: displayPath(maintenancePlan.graphPath),
+      taskId: maintenancePlan.task.id,
+      title: maintenancePlan.task.title,
+      sourceSpecRefs: maintenancePlan.task.sourceSpecRefs,
+    },
+  });
+}
+
+function writeApproval(filePath, approval, overwrite = false) {
+  const existed = existsSync(filePath);
+  if (existed && !overwrite) return { action: 'skipped', filePath };
+  mkdirSync(path.dirname(filePath), { recursive: true });
+  writeFileSync(filePath, `${JSON.stringify(approval, null, 2)}\n`, 'utf8');
+  return { action: existed ? 'overwritten' : 'written', filePath };
+}
+
 function runMine(args) {
   const runsDir = resolveRunsDirForProposals(args);
   const proposalsDir = resolveProposalDir(args);
@@ -1065,6 +1259,58 @@ function runDraftPatch(args) {
   return 0;
 }
 
+function runApproveDraft(args) {
+  const draftFilePath = path.resolve(args.draft);
+  assertFile(draftFilePath, 'proposal patch draft');
+  const artifactRoot = path.resolve(args.artifacts);
+  assertDirectory(artifactRoot, 'iterative artifact root');
+  const proposalsDir = resolveProposalDirForApproval(args, draftFilePath);
+  const approvedBy = args.approvedBy.trim();
+  const approvalNote = args.approvalNote?.trim() || null;
+  if (!approvedBy) throw new Error('--approved-by must not be blank');
+
+  const draft = validateProposalPatchDraftData(loadJson(draftFilePath));
+  const approvalId = buildProposalDraftApprovalId(draft, approvedBy, approvalNote);
+  const maintenancePlan = planMaintenanceTaskForApproval(artifactRoot, draft, approvalId);
+  const approval = buildProposalDraftApproval(draft, draftFilePath, maintenancePlan, approvedBy, approvalNote, approvalId);
+  const requestedFilePath = args.output ? path.resolve(args.output) : null;
+  if (requestedFilePath) assertApprovalOutputPath(proposalsDir, requestedFilePath);
+  const filePath = requestedFilePath ?? approvalPath(proposalsDir, approval.approvalId);
+
+  const taskGraphAction = args.dryRun
+    ? 'dry-run'
+    : maintenancePlan.shouldWrite
+      ? 'written'
+      : 'unchanged';
+  if (!args.dryRun && maintenancePlan.shouldWrite) {
+    writeMaintenanceTaskGraph(maintenancePlan.graphPath, maintenancePlan.graph);
+  }
+  const writeResult = args.dryRun
+    ? { action: 'dry-run', filePath }
+    : writeApproval(filePath, approval, args.overwrite);
+
+  if (args.json) {
+    console.log(JSON.stringify({
+      proposalsDir: displayPath(proposalsDir),
+      draftFile: displayPath(draftFilePath),
+      approvalFile: displayPath(filePath),
+      action: writeResult.action,
+      taskGraphAction,
+      approval,
+    }, null, 2));
+    return 0;
+  }
+  console.log('Plan2Agent proposal draft approval');
+  console.log(`- proposals: ${displayPath(proposalsDir)}`);
+  console.log(`- draft: ${displayPath(draftFilePath)}`);
+  console.log(`- approval: ${displayPath(filePath)}`);
+  console.log(`- approval action: ${writeResult.action}`);
+  console.log(`- maintenance graph: ${displayPath(maintenancePlan.graphPath)} (${taskGraphAction})`);
+  console.log(`- maintenance task: ${maintenancePlan.task.id} (${maintenancePlan.action})`);
+  console.log(`- auto apply performed: ${approval.autoApplyPerformed}`);
+  return 0;
+}
+
 function runList(args) {
   const proposalsDir = resolveProposalDir(args);
   const proposals = loadProposals(proposalsDir);
@@ -1134,6 +1380,7 @@ export function main(argv = process.argv.slice(2)) {
     if (args.command === 'review') return runReview(args);
     if (args.command === 'curate') return runCurate(args);
     if (args.command === 'draft-patch') return runDraftPatch(args);
+    if (args.command === 'approve-draft') return runApproveDraft(args);
     throw new Error(`unknown command: ${args.command}`);
   } catch (error) {
     const prefix = error instanceof ValidationError ? 'p2a proposal validation failed' : 'p2a proposal command failed';

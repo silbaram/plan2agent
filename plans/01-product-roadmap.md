@@ -6,7 +6,7 @@
 
 기준일: 2026-06-24
 
-이 문서에서 완료로 보는 범위는 "기획 산출물 생성 -> task graph 관리 -> 반복 개발 구조 -> 대상 프로젝트 handoff -> agent 실행 결과 추적 -> 감독형 오케스트레이션 계획 -> 실행 회고 proposal queue/review/curation/patch draft"까지다. 실제 Codex/Claude/Gemini CLI를 Plan2Agent가 직접 PTY로 구동하고 감시하는 자동/준자동 실행기는 아직 후속이다.
+이 문서에서 완료로 보는 범위는 "기획 산출물 생성 -> task graph 관리 -> 반복 개발 구조 -> 대상 프로젝트 handoff -> agent 실행 결과 추적 -> 감독형 오케스트레이션 계획 -> 실행 회고 proposal queue/review/curation/patch draft/approval gate"까지다. 실제 Codex/Claude/Gemini CLI를 Plan2Agent가 직접 PTY로 구동하고 감시하는 자동/준자동 실행기는 아직 후속이다.
 
 완료된 큰 축:
 
@@ -26,7 +26,7 @@
 | maintenance lane | Gate A/B/D 없이 상시 maintenance task graph를 lazy 생성/append하고 handoff | `maintenance add`, maintenance handoff |
 | agent 실행 결과 추적 | task별 run log, changedFiles, verification, agentTool, workspaceRef, branch/worktree 격리 기준 기록 | `p2a_runs.mjs`, `schemas/run*.schema.json` |
 | 감독형 오케스트레이션 계획 | ready task 1건을 `solo`/`solo_monitor`/`team`으로 triage하고 역할별 handoff prompt와 monitor gate를 run sidecar로 연결 | `p2a_orchestrate.mjs`, `schemas/orchestration-plan.schema.json`, `p2a_execute --orchestration-plan`, `p2a-dev-orchestrator` |
-| 실행 회고 proposal queue/review/curation/patch draft | 실패/blocked run, monitor verdict, verification gap에서 Hermes식 개선 후보, review artifact, curation artifact, non-applying patch draft를 생성·검증·요약 | `p2a_proposals.mjs`, `schemas/skill-proposal.schema.json`, `schemas/proposal-review.schema.json`, `schemas/proposal-curation.schema.json`, `schemas/proposal-patch-draft.schema.json`, `p2a-skill-curator` |
+| 실행 회고 proposal queue/review/curation/patch draft/approval gate | 실패/blocked run, monitor verdict, verification gap에서 Hermes식 개선 후보, review/curation/patch-draft/approval artifact와 maintenance task를 생성·검증·요약 | `p2a_proposals.mjs`, `schemas/skill-proposal.schema.json`, `schemas/proposal-review.schema.json`, `schemas/proposal-curation.schema.json`, `schemas/proposal-patch-draft.schema.json`, `schemas/proposal-draft-approval.schema.json`, `p2a-skill-curator` |
 | 문서화 | 사용자 시작점과 CLI/하네스/반복 계약 문서 정리 | `docs/README.md`, `docs/quickstart.md`, `docs/cli-reference.md` |
 
 부분 완료 또는 후속으로 남은 축:
@@ -35,7 +35,7 @@
 | --- | --- | --- |
 | baseline-aware 질문 재생성 UX | Gate A/B delta draft는 가능 | 기존 사용자 답변 재사용, 질문 재생성/재처분 UX 고도화 |
 | maintenance 운영 UX | maintenance task graph 생성/검증/handoff 가능 | maintenance draft 승격, 별도 사용자 UX |
-| 개발 실행 계층 (개발팀 AI agent) | 부분 구현 — `p2a-implementer`, `p2a-performance-monitor`, `p2a-skill-curator`, 실패 분류(C-①), 자가발전 1사이클, 감독형 단일 task 실행기 Phase 1, `p2a-dev-orchestrator` MVP 1차, Hermes proposal queue/review/curation/patch draft MVP. 상세 `plans/02`, orchestrator 상세 `plans/02-1` | 실제 patch 적용 자동화, PTY+Electron 감독 GUI 표시/세션 실행, 병렬 scheduler |
+| 개발 실행 계층 (개발팀 AI agent) | 부분 구현 — `p2a-implementer`, `p2a-performance-monitor`, `p2a-skill-curator`, 실패 분류(C-①), 자가발전 1사이클, 감독형 단일 task 실행기 Phase 1, `p2a-dev-orchestrator` MVP 1차, Hermes proposal queue/review/curation/patch draft/approval gate MVP. 상세 `plans/02`, orchestrator 상세 `plans/02-1` | 승인된 maintenance task 실제 patch 적용 실행, PTY+Electron 감독 GUI 표시/세션 실행, 병렬 scheduler |
 | agent 자동 실행 | 실행 prompt·run log·실패 분류(C-①), Phase 1 semi-auto 실행, supervised orchestration plan/monitor gate 가능. 실행 모드는 **감독형 확정**(구독 요금제) | PTY+Electron 감독 GUI 미구현(상세 `plans/03`); 무인 실행·scheduler는 전용 API 키 도입 시 |
 | PR/리뷰 연동 | 변경 파일과 검증 결과 기록 가능 | PR 생성, 리뷰 상태 연동, 변경 요약 자동화 |
 | code-aware 고도화 | spec 기반 semantic diff는 가능 | 기존 코드베이스 분석 기반 spec 역생성, 결과 diff 자동 병합 |
@@ -80,7 +80,7 @@ v1 포함 범위:
 - 대상 프로젝트 handoff와 AI 도구/adapter 선택 설치
 - task별 agent 실행 로그와 검증 결과 기록
 - task 1건의 감독형 오케스트레이션 계획과 monitor gate 기록
-- 실행 회고 기반 개선 proposal queue/review/curation/patch draft 생성과 검증
+- 실행 회고 기반 개선 proposal queue/review/curation/patch draft/approval gate 생성과 검증
 
 v1 밖(v2 이후 후속) 범위:
 
@@ -422,7 +422,8 @@ Manifest 계약:
     "schemas/skill-proposal.schema.json",
     "schemas/proposal-review.schema.json",
     "schemas/proposal-curation.schema.json",
-    "schemas/proposal-patch-draft.schema.json"
+    "schemas/proposal-patch-draft.schema.json",
+    "schemas/proposal-draft-approval.schema.json"
   ],
   "externalHarnessFiles": []
 }
@@ -464,7 +465,7 @@ Team Big Five 선택 통합:
 4. 여러 영역이 맞물리는 task는 선택한 CLI에서 Team Big Five kickoff prompt로 팀 실행을 시작한다.
 5. 대상 프로젝트의 test, lint, typecheck 명령으로 검증한다.
 6. 통과하면 `done`, 막히면 `block`으로 task 상태를 기록한다.
-7. 실패/blocked run이나 verification gap이 쌓이면 `p2a_proposals.mjs mine/review/curate/draft-patch/digest`로 개선 후보 큐와 review/curation/patch-draft artifact를 만든다.
+7. 실패/blocked run이나 verification gap이 쌓이면 `p2a_proposals.mjs mine/review/curate/draft-patch/approve-draft/digest`로 개선 후보 큐와 review/curation/patch-draft/approval artifact를 만들고 승인된 항목을 maintenance task로 연결한다.
 
 안전 기준:
 
@@ -797,7 +798,7 @@ Plan2Agent 개발은 아래 흐름을 기본 협업 방식으로 둔다.
 | 반복/고도화 개발 아키텍처 | 완료 | iteration init/current/validate/open/close/compose/handoff와 status history가 구현됐다. |
 | worktree 또는 branch 기반 task 격리 기준 | 완료 | `p2a_runs.mjs --isolation branch|worktree`, `--create-isolation`로 기록/선택 생성한다. |
 | 감독형 오케스트레이션 계획 | 완료 | `p2a_orchestrate.mjs`가 ready task를 `solo`/`solo_monitor`/`team`으로 triage하고, `p2a_execute --orchestration-plan`이 run sidecar와 monitor gate를 연결한다. |
-| Hermes식 proposal queue/review/curation/patch draft MVP | 완료 | `p2a_proposals.mjs`가 run failure, monitor verdict, verification gap에서 `skill-proposal`, `proposal-review`, `proposal-curation`, `proposal-patch-draft` JSON을 생성하고 digest/validate 흐름을 제공한다. |
+| Hermes식 proposal queue/review/curation/patch draft/approval gate MVP | 완료 | `p2a_proposals.mjs`가 run failure, monitor verdict, verification gap에서 `skill-proposal`, `proposal-review`, `proposal-curation`, `proposal-patch-draft`, `proposal-draft-approval` JSON을 생성하고 승인 항목을 maintenance task로 연결한다. |
 
 부분 완료:
 
@@ -810,7 +811,7 @@ Plan2Agent 개발은 아래 흐름을 기본 협업 방식으로 둔다.
 
 | 단계 | 항목 |
 | --- | --- |
-| v2 | 개발 실행 계층 구성 **(부분 구현)**: implementer/monitor/curator, 실패 분류(C-①), 자가발전 1사이클, 감독형 단일 task 실행기 Phase 1, `p2a-dev-orchestrator` MVP 1차, Hermes proposal queue/review/curation/patch draft MVP 완료. 남은: 실제 patch 적용 자동화, PTY+Electron 감독 GUI, scheduler. planning harness는 read-only 유지. 상세 `plans/02-development-team-ai-agent.md`, `plans/02-1-p2a-dev-orchestrator.md` |
+| v2 | 개발 실행 계층 구성 **(부분 구현)**: implementer/monitor/curator, 실패 분류(C-①), 자가발전 1사이클, 감독형 단일 task 실행기 Phase 1, `p2a-dev-orchestrator` MVP 1차, Hermes proposal queue/review/curation/patch draft/approval gate MVP 완료. 남은: 승인된 maintenance task 실제 patch 적용 실행, PTY+Electron 감독 GUI, scheduler. planning harness는 read-only 유지. 상세 `plans/02-development-team-ai-agent.md`, `plans/02-1-p2a-dev-orchestrator.md` |
 | v2 | 감독형 agent 실행기(Phase 1 semi-auto + orchestration plan 완료 → Phase 2 PTY+Electron 감독 GUI). 무인(headless) 실행·세션 감시는 전용 API 키 도입 시 (LD-9, `plans/02`) |
 | v2 | 실패 task 재시도 정책 자동화 |
 | v2 | PR 생성 및 리뷰 상태 연동 |
@@ -833,7 +834,7 @@ Plan2Agent 개발은 아래 흐름을 기본 협업 방식으로 둔다.
 7. §8-3의 agent 실행 로그, worktree/branch 격리 기준, 결과 diff 연결의 파일 기반 1차 구현은 `p2a_runs.mjs`로 완료했다.
 8. 사용자용 문서 진입점과 CLI/하네스/반복 계약 문서를 `docs/` 아래에 정리했다.
 9. Gate B 승인 audit와 Technology Reconnaissance 근거 검증을 하네스에 반영하고, status.md 구조(Progress/1~5 섹션/Gate A-D) 검증을 추가했다. 기술 선택 false-positive를 막는 negation 처리와 negative fixture(`fixtures/_negative/technology-recon`)를 포함한다.
-10. 개발 실행 계층(개발팀 AI agent)을 부분 구현했다: `p2a-implementer`(Codex workspace-write·Claude deny+hook+macOS sandbox confinement), 독립 `p2a-performance-monitor`, `p2a-skill-curator`+proposal schema, 실패 분류(C-①), 자가발전 1사이클, 감독형 단일 task 실행기 Phase 1(`p2a_execute.mjs`), 감독형 오케스트레이션 계획 MVP(`p2a_orchestrate.mjs`, run sidecar, monitor gate), Hermes proposal queue/review/curation/patch draft MVP(`p2a_proposals.mjs`). 실행 모드는 구독 요금제로 인해 **감독형**으로 확정(무인은 전용 API 키 시). Gemini는 read-only 고정. 상세·결정은 `plans/02-development-team-ai-agent.md`, `plans/02-1-p2a-dev-orchestrator.md`.
+10. 개발 실행 계층(개발팀 AI agent)을 부분 구현했다: `p2a-implementer`(Codex workspace-write·Claude deny+hook+macOS sandbox confinement), 독립 `p2a-performance-monitor`, `p2a-skill-curator`+proposal schema, 실패 분류(C-①), 자가발전 1사이클, 감독형 단일 task 실행기 Phase 1(`p2a_execute.mjs`), 감독형 오케스트레이션 계획 MVP(`p2a_orchestrate.mjs`, run sidecar, monitor gate), Hermes proposal queue/review/curation/patch draft/approval gate MVP(`p2a_proposals.mjs`). 실행 모드는 구독 요금제로 인해 **감독형**으로 확정(무인은 전용 API 키 시). Gemini는 read-only 고정. 상세·결정은 `plans/02-development-team-ai-agent.md`, `plans/02-1-p2a-dev-orchestrator.md`.
 
 부분 완료:
 
@@ -842,7 +843,7 @@ Plan2Agent 개발은 아래 흐름을 기본 협업 방식으로 둔다.
 
 다음 후보:
 
-1. 개발 실행 계층 **이어서 구현**: implementer/monitor/curator/C-①, **감독형 단일 task 실행기 Phase 1(`p2a_execute.mjs`)**, **조율 `p2a-dev-orchestrator` MVP 1차**, **Hermes proposal queue/review/curation/patch draft MVP(`p2a_proposals.mjs`)**는 완료. 다음은 실제 patch 적용 자동화 또는 PTY+Electron 감독 GUI다. planning harness는 read-only 유지. 상세 `plans/02-development-team-ai-agent.md`, `plans/02-1-p2a-dev-orchestrator.md`.
+1. 개발 실행 계층 **이어서 구현**: implementer/monitor/curator/C-①, **감독형 단일 task 실행기 Phase 1(`p2a_execute.mjs`)**, **조율 `p2a-dev-orchestrator` MVP 1차**, **Hermes proposal queue/review/curation/patch draft/approval gate MVP(`p2a_proposals.mjs`)**는 완료. 다음은 승인된 maintenance task 실제 patch 적용 실행 또는 PTY+Electron 감독 GUI다. planning harness는 read-only 유지. 상세 `plans/02-development-team-ai-agent.md`, `plans/02-1-p2a-dev-orchestrator.md`.
 2. Gate D 이후 구조 선택 단계: planning이 handoff-ready가 되면 **반복 구조**(`p2a_iteration init`, 기본 권장)와 **단독 구조**(평면 `gate-*` 유지 + `--graph` 직접 구현) 중 사용자에게 명시적으로 묻는다. `p2a-harness`의 Approved planning output 모드와 `PLAN2AGENT.md`/`harness-guide`에 반영하되, 스킬은 init을 직접 실행하지 않고 명령만 안내한다(read-only 경계 유지).
 3. PTY+Electron 감독 GUI(감독형 실행기 Phase 2) — node-pty/xterm로 live watch+승인, 기존 CLI와 orchestration sidecar를 표시/구동. (무인 실행/scheduler는 전용 API 키 시)
 4. PR 생성 및 리뷰 상태 연동

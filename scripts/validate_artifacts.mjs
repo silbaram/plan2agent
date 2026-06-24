@@ -21,6 +21,7 @@ const SCHEMA_PATHS = {
   proposal_review: path.join(ROOT, 'schemas', 'proposal-review.schema.json'),
   proposal_curation: path.join(ROOT, 'schemas', 'proposal-curation.schema.json'),
   proposal_patch_draft: path.join(ROOT, 'schemas', 'proposal-patch-draft.schema.json'),
+  proposal_draft_approval: path.join(ROOT, 'schemas', 'proposal-draft-approval.schema.json'),
 };
 const GATE_PATHS = {
   statusDoc: 'status.md',
@@ -723,6 +724,25 @@ export function validateProposalPatchDraft(filePath) {
   return validateProposalPatchDraftData(loadJson(filePath));
 }
 
+export function validateProposalDraftApprovalData(data) {
+  validateSchema(data, loadJson(SCHEMA_PATHS.proposal_draft_approval));
+  if (data.autoApplyPerformed !== false) {
+    throw new ValidationError('proposal draft approval autoApplyPerformed must be false');
+  }
+  if (!data.maintenanceTask.sourceSpecRefs.includes(`proposal-patch-draft:${data.draftId}`)) {
+    throw new ValidationError('proposal draft approval maintenanceTask.sourceSpecRefs must reference draftId');
+  }
+  if (!data.maintenanceTask.sourceSpecRefs.includes(`proposal-candidate:${data.candidateId}`)) {
+    throw new ValidationError('proposal draft approval maintenanceTask.sourceSpecRefs must reference candidateId');
+  }
+  validateNonBlankStrings(data.maintenanceTask.sourceSpecRefs, `${data.approvalId}.maintenanceTask.sourceSpecRefs`);
+  return data;
+}
+
+export function validateProposalDraftApproval(filePath) {
+  return validateProposalDraftApprovalData(loadJson(filePath));
+}
+
 export function validateRunsDir(runsDir) {
   if (!existsSync(runsDir)) throw new ValidationError(`runs directory is missing: ${runsDir}`);
   if (!lstatSync(runsDir).isDirectory()) throw new ValidationError(`runs path must be a directory: ${runsDir}`);
@@ -1013,6 +1033,7 @@ function parseArgs(argv) {
     else if (arg === '--proposal-review') args.proposalReview = argv[++index];
     else if (arg === '--proposal-curation') args.proposalCuration = argv[++index];
     else if (arg === '--proposal-patch-draft') args.proposalPatchDraft = argv[++index];
+    else if (arg === '--proposal-draft-approval') args.proposalDraftApproval = argv[++index];
     else if (arg === '--proposals-dir') args.proposalsDir = argv[++index];
     else if (arg === '--require-approved-spec') args.requireApprovedSpec = argv[++index];
     else if (arg === '--require-handoff-ready') args.requireHandoffReady = true;
@@ -1053,6 +1074,7 @@ export function main(argv = process.argv.slice(2)) {
     if (args.proposalReview) validateProposalReview(args.proposalReview);
     if (args.proposalCuration) validateProposalCuration(args.proposalCuration);
     if (args.proposalPatchDraft) validateProposalPatchDraft(args.proposalPatchDraft);
+    if (args.proposalDraftApproval) validateProposalDraftApproval(args.proposalDraftApproval);
     if (args.proposalsDir) validateProposalsDir(args.proposalsDir);
     for (const fixtureDir of args.fixtureDir) validateFixtureDir(fixtureDir);
   } catch (error) {

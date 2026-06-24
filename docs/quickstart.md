@@ -212,7 +212,7 @@ node scripts/p2a_handoff.mjs \
       task-graph.json
       review.json
       status.md
-    proposals/      # p2a_proposals mine/review/curate/draft-patch 실행 시 생성
+    proposals/      # p2a_proposals mine/review/curate/draft-patch/approve-draft 실행 시 생성
   current-spec.json
   manifest.json
   project.config.json
@@ -306,7 +306,14 @@ node scripts/p2a_proposals.mjs curate \
 node scripts/p2a_proposals.mjs draft-patch \
   --curation .plan2agent/proposals/curations/proposal-curation-<hash>.json \
   --candidate-id candidate-<hash>
+
+node scripts/p2a_proposals.mjs approve-draft \
+  --draft .plan2agent/proposals/patch-drafts/proposal-patch-draft-<hash>.json \
+  --artifacts artifacts/<project_id> \
+  --approved-by <name>
 ```
+
+`approve-draft`는 대상 파일을 자동 수정하지 않는다. 승인 기록을 남기고 maintenance task graph에 후속 실행 task를 추가한다.
 
 세부 제어가 필요하면 저수준 명령을 직접 사용할 수 있다.
 
@@ -441,6 +448,13 @@ proposal patch draft 검증:
 ```bash
 node scripts/validate_artifacts.mjs \
   --proposal-patch-draft artifacts/<project_id>/proposals/patch-drafts/proposal-patch-draft-<hash>.json
+```
+
+proposal draft approval 검증:
+
+```bash
+node scripts/validate_artifacts.mjs \
+  --proposal-draft-approval artifacts/<project_id>/proposals/approvals/proposal-draft-approval-<hash>.json
 ```
 
 대상 프로젝트 handoff 준비 상태:
