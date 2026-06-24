@@ -27,11 +27,11 @@
 
       <div class="workbench">
         <nav class="activity-rail" aria-label="Primary">
-          <button class="rail-item active" type="button">OV</button>
-          <button class="rail-item" type="button">TK</button>
-          <button class="rail-item" type="button">RN</button>
-          <button class="rail-item" type="button">AR</button>
-          <button class="rail-item" type="button">TE</button>
+          <button class="rail-item active" type="button" data-view="overview" aria-pressed="true">OV</button>
+          <button class="rail-item" type="button" data-view="tasks" aria-pressed="false">TK</button>
+          <button class="rail-item" type="button" data-view="runs" aria-pressed="false">RN</button>
+          <button class="rail-item" type="button" data-view="artifacts" aria-pressed="false">AR</button>
+          <button class="rail-item" type="button" data-view="terminal" aria-pressed="false">TE</button>
         </nav>
 
         <aside class="sidebar">
@@ -74,39 +74,64 @@
         </aside>
 
         <main class="main-pane">
-          <section class="state-surface" id="state-surface">
-            <div>
-              <p class="eyebrow">Current state</p>
-              <h1 id="state-title">Open a project</h1>
-              <p id="state-detail" class="state-detail">P2A project state will appear here.</p>
-            </div>
-            <div id="state-badge" class="state-badge neutral">idle</div>
+          <section id="overview-view" class="view-panel active" data-view-panel="overview">
+            <section class="state-surface" id="state-surface">
+              <div>
+                <p class="eyebrow">Current state</p>
+                <h1 id="state-title">Open a project</h1>
+                <p id="state-detail" class="state-detail">P2A project state will appear here.</p>
+              </div>
+              <div id="state-badge" class="state-badge neutral">idle</div>
+            </section>
+
+            <section class="grid-two">
+              <div class="surface">
+                <div class="surface-head">
+                  <h2>Commands</h2>
+                  <span class="surface-meta">preview only</span>
+                </div>
+                <div id="command-list" class="command-list"></div>
+              </div>
+
+              <div class="surface">
+                <div class="surface-head">
+                  <h2>Diagnostics</h2>
+                  <span id="diagnostic-count" class="surface-meta">0</span>
+                </div>
+                <div id="diagnostic-list" class="diagnostic-list"></div>
+              </div>
+            </section>
+
+            <section class="surface">
+              <div class="surface-head">
+                <h2>Ready tasks</h2>
+                <span id="task-summary" class="surface-meta">0 tasks</span>
+              </div>
+              <div id="task-table" class="task-table"></div>
+            </section>
           </section>
 
-          <section class="grid-two">
-            <div class="surface">
+          <section id="artifacts-view" class="view-panel" data-view-panel="artifacts" hidden>
+            <section class="surface artifact-workbench">
               <div class="surface-head">
-                <h2>Commands</h2>
-                <span class="surface-meta">preview only</span>
+                <h2>Artifacts</h2>
+                <span id="artifact-count" class="surface-meta">0 documents</span>
               </div>
-              <div id="command-list" class="command-list"></div>
-            </div>
-
-            <div class="surface">
-              <div class="surface-head">
-                <h2>Diagnostics</h2>
-                <span id="diagnostic-count" class="surface-meta">0</span>
+              <div class="artifact-layout">
+                <div id="artifact-list" class="artifact-list"></div>
+                <article class="artifact-preview">
+                  <div class="artifact-preview-head">
+                    <div>
+                      <p class="eyebrow">Read-only</p>
+                      <h1 id="artifact-title">No artifact selected</h1>
+                    </div>
+                    <span id="artifact-meta" class="surface-meta">-</span>
+                  </div>
+                  <div id="artifact-path" class="artifact-path">-</div>
+                  <pre id="artifact-content" class="artifact-content">Open a P2A project and select an artifact.</pre>
+                </article>
               </div>
-              <div id="diagnostic-list" class="diagnostic-list"></div>
-            </div>
-          </section>
-
-          <section class="surface">
-            <div class="surface-head">
-              <h2>Ready tasks</h2>
-              <span id="task-summary" class="surface-meta">0 tasks</span>
-            </div>
-            <div id="task-table" class="task-table"></div>
+            </section>
           </section>
         </main>
 

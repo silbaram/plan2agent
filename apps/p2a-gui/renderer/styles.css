@@ -177,10 +177,21 @@ pre {
 .main-pane {
   display: flex;
   flex-direction: column;
-  gap: 12px;
   overflow: auto;
   padding: 14px;
   background: var(--bg-1);
+}
+
+.view-panel {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 0;
+}
+
+.view-panel[hidden] {
+  display: none;
 }
 
 .panel-block,
@@ -329,6 +340,7 @@ h2 {
 .gate-list,
 .task-list,
 .recent-list,
+.artifact-list,
 .command-list,
 .diagnostic-list,
 .task-table {
@@ -339,12 +351,14 @@ h2 {
 
 .gate-list,
 .task-list,
-.recent-list {
+.recent-list,
+.artifact-list {
   padding: 0;
 }
 
 .row,
 .recent-project-row,
+.artifact-row,
 .command-row,
 .diagnostic-row,
 .task-row {
@@ -352,6 +366,126 @@ h2 {
   border: 1px solid var(--border-1);
   border-radius: 4px;
   background: var(--bg-3);
+}
+
+.artifact-workbench {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.artifact-layout {
+  display: grid;
+  grid-template-columns: minmax(220px, 280px) minmax(0, 1fr);
+  min-height: 0;
+  flex: 1;
+}
+
+.artifact-list {
+  align-content: start;
+  overflow: auto;
+  border-right: 1px solid var(--border-1);
+  background: var(--bg-2);
+}
+
+.artifact-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  height: auto;
+  min-height: 42px;
+  padding: 7px 8px;
+  text-align: left;
+}
+
+.artifact-row.active {
+  border-left: 2px solid var(--accent);
+  background: var(--bg-4);
+  color: var(--fg-1);
+}
+
+.artifact-main {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.artifact-label,
+.artifact-row-path {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.artifact-label {
+  color: var(--fg-2);
+  font-size: 12px;
+}
+
+.artifact-row-path,
+.artifact-group,
+.artifact-path {
+  color: var(--fg-3);
+  font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 10px;
+}
+
+.artifact-group {
+  max-width: 74px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.artifact-preview {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  background: var(--bg-1);
+}
+
+.artifact-preview-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px;
+  border-bottom: 1px solid var(--border-1);
+}
+
+.artifact-preview-head h1 {
+  font-size: 18px;
+}
+
+.artifact-path {
+  min-height: 30px;
+  overflow: hidden;
+  border-bottom: 1px solid var(--border-1);
+  padding: 8px 14px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.artifact-content {
+  flex: 1;
+  min-height: 280px;
+  margin: 0;
+  overflow: auto;
+  padding: 14px;
+  color: var(--fg-2);
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+
+.artifact-content.json {
+  white-space: pre;
 }
 
 .recent-project-row {
@@ -548,6 +682,16 @@ h2 {
 
   .grid-two {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  .artifact-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .artifact-list {
+    max-height: 180px;
+    border-right: 0;
+    border-bottom: 1px solid var(--border-1);
   }
 
   .task-row {

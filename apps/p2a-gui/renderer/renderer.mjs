@@ -4,6 +4,8 @@ const elements = {
   titleProject: document.querySelector('#title-project'),
   openProject: document.querySelector('#open-project'),
   reloadProject: document.querySelector('#reload-project'),
+  railItems: [...document.querySelectorAll('[data-view]')],
+  viewPanels: [...document.querySelectorAll('[data-view-panel]')],
   sidebarState: document.querySelector('#sidebar-state'),
   sidebarProject: document.querySelector('#sidebar-project'),
   sidebarSource: document.querySelector('#sidebar-source'),
@@ -19,6 +21,12 @@ const elements = {
   diagnosticList: document.querySelector('#diagnostic-list'),
   taskSummary: document.querySelector('#task-summary'),
   taskTable: document.querySelector('#task-table'),
+  artifactCount: document.querySelector('#artifact-count'),
+  artifactList: document.querySelector('#artifact-list'),
+  artifactTitle: document.querySelector('#artifact-title'),
+  artifactPath: document.querySelector('#artifact-path'),
+  artifactMeta: document.querySelector('#artifact-meta'),
+  artifactContent: document.querySelector('#artifact-content'),
   inspectorArtifact: document.querySelector('#inspector-artifact'),
   inspectorRuns: document.querySelector('#inspector-runs'),
   inspectorUpdated: document.querySelector('#inspector-updated'),
@@ -70,9 +78,13 @@ const stateMeta = {
 let currentPayload = {
   projectPath: null,
   inspection: null,
+  artifactCatalog: { documents: [] },
   refreshedAt: null,
   trigger: 'initial',
 };
+let activeView = 'overview';
+let selectedArtifactId = null;
+let artifactRequestToken = 0;
 
 function browserFallbackBridge() {
   return {
@@ -97,6 +109,12 @@ function browserFallbackBridge() {
       ...currentPayload,
       refreshedAt: new Date().toISOString(),
       trigger: 'browser',
+    }),
+    readArtifact: async () => ({
+      ok: false,
+      code: 'browser',
+      message: 'Artifact reading is only available in Electron.',
+      catalog: { documents: [] },
     }),
     onProjectUpdated: () => () => {},
   };
@@ -129,6 +147,7 @@ function render(payload) {
   const readyTasks = inspection?.tasks?.ready ?? [];
   const allTaskSummary = inspection?.tasks;
   const localConfig = currentPayload.localConfig ?? {};
+  const artifactCatalog = currentPayload.artifactCatalog ?? { documents: [] };
 
   elements.titleProject.textContent = projectLabel;
   elements.sidebarState.textContent = state;
@@ -147,6 +166,7 @@ function render(payload) {
   renderCommands(inspection?.commands ?? {});
   renderDiagnostics(diagnostics);
   renderTaskTable(inspection);
+  renderArtifactList(artifactCatalog.documents ?? []);
 
   elements.inspectorArtifact.textContent = shortPath(inspection?.displayPaths?.artifactRoot);
   elements.inspectorRuns.textContent = `${inspection?.runs?.total ?? 0}`;
@@ -158,6 +178,22 @@ function render(payload) {
   elements.statusRight.textContent = inspection
     ? `watcher: ${currentPayload.trigger === 'watcher' ? 'reloaded' : 'active'} · tasks ${allTaskSummary?.total ?? 0}`
     : `watcher: standby · recent ${(localConfig.recentProjects ?? []).length}`;
+
+  if (activeView === 'artifacts') ensureArtifactSelection();
+}
+
+function setActiveView(view) {
+  activeView = view === 'artifacts' ? 'artifacts' : 'overview';
+  for (const button of elements.railItems) {
+    const isActive = button.dataset.view === activeView;
+    button.classList.toggle('active', isActive);
+    button.setAttribute('aria-pressed', isActive ? 'true' : 'false');
+  }
+  for (const panel of elements.viewPanels) {
+    panel.hidden = panel.dataset.viewPanel !== activeView;
+    panel.classList.toggle('active', panel.dataset.viewPanel === activeView);
+  }
+  if (activeView === 'artifacts') ensureArtifactSelection();
 }
 
 function renderRecentProjects(projects, activePath) {
@@ -192,6 +228,111 @@ function renderRecentProjects(projects, activePath) {
     button.append(main, state);
     elements.recentProjectList.append(button);
   }
+}
+
+function artifactDocuments() {
+  return currentPayload.artifactCatalog?.documents ?? [];
+}
+
+function renderArtifactList(documents) {
+  elements.artifactList.replaceChildren();
+  elements.artifactCount.textContent = `${documents.length} document${documents.length === 1 ? '' : 's'}`;
+  if (!documents.length) {
+    elements.artifactList.append(emptyNode('No artifact document'));
+    if (activeView === 'artifacts') renderArtifactEmpty('No artifact document', '-');
+    return;
+  }
+
+  if (selectedArtifactId && !documents.some((artifact) => artifact.id === selectedArtifactId)) {
+    selectedArtifactId = null;
+  }
+
+  for (const artifact of documents) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = `artifact-row ${artifact.id === selectedArtifactId ? 'active' : ''}`;
+    button.title = artifact.displayPath ?? artifact.path;
+    button.addEventListener('click', () => selectArtifact(artifact.id));
+
+    const main = document.createElement('span');
+    main.className = 'artifact-main';
+    const label = document.createElement('span');
+    label.className = 'artifact-label';
+    label.textContent = artifact.label;
+    const artifactPath = document.createElement('span');
+    artifactPath.className = 'artifact-row-path';
+    artifactPath.textContent = artifact.displayPath ?? artifact.path;
+    main.append(label, artifactPath);
+
+    const group = document.createElement('span');
+    group.className = 'artifact-group';
+    group.textContent = artifact.group;
+
+    button.append(main, group);
+    elements.artifactList.append(button);
+  }
+}
+
+function renderArtifactEmpty(title, detail) {
+  elements.artifactTitle.textContent = title;
+  elements.artifactPath.textContent = detail;
+  elements.artifactMeta.textContent = '-';
+  elements.artifactContent.className = 'artifact-content';
+  elements.artifactContent.textContent = 'Open a P2A project and select an artifact.';
+}
+
+function renderArtifactLoading(document) {
+  elements.artifactTitle.textContent = document?.label ?? 'Loading artifact';
+  elements.artifactPath.textContent = document?.displayPath ?? '-';
+  elements.artifactMeta.textContent = document ? `${document.group} · ${document.format}` : '-';
+  elements.artifactContent.className = 'artifact-content';
+  elements.artifactContent.textContent = 'Loading...';
+}
+
+function renderArtifactReadResult(result) {
+  if (!result?.ok) {
+    elements.artifactTitle.textContent = 'Artifact unavailable';
+    elements.artifactPath.textContent = result?.code ?? '-';
+    elements.artifactMeta.textContent = '-';
+    elements.artifactContent.className = 'artifact-content';
+    elements.artifactContent.textContent = result?.message ?? 'Could not read artifact.';
+    return;
+  }
+
+  const document = result.document;
+  const modified = document.modifiedAt ? new Date(document.modifiedAt).toLocaleString() : '-';
+  elements.artifactTitle.textContent = document.label;
+  elements.artifactPath.textContent = document.displayPath ?? document.path;
+  elements.artifactMeta.textContent = `${document.group} · ${document.format} · ${formatBytes(document.sizeBytes)} · ${modified}`;
+  elements.artifactContent.className = `artifact-content ${document.format}`;
+  const parseNotice = result.parseError ? `JSON parse warning: ${result.parseError}\n\n` : '';
+  elements.artifactContent.textContent = `${parseNotice}${result.content ?? ''}`;
+}
+
+function ensureArtifactSelection() {
+  const documents = artifactDocuments();
+  if (!documents.length) {
+    selectedArtifactId = null;
+    renderArtifactEmpty('No artifact document', '-');
+    return;
+  }
+  const selectedDocument = documents.find((artifact) => artifact.id === selectedArtifactId) ?? documents[0];
+  if (selectedDocument.id !== selectedArtifactId) {
+    selectArtifact(selectedDocument.id);
+  }
+}
+
+async function selectArtifact(artifactId) {
+  selectedArtifactId = artifactId;
+  renderArtifactList(artifactDocuments());
+  const document = artifactDocuments().find((item) => item.id === artifactId);
+  renderArtifactLoading(document);
+  const token = (artifactRequestToken += 1);
+  const result = await bridge.readArtifact(artifactId);
+  if (token !== artifactRequestToken || selectedArtifactId !== artifactId) return;
+  if (result?.catalog) currentPayload.artifactCatalog = result.catalog;
+  renderArtifactList(artifactDocuments());
+  renderArtifactReadResult(result);
 }
 
 function renderGates(gates) {
@@ -304,6 +445,12 @@ function emptyNode(value) {
   return node;
 }
 
+function formatBytes(value) {
+  if (!Number.isFinite(value)) return '-';
+  if (value < 1024) return `${value} B`;
+  return `${(value / 1024).toFixed(1)} KB`;
+}
+
 async function copyText(value) {
   try {
     await navigator.clipboard.writeText(value);
@@ -313,6 +460,9 @@ async function copyText(value) {
 }
 
 async function boot() {
+  for (const button of elements.railItems) {
+    button.addEventListener('click', () => setActiveView(button.dataset.view));
+  }
   elements.openProject.addEventListener('click', async () => {
     render(await bridge.selectProject());
   });
@@ -320,6 +470,7 @@ async function boot() {
     render(await bridge.reloadProject());
   });
   bridge.onProjectUpdated((payload) => render(payload));
+  setActiveView('overview');
   render(await bridge.getInitialState());
 }
 
@@ -341,6 +492,7 @@ boot().catch((error) => {
       commands: {},
       displayPaths: {},
     },
+    artifactCatalog: { documents: [] },
     localConfig: { recentProjects: [] },
     refreshedAt: new Date().toISOString(),
     trigger: 'renderer',
