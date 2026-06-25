@@ -18,6 +18,77 @@ const RUNTIME_PHASES = new Set(['initialized', 'running', 'blocked', 'ready_for_
 const DEFAULT_ACCEPTED_MONITOR_VERDICTS = ['confirm_done'];
 const DEFAULT_HANDOFF_GRAPH = path.join('.plan2agent', 'artifacts', 'task-graph.json');
 const HIGH_ACCEPTANCE_MONITOR_THRESHOLD = 6;
+const ROLE_PROFILE_SOURCES = new Set(['auto', 'override']);
+const ROLE_PROFILE_TO_ROLE = Object.freeze({
+  owner_supervisor: 'lead',
+  frontend_implementer: 'contributor',
+  backend_implementer: 'contributor',
+  fullstack_implementer: 'contributor',
+  test_implementer: 'contributor',
+  docs_implementer: 'contributor',
+  qa_reviewer: 'reviewer',
+  architecture_reviewer: 'reviewer',
+  security_reviewer: 'reviewer',
+  manual_monitor: 'monitor',
+});
+const IMPLEMENTER_PROFILES = new Set(Object.entries(ROLE_PROFILE_TO_ROLE)
+  .filter(([, role]) => role === 'contributor')
+  .map(([profile]) => profile));
+const REVIEWER_PROFILES = new Set(Object.entries(ROLE_PROFILE_TO_ROLE)
+  .filter(([, role]) => role === 'reviewer')
+  .map(([profile]) => profile));
+const ROLE_PROFILE_GUIDANCE = Object.freeze({
+  owner_supervisor: [
+    'Profile: owner_supervisor.',
+    'Coordinate approvals, user decisions, run lifecycle commands, and final done/block state.',
+    'Do not implement code in this role unless explicitly taking over a manual implementation role.',
+  ],
+  frontend_implementer: [
+    'Profile: frontend_implementer.',
+    'Focus on UI state, interaction flow, responsive constraints, accessibility, empty/loading/error states, and user-facing copy.',
+    'Verify visual behavior with the project’s available frontend checks or a clearly documented manual check.',
+  ],
+  backend_implementer: [
+    'Profile: backend_implementer.',
+    'Focus on API/CLI contracts, validation, persistence, error handling, idempotency, and regression tests.',
+    'Keep interfaces stable unless the task explicitly approves a contract change.',
+  ],
+  fullstack_implementer: [
+    'Profile: fullstack_implementer.',
+    'Coordinate UI, API/CLI, data shape, and verification changes as one scoped implementation.',
+    'Call out any split that should become separate frontend/backend follow-up tasks.',
+  ],
+  test_implementer: [
+    'Profile: test_implementer.',
+    'Focus on regression coverage, fixture quality, deterministic commands, and meaningful failure messages.',
+    'Avoid broad refactors unless needed to make the tests reliable.',
+  ],
+  docs_implementer: [
+    'Profile: docs_implementer.',
+    'Focus on accurate user-facing documentation, concise examples, CLI options, and stale-plan cleanup.',
+    'Keep docs aligned with implemented behavior and avoid speculative promises.',
+  ],
+  qa_reviewer: [
+    'Profile: qa_reviewer.',
+    'Review acceptance criteria coverage, verification evidence, failure handling, and regression risk.',
+    'Report concrete blockers or confirm readiness with a small verdict.',
+  ],
+  architecture_reviewer: [
+    'Profile: architecture_reviewer.',
+    'Review ownership boundaries, contracts, migration risk, coupling, and future extension points.',
+    'Prefer targeted follow-up recommendations over broad redesign.',
+  ],
+  security_reviewer: [
+    'Profile: security_reviewer.',
+    'Review permissions, path confinement, secret exposure, shell/process boundaries, and unsafe automation risk.',
+    'Flag security blockers separately from ordinary implementation concerns.',
+  ],
+  manual_monitor: [
+    'Profile: manual_monitor.',
+    'Check the run output, changed files, verification results, and acceptance criteria before allowing finish.',
+    'Record an explicit verdict; only confirm_done should move the runtime toward finish.',
+  ],
+});
 const PROVIDER_CAPABILITIES = Object.freeze({
   codex: {
     provider: 'codex',
@@ -104,6 +175,8 @@ function usage() {
     '  --task <task-id>         Task to plan. If omitted, there must be exactly one ready task.',
     '  --agent-tool <tool>      Implementer tool label: codex, claude, or manual. Default: codex.',
     '  --reviewer-tool <tool>   Read-only reviewer tool label: codex, claude, gemini, or manual. Default: same as --agent-tool.',
+    '  --implementer-profile <profile> Override implementer specialization profile.',
+    '  --reviewer-profile <profile>    Override reviewer specialization profile.',
     '  --output <path>          Write plan JSON to a file. Without this, JSON is printed to stdout.',
     '  --json                   With --output, also print the JSON payload.',
     '',
@@ -139,6 +212,8 @@ function parseArgs(argv) {
     taskId: null,
     agentTool: 'codex',
     reviewerTool: null,
+    implementerProfile: null,
+    reviewerProfile: null,
     output: null,
     plan: null,
     runtime: null,
@@ -166,6 +241,8 @@ function parseArgs(argv) {
     else if (arg === '--task') args.taskId = requiredValue(argv, ++index, '--task');
     else if (arg === '--agent-tool') args.agentTool = parseAgentTool(requiredValue(argv, ++index, '--agent-tool'), '--agent-tool');
     else if (arg === '--reviewer-tool') args.reviewerTool = parseAgentTool(requiredValue(argv, ++index, '--reviewer-tool'), '--reviewer-tool');
+    else if (arg === '--implementer-profile') args.implementerProfile = parseRoleProfile(requiredValue(argv, ++index, '--implementer-profile'), IMPLEMENTER_PROFILES, '--implementer-profile');
+    else if (arg === '--reviewer-profile') args.reviewerProfile = parseRoleProfile(requiredValue(argv, ++index, '--reviewer-profile'), REVIEWER_PROFILES, '--reviewer-profile');
     else if (arg === '--output') args.output = requiredValue(argv, ++index, '--output');
     else if (arg === '--plan') args.plan = requiredValue(argv, ++index, '--plan');
     else if (arg === '--runtime') args.runtime = requiredValue(argv, ++index, '--runtime');
@@ -199,14 +276,14 @@ function parseArgs(argv) {
     }
   } else if (['show', 'validate', 'handoff'].includes(args.command)) {
     if (!args.plan) throw new Error(`--plan is required for ${args.command}`);
-    if (args.artifacts || args.graph || args.spec || args.maintenance || args.taskId || args.output || args.runtime || args.runId || args.roleId || args.eventType || args.summary || args.detail || args.verdict || args.linkedRoleId || args.roleStatus || args.phase || args.requiresOwnerAction) {
+    if (args.artifacts || args.graph || args.spec || args.maintenance || args.taskId || args.implementerProfile || args.reviewerProfile || args.output || args.runtime || args.runId || args.roleId || args.eventType || args.summary || args.detail || args.verdict || args.linkedRoleId || args.roleStatus || args.phase || args.requiresOwnerAction) {
       throw new Error(`${args.command} only supports --plan and --json`);
     }
   } else if (args.command === 'init-runtime') {
     if (!args.plan) throw new Error('--plan is required for init-runtime');
     if (!args.runId) throw new Error('--run-id is required for init-runtime');
     assertSafeRunId(args.runId);
-    if (args.artifacts || args.graph || args.spec || args.maintenance || args.taskId || args.runtime || args.roleId || args.eventType || args.summary || args.detail || args.verdict || args.linkedRoleId || args.roleStatus || args.phase || args.requiresOwnerAction) {
+    if (args.artifacts || args.graph || args.spec || args.maintenance || args.taskId || args.implementerProfile || args.reviewerProfile || args.runtime || args.roleId || args.eventType || args.summary || args.detail || args.verdict || args.linkedRoleId || args.roleStatus || args.phase || args.requiresOwnerAction) {
       throw new Error('init-runtime only supports --plan, --run-id, --output, and --json');
     }
   } else if (args.command === 'record') {
@@ -214,23 +291,23 @@ function parseArgs(argv) {
     if (!args.roleId) throw new Error('--role is required for record');
     if (!args.eventType) throw new Error('--type is required for record');
     if (!args.summary) throw new Error('--summary is required for record');
-    if (args.artifacts || args.graph || args.spec || args.maintenance || args.taskId || args.output || args.plan || args.runId || args.verdict) {
+    if (args.artifacts || args.graph || args.spec || args.maintenance || args.taskId || args.implementerProfile || args.reviewerProfile || args.output || args.plan || args.runId || args.verdict) {
       throw new Error('record only supports --runtime, --role, --type, --summary, --detail, --linked-role, --role-status, --phase, --requires-owner-action, and --json');
     }
   } else if (args.command === 'runtime-status') {
     if (!args.runtime) throw new Error('--runtime is required for runtime-status');
-    if (args.artifacts || args.graph || args.spec || args.maintenance || args.taskId || args.output || args.plan || args.runId || args.roleId || args.eventType || args.summary || args.detail || args.verdict || args.linkedRoleId || args.roleStatus || args.phase || args.requiresOwnerAction) {
+    if (args.artifacts || args.graph || args.spec || args.maintenance || args.taskId || args.implementerProfile || args.reviewerProfile || args.output || args.plan || args.runId || args.roleId || args.eventType || args.summary || args.detail || args.verdict || args.linkedRoleId || args.roleStatus || args.phase || args.requiresOwnerAction) {
       throw new Error('runtime-status only supports --runtime and --json');
     }
   } else if (args.command === 'next-role') {
     if (!args.runtime) throw new Error('--runtime is required for next-role');
-    if (args.artifacts || args.graph || args.spec || args.maintenance || args.taskId || args.output || args.plan || args.runId || args.roleId || args.eventType || args.summary || args.detail || args.verdict || args.linkedRoleId || args.roleStatus || args.phase || args.requiresOwnerAction) {
+    if (args.artifacts || args.graph || args.spec || args.maintenance || args.taskId || args.implementerProfile || args.reviewerProfile || args.output || args.plan || args.runId || args.roleId || args.eventType || args.summary || args.detail || args.verdict || args.linkedRoleId || args.roleStatus || args.phase || args.requiresOwnerAction) {
       throw new Error('next-role only supports --runtime and --json');
     }
   } else if (args.command === 'role-prompt') {
     if (!args.runtime) throw new Error('--runtime is required for role-prompt');
     if (!args.roleId) throw new Error('--role is required for role-prompt');
-    if (args.artifacts || args.graph || args.spec || args.maintenance || args.taskId || args.output || args.plan || args.runId || args.eventType || args.summary || args.detail || args.verdict || args.linkedRoleId || args.roleStatus || args.phase || args.requiresOwnerAction) {
+    if (args.artifacts || args.graph || args.spec || args.maintenance || args.taskId || args.implementerProfile || args.reviewerProfile || args.output || args.plan || args.runId || args.eventType || args.summary || args.detail || args.verdict || args.linkedRoleId || args.roleStatus || args.phase || args.requiresOwnerAction) {
       throw new Error('role-prompt only supports --runtime, --role, and --json');
     }
   } else if (args.command === 'mark-role') {
@@ -238,7 +315,7 @@ function parseArgs(argv) {
     if (!args.roleId) throw new Error('--role is required for mark-role');
     if (!args.roleStatus) throw new Error('--role-status is required for mark-role');
     if (args.verdict !== null && !args.verdict) throw new Error('--verdict requires a non-empty value');
-    if (args.artifacts || args.graph || args.spec || args.maintenance || args.taskId || args.output || args.plan || args.runId || args.eventType || args.linkedRoleId) {
+    if (args.artifacts || args.graph || args.spec || args.maintenance || args.taskId || args.implementerProfile || args.reviewerProfile || args.output || args.plan || args.runId || args.eventType || args.linkedRoleId) {
       throw new Error('mark-role only supports --runtime, --role, --role-status, --summary, --detail, --verdict, --phase, --requires-owner-action, and --json');
     }
   }
@@ -247,6 +324,11 @@ function parseArgs(argv) {
 
 function parseAgentTool(value, optionName) {
   if (!AGENT_TOOLS.has(value)) throw new Error(`${optionName} must be one of ${[...AGENT_TOOLS].join(', ')}`);
+  return value;
+}
+
+function parseRoleProfile(value, allowedProfiles, optionName) {
+  if (!allowedProfiles.has(value)) throw new Error(`${optionName} must be one of ${[...allowedProfiles].join(', ')}`);
   return value;
 }
 
@@ -264,6 +346,15 @@ function assertProviderRoleCapability(role) {
   if (!capability) throw new Error(`unknown provider: ${role.agentTool}`);
   if (!capability.roles.includes(role.role)) {
     throw new Error(`${role.agentTool} cannot serve ${role.role} in provider-native orchestration`);
+  }
+  if (ROLE_PROFILE_TO_ROLE[role.profile] !== role.role) {
+    throw new Error(`${role.profile} cannot serve ${role.role} in role-profile orchestration`);
+  }
+  if (!ROLE_PROFILE_SOURCES.has(role.profileSource)) {
+    throw new Error(`${role.roleId} uses unsupported role profile source: ${role.profileSource}`);
+  }
+  if (role.profileSource === 'override' && !['implementer', 'reviewer'].includes(role.roleId)) {
+    throw new Error(`${role.roleId} cannot use override role profile source`);
   }
   if (role.requiresWrite && !capability.writeAllowed) {
     throw new Error(`${role.agentTool} is read-only in P2A orchestration; use --agent-tool codex, claude, or manual for implementation and --reviewer-tool gemini for read-only review`);
@@ -344,9 +435,81 @@ function providerPromptPrefix(agentTool) {
   ];
 }
 
-function providerAwarePrompt(agentTool, basePrompt) {
+function taskProfileText(task) {
+  return [
+    task.title,
+    task.description,
+    task.targetArea,
+    task.suggestedAgentPrompt,
+    ...(task.acceptanceCriteria ?? []),
+  ].filter(Boolean).join('\n').toLowerCase();
+}
+
+function includesAny(text, patterns) {
+  return patterns.some((pattern) => pattern.test(text));
+}
+
+function roleProfileSelection(profile, reason, source = 'auto') {
+  if (!ROLE_PROFILE_SOURCES.has(source)) throw new Error(`unknown role profile source: ${source}`);
+  return {
+    profile,
+    profileSource: source,
+    profileReason: reason,
+  };
+}
+
+function overrideRoleProfile(selection, overrideProfile, optionName) {
+  if (!overrideProfile) return selection;
+  return roleProfileSelection(overrideProfile, `${optionName} explicitly set to ${overrideProfile}`, 'override');
+}
+
+function selectImplementerProfile(task) {
+  const text = taskProfileText(task);
+  const targetArea = String(task.targetArea ?? '').toLowerCase();
+  const targetFrontend = includesAny(targetArea, [/\bui\b/, /\bgui\b/, /\bfrontend\b/, /\bscreen\b/, /\bview\b/]);
+  const targetBackend = includesAny(targetArea, [/\bapi\b/, /\bbackend\b/, /\bserver\b/, /\bservice\b/, /\bdb\b/, /\bdatabase\b/, /\bcli\b/, /\bschema\b/]);
+  const targetTest = includesAny(targetArea, [/\btest\b/, /\bqa\b/, /\bverification\b/]);
+  const targetDocs = includesAny(targetArea, [/\bdocs?\b/, /\breadme\b/, /\bplans?\b/]);
+  if (targetFrontend && targetBackend) return roleProfileSelection('fullstack_implementer', `targetArea "${task.targetArea}" matched frontend and backend signals`);
+  if (targetTest) return roleProfileSelection('test_implementer', `targetArea "${task.targetArea}" matched test/QA signals`);
+  if (targetDocs) return roleProfileSelection('docs_implementer', `targetArea "${task.targetArea}" matched docs/plans signals`);
+  if (targetFrontend) return roleProfileSelection('frontend_implementer', `targetArea "${task.targetArea}" matched UI/frontend signals`);
+  if (targetBackend) return roleProfileSelection('backend_implementer', `targetArea "${task.targetArea}" matched API/backend/CLI signals`);
+  const frontend = includesAny(text, [/\bui\b/, /\bgui\b/, /\bfrontend\b/, /\bscreen\b/, /\bview\b/, /\bcomponent\b/, /\breact\b/, /\brenderer\b/, /\bcss\b/, /\bux\b/, /\baccessib/, /\bresponsive\b/]);
+  const backend = includesAny(text, [/\bapi\b/, /\bbackend\b/, /\bserver\b/, /\bservice\b/, /\bdb\b/, /\bdatabase\b/, /\bpersist/, /\bschema\b/, /\bcli\b/, /\bscript\b/, /\bvalidator\b/, /\bruntime\b/, /\borchestrat/]);
+  if (frontend && backend) return roleProfileSelection('fullstack_implementer', 'task text matched both frontend and backend signals');
+  if (includesAny(text, [/\bfixture\b/, /\bregression\b/, /\bvitest\b/, /\bunit test\b/, /\be2e\b/])) {
+    return roleProfileSelection('test_implementer', 'task text matched test/fixture signals');
+  }
+  if (includesAny(text, [/\bdocumentation\b/, /\bmarkdown\b/, /\bcopy\b/, /\bcli reference\b/, /\b개발계획\b/])) {
+    return roleProfileSelection('docs_implementer', 'task text matched documentation signals');
+  }
+  if (frontend) return roleProfileSelection('frontend_implementer', 'task text matched UI/frontend signals');
+  if (backend) return roleProfileSelection('backend_implementer', 'task text matched API/backend/CLI signals');
+  return roleProfileSelection('fullstack_implementer', 'fallback for implementation task without narrower specialization signal');
+}
+
+function selectReviewerProfile(task, reviewerTool) {
+  const text = taskProfileText(task);
+  if (includesAny(text, [/\bsecurity\b/, /\bsecret\b/, /\btoken\b/, /\bpermission\b/, /\bsandbox\b/, /\bpath traversal\b/, /\bconfinement\b/, /\bshell\b/, /\bspawn\b/, /\bipc\b/])) {
+    return roleProfileSelection('security_reviewer', 'task text matched security/process-boundary signals');
+  }
+  if (includesAny(text, [/\barchitecture\b/, /\bdesign\b/, /\bboundary\b/, /\bcontract\b/, /\bmigration\b/, /\bdependency\b/, /\bschema\b/, /\bprovider\b/, /\borchestrat/])) {
+    return roleProfileSelection('architecture_reviewer', 'task text matched architecture/contract signals');
+  }
+  if (reviewerTool === 'gemini') return roleProfileSelection('qa_reviewer', 'Gemini reviewer defaults to read-only QA coverage');
+  return roleProfileSelection('qa_reviewer', 'default reviewer specialization for acceptance and verification coverage');
+}
+
+function profileGuidance(profile) {
+  return ROLE_PROFILE_GUIDANCE[profile] ?? [`Profile: ${profile}.`];
+}
+
+function providerAwarePrompt(agentTool, profile, basePrompt) {
   return [
     ...providerPromptPrefix(agentTool),
+    '',
+    ...profileGuidance(profile),
     '',
     basePrompt,
   ].join('\n');
@@ -562,26 +725,47 @@ function buildPlan(args, source, task, now = new Date()) {
   const riskFlags = buildRiskFlags(task);
   const mode = modeForRiskFlags(riskFlags);
   const monitorRequired = mode !== 'solo';
+  if (args.reviewerProfile && mode !== 'team') {
+    throw new Error('--reviewer-profile requires a team-mode task with a reviewer role');
+  }
   if (args.agentTool === 'gemini') {
     throw new Error('Gemini is read-only in P2A orchestration; use --agent-tool codex, claude, or manual for implementation and --reviewer-tool gemini for read-only review');
   }
   const reviewerTool = args.reviewerTool ?? args.agentTool;
   assertReviewerToolCompatible(args.agentTool, reviewerTool);
+  const implementerProfile = overrideRoleProfile(
+    selectImplementerProfile(task),
+    args.implementerProfile,
+    '--implementer-profile',
+  );
+  const reviewerProfile = overrideRoleProfile(
+    selectReviewerProfile(task, reviewerTool),
+    args.reviewerProfile,
+    '--reviewer-profile',
+  );
+  const ownerProfile = roleProfileSelection('owner_supervisor', 'fixed owner supervision role');
+  const monitorProfile = roleProfileSelection('manual_monitor', 'fixed manual monitor gate role');
   const roles = [
     {
       roleId: 'owner',
       role: 'lead',
+      profile: ownerProfile.profile,
+      profileSource: ownerProfile.profileSource,
+      profileReason: ownerProfile.profileReason,
       agentTool: 'manual',
       scope: 'Own the run lifecycle, approvals, verification recording, and final task state transition.',
-      prompt: providerAwarePrompt('manual', `Supervise ${task.id}, start the run with p2a_execute, and only finish after verification and monitor gate policy are satisfied.`),
+      prompt: providerAwarePrompt('manual', ownerProfile.profile, `Supervise ${task.id}, start the run with p2a_execute, and only finish after verification and monitor gate policy are satisfied.`),
       requiresWrite: false,
     },
     {
       roleId: 'implementer',
       role: 'contributor',
+      profile: implementerProfile.profile,
+      profileSource: implementerProfile.profileSource,
+      profileReason: implementerProfile.profileReason,
       agentTool: args.agentTool,
       scope: 'Implement the approved ready task in the selected workspace or isolated worktree.',
-      prompt: providerAwarePrompt(args.agentTool, buildTaskPrompt(task)),
+      prompt: providerAwarePrompt(args.agentTool, implementerProfile.profile, buildTaskPrompt(task)),
       requiresWrite: args.agentTool !== 'manual',
     },
   ];
@@ -589,9 +773,12 @@ function buildPlan(args, source, task, now = new Date()) {
     roles.push({
       roleId: 'reviewer',
       role: 'reviewer',
+      profile: reviewerProfile.profile,
+      profileSource: reviewerProfile.profileSource,
+      profileReason: reviewerProfile.profileReason,
       agentTool: reviewerTool,
       scope: 'Read-only review of implementation scope, acceptance coverage, and verification evidence.',
-      prompt: providerAwarePrompt(reviewerTool, buildMonitorPrompt(task)),
+      prompt: providerAwarePrompt(reviewerTool, reviewerProfile.profile, buildMonitorPrompt(task)),
       requiresWrite: false,
     });
   }
@@ -599,9 +786,12 @@ function buildPlan(args, source, task, now = new Date()) {
     roles.push({
       roleId: 'monitor',
       role: 'monitor',
+      profile: monitorProfile.profile,
+      profileSource: monitorProfile.profileSource,
+      profileReason: monitorProfile.profileReason,
       agentTool: 'manual',
       scope: 'Owner-visible monitor gate that decides whether the run can close as done.',
-      prompt: providerAwarePrompt('manual', buildMonitorPrompt(task)),
+      prompt: providerAwarePrompt('manual', monitorProfile.profile, buildMonitorPrompt(task)),
       requiresWrite: false,
     });
   }
@@ -742,12 +932,15 @@ export function buildInitialRuntime(plan, runId, sourcePlanRef = null, now = new
       constraints: [
         'Use p2a_execute and p2a_runs for run lifecycle changes; do not edit run logs by hand.',
         'Do not change the task graph or planning artifacts unless the owner explicitly approves it.',
-        ...plan.roles.map((role) => `${role.roleId}: ${role.scope}`),
+        ...plan.roles.map((role) => `${role.roleId} [${role.profile}]: ${role.scope}`),
       ],
       acceptanceCriteria: plan.acceptanceCriteria,
       roleAssignments: plan.roles.map((role) => ({
         roleId: role.roleId,
         role: role.role,
+        profile: role.profile,
+        profileSource: role.profileSource,
+        profileReason: role.profileReason,
         agentTool: role.agentTool,
         scope: role.scope,
         status: runtimeRoleStatusFor(role),
@@ -995,6 +1188,9 @@ function schedulerHint(runtime) {
       ? {
           roleId: decision.role.roleId,
           role: decision.role.role,
+          profile: decision.role.profile,
+          profileSource: decision.role.profileSource,
+          profileReason: decision.role.profileReason,
           agentTool: decision.role.agentTool,
           status: decision.role.status,
           command: decision.role.agentTool === 'manual' ? null : decision.role.agentTool,
@@ -1023,6 +1219,9 @@ function buildSupervisedRolePrompt(runtime, role) {
     `Run: ${runtime.runId}`,
     `Task: ${runtime.taskId} - ${runtime.taskTitle}`,
     `Role: ${role.roleId} (${role.role}, ${role.agentTool})`,
+    `Profile: ${role.profile}`,
+    `Profile source: ${role.profileSource}`,
+    `Profile reason: ${role.profileReason}`,
     `Status: ${role.status}`,
     '',
     'Supervision boundary:',
@@ -1065,6 +1264,9 @@ function rolePromptPayload(runtime, role) {
     role: {
       roleId: role.roleId,
       role: role.role,
+      profile: role.profile,
+      profileSource: role.profileSource,
+      profileReason: role.profileReason,
       agentTool: role.agentTool,
       status: role.status,
       command: role.agentTool === 'manual' ? null : role.agentTool,
@@ -1154,7 +1356,7 @@ function printSummary(plan) {
   console.log(`- mode: ${plan.mode}`);
   console.log(`- providerStrategy: ${plan.providerStrategy.mode} (${plan.providerStrategy.primaryProvider})`);
   console.log(`- monitorGate: ${plan.monitorGate.required ? plan.monitorGate.verdictPath : 'not required'}`);
-  console.log(`- roles: ${plan.roles.map((role) => `${role.roleId}:${role.agentTool}`).join(', ')}`);
+  console.log(`- roles: ${plan.roles.map((role) => `${role.roleId}:${role.agentTool}/${role.profile}(${role.profileSource})`).join(', ')}`);
   console.log(`- riskFlags: ${plan.riskFlags.join(', ') || '-'}`);
 }
 
@@ -1294,7 +1496,7 @@ function runNextRole(args) {
   console.log(`- supervisedOnly: ${hint.supervisedOnly}`);
   console.log(`- startsProcess: ${hint.startsProcess}`);
   if (hint.nextRole) {
-    console.log(`- nextRole: ${hint.nextRole.roleId} (${hint.nextRole.role}, ${hint.nextRole.agentTool}, ${hint.nextRole.status})`);
+    console.log(`- nextRole: ${hint.nextRole.roleId} (${hint.nextRole.role}, ${hint.nextRole.agentTool}, ${hint.nextRole.profile}, ${hint.nextRole.status})`);
     console.log(`- command: ${hint.nextRole.command ?? 'manual'}`);
   } else {
     console.log('- nextRole: none');
@@ -1316,7 +1518,7 @@ function runRolePrompt(args) {
   console.log('Plan2Agent supervised role prompt');
   console.log(`- runtimeId: ${payload.runtimeId}`);
   console.log(`- runId: ${payload.runId}`);
-  console.log(`- role: ${payload.role.roleId} (${payload.role.agentTool})`);
+  console.log(`- role: ${payload.role.roleId} (${payload.role.agentTool}, ${payload.role.profile})`);
   console.log(`- command: ${payload.role.command ?? 'manual'}`);
   console.log('- supervisedOnly: true');
   console.log('- startsProcess: false');
@@ -1356,7 +1558,7 @@ function runMarkRole(args) {
   console.log(`- role: ${args.roleId} -> ${args.roleStatus}`);
   console.log(`- phase: ${updatedRuntime.status.phase}`);
   if (hint.nextRole) {
-    console.log(`- nextRole: ${hint.nextRole.roleId} (${hint.nextRole.agentTool})`);
+    console.log(`- nextRole: ${hint.nextRole.roleId} (${hint.nextRole.agentTool}, ${hint.nextRole.profile})`);
     console.log(`- nextCommand: ${hint.nextRole.command ?? 'manual'}`);
   } else {
     console.log('- nextRole: none');

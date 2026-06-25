@@ -701,11 +701,92 @@ function validateIterationCurrentFixtureCases() {
         || executeOrchestrationPlan.providerStrategy.mode !== 'single_provider'
         || executeOrchestrationPlan.providerStrategy.primaryProvider !== 'codex'
         || executeOrchestrationPlan.providerCapabilities.find((capability) => capability.provider === 'gemini')?.writeAllowed !== false
+        || executeOrchestrationPlan.roles.find((role) => role.roleId === 'owner')?.profile !== 'owner_supervisor'
+        || executeOrchestrationPlan.roles.find((role) => role.roleId === 'owner')?.profileSource !== 'auto'
+        || !executeOrchestrationPlan.roles.every((role) => typeof role.profile === 'string' && role.profile.length > 0)
+        || !executeOrchestrationPlan.roles.every((role) => role.profileSource === 'auto' && typeof role.profileReason === 'string' && role.profileReason.length > 0)
         || executeOrchestrationPlan.monitorGate.required
         || executeOrchestrationPlan.monitorGate.verdictPath !== null
       ) {
         console.error(`p2a_orchestrate default fixture should stay solo: ${caseData.id}`);
         console.error(JSON.stringify({ executeOrchestrationPlan }, null, 2));
+        return { status: 1, checks };
+      }
+
+      const executeUiProfileGraphPath = path.join(tempRoot, 'p2a-orchestrate-ui-profile', 'gate-c-task-graph', 'task-graph.json');
+      mkdirSync(path.dirname(executeUiProfileGraphPath), { recursive: true });
+      const executeUiProfileGraph = JSON.parse(readFileSync(state.taskGraphPath, 'utf8'));
+      const executeUiProfileTask = executeUiProfileGraph.tasks.find((task) => task.id === 'task-001');
+      executeUiProfileTask.title = 'Build frontend settings screen';
+      executeUiProfileTask.description = 'Add a React UI screen with responsive layout, empty state, and accessible controls.';
+      executeUiProfileTask.targetArea = 'ui';
+      executeUiProfileTask.acceptanceCriteria = ['The UI screen renders responsive controls.', 'Empty and error states are visible.'];
+      executeUiProfileTask.suggestedAgentPrompt = 'Implement the frontend screen without changing backend contracts.';
+      writeFileSync(executeUiProfileGraphPath, `${JSON.stringify(executeUiProfileGraph, null, 2)}\n`, 'utf8');
+      result = runOrchestrate([
+        'plan',
+        '--graph',
+        executeUiProfileGraphPath,
+        '--spec',
+        state.specPath,
+        '--task',
+        'task-001',
+      ]);
+      checks += 1;
+      const executeUiProfilePlan = result.status === 0 ? JSON.parse(result.stdout) : null;
+      if (
+        result.status !== 0
+        || executeUiProfilePlan.roles.find((role) => role.roleId === 'implementer')?.profile !== 'frontend_implementer'
+        || executeUiProfilePlan.roles.find((role) => role.roleId === 'implementer')?.profileSource !== 'auto'
+        || !executeUiProfilePlan.roles.find((role) => role.roleId === 'implementer')?.profileReason.includes('targetArea')
+        || !executeUiProfilePlan.handoffPrompts.find((prompt) => prompt.roleId === 'implementer')?.prompt.includes('Profile: frontend_implementer')
+      ) {
+        console.error(`p2a_orchestrate UI task should select frontend_implementer: ${caseData.id}`);
+        writeResultOutput(result);
+        console.error(JSON.stringify({ executeUiProfilePlan }, null, 2));
+        return { status: failureStatus(result), checks };
+      }
+
+      result = runOrchestrate([
+        'plan',
+        '--graph',
+        executeUiProfileGraphPath,
+        '--spec',
+        state.specPath,
+        '--task',
+        'task-001',
+        '--implementer-profile',
+        'backend_implementer',
+      ]);
+      checks += 1;
+      const executeOverrideProfilePlan = result.status === 0 ? JSON.parse(result.stdout) : null;
+      if (
+        result.status !== 0
+        || executeOverrideProfilePlan.roles.find((role) => role.roleId === 'implementer')?.profile !== 'backend_implementer'
+        || executeOverrideProfilePlan.roles.find((role) => role.roleId === 'implementer')?.profileSource !== 'override'
+        || !executeOverrideProfilePlan.roles.find((role) => role.roleId === 'implementer')?.profileReason.includes('--implementer-profile')
+      ) {
+        console.error(`p2a_orchestrate should record implementer profile override: ${caseData.id}`);
+        writeResultOutput(result);
+        console.error(JSON.stringify({ executeOverrideProfilePlan }, null, 2));
+        return { status: failureStatus(result), checks };
+      }
+
+      result = runOrchestrate([
+        'plan',
+        '--graph',
+        executeUiProfileGraphPath,
+        '--spec',
+        state.specPath,
+        '--task',
+        'task-001',
+        '--reviewer-profile',
+        'qa_reviewer',
+      ]);
+      checks += 1;
+      if (result.status === 0 || !result.stderr.includes('--reviewer-profile requires a team-mode task')) {
+        console.error(`p2a_orchestrate should reject unused reviewer profile override on solo task: ${caseData.id}`);
+        writeResultOutput(result);
         return { status: 1, checks };
       }
 
@@ -860,6 +941,8 @@ function validateIterationCurrentFixtureCases() {
         || executeRuntime.runId !== 'run-execute-fixture'
         || executeRuntime.planId !== executeSidecar.planId
         || executeRuntime.sharedMentalModel.roleAssignments.length !== executeSidecar.roles.length
+        || executeRuntime.sharedMentalModel.roleAssignments.find((role) => role.roleId === 'implementer')?.profileSource !== executeSidecar.roles.find((role) => role.roleId === 'implementer')?.profileSource
+        || !executeRuntime.sharedMentalModel.roleAssignments.find((role) => role.roleId === 'implementer')?.profileReason
         || !executeRuntime.communicationLog.some((event) => event.type === 'handoff')
         || executeRuntime.status.phase !== 'running'
       ) {
@@ -874,6 +957,7 @@ function validateIterationCurrentFixtureCases() {
       if (
         result.status !== 0
         || executeNextRole.nextRole?.roleId !== 'implementer'
+        || executeNextRole.nextRole?.profileSource !== 'auto'
         || executeNextRole.startsProcess !== false
         || executeNextRole.supervisedOnly !== true
       ) {
@@ -888,6 +972,7 @@ function validateIterationCurrentFixtureCases() {
       if (
         result.status !== 0
         || !result.stdout.includes('Plan2Agent supervised role prompt')
+        || !result.stdout.includes('Profile source: auto')
         || !result.stdout.includes('startsProcess: false')
         || !result.stdout.includes('Do not run background loops')
       ) {
@@ -1047,12 +1132,61 @@ function validateIterationCurrentFixtureCases() {
       if (
         executeMonitorPlan.mode !== 'team'
         || executeMonitorPlan.providerStrategy.mode !== 'single_provider'
+        || executeMonitorPlan.roles.find((role) => role.roleId === 'implementer')?.profile !== 'fullstack_implementer'
+        || executeMonitorPlan.roles.find((role) => role.roleId === 'implementer')?.profileSource !== 'auto'
         || executeMonitorPlan.roles.find((role) => role.roleId === 'reviewer')?.agentTool !== 'codex'
+        || executeMonitorPlan.roles.find((role) => role.roleId === 'reviewer')?.profile !== 'security_reviewer'
+        || executeMonitorPlan.roles.find((role) => role.roleId === 'reviewer')?.profileSource !== 'auto'
+        || executeMonitorPlan.roles.find((role) => role.roleId === 'monitor')?.profile !== 'manual_monitor'
+        || executeMonitorPlan.roles.find((role) => role.roleId === 'monitor')?.profileReason !== 'fixed manual monitor gate role'
         || !executeMonitorPlan.monitorGate.required
         || !executeMonitorPlan.riskFlags.includes('multi_area')
       ) {
         console.error(`p2a_orchestrate monitor fixture should use explicit multi-area team mode: ${caseData.id}`);
         console.error(JSON.stringify({ executeMonitorPlan }, null, 2));
+        return { status: 1, checks };
+      }
+
+      result = runOrchestrate([
+        'plan',
+        '--graph',
+        executeMonitorGraphPath,
+        '--spec',
+        state.specPath,
+        '--task',
+        'task-001',
+        '--reviewer-profile',
+        'qa_reviewer',
+      ]);
+      checks += 1;
+      const executeReviewerOverridePlan = result.status === 0 ? JSON.parse(result.stdout) : null;
+      if (
+        result.status !== 0
+        || executeReviewerOverridePlan.roles.find((role) => role.roleId === 'reviewer')?.profile !== 'qa_reviewer'
+        || executeReviewerOverridePlan.roles.find((role) => role.roleId === 'reviewer')?.profileSource !== 'override'
+        || !executeReviewerOverridePlan.roles.find((role) => role.roleId === 'reviewer')?.profileReason.includes('--reviewer-profile')
+      ) {
+        console.error(`p2a_orchestrate should record reviewer profile override on team task: ${caseData.id}`);
+        writeResultOutput(result);
+        console.error(JSON.stringify({ executeReviewerOverridePlan }, null, 2));
+        return { status: failureStatus(result), checks };
+      }
+
+      result = runOrchestrate([
+        'plan',
+        '--graph',
+        executeMonitorGraphPath,
+        '--spec',
+        state.specPath,
+        '--task',
+        'task-001',
+        '--reviewer-profile',
+        'frontend_implementer',
+      ]);
+      checks += 1;
+      if (result.status === 0 || !result.stderr.includes('--reviewer-profile must be one of')) {
+        console.error(`p2a_orchestrate should reject reviewer profile from implementer profile set: ${caseData.id}`);
+        writeResultOutput(result);
         return { status: 1, checks };
       }
 
@@ -1073,6 +1207,7 @@ function validateIterationCurrentFixtureCases() {
         result.status !== 0
         || explicitGeminiReviewerPlan.providerStrategy.mode !== 'single_provider_with_read_only_reviewer'
         || explicitGeminiReviewerPlan.roles.find((role) => role.roleId === 'reviewer')?.agentTool !== 'gemini'
+        || explicitGeminiReviewerPlan.roles.find((role) => role.roleId === 'reviewer')?.profile !== 'security_reviewer'
         || explicitGeminiReviewerPlan.roles.find((role) => role.roleId === 'reviewer')?.requiresWrite !== false
       ) {
         console.error(`p2a_orchestrate should allow Gemini as explicit read-only reviewer: ${caseData.id}`);

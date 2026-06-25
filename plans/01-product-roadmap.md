@@ -780,7 +780,7 @@ Plan2Agent 개발은 아래 흐름을 기본 협업 방식으로 둔다.
 
 다음 후보:
 
-1. 오케스트레이션 런타임 고도화 후속: provider-native team orchestration adapter. 기본은 single-provider team이며, Claude는 native agent teams/subagents, Codex는 skill/custom agent/명시 subagent prompt, Gemini는 planning/review/monitor read-only 보조로 둔다. 공식 CLI/앱 세션은 사용자가 foreground에서 열고 승인하며, p2a는 role/prompt/order/state만 조율한다. API 요금제 기반 완전 자동 개발은 비용상 보류하고, 구독 로그인 기반 무인 실행·browser/background loop·계정 우회는 제외한다.
+1. 오케스트레이션 런타임 고도화 후속: provider-native team orchestration adapter. 기본은 single-provider team이며, Claude는 native agent teams/subagents, Codex는 skill/custom agent/명시 subagent prompt, Gemini는 planning/review/monitor read-only 보조로 둔다. Role은 owner/implementer/reviewer/monitor로 유지하고 roleProfile로 frontend/backend/fullstack/test/docs/qa/architecture/security 전문성을 나누며, 자동 선택 근거와 implementer/reviewer override를 plan/runtime에 기록한다. 공식 CLI/앱 세션은 사용자가 foreground에서 열고 승인하며, p2a는 role/prompt/order/state만 조율한다. API 요금제 기반 완전 자동 개발은 비용상 보류하고, 구독 로그인 기반 무인 실행·browser/background loop·계정 우회는 제외한다.
 2. Hermes cross-session recall은 Task Store/DB 설계 시점에 재논의.
 3. PR 생성 및 리뷰 상태 연동.
 4. code-aware spec 역생성과 결과 diff 자동 병합.

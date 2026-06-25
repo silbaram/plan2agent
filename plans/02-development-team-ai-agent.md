@@ -342,7 +342,7 @@ node scripts/run_fixtures.mjs
 3. **`p2a-dev-orchestrator` MVP** (✅ 1차 + runtime 1단계 + supervised scheduler 2단계 완료)
    - 목적: Team Big Five의 team-lead 역할을 P2A-native로 분리한다.
    - 완료 범위: ready task 1건을 `solo`/`solo_monitor`/`team`으로 deterministic triage하고, 역할별 prompt, run/runtime sidecar, shared mental model, communication log, next-role/role-prompt/mark-role 감독형 scheduler, monitor gate를 남긴다.
-   - 후속 범위: provider capability matrix, provider-native team runner adapter, retry/ask/blocked 판단 보조. 구독 로그인 기반 무인 실행과 자동 role/monitor 호출은 계속 제외한다.
+   - 후속 범위: provider capability matrix, provider-native team runner adapter, roleProfile 기반 전문화, retry/ask/blocked 판단 보조. 구독 로그인 기반 무인 실행과 자동 role/monitor 호출은 계속 제외한다.
 
 4. **Hermes식 proposal queue/review/curation/patch draft/approval execution bridge** (✅ 완료)
    - 목적: 실제 run에서 쌓인 proposal을 normalize, dedupe, prioritize하고 승인 대기 목록으로 정리한다.
@@ -352,7 +352,7 @@ node scripts/run_fixtures.mjs
 
 5. **오케스트레이션 런타임 고도화 2단계** (✅ 감독형 scheduler 완료)
    - 완료 범위: runtime sidecar를 기반으로 `next-role`, `role-prompt`, `mark-role`을 제공한다. 사람이 공식 CLI/앱을 열고 prompt를 붙여넣은 뒤 결과를 기록하는 흐름만 지원한다.
-   - 후속 범위: provider-native team orchestration adapter. Claude는 native agent teams/subagents, Codex는 skills/custom agents/명시 subagent prompt, Gemini는 planning/review/monitor read-only 보조로 둔다. API 기반 완전 자동 개발은 비용상 보류한다. 자동 role/monitor 호출과 무인 실행은 제외한다.
+   - 후속 범위: provider-native team orchestration adapter. Claude는 native agent teams/subagents, Codex는 skills/custom agents/명시 subagent prompt, Gemini는 planning/review/monitor read-only 보조로 둔다. Role은 owner/implementer/reviewer/monitor로 유지하고, 세부 전문성은 frontend/backend/fullstack/test/docs/qa/architecture/security profile로 나눈다. profile 자동 선택 근거와 implementer/reviewer override는 plan/runtime에 기록한다. API 기반 완전 자동 개발은 비용상 보류한다. 자동 role/monitor 호출과 무인 실행은 제외한다.
 
 6. **UI/DB 기반 task store**
    - 목적: 파일 기반 운용이 불편해지는 시점에 task/run/proposal 검색과 대시보드를 제공한다.

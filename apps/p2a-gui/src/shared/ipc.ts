@@ -157,6 +157,9 @@ export type OrchestrationRoleStatus =
 export type WorkbenchOrchestrationRole = {
   roleId: string;
   role: string;
+  profile: string;
+  profileSource: string;
+  profileReason: string;
   agentTool: string;
   scope: string;
   status: OrchestrationRoleStatus;
@@ -176,6 +179,9 @@ export type WorkbenchOrchestrationEvent = {
 export type WorkbenchOrchestrationNextRole = {
   roleId: string;
   role: string;
+  profile: string;
+  profileSource: string;
+  profileReason: string;
   agentTool: string;
   status: OrchestrationRoleStatus;
   command: string | null;

@@ -483,6 +483,9 @@ function buildSupervisedRolePrompt(
       "Plan2Agent supervised role prompt",
       "",
       `Role: ${role.roleId} (${role.role}, ${role.agentTool})`,
+      `Profile: ${role.profile}`,
+      `Profile source: ${role.profileSource}`,
+      `Profile reason: ${role.profileReason}`,
       `Status: ${role.status}`,
       "",
       "Supervision boundary:",
@@ -509,6 +512,9 @@ function buildSupervisedRolePrompt(
     `Run: ${stringValue(runtime.runId) ?? "unknown"}`,
     `Task: ${stringValue(runtime.taskId) ?? "unknown"} - ${stringValue(runtime.taskTitle) ?? ""}`.trim(),
     `Role: ${role.roleId} (${role.role}, ${role.agentTool})`,
+    `Profile: ${role.profile}`,
+    `Profile source: ${role.profileSource}`,
+    `Profile reason: ${role.profileReason}`,
     `Status: ${role.status}`,
     "",
     "Supervision boundary:",
@@ -549,6 +555,18 @@ function buildSupervisedRolePrompt(
   ].join("\n");
 }
 
+function defaultRoleProfile(roleId: string, role: string): string {
+  if (roleId === "owner" || role === "lead") return "owner_supervisor";
+  if (roleId === "monitor" || role === "monitor") return "manual_monitor";
+  if (role === "reviewer") return "qa_reviewer";
+  return "fullstack_implementer";
+}
+
+function defaultRoleProfileReason(roleId: string, role: string): string {
+  const profile = defaultRoleProfile(roleId, role);
+  return `legacy orchestration artifact inferred ${profile}`;
+}
+
 function normalizeOrchestrationRoles(
   plan: JsonRecord | null,
   runtime: JsonRecord | null,
@@ -563,6 +581,10 @@ function normalizeOrchestrationRoles(
     .map((roleRecord): WorkbenchOrchestrationRole | null => {
       const roleId = stringValue(roleRecord.roleId);
       const role = stringValue(roleRecord.role);
+      const profile = stringValue(roleRecord.profile) ?? defaultRoleProfile(roleId ?? "", role ?? "");
+      const profileSource = stringValue(roleRecord.profileSource) ?? "auto";
+      const profileReason =
+        stringValue(roleRecord.profileReason) ?? defaultRoleProfileReason(roleId ?? "", role ?? "");
       const agentTool = stringValue(roleRecord.agentTool);
       const scope = stringValue(roleRecord.scope);
       if (!roleId || !role || !agentTool || !scope) return null;
@@ -574,6 +596,9 @@ function normalizeOrchestrationRoles(
       const normalizedRole: WorkbenchOrchestrationRole = {
         roleId,
         role,
+        profile,
+        profileSource,
+        profileReason,
         agentTool,
         scope,
         status,
@@ -608,6 +633,9 @@ function nextRolePayload(role: WorkbenchOrchestrationRole | null): WorkbenchOrch
   return {
     roleId: role.roleId,
     role: role.role,
+    profile: role.profile,
+    profileSource: role.profileSource,
+    profileReason: role.profileReason,
     agentTool: role.agentTool,
     status: role.status,
     command: role.command,

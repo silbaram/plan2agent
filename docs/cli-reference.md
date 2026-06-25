@@ -270,6 +270,8 @@ node scripts/p2a_execute.mjs finish \
 
 team mode의 기본 전략은 single-provider다. `--reviewer-tool`을 생략하면 reviewer도 implementer와 같은 provider를 쓴다. Gemini는 write-required implementer로 쓰지 않고, 사용자가 `--reviewer-tool gemini`를 명시한 경우에만 read-only reviewer/monitor 보조로 배정한다. plan에는 `providerStrategy`와 `providerCapabilities`가 함께 기록되어 이 제한을 검증할 수 있다.
 
+role은 `owner`/`implementer`/`reviewer`/`monitor`를 유지하고, 세부 전문성은 `profile`로 기록한다. 현재 profile은 `frontend_implementer`, `backend_implementer`, `fullstack_implementer`, `test_implementer`, `docs_implementer`, `qa_reviewer`, `architecture_reviewer`, `security_reviewer`, `owner_supervisor`, `manual_monitor`다. `targetArea`, task 본문, acceptance criteria를 기준으로 deterministic하게 선택되며, `profileSource`와 `profileReason`에 자동 선택/수동 override 근거가 남는다. 필요하면 `--implementer-profile <profile>` 또는 team-mode task의 `--reviewer-profile <profile>`로 사람이 전문성을 명시할 수 있고 role prompt에도 profile별 지시와 선택 근거가 포함된다.
+
 `team` mode는 명시적인 다중 영역 task에만 보수적으로 추천한다. `targetArea`에서 복수 영역을 의도할 때는 `api+ui`, `api,ui`, `api&ui`, `api and ui`처럼 comma/plus/ampersand/`and`를 쓴다. `auth/login` 같은 slash 표기는 단일 영역 label로 취급한다.
 
 ```bash

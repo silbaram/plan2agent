@@ -113,6 +113,9 @@
             "required": [
               "roleId",
               "role",
+              "profile",
+              "profileSource",
+              "profileReason",
               "agentTool",
               "scope",
               "status"
@@ -131,6 +134,32 @@
                   "reviewer",
                   "monitor"
                 ]
+              },
+              "profile": {
+                "type": "string",
+                "enum": [
+                  "owner_supervisor",
+                  "frontend_implementer",
+                  "backend_implementer",
+                  "fullstack_implementer",
+                  "test_implementer",
+                  "docs_implementer",
+                  "qa_reviewer",
+                  "architecture_reviewer",
+                  "security_reviewer",
+                  "manual_monitor"
+                ]
+              },
+              "profileSource": {
+                "type": "string",
+                "enum": [
+                  "auto",
+                  "override"
+                ]
+              },
+              "profileReason": {
+                "type": "string",
+                "minLength": 1
               },
               "agentTool": {
                 "type": "string",

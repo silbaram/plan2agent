@@ -216,6 +216,7 @@ MVP에서 하지 않는 것:
 
 - provider capability matrix를 추가한다.
 - `team` plan에 `providerStrategy`, role capability, 실행 표면을 기록한다.
+- `owner`/`implementer`/`reviewer`/`monitor` role은 유지하고, 실제 전문성은 `profile`로 세분화한다. 구현 profile은 frontend/backend/fullstack/test/docs, 리뷰 profile은 qa/architecture/security, monitor는 manual_monitor로 둔다. 자동 선택 근거는 `profileSource/profileReason`에 기록하고, implementer/reviewer는 사람이 override할 수 있다.
 - Claude adapter는 Claude Code의 agent teams/subagents를 native team runner로 사용한다. agent teams가 experimental/off이면 subagent/foreground prompt로 폴백한다.
 - Codex adapter는 Codex skills, custom agents, 명시 subagent prompt를 사용한다. Codex는 subagent를 자동으로 spawn하지 않으므로 prompt에 명시 요청을 포함한다.
 - Gemini adapter는 Gemini CLI extensions, custom commands, `GEMINI.md` context를 사용하되 planning/review/monitor read-only 역할에 한정한다. 구현자 role에는 기본 배정하지 않는다.
@@ -226,6 +227,7 @@ MVP에서 하지 않는 것:
 
 - `claude`, `codex`, `gemini` capability matrix가 scaffold/handoff와 orchestrator plan에서 같은 기준으로 쓰인다.
 - `team` plan 생성 시 implementer/reviewer/monitor role이 provider capability를 위반하지 않는다.
+- task 내용에 따라 role profile이 선택되고 role prompt에 profile별 지시와 선택 근거가 포함된다.
 - Gemini는 write-required role에 배정되지 않는다.
 - Claude team plan은 native team 또는 subagent runner prompt를 제공한다.
 - Codex team plan은 custom agent/subagent 명시 실행 prompt를 제공한다.

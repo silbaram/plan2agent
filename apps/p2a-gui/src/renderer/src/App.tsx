@@ -1513,8 +1513,15 @@ export default function App() {
                     role="listitem"
                   >
                     <span className="mono">{role.roleId}</span>
-                    <strong>{role.role}</strong>
-                    <em className="mono">{role.agentTool}</em>
+                    <strong>
+                      {role.role} · {role.agentTool}
+                    </strong>
+                    <em className="mono">
+                      {role.profile} · {role.profileSource}
+                    </em>
+                    <span className="orchestration-role__reason" title={role.profileReason}>
+                      {role.profileReason}
+                    </span>
                     <small className={`status-badge status-badge--${role.status}`}>
                       {statusLabel(role.status, copy)}
                     </small>

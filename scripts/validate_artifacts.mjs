@@ -35,6 +35,19 @@ const GATE_PATHS = {
   reviewReport: path.join('gate-d-review', 'review-report.md'),
   reviewJson: path.join('gate-d-review', 'review.json'),
 };
+const ROLE_PROFILE_TO_ROLE = {
+  owner_supervisor: 'lead',
+  frontend_implementer: 'contributor',
+  backend_implementer: 'contributor',
+  fullstack_implementer: 'contributor',
+  test_implementer: 'contributor',
+  docs_implementer: 'contributor',
+  qa_reviewer: 'reviewer',
+  architecture_reviewer: 'reviewer',
+  security_reviewer: 'reviewer',
+  manual_monitor: 'monitor',
+};
+const ROLE_PROFILE_SOURCES = new Set(['auto', 'override']);
 
 export class ValidationError extends Error {
   constructor(message) {
@@ -579,6 +592,15 @@ export function validateOrchestrationPlanData(data) {
     if (!capability.roles.includes(role.role)) {
       throw new ValidationError(`orchestration plan role ${role.roleId} assigns ${role.role} to unsupported provider ${role.agentTool}`);
     }
+    if (ROLE_PROFILE_TO_ROLE[role.profile] !== role.role) {
+      throw new ValidationError(`orchestration plan role ${role.roleId} profile ${role.profile} does not match role ${role.role}`);
+    }
+    if (!ROLE_PROFILE_SOURCES.has(role.profileSource)) {
+      throw new ValidationError(`orchestration plan role ${role.roleId} uses unsupported profileSource ${role.profileSource}`);
+    }
+    if (role.profileSource === 'override' && !['implementer', 'reviewer'].includes(role.roleId)) {
+      throw new ValidationError(`orchestration plan role ${role.roleId} cannot use override profileSource`);
+    }
     if (role.requiresWrite && !capability.writeAllowed) {
       throw new ValidationError(`orchestration plan role ${role.roleId} requires write but provider ${role.agentTool} is read-only`);
     }
@@ -628,6 +650,17 @@ export function validateOrchestrationRuntimeData(data) {
     throw new ValidationError('orchestration runtime roleAssignments[].roleId values must be unique');
   }
   const roleIdSet = new Set(roleIds);
+  for (const role of roleAssignments) {
+    if (ROLE_PROFILE_TO_ROLE[role.profile] !== role.role) {
+      throw new ValidationError(`orchestration runtime role ${role.roleId} profile ${role.profile} does not match role ${role.role}`);
+    }
+    if (!ROLE_PROFILE_SOURCES.has(role.profileSource)) {
+      throw new ValidationError(`orchestration runtime role ${role.roleId} uses unsupported profileSource ${role.profileSource}`);
+    }
+    if (role.profileSource === 'override' && !['implementer', 'reviewer'].includes(role.roleId)) {
+      throw new ValidationError(`orchestration runtime role ${role.roleId} cannot use override profileSource`);
+    }
+  }
   const eventIds = data.communicationLog.map((event) => event.eventId);
   if (eventIds.length !== new Set(eventIds).size) {
     throw new ValidationError('orchestration runtime communicationLog[].eventId values must be unique');
