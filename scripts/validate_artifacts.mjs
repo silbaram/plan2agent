@@ -106,22 +106,33 @@ function expectedExecutionGuide(agentTool, role, profile) {
   };
 }
 
-function backfillRoleExecutionGuide(role) {
-  if (!role.executionGuide) {
-    role.executionGuide = expectedExecutionGuide(role.agentTool, role.role, role.profile);
+function cloneJsonData(data) {
+  return JSON.parse(JSON.stringify(data));
+}
+
+function roleWithExecutionGuide(role) {
+  if (role.executionGuide) return role;
+  return {
+    ...role,
+    executionGuide: expectedExecutionGuide(role.agentTool, role.role, role.profile),
+  };
+}
+
+export function normalizeOrchestrationPlanData(data) {
+  const normalized = cloneJsonData(data);
+  if (Array.isArray(normalized?.roles)) {
+    normalized.roles = normalized.roles.map(roleWithExecutionGuide);
   }
-  return role;
+  return normalized;
 }
 
-function backfillOrchestrationPlanData(data) {
-  if (Array.isArray(data?.roles)) data.roles.forEach(backfillRoleExecutionGuide);
-  return data;
-}
-
-function backfillOrchestrationRuntimeData(data) {
-  const roleAssignments = data?.sharedMentalModel?.roleAssignments;
-  if (Array.isArray(roleAssignments)) roleAssignments.forEach(backfillRoleExecutionGuide);
-  return data;
+export function normalizeOrchestrationRuntimeData(data) {
+  const normalized = cloneJsonData(data);
+  const roleAssignments = normalized?.sharedMentalModel?.roleAssignments;
+  if (Array.isArray(roleAssignments)) {
+    normalized.sharedMentalModel.roleAssignments = roleAssignments.map(roleWithExecutionGuide);
+  }
+  return normalized;
 }
 
 function validateExecutionGuide(guide, label) {
@@ -662,7 +673,7 @@ export function validateRunIndex(filePath) {
 }
 
 export function validateOrchestrationPlanData(data) {
-  backfillOrchestrationPlanData(data);
+  data = normalizeOrchestrationPlanData(data);
   validateSchema(data, loadJson(SCHEMA_PATHS.orchestration_plan));
   const roleIds = data.roles.map((role) => role.roleId);
   if (roleIds.length !== new Set(roleIds).size) {
@@ -742,7 +753,7 @@ export function validateOrchestrationPlan(filePath) {
 }
 
 export function validateOrchestrationRuntimeData(data) {
-  backfillOrchestrationRuntimeData(data);
+  data = normalizeOrchestrationRuntimeData(data);
   validateSchema(data, loadJson(SCHEMA_PATHS.orchestration_runtime));
   const roleAssignments = data.sharedMentalModel.roleAssignments;
   const roleIds = roleAssignments.map((role) => role.roleId);

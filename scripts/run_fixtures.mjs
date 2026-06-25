@@ -7,7 +7,12 @@ import path from 'node:path';
 import process from 'node:process';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { validateTaskContextData, validateTaskGraphData } from './validate_artifacts.mjs';
+import {
+  validateOrchestrationPlanData,
+  validateOrchestrationRuntimeData,
+  validateTaskContextData,
+  validateTaskGraphData,
+} from './validate_artifacts.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const ROOT = path.resolve(path.dirname(__filename), '..');
@@ -728,6 +733,17 @@ function validateIterationCurrentFixtureCases() {
         writeResultOutput(result);
         return { status: failureStatus(result), checks };
       }
+      const legacyOrchestrationPlanForDirectValidation = JSON.parse(JSON.stringify(legacyOrchestrationPlan));
+      const normalizedLegacyOrchestrationPlan = validateOrchestrationPlanData(legacyOrchestrationPlanForDirectValidation);
+      checks += 1;
+      if (
+        legacyOrchestrationPlanForDirectValidation.roles.some((role) => role.executionGuide)
+        || !normalizedLegacyOrchestrationPlan.roles.every((role) => role.executionGuide?.startsProcess === false)
+      ) {
+        console.error(`orchestration plan direct validator should normalize without mutating input: ${caseData.id}`);
+        console.error(JSON.stringify({ legacyOrchestrationPlanForDirectValidation, normalizedLegacyOrchestrationPlan }, null, 2));
+        return { status: 1, checks };
+      }
 
       const mismatchedExecutionGuidePlanPath = path.join(tempRoot, 'p2a-execute', 'orchestration', 'task-001-mismatched-execution-guide.json');
       const mismatchedExecutionGuidePlan = JSON.parse(JSON.stringify(executeOrchestrationPlan));
@@ -993,6 +1009,17 @@ function validateIterationCurrentFixtureCases() {
         console.error(`orchestration runtime validator should backfill legacy executionGuide: ${caseData.id}`);
         writeResultOutput(result);
         return { status: failureStatus(result), checks };
+      }
+      const legacyRuntimeForDirectValidation = JSON.parse(JSON.stringify(legacyRuntime));
+      const normalizedLegacyRuntime = validateOrchestrationRuntimeData(legacyRuntimeForDirectValidation);
+      checks += 1;
+      if (
+        legacyRuntimeForDirectValidation.sharedMentalModel.roleAssignments.some((role) => role.executionGuide)
+        || !normalizedLegacyRuntime.sharedMentalModel.roleAssignments.every((role) => role.executionGuide?.startsProcess === false)
+      ) {
+        console.error(`orchestration runtime direct validator should normalize without mutating input: ${caseData.id}`);
+        console.error(JSON.stringify({ legacyRuntimeForDirectValidation, normalizedLegacyRuntime }, null, 2));
+        return { status: 1, checks };
       }
       result = runOrchestrate(['next-role', '--runtime', legacyRuntimePath, '--json']);
       checks += 1;
