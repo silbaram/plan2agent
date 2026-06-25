@@ -185,6 +185,32 @@ describe("execution action helpers", () => {
     }
   });
 
+  it("allows manual implementation starts and rejects read-only/non-implementer tools", async () => {
+    const { projectRoot, artifactRoot } = await createProject();
+    try {
+      const manualCommand = buildStartRunCommand({
+        ...startRequestFor(projectRoot, artifactRoot),
+        agentTool: "manual",
+      });
+      expect(manualCommand.args).toContain("manual");
+
+      expect(() =>
+        buildStartRunCommand({
+          ...startRequestFor(projectRoot, artifactRoot),
+          agentTool: "gemini" as never,
+        }),
+      ).toThrow("unsupported agent tool");
+      expect(() =>
+        buildStartRunCommand({
+          ...startRequestFor(projectRoot, artifactRoot),
+          agentTool: "aider" as never,
+        }),
+      ).toThrow("unsupported agent tool");
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
   it("builds a p2a_execute finish command from typed GUI input", async () => {
     const { projectRoot, artifactRoot } = await createProject();
     try {

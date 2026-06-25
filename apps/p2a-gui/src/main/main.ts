@@ -3,7 +3,7 @@ import { app, BrowserWindow, dialog, ipcMain, session } from "electron";
 import path from "node:path";
 import {
   IPC_CHANNELS,
-  type AgentTool,
+  type ExecutionAgentTool,
   type ArtifactFileReadRequest,
   type ExecutionFinishRunRequest,
   type ExecutionStartRunRequest,
@@ -249,7 +249,7 @@ function registerIpcHandlers(): void {
   });
   ipcMain.handle(
     IPC_CHANNELS.projectSetDefaultAgentTool,
-    async (event, rootPath: string, agentTool: AgentTool) => {
+    async (event, rootPath: string, agentTool: ExecutionAgentTool) => {
       if (typeof rootPath !== "string" || rootPath.trim().length === 0) {
         throw new Error("project:setDefaultAgentTool requires a root path");
       }

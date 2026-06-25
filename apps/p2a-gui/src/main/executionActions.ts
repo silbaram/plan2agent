@@ -2,9 +2,9 @@ import { spawn } from "node:child_process";
 import { existsSync, statSync } from "node:fs";
 import path from "node:path";
 import type {
-  AgentTool,
   ExecutionCommandResult,
   ExecutionCustomVerificationCommand,
+  ExecutionAgentTool,
   ExecutionFinishRunRequest,
   ExecutionStartRunRequest,
   FailureClass,
@@ -12,10 +12,10 @@ import type {
   OrchestrationRoleStatus,
   VerificationType,
 } from "../shared/ipc";
-import { AGENT_TOOLS } from "../shared/ipc";
+import { EXECUTION_AGENT_TOOLS } from "../shared/ipc";
 
 const OUTPUT_LIMIT = 1024 * 128;
-const VALID_AGENT_TOOLS = new Set<AgentTool>(AGENT_TOOLS);
+const VALID_EXECUTION_AGENT_TOOLS = new Set<ExecutionAgentTool>(EXECUTION_AGENT_TOOLS);
 const VALID_FAILURE_CLASSES = new Set<FailureClass>([
   "verification_failed",
   "test_flake",
@@ -243,7 +243,7 @@ export function buildStartRunCommand(request: ExecutionStartRunRequest): Executi
   const context = resolveExecutionContext(request);
   const taskId = normalizeTaskId(request.taskId);
   const runId = normalizeRunId(request.runId);
-  if (!VALID_AGENT_TOOLS.has(request.agentTool)) {
+  if (!VALID_EXECUTION_AGENT_TOOLS.has(request.agentTool)) {
     throw new Error(`unsupported agent tool: ${String(request.agentTool)}`);
   }
 

@@ -17,7 +17,7 @@ import {
   X,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
-import { AGENT_TOOLS, DEFAULT_UI_LOCALE, UI_LOCALES } from "../../shared/ipc";
+import { DEFAULT_UI_LOCALE, EXECUTION_AGENT_TOOLS, UI_LOCALES } from "../../shared/ipc";
 import {
   summarizeFinishRunFailure,
   summarizeStartRunFailure,
@@ -30,6 +30,7 @@ import type {
   ArtifactFileReadResult,
   ArtifactSummary,
   DiagnosticSeverity,
+  ExecutionAgentTool,
   ExecutionCommandResult,
   ExecutionFinishStatus,
   FailureClass,
@@ -74,6 +75,11 @@ const failureClassOptions: FailureClass[] = [
   "implementation_incomplete",
   "other",
 ];
+
+function terminalAgentForExecution(agentTool: ExecutionAgentTool | null | undefined): AgentTool | null {
+  if (!agentTool || agentTool === "manual") return null;
+  return agentTool;
+}
 
 const verificationTypeOptions: VerificationType[] = ["custom", "test", "lint", "typecheck"];
 const orchestrationRoleStatusOptions: OrchestrationRoleStatus[] = [
@@ -608,7 +614,7 @@ export default function App() {
     }
   }
 
-  async function changeDefaultAgentTool(agentTool: AgentTool) {
+  async function changeDefaultAgentTool(agentTool: ExecutionAgentTool) {
     if (!projectSnapshot) return;
 
     try {
@@ -2003,7 +2009,7 @@ export default function App() {
         <TerminalSurface
           cwd={projectSnapshot?.rootPath}
           command={onboarding?.primaryAction.command ?? projectSnapshot?.commands[0]?.command}
-          agentTool={projectSnapshot?.defaultAgentTool ?? "codex"}
+          agentTool={terminalAgentForExecution(projectSnapshot?.defaultAgentTool)}
           taskId={selectedTask?.id}
           taskPrompt={selectedTask?.suggestedAgentPrompt}
           locale={locale}
@@ -2084,11 +2090,11 @@ export default function App() {
               <select
                 className="agent-select mono"
                 value={projectSnapshot?.defaultAgentTool ?? "codex"}
-                onChange={(event) => changeDefaultAgentTool(event.target.value as AgentTool)}
+                onChange={(event) => changeDefaultAgentTool(event.target.value as ExecutionAgentTool)}
                 disabled={!projectSnapshot}
                 aria-label="Settings default agent tool"
               >
-                {AGENT_TOOLS.map((agentTool) => (
+                {EXECUTION_AGENT_TOOLS.map((agentTool) => (
                   <option key={agentTool} value={agentTool}>
                     {agentTool}
                   </option>
@@ -2948,11 +2954,11 @@ export default function App() {
               <select
                 className="agent-select mono"
                 value={projectSnapshot?.defaultAgentTool ?? "codex"}
-                onChange={(event) => changeDefaultAgentTool(event.target.value as AgentTool)}
+                onChange={(event) => changeDefaultAgentTool(event.target.value as ExecutionAgentTool)}
                 disabled={!projectSnapshot}
                 aria-label="Default agent tool"
               >
-                {AGENT_TOOLS.map((agentTool) => (
+                {EXECUTION_AGENT_TOOLS.map((agentTool) => (
                   <option key={agentTool} value={agentTool}>
                     {agentTool}
                   </option>

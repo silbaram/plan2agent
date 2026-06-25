@@ -9,7 +9,7 @@ import type { AgentTool, TerminalSessionInfo, UiLocale } from "../../shared/ipc"
 type TerminalSurfaceProps = {
   cwd: string | null | undefined;
   command: string | null | undefined;
-  agentTool: AgentTool;
+  agentTool: AgentTool | null;
   taskId: string | null | undefined;
   taskPrompt: string | null | undefined;
   locale?: UiLocale;
@@ -78,13 +78,15 @@ function createIdleTranscript({
   return [
     "\x1b[38;5;244m# p2a real PTY surface · idle\x1b[0m\r\n",
     `\x1b[38;5;244m# cwd\x1b[0m ${cwd}\r\n`,
-    `\x1b[38;5;244m# agent\x1b[0m ${agentTool}\r\n`,
+    `\x1b[38;5;244m# agent\x1b[0m ${agentTool ?? "manual"}\r\n`,
     taskId ? `\x1b[38;5;244m# task\x1b[0m ${taskId}\r\n` : "\x1b[38;5;244m# task\x1b[0m none\r\n",
     "\r\n",
     `\x1b[38;5;244m# preview\x1b[0m ${command}\r\n`,
     "\r\n",
     "\x1b[38;5;109m[renderer]\x1b[0m xterm mounted; stdin is forwarded only in passthrough mode.\r\n",
-    "\x1b[38;5;109m[pty]\x1b[0m Start session launches the selected agent CLI in main process.\r\n",
+    agentTool
+      ? "\x1b[38;5;109m[pty]\x1b[0m Start session launches the selected agent CLI in main process.\r\n"
+      : "\x1b[38;5;109m[pty]\x1b[0m Manual mode does not launch an agent CLI session.\r\n",
     "\x1b[38;5;109m[links]\x1b[0m Web links addon active: https://plan2agent.local/docs/terminal\r\n",
     `\x1b[38;5;109m[prompt]\x1b[0m ${promptPreview}\r\n`,
   ];
@@ -321,6 +323,7 @@ export function TerminalSurface({
     if (!terminal) return undefined;
     if (
       !normalizedCwd ||
+      !agentTool ||
       status === "starting" ||
       status === "running" ||
       status === "stopping" ||
@@ -390,7 +393,7 @@ export function TerminalSurface({
   }
 
   const isSessionChanging = status === "starting" || status === "stopping" || status === "killing";
-  const canStartSession = Boolean(cwd) && !activeSession && !isSessionChanging;
+  const canStartSession = Boolean(cwd) && Boolean(agentTool) && !activeSession && !isSessionChanging;
   const canSendMessage =
     Boolean(activeSession) && status === "running" && messageText.trim().length > 0;
   const canRecordNote = status !== "idle" && noteText.trim().length > 0;

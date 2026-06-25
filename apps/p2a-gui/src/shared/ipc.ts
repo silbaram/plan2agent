@@ -21,11 +21,14 @@ export const IPC_CHANNELS = {
 } as const;
 
 export const AGENT_TOOLS = ["codex", "claude", "gemini", "aider", "cursor"] as const;
+export const EXECUTION_AGENT_TOOLS = ["codex", "claude", "manual"] as const;
 export const DEFAULT_AGENT_TOOL: AgentTool = "codex";
+export const DEFAULT_EXECUTION_AGENT_TOOL: ExecutionAgentTool = "codex";
 export const UI_LOCALES = ["ko", "en"] as const;
 export const DEFAULT_UI_LOCALE: UiLocale = "ko";
 
 export type AgentTool = (typeof AGENT_TOOLS)[number];
+export type ExecutionAgentTool = (typeof EXECUTION_AGENT_TOOLS)[number];
 export type UiLocale = (typeof UI_LOCALES)[number];
 
 export type RuntimeInfo = {
@@ -330,7 +333,7 @@ export type RecentProject = {
   rootPath: string;
   name: string;
   lastOpenedAt: string;
-  defaultAgentTool: AgentTool;
+  defaultAgentTool: ExecutionAgentTool;
 };
 
 export type GuiConfigSnapshot = {
@@ -348,7 +351,7 @@ export type ProjectSnapshot = {
   mode: "read-only";
   projectId: string | null;
   activeIteration: string | null;
-  defaultAgentTool: AgentTool;
+  defaultAgentTool: ExecutionAgentTool;
   artifactRoot: string | null;
   checks: ProjectFileCheck[];
   artifacts: ArtifactSummary[];
@@ -442,7 +445,7 @@ export type ExecutionStartRunRequest = {
   artifactRoot: string;
   taskGraphPath: string | null;
   taskId: string;
-  agentTool: AgentTool;
+  agentTool: ExecutionAgentTool;
   runId?: string | null;
 };
 
@@ -499,7 +502,7 @@ export type P2AApi = {
     forgetRecent: (rootPath: string) => Promise<GuiConfigSnapshot>;
     setDefaultAgentTool: (
       rootPath: string,
-      agentTool: AgentTool,
+      agentTool: ExecutionAgentTool,
     ) => Promise<GuiConfigSnapshot>;
     onChanged: (callback: (event: ProjectWatchEvent) => void) => () => void;
   };

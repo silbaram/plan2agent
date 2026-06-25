@@ -6,11 +6,11 @@ import reviewSchema from "../../../../schemas/review.schema.json";
 import runIndexSchema from "../../../../schemas/run-index.schema.json";
 import specSchema from "../../../../schemas/spec.schema.json";
 import taskGraphSchema from "../../../../schemas/task-graph.schema.json";
-import { DEFAULT_AGENT_TOOL } from "../shared/ipc";
+import { DEFAULT_EXECUTION_AGENT_TOOL } from "../shared/ipc";
 import type {
-  AgentTool,
   ArtifactSummary,
   CommandGuidance,
+  ExecutionAgentTool,
   FailureClass,
   FailureRetryability,
   FailureSource,
@@ -1557,7 +1557,7 @@ function buildOnboarding(
 
 export async function loadProjectSnapshot(
   rootPath: string,
-  options: { defaultAgentTool?: AgentTool } = {},
+  options: { defaultAgentTool?: ExecutionAgentTool } = {},
 ): Promise<ProjectSnapshot> {
   const normalizedRootPath = path.resolve(rootPath);
   const checks = await buildFileChecks(normalizedRootPath);
@@ -1577,7 +1577,7 @@ export async function loadProjectSnapshot(
     mode: "read-only",
     projectId: primaryArtifact?.projectId ?? null,
     activeIteration: primaryArtifact?.activeIteration ?? null,
-    defaultAgentTool: options.defaultAgentTool ?? DEFAULT_AGENT_TOOL,
+    defaultAgentTool: options.defaultAgentTool ?? DEFAULT_EXECUTION_AGENT_TOOL,
     artifactRoot: primaryArtifact?.rootPath ?? null,
     checks,
     artifacts,

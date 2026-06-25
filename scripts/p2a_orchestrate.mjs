@@ -1148,11 +1148,27 @@ function appendRuntimeEvent(runtime, args, now = new Date()) {
       answeredAt: null,
     });
   }
+  if (args.eventType === 'answer') {
+    const matchingQuestion = runtime.sharedMentalModel.openQuestions.find((question) => (
+      question.status === 'open'
+      && (question.targetRoleId === role.roleId || question.targetRoleId === null)
+    )) ?? runtime.sharedMentalModel.openQuestions.find((question) => question.status === 'open');
+    if (matchingQuestion) {
+      matchingQuestion.status = 'answered';
+      matchingQuestion.answer = event.detail ?? event.summary;
+      matchingQuestion.answeredAt = createdAt;
+    }
+  }
   runtime.updatedAt = createdAt;
   runtime.status.lastEventId = event.eventId;
   runtime.status.phase = args.phase ?? inferredRuntimePhase(runtime.status.phase, args.eventType);
   runtime.status.blocked = runtime.status.blocked || runtime.status.phase === 'blocked' || args.eventType === 'blocker' || args.roleStatus === 'blocked';
-  runtime.status.needsUserDecision = runtime.status.needsUserDecision || event.requiresOwnerAction;
+  const hasOpenQuestion = runtime.sharedMentalModel.openQuestions.some((question) => question.status === 'open');
+  if (['answer', 'ack', 'decision'].includes(args.eventType) && !hasOpenQuestion && !runtime.status.blocked) {
+    runtime.status.needsUserDecision = false;
+  } else {
+    runtime.status.needsUserDecision = runtime.status.needsUserDecision || event.requiresOwnerAction || hasOpenQuestion;
+  }
   return { runtime: validateOrchestrationRuntimeData(runtime), event };
 }
 

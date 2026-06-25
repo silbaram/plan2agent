@@ -1,10 +1,10 @@
 import { contextBridge, ipcRenderer } from "electron";
 import {
   IPC_CHANNELS,
-  type AgentTool,
   type ArtifactFileReadRequest,
   type ArtifactFileReadResult,
   type ExecutionCommandResult,
+  type ExecutionAgentTool,
   type ExecutionFinishRunRequest,
   type ExecutionStartRunRequest,
   type GuiConfigSnapshot,
@@ -43,7 +43,7 @@ const p2aApi: P2AApi = {
       ipcRenderer.invoke(IPC_CHANNELS.projectLoad, rootPath, options) as Promise<ProjectSnapshot>,
     forgetRecent: (rootPath) =>
       ipcRenderer.invoke(IPC_CHANNELS.projectForgetRecent, rootPath) as Promise<GuiConfigSnapshot>,
-    setDefaultAgentTool: (rootPath, agentTool: AgentTool) =>
+    setDefaultAgentTool: (rootPath, agentTool: ExecutionAgentTool) =>
       ipcRenderer.invoke(
         IPC_CHANNELS.projectSetDefaultAgentTool,
         rootPath,

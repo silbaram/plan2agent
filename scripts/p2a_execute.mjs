@@ -631,6 +631,10 @@ function closedOrchestrationRuntimeForRun(source, runId) {
   return { filePath: runtimePath, runtime };
 }
 
+function expectedTaskStatusForRun(run) {
+  return finishStatusFromRun(run) === 'finished' ? 'done' : 'blocked';
+}
+
 function readRun(runsDir, runId) {
   const filePath = runPath(runsDir, runId);
   assertFile(filePath, runId);
@@ -715,6 +719,28 @@ function verifyRequested(args) {
 
 function finishStatusFromRun(run) {
   return run.status;
+}
+
+function transitionTaskAfterFinishedRun(args, source, run, successStatus = 0) {
+  const task = requireTask(source, run.taskId);
+  const expectedTaskStatus = expectedTaskStatusForRun(run);
+  if (args.noTaskTransition) {
+    console.log('Task transition skipped by --no-task-transition');
+    return successStatus;
+  }
+  if (task.status === expectedTaskStatus) {
+    console.log(`Task transition already applied: ${task.id} status is ${task.status}`);
+    return successStatus;
+  }
+  if (task.status !== 'in_progress') {
+    console.error(`task transition skipped: ${task.id} must be in_progress before done/block; current status is ${task.status}`);
+    return 1;
+  }
+  console.log(`Marking task ${run.status === 'finished' ? 'done' : 'blocked'}...`);
+  const taskResult = runScript('p2a_tasks.mjs', finishTaskArgs(source, task.id, run.status));
+  printChildResult(taskResult);
+  if (taskResult.status !== 0) return taskResult.status ?? 1;
+  return successStatus;
 }
 
 function expectedFailureFinishStatus(result, requestedStatus) {
@@ -834,7 +860,8 @@ function runFinish(args) {
   const closedRuntime = closedOrchestrationRuntimeForRun(source, args.runId);
   if (closedRuntime) {
     console.log(`Orchestration runtime already closed: ${displayPath(closedRuntime.filePath)}`);
-    return 0;
+    const run = readRun(source.runsDir, args.runId);
+    return transitionTaskAfterFinishedRun(args, source, run, 0);
   }
   let verificationFailed = false;
   if (verifyRequested(args)) {
@@ -876,21 +903,7 @@ function runFinish(args) {
   } catch (error) {
     console.error(`warning: orchestration runtime was not updated: ${error.message}`);
   }
-  const task = requireTask(source, run.taskId);
-  const runStatus = finishStatusFromRun(run);
-  if (args.noTaskTransition) {
-    console.log('Task transition skipped by --no-task-transition');
-    return finishResult.status ?? 0;
-  }
-  if (task.status !== 'in_progress') {
-    console.error(`task transition skipped: ${task.id} must be in_progress before done/block; current status is ${task.status}`);
-    return 1;
-  }
-  console.log(`Marking task ${runStatus === 'finished' ? 'done' : 'blocked'}...`);
-  const taskResult = runScript('p2a_tasks.mjs', finishTaskArgs(source, task.id, runStatus));
-  printChildResult(taskResult);
-  if (taskResult.status !== 0) return taskResult.status ?? 1;
-  return finishResult.status ?? 0;
+  return transitionTaskAfterFinishedRun(args, source, run, finishResult.status ?? 0);
 }
 
 export function main(argv = process.argv.slice(2)) {

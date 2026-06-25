@@ -1193,6 +1193,76 @@ function validateIterationCurrentFixtureCases() {
         console.error(JSON.stringify({ executeRuntimeAfterRecord }, null, 2));
         return { status: 1, checks };
       }
+
+      result = runOrchestrate([
+        'record',
+        '--runtime',
+        executeRuntimePath,
+        '--role',
+        'implementer',
+        '--type',
+        'question',
+        '--summary',
+        'Need owner decision before continuing',
+        '--linked-role',
+        'owner',
+      ]);
+      checks += 1;
+      if (result.status !== 0) {
+        console.error(`p2a_orchestrate question record fixture failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: failureStatus(result), checks };
+      }
+      result = runOrchestrate(['next-role', '--runtime', executeRuntimePath, '--json']);
+      checks += 1;
+      const questionNextRole = result.status === 0 ? JSON.parse(result.stdout) : null;
+      if (
+        result.status !== 0
+        || typeof questionNextRole?.reason !== 'string'
+        || !questionNextRole.reason.startsWith('open_question:')
+        || questionNextRole.nextRole?.roleId !== 'owner'
+      ) {
+        console.error(`p2a_orchestrate question should route to owner: ${caseData.id}`);
+        writeResultOutput(result);
+        console.error(JSON.stringify({ questionNextRole }, null, 2));
+        return { status: failureStatus(result), checks };
+      }
+
+      result = runOrchestrate([
+        'record',
+        '--runtime',
+        executeRuntimePath,
+        '--role',
+        'owner',
+        '--type',
+        'answer',
+        '--summary',
+        'Proceed with the scoped implementation',
+      ]);
+      checks += 1;
+      if (result.status !== 0) {
+        console.error(`p2a_orchestrate answer record fixture failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: failureStatus(result), checks };
+      }
+      result = runOrchestrate(['next-role', '--runtime', executeRuntimePath, '--json']);
+      checks += 1;
+      const answerNextRole = result.status === 0 ? JSON.parse(result.stdout) : null;
+      const executeRuntimeAfterAnswer = JSON.parse(readFileSync(executeRuntimePath, 'utf8'));
+      if (
+        result.status !== 0
+        || typeof answerNextRole?.reason !== 'string'
+        || answerNextRole.reason.startsWith('open_question:')
+        || answerNextRole.nextRole?.roleId !== 'implementer'
+        || executeRuntimeAfterAnswer.status.needsUserDecision !== false
+        || executeRuntimeAfterAnswer.sharedMentalModel.openQuestions[0]?.status !== 'answered'
+        || executeRuntimeAfterAnswer.sharedMentalModel.openQuestions[0]?.answer !== 'Proceed with the scoped implementation'
+      ) {
+        console.error(`p2a_orchestrate answer should close open question: ${caseData.id}`);
+        writeResultOutput(result);
+        console.error(JSON.stringify({ answerNextRole, executeRuntimeAfterAnswer }, null, 2));
+        return { status: failureStatus(result), checks };
+      }
       result = runValidator(['--runs-dir', path.join(tempRoot, 'p2a-execute', 'runs')]);
       checks += 1;
       if (result.status !== 0) {
@@ -1284,6 +1354,36 @@ function validateIterationCurrentFixtureCases() {
         console.error(`p2a_execute repeated finish should not append to closed runtime: ${caseData.id}`);
         writeResultOutput(result);
         console.error(JSON.stringify({ executeRuntimeAfterFinish, repeatedFinishRuntime }, null, 2));
+        return { status: 1, checks };
+      }
+
+      const executeGraphNeedingRecovery = JSON.parse(readFileSync(executeGraphPath, 'utf8'));
+      executeGraphNeedingRecovery.tasks = executeGraphNeedingRecovery.tasks.map((task) => (
+        task.id === 'task-001' ? { ...task, status: 'in_progress' } : task
+      ));
+      writeFileSync(executeGraphPath, `${JSON.stringify(executeGraphNeedingRecovery, null, 2)}\n`, 'utf8');
+      result = runExecute([
+        'finish',
+        '--graph',
+        executeGraphPath,
+        '--run-id',
+        'run-execute-fixture',
+        '--status',
+        'finished',
+      ]);
+      checks += 1;
+      const recoveredFinishGraph = JSON.parse(readFileSync(executeGraphPath, 'utf8'));
+      const recoveredFinishRuntime = JSON.parse(readFileSync(executeRuntimePath, 'utf8'));
+      if (
+        result.status !== 0
+        || !(`${result.stdout ?? ''}${result.stderr ?? ''}`).includes('Orchestration runtime already closed')
+        || !(`${result.stdout ?? ''}${result.stderr ?? ''}`).includes('task-001 status is now done')
+        || recoveredFinishGraph.tasks.find((task) => task.id === 'task-001')?.status !== 'done'
+        || recoveredFinishRuntime.communicationLog.length !== executeRuntimeAfterFinish.communicationLog.length
+      ) {
+        console.error(`p2a_execute closed runtime should still recover pending task transition: ${caseData.id}`);
+        writeResultOutput(result);
+        console.error(JSON.stringify({ recoveredFinishGraph, recoveredFinishRuntime }, null, 2));
         return { status: 1, checks };
       }
 
