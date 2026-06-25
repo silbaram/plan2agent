@@ -26,15 +26,6 @@ type TerminalStatus =
 
 type TerminalInputMode = "message" | "passthrough";
 
-type SupervisorNoteKind = "message" | "blocked" | "failed";
-
-type SupervisorNote = {
-  id: string;
-  kind: SupervisorNoteKind;
-  text: string;
-  createdAt: string;
-};
-
 type TerminalSize = {
   cols: number;
   rows: number;
@@ -46,22 +37,6 @@ function normalizeCommand(value: string | null | undefined, copy: UiCopy): strin
 
 function normalizeCwd(value: string | null | undefined): string {
   return value?.trim() || "<project>";
-}
-
-function formatNoteTime(value: string): string {
-  const date = new Date(value);
-  if (!Number.isFinite(date.getTime())) return "now";
-  return new Intl.DateTimeFormat("en-US", {
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-    hour12: false,
-  }).format(date);
-}
-
-function encodeMessageForPty(value: string): string {
-  const normalized = value.trim().replace(/\r?\n/g, "\r");
-  return normalized.endsWith("\r") ? normalized : `${normalized}\r`;
 }
 
 function createIdleTranscript({
@@ -115,9 +90,19 @@ export function TerminalSurface({
   const [inputMode, setInputMode] = useState<TerminalInputMode>("message");
   const [activeSession, setActiveSession] = useState<TerminalSessionInfo | null>(null);
   const [lastExitText, setLastExitText] = useState<string | null>(null);
-  const [messageText, setMessageText] = useState<string>("");
-  const [noteText, setNoteText] = useState<string>("");
-  const [supervisorNotes, setSupervisorNotes] = useState<SupervisorNote[]>([]);
+
+  function updateStatus(nextStatus: TerminalStatus) {
+    statusRef.current = nextStatus;
+    setStatus(nextStatus);
+  }
+
+  function updateInputMode(nextMode: TerminalInputMode) {
+    inputModeRef.current = nextMode;
+    setInputMode(nextMode);
+    if (nextMode === "passthrough") {
+      window.requestAnimationFrame(() => terminalRef.current?.focus());
+    }
+  }
 
   const idleTranscript = useMemo(() => {
     return createIdleTranscript({
@@ -145,7 +130,11 @@ export function TerminalSurface({
   useEffect(() => {
     const terminal = terminalRef.current;
     if (!terminal) return;
-    terminal.options.disableStdin = status !== "running" || inputMode !== "passthrough";
+    const passthroughActive = status === "running" && inputMode === "passthrough";
+    terminal.options.disableStdin = !passthroughActive;
+    if (passthroughActive) {
+      window.requestAnimationFrame(() => terminal.focus());
+    }
   }, [inputMode, status]);
 
   useEffect(() => {
@@ -264,7 +253,7 @@ export function TerminalSurface({
       terminalRef.current?.write(`\r\n\x1b[38;5;172m[session]\x1b[0m ${exitText}\r\n`);
       activeSessionRef.current = null;
       setActiveSession(null);
-      setStatus("exited");
+      updateStatus("exited");
       setLastExitText(exitText);
     });
 
@@ -273,53 +262,6 @@ export function TerminalSurface({
       offExit();
     };
   }, []);
-
-  function addSupervisorNote(kind: SupervisorNoteKind, text: string) {
-    const normalized = text.trim();
-    if (!normalized) return;
-
-    setSupervisorNotes((current) =>
-      [
-        {
-          id: `${Date.now()}-${kind}`,
-          kind,
-          text: normalized,
-          createdAt: new Date().toISOString(),
-        },
-        ...current,
-      ].slice(0, 8),
-    );
-  }
-
-  async function sendMessageAgent() {
-    const session = activeSessionRef.current;
-    const normalized = messageText.trim();
-    if (!session || status !== "running" || !normalized) return;
-
-    try {
-      await window.p2a.terminal.input({
-        sessionId: session.sessionId,
-        data: encodeMessageForPty(normalized),
-      });
-      addSupervisorNote("message", normalized);
-      setMessageText("");
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      setStatus("error");
-      terminalRef.current?.write(`\r\n\x1b[38;5;167m[error]\x1b[0m ${message}\r\n`);
-    }
-  }
-
-  function recordSessionNote(kind: Exclude<SupervisorNoteKind, "message">) {
-    const normalized = noteText.trim();
-    if (!normalized) return;
-
-    addSupervisorNote(kind, normalized);
-    terminalRef.current?.write(
-      `\r\n\x1b[38;5;172m[supervisor]\x1b[0m ${kind} · ${copy.common.localOnly}\r\n`,
-    );
-    setNoteText("");
-  }
 
   async function startSession() {
     const terminal = terminalRef.current;
@@ -340,9 +282,9 @@ export function TerminalSurface({
     terminal.write(
       `\x1b[38;5;172m[session]\x1b[0m ${copy.terminal.startingSession}: ${agentTool} · ${normalizedCwd}\r\n`,
     );
-    setStatus("starting");
+    updateInputMode("passthrough");
+    updateStatus("starting");
     setLastExitText(null);
-    setSupervisorNotes([]);
 
     try {
       const session = await window.p2a.terminal.start({
@@ -354,14 +296,14 @@ export function TerminalSurface({
       });
       activeSessionRef.current = session;
       setActiveSession(session);
-      setStatus("running");
+      updateStatus("running");
       terminal.write(
         `\x1b[38;5;109m[session]\x1b[0m ${copy.terminal.sessionStarted}: pid ${session.pid} · ${session.command} ${session.args.join(" ")}\r\n`,
       );
       terminal.focus();
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      setStatus("error");
+      updateStatus("error");
       terminal.write(`\x1b[38;5;167m[error]\x1b[0m ${message}\r\n`);
     }
 
@@ -372,7 +314,7 @@ export function TerminalSurface({
     const session = activeSessionRef.current;
     if (!session || status === "stopping" || status === "killing") return;
 
-    setStatus("stopping");
+    updateStatus("stopping");
     terminalRef.current?.write(
       `\r\n\x1b[38;5;172m[session]\x1b[0m ${copy.terminal.stoppingSession}\r\n`,
     );
@@ -380,7 +322,7 @@ export function TerminalSurface({
       await window.p2a.terminal.stop({ sessionId: session.sessionId });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      setStatus("error");
+      updateStatus("error");
       terminalRef.current?.write(`\x1b[38;5;167m[error]\x1b[0m ${message}\r\n`);
     }
   }
@@ -389,7 +331,7 @@ export function TerminalSurface({
     const session = activeSessionRef.current;
     if (!session || status === "stopping" || status === "killing") return;
 
-    setStatus("killing");
+    updateStatus("killing");
     terminalRef.current?.write(
       `\r\n\x1b[38;5;167m[session]\x1b[0m ${copy.terminal.killingSession}\r\n`,
     );
@@ -397,16 +339,15 @@ export function TerminalSurface({
       await window.p2a.terminal.kill({ sessionId: session.sessionId });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      setStatus("error");
+      updateStatus("error");
       terminalRef.current?.write(`\x1b[38;5;167m[error]\x1b[0m ${message}\r\n`);
     }
   }
 
   const isSessionChanging = status === "starting" || status === "stopping" || status === "killing";
   const canStartSession = Boolean(cwd) && Boolean(agentTool) && !activeSession && !isSessionChanging;
-  const canSendMessage =
-    Boolean(activeSession) && status === "running" && messageText.trim().length > 0;
-  const canRecordNote = status !== "idle" && noteText.trim().length > 0;
+  const terminalHint =
+    inputMode === "passthrough" ? copy.terminal.passthroughHint : copy.terminal.messageHint;
 
   return (
     <section className="xterm-panel" aria-label={copy.terminal.ptyTerminalSurface}>
@@ -446,113 +387,35 @@ export function TerminalSurface({
         </span>
       </div>
       <div className="xterm-host" ref={hostRef} />
-      <div className="supervisor-panel">
-        <div className="supervisor-panel__compose">
-          <div className="supervisor-panel__head">
-            <div>
-              <div className="label">{copy.terminal.supervisorInput}</div>
-              <strong>{copy.terminal.messageAgent}</strong>
-            </div>
-            <div className="terminal-mode-toggle" role="group" aria-label={copy.terminal.inputMode}>
-              <button
-                className={
-                  inputMode === "message"
-                    ? "terminal-mode-toggle__item terminal-mode-toggle__item--active"
-                    : "terminal-mode-toggle__item"
-                }
-                type="button"
-                onClick={() => setInputMode("message")}
-              >
-                {copy.terminal.message}
-              </button>
-              <button
-                className={
-                  inputMode === "passthrough"
-                    ? "terminal-mode-toggle__item terminal-mode-toggle__item--active"
-                    : "terminal-mode-toggle__item"
-                }
-                type="button"
-                onClick={() => setInputMode("passthrough")}
-              >
-                {copy.terminal.passthrough}
-              </button>
-            </div>
-          </div>
-          <div className="supervisor-message-row">
-            <textarea
-              className="supervisor-textarea"
-              value={messageText}
-              onChange={(event) => setMessageText(event.target.value)}
-              disabled={!activeSession || status !== "running"}
-              placeholder={
-                activeSession
-                  ? copy.terminal.askAgentPlaceholder
-                  : copy.terminal.startSessionPlaceholder
-              }
-              aria-label={copy.terminal.messageAgent}
-            />
+      <div className="terminal-footer">
+        <div className="terminal-footer__mode">
+          <span className="label">{copy.terminal.inputMode}</span>
+          <div className="terminal-mode-toggle" role="group" aria-label={copy.terminal.inputMode}>
             <button
-              className="terminal-control terminal-control--primary"
+              className={
+                inputMode === "message"
+                  ? "terminal-mode-toggle__item terminal-mode-toggle__item--active"
+                  : "terminal-mode-toggle__item"
+              }
               type="button"
-              onClick={sendMessageAgent}
-              disabled={!canSendMessage}
+              onClick={() => updateInputMode("message")}
             >
-              {copy.terminal.sendMessage}
+              {copy.terminal.message}
+            </button>
+            <button
+              className={
+                inputMode === "passthrough"
+                  ? "terminal-mode-toggle__item terminal-mode-toggle__item--active"
+                  : "terminal-mode-toggle__item"
+              }
+              type="button"
+              onClick={() => updateInputMode("passthrough")}
+            >
+              {copy.terminal.passthrough}
             </button>
           </div>
         </div>
-
-        <div className="supervisor-panel__notes">
-          <div className="supervisor-panel__head">
-            <div>
-              <div className="label">{copy.terminal.sessionNote}</div>
-              <strong>{copy.terminal.blockedFailed}</strong>
-            </div>
-            <span className="mono">{copy.common.localOnly}</span>
-          </div>
-          <div className="supervisor-message-row">
-            <textarea
-              className="supervisor-textarea"
-              value={noteText}
-              onChange={(event) => setNoteText(event.target.value)}
-              disabled={status === "idle"}
-              placeholder={copy.terminal.reasonPlaceholder}
-              aria-label={copy.terminal.sessionNote}
-            />
-            <div className="supervisor-note-actions">
-              <button
-                className="terminal-control"
-                type="button"
-                onClick={() => recordSessionNote("blocked")}
-                disabled={!canRecordNote}
-              >
-                {copy.terminal.blockedNote}
-              </button>
-              <button
-                className="terminal-control terminal-control--danger"
-                type="button"
-                onClick={() => recordSessionNote("failed")}
-                disabled={!canRecordNote}
-              >
-                {copy.terminal.failedNote}
-              </button>
-            </div>
-          </div>
-        </div>
-
-        <div className="supervisor-event-list" aria-label={copy.terminal.supervisorNotes}>
-          {supervisorNotes.length > 0 ? (
-            supervisorNotes.map((note) => (
-              <div className={`supervisor-event supervisor-event--${note.kind}`} key={note.id}>
-                <span className="mono">{formatNoteTime(note.createdAt)}</span>
-                <strong>{note.kind}</strong>
-                <p>{note.text}</p>
-              </div>
-            ))
-          ) : (
-            <div className="supervisor-empty">{copy.terminal.noSupervisorNotes}</div>
-          )}
-        </div>
+        <span>{terminalHint}</span>
       </div>
     </section>
   );

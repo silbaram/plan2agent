@@ -2830,10 +2830,6 @@ export default function App() {
             <span>{copy.terminal.finishRun}</span>
             <strong>{copy.terminal.finishWritesRun}</strong>
           </div>
-          <div>
-            <span>{copy.terminal.supervisorNotes}</span>
-            <strong>{copy.common.localOnly}</strong>
-          </div>
         </div>
       </>
     );
