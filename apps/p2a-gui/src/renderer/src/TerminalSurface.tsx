@@ -3,13 +3,13 @@ import { WebLinksAddon } from "@xterm/addon-web-links";
 import { Terminal } from "@xterm/xterm";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { DEFAULT_UI_LOCALE } from "../../shared/ipc";
-import { uiCopy } from "./i18n";
+import { uiCopy, type UiCopy } from "./i18n";
 import type { AgentTool, TerminalSessionInfo, UiLocale } from "../../shared/ipc";
 
 type TerminalSurfaceProps = {
   cwd: string | null | undefined;
   command: string | null | undefined;
-  agentTool: AgentTool;
+  agentTool: AgentTool | null;
   taskId: string | null | undefined;
   taskPrompt: string | null | undefined;
   locale?: UiLocale;
@@ -40,8 +40,8 @@ type TerminalSize = {
   rows: number;
 };
 
-function normalizeCommand(value: string | null | undefined): string {
-  return value?.trim() || "no command guidance for current state";
+function normalizeCommand(value: string | null | undefined, copy: UiCopy): string {
+  return value?.trim() || copy.terminal.noCommandGuidance;
 }
 
 function normalizeCwd(value: string | null | undefined): string {
@@ -70,23 +70,28 @@ function createIdleTranscript({
   agentTool,
   taskId,
   taskPrompt,
-}: Required<Omit<TerminalSurfaceProps, "locale">>): string[] {
+  copy,
+}: Required<Omit<TerminalSurfaceProps, "locale">> & { copy: UiCopy }): string[] {
   const promptPreview = taskPrompt
     ? taskPrompt.split(/\s+/).slice(0, 18).join(" ")
-    : "no selected task prompt";
+    : copy.terminal.noSelectedTaskPrompt;
 
   return [
-    "\x1b[38;5;244m# p2a real PTY surface · idle\x1b[0m\r\n",
+    `\x1b[38;5;244m${copy.terminal.idleTitle}\x1b[0m\r\n`,
     `\x1b[38;5;244m# cwd\x1b[0m ${cwd}\r\n`,
-    `\x1b[38;5;244m# agent\x1b[0m ${agentTool}\r\n`,
-    taskId ? `\x1b[38;5;244m# task\x1b[0m ${taskId}\r\n` : "\x1b[38;5;244m# task\x1b[0m none\r\n",
+    `\x1b[38;5;244m# agent\x1b[0m ${agentTool ?? "manual"}\r\n`,
+    taskId
+      ? `\x1b[38;5;244m# task\x1b[0m ${taskId}\r\n`
+      : `\x1b[38;5;244m# task\x1b[0m ${copy.common.none}\r\n`,
     "\r\n",
     `\x1b[38;5;244m# preview\x1b[0m ${command}\r\n`,
     "\r\n",
-    "\x1b[38;5;109m[renderer]\x1b[0m xterm mounted; stdin is forwarded only in passthrough mode.\r\n",
-    "\x1b[38;5;109m[pty]\x1b[0m Start session launches the selected agent CLI in main process.\r\n",
-    "\x1b[38;5;109m[links]\x1b[0m Web links addon active: https://plan2agent.local/docs/terminal\r\n",
-    `\x1b[38;5;109m[prompt]\x1b[0m ${promptPreview}\r\n`,
+    `\x1b[38;5;109m[renderer]\x1b[0m ${copy.terminal.stdinBoundary}\r\n`,
+    agentTool
+      ? `\x1b[38;5;109m[pty]\x1b[0m ${copy.terminal.startLaunches}\r\n`
+      : `\x1b[38;5;109m[pty]\x1b[0m ${copy.terminal.manualMode}\r\n`,
+    `\x1b[38;5;109m[links]\x1b[0m ${copy.terminal.linksActive}\r\n`,
+    `\x1b[38;5;109m[${copy.terminal.promptPreview}]\x1b[0m ${promptPreview}\r\n`,
   ];
 }
 
@@ -117,12 +122,13 @@ export function TerminalSurface({
   const idleTranscript = useMemo(() => {
     return createIdleTranscript({
       cwd: normalizeCwd(cwd),
-      command: normalizeCommand(command),
+      command: normalizeCommand(command, copy),
       agentTool,
       taskId: taskId ?? null,
       taskPrompt: taskPrompt ?? null,
+      copy,
     });
-  }, [agentTool, command, cwd, taskId, taskPrompt]);
+  }, [agentTool, command, copy, cwd, taskId, taskPrompt]);
 
   useEffect(() => {
     activeSessionRef.current = activeSession;
@@ -310,7 +316,7 @@ export function TerminalSurface({
 
     addSupervisorNote(kind, normalized);
     terminalRef.current?.write(
-      `\r\n\x1b[38;5;172m[supervisor]\x1b[0m ${kind} note captured locally\r\n`,
+      `\r\n\x1b[38;5;172m[supervisor]\x1b[0m ${kind} · ${copy.common.localOnly}\r\n`,
     );
     setNoteText("");
   }
@@ -321,6 +327,7 @@ export function TerminalSurface({
     if (!terminal) return undefined;
     if (
       !normalizedCwd ||
+      !agentTool ||
       status === "starting" ||
       status === "running" ||
       status === "stopping" ||
@@ -330,7 +337,9 @@ export function TerminalSurface({
     }
 
     terminal.reset();
-    terminal.write(`\x1b[38;5;172m[session]\x1b[0m starting ${agentTool} in ${normalizedCwd}\r\n`);
+    terminal.write(
+      `\x1b[38;5;172m[session]\x1b[0m ${copy.terminal.startingSession}: ${agentTool} · ${normalizedCwd}\r\n`,
+    );
     setStatus("starting");
     setLastExitText(null);
     setSupervisorNotes([]);
@@ -347,7 +356,7 @@ export function TerminalSurface({
       setActiveSession(session);
       setStatus("running");
       terminal.write(
-        `\x1b[38;5;109m[session]\x1b[0m pid ${session.pid} · ${session.command} ${session.args.join(" ")}\r\n`,
+        `\x1b[38;5;109m[session]\x1b[0m ${copy.terminal.sessionStarted}: pid ${session.pid} · ${session.command} ${session.args.join(" ")}\r\n`,
       );
       terminal.focus();
     } catch (error) {
@@ -364,7 +373,9 @@ export function TerminalSurface({
     if (!session || status === "stopping" || status === "killing") return;
 
     setStatus("stopping");
-    terminalRef.current?.write("\r\n\x1b[38;5;172m[session]\x1b[0m stopping\r\n");
+    terminalRef.current?.write(
+      `\r\n\x1b[38;5;172m[session]\x1b[0m ${copy.terminal.stoppingSession}\r\n`,
+    );
     try {
       await window.p2a.terminal.stop({ sessionId: session.sessionId });
     } catch (error) {
@@ -379,7 +390,9 @@ export function TerminalSurface({
     if (!session || status === "stopping" || status === "killing") return;
 
     setStatus("killing");
-    terminalRef.current?.write("\r\n\x1b[38;5;167m[session]\x1b[0m killing\r\n");
+    terminalRef.current?.write(
+      `\r\n\x1b[38;5;167m[session]\x1b[0m ${copy.terminal.killingSession}\r\n`,
+    );
     try {
       await window.p2a.terminal.kill({ sessionId: session.sessionId });
     } catch (error) {
@@ -390,13 +403,13 @@ export function TerminalSurface({
   }
 
   const isSessionChanging = status === "starting" || status === "stopping" || status === "killing";
-  const canStartSession = Boolean(cwd) && !activeSession && !isSessionChanging;
+  const canStartSession = Boolean(cwd) && Boolean(agentTool) && !activeSession && !isSessionChanging;
   const canSendMessage =
     Boolean(activeSession) && status === "running" && messageText.trim().length > 0;
   const canRecordNote = status !== "idle" && noteText.trim().length > 0;
 
   return (
-    <section className="xterm-panel" aria-label="PTY terminal surface">
+    <section className="xterm-panel" aria-label={copy.terminal.ptyTerminalSurface}>
       <div className="xterm-panel__bar">
         <span className={`dot dot--${status === "running" ? "active" : "idle"}`} aria-hidden="true" />
         <strong className="mono">node-pty</strong>
@@ -495,6 +508,7 @@ export function TerminalSurface({
               <div className="label">{copy.terminal.sessionNote}</div>
               <strong>{copy.terminal.blockedFailed}</strong>
             </div>
+            <span className="mono">{copy.common.localOnly}</span>
           </div>
           <div className="supervisor-message-row">
             <textarea

@@ -6,17 +6,20 @@ import reviewSchema from "../../../../schemas/review.schema.json";
 import runIndexSchema from "../../../../schemas/run-index.schema.json";
 import specSchema from "../../../../schemas/spec.schema.json";
 import taskGraphSchema from "../../../../schemas/task-graph.schema.json";
-import { DEFAULT_AGENT_TOOL } from "../shared/ipc";
+import { DEFAULT_EXECUTION_AGENT_TOOL } from "../shared/ipc";
 import type {
-  AgentTool,
   ArtifactSummary,
   CommandGuidance,
+  ExecutionAgentTool,
   FailureClass,
   FailureRetryability,
   FailureSource,
   GateSummary,
   OnboardingAction,
   OnboardingCheck,
+  OrchestrationMode,
+  OrchestrationRoleStatus,
+  OrchestrationRuntimePhase,
   ProjectDetectionState,
   ProjectDiagnostic,
   ProjectFileCheck,
@@ -28,7 +31,13 @@ import type {
   TaskStatus,
   VerificationStatus,
   VerificationType,
+  WorkbenchOrchestrationExecutionGuide,
+  WorkbenchOrchestrationEvent,
+  WorkbenchOrchestrationNextRole,
+  WorkbenchOrchestrationRole,
+  WorkbenchOrchestrationSchedulerHint,
   WorkbenchRunFailure,
+  WorkbenchRunOrchestration,
   WorkbenchRunVerification,
   WorkbenchRun,
   WorkbenchTask,
@@ -137,6 +146,49 @@ function isFailureRetryability(value: unknown): value is FailureRetryability {
 
 function isFailureSource(value: unknown): value is FailureSource {
   return value === "owner" || value === "monitor" || value === "implementer";
+}
+
+function isOrchestrationMode(value: unknown): value is OrchestrationMode {
+  return value === "solo" || value === "solo_monitor" || value === "team";
+}
+
+function isOrchestrationRuntimePhase(value: unknown): value is OrchestrationRuntimePhase {
+  return (
+    value === "initialized" ||
+    value === "running" ||
+    value === "blocked" ||
+    value === "ready_for_monitor" ||
+    value === "ready_to_finish" ||
+    value === "closed"
+  );
+}
+
+function isOrchestrationRoleStatus(value: unknown): value is OrchestrationRoleStatus {
+  return (
+    value === "pending" ||
+    value === "active" ||
+    value === "blocked" ||
+    value === "complete" ||
+    value === "skipped"
+  );
+}
+
+function recordValue(value: unknown): JsonRecord | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as JsonRecord)
+    : null;
+}
+
+function recordArrayValue(value: unknown): JsonRecord[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is JsonRecord => {
+        return Boolean(item && typeof item === "object" && !Array.isArray(item));
+      })
+    : [];
+}
+
+function booleanValue(value: unknown): boolean | null {
+  return typeof value === "boolean" ? value : null;
 }
 
 function numberValue(value: unknown): number | null {
@@ -366,7 +418,521 @@ async function readRunDetail(runsDir: string, runId: string): Promise<JsonRecord
   }
 }
 
-async function normalizeRuns(runIndex: JsonRecord | null, runsDir: string): Promise<WorkbenchRun[]> {
+async function readOptionalJson(targetPath: string): Promise<JsonRecord | null> {
+  if (!(await existsAs(targetPath, "file"))) return null;
+  try {
+    return await readJson(targetPath);
+  } catch {
+    return null;
+  }
+}
+
+function normalizeOrchestrationEvent(event: JsonRecord): WorkbenchOrchestrationEvent | null {
+  const eventId = stringValue(event.eventId);
+  const createdAt = stringValue(event.createdAt);
+  const roleId = stringValue(event.roleId);
+  const type = stringValue(event.type);
+  const summary = stringValue(event.summary);
+  if (!eventId || !createdAt || !roleId || !type || !summary) return null;
+
+  return {
+    eventId,
+    createdAt,
+    roleId,
+    type,
+    summary,
+    requiresOwnerAction: booleanValue(event.requiresOwnerAction) ?? false,
+  };
+}
+
+function normalizeOrchestrationEvents(runtime: JsonRecord | null): WorkbenchOrchestrationEvent[] {
+  return recordArrayValue(runtime?.communicationLog)
+    .map(normalizeOrchestrationEvent)
+    .filter((event): event is WorkbenchOrchestrationEvent => event !== null);
+}
+
+function defaultRoleStatus(roleId: string): OrchestrationRoleStatus {
+  return roleId === "owner" || roleId === "implementer" ? "active" : "pending";
+}
+
+function handoffPromptForRole(
+  roleId: string,
+  plan: JsonRecord | null,
+  runtime: JsonRecord | null,
+): string | null {
+  const runtimeHandoff = recordArrayValue(runtime?.communicationLog)
+    .reverse()
+    .find((event) => event.type === "handoff" && event.roleId === roleId);
+  const runtimePrompt = stringValue(runtimeHandoff?.detail);
+  if (runtimePrompt) return runtimePrompt;
+
+  const planHandoff = recordArrayValue(plan?.handoffPrompts).find(
+    (prompt) => prompt.roleId === roleId,
+  );
+  return stringValue(planHandoff?.prompt);
+}
+
+function buildSupervisedRolePrompt(
+  runtime: JsonRecord | null,
+  role: WorkbenchOrchestrationRole,
+  basePrompt: string | null,
+  events: WorkbenchOrchestrationEvent[],
+): string | null {
+  if (!basePrompt && !role.scope) return null;
+  if (!runtime) {
+    return [
+      "Plan2Agent supervised role prompt",
+      "",
+      `Role: ${role.roleId} (${role.role}, ${role.agentTool})`,
+      `Profile: ${role.profile}`,
+      `Profile source: ${role.profileSource}`,
+      `Profile reason: ${role.profileReason}`,
+      `Status: ${role.status}`,
+      `Provider surface: ${role.executionGuide.surface}`,
+      `Recommended feature: ${role.executionGuide.recommendedFeature}`,
+      `Fallback mode: ${role.executionGuide.fallbackMode}`,
+      "",
+      "Supervision boundary:",
+      "- A human must open the official CLI/app and paste this prompt manually.",
+      "- Do not run background loops, browser automation, unofficial APIs, token reuse, or quota/rate-limit bypass.",
+      "- Report results back to the owner, then record them with p2a_orchestrate mark-role or record.",
+      "",
+      "Role scope:",
+      role.scope,
+      "",
+      "Role handoff prompt:",
+      basePrompt ?? role.scope,
+    ].join("\n");
+  }
+
+  const sharedMentalModel = recordValue(runtime.sharedMentalModel);
+  const acceptanceCriteria = stringArrayValue(sharedMentalModel?.acceptanceCriteria);
+  const constraints = stringArrayValue(sharedMentalModel?.constraints);
+  const recentEvents = events.slice(-5);
+
+  return [
+    "Plan2Agent supervised role prompt",
+    "",
+    `Run: ${stringValue(runtime.runId) ?? "unknown"}`,
+    `Task: ${stringValue(runtime.taskId) ?? "unknown"} - ${stringValue(runtime.taskTitle) ?? ""}`.trim(),
+    `Role: ${role.roleId} (${role.role}, ${role.agentTool})`,
+    `Profile: ${role.profile}`,
+    `Profile source: ${role.profileSource}`,
+    `Profile reason: ${role.profileReason}`,
+    `Status: ${role.status}`,
+    `Provider surface: ${role.executionGuide.surface}`,
+    `Recommended feature: ${role.executionGuide.recommendedFeature}`,
+    `Fallback mode: ${role.executionGuide.fallbackMode}`,
+    "",
+    "Supervision boundary:",
+    "- A human must open the official CLI/app and paste this prompt manually.",
+    "- Do not run background loops, browser automation, unofficial APIs, token reuse, or quota/rate-limit bypass.",
+    "- Report results back to the owner, then record them with p2a_orchestrate mark-role or record.",
+    "",
+    `Objective: ${stringValue(sharedMentalModel?.objective) ?? stringValue(runtime.taskTitle) ?? role.roleId}`,
+    `Current state: ${stringValue(sharedMentalModel?.currentState) ?? "No runtime state recorded."}`,
+    "",
+    "Role scope:",
+    role.scope,
+    "",
+    "Acceptance criteria:",
+    ...(acceptanceCriteria.length
+      ? acceptanceCriteria.map((criterion) => `- ${criterion}`)
+      : ["- none recorded"]),
+    "",
+    "Constraints:",
+    ...(constraints.length ? constraints.map((constraint) => `- ${constraint}`) : ["- none recorded"]),
+    "",
+    "Recent runtime events:",
+    ...(
+      recentEvents.length
+        ? recentEvents.map(
+            (event) => `- ${event.createdAt} ${event.roleId}/${event.type}: ${event.summary}`,
+          )
+        : ["- none recorded"]
+    ),
+    "",
+    "Role handoff prompt:",
+    basePrompt ?? role.scope,
+    "",
+    "Completion report:",
+    "- Summarize what was done or reviewed.",
+    "- List changed files, verification commands/results, blockers, and user decisions needed.",
+    "- Do not directly edit Plan2Agent run logs or task graph files.",
+  ].join("\n");
+}
+
+function defaultRoleProfile(roleId: string, role: string): string {
+  if (roleId === "owner" || role === "lead") return "owner_supervisor";
+  if (roleId === "monitor" || role === "monitor") return "manual_monitor";
+  if (role === "reviewer") return "qa_reviewer";
+  return "fullstack_implementer";
+}
+
+function defaultRoleProfileReason(roleId: string, role: string): string {
+  const profile = defaultRoleProfile(roleId, role);
+  return `legacy orchestration artifact inferred ${profile}`;
+}
+
+function defaultExecutionGuide(
+  agentTool: string,
+  role: string,
+  profile: string,
+): WorkbenchOrchestrationExecutionGuide {
+  if (agentTool === "codex") {
+    return {
+      surface: "Codex CLI/app foreground session",
+      recommendedFeature:
+        role === "contributor"
+          ? "skills_custom_agents_explicit_subagent_prompt"
+          : "read_only_review_skill_or_custom_agent_prompt",
+      fallbackMode: "single supervised role prompt",
+      supervisionRequired: true,
+      startsProcess: false,
+      constraints: [
+        "Open Codex manually in the foreground workspace.",
+        "Use skills or custom agents when they are available for this profile.",
+        "Record observed state in P2A.",
+      ],
+    };
+  }
+  if (agentTool === "claude") {
+    return {
+      surface: "Claude Code foreground session",
+      recommendedFeature: role === "contributor" ? "agent_teams_or_subagents" : "read_only_review_subagent",
+      fallbackMode: "supervised foreground role prompt",
+      supervisionRequired: true,
+      startsProcess: false,
+      constraints: [
+        "Open Claude Code manually in the foreground workspace.",
+        "Use agent teams or subagents when enabled.",
+        "Record observed state in P2A.",
+      ],
+    };
+  }
+  if (agentTool === "gemini") {
+    return {
+      surface: "Gemini CLI foreground session",
+      recommendedFeature: "extensions_custom_commands_gemini_context",
+      fallbackMode: "read-only supervised role prompt",
+      supervisionRequired: true,
+      startsProcess: false,
+      constraints: [
+        "Use Gemini only for read-only planning, review, or monitor support.",
+        "Do not edit files in this role.",
+        "Record findings in P2A.",
+      ],
+    };
+  }
+  return {
+    surface: "Human owner foreground action",
+    recommendedFeature:
+      role === "lead" ? "manual_approval_and_run_lifecycle" : "manual_prompt_copy_and_status_recording",
+    fallbackMode: "manual status update",
+    supervisionRequired: true,
+    startsProcess: false,
+    constraints: [
+      "Perform the role directly in the foreground workspace.",
+      "Record observed state in P2A.",
+      profile === "manual_monitor" ? "Record an explicit monitor verdict before finish." : "Keep changes inside the approved task scope.",
+    ],
+  };
+}
+
+function normalizeExecutionGuide(
+  roleRecord: JsonRecord,
+  agentTool: string,
+  role: string,
+  profile: string,
+): WorkbenchOrchestrationExecutionGuide {
+  const guide = recordValue(roleRecord.executionGuide);
+  if (!guide) return defaultExecutionGuide(agentTool, role, profile);
+  return {
+    surface: stringValue(guide.surface) ?? defaultExecutionGuide(agentTool, role, profile).surface,
+    recommendedFeature:
+      stringValue(guide.recommendedFeature) ??
+      defaultExecutionGuide(agentTool, role, profile).recommendedFeature,
+    fallbackMode: stringValue(guide.fallbackMode) ?? defaultExecutionGuide(agentTool, role, profile).fallbackMode,
+    supervisionRequired: booleanValue(guide.supervisionRequired) ?? true,
+    startsProcess: booleanValue(guide.startsProcess) ?? false,
+    constraints: stringArrayValue(guide.constraints).length
+      ? stringArrayValue(guide.constraints)
+      : defaultExecutionGuide(agentTool, role, profile).constraints,
+  };
+}
+
+function normalizeOrchestrationRoles(
+  plan: JsonRecord | null,
+  runtime: JsonRecord | null,
+  events: WorkbenchOrchestrationEvent[],
+): WorkbenchOrchestrationRole[] {
+  const sharedMentalModel = recordValue(runtime?.sharedMentalModel);
+  const runtimeRoles = recordArrayValue(sharedMentalModel?.roleAssignments);
+  const planRoles = recordArrayValue(plan?.roles);
+  const rawRoles = runtimeRoles.length > 0 ? runtimeRoles : planRoles;
+
+  return rawRoles
+    .map((roleRecord): WorkbenchOrchestrationRole | null => {
+      const roleId = stringValue(roleRecord.roleId);
+      const role = stringValue(roleRecord.role);
+      const profile = stringValue(roleRecord.profile) ?? defaultRoleProfile(roleId ?? "", role ?? "");
+      const profileSource = stringValue(roleRecord.profileSource) ?? "auto";
+      const profileReason =
+        stringValue(roleRecord.profileReason) ?? defaultRoleProfileReason(roleId ?? "", role ?? "");
+      const agentTool = stringValue(roleRecord.agentTool);
+      const scope = stringValue(roleRecord.scope);
+      if (!roleId || !role || !agentTool || !scope) return null;
+      const executionGuide = normalizeExecutionGuide(roleRecord, agentTool, role, profile);
+
+      const status = isOrchestrationRoleStatus(roleRecord.status)
+        ? roleRecord.status
+        : defaultRoleStatus(roleId);
+      const basePrompt = handoffPromptForRole(roleId, plan, runtime);
+      const normalizedRole: WorkbenchOrchestrationRole = {
+        roleId,
+        role,
+        profile,
+        profileSource,
+        profileReason,
+        agentTool,
+        executionGuide,
+        scope,
+        status,
+        command: agentTool === "manual" ? null : agentTool,
+        prompt: null,
+      };
+      return {
+        ...normalizedRole,
+        prompt: buildSupervisedRolePrompt(runtime, normalizedRole, basePrompt, events),
+      };
+    })
+    .filter((role): role is WorkbenchOrchestrationRole => role !== null);
+}
+
+function roleIsIncomplete(role: WorkbenchOrchestrationRole): boolean {
+  return role.status !== "complete" && role.status !== "skipped";
+}
+
+function preferredRole(
+  roles: WorkbenchOrchestrationRole[],
+  roleIds: string[],
+): WorkbenchOrchestrationRole | null {
+  for (const roleId of roleIds) {
+    const role = roles.find((item) => item.roleId === roleId);
+    if (role && roleIsIncomplete(role)) return role;
+  }
+  return null;
+}
+
+function nextRolePayload(role: WorkbenchOrchestrationRole | null): WorkbenchOrchestrationNextRole | null {
+  if (!role) return null;
+  return {
+    roleId: role.roleId,
+    role: role.role,
+    profile: role.profile,
+    profileSource: role.profileSource,
+    profileReason: role.profileReason,
+    agentTool: role.agentTool,
+    executionGuide: role.executionGuide,
+    status: role.status,
+    command: role.command,
+  };
+}
+
+function schedulerResolutionHints(
+  phase: OrchestrationRuntimePhase,
+  blocked: boolean,
+  needsUserDecision: boolean,
+  roles: WorkbenchOrchestrationRole[],
+  events: WorkbenchOrchestrationEvent[],
+  nextRole: WorkbenchOrchestrationRole | null,
+): string[] {
+  if (phase === "closed") return ["No scheduler action remains for this runtime."];
+  const blockedRole = roles.find((role) => role.status === "blocked") ?? null;
+  const latestBlocker = [...events].reverse().find((event) => event.type === "blocker");
+  if (blocked || phase === "blocked" || blockedRole) {
+    return [
+      latestBlocker
+        ? `Inspect blocker ${latestBlocker.eventId}: ${latestBlocker.summary}.`
+        : "Inspect the latest blocked role and run output.",
+      "Record an owner decision before skipping or finishing blocked.",
+      blockedRole
+        ? `Do not mark ${blockedRole.roleId} active as a retry; this runtime remains blocked until it is closed.`
+        : "Do not retry inside this blocked runtime.",
+      "If continuing is approved, finish this run blocked and open a follow-up supervised run or maintenance task.",
+      "If acceptance cannot be met, finish blocked with the appropriate failure class.",
+    ];
+  }
+  if (needsUserDecision) return ["Record the owner decision, then recompute next-role before continuing."];
+  if (phase === "ready_for_monitor") {
+    return ["Open the monitor or reviewer role prompt manually and record the verdict/result."];
+  }
+  if (phase === "ready_to_finish") {
+    return ["Review verification evidence and close the run lifecycle with p2a_execute finish."];
+  }
+  if (nextRole) {
+    const surface =
+      nextRole.agentTool === "manual"
+        ? "the manual workflow"
+        : `${nextRole.agentTool} in the official foreground CLI/app`;
+    return [
+      `Open ${surface} for ${nextRole.roleId}.`,
+      "Paste the role prompt and keep the owner supervising the session.",
+      "Record complete, blocked, or skipped when the observed role result is clear.",
+    ];
+  }
+  return ["Recompute next-role after recording any missing runtime event."];
+}
+
+function schedulerHint(
+  runtime: JsonRecord | null,
+  roles: WorkbenchOrchestrationRole[],
+  events: WorkbenchOrchestrationEvent[],
+): WorkbenchOrchestrationSchedulerHint | null {
+  if (!runtime) return null;
+
+  const runtimeStatus = recordValue(runtime.status);
+  const sharedMentalModel = recordValue(runtime.sharedMentalModel);
+  const phaseValue = runtimeStatus?.phase;
+  const phase = isOrchestrationRuntimePhase(phaseValue) ? phaseValue : "running";
+  const blocked = booleanValue(runtimeStatus?.blocked) ?? false;
+  const needsUserDecision = booleanValue(runtimeStatus?.needsUserDecision) ?? false;
+  const owner = roles.find((role) => role.roleId === "owner") ?? roles[0] ?? null;
+  const blockedRole = roles.find((role) => role.status === "blocked") ?? null;
+
+  let role: WorkbenchOrchestrationRole | null = null;
+  let reason = "roles_complete";
+  let instruction = "Owner should finish the run lifecycle. No agent process is started by this scheduler.";
+
+  if (phase === "closed") {
+    reason = "runtime_closed";
+    instruction = "No next role. The run runtime is closed.";
+  } else if (blocked || phase === "blocked" || blockedRole) {
+    role = owner;
+    reason = blockedRole ? `role_blocked:${blockedRole.roleId}` : "runtime_blocked";
+    instruction = "Owner should inspect the blocker and decide whether to unblock, ask the user, or finish blocked.";
+  } else {
+    const openQuestion = recordArrayValue(sharedMentalModel?.openQuestions).find(
+      (question) => question.status === "open",
+    );
+    if (openQuestion) {
+      const targetRoleId = stringValue(openQuestion.targetRoleId);
+      role = targetRoleId
+        ? roles.find((item) => item.roleId === targetRoleId) ?? owner
+        : owner;
+      reason = `open_question:${stringValue(openQuestion.questionId) ?? "unknown"}`;
+      instruction = targetRoleId
+        ? `Answer the open question from ${stringValue(openQuestion.askedByRoleId) ?? "another role"}.`
+        : "Owner should route or answer the open question.";
+    } else if (needsUserDecision) {
+      role = owner;
+      reason = "owner_decision_required";
+      instruction = "Owner should make or record the required decision before continuing.";
+    } else if (phase === "ready_to_finish") {
+      role = owner;
+      reason = "ready_to_finish";
+      instruction = "Owner should review the runtime, run verification/finish commands, and close the task lifecycle.";
+    } else if (phase === "ready_for_monitor") {
+      role = preferredRole(roles, ["monitor"]) ?? preferredRole(roles, ["reviewer"]) ?? owner;
+      reason =
+        role?.roleId === "monitor"
+          ? "monitor_required"
+          : role?.roleId === "reviewer"
+            ? "reviewer_required"
+            : "monitor_not_configured";
+      instruction =
+        role?.roleId === "monitor"
+          ? "Human should open the monitor role prompt in the official CLI/app and record the verdict."
+          : role?.roleId === "reviewer"
+            ? "Human should open the reviewer role prompt in the official CLI/app and record the result."
+            : "Owner should decide whether the run is ready to finish.";
+    } else {
+      role =
+        preferredRole(roles, ["implementer"]) ??
+        preferredRole(roles, ["reviewer"]) ??
+        preferredRole(roles, ["monitor"]) ??
+        owner;
+      reason =
+        role?.roleId === "implementer"
+          ? "implementation_required"
+          : role?.roleId === "reviewer"
+            ? "review_required"
+            : role?.roleId === "monitor"
+              ? "monitor_required"
+              : "roles_complete";
+      instruction =
+        role?.roleId === "implementer"
+          ? "Human should open the implementer role prompt in the official CLI/app and record the result."
+          : role?.roleId === "reviewer"
+            ? "Human should open the reviewer role prompt in the official CLI/app and record the result."
+            : role?.roleId === "monitor"
+              ? "Human should open the monitor role prompt in the official CLI/app and record the verdict."
+              : instruction;
+    }
+  }
+
+  return {
+    supervisedOnly: true,
+    startsProcess: false,
+    nextRole: nextRolePayload(role),
+    reason,
+    instruction,
+    resolutionHints: schedulerResolutionHints(phase, blocked, needsUserDecision, roles, events, role),
+    safetyBoundary:
+      "Open the official CLI/app manually, paste the role prompt, then record the observed result. Do not use this scheduler to bypass subscription limits or run background automation.",
+  };
+}
+
+async function normalizeRunOrchestration(
+  rootPath: string,
+  runsDir: string,
+  runId: string,
+): Promise<WorkbenchRunOrchestration | null> {
+  const planPath = path.join(runsDir, `${runId}.orchestration.json`);
+  const runtimePath = path.join(runsDir, `${runId}.orchestration-runtime.json`);
+  const [plan, runtime] = await Promise.all([
+    readOptionalJson(planPath),
+    readOptionalJson(runtimePath),
+  ]);
+  if (!plan && !runtime) return null;
+
+  const runtimeStatus = recordValue(runtime?.status);
+  const monitorGate = recordValue(plan?.monitorGate);
+  const events = normalizeOrchestrationEvents(runtime);
+  const roles = normalizeOrchestrationRoles(plan, runtime, events);
+  const runtimeMode = runtime?.mode;
+  const planMode = plan?.mode;
+  const runtimePhase = runtimeStatus?.phase;
+
+  return {
+    planId: stringValue(runtime?.planId) ?? stringValue(plan?.planId),
+    runtimeId: stringValue(runtime?.runtimeId),
+    mode: isOrchestrationMode(runtimeMode)
+      ? runtimeMode
+      : isOrchestrationMode(planMode)
+        ? planMode
+        : null,
+    phase: isOrchestrationRuntimePhase(runtimePhase) ? runtimePhase : null,
+    blocked: booleanValue(runtimeStatus?.blocked) ?? false,
+    needsUserDecision: booleanValue(runtimeStatus?.needsUserDecision) ?? false,
+    planPath: plan ? normalizeRelative(rootPath, planPath) : null,
+    runtimePath: runtime ? normalizeRelative(rootPath, runtimePath) : null,
+    sourcePlanRef: stringValue(runtime?.sourcePlanRef),
+    monitorRequired: booleanValue(monitorGate?.required) ?? false,
+    monitorVerdictPath: stringValue(monitorGate?.verdictPath),
+    roles,
+    eventCount: events.length,
+    lastEvent: events.at(-1) ?? null,
+    next: schedulerHint(runtime, roles, events),
+    updatedAt: stringValue(runtime?.updatedAt) ?? stringValue(plan?.createdAt),
+  };
+}
+
+async function normalizeRuns(
+  runIndex: JsonRecord | null,
+  runsDir: string,
+  rootPath: string,
+): Promise<WorkbenchRun[]> {
   const rawRuns = Array.isArray(runIndex?.runs)
     ? runIndex.runs.filter((run): run is JsonRecord => {
         return Boolean(run && typeof run === "object" && !Array.isArray(run));
@@ -397,6 +963,7 @@ async function normalizeRuns(runIndex: JsonRecord | null, runsDir: string): Prom
         return null;
       }
       const runDetail = await readRunDetail(runsDir, runId);
+      const orchestration = await normalizeRunOrchestration(rootPath, runsDir, runId);
 
       return {
         runId,
@@ -413,6 +980,7 @@ async function normalizeRuns(runIndex: JsonRecord | null, runsDir: string): Prom
         verification: normalizeVerification(runDetail),
         notes: stringArrayValue(runDetail?.notes),
         failure: normalizeFailure(runDetail),
+        orchestration,
       };
     }),
   );
@@ -526,7 +1094,7 @@ async function summarizeGates(artifactRoot: string, iterationRoot: string | null
   return gates;
 }
 
-async function summarizeRuns(artifactRoot: string): Promise<{
+async function summarizeRuns(rootPath: string, artifactRoot: string): Promise<{
   runIndexPath: string | null;
   runCount: number;
   runs: WorkbenchRun[];
@@ -568,7 +1136,7 @@ async function summarizeRuns(artifactRoot: string): Promise<{
     rootPath: artifactRoot,
     filePath: runIndexPath,
   });
-  const runs = await normalizeRuns(runIndex, runsDir);
+  const runs = await normalizeRuns(runIndex, runsDir, rootPath);
   return {
     runIndexPath,
     runCount: runs.length,
@@ -624,7 +1192,7 @@ async function summarizeArtifact(rootPath: string, artifactRoot: string): Promis
     searchRoots.map((searchRoot) => path.join(searchRoot, "gate-d-review", "review.json")),
   );
   const gates = await summarizeGates(artifactRoot, iterationRoot);
-  const runSummary = await summarizeRuns(artifactRoot);
+  const runSummary = await summarizeRuns(rootPath, artifactRoot);
   const validations: SchemaValidationSummary[] = [];
 
   const intakeValidation = await validateJsonFile({
@@ -989,7 +1557,7 @@ function buildOnboarding(
 
 export async function loadProjectSnapshot(
   rootPath: string,
-  options: { defaultAgentTool?: AgentTool } = {},
+  options: { defaultAgentTool?: ExecutionAgentTool } = {},
 ): Promise<ProjectSnapshot> {
   const normalizedRootPath = path.resolve(rootPath);
   const checks = await buildFileChecks(normalizedRootPath);
@@ -1009,7 +1577,7 @@ export async function loadProjectSnapshot(
     mode: "read-only",
     projectId: primaryArtifact?.projectId ?? null,
     activeIteration: primaryArtifact?.activeIteration ?? null,
-    defaultAgentTool: options.defaultAgentTool ?? DEFAULT_AGENT_TOOL,
+    defaultAgentTool: options.defaultAgentTool ?? DEFAULT_EXECUTION_AGENT_TOOL,
     artifactRoot: primaryArtifact?.rootPath ?? null,
     checks,
     artifacts,

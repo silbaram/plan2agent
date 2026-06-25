@@ -5,6 +5,7 @@ import {
   scopeArtifactReadRequest,
   scopeExecutionFinishRunRequest,
   scopeExecutionStartRunRequest,
+  scopeOrchestrationMarkRoleRequest,
   scopeTerminalStartRequest,
 } from "./activeProjectScope";
 
@@ -98,5 +99,28 @@ describe("active project scope", () => {
         notes: [],
       });
     }).toThrow("artifact root must stay inside the active project root");
+  });
+
+  it("scopes orchestration role updates to the active project", () => {
+    const activeRoot = path.resolve("/tmp/p2a-active");
+    const request = scopeOrchestrationMarkRoleRequest(activeRoot, {
+      projectRoot: activeRoot,
+      runtimePath: ".plan2agent/runs/run-task-001.orchestration-runtime.json",
+      roleId: "implementer",
+      roleStatus: "complete",
+    });
+
+    expect(request.runtimePath).toBe(
+      path.join(activeRoot, ".plan2agent/runs/run-task-001.orchestration-runtime.json"),
+    );
+
+    expect(() => {
+      scopeOrchestrationMarkRoleRequest(activeRoot, {
+        projectRoot: activeRoot,
+        runtimePath: "../run-task-001.orchestration-runtime.json",
+        roleId: "implementer",
+        roleStatus: "complete",
+      });
+    }).toThrow("runtime path must stay inside the active project root");
   });
 });

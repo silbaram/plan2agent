@@ -844,7 +844,7 @@ function pushTeamBigFiveAdapter(plan, targetRoot, args) {
 
 
 const SCAFFOLD_SCRIPT_FILES = ['p2a_iteration.mjs', 'p2a_tasks.mjs', 'p2a_runs.mjs', 'p2a_execute.mjs', 'p2a_orchestrate.mjs', 'p2a_proposals.mjs', 'p2a_run_paths.mjs', 'p2a_iteration_state.mjs', 'validate_artifacts.mjs'];
-const SCAFFOLD_SCHEMA_FILES = ['intake.schema.json', 'spec.schema.json', 'task-graph.schema.json', 'task-context.schema.json', 'review.schema.json', 'run.schema.json', 'run-index.schema.json', 'orchestration-plan.schema.json', 'skill-proposal.schema.json', 'proposal-review.schema.json', 'proposal-curation.schema.json', 'proposal-patch-draft.schema.json', 'proposal-draft-approval.schema.json'];
+const SCAFFOLD_SCHEMA_FILES = ['intake.schema.json', 'spec.schema.json', 'task-graph.schema.json', 'task-context.schema.json', 'review.schema.json', 'run.schema.json', 'run-index.schema.json', 'orchestration-plan.schema.json', 'orchestration-runtime.schema.json', 'skill-proposal.schema.json', 'proposal-review.schema.json', 'proposal-curation.schema.json', 'proposal-patch-draft.schema.json', 'proposal-draft-approval.schema.json'];
 
 
 function renderProjectGitignore() {
@@ -1107,7 +1107,7 @@ function buildPlan(paths, args, artifactsRoot, targetRoot, sourceInfo, options =
   pushArtifact(plan, path.join(ROOT, 'scripts', 'p2a_run_paths.mjs'), targetRoot, path.join('scripts', 'p2a_run_paths.mjs'));
   pushArtifact(plan, path.join(ROOT, 'scripts', 'p2a_iteration_state.mjs'), targetRoot, path.join('scripts', 'p2a_iteration_state.mjs'));
   pushArtifact(plan, path.join(ROOT, 'scripts', 'validate_artifacts.mjs'), targetRoot, path.join('scripts', 'validate_artifacts.mjs'));
-  for (const schemaFile of ['intake.schema.json', 'spec.schema.json', 'task-graph.schema.json', 'task-context.schema.json', 'review.schema.json', 'run.schema.json', 'run-index.schema.json', 'orchestration-plan.schema.json', 'skill-proposal.schema.json', 'proposal-review.schema.json', 'proposal-curation.schema.json', 'proposal-patch-draft.schema.json', 'proposal-draft-approval.schema.json']) {
+  for (const schemaFile of ['intake.schema.json', 'spec.schema.json', 'task-graph.schema.json', 'task-context.schema.json', 'review.schema.json', 'run.schema.json', 'run-index.schema.json', 'orchestration-plan.schema.json', 'orchestration-runtime.schema.json', 'skill-proposal.schema.json', 'proposal-review.schema.json', 'proposal-curation.schema.json', 'proposal-patch-draft.schema.json', 'proposal-draft-approval.schema.json']) {
     pushArtifact(plan, path.join(ROOT, 'schemas', schemaFile), targetRoot, path.join('schemas', schemaFile));
   }
   const toolAssetPlan = pushToolAssets(plan, targetRoot, args.tools);
@@ -1214,6 +1214,23 @@ function detectPackageManager(targetRoot) {
 }
 
 function buildProjectConfig(targetRoot, teamBigFiveConfig = { enabled: false }, options = {}) {
+  const providerNativeCapabilities = {
+    codex: {
+      skills: 'manual_check',
+      customAgents: 'manual_check',
+      explicitSubagentPrompt: 'manual_check',
+    },
+    claude: {
+      subagents: 'manual_check',
+      skills: 'manual_check',
+      agentTeams: 'manual_check',
+    },
+    gemini: {
+      extensions: 'manual_check',
+      customCommands: 'manual_check',
+      geminiContext: 'manual_check',
+    },
+  };
   if (options.emptyCommands) {
     return {
       schema_version: 'p2a.project_config.v1',
@@ -1230,6 +1247,7 @@ function buildProjectConfig(targetRoot, teamBigFiveConfig = { enabled: false }, 
         worktreePattern: '../.worktrees/<taskId>-<runId>',
       },
       teamBigFive: teamBigFiveConfig,
+      providerNativeCapabilities,
       notes: ['TODO: fill install/test/lint/typecheck commands after project stack is chosen'],
     };
   }
@@ -1273,6 +1291,7 @@ function buildProjectConfig(targetRoot, teamBigFiveConfig = { enabled: false }, 
       worktreePattern: '../.worktrees/<taskId>-<runId>',
     },
     teamBigFive: teamBigFiveConfig,
+    providerNativeCapabilities,
     notes,
   };
 }

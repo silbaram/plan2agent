@@ -16,6 +16,8 @@
     "mode",
     "createdAt",
     "planner",
+    "providerStrategy",
+    "providerCapabilities",
     "roles",
     "acceptanceCriteria",
     "verificationPlan",
@@ -109,17 +111,161 @@
         }
       }
     },
-    "roles": {
+    "providerStrategy": {
+      "type": "object",
+      "required": [
+        "mode",
+        "primaryProvider",
+        "implementationProvider",
+        "reviewProvider",
+        "monitorProvider",
+        "mixedProviderImplementation",
+        "notes"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": [
+            "single_provider",
+            "single_provider_with_read_only_reviewer",
+            "manual"
+          ]
+        },
+        "primaryProvider": {
+          "type": "string",
+          "enum": [
+            "codex",
+            "claude",
+            "gemini",
+            "manual"
+          ]
+        },
+        "implementationProvider": {
+          "type": "string",
+          "enum": [
+            "codex",
+            "claude",
+            "gemini",
+            "manual"
+          ]
+        },
+        "reviewProvider": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "codex",
+            "claude",
+            "gemini",
+            "manual",
+            null
+          ]
+        },
+        "monitorProvider": {
+          "type": "string",
+          "enum": [
+            "manual"
+          ]
+        },
+        "mixedProviderImplementation": {
+          "type": "boolean"
+        },
+        "notes": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    "providerCapabilities": {
       "type": "array",
       "minItems": 1,
       "items": {
         "type": "object",
         "required": [
-          "roleId",
-          "role",
-          "agentTool",
-          "scope",
-          "prompt",
+          "provider",
+          "roles",
+          "writeAllowed",
+          "executionSurface",
+          "officialFeatures",
+          "supervisionMode",
+          "restrictions"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "provider": {
+            "type": "string",
+            "enum": [
+              "codex",
+              "claude",
+              "gemini",
+              "manual"
+            ]
+          },
+          "roles": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string",
+              "enum": [
+                "lead",
+                "contributor",
+                "reviewer",
+                "monitor"
+              ]
+            }
+          },
+          "writeAllowed": {
+            "type": "boolean"
+          },
+          "executionSurface": {
+            "type": "string",
+            "minLength": 1
+          },
+          "officialFeatures": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "supervisionMode": {
+            "type": "string",
+            "enum": [
+              "foreground_human_supervised"
+            ]
+          },
+          "restrictions": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        }
+      }
+    },
+    "roles": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+          "required": [
+            "roleId",
+            "role",
+            "profile",
+            "profileSource",
+            "profileReason",
+            "agentTool",
+            "executionGuide",
+            "scope",
+            "prompt",
           "requiresWrite"
         ],
         "additionalProperties": false,
@@ -137,6 +283,32 @@
               "monitor"
             ]
           },
+          "profile": {
+            "type": "string",
+            "enum": [
+              "owner_supervisor",
+              "frontend_implementer",
+              "backend_implementer",
+              "fullstack_implementer",
+              "test_implementer",
+              "docs_implementer",
+              "qa_reviewer",
+              "architecture_reviewer",
+              "security_reviewer",
+              "manual_monitor"
+            ]
+          },
+          "profileSource": {
+            "type": "string",
+            "enum": [
+              "auto",
+              "override"
+            ]
+          },
+          "profileReason": {
+            "type": "string",
+            "minLength": 1
+          },
           "agentTool": {
             "type": "string",
             "enum": [
@@ -145,6 +317,46 @@
               "gemini",
               "manual"
             ]
+          },
+          "executionGuide": {
+            "type": "object",
+            "required": [
+              "surface",
+              "recommendedFeature",
+              "fallbackMode",
+              "supervisionRequired",
+              "startsProcess",
+              "constraints"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "surface": {
+                "type": "string",
+                "minLength": 1
+              },
+              "recommendedFeature": {
+                "type": "string",
+                "minLength": 1
+              },
+              "fallbackMode": {
+                "type": "string",
+                "minLength": 1
+              },
+              "supervisionRequired": {
+                "const": true
+              },
+              "startsProcess": {
+                "const": false
+              },
+              "constraints": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            }
           },
           "scope": {
             "type": "string",

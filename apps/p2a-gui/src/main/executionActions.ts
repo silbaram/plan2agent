@@ -2,18 +2,20 @@ import { spawn } from "node:child_process";
 import { existsSync, statSync } from "node:fs";
 import path from "node:path";
 import type {
-  AgentTool,
   ExecutionCommandResult,
   ExecutionCustomVerificationCommand,
+  ExecutionAgentTool,
   ExecutionFinishRunRequest,
   ExecutionStartRunRequest,
   FailureClass,
+  OrchestrationMarkRoleRequest,
+  OrchestrationRoleStatus,
   VerificationType,
 } from "../shared/ipc";
-import { AGENT_TOOLS } from "../shared/ipc";
+import { EXECUTION_AGENT_TOOLS } from "../shared/ipc";
 
 const OUTPUT_LIMIT = 1024 * 128;
-const VALID_AGENT_TOOLS = new Set<AgentTool>(AGENT_TOOLS);
+const VALID_EXECUTION_AGENT_TOOLS = new Set<ExecutionAgentTool>(EXECUTION_AGENT_TOOLS);
 const VALID_FAILURE_CLASSES = new Set<FailureClass>([
   "verification_failed",
   "test_flake",
@@ -28,6 +30,13 @@ const VALID_VERIFICATION_TYPES = new Set<VerificationType>([
   "lint",
   "typecheck",
   "custom",
+]);
+const VALID_ORCHESTRATION_ROLE_STATUSES = new Set<OrchestrationRoleStatus>([
+  "pending",
+  "active",
+  "blocked",
+  "complete",
+  "skipped",
 ]);
 
 type ExecutionCommand = {
@@ -70,11 +79,20 @@ function assertFile(targetPath: string, label: string): string {
   return normalized;
 }
 
-function optionalFile(targetPath: string | null, basePath: string): string | null {
+function assertInsideDirectory(rootPath: string, targetPath: string, label: string): string {
+  const relativePath = path.relative(rootPath, targetPath);
+  if (relativePath.startsWith("..") || path.isAbsolute(relativePath)) {
+    throw new Error(`${label} must stay inside project root`);
+  }
+  return targetPath;
+}
+
+function optionalFile(targetPath: string | null, basePath: string, label: string): string | null {
   if (!targetPath) return null;
   const normalized = path.isAbsolute(targetPath)
     ? path.resolve(targetPath)
     : path.resolve(basePath, targetPath);
+  assertInsideDirectory(basePath, normalized, label);
   return existsSync(normalized) && statSync(normalized).isFile() ? normalized : null;
 }
 
@@ -116,6 +134,28 @@ function normalizeRunId(runId: string | null | undefined): string | null {
   return normalized;
 }
 
+function normalizeRoleId(roleId: string): string {
+  if (typeof roleId !== "string" || roleId.trim().length === 0) {
+    throw new Error("role id is required");
+  }
+  const normalized = roleId.trim();
+  if (!/^[A-Za-z0-9._:-]+$/.test(normalized)) {
+    throw new Error(`role id contains unsupported characters: ${roleId}`);
+  }
+  return normalized;
+}
+
+function normalizeOptionalText(value: string | null | undefined): string | null {
+  if (typeof value !== "string") return null;
+  const normalized = value.trim();
+  return normalized.length > 0 ? normalized : null;
+}
+
+function projectRelativeCommandPath(projectRoot: string, targetPath: string): string {
+  const relativePath = path.relative(projectRoot, targetPath);
+  return relativePath.length ? relativePath.split(path.sep).join("/") : ".";
+}
+
 function resolveExecutionContext(request: {
   projectRoot: string;
   artifactRoot: string;
@@ -129,7 +169,7 @@ function resolveExecutionContext(request: {
   const projectRoot = assertDirectory(request.projectRoot, "project root");
   const artifactRoot = assertDirectory(request.artifactRoot, "artifact root");
   const scriptPath = assertFile(path.join(projectRoot, "scripts", "p2a_execute.mjs"), "p2a_execute");
-  const taskGraphPath = optionalFile(request.taskGraphPath, projectRoot);
+  const taskGraphPath = optionalFile(request.taskGraphPath, projectRoot, "task graph path");
   const sourceArgs =
     existsSync(path.join(artifactRoot, "current-spec.json")) || !taskGraphPath
       ? ["--artifacts", artifactRoot]
@@ -140,6 +180,36 @@ function resolveExecutionContext(request: {
     artifactRoot,
     scriptPath,
     sourceArgs,
+  };
+}
+
+function resolveOrchestrationContext(request: OrchestrationMarkRoleRequest): {
+  projectRoot: string;
+  runtimePath: string;
+  runtimeArg: string;
+  scriptPath: string;
+} {
+  const projectRoot = assertDirectory(request.projectRoot, "project root");
+  const scriptPath = assertFile(
+    path.join(projectRoot, "scripts", "p2a_orchestrate.mjs"),
+    "p2a_orchestrate",
+  );
+  const runtimePath = assertFile(
+    assertInsideDirectory(
+      projectRoot,
+      path.isAbsolute(request.runtimePath)
+        ? path.resolve(request.runtimePath)
+        : path.resolve(projectRoot, request.runtimePath),
+      "runtime path",
+    ),
+    "orchestration runtime",
+  );
+
+  return {
+    projectRoot,
+    runtimePath,
+    runtimeArg: projectRelativeCommandPath(projectRoot, runtimePath),
+    scriptPath,
   };
 }
 
@@ -173,7 +243,7 @@ export function buildStartRunCommand(request: ExecutionStartRunRequest): Executi
   const context = resolveExecutionContext(request);
   const taskId = normalizeTaskId(request.taskId);
   const runId = normalizeRunId(request.runId);
-  if (!VALID_AGENT_TOOLS.has(request.agentTool)) {
+  if (!VALID_EXECUTION_AGENT_TOOLS.has(request.agentTool)) {
     throw new Error(`unsupported agent tool: ${String(request.agentTool)}`);
   }
 
@@ -230,6 +300,40 @@ export function buildFinishRunCommand(request: ExecutionFinishRunRequest): Execu
   };
 }
 
+export function buildMarkRoleCommand(request: OrchestrationMarkRoleRequest): ExecutionCommand {
+  const context = resolveOrchestrationContext(request);
+  const roleId = normalizeRoleId(request.roleId);
+  if (!VALID_ORCHESTRATION_ROLE_STATUSES.has(request.roleStatus)) {
+    throw new Error(`unsupported role status: ${String(request.roleStatus)}`);
+  }
+
+  const args = [
+    "mark-role",
+    "--runtime",
+    context.runtimeArg,
+    "--role",
+    roleId,
+    "--role-status",
+    request.roleStatus,
+  ];
+  const summary = normalizeOptionalText(request.summary);
+  const detail = normalizeOptionalText(request.detail);
+  const verdict = normalizeOptionalText(request.verdict ?? null);
+  if (summary) args.push("--summary", summary);
+  if (detail) args.push("--detail", detail);
+  if (verdict) args.push("--verdict", verdict);
+  if (request.requiresOwnerAction) args.push("--requires-owner-action");
+
+  return {
+    cwd: context.projectRoot,
+    scriptPath: context.scriptPath,
+    displayCommand: ["node", "scripts/p2a_orchestrate.mjs", ...args]
+      .map(shellQuote)
+      .join(" "),
+    args,
+  };
+}
+
 function appendChunk(current: string, chunk: Buffer): string {
   const next = current + chunk.toString("utf8");
   return next.length > OUTPUT_LIMIT ? next.slice(-OUTPUT_LIMIT) : next;
@@ -241,6 +345,10 @@ export function finishRun(request: ExecutionFinishRunRequest): Promise<Execution
 
 export function startRun(request: ExecutionStartRunRequest): Promise<ExecutionCommandResult> {
   return runExecutionCommand(buildStartRunCommand(request));
+}
+
+export function markRole(request: OrchestrationMarkRoleRequest): Promise<ExecutionCommandResult> {
+  return runExecutionCommand(buildMarkRoleCommand(request));
 }
 
 function runExecutionCommand(command: ExecutionCommand): Promise<ExecutionCommandResult> {

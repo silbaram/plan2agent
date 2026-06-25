@@ -3,12 +3,11 @@ import {
   AlertTriangle,
   CheckCircle2,
   CircleDot,
+  Copy,
   FileJson,
   FolderOpen,
-  GitBranch,
   History,
   Layers,
-  Monitor,
   RefreshCw,
   Settings,
   ShieldCheck,
@@ -16,7 +15,7 @@ import {
   X,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
-import { AGENT_TOOLS, DEFAULT_UI_LOCALE, UI_LOCALES } from "../../shared/ipc";
+import { DEFAULT_UI_LOCALE, EXECUTION_AGENT_TOOLS, UI_LOCALES } from "../../shared/ipc";
 import {
   summarizeFinishRunFailure,
   summarizeStartRunFailure,
@@ -29,11 +28,13 @@ import type {
   ArtifactFileReadResult,
   ArtifactSummary,
   DiagnosticSeverity,
+  ExecutionAgentTool,
   ExecutionCommandResult,
   ExecutionFinishStatus,
   FailureClass,
   GuiConfigSnapshot,
   OnboardingAction,
+  OrchestrationRoleStatus,
   ProjectSnapshot,
   ProjectWatchEvent,
   RuntimeInfo,
@@ -47,6 +48,7 @@ type OpenState = "idle" | "loading" | "canceled" | "error";
 type WatchState = "idle" | "watching" | "refreshing" | "error";
 type ConfigState = "loading" | "ready" | "error";
 type ExecutionActionState = "idle" | "running" | "error";
+type PromptCopyState = "idle" | "copied" | "error";
 type ArtifactFileState =
   | { status: "idle" }
   | { status: "loading"; document: ArtifactDocument }
@@ -72,21 +74,17 @@ const failureClassOptions: FailureClass[] = [
   "other",
 ];
 
-const verificationTypeOptions: VerificationType[] = ["custom", "test", "lint", "typecheck"];
+function terminalAgentForExecution(agentTool: ExecutionAgentTool | null | undefined): AgentTool | null {
+  if (!agentTool || agentTool === "manual") return null;
+  return agentTool;
+}
 
-const steps = [
-  ["2B-0", "Electron skeleton", "done"],
-  ["2B-1", "Read-only loader", "done"],
-  ["2B-2", "Workbench data views", "done"],
-  ["2B-3", "Onboarding guidance", "done"],
-  ["2C-0", "Terminal surface", "done"],
-  ["2C-1", "Real PTY session", "done"],
-  ["2C-2", "Supervisor controls", "done"],
-  ["2D", "Finish verification", "done"],
-  ["2E", "Start run", "done"],
-  ["2K", "Artifact viewer", "done"],
-  ["smoke", "End-to-end smoke", "done"],
-] as const;
+const verificationTypeOptions: VerificationType[] = ["custom", "test", "lint", "typecheck"];
+const orchestrationRoleStatusOptions: OrchestrationRoleStatus[] = [
+  "complete",
+  "blocked",
+  "skipped",
+];
 
 const navItems = [
   ["overview", Activity],
@@ -98,6 +96,15 @@ const navItems = [
 ] as const;
 
 type ActiveTab = (typeof navItems)[number][0];
+
+type FlowState = "done" | "active" | "next";
+
+type ProjectFlowItem = {
+  id: string;
+  title: string;
+  state: FlowState;
+  status: string;
+};
 
 const settingsCommands = [
   ["typecheck", "npm run typecheck"],
@@ -178,6 +185,100 @@ function statusLabel(value: string, copy: UiCopy): string {
     copy.status[value as keyof UiCopy["status"]] ??
     value.replace(/_/g, " ")
   );
+}
+
+function flowStateLabel(state: FlowState, copy: UiCopy): string {
+  if (state === "done") return copy.status.done;
+  if (state === "active") return copy.status.active;
+  return copy.status.pending;
+}
+
+function projectFlowItems(
+  snapshot: ProjectSnapshot | null,
+  artifact: ArtifactSummary | null,
+  copy: UiCopy,
+): ProjectFlowItem[] {
+  const projectOpen = Boolean(snapshot);
+  const harnessReady = Boolean(
+    snapshot && snapshot.state !== "no_p2a" && snapshot.state !== "broken_install",
+  );
+  const planningReady = Boolean(artifact);
+  const taskReady = Boolean(
+    artifact?.taskGraphPath || (artifact?.taskCounts.total ?? 0) > 0,
+  );
+  const executionStarted = Boolean((artifact?.runCount ?? 0) > 0);
+  const executionReady = Boolean(executionStarted || (artifact?.taskCounts.ready ?? 0) > 0);
+
+  const items: Array<Omit<ProjectFlowItem, "status">> = [
+    {
+      id: "01",
+      title: copy.tasks.flow.project,
+      state: projectOpen ? "done" : "active",
+    },
+    {
+      id: "02",
+      title: copy.tasks.flow.harness,
+      state: !projectOpen ? "next" : harnessReady ? "done" : "active",
+    },
+    {
+      id: "03",
+      title: copy.tasks.flow.planning,
+      state: !harnessReady ? "next" : planningReady ? "done" : "active",
+    },
+    {
+      id: "04",
+      title: copy.tasks.flow.tasks,
+      state: !planningReady ? "next" : taskReady ? "done" : "active",
+    },
+    {
+      id: "05",
+      title: copy.tasks.flow.execution,
+      state: !taskReady ? "next" : executionStarted ? "done" : executionReady ? "active" : "next",
+    },
+  ];
+
+  return items.map((item) => ({
+    ...item,
+    status: flowStateLabel(item.state, copy),
+  }));
+}
+
+function schedulerReasonLabel(reason: string | null | undefined, copy: UiCopy): string {
+  if (!reason) return copy.runs.schedulerReasons.unknown;
+  if (reason === "implementation_required") return copy.runs.schedulerReasons.implementationRequired;
+  if (reason === "review_required") return copy.runs.schedulerReasons.reviewRequired;
+  if (reason === "monitor_required") return copy.runs.schedulerReasons.monitorRequired;
+  if (reason === "reviewer_required") return copy.runs.schedulerReasons.reviewerRequired;
+  if (reason === "owner_decision_required") return copy.runs.schedulerReasons.ownerDecisionRequired;
+  if (reason.startsWith("open_question:")) return copy.runs.schedulerReasons.openQuestion;
+  if (reason.startsWith("role_blocked:")) return copy.runs.schedulerReasons.roleBlocked;
+  if (reason === "runtime_blocked") return copy.runs.schedulerReasons.runtimeBlocked;
+  if (reason === "ready_to_finish") return copy.runs.schedulerReasons.readyToFinish;
+  if (reason === "runtime_closed") return copy.runs.schedulerReasons.runtimeClosed;
+  if (reason === "roles_complete") return copy.runs.schedulerReasons.rolesComplete;
+  if (reason === "monitor_not_configured") return copy.runs.schedulerReasons.monitorNotConfigured;
+  return copy.runs.schedulerReasons.unknown;
+}
+
+function schedulerActionLabel(
+  reason: string | null | undefined,
+  nextRoleId: string | null | undefined,
+  copy: UiCopy,
+): string {
+  if (reason === "ready_to_finish") return copy.runs.schedulerActions.finishRun;
+  if (reason === "runtime_closed" || reason === "roles_complete") {
+    return copy.runs.schedulerActions.closed;
+  }
+  if (reason === "runtime_blocked" || reason?.startsWith("role_blocked:")) {
+    return copy.runs.schedulerActions.blocked;
+  }
+  if (reason === "owner_decision_required" || reason?.startsWith("open_question:")) {
+    return copy.runs.schedulerActions.ownerDecision;
+  }
+  if (!nextRoleId || reason === "monitor_not_configured") {
+    return copy.runs.schedulerActions.noNextRole;
+  }
+  return copy.runs.schedulerActions.openRole;
 }
 
 function parseListInput(value: string): string[] {
@@ -393,6 +494,14 @@ export default function App() {
   const [finishNoteInput, setFinishNoteInput] = useState("");
   const [startResult, setStartResult] = useState<ExecutionCommandResult | null>(null);
   const [finishResult, setFinishResult] = useState<ExecutionCommandResult | null>(null);
+  const [selectedOrchestrationRoleId, setSelectedOrchestrationRoleId] = useState<string | null>(null);
+  const [orchestrationState, setOrchestrationState] =
+    useState<ExecutionActionState>("idle");
+  const [orchestrationResult, setOrchestrationResult] =
+    useState<ExecutionCommandResult | null>(null);
+  const [orchestrationDetailInput, setOrchestrationDetailInput] = useState("");
+  const [orchestrationVerdictInput, setOrchestrationVerdictInput] = useState("");
+  const [promptCopyState, setPromptCopyState] = useState<PromptCopyState>("idle");
   const artifactViewerRef = useRef<HTMLElement | null>(null);
   const artifactViewerCloseButtonRef = useRef<HTMLButtonElement | null>(null);
   const artifactViewerReturnFocusRef = useRef<HTMLElement | null>(null);
@@ -488,6 +597,18 @@ export default function App() {
   const selectedTaskRuns = selectedTask
     ? runs.filter((run) => selectedTask.runIds.includes(run.runId))
     : [];
+  const selectedOrchestration = selectedRun?.orchestration ?? null;
+  const selectedOrchestrationRole =
+    selectedOrchestration?.roles.find((role) => role.roleId === selectedOrchestrationRoleId) ??
+    selectedOrchestration?.roles.find(
+      (role) => role.roleId === selectedOrchestration.next?.nextRole?.roleId,
+    ) ??
+    selectedOrchestration?.roles[0] ??
+    null;
+  const projectFlow = useMemo(
+    () => projectFlowItems(projectSnapshot, artifact, copy),
+    [artifact, copy, projectSnapshot],
+  );
   const tab = copy.tabs[activeTab];
   const statusText = useMemo(() => {
     return statusTextFor(projectSnapshot, openState, copy);
@@ -531,6 +652,21 @@ export default function App() {
     setStartResult(null);
   }, [projectSnapshot?.rootPath, selectedTaskId]);
 
+  useEffect(() => {
+    const roles = selectedRun?.orchestration?.roles ?? [];
+    const nextRoleId =
+      selectedRun?.orchestration?.next?.nextRole?.roleId ?? roles[0]?.roleId ?? null;
+
+    setSelectedOrchestrationRoleId((current) =>
+      roles.some((role) => role.roleId === current) ? current : nextRoleId,
+    );
+    setOrchestrationResult(null);
+    setOrchestrationState("idle");
+    setOrchestrationDetailInput("");
+    setOrchestrationVerdictInput("");
+    setPromptCopyState("idle");
+  }, [selectedRun?.runId, selectedRun?.orchestration?.updatedAt]);
+
   async function openProjectFolder() {
     setOpenState("loading");
     try {
@@ -569,7 +705,7 @@ export default function App() {
     }
   }
 
-  async function changeDefaultAgentTool(agentTool: AgentTool) {
+  async function changeDefaultAgentTool(agentTool: ExecutionAgentTool) {
     if (!projectSnapshot) return;
 
     try {
@@ -774,6 +910,16 @@ export default function App() {
 
   async function finishSelectedRun() {
     if (!projectSnapshot || !artifact || !selectedRun || selectedRun.status !== "started") return;
+    const confirmed = window.confirm(
+      [
+        copy.terminal.finishConfirm,
+        `run ${selectedRun.runId}`,
+        `status ${finishStatus}`,
+        finishPreviewCommand(),
+        copy.terminal.confirmContinue,
+      ].join("\n"),
+    );
+    if (!confirmed) return;
     setFinishState("running");
     setFinishResult(null);
 
@@ -803,6 +949,88 @@ export default function App() {
       setFinishState("error");
       setFinishResult({
         command: finishPreviewCommand(),
+        args: [],
+        cwd: projectSnapshot.rootPath,
+        exitCode: 1,
+        stdout: "",
+        stderr: error instanceof Error ? error.message : String(error),
+        startedAt: new Date().toISOString(),
+        finishedAt: new Date().toISOString(),
+        durationMs: 0,
+      });
+    }
+  }
+
+  function orchestrationMarkPreviewCommand(roleStatus: OrchestrationRoleStatus): string {
+    if (!selectedOrchestration?.runtimePath || !selectedOrchestrationRole) {
+      return copy.runs.noOrchestration;
+    }
+    const args = [
+      "node",
+      "scripts/p2a_orchestrate.mjs",
+      "mark-role",
+      "--runtime",
+      selectedOrchestration.runtimePath,
+      "--role",
+      selectedOrchestrationRole.roleId,
+      "--role-status",
+      roleStatus,
+    ];
+    if (orchestrationDetailInput.trim()) {
+      args.push("--detail", orchestrationDetailInput.trim());
+    }
+    if (
+      selectedOrchestrationRole.roleId === "monitor" &&
+      roleStatus === "complete" &&
+      orchestrationVerdictInput.trim()
+    ) {
+      args.push("--verdict", orchestrationVerdictInput.trim());
+    }
+    return args.map(quoteCommandPart).join(" ");
+  }
+
+  async function copySelectedRolePrompt() {
+    if (!selectedOrchestrationRole?.prompt) return;
+
+    try {
+      await window.navigator.clipboard.writeText(selectedOrchestrationRole.prompt);
+      setPromptCopyState("copied");
+    } catch {
+      setPromptCopyState("error");
+    }
+  }
+
+  async function markSelectedOrchestrationRole(roleStatus: OrchestrationRoleStatus) {
+    if (
+      !projectSnapshot ||
+      !selectedOrchestration?.runtimePath ||
+      !selectedOrchestrationRole
+    ) {
+      return;
+    }
+
+    setOrchestrationState("running");
+    setOrchestrationResult(null);
+
+    try {
+      const result = await window.p2a.orchestration.markRole({
+        projectRoot: projectSnapshot.rootPath,
+        runtimePath: selectedOrchestration.runtimePath,
+        roleId: selectedOrchestrationRole.roleId,
+        roleStatus,
+        detail: orchestrationDetailInput.trim() || null,
+        verdict:
+          selectedOrchestrationRole.roleId === "monitor" && roleStatus === "complete"
+            ? orchestrationVerdictInput.trim() || null
+            : null,
+      });
+      setOrchestrationResult(result);
+      setOrchestrationState(result.exitCode === 0 ? "idle" : "error");
+      await loadProjectPath(projectSnapshot.rootPath, { quiet: true });
+    } catch (error) {
+      setOrchestrationState("error");
+      setOrchestrationResult({
+        command: orchestrationMarkPreviewCommand(roleStatus),
         args: [],
         cwd: projectSnapshot.rootPath,
         exitCode: 1,
@@ -863,7 +1091,7 @@ export default function App() {
             {renderOnboardingAction(onboarding.primaryAction, "primary")}
             {onboarding.secondaryActions.map((action) => renderOnboardingAction(action, "secondary"))}
           </div>
-          <div className="onboarding-checks" aria-label="Onboarding checks">
+          <div className="onboarding-checks" aria-label={copy.common.onboardingChecks}>
             {onboarding.checks.map((check) => (
               <div className={`onboarding-check onboarding-check--${check.status}`} key={check.id}>
                 <span>{check.label}</span>
@@ -879,7 +1107,7 @@ export default function App() {
   function renderOverviewTab() {
     return (
       <>
-        <div className="summary-grid" aria-label="Project summary">
+        <div className="summary-grid" aria-label={copy.common.projectSummary}>
           <div>
             <span>{copy.overview.project}</span>
             <strong>{projectSnapshot?.projectId ?? projectSnapshot?.name ?? copy.common.none}</strong>
@@ -925,14 +1153,14 @@ export default function App() {
                     </div>
                     <span className="mono">{item.activeIteration ?? copy.common.none}</span>
                   </div>
-                  <div className="task-counts" aria-label="Task counts">
+                  <div className="task-counts" aria-label={copy.common.taskCounts}>
                     <span>{copy.status.ready} {formatCount(item.taskCounts.ready, locale)}</span>
                     <span>{copy.status.todo} {formatCount(item.taskCounts.todo, locale)}</span>
                     <span>{copy.status.in_progress} {formatCount(item.taskCounts.inProgress, locale)}</span>
                     <span>{copy.status.blocked} {formatCount(item.taskCounts.blocked, locale)}</span>
                     <span>{copy.status.done} {formatCount(item.taskCounts.done, locale)}</span>
                   </div>
-                  <div className="gate-strip" aria-label="Gate status">
+                  <div className="gate-strip" aria-label={copy.common.gateStatus}>
                     {item.gates.map((gate) => (
                       <span className={`gate-chip gate-chip--${gate.state}`} key={gate.id}>
                         <span className="mono">{gate.id}</span>
@@ -940,7 +1168,7 @@ export default function App() {
                       </span>
                     ))}
                   </div>
-                  <div className="validation-strip" aria-label="Schema validation">
+                  <div className="validation-strip" aria-label={copy.common.schemaValidation}>
                     {item.validations.map((validation) => (
                       <span
                         className={`validation-chip validation-chip--${validation.status}`}
@@ -1168,7 +1396,7 @@ export default function App() {
                 <h3>{copy.artifacts.schemaState}</h3>
               </div>
             </div>
-            <div className="validation-strip" aria-label="Artifact schema validation">
+            <div className="validation-strip" aria-label={copy.common.artifactSchemaValidation}>
               {selectedArtifact.validations.map((validation) => (
                 <span
                   className={`validation-chip validation-chip--${validation.status}`}
@@ -1202,7 +1430,7 @@ export default function App() {
             </span>
           </div>
           {tasks.length > 0 ? (
-            <div className="task-table" role="list" aria-label="Task graph rows">
+            <div className="task-table" role="list" aria-label={copy.common.taskGraphRows}>
               {tasks.map((task) => (
                 <button
                   className={`task-row${selectedTaskId === task.id ? " task-row--selected" : ""}${
@@ -1267,40 +1495,274 @@ export default function App() {
 
   function renderRunsTab() {
     return (
-      <section className="workbench-panel">
+      <>
+        <section className="workbench-panel">
+          <div className="section-head">
+            <div>
+              <div className="label">{copy.runs.runs}</div>
+              <h3>{copy.runs.runHistory}</h3>
+            </div>
+            <span className="section-meta mono">{artifact?.runIndexPath ?? copy.runs.noRunIndex}</span>
+          </div>
+          {runs.length > 0 ? (
+            <div className="run-table" role="list" aria-label={copy.common.runHistoryRows}>
+              {runs.map((run) => (
+                <button
+                  className={`run-row${selectedRunId === run.runId ? " run-row--selected" : ""}`}
+                  key={run.runId}
+                  type="button"
+                  onClick={() => selectRun(run)}
+                  role="listitem"
+                >
+                  <span className="run-row__id mono">{run.runId}</span>
+                  <span className={`status-badge status-badge--${run.status}`}>
+                    {statusLabel(run.status, copy)}
+                  </span>
+                  <span className="mono">{run.taskId}</span>
+                  <span className="mono">{run.agentTool}</span>
+                  <span className="mono">{formatDateTime(run.startedAt, locale, copy)}</span>
+                  <span className="mono">{formatDuration(run.startedAt, run.finishedAt, copy)}</span>
+                </button>
+              ))}
+            </div>
+          ) : (
+            <div className="empty-panel">
+              <History size={18} strokeWidth={1.7} aria-hidden="true" />
+              <span>{copy.runs.noRuns}</span>
+            </div>
+          )}
+        </section>
+        {renderRunOrchestrationPanel()}
+      </>
+    );
+  }
+
+  function renderRunOrchestrationPanel() {
+    if (!selectedRun) return null;
+
+    return (
+      <section className="workbench-panel orchestration-panel">
         <div className="section-head">
           <div>
-            <div className="label">{copy.runs.runs}</div>
-            <h3>{copy.runs.runHistory}</h3>
+            <div className="label">{copy.runs.orchestration}</div>
+            <h3>{selectedRun.runId}</h3>
           </div>
-          <span className="section-meta mono">{artifact?.runIndexPath ?? copy.runs.noRunIndex}</span>
+          <span className={`status-badge status-badge--${selectedOrchestration?.phase ?? "todo"}`}>
+            {selectedOrchestration?.phase ?? copy.common.none}
+          </span>
         </div>
-        {runs.length > 0 ? (
-          <div className="run-table" role="list" aria-label="Run history rows">
-            {runs.map((run) => (
-              <button
-                className={`run-row${selectedRunId === run.runId ? " run-row--selected" : ""}`}
-                key={run.runId}
-                type="button"
-                onClick={() => selectRun(run)}
-                role="listitem"
-              >
-                <span className="run-row__id mono">{run.runId}</span>
-                <span className={`status-badge status-badge--${run.status}`}>
-                  {statusLabel(run.status, copy)}
-                </span>
-                <span className="mono">{run.taskId}</span>
-                <span className="mono">{run.agentTool}</span>
-                <span className="mono">{formatDateTime(run.startedAt, locale, copy)}</span>
-                <span className="mono">{formatDuration(run.startedAt, run.finishedAt, copy)}</span>
-              </button>
-            ))}
+
+        {!selectedOrchestration ? (
+          <div className="empty-panel">
+            <Layers size={18} strokeWidth={1.7} aria-hidden="true" />
+            <span>{copy.runs.noOrchestration}</span>
           </div>
         ) : (
-          <div className="empty-panel">
-            <History size={18} strokeWidth={1.7} aria-hidden="true" />
-            <span>{copy.runs.noRuns}</span>
-          </div>
+          <>
+            <div className="detail-list detail-list--embedded orchestration-summary">
+              <div>
+                <span>{copy.common.mode}</span>
+                <strong className="mono">{selectedOrchestration.mode ?? copy.common.none}</strong>
+              </div>
+              <div>
+                <span>{copy.runs.nextRole}</span>
+                <strong className="mono">
+                  {selectedOrchestration.next?.nextRole?.roleId ?? copy.common.none}
+                </strong>
+              </div>
+              <div>
+                <span>{copy.runs.events}</span>
+                <strong className="mono">{formatCount(selectedOrchestration.eventCount, locale)}</strong>
+              </div>
+              <div>
+                <span>{copy.runs.monitorGate}</span>
+                <strong>{selectedOrchestration.monitorRequired ? copy.runs.needed : copy.runs.notNeeded}</strong>
+              </div>
+              <div>
+                <span>{copy.runs.supervision}</span>
+                <strong>{selectedOrchestration.next?.startsProcess ? copy.runs.startsProcess : copy.runs.noProcess}</strong>
+              </div>
+              <div>
+                <span>{copy.runs.lastEvent}</span>
+                <strong className="mono">
+                  {selectedOrchestration.lastEvent
+                    ? `${selectedOrchestration.lastEvent.roleId}/${selectedOrchestration.lastEvent.type}`
+                    : copy.common.none}
+                </strong>
+              </div>
+            </div>
+
+            <div className="orchestration-layout">
+              <div className="orchestration-role-list" role="list" aria-label={copy.common.orchestrationRoles}>
+                {selectedOrchestration.roles.map((role) => (
+                  <button
+                    className={`orchestration-role${
+                      selectedOrchestrationRole?.roleId === role.roleId
+                        ? " orchestration-role--selected"
+                        : ""
+                    } orchestration-role--${role.status}`}
+                    key={role.roleId}
+                    type="button"
+                    onClick={() => {
+                      setSelectedOrchestrationRoleId(role.roleId);
+                      setPromptCopyState("idle");
+                    }}
+                    role="listitem"
+                  >
+                    <span className="mono">{role.roleId}</span>
+                    <strong>
+                      {role.role} · {role.agentTool}
+                    </strong>
+                    <em className="mono">
+                      {role.profile} · {role.profileSource}
+                    </em>
+                    <span className="orchestration-role__reason" title={role.profileReason}>
+                      {role.profileReason}
+                    </span>
+                    <small className={`status-badge status-badge--${role.status}`}>
+                      {statusLabel(role.status, copy)}
+                    </small>
+                  </button>
+                ))}
+              </div>
+
+              <div className="orchestration-prompt">
+                <div className="orchestration-prompt__head">
+                  <div>
+                    <div className="label">{copy.runs.rolePrompt}</div>
+                    <h3>{selectedOrchestrationRole?.roleId ?? copy.common.none}</h3>
+                  </div>
+                  <button
+                    className="terminal-control"
+                    type="button"
+                    onClick={copySelectedRolePrompt}
+                    disabled={!selectedOrchestrationRole?.prompt}
+                  >
+                    <Copy size={13} strokeWidth={1.7} aria-hidden="true" />
+                    {promptCopyState === "copied"
+                      ? copy.runs.copied
+                      : promptCopyState === "error"
+                        ? copy.common.invalid
+                        : copy.runs.copyPrompt}
+                  </button>
+                </div>
+                {selectedOrchestrationRole && (
+                  <div className="detail-list detail-list--embedded orchestration-guide">
+                    <div>
+                      <span>{copy.runs.providerSurface}</span>
+                      <strong>{selectedOrchestrationRole.executionGuide.surface}</strong>
+                    </div>
+                    <div>
+                      <span>{copy.runs.recommendedFeature}</span>
+                      <strong className="mono">
+                        {selectedOrchestrationRole.executionGuide.recommendedFeature}
+                      </strong>
+                    </div>
+                    <div>
+                      <span>{copy.runs.fallbackMode}</span>
+                      <strong>{selectedOrchestrationRole.executionGuide.fallbackMode}</strong>
+                    </div>
+                  </div>
+                )}
+                <pre className="prompt-preview orchestration-prompt__body">
+                  {selectedOrchestrationRole?.prompt ?? copy.runs.noRolePrompt}
+                </pre>
+
+                <div className="orchestration-record">
+                  <label className="field-label">
+                    <span>{copy.runs.actionNote}</span>
+                    <textarea
+                      className="supervisor-textarea"
+                      value={orchestrationDetailInput}
+                      onChange={(event) => setOrchestrationDetailInput(event.target.value)}
+                      placeholder={copy.runs.actionNotePlaceholder}
+                    />
+                  </label>
+                  {selectedOrchestrationRole?.roleId === "monitor" && (
+                    <label className="field-label">
+                      <span>{copy.terminal.monitorVerdict}</span>
+                      <input
+                        className="text-input mono"
+                        value={orchestrationVerdictInput}
+                        onChange={(event) => setOrchestrationVerdictInput(event.target.value)}
+                        placeholder={copy.terminal.monitorVerdictPlaceholder}
+                      />
+                    </label>
+                  )}
+                  <div className="orchestration-actions" aria-label={copy.runs.recordState}>
+                    {orchestrationRoleStatusOptions.map((roleStatus) => (
+                      <button
+                        className="terminal-control"
+                        key={roleStatus}
+                        type="button"
+                        onClick={() => void markSelectedOrchestrationRole(roleStatus)}
+                        disabled={
+                          orchestrationState === "running" ||
+                          !selectedOrchestration.runtimePath ||
+                          !selectedOrchestrationRole ||
+                          (roleStatus === "complete" &&
+                            selectedOrchestrationRole.roleId === "monitor" &&
+                            !orchestrationVerdictInput.trim())
+                        }
+                      >
+                        {roleStatus === "complete" && (
+                          <CheckCircle2 size={13} strokeWidth={1.7} aria-hidden="true" />
+                        )}
+                        {roleStatus === "blocked" && (
+                          <AlertTriangle size={13} strokeWidth={1.7} aria-hidden="true" />
+                        )}
+                        {roleStatus === "skipped" && (
+                          <X size={13} strokeWidth={1.7} aria-hidden="true" />
+                        )}
+                        {statusLabel(roleStatus, copy)}
+                      </button>
+                    ))}
+                    <span className="mono">
+                      {orchestrationResult
+                        ? `exit ${orchestrationResult.exitCode} · ${formatMilliseconds(
+                            orchestrationResult.durationMs,
+                            copy,
+                          )}`
+                        : orchestrationState === "running"
+                          ? copy.common.running
+                          : copy.runs.recordState}
+                    </span>
+                  </div>
+                  {selectedOrchestrationRole?.roleId === "monitor" &&
+                    !orchestrationVerdictInput.trim() && (
+                      <div className="diagnostic diagnostic--warn">
+                        <AlertTriangle size={14} strokeWidth={1.7} aria-hidden="true" />
+                        <span>{copy.terminal.monitorVerdictRequired}</span>
+                      </div>
+                    )}
+                </div>
+
+                {selectedOrchestration.next && (
+                  <div className="diagnostic diagnostic--ok orchestration-hint">
+                    <ShieldCheck size={14} strokeWidth={1.7} aria-hidden="true" />
+                    <span className="execution-failure__body">
+                      <strong>{schedulerReasonLabel(selectedOrchestration.next.reason, copy)}</strong>
+                      <small>
+                        {schedulerActionLabel(
+                          selectedOrchestration.next.reason,
+                          selectedOrchestration.next.nextRole?.roleId,
+                          copy,
+                        )}
+                      </small>
+                      <em>{copy.runs.supervisedNoProcess}</em>
+                    </span>
+                  </div>
+                )}
+
+                {orchestrationResult && (
+                  <div className="command-output command-output--compact">
+                    <pre>{outputPreview(orchestrationResult.stdout, copy)}</pre>
+                    <pre>{outputPreview(orchestrationResult.stderr, copy)}</pre>
+                  </div>
+                )}
+              </div>
+            </div>
+          </>
         )}
       </section>
     );
@@ -1316,7 +1778,7 @@ export default function App() {
       <section className="workbench-panel start-run-panel">
         <div className="section-head">
           <div>
-            <div className="label">start / run</div>
+            <div className="label">{copy.common.startRun}</div>
             <h3>{selectedTask?.id ?? copy.tasks.noTaskSelected}</h3>
           </div>
           <span className={`status-badge status-badge--${selectedTask?.status ?? "todo"}`}>
@@ -1636,7 +2098,7 @@ export default function App() {
         <TerminalSurface
           cwd={projectSnapshot?.rootPath}
           command={onboarding?.primaryAction.command ?? projectSnapshot?.commands[0]?.command}
-          agentTool={projectSnapshot?.defaultAgentTool ?? "codex"}
+          agentTool={terminalAgentForExecution(projectSnapshot?.defaultAgentTool)}
           taskId={selectedTask?.id}
           taskPrompt={selectedTask?.suggestedAgentPrompt}
           locale={locale}
@@ -1717,11 +2179,11 @@ export default function App() {
               <select
                 className="agent-select mono"
                 value={projectSnapshot?.defaultAgentTool ?? "codex"}
-                onChange={(event) => changeDefaultAgentTool(event.target.value as AgentTool)}
+                onChange={(event) => changeDefaultAgentTool(event.target.value as ExecutionAgentTool)}
                 disabled={!projectSnapshot}
-                aria-label="Settings default agent tool"
+                aria-label={copy.common.defaultAgentTool}
               >
-                {AGENT_TOOLS.map((agentTool) => (
+                {EXECUTION_AGENT_TOOLS.map((agentTool) => (
                   <option key={agentTool} value={agentTool}>
                     {agentTool}
                   </option>
@@ -1808,7 +2270,7 @@ export default function App() {
                     className="recent-row__forget"
                     type="button"
                     onClick={() => forgetRecentProject(project.rootPath)}
-                    aria-label={`Forget ${project.name}`}
+                    aria-label={`${copy.common.forgetProject}: ${project.name}`}
                   >
                     <X size={13} strokeWidth={1.8} aria-hidden="true" />
                   </button>
@@ -2185,6 +2647,36 @@ export default function App() {
             <strong className="mono">{selectedRun.changedFiles.length}</strong>
           </div>
         </div>
+        {selectedOrchestration && (
+          <>
+            <div className="section-head section-head--tight">
+              <div>
+                <div className="label">{copy.runs.orchestration}</div>
+                <h3>{selectedOrchestration.phase ?? copy.common.none}</h3>
+              </div>
+            </div>
+            <div className="detail-list">
+              <div>
+                <span>{copy.common.mode}</span>
+                <strong className="mono">{selectedOrchestration.mode ?? copy.common.none}</strong>
+              </div>
+              <div>
+                <span>{copy.runs.nextRole}</span>
+                <strong className="mono">
+                  {selectedOrchestration.next?.nextRole?.roleId ?? copy.common.none}
+                </strong>
+              </div>
+              <div>
+                <span>{copy.runs.monitorGate}</span>
+                <strong>{selectedOrchestration.monitorRequired ? copy.runs.needed : copy.runs.notNeeded}</strong>
+              </div>
+            </div>
+            <div className="ref-list">
+              {selectedOrchestration.runtimePath && <code>{selectedOrchestration.runtimePath}</code>}
+              {selectedOrchestration.planPath && <code>{selectedOrchestration.planPath}</code>}
+            </div>
+          </>
+        )}
         {selectedRun.verification.length > 0 && (
           <>
             <div className="section-head section-head--tight">
@@ -2320,39 +2812,27 @@ export default function App() {
           </div>
           <div>
             <span>{copy.common.mode}</span>
-            <strong>supervised node-pty</strong>
+            <strong>{copy.terminal.foregroundSession}</strong>
           </div>
         </div>
         <div className="section-head section-head--tight">
           <div>
             <div className="label">{copy.terminal.boundary}</div>
-            <h3>{copy.terminal.terminalApis}</h3>
+            <h3>{copy.terminal.recordingScope}</h3>
           </div>
         </div>
-        <div className="api-list">
+        <div className="detail-list">
           <div>
-            <TerminalSquare size={14} strokeWidth={1.7} aria-hidden="true" />
-            <span className="mono">terminal:start</span>
+            <span>{copy.terminal.terminalTranscript}</span>
+            <strong>{copy.terminal.notPersisted}</strong>
           </div>
           <div>
-            <Monitor size={14} strokeWidth={1.7} aria-hidden="true" />
-            <span className="mono">terminal:input</span>
+            <span>{copy.terminal.finishRun}</span>
+            <strong>{copy.terminal.finishWritesRun}</strong>
           </div>
           <div>
-            <GitBranch size={14} strokeWidth={1.7} aria-hidden="true" />
-            <span className="mono">terminal:resize</span>
-          </div>
-          <div>
-            <CircleDot size={14} strokeWidth={1.7} aria-hidden="true" />
-            <span className="mono">terminal:stop</span>
-          </div>
-          <div>
-            <AlertTriangle size={14} strokeWidth={1.7} aria-hidden="true" />
-            <span className="mono">terminal:kill</span>
-          </div>
-          <div>
-            <CheckCircle2 size={14} strokeWidth={1.7} aria-hidden="true" />
-            <span className="mono">execution:finishRun</span>
+            <span>{copy.terminal.supervisorNotes}</span>
+            <strong>{copy.common.localOnly}</strong>
           </div>
         </div>
       </>
@@ -2453,7 +2933,7 @@ export default function App() {
       </header>
 
       <section className="workspace">
-        <nav className="rail" aria-label="Primary navigation">
+        <nav className="rail" aria-label={copy.common.primaryNavigation}>
           {navItems.map(([id, Icon]) => (
             <button
               className={`rail__item${activeTab === id ? " rail__item--active" : ""}`}
@@ -2521,7 +3001,7 @@ export default function App() {
                       className="recent-row__forget"
                       type="button"
                       onClick={() => forgetRecentProject(project.rootPath)}
-                      aria-label={`Forget ${project.name}`}
+                      aria-label={`${copy.common.forgetProject}: ${project.name}`}
                     >
                       <X size={13} strokeWidth={1.8} aria-hidden="true" />
                     </button>
@@ -2551,11 +3031,11 @@ export default function App() {
               <select
                 className="agent-select mono"
                 value={projectSnapshot?.defaultAgentTool ?? "codex"}
-                onChange={(event) => changeDefaultAgentTool(event.target.value as AgentTool)}
+                onChange={(event) => changeDefaultAgentTool(event.target.value as ExecutionAgentTool)}
                 disabled={!projectSnapshot}
-                aria-label="Default agent tool"
+                aria-label={copy.common.defaultAgentTool}
               >
-                {AGENT_TOOLS.map((agentTool) => (
+                {EXECUTION_AGENT_TOOLS.map((agentTool) => (
                   <option key={agentTool} value={agentTool}>
                     {agentTool}
                   </option>
@@ -2571,11 +3051,11 @@ export default function App() {
           <section className="mini-panel">
             <div className="label">{copy.common.milestones}</div>
             <div className="mini-step-list">
-              {steps.map(([id, title, state]) => (
-                <div className={`mini-step mini-step--${state}`} key={id}>
-                  <span className="mono">{id}</span>
-                  <strong>{title}</strong>
-                  <em>{state}</em>
+              {projectFlow.map((item) => (
+                <div className={`mini-step mini-step--${item.state}`} key={item.id}>
+                  <span className="mono">{item.id}</span>
+                  <strong>{item.title}</strong>
+                  <em>{item.status}</em>
                 </div>
               ))}
             </div>
@@ -2598,7 +3078,7 @@ export default function App() {
       </section>
 
       <footer className="statusbar">
-        <span className="mono">branch p2a-gui-mvp</span>
+        <span className="mono">{formatPath(artifact?.relativePath, copy)}</span>
         <span className="sep" />
         <span>{statusText}</span>
         <span className="statusbar__spacer" />

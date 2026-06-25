@@ -17,14 +17,18 @@ export const IPC_CHANNELS = {
   terminalExit: "terminal:exit",
   executionStartRun: "execution:startRun",
   executionFinishRun: "execution:finishRun",
+  orchestrationMarkRole: "orchestration:markRole",
 } as const;
 
 export const AGENT_TOOLS = ["codex", "claude", "gemini", "aider", "cursor"] as const;
+export const EXECUTION_AGENT_TOOLS = ["codex", "claude", "manual"] as const;
 export const DEFAULT_AGENT_TOOL: AgentTool = "codex";
+export const DEFAULT_EXECUTION_AGENT_TOOL: ExecutionAgentTool = "codex";
 export const UI_LOCALES = ["ko", "en"] as const;
 export const DEFAULT_UI_LOCALE: UiLocale = "ko";
 
 export type AgentTool = (typeof AGENT_TOOLS)[number];
+export type ExecutionAgentTool = (typeof EXECUTION_AGENT_TOOLS)[number];
 export type UiLocale = (typeof UI_LOCALES)[number];
 
 export type RuntimeInfo = {
@@ -136,6 +140,96 @@ export type WorkbenchRunFailure = {
   source: FailureSource;
 };
 
+export type OrchestrationMode = "solo" | "solo_monitor" | "team";
+
+export type OrchestrationRuntimePhase =
+  | "initialized"
+  | "running"
+  | "blocked"
+  | "ready_for_monitor"
+  | "ready_to_finish"
+  | "closed";
+
+export type OrchestrationRoleStatus =
+  | "pending"
+  | "active"
+  | "blocked"
+  | "complete"
+  | "skipped";
+
+export type WorkbenchOrchestrationExecutionGuide = {
+  surface: string;
+  recommendedFeature: string;
+  fallbackMode: string;
+  supervisionRequired: boolean;
+  startsProcess: boolean;
+  constraints: string[];
+};
+
+export type WorkbenchOrchestrationRole = {
+  roleId: string;
+  role: string;
+  profile: string;
+  profileSource: string;
+  profileReason: string;
+  agentTool: string;
+  executionGuide: WorkbenchOrchestrationExecutionGuide;
+  scope: string;
+  status: OrchestrationRoleStatus;
+  command: string | null;
+  prompt: string | null;
+};
+
+export type WorkbenchOrchestrationEvent = {
+  eventId: string;
+  createdAt: string;
+  roleId: string;
+  type: string;
+  summary: string;
+  requiresOwnerAction: boolean;
+};
+
+export type WorkbenchOrchestrationNextRole = {
+  roleId: string;
+  role: string;
+  profile: string;
+  profileSource: string;
+  profileReason: string;
+  agentTool: string;
+  executionGuide: WorkbenchOrchestrationExecutionGuide;
+  status: OrchestrationRoleStatus;
+  command: string | null;
+};
+
+export type WorkbenchOrchestrationSchedulerHint = {
+  supervisedOnly: boolean;
+  startsProcess: boolean;
+  nextRole: WorkbenchOrchestrationNextRole | null;
+  reason: string;
+  instruction: string;
+  resolutionHints: string[];
+  safetyBoundary: string;
+};
+
+export type WorkbenchRunOrchestration = {
+  planId: string | null;
+  runtimeId: string | null;
+  mode: OrchestrationMode | null;
+  phase: OrchestrationRuntimePhase | null;
+  blocked: boolean;
+  needsUserDecision: boolean;
+  planPath: string | null;
+  runtimePath: string | null;
+  sourcePlanRef: string | null;
+  monitorRequired: boolean;
+  monitorVerdictPath: string | null;
+  roles: WorkbenchOrchestrationRole[];
+  eventCount: number;
+  lastEvent: WorkbenchOrchestrationEvent | null;
+  next: WorkbenchOrchestrationSchedulerHint | null;
+  updatedAt: string | null;
+};
+
 export type WorkbenchTask = {
   id: string;
   title: string;
@@ -167,6 +261,7 @@ export type WorkbenchRun = {
   verification: WorkbenchRunVerification[];
   notes: string[];
   failure: WorkbenchRunFailure | null;
+  orchestration: WorkbenchRunOrchestration | null;
 };
 
 export type ArtifactSummary = {
@@ -238,7 +333,7 @@ export type RecentProject = {
   rootPath: string;
   name: string;
   lastOpenedAt: string;
-  defaultAgentTool: AgentTool;
+  defaultAgentTool: ExecutionAgentTool;
 };
 
 export type GuiConfigSnapshot = {
@@ -256,7 +351,7 @@ export type ProjectSnapshot = {
   mode: "read-only";
   projectId: string | null;
   activeIteration: string | null;
-  defaultAgentTool: AgentTool;
+  defaultAgentTool: ExecutionAgentTool;
   artifactRoot: string | null;
   checks: ProjectFileCheck[];
   artifacts: ArtifactSummary[];
@@ -350,7 +445,7 @@ export type ExecutionStartRunRequest = {
   artifactRoot: string;
   taskGraphPath: string | null;
   taskId: string;
-  agentTool: AgentTool;
+  agentTool: ExecutionAgentTool;
   runId?: string | null;
 };
 
@@ -382,6 +477,17 @@ export type ExecutionCommandResult = {
   durationMs: number;
 };
 
+export type OrchestrationMarkRoleRequest = {
+  projectRoot: string;
+  runtimePath: string;
+  roleId: string;
+  roleStatus: OrchestrationRoleStatus;
+  summary?: string | null;
+  detail?: string | null;
+  verdict?: string | null;
+  requiresOwnerAction?: boolean;
+};
+
 export type P2AApi = {
   app: {
     getRuntimeInfo: () => Promise<RuntimeInfo>;
@@ -396,7 +502,7 @@ export type P2AApi = {
     forgetRecent: (rootPath: string) => Promise<GuiConfigSnapshot>;
     setDefaultAgentTool: (
       rootPath: string,
-      agentTool: AgentTool,
+      agentTool: ExecutionAgentTool,
     ) => Promise<GuiConfigSnapshot>;
     onChanged: (callback: (event: ProjectWatchEvent) => void) => () => void;
   };
@@ -415,5 +521,8 @@ export type P2AApi = {
   execution: {
     startRun: (request: ExecutionStartRunRequest) => Promise<ExecutionCommandResult>;
     finishRun: (request: ExecutionFinishRunRequest) => Promise<ExecutionCommandResult>;
+  };
+  orchestration: {
+    markRole: (request: OrchestrationMarkRoleRequest) => Promise<ExecutionCommandResult>;
   };
 };

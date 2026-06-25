@@ -1,11 +1,11 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import {
-  AGENT_TOOLS,
-  DEFAULT_AGENT_TOOL,
+  DEFAULT_EXECUTION_AGENT_TOOL,
   DEFAULT_UI_LOCALE,
+  EXECUTION_AGENT_TOOLS,
   UI_LOCALES,
-  type AgentTool,
+  type ExecutionAgentTool,
   type GuiConfigSnapshot,
   type RecentProject,
   type UiLocale,
@@ -16,7 +16,7 @@ const GUI_CONFIG_FILE = "p2a-gui-config.json";
 const MAX_RECENT_PROJECTS = 8;
 
 type ProjectSetting = {
-  defaultAgentTool: AgentTool;
+  defaultAgentTool: ExecutionAgentTool;
 };
 
 type GuiConfigFile = {
@@ -43,8 +43,8 @@ export function configPathForUserData(userDataPath: string): string {
   return path.join(userDataPath, GUI_CONFIG_FILE);
 }
 
-function isAgentTool(value: unknown): value is AgentTool {
-  return typeof value === "string" && AGENT_TOOLS.includes(value as AgentTool);
+function isExecutionAgentTool(value: unknown): value is ExecutionAgentTool {
+  return typeof value === "string" && EXECUTION_AGENT_TOOLS.includes(value as ExecutionAgentTool);
 }
 
 function isUiLocale(value: unknown): value is UiLocale {
@@ -63,7 +63,9 @@ function normalizeConfig(parsed: unknown): GuiConfigFile {
       if (!setting || typeof setting !== "object") continue;
       const defaultAgentTool = (setting as Partial<ProjectSetting>).defaultAgentTool;
       projectSettings[rootPath] = {
-        defaultAgentTool: isAgentTool(defaultAgentTool) ? defaultAgentTool : DEFAULT_AGENT_TOOL,
+        defaultAgentTool: isExecutionAgentTool(defaultAgentTool)
+          ? defaultAgentTool
+          : DEFAULT_EXECUTION_AGENT_TOOL,
       };
     }
   }
@@ -112,7 +114,7 @@ function toSnapshot(configPath: string, config: GuiConfigFile): GuiConfigSnapsho
     recentProjects: config.recentProjects.map((project): RecentProject => ({
       ...project,
       defaultAgentTool:
-        config.projectSettings[project.rootPath]?.defaultAgentTool ?? DEFAULT_AGENT_TOOL,
+        config.projectSettings[project.rootPath]?.defaultAgentTool ?? DEFAULT_EXECUTION_AGENT_TOOL,
     })),
   };
 }
@@ -153,7 +155,7 @@ export async function rememberRecentProject(
     ...remaining,
   ].slice(0, MAX_RECENT_PROJECTS);
   config.projectSettings[normalizedRootPath] ??= {
-    defaultAgentTool: DEFAULT_AGENT_TOOL,
+    defaultAgentTool: DEFAULT_EXECUTION_AGENT_TOOL,
   };
 
   await writeConfig(configPath, config);
@@ -177,17 +179,17 @@ export async function forgetRecentProject(
 export async function readDefaultAgentTool(
   configPath: string,
   rootPath: string,
-): Promise<AgentTool> {
+): Promise<ExecutionAgentTool> {
   const config = await readConfig(configPath);
-  return config.projectSettings[path.resolve(rootPath)]?.defaultAgentTool ?? DEFAULT_AGENT_TOOL;
+  return config.projectSettings[path.resolve(rootPath)]?.defaultAgentTool ?? DEFAULT_EXECUTION_AGENT_TOOL;
 }
 
 export async function setDefaultAgentTool(
   configPath: string,
   rootPath: string,
-  agentTool: AgentTool,
+  agentTool: ExecutionAgentTool,
 ): Promise<GuiConfigSnapshot> {
-  if (!isAgentTool(agentTool)) {
+  if (!isExecutionAgentTool(agentTool)) {
     throw new Error(`Unsupported agent tool: ${String(agentTool)}`);
   }
   const config = await readConfig(configPath);

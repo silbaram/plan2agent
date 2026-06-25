@@ -7,6 +7,7 @@ import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { loadJson, validateOrchestrationPlanData, validateProposalDraftApprovalData, validateRunData, validateTaskGraphData, ValidationError } from './validate_artifacts.mjs';
+import { orchestrationRuntimePath, readOrchestrationRuntime, recordOrchestrationRuntimeEvent, writeOrchestrationRuntimeForRun } from './p2a_orchestrate.mjs';
 import { resolveIterationState } from './p2a_iteration_state.mjs';
 import { resolveRunsDir } from './p2a_run_paths.mjs';
 
@@ -18,6 +19,7 @@ const FINISH_STATUSES = new Set(['finished', 'failed', 'blocked']);
 const FAILURE_CLASSES = new Set(['verification_failed', 'test_flake', 'scope_violation', 'missing_dependency', 'environment_failure', 'implementation_incomplete', 'other']);
 const FAILURE_RETRYABLE = new Set(['yes', 'no', 'after_fix']);
 const FAILURE_SOURCES = new Set(['owner', 'monitor', 'implementer']);
+const IMPLEMENTER_AGENT_TOOLS = new Set(['codex', 'claude', 'manual']);
 const DEFAULT_HANDOFF_GRAPH = path.join('.plan2agent', 'artifacts', 'task-graph.json');
 const DEFAULT_PROJECT_CONFIG = path.join('.plan2agent', 'project.config.json');
 
@@ -44,7 +46,7 @@ function usage() {
     'Start/plan options:',
     '  --task <task-id>     Task to execute. If omitted, there must be exactly one ready task.',
     '  --approval <path>    Proposal draft approval JSON; selects its maintenance task and implies --maintenance.',
-    '  --agent-tool <tool>  Agent/CLI tool label for the run. Default: codex.',
+    '  --agent-tool <tool>  Write implementer label: codex, claude, or manual. Default: codex.',
     '  --run-id <run-id>    Stable run id for start; generated when omitted.',
     '  --workspace <dir>    Workspace path for implementation/verification. Default: cwd.',
     '  --workspace-ref <r>  Human-readable workspace reference.',
@@ -178,6 +180,9 @@ function parseArgs(argv) {
   if (args.maintenance && !args.artifacts) throw new Error('--maintenance is only supported with --artifacts');
   if (args.command === 'finish' && !args.runId) throw new Error('--run-id is required for finish');
   if (args.command === 'status' && !args.taskId && !args.runId && !args.approval) throw new Error('--task, --approval, or --run-id is required for status');
+  if (['plan', 'start'].includes(args.command) && !IMPLEMENTER_AGENT_TOOLS.has(args.agentTool)) {
+    throw new Error('--agent-tool for implementation must be one of codex, claude, or manual; Gemini is read-only and may only be used as a reviewer/monitor in p2a_orchestrate plans');
+  }
   if ((args.command === 'plan' || args.command === 'status') && args.verifyOptions.length) {
     throw new Error('verification options are only supported with finish');
   }
@@ -568,7 +573,7 @@ function attachOrchestrationPlan(plan, source, runId) {
   validateOrchestrationPlanData(sidecar);
   const filePath = orchestrationSidecarPath(source.runsDir, runId);
   writeFileSync(filePath, `${JSON.stringify(sidecar, null, 2)}\n`, 'utf8');
-  return filePath;
+  return { filePath, sidecar };
 }
 
 function readMonitorVerdict(source, sidecar) {
@@ -596,6 +601,38 @@ function applyMonitorGate(args, source) {
   if (!args.failureSource) args.failureSource = 'monitor';
   if (args.needsUserDecision === null && verdict === 'needs_user_decision') args.needsUserDecision = 'true';
   return { sidecar, verdict, accepted: false, failureClass: args.failureClass };
+}
+
+function updateOrchestrationRuntimeAfterFinish(source, run) {
+  const runtimePath = orchestrationRuntimePath(source.runsDir, run.runId);
+  if (!existsSync(runtimePath)) return null;
+  const currentRuntime = readOrchestrationRuntime(runtimePath);
+  if (currentRuntime.status.phase === 'closed') {
+    return { filePath: runtimePath, runtime: currentRuntime, event: null, skipped: true };
+  }
+  const blocked = run.status !== 'finished';
+  const result = recordOrchestrationRuntimeEvent(runtimePath, {
+    roleId: 'owner',
+    eventType: blocked ? 'blocker' : 'status',
+    summary: `Run ${run.runId} finished with status ${run.status}`,
+    detail: run.failure ? JSON.stringify(run.failure) : null,
+    roleStatus: blocked ? 'blocked' : 'complete',
+    phase: blocked ? 'blocked' : 'closed',
+    requiresOwnerAction: run.failure?.needsUserDecision ?? false,
+  });
+  return { ...result, filePath: runtimePath };
+}
+
+function closedOrchestrationRuntimeForRun(source, runId) {
+  const runtimePath = orchestrationRuntimePath(source.runsDir, runId);
+  if (!existsSync(runtimePath)) return null;
+  const runtime = readOrchestrationRuntime(runtimePath);
+  if (runtime.status.phase !== 'closed') return null;
+  return { filePath: runtimePath, runtime };
+}
+
+function expectedTaskStatusForRun(run) {
+  return finishStatusFromRun(run) === 'finished' ? 'done' : 'blocked';
 }
 
 function readRun(runsDir, runId) {
@@ -684,6 +721,28 @@ function finishStatusFromRun(run) {
   return run.status;
 }
 
+function transitionTaskAfterFinishedRun(args, source, run, successStatus = 0) {
+  const task = requireTask(source, run.taskId);
+  const expectedTaskStatus = expectedTaskStatusForRun(run);
+  if (args.noTaskTransition) {
+    console.log('Task transition skipped by --no-task-transition');
+    return successStatus;
+  }
+  if (task.status === expectedTaskStatus) {
+    console.log(`Task transition already applied: ${task.id} status is ${task.status}`);
+    return successStatus;
+  }
+  if (task.status !== 'in_progress') {
+    console.error(`task transition skipped: ${task.id} must be in_progress before done/block; current status is ${task.status}`);
+    return 1;
+  }
+  console.log(`Marking task ${run.status === 'finished' ? 'done' : 'blocked'}...`);
+  const taskResult = runScript('p2a_tasks.mjs', finishTaskArgs(source, task.id, run.status));
+  printChildResult(taskResult);
+  if (taskResult.status !== 0) return taskResult.status ?? 1;
+  return successStatus;
+}
+
 function expectedFailureFinishStatus(result, requestedStatus) {
   if (result.status === 0) return true;
   if (requestedStatus === 'failed' && result.status === 1) return true;
@@ -718,8 +777,12 @@ function runStart(args) {
   const runResult = runScript('p2a_runs.mjs', startRunArgs(args, task, runId, defaults, approvalLink.approval));
   printChildResult(runResult);
   if (runResult.status !== 0) return runResult.status ?? 1;
-  const sidecarPath = attachOrchestrationPlan(orchestrationPlan, source, runId);
-  if (sidecarPath) console.log(`Attached orchestration sidecar: ${displayPath(sidecarPath)}`);
+  const attachedOrchestration = attachOrchestrationPlan(orchestrationPlan, source, runId);
+  if (attachedOrchestration) {
+    console.log(`Attached orchestration sidecar: ${displayPath(attachedOrchestration.filePath)}`);
+    const runtime = writeOrchestrationRuntimeForRun(attachedOrchestration.sidecar, source.runsDir, runId);
+    console.log(`Initialized orchestration runtime: ${displayPath(runtime.filePath)}`);
+  }
 
   console.log('');
   console.log('Marking task in_progress...');
@@ -775,6 +838,11 @@ function runStatus(args) {
     console.log(`- orchestration: ${sidecar.mode} ${sidecar.planId}`);
     if (sidecar.monitorGate.required) console.log(`- monitorGate: ${sidecar.monitorGate.verdictPath}`);
   }
+  const runtimePath = orchestrationRuntimePath(source.runsDir, run.runId);
+  if (existsSync(runtimePath)) {
+    const runtime = readOrchestrationRuntime(runtimePath);
+    console.log(`- orchestrationRuntime: ${runtime.status.phase} events=${runtime.communicationLog.length} needsUserDecision=${runtime.status.needsUserDecision}`);
+  }
   if (run.failure) console.log(`- failure: ${run.failure.class} retryable=${run.failure.retryable} needsUserDecision=${run.failure.needsUserDecision} source=${run.failure.source}`);
   return 0;
 }
@@ -788,6 +856,12 @@ function runFinish(args) {
       console.error(`finish refused: run ${existingRun.runId} belongs to ${existingRun.taskId}, not approval task ${approvalLink.taskId}`);
       return 1;
     }
+  }
+  const closedRuntime = closedOrchestrationRuntimeForRun(source, args.runId);
+  if (closedRuntime) {
+    console.log(`Orchestration runtime already closed: ${displayPath(closedRuntime.filePath)}`);
+    const run = readRun(source.runsDir, args.runId);
+    return transitionTaskAfterFinishedRun(args, source, run, 0);
   }
   let verificationFailed = false;
   if (verifyRequested(args)) {
@@ -819,21 +893,17 @@ function runFinish(args) {
   if (!expectedFailureFinishStatus(finishResult, requestedStatus)) return finishResult.status ?? 1;
 
   const run = readRun(source.runsDir, args.runId);
-  const task = requireTask(source, run.taskId);
-  const runStatus = finishStatusFromRun(run);
-  if (args.noTaskTransition) {
-    console.log('Task transition skipped by --no-task-transition');
-    return finishResult.status ?? 0;
+  try {
+    const runtimeUpdate = updateOrchestrationRuntimeAfterFinish(source, run);
+    if (runtimeUpdate?.skipped) {
+      console.log(`Orchestration runtime already closed: ${displayPath(runtimeUpdate.filePath)}`);
+    } else if (runtimeUpdate) {
+      console.log(`Updated orchestration runtime: ${displayPath(runtimeUpdate.filePath)} phase=${runtimeUpdate.runtime.status.phase}`);
+    }
+  } catch (error) {
+    console.error(`warning: orchestration runtime was not updated: ${error.message}`);
   }
-  if (task.status !== 'in_progress') {
-    console.error(`task transition skipped: ${task.id} must be in_progress before done/block; current status is ${task.status}`);
-    return 1;
-  }
-  console.log(`Marking task ${runStatus === 'finished' ? 'done' : 'blocked'}...`);
-  const taskResult = runScript('p2a_tasks.mjs', finishTaskArgs(source, task.id, runStatus));
-  printChildResult(taskResult);
-  if (taskResult.status !== 0) return taskResult.status ?? 1;
-  return finishResult.status ?? 0;
+  return transitionTaskAfterFinishedRun(args, source, run, finishResult.status ?? 0);
 }
 
 export function main(argv = process.argv.slice(2)) {

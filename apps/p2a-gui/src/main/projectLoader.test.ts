@@ -235,6 +235,117 @@ describe("loadProjectSnapshot", () => {
           notes: ["done"],
         }),
       );
+      await writeFile(
+        path.join(tempRoot, "runs/run-task-001-a.orchestration.json"),
+        JSON.stringify({
+          schema_version: "p2a.orchestration_plan.v1",
+          planId: "orch-test-task-001",
+          projectId: "run-linked-project",
+          taskId: "task-001",
+          taskTitle: "Implement cache API",
+          mode: "solo_monitor",
+          createdAt: "2026-06-23T01:00:00.000Z",
+          roles: [
+            {
+              roleId: "owner",
+              role: "lead",
+              agentTool: "manual",
+              scope: "Own the run lifecycle.",
+            },
+            {
+              roleId: "implementer",
+              role: "contributor",
+              agentTool: "codex",
+              scope: "Implement the cache API.",
+            },
+            {
+              roleId: "monitor",
+              role: "monitor",
+              agentTool: "manual",
+              scope: "Check the monitor gate.",
+            },
+          ],
+          handoffPrompts: [
+            {
+              roleId: "implementer",
+              command: "codex",
+              prompt: "Implement cache get and set operations.",
+            },
+          ],
+          monitorGate: {
+            required: true,
+            verdictPath: "run-task-001-a.monitor-verdict.json",
+          },
+        }),
+      );
+      await writeFile(
+        path.join(tempRoot, "runs/run-task-001-a.orchestration-runtime.json"),
+        JSON.stringify({
+          schema_version: "p2a.orchestration_runtime.v1",
+          runtimeId: "runtime-run-task-001-a",
+          projectId: "run-linked-project",
+          taskId: "task-001",
+          taskTitle: "Implement cache API",
+          runId: "run-task-001-a",
+          planId: "orch-test-task-001",
+          mode: "solo_monitor",
+          sourcePlanRef: "run-task-001-a.orchestration.json",
+          createdAt: "2026-06-23T01:00:00.000Z",
+          updatedAt: "2026-06-23T01:02:00.000Z",
+          sharedMentalModel: {
+            objective: "Complete task-001: Implement cache API",
+            currentState: "Run is started.",
+            constraints: ["Use official CLI sessions only."],
+            acceptanceCriteria: ["Cache get and set operations are covered"],
+            roleAssignments: [
+              {
+                roleId: "owner",
+                role: "lead",
+                agentTool: "manual",
+                scope: "Own the run lifecycle.",
+                status: "active",
+              },
+              {
+                roleId: "implementer",
+                role: "contributor",
+                agentTool: "codex",
+                scope: "Implement the cache API.",
+                status: "active",
+              },
+              {
+                roleId: "monitor",
+                role: "monitor",
+                agentTool: "manual",
+                scope: "Check the monitor gate.",
+                status: "pending",
+              },
+            ],
+            decisions: [],
+            openQuestions: [],
+            risks: ["monitor_required"],
+          },
+          communicationLog: [
+            {
+              eventId: "event-1-handoff-implementer",
+              createdAt: "2026-06-23T01:00:00.000Z",
+              roleId: "implementer",
+              role: "contributor",
+              agentTool: "codex",
+              type: "handoff",
+              summary: "Handoff prepared for implementer",
+              detail: "Implement cache get and set operations.",
+              linkedRoleId: null,
+              requiresOwnerAction: false,
+            },
+          ],
+          status: {
+            phase: "running",
+            blocked: false,
+            needsUserDecision: false,
+            lastEventId: "event-1-handoff-implementer",
+          },
+        }),
+      );
 
       const snapshot = await loadProjectSnapshot(tempRoot);
 
@@ -259,7 +370,34 @@ describe("loadProjectSnapshot", () => {
           },
         ],
         notes: ["done"],
+        orchestration: {
+          planId: "orch-test-task-001",
+          runtimeId: "runtime-run-task-001-a",
+          mode: "solo_monitor",
+          phase: "running",
+          monitorRequired: true,
+          runtimePath: "runs/run-task-001-a.orchestration-runtime.json",
+          eventCount: 1,
+          next: {
+            supervisedOnly: true,
+            startsProcess: false,
+            nextRole: {
+              roleId: "implementer",
+              command: "codex",
+            },
+          },
+        },
       });
+      expect(snapshot.artifacts[0]?.runs[0]?.orchestration?.roles).toMatchObject([
+        { roleId: "owner", status: "active", command: null },
+        { roleId: "implementer", status: "active", command: "codex" },
+        { roleId: "monitor", status: "pending", command: null },
+      ]);
+      expect(
+        snapshot.artifacts[0]?.runs[0]?.orchestration?.roles.find(
+          (role) => role.roleId === "implementer",
+        )?.prompt,
+      ).toContain("Supervision boundary");
     } finally {
       await rm(tempRoot, { recursive: true, force: true });
     }

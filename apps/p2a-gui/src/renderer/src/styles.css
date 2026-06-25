@@ -1318,6 +1318,29 @@ h3 {
   color: var(--err);
 }
 
+.status-badge--pending,
+.status-badge--initialized {
+  color: var(--fg-3);
+}
+
+.status-badge--active,
+.status-badge--running,
+.status-badge--ready_for_monitor,
+.status-badge--ready_to_finish {
+  border-color: var(--info);
+  color: var(--info);
+}
+
+.status-badge--complete,
+.status-badge--closed {
+  border-color: var(--ok);
+  color: var(--ok);
+}
+
+.status-badge--skipped {
+  color: var(--fg-4);
+}
+
 .dependency-flow {
   display: flex;
   flex-wrap: wrap;
@@ -2069,6 +2092,197 @@ h3 {
 
 .prompt-preview {
   min-height: 96px;
+}
+
+.orchestration-summary {
+  padding: 12px;
+}
+
+.orchestration-layout {
+  display: grid;
+  grid-template-columns: minmax(180px, 0.36fr) minmax(0, 1fr);
+  gap: 1px;
+  border-top: 1px solid var(--border-1);
+  background: var(--border-1);
+}
+
+.orchestration-role-list,
+.orchestration-prompt {
+  min-width: 0;
+  background: var(--bg-2);
+}
+
+.orchestration-role-list {
+  display: grid;
+  align-content: start;
+}
+
+.orchestration-role {
+  min-height: 76px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 76px;
+  gap: 3px 8px;
+  border: 0;
+  border-left: 2px solid transparent;
+  border-bottom: 1px solid var(--border-1);
+  padding: 8px 10px;
+  background: transparent;
+  color: var(--fg-2);
+  text-align: left;
+}
+
+.orchestration-role:last-child {
+  border-bottom: 0;
+}
+
+.orchestration-role:hover,
+.orchestration-role--selected {
+  background: var(--bg-3);
+  color: var(--fg-1);
+}
+
+.orchestration-role--selected {
+  border-left-color: var(--accent);
+}
+
+.orchestration-role--active:not(.orchestration-role--selected) {
+  border-left-color: var(--info);
+}
+
+.orchestration-role--blocked:not(.orchestration-role--selected) {
+  border-left-color: var(--warn);
+}
+
+.orchestration-role--complete:not(.orchestration-role--selected) {
+  border-left-color: var(--ok);
+}
+
+.orchestration-role span,
+.orchestration-role strong,
+.orchestration-role em,
+.orchestration-role__reason {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.orchestration-role span {
+  color: var(--fg-1);
+  font-size: 12px;
+}
+
+.orchestration-role strong,
+.orchestration-role em {
+  color: var(--fg-3);
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 500;
+}
+
+.orchestration-role__reason {
+  color: var(--fg-4);
+  font-size: 11px;
+}
+
+.orchestration-role .status-badge {
+  grid-row: 1 / span 4;
+  grid-column: 2;
+  align-self: center;
+}
+
+.orchestration-prompt {
+  display: grid;
+  gap: 10px;
+  align-content: start;
+  padding: 12px;
+}
+
+.orchestration-prompt__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+}
+
+.orchestration-prompt__head h3 {
+  margin: 2px 0 0;
+  color: var(--fg-1);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.orchestration-prompt__head .terminal-control {
+  gap: 5px;
+  flex: 0 0 auto;
+}
+
+.orchestration-prompt__body {
+  max-height: 320px;
+  overflow: auto;
+  border: 1px solid var(--border-1);
+  border-radius: 4px;
+  background: var(--bg-1);
+}
+
+.orchestration-record {
+  display: grid;
+  gap: 8px;
+}
+
+.orchestration-record .supervisor-textarea {
+  min-height: 54px;
+}
+
+.orchestration-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.orchestration-actions .terminal-control {
+  gap: 5px;
+}
+
+.orchestration-actions span {
+  color: var(--fg-3);
+  font-size: 11px;
+}
+
+.orchestration-hint {
+  margin-top: 2px;
+}
+
+.orchestration-guide {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.orchestration-guide strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.orchestration-hint__list {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.orchestration-hint__list b {
+  color: var(--fg-2);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.orchestration-hint__list i {
+  color: var(--fg-3);
+  font-size: 11px;
+  font-style: normal;
+  overflow-wrap: anywhere;
 }
 
 .detail-list {

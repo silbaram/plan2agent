@@ -262,9 +262,26 @@ node scripts/p2a_orchestrate.mjs plan \
 
 node scripts/p2a_orchestrate.mjs handoff \
   --plan .plan2agent/orchestration/task-001.json
+
+node scripts/p2a_orchestrate.mjs runner-guide \
+  --plan .plan2agent/orchestration/task-001.json \
+  --role implementer
+
+node scripts/p2a_orchestrate.mjs runner-doctor \
+  --root . \
+  --provider all
+
+node scripts/p2a_orchestrate.mjs runner-doctor \
+  --root . \
+  --provider codex \
+  --live
 ```
 
-task를 시작하고 run log를 연다. 출력되는 manual launcher prompt를 Codex/Claude 같은 감독형 agent 세션에 붙여넣는다. 오케스트레이션 계획을 만들지 않았다면 `--orchestration-plan` 옵션은 빼고 실행한다.
+`runner-guide`는 선택 provider의 공식 foreground 기능을 어떻게 쓰면 되는지 보여주는 안내다. `runner-doctor`는 현재 프로젝트에 필요한 provider 자산과 `.plan2agent/project.config.json.providerNativeCapabilities`의 수동 capability evidence를 파일만 읽어 확인한다. `--live`를 명시하면 provider `--version`만 실행해 CLI 존재와 버전 출력만 확인한다. 둘 다 agent session을 열지 않고, owner가 공식 CLI/앱을 직접 열어 prompt를 붙여넣는 전제를 유지한다. 붙여넣은 foreground 세션 안에서 provider-native skill/subagent/custom agent/agent team을 쓰는 것은 허용되는 감독형 자동화다.
+
+blocked runtime에서는 `node scripts/p2a_orchestrate.mjs failure-policy --runtime <runtime-path>`로 다음 조치를 `retry`, `ask_user`, `stop` 중 하나로 확인한다. 이 명령도 후속 조치만 계산하며 provider CLI나 재시도 run을 자동으로 시작하지 않는다.
+
+task를 시작하고 run log를 연다. 출력되는 manual launcher prompt를 Codex/Claude 같은 감독형 agent 세션에 붙여넣는다. 오케스트레이션 계획을 만들지 않았다면 `--orchestration-plan` 옵션은 빼고 실행한다. 이 옵션을 넘기면 `runs/<runId>.orchestration.json`과 `runs/<runId>.orchestration-runtime.json`이 함께 생성된다.
 
 ```bash
 node scripts/p2a_execute.mjs start \

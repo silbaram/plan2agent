@@ -100,6 +100,9 @@ describe("local GUI config", () => {
       await setDefaultAgentTool(configPath, "/tmp/project-a", "claude");
 
       await expect(
+        setDefaultAgentTool(configPath, "/tmp/project-a", "gemini" as never),
+      ).rejects.toThrow("Unsupported agent tool");
+      await expect(
         setDefaultAgentTool(configPath, "/tmp/project-a", "unsupported" as never),
       ).rejects.toThrow("Unsupported agent tool");
       expect(await readDefaultAgentTool(configPath, "/tmp/project-a")).toBe("claude");
