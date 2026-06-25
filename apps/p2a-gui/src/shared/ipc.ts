@@ -463,6 +463,7 @@ export type OrchestrationMarkRoleRequest = {
   roleStatus: OrchestrationRoleStatus;
   summary?: string | null;
   detail?: string | null;
+  verdict?: string | null;
   requiresOwnerAction?: boolean;
 };
 

@@ -87,11 +87,12 @@ function assertInsideDirectory(rootPath: string, targetPath: string, label: stri
   return targetPath;
 }
 
-function optionalFile(targetPath: string | null, basePath: string): string | null {
+function optionalFile(targetPath: string | null, basePath: string, label: string): string | null {
   if (!targetPath) return null;
   const normalized = path.isAbsolute(targetPath)
     ? path.resolve(targetPath)
     : path.resolve(basePath, targetPath);
+  assertInsideDirectory(basePath, normalized, label);
   return existsSync(normalized) && statSync(normalized).isFile() ? normalized : null;
 }
 
@@ -168,7 +169,7 @@ function resolveExecutionContext(request: {
   const projectRoot = assertDirectory(request.projectRoot, "project root");
   const artifactRoot = assertDirectory(request.artifactRoot, "artifact root");
   const scriptPath = assertFile(path.join(projectRoot, "scripts", "p2a_execute.mjs"), "p2a_execute");
-  const taskGraphPath = optionalFile(request.taskGraphPath, projectRoot);
+  const taskGraphPath = optionalFile(request.taskGraphPath, projectRoot, "task graph path");
   const sourceArgs =
     existsSync(path.join(artifactRoot, "current-spec.json")) || !taskGraphPath
       ? ["--artifacts", artifactRoot]
@@ -317,8 +318,10 @@ export function buildMarkRoleCommand(request: OrchestrationMarkRoleRequest): Exe
   ];
   const summary = normalizeOptionalText(request.summary);
   const detail = normalizeOptionalText(request.detail);
+  const verdict = normalizeOptionalText(request.verdict ?? null);
   if (summary) args.push("--summary", summary);
   if (detail) args.push("--detail", detail);
+  if (verdict) args.push("--verdict", verdict);
   if (request.requiresOwnerAction) args.push("--requires-owner-action");
 
   return {

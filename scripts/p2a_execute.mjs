@@ -606,6 +606,10 @@ function applyMonitorGate(args, source) {
 function updateOrchestrationRuntimeAfterFinish(source, run) {
   const runtimePath = orchestrationRuntimePath(source.runsDir, run.runId);
   if (!existsSync(runtimePath)) return null;
+  const currentRuntime = readOrchestrationRuntime(runtimePath);
+  if (currentRuntime.status.phase === 'closed') {
+    return { filePath: runtimePath, runtime: currentRuntime, event: null, skipped: true };
+  }
   const blocked = run.status !== 'finished';
   const result = recordOrchestrationRuntimeEvent(runtimePath, {
     roleId: 'owner',
@@ -617,6 +621,14 @@ function updateOrchestrationRuntimeAfterFinish(source, run) {
     requiresOwnerAction: run.failure?.needsUserDecision ?? false,
   });
   return { ...result, filePath: runtimePath };
+}
+
+function closedOrchestrationRuntimeForRun(source, runId) {
+  const runtimePath = orchestrationRuntimePath(source.runsDir, runId);
+  if (!existsSync(runtimePath)) return null;
+  const runtime = readOrchestrationRuntime(runtimePath);
+  if (runtime.status.phase !== 'closed') return null;
+  return { filePath: runtimePath, runtime };
 }
 
 function readRun(runsDir, runId) {
@@ -819,6 +831,11 @@ function runFinish(args) {
       return 1;
     }
   }
+  const closedRuntime = closedOrchestrationRuntimeForRun(source, args.runId);
+  if (closedRuntime) {
+    console.log(`Orchestration runtime already closed: ${displayPath(closedRuntime.filePath)}`);
+    return 0;
+  }
   let verificationFailed = false;
   if (verifyRequested(args)) {
     console.log('Running verification...');
@@ -851,7 +868,11 @@ function runFinish(args) {
   const run = readRun(source.runsDir, args.runId);
   try {
     const runtimeUpdate = updateOrchestrationRuntimeAfterFinish(source, run);
-    if (runtimeUpdate) console.log(`Updated orchestration runtime: ${displayPath(runtimeUpdate.filePath)} phase=${runtimeUpdate.runtime.status.phase}`);
+    if (runtimeUpdate?.skipped) {
+      console.log(`Orchestration runtime already closed: ${displayPath(runtimeUpdate.filePath)}`);
+    } else if (runtimeUpdate) {
+      console.log(`Updated orchestration runtime: ${displayPath(runtimeUpdate.filePath)} phase=${runtimeUpdate.runtime.status.phase}`);
+    }
   } catch (error) {
     console.error(`warning: orchestration runtime was not updated: ${error.message}`);
   }

@@ -15,6 +15,7 @@ const AGENT_TOOLS = new Set(['codex', 'claude', 'gemini', 'manual']);
 const RUNTIME_EVENT_TYPES = new Set(['handoff', 'status', 'question', 'answer', 'ack', 'concern', 'decision', 'blocker', 'verification', 'monitor_verdict', 'owner_note']);
 const RUNTIME_ROLE_STATUSES = new Set(['pending', 'active', 'blocked', 'complete', 'skipped']);
 const RUNTIME_PHASES = new Set(['initialized', 'running', 'blocked', 'ready_for_monitor', 'ready_to_finish', 'closed']);
+const DEFAULT_ACCEPTED_MONITOR_VERDICTS = ['confirm_done'];
 const DEFAULT_HANDOFF_GRAPH = path.join('.plan2agent', 'artifacts', 'task-graph.json');
 const HIGH_ACCEPTANCE_MONITOR_THRESHOLD = 6;
 const PROVIDER_CAPABILITIES = Object.freeze({
@@ -113,6 +114,7 @@ function usage() {
     `  --type <type>             Event type: ${[...RUNTIME_EVENT_TYPES].join(', ')}.`,
     '  --summary <text>          Event summary.',
     '  --detail <text>           Optional event detail.',
+    '  --verdict <value>         Required when mark-role completes the monitor role.',
     '  --linked-role <role-id>   Optional related role assignment.',
     `  --role-status <status>    Update the event role status: ${[...RUNTIME_ROLE_STATUSES].join(', ')}.`,
     `  --phase <phase>           Update runtime phase: ${[...RUNTIME_PHASES].join(', ')}.`,
@@ -145,6 +147,7 @@ function parseArgs(argv) {
     eventType: null,
     summary: null,
     detail: null,
+    verdict: null,
     linkedRoleId: null,
     roleStatus: null,
     phase: null,
@@ -171,6 +174,7 @@ function parseArgs(argv) {
     else if (arg === '--type') args.eventType = parseEnumValue(requiredValue(argv, ++index, '--type'), RUNTIME_EVENT_TYPES, '--type');
     else if (arg === '--summary') args.summary = requiredValue(argv, ++index, '--summary');
     else if (arg === '--detail') args.detail = requiredValue(argv, ++index, '--detail');
+    else if (arg === '--verdict') args.verdict = requiredValue(argv, ++index, '--verdict').trim();
     else if (arg === '--linked-role') args.linkedRoleId = requiredValue(argv, ++index, '--linked-role');
     else if (arg === '--role-status') args.roleStatus = parseEnumValue(requiredValue(argv, ++index, '--role-status'), RUNTIME_ROLE_STATUSES, '--role-status');
     else if (arg === '--phase') args.phase = parseEnumValue(requiredValue(argv, ++index, '--phase'), RUNTIME_PHASES, '--phase');
@@ -190,19 +194,19 @@ function parseArgs(argv) {
     }
     if (args.spec && args.artifacts) throw new Error('--spec is only supported with --graph; --artifacts uses the active iteration spec');
     if (args.maintenance && !args.artifacts) throw new Error('--maintenance is only supported with --artifacts');
-    if (args.plan || args.runtime || args.runId || args.roleId || args.eventType || args.summary || args.detail || args.linkedRoleId || args.roleStatus || args.phase || args.requiresOwnerAction) {
+    if (args.plan || args.runtime || args.runId || args.roleId || args.eventType || args.summary || args.detail || args.verdict || args.linkedRoleId || args.roleStatus || args.phase || args.requiresOwnerAction) {
       throw new Error('runtime/show options are not supported with plan');
     }
   } else if (['show', 'validate', 'handoff'].includes(args.command)) {
     if (!args.plan) throw new Error(`--plan is required for ${args.command}`);
-    if (args.artifacts || args.graph || args.spec || args.maintenance || args.taskId || args.output || args.runtime || args.runId || args.roleId || args.eventType || args.summary || args.detail || args.linkedRoleId || args.roleStatus || args.phase || args.requiresOwnerAction) {
+    if (args.artifacts || args.graph || args.spec || args.maintenance || args.taskId || args.output || args.runtime || args.runId || args.roleId || args.eventType || args.summary || args.detail || args.verdict || args.linkedRoleId || args.roleStatus || args.phase || args.requiresOwnerAction) {
       throw new Error(`${args.command} only supports --plan and --json`);
     }
   } else if (args.command === 'init-runtime') {
     if (!args.plan) throw new Error('--plan is required for init-runtime');
     if (!args.runId) throw new Error('--run-id is required for init-runtime');
     assertSafeRunId(args.runId);
-    if (args.artifacts || args.graph || args.spec || args.maintenance || args.taskId || args.runtime || args.roleId || args.eventType || args.summary || args.detail || args.linkedRoleId || args.roleStatus || args.phase || args.requiresOwnerAction) {
+    if (args.artifacts || args.graph || args.spec || args.maintenance || args.taskId || args.runtime || args.roleId || args.eventType || args.summary || args.detail || args.verdict || args.linkedRoleId || args.roleStatus || args.phase || args.requiresOwnerAction) {
       throw new Error('init-runtime only supports --plan, --run-id, --output, and --json');
     }
   } else if (args.command === 'record') {
@@ -210,31 +214,32 @@ function parseArgs(argv) {
     if (!args.roleId) throw new Error('--role is required for record');
     if (!args.eventType) throw new Error('--type is required for record');
     if (!args.summary) throw new Error('--summary is required for record');
-    if (args.artifacts || args.graph || args.spec || args.maintenance || args.taskId || args.output || args.plan || args.runId) {
+    if (args.artifacts || args.graph || args.spec || args.maintenance || args.taskId || args.output || args.plan || args.runId || args.verdict) {
       throw new Error('record only supports --runtime, --role, --type, --summary, --detail, --linked-role, --role-status, --phase, --requires-owner-action, and --json');
     }
   } else if (args.command === 'runtime-status') {
     if (!args.runtime) throw new Error('--runtime is required for runtime-status');
-    if (args.artifacts || args.graph || args.spec || args.maintenance || args.taskId || args.output || args.plan || args.runId || args.roleId || args.eventType || args.summary || args.detail || args.linkedRoleId || args.roleStatus || args.phase || args.requiresOwnerAction) {
+    if (args.artifacts || args.graph || args.spec || args.maintenance || args.taskId || args.output || args.plan || args.runId || args.roleId || args.eventType || args.summary || args.detail || args.verdict || args.linkedRoleId || args.roleStatus || args.phase || args.requiresOwnerAction) {
       throw new Error('runtime-status only supports --runtime and --json');
     }
   } else if (args.command === 'next-role') {
     if (!args.runtime) throw new Error('--runtime is required for next-role');
-    if (args.artifacts || args.graph || args.spec || args.maintenance || args.taskId || args.output || args.plan || args.runId || args.roleId || args.eventType || args.summary || args.detail || args.linkedRoleId || args.roleStatus || args.phase || args.requiresOwnerAction) {
+    if (args.artifacts || args.graph || args.spec || args.maintenance || args.taskId || args.output || args.plan || args.runId || args.roleId || args.eventType || args.summary || args.detail || args.verdict || args.linkedRoleId || args.roleStatus || args.phase || args.requiresOwnerAction) {
       throw new Error('next-role only supports --runtime and --json');
     }
   } else if (args.command === 'role-prompt') {
     if (!args.runtime) throw new Error('--runtime is required for role-prompt');
     if (!args.roleId) throw new Error('--role is required for role-prompt');
-    if (args.artifacts || args.graph || args.spec || args.maintenance || args.taskId || args.output || args.plan || args.runId || args.eventType || args.summary || args.detail || args.linkedRoleId || args.roleStatus || args.phase || args.requiresOwnerAction) {
+    if (args.artifacts || args.graph || args.spec || args.maintenance || args.taskId || args.output || args.plan || args.runId || args.eventType || args.summary || args.detail || args.verdict || args.linkedRoleId || args.roleStatus || args.phase || args.requiresOwnerAction) {
       throw new Error('role-prompt only supports --runtime, --role, and --json');
     }
   } else if (args.command === 'mark-role') {
     if (!args.runtime) throw new Error('--runtime is required for mark-role');
     if (!args.roleId) throw new Error('--role is required for mark-role');
     if (!args.roleStatus) throw new Error('--role-status is required for mark-role');
+    if (args.verdict !== null && !args.verdict) throw new Error('--verdict requires a non-empty value');
     if (args.artifacts || args.graph || args.spec || args.maintenance || args.taskId || args.output || args.plan || args.runId || args.eventType || args.linkedRoleId) {
-      throw new Error('mark-role only supports --runtime, --role, --role-status, --summary, --detail, --phase, --requires-owner-action, and --json');
+      throw new Error('mark-role only supports --runtime, --role, --role-status, --summary, --detail, --verdict, --phase, --requires-owner-action, and --json');
     }
   }
   return args;
@@ -262,6 +267,15 @@ function assertProviderRoleCapability(role) {
   }
   if (role.requiresWrite && !capability.writeAllowed) {
     throw new Error(`${role.agentTool} is read-only in P2A orchestration; use --agent-tool codex, claude, or manual for implementation and --reviewer-tool gemini for read-only review`);
+  }
+}
+
+function assertReviewerToolCompatible(agentTool, reviewerTool) {
+  if (!reviewerTool || reviewerTool === agentTool || reviewerTool === 'manual') return;
+  const reviewerCapability = PROVIDER_CAPABILITIES[reviewerTool];
+  if (!reviewerCapability) throw new Error(`unknown reviewer provider: ${reviewerTool}`);
+  if (reviewerCapability.writeAllowed) {
+    throw new Error(`--reviewer-tool ${reviewerTool} is write-capable; cross-provider reviewers must be read-only. Omit --reviewer-tool for single-provider review, or use --reviewer-tool gemini for read-only review`);
   }
 }
 
@@ -552,6 +566,7 @@ function buildPlan(args, source, task, now = new Date()) {
     throw new Error('Gemini is read-only in P2A orchestration; use --agent-tool codex, claude, or manual for implementation and --reviewer-tool gemini for read-only review');
   }
   const reviewerTool = args.reviewerTool ?? args.agentTool;
+  assertReviewerToolCompatible(args.agentTool, reviewerTool);
   const roles = [
     {
       roleId: 'owner',
@@ -658,6 +673,16 @@ function writeJson(filePath, data) {
 function loadPlan(filePath) {
   assertFile(filePath, 'orchestration plan');
   return validateOrchestrationPlanData(JSON.parse(readFileSync(filePath, 'utf8')));
+}
+
+function acceptedMonitorVerdictsForRuntime(runtimePath, runtime) {
+  if (!runtime.sourcePlanRef) return DEFAULT_ACCEPTED_MONITOR_VERDICTS;
+  const planPath = path.resolve(path.dirname(runtimePath), runtime.sourcePlanRef);
+  if (!existsSync(planPath)) return DEFAULT_ACCEPTED_MONITOR_VERDICTS;
+  const plan = loadPlan(planPath);
+  return plan.monitorGate.acceptedVerdicts.length
+    ? plan.monitorGate.acceptedVerdicts
+    : DEFAULT_ACCEPTED_MONITOR_VERDICTS;
 }
 
 export function orchestrationRuntimePath(runsDir, runId) {
@@ -1050,7 +1075,7 @@ function rolePromptPayload(runtime, role) {
   };
 }
 
-function markRoleDefaults(runtime, role, status) {
+function markRoleDefaults(runtime, role, status, options = {}) {
   if (status === 'blocked') {
     return {
       eventType: 'blocker',
@@ -1080,11 +1105,20 @@ function markRoleDefaults(runtime, role, status) {
       };
     }
     if (role.roleId === 'monitor') {
+      if (!options.verdict) {
+        throw new Error('--verdict is required when marking monitor complete');
+      }
+      const acceptedVerdicts = options.acceptedMonitorVerdicts ?? DEFAULT_ACCEPTED_MONITOR_VERDICTS;
+      const accepted = acceptedVerdicts.includes(options.verdict);
       return {
         eventType: 'monitor_verdict',
-        phase: 'ready_to_finish',
-        requiresOwnerAction: false,
-        summary: `${role.roleId} completed supervised monitor check`,
+        phase: accepted ? 'ready_to_finish' : 'blocked',
+        requiresOwnerAction: !accepted,
+        summary: `${role.roleId} verdict ${options.verdict}`,
+        detail: JSON.stringify({
+          verdict: options.verdict,
+          accepted,
+        }),
       };
     }
   }
@@ -1295,12 +1329,18 @@ function runMarkRole(args) {
   const runtimePath = path.resolve(args.runtime);
   const runtime = readOrchestrationRuntime(runtimePath);
   const role = requireRuntimeRole(runtime, args.roleId);
-  const defaults = markRoleDefaults(runtime, role, args.roleStatus);
+  const needsMonitorVerdict = role.roleId === 'monitor' && args.roleStatus === 'complete';
+  const defaults = markRoleDefaults(runtime, role, args.roleStatus, {
+    verdict: args.verdict,
+    acceptedMonitorVerdicts: needsMonitorVerdict
+      ? acceptedMonitorVerdictsForRuntime(runtimePath, runtime)
+      : DEFAULT_ACCEPTED_MONITOR_VERDICTS,
+  });
   const { runtime: updatedRuntime, event } = recordOrchestrationRuntimeEvent(runtimePath, {
     roleId: args.roleId,
     eventType: defaults.eventType,
     summary: args.summary ?? defaults.summary,
-    detail: args.detail,
+    detail: args.detail ?? defaults.detail,
     roleStatus: args.roleStatus,
     phase: args.phase ?? defaults.phase,
     requiresOwnerAction: args.requiresOwnerAction || defaults.requiresOwnerAction,

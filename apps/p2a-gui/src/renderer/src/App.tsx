@@ -407,6 +407,7 @@ export default function App() {
   const [orchestrationResult, setOrchestrationResult] =
     useState<ExecutionCommandResult | null>(null);
   const [orchestrationDetailInput, setOrchestrationDetailInput] = useState("");
+  const [orchestrationVerdictInput, setOrchestrationVerdictInput] = useState("");
   const [promptCopyState, setPromptCopyState] = useState<PromptCopyState>("idle");
   const artifactViewerRef = useRef<HTMLElement | null>(null);
   const artifactViewerCloseButtonRef = useRef<HTMLButtonElement | null>(null);
@@ -565,6 +566,7 @@ export default function App() {
     setOrchestrationResult(null);
     setOrchestrationState("idle");
     setOrchestrationDetailInput("");
+    setOrchestrationVerdictInput("");
     setPromptCopyState("idle");
   }, [selectedRun?.runId, selectedRun?.orchestration?.updatedAt]);
 
@@ -811,6 +813,16 @@ export default function App() {
 
   async function finishSelectedRun() {
     if (!projectSnapshot || !artifact || !selectedRun || selectedRun.status !== "started") return;
+    const confirmed = window.confirm(
+      [
+        copy.terminal.finishConfirm,
+        `run ${selectedRun.runId}`,
+        `status ${finishStatus}`,
+        finishPreviewCommand(),
+        copy.terminal.confirmContinue,
+      ].join("\n"),
+    );
+    if (!confirmed) return;
     setFinishState("running");
     setFinishResult(null);
 
@@ -870,6 +882,13 @@ export default function App() {
     if (orchestrationDetailInput.trim()) {
       args.push("--detail", orchestrationDetailInput.trim());
     }
+    if (
+      selectedOrchestrationRole.roleId === "monitor" &&
+      roleStatus === "complete" &&
+      orchestrationVerdictInput.trim()
+    ) {
+      args.push("--verdict", orchestrationVerdictInput.trim());
+    }
     return args.map(quoteCommandPart).join(" ");
   }
 
@@ -903,6 +922,10 @@ export default function App() {
         roleId: selectedOrchestrationRole.roleId,
         roleStatus,
         detail: orchestrationDetailInput.trim() || null,
+        verdict:
+          selectedOrchestrationRole.roleId === "monitor" && roleStatus === "complete"
+            ? orchestrationVerdictInput.trim() || null
+            : null,
       });
       setOrchestrationResult(result);
       setOrchestrationState(result.exitCode === 0 ? "idle" : "error");
@@ -1533,6 +1556,17 @@ export default function App() {
                       placeholder={copy.runs.actionNotePlaceholder}
                     />
                   </label>
+                  {selectedOrchestrationRole?.roleId === "monitor" && (
+                    <label className="field-label">
+                      <span>{copy.terminal.monitorVerdict}</span>
+                      <input
+                        className="text-input mono"
+                        value={orchestrationVerdictInput}
+                        onChange={(event) => setOrchestrationVerdictInput(event.target.value)}
+                        placeholder={copy.terminal.monitorVerdictPlaceholder}
+                      />
+                    </label>
+                  )}
                   <div className="orchestration-actions" aria-label={copy.runs.recordState}>
                     {orchestrationRoleStatusOptions.map((roleStatus) => (
                       <button
@@ -1543,7 +1577,10 @@ export default function App() {
                         disabled={
                           orchestrationState === "running" ||
                           !selectedOrchestration.runtimePath ||
-                          !selectedOrchestrationRole
+                          !selectedOrchestrationRole ||
+                          (roleStatus === "complete" &&
+                            selectedOrchestrationRole.roleId === "monitor" &&
+                            !orchestrationVerdictInput.trim())
                         }
                       >
                         {roleStatus === "complete" && (
@@ -1569,6 +1606,13 @@ export default function App() {
                           : copy.runs.recordState}
                     </span>
                   </div>
+                  {selectedOrchestrationRole?.roleId === "monitor" &&
+                    !orchestrationVerdictInput.trim() && (
+                      <div className="diagnostic diagnostic--warn">
+                        <AlertTriangle size={14} strokeWidth={1.7} aria-hidden="true" />
+                        <span>{copy.terminal.monitorVerdictRequired}</span>
+                      </div>
+                    )}
                 </div>
 
                 {selectedOrchestration.next && (

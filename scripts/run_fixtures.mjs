@@ -995,6 +995,29 @@ function validateIterationCurrentFixtureCases() {
         return { status: 1, checks };
       }
 
+      result = runExecute([
+        'finish',
+        '--graph',
+        executeGraphPath,
+        '--run-id',
+        'run-execute-fixture',
+        '--status',
+        'finished',
+      ]);
+      checks += 1;
+      const repeatedFinishRuntime = JSON.parse(readFileSync(executeRuntimePath, 'utf8'));
+      const repeatedFinishOutput = `${result.stdout ?? ''}${result.stderr ?? ''}`;
+      if (
+        !repeatedFinishOutput.includes('Orchestration runtime already closed')
+        || repeatedFinishRuntime.status.phase !== 'closed'
+        || repeatedFinishRuntime.communicationLog.length !== executeRuntimeAfterFinish.communicationLog.length
+      ) {
+        console.error(`p2a_execute repeated finish should not append to closed runtime: ${caseData.id}`);
+        writeResultOutput(result);
+        console.error(JSON.stringify({ executeRuntimeAfterFinish, repeatedFinishRuntime }, null, 2));
+        return { status: 1, checks };
+      }
+
       const executeMonitorGraphPath = path.join(tempRoot, 'p2a-execute-monitor', 'gate-c-task-graph', 'task-graph.json');
       mkdirSync(path.dirname(executeMonitorGraphPath), { recursive: true });
       const executeMonitorGraph = JSON.parse(readFileSync(state.taskGraphPath, 'utf8'));
@@ -1056,6 +1079,26 @@ function validateIterationCurrentFixtureCases() {
         writeResultOutput(result);
         console.error(JSON.stringify({ explicitGeminiReviewerPlan }, null, 2));
         return { status: failureStatus(result), checks };
+      }
+
+      result = runOrchestrate([
+        'plan',
+        '--graph',
+        executeMonitorGraphPath,
+        '--spec',
+        state.specPath,
+        '--task',
+        'task-001',
+        '--agent-tool',
+        'codex',
+        '--reviewer-tool',
+        'claude',
+      ]);
+      checks += 1;
+      if (result.status === 0 || !result.stderr.includes('cross-provider reviewers must be read-only')) {
+        console.error(`p2a_orchestrate should reject write-capable cross-provider reviewers: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: 1, checks };
       }
 
       result = runExecute([
@@ -1139,6 +1182,40 @@ function validateIterationCurrentFixtureCases() {
         console.error(`p2a_orchestrate monitor scheduler wrote unexpected state: ${caseData.id}`);
         console.error(JSON.stringify({ executeMonitorRuntimeAfterMarks }, null, 2));
         return { status: 1, checks };
+      }
+
+      result = runOrchestrate([
+        'mark-role',
+        '--runtime',
+        executeMonitorRuntimePath,
+        '--role',
+        'monitor',
+        '--role-status',
+        'complete',
+      ]);
+      checks += 1;
+      if (result.status === 0 || !result.stderr.includes('--verdict is required when marking monitor complete')) {
+        console.error(`p2a_orchestrate monitor mark-role should require verdict: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: 1, checks };
+      }
+
+      result = runOrchestrate([
+        'mark-role',
+        '--runtime',
+        executeMonitorRuntimePath,
+        '--role',
+        'monitor',
+        '--role-status',
+        'complete',
+        '--verdict',
+        'unmet_acceptance',
+      ]);
+      checks += 1;
+      if (result.status !== 0 || !result.stdout.includes('phase: blocked') || !result.stdout.includes('nextRole: owner')) {
+        console.error(`p2a_orchestrate monitor mark-role should block rejected verdicts: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: failureStatus(result), checks };
       }
 
       result = runExecute([

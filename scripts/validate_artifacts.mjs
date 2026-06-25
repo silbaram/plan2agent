@@ -656,6 +656,13 @@ export function validateOrchestrationRuntimeData(data) {
   if (data.status.lastEventId !== null && !eventIds.includes(data.status.lastEventId)) {
     throw new ValidationError(`orchestration runtime status.lastEventId references unknown eventId: ${data.status.lastEventId}`);
   }
+  const hasBlockedRole = roleAssignments.some((role) => role.status === 'blocked');
+  if ((data.status.phase === 'blocked' || hasBlockedRole) && !data.status.blocked) {
+    throw new ValidationError('orchestration runtime status.blocked must be true when phase or roleAssignments indicate blocked');
+  }
+  if (data.status.phase === 'closed' && data.status.blocked) {
+    throw new ValidationError('orchestration runtime status.blocked must be false when phase is closed');
+  }
   return data;
 }
 

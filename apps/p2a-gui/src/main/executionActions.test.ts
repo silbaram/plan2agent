@@ -227,9 +227,10 @@ describe("execution action helpers", () => {
       const command = buildMarkRoleCommand({
         projectRoot,
         runtimePath: path.relative(projectRoot, runtimePath),
-        roleId: "implementer",
+        roleId: "monitor",
         roleStatus: "complete",
         detail: "implementation checked",
+        verdict: "confirm_done",
       });
 
       expect(command.cwd).toBe(projectRoot);
@@ -239,11 +240,13 @@ describe("execution action helpers", () => {
         "--runtime",
         "runs/run-2026-task-001.orchestration-runtime.json",
         "--role",
-        "implementer",
+        "monitor",
         "--role-status",
         "complete",
         "--detail",
         "implementation checked",
+        "--verdict",
+        "confirm_done",
       ]);
     } finally {
       await rm(projectRoot, { recursive: true, force: true });
@@ -309,6 +312,25 @@ describe("execution action helpers", () => {
       expect(command.args.slice(0, 3)).toEqual(["finish", "--graph", taskGraphPath]);
     } finally {
       await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects task graph paths outside the project root", async () => {
+    const { projectRoot, artifactRoot } = await createProject();
+    const outsideRoot = await mkdtemp(path.join(tmpdir(), "p2a-outside-graph-"));
+    const outsideGraphPath = path.join(outsideRoot, "task-graph.json");
+    try {
+      await writeFile(outsideGraphPath, "{}");
+
+      expect(() =>
+        buildFinishRunCommand({
+          ...requestFor(projectRoot, artifactRoot),
+          taskGraphPath: outsideGraphPath,
+        }),
+      ).toThrow("task graph path must stay inside project root");
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+      await rm(outsideRoot, { recursive: true, force: true });
     }
   });
 

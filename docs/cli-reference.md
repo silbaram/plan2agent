@@ -312,7 +312,7 @@ node scripts/p2a_orchestrate.mjs mark-role \
 
 `p2a_execute start --orchestration-plan <path>`는 원본 plan을 `runs/<runId>.orchestration.json` sidecar로 연결하고, 같은 run에 `runs/<runId>.orchestration-runtime.json`을 초기화한다. runtime sidecar에는 shared mental model, role assignment, communication log, runtime phase가 들어간다. `record`는 실행 중 질문, 상태, 결정, 검증, monitor verdict 같은 closed-loop 이벤트를 append한다.
 
-`next-role`, `role-prompt`, `mark-role`은 감독형 scheduler 명령이다. 이 명령들은 다음 role과 prompt를 계산하고 사람이 관찰한 상태 전이를 기록할 뿐, Codex/Claude/Gemini CLI, browser, background loop, unofficial API를 실행하지 않는다. 구독 로그인 기반 사용에서는 사람이 공식 CLI/앱을 직접 열어 prompt를 붙여넣고 결과를 다시 기록한다.
+`next-role`, `role-prompt`, `mark-role`은 감독형 scheduler 명령이다. 이 명령들은 다음 role과 prompt를 계산하고 사람이 관찰한 상태 전이를 기록할 뿐, Codex/Claude/Gemini CLI, browser, background loop, unofficial API를 실행하지 않는다. 구독 로그인 기반 사용에서는 사람이 공식 CLI/앱을 직접 열어 prompt를 붙여넣고 결과를 다시 기록한다. monitor role을 `complete`로 기록할 때는 실제 판단값을 `--verdict confirm_done`처럼 함께 넘긴다. 허용 verdict가 아니면 runtime phase는 `blocked`가 된다.
 
 monitor gate가 필요한 plan은 `runs/<runId>.monitor-verdict.json`에 `{"verdict":"confirm_done"}` 같은 verdict가 있어야 `finish`가 done으로 닫힌다. 허용되지 않은 verdict는 plan의 `failureClassMap`에 따라 기존 run failure class로 변환되어 blocked 흐름으로 기록된다.
 
