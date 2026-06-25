@@ -154,6 +154,15 @@ export type OrchestrationRoleStatus =
   | "complete"
   | "skipped";
 
+export type WorkbenchOrchestrationExecutionGuide = {
+  surface: string;
+  recommendedFeature: string;
+  fallbackMode: string;
+  supervisionRequired: boolean;
+  startsProcess: boolean;
+  constraints: string[];
+};
+
 export type WorkbenchOrchestrationRole = {
   roleId: string;
   role: string;
@@ -161,6 +170,7 @@ export type WorkbenchOrchestrationRole = {
   profileSource: string;
   profileReason: string;
   agentTool: string;
+  executionGuide: WorkbenchOrchestrationExecutionGuide;
   scope: string;
   status: OrchestrationRoleStatus;
   command: string | null;
@@ -183,6 +193,7 @@ export type WorkbenchOrchestrationNextRole = {
   profileSource: string;
   profileReason: string;
   agentTool: string;
+  executionGuide: WorkbenchOrchestrationExecutionGuide;
   status: OrchestrationRoleStatus;
   command: string | null;
 };
@@ -193,6 +204,7 @@ export type WorkbenchOrchestrationSchedulerHint = {
   nextRole: WorkbenchOrchestrationNextRole | null;
   reason: string;
   instruction: string;
+  resolutionHints: string[];
   safetyBoundary: string;
 };
 

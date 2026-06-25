@@ -1,6 +1,6 @@
 # 02-1 p2a-dev-orchestrator 개발 계획
 
-작성일: 2026-06-23 · 상태: MVP 1차 구현 완료, 오케스트레이션 runtime 1단계 완료, 감독형 scheduler 2단계 완료, GUI runtime/scheduler 표시 완료, O7 Hermes proposal queue/review/curation/patch draft/approval execution bridge 완료, provider-native team orchestration 후속 방향 확정 · 상위 문서: `plans/02-development-team-ai-agent.md` · 연결 문서: `plans/01-product-roadmap.md`, `plans/03-p2a-gui-mvp.md`
+작성일: 2026-06-23 · 상태: MVP 1차 구현 완료, 오케스트레이션 runtime 1단계 완료, 감독형 scheduler 2단계 완료, provider capability/roleProfile/executionGuide 완료, GUI runtime/scheduler 표시 완료, O7 Hermes proposal queue/review/curation/patch draft/approval execution bridge 완료, provider-native team runner adapter 후속 · 상위 문서: `plans/02-development-team-ai-agent.md` · 연결 문서: `plans/01-product-roadmap.md`, `plans/03-p2a-gui-mvp.md`
 
 이 문서는 Team Big Five의 `team-lead` 역할을 Plan2Agent-native로 구현하기 위한 최소 개발 계획이다. 목표는 여러 agent를 무인으로 돌리는 것이 아니라, 기존 CLI-first 하네스 위에서 **어떤 task를 solo/team으로 처리할지 판단하고, 역할별 실행 계획, shared mental model, communication log, 검증 흐름을 파일로 남기는 것**이다. 최신 GUI는 task/run/artifact와 PTY 실행에 더해 orchestration mode/role/runtime/monitor gate를 읽고, 사람이 수행한 role 상태만 기록한다. 후속 개발은 generic multi-provider terminal coordinator가 아니라 provider별 공식 기능을 활용하는 provider-native team orchestration으로 진행한다.
 
@@ -13,6 +13,7 @@
 - `p2a_execute start --orchestration-plan <path>` run sidecar 연결.
 - `orchestration-runtime.schema.json`, `p2a_orchestrate init-runtime/record/runtime-status`, `p2a_execute start` runtime sidecar 자동 초기화.
 - `p2a_orchestrate next-role/role-prompt/mark-role` 감독형 scheduler. 다음 role과 prompt를 계산하고 사람이 수행한 결과만 기록한다.
+- provider capability matrix, roleProfile 자동 선택/override, role별 executionGuide, blocked next action hint.
 - monitor verdict 기반 `finish` 차단/blocked 변환.
 - `p2a-dev-orchestrator` read-only agent와 CLI mirror.
 - scaffold/handoff 복사 대상, fixture, CLI 문서 갱신.
@@ -21,7 +22,6 @@
 
 후속으로 남김:
 
-- provider capability matrix. Claude, Codex, Gemini가 어떤 role을 공식 기능으로 수행할 수 있는지 구조화한다.
 - provider-native team runner adapter. Claude는 native agent teams/subagents, Codex는 skills/custom agents/명시 subagent prompt, Gemini는 extensions/custom commands/GEMINI.md 기반 planning/review/monitor 보조로 둔다.
 - 실제 적용 patch 생성.
 - agent-generated orchestration plan.
@@ -44,10 +44,10 @@
 아직 후속으로 남긴 것:
 
 - agent-generated orchestration plan.
-- provider capability matrix와 provider-native team runner adapter.
+- provider-native team runner adapter.
 - 일반 multi-provider PTY session coordinator는 후순위로 둔다.
 - 자동 role/monitor 호출은 API 키 기반 별도 설계 전까지 제외한다.
-- 실패 시 retry/ask/blocked 판단 규칙.
+- 실패 시 retry 정책 자동화.
 
 ## 2. MVP 목표
 
@@ -216,22 +216,26 @@ MVP에서 하지 않는 것:
 
 - provider capability matrix를 추가한다.
 - `team` plan에 `providerStrategy`, role capability, 실행 표면을 기록한다.
+- role별 `executionGuide`에 공식 foreground 표면, 추천 provider 기능, fallback, supervision-required/starts-no-process 경계를 기록한다.
 - `owner`/`implementer`/`reviewer`/`monitor` role은 유지하고, 실제 전문성은 `profile`로 세분화한다. 구현 profile은 frontend/backend/fullstack/test/docs, 리뷰 profile은 qa/architecture/security, monitor는 manual_monitor로 둔다. 자동 선택 근거는 `profileSource/profileReason`에 기록하고, implementer/reviewer는 사람이 override할 수 있다.
 - Claude adapter는 Claude Code의 agent teams/subagents를 native team runner로 사용한다. agent teams가 experimental/off이면 subagent/foreground prompt로 폴백한다.
 - Codex adapter는 Codex skills, custom agents, 명시 subagent prompt를 사용한다. Codex는 subagent를 자동으로 spawn하지 않으므로 prompt에 명시 요청을 포함한다.
 - Gemini adapter는 Gemini CLI extensions, custom commands, `GEMINI.md` context를 사용하되 planning/review/monitor read-only 역할에 한정한다. 구현자 role에는 기본 배정하지 않는다.
 - mixed-provider implementation은 기본값에서 제외한다. provider를 섞는 경우는 사람이 명시한 review/monitor 보조 역할로만 허용한다.
 - GUI는 여러 터미널을 자동으로 여는 대신 provider 선택, role prompt, next-role, mark-role, monitor gate를 명확히 보여준다.
+- blocked next action은 자동 재실행이나 runtime unblock을 하지 않고, owner가 현재 run을 blocked로 닫은 뒤 후속 supervised run 또는 maintenance task를 열지 판단하게 한다.
 
 완료 기준:
 
 - `claude`, `codex`, `gemini` capability matrix가 scaffold/handoff와 orchestrator plan에서 같은 기준으로 쓰인다.
 - `team` plan 생성 시 implementer/reviewer/monitor role이 provider capability를 위반하지 않는다.
 - task 내용에 따라 role profile이 선택되고 role prompt에 profile별 지시와 선택 근거가 포함된다.
+- role prompt와 GUI가 provider execution guide를 보여준다.
 - Gemini는 write-required role에 배정되지 않는다.
 - Claude team plan은 native team 또는 subagent runner prompt를 제공한다.
 - Codex team plan은 custom agent/subagent 명시 실행 prompt를 제공한다.
 - fixture가 provider별 role assignment와 Gemini write 금지를 검증한다.
+- fixture가 executionGuide, startsProcess=false, blocked next action hint를 검증한다.
 - 문서가 single-provider 기본값, mixed-provider 후순위, 무인 실행 금지를 명시한다.
 
 비목표:

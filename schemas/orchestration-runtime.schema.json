@@ -117,6 +117,7 @@
               "profileSource",
               "profileReason",
               "agentTool",
+              "executionGuide",
               "scope",
               "status"
             ],
@@ -169,6 +170,46 @@
                   "gemini",
                   "manual"
                 ]
+              },
+              "executionGuide": {
+                "type": "object",
+                "required": [
+                  "surface",
+                  "recommendedFeature",
+                  "fallbackMode",
+                  "supervisionRequired",
+                  "startsProcess",
+                  "constraints"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "surface": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "recommendedFeature": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "fallbackMode": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "supervisionRequired": {
+                    "const": true
+                  },
+                  "startsProcess": {
+                    "const": false
+                  },
+                  "constraints": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  }
+                }
               },
               "scope": {
                 "type": "string",

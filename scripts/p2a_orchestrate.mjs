@@ -356,6 +356,9 @@ function assertProviderRoleCapability(role) {
   if (role.profileSource === 'override' && !['implementer', 'reviewer'].includes(role.roleId)) {
     throw new Error(`${role.roleId} cannot use override role profile source`);
   }
+  if (!role.executionGuide || role.executionGuide.startsProcess !== false || role.executionGuide.supervisionRequired !== true) {
+    throw new Error(`${role.roleId} must use a supervised execution guide that starts no process`);
+  }
   if (role.requiresWrite && !capability.writeAllowed) {
     throw new Error(`${role.agentTool} is read-only in P2A orchestration; use --agent-tool codex, claude, or manual for implementation and --reviewer-tool gemini for read-only review`);
   }
@@ -411,27 +414,83 @@ function providerStrategyForRoles(roles) {
   };
 }
 
-function providerPromptPrefix(agentTool) {
+function providerExecutionGuide(agentTool, role, profile) {
   if (agentTool === 'codex') {
-    return [
-      'Provider strategy: Use Codex skills/custom agents and explicitly request subagents if role separation is needed.',
-      'Do not assume Codex will spawn subagents automatically.',
-    ];
+    const recommendedFeature = role === 'contributor'
+      ? 'skills_custom_agents_explicit_subagent_prompt'
+      : 'read_only_review_skill_or_custom_agent_prompt';
+    return {
+      surface: 'Codex CLI/app foreground session',
+      recommendedFeature,
+      fallbackMode: 'single supervised role prompt',
+      supervisionRequired: true,
+      startsProcess: false,
+      constraints: [
+        'Open Codex manually in the foreground workspace.',
+        'Use skills or custom agents when they are available for this profile.',
+        'Explicitly request subagents in the pasted prompt if role separation is needed.',
+        role === 'contributor' ? 'Write only within the approved task scope.' : 'Review read-only unless the owner explicitly reassigns implementation.',
+      ],
+    };
   }
   if (agentTool === 'claude') {
-    return [
-      'Provider strategy: Use Claude Code agent teams/subagents when enabled.',
-      'If agent teams are unavailable, run this as a supervised foreground role prompt.',
-    ];
+    const recommendedFeature = role === 'contributor'
+      ? 'agent_teams_or_subagents'
+      : 'read_only_review_subagent';
+    return {
+      surface: 'Claude Code foreground session',
+      recommendedFeature,
+      fallbackMode: 'supervised foreground role prompt',
+      supervisionRequired: true,
+      startsProcess: false,
+      constraints: [
+        'Open Claude Code manually in the foreground workspace.',
+        'Use native agent teams or subagents when enabled for this account and project.',
+        'Fall back to the pasted role prompt when agent teams are unavailable.',
+        role === 'contributor' ? 'Write only within the approved task scope.' : 'Review read-only unless the owner explicitly reassigns implementation.',
+      ],
+    };
   }
   if (agentTool === 'gemini') {
-    return [
-      'Provider strategy: Use Gemini CLI only for read-only planning, review, or monitor support.',
-      'Do not edit files or perform write-required implementation in this role.',
-    ];
+    return {
+      surface: 'Gemini CLI foreground session',
+      recommendedFeature: 'extensions_custom_commands_gemini_context',
+      fallbackMode: 'read-only supervised role prompt',
+      supervisionRequired: true,
+      startsProcess: false,
+      constraints: [
+        'Open Gemini CLI manually in the foreground workspace.',
+        'Use extensions, custom commands, and GEMINI.md context for planning, review, or monitor support.',
+        'Do not edit files or perform write-required implementation in this role.',
+        'Return findings for the owner to record in P2A.',
+      ],
+    };
   }
+  return {
+    surface: 'Human owner foreground action',
+    recommendedFeature: role === 'lead' ? 'manual_approval_and_run_lifecycle' : 'manual_prompt_copy_and_status_recording',
+    fallbackMode: 'manual status update',
+    supervisionRequired: true,
+    startsProcess: false,
+    constraints: [
+      'Perform the role directly in the foreground workspace.',
+      'Record observed state with p2a_orchestrate record or mark-role.',
+      'Do not bypass monitor gates or edit run logs by hand.',
+      profile === 'manual_monitor' ? 'Record an explicit monitor verdict before finish.' : 'Keep changes inside the approved task scope.',
+    ],
+  };
+}
+
+function providerPromptPrefix(role) {
+  const guide = role.executionGuide;
   return [
-    'Provider strategy: Manual owner action in the foreground workspace.',
+    `Provider surface: ${guide.surface}.`,
+    `Recommended feature: ${guide.recommendedFeature}.`,
+    `Fallback mode: ${guide.fallbackMode}.`,
+    `P2A starts process: ${guide.startsProcess}.`,
+    `Supervision required: ${guide.supervisionRequired}.`,
+    'Provider constraints:',
+    ...guide.constraints.map((constraint) => `- ${constraint}`),
   ];
 }
 
@@ -505,11 +564,11 @@ function profileGuidance(profile) {
   return ROLE_PROFILE_GUIDANCE[profile] ?? [`Profile: ${profile}.`];
 }
 
-function providerAwarePrompt(agentTool, profile, basePrompt) {
+function providerAwarePrompt(role, basePrompt) {
   return [
-    ...providerPromptPrefix(agentTool),
+    ...providerPromptPrefix(role),
     '',
-    ...profileGuidance(profile),
+    ...profileGuidance(role.profile),
     '',
     basePrompt,
   ].join('\n');
@@ -721,6 +780,23 @@ function buildMonitorPrompt(task) {
   ].join('\n');
 }
 
+function orchestrationRole({ roleId, role, profileSelection, agentTool, scope, basePrompt, requiresWrite }) {
+  const roleData = {
+    roleId,
+    role,
+    profile: profileSelection.profile,
+    profileSource: profileSelection.profileSource,
+    profileReason: profileSelection.profileReason,
+    agentTool,
+    scope,
+    executionGuide: providerExecutionGuide(agentTool, role, profileSelection.profile),
+    prompt: null,
+    requiresWrite,
+  };
+  roleData.prompt = providerAwarePrompt(roleData, basePrompt);
+  return roleData;
+}
+
 function buildPlan(args, source, task, now = new Date()) {
   const riskFlags = buildRiskFlags(task);
   const mode = modeForRiskFlags(riskFlags);
@@ -746,54 +822,46 @@ function buildPlan(args, source, task, now = new Date()) {
   const ownerProfile = roleProfileSelection('owner_supervisor', 'fixed owner supervision role');
   const monitorProfile = roleProfileSelection('manual_monitor', 'fixed manual monitor gate role');
   const roles = [
-    {
+    orchestrationRole({
       roleId: 'owner',
       role: 'lead',
-      profile: ownerProfile.profile,
-      profileSource: ownerProfile.profileSource,
-      profileReason: ownerProfile.profileReason,
+      profileSelection: ownerProfile,
       agentTool: 'manual',
       scope: 'Own the run lifecycle, approvals, verification recording, and final task state transition.',
-      prompt: providerAwarePrompt('manual', ownerProfile.profile, `Supervise ${task.id}, start the run with p2a_execute, and only finish after verification and monitor gate policy are satisfied.`),
+      basePrompt: `Supervise ${task.id}, start the run with p2a_execute, and only finish after verification and monitor gate policy are satisfied.`,
       requiresWrite: false,
-    },
-    {
+    }),
+    orchestrationRole({
       roleId: 'implementer',
       role: 'contributor',
-      profile: implementerProfile.profile,
-      profileSource: implementerProfile.profileSource,
-      profileReason: implementerProfile.profileReason,
+      profileSelection: implementerProfile,
       agentTool: args.agentTool,
       scope: 'Implement the approved ready task in the selected workspace or isolated worktree.',
-      prompt: providerAwarePrompt(args.agentTool, implementerProfile.profile, buildTaskPrompt(task)),
+      basePrompt: buildTaskPrompt(task),
       requiresWrite: args.agentTool !== 'manual',
-    },
+    }),
   ];
   if (mode === 'team') {
-    roles.push({
+    roles.push(orchestrationRole({
       roleId: 'reviewer',
       role: 'reviewer',
-      profile: reviewerProfile.profile,
-      profileSource: reviewerProfile.profileSource,
-      profileReason: reviewerProfile.profileReason,
+      profileSelection: reviewerProfile,
       agentTool: reviewerTool,
       scope: 'Read-only review of implementation scope, acceptance coverage, and verification evidence.',
-      prompt: providerAwarePrompt(reviewerTool, reviewerProfile.profile, buildMonitorPrompt(task)),
+      basePrompt: buildMonitorPrompt(task),
       requiresWrite: false,
-    });
+    }));
   }
   if (monitorRequired) {
-    roles.push({
+    roles.push(orchestrationRole({
       roleId: 'monitor',
       role: 'monitor',
-      profile: monitorProfile.profile,
-      profileSource: monitorProfile.profileSource,
-      profileReason: monitorProfile.profileReason,
+      profileSelection: monitorProfile,
       agentTool: 'manual',
       scope: 'Owner-visible monitor gate that decides whether the run can close as done.',
-      prompt: providerAwarePrompt('manual', monitorProfile.profile, buildMonitorPrompt(task)),
+      basePrompt: buildMonitorPrompt(task),
       requiresWrite: false,
-    });
+    }));
   }
   const providerStrategy = providerStrategyForRoles(roles);
 
@@ -942,6 +1010,7 @@ export function buildInitialRuntime(plan, runId, sourcePlanRef = null, now = new
         profileSource: role.profileSource,
         profileReason: role.profileReason,
         agentTool: role.agentTool,
+        executionGuide: role.executionGuide,
         scope: role.scope,
         status: runtimeRoleStatusFor(role),
       })),
@@ -1174,6 +1243,40 @@ function nextRoleDecision(runtime) {
   };
 }
 
+function schedulerResolutionHints(runtime, decision) {
+  if (runtime.status.phase === 'closed') {
+    return ['No scheduler action remains for this runtime.'];
+  }
+  const blockedRole = runtimeRoles(runtime).find((role) => role.status === 'blocked');
+  const latestBlocker = [...runtime.communicationLog].reverse().find((event) => event.type === 'blocker');
+  if (runtime.status.blocked || runtime.status.phase === 'blocked' || blockedRole) {
+    return [
+      latestBlocker ? `Inspect blocker ${latestBlocker.eventId}: ${latestBlocker.summary}.` : 'Inspect the latest blocked role and run output.',
+      'Record an owner decision before skipping or finishing blocked.',
+      blockedRole ? `Do not mark ${blockedRole.roleId} active as a retry; this runtime remains blocked until it is closed.` : 'Do not retry inside this blocked runtime.',
+      'If continuing is approved, finish this run blocked and open a follow-up supervised run or maintenance task.',
+      'If acceptance cannot be met, finish blocked with the appropriate failure class.',
+    ];
+  }
+  if (runtime.status.needsUserDecision) {
+    return ['Record the owner decision, then recompute next-role before continuing.'];
+  }
+  if (runtime.status.phase === 'ready_for_monitor') {
+    return ['Open the monitor or reviewer role prompt manually and record the verdict/result.'];
+  }
+  if (runtime.status.phase === 'ready_to_finish') {
+    return ['Review verification evidence and close the run lifecycle with p2a_execute finish.'];
+  }
+  if (decision.role) {
+    return [
+      `Open ${decision.role.agentTool === 'manual' ? 'the manual workflow' : `${decision.role.agentTool} in the official foreground CLI/app`} for ${decision.role.roleId}.`,
+      'Paste the role prompt and keep the owner supervising the session.',
+      'Record complete, blocked, or skipped when the observed role result is clear.',
+    ];
+  }
+  return ['Recompute next-role after recording any missing runtime event.'];
+}
+
 function schedulerHint(runtime) {
   const decision = nextRoleDecision(runtime);
   return {
@@ -1192,12 +1295,14 @@ function schedulerHint(runtime) {
           profileSource: decision.role.profileSource,
           profileReason: decision.role.profileReason,
           agentTool: decision.role.agentTool,
+          executionGuide: decision.role.executionGuide,
           status: decision.role.status,
           command: decision.role.agentTool === 'manual' ? null : decision.role.agentTool,
         }
       : null,
     reason: decision.reason,
     instruction: decision.instruction,
+    resolutionHints: schedulerResolutionHints(runtime, decision),
     safetyBoundary: 'Open the official CLI/app manually, paste the role prompt, then record the observed result. Do not use this scheduler to bypass subscription limits or run background automation.',
   };
 }
@@ -1223,6 +1328,9 @@ function buildSupervisedRolePrompt(runtime, role) {
     `Profile source: ${role.profileSource}`,
     `Profile reason: ${role.profileReason}`,
     `Status: ${role.status}`,
+    `Provider surface: ${role.executionGuide.surface}`,
+    `Recommended feature: ${role.executionGuide.recommendedFeature}`,
+    `Fallback mode: ${role.executionGuide.fallbackMode}`,
     '',
     'Supervision boundary:',
     '- A human must open the official CLI/app and paste this prompt manually.',
@@ -1268,6 +1376,7 @@ function rolePromptPayload(runtime, role) {
       profileSource: role.profileSource,
       profileReason: role.profileReason,
       agentTool: role.agentTool,
+      executionGuide: role.executionGuide,
       status: role.status,
       command: role.agentTool === 'manual' ? null : role.agentTool,
     },
@@ -1503,6 +1612,9 @@ function runNextRole(args) {
   }
   console.log(`- reason: ${hint.reason}`);
   console.log(`- instruction: ${hint.instruction}`);
+  if (hint.resolutionHints.length) {
+    console.log(`- nextActions: ${hint.resolutionHints.join(' | ')}`);
+  }
   console.log(`- safety: ${hint.safetyBoundary}`);
   return 0;
 }
@@ -1562,6 +1674,9 @@ function runMarkRole(args) {
     console.log(`- nextCommand: ${hint.nextRole.command ?? 'manual'}`);
   } else {
     console.log('- nextRole: none');
+  }
+  if (hint.resolutionHints.length) {
+    console.log(`- nextActions: ${hint.resolutionHints.join(' | ')}`);
   }
   console.log('- startsProcess: false');
   return 0;

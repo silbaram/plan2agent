@@ -268,7 +268,7 @@ node scripts/p2a_execute.mjs finish \
 
 `p2a_orchestrate.mjs`는 ready task 1건을 대상으로 deterministic heuristic을 적용해 `solo`, `solo_monitor`, `team` 중 하나의 실행 계획을 만든다. 이 도구는 agent를 자동 실행하지 않는다. owner가 foreground agent 세션을 열고, 생성된 role prompt와 monitor gate를 보며 감독형으로 실행한다.
 
-team mode의 기본 전략은 single-provider다. `--reviewer-tool`을 생략하면 reviewer도 implementer와 같은 provider를 쓴다. Gemini는 write-required implementer로 쓰지 않고, 사용자가 `--reviewer-tool gemini`를 명시한 경우에만 read-only reviewer/monitor 보조로 배정한다. plan에는 `providerStrategy`와 `providerCapabilities`가 함께 기록되어 이 제한을 검증할 수 있다.
+team mode의 기본 전략은 single-provider다. `--reviewer-tool`을 생략하면 reviewer도 implementer와 같은 provider를 쓴다. Gemini는 write-required implementer로 쓰지 않고, 사용자가 `--reviewer-tool gemini`를 명시한 경우에만 read-only reviewer/monitor 보조로 배정한다. plan에는 `providerStrategy`, `providerCapabilities`, role별 `executionGuide`가 함께 기록되어 이 제한을 검증할 수 있다. `executionGuide`는 공식 foreground CLI/app 표면, 추천 provider 기능, fallback 방식, supervision-required/starts-no-process 경계를 남긴다.
 
 role은 `owner`/`implementer`/`reviewer`/`monitor`를 유지하고, 세부 전문성은 `profile`로 기록한다. 현재 profile은 `frontend_implementer`, `backend_implementer`, `fullstack_implementer`, `test_implementer`, `docs_implementer`, `qa_reviewer`, `architecture_reviewer`, `security_reviewer`, `owner_supervisor`, `manual_monitor`다. `targetArea`, task 본문, acceptance criteria를 기준으로 deterministic하게 선택되며, `profileSource`와 `profileReason`에 자동 선택/수동 override 근거가 남는다. 필요하면 `--implementer-profile <profile>` 또는 team-mode task의 `--reviewer-profile <profile>`로 사람이 전문성을 명시할 수 있고 role prompt에도 profile별 지시와 선택 근거가 포함된다.
 
@@ -314,7 +314,7 @@ node scripts/p2a_orchestrate.mjs mark-role \
 
 `p2a_execute start --orchestration-plan <path>`는 원본 plan을 `runs/<runId>.orchestration.json` sidecar로 연결하고, 같은 run에 `runs/<runId>.orchestration-runtime.json`을 초기화한다. runtime sidecar에는 shared mental model, role assignment, communication log, runtime phase가 들어간다. `record`는 실행 중 질문, 상태, 결정, 검증, monitor verdict 같은 closed-loop 이벤트를 append한다.
 
-`next-role`, `role-prompt`, `mark-role`은 감독형 scheduler 명령이다. 이 명령들은 다음 role과 prompt를 계산하고 사람이 관찰한 상태 전이를 기록할 뿐, Codex/Claude/Gemini CLI, browser, background loop, unofficial API를 실행하지 않는다. 구독 로그인 기반 사용에서는 사람이 공식 CLI/앱을 직접 열어 prompt를 붙여넣고 결과를 다시 기록한다. monitor role을 `complete`로 기록할 때는 실제 판단값을 `--verdict confirm_done`처럼 함께 넘긴다. 허용 verdict가 아니면 runtime phase는 `blocked`가 된다.
+`next-role`, `role-prompt`, `mark-role`은 감독형 scheduler 명령이다. 이 명령들은 다음 role, provider execution guide, prompt, blocked next action 후보를 계산하고 사람이 관찰한 상태 전이를 기록할 뿐, Codex/Claude/Gemini CLI, browser, background loop, unofficial API를 실행하지 않는다. 구독 로그인 기반 사용에서는 사람이 공식 CLI/앱을 직접 열어 prompt를 붙여넣고 결과를 다시 기록한다. monitor role을 `complete`로 기록할 때는 실제 판단값을 `--verdict confirm_done`처럼 함께 넘긴다. 허용 verdict가 아니면 runtime phase는 `blocked`가 되며, 이 runtime은 자동으로 unblock하지 않는다. 계속 진행하려면 현재 run을 blocked로 닫고 후속 supervised run이나 maintenance task로 이어간다.
 
 monitor gate가 필요한 plan은 `runs/<runId>.monitor-verdict.json`에 `{"verdict":"confirm_done"}` 같은 verdict가 있어야 `finish`가 done으로 닫힌다. 허용되지 않은 verdict는 plan의 `failureClassMap`에 따라 기존 run failure class로 변환되어 blocked 흐름으로 기록된다.
 

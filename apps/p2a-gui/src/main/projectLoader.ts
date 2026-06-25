@@ -31,6 +31,7 @@ import type {
   TaskStatus,
   VerificationStatus,
   VerificationType,
+  WorkbenchOrchestrationExecutionGuide,
   WorkbenchOrchestrationEvent,
   WorkbenchOrchestrationNextRole,
   WorkbenchOrchestrationRole,
@@ -487,6 +488,9 @@ function buildSupervisedRolePrompt(
       `Profile source: ${role.profileSource}`,
       `Profile reason: ${role.profileReason}`,
       `Status: ${role.status}`,
+      `Provider surface: ${role.executionGuide.surface}`,
+      `Recommended feature: ${role.executionGuide.recommendedFeature}`,
+      `Fallback mode: ${role.executionGuide.fallbackMode}`,
       "",
       "Supervision boundary:",
       "- A human must open the official CLI/app and paste this prompt manually.",
@@ -516,6 +520,9 @@ function buildSupervisedRolePrompt(
     `Profile source: ${role.profileSource}`,
     `Profile reason: ${role.profileReason}`,
     `Status: ${role.status}`,
+    `Provider surface: ${role.executionGuide.surface}`,
+    `Recommended feature: ${role.executionGuide.recommendedFeature}`,
+    `Fallback mode: ${role.executionGuide.fallbackMode}`,
     "",
     "Supervision boundary:",
     "- A human must open the official CLI/app and paste this prompt manually.",
@@ -567,6 +574,93 @@ function defaultRoleProfileReason(roleId: string, role: string): string {
   return `legacy orchestration artifact inferred ${profile}`;
 }
 
+function defaultExecutionGuide(
+  agentTool: string,
+  role: string,
+  profile: string,
+): WorkbenchOrchestrationExecutionGuide {
+  if (agentTool === "codex") {
+    return {
+      surface: "Codex CLI/app foreground session",
+      recommendedFeature:
+        role === "contributor"
+          ? "skills_custom_agents_explicit_subagent_prompt"
+          : "read_only_review_skill_or_custom_agent_prompt",
+      fallbackMode: "single supervised role prompt",
+      supervisionRequired: true,
+      startsProcess: false,
+      constraints: [
+        "Open Codex manually in the foreground workspace.",
+        "Use skills or custom agents when they are available for this profile.",
+        "Record observed state in P2A.",
+      ],
+    };
+  }
+  if (agentTool === "claude") {
+    return {
+      surface: "Claude Code foreground session",
+      recommendedFeature: role === "contributor" ? "agent_teams_or_subagents" : "read_only_review_subagent",
+      fallbackMode: "supervised foreground role prompt",
+      supervisionRequired: true,
+      startsProcess: false,
+      constraints: [
+        "Open Claude Code manually in the foreground workspace.",
+        "Use agent teams or subagents when enabled.",
+        "Record observed state in P2A.",
+      ],
+    };
+  }
+  if (agentTool === "gemini") {
+    return {
+      surface: "Gemini CLI foreground session",
+      recommendedFeature: "extensions_custom_commands_gemini_context",
+      fallbackMode: "read-only supervised role prompt",
+      supervisionRequired: true,
+      startsProcess: false,
+      constraints: [
+        "Use Gemini only for read-only planning, review, or monitor support.",
+        "Do not edit files in this role.",
+        "Record findings in P2A.",
+      ],
+    };
+  }
+  return {
+    surface: "Human owner foreground action",
+    recommendedFeature:
+      role === "lead" ? "manual_approval_and_run_lifecycle" : "manual_prompt_copy_and_status_recording",
+    fallbackMode: "manual status update",
+    supervisionRequired: true,
+    startsProcess: false,
+    constraints: [
+      "Perform the role directly in the foreground workspace.",
+      "Record observed state in P2A.",
+      profile === "manual_monitor" ? "Record an explicit monitor verdict before finish." : "Keep changes inside the approved task scope.",
+    ],
+  };
+}
+
+function normalizeExecutionGuide(
+  roleRecord: JsonRecord,
+  agentTool: string,
+  role: string,
+  profile: string,
+): WorkbenchOrchestrationExecutionGuide {
+  const guide = recordValue(roleRecord.executionGuide);
+  if (!guide) return defaultExecutionGuide(agentTool, role, profile);
+  return {
+    surface: stringValue(guide.surface) ?? defaultExecutionGuide(agentTool, role, profile).surface,
+    recommendedFeature:
+      stringValue(guide.recommendedFeature) ??
+      defaultExecutionGuide(agentTool, role, profile).recommendedFeature,
+    fallbackMode: stringValue(guide.fallbackMode) ?? defaultExecutionGuide(agentTool, role, profile).fallbackMode,
+    supervisionRequired: booleanValue(guide.supervisionRequired) ?? true,
+    startsProcess: booleanValue(guide.startsProcess) ?? false,
+    constraints: stringArrayValue(guide.constraints).length
+      ? stringArrayValue(guide.constraints)
+      : defaultExecutionGuide(agentTool, role, profile).constraints,
+  };
+}
+
 function normalizeOrchestrationRoles(
   plan: JsonRecord | null,
   runtime: JsonRecord | null,
@@ -588,6 +682,7 @@ function normalizeOrchestrationRoles(
       const agentTool = stringValue(roleRecord.agentTool);
       const scope = stringValue(roleRecord.scope);
       if (!roleId || !role || !agentTool || !scope) return null;
+      const executionGuide = normalizeExecutionGuide(roleRecord, agentTool, role, profile);
 
       const status = isOrchestrationRoleStatus(roleRecord.status)
         ? roleRecord.status
@@ -600,6 +695,7 @@ function normalizeOrchestrationRoles(
         profileSource,
         profileReason,
         agentTool,
+        executionGuide,
         scope,
         status,
         command: agentTool === "manual" ? null : agentTool,
@@ -637,14 +733,61 @@ function nextRolePayload(role: WorkbenchOrchestrationRole | null): WorkbenchOrch
     profileSource: role.profileSource,
     profileReason: role.profileReason,
     agentTool: role.agentTool,
+    executionGuide: role.executionGuide,
     status: role.status,
     command: role.command,
   };
 }
 
+function schedulerResolutionHints(
+  phase: OrchestrationRuntimePhase,
+  blocked: boolean,
+  needsUserDecision: boolean,
+  roles: WorkbenchOrchestrationRole[],
+  events: WorkbenchOrchestrationEvent[],
+  nextRole: WorkbenchOrchestrationRole | null,
+): string[] {
+  if (phase === "closed") return ["No scheduler action remains for this runtime."];
+  const blockedRole = roles.find((role) => role.status === "blocked") ?? null;
+  const latestBlocker = [...events].reverse().find((event) => event.type === "blocker");
+  if (blocked || phase === "blocked" || blockedRole) {
+    return [
+      latestBlocker
+        ? `Inspect blocker ${latestBlocker.eventId}: ${latestBlocker.summary}.`
+        : "Inspect the latest blocked role and run output.",
+      "Record an owner decision before skipping or finishing blocked.",
+      blockedRole
+        ? `Do not mark ${blockedRole.roleId} active as a retry; this runtime remains blocked until it is closed.`
+        : "Do not retry inside this blocked runtime.",
+      "If continuing is approved, finish this run blocked and open a follow-up supervised run or maintenance task.",
+      "If acceptance cannot be met, finish blocked with the appropriate failure class.",
+    ];
+  }
+  if (needsUserDecision) return ["Record the owner decision, then recompute next-role before continuing."];
+  if (phase === "ready_for_monitor") {
+    return ["Open the monitor or reviewer role prompt manually and record the verdict/result."];
+  }
+  if (phase === "ready_to_finish") {
+    return ["Review verification evidence and close the run lifecycle with p2a_execute finish."];
+  }
+  if (nextRole) {
+    const surface =
+      nextRole.agentTool === "manual"
+        ? "the manual workflow"
+        : `${nextRole.agentTool} in the official foreground CLI/app`;
+    return [
+      `Open ${surface} for ${nextRole.roleId}.`,
+      "Paste the role prompt and keep the owner supervising the session.",
+      "Record complete, blocked, or skipped when the observed role result is clear.",
+    ];
+  }
+  return ["Recompute next-role after recording any missing runtime event."];
+}
+
 function schedulerHint(
   runtime: JsonRecord | null,
   roles: WorkbenchOrchestrationRole[],
+  events: WorkbenchOrchestrationEvent[],
 ): WorkbenchOrchestrationSchedulerHint | null {
   if (!runtime) return null;
 
@@ -734,6 +877,7 @@ function schedulerHint(
     nextRole: nextRolePayload(role),
     reason,
     instruction,
+    resolutionHints: schedulerResolutionHints(phase, blocked, needsUserDecision, roles, events, role),
     safetyBoundary:
       "Open the official CLI/app manually, paste the role prompt, then record the observed result. Do not use this scheduler to bypass subscription limits or run background automation.",
   };
@@ -779,7 +923,7 @@ async function normalizeRunOrchestration(
     roles,
     eventCount: events.length,
     lastEvent: events.at(-1) ?? null,
-    next: schedulerHint(runtime, roles),
+    next: schedulerHint(runtime, roles, events),
     updatedAt: stringValue(runtime?.updatedAt) ?? stringValue(plan?.createdAt),
   };
 }

@@ -49,6 +49,103 @@ const ROLE_PROFILE_TO_ROLE = {
 };
 const ROLE_PROFILE_SOURCES = new Set(['auto', 'override']);
 
+function expectedExecutionGuide(agentTool, role, profile) {
+  if (agentTool === 'codex') {
+    return {
+      surface: 'Codex CLI/app foreground session',
+      recommendedFeature: role === 'contributor'
+        ? 'skills_custom_agents_explicit_subagent_prompt'
+        : 'read_only_review_skill_or_custom_agent_prompt',
+      fallbackMode: 'single supervised role prompt',
+      supervisionRequired: true,
+      startsProcess: false,
+      constraints: [
+        'Open Codex manually in the foreground workspace.',
+      ],
+    };
+  }
+  if (agentTool === 'claude') {
+    return {
+      surface: 'Claude Code foreground session',
+      recommendedFeature: role === 'contributor'
+        ? 'agent_teams_or_subagents'
+        : 'read_only_review_subagent',
+      fallbackMode: 'supervised foreground role prompt',
+      supervisionRequired: true,
+      startsProcess: false,
+      constraints: [
+        'Open Claude Code manually in the foreground workspace.',
+      ],
+    };
+  }
+  if (agentTool === 'gemini') {
+    return {
+      surface: 'Gemini CLI foreground session',
+      recommendedFeature: 'extensions_custom_commands_gemini_context',
+      fallbackMode: 'read-only supervised role prompt',
+      supervisionRequired: true,
+      startsProcess: false,
+      constraints: [
+        'Use Gemini only for read-only planning, review, or monitor support.',
+      ],
+    };
+  }
+  return {
+    surface: 'Human owner foreground action',
+    recommendedFeature: role === 'lead'
+      ? 'manual_approval_and_run_lifecycle'
+      : 'manual_prompt_copy_and_status_recording',
+    fallbackMode: 'manual status update',
+    supervisionRequired: true,
+    startsProcess: false,
+    constraints: [
+      profile === 'manual_monitor'
+        ? 'Record an explicit monitor verdict before finish.'
+        : 'Perform the role directly in the foreground workspace.',
+    ],
+  };
+}
+
+function backfillRoleExecutionGuide(role) {
+  if (!role.executionGuide) {
+    role.executionGuide = expectedExecutionGuide(role.agentTool, role.role, role.profile);
+  }
+  return role;
+}
+
+function backfillOrchestrationPlanData(data) {
+  if (Array.isArray(data?.roles)) data.roles.forEach(backfillRoleExecutionGuide);
+  return data;
+}
+
+function backfillOrchestrationRuntimeData(data) {
+  const roleAssignments = data?.sharedMentalModel?.roleAssignments;
+  if (Array.isArray(roleAssignments)) roleAssignments.forEach(backfillRoleExecutionGuide);
+  return data;
+}
+
+function validateExecutionGuide(guide, label) {
+  if (guide.supervisionRequired !== true) {
+    throw new ValidationError(`${label} executionGuide.supervisionRequired must be true`);
+  }
+  if (guide.startsProcess !== false) {
+    throw new ValidationError(`${label} executionGuide.startsProcess must be false`);
+  }
+  if (!Array.isArray(guide.constraints) || guide.constraints.length === 0) {
+    throw new ValidationError(`${label} executionGuide.constraints must not be empty`);
+  }
+}
+
+function validateExecutionGuideForRole(role, label) {
+  validateExecutionGuide(role.executionGuide, label);
+  const expected = expectedExecutionGuide(role.agentTool, role.role, role.profile);
+  for (const field of ['surface', 'recommendedFeature', 'fallbackMode']) {
+    if (role.executionGuide[field] !== expected[field]) {
+      throw new ValidationError(`${label} executionGuide.${field} must match ${role.agentTool}/${role.role}`);
+    }
+  }
+}
+
 export class ValidationError extends Error {
   constructor(message) {
     super(message);
@@ -565,6 +662,7 @@ export function validateRunIndex(filePath) {
 }
 
 export function validateOrchestrationPlanData(data) {
+  backfillOrchestrationPlanData(data);
   validateSchema(data, loadJson(SCHEMA_PATHS.orchestration_plan));
   const roleIds = data.roles.map((role) => role.roleId);
   if (roleIds.length !== new Set(roleIds).size) {
@@ -601,6 +699,7 @@ export function validateOrchestrationPlanData(data) {
     if (role.profileSource === 'override' && !['implementer', 'reviewer'].includes(role.roleId)) {
       throw new ValidationError(`orchestration plan role ${role.roleId} cannot use override profileSource`);
     }
+    validateExecutionGuideForRole(role, `orchestration plan role ${role.roleId}`);
     if (role.requiresWrite && !capability.writeAllowed) {
       throw new ValidationError(`orchestration plan role ${role.roleId} requires write but provider ${role.agentTool} is read-only`);
     }
@@ -643,6 +742,7 @@ export function validateOrchestrationPlan(filePath) {
 }
 
 export function validateOrchestrationRuntimeData(data) {
+  backfillOrchestrationRuntimeData(data);
   validateSchema(data, loadJson(SCHEMA_PATHS.orchestration_runtime));
   const roleAssignments = data.sharedMentalModel.roleAssignments;
   const roleIds = roleAssignments.map((role) => role.roleId);
@@ -660,6 +760,7 @@ export function validateOrchestrationRuntimeData(data) {
     if (role.profileSource === 'override' && !['implementer', 'reviewer'].includes(role.roleId)) {
       throw new ValidationError(`orchestration runtime role ${role.roleId} cannot use override profileSource`);
     }
+    validateExecutionGuideForRole(role, `orchestration runtime role ${role.roleId}`);
   }
   const eventIds = data.communicationLog.map((event) => event.eventId);
   if (eventIds.length !== new Set(eventIds).size) {

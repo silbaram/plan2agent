@@ -31,7 +31,7 @@
 | --- | --- | --- |
 | baseline-aware 질문 UX | Gate A/B delta draft 기반 있음 | 기존 답변 재사용, 질문 재생성/재처분 UX |
 | maintenance 운영 UX | maintenance task 생성/검증/handoff 가능 | draft 승격과 전용 UX |
-| Team Big Five orchestration | `p2a-dev-orchestrator` MVP 1차, runtime sidecar/communication log, supervised scheduler, GUI runtime/scheduler 표시 완료 | provider-native team runner adapter와 capability matrix |
+| Team Big Five orchestration | `p2a-dev-orchestrator` MVP 1차, runtime sidecar/communication log, supervised scheduler, provider capability matrix, roleProfile/override, provider execution guide, GUI runtime/scheduler 표시 완료 | provider-native team runner adapter |
 | Hermes 고도화 | proposal -> review -> curation -> patch draft -> approval -> maintenance 실행 bridge 완료 | cross-session recall, 검색/DB 기반 개선 후보 큐 |
 | PR/리뷰 연동 | 변경 파일과 검증 결과 기록 가능 | PR 생성, 리뷰 상태 연동, 변경 요약 자동화 |
 | code-aware 고도화 | spec 기반 semantic diff 가능 | 코드베이스 분석 기반 spec 역생성, 결과 diff 병합 |
@@ -759,7 +759,7 @@ Plan2Agent 개발은 아래 흐름을 기본 협업 방식으로 둔다.
 | --- | --- | --- |
 | baseline-aware intake/spec | delta draft와 diff-task 기반 있음 | 질문 재생성 UX와 답변 재사용/재처분 |
 | maintenance task 운영 | lazy 생성/append, 검증, handoff 가능 | maintenance draft 승격과 전용 UX |
-| Team Big Five orchestration | deterministic triage, role handoff, runtime sidecar/communication log, supervised scheduler, GUI runtime/scheduler 표시와 수동 role 상태 기록 완료 | provider capability matrix와 provider-native team runner adapter |
+| Team Big Five orchestration | deterministic triage, role handoff, runtime sidecar/communication log, supervised scheduler, provider capability matrix, roleProfile/override, provider execution guide, GUI runtime/scheduler 표시와 수동 role 상태 기록 완료 | provider-native team runner adapter |
 | Hermes식 자가발전 | proposal -> review -> curation -> patch draft -> approval -> maintenance 실행 bridge 완료 | cross-session recall과 검색/DB 기반 개선 후보 큐 |
 
 후속 백로그:
@@ -780,7 +780,7 @@ Plan2Agent 개발은 아래 흐름을 기본 협업 방식으로 둔다.
 
 다음 후보:
 
-1. 오케스트레이션 런타임 고도화 후속: provider-native team orchestration adapter. 기본은 single-provider team이며, Claude는 native agent teams/subagents, Codex는 skill/custom agent/명시 subagent prompt, Gemini는 planning/review/monitor read-only 보조로 둔다. Role은 owner/implementer/reviewer/monitor로 유지하고 roleProfile로 frontend/backend/fullstack/test/docs/qa/architecture/security 전문성을 나누며, 자동 선택 근거와 implementer/reviewer override를 plan/runtime에 기록한다. 공식 CLI/앱 세션은 사용자가 foreground에서 열고 승인하며, p2a는 role/prompt/order/state만 조율한다. API 요금제 기반 완전 자동 개발은 비용상 보류하고, 구독 로그인 기반 무인 실행·browser/background loop·계정 우회는 제외한다.
+1. 오케스트레이션 런타임 고도화 후속: provider-native team runner adapter. 현재 plan/runtime은 provider capability, roleProfile/override, executionGuide, blocked next action까지 기록한다. 남은 범위는 Claude/Codex/Gemini 공식 foreground 사용법을 더 구체적인 runner guide로 나누는 것이다. 공식 CLI/앱 세션은 사용자가 foreground에서 열고 승인하며, p2a는 role/prompt/order/state만 조율한다. API 요금제 기반 완전 자동 개발은 비용상 보류하고, 구독 로그인 기반 무인 실행·browser/background loop·계정 우회는 제외한다.
 2. Hermes cross-session recall은 Task Store/DB 설계 시점에 재논의.
 3. PR 생성 및 리뷰 상태 연동.
 4. code-aware spec 역생성과 결과 diff 자동 병합.

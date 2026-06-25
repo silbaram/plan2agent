@@ -1549,6 +1549,24 @@ export default function App() {
                         : copy.runs.copyPrompt}
                   </button>
                 </div>
+                {selectedOrchestrationRole && (
+                  <div className="detail-list detail-list--embedded orchestration-guide">
+                    <div>
+                      <span>{copy.runs.providerSurface}</span>
+                      <strong>{selectedOrchestrationRole.executionGuide.surface}</strong>
+                    </div>
+                    <div>
+                      <span>{copy.runs.recommendedFeature}</span>
+                      <strong className="mono">
+                        {selectedOrchestrationRole.executionGuide.recommendedFeature}
+                      </strong>
+                    </div>
+                    <div>
+                      <span>{copy.runs.fallbackMode}</span>
+                      <strong>{selectedOrchestrationRole.executionGuide.fallbackMode}</strong>
+                    </div>
+                  </div>
+                )}
                 <pre className="prompt-preview orchestration-prompt__body">
                   {selectedOrchestrationRole?.prompt ?? copy.runs.noRolePrompt}
                 </pre>
@@ -1628,6 +1646,14 @@ export default function App() {
                     <span className="execution-failure__body">
                       <strong>{selectedOrchestration.next.reason}</strong>
                       <small>{selectedOrchestration.next.instruction}</small>
+                      {selectedOrchestration.next.resolutionHints.length > 0 && (
+                        <span className="orchestration-hint__list">
+                          <b>{copy.runs.nextActions}</b>
+                          {selectedOrchestration.next.resolutionHints.map((hint) => (
+                            <i key={hint}>{hint}</i>
+                          ))}
+                        </span>
+                      )}
                       <em>{selectedOrchestration.next.safetyBoundary}</em>
                     </span>
                   </div>

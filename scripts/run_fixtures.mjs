@@ -705,11 +705,39 @@ function validateIterationCurrentFixtureCases() {
         || executeOrchestrationPlan.roles.find((role) => role.roleId === 'owner')?.profileSource !== 'auto'
         || !executeOrchestrationPlan.roles.every((role) => typeof role.profile === 'string' && role.profile.length > 0)
         || !executeOrchestrationPlan.roles.every((role) => role.profileSource === 'auto' && typeof role.profileReason === 'string' && role.profileReason.length > 0)
+        || !executeOrchestrationPlan.roles.every((role) => role.executionGuide?.startsProcess === false && role.executionGuide?.supervisionRequired === true)
+        || executeOrchestrationPlan.roles.find((role) => role.roleId === 'implementer')?.executionGuide?.recommendedFeature !== 'skills_custom_agents_explicit_subagent_prompt'
         || executeOrchestrationPlan.monitorGate.required
         || executeOrchestrationPlan.monitorGate.verdictPath !== null
       ) {
         console.error(`p2a_orchestrate default fixture should stay solo: ${caseData.id}`);
         console.error(JSON.stringify({ executeOrchestrationPlan }, null, 2));
+        return { status: 1, checks };
+      }
+
+      const legacyOrchestrationPlanPath = path.join(tempRoot, 'p2a-execute', 'orchestration', 'task-001-legacy-execution-guide.json');
+      const legacyOrchestrationPlan = JSON.parse(JSON.stringify(executeOrchestrationPlan));
+      legacyOrchestrationPlan.roles.forEach((role) => {
+        delete role.executionGuide;
+      });
+      writeFileSync(legacyOrchestrationPlanPath, `${JSON.stringify(legacyOrchestrationPlan, null, 2)}\n`, 'utf8');
+      result = runValidator(['--orchestration-plan', legacyOrchestrationPlanPath]);
+      checks += 1;
+      if (result.status !== 0) {
+        console.error(`orchestration plan validator should backfill legacy executionGuide: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: failureStatus(result), checks };
+      }
+
+      const mismatchedExecutionGuidePlanPath = path.join(tempRoot, 'p2a-execute', 'orchestration', 'task-001-mismatched-execution-guide.json');
+      const mismatchedExecutionGuidePlan = JSON.parse(JSON.stringify(executeOrchestrationPlan));
+      mismatchedExecutionGuidePlan.roles.find((role) => role.roleId === 'implementer').executionGuide.surface = 'Claude Code foreground session';
+      writeFileSync(mismatchedExecutionGuidePlanPath, `${JSON.stringify(mismatchedExecutionGuidePlan, null, 2)}\n`, 'utf8');
+      result = runValidator(['--orchestration-plan', mismatchedExecutionGuidePlanPath]);
+      checks += 1;
+      if (result.status === 0 || !result.stderr.includes('executionGuide.surface must match codex/contributor')) {
+        console.error(`orchestration plan validator should reject mismatched executionGuide provider: ${caseData.id}`);
+        writeResultOutput(result);
         return { status: 1, checks };
       }
 
@@ -740,6 +768,7 @@ function validateIterationCurrentFixtureCases() {
         || executeUiProfilePlan.roles.find((role) => role.roleId === 'implementer')?.profileSource !== 'auto'
         || !executeUiProfilePlan.roles.find((role) => role.roleId === 'implementer')?.profileReason.includes('targetArea')
         || !executeUiProfilePlan.handoffPrompts.find((prompt) => prompt.roleId === 'implementer')?.prompt.includes('Profile: frontend_implementer')
+        || !executeUiProfilePlan.handoffPrompts.find((prompt) => prompt.roleId === 'implementer')?.prompt.includes('Recommended feature: skills_custom_agents_explicit_subagent_prompt')
       ) {
         console.error(`p2a_orchestrate UI task should select frontend_implementer: ${caseData.id}`);
         writeResultOutput(result);
@@ -943,12 +972,39 @@ function validateIterationCurrentFixtureCases() {
         || executeRuntime.sharedMentalModel.roleAssignments.length !== executeSidecar.roles.length
         || executeRuntime.sharedMentalModel.roleAssignments.find((role) => role.roleId === 'implementer')?.profileSource !== executeSidecar.roles.find((role) => role.roleId === 'implementer')?.profileSource
         || !executeRuntime.sharedMentalModel.roleAssignments.find((role) => role.roleId === 'implementer')?.profileReason
+        || executeRuntime.sharedMentalModel.roleAssignments.find((role) => role.roleId === 'implementer')?.executionGuide?.surface !== 'Codex CLI/app foreground session'
         || !executeRuntime.communicationLog.some((event) => event.type === 'handoff')
         || executeRuntime.status.phase !== 'running'
       ) {
         console.error(`p2a_execute start wrote unexpected orchestration runtime: ${caseData.id}`);
         console.error(JSON.stringify({ executeRuntime, executeSidecar }, null, 2));
         return { status: 1, checks };
+      }
+
+      const legacyRuntimePath = path.join(tempRoot, 'p2a-execute', 'runs', 'run-execute-fixture-legacy.orchestration-runtime.json');
+      const legacyRuntime = JSON.parse(JSON.stringify(executeRuntime));
+      legacyRuntime.sharedMentalModel.roleAssignments.forEach((role) => {
+        delete role.executionGuide;
+      });
+      writeFileSync(legacyRuntimePath, `${JSON.stringify(legacyRuntime, null, 2)}\n`, 'utf8');
+      result = runValidator(['--orchestration-runtime', legacyRuntimePath]);
+      checks += 1;
+      if (result.status !== 0) {
+        console.error(`orchestration runtime validator should backfill legacy executionGuide: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: failureStatus(result), checks };
+      }
+      result = runOrchestrate(['next-role', '--runtime', legacyRuntimePath, '--json']);
+      checks += 1;
+      const legacyRuntimeNextRole = result.status === 0 ? JSON.parse(result.stdout) : null;
+      if (
+        result.status !== 0
+        || legacyRuntimeNextRole.nextRole?.executionGuide?.surface !== 'Codex CLI/app foreground session'
+      ) {
+        console.error(`p2a_orchestrate should read legacy runtime without executionGuide: ${caseData.id}`);
+        writeResultOutput(result);
+        console.error(JSON.stringify({ legacyRuntimeNextRole }, null, 2));
+        return { status: failureStatus(result), checks };
       }
 
       result = runOrchestrate(['next-role', '--runtime', executeRuntimePath, '--json']);
@@ -958,6 +1014,8 @@ function validateIterationCurrentFixtureCases() {
         result.status !== 0
         || executeNextRole.nextRole?.roleId !== 'implementer'
         || executeNextRole.nextRole?.profileSource !== 'auto'
+        || executeNextRole.nextRole?.executionGuide?.startsProcess !== false
+        || !executeNextRole.resolutionHints?.some((hint) => hint.includes('Open codex'))
         || executeNextRole.startsProcess !== false
         || executeNextRole.supervisedOnly !== true
       ) {
@@ -973,6 +1031,7 @@ function validateIterationCurrentFixtureCases() {
         result.status !== 0
         || !result.stdout.includes('Plan2Agent supervised role prompt')
         || !result.stdout.includes('Profile source: auto')
+        || !result.stdout.includes('Provider surface: Codex CLI/app foreground session')
         || !result.stdout.includes('startsProcess: false')
         || !result.stdout.includes('Do not run background loops')
       ) {
@@ -1139,6 +1198,7 @@ function validateIterationCurrentFixtureCases() {
         || executeMonitorPlan.roles.find((role) => role.roleId === 'reviewer')?.profileSource !== 'auto'
         || executeMonitorPlan.roles.find((role) => role.roleId === 'monitor')?.profile !== 'manual_monitor'
         || executeMonitorPlan.roles.find((role) => role.roleId === 'monitor')?.profileReason !== 'fixed manual monitor gate role'
+        || executeMonitorPlan.roles.find((role) => role.roleId === 'reviewer')?.executionGuide?.recommendedFeature !== 'read_only_review_skill_or_custom_agent_prompt'
         || !executeMonitorPlan.monitorGate.required
         || !executeMonitorPlan.riskFlags.includes('multi_area')
       ) {
@@ -1208,6 +1268,7 @@ function validateIterationCurrentFixtureCases() {
         || explicitGeminiReviewerPlan.providerStrategy.mode !== 'single_provider_with_read_only_reviewer'
         || explicitGeminiReviewerPlan.roles.find((role) => role.roleId === 'reviewer')?.agentTool !== 'gemini'
         || explicitGeminiReviewerPlan.roles.find((role) => role.roleId === 'reviewer')?.profile !== 'security_reviewer'
+        || explicitGeminiReviewerPlan.roles.find((role) => role.roleId === 'reviewer')?.executionGuide?.recommendedFeature !== 'extensions_custom_commands_gemini_context'
         || explicitGeminiReviewerPlan.roles.find((role) => role.roleId === 'reviewer')?.requiresWrite !== false
       ) {
         console.error(`p2a_orchestrate should allow Gemini as explicit read-only reviewer: ${caseData.id}`);
@@ -1347,7 +1408,13 @@ function validateIterationCurrentFixtureCases() {
         'unmet_acceptance',
       ]);
       checks += 1;
-      if (result.status !== 0 || !result.stdout.includes('phase: blocked') || !result.stdout.includes('nextRole: owner')) {
+      if (
+        result.status !== 0
+        || !result.stdout.includes('phase: blocked')
+        || !result.stdout.includes('nextRole: owner')
+        || !result.stdout.includes('Do not retry inside this blocked runtime')
+        || result.stdout.includes('mark monitor active')
+      ) {
         console.error(`p2a_orchestrate monitor mark-role should block rejected verdicts: ${caseData.id}`);
         writeResultOutput(result);
         return { status: failureStatus(result), checks };
