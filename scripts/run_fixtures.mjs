@@ -1158,7 +1158,9 @@ function validateIterationCurrentFixtureCases() {
         || !result.stdout.includes('Profile source: auto')
         || !result.stdout.includes('Provider surface: Codex CLI/app foreground session')
         || !result.stdout.includes('startsProcess: false')
-        || !result.stdout.includes('Do not run background loops')
+        || !result.stdout.includes('Provider-native delegation')
+        || !result.stdout.includes('Provider-native skills, subagents, custom agents, or agent teams are allowed inside that foreground session')
+        || !result.stdout.includes('P2A itself must not launch provider CLIs')
       ) {
         console.error(`p2a_orchestrate role-prompt fixture check failed: ${caseData.id}`);
         writeResultOutput(result);
@@ -1175,7 +1177,7 @@ function validateIterationCurrentFixtureCases() {
         || executeRuntimeRunnerGuide.supervisedOnly !== true
         || executeRuntimeRunnerGuide.startsProcess !== false
         || executeRuntimeRunnerGuide.roles[0]?.runnerAdapter?.adapterName !== 'codex_supervised_skills_custom_agents'
-        || !executeRuntimeRunnerGuide.roles[0]?.runnerAdapter?.foregroundSteps?.some((step) => step.includes('explicitly request'))
+        || !executeRuntimeRunnerGuide.roles[0]?.runnerAdapter?.foregroundSteps?.some((step) => step.includes('foreground Codex session'))
         || !executeRuntimeRunnerGuide.roles[0]?.actionCommand?.includes('role-prompt')
       ) {
         console.error(`p2a_orchestrate runner-guide runtime fixture check failed: ${caseData.id}`);

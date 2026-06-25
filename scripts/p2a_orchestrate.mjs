@@ -109,7 +109,7 @@ const PROVIDER_CAPABILITIES = Object.freeze({
     officialFeatures: ['skills', 'custom_agents', 'explicit_subagent_prompt'],
     supervisionMode: 'foreground_human_supervised',
     restrictions: [
-      'Codex subagents are not spawned automatically; the role prompt must explicitly request them.',
+      'P2A does not spawn Codex subagents; the foreground Codex session may use skills, custom agents, or subagents when the pasted prompt requests them.',
       'P2A never starts Codex as a background process.',
     ],
   },
@@ -121,7 +121,7 @@ const PROVIDER_CAPABILITIES = Object.freeze({
     officialFeatures: ['subagents', 'plugins', 'skills', 'agent_teams'],
     supervisionMode: 'foreground_human_supervised',
     restrictions: [
-      'Claude agent teams are experimental and may be disabled; fall back to supervised subagent or role prompts.',
+      'P2A does not start Claude Code agent teams; the foreground Claude Code session may use native agent teams/subagents when enabled.',
       'P2A never starts Claude Code as a background process.',
     ],
   },
@@ -465,6 +465,7 @@ function providerStrategyForRoles(roles) {
   const notes = [
     'P2A coordinates role order, prompts, runtime state, and monitor gates only.',
     'A human owner opens the official provider CLI/app in the foreground and records observed progress.',
+    'Provider-native skills, subagents, custom agents, or agent teams may run inside that foreground session when requested by the pasted prompt.',
     'P2A does not run background loops, browser automation, unofficial APIs, token reuse, account rotation, or rate-limit bypass.',
   ];
   if (implementationProvider === 'codex') {
@@ -504,7 +505,7 @@ function providerExecutionGuide(agentTool, role, profile) {
       startsProcess: false,
       constraints: [
         'Open Codex manually in the foreground workspace.',
-        'Use skills or custom agents when they are available for this profile.',
+        'Inside the foreground Codex session, use skills or custom agents when they are available for this profile.',
         'Explicitly request subagents in the pasted prompt if role separation is needed.',
         role === 'contributor' ? 'Write only within the approved task scope.' : 'Review read-only unless the owner explicitly reassigns implementation.',
       ],
@@ -522,7 +523,7 @@ function providerExecutionGuide(agentTool, role, profile) {
       startsProcess: false,
       constraints: [
         'Open Claude Code manually in the foreground workspace.',
-        'Use native agent teams or subagents when enabled for this account and project.',
+        'Inside the foreground Claude Code session, use native agent teams or subagents when enabled for this account and project.',
         'Fall back to the pasted role prompt when agent teams are unavailable.',
         role === 'contributor' ? 'Write only within the approved task scope.' : 'Review read-only unless the owner explicitly reassigns implementation.',
       ],
@@ -1587,6 +1588,34 @@ function recentRuntimeEvents(runtime, limit = 5) {
   return runtime.communicationLog.slice(-limit);
 }
 
+function providerDelegationInstructions(role) {
+  if (role.agentTool === 'codex') {
+    return [
+      'Use Codex skills/custom agents for this profile when they are installed in the workspace.',
+      'If role separation is useful, explicitly delegate inside this foreground Codex session to the relevant specialist or subagent.',
+      'Do not ask P2A to launch Codex or any additional background session.',
+    ];
+  }
+  if (role.agentTool === 'claude') {
+    return [
+      'Use Claude Code subagents, skills, or agent teams inside this foreground session when they are enabled for the account/project.',
+      'If native agent teams are unavailable, continue with the supervised role prompt in the same foreground session.',
+      'Do not ask P2A to launch Claude Code or any additional background session.',
+    ];
+  }
+  if (role.agentTool === 'gemini') {
+    return [
+      'Use Gemini extensions, custom commands, GEMINI.md context, or MCP tools only for read-only planning/review/monitor support.',
+      'Do not perform write-required implementation from the Gemini role.',
+      'Do not ask P2A to launch Gemini or any additional background session.',
+    ];
+  }
+  return [
+    'Perform or supervise this role directly as the owner.',
+    'Use provider-native delegation only from a manually opened foreground CLI/app session.',
+  ];
+}
+
 function buildSupervisedRolePrompt(runtime, role) {
   const handoffEvent = handoffEventForRole(runtime, role.roleId);
   const basePrompt = handoffEvent?.detail ?? role.scope;
@@ -1606,8 +1635,12 @@ function buildSupervisedRolePrompt(runtime, role) {
     '',
     'Supervision boundary:',
     '- A human must open the official CLI/app and paste this prompt manually.',
-    '- Do not run background loops, browser automation, unofficial APIs, token reuse, or quota/rate-limit bypass.',
+    '- Provider-native skills, subagents, custom agents, or agent teams are allowed inside that foreground session when requested here.',
+    '- P2A itself must not launch provider CLIs, background loops, browser automation, unofficial APIs, token reuse, or quota/rate-limit bypass.',
     '- Report results back to the owner, then record them with p2a_orchestrate mark-role or record.',
+    '',
+    'Provider-native delegation:',
+    ...providerDelegationInstructions(role).map((instruction) => `- ${instruction}`),
     '',
     `Objective: ${runtime.sharedMentalModel.objective}`,
     `Current state: ${runtime.sharedMentalModel.currentState}`,
@@ -1675,7 +1708,7 @@ function providerRunnerAdapter(role) {
       foregroundSteps: [
         'Open Codex manually in the project workspace.',
         `Paste the supervised role prompt and explicitly request the ${profileLabel} specialist behavior.`,
-        'If role separation is needed, ask Codex to use the relevant skill/custom agent or subagent explicitly in the prompt.',
+        'Inside that foreground Codex session, ask Codex to use the relevant skill/custom agent or subagent explicitly in the prompt when role separation is useful.',
         'Keep the owner supervising the foreground session and capture changed files plus verification evidence.',
         `Record the observed result with mark-role for ${role.roleId}.`,
       ],
@@ -1699,7 +1732,7 @@ function providerRunnerAdapter(role) {
       ],
       foregroundSteps: [
         'Open Claude Code manually in the project workspace.',
-        `Use native agent teams/subagents for ${profileLabel} when they are available.`,
+        `Inside that foreground Claude Code session, use native agent teams/subagents for ${profileLabel} when they are available.`,
         'If agent teams are disabled or experimental access is unavailable, paste the supervised role prompt as a normal foreground task.',
         'Keep implementation and review inside the assigned role scope.',
         `Record the observed result with mark-role for ${role.roleId}.`,

@@ -215,18 +215,18 @@ MVP에서 하지 않는 것:
 
 ### O8. Provider-native team orchestration adapter
 
-목적: `team` mode를 여러 회사 CLI를 동시에 섞는 터미널 조율 문제가 아니라, 선택한 provider의 공식 team/subagent/skill 기능을 활용하는 감독형 실행 흐름으로 고정한다. 기본값은 single-provider team이다.
+목적: `team` mode를 여러 회사 CLI를 동시에 섞는 터미널 조율 문제가 아니라, 선택한 provider의 공식 team/subagent/skill 기능을 활용하는 감독형 실행 흐름으로 고정한다. 기본값은 single-provider team이다. 여기서 감독형은 P2A가 provider CLI/API를 직접 실행하지 않는다는 뜻이며, 사용자가 연 공식 foreground 세션 내부에서 provider-native skill/subagent/custom agent/agent team이 작업을 수행하는 것은 허용한다.
 
 범위:
 
 - provider capability matrix를 추가한다.
 - `team` plan에 `providerStrategy`, role capability, 실행 표면을 기록한다.
-- role별 `executionGuide`에 공식 foreground 표면, 추천 provider 기능, fallback, supervision-required/starts-no-process 경계를 기록한다.
+- role별 `executionGuide`에 공식 foreground 표면, 추천 provider 기능, provider-native delegation, fallback, supervision-required/starts-no-process 경계를 기록한다.
 - `runner-guide` 명령으로 role별 provider-native foreground step, availability check, fallback, 금지 자동화를 출력한다.
 - `runner-doctor` 명령으로 대상 project root의 P2A CLI/schema, provider별 agent/skill/command 자산 설치 상태를 read-only로 점검하고, `--live` 옵션으로 provider `--version`만 probe한다.
 - `owner`/`implementer`/`reviewer`/`monitor` role은 유지하고, 실제 전문성은 `profile`로 세분화한다. 구현 profile은 frontend/backend/fullstack/test/docs, 리뷰 profile은 qa/architecture/security, monitor는 manual_monitor로 둔다. 자동 선택 근거는 `profileSource/profileReason`에 기록하고, implementer/reviewer는 사람이 override할 수 있다.
-- Claude adapter guide는 Claude Code의 agent teams/subagents를 우선 안내하고, 사용 불가 시 supervised foreground prompt로 폴백하게 한다.
-- Codex adapter guide는 Codex skills, custom agents, 명시 subagent prompt를 안내한다. Codex는 subagent를 자동으로 spawn하지 않으므로 prompt에 명시 요청을 포함한다.
+- Claude adapter guide는 사용자가 연 Claude Code foreground 세션 안에서 agent teams/subagents를 우선 안내하고, 사용 불가 시 supervised foreground prompt로 폴백하게 한다.
+- Codex adapter guide는 사용자가 연 Codex foreground 세션 안에서 skills, custom agents, 명시 subagent prompt를 안내한다. P2A가 subagent를 실행하는 것이 아니라 prompt에 명시 위임을 포함한다.
 - Gemini adapter guide는 Gemini CLI extensions, custom commands, `GEMINI.md` context를 planning/review/monitor read-only 역할에만 안내한다. 구현자 role에는 기본 배정하지 않는다.
 - mixed-provider implementation은 기본값에서 제외한다. provider를 섞는 경우는 사람이 명시한 review/monitor 보조 역할로만 허용한다.
 - GUI는 여러 터미널을 자동으로 여는 대신 provider 선택, role prompt, next-role, mark-role, monitor gate를 명확히 보여준다.
@@ -248,14 +248,14 @@ MVP에서 하지 않는 것:
 
 비목표:
 
-- P2A가 Codex/Claude/Gemini 프로세스를 자동으로 여러 개 띄우는 기능.
+- P2A가 Codex/Claude/Gemini 프로세스를 자동으로 여러 개 띄우는 기능. 공식 foreground 세션 안에서 provider-native subagent/skill/agent team이 동작하는 것은 허용한다.
 - browser/background loop, 계정/세션/rate limit 우회.
 - 여러 provider가 같은 파일을 동시에 수정하는 mixed-provider implementation.
 
 후속:
 
 - Hermes 고도화는 store/DB 단계로 연기한다. 실제 적용 patch 생성, skipped-verification rationale 표준화, 반복 failureClass/source/targetFiles 통계, cross-session recall, 검색/DB 저장은 지금 구현하지 않고 나중에 방향을 다시 논의한다.
-- GUI supervised scheduler 표면은 완료했다. API 요금제 기반 완전 자동 개발은 비용상 보류한다. 다음 구현 축은 provider-native team orchestration adapter다. 공식 CLI/앱은 사람이 foreground에서 사용하고, p2a는 provider 선택, role/prompt/order/state, monitor gate만 조율한다. 무인 실행, browser/background loop, 계정/세션/rate limit 우회, 자동 role/monitor 호출은 계속 제외한다.
+- GUI supervised scheduler와 provider-native team orchestration adapter는 완료했다. API 요금제 기반 완전 자동 개발은 비용상 보류한다. 공식 CLI/앱은 사람이 foreground에서 사용하고, P2A는 provider 선택, role/prompt/order/state, monitor gate만 조율한다. 세션 내부의 공식 subagent/skill/agent team 사용은 허용하고, P2A가 직접 실행하는 무인 실행, browser/background loop, 계정/세션/rate limit 우회, role/monitor 자동 호출은 계속 제외한다. 다음 후보는 agent-generated orchestration plan 또는 PR/리뷰 연동이다.
 
 ## 5. Team Big Five 완료 판단
 
@@ -305,13 +305,13 @@ MVP 연결:
 | triage 기본값 | `targetArea`의 명시 다중 영역(comma/plus/ampersand/`and`)은 `team`, acceptance criteria 6개 이상은 `solo_monitor`, 의존성 2개 이상은 risk flag만 기록하고 monitor gate를 강제하지 않음 |
 | orchestrator agent 역할 | plan review/proposal. 자동 적용 없음 |
 | team mode 기본 전략 | single-provider team. 선택 provider의 공식 기능을 우선 사용하고, mixed-provider implementation은 기본값에서 제외 |
-| Claude team 전략 | Claude Code native agent teams/subagents를 우선 사용. experimental team 기능이 꺼져 있으면 foreground subagent/prompt로 폴백 |
-| Codex team 전략 | Codex skills/custom agents/명시 subagent prompt를 사용. Codex subagent는 자동 spawn이 아니라 explicit request 기반 |
+| Claude team 전략 | 사용자가 연 Claude Code foreground 세션 안에서 native agent teams/subagents를 우선 사용. experimental team 기능이 꺼져 있으면 foreground subagent/prompt로 폴백 |
+| Codex team 전략 | 사용자가 연 Codex foreground 세션 안에서 skills/custom agents/명시 subagent prompt를 사용. P2A가 subagent를 실행하지 않고 prompt에서 explicit delegation을 요청 |
 | Gemini 역할 | planning/review/monitor read-only 보조. write-required implementer에는 기본 배정하지 않음 |
 | GUI 편집 여부 | plan/runtime 임의 편집은 제외. Runs 화면은 read-only 표시와 수동 `mark-role` 기록만 |
 | API 기반 자동 개발 | 비용상 보류. API 키 기반 runner는 현재 개발하지 않음 |
-| 구독 CLI/앱 사용 | 공식 CLI/앱을 사람이 foreground에서 사용한다. p2a는 prompt/role/order/state를 조율하고, 사용자가 승인한 입력과 상태 기록만 수행 |
-| 금지 자동화 | browser/background loop, 세션 쿠키·토큰 재사용, 여러 계정 로테이션, rate limit 우회, 자동 role/monitor 호출, 무인 headless 실행 |
+| 구독 CLI/앱 사용 | 공식 CLI/앱을 사람이 foreground에서 사용한다. p2a는 prompt/role/order/state를 조율하고, 사용자가 승인한 입력과 상태 기록만 수행한다. 세션 내부의 공식 skill/subagent/agent team 사용은 허용 |
+| 금지 자동화 | P2A가 직접 실행하는 browser/background loop, provider SDK/API 호출, 세션 쿠키·토큰 재사용, 여러 계정 로테이션, rate limit 우회, 자동 role/monitor 호출, 무인 headless 실행 |
 | supervised scheduler | `next-role`, `role-prompt`, `mark-role`, `failure-policy`는 프로세스를 실행하지 않고 prompt/상태/실패 후 조치만 다룬다 |
 | Hermes queue/review/curation/patch draft/approval execution bridge | `p2a_proposals.mjs` deterministic mining/review/curation/draft-patch/approve-draft + `p2a_execute --approval` 감독형 실행 연결. 자동 적용 없음 |
 
