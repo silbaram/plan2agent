@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /** Run Plan2Agent fixture/golden validation for positive, e2e, iteration, and negative fixture cases. */
 
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
@@ -72,8 +72,12 @@ function runTargetExecute(targetRoot, args) {
   return spawnSync(process.execPath, [path.join(targetRoot, 'scripts', 'p2a_execute.mjs'), ...args], { cwd: targetRoot, encoding: 'utf8' });
 }
 
-function runTargetOrchestrate(targetRoot, args) {
-  return spawnSync(process.execPath, [path.join(targetRoot, 'scripts', 'p2a_orchestrate.mjs'), ...args], { cwd: targetRoot, encoding: 'utf8' });
+function runTargetOrchestrate(targetRoot, args, options = {}) {
+  return spawnSync(process.execPath, [path.join(targetRoot, 'scripts', 'p2a_orchestrate.mjs'), ...args], {
+    cwd: targetRoot,
+    encoding: 'utf8',
+    env: options.env,
+  });
 }
 
 function runTargetProposals(targetRoot, args) {
@@ -87,6 +91,14 @@ function runTargetIteration(targetRoot, args) {
 function writeResultOutput(result) {
   if (result.stdout) process.stdout.write(result.stdout);
   if (result.stderr) process.stderr.write(result.stderr);
+}
+
+function writeFakeProviderCli(binDir, command, versionOutput) {
+  mkdirSync(binDir, { recursive: true });
+  const commandPath = path.join(binDir, command);
+  writeFileSync(commandPath, `#!/usr/bin/env node\nconsole.log(${JSON.stringify(versionOutput)});\n`, 'utf8');
+  chmodSync(commandPath, 0o755);
+  return commandPath;
 }
 
 function failureStatus(result) {
@@ -232,6 +244,58 @@ function validateScaffoldFixtureCase() {
     if (result.status !== 0 || !result.stdout.includes('p2a_iteration.mjs init')) {
       console.error('scaffold target p2a_iteration --help failed');
       writeResultOutput(result);
+      return { status: failureStatus(result), checks };
+    }
+
+    result = runTargetOrchestrate(targetRoot, ['runner-doctor', '--root', targetRoot, '--json']);
+    checks += 1;
+    const runnerDoctor = result.status === 0 ? JSON.parse(result.stdout) : null;
+    if (
+      result.status !== 0
+      || runnerDoctor.schema_version !== 'p2a.provider_runner_doctor.v1'
+      || runnerDoctor.supervisedOnly !== true
+      || runnerDoctor.live !== false
+      || runnerDoctor.startsProcess !== false
+      || runnerDoctor.startsAgentSession !== false
+      || !runnerDoctor.safetyBoundary.includes('does not start Codex')
+      || runnerDoctor.providers.map((provider) => provider.status).join(',') !== 'ready,ready,ready'
+      || runnerDoctor.providers.find((provider) => provider.provider === 'codex')?.summary.requiredPresent !== 8
+      || runnerDoctor.providers.find((provider) => provider.provider === 'claude')?.checks.find((check) => check.id === 'claude_workspace_hook')?.present !== true
+      || runnerDoctor.providers.find((provider) => provider.provider === 'gemini')?.checks.find((check) => check.id === 'gemini_context')?.present !== false
+      || runnerDoctor.providers.some((provider) => provider.liveStatus !== 'not_checked')
+    ) {
+      console.error('scaffold target runner-doctor fixture failed');
+      writeResultOutput(result);
+      console.error(JSON.stringify({ runnerDoctor }, null, 2));
+      return { status: failureStatus(result), checks };
+    }
+
+    const fakeBinDir = path.join(tempRoot, 'fake-provider-bin');
+    writeFakeProviderCli(fakeBinDir, 'codex', 'codex-cli fixture-1.0.0');
+    writeFakeProviderCli(fakeBinDir, 'claude', 'claude-code fixture-1.0.0');
+    writeFakeProviderCli(fakeBinDir, 'gemini', 'gemini-cli fixture-1.0.0');
+    result = runTargetOrchestrate(targetRoot, ['runner-doctor', '--root', targetRoot, '--provider', 'all', '--live', '--json'], {
+      env: {
+        ...process.env,
+        PATH: `${fakeBinDir}${path.delimiter}${process.env.PATH ?? ''}`,
+      },
+    });
+    checks += 1;
+    const liveRunnerDoctor = result.status === 0 ? JSON.parse(result.stdout) : null;
+    if (
+      result.status !== 0
+      || liveRunnerDoctor.live !== true
+      || liveRunnerDoctor.startsProcess !== true
+      || liveRunnerDoctor.startsAgentSession !== false
+      || !liveRunnerDoctor.safetyBoundary.includes('--version probes')
+      || liveRunnerDoctor.providers.map((provider) => provider.liveStatus).join(',') !== 'available,available,available'
+      || liveRunnerDoctor.providers.find((provider) => provider.provider === 'codex')?.liveChecks[0]?.output !== 'codex-cli fixture-1.0.0'
+      || liveRunnerDoctor.providers.find((provider) => provider.provider === 'claude')?.liveChecks[0]?.startsAgentSession !== false
+      || liveRunnerDoctor.providers.find((provider) => provider.provider === 'gemini')?.liveChecks[0]?.command !== 'gemini'
+    ) {
+      console.error('scaffold target runner-doctor live fixture failed');
+      writeResultOutput(result);
+      console.error(JSON.stringify({ liveRunnerDoctor }, null, 2));
       return { status: failureStatus(result), checks };
     }
 
@@ -1067,6 +1131,40 @@ function validateIterationCurrentFixtureCases() {
         return { status: failureStatus(result), checks };
       }
 
+      result = runOrchestrate(['runner-guide', '--runtime', executeRuntimePath, '--role', 'implementer', '--json']);
+      checks += 1;
+      const executeRuntimeRunnerGuide = result.status === 0 ? JSON.parse(result.stdout) : null;
+      if (
+        result.status !== 0
+        || executeRuntimeRunnerGuide.schema_version !== 'p2a.provider_runner_guide.v1'
+        || executeRuntimeRunnerGuide.source.type !== 'runtime'
+        || executeRuntimeRunnerGuide.supervisedOnly !== true
+        || executeRuntimeRunnerGuide.startsProcess !== false
+        || executeRuntimeRunnerGuide.roles[0]?.runnerAdapter?.adapterName !== 'codex_supervised_skills_custom_agents'
+        || !executeRuntimeRunnerGuide.roles[0]?.runnerAdapter?.foregroundSteps?.some((step) => step.includes('explicitly request'))
+        || !executeRuntimeRunnerGuide.roles[0]?.actionCommand?.includes('role-prompt')
+      ) {
+        console.error(`p2a_orchestrate runner-guide runtime fixture check failed: ${caseData.id}`);
+        writeResultOutput(result);
+        console.error(JSON.stringify({ executeRuntimeRunnerGuide }, null, 2));
+        return { status: failureStatus(result), checks };
+      }
+
+      result = runOrchestrate(['runner-guide', '--runtime', executeRuntimePath, '--role', 'implementer', '--agent-tool', 'claude']);
+      checks += 1;
+      if (result.status === 0 || !result.stderr.includes('--agent-tool is only supported with plan')) {
+        console.error(`p2a_orchestrate runner-guide should reject ignored provider override: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: 1, checks };
+      }
+      result = runOrchestrate(['runner-guide', '--runtime', executeRuntimePath, '--role', 'implementer', '--provider', 'codex']);
+      checks += 1;
+      if (result.status === 0 || !result.stderr.includes('runner-guide only supports --plan or --runtime')) {
+        console.error(`p2a_orchestrate runner-guide should reject runner-doctor provider option: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: 1, checks };
+      }
+
       result = runOrchestrate([
         'record',
         '--runtime',
@@ -1234,6 +1332,49 @@ function validateIterationCurrentFixtureCases() {
         return { status: 1, checks };
       }
 
+      const executeClaudePlanPath = path.join(tempRoot, 'p2a-orchestrate-claude', 'orchestration', 'task-001.json');
+      result = runOrchestrate([
+        'plan',
+        '--graph',
+        executeMonitorGraphPath,
+        '--spec',
+        state.specPath,
+        '--task',
+        'task-001',
+        '--agent-tool',
+        'claude',
+        '--output',
+        executeClaudePlanPath,
+      ]);
+      checks += 1;
+      if (result.status !== 0) {
+        console.error(`p2a_orchestrate claude team fixture plan failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: failureStatus(result), checks };
+      }
+      const executeClaudePlan = JSON.parse(readFileSync(executeClaudePlanPath, 'utf8'));
+      if (
+        executeClaudePlan.providerStrategy.primaryProvider !== 'claude'
+        || executeClaudePlan.roles.find((role) => role.roleId === 'implementer')?.executionGuide?.recommendedFeature !== 'agent_teams_or_subagents'
+      ) {
+        console.error(`p2a_orchestrate claude team fixture should use provider-native guide: ${caseData.id}`);
+        console.error(JSON.stringify({ executeClaudePlan }, null, 2));
+        return { status: 1, checks };
+      }
+      result = runOrchestrate(['runner-guide', '--plan', executeClaudePlanPath, '--role', 'implementer']);
+      checks += 1;
+      if (
+        result.status !== 0
+        || !result.stdout.includes('claude_supervised_agent_teams_subagents')
+        || !result.stdout.includes('agent teams/subagents')
+        || !result.stdout.includes('startsProcess: false')
+        || !result.stdout.includes('Do not let P2A spawn')
+      ) {
+        console.error(`p2a_orchestrate runner-guide claude fixture check failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: failureStatus(result), checks };
+      }
+
       result = runOrchestrate([
         'plan',
         '--graph',
@@ -1301,6 +1442,22 @@ function validateIterationCurrentFixtureCases() {
         console.error(`p2a_orchestrate should allow Gemini as explicit read-only reviewer: ${caseData.id}`);
         writeResultOutput(result);
         console.error(JSON.stringify({ explicitGeminiReviewerPlan }, null, 2));
+        return { status: failureStatus(result), checks };
+      }
+      const explicitGeminiReviewerPlanPath = path.join(tempRoot, 'p2a-orchestrate-gemini-reviewer', 'orchestration', 'task-001.json');
+      mkdirSync(path.dirname(explicitGeminiReviewerPlanPath), { recursive: true });
+      writeFileSync(explicitGeminiReviewerPlanPath, `${JSON.stringify(explicitGeminiReviewerPlan, null, 2)}\n`, 'utf8');
+      result = runOrchestrate(['runner-guide', '--plan', explicitGeminiReviewerPlanPath, '--role', 'reviewer']);
+      checks += 1;
+      if (
+        result.status !== 0
+        || !result.stdout.includes('gemini_read_only_extensions_custom_commands')
+        || !result.stdout.includes('Gemini is read-only')
+        || !result.stdout.includes('without editing files')
+        || !result.stdout.includes('Do not use Gemini for write-required')
+      ) {
+        console.error(`p2a_orchestrate runner-guide gemini fixture check failed: ${caseData.id}`);
+        writeResultOutput(result);
         return { status: failureStatus(result), checks };
       }
 

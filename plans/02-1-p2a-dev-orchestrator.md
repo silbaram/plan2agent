@@ -1,6 +1,6 @@
 # 02-1 p2a-dev-orchestrator 개발 계획
 
-작성일: 2026-06-23 · 상태: MVP 1차 구현 완료, 오케스트레이션 runtime 1단계 완료, 감독형 scheduler 2단계 완료, provider capability/roleProfile/executionGuide 완료, GUI runtime/scheduler 표시 완료, O7 Hermes proposal queue/review/curation/patch draft/approval execution bridge 완료, provider-native team runner adapter 후속 · 상위 문서: `plans/02-development-team-ai-agent.md` · 연결 문서: `plans/01-product-roadmap.md`, `plans/03-p2a-gui-mvp.md`
+작성일: 2026-06-23 · 상태: MVP 1차 구현 완료, 오케스트레이션 runtime 1단계 완료, 감독형 scheduler 2단계 완료, provider capability/roleProfile/executionGuide 완료, GUI runtime/scheduler 표시 완료, O7 Hermes proposal queue/review/curation/patch draft/approval execution bridge 완료, O8 provider-native runner guide/doctor/live version probe 완료 · 상위 문서: `plans/02-development-team-ai-agent.md` · 연결 문서: `plans/01-product-roadmap.md`, `plans/03-p2a-gui-mvp.md`
 
 이 문서는 Team Big Five의 `team-lead` 역할을 Plan2Agent-native로 구현하기 위한 최소 개발 계획이다. 목표는 여러 agent를 무인으로 돌리는 것이 아니라, 기존 CLI-first 하네스 위에서 **어떤 task를 solo/team으로 처리할지 판단하고, 역할별 실행 계획, shared mental model, communication log, 검증 흐름을 파일로 남기는 것**이다. 최신 GUI는 task/run/artifact와 PTY 실행에 더해 orchestration mode/role/runtime/monitor gate를 읽고, 사람이 수행한 role 상태만 기록한다. 후속 개발은 generic multi-provider terminal coordinator가 아니라 provider별 공식 기능을 활용하는 provider-native team orchestration으로 진행한다.
 
@@ -14,6 +14,8 @@
 - `orchestration-runtime.schema.json`, `p2a_orchestrate init-runtime/record/runtime-status`, `p2a_execute start` runtime sidecar 자동 초기화.
 - `p2a_orchestrate next-role/role-prompt/mark-role` 감독형 scheduler. 다음 role과 prompt를 계산하고 사람이 수행한 결과만 기록한다.
 - provider capability matrix, roleProfile 자동 선택/override, role별 executionGuide, blocked next action hint.
+- `p2a_orchestrate runner-guide --plan|--runtime` provider-native supervised runner guide. Codex/Claude/Gemini별 공식 foreground 기능과 fallback 절차를 출력하지만 프로세스는 시작하지 않는다.
+- `p2a_orchestrate runner-doctor --root <dir>` provider asset doctor. 기본 모드는 대상 프로젝트의 P2A CLI/schema와 Codex/Claude/Gemini 자산 설치 상태를 파일 존재로 확인하고, `--live`는 provider `--version` probe만 실행한다. agent session/API/background loop는 시작하지 않는다.
 - monitor verdict 기반 `finish` 차단/blocked 변환.
 - `p2a-dev-orchestrator` read-only agent와 CLI mirror.
 - scaffold/handoff 복사 대상, fixture, CLI 문서 갱신.
@@ -22,7 +24,7 @@
 
 후속으로 남김:
 
-- provider-native team runner adapter. Claude는 native agent teams/subagents, Codex는 skills/custom agents/명시 subagent prompt, Gemini는 extensions/custom commands/GEMINI.md 기반 planning/review/monitor 보조로 둔다.
+- provider-native deep live capability 감지. Claude agent teams/subagents 같은 계정별 기능 사용 가능 여부는 현재 사람이 foreground에서 확인한다.
 - 실제 적용 patch 생성.
 - agent-generated orchestration plan.
 
@@ -44,7 +46,7 @@
 아직 후속으로 남긴 것:
 
 - agent-generated orchestration plan.
-- provider-native team runner adapter.
+- provider-native deep live capability 감지. provider별 설치 파일 상태와 CLI version probe는 `runner-doctor`로 확인한다.
 - 일반 multi-provider PTY session coordinator는 후순위로 둔다.
 - 자동 role/monitor 호출은 API 키 기반 별도 설계 전까지 제외한다.
 - 실패 시 retry 정책 자동화.
@@ -106,6 +108,8 @@ MVP에서 하지 않는 것:
    - `init-runtime`: run-level shared mental model과 communication log sidecar 생성.
    - `record`: 실행 중 status/question/decision/verification/monitor verdict 이벤트 기록.
    - `runtime-status`: runtime phase와 role/event 상태 표시.
+   - `runner-guide`: plan/runtime의 role별 provider-native supervised runner 절차 출력. 프로세스 실행 없음.
+   - `runner-doctor`: project root의 provider-native P2A asset 설치 상태 점검과 선택적 `--version` probe. agent session 실행 없음.
    - `next-role`: runtime 상태에서 다음 감독 대상 role 계산. 프로세스 실행 없음.
    - `role-prompt`: 사람이 공식 CLI/앱에 붙여넣을 role prompt 출력. 프로세스 실행 없음.
    - `mark-role`: 사람이 수행한 role 결과를 `active/complete/blocked/skipped` 상태로 기록.
@@ -217,10 +221,12 @@ MVP에서 하지 않는 것:
 - provider capability matrix를 추가한다.
 - `team` plan에 `providerStrategy`, role capability, 실행 표면을 기록한다.
 - role별 `executionGuide`에 공식 foreground 표면, 추천 provider 기능, fallback, supervision-required/starts-no-process 경계를 기록한다.
+- `runner-guide` 명령으로 role별 provider-native foreground step, availability check, fallback, 금지 자동화를 출력한다.
+- `runner-doctor` 명령으로 대상 project root의 P2A CLI/schema, provider별 agent/skill/command 자산 설치 상태를 read-only로 점검하고, `--live` 옵션으로 provider `--version`만 probe한다.
 - `owner`/`implementer`/`reviewer`/`monitor` role은 유지하고, 실제 전문성은 `profile`로 세분화한다. 구현 profile은 frontend/backend/fullstack/test/docs, 리뷰 profile은 qa/architecture/security, monitor는 manual_monitor로 둔다. 자동 선택 근거는 `profileSource/profileReason`에 기록하고, implementer/reviewer는 사람이 override할 수 있다.
-- Claude adapter는 Claude Code의 agent teams/subagents를 native team runner로 사용한다. agent teams가 experimental/off이면 subagent/foreground prompt로 폴백한다.
-- Codex adapter는 Codex skills, custom agents, 명시 subagent prompt를 사용한다. Codex는 subagent를 자동으로 spawn하지 않으므로 prompt에 명시 요청을 포함한다.
-- Gemini adapter는 Gemini CLI extensions, custom commands, `GEMINI.md` context를 사용하되 planning/review/monitor read-only 역할에 한정한다. 구현자 role에는 기본 배정하지 않는다.
+- Claude adapter guide는 Claude Code의 agent teams/subagents를 우선 안내하고, 사용 불가 시 supervised foreground prompt로 폴백하게 한다.
+- Codex adapter guide는 Codex skills, custom agents, 명시 subagent prompt를 안내한다. Codex는 subagent를 자동으로 spawn하지 않으므로 prompt에 명시 요청을 포함한다.
+- Gemini adapter guide는 Gemini CLI extensions, custom commands, `GEMINI.md` context를 planning/review/monitor read-only 역할에만 안내한다. 구현자 role에는 기본 배정하지 않는다.
 - mixed-provider implementation은 기본값에서 제외한다. provider를 섞는 경우는 사람이 명시한 review/monitor 보조 역할로만 허용한다.
 - GUI는 여러 터미널을 자동으로 여는 대신 provider 선택, role prompt, next-role, mark-role, monitor gate를 명확히 보여준다.
 - blocked next action은 자동 재실행이나 runtime unblock을 하지 않고, owner가 현재 run을 blocked로 닫은 뒤 후속 supervised run 또는 maintenance task를 열지 판단하게 한다.
@@ -232,8 +238,9 @@ MVP에서 하지 않는 것:
 - task 내용에 따라 role profile이 선택되고 role prompt에 profile별 지시와 선택 근거가 포함된다.
 - role prompt와 GUI가 provider execution guide를 보여준다.
 - Gemini는 write-required role에 배정되지 않는다.
-- Claude team plan은 native team 또는 subagent runner prompt를 제공한다.
-- Codex team plan은 custom agent/subagent 명시 실행 prompt를 제공한다.
+- Claude team plan은 native team/subagent runner guide 또는 foreground prompt fallback을 제공한다.
+- Codex team plan은 custom agent/subagent 명시 실행 guide와 role prompt를 제공한다.
+- runner-doctor가 scaffold/handoff 대상 프로젝트에서 provider별 필수 asset 누락을 잡고, 기본 모드는 provider CLI를 시작하지 않으며, `--live`는 `--version` probe만 실행함을 fixture가 검증한다.
 - fixture가 provider별 role assignment와 Gemini write 금지를 검증한다.
 - fixture가 executionGuide, startsProcess=false, blocked next action hint를 검증한다.
 - 문서가 single-provider 기본값, mixed-provider 후순위, 무인 실행 금지를 명시한다.
@@ -264,7 +271,9 @@ MVP 완료:
 
 - team mode에서 실패/retry/ask-user 판단이 일관되게 동작한다.
 - provider capability matrix가 role 배정을 안전하게 제한한다.
-- Claude/Codex/Gemini별 provider-native team runner adapter가 있다.
+- Claude/Codex/Gemini별 provider-native team runner guide가 있다.
+- provider별 asset 설치 상태 점검 doctor와 CLI version probe가 있다.
+- provider별 계정/CLI deep capability probing은 후속으로 남는다.
 - single-provider team이 기본값이고, mixed-provider implementation은 기본값에서 제외된다.
 
 ## 6. Hermes와의 관계

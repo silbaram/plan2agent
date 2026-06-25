@@ -4,14 +4,22 @@
 import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
+import { spawnSync } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { loadJson, validateOrchestrationPlanData, validateOrchestrationRuntimeData, validateTaskGraphData, ValidationError } from './validate_artifacts.mjs';
 import { resolveIterationState } from './p2a_iteration_state.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const ROOT = path.resolve(path.dirname(__filename), '..');
-const COMMANDS = new Set(['plan', 'show', 'validate', 'handoff', 'init-runtime', 'record', 'runtime-status', 'next-role', 'role-prompt', 'mark-role']);
+const COMMANDS = new Set(['plan', 'show', 'validate', 'handoff', 'runner-guide', 'runner-doctor', 'init-runtime', 'record', 'runtime-status', 'next-role', 'role-prompt', 'mark-role']);
 const AGENT_TOOLS = new Set(['codex', 'claude', 'gemini', 'manual']);
+const RUNNER_DOCTOR_PROVIDERS = new Set(['all', 'codex', 'claude', 'gemini']);
+const RUNNER_DOCTOR_COMMANDS = Object.freeze({
+  codex: 'codex',
+  claude: 'claude',
+  gemini: 'gemini',
+});
+const RUNNER_DOCTOR_VERSION_ARGS = ['--version'];
 const RUNTIME_EVENT_TYPES = new Set(['handoff', 'status', 'question', 'answer', 'ack', 'concern', 'decision', 'blocker', 'verification', 'monitor_verdict', 'owner_note']);
 const RUNTIME_ROLE_STATUSES = new Set(['pending', 'active', 'blocked', 'complete', 'skipped']);
 const RUNTIME_PHASES = new Set(['initialized', 'running', 'blocked', 'ready_for_monitor', 'ready_to_finish', 'closed']);
@@ -138,6 +146,11 @@ const PROVIDER_CAPABILITIES = Object.freeze({
     ],
   },
 });
+const COMMON_PROHIBITED_AUTOMATION = Object.freeze([
+  'Do not let P2A spawn the provider CLI/app or run hidden background loops.',
+  'Do not use browser automation, unofficial APIs, token reuse, account rotation, or rate-limit bypass.',
+  'Do not edit Plan2Agent task graph, run log, or runtime files by hand.',
+]);
 
 function usage() {
   return [
@@ -146,6 +159,8 @@ function usage() {
     '  node scripts/p2a_orchestrate.mjs show --plan <path>',
     '  node scripts/p2a_orchestrate.mjs validate --plan <path>',
     '  node scripts/p2a_orchestrate.mjs handoff --plan <path>',
+    '  node scripts/p2a_orchestrate.mjs runner-guide (--plan <path>|--runtime <path>) [--role <role-id>] [--json]',
+    '  node scripts/p2a_orchestrate.mjs runner-doctor [--root <dir>] [--provider all|codex|claude|gemini] [--live] [--json]',
     '  node scripts/p2a_orchestrate.mjs init-runtime --plan <path> --run-id <run-id> [--output <path>] [--json]',
     '  node scripts/p2a_orchestrate.mjs record --runtime <path> --role <role-id> --type <type> --summary <text> [options]',
     '  node scripts/p2a_orchestrate.mjs runtime-status --runtime <path> [--json]',
@@ -158,6 +173,8 @@ function usage() {
     '  show                 Print a compact plan summary.',
     '  validate             Validate an orchestration plan JSON file.',
     '  handoff              Print the owner start command and role prompts for the plan.',
+    '  runner-guide         Print provider-native supervised runner steps. Does not start any agent or CLI process.',
+    '  runner-doctor        Check provider-native P2A assets and optional CLI version probes under a project root.',
     '  init-runtime         Create the run-level shared mental model and communication log sidecar.',
     '  record               Append one runtime communication event.',
     '  runtime-status       Print the runtime phase, role status, and latest communication event.',
@@ -179,6 +196,9 @@ function usage() {
     '  --reviewer-profile <profile>    Override reviewer specialization profile.',
     '  --output <path>          Write plan JSON to a file. Without this, JSON is printed to stdout.',
     '  --json                   With --output, also print the JSON payload.',
+    '  --root <dir>             Project root for runner-doctor. Default: current directory.',
+    '  --provider <provider>    runner-doctor provider filter: all, codex, claude, or gemini.',
+    '  --live                   runner-doctor also runs provider --version probes. No agent session is opened.',
     '',
     'Runtime options:',
     '  --run-id <run-id>         Run id for init-runtime.',
@@ -202,6 +222,7 @@ function parseArgs(argv) {
   const command = argv[0];
   if (!command || command === '--help' || command === '-h') return { help: true };
   if (!COMMANDS.has(command)) throw new Error(`unknown command: ${command}\n\n${usage()}`);
+  const providedOptions = new Set();
 
   const args = {
     command,
@@ -214,6 +235,9 @@ function parseArgs(argv) {
     reviewerTool: null,
     implementerProfile: null,
     reviewerProfile: null,
+    root: '.',
+    provider: 'all',
+    live: false,
     output: null,
     plan: null,
     runtime: null,
@@ -239,10 +263,25 @@ function parseArgs(argv) {
     else if (arg === '--spec') args.spec = requiredValue(argv, ++index, '--spec');
     else if (arg === '--maintenance') args.maintenance = true;
     else if (arg === '--task') args.taskId = requiredValue(argv, ++index, '--task');
-    else if (arg === '--agent-tool') args.agentTool = parseAgentTool(requiredValue(argv, ++index, '--agent-tool'), '--agent-tool');
-    else if (arg === '--reviewer-tool') args.reviewerTool = parseAgentTool(requiredValue(argv, ++index, '--reviewer-tool'), '--reviewer-tool');
-    else if (arg === '--implementer-profile') args.implementerProfile = parseRoleProfile(requiredValue(argv, ++index, '--implementer-profile'), IMPLEMENTER_PROFILES, '--implementer-profile');
-    else if (arg === '--reviewer-profile') args.reviewerProfile = parseRoleProfile(requiredValue(argv, ++index, '--reviewer-profile'), REVIEWER_PROFILES, '--reviewer-profile');
+    else if (arg === '--agent-tool') {
+      providedOptions.add('--agent-tool');
+      args.agentTool = parseAgentTool(requiredValue(argv, ++index, '--agent-tool'), '--agent-tool');
+    } else if (arg === '--reviewer-tool') {
+      providedOptions.add('--reviewer-tool');
+      args.reviewerTool = parseAgentTool(requiredValue(argv, ++index, '--reviewer-tool'), '--reviewer-tool');
+    } else if (arg === '--implementer-profile') {
+      providedOptions.add('--implementer-profile');
+      args.implementerProfile = parseRoleProfile(requiredValue(argv, ++index, '--implementer-profile'), IMPLEMENTER_PROFILES, '--implementer-profile');
+    } else if (arg === '--reviewer-profile') {
+      providedOptions.add('--reviewer-profile');
+      args.reviewerProfile = parseRoleProfile(requiredValue(argv, ++index, '--reviewer-profile'), REVIEWER_PROFILES, '--reviewer-profile');
+    } else if (arg === '--root') {
+      providedOptions.add('--root');
+      args.root = requiredValue(argv, ++index, '--root');
+    } else if (arg === '--provider') {
+      providedOptions.add('--provider');
+      args.provider = parseRunnerDoctorProvider(requiredValue(argv, ++index, '--provider'));
+    } else if (arg === '--live') args.live = true;
     else if (arg === '--output') args.output = requiredValue(argv, ++index, '--output');
     else if (arg === '--plan') args.plan = requiredValue(argv, ++index, '--plan');
     else if (arg === '--runtime') args.runtime = requiredValue(argv, ++index, '--runtime');
@@ -262,6 +301,7 @@ function parseArgs(argv) {
   }
 
   if (args.help) return args;
+  if (args.command !== 'plan') rejectPlanOnlyOptions(args.command, providedOptions);
   if (args.command === 'plan') {
     const sourceCount = [args.artifacts, args.graph].filter(Boolean).length;
     if (sourceCount > 1) throw new Error('--artifacts and --graph cannot be used together');
@@ -271,19 +311,29 @@ function parseArgs(argv) {
     }
     if (args.spec && args.artifacts) throw new Error('--spec is only supported with --graph; --artifacts uses the active iteration spec');
     if (args.maintenance && !args.artifacts) throw new Error('--maintenance is only supported with --artifacts');
-    if (args.plan || args.runtime || args.runId || args.roleId || args.eventType || args.summary || args.detail || args.verdict || args.linkedRoleId || args.roleStatus || args.phase || args.requiresOwnerAction) {
+    if (args.plan || args.runtime || args.runId || args.roleId || args.eventType || args.summary || args.detail || args.verdict || args.linkedRoleId || args.roleStatus || args.phase || args.requiresOwnerAction || args.live || hasRunnerDoctorOptions(providedOptions)) {
       throw new Error('runtime/show options are not supported with plan');
     }
   } else if (['show', 'validate', 'handoff'].includes(args.command)) {
     if (!args.plan) throw new Error(`--plan is required for ${args.command}`);
-    if (args.artifacts || args.graph || args.spec || args.maintenance || args.taskId || args.implementerProfile || args.reviewerProfile || args.output || args.runtime || args.runId || args.roleId || args.eventType || args.summary || args.detail || args.verdict || args.linkedRoleId || args.roleStatus || args.phase || args.requiresOwnerAction) {
+    if (args.artifacts || args.graph || args.spec || args.maintenance || args.taskId || args.implementerProfile || args.reviewerProfile || args.output || args.runtime || args.runId || args.roleId || args.eventType || args.summary || args.detail || args.verdict || args.linkedRoleId || args.roleStatus || args.phase || args.requiresOwnerAction || args.live || hasRunnerDoctorOptions(providedOptions)) {
       throw new Error(`${args.command} only supports --plan and --json`);
+    }
+  } else if (args.command === 'runner-guide') {
+    const sourceCount = [args.plan, args.runtime].filter(Boolean).length;
+    if (sourceCount !== 1) throw new Error('runner-guide requires exactly one of --plan or --runtime');
+    if (args.artifacts || args.graph || args.spec || args.maintenance || args.taskId || args.output || args.live || hasRunnerDoctorOptions(providedOptions) || args.runId || args.eventType || args.summary || args.detail || args.verdict || args.linkedRoleId || args.roleStatus || args.phase || args.requiresOwnerAction) {
+      throw new Error('runner-guide only supports --plan or --runtime, optional --role, and --json');
+    }
+  } else if (args.command === 'runner-doctor') {
+    if (args.artifacts || args.graph || args.spec || args.maintenance || args.taskId || args.output || args.plan || args.runtime || args.runId || args.roleId || args.eventType || args.summary || args.detail || args.verdict || args.linkedRoleId || args.roleStatus || args.phase || args.requiresOwnerAction) {
+      throw new Error('runner-doctor only supports --root, --provider, --live, and --json');
     }
   } else if (args.command === 'init-runtime') {
     if (!args.plan) throw new Error('--plan is required for init-runtime');
     if (!args.runId) throw new Error('--run-id is required for init-runtime');
     assertSafeRunId(args.runId);
-    if (args.artifacts || args.graph || args.spec || args.maintenance || args.taskId || args.implementerProfile || args.reviewerProfile || args.runtime || args.roleId || args.eventType || args.summary || args.detail || args.verdict || args.linkedRoleId || args.roleStatus || args.phase || args.requiresOwnerAction) {
+    if (args.artifacts || args.graph || args.spec || args.maintenance || args.taskId || args.implementerProfile || args.reviewerProfile || args.runtime || args.roleId || args.eventType || args.summary || args.detail || args.verdict || args.linkedRoleId || args.roleStatus || args.phase || args.requiresOwnerAction || args.live || hasRunnerDoctorOptions(providedOptions)) {
       throw new Error('init-runtime only supports --plan, --run-id, --output, and --json');
     }
   } else if (args.command === 'record') {
@@ -291,23 +341,23 @@ function parseArgs(argv) {
     if (!args.roleId) throw new Error('--role is required for record');
     if (!args.eventType) throw new Error('--type is required for record');
     if (!args.summary) throw new Error('--summary is required for record');
-    if (args.artifacts || args.graph || args.spec || args.maintenance || args.taskId || args.implementerProfile || args.reviewerProfile || args.output || args.plan || args.runId || args.verdict) {
+    if (args.artifacts || args.graph || args.spec || args.maintenance || args.taskId || args.implementerProfile || args.reviewerProfile || args.output || args.plan || args.runId || args.verdict || args.live || hasRunnerDoctorOptions(providedOptions)) {
       throw new Error('record only supports --runtime, --role, --type, --summary, --detail, --linked-role, --role-status, --phase, --requires-owner-action, and --json');
     }
   } else if (args.command === 'runtime-status') {
     if (!args.runtime) throw new Error('--runtime is required for runtime-status');
-    if (args.artifacts || args.graph || args.spec || args.maintenance || args.taskId || args.implementerProfile || args.reviewerProfile || args.output || args.plan || args.runId || args.roleId || args.eventType || args.summary || args.detail || args.verdict || args.linkedRoleId || args.roleStatus || args.phase || args.requiresOwnerAction) {
+    if (args.artifacts || args.graph || args.spec || args.maintenance || args.taskId || args.implementerProfile || args.reviewerProfile || args.output || args.plan || args.runId || args.roleId || args.eventType || args.summary || args.detail || args.verdict || args.linkedRoleId || args.roleStatus || args.phase || args.requiresOwnerAction || args.live || hasRunnerDoctorOptions(providedOptions)) {
       throw new Error('runtime-status only supports --runtime and --json');
     }
   } else if (args.command === 'next-role') {
     if (!args.runtime) throw new Error('--runtime is required for next-role');
-    if (args.artifacts || args.graph || args.spec || args.maintenance || args.taskId || args.implementerProfile || args.reviewerProfile || args.output || args.plan || args.runId || args.roleId || args.eventType || args.summary || args.detail || args.verdict || args.linkedRoleId || args.roleStatus || args.phase || args.requiresOwnerAction) {
+    if (args.artifacts || args.graph || args.spec || args.maintenance || args.taskId || args.implementerProfile || args.reviewerProfile || args.output || args.plan || args.runId || args.roleId || args.eventType || args.summary || args.detail || args.verdict || args.linkedRoleId || args.roleStatus || args.phase || args.requiresOwnerAction || args.live || hasRunnerDoctorOptions(providedOptions)) {
       throw new Error('next-role only supports --runtime and --json');
     }
   } else if (args.command === 'role-prompt') {
     if (!args.runtime) throw new Error('--runtime is required for role-prompt');
     if (!args.roleId) throw new Error('--role is required for role-prompt');
-    if (args.artifacts || args.graph || args.spec || args.maintenance || args.taskId || args.implementerProfile || args.reviewerProfile || args.output || args.plan || args.runId || args.eventType || args.summary || args.detail || args.verdict || args.linkedRoleId || args.roleStatus || args.phase || args.requiresOwnerAction) {
+    if (args.artifacts || args.graph || args.spec || args.maintenance || args.taskId || args.implementerProfile || args.reviewerProfile || args.output || args.plan || args.runId || args.eventType || args.summary || args.detail || args.verdict || args.linkedRoleId || args.roleStatus || args.phase || args.requiresOwnerAction || args.live || hasRunnerDoctorOptions(providedOptions)) {
       throw new Error('role-prompt only supports --runtime, --role, and --json');
     }
   } else if (args.command === 'mark-role') {
@@ -315,15 +365,32 @@ function parseArgs(argv) {
     if (!args.roleId) throw new Error('--role is required for mark-role');
     if (!args.roleStatus) throw new Error('--role-status is required for mark-role');
     if (args.verdict !== null && !args.verdict) throw new Error('--verdict requires a non-empty value');
-    if (args.artifacts || args.graph || args.spec || args.maintenance || args.taskId || args.implementerProfile || args.reviewerProfile || args.output || args.plan || args.runId || args.eventType || args.linkedRoleId) {
+    if (args.artifacts || args.graph || args.spec || args.maintenance || args.taskId || args.implementerProfile || args.reviewerProfile || args.output || args.plan || args.runId || args.eventType || args.linkedRoleId || args.live || hasRunnerDoctorOptions(providedOptions)) {
       throw new Error('mark-role only supports --runtime, --role, --role-status, --summary, --detail, --verdict, --phase, --requires-owner-action, and --json');
     }
   }
   return args;
 }
 
+function hasRunnerDoctorOptions(providedOptions) {
+  return providedOptions.has('--root') || providedOptions.has('--provider');
+}
+
+function rejectPlanOnlyOptions(command, providedOptions) {
+  const invalidOptions = ['--agent-tool', '--reviewer-tool', '--implementer-profile', '--reviewer-profile']
+    .filter((option) => providedOptions.has(option));
+  if (invalidOptions.length) {
+    throw new Error(`${invalidOptions.join(', ')} ${invalidOptions.length === 1 ? 'is' : 'are'} only supported with plan; ${command} reads provider/profile assignments from the existing plan or runtime`);
+  }
+}
+
 function parseAgentTool(value, optionName) {
   if (!AGENT_TOOLS.has(value)) throw new Error(`${optionName} must be one of ${[...AGENT_TOOLS].join(', ')}`);
+  return value;
+}
+
+function parseRunnerDoctorProvider(value) {
+  if (!RUNNER_DOCTOR_PROVIDERS.has(value)) throw new Error(`--provider must be one of ${[...RUNNER_DOCTOR_PROVIDERS].join(', ')}`);
   return value;
 }
 
@@ -1386,6 +1453,462 @@ function rolePromptPayload(runtime, role) {
   };
 }
 
+function providerRunnerAdapter(role) {
+  const capability = PROVIDER_CAPABILITIES[role.agentTool] ?? PROVIDER_CAPABILITIES.manual;
+  const profileLabel = role.profile.split('_').join(' ');
+  if (role.agentTool === 'codex') {
+    return {
+      adapterName: 'codex_supervised_skills_custom_agents',
+      provider: 'codex',
+      surface: capability.executionSurface,
+      officialFeatures: [...capability.officialFeatures],
+      availabilityChecks: [
+        'Confirm Codex CLI/app is opened manually in the target workspace.',
+        `Confirm a suitable skill/custom agent exists for ${profileLabel}, or use the plain role prompt.`,
+        'Confirm the owner can see the foreground session before any write action.',
+      ],
+      foregroundSteps: [
+        'Open Codex manually in the project workspace.',
+        `Paste the supervised role prompt and explicitly request the ${profileLabel} specialist behavior.`,
+        'If role separation is needed, ask Codex to use the relevant skill/custom agent or subagent explicitly in the prompt.',
+        'Keep the owner supervising the foreground session and capture changed files plus verification evidence.',
+        `Record the observed result with mark-role for ${role.roleId}.`,
+      ],
+      fallbackSteps: [
+        'Use the same supervised role prompt without a custom agent or subagent.',
+        'If the session cannot continue safely, record the role as blocked and let the owner close or open a follow-up run.',
+      ],
+      prohibitedAutomation: [...COMMON_PROHIBITED_AUTOMATION],
+    };
+  }
+  if (role.agentTool === 'claude') {
+    return {
+      adapterName: 'claude_supervised_agent_teams_subagents',
+      provider: 'claude',
+      surface: capability.executionSurface,
+      officialFeatures: [...capability.officialFeatures],
+      availabilityChecks: [
+        'Confirm Claude Code is opened manually in the target workspace.',
+        'Confirm agent teams/subagents are enabled for the account and project before using them.',
+        'Confirm the owner can supervise the foreground session and approve tool use.',
+      ],
+      foregroundSteps: [
+        'Open Claude Code manually in the project workspace.',
+        `Use native agent teams/subagents for ${profileLabel} when they are available.`,
+        'If agent teams are disabled or experimental access is unavailable, paste the supervised role prompt as a normal foreground task.',
+        'Keep implementation and review inside the assigned role scope.',
+        `Record the observed result with mark-role for ${role.roleId}.`,
+      ],
+      fallbackSteps: [
+        'Use a single supervised Claude Code role prompt.',
+        'If team/subagent behavior is unavailable, do not emulate it by starting hidden background sessions.',
+      ],
+      prohibitedAutomation: [...COMMON_PROHIBITED_AUTOMATION],
+    };
+  }
+  if (role.agentTool === 'gemini') {
+    return {
+      adapterName: 'gemini_read_only_extensions_custom_commands',
+      provider: 'gemini',
+      surface: capability.executionSurface,
+      officialFeatures: [...capability.officialFeatures],
+      availabilityChecks: [
+        'Confirm Gemini CLI is opened manually in the target workspace.',
+        'Confirm the role is review or monitor only; Gemini is read-only in P2A orchestration.',
+        'Confirm extensions/custom commands/GEMINI.md context are available if the project uses them.',
+      ],
+      foregroundSteps: [
+        'Open Gemini CLI manually in the project workspace.',
+        `Paste the supervised read-only prompt for ${profileLabel}.`,
+        'Use extensions, custom commands, GEMINI.md context, or MCP tools only for planning, review, or monitor support.',
+        'Return findings to the owner without editing files.',
+        `Record the observed result with mark-role for ${role.roleId}.`,
+      ],
+      fallbackSteps: [
+        'Use the pasted read-only prompt without extensions or custom commands.',
+        'If review cannot be completed read-only, record the role as blocked and assign a write-capable provider in a follow-up plan.',
+      ],
+      prohibitedAutomation: [
+        ...COMMON_PROHIBITED_AUTOMATION,
+        'Do not use Gemini for write-required implementation in this P2A mode.',
+      ],
+    };
+  }
+  return {
+    adapterName: 'manual_owner_foreground_action',
+    provider: 'manual',
+    surface: capability.executionSurface,
+    officialFeatures: [...capability.officialFeatures],
+    availabilityChecks: [
+      'Confirm the owner is ready to perform or record this role directly.',
+      'Confirm run lifecycle and monitor gate decisions are visible before state changes.',
+    ],
+    foregroundSteps: [
+      'Review the plan/runtime state in the foreground workspace.',
+      `Perform or supervise the ${role.roleId} role directly.`,
+      'Record the observed state with p2a_orchestrate record or mark-role.',
+      'Close the run lifecycle only after verification and monitor policy are satisfied.',
+    ],
+    fallbackSteps: [
+      'If the owner cannot decide, record an owner_note or blocker and keep the runtime supervised.',
+    ],
+    prohibitedAutomation: [...COMMON_PROHIBITED_AUTOMATION],
+  };
+}
+
+function selectGuideRoles(roles, roleId, sourceLabel) {
+  if (!roleId) return roles;
+  const role = roles.find((item) => item.roleId === roleId);
+  if (!role) throw new Error(`unknown ${sourceLabel} role: ${roleId}`);
+  return [role];
+}
+
+function runnerGuideRole(role, actionCommand) {
+  return {
+    roleId: role.roleId,
+    role: role.role,
+    profile: role.profile,
+    profileSource: role.profileSource,
+    profileReason: role.profileReason,
+    agentTool: role.agentTool,
+    status: role.status ?? null,
+    executionGuide: role.executionGuide,
+    actionCommand,
+    runnerAdapter: providerRunnerAdapter(role),
+  };
+}
+
+function runnerGuideFromPlan(plan, planPath, roleId) {
+  const sourcePath = displayPath(path.resolve(planPath));
+  const roles = selectGuideRoles(plan.roles, roleId, 'plan');
+  return {
+    schema_version: 'p2a.provider_runner_guide.v1',
+    source: {
+      type: 'plan',
+      path: sourcePath,
+      planId: plan.planId,
+      runtimeId: null,
+      runId: null,
+    },
+    taskId: plan.taskId,
+    taskTitle: plan.taskTitle,
+    mode: plan.mode,
+    providerStrategy: plan.providerStrategy,
+    supervisedOnly: true,
+    startsProcess: false,
+    safetyBoundary: 'This guide prints provider-native supervised steps only. P2A does not start provider CLIs, browser automation, background loops, or unofficial API sessions.',
+    roles: roles.map((role) => runnerGuideRole(
+      role,
+      commandLine('p2a_orchestrate.mjs', ['handoff', '--plan', sourcePath]),
+    )),
+  };
+}
+
+function runnerGuideFromRuntime(runtime, runtimePath, roleId) {
+  const sourcePath = displayPath(path.resolve(runtimePath));
+  const roles = selectGuideRoles(runtime.sharedMentalModel.roleAssignments, roleId, 'runtime');
+  return {
+    schema_version: 'p2a.provider_runner_guide.v1',
+    source: {
+      type: 'runtime',
+      path: sourcePath,
+      planId: runtime.planId,
+      runtimeId: runtime.runtimeId,
+      runId: runtime.runId,
+    },
+    taskId: runtime.taskId,
+    taskTitle: runtime.taskTitle,
+    mode: runtime.mode,
+    providerStrategy: null,
+    supervisedOnly: true,
+    startsProcess: false,
+    safetyBoundary: 'This guide prints provider-native supervised steps only. P2A does not start provider CLIs, browser automation, background loops, or unofficial API sessions.',
+    roles: roles.map((role) => runnerGuideRole(
+      role,
+      commandLine('p2a_orchestrate.mjs', ['role-prompt', '--runtime', sourcePath, '--role', role.roleId]),
+    )),
+  };
+}
+
+function printRunnerGuide(payload) {
+  console.log('Plan2Agent provider-native runner guide');
+  console.log(`- source: ${payload.source.type} ${payload.source.path}`);
+  console.log(`- task: ${payload.taskId} - ${payload.taskTitle}`);
+  console.log(`- mode: ${payload.mode}`);
+  if (payload.providerStrategy) {
+    console.log(`- providerStrategy: ${payload.providerStrategy.mode} (${payload.providerStrategy.primaryProvider})`);
+  }
+  console.log(`- supervisedOnly: ${payload.supervisedOnly}`);
+  console.log(`- startsProcess: ${payload.startsProcess}`);
+  console.log(`- safety: ${payload.safetyBoundary}`);
+  console.log('');
+  for (const role of payload.roles) {
+    console.log(`[${role.roleId}]`);
+    console.log(`provider: ${role.agentTool}`);
+    console.log(`profile: ${role.profile} (${role.profileSource})`);
+    console.log(`adapter: ${role.runnerAdapter.adapterName}`);
+    console.log(`surface: ${role.runnerAdapter.surface}`);
+    console.log(`officialFeatures: ${role.runnerAdapter.officialFeatures.join(', ')}`);
+    console.log(`actionCommand: ${role.actionCommand}`);
+    console.log('availabilityChecks:');
+    role.runnerAdapter.availabilityChecks.forEach((step) => console.log(`- ${step}`));
+    console.log('foregroundSteps:');
+    role.runnerAdapter.foregroundSteps.forEach((step, index) => console.log(`${index + 1}. ${step}`));
+    console.log('fallbackSteps:');
+    role.runnerAdapter.fallbackSteps.forEach((step) => console.log(`- ${step}`));
+    console.log('prohibitedAutomation:');
+    role.runnerAdapter.prohibitedAutomation.forEach((step) => console.log(`- ${step}`));
+    console.log('');
+  }
+}
+
+function assertDirectory(dirPath, label) {
+  if (!existsSync(dirPath)) throw new Error(`${label} is missing: ${dirPath}`);
+  if (!lstatSync(dirPath).isDirectory()) throw new Error(`${label} must be a directory: ${dirPath}`);
+}
+
+function runnerDoctorCommonChecks() {
+  return [
+    { id: 'orchestrator_cli', label: 'p2a_orchestrate CLI', path: path.join('scripts', 'p2a_orchestrate.mjs'), required: true },
+    { id: 'execute_cli', label: 'p2a_execute CLI', path: path.join('scripts', 'p2a_execute.mjs'), required: true },
+    { id: 'orchestration_plan_schema', label: 'orchestration plan schema', path: path.join('schemas', 'orchestration-plan.schema.json'), required: true },
+    { id: 'orchestration_runtime_schema', label: 'orchestration runtime schema', path: path.join('schemas', 'orchestration-runtime.schema.json'), required: true },
+    { id: 'manifest', label: 'Plan2Agent install manifest', path: path.join('.plan2agent', 'manifest.json'), required: false },
+  ];
+}
+
+function runnerDoctorProviderChecks(provider) {
+  if (provider === 'codex') {
+    return [
+      { id: 'codex_implementer_agent', label: 'Codex implementer custom agent', path: path.join('.codex', 'agents', 'p2a-implementer.toml'), required: true },
+      { id: 'codex_monitor_agent', label: 'Codex performance monitor custom agent', path: path.join('.codex', 'agents', 'p2a-performance-monitor.toml'), required: true },
+      { id: 'codex_orchestrator_agent', label: 'Codex dev orchestrator custom agent', path: path.join('.codex', 'agents', 'p2a-dev-orchestrator.toml'), required: true },
+      { id: 'common_dev_execution_skill', label: 'P2A dev execution skill', path: path.join('.agents', 'skills', 'p2a-dev-execution', 'SKILL.md'), required: true },
+      { id: 'team_bigfive_skill', label: 'Team Big Five kickoff skill', path: path.join('.agents', 'skills', 'team-bigfive-kickoff', 'SKILL.md'), required: false },
+      { id: 'team_bigfive_codex_agent', label: 'Team Big Five Codex coordinator', path: path.join('.codex', 'agents', 'team-bigfive-coordinator.toml'), required: false },
+    ];
+  }
+  if (provider === 'claude') {
+    return [
+      { id: 'claude_implementer_agent', label: 'Claude implementer subagent', path: path.join('.claude', 'agents', 'p2a-implementer.md'), required: true },
+      { id: 'claude_monitor_agent', label: 'Claude performance monitor subagent', path: path.join('.claude', 'agents', 'p2a-performance-monitor.md'), required: true },
+      { id: 'claude_orchestrator_agent', label: 'Claude dev orchestrator subagent', path: path.join('.claude', 'agents', 'p2a-dev-orchestrator.md'), required: true },
+      { id: 'claude_dev_execution_skill', label: 'Claude dev execution skill', path: path.join('.claude', 'skills', 'p2a-dev-execution', 'SKILL.md'), required: true },
+      { id: 'claude_workspace_hook', label: 'Claude workspace confinement hook', path: path.join('.claude', 'hooks', 'p2a-confine-workspace.mjs'), required: true },
+      { id: 'claude_project_settings', label: 'Claude project settings', path: path.join('.claude', 'settings.json'), required: false },
+      { id: 'team_bigfive_claude_skill', label: 'Team Big Five Claude kickoff skill', path: path.join('.claude', 'skills', 'team-bigfive-kickoff', 'SKILL.md'), required: false },
+      { id: 'team_bigfive_claude_agent', label: 'Team Big Five Claude coordinator', path: path.join('.claude', 'agents', 'team-bigfive-coordinator.md'), required: false },
+    ];
+  }
+  if (provider === 'gemini') {
+    return [
+      { id: 'gemini_orchestrator_agent', label: 'Gemini dev orchestrator subagent', path: path.join('.gemini', 'agents', 'p2a-dev-orchestrator.md'), required: true },
+      { id: 'gemini_monitor_agent', label: 'Gemini performance monitor subagent', path: path.join('.gemini', 'agents', 'p2a-performance-monitor.md'), required: true },
+      { id: 'gemini_review_agent', label: 'Gemini quality reviewer subagent', path: path.join('.gemini', 'agents', 'p2a-quality-reviewer.md'), required: true },
+      { id: 'gemini_dev_execution_command', label: 'Gemini dev execution command', path: path.join('.gemini', 'commands', 'p2a', 'dev-execution.toml'), required: true },
+      { id: 'gemini_context', label: 'GEMINI.md project context', path: 'GEMINI.md', required: false },
+      { id: 'team_bigfive_gemini_command', label: 'Team Big Five Gemini command', path: path.join('.gemini', 'commands', 'p2a', 'team-bigfive.toml'), required: false },
+      { id: 'team_bigfive_gemini_agent', label: 'Team Big Five Gemini coordinator', path: path.join('.gemini', 'agents', 'team-bigfive-coordinator.md'), required: false },
+    ];
+  }
+  throw new Error(`unsupported runner-doctor provider: ${provider}`);
+}
+
+function doctorCheck(rootPath, definition) {
+  const absolutePath = path.resolve(rootPath, definition.path);
+  const present = existsSync(absolutePath);
+  const kind = present
+    ? (lstatSync(absolutePath).isDirectory() ? 'directory' : (lstatSync(absolutePath).isFile() ? 'file' : 'other'))
+    : 'missing';
+  return {
+    id: definition.id,
+    label: definition.label,
+    path: normalizePath(definition.path),
+    required: definition.required,
+    present,
+    kind,
+  };
+}
+
+function readOptionalJson(rootPath, relativePath) {
+  const filePath = path.resolve(rootPath, relativePath);
+  if (!existsSync(filePath) || !lstatSync(filePath).isFile()) return null;
+  return JSON.parse(readFileSync(filePath, 'utf8'));
+}
+
+function checkSummary(checks) {
+  const requiredChecks = checks.filter((check) => check.required);
+  const optionalChecks = checks.filter((check) => !check.required);
+  return {
+    requiredPresent: requiredChecks.filter((check) => check.present).length,
+    requiredTotal: requiredChecks.length,
+    optionalPresent: optionalChecks.filter((check) => check.present).length,
+    optionalTotal: optionalChecks.length,
+    missingRequired: requiredChecks.filter((check) => !check.present).map((check) => check.path),
+    missingOptional: optionalChecks.filter((check) => !check.present).map((check) => check.path),
+  };
+}
+
+function liveVersionProbe(provider, rootPath) {
+  const command = RUNNER_DOCTOR_COMMANDS[provider];
+  const startedAt = new Date().toISOString();
+  const result = spawnSync(command, RUNNER_DOCTOR_VERSION_ARGS, {
+    cwd: rootPath,
+    encoding: 'utf8',
+    shell: false,
+    timeout: 5000,
+  });
+  const output = `${result.stdout ?? ''}${result.stderr ?? ''}`.trim();
+  const firstLine = output.split(/\r?\n/).find(Boolean) ?? null;
+  let status = 'available';
+  if (result.error?.code === 'ENOENT') status = 'missing';
+  else if (result.error?.code === 'ETIMEDOUT' || result.signal === 'SIGTERM') status = 'timeout';
+  else if (result.error) status = 'error';
+  else if ((result.status ?? 1) !== 0) status = 'error';
+  return {
+    id: `${provider}_version_probe`,
+    provider,
+    command,
+    args: [...RUNNER_DOCTOR_VERSION_ARGS],
+    status,
+    exitCode: result.status ?? null,
+    signal: result.signal ?? null,
+    errorCode: result.error?.code ?? null,
+    output: firstLine,
+    startedAt,
+    startsAgentSession: false,
+  };
+}
+
+function providerLiveStatus(liveChecks) {
+  if (!liveChecks.length) return 'not_checked';
+  const status = liveChecks[0].status;
+  if (status === 'available') return 'available';
+  if (status === 'missing') return 'missing';
+  if (status === 'timeout') return 'timeout';
+  return 'error';
+}
+
+function providerDoctorResult(rootPath, provider, commonChecks, manifestTargets, live) {
+  const checks = runnerDoctorProviderChecks(provider).map((definition) => doctorCheck(rootPath, definition));
+  const requiredSummary = checkSummary([...commonChecks, ...checks]);
+  const providerSummary = checkSummary(checks);
+  const summary = {
+    requiredPresent: requiredSummary.requiredPresent,
+    requiredTotal: requiredSummary.requiredTotal,
+    optionalPresent: providerSummary.optionalPresent,
+    optionalTotal: providerSummary.optionalTotal,
+    missingRequired: requiredSummary.missingRequired,
+    missingOptional: providerSummary.missingOptional,
+  };
+  const manifestTargeted = manifestTargets ? manifestTargets.includes(provider) : null;
+  const liveChecks = live ? [liveVersionProbe(provider, rootPath)] : [];
+  const liveStatus = providerLiveStatus(liveChecks);
+  const status = summary.missingRequired.length
+    ? 'missing'
+    : manifestTargeted === false
+      ? 'not_targeted'
+      : 'ready';
+  const nextActions = [];
+  if (summary.missingRequired.length) {
+    nextActions.push(`Install or refresh P2A ${provider} assets; missing required files: ${summary.missingRequired.join(', ')}`);
+  }
+  if (manifestTargeted === false) {
+    nextActions.push(`Manifest aiToolTargets does not include ${provider}; rerun scaffold/handoff with --tools ${provider} or all if this provider should be used.`);
+  }
+  if (summary.missingOptional.length) {
+    nextActions.push(`Optional provider enhancements are not installed: ${summary.missingOptional.join(', ')}`);
+  }
+  if (liveStatus === 'missing') {
+    nextActions.push(`${provider} command was not found on PATH; install the official CLI/app or open it manually outside P2A.`);
+  } else if (liveStatus === 'timeout') {
+    nextActions.push(`${provider} --version probe timed out; verify the official CLI manually before using this provider.`);
+  } else if (liveStatus === 'error') {
+    nextActions.push(`${provider} --version probe failed; verify the official CLI manually before using this provider.`);
+  }
+  if (!nextActions.length) {
+    nextActions.push('Provider assets are ready for supervised foreground use; open the official CLI/app manually and paste the role prompt.');
+  }
+  return {
+    provider,
+    status,
+    manifestTargeted,
+    summary,
+    checks,
+    liveStatus,
+    liveChecks,
+    nextActions,
+    startsProcess: live,
+    startsAgentSession: false,
+  };
+}
+
+function runnerDoctorPayload(root, providerFilter, live, now = new Date()) {
+  const rootPath = path.resolve(root);
+  assertDirectory(rootPath, 'runner-doctor root');
+  const manifest = readOptionalJson(rootPath, path.join('.plan2agent', 'manifest.json'));
+  const manifestTargets = Array.isArray(manifest?.aiToolTargets) ? manifest.aiToolTargets : null;
+  const commonChecks = runnerDoctorCommonChecks().map((definition) => doctorCheck(rootPath, definition));
+  const providers = (providerFilter === 'all' ? ['codex', 'claude', 'gemini'] : [providerFilter])
+    .map((provider) => providerDoctorResult(rootPath, provider, commonChecks, manifestTargets, live));
+  return {
+    schema_version: 'p2a.provider_runner_doctor.v1',
+    checkedAt: now.toISOString(),
+    root: displayPath(rootPath),
+    supervisedOnly: true,
+    live,
+    startsProcess: live,
+    startsAgentSession: false,
+    safetyBoundary: live
+      ? 'runner-doctor --live only runs provider --version probes. It does not authenticate, open agent sessions, run browser automation, background loops, or provider APIs.'
+      : 'runner-doctor only reads files under the selected root. It does not start Codex, Claude, Gemini, browser automation, background loops, or provider APIs.',
+    manifest: {
+      present: manifest !== null,
+      aiToolTargets: manifestTargets,
+    },
+    commonChecks,
+    providers,
+  };
+}
+
+function printRunnerDoctor(payload) {
+  console.log('Plan2Agent provider runner doctor');
+  console.log(`- root: ${payload.root}`);
+  console.log(`- supervisedOnly: ${payload.supervisedOnly}`);
+  console.log(`- live: ${payload.live}`);
+  console.log(`- startsProcess: ${payload.startsProcess}`);
+  console.log(`- startsAgentSession: ${payload.startsAgentSession}`);
+  console.log(`- safety: ${payload.safetyBoundary}`);
+  console.log(`- manifest: ${payload.manifest.present ? `aiToolTargets=${(payload.manifest.aiToolTargets ?? []).join(',') || '-'}` : 'not found'}`);
+  console.log('');
+  console.log('[common]');
+  for (const check of payload.commonChecks) {
+    console.log(`- ${check.present ? 'ok' : (check.required ? 'missing' : 'optional-missing')}: ${check.path}`);
+  }
+  console.log('');
+  for (const provider of payload.providers) {
+    console.log(`[${provider.provider}]`);
+    console.log(`status: ${provider.status}`);
+    console.log(`liveStatus: ${provider.liveStatus}`);
+    console.log(`manifestTargeted: ${provider.manifestTargeted === null ? 'unknown' : provider.manifestTargeted}`);
+    console.log(`required: ${provider.summary.requiredPresent}/${provider.summary.requiredTotal}`);
+    console.log(`optional: ${provider.summary.optionalPresent}/${provider.summary.optionalTotal}`);
+    for (const check of provider.checks) {
+      console.log(`- ${check.present ? 'ok' : (check.required ? 'missing' : 'optional-missing')}: ${check.path}`);
+    }
+    if (provider.liveChecks.length) {
+      console.log('liveChecks:');
+      for (const check of provider.liveChecks) {
+        const output = check.output ? ` output=${check.output}` : '';
+        console.log(`- ${check.status}: ${check.command} ${check.args.join(' ')} exit=${check.exitCode ?? '-'}${output}`);
+      }
+    }
+    console.log('nextActions:');
+    provider.nextActions.forEach((action) => console.log(`- ${action}`));
+    console.log('');
+  }
+}
+
 function markRoleDefaults(runtime, role, status, options = {}) {
   if (status === 'blocked') {
     return {
@@ -1519,6 +2042,28 @@ function runHandoff(args) {
     console.log(prompt.prompt);
     console.log('');
   }
+  return 0;
+}
+
+function runRunnerGuide(args) {
+  const payload = args.plan
+    ? runnerGuideFromPlan(loadPlan(args.plan), args.plan, args.roleId)
+    : runnerGuideFromRuntime(readOrchestrationRuntime(path.resolve(args.runtime)), args.runtime, args.roleId);
+  if (args.json) {
+    process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+    return 0;
+  }
+  printRunnerGuide(payload);
+  return 0;
+}
+
+function runRunnerDoctor(args) {
+  const payload = runnerDoctorPayload(args.root, args.provider, args.live);
+  if (args.json) {
+    process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+    return 0;
+  }
+  printRunnerDoctor(payload);
   return 0;
 }
 
@@ -1693,6 +2238,8 @@ export function main(argv = process.argv.slice(2)) {
     if (args.command === 'show') return runShow(args);
     if (args.command === 'validate') return runValidate(args);
     if (args.command === 'handoff') return runHandoff(args);
+    if (args.command === 'runner-guide') return runRunnerGuide(args);
+    if (args.command === 'runner-doctor') return runRunnerDoctor(args);
     if (args.command === 'init-runtime') return runInitRuntime(args);
     if (args.command === 'record') return runRecord(args);
     if (args.command === 'runtime-status') return runRuntimeStatus(args);
