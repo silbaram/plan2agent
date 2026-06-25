@@ -1,8 +1,8 @@
 # 02-1 p2a-dev-orchestrator 개발 계획
 
-작성일: 2026-06-23 · 상태: MVP 1차 구현 완료, 오케스트레이션 runtime 1단계 완료, 감독형 scheduler 2단계 완료, provider capability/roleProfile/executionGuide 완료, GUI runtime/scheduler 표시 완료, O7 Hermes proposal queue/review/curation/patch draft/approval execution bridge 완료, O8 provider-native runner guide/doctor/live version probe 완료 · 상위 문서: `plans/02-development-team-ai-agent.md` · 연결 문서: `plans/01-product-roadmap.md`, `plans/03-p2a-gui-mvp.md`
+작성일: 2026-06-23 · 상태: MVP 1차 구현 완료, 오케스트레이션 runtime 1단계 완료, 감독형 scheduler 2단계 완료, failure-policy 완료, provider capability/roleProfile/executionGuide 완료, GUI runtime/scheduler 표시 완료, O7 Hermes proposal queue/review/curation/patch draft/approval execution bridge 완료, O8 provider-native runner guide/doctor/live version probe/capability evidence 완료 · 상위 문서: `plans/02-development-team-ai-agent.md` · 연결 문서: `plans/01-product-roadmap.md`, `plans/03-p2a-gui-mvp.md`
 
-이 문서는 Team Big Five의 `team-lead` 역할을 Plan2Agent-native로 구현하기 위한 최소 개발 계획이다. 목표는 여러 agent를 무인으로 돌리는 것이 아니라, 기존 CLI-first 하네스 위에서 **어떤 task를 solo/team으로 처리할지 판단하고, 역할별 실행 계획, shared mental model, communication log, 검증 흐름을 파일로 남기는 것**이다. 최신 GUI는 task/run/artifact와 PTY 실행에 더해 orchestration mode/role/runtime/monitor gate를 읽고, 사람이 수행한 role 상태만 기록한다. 후속 개발은 generic multi-provider terminal coordinator가 아니라 provider별 공식 기능을 활용하는 provider-native team orchestration으로 진행한다.
+이 문서는 Team Big Five의 `team-lead` 역할을 Plan2Agent-native로 구현하기 위한 최소 개발 계획이다. 목표는 여러 agent를 무인으로 돌리는 것이 아니라, 기존 CLI-first 하네스 위에서 **어떤 task를 solo/team으로 처리할지 판단하고, 역할별 실행 계획, shared mental model, communication log, 검증 흐름을 파일로 남기는 것**이다. 최신 GUI는 task/run/artifact와 PTY 실행에 더해 orchestration mode/role/runtime/monitor gate를 읽고, 사람이 수행한 role 상태만 기록한다. provider별 공식 기능을 활용하는 provider-native guide/doctor와 실패 시 retry/ask-user/stop 정책은 완료됐고, 후속은 agent-generated orchestration plan이다.
 
 ## 0. 이번 브랜치 구현 상태
 
@@ -13,6 +13,7 @@
 - `p2a_execute start --orchestration-plan <path>` run sidecar 연결.
 - `orchestration-runtime.schema.json`, `p2a_orchestrate init-runtime/record/runtime-status`, `p2a_execute start` runtime sidecar 자동 초기화.
 - `p2a_orchestrate next-role/role-prompt/mark-role` 감독형 scheduler. 다음 role과 prompt를 계산하고 사람이 수행한 결과만 기록한다.
+- `p2a_orchestrate failure-policy`가 blocked/failed runtime과 run failure를 읽어 `retry`, `ask_user`, `stop` 중 다음 감독형 조치를 계산한다.
 - provider capability matrix, roleProfile 자동 선택/override, role별 executionGuide, blocked next action hint.
 - `p2a_orchestrate runner-guide --plan|--runtime` provider-native supervised runner guide. Codex/Claude/Gemini별 공식 foreground 기능과 fallback 절차를 출력하지만 프로세스는 시작하지 않는다.
 - `p2a_orchestrate runner-doctor --root <dir>` provider asset doctor. 기본 모드는 대상 프로젝트의 P2A CLI/schema와 Codex/Claude/Gemini 자산 설치 상태를 파일 존재로 확인하고, `--live`는 provider `--version` probe만 실행한다. agent session/API/background loop는 시작하지 않는다.
@@ -24,7 +25,7 @@
 
 후속으로 남김:
 
-- provider-native deep live capability 감지. Claude agent teams/subagents 같은 계정별 기능 사용 가능 여부는 현재 사람이 foreground에서 확인한다.
+- 계정 내부 team/subagent/extension 자동 introspection. Claude agent teams/subagents 같은 계정별 기능 사용 가능 여부는 현재 사람이 foreground에서 확인한다.
 - 실제 적용 patch 생성.
 - agent-generated orchestration plan.
 
@@ -46,10 +47,9 @@
 아직 후속으로 남긴 것:
 
 - agent-generated orchestration plan.
-- provider-native deep live capability 감지. provider별 설치 파일 상태와 CLI version probe는 `runner-doctor`로 확인한다.
+- 계정 내부 team/subagent/extension 자동 introspection. provider별 설치 파일 상태, 수동 capability evidence, CLI version probe는 `runner-doctor`로 확인한다.
 - 일반 multi-provider PTY session coordinator는 후순위로 둔다.
 - 자동 role/monitor 호출은 API 키 기반 별도 설계 전까지 제외한다.
-- 실패 시 retry 정책 자동화.
 
 ## 2. MVP 목표
 
@@ -113,6 +113,7 @@ MVP에서 하지 않는 것:
    - `next-role`: runtime 상태에서 다음 감독 대상 role 계산. 프로세스 실행 없음.
    - `role-prompt`: 사람이 공식 CLI/앱에 붙여넣을 role prompt 출력. 프로세스 실행 없음.
    - `mark-role`: 사람이 수행한 role 결과를 `active/complete/blocked/skipped` 상태로 기록.
+   - `failure-policy`: blocked/failed runtime에서 run failure, monitor verdict, open question을 읽어 `retry`, `ask_user`, `stop` 중 다음 감독형 조치 계산. 프로세스 실행 없음.
 
 5. run/runtime sidecar
    - 저장 위치는 `runs/<runId>.orchestration.json`로 고정한다.
@@ -264,6 +265,7 @@ MVP 완료:
 - task triage와 역할별 실행 계획이 구조화 파일로 남는다.
 - shared mental model과 closed-loop communication log가 runtime sidecar로 남는다.
 - next-role/role-prompt/mark-role로 사람이 감독하는 role 진행 순서를 유지할 수 있다.
+- failure-policy로 blocked/failed runtime의 다음 조치를 retry/ask_user/stop 중 하나로 일관되게 판단할 수 있다.
 - contributor와 monitor가 기존 `p2a-implementer`, `p2a-performance-monitor` 계약으로 연결된다.
 - CLI에서 사람이 감독하며 팀 실행을 진행할 수 있다.
 
@@ -273,7 +275,8 @@ MVP 완료:
 - provider capability matrix가 role 배정을 안전하게 제한한다.
 - Claude/Codex/Gemini별 provider-native team runner guide가 있다.
 - provider별 asset 설치 상태 점검 doctor와 CLI version probe가 있다.
-- provider별 계정/CLI deep capability probing은 후속으로 남는다.
+- provider별 수동 capability evidence를 runner doctor가 표시한다.
+- 계정 내부 team/subagent/extension 자동 introspection은 비목표로 남는다.
 - single-provider team이 기본값이고, mixed-provider implementation은 기본값에서 제외된다.
 
 ## 6. Hermes와의 관계
@@ -309,7 +312,7 @@ MVP 연결:
 | API 기반 자동 개발 | 비용상 보류. API 키 기반 runner는 현재 개발하지 않음 |
 | 구독 CLI/앱 사용 | 공식 CLI/앱을 사람이 foreground에서 사용한다. p2a는 prompt/role/order/state를 조율하고, 사용자가 승인한 입력과 상태 기록만 수행 |
 | 금지 자동화 | browser/background loop, 세션 쿠키·토큰 재사용, 여러 계정 로테이션, rate limit 우회, 자동 role/monitor 호출, 무인 headless 실행 |
-| supervised scheduler | `next-role`, `role-prompt`, `mark-role`은 프로세스를 실행하지 않고 prompt/상태만 다룬다 |
+| supervised scheduler | `next-role`, `role-prompt`, `mark-role`, `failure-policy`는 프로세스를 실행하지 않고 prompt/상태/실패 후 조치만 다룬다 |
 | Hermes queue/review/curation/patch draft/approval execution bridge | `p2a_proposals.mjs` deterministic mining/review/curation/draft-patch/approve-draft + `p2a_execute --approval` 감독형 실행 연결. 자동 적용 없음 |
 
 ## 8. Provider 공식 기능 기준

@@ -6,14 +6,15 @@ import path from 'node:path';
 import process from 'node:process';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { loadJson, validateOrchestrationPlanData, validateOrchestrationRuntimeData, validateTaskGraphData, ValidationError } from './validate_artifacts.mjs';
+import { loadJson, validateOrchestrationPlanData, validateOrchestrationRuntimeData, validateRunData, validateTaskGraphData, ValidationError } from './validate_artifacts.mjs';
 import { resolveIterationState } from './p2a_iteration_state.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const ROOT = path.resolve(path.dirname(__filename), '..');
-const COMMANDS = new Set(['plan', 'show', 'validate', 'handoff', 'runner-guide', 'runner-doctor', 'init-runtime', 'record', 'runtime-status', 'next-role', 'role-prompt', 'mark-role']);
+const COMMANDS = new Set(['plan', 'show', 'validate', 'handoff', 'runner-guide', 'runner-doctor', 'init-runtime', 'record', 'runtime-status', 'next-role', 'role-prompt', 'mark-role', 'failure-policy']);
 const AGENT_TOOLS = new Set(['codex', 'claude', 'gemini', 'manual']);
 const RUNNER_DOCTOR_PROVIDERS = new Set(['all', 'codex', 'claude', 'gemini']);
+const PROVIDER_CAPABILITY_STATUSES = new Set(['available', 'unavailable', 'manual_check', 'unknown']);
 const RUNNER_DOCTOR_COMMANDS = Object.freeze({
   codex: 'codex',
   claude: 'claude',
@@ -23,6 +24,8 @@ const RUNNER_DOCTOR_VERSION_ARGS = ['--version'];
 const RUNTIME_EVENT_TYPES = new Set(['handoff', 'status', 'question', 'answer', 'ack', 'concern', 'decision', 'blocker', 'verification', 'monitor_verdict', 'owner_note']);
 const RUNTIME_ROLE_STATUSES = new Set(['pending', 'active', 'blocked', 'complete', 'skipped']);
 const RUNTIME_PHASES = new Set(['initialized', 'running', 'blocked', 'ready_for_monitor', 'ready_to_finish', 'closed']);
+const RUNTIME_FAILURE_RETRYABLE = new Set(['yes', 'no', 'after_fix']);
+const RUNTIME_FAILURE_SOURCES = new Set(['run_failure', 'monitor_verdict', 'open_question', 'blocked_runtime', 'closed_runtime', 'none']);
 const DEFAULT_ACCEPTED_MONITOR_VERDICTS = ['confirm_done'];
 const DEFAULT_HANDOFF_GRAPH = path.join('.plan2agent', 'artifacts', 'task-graph.json');
 const HIGH_ACCEPTANCE_MONITOR_THRESHOLD = 6;
@@ -167,6 +170,7 @@ function usage() {
     '  node scripts/p2a_orchestrate.mjs next-role --runtime <path> [--json]',
     '  node scripts/p2a_orchestrate.mjs role-prompt --runtime <path> --role <role-id> [--json]',
     '  node scripts/p2a_orchestrate.mjs mark-role --runtime <path> --role <role-id> --role-status <status> [options]',
+    '  node scripts/p2a_orchestrate.mjs failure-policy --runtime <path> [--json]',
     '',
     'Commands:',
     '  plan                 Create a deterministic supervised orchestration plan. No task/run files are changed.',
@@ -181,6 +185,7 @@ function usage() {
     '  next-role            Compute the next supervised role. Does not start any agent or CLI process.',
     '  role-prompt          Print the prompt for a role so a human can paste it into an official CLI/app.',
     '  mark-role            Record a human-observed role state transition.',
+    '  failure-policy       Decide retry, ask-user, or stop for a blocked/failed supervised runtime.',
     '',
     'Source options:',
     '  --artifacts <dir>    Iterative artifact root; uses the active iteration task graph.',
@@ -353,6 +358,11 @@ function parseArgs(argv) {
     if (!args.runtime) throw new Error('--runtime is required for next-role');
     if (args.artifacts || args.graph || args.spec || args.maintenance || args.taskId || args.implementerProfile || args.reviewerProfile || args.output || args.plan || args.runId || args.roleId || args.eventType || args.summary || args.detail || args.verdict || args.linkedRoleId || args.roleStatus || args.phase || args.requiresOwnerAction || args.live || hasRunnerDoctorOptions(providedOptions)) {
       throw new Error('next-role only supports --runtime and --json');
+    }
+  } else if (args.command === 'failure-policy') {
+    if (!args.runtime) throw new Error('--runtime is required for failure-policy');
+    if (args.artifacts || args.graph || args.spec || args.maintenance || args.taskId || args.implementerProfile || args.reviewerProfile || args.output || args.plan || args.runId || args.roleId || args.eventType || args.summary || args.detail || args.verdict || args.linkedRoleId || args.roleStatus || args.phase || args.requiresOwnerAction || args.live || hasRunnerDoctorOptions(providedOptions)) {
+      throw new Error('failure-policy only supports --runtime and --json');
     }
   } else if (args.command === 'role-prompt') {
     if (!args.runtime) throw new Error('--runtime is required for role-prompt');
@@ -1335,6 +1345,7 @@ function schedulerResolutionHints(runtime, decision) {
   if (runtime.status.blocked || runtime.status.phase === 'blocked' || blockedRole) {
     return [
       latestBlocker ? `Inspect blocker ${latestBlocker.eventId}: ${latestBlocker.summary}.` : 'Inspect the latest blocked role and run output.',
+      'Run p2a_orchestrate failure-policy --runtime <path> to choose retry, ask-user, or stop.',
       'Record an owner decision before skipping or finishing blocked.',
       blockedRole ? `Do not mark ${blockedRole.roleId} active as a retry; this runtime remains blocked until it is closed.` : 'Do not retry inside this blocked runtime.',
       'If continuing is approved, finish this run blocked and open a follow-up supervised run or maintenance task.',
@@ -1387,6 +1398,184 @@ function schedulerHint(runtime) {
     instruction: decision.instruction,
     resolutionHints: schedulerResolutionHints(runtime, decision),
     safetyBoundary: 'Open the official CLI/app manually, paste the role prompt, then record the observed result. Do not use this scheduler to bypass subscription limits or run background automation.',
+  };
+}
+
+function readRunForRuntime(runtimePath, runtime) {
+  const runPath = path.join(path.dirname(runtimePath), `${runtime.runId}.json`);
+  if (!existsSync(runPath)) {
+    return {
+      present: false,
+      path: displayPath(runPath),
+      run: null,
+    };
+  }
+  const run = validateRunData(loadJson(runPath));
+  if (run.runId !== runtime.runId) {
+    throw new Error(`runtime runId ${runtime.runId} does not match run log ${run.runId}`);
+  }
+  return {
+    present: true,
+    path: displayPath(runPath),
+    run,
+  };
+}
+
+function latestRuntimeEvent(runtime, type) {
+  return [...runtime.communicationLog].reverse().find((event) => event.type === type) ?? null;
+}
+
+function monitorFailureFromRuntime(runtime) {
+  const event = latestRuntimeEvent(runtime, 'monitor_verdict');
+  if (!event?.detail) return null;
+  try {
+    const detail = JSON.parse(event.detail);
+    if (detail?.accepted === false) {
+      return {
+        source: 'monitor_verdict',
+        class: 'implementation_incomplete',
+        retryable: 'after_fix',
+        needsUserDecision: false,
+        evidence: `${event.eventId}: ${event.summary}`,
+      };
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+function runtimeFailureSignal(runtime, runInfo) {
+  const runFailure = runInfo.run?.failure ?? null;
+  if (runFailure) {
+    return {
+      source: 'run_failure',
+      class: runFailure.class,
+      retryable: runFailure.retryable,
+      needsUserDecision: runFailure.needsUserDecision,
+      evidence: `run ${runInfo.run.runId} status=${runInfo.run.status} source=${runFailure.source}`,
+    };
+  }
+  const openQuestion = runtime.sharedMentalModel.openQuestions.find((question) => question.status === 'open');
+  if (openQuestion) {
+    return {
+      source: 'open_question',
+      class: 'other',
+      retryable: 'no',
+      needsUserDecision: true,
+      evidence: `${openQuestion.questionId}: ${openQuestion.summary}`,
+    };
+  }
+  const monitorFailure = monitorFailureFromRuntime(runtime);
+  if (monitorFailure) return monitorFailure;
+  if (runtime.status.needsUserDecision) {
+    return {
+      source: 'open_question',
+      class: 'other',
+      retryable: 'no',
+      needsUserDecision: true,
+      evidence: 'runtime status.needsUserDecision=true',
+    };
+  }
+  const blockedRole = runtimeRoles(runtime).find((role) => role.status === 'blocked');
+  if (runtime.status.blocked || runtime.status.phase === 'blocked' || blockedRole) {
+    const latestBlocker = latestRuntimeEvent(runtime, 'blocker');
+    return {
+      source: 'blocked_runtime',
+      class: 'other',
+      retryable: 'no',
+      needsUserDecision: true,
+      evidence: latestBlocker ? `${latestBlocker.eventId}: ${latestBlocker.summary}` : (blockedRole ? `blocked role: ${blockedRole.roleId}` : 'runtime blocked'),
+    };
+  }
+  if (runtime.status.phase === 'closed') {
+    return {
+      source: 'closed_runtime',
+      class: null,
+      retryable: 'no',
+      needsUserDecision: false,
+      evidence: 'runtime already closed',
+    };
+  }
+  return {
+    source: 'none',
+    class: null,
+    retryable: 'no',
+    needsUserDecision: false,
+    evidence: 'no failure signal found',
+  };
+}
+
+function failurePolicyAction(signal, runtime, runInfo) {
+  if (runInfo.run?.status === 'finished' || runtime.status.phase === 'closed') return 'stop';
+  if (signal.needsUserDecision) return 'ask_user';
+  if (signal.retryable === 'yes' || signal.retryable === 'after_fix') return 'retry';
+  return 'stop';
+}
+
+function failurePolicyInstructions(action, signal, runtime) {
+  if (action === 'retry') {
+    const afterFix = signal.retryable === 'after_fix';
+    return [
+      afterFix
+        ? 'Do not retry inside the blocked runtime. Fix or scope the blocker first, then open a follow-up supervised run or maintenance task.'
+        : 'Do not retry inside the current runtime. Open a follow-up supervised run if the owner approves another attempt.',
+      'Keep the provider CLI/app foreground and human-supervised; P2A should only provide role prompts and state recording.',
+      `Record the next attempt against ${runtime.taskId} with a new run id so the blocked run remains auditable.`,
+    ];
+  }
+  if (action === 'ask_user') {
+    return [
+      'Ask the user or owner for the missing decision before attempting more implementation.',
+      'Record the answer with p2a_orchestrate record --type answer or a decision event, then recompute next-role.',
+      'Do not start a retry until the open decision is answered and the owner explicitly approves the follow-up.',
+    ];
+  }
+  return [
+    'Do not start another attempt from this runtime.',
+    'Keep or close the run as blocked/failed with the recorded failure class and preserve the audit trail.',
+    'Create a new task only if the owner changes scope or accepts a separate follow-up.',
+  ];
+}
+
+function failurePolicyPayload(runtimePath) {
+  const resolvedRuntimePath = path.resolve(runtimePath);
+  const runtime = readOrchestrationRuntime(resolvedRuntimePath);
+  const runInfo = readRunForRuntime(resolvedRuntimePath, runtime);
+  const signal = runtimeFailureSignal(runtime, runInfo);
+  if (!RUNTIME_FAILURE_RETRYABLE.has(signal.retryable)) {
+    throw new Error(`unsupported failure retryability in runtime policy: ${signal.retryable}`);
+  }
+  if (!RUNTIME_FAILURE_SOURCES.has(signal.source)) {
+    throw new Error(`unsupported runtime failure source: ${signal.source}`);
+  }
+  const action = failurePolicyAction(signal, runtime, runInfo);
+  return {
+    schema_version: 'p2a.orchestration_failure_policy.v1',
+    runtimeId: runtime.runtimeId,
+    runId: runtime.runId,
+    taskId: runtime.taskId,
+    mode: runtime.mode,
+    phase: runtime.status.phase,
+    supervisedOnly: true,
+    startsProcess: false,
+    source: {
+      runtimePath: displayPath(resolvedRuntimePath),
+      runPath: runInfo.path,
+      runPresent: runInfo.present,
+      runStatus: runInfo.run?.status ?? null,
+      signal: signal.source,
+      evidence: signal.evidence,
+    },
+    failure: {
+      class: signal.class,
+      retryable: signal.retryable,
+      needsUserDecision: signal.needsUserDecision,
+    },
+    action,
+    ownerActionRequired: action === 'ask_user',
+    instructions: failurePolicyInstructions(action, signal, runtime),
+    safetyBoundary: 'This policy chooses the next supervised action only. It does not start provider CLIs, browser automation, background loops, unofficial APIs, or retries.',
   };
 }
 
@@ -1730,6 +1919,82 @@ function runnerDoctorProviderChecks(provider) {
   throw new Error(`unsupported runner-doctor provider: ${provider}`);
 }
 
+function providerNativeCapabilityDefinitions(provider) {
+  if (provider === 'codex') {
+    return [
+      {
+        id: 'skills',
+        label: 'Codex skills',
+        source: 'asset',
+        assetPath: path.join('.agents', 'skills', 'p2a-dev-execution', 'SKILL.md'),
+        nextAction: 'Install P2A skills or rerun scaffold/handoff with Codex assets.',
+      },
+      {
+        id: 'customAgents',
+        label: 'Codex custom agents',
+        source: 'asset',
+        assetPath: path.join('.codex', 'agents', 'p2a-implementer.toml'),
+        nextAction: 'Install Codex custom agents or use a plain supervised role prompt.',
+      },
+      {
+        id: 'explicitSubagentPrompt',
+        label: 'Explicit subagent prompt support',
+        source: 'manual_evidence',
+        nextAction: 'Open Codex manually and confirm that explicit subagent/specialist prompting works for this account.',
+      },
+    ];
+  }
+  if (provider === 'claude') {
+    return [
+      {
+        id: 'subagents',
+        label: 'Claude subagent files',
+        source: 'asset',
+        assetPath: path.join('.claude', 'agents', 'p2a-implementer.md'),
+        nextAction: 'Install Claude subagent assets or use a plain supervised foreground prompt.',
+      },
+      {
+        id: 'skills',
+        label: 'Claude skills',
+        source: 'asset',
+        assetPath: path.join('.claude', 'skills', 'p2a-dev-execution', 'SKILL.md'),
+        nextAction: 'Install Claude skill assets or use a plain supervised foreground prompt.',
+      },
+      {
+        id: 'agentTeams',
+        label: 'Claude agent teams account capability',
+        source: 'manual_evidence',
+        nextAction: 'Open Claude Code manually and record whether native agent teams are enabled for this account/project.',
+      },
+    ];
+  }
+  if (provider === 'gemini') {
+    return [
+      {
+        id: 'extensions',
+        label: 'Gemini extensions account capability',
+        source: 'manual_evidence',
+        nextAction: 'Open Gemini CLI manually and record whether extensions/MCP are available for read-only planning or review.',
+      },
+      {
+        id: 'customCommands',
+        label: 'Gemini custom commands',
+        source: 'asset',
+        assetPath: path.join('.gemini', 'commands', 'p2a', 'dev-execution.toml'),
+        nextAction: 'Install Gemini custom command assets or use a plain supervised read-only prompt.',
+      },
+      {
+        id: 'geminiContext',
+        label: 'GEMINI.md project context',
+        source: 'asset',
+        assetPath: 'GEMINI.md',
+        nextAction: 'Add GEMINI.md when this project needs shared Gemini read-only context.',
+      },
+    ];
+  }
+  throw new Error(`unsupported runner-doctor provider: ${provider}`);
+}
+
 function doctorCheck(rootPath, definition) {
   const absolutePath = path.resolve(rootPath, definition.path);
   const present = existsSync(absolutePath);
@@ -1750,6 +2015,73 @@ function readOptionalJson(rootPath, relativePath) {
   const filePath = path.resolve(rootPath, relativePath);
   if (!existsSync(filePath) || !lstatSync(filePath).isFile()) return null;
   return JSON.parse(readFileSync(filePath, 'utf8'));
+}
+
+function normalizeCapabilityEvidence(value) {
+  if (typeof value === 'boolean') {
+    return {
+      status: value ? 'available' : 'unavailable',
+      evidence: null,
+      checkedAt: null,
+    };
+  }
+  if (typeof value === 'string') {
+    return {
+      status: PROVIDER_CAPABILITY_STATUSES.has(value) ? value : 'unknown',
+      evidence: null,
+      checkedAt: null,
+    };
+  }
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    const rawStatus = typeof value.status === 'string' ? value.status : 'unknown';
+    return {
+      status: PROVIDER_CAPABILITY_STATUSES.has(rawStatus) ? rawStatus : 'unknown',
+      evidence: typeof value.evidence === 'string' && value.evidence.trim() ? value.evidence.trim() : null,
+      checkedAt: typeof value.checkedAt === 'string' && value.checkedAt.trim() ? value.checkedAt.trim() : null,
+    };
+  }
+  return {
+    status: 'unknown',
+    evidence: null,
+    checkedAt: null,
+  };
+}
+
+function providerCapabilityResult(rootPath, projectConfig, provider, definition) {
+  const configured = normalizeCapabilityEvidence(projectConfig?.providerNativeCapabilities?.[provider]?.[definition.id]);
+  const assetPath = definition.assetPath ?? null;
+  const assetPresent = assetPath ? existsSync(path.resolve(rootPath, assetPath)) : null;
+  let status;
+  if (assetPath) {
+    if (configured.status === 'unavailable') {
+      status = 'unavailable';
+    } else {
+      status = assetPresent ? 'available' : 'manual_check';
+    }
+  } else {
+    status = configured.status === 'unknown' ? 'manual_check' : configured.status;
+  }
+  return {
+    id: definition.id,
+    label: definition.label,
+    source: definition.source,
+    status,
+    evidence: configured.evidence,
+    checkedAt: configured.checkedAt,
+    assetPath: assetPath ? normalizePath(assetPath) : null,
+    assetPresent,
+    nextAction: status === 'available' ? null : definition.nextAction,
+  };
+}
+
+function capabilitySummary(capabilities) {
+  return {
+    available: capabilities.filter((capability) => capability.status === 'available').length,
+    manualCheck: capabilities.filter((capability) => capability.status === 'manual_check').length,
+    unavailable: capabilities.filter((capability) => capability.status === 'unavailable').length,
+    unknown: capabilities.filter((capability) => capability.status === 'unknown').length,
+    total: capabilities.length,
+  };
 }
 
 function checkSummary(checks) {
@@ -1805,8 +2137,10 @@ function providerLiveStatus(liveChecks) {
   return 'error';
 }
 
-function providerDoctorResult(rootPath, provider, commonChecks, manifestTargets, live) {
+function providerDoctorResult(rootPath, provider, commonChecks, manifestTargets, projectConfig, live) {
   const checks = runnerDoctorProviderChecks(provider).map((definition) => doctorCheck(rootPath, definition));
+  const capabilities = providerNativeCapabilityDefinitions(provider)
+    .map((definition) => providerCapabilityResult(rootPath, projectConfig, provider, definition));
   const requiredSummary = checkSummary([...commonChecks, ...checks]);
   const providerSummary = checkSummary(checks);
   const summary = {
@@ -1817,6 +2151,7 @@ function providerDoctorResult(rootPath, provider, commonChecks, manifestTargets,
     missingRequired: requiredSummary.missingRequired,
     missingOptional: providerSummary.missingOptional,
   };
+  const providerCapabilitySummary = capabilitySummary(capabilities);
   const manifestTargeted = manifestTargets ? manifestTargets.includes(provider) : null;
   const liveChecks = live ? [liveVersionProbe(provider, rootPath)] : [];
   const liveStatus = providerLiveStatus(liveChecks);
@@ -1835,6 +2170,9 @@ function providerDoctorResult(rootPath, provider, commonChecks, manifestTargets,
   if (summary.missingOptional.length) {
     nextActions.push(`Optional provider enhancements are not installed: ${summary.missingOptional.join(', ')}`);
   }
+  for (const capability of capabilities) {
+    if (capability.nextAction) nextActions.push(`${capability.label}: ${capability.nextAction}`);
+  }
   if (liveStatus === 'missing') {
     nextActions.push(`${provider} command was not found on PATH; install the official CLI/app or open it manually outside P2A.`);
   } else if (liveStatus === 'timeout') {
@@ -1851,6 +2189,8 @@ function providerDoctorResult(rootPath, provider, commonChecks, manifestTargets,
     manifestTargeted,
     summary,
     checks,
+    capabilitySummary: providerCapabilitySummary,
+    capabilities,
     liveStatus,
     liveChecks,
     nextActions,
@@ -1863,10 +2203,11 @@ function runnerDoctorPayload(root, providerFilter, live, now = new Date()) {
   const rootPath = path.resolve(root);
   assertDirectory(rootPath, 'runner-doctor root');
   const manifest = readOptionalJson(rootPath, path.join('.plan2agent', 'manifest.json'));
+  const projectConfig = readOptionalJson(rootPath, path.join('.plan2agent', 'project.config.json'));
   const manifestTargets = Array.isArray(manifest?.aiToolTargets) ? manifest.aiToolTargets : null;
   const commonChecks = runnerDoctorCommonChecks().map((definition) => doctorCheck(rootPath, definition));
   const providers = (providerFilter === 'all' ? ['codex', 'claude', 'gemini'] : [providerFilter])
-    .map((provider) => providerDoctorResult(rootPath, provider, commonChecks, manifestTargets, live));
+    .map((provider) => providerDoctorResult(rootPath, provider, commonChecks, manifestTargets, projectConfig, live));
   return {
     schema_version: 'p2a.provider_runner_doctor.v1',
     checkedAt: now.toISOString(),
@@ -1882,6 +2223,10 @@ function runnerDoctorPayload(root, providerFilter, live, now = new Date()) {
       present: manifest !== null,
       aiToolTargets: manifestTargets,
     },
+    projectConfig: {
+      present: projectConfig !== null,
+      providerNativeCapabilities: projectConfig?.providerNativeCapabilities ? true : false,
+    },
     commonChecks,
     providers,
   };
@@ -1896,6 +2241,7 @@ function printRunnerDoctor(payload) {
   console.log(`- startsAgentSession: ${payload.startsAgentSession}`);
   console.log(`- safety: ${payload.safetyBoundary}`);
   console.log(`- manifest: ${payload.manifest.present ? `aiToolTargets=${(payload.manifest.aiToolTargets ?? []).join(',') || '-'}` : 'not found'}`);
+  console.log(`- projectConfig: ${payload.projectConfig.present ? `providerNativeCapabilities=${payload.projectConfig.providerNativeCapabilities}` : 'not found'}`);
   console.log('');
   console.log('[common]');
   for (const check of payload.commonChecks) {
@@ -1909,8 +2255,15 @@ function printRunnerDoctor(payload) {
     console.log(`manifestTargeted: ${provider.manifestTargeted === null ? 'unknown' : provider.manifestTargeted}`);
     console.log(`required: ${provider.summary.requiredPresent}/${provider.summary.requiredTotal}`);
     console.log(`optional: ${provider.summary.optionalPresent}/${provider.summary.optionalTotal}`);
+    console.log(`capabilities: available=${provider.capabilitySummary.available}/${provider.capabilitySummary.total}, manualCheck=${provider.capabilitySummary.manualCheck}, unavailable=${provider.capabilitySummary.unavailable}`);
     for (const check of provider.checks) {
       console.log(`- ${check.present ? 'ok' : (check.required ? 'missing' : 'optional-missing')}: ${check.path}`);
+    }
+    console.log('capabilityChecks:');
+    for (const capability of provider.capabilities) {
+      const asset = capability.assetPath ? ` asset=${capability.assetPath} present=${capability.assetPresent}` : '';
+      const evidence = capability.evidence ? ` evidence=${capability.evidence}` : '';
+      console.log(`- ${capability.status}: ${capability.id}${asset}${evidence}`);
     }
     if (provider.liveChecks.length) {
       console.log('liveChecks:');
@@ -2180,6 +2533,30 @@ function runNextRole(args) {
   return 0;
 }
 
+function runFailurePolicy(args) {
+  const payload = failurePolicyPayload(args.runtime);
+  if (args.json) {
+    process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+    return 0;
+  }
+  console.log('Plan2Agent supervised failure policy');
+  console.log(`- runtimeId: ${payload.runtimeId}`);
+  console.log(`- runId: ${payload.runId}`);
+  console.log(`- task: ${payload.taskId}`);
+  console.log(`- mode: ${payload.mode}`);
+  console.log(`- phase: ${payload.phase}`);
+  console.log(`- action: ${payload.action}`);
+  console.log(`- failure: ${payload.failure.class ?? 'none'} retryable=${payload.failure.retryable} needsUserDecision=${payload.failure.needsUserDecision}`);
+  console.log(`- signal: ${payload.source.signal} ${payload.source.evidence}`);
+  console.log(`- run: ${payload.source.runPresent ? `${payload.source.runStatus} ${payload.source.runPath}` : `not found ${payload.source.runPath}`}`);
+  console.log(`- supervisedOnly: ${payload.supervisedOnly}`);
+  console.log(`- startsProcess: ${payload.startsProcess}`);
+  console.log('- instructions:');
+  payload.instructions.forEach((instruction) => console.log(`  - ${instruction}`));
+  console.log(`- safety: ${payload.safetyBoundary}`);
+  return 0;
+}
+
 function runRolePrompt(args) {
   const runtime = readOrchestrationRuntime(path.resolve(args.runtime));
   const role = requireRuntimeRole(runtime, args.roleId);
@@ -2260,6 +2637,7 @@ export function main(argv = process.argv.slice(2)) {
     if (args.command === 'record') return runRecord(args);
     if (args.command === 'runtime-status') return runRuntimeStatus(args);
     if (args.command === 'next-role') return runNextRole(args);
+    if (args.command === 'failure-policy') return runFailurePolicy(args);
     if (args.command === 'role-prompt') return runRolePrompt(args);
     if (args.command === 'mark-role') return runMarkRole(args);
     throw new Error(`unknown command: ${args.command}`);

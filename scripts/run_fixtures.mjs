@@ -258,8 +258,13 @@ function validateScaffoldFixtureCase() {
       || runnerDoctor.startsProcess !== false
       || runnerDoctor.startsAgentSession !== false
       || !runnerDoctor.safetyBoundary.includes('does not start Codex')
+      || runnerDoctor.projectConfig.providerNativeCapabilities !== true
       || runnerDoctor.providers.map((provider) => provider.status).join(',') !== 'ready,ready,ready'
       || runnerDoctor.providers.find((provider) => provider.provider === 'codex')?.summary.requiredPresent !== 8
+      || runnerDoctor.providers.find((provider) => provider.provider === 'codex')?.capabilitySummary.available !== 2
+      || runnerDoctor.providers.find((provider) => provider.provider === 'codex')?.capabilitySummary.manualCheck !== 1
+      || runnerDoctor.providers.find((provider) => provider.provider === 'claude')?.capabilities.find((capability) => capability.id === 'agentTeams')?.status !== 'manual_check'
+      || runnerDoctor.providers.find((provider) => provider.provider === 'gemini')?.capabilities.find((capability) => capability.id === 'customCommands')?.status !== 'available'
       || runnerDoctor.providers.find((provider) => provider.provider === 'claude')?.checks.find((check) => check.id === 'claude_workspace_hook')?.present !== true
       || runnerDoctor.providers.find((provider) => provider.provider === 'gemini')?.checks.find((check) => check.id === 'gemini_context')?.present !== false
       || runnerDoctor.providers.some((provider) => provider.liveStatus !== 'not_checked')
@@ -267,6 +272,32 @@ function validateScaffoldFixtureCase() {
       console.error('scaffold target runner-doctor fixture failed');
       writeResultOutput(result);
       console.error(JSON.stringify({ runnerDoctor }, null, 2));
+      return { status: failureStatus(result), checks };
+    }
+
+    const capabilityTargetRoot = path.join(tempRoot, 'capability-target');
+    cpSync(targetRoot, capabilityTargetRoot, { recursive: true });
+    const capabilityConfigPath = path.join(capabilityTargetRoot, '.plan2agent', 'project.config.json');
+    const capabilityConfig = JSON.parse(readFileSync(capabilityConfigPath, 'utf8'));
+    capabilityConfig.providerNativeCapabilities.codex.customAgents = {
+      status: 'available',
+      evidence: 'fixture intentionally claims availability while asset is missing',
+    };
+    writeFileSync(capabilityConfigPath, `${JSON.stringify(capabilityConfig, null, 2)}\n`);
+    rmSync(path.join(capabilityTargetRoot, '.codex', 'agents', 'p2a-implementer.toml'));
+    result = runTargetOrchestrate(capabilityTargetRoot, ['runner-doctor', '--root', capabilityTargetRoot, '--provider', 'codex', '--json']);
+    checks += 1;
+    const capabilityDoctor = result.status === 0 ? JSON.parse(result.stdout) : null;
+    const customAgentsCapability = capabilityDoctor?.providers?.[0]?.capabilities?.find((capability) => capability.id === 'customAgents');
+    if (
+      result.status !== 0
+      || customAgentsCapability?.status !== 'manual_check'
+      || customAgentsCapability?.assetPresent !== false
+      || customAgentsCapability?.evidence !== 'fixture intentionally claims availability while asset is missing'
+    ) {
+      console.error('scaffold target runner-doctor capability fixture failed');
+      writeResultOutput(result);
+      console.error(JSON.stringify({ capabilityDoctor }, null, 2));
       return { status: failureStatus(result), checks };
     }
 
@@ -529,6 +560,7 @@ function validateE2eFixtureCases() {
       ];
       const missingTeamFiles = expectedTeamFiles.filter((filePath) => !existsSync(path.join(teamTargetRoot, filePath)));
       const teamManifest = JSON.parse(readFileSync(path.join(teamTargetRoot, '.plan2agent', 'manifest.json'), 'utf8'));
+      const teamProjectConfig = JSON.parse(readFileSync(path.join(teamTargetRoot, '.plan2agent', 'project.config.json'), 'utf8'));
       const teamSourceManifest = JSON.parse(readFileSync(path.join(teamTargetRoot, '.plan2agent', 'team-harnesses', 'team-bigfive', 'source-manifest.json'), 'utf8'));
       if (
         missingTeamFiles.length
@@ -539,11 +571,13 @@ function validateE2eFixtureCases() {
         || teamManifest.externalHarnesses[0].name !== 'team-bigfive'
         || teamManifest.externalHarnesses[0].targets.join(',') !== 'codex,claude,gemini'
         || teamManifest.externalHarnesses[0].sourceVersion !== '1.2.3'
+        || teamProjectConfig.providerNativeCapabilities?.claude?.agentTeams !== 'manual_check'
+        || teamProjectConfig.providerNativeCapabilities?.codex?.customAgents !== 'manual_check'
         || teamSourceManifest.source.fileCount !== 2
         || teamSourceManifest.source.files.some((file) => file.path === '.env' || file.path.startsWith('_workspace/'))
       ) {
         console.error(`greenfield handoff Team Big Five output mismatch: ${caseData.id}`);
-        console.error(JSON.stringify({ missingTeamFiles, teamManifest, teamSourceManifest }, null, 2));
+        console.error(JSON.stringify({ missingTeamFiles, teamManifest, teamProjectConfig, teamSourceManifest }, null, 2));
         return { status: 1, checks };
       }
     } finally {
@@ -1227,6 +1261,20 @@ function validateIterationCurrentFixtureCases() {
         console.error(JSON.stringify({ questionNextRole }, null, 2));
         return { status: failureStatus(result), checks };
       }
+      result = runOrchestrate(['failure-policy', '--runtime', executeRuntimePath, '--json']);
+      checks += 1;
+      const questionFailurePolicy = result.status === 0 ? JSON.parse(result.stdout) : null;
+      if (
+        result.status !== 0
+        || questionFailurePolicy.action !== 'ask_user'
+        || questionFailurePolicy.source.signal !== 'open_question'
+        || questionFailurePolicy.startsProcess !== false
+      ) {
+        console.error(`p2a_orchestrate failure-policy should ask user for open question: ${caseData.id}`);
+        writeResultOutput(result);
+        console.error(JSON.stringify({ questionFailurePolicy }, null, 2));
+        return { status: failureStatus(result), checks };
+      }
 
       result = runOrchestrate([
         'record',
@@ -1696,11 +1744,28 @@ function validateIterationCurrentFixtureCases() {
         result.status !== 0
         || !result.stdout.includes('phase: blocked')
         || !result.stdout.includes('nextRole: owner')
+        || !result.stdout.includes('failure-policy --runtime')
         || !result.stdout.includes('Do not retry inside this blocked runtime')
         || result.stdout.includes('mark monitor active')
       ) {
         console.error(`p2a_orchestrate monitor mark-role should block rejected verdicts: ${caseData.id}`);
         writeResultOutput(result);
+        return { status: failureStatus(result), checks };
+      }
+      result = runOrchestrate(['failure-policy', '--runtime', executeMonitorRuntimePath, '--json']);
+      checks += 1;
+      const monitorFailurePolicy = result.status === 0 ? JSON.parse(result.stdout) : null;
+      if (
+        result.status !== 0
+        || monitorFailurePolicy.action !== 'retry'
+        || monitorFailurePolicy.failure.class !== 'implementation_incomplete'
+        || monitorFailurePolicy.failure.retryable !== 'after_fix'
+        || monitorFailurePolicy.source.signal !== 'monitor_verdict'
+        || monitorFailurePolicy.startsProcess !== false
+      ) {
+        console.error(`p2a_orchestrate failure-policy should retry after rejected monitor verdict: ${caseData.id}`);
+        writeResultOutput(result);
+        console.error(JSON.stringify({ monitorFailurePolicy }, null, 2));
         return { status: failureStatus(result), checks };
       }
 
@@ -1753,6 +1818,65 @@ function validateIterationCurrentFixtureCases() {
         console.error(`p2a_execute monitor fixture wrote unexpected blocked state: ${caseData.id}`);
         console.error(JSON.stringify({ executeMonitorFinishedGraph, executeMonitorFinishedRun, executeMonitorFinishedRuntime }, null, 2));
         return { status: 1, checks };
+      }
+      result = runOrchestrate(['failure-policy', '--runtime', executeMonitorRuntimePath, '--json']);
+      checks += 1;
+      const monitorRunFailurePolicy = result.status === 0 ? JSON.parse(result.stdout) : null;
+      if (
+        result.status !== 0
+        || monitorRunFailurePolicy.action !== 'retry'
+        || monitorRunFailurePolicy.source.signal !== 'run_failure'
+        || monitorRunFailurePolicy.source.runStatus !== 'blocked'
+        || monitorRunFailurePolicy.failure.retryable !== 'after_fix'
+      ) {
+        console.error(`p2a_orchestrate failure-policy should prefer blocked run failure: ${caseData.id}`);
+        writeResultOutput(result);
+        console.error(JSON.stringify({ monitorRunFailurePolicy }, null, 2));
+        return { status: failureStatus(result), checks };
+      }
+
+      const stopPolicyDir = path.join(tempRoot, 'p2a-policy-stop', 'runs');
+      mkdirSync(stopPolicyDir, { recursive: true });
+      const stopPolicyRuntimePath = path.join(stopPolicyDir, 'run-policy-stop.orchestration-runtime.json');
+      const stopPolicyRunPath = path.join(stopPolicyDir, 'run-policy-stop.json');
+      const stopPolicyRuntime = {
+        ...executeMonitorFinishedRuntime,
+        runtimeId: 'runtime-run-policy-stop',
+        runId: 'run-policy-stop',
+        status: {
+          ...executeMonitorFinishedRuntime.status,
+          phase: 'blocked',
+          blocked: true,
+          needsUserDecision: false,
+        },
+      };
+      const stopPolicyRun = {
+        ...executeMonitorFinishedRun,
+        runId: 'run-policy-stop',
+        status: 'blocked',
+        failure: {
+          class: 'scope_violation',
+          retryable: 'no',
+          needsUserDecision: false,
+          source: 'owner',
+        },
+      };
+      writeFileSync(stopPolicyRuntimePath, `${JSON.stringify(stopPolicyRuntime, null, 2)}\n`, 'utf8');
+      writeFileSync(stopPolicyRunPath, `${JSON.stringify(stopPolicyRun, null, 2)}\n`, 'utf8');
+      result = runOrchestrate(['failure-policy', '--runtime', stopPolicyRuntimePath, '--json']);
+      checks += 1;
+      const stopFailurePolicy = result.status === 0 ? JSON.parse(result.stdout) : null;
+      if (
+        result.status !== 0
+        || stopFailurePolicy.action !== 'stop'
+        || stopFailurePolicy.source.signal !== 'run_failure'
+        || stopFailurePolicy.failure.class !== 'scope_violation'
+        || stopFailurePolicy.failure.retryable !== 'no'
+      ) {
+        console.error(`p2a_orchestrate failure-policy should stop non-retryable run failures: ${caseData.id}`);
+        writeResultOutput(result);
+        console.error(JSON.stringify({ stopFailurePolicy }, null, 2));
+        return { status: failureStatus(result), checks };
       }
 
       result = runProposals([

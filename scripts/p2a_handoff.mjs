@@ -1214,6 +1214,23 @@ function detectPackageManager(targetRoot) {
 }
 
 function buildProjectConfig(targetRoot, teamBigFiveConfig = { enabled: false }, options = {}) {
+  const providerNativeCapabilities = {
+    codex: {
+      skills: 'manual_check',
+      customAgents: 'manual_check',
+      explicitSubagentPrompt: 'manual_check',
+    },
+    claude: {
+      subagents: 'manual_check',
+      skills: 'manual_check',
+      agentTeams: 'manual_check',
+    },
+    gemini: {
+      extensions: 'manual_check',
+      customCommands: 'manual_check',
+      geminiContext: 'manual_check',
+    },
+  };
   if (options.emptyCommands) {
     return {
       schema_version: 'p2a.project_config.v1',
@@ -1230,6 +1247,7 @@ function buildProjectConfig(targetRoot, teamBigFiveConfig = { enabled: false }, 
         worktreePattern: '../.worktrees/<taskId>-<runId>',
       },
       teamBigFive: teamBigFiveConfig,
+      providerNativeCapabilities,
       notes: ['TODO: fill install/test/lint/typecheck commands after project stack is chosen'],
     };
   }
@@ -1273,6 +1291,7 @@ function buildProjectConfig(targetRoot, teamBigFiveConfig = { enabled: false }, 
       worktreePattern: '../.worktrees/<taskId>-<runId>',
     },
     teamBigFive: teamBigFiveConfig,
+    providerNativeCapabilities,
     notes,
   };
 }

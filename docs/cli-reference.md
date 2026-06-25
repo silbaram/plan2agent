@@ -327,15 +327,18 @@ node scripts/p2a_orchestrate.mjs mark-role \
   --runtime .plan2agent/runs/<run-id>.orchestration-runtime.json \
   --role implementer \
   --role-status complete
+
+node scripts/p2a_orchestrate.mjs failure-policy \
+  --runtime .plan2agent/runs/<run-id>.orchestration-runtime.json
 ```
 
 `p2a_execute start --orchestration-plan <path>`는 원본 plan을 `runs/<runId>.orchestration.json` sidecar로 연결하고, 같은 run에 `runs/<runId>.orchestration-runtime.json`을 초기화한다. runtime sidecar에는 shared mental model, role assignment, communication log, runtime phase가 들어간다. `record`는 실행 중 질문, 상태, 결정, 검증, monitor verdict 같은 closed-loop 이벤트를 append한다.
 
 `runner-guide`는 plan 또는 runtime에서 role별 provider-native adapter 절차를 출력한다. Codex는 skills/custom agents/명시 subagent prompt, Claude는 agent teams/subagents와 foreground prompt fallback, Gemini는 extensions/custom commands/GEMINI.md 기반 read-only review/monitor 절차를 보여준다. 이 명령도 guide만 출력하고 provider CLI나 background process를 시작하지 않는다.
 
-`runner-doctor`는 선택한 project root 아래에 P2A CLI, orchestration schema, Codex/Claude/Gemini provider 자산이 설치되어 있는지 파일만 읽어 점검한다. 기본 모드에서는 provider CLI, browser, background loop, API session을 시작하지 않는다. `--provider codex|claude|gemini`로 범위를 좁힐 수 있다. `--live`를 명시하면 해당 provider의 `--version` probe만 실행해 CLI 존재와 버전 출력만 확인하며, 인증·agent session·API 호출·background loop는 열지 않는다.
+`runner-doctor`는 선택한 project root 아래에 P2A CLI, orchestration schema, Codex/Claude/Gemini provider 자산이 설치되어 있는지 파일만 읽어 점검한다. `.plan2agent/project.config.json.providerNativeCapabilities`가 있으면 사람이 확인한 provider-native 기능 evidence도 함께 표시한다. 파일로 확인 가능한 skills/custom agents/custom commands는 asset 상태로 판정하고, Claude agent teams 같은 계정별 기능은 evidence가 없으면 `manual_check`로 남긴다. 기본 모드에서는 provider CLI, browser, background loop, API session을 시작하지 않는다. `--provider codex|claude|gemini`로 범위를 좁힐 수 있다. `--live`를 명시하면 해당 provider의 `--version` probe만 실행해 CLI 존재와 버전 출력만 확인하며, 인증·agent session·API 호출·background loop는 열지 않는다.
 
-`next-role`, `role-prompt`, `mark-role`은 감독형 scheduler 명령이다. 이 명령들은 다음 role, provider execution guide, prompt, blocked next action 후보를 계산하고 사람이 관찰한 상태 전이를 기록할 뿐, Codex/Claude/Gemini CLI, browser, background loop, unofficial API를 실행하지 않는다. 구독 로그인 기반 사용에서는 사람이 공식 CLI/앱을 직접 열어 prompt를 붙여넣고 결과를 다시 기록한다. monitor role을 `complete`로 기록할 때는 실제 판단값을 `--verdict confirm_done`처럼 함께 넘긴다. 허용 verdict가 아니면 runtime phase는 `blocked`가 되며, 이 runtime은 자동으로 unblock하지 않는다. 계속 진행하려면 현재 run을 blocked로 닫고 후속 supervised run이나 maintenance task로 이어간다.
+`next-role`, `role-prompt`, `mark-role`, `failure-policy`는 감독형 scheduler 명령이다. 이 명령들은 다음 role, provider execution guide, prompt, blocked next action 후보, 실패 후 `retry|ask_user|stop` 정책을 계산하고 사람이 관찰한 상태 전이를 기록할 뿐, Codex/Claude/Gemini CLI, browser, background loop, unofficial API를 실행하지 않는다. 구독 로그인 기반 사용에서는 사람이 공식 CLI/앱을 직접 열어 prompt를 붙여넣고 결과를 다시 기록한다. monitor role을 `complete`로 기록할 때는 실제 판단값을 `--verdict confirm_done`처럼 함께 넘긴다. 허용 verdict가 아니면 runtime phase는 `blocked`가 되며, 이 runtime은 자동으로 unblock하지 않는다. 계속 진행하려면 `failure-policy`가 제안한 방식에 따라 현재 run을 blocked로 닫고 후속 supervised run이나 maintenance task로 이어간다.
 
 monitor gate가 필요한 plan은 `runs/<runId>.monitor-verdict.json`에 `{"verdict":"confirm_done"}` 같은 verdict가 있어야 `finish`가 done으로 닫힌다. 허용되지 않은 verdict는 plan의 `failureClassMap`에 따라 기존 run failure class로 변환되어 blocked 흐름으로 기록된다.
 
