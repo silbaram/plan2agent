@@ -1,5 +1,13 @@
 import { mkdirSync, watch, type FSWatcher } from "node:fs";
-import { app, BrowserWindow, dialog, ipcMain, session } from "electron";
+import {
+  app,
+  BrowserWindow,
+  dialog,
+  ipcMain,
+  Menu,
+  session,
+  type MenuItemConstructorOptions,
+} from "electron";
 import path from "node:path";
 import {
   IPC_CHANNELS,
@@ -201,6 +209,30 @@ function createMainWindow(): void {
   }
 }
 
+function configureApplicationMenu(): void {
+  if (process.platform !== "darwin") {
+    Menu.setApplicationMenu(null);
+    return;
+  }
+
+  const template: MenuItemConstructorOptions[] = [
+    {
+      label: "P2A GUI",
+      submenu: [
+        { role: "about" },
+        { type: "separator" },
+        { role: "hide" },
+        { role: "hideOthers" },
+        { role: "unhide" },
+        { type: "separator" },
+        { role: "quit" },
+      ],
+    },
+  ];
+
+  Menu.setApplicationMenu(Menu.buildFromTemplate(template));
+}
+
 function registerIpcHandlers(): void {
   ipcMain.handle(IPC_CHANNELS.appGetRuntimeInfo, () => runtimeInfo());
   ipcMain.handle(IPC_CHANNELS.configGet, () => loadGuiConfig(guiConfigPath()));
@@ -342,6 +374,7 @@ function installContentSecurityPolicy(): void {
 applyEnvironmentOverrides();
 
 app.whenReady().then(() => {
+  configureApplicationMenu();
   installContentSecurityPolicy();
   registerIpcHandlers();
   createMainWindow();

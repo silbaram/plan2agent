@@ -23,6 +23,8 @@ import {
 } from "../../shared/executionFailure";
 import { TerminalSurface } from "./TerminalSurface";
 import { localeNames, uiCopy, type UiCopy } from "./i18n";
+import { JsonPreview } from "./JsonPreview";
+import { MarkdownPreview } from "./MarkdownPreview";
 import type {
   AgentTool,
   ArtifactFileReadResult,
@@ -33,7 +35,6 @@ import type {
   ExecutionFinishStatus,
   FailureClass,
   GuiConfigSnapshot,
-  OnboardingAction,
   OrchestrationRoleStatus,
   ProjectSnapshot,
   ProjectWatchEvent,
@@ -233,7 +234,7 @@ function projectFlowItems(
     {
       id: "05",
       title: copy.tasks.flow.execution,
-      state: !taskReady ? "next" : executionStarted ? "done" : executionReady ? "active" : "next",
+      state: !taskReady ? "next" : executionStarted || executionReady ? "active" : "next",
     },
   ];
 
@@ -455,12 +456,38 @@ function localizedExecutionFailure(
   return localized ? { ...failure, ...localized } : failure;
 }
 
-function impactText(action: OnboardingAction, copy: UiCopy): string {
-  return copy.impact[action.impact];
-}
+function overviewProgressSummary(
+  onboarding: ProjectSnapshot["onboarding"],
+  artifact: ArtifactSummary | null,
+  locale: UiLocale,
+  copy: UiCopy,
+) {
+  const readyTasks = artifact?.taskCounts.ready ?? 0;
+  const runCount = artifact?.runCount ?? 0;
 
-function onboardingActionCopy(action: OnboardingAction, copy: UiCopy) {
-  return copy.onboarding.actions[action.id];
+  if (onboarding.stage === "execution_ready") {
+    if (readyTasks > 0) {
+      return {
+        title: copy.onboarding.progress.execution_ready.readyTitle.replace(
+          "{count}",
+          formatCount(readyTasks, locale),
+        ),
+        detail: copy.onboarding.progress.execution_ready.readyDetail,
+        nextStep: copy.onboarding.progress.execution_ready.nextStepReady,
+      };
+    }
+
+    return {
+      title: copy.onboarding.progress.execution_ready.runTitle.replace(
+        "{count}",
+        formatCount(runCount, locale),
+      ),
+      detail: copy.onboarding.progress.execution_ready.runDetail,
+      nextStep: copy.onboarding.progress.execution_ready.nextStepRuns,
+    };
+  }
+
+  return copy.onboarding.progress[onboarding.stage];
 }
 
 export default function App() {
@@ -589,9 +616,6 @@ export default function App() {
     artifactDocuments[0] ??
     null;
   const onboarding = projectSnapshot?.onboarding ?? null;
-  const onboardingActions = onboarding
-    ? [onboarding.primaryAction, ...onboarding.secondaryActions]
-    : [];
   const selectedTask = tasks.find((task) => task.id === selectedTaskId) ?? null;
   const selectedRun = runs.find((run) => run.runId === selectedRunId) ?? null;
   const selectedTaskRuns = selectedTask
@@ -1043,79 +1067,48 @@ export default function App() {
     }
   }
 
-  function renderOnboardingAction(action: OnboardingAction, variant: "primary" | "secondary") {
-    const actionCopy = onboardingActionCopy(action, copy);
+  function renderOverviewStatePanel() {
+    const activeFlowItem =
+      projectFlow.find((item) => item.state === "active") ??
+      [...projectFlow].reverse().find((item) => item.state === "done") ??
+      projectFlow[0];
+    const progress = onboarding ? overviewProgressSummary(onboarding, artifact, locale, copy) : null;
+
     return (
-      <article className={`onboarding-action onboarding-action--${variant}`} key={action.id}>
-        <div className="onboarding-action__head">
+      <section className="overview-state-panel" aria-label={copy.common.milestones}>
+        <div className="overview-state-panel__head">
           <div>
-            <strong>{actionCopy.label}</strong>
-            <span>{actionCopy.description}</span>
+            <div className="label">{copy.common.milestones}</div>
+            <h3>{activeFlowItem?.title ?? projectStateLabel(projectSnapshot, copy)}</h3>
           </div>
-          <em className={`impact-badge impact-badge--${action.impact}`}>
-            {impactText(action, copy)}
-          </em>
+          <span className={`state-pill state-pill--${statusClass}`}>{statusText}</span>
         </div>
-        <dl className="onboarding-action__meta">
-          <dt>cwd</dt>
-          <dd className="mono">{action.cwd}</dd>
-          <dt>target</dt>
-          <dd className="mono">{action.targetPath}</dd>
-        </dl>
-        {action.command ? (
-          <code>{action.command}</code>
-        ) : (
-          <span className="onboarding-action__empty">{copy.common.noExternalCommand}</span>
+
+        <div className="overview-flow-diagram">
+          {projectFlow.map((item) => (
+            <div className={`overview-flow-step overview-flow-step--${item.state}`} key={item.id}>
+              <span className="mono overview-flow-step__id">{item.id}</span>
+              <strong>{item.title}</strong>
+              <em>{item.status}</em>
+            </div>
+          ))}
+        </div>
+
+        {progress && (
+          <div className="overview-current-progress">
+            <div>
+              <span>{copy.overview.currentProgress}</span>
+              <strong>{progress.title}</strong>
+              <small>{progress.detail}</small>
+            </div>
+            <div>
+              <span>{copy.overview.nextStep}</span>
+              <strong>{progress.nextStep}</strong>
+            </div>
+          </div>
         )}
-      </article>
-    );
-  }
 
-  function renderOnboardingPanel() {
-    if (!onboarding) return null;
-
-    return (
-      <section className="workbench-panel onboarding-panel">
-        <div className="section-head">
-          <div>
-              <div className="label">{copy.overview.onboarding}</div>
-              <h3>{copy.onboarding.titles[onboarding.stage]}</h3>
-          </div>
-          <span className={`state-pill state-pill--${projectSnapshot?.state ?? "idle"}`}>
-            {projectStateLabel(projectSnapshot, copy)}
-          </span>
-        </div>
-        <div className="onboarding-body">
-          <p>{copy.onboarding.summaries[onboarding.stage]}</p>
-          <div className="onboarding-actions">
-            {renderOnboardingAction(onboarding.primaryAction, "primary")}
-            {onboarding.secondaryActions.map((action) => renderOnboardingAction(action, "secondary"))}
-          </div>
-          <div className="onboarding-checks" aria-label={copy.common.onboardingChecks}>
-            {onboarding.checks.map((check) => (
-              <div className={`onboarding-check onboarding-check--${check.status}`} key={check.id}>
-                <span>{check.label}</span>
-                <strong>{check.detail}</strong>
-              </div>
-            ))}
-          </div>
-        </div>
-      </section>
-    );
-  }
-
-  function renderOverviewTab() {
-    return (
-      <>
-        <div className="summary-grid" aria-label={copy.common.projectSummary}>
-          <div>
-            <span>{copy.overview.project}</span>
-            <strong>{projectSnapshot?.projectId ?? projectSnapshot?.name ?? copy.common.none}</strong>
-          </div>
-          <div>
-            <span>{copy.overview.state}</span>
-            <strong>{projectStateLabel(projectSnapshot, copy)}</strong>
-          </div>
+        <div className="overview-state-metrics" aria-label={copy.common.projectSummary}>
           <div>
             <span>{copy.overview.readyTasks}</span>
             <strong>
@@ -1132,93 +1125,12 @@ export default function App() {
             <strong>{artifact ? formatCount(artifact.runCount, locale) : "0"}</strong>
           </div>
         </div>
-
-        {renderOnboardingPanel()}
-
-        <section className="workbench-panel">
-          <div className="section-head">
-            <div>
-              <div className="label">{copy.overview.artifacts}</div>
-              <h3>{copy.overview.detectedRoots}</h3>
-            </div>
-          </div>
-          {projectSnapshot && projectSnapshot.artifacts.length > 0 ? (
-            <div className="artifact-list">
-              {projectSnapshot.artifacts.map((item) => (
-                <article className="artifact-row" key={item.rootPath}>
-                  <div className="artifact-row__head">
-                    <div>
-                      <strong>{item.projectId}</strong>
-                      <span className="mono">{item.relativePath}</span>
-                    </div>
-                    <span className="mono">{item.activeIteration ?? copy.common.none}</span>
-                  </div>
-                  <div className="task-counts" aria-label={copy.common.taskCounts}>
-                    <span>{copy.status.ready} {formatCount(item.taskCounts.ready, locale)}</span>
-                    <span>{copy.status.todo} {formatCount(item.taskCounts.todo, locale)}</span>
-                    <span>{copy.status.in_progress} {formatCount(item.taskCounts.inProgress, locale)}</span>
-                    <span>{copy.status.blocked} {formatCount(item.taskCounts.blocked, locale)}</span>
-                    <span>{copy.status.done} {formatCount(item.taskCounts.done, locale)}</span>
-                  </div>
-                  <div className="gate-strip" aria-label={copy.common.gateStatus}>
-                    {item.gates.map((gate) => (
-                      <span className={`gate-chip gate-chip--${gate.state}`} key={gate.id}>
-                        <span className="mono">{gate.id}</span>
-                        {gate.label}
-                      </span>
-                    ))}
-                  </div>
-                  <div className="validation-strip" aria-label={copy.common.schemaValidation}>
-                    {item.validations.map((validation) => (
-                      <span
-                        className={`validation-chip validation-chip--${validation.status}`}
-                        key={validation.id}
-                        title={validation.errors.join("\n") || validation.relativePath || validation.label}
-                      >
-                        {validation.label}
-                        <span className="mono">{statusLabel(validation.status, copy)}</span>
-                      </span>
-                    ))}
-                  </div>
-                </article>
-              ))}
-            </div>
-          ) : (
-            <div className="empty-panel">
-              <FileJson size={18} strokeWidth={1.7} aria-hidden="true" />
-              <span>{copy.common.noArtifactRoot}</span>
-            </div>
-          )}
-        </section>
-
-        <section className="workbench-panel">
-          <div className="section-head">
-            <div>
-              <div className="label">{copy.overview.filesystem}</div>
-              <h3>{copy.overview.readOnlyChecks}</h3>
-            </div>
-          </div>
-          <div className="check-grid">
-            {(projectSnapshot?.checks ?? []).map((check) => (
-              <div className={`check-row check-row--${check.exists ? "present" : "missing"}`} key={check.id}>
-                <ShieldCheck size={14} strokeWidth={1.7} aria-hidden="true" />
-                <span>{check.label}</span>
-                <em className="mono">
-                  {check.exists ? copy.status.present : copy.status.missing}
-                </em>
-                <small className="mono">{check.relativePath}</small>
-              </div>
-            ))}
-            {!projectSnapshot && (
-              <div className="empty-panel empty-panel--inline">
-                <FileJson size={18} strokeWidth={1.7} aria-hidden="true" />
-                <span>{copy.common.noFolderSelected}</span>
-              </div>
-            )}
-          </div>
-        </section>
-      </>
+      </section>
     );
+  }
+
+  function renderOverviewTab() {
+    return renderOverviewStatePanel();
   }
 
   function renderArtifactViewer() {
@@ -1276,9 +1188,15 @@ export default function App() {
                 <span className="mono">{formatBytes(file.sizeBytes)}</span>
                 <span className="mono">{formatDateTime(file.modifiedAt, locale, copy)}</span>
               </div>
-              <pre className={`artifact-viewer__content artifact-viewer__content--${file.kind}`}>
-                {formatArtifactPreview(file)}
-              </pre>
+              {file.kind === "markdown" ? (
+                <MarkdownPreview content={file.content} />
+              ) : file.kind === "json" ? (
+                <JsonPreview content={file.content} labels={copy.artifacts.jsonViewer} />
+              ) : (
+                <pre className={`artifact-viewer__content artifact-viewer__content--${file.kind}`}>
+                  {formatArtifactPreview(file)}
+                </pre>
+              )}
             </>
           )}
         </section>
@@ -1533,6 +1451,7 @@ export default function App() {
           )}
         </section>
         {renderRunOrchestrationPanel()}
+        {selectedRun?.status === "started" && renderFinishPanel()}
       </>
     );
   }
@@ -1764,85 +1683,6 @@ export default function App() {
             </div>
           </>
         )}
-      </section>
-    );
-  }
-
-  function renderStartRunPanel() {
-    const canStart =
-      Boolean(projectSnapshot && artifact && selectedTask) &&
-      Boolean(selectedTask?.ready) &&
-      startState !== "running";
-
-    return (
-      <section className="workbench-panel start-run-panel">
-        <div className="section-head">
-          <div>
-            <div className="label">{copy.common.startRun}</div>
-            <h3>{selectedTask?.id ?? copy.tasks.noTaskSelected}</h3>
-          </div>
-          <span className={`status-badge status-badge--${selectedTask?.status ?? "todo"}`}>
-            {selectedTask
-              ? selectedTask.ready
-                ? copy.status.ready
-                : statusLabel(selectedTask.status, copy)
-              : copy.common.none}
-          </span>
-        </div>
-
-        <div className="finish-panel__body start-run-panel__body">
-          <div className="finish-panel__controls">
-            <div className="detail-list detail-list--embedded">
-              <div>
-                <span>{copy.runs.task}</span>
-                <strong className="mono">{selectedTask?.id ?? copy.common.none}</strong>
-              </div>
-              <div>
-                <span>{copy.runs.agent}</span>
-                <strong className="mono">{projectSnapshot?.defaultAgentTool ?? "codex"}</strong>
-              </div>
-              <div>
-                <span>{copy.common.workspace}</span>
-                <strong className="mono">{formatPath(projectSnapshot?.rootPath, copy)}</strong>
-              </div>
-              <div>
-                <span>{copy.tasks.target}</span>
-                <strong>{selectedTask?.targetArea ?? copy.common.none}</strong>
-              </div>
-            </div>
-          </div>
-
-          <div className="finish-panel__result">
-            <div className="command-preview">
-              <span className="mono">cwd {formatPath(projectSnapshot?.rootPath, copy)}</span>
-              <code>{startResult?.command ?? startPreviewCommand()}</code>
-            </div>
-            <div className="finish-actions">
-              <button
-                className="terminal-control terminal-control--primary"
-                type="button"
-                onClick={startSelectedTask}
-                disabled={!canStart}
-              >
-                {startState === "running" ? copy.common.loading : copy.common.startRun}
-              </button>
-              <span className="mono">
-                {startResult
-                  ? `exit ${startResult.exitCode} · ${formatMilliseconds(startResult.durationMs, copy)}`
-                  : selectedTask?.ready
-                    ? copy.status.ready
-                    : copy.common.notRunnable}
-              </span>
-            </div>
-            {renderStartFailureDiagnostic()}
-            {startResult && (
-              <div className="command-output">
-                <pre>{outputPreview(startResult.stdout, copy)}</pre>
-                <pre>{outputPreview(startResult.stderr, copy)}</pre>
-              </div>
-            )}
-          </div>
-        </div>
       </section>
     );
   }
@@ -2092,37 +1932,14 @@ export default function App() {
 
   function renderTerminalTab() {
     return (
-      <>
-        {renderStartRunPanel()}
-
-        <TerminalSurface
-          cwd={projectSnapshot?.rootPath}
-          command={onboarding?.primaryAction.command ?? projectSnapshot?.commands[0]?.command}
-          agentTool={terminalAgentForExecution(projectSnapshot?.defaultAgentTool)}
-          taskId={selectedTask?.id}
-          taskPrompt={selectedTask?.suggestedAgentPrompt}
-          locale={locale}
-        />
-
-        {renderFinishPanel()}
-
-        <section className="workbench-panel">
-          <div className="section-head">
-            <div>
-              <div className="label">{copy.tasks.prompt}</div>
-              <h3>{selectedTask?.id ?? copy.tasks.noTaskSelected}</h3>
-            </div>
-          </div>
-          {selectedTask ? (
-            <pre className="prompt-preview">{selectedTask.suggestedAgentPrompt}</pre>
-          ) : (
-            <div className="empty-panel">
-              <FileJson size={18} strokeWidth={1.7} aria-hidden="true" />
-              <span>{copy.tasks.selectTaskPrompt}</span>
-            </div>
-          )}
-        </section>
-      </>
+      <TerminalSurface
+        cwd={projectSnapshot?.rootPath}
+        command={null}
+        agentTool={terminalAgentForExecution(projectSnapshot?.defaultAgentTool)}
+        taskId={null}
+        taskPrompt={null}
+        locale={locale}
+      />
     );
   }
 
@@ -2317,46 +2134,6 @@ export default function App() {
   function renderOverviewInspector() {
     return (
       <>
-        {onboarding && (
-          <>
-            <div className="section-head">
-              <div>
-                <div className="label">{copy.overview.nextAction}</div>
-                <h3>{onboardingActionCopy(onboarding.primaryAction, copy).label}</h3>
-              </div>
-            </div>
-            <div className="detail-list">
-              <div>
-                <span>{copy.overview.stage}</span>
-                <strong className="mono">{onboarding.stage}</strong>
-              </div>
-              <div>
-                <span>{copy.overview.impact}</span>
-                <strong>{impactText(onboarding.primaryAction, copy)}</strong>
-              </div>
-              <div>
-                <span>{copy.tasks.target}</span>
-                <strong className="mono">{onboarding.primaryAction.targetPath}</strong>
-              </div>
-              <div>
-                <span>cwd</span>
-                <strong className="mono">{onboarding.primaryAction.cwd}</strong>
-              </div>
-            </div>
-            {onboarding.primaryAction.command && (
-              <>
-                <div className="section-head section-head--tight">
-                  <div>
-                    <div className="label">{copy.common.command}</div>
-                    <h3>{copy.common.externalTerminal}</h3>
-                  </div>
-                </div>
-                <pre className="inspector-code">{onboarding.primaryAction.command}</pre>
-              </>
-            )}
-          </>
-        )}
-
         <div className="section-head">
           <div>
             <div className="label">{copy.settings.diagnostics}</div>
@@ -2788,53 +2565,6 @@ export default function App() {
     );
   }
 
-  function renderTerminalInspector() {
-    return (
-      <>
-        <div className="section-head">
-          <div>
-            <div className="label">{copy.terminal.session}</div>
-            <h3>{copy.terminal.executionBoundary}</h3>
-          </div>
-        </div>
-        <div className="detail-list">
-          <div>
-            <span>cwd</span>
-            <strong className="mono">{formatPath(projectSnapshot?.rootPath, copy)}</strong>
-          </div>
-          <div>
-            <span>{copy.runs.agent}</span>
-            <strong className="mono">{projectSnapshot?.defaultAgentTool ?? "codex"}</strong>
-          </div>
-          <div>
-            <span>{copy.runs.task}</span>
-            <strong className="mono">{selectedTask?.id ?? copy.common.none}</strong>
-          </div>
-          <div>
-            <span>{copy.common.mode}</span>
-            <strong>{copy.terminal.foregroundSession}</strong>
-          </div>
-        </div>
-        <div className="section-head section-head--tight">
-          <div>
-            <div className="label">{copy.terminal.boundary}</div>
-            <h3>{copy.terminal.recordingScope}</h3>
-          </div>
-        </div>
-        <div className="detail-list">
-          <div>
-            <span>{copy.terminal.terminalTranscript}</span>
-            <strong>{copy.terminal.notPersisted}</strong>
-          </div>
-          <div>
-            <span>{copy.terminal.finishRun}</span>
-            <strong>{copy.terminal.finishWritesRun}</strong>
-          </div>
-        </div>
-      </>
-    );
-  }
-
   function renderSettingsInspector() {
     return (
       <>
@@ -2903,10 +2633,11 @@ export default function App() {
     if (activeTab === "tasks") return renderTaskInspector();
     if (activeTab === "runs") return renderRunInspector();
     if (activeTab === "artifacts") return renderArtifactInspector();
-    if (activeTab === "terminal") return renderTerminalInspector();
     if (activeTab === "settings") return renderSettingsInspector();
     return renderOverviewInspector();
   }
+
+  const inspectorVisible = activeTab !== "overview" && activeTab !== "terminal";
 
   return (
     <main className="app-shell">
@@ -2928,7 +2659,7 @@ export default function App() {
         </div>
       </header>
 
-      <section className="workspace">
+      <section className={`workspace${inspectorVisible ? "" : " workspace--wide"}`}>
         <nav className="rail" aria-label={copy.common.primaryNavigation}>
           {navItems.map(([id, Icon]) => (
             <button
@@ -3014,6 +2745,10 @@ export default function App() {
           </section>
 
           <dl className="compact-dl">
+            <dt>{copy.overview.project}</dt>
+            <dd className="mono">
+              {projectSnapshot?.projectId ?? artifact?.projectId ?? copy.common.none}
+            </dd>
             <dt>{copy.common.selectedPath}</dt>
             <dd className="mono">{formatPath(projectSnapshot?.rootPath, copy)}</dd>
             <dt>{copy.overview.state}</dt>
@@ -3064,13 +2799,12 @@ export default function App() {
               <div className="label">{tab.label}</div>
               <h2>{projectSnapshot ? tab.title : copy.app.openProject}</h2>
             </div>
-            <span className={`state-pill state-pill--${statusClass}`}>{statusText}</span>
           </div>
 
           {renderActiveTab()}
         </section>
 
-        <aside className="inspector">{renderInspector()}</aside>
+        {inspectorVisible && <aside className="inspector">{renderInspector()}</aside>}
       </section>
 
       <footer className="statusbar">

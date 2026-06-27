@@ -31,8 +31,8 @@ type TerminalSize = {
   rows: number;
 };
 
-function normalizeCommand(value: string | null | undefined, copy: UiCopy): string {
-  return value?.trim() || copy.terminal.noCommandGuidance;
+function normalizeCommand(value: string | null | undefined): string | null {
+  return value?.trim() || null;
 }
 
 function normalizeCwd(value: string | null | undefined): string {
@@ -46,28 +46,40 @@ function createIdleTranscript({
   taskId,
   taskPrompt,
   copy,
-}: Required<Omit<TerminalSurfaceProps, "locale">> & { copy: UiCopy }): string[] {
-  const promptPreview = taskPrompt
-    ? taskPrompt.split(/\s+/).slice(0, 18).join(" ")
-    : copy.terminal.noSelectedTaskPrompt;
-
-  return [
+}: {
+  cwd: string;
+  command: string | null;
+  agentTool: AgentTool | null;
+  taskId: string | null;
+  taskPrompt: string | null;
+  copy: UiCopy;
+}): string[] {
+  const transcript = [
     `\x1b[38;5;244m${copy.terminal.idleTitle}\x1b[0m\r\n`,
     `\x1b[38;5;244m# cwd\x1b[0m ${cwd}\r\n`,
     `\x1b[38;5;244m# agent\x1b[0m ${agentTool ?? "manual"}\r\n`,
-    taskId
-      ? `\x1b[38;5;244m# task\x1b[0m ${taskId}\r\n`
-      : `\x1b[38;5;244m# task\x1b[0m ${copy.common.none}\r\n`,
-    "\r\n",
-    `\x1b[38;5;244m# preview\x1b[0m ${command}\r\n`,
     "\r\n",
     `\x1b[38;5;109m[renderer]\x1b[0m ${copy.terminal.stdinBoundary}\r\n`,
     agentTool
       ? `\x1b[38;5;109m[pty]\x1b[0m ${copy.terminal.startLaunches}\r\n`
       : `\x1b[38;5;109m[pty]\x1b[0m ${copy.terminal.manualMode}\r\n`,
     `\x1b[38;5;109m[links]\x1b[0m ${copy.terminal.linksActive}\r\n`,
-    `\x1b[38;5;109m[${copy.terminal.promptPreview}]\x1b[0m ${promptPreview}\r\n`,
   ];
+
+  if (taskId) {
+    transcript.splice(3, 0, `\x1b[38;5;244m# task\x1b[0m ${taskId}\r\n`);
+  }
+
+  if (command) {
+    transcript.push(`\x1b[38;5;244m# preview\x1b[0m ${command}\r\n`);
+  }
+
+  if (taskPrompt) {
+    const promptPreview = taskPrompt.split(/\s+/).slice(0, 18).join(" ");
+    transcript.push(`\x1b[38;5;109m[${copy.terminal.promptPreview}]\x1b[0m ${promptPreview}\r\n`);
+  }
+
+  return transcript;
 }
 
 export function TerminalSurface({
@@ -107,7 +119,7 @@ export function TerminalSurface({
   const idleTranscript = useMemo(() => {
     return createIdleTranscript({
       cwd: normalizeCwd(cwd),
-      command: normalizeCommand(command, copy),
+      command: normalizeCommand(command),
       agentTool,
       taskId: taskId ?? null,
       taskPrompt: taskPrompt ?? null,
