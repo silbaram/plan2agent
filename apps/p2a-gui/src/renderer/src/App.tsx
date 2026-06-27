@@ -14,7 +14,15 @@ import {
   TerminalSquare,
   X,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type KeyboardEvent,
+  type PointerEvent,
+} from "react";
 import { DEFAULT_UI_LOCALE, EXECUTION_AGENT_TOOLS, UI_LOCALES } from "../../shared/ipc";
 import {
   summarizeFinishRunFailure,
@@ -113,6 +121,9 @@ const settingsCommands = [
   ["package", "npm run package"],
   ["packaged smoke", "npm run smoke:packaged"],
 ] as const;
+const DEFAULT_SIDEBAR_WIDTH = 280;
+const MIN_SIDEBAR_WIDTH = 240;
+const MAX_SIDEBAR_WIDTH = 420;
 
 const localeTags: Record<UiLocale, string> = {
   ko: "ko-KR",
@@ -179,6 +190,10 @@ function formatMilliseconds(value: number | null | undefined, copy: UiCopy): str
   if (typeof value !== "number" || !Number.isFinite(value)) return copy.common.none;
   if (value < 1000) return `${value}ms`;
   return `${(value / 1000).toFixed(1)}s`;
+}
+
+function clampSidebarWidth(value: number): number {
+  return Math.min(MAX_SIDEBAR_WIDTH, Math.max(MIN_SIDEBAR_WIDTH, Math.round(value)));
 }
 
 function statusLabel(value: string, copy: UiCopy): string {
@@ -529,9 +544,11 @@ export default function App() {
   const [orchestrationDetailInput, setOrchestrationDetailInput] = useState("");
   const [orchestrationVerdictInput, setOrchestrationVerdictInput] = useState("");
   const [promptCopyState, setPromptCopyState] = useState<PromptCopyState>("idle");
+  const [sidebarWidth, setSidebarWidth] = useState(DEFAULT_SIDEBAR_WIDTH);
   const artifactViewerRef = useRef<HTMLElement | null>(null);
   const artifactViewerCloseButtonRef = useRef<HTMLButtonElement | null>(null);
   const artifactViewerReturnFocusRef = useRef<HTMLElement | null>(null);
+  const sidebarResizeRef = useRef<{ pointerId: number; startX: number; startWidth: number } | null>(null);
 
   useEffect(() => {
     window.p2a.app
@@ -2325,27 +2342,19 @@ export default function App() {
           </div>
         </div>
 
-        {renderStartRunInspectorAction()}
-
-        <div className="section-head section-head--tight">
-          <div>
-            <div className="label">{copy.tasks.acceptance}</div>
-            <h3>{copy.tasks.criteria}</h3>
-          </div>
-        </div>
-        <ul className="criteria-list">
-          {selectedTask.acceptanceCriteria.map((criterion) => (
-            <li key={criterion}>{criterion}</li>
-          ))}
-        </ul>
-
-        <div className="section-head section-head--tight">
-          <div>
-            <div className="label">{copy.tasks.prompt}</div>
-            <h3>{copy.tasks.agentHandoff}</h3>
-          </div>
-        </div>
-        <pre className="inspector-code">{selectedTask.suggestedAgentPrompt}</pre>
+        <details className="inspector-disclosure">
+          <summary>
+            <span className="inspector-disclosure__title">
+              <span className="label">{copy.tasks.acceptance}</span>
+              <strong>{copy.tasks.criteria}</strong>
+            </span>
+          </summary>
+          <ul className="criteria-list">
+            {selectedTask.acceptanceCriteria.map((criterion) => (
+              <li key={criterion}>{criterion}</li>
+            ))}
+          </ul>
+        </details>
 
         {selectedTaskRuns.length > 0 && (
           <>
@@ -2638,6 +2647,51 @@ export default function App() {
   }
 
   const inspectorVisible = activeTab !== "overview" && activeTab !== "terminal";
+  const workspaceStyle = {
+    "--sidebar-w": `${sidebarWidth}px`,
+  } as CSSProperties;
+
+  function beginSidebarResize(event: PointerEvent<HTMLDivElement>) {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    sidebarResizeRef.current = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startWidth: sidebarWidth,
+    };
+    event.currentTarget.setPointerCapture(event.pointerId);
+  }
+
+  function updateSidebarResize(event: PointerEvent<HTMLDivElement>) {
+    const resize = sidebarResizeRef.current;
+    if (!resize || resize.pointerId !== event.pointerId) return;
+    setSidebarWidth(clampSidebarWidth(resize.startWidth + event.clientX - resize.startX));
+  }
+
+  function endSidebarResize(event: PointerEvent<HTMLDivElement>) {
+    const resize = sidebarResizeRef.current;
+    if (!resize || resize.pointerId !== event.pointerId) return;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+    sidebarResizeRef.current = null;
+  }
+
+  function handleSidebarResizeKeyDown(event: KeyboardEvent<HTMLDivElement>) {
+    if (event.key === "ArrowLeft") {
+      event.preventDefault();
+      setSidebarWidth((width) => clampSidebarWidth(width - 12));
+    } else if (event.key === "ArrowRight") {
+      event.preventDefault();
+      setSidebarWidth((width) => clampSidebarWidth(width + 12));
+    } else if (event.key === "Home") {
+      event.preventDefault();
+      setSidebarWidth(MIN_SIDEBAR_WIDTH);
+    } else if (event.key === "End") {
+      event.preventDefault();
+      setSidebarWidth(MAX_SIDEBAR_WIDTH);
+    }
+  }
 
   return (
     <main className="app-shell">
@@ -2652,14 +2706,12 @@ export default function App() {
           <strong>{projectSnapshot?.name ?? copy.app.titleFallback}</strong>
           <span>{projectSnapshot ? projectStateLabel(projectSnapshot, copy) : copy.app.readOnlyShellReady}</span>
         </div>
-        <div className="titlebar__meta mono">
-          <span>{runtimeInfo ? `electron ${runtimeInfo.electronVersion}` : "electron"}</span>
-          <span className="sep" />
-          <span>{runtimeInfo ? `node ${runtimeInfo.nodeVersion}` : "node"}</span>
-        </div>
       </header>
 
-      <section className={`workspace${inspectorVisible ? "" : " workspace--wide"}`}>
+      <section
+        className={`workspace${inspectorVisible ? "" : " workspace--wide"}`}
+        style={workspaceStyle}
+      >
         <nav className="rail" aria-label={copy.common.primaryNavigation}>
           {navItems.map(([id, Icon]) => (
             <button
@@ -2749,8 +2801,6 @@ export default function App() {
             <dd className="mono">
               {projectSnapshot?.projectId ?? artifact?.projectId ?? copy.common.none}
             </dd>
-            <dt>{copy.common.selectedPath}</dt>
-            <dd className="mono">{formatPath(projectSnapshot?.rootPath, copy)}</dd>
             <dt>{copy.overview.state}</dt>
             <dd>{projectStateLabel(projectSnapshot, copy)}</dd>
             <dt>{copy.common.artifactRoot}</dt>
@@ -2792,6 +2842,22 @@ export default function App() {
             </div>
           </section>
         </aside>
+
+        <div
+          className="sidebar-resizer"
+          role="separator"
+          aria-label={copy.common.resizeSidebar}
+          aria-orientation="vertical"
+          aria-valuemin={MIN_SIDEBAR_WIDTH}
+          aria-valuemax={MAX_SIDEBAR_WIDTH}
+          aria-valuenow={sidebarWidth}
+          tabIndex={0}
+          onPointerDown={beginSidebarResize}
+          onPointerMove={updateSidebarResize}
+          onPointerUp={endSidebarResize}
+          onPointerCancel={endSidebarResize}
+          onKeyDown={handleSidebarResizeKeyDown}
+        />
 
         <section className="content">
           <div className="content-head">
