@@ -4,25 +4,25 @@
 import { existsSync, lstatSync, readFileSync, readdirSync, realpathSync } from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { pathToFileURL } from 'node:url';
+import { P2A_DIR, resolveP2aPaths } from './p2a_paths.mjs';
 
-const __filename = fileURLToPath(import.meta.url);
-const ROOT = path.resolve(path.dirname(__filename), '..');
+const P2A_PATHS = resolveP2aPaths(import.meta.url);
 const SCHEMA_PATHS = {
-  intake: path.join(ROOT, 'schemas', 'intake.schema.json'),
-  spec: path.join(ROOT, 'schemas', 'spec.schema.json'),
-  task_graph: path.join(ROOT, 'schemas', 'task-graph.schema.json'),
-  task_context: path.join(ROOT, 'schemas', 'task-context.schema.json'),
-  review: path.join(ROOT, 'schemas', 'review.schema.json'),
-  run: path.join(ROOT, 'schemas', 'run.schema.json'),
-  run_index: path.join(ROOT, 'schemas', 'run-index.schema.json'),
-  orchestration_plan: path.join(ROOT, 'schemas', 'orchestration-plan.schema.json'),
-  orchestration_runtime: path.join(ROOT, 'schemas', 'orchestration-runtime.schema.json'),
-  skill_proposal: path.join(ROOT, 'schemas', 'skill-proposal.schema.json'),
-  proposal_review: path.join(ROOT, 'schemas', 'proposal-review.schema.json'),
-  proposal_curation: path.join(ROOT, 'schemas', 'proposal-curation.schema.json'),
-  proposal_patch_draft: path.join(ROOT, 'schemas', 'proposal-patch-draft.schema.json'),
-  proposal_draft_approval: path.join(ROOT, 'schemas', 'proposal-draft-approval.schema.json'),
+  intake: path.join(P2A_PATHS.schemasDir, 'intake.schema.json'),
+  spec: path.join(P2A_PATHS.schemasDir, 'spec.schema.json'),
+  task_graph: path.join(P2A_PATHS.schemasDir, 'task-graph.schema.json'),
+  task_context: path.join(P2A_PATHS.schemasDir, 'task-context.schema.json'),
+  review: path.join(P2A_PATHS.schemasDir, 'review.schema.json'),
+  run: path.join(P2A_PATHS.schemasDir, 'run.schema.json'),
+  run_index: path.join(P2A_PATHS.schemasDir, 'run-index.schema.json'),
+  orchestration_plan: path.join(P2A_PATHS.schemasDir, 'orchestration-plan.schema.json'),
+  orchestration_runtime: path.join(P2A_PATHS.schemasDir, 'orchestration-runtime.schema.json'),
+  skill_proposal: path.join(P2A_PATHS.schemasDir, 'skill-proposal.schema.json'),
+  proposal_review: path.join(P2A_PATHS.schemasDir, 'proposal-review.schema.json'),
+  proposal_curation: path.join(P2A_PATHS.schemasDir, 'proposal-curation.schema.json'),
+  proposal_patch_draft: path.join(P2A_PATHS.schemasDir, 'proposal-patch-draft.schema.json'),
+  proposal_draft_approval: path.join(P2A_PATHS.schemasDir, 'proposal-draft-approval.schema.json'),
 };
 const GATE_PATHS = {
   statusDoc: 'status.md',
@@ -173,6 +173,20 @@ function assertFile(filePath, label) {
   if (!lstatSync(filePath).isFile()) throw new ValidationError(`${label} must be a file: ${filePath}`);
 }
 
+function resolveProjectRelativeReference(reference, baseDir) {
+  if (!reference.startsWith(`${P2A_DIR}/`) && !reference.startsWith(`${P2A_DIR}${path.sep}`)) return null;
+  let current = path.resolve(baseDir);
+  while (true) {
+    const p2aDir = path.join(current, P2A_DIR);
+    if (existsSync(p2aDir) && lstatSync(p2aDir).isDirectory()) {
+      return path.resolve(current, reference);
+    }
+    const parent = path.dirname(current);
+    if (parent === current) return null;
+    current = parent;
+  }
+}
+
 function resolveExistingFileReference(reference, baseDir) {
   if (!reference || typeof reference !== 'string') return null;
   const candidates = path.isAbsolute(reference)
@@ -180,8 +194,9 @@ function resolveExistingFileReference(reference, baseDir) {
     : [
         path.resolve(process.cwd(), reference),
         path.resolve(baseDir, reference),
+        resolveProjectRelativeReference(reference, baseDir),
       ];
-  return candidates.find((candidate) => existsSync(candidate) && lstatSync(candidate).isFile()) ?? null;
+  return candidates.filter(Boolean).find((candidate) => existsSync(candidate) && lstatSync(candidate).isFile()) ?? null;
 }
 
 function resolveSpecSourceIntake(specPath, specReference = loadJson(specPath)) {
@@ -1102,11 +1117,13 @@ function artifactReferenceMatches(reference, artifactRoot, filePath) {
   if (path.isAbsolute(reference) && path.resolve(reference) === path.resolve(filePath)) return true;
   const normalized = normalizeReference(reference);
   const expectedRelative = artifactRelativeRef(artifactRoot, filePath);
+  const reviewRelative = normalizePath(path.relative(path.join(artifactRoot, 'gate-d-review'), filePath));
   const projectRelative = `${path.basename(artifactRoot)}/${expectedRelative}`;
-  const artifactsRelative = `artifacts/${projectRelative}`;
+  const p2aArtifactsRelative = `.plan2agent/artifacts/${projectRelative}`;
   return normalized === expectedRelative
+    || normalized === reviewRelative
     || normalized === projectRelative
-    || normalized === artifactsRelative;
+    || normalized === p2aArtifactsRelative;
 }
 
 function validateReviewReferencesForRoot(review, artifactRoot, paths) {
@@ -1345,7 +1362,7 @@ export function main(argv = process.argv.slice(2)) {
 function isDirectEntry() {
   if (!process.argv[1]) return false;
   try {
-    return realpathSync(__filename) === realpathSync(process.argv[1]);
+    return realpathSync(P2A_PATHS.filename) === realpathSync(process.argv[1]);
   } catch {
     return import.meta.url === pathToFileURL(process.argv[1]).href;
   }

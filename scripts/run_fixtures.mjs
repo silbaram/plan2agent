@@ -61,19 +61,19 @@ function runHandoff(args) {
 }
 
 function runTargetTasks(targetRoot, args) {
-  return spawnSync(process.execPath, [path.join(targetRoot, 'scripts', 'p2a_tasks.mjs'), ...args], { cwd: targetRoot, encoding: 'utf8' });
+  return spawnSync(process.execPath, [path.join(targetRoot, '.plan2agent', 'scripts', 'p2a_tasks.mjs'), ...args], { cwd: targetRoot, encoding: 'utf8' });
 }
 
 function runTargetRuns(targetRoot, args) {
-  return spawnSync(process.execPath, [path.join(targetRoot, 'scripts', 'p2a_runs.mjs'), ...args], { cwd: targetRoot, encoding: 'utf8' });
+  return spawnSync(process.execPath, [path.join(targetRoot, '.plan2agent', 'scripts', 'p2a_runs.mjs'), ...args], { cwd: targetRoot, encoding: 'utf8' });
 }
 
 function runTargetExecute(targetRoot, args) {
-  return spawnSync(process.execPath, [path.join(targetRoot, 'scripts', 'p2a_execute.mjs'), ...args], { cwd: targetRoot, encoding: 'utf8' });
+  return spawnSync(process.execPath, [path.join(targetRoot, '.plan2agent', 'scripts', 'p2a_execute.mjs'), ...args], { cwd: targetRoot, encoding: 'utf8' });
 }
 
 function runTargetOrchestrate(targetRoot, args, options = {}) {
-  return spawnSync(process.execPath, [path.join(targetRoot, 'scripts', 'p2a_orchestrate.mjs'), ...args], {
+  return spawnSync(process.execPath, [path.join(targetRoot, '.plan2agent', 'scripts', 'p2a_orchestrate.mjs'), ...args], {
     cwd: targetRoot,
     encoding: 'utf8',
     env: options.env,
@@ -81,11 +81,11 @@ function runTargetOrchestrate(targetRoot, args, options = {}) {
 }
 
 function runTargetProposals(targetRoot, args) {
-  return spawnSync(process.execPath, [path.join(targetRoot, 'scripts', 'p2a_proposals.mjs'), ...args], { cwd: targetRoot, encoding: 'utf8' });
+  return spawnSync(process.execPath, [path.join(targetRoot, '.plan2agent', 'scripts', 'p2a_proposals.mjs'), ...args], { cwd: targetRoot, encoding: 'utf8' });
 }
 
 function runTargetIteration(targetRoot, args) {
-  return spawnSync(process.execPath, [path.join(targetRoot, 'scripts', 'p2a_iteration.mjs'), ...args], { cwd: targetRoot, encoding: 'utf8' });
+  return spawnSync(process.execPath, [path.join(targetRoot, '.plan2agent', 'scripts', 'p2a_iteration.mjs'), ...args], { cwd: targetRoot, encoding: 'utf8' });
 }
 
 function writeResultOutput(result) {
@@ -139,18 +139,18 @@ function assertCaseShape(caseData, groupName) {
 }
 
 
-function assertTargetSpecSourceIntake(targetRoot, caseId, label) {
-  const artifactsDir = path.join(targetRoot, '.plan2agent', 'artifacts');
-  const targetSpecPath = path.join(artifactsDir, 'spec.json');
-  const targetTaskGraphPath = path.join(artifactsDir, 'task-graph.json');
-  const targetIntakePath = path.join(artifactsDir, 'intake.json');
+function assertTargetSpecSourceIntake(targetRoot, projectId, caseId, label) {
+  const artifactsDir = path.join(targetRoot, '.plan2agent', 'artifacts', projectId);
+  const targetSpecPath = path.join(artifactsDir, 'gate-b-spec', 'spec.json');
+  const targetIntakePath = path.join(artifactsDir, 'gate-a-intake', 'intake.json');
+  const targetIntakeRef = `.plan2agent/artifacts/${projectId}/gate-a-intake/intake.json`;
   const targetSpec = JSON.parse(readFileSync(targetSpecPath, 'utf8'));
-  if (!existsSync(targetIntakePath) || targetSpec.source_intake !== 'intake.json') {
+  if (!existsSync(targetIntakePath) || targetSpec.source_intake !== targetIntakeRef) {
     console.error(`${label} handoff spec.source_intake/intake.json mismatch: ${caseId}`);
     console.error(JSON.stringify({ source_intake: targetSpec.source_intake, intakeExists: existsSync(targetIntakePath) }, null, 2));
     return { status: 1 };
   }
-  const result = runValidator(['--task-graph', targetTaskGraphPath, '--require-approved-spec', targetSpecPath]);
+  const result = runValidator(['--artifact-root', artifactsDir, '--project-id', projectId, '--require-handoff-ready']);
   if (result.status !== 0) {
     console.error(`${label} handoff target approved spec validation failed: ${caseId}`);
     writeResultOutput(result);
@@ -188,10 +188,10 @@ function validateScaffoldFixtureCase() {
       return { status: failureStatus(result), checks };
     }
 
-    const expectedScripts = ['p2a_iteration.mjs', 'p2a_tasks.mjs', 'p2a_runs.mjs', 'p2a_execute.mjs', 'p2a_orchestrate.mjs', 'p2a_proposals.mjs', 'p2a_run_paths.mjs', 'p2a_iteration_state.mjs', 'validate_artifacts.mjs']
-      .map((file) => path.join('scripts', file));
+    const expectedScripts = ['p2a_paths.mjs', 'p2a_iteration.mjs', 'p2a_tasks.mjs', 'p2a_runs.mjs', 'p2a_execute.mjs', 'p2a_orchestrate.mjs', 'p2a_proposals.mjs', 'p2a_run_paths.mjs', 'p2a_iteration_state.mjs', 'validate_artifacts.mjs']
+      .map((file) => path.join('.plan2agent', 'scripts', file));
     const expectedSchemas = ['intake.schema.json', 'spec.schema.json', 'task-graph.schema.json', 'task-context.schema.json', 'review.schema.json', 'run.schema.json', 'run-index.schema.json', 'orchestration-plan.schema.json', 'orchestration-runtime.schema.json', 'skill-proposal.schema.json', 'proposal-review.schema.json', 'proposal-curation.schema.json', 'proposal-patch-draft.schema.json', 'proposal-draft-approval.schema.json']
-      .map((file) => path.join('schemas', file));
+      .map((file) => path.join('.plan2agent', 'schemas', file));
     const expectedToolFiles = [
       path.join('.agents', 'skills', 'p2a-harness', 'SKILL.md'),
       path.join('.claude', 'skills', 'p2a-harness', 'SKILL.md'),
@@ -214,8 +214,9 @@ function validateScaffoldFixtureCase() {
     const claudeSettings = JSON.parse(readFileSync(path.join(targetRoot, '.claude', 'settings.json'), 'utf8'));
     const claudeLocalSettings = JSON.parse(readFileSync(path.join(targetRoot, '.claude', 'settings.local.json'), 'utf8'));
     const gitignore = readFileSync(path.join(targetRoot, '.gitignore'), 'utf8');
-    const ignoredPlans = ['.plan2agent/artifacts', 'artifacts/<project>/gate-*', 'artifacts/**/gate-*']
-      .filter((line) => gitignore.includes(line));
+    const gitignoreLines = new Set(gitignore.split(/\r?\n/));
+    const ignoredPlans = ['.plan2agent/artifacts', '.plan2agent/artifacts/<project>/gate-*', '.plan2agent/artifacts/**/gate-*']
+      .filter((line) => gitignoreLines.has(line));
     const expectedSandboxEnabled = process.platform === 'darwin' || process.platform === 'linux';
     if (
       missingFiles.length
@@ -229,7 +230,7 @@ function validateScaffoldFixtureCase() {
       || (expectedSandboxEnabled && claudeLocalSettings.sandbox?.filesystem?.allowWrite?.[0] !== '.')
       || (!expectedSandboxEnabled && Object.keys(claudeLocalSettings).length !== 0)
       || !gitignore.includes('.plan2agent/runs/')
-      || !gitignore.includes('artifacts/**/runs/')
+      || !gitignore.includes('.plan2agent/artifacts/**/runs/')
       || !gitignore.includes('.claude/settings.local.json')
       || !gitignore.includes('node_modules/')
       || ignoredPlans.length
@@ -394,38 +395,40 @@ function validateE2eFixtureCases() {
         '--include-intake',
       ]);
       checks += 1;
-      if (result.status !== 0 || !existsSync(path.join(targetRoot, '.plan2agent', 'artifacts', 'spec.json'))) {
+      if (result.status !== 0 || !existsSync(path.join(targetRoot, '.plan2agent', 'artifacts', caseData.project_id, 'gate-b-spec', 'spec.json'))) {
         console.error(`greenfield handoff fixture check failed: ${caseData.id}`);
         writeResultOutput(result);
         return { status: failureStatus(result), checks };
       }
       if (
-        !existsSync(path.join(targetRoot, 'scripts', 'p2a_iteration_state.mjs'))
-        || !existsSync(path.join(targetRoot, 'scripts', 'p2a_runs.mjs'))
-        || !existsSync(path.join(targetRoot, 'scripts', 'p2a_execute.mjs'))
-        || !existsSync(path.join(targetRoot, 'scripts', 'p2a_orchestrate.mjs'))
-        || !existsSync(path.join(targetRoot, 'scripts', 'p2a_proposals.mjs'))
-        || !existsSync(path.join(targetRoot, 'scripts', 'p2a_run_paths.mjs'))
-        || !existsSync(path.join(targetRoot, 'schemas', 'task-context.schema.json'))
-        || !existsSync(path.join(targetRoot, 'schemas', 'run.schema.json'))
-        || !existsSync(path.join(targetRoot, 'schemas', 'run-index.schema.json'))
-        || !existsSync(path.join(targetRoot, 'schemas', 'orchestration-plan.schema.json'))
-        || !existsSync(path.join(targetRoot, 'schemas', 'orchestration-runtime.schema.json'))
-        || !existsSync(path.join(targetRoot, 'schemas', 'skill-proposal.schema.json'))
-        || !existsSync(path.join(targetRoot, 'schemas', 'proposal-review.schema.json'))
-        || !existsSync(path.join(targetRoot, 'schemas', 'proposal-curation.schema.json'))
-        || !existsSync(path.join(targetRoot, 'schemas', 'proposal-patch-draft.schema.json'))
-        || !existsSync(path.join(targetRoot, 'schemas', 'proposal-draft-approval.schema.json'))
+        !existsSync(path.join(targetRoot, '.plan2agent', 'scripts', 'p2a_iteration_state.mjs'))
+        || !existsSync(path.join(targetRoot, '.plan2agent', 'scripts', 'p2a_runs.mjs'))
+        || !existsSync(path.join(targetRoot, '.plan2agent', 'scripts', 'p2a_execute.mjs'))
+        || !existsSync(path.join(targetRoot, '.plan2agent', 'scripts', 'p2a_orchestrate.mjs'))
+        || !existsSync(path.join(targetRoot, '.plan2agent', 'scripts', 'p2a_proposals.mjs'))
+        || !existsSync(path.join(targetRoot, '.plan2agent', 'scripts', 'p2a_run_paths.mjs'))
+        || !existsSync(path.join(targetRoot, '.plan2agent', 'schemas', 'task-context.schema.json'))
+        || !existsSync(path.join(targetRoot, '.plan2agent', 'schemas', 'run.schema.json'))
+        || !existsSync(path.join(targetRoot, '.plan2agent', 'schemas', 'run-index.schema.json'))
+        || !existsSync(path.join(targetRoot, '.plan2agent', 'schemas', 'orchestration-plan.schema.json'))
+        || !existsSync(path.join(targetRoot, '.plan2agent', 'schemas', 'orchestration-runtime.schema.json'))
+        || !existsSync(path.join(targetRoot, '.plan2agent', 'schemas', 'skill-proposal.schema.json'))
+        || !existsSync(path.join(targetRoot, '.plan2agent', 'schemas', 'proposal-review.schema.json'))
+        || !existsSync(path.join(targetRoot, '.plan2agent', 'schemas', 'proposal-curation.schema.json'))
+        || !existsSync(path.join(targetRoot, '.plan2agent', 'schemas', 'proposal-patch-draft.schema.json'))
+        || !existsSync(path.join(targetRoot, '.plan2agent', 'schemas', 'proposal-draft-approval.schema.json'))
         || existsSync(path.join(targetRoot, '.plan2agent', 'current-spec.json'))
       ) {
         console.error(`greenfield handoff wrote unexpected tool/current-spec files: ${caseData.id}`);
         return { status: 1, checks };
       }
-      result = assertTargetSpecSourceIntake(targetRoot, caseData.id, 'greenfield');
+      result = assertTargetSpecSourceIntake(targetRoot, caseData.project_id, caseData.id, 'greenfield');
       checks += 1;
       if (result.status !== 0) return { status: result.status, checks };
 
-      result = runTargetTasks(targetRoot, ['ready', '--graph', path.join(targetRoot, '.plan2agent', 'artifacts', 'task-graph.json')]);
+      const targetArtifactRoot = path.join(targetRoot, '.plan2agent', 'artifacts', caseData.project_id);
+      const targetTaskGraphPath = path.join(targetArtifactRoot, 'gate-c-task-graph', 'task-graph.json');
+      result = runTargetTasks(targetRoot, ['ready', '--graph', targetTaskGraphPath]);
       checks += 1;
       if (result.status !== 0) {
         console.error(`greenfield handoff target p2a_tasks execution failed: ${caseData.id}`);
@@ -433,7 +436,7 @@ function validateE2eFixtureCases() {
         return { status: failureStatus(result), checks };
       }
 
-      result = runTargetRuns(targetRoot, ['list', '--graph', path.join(targetRoot, '.plan2agent', 'artifacts', 'task-graph.json')]);
+      result = runTargetRuns(targetRoot, ['list', '--graph', targetTaskGraphPath]);
       checks += 1;
       if (result.status !== 0 || !result.stdout.includes('runId')) {
         console.error(`greenfield handoff target p2a_runs execution failed: ${caseData.id}`);
@@ -441,7 +444,7 @@ function validateE2eFixtureCases() {
         return { status: failureStatus(result), checks };
       }
 
-      result = runTargetExecute(targetRoot, ['plan', '--graph', path.join(targetRoot, '.plan2agent', 'artifacts', 'task-graph.json'), '--task', 'task-001', '--run-id', 'run-target-execute-plan']);
+      result = runTargetExecute(targetRoot, ['plan', '--graph', targetTaskGraphPath, '--task', 'task-001', '--run-id', 'run-target-execute-plan']);
       checks += 1;
       if (result.status !== 0 || !result.stdout.includes('Plan2Agent supervised task execution')) {
         console.error(`greenfield handoff target p2a_execute execution failed: ${caseData.id}`);
@@ -449,7 +452,7 @@ function validateE2eFixtureCases() {
         return { status: failureStatus(result), checks };
       }
 
-      result = runTargetOrchestrate(targetRoot, ['plan', '--graph', path.join(targetRoot, '.plan2agent', 'artifacts', 'task-graph.json'), '--task', 'task-001']);
+      result = runTargetOrchestrate(targetRoot, ['plan', '--graph', targetTaskGraphPath, '--task', 'task-001']);
       checks += 1;
       if (result.status !== 0 || !result.stdout.includes('"schema_version": "p2a.orchestration_plan.v1"')) {
         console.error(`greenfield handoff target p2a_orchestrate execution failed: ${caseData.id}`);
@@ -502,18 +505,18 @@ function validateE2eFixtureCases() {
         || !toolManifest.includedTools.includes('p2a_proposals')
         || !toolManifest.toolFiles.includes('.agents/skills/p2a-harness/SKILL.md')
         || !toolManifest.toolFiles.includes('.gemini/commands/p2a/harness.toml')
-        || !toolManifest.toolFiles.includes('scripts/p2a_runs.mjs')
-        || !toolManifest.toolFiles.includes('scripts/p2a_execute.mjs')
-        || !toolManifest.toolFiles.includes('scripts/p2a_orchestrate.mjs')
-        || !toolManifest.toolFiles.includes('scripts/p2a_proposals.mjs')
-        || !toolManifest.toolFiles.includes('scripts/p2a_run_paths.mjs')
-        || !toolManifest.schemaFiles.includes('schemas/run.schema.json')
-        || !toolManifest.schemaFiles.includes('schemas/orchestration-plan.schema.json')
-        || !toolManifest.schemaFiles.includes('schemas/orchestration-runtime.schema.json')
-        || !toolManifest.schemaFiles.includes('schemas/proposal-review.schema.json')
-        || !toolManifest.schemaFiles.includes('schemas/proposal-curation.schema.json')
-        || !toolManifest.schemaFiles.includes('schemas/proposal-patch-draft.schema.json')
-        || !toolManifest.schemaFiles.includes('schemas/proposal-draft-approval.schema.json')
+        || !toolManifest.toolFiles.includes('.plan2agent/scripts/p2a_runs.mjs')
+        || !toolManifest.toolFiles.includes('.plan2agent/scripts/p2a_execute.mjs')
+        || !toolManifest.toolFiles.includes('.plan2agent/scripts/p2a_orchestrate.mjs')
+        || !toolManifest.toolFiles.includes('.plan2agent/scripts/p2a_proposals.mjs')
+        || !toolManifest.toolFiles.includes('.plan2agent/scripts/p2a_run_paths.mjs')
+        || !toolManifest.schemaFiles.includes('.plan2agent/schemas/run.schema.json')
+        || !toolManifest.schemaFiles.includes('.plan2agent/schemas/orchestration-plan.schema.json')
+        || !toolManifest.schemaFiles.includes('.plan2agent/schemas/orchestration-runtime.schema.json')
+        || !toolManifest.schemaFiles.includes('.plan2agent/schemas/proposal-review.schema.json')
+        || !toolManifest.schemaFiles.includes('.plan2agent/schemas/proposal-curation.schema.json')
+        || !toolManifest.schemaFiles.includes('.plan2agent/schemas/proposal-patch-draft.schema.json')
+        || !toolManifest.schemaFiles.includes('.plan2agent/schemas/proposal-draft-approval.schema.json')
       ) {
         console.error(`greenfield handoff --tools output mismatch: ${caseData.id}`);
         console.error(JSON.stringify({ missingToolFiles, toolManifest }, null, 2));
@@ -3352,7 +3355,7 @@ function validateIterationCurrentFixtureCases() {
         result.status !== 0
         || !result.stdout.includes('sourceIterationId: iter-002')
         || !result.stdout.includes('copy+rewrite:')
-        || !result.stdout.includes('gate-b-spec/spec.json -> .plan2agent/artifacts/spec.json')
+        || !result.stdout.includes(`gate-b-spec/spec.json -> .plan2agent/artifacts/${caseData.project_id}/gate-b-spec/spec.json`)
       ) {
         console.error(`iteration handoff --iteration-id active dry-run fixture check failed: ${caseData.id}`);
         writeResultOutput(result);
@@ -3377,22 +3380,24 @@ function validateIterationCurrentFixtureCases() {
       }
       const targetCurrentSpecPath = path.join(iterationTargetRoot, '.plan2agent', 'current-spec.json');
       const targetManifestPath = path.join(iterationTargetRoot, '.plan2agent', 'manifest.json');
-      const targetTaskGraphPath = path.join(iterationTargetRoot, '.plan2agent', 'artifacts', 'task-graph.json');
-      const targetSpecPath = path.join(iterationTargetRoot, '.plan2agent', 'artifacts', 'spec.json');
+      const iterationTargetArtifactRoot = path.join(iterationTargetRoot, '.plan2agent', 'artifacts', caseData.project_id);
+      const targetTaskGraphPath = path.join(iterationTargetArtifactRoot, 'gate-c-task-graph', 'task-graph.json');
+      const targetSpecPath = path.join(iterationTargetArtifactRoot, 'gate-b-spec', 'spec.json');
+      const targetIntakePath = path.join(iterationTargetArtifactRoot, 'gate-a-intake', 'intake.json');
       const targetMaintenanceGraphPath = path.join(iterationTargetRoot, '.plan2agent', 'maintenance', 'task-graph.json');
       if (
         !existsSync(targetCurrentSpecPath)
         || !existsSync(targetSpecPath)
-        || !existsSync(path.join(iterationTargetRoot, '.plan2agent', 'artifacts', 'intake.json'))
+        || !existsSync(targetIntakePath)
         || !existsSync(targetMaintenanceGraphPath)
-        || !existsSync(path.join(iterationTargetRoot, 'scripts', 'p2a_iteration_state.mjs'))
-        || !existsSync(path.join(iterationTargetRoot, 'scripts', 'p2a_runs.mjs'))
-        || !existsSync(path.join(iterationTargetRoot, 'scripts', 'p2a_execute.mjs'))
-        || !existsSync(path.join(iterationTargetRoot, 'scripts', 'p2a_orchestrate.mjs'))
-        || !existsSync(path.join(iterationTargetRoot, 'scripts', 'p2a_proposals.mjs'))
-        || !existsSync(path.join(iterationTargetRoot, 'schemas', 'run-index.schema.json'))
-        || !existsSync(path.join(iterationTargetRoot, 'schemas', 'orchestration-plan.schema.json'))
-        || !existsSync(path.join(iterationTargetRoot, 'schemas', 'orchestration-runtime.schema.json'))
+        || !existsSync(path.join(iterationTargetRoot, '.plan2agent', 'scripts', 'p2a_iteration_state.mjs'))
+        || !existsSync(path.join(iterationTargetRoot, '.plan2agent', 'scripts', 'p2a_runs.mjs'))
+        || !existsSync(path.join(iterationTargetRoot, '.plan2agent', 'scripts', 'p2a_execute.mjs'))
+        || !existsSync(path.join(iterationTargetRoot, '.plan2agent', 'scripts', 'p2a_orchestrate.mjs'))
+        || !existsSync(path.join(iterationTargetRoot, '.plan2agent', 'scripts', 'p2a_proposals.mjs'))
+        || !existsSync(path.join(iterationTargetRoot, '.plan2agent', 'schemas', 'run-index.schema.json'))
+        || !existsSync(path.join(iterationTargetRoot, '.plan2agent', 'schemas', 'orchestration-plan.schema.json'))
+        || !existsSync(path.join(iterationTargetRoot, '.plan2agent', 'schemas', 'orchestration-runtime.schema.json'))
       ) {
         console.error(`iteration handoff did not copy active artifacts/current-spec/tools: ${caseData.id}`);
         return { status: 1, checks };
@@ -3402,6 +3407,8 @@ function validateIterationCurrentFixtureCases() {
       const sourceCurrentSpecAfterHandoff = JSON.parse(readFileSync(path.join(artifactRoot, 'current-spec.json'), 'utf8'));
       const targetTaskGraph = JSON.parse(readFileSync(targetTaskGraphPath, 'utf8'));
       const targetSpec = JSON.parse(readFileSync(targetSpecPath, 'utf8'));
+      const expectedTargetSpecRef = `.plan2agent/artifacts/${caseData.project_id}/gate-b-spec/spec.json`;
+      const expectedTargetIntakeRef = `.plan2agent/artifacts/${caseData.project_id}/gate-a-intake/intake.json`;
       if (
         targetManifest.sourceLayout !== 'iteration'
         || targetManifest.sourceIterationId !== 'iter-002'
@@ -3411,31 +3418,31 @@ function validateIterationCurrentFixtureCases() {
         || !targetManifest.includedTools.includes('p2a_execute')
         || !targetManifest.includedTools.includes('p2a_orchestrate')
         || !targetManifest.includedTools.includes('p2a_proposals')
-        || !targetManifest.toolFiles.includes('scripts/p2a_runs.mjs')
-        || !targetManifest.toolFiles.includes('scripts/p2a_execute.mjs')
-        || !targetManifest.toolFiles.includes('scripts/p2a_orchestrate.mjs')
-        || !targetManifest.toolFiles.includes('scripts/p2a_proposals.mjs')
-        || !targetManifest.schemaFiles.includes('schemas/task-context.schema.json')
-        || !targetManifest.schemaFiles.includes('schemas/run-index.schema.json')
-        || !targetManifest.schemaFiles.includes('schemas/orchestration-plan.schema.json')
-        || !targetManifest.schemaFiles.includes('schemas/orchestration-runtime.schema.json')
-        || !targetManifest.schemaFiles.includes('schemas/skill-proposal.schema.json')
-        || !targetManifest.schemaFiles.includes('schemas/proposal-review.schema.json')
-        || !targetManifest.schemaFiles.includes('schemas/proposal-curation.schema.json')
-        || !targetManifest.schemaFiles.includes('schemas/proposal-patch-draft.schema.json')
-        || !targetManifest.schemaFiles.includes('schemas/proposal-draft-approval.schema.json')
+        || !targetManifest.toolFiles.includes('.plan2agent/scripts/p2a_runs.mjs')
+        || !targetManifest.toolFiles.includes('.plan2agent/scripts/p2a_execute.mjs')
+        || !targetManifest.toolFiles.includes('.plan2agent/scripts/p2a_orchestrate.mjs')
+        || !targetManifest.toolFiles.includes('.plan2agent/scripts/p2a_proposals.mjs')
+        || !targetManifest.schemaFiles.includes('.plan2agent/schemas/task-context.schema.json')
+        || !targetManifest.schemaFiles.includes('.plan2agent/schemas/run-index.schema.json')
+        || !targetManifest.schemaFiles.includes('.plan2agent/schemas/orchestration-plan.schema.json')
+        || !targetManifest.schemaFiles.includes('.plan2agent/schemas/orchestration-runtime.schema.json')
+        || !targetManifest.schemaFiles.includes('.plan2agent/schemas/skill-proposal.schema.json')
+        || !targetManifest.schemaFiles.includes('.plan2agent/schemas/proposal-review.schema.json')
+        || !targetManifest.schemaFiles.includes('.plan2agent/schemas/proposal-curation.schema.json')
+        || !targetManifest.schemaFiles.includes('.plan2agent/schemas/proposal-patch-draft.schema.json')
+        || !targetManifest.schemaFiles.includes('.plan2agent/schemas/proposal-draft-approval.schema.json')
         || targetCurrentSpec.last_handoff?.iteration_id !== 'iter-002'
         || targetCurrentSpec.last_handoff?.maintenance_included !== true
         || sourceCurrentSpecAfterHandoff.last_handoff?.target_project !== iterationTargetRoot
-        || targetTaskGraph.sourceSpec !== 'spec.json'
-        || targetSpec.source_intake !== 'intake.json'
+        || targetTaskGraph.sourceSpec !== expectedTargetSpecRef
+        || targetSpec.source_intake !== expectedTargetIntakeRef
       ) {
         console.error(`iteration handoff manifest/task graph contract mismatch: ${caseData.id}`);
         console.error(JSON.stringify({ targetManifest, targetCurrentSpec, sourceCurrentSpecAfterHandoff, targetTaskGraphSourceSpec: targetTaskGraph.sourceSpec, targetSpecSourceIntake: targetSpec.source_intake }, null, 2));
         return { status: 1, checks };
       }
 
-      result = assertTargetSpecSourceIntake(iterationTargetRoot, caseData.id, 'iteration');
+      result = assertTargetSpecSourceIntake(iterationTargetRoot, caseData.project_id, caseData.id, 'iteration');
       checks += 1;
       if (result.status !== 0) return { status: result.status, checks };
 

@@ -89,6 +89,7 @@ function terminalAgentForExecution(agentTool: ExecutionAgentTool | null | undefi
 }
 
 const verificationTypeOptions: VerificationType[] = ["custom", "test", "lint", "typecheck"];
+const finishStatusOptions: ExecutionFinishStatus[] = ["auto", "finished", "failed", "blocked"];
 const orchestrationRoleStatusOptions: OrchestrationRoleStatus[] = [
   "complete",
   "blocked",
@@ -201,6 +202,18 @@ function statusLabel(value: string, copy: UiCopy): string {
     copy.status[value as keyof UiCopy["status"]] ??
     value.replace(/_/g, " ")
   );
+}
+
+function finishStatusLabel(value: ExecutionFinishStatus, copy: UiCopy): string {
+  if (value === "auto") return copy.terminal.finishStatusAuto;
+  return statusLabel(value, copy);
+}
+
+function finishStatusDetail(value: ExecutionFinishStatus, copy: UiCopy): string {
+  if (value === "auto") return copy.terminal.finishStatusAutoDetail;
+  if (value === "finished") return copy.terminal.finishStatusFinishedDetail;
+  if (value === "failed") return copy.terminal.finishStatusFailedDetail;
+  return copy.terminal.finishStatusBlockedDetail;
 }
 
 function flowStateLabel(state: FlowState, copy: UiCopy): string {
@@ -871,7 +884,7 @@ export default function App() {
     if (!artifact || !selectedTask || !projectSnapshot) return copy.tasks.selectReadyTask;
     const args = [
       "node",
-      "scripts/p2a_execute.mjs",
+      ".plan2agent/scripts/p2a_execute.mjs",
       "start",
       ...executionSourcePreviewArgs(),
       "--task",
@@ -888,7 +901,7 @@ export default function App() {
     if (!artifact || !selectedRun) return copy.runs.selectRun;
     const args = [
       "node",
-      "scripts/p2a_execute.mjs",
+      ".plan2agent/scripts/p2a_execute.mjs",
       "finish",
       ...executionSourcePreviewArgs(),
       "--run-id",
@@ -1008,7 +1021,7 @@ export default function App() {
     }
     const args = [
       "node",
-      "scripts/p2a_orchestrate.mjs",
+      ".plan2agent/scripts/p2a_orchestrate.mjs",
       "mark-role",
       "--runtime",
       selectedOrchestration.runtimePath,
@@ -1776,10 +1789,23 @@ export default function App() {
       Boolean(projectSnapshot && artifact && selectedRun) &&
       selectedRun?.status === "started" &&
       finishState !== "running";
+    const requiresFailureClass = finishStatus === "blocked" || finishStatus === "failed";
     const noteRequired =
-      (finishStatus === "blocked" || finishStatus === "failed") &&
-      finishFailureClass === "other";
+      requiresFailureClass && finishFailureClass === "other";
     const hasRequiredNote = !noteRequired || parseListInput(finishNoteInput).length > 0;
+    const enabledVerification = [
+      verifyTest ? "test" : null,
+      verifyLint ? "lint" : null,
+      verifyTypecheck ? "typecheck" : null,
+      customVerifyCommand.trim() ? customVerifyType : null,
+    ].filter((value): value is string => Boolean(value));
+    const verificationSummaryLabel =
+      enabledVerification.length > 0 ? enabledVerification.join(", ") : copy.common.none;
+    const finishActionStatus = finishResult
+      ? `exit ${finishResult.exitCode} · ${formatMilliseconds(finishResult.durationMs, copy)}`
+      : selectedRun?.status === "started"
+        ? copy.status.ready
+        : copy.common.notRunnable;
 
     return (
       <section className="workbench-panel finish-panel">
@@ -1794,123 +1820,183 @@ export default function App() {
         </div>
 
         <div className="finish-panel__body">
-          <div className="finish-panel__controls">
-            <div className="form-grid form-grid--two">
-              <label className="field-label">
-                <span>{copy.terminal.finalStatus}</span>
-                <select
-                  className="agent-select mono"
-                  value={finishStatus}
-                  onChange={(event) => setFinishStatus(event.target.value as ExecutionFinishStatus)}
-                >
-                  <option value="auto">auto</option>
-                  <option value="finished">finished</option>
-                  <option value="failed">failed</option>
-                  <option value="blocked">blocked</option>
-                </select>
-              </label>
+          <div className="finish-panel__controls finish-flow">
+            <div className="finish-step">
+              <div className="finish-step__head">
+                <span className="finish-step__index mono">1</span>
+                <span>
+                  <strong>{copy.terminal.finishDecision}</strong>
+                  <small>{copy.terminal.finishDecisionDetail}</small>
+                </span>
+              </div>
 
-              <label className="field-label">
-                <span>{copy.terminal.failureClass}</span>
-                <select
-                  className="agent-select mono"
-                  value={finishFailureClass}
-                  onChange={(event) => setFinishFailureClass(event.target.value as FailureClass)}
-                  disabled={finishStatus !== "failed" && finishStatus !== "blocked"}
-                >
-                  {failureClassOptions.map((failureClass) => (
-                    <option key={failureClass} value={failureClass}>
-                      {failureClass}
-                    </option>
-                  ))}
-                </select>
-              </label>
+              <div
+                className="finish-choice-grid"
+                role="radiogroup"
+                aria-label={copy.terminal.finalStatus}
+              >
+                {finishStatusOptions.map((status) => (
+                  <button
+                    className={`finish-choice${
+                      finishStatus === status ? " finish-choice--selected" : ""
+                    }`}
+                    key={status}
+                    type="button"
+                    role="radio"
+                    aria-checked={finishStatus === status}
+                    onClick={() => setFinishStatus(status)}
+                  >
+                    <strong>{finishStatusLabel(status, copy)}</strong>
+                    <span>{finishStatusDetail(status, copy)}</span>
+                  </button>
+                ))}
+              </div>
+
+              {requiresFailureClass && (
+                <label className="field-label finish-failure-class">
+                  <span>{copy.terminal.failureClass}</span>
+                  <select
+                    className="agent-select mono"
+                    value={finishFailureClass}
+                    onChange={(event) => setFinishFailureClass(event.target.value as FailureClass)}
+                  >
+                    {failureClassOptions.map((failureClass) => (
+                      <option key={failureClass} value={failureClass}>
+                        {failureClass}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
             </div>
 
-            <div className="check-options" aria-label={copy.terminal.verificationOptions}>
-              <label>
-                <input
-                  type="checkbox"
-                  checked={verifyTest}
-                  onChange={(event) => setVerifyTest(event.target.checked)}
-                />
-                test
-              </label>
-              <label>
-                <input
-                  type="checkbox"
-                  checked={verifyLint}
-                  onChange={(event) => setVerifyLint(event.target.checked)}
-                />
-                lint
-              </label>
-              <label>
-                <input
-                  type="checkbox"
-                  checked={verifyTypecheck}
-                  onChange={(event) => setVerifyTypecheck(event.target.checked)}
-                />
-                typecheck
-              </label>
-              <label>
+            <div className="finish-step">
+              <div className="finish-step__head">
+                <span className="finish-step__index mono">2</span>
+                <span>
+                  <strong>{copy.terminal.verificationChecks}</strong>
+                  <small>{copy.terminal.verificationChecksDetail}</small>
+                </span>
+              </div>
+
+              <div className="check-options finish-checks" aria-label={copy.terminal.verificationOptions}>
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={verifyTest}
+                    onChange={(event) => setVerifyTest(event.target.checked)}
+                  />
+                  test
+                </label>
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={verifyLint}
+                    onChange={(event) => setVerifyLint(event.target.checked)}
+                  />
+                  lint
+                </label>
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={verifyTypecheck}
+                    onChange={(event) => setVerifyTypecheck(event.target.checked)}
+                  />
+                  typecheck
+                </label>
+              </div>
+
+              <details className="finish-disclosure">
+                <summary>{copy.terminal.customVerification}</summary>
+                <div className="custom-command-row">
+                  <select
+                    className="agent-select mono"
+                    value={customVerifyType}
+                    onChange={(event) => setCustomVerifyType(event.target.value as VerificationType)}
+                    aria-label={copy.terminal.customVerificationType}
+                  >
+                    {verificationTypeOptions.map((type) => (
+                      <option key={type} value={type}>
+                        {type}
+                      </option>
+                    ))}
+                  </select>
+                  <input
+                    className="text-input mono"
+                    value={customVerifyCommand}
+                    onChange={(event) => setCustomVerifyCommand(event.target.value)}
+                    placeholder="npm run smoke"
+                    aria-label={copy.terminal.customVerificationCommand}
+                  />
+                </div>
+              </details>
+            </div>
+
+            <div className="finish-step">
+              <div className="finish-step__head">
+                <span className="finish-step__index mono">3</span>
+                <span>
+                  <strong>{copy.terminal.finishRecord}</strong>
+                  <small>{copy.terminal.finishRecordDetail}</small>
+                </span>
+              </div>
+
+              <label className="finish-collect">
                 <input
                   type="checkbox"
                   checked={collectGit}
                   onChange={(event) => setCollectGit(event.target.checked)}
                 />
-                {copy.terminal.collectGit}
+                <span>{copy.terminal.collectGit}</span>
               </label>
-            </div>
 
-            <div className="custom-command-row">
-              <select
-                className="agent-select mono"
-                value={customVerifyType}
-                onChange={(event) => setCustomVerifyType(event.target.value as VerificationType)}
-                aria-label={copy.terminal.customVerificationType}
-              >
-                {verificationTypeOptions.map((type) => (
-                  <option key={type} value={type}>
-                    {type}
-                  </option>
-                ))}
-              </select>
-              <input
-                className="text-input mono"
-                value={customVerifyCommand}
-                onChange={(event) => setCustomVerifyCommand(event.target.value)}
-                placeholder="npm run smoke"
-                aria-label={copy.terminal.customVerificationCommand}
-              />
-            </div>
-
-            <div className="form-grid form-grid--two">
-              <label className="field-label">
-                <span>{copy.runs.changedFiles}</span>
-                <textarea
-                  className="supervisor-textarea"
-                  value={changedFilesInput}
-                  onChange={(event) => setChangedFilesInput(event.target.value)}
-                  placeholder="src/file.ts"
-                />
-              </label>
-              <label className="field-label">
-                <span>{copy.common.note}</span>
-                <textarea
-                  className="supervisor-textarea"
-                  value={finishNoteInput}
-                  onChange={(event) => setFinishNoteInput(event.target.value)}
-                  placeholder={copy.terminal.verificationNotePlaceholder}
-                />
-              </label>
+              <div className="form-grid form-grid--two">
+                <label className="field-label">
+                  <span>{copy.runs.changedFiles}</span>
+                  <textarea
+                    className="supervisor-textarea"
+                    value={changedFilesInput}
+                    onChange={(event) => setChangedFilesInput(event.target.value)}
+                    placeholder="src/file.ts"
+                  />
+                </label>
+                <label className="field-label">
+                  <span>{copy.common.note}</span>
+                  <textarea
+                    className="supervisor-textarea"
+                    value={finishNoteInput}
+                    onChange={(event) => setFinishNoteInput(event.target.value)}
+                    placeholder={copy.terminal.verificationNotePlaceholder}
+                  />
+                </label>
+              </div>
             </div>
           </div>
 
-          <div className="finish-panel__result">
-            <div className="command-preview">
-              <span className="mono">cwd {formatPath(projectSnapshot?.rootPath, copy)}</span>
-              <code>{finishResult?.command ?? finishPreviewCommand()}</code>
+          <div className="finish-panel__result finish-submit">
+            <div className="finish-submit__head">
+              <div>
+                <div className="label">{copy.terminal.finishAction}</div>
+                <h3>{copy.terminal.finishActionDetail}</h3>
+              </div>
+              <span className="mono">{finishActionStatus}</span>
             </div>
+
+            <div className="finish-summary-grid">
+              <div>
+                <span>{copy.terminal.finalStatus}</span>
+                <strong>{finishStatusLabel(finishStatus, copy)}</strong>
+              </div>
+              <div>
+                <span>{copy.terminal.verificationOptions}</span>
+                <strong className="mono">{verificationSummaryLabel}</strong>
+              </div>
+              <div>
+                <span>{copy.terminal.collectGit}</span>
+                <strong>{collectGit ? copy.runs.needed : copy.runs.notNeeded}</strong>
+              </div>
+            </div>
+
             <div className="finish-actions">
               <button
                 className="terminal-control terminal-control--primary"
@@ -1920,14 +2006,16 @@ export default function App() {
               >
                 {finishState === "running" ? copy.common.running : copy.terminal.finishRun}
               </button>
-              <span className="mono">
-                {finishResult
-                  ? `exit ${finishResult.exitCode} · ${formatMilliseconds(finishResult.durationMs, copy)}`
-                  : selectedRun?.status === "started"
-                    ? copy.status.ready
-                    : copy.common.notRunnable}
-              </span>
             </div>
+
+            <details className="finish-disclosure finish-disclosure--command">
+              <summary>{copy.terminal.commandPreview}</summary>
+              <div className="command-preview command-preview--compact">
+                <span className="mono">cwd {formatPath(projectSnapshot?.rootPath, copy)}</span>
+                <code>{finishResult?.command ?? finishPreviewCommand()}</code>
+              </div>
+            </details>
+
             {noteRequired && !hasRequiredNote && (
               <div className="diagnostic diagnostic--warn">
                 <AlertTriangle size={14} strokeWidth={1.7} aria-hidden="true" />

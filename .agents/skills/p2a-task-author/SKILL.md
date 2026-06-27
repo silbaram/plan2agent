@@ -16,7 +16,7 @@ Use this skill when the active iteration has an approved Gate B spec and needs a
 Run the context command to get the `p2a.task_context.v1` JSON bundle:
 
 ```bash
-node scripts/p2a_iteration.mjs context --artifacts <root>
+node .plan2agent/scripts/p2a_iteration.mjs context --artifacts <root>
 ```
 
 Use these context fields:
@@ -40,7 +40,7 @@ Write only this draft artifact, for example with the Write tool:
 iterations/<active_iteration>/gate-c-task-graph/task-graph.draft.json
 ```
 
-The draft must conform to `schemas/task-graph.schema.json` (`p2a.task_graph.v1`) and include:
+The draft must conform to `.plan2agent/schemas/task-graph.schema.json` (`p2a.task_graph.v1`) and include:
 
 - `schema_version`: `p2a.task_graph.v1`
 - `projectId`
@@ -86,7 +86,7 @@ After writing the draft, hand it to the human gate with these steps:
 1. Validate the draft:
 
    ```bash
-   node scripts/p2a_iteration.mjs validate --artifacts <root> --stage gate-c-draft
+   node .plan2agent/scripts/p2a_iteration.mjs validate --artifacts <root> --stage gate-c-draft
    ```
 
 2. If the human approves after review, add this block to `status.md`:
@@ -103,7 +103,7 @@ After writing the draft, hand it to the human gate with these steps:
 3. Promote the approved draft:
 
    ```bash
-   node scripts/p2a_iteration.mjs promote-tasks --artifacts <root>
+   node .plan2agent/scripts/p2a_iteration.mjs promote-tasks --artifacts <root>
    ```
 
 ## Constraints

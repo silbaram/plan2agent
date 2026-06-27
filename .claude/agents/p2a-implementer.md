@@ -25,7 +25,7 @@ Role:
 
 Write boundaries:
 - Write only inside the target project workspace or isolated worktree provided for the run.
-- Do not modify Plan2Agent harness or installed integration files, including `.agents/`, `.claude/`, `.codex/`, `.gemini/`, `scripts/`, or `schemas/`.
+- Do not modify Plan2Agent harness or installed integration files, including `.agents/`, `.claude/`, `.codex/`, `.gemini/`, `.plan2agent/scripts/`, or `.plan2agent/schemas/`.
 - Do not modify Plan2Agent planning outputs or gate artifacts.
 - Do not access, print, copy, or exfiltrate secrets, credentials, tokens, or `.env` contents.
 - Do not install dependencies unless the approved task, existing project conventions, lockfiles, or explicit human instructions provide grounded evidence that the dependency is required.

@@ -5,14 +5,15 @@ import { existsSync, lstatSync, readFileSync, realpathSync, writeFileSync } from
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import process from 'node:process';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { pathToFileURL } from 'node:url';
 import { loadJson, validateOrchestrationPlanData, validateProposalDraftApprovalData, validateRunData, validateTaskGraphData, ValidationError } from './validate_artifacts.mjs';
 import { orchestrationRuntimePath, readOrchestrationRuntime, recordOrchestrationRuntimeEvent, writeOrchestrationRuntimeForRun } from './p2a_orchestrate.mjs';
 import { resolveIterationState } from './p2a_iteration_state.mjs';
 import { resolveRunsDir } from './p2a_run_paths.mjs';
+import { configuredTaskGraphPath, nodeScriptCommand, resolveP2aPaths, singleArtifactProjectRoot } from './p2a_paths.mjs';
 
-const __filename = fileURLToPath(import.meta.url);
-const ROOT = path.resolve(path.dirname(__filename), '..');
+const P2A_PATHS = resolveP2aPaths(import.meta.url);
+const ROOT = P2A_PATHS.projectRoot;
 const COMMANDS = new Set(['plan', 'start', 'status', 'finish']);
 const ISOLATION_MODES = new Set(['none', 'branch', 'worktree']);
 const FINISH_STATUSES = new Set(['finished', 'failed', 'blocked']);
@@ -20,16 +21,15 @@ const FAILURE_CLASSES = new Set(['verification_failed', 'test_flake', 'scope_vio
 const FAILURE_RETRYABLE = new Set(['yes', 'no', 'after_fix']);
 const FAILURE_SOURCES = new Set(['owner', 'monitor', 'implementer']);
 const IMPLEMENTER_AGENT_TOOLS = new Set(['codex', 'claude', 'manual']);
-const DEFAULT_HANDOFF_GRAPH = path.join('.plan2agent', 'artifacts', 'task-graph.json');
 const DEFAULT_PROJECT_CONFIG = path.join('.plan2agent', 'project.config.json');
 
 function usage() {
   return [
     'Usage:',
-    '  node scripts/p2a_execute.mjs plan (--artifacts <dir>|--graph <path>) [--task <task-id>] [options]',
-    '  node scripts/p2a_execute.mjs start (--artifacts <dir>|--graph <path>) [--task <task-id>] [options]',
-    '  node scripts/p2a_execute.mjs status (--artifacts <dir>|--graph <path>) [--task <task-id>] [--run-id <run-id>]',
-    '  node scripts/p2a_execute.mjs finish (--artifacts <dir>|--graph <path>) --run-id <run-id> [options]',
+    '  node .plan2agent/scripts/p2a_execute.mjs plan (--artifacts <dir>|--graph <path>) [--task <task-id>] [options]',
+    '  node .plan2agent/scripts/p2a_execute.mjs start (--artifacts <dir>|--graph <path>) [--task <task-id>] [options]',
+    '  node .plan2agent/scripts/p2a_execute.mjs status (--artifacts <dir>|--graph <path>) [--task <task-id>] [--run-id <run-id>]',
+    '  node .plan2agent/scripts/p2a_execute.mjs finish (--artifacts <dir>|--graph <path>) --run-id <run-id> [options]',
     '',
     'Commands:',
     '  plan                 Resolve one ready task and print the supervised execution plan. No files are changed.',
@@ -39,7 +39,7 @@ function usage() {
     '',
     'Source options:',
     '  --artifacts <dir>    Iterative artifact root; uses the active iteration task graph.',
-    '  --graph <path>       Task graph JSON path. Defaults to .plan2agent/artifacts/task-graph.json if present.',
+    '  --graph <path>       Task graph JSON path.',
     '  --spec <path>        Spec JSON path for prompt context. Only supported with --graph.',
     '  --maintenance        With --artifacts, use the maintenance task graph.',
     '',
@@ -167,7 +167,10 @@ function parseArgs(argv) {
   const sourceCount = [args.artifacts, args.graph].filter(Boolean).length;
   if (sourceCount > 1) throw new Error('--artifacts and --graph cannot be used together');
   if (sourceCount === 0) {
-    if (existsSync(DEFAULT_HANDOFF_GRAPH)) args.graph = DEFAULT_HANDOFF_GRAPH;
+    const defaultArtifacts = singleArtifactProjectRoot();
+    const configuredGraph = configuredTaskGraphPath();
+    if (defaultArtifacts) args.artifacts = defaultArtifacts;
+    else if (configuredGraph) args.graph = configuredGraph;
     else throw new Error('--artifacts or --graph is required');
   }
   if (args.approval) {
@@ -286,7 +289,7 @@ function resolveSource(args) {
   return {
     projectId: graph.projectId,
     sourceArgs: ['--graph', args.graph],
-    sourceLayout: path.resolve(graphPath) === path.resolve(DEFAULT_HANDOFF_GRAPH) ? 'handoff' : 'graph',
+    sourceLayout: 'graph',
     iterationId: graph.version ?? null,
     artifactRoot: null,
     graphPath,
@@ -430,8 +433,8 @@ function childEnv() {
 }
 
 function runScript(scriptName, scriptArgs, options = {}) {
-  return spawnSync(process.execPath, [path.join(ROOT, 'scripts', scriptName), ...scriptArgs], {
-    cwd: options.cwd ?? process.cwd(),
+  return spawnSync(process.execPath, [path.join(P2A_PATHS.scriptsDir, scriptName), ...scriptArgs], {
+    cwd: options.cwd ?? ROOT,
     encoding: 'utf8',
     env: childEnv(),
     maxBuffer: 1024 * 1024 * 20,
@@ -444,7 +447,7 @@ function printChildResult(result) {
 }
 
 function commandLine(scriptName, args) {
-  return ['node', `scripts/${scriptName}`, ...args].map(shellQuote).join(' ');
+  return nodeScriptCommand(P2A_PATHS, scriptName, args).map(shellQuote).join(' ');
 }
 
 function shellQuote(value) {
@@ -928,7 +931,7 @@ export function main(argv = process.argv.slice(2)) {
 function isDirectEntry() {
   if (!process.argv[1]) return false;
   try {
-    return realpathSync(__filename) === realpathSync(process.argv[1]);
+    return realpathSync(P2A_PATHS.filename) === realpathSync(process.argv[1]);
   } catch {
     return import.meta.url === pathToFileURL(process.argv[1]).href;
   }

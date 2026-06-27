@@ -29,11 +29,11 @@ async function readJson<T>(filePath: string): Promise<T> {
 
 async function createProject() {
   const projectRoot = await mkdtemp(path.join(tmpdir(), "p2a-execution-"));
-  const artifactRoot = path.join(projectRoot, "artifacts", "demo");
-  await mkdir(path.join(projectRoot, "scripts"), { recursive: true });
+  const artifactRoot = path.join(projectRoot, ".plan2agent", "artifacts", "demo");
+  await mkdir(path.join(projectRoot, ".plan2agent", "scripts"), { recursive: true });
   await mkdir(artifactRoot, { recursive: true });
-  await writeFile(path.join(projectRoot, "scripts", "p2a_execute.mjs"), "");
-  await writeFile(path.join(projectRoot, "scripts", "p2a_orchestrate.mjs"), "");
+  await writeFile(path.join(projectRoot, ".plan2agent", "scripts", "p2a_execute.mjs"), "");
+  await writeFile(path.join(projectRoot, ".plan2agent", "scripts", "p2a_orchestrate.mjs"), "");
   return { projectRoot, artifactRoot };
 }
 
@@ -69,13 +69,13 @@ async function createSmokeProject() {
   const projectRoot = await mkdtemp(path.join(tmpdir(), "p2a-execution-smoke-"));
   const taskGraphPath = path.join(projectRoot, "gate-c-task-graph", "task-graph.json");
 
-  await cp(path.join(repoRoot, "scripts"), path.join(projectRoot, "scripts"), {
-    recursive: true,
-  });
-  await cp(path.join(repoRoot, "schemas"), path.join(projectRoot, "schemas"), {
-    recursive: true,
-  });
   await mkdir(path.join(projectRoot, ".plan2agent"), { recursive: true });
+  await cp(path.join(repoRoot, "scripts"), path.join(projectRoot, ".plan2agent", "scripts"), {
+    recursive: true,
+  });
+  await cp(path.join(repoRoot, "schemas"), path.join(projectRoot, ".plan2agent", "schemas"), {
+    recursive: true,
+  });
   await mkdir(path.join(projectRoot, "gate-b-spec"), { recursive: true });
   await mkdir(path.dirname(taskGraphPath), { recursive: true });
   await writeFile(

@@ -5,7 +5,7 @@ import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, writeFile
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import process from 'node:process';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { pathToFileURL } from 'node:url';
 import {
   loadJson,
   validateRunData,
@@ -16,9 +16,10 @@ import {
 } from './validate_artifacts.mjs';
 import { resolveIterationState } from './p2a_iteration_state.mjs';
 import { DEFAULT_RUNS_DIR, resolveRunsDir } from './p2a_run_paths.mjs';
+import { configuredTaskGraphPath, resolveP2aPaths, singleArtifactProjectRoot } from './p2a_paths.mjs';
 
-const __filename = fileURLToPath(import.meta.url);
-const ROOT = path.resolve(path.dirname(__filename), '..');
+const P2A_PATHS = resolveP2aPaths(import.meta.url);
+const ROOT = P2A_PATHS.projectRoot;
 const COMMANDS = new Set(['start', 'record', 'verify', 'finish', 'list', 'show', 'validate']);
 const ISOLATION_MODES = new Set(['none', 'branch', 'worktree']);
 const RUN_STATUSES = new Set(['started', 'finished', 'failed', 'blocked']);
@@ -36,20 +37,19 @@ const FAILURE_DEFAULTS = {
 };
 const VERIFICATION_TYPES = new Set(['test', 'lint', 'typecheck', 'custom']);
 const VERIFICATION_STATUSES = new Set(['passed', 'failed', 'skipped', 'not_run']);
-const DEFAULT_HANDOFF_GRAPH = path.join('.plan2agent', 'artifacts', 'task-graph.json');
 const OUTPUT_TAIL_LIMIT = 4000;
 
 function usage() {
   return [
     'Usage:',
-    '  node scripts/p2a_runs.mjs start --artifacts <iterative-project-dir> --task <task-id> --agent-tool <tool> [options]',
-    '  node scripts/p2a_runs.mjs start --graph <task-graph.json> --task <task-id> --agent-tool <tool> [--runs <dir>] [options]',
-    '  node scripts/p2a_runs.mjs record --run-id <run-id> (--artifacts <dir>|--runs <dir>|--graph <path>) [--changed-file <path> ...] [--verification <type:status:command>] [--note <text>]',
-    '  node scripts/p2a_runs.mjs verify --run-id <run-id> (--artifacts <dir>|--runs <dir>|--graph <path>) [--test] [--lint] [--typecheck] [--test-command <cmd>] [--lint-command <cmd>] [--typecheck-command <cmd>] [--verify-command <type:cmd>]',
-    '  node scripts/p2a_runs.mjs finish --run-id <run-id> (--artifacts <dir>|--runs <dir>|--graph <path>) [--status finished|failed|blocked] [--failure-class <class>] [--retryable yes|no|after_fix] [--needs-user-decision true|false] [--failure-source owner|monitor|implementer] [--changed-file <path> ...] [--collect-git] [--note <text>]',
-    '  node scripts/p2a_runs.mjs list (--artifacts <dir>|--runs <dir>|--graph <path>) [--json]',
-    '  node scripts/p2a_runs.mjs show --run-id <run-id> (--artifacts <dir>|--runs <dir>|--graph <path>)',
-    '  node scripts/p2a_runs.mjs validate (--artifacts <dir>|--runs <dir>|--graph <path>) [--run-id <run-id>]',
+    '  node .plan2agent/scripts/p2a_runs.mjs start --artifacts <iterative-project-dir> --task <task-id> --agent-tool <tool> [options]',
+    '  node .plan2agent/scripts/p2a_runs.mjs start --graph <task-graph.json> --task <task-id> --agent-tool <tool> [--runs <dir>] [options]',
+    '  node .plan2agent/scripts/p2a_runs.mjs record --run-id <run-id> (--artifacts <dir>|--runs <dir>|--graph <path>) [--changed-file <path> ...] [--verification <type:status:command>] [--note <text>]',
+    '  node .plan2agent/scripts/p2a_runs.mjs verify --run-id <run-id> (--artifacts <dir>|--runs <dir>|--graph <path>) [--test] [--lint] [--typecheck] [--test-command <cmd>] [--lint-command <cmd>] [--typecheck-command <cmd>] [--verify-command <type:cmd>]',
+    '  node .plan2agent/scripts/p2a_runs.mjs finish --run-id <run-id> (--artifacts <dir>|--runs <dir>|--graph <path>) [--status finished|failed|blocked] [--failure-class <class>] [--retryable yes|no|after_fix] [--needs-user-decision true|false] [--failure-source owner|monitor|implementer] [--changed-file <path> ...] [--collect-git] [--note <text>]',
+    '  node .plan2agent/scripts/p2a_runs.mjs list (--artifacts <dir>|--runs <dir>|--graph <path>) [--json]',
+    '  node .plan2agent/scripts/p2a_runs.mjs show --run-id <run-id> (--artifacts <dir>|--runs <dir>|--graph <path>)',
+    '  node .plan2agent/scripts/p2a_runs.mjs validate (--artifacts <dir>|--runs <dir>|--graph <path>) [--run-id <run-id>]',
     '',
     'Options:',
     '  --artifacts <dir>       Iterative artifact root; writes runs/ under that root.',
@@ -175,7 +175,10 @@ function parseArgs(argv) {
   if (args.help) return args;
   const sourceCount = [args.artifacts, args.graph, args.runs].filter(Boolean).length;
   if (sourceCount === 0) {
-    if (existsSync(DEFAULT_HANDOFF_GRAPH)) args.graph = DEFAULT_HANDOFF_GRAPH;
+    const defaultArtifacts = singleArtifactProjectRoot();
+    const configuredGraph = configuredTaskGraphPath();
+    if (defaultArtifacts) args.artifacts = defaultArtifacts;
+    else if (configuredGraph) args.graph = configuredGraph;
     else if (existsSync(DEFAULT_RUNS_DIR)) args.runs = DEFAULT_RUNS_DIR;
     else throw new Error('--artifacts, --graph, or --runs is required');
   }
@@ -317,11 +320,9 @@ function resolveTaskSource(args) {
 
   const graphPath = path.resolve(args.graph);
   const graph = loadTaskGraph(graphPath);
-  const handoffGraphPath = path.resolve(DEFAULT_HANDOFF_GRAPH);
-  const sourceLayout = path.resolve(graphPath) === handoffGraphPath ? 'handoff' : 'graph';
   return {
     projectId: graph.projectId,
-    sourceLayout,
+    sourceLayout: 'graph',
     iterationId: graph.version ?? null,
     artifactRoot: null,
     graphPath,
@@ -819,7 +820,7 @@ export function main(argv = process.argv.slice(2)) {
 function isDirectEntry() {
   if (!process.argv[1]) return false;
   try {
-    return realpathSync(__filename) === realpathSync(process.argv[1]);
+    return realpathSync(P2A_PATHS.filename) === realpathSync(process.argv[1]);
   } catch {
     return import.meta.url === pathToFileURL(process.argv[1]).href;
   }

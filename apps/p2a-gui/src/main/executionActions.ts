@@ -168,7 +168,10 @@ function resolveExecutionContext(request: {
 } {
   const projectRoot = assertDirectory(request.projectRoot, "project root");
   const artifactRoot = assertDirectory(request.artifactRoot, "artifact root");
-  const scriptPath = assertFile(path.join(projectRoot, "scripts", "p2a_execute.mjs"), "p2a_execute");
+  const scriptPath = assertFile(
+    path.join(projectRoot, ".plan2agent", "scripts", "p2a_execute.mjs"),
+    "p2a_execute",
+  );
   const taskGraphPath = optionalFile(request.taskGraphPath, projectRoot, "task graph path");
   const sourceArgs =
     existsSync(path.join(artifactRoot, "current-spec.json")) || !taskGraphPath
@@ -191,7 +194,7 @@ function resolveOrchestrationContext(request: OrchestrationMarkRoleRequest): {
 } {
   const projectRoot = assertDirectory(request.projectRoot, "project root");
   const scriptPath = assertFile(
-    path.join(projectRoot, "scripts", "p2a_orchestrate.mjs"),
+    path.join(projectRoot, ".plan2agent", "scripts", "p2a_orchestrate.mjs"),
     "p2a_orchestrate",
   );
   const runtimePath = assertFile(
@@ -262,7 +265,9 @@ export function buildStartRunCommand(request: ExecutionStartRunRequest): Executi
   return {
     cwd: context.projectRoot,
     scriptPath: context.scriptPath,
-    displayCommand: ["node", "scripts/p2a_execute.mjs", ...args].map(shellQuote).join(" "),
+    displayCommand: ["node", ".plan2agent/scripts/p2a_execute.mjs", ...args]
+      .map(shellQuote)
+      .join(" "),
     args,
   };
 }
@@ -295,7 +300,9 @@ export function buildFinishRunCommand(request: ExecutionFinishRunRequest): Execu
   return {
     cwd: context.projectRoot,
     scriptPath: context.scriptPath,
-    displayCommand: ["node", "scripts/p2a_execute.mjs", ...args].map(shellQuote).join(" "),
+    displayCommand: ["node", ".plan2agent/scripts/p2a_execute.mjs", ...args]
+      .map(shellQuote)
+      .join(" "),
     args,
   };
 }
@@ -327,7 +334,7 @@ export function buildMarkRoleCommand(request: OrchestrationMarkRoleRequest): Exe
   return {
     cwd: context.projectRoot,
     scriptPath: context.scriptPath,
-    displayCommand: ["node", "scripts/p2a_orchestrate.mjs", ...args]
+    displayCommand: ["node", ".plan2agent/scripts/p2a_orchestrate.mjs", ...args]
       .map(shellQuote)
       .join(" "),
     args,

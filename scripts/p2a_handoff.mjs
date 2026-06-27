@@ -18,7 +18,6 @@ import { createInterface } from 'node:readline/promises';
 import path from 'node:path';
 import process from 'node:process';
 import { Readable } from 'node:stream';
-import { fileURLToPath } from 'node:url';
 import {
   loadJson,
   validateArtifactRoot,
@@ -30,18 +29,17 @@ import {
 } from './validate_artifacts.mjs';
 import { resolveIterationState } from './p2a_iteration_state.mjs';
 import { renderIterationIndexMarkdown } from './p2a_iteration.mjs';
+import { P2A_ARTIFACTS_DIR, P2A_SCHEMAS_DIR, P2A_SCRIPTS_DIR, resolveP2aPaths } from './p2a_paths.mjs';
 
-const __filename = fileURLToPath(import.meta.url);
-const ROOT = path.resolve(path.dirname(__filename), '..');
+const P2A_PATHS = resolveP2aPaths(import.meta.url);
+const ROOT = P2A_PATHS.toolRoot;
 const VALID_MODES = new Set(['copy', 'move']);
 const TOOL_TARGET_ORDER = ['codex', 'claude', 'gemini'];
 const VALID_TOOL_TARGETS = new Set(TOOL_TARGET_ORDER);
-const ARTIFACT_TARGET_DIR = path.join('.plan2agent', 'artifacts');
+const ARTIFACT_TARGET_BASE = P2A_ARTIFACTS_DIR;
 const TEAM_BIGFIVE_HARNESS_DIR = path.join('.plan2agent', 'team-harnesses', 'team-bigfive');
 const TEAM_BIGFIVE_SOURCE_MANIFEST = path.join(TEAM_BIGFIVE_HARNESS_DIR, 'source-manifest.json');
 const TEAM_BIGFIVE_ADAPTATION_NOTES = path.join(TEAM_BIGFIVE_HARNESS_DIR, 'adaptation-notes.md');
-const REBASED_SOURCE_SPEC = 'spec.json';
-const REBASED_SOURCE_INTAKE = 'intake.json';
 const DEFAULT_ITERATION_ID = 'active';
 
 function usage() {
@@ -618,12 +616,12 @@ description: Kick off a Team Big Five style execution session for an approved Pl
 
 # Team Big Five Kickoff
 
-Use this skill only after Plan2Agent handoff has installed approved artifacts under \`.plan2agent/artifacts/\`.
+Use this skill only after Plan2Agent handoff has installed approved artifacts under \`.plan2agent/artifacts/<projectId>/\`.
 
 ## Inputs
 
-- A Plan2Agent task id from \`.plan2agent/artifacts/task-graph.json\`.
-- The task prompt from \`node scripts/p2a_execute.mjs start --graph .plan2agent/artifacts/task-graph.json --task <task-id>\` or \`node scripts/p2a_tasks.mjs prompt --graph .plan2agent/artifacts/task-graph.json <task-id>\`.
+- A Plan2Agent task id from \`.plan2agent/artifacts/<projectId>/gate-c-task-graph/task-graph.json\`.
+- The task prompt from \`node .plan2agent/scripts/p2a_execute.mjs start --graph .plan2agent/artifacts/<projectId>/gate-c-task-graph/task-graph.json --task <task-id>\` or \`node .plan2agent/scripts/p2a_tasks.mjs prompt --graph .plan2agent/artifacts/<projectId>/gate-c-task-graph/task-graph.json <task-id>\`.
 - Optional verification commands from \`.plan2agent/project.config.json\`.
 
 ## Workflow
@@ -632,7 +630,7 @@ Use this skill only after Plan2Agent handoff has installed approved artifacts un
 2. Split the work into five lanes: coordination, implementation plan, code changes, review, and verification.
 3. Keep all work tied to the task id and source spec refs.
 4. Do not edit approved Plan2Agent artifacts except through the task/status CLIs.
-5. Track execution with \`node scripts/p2a_execute.mjs start/finish/status\` or the lower-level \`node scripts/p2a_runs.mjs start/verify/finish\` so runId, changed files, verification, agent tool, and workspace reference are preserved.
+5. Track execution with \`node .plan2agent/scripts/p2a_execute.mjs start/finish/status\` or the lower-level \`node .plan2agent/scripts/p2a_runs.mjs start/verify/finish\` so runId, changed files, verification, agent tool, and workspace reference are preserved.
 6. Before marking the task done, run or request the configured test, lint, and typecheck commands when available.
 
 ## Output
@@ -644,7 +642,7 @@ Return a concise kickoff plan, the lane assignments or prompts, expected changed
 function teamBigFiveCoordinatorInstructions(target) {
   return `You are the Team Big Five coordinator for Plan2Agent handoff projects.
 
-Operate inside the target project after approved Plan2Agent artifacts have been installed. Use .plan2agent/artifacts/task-graph.json, .plan2agent/artifacts/spec.json, and .plan2agent/project.config.json as the source of truth.
+Operate inside the target project after approved Plan2Agent artifacts have been installed. Use .plan2agent/artifacts/<projectId>/gate-c-task-graph/task-graph.json, .plan2agent/artifacts/<projectId>/gate-b-spec/spec.json, and .plan2agent/project.config.json as the source of truth.
 
 Coordinate complex tasks through five lanes:
 - coordination: keep task id, scope, dependencies, and acceptance criteria visible.
@@ -653,7 +651,7 @@ Coordinate complex tasks through five lanes:
 - review: inspect behavioral regressions, missing tests, and scope drift.
 - verification: run or request test/lint/typecheck commands from project.config.json.
 
-Do not modify .plan2agent/artifacts/* directly. Use scripts/p2a_execute.mjs for supervised task lifecycle records, or scripts/p2a_tasks.mjs and scripts/p2a_runs.mjs for lower-level task state and run records. Do not run package install, destructive git commands, or external network operations unless the user explicitly approves them. When finished, report the run id, changed files, verification commands, results, and any remaining blockers. Target adapter: ${target}.`;
+Do not modify .plan2agent/artifacts/* directly. Use .plan2agent/scripts/p2a_execute.mjs for supervised task lifecycle records, or .plan2agent/scripts/p2a_tasks.mjs and .plan2agent/scripts/p2a_runs.mjs for lower-level task state and run records. Do not run package install, destructive git commands, or external network operations unless the user explicitly approves them. When finished, report the run id, changed files, verification commands, results, and any remaining blockers. Target adapter: ${target}.`;
 }
 
 function tomlString(value) {
@@ -709,7 +707,7 @@ function renderGeminiTeamBigFiveCommand() {
 
 {{args}}
 
-Read .plan2agent/artifacts/task-graph.json, .plan2agent/artifacts/spec.json, and .plan2agent/project.config.json. Create a five-lane kickoff plan, then execute only if the user explicitly asks you to make code changes.`;
+Read .plan2agent/artifacts/<projectId>/gate-c-task-graph/task-graph.json, .plan2agent/artifacts/<projectId>/gate-b-spec/spec.json, and .plan2agent/project.config.json. Create a five-lane kickoff plan, then execute only if the user explicitly asks you to make code changes.`;
   return `description = "Kick off a Team Big Five execution session for a Plan2Agent task."\nprompt = ${tomlString(prompt)}\n`;
 }
 
@@ -727,8 +725,8 @@ Plan2Agent handoff installs adapter files only. It does not run agents, install 
 
 Use approved Plan2Agent artifacts as the source of truth:
 
-- .plan2agent/artifacts/spec.json
-- .plan2agent/artifacts/task-graph.json
+- .plan2agent/artifacts/<projectId>/gate-b-spec/spec.json
+- .plan2agent/artifacts/<projectId>/gate-c-task-graph/task-graph.json
 - .plan2agent/project.config.json
 
 Target entry points:
@@ -843,8 +841,36 @@ function pushTeamBigFiveAdapter(plan, targetRoot, args) {
 }
 
 
-const SCAFFOLD_SCRIPT_FILES = ['p2a_iteration.mjs', 'p2a_tasks.mjs', 'p2a_runs.mjs', 'p2a_execute.mjs', 'p2a_orchestrate.mjs', 'p2a_proposals.mjs', 'p2a_run_paths.mjs', 'p2a_iteration_state.mjs', 'validate_artifacts.mjs'];
+const SCAFFOLD_SCRIPT_FILES = ['p2a_paths.mjs', 'p2a_iteration.mjs', 'p2a_tasks.mjs', 'p2a_runs.mjs', 'p2a_execute.mjs', 'p2a_orchestrate.mjs', 'p2a_proposals.mjs', 'p2a_run_paths.mjs', 'p2a_iteration_state.mjs', 'validate_artifacts.mjs'];
 const SCAFFOLD_SCHEMA_FILES = ['intake.schema.json', 'spec.schema.json', 'task-graph.schema.json', 'task-context.schema.json', 'review.schema.json', 'run.schema.json', 'run-index.schema.json', 'orchestration-plan.schema.json', 'orchestration-runtime.schema.json', 'skill-proposal.schema.json', 'proposal-review.schema.json', 'proposal-curation.schema.json', 'proposal-patch-draft.schema.json', 'proposal-draft-approval.schema.json'];
+
+function targetScriptPath(file) {
+  return path.join(P2A_SCRIPTS_DIR, file);
+}
+
+function targetSchemaPath(file) {
+  return path.join(P2A_SCHEMAS_DIR, file);
+}
+
+function targetArtifactDir(projectId) {
+  return path.join(ARTIFACT_TARGET_BASE, projectId);
+}
+
+function targetGatePath(projectId, gateDir, file) {
+  return path.join(targetArtifactDir(projectId), gateDir, file);
+}
+
+function targetIntakeJsonPath(projectId) {
+  return targetGatePath(projectId, 'gate-a-intake', 'intake.json');
+}
+
+function targetSpecJsonPath(projectId) {
+  return targetGatePath(projectId, 'gate-b-spec', 'spec.json');
+}
+
+function targetTaskGraphPath(projectId) {
+  return targetGatePath(projectId, 'gate-c-task-graph', 'task-graph.json');
+}
 
 
 function renderProjectGitignore() {
@@ -853,7 +879,7 @@ function renderProjectGitignore() {
 
 # Plan2Agent run logs
 .plan2agent/runs/
-artifacts/**/runs/
+.plan2agent/artifacts/**/runs/
 
 # Dependencies / build outputs
 node_modules/
@@ -974,38 +1000,38 @@ This repository owns its Plan2Agent planning and development loop in-place.
 
    \`/p2a-harness "<one sentence idea>"\`
 
-   Planning Gates A-D write artifacts under \`artifacts/<project>/gate-*\`.
+   Planning Gates A-D write artifacts under \`.plan2agent/artifacts/<project>/gate-*\`.
 
 2. Convert approved planning artifacts into the iteration structure:
 
-   \`node scripts/p2a_iteration.mjs init --artifacts artifacts/<project>\`
+   \`node .plan2agent/scripts/p2a_iteration.mjs init --artifacts .plan2agent/artifacts/<project>\`
 
 3. Develop from ready tasks and track execution:
 
-   - \`node scripts/p2a_execute.mjs plan|start|finish|status\`
-   - \`node scripts/p2a_orchestrate.mjs plan|handoff\`
-   - \`node scripts/p2a_proposals.mjs mine|review|curate|draft-patch|approve-draft|digest\`
-   - \`node scripts/p2a_tasks.mjs ready|prompt|start|done\`
-   - \`node scripts/p2a_runs.mjs start|verify|finish\`
+   - \`node .plan2agent/scripts/p2a_execute.mjs plan|start|finish|status\`
+   - \`node .plan2agent/scripts/p2a_orchestrate.mjs plan|handoff\`
+   - \`node .plan2agent/scripts/p2a_proposals.mjs mine|review|curate|draft-patch|approve-draft|digest\`
+   - \`node .plan2agent/scripts/p2a_tasks.mjs ready|prompt|start|done\`
+   - \`node .plan2agent/scripts/p2a_runs.mjs start|verify|finish\`
 
 4. Open the next iteration in this same project:
 
-   \`node scripts/p2a_iteration.mjs open|draft|context|promote-tasks\`
+   \`node .plan2agent/scripts/p2a_iteration.mjs open|draft|context|promote-tasks\`
 `;
 }
 
 function buildScaffoldPlan(args, targetRoot, createdAt = new Date().toISOString()) {
   const plan = [];
   for (const file of SCAFFOLD_SCRIPT_FILES) {
-    pushArtifact(plan, path.join(ROOT, 'scripts', file), targetRoot, path.join('scripts', file));
+    pushArtifact(plan, path.join(ROOT, 'scripts', file), targetRoot, targetScriptPath(file));
   }
   for (const file of SCAFFOLD_SCHEMA_FILES) {
-    pushArtifact(plan, path.join(ROOT, 'schemas', file), targetRoot, path.join('schemas', file));
+    pushArtifact(plan, path.join(ROOT, 'schemas', file), targetRoot, targetSchemaPath(file));
   }
   const toolAssetPlan = pushToolAssets(plan, targetRoot, args.tools);
   const claudeCoarseDeny = args.tools.includes('claude') ? claudeCoarseDenyRules(targetRoot) : { omitted: [] };
-  const scriptFiles = SCAFFOLD_SCRIPT_FILES.map((file) => normalizePath(path.join('scripts', file)));
-  const schemaFiles = SCAFFOLD_SCHEMA_FILES.map((file) => normalizePath(path.join('schemas', file)));
+  const scriptFiles = SCAFFOLD_SCRIPT_FILES.map((file) => normalizePath(targetScriptPath(file)));
+  const schemaFiles = SCAFFOLD_SCHEMA_FILES.map((file) => normalizePath(targetSchemaPath(file)));
   const manifest = {
     schema_version: 'p2a.handoff.v1',
     provenance: { mode: 'scaffold', createdAt, toolkitRoot: ROOT },
@@ -1054,18 +1080,22 @@ function printScaffoldPlan(plan, args, targetRoot) {
 function buildPlan(paths, args, artifactsRoot, targetRoot, sourceInfo, options = {}) {
   const { record = null, createdAt = new Date().toISOString() } = options;
   const plan = [];
-  pushArtifact(plan, paths.productSpec, targetRoot, path.join(ARTIFACT_TARGET_DIR, 'product-spec.md'));
-  pushArtifact(plan, paths.implementationPlan, targetRoot, path.join(ARTIFACT_TARGET_DIR, 'implementation-plan.md'));
-  pushArtifact(plan, paths.specJson, targetRoot, path.join(ARTIFACT_TARGET_DIR, 'spec.json'), { type: 'rewrite-json', transform: rebaseSpecSourceIntake });
-  pushArtifact(plan, paths.taskGraph, targetRoot, path.join(ARTIFACT_TARGET_DIR, 'task-graph.json'), { type: 'rewrite-json', transform: rebaseTaskGraphSourceSpec });
-  pushArtifact(plan, paths.reviewReport, targetRoot, path.join(ARTIFACT_TARGET_DIR, 'review-report.md'));
-  pushArtifact(plan, paths.reviewJson, targetRoot, path.join(ARTIFACT_TARGET_DIR, 'review.json'));
+  const artifactTargetDir = targetArtifactDir(args.projectId);
+  const targetIntakeRef = normalizePath(targetIntakeJsonPath(args.projectId));
+  const targetSpecRef = normalizePath(targetSpecJsonPath(args.projectId));
+  const targetTaskGraphRef = normalizePath(targetTaskGraphPath(args.projectId));
+  pushArtifact(plan, paths.productSpec, targetRoot, path.join(artifactTargetDir, 'gate-b-spec', 'product-spec.md'));
+  pushArtifact(plan, paths.implementationPlan, targetRoot, path.join(artifactTargetDir, 'gate-b-spec', 'implementation-plan.md'));
+  pushArtifact(plan, paths.specJson, targetRoot, targetSpecJsonPath(args.projectId), { type: 'rewrite-json', transform: (source) => rebaseSpecSourceIntake(source, targetIntakeRef) });
+  pushArtifact(plan, paths.taskGraph, targetRoot, targetTaskGraphPath(args.projectId), { type: 'rewrite-json', transform: (source) => rebaseTaskGraphSourceSpec(source, targetSpecRef) });
+  pushArtifact(plan, paths.reviewReport, targetRoot, path.join(artifactTargetDir, 'gate-d-review', 'review-report.md'));
+  pushArtifact(plan, paths.reviewJson, targetRoot, path.join(artifactTargetDir, 'gate-d-review', 'review.json'));
 
   assertFile(paths.intakeJson, 'gate-a-intake/intake.json');
-  pushArtifact(plan, paths.intakeJson, targetRoot, path.join(ARTIFACT_TARGET_DIR, 'intake.json'));
+  pushArtifact(plan, paths.intakeJson, targetRoot, targetIntakeJsonPath(args.projectId));
   if (args.includeIntake) {
     assertFile(paths.intakeMd, 'gate-a-intake/intake.md');
-    pushArtifact(plan, paths.intakeMd, targetRoot, path.join(ARTIFACT_TARGET_DIR, 'intake.md'));
+    pushArtifact(plan, paths.intakeMd, targetRoot, path.join(artifactTargetDir, 'gate-a-intake', 'intake.md'));
   }
 
   assertFile(paths.statusDoc, 'status.md');
@@ -1076,11 +1106,11 @@ function buildPlan(paths, args, artifactsRoot, targetRoot, sourceInfo, options =
     pushGeneratedText(
       plan,
       targetRoot,
-      path.join(ARTIFACT_TARGET_DIR, 'status.md'),
+      path.join(artifactTargetDir, 'status.md'),
       renderIterationIndexMarkdown(artifactsRoot, currentSpecForHandoff),
     );
   } else {
-    pushArtifact(plan, paths.statusDoc, targetRoot, path.join(ARTIFACT_TARGET_DIR, 'status.md'));
+    pushArtifact(plan, paths.statusDoc, targetRoot, path.join(artifactTargetDir, 'status.md'));
   }
   if (sourceInfo.currentSpecPath) {
     if (currentSpecForHandoff) {
@@ -1099,39 +1129,28 @@ function buildPlan(paths, args, artifactsRoot, targetRoot, sourceInfo, options =
     maintenanceFiles.push(normalizePath(targetRelative));
   }
 
-  pushArtifact(plan, path.join(ROOT, 'scripts', 'p2a_tasks.mjs'), targetRoot, path.join('scripts', 'p2a_tasks.mjs'));
-  pushArtifact(plan, path.join(ROOT, 'scripts', 'p2a_runs.mjs'), targetRoot, path.join('scripts', 'p2a_runs.mjs'));
-  pushArtifact(plan, path.join(ROOT, 'scripts', 'p2a_execute.mjs'), targetRoot, path.join('scripts', 'p2a_execute.mjs'));
-  pushArtifact(plan, path.join(ROOT, 'scripts', 'p2a_orchestrate.mjs'), targetRoot, path.join('scripts', 'p2a_orchestrate.mjs'));
-  pushArtifact(plan, path.join(ROOT, 'scripts', 'p2a_proposals.mjs'), targetRoot, path.join('scripts', 'p2a_proposals.mjs'));
-  pushArtifact(plan, path.join(ROOT, 'scripts', 'p2a_run_paths.mjs'), targetRoot, path.join('scripts', 'p2a_run_paths.mjs'));
-  pushArtifact(plan, path.join(ROOT, 'scripts', 'p2a_iteration_state.mjs'), targetRoot, path.join('scripts', 'p2a_iteration_state.mjs'));
-  pushArtifact(plan, path.join(ROOT, 'scripts', 'validate_artifacts.mjs'), targetRoot, path.join('scripts', 'validate_artifacts.mjs'));
+  for (const file of SCAFFOLD_SCRIPT_FILES) {
+    pushArtifact(plan, path.join(ROOT, 'scripts', file), targetRoot, targetScriptPath(file));
+  }
   for (const schemaFile of ['intake.schema.json', 'spec.schema.json', 'task-graph.schema.json', 'task-context.schema.json', 'review.schema.json', 'run.schema.json', 'run-index.schema.json', 'orchestration-plan.schema.json', 'orchestration-runtime.schema.json', 'skill-proposal.schema.json', 'proposal-review.schema.json', 'proposal-curation.schema.json', 'proposal-patch-draft.schema.json', 'proposal-draft-approval.schema.json']) {
-    pushArtifact(plan, path.join(ROOT, 'schemas', schemaFile), targetRoot, path.join('schemas', schemaFile));
+    pushArtifact(plan, path.join(ROOT, 'schemas', schemaFile), targetRoot, targetSchemaPath(schemaFile));
   }
   const toolAssetPlan = pushToolAssets(plan, targetRoot, args.tools);
   const teamBigFivePlan = pushTeamBigFiveAdapter(plan, targetRoot, args);
 
   const artifactFiles = plan
-    .filter((item) => item.targetRelative.startsWith(`${ARTIFACT_TARGET_DIR}${path.sep}`) || item.targetRelative.startsWith(`${ARTIFACT_TARGET_DIR}/`))
+    .filter((item) => item.targetRelative.startsWith(`${artifactTargetDir}${path.sep}`) || item.targetRelative.startsWith(`${artifactTargetDir}/`))
     .map((item) => normalizePath(item.targetRelative));
   const schemaFiles = plan
-    .filter((item) => item.targetRelative.startsWith(`schemas${path.sep}`) || item.targetRelative.startsWith('schemas/'))
+    .filter((item) => item.targetRelative.startsWith(`${P2A_SCHEMAS_DIR}${path.sep}`) || item.targetRelative.startsWith(`${P2A_SCHEMAS_DIR}/`))
     .map((item) => normalizePath(item.targetRelative));
+  const p2aToolFiles = SCAFFOLD_SCRIPT_FILES.map((file) => normalizePath(targetScriptPath(file)));
   const toolFiles = [
-    'scripts/p2a_tasks.mjs',
-    'scripts/p2a_runs.mjs',
-    'scripts/p2a_execute.mjs',
-    'scripts/p2a_orchestrate.mjs',
-    'scripts/p2a_proposals.mjs',
-    'scripts/p2a_run_paths.mjs',
-    'scripts/p2a_iteration_state.mjs',
-    'scripts/validate_artifacts.mjs',
+    ...p2aToolFiles,
     ...toolAssetPlan.files,
     ...teamBigFivePlan.files,
   ];
-  const includedTools = ['p2a_tasks', 'p2a_runs', 'p2a_execute', 'p2a_orchestrate', 'p2a_proposals', 'p2a_run_paths', 'p2a_iteration_state', 'validate_artifacts'];
+  const includedTools = SCAFFOLD_SCRIPT_FILES.map((file) => file.replace(/\.mjs$/, ''));
   for (const target of args.tools) includedTools.push(`p2a_${target}_assets`);
   if (teamBigFivePlan.enabled) includedTools.push('team_bigfive_adapter');
 
@@ -1157,15 +1176,17 @@ function buildPlan(paths, args, artifactsRoot, targetRoot, sourceInfo, options =
     externalHarnessGroups: teamBigFivePlan.groups,
     schemaFiles,
     notes: [
-      `task-graph.sourceSpec rebased to ${REBASED_SOURCE_SPEC}`,
-      `spec.source_intake rebased to ${REBASED_SOURCE_INTAKE}`,
+      `task-graph.sourceSpec rebased to ${targetSpecRef}`,
+      `spec.source_intake rebased to ${targetIntakeRef}`,
       sourceInfo.kind === 'iteration' ? `iteration handoff source: ${sourceInfo.iterationId}` : 'greenfield handoff source',
       args.tools.length ? `AI tool assets copied for: ${args.tools.join(', ')}` : 'AI tool assets not requested',
       teamBigFivePlan.enabled ? `Team Big Five adapter installed for: ${teamBigFivePlan.targets.join(', ')}` : 'Team Big Five adapter not requested',
     ],
   };
 
-  const projectConfig = buildProjectConfig(targetRoot, teamBigFivePlan.projectConfig);
+  const projectConfig = buildProjectConfig(targetRoot, teamBigFivePlan.projectConfig, {
+    taskGraph: targetTaskGraphRef,
+  });
   plan.push({
     type: 'write-json',
     targetRelative: path.join('.plan2agent', 'manifest.json'),
@@ -1185,20 +1206,20 @@ function normalizePath(filePath) {
   return filePath.split(path.sep).join('/');
 }
 
-function rebaseSpecSourceIntake(source) {
+function rebaseSpecSourceIntake(source, sourceIntakeRef) {
   const spec = loadJson(source);
-  spec.source_intake = REBASED_SOURCE_INTAKE;
+  spec.source_intake = sourceIntakeRef;
   const sourceText = readFileSync(source, 'utf8');
-  const rewritten = sourceText.replace(/(\"source_intake\"\s*:\s*)\"(?:[^\"\\]|\\.)*\"/, `$1${JSON.stringify(REBASED_SOURCE_INTAKE)}`);
+  const rewritten = sourceText.replace(/(\"source_intake\"\s*:\s*)\"(?:[^\"\\]|\\.)*\"/, `$1${JSON.stringify(sourceIntakeRef)}`);
   if (rewritten === sourceText) throw new Error(`could not rebase source_intake in ${source}`);
   return rewritten;
 }
 
-function rebaseTaskGraphSourceSpec(source) {
+function rebaseTaskGraphSourceSpec(source, sourceSpecRef) {
   const taskGraph = loadJson(source);
-  taskGraph.sourceSpec = REBASED_SOURCE_SPEC;
+  taskGraph.sourceSpec = sourceSpecRef;
   const sourceText = readFileSync(source, 'utf8');
-  const rewritten = sourceText.replace(/(\"sourceSpec\"\s*:\s*)\"(?:[^\"\\]|\\.)*\"/, `$1${JSON.stringify(REBASED_SOURCE_SPEC)}`);
+  const rewritten = sourceText.replace(/(\"sourceSpec\"\s*:\s*)\"(?:[^\"\\]|\\.)*\"/, `$1${JSON.stringify(sourceSpecRef)}`);
   if (rewritten === sourceText) throw new Error(`could not rebase sourceSpec in ${source}`);
   return rewritten;
 }
@@ -1214,6 +1235,7 @@ function detectPackageManager(targetRoot) {
 }
 
 function buildProjectConfig(targetRoot, teamBigFiveConfig = { enabled: false }, options = {}) {
+  const taskGraph = options.taskGraph ?? null;
   const providerNativeCapabilities = {
     codex: {
       skills: 'manual_check',
@@ -1239,7 +1261,7 @@ function buildProjectConfig(targetRoot, teamBigFiveConfig = { enabled: false }, 
       testCommand: null,
       lintCommand: null,
       typecheckCommand: null,
-      taskGraph: '.plan2agent/artifacts/task-graph.json',
+      taskGraph,
       runTracking: {
         runsDir: '.plan2agent/runs',
         defaultIsolation: 'none',
@@ -1283,7 +1305,7 @@ function buildProjectConfig(targetRoot, teamBigFiveConfig = { enabled: false }, 
     testCommand,
     lintCommand,
     typecheckCommand,
-    taskGraph: '.plan2agent/artifacts/task-graph.json',
+    taskGraph,
     runTracking: {
       runsDir: '.plan2agent/runs',
       defaultIsolation: 'none',
@@ -1564,7 +1586,7 @@ async function buildInteractiveArgv(rl) {
   if (picked === 'manual') {
     projectId = await askRequired(rl, 'project-id', '프로젝트 식별자');
     if (!projectId) return null;
-    artifacts = await askRequired(rl, 'artifacts', '원본 산출물 디렉터리 (예: artifacts/<id>)', path.join('artifacts', projectId));
+    artifacts = await askRequired(rl, 'artifacts', '원본 산출물 디렉터리 (예: .plan2agent/artifacts/<id>)', path.join(P2A_ARTIFACTS_DIR, projectId));
     if (!artifacts) return null;
   } else {
     projectId = picked.projectId;
@@ -1607,22 +1629,44 @@ function argvValue(argv, option) {
   return index === -1 ? null : argv[index + 1];
 }
 
+function artifactRootFromTaskGraphRef(taskGraphRef) {
+  if (!taskGraphRef) return '.plan2agent/artifacts/<projectId>';
+  const graphDir = path.dirname(taskGraphRef);
+  if (path.basename(graphDir) !== 'gate-c-task-graph') return path.dirname(taskGraphRef);
+  const parent = path.dirname(graphDir);
+  const parentBase = path.basename(parent);
+  if (parentBase === 'maintenance' || parentBase.startsWith('iter-')) {
+    const iterationsDir = path.dirname(parent);
+    if (path.basename(iterationsDir) === 'iterations') return normalizePath(path.dirname(iterationsDir));
+  }
+  return normalizePath(parent);
+}
+
 function printNextSteps(targetRoot) {
+  let config = null;
+  try {
+    config = JSON.parse(readFileSync(path.join(targetRoot, '.plan2agent', 'project.config.json'), 'utf8'));
+  } catch {
+    config = null;
+  }
+  const sourceArg = config?.taskGraph
+    ? `--graph ${normalizePath(config.taskGraph)}`
+    : '--graph .plan2agent/artifacts/<projectId>/gate-c-task-graph/task-graph.json';
+  const artifactRoot = artifactRootFromTaskGraphRef(config?.taskGraph);
   console.log(`✅ 인계 완료 — ${targetRoot}`);
   console.log(`다음: cd ${targetRoot}`);
-  console.log('      node scripts/p2a_execute.mjs plan --graph .plan2agent/artifacts/task-graph.json --task <task-id>');
-  console.log('      node scripts/p2a_orchestrate.mjs plan --graph .plan2agent/artifacts/task-graph.json --task <task-id> --output .plan2agent/orchestration/<task-id>.json');
-  console.log('      node scripts/p2a_execute.mjs start --graph .plan2agent/artifacts/task-graph.json --task <task-id> --agent-tool <tool>');
-  console.log('      node scripts/p2a_execute.mjs finish --graph .plan2agent/artifacts/task-graph.json --run-id <run-id> --test --lint --typecheck');
-  console.log('      node scripts/p2a_proposals.mjs mine --graph .plan2agent/artifacts/task-graph.json');
-  console.log('      node scripts/p2a_proposals.mjs review --proposals .plan2agent/proposals');
-  console.log('      node scripts/p2a_proposals.mjs curate --review .plan2agent/proposals/reviews/<review-id>.json');
-  console.log('      node scripts/p2a_proposals.mjs draft-patch --curation .plan2agent/proposals/curations/<curation-id>.json --candidate-id <candidate-id>');
-  console.log('      node scripts/p2a_proposals.mjs approve-draft --draft .plan2agent/proposals/patch-drafts/<draft-id>.json --artifacts <iterative-artifact-root> --approved-by <name>');
-  console.log('      node scripts/p2a_execute.mjs plan --artifacts <iterative-artifact-root> --approval .plan2agent/proposals/approvals/<approval-id>.json');
+  console.log(`      node .plan2agent/scripts/p2a_execute.mjs plan ${sourceArg} --task <task-id>`);
+  console.log(`      node .plan2agent/scripts/p2a_orchestrate.mjs plan ${sourceArg} --task <task-id> --output .plan2agent/orchestration/<task-id>.json`);
+  console.log(`      node .plan2agent/scripts/p2a_execute.mjs start ${sourceArg} --task <task-id> --agent-tool <tool>`);
+  console.log(`      node .plan2agent/scripts/p2a_execute.mjs finish ${sourceArg} --run-id <run-id> --test --lint --typecheck`);
+  console.log(`      node .plan2agent/scripts/p2a_proposals.mjs mine ${sourceArg}`);
+  console.log('      node .plan2agent/scripts/p2a_proposals.mjs review --proposals .plan2agent/proposals');
+  console.log('      node .plan2agent/scripts/p2a_proposals.mjs curate --review .plan2agent/proposals/reviews/<review-id>.json');
+  console.log('      node .plan2agent/scripts/p2a_proposals.mjs draft-patch --curation .plan2agent/proposals/curations/<curation-id>.json --candidate-id <candidate-id>');
+  console.log(`      node .plan2agent/scripts/p2a_proposals.mjs approve-draft --draft .plan2agent/proposals/patch-drafts/<draft-id>.json --artifacts ${artifactRoot} --approved-by <name>`);
 
   try {
-    const config = JSON.parse(readFileSync(path.join(targetRoot, '.plan2agent', 'project.config.json'), 'utf8'));
+    if (!config) throw new Error('missing config');
     if (['testCommand', 'lintCommand', 'typecheckCommand'].some((key) => config[key] === null)) {
       console.log('참고: .plan2agent/project.config.json 의 test/lint/typecheck 명령을 채우세요.');
     }
@@ -1685,9 +1729,9 @@ function shouldRunInteractive(argv) {
 function isDirectEntry() {
   if (!process.argv[1]) return false;
   try {
-    return realpathSync(__filename) === realpathSync(process.argv[1]);
+    return realpathSync(P2A_PATHS.filename) === realpathSync(process.argv[1]);
   } catch {
-    return __filename === path.resolve(process.argv[1]);
+    return P2A_PATHS.filename === path.resolve(process.argv[1]);
   }
 }
 

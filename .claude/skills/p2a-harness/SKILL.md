@@ -79,7 +79,7 @@ This is a narrative-first recommended structure, not a blank form. Preserve the 
 
 - When the user answers decisions such as `ND-1` or `ND-4`, merge the answers into `intake_json.needs_user_decision[*].answer`, set those decisions to `answered`, recompute `intake_json.status`, and refresh `gate-a-intake/intake.md` in the same turn so every answered decision is shown as answered with its selected option/answer. An answered JSON decision must never remain `open` in `intake.md`.
 - Resume from the earliest stage whose input changed. For example, changed intake answers invalidate spec, implementation plan, task graph, and review.
-- Carry forward stable artifact ids (`project_id`, `source_intake`, `sourceSpec`) so later stages can trace their source. Use the gate-folder paths for cross-artifact references, for example `artifacts/<project_id>/gate-a-intake/intake.json` for `source_intake` and `artifacts/<project_id>/gate-b-spec/spec.json` for `sourceSpec`.
+- Carry forward stable artifact ids (`project_id`, `source_intake`, `sourceSpec`) so later stages can trace their source. Use the gate-folder paths for cross-artifact references, for example `.plan2agent/artifacts/<project_id>/gate-a-intake/intake.json` for `source_intake` and `.plan2agent/artifacts/<project_id>/gate-b-spec/spec.json` for `sourceSpec`.
 - If an artifact is pasted in Markdown only, reconstruct the matching JSON contract before advancing to the next gate.
 
 ## State Passing Contract
@@ -94,11 +94,11 @@ Return intermediate artifacts in fenced code blocks named exactly:
 - `review_report`
 - `review_json`
 
-`intake_json`, `spec_json`, `task_graph_json`, and `review_json` must conform to `schemas/intake.schema.json`, `schemas/spec.schema.json`, `schemas/task-graph.schema.json`, and `schemas/review.schema.json` respectively. `intake_json.evidence` and `spec_json.evidence` carry all user, local, and web sources used by the run.
+`intake_json`, `spec_json`, `task_graph_json`, and `review_json` must conform to `.plan2agent/schemas/intake.schema.json`, `.plan2agent/schemas/spec.schema.json`, `.plan2agent/schemas/task-graph.schema.json`, and `.plan2agent/schemas/review.schema.json` respectively. `intake_json.evidence` and `spec_json.evidence` carry all user, local, and web sources used by the run.
 
 ## Artifact Persistence
 
-In addition to the inline state sections, the harness orchestrator writes each artifact to a file so the user can open and review it before any gate. Use a stable `project_id` (kebab-case, derived from the idea or carried forward) and keep all files for one run under `artifacts/<project_id>/` using gate-specific folders:
+In addition to the inline state sections, the harness orchestrator writes each artifact to a file so the user can open and review it before any gate. Use a stable `project_id` (kebab-case, derived from the idea or carried forward) and keep all files for one run under `.plan2agent/artifacts/<project_id>/` using gate-specific folders:
 
 - `status.md` — top-level standing progress status and decision index. Refresh it at every gate transition.
 - `gate-a-intake/intake.json` — the `intake_json` artifact
@@ -110,11 +110,11 @@ In addition to the inline state sections, the harness orchestrator writes each a
 - `gate-d-review/review-report.md` — the `review_report` artifact
 - `gate-d-review/review.json` — the `review_json` artifact
 
-The orchestrator writes each stage's outputs into its matching `gate-*` folder before stopping at that gate, and tells the user the file paths. `status.md` remains directly under `artifacts/<project_id>/` because it is the standing cross-gate progress and decision index. Whenever the orchestrator writes any gate artifact, refresh `status.md` in the same turn; do not treat it as a Gate-A-only or optional file. Likewise, whenever Gate A intake answers change, refresh both `gate-a-intake/intake.json` and `gate-a-intake/intake.md` so decision status and selected answers match exactly. Only the harness orchestrator writes files; subagents stay read-only and return their content for the orchestrator to persist. Continue to surface the inline named sections as well so resume and paste-in still work.
+The orchestrator writes each stage's outputs into its matching `gate-*` folder before stopping at that gate, and tells the user the file paths. `status.md` remains directly under `.plan2agent/artifacts/<project_id>/` because it is the standing cross-gate progress and decision index. Whenever the orchestrator writes any gate artifact, refresh `status.md` in the same turn; do not treat it as a Gate-A-only or optional file. Likewise, whenever Gate A intake answers change, refresh both `gate-a-intake/intake.json` and `gate-a-intake/intake.md` so decision status and selected answers match exactly. Only the harness orchestrator writes files; subagents stay read-only and return their content for the orchestrator to persist. Continue to surface the inline named sections as well so resume and paste-in still work.
 
 ### `status.md` Standing Document
 
-`status.md` should mirror the narrative-first pattern used by `intake.md`: it is a readable standing document, not a blank form. Preserve English JSON field names when referencing source fields, but render headings and labels in the user's language when appropriate (for example Korean: `1. 진행 상태`, `2. 게이트별`, `3. 열린 결정`, `4. 다음`, `5. 변경 이력`). Keep it valid for `scripts/validate_artifacts.mjs --status`: it must include a literal `Progress:` line, Gate A, Gate B, Gate C, and Gate D sections, plus numbered `## 1.` through `## 5.` sections. Maintain this structure on every gate transition, even when only one section changes. Use this standard skeleton:
+`status.md` should mirror the narrative-first pattern used by `intake.md`: it is a readable standing document, not a blank form. Preserve English JSON field names when referencing source fields, but render headings and labels in the user's language when appropriate (for example Korean: `1. 진행 상태`, `2. 게이트별`, `3. 열린 결정`, `4. 다음`, `5. 변경 이력`). Keep it valid for `.plan2agent/scripts/validate_artifacts.mjs --status`: it must include a literal `Progress:` line, Gate A, Gate B, Gate C, and Gate D sections, plus numbered `## 1.` through `## 5.` sections. Maintain this structure on every gate transition, even when only one section changes. Use this standard skeleton:
 
 1. **Progress line** — show the current gate marker across `[A] → [B] → [C] → [D]`, indicating which gates are complete, current, blocked, or pending.
 2. **Per-gate sections** — summarize each gate's latest state and point to the canonical artifact files for that gate.
@@ -155,7 +155,7 @@ Do not retype gate status facts from memory. Pull gate status, task counts, `rea
 
 ## Rules
 
-- You MAY create or update Plan2Agent planning artifacts (`.md` / `.json`) under `artifacts/<project_id>/`.
+- You MAY create or update Plan2Agent planning artifacts (`.md` / `.json`) under `.plan2agent/artifacts/<project_id>/`.
 - Do NOT edit application or source code, install dependencies, run shell commands for implementation, or perform git operations.
 - Subagents remain strictly read-only; only the harness orchestrator persists artifact files.
 - Refresh `status.md` in the same turn as every gate artifact write, using facts pulled from the artifacts and tools rather than memory.

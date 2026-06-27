@@ -6,16 +6,15 @@ import { createInterface } from 'node:readline/promises';
 import path from 'node:path';
 import process from 'node:process';
 import { Readable } from 'node:stream';
-import { fileURLToPath } from 'node:url';
 import { validateTaskGraphData, ValidationError } from './validate_artifacts.mjs';
 import { resolveIterationState } from './p2a_iteration_state.mjs';
 import { resolveRunsDir } from './p2a_run_paths.mjs';
+import { P2A_ARTIFACTS_DIR, configuredTaskGraphPath, resolveP2aPaths } from './p2a_paths.mjs';
 
-const __filename = fileURLToPath(import.meta.url);
-const ROOT = path.resolve(path.dirname(__filename), '..');
+const P2A_PATHS = resolveP2aPaths(import.meta.url);
+const ROOT = P2A_PATHS.projectRoot;
 const VALID_TRANSITIONS = new Set(['start', 'done', 'block', 'todo']);
-const DEFAULT_GRAPH_PATH = '.plan2agent/artifacts/task-graph.json';
-const DEFAULT_ARTIFACT_CANDIDATES = ['.', '.plan2agent', '.plan2agent/artifacts'];
+const DEFAULT_ARTIFACT_CANDIDATES = ['.'];
 const INTERACTIVE_COMMANDS = [
   { command: 'list', description: '전체 task와 진행 상태표' },
   { command: 'ready', description: '지금 시작 가능한 task' },
@@ -31,8 +30,8 @@ const TASK_ID_COMMANDS = new Set(['show', 'prompt', 'start', 'done', 'block', 't
 function usage() {
   return [
     'Usage:',
-    '  node scripts/p2a_tasks.mjs <command> --graph <path> [--spec <path>] [task-id]',
-    '  node scripts/p2a_tasks.mjs <command> --artifacts <iterative-project-dir> [task-id]',
+    '  node .plan2agent/scripts/p2a_tasks.mjs <command> --graph <path> [--spec <path>] [task-id]',
+    '  node .plan2agent/scripts/p2a_tasks.mjs <command> --artifacts <iterative-project-dir> [task-id]',
     '',
     'Commands:',
     '  list                 Show all tasks with readiness.',
@@ -45,7 +44,7 @@ function usage() {
     '  todo <task-id>       Mark a task todo.',
     '',
     'Options:',
-    '  --graph <path>       Task graph JSON path.',
+    '  --graph <path>       Task graph JSON path. Defaults to .plan2agent/project.config.json taskGraph when available.',
     '  --artifacts <dir>    Iterative artifact root; uses the active iteration task graph.',
     '  --spec <path>        Spec JSON path for prompt context. Only supported with --graph.',
     '  --maintenance        With --artifacts, operate on the maintenance task graph.',
@@ -79,6 +78,9 @@ function parseArgs(argv) {
       positional.push(arg);
     }
   }
+  if (!graphPath && !artifactsPath) {
+    graphPath = configuredTaskGraphPath();
+  }
   if (graphPath && artifactsPath) throw new Error('--graph and --artifacts cannot be used together');
   if (graphPath && maintenance) throw new Error('--maintenance is only supported with --artifacts');
   if (!graphPath && !artifactsPath) throw new Error('--graph or --artifacts is required');
@@ -93,7 +95,7 @@ function resolveTaskInputs(args) {
   if (args.maintenance) {
     const graphPath = path.join(iterationState.artifactRoot, 'iterations', 'maintenance', 'gate-c-task-graph', 'task-graph.json');
     if (!existsSync(graphPath)) {
-      throw new Error('no maintenance task graph yet; create one with: node scripts/p2a_iteration.mjs maintenance add --artifacts <dir> --title ... --accept ...');
+      throw new Error('no maintenance task graph yet; create one with: node .plan2agent/scripts/p2a_iteration.mjs maintenance add --artifacts <dir> --title ... --accept ...');
     }
     return {
       ...args,
@@ -310,7 +312,7 @@ async function askMenu(rl, title, items, formatItem) {
 }
 
 function interactiveGraphDefault() {
-  return existsSync(DEFAULT_GRAPH_PATH) ? DEFAULT_GRAPH_PATH : null;
+  return configuredTaskGraphPath();
 }
 
 function isIterativeArtifactRoot(candidate) {
@@ -327,12 +329,12 @@ function interactiveArtifactsDefault() {
 }
 
 function listArtifactProjectDefaults() {
-  const artifactsRoot = path.join(process.cwd(), 'artifacts');
+  const artifactsRoot = path.join(process.cwd(), P2A_ARTIFACTS_DIR);
   if (!existsSync(artifactsRoot)) return [];
   try {
     return readdirSync(artifactsRoot, { withFileTypes: true })
       .filter((entry) => entry.isDirectory())
-      .map((entry) => path.join('artifacts', entry.name))
+      .map((entry) => path.join(P2A_ARTIFACTS_DIR, entry.name))
       .filter((candidate) => isIterativeArtifactRoot(candidate))
       .sort();
   } catch {
@@ -376,7 +378,7 @@ async function buildInteractiveArgv(rl) {
     if (source.mode === 'maintenance') {
       graphPath = path.join(iterationState.artifactRoot, 'iterations', 'maintenance', 'gate-c-task-graph', 'task-graph.json');
       if (!existsSync(graphPath)) {
-        throw new Error('no maintenance task graph yet; create one with: node scripts/p2a_iteration.mjs maintenance add --artifacts <dir> --title ... --accept ...');
+        throw new Error('no maintenance task graph yet; create one with: node .plan2agent/scripts/p2a_iteration.mjs maintenance add --artifacts <dir> --title ... --accept ...');
       }
       argv = [selected.command, '--artifacts', artifactsPath, '--maintenance'];
     } else {
@@ -457,9 +459,9 @@ function shouldRunInteractive(argv) {
 function isDirectEntry() {
   if (!process.argv[1]) return false;
   try {
-    return realpathSync(__filename) === realpathSync(process.argv[1]);
+    return realpathSync(P2A_PATHS.filename) === realpathSync(process.argv[1]);
   } catch {
-    return __filename === path.resolve(process.argv[1]);
+    return P2A_PATHS.filename === path.resolve(process.argv[1]);
   }
 }
 

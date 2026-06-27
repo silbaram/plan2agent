@@ -7,7 +7,7 @@ Electron MVP for the Plan2Agent supervised desktop GUI.
 - Electron main process owns app lifecycle, native dialogs, project file loading, file watching, command execution, and PTY lifecycle.
 - Preload exposes a narrow typed API through `contextBridge`.
 - Renderer is a React workbench for Overview, Tasks, Runs, Terminal, and Settings.
-- Project artifacts and runs remain file-based. The GUI reads existing P2A files and calls the existing `scripts/p2a_execute.mjs` lifecycle for start/finish actions.
+- Project artifacts and runs remain file-based. The GUI reads existing P2A files and calls the embedded `.plan2agent/scripts/p2a_execute.mjs` lifecycle for start/finish actions.
 - Terminal sessions use `node-pty` and `xterm.js` for a single supervised agent CLI session.
 - The GUI does not scaffold, import, upgrade, repair, or overwrite P2A harness files. Those actions are shown as command guidance only.
 

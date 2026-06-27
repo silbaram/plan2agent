@@ -4,5 +4,5 @@ Use the Plan2Agent p2a-intake skill for the following idea or resume context:
 
 {{args}}
 
-Return intake_json conforming to schemas/intake.schema.json and a table of open needs_user_decision items when blocked.
+Return intake_json conforming to .plan2agent/schemas/intake.schema.json and a table of open needs_user_decision items when blocked.
 """

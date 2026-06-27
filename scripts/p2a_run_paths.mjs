@@ -1,11 +1,16 @@
 /** Shared path resolution helpers for Plan2Agent run artifacts. */
 
 import path from 'node:path';
+import { P2A_DIR } from './p2a_paths.mjs';
 
-export const DEFAULT_RUNS_DIR = path.join('.plan2agent', 'runs');
+export const DEFAULT_RUNS_DIR = path.join(P2A_DIR, 'runs');
 
 export function defaultRunsDirForGraph(graphPath) {
-  return path.resolve(path.dirname(graphPath), '..', 'runs');
+  const graphDir = path.dirname(graphPath);
+  if (path.basename(graphDir) === 'gate-c-task-graph') {
+    return path.resolve(graphDir, '..', 'runs');
+  }
+  return path.resolve(graphDir, 'runs');
 }
 
 export function resolveRunsDir(args) {

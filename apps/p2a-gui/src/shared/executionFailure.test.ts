@@ -4,7 +4,7 @@ import { summarizeFinishRunFailure, summarizeStartRunFailure } from "./execution
 
 function failedResult(overrides: Partial<ExecutionCommandResult>): ExecutionCommandResult {
   return {
-    command: "node scripts/p2a_execute.mjs start --task task-001",
+    command: "node .plan2agent/scripts/p2a_execute.mjs start --task task-001",
     args: [],
     cwd: "/project",
     exitCode: 1,
@@ -27,7 +27,7 @@ describe("summarizeStartRunFailure", () => {
     expect(
       summarizeStartRunFailure(
         failedResult({
-          stderr: "p2a_execute does not exist: /project/scripts/p2a_execute.mjs",
+          stderr: "p2a_execute does not exist: /project/.plan2agent/scripts/p2a_execute.mjs",
         }),
       ),
     ).toMatchObject({

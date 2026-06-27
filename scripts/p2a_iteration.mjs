@@ -14,7 +14,7 @@ import {
 import { createHash } from 'node:crypto';
 import path from 'node:path';
 import process from 'node:process';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { pathToFileURL } from 'node:url';
 import {
   loadJson,
   validateIntake,
@@ -35,9 +35,10 @@ import {
   serializeIterationState,
 } from './p2a_iteration_state.mjs';
 import { loadRunsForArtifactRoot } from './p2a_runs.mjs';
+import { resolveP2aPaths } from './p2a_paths.mjs';
 
-const __filename = fileURLToPath(import.meta.url);
-const ROOT = path.resolve(path.dirname(__filename), '..');
+const P2A_PATHS = resolveP2aPaths(import.meta.url);
+const ROOT = P2A_PATHS.projectRoot;
 const GATE_DIRS = ['gate-a-intake', 'gate-b-spec', 'gate-c-task-graph', 'gate-d-review'];
 const STATUS_ORDER = ['todo', 'in_progress', 'done', 'blocked'];
 const DEFAULT_ITERATION_ID = 'v1-mvp';
@@ -70,18 +71,18 @@ const IMPLEMENTATION_FIELDS = [
 function usage() {
   return [
     'Usage:',
-    '  node scripts/p2a_iteration.mjs init --artifacts <greenfield-project-dir> [--iteration-id v1-mvp] [--dry-run]',
-    '  node scripts/p2a_iteration.mjs current --artifacts <iterative-project-dir> [--json]',
-    '  node scripts/p2a_iteration.mjs validate --artifacts <iterative-project-dir> [--require-close-ready] [--allow-planning] [--stage ready|gate-a|gate-b-draft|gate-b-approved|gate-c-draft] [--skip-archive-audit]',
-    '  node scripts/p2a_iteration.mjs close --artifacts <iterative-project-dir> [--iteration-id active]',
-    '  node scripts/p2a_iteration.mjs open --artifacts <iterative-project-dir> --iteration-id <id> --idea <text>',
-    '  node scripts/p2a_iteration.mjs draft --artifacts <iterative-project-dir> [--idea <text>] [--force]',
-    '  node scripts/p2a_iteration.mjs context --artifacts <iterative-project-dir> [--idea <text>] [--code-root <dir>]',
-    '  node scripts/p2a_iteration.mjs promote-spec --artifacts <iterative-project-dir>',
-    '  node scripts/p2a_iteration.mjs promote-tasks --artifacts <iterative-project-dir>',
-    '  node scripts/p2a_iteration.mjs diff-tasks --artifacts <iterative-project-dir> [--force]',
-    '  node scripts/p2a_iteration.mjs compose --artifacts <iterative-project-dir> [--allow-conflicts]',
-    '  node scripts/p2a_iteration.mjs maintenance add --artifacts <iterative-project-dir> --title <text> --accept <text> [--accept <text> ...] [--description <text>] [--area <text>] [--prompt <text>] [--ref <value> ...] [--depends <task-id> ...] [--dry-run]',
+    '  node .plan2agent/scripts/p2a_iteration.mjs init --artifacts <greenfield-project-dir> [--iteration-id v1-mvp] [--dry-run]',
+    '  node .plan2agent/scripts/p2a_iteration.mjs current --artifacts <iterative-project-dir> [--json]',
+    '  node .plan2agent/scripts/p2a_iteration.mjs validate --artifacts <iterative-project-dir> [--require-close-ready] [--allow-planning] [--stage ready|gate-a|gate-b-draft|gate-b-approved|gate-c-draft] [--skip-archive-audit]',
+    '  node .plan2agent/scripts/p2a_iteration.mjs close --artifacts <iterative-project-dir> [--iteration-id active]',
+    '  node .plan2agent/scripts/p2a_iteration.mjs open --artifacts <iterative-project-dir> --iteration-id <id> --idea <text>',
+    '  node .plan2agent/scripts/p2a_iteration.mjs draft --artifacts <iterative-project-dir> [--idea <text>] [--force]',
+    '  node .plan2agent/scripts/p2a_iteration.mjs context --artifacts <iterative-project-dir> [--idea <text>] [--code-root <dir>]',
+    '  node .plan2agent/scripts/p2a_iteration.mjs promote-spec --artifacts <iterative-project-dir>',
+    '  node .plan2agent/scripts/p2a_iteration.mjs promote-tasks --artifacts <iterative-project-dir>',
+    '  node .plan2agent/scripts/p2a_iteration.mjs diff-tasks --artifacts <iterative-project-dir> [--force]',
+    '  node .plan2agent/scripts/p2a_iteration.mjs compose --artifacts <iterative-project-dir> [--allow-conflicts]',
+    '  node .plan2agent/scripts/p2a_iteration.mjs maintenance add --artifacts <iterative-project-dir> --title <text> --accept <text> [--accept <text> ...] [--description <text>] [--area <text>] [--prompt <text>] [--ref <value> ...] [--depends <task-id> ...] [--dry-run]',
     '',
     'Commands:',
     '  init                  Convert a greenfield artifact root into iterations/<id>/gate-*.',
@@ -919,7 +920,7 @@ function maintenanceReadme() {
   return `# maintenance\n\n` +
     `작은 fix, 문서 수정, 패치성 변경을 append하는 상시 반복입니다.\n\n` +
     `task graph는 첫 fix가 생길 때 \`gate-c-task-graph/task-graph.json\`으로 생성합니다. ` +
-    `빈 task graph는 \`schemas/task-graph.schema.json\`의 \`tasks\` 최소 1개 제약을 위반하므로 만들지 않습니다.\n`;
+    `빈 task graph는 \`.plan2agent/schemas/task-graph.schema.json\`의 \`tasks\` 최소 1개 제약을 위반하므로 만들지 않습니다.\n`;
 }
 
 function closeStatusMarkdown(projectId, iterationId, spec, taskGraph, review, closedAt, effectiveSpecRef) {
@@ -3266,7 +3267,7 @@ export function main(argv = process.argv.slice(2)) {
 function isDirectEntry() {
   if (!process.argv[1]) return false;
   try {
-    return realpathSync(__filename) === realpathSync(process.argv[1]);
+    return realpathSync(P2A_PATHS.filename) === realpathSync(process.argv[1]);
   } catch {
     return import.meta.url === pathToFileURL(process.argv[1]).href;
   }

@@ -41,7 +41,7 @@ export function summarizeStartRunFailure(
     return {
       kind: "script_missing",
       title: "P2A execution script missing",
-      detail: "The selected project does not expose scripts/p2a_execute.mjs.",
+      detail: "The selected project does not expose .plan2agent/scripts/p2a_execute.mjs.",
       nextAction: "Validate or reinstall the P2A harness, then reload the project.",
     };
   }

@@ -1273,9 +1273,9 @@ async function buildFileChecks(rootPath: string): Promise<ProjectFileCheck[]> {
     ["manifest", "manifest", ".plan2agent/manifest.json", "file"],
     ["project-config", "project config", ".plan2agent/project.config.json", "file"],
     ["plan-doc", "PLAN2AGENT.md", "PLAN2AGENT.md", "file"],
-    ["scripts", "scripts", "scripts", "directory"],
-    ["schemas", "schemas", "schemas", "directory"],
-    ["artifacts", "artifacts", "artifacts", "directory"],
+    ["scripts", "scripts", ".plan2agent/scripts", "directory"],
+    ["schemas", "schemas", ".plan2agent/schemas", "directory"],
+    ["artifacts", "artifacts", ".plan2agent/artifacts", "directory"],
     ["runs", "runs", ".plan2agent/runs", "directory"],
   ] as const;
 
@@ -1367,7 +1367,7 @@ function buildCommands(rootPath: string, state: ProjectDetectionState, artifacts
     commands.push({
       id: "validate",
       label: "Validate guidance",
-      command: `node scripts/validate_artifacts.mjs --artifacts ${shellQuote(primaryArtifact?.rootPath ?? rootPath)}`,
+      command: `node .plan2agent/scripts/validate_artifacts.mjs --artifact-root ${shellQuote(primaryArtifact?.rootPath ?? rootPath)}`,
       description: "Validate existing planning artifacts without modifying project files.",
     });
   }
@@ -1384,7 +1384,7 @@ function importCommand(rootPath: string): string {
 }
 
 function validateCommand(rootPath: string, artifacts: ArtifactSummary[]): string {
-  return `node scripts/validate_artifacts.mjs --artifacts ${shellQuote(artifacts[0]?.rootPath ?? rootPath)}`;
+  return `node .plan2agent/scripts/validate_artifacts.mjs --artifact-root ${shellQuote(artifacts[0]?.rootPath ?? rootPath)}`;
 }
 
 function installAction(rootPath: string): OnboardingAction {

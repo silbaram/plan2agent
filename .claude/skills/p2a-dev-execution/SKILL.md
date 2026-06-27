@@ -33,7 +33,7 @@ Use these inputs:
 1. Confirm the target task is ready and inspect its implementation context:
 
    ```bash
-   node scripts/p2a_tasks.mjs ready --artifacts <dir>
+   node .plan2agent/scripts/p2a_tasks.mjs ready --artifacts <dir>
    ```
 
    Use the task `prompt` to understand the scoped work, acceptance criteria, target area, and relevant constraints.
@@ -41,7 +41,7 @@ Use these inputs:
 2. Start a run unless the user provided an existing run id. When using Codex, create an isolated worktree so the write-capable implementer is confined by Codex's `workspace-write` sandbox:
 
    ```bash
-   node scripts/p2a_runs.mjs start --artifacts <dir> --task <id> --agent-tool codex --isolation worktree --worktree <fresh-worktree-path> --create-isolation
+   node .plan2agent/scripts/p2a_runs.mjs start --artifacts <dir> --task <id> --agent-tool codex --isolation worktree --worktree <fresh-worktree-path> --create-isolation
    ```
 
    The worktree path must be a fresh empty path, following the `project.config.json` `runTracking.worktreePattern` convention (for example, `../.worktrees/<taskId>-<runId>`).
@@ -57,7 +57,7 @@ Use these inputs:
 5. Verify the run with the required checks by actually executing configured or explicitly requested commands:
 
    ```bash
-   node scripts/p2a_runs.mjs verify --run-id <id> --artifacts <dir> --test --lint --typecheck
+   node .plan2agent/scripts/p2a_runs.mjs verify --run-id <id> --artifacts <dir> --test --lint --typecheck
    ```
 
    `p2a_runs verify` must execute the configured or explicitly requested verification commands and capture their exit codes as `source: config` or `source: command`. Do not self-report verification with a manual record; do not use `source: manual` or `exitCode: null` as a substitute for executed verification.
@@ -67,7 +67,7 @@ Use these inputs:
 6. Finish the run, collecting git state:
 
    ```bash
-   node scripts/p2a_runs.mjs finish --run-id <id> --artifacts <dir> --status finished|failed|blocked --collect-git
+   node .plan2agent/scripts/p2a_runs.mjs finish --run-id <id> --artifacts <dir> --status finished|failed|blocked --collect-git
    ```
 
    When finishing with `--status failed` or `--status blocked`, include `--failure-class <class>` so the run records a structured `failure` object. The supported classes are `verification_failed`, `test_flake`, `scope_violation`, `missing_dependency`, `environment_failure`, `implementation_incomplete`, and `other`. The CLI fills `retryable`, `needsUserDecision`, and `source` from the class defaults; use `--retryable`, `--needs-user-decision`, or `--failure-source` only when the default is wrong. Use `--failure-class other` only as an escape hatch and always include at least one `--note` explaining why no more specific class applies.
@@ -79,20 +79,20 @@ Use these inputs:
    If the monitor returns `verdict: "block"`, do not mark the task done. First finish the run as blocked with `--failure-source monitor` and a failure class derived from the monitor verdict details: `unmet_acceptance` maps to `implementation_incomplete`, `verification_concerns` maps to `verification_failed`, and `scope_concerns` maps to `scope_violation`. Then record the blocker and follow-up reason:
 
    ```bash
-   node scripts/p2a_tasks.mjs block --artifacts <dir> <task-id>
+   node .plan2agent/scripts/p2a_tasks.mjs block --artifacts <dir> <task-id>
    ```
 
    If the monitor returns `verdict: "confirm_done"`, mark the task done:
 
    ```bash
-   node scripts/p2a_tasks.mjs done --artifacts <dir> <task-id>
+   node .plan2agent/scripts/p2a_tasks.mjs done --artifacts <dir> <task-id>
    ```
 
 8. Complete the retrospective gate described below.
 
 ## Writing boundaries and prohibitions
 
-- Implement only inside the separate target project. Do not write to the Plan2Agent repository itself, including `.agents/`, `.claude/`, `.codex/`, `.gemini/`, `scripts/`, `schemas/`, `plans/`, or `docs/`.
+- Implement only inside the separate target project. Do not write to the Plan2Agent repository itself, including `.agents/`, `.claude/`, `.codex/`, `.gemini/`, `.plan2agent/scripts/`, `.plan2agent/schemas/`, `plans/`, or `docs/`.
 - Limit writes to the run `workspaceRef` or worktree. Refuse requests to write outside that workspace.
 - Do not add or rewrite requirements by bypassing planning artifacts.
 - Do not install dependencies without grounded evidence from the approved task, existing project conventions, or explicit user approval.
@@ -115,6 +115,6 @@ Return these items to the user:
 
 After execution, perform a Hermes-style retrospective gate. Look for repeated mistakes, missing verification, reusable procedures, or unclear boundaries discovered during the run.
 
-If an improvement is warranted, write it as a skill-proposal schema object rather than freeform markdown and save it inside the project at `.plan2agent/proposals/<proposalId>.json`. The object must conform to `schemas/skill-proposal.schema.json` with `schema_version: "p2a.skill_proposal.v1"`, a stable non-empty `proposalId`, the source run id when available, concrete evidence, target canonical files, risk, and `status: "proposed"`.
+If an improvement is warranted, write it as a skill-proposal schema object rather than freeform markdown and save it inside the project at `.plan2agent/proposals/<proposalId>.json`. The object must conform to `.plan2agent/schemas/skill-proposal.schema.json` with `schema_version: "p2a.skill_proposal.v1"`, a stable non-empty `proposalId`, the source run id when available, concrete evidence, target canonical files, risk, and `status: "proposed"`.
 
 Do not edit any skill, agent, planning artifact, CLI mirror, or other canonical file automatically as part of the retrospective. Leave only the proposal object for later review. A human or the read-only skill curator must review the proposal, and any approved patch must happen in a separate turn after human approval.

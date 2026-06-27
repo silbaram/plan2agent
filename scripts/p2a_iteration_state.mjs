@@ -4,7 +4,6 @@
 import { existsSync, lstatSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
-import { fileURLToPath } from 'node:url';
 import {
   loadJson,
   validateReviewPass,
@@ -14,9 +13,10 @@ import {
   validateTaskGraph,
   ValidationError,
 } from './validate_artifacts.mjs';
+import { resolveP2aPaths } from './p2a_paths.mjs';
 
-const __filename = fileURLToPath(import.meta.url);
-export const ROOT = path.resolve(path.dirname(__filename), '..');
+const P2A_PATHS = resolveP2aPaths(import.meta.url);
+export const ROOT = P2A_PATHS.projectRoot;
 
 function assertDirectory(dirPath, label) {
   if (!existsSync(dirPath)) throw new ValidationError(`${label} does not exist: ${dirPath}`);
@@ -96,7 +96,7 @@ function expectedReferenceCandidates({ artifactRoot, iterationRoot, fromDir, exp
       normalizedRelative(fromDir, expectedPath),
       artifactRelative,
       `${path.basename(artifactRoot)}/${artifactRelative}`,
-      `artifacts/${path.basename(artifactRoot)}/${artifactRelative}`,
+      `.plan2agent/artifacts/${path.basename(artifactRoot)}/${artifactRelative}`,
     ],
   }];
 }

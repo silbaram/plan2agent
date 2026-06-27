@@ -4,5 +4,5 @@ Use the Plan2Agent p2a-task-breakdown skill for the following approved implement
 
 {{args}}
 
-Return task_graph_json conforming to schemas/task-graph.schema.json only. Do not implement tasks. Reject the request if the spec is not approved or open decisions remain.
+Return task_graph_json conforming to .plan2agent/schemas/task-graph.schema.json only. Do not implement tasks. Reject the request if the spec is not approved or open decisions remain.
 """

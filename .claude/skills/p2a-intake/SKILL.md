@@ -15,7 +15,7 @@ Convert an early idea into structured planning input.
 
 ## Output
 
-Return an `intake_json` object conforming to `schemas/intake.schema.json` with:
+Return an `intake_json` object conforming to `.plan2agent/schemas/intake.schema.json` with:
 
 - `schema_version`: `p2a.intake.v1`
 - `idea`: original idea

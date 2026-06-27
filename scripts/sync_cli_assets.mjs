@@ -31,7 +31,7 @@ const GEMINI_COMMANDS = {
 {{args}}
 
 Rules:
-- Only write Plan2Agent planning artifacts under artifacts/<project_id>/; never edit source code.
+- Only write Plan2Agent planning artifacts under .plan2agent/artifacts/<project_id>/; never edit source code.
 - Do not run mutating commands.
 - Follow the stage-to-subagent mapping in the skill.
 - Stop at intake if any needs_user_decision is open.
@@ -45,7 +45,7 @@ Rules:
 
 {{args}}
 
-Return intake_json conforming to schemas/intake.schema.json and a table of open needs_user_decision items when blocked.`,
+Return intake_json conforming to .plan2agent/schemas/intake.schema.json and a table of open needs_user_decision items when blocked.`,
   },
   review: {
     skill: 'p2a-review',
@@ -63,7 +63,7 @@ Return review_report with blocking issues, non-blocking risks, missing acceptanc
 
 {{args}}
 
-Return product_spec_markdown, implementation_plan_markdown, spec_json conforming to schemas/spec.schema.json, and open_decisions. Keep approval as draft until explicitly approved.`,
+Return product_spec_markdown, implementation_plan_markdown, spec_json conforming to .plan2agent/schemas/spec.schema.json, and open_decisions. Keep approval as draft until explicitly approved.`,
   },
   'task-author': {
     skill: 'p2a-task-author',
@@ -99,7 +99,7 @@ Read the packaged Harness and DevSync references inside the p2a-design-system sk
 
 {{args}}
 
-Return task_graph_json conforming to schemas/task-graph.schema.json only. Do not implement tasks. Reject the request if the spec is not approved or open decisions remain.`,
+Return task_graph_json conforming to .plan2agent/schemas/task-graph.schema.json only. Do not implement tasks. Reject the request if the spec is not approved or open decisions remain.`,
   },
 };
 

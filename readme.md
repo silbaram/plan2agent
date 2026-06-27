@@ -37,7 +37,7 @@ v1에서 하지 않는 일:
 
 ## 하네스 구조
 
-Canonical 원본은 `.agents/skills/`와 CLI-중립 `.agents/agents/`다. `.agents/agents/*.md` frontmatter는 `capabilities`, `access`, `tier`만 사용하고 특정 CLI의 `tools`/`model` 문법을 넣지 않는다. `.claude/`, `.codex/`, `.gemini/` 아래 agent/skill mirror는 `scripts/sync_cli_assets.mjs`로 생성되는 산출물이므로 직접 수정하지 않는다. Gemini command shim은 수동 관리 대상이다.
+Canonical 원본은 `.agents/skills/`와 CLI-중립 `.agents/agents/`다. `.agents/agents/*.md` frontmatter는 `capabilities`, `access`, `tier`만 사용하고 특정 CLI의 `tools`/`model` 문법을 넣지 않는다. `.claude/`, `.codex/`, `.gemini/` 아래 agent/skill mirror는 `.plan2agent/scripts/sync_cli_assets.mjs`로 생성되는 산출물이므로 직접 수정하지 않는다. Gemini command shim은 수동 관리 대상이다.
 
 공통 canonical 원본:
 
@@ -146,7 +146,7 @@ fixtures/
       task-graph.json
     review-blocked/
       review.blocked.json
-schemas/
+.plan2agent/schemas/
   intake.schema.json
   spec.schema.json
   task-graph.schema.json
@@ -203,16 +203,16 @@ Skills:
 
 | Artifact | Schema | 생성 단계 | 다음 단계로 넘어가는 조건 |
 | --- | --- | --- | --- |
-| `intake_json` | `schemas/intake.schema.json` | Intake | `status: ready_for_spec` |
+| `intake_json` | `.plan2agent/schemas/intake.schema.json` | Intake | `status: ready_for_spec` |
 | `product_spec_markdown` | Markdown | Product Spec | 사용자 검토 가능 |
 | `implementation_plan_markdown` | Markdown | Implementation Plan | 사용자 검토 가능 |
-| `spec_json` | `schemas/spec.schema.json` | Spec | 모든 `CQ-n` disposition 완료, `approval: approved`, `open_decisions: []` |
-| `task_graph_json` | `schemas/task-graph.schema.json` | Task Breakdown | dependency ids valid and DAG acyclic |
+| `spec_json` | `.plan2agent/schemas/spec.schema.json` | Spec | 모든 `CQ-n` disposition 완료, `approval: approved`, `open_decisions: []` |
+| `task_graph_json` | `.plan2agent/schemas/task-graph.schema.json` | Task Breakdown | dependency ids valid and DAG acyclic |
 | `review_report` | Markdown/JSON-compatible sections | Review | no blocking issues |
 
 ### 산출물 파일 저장
 
-하네스 오케스트레이터는 각 단계 산출물을 `artifacts/<project_id>/` 아래 gate별 폴더에 기록해 사용자가 게이트 전에 파일로 검토할 수 있게 한다.
+하네스 오케스트레이터는 각 단계 산출물을 `.plan2agent/artifacts/<project_id>/` 아래 gate별 폴더에 기록해 사용자가 게이트 전에 파일로 검토할 수 있게 한다.
 
 - `status.md` — 모든 게이트 전환마다 갱신되는 standing 진행상태 및 결정 인덱스
 - `gate-a-intake/intake.json`, `gate-a-intake/intake.md`
@@ -220,9 +220,9 @@ Skills:
 - `gate-c-task-graph/task-graph.json`
 - `gate-d-review/review-report.md`
 
-subagent는 read-only를 유지하며, 파일 기록은 하네스 오케스트레이터만 수행한다. `scripts/validate_artifacts.mjs`로 이 파일들을 그대로 검증할 수 있다.
+subagent는 read-only를 유지하며, 파일 기록은 하네스 오케스트레이터만 수행한다. `.plan2agent/scripts/validate_artifacts.mjs`로 이 파일들을 그대로 검증할 수 있다.
 
-`artifacts/<project_id>/` 산출물은 git에 커밋해 기획 이력(파일 기반 versioning)으로 보존한다.
+`.plan2agent/artifacts/<project_id>/` 산출물은 git에 커밋해 기획 이력(파일 기반 versioning)으로 보존한다.
 
 
 ## Evidence와 Web citation 규칙
@@ -341,19 +341,19 @@ Gemini CLI에서 `.gemini/commands/p2a/harness.toml`은 `/p2a:harness` 명령이
 CLI mirror 생성/동기화:
 
 ```bash
-node scripts/sync_cli_assets.mjs
+node .plan2agent/scripts/sync_cli_assets.mjs
 ```
 
 CLI mirror drift 확인(검사 항목: agent mirror 동기화, skill mirror byte 비교, Gemini command shim 내용 검사(skill 이름, `{{args}}`, 필수 필드)):
 
 ```bash
-node scripts/check_cli_parity.mjs
+node .plan2agent/scripts/check_cli_parity.mjs
 ```
 
 Fixture/golden output 확인:
 
 ```bash
-node scripts/run_fixtures.mjs
+node .plan2agent/scripts/run_fixtures.mjs
 ```
 
 `run_fixtures.mjs`는 일반 fixture set을 통과 검증하고, `fixtures/_e2e/manifest.json`의 artifact-root fixture는 handoff-ready 상태인지 확인한다. 승인된 Gate B가 있는 status 문서는 `Gate B approval audit` block까지 확인한다. `fixtures/_negative/manifest.json`에 정의된 중단/실패 fixture는 기대한 실패 메시지가 나오는지 확인한다.
@@ -361,23 +361,23 @@ node scripts/run_fixtures.mjs
 artifact gate 확인:
 
 ```bash
-node scripts/validate_artifacts.mjs --intake artifacts/<project_id>/gate-a-intake/intake.json
-node scripts/validate_artifacts.mjs --status artifacts/<project_id>/status.md
-node scripts/validate_artifacts.mjs --artifact-root artifacts/<project_id>
-node scripts/validate_artifacts.mjs --spec artifacts/<project_id>/gate-b-spec/spec.json
-node scripts/validate_artifacts.mjs --task-graph artifacts/<project_id>/gate-c-task-graph/task-graph.json --require-approved-spec artifacts/<project_id>/gate-b-spec/spec.json
-node scripts/validate_artifacts.mjs --review artifacts/<project_id>/gate-d-review/review.json --require-review-pass
-node scripts/validate_artifacts.mjs --artifact-root artifacts/<project_id> --project-id <project_id> --require-handoff-ready
+node .plan2agent/scripts/validate_artifacts.mjs --intake .plan2agent/artifacts/<project_id>/gate-a-intake/intake.json
+node .plan2agent/scripts/validate_artifacts.mjs --status .plan2agent/artifacts/<project_id>/status.md
+node .plan2agent/scripts/validate_artifacts.mjs --artifact-root .plan2agent/artifacts/<project_id>
+node .plan2agent/scripts/validate_artifacts.mjs --spec .plan2agent/artifacts/<project_id>/gate-b-spec/spec.json
+node .plan2agent/scripts/validate_artifacts.mjs --task-graph .plan2agent/artifacts/<project_id>/gate-c-task-graph/task-graph.json --require-approved-spec .plan2agent/artifacts/<project_id>/gate-b-spec/spec.json
+node .plan2agent/scripts/validate_artifacts.mjs --review .plan2agent/artifacts/<project_id>/gate-d-review/review.json --require-review-pass
+node .plan2agent/scripts/validate_artifacts.mjs --artifact-root .plan2agent/artifacts/<project_id> --project-id <project_id> --require-handoff-ready
 ```
 
 `--spec`은 `--intake`를 함께 주면 그 intake를 사용하고, 없으면 `spec.source_intake`를 실제 파일로 자동 연결해 Gate B의 `clarifying_question_disposition` 추적성까지 검사한다. `spec.source_intake`가 명시됐지만 파일로 해석되지 않으면 실패한다. raw `CQ-n`은 `open_decisions`에 넣지 않고, blocker가 되면 `ND-n`으로 승격해 추적한다.
 
 ## Task 관리
 
-Gate D까지 통과해 `artifacts/<project_id>/gate-c-task-graph/task-graph.json`이 확정되면 Node.js task CLI로 개발 진행 상태를 관리한다. 기본 사용법은 다음과 같다.
+Gate D까지 통과해 `.plan2agent/artifacts/<project_id>/gate-c-task-graph/task-graph.json`이 확정되면 Node.js task CLI로 개발 진행 상태를 관리한다. 기본 사용법은 다음과 같다.
 
 ```bash
-node scripts/p2a_tasks.mjs <command> --graph artifacts/<project_id>/gate-c-task-graph/task-graph.json [task-id]
+node .plan2agent/scripts/p2a_tasks.mjs <command> --graph .plan2agent/artifacts/<project_id>/gate-c-task-graph/task-graph.json [task-id]
 ```
 
 명령:
@@ -393,11 +393,11 @@ node scripts/p2a_tasks.mjs <command> --graph artifacts/<project_id>/gate-c-task-
 
 감독형 개발 진행 루프:
 
-1. 기획 완료 후 `node scripts/p2a_execute.mjs plan --graph artifacts/<project_id>/gate-c-task-graph/task-graph.json --task <task-id>`로 단일 task 실행 계획을 확인한다.
-2. `node scripts/p2a_execute.mjs start --graph artifacts/<project_id>/gate-c-task-graph/task-graph.json --task <task-id> --agent-tool codex`로 run을 열고 task를 `in_progress`로 바꾼다.
+1. 기획 완료 후 `node .plan2agent/scripts/p2a_execute.mjs plan --graph .plan2agent/artifacts/<project_id>/gate-c-task-graph/task-graph.json --task <task-id>`로 단일 task 실행 계획을 확인한다.
+2. `node .plan2agent/scripts/p2a_execute.mjs start --graph .plan2agent/artifacts/<project_id>/gate-c-task-graph/task-graph.json --task <task-id> --agent-tool codex`로 run을 열고 task를 `in_progress`로 바꾼다.
 3. 출력된 manual launcher prompt를 Claude Code 또는 Codex 같은 write-capable agent CLI에 붙여넣어 구현 작업을 수행한다. Gemini CLI는 현재 review/monitor 같은 read-only 보조로만 사용한다.
-4. `node scripts/p2a_execute.mjs finish --graph artifacts/<project_id>/gate-c-task-graph/task-graph.json --run-id <run-id> --test --lint --typecheck`로 검증, run finish, task `done`/`blocked` 전이를 기록한다.
-5. 세부 제어가 필요하면 `p2a_tasks.mjs`와 `p2a_runs.mjs`를 직접 사용한다. 각 전이는 저장 전에 task graph 전체를 `scripts/validate_artifacts.mjs`의 검증 로직으로 재검증하므로 잘못된 graph는 기록되지 않는다.
+4. `node .plan2agent/scripts/p2a_execute.mjs finish --graph .plan2agent/artifacts/<project_id>/gate-c-task-graph/task-graph.json --run-id <run-id> --test --lint --typecheck`로 검증, run finish, task `done`/`blocked` 전이를 기록한다.
+5. 세부 제어가 필요하면 `p2a_tasks.mjs`와 `p2a_runs.mjs`를 직접 사용한다. 각 전이는 저장 전에 task graph 전체를 `.plan2agent/scripts/validate_artifacts.mjs`의 검증 로직으로 재검증하므로 잘못된 graph는 기록되지 않는다.
 
 ## Task Graph 기준
 
@@ -439,7 +439,7 @@ node scripts/p2a_tasks.mjs <command> --graph artifacts/<project_id>/gate-c-task-
 - v1 하네스는 read-only planning이다.
 - 어떤 skill이나 subagent도 코드 변경을 지시하지 않는다.
 - dependency 설치, shell 실행, git 조작은 v1 workflow에 포함하지 않는다.
-- 하네스 오케스트레이터는 planning 산출물(.md/.json)을 `artifacts/<project_id>/`에만 기록할 수 있다. 소스코드 변경, 의존성 설치, shell 실행(구현 목적), git 조작은 계속 금지하며, subagent는 read-only를 유지한다.
+- 하네스 오케스트레이터는 planning 산출물(.md/.json)을 `.plan2agent/artifacts/<project_id>/`에만 기록할 수 있다. 소스코드 변경, 의존성 설치, shell 실행(구현 목적), git 조작은 계속 금지하며, subagent는 read-only를 유지한다.
 - 불명확한 요구사항은 임의 구현하지 않고 `needs_user_decision`으로 남긴다.
 - 실제 구현은 task graph 승인 이후 별도 단계에서 수행한다.
 

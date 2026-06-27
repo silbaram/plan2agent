@@ -5,7 +5,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { pathToFileURL } from 'node:url';
 import {
   loadJson,
   validateOrchestrationPlanData,
@@ -22,24 +22,24 @@ import {
   ValidationError,
 } from './validate_artifacts.mjs';
 import { DEFAULT_RUNS_DIR, resolveRunsDir } from './p2a_run_paths.mjs';
+import { configuredTaskGraphPath, resolveP2aPaths, singleArtifactProjectRoot } from './p2a_paths.mjs';
 
-const __filename = fileURLToPath(import.meta.url);
+const P2A_PATHS = resolveP2aPaths(import.meta.url);
 const COMMANDS = new Set(['mine', 'list', 'show', 'validate', 'digest', 'review', 'curate', 'draft-patch', 'approve-draft']);
 const DEFAULT_PROPOSALS_DIR = path.join('.plan2agent', 'proposals');
-const DEFAULT_HANDOFF_GRAPH = path.join('.plan2agent', 'artifacts', 'task-graph.json');
 
 function usage() {
   return [
     'Usage:',
-    '  node scripts/p2a_proposals.mjs mine (--artifacts <dir>|--runs <dir>|--graph <path>) [--run-id <run-id>] [--proposals <dir>] [--dry-run] [--overwrite] [--json]',
-    '  node scripts/p2a_proposals.mjs list [--proposals <dir>] [--json]',
-    '  node scripts/p2a_proposals.mjs show (--proposal <path>|--proposal-id <id>) [--proposals <dir>]',
-    '  node scripts/p2a_proposals.mjs validate [--proposal <path>|--proposals <dir>]',
-    '  node scripts/p2a_proposals.mjs digest [--proposals <dir>] [--json]',
-    '  node scripts/p2a_proposals.mjs review [--proposals <dir>] [--output <path>] [--dry-run] [--overwrite] [--json]',
-    '  node scripts/p2a_proposals.mjs curate --review <path> [--proposals <dir>] [--output <path>] [--dry-run] [--overwrite] [--json]',
-    '  node scripts/p2a_proposals.mjs draft-patch --curation <path> [--candidate-id <id>] [--proposals <dir>] [--output <path>] [--dry-run] [--overwrite] [--json]',
-    '  node scripts/p2a_proposals.mjs approve-draft --draft <path> --artifacts <iterative-project-dir> --approved-by <name> [--approval-note <text>] [--proposals <dir>] [--output <path>] [--dry-run] [--overwrite] [--json]',
+    '  node .plan2agent/scripts/p2a_proposals.mjs mine (--artifacts <dir>|--runs <dir>|--graph <path>) [--run-id <run-id>] [--proposals <dir>] [--dry-run] [--overwrite] [--json]',
+    '  node .plan2agent/scripts/p2a_proposals.mjs list [--proposals <dir>] [--json]',
+    '  node .plan2agent/scripts/p2a_proposals.mjs show (--proposal <path>|--proposal-id <id>) [--proposals <dir>]',
+    '  node .plan2agent/scripts/p2a_proposals.mjs validate [--proposal <path>|--proposals <dir>]',
+    '  node .plan2agent/scripts/p2a_proposals.mjs digest [--proposals <dir>] [--json]',
+    '  node .plan2agent/scripts/p2a_proposals.mjs review [--proposals <dir>] [--output <path>] [--dry-run] [--overwrite] [--json]',
+    '  node .plan2agent/scripts/p2a_proposals.mjs curate --review <path> [--proposals <dir>] [--output <path>] [--dry-run] [--overwrite] [--json]',
+    '  node .plan2agent/scripts/p2a_proposals.mjs draft-patch --curation <path> [--candidate-id <id>] [--proposals <dir>] [--output <path>] [--dry-run] [--overwrite] [--json]',
+    '  node .plan2agent/scripts/p2a_proposals.mjs approve-draft --draft <path> --artifacts <iterative-project-dir> --approved-by <name> [--approval-note <text>] [--proposals <dir>] [--output <path>] [--dry-run] [--overwrite] [--json]',
     '',
     'Commands:',
     '  mine       Read run logs and orchestration sidecars, then write proposed skill-proposal JSON files.',
@@ -128,7 +128,10 @@ function parseArgs(argv) {
   const sourceCount = [args.artifacts, args.graph, args.runs].filter(Boolean).length;
   if (sourceCount > 1) throw new Error('--artifacts, --graph, and --runs cannot be combined');
   if (args.command === 'mine' && sourceCount === 0) {
-    if (existsSync(DEFAULT_HANDOFF_GRAPH)) args.graph = DEFAULT_HANDOFF_GRAPH;
+    const defaultArtifacts = singleArtifactProjectRoot();
+    const configuredGraph = configuredTaskGraphPath();
+    if (defaultArtifacts) args.artifacts = defaultArtifacts;
+    else if (configuredGraph) args.graph = configuredGraph;
     else if (existsSync(DEFAULT_RUNS_DIR)) args.runs = DEFAULT_RUNS_DIR;
     else throw new Error('--artifacts, --graph, or --runs is required for mine');
   }
@@ -1405,7 +1408,7 @@ export function main(argv = process.argv.slice(2)) {
 function isDirectEntry() {
   if (!process.argv[1]) return false;
   try {
-    return realpathSync(__filename) === realpathSync(process.argv[1]);
+    return realpathSync(P2A_PATHS.filename) === realpathSync(process.argv[1]);
   } catch {
     return import.meta.url === pathToFileURL(process.argv[1]).href;
   }

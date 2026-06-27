@@ -91,16 +91,16 @@ The harness passes intermediate artifacts with these exact names:
 
 | Artifact | Schema or format | Required next-step condition |
 | --- | --- | --- |
-| `intake_json` | `schemas/intake.schema.json` | `status: ready_for_spec` |
+| `intake_json` | `.plan2agent/schemas/intake.schema.json` | `status: ready_for_spec` |
 | `product_spec_markdown` | Markdown | user review |
 | `implementation_plan_markdown` | Markdown | user review |
-| `spec_json` | `schemas/spec.schema.json` | all `CQ-n` dispositions recorded, `approval: approved`, and `open_decisions: []` |
-| `task_graph_json` | `schemas/task-graph.schema.json` | dependency ids valid and DAG acyclic |
+| `spec_json` | `.plan2agent/schemas/spec.schema.json` | all `CQ-n` dispositions recorded, `approval: approved`, and `open_decisions: []` |
+| `task_graph_json` | `.plan2agent/schemas/task-graph.schema.json` | dependency ids valid and DAG acyclic |
 | `review_report` | Markdown/JSON-compatible sections | no blocking issues |
 
-Schema validation is intentionally complemented by `scripts/validate_artifacts.mjs`, which performs gate checks that are easier to express procedurally: open/deferred decision blocking, `CQ-n` disposition coverage, spec/intake `open_decisions` traceability including promoted clarifying-question decisions, approved-spec requirement, missing dependency ids, duplicate task ids, and cycle detection.
+Schema validation is intentionally complemented by `.plan2agent/.plan2agent/scripts/validate_artifacts.mjs`, which performs gate checks that are easier to express procedurally: open/deferred decision blocking, `CQ-n` disposition coverage, spec/intake `open_decisions` traceability including promoted clarifying-question decisions, approved-spec requirement, missing dependency ids, duplicate task ids, and cycle detection.
 
-The harness orchestrator also persists each artifact as a file under `artifacts/<project_id>/` using gate-specific folders (`gate-a-intake/intake.json`, `gate-a-intake/intake.md`, `gate-b-spec/product-spec.md`, `gate-b-spec/implementation-plan.md`, `gate-b-spec/spec.json`, `gate-c-task-graph/task-graph.json`, `gate-d-review/review-report.md`) plus top-level `status.md` as a standing progress and decision index refreshed at every gate transition, so the user can review artifacts at each gate and run `scripts/validate_artifacts.mjs` against them. Subagents remain read-only; only the orchestrator writes files, and neither the harness nor subagents perform git operations. The user may commit `artifacts/<project_id>/` outputs to git as planning history for file-based versioning.
+The harness orchestrator also persists each artifact as a file under `.plan2agent/artifacts/<project_id>/` using gate-specific folders (`gate-a-intake/intake.json`, `gate-a-intake/intake.md`, `gate-b-spec/product-spec.md`, `gate-b-spec/implementation-plan.md`, `gate-b-spec/spec.json`, `gate-c-task-graph/task-graph.json`, `gate-d-review/review-report.md`) plus top-level `status.md` as a standing progress and decision index refreshed at every gate transition, so the user can review artifacts at each gate and run `.plan2agent/.plan2agent/scripts/validate_artifacts.mjs` against them. Subagents remain read-only; only the orchestrator writes files, and neither the harness nor subagents perform git operations. The user may commit `.plan2agent/artifacts/<project_id>/` outputs to git as planning history for file-based versioning.
 
 
 ## 7. Evidence and Citation Convention
@@ -124,21 +124,21 @@ Intake and spec artifacts include an `evidence` array so web-grounded or local-s
 .codex/agents/                  # generated Codex subagents
 .gemini/agents/                 # generated Gemini subagents
 .gemini/commands/p2a/           # Gemini command shims
-schemas/                        # artifact JSON schemas
-scripts/sync_cli_assets.mjs      # generate CLI mirrors from canonical sources
-scripts/check_cli_parity.mjs     # mirror drift check
-scripts/validate_artifacts.mjs   # schema, gate, and graph validation
-scripts/run_fixtures.mjs         # fixture/golden validation
-scripts/p2a_tasks.mjs            # task status and dependency management CLI
-scripts/p2a_runs.mjs             # task run log and verification tracking CLI
-scripts/p2a_execute.mjs          # supervised single-task lifecycle runner
+.plan2agent/schemas/                        # artifact JSON schemas
+.plan2agent/scripts/sync_cli_assets.mjs      # generate CLI mirrors from canonical sources
+.plan2agent/scripts/check_cli_parity.mjs     # mirror drift check
+.plan2agent/.plan2agent/scripts/validate_artifacts.mjs   # schema, gate, and graph validation
+.plan2agent/scripts/run_fixtures.mjs         # fixture/golden validation
+.plan2agent/scripts/p2a_tasks.mjs            # task status and dependency management CLI
+.plan2agent/scripts/p2a_runs.mjs             # task run log and verification tracking CLI
+.plan2agent/scripts/p2a_execute.mjs          # supervised single-task lifecycle runner
 ```
 
 구조 판단:
 
 - v1 skill 원본은 `.agents/skills`에 둔다.
 - CLI-neutral agent 원본은 `.agents/agents`에 둔다.
-- `.claude/agents`, `.codex/agents`, `.gemini/agents`는 `scripts/sync_cli_assets.mjs`가 생성하는 target별 산출물이다.
+- `.claude/agents`, `.codex/agents`, `.gemini/agents`는 `.plan2agent/scripts/sync_cli_assets.mjs`가 생성하는 target별 산출물이다.
 - Gemini CLI의 `.gemini/commands`는 skill 자체가 아니라 invocation shortcut으로만 둔다.
 
 ## 9. 공통 Skill 내용 규칙
@@ -149,7 +149,7 @@ scripts/p2a_execute.mjs          # supervised single-task lifecycle runner
 - 입력과 출력 형식을 명시한다.
 - 불명확하면 질문 목록을 만들고, 임의 구현을 시작하지 않는다.
 - 코드 변경, shell 실행, dependency 설치는 v1 skill에서 금지한다.
-- 단, 하네스 오케스트레이터는 planning 산출물(.md/.json)을 `artifacts/<project_id>/`에 기록할 수 있다. 소스코드 변경·의존성 설치·shell 실행(구현)·git 조작은 여전히 금지하고 subagent는 read-only를 유지한다.
+- 단, 하네스 오케스트레이터는 planning 산출물(.md/.json)을 `.plan2agent/artifacts/<project_id>/`에 기록할 수 있다. 소스코드 변경·의존성 설치·shell 실행(구현)·git 조작은 여전히 금지하고 subagent는 read-only를 유지한다.
 - 산출물은 Markdown과 JSON을 모두 고려하되, 내부 원본은 JSON으로 본다.
 - 하네스 skill은 단계→subagent 매핑, gate, resume, state passing contract를 포함한다.
 
@@ -196,10 +196,10 @@ Gemini target fields use the documented subagent keys `kind`, `tools`, `temperat
 2. Claude Code mirror가 필요한 skill은 `.claude/skills`에 동일하게 반영한다.
 3. subagent 역할 변경은 `.codex/agents`, `.claude/agents`, `.gemini/agents`에 같은 역할명으로 반영한다.
 4. Gemini CLI shortcut 변경은 `.gemini/commands/p2a/*.toml`에 반영한다.
-5. Schema 변경은 `schemas/*.schema.json`과 `scripts/validate_artifacts.mjs`에 반영한다.
-6. CLI agent mirror는 canonical `.agents/agents` sources에서 `scripts/sync_cli_assets.mjs`의 target renderer로 생성하고 `scripts/check_cli_parity.mjs`로 검증한다.
-7. Fixture/golden output은 `fixtures/<name>/`에 추가하고 `scripts/run_fixtures.mjs`로 검증한다.
-8. Gate D 이후 task 상태와 의존성 관리는 `scripts/p2a_tasks.mjs`로 수행한다.
+5. Schema 변경은 `.plan2agent/schemas/*.schema.json`과 `.plan2agent/.plan2agent/scripts/validate_artifacts.mjs`에 반영한다.
+6. CLI agent mirror는 canonical `.agents/agents` sources에서 `.plan2agent/scripts/sync_cli_assets.mjs`의 target renderer로 생성하고 `.plan2agent/scripts/check_cli_parity.mjs`로 검증한다.
+7. Fixture/golden output은 `fixtures/<name>/`에 추가하고 `.plan2agent/scripts/run_fixtures.mjs`로 검증한다.
+8. Gate D 이후 task 상태와 의존성 관리는 `.plan2agent/scripts/p2a_tasks.mjs`로 수행한다.
 9. 각 CLI에서 "idea -> intake -> spec -> task graph -> review" 흐름을 read-only로 수동 검증한다.
 
 ## 13. 산출물 Acceptance Criteria
@@ -223,8 +223,8 @@ Gemini target fields use the documented subagent keys `kind`, `tools`, `temperat
 - 완료: draft/negative fixture coverage를 추가해 unresolved promoted decision, promoted decision의 `open_decisions` 누락 실패, Gate D blocker 실패 흐름을 고정했다(`fixtures/_negative`).
 - 완료: end-to-end artifact-root golden fixture를 추가해 `--artifact-root --require-handoff-ready` 검증을 고정했다(`fixtures/_e2e/webhook-api-service`).
 - 완료: Gate B 승인 audit log를 `status.md`에 기록하고 validator가 확인하도록 했다.
-- 완료: Python stdlib scripts를 Node.js ESM scripts로 대체하고 `scripts/check_cli_parity.mjs`, `scripts/run_fixtures.mjs`, `scripts/validate_artifacts.mjs` 검증 경로를 확정했다.
-- 완료: task 상태와 의존성 관리는 `scripts/p2a_tasks.mjs`로 제공한다.
+- 완료: Python stdlib scripts를 Node.js ESM scripts로 대체하고 `.plan2agent/scripts/check_cli_parity.mjs`, `.plan2agent/scripts/run_fixtures.mjs`, `.plan2agent/.plan2agent/scripts/validate_artifacts.mjs` 검증 경로를 확정했다.
+- 완료: task 상태와 의존성 관리는 `.plan2agent/scripts/p2a_tasks.mjs`로 제공한다.
 - CLI mirror drift check와 fixture runner의 CI 연결은 사용자 관리 항목으로 둔다.
 - 완료: `p2a_runs.mjs`로 파일 기반 agent 실행 로그, branch/worktree 격리 기준, changed files, verification 결과를 기록한다. PTY 기반 agent 자동 실행과 PR 생성은 후속이다.
 - 완료: `p2a_execute.mjs`로 ready task 1건의 plan/start/finish/status를 묶는 Phase 1 감독형 실행기를 제공한다. Codex/Claude 구현 세션 자체는 foreground 감독형으로 유지한다.

@@ -5,12 +5,13 @@ import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, writeFile
 import path from 'node:path';
 import process from 'node:process';
 import { spawnSync } from 'node:child_process';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { pathToFileURL } from 'node:url';
 import { loadJson, validateOrchestrationPlanData, validateOrchestrationRuntimeData, validateRunData, validateTaskGraphData, ValidationError } from './validate_artifacts.mjs';
 import { resolveIterationState } from './p2a_iteration_state.mjs';
+import { configuredTaskGraphPath, nodeScriptCommand, resolveP2aPaths, singleArtifactProjectRoot } from './p2a_paths.mjs';
 
-const __filename = fileURLToPath(import.meta.url);
-const ROOT = path.resolve(path.dirname(__filename), '..');
+const P2A_PATHS = resolveP2aPaths(import.meta.url);
+const ROOT = P2A_PATHS.projectRoot;
 const COMMANDS = new Set(['plan', 'show', 'validate', 'handoff', 'runner-guide', 'runner-doctor', 'init-runtime', 'record', 'runtime-status', 'next-role', 'role-prompt', 'mark-role', 'failure-policy']);
 const AGENT_TOOLS = new Set(['codex', 'claude', 'gemini', 'manual']);
 const RUNNER_DOCTOR_PROVIDERS = new Set(['all', 'codex', 'claude', 'gemini']);
@@ -27,7 +28,6 @@ const RUNTIME_PHASES = new Set(['initialized', 'running', 'blocked', 'ready_for_
 const RUNTIME_FAILURE_RETRYABLE = new Set(['yes', 'no', 'after_fix']);
 const RUNTIME_FAILURE_SOURCES = new Set(['run_failure', 'monitor_verdict', 'open_question', 'blocked_runtime', 'closed_runtime', 'none']);
 const DEFAULT_ACCEPTED_MONITOR_VERDICTS = ['confirm_done'];
-const DEFAULT_HANDOFF_GRAPH = path.join('.plan2agent', 'artifacts', 'task-graph.json');
 const HIGH_ACCEPTANCE_MONITOR_THRESHOLD = 6;
 const ROLE_PROFILE_SOURCES = new Set(['auto', 'override']);
 const ROLE_PROFILE_TO_ROLE = Object.freeze({
@@ -158,19 +158,19 @@ const COMMON_PROHIBITED_AUTOMATION = Object.freeze([
 function usage() {
   return [
     'Usage:',
-    '  node scripts/p2a_orchestrate.mjs plan (--artifacts <dir>|--graph <path>) [--task <task-id>] [--output <path>] [options]',
-    '  node scripts/p2a_orchestrate.mjs show --plan <path>',
-    '  node scripts/p2a_orchestrate.mjs validate --plan <path>',
-    '  node scripts/p2a_orchestrate.mjs handoff --plan <path>',
-    '  node scripts/p2a_orchestrate.mjs runner-guide (--plan <path>|--runtime <path>) [--role <role-id>] [--json]',
-    '  node scripts/p2a_orchestrate.mjs runner-doctor [--root <dir>] [--provider all|codex|claude|gemini] [--live] [--json]',
-    '  node scripts/p2a_orchestrate.mjs init-runtime --plan <path> --run-id <run-id> [--output <path>] [--json]',
-    '  node scripts/p2a_orchestrate.mjs record --runtime <path> --role <role-id> --type <type> --summary <text> [options]',
-    '  node scripts/p2a_orchestrate.mjs runtime-status --runtime <path> [--json]',
-    '  node scripts/p2a_orchestrate.mjs next-role --runtime <path> [--json]',
-    '  node scripts/p2a_orchestrate.mjs role-prompt --runtime <path> --role <role-id> [--json]',
-    '  node scripts/p2a_orchestrate.mjs mark-role --runtime <path> --role <role-id> --role-status <status> [options]',
-    '  node scripts/p2a_orchestrate.mjs failure-policy --runtime <path> [--json]',
+    '  node .plan2agent/scripts/p2a_orchestrate.mjs plan (--artifacts <dir>|--graph <path>) [--task <task-id>] [--output <path>] [options]',
+    '  node .plan2agent/scripts/p2a_orchestrate.mjs show --plan <path>',
+    '  node .plan2agent/scripts/p2a_orchestrate.mjs validate --plan <path>',
+    '  node .plan2agent/scripts/p2a_orchestrate.mjs handoff --plan <path>',
+    '  node .plan2agent/scripts/p2a_orchestrate.mjs runner-guide (--plan <path>|--runtime <path>) [--role <role-id>] [--json]',
+    '  node .plan2agent/scripts/p2a_orchestrate.mjs runner-doctor [--root <dir>] [--provider all|codex|claude|gemini] [--live] [--json]',
+    '  node .plan2agent/scripts/p2a_orchestrate.mjs init-runtime --plan <path> --run-id <run-id> [--output <path>] [--json]',
+    '  node .plan2agent/scripts/p2a_orchestrate.mjs record --runtime <path> --role <role-id> --type <type> --summary <text> [options]',
+    '  node .plan2agent/scripts/p2a_orchestrate.mjs runtime-status --runtime <path> [--json]',
+    '  node .plan2agent/scripts/p2a_orchestrate.mjs next-role --runtime <path> [--json]',
+    '  node .plan2agent/scripts/p2a_orchestrate.mjs role-prompt --runtime <path> --role <role-id> [--json]',
+    '  node .plan2agent/scripts/p2a_orchestrate.mjs mark-role --runtime <path> --role <role-id> --role-status <status> [options]',
+    '  node .plan2agent/scripts/p2a_orchestrate.mjs failure-policy --runtime <path> [--json]',
     '',
     'Commands:',
     '  plan                 Create a deterministic supervised orchestration plan. No task/run files are changed.',
@@ -189,7 +189,7 @@ function usage() {
     '',
     'Source options:',
     '  --artifacts <dir>    Iterative artifact root; uses the active iteration task graph.',
-    '  --graph <path>       Task graph JSON path. Defaults to .plan2agent/artifacts/task-graph.json if present.',
+    '  --graph <path>       Task graph JSON path.',
     '  --spec <path>        Spec JSON path for prompt context. Only supported with --graph.',
     '  --maintenance        With --artifacts, use the maintenance task graph.',
     '',
@@ -311,7 +311,10 @@ function parseArgs(argv) {
     const sourceCount = [args.artifacts, args.graph].filter(Boolean).length;
     if (sourceCount > 1) throw new Error('--artifacts and --graph cannot be used together');
     if (sourceCount === 0) {
-      if (existsSync(DEFAULT_HANDOFF_GRAPH)) args.graph = DEFAULT_HANDOFF_GRAPH;
+      const defaultArtifacts = singleArtifactProjectRoot();
+      const configuredGraph = configuredTaskGraphPath();
+      if (defaultArtifacts) args.artifacts = defaultArtifacts;
+      else if (configuredGraph) args.graph = configuredGraph;
       else throw new Error('--artifacts or --graph is required');
     }
     if (args.spec && args.artifacts) throw new Error('--spec is only supported with --graph; --artifacts uses the active iteration spec');
@@ -729,7 +732,7 @@ function resolveSource(args) {
   return {
     projectId: graph.projectId,
     sourceArgs: ['--graph', args.graph, ...(args.spec ? ['--spec', args.spec] : [])],
-    sourceLayout: path.resolve(graphPath) === path.resolve(DEFAULT_HANDOFF_GRAPH) ? 'handoff' : 'graph',
+    sourceLayout: 'graph',
     graphPath,
     specPath: args.spec ? path.resolve(args.spec) : null,
     graph,
@@ -1907,10 +1910,10 @@ function assertDirectory(dirPath, label) {
 
 function runnerDoctorCommonChecks() {
   return [
-    { id: 'orchestrator_cli', label: 'p2a_orchestrate CLI', path: path.join('scripts', 'p2a_orchestrate.mjs'), required: true },
-    { id: 'execute_cli', label: 'p2a_execute CLI', path: path.join('scripts', 'p2a_execute.mjs'), required: true },
-    { id: 'orchestration_plan_schema', label: 'orchestration plan schema', path: path.join('schemas', 'orchestration-plan.schema.json'), required: true },
-    { id: 'orchestration_runtime_schema', label: 'orchestration runtime schema', path: path.join('schemas', 'orchestration-runtime.schema.json'), required: true },
+    { id: 'orchestrator_cli', label: 'p2a_orchestrate CLI', path: path.join('.plan2agent', 'scripts', 'p2a_orchestrate.mjs'), required: true },
+    { id: 'execute_cli', label: 'p2a_execute CLI', path: path.join('.plan2agent', 'scripts', 'p2a_execute.mjs'), required: true },
+    { id: 'orchestration_plan_schema', label: 'orchestration plan schema', path: path.join('.plan2agent', 'schemas', 'orchestration-plan.schema.json'), required: true },
+    { id: 'orchestration_runtime_schema', label: 'orchestration runtime schema', path: path.join('.plan2agent', 'schemas', 'orchestration-runtime.schema.json'), required: true },
     { id: 'manifest', label: 'Plan2Agent install manifest', path: path.join('.plan2agent', 'manifest.json'), required: false },
   ];
 }
@@ -2367,7 +2370,7 @@ function markRoleDefaults(runtime, role, status, options = {}) {
 }
 
 function commandLine(scriptName, args) {
-  return ['node', `scripts/${scriptName}`, ...args].map(shellQuote).join(' ');
+  return nodeScriptCommand(P2A_PATHS, scriptName, args).map(shellQuote).join(' ');
 }
 
 function shellQuote(value) {
@@ -2684,7 +2687,7 @@ export function main(argv = process.argv.slice(2)) {
 function isDirectEntry() {
   if (!process.argv[1]) return false;
   try {
-    return realpathSync(__filename) === realpathSync(process.argv[1]);
+    return realpathSync(P2A_PATHS.filename) === realpathSync(process.argv[1]);
   } catch {
     return import.meta.url === pathToFileURL(process.argv[1]).href;
   }
