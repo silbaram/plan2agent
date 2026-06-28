@@ -966,6 +966,7 @@ async function normalizeRuns(
       }
       const runDetail = await readRunDetail(runsDir, runId);
       const orchestration = await normalizeRunOrchestration(rootPath, runsDir, runId);
+      const resolvedRunRef = normalizeRelative(rootPath, path.join(runsDir, `${runId}.json`));
 
       return {
         runId,
@@ -975,7 +976,7 @@ async function normalizeRuns(
         agentTool,
         workspaceRef,
         taskGraphRef,
-        runRef,
+        runRef: resolvedRunRef,
         startedAt,
         finishedAt: stringValue(run.finishedAt),
         changedFiles: stringArrayValue(runDetail?.changedFiles),

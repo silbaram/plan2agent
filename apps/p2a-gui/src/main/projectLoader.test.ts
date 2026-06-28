@@ -289,7 +289,7 @@ describe("loadProjectSnapshot", () => {
               agentTool: "codex",
               workspaceRef: tempRoot,
               taskGraphRef: "gate-c-task-graph/task-graph.json",
-              runRef: "runs/run-task-001-a.json",
+              runRef: "run-task-001-a.json",
               startedAt: "2026-06-23T01:00:00.000Z",
               finishedAt: "2026-06-23T01:10:00.000Z",
             },
@@ -469,6 +469,7 @@ describe("loadProjectSnapshot", () => {
         runId: "run-task-001-a",
         taskId: "task-001",
         status: "finished",
+        runRef: "runs/run-task-001-a.json",
       });
       expect(snapshot.artifacts[0]?.tasks[0]).toMatchObject({
         id: "task-001",
