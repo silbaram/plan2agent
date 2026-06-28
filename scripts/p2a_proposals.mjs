@@ -22,7 +22,13 @@ import {
   ValidationError,
 } from './validate_artifacts.mjs';
 import { DEFAULT_RUNS_DIR, resolveRunsDir } from './p2a_run_paths.mjs';
-import { configuredTaskGraphPath, resolveP2aPaths, singleArtifactProjectRoot } from './p2a_paths.mjs';
+import {
+  assertNoUninitializedScaffoldArtifactRoots,
+  assertNotUninitializedScaffoldGraph,
+  configuredTaskGraphPath,
+  resolveP2aPaths,
+  singleArtifactProjectRoot,
+} from './p2a_paths.mjs';
 
 const P2A_PATHS = resolveP2aPaths(import.meta.url);
 const COMMANDS = new Set(['mine', 'list', 'show', 'validate', 'digest', 'review', 'curate', 'draft-patch', 'approve-draft']);
@@ -133,7 +139,10 @@ function parseArgs(argv) {
     if (defaultArtifacts) args.artifacts = defaultArtifacts;
     else if (configuredGraph) args.graph = configuredGraph;
     else if (existsSync(DEFAULT_RUNS_DIR)) args.runs = DEFAULT_RUNS_DIR;
-    else throw new Error('--artifacts, --graph, or --runs is required for mine');
+    else assertNoUninitializedScaffoldArtifactRoots();
+    if (!args.artifacts && !args.graph && !args.runs) {
+      throw new Error('--artifacts, --graph, or --runs is required for mine');
+    }
   }
   if (args.command === 'show' && [args.proposal, args.proposalId].filter(Boolean).length !== 1) {
     throw new Error('show requires exactly one of --proposal or --proposal-id');
@@ -153,6 +162,7 @@ function parseArgs(argv) {
   if (args.draft && args.command !== 'approve-draft') throw new Error('--draft is only supported by approve-draft');
   if (args.approvedBy && args.command !== 'approve-draft') throw new Error('--approved-by is only supported by approve-draft');
   if (args.approvalNote && args.command !== 'approve-draft') throw new Error('--approval-note is only supported by approve-draft');
+  if (args.graph) assertNotUninitializedScaffoldGraph(args.graph);
   if (args.output && !['review', 'curate', 'draft-patch', 'approve-draft'].includes(args.command)) {
     throw new Error('--output is only supported by review, curate, draft-patch, or approve-draft');
   }

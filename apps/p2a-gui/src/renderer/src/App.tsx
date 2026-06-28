@@ -1116,7 +1116,11 @@ export default function App() {
 
         <div className="overview-flow-diagram">
           {projectFlow.map((item) => (
-            <div className={`overview-flow-step overview-flow-step--${item.state}`} key={item.id}>
+            <div
+              className={`overview-flow-step overview-flow-step--${item.state}`}
+              key={item.id}
+              aria-current={item.state === "active" ? "step" : undefined}
+            >
               <span className="mono overview-flow-step__id">{item.id}</span>
               <strong>{item.title}</strong>
               <em>{item.status}</em>

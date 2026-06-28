@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /** Run Plan2Agent fixture/golden validation for positive, e2e, iteration, and negative fixture cases. */
 
-import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
@@ -246,6 +246,65 @@ function validateScaffoldFixtureCase() {
       console.error('scaffold target p2a_iteration --help failed');
       writeResultOutput(result);
       return { status: failureStatus(result), checks };
+    }
+
+    const scaffoldArtifactRoot = path.join(targetRoot, '.plan2agent', 'artifacts', 'webhook-api-service');
+    mkdirSync(path.dirname(scaffoldArtifactRoot), { recursive: true });
+    cpSync(path.join(E2E_FIXTURE_ROOT, 'webhook-api-service'), scaffoldArtifactRoot, { recursive: true });
+    const initRequiredCases = [
+      ['p2a_execute plan without source', () => runTargetExecute(targetRoot, ['plan', '--task', 'task-001'])],
+      ['p2a_tasks ready without source', () => runTargetTasks(targetRoot, ['ready'])],
+      ['p2a_runs start without source', () => runTargetRuns(targetRoot, ['start', '--task', 'task-001', '--agent-tool', 'codex'])],
+      ['p2a_orchestrate plan without source', () => runTargetOrchestrate(targetRoot, ['plan', '--task', 'task-001'])],
+      ['p2a_proposals mine without source', () => runTargetProposals(targetRoot, ['mine'])],
+    ];
+    for (const [label, runCase] of initRequiredCases) {
+      result = runCase();
+      checks += 1;
+      const output = `${result.stdout ?? ''}${result.stderr ?? ''}`;
+      if (result.status === 0 || !output.includes('p2a_iteration.mjs init') || !output.includes('.plan2agent/artifacts/webhook-api-service')) {
+        console.error(`scaffold target did not require iteration init: ${label}`);
+        writeResultOutput(result);
+        return { status: 1, checks };
+      }
+    }
+
+    const partialIterationArtifactRoot = path.join(targetRoot, '.plan2agent', 'artifacts', 'partial-iteration-service');
+    cpSync(path.join(E2E_FIXTURE_ROOT, 'webhook-api-service'), partialIterationArtifactRoot, { recursive: true });
+    mkdirSync(path.join(partialIterationArtifactRoot, 'iterations'), { recursive: true });
+    result = runTargetExecute(targetRoot, [
+      'plan',
+      '--graph',
+      '.plan2agent/artifacts/partial-iteration-service/gate-c-task-graph/task-graph.json',
+      '--task',
+      'task-001',
+    ]);
+    checks += 1;
+    {
+      const output = `${result.stdout ?? ''}${result.stderr ?? ''}`;
+      if (result.status === 0 || !output.includes('iteration layout is incomplete') || output.includes('p2a_iteration.mjs init')) {
+        console.error('scaffold partial iteration layout was not rejected with a repair diagnostic');
+        writeResultOutput(result);
+        return { status: 1, checks };
+      }
+    }
+
+    const movedPartialArtifactRoot = path.join(targetRoot, '.plan2agent', 'artifacts', 'moved-partial-service');
+    const movedPartialIterationRoot = path.join(movedPartialArtifactRoot, 'iterations', 'v1-mvp');
+    cpSync(path.join(E2E_FIXTURE_ROOT, 'webhook-api-service'), movedPartialArtifactRoot, { recursive: true });
+    mkdirSync(movedPartialIterationRoot, { recursive: true });
+    for (const gate of ['gate-a-intake', 'gate-b-spec', 'gate-c-task-graph', 'gate-d-review']) {
+      renameSync(path.join(movedPartialArtifactRoot, gate), path.join(movedPartialIterationRoot, gate));
+    }
+    result = runTargetExecute(targetRoot, ['plan', '--task', 'task-001']);
+    checks += 1;
+    {
+      const output = `${result.stdout ?? ''}${result.stderr ?? ''}`;
+      if (result.status === 0 || !output.includes('iteration layout is incomplete') || !output.includes('.plan2agent/artifacts/moved-partial-service')) {
+        console.error('scaffold moved partial iteration layout was not rejected with a repair diagnostic');
+        writeResultOutput(result);
+        return { status: 1, checks };
+      }
     }
 
     result = runTargetOrchestrate(targetRoot, ['runner-doctor', '--root', targetRoot, '--json']);

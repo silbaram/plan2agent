@@ -8,7 +8,14 @@ import { spawnSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 import { loadJson, validateOrchestrationPlanData, validateOrchestrationRuntimeData, validateRunData, validateTaskGraphData, ValidationError } from './validate_artifacts.mjs';
 import { resolveIterationState } from './p2a_iteration_state.mjs';
-import { configuredTaskGraphPath, nodeScriptCommand, resolveP2aPaths, singleArtifactProjectRoot } from './p2a_paths.mjs';
+import {
+  assertNoUninitializedScaffoldArtifactRoots,
+  assertNotUninitializedScaffoldGraph,
+  configuredTaskGraphPath,
+  nodeScriptCommand,
+  resolveP2aPaths,
+  singleArtifactProjectRoot,
+} from './p2a_paths.mjs';
 
 const P2A_PATHS = resolveP2aPaths(import.meta.url);
 const ROOT = P2A_PATHS.projectRoot;
@@ -315,10 +322,14 @@ function parseArgs(argv) {
       const configuredGraph = configuredTaskGraphPath();
       if (defaultArtifacts) args.artifacts = defaultArtifacts;
       else if (configuredGraph) args.graph = configuredGraph;
-      else throw new Error('--artifacts or --graph is required');
+      else assertNoUninitializedScaffoldArtifactRoots();
+      if (!args.artifacts && !args.graph) {
+        throw new Error('--artifacts or --graph is required');
+      }
     }
     if (args.spec && args.artifacts) throw new Error('--spec is only supported with --graph; --artifacts uses the active iteration spec');
     if (args.maintenance && !args.artifacts) throw new Error('--maintenance is only supported with --artifacts');
+    if (args.graph) assertNotUninitializedScaffoldGraph(args.graph);
     if (args.plan || args.runtime || args.runId || args.roleId || args.eventType || args.summary || args.detail || args.verdict || args.linkedRoleId || args.roleStatus || args.phase || args.requiresOwnerAction || args.live || hasRunnerDoctorOptions(providedOptions)) {
       throw new Error('runtime/show options are not supported with plan');
     }

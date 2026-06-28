@@ -150,7 +150,7 @@ Do not retype gate status facts from memory. Pull gate status, task counts, `rea
 
 - **Blocked intake:** Write `gate-a-intake/intake.json` and `gate-a-intake/intake.md`, refresh top-level `status.md`, present the analysis narrative and per-decision recommendations, invite feedback and answers, and stop at Gate A.
 - **Draft spec:** Write `gate-b-spec/product-spec.md`, `gate-b-spec/implementation-plan.md`, and `gate-b-spec/spec.json` with `approval: draft`, refresh top-level `status.md`, present them for file-based review, and stop at Gate B before the task graph.
-- **Approved planning output:** Write all artifact files, refresh top-level `status.md`, and return the state sections after gates pass.
+- **Approved planning output:** Write all artifact files, refresh top-level `status.md`, and return the state sections after gates pass. In a co-located scaffold project, make the next action `node .plan2agent/scripts/p2a_iteration.mjs init --artifacts .plan2agent/artifacts/<project_id> --iteration-id v1-mvp` and explicitly state that development must not start from the root `gate-c-task-graph/task-graph.json`.
 - **Resume output:** Regenerate only the downstream artifact files and sections, refresh top-level `status.md`, plus a short changelog of which decisions were applied.
 
 ## Rules
@@ -162,3 +162,4 @@ Do not retype gate status facts from memory. Pull gate status, task counts, `rea
 - Do not claim that implementation happened.
 - Mark unresolved decisions as `needs_user_decision`.
 - Keep tasks small enough for one agent or developer to complete independently.
+- After Gate D passes in a co-located scaffold project, stop before development execution and direct the user to convert the greenfield gate bundle with `p2a_iteration init`; do not set or recommend `.plan2agent/project.config.json.taskGraph` to the root `gate-c-task-graph/task-graph.json`.

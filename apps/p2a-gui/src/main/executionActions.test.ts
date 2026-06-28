@@ -341,6 +341,71 @@ describe("execution action helpers", () => {
     }
   });
 
+  it("rejects scaffold greenfield artifacts before building execution commands", async () => {
+    const { projectRoot, artifactRoot } = await createProject();
+    const taskGraphPath = path.join(artifactRoot, "gate-c-task-graph", "task-graph.json");
+    try {
+      await writeFile(
+        path.join(projectRoot, ".plan2agent", "manifest.json"),
+        formatJson({
+          schema_version: "p2a.handoff.v1",
+          provenance: { mode: "scaffold" },
+        }),
+      );
+      await mkdir(path.join(artifactRoot, "gate-a-intake"), { recursive: true });
+      await mkdir(path.join(artifactRoot, "gate-b-spec"), { recursive: true });
+      await mkdir(path.dirname(taskGraphPath), { recursive: true });
+      await mkdir(path.join(artifactRoot, "gate-d-review"), { recursive: true });
+      await writeFile(path.join(artifactRoot, "status.md"), "Progress: [A] -> [B] -> [C] -> [D]\n");
+      await writeFile(path.join(artifactRoot, "gate-a-intake", "intake.json"), "{}");
+      await writeFile(path.join(artifactRoot, "gate-b-spec", "spec.json"), "{}");
+      await writeFile(taskGraphPath, "{}");
+      await writeFile(path.join(artifactRoot, "gate-d-review", "review.json"), "{}");
+
+      expect(() =>
+        buildStartRunCommand({
+          ...startRequestFor(projectRoot, artifactRoot),
+          taskGraphPath,
+        }),
+      ).toThrow("p2a_iteration.mjs init");
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects scaffold artifacts with incomplete iteration metadata", async () => {
+    const { projectRoot, artifactRoot } = await createProject();
+    const taskGraphPath = path.join(artifactRoot, "gate-c-task-graph", "task-graph.json");
+    try {
+      await writeFile(
+        path.join(projectRoot, ".plan2agent", "manifest.json"),
+        formatJson({
+          schema_version: "p2a.handoff.v1",
+          provenance: { mode: "scaffold" },
+        }),
+      );
+      await mkdir(path.join(artifactRoot, "gate-a-intake"), { recursive: true });
+      await mkdir(path.join(artifactRoot, "gate-b-spec"), { recursive: true });
+      await mkdir(path.dirname(taskGraphPath), { recursive: true });
+      await mkdir(path.join(artifactRoot, "gate-d-review"), { recursive: true });
+      await mkdir(path.join(artifactRoot, "iterations"), { recursive: true });
+      await writeFile(path.join(artifactRoot, "status.md"), "Progress: [A] -> [B] -> [C] -> [D]\n");
+      await writeFile(path.join(artifactRoot, "gate-a-intake", "intake.json"), "{}");
+      await writeFile(path.join(artifactRoot, "gate-b-spec", "spec.json"), "{}");
+      await writeFile(taskGraphPath, "{}");
+      await writeFile(path.join(artifactRoot, "gate-d-review", "review.json"), "{}");
+
+      expect(() =>
+        buildStartRunCommand({
+          ...startRequestFor(projectRoot, artifactRoot),
+          taskGraphPath,
+        }),
+      ).toThrow("Iteration layout is incomplete");
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
   it("rejects task graph paths outside the project root", async () => {
     const { projectRoot, artifactRoot } = await createProject();
     const outsideRoot = await mkdtemp(path.join(tmpdir(), "p2a-outside-graph-"));

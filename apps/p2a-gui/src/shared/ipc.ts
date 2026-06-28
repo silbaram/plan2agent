@@ -53,6 +53,7 @@ export type ProjectDetectionState =
   | "no_p2a"
   | "installed_empty"
   | "planning_in_progress"
+  | "iteration_init_required"
   | "execution_ready"
   | "broken_install";
 
@@ -269,6 +270,7 @@ export type ArtifactSummary = {
   rootPath: string;
   relativePath: string;
   activeIteration: string | null;
+  requiresIterationInit: boolean;
   taskGraphVersion: string | null;
   sourceSpec: string | null;
   statusPath: string | null;
@@ -285,7 +287,7 @@ export type ArtifactSummary = {
 };
 
 export type CommandGuidance = {
-  id: "setup" | "import" | "validate";
+  id: "setup" | "import" | "init_iteration" | "validate";
   label: string;
   command: string;
   description: string;
@@ -295,6 +297,7 @@ export type OnboardingStage =
   | "install_p2a"
   | "import_plan"
   | "continue_planning"
+  | "iteration_init_required"
   | "repair_validate"
   | "execution_ready";
 
@@ -302,6 +305,7 @@ export type OnboardingAction = {
   id:
     | "install_p2a"
     | "import_plan"
+    | "init_iteration"
     | "validate_artifacts"
     | "inspect_tasks"
     | "open_terminal";

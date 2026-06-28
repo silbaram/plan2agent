@@ -9,7 +9,13 @@ import { Readable } from 'node:stream';
 import { validateTaskGraphData, ValidationError } from './validate_artifacts.mjs';
 import { resolveIterationState } from './p2a_iteration_state.mjs';
 import { resolveRunsDir } from './p2a_run_paths.mjs';
-import { P2A_ARTIFACTS_DIR, configuredTaskGraphPath, resolveP2aPaths } from './p2a_paths.mjs';
+import {
+  P2A_ARTIFACTS_DIR,
+  assertNoUninitializedScaffoldArtifactRoots,
+  assertNotUninitializedScaffoldGraph,
+  configuredTaskGraphPath,
+  resolveP2aPaths,
+} from './p2a_paths.mjs';
 
 const P2A_PATHS = resolveP2aPaths(import.meta.url);
 const ROOT = P2A_PATHS.projectRoot;
@@ -81,10 +87,12 @@ function parseArgs(argv) {
   if (!graphPath && !artifactsPath) {
     graphPath = configuredTaskGraphPath();
   }
+  if (!graphPath && !artifactsPath) assertNoUninitializedScaffoldArtifactRoots();
   if (graphPath && artifactsPath) throw new Error('--graph and --artifacts cannot be used together');
   if (graphPath && maintenance) throw new Error('--maintenance is only supported with --artifacts');
   if (!graphPath && !artifactsPath) throw new Error('--graph or --artifacts is required');
   if (artifactsPath && specPath) throw new Error('--spec is only supported with --graph; --artifacts uses the active iteration spec');
+  if (graphPath) assertNotUninitializedScaffoldGraph(graphPath);
   return { command, graphPath, artifactsPath, specPath, maintenance, taskId: positional[0], extra: positional.slice(1), iterationState: null };
 }
 
@@ -393,6 +401,7 @@ async function buildInteractiveArgv(rl) {
       interactiveGraphDefault(),
     );
     if (!graphPath) return null;
+    assertNotUninitializedScaffoldGraph(graphPath);
     argv = [selected.command, '--graph', graphPath];
   }
 

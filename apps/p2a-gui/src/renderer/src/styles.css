@@ -545,6 +545,7 @@ h3 {
 
 .state-pill--planning_in_progress,
 .state-pill--installed_empty,
+.state-pill--iteration_init_required,
 .state-pill--canceled {
   border-color: var(--warn);
 }
@@ -594,10 +595,14 @@ h3 {
   gap: 0;
   padding: 12px 14px 4px;
   overflow-x: auto;
+  isolation: isolate;
 }
 
 .overview-flow-step {
+  --overview-flow-step-bg: var(--bg-1);
+  --overview-flow-step-border: var(--border-1);
   position: relative;
+  z-index: 1;
   min-width: 124px;
   min-height: 76px;
   display: grid;
@@ -605,10 +610,34 @@ h3 {
   gap: 3px;
   margin-left: -12px;
   padding: 10px 22px 10px 24px;
-  border: 1px solid var(--border-1);
-  background: var(--bg-1);
+  border: 0;
+  background: transparent;
   color: var(--fg-3);
   clip-path: polygon(0 0, calc(100% - 18px) 0, 100% 50%, calc(100% - 18px) 100%, 0 100%, 18px 50%);
+}
+
+.overview-flow-step::before,
+.overview-flow-step::after {
+  content: "";
+  position: absolute;
+  clip-path: inherit;
+  pointer-events: none;
+  z-index: 0;
+}
+
+.overview-flow-step::before {
+  inset: 0;
+  background: var(--overview-flow-step-border);
+}
+
+.overview-flow-step::after {
+  inset: 1px;
+  background: var(--overview-flow-step-bg);
+}
+
+.overview-flow-step > * {
+  position: relative;
+  z-index: 1;
 }
 
 .overview-flow-step:first-child {
@@ -617,17 +646,19 @@ h3 {
 }
 
 .overview-flow-step--done {
+  z-index: 2;
   color: var(--fg-2);
 }
 
 .overview-flow-step--active {
-  z-index: 1;
-  border-color: var(--accent);
-  background: var(--bg-3);
+  --overview-flow-step-bg: var(--bg-3);
+  --overview-flow-step-border: var(--accent);
+  z-index: 4;
   color: var(--fg-1);
 }
 
 .overview-flow-step--next {
+  z-index: 0;
   color: var(--fg-4);
 }
 

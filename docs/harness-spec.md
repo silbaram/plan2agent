@@ -98,9 +98,9 @@ The harness passes intermediate artifacts with these exact names:
 | `task_graph_json` | `.plan2agent/schemas/task-graph.schema.json` | dependency ids valid and DAG acyclic |
 | `review_report` | Markdown/JSON-compatible sections | no blocking issues |
 
-Schema validation is intentionally complemented by `.plan2agent/.plan2agent/scripts/validate_artifacts.mjs`, which performs gate checks that are easier to express procedurally: open/deferred decision blocking, `CQ-n` disposition coverage, spec/intake `open_decisions` traceability including promoted clarifying-question decisions, approved-spec requirement, missing dependency ids, duplicate task ids, and cycle detection.
+Schema validation is intentionally complemented by `scripts/validate_artifacts.mjs` and scaffold-installed `.plan2agent/scripts/validate_artifacts.mjs`, which perform gate checks that are easier to express procedurally: open/deferred decision blocking, `CQ-n` disposition coverage, spec/intake `open_decisions` traceability including promoted clarifying-question decisions, approved-spec requirement, missing dependency ids, duplicate task ids, and cycle detection.
 
-The harness orchestrator also persists each artifact as a file under `.plan2agent/artifacts/<project_id>/` using gate-specific folders (`gate-a-intake/intake.json`, `gate-a-intake/intake.md`, `gate-b-spec/product-spec.md`, `gate-b-spec/implementation-plan.md`, `gate-b-spec/spec.json`, `gate-c-task-graph/task-graph.json`, `gate-d-review/review-report.md`) plus top-level `status.md` as a standing progress and decision index refreshed at every gate transition, so the user can review artifacts at each gate and run `.plan2agent/.plan2agent/scripts/validate_artifacts.mjs` against them. Subagents remain read-only; only the orchestrator writes files, and neither the harness nor subagents perform git operations. The user may commit `.plan2agent/artifacts/<project_id>/` outputs to git as planning history for file-based versioning.
+The harness orchestrator also persists each artifact as a file under `.plan2agent/artifacts/<project_id>/` using gate-specific folders (`gate-a-intake/intake.json`, `gate-a-intake/intake.md`, `gate-b-spec/product-spec.md`, `gate-b-spec/implementation-plan.md`, `gate-b-spec/spec.json`, `gate-c-task-graph/task-graph.json`, `gate-d-review/review-report.md`) plus top-level `status.md` as a standing progress and decision index refreshed at every gate transition, so the user can review artifacts at each gate and run `validate_artifacts.mjs` against them. In co-located scaffold projects, Gate D success is followed by `p2a_iteration.mjs init`, which moves root `gate-*` folders into `iterations/<iter-id>/gate-*` before task execution starts. Subagents remain read-only; only the orchestrator writes planning files, and neither the harness nor subagents perform git operations. The user may commit `.plan2agent/artifacts/<project_id>/` outputs to git as planning history for file-based versioning.
 
 
 ## 7. Evidence and Citation Convention
@@ -124,14 +124,15 @@ Intake and spec artifacts include an `evidence` array so web-grounded or local-s
 .codex/agents/                  # generated Codex subagents
 .gemini/agents/                 # generated Gemini subagents
 .gemini/commands/p2a/           # Gemini command shims
-.plan2agent/schemas/                        # artifact JSON schemas
-.plan2agent/scripts/sync_cli_assets.mjs      # generate CLI mirrors from canonical sources
-.plan2agent/scripts/check_cli_parity.mjs     # mirror drift check
-.plan2agent/.plan2agent/scripts/validate_artifacts.mjs   # schema, gate, and graph validation
-.plan2agent/scripts/run_fixtures.mjs         # fixture/golden validation
-.plan2agent/scripts/p2a_tasks.mjs            # task status and dependency management CLI
-.plan2agent/scripts/p2a_runs.mjs             # task run log and verification tracking CLI
-.plan2agent/scripts/p2a_execute.mjs          # supervised single-task lifecycle runner
+schemas/                                    # artifact JSON schemas
+scripts/sync_cli_assets.mjs                 # generate CLI mirrors from canonical sources
+scripts/check_cli_parity.mjs                # mirror drift check
+scripts/validate_artifacts.mjs              # schema, gate, and graph validation
+scripts/run_fixtures.mjs                    # fixture/golden validation
+scripts/p2a_iteration.mjs                   # iteration init/open/close/maintenance CLI
+scripts/p2a_tasks.mjs                       # task status and dependency management CLI
+scripts/p2a_runs.mjs                        # task run log and verification tracking CLI
+scripts/p2a_execute.mjs                     # supervised single-task lifecycle runner
 ```
 
 구조 판단:
@@ -187,7 +188,7 @@ Gemini target fields use the documented subagent keys `kind`, `tools`, `temperat
 - Plan2Agent v1은 세 CLI 모두에서 같은 역할 이름을 사용하되, CLI별 문법은 renderer가 생성한다.
 - 각 CLI의 subagent는 read-only planning 역할로 제한한다.
 - Intake/spec 단계는 prior-art 근거가 필요한 경우 read-only web lookup을 허용할 수 있다.
-- 실제 실행은 task graph가 확정된 뒤 v2에서 다룬다.
+- 실제 코드 변경 세션은 사람이 감독하는 foreground CLI/app에서 수행하고, P2A는 task/run/orchestration 상태를 파일로 기록한다.
 - skill은 workflow 재사용 단위이고, subagent는 context 격리와 전문 역할 분리를 위한 단위다.
 
 ## 12. 구현 및 고도화 순서
@@ -196,10 +197,10 @@ Gemini target fields use the documented subagent keys `kind`, `tools`, `temperat
 2. Claude Code mirror가 필요한 skill은 `.claude/skills`에 동일하게 반영한다.
 3. subagent 역할 변경은 `.codex/agents`, `.claude/agents`, `.gemini/agents`에 같은 역할명으로 반영한다.
 4. Gemini CLI shortcut 변경은 `.gemini/commands/p2a/*.toml`에 반영한다.
-5. Schema 변경은 `.plan2agent/schemas/*.schema.json`과 `.plan2agent/.plan2agent/scripts/validate_artifacts.mjs`에 반영한다.
-6. CLI agent mirror는 canonical `.agents/agents` sources에서 `.plan2agent/scripts/sync_cli_assets.mjs`의 target renderer로 생성하고 `.plan2agent/scripts/check_cli_parity.mjs`로 검증한다.
-7. Fixture/golden output은 `fixtures/<name>/`에 추가하고 `.plan2agent/scripts/run_fixtures.mjs`로 검증한다.
-8. Gate D 이후 task 상태와 의존성 관리는 `.plan2agent/scripts/p2a_tasks.mjs`로 수행한다.
+5. Schema 변경은 `schemas/*.schema.json`과 `scripts/validate_artifacts.mjs`에 반영한다.
+6. CLI agent mirror는 canonical `.agents/agents` sources에서 `scripts/sync_cli_assets.mjs`의 target renderer로 생성하고 `scripts/check_cli_parity.mjs`로 검증한다.
+7. Fixture/golden output은 `fixtures/<name>/`에 추가하고 `scripts/run_fixtures.mjs`로 검증한다.
+8. Gate D 이후 co-located scaffold는 `p2a_iteration.mjs init`으로 반복 구조를 만든 뒤 `p2a_tasks.mjs --artifacts`로 task 상태와 의존성을 관리한다.
 9. 각 CLI에서 "idea -> intake -> spec -> task graph -> review" 흐름을 read-only로 수동 검증한다.
 
 ## 13. 산출물 Acceptance Criteria

@@ -176,7 +176,7 @@ node .plan2agent/scripts/p2a_iteration.mjs maintenance add \
 
 `--run`, `--run-index`, `--runs-dir`는 `p2a_runs.mjs`가 만든 run log와 index의 schema 및 상호 참조를 검증한다. `--orchestration-plan`, `--orchestration-runtime`, `--skill-proposal`, `--proposal-review`, `--proposal-curation`, `--proposal-patch-draft`, `--proposal-draft-approval`, `--proposals-dir`는 실행 계획/runtime sidecar와 Hermes식 proposal queue/review/curation/patch draft/approval artifact를 검증한다.
 
-`p2a_iteration.mjs validate`는 반복 구조의 active iteration 포인터, active Gate B-D 산출물, task dependency, review blocker, current-spec composition을 검증한다. `--require-approved-spec`는 task graph가 승인된 spec을 기준으로 생성됐는지 확인할 때 함께 사용한다. `--allow-planning`/`--stage`는 Gate A-ready, Gate B draft/approved, 또는 `gate-c-task-graph/task-graph.draft.json`을 검증하는 Gate C draft 상태를 planning state로 검증한다. `--require-close-ready`를 붙이면 모든 active task가 `done`인지까지 확인한다.
+`p2a_iteration.mjs validate`는 반복 구조의 active iteration 포인터, active Gate B-D 산출물, task dependency, review blocker, current-spec composition을 검증한다. `--allow-planning`/`--stage`는 Gate A-ready, Gate B draft/approved, 또는 `gate-c-task-graph/task-graph.draft.json`을 검증하는 Gate C draft 상태를 planning state로 검증한다. `--require-close-ready`를 붙이면 모든 active task가 `done`인지까지 확인한다. 개별 flat task graph가 승인된 spec을 기준으로 생성됐는지 확인할 때는 `validate_artifacts.mjs --task-graph ... --require-approved-spec ...`를 사용한다.
 
 `p2a_iteration.mjs close/open/draft/promote-spec/context/promote-tasks/diff-tasks/compose`는 반복 planning과 task graph 승격을 다룬다. `p2a_iteration.mjs maintenance add`는 Gate A/B/D 없이 `iterations/maintenance/gate-c-task-graph/task-graph.json`을 lazy 생성하거나 append한다. 필수 옵션은 `--title`과 하나 이상의 `--accept`이며, 선택 옵션은 `--description`, `--area`, `--prompt`, 반복 가능한 `--ref`, 반복 가능한 `--depends`, `--dry-run`이다.
 
@@ -202,43 +202,39 @@ npm run package
 
 `p2a_execute.mjs`는 Phase 1 감독형 실행기다. 여러 task를 스케줄링하지 않고, ready task 1건에 대해 기존 `p2a_tasks.mjs`와 `p2a_runs.mjs` 흐름을 묶는다. Codex/Claude 구현 세션 자체는 사람이 보는 foreground에서 진행하며, 이 CLI는 run 생성, task 상태 전이, verification, finish, done/block 기록을 연결한다.
 
+Co-located scaffold 프로젝트에서는 Gate D 통과 후 먼저 `p2a_iteration init`으로 반복 구조를 만들고 `--artifacts`를 사용한다.
+
 ```bash
+node .plan2agent/scripts/p2a_iteration.mjs init \
+  --artifacts .plan2agent/artifacts/<project_id> \
+  --iteration-id v1-mvp
+
 node .plan2agent/scripts/p2a_execute.mjs plan \
-  --graph .plan2agent/artifacts/<project_id>/gate-c-task-graph/task-graph.json \
+  --artifacts .plan2agent/artifacts/<project_id> \
   --task task-001
 
 node .plan2agent/scripts/p2a_execute.mjs start \
-  --graph .plan2agent/artifacts/<project_id>/gate-c-task-graph/task-graph.json \
+  --artifacts .plan2agent/artifacts/<project_id> \
   --task task-001 \
   --agent-tool codex \
   --workspace . \
   --workspace-ref target-project
 
 node .plan2agent/scripts/p2a_execute.mjs finish \
-  --graph .plan2agent/artifacts/<project_id>/gate-c-task-graph/task-graph.json \
+  --artifacts .plan2agent/artifacts/<project_id> \
   --run-id run-... \
   --test \
   --lint \
   --typecheck \
   --collect-git
-
-node .plan2agent/scripts/p2a_execute.mjs status \
-  --graph .plan2agent/artifacts/<project_id>/gate-c-task-graph/task-graph.json \
-  --task task-001
 ```
 
-반복 구조 artifact root에서는 active iteration을 자동 인식한다.
+Legacy handoff 대상처럼 반복 루트가 아닌 task graph를 명시해야 하는 경우에는 `--graph`를 사용할 수 있다.
 
 ```bash
 node .plan2agent/scripts/p2a_execute.mjs plan \
-  --artifacts .plan2agent/artifacts/<project_id> \
+  --graph .plan2agent/artifacts/<project_id>/gate-c-task-graph/task-graph.json \
   --task task-001
-
-node .plan2agent/scripts/p2a_execute.mjs start \
-  --artifacts .plan2agent/artifacts/<project_id> \
-  --task task-001 \
-  --isolation branch \
-  --create-isolation
 ```
 
 승인된 proposal patch draft는 approval artifact로 maintenance task를 자동 선택할 수 있다. `--approval`은 `--artifacts`와 함께 쓰며 maintenance task graph를 사용한다.
@@ -366,22 +362,21 @@ node .plan2agent/scripts/p2a_tasks.mjs <command> --artifacts <iterative-project-
 
 ```bash
 node .plan2agent/scripts/p2a_tasks.mjs list \
-  --graph .plan2agent/artifacts/<project_id>/gate-c-task-graph/task-graph.json
+  --artifacts .plan2agent/artifacts/<project_id>
 
 node .plan2agent/scripts/p2a_tasks.mjs ready \
-  --graph .plan2agent/artifacts/<project_id>/gate-c-task-graph/task-graph.json
+  --artifacts .plan2agent/artifacts/<project_id>
 
 node .plan2agent/scripts/p2a_tasks.mjs prompt \
-  --graph .plan2agent/artifacts/<project_id>/gate-c-task-graph/task-graph.json \
-  --spec .plan2agent/artifacts/<project_id>/gate-b-spec/spec.json \
+  --artifacts .plan2agent/artifacts/<project_id> \
   task-001
 
 node .plan2agent/scripts/p2a_tasks.mjs start \
-  --graph .plan2agent/artifacts/<project_id>/gate-c-task-graph/task-graph.json \
+  --artifacts .plan2agent/artifacts/<project_id> \
   task-001
 ```
 
-반복 구조로 변환된 artifact는 active iteration을 자동 인식할 수 있다. `--maintenance`를 함께 쓰면 active 기능 반복 대신 `iterations/maintenance/gate-c-task-graph/task-graph.json` 단일 그래프를 대상으로 같은 명령을 실행한다.
+반복 구조로 변환된 artifact는 active iteration을 자동 인식한다. `--maintenance`를 함께 쓰면 active 기능 반복 대신 `iterations/maintenance/gate-c-task-graph/task-graph.json` 단일 그래프를 대상으로 같은 명령을 실행한다. scaffold 프로젝트에서 초기 `gate-c-task-graph/task-graph.json`을 직접 `--graph`로 실행하려 하면 CLI가 `p2a_iteration init`을 요구한다.
 
 ```bash
 node .plan2agent/scripts/p2a_tasks.mjs ready \
@@ -640,9 +635,9 @@ node .plan2agent/scripts/p2a_handoff.mjs \
   --target ../target-project
 ```
 
-### 워크플로우 B — 대상 프로젝트에서 ready task로 개발 시작
+### 워크플로우 B — legacy handoff 대상 프로젝트에서 ready task로 개발 시작
 
-인계 후 대상 프로젝트에서 실행한다.
+인계 후 대상 프로젝트에서 실행한다. 이 흐름은 `.plan2agent/project.config.json.taskGraph`가 flat graph를 가리키는 legacy handoff 대상용이다. Co-located scaffold 프로젝트는 Gate D 이후 `p2a_iteration init`을 먼저 실행하고 `--artifacts .plan2agent/artifacts/<project_id>`를 사용한다.
 
 ```bash
 node .plan2agent/scripts/p2a_execute.mjs plan \

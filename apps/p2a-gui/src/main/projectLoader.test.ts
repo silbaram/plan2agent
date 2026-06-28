@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { cp, mkdtemp, mkdir, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -96,6 +96,121 @@ describe("loadProjectSnapshot", () => {
         },
       });
       expect(snapshot.onboarding.primaryAction.command).toContain("--artifacts <artifact-root>");
+    } finally {
+      await rm(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("requires iteration init for scaffold projects with greenfield Gate artifacts", async () => {
+    const tempRoot = await mkdtemp(path.join(tmpdir(), "p2a-loader-scaffold-greenfield-"));
+    try {
+      await mkdir(path.join(tempRoot, ".plan2agent", "artifacts"), { recursive: true });
+      await writeFile(
+        path.join(tempRoot, ".plan2agent/manifest.json"),
+        JSON.stringify({
+          schema_version: "p2a.handoff.v1",
+          provenance: { mode: "scaffold" },
+        }),
+      );
+      await cp(
+        path.join(repoRoot, "fixtures/_e2e/webhook-api-service"),
+        path.join(tempRoot, ".plan2agent/artifacts/webhook-api-service"),
+        { recursive: true },
+      );
+
+      const snapshot = await loadProjectSnapshot(tempRoot);
+
+      expect(snapshot.state).toBe("iteration_init_required");
+      expect(snapshot.artifacts[0]).toMatchObject({
+        requiresIterationInit: true,
+        taskCounts: { ready: 1 },
+      });
+      expect(snapshot.onboarding).toMatchObject({
+        stage: "iteration_init_required",
+        primaryAction: {
+          id: "init_iteration",
+          impact: "writes_project",
+        },
+      });
+      expect(snapshot.onboarding.primaryAction.command).toContain("p2a_iteration.mjs init");
+      expect(snapshot.onboarding.primaryAction.command).toContain(
+        ".plan2agent/artifacts/webhook-api-service",
+      );
+      expect(snapshot.commands.some((command) => command.id === "init_iteration")).toBe(true);
+    } finally {
+      await rm(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("marks scaffold artifacts broken when iteration metadata is incomplete", async () => {
+    const tempRoot = await mkdtemp(path.join(tmpdir(), "p2a-loader-scaffold-partial-"));
+    try {
+      await mkdir(path.join(tempRoot, ".plan2agent", "artifacts"), { recursive: true });
+      await writeFile(
+        path.join(tempRoot, ".plan2agent/manifest.json"),
+        JSON.stringify({
+          schema_version: "p2a.handoff.v1",
+          provenance: { mode: "scaffold" },
+        }),
+      );
+      const artifactRoot = path.join(tempRoot, ".plan2agent/artifacts/webhook-api-service");
+      await cp(path.join(repoRoot, "fixtures/_e2e/webhook-api-service"), artifactRoot, {
+        recursive: true,
+      });
+      await mkdir(path.join(artifactRoot, "iterations"), { recursive: true });
+
+      const snapshot = await loadProjectSnapshot(tempRoot);
+
+      expect(snapshot.state).toBe("broken_install");
+      expect(snapshot.artifacts[0]).toMatchObject({
+        requiresIterationInit: false,
+      });
+      expect(
+        snapshot.diagnostics.some((diagnostic) =>
+          diagnostic.message.includes("Iteration layout is incomplete"),
+        ),
+      ).toBe(true);
+      expect(snapshot.commands.some((command) => command.id === "init_iteration")).toBe(false);
+      expect(snapshot.onboarding.stage).toBe("repair_validate");
+    } finally {
+      await rm(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("detects incomplete scaffold artifacts after greenfield gates have been moved", async () => {
+    const tempRoot = await mkdtemp(path.join(tmpdir(), "p2a-loader-scaffold-moved-partial-"));
+    try {
+      await mkdir(path.join(tempRoot, ".plan2agent", "artifacts"), { recursive: true });
+      await writeFile(
+        path.join(tempRoot, ".plan2agent/manifest.json"),
+        JSON.stringify({
+          schema_version: "p2a.handoff.v1",
+          provenance: { mode: "scaffold" },
+        }),
+      );
+      const artifactRoot = path.join(tempRoot, ".plan2agent/artifacts/webhook-api-service");
+      const iterationRoot = path.join(artifactRoot, "iterations", "v1-mvp");
+      await cp(path.join(repoRoot, "fixtures/_e2e/webhook-api-service"), artifactRoot, {
+        recursive: true,
+      });
+      await mkdir(iterationRoot, { recursive: true });
+      await Promise.all(
+        ["gate-a-intake", "gate-b-spec", "gate-c-task-graph", "gate-d-review"].map((gate) =>
+          rename(path.join(artifactRoot, gate), path.join(iterationRoot, gate)),
+        ),
+      );
+
+      const snapshot = await loadProjectSnapshot(tempRoot);
+
+      expect(snapshot.state).toBe("broken_install");
+      expect(snapshot.artifacts[0]).toMatchObject({
+        requiresIterationInit: false,
+      });
+      expect(
+        snapshot.diagnostics.some((diagnostic) =>
+          diagnostic.message.includes("Iteration layout is incomplete"),
+        ),
+      ).toBe(true);
     } finally {
       await rm(tempRoot, { recursive: true, force: true });
     }

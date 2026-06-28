@@ -242,6 +242,8 @@ node .plan2agent/scripts/p2a_handoff.mjs \
 
 ## 대상 프로젝트에서 개발하기
 
+Co-located scaffold 프로젝트라면 Gate D 통과 후 먼저 `p2a_iteration init`을 실행하고 `--artifacts .plan2agent/artifacts/<project_id>`를 사용한다. 아래 `--graph` 예시는 이미 승인 산출물을 별도 대상 프로젝트로 옮긴 legacy handoff 흐름에서 명시 graph를 사용할 때의 형태다.
+
 인계 후 대상 프로젝트에서 ready task 실행 계획을 확인한다.
 
 ```bash

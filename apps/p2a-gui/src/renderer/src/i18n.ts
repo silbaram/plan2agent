@@ -108,6 +108,7 @@ export const uiCopy = {
         install_p2a: "P2A 설치 필요",
         import_plan: "기획 가져오기",
         continue_planning: "기획 진행 중",
+        iteration_init_required: "반복 초기화 필요",
         repair_validate: "검증 필요",
         execution_ready: "작업 실행 가능",
       },
@@ -115,6 +116,7 @@ export const uiCopy = {
         install_p2a: "선택한 폴더에서 P2A 하네스나 산출물을 찾지 못했습니다.",
         import_plan: "하네스 표식은 있지만 아직 기획 산출물 루트가 없습니다.",
         continue_planning: "기획 산출물은 있지만 실행 가능한 작업이나 실행 이력이 아직 없습니다.",
+        iteration_init_required: "승인된 Gate 산출물이 아직 반복 구조로 변환되지 않았습니다.",
         repair_validate: "P2A 파일은 있지만 하나 이상의 산출물 확인이 실패했습니다.",
         execution_ready: "선택한 산출물 루트에 실행 가능한 작업 또는 실행 기록이 있습니다.",
       },
@@ -126,6 +128,10 @@ export const uiCopy = {
         import_plan: {
           label: "기획 가져오기",
           description: "승인된 기획 산출물 묶음을 이 작업공간으로 가져옵니다.",
+        },
+        init_iteration: {
+          label: "반복 초기화",
+          description: "Gate A-D 산출물을 iterations/<id>/gate-* 구조로 변환합니다.",
         },
         validate_artifacts: {
           label: "산출물 검증",
@@ -156,6 +162,11 @@ export const uiCopy = {
           detail: "기획 문서는 있지만 실행 가능한 작업 목록이 아직 없습니다.",
           nextStep: "기획 문서를 완성한 뒤 작업 그래프를 생성하세요.",
         },
+        iteration_init_required: {
+          title: "반복 구조 초기화가 필요합니다",
+          detail: "승인된 Gate A-D 산출물이 root gate-* 폴더에 있어 아직 task 실행 상태 파일로 사용할 수 없습니다.",
+          nextStep: "p2a_iteration init을 실행한 뒤 --artifacts 경로로 작업을 시작하세요.",
+        },
         repair_validate: {
           title: "산출물 검증이 필요합니다",
           detail: "P2A 파일은 있지만 하나 이상의 문서 확인이 실패했습니다.",
@@ -175,6 +186,7 @@ export const uiCopy = {
       no_p2a: "P2A 없음",
       installed_empty: "설치됨, 문서 없음",
       planning_in_progress: "기획 진행 중",
+      iteration_init_required: "반복 초기화 필요",
       execution_ready: "작업 실행 가능",
       broken_install: "설치 오류",
     },
@@ -564,6 +576,7 @@ export const uiCopy = {
         install_p2a: "Install P2A",
         import_plan: "Import plan",
         continue_planning: "Planning in progress",
+        iteration_init_required: "Iteration init required",
         repair_validate: "Repair / validate",
         execution_ready: "Work ready",
       },
@@ -571,6 +584,7 @@ export const uiCopy = {
         install_p2a: "No harness markers or planning artifacts were found.",
         import_plan: "Harness markers exist, but no planning artifact root was found.",
         continue_planning: "Planning artifacts exist, but no ready task or run history is available yet.",
+        iteration_init_required: "Approved Gate artifacts still need to be converted into the iteration layout.",
         repair_validate: "P2A files were found, but one or more artifact checks failed.",
         execution_ready: "A ready task or run record is available in the selected artifact root.",
       },
@@ -582,6 +596,10 @@ export const uiCopy = {
         import_plan: {
           label: "Import plan",
           description: "Import an approved planning artifact bundle into this workspace.",
+        },
+        init_iteration: {
+          label: "Initialize iteration",
+          description: "Convert Gate A-D artifacts into iterations/<id>/gate-*.",
         },
         validate_artifacts: {
           label: "Validate artifacts",
@@ -612,6 +630,11 @@ export const uiCopy = {
           detail: "Planning documents exist, but no executable task list is available yet.",
           nextStep: "Finish the planning documents, then generate the task graph.",
         },
+        iteration_init_required: {
+          title: "Iteration layout initialization is required",
+          detail: "Approved Gate A-D artifacts are still in root gate-* folders, so they are not the executable task state yet.",
+          nextStep: "Run p2a_iteration init, then start tasks through the --artifacts path.",
+        },
         repair_validate: {
           title: "Artifact validation is needed",
           detail: "P2A files exist, but one or more document checks failed.",
@@ -631,6 +654,7 @@ export const uiCopy = {
       no_p2a: "No P2A",
       installed_empty: "Installed empty",
       planning_in_progress: "Planning in progress",
+      iteration_init_required: "Iteration init required",
       execution_ready: "Work ready",
       broken_install: "Broken install",
     },

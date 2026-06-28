@@ -616,12 +616,12 @@ description: Kick off a Team Big Five style execution session for an approved Pl
 
 # Team Big Five Kickoff
 
-Use this skill only after Plan2Agent handoff has installed approved artifacts under \`.plan2agent/artifacts/<projectId>/\`.
+Use this skill only after Plan2Agent legacy handoff has installed approved flat artifacts under \`.plan2agent/artifacts/<projectId>/\`.
 
 ## Inputs
 
-- A Plan2Agent task id from \`.plan2agent/artifacts/<projectId>/gate-c-task-graph/task-graph.json\`.
-- The task prompt from \`node .plan2agent/scripts/p2a_execute.mjs start --graph .plan2agent/artifacts/<projectId>/gate-c-task-graph/task-graph.json --task <task-id>\` or \`node .plan2agent/scripts/p2a_tasks.mjs prompt --graph .plan2agent/artifacts/<projectId>/gate-c-task-graph/task-graph.json <task-id>\`.
+- A Plan2Agent task id from the handoff task graph recorded in \`.plan2agent/project.config.json.taskGraph\`.
+- The task prompt from \`node .plan2agent/scripts/p2a_execute.mjs start --graph <task-graph> --task <task-id>\` or \`node .plan2agent/scripts/p2a_tasks.mjs prompt --graph <task-graph> <task-id>\`.
 - Optional verification commands from \`.plan2agent/project.config.json\`.
 
 ## Workflow
@@ -642,7 +642,7 @@ Return a concise kickoff plan, the lane assignments or prompts, expected changed
 function teamBigFiveCoordinatorInstructions(target) {
   return `You are the Team Big Five coordinator for Plan2Agent handoff projects.
 
-Operate inside the target project after approved Plan2Agent artifacts have been installed. Use .plan2agent/artifacts/<projectId>/gate-c-task-graph/task-graph.json, .plan2agent/artifacts/<projectId>/gate-b-spec/spec.json, and .plan2agent/project.config.json as the source of truth.
+Operate inside a legacy handoff target project after approved Plan2Agent artifacts have been installed. Use the task graph and spec recorded in .plan2agent/project.config.json and .plan2agent/artifacts/<projectId>/ as the source of truth.
 
 Coordinate complex tasks through five lanes:
 - coordination: keep task id, scope, dependencies, and acceptance criteria visible.
@@ -707,7 +707,7 @@ function renderGeminiTeamBigFiveCommand() {
 
 {{args}}
 
-Read .plan2agent/artifacts/<projectId>/gate-c-task-graph/task-graph.json, .plan2agent/artifacts/<projectId>/gate-b-spec/spec.json, and .plan2agent/project.config.json. Create a five-lane kickoff plan, then execute only if the user explicitly asks you to make code changes.`;
+Read .plan2agent/project.config.json, then use its taskGraph and the matching spec under .plan2agent/artifacts/<projectId>/. Create a five-lane kickoff plan, then execute only if the user explicitly asks you to make code changes.`;
   return `description = "Kick off a Team Big Five execution session for a Plan2Agent task."\nprompt = ${tomlString(prompt)}\n`;
 }
 
@@ -723,11 +723,11 @@ Installed targets: ${targets.join(', ')}
 
 Plan2Agent handoff installs adapter files only. It does not run agents, install packages, clone repositories, create branches, or execute tests.
 
-Use approved Plan2Agent artifacts as the source of truth:
+Use approved legacy handoff artifacts as the source of truth:
 
-- .plan2agent/artifacts/<projectId>/gate-b-spec/spec.json
-- .plan2agent/artifacts/<projectId>/gate-c-task-graph/task-graph.json
 - .plan2agent/project.config.json
+- .plan2agent/artifacts/<projectId>/gate-b-spec/spec.json
+- the task graph path recorded in .plan2agent/project.config.json.taskGraph
 
 Target entry points:
 
@@ -1664,6 +1664,7 @@ function printNextSteps(targetRoot) {
   console.log('      node .plan2agent/scripts/p2a_proposals.mjs curate --review .plan2agent/proposals/reviews/<review-id>.json');
   console.log('      node .plan2agent/scripts/p2a_proposals.mjs draft-patch --curation .plan2agent/proposals/curations/<curation-id>.json --candidate-id <candidate-id>');
   console.log(`      node .plan2agent/scripts/p2a_proposals.mjs approve-draft --draft .plan2agent/proposals/patch-drafts/<draft-id>.json --artifacts ${artifactRoot} --approved-by <name>`);
+  console.log('참고: 이 next step은 legacy handoff 대상용입니다. co-located scaffold 프로젝트는 Gate D 이후 p2a_iteration init을 먼저 실행하고 --artifacts를 사용하세요.');
 
   try {
     if (!config) throw new Error('missing config');

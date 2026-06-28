@@ -16,7 +16,13 @@ import {
 } from './validate_artifacts.mjs';
 import { resolveIterationState } from './p2a_iteration_state.mjs';
 import { DEFAULT_RUNS_DIR, resolveRunsDir } from './p2a_run_paths.mjs';
-import { configuredTaskGraphPath, resolveP2aPaths, singleArtifactProjectRoot } from './p2a_paths.mjs';
+import {
+  assertNoUninitializedScaffoldArtifactRoots,
+  assertNotUninitializedScaffoldGraph,
+  configuredTaskGraphPath,
+  resolveP2aPaths,
+  singleArtifactProjectRoot,
+} from './p2a_paths.mjs';
 
 const P2A_PATHS = resolveP2aPaths(import.meta.url);
 const ROOT = P2A_PATHS.projectRoot;
@@ -179,11 +185,16 @@ function parseArgs(argv) {
     const configuredGraph = configuredTaskGraphPath();
     if (defaultArtifacts) args.artifacts = defaultArtifacts;
     else if (configuredGraph) args.graph = configuredGraph;
+    else if (args.command === 'start') assertNoUninitializedScaffoldArtifactRoots();
     else if (existsSync(DEFAULT_RUNS_DIR)) args.runs = DEFAULT_RUNS_DIR;
-    else throw new Error('--artifacts, --graph, or --runs is required');
+    else assertNoUninitializedScaffoldArtifactRoots();
+    if (!args.artifacts && !args.graph && !args.runs) {
+      throw new Error('--artifacts, --graph, or --runs is required');
+    }
   }
   if (args.artifacts && args.graph) throw new Error('--artifacts and --graph cannot be used together');
   if (args.maintenance && !args.artifacts) throw new Error('--maintenance is only supported with --artifacts');
+  if (args.graph) assertNotUninitializedScaffoldGraph(args.graph);
   if (args.command === 'start') {
     if (!args.taskId) throw new Error('--task is required for start');
     if (!args.agentTool) throw new Error('--agent-tool is required for start');

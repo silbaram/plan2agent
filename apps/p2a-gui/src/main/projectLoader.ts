@@ -6,6 +6,7 @@ import reviewSchema from "../../../../schemas/review.schema.json";
 import runIndexSchema from "../../../../schemas/run-index.schema.json";
 import specSchema from "../../../../schemas/spec.schema.json";
 import taskGraphSchema from "../../../../schemas/task-graph.schema.json";
+import { readScaffoldArtifactLayout } from "./artifactLayout";
 import { DEFAULT_EXECUTION_AGENT_TOOL } from "../shared/ipc";
 import type {
   ArtifactSummary,
@@ -272,6 +273,7 @@ function diagnosticsFromValidation(validation: SchemaValidationSummary): Project
 
 function stateLabel(state: ProjectDetectionState): string {
   if (state === "execution_ready") return "Execution ready";
+  if (state === "iteration_init_required") return "Iteration init required";
   if (state === "planning_in_progress") return "Planning in progress";
   if (state === "installed_empty") return "Installed empty";
   if (state === "broken_install") return "Broken install";
@@ -1035,7 +1037,7 @@ async function firstExistingDirectory(candidates: string[]): Promise<string | nu
 }
 
 async function looksLikeArtifactRoot(candidateRoot: string): Promise<boolean> {
-  const markers = [
+  const fileMarkers = [
     "status.md",
     "current-spec.json",
     "gate-a-intake/intake.json",
@@ -1045,9 +1047,10 @@ async function looksLikeArtifactRoot(candidateRoot: string): Promise<boolean> {
     "gate-d-review/review.json",
   ];
 
-  for (const marker of markers) {
+  for (const marker of fileMarkers) {
     if (await existsAs(path.join(candidateRoot, marker), "file")) return true;
   }
+  if (await existsAs(path.join(candidateRoot, "iterations"), "directory")) return true;
   return false;
 }
 
@@ -1191,6 +1194,20 @@ async function summarizeArtifact(rootPath: string, artifactRoot: string): Promis
   const reviewPath = await firstExistingFile(
     searchRoots.map((searchRoot) => path.join(searchRoot, "gate-d-review", "review.json")),
   );
+  const scaffoldLayout = await readScaffoldArtifactLayout(rootPath, artifactRoot);
+  const requiresIterationInit = scaffoldLayout.requiresIterationInit;
+  if (requiresIterationInit) {
+    diagnostics.push({
+      severity: "warn",
+      message: `Gate artifacts are still in the greenfield layout. Run: node .plan2agent/scripts/p2a_iteration.mjs init --artifacts ${normalizeRelative(rootPath, artifactRoot)} --iteration-id v1-mvp`,
+    });
+  }
+  if (scaffoldLayout.hasIncompleteIterationLayout) {
+    diagnostics.push({
+      severity: "error",
+      message: "Iteration layout is incomplete: current-spec.json and iterations/ must exist together. Repair the iteration metadata before starting tasks.",
+    });
+  }
   const gates = await summarizeGates(artifactRoot, iterationRoot);
   const runSummary = await summarizeRuns(rootPath, artifactRoot);
   const validations: SchemaValidationSummary[] = [];
@@ -1251,6 +1268,7 @@ async function summarizeArtifact(rootPath: string, artifactRoot: string): Promis
     rootPath: artifactRoot,
     relativePath: normalizeRelative(rootPath, artifactRoot),
     activeIteration,
+    requiresIterationInit,
     taskGraphVersion: stringValue(taskGraph?.version),
     sourceSpec: stringValue(taskGraph?.sourceSpec),
     statusPath: statusPath ? normalizeRelative(rootPath, statusPath) : null,
@@ -1296,6 +1314,9 @@ function determineState(checks: ProjectFileCheck[], artifacts: ArtifactSummary[]
     artifact.diagnostics.some((diagnostic) => diagnostic.severity === "error"),
   );
   if (hasErrors) return "broken_install";
+  if (artifacts.some((artifact) => artifact.requiresIterationInit)) {
+    return "iteration_init_required";
+  }
   if (artifacts.some((artifact) => artifact.taskCounts.ready > 0 || artifact.runCount > 0)) {
     return "execution_ready";
   }
@@ -1331,6 +1352,12 @@ function buildDiagnostics(
       message: "At least one ready task or run record was found.",
     });
   }
+  if (state === "iteration_init_required") {
+    diagnostics.push({
+      severity: "warn",
+      message: "A greenfield Gate A-D bundle was found; convert it with p2a_iteration init before starting tasks.",
+    });
+  }
   if (state === "installed_empty") {
     diagnostics.push({
       severity: "ok",
@@ -1362,6 +1389,14 @@ function buildCommands(rootPath: string, state: ProjectDetectionState, artifacts
       description: "Import an existing planning artifact bundle from an external terminal.",
     });
   }
+  if (primaryArtifact?.requiresIterationInit) {
+    commands.push({
+      id: "init_iteration",
+      label: "Initialize iteration layout",
+      command: iterationInitCommand(primaryArtifact),
+      description: "Convert the approved Gate A-D bundle into iterations/<id>/gate-* before execution.",
+    });
+  }
 
   if (primaryArtifact || state === "broken_install") {
     commands.push({
@@ -1384,7 +1419,15 @@ function importCommand(rootPath: string): string {
 }
 
 function validateCommand(rootPath: string, artifacts: ArtifactSummary[]): string {
-  return `node .plan2agent/scripts/validate_artifacts.mjs --artifact-root ${shellQuote(artifacts[0]?.rootPath ?? rootPath)}`;
+  const primaryArtifact = artifacts[0];
+  if (primaryArtifact?.activeIteration) {
+    return `node .plan2agent/scripts/p2a_iteration.mjs validate --artifacts ${shellQuote(primaryArtifact.rootPath)}`;
+  }
+  return `node .plan2agent/scripts/validate_artifacts.mjs --artifact-root ${shellQuote(primaryArtifact?.rootPath ?? rootPath)}`;
+}
+
+function iterationInitCommand(artifact: ArtifactSummary): string {
+  return `node .plan2agent/scripts/p2a_iteration.mjs init --artifacts ${shellQuote(artifact.rootPath)} --iteration-id v1-mvp`;
 }
 
 function installAction(rootPath: string): OnboardingAction {
@@ -1407,6 +1450,18 @@ function importAction(rootPath: string): OnboardingAction {
     command: importCommand(rootPath),
     cwd: rootPath,
     targetPath: rootPath,
+    impact: "writes_project",
+  };
+}
+
+function iterationInitAction(rootPath: string, artifact: ArtifactSummary): OnboardingAction {
+  return {
+    id: "init_iteration",
+    label: "Initialize iteration",
+    description: "Convert greenfield Gate artifacts into the iteration layout.",
+    command: iterationInitCommand(artifact),
+    cwd: rootPath,
+    targetPath: artifact.rootPath,
     impact: "writes_project",
   };
 }
@@ -1483,8 +1538,16 @@ function buildOnboardingChecks(
     {
       id: "ready-task",
       label: "Execution readiness",
-      status: hasReadyTask || hasRunHistory ? "ok" : state === "execution_ready" ? "ok" : "warn",
-      detail: hasReadyTask
+      status: state === "iteration_init_required"
+        ? "warn"
+        : hasReadyTask || hasRunHistory
+          ? "ok"
+          : state === "execution_ready"
+            ? "ok"
+            : "warn",
+      detail: state === "iteration_init_required"
+        ? "iteration init required before task execution"
+        : hasReadyTask
         ? "ready task available"
         : hasRunHistory
           ? "run history available"
@@ -1541,6 +1604,18 @@ function buildOnboarding(
       summary: "Planning artifacts exist, but no ready task or run history is available yet.",
       primaryAction: validateAction(rootPath, artifacts),
       secondaryActions: [importAction(rootPath)],
+      checks: checksForUi,
+    };
+  }
+
+  if (state === "iteration_init_required") {
+    const primaryArtifact = artifacts.find((artifact) => artifact.requiresIterationInit) ?? artifacts[0];
+    return {
+      stage: "iteration_init_required",
+      title: "Initialize iteration",
+      summary: "Approved Gate artifacts exist, but they still need to be moved into the iteration layout before execution.",
+      primaryAction: primaryArtifact ? iterationInitAction(rootPath, primaryArtifact) : validateAction(rootPath, artifacts),
+      secondaryActions: [validateAction(rootPath, artifacts)],
       checks: checksForUi,
     };
   }

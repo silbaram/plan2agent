@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { existsSync, statSync } from "node:fs";
 import path from "node:path";
+import { readScaffoldArtifactLayoutSync } from "./artifactLayout";
 import type {
   ExecutionCommandResult,
   ExecutionCustomVerificationCommand,
@@ -156,6 +157,32 @@ function projectRelativeCommandPath(projectRoot: string, targetPath: string): st
   return relativePath.length ? relativePath.split(path.sep).join("/") : ".";
 }
 
+function assertIterationInitializedForExecution(
+  projectRoot: string,
+  artifactRoot: string,
+): void {
+  const layout = readScaffoldArtifactLayoutSync(projectRoot, artifactRoot);
+  if (layout.hasIncompleteIterationLayout) {
+    throw new Error(
+      [
+        "Iteration layout is incomplete for this scaffold artifact bundle.",
+        "current-spec.json and iterations/ must exist together before task execution.",
+        "Repair or restore the iteration metadata before starting tasks.",
+      ].join("\n"),
+    );
+  }
+  if (!layout.requiresIterationInit) return;
+
+  const artifactRef = projectRelativeCommandPath(projectRoot, artifactRoot);
+  throw new Error(
+    [
+      "This artifact bundle is still in the greenfield gate layout.",
+      "Convert it to the iteration layout before starting or finishing runs.",
+      `Run: node .plan2agent/scripts/p2a_iteration.mjs init --artifacts ${artifactRef} --iteration-id v1-mvp`,
+    ].join("\n"),
+  );
+}
+
 function resolveExecutionContext(request: {
   projectRoot: string;
   artifactRoot: string;
@@ -173,6 +200,7 @@ function resolveExecutionContext(request: {
     "p2a_execute",
   );
   const taskGraphPath = optionalFile(request.taskGraphPath, projectRoot, "task graph path");
+  assertIterationInitializedForExecution(projectRoot, artifactRoot);
   const sourceArgs =
     existsSync(path.join(artifactRoot, "current-spec.json")) || !taskGraphPath
       ? ["--artifacts", artifactRoot]
