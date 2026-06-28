@@ -374,11 +374,19 @@ node .plan2agent/scripts/validate_artifacts.mjs --artifact-root .plan2agent/arti
 
 ## Task 관리
 
-Gate D까지 통과해 `.plan2agent/artifacts/<project_id>/gate-c-task-graph/task-graph.json`이 확정되면 Node.js task CLI로 개발 진행 상태를 관리한다. 기본 사용법은 다음과 같다.
+Co-located scaffold 프로젝트에서는 Gate D까지 통과한 직후 개발을 시작하지 않고, 먼저 greenfield gate bundle을 반복 구조로 전환한다.
 
 ```bash
-node .plan2agent/scripts/p2a_tasks.mjs <command> --graph .plan2agent/artifacts/<project_id>/gate-c-task-graph/task-graph.json [task-id]
+node .plan2agent/scripts/p2a_iteration.mjs init \
+  --artifacts .plan2agent/artifacts/<project_id> \
+  --iteration-id v1-mvp
+
+node .plan2agent/scripts/p2a_tasks.mjs <command> \
+  --artifacts .plan2agent/artifacts/<project_id> \
+  [task-id]
 ```
+
+이후 정본 task graph는 active iteration 아래의 `iterations/<iter-id>/gate-c-task-graph/task-graph.json`이다. scaffold 프로젝트에서 초기 `gate-c-task-graph/task-graph.json`을 `--graph`로 직접 실행하려 하면 CLI가 `p2a_iteration init`을 먼저 요구한다. legacy handoff 대상 프로젝트처럼 반복 루트가 아닌 산출물을 명시적으로 실행해야 하는 경우에만 `--graph`를 사용한다.
 
 명령:
 
@@ -393,10 +401,10 @@ node .plan2agent/scripts/p2a_tasks.mjs <command> --graph .plan2agent/artifacts/<
 
 감독형 개발 진행 루프:
 
-1. 기획 완료 후 `node .plan2agent/scripts/p2a_execute.mjs plan --graph .plan2agent/artifacts/<project_id>/gate-c-task-graph/task-graph.json --task <task-id>`로 단일 task 실행 계획을 확인한다.
-2. `node .plan2agent/scripts/p2a_execute.mjs start --graph .plan2agent/artifacts/<project_id>/gate-c-task-graph/task-graph.json --task <task-id> --agent-tool codex`로 run을 열고 task를 `in_progress`로 바꾼다.
+1. 기획 완료 후 `p2a_iteration init`이 끝난 artifact root를 기준으로 `node .plan2agent/scripts/p2a_execute.mjs plan --artifacts .plan2agent/artifacts/<project_id> --task <task-id>`로 단일 task 실행 계획을 확인한다.
+2. `node .plan2agent/scripts/p2a_execute.mjs start --artifacts .plan2agent/artifacts/<project_id> --task <task-id> --agent-tool codex`로 run을 열고 task를 `in_progress`로 바꾼다.
 3. 출력된 manual launcher prompt를 Claude Code 또는 Codex 같은 write-capable agent CLI에 붙여넣어 구현 작업을 수행한다. Gemini CLI는 현재 review/monitor 같은 read-only 보조로만 사용한다.
-4. `node .plan2agent/scripts/p2a_execute.mjs finish --graph .plan2agent/artifacts/<project_id>/gate-c-task-graph/task-graph.json --run-id <run-id> --test --lint --typecheck`로 검증, run finish, task `done`/`blocked` 전이를 기록한다.
+4. `node .plan2agent/scripts/p2a_execute.mjs finish --artifacts .plan2agent/artifacts/<project_id> --run-id <run-id> --test --lint --typecheck`로 검증, run finish, task `done`/`blocked` 전이를 기록한다.
 5. 세부 제어가 필요하면 `p2a_tasks.mjs`와 `p2a_runs.mjs`를 직접 사용한다. 각 전이는 저장 전에 task graph 전체를 `.plan2agent/scripts/validate_artifacts.mjs`의 검증 로직으로 재검증하므로 잘못된 graph는 기록되지 않는다.
 
 ## Task Graph 기준
