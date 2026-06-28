@@ -2,7 +2,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { Terminal } from "@xterm/xterm";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { DEFAULT_UI_LOCALE } from "../../shared/ipc";
+import { AGENT_TOOLS, DEFAULT_AGENT_TOOL, DEFAULT_UI_LOCALE } from "../../shared/ipc";
 import { uiCopy, type UiCopy } from "./i18n";
 import type { AgentTool, TerminalSessionInfo, UiLocale } from "../../shared/ipc";
 
@@ -24,8 +24,6 @@ type TerminalStatus =
   | "exited"
   | "error";
 
-type TerminalInputMode = "message" | "passthrough";
-
 type TerminalSize = {
   cols: number;
   rows: number;
@@ -37,6 +35,10 @@ function normalizeCommand(value: string | null | undefined): string | null {
 
 function normalizeCwd(value: string | null | undefined): string {
   return value?.trim() || "<project>";
+}
+
+function normalizeInitialAgentTool(agentTool: AgentTool | null): AgentTool {
+  return agentTool ?? DEFAULT_AGENT_TOOL;
 }
 
 function createIdleTranscript({
@@ -57,13 +59,12 @@ function createIdleTranscript({
   const transcript = [
     `\x1b[38;5;244m${copy.terminal.idleTitle}\x1b[0m\r\n`,
     `\x1b[38;5;244m# cwd\x1b[0m ${cwd}\r\n`,
-    `\x1b[38;5;244m# agent\x1b[0m ${agentTool ?? "manual"}\r\n`,
+    `\x1b[38;5;244m# cli\x1b[0m ${agentTool ?? "manual"}\r\n`,
     "\r\n",
-    `\x1b[38;5;109m[renderer]\x1b[0m ${copy.terminal.stdinBoundary}\r\n`,
+    `\x1b[38;5;109m[pty]\x1b[0m ${copy.terminal.stdinBoundary}\r\n`,
     agentTool
       ? `\x1b[38;5;109m[pty]\x1b[0m ${copy.terminal.startLaunches}\r\n`
       : `\x1b[38;5;109m[pty]\x1b[0m ${copy.terminal.manualMode}\r\n`,
-    `\x1b[38;5;109m[links]\x1b[0m ${copy.terminal.linksActive}\r\n`,
   ];
 
   if (taskId) {
@@ -96,36 +97,30 @@ export function TerminalSurface({
   const fitAddonRef = useRef<FitAddon | null>(null);
   const activeSessionRef = useRef<TerminalSessionInfo | null>(null);
   const statusRef = useRef<TerminalStatus>("idle");
-  const inputModeRef = useRef<TerminalInputMode>("message");
   const [size, setSize] = useState<TerminalSize>({ cols: 0, rows: 0 });
   const [status, setStatus] = useState<TerminalStatus>("idle");
-  const [inputMode, setInputMode] = useState<TerminalInputMode>("message");
+  const [selectedAgentTool, setSelectedAgentTool] = useState<AgentTool>(() =>
+    normalizeInitialAgentTool(agentTool),
+  );
   const [activeSession, setActiveSession] = useState<TerminalSessionInfo | null>(null);
   const [lastExitText, setLastExitText] = useState<string | null>(null);
+  const [statusMessage, setStatusMessage] = useState<string>(copy.terminal.ready);
 
   function updateStatus(nextStatus: TerminalStatus) {
     statusRef.current = nextStatus;
     setStatus(nextStatus);
   }
 
-  function updateInputMode(nextMode: TerminalInputMode) {
-    inputModeRef.current = nextMode;
-    setInputMode(nextMode);
-    if (nextMode === "passthrough") {
-      window.requestAnimationFrame(() => terminalRef.current?.focus());
-    }
-  }
-
   const idleTranscript = useMemo(() => {
     return createIdleTranscript({
       cwd: normalizeCwd(cwd),
       command: normalizeCommand(command),
-      agentTool,
+      agentTool: selectedAgentTool,
       taskId: taskId ?? null,
       taskPrompt: taskPrompt ?? null,
       copy,
     });
-  }, [agentTool, command, copy, cwd, taskId, taskPrompt]);
+  }, [selectedAgentTool, command, copy, cwd, taskId, taskPrompt]);
 
   useEffect(() => {
     activeSessionRef.current = activeSession;
@@ -136,18 +131,26 @@ export function TerminalSurface({
   }, [status]);
 
   useEffect(() => {
-    inputModeRef.current = inputMode;
-  }, [inputMode]);
+    if (!activeSessionRef.current && agentTool) {
+      setSelectedAgentTool(agentTool);
+    }
+  }, [agentTool]);
 
   useEffect(() => {
     const terminal = terminalRef.current;
     if (!terminal) return;
-    const passthroughActive = status === "running" && inputMode === "passthrough";
-    terminal.options.disableStdin = !passthroughActive;
-    if (passthroughActive) {
+    const sessionAcceptsInput = status === "running";
+    terminal.options.disableStdin = !sessionAcceptsInput;
+    if (sessionAcceptsInput) {
       window.requestAnimationFrame(() => terminal.focus());
     }
-  }, [inputMode, status]);
+  }, [status]);
+
+  useEffect(() => {
+    if (status === "idle") {
+      setStatusMessage(copy.terminal.ready);
+    }
+  }, [copy, status]);
 
   useEffect(() => {
     const host = hostRef.current;
@@ -155,7 +158,7 @@ export function TerminalSurface({
 
     const terminal = new Terminal({
       allowTransparency: false,
-      convertEol: true,
+      convertEol: false,
       cursorBlink: true,
       disableStdin: true,
       fontFamily: '"JetBrains Mono", "SFMono-Regular", Consolas, monospace',
@@ -188,7 +191,10 @@ export function TerminalSurface({
     const fitAddon = new FitAddon();
     const webLinksAddon = new WebLinksAddon((event, uri) => {
       event.preventDefault();
-      terminal.write(`\r\n\x1b[38;5;172m[link]\x1b[0m ${uri}\r\n`);
+      void window.p2a.app.openExternal(uri).catch((error: unknown) => {
+        const message = error instanceof Error ? error.message : String(error);
+        setStatusMessage(`${copy.terminal.openLinkFailed}: ${message}`);
+      });
     });
 
     terminal.loadAddon(fitAddon);
@@ -196,7 +202,7 @@ export function TerminalSurface({
     terminal.open(host);
     const dataDisposable = terminal.onData((data) => {
       const session = activeSessionRef.current;
-      if (!session || statusRef.current !== "running" || inputModeRef.current !== "passthrough") {
+      if (!session || statusRef.current !== "running") {
         return;
       }
       void window.p2a.terminal.input({
@@ -254,26 +260,32 @@ export function TerminalSurface({
   useEffect(() => {
     const offData = window.p2a.terminal.onData((event) => {
       const session = activeSessionRef.current;
-      if (!session || event.sessionId !== session.sessionId) return;
-      terminalRef.current?.write(event.data);
+      if (session && event.sessionId === session.sessionId) {
+        terminalRef.current?.write(event.data);
+        return;
+      }
+      if (!session && statusRef.current === "starting") {
+        terminalRef.current?.write(event.data);
+      }
     });
     const offExit = window.p2a.terminal.onExit((event) => {
       const session = activeSessionRef.current;
-      if (!session || event.sessionId !== session.sessionId) return;
+      if (session && event.sessionId !== session.sessionId) return;
+      if (!session && statusRef.current !== "starting") return;
 
       const exitText = `exit ${event.exitCode}${event.signal ? ` signal ${event.signal}` : ""}`;
-      terminalRef.current?.write(`\r\n\x1b[38;5;172m[session]\x1b[0m ${exitText}\r\n`);
       activeSessionRef.current = null;
       setActiveSession(null);
       updateStatus("exited");
       setLastExitText(exitText);
+      setStatusMessage(`${copy.terminal.sessionExited}: ${exitText}`);
     });
 
     return () => {
       offData();
       offExit();
     };
-  }, []);
+  }, [copy]);
 
   async function startSession() {
     const terminal = terminalRef.current;
@@ -281,7 +293,6 @@ export function TerminalSurface({
     if (!terminal) return undefined;
     if (
       !normalizedCwd ||
-      !agentTool ||
       status === "starting" ||
       status === "running" ||
       status === "stopping" ||
@@ -291,17 +302,14 @@ export function TerminalSurface({
     }
 
     terminal.reset();
-    terminal.write(
-      `\x1b[38;5;172m[session]\x1b[0m ${copy.terminal.startingSession}: ${agentTool} · ${normalizedCwd}\r\n`,
-    );
-    updateInputMode("passthrough");
     updateStatus("starting");
+    setStatusMessage(`${copy.terminal.startingSession}: ${selectedAgentTool} @ ${normalizedCwd}`);
     setLastExitText(null);
 
     try {
       const session = await window.p2a.terminal.start({
         cwd: normalizedCwd,
-        agentTool,
+        agentTool: selectedAgentTool,
         cols: size.cols || 100,
         rows: size.rows || 28,
         taskId: taskId ?? null,
@@ -309,14 +317,14 @@ export function TerminalSurface({
       activeSessionRef.current = session;
       setActiveSession(session);
       updateStatus("running");
-      terminal.write(
-        `\x1b[38;5;109m[session]\x1b[0m ${copy.terminal.sessionStarted}: pid ${session.pid} · ${session.command} ${session.args.join(" ")}\r\n`,
+      setStatusMessage(
+        `${copy.terminal.sessionStarted}: pid ${session.pid} | ${session.command} ${session.args.join(" ")}`.trim(),
       );
       terminal.focus();
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       updateStatus("error");
-      terminal.write(`\x1b[38;5;167m[error]\x1b[0m ${message}\r\n`);
+      setStatusMessage(message);
     }
 
     return undefined;
@@ -327,15 +335,13 @@ export function TerminalSurface({
     if (!session || status === "stopping" || status === "killing") return;
 
     updateStatus("stopping");
-    terminalRef.current?.write(
-      `\r\n\x1b[38;5;172m[session]\x1b[0m ${copy.terminal.stoppingSession}\r\n`,
-    );
+    setStatusMessage(copy.terminal.stoppingSession);
     try {
       await window.p2a.terminal.stop({ sessionId: session.sessionId });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       updateStatus("error");
-      terminalRef.current?.write(`\x1b[38;5;167m[error]\x1b[0m ${message}\r\n`);
+      setStatusMessage(message);
     }
   }
 
@@ -344,22 +350,18 @@ export function TerminalSurface({
     if (!session || status === "stopping" || status === "killing") return;
 
     updateStatus("killing");
-    terminalRef.current?.write(
-      `\r\n\x1b[38;5;167m[session]\x1b[0m ${copy.terminal.killingSession}\r\n`,
-    );
+    setStatusMessage(copy.terminal.killingSession);
     try {
       await window.p2a.terminal.kill({ sessionId: session.sessionId });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       updateStatus("error");
-      terminalRef.current?.write(`\x1b[38;5;167m[error]\x1b[0m ${message}\r\n`);
+      setStatusMessage(message);
     }
   }
 
   const isSessionChanging = status === "starting" || status === "stopping" || status === "killing";
-  const canStartSession = Boolean(cwd) && Boolean(agentTool) && !activeSession && !isSessionChanging;
-  const terminalHint =
-    inputMode === "passthrough" ? copy.terminal.passthroughHint : copy.terminal.messageHint;
+  const canStartSession = Boolean(cwd) && !activeSession && !isSessionChanging;
 
   return (
     <section className="xterm-panel" aria-label={copy.terminal.ptyTerminalSurface}>
@@ -367,8 +369,25 @@ export function TerminalSurface({
         <span className={`dot dot--${status === "running" ? "active" : "idle"}`} aria-hidden="true" />
         <strong className="mono">node-pty</strong>
         <span className="mono">{status}</span>
-        <span className="mono">{inputMode}</span>
-        <span className="mono">{copy.terminal.lastExit} {lastExitText ?? copy.common.none}</span>
+        <label className="terminal-agent">
+          <span>{copy.terminal.agentCli}</span>
+          <select
+            className="agent-select mono terminal-agent-select"
+            value={selectedAgentTool}
+            onChange={(event) => setSelectedAgentTool(event.target.value as AgentTool)}
+            disabled={Boolean(activeSession) || isSessionChanging}
+            aria-label={copy.terminal.agentCli}
+          >
+            {AGENT_TOOLS.map((candidate) => (
+              <option key={candidate} value={candidate}>
+                {candidate}
+              </option>
+            ))}
+          </select>
+        </label>
+        <span className="mono">
+          {copy.terminal.lastExit} {lastExitText ?? copy.common.none}
+        </span>
         <span className="xterm-panel__spacer" />
         <button
           className="terminal-control"
@@ -400,34 +419,11 @@ export function TerminalSurface({
       </div>
       <div className="xterm-host" ref={hostRef} />
       <div className="terminal-footer">
-        <div className="terminal-footer__mode">
-          <span className="label">{copy.terminal.inputMode}</span>
-          <div className="terminal-mode-toggle" role="group" aria-label={copy.terminal.inputMode}>
-            <button
-              className={
-                inputMode === "message"
-                  ? "terminal-mode-toggle__item terminal-mode-toggle__item--active"
-                  : "terminal-mode-toggle__item"
-              }
-              type="button"
-              onClick={() => updateInputMode("message")}
-            >
-              {copy.terminal.message}
-            </button>
-            <button
-              className={
-                inputMode === "passthrough"
-                  ? "terminal-mode-toggle__item terminal-mode-toggle__item--active"
-                  : "terminal-mode-toggle__item"
-              }
-              type="button"
-              onClick={() => updateInputMode("passthrough")}
-            >
-              {copy.terminal.passthrough}
-            </button>
-          </div>
+        <div className="terminal-footer__meta">
+          <span className="label">{copy.terminal.cwd}</span>
+          <span className="mono">{normalizeCwd(cwd)}</span>
         </div>
-        <span>{terminalHint}</span>
+        <span>{statusMessage}</span>
       </div>
     </section>
   );

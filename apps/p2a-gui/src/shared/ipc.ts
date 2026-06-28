@@ -1,5 +1,6 @@
 export const IPC_CHANNELS = {
   appGetRuntimeInfo: "app:getRuntimeInfo",
+  appOpenExternal: "app:openExternal",
   configGet: "config:get",
   configSetLocale: "config:setLocale",
   projectOpenFolder: "project:openFolder",
@@ -495,6 +496,7 @@ export type OrchestrationMarkRoleRequest = {
 export type P2AApi = {
   app: {
     getRuntimeInfo: () => Promise<RuntimeInfo>;
+    openExternal: (uri: string) => Promise<void>;
   };
   config: {
     get: () => Promise<GuiConfigSnapshot>;

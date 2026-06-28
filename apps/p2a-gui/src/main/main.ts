@@ -6,6 +6,7 @@ import {
   ipcMain,
   Menu,
   session,
+  shell,
   type MenuItemConstructorOptions,
 } from "electron";
 import path from "node:path";
@@ -238,6 +239,16 @@ function registerIpcHandlers(): void {
   ipcMain.handle(IPC_CHANNELS.configGet, () => loadGuiConfig(guiConfigPath()));
   ipcMain.handle(IPC_CHANNELS.configSetLocale, (_event, locale: UiLocale) => {
     return setUiLocale(guiConfigPath(), locale);
+  });
+  ipcMain.handle(IPC_CHANNELS.appOpenExternal, async (_event, uri: string) => {
+    if (typeof uri !== "string" || uri.trim().length === 0) {
+      throw new Error("app:openExternal requires a uri");
+    }
+    const parsed = new URL(uri);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      throw new Error(`unsupported external uri protocol: ${parsed.protocol}`);
+    }
+    await shell.openExternal(parsed.toString());
   });
   ipcMain.handle(IPC_CHANNELS.projectOpenFolder, async (event): Promise<ProjectOpenResult> => {
     const result = await dialog.showOpenDialog({

@@ -30,6 +30,8 @@ const p2aApi: P2AApi = {
   app: {
     getRuntimeInfo: () =>
       ipcRenderer.invoke(IPC_CHANNELS.appGetRuntimeInfo) as Promise<RuntimeInfo>,
+    openExternal: (uri: string) =>
+      ipcRenderer.invoke(IPC_CHANNELS.appOpenExternal, uri) as Promise<void>,
   },
   config: {
     get: () => ipcRenderer.invoke(IPC_CHANNELS.configGet) as Promise<GuiConfigSnapshot>,
