@@ -45,6 +45,7 @@ Use these inputs:
    ```
 
    The worktree path must be a fresh empty path, following the `project.config.json` `runTracking.worktreePattern` convention (for example, `../.worktrees/<taskId>-<runId>`).
+   Run this command from an existing git workspace; the fresh worktree path does not need to exist before `--create-isolation`.
 
    Codex uses sandbox confinement. Claude write-capable runs require scaffold confinement (deny rules + PreToolUse hook, plus OS sandbox on macOS/Linux) and foreground human supervision for now; do not switch Claude to unattended `permissionMode` auto/background until the cross-OS spike is complete and a human explicitly approves that mode. Gemini is still read-only, so use the main-session fallback for Gemini.
 

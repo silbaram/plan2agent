@@ -486,6 +486,14 @@ function resolveWorkspacePath(args) {
   return process.cwd();
 }
 
+function resolveIsolationBasePath(args, workspacePath) {
+  if (!(args.createIsolation && args.isolation === 'worktree')) return workspacePath;
+  const workspaceArg = args.workspace ? path.resolve(args.workspace) : null;
+  const worktree = args.worktree ? path.resolve(args.worktree) : null;
+  if (workspaceArg && workspaceArg !== worktree) return workspaceArg;
+  return process.cwd();
+}
+
 function tail(value) {
   if (value === null || value === undefined) return null;
   const text = String(value);
@@ -672,9 +680,12 @@ function startRun(args) {
   assertSafeRunId(runId);
   if (existsSync(runPath(runsDir, runId))) throw new Error(`run already exists: ${runId}`);
   const workspacePath = resolveWorkspacePath(args);
-  assertDirectory(workspacePath, '--workspace');
+  const isolationBasePath = resolveIsolationBasePath(args, workspacePath);
+  const createsWorktree = args.createIsolation && args.isolation === 'worktree';
+  assertDirectory(createsWorktree ? isolationBasePath : workspacePath, '--workspace');
   const workspaceRef = args.workspaceRef ?? displayPath(workspacePath);
-  const isolation = prepareIsolation(args, workspacePath, runId, task.id);
+  const isolation = prepareIsolation(args, isolationBasePath, runId, task.id);
+  if (createsWorktree) assertDirectory(workspacePath, '--workspace');
   const run = {
     schema_version: 'p2a.run.v1',
     runId,

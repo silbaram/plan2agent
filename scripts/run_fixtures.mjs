@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /** Run Plan2Agent fixture/golden validation for positive, e2e, iteration, and negative fixture cases. */
 
-import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, readdirSync, renameSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
@@ -40,8 +40,8 @@ function runTasks(args, options = {}) {
   return spawnSync(process.execPath, [TASKS_CLI, ...args], { cwd: ROOT, encoding: 'utf8', input: options.input });
 }
 
-function runRuns(args) {
-  return spawnSync(process.execPath, [RUNS_CLI, ...args], { cwd: ROOT, encoding: 'utf8' });
+function runRuns(args, options = {}) {
+  return spawnSync(process.execPath, [RUNS_CLI, ...args], { cwd: options.cwd ?? ROOT, encoding: 'utf8' });
 }
 
 function runExecute(args) {
@@ -1154,6 +1154,81 @@ function validateIterationCurrentFixtureCases() {
       ) {
         console.error(`p2a_execute start wrote unexpected orchestration runtime: ${caseData.id}`);
         console.error(JSON.stringify({ executeRuntime, executeSidecar }, null, 2));
+        return { status: 1, checks };
+      }
+
+      const executeIsolationGraphPath = path.join(tempRoot, 'p2a-execute-isolation', 'gate-c-task-graph', 'task-graph.json');
+      const executeIsolationWorkspace = path.join(tempRoot, 'execute-isolation-workspace');
+      const executeIsolationWorktree = path.join(tempRoot, 'execute-isolation-worktree');
+      mkdirSync(path.dirname(executeIsolationGraphPath), { recursive: true });
+      mkdirSync(executeIsolationWorkspace, { recursive: true });
+      writeFileSync(executeIsolationGraphPath, readFileSync(state.taskGraphPath, 'utf8'), 'utf8');
+      writeFileSync(path.join(executeIsolationWorkspace, 'baseline.txt'), 'baseline\n', 'utf8');
+      result = spawnSync('git', ['init'], { cwd: executeIsolationWorkspace, encoding: 'utf8' });
+      checks += 1;
+      if (result.status !== 0) {
+        console.error(`p2a_execute create-isolation fixture git init failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: failureStatus(result), checks };
+      }
+      result = spawnSync('git', ['add', 'baseline.txt'], { cwd: executeIsolationWorkspace, encoding: 'utf8' });
+      checks += 1;
+      if (result.status !== 0) {
+        console.error(`p2a_execute create-isolation fixture git add failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: failureStatus(result), checks };
+      }
+      result = spawnSync('git', ['-c', 'user.email=p2a@example.invalid', '-c', 'user.name=P2A Fixture', 'commit', '-m', 'initial'], { cwd: executeIsolationWorkspace, encoding: 'utf8' });
+      checks += 1;
+      if (result.status !== 0) {
+        console.error(`p2a_execute create-isolation fixture git commit failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: failureStatus(result), checks };
+      }
+      result = runExecute([
+        'start',
+        '--graph',
+        executeIsolationGraphPath,
+        '--spec',
+        state.specPath,
+        '--task',
+        'task-001',
+        '--run-id',
+        'run-execute-create-worktree',
+        '--agent-tool',
+        'codex',
+        '--workspace',
+        executeIsolationWorkspace,
+        '--workspace-ref',
+        'execute-create-isolation-worktree',
+        '--isolation',
+        'worktree',
+        '--worktree',
+        executeIsolationWorktree,
+        '--create-isolation',
+      ]);
+      checks += 1;
+      if (result.status !== 0 || !existsSync(path.join(executeIsolationWorktree, 'baseline.txt'))) {
+        console.error(`p2a_execute create-isolation worktree fixture failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: failureStatus(result), checks };
+      }
+      const executeIsolationRun = JSON.parse(readFileSync(path.join(tempRoot, 'p2a-execute-isolation', 'runs', 'run-execute-create-worktree.json'), 'utf8'));
+      const executeIsolationGraph = JSON.parse(readFileSync(executeIsolationGraphPath, 'utf8'));
+      const expectedExecuteWorktreePath = realpathSync(executeIsolationWorktree);
+      const recordedExecuteWorkspacePath = path.resolve(ROOT, executeIsolationRun.workspacePath);
+      const recordedExecuteWorktreePath = path.resolve(ROOT, executeIsolationRun.isolation.worktree);
+      if (
+        executeIsolationRun.workspaceRef !== 'execute-create-isolation-worktree'
+        || executeIsolationRun.isolation.mode !== 'worktree'
+        || executeIsolationRun.isolation.created !== true
+        || executeIsolationRun.isolation.createExitCode !== 0
+        || realpathSync(recordedExecuteWorkspacePath) !== expectedExecuteWorktreePath
+        || realpathSync(recordedExecuteWorktreePath) !== expectedExecuteWorktreePath
+        || executeIsolationGraph.tasks.find((task) => task.id === 'task-001')?.status !== 'in_progress'
+      ) {
+        console.error(`p2a_execute create-isolation fixture wrote unexpected state: ${caseData.id}`);
+        console.error(JSON.stringify({ executeIsolationRun, executeIsolationGraph }, null, 2));
         return { status: 1, checks };
       }
 
@@ -2682,6 +2757,76 @@ function validateIterationCurrentFixtureCases() {
       if (collectGitRun.changedFiles.join(',') !== 'src/tracked.txt') {
         console.error(`p2a_runs collect-git fixture wrote unexpected changed files: ${caseData.id}`);
         console.error(JSON.stringify(collectGitRun, null, 2));
+        return { status: 1, checks };
+      }
+
+      const isolationBaseWorkspace = path.join(tempRoot, 'isolation-base-workspace');
+      const isolationWorktree = path.join(tempRoot, 'isolation-worktree');
+      mkdirSync(isolationBaseWorkspace, { recursive: true });
+      writeFileSync(path.join(isolationBaseWorkspace, 'baseline.txt'), 'baseline\n', 'utf8');
+      result = spawnSync('git', ['init'], { cwd: isolationBaseWorkspace, encoding: 'utf8' });
+      checks += 1;
+      if (result.status !== 0) {
+        console.error(`create-isolation fixture git init failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: failureStatus(result), checks };
+      }
+      result = spawnSync('git', ['add', 'baseline.txt'], { cwd: isolationBaseWorkspace, encoding: 'utf8' });
+      checks += 1;
+      if (result.status !== 0) {
+        console.error(`create-isolation fixture git add failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: failureStatus(result), checks };
+      }
+      result = spawnSync('git', ['-c', 'user.email=p2a@example.invalid', '-c', 'user.name=P2A Fixture', 'commit', '-m', 'initial'], { cwd: isolationBaseWorkspace, encoding: 'utf8' });
+      checks += 1;
+      if (result.status !== 0) {
+        console.error(`create-isolation fixture git commit failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: failureStatus(result), checks };
+      }
+
+      const isolationRunId = 'run-fixture-create-worktree';
+      result = runRuns([
+        'start',
+        '--artifacts',
+        artifactRoot,
+        '--task',
+        'task-001',
+        '--run-id',
+        isolationRunId,
+        '--agent-tool',
+        'codex',
+        '--workspace',
+        isolationWorktree,
+        '--workspace-ref',
+        'create-isolation-worktree',
+        '--isolation',
+        'worktree',
+        '--worktree',
+        isolationWorktree,
+        '--create-isolation',
+      ], { cwd: isolationBaseWorkspace });
+      checks += 1;
+      if (result.status !== 0 || !existsSync(path.join(isolationWorktree, 'baseline.txt'))) {
+        console.error(`p2a_runs create-isolation worktree fixture failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: failureStatus(result), checks };
+      }
+      const isolationRun = JSON.parse(readFileSync(path.join(runsDir, `${isolationRunId}.json`), 'utf8'));
+      const expectedWorktreePath = realpathSync(isolationWorktree);
+      const recordedWorkspacePath = path.resolve(isolationBaseWorkspace, isolationRun.workspacePath);
+      const recordedIsolationWorktree = path.resolve(isolationBaseWorkspace, isolationRun.isolation.worktree);
+      if (
+        isolationRun.workspaceRef !== 'create-isolation-worktree'
+        || isolationRun.isolation.mode !== 'worktree'
+        || isolationRun.isolation.created !== true
+        || isolationRun.isolation.createExitCode !== 0
+        || realpathSync(recordedIsolationWorktree) !== expectedWorktreePath
+        || realpathSync(recordedWorkspacePath) !== expectedWorktreePath
+      ) {
+        console.error(`p2a_runs create-isolation worktree fixture wrote unexpected run log: ${caseData.id}`);
+        console.error(JSON.stringify(isolationRun, null, 2));
         return { status: 1, checks };
       }
 
