@@ -256,7 +256,7 @@ GUI local config:
 | standing status | `artifacts/<project_id>/status.md`, iteration `status.md` |
 | spec | `gate-b-spec/spec.json`, `current-spec.json` |
 | task graph | `gate-c-task-graph/task-graph.json`, maintenance task graph |
-| review | `gate-d-review/review.json`, `review-report.md` |
+| review | `gate-d-review/review.json` canonical result, `gate-d-review/review-report.md` human-readable rendering |
 | runs | `runs/run-index.json`, `runs/<runId>.json` |
 
 완료 기준:

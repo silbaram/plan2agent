@@ -115,8 +115,8 @@ fixtures/
     intake.answered.json
     spec.approved.json
     task-graph.json
-    review-report.md
     review.json
+    review-report.md
   webhook-api-service/
     status.md
     input.md
@@ -124,8 +124,8 @@ fixtures/
     intake.answered.json
     spec.approved.json
     task-graph.json
-    review-report.md
     review.json
+    review-report.md
   _e2e/
     manifest.json
     webhook-api-service/
@@ -208,7 +208,8 @@ Skills:
 | `implementation_plan_markdown` | Markdown | Implementation Plan | 사용자 검토 가능 |
 | `spec_json` | `.plan2agent/schemas/spec.schema.json` | Spec | 모든 `CQ-n` disposition 완료, `approval: approved`, `open_decisions: []` |
 | `task_graph_json` | `.plan2agent/schemas/task-graph.schema.json` | Task Breakdown | dependency ids valid and DAG acyclic |
-| `review_report` | Markdown/JSON-compatible sections | Review | no blocking issues |
+| `review_json` | `.plan2agent/schemas/review.schema.json` | Review | `blocking_issues: []` |
+| `review_report` | Markdown rendering of `review_json` | Review | 사람이 읽는 보고서이며 Gate D 판정의 정본은 아님 |
 
 ### 산출물 파일 저장
 
@@ -218,7 +219,8 @@ Skills:
 - `gate-a-intake/intake.json`, `gate-a-intake/intake.md`
 - `gate-b-spec/product-spec.md`, `gate-b-spec/implementation-plan.md`, `gate-b-spec/spec.json`
 - `gate-c-task-graph/task-graph.json`
-- `gate-d-review/review-report.md`
+- `gate-d-review/review.json` — Gate D의 machine-readable canonical review result
+- `gate-d-review/review-report.md` — 사람이 읽는 `review.json` 렌더링
 
 subagent는 read-only를 유지하며, 파일 기록은 하네스 오케스트레이터만 수행한다. `.plan2agent/scripts/validate_artifacts.mjs`로 이 파일들을 그대로 검증할 수 있다.
 

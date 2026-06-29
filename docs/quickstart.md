@@ -83,7 +83,7 @@ P2A 하네스는 다음 gate를 지킨다.
 | Gate A | intake 결정 | high-impact decision이 답변됨 |
 | Gate B | 제품/구현 spec 승인 | `approval: approved`, `open_decisions: []` |
 | Gate C | task graph 확정 | dependency 유효, cycle 없음, acceptance 있음 |
-| Gate D | review 통과 | blocking issue 없음 |
+| Gate D | review 통과 | `review.json.blocking_issues == []` |
 
 생성되는 기본 파일 구조:
 
@@ -100,8 +100,8 @@ P2A 하네스는 다음 gate를 지킨다.
   gate-c-task-graph/
     task-graph.json
   gate-d-review/
-    review-report.md
     review.json
+    review-report.md
 ```
 
 ### 2. 반복 구조로 전환
