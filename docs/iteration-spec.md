@@ -134,8 +134,8 @@ open iteration -> task 실행 -> 모든 task done -> 사용자 close -> archived
       gate-c-task-graph/
         task-graph.json
       gate-d-review/
-        review-report.md
         review.json
+        review-report.md
     maintenance/
       README.md
       gate-c-task-graph/
@@ -556,8 +556,8 @@ node .plan2agent/scripts/p2a_handoff.mjs \
 - `.plan2agent/artifacts/implementation-plan.md`
 - `.plan2agent/artifacts/<project_id>/gate-b-spec/spec.json`
 - `.plan2agent/artifacts/<project_id>/gate-c-task-graph/task-graph.json`
-- `.plan2agent/artifacts/review-report.md`
 - `.plan2agent/artifacts/review.json`
+- `.plan2agent/artifacts/review-report.md`
 - `.plan2agent/artifacts/status.md`
 - `.plan2agent/current-spec.json`
 

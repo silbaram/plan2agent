@@ -37,7 +37,7 @@ The fixture represents a complete Plan2Agent planning run for the cache-library 
 ### Gate D - Review blockers
 
 - 정본 파일: `review.json`
-- report: `review-report.md`
+- 사람이 읽는 보고서: `review-report.md`
 - 상태: passed
 - `blocking_issues`: []
 

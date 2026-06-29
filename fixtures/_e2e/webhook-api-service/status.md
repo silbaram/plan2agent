@@ -36,7 +36,8 @@ This e2e golden fixture represents a complete Plan2Agent artifact root for a web
 
 ### Gate D - Review blockers
 
-- Canonical files: `gate-d-review/review-report.md`, `gate-d-review/review.json`
+- Canonical file: `gate-d-review/review.json`
+- Human-readable report: `gate-d-review/review-report.md`
 - Status: passed
 - `blocking_issues`: []
 

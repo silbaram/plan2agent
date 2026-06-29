@@ -263,7 +263,7 @@ v2의 첫 고도화 목표는 v1 하네스가 만든 산출물을 실제 개발 
 1. Gate D를 통과한 `artifacts/<project_id>/` 산출물을 선택한다.
 2. 사용자가 지정한 개발 대상 디렉터리로 산출물을 복사하거나 이동한다.
 3. 대상 프로젝트 안에 `plan2agent/` 또는 `.plan2agent/` 작업 디렉터리를 만든다.
-4. `product-spec.md`, `implementation-plan.md`, `spec.json`, `task-graph.json`, `review-report.md`를 대상 프로젝트에 배치한다.
+4. `product-spec.md`, `implementation-plan.md`, `spec.json`, `task-graph.json`, `review.json`, `review-report.md`를 대상 프로젝트에 배치한다.
 5. Codex, Claude Code, Gemini CLI에서 사용할 skill, agent, command shim을 대상 프로젝트에 복사한다.
 6. 선택한 CLI에는 `team-bigfive` 기반 팀 실행 adapter를 함께 설치해 여러 agent가 협업해야 하는 task 실행에 사용할 수 있게 한다.
 7. task 실행, 상태 변경, 검증 명령을 대상 프로젝트 기준으로 사용할 수 있게 초기 설정 파일을 만든다.
@@ -278,8 +278,8 @@ v2의 첫 고도화 목표는 v1 하네스가 만든 산출물을 실제 개발 
       implementation-plan.md
       spec.json
       task-graph.json
-      review-report.md
       review.json
+      review-report.md
       status.md
     team-harnesses/
       team-bigfive/
@@ -344,7 +344,7 @@ v2 부트스트랩 도구가 만들어야 할 결과:
 
 - `spec.json`이 존재한다.
 - `task-graph.json`이 존재한다.
-- `review-report.md`와 `review.json`이 존재한다.
+- Gate D 정본인 `review.json`과 사람이 읽는 `review-report.md`가 존재한다.
 - intake의 모든 `CQ-n`이 `spec.json.clarifying_question_disposition`에서 처분되어 있다.
 - `spec.json.approval`이 `approved`다.
 - `spec.json.open_decisions`가 비어 있다.
@@ -384,8 +384,8 @@ Manifest 계약:
     ".plan2agent/artifacts/implementation-plan.md",
     ".plan2agent/artifacts/spec.json",
     ".plan2agent/artifacts/task-graph.json",
-    ".plan2agent/artifacts/review-report.md",
     ".plan2agent/artifacts/review.json",
+    ".plan2agent/artifacts/review-report.md",
     ".plan2agent/artifacts/status.md"
   ],
   "toolFiles": [
@@ -551,8 +551,8 @@ artifacts/<project>/
       gate-c-task-graph/
         task-graph.json
       gate-d-review/
-        review-report.md
         review.json
+        review-report.md
     maintenance/
       README.md
       gate-c-task-graph/
@@ -715,6 +715,7 @@ artifacts/
     gate-c-task-graph/
       task-graph.json
     gate-d-review/
+      review.json
       review-report.md
 ```
 

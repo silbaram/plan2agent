@@ -36,7 +36,8 @@ The fixture represents a complete Plan2Agent planning run for a webhook ingestio
 
 ### Gate D - Review blockers
 
-- Canonical files: `review-report.md`, `review.json`
+- Canonical file: `review.json`
+- Human-readable report: `review-report.md`
 - Status: passed
 - `blocking_issues`: []
 
