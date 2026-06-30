@@ -204,23 +204,21 @@ Skills:
 | Artifact | Schema | 생성 단계 | 다음 단계로 넘어가는 조건 |
 | --- | --- | --- | --- |
 | `intake_json` | `.plan2agent/schemas/intake.schema.json` | Intake | `status: ready_for_spec` |
-| `product_spec_markdown` | Markdown | Product Spec | 사용자 검토 가능 |
-| `implementation_plan_markdown` | Markdown | Implementation Plan | 사용자 검토 가능 |
-| `spec_json` | `.plan2agent/schemas/spec.schema.json` | Spec | 모든 `CQ-n` disposition 완료, `approval: approved`, `open_decisions: []` |
+| `spec_json` | `.plan2agent/schemas/spec.schema.json` | Spec | 모든 `CQ-n` disposition 완료, `approval: approved`, `approval_audit` present, `open_decisions: []` |
 | `task_graph_json` | `.plan2agent/schemas/task-graph.schema.json` | Task Breakdown | dependency ids valid and DAG acyclic |
 | `review_json` | `.plan2agent/schemas/review.schema.json` | Review | `blocking_issues: []` |
-| `review_report` | Markdown rendering of `review_json` | Review | 사람이 읽는 보고서이며 Gate D 판정의 정본은 아님 |
+| Optional Markdown views | generated from JSON | Review/export | 사람이 읽는 view이며 Gate 판정의 정본은 아님 |
 
 ### 산출물 파일 저장
 
-하네스 오케스트레이터는 각 단계 산출물을 `.plan2agent/artifacts/<project_id>/` 아래 gate별 폴더에 기록해 사용자가 게이트 전에 파일로 검토할 수 있게 한다.
+하네스 오케스트레이터는 각 단계의 정본 JSON 산출물을 `.plan2agent/artifacts/<project_id>/` 아래 gate별 폴더에 기록한다. Markdown 파일은 필요할 때 JSON에서 생성하는 view/export다.
 
-- `status.md` — 모든 게이트 전환마다 갱신되는 standing 진행상태 및 결정 인덱스
-- `gate-a-intake/intake.json`, `gate-a-intake/intake.md`
-- `gate-b-spec/product-spec.md`, `gate-b-spec/implementation-plan.md`, `gate-b-spec/spec.json`
+- `status.md` — optional generated standing 진행상태 view
+- `gate-a-intake/intake.json` — canonical intake
+- `gate-b-spec/spec.json` — canonical product/implementation spec
 - `gate-c-task-graph/task-graph.json`
 - `gate-d-review/review.json` — Gate D의 machine-readable canonical review result
-- `gate-d-review/review-report.md` — 사람이 읽는 `review.json` 렌더링
+- `gate-a-intake/intake.md`, `gate-b-spec/product-spec.md`, `gate-b-spec/implementation-plan.md`, `gate-d-review/review-report.md` — optional generated Markdown views
 
 subagent는 read-only를 유지하며, 파일 기록은 하네스 오케스트레이터만 수행한다. `.plan2agent/scripts/validate_artifacts.mjs`로 이 파일들을 그대로 검증할 수 있다.
 
@@ -245,8 +243,8 @@ Intake와 spec 단계가 web lookup 또는 외부 문서를 사용하면 결과 
 
 2. **Gate B — Spec approval**
    - intake의 모든 `CQ-n`은 `spec_json.clarifying_question_disposition`에서 처분되어야 한다.
-   - `spec_json.approval`이 `approved`가 아니거나 `open_decisions`가 남아 있으면 task graph를 만들지 않는다.
-   - 승인된 Gate B가 있는 artifact root 또는 fixture는 `status.md`에 `Gate B approval audit` block을 기록해야 한다.
+   - `spec_json.approval`이 `approved`가 아니거나, `approval_audit`가 없거나, `open_decisions`가 남아 있으면 task graph를 만들지 않는다.
+   - 승인된 Gate B가 있는 artifact root 또는 fixture는 `spec_json.approval_audit`를 기록해야 한다.
 
 3. **Gate C — Task graph validation**
    - 모든 dependency는 같은 graph 안의 task id를 참조해야 한다.
@@ -358,7 +356,7 @@ Fixture/golden output 확인:
 node .plan2agent/scripts/run_fixtures.mjs
 ```
 
-`run_fixtures.mjs`는 일반 fixture set을 통과 검증하고, `fixtures/_e2e/manifest.json`의 artifact-root fixture는 handoff-ready 상태인지 확인한다. 승인된 Gate B가 있는 status 문서는 `Gate B approval audit` block까지 확인한다. `fixtures/_negative/manifest.json`에 정의된 중단/실패 fixture는 기대한 실패 메시지가 나오는지 확인한다.
+`run_fixtures.mjs`는 일반 fixture set을 통과 검증하고, `fixtures/_e2e/manifest.json`의 artifact-root fixture는 handoff-ready 상태인지 확인한다. 승인된 Gate B spec은 `approval_audit`까지 확인한다. `fixtures/_negative/manifest.json`에 정의된 중단/실패 fixture는 기대한 실패 메시지가 나오는지 확인한다.
 
 artifact gate 확인:
 

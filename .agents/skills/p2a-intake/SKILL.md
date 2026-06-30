@@ -27,7 +27,7 @@ Return an `intake_json` object conforming to `.plan2agent/schemas/intake.schema.
 - `evidence`: source objects with `source_id`, `title`, `url`, and `used_for`
 - `status`: `blocked_on_user` when any decision is `open` or `deferred`, otherwise `ready_for_spec`
 
-- Also produce a human-readable analysis (persisted by the harness as `intake.md`) following the harness standard soft template and containing the restated understanding, each assumption with its reasoning, and for every `needs_user_decision` the option trade-offs, a recommended option with rationale, the downstream artifacts it blocks, and the current decision `status` (`open`, `answered`, or `deferred`). If a decision is `answered`, clearly show the selected option/answer in prose, for example `선택: <option label>` or `Selected: <option label>`.
+- Also produce a human-readable analysis in the conversation. The harness may generate `intake.md` as an optional view/export from `intake_json`, but `intake_json` is the source of truth. The analysis should follow the harness soft template and contain the restated understanding, each assumption with its reasoning, and for every `needs_user_decision` the option trade-offs, a recommended option with rationale, the downstream artifacts it blocks, and the current decision `status` (`open`, `answered`, or `deferred`). If a decision is `answered`, clearly show the selected option/answer in prose, for example `선택: <option label>` or `Selected: <option label>`.
 
 When `status` is `blocked_on_user`, lead with the analysis narrative (understanding, assumptions with reasoning, and per-decision trade-offs and recommendations). A Markdown decision table may supplement it but must not replace the explanation.
 
@@ -36,8 +36,8 @@ When `status` is `blocked_on_user`, lead with the analysis narrative (understand
 - Use stable ids like `ND-1`, `ND-2`, `CQ-1`, and `A-1`.
 - Do not renumber existing ids during resume.
 - Mark a decision `answered` only when the user's answer selects or clearly overrides an option.
-- On resume, when you set a decision to `answered` in `intake_json.needs_user_decision`, update the returned `intake.md` analysis at the same time so the same decision is no longer shown as `open` and includes the selected option/answer.
-- `intake_json` and `intake.md` must always agree on each `needs_user_decision` status and selected answer; never leave a human-readable decision stale after changing JSON.
+- On resume, when you set a decision to `answered` in `intake_json.needs_user_decision`, update the conversational summary and any generated `intake.md` view from the JSON. Do not maintain Markdown as a second editable source.
+- `intake_json` is canonical for each `needs_user_decision` status and selected answer.
 
 ## Rules
 

@@ -9,13 +9,13 @@ Review planning artifacts before implementation starts.
 
 ## Inputs
 
-- `spec_json` and its Markdown rendering.
+- `spec_json`.
 - `task_graph_json`.
 - Optional intake artifact for decision traceability.
 
 ## Output
 
-Return `review_report` and `review_json` (schema `p2a.review.v1`) with the same finding sections. `review_json.blocking_issues` must be an empty array when the review passes with no blockers.
+Return `review_json` (schema `p2a.review.v1`). An optional `review_report` Markdown view may be generated from the JSON for human review. `review_json.blocking_issues` must be an empty array when the review passes with no blockers.
 
 `review_json` includes `schema_version`, `projectId`, `sourceSpec`, `sourceTaskGraph`, and:
 
@@ -32,7 +32,7 @@ Return `review_report` and `review_json` (schema `p2a.review.v1`) with the same 
 
 - `spec_json.approval` is `approved` before task graph readiness is claimed.
 - `spec_json.open_decisions` is empty.
-- Approved Gate B status includes a `Gate B approval audit` block in top-level `status.md` with `Approved by`, `Approved at`, `Approved artifacts`, and `Approval note`.
+- Approved Gate B status includes `spec_json.approval_audit` with `approved_by`, `approved_at`, `approved_artifacts`, and `approval_note`.
 - Every intake `CQ-n` appears exactly once in `spec_json.clarifying_question_disposition`.
 - No raw `CQ-n` id appears in `spec_json.open_decisions`; unresolved blockers from clarifying questions must be promoted to `ND-n`.
 - Every promoted clarifying question decision is either listed in `open_decisions` while unresolved or has a `resolution` before approval.

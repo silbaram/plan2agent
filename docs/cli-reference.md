@@ -154,15 +154,21 @@ node .plan2agent/scripts/p2a_iteration.mjs draft \
 node .plan2agent/scripts/p2a_iteration.mjs promote-spec \
   --artifacts .plan2agent/artifacts/<project_id>
 
+node .plan2agent/scripts/p2a_iteration.mjs diff-tasks \
+  --artifacts .plan2agent/artifacts/<project_id>
+
 node .plan2agent/scripts/p2a_iteration.mjs context \
   --artifacts .plan2agent/artifacts/<project_id> \
   --code-root .
 
-node .plan2agent/scripts/p2a_iteration.mjs promote-tasks \
-  --artifacts .plan2agent/artifacts/<project_id>
+node .plan2agent/scripts/p2a_iteration.mjs validate \
+  --artifacts .plan2agent/artifacts/<project_id> \
+  --stage gate-c-draft
 
-node .plan2agent/scripts/p2a_iteration.mjs diff-tasks \
-  --artifacts .plan2agent/artifacts/<project_id>
+node .plan2agent/scripts/p2a_iteration.mjs promote-tasks \
+  --artifacts .plan2agent/artifacts/<project_id> \
+  --approved-by user \
+  --approval-note "Reviewed and approved the Gate C draft task graph."
 
 node .plan2agent/scripts/p2a_iteration.mjs compose \
   --artifacts .plan2agent/artifacts/<project_id> \
@@ -174,13 +180,13 @@ node .plan2agent/scripts/p2a_iteration.mjs maintenance add \
   --accept "Typo is fixed"
 ```
 
-`--status`는 top-level `status.md` standing document의 최소 구조를 확인한다. `--artifact-root`는 `.plan2agent/artifacts/<project_id>/` 아래 Gate A-D bundle을 한 번에 검증하며, 승인된 Gate B spec이 있으면 `status.md`의 `Gate B approval audit` block도 확인한다. `--spec`은 `--intake`가 있으면 그 intake를 사용하고, 없으면 `spec.source_intake`를 실제 파일로 자동 연결해 Gate B traceability를 검사한다. `spec.source_intake`가 명시됐지만 파일로 해석되지 않으면 실패한다.
+`--status`는 generated `status.md` view의 최소 구조만 확인한다. `--artifact-root`는 `.plan2agent/artifacts/<project_id>/` 아래 Gate A-D JSON bundle을 한 번에 검증하며, 승인된 Gate B spec이 있으면 `spec.approval_audit`도 확인한다. `--spec`은 `--intake`가 있으면 그 intake를 사용하고, 없으면 `spec.source_intake`를 실제 파일로 자동 연결해 Gate B traceability를 검사한다. `spec.source_intake`가 명시됐지만 파일로 해석되지 않으면 실패한다.
 
 `--run`, `--run-index`, `--runs-dir`는 `p2a_runs.mjs`가 만든 run log와 index의 schema 및 상호 참조를 검증한다. `--orchestration-plan`, `--orchestration-runtime`, `--skill-proposal`, `--proposal-review`, `--proposal-curation`, `--proposal-patch-draft`, `--proposal-draft-approval`, `--proposals-dir`는 실행 계획/runtime sidecar와 Hermes식 proposal queue/review/curation/patch draft/approval artifact를 검증한다.
 
 `p2a_iteration.mjs validate`는 반복 구조의 active iteration 포인터, active Gate B-D 산출물, task dependency, review blocker, current-spec composition을 검증한다. `--allow-planning`/`--stage`는 Gate A-ready, Gate B draft/approved, 또는 `gate-c-task-graph/task-graph.draft.json`을 검증하는 Gate C draft 상태를 planning state로 검증한다. `--require-close-ready`를 붙이면 모든 active task가 `done`인지까지 확인한다. 개별 flat task graph가 승인된 spec을 기준으로 생성됐는지 확인할 때는 `validate_artifacts.mjs --task-graph ... --require-approved-spec ...`를 사용한다.
 
-`p2a_iteration.mjs close/open/draft/promote-spec/context/promote-tasks/diff-tasks/compose`는 반복 planning과 task graph 승격을 다룬다. `p2a_iteration.mjs maintenance add`는 Gate A/B/D 없이 `iterations/maintenance/gate-c-task-graph/task-graph.json`을 lazy 생성하거나 append한다. 필수 옵션은 `--title`과 하나 이상의 `--accept`이며, 선택 옵션은 `--description`, `--area`, `--prompt`, 반복 가능한 `--ref`, 반복 가능한 `--depends`, `--dry-run`이다.
+`p2a_iteration.mjs close/open/draft/promote-spec/context/diff-tasks/promote-tasks/compose`는 반복 planning과 task graph 초안/승격을 다룬다. `diff-tasks`는 `task-graph.draft.json`만 만들고, `promote-tasks`가 사람 승인 audit과 함께 정본 `task-graph.json`으로 승격한다. `p2a_iteration.mjs maintenance add`는 Gate A/B/D 없이 `iterations/maintenance/gate-c-task-graph/task-graph.json`을 lazy 생성하거나 append한다. 필수 옵션은 `--title`과 하나 이상의 `--accept`이며, 선택 옵션은 `--description`, `--area`, `--prompt`, 반복 가능한 `--ref`, 반복 가능한 `--depends`, `--dry-run`이다.
 
 ### GUI desktop app — `apps/p2a-gui`
 
@@ -547,7 +553,7 @@ MVP 제약:
 | --- | --- |
 | `--mode copy|move` | 기본은 `copy`; `move`는 성공적으로 쓴 뒤 원본 파일을 정리한다. |
 | `--iteration-id active|<id>` | 반복 구조 root에서 인계할 반복. 기본값은 `active`; greenfield root에서는 생략한다. |
-| `--include-intake` | 사람용 `gate-a-intake/intake.md`도 함께 포함한다. `intake.json`은 `spec.source_intake` 추적성을 위해 항상 복사된다. |
+| `--include-intake` | generated `gate-a-intake/intake.md`가 있으면 함께 포함한다. `intake.json`은 `spec.source_intake` 추적성을 위해 항상 복사된다. |
 | `--tools codex,claude,gemini|all` | 대상 프로젝트에 P2A AI 개발용 skill/agent/command shim을 복사한다. 생략하면 복사하지 않는다. |
 | `--include-team-bigfive` | 대상 프로젝트에 Team Big Five adapter를 설치한다. |
 | `--team-bigfive-source <path-or-git-url>` | Team Big Five 원본 출처. local directory는 파일 목록과 SHA-256을 기록하고, Git URL은 fetch 없이 URL만 기록한다. |
@@ -555,7 +561,7 @@ MVP 제약:
 | `--overwrite` | 대상 파일이 이미 있을 때 덮어쓰기를 허용한다. |
 | `--dry-run` | 파일을 쓰지 않고 gate 검증과 인계 계획 출력만 수행한다. |
 
-인계 전제는 Gate B~D가 통과된 상태다. 특히 `spec.approval`은 `approved`여야 하고, 모든 intake `CQ-n`은 `spec.clarifying_question_disposition`에서 처분되어야 하며, `spec.open_decisions`와 `review.json.blocking_issues`는 비어 있어야 한다. 반복 구조 root를 넘기면 active 반복 산출물을 `.plan2agent/artifacts/`로 평탄화하고, `task-graph.sourceSpec`은 `spec.json`으로, `spec.source_intake`는 `intake.json`으로 rebase한다. 이때 `intake.json`은 항상 함께 복사되며, 루트 `current-spec.json`은 `.plan2agent/current-spec.json`으로 함께 복사한다. 반복 history 보존을 위해 iterative root에서는 `--mode move`를 지원하지 않는다. 기본 실행 도구로 `p2a_tasks.mjs`, `p2a_runs.mjs`, `p2a_execute.mjs`, `p2a_orchestrate.mjs`, `p2a_proposals.mjs`, `validate_artifacts.mjs`, run/orchestration plan/orchestration runtime/proposal/review/curation/patch-draft schema가 함께 설치되며, `.plan2agent/project.config.json.runTracking`에 기본 runs directory와 branch/worktree naming hint가 기록된다.
+인계 전제는 Gate B~D가 통과된 상태다. 특히 `spec.approval`은 `approved`여야 하고, `spec.approval_audit`가 있어야 하며, 모든 intake `CQ-n`은 `spec.clarifying_question_disposition`에서 처분되어야 하고, `spec.open_decisions`와 `review.json.blocking_issues`는 비어 있어야 한다. 반복 구조 root를 넘기면 active 반복 산출물을 `.plan2agent/artifacts/`로 평탄화하고, `task-graph.sourceSpec`은 `spec.json`으로, `spec.source_intake`는 `intake.json`으로 rebase한다. 이때 `intake.json`은 항상 함께 복사되며, 루트 `current-spec.json`은 `.plan2agent/current-spec.json`으로 함께 복사한다. Markdown view 파일은 존재할 때만 함께 복사된다. 반복 history 보존을 위해 iterative root에서는 `--mode move`를 지원하지 않는다. 기본 실행 도구로 `p2a_tasks.mjs`, `p2a_runs.mjs`, `p2a_execute.mjs`, `p2a_orchestrate.mjs`, `p2a_proposals.mjs`, `validate_artifacts.mjs`, run/orchestration plan/orchestration runtime/proposal/review/curation/patch-draft schema가 함께 설치되며, `.plan2agent/project.config.json.runTracking`에 기본 runs directory와 branch/worktree naming hint가 기록된다.
 
 `--tools`를 지정하면 공통 P2A 원본인 `.agents/skills`, `.agents/agents`와 선택한 CLI별 mirror를 함께 복사한다. `codex`는 `.codex/agents`, `claude`는 `.claude/skills`와 `.claude/agents`, `gemini`는 `.gemini/agents`와 `.gemini/commands/p2a`를 추가한다. 복사된 파일과 선택한 CLI 범위는 `.plan2agent/manifest.json`의 `aiToolTargets`, `aiToolFiles`, `toolFiles`에 기록된다.
 
@@ -750,6 +756,15 @@ node .plan2agent/scripts/p2a_iteration.mjs promote-spec \
 
 node .plan2agent/scripts/p2a_iteration.mjs diff-tasks \
   --artifacts .plan2agent/artifacts/<project_id>
+
+node .plan2agent/scripts/p2a_iteration.mjs validate \
+  --artifacts .plan2agent/artifacts/<project_id> \
+  --stage gate-c-draft
+
+node .plan2agent/scripts/p2a_iteration.mjs promote-tasks \
+  --artifacts .plan2agent/artifacts/<project_id> \
+  --approved-by user \
+  --approval-note "Reviewed and approved the Gate C draft task graph."
 
 # Gate C task graph 실행과 Gate D review까지 완료한 뒤:
 node .plan2agent/scripts/p2a_iteration.mjs close \

@@ -39,12 +39,12 @@
   "expected_failure": [
     {
       "id": "approval-audit-required-for-approved-gate-b",
-      "description": "An approved Gate B artifact root must include a Gate B approval audit block in status.md.",
+      "description": "An approved Gate B artifact root must include approval audit metadata in spec.json.",
       "args": [
         "--artifact-root",
         "fixtures/_negative/missing-approval-audit"
       ],
-      "expected_message": "status.md missing Gate B approval audit"
+      "expected_message": "spec.approval_audit is required when spec.approval is approved"
     },
     {
       "id": "promoted-decision-missing-open-decision-fails",

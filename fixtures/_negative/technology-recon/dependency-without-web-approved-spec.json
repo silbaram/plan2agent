@@ -84,5 +84,13 @@
       "url": "",
       "used_for": "Confirmed durable API storage is in scope."
     }
-  ]
+  ],
+  "approval_audit": {
+    "approved_by": "user",
+    "approved_at": "2026-06-13",
+    "approved_artifacts": [
+      "fixtures/_negative/technology-recon/dependency-without-web-approved-spec.json"
+    ],
+    "approval_note": "Approved fixture intentionally missing WEB evidence for selected PostgreSQL dependency."
+  }
 }

@@ -87,5 +87,13 @@
       "url": "",
       "used_for": "Confirmed the local-only fixture scope."
     }
-  ]
+  ],
+  "approval_audit": {
+    "approved_by": "user",
+    "approved_at": "2026-06-13",
+    "approved_artifacts": [
+      "fixtures/_negative/technology-recon/prohibition-only-approved-spec.json"
+    ],
+    "approval_note": "Approved local-only fixture scope with no material selected external technology."
+  }
 }

@@ -22,8 +22,7 @@ import {
   validateHandoffReadyArtifactRoot,
   validateReviewPass,
   validateSpec,
-  validateStatusApprovalAudit,
-  validateStatusDoc,
+  validateApprovalAuditData,
   validateTaskGraph,
   validateTaskContextData,
   validateTaskGraphData,
@@ -79,7 +78,7 @@ function usage() {
     '  node .plan2agent/scripts/p2a_iteration.mjs draft --artifacts <iterative-project-dir> [--idea <text>] [--force]',
     '  node .plan2agent/scripts/p2a_iteration.mjs context --artifacts <iterative-project-dir> [--idea <text>] [--code-root <dir>]',
     '  node .plan2agent/scripts/p2a_iteration.mjs promote-spec --artifacts <iterative-project-dir>',
-    '  node .plan2agent/scripts/p2a_iteration.mjs promote-tasks --artifacts <iterative-project-dir>',
+    '  node .plan2agent/scripts/p2a_iteration.mjs promote-tasks --artifacts <iterative-project-dir> [--approved-by <name>] [--approval-note <text>]',
     '  node .plan2agent/scripts/p2a_iteration.mjs diff-tasks --artifacts <iterative-project-dir> [--force]',
     '  node .plan2agent/scripts/p2a_iteration.mjs compose --artifacts <iterative-project-dir> [--allow-conflicts]',
     '  node .plan2agent/scripts/p2a_iteration.mjs maintenance add --artifacts <iterative-project-dir> --title <text> --accept <text> [--accept <text> ...] [--description <text>] [--area <text>] [--prompt <text>] [--ref <value> ...] [--depends <task-id> ...] [--dry-run]',
@@ -132,10 +131,11 @@ function usage() {
     '  --code-root <dir>     Code root to scan for L1 file-tree signals. Default: current working directory.',
     '',
     'promote-tasks options:',
-    '  (none)                Requires approved spec plus Gate C approval audit in status.md.',
+    '  --approved-by <name>   Record Gate C task graph approval in current-spec.json. Defaults to user when --approval-note is present.',
+    '  --approval-note <text> Approval rationale recorded with the Gate C audit.',
     '',
     'diff-tasks options:',
-    '  --force               Overwrite existing Gate C task graph.',
+    '  --force               Overwrite existing Gate C task graph draft.',
     '',
     'compose options:',
     '  --allow-conflicts     Write current-spec open_decisions when composition conflicts are detected.',
@@ -176,6 +176,8 @@ function parseArgs(argv) {
     sourceSpecRefs: [],
     dependencies: [],
     codeRoot: process.cwd(),
+    approvedBy: null,
+    approvalNote: null,
   };
   const command = argv[0];
   if (!command) throw new Error(`missing command\n\n${usage()}`);
@@ -238,6 +240,14 @@ function parseArgs(argv) {
     } else if (arg === '--allow-conflicts') {
       if (command !== 'compose') throw new Error('--allow-conflicts is only supported by compose');
       args.allowConflicts = true;
+    } else if (arg === '--approved-by') {
+      if (command !== 'promote-tasks') throw new Error('--approved-by is only supported by promote-tasks');
+      args.approvedBy = argv[++index];
+      if (!args.approvedBy) throw new Error('--approved-by requires a value');
+    } else if (arg === '--approval-note') {
+      if (command !== 'promote-tasks') throw new Error('--approval-note is only supported by promote-tasks');
+      args.approvalNote = argv[++index];
+      if (!args.approvalNote) throw new Error('--approval-note requires a value');
     } else if (arg === '--title') {
       if (command !== 'maintenance' || args.action !== 'add') throw new Error('--title is only supported by maintenance add');
       args.title = argv[++index];
@@ -349,9 +359,14 @@ function preflight(paths, iterationId) {
 
   const rootValidation = validateHandoffReadyArtifactRoot(paths.artifactRoot);
   const gateBApprovalAudit = gateBApprovalAuditForIteration(
-    parseGateBApprovalAudit(paths.statusMd),
+    rootValidation.spec.approval_audit ?? parseGateBApprovalAudit(paths.statusMd),
     iterationId,
     'Gate B approval preserved from greenfield status during iteration init.',
+  );
+  const gateCApprovalAudit = gateCApprovalAuditForIteration(
+    parseGateCApprovalAudit(paths.statusMd),
+    iterationId,
+    'Gate C approval preserved from greenfield task graph during iteration init.',
   );
 
   return {
@@ -359,6 +374,7 @@ function preflight(paths, iterationId) {
     taskGraph: rootValidation.taskGraph,
     review: rootValidation.review,
     gateBApprovalAudit,
+    gateCApprovalAudit,
   };
 }
 
@@ -571,8 +587,6 @@ function parseGateBApprovalAudit(statusPath) {
 
 function gateBApprovalArtifactsForIteration(iterationId) {
   return [
-    `iterations/${iterationId}/gate-b-spec/product-spec.md`,
-    `iterations/${iterationId}/gate-b-spec/implementation-plan.md`,
     sourceSpecRef(iterationId),
   ];
 }
@@ -611,6 +625,54 @@ function renderGateBApprovalAudit(currentSpec, iterationId) {
     `- Approval note: ${audit.approval_note ?? 'Gate B approved.'}\n\n`;
 }
 
+function gateCApprovalArtifactsForIteration(iterationId) {
+  return [
+    `iterations/${iterationId}/gate-c-task-graph/task-graph.draft.json`,
+  ];
+}
+
+function gateCApprovalAuditForIteration(audit, iterationId, fallbackNote, approvedAtOverride = null) {
+  const approvedAt = approvedAtOverride ?? audit?.approved_at ?? new Date().toISOString().slice(0, 10);
+  const approvedArtifacts = Array.isArray(audit?.approved_artifacts) && audit.approved_artifacts.length
+    ? audit.approved_artifacts
+    : audit?.approved_source
+      ? [audit.approved_source]
+      : gateCApprovalArtifactsForIteration(iterationId);
+  return {
+    approved_by: audit?.approved_by ?? 'user',
+    approved_at: approvedAt.slice(0, 10),
+    approved_artifacts: approvedArtifacts,
+    approval_note: audit?.approval_note ?? fallbackNote,
+    ...(audit?.draft_sha256 ? { draft_sha256: audit.draft_sha256 } : {}),
+    ...(audit?.approved_source ? { approved_source: audit.approved_source } : {}),
+    ...(audit?.authoring_agent ? { authoring_agent: audit.authoring_agent } : {}),
+  };
+}
+
+function currentSpecWithGateCApprovalAudit(currentSpec, iterationId, audit) {
+  return {
+    ...currentSpec,
+    gate_c_approval_audits: {
+      ...(currentSpec.gate_c_approval_audits ?? {}),
+      [iterationId]: audit,
+    },
+  };
+}
+
+function renderGateCApprovalAudit(currentSpec, iterationId) {
+  const audit = currentSpec.gate_c_approval_audits?.[iterationId];
+  if (!audit) return '';
+  const artifacts = Array.isArray(audit.approved_artifacts)
+    ? audit.approved_artifacts
+    : parseApprovedArtifacts(audit.approved_artifacts);
+  const artifactText = artifacts.map((item) => `\`${item}\``).join(', ');
+  return `#### Gate C approval audit\n\n` +
+    `- Approved by: ${audit.approved_by ?? 'user'}\n` +
+    `- Approved at: ${(audit.approved_at ?? new Date().toISOString()).slice(0, 10)}\n` +
+    `- Approved artifacts: ${artifactText || '`iterations/<iter-id>/gate-c-task-graph/task-graph.draft.json`'}\n` +
+    `- Approval note: ${audit.approval_note ?? 'Gate C task graph approved.'}\n\n`;
+}
+
 function progressForIteration(currentSpec, activeIteration) {
   const status = statusForIterationId(currentSpec, activeIteration);
   if (status === 'active_planning') return '[A:pending] -> [B:pending] -> [C:pending] -> [D:pending]';
@@ -641,6 +703,7 @@ function renderActiveGateSections(artifactRoot, activeIteration, currentSpec) {
     `### Gate C - Task graph validation\n\n` +
     `- 상태: ${taskGraph ? `${taskGraph.tasks?.length ?? 0} task(s)` : 'pending'}\n` +
     `- 정본 파일: \`iterations/${activeIteration}/gate-c-task-graph/task-graph.json\`\n\n` +
+    renderGateCApprovalAudit(currentSpec, activeIteration) +
     `### Gate D - Review blockers\n\n` +
     `- 상태: ${review ? `blocking_issues=${blockerCount}` : 'pending'}\n` +
     `- 정본 파일: \`iterations/${activeIteration}/gate-d-review/review.json\`\n`;
@@ -820,8 +883,8 @@ function statusMarkdown(projectId, iterationId, spec, taskGraph, review) {
     `- 작은 fix → maintenance에 append\n`;
 }
 
-function currentSpecPointer(projectId, iterationId, gateBApprovalAudit) {
-  const currentSpec = {
+function currentSpecPointer(projectId, iterationId, gateBApprovalAudit, gateCApprovalAudit) {
+  let currentSpec = {
     schema_version: 'p2a.current_spec.v1',
     project_id: projectId,
     composed_from: [iterationId],
@@ -829,9 +892,9 @@ function currentSpecPointer(projectId, iterationId, gateBApprovalAudit) {
     effective_spec_ref: `iterations/${iterationId}/gate-b-spec/spec.json`,
     note: '반복 1개라 이 반복 spec이 곧 현재 유효 spec. 다중 반복 조합 규칙은 docs/iteration-spec.md에서 정식화.',
   };
-  return gateBApprovalAudit
-    ? currentSpecWithGateBApprovalAudit(currentSpec, iterationId, gateBApprovalAudit)
-    : currentSpec;
+  if (gateBApprovalAudit) currentSpec = currentSpecWithGateBApprovalAudit(currentSpec, iterationId, gateBApprovalAudit);
+  if (gateCApprovalAudit) currentSpec = currentSpecWithGateCApprovalAudit(currentSpec, iterationId, gateCApprovalAudit);
+  return currentSpec;
 }
 
 function currentSpecForOpen(currentSpec, nextIterationId, previousIterationId, idea, openedAt) {
@@ -2229,6 +2292,9 @@ function buildComposedCurrentSpec(previousCurrentSpec, sources, skipped) {
   if (previousCurrentSpec.gate_b_approval_audits && typeof previousCurrentSpec.gate_b_approval_audits === 'object') {
     composedCurrentSpec.gate_b_approval_audits = cloneJson(previousCurrentSpec.gate_b_approval_audits);
   }
+  if (previousCurrentSpec.gate_c_approval_audits && typeof previousCurrentSpec.gate_c_approval_audits === 'object') {
+    composedCurrentSpec.gate_c_approval_audits = cloneJson(previousCurrentSpec.gate_c_approval_audits);
+  }
 
   const pending = previousCurrentSpec.pending_iteration;
   if (pending && !composedIterationIds.includes(pending.iteration_id)) {
@@ -2285,6 +2351,7 @@ function buildPlan(paths, iterationId, facts) {
   return {
     projectId,
     gateBApprovalAudit: facts.gateBApprovalAudit,
+    gateCApprovalAudit: facts.gateCApprovalAudit,
     moves: GATE_DIRS.map((gate) => ({
       from: path.join(paths.artifactRoot, gate),
       to: path.join(paths.iterationRoot, gate),
@@ -2329,7 +2396,7 @@ function applyPlan(paths, iterationId, plan) {
     originalMovedTaskGraph = rebaseMovedTaskGraphSourceSpec(paths.movedTaskGraph);
     const movedFacts = validateMoved(paths);
     const projectId = projectIdFrom(paths.artifactRoot, movedFacts.spec, movedFacts.taskGraph);
-    const currentSpec = currentSpecPointer(projectId, iterationId, plan.gateBApprovalAudit);
+    const currentSpec = currentSpecPointer(projectId, iterationId, plan.gateBApprovalAudit, plan.gateCApprovalAudit);
     mkdirSync(paths.maintenanceRoot, { recursive: true });
     writeJson(paths.currentSpec, currentSpec);
     writeIterationStatus(paths.artifactRoot, currentSpec);
@@ -2373,7 +2440,7 @@ function init(args) {
   validateMoved(paths);
   resolveIterationState(artifactRoot);
   console.log(`Plan2Agent iteration init passed: ${toRelativeFromRoot(artifactRoot)} -> iterations/${args.iterationId}/`);
-  console.log('Moved artifacts revalidated: spec approved, task graph valid, review passed, Gate B approval audit present.');
+  console.log('Moved artifacts revalidated: spec approved, task graph valid, review passed, Gate B/C approval audits present.');
   console.log('Maintenance is lazy: no empty task-graph.json was created.');
   return 0;
 }
@@ -2426,7 +2493,6 @@ function inferPlanningStage(state) {
 
 function validatePlanningIteration(args) {
   const state = resolveIterationState(args.artifacts, { requireReady: false });
-  validateStatusDoc(state.statusPath);
   validateCurrentSpecCompositionData(state.currentSpec, state.artifactRoot, { requireNoOpenDecisions: true });
   const stage = args.stage ?? inferPlanningStage(state);
   if (stage === 'ready') return validateIteration({ ...args, stage: null, allowPlanning: false });
@@ -2469,9 +2535,6 @@ function validatePlanningIteration(args) {
   if (stage === 'gate-b-approved' && spec.approval !== 'approved') {
     throw new ValidationError(`--stage gate-b-approved requires spec.approval approved, got ${JSON.stringify(spec.approval)}`);
   }
-  if (stage === 'gate-b-approved') {
-    validateStatusApprovalAudit(state.statusPath, spec);
-  }
   if (stage === 'gate-b-draft' && spec.approval === 'approved') {
     throw new ValidationError('--stage gate-b-draft expected a non-approved spec; use --stage gate-b-approved for approved Gate B');
   }
@@ -2497,6 +2560,7 @@ function gateCTaskGraphDraftMetaPath(state) {
 }
 
 function parseGateCApprovalAudit(statusPath) {
+  if (!statusPath || !existsSync(statusPath)) return null;
   const text = readFileSync(statusPath, 'utf8');
   const headingMatch = text.match(/^#{3,6}\s+Gate C approval audit\s*$/im);
   if (!headingMatch) return null;
@@ -2507,16 +2571,19 @@ function parseGateCApprovalAudit(statusPath) {
     const match = block.match(new RegExp(`^\\s*-\\s*${label}:\\s*(.+?)\\s*$`, 'im'));
     return match ? match[1].trim() : null;
   };
+  const approvedSource = get('Approved source');
+  const approvedArtifacts = parseApprovedArtifacts(get('Approved artifacts'));
   return {
     approved_by: get('Approved by'),
     approved_at: get('Approved at'),
-    approved_source: get('Approved source'),
+    approved_artifacts: approvedArtifacts.length ? approvedArtifacts : approvedSource ? [approvedSource] : [],
+    approved_source: approvedSource,
     authoring_agent: get('Authoring agent'),
     approval_note: get('Approval note'),
   };
 }
 
-function taskDraftProvenance(state, draftPath, promotedAt) {
+function taskDraftProvenance(state, draftPath, promotedAt, gateCApprovalAudit) {
   const existingMetaPath = gateCTaskGraphDraftMetaPath(state);
   const existingMeta = existsSync(existingMetaPath) ? loadJson(existingMetaPath) : null;
   return {
@@ -2532,7 +2599,7 @@ function taskDraftProvenance(state, draftPath, promotedAt) {
     draft_sha256: fileSha256(draftPath),
     source_spec_sha256: existsSync(state.specPath) ? fileSha256(state.specPath) : null,
     promoted_at: promotedAt,
-    gate_c_approval_audit: parseGateCApprovalAudit(state.statusPath),
+    gate_c_approval_audit: gateCApprovalAudit,
   };
 }
 
@@ -2884,10 +2951,9 @@ function promoteSpec(args) {
   const promotedAt = new Date().toISOString();
   const artifacts = activeSpecArtifacts(state.artifactRoot, state.activeIteration);
   const gateBApprovalAudit = gateBApprovalAuditForIteration(
-    null,
+    spec.approval_audit,
     state.activeIteration,
     'Gate B approval recorded by p2a_iteration promote-spec after approved spec with no open decisions.',
-    promotedAt,
   );
   const nextCurrentSpec = currentSpecForPromotedSpec(
     state.currentSpec,
@@ -2917,18 +2983,33 @@ function promoteSpec(args) {
   return 0;
 }
 
-function assertGateCApprovalAudit(statusPath) {
-  const text = readFileSync(statusPath, 'utf8');
-  const required = [
-    /^#{3,6}\s+Gate C approval audit\s*$/im,
-    /Approved by:\s*\S+/i,
-    /Approved at:\s*\d{4}-\d{2}-\d{2}/i,
-    /Approved source:\s*\S+/i,
-    /Approval note:\s*\S+/i,
-  ];
-  if (!required.every((pattern) => pattern.test(text))) {
-    throw new ValidationError('Gate C approval audit block required in status.md before promote-tasks');
+function gateCApprovalAuditFromArgs(args, state, draftSha256) {
+  if (!args.approvedBy && !args.approvalNote) return null;
+  return gateCApprovalAuditForIteration(
+    {
+      approved_by: args.approvedBy ?? 'user',
+      approved_at: new Date().toISOString().slice(0, 10),
+      approved_artifacts: gateCApprovalArtifactsForIteration(state.activeIteration),
+      approval_note: args.approvalNote ?? 'Gate C task graph approved for promotion.',
+      draft_sha256: draftSha256,
+    },
+    state.activeIteration,
+    'Gate C task graph approved for promotion.',
+  );
+}
+
+function resolveGateCApprovalAuditForPromotion(state, args, draftSha256) {
+  const requestedAudit = gateCApprovalAuditFromArgs(args, state, draftSha256);
+  const currentSpecAudit = state.currentSpec.gate_c_approval_audits?.[state.activeIteration] ?? null;
+  const audit = requestedAudit ?? currentSpecAudit;
+  if (!audit) {
+    throw new ValidationError('Gate C approval audit required in current-spec.json gate_c_approval_audits or via promote-tasks --approved-by/--approval-note');
   }
+  validateApprovalAuditData(audit, `current-spec.json gate_c_approval_audits.${state.activeIteration}`);
+  if (audit.draft_sha256 !== draftSha256) {
+    throw new ValidationError('Gate C approval audit does not match current task-graph.draft.json; rerun promote-tasks with --approved-by and --approval-note after reviewing the draft');
+  }
+  return audit;
 }
 
 function canonicalDraftVersion(version) {
@@ -2943,10 +3024,13 @@ function promoteTasks(args) {
   if (!existsSync(draftPath)) throw new ValidationError(`gate-c draft not found; author one at ${draftPath} first`);
   const draft = loadJson(draftPath);
   validateTaskGraphData(draft, state.specPath);
-  assertGateCApprovalAudit(state.statusPath);
   const promotedAt = new Date().toISOString();
+  const draftSha256 = fileSha256(draftPath);
+  const gateCApprovalAudit = resolveGateCApprovalAuditForPromotion(state, args, draftSha256);
+  const nextCurrentSpec = currentSpecWithGateCApprovalAudit(state.currentSpec, state.activeIteration, gateCApprovalAudit);
+  writeJson(state.currentSpecPath, nextCurrentSpec);
   const metaPath = gateCTaskGraphDraftMetaPath(state);
-  writeJson(metaPath, taskDraftProvenance(state, draftPath, promotedAt));
+  writeJson(metaPath, taskDraftProvenance({ ...state, currentSpec: nextCurrentSpec }, draftPath, promotedAt, gateCApprovalAudit));
 
   const promoted = {
     ...draft,
@@ -2954,7 +3038,7 @@ function promoteTasks(args) {
   };
   writeJson(state.taskGraphPath, promoted);
   renameSync(draftPath, `${draftPath}.promoted`);
-  writeIterationStatus(state.artifactRoot, state.currentSpec);
+  writeIterationStatus(state.artifactRoot, nextCurrentSpec);
 
   console.log(`Plan2Agent tasks promoted: ${promoted.tasks.length} task(s)`);
   console.log(`- graph: ${toRelativeFromRoot(state.taskGraphPath)}`);
@@ -3038,12 +3122,15 @@ function diffTasks(args) {
     throw new ValidationError('diff-tasks requires active spec.open_decisions to be empty');
   }
 
-  const taskGraphPath = state.taskGraphPath;
-  if (existsSync(taskGraphPath) && !args.force) {
-    throw new Error(`task graph already exists: ${taskGraphPath}; use --force to overwrite`);
+  const draftPath = gateCTaskGraphDraftPath(state);
+  if (existsSync(draftPath) && !args.force) {
+    throw new Error(`task graph draft already exists: ${draftPath}; use --force to overwrite`);
+  }
+  if (existsSync(state.taskGraphPath) && !args.force) {
+    throw new Error(`canonical task graph already exists: ${state.taskGraphPath}; use --force to create a replacement draft`);
   }
   const { baselineSpec, baselineRef } = loadDiffBaseline(state);
-  const existingTaskGraph = args.force ? loadExistingTaskGraphIfPresent(taskGraphPath) : null;
+  const existingTaskGraph = args.force ? loadExistingTaskGraphIfPresent(state.taskGraphPath) : null;
   const graph = taskGraphFromSpecChanges({
     projectId: state.projectId,
     iterationId: state.activeIteration,
@@ -3053,18 +3140,24 @@ function diffTasks(args) {
     existingTaskGraph,
     historicalTasks: historicalCompletedTasks(state),
   });
-  validateTaskGraphData(graph, state.specPath);
-  mkdirSync(path.dirname(taskGraphPath), { recursive: true });
-  writeJson(taskGraphPath, graph);
+  const draft = {
+    ...graph,
+    version: typeof graph.version === 'string' && graph.version.endsWith('-draft')
+      ? graph.version
+      : `${graph.version}-draft`,
+  };
+  validateTaskGraphData(draft, state.specPath);
+  mkdirSync(path.dirname(draftPath), { recursive: true });
+  writeJson(draftPath, draft);
 
-  const stats = semanticGraphStats(graph);
-  console.log(`Plan2Agent diff task graph generated: ${toRelativeFromRoot(taskGraphPath)}`);
+  const stats = semanticGraphStats(draft);
+  console.log(`Plan2Agent diff task graph draft generated: ${toRelativeFromRoot(draftPath)}`);
   console.log(`- active iteration: ${state.activeIteration}`);
   console.log(`- baseline: ${baselineRef ?? 'none'}`);
   console.log(`- semantic groups: ${stats.groups.join(', ')}`);
   console.log(`- rework groups: ${stats.rework}`);
   console.log(`- reused active tasks: ${stats.reused}`);
-  console.log(`- tasks: ${graph.tasks.length}`);
+  console.log(`- tasks: ${draft.tasks.length}`);
   return 0;
 }
 

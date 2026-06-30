@@ -407,14 +407,8 @@ export function validateIntake(filePath, options = {}) {
       `intake.status must be ${JSON.stringify(expectedStatus)} when unresolved decisions are ${JSON.stringify(unresolvedDecisions)}`,
     );
   }
-  const intakeMdPath = options.intakeMdPath ?? siblingIntakeMarkdownPath(filePath);
-  if (intakeMdPath) validateIntakeMarkdownDecisionSync(data, intakeMdPath);
+  if (options.intakeMdPath) validateIntakeMarkdownDecisionSync(data, options.intakeMdPath);
   return data;
-}
-
-function siblingIntakeMarkdownPath(intakePath) {
-  const candidate = path.join(path.dirname(intakePath), 'intake.md');
-  return existsSync(candidate) && lstatSync(candidate).isFile() ? candidate : null;
 }
 
 export function validateIntakeMarkdownDecisionSync(intake, intakeMdPath) {
@@ -447,6 +441,7 @@ export function validateSpec(filePath, intakePath = null) {
   if (data.approval === 'approved' && data.open_decisions.length) {
     throw new ValidationError('approved specs must not contain open_decisions');
   }
+  validateSpecApprovalAudit(data);
 
   if (intake) {
     const intakeDecisions = new Map(intake.needs_user_decision.map((decision) => [decision.id, decision.status]));
@@ -484,6 +479,51 @@ export function validateSpec(filePath, intakePath = null) {
     }
   }
   return data;
+}
+
+export function validateApprovalAuditData(audit, label = 'approval audit') {
+  if (!audit || typeof audit !== 'object' || Array.isArray(audit)) {
+    throw new ValidationError(`${label} must be an object`);
+  }
+  const requiredStrings = ['approved_by', 'approved_at', 'approval_note'];
+  for (const field of requiredStrings) {
+    if (typeof audit[field] !== 'string' || audit[field].trim().length === 0) {
+      throw new ValidationError(`${label}.${field} must be a non-empty string`);
+    }
+  }
+  if (!/^\d{4}-\d{2}-\d{2}/.test(audit.approved_at)) {
+    throw new ValidationError(`${label}.approved_at must start with YYYY-MM-DD`);
+  }
+  if (!Array.isArray(audit.approved_artifacts) || audit.approved_artifacts.length === 0) {
+    throw new ValidationError(`${label}.approved_artifacts must be a non-empty array`);
+  }
+  validateNonBlankStrings(audit.approved_artifacts, `${label}.approved_artifacts`);
+  return audit;
+}
+
+export function validateSpecApprovalAudit(spec, label = 'spec.approval_audit') {
+  if (spec.approval !== 'approved') return null;
+  if (!spec.approval_audit) {
+    throw new ValidationError(`${label} is required when spec.approval is approved`);
+  }
+  return validateApprovalAuditData(spec.approval_audit, label);
+}
+
+export function validateCurrentSpecGateBApprovalAudit(currentSpec, iterationId, spec) {
+  if (spec.approval !== 'approved') return null;
+  const audit = currentSpec?.gate_b_approval_audits?.[iterationId];
+  if (!audit) {
+    throw new ValidationError(`current-spec.json gate_b_approval_audits.${iterationId} is required for approved Gate B`);
+  }
+  return validateApprovalAuditData(audit, `current-spec.json gate_b_approval_audits.${iterationId}`);
+}
+
+export function validateCurrentSpecGateCApprovalAudit(currentSpec, iterationId) {
+  const audit = currentSpec?.gate_c_approval_audits?.[iterationId];
+  if (!audit) {
+    throw new ValidationError(`current-spec.json gate_c_approval_audits.${iterationId} is required for promoted Gate C task graph`);
+  }
+  return validateApprovalAuditData(audit, `current-spec.json gate_c_approval_audits.${iterationId}`);
 }
 
 function validateClarifyingQuestionDisposition(spec, intake = null) {
@@ -1066,22 +1106,6 @@ export function validateStatusDoc(filePath) {
   return text;
 }
 
-export function validateStatusApprovalAudit(filePath, spec) {
-  if (spec.approval !== 'approved') return null;
-  const text = readFileSync(filePath, 'utf8');
-  const required = [
-    ['Gate B approval audit', /^#{3,6}\s+Gate B approval audit\s*$/im],
-    ['Approved by field', /Approved by:\s*\S+/i],
-    ['Approved at field', /Approved at:\s*\d{4}-\d{2}-\d{2}/i],
-    ['Approved artifacts field', /Approved artifacts:\s*\S+/i],
-    ['Approval note field', /Approval note:\s*\S+/i],
-  ];
-  for (const [label, pattern] of required) {
-    if (!pattern.test(text)) throw new ValidationError(`status.md missing ${label}`);
-  }
-  return text;
-}
-
 function artifactPaths(artifactRoot) {
   const root = path.resolve(artifactRoot);
   return Object.fromEntries(
@@ -1152,11 +1176,9 @@ export function validateArtifactRoot(artifactRoot, options = {}) {
   if (!lstatSync(root).isDirectory()) throw new ValidationError(`artifact root must be a directory: ${root}`);
 
   const paths = artifactPaths(root);
-  assertFile(paths.statusDoc, GATE_PATHS.statusDoc);
-  validateStatusDoc(paths.statusDoc);
 
-  requireGateFiles(paths, ['intakeJson', 'intakeMd'], 'Gate A');
-  const intake = validateIntake(paths.intakeJson, { intakeMdPath: paths.intakeMd });
+  requireGateFiles(paths, ['intakeJson'], 'Gate A');
+  const intake = validateIntake(paths.intakeJson);
   const result = {
     artifactRoot: root,
     paths,
@@ -1173,13 +1195,12 @@ export function validateArtifactRoot(artifactRoot, options = {}) {
     readyForHandoff: false,
   };
 
-  const gateBKeys = ['productSpec', 'implementationPlan', 'specJson'];
+  const gateBKeys = ['specJson'];
   const gateBExisting = filesExist(paths, gateBKeys);
   if (gateBExisting.length) {
     requireGateFiles(paths, gateBKeys, 'Gate B');
     const spec = validateSpec(paths.specJson, paths.intakeJson);
     assertProjectId('spec.project_id', spec.project_id, options.projectId);
-    validateStatusApprovalAudit(paths.statusDoc, spec);
     result.spec = spec;
     result.gates.b = { present: true, valid: true, passed: spec.approval === 'approved' && spec.open_decisions.length === 0 };
   }
@@ -1195,7 +1216,7 @@ export function validateArtifactRoot(artifactRoot, options = {}) {
     result.gates.c = { present: true, valid: true, passed: true };
   }
 
-  const gateDKeys = ['reviewReport', 'reviewJson'];
+  const gateDKeys = ['reviewJson'];
   const gateDExisting = filesExist(paths, gateDKeys);
   if (gateDExisting.length) {
     if (!result.taskGraph) throw new ValidationError('Gate D cannot be validated before Gate C task graph exists');
@@ -1258,12 +1279,10 @@ function optionalFixtureIntakeMd(fixturePath) {
 
 export function validateFixtureDir(fixturePath) {
   const required = [
-    ['status.md', (artifactPath) => validateStatusDoc(artifactPath)],
     ['intake.blocked.json', (artifactPath) => validateIntake(artifactPath)],
     ['intake.answered.json', (artifactPath) => validateIntake(artifactPath, { intakeMdPath: optionalFixtureIntakeMd(fixturePath) })],
     ['spec.approved.json', (artifactPath) => validateSpec(artifactPath, path.join(fixturePath, 'intake.answered.json'))],
     ['task-graph.json', (artifactPath) => validateTaskGraph(artifactPath, path.join(fixturePath, 'spec.approved.json'))],
-    ['review-report.md', () => null],
     ['review.json', (artifactPath) => validateReviewPass(artifactPath, { sourceSpec: 'spec.approved.json', sourceTaskGraph: 'task-graph.json' })],
   ];
   for (const [filename, validator] of required) {
@@ -1275,10 +1294,8 @@ export function validateFixtureDir(fixturePath) {
     }
     validator(artifactPath);
   }
-  validateStatusApprovalAudit(
-    path.join(fixturePath, 'status.md'),
-    loadJson(path.join(fixturePath, 'spec.approved.json')),
-  );
+  const reportPath = path.join(fixturePath, 'review-report.md');
+  if (existsSync(reportPath)) assertFile(reportPath, 'review-report.md');
 }
 
 function parseArgs(argv) {

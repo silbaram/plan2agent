@@ -12,7 +12,6 @@ export type ScaffoldArtifactLayout = {
 };
 
 const GREENFIELD_REQUIRED_FILES = [
-  "status.md",
   path.join("gate-a-intake", "intake.json"),
   path.join("gate-b-spec", "spec.json"),
   path.join("gate-c-task-graph", "task-graph.json"),

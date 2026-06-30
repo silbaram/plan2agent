@@ -54,7 +54,7 @@ Return intake_json conforming to .plan2agent/schemas/intake.schema.json and a ta
 
 {{args}}
 
-Return review_report with blocking issues, non-blocking risks, missing acceptance criteria, oversized tasks, dependency issues, schema_or_gate_issues, and recommended changes.`,
+Return review_json with blocking issues, non-blocking risks, missing acceptance criteria, oversized tasks, dependency issues, schema_or_gate_issues, and recommended changes. Generate Markdown only as an optional view.`,
   },
   spec: {
     skill: 'p2a-spec',
@@ -63,7 +63,7 @@ Return review_report with blocking issues, non-blocking risks, missing acceptanc
 
 {{args}}
 
-Return product_spec_markdown, implementation_plan_markdown, spec_json conforming to .plan2agent/schemas/spec.schema.json, and open_decisions. Keep approval as draft until explicitly approved.`,
+Return spec_json conforming to .plan2agent/schemas/spec.schema.json and open_decisions. Keep approval as draft until explicitly approved; when approved, include approval_audit. Generate Markdown only as an optional view.`,
   },
   'task-author': {
     skill: 'p2a-task-author',

@@ -124,5 +124,13 @@
       "url": "https://redis.io/docs/latest/develop/reference/eviction/",
       "used_for": "Kept Redis as behavior inspiration while explicitly excluding protocol/server compatibility."
     }
-  ]
+  ],
+  "approval_audit": {
+    "approved_by": "user",
+    "approved_at": "2026-06-13",
+    "approved_artifacts": [
+      "spec.approved.json"
+    ],
+    "approval_note": "Approved fixture spec with no open decisions."
+  }
 }

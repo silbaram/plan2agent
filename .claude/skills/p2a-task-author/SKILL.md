@@ -89,22 +89,16 @@ After writing the draft, hand it to the human gate with these steps:
    node .plan2agent/scripts/p2a_iteration.mjs validate --artifacts <root> --stage gate-c-draft
    ```
 
-2. If the human approves after review, add this block to `status.md`:
-
-   ```markdown
-   #### Gate C approval audit
-   - Approved by: user
-   - Approved at: YYYY-MM-DD
-   - Approved source: gate-c-task-graph/task-graph.draft.json (agent-authored)
-   - Authoring agent: <codex|claude|gemini> / p2a-task-author
-   - Approval note: <review rationale>
-   ```
-
-3. Promote the approved draft:
+2. If the human approves after review, promote the approved draft and record the Gate C audit in `current-spec.json`:
 
    ```bash
-   node .plan2agent/scripts/p2a_iteration.mjs promote-tasks --artifacts <root>
+   node .plan2agent/scripts/p2a_iteration.mjs promote-tasks \
+     --artifacts <root> \
+     --approved-by user \
+     --approval-note "<review rationale>"
    ```
+
+   `promote-tasks` records `current-spec.json.gate_c_approval_audits[active_iteration]`, writes `task-graph.draft.meta.json`, and promotes the draft to canonical `task-graph.json`.
 
 ## Constraints
 

@@ -6,10 +6,10 @@ import path from 'node:path';
 import process from 'node:process';
 import {
   loadJson,
+  validateCurrentSpecGateBApprovalAudit,
+  validateCurrentSpecGateCApprovalAudit,
   validateReviewPass,
   validateSpec,
-  validateStatusApprovalAudit,
-  validateStatusDoc,
   validateTaskGraph,
   ValidationError,
 } from './validate_artifacts.mjs';
@@ -132,9 +132,9 @@ function validateReadyIterationArtifacts(state) {
   if (spec.open_decisions.length) {
     throw new ValidationError(`ready iteration requires spec.open_decisions to be empty, got ${JSON.stringify(spec.open_decisions)}`);
   }
-  validateStatusDoc(state.statusPath);
-  validateStatusApprovalAudit(state.statusPath, spec);
+  validateCurrentSpecGateBApprovalAudit(state.currentSpec, state.activeIteration, spec);
   validateTaskGraph(state.taskGraphPath, state.specPath);
+  validateCurrentSpecGateCApprovalAudit(state.currentSpec, state.activeIteration);
   const review = validateReviewPass(state.reviewPath);
   validateReviewReferences({
     review,
@@ -164,7 +164,6 @@ export function resolveIterationState(artifactPath, options = {}) {
   const currentSpecPath = path.join(artifactRoot, 'current-spec.json');
   const iterationsRoot = path.join(artifactRoot, 'iterations');
 
-  assertFile(statusPath, 'status.md');
   assertFile(currentSpecPath, 'current-spec.json');
   assertDirectory(iterationsRoot, 'iterations');
 
@@ -175,14 +174,9 @@ export function resolveIterationState(artifactPath, options = {}) {
 
   const activeIteration = currentSpec.active_iteration;
   assertSafeIterationId(activeIteration);
-  const statusActiveIteration = parseStatusActiveIteration(statusPath);
-  if (!statusActiveIteration) {
-    throw new ValidationError('status.md active iteration pointer is missing');
-  }
-  assertSafeIterationId(statusActiveIteration);
-  if (statusActiveIteration !== activeIteration) {
-    throw new ValidationError(`status.md active iteration ${JSON.stringify(statusActiveIteration)} does not match current-spec.json active_iteration ${JSON.stringify(activeIteration)}`);
-  }
+  const statusActiveIteration = existsSync(statusPath) && lstatSync(statusPath).isFile()
+    ? parseStatusActiveIteration(statusPath)
+    : null;
 
   const iterationRoot = path.join(iterationsRoot, activeIteration);
   const gateBSpecRoot = path.join(iterationRoot, 'gate-b-spec');

@@ -138,5 +138,13 @@
       "url": "https://nodejs.org/en/learn/getting-started/introduction-to-nodejs",
       "used_for": "Grounded the TypeScript/Node.js HTTP-service runtime choice used by the Gate B implementation plan."
     }
-  ]
+  ],
+  "approval_audit": {
+    "approved_by": "user",
+    "approved_at": "2026-06-13",
+    "approved_artifacts": [
+      "gate-b-spec/spec.json"
+    ],
+    "approval_note": "Approved after resolving ND-4 signature verification and confirming no open decisions remain."
+  }
 }

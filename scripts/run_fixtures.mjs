@@ -674,7 +674,44 @@ function validateIterationCurrentFixtureCases() {
       const artifactRoot = path.join(tempRoot, path.basename(caseData.artifact_root));
       cpSync(sourceRoot, artifactRoot, { recursive: true });
 
-      let result = runIteration(['init', '--artifacts', artifactRoot, '--iteration-id', 'v1-mvp']);
+      const greenfieldStatusText = readFileSync(path.join(artifactRoot, 'status.md'), 'utf8');
+      writeFileSync(path.join(artifactRoot, 'status.md'), '# broken generated status\n', 'utf8');
+      let result = runValidator(['--artifact-root', artifactRoot, '--project-id', caseData.project_id]);
+      checks += 1;
+      if (result.status !== 0 || !result.stdout.includes('artifact validation passed')) {
+        console.error(`artifact-root validation did not tolerate broken generated status.md structure: ${caseData.id}`);
+        writeResultOutput(result);
+        writeFileSync(path.join(artifactRoot, 'status.md'), greenfieldStatusText, 'utf8');
+        return { status: failureStatus(result), checks };
+      }
+      result = runValidator(['--status', path.join(artifactRoot, 'status.md')]);
+      checks += 1;
+      const explicitGreenfieldStatusOutput = `${result.stdout ?? ''}${result.stderr ?? ''}`;
+      if (result.status === 0 || !explicitGreenfieldStatusOutput.includes('status.md missing Progress line')) {
+        console.error(`explicit status validator did not reject broken greenfield status.md structure: ${caseData.id}`);
+        writeResultOutput(result);
+        writeFileSync(path.join(artifactRoot, 'status.md'), greenfieldStatusText, 'utf8');
+        return { status: 1, checks };
+      }
+      writeFileSync(path.join(artifactRoot, 'status.md'), greenfieldStatusText, 'utf8');
+
+      const markdownOnlyRoot = path.join(tempRoot, 'markdown-only-gate-root');
+      mkdirSync(path.join(markdownOnlyRoot, 'gate-a-intake'), { recursive: true });
+      mkdirSync(path.join(markdownOnlyRoot, 'gate-b-spec'), { recursive: true });
+      mkdirSync(path.join(markdownOnlyRoot, 'gate-d-review'), { recursive: true });
+      cpSync(path.join(artifactRoot, 'gate-a-intake', 'intake.json'), path.join(markdownOnlyRoot, 'gate-a-intake', 'intake.json'));
+      writeFileSync(path.join(markdownOnlyRoot, 'gate-b-spec', 'product-spec.md'), '# generated product spec view\n', 'utf8');
+      writeFileSync(path.join(markdownOnlyRoot, 'gate-b-spec', 'implementation-plan.md'), '# generated implementation plan view\n', 'utf8');
+      writeFileSync(path.join(markdownOnlyRoot, 'gate-d-review', 'review-report.md'), '# generated review view\n', 'utf8');
+      result = runValidator(['--artifact-root', markdownOnlyRoot, '--project-id', caseData.project_id]);
+      checks += 1;
+      if (result.status !== 0 || !result.stdout.includes('artifact validation passed')) {
+        console.error(`artifact-root validation treated generated markdown views as gate presence: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: failureStatus(result), checks };
+      }
+
+      result = runIteration(['init', '--artifacts', artifactRoot, '--iteration-id', 'v1-mvp']);
       checks += 1;
       if (result.status !== 0) {
         console.error(`iteration init fixture check failed: ${caseData.id}`);
@@ -730,8 +767,17 @@ function validateIterationCurrentFixtureCases() {
       result = runIteration(['validate', '--artifacts', artifactRoot]);
       checks += 1;
       const brokenStatusOutput = `${result.stdout ?? ''}${result.stderr ?? ''}`;
-      if (result.status === 0 || !brokenStatusOutput.includes('status.md missing Progress line')) {
-        console.error(`iteration validate fixture did not reject broken status.md structure: ${caseData.id}`);
+      if (result.status !== 0 || !brokenStatusOutput.includes('iteration validation passed')) {
+        console.error(`iteration validate fixture did not tolerate broken generated status.md structure: ${caseData.id}`);
+        writeResultOutput(result);
+        writeFileSync(path.join(artifactRoot, 'status.md'), statusText, 'utf8');
+        return { status: failureStatus(result), checks };
+      }
+      result = runValidator(['--status', path.join(artifactRoot, 'status.md')]);
+      checks += 1;
+      const explicitStatusOutput = `${result.stdout ?? ''}${result.stderr ?? ''}`;
+      if (result.status === 0 || !explicitStatusOutput.includes('status.md missing Progress line')) {
+        console.error(`explicit status validator did not reject broken status.md structure: ${caseData.id}`);
         writeResultOutput(result);
         writeFileSync(path.join(artifactRoot, 'status.md'), statusText, 'utf8');
         return { status: 1, checks };
@@ -3159,8 +3205,17 @@ function validateIterationCurrentFixtureCases() {
       result = runIteration(['validate', '--artifacts', artifactRoot, '--allow-planning']);
       checks += 1;
       const brokenPlanningStatusOutput = `${result.stdout ?? ''}${result.stderr ?? ''}`;
-      if (result.status === 0 || !brokenPlanningStatusOutput.includes('status.md missing Progress line')) {
-        console.error(`iteration planning validate did not reject broken status.md structure: ${caseData.id}`);
+      if (result.status !== 0 || !brokenPlanningStatusOutput.includes('stage: gate-b-draft')) {
+        console.error(`iteration planning validate did not tolerate broken generated status.md structure: ${caseData.id}`);
+        writeResultOutput(result);
+        writeFileSync(path.join(artifactRoot, 'status.md'), draftStatusText, 'utf8');
+        return { status: failureStatus(result), checks };
+      }
+      result = runValidator(['--status', path.join(artifactRoot, 'status.md')]);
+      checks += 1;
+      const explicitPlanningStatusOutput = `${result.stdout ?? ''}${result.stderr ?? ''}`;
+      if (result.status === 0 || !explicitPlanningStatusOutput.includes('status.md missing Progress line')) {
+        console.error(`explicit status validator did not reject broken planning status.md structure: ${caseData.id}`);
         writeResultOutput(result);
         writeFileSync(path.join(artifactRoot, 'status.md'), draftStatusText, 'utf8');
         return { status: 1, checks };
@@ -3169,8 +3224,15 @@ function validateIterationCurrentFixtureCases() {
 
       const approvedDraftSpec = JSON.parse(readFileSync(draftSpecPath, 'utf8'));
       approvedDraftSpec.approval = 'approved';
+      approvedDraftSpec.approval_audit = {
+        approved_by: 'user',
+        approved_at: '2026-06-15',
+        approved_artifacts: ['iterations/iter-002/gate-b-spec/spec.json'],
+        approval_note: 'Fixture approved iter-002 Gate B draft spec for promotion.',
+      };
       writeFileSync(draftSpecPath, `${JSON.stringify(approvedDraftSpec, null, 2)}\n`, 'utf8');
       const iter2TaskGraphPath = path.join(artifactRoot, 'iterations', 'iter-002', 'gate-c-task-graph', 'task-graph.json');
+      const iter2DraftPath = path.join(artifactRoot, 'iterations', 'iter-002', 'gate-c-task-graph', 'task-graph.draft.json');
       const iter2ReviewPath = path.join(artifactRoot, 'iterations', 'iter-002', 'gate-d-review', 'review.json');
       const iter2ReviewReportPath = path.join(artifactRoot, 'iterations', 'iter-002', 'gate-d-review', 'review-report.md');
 
@@ -3202,50 +3264,116 @@ function validateIterationCurrentFixtureCases() {
 
       result = runIteration(['diff-tasks', '--artifacts', artifactRoot]);
       checks += 1;
-      if (result.status !== 0 || !result.stdout.includes('diff task graph generated')) {
+      if (
+        result.status !== 0
+        || !result.stdout.includes('diff task graph draft generated')
+        || !existsSync(iter2DraftPath)
+        || existsSync(iter2TaskGraphPath)
+      ) {
         console.error(`iteration diff-tasks fixture check failed: ${caseData.id}`);
         writeResultOutput(result);
         return { status: failureStatus(result), checks };
       }
-      let iter2TaskGraph = JSON.parse(readFileSync(iter2TaskGraphPath, 'utf8'));
-      if (iter2TaskGraph.sourceSpec !== '../gate-b-spec/spec.json' || !iter2TaskGraph.tasks.length) {
-        console.error(`iteration diff-tasks wrote invalid task graph fixture: ${caseData.id}`);
-        console.error(JSON.stringify(iter2TaskGraph, null, 2));
+      let iter2DraftGraph = JSON.parse(readFileSync(iter2DraftPath, 'utf8'));
+      if (iter2DraftGraph.sourceSpec !== '../gate-b-spec/spec.json' || !iter2DraftGraph.tasks.length) {
+        console.error(`iteration diff-tasks wrote invalid task graph draft fixture: ${caseData.id}`);
+        console.error(JSON.stringify(iter2DraftGraph, null, 2));
         return { status: 1, checks };
       }
-      const iter2VerificationTask = iter2TaskGraph.tasks.find((task) => task.targetArea === 'verification');
-      const iter2ImplementationTaskIds = iter2TaskGraph.tasks
+      const iter2VerificationTask = iter2DraftGraph.tasks.find((task) => task.targetArea === 'verification');
+      const iter2ImplementationTaskIds = iter2DraftGraph.tasks
         .filter((task) => task.targetArea !== 'verification')
         .map((task) => task.id);
       if (
-        iter2TaskGraph.tasks.length >= 16
+        iter2DraftGraph.tasks.length >= 16
         || !iter2VerificationTask
         || JSON.stringify(iter2VerificationTask.dependencies) !== JSON.stringify(iter2ImplementationTaskIds)
-        || !iter2TaskGraph.tasks.some((task) => task.title.startsWith('Rework '))
-        || !iter2TaskGraph.tasks.some((task) => task.description.includes('Rework previous completed task'))
+        || !iter2DraftGraph.tasks.some((task) => task.title.startsWith('Rework '))
+        || !iter2DraftGraph.tasks.some((task) => task.description.includes('Rework previous completed task'))
       ) {
         console.error(`iteration diff-tasks did not generate expected semantic/rework graph: ${caseData.id}`);
-        console.error(JSON.stringify(iter2TaskGraph, null, 2));
+        console.error(JSON.stringify(iter2DraftGraph, null, 2));
         return { status: 1, checks };
       }
 
+      result = runIteration(['validate', '--artifacts', artifactRoot, '--stage', 'gate-c-draft']);
+      checks += 1;
+      if (result.status !== 0 || !result.stdout.includes('gate-c draft valid')) {
+        console.error(`iteration diff-tasks draft validation fixture check failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: failureStatus(result), checks };
+      }
+
+      result = runIteration([
+        'promote-tasks',
+        '--artifacts',
+        artifactRoot,
+        '--approved-by',
+        'user',
+        '--approval-note',
+        'Fixture reviewed the semantic diff Gate C draft task graph.',
+      ]);
+      checks += 1;
+      if (
+        result.status !== 0
+        || !result.stdout.includes('Plan2Agent tasks promoted')
+        || !existsSync(iter2TaskGraphPath)
+        || existsSync(iter2DraftPath)
+      ) {
+        console.error(`iteration diff-tasks promote fixture check failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: failureStatus(result), checks };
+      }
+
+      let iter2TaskGraph = JSON.parse(readFileSync(iter2TaskGraphPath, 'utf8'));
       const originalSemanticTaskIds = iter2TaskGraph.tasks.map((task) => task.id);
       result = runIteration(['diff-tasks', '--artifacts', artifactRoot, '--force']);
       checks += 1;
-      if (result.status !== 0 || !result.stdout.includes('reused active tasks:')) {
+      if (result.status !== 0 || !result.stdout.includes('reused active tasks:') || !existsSync(iter2DraftPath)) {
         console.error(`iteration diff-tasks --force reuse fixture check failed: ${caseData.id}`);
         writeResultOutput(result);
         return { status: failureStatus(result), checks };
       }
-      iter2TaskGraph = JSON.parse(readFileSync(iter2TaskGraphPath, 'utf8'));
+      iter2DraftGraph = JSON.parse(readFileSync(iter2DraftPath, 'utf8'));
+	      if (
+	        JSON.stringify(iter2DraftGraph.tasks.map((task) => task.id)) !== JSON.stringify(originalSemanticTaskIds)
+	        || !iter2DraftGraph.tasks.some((task) => task.description.includes('Reuses existing active task id'))
+	      ) {
+	        console.error(`iteration diff-tasks --force did not reuse active semantic tasks: ${caseData.id}`);
+	        console.error(JSON.stringify(iter2DraftGraph, null, 2));
+	        return { status: 1, checks };
+	      }
+
+	      result = runIteration(['promote-tasks', '--artifacts', artifactRoot]);
+	      checks += 1;
+	      const staleGateCAuditOutput = `${result.stdout ?? ''}${result.stderr ?? ''}`;
+	      if (result.status === 0 || !staleGateCAuditOutput.includes('does not match current task-graph.draft.json')) {
+	        console.error(`iteration promote-tasks reused stale Gate C audit for regenerated draft: ${caseData.id}`);
+	        writeResultOutput(result);
+	        return { status: 1, checks };
+	      }
+
+	      result = runIteration([
+	        'promote-tasks',
+	        '--artifacts',
+        artifactRoot,
+        '--approved-by',
+        'user',
+        '--approval-note',
+        'Fixture reviewed regenerated semantic diff task graph.',
+      ]);
+      checks += 1;
       if (
-        JSON.stringify(iter2TaskGraph.tasks.map((task) => task.id)) !== JSON.stringify(originalSemanticTaskIds)
-        || !iter2TaskGraph.tasks.some((task) => task.description.includes('Reuses existing active task id'))
+        result.status !== 0
+        || !result.stdout.includes('Plan2Agent tasks promoted')
+        || !existsSync(iter2TaskGraphPath)
+        || existsSync(iter2DraftPath)
       ) {
-        console.error(`iteration diff-tasks --force did not reuse active semantic tasks: ${caseData.id}`);
-        console.error(JSON.stringify(iter2TaskGraph, null, 2));
-        return { status: 1, checks };
+        console.error(`iteration diff-tasks --force promote fixture check failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: failureStatus(result), checks };
       }
+      iter2TaskGraph = JSON.parse(readFileSync(iter2TaskGraphPath, 'utf8'));
       for (const task of iter2TaskGraph.tasks) task.status = 'done';
       writeFileSync(iter2TaskGraphPath, `${JSON.stringify(iter2TaskGraph, null, 2)}\n`, 'utf8');
       cpSync(closedBaselineReviewPath, iter2ReviewPath);
@@ -3699,6 +3827,12 @@ function validateIterationCurrentFixtureCases() {
 
       const approvedIter3Spec = JSON.parse(readFileSync(iter3SpecPath, 'utf8'));
       approvedIter3Spec.approval = 'approved';
+      approvedIter3Spec.approval_audit = {
+        approved_by: 'user',
+        approved_at: '2026-06-15',
+        approved_artifacts: ['iterations/iter-003/gate-b-spec/spec.json'],
+        approval_note: 'Fixture approved iter-003 Gate B draft spec for promotion.',
+      };
       writeFileSync(iter3SpecPath, `${JSON.stringify(approvedIter3Spec, null, 2)}\n`, 'utf8');
       result = runIteration(['promote-spec', '--artifacts', artifactRoot]);
       checks += 1;
@@ -3866,7 +4000,7 @@ function validateIterationCurrentFixtureCases() {
       const promoteTasksNoAuditOutput = `${result.stdout ?? ''}${result.stderr ?? ''}`;
       if (
         result.status === 0
-        || !promoteTasksNoAuditOutput.includes('Gate C approval audit block required')
+        || !promoteTasksNoAuditOutput.includes('Gate C approval audit required in current-spec.json')
         || existsSync(iter3TaskGraphPath)
         || !existsSync(iter3DraftPath)
       ) {
@@ -3875,12 +4009,15 @@ function validateIterationCurrentFixtureCases() {
         return { status: 1, checks };
       }
 
-      writeFileSync(
-        path.join(artifactRoot, 'status.md'),
-        `${readFileSync(path.join(artifactRoot, 'status.md'), 'utf8')}\n#### Gate C approval audit\n- Approved by: user\n- Approved at: 2026-06-15\n- Approved source: gate-c-task-graph/task-graph.draft.json (agent-authored)\n- Authoring agent: codex / p2a-task-author\n- Approval note: Fixture reviewed the Gate C draft task graph.\n`,
-        'utf8',
-      );
-      result = runIteration(['promote-tasks', '--artifacts', artifactRoot]);
+      result = runIteration([
+        'promote-tasks',
+        '--artifacts',
+        artifactRoot,
+        '--approved-by',
+        'user',
+        '--approval-note',
+        'Fixture reviewed the Gate C draft task graph.',
+      ]);
       checks += 1;
       const promotedDraftPath = `${iter3DraftPath}.promoted`;
       if (
@@ -3914,21 +4051,24 @@ function validateIterationCurrentFixtureCases() {
         || iter3DraftMeta.schema_version !== 'p2a.task_graph_draft_meta.v1'
         || iter3DraftMeta.iteration_id !== 'iter-003'
         || typeof iter3DraftMeta.draft_sha256 !== 'string'
-        || iter3DraftMeta.gate_c_approval_audit?.authoring_agent !== 'codex / p2a-task-author'
+        || iter3DraftMeta.gate_c_approval_audit?.approved_by !== 'user'
+        || iter3DraftMeta.gate_c_approval_audit?.approval_note !== 'Fixture reviewed the Gate C draft task graph.'
       ) {
         console.error(`iteration promote-tasks did not write provenance sidecar: ${caseData.id}`);
         console.error(JSON.stringify(iter3DraftMeta, null, 2));
         return { status: 1, checks };
       }
 
-      const currentSpec = JSON.parse(readFileSync(state.currentSpecPath, 'utf8'));
-      currentSpec.active_iteration = 'iter-004';
-      writeFileSync(state.currentSpecPath, `${JSON.stringify(currentSpec, null, 2)}\n`, 'utf8');
+      const statusBeforeMismatch = readFileSync(path.join(artifactRoot, 'status.md'), 'utf8');
+      writeFileSync(
+        path.join(artifactRoot, 'status.md'),
+        statusBeforeMismatch.replace(/p2a:active-iteration=\S+/, 'p2a:active-iteration=stale-status'),
+        'utf8',
+      );
       result = runIteration(['current', '--artifacts', artifactRoot]);
       checks += 1;
-      const mismatchOutput = `${result.stdout ?? ''}${result.stderr ?? ''}`;
-      if (result.status === 0 || !mismatchOutput.includes('does not match current-spec.json active_iteration')) {
-        console.error(`iteration current fixture did not reject status/current-spec mismatch: ${caseData.id}`);
+      if (result.status !== 0 || !result.stdout.includes('active iteration: iter-003')) {
+        console.error(`iteration current fixture did not ignore stale status/current-spec mismatch: ${caseData.id}`);
         writeResultOutput(result);
         return { status: 1, checks };
       }

@@ -57,7 +57,7 @@ function usage() {
     'Handoff options:',
     '  --mode copy|move     Copy artifacts by default; move removes source files after successful write.',
     '  --iteration-id <id>  Use iterative artifacts. Default: active when --artifacts is an iterative root.',
-    '  --include-intake     Include gate-a-intake/intake.md (intake.json is always copied for spec traceability).',
+    '  --include-intake     Include generated gate-a-intake/intake.md when present (intake.json is always copied).',
     '  --tools <list>       Copy P2A AI tool assets for codex,claude,gemini. Use comma list or all.',
     '  --include-team-bigfive',
     '                       Install Team Big Five adapter files for selected CLI targets.',
@@ -263,14 +263,10 @@ function validateIterationHandoffSource(artifactsRoot, projectId, iterationIdArg
   const iterationId = iterationIdArg === DEFAULT_ITERATION_ID ? state.activeIteration : iterationIdArg;
   const paths = iterationGatePaths(artifactsRoot, iterationId, state.currentSpecPath);
 
-  assertFile(paths.statusDoc, 'status.md');
   assertFile(paths.currentSpec, 'current-spec.json');
   assertNoCurrentSpecOpenDecisions(state.currentSpec);
-  assertFile(paths.productSpec, `iterations/${iterationId}/gate-b-spec/product-spec.md`);
-  assertFile(paths.implementationPlan, `iterations/${iterationId}/gate-b-spec/implementation-plan.md`);
   assertFile(paths.specJson, `iterations/${iterationId}/gate-b-spec/spec.json`);
   assertFile(paths.taskGraph, `iterations/${iterationId}/gate-c-task-graph/task-graph.json`);
-  assertFile(paths.reviewReport, `iterations/${iterationId}/gate-d-review/review-report.md`);
   assertFile(paths.reviewJson, `iterations/${iterationId}/gate-d-review/review.json`);
 
   const spec = validateSpec(paths.specJson);
@@ -320,6 +316,13 @@ function pushArtifact(plan, source, targetRoot, targetRelative, options = {}) {
     target: targetPath(targetRoot, targetRelative),
     transform: options.transform ?? null,
   });
+}
+
+function pushArtifactIfExists(plan, source, targetRoot, targetRelative, options = {}) {
+  if (!existsSync(source)) return false;
+  assertFile(source, targetRelative);
+  pushArtifact(plan, source, targetRoot, targetRelative, options);
+  return true;
 }
 
 function maintenanceTaskGraphSourcePath(artifactsRoot) {
@@ -1088,21 +1091,19 @@ function buildPlan(paths, args, artifactsRoot, targetRoot, sourceInfo, options =
   const targetIntakeRef = normalizePath(targetIntakeJsonPath(args.projectId));
   const targetSpecRef = normalizePath(targetSpecJsonPath(args.projectId));
   const targetTaskGraphRef = normalizePath(targetTaskGraphPath(args.projectId));
-  pushArtifact(plan, paths.productSpec, targetRoot, path.join(artifactTargetDir, 'gate-b-spec', 'product-spec.md'));
-  pushArtifact(plan, paths.implementationPlan, targetRoot, path.join(artifactTargetDir, 'gate-b-spec', 'implementation-plan.md'));
-  pushArtifact(plan, paths.specJson, targetRoot, targetSpecJsonPath(args.projectId), { type: 'rewrite-json', transform: (source) => rebaseSpecSourceIntake(source, targetIntakeRef) });
+  pushArtifactIfExists(plan, paths.productSpec, targetRoot, path.join(artifactTargetDir, 'gate-b-spec', 'product-spec.md'));
+  pushArtifactIfExists(plan, paths.implementationPlan, targetRoot, path.join(artifactTargetDir, 'gate-b-spec', 'implementation-plan.md'));
+  pushArtifact(plan, paths.specJson, targetRoot, targetSpecJsonPath(args.projectId), { type: 'rewrite-json', transform: (source) => rebaseSpecSourceIntake(source, targetIntakeRef, targetSpecRef) });
   pushArtifact(plan, paths.taskGraph, targetRoot, targetTaskGraphPath(args.projectId), { type: 'rewrite-json', transform: (source) => rebaseTaskGraphSourceSpec(source, targetSpecRef) });
-  pushArtifact(plan, paths.reviewReport, targetRoot, path.join(artifactTargetDir, 'gate-d-review', 'review-report.md'));
+  pushArtifactIfExists(plan, paths.reviewReport, targetRoot, path.join(artifactTargetDir, 'gate-d-review', 'review-report.md'));
   pushArtifact(plan, paths.reviewJson, targetRoot, path.join(artifactTargetDir, 'gate-d-review', 'review.json'));
 
   assertFile(paths.intakeJson, 'gate-a-intake/intake.json');
   pushArtifact(plan, paths.intakeJson, targetRoot, targetIntakeJsonPath(args.projectId));
   if (args.includeIntake) {
-    assertFile(paths.intakeMd, 'gate-a-intake/intake.md');
-    pushArtifact(plan, paths.intakeMd, targetRoot, path.join(artifactTargetDir, 'gate-a-intake', 'intake.md'));
+    pushArtifactIfExists(plan, paths.intakeMd, targetRoot, path.join(artifactTargetDir, 'gate-a-intake', 'intake.md'));
   }
 
-  assertFile(paths.statusDoc, 'status.md');
   const currentSpecForHandoff = record && sourceInfo.currentSpec
     ? appendHandoffRecord(sourceInfo.currentSpec, record)
     : null;
@@ -1114,7 +1115,7 @@ function buildPlan(paths, args, artifactsRoot, targetRoot, sourceInfo, options =
       renderIterationIndexMarkdown(artifactsRoot, currentSpecForHandoff),
     );
   } else {
-    pushArtifact(plan, paths.statusDoc, targetRoot, path.join(artifactTargetDir, 'status.md'));
+    pushArtifactIfExists(plan, paths.statusDoc, targetRoot, path.join(artifactTargetDir, 'status.md'));
   }
   if (sourceInfo.currentSpecPath) {
     if (currentSpecForHandoff) {
@@ -1210,13 +1211,13 @@ function normalizePath(filePath) {
   return filePath.split(path.sep).join('/');
 }
 
-function rebaseSpecSourceIntake(source, sourceIntakeRef) {
+function rebaseSpecSourceIntake(source, sourceIntakeRef, sourceSpecRef) {
   const spec = loadJson(source);
   spec.source_intake = sourceIntakeRef;
-  const sourceText = readFileSync(source, 'utf8');
-  const rewritten = sourceText.replace(/(\"source_intake\"\s*:\s*)\"(?:[^\"\\]|\\.)*\"/, `$1${JSON.stringify(sourceIntakeRef)}`);
-  if (rewritten === sourceText) throw new Error(`could not rebase source_intake in ${source}`);
-  return rewritten;
+  if (spec.approval_audit) {
+    spec.approval_audit.approved_artifacts = [sourceSpecRef];
+  }
+  return `${JSON.stringify(spec, null, 2)}\n`;
 }
 
 function rebaseTaskGraphSourceSpec(source, sourceSpecRef) {
@@ -1485,7 +1486,6 @@ function readinessProblems(status) {
   if (!status.b) missing.push('B');
   if (!status.c) missing.push('C');
   if (!status.d) missing.push('D');
-  if (!status.statusDoc) problems.push('status.md 누락/검증 실패');
   if (missing.length) problems.push(`게이트 누락: ${missing.join(', ')}`);
   if (!status.approved) problems.push('미승인(spec.approval != approved)');
   if (status.openDecisions === null) problems.push('열린 결정 수 확인 불가');
