@@ -121,7 +121,7 @@ Gate D의 정본 산출물은 `review_json`이며 파일로는 `gate-d-review/re
 | `gate-d-review/review.json` | Gate D의 machine-readable canonical review result다. Validator, iteration 전환, handoff 준비 여부는 이 파일의 `blocking_issues`가 빈 배열인지로 판단한다. |
 | `gate-d-review/review-report.md` | `review.json`의 동일 findings를 사람이 읽기 쉽게 렌더링한 Markdown 보고서다. blocking issues, non-blocking risks, 누락된 테스트/완료 기준, oversized tasks, dependency issues, gate issues, 추천 변경 사항을 담는다. |
 
-`.plan2agent/artifacts/<project_id>/` 산출물은 git에 커밋해 기획 이력(파일 기반 versioning)으로 보존한다. 따라서 artifact 디렉터리는 ignore하지 않고, 변경된 계획과 task graph를 파일 히스토리로 추적한다.
+`.plan2agent/` 아래 산출물은 application source git에 커밋하지 않는 로컬 하네스 상태다. 기획 이력, task/run 진행, 검증 결과의 장기 보존은 Plan2Agent Memory 같은 artifact store에 동기화하는 방향을 기준으로 한다. 로컬 파일은 게이트 검증, 재개, UI 표시를 위한 working cache이며, git commit은 제품 소스코드 변경 이력에 집중한다.
 
 ### 3.1 산출물과 스키마 매핑
 

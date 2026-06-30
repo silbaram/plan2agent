@@ -21,6 +21,9 @@ import type {
   OrchestrationMode,
   OrchestrationRoleStatus,
   OrchestrationRuntimePhase,
+  ProposalRisk,
+  ProposalStatus,
+  ProposalSummary,
   ProjectDetectionState,
   ProjectDiagnostic,
   ProjectFileCheck,
@@ -127,6 +130,14 @@ function isVerificationType(value: unknown): value is VerificationType {
 
 function isVerificationStatus(value: unknown): value is VerificationStatus {
   return value === "passed" || value === "failed" || value === "skipped" || value === "not_run";
+}
+
+function isProposalStatus(value: unknown): value is ProposalStatus {
+  return value === "proposed" || value === "approved" || value === "rejected" || value === "deferred";
+}
+
+function isProposalRisk(value: unknown): value is ProposalRisk {
+  return value === "low" || value === "medium" || value === "high";
 }
 
 function isFailureClass(value: unknown): value is FailureClass {
@@ -272,6 +283,7 @@ function diagnosticsFromValidation(validation: SchemaValidationSummary): Project
 }
 
 function stateLabel(state: ProjectDetectionState): string {
+  if (state === "cycle_close_ready") return "Cycle close-ready";
   if (state === "execution_ready") return "Execution ready";
   if (state === "iteration_init_required") return "Iteration init required";
   if (state === "planning_in_progress") return "Planning in progress";
@@ -300,6 +312,17 @@ function countTasks(tasks: WorkbenchTask[]): TaskCounts {
       done: counts.done + (task.status === "done" ? 1 : 0),
     };
   }, EMPTY_TASK_COUNTS);
+}
+
+function artifactIsCycleCloseReady(artifact: ArtifactSummary): boolean {
+  return Boolean(
+    artifact.activeIteration &&
+      artifact.taskCounts.total > 0 &&
+      artifact.taskCounts.done === artifact.taskCounts.total &&
+      artifact.taskCounts.todo === 0 &&
+      artifact.taskCounts.inProgress === 0 &&
+      artifact.taskCounts.blocked === 0,
+  );
 }
 
 function normalizeTask(
@@ -1055,6 +1078,75 @@ async function looksLikeArtifactRoot(candidateRoot: string): Promise<boolean> {
   return false;
 }
 
+function proposalStatusRank(status: ProposalStatus): number {
+  if (status === "proposed") return 0;
+  if (status === "approved") return 1;
+  if (status === "deferred") return 2;
+  return 3;
+}
+
+function proposalRiskRank(risk: ProposalRisk): number {
+  if (risk === "high") return 0;
+  if (risk === "medium") return 1;
+  return 2;
+}
+
+function normalizeProposal(rootPath: string, proposalPath: string, proposal: JsonRecord | null): ProposalSummary | null {
+  if (proposal?.schema_version !== "p2a.skill_proposal.v1") return null;
+  const proposalId = stringValue(proposal.proposalId);
+  const problem = stringValue(proposal.problem);
+  const recommendedChange = stringValue(proposal.recommendedChange);
+  const status = isProposalStatus(proposal.status) ? proposal.status : null;
+  const risk = isProposalRisk(proposal.risk) ? proposal.risk : null;
+  if (!proposalId || !problem || !recommendedChange || !status || !risk) return null;
+
+  return {
+    proposalId,
+    sourceRunId: stringValue(proposal.sourceRunId),
+    status,
+    risk,
+    problem,
+    recommendedChange,
+    targetFiles: stringArrayValue(proposal.targetFiles),
+    evidenceCount: Array.isArray(proposal.evidence) ? proposal.evidence.length : 0,
+    relativePath: normalizeRelative(rootPath, proposalPath),
+    note: stringValue(proposal.note),
+  };
+}
+
+async function summarizeProposals(rootPath: string): Promise<ProposalSummary[]> {
+  const proposalsDir = path.join(rootPath, ".plan2agent", "proposals");
+  let entries: Array<{ isFile(): boolean; name: string }>;
+  try {
+    entries = await readdir(proposalsDir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+
+  const proposals = await Promise.all(
+    entries
+      .filter((entry) => entry.isFile() && entry.name.endsWith(".json"))
+      .map(async (entry): Promise<ProposalSummary | null> => {
+        const proposalPath = path.join(proposalsDir, entry.name);
+        try {
+          return normalizeProposal(rootPath, proposalPath, await readJson(proposalPath));
+        } catch {
+          return null;
+        }
+      }),
+  );
+
+  return proposals
+    .filter((proposal): proposal is ProposalSummary => proposal !== null)
+    .sort((left, right) => {
+      const statusDiff = proposalStatusRank(left.status) - proposalStatusRank(right.status);
+      if (statusDiff !== 0) return statusDiff;
+      const riskDiff = proposalRiskRank(left.risk) - proposalRiskRank(right.risk);
+      if (riskDiff !== 0) return riskDiff;
+      return left.proposalId.localeCompare(right.proposalId);
+    });
+}
+
 async function discoverArtifactRoots(rootPath: string): Promise<string[]> {
   const artifactRoots = new Set<string>();
   if (await looksLikeArtifactRoot(rootPath)) {
@@ -1318,6 +1410,9 @@ function determineState(checks: ProjectFileCheck[], artifacts: ArtifactSummary[]
   if (artifacts.some((artifact) => artifact.requiresIterationInit)) {
     return "iteration_init_required";
   }
+  if (artifacts.some(artifactIsCycleCloseReady)) {
+    return "cycle_close_ready";
+  }
   if (artifacts.some((artifact) => artifact.taskCounts.ready > 0 || artifact.runCount > 0)) {
     return "execution_ready";
   }
@@ -1330,6 +1425,7 @@ function buildDiagnostics(
   state: ProjectDetectionState,
   checks: ProjectFileCheck[],
   artifacts: ArtifactSummary[],
+  proposals: ProposalSummary[],
 ): ProjectDiagnostic[] {
   const diagnostics = artifacts.flatMap((artifact) => artifact.diagnostics);
   const hasPlan2AgentDir = checks.some((check) => check.id === "p2a-dir" && check.exists);
@@ -1353,6 +1449,12 @@ function buildDiagnostics(
       message: "At least one ready task or run record was found.",
     });
   }
+  if (state === "cycle_close_ready") {
+    diagnostics.push({
+      severity: "ok",
+      message: "All active iteration tasks are done; the iteration is ready to close.",
+    });
+  }
   if (state === "iteration_init_required") {
     diagnostics.push({
       severity: "warn",
@@ -1363,6 +1465,12 @@ function buildDiagnostics(
     diagnostics.push({
       severity: "ok",
       message: "P2A markers exist, but no planning artifacts were found yet.",
+    });
+  }
+  if (proposals.length > 0) {
+    diagnostics.push({
+      severity: "ok",
+      message: `${proposals.length} proposal feedback item(s) found in .plan2agent/proposals.`,
     });
   }
 
@@ -1431,6 +1539,18 @@ function iterationInitCommand(artifact: ArtifactSummary): string {
   return `node .plan2agent/scripts/p2a_iteration.mjs init --artifacts ${shellQuote(artifact.rootPath)} --iteration-id v1-mvp`;
 }
 
+function iterationCloseCommand(artifact: ArtifactSummary): string {
+  return `node .plan2agent/scripts/p2a_iteration.mjs close --artifacts ${shellQuote(artifact.rootPath)}`;
+}
+
+function iterationOpenCommand(artifact: ArtifactSummary): string {
+  return `node .plan2agent/scripts/p2a_iteration.mjs open --artifacts ${shellQuote(artifact.rootPath)} --iteration-id '<next>' --idea '<text>'`;
+}
+
+function maintenanceAddCommand(artifact: ArtifactSummary): string {
+  return `node .plan2agent/scripts/p2a_iteration.mjs maintenance add --artifacts ${shellQuote(artifact.rootPath)} --title '<title>' --accept '<criterion>'`;
+}
+
 function installAction(rootPath: string): OnboardingAction {
   return {
     id: "install_p2a",
@@ -1461,6 +1581,42 @@ function iterationInitAction(rootPath: string, artifact: ArtifactSummary): Onboa
     label: "Initialize iteration",
     description: "Convert greenfield Gate artifacts into the iteration layout.",
     command: iterationInitCommand(artifact),
+    cwd: rootPath,
+    targetPath: artifact.rootPath,
+    impact: "writes_project",
+  };
+}
+
+function iterationCloseAction(rootPath: string, artifact: ArtifactSummary): OnboardingAction {
+  return {
+    id: "close_iteration",
+    label: "Close iteration",
+    description: "Archive the completed active iteration so the next cycle can start.",
+    command: iterationCloseCommand(artifact),
+    cwd: rootPath,
+    targetPath: artifact.rootPath,
+    impact: "writes_project",
+  };
+}
+
+function iterationOpenAction(rootPath: string, artifact: ArtifactSummary): OnboardingAction {
+  return {
+    id: "open_iteration",
+    label: "Open next iteration",
+    description: "Start the next feature cycle after the current iteration is closed.",
+    command: iterationOpenCommand(artifact),
+    cwd: rootPath,
+    targetPath: artifact.rootPath,
+    impact: "writes_project",
+  };
+}
+
+function maintenanceAddAction(rootPath: string, artifact: ArtifactSummary): OnboardingAction {
+  return {
+    id: "add_maintenance",
+    label: "Add maintenance task",
+    description: "Capture a small fix without opening a full feature iteration.",
+    command: maintenanceAddCommand(artifact),
     cwd: rootPath,
     targetPath: artifact.rootPath,
     impact: "writes_project",
@@ -1516,6 +1672,7 @@ function buildOnboardingChecks(
   );
   const hasReadyTask = artifacts.some((artifact) => artifact.taskCounts.ready > 0);
   const hasRunHistory = artifacts.some((artifact) => artifact.runCount > 0);
+  const hasCloseReadyCycle = artifacts.some(artifactIsCycleCloseReady);
 
   return [
     {
@@ -1541,13 +1698,15 @@ function buildOnboardingChecks(
       label: "Execution readiness",
       status: state === "iteration_init_required"
         ? "warn"
-        : hasReadyTask || hasRunHistory
+        : hasCloseReadyCycle || hasReadyTask || hasRunHistory
           ? "ok"
           : state === "execution_ready"
             ? "ok"
             : "warn",
       detail: state === "iteration_init_required"
         ? "iteration init required before task execution"
+        : hasCloseReadyCycle
+          ? "all active iteration tasks are done"
         : hasReadyTask
         ? "ready task available"
         : hasRunHistory
@@ -1621,6 +1780,25 @@ function buildOnboarding(
     };
   }
 
+  if (state === "cycle_close_ready") {
+    const primaryArtifact = artifacts.find(artifactIsCycleCloseReady) ?? artifacts[0];
+    return {
+      stage: "cycle_close_ready",
+      title: "Cycle close-ready",
+      summary: "All active iteration tasks are done. Close the iteration before opening the next cycle.",
+      primaryAction: primaryArtifact ? iterationCloseAction(rootPath, primaryArtifact) : validateAction(rootPath, artifacts),
+      secondaryActions: primaryArtifact
+        ? [
+            inspectTasksAction(rootPath, artifacts),
+            validateAction(rootPath, artifacts),
+            iterationOpenAction(rootPath, primaryArtifact),
+            maintenanceAddAction(rootPath, primaryArtifact),
+          ]
+        : [validateAction(rootPath, artifacts)],
+      checks: checksForUi,
+    };
+  }
+
   return {
     stage: "execution_ready",
     title: "Execution ready",
@@ -1641,9 +1819,10 @@ export async function loadProjectSnapshot(
   const artifacts = await Promise.all(
     artifactRoots.map((artifactRoot) => summarizeArtifact(normalizedRootPath, artifactRoot)),
   );
+  const proposals = await summarizeProposals(normalizedRootPath);
   const state = determineState(checks, artifacts);
   const primaryArtifact = artifacts[0] ?? null;
-  const diagnostics = buildDiagnostics(state, checks, artifacts);
+  const diagnostics = buildDiagnostics(state, checks, artifacts, proposals);
 
   return {
     rootPath: normalizedRootPath,
@@ -1659,6 +1838,7 @@ export async function loadProjectSnapshot(
     artifacts,
     onboarding: buildOnboarding(normalizedRootPath, state, checks, artifacts),
     commands: buildCommands(normalizedRootPath, state, artifacts),
+    proposals,
     diagnostics,
     generatedAt: new Date().toISOString(),
   };

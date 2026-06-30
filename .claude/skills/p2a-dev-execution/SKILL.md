@@ -45,10 +45,11 @@ Use these inputs:
    ```
 
    The worktree path must be a fresh empty path, following the `project.config.json` `runTracking.worktreePattern` convention (for example, `../.worktrees/<taskId>-<runId>`).
+   Run this command from an existing git workspace; the fresh worktree path does not need to exist before `--create-isolation`.
 
    Codex uses sandbox confinement. Claude write-capable runs require scaffold confinement (deny rules + PreToolUse hook, plus OS sandbox on macOS/Linux) and foreground human supervision for now; do not switch Claude to unattended `permissionMode` auto/background until the cross-OS spike is complete and a human explicitly approves that mode. Gemini is still read-only, so use the main-session fallback for Gemini.
 
-3. Before implementing, ensure the target project has a committed git baseline. If there is pre-existing untracked or scaffolded state, commit it first; otherwise `p2a_runs finish --collect-git` records the entire untracked tree as this task's `changedFiles` instead of only the files this task changed.
+3. Before implementing, ensure the target project has a committed source-code git baseline, excluding local `.plan2agent/` state. If there is pre-existing untracked application source, commit or intentionally ignore it first; otherwise `p2a_runs finish --collect-git` records the entire untracked source tree as this task's `changedFiles` instead of only the files this task changed.
 
 4. Implement the task while obeying the writing boundaries below. When possible, spawn the `p2a-implementer` subagent to perform the implementation inside the isolated worktree. Codex uses the `workspace-write` sandbox. Claude uses scaffold confinement for write-capable foreground-supervised runs; unattended `permissionMode` auto/background remains deferred until the cross-OS spike and explicit human decision. Gemini remains read-only, so use the main-session fallback for Gemini.
 

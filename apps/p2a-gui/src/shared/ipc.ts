@@ -56,6 +56,7 @@ export type ProjectDetectionState =
   | "planning_in_progress"
   | "iteration_init_required"
   | "execution_ready"
+  | "cycle_close_ready"
   | "broken_install";
 
 export type DiagnosticSeverity = "ok" | "warn" | "error";
@@ -108,6 +109,23 @@ export type RunStatus = "started" | "finished" | "failed" | "blocked";
 export type VerificationType = "test" | "lint" | "typecheck" | "custom";
 
 export type VerificationStatus = "passed" | "failed" | "skipped" | "not_run";
+
+export type ProposalStatus = "proposed" | "approved" | "rejected" | "deferred";
+
+export type ProposalRisk = "low" | "medium" | "high";
+
+export type ProposalSummary = {
+  proposalId: string;
+  sourceRunId: string | null;
+  status: ProposalStatus;
+  risk: ProposalRisk;
+  problem: string;
+  recommendedChange: string;
+  targetFiles: string[];
+  evidenceCount: number;
+  relativePath: string;
+  note: string | null;
+};
 
 export type FailureClass =
   | "verification_failed"
@@ -300,13 +318,17 @@ export type OnboardingStage =
   | "continue_planning"
   | "iteration_init_required"
   | "repair_validate"
-  | "execution_ready";
+  | "execution_ready"
+  | "cycle_close_ready";
 
 export type OnboardingAction = {
   id:
     | "install_p2a"
     | "import_plan"
     | "init_iteration"
+    | "close_iteration"
+    | "open_iteration"
+    | "add_maintenance"
     | "validate_artifacts"
     | "inspect_tasks"
     | "open_terminal";
@@ -362,6 +384,7 @@ export type ProjectSnapshot = {
   artifacts: ArtifactSummary[];
   onboarding: ProjectOnboarding;
   commands: CommandGuidance[];
+  proposals: ProposalSummary[];
   diagnostics: ProjectDiagnostic[];
   generatedAt: string;
 };

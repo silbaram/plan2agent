@@ -224,7 +224,7 @@ Skills:
 
 subagent는 read-only를 유지하며, 파일 기록은 하네스 오케스트레이터만 수행한다. `.plan2agent/scripts/validate_artifacts.mjs`로 이 파일들을 그대로 검증할 수 있다.
 
-`.plan2agent/artifacts/<project_id>/` 산출물은 git에 커밋해 기획 이력(파일 기반 versioning)으로 보존한다.
+`.plan2agent/` 아래 planning artifact, run log, proposal, 생성된 하네스 파일은 application source git에 커밋하지 않는 로컬 상태다. 장기 보존과 조회는 Plan2Agent Memory 같은 artifact store에 동기화하는 방향을 기준으로 하며, git commit은 제품 소스코드 변경 이력에 집중한다.
 
 
 ## Evidence와 Web citation 규칙

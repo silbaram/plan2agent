@@ -215,8 +215,6 @@ function validateScaffoldFixtureCase() {
     const claudeLocalSettings = JSON.parse(readFileSync(path.join(targetRoot, '.claude', 'settings.local.json'), 'utf8'));
     const gitignore = readFileSync(path.join(targetRoot, '.gitignore'), 'utf8');
     const gitignoreLines = new Set(gitignore.split(/\r?\n/));
-    const ignoredPlans = ['.plan2agent/artifacts', '.plan2agent/artifacts/<project>/gate-*', '.plan2agent/artifacts/**/gate-*']
-      .filter((line) => gitignoreLines.has(line));
     const expectedSandboxEnabled = process.platform === 'darwin' || process.platform === 'linux';
     if (
       missingFiles.length
@@ -229,14 +227,13 @@ function validateScaffoldFixtureCase() {
       || claudeSettings.hooks?.PreToolUse?.[0]?.hooks?.[0]?.command !== 'node .claude/hooks/p2a-confine-workspace.mjs'
       || (expectedSandboxEnabled && claudeLocalSettings.sandbox?.filesystem?.allowWrite?.[0] !== '.')
       || (!expectedSandboxEnabled && Object.keys(claudeLocalSettings).length !== 0)
-      || !gitignore.includes('.plan2agent/runs/')
-      || !gitignore.includes('.plan2agent/artifacts/**/runs/')
+      || !gitignoreLines.has('.plan2agent/')
+      || !gitignore.includes('Plan2Agent Memory')
       || !gitignore.includes('.claude/settings.local.json')
       || !gitignore.includes('node_modules/')
-      || ignoredPlans.length
     ) {
       console.error('scaffold output mismatch');
-      console.error(JSON.stringify({ missingFiles, manifest, config, claudeSettings, claudeLocalSettings, ignoredPlans }, null, 2));
+      console.error(JSON.stringify({ missingFiles, manifest, config, claudeSettings, claudeLocalSettings }, null, 2));
       return { status: 1, checks };
     }
 

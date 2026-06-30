@@ -51,6 +51,72 @@ describe("loadProjectSnapshot", () => {
     ]);
   });
 
+  it("marks an active iteration close-ready when every task is done", async () => {
+    const tempRoot = await mkdtemp(path.join(tmpdir(), "p2a-loader-close-ready-"));
+    try {
+      const iterationRoot = path.join(tempRoot, "iterations", "v1-mvp");
+      await mkdir(path.join(iterationRoot, "gate-c-task-graph"), { recursive: true });
+      await writeFile(
+        path.join(tempRoot, "current-spec.json"),
+        JSON.stringify({
+          project_id: "close-ready-project",
+          active_iteration: "v1-mvp",
+        }),
+      );
+      await writeFile(
+        path.join(iterationRoot, "gate-c-task-graph", "task-graph.json"),
+        JSON.stringify({
+          schema_version: "p2a.task_graph.v1",
+          projectId: "close-ready-project",
+          version: "v1-mvp",
+          sourceSpec: "gate-b-spec/spec.json",
+          tasks: [
+            {
+              id: "task-001",
+              title: "Finish the cycle",
+              description: "Close-ready fixture task.",
+              status: "done",
+              dependencies: [],
+              acceptanceCriteria: ["The task is done"],
+              targetArea: "cycle",
+              suggestedAgentPrompt: "Finish the cycle.",
+              sourceSpecRefs: ["implementation"],
+            },
+          ],
+        }),
+      );
+
+      const snapshot = await loadProjectSnapshot(tempRoot);
+
+      expect(snapshot.state).toBe("cycle_close_ready");
+      expect(snapshot.artifacts[0]).toMatchObject({
+        activeIteration: "v1-mvp",
+        taskCounts: {
+          total: 1,
+          ready: 0,
+          todo: 0,
+          done: 1,
+        },
+      });
+      expect(snapshot.onboarding).toMatchObject({
+        stage: "cycle_close_ready",
+        primaryAction: {
+          id: "close_iteration",
+          impact: "writes_project",
+        },
+      });
+      expect(snapshot.onboarding.primaryAction.command).toContain("p2a_iteration.mjs close");
+      expect(snapshot.onboarding.secondaryActions.map((action) => action.id)).toEqual([
+        "inspect_tasks",
+        "validate_artifacts",
+        "open_iteration",
+        "add_maintenance",
+      ]);
+    } finally {
+      await rm(tempRoot, { recursive: true, force: true });
+    }
+  });
+
   it("returns setup guidance for a folder without P2A markers", async () => {
     const tempRoot = await mkdtemp(path.join(tmpdir(), "p2a-loader-no-markers-"));
     try {
@@ -96,6 +162,47 @@ describe("loadProjectSnapshot", () => {
         },
       });
       expect(snapshot.onboarding.primaryAction.command).toContain("--artifacts <artifact-root>");
+    } finally {
+      await rm(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("summarizes proposal feedback files from the harness proposal queue", async () => {
+    const tempRoot = await mkdtemp(path.join(tmpdir(), "p2a-loader-proposals-"));
+    try {
+      await mkdir(path.join(tempRoot, ".plan2agent", "proposals"), { recursive: true });
+      await writeFile(
+        path.join(tempRoot, ".plan2agent/manifest.json"),
+        JSON.stringify({ schema_version: "p2a.manifest.v1" }),
+      );
+      await writeFile(
+        path.join(tempRoot, ".plan2agent/proposals/p2a-runs-create-isolation-workspace-check.json"),
+        JSON.stringify({
+          schema_version: "p2a.skill_proposal.v1",
+          proposalId: "p2a-runs-create-isolation-workspace-check",
+          sourceRunId: "run-20260629-task-14-search-tests",
+          problem: "p2a_runs start validates a fresh worktree before creating it.",
+          evidence: ["The run failed before git worktree creation."],
+          recommendedChange: "Create the worktree before checking workspace existence.",
+          targetFiles: [".plan2agent/scripts/p2a_runs.mjs", ".agents/skills/p2a-dev-execution/SKILL.md"],
+          risk: "low",
+          status: "proposed",
+          note: "Repeated workflow issue.",
+        }),
+      );
+
+      const snapshot = await loadProjectSnapshot(tempRoot);
+
+      expect(snapshot.proposals).toHaveLength(1);
+      expect(snapshot.proposals[0]).toMatchObject({
+        proposalId: "p2a-runs-create-isolation-workspace-check",
+        sourceRunId: "run-20260629-task-14-search-tests",
+        status: "proposed",
+        risk: "low",
+        evidenceCount: 1,
+        relativePath: ".plan2agent/proposals/p2a-runs-create-isolation-workspace-check.json",
+      });
+      expect(snapshot.diagnostics.some((diagnostic) => diagnostic.message.includes("proposal feedback"))).toBe(true);
     } finally {
       await rm(tempRoot, { recursive: true, force: true });
     }

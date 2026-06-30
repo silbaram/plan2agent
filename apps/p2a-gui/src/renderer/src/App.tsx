@@ -43,7 +43,9 @@ import type {
   ExecutionFinishStatus,
   FailureClass,
   GuiConfigSnapshot,
+  OnboardingAction,
   OrchestrationRoleStatus,
+  ProposalSummary,
   ProjectSnapshot,
   ProjectWatchEvent,
   RuntimeInfo,
@@ -67,7 +69,7 @@ type ArtifactFileState =
 type ArtifactDocument = {
   id: string;
   label: string;
-  group: "status" | "gate" | "task" | "run";
+  group: "status" | "gate" | "task" | "run" | "proposal";
   relativePath: string;
   meta: string;
   state: string;
@@ -237,6 +239,7 @@ function projectFlowItems(
   );
   const executionStarted = Boolean((artifact?.runCount ?? 0) > 0);
   const executionReady = Boolean(executionStarted || (artifact?.taskCounts.ready ?? 0) > 0);
+  const cycleCloseReady = snapshot?.state === "cycle_close_ready";
 
   const items: Array<Omit<ProjectFlowItem, "status">> = [
     {
@@ -262,7 +265,7 @@ function projectFlowItems(
     {
       id: "05",
       title: copy.tasks.flow.execution,
-      state: !taskReady ? "next" : executionStarted || executionReady ? "active" : "next",
+      state: !taskReady ? "next" : cycleCloseReady ? "done" : executionStarted || executionReady ? "active" : "next",
     },
   ];
 
@@ -360,9 +363,26 @@ function artifactDocumentId(artifact: ArtifactSummary, relativePath: string): st
   return `${artifact.rootPath}:${relativePath}`;
 }
 
-function buildArtifactDocuments(artifact: ArtifactSummary | null, copy: UiCopy): ArtifactDocument[] {
-  if (!artifact) return [];
+function proposalDocumentId(proposal: ProposalSummary): string {
+  return `proposal:${proposal.relativePath}`;
+}
 
+function proposalArtifactDocument(proposal: ProposalSummary, copy: UiCopy): ArtifactDocument {
+  return {
+    id: proposalDocumentId(proposal),
+    label: proposal.proposalId,
+    group: "proposal",
+    relativePath: proposal.relativePath,
+    meta: `${proposal.risk} · ${proposal.sourceRunId ?? copy.common.none}`,
+    state: proposal.status,
+  };
+}
+
+function buildArtifactDocuments(
+  artifact: ArtifactSummary | null,
+  proposals: ProposalSummary[],
+  copy: UiCopy,
+): ArtifactDocument[] {
   const documents: ArtifactDocument[] = [];
   const seenPaths = new Set<string>();
   const addDocument = (
@@ -374,6 +394,7 @@ function buildArtifactDocuments(artifact: ArtifactSummary | null, copy: UiCopy):
   ) => {
     if (!relativePath || seenPaths.has(relativePath)) return;
     seenPaths.add(relativePath);
+    if (!artifact) return;
     documents.push({
       id: artifactDocumentId(artifact, relativePath),
       label,
@@ -384,32 +405,40 @@ function buildArtifactDocuments(artifact: ArtifactSummary | null, copy: UiCopy):
     });
   };
 
-  addDocument(
-    copy.artifacts.groups.status,
-    "status",
-    artifact.statusPath,
-    "markdown",
-    artifact.statusPath ? "present" : "missing",
-  );
-
-  for (const validation of artifact.validations) {
+  if (artifact) {
     addDocument(
-      validation.label,
-      validation.id === "task-graph" ? "task" : "gate",
-      validation.relativePath,
-      validation.id,
-      validation.status,
+      copy.artifacts.groups.status,
+      "status",
+      artifact.statusPath,
+      "markdown",
+      artifact.statusPath ? "present" : "missing",
     );
+
+    for (const validation of artifact.validations) {
+      addDocument(
+        validation.label,
+        validation.id === "task-graph" ? "task" : "gate",
+        validation.relativePath,
+        validation.id,
+        validation.status,
+      );
+    }
+
+    for (const run of artifact.runs) {
+      addDocument(
+        run.runId,
+        "run",
+        projectRelativeArtifactPath(artifact, run.runRef),
+        run.taskId,
+        run.status,
+      );
+    }
   }
 
-  for (const run of artifact.runs) {
-    addDocument(
-      run.runId,
-      "run",
-      projectRelativeArtifactPath(artifact, run.runRef),
-      run.taskId,
-      run.status,
-    );
+  for (const proposal of proposals) {
+    if (seenPaths.has(proposal.relativePath)) continue;
+    seenPaths.add(proposal.relativePath);
+    documents.push(proposalArtifactDocument(proposal, copy));
   }
 
   return documents;
@@ -492,6 +521,21 @@ function overviewProgressSummary(
 ) {
   const readyTasks = artifact?.taskCounts.ready ?? 0;
   const runCount = artifact?.runCount ?? 0;
+  const doneTasks = artifact?.taskCounts.done ?? 0;
+  const totalTasks = artifact?.taskCounts.total ?? 0;
+
+  if (onboarding.stage === "cycle_close_ready") {
+    return {
+      title: copy.onboarding.progress.cycle_close_ready.title
+        .replace("{done}", formatCount(doneTasks, locale))
+        .replace("{total}", formatCount(totalTasks, locale)),
+      detail: copy.onboarding.progress.cycle_close_ready.detail.replace(
+        "{iteration}",
+        artifact?.activeIteration ?? copy.common.unknown,
+      ),
+      nextStep: copy.onboarding.progress.cycle_close_ready.nextStep,
+    };
+  }
 
   if (onboarding.stage === "execution_ready") {
     if (readyTasks > 0) {
@@ -516,6 +560,41 @@ function overviewProgressSummary(
   }
 
   return copy.onboarding.progress[onboarding.stage];
+}
+
+function localizedOnboardingAction(action: OnboardingAction, copy: UiCopy) {
+  return copy.onboarding.actions[action.id] ?? {
+    label: action.label,
+    description: action.description,
+  };
+}
+
+function actionPriorityLabel(index: number, copy: UiCopy): string {
+  return index === 0 ? copy.overview.primaryAction : copy.overview.secondaryAction;
+}
+
+function overviewTaskMetric(
+  artifact: ArtifactSummary | null,
+  state: ProjectSnapshot["state"] | null,
+  locale: UiLocale,
+  copy: UiCopy,
+) {
+  const readyTasks = artifact?.taskCounts.ready ?? 0;
+  const doneTasks = artifact?.taskCounts.done ?? 0;
+  const totalTasks = artifact?.taskCounts.total ?? 0;
+  const showDoneProgress = state === "cycle_close_ready" || (totalTasks > 0 && doneTasks === totalTasks);
+
+  return {
+    label: showDoneProgress ? copy.overview.doneTasks : copy.overview.readyTasks,
+    value: `${formatCount(showDoneProgress ? doneTasks : readyTasks, locale)} / ${formatCount(totalTasks, locale)}`,
+  };
+}
+
+function proposalTargetText(proposal: ProposalSummary, copy: UiCopy): string {
+  if (proposal.targetFiles.length === 0) return copy.common.none;
+  const visibleTargets = proposal.targetFiles.slice(0, 2).join(", ");
+  const hiddenCount = proposal.targetFiles.length - 2;
+  return hiddenCount > 0 ? `${visibleTargets} +${hiddenCount}` : visibleTargets;
 }
 
 export default function App() {
@@ -637,9 +716,10 @@ export default function App() {
   const selectedArtifact =
     projectSnapshot?.artifacts.find((item) => item.rootPath === selectedArtifactRootPath) ??
     artifact;
+  const proposals = projectSnapshot?.proposals ?? [];
   const artifactDocuments = useMemo(
-    () => buildArtifactDocuments(selectedArtifact ?? null, copy),
-    [copy, selectedArtifact],
+    () => buildArtifactDocuments(selectedArtifact ?? null, proposals, copy),
+    [copy, proposals, selectedArtifact],
   );
   const selectedArtifactDocument =
     artifactDocuments.find((document) => document.id === selectedArtifactDocumentId) ??
@@ -1103,13 +1183,25 @@ export default function App() {
       [...projectFlow].reverse().find((item) => item.state === "done") ??
       projectFlow[0];
     const progress = onboarding ? overviewProgressSummary(onboarding, artifact, locale, copy) : null;
+    const cycleActions =
+      onboarding?.stage === "cycle_close_ready"
+        ? [onboarding.primaryAction, ...onboarding.secondaryActions]
+        : [];
+    const panelTitle =
+      projectSnapshot?.state === "cycle_close_ready"
+        ? projectStateLabel(projectSnapshot, copy)
+        : activeFlowItem?.title ?? projectStateLabel(projectSnapshot, copy);
+    const visibleProposals = proposals.slice(0, 4);
+    const taskMetric = overviewTaskMetric(artifact, projectSnapshot?.state ?? null, locale, copy);
+    const runMetric = artifact ? formatCount(artifact.runCount, locale) : "0";
+    const showTaskMetric = onboarding?.stage !== "cycle_close_ready";
 
     return (
       <section className="overview-state-panel" aria-label={copy.common.milestones}>
         <div className="overview-state-panel__head">
           <div>
             <div className="label">{copy.common.milestones}</div>
-            <h3>{activeFlowItem?.title ?? projectStateLabel(projectSnapshot, copy)}</h3>
+            <h3>{panelTitle}</h3>
           </div>
           <span className={`state-pill state-pill--${statusClass}`}>{statusText}</span>
         </div>
@@ -1130,35 +1222,103 @@ export default function App() {
 
         {progress && (
           <div className="overview-current-progress">
-            <div>
+            <div className="overview-current-progress__card">
               <span>{copy.overview.currentProgress}</span>
               <strong>{progress.title}</strong>
               <small>{progress.detail}</small>
+              <div className="overview-progress-meta" aria-label={copy.common.projectSummary}>
+                {showTaskMetric && (
+                  <span>
+                    <em>{taskMetric.label}</em>
+                    <strong className="mono">{taskMetric.value}</strong>
+                  </span>
+                )}
+                <span>
+                  <em>{copy.overview.runs}</em>
+                  <strong className="mono">{runMetric}</strong>
+                </span>
+              </div>
             </div>
-            <div>
+            <div className="overview-current-progress__card">
               <span>{copy.overview.nextStep}</span>
               <strong>{progress.nextStep}</strong>
             </div>
           </div>
         )}
 
-        <div className="overview-state-metrics" aria-label={copy.common.projectSummary}>
-          <div>
-            <span>{copy.overview.readyTasks}</span>
-            <strong>
-              {artifact
-                ? `${formatCount(artifact.taskCounts.ready, locale)} / ${formatCount(
-                    artifact.taskCounts.total,
-                    locale,
-                  )}`
-                : "0 / 0"}
-            </strong>
+        {cycleActions.length > 0 && (
+          <div className="overview-cycle-actions" aria-label={copy.overview.cycleActions}>
+            <div className="overview-cycle-actions__head">
+              <span>{copy.overview.cycleActions}</span>
+              <strong>{copy.overview.commandPreview}</strong>
+            </div>
+            <div className="overview-cycle-action-list">
+              {cycleActions.map((action, index) => {
+                const actionCopy = localizedOnboardingAction(action, copy);
+                return (
+                  <div
+                    className={`overview-cycle-action${
+                      index === 0 ? " overview-cycle-action--primary" : ""
+                    }`}
+                    key={`${action.id}-${index}`}
+                  >
+                    <div className="overview-cycle-action__body">
+                      <span className="mono">{actionPriorityLabel(index, copy)}</span>
+                      <strong>{actionCopy.label}</strong>
+                      <small>{actionCopy.description}</small>
+                    </div>
+                    <div className="overview-cycle-action__meta">
+                      <span className={`status-badge status-badge--${action.impact}`}>
+                        {copy.impact[action.impact]}
+                      </span>
+                      <span className="mono">{formatPath(action.targetPath, copy)}</span>
+                    </div>
+                    {action.command && <code>{action.command}</code>}
+                  </div>
+                );
+              })}
+            </div>
           </div>
-          <div>
-            <span>{copy.overview.runs}</span>
-            <strong>{artifact ? formatCount(artifact.runCount, locale) : "0"}</strong>
+        )}
+
+        {visibleProposals.length > 0 && (
+          <div className="overview-proposals" aria-label={copy.overview.proposalFeedback}>
+            <div className="overview-proposals__head">
+              <span>{copy.overview.proposalFeedback}</span>
+              <strong className="mono">
+                {copy.overview.proposalCount.replace("{count}", formatCount(proposals.length, locale))}
+              </strong>
+            </div>
+            <div className="overview-proposal-list">
+              {visibleProposals.map((proposal) => (
+                <button
+                  className="overview-proposal-row"
+                  key={proposal.relativePath}
+                  type="button"
+                  onClick={() => void openArtifactDocument(proposalArtifactDocument(proposal, copy))}
+                  title={proposal.problem}
+                >
+                  <span className="overview-proposal-row__state">
+                    <em className={`status-badge status-badge--${proposal.status}`}>
+                      {statusLabel(proposal.status, copy)}
+                    </em>
+                    <em className={`status-badge status-badge--risk-${proposal.risk}`}>
+                      {statusLabel(proposal.risk, copy)}
+                    </em>
+                  </span>
+                  <span className="overview-proposal-row__main">
+                    <strong>{proposal.proposalId}</strong>
+                    <small>{proposal.problem}</small>
+                  </span>
+                  <span className="overview-proposal-row__meta">
+                    <em className="mono">{proposalTargetText(proposal, copy)}</em>
+                    <em className="mono">{proposal.relativePath}</em>
+                  </span>
+                </button>
+              ))}
+            </div>
           </div>
-        </div>
+        )}
       </section>
     );
   }

@@ -88,6 +88,13 @@ export const uiCopy = {
       pending: "대기",
       active: "현재",
       complete: "완료",
+      proposed: "제안",
+      approved: "승인",
+      rejected: "거절",
+      deferred: "보류",
+      low: "낮음",
+      medium: "중간",
+      high: "높음",
     },
     app: {
       titleFallback: "P2A GUI",
@@ -111,6 +118,7 @@ export const uiCopy = {
         iteration_init_required: "반복 초기화 필요",
         repair_validate: "검증 필요",
         execution_ready: "작업 실행 가능",
+        cycle_close_ready: "반복 종료 준비",
       },
       summaries: {
         install_p2a: "선택한 폴더에서 P2A 하네스나 산출물을 찾지 못했습니다.",
@@ -119,6 +127,7 @@ export const uiCopy = {
         iteration_init_required: "승인된 Gate 산출물이 아직 반복 구조로 변환되지 않았습니다.",
         repair_validate: "P2A 파일은 있지만 하나 이상의 산출물 확인이 실패했습니다.",
         execution_ready: "선택한 산출물 루트에 실행 가능한 작업 또는 실행 기록이 있습니다.",
+        cycle_close_ready: "활성 반복의 모든 작업이 완료되어 다음 사이클로 넘길 준비가 됐습니다.",
       },
       actions: {
         install_p2a: {
@@ -132,6 +141,18 @@ export const uiCopy = {
         init_iteration: {
           label: "반복 초기화",
           description: "Gate A-D 산출물을 iterations/<id>/gate-* 구조로 변환합니다.",
+        },
+        close_iteration: {
+          label: "반복 닫기",
+          description: "완료된 활성 반복을 보관 상태로 전환해 다음 사이클을 열 수 있게 합니다.",
+        },
+        open_iteration: {
+          label: "다음 반복 열기",
+          description: "현재 반복을 닫은 뒤 새 기능 반복을 시작합니다.",
+        },
+        add_maintenance: {
+          label: "maintenance 작업 추가",
+          description: "전체 기능 반복을 열지 않고 작은 수정 작업을 기록합니다.",
         },
         validate_artifacts: {
           label: "산출물 검증",
@@ -180,6 +201,11 @@ export const uiCopy = {
           nextStepReady: "태스크 탭에서 실행할 작업을 선택하세요.",
           nextStepRuns: "실행 탭에서 최근 실행 결과를 확인하세요.",
         },
+        cycle_close_ready: {
+          title: "{done} / {total} 작업 완료",
+          detail: "활성 반복 {iteration}의 task graph가 close-ready 상태입니다.",
+          nextStep: "현재 반복을 닫은 뒤 다음 반복 또는 maintenance 작업을 선택하세요.",
+        },
       },
     },
     projectState: {
@@ -188,12 +214,14 @@ export const uiCopy = {
       planning_in_progress: "기획 진행 중",
       iteration_init_required: "반복 초기화 필요",
       execution_ready: "작업 실행 가능",
+      cycle_close_ready: "반복 종료 준비",
       broken_install: "설치 오류",
     },
     overview: {
       project: "프로젝트 ID",
       state: "현재 개발 상태",
       readyTasks: "실행 가능 / 전체 작업",
+      doneTasks: "완료 / 전체 작업",
       runs: "실행 기록",
       artifacts: "기획 산출물",
       detectedRoots: "감지된 산출물 루트",
@@ -203,6 +231,12 @@ export const uiCopy = {
       currentProgress: "현재 진행 상태",
       nextAction: "다음 작업",
       nextStep: "지금 할 일",
+      cycleActions: "사이클 다음 작업",
+      commandPreview: "명령 프리뷰",
+      primaryAction: "주요",
+      secondaryAction: "보조",
+      proposalFeedback: "제안 피드백",
+      proposalCount: "{count}건",
       stage: "단계",
       impact: "영향",
     },
@@ -236,6 +270,7 @@ export const uiCopy = {
         gate: "게이트",
         task: "작업",
         run: "실행",
+        proposal: "제안",
       },
     },
     tasks: {
@@ -555,6 +590,13 @@ export const uiCopy = {
       pending: "pending",
       active: "current",
       complete: "complete",
+      proposed: "proposed",
+      approved: "approved",
+      rejected: "rejected",
+      deferred: "deferred",
+      low: "low",
+      medium: "medium",
+      high: "high",
     },
     app: {
       titleFallback: "P2A GUI",
@@ -578,6 +620,7 @@ export const uiCopy = {
         iteration_init_required: "Iteration init required",
         repair_validate: "Repair / validate",
         execution_ready: "Work ready",
+        cycle_close_ready: "Cycle close-ready",
       },
       summaries: {
         install_p2a: "No harness markers or planning artifacts were found.",
@@ -586,6 +629,7 @@ export const uiCopy = {
         iteration_init_required: "Approved Gate artifacts still need to be converted into the iteration layout.",
         repair_validate: "P2A files were found, but one or more artifact checks failed.",
         execution_ready: "A ready task or run record is available in the selected artifact root.",
+        cycle_close_ready: "Every active iteration task is complete and the project is ready to move to the next cycle.",
       },
       actions: {
         install_p2a: {
@@ -599,6 +643,18 @@ export const uiCopy = {
         init_iteration: {
           label: "Initialize iteration",
           description: "Convert Gate A-D artifacts into iterations/<id>/gate-*.",
+        },
+        close_iteration: {
+          label: "Close iteration",
+          description: "Archive the completed active iteration so the next cycle can start.",
+        },
+        open_iteration: {
+          label: "Open next iteration",
+          description: "Start a new feature iteration after the current one is closed.",
+        },
+        add_maintenance: {
+          label: "Add maintenance task",
+          description: "Record a small fix without opening a full feature iteration.",
         },
         validate_artifacts: {
           label: "Validate artifacts",
@@ -647,6 +703,11 @@ export const uiCopy = {
           nextStepReady: "Open Tasks and select the work to execute.",
           nextStepRuns: "Open Runs and review the latest execution result.",
         },
+        cycle_close_ready: {
+          title: "{done} / {total} tasks done",
+          detail: "Active iteration {iteration} is close-ready.",
+          nextStep: "Close this iteration, then open the next iteration or add maintenance work.",
+        },
       },
     },
     projectState: {
@@ -655,12 +716,14 @@ export const uiCopy = {
       planning_in_progress: "Planning in progress",
       iteration_init_required: "Iteration init required",
       execution_ready: "Work ready",
+      cycle_close_ready: "Cycle close-ready",
       broken_install: "Broken install",
     },
     overview: {
       project: "project id",
       state: "current development state",
       readyTasks: "ready / total tasks",
+      doneTasks: "done / total tasks",
       runs: "run records",
       artifacts: "planning artifacts",
       detectedRoots: "Detected artifact roots",
@@ -670,6 +733,12 @@ export const uiCopy = {
       currentProgress: "current progress",
       nextAction: "next action",
       nextStep: "next step",
+      cycleActions: "cycle next actions",
+      commandPreview: "command preview",
+      primaryAction: "primary",
+      secondaryAction: "secondary",
+      proposalFeedback: "proposal feedback",
+      proposalCount: "{count} items",
       stage: "stage",
       impact: "impact",
     },
@@ -703,6 +772,7 @@ export const uiCopy = {
         gate: "gate",
         task: "task",
         run: "run",
+        proposal: "proposal",
       },
     },
     tasks: {

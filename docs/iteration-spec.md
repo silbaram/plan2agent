@@ -109,7 +109,7 @@ open iteration -> task 실행 -> 모든 task done -> 사용자 close -> archived
 - 작은 fix, 문서 수정, 패치성 변경은 상시 `maintenance` 반복에 append한다.
 - 반복 전환은 암묵적으로 일어나지 않는다. 모든 task done과 사용자 close가 모두 만족될 때만 마감한다.
 - 마감 시 해당 반복을 `archived`로 동결하고, 루트 `status.md` 반복 인덱스에 표시한다.
-- 마감 시 필요하면 개발 대상 프로젝트로 재인계하고 git 커밋으로 산출물 기준점을 남긴다.
+- 마감 시 필요하면 개발 대상 프로젝트로 재인계하고, P2A 산출물 기준점은 Plan2Agent Memory 또는 명시 export에 남긴다. git commit은 제품 소스코드 기준점에만 사용한다.
 - 병렬 반복, branch별 반복, worktree별 반복은 후속 고도화로 둔다.
 
 이 결정은 현재 task 상태 CLI가 단일 task graph를 기준으로 동작하는 단순성을 유지한다. 활성 반복 인식은 “현재 어떤 task graph를 볼 것인가”의 선택 문제로 제한한다.
@@ -190,7 +190,7 @@ open iteration -> task 실행 -> 모든 task done -> 사용자 close -> archived
 | task graph schema | `.plan2agent/schemas/task-graph.schema.json`을 그대로 사용한다. |
 | artifact validator | `.plan2agent/scripts/validate_artifacts.mjs`를 반복 내부 gate 검증에 재사용한다. |
 | task graph/task 필드 | top-level `version`과 task별 `status`, `targetArea`, `sourceSpecRefs`를 반복 개발의 versioning, 상태, 영역 태그, spec trace에 사용한다. |
-| git | 반복 close와 handoff 기준점을 커밋으로 남긴다. |
+| source git | 제품 소스코드 기준점을 남긴다. P2A 반복 산출물과 run history는 Plan2Agent Memory 또는 명시 export에 보존한다. |
 | `p2a_handoff` | 활성 반복 산출물과 `current-spec.json`을 대상 프로젝트로 다시 동기화하는 흐름에 재사용한다. |
 
 ### 신규
@@ -223,7 +223,7 @@ baseline-aware Gate A/B 재실행
       |
       v
 status.md/current-spec.json 갱신
-  + git 커밋
+  + Plan2Agent Memory checkpoint
       |
       v
 p2a_handoff --overwrite
