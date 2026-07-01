@@ -209,7 +209,15 @@ function validateScaffoldFixtureCase() {
     ];
     const missingFiles = [...expectedScripts, ...expectedSchemas, ...expectedToolFiles, ...expectedGenerated]
       .filter((filePath) => !existsSync(path.join(targetRoot, filePath)));
+    const excludedToolFiles = [
+      path.join('.agents', 'skills', 'p2a-design-system', 'SKILL.md'),
+      path.join('.claude', 'skills', 'p2a-design-system', 'SKILL.md'),
+      path.join('.gemini', 'commands', 'p2a', 'design-system.toml'),
+    ];
+    const copiedExcludedToolFiles = excludedToolFiles.filter((filePath) => existsSync(path.join(targetRoot, filePath)));
     const manifest = JSON.parse(readFileSync(path.join(targetRoot, '.plan2agent', 'manifest.json'), 'utf8'));
+    const manifestDesignSystemFiles = [...(manifest.aiToolFiles ?? []), ...(manifest.toolFiles ?? [])]
+      .filter((filePath) => filePath.includes('p2a-design-system') || filePath.endsWith('/design-system.toml'));
     const config = JSON.parse(readFileSync(path.join(targetRoot, '.plan2agent', 'project.config.json'), 'utf8'));
     const claudeSettings = JSON.parse(readFileSync(path.join(targetRoot, '.claude', 'settings.json'), 'utf8'));
     const claudeLocalSettings = JSON.parse(readFileSync(path.join(targetRoot, '.claude', 'settings.local.json'), 'utf8'));
@@ -218,6 +226,8 @@ function validateScaffoldFixtureCase() {
     const expectedSandboxEnabled = process.platform === 'darwin' || process.platform === 'linux';
     if (
       missingFiles.length
+      || copiedExcludedToolFiles.length
+      || manifestDesignSystemFiles.length
       || manifest.provenance?.mode !== 'scaffold'
       || manifest.aiToolTargets.join(',') !== 'codex,claude,gemini'
       || config.testCommand !== null
@@ -233,7 +243,7 @@ function validateScaffoldFixtureCase() {
       || !gitignore.includes('node_modules/')
     ) {
       console.error('scaffold output mismatch');
-      console.error(JSON.stringify({ missingFiles, manifest, config, claudeSettings, claudeLocalSettings }, null, 2));
+      console.error(JSON.stringify({ missingFiles, copiedExcludedToolFiles, manifestDesignSystemFiles, manifest, config, claudeSettings, claudeLocalSettings }, null, 2));
       return { status: 1, checks };
     }
 
@@ -549,9 +559,18 @@ function validateE2eFixtureCases() {
         path.join('.gemini', 'commands', 'p2a', 'harness.toml'),
       ];
       const missingToolFiles = expectedToolFiles.filter((filePath) => !existsSync(path.join(toolTargetRoot, filePath)));
+      const excludedToolFiles = [
+        path.join('.agents', 'skills', 'p2a-design-system', 'SKILL.md'),
+        path.join('.gemini', 'commands', 'p2a', 'design-system.toml'),
+      ];
+      const copiedExcludedToolFiles = excludedToolFiles.filter((filePath) => existsSync(path.join(toolTargetRoot, filePath)));
       const toolManifest = JSON.parse(readFileSync(path.join(toolTargetRoot, '.plan2agent', 'manifest.json'), 'utf8'));
+      const manifestDesignSystemFiles = [...(toolManifest.aiToolFiles ?? []), ...(toolManifest.toolFiles ?? [])]
+        .filter((filePath) => filePath.includes('p2a-design-system') || filePath.endsWith('/design-system.toml'));
       if (
         missingToolFiles.length
+        || copiedExcludedToolFiles.length
+        || manifestDesignSystemFiles.length
         || toolManifest.aiToolTargets.join(',') !== 'codex,gemini'
         || !toolManifest.includedTools.includes('p2a_codex_assets')
         || !toolManifest.includedTools.includes('p2a_gemini_assets')
@@ -575,7 +594,7 @@ function validateE2eFixtureCases() {
         || !toolManifest.schemaFiles.includes('.plan2agent/schemas/proposal-draft-approval.schema.json')
       ) {
         console.error(`greenfield handoff --tools output mismatch: ${caseData.id}`);
-        console.error(JSON.stringify({ missingToolFiles, toolManifest }, null, 2));
+        console.error(JSON.stringify({ missingToolFiles, copiedExcludedToolFiles, manifestDesignSystemFiles, toolManifest }, null, 2));
         return { status: 1, checks };
       }
 

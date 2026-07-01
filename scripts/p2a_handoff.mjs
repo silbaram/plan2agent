@@ -52,13 +52,13 @@ function usage() {
     'Scaffold:',
     '  scaffold             Install the full co-located P2A planning/development harness into a project.',
     '  --target <path>      Project directory to create or update.',
-    '  --tools <list>       Copy P2A AI tool assets for codex,claude,gemini. Use comma list, all, or none. Default: all.',
+    '  --tools <list>       Copy portable P2A AI tool assets for codex,claude,gemini. Use comma list, all, or none. Default: all.',
     '',
     'Handoff options:',
     '  --mode copy|move     Copy artifacts by default; move removes source files after successful write.',
     '  --iteration-id <id>  Use iterative artifacts. Default: active when --artifacts is an iterative root.',
     '  --include-intake     Include generated gate-a-intake/intake.md when present (intake.json is always copied).',
-    '  --tools <list>       Copy P2A AI tool assets for codex,claude,gemini. Use comma list or all.',
+    '  --tools <list>       Copy portable P2A AI tool assets for codex,claude,gemini. Use comma list or all.',
     '  --include-team-bigfive',
     '                       Install Team Big Five adapter files for selected CLI targets.',
     '  --team-bigfive-source <path-or-git-url>',
@@ -389,6 +389,15 @@ function isP2aTopLevelAsset(relativePath) {
   return firstSegment.startsWith('p2a-');
 }
 
+function isPortableP2aTopLevelAsset(relativePath) {
+  const [firstSegment] = normalizePath(relativePath).split('/');
+  return isP2aTopLevelAsset(relativePath) && firstSegment !== 'p2a-design-system';
+}
+
+function isPortableGeminiP2aCommand(relativePath) {
+  return normalizePath(relativePath) !== 'design-system.toml';
+}
+
 function pushToolAssetDirectory(plan, targetRoot, sourceRelativeDir, targetRelativeDir, options = {}) {
   const sourceRoot = path.join(ROOT, sourceRelativeDir);
   if (!existsSync(sourceRoot) || !lstatSync(sourceRoot).isDirectory()) {
@@ -416,7 +425,7 @@ function selectedToolAssetSpecs(toolTargets) {
       key: 'common-skills',
       source: path.join('.agents', 'skills'),
       target: path.join('.agents', 'skills'),
-      filter: isP2aTopLevelAsset,
+      filter: isPortableP2aTopLevelAsset,
     },
     {
       key: 'common-agents',
@@ -439,7 +448,7 @@ function selectedToolAssetSpecs(toolTargets) {
         key: 'claude-skills',
         source: path.join('.claude', 'skills'),
         target: path.join('.claude', 'skills'),
-        filter: isP2aTopLevelAsset,
+        filter: isPortableP2aTopLevelAsset,
       },
       {
         key: 'claude-agents',
@@ -467,6 +476,7 @@ function selectedToolAssetSpecs(toolTargets) {
         key: 'gemini-commands',
         source: path.join('.gemini', 'commands', 'p2a'),
         target: path.join('.gemini', 'commands', 'p2a'),
+        filter: isPortableGeminiP2aCommand,
       },
     );
   }
