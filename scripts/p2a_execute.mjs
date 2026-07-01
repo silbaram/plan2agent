@@ -68,6 +68,7 @@ function usage() {
     '  --test, --lint, --typecheck',
     '  --test-command <cmd>, --lint-command <cmd>, --typecheck-command <cmd>',
     '  --verify-command <type:cmd>',
+    '  --save-config',
     '  --status finished|failed|blocked',
     '  --failure-class <class>',
     '  --retryable yes|no|after_fix',
@@ -114,6 +115,7 @@ function parseArgs(argv) {
     needsUserDecision: null,
     failureSource: null,
     collectGit: false,
+    saveConfig: false,
     noTaskTransition: false,
     help: false,
   };
@@ -148,6 +150,7 @@ function parseArgs(argv) {
     else if (arg === '--lint-command') args.verifyOptions.push('--lint-command', requiredValue(argv, ++index, '--lint-command'));
     else if (arg === '--typecheck-command') args.verifyOptions.push('--typecheck-command', requiredValue(argv, ++index, '--typecheck-command'));
     else if (arg === '--verify-command') args.verifyOptions.push('--verify-command', requiredValue(argv, ++index, '--verify-command'));
+    else if (arg === '--save-config') args.saveConfig = true;
     else if (arg === '--status') {
       args.status = requiredValue(argv, ++index, '--status');
       if (!FINISH_STATUSES.has(args.status)) throw new Error('--status must be finished, failed, or blocked');
@@ -203,7 +206,7 @@ function parseArgs(argv) {
   if (args.orchestrationPlan && args.command !== 'start') {
     throw new Error('--orchestration-plan is only supported with start');
   }
-  if (args.command !== 'finish' && (args.status || args.failureClass || args.retryable || args.needsUserDecision !== null || args.failureSource || args.collectGit)) {
+  if (args.command !== 'finish' && (args.status || args.failureClass || args.retryable || args.needsUserDecision !== null || args.failureSource || args.collectGit || args.saveConfig)) {
     throw new Error('finish options are only supported with finish');
   }
   return args;
@@ -531,7 +534,9 @@ function finishRunArgs(args, finalStatus, approval = null) {
 }
 
 function verifyRunArgs(args) {
-  return ['verify', ...sourceRunArgs(args), '--run-id', args.runId, ...args.verifyOptions];
+  const runArgs = ['verify', ...sourceRunArgs(args), '--run-id', args.runId, ...args.verifyOptions];
+  if (args.saveConfig) runArgs.push('--save-config');
+  return runArgs;
 }
 
 function runsIndexPath(runsDir) {

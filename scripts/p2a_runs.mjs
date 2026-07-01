@@ -20,9 +20,16 @@ import {
   assertNoUninitializedScaffoldArtifactRoots,
   assertNotUninitializedScaffoldGraph,
   configuredTaskGraphPath,
+  P2A_PROJECT_CONFIG,
   resolveP2aPaths,
   singleArtifactProjectRoot,
 } from './p2a_paths.mjs';
+import {
+  detectProjectCommands,
+  mergeDetectedProjectConfig,
+  mergeExplicitVerificationCommands,
+  writeProjectConfig,
+} from './p2a_project_config.mjs';
 
 const P2A_PATHS = resolveP2aPaths(import.meta.url);
 const ROOT = P2A_PATHS.projectRoot;
@@ -88,6 +95,7 @@ function usage() {
     '                          Run an explicit verification command.',
     '  --verify-command <type:cmd>',
     '                          Run a custom command; type is optional and defaults to custom.',
+    '  --save-config           Persist detected or explicit test/lint/typecheck commands to project.config.json.',
     '  --json                  Machine-readable output for list.',
     '  --help, -h              Show this help.',
   ].join('\n');
@@ -123,6 +131,7 @@ function parseArgs(argv) {
     needsUserDecision: null,
     failureSource: null,
     collectGit: false,
+    saveConfig: false,
     json: false,
     help: false,
   };
@@ -157,6 +166,7 @@ function parseArgs(argv) {
     else if (arg === '--lint-command') args.verifyRequests.push({ type: 'lint', command: requiredValue(argv, ++index, '--lint-command'), source: 'command' });
     else if (arg === '--typecheck-command') args.verifyRequests.push({ type: 'typecheck', command: requiredValue(argv, ++index, '--typecheck-command'), source: 'command' });
     else if (arg === '--verify-command') args.verifyRequests.push(parseVerifyCommand(requiredValue(argv, ++index, '--verify-command')));
+    else if (arg === '--save-config') args.saveConfig = true;
     else if (arg === '--failure-class') {
       args.failureClass = requiredValue(argv, ++index, '--failure-class');
       if (!FAILURE_CLASSES.has(args.failureClass)) throw new Error(`--failure-class must be one of ${[...FAILURE_CLASSES].join(', ')}`);
@@ -202,6 +212,9 @@ function parseArgs(argv) {
   }
   if (args.command !== 'finish' && (args.failureClass || args.retryable || args.needsUserDecision !== null || args.failureSource)) {
     throw new Error('failure options are only supported with finish');
+  }
+  if (args.saveConfig && args.command !== 'verify') {
+    throw new Error('--save-config is only supported with verify');
   }
   if (args.command === 'finish') {
     const status = args.status ?? null;
@@ -552,14 +565,23 @@ function projectConfigCandidates(runsDir, run, workspacePath) {
 }
 
 function loadProjectConfig(runsDir, run, workspacePath) {
-  for (const candidate of projectConfigCandidates(runsDir, run, workspacePath)) {
+  return loadProjectConfigWithPath(runsDir, run, workspacePath).config;
+}
+
+function loadProjectConfigWithPath(runsDir, run, workspacePath) {
+  const candidates = projectConfigCandidates(runsDir, run, workspacePath);
+  for (const candidate of candidates) {
+    if (!existsSync(candidate)) continue;
     try {
-      if (existsSync(candidate) && lstatSync(candidate).isFile()) return loadJson(candidate);
-    } catch {
-      // Ignore malformed optional config here; explicit verification commands still work.
+      if (!lstatSync(candidate).isFile()) continue;
+      return { config: loadJson(candidate), path: candidate };
+    } catch (error) {
+      throw new Error(`project config is malformed: ${displayPath(candidate)} (${error.message}). Fix or remove it before automatic command detection.`);
     }
   }
-  return {};
+  const workspaceConfig = path.join(workspacePath, P2A_PROJECT_CONFIG);
+  const fallbackPath = existsSync(path.dirname(workspaceConfig)) ? workspaceConfig : null;
+  return { config: {}, path: fallbackPath };
 }
 
 function configuredCommand(config, type) {
@@ -597,6 +619,40 @@ function verificationSpecs(args, config) {
     }
     return { ...request, command };
   });
+}
+
+function configRequestsNeedDetection(args, config) {
+  if (!args.verifyRequests.length) {
+    return !configuredCommand(config, 'test') || !configuredCommand(config, 'lint') || !configuredCommand(config, 'typecheck');
+  }
+  return args.verifyRequests.some((request) => request.source === 'config' && !configuredCommand(config, request.type));
+}
+
+function prepareProjectConfigForVerification(args, runsDir, run, workspacePath) {
+  const loaded = loadProjectConfigWithPath(runsDir, run, workspacePath);
+  let config = loaded.config;
+  const saved = [];
+
+  if (configRequestsNeedDetection(args, config)) {
+    const detected = detectProjectCommands(workspacePath);
+    const merged = mergeDetectedProjectConfig(config, detected);
+    config = merged.config;
+    if (merged.updatedKeys.length && loaded.path) {
+      writeProjectConfig(loaded.path, config);
+      saved.push({ source: 'detected', path: loaded.path, keys: merged.updatedKeys });
+    }
+  }
+
+  if (args.saveConfig) {
+    const merged = mergeExplicitVerificationCommands(config, args.verifyRequests);
+    config = merged.config;
+    if (merged.updatedKeys.length && loaded.path) {
+      writeProjectConfig(loaded.path, config);
+      saved.push({ source: 'explicit', path: loaded.path, keys: merged.updatedKeys });
+    }
+  }
+
+  return { config, saved };
 }
 
 function runVerificationCommand(spec, workspacePath) {
@@ -737,15 +793,22 @@ function verifyRun(args) {
   const run = readRun(runsDir, args.runId);
   const workspacePath = args.workspace ? path.resolve(args.workspace) : path.resolve(run.workspacePath);
   assertDirectory(workspacePath, 'run workspace');
-  const config = loadProjectConfig(runsDir, run, workspacePath);
+  const configUpdate = prepareProjectConfigForVerification(args, runsDir, run, workspacePath);
+  const config = configUpdate.config;
   const specs = verificationSpecs(args, config);
   const results = specs.map((spec) => runVerificationCommand(spec, workspacePath));
   run.verification.push(...results);
   run.updatedAt = new Date().toISOString();
   writeRun(runsDir, run);
   console.log(`Plan2Agent run verification recorded: ${run.runId}`);
+  for (const saved of configUpdate.saved) {
+    console.log(`- projectConfig: saved ${saved.source} ${saved.keys.join(',')} to ${displayPath(saved.path)}`);
+  }
   for (const result of results) {
     console.log(`- ${result.type}: ${result.status} (${result.command})`);
+    if (result.status === 'skipped' && result.source === 'config') {
+      console.log(`  hint: pass --${result.type}-command <cmd> --save-config to store a project-specific command`);
+    }
   }
   return results.some((result) => result.status === 'failed') ? 1 : 0;
 }

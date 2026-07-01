@@ -1,0 +1,178 @@
+/** Shared Plan2Agent project config detection and merge helpers. */
+
+import { existsSync, lstatSync, readFileSync, writeFileSync } from 'node:fs';
+import path from 'node:path';
+
+export function defaultRunTracking() {
+  return {
+    runsDir: '.plan2agent/runs',
+    defaultIsolation: 'none',
+    branchPattern: 'p2a/<taskId>-<runId>',
+    worktreePattern: '../.worktrees/<taskId>-<runId>',
+  };
+}
+
+export function defaultProviderNativeCapabilities() {
+  return {
+    codex: {
+      skills: 'manual_check',
+      customAgents: 'manual_check',
+      explicitSubagentPrompt: 'manual_check',
+    },
+    claude: {
+      subagents: 'manual_check',
+      skills: 'manual_check',
+      agentTeams: 'manual_check',
+    },
+    gemini: {
+      extensions: 'manual_check',
+      customCommands: 'manual_check',
+      geminiContext: 'manual_check',
+    },
+  };
+}
+
+export function detectPackageManager(targetRoot) {
+  if (existsSync(path.join(targetRoot, 'pnpm-lock.yaml'))) return 'pnpm';
+  if (existsSync(path.join(targetRoot, 'yarn.lock'))) return 'yarn';
+  if (existsSync(path.join(targetRoot, 'package-lock.json'))) return 'npm';
+  if (existsSync(path.join(targetRoot, 'package.json'))) return 'npm';
+  if (existsSync(path.join(targetRoot, 'gradlew')) || existsSync(path.join(targetRoot, 'build.gradle')) || existsSync(path.join(targetRoot, 'build.gradle.kts'))) return 'gradle';
+  if (existsSync(path.join(targetRoot, 'pom.xml'))) return 'maven';
+  return null;
+}
+
+function readJsonObject(filePath) {
+  try {
+    if (!existsSync(filePath) || !lstatSync(filePath).isFile()) return null;
+    const data = JSON.parse(readFileSync(filePath, 'utf8'));
+    return data && typeof data === 'object' && !Array.isArray(data) ? data : null;
+  } catch {
+    return null;
+  }
+}
+
+export function detectProjectCommands(targetRoot) {
+  const packageManager = detectPackageManager(targetRoot);
+  let installCommand = null;
+  let testCommand = null;
+  let lintCommand = null;
+  let typecheckCommand = null;
+
+  if (packageManager === 'pnpm') installCommand = 'pnpm install';
+  else if (packageManager === 'yarn') installCommand = 'yarn install';
+  else if (packageManager === 'npm') installCommand = 'npm install';
+  else if (packageManager === 'gradle') testCommand = existsSync(path.join(targetRoot, 'gradlew')) ? './gradlew test' : 'gradle test';
+  else if (packageManager === 'maven') testCommand = 'mvn test';
+
+  if (packageManager === 'npm' || packageManager === 'pnpm' || packageManager === 'yarn') {
+    const packageJson = readJsonObject(path.join(targetRoot, 'package.json'));
+    const scripts = packageJson?.scripts ?? {};
+    const runner = packageManager === 'npm' ? 'npm run' : packageManager;
+    if (scripts.test) testCommand = packageManager === 'npm' ? 'npm test' : `${packageManager} test`;
+    if (scripts.lint) lintCommand = `${runner} lint`;
+    if (scripts.typecheck) typecheckCommand = `${runner} typecheck`;
+  }
+
+  return {
+    packageManager,
+    installCommand,
+    testCommand,
+    lintCommand,
+    typecheckCommand,
+    notes: packageManager
+      ? ['Detected by Plan2Agent from project files; review commands before relying on them for release gates']
+      : ['Commands pending; rerun verification after project scaffold files exist or pass an explicit command with --save-config'],
+  };
+}
+
+export function buildProjectConfig(targetRoot, teamBigFiveConfig = { enabled: false }, options = {}) {
+  const taskGraph = options.taskGraph ?? null;
+  const detected = options.emptyCommands
+    ? {
+        packageManager: null,
+        installCommand: null,
+        testCommand: null,
+        lintCommand: null,
+        typecheckCommand: null,
+        notes: ['Commands pending; rerun verification after project scaffold files exist or pass an explicit command with --save-config'],
+      }
+    : detectProjectCommands(targetRoot);
+  return {
+    schema_version: 'p2a.project_config.v1',
+    packageManager: detected.packageManager,
+    installCommand: detected.installCommand,
+    testCommand: detected.testCommand,
+    lintCommand: detected.lintCommand,
+    typecheckCommand: detected.typecheckCommand,
+    taskGraph,
+    runTracking: defaultRunTracking(),
+    teamBigFive: teamBigFiveConfig,
+    providerNativeCapabilities: defaultProviderNativeCapabilities(),
+    notes: detected.notes,
+  };
+}
+
+export function commandKeyForVerificationType(type) {
+  if (type === 'test') return 'testCommand';
+  if (type === 'lint') return 'lintCommand';
+  if (type === 'typecheck') return 'typecheckCommand';
+  return null;
+}
+
+function isEmptyValue(value) {
+  return value === null || value === undefined || value === '';
+}
+
+function addUniqueNote(config, note) {
+  const notes = Array.isArray(config.notes) ? config.notes.filter((item) => typeof item === 'string') : [];
+  if (!notes.includes(note)) notes.push(note);
+  config.notes = notes;
+}
+
+export function mergeDetectedProjectConfig(config, detected, options = {}) {
+  const overwrite = options.overwrite === true;
+  const next = { ...config };
+  const updatedKeys = [];
+  for (const key of ['packageManager', 'installCommand', 'testCommand', 'lintCommand', 'typecheckCommand']) {
+    const value = detected?.[key] ?? null;
+    if (isEmptyValue(value)) continue;
+    if (overwrite || isEmptyValue(next[key])) {
+      next[key] = value;
+      updatedKeys.push(key);
+    }
+  }
+  if (updatedKeys.length) {
+    if (!next.schema_version) next.schema_version = 'p2a.project_config.v1';
+    if (!next.runTracking) next.runTracking = defaultRunTracking();
+    if (!next.providerNativeCapabilities) next.providerNativeCapabilities = defaultProviderNativeCapabilities();
+    addUniqueNote(next, 'Verification commands were detected from project files');
+  }
+  return { config: next, updatedKeys };
+}
+
+export function mergeExplicitVerificationCommands(config, verifyRequests, options = {}) {
+  const overwrite = options.overwrite !== false;
+  const next = { ...config };
+  const updatedKeys = [];
+  for (const request of verifyRequests) {
+    if (request?.source !== 'command' || !request.command) continue;
+    const key = commandKeyForVerificationType(request.type);
+    if (!key) continue;
+    if (overwrite || isEmptyValue(next[key])) {
+      next[key] = request.command;
+      updatedKeys.push(key);
+    }
+  }
+  if (updatedKeys.length) {
+    if (!next.schema_version) next.schema_version = 'p2a.project_config.v1';
+    if (!next.runTracking) next.runTracking = defaultRunTracking();
+    if (!next.providerNativeCapabilities) next.providerNativeCapabilities = defaultProviderNativeCapabilities();
+    addUniqueNote(next, 'Verification commands were saved from explicit CLI options');
+  }
+  return { config: next, updatedKeys };
+}
+
+export function writeProjectConfig(configPath, config) {
+  writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`, 'utf8');
+}

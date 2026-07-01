@@ -130,6 +130,7 @@ scripts/validate_artifacts.mjs              # schema, gate, and graph validation
 scripts/run_fixtures.mjs                    # fixture/golden validation
 scripts/p2a_iteration.mjs                   # iteration init/open/close/maintenance CLI
 scripts/p2a_tasks.mjs                       # task status and dependency management CLI
+scripts/p2a_project_config.mjs              # project command detection and config merge helper
 scripts/p2a_runs.mjs                        # task run log and verification tracking CLI
 scripts/p2a_execute.mjs                     # supervised single-task lifecycle runner
 ```

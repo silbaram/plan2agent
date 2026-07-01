@@ -231,6 +231,7 @@ node /path/to/plan2agent/scripts/p2a_handoff.mjs \
     project.config.json
     proposals/      # p2a_proposals mine/review/curate/draft-patch/approve-draft 실행 시 생성
     scripts/
+      p2a_project_config.mjs
       p2a_tasks.mjs
       p2a_runs.mjs
       p2a_execute.mjs
@@ -434,7 +435,7 @@ node .plan2agent/scripts/p2a_tasks.mjs ready \
 | `proposals/curations/<curationId>.json` | 승인 후보 readiness, priority, evidence strength 확인 |
 | `proposals/patch-drafts/<draftId>.json` | 사람 승인 전 변경 의도, 대상 파일, 검증 계획 확인 |
 | `.plan2agent/manifest.json` | handoff에서 대상 프로젝트에 설치된 파일 목록 확인 |
-| `.plan2agent/project.config.json` | test/lint/typecheck command와 run tracking 기본값 확인 |
+| `.plan2agent/project.config.json` | 감지/저장된 test/lint/typecheck command와 run tracking 기본값 확인 |
 
 ## 검증 체크리스트
 
@@ -521,6 +522,7 @@ node .plan2agent/scripts/validate_artifacts.mjs \
 - 반복은 append-only에 가깝게 보존하고, 변경/누락/재작업은 새 반복의 task로 남긴다.
 - `diff-tasks`는 deterministic draft generator이고, 복잡한 task 저작은 `context`와 agent-authored draft gate를 사용한다. 두 경로 모두 `promote-tasks` 승인 후에만 정본이 된다.
 - `handoff`는 파일과 실행 도구를 복사하지만 agent를 자동 실행하지 않는다.
+- `p2a_runs verify --test` 같은 검증 명령은 `project.config.json`이 비어 있으면 현재 workspace를 다시 감지해 기본 명령을 저장한다.
 - `p2a_runs --create-isolation`을 쓰기 전에는 git branch/worktree 생성 정책을 확인한다.
 - `p2a_proposals`는 개선 후보만 만들고, skill/agent/schema 적용은 사람 승인 후 별도 변경으로 처리한다.
 
@@ -532,7 +534,7 @@ node .plan2agent/scripts/validate_artifacts.mjs \
 | `Gate C approval audit required in current-spec.json` | `promote-tasks --approved-by ... --approval-note ...` 또는 `current-spec.json.gate_c_approval_audits` 기록 여부 |
 | `open requires ... archived` | 이전 반복을 `close`했는지 |
 | `run-index ... does not match run file` | `runs/run-index.json`과 `runs/<runId>.json`을 수동 편집하지 않았는지 |
-| handoff 대상에서 test/lint/typecheck가 안 잡힘 | `.plan2agent/project.config.json`의 command 값을 채웠는지 |
+| handoff 대상에서 test/lint/typecheck가 안 잡힘 | `--test-command <cmd> --save-config`처럼 명시 명령을 저장할지 |
 
 ## 다음에 볼 문서
 

@@ -30,6 +30,7 @@ import {
 import { resolveIterationState } from './p2a_iteration_state.mjs';
 import { renderIterationIndexMarkdown } from './p2a_iteration.mjs';
 import { P2A_ARTIFACTS_DIR, P2A_SCHEMAS_DIR, P2A_SCRIPTS_DIR, resolveP2aPaths } from './p2a_paths.mjs';
+import { buildProjectConfig } from './p2a_project_config.mjs';
 
 const P2A_PATHS = resolveP2aPaths(import.meta.url);
 const ROOT = P2A_PATHS.toolRoot;
@@ -854,7 +855,7 @@ function pushTeamBigFiveAdapter(plan, targetRoot, args) {
 }
 
 
-const SCAFFOLD_SCRIPT_FILES = ['p2a_paths.mjs', 'p2a_iteration.mjs', 'p2a_tasks.mjs', 'p2a_runs.mjs', 'p2a_execute.mjs', 'p2a_orchestrate.mjs', 'p2a_proposals.mjs', 'p2a_run_paths.mjs', 'p2a_iteration_state.mjs', 'validate_artifacts.mjs'];
+const SCAFFOLD_SCRIPT_FILES = ['p2a_paths.mjs', 'p2a_project_config.mjs', 'p2a_iteration.mjs', 'p2a_tasks.mjs', 'p2a_runs.mjs', 'p2a_execute.mjs', 'p2a_orchestrate.mjs', 'p2a_proposals.mjs', 'p2a_run_paths.mjs', 'p2a_iteration_state.mjs', 'validate_artifacts.mjs'];
 const SCAFFOLD_SCHEMA_FILES = ['intake.schema.json', 'spec.schema.json', 'task-graph.schema.json', 'task-context.schema.json', 'review.schema.json', 'run.schema.json', 'run-index.schema.json', 'orchestration-plan.schema.json', 'orchestration-runtime.schema.json', 'skill-proposal.schema.json', 'proposal-review.schema.json', 'proposal-curation.schema.json', 'proposal-patch-draft.schema.json', 'proposal-draft-approval.schema.json'];
 
 function targetScriptPath(file) {
@@ -1071,7 +1072,7 @@ function buildScaffoldPlan(args, targetRoot, createdAt = new Date().toISOString(
     pushGeneratedJson(plan, targetRoot, path.join('.claude', 'settings.local.json'), buildClaudeLocalSettings());
   }
   pushGeneratedJson(plan, targetRoot, path.join('.plan2agent', 'manifest.json'), manifest);
-  pushGeneratedJson(plan, targetRoot, path.join('.plan2agent', 'project.config.json'), buildProjectConfig(targetRoot, { enabled: false }, { emptyCommands: true }));
+  pushGeneratedJson(plan, targetRoot, path.join('.plan2agent', 'project.config.json'), buildProjectConfig(targetRoot, { enabled: false }));
   pushGeneratedText(plan, targetRoot, '.gitignore', renderProjectGitignore());
   pushGeneratedText(plan, targetRoot, 'PLAN2AGENT.md', renderPlan2AgentGuide());
   plan.scaffoldWarnings = claudeCoarseDeny.omitted.map((prefix) => `Claude coarse deny ${prefix}/** omitted because targetProject is under that prefix; the PreToolUse hook enforces the workspace boundary instead.`);
@@ -1237,100 +1238,6 @@ function rebaseTaskGraphSourceSpec(source, sourceSpecRef) {
   const rewritten = sourceText.replace(/(\"sourceSpec\"\s*:\s*)\"(?:[^\"\\]|\\.)*\"/, `$1${JSON.stringify(sourceSpecRef)}`);
   if (rewritten === sourceText) throw new Error(`could not rebase sourceSpec in ${source}`);
   return rewritten;
-}
-
-function detectPackageManager(targetRoot) {
-  if (existsSync(path.join(targetRoot, 'pnpm-lock.yaml'))) return 'pnpm';
-  if (existsSync(path.join(targetRoot, 'yarn.lock'))) return 'yarn';
-  if (existsSync(path.join(targetRoot, 'package-lock.json'))) return 'npm';
-  if (existsSync(path.join(targetRoot, 'package.json'))) return 'npm';
-  if (existsSync(path.join(targetRoot, 'gradlew')) || existsSync(path.join(targetRoot, 'build.gradle')) || existsSync(path.join(targetRoot, 'build.gradle.kts'))) return 'gradle';
-  if (existsSync(path.join(targetRoot, 'pom.xml'))) return 'maven';
-  return null;
-}
-
-function buildProjectConfig(targetRoot, teamBigFiveConfig = { enabled: false }, options = {}) {
-  const taskGraph = options.taskGraph ?? null;
-  const providerNativeCapabilities = {
-    codex: {
-      skills: 'manual_check',
-      customAgents: 'manual_check',
-      explicitSubagentPrompt: 'manual_check',
-    },
-    claude: {
-      subagents: 'manual_check',
-      skills: 'manual_check',
-      agentTeams: 'manual_check',
-    },
-    gemini: {
-      extensions: 'manual_check',
-      customCommands: 'manual_check',
-      geminiContext: 'manual_check',
-    },
-  };
-  if (options.emptyCommands) {
-    return {
-      schema_version: 'p2a.project_config.v1',
-      packageManager: null,
-      installCommand: null,
-      testCommand: null,
-      lintCommand: null,
-      typecheckCommand: null,
-      taskGraph,
-      runTracking: {
-        runsDir: '.plan2agent/runs',
-        defaultIsolation: 'none',
-        branchPattern: 'p2a/<taskId>-<runId>',
-        worktreePattern: '../.worktrees/<taskId>-<runId>',
-      },
-      teamBigFive: teamBigFiveConfig,
-      providerNativeCapabilities,
-      notes: ['TODO: fill install/test/lint/typecheck commands after project stack is chosen'],
-    };
-  }
-  const packageManager = detectPackageManager(targetRoot);
-  let installCommand = null;
-  let testCommand = null;
-  let lintCommand = null;
-  let typecheckCommand = null;
-  const notes = ['TODO: 사용자 확인'];
-
-  if (packageManager === 'pnpm') installCommand = 'pnpm install';
-  else if (packageManager === 'yarn') installCommand = 'yarn install';
-  else if (packageManager === 'npm') installCommand = 'npm install';
-  else if (packageManager === 'gradle') testCommand = existsSync(path.join(targetRoot, 'gradlew')) ? './gradlew test' : 'gradle test';
-  else if (packageManager === 'maven') testCommand = 'mvn test';
-
-  if (packageManager === 'npm' || packageManager === 'pnpm' || packageManager === 'yarn') {
-    const packageJsonPath = path.join(targetRoot, 'package.json');
-    if (existsSync(packageJsonPath)) {
-      const packageJson = JSON.parse(readFileSync(packageJsonPath, 'utf8'));
-      const scripts = packageJson.scripts ?? {};
-      const runner = packageManager === 'npm' ? 'npm run' : packageManager;
-      if (scripts.test) testCommand = packageManager === 'npm' ? 'npm test' : `${packageManager} test`;
-      if (scripts.lint) lintCommand = `${runner} lint`;
-      if (scripts.typecheck) typecheckCommand = `${runner} typecheck`;
-    }
-  }
-
-  return {
-    schema_version: 'p2a.project_config.v1',
-    packageManager,
-    installCommand,
-    testCommand,
-    lintCommand,
-    typecheckCommand,
-    taskGraph,
-    runTracking: {
-      runsDir: '.plan2agent/runs',
-      defaultIsolation: 'none',
-      branchPattern: 'p2a/<taskId>-<runId>',
-      worktreePattern: '../.worktrees/<taskId>-<runId>',
-    },
-    teamBigFive: teamBigFiveConfig,
-    providerNativeCapabilities,
-    notes,
-  };
 }
 
 function assertNoConflicts(plan, overwrite) {
@@ -1683,7 +1590,7 @@ function printNextSteps(targetRoot) {
   try {
     if (!config) throw new Error('missing config');
     if (['testCommand', 'lintCommand', 'typecheckCommand'].some((key) => config[key] === null)) {
-      console.log('참고: .plan2agent/project.config.json 의 test/lint/typecheck 명령을 채우세요.');
+      console.log('참고: test/lint/typecheck 명령이 비어 있으면 verify 시점에 다시 감지합니다. 명시 명령은 --save-config로 저장할 수 있습니다.');
     }
   } catch {
     // Best-effort hint only.

@@ -155,6 +155,7 @@ scripts/
   check_cli_parity.mjs
   validate_artifacts.mjs
   run_fixtures.mjs
+  p2a_project_config.mjs
   p2a_tasks.mjs
   p2a_runs.mjs
   p2a_execute.mjs

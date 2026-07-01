@@ -188,7 +188,7 @@ function validateScaffoldFixtureCase() {
       return { status: failureStatus(result), checks };
     }
 
-    const expectedScripts = ['p2a_paths.mjs', 'p2a_iteration.mjs', 'p2a_tasks.mjs', 'p2a_runs.mjs', 'p2a_execute.mjs', 'p2a_orchestrate.mjs', 'p2a_proposals.mjs', 'p2a_run_paths.mjs', 'p2a_iteration_state.mjs', 'validate_artifacts.mjs']
+    const expectedScripts = ['p2a_paths.mjs', 'p2a_project_config.mjs', 'p2a_iteration.mjs', 'p2a_tasks.mjs', 'p2a_runs.mjs', 'p2a_execute.mjs', 'p2a_orchestrate.mjs', 'p2a_proposals.mjs', 'p2a_run_paths.mjs', 'p2a_iteration_state.mjs', 'validate_artifacts.mjs']
       .map((file) => path.join('.plan2agent', 'scripts', file));
     const expectedSchemas = ['intake.schema.json', 'spec.schema.json', 'task-graph.schema.json', 'task-context.schema.json', 'review.schema.json', 'run.schema.json', 'run-index.schema.json', 'orchestration-plan.schema.json', 'orchestration-runtime.schema.json', 'skill-proposal.schema.json', 'proposal-review.schema.json', 'proposal-curation.schema.json', 'proposal-patch-draft.schema.json', 'proposal-draft-approval.schema.json']
       .map((file) => path.join('.plan2agent', 'schemas', file));
@@ -254,6 +254,78 @@ function validateScaffoldFixtureCase() {
       writeResultOutput(result);
       return { status: failureStatus(result), checks };
     }
+
+    const lazyConfigGraphPath = path.join(tempRoot, 'lazy-config-task-graph.json');
+    cpSync(path.join(E2E_FIXTURE_ROOT, 'webhook-api-service', 'gate-c-task-graph', 'task-graph.json'), lazyConfigGraphPath);
+    writeFileSync(path.join(targetRoot, 'package.json'), `${JSON.stringify({
+      scripts: {
+        test: 'node -p 1',
+      },
+    }, null, 2)}\n`);
+    result = runTargetRuns(targetRoot, [
+      'start',
+      '--graph',
+      lazyConfigGraphPath,
+      '--task',
+      'task-001',
+      '--agent-tool',
+      'codex',
+      '--run-id',
+      'run-lazy-config',
+    ]);
+    checks += 1;
+    if (result.status !== 0) {
+      console.error('scaffold target lazy config run start failed');
+      writeResultOutput(result);
+      return { status: failureStatus(result), checks };
+    }
+    result = runTargetRuns(targetRoot, [
+      'verify',
+      '--graph',
+      lazyConfigGraphPath,
+      '--run-id',
+      'run-lazy-config',
+      '--test',
+    ]);
+    checks += 1;
+    const lazyConfig = JSON.parse(readFileSync(path.join(targetRoot, '.plan2agent', 'project.config.json'), 'utf8'));
+    const lazyRun = JSON.parse(readFileSync(path.join(tempRoot, 'runs', 'run-lazy-config.json'), 'utf8'));
+    if (
+      result.status !== 0
+      || lazyConfig.packageManager !== 'npm'
+      || lazyConfig.testCommand !== 'npm test'
+      || !result.stdout.includes('saved detected packageManager,installCommand,testCommand')
+      || lazyRun.verification[0]?.status !== 'passed'
+      || lazyRun.verification[0]?.command !== 'npm test'
+    ) {
+      console.error('scaffold target lazy project config detection failed');
+      writeResultOutput(result);
+      console.error(JSON.stringify({ lazyConfig, lazyRun }, null, 2));
+      return { status: 1, checks };
+    }
+
+    const malformedConfigPath = path.join(targetRoot, '.plan2agent', 'project.config.json');
+    const malformedConfigText = '{bad json';
+    writeFileSync(malformedConfigPath, malformedConfigText, 'utf8');
+    result = runTargetRuns(targetRoot, [
+      'verify',
+      '--graph',
+      lazyConfigGraphPath,
+      '--run-id',
+      'run-lazy-config',
+      '--test',
+    ]);
+    checks += 1;
+    if (
+      result.status === 0
+      || !`${result.stdout}${result.stderr}`.includes('project config is malformed')
+      || readFileSync(malformedConfigPath, 'utf8') !== malformedConfigText
+    ) {
+      console.error('scaffold target malformed project config was not preserved and rejected');
+      writeResultOutput(result);
+      return { status: 1, checks };
+    }
+    writeFileSync(malformedConfigPath, `${JSON.stringify(lazyConfig, null, 2)}\n`, 'utf8');
 
     const scaffoldArtifactRoot = path.join(targetRoot, '.plan2agent', 'artifacts', 'webhook-api-service');
     mkdirSync(path.dirname(scaffoldArtifactRoot), { recursive: true });
