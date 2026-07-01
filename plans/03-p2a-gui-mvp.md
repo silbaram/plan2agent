@@ -1,6 +1,6 @@
 # P2A GUI MVP 계획
 
-작성일: 2026-06-23 · 상태: GUI MVP 개발 완료 · 작업 브랜치: `p2a-gui-mvp` · 연결 문서: `plans/02-development-team-ai-agent.md`, `.agents/skills/p2a-design-system/SKILL.md`
+작성일: 2026-06-23 · 상태: GUI MVP 개발 완료 · 작업 브랜치: `p2a-gui-mvp` · 연결 문서: `docs/supervised-execution.md`, `.agents/skills/p2a-design-system/SKILL.md`
 
 이 문서는 Plan2Agent Phase 2의 **PTY+Electron 감독 GUI** 제품 MVP 범위와 완료 상태를 정리한다. 목표는 완전한 multi-agent orchestration이 아니라, 현재 구현된 파일 기반 하네스와 감독형 단일 task 실행기 Phase 1을 데스크톱 UI에서 읽고, 사람이 보기 편하게 감독할 수 있게 만드는 것이다.
 

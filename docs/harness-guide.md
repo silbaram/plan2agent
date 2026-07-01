@@ -553,11 +553,11 @@ node scripts/sync_cli_assets.mjs
 
 ## 11. 추가 포인터와 v1/v2 범위
 
-- 제품 방향과 로드맵은 `plans/01-product-roadmap.md`를 먼저 본다. v1은 “아이디어 입력 -> 대화 보강 -> 개발 명세 -> task graph 생성/관리”까지 담당하고, 실제 agent 자동 실행보다 실행 가능한 task를 만드는 데 집중한다.
+- 제품 방향과 남은 로드맵은 `plans/01-product-roadmap.md`를 먼저 본다. Gate A-D 상세 계약은 이 문서, 반복 개발은 `docs/iteration-spec.md`, 감독형 실행은 `docs/supervised-execution.md`를 정본으로 본다.
 - 하네스 구현 기준은 `docs/harness-spec.md`를 본다. 이 문서는 단계, 역할, 승인 게이트, resume, state passing, evidence, 저장 구조, 검증 스크립트 기준을 정의한다.
 - 다회차 기획과 반복/고도화 개발 구조는 `docs/iteration-spec.md`를 본다. 이 문서는 iteration layout, `current-spec.json`, active iteration, maintenance, open/close 후보 명령을 정의한다.
 - 사용자 시작점과 문서 탐색은 `docs/README.md`와 `docs/quickstart.md`를 먼저 본다. CLI별 세부 명령은 `docs/cli-reference.md`를 본다.
-- v1 한계: 코드 변경, dependency 설치, 구현 목적 shell 실행, agent 자동 실행, PTY 기반 실행 관리는 하네스 범위가 아니다.
+- 하네스 한계: Gate A-D planning 단계는 코드 변경, dependency 설치, 구현 목적 shell 실행을 하지 않는다. 승인된 task 이후의 감독형 실행 흐름은 `docs/supervised-execution.md`를 본다.
 - 실행 추적: handoff 이후 `p2a_runs.mjs`가 파일 기반 run log, changed files, verification, workspace/branch/worktree 참조를 기록한다. agent 자동 실행 orchestration은 후속이다.
 
 무엇을 보강했는지:

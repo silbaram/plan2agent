@@ -28,7 +28,7 @@ v1에서 하지 않는 일:
 
 ## 기준 문서
 
-- [제품 기준과 고도화 로드맵](plans/01-product-roadmap.md)
+- [제품 로드맵](plans/01-product-roadmap.md)
 - [문서 홈](docs/README.md)
 - [제품 퀵스타트](docs/quickstart.md)
 - [하네스 구현 기준](docs/harness-spec.md)
@@ -456,4 +456,4 @@ node .plan2agent/scripts/p2a_tasks.mjs <command> \
 
 - CLI asset drift check와 fixture runner의 CI 연결은 사용자 관리 항목으로 유지
 - 완료: `p2a_runs.mjs` 기반 agent 실행 로그, branch/worktree 격리 기준, 결과 diff 연결 sidecar 추가. PTY 기반 agent 자동 실행과 PR 생성은 후속.
-- 완료: `p2a_execute.mjs` 기반 감독형 단일 task 실행기 Phase 1 추가. PTY+Electron 감독 GUI는 후속.
+- 완료: `p2a_execute.mjs` 기반 감독형 단일 task 실행기 Phase 1과 PTY+Electron 감독 GUI MVP 추가.

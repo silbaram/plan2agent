@@ -76,9 +76,9 @@ MVP 이후에는 이미 만들어진 산출물과 대상 프로젝트 위에 작
 
 연결 기준:
 
-- `plans/01-product-roadmap.md` §9의 변경 추적 방식은 “새 버전의 명세와 task graph” 및 v2 이후 구조적 diff를 백로그로 둔다.
-- `plans/01-product-roadmap.md` §14의 “기획 변경 diff 기반 재작업 task 생성”은 이 문서의 반복 구조 위에서 구현한다.
-- `plans/01-product-roadmap.md` §8-1의 개발 인계는 단일 Gate D 산출물 인계를 다룬다. 이 문서는 인계 이후 다음 반복 산출물을 어떻게 쌓고 다시 인계할지 정의한다.
+- `plans/01-product-roadmap.md`는 제품 방향과 현재 로드맵 인덱스만 담는다.
+- 변경 추적, 반복별 spec/task graph, diff 기반 재작업 task 생성의 상세 계약은 이 문서가 정본이다.
+- 단일 Gate D 산출물 인계와 scaffold 이후 반복 구조는 이 문서와 `docs/cli-reference.md`의 handoff 명령 계약을 따른다.
 
 ## 2. 확정 아키텍처
 
@@ -592,7 +592,7 @@ handoff는 active 반복의 `task-graph.sourceSpec`을 `spec.json`으로, `spec.
 - 문제: deterministic `diff-tasks`는 spec field 차이를 semantic group으로 병합/분할하고 rework/reuse를 표시하지만, code-aware 판단이나 복잡한 task 재구성까지 맡기지는 않는다.
 - 해법: 기획층(Gate C)에 **agent 저작 + 사람 승인 게이트**를 추가한다. agent는 현재 기준 맥락을 읽어 richer task 초안을 쓰고, 사람이 게이트에서 승격을 확정한다.
 - 불변: 실행층(`p2a_tasks`)과 `.plan2agent/schemas/task-graph.schema.json`은 바꾸지 않는다. agent 출력도 기존 `p2a.task_graph.v1`을 따른다.
-- 로드맵 연결: `plans/01-product-roadmap.md` §13의 "task graph 확정 시 사용자 승인"을 명시적 게이트로 구체화하고, §14의 "기획 변경 diff 기반 재작업 task 생성" 구현 계약을 제공한다.
+- 로드맵 연결: `plans/01-product-roadmap.md`의 승인 게이트와 diff 기반 고도화 방향을 Gate C approval/promotion 계약으로 구체화한다.
 
 ### 10-2. 핵심 원칙
 
@@ -765,7 +765,7 @@ Phase 2 흐름: `context` -> `p2a-task-author`가 `task-graph.draft.json` 저작
 
 ## 13. 검증 메모
 
-- `plans/01-product-roadmap.md` §9의 “새 버전의 명세와 task graph”는 반복별 `gate-b-spec/spec.json`과 `gate-c-task-graph/task-graph.json`으로 구체화한다.
-- `plans/01-product-roadmap.md` §14의 “기획 변경 diff 기반 재작업 task 생성”은 후속 자동화이며, 본 문서는 그 전에 필요한 파일 기반 반복 구조를 정의한다.
+- 제품 로드맵의 “새 버전의 명세와 task graph” 방향은 반복별 `gate-b-spec/spec.json`과 `gate-c-task-graph/task-graph.json`으로 구체화한다.
+- 제품 로드맵의 “기획 변경 diff 기반 재작업 task 생성” 방향은 이 문서의 `diff-tasks`, Gate C draft, promotion 계약으로 구체화한다.
 - task graph schema는 top-level `version`과 task별 `status`, `targetArea`, `sourceSpecRefs`를 요구한다.
 - validator는 같은 task graph 안의 task id 집합을 만든 뒤 `dependencies`가 그 집합 안에 있는지 검사하므로, 반복 간 dependency를 넣지 않는 채택안은 schema/validator 변경 없이 적용 가능하다.
