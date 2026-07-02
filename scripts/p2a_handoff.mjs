@@ -31,6 +31,7 @@ import { resolveIterationState } from './p2a_iteration_state.mjs';
 import { renderIterationIndexMarkdown } from './p2a_iteration.mjs';
 import { P2A_ARTIFACTS_DIR, P2A_SCHEMAS_DIR, P2A_SCRIPTS_DIR, resolveP2aPaths } from './p2a_paths.mjs';
 import { buildProjectConfig } from './p2a_project_config.mjs';
+import { PROJECT_RUNTIME_SCHEMA_FILES, PROJECT_RUNTIME_SCRIPT_FILES } from './p2a_tool_manifest.mjs';
 
 const P2A_PATHS = resolveP2aPaths(import.meta.url);
 const ROOT = P2A_PATHS.toolRoot;
@@ -855,8 +856,8 @@ function pushTeamBigFiveAdapter(plan, targetRoot, args) {
 }
 
 
-const SCAFFOLD_SCRIPT_FILES = ['p2a_paths.mjs', 'p2a_project_config.mjs', 'p2a_iteration.mjs', 'p2a_tasks.mjs', 'p2a_runs.mjs', 'p2a_execute.mjs', 'p2a_orchestrate.mjs', 'p2a_proposals.mjs', 'p2a_run_paths.mjs', 'p2a_iteration_state.mjs', 'validate_artifacts.mjs'];
-const SCAFFOLD_SCHEMA_FILES = ['intake.schema.json', 'spec.schema.json', 'task-graph.schema.json', 'task-context.schema.json', 'review.schema.json', 'run.schema.json', 'run-index.schema.json', 'orchestration-plan.schema.json', 'orchestration-runtime.schema.json', 'skill-proposal.schema.json', 'proposal-review.schema.json', 'proposal-curation.schema.json', 'proposal-patch-draft.schema.json', 'proposal-draft-approval.schema.json'];
+const SCAFFOLD_SCRIPT_FILES = PROJECT_RUNTIME_SCRIPT_FILES;
+const SCAFFOLD_SCHEMA_FILES = PROJECT_RUNTIME_SCHEMA_FILES;
 
 function targetScriptPath(file) {
   return path.join(P2A_SCRIPTS_DIR, file);
@@ -1148,7 +1149,7 @@ function buildPlan(paths, args, artifactsRoot, targetRoot, sourceInfo, options =
   for (const file of SCAFFOLD_SCRIPT_FILES) {
     pushArtifact(plan, path.join(ROOT, 'scripts', file), targetRoot, targetScriptPath(file));
   }
-  for (const schemaFile of ['intake.schema.json', 'spec.schema.json', 'task-graph.schema.json', 'task-context.schema.json', 'review.schema.json', 'run.schema.json', 'run-index.schema.json', 'orchestration-plan.schema.json', 'orchestration-runtime.schema.json', 'skill-proposal.schema.json', 'proposal-review.schema.json', 'proposal-curation.schema.json', 'proposal-patch-draft.schema.json', 'proposal-draft-approval.schema.json']) {
+  for (const schemaFile of SCAFFOLD_SCHEMA_FILES) {
     pushArtifact(plan, path.join(ROOT, 'schemas', schemaFile), targetRoot, targetSchemaPath(schemaFile));
   }
   const toolAssetPlan = pushToolAssets(plan, targetRoot, args.tools);

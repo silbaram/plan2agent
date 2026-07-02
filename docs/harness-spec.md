@@ -124,22 +124,30 @@ Intake and spec artifacts include an `evidence` array so web-grounded or local-s
 .gemini/agents/                 # generated Gemini subagents
 .gemini/commands/p2a/           # Gemini command shims
 schemas/                                    # artifact JSON schemas
+scripts/p2a_tool_manifest.mjs              # repo/runtime script and schema manifest
+scripts/p2a_doctor.mjs                     # scaffold target doctor, repo-only
+scripts/p2a_handoff.mjs                    # scaffold/handoff installer, repo-only
 scripts/sync_cli_assets.mjs                 # generate CLI mirrors from canonical sources
 scripts/check_cli_parity.mjs                # mirror drift check
 scripts/validate_artifacts.mjs              # schema, gate, and graph validation
 scripts/run_fixtures.mjs                    # fixture/golden validation
+scripts/p2a_paths.mjs                       # relocatable runtime path helpers
 scripts/p2a_iteration.mjs                   # iteration init/open/close/maintenance CLI
 scripts/p2a_tasks.mjs                       # task status and dependency management CLI
 scripts/p2a_project_config.mjs              # project command detection and config merge helper
 scripts/p2a_runs.mjs                        # task run log and verification tracking CLI
 scripts/p2a_execute.mjs                     # supervised single-task lifecycle runner
+scripts/p2a_orchestrate.mjs                 # supervised orchestration CLI
+scripts/p2a_proposals.mjs                   # proposal mining/review/curation CLI
+scripts/p2a_run_paths.mjs                   # run directory resolution helper
+scripts/p2a_iteration_state.mjs             # active iteration resolution helper
 ```
 
 구조 판단:
 
 - v1 skill 원본은 `.agents/skills`에 둔다.
 - CLI-neutral agent 원본은 `.agents/agents`에 둔다.
-- `.claude/agents`, `.codex/agents`, `.gemini/agents`는 `.plan2agent/scripts/sync_cli_assets.mjs`가 생성하는 target별 산출물이다.
+- `.claude/agents`, `.codex/agents`, `.gemini/agents`는 Plan2Agent 본체의 `scripts/sync_cli_assets.mjs`가 생성하는 target별 산출물이다.
 - Gemini CLI의 `.gemini/commands`는 skill 자체가 아니라 invocation shortcut으로만 둔다.
 
 ## 9. 공통 Skill 내용 규칙
@@ -225,7 +233,7 @@ Gemini target fields use the documented subagent keys `kind`, `tools`, `temperat
 - 완료: draft/negative fixture coverage를 추가해 unresolved promoted decision, promoted decision의 `open_decisions` 누락 실패, Gate D blocker 실패 흐름을 고정했다(`fixtures/_negative`).
 - 완료: end-to-end artifact-root golden fixture를 추가해 `--artifact-root --require-handoff-ready` 검증을 고정했다(`fixtures/_e2e/webhook-api-service`).
 - 완료: Gate B 승인 audit log를 `spec_json.approval_audit`에 기록하고 validator가 확인하도록 했다.
-- 완료: Python stdlib scripts를 Node.js ESM scripts로 대체하고 `.plan2agent/scripts/check_cli_parity.mjs`, `.plan2agent/scripts/run_fixtures.mjs`, `.plan2agent/.plan2agent/scripts/validate_artifacts.mjs` 검증 경로를 확정했다.
+- 완료: Python stdlib scripts를 Node.js ESM scripts로 대체하고, 본체 전용 `scripts/check_cli_parity.mjs`/`scripts/run_fixtures.mjs`와 scaffold-installed `.plan2agent/scripts/validate_artifacts.mjs` 검증 경로를 확정했다.
 - 완료: task 상태와 의존성 관리는 `.plan2agent/scripts/p2a_tasks.mjs`로 제공한다.
 - CLI mirror drift check와 fixture runner의 CI 연결은 사용자 관리 항목으로 둔다.
 - 완료: `p2a_runs.mjs`로 파일 기반 agent 실행 로그, branch/worktree 격리 기준, changed files, verification 결과를 기록한다. PTY 기반 agent 자동 실행과 PR 생성은 후속이다.

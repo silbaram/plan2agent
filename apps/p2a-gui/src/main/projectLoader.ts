@@ -1,5 +1,7 @@
+import { existsSync } from "node:fs";
 import { readdir, readFile, stat } from "node:fs/promises";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import Ajv2020, { type ValidateFunction } from "ajv/dist/2020";
 import intakeSchema from "../../../../schemas/intake.schema.json";
 import reviewSchema from "../../../../schemas/review.schema.json";
@@ -77,6 +79,7 @@ const schemaValidators = {
   review: ajv.compile(reviewSchema),
   "run-index": ajv.compile(runIndexSchema),
 } satisfies Record<SchemaValidationSummary["id"], ValidateFunction>;
+let cachedToolkitHandoffScript: string | null = null;
 
 function normalizeRelative(rootPath: string, targetPath: string): string {
   const relativePath = path.relative(rootPath, targetPath);
@@ -209,6 +212,47 @@ function numberValue(value: unknown): number | null {
 
 function shellQuote(value: string): string {
   return `'${value.replace(/'/g, "'\\''")}'`;
+}
+
+function findToolkitRoot(startPath: string): string | null {
+  let current = path.resolve(startPath);
+  if (!existsSync(current)) current = path.dirname(current);
+  while (true) {
+    const handoffScript = path.join(current, "scripts", "p2a_handoff.mjs");
+    const manifestScript = path.join(current, "scripts", "p2a_tool_manifest.mjs");
+    if (existsSync(handoffScript) && existsSync(manifestScript)) return current;
+    const parent = path.dirname(current);
+    if (parent === current) return null;
+    current = parent;
+  }
+}
+
+function currentModuleDir(): string | null {
+  try {
+    return path.dirname(fileURLToPath(import.meta.url));
+  } catch {
+    return null;
+  }
+}
+
+function toolkitHandoffScript(): string {
+  if (cachedToolkitHandoffScript) return cachedToolkitHandoffScript;
+  const candidates = [
+    process.env.P2A_TOOLKIT_ROOT,
+    process.cwd(),
+    currentModuleDir(),
+  ].filter((candidate): candidate is string => typeof candidate === "string" && candidate.trim().length > 0);
+
+  for (const candidate of candidates) {
+    const root = findToolkitRoot(candidate);
+    if (root) {
+      cachedToolkitHandoffScript = path.join(root, "scripts", "p2a_handoff.mjs");
+      return cachedToolkitHandoffScript;
+    }
+  }
+
+  cachedToolkitHandoffScript = path.join(process.cwd(), "scripts", "p2a_handoff.mjs");
+  return cachedToolkitHandoffScript;
 }
 
 function formatAjvErrors(validator: ValidateFunction): string[] {
@@ -1485,8 +1529,8 @@ function buildCommands(rootPath: string, state: ProjectDetectionState, artifacts
     commands.push({
       id: "setup",
       label: "Setup guidance",
-      command: `node scripts/p2a_handoff.mjs scaffold --target ${shellQuote(rootPath)} --tools all`,
-      description: "Install P2A harness files from an external terminal.",
+      command: setupCommand(rootPath),
+      description: "Install P2A harness files from a Plan2Agent toolkit checkout.",
     });
   }
 
@@ -1494,8 +1538,8 @@ function buildCommands(rootPath: string, state: ProjectDetectionState, artifacts
     commands.push({
       id: "import",
       label: "Import guidance",
-      command: `node scripts/p2a_handoff.mjs --project-id <project-id> --artifacts <artifact-root> --target ${shellQuote(rootPath)} --tools all`,
-      description: "Import an existing planning artifact bundle from an external terminal.",
+      command: importCommand(rootPath),
+      description: "Import an existing planning artifact bundle from a Plan2Agent toolkit checkout.",
     });
   }
   if (primaryArtifact?.requiresIterationInit) {
@@ -1520,11 +1564,11 @@ function buildCommands(rootPath: string, state: ProjectDetectionState, artifacts
 }
 
 function setupCommand(rootPath: string): string {
-  return `node scripts/p2a_handoff.mjs scaffold --target ${shellQuote(rootPath)} --tools all`;
+  return `node ${shellQuote(toolkitHandoffScript())} scaffold --target ${shellQuote(rootPath)} --tools all`;
 }
 
 function importCommand(rootPath: string): string {
-  return `node scripts/p2a_handoff.mjs --project-id <project-id> --artifacts <artifact-root> --target ${shellQuote(rootPath)} --tools all`;
+  return `node ${shellQuote(toolkitHandoffScript())} --project-id <project-id> --artifacts <artifact-root> --target ${shellQuote(rootPath)} --tools all`;
 }
 
 function validateCommand(rootPath: string, artifacts: ArtifactSummary[]): string {
@@ -1555,7 +1599,7 @@ function installAction(rootPath: string): OnboardingAction {
   return {
     id: "install_p2a",
     label: "Install P2A",
-    description: "Install harness files from an external terminal.",
+    description: "Install harness files from a Plan2Agent toolkit checkout.",
     command: setupCommand(rootPath),
     cwd: rootPath,
     targetPath: rootPath,
@@ -1567,7 +1611,7 @@ function importAction(rootPath: string): OnboardingAction {
   return {
     id: "import_plan",
     label: "Import Plan",
-    description: "Import an approved planning artifact bundle into this workspace.",
+    description: "Import an approved planning artifact bundle from a Plan2Agent toolkit checkout.",
     command: importCommand(rootPath),
     cwd: rootPath,
     targetPath: rootPath,

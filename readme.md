@@ -37,7 +37,7 @@ v1에서 하지 않는 일:
 
 ## 하네스 구조
 
-Canonical 원본은 `.agents/skills/`와 CLI-중립 `.agents/agents/`다. `.agents/agents/*.md` frontmatter는 `capabilities`, `access`, `tier`만 사용하고 특정 CLI의 `tools`/`model` 문법을 넣지 않는다. `.claude/`, `.codex/`, `.gemini/` 아래 agent/skill mirror는 `.plan2agent/scripts/sync_cli_assets.mjs`로 생성되는 산출물이므로 직접 수정하지 않는다. Gemini command shim은 수동 관리 대상이다.
+Canonical 원본은 `.agents/skills/`와 CLI-중립 `.agents/agents/`다. `.agents/agents/*.md` frontmatter는 `capabilities`, `access`, `tier`만 사용하고 특정 CLI의 `tools`/`model` 문법을 넣지 않는다. `.claude/`, `.codex/`, `.gemini/` 아래 agent/skill mirror는 Plan2Agent 본체의 `scripts/sync_cli_assets.mjs`로 생성되는 산출물이므로 직접 수정하지 않는다. Gemini command shim은 수동 관리 대상이다.
 
 공통 canonical 원본:
 
@@ -146,19 +146,30 @@ fixtures/
       task-graph.json
     review-blocked/
       review.blocked.json
-.plan2agent/schemas/
+schemas/
   intake.schema.json
   spec.schema.json
   task-graph.schema.json
 scripts/
+  # repo-only toolkit scripts
+  p2a_doctor.mjs
+  p2a_handoff.mjs
   sync_cli_assets.mjs
   check_cli_parity.mjs
-  validate_artifacts.mjs
   run_fixtures.mjs
+  p2a_tool_manifest.mjs
+  # scaffold-installed project runtime scripts
+  p2a_paths.mjs
   p2a_project_config.mjs
+  p2a_iteration.mjs
   p2a_tasks.mjs
   p2a_runs.mjs
   p2a_execute.mjs
+  p2a_orchestrate.mjs
+  p2a_proposals.mjs
+  p2a_run_paths.mjs
+  p2a_iteration_state.mjs
+  validate_artifacts.mjs
 ```
 
 
@@ -342,22 +353,24 @@ Gemini CLI에서 `.gemini/commands/p2a/harness.toml`은 `/p2a:harness` 명령이
 CLI mirror 생성/동기화:
 
 ```bash
-node .plan2agent/scripts/sync_cli_assets.mjs
+node scripts/sync_cli_assets.mjs
 ```
 
 CLI mirror drift 확인(검사 항목: agent mirror 동기화, skill mirror byte 비교, Gemini command shim 내용 검사(skill 이름, `{{args}}`, 필수 필드)):
 
 ```bash
-node .plan2agent/scripts/check_cli_parity.mjs
+node scripts/check_cli_parity.mjs
 ```
 
 Fixture/golden output 확인:
 
 ```bash
-node .plan2agent/scripts/run_fixtures.mjs
+node scripts/run_fixtures.mjs
 ```
 
 `run_fixtures.mjs`는 일반 fixture set을 통과 검증하고, `fixtures/_e2e/manifest.json`의 artifact-root fixture는 handoff-ready 상태인지 확인한다. 승인된 Gate B spec은 `approval_audit`까지 확인한다. `fixtures/_negative/manifest.json`에 정의된 중단/실패 fixture는 기대한 실패 메시지가 나오는지 확인한다.
+
+위 세 명령과 `p2a_doctor.mjs`, `p2a_handoff.mjs`는 Plan2Agent 본체 개발자용이며 scaffold 대상 프로젝트에는 설치되지 않는다. 대상 프로젝트에는 `scripts/p2a_tool_manifest.mjs`의 project runtime 목록만 `.plan2agent/scripts/` 아래로 복사된다.
 
 artifact gate 확인:
 

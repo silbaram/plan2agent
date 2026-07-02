@@ -13,6 +13,7 @@ import {
   validateTaskContextData,
   validateTaskGraphData,
 } from './validate_artifacts.mjs';
+import { PROJECT_RUNTIME_SCHEMA_FILES, PROJECT_RUNTIME_SCRIPT_FILES } from './p2a_tool_manifest.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const ROOT = path.resolve(path.dirname(__filename), '..');
@@ -27,6 +28,7 @@ const EXECUTE_CLI = path.join(ROOT, 'scripts', 'p2a_execute.mjs');
 const ORCHESTRATE_CLI = path.join(ROOT, 'scripts', 'p2a_orchestrate.mjs');
 const PROPOSALS_CLI = path.join(ROOT, 'scripts', 'p2a_proposals.mjs');
 const HANDOFF_CLI = path.join(ROOT, 'scripts', 'p2a_handoff.mjs');
+const DOCTOR_CLI = path.join(ROOT, 'scripts', 'p2a_doctor.mjs');
 
 function runValidator(args) {
   return spawnSync(process.execPath, [VALIDATOR, ...args], { cwd: ROOT, encoding: 'utf8' });
@@ -58,6 +60,10 @@ function runProposals(args) {
 
 function runHandoff(args) {
   return spawnSync(process.execPath, [HANDOFF_CLI, ...args], { cwd: ROOT, encoding: 'utf8' });
+}
+
+function runDoctor(args) {
+  return spawnSync(process.execPath, [DOCTOR_CLI, ...args], { cwd: ROOT, encoding: 'utf8' });
 }
 
 function runTargetTasks(targetRoot, args) {
@@ -188,9 +194,9 @@ function validateScaffoldFixtureCase() {
       return { status: failureStatus(result), checks };
     }
 
-    const expectedScripts = ['p2a_paths.mjs', 'p2a_project_config.mjs', 'p2a_iteration.mjs', 'p2a_tasks.mjs', 'p2a_runs.mjs', 'p2a_execute.mjs', 'p2a_orchestrate.mjs', 'p2a_proposals.mjs', 'p2a_run_paths.mjs', 'p2a_iteration_state.mjs', 'validate_artifacts.mjs']
+    const expectedScripts = PROJECT_RUNTIME_SCRIPT_FILES
       .map((file) => path.join('.plan2agent', 'scripts', file));
-    const expectedSchemas = ['intake.schema.json', 'spec.schema.json', 'task-graph.schema.json', 'task-context.schema.json', 'review.schema.json', 'run.schema.json', 'run-index.schema.json', 'orchestration-plan.schema.json', 'orchestration-runtime.schema.json', 'skill-proposal.schema.json', 'proposal-review.schema.json', 'proposal-curation.schema.json', 'proposal-patch-draft.schema.json', 'proposal-draft-approval.schema.json']
+    const expectedSchemas = PROJECT_RUNTIME_SCHEMA_FILES
       .map((file) => path.join('.plan2agent', 'schemas', file));
     const expectedToolFiles = [
       path.join('.agents', 'skills', 'p2a-harness', 'SKILL.md'),
@@ -326,6 +332,44 @@ function validateScaffoldFixtureCase() {
       return { status: 1, checks };
     }
     writeFileSync(malformedConfigPath, `${JSON.stringify(lazyConfig, null, 2)}\n`, 'utf8');
+
+    result = runDoctor(['--target', targetRoot, '--json']);
+    checks += 1;
+    const doctorReport = result.status === 0 ? JSON.parse(result.stdout) : null;
+    if (
+      result.status !== 0
+      || doctorReport.schema_version !== 'p2a.doctor.v1'
+      || doctorReport.status !== 'pass'
+      || doctorReport.summary.failures !== 0
+      || doctorReport.checks.find((check) => check.id === 'runtime_scripts')?.status !== 'pass'
+      || doctorReport.checks.find((check) => check.id === 'runtime_schemas')?.status !== 'pass'
+      || doctorReport.checks.find((check) => check.id === 'repo_only_scripts_absent')?.status !== 'pass'
+      || doctorReport.checks.find((check) => check.id === 'verification_commands')?.status !== 'pass'
+    ) {
+      console.error('p2a_doctor did not pass for a complete scaffold target');
+      writeResultOutput(result);
+      console.error(JSON.stringify({ doctorReport }, null, 2));
+      return { status: 1, checks };
+    }
+
+    const misplacedDoctorPath = path.join(targetRoot, '.plan2agent', 'scripts', 'p2a_doctor.mjs');
+    writeFileSync(misplacedDoctorPath, 'repo-only script should not be scaffold-installed\n', 'utf8');
+    result = runDoctor(['--target', targetRoot, '--json']);
+    checks += 1;
+    const misplacedDoctorReport = result.status === 0 ? JSON.parse(result.stdout) : null;
+    const repoOnlyCheck = misplacedDoctorReport?.checks.find((check) => check.id === 'repo_only_scripts_absent');
+    if (
+      result.status !== 0
+      || misplacedDoctorReport.status !== 'warn'
+      || repoOnlyCheck?.status !== 'warn'
+      || !repoOnlyCheck.unexpected?.includes('.plan2agent/scripts/p2a_doctor.mjs')
+    ) {
+      console.error('p2a_doctor did not warn for a repo-only script under .plan2agent/scripts');
+      writeResultOutput(result);
+      console.error(JSON.stringify({ misplacedDoctorReport }, null, 2));
+      return { status: 1, checks };
+    }
+    unlinkSync(misplacedDoctorPath);
 
     const scaffoldArtifactRoot = path.join(targetRoot, '.plan2agent', 'artifacts', 'webhook-api-service');
     mkdirSync(path.dirname(scaffoldArtifactRoot), { recursive: true });

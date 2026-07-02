@@ -33,7 +33,7 @@
 | maintenance graph 생성/검증 | `p2a_iteration.mjs maintenance add`, `validate` | maintenance task graph를 lazy 생성/append하고, 존재하면 schema/dependency를 검증한다. |
 | co-located scaffold | `p2a_handoff.mjs scaffold` | 정식 진입점. 빈 코드 프로젝트에 반복 CLI, schema, AI 자산, project config, manifest, 시작 가이드, 프로젝트용 `.gitignore`를 설치해 이후 기획·개발·반복을 그 프로젝트 안에서 수행하게 한다. |
 | 반복 handoff | `p2a_handoff.mjs --iteration-id active` | 레거시/특수 흐름. plan2agent에서 이미 기획한 산출물을 별도 프로젝트로 옮길 때 active 반복 산출물, `.plan2agent/current-spec.json`, maintenance graph를 대상 프로젝트에 복사하고 handoff 기준점을 기록한다. |
-| 회귀 fixture | `.plan2agent/scripts/run_fixtures.mjs` | greenfield -> init -> current -> tasks ready -> close -> open -> validate/current, draft/compose/handoff 흐름을 검증한다. |
+| 회귀 fixture | `scripts/run_fixtures.mjs` | Plan2Agent 본체 저장소에서 greenfield -> init -> current -> tasks ready -> close -> open -> validate/current, draft/compose/handoff 흐름을 검증한다. |
 
 ### 0-2. 부분 구현
 
@@ -540,7 +540,7 @@ node .plan2agent/scripts/p2a_iteration.mjs validate \
 기본값은 `--iteration-id active`다. 다만 명령형 재현성을 위해 특정 iteration id override도 제공한다.
 
 ```bash
-node .plan2agent/scripts/p2a_handoff.mjs \
+node scripts/p2a_handoff.mjs \
   --project-id <project_id> \
   --artifacts .plan2agent/artifacts/<project_id> \
   --target /path/to/project \

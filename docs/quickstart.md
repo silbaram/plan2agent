@@ -231,12 +231,16 @@ node /path/to/plan2agent/scripts/p2a_handoff.mjs \
     project.config.json
     proposals/      # p2a_proposals mine/review/curate/draft-patch/approve-draft 실행 시 생성
     scripts/
+      p2a_paths.mjs
       p2a_project_config.mjs
+      p2a_iteration.mjs
       p2a_tasks.mjs
       p2a_runs.mjs
       p2a_execute.mjs
       p2a_orchestrate.mjs
       p2a_proposals.mjs
+      p2a_run_paths.mjs
+      p2a_iteration_state.mjs
       validate_artifacts.mjs
     schemas/
       *.schema.json

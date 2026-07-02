@@ -137,6 +137,8 @@ describe("loadProjectSnapshot", () => {
         },
       });
       expect(snapshot.onboarding.primaryAction.command).toContain("scaffold");
+      expect(snapshot.onboarding.primaryAction.command).toContain("scripts/p2a_handoff.mjs");
+      expect(snapshot.onboarding.primaryAction.command).not.toContain("/path/to/plan2agent");
     } finally {
       await rm(tempRoot, { recursive: true, force: true });
     }
@@ -162,6 +164,8 @@ describe("loadProjectSnapshot", () => {
         },
       });
       expect(snapshot.onboarding.primaryAction.command).toContain("--artifacts <artifact-root>");
+      expect(snapshot.onboarding.primaryAction.command).toContain("scripts/p2a_handoff.mjs");
+      expect(snapshot.onboarding.primaryAction.command).not.toContain("/path/to/plan2agent");
     } finally {
       await rm(tempRoot, { recursive: true, force: true });
     }
