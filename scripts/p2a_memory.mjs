@@ -2,7 +2,7 @@
 /** Sync Plan2Agent local artifacts with a Plan2Agent Memory server. */
 
 import { createHash } from 'node:crypto';
-import { existsSync, lstatSync, readdirSync, readFileSync } from 'node:fs';
+import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync } from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
 import { pathToFileURL } from 'node:url';
@@ -29,7 +29,7 @@ import {
 } from './p2a_iteration_state.mjs';
 
 const P2A_PATHS = resolveP2aPaths(import.meta.url);
-const COMMANDS = new Set(['status', 'push', 'digest']);
+const COMMANDS = new Set(['status', 'push', 'pull', 'digest']);
 const DEFAULT_MEMORY_URL_ENV = 'P2A_MEMORY_URL';
 const DEFAULT_MEMORY_TOKEN_ENV = 'P2A_MEMORY_TOKEN';
 const DEFAULT_ARTIFACT_LIMIT = 5000;
@@ -40,23 +40,25 @@ function usage() {
     'Usage:',
     '  node .plan2agent/scripts/p2a_memory.mjs status (--artifacts <dir>|--graph <path>|--runs <dir>) [--server <url>] [--token <token>] [--json]',
     '  node .plan2agent/scripts/p2a_memory.mjs push (--artifacts <dir>|--graph <path>) [--server <url>] [--token <token>] [--dry-run] [--yes] [--json]',
+    '  node .plan2agent/scripts/p2a_memory.mjs pull (--artifacts <dir>|--graph <path>|--runs <dir>) --dry-run [--server <url>] [--token <token>] [--json]',
     '  node .plan2agent/scripts/p2a_memory.mjs digest (--artifacts <dir>|--graph <path>|--runs <dir>) [--proposals <dir>] [--json]',
     '',
     'Commands:',
     '  status   Compare local project, iteration, document, task, run, and chunk snapshots with Memory.',
     '  push     Upsert local snapshots to Memory. Actual writes require --yes.',
+    '  pull     Preview remote Memory snapshots that differ from local files. Dry-run only.',
     '  digest   Summarize failed/blocked runs, verification gaps, and proposal queue candidates.',
     '',
     'Source options:',
     '  --artifacts <dir>   Iterative artifact root, for example .plan2agent/artifacts/<project_id>.',
     '  --graph <path>      Task graph JSON path. Runs default beside the graph parent.',
-    '  --runs <dir>        Explicit runs directory. Supported by status and digest only.',
+    '  --runs <dir>        Explicit runs directory. Supported by status, pull, and digest only.',
     '  --proposals <dir>   Proposal queue directory for digest.',
     '',
     'Memory options:',
     `  --server <url>      Memory server base URL. Default: ${DEFAULT_MEMORY_URL_ENV} or project config memory.serverUrlEnv.`,
     `  --token <token>     X-P2A-Local-Token value. Default: ${DEFAULT_MEMORY_TOKEN_ENV} or project config memory.tokenEnv.`,
-    '  --dry-run           For push, print the write plan without contacting the server.',
+    '  --dry-run           For push, print the write plan without contacting the server. Required by pull.',
     '  --yes               Required for push to perform server writes.',
     '  --json              Machine-readable output.',
     '  --help, -h          Show this help.',
@@ -101,8 +103,9 @@ function parseArgs(argv) {
   if (args.help) return args;
   const sourceCount = [args.artifacts, args.graph, args.runs].filter(Boolean).length;
   if (sourceCount > 1) throw new Error('--artifacts, --graph, and --runs cannot be combined');
-  if (args.command === 'push' && args.runs) throw new Error('push requires --artifacts or --graph; --runs is digest/status only');
-  if (args.command !== 'push' && args.dryRun) throw new Error('--dry-run is only supported by push');
+  if (args.command === 'push' && args.runs) throw new Error('push requires --artifacts or --graph; --runs is digest/status/pull only');
+  if (!['push', 'pull'].includes(args.command) && args.dryRun) throw new Error('--dry-run is only supported by push and pull');
+  if (args.command === 'pull' && !args.dryRun) throw new Error('pull is preview-only for now and requires --dry-run');
   if (args.command !== 'push' && args.yes) throw new Error('--yes is only supported by push');
   if (args.command !== 'digest' && args.proposals) throw new Error('--proposals is only supported by digest');
 
@@ -853,22 +856,37 @@ function localKey(item) {
   return item.sourceKey ?? item.artifactId;
 }
 
-function compareSync(plan, remoteArtifacts) {
-  const remoteByKey = new Map();
+export function compareSync(plan, remoteArtifacts) {
+  const remoteBySource = new Map();
   for (const item of remoteArtifacts) {
-    remoteByKey.set(`${item.artifactType}:${remoteKey(item)}`, item);
+    const key = `${item.artifactType}:${remoteKey(item)}`;
+    const candidates = remoteBySource.get(key) ?? [];
+    candidates.push(item);
+    remoteBySource.set(key, candidates);
   }
   const items = plan.syncItems.map((item) => {
     const key = `${item.artifactType}:${localKey(item)}`;
-    const remote = remoteByKey.get(key) ?? null;
+    const remote = selectRemoteCandidate(remoteBySource.get(key) ?? []);
     if (!remote) return { ...item, syncStatus: 'missing_remote', remote: null };
     if (item.contentHash && remote.contentHash && item.contentHash !== remote.contentHash) {
-      return { ...item, syncStatus: 'remote_differs', remoteArtifactId: remote.artifactId, remoteContentHash: remote.contentHash };
+      return {
+        ...item,
+        syncStatus: 'remote_differs',
+        remoteArtifactId: remote.artifactId,
+        remoteContentHash: remote.contentHash,
+        remoteSnapshotVersion: remote.snapshotVersion ?? null,
+      };
     }
-    return { ...item, syncStatus: 'synced', remoteArtifactId: remote.artifactId, remoteContentHash: remote.contentHash ?? null };
+    return {
+      ...item,
+      syncStatus: 'synced',
+      remoteArtifactId: remote.artifactId,
+      remoteContentHash: remote.contentHash ?? null,
+      remoteSnapshotVersion: remote.snapshotVersion ?? null,
+    };
   });
-  const matchedKeys = new Set(items.filter((item) => item.remoteArtifactId).map((item) => `${item.artifactType}:${localKey(item)}`));
-  const extraRemote = remoteArtifacts.filter((item) => !matchedKeys.has(`${item.artifactType}:${remoteKey(item)}`));
+  const localSourceKeys = new Set(plan.syncItems.map((item) => `${item.artifactType}:${localKey(item)}`));
+  const extraRemote = remoteArtifacts.filter((item) => !localSourceKeys.has(`${item.artifactType}:${remoteKey(item)}`));
   const summary = {
     totalLocal: items.length,
     synced: items.filter((item) => item.syncStatus === 'synced').length,
@@ -877,6 +895,31 @@ function compareSync(plan, remoteArtifacts) {
     extraRemote: extraRemote.length,
   };
   return { summary, items, extraRemote };
+}
+
+function selectRemoteCandidate(candidates) {
+  if (!candidates.length) return null;
+  return [...candidates].sort(compareRemoteFreshness)[0];
+}
+
+function compareRemoteFreshness(left, right) {
+  const versionDelta = remoteVersion(right) - remoteVersion(left);
+  if (versionDelta !== 0) return versionDelta;
+  const updatedDelta = remoteTimestamp(right.updatedAt) - remoteTimestamp(left.updatedAt);
+  if (updatedDelta !== 0) return updatedDelta;
+  const createdDelta = remoteTimestamp(right.createdAt) - remoteTimestamp(left.createdAt);
+  if (createdDelta !== 0) return createdDelta;
+  return String(left.artifactId ?? '').localeCompare(String(right.artifactId ?? ''));
+}
+
+function remoteVersion(item) {
+  const numeric = Number(item.snapshotVersion);
+  return Number.isFinite(numeric) ? numeric : Number.NEGATIVE_INFINITY;
+}
+
+function remoteTimestamp(value) {
+  const timestamp = Date.parse(value ?? '');
+  return Number.isFinite(timestamp) ? timestamp : Number.NEGATIVE_INFINITY;
 }
 
 async function runStatus(args) {
@@ -927,6 +970,166 @@ function printStatus(payload) {
   console.log(`- server: ${payload.server.status}${payload.server.url ? ` (${payload.server.url})` : ''}`);
   console.log(`- local: ${formatSummary(payload.local)}`);
   console.log(`- sync: synced=${payload.sync.summary.synced} missingRemote=${payload.sync.summary.missingRemote} remoteDiffers=${payload.sync.summary.remoteDiffers} extraRemote=${payload.sync.summary.extraRemote}`);
+  if (payload.skippedRuns.length) console.log(`- skipped runs: ${payload.skippedRuns.length}`);
+  if (payload.nextActions.length) {
+    console.log('next actions:');
+    payload.nextActions.forEach((action) => console.log(`- ${action}`));
+  }
+}
+
+async function runPull(args) {
+  const plan = buildMemoryPlan(args);
+  const connection = resolveMemoryConnection(args);
+  const server = await memoryHealth(connection);
+  const remote = await fetchRemoteArtifacts(connection, plan);
+  const remoteAvailable = Boolean(connection.server && !remote.error);
+  const sync = remoteAvailable
+    ? compareSync(plan, remote.artifacts)
+    : emptySync();
+  const preview = buildPullPreview(sync, remoteAvailable);
+  const payload = {
+    schema_version: 'p2a.memory_pull_preview.v1',
+    generatedAt: new Date().toISOString(),
+    dryRun: true,
+    localWrites: 0,
+    context: plan.context,
+    server: {
+      url: connection.server,
+      source: connection.serverSource,
+      status: remote.error ? 'unavailable' : server.status,
+      detail: remote.error ?? server.detail,
+    },
+    local: plan.summary,
+    remote: summarizeRemoteArtifacts(remoteAvailable ? remote.artifacts : []),
+    preview,
+    skippedRuns: plan.skippedRuns,
+    limitations: [
+      'Memory pull is preview-only in this release and does not write local files.',
+      'The current Memory lookup API returns artifact metadata and hashes; content apply is intentionally not performed.',
+    ],
+    nextActions: pullPreviewNextActions(connection, remote, preview, plan),
+  };
+  if (args.json) console.log(JSON.stringify(payload, null, 2));
+  else printPullPreview(payload);
+  return remoteAvailable ? 0 : 1;
+}
+
+function emptySync() {
+  return {
+    summary: {
+      totalLocal: 0,
+      synced: 0,
+      missingRemote: 0,
+      remoteDiffers: 0,
+      extraRemote: 0,
+    },
+    items: [],
+    extraRemote: [],
+  };
+}
+
+function summarizeRemoteArtifacts(artifacts) {
+  const byType = {};
+  for (const artifact of artifacts) {
+    byType[artifact.artifactType] = (byType[artifact.artifactType] ?? 0) + 1;
+  }
+  return {
+    total: artifacts.length,
+    byType,
+  };
+}
+
+function buildPullPreview(sync, remoteAvailable) {
+  const items = remoteAvailable
+    ? sync.items
+      .filter((item) => item.syncStatus !== 'synced')
+      .map((item) => pullLocalItemPreview(item))
+    : [];
+  const remoteOnly = remoteAvailable
+    ? sync.extraRemote.map((item) => pullRemoteOnlyPreview(item))
+    : [];
+  return {
+    compared: remoteAvailable,
+    summary: {
+      comparedLocal: sync.summary.totalLocal,
+      alreadyLocal: sync.summary.synced,
+      localOnly: sync.summary.missingRemote,
+      remoteDiffers: sync.summary.remoteDiffers,
+      remoteOnly: sync.summary.extraRemote,
+      localWrites: 0,
+    },
+    items,
+    remoteOnly,
+  };
+}
+
+function pullLocalItemPreview(item) {
+  return {
+    action: item.syncStatus === 'remote_differs' ? 'review_remote_diff' : 'local_only',
+    artifactType: item.artifactType,
+    sourceKey: localKey(item),
+    sourcePath: item.sourcePath,
+    localContentHash: item.contentHash ?? null,
+    remoteArtifactId: item.remoteArtifactId ?? null,
+    remoteContentHash: item.remoteContentHash ?? null,
+    remoteSnapshotVersion: item.remoteSnapshotVersion ?? null,
+    detail: item.syncStatus === 'remote_differs'
+      ? 'Remote Memory has a different hash for this local source. Review before deciding whether to restore manually.'
+      : 'Local source is not present in Memory. Push if this local artifact should be preserved.',
+  };
+}
+
+function pullRemoteOnlyPreview(item) {
+  return {
+    action: 'remote_only',
+    artifactType: item.artifactType,
+    sourceKey: remoteKey(item),
+    sourcePath: item.sourcePath ?? item.sourceReference?.path ?? null,
+    remoteArtifactId: item.artifactId ?? null,
+    remoteContentHash: item.contentHash ?? null,
+    snapshotVersion: item.snapshotVersion ?? null,
+    detail: 'Memory has an artifact with no matching local source in the selected context.',
+  };
+}
+
+function sourceFlag(context) {
+  if (context.sourceKind === 'artifacts') return `--artifacts ${context.sourcePath}`;
+  if (context.sourceKind === 'graph') return `--graph ${context.sourcePath}`;
+  return `--runs ${context.runsDir}`;
+}
+
+function pullPreviewNextActions(connection, remote, preview, plan) {
+  const actions = [];
+  if (!connection.server) {
+    actions.push(`Set ${DEFAULT_MEMORY_URL_ENV} or pass --server to preview Memory pull.`);
+  } else if (remote.error) {
+    actions.push('Fix Memory server connectivity before relying on pull preview.');
+  }
+  if (preview.summary.localOnly > 0) {
+    if (plan.context.sourceKind === 'graph' || plan.context.sourceKind === 'artifacts') {
+      actions.push(`Preview push for local-only artifacts: node .plan2agent/scripts/p2a.mjs memory push ${sourceFlag(plan.context)} --dry-run`);
+    } else {
+      actions.push('Use --artifacts or --graph when you are ready to push full local snapshots to Memory.');
+    }
+  }
+  if (preview.summary.remoteDiffers > 0 || preview.summary.remoteOnly > 0) {
+    actions.push('Review remote-only/different artifacts and restore manually from Memory/search output if needed.');
+  }
+  if (plan.skippedRuns.length > 0) actions.push('Inspect skipped run records before using Memory as a restore source.');
+  if (!actions.length) actions.push('No Memory pull differences detected.');
+  return actions;
+}
+
+function printPullPreview(payload) {
+  console.log('Plan2Agent memory pull dry run');
+  console.log(`- project: ${payload.context.projectId}`);
+  console.log(`- iteration: ${payload.context.iterationId}`);
+  console.log(`- source: ${payload.context.sourceKind} ${payload.context.sourcePath}`);
+  console.log(`- server: ${payload.server.status}${payload.server.url ? ` (${payload.server.url})` : ''}`);
+  console.log('- dry-run: no local files written');
+  console.log(`- local: ${formatSummary(payload.local)}`);
+  console.log(`- remote: total=${payload.remote.total}`);
+  console.log(`- preview: compared=${payload.preview.compared ? 'yes' : 'no'} alreadyLocal=${payload.preview.summary.alreadyLocal} localOnly=${payload.preview.summary.localOnly} remoteDiffers=${payload.preview.summary.remoteDiffers} remoteOnly=${payload.preview.summary.remoteOnly}`);
   if (payload.skippedRuns.length) console.log(`- skipped runs: ${payload.skippedRuns.length}`);
   if (payload.nextActions.length) {
     console.log('next actions:');
@@ -1206,23 +1409,35 @@ function errorMessage(error) {
   return error instanceof Error && error.message ? error.message : String(error);
 }
 
-async function main() {
-  const args = parseArgs(process.argv.slice(2));
+export async function main(argv = process.argv.slice(2)) {
+  const args = parseArgs(argv);
   if (args.help) {
     console.log(usage());
     return 0;
   }
   if (args.command === 'status') return runStatus(args);
   if (args.command === 'push') return runPush(args);
+  if (args.command === 'pull') return runPull(args);
   if (args.command === 'digest') return runDigest(args);
   throw new Error(`unknown command: ${args.command}`);
 }
 
-main()
-  .then((status) => {
-    process.exitCode = status;
-  })
-  .catch((error) => {
-    console.error(`p2a_memory error: ${errorMessage(error)}`);
-    process.exitCode = 1;
-  });
+function isDirectEntry() {
+  if (!process.argv[1]) return false;
+  try {
+    return realpathSync(P2A_PATHS.filename) === realpathSync(process.argv[1]);
+  } catch {
+    return import.meta.url === pathToFileURL(process.argv[1]).href;
+  }
+}
+
+if (isDirectEntry()) {
+  main()
+    .then((status) => {
+      process.exitCode = status;
+    })
+    .catch((error) => {
+      console.error(`p2a_memory error: ${errorMessage(error)}`);
+      process.exitCode = 1;
+    });
+}

@@ -50,7 +50,7 @@ function usage() {
     '  node .plan2agent/scripts/p2a.mjs upgrade (--dry-run|--apply)',
     '  node .plan2agent/scripts/p2a.mjs enhance <capability> [--dry-run] [--overwrite]',
     '  node .plan2agent/scripts/p2a.mjs eval <grade|compare|analyze|generate|digest> [options]',
-    '  node .plan2agent/scripts/p2a.mjs memory <status|push|digest> [options]',
+    '  node .plan2agent/scripts/p2a.mjs memory <status|push|pull|digest> [options]',
     '  node .plan2agent/scripts/p2a.mjs execute <plan|start|resume|status|finish> [options]',
     '  node .plan2agent/scripts/p2a.mjs tasks|runs|iteration|orchestrate|proposals|validate ...',
     '',
@@ -575,6 +575,7 @@ function buildInfo(targetRootInput) {
       nextActions.push('Repair Memory capability manifest/config drift: node .plan2agent/scripts/p2a.mjs enhance memory');
     } else if (artifacts.length) {
       nextActions.push(`Check Memory sync: node .plan2agent/scripts/p2a.mjs memory status --artifacts ${artifacts[0].artifactRoot}`);
+      nextActions.push(`Preview Memory pull: node .plan2agent/scripts/p2a.mjs memory pull --artifacts ${artifacts[0].artifactRoot} --dry-run`);
       nextActions.push(`Digest Memory maintenance candidates: node .plan2agent/scripts/p2a.mjs memory digest --artifacts ${artifacts[0].artifactRoot}`);
     }
   }

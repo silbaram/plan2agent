@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 /** Run Plan2Agent fixture/golden validation for positive, e2e, iteration, and negative fixture cases. */
 
+import { createHash } from 'node:crypto';
 import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, readdirSync, renameSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -13,6 +14,7 @@ import {
   validateTaskContextData,
   validateTaskGraphData,
 } from './validate_artifacts.mjs';
+import { compareSync } from './p2a_memory.mjs';
 import { PROJECT_RUNTIME_SCHEMA_FILES, PROJECT_RUNTIME_SCRIPT_FILES } from './p2a_tool_manifest.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -140,6 +142,22 @@ function writeFakeProviderCli(binDir, command, versionOutput) {
   writeFileSync(commandPath, `#!/usr/bin/env node\nconsole.log(${JSON.stringify(versionOutput)});\n`, 'utf8');
   chmodSync(commandPath, 0o755);
   return commandPath;
+}
+
+function hashText(value) {
+  return createHash('sha256').update(value).digest('hex');
+}
+
+function normalizeFixturePath(filePath) {
+  const relative = path.relative(ROOT, filePath);
+  if (relative && !relative.startsWith('..') && !path.isAbsolute(relative)) {
+    return relative.split(path.sep).join('/');
+  }
+  return filePath.split(path.sep).join('/');
+}
+
+function sourceDocumentId(projectId, iterationId, sourcePath) {
+  return `${projectId}:${iterationId}:${sourcePath}`;
 }
 
 function failureStatus(result) {
@@ -779,6 +797,7 @@ function validateScaffoldFixtureCase() {
       || !result.stdout.includes('Plan2Agent enhance memory dry run')
       || !result.stdout.includes('configUpdatedKeys: memory')
       || !result.stdout.includes('After creating an artifact root, check local/Memory sync: node .plan2agent/scripts/p2a.mjs memory status --artifacts .plan2agent/artifacts/<project_id>')
+      || !result.stdout.includes('After Memory is configured, preview restore diff: node .plan2agent/scripts/p2a.mjs memory pull --artifacts .plan2agent/artifacts/<project_id> --dry-run')
       || !result.stdout.includes('dry-run: no files written')
       || dryRunCapabilityConfig.memory
     ) {
@@ -1627,6 +1646,93 @@ function validateMemoryFixtureCases() {
     console.error('memory push dry-run fixture failed');
     writeResultOutput(result);
     return { status: failureStatus(result), checks };
+  }
+
+  result = runMemory(['pull', '--graph', graphPath, '--dry-run']);
+  checks += 1;
+  if (result.status === 0 || !result.stdout.includes('Plan2Agent memory pull dry run') || !result.stdout.includes('server: not_configured') || !result.stdout.includes('dry-run: no local files written')) {
+    console.error('memory pull dry-run not-configured fixture failed');
+    writeResultOutput(result);
+    return { status: result.status === 0 ? 1 : failureStatus(result), checks };
+  }
+
+  result = runMemory(['pull', '--graph', graphPath]);
+  checks += 1;
+  if (result.status === 0 || !result.stderr.includes('pull is preview-only for now and requires --dry-run')) {
+    console.error('memory pull dry-run guard fixture failed');
+    writeResultOutput(result);
+    return { status: result.status === 0 ? 1 : failureStatus(result), checks };
+  }
+
+  const graph = JSON.parse(readFileSync(graphPath, 'utf8'));
+  const graphSourcePath = normalizeFixturePath(graphPath);
+  const graphDocumentSourceId = sourceDocumentId(graph.projectId, graph.version, graphSourcePath);
+  const duplicateRemoteSync = compareSync({
+    syncItems: [
+      {
+        artifactType: 'DOCUMENT_SNAPSHOT',
+        sourceKey: graphDocumentSourceId,
+        sourcePath: graphSourcePath,
+        contentHash: hashText(readFileSync(graphPath, 'utf8')),
+        sourceIds: {
+          sourceDocumentId: graphDocumentSourceId,
+        },
+      },
+    ],
+  }, [
+    {
+      artifactType: 'DOCUMENT_SNAPSHOT',
+      artifactId: 'remote-task-graph-latest',
+      projectId: 'remote-project-id',
+      iterationId: 'remote-iteration-id',
+      sourcePath: graphSourcePath,
+      title: path.basename(graphPath),
+      contentHash: hashText(readFileSync(graphPath, 'utf8')),
+      snapshotVersion: 2,
+      createdAt: '2026-07-02T00:00:00.000Z',
+      updatedAt: '2026-07-02T00:00:00.000Z',
+      sourceIds: {
+        sourceProjectId: graph.projectId,
+        sourceIterationId: graph.version,
+        sourceDocumentId: graphDocumentSourceId,
+      },
+      metadata: {
+        sourceDocumentId: graphDocumentSourceId,
+      },
+    },
+    {
+      artifactType: 'DOCUMENT_SNAPSHOT',
+      artifactId: 'remote-task-graph-old',
+      projectId: 'remote-project-id',
+      iterationId: 'remote-iteration-id',
+      sourcePath: graphSourcePath,
+      title: path.basename(graphPath),
+      contentHash: 'older-task-graph-hash',
+      snapshotVersion: 1,
+      createdAt: '2026-07-01T00:00:00.000Z',
+      updatedAt: '2026-07-01T00:00:00.000Z',
+      sourceIds: {
+        sourceProjectId: graph.projectId,
+        sourceIterationId: graph.version,
+        sourceDocumentId: graphDocumentSourceId,
+      },
+      metadata: {
+        sourceDocumentId: graphDocumentSourceId,
+      },
+    },
+  ]);
+  checks += 1;
+  const duplicateRemoteItem = duplicateRemoteSync.items[0];
+  if (
+    duplicateRemoteSync.summary.synced !== 1
+    || duplicateRemoteSync.summary.remoteDiffers !== 0
+    || duplicateRemoteSync.summary.extraRemote !== 0
+    || duplicateRemoteItem.remoteArtifactId !== 'remote-task-graph-latest'
+    || duplicateRemoteItem.remoteSnapshotVersion !== 2
+  ) {
+    console.error('memory duplicate remote snapshot comparison fixture failed');
+    console.error(JSON.stringify({ duplicateRemoteSync }, null, 2));
+    return { status: 1, checks };
   }
 
   result = runMemory(['digest', '--graph', graphPath]);

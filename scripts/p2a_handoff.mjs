@@ -1756,6 +1756,7 @@ function enhanceCapabilityNextActions(capability, targetRoot, config, manifest) 
   if (capability === 'memory') {
     return [
       `${source.hasArtifact ? 'Check local/Memory sync' : 'After creating an artifact root, check local/Memory sync'}: node .plan2agent/scripts/p2a.mjs memory status --artifacts ${source.artifactRef}`,
+      `${source.hasArtifact ? 'Preview Memory restore diff' : 'After Memory is configured, preview restore diff'}: node .plan2agent/scripts/p2a.mjs memory pull --artifacts ${source.artifactRef} --dry-run`,
       `${source.hasArtifact ? 'Preview explicit Memory push' : 'After review, preview explicit Memory push'}: node .plan2agent/scripts/p2a.mjs memory push --artifacts ${source.artifactRef} --dry-run`,
       `${source.hasArtifact ? 'Summarize run/proposal gaps' : 'After runs exist, summarize run/proposal gaps'}: node .plan2agent/scripts/p2a.mjs memory digest --artifacts ${source.artifactRef}`,
     ];
