@@ -346,6 +346,28 @@ export type MemoryDigestSummary = {
   uncoveredCandidateRuns: number;
 };
 
+export type MemoryHistorySummary = {
+  sourcePath: string | null;
+  source: "file";
+  totalEvents: number;
+  visibleEvents: number;
+  localEvents: number;
+  remoteEvents: number;
+  failedOrBlockedRuns: number;
+  latestEventAt: string | null;
+};
+
+export type MemorySearchSummary = {
+  sourcePath: string | null;
+  source: "file";
+  query: string;
+  totalResults: number;
+  documentResults: number;
+  runResults: number;
+  taskResults: number;
+  latestGeneratedAt: string | null;
+};
+
 export type ArtifactSummary = {
   projectId: string;
   rootPath: string;
@@ -366,6 +388,8 @@ export type ArtifactSummary = {
   runs: WorkbenchRun[];
   evalSummary: EvalArtifactSummary | null;
   memoryDigest: MemoryDigestSummary | null;
+  memoryHistory: MemoryHistorySummary | null;
+  memorySearch: MemorySearchSummary | null;
   diagnostics: ProjectDiagnostic[];
 };
 
@@ -596,7 +620,9 @@ export type OperationalAction =
   | "update_apply"
   | "eval_generate"
   | "eval_analyze"
-  | "eval_digest";
+  | "eval_digest"
+  | "memory_digest"
+  | "memory_history";
 
 export type OperationalActionRequest = {
   projectRoot: string;

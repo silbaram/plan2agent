@@ -36,6 +36,8 @@ import type {
   ProjectOnboarding,
   ProjectSnapshot,
   MemoryDigestSummary,
+  MemoryHistorySummary,
+  MemorySearchSummary,
   RunStatus,
   SchemaValidationSummary,
   TaskCounts,
@@ -1575,6 +1577,71 @@ async function summarizeMemoryDigest(
   };
 }
 
+async function summarizeMemoryHistory(
+  rootPath: string,
+  artifactRoot: string,
+): Promise<MemoryHistorySummary | null> {
+  const candidates = [
+    { filePath: path.join(artifactRoot, "memory-history.json"), allowMissingContext: true },
+    { filePath: path.join(artifactRoot, "eval", "memory-history.json"), allowMissingContext: true },
+    { filePath: path.join(rootPath, ".plan2agent", "memory-history.json"), allowMissingContext: false },
+  ];
+  for (const candidate of candidates) {
+    const history = await readOptionalJson(candidate.filePath);
+    if (history?.schema_version !== "p2a.memory_history.v1") continue;
+    if (!memoryDigestMatchesArtifact(rootPath, artifactRoot, history, candidate.allowMissingContext)) continue;
+    const summary = recordValue(history.summary);
+    const timeline = recordArrayValue(history.timeline);
+    const latestEventAt = timeline
+      .map((item) => stringValue(item.occurredAt))
+      .filter((value): value is string => Boolean(value))
+      .sort((left, right) => right.localeCompare(left))[0] ?? null;
+    return {
+      sourcePath: normalizeRelative(rootPath, candidate.filePath),
+      source: "file",
+      totalEvents: numberValue(summary?.totalEvents) ?? timeline.length,
+      visibleEvents: numberValue(summary?.visibleEvents) ?? timeline.length,
+      localEvents: numberValue(summary?.localEvents) ?? 0,
+      remoteEvents: numberValue(summary?.remoteEvents) ?? 0,
+      failedOrBlockedRuns: numberValue(summary?.failedOrBlockedRuns) ?? 0,
+      latestEventAt,
+    };
+  }
+  return null;
+}
+
+async function summarizeMemorySearch(
+  rootPath: string,
+  artifactRoot: string,
+): Promise<MemorySearchSummary | null> {
+  const candidates = [
+    { filePath: path.join(artifactRoot, "memory-search.json"), allowMissingContext: true },
+    { filePath: path.join(artifactRoot, "eval", "memory-search.json"), allowMissingContext: true },
+    { filePath: path.join(rootPath, ".plan2agent", "memory-search.json"), allowMissingContext: false },
+  ];
+  for (const candidate of candidates) {
+    const search = await readOptionalJson(candidate.filePath);
+    if (search?.schema_version !== "p2a.memory_search.v1") continue;
+    if (!memoryDigestMatchesArtifact(rootPath, artifactRoot, search, candidate.allowMissingContext)) continue;
+    const query = recordValue(search.query);
+    const summary = recordValue(search.summary);
+    const byType = recordValue(summary?.byType);
+    return {
+      sourcePath: normalizeRelative(rootPath, candidate.filePath),
+      source: "file",
+      query: stringValue(query?.text) ?? "",
+      totalResults: numberValue(summary?.total) ?? recordArrayValue(search.results).length,
+      documentResults:
+        (numberValue(byType?.DOCUMENT_SNAPSHOT) ?? 0) +
+        (numberValue(byType?.DOCUMENT_CHUNK) ?? 0),
+      runResults: numberValue(byType?.RUN_RECORD) ?? 0,
+      taskResults: numberValue(byType?.TASK) ?? 0,
+      latestGeneratedAt: stringValue(search.generatedAt),
+    };
+  }
+  return null;
+}
+
 async function summarizeUpdateReports(rootPath: string): Promise<UpdateReportSummary[]> {
   const reportsDir = path.join(rootPath, ".plan2agent", "update-reports");
   const reports = await readJsonFilesFromDirectory(reportsDir);
@@ -1677,6 +1744,8 @@ async function summarizeArtifact(rootPath: string, artifactRoot: string): Promis
   const runSummary = await summarizeRuns(rootPath, artifactRoot);
   const evalSummary = await summarizeEvalArtifacts(rootPath, artifactRoot);
   const memoryDigest = await summarizeMemoryDigest(rootPath, artifactRoot, runSummary.runs);
+  const memoryHistory = await summarizeMemoryHistory(rootPath, artifactRoot);
+  const memorySearch = await summarizeMemorySearch(rootPath, artifactRoot);
   const validations: SchemaValidationSummary[] = [];
 
   const intakeValidation = await validateJsonFile({
@@ -1750,6 +1819,8 @@ async function summarizeArtifact(rootPath: string, artifactRoot: string): Promis
     runs: runSummary.runs,
     evalSummary,
     memoryDigest,
+    memoryHistory,
+    memorySearch,
     diagnostics,
   };
 }

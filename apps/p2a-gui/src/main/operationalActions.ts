@@ -14,6 +14,8 @@ const VALID_OPERATIONAL_ACTIONS = new Set<OperationalAction>([
   "eval_generate",
   "eval_analyze",
   "eval_digest",
+  "memory_digest",
+  "memory_history",
 ]);
 
 type OperationalCommand = {
@@ -114,6 +116,30 @@ function evalArgsForAction(
   ];
 }
 
+function memoryArgsForAction(
+  action: Extract<OperationalAction, "memory_digest" | "memory_history">,
+  artifactRef: string,
+): string[] {
+  if (action === "memory_digest") {
+    return [
+      "memory",
+      "digest",
+      "--artifacts",
+      artifactRef,
+      "--output",
+      `${artifactRef}/memory-digest.json`,
+    ];
+  }
+  return [
+    "memory",
+    "history",
+    "--artifacts",
+    artifactRef,
+    "--output",
+    `${artifactRef}/memory-history.json`,
+  ];
+}
+
 export function buildOperationalActionCommand(
   request: OperationalActionRequest,
 ): OperationalCommand {
@@ -138,7 +164,10 @@ export function buildOperationalActionCommand(
       ),
       "artifact root",
     );
-    args = evalArgsForAction(action, projectRelativeCommandPath(projectRoot, artifactRoot));
+    const artifactRef = projectRelativeCommandPath(projectRoot, artifactRoot);
+    args = action === "memory_digest" || action === "memory_history"
+      ? memoryArgsForAction(action, artifactRef)
+      : evalArgsForAction(action, artifactRef);
   }
 
   return {

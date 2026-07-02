@@ -2,7 +2,7 @@
 /** Sync Plan2Agent local artifacts with a Plan2Agent Memory server. */
 
 import { createHash } from 'node:crypto';
-import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
 import { pathToFileURL } from 'node:url';
@@ -29,11 +29,12 @@ import {
 } from './p2a_iteration_state.mjs';
 
 const P2A_PATHS = resolveP2aPaths(import.meta.url);
-const COMMANDS = new Set(['status', 'push', 'pull', 'search', 'digest']);
+const COMMANDS = new Set(['status', 'push', 'pull', 'search', 'history', 'digest']);
 const DEFAULT_MEMORY_URL_ENV = 'P2A_MEMORY_URL';
 const DEFAULT_MEMORY_TOKEN_ENV = 'P2A_MEMORY_TOKEN';
 const DEFAULT_ARTIFACT_LIMIT = 5000;
 const DEFAULT_SEARCH_LIMIT = 20;
+const DEFAULT_HISTORY_LIMIT = 100;
 const MAX_CHUNK_CHARS = 2000;
 const SEARCH_ARTIFACT_TYPES = new Set([
   'PROJECT',
@@ -65,14 +66,16 @@ function usage() {
     '  node .plan2agent/scripts/p2a_memory.mjs status (--artifacts <dir>|--graph <path>|--runs <dir>) [--server <url>] [--token <token>] [--json]',
     '  node .plan2agent/scripts/p2a_memory.mjs push (--artifacts <dir>|--graph <path>) [--server <url>] [--token <token>] [--dry-run] [--yes] [--json]',
     '  node .plan2agent/scripts/p2a_memory.mjs pull (--artifacts <dir>|--graph <path>|--runs <dir>) --dry-run [--server <url>] [--token <token>] [--json]',
-    '  node .plan2agent/scripts/p2a_memory.mjs search --query <text> [--artifacts <dir>|--graph <path>|--runs <dir>|--global] [--type <kind>] [--source-path <path>] [--limit <n>] [--server <url>] [--token <token>] [--json]',
-    '  node .plan2agent/scripts/p2a_memory.mjs digest (--artifacts <dir>|--graph <path>|--runs <dir>) [--proposals <dir>] [--json]',
+    '  node .plan2agent/scripts/p2a_memory.mjs search --query <text> [--artifacts <dir>|--graph <path>|--runs <dir>|--global] [--type <kind>] [--source-path <path>] [--limit <n>] [--server <url>] [--token <token>] [--output <path>] [--json]',
+    '  node .plan2agent/scripts/p2a_memory.mjs history [--artifacts <dir>|--graph <path>|--runs <dir>|--global] [--project <id>] [--iteration <id>] [--limit <n>] [--server <url>] [--token <token>] [--output <path>] [--json]',
+    '  node .plan2agent/scripts/p2a_memory.mjs digest (--artifacts <dir>|--graph <path>|--runs <dir>) [--proposals <dir>] [--output <path>] [--json]',
     '',
     'Commands:',
     '  status   Compare local project, iteration, document, task, run, and chunk snapshots with Memory.',
     '  push     Upsert local snapshots to Memory. Actual writes require --yes.',
     '  pull     Preview remote Memory snapshots that differ from local files. Dry-run only.',
     '  search   Keyword-search Memory snapshots. Uses the current project context unless --global is passed.',
+    '  history  Show local and remote Memory artifact lineage as a timeline.',
     '  digest   Summarize failed/blocked runs, verification gaps, and proposal queue candidates.',
     '',
     'Source options:',
@@ -80,7 +83,7 @@ function usage() {
     '  --graph <path>      Task graph JSON path. Runs default beside the graph parent.',
     '  --runs <dir>        Explicit runs directory. Supported by status, pull, search, and digest only.',
     '  --proposals <dir>   Proposal queue directory for digest.',
-    '  --global            For search, do not apply current project/iteration filters.',
+    '  --global            For search/history, do not apply current project/iteration filters.',
     '',
     'Memory options:',
     `  --server <url>      Memory server base URL. Default: ${DEFAULT_MEMORY_URL_ENV} or project config memory.serverUrlEnv.`,
@@ -88,7 +91,10 @@ function usage() {
     '  --query <text>      Keyword query for search.',
     '  --type <kind>       Search artifact type: document, chunk, task, run, graph, project, or iteration.',
     '  --source-path <path> Search source path filter.',
-    `  --limit <n>         Search result limit. Default: ${DEFAULT_SEARCH_LIMIT}.`,
+    '  --project <id>      Source project ID filter for history.',
+    '  --iteration <id>    Source iteration ID filter for history.',
+    `  --limit <n>         Search/history result limit. Defaults: search=${DEFAULT_SEARCH_LIMIT}, history=${DEFAULT_HISTORY_LIMIT}.`,
+    '  --output <path>     Write search/history/digest JSON to a file.',
     '  --dry-run           For push, print the write plan without contacting the server. Required by pull.',
     '  --yes               Required for push to perform server writes.',
     '  --json              Machine-readable output.',
@@ -111,6 +117,9 @@ function parseArgs(argv) {
     artifactType: null,
     sourcePath: null,
     limit: null,
+    project: null,
+    iteration: null,
+    output: null,
     global: false,
     server: null,
     token: null,
@@ -131,6 +140,9 @@ function parseArgs(argv) {
     else if (arg === '--type' || arg === '--artifact-type') args.artifactType = normalizeSearchArtifactType(requiredValue(argv, ++index, arg));
     else if (arg === '--source-path') args.sourcePath = normalizeSearchSourcePath(requiredValue(argv, ++index, '--source-path'));
     else if (arg === '--limit') args.limit = parsePositiveInteger(requiredValue(argv, ++index, '--limit'), '--limit');
+    else if (arg === '--project') args.project = requiredValue(argv, ++index, '--project').trim();
+    else if (arg === '--iteration') args.iteration = requiredValue(argv, ++index, '--iteration').trim();
+    else if (arg === '--output') args.output = requiredValue(argv, ++index, '--output');
     else if (arg === '--global') args.global = true;
     else if (arg === '--server') args.server = requiredValue(argv, ++index, '--server');
     else if (arg === '--token') args.token = requiredValue(argv, ++index, '--token');
@@ -149,26 +161,44 @@ function parseArgs(argv) {
   if (args.command === 'pull' && !args.dryRun) throw new Error('pull is preview-only for now and requires --dry-run');
   if (args.command !== 'push' && args.yes) throw new Error('--yes is only supported by push');
   if (args.command !== 'digest' && args.proposals) throw new Error('--proposals is only supported by digest');
-  if (args.command !== 'search' && (args.query || args.artifactType || args.sourcePath || args.limit || args.global)) {
-    throw new Error('--query, --type, --source-path, --limit, and --global are only supported by search');
+  if (!['search', 'history', 'digest'].includes(args.command) && args.output) {
+    throw new Error('--output is only supported by search, history, and digest');
+  }
+  if (args.command !== 'search' && (args.query || args.artifactType || args.sourcePath)) {
+    throw new Error('--query, --type, and --source-path are only supported by search');
+  }
+  if (!['search', 'history'].includes(args.command) && (args.limit || args.global)) {
+    throw new Error('--limit and --global are only supported by search or history');
+  }
+  if (args.command !== 'history' && (args.project || args.iteration)) {
+    throw new Error('--project and --iteration are only supported by history');
   }
   if (args.command === 'search') {
     if (!trimString(args.query)) throw new Error('search requires --query <text>');
     args.query = trimString(args.query);
     if (args.global && sourceCount > 0) throw new Error('search --global cannot be combined with --artifacts, --graph, or --runs');
   }
+  if (args.command === 'history') {
+    if (args.global && sourceCount > 0) throw new Error('history --global cannot be combined with --artifacts, --graph, or --runs');
+    if ((args.project || args.iteration) && sourceCount > 0) throw new Error('history --project/--iteration cannot be combined with --artifacts, --graph, or --runs');
+    if (args.project !== null && !args.project) throw new Error('--project requires a non-empty value');
+    if (args.iteration !== null && !args.iteration) throw new Error('--iteration requires a non-empty value');
+  }
 
-  if (sourceCount === 0 && !(args.command === 'search' && args.global)) {
+  if (sourceCount === 0 && !(args.command === 'search' && args.global) && !(args.command === 'history' && (args.global || args.project || args.iteration))) {
     const defaultArtifacts = singleArtifactProjectRoot();
     const configuredGraph = configuredTaskGraphPath();
     if (defaultArtifacts) args.artifacts = defaultArtifacts;
     else if (configuredGraph) args.graph = configuredGraph;
-    else if (['digest', 'search'].includes(args.command) && existsSync(path.join('.plan2agent', 'runs'))) args.runs = path.join('.plan2agent', 'runs');
+    else if (['digest', 'search', 'history'].includes(args.command) && existsSync(path.join('.plan2agent', 'runs'))) args.runs = path.join('.plan2agent', 'runs');
     else if (args.command !== 'search') assertNoUninitializedScaffoldArtifactRoots();
   }
 
-  if (!args.artifacts && !args.graph && !args.runs && args.command !== 'search') {
+  if (!args.artifacts && !args.graph && !args.runs && !['search', 'history'].includes(args.command)) {
     throw new Error('--artifacts, --graph, or --runs is required');
+  }
+  if (args.command === 'history' && !args.artifacts && !args.graph && !args.runs && !args.global && !args.project && !args.iteration) {
+    throw new Error('history requires --artifacts, --graph, --runs, --global, --project, or --iteration');
   }
   if (args.command === 'push' && !args.artifacts && !args.graph) {
     throw new Error('push requires --artifacts or --graph');
@@ -215,6 +245,11 @@ function readJsonObject(filePath) {
   } catch {
     return null;
   }
+}
+
+function writeJsonFile(filePath, payload) {
+  mkdirSync(path.dirname(filePath), { recursive: true });
+  writeFileSync(filePath, `${JSON.stringify(payload, null, 2)}\n`, 'utf8');
 }
 
 function projectConfig() {
@@ -799,48 +834,58 @@ function buildRunSnapshots(context, projectCanonicalId, iterationCanonicalId, ta
   const runs = [];
   const skippedRuns = [];
   for (const item of context.runs.runs) {
-    const { run, filePath, raw } = item;
+    const { run } = item;
     const task = taskBySourceId.get(run.taskId);
     if (!task) {
+      if (context.sourceKind === 'runs') {
+        const taskId = stableId('p2a-task', [context.projectId, context.iterationId, run.taskId]);
+        runs.push(buildRunSnapshot(context, projectCanonicalId, iterationCanonicalId, taskId, baseMetadata, item));
+        continue;
+      }
       skippedRuns.push({
         runId: run.runId,
         reason: `run task ${run.taskId} is not in the selected task graph`,
       });
       continue;
     }
-    const runId = stableId('p2a-run', [context.projectId, context.iterationId, run.runId]);
-    const runMetadata = metadata({
-      ...baseMetadata,
-      sourceTaskId: run.taskId,
-      sourceRunId: run.runId,
-      taskTitle: run.taskTitle,
-      failureClass: run.failure?.class ?? null,
-      verificationCount: run.verification.length,
-      changedFileCount: run.changedFiles.length,
-    });
-    runs.push({
-      id: runId,
-      sourceKey: `${run.taskId}:${run.runId}`,
-      sourcePath: displayPath(filePath),
-      contentHash: hashText(raw),
-      request: {
-        runId,
-        projectId: projectCanonicalId,
-        iterationId: iterationCanonicalId,
-        taskId: task.id,
-        sourceRunId: run.runId,
-        status: memoryRunStatus(run.status),
-        agentTool: run.agentTool,
-        runJson: raw,
-        artifactRefs: [],
-        startedAt: run.startedAt,
-        finishedAt: run.finishedAt,
-        sourceReference: sourceReference(runId, filePath),
-        metadata: runMetadata,
-      },
-    });
+    runs.push(buildRunSnapshot(context, projectCanonicalId, iterationCanonicalId, task.id, baseMetadata, item));
   }
   return { runs, skippedRuns };
+}
+
+function buildRunSnapshot(context, projectCanonicalId, iterationCanonicalId, taskId, baseMetadata, item) {
+  const { run, filePath, raw } = item;
+  const runId = stableId('p2a-run', [context.projectId, context.iterationId, run.runId]);
+  const runMetadata = metadata({
+    ...baseMetadata,
+    sourceTaskId: run.taskId,
+    sourceRunId: run.runId,
+    taskTitle: run.taskTitle,
+    failureClass: run.failure?.class ?? null,
+    verificationCount: run.verification.length,
+    changedFileCount: run.changedFiles.length,
+  });
+  return {
+    id: runId,
+    sourceKey: `${run.taskId}:${run.runId}`,
+    sourcePath: displayPath(filePath),
+    contentHash: hashText(raw),
+    request: {
+      runId,
+      projectId: projectCanonicalId,
+      iterationId: iterationCanonicalId,
+      taskId,
+      sourceRunId: run.runId,
+      status: memoryRunStatus(run.status),
+      agentTool: run.agentTool,
+      runJson: raw,
+      artifactRefs: [],
+      startedAt: run.startedAt,
+      finishedAt: run.finishedAt,
+      sourceReference: sourceReference(runId, filePath),
+      metadata: runMetadata,
+    },
+  };
 }
 
 async function memoryGet(connection, pathName, searchParams = {}) {
@@ -921,6 +966,22 @@ async function searchRemoteMemory(connection, args, plan) {
     return { results: Array.isArray(results) ? results : [], error: null };
   } catch (error) {
     return { results: [], error: errorMessage(error) };
+  }
+}
+
+async function fetchRemoteHistoryArtifacts(connection, args, plan) {
+  if (!connection.server) return { artifacts: [], error: null };
+  const searchParams = {
+    limit: args.limit ?? DEFAULT_HISTORY_LIMIT,
+  };
+  if (plan) searchParams.sourceProjectId = plan.context.projectId;
+  else if (args.project) searchParams.sourceProjectId = args.project;
+  if (!plan && args.iteration) searchParams.sourceIterationId = args.iteration;
+  try {
+    const artifacts = await memoryGet(connection, '/artifacts', searchParams);
+    return { artifacts: Array.isArray(artifacts) ? artifacts : [], error: null };
+  } catch (error) {
+    return { artifacts: [], error: errorMessage(error) };
   }
 }
 
@@ -1265,6 +1326,7 @@ async function runSearch(args) {
     results,
     nextActions: searchNextActions(connection, search, results, plan, args),
   };
+  if (args.output) writeJsonFile(path.resolve(args.output), payload);
   if (args.json) console.log(JSON.stringify(payload, null, 2));
   else printSearch(payload);
   return remoteAvailable ? 0 : 1;
@@ -1366,6 +1428,311 @@ function shellQuote(value) {
   const text = String(value ?? '');
   if (/^[A-Za-z0-9_./:=+-]+$/.test(text)) return text;
   return `'${text.replace(/'/g, "'\\''")}'`;
+}
+
+async function runHistory(args) {
+  const plan = args.artifacts || args.graph || args.runs
+    ? buildMemoryPlan(args)
+    : null;
+  const connection = resolveMemoryConnection(args);
+  const server = await memoryHealth(connection);
+  const remote = await fetchRemoteHistoryArtifacts(connection, args, plan);
+  const localEvents = plan ? buildLocalHistoryEvents(plan) : [];
+  const remoteEvents = remote.error ? [] : normalizeRemoteHistoryEvents(remote.artifacts);
+  const timeline = [...localEvents, ...remoteEvents]
+    .sort(compareHistoryEvents)
+    .slice(0, args.limit ?? DEFAULT_HISTORY_LIMIT);
+  const payload = {
+    schema_version: 'p2a.memory_history.v1',
+    generatedAt: new Date().toISOString(),
+    scope: historyScope(plan, args),
+    context: plan ? plan.context : null,
+    server: {
+      url: connection.server,
+      source: connection.serverSource,
+      status: remote.error ? 'unavailable' : server.status,
+      detail: remote.error ?? server.detail,
+    },
+    summary: summarizeHistory(localEvents, remoteEvents, timeline),
+    timeline,
+    skippedRuns: plan?.skippedRuns ?? [],
+    nextActions: historyNextActions(connection, remote, localEvents, remoteEvents, plan, args),
+  };
+  if (args.output) writeJsonFile(path.resolve(args.output), payload);
+  if (args.json) console.log(JSON.stringify(payload, null, 2));
+  else printHistory(payload);
+  if (plan) return 0;
+  return connection.server && !remote.error ? 0 : 1;
+}
+
+function historyScope(plan, args) {
+  if (plan) {
+    return {
+      mode: 'context',
+      sourceKind: plan.context.sourceKind,
+      sourcePath: plan.context.sourcePath,
+      projectId: plan.context.projectId,
+      iterationId: plan.context.iterationId,
+      limit: args.limit ?? DEFAULT_HISTORY_LIMIT,
+    };
+  }
+  return {
+    mode: args.global ? 'global' : 'remote_filter',
+    sourceKind: null,
+    sourcePath: null,
+    projectId: args.project ?? null,
+    iterationId: args.iteration ?? null,
+    limit: args.limit ?? DEFAULT_HISTORY_LIMIT,
+  };
+}
+
+function buildLocalHistoryEvents(plan) {
+  const events = [
+    localHistoryEvent({
+      artifactType: 'PROJECT',
+      artifactId: plan.project.id,
+      sourceKey: plan.project.sourceKey,
+      sourcePath: plan.context.sourcePath,
+      projectId: plan.context.projectId,
+      iterationId: null,
+      title: plan.project.request.name,
+      occurredAt: fileTimestamp(plan.context.sourcePath),
+      metadata: plan.project.request.metadata,
+    }),
+    localHistoryEvent({
+      artifactType: 'ITERATION',
+      artifactId: plan.iteration.id,
+      sourceKey: plan.iteration.sourceKey,
+      sourcePath: plan.context.sourcePath,
+      projectId: plan.context.projectId,
+      iterationId: plan.context.iterationId,
+      title: plan.iteration.request.label,
+      status: plan.iteration.request.status,
+      occurredAt: fileTimestamp(plan.context.sourcePath),
+      metadata: plan.iteration.request.metadata,
+    }),
+    ...plan.documents.map((document) => localHistoryEvent({
+      artifactType: 'DOCUMENT_SNAPSHOT',
+      artifactId: document.id,
+      sourceKey: document.sourceKey,
+      sourcePath: document.sourcePath,
+      projectId: plan.context.projectId,
+      iterationId: plan.context.iterationId,
+      title: document.request.title,
+      contentHash: document.contentHash,
+      occurredAt: fileTimestamp(document.sourcePath),
+      metadata: document.request.metadata,
+    })),
+    ...(plan.taskGraph ? [localHistoryEvent({
+      artifactType: 'TASK_GRAPH',
+      artifactId: plan.taskGraph.id,
+      sourceKey: plan.taskGraph.sourceKey,
+      sourcePath: plan.taskGraph.sourcePath,
+      projectId: plan.context.projectId,
+      iterationId: plan.context.iterationId,
+      title: 'task graph',
+      contentHash: plan.taskGraph.graphHash,
+      occurredAt: fileTimestamp(plan.taskGraph.sourcePath),
+      metadata: plan.taskGraph.request.metadata,
+    })] : []),
+    ...plan.tasks.map((task) => localHistoryEvent({
+      artifactType: 'TASK',
+      artifactId: task.id,
+      sourceKey: task.sourceKey,
+      sourcePath: plan.taskGraph?.sourcePath ?? plan.context.sourcePath,
+      projectId: plan.context.projectId,
+      iterationId: plan.context.iterationId,
+      taskId: task.request.sourceTaskId,
+      title: task.request.title,
+      status: task.request.status,
+      occurredAt: fileTimestamp(plan.taskGraph?.sourcePath ?? plan.context.sourcePath),
+      metadata: task.request.metadata,
+    })),
+    ...plan.runs.map((run) => localHistoryEvent({
+      artifactType: 'RUN_RECORD',
+      artifactId: run.id,
+      sourceKey: run.sourceKey,
+      sourcePath: run.sourcePath,
+      projectId: plan.context.projectId,
+      iterationId: plan.context.iterationId,
+      taskId: run.request.metadata.sourceTaskId ?? null,
+      runId: run.request.sourceRunId,
+      title: run.request.metadata.taskTitle ?? run.request.sourceRunId,
+      status: run.request.status,
+      contentHash: run.contentHash,
+      occurredAt: historyTimestamp(run.request.finishedAt, run.request.startedAt, fileTimestamp(run.sourcePath)),
+      metadata: run.request.metadata,
+    })),
+  ];
+  return events.filter(Boolean);
+}
+
+function localHistoryEvent(values) {
+  return historyEvent({
+    source: 'local',
+    eventType: 'local_snapshot',
+    snapshotVersion: null,
+    sourceReference: null,
+    ...values,
+  });
+}
+
+function normalizeRemoteHistoryEvents(artifacts) {
+  return artifacts.map((item) => historyEvent({
+    source: 'remote',
+    eventType: 'memory_snapshot',
+    artifactType: item.artifactType ?? 'UNKNOWN',
+    artifactId: item.artifactId ?? null,
+    sourceKey: remoteKey(item),
+    sourcePath: item.sourcePath ?? item.lineage?.sourcePath ?? item.sourceReference?.path ?? null,
+    projectId: item.sourceIds?.sourceProjectId ?? item.metadata?.sourceProjectId ?? item.projectId ?? item.lineage?.projectId ?? null,
+    iterationId: item.sourceIds?.sourceIterationId ?? item.metadata?.sourceIterationId ?? item.iterationId ?? item.lineage?.iterationId ?? null,
+    taskId: item.sourceIds?.sourceTaskId ?? item.metadata?.sourceTaskId ?? item.taskId ?? null,
+    runId: item.sourceIds?.sourceRunId ?? item.metadata?.sourceRunId ?? item.runId ?? null,
+    title: item.title ?? item.metadata?.taskTitle ?? item.sourcePath ?? item.artifactId ?? item.artifactType ?? 'artifact',
+    status: item.metadata?.status ?? null,
+    contentHash: item.contentHash ?? item.lineage?.contentHash ?? null,
+    snapshotVersion: item.snapshotVersion ?? item.lineage?.snapshotVersion ?? null,
+    occurredAt: historyTimestamp(item.updatedAt, item.createdAt),
+    sourceReference: item.sourceReference ?? null,
+    metadata: item.metadata ?? {},
+  })).filter(Boolean);
+}
+
+function historyEvent(values) {
+  return {
+    source: values.source,
+    eventType: values.eventType,
+    artifactType: values.artifactType,
+    artifactId: values.artifactId ?? null,
+    sourceKey: values.sourceKey ?? null,
+    sourcePath: values.sourcePath ?? null,
+    projectId: values.projectId ?? null,
+    iterationId: values.iterationId ?? null,
+    taskId: values.taskId ?? null,
+    runId: values.runId ?? null,
+    title: values.title ?? values.sourceKey ?? values.artifactId ?? values.artifactType,
+    status: values.status ?? null,
+    contentHash: values.contentHash ?? null,
+    snapshotVersion: values.snapshotVersion ?? null,
+    occurredAt: historyTimestamp(values.occurredAt),
+    sourceReference: values.sourceReference ?? null,
+    metadata: values.metadata ?? {},
+  };
+}
+
+function historyTimestamp(...values) {
+  for (const value of values) {
+    if (!value) continue;
+    const time = Date.parse(value);
+    if (Number.isFinite(time)) return new Date(time).toISOString();
+  }
+  return null;
+}
+
+function fileTimestamp(sourcePath) {
+  if (!sourcePath) return null;
+  const filePath = path.isAbsolute(sourcePath) ? sourcePath : path.join(P2A_PATHS.projectRoot, sourcePath);
+  try {
+    if (!existsSync(filePath)) return null;
+    return lstatSync(filePath).mtime.toISOString();
+  } catch {
+    return null;
+  }
+}
+
+function compareHistoryEvents(left, right) {
+  const timeDelta = historyEventTime(right) - historyEventTime(left);
+  if (timeDelta !== 0) return timeDelta;
+  const sourceDelta = left.source.localeCompare(right.source);
+  if (sourceDelta !== 0) return sourceDelta;
+  const typeDelta = left.artifactType.localeCompare(right.artifactType);
+  if (typeDelta !== 0) return typeDelta;
+  return String(left.sourceKey ?? left.artifactId ?? '').localeCompare(String(right.sourceKey ?? right.artifactId ?? ''));
+}
+
+function historyEventTime(event) {
+  const time = Date.parse(event.occurredAt ?? '');
+  return Number.isFinite(time) ? time : Number.NEGATIVE_INFINITY;
+}
+
+function isFailedOrBlockedRunEvent(event) {
+  return event.artifactType === 'RUN_RECORD'
+    && ['failed', 'blocked'].includes(String(event.status ?? '').toLowerCase());
+}
+
+function summarizeHistory(localEvents, remoteEvents, timeline) {
+  const allEvents = [...localEvents, ...remoteEvents];
+  const byType = {};
+  const bySource = {};
+  const iterations = new Set();
+  let failedOrBlockedRuns = 0;
+  for (const event of allEvents) {
+    byType[event.artifactType] = (byType[event.artifactType] ?? 0) + 1;
+    bySource[event.source] = (bySource[event.source] ?? 0) + 1;
+    if (event.iterationId) iterations.add(event.iterationId);
+    if (isFailedOrBlockedRunEvent(event)) failedOrBlockedRuns += 1;
+  }
+  return {
+    totalEvents: allEvents.length,
+    visibleEvents: timeline.length,
+    localEvents: localEvents.length,
+    remoteEvents: remoteEvents.length,
+    failedOrBlockedRuns,
+    iterationCount: iterations.size,
+    byType,
+    bySource,
+  };
+}
+
+function historyNextActions(connection, remote, localEvents, remoteEvents, plan, args) {
+  const actions = [];
+  if (!connection.server) {
+    actions.push(`Set ${DEFAULT_MEMORY_URL_ENV} or pass --server to include remote Memory history.`);
+  } else if (remote.error) {
+    actions.push('Fix Memory server connectivity before relying on remote history.');
+  } else if (!remoteEvents.length) {
+    actions.push('Push project artifacts to Memory before relying on cross-session history.');
+  }
+  if (plan && localEvents.length) {
+    actions.push(`Search this project history: node .plan2agent/scripts/p2a.mjs memory search ${sourceFlag(plan.context)} --query <term>`);
+  } else if (args.project) {
+    actions.push(`Search remote project history: node .plan2agent/scripts/p2a.mjs memory search --query <term> --global`);
+  }
+  if (plan && localEvents.some(isFailedOrBlockedRunEvent)) {
+    actions.push(`Summarize maintenance candidates: node .plan2agent/scripts/p2a.mjs memory digest ${sourceFlag(plan.context)}`);
+    actions.push(`Analyze failure clusters: node .plan2agent/scripts/p2a.mjs eval analyze ${sourceFlag(plan.context)}`);
+  }
+  if (!actions.length) actions.push('No immediate Memory history action found.');
+  return actions;
+}
+
+function printHistory(payload) {
+  console.log('Plan2Agent memory history');
+  console.log(`- scope: ${payload.scope.mode}${payload.scope.projectId ? ` project=${payload.scope.projectId}` : ''}${payload.scope.iterationId ? ` iteration=${payload.scope.iterationId}` : ''}`);
+  if (payload.context) console.log(`- source: ${payload.context.sourceKind} ${payload.context.sourcePath}`);
+  console.log(`- server: ${payload.server.status}${payload.server.url ? ` (${payload.server.url})` : ''}`);
+  console.log(`- events: total=${payload.summary.totalEvents} visible=${payload.summary.visibleEvents} local=${payload.summary.localEvents} remote=${payload.summary.remoteEvents} failedOrBlockedRuns=${payload.summary.failedOrBlockedRuns}`);
+  const types = Object.entries(payload.summary.byType);
+  if (types.length) console.log(`- types: ${types.map(([name, count]) => `${name}=${count}`).join(' ')}`);
+  if (payload.timeline.length) {
+    console.log('timeline:');
+    payload.timeline.forEach((event, index) => {
+      const when = event.occurredAt ?? 'unknown-time';
+      const status = event.status ? ` status=${event.status}` : '';
+      const run = event.runId ? ` run=${event.runId}` : '';
+      const task = event.taskId ? ` task=${event.taskId}` : '';
+      const version = event.snapshotVersion ? ` v${event.snapshotVersion}` : '';
+      console.log(`${index + 1}. ${when} ${event.source} ${event.artifactType}${version}${status}${task}${run}`);
+      console.log(`   ${event.title}`);
+      if (event.sourcePath) console.log(`   source: ${event.sourcePath}`);
+    });
+  }
+  if (payload.skippedRuns.length) console.log(`- skipped runs: ${payload.skippedRuns.length}`);
+  if (payload.nextActions.length) {
+    console.log('next actions:');
+    payload.nextActions.forEach((action) => console.log(`- ${action}`));
+  }
 }
 
 function formatSummary(summary) {
@@ -1520,6 +1887,7 @@ async function runDigest(args) {
   const { proposals, skippedProposals } = readProposals(context.proposalsDir);
   const runs = context.runs.runs.map((item) => item.run);
   const digest = buildDigest(context, runs, context.runs.skippedRuns, proposals, skippedProposals);
+  if (args.output) writeJsonFile(path.resolve(args.output), digest);
   if (args.json) console.log(JSON.stringify(digest, null, 2));
   else printDigest(digest);
   return 0;
@@ -1650,6 +2018,7 @@ export async function main(argv = process.argv.slice(2)) {
   if (args.command === 'push') return runPush(args);
   if (args.command === 'pull') return runPull(args);
   if (args.command === 'search') return runSearch(args);
+  if (args.command === 'history') return runHistory(args);
   if (args.command === 'digest') return runDigest(args);
   throw new Error(`unknown command: ${args.command}`);
 }

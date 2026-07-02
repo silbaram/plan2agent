@@ -799,6 +799,7 @@ function validateScaffoldFixtureCase() {
       || !result.stdout.includes('After creating an artifact root, check local/Memory sync: node .plan2agent/scripts/p2a.mjs memory status --artifacts .plan2agent/artifacts/<project_id>')
       || !result.stdout.includes('After Memory is configured, preview restore diff: node .plan2agent/scripts/p2a.mjs memory pull --artifacts .plan2agent/artifacts/<project_id> --dry-run')
       || !result.stdout.includes('After Memory contains snapshots, search history: node .plan2agent/scripts/p2a.mjs memory search --artifacts .plan2agent/artifacts/<project_id> --query <term>')
+      || !result.stdout.includes('After Memory contains snapshots, show timeline: node .plan2agent/scripts/p2a.mjs memory history --artifacts .plan2agent/artifacts/<project_id>')
       || !result.stdout.includes('dry-run: no files written')
       || dryRunCapabilityConfig.memory
     ) {
@@ -1689,6 +1690,54 @@ function validateMemoryFixtureCases() {
     || searchSourcePathPayload?.query?.sourcePath !== 'fixtures/webhook-api-service/task-graph.json'
   ) {
     console.error('memory search source-path normalization fixture failed');
+    writeResultOutput(result);
+    return { status: result.status === 0 ? 1 : failureStatus(result), checks };
+  }
+
+  result = runMemory(['history', '--graph', graphPath]);
+  checks += 1;
+  if (
+    result.status !== 0
+    || !result.stdout.includes('Plan2Agent memory history')
+    || !result.stdout.includes('server: not_configured')
+    || !result.stdout.includes('TASK_GRAPH=')
+    || !result.stdout.includes('Set P2A_MEMORY_URL or pass --server to include remote Memory history.')
+  ) {
+    console.error('memory history local fixture failed');
+    writeResultOutput(result);
+    return { status: failureStatus(result), checks };
+  }
+
+  const historyRunsDir = mkdtempSync(path.join(tmpdir(), 'p2a-memory-history-runs-'));
+  try {
+    writeEvalRuns(historyRunsDir, [evalRunFixture('run-memory-history-failed', 'failed')]);
+    result = runMemory(['history', '--runs', historyRunsDir]);
+    checks += 1;
+    if (
+      result.status !== 0
+      || !result.stdout.includes('failedOrBlockedRuns=1')
+      || !result.stdout.includes('Summarize maintenance candidates: node .plan2agent/scripts/p2a.mjs memory digest --runs')
+      || !result.stdout.includes('Analyze failure clusters: node .plan2agent/scripts/p2a.mjs eval analyze --runs')
+    ) {
+      console.error('memory history failed run next actions fixture failed');
+      writeResultOutput(result);
+      return { status: failureStatus(result), checks };
+    }
+  } finally {
+    rmSync(historyRunsDir, { recursive: true, force: true });
+  }
+
+  result = runMemory(['history', '--global', '--project', 'webhook-api-service', '--json']);
+  checks += 1;
+  const historyGlobalPayload = result.stdout ? JSON.parse(result.stdout) : null;
+  if (
+    result.status === 0
+    || historyGlobalPayload?.schema_version !== 'p2a.memory_history.v1'
+    || historyGlobalPayload?.scope?.mode !== 'global'
+    || historyGlobalPayload?.scope?.projectId !== 'webhook-api-service'
+    || historyGlobalPayload?.server?.status !== 'not_configured'
+  ) {
+    console.error('memory history global not-configured fixture failed');
     writeResultOutput(result);
     return { status: result.status === 0 ? 1 : failureStatus(result), checks };
   }
@@ -4887,6 +4936,16 @@ function validateIterationCurrentFixtureCases() {
         console.error(`iteration draft Gate A/B artifact validation failed: ${caseData.id}`);
         writeResultOutput(result);
         return { status: failureStatus(result), checks };
+      }
+      const draftSpec = JSON.parse(readFileSync(draftSpecPath, 'utf8'));
+      if (
+        !draftSpec.reference_reconnaissance
+        || !draftSpec.reference_reconnaissance.candidates?.some((candidate) => candidate.candidate_id === 'REF-1')
+        || !draftSpec.reference_reconnaissance.candidates?.every((candidate) => draftSpec.evidence.some((item) => item.source_id === candidate.source_id))
+      ) {
+        console.error(`iteration draft did not include valid Gate B reference reconnaissance: ${caseData.id}`);
+        console.error(JSON.stringify(draftSpec.reference_reconnaissance ?? null, null, 2));
+        return { status: 1, checks };
       }
 
       const draftCurrentSpec = JSON.parse(readFileSync(state.currentSpecPath, 'utf8'));

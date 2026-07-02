@@ -194,7 +194,7 @@ describe("operational actions", () => {
     }
   });
 
-  it("builds eval generate, analyze, and digest commands for the active artifact", async () => {
+  it("builds eval and memory report commands for the active artifact", async () => {
     const { projectRoot, artifactRoot } = await createProject();
     try {
       expect(
@@ -242,6 +242,36 @@ describe("operational actions", () => {
         ".plan2agent/artifacts/demo/eval",
         "--output",
         ".plan2agent/artifacts/demo/eval/eval-digest.json",
+      ]);
+
+      expect(
+        buildOperationalActionCommand({
+          projectRoot,
+          artifactRoot,
+          action: "memory_digest",
+        }).args,
+      ).toEqual([
+        "memory",
+        "digest",
+        "--artifacts",
+        ".plan2agent/artifacts/demo",
+        "--output",
+        ".plan2agent/artifacts/demo/memory-digest.json",
+      ]);
+
+      expect(
+        buildOperationalActionCommand({
+          projectRoot,
+          artifactRoot,
+          action: "memory_history",
+        }).args,
+      ).toEqual([
+        "memory",
+        "history",
+        "--artifacts",
+        ".plan2agent/artifacts/demo",
+        "--output",
+        ".plan2agent/artifacts/demo/memory-history.json",
       ]);
     } finally {
       await rm(projectRoot, { recursive: true, force: true });

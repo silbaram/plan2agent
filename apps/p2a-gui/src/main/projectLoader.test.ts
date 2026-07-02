@@ -808,4 +808,90 @@ describe("loadProjectSnapshot", () => {
       await rm(tempRoot, { recursive: true, force: true });
     }
   });
+
+  it("summarizes memory history and search reports for an artifact", async () => {
+    const tempRoot = await mkdtemp(path.join(tmpdir(), "p2a-loader-memory-reports-"));
+    try {
+      await mkdir(path.join(tempRoot, "gate-c-task-graph"), { recursive: true });
+      await mkdir(path.join(tempRoot, ".plan2agent"), { recursive: true });
+      await writeFile(
+        path.join(tempRoot, "gate-c-task-graph/task-graph.json"),
+        JSON.stringify({
+          schema_version: "p2a.task_graph.v1",
+          projectId: "memory-report-project",
+          version: "1",
+          sourceSpec: "gate-b-spec/spec.json",
+          tasks: [],
+        }),
+      );
+      await writeFile(
+        path.join(tempRoot, "memory-history.json"),
+        JSON.stringify({
+          schema_version: "p2a.memory_history.v1",
+          generatedAt: "2026-07-02T01:00:00.000Z",
+          context: {
+            sourceKind: "artifacts",
+            sourcePath: ".",
+            runsDir: "runs",
+          },
+          summary: {
+            totalEvents: 3,
+            visibleEvents: 3,
+            localEvents: 2,
+            remoteEvents: 1,
+            failedOrBlockedRuns: 1,
+          },
+          timeline: [
+            {
+              occurredAt: "2026-07-02T01:01:00.000Z",
+            },
+          ],
+        }),
+      );
+      await writeFile(
+        path.join(tempRoot, "memory-search.json"),
+        JSON.stringify({
+          schema_version: "p2a.memory_search.v1",
+          generatedAt: "2026-07-02T01:02:00.000Z",
+          query: {
+            text: "webhook",
+          },
+          context: {
+            sourceKind: "artifacts",
+            sourcePath: ".",
+            runsDir: "runs",
+          },
+          summary: {
+            total: 4,
+            byType: {
+              DOCUMENT_SNAPSHOT: 1,
+              DOCUMENT_CHUNK: 2,
+              RUN_RECORD: 1,
+            },
+          },
+          results: [],
+        }),
+      );
+
+      const snapshot = await loadProjectSnapshot(tempRoot);
+
+      expect(snapshot.artifacts[0]?.memoryHistory).toMatchObject({
+        sourcePath: "memory-history.json",
+        totalEvents: 3,
+        visibleEvents: 3,
+        remoteEvents: 1,
+        failedOrBlockedRuns: 1,
+        latestEventAt: "2026-07-02T01:01:00.000Z",
+      });
+      expect(snapshot.artifacts[0]?.memorySearch).toMatchObject({
+        sourcePath: "memory-search.json",
+        query: "webhook",
+        totalResults: 4,
+        documentResults: 3,
+        runResults: 1,
+      });
+    } finally {
+      await rm(tempRoot, { recursive: true, force: true });
+    }
+  });
 });

@@ -1759,6 +1759,7 @@ function enhanceCapabilityNextActions(capability, targetRoot, config, manifest) 
       `${source.hasArtifact ? 'Preview Memory restore diff' : 'After Memory is configured, preview restore diff'}: node .plan2agent/scripts/p2a.mjs memory pull --artifacts ${source.artifactRef} --dry-run`,
       `${source.hasArtifact ? 'Preview explicit Memory push' : 'After review, preview explicit Memory push'}: node .plan2agent/scripts/p2a.mjs memory push --artifacts ${source.artifactRef} --dry-run`,
       `${source.hasArtifact ? 'Search Memory history' : 'After Memory contains snapshots, search history'}: node .plan2agent/scripts/p2a.mjs memory search --artifacts ${source.artifactRef} --query <term>`,
+      `${source.hasArtifact ? 'Show Memory timeline' : 'After Memory contains snapshots, show timeline'}: node .plan2agent/scripts/p2a.mjs memory history --artifacts ${source.artifactRef}`,
       `${source.hasArtifact ? 'Summarize run/proposal gaps' : 'After runs exist, summarize run/proposal gaps'}: node .plan2agent/scripts/p2a.mjs memory digest --artifacts ${source.artifactRef}`,
     ];
   }

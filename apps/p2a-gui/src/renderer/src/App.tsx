@@ -46,6 +46,8 @@ import type {
   FailureClass,
   GuiConfigSnapshot,
   MemoryDigestSummary,
+  MemoryHistorySummary,
+  MemorySearchSummary,
   OnboardingAction,
   OperationalAction,
   OrchestrationRoleStatus,
@@ -402,11 +404,19 @@ function operationalActionLabel(action: OperationalAction, copy: UiCopy): string
   if (action === "update_apply") return copy.operational.runUpdateApply;
   if (action === "eval_generate") return copy.operational.runEvalGenerate;
   if (action === "eval_analyze") return copy.operational.runEvalAnalyze;
-  return copy.operational.runEvalDigest;
+  if (action === "eval_digest") return copy.operational.runEvalDigest;
+  if (action === "memory_digest") return copy.operational.runMemoryDigest;
+  return copy.operational.runMemoryHistory;
 }
 
 function operationalActionRequiresArtifact(action: OperationalAction): boolean {
-  return action === "eval_generate" || action === "eval_analyze" || action === "eval_digest";
+  return (
+    action === "eval_generate" ||
+    action === "eval_analyze" ||
+    action === "eval_digest" ||
+    action === "memory_digest" ||
+    action === "memory_history"
+  );
 }
 
 function hasP2aCommand(snapshot: ProjectSnapshot | null): boolean {
@@ -477,6 +487,30 @@ function memoryDigestArtifactDocument(summary: MemoryDigestSummary, copy: UiCopy
     relativePath: summary.sourcePath,
     meta: summary.source,
     state: summary.failedOrBlocked > 0 || summary.verificationGaps > 0 ? "warn" : "present",
+  };
+}
+
+function memoryHistoryArtifactDocument(summary: MemoryHistorySummary, copy: UiCopy): ArtifactDocument | null {
+  if (!summary.sourcePath) return null;
+  return {
+    id: `memory:${summary.sourcePath}`,
+    label: copy.operational.memoryHistory,
+    group: "memory",
+    relativePath: summary.sourcePath,
+    meta: summary.latestEventAt ?? copy.common.none,
+    state: summary.failedOrBlockedRuns > 0 ? "warn" : "present",
+  };
+}
+
+function memorySearchArtifactDocument(summary: MemorySearchSummary, copy: UiCopy): ArtifactDocument | null {
+  if (!summary.sourcePath) return null;
+  return {
+    id: `memory:${summary.sourcePath}`,
+    label: copy.operational.memorySearch,
+    group: "memory",
+    relativePath: summary.sourcePath,
+    meta: summary.query || copy.common.none,
+    state: summary.totalResults > 0 ? "present" : "missing",
   };
 }
 
@@ -571,6 +605,24 @@ function buildArtifactDocuments(
         artifact.memoryDigest.sourcePath,
         `${artifact.memoryDigest.failedOrBlocked} ${copy.operational.failedOrBlocked}`,
         artifact.memoryDigest.failedOrBlocked > 0 ? "warn" : "present",
+      );
+    }
+    if (artifact.memoryHistory?.sourcePath) {
+      addDocument(
+        copy.operational.memoryHistory,
+        "memory",
+        artifact.memoryHistory.sourcePath,
+        `${artifact.memoryHistory.visibleEvents} ${copy.operational.events}`,
+        artifact.memoryHistory.failedOrBlockedRuns > 0 ? "warn" : "present",
+      );
+    }
+    if (artifact.memorySearch?.sourcePath) {
+      addDocument(
+        copy.operational.memorySearch,
+        "memory",
+        artifact.memorySearch.sourcePath,
+        `${artifact.memorySearch.totalResults} ${copy.operational.results}`,
+        artifact.memorySearch.totalResults > 0 ? "present" : "missing",
       );
     }
   }
@@ -1178,7 +1230,7 @@ export default function App() {
         "--output",
         `${artifact.relativePath}/eval/analysis.json`,
       );
-    } else {
+    } else if (action === "eval_digest") {
       args.push(
         "eval",
         "digest",
@@ -1187,6 +1239,26 @@ export default function App() {
         "--output",
         `${artifact.relativePath}/eval/eval-digest.json`,
       );
+    } else if (action === "memory_digest") {
+      args.push(
+        "memory",
+        "digest",
+        "--artifacts",
+        artifact.relativePath,
+        "--output",
+        `${artifact.relativePath}/memory-digest.json`,
+      );
+    } else if (action === "memory_history") {
+      args.push(
+        "memory",
+        "history",
+        "--artifacts",
+        artifact.relativePath,
+        "--output",
+        `${artifact.relativePath}/memory-history.json`,
+      );
+    } else {
+      return copy.common.invalid;
     }
     return args.map(quoteCommandPart).join(" ");
   }
@@ -1494,6 +1566,10 @@ export default function App() {
         : copy.operational.evalSummary;
     const memoryDigest = artifact?.memoryDigest ?? null;
     const memoryDigestDocument = memoryDigest ? memoryDigestArtifactDocument(memoryDigest, copy) : null;
+    const memoryHistory = artifact?.memoryHistory ?? null;
+    const memoryHistoryDocument = memoryHistory ? memoryHistoryArtifactDocument(memoryHistory, copy) : null;
+    const memorySearch = artifact?.memorySearch ?? null;
+    const memorySearchDocument = memorySearch ? memorySearchArtifactDocument(memorySearch, copy) : null;
     const operationalReportCount = [
       doctorReport,
       latestPreviewReport,
@@ -1501,6 +1577,8 @@ export default function App() {
       evalSummary,
       evalAnalysisDocument,
       memoryDigest,
+      memoryHistory,
+      memorySearch,
     ].filter(Boolean).length;
     const hasOperationalReport = operationalReportCount > 0;
     const operationalActions: OperationalAction[] = [
@@ -1509,6 +1587,8 @@ export default function App() {
       "eval_generate",
       "eval_analyze",
       "eval_digest",
+      "memory_digest",
+      "memory_history",
     ];
     const operationalActionsAvailable = canRunOperationalActions(projectSnapshot);
     const activeOperationalAction = operationalAction ?? "update_preview";
@@ -1837,6 +1917,36 @@ export default function App() {
                     memoryDigest.source === "local" ? copy.common.localOnly : memoryDigest.sourcePath
                   }`,
                   footer: memoryDigest.sourcePath ?? copy.common.localOnly,
+                })}
+              {memoryHistory &&
+                renderOperationalCard({
+                  document: memoryHistoryDocument,
+                  tone: memoryHistory.failedOrBlockedRuns > 0 ? "warn" : "ok",
+                  title: memoryHistory.sourcePath ?? copy.operational.memoryHistory,
+                  label: copy.operational.memoryHistory,
+                  summary: `${formatCount(memoryHistory.visibleEvents, locale)} ${
+                    copy.operational.events
+                  } · ${formatCount(memoryHistory.remoteEvents, locale)} ${
+                    copy.operational.remote
+                  }`,
+                  detail: `${formatCount(memoryHistory.failedOrBlockedRuns, locale)} ${
+                    copy.operational.failedOrBlocked
+                  } · ${memoryHistory.latestEventAt ?? copy.common.none}`,
+                  footer: memoryHistory.sourcePath ?? copy.common.none,
+                })}
+              {memorySearch &&
+                renderOperationalCard({
+                  document: memorySearchDocument,
+                  tone: memorySearch.totalResults > 0 ? "ok" : "info",
+                  title: memorySearch.sourcePath ?? copy.operational.memorySearch,
+                  label: copy.operational.memorySearch,
+                  summary: `${formatCount(memorySearch.totalResults, locale)} ${
+                    copy.operational.results
+                  } · ${memorySearch.query || copy.common.none}`,
+                  detail: `${formatCount(memorySearch.documentResults, locale)} ${
+                    copy.operational.documents
+                  } · ${formatCount(memorySearch.runResults, locale)} ${copy.runs.runs}`,
+                  footer: memorySearch.sourcePath ?? copy.common.none,
                 })}
             </div>
           </div>
