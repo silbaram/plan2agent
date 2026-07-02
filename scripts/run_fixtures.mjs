@@ -27,6 +27,7 @@ const RUNS_CLI = path.join(ROOT, 'scripts', 'p2a_runs.mjs');
 const EXECUTE_CLI = path.join(ROOT, 'scripts', 'p2a_execute.mjs');
 const ORCHESTRATE_CLI = path.join(ROOT, 'scripts', 'p2a_orchestrate.mjs');
 const PROPOSALS_CLI = path.join(ROOT, 'scripts', 'p2a_proposals.mjs');
+const MEMORY_CLI = path.join(ROOT, 'scripts', 'p2a_memory.mjs');
 const HANDOFF_CLI = path.join(ROOT, 'scripts', 'p2a_handoff.mjs');
 const DOCTOR_CLI = path.join(ROOT, 'scripts', 'p2a_doctor.mjs');
 
@@ -56,6 +57,14 @@ function runOrchestrate(args) {
 
 function runProposals(args) {
   return spawnSync(process.execPath, [PROPOSALS_CLI, ...args], { cwd: ROOT, encoding: 'utf8' });
+}
+
+function runMemory(args) {
+  return spawnSync(process.execPath, [MEMORY_CLI, ...args], {
+    cwd: ROOT,
+    encoding: 'utf8',
+    env: { ...process.env, P2A_MEMORY_URL: '', P2A_MEMORY_TOKEN: '' },
+  });
 }
 
 function runHandoff(args) {
@@ -88,6 +97,10 @@ function runTargetOrchestrate(targetRoot, args, options = {}) {
 
 function runTargetProposals(targetRoot, args) {
   return spawnSync(process.execPath, [path.join(targetRoot, '.plan2agent', 'scripts', 'p2a_proposals.mjs'), ...args], { cwd: targetRoot, encoding: 'utf8' });
+}
+
+function runTargetMemory(targetRoot, args) {
+  return spawnSync(process.execPath, [path.join(targetRoot, '.plan2agent', 'scripts', 'p2a_memory.mjs'), ...args], { cwd: targetRoot, encoding: 'utf8' });
 }
 
 function runTargetIteration(targetRoot, args) {
@@ -261,6 +274,14 @@ function validateScaffoldFixtureCase() {
     checks += 1;
     if (result.status !== 0 || !result.stdout.includes('p2a_iteration.mjs init')) {
       console.error('scaffold target p2a_iteration --help failed');
+      writeResultOutput(result);
+      return { status: failureStatus(result), checks };
+    }
+
+    result = runTargetMemory(targetRoot, ['--help']);
+    checks += 1;
+    if (result.status !== 0 || !result.stdout.includes('p2a_memory.mjs status')) {
+      console.error('scaffold target p2a_memory --help failed');
       writeResultOutput(result);
       return { status: failureStatus(result), checks };
     }
@@ -757,6 +778,45 @@ function validateScaffoldFixtureCase() {
   } finally {
     rmSync(tempRoot, { recursive: true, force: true });
   }
+  return { status: 0, checks };
+}
+
+function validateMemoryFixtureCases() {
+  let checks = 0;
+  const graphPath = path.join(FIXTURE_ROOT, 'webhook-api-service', 'task-graph.json');
+
+  let result = runMemory(['status', '--graph', graphPath]);
+  checks += 1;
+  if (result.status !== 0 || !result.stdout.includes('Plan2Agent memory status') || !result.stdout.includes('documents=2') || !result.stdout.includes('taskGraphs=1')) {
+    console.error('memory status fixture failed');
+    writeResultOutput(result);
+    return { status: failureStatus(result), checks };
+  }
+
+  result = runMemory(['push', '--graph', graphPath, '--dry-run']);
+  checks += 1;
+  if (result.status !== 0 || !result.stdout.includes('Plan2Agent memory push dry run') || !result.stdout.includes('dry-run: no server writes') || !result.stdout.includes('DOCUMENT_CHUNK:')) {
+    console.error('memory push dry-run fixture failed');
+    writeResultOutput(result);
+    return { status: failureStatus(result), checks };
+  }
+
+  result = runMemory(['digest', '--graph', graphPath]);
+  checks += 1;
+  if (result.status !== 0 || !result.stdout.includes('Plan2Agent memory digest') || !result.stdout.includes('runs: total=0')) {
+    console.error('memory digest fixture failed');
+    writeResultOutput(result);
+    return { status: failureStatus(result), checks };
+  }
+
+  result = runMemory(['push', '--graph', graphPath]);
+  checks += 1;
+  if (result.status === 0 || !result.stdout.includes('Actual Memory writes require --yes')) {
+    console.error('memory push approval guard fixture failed');
+    writeResultOutput(result);
+    return { status: result.status === 0 ? 1 : failureStatus(result), checks };
+  }
+
   return { status: 0, checks };
 }
 
@@ -4608,6 +4668,15 @@ export function main() {
   }
   if (scaffoldResult.status !== 0) return scaffoldResult.status;
 
+  let memoryResult;
+  try {
+    memoryResult = validateMemoryFixtureCases();
+  } catch (error) {
+    console.error(`fixture validation failed: ${error.message}`);
+    return 1;
+  }
+  if (memoryResult.status !== 0) return memoryResult.status;
+
   let e2eResult;
   try {
     e2eResult = validateE2eFixtureCases();
@@ -4637,6 +4706,7 @@ export function main() {
 
   const segments = [`${fixtureDirs.length} Plan2Agent fixture set(s)`];
   if (scaffoldResult.checks) segments.push(`${scaffoldResult.checks} scaffold fixture check(s)`);
+  if (memoryResult.checks) segments.push(`${memoryResult.checks} memory fixture check(s)`);
   if (e2eResult.checks) segments.push(`${e2eResult.checks} e2e fixture check(s)`);
   if (iterationResult.checks) segments.push(`${iterationResult.checks} iteration fixture check(s)`);
   if (negativeResult.checks) segments.push(`${negativeResult.checks} negative fixture check(s)`);
