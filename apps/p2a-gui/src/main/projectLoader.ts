@@ -16,6 +16,7 @@ import type {
   ArtifactSummary,
   CommandGuidance,
   DoctorCommandSummary,
+  EvalArtifactSummary,
   ExecutionAgentTool,
   FailureClass,
   FailureRetryability,
@@ -34,6 +35,7 @@ import type {
   ProjectFileCheck,
   ProjectOnboarding,
   ProjectSnapshot,
+  MemoryDigestSummary,
   RunStatus,
   SchemaValidationSummary,
   TaskCounts,
@@ -46,10 +48,15 @@ import type {
   WorkbenchOrchestrationRole,
   WorkbenchOrchestrationSchedulerHint,
   WorkbenchRunFailure,
+  WorkbenchRunFixSummary,
+  WorkbenchRunGuard,
+  WorkbenchRunLocalization,
   WorkbenchRunOrchestration,
+  WorkbenchRunReproduction,
   WorkbenchRunVerification,
   WorkbenchRun,
   WorkbenchTask,
+  UpdateReportSummary,
 } from "../shared/ipc";
 
 type JsonRecord = Record<string, unknown>;
@@ -568,6 +575,47 @@ function normalizeFailure(runDetail: JsonRecord | null): WorkbenchRunFailure | n
     needsUserDecision,
     source,
   };
+}
+
+function normalizeRunReproduction(runDetail: JsonRecord | null): WorkbenchRunReproduction | null {
+  const reproduction = recordValue(runDetail?.reproduction);
+  if (!reproduction) return null;
+  const normalized = {
+    steps: stringArrayValue(reproduction.steps),
+    commands: stringArrayValue(reproduction.commands),
+    notes: stringArrayValue(reproduction.notes),
+  };
+  return normalized.steps.length || normalized.commands.length || normalized.notes.length ? normalized : null;
+}
+
+function normalizeRunLocalization(runDetail: JsonRecord | null): WorkbenchRunLocalization | null {
+  const localization = recordValue(runDetail?.localization);
+  if (!localization) return null;
+  const normalized = {
+    findings: stringArrayValue(localization.findings),
+    files: stringArrayValue(localization.files),
+  };
+  return normalized.findings.length || normalized.files.length ? normalized : null;
+}
+
+function normalizeRunFixSummary(runDetail: JsonRecord | null): WorkbenchRunFixSummary | null {
+  const fixSummary = recordValue(runDetail?.fixSummary);
+  if (!fixSummary) return null;
+  const normalized = {
+    summaries: stringArrayValue(fixSummary.summaries),
+    files: stringArrayValue(fixSummary.files),
+  };
+  return normalized.summaries.length || normalized.files.length ? normalized : null;
+}
+
+function normalizeRunGuard(runDetail: JsonRecord | null): WorkbenchRunGuard | null {
+  const guard = recordValue(runDetail?.guard);
+  if (!guard) return null;
+  const normalized = {
+    checks: stringArrayValue(guard.checks),
+    notes: stringArrayValue(guard.notes),
+  };
+  return normalized.checks.length || normalized.notes.length ? normalized : null;
 }
 
 async function readRunDetail(runsDir: string, runId: string): Promise<JsonRecord | null> {
@@ -1142,6 +1190,10 @@ async function normalizeRuns(
         changedFiles: stringArrayValue(runDetail?.changedFiles),
         verification: normalizeVerification(runDetail),
         notes: stringArrayValue(runDetail?.notes),
+        reproduction: normalizeRunReproduction(runDetail),
+        localization: normalizeRunLocalization(runDetail),
+        fixSummary: normalizeRunFixSummary(runDetail),
+        guard: normalizeRunGuard(runDetail),
         failure: normalizeFailure(runDetail),
         orchestration,
       };
@@ -1380,6 +1432,189 @@ async function summarizeRuns(rootPath: string, artifactRoot: string): Promise<{
   };
 }
 
+async function readJsonFilesFromDirectory(directoryPath: string): Promise<Array<{ filePath: string; data: JsonRecord }>> {
+  if (!(await existsAs(directoryPath, "directory"))) return [];
+  let entries;
+  try {
+    entries = await readdir(directoryPath, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  const files = await Promise.all(
+    entries
+      .filter((entry) => entry.isFile() && entry.name.endsWith(".json"))
+      .map(async (entry) => {
+        const filePath = path.join(directoryPath, entry.name);
+        try {
+          const data = await readJson(filePath);
+          return data ? { filePath, data } : null;
+        } catch {
+          return null;
+        }
+      }),
+  );
+  return files.filter((item): item is { filePath: string; data: JsonRecord } => item !== null);
+}
+
+async function summarizeEvalArtifacts(rootPath: string, artifactRoot: string): Promise<EvalArtifactSummary | null> {
+  const evalDir = path.join(artifactRoot, "eval");
+  if (!(await existsAs(evalDir, "directory"))) return null;
+  const indexPath = path.join(evalDir, "eval-index.json");
+  const analysisPath = path.join(evalDir, "analysis.json");
+  const index = await readOptionalJson(indexPath);
+  const analysis = await readOptionalJson(analysisPath);
+  const evalFiles = await readJsonFilesFromDirectory(evalDir);
+  const digestFile = evalFiles
+    .filter((item) => item.data.schema_version === "p2a.eval_digest.v1")
+    .sort((left, right) => {
+      const leftTime = stringValue(left.data.generatedAt) ?? "";
+      const rightTime = stringValue(right.data.generatedAt) ?? "";
+      return rightTime.localeCompare(leftTime);
+    })[0] ?? null;
+  const summary = recordValue(index?.summary);
+  const digestGrades = recordValue(digestFile?.data.grades);
+  const digestAnalyses = recordValue(digestFile?.data.analyses);
+  const analysisSummary = recordValue(analysis?.summary);
+  const maintenanceDraft = recordValue(analysis?.maintenanceDraft);
+  const maintenanceDraftSummary = recordValue(maintenanceDraft?.summary);
+  return {
+    evalDir: normalizeRelative(rootPath, evalDir),
+    indexPath: index ? normalizeRelative(rootPath, indexPath) : null,
+    digestPath: digestFile ? normalizeRelative(rootPath, digestFile.filePath) : null,
+    analysisPath: analysis ? normalizeRelative(rootPath, analysisPath) : null,
+    gradeCount: numberValue(summary?.grades) ?? numberValue(digestGrades?.total) ?? 0,
+    nonPassGrades: numberValue(summary?.nonPassGrades) ?? recordArrayValue(digestGrades?.nonPass).length,
+    clusters: numberValue(summary?.clusters) ?? numberValue(digestAnalyses?.clusters) ?? numberValue(analysisSummary?.clusters) ?? 0,
+    maintenanceDraftTasks: numberValue(maintenanceDraftSummary?.tasks) ?? 0,
+    latestGeneratedAt: stringValue(index?.generatedAt) ?? stringValue(digestFile?.data.generatedAt) ?? stringValue(analysis?.generatedAt),
+  };
+}
+
+function localMemoryDigestSummary(runs: WorkbenchRun[]): Omit<MemoryDigestSummary, "sourcePath" | "source" | "proposals" | "uncoveredCandidateRuns"> {
+  const failedOrBlocked = runs.filter((run) => run.status === "failed" || run.status === "blocked").length;
+  const verificationFailures = runs.filter((run) =>
+    run.verification.some((verification) => verification.status === "failed"),
+  ).length;
+  const verificationGaps = runs.filter((run) =>
+    run.status === "finished" && run.verification.length === 0,
+  ).length;
+  return {
+    totalRuns: runs.length,
+    failedOrBlocked,
+    verificationFailures,
+    verificationGaps,
+  };
+}
+
+function resolveProjectRelativePath(rootPath: string, value: string): string {
+  return path.isAbsolute(value) ? path.resolve(value) : path.resolve(rootPath, value);
+}
+
+function sameResolvedPath(left: string, right: string): boolean {
+  return path.resolve(left) === path.resolve(right);
+}
+
+function memoryDigestMatchesArtifact(
+  rootPath: string,
+  artifactRoot: string,
+  digest: JsonRecord,
+  allowMissingContext: boolean,
+): boolean {
+  const context = recordValue(digest.context);
+  const sourcePath = stringValue(context?.sourcePath);
+  const runsDir = stringValue(context?.runsDir);
+  if (!sourcePath && !runsDir) return allowMissingContext;
+
+  const resolvedArtifactRoot = path.resolve(artifactRoot);
+  if (sourcePath && sameResolvedPath(resolveProjectRelativePath(rootPath, sourcePath), resolvedArtifactRoot)) {
+    return true;
+  }
+
+  if (!runsDir) return false;
+  const resolvedRunsDir = resolveProjectRelativePath(rootPath, runsDir);
+  return [
+    path.join(resolvedArtifactRoot, "runs"),
+    path.join(path.dirname(resolvedArtifactRoot), "runs"),
+  ].some((candidate) => sameResolvedPath(resolvedRunsDir, candidate));
+}
+
+async function summarizeMemoryDigest(
+  rootPath: string,
+  artifactRoot: string,
+  runs: WorkbenchRun[],
+): Promise<MemoryDigestSummary | null> {
+  const candidates = [
+    { filePath: path.join(artifactRoot, "memory-digest.json"), allowMissingContext: true },
+    { filePath: path.join(artifactRoot, "eval", "memory-digest.json"), allowMissingContext: true },
+    { filePath: path.join(rootPath, ".plan2agent", "memory-digest.json"), allowMissingContext: false },
+  ];
+  for (const candidate of candidates) {
+    const digest = await readOptionalJson(candidate.filePath);
+    if (digest?.schema_version !== "p2a.memory_digest.v1") continue;
+    if (!memoryDigestMatchesArtifact(rootPath, artifactRoot, digest, candidate.allowMissingContext)) continue;
+    const runSummary = recordValue(digest.runs);
+    const proposalSummary = recordValue(digest.proposals);
+    return {
+      sourcePath: normalizeRelative(rootPath, candidate.filePath),
+      source: "file",
+      totalRuns: numberValue(runSummary?.total) ?? 0,
+      failedOrBlocked: numberValue(runSummary?.failedOrBlocked) ?? 0,
+      verificationFailures: numberValue(runSummary?.verificationFailures) ?? 0,
+      verificationGaps: numberValue(runSummary?.verificationGaps) ?? 0,
+      proposals: numberValue(proposalSummary?.total) ?? 0,
+      uncoveredCandidateRuns: stringArrayValue(proposalSummary?.uncoveredCandidateRuns).length,
+    };
+  }
+  if (runs.length === 0) return null;
+  return {
+    sourcePath: null,
+    source: "local",
+    ...localMemoryDigestSummary(runs),
+    proposals: 0,
+    uncoveredCandidateRuns: 0,
+  };
+}
+
+async function summarizeUpdateReports(rootPath: string): Promise<UpdateReportSummary[]> {
+  const reportsDir = path.join(rootPath, ".plan2agent", "update-reports");
+  const reports = await readJsonFilesFromDirectory(reportsDir);
+  return reports
+    .filter((item) =>
+      item.data.schema_version === "p2a.upgrade_apply.v1" ||
+      item.data.schema_version === "p2a.upgrade_dry_run.v1",
+    )
+    .map((item): UpdateReportSummary => {
+      const kind = item.data.schema_version === "p2a.upgrade_apply.v1" ? "apply" : "preview";
+      const applied = recordValue(item.data.applied);
+      const preview = recordValue(item.data.preview);
+      const summary = recordValue(kind === "apply" ? preview?.summary : item.data.summary);
+      const blockers = recordArrayValue(item.data.blockers);
+      const failures = recordArrayValue(item.data.failures);
+      const changedItems = [
+        numberValue(summary?.missing),
+        numberValue(summary?.wouldUpdate),
+        numberValue(summary?.manualReview),
+        numberValue(summary?.conflicts),
+        numberValue(summary?.errors),
+      ].reduce<number>((total, value) => total + (value ?? 0), 0);
+      const createdAt = stringValue(item.data.appliedAt) ?? stringValue(item.data.generatedAt);
+      return {
+        command: stringValue(item.data.command) ?? "update",
+        kind,
+        status: stringValue(item.data.status) ?? "unknown",
+        appliedAt: stringValue(item.data.appliedAt),
+        createdAt,
+        relativePath: normalizeRelative(rootPath, item.filePath),
+        appliedFiles: stringArrayValue(applied?.files).length,
+        changedItems,
+        blockers: kind === "apply" ? blockers.length : failures.length,
+        error: stringValue(item.data.error),
+      };
+    })
+    .sort((left, right) => (right.createdAt ?? "").localeCompare(left.createdAt ?? ""))
+    .slice(0, 10);
+}
+
 async function summarizeArtifact(rootPath: string, artifactRoot: string): Promise<ArtifactSummary> {
   const diagnostics: ProjectDiagnostic[] = [];
   let projectId = path.basename(artifactRoot);
@@ -1440,6 +1675,8 @@ async function summarizeArtifact(rootPath: string, artifactRoot: string): Promis
   }
   const gates = await summarizeGates(artifactRoot, iterationRoot);
   const runSummary = await summarizeRuns(rootPath, artifactRoot);
+  const evalSummary = await summarizeEvalArtifacts(rootPath, artifactRoot);
+  const memoryDigest = await summarizeMemoryDigest(rootPath, artifactRoot, runSummary.runs);
   const validations: SchemaValidationSummary[] = [];
 
   const intakeValidation = await validateJsonFile({
@@ -1511,6 +1748,8 @@ async function summarizeArtifact(rootPath: string, artifactRoot: string): Promis
     tasks,
     runCount: runSummary.runCount,
     runs: runSummary.runs,
+    evalSummary,
+    memoryDigest,
     diagnostics,
   };
 }
@@ -1981,6 +2220,7 @@ export async function loadProjectSnapshot(
     artifactRoots.map((artifactRoot) => summarizeArtifact(normalizedRootPath, artifactRoot)),
   );
   const proposals = await summarizeProposals(normalizedRootPath);
+  const updateReports = await summarizeUpdateReports(normalizedRootPath);
   const state = determineState(checks, artifacts);
   const primaryArtifact = artifacts[0] ?? null;
   const hasP2aMarker = checks.some((check) =>
@@ -2005,6 +2245,7 @@ export async function loadProjectSnapshot(
     commands: buildCommands(normalizedRootPath, state, artifacts),
     doctor,
     proposals,
+    updateReports,
     diagnostics,
     generatedAt: new Date().toISOString(),
   };

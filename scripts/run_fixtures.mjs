@@ -710,11 +710,12 @@ function validateScaffoldFixtureCase() {
     checks += 1;
     if (
       result.status !== 0
-      || !result.stdout.includes('Plan2Agent upgrade dry run')
-      || !result.stdout.includes('status: pass')
-      || !result.stdout.includes('changes: none')
-      || !result.stdout.includes('dry-run: no files written')
-    ) {
+	      || !result.stdout.includes('Plan2Agent upgrade dry run')
+	      || !result.stdout.includes('status: pass')
+	      || !result.stdout.includes('changes: none')
+	      || !result.stdout.includes('report: .plan2agent/update-reports/upgrade-')
+	      || !result.stdout.includes('dry-run: no harness files written')
+	    ) {
       console.error('upgrade dry-run fixture failed');
       writeResultOutput(result);
       return { status: failureStatus(result), checks };
@@ -724,11 +725,12 @@ function validateScaffoldFixtureCase() {
     checks += 1;
     if (
       result.status !== 0
-      || !result.stdout.includes('Plan2Agent update preview')
-      || !result.stdout.includes('status: pass')
-      || !result.stdout.includes('changes: none')
-      || !result.stdout.includes('dry-run: no files written')
-    ) {
+	      || !result.stdout.includes('Plan2Agent update preview')
+	      || !result.stdout.includes('status: pass')
+	      || !result.stdout.includes('changes: none')
+	      || !result.stdout.includes('report: .plan2agent/update-reports/update-')
+	      || !result.stdout.includes('dry-run: no harness files written')
+	    ) {
       console.error('update preview fixture failed');
       writeResultOutput(result);
       return { status: failureStatus(result), checks };
@@ -770,8 +772,8 @@ function validateScaffoldFixtureCase() {
       || readFileSync(staleRuntimePath, 'utf8') !== readFileSync(path.join(ROOT, 'scripts', 'p2a_eval.mjs'), 'utf8')
       || appliedUpdateConfig.devExecution?.scopePolicy !== 'task_only'
       || !appliedUpdateManifest.updates?.some((entry) => entry.command === 'update')
-      || applyUpdateReports.length !== 1
-    ) {
+	      || applyUpdateReports.length !== 3
+	    ) {
       console.error('update apply fixture failed');
       writeResultOutput(result);
       console.error(JSON.stringify({ appliedUpdateConfig, appliedUpdateManifest, applyUpdateReports }, null, 2));
@@ -786,8 +788,8 @@ function validateScaffoldFixtureCase() {
       || !result.stdout.includes('Plan2Agent update apply')
       || !result.stdout.includes('status: noop')
       || appliedUpdateManifestAfterNoop.updates.filter((entry) => entry.command === 'update').length !== 1
-      || applyUpdateReportsAfterNoop.length !== 2
-    ) {
+	      || applyUpdateReportsAfterNoop.length !== 4
+	    ) {
       console.error('update apply idempotency fixture failed');
       writeResultOutput(result);
       console.error(JSON.stringify({ appliedUpdateManifestAfterNoop, applyUpdateReportsAfterNoop }, null, 2));
@@ -828,8 +830,8 @@ function validateScaffoldFixtureCase() {
       || !result.stdout.includes('Plan2Agent update apply')
       || !result.stdout.includes('status: blocked')
       || !result.stdout.includes('blockers:')
-      || blockedReports.length !== 1
-    ) {
+	      || blockedReports.length !== 3
+	    ) {
       console.error('update apply blocker fixture failed');
       writeResultOutput(result);
       console.error(JSON.stringify({ blockedReports }, null, 2));
@@ -848,14 +850,14 @@ function validateScaffoldFixtureCase() {
     chmodSync(failedSchemaPath, 0o644);
     const failedReportsDir = path.join(failedApplyRoot, '.plan2agent', 'update-reports');
     const failedReports = existsSync(failedReportsDir) ? readdirSync(failedReportsDir).filter((entry) => entry.endsWith('.json')) : [];
-    const failedReport = failedReports.length === 1
-      ? JSON.parse(readFileSync(path.join(failedReportsDir, failedReports[0]), 'utf8'))
-      : null;
-    if (
-      result.status === 0
-      || !result.stdout.includes('Plan2Agent upgrade apply')
-      || !result.stdout.includes('status: failed')
-      || failedReports.length !== 1
+	    const failedReport = failedReports
+	      .map((entry) => JSON.parse(readFileSync(path.join(failedReportsDir, entry), 'utf8')))
+	      .find((report) => report.schema_version === 'p2a.upgrade_apply.v1' && report.status === 'failed') ?? null;
+	    if (
+	      result.status === 0
+	      || !result.stdout.includes('Plan2Agent upgrade apply')
+	      || !result.stdout.includes('status: failed')
+	      || failedReports.length !== 3
       || failedReport?.status !== 'failed'
       || !failedReport?.applied?.files?.includes('.plan2agent/scripts/p2a_eval.mjs')
       || !failedReport?.error
@@ -1074,6 +1076,229 @@ function validateEvalFixtureCases() {
       writeResultOutput(result);
       return { status: failureStatus(result), checks };
     }
+
+    result = runRuns([
+      'record',
+      '--runs',
+      candidateRunsDir,
+      '--run-id',
+      'run-eval-failed',
+      '--repro-step',
+      'Run webhook verification tests against invalid signatures.',
+      '--repro-command',
+      'npm test -- webhook-verification',
+      '--localization',
+      'HMAC rejection path still accepts invalid signatures.',
+      '--localized-file',
+      'src/webhook-verification.ts',
+      '--fix-summary',
+      'Reject invalid HMAC signatures before normalization.',
+      '--fix-file',
+      'src/webhook-verification.ts',
+      '--guard',
+      'npm test -- webhook-verification covers invalid, expired, and valid signatures.',
+    ]);
+    checks += 1;
+    const structuredRun = JSON.parse(readFileSync(path.join(candidateRunsDir, 'run-eval-failed.json'), 'utf8'));
+    if (
+      result.status !== 0
+      || structuredRun.reproduction?.steps?.length !== 1
+      || structuredRun.reproduction?.commands?.length !== 1
+      || structuredRun.localization?.files?.[0] !== 'src/webhook-verification.ts'
+      || structuredRun.fixSummary?.summaries?.length !== 1
+      || structuredRun.guard?.checks?.length !== 1
+    ) {
+      console.error('run structured detail record fixture failed');
+      writeResultOutput(result);
+      return { status: failureStatus(result), checks };
+    }
+
+    const evalOutputDir = path.join(tempRoot, 'candidate-eval');
+    result = runEval(['generate', '--graph', graphPath, '--runs', candidateRunsDir, '--output', evalOutputDir]);
+    checks += 1;
+    const evalIndexPath = path.join(evalOutputDir, 'eval-index.json');
+    const passGradePath = path.join(evalOutputDir, 'grades', 'run-eval-pass.json');
+    const failedGradePath = path.join(evalOutputDir, 'grades', 'run-eval-failed.json');
+    const analysisPath = path.join(evalOutputDir, 'analysis.json');
+    const evalIndex = existsSync(evalIndexPath) ? JSON.parse(readFileSync(evalIndexPath, 'utf8')) : null;
+	    if (
+	      result.status !== 0
+	      || !result.stdout.includes('Plan2Agent eval generate')
+	      || !existsSync(passGradePath)
+      || !existsSync(failedGradePath)
+      || !existsSync(analysisPath)
+      || evalIndex?.schema_version !== 'p2a.eval_index.v1'
+      || evalIndex?.summary?.grades !== 2
+      || evalIndex?.summary?.nonPassGrades !== 1
+      || evalIndex?.summary?.clusters !== 1
+    ) {
+      console.error('eval generate fixture failed');
+	      writeResultOutput(result);
+	      return { status: failureStatus(result), checks };
+	    }
+
+	    result = runValidator(['--eval-index', evalIndexPath]);
+	    checks += 1;
+	    if (result.status !== 0) {
+	      console.error('eval index schema validation fixture failed');
+	      writeResultOutput(result);
+	      return { status: failureStatus(result), checks };
+	    }
+
+	    const staleGradePath = path.join(evalOutputDir, 'grades', 'run-stale-old.json');
+	    writeFileSync(staleGradePath, `${JSON.stringify({
+	      schema_version: 'p2a.eval_grade.v1',
+	      run: { runId: 'run-stale-old' },
+	      task: { taskId: 'task-999' },
+	      verdict: 'fail',
+	      score: 0,
+	      acceptanceCoverage: [],
+	      reasons: ['stale fixture grade'],
+	    }, null, 2)}\n`, 'utf8');
+	    result = runEval(['generate', '--graph', graphPath, '--runs', candidateRunsDir, '--output', evalOutputDir]);
+	    checks += 1;
+	    const regeneratedEvalIndex = existsSync(evalIndexPath) ? JSON.parse(readFileSync(evalIndexPath, 'utf8')) : null;
+	    if (
+	      result.status !== 0
+	      || existsSync(staleGradePath)
+	      || regeneratedEvalIndex?.summary?.grades !== 2
+	      || regeneratedEvalIndex?.summary?.nonPassGrades !== 1
+	    ) {
+	      console.error('eval generate stale output cleanup fixture failed');
+	      writeResultOutput(result);
+	      return { status: failureStatus(result), checks };
+	    }
+
+	    result = runEval(['digest', '--eval', evalOutputDir]);
+	    checks += 1;
+	    if (result.status !== 0 || !result.stdout.includes('Plan2Agent eval digest') || !result.stdout.includes('"pass":1') || !result.stdout.includes('"fail":1')) {
+	      console.error('eval digest fixture failed');
+	      writeResultOutput(result);
+	      return { status: failureStatus(result), checks };
+	    }
+
+	    const nestedEvalDigestPath = path.join(evalOutputDir, 'eval-digest.json');
+	    result = runEval(['digest', '--eval', evalOutputDir, '--output', nestedEvalDigestPath]);
+	    checks += 1;
+	    if (result.status !== 0 || !existsSync(nestedEvalDigestPath)) {
+	      console.error('eval digest nested output fixture failed');
+	      writeResultOutput(result);
+	      return { status: failureStatus(result), checks };
+	    }
+
+	    result = runEval(['digest', '--eval', evalOutputDir]);
+	    checks += 1;
+	    if (result.status !== 0 || !result.stdout.includes('digests=1') || !result.stdout.includes('skipped=0')) {
+	      console.error('eval digest should ignore supported nested digest fixture failed');
+	      writeResultOutput(result);
+	      return { status: failureStatus(result), checks };
+	    }
+
+    const evalDigestPath = path.join(tempRoot, 'eval-digest.json');
+    result = runEval(['digest', '--eval', evalOutputDir, '--output', evalDigestPath]);
+    checks += 1;
+    const evalDigest = existsSync(evalDigestPath) ? JSON.parse(readFileSync(evalDigestPath, 'utf8')) : null;
+	    if (
+	      result.status !== 0
+	      || !existsSync(evalDigestPath)
+      || evalDigest?.schema_version !== 'p2a.eval_digest.v1'
+      || evalDigest?.grades?.byVerdict?.pass !== 1
+      || evalDigest?.grades?.byVerdict?.fail !== 1
+      || evalDigest?.analyses?.clusters !== 1
+    ) {
+      console.error('eval digest output fixture failed');
+	      writeResultOutput(result);
+	      return { status: failureStatus(result), checks };
+	    }
+
+	    result = runValidator(['--eval-digest', evalDigestPath]);
+	    checks += 1;
+	    if (result.status !== 0) {
+	      console.error('eval digest schema validation fixture failed');
+	      writeResultOutput(result);
+	      return { status: failureStatus(result), checks };
+	    }
+
+    const evalArtifactRoot = path.join(tempRoot, 'eval-artifact-root');
+    cpSync(path.join(E2E_FIXTURE_ROOT, 'webhook-api-service'), evalArtifactRoot, { recursive: true });
+    result = runIteration(['init', '--artifacts', evalArtifactRoot, '--iteration-id', 'v1-mvp']);
+    checks += 1;
+    if (result.status !== 0) {
+      console.error('eval maintenance fixture iteration init failed');
+      writeResultOutput(result);
+      return { status: failureStatus(result), checks };
+    }
+    writeEvalRuns(path.join(evalArtifactRoot, 'runs'), [passRun, structuredRun]);
+    const maintenanceDraftPath = path.join(tempRoot, 'eval-maintenance-draft.json');
+    result = runEval(['analyze', '--artifacts', evalArtifactRoot, '--maintenance-draft', maintenanceDraftPath]);
+    checks += 1;
+    const maintenanceDraft = existsSync(maintenanceDraftPath) ? JSON.parse(readFileSync(maintenanceDraftPath, 'utf8')) : null;
+	    if (
+	      result.status !== 0
+	      || !result.stdout.includes('maintenance draft: tasks=1')
+	      || maintenanceDraft?.schema_version !== 'p2a.eval_maintenance_draft.v1'
+	      || maintenanceDraft?.tasks?.[0]?.sourceSpecRefs?.some((ref) => typeof ref === 'string' && ref.startsWith('eval-cluster:cluster-verification_failed-')) !== true
+	    ) {
+	      console.error('eval maintenance draft fixture failed');
+	      writeResultOutput(result);
+	      return { status: failureStatus(result), checks };
+	    }
+
+	    result = runValidator(['--eval-maintenance-draft', maintenanceDraftPath]);
+	    checks += 1;
+	    if (result.status !== 0) {
+	      console.error('eval maintenance draft schema validation fixture failed');
+	      writeResultOutput(result);
+	      return { status: failureStatus(result), checks };
+	    }
+
+    result = runEval(['analyze', '--artifacts', evalArtifactRoot, '--apply-maintenance', '--dry-run']);
+    checks += 1;
+    if (result.status !== 0 || !result.stdout.includes('maintenance apply: dry_run')) {
+      console.error('eval maintenance dry-run apply fixture failed');
+      writeResultOutput(result);
+      return { status: failureStatus(result), checks };
+    }
+
+    result = runEval(['analyze', '--artifacts', evalArtifactRoot, '--apply-maintenance', '--yes']);
+	    checks += 1;
+	    const evalMaintenanceGraphPath = path.join(evalArtifactRoot, 'iterations', 'maintenance', 'gate-c-task-graph', 'task-graph.json');
+	    const evalMaintenanceGraph = existsSync(evalMaintenanceGraphPath) ? JSON.parse(readFileSync(evalMaintenanceGraphPath, 'utf8')) : null;
+	    const evalMaintenanceReportPath = path.join(evalArtifactRoot, 'eval', 'maintenance-apply-report.json');
+	    const evalMaintenanceReport = existsSync(evalMaintenanceReportPath) ? JSON.parse(readFileSync(evalMaintenanceReportPath, 'utf8')) : null;
+	    if (
+	      result.status !== 0
+	      || !result.stdout.includes('maintenance apply: applied')
+	      || evalMaintenanceGraph?.tasks?.length !== 1
+	      || evalMaintenanceGraph?.tasks?.[0]?.sourceSpecRefs?.some((ref) => typeof ref === 'string' && ref.startsWith('eval-cluster:cluster-verification_failed-')) !== true
+	      || evalMaintenanceReport?.schema_version !== 'p2a.eval_maintenance_apply_report.v1'
+	      || evalMaintenanceReport?.status !== 'applied'
+	    ) {
+	      console.error('eval maintenance apply fixture failed');
+	      writeResultOutput(result);
+	      return { status: failureStatus(result), checks };
+	    }
+
+	    result = runValidator(['--eval-maintenance-apply-report', evalMaintenanceReportPath]);
+	    checks += 1;
+	    if (result.status !== 0) {
+	      console.error('eval maintenance apply report schema validation fixture failed');
+	      writeResultOutput(result);
+	      return { status: failureStatus(result), checks };
+	    }
+
+    result = runEval(['analyze', '--artifacts', evalArtifactRoot, '--apply-maintenance', '--yes']);
+    checks += 1;
+    const evalMaintenanceGraphAfterNoop = JSON.parse(readFileSync(evalMaintenanceGraphPath, 'utf8'));
+    if (
+      result.status !== 0
+      || !result.stdout.includes('maintenance apply: noop')
+      || evalMaintenanceGraphAfterNoop.tasks?.length !== 1
+    ) {
+      console.error('eval maintenance apply idempotency fixture failed');
+      writeResultOutput(result);
+      return { status: failureStatus(result), checks };
+    }
   } finally {
     rmSync(tempRoot, { recursive: true, force: true });
   }
@@ -1171,11 +1396,15 @@ function validateE2eFixtureCases() {
         || !existsSync(path.join(targetRoot, '.plan2agent', 'schemas', 'orchestration-plan.schema.json'))
         || !existsSync(path.join(targetRoot, '.plan2agent', 'schemas', 'orchestration-runtime.schema.json'))
         || !existsSync(path.join(targetRoot, '.plan2agent', 'schemas', 'skill-proposal.schema.json'))
-        || !existsSync(path.join(targetRoot, '.plan2agent', 'schemas', 'proposal-review.schema.json'))
-        || !existsSync(path.join(targetRoot, '.plan2agent', 'schemas', 'proposal-curation.schema.json'))
-        || !existsSync(path.join(targetRoot, '.plan2agent', 'schemas', 'proposal-patch-draft.schema.json'))
-        || !existsSync(path.join(targetRoot, '.plan2agent', 'schemas', 'proposal-draft-approval.schema.json'))
-        || existsSync(path.join(targetRoot, '.plan2agent', 'current-spec.json'))
+	        || !existsSync(path.join(targetRoot, '.plan2agent', 'schemas', 'proposal-review.schema.json'))
+	        || !existsSync(path.join(targetRoot, '.plan2agent', 'schemas', 'proposal-curation.schema.json'))
+	        || !existsSync(path.join(targetRoot, '.plan2agent', 'schemas', 'proposal-patch-draft.schema.json'))
+	        || !existsSync(path.join(targetRoot, '.plan2agent', 'schemas', 'proposal-draft-approval.schema.json'))
+	        || !existsSync(path.join(targetRoot, '.plan2agent', 'schemas', 'eval-index.schema.json'))
+	        || !existsSync(path.join(targetRoot, '.plan2agent', 'schemas', 'eval-digest.schema.json'))
+	        || !existsSync(path.join(targetRoot, '.plan2agent', 'schemas', 'eval-maintenance-draft.schema.json'))
+	        || !existsSync(path.join(targetRoot, '.plan2agent', 'schemas', 'eval-maintenance-apply-report.schema.json'))
+	        || existsSync(path.join(targetRoot, '.plan2agent', 'current-spec.json'))
       ) {
         console.error(`greenfield handoff wrote unexpected tool/current-spec files: ${caseData.id}`);
         return { status: 1, checks };
@@ -1280,11 +1509,15 @@ function validateE2eFixtureCases() {
         || !toolManifest.schemaFiles.includes('.plan2agent/schemas/run.schema.json')
         || !toolManifest.schemaFiles.includes('.plan2agent/schemas/orchestration-plan.schema.json')
         || !toolManifest.schemaFiles.includes('.plan2agent/schemas/orchestration-runtime.schema.json')
-        || !toolManifest.schemaFiles.includes('.plan2agent/schemas/proposal-review.schema.json')
-        || !toolManifest.schemaFiles.includes('.plan2agent/schemas/proposal-curation.schema.json')
-        || !toolManifest.schemaFiles.includes('.plan2agent/schemas/proposal-patch-draft.schema.json')
-        || !toolManifest.schemaFiles.includes('.plan2agent/schemas/proposal-draft-approval.schema.json')
-      ) {
+	        || !toolManifest.schemaFiles.includes('.plan2agent/schemas/proposal-review.schema.json')
+	        || !toolManifest.schemaFiles.includes('.plan2agent/schemas/proposal-curation.schema.json')
+	        || !toolManifest.schemaFiles.includes('.plan2agent/schemas/proposal-patch-draft.schema.json')
+	        || !toolManifest.schemaFiles.includes('.plan2agent/schemas/proposal-draft-approval.schema.json')
+	        || !toolManifest.schemaFiles.includes('.plan2agent/schemas/eval-index.schema.json')
+	        || !toolManifest.schemaFiles.includes('.plan2agent/schemas/eval-digest.schema.json')
+	        || !toolManifest.schemaFiles.includes('.plan2agent/schemas/eval-maintenance-draft.schema.json')
+	        || !toolManifest.schemaFiles.includes('.plan2agent/schemas/eval-maintenance-apply-report.schema.json')
+	      ) {
         console.error(`greenfield handoff --tools output mismatch: ${caseData.id}`);
         console.error(JSON.stringify({ missingToolFiles, copiedExcludedToolFiles, manifestDesignSystemFiles, toolManifest }, null, 2));
         return { status: 1, checks };
@@ -4469,10 +4702,14 @@ function validateIterationCurrentFixtureCases() {
         || !existsSync(path.join(iterationTargetRoot, '.plan2agent', 'scripts', 'p2a_execute.mjs'))
         || !existsSync(path.join(iterationTargetRoot, '.plan2agent', 'scripts', 'p2a_orchestrate.mjs'))
         || !existsSync(path.join(iterationTargetRoot, '.plan2agent', 'scripts', 'p2a_proposals.mjs'))
-        || !existsSync(path.join(iterationTargetRoot, '.plan2agent', 'schemas', 'run-index.schema.json'))
-        || !existsSync(path.join(iterationTargetRoot, '.plan2agent', 'schemas', 'orchestration-plan.schema.json'))
-        || !existsSync(path.join(iterationTargetRoot, '.plan2agent', 'schemas', 'orchestration-runtime.schema.json'))
-      ) {
+	        || !existsSync(path.join(iterationTargetRoot, '.plan2agent', 'schemas', 'run-index.schema.json'))
+	        || !existsSync(path.join(iterationTargetRoot, '.plan2agent', 'schemas', 'orchestration-plan.schema.json'))
+	        || !existsSync(path.join(iterationTargetRoot, '.plan2agent', 'schemas', 'orchestration-runtime.schema.json'))
+	        || !existsSync(path.join(iterationTargetRoot, '.plan2agent', 'schemas', 'eval-index.schema.json'))
+	        || !existsSync(path.join(iterationTargetRoot, '.plan2agent', 'schemas', 'eval-digest.schema.json'))
+	        || !existsSync(path.join(iterationTargetRoot, '.plan2agent', 'schemas', 'eval-maintenance-draft.schema.json'))
+	        || !existsSync(path.join(iterationTargetRoot, '.plan2agent', 'schemas', 'eval-maintenance-apply-report.schema.json'))
+	      ) {
         console.error(`iteration handoff did not copy active artifacts/current-spec/tools: ${caseData.id}`);
         return { status: 1, checks };
       }
@@ -4501,11 +4738,15 @@ function validateIterationCurrentFixtureCases() {
         || !targetManifest.schemaFiles.includes('.plan2agent/schemas/orchestration-plan.schema.json')
         || !targetManifest.schemaFiles.includes('.plan2agent/schemas/orchestration-runtime.schema.json')
         || !targetManifest.schemaFiles.includes('.plan2agent/schemas/skill-proposal.schema.json')
-        || !targetManifest.schemaFiles.includes('.plan2agent/schemas/proposal-review.schema.json')
-        || !targetManifest.schemaFiles.includes('.plan2agent/schemas/proposal-curation.schema.json')
-        || !targetManifest.schemaFiles.includes('.plan2agent/schemas/proposal-patch-draft.schema.json')
-        || !targetManifest.schemaFiles.includes('.plan2agent/schemas/proposal-draft-approval.schema.json')
-        || targetCurrentSpec.last_handoff?.iteration_id !== 'iter-002'
+	        || !targetManifest.schemaFiles.includes('.plan2agent/schemas/proposal-review.schema.json')
+	        || !targetManifest.schemaFiles.includes('.plan2agent/schemas/proposal-curation.schema.json')
+	        || !targetManifest.schemaFiles.includes('.plan2agent/schemas/proposal-patch-draft.schema.json')
+	        || !targetManifest.schemaFiles.includes('.plan2agent/schemas/proposal-draft-approval.schema.json')
+	        || !targetManifest.schemaFiles.includes('.plan2agent/schemas/eval-index.schema.json')
+	        || !targetManifest.schemaFiles.includes('.plan2agent/schemas/eval-digest.schema.json')
+	        || !targetManifest.schemaFiles.includes('.plan2agent/schemas/eval-maintenance-draft.schema.json')
+	        || !targetManifest.schemaFiles.includes('.plan2agent/schemas/eval-maintenance-apply-report.schema.json')
+	        || targetCurrentSpec.last_handoff?.iteration_id !== 'iter-002'
         || targetCurrentSpec.last_handoff?.maintenance_included !== true
         || sourceCurrentSpecAfterHandoff.last_handoff?.target_project !== iterationTargetRoot
         || targetTaskGraph.sourceSpec !== expectedTargetSpecRef

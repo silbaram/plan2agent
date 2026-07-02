@@ -23,6 +23,10 @@ const SCHEMA_PATHS = {
   proposal_curation: path.join(P2A_PATHS.schemasDir, 'proposal-curation.schema.json'),
   proposal_patch_draft: path.join(P2A_PATHS.schemasDir, 'proposal-patch-draft.schema.json'),
   proposal_draft_approval: path.join(P2A_PATHS.schemasDir, 'proposal-draft-approval.schema.json'),
+  eval_index: path.join(P2A_PATHS.schemasDir, 'eval-index.schema.json'),
+  eval_digest: path.join(P2A_PATHS.schemasDir, 'eval-digest.schema.json'),
+  eval_maintenance_draft: path.join(P2A_PATHS.schemasDir, 'eval-maintenance-draft.schema.json'),
+  eval_maintenance_apply_report: path.join(P2A_PATHS.schemasDir, 'eval-maintenance-apply-report.schema.json'),
 };
 const GATE_PATHS = {
   statusDoc: 'status.md',
@@ -1036,6 +1040,42 @@ export function validateProposalDraftApproval(filePath) {
   return validateProposalDraftApprovalData(loadJson(filePath));
 }
 
+export function validateEvalIndexData(data) {
+  validateSchema(data, loadJson(SCHEMA_PATHS.eval_index));
+  return data;
+}
+
+export function validateEvalIndex(filePath) {
+  return validateEvalIndexData(loadJson(filePath));
+}
+
+export function validateEvalDigestData(data) {
+  validateSchema(data, loadJson(SCHEMA_PATHS.eval_digest));
+  return data;
+}
+
+export function validateEvalDigest(filePath) {
+  return validateEvalDigestData(loadJson(filePath));
+}
+
+export function validateEvalMaintenanceDraftData(data) {
+  validateSchema(data, loadJson(SCHEMA_PATHS.eval_maintenance_draft));
+  return data;
+}
+
+export function validateEvalMaintenanceDraft(filePath) {
+  return validateEvalMaintenanceDraftData(loadJson(filePath));
+}
+
+export function validateEvalMaintenanceApplyReportData(data) {
+  validateSchema(data, loadJson(SCHEMA_PATHS.eval_maintenance_apply_report));
+  return data;
+}
+
+export function validateEvalMaintenanceApplyReport(filePath) {
+  return validateEvalMaintenanceApplyReportData(loadJson(filePath));
+}
+
 export function validateRunsDir(runsDir) {
   if (!existsSync(runsDir)) throw new ValidationError(`runs directory is missing: ${runsDir}`);
   if (!lstatSync(runsDir).isDirectory()) throw new ValidationError(`runs path must be a directory: ${runsDir}`);
@@ -1320,6 +1360,10 @@ function parseArgs(argv) {
     else if (arg === '--proposal-curation') args.proposalCuration = argv[++index];
     else if (arg === '--proposal-patch-draft') args.proposalPatchDraft = argv[++index];
     else if (arg === '--proposal-draft-approval') args.proposalDraftApproval = argv[++index];
+    else if (arg === '--eval-index') args.evalIndex = argv[++index];
+    else if (arg === '--eval-digest') args.evalDigest = argv[++index];
+    else if (arg === '--eval-maintenance-draft') args.evalMaintenanceDraft = argv[++index];
+    else if (arg === '--eval-maintenance-apply-report') args.evalMaintenanceApplyReport = argv[++index];
     else if (arg === '--proposals-dir') args.proposalsDir = argv[++index];
     else if (arg === '--require-approved-spec') args.requireApprovedSpec = argv[++index];
     else if (arg === '--require-handoff-ready') args.requireHandoffReady = true;
@@ -1362,6 +1406,10 @@ export function main(argv = process.argv.slice(2)) {
     if (args.proposalCuration) validateProposalCuration(args.proposalCuration);
     if (args.proposalPatchDraft) validateProposalPatchDraft(args.proposalPatchDraft);
     if (args.proposalDraftApproval) validateProposalDraftApproval(args.proposalDraftApproval);
+    if (args.evalIndex) validateEvalIndex(args.evalIndex);
+    if (args.evalDigest) validateEvalDigest(args.evalDigest);
+    if (args.evalMaintenanceDraft) validateEvalMaintenanceDraft(args.evalMaintenanceDraft);
+    if (args.evalMaintenanceApplyReport) validateEvalMaintenanceApplyReport(args.evalMaintenanceApplyReport);
     if (args.proposalsDir) validateProposalsDir(args.proposalsDir);
     for (const fixtureDir of args.fixtureDir) validateFixtureDir(fixtureDir);
   } catch (error) {

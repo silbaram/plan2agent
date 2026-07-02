@@ -49,6 +49,7 @@ import type {
   ProjectSnapshot,
   ProjectWatchEvent,
   RuntimeInfo,
+  UpdateReportSummary,
   UiLocale,
   VerificationType,
   WorkbenchRun,
@@ -69,7 +70,7 @@ type ArtifactFileState =
 type ArtifactDocument = {
   id: string;
   label: string;
-  group: "status" | "gate" | "task" | "run" | "proposal";
+  group: "status" | "gate" | "task" | "run" | "proposal" | "update" | "eval" | "memory";
   relativePath: string;
   meta: string;
   state: string;
@@ -378,9 +379,22 @@ function proposalArtifactDocument(proposal: ProposalSummary, copy: UiCopy): Arti
   };
 }
 
+function updateReportArtifactDocument(report: UpdateReportSummary, copy: UiCopy): ArtifactDocument {
+  const kindLabel = report.kind === "preview" ? copy.operational.preview : copy.operational.apply;
+  return {
+    id: `update:${report.relativePath}`,
+    label: `${report.command} ${kindLabel} ${report.status}`,
+    group: "update",
+    relativePath: report.relativePath,
+    meta: report.createdAt ?? copy.common.none,
+    state: report.status,
+  };
+}
+
 function buildArtifactDocuments(
   artifact: ArtifactSummary | null,
   proposals: ProposalSummary[],
+  updateReports: UpdateReportSummary[],
   copy: UiCopy,
 ): ArtifactDocument[] {
   const documents: ArtifactDocument[] = [];
@@ -433,12 +447,55 @@ function buildArtifactDocuments(
         run.status,
       );
     }
+
+    if (artifact.evalSummary?.indexPath) {
+      addDocument(
+        copy.operational.evalIndex,
+        "eval",
+        artifact.evalSummary.indexPath,
+        `${artifact.evalSummary.gradeCount} ${copy.operational.grades}`,
+        artifact.evalSummary.nonPassGrades > 0 ? "warn" : "present",
+      );
+    }
+    if (artifact.evalSummary?.digestPath) {
+      addDocument(
+        copy.operational.evalDigest,
+        "eval",
+        artifact.evalSummary.digestPath,
+        `${artifact.evalSummary.clusters} ${copy.operational.clusters}`,
+        artifact.evalSummary.nonPassGrades > 0 ? "warn" : "present",
+      );
+    }
+    if (artifact.evalSummary?.analysisPath) {
+      addDocument(
+        copy.operational.evalAnalysis,
+        "eval",
+        artifact.evalSummary.analysisPath,
+        `${artifact.evalSummary.clusters} ${copy.operational.clusters}`,
+        artifact.evalSummary.clusters > 0 ? "warn" : "present",
+      );
+    }
+    if (artifact.memoryDigest?.sourcePath) {
+      addDocument(
+        copy.operational.memoryDigest,
+        "memory",
+        artifact.memoryDigest.sourcePath,
+        `${artifact.memoryDigest.failedOrBlocked} ${copy.operational.failedOrBlocked}`,
+        artifact.memoryDigest.failedOrBlocked > 0 ? "warn" : "present",
+      );
+    }
   }
 
   for (const proposal of proposals) {
     if (seenPaths.has(proposal.relativePath)) continue;
     seenPaths.add(proposal.relativePath);
     documents.push(proposalArtifactDocument(proposal, copy));
+  }
+
+  for (const report of updateReports) {
+    if (seenPaths.has(report.relativePath)) continue;
+    seenPaths.add(report.relativePath);
+    documents.push(updateReportArtifactDocument(report, copy));
   }
 
   return documents;
@@ -718,9 +775,10 @@ export default function App() {
     projectSnapshot?.artifacts.find((item) => item.rootPath === selectedArtifactRootPath) ??
     artifact;
   const proposals = projectSnapshot?.proposals ?? [];
+  const updateReports = projectSnapshot?.updateReports ?? [];
   const artifactDocuments = useMemo(
-    () => buildArtifactDocuments(selectedArtifact ?? null, proposals, copy),
-    [copy, proposals, selectedArtifact],
+    () => buildArtifactDocuments(selectedArtifact ?? null, proposals, updateReports, copy),
+    [copy, proposals, selectedArtifact, updateReports],
   );
   const selectedArtifactDocument =
     artifactDocuments.find((document) => document.id === selectedArtifactDocumentId) ??
@@ -1241,6 +1299,10 @@ export default function App() {
     const taskMetric = overviewTaskMetric(artifact, projectSnapshot?.state ?? null, locale, copy);
     const runMetric = artifact ? formatCount(artifact.runCount, locale) : "0";
     const showTaskMetric = onboarding?.stage !== "cycle_close_ready";
+    const latestUpdateReport = updateReports[0] ?? null;
+    const evalSummary = artifact?.evalSummary ?? null;
+    const memoryDigest = artifact?.memoryDigest ?? null;
+    const hasOperationalReport = Boolean(latestUpdateReport || evalSummary || memoryDigest);
 
     return (
       <section className="overview-state-panel" aria-label={copy.common.milestones}>
@@ -1362,6 +1424,113 @@ export default function App() {
                   </span>
                 </button>
               ))}
+            </div>
+          </div>
+        )}
+
+        {hasOperationalReport && (
+          <div className="overview-operational" aria-label={copy.operational.title}>
+            <div className="overview-operational__head">
+              <span>{copy.operational.title}</span>
+              <strong className="mono">
+                {formatCount(
+                  [latestUpdateReport, evalSummary, memoryDigest].filter(Boolean).length,
+                  locale,
+                )}
+              </strong>
+            </div>
+            <div className="overview-operational-grid">
+              {latestUpdateReport && (
+                <button
+                  className="overview-operational-card"
+                  type="button"
+                  onClick={() => void openArtifactDocument(updateReportArtifactDocument(latestUpdateReport, copy))}
+                  title={latestUpdateReport.relativePath}
+                >
+                  <span>{copy.operational.updateReport}</span>
+                  <strong>{`${latestUpdateReport.command} ${
+                    latestUpdateReport.kind === "preview" ? copy.operational.preview : copy.operational.apply
+                  } ${latestUpdateReport.status}`}</strong>
+                  <small className="mono">
+                    {latestUpdateReport.kind === "preview" ? (
+                      <>
+                        {formatCount(latestUpdateReport.changedItems, locale)} {copy.operational.changes}
+                      </>
+                    ) : (
+                      <>
+                        {formatCount(latestUpdateReport.appliedFiles, locale)} {copy.operational.appliedFiles}
+                      </>
+                    )}
+                    {" · "}
+                    {formatCount(latestUpdateReport.blockers, locale)} {copy.operational.blockers}
+                  </small>
+                  <code>{latestUpdateReport.relativePath}</code>
+                </button>
+              )}
+              {evalSummary && (
+                <button
+                  className="overview-operational-card"
+                  type="button"
+                  onClick={() => {
+                    const relativePath = evalSummary.digestPath ?? evalSummary.analysisPath ?? evalSummary.indexPath;
+                    if (!relativePath) return;
+                    void openArtifactDocument({
+                      id: `eval:${relativePath}`,
+                      label: copy.operational.evalSummary,
+                      group: "eval",
+                      relativePath,
+                      meta: evalSummary.evalDir ?? copy.common.none,
+                      state: evalSummary.nonPassGrades > 0 ? "warn" : "present",
+                    });
+                  }}
+                  title={evalSummary.evalDir ?? copy.operational.evalSummary}
+                >
+                  <span>{copy.operational.evalSummary}</span>
+                  <strong>
+                    {formatCount(evalSummary.gradeCount, locale)} {copy.operational.grades}
+                    {" · "}
+                    {formatCount(evalSummary.nonPassGrades, locale)} {copy.operational.nonPass}
+                  </strong>
+                  <small className="mono">
+                    {formatCount(evalSummary.clusters, locale)} {copy.operational.clusters}
+                    {" · "}
+                    {formatCount(evalSummary.maintenanceDraftTasks, locale)} {copy.operational.maintenanceDrafts}
+                  </small>
+                  <code>{evalSummary.digestPath ?? evalSummary.analysisPath ?? evalSummary.indexPath ?? evalSummary.evalDir}</code>
+                </button>
+              )}
+              {memoryDigest && (
+                <button
+                  className="overview-operational-card"
+                  type="button"
+                  disabled={!memoryDigest.sourcePath}
+                  onClick={() => {
+                    if (!memoryDigest.sourcePath) return;
+                    void openArtifactDocument({
+                      id: `memory:${memoryDigest.sourcePath}`,
+                      label: copy.operational.memoryDigest,
+                      group: "memory",
+                      relativePath: memoryDigest.sourcePath,
+                      meta: memoryDigest.source,
+                      state: memoryDigest.failedOrBlocked > 0 ? "warn" : "present",
+                    });
+                  }}
+                  title={memoryDigest.sourcePath ?? copy.operational.localDigest}
+                >
+                  <span>{copy.operational.memoryDigest}</span>
+                  <strong>
+                    {formatCount(memoryDigest.totalRuns, locale)} {copy.runs.runs}
+                    {" · "}
+                    {formatCount(memoryDigest.failedOrBlocked, locale)} {copy.operational.failedOrBlocked}
+                  </strong>
+                  <small className="mono">
+                    {formatCount(memoryDigest.verificationGaps, locale)} {copy.operational.verificationGaps}
+                    {" · "}
+                    {memoryDigest.source === "local" ? copy.operational.localDigest : memoryDigest.sourcePath}
+                  </small>
+                  <code>{memoryDigest.sourcePath ?? copy.operational.localDigest}</code>
+                </button>
+              )}
             </div>
           </div>
         )}
@@ -2733,6 +2902,80 @@ export default function App() {
             <strong className="mono">{selectedRun.changedFiles.length}</strong>
           </div>
         </div>
+        {(selectedRun.reproduction || selectedRun.localization || selectedRun.fixSummary || selectedRun.guard) && (
+          <>
+            <div className="section-head section-head--tight">
+              <div>
+                <div className="label">{copy.runs.structuredDetails}</div>
+                <h3>{copy.runs.evidence}</h3>
+              </div>
+            </div>
+            <div className="run-structured-list">
+              {selectedRun.reproduction && (
+                <details className="inspector-disclosure">
+                  <summary>
+                    <span className="inspector-disclosure__title">
+                      <span className="label">{copy.runs.reproduction}</span>
+                      <strong>
+                        {formatCount(
+                          selectedRun.reproduction.steps.length + selectedRun.reproduction.commands.length,
+                          locale,
+                        )}
+                      </strong>
+                    </span>
+                  </summary>
+                  <div className="ref-list">
+                    {selectedRun.reproduction.steps.map((item) => <code key={`step-${item}`}>{item}</code>)}
+                    {selectedRun.reproduction.commands.map((item) => <code key={`cmd-${item}`}>{item}</code>)}
+                    {selectedRun.reproduction.notes.map((item) => <code key={`note-${item}`}>{item}</code>)}
+                  </div>
+                </details>
+              )}
+              {selectedRun.localization && (
+                <details className="inspector-disclosure">
+                  <summary>
+                    <span className="inspector-disclosure__title">
+                      <span className="label">{copy.runs.localization}</span>
+                      <strong>{formatCount(selectedRun.localization.findings.length, locale)}</strong>
+                    </span>
+                  </summary>
+                  <div className="ref-list">
+                    {selectedRun.localization.findings.map((item) => <code key={`finding-${item}`}>{item}</code>)}
+                    {selectedRun.localization.files.map((item) => <code key={`loc-file-${item}`}>{item}</code>)}
+                  </div>
+                </details>
+              )}
+              {selectedRun.fixSummary && (
+                <details className="inspector-disclosure">
+                  <summary>
+                    <span className="inspector-disclosure__title">
+                      <span className="label">{copy.runs.fixSummary}</span>
+                      <strong>{formatCount(selectedRun.fixSummary.summaries.length, locale)}</strong>
+                    </span>
+                  </summary>
+                  <div className="ref-list">
+                    {selectedRun.fixSummary.summaries.map((item) => <code key={`fix-${item}`}>{item}</code>)}
+                    {selectedRun.fixSummary.files.map((item) => <code key={`fix-file-${item}`}>{item}</code>)}
+                  </div>
+                </details>
+              )}
+              {selectedRun.guard && (
+                <details className="inspector-disclosure">
+                  <summary>
+                    <span className="inspector-disclosure__title">
+                      <span className="label">{copy.runs.guard}</span>
+                      <strong>{formatCount(selectedRun.guard.checks.length, locale)}</strong>
+                    </span>
+                  </summary>
+                  <div className="ref-list">
+                    {selectedRun.guard.checks.map((item) => <code key={`guard-${item}`}>{item}</code>)}
+                    {selectedRun.guard.notes.map((item) => <code key={`guard-note-${item}`}>{item}</code>)}
+                  </div>
+                </details>
+              )}
+            </div>
+          </>
+        )}
         {selectedOrchestration && (
           <>
             <div className="section-head section-head--tight">

@@ -160,6 +160,27 @@ export type WorkbenchRunFailure = {
   source: FailureSource;
 };
 
+export type WorkbenchRunReproduction = {
+  steps: string[];
+  commands: string[];
+  notes: string[];
+};
+
+export type WorkbenchRunLocalization = {
+  findings: string[];
+  files: string[];
+};
+
+export type WorkbenchRunFixSummary = {
+  summaries: string[];
+  files: string[];
+};
+
+export type WorkbenchRunGuard = {
+  checks: string[];
+  notes: string[];
+};
+
 export type OrchestrationMode = "solo" | "solo_monitor" | "team";
 
 export type OrchestrationRuntimePhase =
@@ -280,8 +301,48 @@ export type WorkbenchRun = {
   changedFiles: string[];
   verification: WorkbenchRunVerification[];
   notes: string[];
+  reproduction: WorkbenchRunReproduction | null;
+  localization: WorkbenchRunLocalization | null;
+  fixSummary: WorkbenchRunFixSummary | null;
+  guard: WorkbenchRunGuard | null;
   failure: WorkbenchRunFailure | null;
   orchestration: WorkbenchRunOrchestration | null;
+};
+
+export type UpdateReportSummary = {
+  command: string;
+  kind: "preview" | "apply";
+  status: string;
+  appliedAt: string | null;
+  createdAt: string | null;
+  relativePath: string;
+  appliedFiles: number;
+  changedItems: number;
+  blockers: number;
+  error: string | null;
+};
+
+export type EvalArtifactSummary = {
+  evalDir: string | null;
+  indexPath: string | null;
+  digestPath: string | null;
+  analysisPath: string | null;
+  gradeCount: number;
+  nonPassGrades: number;
+  clusters: number;
+  maintenanceDraftTasks: number;
+  latestGeneratedAt: string | null;
+};
+
+export type MemoryDigestSummary = {
+  sourcePath: string | null;
+  source: "file" | "local";
+  totalRuns: number;
+  failedOrBlocked: number;
+  verificationFailures: number;
+  verificationGaps: number;
+  proposals: number;
+  uncoveredCandidateRuns: number;
 };
 
 export type ArtifactSummary = {
@@ -302,6 +363,8 @@ export type ArtifactSummary = {
   tasks: WorkbenchTask[];
   runCount: number;
   runs: WorkbenchRun[];
+  evalSummary: EvalArtifactSummary | null;
+  memoryDigest: MemoryDigestSummary | null;
   diagnostics: ProjectDiagnostic[];
 };
 
@@ -399,6 +462,7 @@ export type ProjectSnapshot = {
   commands: CommandGuidance[];
   doctor: DoctorCommandSummary | null;
   proposals: ProposalSummary[];
+  updateReports: UpdateReportSummary[];
   diagnostics: ProjectDiagnostic[];
   generatedAt: string;
 };

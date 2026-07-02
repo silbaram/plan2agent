@@ -1,0 +1,70 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://plan2agent.local/schemas/eval-maintenance-apply-report.schema.json",
+  "title": "Plan2Agent Eval Maintenance Apply Report",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "generatedAt",
+    "status",
+    "graphPath",
+    "summary",
+    "results"
+  ],
+  "additionalProperties": true,
+  "properties": {
+    "schema_version": {
+      "const": "p2a.eval_maintenance_apply_report.v1"
+    },
+    "generatedAt": {
+      "type": "string",
+      "minLength": 1
+    },
+    "status": {
+      "type": "string",
+      "enum": ["failed", "applied", "dry_run", "noop"]
+    },
+    "graphPath": {
+      "type": "string",
+      "minLength": 1
+    },
+    "summary": {
+      "type": "object",
+      "required": [
+        "tasks",
+        "applied",
+        "dryRun",
+        "skipped",
+        "failed"
+      ],
+      "additionalProperties": true,
+      "properties": {
+        "tasks": { "type": "integer", "minimum": 0 },
+        "applied": { "type": "integer", "minimum": 0 },
+        "dryRun": { "type": "integer", "minimum": 0 },
+        "skipped": { "type": "integer", "minimum": 0 },
+        "failed": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "results": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "clusterId",
+          "title",
+          "status"
+        ],
+        "additionalProperties": true,
+        "properties": {
+          "clusterId": { "type": "string", "minLength": 1 },
+          "title": { "type": "string", "minLength": 1 },
+          "status": {
+            "type": "string",
+            "enum": ["failed", "applied", "dry_run", "skipped"]
+          }
+        }
+      }
+    }
+  }
+}

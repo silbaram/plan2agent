@@ -61,7 +61,7 @@ node scripts/p2a_handoff.mjs upgrade --target <project-dir> (--dry-run|--apply) 
 
 `update`는 기존 scaffold 대상 프로젝트의 runtime script/schema/AI tool asset/generated file을 현재 toolkit 기준과 비교한다. 기본 실행과 `--dry-run`은 preview만 출력하고 파일을 쓰지 않는다. `upgrade --dry-run`도 같은 drift/migration 판정을 재사용한다. 출력은 `unchanged`, `missing`, `would_update`, `manual_review`, `conflict`, `error`로 나뉘고, `.plan2agent/manifest.json` 또는 `project.config.json`을 읽을 수 없거나 target path가 유효하지 않으면 non-zero exit를 반환한다. manifest에서 활성화된 capability의 config가 누락되면 migration preview에 `<capability>_config: would_update`로 표시한다.
 
-`update --apply`와 `upgrade --apply`는 preview를 먼저 만든 뒤 안전한 항목만 적용한다. 자동 적용 대상은 `.plan2agent/scripts/`, `.plan2agent/schemas/`, provider P2A asset 디렉터리(`.agents/`, `.codex/`, `.claude/skills|agents|hooks/`, `.gemini/agents|commands/p2a/`)와 안전한 `project.config.json` 기본값 migration이다. `.gitignore`, `PLAN2AGENT.md`, Claude settings 같은 애매한 generated/local 파일이나 conflict/error가 있으면 적용 전에 중단하고 non-zero exit를 반환한다. apply 결과와 blocker는 `.plan2agent/update-reports/<command>-<timestamp>-<hash>.json`에 기록되며, 적용된 manifest에는 최근 update/upgrade 기록이 남는다.
+`update`/`upgrade --dry-run`은 preview report를 `.plan2agent/update-reports/<command>-<timestamp>-<hash>.json`에 기록하고 하네스 파일은 변경하지 않는다. `update --apply`와 `upgrade --apply`는 같은 preview를 먼저 만든 뒤 안전한 항목만 적용한다. 자동 적용 대상은 `.plan2agent/scripts/`, `.plan2agent/schemas/`, provider P2A asset 디렉터리(`.agents/`, `.codex/`, `.claude/skills|agents|hooks/`, `.gemini/agents|commands/p2a/`)와 안전한 `project.config.json` 기본값 migration이다. `.gitignore`, `PLAN2AGENT.md`, Claude settings 같은 애매한 generated/local 파일이나 conflict/error가 있으면 적용 전에 중단하고 non-zero exit를 반환한다. apply 결과와 blocker도 `.plan2agent/update-reports/<command>-<timestamp>-<hash>.json`에 기록되며, 적용된 manifest에는 최근 update/upgrade 기록이 남는다.
 
 P2A planning artifact, run log, proposal, 생성된 runtime helper의 장기 보존은 Plan2Agent Memory 동기화 또는 명시 export를 기준으로 한다. git commit은 제품 소스코드와 사람이 유지할 프로젝트 설정 이력에 집중한다.
 
@@ -591,13 +591,22 @@ node .plan2agent/scripts/p2a_eval.mjs compare \
 
 node .plan2agent/scripts/p2a_eval.mjs analyze \
   --artifacts .plan2agent/artifacts/<project_id>
+
+node .plan2agent/scripts/p2a_eval.mjs generate \
+  --artifacts .plan2agent/artifacts/<project_id>
+
+node .plan2agent/scripts/p2a_eval.mjs digest \
+  --eval .plan2agent/artifacts/<project_id>/eval \
+  --output .plan2agent/artifacts/<project_id>/eval/eval-digest.json
 ```
 
 `grade`는 한 run을 해당 task의 acceptance criteria와 verification evidence에 대조한다. run이 failed/blocked거나 verification 실패가 있으면 `fail`, verification이 없거나 run이 finished가 아니면 `needs_evidence`, 일부 acceptance evidence만 보이면 `partial`, finished run + verification + acceptance evidence가 모두 맞으면 `pass`를 출력한다. 이 평가는 보수적인 로컬 증거 점검이므로 최종 승인 판단은 사람이 run evidence와 task acceptance를 함께 확인한다.
 
 `compare`는 두 artifact root 또는 runs directory의 run status, verification failure/gap, skipped run, task done count를 비교해 `pass|warn|fail` regression verdict를 낸다. candidate에 failed/blocked run이나 verification failure가 늘면 `fail`, verification gap이나 skipped run이 늘면 `warn`이다.
 
-`analyze`는 failed/blocked run, failed verification, verification gap을 failure cluster로 묶고 proposal coverage를 계산한다. artifact root를 입력하면 각 cluster에 `p2a_iteration maintenance add` 후보 명령을 붙이고, scope/dependency 계열 cluster는 `p2a_iteration open ... draft`로 Gate A/B delta draft를 여는 명령도 함께 제안한다. 이 명령도 파일을 자동 수정하지 않으며, `--output`을 지정했을 때만 eval JSON을 저장한다.
+`analyze`는 failed/blocked run, failed verification, verification gap을 failure cluster로 묶고 proposal coverage를 계산한다. artifact root를 입력하면 각 cluster에 `p2a_iteration maintenance add` 후보 명령을 붙이고, scope/dependency 계열 cluster는 `p2a_iteration open ... draft`로 Gate A/B delta draft를 여는 명령도 함께 제안한다. 기본 실행은 파일을 자동 수정하지 않으며, `--maintenance-draft <path>`를 주면 maintenance task draft JSON을 저장한다. `--apply-maintenance --yes`는 draft된 maintenance task를 maintenance graph에 적용하고 `eval/maintenance-apply-report.json`을 남긴다. 먼저 확인하려면 `--apply-maintenance --dry-run`을 사용한다.
+
+`generate`는 현재 run index를 기준으로 grade files, `analysis.json`, `eval-index.json`을 eval 디렉터리에 생성한다. 같은 출력 디렉터리에 재실행하면 이전 generated grade/index/analysis/compare 파일을 정리하고 새 결과로 대체한다. `digest`는 생성된 eval artifact를 요약하며, GUI에서 digest 문서로 확인하려면 `--output <eval-dir>/eval-digest.json`처럼 파일로 저장한다.
 
 ## 10. Memory 동기화 — `p2a_memory.mjs`
 

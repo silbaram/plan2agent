@@ -41,4 +41,8 @@ export const PROJECT_RUNTIME_SCHEMA_FILES = [
   'proposal-curation.schema.json',
   'proposal-patch-draft.schema.json',
   'proposal-draft-approval.schema.json',
+  'eval-index.schema.json',
+  'eval-digest.schema.json',
+  'eval-maintenance-draft.schema.json',
+  'eval-maintenance-apply-report.schema.json',
 ];

@@ -372,7 +372,7 @@ node scripts/run_fixtures.mjs
 
 `run_fixtures.mjs`는 일반 fixture set을 통과 검증하고, `fixtures/_e2e/manifest.json`의 artifact-root fixture는 handoff-ready 상태인지 확인한다. 승인된 Gate B spec은 `approval_audit`까지 확인한다. `fixtures/_negative/manifest.json`에 정의된 중단/실패 fixture는 기대한 실패 메시지가 나오는지 확인한다.
 
-위 세 명령과 `p2a_doctor.mjs`, `p2a_handoff.mjs`는 Plan2Agent 본체 개발자용이며 scaffold 대상 프로젝트에는 설치되지 않는다. 대상 프로젝트에는 `scripts/p2a_tool_manifest.mjs`의 project runtime 목록만 `.plan2agent/scripts/` 아래로 복사된다. run 평가는 `p2a_eval.mjs grade/compare/analyze`로 수행하고, 장기 보존과 회고 검색은 `p2a_memory.mjs status/push/digest`로 Memory 서버와 동기화한다.
+위 세 명령과 `p2a_doctor.mjs`, `p2a_handoff.mjs`는 Plan2Agent 본체 개발자용이며 scaffold 대상 프로젝트에는 설치되지 않는다. 대상 프로젝트에는 `scripts/p2a_tool_manifest.mjs`의 project runtime 목록만 `.plan2agent/scripts/` 아래로 복사된다. run 평가는 `p2a_eval.mjs grade/compare/analyze/generate/digest`로 수행하고, 장기 보존과 회고 검색은 `p2a_memory.mjs status/push/digest`로 Memory 서버와 동기화한다.
 
 artifact gate 확인:
 

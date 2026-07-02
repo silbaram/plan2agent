@@ -2,7 +2,8 @@
 /** Deterministic Plan2Agent run grading, regression compare, and failure analysis. */
 
 import { createHash } from 'node:crypto';
-import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
 import {
@@ -24,7 +25,7 @@ import {
 import { resolveIterationState } from './p2a_iteration_state.mjs';
 
 const P2A_PATHS = resolveP2aPaths(import.meta.url);
-const COMMANDS = new Set(['grade', 'compare', 'analyze']);
+const COMMANDS = new Set(['grade', 'compare', 'analyze', 'generate', 'digest']);
 const DEFAULT_PROPOSALS_DIR = path.join('.plan2agent', 'proposals');
 const STOP_WORDS = new Set([
   'a',
@@ -52,24 +53,33 @@ function usage() {
     'Usage:',
     '  node .plan2agent/scripts/p2a_eval.mjs grade (--artifacts <dir>|--graph <path>) (--run-id <id>|--run <path>) [--output <path>] [--dry-run] [--json]',
     '  node .plan2agent/scripts/p2a_eval.mjs compare --baseline <artifacts-or-runs-dir> --candidate <artifacts-or-runs-dir> [--output <path>] [--dry-run] [--json]',
-    '  node .plan2agent/scripts/p2a_eval.mjs analyze (--artifacts <dir>|--graph <path>|--runs <dir>) [--proposals <dir>] [--output <path>] [--dry-run] [--json]',
+    '  node .plan2agent/scripts/p2a_eval.mjs analyze (--artifacts <dir>|--graph <path>|--runs <dir>) [--proposals <dir>] [--maintenance-draft <path>] [--apply-maintenance [--yes]] [--output <path>] [--dry-run] [--json]',
+    '  node .plan2agent/scripts/p2a_eval.mjs generate [--artifacts <dir>|--graph <path> [--runs <dir>]|--runs <dir>] [--baseline <dir> --candidate <dir>] [--proposals <dir>] [--output <dir>] [--dry-run] [--json]',
+    '  node .plan2agent/scripts/p2a_eval.mjs digest [--eval <dir>|--artifacts <dir>|--graph <path>|--runs <dir>] [--output <path>] [--dry-run] [--json]',
     '',
     'Commands:',
     '  grade     Evaluate one run against its task acceptance criteria and verification evidence.',
     '  compare   Compare two local iteration/run snapshots for regression signals.',
     '  analyze   Cluster failed runs, verification gaps, and proposal coverage into follow-up candidates.',
+    '  generate  Write grade/analyze/compare eval artifacts for the selected local source.',
+    '  digest    Summarize generated eval artifacts into a compact follow-up view.',
     '',
     'Source options:',
     '  --artifacts <dir>   Iterative artifact root.',
     '  --graph <path>      Task graph JSON path.',
-    '  --runs <dir>        Explicit runs directory. Supported by analyze only.',
+    '  --runs <dir>        Explicit runs directory for analyze/digest/generate, or generate with --graph.',
     '  --run-id <id>       Run id to grade. Reads the matching runs directory.',
     '  --run <path>        Explicit run JSON path to grade.',
     '  --baseline <path>   Baseline artifact root or runs directory for compare.',
     '  --candidate <path>  Candidate artifact root or runs directory for compare.',
-    '  --proposals <dir>   Proposal queue directory for analyze.',
-    '  --output <path>     Optional JSON output path. Writes unless --dry-run is set.',
-    '  --dry-run           Print output plan/result without writing --output.',
+    '  --proposals <dir>   Proposal queue directory for analyze/generate.',
+    '  --maintenance-draft <path>',
+    '                      For analyze, write a maintenance task draft JSON from failure clusters.',
+    '  --apply-maintenance For analyze with --artifacts, add drafted maintenance tasks to the maintenance graph.',
+    '  --yes               Required with --apply-maintenance unless --dry-run is also set.',
+    '  --eval <dir>        Generated eval artifact directory for digest.',
+    '  --output <path>     Optional output path. For generate this is a directory; otherwise a JSON file.',
+    '  --dry-run           Print output plan/result without writing outputs.',
     '  --json              Machine-readable stdout.',
     '  --help, -h          Show this help.',
   ].join('\n');
@@ -90,6 +100,10 @@ function parseArgs(argv) {
     baseline: null,
     candidate: null,
     proposals: null,
+    maintenanceDraft: null,
+    applyMaintenance: false,
+    yes: false,
+    evalDir: null,
     output: null,
     dryRun: false,
     json: false,
@@ -107,6 +121,10 @@ function parseArgs(argv) {
     else if (arg === '--baseline') args.baseline = requiredValue(argv, ++index, '--baseline');
     else if (arg === '--candidate') args.candidate = requiredValue(argv, ++index, '--candidate');
     else if (arg === '--proposals') args.proposals = requiredValue(argv, ++index, '--proposals');
+    else if (arg === '--maintenance-draft') args.maintenanceDraft = requiredValue(argv, ++index, '--maintenance-draft');
+    else if (arg === '--apply-maintenance') args.applyMaintenance = true;
+    else if (arg === '--yes') args.yes = true;
+    else if (arg === '--eval') args.evalDir = requiredValue(argv, ++index, '--eval');
     else if (arg === '--output') args.output = requiredValue(argv, ++index, '--output');
     else if (arg === '--dry-run') args.dryRun = true;
     else if (arg === '--json') args.json = true;
@@ -121,6 +139,8 @@ function parseArgs(argv) {
 
 function validateArgs(args) {
   if (args.command === 'grade') {
+    if (args.evalDir) throw new Error('grade does not support --eval');
+    if (args.maintenanceDraft || args.applyMaintenance || args.yes) throw new Error('grade does not support maintenance draft/apply options');
     if (args.runs) throw new Error('grade uses --artifacts or --graph with --run-id, or --run with --graph');
     const sourceCount = [args.artifacts, args.graph].filter(Boolean).length;
     if (sourceCount === 0) {
@@ -137,12 +157,13 @@ function validateArgs(args) {
   }
   if (args.command === 'compare') {
     if (!args.baseline || !args.candidate) throw new Error('compare requires --baseline and --candidate');
-    if (args.artifacts || args.graph || args.runs || args.run || args.runId || args.proposals) {
+    if (args.artifacts || args.graph || args.runs || args.run || args.runId || args.proposals || args.evalDir || args.maintenanceDraft || args.applyMaintenance || args.yes) {
       throw new Error('compare only supports --baseline, --candidate, --output, --dry-run, and --json');
     }
     return;
   }
   if (args.command === 'analyze') {
+    if (args.evalDir) throw new Error('analyze does not support --eval');
     const sourceCount = [args.artifacts, args.graph, args.runs].filter(Boolean).length;
     if (sourceCount === 0) {
       const defaultArtifacts = singleArtifactProjectRoot();
@@ -156,6 +177,58 @@ function validateArgs(args) {
       throw new Error('analyze requires exactly one of --artifacts, --graph, or --runs');
     }
     if (args.run || args.runId || args.baseline || args.candidate) throw new Error('analyze does not support run/compare options');
+    if ((args.maintenanceDraft || args.applyMaintenance) && !args.artifacts) {
+      throw new Error('maintenance draft/apply requires analyze --artifacts so tasks can target the maintenance graph');
+    }
+    if (args.applyMaintenance && !args.dryRun && !args.yes) {
+      throw new Error('--apply-maintenance requires --yes, or use --dry-run to preview');
+    }
+    if (args.graph) assertNotUninitializedScaffoldGraph(args.graph);
+    return;
+  }
+  if (args.command === 'generate') {
+    if (args.evalDir) throw new Error('generate uses --output for the eval artifact directory, not --eval');
+    if (args.maintenanceDraft || args.applyMaintenance || args.yes) throw new Error('generate does not support maintenance draft/apply options');
+    if (args.run || args.runId) throw new Error('generate grades all indexed runs; use grade for one --run or --run-id');
+    if ((args.baseline && !args.candidate) || (!args.baseline && args.candidate)) {
+      throw new Error('generate requires both --baseline and --candidate when generating compare output');
+    }
+    if (args.artifacts && args.graph) throw new Error('generate cannot combine --artifacts and --graph');
+    if (args.artifacts && args.runs) throw new Error('generate cannot combine --artifacts and --runs; use --graph with --runs for detached run directories');
+    if (!args.artifacts && !args.graph && !args.runs && !args.baseline) {
+      const defaultArtifacts = singleArtifactProjectRoot();
+      const configuredGraph = configuredTaskGraphPath();
+      if (defaultArtifacts) args.artifacts = defaultArtifacts;
+      else if (configuredGraph) args.graph = configuredGraph;
+      else if (existsSync(path.join('.plan2agent', 'runs'))) args.runs = path.join('.plan2agent', 'runs');
+      else assertNoUninitializedScaffoldArtifactRoots();
+    }
+    if (args.proposals && !args.artifacts && !args.graph && !args.runs) {
+      throw new Error('generate only supports --proposals when a local source is selected');
+    }
+    if (!args.artifacts && !args.graph && !args.runs && !args.baseline) {
+      throw new Error('generate requires a local source or --baseline/--candidate compare sources');
+    }
+    if (args.graph) assertNotUninitializedScaffoldGraph(args.graph);
+    return;
+  }
+  if (args.command === 'digest') {
+    if (args.run || args.runId || args.baseline || args.candidate || args.proposals || args.maintenanceDraft || args.applyMaintenance || args.yes) {
+      throw new Error('digest supports only --eval, source options, --output, --dry-run, and --json');
+    }
+    const sourceCount = [args.evalDir, args.artifacts, args.graph, args.runs].filter(Boolean).length;
+    if (sourceCount === 0) {
+      const defaultArtifacts = singleArtifactProjectRoot();
+      const configuredGraph = configuredTaskGraphPath();
+      if (existsSync(path.join('.plan2agent', 'eval'))) args.evalDir = path.join('.plan2agent', 'eval');
+      else if (defaultArtifacts) args.artifacts = defaultArtifacts;
+      else if (configuredGraph) args.graph = configuredGraph;
+      else if (existsSync(path.join('.plan2agent', 'runs'))) args.runs = path.join('.plan2agent', 'runs');
+      else assertNoUninitializedScaffoldArtifactRoots();
+    }
+    if ([args.evalDir, args.artifacts, args.graph, args.runs].filter(Boolean).length !== 1) {
+      throw new Error('digest requires exactly one of --eval, --artifacts, --graph, or --runs');
+    }
     if (args.graph) assertNotUninitializedScaffoldGraph(args.graph);
   }
 }
@@ -239,6 +312,38 @@ function loadAnalyzeSource(args) {
   };
 }
 
+function loadGenerateSource(args) {
+  if (args.artifacts || args.graph) {
+    const source = loadGraphSource(args);
+    if (!args.runs) return source;
+    const runsDir = path.resolve(args.runs);
+    return {
+      ...source,
+      runsDir,
+      proposalsDir: path.join(path.dirname(runsDir), 'proposals'),
+    };
+  }
+  if (args.runs) return loadAnalyzeSource(args);
+  return null;
+}
+
+function evalOutputDirForSource(source) {
+  if (source.sourceKind === 'artifacts') return path.join(source.sourcePath, 'eval');
+  return path.join(path.dirname(source.runsDir), 'eval');
+}
+
+function resolveGenerateOutputDir(args, source) {
+  if (args.output) return path.resolve(args.output);
+  if (source) return evalOutputDirForSource(source);
+  return path.resolve('.plan2agent', 'eval');
+}
+
+function resolveDigestEvalDir(args) {
+  if (args.evalDir) return path.resolve(args.evalDir);
+  const source = loadAnalyzeSource(args);
+  return evalOutputDirForSource(source);
+}
+
 function runFilePath(runsDir, runId) {
   if (!/^run-[A-Za-z0-9._-]+$/.test(runId ?? '')) throw new Error(`run id must match run-[A-Za-z0-9._-]+, got ${JSON.stringify(runId)}`);
   return path.join(runsDir, `${runId}.json`);
@@ -288,6 +393,10 @@ function evidenceText(run) {
     run.taskTitle,
     ...(run.notes ?? []),
     ...(run.changedFiles ?? []),
+    ...structuredRunEvidence(run.reproduction),
+    ...structuredRunEvidence(run.localization),
+    ...structuredRunEvidence(run.fixSummary),
+    ...structuredRunEvidence(run.guard),
     ...(run.verification ?? []).flatMap((item) => [
       item.type,
       item.command,
@@ -296,6 +405,11 @@ function evidenceText(run) {
       item.stderrTail,
     ]),
   ].filter(Boolean).join('\n');
+}
+
+function structuredRunEvidence(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return [];
+  return Object.values(value).flatMap((item) => Array.isArray(item) ? item : [item]).filter(Boolean);
 }
 
 function criterionCoverage(criterion, run) {
@@ -368,6 +482,10 @@ function buildGrade(source, runInfo) {
         status: item.status,
         exitCode: item.exitCode,
       })),
+      reproduction: runInfo.run.reproduction ?? null,
+      localization: runInfo.run.localization ?? null,
+      fixSummary: runInfo.run.fixSummary ?? null,
+      guard: runInfo.run.guard ?? null,
       failure: runInfo.run.failure ?? null,
     },
     verdict,
@@ -596,7 +714,11 @@ function clusterRecommendation(key) {
 
 function buildAnalyze(args) {
   const source = loadAnalyzeSource(args);
-  const proposalsDir = args.proposals ? path.resolve(args.proposals) : source.proposalsDir ?? DEFAULT_PROPOSALS_DIR;
+  return buildAnalyzeForSource(source, args.proposals);
+}
+
+function buildAnalyzeForSource(source, proposalsArg = null) {
+  const proposalsDir = proposalsArg ? path.resolve(proposalsArg) : source.proposalsDir ?? DEFAULT_PROPOSALS_DIR;
   const runs = readRuns(source.runsDir);
   const { proposals, skippedProposals } = readProposals(proposalsDir);
   const clustersByKey = new Map();
@@ -605,7 +727,6 @@ function buildAnalyze(args) {
     if (!key) continue;
     if (!clustersByKey.has(key)) {
       clustersByKey.set(key, {
-        clusterId: `cluster-${key}`,
         classification: key,
         runIds: [],
         taskIds: [],
@@ -621,16 +742,26 @@ function buildAnalyze(args) {
   }
   const proposalSourceRuns = new Set(proposals.map((proposal) => proposal.sourceRunId).filter(Boolean));
   const clusters = [...clustersByKey.values()]
-    .map((cluster) => ({
-      ...cluster,
-      runIds: sortedUnique(cluster.runIds),
-      taskIds: sortedUnique(cluster.taskIds),
-      changedFiles: sortedUnique([...cluster.changedFiles]).slice(0, 20),
-      proposalCoverage: cluster.runIds.filter((runId) => proposalSourceRuns.has(runId)).length,
-      recommendation: clusterRecommendation(cluster.classification),
-      maintenanceCommand: maintenanceCommandForCluster(source, cluster),
-      deltaDraftCommand: deltaDraftCommandForCluster(source, cluster),
-    }))
+    .map((cluster) => {
+      const runIds = sortedUnique(cluster.runIds);
+      const taskIds = sortedUnique(cluster.taskIds);
+      const changedFiles = sortedUnique([...cluster.changedFiles]).slice(0, 20);
+      const clusterId = `cluster-${cluster.classification}-${stableHash({ runIds, taskIds, changedFiles })}`;
+      const normalizedCluster = {
+        ...cluster,
+        clusterId,
+        runIds,
+        taskIds,
+        changedFiles,
+        proposalCoverage: runIds.filter((runId) => proposalSourceRuns.has(runId)).length,
+        recommendation: clusterRecommendation(cluster.classification),
+      };
+      return {
+        ...normalizedCluster,
+        maintenanceCommand: maintenanceCommandForCluster(source, normalizedCluster),
+        deltaDraftCommand: deltaDraftCommandForCluster(source, normalizedCluster),
+      };
+    })
     .sort((left, right) => right.runIds.length - left.runIds.length || left.classification.localeCompare(right.classification));
   return {
     schema_version: 'p2a.eval_analysis.v1',
@@ -711,6 +842,285 @@ function analyzeNextActions(source, clusters) {
   return actions;
 }
 
+function maintenanceDraftTask(source, analysis, cluster) {
+  const title = `Improve ${cluster.classification} handling`;
+  const runList = cluster.runIds.join(', ');
+  const taskList = cluster.taskIds.join(', ');
+  const sourceSpecRefs = sortedUnique([
+    `eval-analysis:${analysis.analysisId}`,
+    `eval-cluster:${cluster.clusterId}`,
+    ...cluster.runIds.map((runId) => `run:${runId}`),
+  ]);
+  const acceptanceCriteria = [
+    `Future runs avoid or explicitly classify ${cluster.classification}.`,
+    `Local verification or documented guard covers the failure pattern from ${cluster.runIds.length} run(s).`,
+  ];
+  if (cluster.changedFiles.length) {
+    acceptanceCriteria.push('The maintenance fix stays scoped to the files or workflow area implicated by the eval cluster.');
+  }
+  const description = [
+    `Eval cluster ${cluster.clusterId} found ${cluster.runIds.length} run(s) classified as ${cluster.classification}.`,
+    `Runs: ${runList || 'none'}.`,
+    `Tasks: ${taskList || 'none'}.`,
+    `Recommendation: ${cluster.recommendation}`,
+  ].join('\n');
+  const suggestedAgentPrompt = [
+    `Apply the maintenance follow-up for eval cluster ${cluster.clusterId} in project ${source.projectId}.`,
+    `Classification: ${cluster.classification}.`,
+    `Runs: ${runList || 'none'}.`,
+    `Tasks: ${taskList || 'none'}.`,
+    cluster.changedFiles.length ? `Impacted files: ${cluster.changedFiles.join(', ')}.` : null,
+    `Recommendation: ${cluster.recommendation}`,
+    'Keep the change scoped, update verification evidence, and record the guard that prevents recurrence.',
+  ].filter(Boolean).join('\n');
+  return {
+    clusterId: cluster.clusterId,
+    classification: cluster.classification,
+    runIds: cluster.runIds,
+    taskIds: cluster.taskIds,
+    title,
+    description,
+    acceptanceCriteria,
+    targetArea: 'maintenance',
+    suggestedAgentPrompt,
+    sourceSpecRefs,
+    applyCommand: maintenanceAddCommandForTask(source, {
+      title,
+      description,
+      acceptanceCriteria,
+      targetArea: 'maintenance',
+      suggestedAgentPrompt,
+      sourceSpecRefs,
+    }),
+  };
+}
+
+function maintenanceAddCommandForTask(source, task) {
+  return [
+    'node .plan2agent/scripts/p2a_iteration.mjs maintenance add',
+    '--artifacts',
+    shellQuote(displayPath(source.sourcePath)),
+    '--title',
+    shellQuote(task.title),
+    '--description',
+    shellQuote(task.description),
+    '--area',
+    shellQuote(task.targetArea),
+    '--prompt',
+    shellQuote(task.suggestedAgentPrompt),
+    ...task.acceptanceCriteria.flatMap((criterion) => ['--accept', shellQuote(criterion)]),
+    ...task.sourceSpecRefs.flatMap((ref) => ['--ref', shellQuote(ref)]),
+  ].join(' ');
+}
+
+function buildMaintenanceDraft(source, analysis) {
+  if (source.sourceKind !== 'artifacts') {
+    throw new Error('maintenance draft requires an artifact source');
+  }
+  const tasks = analysis.clusters.map((cluster) => maintenanceDraftTask(source, analysis, cluster));
+  return {
+    schema_version: 'p2a.eval_maintenance_draft.v1',
+    draftId: `eval-maintenance-draft-${stableHash({
+      analysisId: analysis.analysisId,
+      source: source.sourcePath,
+      tasks: tasks.map((task) => ({ clusterId: task.clusterId, refs: task.sourceSpecRefs })),
+    })}`,
+    generatedAt: new Date().toISOString(),
+    source: analysis.source,
+    analysisId: analysis.analysisId,
+    summary: {
+      clusters: analysis.clusters.length,
+      tasks: tasks.length,
+    },
+    tasks,
+    nextActions: tasks.length
+      ? [
+          'Review this draft before applying it to the maintenance graph.',
+          `Apply after review: node .plan2agent/scripts/p2a_eval.mjs analyze --artifacts ${shellQuote(displayPath(source.sourcePath))} --apply-maintenance --yes`,
+        ]
+      : ['No maintenance tasks were drafted because no failure clusters were found.'],
+  };
+}
+
+function writeMaintenanceDraftIfRequested(args, draft) {
+  if (!draft || !args.maintenanceDraft) return { wrote: false, filePath: null };
+  const filePath = path.resolve(args.maintenanceDraft);
+  if (args.dryRun) return { wrote: false, filePath };
+  writeJsonFile(filePath, draft);
+  return { wrote: true, filePath };
+}
+
+function maintenanceGraphPathForSource(source) {
+  return path.join(source.sourcePath, 'iterations', 'maintenance', 'gate-c-task-graph', 'task-graph.json');
+}
+
+function existingMaintenanceClusterRefs(source) {
+  const graphPath = maintenanceGraphPathForSource(source);
+  if (!fileExists(graphPath)) return new Set();
+  try {
+    const graph = loadJson(graphPath);
+    return new Set(
+      (graph.tasks ?? [])
+        .flatMap((task) => Array.isArray(task.sourceSpecRefs) ? task.sourceSpecRefs : [])
+        .filter((ref) => typeof ref === 'string' && ref.startsWith('eval-cluster:')),
+    );
+  } catch {
+    return new Set();
+  }
+}
+
+function tailText(value) {
+  const text = String(value ?? '');
+  return text.length > 4000 ? text.slice(-4000) : text;
+}
+
+function maintenanceAddCliArgs(source, task, dryRun) {
+  const iterationScript = path.join(P2A_PATHS.scriptsDir, 'p2a_iteration.mjs');
+  return [
+    iterationScript,
+    'maintenance',
+    'add',
+    '--artifacts',
+    source.sourcePath,
+    '--title',
+    task.title,
+    '--description',
+    task.description,
+    '--area',
+    task.targetArea,
+    '--prompt',
+    task.suggestedAgentPrompt,
+    ...task.acceptanceCriteria.flatMap((criterion) => ['--accept', criterion]),
+    ...task.sourceSpecRefs.flatMap((ref) => ['--ref', ref]),
+    ...(dryRun ? ['--dry-run'] : []),
+  ];
+}
+
+function runMaintenanceAddTask(source, task, dryRun) {
+  return spawnSync(process.execPath, maintenanceAddCliArgs(source, task, dryRun), {
+    cwd: P2A_PATHS.projectRoot,
+    encoding: 'utf8',
+    maxBuffer: 1024 * 1024 * 5,
+  });
+}
+
+function maintenanceTaskApplyResult(task, status, reason, result = null) {
+  return {
+    clusterId: task.clusterId,
+    title: task.title,
+    status,
+    reason,
+    exitCode: result ? typeof result.status === 'number' ? result.status : 1 : null,
+    stdoutTail: result ? tailText(result.stdout) : undefined,
+    stderrTail: result ? tailText([result.stderr, result.error?.message].filter(Boolean).join('\n')) : undefined,
+  };
+}
+
+function buildMaintenanceApplyResult(source, draft, args, results) {
+  const failed = results.filter((result) => result.status === 'failed').length;
+  const applied = results.filter((result) => result.status === 'applied').length;
+  const dryRun = results.filter((result) => result.status === 'dry_run').length;
+  const skipped = results.filter((result) => result.status === 'skipped').length;
+  return {
+    status: failed ? 'failed' : applied ? 'applied' : dryRun ? 'dry_run' : 'noop',
+    graphPath: displayPath(maintenanceGraphPathForSource(source)),
+    dryRun: args.dryRun,
+    summary: {
+      tasks: draft.tasks.length,
+      applied,
+      dryRun,
+      skipped,
+      failed,
+    },
+    results,
+  };
+}
+
+function maintenanceApplyReportPath(source) {
+  return path.join(source.sourcePath, 'eval', 'maintenance-apply-report.json');
+}
+
+function writeMaintenanceApplyReportIfNeeded(source, applyResult, args) {
+  if (args.dryRun) return null;
+  const filePath = maintenanceApplyReportPath(source);
+  writeJsonFile(filePath, {
+    schema_version: 'p2a.eval_maintenance_apply_report.v1',
+    generatedAt: new Date().toISOString(),
+    source: sourceDescriptor(source),
+    ...applyResult,
+  });
+  return displayPath(filePath);
+}
+
+function applyMaintenanceDraft(source, draft, args) {
+  const existingRefs = existingMaintenanceClusterRefs(source);
+  const results = [];
+  const pending = [];
+  for (const task of draft.tasks) {
+    const clusterRef = task.sourceSpecRefs.find((ref) => ref.startsWith('eval-cluster:')) ?? null;
+    if (clusterRef && existingRefs.has(clusterRef)) {
+      results.push(maintenanceTaskApplyResult(
+        task,
+        'skipped',
+        `maintenance graph already contains ${clusterRef}`,
+      ));
+      continue;
+    }
+    pending.push({ task, clusterRef });
+  }
+
+  if (args.dryRun) {
+    for (const item of pending) {
+      const result = runMaintenanceAddTask(source, item.task, true);
+      const status = result.status === 0 ? 'dry_run' : 'failed';
+      results.push(maintenanceTaskApplyResult(
+        item.task,
+        status,
+        status === 'failed' ? 'p2a_iteration maintenance add dry-run failed' : null,
+        result,
+      ));
+    }
+    return buildMaintenanceApplyResult(source, draft, args, results);
+  }
+
+  const preflightFailures = [];
+  for (const item of pending) {
+    const result = runMaintenanceAddTask(source, item.task, true);
+    if (result.status !== 0) {
+      preflightFailures.push(maintenanceTaskApplyResult(
+        item.task,
+        'failed',
+        'p2a_iteration maintenance add dry-run preflight failed',
+        result,
+      ));
+    }
+  }
+  if (preflightFailures.length) {
+    const applyResult = buildMaintenanceApplyResult(source, draft, args, [...results, ...preflightFailures]);
+    return {
+      ...applyResult,
+      reportPath: writeMaintenanceApplyReportIfNeeded(source, applyResult, args),
+    };
+  }
+
+  for (const item of pending) {
+    const result = runMaintenanceAddTask(source, item.task, false);
+    const status = result.status === 0 ? 'applied' : 'failed';
+    if (status === 'applied' && item.clusterRef) existingRefs.add(item.clusterRef);
+    results.push(maintenanceTaskApplyResult(
+      item.task,
+      status,
+      status === 'failed' ? 'p2a_iteration maintenance add failed' : null,
+      result,
+    ));
+  }
+  const applyResult = buildMaintenanceApplyResult(source, draft, args, results);
+  return {
+    ...applyResult,
+    reportPath: writeMaintenanceApplyReportIfNeeded(source, applyResult, args),
+  };
+}
+
 function printAnalyze(payload, writeResult) {
   console.log('Plan2Agent eval analyze');
   console.log(`- source: ${payload.source.sourceKind} ${payload.source.sourcePath}`);
@@ -719,6 +1129,440 @@ function printAnalyze(payload, writeResult) {
     console.log(`- cluster: ${cluster.classification} runs=${cluster.runIds.length} proposalCoverage=${cluster.proposalCoverage}`);
     console.log(`  recommendation: ${cluster.recommendation}`);
   });
+  if (payload.maintenanceDraft) {
+    console.log(`- maintenance draft: tasks=${payload.maintenanceDraft.summary.tasks}`);
+    if (payload.maintenanceDraft.outputPath) {
+      console.log(`- maintenance draft output: ${payload.maintenanceDraft.outputPath}${payload.maintenanceDraft.dryRun ? ' (dry-run)' : ''}`);
+    }
+    if (payload.maintenanceDraft.applyResult) {
+      const result = payload.maintenanceDraft.applyResult;
+      console.log(`- maintenance apply: ${result.status} applied=${result.summary.applied} skipped=${result.summary.skipped} failed=${result.summary.failed}`);
+      if (result.reportPath) console.log(`- maintenance apply report: ${result.reportPath}`);
+    }
+  }
+  if (writeResult.wrote) console.log(`- output: ${displayPath(writeResult.filePath)}`);
+  if (payload.nextActions.length) {
+    console.log('next actions:');
+    payload.nextActions.forEach((action) => console.log(`- ${action}`));
+  }
+}
+
+function buildGeneratedGrades(source, runs) {
+  const grades = [];
+  const skippedGrades = [];
+  if (!source.graph) {
+    for (const run of runs.runs) {
+      skippedGrades.push({
+        runId: run.runId,
+        taskId: run.taskId,
+        reason: 'task graph is unavailable; use --artifacts or --graph to generate grades',
+      });
+    }
+    return { grades, skippedGrades };
+  }
+  for (const run of runs.runs) {
+    try {
+      grades.push(buildGrade(source, {
+        run,
+        filePath: runFilePath(source.runsDir, run.runId),
+      }));
+    } catch (error) {
+      skippedGrades.push({
+        runId: run.runId,
+        taskId: run.taskId,
+        reason: errorMessage(error),
+      });
+    }
+  }
+  return { grades, skippedGrades };
+}
+
+function generateFileMap(outputDir, grades, analysis, compare) {
+  return {
+    index: displayPath(path.join(outputDir, 'eval-index.json')),
+    grades: grades.map((grade) => ({
+      runId: grade.run.runId,
+      taskId: grade.task.taskId,
+      verdict: grade.verdict,
+      score: grade.score,
+      path: displayPath(path.join(outputDir, 'grades', `${grade.run.runId}.json`)),
+    })),
+    analysis: analysis ? displayPath(path.join(outputDir, 'analysis.json')) : null,
+    compare: compare ? displayPath(path.join(outputDir, 'compare.json')) : null,
+  };
+}
+
+function sourceDescriptor(source) {
+  if (!source) return null;
+  return {
+    sourceKind: source.sourceKind,
+    sourcePath: displayPath(source.sourcePath),
+    projectId: source.projectId,
+    iterationId: source.iterationId,
+    graphPath: source.graphPath ? displayPath(source.graphPath) : null,
+    runsDir: displayPath(source.runsDir),
+    proposalsDir: source.proposalsDir ? displayPath(source.proposalsDir) : null,
+  };
+}
+
+function buildGenerate(args) {
+  const source = loadGenerateSource(args);
+  const outputDir = resolveGenerateOutputDir(args, source);
+  const runs = source ? readRuns(source.runsDir) : { runs: [], skippedRuns: [] };
+  const { grades, skippedGrades } = source
+    ? buildGeneratedGrades(source, runs)
+    : { grades: [], skippedGrades: [] };
+  const analysis = source ? buildAnalyzeForSource(source, args.proposals) : null;
+  const compare = args.baseline && args.candidate ? buildCompare(args) : null;
+  const nonPassGrades = grades.filter((grade) => grade.verdict !== 'pass');
+  const summary = {
+    runs: runs.runs.length,
+    skippedRuns: runs.skippedRuns.length,
+    grades: grades.length,
+    nonPassGrades: nonPassGrades.length,
+    skippedGrades: skippedGrades.length,
+    analyses: analysis ? 1 : 0,
+    compares: compare ? 1 : 0,
+    clusters: analysis?.summary?.clusters ?? 0,
+    compareVerdict: compare?.verdict ?? null,
+  };
+  const files = generateFileMap(outputDir, grades, analysis, compare);
+  const payload = {
+    schema_version: 'p2a.eval_generate.v1',
+    generateId: `eval-generate-${stableHash({
+      source: sourceDescriptor(source),
+      compare: compare ? { baseline: args.baseline, candidate: args.candidate, verdict: compare.verdict } : null,
+      summary,
+    })}`,
+    generatedAt: new Date().toISOString(),
+    outputDir: displayPath(outputDir),
+    source: sourceDescriptor(source),
+    compareSource: compare ? {
+      baseline: displayPath(path.resolve(args.baseline)),
+      candidate: displayPath(path.resolve(args.candidate)),
+    } : null,
+    summary,
+    files,
+    skippedRuns: runs.skippedRuns,
+    skippedGrades,
+    nextActions: [],
+    results: {
+      grades,
+      analysis,
+      compare,
+    },
+  };
+  payload.nextActions = generateNextActions(payload);
+  return payload;
+}
+
+function generateNextActions(payload) {
+  const digestOutputPath = path.join(payload.outputDir, 'eval-digest.json');
+  const actions = [
+    `Summarize generated eval artifacts: node .plan2agent/scripts/p2a_eval.mjs digest --eval ${shellQuote(payload.outputDir)} --output ${shellQuote(digestOutputPath)}`,
+  ];
+  if (payload.skippedGrades.length) {
+    actions.push('Review skippedGrades; runs without a matching task graph cannot receive acceptance coverage grades.');
+  }
+  if (payload.summary.nonPassGrades > 0) {
+    actions.push('Review non-pass grade files under the generated grades directory before closing the related tasks.');
+  }
+  if (payload.results.analysis?.clusters?.length) {
+    actions.push('Use analysis cluster maintenanceCommand or deltaDraftCommand when the failure pattern requires follow-up work.');
+  }
+  if (payload.results.compare && payload.results.compare.verdict !== 'pass') {
+    actions.push('Review compare.json regression signals before promoting the candidate run set.');
+  }
+  return actions;
+}
+
+function writeJsonFile(filePath, payload) {
+  mkdirSync(path.dirname(filePath), { recursive: true });
+  writeFileSync(filePath, `${JSON.stringify(payload, null, 2)}\n`, 'utf8');
+}
+
+function removeFileIfExists(filePath) {
+  if (!fileExists(filePath)) return;
+  rmSync(filePath, { force: true });
+}
+
+function cleanGenerateOutputs(outputDir) {
+  removeFileIfExists(path.join(outputDir, 'eval-index.json'));
+  removeFileIfExists(path.join(outputDir, 'analysis.json'));
+  removeFileIfExists(path.join(outputDir, 'compare.json'));
+  const gradesDir = path.join(outputDir, 'grades');
+  if (!directoryExists(gradesDir)) return;
+  for (const entry of readdirSync(gradesDir, { withFileTypes: true })) {
+    if (entry.isFile() && entry.name.endsWith('.json')) {
+      removeFileIfExists(path.join(gradesDir, entry.name));
+    }
+  }
+}
+
+function writeGenerateOutputs(args, payload) {
+  const outputDir = path.resolve(args.output ?? payload.outputDir);
+  const gradeFiles = payload.results.grades.map((grade) => ({
+    grade,
+    filePath: path.join(outputDir, 'grades', `${grade.run.runId}.json`),
+  }));
+  const analysisPath = payload.results.analysis ? path.join(outputDir, 'analysis.json') : null;
+  const comparePath = payload.results.compare ? path.join(outputDir, 'compare.json') : null;
+  const indexPath = path.join(outputDir, 'eval-index.json');
+  if (args.dryRun) {
+    return {
+      wrote: false,
+      outputDir,
+      files: {
+        index: indexPath,
+        grades: gradeFiles.map((item) => item.filePath),
+        analysis: analysisPath,
+        compare: comparePath,
+      },
+    };
+  }
+  cleanGenerateOutputs(outputDir);
+  for (const item of gradeFiles) writeJsonFile(item.filePath, item.grade);
+  if (payload.results.analysis) writeJsonFile(analysisPath, payload.results.analysis);
+  if (payload.results.compare) writeJsonFile(comparePath, payload.results.compare);
+  const { results, ...indexPayload } = payload;
+  writeJsonFile(indexPath, {
+    ...indexPayload,
+    schema_version: 'p2a.eval_index.v1',
+    generateSchemaVersion: payload.schema_version,
+  });
+  return {
+    wrote: true,
+    outputDir,
+    files: {
+      index: indexPath,
+      grades: gradeFiles.map((item) => item.filePath),
+      analysis: analysisPath,
+      compare: comparePath,
+    },
+  };
+}
+
+function printGenerate(payload, writeResult, dryRun) {
+  console.log('Plan2Agent eval generate');
+  if (payload.source) console.log(`- source: ${payload.source.sourceKind} ${payload.source.sourcePath}`);
+  if (payload.compareSource) console.log(`- compare: ${payload.compareSource.baseline} -> ${payload.compareSource.candidate}`);
+  console.log(`- output: ${payload.outputDir}${dryRun ? ' (dry-run)' : ''}`);
+  console.log(`- grades: ${payload.summary.grades} nonPass=${payload.summary.nonPassGrades} skipped=${payload.summary.skippedGrades}`);
+  console.log(`- analysis: ${payload.summary.analyses} clusters=${payload.summary.clusters}`);
+  if (payload.summary.compares) console.log(`- compare: verdict=${payload.summary.compareVerdict}`);
+  if (writeResult.wrote) console.log(`- index: ${displayPath(writeResult.files.index)}`);
+  if (payload.nextActions.length) {
+    console.log('next actions:');
+    payload.nextActions.forEach((action) => console.log(`- ${action}`));
+  }
+}
+
+function jsonFilesRecursive(dirPath) {
+  if (!directoryExists(dirPath)) throw new Error(`eval directory is missing: ${dirPath}`);
+  const entries = readdirSync(dirPath, { withFileTypes: true })
+    .sort((left, right) => left.name.localeCompare(right.name));
+  const files = [];
+  for (const entry of entries) {
+    const entryPath = path.join(dirPath, entry.name);
+    if (entry.isDirectory()) files.push(...jsonFilesRecursive(entryPath));
+    else if (entry.isFile() && entry.name.endsWith('.json')) files.push(entryPath);
+  }
+  return files;
+}
+
+function readEvalArtifacts(evalDir) {
+  const artifacts = {
+    indexes: [],
+    grades: [],
+    analyses: [],
+    compares: [],
+    digests: [],
+    applyReports: [],
+    skippedFiles: [],
+    totalJsonFiles: 0,
+  };
+  for (const filePath of jsonFilesRecursive(evalDir)) {
+    artifacts.totalJsonFiles += 1;
+    try {
+      const payload = JSON.parse(readFileSync(filePath, 'utf8'));
+      const schemaVersion = payload?.schema_version;
+      if (schemaVersion === 'p2a.eval_index.v1' || schemaVersion === 'p2a.eval_generate.v1') {
+        artifacts.indexes.push({ filePath, payload });
+      } else if (schemaVersion === 'p2a.eval_grade.v1') {
+        artifacts.grades.push({ filePath, payload });
+      } else if (schemaVersion === 'p2a.eval_analysis.v1') {
+        artifacts.analyses.push({ filePath, payload });
+      } else if (schemaVersion === 'p2a.eval_compare.v1') {
+        artifacts.compares.push({ filePath, payload });
+      } else if (schemaVersion === 'p2a.eval_digest.v1') {
+        artifacts.digests.push({ filePath, payload });
+      } else if (schemaVersion === 'p2a.eval_maintenance_apply_report.v1') {
+        artifacts.applyReports.push({ filePath, payload });
+      } else {
+        artifacts.skippedFiles.push({ filePath: displayPath(filePath), reason: `unsupported schema_version: ${schemaVersion ?? 'missing'}` });
+      }
+    } catch (error) {
+      artifacts.skippedFiles.push({ filePath: displayPath(filePath), reason: errorMessage(error) });
+    }
+  }
+  return artifacts;
+}
+
+function incrementCounter(target, key) {
+  target[key] = (target[key] ?? 0) + 1;
+}
+
+function buildEvalDigest(args) {
+  const evalDir = resolveDigestEvalDir(args);
+  const artifacts = readEvalArtifacts(evalDir);
+  const byVerdict = {};
+  let scoreTotal = 0;
+  let scoredGrades = 0;
+  let coveredCriteria = 0;
+  let totalCriteria = 0;
+  const nonPassGrades = [];
+  for (const item of artifacts.grades) {
+    const grade = item.payload;
+    incrementCounter(byVerdict, grade.verdict ?? 'unknown');
+    if (typeof grade.score === 'number') {
+      scoreTotal += grade.score;
+      scoredGrades += 1;
+    }
+    const coverage = Array.isArray(grade.acceptanceCoverage) ? grade.acceptanceCoverage : [];
+    coveredCriteria += coverage.filter((criterion) => criterion.covered).length;
+    totalCriteria += coverage.length;
+    if (grade.verdict !== 'pass') {
+      nonPassGrades.push({
+        runId: grade.run?.runId ?? 'unknown',
+        taskId: grade.task?.taskId ?? 'unknown',
+        verdict: grade.verdict ?? 'unknown',
+        score: grade.score ?? null,
+        path: displayPath(item.filePath),
+        reasons: Array.isArray(grade.reasons) ? grade.reasons : [],
+      });
+    }
+  }
+
+  const compareByVerdict = {};
+  const failingSignals = [];
+  for (const item of artifacts.compares) {
+    const compare = item.payload;
+    incrementCounter(compareByVerdict, compare.verdict ?? 'unknown');
+    for (const signal of compare.signals ?? []) {
+      if (signal.severity && signal.severity !== 'pass') {
+        failingSignals.push({
+          verdict: compare.verdict ?? 'unknown',
+          severity: signal.severity,
+          metric: signal.metric,
+          baseline: signal.baseline,
+          candidate: signal.candidate,
+          path: displayPath(item.filePath),
+        });
+      }
+    }
+  }
+
+  const clusterByClassification = {};
+  const clusters = [];
+  for (const item of artifacts.analyses) {
+    const analysis = item.payload;
+    for (const cluster of analysis.clusters ?? []) {
+      incrementCounter(clusterByClassification, cluster.classification ?? 'unknown');
+      clusters.push({
+        analysisId: analysis.analysisId ?? null,
+        classification: cluster.classification ?? 'unknown',
+        runIds: cluster.runIds ?? [],
+        taskIds: cluster.taskIds ?? [],
+        recommendation: cluster.recommendation ?? null,
+        maintenanceCommand: cluster.maintenanceCommand ?? null,
+        deltaDraftCommand: cluster.deltaDraftCommand ?? null,
+        path: displayPath(item.filePath),
+      });
+    }
+  }
+  clusters.sort((left, right) => (right.runIds.length - left.runIds.length) || left.classification.localeCompare(right.classification));
+  const maintenanceCommands = sortedUnique(clusters.map((cluster) => cluster.maintenanceCommand));
+  const deltaDraftCommands = sortedUnique(clusters.map((cluster) => cluster.deltaDraftCommand));
+  const payload = {
+    schema_version: 'p2a.eval_digest.v1',
+    digestId: `eval-digest-${stableHash({
+      evalDir: displayPath(evalDir),
+      files: artifacts.totalJsonFiles,
+      grades: byVerdict,
+      compares: compareByVerdict,
+      clusters: clusterByClassification,
+    })}`,
+    generatedAt: new Date().toISOString(),
+    evalDir: displayPath(evalDir),
+    files: {
+      totalJson: artifacts.totalJsonFiles,
+      indexes: artifacts.indexes.length,
+      grades: artifacts.grades.length,
+      analyses: artifacts.analyses.length,
+      compares: artifacts.compares.length,
+      digests: artifacts.digests.length,
+      applyReports: artifacts.applyReports.length,
+      skipped: artifacts.skippedFiles.length,
+    },
+    grades: {
+      total: artifacts.grades.length,
+      byVerdict,
+      averageScore: scoredGrades ? Number((scoreTotal / scoredGrades).toFixed(3)) : null,
+      acceptanceCoverage: {
+        covered: coveredCriteria,
+        total: totalCriteria,
+      },
+      nonPass: nonPassGrades.slice(0, 20),
+    },
+    compares: {
+      total: artifacts.compares.length,
+      byVerdict: compareByVerdict,
+      failingSignals: failingSignals.slice(0, 20),
+    },
+    analyses: {
+      total: artifacts.analyses.length,
+      clusters: clusters.length,
+      byClassification: clusterByClassification,
+      topClusters: clusters.slice(0, 10),
+      maintenanceCommands: maintenanceCommands.slice(0, 10),
+      deltaDraftCommands: deltaDraftCommands.slice(0, 10),
+    },
+    skippedFiles: artifacts.skippedFiles,
+    nextActions: [],
+  };
+  payload.nextActions = evalDigestNextActions(payload);
+  return payload;
+}
+
+function evalDigestNextActions(payload) {
+  const actions = [];
+  if (payload.files.grades + payload.files.analyses + payload.files.compares === 0) {
+    actions.push(`Generate eval artifacts first: node .plan2agent/scripts/p2a_eval.mjs generate --output ${shellQuote(payload.evalDir)}`);
+  }
+  if (payload.grades.nonPass.length) {
+    actions.push('Review non-pass eval grades and add missing verification evidence or fixes before marking related tasks done.');
+  }
+  if (payload.compares.failingSignals.length) {
+    actions.push('Review compare regression signals before promoting the candidate run set.');
+  }
+  if (payload.analyses.maintenanceCommands.length) {
+    actions.push(`Create the top maintenance candidate: ${payload.analyses.maintenanceCommands[0]}`);
+  }
+  if (payload.analyses.deltaDraftCommands.length) {
+    actions.push(`Open a delta iteration for scope-changing findings: ${payload.analyses.deltaDraftCommands[0]}`);
+  }
+  if (!actions.length) actions.push('No immediate eval follow-up required from generated artifacts.');
+  return actions;
+}
+
+function printEvalDigest(payload, writeResult) {
+  console.log('Plan2Agent eval digest');
+  console.log(`- eval: ${payload.evalDir}`);
+  console.log(`- files: grades=${payload.files.grades} analyses=${payload.files.analyses} compares=${payload.files.compares} digests=${payload.files.digests} applyReports=${payload.files.applyReports} skipped=${payload.files.skipped}`);
+  console.log(`- grades: total=${payload.grades.total} byVerdict=${JSON.stringify(payload.grades.byVerdict)} averageScore=${payload.grades.averageScore ?? 'n/a'}`);
+  console.log(`- acceptance: ${payload.grades.acceptanceCoverage.covered}/${payload.grades.acceptanceCoverage.total} covered`);
+  console.log(`- compare: total=${payload.compares.total} byVerdict=${JSON.stringify(payload.compares.byVerdict)} failingSignals=${payload.compares.failingSignals.length}`);
+  console.log(`- analysis: total=${payload.analyses.total} clusters=${payload.analyses.clusters} byClassification=${JSON.stringify(payload.analyses.byClassification)}`);
   if (writeResult.wrote) console.log(`- output: ${displayPath(writeResult.filePath)}`);
   if (payload.nextActions.length) {
     console.log('next actions:');
@@ -745,10 +1589,40 @@ function runCompare(args) {
 }
 
 function runAnalyze(args) {
-  const payload = buildAnalyze(args);
+  const source = loadAnalyzeSource(args);
+  const payload = buildAnalyzeForSource(source, args.proposals);
+  let applyResult = null;
+  if (args.maintenanceDraft || args.applyMaintenance) {
+    const draft = buildMaintenanceDraft(source, payload);
+    const draftWriteResult = writeMaintenanceDraftIfRequested(args, draft);
+    applyResult = args.applyMaintenance ? applyMaintenanceDraft(source, draft, args) : null;
+    payload.maintenanceDraft = {
+      ...draft,
+      outputPath: draftWriteResult.filePath ? displayPath(draftWriteResult.filePath) : null,
+      wrote: draftWriteResult.wrote,
+      dryRun: args.dryRun,
+      applyResult,
+    };
+  }
   const writeResult = writeOutputIfRequested(args, payload);
   if (args.json) console.log(JSON.stringify(payload, null, 2));
   else printAnalyze(payload, writeResult);
+  return applyResult?.status === 'failed' ? 1 : 0;
+}
+
+function runGenerate(args) {
+  const payload = buildGenerate(args);
+  const writeResult = writeGenerateOutputs(args, payload);
+  if (args.json) console.log(JSON.stringify(payload, null, 2));
+  else printGenerate(payload, writeResult, args.dryRun);
+  return 0;
+}
+
+function runEvalDigest(args) {
+  const payload = buildEvalDigest(args);
+  const writeResult = writeOutputIfRequested(args, payload);
+  if (args.json) console.log(JSON.stringify(payload, null, 2));
+  else printEvalDigest(payload, writeResult);
   return 0;
 }
 
@@ -761,6 +1635,8 @@ async function main() {
   if (args.command === 'grade') return runGrade(args);
   if (args.command === 'compare') return runCompare(args);
   if (args.command === 'analyze') return runAnalyze(args);
+  if (args.command === 'generate') return runGenerate(args);
+  if (args.command === 'digest') return runEvalDigest(args);
   throw new Error(`unknown command: ${args.command}`);
 }
 

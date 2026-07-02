@@ -1,0 +1,92 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://plan2agent.local/schemas/eval-digest.schema.json",
+  "title": "Plan2Agent Eval Digest",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "generatedAt",
+    "evalDir",
+    "files",
+    "grades",
+    "compares",
+    "analyses",
+    "nextActions"
+  ],
+  "additionalProperties": true,
+  "properties": {
+    "schema_version": {
+      "const": "p2a.eval_digest.v1"
+    },
+    "generatedAt": {
+      "type": "string",
+      "minLength": 1
+    },
+    "evalDir": {
+      "type": "string",
+      "minLength": 1
+    },
+    "files": {
+      "type": "object",
+      "required": [
+        "grades",
+        "analyses",
+        "compares",
+        "skipped"
+      ],
+      "additionalProperties": true,
+      "properties": {
+        "grades": { "type": "integer", "minimum": 0 },
+        "analyses": { "type": "integer", "minimum": 0 },
+        "compares": { "type": "integer", "minimum": 0 },
+        "skipped": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "grades": {
+      "type": "object",
+      "required": [
+        "total",
+        "byVerdict",
+        "nonPass"
+      ],
+      "additionalProperties": true,
+      "properties": {
+        "total": { "type": "integer", "minimum": 0 },
+        "byVerdict": { "type": "object" },
+        "nonPass": { "type": "array" }
+      }
+    },
+    "compares": {
+      "type": "object",
+      "required": [
+        "total",
+        "byVerdict",
+        "failingSignals"
+      ],
+      "additionalProperties": true,
+      "properties": {
+        "total": { "type": "integer", "minimum": 0 },
+        "byVerdict": { "type": "object" },
+        "failingSignals": { "type": "array" }
+      }
+    },
+    "analyses": {
+      "type": "object",
+      "required": [
+        "total",
+        "clusters",
+        "byClassification"
+      ],
+      "additionalProperties": true,
+      "properties": {
+        "total": { "type": "integer", "minimum": 0 },
+        "clusters": { "type": "integer", "minimum": 0 },
+        "byClassification": { "type": "object" }
+      }
+    },
+    "nextActions": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 }
+    }
+  }
+}

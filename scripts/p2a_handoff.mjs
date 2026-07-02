@@ -76,7 +76,7 @@ function usage() {
     '  --team-bigfive-targets <list>',
     '                       Adapter targets for codex,claude,gemini. Defaults to --tools or all.',
     '  --overwrite          Allow replacing existing target files.',
-    '  --dry-run            Validate and print the handoff plan without writing files.',
+    '  --dry-run            Validate and print the plan. update/upgrade also write a local preview report.',
     '  --apply              Apply safe update/upgrade changes after reviewing the preview.',
     '  --help, -h           Show this help.',
   ].join('\n');
@@ -1270,6 +1270,7 @@ function buildUpgradeDryRunReport(args, targetRoot) {
   const status = failures.length ? 'fail' : changes ? 'changes' : 'pass';
   return {
     schema_version: 'p2a.upgrade_dry_run.v1',
+    generatedAt: new Date().toISOString(),
     command: args.command,
     status,
     targetProject: targetRoot,
@@ -1318,7 +1319,8 @@ function printUpgradeDryRunReport(report) {
       console.log(`- ${migration.id}: ${migration.status}${keys}`);
     }
   }
-  console.log('dry-run: no files written');
+  if (report.reportPath) console.log(`report: ${report.reportPath}`);
+  console.log('dry-run: no harness files written');
 }
 
 function isProjectConfigTarget(targetRelative) {
@@ -1398,12 +1400,21 @@ function reportHash(payload) {
   return createHash('sha256').update(JSON.stringify(payload)).digest('hex').slice(0, 10);
 }
 
-function upgradeReportRelativePath(command, appliedAt, payload) {
+function upgradeReportRelativePath(command, timestamp, payload) {
   return normalizePath(path.join(
     '.plan2agent',
     'update-reports',
-    `${command}-${reportTimestamp(appliedAt)}-${reportHash(payload)}.json`,
+    `${command}-${reportTimestamp(timestamp)}-${reportHash(payload)}.json`,
   ));
+}
+
+function writeUpgradePreviewReport(targetRoot, report) {
+  const reportRelative = upgradeReportRelativePath(report.command, report.generatedAt, report);
+  const reportPath = targetPath(targetRoot, reportRelative);
+  const reportWithPath = { ...report, reportPath: reportRelative };
+  mkdirSync(path.dirname(reportPath), { recursive: true });
+  writeFileSync(reportPath, `${JSON.stringify(reportWithPath, null, 2)}\n`, 'utf8');
+  return reportWithPath;
 }
 
 function writeUpgradeApplyReport(targetRoot, report) {
@@ -2377,8 +2388,9 @@ export function main(argv = process.argv.slice(2)) {
         printUpgradeApplyReport(writtenReport);
         return ['blocked', 'failed'].includes(writtenReport.status) ? 1 : 0;
       }
-      printUpgradeDryRunReport(report);
-      return report.status === 'fail' ? 1 : 0;
+      const writtenReport = writeUpgradePreviewReport(targetRoot, publicUpgradeReport(report));
+      printUpgradeDryRunReport(writtenReport);
+      return writtenReport.status === 'fail' ? 1 : 0;
     }
 
     if (args.command === 'scaffold') {

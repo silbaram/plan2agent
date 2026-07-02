@@ -58,9 +58,9 @@ function usage() {
     'Usage:',
     '  node .plan2agent/scripts/p2a_runs.mjs start --artifacts <iterative-project-dir> --task <task-id> --agent-tool <tool> [options]',
     '  node .plan2agent/scripts/p2a_runs.mjs start --graph <task-graph.json> --task <task-id> --agent-tool <tool> [--runs <dir>] [options]',
-    '  node .plan2agent/scripts/p2a_runs.mjs record --run-id <run-id> (--artifacts <dir>|--runs <dir>|--graph <path>) [--changed-file <path> ...] [--verification <type:status:command>] [--note <text>]',
+    '  node .plan2agent/scripts/p2a_runs.mjs record --run-id <run-id> (--artifacts <dir>|--runs <dir>|--graph <path>) [--changed-file <path> ...] [--verification <type:status:command>] [--note <text>] [structured detail options]',
     '  node .plan2agent/scripts/p2a_runs.mjs verify --run-id <run-id> (--artifacts <dir>|--runs <dir>|--graph <path>) [--test] [--lint] [--typecheck] [--test-command <cmd>] [--lint-command <cmd>] [--typecheck-command <cmd>] [--verify-command <type:cmd>]',
-    '  node .plan2agent/scripts/p2a_runs.mjs finish --run-id <run-id> (--artifacts <dir>|--runs <dir>|--graph <path>) [--status finished|failed|blocked] [--failure-class <class>] [--retryable yes|no|after_fix] [--needs-user-decision true|false] [--failure-source owner|monitor|implementer] [--changed-file <path> ...] [--collect-git] [--note <text>]',
+    '  node .plan2agent/scripts/p2a_runs.mjs finish --run-id <run-id> (--artifacts <dir>|--runs <dir>|--graph <path>) [--status finished|failed|blocked] [--failure-class <class>] [--retryable yes|no|after_fix] [--needs-user-decision true|false] [--failure-source owner|monitor|implementer] [--changed-file <path> ...] [--collect-git] [--note <text>] [structured detail options]',
     '  node .plan2agent/scripts/p2a_runs.mjs list (--artifacts <dir>|--runs <dir>|--graph <path>) [--json]',
     '  node .plan2agent/scripts/p2a_runs.mjs show --run-id <run-id> (--artifacts <dir>|--runs <dir>|--graph <path>)',
     '  node .plan2agent/scripts/p2a_runs.mjs validate (--artifacts <dir>|--runs <dir>|--graph <path>) [--run-id <run-id>]',
@@ -83,6 +83,15 @@ function usage() {
     '  --changed-file <path>   Changed file to attach to the run. Repeatable.',
     '  --collect-git           Add changed files from git status in the workspace.',
     '  --note <text>           Append a run note. Repeatable.',
+    '  --repro-step <text>     Append a structured reproduction step. Repeatable.',
+    '  --repro-command <cmd>   Append a command that reproduces the observed issue. Repeatable.',
+    '  --repro-note <text>     Append reproduction context. Repeatable.',
+    '  --localization <text>   Append a problem localization finding. Repeatable.',
+    '  --localized-file <path> Append a file implicated by localization. Repeatable.',
+    '  --fix-summary <text>    Append a concise summary of the fix. Repeatable.',
+    '  --fix-file <path>       Append a file intentionally changed by the fix. Repeatable.',
+    '  --guard <text>          Append a recurrence guard or verification check. Repeatable.',
+    '  --guard-note <text>     Append guard context. Repeatable.',
     '  --failure-class <class> Failure class for failed/blocked finish. One of: verification_failed, test_flake, scope_violation, missing_dependency, environment_failure, implementation_incomplete, other.',
     '  --retryable <value>     Override failure retryability: yes, no, after_fix.',
     '  --needs-user-decision <true|false>',
@@ -124,6 +133,15 @@ function parseArgs(argv) {
     createIsolation: false,
     changedFiles: [],
     notes: [],
+    reproductionSteps: [],
+    reproductionCommands: [],
+    reproductionNotes: [],
+    localizationFindings: [],
+    localizedFiles: [],
+    fixSummaries: [],
+    fixFiles: [],
+    guardChecks: [],
+    guardNotes: [],
     manualVerification: [],
     verifyRequests: [],
     status: null,
@@ -159,6 +177,15 @@ function parseArgs(argv) {
     else if (arg === '--changed-file') args.changedFiles.push(requiredValue(argv, ++index, '--changed-file'));
     else if (arg === '--collect-git') args.collectGit = true;
     else if (arg === '--note') args.notes.push(requiredValue(argv, ++index, '--note'));
+    else if (arg === '--repro-step') args.reproductionSteps.push(requiredValue(argv, ++index, '--repro-step'));
+    else if (arg === '--repro-command') args.reproductionCommands.push(requiredValue(argv, ++index, '--repro-command'));
+    else if (arg === '--repro-note') args.reproductionNotes.push(requiredValue(argv, ++index, '--repro-note'));
+    else if (arg === '--localization') args.localizationFindings.push(requiredValue(argv, ++index, '--localization'));
+    else if (arg === '--localized-file') args.localizedFiles.push(requiredValue(argv, ++index, '--localized-file'));
+    else if (arg === '--fix-summary') args.fixSummaries.push(requiredValue(argv, ++index, '--fix-summary'));
+    else if (arg === '--fix-file') args.fixFiles.push(requiredValue(argv, ++index, '--fix-file'));
+    else if (arg === '--guard') args.guardChecks.push(requiredValue(argv, ++index, '--guard'));
+    else if (arg === '--guard-note') args.guardNotes.push(requiredValue(argv, ++index, '--guard-note'));
     else if (arg === '--verification') args.manualVerification.push(parseManualVerification(requiredValue(argv, ++index, '--verification')));
     else if (arg === '--test') args.verifyRequests.push({ type: 'test', command: null, source: 'config' });
     else if (arg === '--lint') args.verifyRequests.push({ type: 'lint', command: null, source: 'config' });
@@ -214,6 +241,9 @@ function parseArgs(argv) {
   if (args.command !== 'finish' && (args.failureClass || args.retryable || args.needsUserDecision !== null || args.failureSource)) {
     throw new Error('failure options are only supported with finish');
   }
+  if (!['record', 'finish'].includes(args.command) && hasStructuredDetailOptions(args)) {
+    throw new Error('structured detail options are only supported with record or finish');
+  }
   if (args.saveConfig && args.command !== 'verify') {
     throw new Error('--save-config is only supported with verify');
   }
@@ -231,6 +261,20 @@ function parseArgs(argv) {
     throw new Error(`--run-id is required for ${args.command}`);
   }
   return args;
+}
+
+function hasStructuredDetailOptions(args) {
+  return [
+    args.reproductionSteps,
+    args.reproductionCommands,
+    args.reproductionNotes,
+    args.localizationFindings,
+    args.localizedFiles,
+    args.fixSummaries,
+    args.fixFiles,
+    args.guardChecks,
+    args.guardNotes,
+  ].some((values) => values.length > 0);
 }
 
 function requiredValue(argv, index, optionName) {
@@ -502,6 +546,62 @@ function uniqueStrings(values) {
     output.push(trimmed);
   }
   return output;
+}
+
+function mergeDetailArray(existing, additions) {
+  return uniqueStrings([...(Array.isArray(existing) ? existing : []), ...additions]);
+}
+
+function maybeDeleteEmptyRunDetail(run, key, fields) {
+  const detail = run[key];
+  if (!detail || typeof detail !== 'object' || Array.isArray(detail)) return;
+  const hasValue = fields.some((field) => Array.isArray(detail[field]) && detail[field].length > 0);
+  if (!hasValue) delete run[key];
+}
+
+function mergeStructuredRunDetails(run, args) {
+  if (!hasStructuredDetailOptions(args)) return;
+  if (args.reproductionSteps.length || args.reproductionCommands.length || args.reproductionNotes.length || run.reproduction) {
+    const existing = run.reproduction && typeof run.reproduction === 'object' && !Array.isArray(run.reproduction)
+      ? run.reproduction
+      : {};
+    run.reproduction = {
+      steps: mergeDetailArray(existing.steps, args.reproductionSteps),
+      commands: mergeDetailArray(existing.commands, args.reproductionCommands),
+      notes: mergeDetailArray(existing.notes, args.reproductionNotes),
+    };
+    maybeDeleteEmptyRunDetail(run, 'reproduction', ['steps', 'commands', 'notes']);
+  }
+  if (args.localizationFindings.length || args.localizedFiles.length || run.localization) {
+    const existing = run.localization && typeof run.localization === 'object' && !Array.isArray(run.localization)
+      ? run.localization
+      : {};
+    run.localization = {
+      findings: mergeDetailArray(existing.findings, args.localizationFindings),
+      files: mergeDetailArray(existing.files, args.localizedFiles),
+    };
+    maybeDeleteEmptyRunDetail(run, 'localization', ['findings', 'files']);
+  }
+  if (args.fixSummaries.length || args.fixFiles.length || run.fixSummary) {
+    const existing = run.fixSummary && typeof run.fixSummary === 'object' && !Array.isArray(run.fixSummary)
+      ? run.fixSummary
+      : {};
+    run.fixSummary = {
+      summaries: mergeDetailArray(existing.summaries, args.fixSummaries),
+      files: mergeDetailArray(existing.files, args.fixFiles),
+    };
+    maybeDeleteEmptyRunDetail(run, 'fixSummary', ['summaries', 'files']);
+  }
+  if (args.guardChecks.length || args.guardNotes.length || run.guard) {
+    const existing = run.guard && typeof run.guard === 'object' && !Array.isArray(run.guard)
+      ? run.guard
+      : {};
+    run.guard = {
+      checks: mergeDetailArray(existing.checks, args.guardChecks),
+      notes: mergeDetailArray(existing.notes, args.guardNotes),
+    };
+    maybeDeleteEmptyRunDetail(run, 'guard', ['checks', 'notes']);
+  }
 }
 
 function resolveWorkspacePath(args) {
@@ -795,6 +895,7 @@ function recordRun(args) {
   run.changedFiles = uniqueStrings([...run.changedFiles, ...args.changedFiles]);
   run.verification.push(...args.manualVerification);
   run.notes = uniqueStrings([...run.notes, ...args.notes]);
+  mergeStructuredRunDetails(run, args);
   run.updatedAt = new Date().toISOString();
   writeRun(runsDir, run);
   console.log(`Plan2Agent run recorded: ${run.runId}`);
@@ -837,6 +938,7 @@ function finishRun(args) {
   if (args.collectGit) changedFiles.push(...collectGitChangedFiles(workspacePath));
   run.changedFiles = uniqueStrings([...run.changedFiles, ...changedFiles]);
   run.notes = uniqueStrings([...run.notes, ...args.notes]);
+  mergeStructuredRunDetails(run, args);
   run.status = deriveFinishStatus(run, args.status);
   const failure = buildFailure(args, run.status);
   if (failure) run.failure = failure;

@@ -1,0 +1,69 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://plan2agent.local/schemas/eval-maintenance-draft.schema.json",
+  "title": "Plan2Agent Eval Maintenance Draft",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "draftId",
+    "generatedAt",
+    "summary",
+    "tasks",
+    "nextActions"
+  ],
+  "additionalProperties": true,
+  "properties": {
+    "schema_version": {
+      "const": "p2a.eval_maintenance_draft.v1"
+    },
+    "draftId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "generatedAt": {
+      "type": "string",
+      "minLength": 1
+    },
+    "summary": {
+      "type": "object",
+      "required": [
+        "clusters",
+        "tasks"
+      ],
+      "additionalProperties": true,
+      "properties": {
+        "clusters": { "type": "integer", "minimum": 0 },
+        "tasks": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "tasks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "clusterId",
+          "title",
+          "acceptanceCriteria",
+          "sourceSpecRefs"
+        ],
+        "additionalProperties": true,
+        "properties": {
+          "clusterId": { "type": "string", "minLength": 1 },
+          "title": { "type": "string", "minLength": 1 },
+          "acceptanceCriteria": {
+            "type": "array",
+            "items": { "type": "string", "minLength": 1 }
+          },
+          "sourceSpecRefs": {
+            "type": "array",
+            "items": { "type": "string", "minLength": 1 }
+          }
+        }
+      }
+    },
+    "nextActions": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 }
+    }
+  }
+}
