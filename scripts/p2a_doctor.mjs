@@ -593,6 +593,31 @@ function buildDevReport(targetRoot, manifest, configResult) {
       : check('dev_run_tracking', 'Run tracking config', 'warn', 'runTracking.runsDir/defaultIsolation is not configured'),
   );
 
+  checks.push(
+    config?.devExecution?.defaultProvider
+      && Array.isArray(config.devExecution.allowedProviders)
+      && config.devExecution.scopePolicy === 'task_only'
+      && config.devExecution.verificationPolicy === 'required_for_done'
+      ? check('dev_execution_config', 'Dev execution config', 'pass', `defaultProvider=${config.devExecution.defaultProvider}, scopePolicy=${config.devExecution.scopePolicy}`)
+      : check('dev_execution_config', 'Dev execution config', 'warn', 'devExecution defaultProvider/allowedProviders/scopePolicy/verificationPolicy is not fully configured'),
+  );
+
+  checks.push(
+    config?.roleProfiles?.implementer?.defaultProfile
+      && config?.roleProfiles?.reviewer?.defaultProfile
+      && config?.roleProfiles?.monitor?.defaultProfile
+      ? check('dev_role_profiles', 'Role profiles', 'pass', `implementer=${config.roleProfiles.implementer.defaultProfile}, reviewer=${config.roleProfiles.reviewer.defaultProfile}, monitor=${config.roleProfiles.monitor.defaultProfile}`)
+      : check('dev_role_profiles', 'Role profiles', 'warn', 'roleProfiles implementer/reviewer/monitor defaults are not fully configured'),
+  );
+
+  checks.push(
+    config?.promptTemplates?.devExecution === 'p2a.dev_prompt.v1'
+      && config?.promptTemplates?.roleContract === 'p2a.role_contract.v1'
+      && config?.promptTemplates?.providerGuide === 'p2a.provider_guide.v1'
+      ? check('dev_prompt_templates', 'Prompt template versions', 'pass', 'dev prompt, role contract, and provider guide versions are configured')
+      : check('dev_prompt_templates', 'Prompt template versions', 'warn', 'promptTemplates devExecution/roleContract/providerGuide versions are not fully configured'),
+  );
+
   if (targets.includes('claude')) {
     const claudeSettingsPath = path.join(targetRoot, '.claude', 'settings.json');
     const claudeSettings = readJsonObject(claudeSettingsPath);

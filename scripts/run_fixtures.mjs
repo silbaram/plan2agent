@@ -238,6 +238,10 @@ function validateScaffoldFixtureCase() {
       || manifest.aiToolTargets.join(',') !== 'codex,claude,gemini'
       || config.testCommand !== null
       || config.runTracking?.runsDir !== '.plan2agent/runs'
+      || config.devExecution?.scopePolicy !== 'task_only'
+      || config.devExecution?.verificationPolicy !== 'required_for_done'
+      || config.roleProfiles?.implementer?.defaultProfile !== 'fullstack'
+      || config.promptTemplates?.devExecution !== 'p2a.dev_prompt.v1'
       || !claudeSettings.permissions?.deny?.includes('Edit(~/**)')
       || claudeSettings.hooks?.PreToolUse?.[0]?.matcher !== 'Write|Edit|Bash'
       || claudeSettings.hooks?.PreToolUse?.[0]?.hooks?.[0]?.command !== 'node .claude/hooks/p2a-confine-workspace.mjs'
@@ -568,6 +572,60 @@ function validateScaffoldFixtureCase() {
       return { status: failureStatus(result), checks };
     }
 
+    const enhanceTargetRoot = path.join(tempRoot, 'enhance-target');
+    result = runHandoff(['scaffold', '--target', enhanceTargetRoot, '--tools', 'none']);
+    checks += 1;
+    if (result.status !== 0) {
+      console.error('enhance target scaffold fixture failed');
+      writeResultOutput(result);
+      return { status: failureStatus(result), checks };
+    }
+    const enhanceConfigPath = path.join(enhanceTargetRoot, '.plan2agent', 'project.config.json');
+    const enhanceConfig = JSON.parse(readFileSync(enhanceConfigPath, 'utf8'));
+    delete enhanceConfig.devExecution;
+    delete enhanceConfig.roleProfiles;
+    delete enhanceConfig.promptTemplates;
+    writeFileSync(enhanceConfigPath, `${JSON.stringify(enhanceConfig, null, 2)}\n`);
+    result = runHandoff(['enhance', 'dev-skills', '--target', enhanceTargetRoot, '--tools', 'codex', '--dry-run']);
+    checks += 1;
+    if (
+      result.status !== 0
+      || !result.stdout.includes('Plan2Agent enhance dev-skills dry run')
+      || !result.stdout.includes('configUpdatedKeys: devExecution,roleProfiles,promptTemplates')
+      || !result.stdout.includes('dry-run: no files written')
+      || existsSync(path.join(enhanceTargetRoot, '.codex', 'agents', 'p2a-implementer.toml'))
+    ) {
+      console.error('enhance dev-skills dry-run fixture failed');
+      writeResultOutput(result);
+      return { status: failureStatus(result), checks };
+    }
+    result = runHandoff(['enhance', 'dev-skills', '--target', enhanceTargetRoot, '--tools', 'codex']);
+    checks += 1;
+    const enhancedConfig = JSON.parse(readFileSync(enhanceConfigPath, 'utf8'));
+    const enhancedManifest = JSON.parse(readFileSync(path.join(enhanceTargetRoot, '.plan2agent', 'manifest.json'), 'utf8'));
+    if (
+      result.status !== 0
+      || enhancedConfig.devExecution?.scopePolicy !== 'task_only'
+      || enhancedConfig.roleProfiles?.monitor?.defaultProfile !== 'manual_monitor'
+      || enhancedConfig.promptTemplates?.providerGuide !== 'p2a.provider_guide.v1'
+      || !enhancedManifest.aiToolTargets?.includes('codex')
+      || enhancedManifest.enhancements?.devSkills?.promptTemplateVersion !== 'p2a.dev_prompt.v1'
+      || !existsSync(path.join(enhanceTargetRoot, '.codex', 'agents', 'p2a-implementer.toml'))
+    ) {
+      console.error('enhance dev-skills fixture failed');
+      writeResultOutput(result);
+      console.error(JSON.stringify({ enhancedConfig, enhancedManifest }, null, 2));
+      return { status: failureStatus(result), checks };
+    }
+    writeFileSync(path.join(enhanceTargetRoot, '.codex', 'agents', 'p2a-implementer.toml'), 'local conflicting asset\n', 'utf8');
+    result = runHandoff(['enhance', 'dev-skills', '--target', enhanceTargetRoot, '--tools', 'codex']);
+    checks += 1;
+    if (result.status === 0 || !`${result.stdout}${result.stderr}`.includes('--overwrite')) {
+      console.error('enhance dev-skills conflict fixture did not require --overwrite');
+      writeResultOutput(result);
+      return { status: 1, checks };
+    }
+
     result = runHandoff(['upgrade', '--target', targetRoot, '--dry-run']);
     checks += 1;
     if (
@@ -578,6 +636,27 @@ function validateScaffoldFixtureCase() {
       || !result.stdout.includes('dry-run: no files written')
     ) {
       console.error('upgrade dry-run fixture failed');
+      writeResultOutput(result);
+      return { status: failureStatus(result), checks };
+    }
+
+    const legacyUpgradeRoot = path.join(tempRoot, 'legacy-upgrade-target');
+    cpSync(targetRoot, legacyUpgradeRoot, { recursive: true });
+    const legacyConfigPath = path.join(legacyUpgradeRoot, '.plan2agent', 'project.config.json');
+    const legacyConfig = JSON.parse(readFileSync(legacyConfigPath, 'utf8'));
+    delete legacyConfig.devExecution;
+    delete legacyConfig.roleProfiles;
+    delete legacyConfig.promptTemplates;
+    writeFileSync(legacyConfigPath, `${JSON.stringify(legacyConfig, null, 2)}\n`);
+    result = runHandoff(['upgrade', '--target', legacyUpgradeRoot, '--dry-run']);
+    checks += 1;
+    if (
+      result.status !== 0
+      || !result.stdout.includes('migrations:')
+      || !result.stdout.includes('dev_skills_config: would_update')
+      || !result.stdout.includes('devExecution,roleProfiles,promptTemplates')
+    ) {
+      console.error('upgrade dry-run did not preview dev-skills config migration');
       writeResultOutput(result);
       return { status: failureStatus(result), checks };
     }

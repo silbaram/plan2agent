@@ -30,7 +30,7 @@ import {
 import { resolveIterationState } from './p2a_iteration_state.mjs';
 import { renderIterationIndexMarkdown } from './p2a_iteration.mjs';
 import { P2A_ARTIFACTS_DIR, P2A_SCHEMAS_DIR, P2A_SCRIPTS_DIR, resolveP2aPaths } from './p2a_paths.mjs';
-import { buildProjectConfig } from './p2a_project_config.mjs';
+import { buildProjectConfig, defaultPromptTemplates, mergeDevSkillConfig } from './p2a_project_config.mjs';
 import { PROJECT_RUNTIME_SCHEMA_FILES, PROJECT_RUNTIME_SCRIPT_FILES } from './p2a_tool_manifest.mjs';
 
 const P2A_PATHS = resolveP2aPaths(import.meta.url);
@@ -48,12 +48,14 @@ function usage() {
   return [
     'Usage:',
     '  node scripts/p2a_handoff.mjs scaffold --target <project-dir> [--tools <list>] [--overwrite] [--dry-run]',
+    '  node scripts/p2a_handoff.mjs enhance dev-skills --target <project-dir> [--tools <list>] [--overwrite] [--dry-run]',
     '  node scripts/p2a_handoff.mjs upgrade --target <project-dir> --dry-run [--tools <list>]',
     '  node scripts/p2a_handoff.mjs --project-id <id> --artifacts <path> --target <path> [options]',
     '',
     'Options:',
     'Scaffold:',
     '  scaffold             Install the full co-located P2A planning/development harness into a project.',
+    '  enhance dev-skills   Install or refresh development skill/agent assets and dev execution config.',
     '  upgrade              Preview scaffolded harness file updates. Dry-run only for now.',
     '  --target <path>      Project directory to create or update.',
     '  --tools <list>       Copy portable P2A AI tool assets for codex,claude,gemini. Use comma list, all, or none. Default: all.',
@@ -108,26 +110,29 @@ function isGitUrl(value) {
 }
 
 function parseArgs(argv) {
-  const command = argv[0] === 'scaffold' || argv[0] === 'upgrade' ? argv.shift() : 'handoff';
+  const command = argv[0] === 'scaffold' || argv[0] === 'upgrade' || argv[0] === 'enhance' ? argv.shift() : 'handoff';
+  const enhancement = command === 'enhance' ? argv.shift() : null;
+  const enhancementHelp = enhancement === '--help' || enhancement === '-h';
   const args = {
     command,
+    enhancement,
     mode: 'copy',
     iterationId: DEFAULT_ITERATION_ID,
     iterationIdProvided: false,
     includeIntake: false,
-    tools: command === 'scaffold' ? [...TOOL_TARGET_ORDER] : command === 'upgrade' ? null : [],
+    tools: command === 'scaffold' || command === 'enhance' ? [...TOOL_TARGET_ORDER] : command === 'upgrade' ? null : [],
     includeTeamBigFive: false,
     teamBigFiveSource: null,
     teamBigFiveTargets: null,
     overwrite: false,
     dryRun: false,
-    help: false,
+    help: enhancementHelp,
   };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === '--help' || arg === '-h') {
       args.help = true;
-    } else if ((command === 'scaffold' || command === 'upgrade') && (arg === '--project-id' || arg === '--artifacts' || arg === '--mode' || arg === '--iteration-id' || arg === '--include-intake' || arg === '--include-team-bigfive' || arg === '--team-bigfive-source' || arg === '--team-bigfive-targets')) {
+    } else if ((command === 'scaffold' || command === 'upgrade' || command === 'enhance') && (arg === '--project-id' || arg === '--artifacts' || arg === '--mode' || arg === '--iteration-id' || arg === '--include-intake' || arg === '--include-team-bigfive' || arg === '--team-bigfive-source' || arg === '--team-bigfive-targets')) {
       throw new Error(`${arg} is not valid for ${command}`);
     } else if (arg === '--project-id') {
       args.projectId = argv[++index];
@@ -170,7 +175,10 @@ function parseArgs(argv) {
     }
   }
   if (args.help) return args;
-  if (command === 'scaffold' || command === 'upgrade') {
+  if (command === 'enhance') {
+    if (enhancement !== 'dev-skills') throw new Error('enhance requires the dev-skills capability');
+  }
+  if (command === 'scaffold' || command === 'upgrade' || command === 'enhance') {
     if (!args.target) throw new Error('--target is required');
     if (command === 'upgrade' && !args.dryRun) throw new Error('upgrade currently supports --dry-run only');
     return args;
@@ -1099,8 +1107,8 @@ function printScaffoldPlan(plan, args, targetRoot) {
   if (args.dryRun) console.log('dry-run: no files written');
 }
 
-function readUpgradeJsonFile(filePath, label) {
-  if (!existsSync(filePath)) throw new Error(`upgrade requires ${label}: ${normalizePath(filePath)}`);
+function readUpgradeJsonFile(filePath, label, operation = 'upgrade') {
+  if (!existsSync(filePath)) throw new Error(`${operation} requires ${label}: ${normalizePath(filePath)}`);
   try {
     const parsed = JSON.parse(readFileSync(filePath, 'utf8'));
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
@@ -1188,13 +1196,14 @@ function summarizeUpgradeItems(items) {
 
 function buildUpgradeDryRunReport(args, targetRoot) {
   const manifest = readUpgradeJsonFile(path.join(targetRoot, '.plan2agent', 'manifest.json'), '.plan2agent/manifest.json');
-  readUpgradeJsonFile(path.join(targetRoot, '.plan2agent', 'project.config.json'), '.plan2agent/project.config.json');
+  const config = readUpgradeJsonFile(path.join(targetRoot, '.plan2agent', 'project.config.json'), '.plan2agent/project.config.json');
   const tools = upgradeToolTargets(args, manifest);
   const plan = buildScaffoldPlan({ ...args, tools }, targetRoot);
   const items = plan.map(compareUpgradePlanItem);
   const summary = summarizeUpgradeItems(items);
   const failures = items.filter((item) => item.status === 'conflict' || item.status === 'error');
-  const changes = summary.missing + summary.wouldUpdate + summary.manualReview;
+  const devConfigMigration = mergeDevSkillConfig(config);
+  const changes = summary.missing + summary.wouldUpdate + summary.manualReview + devConfigMigration.updatedKeys.length;
   const status = failures.length ? 'fail' : changes ? 'changes' : 'pass';
   return {
     schema_version: 'p2a.upgrade_dry_run.v1',
@@ -1203,6 +1212,13 @@ function buildUpgradeDryRunReport(args, targetRoot) {
     aiToolTargets: tools,
     summary,
     items,
+    migrations: [
+      {
+        id: 'dev_skills_config',
+        status: devConfigMigration.updatedKeys.length ? 'would_update' : 'up_to_date',
+        updatedKeys: devConfigMigration.updatedKeys,
+      },
+    ],
     failures,
     nextActions: failures.length
       ? ['Resolve conflicts/errors above before running upgrade again.']
@@ -1232,7 +1248,156 @@ function printUpgradeDryRunReport(report) {
     console.log('next actions:');
     for (const action of report.nextActions) console.log(`- ${action}`);
   }
+  if (report.migrations.length) {
+    console.log('migrations:');
+    for (const migration of report.migrations) {
+      const keys = migration.updatedKeys.length ? ` (${migration.updatedKeys.join(',')})` : '';
+      console.log(`- ${migration.id}: ${migration.status}${keys}`);
+    }
+  }
   console.log('dry-run: no files written');
+}
+
+function uniqueNormalizedList(...lists) {
+  const seen = new Set();
+  const values = [];
+  for (const list of lists) {
+    if (!Array.isArray(list)) continue;
+    for (const item of list) {
+      if (typeof item !== 'string' || item.trim() === '') continue;
+      const normalized = normalizePath(item);
+      if (seen.has(normalized)) continue;
+      seen.add(normalized);
+      values.push(normalized);
+    }
+  }
+  return values;
+}
+
+function mergeAiToolGroups(existingGroups, nextGroups) {
+  const groupsByKey = new Map();
+  for (const group of Array.isArray(existingGroups) ? existingGroups : []) {
+    if (group?.key && typeof group.key === 'string') groupsByKey.set(group.key, group);
+  }
+  for (const group of nextGroups) groupsByKey.set(group.key, group);
+  return [...groupsByKey.values()].sort((left, right) => left.key.localeCompare(right.key));
+}
+
+function mergeEnhanceDevSkillsManifest(manifest, toolTargets, toolAssetPlan) {
+  const promptTemplates = defaultPromptTemplates();
+  const existingTargets = Array.isArray(manifest.aiToolTargets)
+    ? manifest.aiToolTargets.filter((target) => typeof target === 'string')
+    : [];
+  const includedTools = [
+    ...(Array.isArray(manifest.includedTools) ? manifest.includedTools.filter((item) => typeof item === 'string') : []),
+    ...toolTargets.map((target) => `p2a_${target}_assets`),
+  ];
+  const notes = [
+    ...(Array.isArray(manifest.notes) ? manifest.notes.filter((item) => typeof item === 'string') : []),
+    'Development skill assets and config enhanced by p2a enhance dev-skills',
+  ];
+  return {
+    ...manifest,
+    schema_version: manifest.schema_version ?? 'p2a.handoff.v1',
+    includedTools: [...new Set(includedTools)],
+    aiToolTargets: TOOL_TARGET_ORDER.filter((target) => new Set([...existingTargets, ...toolTargets]).has(target)),
+    toolFiles: uniqueNormalizedList(manifest.toolFiles, toolAssetPlan.files),
+    aiToolFiles: uniqueNormalizedList(manifest.aiToolFiles, toolAssetPlan.files),
+    aiToolGroups: mergeAiToolGroups(manifest.aiToolGroups, toolAssetPlan.groups),
+    enhancements: {
+      ...(manifest.enhancements && typeof manifest.enhancements === 'object' && !Array.isArray(manifest.enhancements) ? manifest.enhancements : {}),
+      devSkills: {
+        enabled: true,
+        aiToolTargets: toolTargets,
+        promptTemplateVersion: promptTemplates.devExecution,
+        roleContractVersion: promptTemplates.roleContract,
+        providerGuideVersion: promptTemplates.providerGuide,
+      },
+    },
+    notes: [...new Set(notes)],
+  };
+}
+
+function buildEnhanceDevSkillsPlan(args, targetRoot) {
+  const manifestPath = path.join(targetRoot, '.plan2agent', 'manifest.json');
+  const configPath = path.join(targetRoot, '.plan2agent', 'project.config.json');
+  const manifest = readUpgradeJsonFile(manifestPath, '.plan2agent/manifest.json', 'enhance dev-skills');
+  const config = readUpgradeJsonFile(configPath, '.plan2agent/project.config.json', 'enhance dev-skills');
+  const plan = [];
+  const toolAssetPlan = pushToolAssets(plan, targetRoot, args.tools);
+  const mergedConfig = mergeDevSkillConfig(config);
+  const nextManifest = mergeEnhanceDevSkillsManifest(manifest, args.tools, toolAssetPlan);
+  pushGeneratedJson(plan, targetRoot, path.join('.plan2agent', 'manifest.json'), nextManifest);
+  pushGeneratedJson(plan, targetRoot, path.join('.plan2agent', 'project.config.json'), mergedConfig.config);
+  plan.enhanceSummary = {
+    aiToolTargets: args.tools,
+    assetFileCount: toolAssetPlan.files.length,
+    configUpdatedKeys: mergedConfig.updatedKeys,
+  };
+  return plan;
+}
+
+function compareEnhancePlanItem(item) {
+  const targetRelative = normalizePath(item.targetRelative);
+  const base = {
+    action: plannedAction(item),
+    target: targetRelative,
+    source: item.source ? normalizePath(path.relative(process.cwd(), item.source)) : '(generated)',
+  };
+  if (!existsSync(item.target)) return { ...base, status: 'missing', detail: 'target file is missing' };
+  if (!lstatSync(item.target).isFile()) return { ...base, status: 'conflict', detail: 'target path exists but is not a file' };
+  try {
+    const planned = plannedItemContent(item);
+    const plannedBuffer = Buffer.isBuffer(planned) ? planned : Buffer.from(String(planned));
+    const currentBuffer = readFileSync(item.target);
+    return plannedBuffer.equals(currentBuffer)
+      ? { ...base, status: 'unchanged', detail: 'target already matches planned content' }
+      : { ...base, status: 'would_update', detail: 'target differs from planned content' };
+  } catch (error) {
+    return { ...base, status: 'error', detail: error.message };
+  }
+}
+
+function enhancePlanItems(plan) {
+  return plan.map(compareEnhancePlanItem);
+}
+
+function assertEnhanceNoConflicts(plan, overwrite) {
+  const conflicts = [];
+  for (const item of plan) {
+    if (!existsSync(item.target)) continue;
+    if (!lstatSync(item.target).isFile()) {
+      conflicts.push(`${normalizePath(item.targetRelative)} (not a file)`);
+      continue;
+    }
+    if (item.type === 'write-json' || item.type === 'write-text') continue;
+    const currentBuffer = readFileSync(item.target);
+    const planned = plannedItemContent(item);
+    const plannedBuffer = Buffer.isBuffer(planned) ? planned : Buffer.from(String(planned));
+    if (!overwrite && !plannedBuffer.equals(currentBuffer)) {
+      conflicts.push(normalizePath(item.targetRelative));
+    }
+  }
+  if (conflicts.length) {
+    throw new Error(`enhance dev-skills would replace existing file(s); rerun with --overwrite after reviewing: ${conflicts.join(', ')}`);
+  }
+}
+
+function printEnhanceDevSkillsPlan(plan, args, targetRoot) {
+  const items = enhancePlanItems(plan);
+  const summary = summarizeUpgradeItems(items);
+  console.log(`Plan2Agent enhance dev-skills ${args.dryRun ? 'dry run' : 'plan'}`);
+  console.log(`targetProject: ${targetRoot}`);
+  console.log(`aiTools: ${args.tools.length ? args.tools.join(',') : 'none'}`);
+  console.log(`assets: ${plan.enhanceSummary.assetFileCount}`);
+  console.log(`configUpdatedKeys: ${plan.enhanceSummary.configUpdatedKeys.length ? plan.enhanceSummary.configUpdatedKeys.join(',') : 'none'}`);
+  console.log(`summary: ${summary.unchanged} unchanged, ${summary.missing} missing, ${summary.wouldUpdate} update(s), ${summary.conflicts} conflict(s), ${summary.errors} error(s)`);
+  console.log('writes:');
+  for (const item of items.filter((entry) => entry.status !== 'unchanged')) {
+    console.log(`- ${item.status}: ${item.action} ${item.source} -> ${item.target}`);
+    console.log(`  ${item.detail}`);
+  }
+  if (args.dryRun) console.log('dry-run: no files written');
 }
 
 function buildPlan(paths, args, artifactsRoot, targetRoot, sourceInfo, options = {}) {
@@ -1806,6 +1971,19 @@ export function main(argv = process.argv.slice(2)) {
     }
 
     const targetRoot = path.resolve(args.target);
+    if (args.command === 'enhance') {
+      if (!existsSync(targetRoot) || !lstatSync(targetRoot).isDirectory()) {
+        throw new Error(`--target must be an existing scaffold project directory: ${targetRoot}`);
+      }
+      const plan = buildEnhanceDevSkillsPlan(args, targetRoot);
+      assertEnhanceNoConflicts(plan, args.overwrite);
+      printEnhanceDevSkillsPlan(plan, args, targetRoot);
+      if (args.dryRun) return 0;
+      writePlan(plan);
+      console.log('enhance dev-skills complete');
+      return 0;
+    }
+
     if (args.command === 'upgrade') {
       if (!existsSync(targetRoot) || !lstatSync(targetRoot).isDirectory()) {
         throw new Error(`--target must be an existing scaffold project directory: ${targetRoot}`);

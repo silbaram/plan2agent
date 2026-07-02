@@ -32,6 +32,43 @@ export function defaultProviderNativeCapabilities() {
   };
 }
 
+export function defaultDevExecution() {
+  return {
+    defaultProvider: 'codex',
+    allowedProviders: ['codex', 'claude', 'gemini', 'manual'],
+    writeProviders: ['codex', 'claude'],
+    readOnlyProviders: ['gemini'],
+    defaultIsolation: 'none',
+    scopePolicy: 'task_only',
+    verificationPolicy: 'required_for_done',
+  };
+}
+
+export function defaultRoleProfiles() {
+  return {
+    implementer: {
+      defaultProfile: 'fullstack',
+      allowedProfiles: ['frontend', 'backend', 'fullstack', 'test', 'docs'],
+    },
+    reviewer: {
+      defaultProfile: 'qa',
+      allowedProfiles: ['qa', 'architecture', 'security'],
+    },
+    monitor: {
+      defaultProfile: 'manual_monitor',
+      allowedProfiles: ['manual_monitor', 'qa'],
+    },
+  };
+}
+
+export function defaultPromptTemplates() {
+  return {
+    devExecution: 'p2a.dev_prompt.v1',
+    roleContract: 'p2a.role_contract.v1',
+    providerGuide: 'p2a.provider_guide.v1',
+  };
+}
+
 export function detectPackageManager(targetRoot) {
   if (existsSync(path.join(targetRoot, 'pnpm-lock.yaml'))) return 'pnpm';
   if (existsSync(path.join(targetRoot, 'yarn.lock'))) return 'yarn';
@@ -109,6 +146,9 @@ export function buildProjectConfig(targetRoot, teamBigFiveConfig = { enabled: fa
     runTracking: defaultRunTracking(),
     teamBigFive: teamBigFiveConfig,
     providerNativeCapabilities: defaultProviderNativeCapabilities(),
+    devExecution: defaultDevExecution(),
+    roleProfiles: defaultRoleProfiles(),
+    promptTemplates: defaultPromptTemplates(),
     notes: detected.notes,
   };
 }
@@ -128,6 +168,52 @@ function addUniqueNote(config, note) {
   const notes = Array.isArray(config.notes) ? config.notes.filter((item) => typeof item === 'string') : [];
   if (!notes.includes(note)) notes.push(note);
   config.notes = notes;
+}
+
+function isMissingDefaultValue(value) {
+  return isEmptyValue(value) || (Array.isArray(value) && value.length === 0);
+}
+
+function mergeObjectDefaults(target, defaults) {
+  const next = target && typeof target === 'object' && !Array.isArray(target) ? { ...target } : {};
+  const updatedKeys = [];
+  for (const [key, value] of Object.entries(defaults)) {
+    if (value && typeof value === 'object' && !Array.isArray(value)) {
+      const nested = mergeObjectDefaults(next[key], value);
+      if (nested.updatedKeys.length) {
+        next[key] = nested.value;
+        updatedKeys.push(key);
+      }
+    } else if (isMissingDefaultValue(next[key])) {
+      next[key] = value;
+      updatedKeys.push(key);
+    }
+  }
+  return { value: next, updatedKeys };
+}
+
+export function mergeDevSkillConfig(config) {
+  const next = { ...config };
+  const updatedKeys = [];
+  const merges = [
+    ['devExecution', defaultDevExecution()],
+    ['roleProfiles', defaultRoleProfiles()],
+    ['promptTemplates', defaultPromptTemplates()],
+  ];
+  for (const [key, defaults] of merges) {
+    const merged = mergeObjectDefaults(next[key], defaults);
+    if (merged.updatedKeys.length || isMissingDefaultValue(next[key])) {
+      next[key] = merged.value;
+      updatedKeys.push(key);
+    }
+  }
+  if (updatedKeys.length) {
+    if (!next.schema_version) next.schema_version = 'p2a.project_config.v1';
+    if (!next.runTracking) next.runTracking = defaultRunTracking();
+    if (!next.providerNativeCapabilities) next.providerNativeCapabilities = defaultProviderNativeCapabilities();
+    addUniqueNote(next, 'Development skill execution defaults were installed by p2a enhance dev-skills');
+  }
+  return { config: next, updatedKeys };
 }
 
 export function mergeDetectedProjectConfig(config, detected, options = {}) {
