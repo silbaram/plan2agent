@@ -798,6 +798,7 @@ function validateScaffoldFixtureCase() {
       || !result.stdout.includes('configUpdatedKeys: memory')
       || !result.stdout.includes('After creating an artifact root, check local/Memory sync: node .plan2agent/scripts/p2a.mjs memory status --artifacts .plan2agent/artifacts/<project_id>')
       || !result.stdout.includes('After Memory is configured, preview restore diff: node .plan2agent/scripts/p2a.mjs memory pull --artifacts .plan2agent/artifacts/<project_id> --dry-run')
+      || !result.stdout.includes('After Memory contains snapshots, search history: node .plan2agent/scripts/p2a.mjs memory search --artifacts .plan2agent/artifacts/<project_id> --query <term>')
       || !result.stdout.includes('dry-run: no files written')
       || dryRunCapabilityConfig.memory
     ) {
@@ -1660,6 +1661,34 @@ function validateMemoryFixtureCases() {
   checks += 1;
   if (result.status === 0 || !result.stderr.includes('pull is preview-only for now and requires --dry-run')) {
     console.error('memory pull dry-run guard fixture failed');
+    writeResultOutput(result);
+    return { status: result.status === 0 ? 1 : failureStatus(result), checks };
+  }
+
+  result = runMemory(['search', '--graph', graphPath, '--query', 'webhook', '--type', 'document']);
+  checks += 1;
+  if (result.status === 0 || !result.stdout.includes('Plan2Agent memory search') || !result.stdout.includes('server: not_configured') || !result.stdout.includes('Set P2A_MEMORY_URL or pass --server to search Memory.')) {
+    console.error('memory search not-configured fixture failed');
+    writeResultOutput(result);
+    return { status: result.status === 0 ? 1 : failureStatus(result), checks };
+  }
+
+  result = runMemory(['search', '--graph', graphPath, '--query', 'webhook', '--type', 'proposal']);
+  checks += 1;
+  if (result.status === 0 || !result.stderr.includes('Memory search does not support proposal type yet')) {
+    console.error('memory search unsupported type fixture failed');
+    writeResultOutput(result);
+    return { status: result.status === 0 ? 1 : failureStatus(result), checks };
+  }
+
+  result = runMemory(['search', '--query', 'webhook', '--global', '--source-path', './fixtures/webhook-api-service/task-graph.json', '--json']);
+  checks += 1;
+  const searchSourcePathPayload = result.stdout ? JSON.parse(result.stdout) : null;
+  if (
+    result.status === 0
+    || searchSourcePathPayload?.query?.sourcePath !== 'fixtures/webhook-api-service/task-graph.json'
+  ) {
+    console.error('memory search source-path normalization fixture failed');
     writeResultOutput(result);
     return { status: result.status === 0 ? 1 : failureStatus(result), checks };
   }

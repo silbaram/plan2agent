@@ -29,11 +29,35 @@ import {
 } from './p2a_iteration_state.mjs';
 
 const P2A_PATHS = resolveP2aPaths(import.meta.url);
-const COMMANDS = new Set(['status', 'push', 'pull', 'digest']);
+const COMMANDS = new Set(['status', 'push', 'pull', 'search', 'digest']);
 const DEFAULT_MEMORY_URL_ENV = 'P2A_MEMORY_URL';
 const DEFAULT_MEMORY_TOKEN_ENV = 'P2A_MEMORY_TOKEN';
 const DEFAULT_ARTIFACT_LIMIT = 5000;
+const DEFAULT_SEARCH_LIMIT = 20;
 const MAX_CHUNK_CHARS = 2000;
+const SEARCH_ARTIFACT_TYPES = new Set([
+  'PROJECT',
+  'ITERATION',
+  'DOCUMENT_SNAPSHOT',
+  'TASK_GRAPH',
+  'TASK',
+  'RUN_RECORD',
+  'DOCUMENT_CHUNK',
+]);
+const SEARCH_TYPE_ALIASES = new Map([
+  ['project', 'PROJECT'],
+  ['iteration', 'ITERATION'],
+  ['document', 'DOCUMENT_SNAPSHOT'],
+  ['doc', 'DOCUMENT_SNAPSHOT'],
+  ['snapshot', 'DOCUMENT_SNAPSHOT'],
+  ['task-graph', 'TASK_GRAPH'],
+  ['graph', 'TASK_GRAPH'],
+  ['task', 'TASK'],
+  ['run', 'RUN_RECORD'],
+  ['run-record', 'RUN_RECORD'],
+  ['chunk', 'DOCUMENT_CHUNK'],
+  ['document-chunk', 'DOCUMENT_CHUNK'],
+]);
 
 function usage() {
   return [
@@ -41,23 +65,30 @@ function usage() {
     '  node .plan2agent/scripts/p2a_memory.mjs status (--artifacts <dir>|--graph <path>|--runs <dir>) [--server <url>] [--token <token>] [--json]',
     '  node .plan2agent/scripts/p2a_memory.mjs push (--artifacts <dir>|--graph <path>) [--server <url>] [--token <token>] [--dry-run] [--yes] [--json]',
     '  node .plan2agent/scripts/p2a_memory.mjs pull (--artifacts <dir>|--graph <path>|--runs <dir>) --dry-run [--server <url>] [--token <token>] [--json]',
+    '  node .plan2agent/scripts/p2a_memory.mjs search --query <text> [--artifacts <dir>|--graph <path>|--runs <dir>|--global] [--type <kind>] [--source-path <path>] [--limit <n>] [--server <url>] [--token <token>] [--json]',
     '  node .plan2agent/scripts/p2a_memory.mjs digest (--artifacts <dir>|--graph <path>|--runs <dir>) [--proposals <dir>] [--json]',
     '',
     'Commands:',
     '  status   Compare local project, iteration, document, task, run, and chunk snapshots with Memory.',
     '  push     Upsert local snapshots to Memory. Actual writes require --yes.',
     '  pull     Preview remote Memory snapshots that differ from local files. Dry-run only.',
+    '  search   Keyword-search Memory snapshots. Uses the current project context unless --global is passed.',
     '  digest   Summarize failed/blocked runs, verification gaps, and proposal queue candidates.',
     '',
     'Source options:',
     '  --artifacts <dir>   Iterative artifact root, for example .plan2agent/artifacts/<project_id>.',
     '  --graph <path>      Task graph JSON path. Runs default beside the graph parent.',
-    '  --runs <dir>        Explicit runs directory. Supported by status, pull, and digest only.',
+    '  --runs <dir>        Explicit runs directory. Supported by status, pull, search, and digest only.',
     '  --proposals <dir>   Proposal queue directory for digest.',
+    '  --global            For search, do not apply current project/iteration filters.',
     '',
     'Memory options:',
     `  --server <url>      Memory server base URL. Default: ${DEFAULT_MEMORY_URL_ENV} or project config memory.serverUrlEnv.`,
     `  --token <token>     X-P2A-Local-Token value. Default: ${DEFAULT_MEMORY_TOKEN_ENV} or project config memory.tokenEnv.`,
+    '  --query <text>      Keyword query for search.',
+    '  --type <kind>       Search artifact type: document, chunk, task, run, graph, project, or iteration.',
+    '  --source-path <path> Search source path filter.',
+    `  --limit <n>         Search result limit. Default: ${DEFAULT_SEARCH_LIMIT}.`,
     '  --dry-run           For push, print the write plan without contacting the server. Required by pull.',
     '  --yes               Required for push to perform server writes.',
     '  --json              Machine-readable output.',
@@ -76,6 +107,11 @@ function parseArgs(argv) {
     graph: null,
     runs: null,
     proposals: null,
+    query: null,
+    artifactType: null,
+    sourcePath: null,
+    limit: null,
+    global: false,
     server: null,
     token: null,
     dryRun: false,
@@ -91,6 +127,11 @@ function parseArgs(argv) {
     else if (arg === '--graph') args.graph = requiredValue(argv, ++index, '--graph');
     else if (arg === '--runs') args.runs = requiredValue(argv, ++index, '--runs');
     else if (arg === '--proposals') args.proposals = requiredValue(argv, ++index, '--proposals');
+    else if (arg === '--query') args.query = requiredValue(argv, ++index, '--query');
+    else if (arg === '--type' || arg === '--artifact-type') args.artifactType = normalizeSearchArtifactType(requiredValue(argv, ++index, arg));
+    else if (arg === '--source-path') args.sourcePath = normalizeSearchSourcePath(requiredValue(argv, ++index, '--source-path'));
+    else if (arg === '--limit') args.limit = parsePositiveInteger(requiredValue(argv, ++index, '--limit'), '--limit');
+    else if (arg === '--global') args.global = true;
     else if (arg === '--server') args.server = requiredValue(argv, ++index, '--server');
     else if (arg === '--token') args.token = requiredValue(argv, ++index, '--token');
     else if (arg === '--dry-run') args.dryRun = true;
@@ -103,22 +144,30 @@ function parseArgs(argv) {
   if (args.help) return args;
   const sourceCount = [args.artifacts, args.graph, args.runs].filter(Boolean).length;
   if (sourceCount > 1) throw new Error('--artifacts, --graph, and --runs cannot be combined');
-  if (args.command === 'push' && args.runs) throw new Error('push requires --artifacts or --graph; --runs is digest/status/pull only');
+  if (args.command === 'push' && args.runs) throw new Error('push requires --artifacts or --graph; --runs is digest/status/pull/search only');
   if (!['push', 'pull'].includes(args.command) && args.dryRun) throw new Error('--dry-run is only supported by push and pull');
   if (args.command === 'pull' && !args.dryRun) throw new Error('pull is preview-only for now and requires --dry-run');
   if (args.command !== 'push' && args.yes) throw new Error('--yes is only supported by push');
   if (args.command !== 'digest' && args.proposals) throw new Error('--proposals is only supported by digest');
+  if (args.command !== 'search' && (args.query || args.artifactType || args.sourcePath || args.limit || args.global)) {
+    throw new Error('--query, --type, --source-path, --limit, and --global are only supported by search');
+  }
+  if (args.command === 'search') {
+    if (!trimString(args.query)) throw new Error('search requires --query <text>');
+    args.query = trimString(args.query);
+    if (args.global && sourceCount > 0) throw new Error('search --global cannot be combined with --artifacts, --graph, or --runs');
+  }
 
-  if (sourceCount === 0) {
+  if (sourceCount === 0 && !(args.command === 'search' && args.global)) {
     const defaultArtifacts = singleArtifactProjectRoot();
     const configuredGraph = configuredTaskGraphPath();
     if (defaultArtifacts) args.artifacts = defaultArtifacts;
     else if (configuredGraph) args.graph = configuredGraph;
-    else if (args.command === 'digest' && existsSync(path.join('.plan2agent', 'runs'))) args.runs = path.join('.plan2agent', 'runs');
-    else assertNoUninitializedScaffoldArtifactRoots();
+    else if (['digest', 'search'].includes(args.command) && existsSync(path.join('.plan2agent', 'runs'))) args.runs = path.join('.plan2agent', 'runs');
+    else if (args.command !== 'search') assertNoUninitializedScaffoldArtifactRoots();
   }
 
-  if (!args.artifacts && !args.graph && !args.runs) {
+  if (!args.artifacts && !args.graph && !args.runs && args.command !== 'search') {
     throw new Error('--artifacts, --graph, or --runs is required');
   }
   if (args.command === 'push' && !args.artifacts && !args.graph) {
@@ -132,6 +181,30 @@ function requiredValue(argv, index, optionName) {
   const value = argv[index];
   if (!value) throw new Error(`${optionName} requires a value`);
   return value;
+}
+
+function parsePositiveInteger(value, optionName) {
+  const number = Number(value);
+  if (!Number.isInteger(number) || number <= 0) throw new Error(`${optionName} requires a positive integer`);
+  return number;
+}
+
+function normalizeSearchArtifactType(value) {
+  const normalized = value.trim().toLowerCase().replace(/[_\s]+/g, '-');
+  if (normalized === 'proposal' || normalized === 'proposals') {
+    throw new Error('Memory search does not support proposal type yet because proposal snapshots are not pushed to Memory');
+  }
+  const aliased = SEARCH_TYPE_ALIASES.get(normalized);
+  if (aliased) return aliased;
+  const upper = value.trim().toUpperCase();
+  if (SEARCH_ARTIFACT_TYPES.has(upper)) return upper;
+  throw new Error(`unsupported Memory search type: ${value}; expected document, chunk, task, run, graph, project, or iteration`);
+}
+
+function normalizeSearchSourcePath(value) {
+  const raw = value.trim();
+  if (!raw) throw new Error('--source-path requires a non-empty path');
+  return relativeToProject(P2A_PATHS.projectRoot, path.resolve(raw));
 }
 
 function readJsonObject(filePath) {
@@ -833,6 +906,24 @@ async function fetchRemoteArtifacts(connection, plan) {
   }
 }
 
+async function searchRemoteMemory(connection, args, plan) {
+  if (!connection.server) return { results: [], error: null };
+  const searchParams = {
+    q: args.query,
+    projectId: plan?.project.id ?? null,
+    iterationId: plan?.iteration.id ?? null,
+    artifactType: args.artifactType,
+    sourcePath: args.sourcePath,
+    limit: args.limit ?? DEFAULT_SEARCH_LIMIT,
+  };
+  try {
+    const results = await memoryGet(connection, '/search/keyword', searchParams);
+    return { results: Array.isArray(results) ? results : [], error: null };
+  } catch (error) {
+    return { results: [], error: errorMessage(error) };
+  }
+}
+
 function remoteKey(item) {
   const sourceIds = item.sourceIds ?? {};
   if (item.artifactType === 'PROJECT') return sourceIds.sourceProjectId ?? item.metadata?.sourceProjectId ?? item.artifactId;
@@ -1137,6 +1228,146 @@ function printPullPreview(payload) {
   }
 }
 
+async function runSearch(args) {
+  const plan = args.artifacts || args.graph || args.runs
+    ? buildMemoryPlan(args)
+    : null;
+  const connection = resolveMemoryConnection(args);
+  const server = await memoryHealth(connection);
+  const search = await searchRemoteMemory(connection, args, plan);
+  const remoteAvailable = Boolean(connection.server && !search.error);
+  const results = remoteAvailable ? normalizeSearchResults(search.results) : [];
+  const payload = {
+    schema_version: 'p2a.memory_search.v1',
+    generatedAt: new Date().toISOString(),
+    query: {
+      text: args.query,
+      artifactType: args.artifactType,
+      sourcePath: args.sourcePath,
+      limit: args.limit ?? DEFAULT_SEARCH_LIMIT,
+      scope: plan ? 'context' : 'global',
+    },
+    context: plan ? {
+      sourceKind: plan.context.sourceKind,
+      sourcePath: displayPath(plan.context.sourcePath),
+      projectId: plan.context.projectId,
+      iterationId: plan.context.iterationId,
+      serverProjectId: plan.project.id,
+      serverIterationId: plan.iteration.id,
+    } : null,
+    server: {
+      url: connection.server,
+      source: connection.serverSource,
+      status: search.error ? 'unavailable' : server.status,
+      detail: search.error ?? server.detail,
+    },
+    summary: summarizeSearchResults(results),
+    results,
+    nextActions: searchNextActions(connection, search, results, plan, args),
+  };
+  if (args.json) console.log(JSON.stringify(payload, null, 2));
+  else printSearch(payload);
+  return remoteAvailable ? 0 : 1;
+}
+
+function normalizeSearchResults(results) {
+  return results.map((item) => ({
+    artifactType: item.artifactType ?? 'UNKNOWN',
+    score: typeof item.score === 'number' ? item.score : null,
+    matchReason: item.matchReason ?? null,
+    projectId: item.projectId ?? null,
+    iterationId: item.iterationId ?? null,
+    documentId: item.documentId ?? null,
+    chunkId: item.chunkId ?? null,
+    chunkIndex: item.chunkIndex ?? null,
+    sourcePath: item.sourcePath ?? item.lineage?.sourcePath ?? null,
+    content: typeof item.content === 'string' ? item.content : '',
+    contentPreview: searchContentPreview(item.content),
+    lineage: item.lineage ?? null,
+    sourceIds: item.sourceIds ?? {},
+    metadata: item.metadata ?? {},
+  }));
+}
+
+function summarizeSearchResults(results) {
+  const byType = {};
+  const byMatchReason = {};
+  for (const item of results) {
+    byType[item.artifactType] = (byType[item.artifactType] ?? 0) + 1;
+    const reason = item.matchReason ?? 'unknown';
+    byMatchReason[reason] = (byMatchReason[reason] ?? 0) + 1;
+  }
+  return {
+    total: results.length,
+    byType,
+    byMatchReason,
+  };
+}
+
+function searchContentPreview(value, maxLength = 180) {
+  const normalized = typeof value === 'string'
+    ? value.replace(/\s+/g, ' ').trim()
+    : '';
+  if (normalized.length <= maxLength) return normalized;
+  return `${normalized.slice(0, maxLength - 3)}...`;
+}
+
+function searchNextActions(connection, search, results, plan, args) {
+  const actions = [];
+  if (!connection.server) {
+    actions.push(`Set ${DEFAULT_MEMORY_URL_ENV} or pass --server to search Memory.`);
+  } else if (search.error) {
+    actions.push('Fix Memory server connectivity before relying on search results.');
+  } else if (!results.length) {
+    if (plan) {
+      actions.push(`Try a broader Memory search: node .plan2agent/scripts/p2a.mjs memory search --query ${shellQuote(args.query)} --global`);
+    } else {
+      actions.push('Push project artifacts to Memory before relying on cross-project search.');
+    }
+  } else {
+    actions.push('Inspect matching Memory content before restoring files or drafting maintenance work.');
+    if (plan) {
+      actions.push(`Compare current local state with Memory: node .plan2agent/scripts/p2a.mjs memory pull ${sourceFlag(plan.context)} --dry-run`);
+    }
+  }
+  return actions;
+}
+
+function printSearch(payload) {
+  console.log('Plan2Agent memory search');
+  console.log(`- query: ${payload.query.text}`);
+  console.log(`- scope: ${payload.context ? `${payload.context.projectId} ${payload.context.iterationId}` : 'global'}`);
+  console.log(`- server: ${payload.server.status}${payload.server.url ? ` (${payload.server.url})` : ''}`);
+  const filters = [
+    payload.query.artifactType ? `type=${payload.query.artifactType}` : null,
+    payload.query.sourcePath ? `sourcePath=${payload.query.sourcePath}` : null,
+    `limit=${payload.query.limit}`,
+  ].filter(Boolean);
+  console.log(`- filters: ${filters.join(' ')}`);
+  console.log(`- results: ${payload.summary.total}`);
+  if (payload.results.length) {
+    console.log('results:');
+    payload.results.forEach((item, index) => {
+      const score = typeof item.score === 'number' ? item.score.toFixed(3) : 'n/a';
+      const pathLabel = item.sourcePath ?? 'unknown-source';
+      const chunkLabel = item.chunkIndex === null || item.chunkIndex === undefined ? '' : ` chunk=${item.chunkIndex}`;
+      console.log(`${index + 1}. ${item.artifactType} score=${score} match=${item.matchReason ?? 'unknown'}${chunkLabel}`);
+      console.log(`   source: ${pathLabel}`);
+      if (item.contentPreview) console.log(`   content: ${item.contentPreview}`);
+    });
+  }
+  if (payload.nextActions.length) {
+    console.log('next actions:');
+    payload.nextActions.forEach((action) => console.log(`- ${action}`));
+  }
+}
+
+function shellQuote(value) {
+  const text = String(value ?? '');
+  if (/^[A-Za-z0-9_./:=+-]+$/.test(text)) return text;
+  return `'${text.replace(/'/g, "'\\''")}'`;
+}
+
 function formatSummary(summary) {
   return [
     `projects=${summary.projects}`,
@@ -1418,6 +1649,7 @@ export async function main(argv = process.argv.slice(2)) {
   if (args.command === 'status') return runStatus(args);
   if (args.command === 'push') return runPush(args);
   if (args.command === 'pull') return runPull(args);
+  if (args.command === 'search') return runSearch(args);
   if (args.command === 'digest') return runDigest(args);
   throw new Error(`unknown command: ${args.command}`);
 }
