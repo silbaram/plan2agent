@@ -1761,6 +1761,7 @@ async function buildFileChecks(rootPath: string): Promise<ProjectFileCheck[]> {
     ["project-config", "project config", ".plan2agent/project.config.json", "file"],
     ["plan-doc", "PLAN2AGENT.md", "PLAN2AGENT.md", "file"],
     ["scripts", "scripts", ".plan2agent/scripts", "directory"],
+    ["p2a-entry", "p2a command", ".plan2agent/scripts/p2a.mjs", "file"],
     ["schemas", "schemas", ".plan2agent/schemas", "directory"],
     ["artifacts", "artifacts", ".plan2agent/artifacts", "directory"],
     ["runs", "runs", ".plan2agent/runs", "directory"],

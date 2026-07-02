@@ -409,6 +409,15 @@ function operationalActionRequiresArtifact(action: OperationalAction): boolean {
   return action === "eval_generate" || action === "eval_analyze" || action === "eval_digest";
 }
 
+function hasP2aCommand(snapshot: ProjectSnapshot | null): boolean {
+  return Boolean(snapshot?.checks.some((check) => check.id === "p2a-entry" && check.exists));
+}
+
+function canRunOperationalActions(snapshot: ProjectSnapshot | null): boolean {
+  if (!snapshot || !hasP2aCommand(snapshot)) return false;
+  return snapshot.state !== "no_p2a" && snapshot.state !== "broken_install";
+}
+
 function operationalCardClass(tone: OperationalTone, mode: "button" | "static" = "button"): string {
   return [
     "overview-operational-card",
@@ -930,6 +939,12 @@ export default function App() {
   }, [projectSnapshot?.rootPath, selectedTaskId]);
 
   useEffect(() => {
+    setOperationalState("idle");
+    setOperationalAction(null);
+    setOperationalResult(null);
+  }, [projectSnapshot?.rootPath]);
+
+  useEffect(() => {
     const roles = selectedRun?.orchestration?.roles ?? [];
     const nextRoleId =
       selectedRun?.orchestration?.next?.nextRole?.roleId ?? roles[0]?.roleId ?? null;
@@ -1177,7 +1192,13 @@ export default function App() {
   }
 
   async function runOperationalAction(action: OperationalAction) {
-    if (!projectSnapshot || (operationalActionRequiresArtifact(action) && !artifact)) return;
+    if (
+      !projectSnapshot ||
+      !canRunOperationalActions(projectSnapshot) ||
+      (operationalActionRequiresArtifact(action) && !artifact)
+    ) {
+      return;
+    }
     const previewCommand = operationalActionPreviewCommand(action);
     if (action === "update_apply") {
       const confirmed = window.confirm(
@@ -1489,6 +1510,7 @@ export default function App() {
       "eval_analyze",
       "eval_digest",
     ];
+    const operationalActionsAvailable = canRunOperationalActions(projectSnapshot);
     const activeOperationalAction = operationalAction ?? "update_preview";
     const operationalCommand = operationalResult?.command ?? operationalActionPreviewCommand(activeOperationalAction);
     const showOperationalResult = operationalState === "running" || Boolean(operationalResult);
@@ -1672,6 +1694,11 @@ export default function App() {
               {operationalActions.map((action) => {
                 const requiresArtifact = operationalActionRequiresArtifact(action);
                 const isRunning = operationalState === "running" && operationalAction === action;
+                const disabledReason = !operationalActionsAvailable
+                  ? copy.operational.commandUnavailable
+                  : requiresArtifact && !artifact
+                    ? copy.common.noArtifactRoot
+                    : null;
                 return (
                   <button
                     className={`terminal-control${
@@ -1679,13 +1706,9 @@ export default function App() {
                     }${action === "update_apply" ? " terminal-control--danger" : ""}`}
                     key={action}
                     type="button"
-                    disabled={operationalState === "running" || (requiresArtifact && !artifact)}
+                    disabled={operationalState === "running" || Boolean(disabledReason)}
                     onClick={() => void runOperationalAction(action)}
-                    title={
-                      requiresArtifact && !artifact
-                        ? copy.common.noArtifactRoot
-                        : operationalActionPreviewCommand(action)
-                    }
+                    title={disabledReason ?? operationalActionPreviewCommand(action)}
                   >
                     <span>{isRunning ? copy.common.running : operationalActionLabel(action, copy)}</span>
                   </button>
