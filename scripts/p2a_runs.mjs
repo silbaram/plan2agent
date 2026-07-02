@@ -838,6 +838,44 @@ function deriveFinishStatus(run, requestedStatus) {
   return run.verification.some((item) => item.status === 'failed') ? 'failed' : 'finished';
 }
 
+function failedVerificationItems(run) {
+  return run.verification.filter((item) => item.status === 'failed');
+}
+
+function incompleteVerificationItems(run) {
+  return run.verification.filter((item) => item.status === 'skipped' || item.status === 'not_run');
+}
+
+function assertFinishedRunGuard(run) {
+  if (run.status !== 'finished') return;
+  const failed = failedVerificationItems(run);
+  if (failed.length) {
+    const summary = failed.map((item) => `${item.type}:${item.command}`).join(', ');
+    throw new Error(`finished run cannot include failed verification: ${summary}. Finish as failed with --failure-class verification_failed or rerun verification first.`);
+  }
+}
+
+function printRunGuardWarnings(run) {
+  if (run.status === 'finished') {
+    if (run.verification.length === 0) {
+      console.log('- guard warning: finished run has no verification evidence; task done will warn before completion.');
+    }
+    const incomplete = incompleteVerificationItems(run);
+    if (incomplete.length) {
+      console.log(`- guard warning: verification has incomplete entries: ${incomplete.map((item) => `${item.type}:${item.status}`).join(', ')}`);
+    }
+  }
+  if (run.status === 'failed' || run.status === 'blocked') {
+    const missing = [];
+    if (!run.reproduction) missing.push('reproduction');
+    if (!run.localization) missing.push('localization');
+    if (!run.guard) missing.push('guard');
+    if (missing.length) {
+      console.log(`- guard warning: add structured failure detail before retry/digest: ${missing.join(', ')}`);
+    }
+  }
+}
+
 function startRun(args) {
   const source = resolveTaskSource(args);
   const task = requireTask(source.graph, args.taskId);
@@ -940,6 +978,7 @@ function finishRun(args) {
   run.notes = uniqueStrings([...run.notes, ...args.notes]);
   mergeStructuredRunDetails(run, args);
   run.status = deriveFinishStatus(run, args.status);
+  assertFinishedRunGuard(run);
   const failure = buildFailure(args, run.status);
   if (failure) run.failure = failure;
   else delete run.failure;
@@ -952,6 +991,7 @@ function finishRun(args) {
   console.log(`- changedFiles: ${run.changedFiles.length}`);
   console.log(`- verification: ${run.verification.length}`);
   if (run.failure) console.log(`- failure: ${run.failure.class} retryable=${run.failure.retryable} needsUserDecision=${run.failure.needsUserDecision} source=${run.failure.source}`);
+  printRunGuardWarnings(run);
   printRunCommandFooter(P2A_PATHS, {
     sourceArgs: sourceRunArgs(args),
     runSourceArgs: runLifecycleSourceArgs(args),

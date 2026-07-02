@@ -418,6 +418,8 @@ node .plan2agent/scripts/p2a_tasks.mjs <command> --artifacts <iterative-project-
 | `block <task-id>` | task를 `blocked`로 표시한다. |
 | `todo <task-id>` | task를 `todo`로 되돌린다. |
 
+`done`은 최신 run evidence를 확인하는 shortcut guard를 거친다. 최신 run이 아직 `started`이거나 `failed`/`blocked`이면 `done` 전이가 실패하고, `finished` run이라도 실패한 verification이 남아 있으면 실패한다. run-index가 최신 run을 가리키는데 run 파일이 없거나 schema가 깨진 경우도 evidence를 신뢰할 수 없으므로 차단한다. 하위호환을 위해 run evidence가 전혀 없거나 verification이 비어 있는 경우, verification에 `skipped`/`not_run`이 섞인 경우, run의 변경 파일에 `.plan2agent/` 또는 Gate 산출물이 포함된 경우는 경고만 출력한다.
+
 대표 예시:
 
 ```bash
@@ -506,6 +508,8 @@ node .plan2agent/scripts/p2a_runs.mjs list \
 ```
 
 `verify`는 `.plan2agent/project.config.json`의 `testCommand`, `lintCommand`, `typecheckCommand`를 읽는다. 설정이 비어 있으면 현재 workspace의 `package.json`, lockfile, Gradle, Maven 파일을 다시 감지해 누락된 기본 명령을 채운 뒤 실행한다. 별도 명령을 쓰려면 `--test-command`, `--lint-command`, `--typecheck-command`, `--verify-command <type:cmd>`를 넘긴다. 명시 명령을 다음 실행의 기본값으로 저장하려면 `--save-config`를 함께 넘긴다. `--isolation branch|worktree`는 격리 기준을 run log에 기록하며, `--create-isolation`을 함께 줄 때만 실제 `git switch -c` 또는 `git worktree add`를 실행한다.
+
+`finish`는 `--status finished`로 닫으려는 run에 실패한 verification이 남아 있으면 non-zero로 거절한다. 이 경우 verification을 다시 통과시키거나 `--status failed --failure-class verification_failed`처럼 실패 run으로 닫아야 한다. `finished` run에 verification evidence가 없거나 `skipped`/`not_run`만 있는 경우는 경고를 출력하고, `failed`/`blocked` run에 `reproduction`, `localization`, `guard` 구조 필드가 빠진 경우도 후속 분석 품질을 위해 경고한다.
 
 handoff 대상 프로젝트에서는 다음처럼 쓴다.
 

@@ -6,7 +6,7 @@ import { createInterface } from 'node:readline/promises';
 import path from 'node:path';
 import process from 'node:process';
 import { Readable } from 'node:stream';
-import { validateTaskGraphData, ValidationError } from './validate_artifacts.mjs';
+import { validateRunData, validateTaskGraphData, ValidationError } from './validate_artifacts.mjs';
 import { resolveIterationState } from './p2a_iteration_state.mjs';
 import { resolveRunsDir } from './p2a_run_paths.mjs';
 import {
@@ -246,7 +246,14 @@ function runsDirForTaskArgs(args) {
   return null;
 }
 
-function latestRunFailureClass(args, taskId) {
+function latestRunProblem(message, strict) {
+  if (strict) throw new Error(message);
+  console.error(`warning: ${message}`);
+  return null;
+}
+
+function latestRunForTask(args, taskId, options = {}) {
+  const strict = options.strict ?? false;
   const runsDir = runsDirForTaskArgs(args);
   if (!runsDir) return null;
   const indexPath = path.join(runsDir, 'run-index.json');
@@ -257,12 +264,60 @@ function latestRunFailureClass(args, taskId) {
     const runId = taskEntry?.latestRunId;
     if (!runId) return null;
     const runPath = path.join(runsDir, `${runId}.json`);
-    if (!existsSync(runPath) || !lstatSync(runPath).isFile()) return null;
+    if (!existsSync(runPath) || !lstatSync(runPath).isFile()) {
+      return latestRunProblem(`latest run ${runId} for ${taskId} is missing at ${formatDisplayPath(runPath)}`, strict);
+    }
     const run = JSON.parse(readFileSync(runPath, 'utf8'));
-    return run.failure?.class ?? null;
+    validateRunData(run);
+    return run;
   } catch (error) {
-    console.error(`warning: could not read latest run failure for ${taskId}: ${error.message}`);
-    return null;
+    return latestRunProblem(`could not read latest run for ${taskId}: ${error.message}`, strict);
+  }
+}
+
+function latestRunFailureClass(args, taskId) {
+  return latestRunForTask(args, taskId)?.failure?.class ?? null;
+}
+
+function changedPlan2AgentControlFiles(run) {
+  return run.changedFiles.filter((filePath) => {
+    const normalized = filePath.split(/[\\/]+/).join('/').replace(/^\.\//, '');
+    return normalized.startsWith('.plan2agent/')
+      || normalized.startsWith('gate-a-intake/')
+      || normalized.startsWith('gate-b-spec/')
+      || normalized.startsWith('gate-c-task-graph/')
+      || normalized.startsWith('gate-d-review/')
+      || normalized === 'current-spec.json';
+  });
+}
+
+function assertDoneShortcutGuard(args, task) {
+  const run = latestRunForTask(args, task.id, { strict: true });
+  if (!run) {
+    console.error(`warning: no run evidence found for ${task.id}; record or finish a run before marking future tasks done.`);
+    return;
+  }
+  if (run.status === 'started') {
+    throw new Error(`${task.id} cannot be marked done while latest run ${run.runId} is still started`);
+  }
+  if (run.status === 'failed' || run.status === 'blocked') {
+    const suffix = run.failure?.class ? ` (${run.failure.class})` : '';
+    throw new Error(`${task.id} cannot be marked done because latest run ${run.runId} is ${run.status}${suffix}`);
+  }
+  const failedVerification = run.verification.filter((item) => item.status === 'failed');
+  if (failedVerification.length) {
+    throw new Error(`${task.id} cannot be marked done because latest run ${run.runId} has failed verification: ${failedVerification.map((item) => item.type).join(', ')}`);
+  }
+  if (run.verification.length === 0) {
+    console.error(`warning: latest run ${run.runId} has no verification evidence before marking ${task.id} done`);
+  }
+  const incompleteVerification = run.verification.filter((item) => item.status === 'skipped' || item.status === 'not_run');
+  if (incompleteVerification.length) {
+    console.error(`warning: latest run ${run.runId} has incomplete verification: ${incompleteVerification.map((item) => `${item.type}:${item.status}`).join(', ')}`);
+  }
+  const controlFiles = changedPlan2AgentControlFiles(run);
+  if (controlFiles.length) {
+    console.error(`warning: latest run ${run.runId} changed Plan2Agent control artifacts: ${controlFiles.join(', ')}`);
   }
 }
 
@@ -275,6 +330,7 @@ function transitionTask(graph, task, command, args = {}) {
     task.status = 'in_progress';
   } else if (command === 'done') {
     if (task.status !== 'in_progress') throw new Error(`${task.id} must be in_progress before done; current status is ${task.status}`);
+    assertDoneShortcutGuard(args, task);
     task.status = 'done';
   } else if (command === 'block') {
     task.status = 'blocked';
