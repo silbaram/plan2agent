@@ -38,11 +38,14 @@ import type {
   ArtifactFileReadResult,
   ArtifactSummary,
   DiagnosticSeverity,
+  DoctorCommandSummary,
+  EvalArtifactSummary,
   ExecutionAgentTool,
   ExecutionCommandResult,
   ExecutionFinishStatus,
   FailureClass,
   GuiConfigSnapshot,
+  MemoryDigestSummary,
   OnboardingAction,
   OrchestrationRoleStatus,
   ProposalSummary,
@@ -75,6 +78,8 @@ type ArtifactDocument = {
   meta: string;
   state: string;
 };
+
+type OperationalTone = "ok" | "warn" | "error" | "info";
 
 const failureClassOptions: FailureClass[] = [
   "verification_failed",
@@ -388,6 +393,68 @@ function updateReportArtifactDocument(report: UpdateReportSummary, copy: UiCopy)
     relativePath: report.relativePath,
     meta: report.createdAt ?? copy.common.none,
     state: report.status,
+  };
+}
+
+function operationalCardClass(tone: OperationalTone, mode: "button" | "static" = "button"): string {
+  return [
+    "overview-operational-card",
+    `overview-operational-card--${tone}`,
+    mode === "static" ? "overview-operational-card--static" : null,
+  ]
+    .filter(Boolean)
+    .join(" ");
+}
+
+function doctorOperationalTone(doctor: DoctorCommandSummary): OperationalTone {
+  if (doctor.status === "pass") return "ok";
+  if (doctor.status === "warn") return "warn";
+  if (doctor.status === "fail") return "error";
+  return "info";
+}
+
+function updateReportOperationalTone(report: UpdateReportSummary): OperationalTone {
+  const status = report.status.toLowerCase();
+  if (report.error || status.includes("fail") || status.includes("error")) return "error";
+  if (report.blockers > 0 || status.includes("warn") || status.includes("block")) return "warn";
+  if (status.includes("pass") || status.includes("success") || status.includes("applied")) return "ok";
+  return "info";
+}
+
+function evalDigestArtifactDocument(summary: EvalArtifactSummary, copy: UiCopy): ArtifactDocument | null {
+  const relativePath = summary.digestPath ?? summary.indexPath;
+  if (!relativePath) return null;
+  return {
+    id: `eval:${relativePath}`,
+    label: summary.digestPath ? copy.operational.evalDigest : copy.operational.evalIndex,
+    group: "eval",
+    relativePath,
+    meta: summary.latestGeneratedAt ?? summary.evalDir ?? copy.common.none,
+    state: summary.nonPassGrades > 0 ? "warn" : "present",
+  };
+}
+
+function evalAnalysisArtifactDocument(summary: EvalArtifactSummary, copy: UiCopy): ArtifactDocument | null {
+  if (!summary.analysisPath) return null;
+  return {
+    id: `eval:${summary.analysisPath}`,
+    label: copy.operational.evalAnalysis,
+    group: "eval",
+    relativePath: summary.analysisPath,
+    meta: summary.evalDir ?? copy.common.none,
+    state: summary.maintenanceDraftTasks > 0 || summary.clusters > 0 ? "warn" : "present",
+  };
+}
+
+function memoryDigestArtifactDocument(summary: MemoryDigestSummary, copy: UiCopy): ArtifactDocument | null {
+  if (!summary.sourcePath) return null;
+  return {
+    id: `memory:${summary.sourcePath}`,
+    label: copy.operational.memoryDigest,
+    group: "memory",
+    relativePath: summary.sourcePath,
+    meta: summary.source,
+    state: summary.failedOrBlocked > 0 || summary.verificationGaps > 0 ? "warn" : "present",
   };
 }
 
@@ -1299,10 +1366,73 @@ export default function App() {
     const taskMetric = overviewTaskMetric(artifact, projectSnapshot?.state ?? null, locale, copy);
     const runMetric = artifact ? formatCount(artifact.runCount, locale) : "0";
     const showTaskMetric = onboarding?.stage !== "cycle_close_ready";
-    const latestUpdateReport = updateReports[0] ?? null;
+    const doctorReport = projectSnapshot?.doctor ?? null;
+    const latestPreviewReport = updateReports.find((report) => report.kind === "preview") ?? null;
+    const latestApplyReport = updateReports.find((report) => report.kind === "apply") ?? null;
     const evalSummary = artifact?.evalSummary ?? null;
+    const evalDigestDocument = evalSummary ? evalDigestArtifactDocument(evalSummary, copy) : null;
+    const evalAnalysisDocument = evalSummary ? evalAnalysisArtifactDocument(evalSummary, copy) : null;
+    const evalDigestLabel = evalSummary?.digestPath
+      ? copy.operational.evalDigest
+      : evalSummary?.indexPath
+        ? copy.operational.evalIndex
+        : copy.operational.evalSummary;
     const memoryDigest = artifact?.memoryDigest ?? null;
-    const hasOperationalReport = Boolean(latestUpdateReport || evalSummary || memoryDigest);
+    const memoryDigestDocument = memoryDigest ? memoryDigestArtifactDocument(memoryDigest, copy) : null;
+    const operationalReportCount = [
+      doctorReport,
+      latestPreviewReport,
+      latestApplyReport,
+      evalSummary,
+      evalAnalysisDocument,
+      memoryDigest,
+    ].filter(Boolean).length;
+    const hasOperationalReport = operationalReportCount > 0;
+
+    const renderOperationalCard = ({
+      document,
+      tone,
+      title,
+      label,
+      summary,
+      detail,
+      footer,
+    }: {
+      document: ArtifactDocument | null;
+      tone: OperationalTone;
+      title: string;
+      label: string;
+      summary: string;
+      detail: string;
+      footer: string;
+    }) => {
+      const className = operationalCardClass(tone, document ? "button" : "static");
+      const content = (
+        <>
+          <span>{label}</span>
+          <strong>{summary}</strong>
+          <small className="mono">{detail}</small>
+          <code>{footer}</code>
+        </>
+      );
+      if (!document) {
+        return (
+          <div className={className} title={title}>
+            {content}
+          </div>
+        );
+      }
+      return (
+        <button
+          className={className}
+          type="button"
+          onClick={() => void openArtifactDocument(document)}
+          title={title}
+        >
+          {content}
+        </button>
+      );
+    };
 
     return (
       <section className="overview-state-panel" aria-label={copy.common.milestones}>
@@ -1432,105 +1562,101 @@ export default function App() {
           <div className="overview-operational" aria-label={copy.operational.title}>
             <div className="overview-operational__head">
               <span>{copy.operational.title}</span>
-              <strong className="mono">
-                {formatCount(
-                  [latestUpdateReport, evalSummary, memoryDigest].filter(Boolean).length,
-                  locale,
-                )}
-              </strong>
+              <strong className="mono">{formatCount(operationalReportCount, locale)}</strong>
             </div>
             <div className="overview-operational-grid">
-              {latestUpdateReport && (
-                <button
-                  className="overview-operational-card"
-                  type="button"
-                  onClick={() => void openArtifactDocument(updateReportArtifactDocument(latestUpdateReport, copy))}
-                  title={latestUpdateReport.relativePath}
-                >
-                  <span>{copy.operational.updateReport}</span>
-                  <strong>{`${latestUpdateReport.command} ${
-                    latestUpdateReport.kind === "preview" ? copy.operational.preview : copy.operational.apply
-                  } ${latestUpdateReport.status}`}</strong>
-                  <small className="mono">
-                    {latestUpdateReport.kind === "preview" ? (
-                      <>
-                        {formatCount(latestUpdateReport.changedItems, locale)} {copy.operational.changes}
-                      </>
-                    ) : (
-                      <>
-                        {formatCount(latestUpdateReport.appliedFiles, locale)} {copy.operational.appliedFiles}
-                      </>
-                    )}
-                    {" · "}
-                    {formatCount(latestUpdateReport.blockers, locale)} {copy.operational.blockers}
-                  </small>
-                  <code>{latestUpdateReport.relativePath}</code>
-                </button>
-              )}
-              {evalSummary && (
-                <button
-                  className="overview-operational-card"
-                  type="button"
-                  onClick={() => {
-                    const relativePath = evalSummary.digestPath ?? evalSummary.analysisPath ?? evalSummary.indexPath;
-                    if (!relativePath) return;
-                    void openArtifactDocument({
-                      id: `eval:${relativePath}`,
-                      label: copy.operational.evalSummary,
-                      group: "eval",
-                      relativePath,
-                      meta: evalSummary.evalDir ?? copy.common.none,
-                      state: evalSummary.nonPassGrades > 0 ? "warn" : "present",
-                    });
-                  }}
-                  title={evalSummary.evalDir ?? copy.operational.evalSummary}
-                >
-                  <span>{copy.operational.evalSummary}</span>
-                  <strong>
-                    {formatCount(evalSummary.gradeCount, locale)} {copy.operational.grades}
-                    {" · "}
-                    {formatCount(evalSummary.nonPassGrades, locale)} {copy.operational.nonPass}
-                  </strong>
-                  <small className="mono">
-                    {formatCount(evalSummary.clusters, locale)} {copy.operational.clusters}
-                    {" · "}
-                    {formatCount(evalSummary.maintenanceDraftTasks, locale)} {copy.operational.maintenanceDrafts}
-                  </small>
-                  <code>{evalSummary.digestPath ?? evalSummary.analysisPath ?? evalSummary.indexPath ?? evalSummary.evalDir}</code>
-                </button>
-              )}
-              {memoryDigest && (
-                <button
-                  className="overview-operational-card"
-                  type="button"
-                  disabled={!memoryDigest.sourcePath}
-                  onClick={() => {
-                    if (!memoryDigest.sourcePath) return;
-                    void openArtifactDocument({
-                      id: `memory:${memoryDigest.sourcePath}`,
-                      label: copy.operational.memoryDigest,
-                      group: "memory",
-                      relativePath: memoryDigest.sourcePath,
-                      meta: memoryDigest.source,
-                      state: memoryDigest.failedOrBlocked > 0 ? "warn" : "present",
-                    });
-                  }}
-                  title={memoryDigest.sourcePath ?? copy.operational.localDigest}
-                >
-                  <span>{copy.operational.memoryDigest}</span>
-                  <strong>
-                    {formatCount(memoryDigest.totalRuns, locale)} {copy.runs.runs}
-                    {" · "}
-                    {formatCount(memoryDigest.failedOrBlocked, locale)} {copy.operational.failedOrBlocked}
-                  </strong>
-                  <small className="mono">
-                    {formatCount(memoryDigest.verificationGaps, locale)} {copy.operational.verificationGaps}
-                    {" · "}
-                    {memoryDigest.source === "local" ? copy.operational.localDigest : memoryDigest.sourcePath}
-                  </small>
-                  <code>{memoryDigest.sourcePath ?? copy.operational.localDigest}</code>
-                </button>
-              )}
+              {doctorReport &&
+                renderOperationalCard({
+                  document: null,
+                  tone: doctorOperationalTone(doctorReport),
+                  title: doctorReport.command,
+                  label: copy.operational.doctorReport,
+                  summary: `${statusLabel(doctorReport.status, copy)} · ${
+                    doctorReport.projectState ?? copy.common.unknown
+                  }`,
+                  detail: doctorReport.summary
+                    ? `${formatCount(doctorReport.summary.passed, locale)} ${
+                        copy.operational.passed
+                      } · ${formatCount(doctorReport.summary.warnings, locale)} ${
+                        copy.operational.warnings
+                      } · ${formatCount(doctorReport.summary.failures, locale)} ${
+                        copy.operational.failures
+                      }`
+                    : doctorReport.error ?? copy.operational.doctorUnavailable,
+                  footer: doctorReport.command,
+                })}
+              {latestPreviewReport &&
+                renderOperationalCard({
+                  document: updateReportArtifactDocument(latestPreviewReport, copy),
+                  tone: updateReportOperationalTone(latestPreviewReport),
+                  title: latestPreviewReport.relativePath,
+                  label: copy.operational.updatePreview,
+                  summary: `${latestPreviewReport.command} ${statusLabel(latestPreviewReport.status, copy)}`,
+                  detail: `${formatCount(latestPreviewReport.changedItems, locale)} ${
+                    copy.operational.changes
+                  } · ${formatCount(latestPreviewReport.blockers, locale)} ${copy.operational.blockers}`,
+                  footer: latestPreviewReport.relativePath,
+                })}
+              {latestApplyReport &&
+                renderOperationalCard({
+                  document: updateReportArtifactDocument(latestApplyReport, copy),
+                  tone: updateReportOperationalTone(latestApplyReport),
+                  title: latestApplyReport.relativePath,
+                  label: copy.operational.updateApply,
+                  summary: `${latestApplyReport.command} ${statusLabel(latestApplyReport.status, copy)}`,
+                  detail: `${formatCount(latestApplyReport.appliedFiles, locale)} ${
+                    copy.operational.appliedFiles
+                  } · ${formatCount(latestApplyReport.blockers, locale)} ${copy.operational.blockers}`,
+                  footer: latestApplyReport.relativePath,
+                })}
+              {evalSummary &&
+                renderOperationalCard({
+                  document: evalDigestDocument,
+                  tone: evalSummary.nonPassGrades > 0 ? "warn" : "ok",
+                  title: evalSummary.evalDir ?? copy.operational.evalDigest,
+                  label: evalDigestLabel,
+                  summary: `${formatCount(evalSummary.gradeCount, locale)} ${
+                    copy.operational.grades
+                  } · ${formatCount(evalSummary.nonPassGrades, locale)} ${copy.operational.nonPass}`,
+                  detail: `${formatCount(evalSummary.clusters, locale)} ${
+                    copy.operational.clusters
+                  } · ${formatCount(evalSummary.maintenanceDraftTasks, locale)} ${
+                    copy.operational.maintenanceDrafts
+                  }`,
+                  footer: evalDigestDocument?.relativePath ?? evalSummary.evalDir ?? copy.common.none,
+                })}
+              {evalSummary &&
+                evalAnalysisDocument &&
+                renderOperationalCard({
+                  document: evalAnalysisDocument,
+                  tone: evalSummary.maintenanceDraftTasks > 0 || evalSummary.clusters > 0 ? "warn" : "ok",
+                  title: evalAnalysisDocument.relativePath,
+                  label: copy.operational.evalAnalysis,
+                  summary: `${formatCount(evalSummary.clusters, locale)} ${copy.operational.clusters}`,
+                  detail: `${formatCount(evalSummary.maintenanceDraftTasks, locale)} ${
+                    copy.operational.maintenanceDrafts
+                  } · ${evalSummary.latestGeneratedAt ?? copy.common.none}`,
+                  footer: evalAnalysisDocument.relativePath,
+                })}
+              {memoryDigest &&
+                renderOperationalCard({
+                  document: memoryDigestDocument,
+                  tone:
+                    memoryDigest.failedOrBlocked > 0 || memoryDigest.verificationGaps > 0 ? "warn" : "ok",
+                  title: memoryDigest.sourcePath ?? copy.common.localOnly,
+                  label: copy.operational.memoryDigest,
+                  summary: `${formatCount(memoryDigest.totalRuns, locale)} ${
+                    copy.runs.runs
+                  } · ${formatCount(memoryDigest.failedOrBlocked, locale)} ${
+                    copy.operational.failedOrBlocked
+                  }`,
+                  detail: `${formatCount(memoryDigest.verificationGaps, locale)} ${
+                    copy.operational.verificationGaps
+                  } · ${
+                    memoryDigest.source === "local" ? copy.common.localOnly : memoryDigest.sourcePath
+                  }`,
+                  footer: memoryDigest.sourcePath ?? copy.common.localOnly,
+                })}
             </div>
           </div>
         )}

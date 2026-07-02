@@ -581,7 +581,7 @@ describe("execution action helpers", () => {
         "review",
       ]);
       expect(startResult.followUpCommands.find((command) => command.id === "resume")?.command).toContain(
-        `p2a_execute.mjs resume`,
+        `p2a.mjs execute resume`,
       );
 
       const graphAfterStart = await readJson<{ tasks: Array<{ id: string; status: string }> }>(

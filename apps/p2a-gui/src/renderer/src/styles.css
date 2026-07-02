@@ -1005,6 +1005,31 @@ h3 {
   background: var(--bg-3);
 }
 
+.overview-operational-card--ok {
+  border-left-color: var(--ok);
+}
+
+.overview-operational-card--warn {
+  border-left-color: var(--warn);
+}
+
+.overview-operational-card--error {
+  border-left-color: var(--err);
+}
+
+.overview-operational-card--info {
+  border-left-color: var(--info);
+}
+
+.overview-operational-card--static {
+  cursor: default;
+}
+
+.overview-operational-card--static:hover {
+  border-color: var(--border-1);
+  background: var(--bg-1);
+}
+
 .overview-operational-card:disabled {
   cursor: default;
 }
