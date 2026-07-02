@@ -413,6 +413,19 @@ export type DoctorCommandSummary = {
   error: string | null;
 };
 
+export type InfoCommandSummary = {
+  command: string;
+  status: "available" | "unavailable";
+  exitCode: number | null;
+  mode: string | null;
+  surface: string | null;
+  artifactCount: number;
+  enabledEnhancements: string[];
+  nextActionCount: number;
+  firstNextAction: string | null;
+  error: string | null;
+};
+
 export type OnboardingStage =
   | "install_p2a"
   | "import_plan"
@@ -485,6 +498,7 @@ export type ProjectSnapshot = {
   artifacts: ArtifactSummary[];
   onboarding: ProjectOnboarding;
   commands: CommandGuidance[];
+  info: InfoCommandSummary | null;
   doctor: DoctorCommandSummary | null;
   proposals: ProposalSummary[];
   updateReports: UpdateReportSummary[];

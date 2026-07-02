@@ -412,6 +412,47 @@ function structuredRunEvidence(value) {
   return Object.values(value).flatMap((item) => Array.isArray(item) ? item : [item]).filter(Boolean);
 }
 
+function arrayLength(value) {
+  return Array.isArray(value) ? value.filter(Boolean).length : 0;
+}
+
+function structuredRunSummary(run) {
+  const reproductionSteps = arrayLength(run.reproduction?.steps);
+  const reproductionCommands = arrayLength(run.reproduction?.commands);
+  const reproductionNotes = arrayLength(run.reproduction?.notes);
+  const localizationFindings = arrayLength(run.localization?.findings);
+  const localizedFiles = arrayLength(run.localization?.files);
+  const fixSummaries = arrayLength(run.fixSummary?.summaries);
+  const fixFiles = arrayLength(run.fixSummary?.files);
+  const guardChecks = arrayLength(run.guard?.checks);
+  const guardNotes = arrayLength(run.guard?.notes);
+  return {
+    hasReproduction: reproductionSteps + reproductionCommands + reproductionNotes > 0,
+    hasLocalization: localizationFindings + localizedFiles > 0,
+    hasFixSummary: fixSummaries + fixFiles > 0,
+    hasGuard: guardChecks + guardNotes > 0,
+    reproductionSteps,
+    reproductionCommands,
+    reproductionNotes,
+    localizationFindings,
+    localizedFiles,
+    fixSummaries,
+    fixFiles,
+    guardChecks,
+    guardNotes,
+  };
+}
+
+function missingStructuredRunFields(run) {
+  if (!['failed', 'blocked'].includes(run.status)) return [];
+  const summary = structuredRunSummary(run);
+  return [
+    summary.hasReproduction ? null : 'reproduction',
+    summary.hasLocalization ? null : 'localization',
+    summary.hasGuard ? null : 'guard',
+  ].filter(Boolean);
+}
+
 function criterionCoverage(criterion, run) {
   const criterionTokens = [...tokenSet(criterion)];
   const evidenceTokens = tokenSet(evidenceText(run));
@@ -444,6 +485,10 @@ function gradeReasons(run, coverage, verdict) {
   if (failedChecks.length) reasons.push(`${failedChecks.length} verification check(s) failed`);
   const uncovered = coverage.filter((item) => !item.covered);
   if (uncovered.length) reasons.push(`${uncovered.length} acceptance criterion/criteria lack direct local evidence`);
+  const missingStructuredFields = missingStructuredRunFields(run);
+  if (missingStructuredFields.length) {
+    reasons.push(`failed/blocked run is missing structured debug detail: ${missingStructuredFields.join(', ')}`);
+  }
   if (!reasons.length && verdict === 'pass') reasons.push('run finished, verification passed, and acceptance criteria have local evidence');
   return reasons;
 }
@@ -487,6 +532,7 @@ function buildGrade(source, runInfo) {
       fixSummary: runInfo.run.fixSummary ?? null,
       guard: runInfo.run.guard ?? null,
       failure: runInfo.run.failure ?? null,
+      structuredEvidence: structuredRunSummary(runInfo.run),
     },
     verdict,
     score: gradeScore(verdict, coverage),
@@ -510,6 +556,10 @@ function gradeNextActions(verdict, source, run) {
   ];
   if (run.status === 'failed' || run.status === 'blocked' || verdict === 'needs_evidence') {
     actions.push(`Mine proposal candidates: node .plan2agent/scripts/p2a.mjs proposals mine --runs ${displayPath(source.runsDir)} --run-id ${run.runId}`);
+  }
+  const missingStructuredFields = missingStructuredRunFields(run);
+  if (missingStructuredFields.length) {
+    actions.push(`Record structured debug detail before retrying: node .plan2agent/scripts/p2a.mjs runs record --runs ${displayPath(source.runsDir)} --run-id ${run.runId} --repro-step <step> --localization <finding> --guard <check>`);
   }
   return actions;
 }
@@ -573,11 +623,24 @@ function summarizeSource(source) {
   const failureClasses = {};
   let verificationFailures = 0;
   let verificationGaps = 0;
+  let failedOrBlockedRuns = 0;
+  let missingReproduction = 0;
+  let missingLocalization = 0;
+  let missingGuard = 0;
+  let guardedFailures = 0;
   for (const run of source.runs.runs) {
     runStatus[run.status] = (runStatus[run.status] ?? 0) + 1;
     if (run.failure?.class) failureClasses[run.failure.class] = (failureClasses[run.failure.class] ?? 0) + 1;
     if (run.verification.some((item) => item.status === 'failed')) verificationFailures += 1;
     if (run.status === 'finished' && run.verification.length === 0) verificationGaps += 1;
+    if (['failed', 'blocked'].includes(run.status)) {
+      failedOrBlockedRuns += 1;
+      const structured = structuredRunSummary(run);
+      if (!structured.hasReproduction) missingReproduction += 1;
+      if (!structured.hasLocalization) missingLocalization += 1;
+      if (!structured.hasGuard) missingGuard += 1;
+      if (structured.hasGuard) guardedFailures += 1;
+    }
   }
   return {
     sourceKind: source.sourceKind,
@@ -596,6 +659,13 @@ function summarizeSource(source) {
       verificationFailures,
       verificationGaps,
       skippedRuns: source.runs.skippedRuns.length,
+      structuredEvidence: {
+        failedOrBlockedRuns,
+        missingReproduction,
+        missingLocalization,
+        missingGuard,
+        guardedFailures,
+      },
     },
   };
 }
@@ -643,6 +713,13 @@ function compareSignals(baseline, candidate) {
   }
   if (candidate.runs.skippedRuns > 0) {
     signals.push({ severity: 'warn', metric: 'skipped_runs', baseline: baseline.runs.skippedRuns, candidate: candidate.runs.skippedRuns });
+  }
+  for (const metric of ['missingReproduction', 'missingLocalization', 'missingGuard']) {
+    const baselineValue = baseline.runs.structuredEvidence?.[metric] ?? 0;
+    const candidateValue = candidate.runs.structuredEvidence?.[metric] ?? 0;
+    if (candidateValue > baselineValue) {
+      signals.push({ severity: 'warn', metric: `structured_${metric}`, baseline: baselineValue, candidate: candidateValue });
+    }
   }
   if (!signals.length) signals.push({ severity: 'pass', metric: 'regression_checks', baseline: 'no worse', candidate: 'no worse' });
   return signals;

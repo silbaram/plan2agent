@@ -35,6 +35,7 @@ import type {
   ProjectFileCheck,
   ProjectOnboarding,
   ProjectSnapshot,
+  InfoCommandSummary,
   MemoryDigestSummary,
   MemoryHistorySummary,
   MemorySearchSummary,
@@ -316,6 +317,93 @@ function doctorCommandSummary(
       projectState: null,
       error: fallbackError ?? "p2a_doctor did not return JSON",
     };
+  }
+}
+
+function infoCommandSummary(
+  command: string,
+  exitCode: number | null,
+  stdout: string,
+  fallbackError: string | null,
+): InfoCommandSummary {
+  try {
+    const parsed = JSON.parse(stdout) as unknown;
+    const report = parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as JsonRecord)
+      : null;
+    const enhancements = recordValue(report?.enhancements);
+    const nextActions = stringArrayValue(report?.nextActions);
+    const schemaVersion = stringValue(report?.schema_version);
+    const status = schemaVersion === "p2a.info.v1" ? "available" : "unavailable";
+    return {
+      command,
+      status,
+      exitCode,
+      mode: stringValue(report?.mode),
+      surface: stringValue(report?.surface),
+      artifactCount: numberValue(report?.artifactCount) ?? 0,
+      enabledEnhancements: stringArrayValue(enhancements?.enabled),
+      nextActionCount: nextActions.length,
+      firstNextAction: nextActions[0] ?? null,
+      error: status === "available"
+        ? null
+        : fallbackError ?? `p2a info returned unexpected schema: ${schemaVersion ?? "none"}`,
+    };
+  } catch {
+    return {
+      command,
+      status: "unavailable",
+      exitCode,
+      mode: null,
+      surface: null,
+      artifactCount: 0,
+      enabledEnhancements: [],
+      nextActionCount: 0,
+      firstNextAction: null,
+      error: fallbackError ?? "p2a info did not return JSON",
+    };
+  }
+}
+
+async function runInfoCommand(rootPath: string): Promise<InfoCommandSummary> {
+  const scriptPath = toolkitScript("p2a.mjs");
+  const command = `node ${shellQuote(scriptPath)} info --target ${shellQuote(rootPath)} --json`;
+  if (!existsSync(scriptPath)) {
+    return {
+      command,
+      status: "unavailable",
+      exitCode: null,
+      mode: null,
+      surface: null,
+      artifactCount: 0,
+      enabledEnhancements: [],
+      nextActionCount: 0,
+      firstNextAction: null,
+      error: `p2a.mjs was not found at ${scriptPath}`,
+    };
+  }
+
+  try {
+    const result = await execFileAsync(process.execPath, [scriptPath, "info", "--target", rootPath, "--json"], {
+      timeout: 5000,
+      maxBuffer: 1024 * 1024,
+    });
+    return infoCommandSummary(command, 0, result.stdout, null);
+  } catch (error) {
+    const detail = error as {
+      code?: unknown;
+      stdout?: unknown;
+      stderr?: unknown;
+      message?: unknown;
+    };
+    const stdout = typeof detail.stdout === "string" ? detail.stdout : "";
+    const stderr = typeof detail.stderr === "string" && detail.stderr.trim().length
+      ? detail.stderr.trim()
+      : typeof detail.message === "string"
+        ? detail.message
+        : null;
+    const exitCode = typeof detail.code === "number" ? detail.code : null;
+    return infoCommandSummary(command, exitCode, stdout, stderr);
   }
 }
 
@@ -1874,6 +1962,7 @@ function buildDiagnostics(
   checks: ProjectFileCheck[],
   artifacts: ArtifactSummary[],
   proposals: ProposalSummary[],
+  info: InfoCommandSummary | null,
   doctor: DoctorCommandSummary | null,
 ): ProjectDiagnostic[] {
   const diagnostics = artifacts.flatMap((artifact) => artifact.diagnostics);
@@ -1922,9 +2011,23 @@ function buildDiagnostics(
       message: `${proposals.length} proposal feedback item(s) found in .plan2agent/proposals.`,
     });
   }
+  if (info) diagnostics.push(infoDiagnostic(info));
   if (doctor) diagnostics.push(doctorDiagnostic(doctor));
 
   return diagnostics;
+}
+
+function infoDiagnostic(info: InfoCommandSummary): ProjectDiagnostic {
+  if (info.status === "unavailable") {
+    return {
+      severity: "warn",
+      message: `p2a info unavailable: ${info.error ?? "no JSON result"}`,
+    };
+  }
+  return {
+    severity: "ok",
+    message: `p2a info: mode=${info.mode ?? "unknown"}, artifacts=${info.artifactCount}, nextActions=${info.nextActionCount}.`,
+  };
 }
 
 function doctorDiagnostic(doctor: DoctorCommandSummary): ProjectDiagnostic {
@@ -2298,8 +2401,9 @@ export async function loadProjectSnapshot(
   const hasP2aMarker = checks.some((check) =>
     (check.id === "p2a-dir" || check.id === "manifest" || check.id === "project-config") && check.exists,
   );
+  const info = hasP2aMarker ? await runInfoCommand(normalizedRootPath) : null;
   const doctor = hasP2aMarker ? await runDoctorCommand(normalizedRootPath) : null;
-  const diagnostics = buildDiagnostics(state, checks, artifacts, proposals, doctor);
+  const diagnostics = buildDiagnostics(state, checks, artifacts, proposals, info, doctor);
 
   return {
     rootPath: normalizedRootPath,
@@ -2315,6 +2419,7 @@ export async function loadProjectSnapshot(
     artifacts,
     onboarding: buildOnboarding(normalizedRootPath, state, checks, artifacts),
     commands: buildCommands(normalizedRootPath, state, artifacts),
+    info,
     doctor,
     proposals,
     updateReports,

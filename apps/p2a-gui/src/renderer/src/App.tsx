@@ -45,6 +45,7 @@ import type {
   ExecutionFinishStatus,
   FailureClass,
   GuiConfigSnapshot,
+  InfoCommandSummary,
   MemoryDigestSummary,
   MemoryHistorySummary,
   MemorySearchSummary,
@@ -443,6 +444,10 @@ function doctorOperationalTone(doctor: DoctorCommandSummary): OperationalTone {
   if (doctor.status === "warn") return "warn";
   if (doctor.status === "fail") return "error";
   return "info";
+}
+
+function infoOperationalTone(info: InfoCommandSummary): OperationalTone {
+  return info.status === "available" ? "ok" : "warn";
 }
 
 function updateReportOperationalTone(report: UpdateReportSummary): OperationalTone {
@@ -1553,6 +1558,7 @@ export default function App() {
     const taskMetric = overviewTaskMetric(artifact, projectSnapshot?.state ?? null, locale, copy);
     const runMetric = artifact ? formatCount(artifact.runCount, locale) : "0";
     const showTaskMetric = onboarding?.stage !== "cycle_close_ready";
+    const infoReport = projectSnapshot?.info ?? null;
     const doctorReport = projectSnapshot?.doctor ?? null;
     const latestPreviewReport = updateReports.find((report) => report.kind === "preview") ?? null;
     const latestApplyReport = updateReports.find((report) => report.kind === "apply") ?? null;
@@ -1571,6 +1577,7 @@ export default function App() {
     const memorySearch = artifact?.memorySearch ?? null;
     const memorySearchDocument = memorySearch ? memorySearchArtifactDocument(memorySearch, copy) : null;
     const operationalReportCount = [
+      infoReport,
       doctorReport,
       latestPreviewReport,
       latestApplyReport,
@@ -1826,6 +1833,25 @@ export default function App() {
               {!hasOperationalReport && (
                 <div className="empty-inline empty-inline--compact">{copy.operational.noReports}</div>
               )}
+              {infoReport &&
+                renderOperationalCard({
+                  document: null,
+                  tone: infoOperationalTone(infoReport),
+                  title: infoReport.command,
+                  label: copy.operational.infoReport,
+                  summary: `${infoReport.mode ?? copy.common.unknown} · ${formatCount(
+                    infoReport.artifactCount,
+                    locale,
+                  )} ${copy.common.artifactRoot}`,
+                  detail: infoReport.status === "available"
+                    ? `${formatCount(infoReport.enabledEnhancements.length, locale)} ${
+                        copy.operational.enhancements
+                      } · ${formatCount(infoReport.nextActionCount, locale)} ${
+                        copy.operational.nextActions
+                      }`
+                    : infoReport.error ?? copy.operational.infoUnavailable,
+                  footer: infoReport.firstNextAction ?? infoReport.command,
+                })}
               {doctorReport &&
                 renderOperationalCard({
                   document: null,

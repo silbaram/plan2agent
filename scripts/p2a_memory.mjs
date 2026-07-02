@@ -1897,6 +1897,7 @@ function buildDigest(context, runs, skippedRuns, proposals, skippedProposals) {
   const failedRuns = runs.filter((run) => ['failed', 'blocked'].includes(run.status));
   const verificationFailures = runs.filter((run) => run.verification.some((item) => item.status === 'failed'));
   const verificationGaps = runs.filter((run) => run.status === 'finished' && run.verification.length === 0);
+  const structuredEvidence = structuredEvidenceDigest(failedRuns);
   const failedByClass = {};
   for (const run of failedRuns) {
     const failureClass = run.failure?.class ?? 'unknown';
@@ -1942,6 +1943,7 @@ function buildDigest(context, runs, skippedRuns, proposals, skippedProposals) {
       failedByClass,
       verificationFailures: verificationFailures.length,
       verificationGaps: verificationGaps.length,
+      structuredEvidence,
       skippedRuns: skippedRuns.length,
     },
     proposals: {
@@ -1953,9 +1955,68 @@ function buildDigest(context, runs, skippedRuns, proposals, skippedProposals) {
       uncoveredCandidateRuns,
     },
     maintenanceCandidates,
-    nextActions: digestNextActions(context, uncoveredCandidateRuns, proposals),
+    nextActions: digestNextActions(context, uncoveredCandidateRuns, proposals, structuredEvidence),
     skippedRuns,
     skippedProposals,
+  };
+}
+
+function detailCount(value) {
+  return Array.isArray(value) ? value.filter(Boolean).length : 0;
+}
+
+function runStructuredDetailSummary(run) {
+  const reproduction = detailCount(run.reproduction?.steps)
+    + detailCount(run.reproduction?.commands)
+    + detailCount(run.reproduction?.notes);
+  const localization = detailCount(run.localization?.findings)
+    + detailCount(run.localization?.files);
+  const fixSummary = detailCount(run.fixSummary?.summaries)
+    + detailCount(run.fixSummary?.files);
+  const guard = detailCount(run.guard?.checks)
+    + detailCount(run.guard?.notes);
+  return {
+    hasReproduction: reproduction > 0,
+    hasLocalization: localization > 0,
+    hasFixSummary: fixSummary > 0,
+    hasGuard: guard > 0,
+  };
+}
+
+function structuredDetailMissingFields(run) {
+  const summary = runStructuredDetailSummary(run);
+  return [
+    summary.hasReproduction ? null : 'reproduction',
+    summary.hasLocalization ? null : 'localization',
+    summary.hasGuard ? null : 'guard',
+  ].filter(Boolean);
+}
+
+function structuredEvidenceDigest(failedRuns) {
+  const missingDetails = [];
+  let withReproduction = 0;
+  let withLocalization = 0;
+  let withFixSummary = 0;
+  let withGuard = 0;
+  for (const run of failedRuns) {
+    const summary = runStructuredDetailSummary(run);
+    if (summary.hasReproduction) withReproduction += 1;
+    if (summary.hasLocalization) withLocalization += 1;
+    if (summary.hasFixSummary) withFixSummary += 1;
+    if (summary.hasGuard) withGuard += 1;
+    const missing = structuredDetailMissingFields(run);
+    if (missing.length) missingDetails.push({ runId: run.runId, missing });
+  }
+  return {
+    failedOrBlockedRuns: failedRuns.length,
+    withReproduction,
+    withLocalization,
+    withFixSummary,
+    withGuard,
+    missingReproduction: failedRuns.length - withReproduction,
+    missingLocalization: failedRuns.length - withLocalization,
+    missingGuard: failedRuns.length - withGuard,
+    missingDetails: missingDetails.slice(0, 20),
   };
 }
 
@@ -1963,7 +2024,7 @@ function riskRank(risk) {
   return { high: 0, medium: 1, low: 2 }[risk] ?? 9;
 }
 
-function digestNextActions(context, uncoveredCandidateRuns, proposals) {
+function digestNextActions(context, uncoveredCandidateRuns, proposals, structuredEvidence) {
   const sourceFlag = context.sourceKind === 'artifacts'
     ? `--artifacts ${displayPath(context.sourcePath)}`
     : context.sourceKind === 'graph'
@@ -1975,6 +2036,10 @@ function digestNextActions(context, uncoveredCandidateRuns, proposals) {
   }
   if (uncoveredCandidateRuns.length) {
     actions.push(`Mine missing proposal candidates: node .plan2agent/scripts/p2a.mjs proposals mine ${sourceFlag}`);
+  }
+  if (structuredEvidence.missingDetails.length) {
+    const runId = structuredEvidence.missingDetails[0].runId;
+    actions.push(`Record structured debug detail for failed/blocked runs: node .plan2agent/scripts/p2a.mjs runs record ${sourceFlag} --run-id ${runId} --repro-step <step> --localization <finding> --guard <check>`);
   }
   if (proposals.some((proposal) => proposal.status === 'proposed')) {
     actions.push(`Review proposal queue: node .plan2agent/scripts/p2a.mjs proposals review --proposals ${displayPath(context.proposalsDir)} --dry-run`);
@@ -1989,6 +2054,7 @@ function printDigest(payload) {
   console.log(`- project: ${payload.context.projectId}`);
   console.log(`- iteration: ${payload.context.iterationId}`);
   console.log(`- runs: total=${payload.runs.total} failedOrBlocked=${payload.runs.failedOrBlocked} verificationFailures=${payload.runs.verificationFailures} verificationGaps=${payload.runs.verificationGaps} skipped=${payload.runs.skippedRuns}`);
+  console.log(`- structured: reproduction=${payload.runs.structuredEvidence.withReproduction}/${payload.runs.structuredEvidence.failedOrBlockedRuns} localization=${payload.runs.structuredEvidence.withLocalization}/${payload.runs.structuredEvidence.failedOrBlockedRuns} guard=${payload.runs.structuredEvidence.withGuard}/${payload.runs.structuredEvidence.failedOrBlockedRuns}`);
   const classes = Object.entries(payload.runs.failedByClass);
   if (classes.length) console.log(`- failure classes: ${classes.map(([name, count]) => `${name}=${count}`).join(' ')}`);
   console.log(`- proposals: total=${payload.proposals.total} proposed=${payload.proposals.byStatus.proposed ?? 0} candidateRuns=${payload.proposals.candidateRuns} uncoveredCandidateRuns=${payload.proposals.uncoveredCandidateRuns.length}`);

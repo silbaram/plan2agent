@@ -242,7 +242,7 @@ node .plan2agent/scripts/p2a_iteration.mjs maintenance add \
 
 ### GUI desktop app — `apps/p2a-gui`
 
-GUI는 Electron Forge + React + TypeScript 앱이다. 선택한 프로젝트의 P2A 설치 상태, task/run/artifact, update preview/apply report, eval index/analysis/digest, memory digest/history/search report, orchestration runtime/scheduler 상태, PTY session, start/finish lifecycle, 한글/영문 UI를 파일 기반 CLI 계약 위에서 표시한다. GUI의 프로젝트 읽기와 실행 action은 Electron main process의 typed IPC를 거치며, renderer가 임의 파일 경로나 shell API를 직접 호출하지 않는다. operational report action은 `update --dry-run|--apply`, `eval generate/analyze/digest`, `memory digest/history`만 typed IPC로 실행하고, 생성된 JSON report를 artifact browser에서 다시 열 수 있게 한다. orchestration GUI action은 `p2a_orchestrate.mjs mark-role`만 호출해 사람이 관찰한 role 상태를 기록하며, Codex/Claude/Gemini CLI나 browser/background loop를 대신 실행하지 않는다.
+GUI는 Electron Forge + React + TypeScript 앱이다. 선택한 프로젝트의 P2A 설치 상태, `p2a info`/`p2a_doctor` 요약, task/run/artifact, update preview/apply report, eval index/analysis/digest, memory digest/history/search report, orchestration runtime/scheduler 상태, PTY session, start/finish lifecycle, 한글/영문 UI를 파일 기반 CLI 계약 위에서 표시한다. GUI의 프로젝트 읽기와 실행 action은 Electron main process의 typed IPC를 거치며, renderer가 임의 파일 경로나 shell API를 직접 호출하지 않는다. operational report action은 `update --dry-run|--apply`, `eval generate/analyze/digest`, `memory digest/history`만 typed IPC로 실행하고, 생성된 JSON report를 artifact browser에서 다시 열 수 있게 한다. orchestration GUI action은 `p2a_orchestrate.mjs mark-role`만 호출해 사람이 관찰한 role 상태를 기록하며, Codex/Claude/Gemini CLI나 browser/background loop를 대신 실행하지 않는다.
 
 운영 원칙: API 요금제 기반 완전 자동 개발은 비용상 보류한다. 구독 로그인 기반 Codex/Claude/Gemini 사용은 공식 CLI/앱을 사람이 foreground에서 열고 승인·감독하는 방식으로 제한한다. p2a는 role, prompt, order, run state를 조율하고 기록할 뿐, browser/background loop, 세션 쿠키·토큰 재사용, 여러 계정 로테이션, rate limit 우회, 무인 headless 실행을 구현하지 않는다.
 
@@ -527,7 +527,7 @@ node .plan2agent/scripts/p2a_runs.mjs finish --run-id run-... --collect-git
 
 ## 9. 개선 proposal 큐 — `p2a_proposals.mjs`
 
-`p2a_proposals.mjs`는 Hermes식 자가 개선 루프의 파일 기반 MVP다. run log, orchestration sidecar, monitor verdict를 읽어 skill/agent/CLI 개선 후보를 `p2a.skill_proposal.v1` JSON으로 만들고, 사람이 검토할 review/curation artifact, non-applying patch draft, approval artifact를 생성한다. proposal 적용은 자동으로 하지 않고 승인된 maintenance task를 별도 실행한다.
+`p2a_proposals.mjs`는 Hermes식 자가 개선 루프의 파일 기반 MVP다. run log, orchestration sidecar, monitor verdict, structured debug detail을 읽어 skill/agent/CLI 개선 후보를 `p2a.skill_proposal.v1` JSON으로 만들고, 사람이 검토할 review/curation artifact, non-applying patch draft, approval artifact를 생성한다. failed/blocked run에 `reproduction`, `localization`, `guard`가 빠져 있으면 structured debug detail 보강 proposal도 생성한다. proposal 적용은 자동으로 하지 않고 승인된 maintenance task를 별도 실행한다.
 
 기본 저장 위치:
 
@@ -619,9 +619,9 @@ node .plan2agent/scripts/p2a_eval.mjs digest \
   --output .plan2agent/artifacts/<project_id>/eval/eval-digest.json
 ```
 
-`grade`는 한 run을 해당 task의 acceptance criteria와 verification evidence에 대조한다. run이 failed/blocked거나 verification 실패가 있으면 `fail`, verification이 없거나 run이 finished가 아니면 `needs_evidence`, 일부 acceptance evidence만 보이면 `partial`, finished run + verification + acceptance evidence가 모두 맞으면 `pass`를 출력한다. 이 평가는 보수적인 로컬 증거 점검이므로 최종 승인 판단은 사람이 run evidence와 task acceptance를 함께 확인한다.
+`grade`는 한 run을 해당 task의 acceptance criteria와 verification evidence에 대조한다. run이 failed/blocked거나 verification 실패가 있으면 `fail`, verification이 없거나 run이 finished가 아니면 `needs_evidence`, 일부 acceptance evidence만 보이면 `partial`, finished run + verification + acceptance evidence가 모두 맞으면 `pass`를 출력한다. `reproduction`, `localization`, `fixSummary`, `guard`는 acceptance evidence 텍스트와 grade JSON의 `run.structuredEvidence`에 포함되며, failed/blocked run에서 reproduction/localization/guard가 빠지면 후속 기록 명령을 제안한다. 이 평가는 보수적인 로컬 증거 점검이므로 최종 승인 판단은 사람이 run evidence와 task acceptance를 함께 확인한다.
 
-`compare`는 두 artifact root 또는 runs directory의 run status, verification failure/gap, skipped run, task done count를 비교해 `pass|warn|fail` regression verdict를 낸다. candidate에 failed/blocked run이나 verification failure가 늘면 `fail`, verification gap이나 skipped run이 늘면 `warn`이다.
+`compare`는 두 artifact root 또는 runs directory의 run status, verification failure/gap, skipped run, task done count를 비교해 `pass|warn|fail` regression verdict를 낸다. candidate에 failed/blocked run이나 verification failure가 늘면 `fail`, verification gap이나 skipped run이 늘면 `warn`이다. candidate의 failed/blocked run에서 structured debug detail 누락이 baseline보다 늘면 `structured_missingReproduction`, `structured_missingLocalization`, `structured_missingGuard` warning signal을 남긴다.
 
 `analyze`는 failed/blocked run, failed verification, verification gap을 failure cluster로 묶고 proposal coverage를 계산한다. artifact root를 입력하면 각 cluster에 `p2a_iteration maintenance add` 후보 명령을 붙이고, scope/dependency 계열 cluster는 `p2a_iteration open ... draft`로 Gate A/B delta draft를 여는 명령도 함께 제안한다. 기본 실행은 파일을 자동 수정하지 않으며, `--maintenance-draft <path>`를 주면 maintenance task draft JSON을 저장한다. `--apply-maintenance --yes`는 draft된 maintenance task를 maintenance graph에 적용하고 `eval/maintenance-apply-report.json`을 남긴다. 먼저 확인하려면 `--apply-maintenance --dry-run`을 사용한다.
 
@@ -676,7 +676,7 @@ node .plan2agent/scripts/p2a_memory.mjs digest \
 
 `push`는 같은 계획을 Memory write DTO로 변환한다. `--dry-run`은 서버에 접속하지 않고 write 순서와 수량만 보여준다. 실제 서버 write는 `--yes`가 있어야 하며, project → iteration → document snapshots/chunks → task graph → tasks → runs 순서로 upsert한다. 인증이 필요한 Memory 서버는 `--token` 또는 `P2A_MEMORY_TOKEN` 값을 `X-P2A-Local-Token` 헤더로 받는다.
 
-`digest`는 로컬 run index와 proposal queue를 읽어 failed/blocked run, failure class, verification failure/gap, proposal coverage를 요약한다. proposal 후보가 빠진 run이 있으면 `p2a_proposals.mjs mine` 명령을 next action으로 제안하고, 이미 proposed 상태인 항목은 review/curate 흐름으로 연결한다.
+`digest`는 로컬 run index와 proposal queue를 읽어 failed/blocked run, failure class, verification failure/gap, proposal coverage, structured debug detail coverage를 요약한다. proposal 후보가 빠진 run이 있으면 `p2a_proposals.mjs mine` 명령을 next action으로 제안하고, failed/blocked run에 reproduction/localization/guard가 빠져 있으면 `p2a_runs record`로 보강하는 명령을 제안한다. 이미 proposed 상태인 항목은 review/curate 흐름으로 연결한다.
 
 ## 12. 인계 — `p2a_handoff.mjs`
 

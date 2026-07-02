@@ -1388,8 +1388,39 @@ function validateEvalFixtureCases() {
 
     result = runEval(['compare', '--baseline', baselineRunsDir, '--candidate', candidateRunsDir]);
     checks += 1;
-    if (result.status !== 0 || !result.stdout.includes('Plan2Agent eval compare') || !result.stdout.includes('verdict: fail') || !result.stdout.includes('failed_or_blocked_runs')) {
+    if (
+      result.status !== 0
+      || !result.stdout.includes('Plan2Agent eval compare')
+      || !result.stdout.includes('verdict: fail')
+      || !result.stdout.includes('failed_or_blocked_runs')
+      || !result.stdout.includes('structured_missingReproduction')
+    ) {
       console.error('eval compare fixture failed');
+      writeResultOutput(result);
+      return { status: failureStatus(result), checks };
+    }
+
+    result = runEval(['grade', '--graph', graphPath, '--run', path.join(candidateRunsDir, 'run-eval-failed.json')]);
+    checks += 1;
+    if (
+      result.status !== 0
+      || !result.stdout.includes('grade: fail')
+      || !result.stdout.includes('missing structured debug detail: reproduction, localization, guard')
+      || !result.stdout.includes('Record structured debug detail before retrying')
+    ) {
+      console.error('eval failed-run structured detail grade fixture failed');
+      writeResultOutput(result);
+      return { status: failureStatus(result), checks };
+    }
+
+    result = runProposals(['mine', '--runs', candidateRunsDir, '--dry-run']);
+    checks += 1;
+    if (
+      result.status !== 0
+      || !result.stdout.includes('proposal-run-eval-failed-structured-debug-detail')
+      || !result.stdout.includes('structured-debug-detail')
+    ) {
+      console.error('proposal structured detail mining fixture failed');
       writeResultOutput(result);
       return { status: failureStatus(result), checks };
     }
@@ -1446,6 +1477,7 @@ function validateEvalFixtureCases() {
     const failedGradePath = path.join(evalOutputDir, 'grades', 'run-eval-failed.json');
     const analysisPath = path.join(evalOutputDir, 'analysis.json');
     const evalIndex = existsSync(evalIndexPath) ? JSON.parse(readFileSync(evalIndexPath, 'utf8')) : null;
+    const failedGrade = existsSync(failedGradePath) ? JSON.parse(readFileSync(failedGradePath, 'utf8')) : null;
 	    if (
 	      result.status !== 0
 	      || !result.stdout.includes('Plan2Agent eval generate')
@@ -1456,6 +1488,7 @@ function validateEvalFixtureCases() {
       || evalIndex?.summary?.grades !== 2
       || evalIndex?.summary?.nonPassGrades !== 1
       || evalIndex?.summary?.clusters !== 1
+      || failedGrade?.run?.structuredEvidence?.hasGuard !== true
     ) {
       console.error('eval generate fixture failed');
 	      writeResultOutput(result);
@@ -1819,6 +1852,24 @@ function validateMemoryFixtureCases() {
     console.error('memory digest fixture failed');
     writeResultOutput(result);
     return { status: failureStatus(result), checks };
+  }
+
+  const digestRunsDir = mkdtempSync(path.join(tmpdir(), 'p2a-memory-digest-runs-'));
+  try {
+    writeEvalRuns(digestRunsDir, [evalRunFixture('run-memory-digest-failed', 'failed')]);
+    result = runMemory(['digest', '--runs', digestRunsDir]);
+    checks += 1;
+    if (
+      result.status !== 0
+      || !result.stdout.includes('structured: reproduction=0/1 localization=0/1 guard=0/1')
+      || !result.stdout.includes('Record structured debug detail for failed/blocked runs')
+    ) {
+      console.error('memory digest structured detail fixture failed');
+      writeResultOutput(result);
+      return { status: failureStatus(result), checks };
+    }
+  } finally {
+    rmSync(digestRunsDir, { recursive: true, force: true });
   }
 
   result = runMemory(['push', '--graph', graphPath]);
@@ -3676,9 +3727,9 @@ function validateIterationCurrentFixtureCases() {
       const executeMonitorReview = JSON.parse(readFileSync(executeMonitorReviewPath, 'utf8'));
       if (
         executeMonitorReview.schema_version !== 'p2a.proposal_review.v1'
-        || executeMonitorReview.summary.totalProposals !== 1
-        || executeMonitorReview.groups[0]?.classification !== 'implementation_incomplete'
-        || executeMonitorReview.groups[0]?.recommendedDisposition !== 'defer'
+        || executeMonitorReview.summary.totalProposals !== 2
+        || !executeMonitorReview.groups.some((group) => group.classification === 'implementation_incomplete' && group.recommendedDisposition === 'defer')
+        || !executeMonitorReview.groups.some((group) => group.classification === 'structured_debug_detail' && group.proposalIds?.includes('proposal-run-execute-monitor-fixture-structured-debug-detail'))
       ) {
         console.error(`p2a_proposals review wrote unexpected review: ${caseData.id}`);
         console.error(JSON.stringify({ executeMonitorReview }, null, 2));
@@ -3710,12 +3761,12 @@ function validateIterationCurrentFixtureCases() {
         return { status: failureStatus(result), checks };
       }
       const executeMonitorCuration = JSON.parse(readFileSync(executeMonitorCurationPath, 'utf8'));
+      const executeMonitorImplementationCandidate = executeMonitorCuration.candidates.find((candidate) => candidate.classification === 'implementation_incomplete');
       if (
         executeMonitorCuration.schema_version !== 'p2a.proposal_curation.v1'
-        || executeMonitorCuration.summary.totalCandidates !== 1
-        || executeMonitorCuration.candidates[0]?.classification !== 'implementation_incomplete'
-        || executeMonitorCuration.candidates[0]?.readiness !== 'watch'
-        || executeMonitorCuration.candidates[0]?.separatePatchRequired !== true
+        || executeMonitorCuration.summary.totalCandidates !== 2
+        || executeMonitorImplementationCandidate?.readiness !== 'watch'
+        || executeMonitorImplementationCandidate?.separatePatchRequired !== true
       ) {
         console.error(`p2a_proposals curate wrote unexpected curation: ${caseData.id}`);
         console.error(JSON.stringify({ executeMonitorCuration }, null, 2));
@@ -3736,7 +3787,7 @@ function validateIterationCurrentFixtureCases() {
         '--curation',
         executeMonitorCurationPath,
         '--candidate-id',
-        executeMonitorCuration.candidates[0].candidateId,
+        executeMonitorImplementationCandidate.candidateId,
         '--proposals',
         executeMonitorProposalsDir,
         '--output',
@@ -3751,7 +3802,7 @@ function validateIterationCurrentFixtureCases() {
       const executeMonitorPatchDraft = JSON.parse(readFileSync(executeMonitorPatchDraftPath, 'utf8'));
       if (
         executeMonitorPatchDraft.schema_version !== 'p2a.proposal_patch_draft.v1'
-        || executeMonitorPatchDraft.candidateId !== executeMonitorCuration.candidates[0].candidateId
+        || executeMonitorPatchDraft.candidateId !== executeMonitorImplementationCandidate.candidateId
         || executeMonitorPatchDraft.autoApplyAllowed !== false
         || executeMonitorPatchDraft.approvalRequired !== true
         || executeMonitorPatchDraft.targetFiles.length === 0

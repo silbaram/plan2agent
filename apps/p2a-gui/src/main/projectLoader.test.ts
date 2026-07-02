@@ -172,7 +172,13 @@ describe("loadProjectSnapshot", () => {
         status: "fail",
         projectState: "installed_empty",
       });
+      expect(snapshot.info).toMatchObject({
+        status: "available",
+        mode: "installed",
+        artifactCount: 0,
+      });
       expect(snapshot.diagnostics.some((diagnostic) => diagnostic.message.includes("p2a_doctor fail"))).toBe(true);
+      expect(snapshot.diagnostics.some((diagnostic) => diagnostic.message.includes("p2a info"))).toBe(true);
     } finally {
       await rm(tempRoot, { recursive: true, force: true });
     }
