@@ -1675,6 +1675,22 @@ function validateMemoryFixtureCases() {
     return { status: failureStatus(result), checks };
   }
 
+  result = runMemory(['status', '--graph', graphPath, '--json']);
+  checks += 1;
+  const memoryStatusJson = result.status === 0 ? JSON.parse(result.stdout) : null;
+  const memoryProjectItem = memoryStatusJson?.sync?.items?.find((item) => item.artifactType === 'PROJECT');
+  const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+  if (
+    result.status !== 0
+    || memoryStatusJson?.schema_version !== 'p2a.memory_status.v1'
+    || !uuidPattern.test(memoryProjectItem?.artifactId ?? '')
+    || memoryProjectItem?.artifactId?.startsWith('p2a-project-')
+  ) {
+    console.error('memory status canonical UUID fixture failed');
+    writeResultOutput(result);
+    return { status: failureStatus(result), checks };
+  }
+
   result = runMemory(['push', '--graph', graphPath, '--dry-run']);
   checks += 1;
   if (result.status !== 0 || !result.stdout.includes('Plan2Agent memory push dry run') || !result.stdout.includes('dry-run: no server writes') || !result.stdout.includes('DOCUMENT_CHUNK:')) {
