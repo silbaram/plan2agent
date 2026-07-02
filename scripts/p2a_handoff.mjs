@@ -48,11 +48,13 @@ function usage() {
   return [
     'Usage:',
     '  node scripts/p2a_handoff.mjs scaffold --target <project-dir> [--tools <list>] [--overwrite] [--dry-run]',
+    '  node scripts/p2a_handoff.mjs upgrade --target <project-dir> --dry-run [--tools <list>]',
     '  node scripts/p2a_handoff.mjs --project-id <id> --artifacts <path> --target <path> [options]',
     '',
     'Options:',
     'Scaffold:',
     '  scaffold             Install the full co-located P2A planning/development harness into a project.',
+    '  upgrade              Preview scaffolded harness file updates. Dry-run only for now.',
     '  --target <path>      Project directory to create or update.',
     '  --tools <list>       Copy portable P2A AI tool assets for codex,claude,gemini. Use comma list, all, or none. Default: all.',
     '',
@@ -106,14 +108,14 @@ function isGitUrl(value) {
 }
 
 function parseArgs(argv) {
-  const command = argv[0] === 'scaffold' ? argv.shift() : 'handoff';
+  const command = argv[0] === 'scaffold' || argv[0] === 'upgrade' ? argv.shift() : 'handoff';
   const args = {
     command,
     mode: 'copy',
     iterationId: DEFAULT_ITERATION_ID,
     iterationIdProvided: false,
     includeIntake: false,
-    tools: command === 'scaffold' ? [...TOOL_TARGET_ORDER] : [],
+    tools: command === 'scaffold' ? [...TOOL_TARGET_ORDER] : command === 'upgrade' ? null : [],
     includeTeamBigFive: false,
     teamBigFiveSource: null,
     teamBigFiveTargets: null,
@@ -125,8 +127,8 @@ function parseArgs(argv) {
     const arg = argv[index];
     if (arg === '--help' || arg === '-h') {
       args.help = true;
-    } else if (command === 'scaffold' && (arg === '--project-id' || arg === '--artifacts' || arg === '--mode' || arg === '--iteration-id' || arg === '--include-intake' || arg === '--include-team-bigfive' || arg === '--team-bigfive-source' || arg === '--team-bigfive-targets')) {
-      throw new Error(`${arg} is not valid for scaffold`);
+    } else if ((command === 'scaffold' || command === 'upgrade') && (arg === '--project-id' || arg === '--artifacts' || arg === '--mode' || arg === '--iteration-id' || arg === '--include-intake' || arg === '--include-team-bigfive' || arg === '--team-bigfive-source' || arg === '--team-bigfive-targets')) {
+      throw new Error(`${arg} is not valid for ${command}`);
     } else if (arg === '--project-id') {
       args.projectId = argv[++index];
       if (!args.projectId) throw new Error('--project-id requires a value');
@@ -168,8 +170,9 @@ function parseArgs(argv) {
     }
   }
   if (args.help) return args;
-  if (command === 'scaffold') {
+  if (command === 'scaffold' || command === 'upgrade') {
     if (!args.target) throw new Error('--target is required');
+    if (command === 'upgrade' && !args.dryRun) throw new Error('upgrade currently supports --dry-run only');
     return args;
   }
   for (const required of ['projectId', 'artifacts', 'target']) {
@@ -1096,6 +1099,142 @@ function printScaffoldPlan(plan, args, targetRoot) {
   if (args.dryRun) console.log('dry-run: no files written');
 }
 
+function readUpgradeJsonFile(filePath, label) {
+  if (!existsSync(filePath)) throw new Error(`upgrade requires ${label}: ${normalizePath(filePath)}`);
+  try {
+    const parsed = JSON.parse(readFileSync(filePath, 'utf8'));
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      throw new Error('JSON root must be an object');
+    }
+    return parsed;
+  } catch (error) {
+    throw new Error(`upgrade could not read ${label}: ${error.message}`);
+  }
+}
+
+function upgradeToolTargets(args, manifest) {
+  if (Array.isArray(args.tools)) return args.tools;
+  const manifestTargets = Array.isArray(manifest.aiToolTargets)
+    ? manifest.aiToolTargets.filter((target) => typeof target === 'string' && VALID_TOOL_TARGETS.has(target))
+    : [];
+  return TOOL_TARGET_ORDER.filter((target) => manifestTargets.includes(target));
+}
+
+function plannedItemContent(item) {
+  if (item.type === 'write-json') return item.content ?? `${JSON.stringify(item.data, null, 2)}\n`;
+  if (item.type === 'write-text') return item.content;
+  if (item.type === 'rewrite-json') return item.transform(item.source);
+  return readFileSync(item.source);
+}
+
+function plannedAction(item) {
+  if (item.type === 'write-json' || item.type === 'write-text') return 'generate';
+  if (item.type === 'rewrite-json') return 'copy+rewrite';
+  return 'copy';
+}
+
+function compareUpgradePlanItem(item) {
+  const targetRelative = normalizePath(item.targetRelative);
+  const base = {
+    action: plannedAction(item),
+    target: targetRelative,
+    source: item.source ? normalizePath(path.relative(process.cwd(), item.source)) : '(generated)',
+  };
+  if (targetRelative === '.plan2agent/project.config.json' && existsSync(item.target)) {
+    return {
+      ...base,
+      status: 'manual_review',
+      detail: 'project config exists; preserve local commands/provider evidence and review migration manually',
+    };
+  }
+  if (!existsSync(item.target)) {
+    return { ...base, status: 'missing', detail: 'target file is missing' };
+  }
+  if (!lstatSync(item.target).isFile()) {
+    return { ...base, status: 'conflict', detail: 'target path exists but is not a file' };
+  }
+  try {
+    const planned = plannedItemContent(item);
+    const plannedBuffer = Buffer.isBuffer(planned) ? planned : Buffer.from(String(planned));
+    const currentBuffer = readFileSync(item.target);
+    return plannedBuffer.equals(currentBuffer)
+      ? { ...base, status: 'unchanged', detail: 'target matches toolkit file' }
+      : { ...base, status: 'would_update', detail: 'target differs from toolkit file' };
+  } catch (error) {
+    return { ...base, status: 'error', detail: error.message };
+  }
+}
+
+function summarizeUpgradeItems(items) {
+  const summary = {
+    total: items.length,
+    unchanged: 0,
+    missing: 0,
+    wouldUpdate: 0,
+    manualReview: 0,
+    conflicts: 0,
+    errors: 0,
+  };
+  for (const item of items) {
+    if (item.status === 'unchanged') summary.unchanged += 1;
+    else if (item.status === 'missing') summary.missing += 1;
+    else if (item.status === 'would_update') summary.wouldUpdate += 1;
+    else if (item.status === 'manual_review') summary.manualReview += 1;
+    else if (item.status === 'conflict') summary.conflicts += 1;
+    else if (item.status === 'error') summary.errors += 1;
+  }
+  return summary;
+}
+
+function buildUpgradeDryRunReport(args, targetRoot) {
+  const manifest = readUpgradeJsonFile(path.join(targetRoot, '.plan2agent', 'manifest.json'), '.plan2agent/manifest.json');
+  readUpgradeJsonFile(path.join(targetRoot, '.plan2agent', 'project.config.json'), '.plan2agent/project.config.json');
+  const tools = upgradeToolTargets(args, manifest);
+  const plan = buildScaffoldPlan({ ...args, tools }, targetRoot);
+  const items = plan.map(compareUpgradePlanItem);
+  const summary = summarizeUpgradeItems(items);
+  const failures = items.filter((item) => item.status === 'conflict' || item.status === 'error');
+  const changes = summary.missing + summary.wouldUpdate + summary.manualReview;
+  const status = failures.length ? 'fail' : changes ? 'changes' : 'pass';
+  return {
+    schema_version: 'p2a.upgrade_dry_run.v1',
+    status,
+    targetProject: targetRoot,
+    aiToolTargets: tools,
+    summary,
+    items,
+    failures,
+    nextActions: failures.length
+      ? ['Resolve conflicts/errors above before running upgrade again.']
+      : changes
+        ? ['Review listed changes. Actual upgrade writes are intentionally not implemented yet.']
+        : [],
+  };
+}
+
+function printUpgradeDryRunReport(report) {
+  console.log('Plan2Agent upgrade dry run');
+  console.log(`status: ${report.status}`);
+  console.log(`targetProject: ${report.targetProject}`);
+  console.log(`aiTools: ${report.aiToolTargets.length ? report.aiToolTargets.join(',') : 'none'}`);
+  console.log(`summary: ${report.summary.unchanged} unchanged, ${report.summary.missing} missing, ${report.summary.wouldUpdate} update(s), ${report.summary.manualReview} manual review, ${report.summary.conflicts} conflict(s), ${report.summary.errors} error(s)`);
+  const notable = report.items.filter((item) => item.status !== 'unchanged');
+  if (notable.length) {
+    console.log('changes:');
+    for (const item of notable) {
+      console.log(`- ${item.status}: ${item.action} ${item.source} -> ${item.target}`);
+      console.log(`  ${item.detail}`);
+    }
+  } else {
+    console.log('changes: none');
+  }
+  if (report.nextActions.length) {
+    console.log('next actions:');
+    for (const action of report.nextActions) console.log(`- ${action}`);
+  }
+  console.log('dry-run: no files written');
+}
+
 function buildPlan(paths, args, artifactsRoot, targetRoot, sourceInfo, options = {}) {
   const { record = null, createdAt = new Date().toISOString() } = options;
   const plan = [];
@@ -1667,6 +1806,15 @@ export function main(argv = process.argv.slice(2)) {
     }
 
     const targetRoot = path.resolve(args.target);
+    if (args.command === 'upgrade') {
+      if (!existsSync(targetRoot) || !lstatSync(targetRoot).isDirectory()) {
+        throw new Error(`--target must be an existing scaffold project directory: ${targetRoot}`);
+      }
+      const report = buildUpgradeDryRunReport(args, targetRoot);
+      printUpgradeDryRunReport(report);
+      return report.status === 'fail' ? 1 : 0;
+    }
+
     if (args.command === 'scaffold') {
       if (existsSync(targetRoot) && !lstatSync(targetRoot).isDirectory()) {
         throw new Error(`--target must be a directory path, but a non-directory exists: ${targetRoot}`);

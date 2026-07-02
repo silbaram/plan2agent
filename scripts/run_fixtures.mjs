@@ -568,6 +568,38 @@ function validateScaffoldFixtureCase() {
       return { status: failureStatus(result), checks };
     }
 
+    result = runHandoff(['upgrade', '--target', targetRoot, '--dry-run']);
+    checks += 1;
+    if (
+      result.status !== 0
+      || !result.stdout.includes('Plan2Agent upgrade dry run')
+      || !result.stdout.includes('status: changes')
+      || !result.stdout.includes('manual_review')
+      || !result.stdout.includes('dry-run: no files written')
+    ) {
+      console.error('upgrade dry-run fixture failed');
+      writeResultOutput(result);
+      return { status: failureStatus(result), checks };
+    }
+
+    result = runHandoff(['upgrade', '--target', targetRoot]);
+    checks += 1;
+    if (result.status === 0 || !`${result.stdout}${result.stderr}`.includes('upgrade currently supports --dry-run only')) {
+      console.error('upgrade without dry-run did not fail explicitly');
+      writeResultOutput(result);
+      return { status: 1, checks };
+    }
+
+    const nonHarnessRoot = path.join(tempRoot, 'non-harness-target');
+    mkdirSync(nonHarnessRoot, { recursive: true });
+    result = runHandoff(['upgrade', '--target', nonHarnessRoot, '--dry-run']);
+    checks += 1;
+    if (result.status === 0 || !`${result.stdout}${result.stderr}`.includes('upgrade requires .plan2agent/manifest.json')) {
+      console.error('upgrade dry-run did not fail for a non-P2A target');
+      writeResultOutput(result);
+      return { status: 1, checks };
+    }
+
     result = runHandoff(['scaffold', '--target', targetRoot, '--tools', 'none']);
     checks += 1;
     if (result.status === 0 || !`${result.stdout}${result.stderr}`.includes('--overwrite')) {
