@@ -14,14 +14,14 @@ import {
   assertNoUninitializedScaffoldArtifactRoots,
   assertNotUninitializedScaffoldGraph,
   configuredTaskGraphPath,
-  nodeScriptCommand,
   resolveP2aPaths,
   singleArtifactProjectRoot,
 } from './p2a_paths.mjs';
+import { commandLine as sharedCommandLine, printRunCommandFooter } from './p2a_run_commands.mjs';
 
 const P2A_PATHS = resolveP2aPaths(import.meta.url);
 const ROOT = P2A_PATHS.projectRoot;
-const COMMANDS = new Set(['plan', 'start', 'status', 'finish']);
+const COMMANDS = new Set(['plan', 'start', 'resume', 'status', 'finish']);
 const ISOLATION_MODES = new Set(['none', 'branch', 'worktree']);
 const FINISH_STATUSES = new Set(['finished', 'failed', 'blocked']);
 const FAILURE_CLASSES = new Set(['verification_failed', 'test_flake', 'scope_violation', 'missing_dependency', 'environment_failure', 'implementation_incomplete', 'other']);
@@ -35,12 +35,14 @@ function usage() {
     'Usage:',
     '  node .plan2agent/scripts/p2a_execute.mjs plan (--artifacts <dir>|--graph <path>) [--task <task-id>] [options]',
     '  node .plan2agent/scripts/p2a_execute.mjs start (--artifacts <dir>|--graph <path>) [--task <task-id>] [options]',
+    '  node .plan2agent/scripts/p2a_execute.mjs resume (--artifacts <dir>|--graph <path>) --run-id <run-id>',
     '  node .plan2agent/scripts/p2a_execute.mjs status (--artifacts <dir>|--graph <path>) [--task <task-id>] [--run-id <run-id>]',
     '  node .plan2agent/scripts/p2a_execute.mjs finish (--artifacts <dir>|--graph <path>) --run-id <run-id> [options]',
     '',
     'Commands:',
     '  plan                 Resolve one ready task and print the supervised execution plan. No files are changed.',
     '  start                Create a run, mark the task in_progress, and print the manual launcher prompt.',
+    '  resume               Reprint the selected run context and manual launcher prompt without changing files.',
     '  status               Show task status and the latest or requested run log summary.',
     '  finish               Optionally verify, finish the run, then mark the task done or blocked.',
     '',
@@ -195,12 +197,12 @@ function parseArgs(argv) {
   if (args.spec && args.artifacts) throw new Error('--spec is only supported with --graph; --artifacts uses the active iteration spec');
   if (args.maintenance && !args.artifacts) throw new Error('--maintenance is only supported with --artifacts');
   if (args.graph) assertNotUninitializedScaffoldGraph(args.graph);
-  if (args.command === 'finish' && !args.runId) throw new Error('--run-id is required for finish');
+  if (['finish', 'resume'].includes(args.command) && !args.runId) throw new Error(`--run-id is required for ${args.command}`);
   if (args.command === 'status' && !args.taskId && !args.runId && !args.approval) throw new Error('--task, --approval, or --run-id is required for status');
   if (['plan', 'start'].includes(args.command) && !IMPLEMENTER_AGENT_TOOLS.has(args.agentTool)) {
     throw new Error('--agent-tool for implementation must be one of codex, claude, or manual; Gemini is read-only and may only be used as a reviewer/monitor in p2a_orchestrate plans');
   }
-  if ((args.command === 'plan' || args.command === 'status') && args.verifyOptions.length) {
+  if (['plan', 'resume', 'status'].includes(args.command) && args.verifyOptions.length) {
     throw new Error('verification options are only supported with finish');
   }
   if (args.orchestrationPlan && args.command !== 'start') {
@@ -461,12 +463,7 @@ function printChildResult(result) {
 }
 
 function commandLine(scriptName, args) {
-  return nodeScriptCommand(P2A_PATHS, scriptName, args).map(shellQuote).join(' ');
-}
-
-function shellQuote(value) {
-  if (/^[A-Za-z0-9_./:@%+=,-]+$/.test(value)) return value;
-  return `'${String(value).replaceAll("'", "'\\''")}'`;
+  return sharedCommandLine(P2A_PATHS, scriptName, args);
 }
 
 function promptArgs(source, taskId) {
@@ -813,9 +810,42 @@ function runStart(args) {
   }
 
   printLauncherPrompt(source, task, runId, approvalLink);
-  console.log('');
-  console.log('Finish command:');
-  console.log(commandLine('p2a_execute.mjs', ['finish', ...sourceRunArgs(args), ...(args.approval ? ['--approval', args.approval] : []), '--run-id', runId, '--test', '--lint', '--typecheck']));
+  printRunCommandFooter(P2A_PATHS, {
+    sourceArgs: source.sourceArgs,
+    runId,
+    heading: 'Run commands:',
+  });
+  return 0;
+}
+
+function runResume(args) {
+  const source = resolveSource(args);
+  const approvalLink = resolveApprovalSelection(args, source);
+  const run = readRun(source.runsDir, args.runId);
+  if (approvalLink.taskId && run.taskId !== approvalLink.taskId) {
+    console.error(`resume refused: run ${run.runId} belongs to ${run.taskId}, not approval task ${approvalLink.taskId}`);
+    return 1;
+  }
+  const task = requireTask(source, run.taskId);
+  console.log('Plan2Agent execution resume');
+  console.log(`- project: ${source.projectId}`);
+  console.log(`- task: ${task.id} - ${task.title}`);
+  console.log(`- taskStatus: ${task.status}`);
+  console.log(`- runId: ${run.runId}`);
+  console.log(`- runStatus: ${run.status}`);
+  console.log(`- agentTool: ${run.agentTool}`);
+  console.log(`- workspaceRef: ${run.workspaceRef}`);
+  if (run.status !== 'started') {
+    console.log('- resumeNote: run is already closed; use status/review commands for follow-up evidence.');
+  }
+  printLauncherPrompt(source, task, run.runId, approvalLink);
+  printRunCommandFooter(P2A_PATHS, {
+    sourceArgs: source.sourceArgs,
+    runId: run.runId,
+    includeResume: false,
+    includeFinish: run.status === 'started',
+    heading: 'Run commands:',
+  });
   return 0;
 }
 
@@ -863,6 +893,13 @@ function runStatus(args) {
     console.log(`- orchestrationRuntime: ${runtime.status.phase} events=${runtime.communicationLog.length} needsUserDecision=${runtime.status.needsUserDecision}`);
   }
   if (run.failure) console.log(`- failure: ${run.failure.class} retryable=${run.failure.retryable} needsUserDecision=${run.failure.needsUserDecision} source=${run.failure.source}`);
+  printRunCommandFooter(P2A_PATHS, {
+    sourceArgs: source.sourceArgs,
+    runId: run.runId,
+    includeResume: run.status === 'started',
+    includeFinish: run.status === 'started',
+    heading: 'Run commands:',
+  });
   return 0;
 }
 
@@ -880,7 +917,15 @@ function runFinish(args) {
   if (closedRuntime) {
     console.log(`Orchestration runtime already closed: ${displayPath(closedRuntime.filePath)}`);
     const run = readRun(source.runsDir, args.runId);
-    return transitionTaskAfterFinishedRun(args, source, run, 0);
+    const status = transitionTaskAfterFinishedRun(args, source, run, 0);
+    printRunCommandFooter(P2A_PATHS, {
+      sourceArgs: source.sourceArgs,
+      runId: run.runId,
+      includeResume: false,
+      includeFinish: false,
+      heading: 'Run commands:',
+    });
+    return status;
   }
   let verificationFailed = false;
   if (verifyRequested(args)) {
@@ -922,7 +967,15 @@ function runFinish(args) {
   } catch (error) {
     console.error(`warning: orchestration runtime was not updated: ${error.message}`);
   }
-  return transitionTaskAfterFinishedRun(args, source, run, finishResult.status ?? 0);
+  const status = transitionTaskAfterFinishedRun(args, source, run, finishResult.status ?? 0);
+  printRunCommandFooter(P2A_PATHS, {
+    sourceArgs: source.sourceArgs,
+    runId: run.runId,
+    includeResume: false,
+    includeFinish: false,
+    heading: 'Run commands:',
+  });
+  return status;
 }
 
 export function main(argv = process.argv.slice(2)) {
@@ -934,6 +987,7 @@ export function main(argv = process.argv.slice(2)) {
     }
     if (args.command === 'plan') return runPlan(args);
     if (args.command === 'start') return runStart(args);
+    if (args.command === 'resume') return runResume(args);
     if (args.command === 'status') return runStatus(args);
     if (args.command === 'finish') return runFinish(args);
     throw new Error(`unknown command: ${args.command}`);

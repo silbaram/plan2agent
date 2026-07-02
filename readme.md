@@ -418,8 +418,10 @@ node .plan2agent/scripts/p2a_tasks.mjs <command> \
 1. 기획 완료 후 `p2a_iteration init`이 끝난 artifact root를 기준으로 `node .plan2agent/scripts/p2a_execute.mjs plan --artifacts .plan2agent/artifacts/<project_id> --task <task-id>`로 단일 task 실행 계획을 확인한다.
 2. `node .plan2agent/scripts/p2a_execute.mjs start --artifacts .plan2agent/artifacts/<project_id> --task <task-id> --agent-tool codex`로 run을 열고 task를 `in_progress`로 바꾼다.
 3. 출력된 manual launcher prompt를 Claude Code 또는 Codex 같은 write-capable agent CLI에 붙여넣어 구현 작업을 수행한다. Gemini CLI는 현재 review/monitor 같은 read-only 보조로만 사용한다.
-4. `node .plan2agent/scripts/p2a_execute.mjs finish --artifacts .plan2agent/artifacts/<project_id> --run-id <run-id> --test --lint --typecheck`로 검증, run finish, task `done`/`blocked` 전이를 기록한다.
-5. 세부 제어가 필요하면 `p2a_tasks.mjs`와 `p2a_runs.mjs`를 직접 사용한다. 각 전이는 저장 전에 task graph 전체를 `.plan2agent/scripts/validate_artifacts.mjs`의 검증 로직으로 재검증하므로 잘못된 graph는 기록되지 않는다.
+4. 세션이 끊기면 `node .plan2agent/scripts/p2a_execute.mjs resume --artifacts .plan2agent/artifacts/<project_id> --run-id <run-id>`로 같은 run의 상태와 launcher prompt를 다시 출력한다.
+5. `node .plan2agent/scripts/p2a_execute.mjs finish --artifacts .plan2agent/artifacts/<project_id> --run-id <run-id> --test --lint --typecheck`로 검증, run finish, task `done`/`blocked` 전이를 기록한다.
+6. `start`, `status`, `finish` 출력 footer에는 copy-paste 가능한 `resume`, `status`, `finish`, `review` 명령이 남는다. `review`는 해당 run을 `p2a_proposals.mjs mine --run-id <run-id>` 회고 후보로 연결한다.
+7. 세부 제어가 필요하면 `p2a_tasks.mjs`와 `p2a_runs.mjs`를 직접 사용한다. 각 전이는 저장 전에 task graph 전체를 `.plan2agent/scripts/validate_artifacts.mjs`의 검증 로직으로 재검증하므로 잘못된 graph는 기록되지 않는다.
 
 ## Task Graph 기준
 

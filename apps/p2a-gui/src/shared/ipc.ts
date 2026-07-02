@@ -507,6 +507,12 @@ export type ExecutionFinishRunRequest = {
   notes: string[];
 };
 
+export type ExecutionFollowUpCommand = {
+  id: "resume" | "status" | "finish" | "review";
+  label: string;
+  command: string;
+};
+
 export type ExecutionCommandResult = {
   command: string;
   args: string[];
@@ -514,6 +520,7 @@ export type ExecutionCommandResult = {
   exitCode: number;
   stdout: string;
   stderr: string;
+  followUpCommands: ExecutionFollowUpCommand[];
   startedAt: string;
   finishedAt: string;
   durationMs: number;

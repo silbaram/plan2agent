@@ -6,6 +6,7 @@ import type {
   ExecutionCommandResult,
   ExecutionCustomVerificationCommand,
   ExecutionAgentTool,
+  ExecutionFollowUpCommand,
   ExecutionFinishRunRequest,
   ExecutionStartRunRequest,
   FailureClass,
@@ -38,6 +39,12 @@ const VALID_ORCHESTRATION_ROLE_STATUSES = new Set<OrchestrationRoleStatus>([
   "blocked",
   "complete",
   "skipped",
+]);
+const FOLLOW_UP_COMMAND_IDS = new Set<ExecutionFollowUpCommand["id"]>([
+  "resume",
+  "status",
+  "finish",
+  "review",
 ]);
 
 type ExecutionCommand = {
@@ -374,6 +381,21 @@ function appendChunk(current: string, chunk: Buffer): string {
   return next.length > OUTPUT_LIMIT ? next.slice(-OUTPUT_LIMIT) : next;
 }
 
+function extractFollowUpCommands(stdout: string): ExecutionFollowUpCommand[] {
+  const commands: ExecutionFollowUpCommand[] = [];
+  const seen = new Set<string>();
+  for (const line of stdout.split(/\r?\n/)) {
+    const match = line.match(/^- (resume|status|finish|review): (.+)$/);
+    if (!match) continue;
+    const id = match[1] as ExecutionFollowUpCommand["id"];
+    const command = match[2].trim();
+    if (!FOLLOW_UP_COMMAND_IDS.has(id) || !command || seen.has(id)) continue;
+    seen.add(id);
+    commands.push({ id, label: id, command });
+  }
+  return commands;
+}
+
 export function finishRun(request: ExecutionFinishRunRequest): Promise<ExecutionCommandResult> {
   return runExecutionCommand(buildFinishRunCommand(request));
 }
@@ -419,6 +441,7 @@ function runExecutionCommand(command: ExecutionCommand): Promise<ExecutionComman
         exitCode: exitCode ?? 1,
         stdout,
         stderr,
+        followUpCommands: extractFollowUpCommands(stdout),
         startedAt,
         finishedAt: finishedAtDate.toISOString(),
         durationMs: Math.max(0, finishedAtDate.getTime() - startedAtDate.getTime()),

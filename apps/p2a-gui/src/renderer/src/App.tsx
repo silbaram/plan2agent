@@ -636,6 +636,7 @@ export default function App() {
   const [orchestrationDetailInput, setOrchestrationDetailInput] = useState("");
   const [orchestrationVerdictInput, setOrchestrationVerdictInput] = useState("");
   const [promptCopyState, setPromptCopyState] = useState<PromptCopyState>("idle");
+  const [followUpCopyState, setFollowUpCopyState] = useState<string | null>(null);
   const [sidebarWidth, setSidebarWidth] = useState(DEFAULT_SIDEBAR_WIDTH);
   const artifactViewerRef = useRef<HTMLElement | null>(null);
   const artifactViewerCloseButtonRef = useRef<HTMLButtonElement | null>(null);
@@ -1035,6 +1036,7 @@ export default function App() {
         exitCode: 1,
         stdout: "",
         stderr: error instanceof Error ? error.message : String(error),
+        followUpCommands: [],
         startedAt: new Date().toISOString(),
         finishedAt: new Date().toISOString(),
         durationMs: 0,
@@ -1088,6 +1090,7 @@ export default function App() {
         exitCode: 1,
         stdout: "",
         stderr: error instanceof Error ? error.message : String(error),
+        followUpCommands: [],
         startedAt: new Date().toISOString(),
         finishedAt: new Date().toISOString(),
         durationMs: 0,
@@ -1134,6 +1137,48 @@ export default function App() {
     }
   }
 
+  async function copyFollowUpCommand(commandId: string, command: string) {
+    try {
+      await window.navigator.clipboard.writeText(command);
+      setFollowUpCopyState(commandId);
+      window.setTimeout(() => {
+        setFollowUpCopyState((current) => (current === commandId ? null : current));
+      }, 1600);
+    } catch {
+      setFollowUpCopyState(null);
+    }
+  }
+
+  function renderFollowUpCommands(result: ExecutionCommandResult | null) {
+    if (!result?.followUpCommands.length) return null;
+    return (
+      <div className="follow-up-commands" aria-label={copy.terminal.followUpCommands}>
+        <div className="label">{copy.terminal.followUpCommands}</div>
+        <div className="follow-up-commands__list">
+          {result.followUpCommands.map((item) => {
+            const copyId = `${result.startedAt}:${item.id}`;
+            return (
+              <div className="follow-up-command" key={`${item.id}:${item.command}`}>
+                <span className="mono">{item.label}</span>
+                <code>{item.command}</code>
+                <button
+                  className="terminal-control"
+                  type="button"
+                  onClick={() => void copyFollowUpCommand(copyId, item.command)}
+                  aria-label={`${copy.runs.copyCommand}: ${item.label}`}
+                  title={`${copy.runs.copyCommand}: ${item.label}`}
+                >
+                  <Copy size={13} strokeWidth={1.7} aria-hidden="true" />
+                  <span>{followUpCopyState === copyId ? copy.runs.copied : copy.runs.copyCommand}</span>
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    );
+  }
+
   async function markSelectedOrchestrationRole(roleStatus: OrchestrationRoleStatus) {
     if (
       !projectSnapshot ||
@@ -1170,6 +1215,7 @@ export default function App() {
         exitCode: 1,
         stdout: "",
         stderr: error instanceof Error ? error.message : String(error),
+        followUpCommands: [],
         startedAt: new Date().toISOString(),
         finishedAt: new Date().toISOString(),
         durationMs: 0,
@@ -1917,6 +1963,7 @@ export default function App() {
           </span>
         </div>
         {renderStartFailureDiagnostic(true)}
+        {renderFollowUpCommands(startResult)}
         {startResult && (
           <div className="command-output command-output--compact">
             <pre>{outputPreview(startResult.stdout, copy)}</pre>
@@ -2187,6 +2234,7 @@ export default function App() {
               </div>
             )}
             {renderFinishFailureDiagnostic()}
+            {renderFollowUpCommands(finishResult)}
             {finishResult && (
               <div className="command-output">
                 <pre>{outputPreview(finishResult.stdout, copy)}</pre>

@@ -1492,6 +1492,29 @@ function validateIterationCurrentFixtureCases() {
         return { status: 1, checks };
       }
 
+      result = runExecute([
+        'resume',
+        '--graph',
+        executeGraphPath,
+        '--spec',
+        state.specPath,
+        '--run-id',
+        'run-execute-fixture',
+      ]);
+      checks += 1;
+      if (
+        result.status !== 0
+        || !result.stdout.includes('Plan2Agent execution resume')
+        || !result.stdout.includes('Manual launcher prompt')
+        || !result.stdout.includes('p2a_execute.mjs status')
+        || !result.stdout.includes('p2a_execute.mjs finish')
+        || !result.stdout.includes('p2a_proposals.mjs mine')
+      ) {
+        console.error(`p2a_execute resume fixture check failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: failureStatus(result), checks };
+      }
+
       const executeIsolationGraphPath = path.join(tempRoot, 'p2a-execute-isolation', 'gate-c-task-graph', 'task-graph.json');
       const executeIsolationWorkspace = path.join(tempRoot, 'execute-isolation-workspace');
       const executeIsolationWorktree = path.join(tempRoot, 'execute-isolation-worktree');
@@ -2976,7 +2999,18 @@ function validateIterationCurrentFixtureCases() {
         'Fixture run started.',
       ]);
       checks += 1;
-      if (result.status !== 0 || !result.stdout.includes(`Plan2Agent run started: ${fixtureRunId}`)) {
+      if (
+        result.status !== 0
+        || !result.stdout.includes(`Plan2Agent run started: ${fixtureRunId}`)
+        || !result.stdout.includes(`resume: node `)
+        || !result.stdout.includes(`p2a_execute.mjs resume --artifacts ${artifactRoot} --run-id ${fixtureRunId}`)
+        || !result.stdout.includes(`status: node `)
+        || !result.stdout.includes(`p2a_execute.mjs status --artifacts ${artifactRoot} --run-id ${fixtureRunId}`)
+        || !result.stdout.includes(`finish: node `)
+        || !result.stdout.includes(`p2a_execute.mjs finish --artifacts ${artifactRoot} --run-id ${fixtureRunId} --test --lint --typecheck`)
+        || !result.stdout.includes(`review: node `)
+        || !result.stdout.includes(`p2a_proposals.mjs mine --artifacts ${artifactRoot} --run-id ${fixtureRunId}`)
+      ) {
         console.error(`p2a_runs start fixture check failed: ${caseData.id}`);
         writeResultOutput(result);
         return { status: failureStatus(result), checks };

@@ -30,6 +30,7 @@ import {
   mergeExplicitVerificationCommands,
   writeProjectConfig,
 } from './p2a_project_config.mjs';
+import { printRunCommandFooter } from './p2a_run_commands.mjs';
 
 const P2A_PATHS = resolveP2aPaths(import.meta.url);
 const ROOT = P2A_PATHS.projectRoot;
@@ -355,6 +356,16 @@ function resolveTaskSource(args) {
     sourceSpecRef: graph.sourceSpec,
     runsDir: resolveRunsDir(args),
   };
+}
+
+function sourceRunArgs(args) {
+  if (args.artifacts) return ['--artifacts', args.artifacts, ...(args.maintenance ? ['--maintenance'] : [])];
+  if (args.graph) return ['--graph', args.graph];
+  return null;
+}
+
+function runLifecycleSourceArgs(args) {
+  return sourceRunArgs(args) ?? (args.runs ? ['--runs', args.runs] : null);
 }
 
 function assertSafeRunId(runId) {
@@ -770,6 +781,11 @@ function startRun(args) {
   console.log(`- agentTool: ${run.agentTool}`);
   console.log(`- workspaceRef: ${run.workspaceRef}`);
   console.log(`- runs: ${displayPath(runsDir)}`);
+  printRunCommandFooter(P2A_PATHS, {
+    sourceArgs: sourceRunArgs(args),
+    runSourceArgs: runLifecycleSourceArgs(args),
+    runId: run.runId,
+  });
   return 0;
 }
 
@@ -834,6 +850,13 @@ function finishRun(args) {
   console.log(`- changedFiles: ${run.changedFiles.length}`);
   console.log(`- verification: ${run.verification.length}`);
   if (run.failure) console.log(`- failure: ${run.failure.class} retryable=${run.failure.retryable} needsUserDecision=${run.failure.needsUserDecision} source=${run.failure.source}`);
+  printRunCommandFooter(P2A_PATHS, {
+    sourceArgs: sourceRunArgs(args),
+    runSourceArgs: runLifecycleSourceArgs(args),
+    runId: run.runId,
+    includeResume: false,
+    includeFinish: false,
+  });
   return run.status === 'failed' ? 1 : 0;
 }
 

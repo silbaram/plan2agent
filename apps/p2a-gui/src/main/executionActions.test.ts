@@ -574,6 +574,15 @@ describe("execution action helpers", () => {
 
       expect(startResult.exitCode).toBe(0);
       expect(startResult.stdout).toContain(`Plan2Agent run started: ${runId}`);
+      expect(startResult.followUpCommands.map((command) => command.id)).toEqual([
+        "resume",
+        "status",
+        "finish",
+        "review",
+      ]);
+      expect(startResult.followUpCommands.find((command) => command.id === "resume")?.command).toContain(
+        `p2a_execute.mjs resume`,
+      );
 
       const graphAfterStart = await readJson<{ tasks: Array<{ id: string; status: string }> }>(
         taskGraphPath,
@@ -602,6 +611,10 @@ describe("execution action helpers", () => {
       expect(finishResult.stdout).toContain("Running verification...");
       expect(finishResult.stdout).toContain(`Plan2Agent run finished: ${runId}`);
       expect(finishResult.stdout).toContain("task-001 status is now done");
+      expect(finishResult.followUpCommands.map((command) => command.id)).toEqual([
+        "status",
+        "review",
+      ]);
 
       const graphAfterFinish = await readJson<{ tasks: Array<{ id: string; status: string }> }>(
         taskGraphPath,

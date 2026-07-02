@@ -2844,6 +2844,47 @@ h3 {
   border-top: 1px solid var(--border-1);
 }
 
+.follow-up-commands {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.follow-up-commands__list {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.follow-up-command {
+  display: grid;
+  grid-template-columns: 64px minmax(0, 1fr) max-content;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  border: 1px solid var(--border-1);
+  border-radius: 4px;
+  padding: 6px;
+  background: var(--bg-1);
+}
+
+.follow-up-command > span {
+  color: var(--fg-3);
+  font-size: 11px;
+}
+
+.follow-up-command code {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--fg-2);
+  font-size: 11px;
+}
+
+.follow-up-command .terminal-control {
+  min-height: 26px;
+  padding: 0 7px;
+}
+
 .text-input {
   width: 100%;
   min-width: 0;
