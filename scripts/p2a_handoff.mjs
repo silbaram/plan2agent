@@ -1171,11 +1171,16 @@ function compareUpgradePlanItem(item) {
     target: targetRelative,
     source: item.source ? normalizePath(path.relative(process.cwd(), item.source)) : '(generated)',
   };
-  if (targetRelative === '.plan2agent/project.config.json' && existsSync(item.target)) {
+  if ((targetRelative === '.plan2agent/manifest.json' || targetRelative === '.plan2agent/project.config.json') && existsSync(item.target)) {
+    if (!lstatSync(item.target).isFile()) {
+      return { ...base, status: 'conflict', detail: 'target path exists but is not a file' };
+    }
     return {
       ...base,
-      status: 'manual_review',
-      detail: 'project config exists; preserve local commands/provider evidence and review migration manually',
+      status: 'unchanged',
+      detail: targetRelative === '.plan2agent/project.config.json'
+        ? 'project config is preserved; safe default migrations are reported separately'
+        : 'manifest is preserved; apply records update history only when safe changes are applied',
     };
   }
   if (!existsSync(item.target)) {
@@ -1215,6 +1220,19 @@ function summarizeUpgradeItems(items) {
     else if (item.status === 'error') summary.errors += 1;
   }
   return summary;
+}
+
+function shellQuote(value) {
+  const text = String(value);
+  if (/^[A-Za-z0-9_./:@%+=,-]+$/.test(text)) return text;
+  return `'${text.replace(/'/g, "'\\''")}'`;
+}
+
+function updateApplyCommand(args, targetRoot) {
+  const parts = ['node', 'scripts/p2a_handoff.mjs', args.command, '--target', targetRoot];
+  if (args.toolsProvided) parts.push('--tools', args.tools.length ? args.tools.join(',') : 'none');
+  parts.push('--apply');
+  return parts.map(shellQuote).join(' ');
 }
 
 function buildConfigMigrations(config, manifest) {
@@ -1264,7 +1282,7 @@ function buildUpgradeDryRunReport(args, targetRoot) {
     nextActions: failures.length
       ? [`Resolve conflicts/errors above before running ${args.command} again.`]
       : changes
-        ? [`Review listed changes. Apply safe updates with: node scripts/p2a_handoff.mjs ${args.command} --target ${targetRoot} --apply`]
+        ? [`Review listed changes. Apply safe updates with: ${updateApplyCommand(args, targetRoot)}`]
         : [],
     _plan: plan,
     _manifest: manifest,
@@ -1450,11 +1468,11 @@ function buildUpgradeApplyReport(args, targetRoot, previewReport) {
   const blockers = upgradeApplyBlockers(previewReport);
   const applyItems = blockers.length ? [] : upgradeApplyItems(previewReport);
   const migrations = blockers.length ? [] : changedMigrations(previewReport);
-  const report = {
+  return {
     schema_version: 'p2a.upgrade_apply.v1',
     command: args.command,
     appliedAt,
-    status: blockers.length ? 'blocked' : 'applied',
+    status: blockers.length ? 'blocked' : 'pending',
     targetProject: targetRoot,
     aiToolTargets: previewReport.aiToolTargets,
     preview: publicUpgradeReport(previewReport),
@@ -1465,31 +1483,48 @@ function buildUpgradeApplyReport(args, targetRoot, previewReport) {
       config: false,
       manifest: false,
     },
+    error: null,
     nextActions: [],
+    _applyItems: applyItems,
+    _migrations: migrations,
   };
-  if (blockers.length) {
+}
+
+function errorDetail(error) {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function publicUpgradeApplyReport(report) {
+  const { _applyItems, _migrations, ...publicReport } = report;
+  return publicReport;
+}
+
+function executeUpgradeApply(targetRoot, report, previewReport) {
+  if (report.blockers.length) {
     report.nextActions = ['Review blockers above, resolve conflicts/manual review items, then rerun with --apply.'];
     return report;
   }
 
-  if (applyItems.length) {
-    writePlan(applyItems);
-    report.applied.files = applyItems.map((item) => normalizePath(item.targetRelative));
+  if (report._applyItems.length) {
+    for (const item of report._applyItems) {
+      writePlanItem(item);
+      report.applied.files.push(normalizePath(item.targetRelative));
+    }
   }
-  if (migrations.length) {
+  if (report._migrations.length) {
     writeJsonFile(path.join(targetRoot, '.plan2agent', 'project.config.json'), previewReport._nextConfig);
     report.applied.config = true;
-    report.applied.migrations = migrations.map((migration) => ({
+    report.applied.migrations = report._migrations.map((migration) => ({
       id: migration.id,
       updatedKeys: migration.updatedKeys,
     }));
   }
-  const shouldUpdateManifest = report.applied.files.length > 0 || report.applied.config || previewReport.status !== 'pass';
+  const shouldUpdateManifest = report.applied.files.length > 0 || report.applied.config;
   if (shouldUpdateManifest) {
     const nextManifest = mergeUpgradeManifest(
       previewReport._manifest,
       previewReport,
-      appliedAt,
+      report.appliedAt,
       report.applied.files,
       report.applied.migrations.map((migration) => migration.id),
     );
@@ -1500,6 +1535,7 @@ function buildUpgradeApplyReport(args, targetRoot, previewReport) {
     report.status = 'noop';
     report.nextActions = ['No safe update changes were required.'];
   } else {
+    report.status = 'applied';
     report.nextActions = ['Run p2a_doctor --dev against the target project to verify the applied update.'];
   }
   return report;
@@ -1516,6 +1552,7 @@ function printUpgradeApplyReport(report) {
       console.log(`  ${blocker.detail}`);
     }
   }
+  if (report.error) console.log(`error: ${report.error}`);
   if (report.applied.files.length) {
     console.log('applied files:');
     for (const file of report.applied.files) console.log(`- ${file}`);
@@ -1904,19 +1941,21 @@ function printPlan(plan, args, artifactsRoot, targetRoot, sourceInfo) {
   if (args.dryRun) console.log('dry-run: no files written');
 }
 
-function writePlan(plan) {
-  for (const item of plan) mkdirSync(path.dirname(item.target), { recursive: true });
-  for (const item of plan) {
-    if (item.type === 'write-json') {
-      writeFileSync(item.target, item.content ?? `${JSON.stringify(item.data, null, 2)}\n`, 'utf8');
-    } else if (item.type === 'write-text') {
-      writeFileSync(item.target, item.content, 'utf8');
-    } else if (item.type === 'rewrite-json') {
-      writeFileSync(item.target, item.transform(item.source), 'utf8');
-    } else {
-      copyFileSync(item.source, item.target);
-    }
+function writePlanItem(item) {
+  mkdirSync(path.dirname(item.target), { recursive: true });
+  if (item.type === 'write-json') {
+    writeFileSync(item.target, item.content ?? `${JSON.stringify(item.data, null, 2)}\n`, 'utf8');
+  } else if (item.type === 'write-text') {
+    writeFileSync(item.target, item.content, 'utf8');
+  } else if (item.type === 'rewrite-json') {
+    writeFileSync(item.target, item.transform(item.source), 'utf8');
+  } else {
+    copyFileSync(item.source, item.target);
   }
+}
+
+function writePlan(plan) {
+  for (const item of plan) writePlanItem(item);
 }
 
 function cleanupMovedSources(plan, artifactsRoot) {
@@ -2326,9 +2365,17 @@ export function main(argv = process.argv.slice(2)) {
       }
       const report = buildUpgradeDryRunReport(args, targetRoot);
       if (args.apply) {
-        const applyReport = writeUpgradeApplyReport(targetRoot, buildUpgradeApplyReport(args, targetRoot, report));
-        printUpgradeApplyReport(applyReport);
-        return applyReport.status === 'blocked' ? 1 : 0;
+        const applyReport = buildUpgradeApplyReport(args, targetRoot, report);
+        try {
+          executeUpgradeApply(targetRoot, applyReport, report);
+        } catch (error) {
+          applyReport.status = 'failed';
+          applyReport.error = errorDetail(error);
+          applyReport.nextActions = ['Inspect the apply report, restore any partially applied files if needed, then rerun update/upgrade after resolving the failure.'];
+        }
+        const writtenReport = writeUpgradeApplyReport(targetRoot, publicUpgradeApplyReport(applyReport));
+        printUpgradeApplyReport(writtenReport);
+        return ['blocked', 'failed'].includes(writtenReport.status) ? 1 : 0;
       }
       printUpgradeDryRunReport(report);
       return report.status === 'fail' ? 1 : 0;
