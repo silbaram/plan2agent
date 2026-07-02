@@ -1,7 +1,9 @@
 import { existsSync } from "node:fs";
 import { readdir, readFile, stat } from "node:fs/promises";
+import { execFile } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 import Ajv2020, { type ValidateFunction } from "ajv/dist/2020";
 import intakeSchema from "../../../../schemas/intake.schema.json";
 import reviewSchema from "../../../../schemas/review.schema.json";
@@ -13,6 +15,7 @@ import { DEFAULT_EXECUTION_AGENT_TOOL } from "../shared/ipc";
 import type {
   ArtifactSummary,
   CommandGuidance,
+  DoctorCommandSummary,
   ExecutionAgentTool,
   FailureClass,
   FailureRetryability,
@@ -79,6 +82,7 @@ const schemaValidators = {
   review: ajv.compile(reviewSchema),
   "run-index": ajv.compile(runIndexSchema),
 } satisfies Record<SchemaValidationSummary["id"], ValidateFunction>;
+const execFileAsync = promisify(execFile);
 let cachedToolkitHandoffScript: string | null = null;
 
 function normalizeRelative(rootPath: string, targetPath: string): string {
@@ -253,6 +257,95 @@ function toolkitHandoffScript(): string {
 
   cachedToolkitHandoffScript = path.join(process.cwd(), "scripts", "p2a_handoff.mjs");
   return cachedToolkitHandoffScript;
+}
+
+function toolkitScript(scriptName: string): string {
+  return path.join(path.dirname(toolkitHandoffScript()), scriptName);
+}
+
+function isDoctorStatus(value: unknown): value is DoctorCommandSummary["status"] {
+  return value === "pass" || value === "warn" || value === "fail";
+}
+
+function doctorCommandSummary(
+  command: string,
+  exitCode: number | null,
+  stdout: string,
+  fallbackError: string | null,
+): DoctorCommandSummary {
+  try {
+    const parsed = JSON.parse(stdout) as unknown;
+    const report = parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as JsonRecord)
+      : null;
+    const summary = report?.summary && typeof report.summary === "object" && !Array.isArray(report.summary)
+      ? (report.summary as JsonRecord)
+      : null;
+    const projectState = report?.projectState && typeof report.projectState === "object" && !Array.isArray(report.projectState)
+      ? (report.projectState as JsonRecord)
+      : null;
+    return {
+      command,
+      status: isDoctorStatus(report?.status) ? report.status : "unavailable",
+      exitCode,
+      summary: summary
+        ? {
+            passed: numberValue(summary.passed) ?? 0,
+            warnings: numberValue(summary.warnings) ?? 0,
+            failures: numberValue(summary.failures) ?? 0,
+          }
+        : null,
+      projectState: stringValue(projectState?.state),
+      error: null,
+    };
+  } catch {
+    return {
+      command,
+      status: "unavailable",
+      exitCode,
+      summary: null,
+      projectState: null,
+      error: fallbackError ?? "p2a_doctor did not return JSON",
+    };
+  }
+}
+
+async function runDoctorCommand(rootPath: string): Promise<DoctorCommandSummary> {
+  const scriptPath = toolkitScript("p2a_doctor.mjs");
+  const command = `node ${shellQuote(scriptPath)} --target ${shellQuote(rootPath)} --json`;
+  if (!existsSync(scriptPath)) {
+    return {
+      command,
+      status: "unavailable",
+      exitCode: null,
+      summary: null,
+      projectState: null,
+      error: `p2a_doctor.mjs was not found at ${scriptPath}`,
+    };
+  }
+
+  try {
+    const result = await execFileAsync(process.execPath, [scriptPath, "--target", rootPath, "--json"], {
+      timeout: 5000,
+      maxBuffer: 1024 * 1024,
+    });
+    return doctorCommandSummary(command, 0, result.stdout, null);
+  } catch (error) {
+    const detail = error as {
+      code?: unknown;
+      stdout?: unknown;
+      stderr?: unknown;
+      message?: unknown;
+    };
+    const stdout = typeof detail.stdout === "string" ? detail.stdout : "";
+    const stderr = typeof detail.stderr === "string" && detail.stderr.trim().length
+      ? detail.stderr.trim()
+      : typeof detail.message === "string"
+        ? detail.message
+        : null;
+    const exitCode = typeof detail.code === "number" ? detail.code : null;
+    return doctorCommandSummary(command, exitCode, stdout, stderr);
+  }
 }
 
 function formatAjvErrors(validator: ValidateFunction): string[] {
@@ -1470,6 +1563,7 @@ function buildDiagnostics(
   checks: ProjectFileCheck[],
   artifacts: ArtifactSummary[],
   proposals: ProposalSummary[],
+  doctor: DoctorCommandSummary | null,
 ): ProjectDiagnostic[] {
   const diagnostics = artifacts.flatMap((artifact) => artifact.diagnostics);
   const hasPlan2AgentDir = checks.some((check) => check.id === "p2a-dir" && check.exists);
@@ -1517,8 +1611,31 @@ function buildDiagnostics(
       message: `${proposals.length} proposal feedback item(s) found in .plan2agent/proposals.`,
     });
   }
+  if (doctor) diagnostics.push(doctorDiagnostic(doctor));
 
   return diagnostics;
+}
+
+function doctorDiagnostic(doctor: DoctorCommandSummary): ProjectDiagnostic {
+  if (doctor.status === "unavailable") {
+    return {
+      severity: "warn",
+      message: `p2a_doctor unavailable: ${doctor.error ?? "no JSON result"}`,
+    };
+  }
+  const summary = doctor.summary
+    ? `${doctor.summary.passed} passed, ${doctor.summary.warnings} warning(s), ${doctor.summary.failures} failure(s)`
+    : "summary unavailable";
+  if (doctor.status === "fail" && doctor.projectState === "no_p2a") {
+    return {
+      severity: "warn",
+      message: `p2a_doctor reported no installed harness (${summary}).`,
+    };
+  }
+  return {
+    severity: doctor.status === "fail" ? "error" : doctor.status === "warn" ? "warn" : "ok",
+    message: `p2a_doctor ${doctor.status}: ${summary}.`,
+  };
 }
 
 function buildCommands(rootPath: string, state: ProjectDetectionState, artifacts: ArtifactSummary[]): CommandGuidance[] {
@@ -1866,7 +1983,11 @@ export async function loadProjectSnapshot(
   const proposals = await summarizeProposals(normalizedRootPath);
   const state = determineState(checks, artifacts);
   const primaryArtifact = artifacts[0] ?? null;
-  const diagnostics = buildDiagnostics(state, checks, artifacts, proposals);
+  const hasP2aMarker = checks.some((check) =>
+    (check.id === "p2a-dir" || check.id === "manifest" || check.id === "project-config") && check.exists,
+  );
+  const doctor = hasP2aMarker ? await runDoctorCommand(normalizedRootPath) : null;
+  const diagnostics = buildDiagnostics(state, checks, artifacts, proposals, doctor);
 
   return {
     rootPath: normalizedRootPath,
@@ -1882,6 +2003,7 @@ export async function loadProjectSnapshot(
     artifacts,
     onboarding: buildOnboarding(normalizedRootPath, state, checks, artifacts),
     commands: buildCommands(normalizedRootPath, state, artifacts),
+    doctor,
     proposals,
     diagnostics,
     generatedAt: new Date().toISOString(),

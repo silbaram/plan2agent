@@ -312,6 +312,19 @@ export type CommandGuidance = {
   description: string;
 };
 
+export type DoctorCommandSummary = {
+  command: string;
+  status: "pass" | "warn" | "fail" | "unavailable";
+  exitCode: number | null;
+  summary: {
+    passed: number;
+    warnings: number;
+    failures: number;
+  } | null;
+  projectState: string | null;
+  error: string | null;
+};
+
 export type OnboardingStage =
   | "install_p2a"
   | "import_plan"
@@ -384,6 +397,7 @@ export type ProjectSnapshot = {
   artifacts: ArtifactSummary[];
   onboarding: ProjectOnboarding;
   commands: CommandGuidance[];
+  doctor: DoctorCommandSummary | null;
   proposals: ProposalSummary[];
   diagnostics: ProjectDiagnostic[];
   generatedAt: string;

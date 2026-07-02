@@ -36,6 +36,7 @@ describe("loadProjectSnapshot", () => {
       dependencies: ["task-001"],
     });
     expect(snapshot.artifacts[0]?.gates.every((gate) => gate.state === "present")).toBe(true);
+    expect(snapshot.doctor).toBeNull();
     expect(snapshot.commands.some((command) => command.id === "validate")).toBe(true);
     expect(snapshot.onboarding).toMatchObject({
       stage: "execution_ready",
@@ -123,6 +124,7 @@ describe("loadProjectSnapshot", () => {
       const snapshot = await loadProjectSnapshot(tempRoot);
 
       expect(snapshot.state).toBe("no_p2a");
+      expect(snapshot.doctor).toBeNull();
       expect(snapshot.artifacts).toHaveLength(0);
       expect(snapshot.commands).toMatchObject([
         {
@@ -166,6 +168,11 @@ describe("loadProjectSnapshot", () => {
       expect(snapshot.onboarding.primaryAction.command).toContain("--artifacts <artifact-root>");
       expect(snapshot.onboarding.primaryAction.command).toContain("scripts/p2a_handoff.mjs");
       expect(snapshot.onboarding.primaryAction.command).not.toContain("/path/to/plan2agent");
+      expect(snapshot.doctor).toMatchObject({
+        status: "fail",
+        projectState: "installed_empty",
+      });
+      expect(snapshot.diagnostics.some((diagnostic) => diagnostic.message.includes("p2a_doctor fail"))).toBe(true);
     } finally {
       await rm(tempRoot, { recursive: true, force: true });
     }
