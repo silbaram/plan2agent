@@ -16,6 +16,7 @@ import {
   type ArtifactFileReadRequest,
   type ExecutionFinishRunRequest,
   type ExecutionStartRunRequest,
+  type OperationalActionRequest,
   type OrchestrationMarkRoleRequest,
   type ProjectOpenResult,
   type ProjectLoadOptions,
@@ -39,6 +40,7 @@ import {
 } from "./localConfig";
 import { PtySessionManager } from "./ptySessionManager";
 import { finishRun, markRole, startRun } from "./executionActions";
+import { runOperationalAction } from "./operationalActions";
 import { readArtifactFile } from "./artifactFiles";
 import { loadProjectSnapshot } from "./projectLoader";
 import {
@@ -46,6 +48,7 @@ import {
   scopeArtifactReadRequest,
   scopeExecutionFinishRunRequest,
   scopeExecutionStartRunRequest,
+  scopeOperationalActionRequest,
   scopeOrchestrationMarkRoleRequest,
   scopeTerminalStartRequest,
 } from "./activeProjectScope";
@@ -352,6 +355,14 @@ function registerIpcHandlers(): void {
     }
     return finishRun(
       scopeExecutionFinishRunRequest(activeProjectRootForSender(event.sender), request),
+    );
+  });
+  ipcMain.handle(IPC_CHANNELS.operationalRunAction, (event, request: OperationalActionRequest) => {
+    if (!request || typeof request.action !== "string") {
+      throw new Error("operational:runAction requires an action");
+    }
+    return runOperationalAction(
+      scopeOperationalActionRequest(activeProjectRootForSender(event.sender), request),
     );
   });
   ipcMain.handle(

@@ -18,6 +18,7 @@ export const IPC_CHANNELS = {
   terminalExit: "terminal:exit",
   executionStartRun: "execution:startRun",
   executionFinishRun: "execution:finishRun",
+  operationalRunAction: "operational:runAction",
   orchestrationMarkRole: "orchestration:markRole",
 } as const;
 
@@ -590,6 +591,19 @@ export type ExecutionCommandResult = {
   durationMs: number;
 };
 
+export type OperationalAction =
+  | "update_preview"
+  | "update_apply"
+  | "eval_generate"
+  | "eval_analyze"
+  | "eval_digest";
+
+export type OperationalActionRequest = {
+  projectRoot: string;
+  artifactRoot?: string | null;
+  action: OperationalAction;
+};
+
 export type OrchestrationMarkRoleRequest = {
   projectRoot: string;
   runtimePath: string;
@@ -635,6 +649,9 @@ export type P2AApi = {
   execution: {
     startRun: (request: ExecutionStartRunRequest) => Promise<ExecutionCommandResult>;
     finishRun: (request: ExecutionFinishRunRequest) => Promise<ExecutionCommandResult>;
+  };
+  operational: {
+    runAction: (request: OperationalActionRequest) => Promise<ExecutionCommandResult>;
   };
   orchestration: {
     markRole: (request: OrchestrationMarkRoleRequest) => Promise<ExecutionCommandResult>;

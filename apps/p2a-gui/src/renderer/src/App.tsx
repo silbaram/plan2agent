@@ -47,6 +47,7 @@ import type {
   GuiConfigSnapshot,
   MemoryDigestSummary,
   OnboardingAction,
+  OperationalAction,
   OrchestrationRoleStatus,
   ProposalSummary,
   ProjectSnapshot,
@@ -394,6 +395,18 @@ function updateReportArtifactDocument(report: UpdateReportSummary, copy: UiCopy)
     meta: report.createdAt ?? copy.common.none,
     state: report.status,
   };
+}
+
+function operationalActionLabel(action: OperationalAction, copy: UiCopy): string {
+  if (action === "update_preview") return copy.operational.runUpdatePreview;
+  if (action === "update_apply") return copy.operational.runUpdateApply;
+  if (action === "eval_generate") return copy.operational.runEvalGenerate;
+  if (action === "eval_analyze") return copy.operational.runEvalAnalyze;
+  return copy.operational.runEvalDigest;
+}
+
+function operationalActionRequiresArtifact(action: OperationalAction): boolean {
+  return action === "eval_generate" || action === "eval_analyze" || action === "eval_digest";
 }
 
 function operationalCardClass(tone: OperationalTone, mode: "button" | "static" = "button"): string {
@@ -752,6 +765,10 @@ export default function App() {
   const [finishNoteInput, setFinishNoteInput] = useState("");
   const [startResult, setStartResult] = useState<ExecutionCommandResult | null>(null);
   const [finishResult, setFinishResult] = useState<ExecutionCommandResult | null>(null);
+  const [operationalState, setOperationalState] =
+    useState<ExecutionActionState>("idle");
+  const [operationalAction, setOperationalAction] = useState<OperationalAction | null>(null);
+  const [operationalResult, setOperationalResult] = useState<ExecutionCommandResult | null>(null);
   const [selectedOrchestrationRoleId, setSelectedOrchestrationRoleId] = useState<string | null>(null);
   const [orchestrationState, setOrchestrationState] =
     useState<ExecutionActionState>("idle");
@@ -1127,6 +1144,83 @@ export default function App() {
     return args.map(quoteCommandPart).join(" ");
   }
 
+  function operationalActionPreviewCommand(action: OperationalAction): string {
+    const args = ["node", ".plan2agent/scripts/p2a.mjs"];
+    if (action === "update_preview") {
+      args.push("update", "--dry-run");
+    } else if (action === "update_apply") {
+      args.push("update", "--apply");
+    } else if (!artifact) {
+      return copy.common.noArtifactRoot;
+    } else if (action === "eval_generate") {
+      args.push("eval", "generate", "--artifacts", artifact.relativePath);
+    } else if (action === "eval_analyze") {
+      args.push(
+        "eval",
+        "analyze",
+        "--artifacts",
+        artifact.relativePath,
+        "--output",
+        `${artifact.relativePath}/eval/analysis.json`,
+      );
+    } else {
+      args.push(
+        "eval",
+        "digest",
+        "--eval",
+        `${artifact.relativePath}/eval`,
+        "--output",
+        `${artifact.relativePath}/eval/eval-digest.json`,
+      );
+    }
+    return args.map(quoteCommandPart).join(" ");
+  }
+
+  async function runOperationalAction(action: OperationalAction) {
+    if (!projectSnapshot || (operationalActionRequiresArtifact(action) && !artifact)) return;
+    const previewCommand = operationalActionPreviewCommand(action);
+    if (action === "update_apply") {
+      const confirmed = window.confirm(
+        [
+          copy.operational.applyConfirm,
+          projectSnapshot.rootPath,
+          previewCommand,
+          copy.terminal.confirmContinue,
+        ].join("\n"),
+      );
+      if (!confirmed) return;
+    }
+
+    setOperationalState("running");
+    setOperationalAction(action);
+    setOperationalResult(null);
+
+    try {
+      const result = await window.p2a.operational.runAction({
+        projectRoot: projectSnapshot.rootPath,
+        artifactRoot: artifact?.rootPath ?? null,
+        action,
+      });
+      setOperationalResult(result);
+      setOperationalState(result.exitCode === 0 ? "idle" : "error");
+      await loadProjectPath(projectSnapshot.rootPath, { quiet: true });
+    } catch (error) {
+      setOperationalState("error");
+      setOperationalResult({
+        command: previewCommand,
+        args: [],
+        cwd: projectSnapshot.rootPath,
+        exitCode: 1,
+        stdout: "",
+        stderr: error instanceof Error ? error.message : String(error),
+        followUpCommands: [],
+        startedAt: new Date().toISOString(),
+        finishedAt: new Date().toISOString(),
+        durationMs: 0,
+      });
+    }
+  }
+
   async function startSelectedTask() {
     if (!projectSnapshot || !artifact || !selectedTask || !selectedTask.ready) return;
     setStartState("running");
@@ -1388,6 +1482,16 @@ export default function App() {
       memoryDigest,
     ].filter(Boolean).length;
     const hasOperationalReport = operationalReportCount > 0;
+    const operationalActions: OperationalAction[] = [
+      "update_preview",
+      "update_apply",
+      "eval_generate",
+      "eval_analyze",
+      "eval_digest",
+    ];
+    const activeOperationalAction = operationalAction ?? "update_preview";
+    const operationalCommand = operationalResult?.command ?? operationalActionPreviewCommand(activeOperationalAction);
+    const showOperationalResult = operationalState === "running" || Boolean(operationalResult);
 
     const renderOperationalCard = ({
       document,
@@ -1558,13 +1662,67 @@ export default function App() {
           </div>
         )}
 
-        {hasOperationalReport && (
+        {projectSnapshot && (
           <div className="overview-operational" aria-label={copy.operational.title}>
             <div className="overview-operational__head">
               <span>{copy.operational.title}</span>
               <strong className="mono">{formatCount(operationalReportCount, locale)}</strong>
             </div>
+            <div className="overview-operational-actions" aria-label={copy.operational.actions}>
+              {operationalActions.map((action) => {
+                const requiresArtifact = operationalActionRequiresArtifact(action);
+                const isRunning = operationalState === "running" && operationalAction === action;
+                return (
+                  <button
+                    className={`terminal-control${
+                      action === "update_preview" ? " terminal-control--primary" : ""
+                    }${action === "update_apply" ? " terminal-control--danger" : ""}`}
+                    key={action}
+                    type="button"
+                    disabled={operationalState === "running" || (requiresArtifact && !artifact)}
+                    onClick={() => void runOperationalAction(action)}
+                    title={
+                      requiresArtifact && !artifact
+                        ? copy.common.noArtifactRoot
+                        : operationalActionPreviewCommand(action)
+                    }
+                  >
+                    <span>{isRunning ? copy.common.running : operationalActionLabel(action, copy)}</span>
+                  </button>
+                );
+              })}
+            </div>
+            {showOperationalResult && (
+              <div className="overview-operational-result">
+                <div className="overview-operational-result__head">
+                  <span>{copy.operational.lastResult}</span>
+                  <strong className="mono">
+                    {operationalState === "running"
+                      ? copy.common.running
+                      : operationalResult
+                        ? `exit ${operationalResult.exitCode} · ${formatMilliseconds(
+                            operationalResult.durationMs,
+                            copy,
+                          )}`
+                        : copy.common.none}
+                  </strong>
+                </div>
+                <div className="command-preview command-preview--compact">
+                  <span>{operationalActionLabel(activeOperationalAction, copy)}</span>
+                  <code>{operationalCommand}</code>
+                </div>
+                {operationalResult && (
+                  <div className="command-output command-output--compact">
+                    <pre>{outputPreview(operationalResult.stdout, copy)}</pre>
+                    <pre>{outputPreview(operationalResult.stderr, copy)}</pre>
+                  </div>
+                )}
+              </div>
+            )}
             <div className="overview-operational-grid">
+              {!hasOperationalReport && (
+                <div className="empty-inline empty-inline--compact">{copy.operational.noReports}</div>
+              )}
               {doctorReport &&
                 renderOperationalCard({
                   document: null,
