@@ -5,6 +5,7 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, lstatSync, readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
+import { resolveOrchestrationAgentTool } from './p2a_project_config.mjs';
 import { resolveP2aPaths } from './p2a_paths.mjs';
 
 const P2A_PATHS = resolveP2aPaths(import.meta.url);
@@ -479,12 +480,43 @@ function summarizeProposalsEnhancement(targetRoot, manifest, config) {
   };
 }
 
+function summarizeOrchestrationEnhancement(manifest, config) {
+  const state = capabilityState(manifest, config, 'orchestration');
+  const configOrchestration = state.configRecord;
+  const manifestOrchestration = state.manifestRecord;
+  if (!state.enabled) {
+    return {
+      enabled: false,
+      manifestPresent: state.manifestPresent,
+      configPresent: state.configPresent,
+      manifestEnabled: state.manifestEnabled,
+      configEnabled: state.configEnabled,
+      inSync: state.inSync,
+    };
+  }
+  return {
+    enabled: true,
+    mode: stringValue(manifestOrchestration.mode) ?? stringValue(configOrchestration.defaultMode) ?? 'solo',
+    manifestPresent: state.manifestPresent,
+    configPresent: state.configPresent,
+    manifestEnabled: state.manifestEnabled,
+    configEnabled: state.configEnabled,
+    inSync: state.inSync,
+    defaultMode: stringValue(configOrchestration.defaultMode) ?? 'solo',
+    supervisedRun: configOrchestration.supervisedRun === true,
+    providerRouting: stringValue(configOrchestration.providerRouting) ?? 'project_config',
+    monitorGatePolicy: stringValue(configOrchestration.monitorGatePolicy) ?? 'explicit_plan_only',
+    runtimeDir: stringValue(configOrchestration.runtimeDir) ?? '.plan2agent/runs',
+  };
+}
+
 function summarizeEnhancements(targetRoot, manifest, config) {
   const keys = ['devSkills', 'memory', 'gui', 'orchestration', 'proposals'];
   const enabled = keys.filter((key) => capabilityState(manifest, config, key).enabled);
   return {
     enabled,
     memory: summarizeMemoryEnhancement(manifest, config),
+    orchestration: summarizeOrchestrationEnhancement(manifest, config),
     proposals: summarizeProposalsEnhancement(targetRoot, manifest, config),
   };
 }
@@ -557,6 +589,18 @@ function buildInfo(targetRootInput) {
       nextActions.push(`Preview proposal curation review: node .plan2agent/scripts/p2a.mjs proposals review --proposals ${enhancements.proposals.queueDir} --dry-run`);
     }
   }
+  if (enhancements.orchestration.enabled) {
+    if (!enhancements.orchestration.inSync) {
+      nextActions.push('Repair orchestration capability manifest/config drift: node .plan2agent/scripts/p2a.mjs enhance orchestration');
+    } else {
+      const orchestrationAgentTool = resolveOrchestrationAgentTool(config, manifest);
+      nextActions.push('Check provider runner readiness: node .plan2agent/scripts/p2a.mjs orchestrate runner-doctor --root .');
+      if (artifacts.length) {
+        nextActions.push(`Plan supervised orchestration: node .plan2agent/scripts/p2a.mjs orchestrate plan --artifacts ${artifacts[0].artifactRoot} --task <task-id> --agent-tool ${orchestrationAgentTool} --output .plan2agent/orchestration/<task-id>.json`);
+        nextActions.push(`Start supervised run with orchestration: node .plan2agent/scripts/p2a.mjs execute start --artifacts ${artifacts[0].artifactRoot} --task <task-id> --agent-tool ${orchestrationAgentTool} --orchestration-plan .plan2agent/orchestration/<task-id>.json`);
+      }
+    }
+  }
   if (!nextActions.length) nextActions.push('No immediate P2A action detected from local files.');
   return {
     schema_version: 'p2a.info.v1',
@@ -604,6 +648,10 @@ function printInfo(info) {
   if (info.enhancements?.proposals?.enabled) {
     const proposals = info.enhancements.proposals;
     console.log(`- proposals: queue=${proposals.queueDir} entries=${proposals.queueJsonFiles} sync=${proposals.inSync ? 'ok' : 'drift'} reviewPolicy=${proposals.reviewPolicy} patchPolicy=${proposals.patchPolicy} approvalRequired=${proposals.approvalRequired ? 'yes' : 'no'}`);
+  }
+  if (info.enhancements?.orchestration?.enabled) {
+    const orchestration = info.enhancements.orchestration;
+    console.log(`- orchestration: mode=${orchestration.defaultMode} sync=${orchestration.inSync ? 'ok' : 'drift'} supervisedRun=${orchestration.supervisedRun ? 'yes' : 'no'} providerRouting=${orchestration.providerRouting} monitorGatePolicy=${orchestration.monitorGatePolicy} runtimeDir=${orchestration.runtimeDir}`);
   }
   for (const artifact of info.artifacts) {
     const active = artifact.activeIteration ? ` active=${artifact.activeIteration}` : '';

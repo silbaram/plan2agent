@@ -70,6 +70,11 @@ const PROPOSAL_SCHEMA_FILES = [
   'proposal-patch-draft.schema.json',
   'proposal-draft-approval.schema.json',
 ];
+const ORCHESTRATION_SCHEMA_FILES = [
+  'orchestration-plan.schema.json',
+  'orchestration-runtime.schema.json',
+];
+const ORCHESTRATION_MODES = new Set(['solo', 'solo_monitor', 'team']);
 
 function usage() {
   return [
@@ -680,11 +685,62 @@ function proposalsCapabilityChecks(targetRoot, state) {
   return checks;
 }
 
+function orchestrationCapabilityChecks(targetRoot, state) {
+  const orchestrationConfig = state.configRecord;
+  const checks = [];
+  checks.push(capabilityManifestCheck('orchestration', 'Orchestration', state));
+  checks.push(
+    orchestrationConfig.enabled === true
+      ? check('capability_orchestration_config', 'Orchestration capability config', 'pass', `defaultMode=${orchestrationConfig.defaultMode ?? 'solo'}, runtimeDir=${orchestrationConfig.runtimeDir ?? '.plan2agent/runs'}`)
+      : check('capability_orchestration_config', 'Orchestration capability config', 'fail', 'manifest enables orchestration but project.config.json orchestration.enabled is not true'),
+  );
+  checks.push(
+    isFile(path.join(targetRoot, '.plan2agent', 'scripts', 'p2a_orchestrate.mjs'))
+      ? check('capability_orchestration_runtime', 'Orchestration runtime script', 'pass', '.plan2agent/scripts/p2a_orchestrate.mjs is installed')
+      : check('capability_orchestration_runtime', 'Orchestration runtime script', 'fail', 'p2a_orchestrate.mjs is missing from the project runtime'),
+  );
+  const missingSchemas = ORCHESTRATION_SCHEMA_FILES
+    .map((file) => `.plan2agent/schemas/${file}`)
+    .filter((relativePath) => !isFile(path.join(targetRoot, relativePath)));
+  checks.push(
+    missingSchemas.length
+      ? check('capability_orchestration_schemas', 'Orchestration schemas', 'fail', `${missingSchemas.length} orchestration schema file(s) are missing`, { missing: missingSchemas })
+      : check('capability_orchestration_schemas', 'Orchestration schemas', 'pass', `${ORCHESTRATION_SCHEMA_FILES.length} orchestration schemas are installed`),
+  );
+  checks.push(
+    ORCHESTRATION_MODES.has(orchestrationConfig.defaultMode ?? 'solo')
+      ? check('capability_orchestration_default_mode', 'Orchestration default mode', 'pass', `defaultMode=${orchestrationConfig.defaultMode ?? 'solo'}`)
+      : check('capability_orchestration_default_mode', 'Orchestration default mode', 'fail', `orchestration.defaultMode must be one of ${[...ORCHESTRATION_MODES].join(', ')}`),
+  );
+  checks.push(
+    orchestrationConfig.supervisedRun === true
+      ? check('capability_orchestration_supervision', 'Orchestration supervision', 'pass', 'supervisedRun is enabled')
+      : check('capability_orchestration_supervision', 'Orchestration supervision', 'fail', 'orchestration.supervisedRun must remain true'),
+  );
+  checks.push(
+    orchestrationConfig.providerRouting === 'project_config'
+      ? check('capability_orchestration_provider_routing', 'Orchestration provider routing', 'pass', 'provider routing uses project_config')
+      : check('capability_orchestration_provider_routing', 'Orchestration provider routing', 'fail', 'orchestration.providerRouting must remain project_config'),
+  );
+  checks.push(
+    orchestrationConfig.monitorGatePolicy === 'explicit_plan_only'
+      ? check('capability_orchestration_monitor_gate', 'Orchestration monitor gate', 'pass', 'monitor gates require explicit orchestration plans')
+      : check('capability_orchestration_monitor_gate', 'Orchestration monitor gate', 'fail', 'orchestration.monitorGatePolicy must remain explicit_plan_only'),
+  );
+  checks.push(
+    typeof orchestrationConfig.runtimeDir === 'string' && orchestrationConfig.runtimeDir.trim()
+      ? check('capability_orchestration_runtime_dir', 'Orchestration runtime dir', 'pass', `runtimeDir=${orchestrationConfig.runtimeDir}`)
+      : check('capability_orchestration_runtime_dir', 'Orchestration runtime dir', 'warn', 'orchestration.runtimeDir is not configured; default .plan2agent/runs will be used'),
+  );
+  return checks;
+}
+
 function buildCapabilityReport(targetRoot, manifest, configResult) {
   const config = configResult.ok ? configResult.data : null;
   const enabled = enabledCapabilityEnhancements(manifest, config);
   const checks = [];
   if (enabled.includes('memory')) checks.push(...memoryCapabilityChecks(targetRoot, capabilityState(manifest, config, 'memory')));
+  if (enabled.includes('orchestration')) checks.push(...orchestrationCapabilityChecks(targetRoot, capabilityState(manifest, config, 'orchestration')));
   if (enabled.includes('proposals')) checks.push(...proposalsCapabilityChecks(targetRoot, capabilityState(manifest, config, 'proposals')));
   return { enabled, checks };
 }
@@ -896,6 +952,20 @@ function nextActions(status, checks) {
   }
   if (checks.some((item) => item.id === 'capability_memory_push_policy' && item.status === 'fail')) {
     actions.push('Restore memory.pushPolicy to explicit_approval before enabling Memory push.');
+  }
+  if (checks.some((item) => item.id === 'capability_orchestration_manifest' && item.status === 'fail')
+    || checks.some((item) => item.id === 'capability_orchestration_config' && item.status === 'fail')) {
+    actions.push('Run p2a.mjs enhance orchestration or upgrade --dry-run to restore orchestration capability config.');
+  }
+  if (checks.some((item) => item.id === 'capability_orchestration_runtime' && item.status === 'fail')
+    || checks.some((item) => item.id === 'capability_orchestration_schemas' && item.status === 'fail')) {
+    actions.push('Run p2a.mjs upgrade --dry-run from the scaffolded project, then apply the reviewed orchestration runtime/schema update.');
+  }
+  if (checks.some((item) => item.id === 'capability_orchestration_supervision' && item.status === 'fail')
+    || checks.some((item) => item.id === 'capability_orchestration_provider_routing' && item.status === 'fail')
+    || checks.some((item) => item.id === 'capability_orchestration_monitor_gate' && item.status === 'fail')
+    || checks.some((item) => item.id === 'capability_orchestration_default_mode' && item.status === 'fail')) {
+    actions.push('Restore orchestration supervisedRun, providerRouting, monitorGatePolicy, and defaultMode before using supervised orchestration.');
   }
   if (checks.some((item) => item.id === 'capability_proposals_manifest' && item.status === 'fail')
     || checks.some((item) => item.id === 'capability_proposals_config' && item.status === 'fail')) {

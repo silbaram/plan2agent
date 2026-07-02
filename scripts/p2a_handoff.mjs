@@ -30,7 +30,7 @@ import {
 import { resolveIterationState } from './p2a_iteration_state.mjs';
 import { renderIterationIndexMarkdown } from './p2a_iteration.mjs';
 import { P2A_ARTIFACTS_DIR, P2A_SCHEMAS_DIR, P2A_SCRIPTS_DIR, resolveP2aPaths } from './p2a_paths.mjs';
-import { buildProjectConfig, defaultCapabilityConfig, defaultPromptTemplates, mergeCapabilityConfig, mergeDevSkillConfig } from './p2a_project_config.mjs';
+import { buildProjectConfig, defaultCapabilityConfig, defaultPromptTemplates, mergeCapabilityConfig, mergeDevSkillConfig, resolveOrchestrationAgentTool } from './p2a_project_config.mjs';
 import { PROJECT_RUNTIME_SCHEMA_FILES, PROJECT_RUNTIME_SCRIPT_FILES } from './p2a_tool_manifest.mjs';
 
 const P2A_PATHS = resolveP2aPaths(import.meta.url);
@@ -1746,12 +1746,12 @@ function buildEnhanceCapabilityPlan(args, targetRoot) {
     capability: args.enhancement,
     configKey: args.enhancement,
     configUpdatedKeys: mergedConfig.updatedKeys,
-    nextActions: enhanceCapabilityNextActions(args.enhancement, targetRoot, mergedConfig.config),
+    nextActions: enhanceCapabilityNextActions(args.enhancement, targetRoot, mergedConfig.config, nextManifest),
   };
   return plan;
 }
 
-function enhanceCapabilityNextActions(capability, targetRoot, config) {
+function enhanceCapabilityNextActions(capability, targetRoot, config, manifest) {
   const source = preferredEnhanceArtifactArg(targetRoot);
   if (capability === 'memory') {
     return [
@@ -1766,6 +1766,16 @@ function enhanceCapabilityNextActions(capability, targetRoot, config) {
       `${source.hasArtifact ? 'Mine proposal candidates' : 'After runs exist, mine proposal candidates'}: node .plan2agent/scripts/p2a.mjs proposals mine --artifacts ${source.artifactRef} --proposals ${queueDir} --dry-run`,
       `Review proposal queue: node .plan2agent/scripts/p2a.mjs proposals digest --proposals ${queueDir}`,
       `Preview curation review: node .plan2agent/scripts/p2a.mjs proposals review --proposals ${queueDir} --dry-run`,
+    ];
+  }
+  if (capability === 'orchestration') {
+    const runtimeDir = projectRelativeConfigPath(targetRoot, config?.orchestration?.runtimeDir, path.join('.plan2agent', 'runs'));
+    const orchestrationAgentTool = resolveOrchestrationAgentTool(config, manifest);
+    return [
+      'Check provider runner readiness: node .plan2agent/scripts/p2a.mjs orchestrate runner-doctor --root .',
+      `${source.hasArtifact ? 'Plan supervised orchestration' : 'After a ready task exists, plan supervised orchestration'}: node .plan2agent/scripts/p2a.mjs orchestrate plan --artifacts ${source.artifactRef} --task <task-id> --agent-tool ${orchestrationAgentTool} --output .plan2agent/orchestration/<task-id>.json`,
+      `${source.hasArtifact ? 'Start supervised run with orchestration' : 'After reviewing the plan, start supervised run with orchestration'}: node .plan2agent/scripts/p2a.mjs execute start --artifacts ${source.artifactRef} --task <task-id> --agent-tool ${orchestrationAgentTool} --orchestration-plan .plan2agent/orchestration/<task-id>.json`,
+      `Inspect orchestration runtime after start: node .plan2agent/scripts/p2a.mjs orchestrate runtime-status --runtime ${runtimeDir}/<run-id>.orchestration-runtime.json`,
     ];
   }
   return [];

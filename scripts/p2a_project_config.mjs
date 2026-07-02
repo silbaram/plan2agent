@@ -3,6 +3,9 @@
 import { existsSync, lstatSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 
+const ORCHESTRATION_AGENT_TOOLS = new Set(['codex', 'claude', 'manual']);
+const AI_TOOL_TARGETS = new Set(['codex', 'claude', 'gemini']);
+
 export function defaultRunTracking() {
   return {
     runsDir: '.plan2agent/runs',
@@ -42,6 +45,67 @@ export function defaultDevExecution() {
     scopePolicy: 'task_only',
     verificationPolicy: 'required_for_done',
   };
+}
+
+function objectValue(value) {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+}
+
+function normalizedProviderValue(value) {
+  return typeof value === 'string' && value.trim() ? value.trim().toLowerCase() : null;
+}
+
+function normalizedProviderList(value) {
+  return Array.isArray(value)
+    ? value
+      .filter((item) => typeof item === 'string')
+      .map((item) => item.trim().toLowerCase())
+      .filter(Boolean)
+    : [];
+}
+
+function uniqueOrdered(values) {
+  const seen = new Set();
+  const unique = [];
+  for (const value of values) {
+    if (!value || seen.has(value)) continue;
+    seen.add(value);
+    unique.push(value);
+  }
+  return unique;
+}
+
+export function resolveOrchestrationAgentTool(config, manifest) {
+  const defaults = defaultDevExecution();
+  const devExecution = objectValue(config?.devExecution);
+  const configuredAllowed = normalizedProviderList(devExecution.allowedProviders);
+  const configuredWrite = normalizedProviderList(devExecution.writeProviders);
+  const allowedSet = new Set(configuredAllowed.length ? configuredAllowed : defaults.allowedProviders);
+  const writeProviders = configuredWrite.length ? configuredWrite : defaults.writeProviders;
+  const writeSet = new Set(writeProviders);
+  const defaultProvider = normalizedProviderValue(devExecution.defaultProvider) ?? defaults.defaultProvider;
+  const manifestTargets = normalizedProviderList(manifest?.aiToolTargets)
+    .filter((target) => AI_TOOL_TARGETS.has(target));
+  const manifestTargetSet = new Set(manifestTargets);
+  const hasManifestTargets = manifestTargets.length > 0;
+  const candidates = uniqueOrdered([
+    defaultProvider,
+    ...writeProviders,
+    ...configuredAllowed,
+    ...defaults.writeProviders,
+    'manual',
+  ]);
+
+  for (const tool of candidates) {
+    if (!ORCHESTRATION_AGENT_TOOLS.has(tool) || !allowedSet.has(tool)) continue;
+    if (tool === 'manual') return tool;
+    if (!writeSet.has(tool)) continue;
+    if (!hasManifestTargets) continue;
+    if (!manifestTargetSet.has(tool)) continue;
+    return tool;
+  }
+
+  return allowedSet.has('manual') ? 'manual' : '<agent-tool>';
 }
 
 export function defaultRoleProfiles() {

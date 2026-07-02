@@ -804,7 +804,77 @@ function validateScaffoldFixtureCase() {
         writeResultOutput(result);
         return { status: 1, checks };
       }
+      if (
+        capability === 'orchestration'
+        && (
+          !result.stdout.includes('Check provider runner readiness: node .plan2agent/scripts/p2a.mjs orchestrate runner-doctor --root .')
+          || !result.stdout.includes('After a ready task exists, plan supervised orchestration: node .plan2agent/scripts/p2a.mjs orchestrate plan --artifacts .plan2agent/artifacts/<project_id> --task <task-id> --agent-tool codex --output .plan2agent/orchestration/<task-id>.json')
+          || !result.stdout.includes('After reviewing the plan, start supervised run with orchestration: node .plan2agent/scripts/p2a.mjs execute start --artifacts .plan2agent/artifacts/<project_id> --task <task-id> --agent-tool codex --orchestration-plan .plan2agent/orchestration/<task-id>.json')
+          || !result.stdout.includes('Inspect orchestration runtime after start: node .plan2agent/scripts/p2a.mjs orchestrate runtime-status --runtime .plan2agent/runs/<run-id>.orchestration-runtime.json')
+        )
+      ) {
+        console.error('enhance orchestration next-actions fixture failed');
+        writeResultOutput(result);
+        return { status: 1, checks };
+      }
     }
+
+    const orchestrationClaudeRoot = path.join(tempRoot, 'orchestration-claude-target');
+    result = runHandoff(['scaffold', '--target', orchestrationClaudeRoot, '--tools', 'claude']);
+    checks += 1;
+    if (result.status !== 0) {
+      console.error('orchestration claude provider scaffold fixture failed');
+      writeResultOutput(result);
+      return { status: failureStatus(result), checks };
+    }
+    result = runHandoff(['enhance', 'orchestration', '--target', orchestrationClaudeRoot]);
+    checks += 1;
+    if (
+      result.status !== 0
+      || !result.stdout.includes('After a ready task exists, plan supervised orchestration: node .plan2agent/scripts/p2a.mjs orchestrate plan --artifacts .plan2agent/artifacts/<project_id> --task <task-id> --agent-tool claude --output .plan2agent/orchestration/<task-id>.json')
+      || !result.stdout.includes('After reviewing the plan, start supervised run with orchestration: node .plan2agent/scripts/p2a.mjs execute start --artifacts .plan2agent/artifacts/<project_id> --task <task-id> --agent-tool claude --orchestration-plan .plan2agent/orchestration/<task-id>.json')
+    ) {
+      console.error('enhance orchestration claude provider next-actions fixture failed');
+      writeResultOutput(result);
+      return { status: failureStatus(result), checks };
+    }
+    const providerArtifactRoot = path.join(orchestrationClaudeRoot, '.plan2agent', 'artifacts', 'provider-check');
+    mkdirSync(providerArtifactRoot, { recursive: true });
+    writeFileSync(path.join(providerArtifactRoot, 'current-spec.json'), `${JSON.stringify({ schema_version: 'p2a.spec.v1', project_id: 'provider-check' }, null, 2)}\n`, 'utf8');
+    result = runTargetP2a(orchestrationClaudeRoot, ['info', '--json']);
+    checks += 1;
+    const claudeProviderInfo = result.status === 0 ? JSON.parse(result.stdout) : null;
+    if (
+      result.status !== 0
+      || !claudeProviderInfo.nextActions?.some((action) => action.includes('orchestrate plan --artifacts .plan2agent/artifacts/provider-check --task <task-id> --agent-tool claude'))
+      || !claudeProviderInfo.nextActions?.some((action) => action.includes('execute start --artifacts .plan2agent/artifacts/provider-check --task <task-id> --agent-tool claude --orchestration-plan'))
+    ) {
+      console.error('p2a info orchestration claude provider next-actions fixture failed');
+      writeResultOutput(result);
+      console.error(JSON.stringify({ claudeProviderInfo }, null, 2));
+      return { status: failureStatus(result), checks };
+    }
+
+    const orchestrationManualRoot = path.join(tempRoot, 'orchestration-manual-target');
+    result = runHandoff(['scaffold', '--target', orchestrationManualRoot, '--tools', 'none']);
+    checks += 1;
+    if (result.status !== 0) {
+      console.error('orchestration manual provider scaffold fixture failed');
+      writeResultOutput(result);
+      return { status: failureStatus(result), checks };
+    }
+    result = runHandoff(['enhance', 'orchestration', '--target', orchestrationManualRoot]);
+    checks += 1;
+    if (
+      result.status !== 0
+      || !result.stdout.includes('After a ready task exists, plan supervised orchestration: node .plan2agent/scripts/p2a.mjs orchestrate plan --artifacts .plan2agent/artifacts/<project_id> --task <task-id> --agent-tool manual --output .plan2agent/orchestration/<task-id>.json')
+      || !result.stdout.includes('After reviewing the plan, start supervised run with orchestration: node .plan2agent/scripts/p2a.mjs execute start --artifacts .plan2agent/artifacts/<project_id> --task <task-id> --agent-tool manual --orchestration-plan .plan2agent/orchestration/<task-id>.json')
+    ) {
+      console.error('enhance orchestration manual provider next-actions fixture failed');
+      writeResultOutput(result);
+      return { status: failureStatus(result), checks };
+    }
+
     const enhancedCapabilityConfig = JSON.parse(readFileSync(enhanceConfigPath, 'utf8'));
     const enhancedCapabilityManifest = JSON.parse(readFileSync(path.join(enhanceTargetRoot, '.plan2agent', 'manifest.json'), 'utf8'));
     if (
@@ -828,9 +898,14 @@ function validateScaffoldFixtureCase() {
     if (
       result.status !== 0
       || !enhancedCapabilityInfo.enhancements?.enabled?.includes('memory')
+      || !enhancedCapabilityInfo.enhancements?.enabled?.includes('orchestration')
       || !enhancedCapabilityInfo.enhancements?.enabled?.includes('proposals')
       || enhancedCapabilityInfo.enhancements?.memory?.enabled !== true
       || enhancedCapabilityInfo.enhancements?.memory?.pushPolicy !== 'explicit_approval'
+      || enhancedCapabilityInfo.enhancements?.orchestration?.enabled !== true
+      || enhancedCapabilityInfo.enhancements?.orchestration?.defaultMode !== 'solo'
+      || enhancedCapabilityInfo.enhancements?.orchestration?.providerRouting !== 'project_config'
+      || enhancedCapabilityInfo.enhancements?.orchestration?.monitorGatePolicy !== 'explicit_plan_only'
       || enhancedCapabilityInfo.enhancements?.proposals?.enabled !== true
       || enhancedCapabilityInfo.enhancements?.proposals?.reviewPolicy !== 'manual_curate'
       || enhancedCapabilityInfo.enhancements?.proposals?.patchPolicy !== 'draft_only'
@@ -848,10 +923,15 @@ function validateScaffoldFixtureCase() {
     if (
       result.status !== 0
       || !enhancedCapabilityDoctor.dev?.capabilities?.includes('memory')
+      || !enhancedCapabilityDoctor.dev?.capabilities?.includes('orchestration')
       || !enhancedCapabilityDoctor.dev?.capabilities?.includes('proposals')
       || !enhancedCapabilityDoctor.checks?.some((item) => item.id === 'capability_memory_manifest' && item.status === 'pass')
       || !enhancedCapabilityDoctor.checks?.some((item) => item.id === 'capability_memory_config' && item.status === 'pass')
       || !enhancedCapabilityDoctor.checks?.some((item) => item.id === 'capability_memory_push_policy' && item.status === 'pass')
+      || !enhancedCapabilityDoctor.checks?.some((item) => item.id === 'capability_orchestration_manifest' && item.status === 'pass')
+      || !enhancedCapabilityDoctor.checks?.some((item) => item.id === 'capability_orchestration_config' && item.status === 'pass')
+      || !enhancedCapabilityDoctor.checks?.some((item) => item.id === 'capability_orchestration_provider_routing' && item.status === 'pass')
+      || !enhancedCapabilityDoctor.checks?.some((item) => item.id === 'capability_orchestration_monitor_gate' && item.status === 'pass')
       || !enhancedCapabilityDoctor.checks?.some((item) => item.id === 'capability_proposals_manifest' && item.status === 'pass')
       || !enhancedCapabilityDoctor.checks?.some((item) => item.id === 'capability_proposals_config' && item.status === 'pass')
       || !enhancedCapabilityDoctor.checks?.some((item) => item.id === 'capability_proposals_patch_policy' && item.status === 'pass')
