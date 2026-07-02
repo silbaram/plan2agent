@@ -27,6 +27,7 @@ const RUNS_CLI = path.join(ROOT, 'scripts', 'p2a_runs.mjs');
 const EXECUTE_CLI = path.join(ROOT, 'scripts', 'p2a_execute.mjs');
 const ORCHESTRATE_CLI = path.join(ROOT, 'scripts', 'p2a_orchestrate.mjs');
 const PROPOSALS_CLI = path.join(ROOT, 'scripts', 'p2a_proposals.mjs');
+const EVAL_CLI = path.join(ROOT, 'scripts', 'p2a_eval.mjs');
 const MEMORY_CLI = path.join(ROOT, 'scripts', 'p2a_memory.mjs');
 const HANDOFF_CLI = path.join(ROOT, 'scripts', 'p2a_handoff.mjs');
 const DOCTOR_CLI = path.join(ROOT, 'scripts', 'p2a_doctor.mjs');
@@ -57,6 +58,10 @@ function runOrchestrate(args) {
 
 function runProposals(args) {
   return spawnSync(process.execPath, [PROPOSALS_CLI, ...args], { cwd: ROOT, encoding: 'utf8' });
+}
+
+function runEval(args) {
+  return spawnSync(process.execPath, [EVAL_CLI, ...args], { cwd: ROOT, encoding: 'utf8' });
 }
 
 function runMemory(args) {
@@ -97,6 +102,10 @@ function runTargetOrchestrate(targetRoot, args, options = {}) {
 
 function runTargetProposals(targetRoot, args) {
   return spawnSync(process.execPath, [path.join(targetRoot, '.plan2agent', 'scripts', 'p2a_proposals.mjs'), ...args], { cwd: targetRoot, encoding: 'utf8' });
+}
+
+function runTargetEval(targetRoot, args) {
+  return spawnSync(process.execPath, [path.join(targetRoot, '.plan2agent', 'scripts', 'p2a_eval.mjs'), ...args], { cwd: targetRoot, encoding: 'utf8' });
 }
 
 function runTargetMemory(targetRoot, args) {
@@ -274,6 +283,14 @@ function validateScaffoldFixtureCase() {
     checks += 1;
     if (result.status !== 0 || !result.stdout.includes('p2a_iteration.mjs init')) {
       console.error('scaffold target p2a_iteration --help failed');
+      writeResultOutput(result);
+      return { status: failureStatus(result), checks };
+    }
+
+    result = runTargetEval(targetRoot, ['--help']);
+    checks += 1;
+    if (result.status !== 0 || !result.stdout.includes('p2a_eval.mjs grade')) {
+      console.error('scaffold target p2a_eval --help failed');
       writeResultOutput(result);
       return { status: failureStatus(result), checks };
     }
@@ -772,6 +789,133 @@ function validateScaffoldFixtureCase() {
     checks += 1;
     if (result.status !== 0) {
       console.error('scaffold overwrite fixture failed');
+      writeResultOutput(result);
+      return { status: failureStatus(result), checks };
+    }
+  } finally {
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+  return { status: 0, checks };
+}
+
+function evalRunFixture(runId, status = 'finished') {
+  const failed = status === 'failed';
+  return {
+    schema_version: 'p2a.run.v1',
+    runId,
+    projectId: 'webhook-api-service',
+    taskId: 'task-002',
+    taskTitle: 'Implement HMAC webhook verification',
+    iterationId: '1',
+    sourceLayout: 'graph',
+    taskGraphRef: 'fixtures/webhook-api-service/task-graph.json',
+    sourceSpecRef: 'fixtures/webhook-api-service/spec.approved.json',
+    agentTool: 'manual',
+    workspaceRef: 'fixture',
+    workspacePath: ROOT,
+    isolation: {
+      mode: 'none',
+      branch: null,
+      worktree: null,
+      baseRef: null,
+      created: false,
+      createCommand: null,
+      createExitCode: null,
+      createOutputTail: null,
+    },
+    status,
+    startedAt: '2026-07-02T00:00:00.000Z',
+    updatedAt: '2026-07-02T00:01:00.000Z',
+    finishedAt: '2026-07-02T00:01:00.000Z',
+    changedFiles: ['src/webhook-verification.ts', 'test/webhook-verification.test.ts'],
+    verification: [{
+      type: 'test',
+      command: 'npm test -- webhook-verification',
+      status: failed ? 'failed' : 'passed',
+      exitCode: failed ? 1 : 0,
+      durationMs: 1000,
+      startedAt: '2026-07-02T00:00:30.000Z',
+      finishedAt: '2026-07-02T00:00:31.000Z',
+      stdoutTail: failed
+        ? 'invalid signatures still pass verification'
+        : 'Missing or invalid signatures are rejected. Expired timestamps are rejected. Valid signatures pass verification with deterministic tests.',
+      stderrTail: null,
+      source: 'command',
+    }],
+    notes: failed
+      ? ['Verification failed while checking HMAC rejection behavior.']
+      : ['Missing or invalid signatures are rejected. Expired timestamps are rejected. Valid signatures pass verification with deterministic tests.'],
+    ...(failed ? {
+      failure: {
+        class: 'verification_failed',
+        retryable: 'after_fix',
+        needsUserDecision: false,
+        source: 'owner',
+      },
+    } : {}),
+  };
+}
+
+function writeEvalRuns(runsDir, runs) {
+  mkdirSync(runsDir, { recursive: true });
+  for (const run of runs) {
+    writeFileSync(path.join(runsDir, `${run.runId}.json`), `${JSON.stringify(run, null, 2)}\n`, 'utf8');
+  }
+  writeFileSync(path.join(runsDir, 'run-index.json'), `${JSON.stringify({
+    schema_version: 'p2a.run_index.v1',
+    projectId: 'webhook-api-service',
+    runs: runs.map((run) => ({
+      runId: run.runId,
+      taskId: run.taskId,
+      iterationId: run.iterationId,
+      status: run.status,
+      agentTool: run.agentTool,
+      workspaceRef: run.workspaceRef,
+      taskGraphRef: run.taskGraphRef,
+      runRef: `${run.runId}.json`,
+      startedAt: run.startedAt,
+      finishedAt: run.finishedAt,
+    })),
+    tasks: [{
+      taskId: 'task-002',
+      runIds: runs.map((run) => run.runId),
+      latestRunId: runs[runs.length - 1]?.runId ?? null,
+    }],
+  }, null, 2)}\n`, 'utf8');
+}
+
+function validateEvalFixtureCases() {
+  const tempRoot = mkdtempSync(path.join(tmpdir(), 'p2a-eval-'));
+  let checks = 0;
+  try {
+    const baselineRunsDir = path.join(tempRoot, 'baseline-runs');
+    const candidateRunsDir = path.join(tempRoot, 'candidate-runs');
+    const passRun = evalRunFixture('run-eval-pass');
+    const failedRun = evalRunFixture('run-eval-failed', 'failed');
+    writeEvalRuns(baselineRunsDir, [passRun]);
+    writeEvalRuns(candidateRunsDir, [passRun, failedRun]);
+
+    const graphPath = path.join(FIXTURE_ROOT, 'webhook-api-service', 'task-graph.json');
+    let result = runEval(['grade', '--graph', graphPath, '--run', path.join(baselineRunsDir, 'run-eval-pass.json')]);
+    checks += 1;
+    if (result.status !== 0 || !result.stdout.includes('Plan2Agent eval grade') || !result.stdout.includes('grade: pass')) {
+      console.error('eval grade fixture failed');
+      writeResultOutput(result);
+      return { status: failureStatus(result), checks };
+    }
+
+    result = runEval(['compare', '--baseline', baselineRunsDir, '--candidate', candidateRunsDir]);
+    checks += 1;
+    if (result.status !== 0 || !result.stdout.includes('Plan2Agent eval compare') || !result.stdout.includes('verdict: fail') || !result.stdout.includes('failed_or_blocked_runs')) {
+      console.error('eval compare fixture failed');
+      writeResultOutput(result);
+      return { status: failureStatus(result), checks };
+    }
+
+    result = runEval(['analyze', '--runs', candidateRunsDir]);
+    checks += 1;
+    if (result.status !== 0 || !result.stdout.includes('Plan2Agent eval analyze') || !result.stdout.includes('cluster: verification_failed')) {
+      console.error('eval analyze fixture failed');
       writeResultOutput(result);
       return { status: failureStatus(result), checks };
     }
@@ -4668,6 +4812,15 @@ export function main() {
   }
   if (scaffoldResult.status !== 0) return scaffoldResult.status;
 
+  let evalResult;
+  try {
+    evalResult = validateEvalFixtureCases();
+  } catch (error) {
+    console.error(`fixture validation failed: ${error.message}`);
+    return 1;
+  }
+  if (evalResult.status !== 0) return evalResult.status;
+
   let memoryResult;
   try {
     memoryResult = validateMemoryFixtureCases();
@@ -4706,6 +4859,7 @@ export function main() {
 
   const segments = [`${fixtureDirs.length} Plan2Agent fixture set(s)`];
   if (scaffoldResult.checks) segments.push(`${scaffoldResult.checks} scaffold fixture check(s)`);
+  if (evalResult.checks) segments.push(`${evalResult.checks} eval fixture check(s)`);
   if (memoryResult.checks) segments.push(`${memoryResult.checks} memory fixture check(s)`);
   if (e2eResult.checks) segments.push(`${e2eResult.checks} e2e fixture check(s)`);
   if (iterationResult.checks) segments.push(`${iterationResult.checks} iteration fixture check(s)`);

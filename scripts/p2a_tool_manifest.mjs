@@ -19,6 +19,7 @@ export const PROJECT_RUNTIME_SCRIPT_FILES = [
   'p2a_execute.mjs',
   'p2a_orchestrate.mjs',
   'p2a_proposals.mjs',
+  'p2a_eval.mjs',
   'p2a_memory.mjs',
   'p2a_run_paths.mjs',
   'p2a_iteration_state.mjs',

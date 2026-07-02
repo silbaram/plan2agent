@@ -1168,6 +1168,9 @@ function digestNextActions(context, uncoveredCandidateRuns, proposals) {
       ? `--graph ${displayPath(context.sourcePath)}`
       : `--runs ${displayPath(context.runsDir)}`;
   const actions = [];
+  if (uncoveredCandidateRuns.length || proposals.some((proposal) => proposal.status === 'proposed')) {
+    actions.push(`Analyze failure clusters: node .plan2agent/scripts/p2a_eval.mjs analyze ${sourceFlag}`);
+  }
   if (uncoveredCandidateRuns.length) {
     actions.push(`Mine missing proposal candidates: node .plan2agent/scripts/p2a_proposals.mjs mine ${sourceFlag}`);
   }
