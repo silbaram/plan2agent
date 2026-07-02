@@ -388,6 +388,30 @@ function validateTechnologyReconnaissanceEvidence(spec) {
   }
 }
 
+function validateReferenceReconnaissance(spec) {
+  const reconnaissance = spec.reference_reconnaissance;
+  if (!reconnaissance) return;
+
+  const evidenceIds = new Set((spec.evidence ?? []).map((item) => item.source_id));
+  const candidateIds = reconnaissance.candidates.map((candidate) => candidate.candidate_id);
+  if (candidateIds.length !== new Set(candidateIds).size) {
+    throw new ValidationError('spec.reference_reconnaissance candidate_id values must be unique');
+  }
+
+  for (const candidate of reconnaissance.candidates) {
+    if (!evidenceIds.has(candidate.source_id)) {
+      throw new ValidationError(`spec.reference_reconnaissance ${candidate.candidate_id} references unknown evidence source_id ${candidate.source_id}`);
+    }
+  }
+
+  const knownCandidateIds = new Set(candidateIds);
+  for (const pattern of [...reconnaissance.selected_patterns, ...reconnaissance.rejected_patterns]) {
+    if (!knownCandidateIds.has(pattern.candidate_id)) {
+      throw new ValidationError(`spec.reference_reconnaissance pattern references unknown candidate_id ${pattern.candidate_id}`);
+    }
+  }
+}
+
 export function validateIntake(filePath, options = {}) {
   const data = validateAgainstSchema(filePath, 'intake');
   validateEvidence(data.evidence, 'intake');
@@ -441,6 +465,7 @@ export function validateSpec(filePath, intakePath = null) {
   const intake = intakePath ? validateIntake(intakePath) : null;
   validateEvidence(data.evidence, 'spec');
   validateTechnologyReconnaissanceEvidence(data);
+  validateReferenceReconnaissance(data);
   validateClarifyingQuestionDisposition(data, intake);
   if (data.approval === 'approved' && data.open_decisions.length) {
     throw new ValidationError('approved specs must not contain open_decisions');

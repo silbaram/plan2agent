@@ -112,6 +112,7 @@ Intake and spec artifacts include an `evidence` array so web-grounded or local-s
 - Every `WEB-n` item must include a title, http(s) URL, and `used_for` rationale.
 - If a web source materially changes a question, assumption, product decision, or integration choice, the artifact must include the source in `evidence` and refer to the source id in nearby rationale.
 - Gate B technology recommendations should prefer primary sources such as official docs, release notes, standards documents, package registries, source repositories, or vendor documentation.
+- If Gate B compares concrete reusable technologies, local code patterns, prior artifacts, or external implementation approaches, record the comparison in optional `spec_json.reference_reconnaissance`. Each `REF-n` candidate points to an existing `evidence[].source_id`; selected and rejected patterns point back to those candidates so source metadata stays separate from decision rationale.
 
 ## 8. 기준 저장 구조
 

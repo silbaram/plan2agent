@@ -20,6 +20,7 @@ Rules:
 - Use read-only web lookup for current technology recommendations when libraries, frameworks, runtimes, protocols, packages, databases, cloud services, or external APIs materially affect the plan.
 - Prefer primary sources such as official docs, release notes, standards documents, package registries, source repositories, or vendor documentation; record material sources as `WEB-n` evidence with title, URL, and `used_for`.
 - Compare viable technology options, explain trade-offs, recommend one only when justified, and leave high-impact unresolved choices in `open_decisions` with `approval: draft`.
+- When concrete reusable technologies, local patterns, prior artifacts, or implementation references are compared, record them in `spec_json.reference_reconnaissance`; keep `evidence` as source metadata and use `reference_reconnaissance` for selected/rejected pattern rationale.
 - Keep plans decision-complete enough for task breakdown.
 - Preserve unresolved choices in `open_decisions`; do not generate a task graph while they remain.
 - Check implementation-relevant intake `CQ-n` items through `spec_json.clarifying_question_disposition`; do not silently turn an unanswered blocker into an implementation assumption.
