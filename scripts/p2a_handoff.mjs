@@ -51,16 +51,16 @@ function usage() {
     'Usage:',
     '  node scripts/p2a_handoff.mjs scaffold --target <project-dir> [--tools <list>] [--overwrite] [--dry-run]',
     '  node scripts/p2a_handoff.mjs enhance <capability> --target <project-dir> [--tools <list>] [--overwrite] [--dry-run]',
-    '  node scripts/p2a_handoff.mjs update --target <project-dir> [--tools <list>] [--dry-run]',
-    '  node scripts/p2a_handoff.mjs upgrade --target <project-dir> --dry-run [--tools <list>]',
+    '  node scripts/p2a_handoff.mjs update --target <project-dir> [--tools <list>] [--dry-run|--apply]',
+    '  node scripts/p2a_handoff.mjs upgrade --target <project-dir> (--dry-run|--apply) [--tools <list>]',
     '  node scripts/p2a_handoff.mjs --project-id <id> --artifacts <path> --target <path> [options]',
     '',
     'Options:',
     'Scaffold:',
     '  scaffold             Install the full co-located P2A planning/development harness into a project.',
     '  enhance <capability> Install or refresh one capability: dev-skills, memory, gui, orchestration, proposals.',
-    '  update               Preview scaffolded harness updates. No files are written.',
-    '  upgrade              Preview scaffolded harness file updates. Dry-run only for now.',
+    '  update               Preview or apply scaffolded harness updates.',
+    '  upgrade              Preview or apply scaffolded harness file updates.',
     '  --target <path>      Project directory to create or update.',
     '  --tools <list>       Copy portable P2A AI tool assets for scaffold/enhance dev-skills. Use comma list, all, or none. Default: all.',
     '',
@@ -77,6 +77,7 @@ function usage() {
     '                       Adapter targets for codex,claude,gemini. Defaults to --tools or all.',
     '  --overwrite          Allow replacing existing target files.',
     '  --dry-run            Validate and print the handoff plan without writing files.',
+    '  --apply              Apply safe update/upgrade changes after reviewing the preview.',
     '  --help, -h           Show this help.',
   ].join('\n');
 }
@@ -131,7 +132,9 @@ function parseArgs(argv) {
     teamBigFiveTargets: null,
     overwrite: false,
     dryRun: false,
+    apply: false,
     help: enhancementHelp,
+    toolsProvided: false,
   };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
@@ -160,6 +163,7 @@ function parseArgs(argv) {
       args.includeIntake = true;
     } else if (arg === '--tools') {
       args.tools = parseToolTargets(argv[++index]);
+      args.toolsProvided = true;
     } else if (arg === '--include-team-bigfive') {
       args.includeTeamBigFive = true;
     } else if (arg === '--team-bigfive-source') {
@@ -173,6 +177,8 @@ function parseArgs(argv) {
       args.overwrite = true;
     } else if (arg === '--dry-run') {
       args.dryRun = true;
+    } else if (arg === '--apply') {
+      args.apply = true;
     } else if (arg.startsWith('--')) {
       throw new Error(`unknown option: ${arg}`);
     } else {
@@ -185,12 +191,15 @@ function parseArgs(argv) {
   }
   if (command === 'scaffold' || command === 'update' || command === 'upgrade' || command === 'enhance') {
     if (!args.target) throw new Error('--target is required');
-    if (command === 'upgrade' && !args.dryRun) throw new Error('upgrade currently supports --dry-run only');
+    if (args.apply && args.dryRun) throw new Error('--apply cannot be combined with --dry-run');
+    if (args.apply && command !== 'update' && command !== 'upgrade') throw new Error('--apply is only supported by update and upgrade');
+    if (command === 'upgrade' && !args.dryRun && !args.apply) throw new Error('upgrade requires --dry-run or --apply');
     return args;
   }
   for (const required of ['projectId', 'artifacts', 'target']) {
     if (!args[required]) throw new Error(`--${required.replace(/[A-Z]/g, (match) => `-${match.toLowerCase()}`)} is required`);
   }
+  if (args.apply) throw new Error('--apply is only supported by update and upgrade');
   if (!args.includeTeamBigFive && (args.teamBigFiveSource || args.teamBigFiveTargets)) {
     throw new Error('--team-bigfive-source and --team-bigfive-targets require --include-team-bigfive');
   }
@@ -1208,6 +1217,27 @@ function summarizeUpgradeItems(items) {
   return summary;
 }
 
+function buildConfigMigrations(config, manifest) {
+  let nextConfig = config;
+  const devConfigMigration = mergeDevSkillConfig(nextConfig);
+  nextConfig = devConfigMigration.config;
+  const migrations = [{
+    id: 'dev_skills_config',
+    status: devConfigMigration.updatedKeys.length ? 'would_update' : 'up_to_date',
+    updatedKeys: devConfigMigration.updatedKeys,
+  }];
+  for (const capability of enabledCapabilityEnhancements(manifest)) {
+    const migration = mergeCapabilityConfig(nextConfig, capability);
+    nextConfig = migration.config;
+    migrations.push({
+      id: `${capability}_config`,
+      status: migration.updatedKeys.length ? 'would_update' : 'up_to_date',
+      updatedKeys: migration.updatedKeys,
+    });
+  }
+  return { config: nextConfig, migrations };
+}
+
 function buildUpgradeDryRunReport(args, targetRoot) {
   const manifest = readUpgradeJsonFile(path.join(targetRoot, '.plan2agent', 'manifest.json'), '.plan2agent/manifest.json', args.command);
   const config = readUpgradeJsonFile(path.join(targetRoot, '.plan2agent', 'project.config.json'), '.plan2agent/project.config.json', args.command);
@@ -1216,17 +1246,8 @@ function buildUpgradeDryRunReport(args, targetRoot) {
   const items = plan.map(compareUpgradePlanItem);
   const summary = summarizeUpgradeItems(items);
   const failures = items.filter((item) => item.status === 'conflict' || item.status === 'error');
-  const devConfigMigration = mergeDevSkillConfig(config);
-  const capabilityMigrations = enabledCapabilityEnhancements(manifest).map((capability) => {
-    const migration = mergeCapabilityConfig(config, capability);
-    return {
-      id: `${capability}_config`,
-      status: migration.updatedKeys.length ? 'would_update' : 'up_to_date',
-      updatedKeys: migration.updatedKeys,
-    };
-  });
-  const migrationUpdateCount = devConfigMigration.updatedKeys.length
-    + capabilityMigrations.reduce((sum, migration) => sum + migration.updatedKeys.length, 0);
+  const configMigrations = buildConfigMigrations(config, manifest);
+  const migrationUpdateCount = configMigrations.migrations.reduce((sum, migration) => sum + migration.updatedKeys.length, 0);
   const changes = summary.missing + summary.wouldUpdate + summary.manualReview + migrationUpdateCount;
   const status = failures.length ? 'fail' : changes ? 'changes' : 'pass';
   return {
@@ -1235,22 +1256,20 @@ function buildUpgradeDryRunReport(args, targetRoot) {
     status,
     targetProject: targetRoot,
     aiToolTargets: tools,
+    toolsProvided: args.toolsProvided,
     summary,
     items,
-    migrations: [
-      {
-        id: 'dev_skills_config',
-        status: devConfigMigration.updatedKeys.length ? 'would_update' : 'up_to_date',
-        updatedKeys: devConfigMigration.updatedKeys,
-      },
-      ...capabilityMigrations,
-    ],
+    migrations: configMigrations.migrations,
     failures,
     nextActions: failures.length
       ? [`Resolve conflicts/errors above before running ${args.command} again.`]
       : changes
-        ? [`Review listed changes. Actual ${args.command} writes are intentionally not implemented yet.`]
+        ? [`Review listed changes. Apply safe updates with: node scripts/p2a_handoff.mjs ${args.command} --target ${targetRoot} --apply`]
         : [],
+    _plan: plan,
+    _manifest: manifest,
+    _config: config,
+    _nextConfig: configMigrations.config,
   };
 }
 
@@ -1282,6 +1301,237 @@ function printUpgradeDryRunReport(report) {
     }
   }
   console.log('dry-run: no files written');
+}
+
+function isProjectConfigTarget(targetRelative) {
+  return normalizePath(targetRelative) === '.plan2agent/project.config.json';
+}
+
+function isManifestTarget(targetRelative) {
+  return normalizePath(targetRelative) === '.plan2agent/manifest.json';
+}
+
+function isAutoUpgradableTarget(targetRelative) {
+  const target = normalizePath(targetRelative);
+  return target.startsWith('.plan2agent/scripts/')
+    || target.startsWith('.plan2agent/schemas/')
+    || target.startsWith('.agents/')
+    || target.startsWith('.codex/')
+    || target.startsWith('.claude/skills/')
+    || target.startsWith('.claude/agents/')
+    || target.startsWith('.claude/hooks/')
+    || target.startsWith('.gemini/agents/')
+    || target.startsWith('.gemini/commands/p2a/');
+}
+
+function applyCandidateStatus(status) {
+  return status === 'missing' || status === 'would_update';
+}
+
+function publicUpgradeReport(report) {
+  const { _plan, _manifest, _config, _nextConfig, ...publicReport } = report;
+  return publicReport;
+}
+
+function upgradeApplyBlockers(report) {
+  const blockers = report.failures.map((item) => ({
+    status: item.status,
+    target: item.target,
+    detail: item.detail,
+  }));
+  for (const item of report.items) {
+    if (item.status === 'manual_review' && !isProjectConfigTarget(item.target)) {
+      blockers.push({
+        status: 'manual_review',
+        target: item.target,
+        detail: item.detail,
+      });
+      continue;
+    }
+    if (!applyCandidateStatus(item.status)) continue;
+    if (isManifestTarget(item.target) || isProjectConfigTarget(item.target) || isAutoUpgradableTarget(item.target)) continue;
+    blockers.push({
+      status: 'manual_review',
+      target: item.target,
+      detail: `safe apply does not overwrite ${item.target}; review this generated file manually`,
+    });
+  }
+  return blockers;
+}
+
+function upgradeApplyItems(report) {
+  const itemByTarget = new Map(report.items.map((item) => [normalizePath(item.target), item]));
+  return report._plan.filter((item) => {
+    const target = normalizePath(item.targetRelative);
+    const comparison = itemByTarget.get(target);
+    return comparison && applyCandidateStatus(comparison.status) && isAutoUpgradableTarget(target);
+  });
+}
+
+function changedMigrations(report) {
+  return report.migrations.filter((migration) => migration.updatedKeys.length > 0);
+}
+
+function reportTimestamp(value) {
+  return value.replace(/[-:.]/g, '').replace(/\.\d+Z$/, 'Z');
+}
+
+function reportHash(payload) {
+  return createHash('sha256').update(JSON.stringify(payload)).digest('hex').slice(0, 10);
+}
+
+function upgradeReportRelativePath(command, appliedAt, payload) {
+  return normalizePath(path.join(
+    '.plan2agent',
+    'update-reports',
+    `${command}-${reportTimestamp(appliedAt)}-${reportHash(payload)}.json`,
+  ));
+}
+
+function writeUpgradeApplyReport(targetRoot, report) {
+  const reportRelative = upgradeReportRelativePath(report.command, report.appliedAt, report);
+  const reportPath = targetPath(targetRoot, reportRelative);
+  const reportWithPath = { ...report, reportPath: reportRelative };
+  mkdirSync(path.dirname(reportPath), { recursive: true });
+  writeFileSync(reportPath, `${JSON.stringify(reportWithPath, null, 2)}\n`, 'utf8');
+  return reportWithPath;
+}
+
+function plannedManifestData(report) {
+  const manifestItem = report._plan.find((item) => isManifestTarget(item.targetRelative));
+  return manifestItem?.data ?? null;
+}
+
+function mergeUpgradeManifest(existingManifest, report, appliedAt, appliedFiles, migrationIds) {
+  const plannedManifest = plannedManifestData(report) ?? {};
+  const notes = [
+    ...(Array.isArray(existingManifest.notes) ? existingManifest.notes.filter((item) => typeof item === 'string') : []),
+    `Harness ${report.command} applied at ${appliedAt}`,
+  ];
+  const updates = Array.isArray(existingManifest.updates)
+    ? existingManifest.updates.filter((item) => item && typeof item === 'object' && !Array.isArray(item))
+    : [];
+  updates.push({
+    command: report.command,
+    appliedAt,
+    toolkitRoot: ROOT,
+    files: appliedFiles.length,
+    migrations: migrationIds,
+  });
+  return {
+    ...existingManifest,
+    schema_version: existingManifest.schema_version ?? 'p2a.handoff.v1',
+    targetProject: existingManifest.targetProject ?? report.targetProject,
+    includedTools: uniqueNormalizedList(existingManifest.includedTools, plannedManifest.includedTools),
+    aiToolTargets: uniqueNormalizedList(existingManifest.aiToolTargets, report.aiToolTargets),
+    scriptFiles: uniqueNormalizedList(plannedManifest.scriptFiles, existingManifest.scriptFiles),
+    schemaFiles: uniqueNormalizedList(plannedManifest.schemaFiles, existingManifest.schemaFiles),
+    toolFiles: uniqueNormalizedList(existingManifest.toolFiles, plannedManifest.toolFiles),
+    aiToolFiles: uniqueNormalizedList(existingManifest.aiToolFiles, plannedManifest.aiToolFiles),
+    aiToolGroups: mergeAiToolGroups(existingManifest.aiToolGroups, plannedManifest.aiToolGroups ?? []),
+    provenance: {
+      ...(existingManifest.provenance && typeof existingManifest.provenance === 'object' && !Array.isArray(existingManifest.provenance) ? existingManifest.provenance : {}),
+      toolkitRoot: ROOT,
+      lastUpdatedAt: appliedAt,
+      lastUpdateCommand: report.command,
+    },
+    updates: updates.slice(-20),
+    notes: [...new Set(notes)],
+  };
+}
+
+function writeJsonFile(filePath, data) {
+  mkdirSync(path.dirname(filePath), { recursive: true });
+  writeFileSync(filePath, `${JSON.stringify(data, null, 2)}\n`, 'utf8');
+}
+
+function buildUpgradeApplyReport(args, targetRoot, previewReport) {
+  const appliedAt = new Date().toISOString();
+  const blockers = upgradeApplyBlockers(previewReport);
+  const applyItems = blockers.length ? [] : upgradeApplyItems(previewReport);
+  const migrations = blockers.length ? [] : changedMigrations(previewReport);
+  const report = {
+    schema_version: 'p2a.upgrade_apply.v1',
+    command: args.command,
+    appliedAt,
+    status: blockers.length ? 'blocked' : 'applied',
+    targetProject: targetRoot,
+    aiToolTargets: previewReport.aiToolTargets,
+    preview: publicUpgradeReport(previewReport),
+    blockers,
+    applied: {
+      files: [],
+      migrations: [],
+      config: false,
+      manifest: false,
+    },
+    nextActions: [],
+  };
+  if (blockers.length) {
+    report.nextActions = ['Review blockers above, resolve conflicts/manual review items, then rerun with --apply.'];
+    return report;
+  }
+
+  if (applyItems.length) {
+    writePlan(applyItems);
+    report.applied.files = applyItems.map((item) => normalizePath(item.targetRelative));
+  }
+  if (migrations.length) {
+    writeJsonFile(path.join(targetRoot, '.plan2agent', 'project.config.json'), previewReport._nextConfig);
+    report.applied.config = true;
+    report.applied.migrations = migrations.map((migration) => ({
+      id: migration.id,
+      updatedKeys: migration.updatedKeys,
+    }));
+  }
+  const shouldUpdateManifest = report.applied.files.length > 0 || report.applied.config || previewReport.status !== 'pass';
+  if (shouldUpdateManifest) {
+    const nextManifest = mergeUpgradeManifest(
+      previewReport._manifest,
+      previewReport,
+      appliedAt,
+      report.applied.files,
+      report.applied.migrations.map((migration) => migration.id),
+    );
+    writeJsonFile(path.join(targetRoot, '.plan2agent', 'manifest.json'), nextManifest);
+    report.applied.manifest = true;
+  }
+  if (!report.applied.files.length && !report.applied.config && !report.applied.manifest) {
+    report.status = 'noop';
+    report.nextActions = ['No safe update changes were required.'];
+  } else {
+    report.nextActions = ['Run p2a_doctor --dev against the target project to verify the applied update.'];
+  }
+  return report;
+}
+
+function printUpgradeApplyReport(report) {
+  console.log(report.command === 'update' ? 'Plan2Agent update apply' : 'Plan2Agent upgrade apply');
+  console.log(`status: ${report.status}`);
+  console.log(`targetProject: ${report.targetProject}`);
+  if (report.blockers.length) {
+    console.log('blockers:');
+    for (const blocker of report.blockers) {
+      console.log(`- ${blocker.status}: ${blocker.target}`);
+      console.log(`  ${blocker.detail}`);
+    }
+  }
+  if (report.applied.files.length) {
+    console.log('applied files:');
+    for (const file of report.applied.files) console.log(`- ${file}`);
+  }
+  if (report.applied.migrations.length) {
+    console.log('applied migrations:');
+    for (const migration of report.applied.migrations) {
+      console.log(`- ${migration.id}: ${migration.updatedKeys.join(',')}`);
+    }
+  }
+  console.log(`manifest: ${report.applied.manifest ? 'updated' : 'unchanged'}`);
+  if (report.reportPath) console.log(`report: ${report.reportPath}`);
+  if (report.nextActions.length) {
+    console.log('next actions:');
+    for (const action of report.nextActions) console.log(`- ${action}`);
+  }
 }
 
 function uniqueNormalizedList(...lists) {
@@ -2075,6 +2325,11 @@ export function main(argv = process.argv.slice(2)) {
         throw new Error(`--target must be an existing scaffold project directory: ${targetRoot}`);
       }
       const report = buildUpgradeDryRunReport(args, targetRoot);
+      if (args.apply) {
+        const applyReport = writeUpgradeApplyReport(targetRoot, buildUpgradeApplyReport(args, targetRoot, report));
+        printUpgradeApplyReport(applyReport);
+        return applyReport.status === 'blocked' ? 1 : 0;
+      }
       printUpgradeDryRunReport(report);
       return report.status === 'fail' ? 1 : 0;
     }

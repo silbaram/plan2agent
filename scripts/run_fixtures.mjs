@@ -734,6 +734,77 @@ function validateScaffoldFixtureCase() {
       return { status: failureStatus(result), checks };
     }
 
+    const applyUpdateRoot = path.join(tempRoot, 'apply-update-target');
+    cpSync(targetRoot, applyUpdateRoot, { recursive: true });
+    const staleRuntimePath = path.join(applyUpdateRoot, '.plan2agent', 'scripts', 'p2a_eval.mjs');
+    writeFileSync(staleRuntimePath, 'stale runtime script\n', 'utf8');
+    const applyConfigPath = path.join(applyUpdateRoot, '.plan2agent', 'project.config.json');
+    const applyConfig = JSON.parse(readFileSync(applyConfigPath, 'utf8'));
+    delete applyConfig.devExecution;
+    writeFileSync(applyConfigPath, `${JSON.stringify(applyConfig, null, 2)}\n`);
+    result = runHandoff(['update', '--target', applyUpdateRoot, '--apply']);
+    checks += 1;
+    const appliedUpdateConfig = JSON.parse(readFileSync(applyConfigPath, 'utf8'));
+    const appliedUpdateManifest = JSON.parse(readFileSync(path.join(applyUpdateRoot, '.plan2agent', 'manifest.json'), 'utf8'));
+    const applyUpdateReports = readdirSync(path.join(applyUpdateRoot, '.plan2agent', 'update-reports')).filter((entry) => entry.endsWith('.json'));
+    if (
+      result.status !== 0
+      || !result.stdout.includes('Plan2Agent update apply')
+      || !result.stdout.includes('status: applied')
+      || !result.stdout.includes('report: .plan2agent/update-reports/update-')
+      || readFileSync(staleRuntimePath, 'utf8') !== readFileSync(path.join(ROOT, 'scripts', 'p2a_eval.mjs'), 'utf8')
+      || appliedUpdateConfig.devExecution?.scopePolicy !== 'task_only'
+      || !appliedUpdateManifest.updates?.some((entry) => entry.command === 'update')
+      || applyUpdateReports.length !== 1
+    ) {
+      console.error('update apply fixture failed');
+      writeResultOutput(result);
+      console.error(JSON.stringify({ appliedUpdateConfig, appliedUpdateManifest, applyUpdateReports }, null, 2));
+      return { status: failureStatus(result), checks };
+    }
+
+    const applyUpgradeRoot = path.join(tempRoot, 'apply-upgrade-target');
+    cpSync(targetRoot, applyUpgradeRoot, { recursive: true });
+    const staleSchemaPath = path.join(applyUpgradeRoot, '.plan2agent', 'schemas', 'run.schema.json');
+    writeFileSync(staleSchemaPath, '{"stale": true}\n', 'utf8');
+    result = runHandoff(['upgrade', '--target', applyUpgradeRoot, '--apply']);
+    checks += 1;
+    const appliedUpgradeManifest = JSON.parse(readFileSync(path.join(applyUpgradeRoot, '.plan2agent', 'manifest.json'), 'utf8'));
+    if (
+      result.status !== 0
+      || !result.stdout.includes('Plan2Agent upgrade apply')
+      || !result.stdout.includes('status: applied')
+      || readFileSync(staleSchemaPath, 'utf8') !== readFileSync(path.join(ROOT, 'schemas', 'run.schema.json'), 'utf8')
+      || !appliedUpgradeManifest.updates?.some((entry) => entry.command === 'upgrade')
+    ) {
+      console.error('upgrade apply fixture failed');
+      writeResultOutput(result);
+      console.error(JSON.stringify({ appliedUpgradeManifest }, null, 2));
+      return { status: failureStatus(result), checks };
+    }
+
+    const blockedUpdateRoot = path.join(tempRoot, 'blocked-update-target');
+    cpSync(targetRoot, blockedUpdateRoot, { recursive: true });
+    const conflictRuntimePath = path.join(blockedUpdateRoot, '.plan2agent', 'scripts', 'p2a_eval.mjs');
+    rmSync(conflictRuntimePath, { force: true });
+    mkdirSync(conflictRuntimePath, { recursive: true });
+    result = runHandoff(['update', '--target', blockedUpdateRoot, '--apply']);
+    checks += 1;
+    const blockedReportsDir = path.join(blockedUpdateRoot, '.plan2agent', 'update-reports');
+    const blockedReports = existsSync(blockedReportsDir) ? readdirSync(blockedReportsDir).filter((entry) => entry.endsWith('.json')) : [];
+    if (
+      result.status === 0
+      || !result.stdout.includes('Plan2Agent update apply')
+      || !result.stdout.includes('status: blocked')
+      || !result.stdout.includes('blockers:')
+      || blockedReports.length !== 1
+    ) {
+      console.error('update apply blocker fixture failed');
+      writeResultOutput(result);
+      console.error(JSON.stringify({ blockedReports }, null, 2));
+      return { status: 1, checks };
+    }
+
     const legacyUpgradeRoot = path.join(tempRoot, 'legacy-upgrade-target');
     cpSync(targetRoot, legacyUpgradeRoot, { recursive: true });
     const legacyConfigPath = path.join(legacyUpgradeRoot, '.plan2agent', 'project.config.json');
@@ -775,7 +846,7 @@ function validateScaffoldFixtureCase() {
 
     result = runHandoff(['upgrade', '--target', targetRoot]);
     checks += 1;
-    if (result.status === 0 || !`${result.stdout}${result.stderr}`.includes('upgrade currently supports --dry-run only')) {
+    if (result.status === 0 || !`${result.stdout}${result.stderr}`.includes('upgrade requires --dry-run or --apply')) {
       console.error('upgrade without dry-run did not fail explicitly');
       writeResultOutput(result);
       return { status: 1, checks };
