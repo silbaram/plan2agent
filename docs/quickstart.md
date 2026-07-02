@@ -408,6 +408,8 @@ node .plan2agent/scripts/p2a.mjs tasks done \
   task-001
 ```
 
+`runs finish --status finished`와 `tasks done`은 verification evidence가 모두 `passed`일 때만 성공한다. 테스트 명령을 자동 감지하지 못해 `skipped`/`not_run`이 기록된 run은 성공 완료 증거로 쓰지 않는다. 그 run은 `failed`/`blocked`로 닫고, 프로젝트 설정이나 검증 명령을 고친 뒤 새 run에서 `passed` verification을 남긴다.
+
 ## Maintenance task
 
 작은 fix나 문서 수정처럼 Gate A-D 전체 반복을 열기 애매한 일은 maintenance graph에 추가한다.

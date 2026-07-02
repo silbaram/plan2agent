@@ -60,7 +60,7 @@ function usage() {
     '  node .plan2agent/scripts/p2a_runs.mjs start --graph <task-graph.json> --task <task-id> --agent-tool <tool> [--runs <dir>] [options]',
     '  node .plan2agent/scripts/p2a_runs.mjs record --run-id <run-id> (--artifacts <dir>|--runs <dir>|--graph <path>) [--changed-file <path> ...] [--verification <type:status:command>] [--note <text>] [structured detail options]',
     '  node .plan2agent/scripts/p2a_runs.mjs verify --run-id <run-id> (--artifacts <dir>|--runs <dir>|--graph <path>) [--test] [--lint] [--typecheck] [--test-command <cmd>] [--lint-command <cmd>] [--typecheck-command <cmd>] [--verify-command <type:cmd>]',
-    '  node .plan2agent/scripts/p2a_runs.mjs finish --run-id <run-id> (--artifacts <dir>|--runs <dir>|--graph <path>) [--status finished|failed|blocked] [--failure-class <class>] [--retryable yes|no|after_fix] [--needs-user-decision true|false] [--failure-source owner|monitor|implementer] [--changed-file <path> ...] [--collect-git] [--note <text>] [structured detail options]',
+    '  node .plan2agent/scripts/p2a_runs.mjs finish --run-id <run-id> (--artifacts <dir>|--runs <dir>|--graph <path>) [--status finished|failed|blocked] [--failure-class <class>] [--retryable yes|no|after_fix] [--needs-user-decision true|false] [--failure-source owner|monitor|implementer] [--changed-file <path> ...] [--verification <type:status:command>] [--collect-git] [--note <text>] [structured detail options]',
     '  node .plan2agent/scripts/p2a_runs.mjs list (--artifacts <dir>|--runs <dir>|--graph <path>) [--json]',
     '  node .plan2agent/scripts/p2a_runs.mjs show --run-id <run-id> (--artifacts <dir>|--runs <dir>|--graph <path>)',
     '  node .plan2agent/scripts/p2a_runs.mjs validate (--artifacts <dir>|--runs <dir>|--graph <path>) [--run-id <run-id>]',
@@ -848,23 +848,22 @@ function incompleteVerificationItems(run) {
 
 function assertFinishedRunGuard(run) {
   if (run.status !== 'finished') return;
+  if (run.verification.length === 0) {
+    throw new Error('finished run requires verification evidence. Record a passed verification or finish as failed/blocked with --failure-class.');
+  }
   const failed = failedVerificationItems(run);
   if (failed.length) {
     const summary = failed.map((item) => `${item.type}:${item.command}`).join(', ');
-    throw new Error(`finished run cannot include failed verification: ${summary}. Finish as failed with --failure-class verification_failed or rerun verification first.`);
+    throw new Error(`finished run cannot include failed verification: ${summary}. Finish this run as failed/blocked with --failure-class, or start a new run with passed verification evidence.`);
+  }
+  const incomplete = incompleteVerificationItems(run);
+  if (incomplete.length) {
+    const summary = incomplete.map((item) => `${item.type}:${item.status}`).join(', ');
+    throw new Error(`finished run cannot include incomplete verification: ${summary}. Finish this run as failed/blocked with --failure-class, or start a new run with passed verification evidence.`);
   }
 }
 
 function printRunGuardWarnings(run) {
-  if (run.status === 'finished') {
-    if (run.verification.length === 0) {
-      console.log('- guard warning: finished run has no verification evidence; task done will warn before completion.');
-    }
-    const incomplete = incompleteVerificationItems(run);
-    if (incomplete.length) {
-      console.log(`- guard warning: verification has incomplete entries: ${incomplete.map((item) => `${item.type}:${item.status}`).join(', ')}`);
-    }
-  }
   if (run.status === 'failed' || run.status === 'blocked') {
     const missing = [];
     if (!run.reproduction) missing.push('reproduction');
@@ -975,6 +974,7 @@ function finishRun(args) {
   const changedFiles = [...args.changedFiles];
   if (args.collectGit) changedFiles.push(...collectGitChangedFiles(workspacePath));
   run.changedFiles = uniqueStrings([...run.changedFiles, ...changedFiles]);
+  run.verification.push(...args.manualVerification);
   run.notes = uniqueStrings([...run.notes, ...args.notes]);
   mergeStructuredRunDetails(run, args);
   run.status = deriveFinishStatus(run, args.status);

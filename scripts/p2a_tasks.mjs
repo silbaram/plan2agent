@@ -6,7 +6,7 @@ import { createInterface } from 'node:readline/promises';
 import path from 'node:path';
 import process from 'node:process';
 import { Readable } from 'node:stream';
-import { validateRunData, validateTaskGraphData, ValidationError } from './validate_artifacts.mjs';
+import { validateRunData, validateRunIndexData, validateTaskGraphData, ValidationError } from './validate_artifacts.mjs';
 import { resolveIterationState } from './p2a_iteration_state.mjs';
 import { resolveRunsDir } from './p2a_run_paths.mjs';
 import {
@@ -252,27 +252,70 @@ function latestRunProblem(message, strict) {
   return null;
 }
 
+function latestRunIndexEntry(index, taskId, runId, strict) {
+  const entry = index.runs.find((run) => run.runId === runId);
+  if (!entry) {
+    return latestRunProblem(`latest run ${runId} for ${taskId} is missing from run-index runs[]`, strict);
+  }
+  return entry;
+}
+
+function assertRunMatchesIndexEntry(taskId, runId, run, indexEntry, strict) {
+  const mismatches = [];
+  for (const field of ['runId', 'taskId', 'iterationId', 'status', 'agentTool', 'workspaceRef', 'taskGraphRef', 'startedAt', 'finishedAt']) {
+    if (JSON.stringify(run[field]) !== JSON.stringify(indexEntry[field])) mismatches.push(`${field}:index=${indexEntry[field] ?? 'null'} file=${run[field] ?? 'null'}`);
+  }
+  const expectedRunRef = `${run.runId}.json`;
+  if (indexEntry.runRef !== expectedRunRef) mismatches.push(`runRef:index=${indexEntry.runRef} file=${expectedRunRef}`);
+  if (mismatches.length) {
+    latestRunProblem(`latest run evidence mismatch for ${taskId} (${runId}): ${mismatches.join(', ')}`, strict);
+  }
+}
+
 function latestRunForTask(args, taskId, options = {}) {
   const strict = options.strict ?? false;
   const runsDir = runsDirForTaskArgs(args);
-  if (!runsDir) return null;
+  if (!runsDir) return latestRunProblem(`no runs directory could be resolved for ${taskId}`, strict);
   const indexPath = path.join(runsDir, 'run-index.json');
-  if (!existsSync(indexPath) || !lstatSync(indexPath).isFile()) return null;
+  if (!existsSync(indexPath) || !lstatSync(indexPath).isFile()) {
+    return latestRunProblem(`no run evidence found for ${taskId}; finish a successful run before marking the task done`, strict);
+  }
+  let index;
   try {
-    const index = JSON.parse(readFileSync(indexPath, 'utf8'));
-    const taskEntry = index.tasks?.find((entry) => entry.taskId === taskId);
-    const runId = taskEntry?.latestRunId;
-    if (!runId) return null;
-    const runPath = path.join(runsDir, `${runId}.json`);
-    if (!existsSync(runPath) || !lstatSync(runPath).isFile()) {
-      return latestRunProblem(`latest run ${runId} for ${taskId} is missing at ${formatDisplayPath(runPath)}`, strict);
-    }
-    const run = JSON.parse(readFileSync(runPath, 'utf8'));
+    index = JSON.parse(readFileSync(indexPath, 'utf8'));
+    validateRunIndexData(index);
+  } catch (error) {
+    return latestRunProblem(`could not read run-index for ${taskId}: ${error.message}`, strict);
+  }
+  const taskEntry = index.tasks?.find((entry) => entry.taskId === taskId);
+  const runId = taskEntry?.latestRunId;
+  if (!runId) {
+    return latestRunProblem(`no latest run evidence found for ${taskId}; finish a successful run before marking the task done`, strict);
+  }
+  const indexEntry = latestRunIndexEntry(index, taskId, runId, strict);
+  if (!indexEntry) return null;
+  const runPath = path.join(runsDir, `${runId}.json`);
+  if (!existsSync(runPath) || !lstatSync(runPath).isFile()) {
+    return latestRunProblem(`latest run ${runId} for ${taskId} is missing at ${formatDisplayPath(runPath)}`, strict);
+  }
+  let run;
+  try {
+    run = JSON.parse(readFileSync(runPath, 'utf8'));
     validateRunData(run);
-    return run;
   } catch (error) {
     return latestRunProblem(`could not read latest run for ${taskId}: ${error.message}`, strict);
   }
+  if (run.runId !== runId) {
+    return latestRunProblem(`latest run evidence mismatch for ${taskId}: index points to ${runId} but file contains ${run.runId}`, strict);
+  }
+  if (run.taskId !== taskId) {
+    return latestRunProblem(`latest run ${run.runId} belongs to ${run.taskId}, not ${taskId}`, strict);
+  }
+  if (run.projectId !== index.projectId) {
+    return latestRunProblem(`latest run ${run.runId} projectId ${run.projectId} does not match run-index projectId ${index.projectId}`, strict);
+  }
+  assertRunMatchesIndexEntry(taskId, runId, run, indexEntry, strict);
+  return run;
 }
 
 function latestRunFailureClass(args, taskId) {
@@ -294,8 +337,7 @@ function changedPlan2AgentControlFiles(run) {
 function assertDoneShortcutGuard(args, task) {
   const run = latestRunForTask(args, task.id, { strict: true });
   if (!run) {
-    console.error(`warning: no run evidence found for ${task.id}; record or finish a run before marking future tasks done.`);
-    return;
+    throw new Error(`no run evidence found for ${task.id}; finish a successful run before marking the task done`);
   }
   if (run.status === 'started') {
     throw new Error(`${task.id} cannot be marked done while latest run ${run.runId} is still started`);
@@ -309,15 +351,15 @@ function assertDoneShortcutGuard(args, task) {
     throw new Error(`${task.id} cannot be marked done because latest run ${run.runId} has failed verification: ${failedVerification.map((item) => item.type).join(', ')}`);
   }
   if (run.verification.length === 0) {
-    console.error(`warning: latest run ${run.runId} has no verification evidence before marking ${task.id} done`);
+    throw new Error(`${task.id} cannot be marked done because latest run ${run.runId} has no verification evidence`);
   }
   const incompleteVerification = run.verification.filter((item) => item.status === 'skipped' || item.status === 'not_run');
   if (incompleteVerification.length) {
-    console.error(`warning: latest run ${run.runId} has incomplete verification: ${incompleteVerification.map((item) => `${item.type}:${item.status}`).join(', ')}`);
+    throw new Error(`${task.id} cannot be marked done because latest run ${run.runId} has incomplete verification: ${incompleteVerification.map((item) => `${item.type}:${item.status}`).join(', ')}`);
   }
   const controlFiles = changedPlan2AgentControlFiles(run);
   if (controlFiles.length) {
-    console.error(`warning: latest run ${run.runId} changed Plan2Agent control artifacts: ${controlFiles.join(', ')}`);
+    throw new Error(`${task.id} cannot be marked done because latest run ${run.runId} changed Plan2Agent control artifacts: ${controlFiles.join(', ')}`);
   }
 }
 

@@ -1763,6 +1763,54 @@ function validateIterationCurrentFixtureCases() {
   const cases = manifest.cases ?? [];
   let checks = 0;
 
+  function copyWebhookTaskGraph(tempRoot, name) {
+    const graphPath = path.join(tempRoot, name, 'gate-c-task-graph', 'task-graph.json');
+    mkdirSync(path.dirname(graphPath), { recursive: true });
+    cpSync(path.join(E2E_FIXTURE_ROOT, 'webhook-api-service', 'gate-c-task-graph', 'task-graph.json'), graphPath);
+    return graphPath;
+  }
+
+  function passedFixtureVerification(command) {
+    return {
+      type: 'custom',
+      command,
+      status: 'passed',
+      exitCode: 0,
+      durationMs: 1,
+      startedAt: '2026-07-02T00:00:00.000Z',
+      finishedAt: '2026-07-02T00:00:00.001Z',
+      stdoutTail: 'passed',
+      stderrTail: null,
+      source: 'manual',
+    };
+  }
+
+  function writeLatestRunEvidence(runsDir, taskId, run) {
+    mkdirSync(runsDir, { recursive: true });
+    writeFileSync(path.join(runsDir, `${run.runId}.json`), `${JSON.stringify(run, null, 2)}\n`, 'utf8');
+    writeFileSync(path.join(runsDir, 'run-index.json'), `${JSON.stringify({
+      schema_version: 'p2a.run_index.v1',
+      projectId: run.projectId,
+      runs: [{
+        runId: run.runId,
+        taskId,
+        iterationId: run.iterationId,
+        status: run.status,
+        agentTool: run.agentTool,
+        workspaceRef: run.workspaceRef,
+        taskGraphRef: run.taskGraphRef,
+        runRef: `${run.runId}.json`,
+        startedAt: run.startedAt,
+        finishedAt: run.finishedAt,
+      }],
+      tasks: [{
+        taskId,
+        runIds: [run.runId],
+        latestRunId: run.runId,
+      }],
+    }, null, 2)}\n`, 'utf8');
+  }
+
   for (const caseData of cases) {
     assertE2eCaseShape(caseData);
     const tempRoot = mkdtempSync(path.join(tmpdir(), 'p2a-iteration-fixture-'));
@@ -3595,6 +3643,8 @@ function validateIterationCurrentFixtureCases() {
         executeMonitorApprovalPath,
         '--run-id',
         'run-approved-proposal-fixture',
+        '--verify-command',
+        'custom:node --version',
         '--status',
         'finished',
       ]);
@@ -3646,6 +3696,8 @@ function validateIterationCurrentFixtureCases() {
         executeMonitorApprovalPath,
         '--run-id',
         executeFinishTraceRunId,
+        '--verify-command',
+        'custom:node --version',
         '--status',
         'finished',
       ]);
@@ -3915,6 +3967,8 @@ function validateIterationCurrentFixtureCases() {
         artifactRoot,
         '--run-id',
         collectGitRunId,
+        '--verification',
+        'custom:passed:collect git fixture',
         '--status',
         'finished',
         '--workspace',
@@ -4082,6 +4136,53 @@ function validateIterationCurrentFixtureCases() {
         return { status: 1, checks };
       }
 
+      const finishedWithoutVerificationRunId = 'run-fixture-finished-without-verification';
+      result = runRuns(['start', '--artifacts', artifactRoot, '--task', 'task-001', '--run-id', finishedWithoutVerificationRunId, '--agent-tool', 'codex', '--workspace-ref', 'fixture-workspace']);
+      checks += 1;
+      if (result.status !== 0) {
+        console.error(`p2a_runs missing-verification guard fixture start failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: failureStatus(result), checks };
+      }
+      result = runRuns(['finish', '--artifacts', artifactRoot, '--run-id', finishedWithoutVerificationRunId, '--status', 'finished']);
+      checks += 1;
+      const finishedWithoutVerificationOutput = `${result.stdout ?? ''}${result.stderr ?? ''}`;
+      if (
+        result.status === 0
+        || !finishedWithoutVerificationOutput.includes('finished run requires verification evidence')
+      ) {
+        console.error(`p2a_runs allowed finished status without verification: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: 1, checks };
+      }
+
+      const finishedWithIncompleteVerificationRunId = 'run-fixture-finished-with-incomplete-verification';
+      result = runRuns(['start', '--artifacts', artifactRoot, '--task', 'task-001', '--run-id', finishedWithIncompleteVerificationRunId, '--agent-tool', 'codex', '--workspace-ref', 'fixture-workspace']);
+      checks += 1;
+      if (result.status !== 0) {
+        console.error(`p2a_runs incomplete-verification guard fixture start failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: failureStatus(result), checks };
+      }
+      result = runRuns(['record', '--artifacts', artifactRoot, '--run-id', finishedWithIncompleteVerificationRunId, '--verification', 'test:skipped:npm test']);
+      checks += 1;
+      if (result.status !== 0) {
+        console.error(`p2a_runs incomplete-verification guard fixture record failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: failureStatus(result), checks };
+      }
+      result = runRuns(['finish', '--artifacts', artifactRoot, '--run-id', finishedWithIncompleteVerificationRunId, '--status', 'finished']);
+      checks += 1;
+      const finishedWithIncompleteVerificationOutput = `${result.stdout ?? ''}${result.stderr ?? ''}`;
+      if (
+        result.status === 0
+        || !finishedWithIncompleteVerificationOutput.includes('finished run cannot include incomplete verification')
+      ) {
+        console.error(`p2a_runs allowed finished status with incomplete verification: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: 1, checks };
+      }
+
       const graphBlockedRunId = 'run-fixture-graph-blocked';
       result = runRuns(['start', '--graph', state.taskGraphPath, '--task', 'task-001', '--run-id', graphBlockedRunId, '--agent-tool', 'codex', '--workspace-ref', 'fixture-workspace']);
       checks += 1;
@@ -4113,9 +4214,27 @@ function validateIterationCurrentFixtureCases() {
         return { status: 1, checks };
       }
 
-      const doneGuardGraphPath = path.join(tempRoot, 'p2a-done-guard', 'gate-c-task-graph', 'task-graph.json');
-      mkdirSync(path.dirname(doneGuardGraphPath), { recursive: true });
-      cpSync(path.join(E2E_FIXTURE_ROOT, 'webhook-api-service', 'gate-c-task-graph', 'task-graph.json'), doneGuardGraphPath);
+      const noEvidenceGraphPath = copyWebhookTaskGraph(tempRoot, 'p2a-done-no-evidence');
+      result = runTasks(['start', '--graph', noEvidenceGraphPath, 'task-001']);
+      checks += 1;
+      if (result.status !== 0) {
+        console.error(`p2a_tasks no-evidence guard fixture start failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: failureStatus(result), checks };
+      }
+      result = runTasks(['done', '--graph', noEvidenceGraphPath, 'task-001']);
+      checks += 1;
+      const noEvidenceDoneOutput = `${result.stdout ?? ''}${result.stderr ?? ''}`;
+      if (
+        result.status === 0
+        || !noEvidenceDoneOutput.includes('no run evidence found for task-001')
+      ) {
+        console.error(`p2a_tasks allowed done without run evidence: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: 1, checks };
+      }
+
+      const doneGuardGraphPath = copyWebhookTaskGraph(tempRoot, 'p2a-done-guard');
       result = runTasks(['start', '--graph', doneGuardGraphPath, 'task-001']);
       checks += 1;
       if (result.status !== 0) {
@@ -4149,7 +4268,10 @@ function validateIterationCurrentFixtureCases() {
         writeResultOutput(result);
         return { status: 1, checks };
       }
-      unlinkSync(path.join(tempRoot, 'p2a-done-guard', 'runs', `${doneGuardRunId}.json`));
+      const doneGuardRunsDir = path.join(tempRoot, 'p2a-done-guard', 'runs');
+      const doneGuardRunPath = path.join(doneGuardRunsDir, `${doneGuardRunId}.json`);
+      const doneGuardBaseRun = JSON.parse(readFileSync(doneGuardRunPath, 'utf8'));
+      unlinkSync(doneGuardRunPath);
       result = runTasks(['done', '--graph', doneGuardGraphPath, 'task-001']);
       checks += 1;
       const missingRunGuardOutput = `${result.stdout ?? ''}${result.stderr ?? ''}`;
@@ -4162,6 +4284,93 @@ function validateIterationCurrentFixtureCases() {
         return { status: 1, checks };
       }
 
+      function finishedDoneGuardRun(overrides = {}) {
+        const run = {
+          ...doneGuardBaseRun,
+          status: 'finished',
+          updatedAt: '2026-07-02T00:02:00.000Z',
+          finishedAt: '2026-07-02T00:02:00.000Z',
+          changedFiles: ['src/webhook-verification.ts'],
+          verification: [passedFixtureVerification('done guard fixture')],
+          notes: ['Done guard fixture.'],
+          ...overrides,
+        };
+        delete run.failure;
+        return run;
+      }
+
+      writeLatestRunEvidence(doneGuardRunsDir, 'task-001', finishedDoneGuardRun({
+        taskId: 'task-002',
+        taskTitle: 'Mismatched fixture task',
+      }));
+      result = runTasks(['done', '--graph', doneGuardGraphPath, 'task-001']);
+      checks += 1;
+      const mismatchedRunGuardOutput = `${result.stdout ?? ''}${result.stderr ?? ''}`;
+      if (
+        result.status === 0
+        || !mismatchedRunGuardOutput.includes(`latest run ${doneGuardRunId} belongs to task-002, not task-001`)
+      ) {
+        console.error(`p2a_tasks allowed done with mismatched latest run task: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: 1, checks };
+      }
+
+      writeLatestRunEvidence(doneGuardRunsDir, 'task-001', finishedDoneGuardRun({ verification: [] }));
+      result = runTasks(['done', '--graph', doneGuardGraphPath, 'task-001']);
+      checks += 1;
+      const noVerificationDoneOutput = `${result.stdout ?? ''}${result.stderr ?? ''}`;
+      if (
+        result.status === 0
+        || !noVerificationDoneOutput.includes(`task-001 cannot be marked done because latest run ${doneGuardRunId} has no verification evidence`)
+      ) {
+        console.error(`p2a_tasks allowed done with no verification evidence: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: 1, checks };
+      }
+
+      writeLatestRunEvidence(doneGuardRunsDir, 'task-001', finishedDoneGuardRun({
+        verification: [{
+          ...passedFixtureVerification('done guard skipped fixture'),
+          status: 'skipped',
+          exitCode: null,
+        }],
+      }));
+      result = runTasks(['done', '--graph', doneGuardGraphPath, 'task-001']);
+      checks += 1;
+      const incompleteDoneOutput = `${result.stdout ?? ''}${result.stderr ?? ''}`;
+      if (
+        result.status === 0
+        || !incompleteDoneOutput.includes(`task-001 cannot be marked done because latest run ${doneGuardRunId} has incomplete verification`)
+      ) {
+        console.error(`p2a_tasks allowed done with incomplete verification: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: 1, checks };
+      }
+
+      writeLatestRunEvidence(doneGuardRunsDir, 'task-001', finishedDoneGuardRun({
+        changedFiles: ['.plan2agent/project.config.json'],
+      }));
+      result = runTasks(['done', '--graph', doneGuardGraphPath, 'task-001']);
+      checks += 1;
+      const controlArtifactDoneOutput = `${result.stdout ?? ''}${result.stderr ?? ''}`;
+      if (
+        result.status === 0
+        || !controlArtifactDoneOutput.includes(`task-001 cannot be marked done because latest run ${doneGuardRunId} changed Plan2Agent control artifacts`)
+      ) {
+        console.error(`p2a_tasks allowed done with control artifact changes: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: 1, checks };
+      }
+
+      writeLatestRunEvidence(doneGuardRunsDir, 'task-001', finishedDoneGuardRun());
+      result = runTasks(['done', '--graph', doneGuardGraphPath, 'task-001']);
+      checks += 1;
+      if (result.status !== 0 || !result.stdout.includes('task-001 status is now done')) {
+        console.error(`p2a_tasks done guard fixture did not allow valid finished run: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: failureStatus(result), checks };
+      }
+
       const finishedFailureFlagRunId = 'run-fixture-finished-with-failure-flag';
       result = runRuns(['start', '--artifacts', artifactRoot, '--task', 'task-001', '--run-id', finishedFailureFlagRunId, '--agent-tool', 'codex', '--workspace-ref', 'fixture-workspace']);
       checks += 1;
@@ -4171,7 +4380,7 @@ function validateIterationCurrentFixtureCases() {
         return { status: failureStatus(result), checks };
       }
 
-      result = runRuns(['finish', '--artifacts', artifactRoot, '--run-id', finishedFailureFlagRunId, '--status', 'finished', '--failure-class', 'verification_failed']);
+      result = runRuns(['finish', '--artifacts', artifactRoot, '--run-id', finishedFailureFlagRunId, '--verification', 'custom:passed:failure option fixture', '--status', 'finished', '--failure-class', 'verification_failed']);
       checks += 1;
       const explicitFinishedFailureOutput = `${result.stdout ?? ''}${result.stderr ?? ''}`;
       if (result.status === 0 || !explicitFinishedFailureOutput.includes('failure options are only valid when the run finishes as failed or blocked (got finished)')) {
@@ -4180,7 +4389,7 @@ function validateIterationCurrentFixtureCases() {
         return { status: 1, checks };
       }
 
-      result = runRuns(['finish', '--artifacts', artifactRoot, '--run-id', finishedFailureFlagRunId, '--failure-class', 'verification_failed']);
+      result = runRuns(['finish', '--artifacts', artifactRoot, '--run-id', finishedFailureFlagRunId, '--verification', 'custom:passed:failure option fixture', '--failure-class', 'verification_failed']);
       checks += 1;
       const derivedFinishedFailureOutput = `${result.stdout ?? ''}${result.stderr ?? ''}`;
       if (result.status === 0 || !derivedFinishedFailureOutput.includes('failure options are only valid when the run finishes as failed or blocked (got finished)')) {
