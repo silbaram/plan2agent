@@ -39,7 +39,15 @@
 
 통합검증 중 `p2a_memory`가 `p2a-project-*` 형태의 안정 ID를 canonical server ID로 전송해 서버의 UUID 검증에 실패하는 문제가 발견됐다. 이를 deterministic UUID 생성 방식으로 수정했고, fixture에 canonical UUID 검증을 추가했다. 로컬/P2A 식별자는 `sourceProjectId`, `sourceIterationId`, `sourceTaskId`, `sourceRunId`, metadata, source reference로 유지한다.
 
-### 0.3 완료 검증 명령
+### 0.3 범위 정리
+
+agents-cli의 기능을 1:1로 복제한 것이 아니라, P2A의 파일 기반 하네스에 맞는 운영 패턴만 선별해 반영했다.
+
+- agents-cli의 `setup` 개념은 P2A에서 별도 `setup` 명령이 아니라 `scaffold`로 대응한다. `scaffold`가 fresh project 설치 진입점이고, 이후 `enhance`, `update`, `upgrade`, `doctor`, `info`가 운영 표면을 나눈다.
+- agents-cli의 eval flywheel은 P2A에서 `p2a_eval grade/compare/analyze/generate/digest`로 변환했다. dataset synthesize, optimize, cloud submit/results 같은 agents-cli 고유 기능은 구현 범위가 아니다.
+- observability는 Cloud Trace/BigQuery가 아니라 Plan2Agent Memory의 artifact snapshot, hash, lineage, keyword search, digest 중심으로 구현했다.
+
+### 0.4 완료 검증 명령
 
 완료 시점에 아래 검증을 통과했다.
 
@@ -58,7 +66,7 @@ npm run typecheck
 npm test
 ```
 
-### 0.4 남은 처리
+### 0.5 남은 처리
 
 기능 개발과 실제 검증은 완료됐다. 남은 작업은 변경사항 커밋, 푸시, 필요 시 release note 또는 후속 계획 문서로의 이관이다.
 
@@ -85,21 +93,21 @@ P2A는 이미 Gate A-D, iteration, task graph, run log, proposal, handoff 구조
 | 영역 | agents-cli 패턴 | P2A 적용 아이디어 |
 | --- | --- | --- |
 | workflow | 전체 개발 단계와 재진입 규칙 | `p2a-workflow` 또는 `p2a-harness`를 상위 orchestration 문서로 유지 |
-| scaffold | create/enhance/upgrade 분리 | `p2a_handoff scaffold`를 setup/enhance/upgrade 명령면으로 정리 |
+| scaffold | create/enhance/upgrade 분리 | `p2a_handoff scaffold`를 `scaffold`/`enhance`/`upgrade` 명령면으로 정리 |
 | develop/code | 코드 보존, 실행 경계, 디버깅 규칙 | `p2a-dev-execution`, implementer/monitor/orchestrator skill과 provider config 고도화 |
-| eval | generate/grade/compare/analyze/optimize | `p2a_eval`로 task/run/spec 품질 평가 루프 설계 |
+| eval | generate/grade/compare/analyze/optimize | `p2a_eval generate/grade/compare/analyze/digest`로 task/run/spec 품질 평가 루프 설계. `optimize`는 P2A 구현 범위가 아님 |
 | deploy/publish | 명시 승인 후 실행 | P2A도 코드 변경, PR, Memory push 같은 외부 효과 작업에 승인 audit 유지 |
 | observability | trace/log/analytics tier 구분 | P2A Memory를 artifact/run/proposal observability backend로 사용 |
 
 P2A의 기존 skill 구조는 이미 CLI별 mirror와 role 분리가 있다. 다음 개선은 skill을 더 늘리는 것보다, 사용자가 "지금 어떤 명령을 실행해야 하는지"를 찾기 쉽게 하는 top-level command surface가 중요하다.
 
-### 2.2 `setup/info/update/doctor` 계열
+### 2.2 `scaffold/info/update/doctor` 계열
 
-`agents-cli`는 설치와 상태 확인을 명령으로 노출한다. P2A도 아래 명령면이 필요하다.
+`agents-cli`는 설치와 상태 확인을 명령으로 노출한다. P2A는 별도 `setup` 명령을 만들지 않고, 아래처럼 `scaffold`를 fresh project 설치 진입점으로 둔다.
 
 | 후보 명령 | 목적 |
 | --- | --- |
-| `p2a setup` | 대상 프로젝트에 `.plan2agent`, schemas, scripts, skills, agents를 설치 |
+| `p2a scaffold` | 대상 프로젝트에 `.plan2agent`, schemas, scripts, skills, agents를 설치 |
 | `p2a info` | active project, active iteration, Gate 상태, task/run 요약, toolkit version 출력 |
 | `p2a update` | scaffolded 프로젝트의 scripts/schemas/skills를 최신 toolkit 기준으로 갱신 |
 | `p2a doctor` | 누락 파일, schema drift, CLI mirror drift, Memory 연결, Node/Docker/git 상태 진단 |
@@ -130,14 +138,14 @@ P2A 적용:
 
 | agents-cli에서 확인한 패턴 | P2A 적용 아이디어 | 우선순위 |
 | --- | --- | --- |
-| `setup`, `info`, `update`가 설치/상태/재설치를 표준 명령으로 제공 | `p2a setup/info/update/doctor`를 top-level 진입점으로 만들고, 실패 시 non-zero exit와 구체적 실패 사유를 출력 | P1 |
+| `setup`, `info`, `update`가 설치/상태/재설치를 표준 명령으로 제공 | P2A에서는 별도 `setup` 명령을 만들지 않고 `p2a scaffold/info/update/doctor`를 top-level 진입점으로 정리하며, 실패 시 non-zero exit와 구체적 실패 사유를 출력 | P1 |
 | `scaffold create/enhance/upgrade --dry-run`으로 신규/기존/업그레이드 흐름 분리 | `p2a scaffold`, `p2a enhance <capability>`, `p2a upgrade --dry-run`으로 하네스 설치와 확장을 분리 | P1 |
 | strict programmatic mode로 필수 인자를 침묵 보정하지 않음 | P2A 명령도 필수 결정이 빠지면 UsageError 또는 Gate blocker로 멈추고, agent가 임의 기본값을 만들지 않게 함 | P1 |
 | release notes에서 `update` 실패를 성공처럼 보이던 문제를 수정 | P2A update/upgrade/memory push도 부분 실패를 성공으로 포장하지 않고 실패 asset 목록과 복구 명령을 남김 | P1 |
 | `run` footer가 copy-paste 가능한 resume command를 출력 | `p2a_runs start/finish`와 GUI supervised run footer에 `resume`, `status`, `finish`, `review` 명령을 출력 | P2 |
 | `agents-cli-manifest.yaml`로 언어 독립 manifest와 config migration 제공 | `.plan2agent/project.config.json`과 후보 `dev.config.json`에 schemaVersion, toolkitVersion, migration preview를 추가 | P2 |
 | scaffold reference project를 `/tmp`에 만들어 필요한 파일만 비교 | `p2a scaffold reference --capability <x>` 또는 `p2a upgrade --dry-run --reference`로 대상 프로젝트를 건드리기 전 diff 확인 | P2 |
-| Quality Flywheel이 dataset -> generate -> grade -> analyze -> optimize를 반복 | `p2a_eval generate/grade/compare/analyze/digest`로 spec/task/run/proposal 품질 루프를 구축 | P2 |
+| Quality Flywheel이 dataset -> generate -> grade -> analyze -> optimize를 반복 | agents-cli와 동등한 eval 제품군이 아니라 `p2a_eval generate/grade/compare/analyze/digest`로 spec/task/run/proposal 품질 루프를 구축 | P2 |
 | observability를 trace, prompt-response log, analytics, third-party tier로 구분 | P2A Memory에 trace/content/analytics/search tier를 두고 GUI가 같은 계층으로 보여주게 함 | P2 |
 | skill phase마다 관련 skill을 다시 읽으라고 명시 | P2A도 Gate/Run/Review 전환 시 필요한 skill과 source artifact를 `p2a info`와 run prompt에 명시 | P2 |
 

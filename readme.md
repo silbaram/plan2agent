@@ -1,8 +1,8 @@
 # Plan2Agent
 
-Plan2Agent(P2A)는 사용자의 한 문장 아이디어를 출발점으로 삼아, 대화로 기획을 보강하고, 개발 가능한 명세와 task graph로 분해하는 planning harness다.
+Plan2Agent(P2A)는 사용자의 한 문장 아이디어를 출발점으로 삼아, 대화로 기획을 보강하고, 개발 가능한 명세와 task graph로 분해한 뒤 실행, 평가, 회고를 파일 기반 artifact로 묶는 planning/development harness다.
 
-현재 v1 하네스는 코드 변경을 자동 실행하지 않는다. Claude Code, Codex, Gemini CLI가 공통 skill과 subagent를 사용해 `idea -> intake -> spec -> task graph -> review` 흐름을 수행하고, handoff 이후에는 task 상태와 agent 실행 결과를 파일 기반 sidecar로 기록한다.
+현재 v1 하네스는 코드 변경을 완전 자동 실행하지 않는다. Claude Code, Codex, Gemini CLI가 공통 skill과 subagent를 사용해 `idea -> intake -> spec -> task graph -> review` 흐름을 수행하고, handoff/scaffold 이후에는 task 상태, agent 실행 결과, eval/proposal/memory report를 파일 기반 sidecar로 기록한다.
 
 ## 현재 범위
 
@@ -17,6 +17,7 @@ v1에서 하는 일:
 - 반복 구조에서 close/open, semantic diff task, maintenance task, handoff 기준점을 관리한다.
 - 대상 프로젝트로 산출물과 실행 도구를 handoff한다.
 - agent 실행 결과를 run log로 기록한다.
+- eval/proposal/memory CLI로 실행 결과를 평가하고 장기 보존/검색 backend와 동기화한다.
 - 4개 CLI 구성의 mirror drift를 검사한다.
 
 v1에서 하지 않는 일:
@@ -24,7 +25,7 @@ v1에서 하지 않는 일:
 - 실제 코드 변경 자동 실행
 - dependency 설치 또는 shell 기반 구현 작업
 - agent 실행 결과 자동 병합
-- DB 또는 지식 그래프 저장소 운영
+- Memory 서버나 DB 자체 운영. P2A는 선택적으로 Plan2Agent Memory 서버에 status/push/pull/search/history/digest를 수행하는 client 역할만 한다.
 
 ## 기준 문서
 
@@ -374,7 +375,7 @@ node scripts/run_fixtures.mjs
 
 `run_fixtures.mjs`는 일반 fixture set을 통과 검증하고, `fixtures/_e2e/manifest.json`의 artifact-root fixture는 handoff-ready 상태인지 확인한다. 승인된 Gate B spec은 `approval_audit`까지 확인한다. `fixtures/_negative/manifest.json`에 정의된 중단/실패 fixture는 기대한 실패 메시지가 나오는지 확인한다.
 
-위 세 명령과 `p2a_doctor.mjs`, `p2a_handoff.mjs`는 Plan2Agent 본체 개발자용이며 scaffold 대상 프로젝트에는 설치되지 않는다. 대상 프로젝트에는 `scripts/p2a_tool_manifest.mjs`의 project runtime 목록만 `.plan2agent/scripts/` 아래로 복사된다. 대상 프로젝트에서는 `node .plan2agent/scripts/p2a.mjs info|eval|memory|execute|tasks|runs|iteration|orchestrate|proposals|validate`를 공통 진입점으로 쓸 수 있다. `doctor`, `update`, `upgrade`, `enhance`는 scaffold 시 기록된 toolkit checkout을 찾아 repo-only 스크립트로 위임한다. run 평가는 `p2a.mjs eval grade/compare/analyze/generate/digest`로 수행하고, 장기 보존과 회고 검색은 `p2a.mjs memory status/push/digest`로 Memory 서버와 동기화한다.
+위 세 명령과 `p2a_doctor.mjs`, `p2a_handoff.mjs`는 Plan2Agent 본체 개발자용이며 scaffold 대상 프로젝트에는 설치되지 않는다. 대상 프로젝트에는 `scripts/p2a_tool_manifest.mjs`의 project runtime 목록만 `.plan2agent/scripts/` 아래로 복사된다. 대상 프로젝트에서는 `node .plan2agent/scripts/p2a.mjs info|eval|memory|execute|tasks|runs|iteration|orchestrate|proposals|validate`를 공통 진입점으로 쓸 수 있다. `doctor`, `update`, `upgrade`, `enhance`는 scaffold 시 기록된 toolkit checkout을 찾아 repo-only 스크립트로 위임한다. run 평가는 `p2a.mjs eval grade/compare/analyze/generate/digest`로 수행하고, 장기 보존과 회고 검색은 `p2a.mjs memory status/push/pull/search/history/digest`로 Memory 서버와 동기화한다.
 
 artifact gate 확인:
 
