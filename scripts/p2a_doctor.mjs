@@ -63,6 +63,14 @@ const DEV_PROVIDER_FILES = {
   ],
 };
 
+const PROPOSAL_SCHEMA_FILES = [
+  'skill-proposal.schema.json',
+  'proposal-review.schema.json',
+  'proposal-curation.schema.json',
+  'proposal-patch-draft.schema.json',
+  'proposal-draft-approval.schema.json',
+];
+
 function usage() {
   return [
     'Usage:',
@@ -152,6 +160,24 @@ function stringArrayValue(value) {
   return Array.isArray(value)
     ? value.filter((item) => typeof item === 'string')
     : [];
+}
+
+function objectValue(value) {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+}
+
+function capabilityState(manifest, config, capability) {
+  const manifestRecord = objectValue(objectValue(manifest?.enhancements)[capability]);
+  const configRecord = objectValue(config?.[capability]);
+  const manifestEnabled = manifestRecord.enabled === true;
+  const configEnabled = configRecord.enabled === true;
+  return {
+    manifestRecord,
+    configRecord,
+    manifestEnabled,
+    configEnabled,
+    enabled: manifestEnabled || configEnabled,
+  };
 }
 
 function relativeToTarget(targetRoot, filePath) {
@@ -562,10 +588,113 @@ function devProviderAssetChecks(targetRoot, targets) {
   });
 }
 
+function enabledCapabilityEnhancements(manifest, config) {
+  return ['memory', 'gui', 'orchestration', 'proposals']
+    .filter((capability) => capabilityState(manifest, config, capability).enabled);
+}
+
+function capabilityManifestCheck(capability, label, state) {
+  return state.manifestEnabled
+    ? check(`capability_${capability}_manifest`, `${label} capability manifest`, 'pass', `manifest.enhancements.${capability}.enabled is true`)
+    : check(`capability_${capability}_manifest`, `${label} capability manifest`, 'fail', `project config enables ${capability} but manifest.enhancements.${capability}.enabled is not true`);
+}
+
+function memoryCapabilityChecks(targetRoot, state) {
+  const memoryConfig = state.configRecord;
+  const checks = [];
+  checks.push(capabilityManifestCheck('memory', 'Memory', state));
+  checks.push(
+    memoryConfig.enabled === true
+      ? check('capability_memory_config', 'Memory capability config', 'pass', `mode=${memoryConfig.mode ?? 'manual_sync'}, serverUrlEnv=${memoryConfig.serverUrlEnv ?? 'P2A_MEMORY_URL'}`)
+      : check('capability_memory_config', 'Memory capability config', 'fail', 'manifest enables Memory but project.config.json memory.enabled is not true'),
+  );
+  checks.push(
+    isFile(path.join(targetRoot, '.plan2agent', 'scripts', 'p2a_memory.mjs'))
+      ? check('capability_memory_runtime', 'Memory runtime script', 'pass', '.plan2agent/scripts/p2a_memory.mjs is installed')
+      : check('capability_memory_runtime', 'Memory runtime script', 'fail', 'p2a_memory.mjs is missing from the project runtime'),
+  );
+  checks.push(
+    typeof memoryConfig.serverUrlEnv === 'string' && memoryConfig.serverUrlEnv.trim()
+      ? check('capability_memory_server_env', 'Memory server env config', 'pass', `server URL env is ${memoryConfig.serverUrlEnv}`)
+      : check('capability_memory_server_env', 'Memory server env config', 'warn', 'memory.serverUrlEnv is not configured; --server will be required for status/push'),
+  );
+  checks.push(
+    memoryConfig.pushPolicy === 'explicit_approval'
+      ? check('capability_memory_push_policy', 'Memory push policy', 'pass', 'push requires explicit approval')
+      : check('capability_memory_push_policy', 'Memory push policy', 'fail', 'memory.pushPolicy must remain explicit_approval'),
+  );
+  const tiers = stringArrayValue(memoryConfig.syncTiers);
+  checks.push(
+    tiers.includes('trace') && tiers.includes('content')
+      ? check('capability_memory_sync_tiers', 'Memory sync tiers', 'pass', `syncTiers=${tiers.join(',')}`)
+      : check('capability_memory_sync_tiers', 'Memory sync tiers', 'warn', 'memory.syncTiers should include trace and content for useful status/push coverage'),
+  );
+  return checks;
+}
+
+function proposalsCapabilityChecks(targetRoot, state) {
+  const proposalsConfig = state.configRecord;
+  const checks = [];
+  checks.push(capabilityManifestCheck('proposals', 'Proposal', state));
+  checks.push(
+    proposalsConfig.enabled === true
+      ? check('capability_proposals_config', 'Proposal capability config', 'pass', `queueDir=${proposalsConfig.queueDir ?? '.plan2agent/proposals'}`)
+      : check('capability_proposals_config', 'Proposal capability config', 'fail', 'manifest enables proposals but project.config.json proposals.enabled is not true'),
+  );
+  checks.push(
+    isFile(path.join(targetRoot, '.plan2agent', 'scripts', 'p2a_proposals.mjs'))
+      ? check('capability_proposals_runtime', 'Proposal runtime script', 'pass', '.plan2agent/scripts/p2a_proposals.mjs is installed')
+      : check('capability_proposals_runtime', 'Proposal runtime script', 'fail', 'p2a_proposals.mjs is missing from the project runtime'),
+  );
+  const missingSchemas = PROPOSAL_SCHEMA_FILES
+    .map((file) => `.plan2agent/schemas/${file}`)
+    .filter((relativePath) => !isFile(path.join(targetRoot, relativePath)));
+  checks.push(
+    missingSchemas.length
+      ? check('capability_proposals_schemas', 'Proposal schemas', 'fail', `${missingSchemas.length} proposal schema file(s) are missing`, { missing: missingSchemas })
+      : check('capability_proposals_schemas', 'Proposal schemas', 'pass', `${PROPOSAL_SCHEMA_FILES.length} proposal schemas are installed`),
+  );
+  const mineOn = stringArrayValue(proposalsConfig.mineOn);
+  const missingMineSignals = ['failed_run', 'blocked_run', 'verification_gap']
+    .filter((signal) => !mineOn.includes(signal));
+  checks.push(
+    missingMineSignals.length
+      ? check('capability_proposals_mine_signals', 'Proposal mining signals', 'warn', `missing mining signal(s): ${missingMineSignals.join(', ')}`, { missing: missingMineSignals })
+      : check('capability_proposals_mine_signals', 'Proposal mining signals', 'pass', `mineOn=${mineOn.join(',')}`),
+  );
+  checks.push(
+    proposalsConfig.reviewPolicy === 'manual_curate'
+      ? check('capability_proposals_review_policy', 'Proposal review policy', 'pass', 'review requires manual curation')
+      : check('capability_proposals_review_policy', 'Proposal review policy', 'fail', 'proposals.reviewPolicy must remain manual_curate'),
+  );
+  checks.push(
+    proposalsConfig.patchPolicy === 'draft_only'
+      ? check('capability_proposals_patch_policy', 'Proposal patch policy', 'pass', 'patches are draft-only')
+      : check('capability_proposals_patch_policy', 'Proposal patch policy', 'fail', 'proposals.patchPolicy must remain draft_only'),
+  );
+  checks.push(
+    proposalsConfig.approvalRequired === true
+      ? check('capability_proposals_approval', 'Proposal approval gate', 'pass', 'approval is required before maintenance task handoff')
+      : check('capability_proposals_approval', 'Proposal approval gate', 'fail', 'proposals.approvalRequired must remain true'),
+  );
+  return checks;
+}
+
+function buildCapabilityReport(targetRoot, manifest, configResult) {
+  const config = configResult.ok ? configResult.data : null;
+  const enabled = enabledCapabilityEnhancements(manifest, config);
+  const checks = [];
+  if (enabled.includes('memory')) checks.push(...memoryCapabilityChecks(targetRoot, capabilityState(manifest, config, 'memory')));
+  if (enabled.includes('proposals')) checks.push(...proposalsCapabilityChecks(targetRoot, capabilityState(manifest, config, 'proposals')));
+  return { enabled, checks };
+}
+
 function buildDevReport(targetRoot, manifest, configResult) {
   const targets = selectedToolTargets(manifest);
+  const capabilityReport = buildCapabilityReport(targetRoot, manifest, configResult);
   const checks = [];
   checks.push(...devProviderAssetChecks(targetRoot, targets));
+  checks.push(...capabilityReport.checks);
 
   const manifestAiToolFiles = stringArrayValue(manifest?.aiToolFiles).map(normalizePath);
   if (manifestAiToolFiles.length) {
@@ -639,6 +768,7 @@ function buildDevReport(targetRoot, manifest, configResult) {
   return {
     enabled: true,
     aiToolTargets: targets,
+    capabilities: capabilityReport.enabled,
     checks,
   };
 }
@@ -757,6 +887,29 @@ function nextActions(status, checks) {
   if (checks.some((item) => item.id === 'dev_provider_capabilities' && item.status === 'warn')) {
     actions.push('Review .plan2agent/project.config.json providerNativeCapabilities for the selected AI tool targets.');
   }
+  if (checks.some((item) => item.id === 'capability_memory_manifest' && item.status === 'fail')
+    || checks.some((item) => item.id === 'capability_memory_config' && item.status === 'fail')) {
+    actions.push('Run p2a.mjs enhance memory or upgrade --dry-run to restore Memory capability config.');
+  }
+  if (checks.some((item) => item.id === 'capability_memory_runtime' && item.status === 'fail')) {
+    actions.push('Run p2a.mjs upgrade --dry-run from the scaffolded project, then apply the reviewed runtime update.');
+  }
+  if (checks.some((item) => item.id === 'capability_memory_push_policy' && item.status === 'fail')) {
+    actions.push('Restore memory.pushPolicy to explicit_approval before enabling Memory push.');
+  }
+  if (checks.some((item) => item.id === 'capability_proposals_manifest' && item.status === 'fail')
+    || checks.some((item) => item.id === 'capability_proposals_config' && item.status === 'fail')) {
+    actions.push('Run p2a.mjs enhance proposals or upgrade --dry-run to restore proposal capability config.');
+  }
+  if (checks.some((item) => item.id === 'capability_proposals_runtime' && item.status === 'fail')
+    || checks.some((item) => item.id === 'capability_proposals_schemas' && item.status === 'fail')) {
+    actions.push('Run p2a.mjs upgrade --dry-run from the scaffolded project, then apply the reviewed proposal runtime/schema update.');
+  }
+  if (checks.some((item) => item.id === 'capability_proposals_review_policy' && item.status === 'fail')
+    || checks.some((item) => item.id === 'capability_proposals_patch_policy' && item.status === 'fail')
+    || checks.some((item) => item.id === 'capability_proposals_approval' && item.status === 'fail')) {
+    actions.push('Restore proposals reviewPolicy/manual curation, draft_only patching, and approvalRequired before using proposal maintenance handoff.');
+  }
   if (!actions.length) actions.push('Review failed or warning checks above.');
   return actions;
 }
@@ -791,6 +944,7 @@ function printHuman(report) {
   }
   if (report.dev) {
     console.log(`dev targets: ${report.dev.aiToolTargets.length ? report.dev.aiToolTargets.join(', ') : 'none'}`);
+    console.log(`dev capabilities: ${report.dev.capabilities.length ? report.dev.capabilities.join(', ') : 'none'}`);
   }
   if (report.nextActions.length) {
     console.log('next actions:');

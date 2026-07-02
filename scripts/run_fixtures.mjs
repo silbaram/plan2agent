@@ -778,6 +778,7 @@ function validateScaffoldFixtureCase() {
       result.status !== 0
       || !result.stdout.includes('Plan2Agent enhance memory dry run')
       || !result.stdout.includes('configUpdatedKeys: memory')
+      || !result.stdout.includes('After creating an artifact root, check local/Memory sync: node .plan2agent/scripts/p2a.mjs memory status --artifacts .plan2agent/artifacts/<project_id>')
       || !result.stdout.includes('dry-run: no files written')
       || dryRunCapabilityConfig.memory
     ) {
@@ -795,6 +796,14 @@ function validateScaffoldFixtureCase() {
         writeResultOutput(result);
         return { status: failureStatus(result), checks };
       }
+      if (
+        capability === 'proposals'
+        && !result.stdout.includes('After runs exist, mine proposal candidates: node .plan2agent/scripts/p2a.mjs proposals mine --artifacts .plan2agent/artifacts/<project_id> --proposals .plan2agent/proposals --dry-run')
+      ) {
+        console.error('enhance proposals next-actions fixture failed');
+        writeResultOutput(result);
+        return { status: 1, checks };
+      }
     }
     const enhancedCapabilityConfig = JSON.parse(readFileSync(enhanceConfigPath, 'utf8'));
     const enhancedCapabilityManifest = JSON.parse(readFileSync(path.join(enhanceTargetRoot, '.plan2agent', 'manifest.json'), 'utf8'));
@@ -811,6 +820,83 @@ function validateScaffoldFixtureCase() {
       console.error('enhance capability config/manifest fixture failed');
       console.error(JSON.stringify({ enhancedCapabilityConfig, enhancedCapabilityManifest }, null, 2));
       return { status: 1, checks };
+    }
+
+    result = runTargetP2a(enhanceTargetRoot, ['info', '--json']);
+    checks += 1;
+    const enhancedCapabilityInfo = result.status === 0 ? JSON.parse(result.stdout) : null;
+    if (
+      result.status !== 0
+      || !enhancedCapabilityInfo.enhancements?.enabled?.includes('memory')
+      || !enhancedCapabilityInfo.enhancements?.enabled?.includes('proposals')
+      || enhancedCapabilityInfo.enhancements?.memory?.enabled !== true
+      || enhancedCapabilityInfo.enhancements?.memory?.pushPolicy !== 'explicit_approval'
+      || enhancedCapabilityInfo.enhancements?.proposals?.enabled !== true
+      || enhancedCapabilityInfo.enhancements?.proposals?.reviewPolicy !== 'manual_curate'
+      || enhancedCapabilityInfo.enhancements?.proposals?.patchPolicy !== 'draft_only'
+      || enhancedCapabilityInfo.enhancements?.proposals?.approvalRequired !== true
+    ) {
+      console.error('enhance capability info fixture failed');
+      writeResultOutput(result);
+      console.error(JSON.stringify({ enhancedCapabilityInfo }, null, 2));
+      return { status: failureStatus(result), checks };
+    }
+
+    result = runDoctor(['--target', enhanceTargetRoot, '--dev', '--json']);
+    checks += 1;
+    const enhancedCapabilityDoctor = result.status === 0 ? JSON.parse(result.stdout) : null;
+    if (
+      result.status !== 0
+      || !enhancedCapabilityDoctor.dev?.capabilities?.includes('memory')
+      || !enhancedCapabilityDoctor.dev?.capabilities?.includes('proposals')
+      || !enhancedCapabilityDoctor.checks?.some((item) => item.id === 'capability_memory_manifest' && item.status === 'pass')
+      || !enhancedCapabilityDoctor.checks?.some((item) => item.id === 'capability_memory_config' && item.status === 'pass')
+      || !enhancedCapabilityDoctor.checks?.some((item) => item.id === 'capability_memory_push_policy' && item.status === 'pass')
+      || !enhancedCapabilityDoctor.checks?.some((item) => item.id === 'capability_proposals_manifest' && item.status === 'pass')
+      || !enhancedCapabilityDoctor.checks?.some((item) => item.id === 'capability_proposals_config' && item.status === 'pass')
+      || !enhancedCapabilityDoctor.checks?.some((item) => item.id === 'capability_proposals_patch_policy' && item.status === 'pass')
+      || !enhancedCapabilityDoctor.checks?.some((item) => item.id === 'capability_proposals_approval' && item.status === 'pass')
+    ) {
+      console.error('enhance capability doctor fixture failed');
+      writeResultOutput(result);
+      console.error(JSON.stringify({ enhancedCapabilityDoctor }, null, 2));
+      return { status: failureStatus(result), checks };
+    }
+
+    const capabilityDriftRoot = path.join(tempRoot, 'capability-drift-target');
+    cpSync(enhanceTargetRoot, capabilityDriftRoot, { recursive: true });
+    const capabilityDriftManifestPath = path.join(capabilityDriftRoot, '.plan2agent', 'manifest.json');
+    const capabilityDriftManifest = JSON.parse(readFileSync(capabilityDriftManifestPath, 'utf8'));
+    delete capabilityDriftManifest.enhancements.proposals;
+    writeFileSync(capabilityDriftManifestPath, `${JSON.stringify(capabilityDriftManifest, null, 2)}\n`);
+
+    result = runDoctor(['--target', capabilityDriftRoot, '--dev', '--json']);
+    checks += 1;
+    const capabilityDriftDoctor = result.stdout ? JSON.parse(result.stdout) : null;
+    if (
+      result.status === 0
+      || !capabilityDriftDoctor?.checks?.some((item) => item.id === 'capability_proposals_manifest' && item.status === 'fail')
+      || !capabilityDriftDoctor?.nextActions?.some((action) => action.includes('enhance proposals'))
+    ) {
+      console.error('capability manifest drift doctor fixture failed');
+      writeResultOutput(result);
+      console.error(JSON.stringify({ capabilityDriftDoctor }, null, 2));
+      return { status: result.status === 0 ? 1 : failureStatus(result), checks };
+    }
+
+    result = runTargetP2a(capabilityDriftRoot, ['info', '--json']);
+    checks += 1;
+    const capabilityDriftInfo = result.status === 0 ? JSON.parse(result.stdout) : null;
+    if (
+      result.status !== 0
+      || capabilityDriftInfo.enhancements?.proposals?.enabled !== true
+      || capabilityDriftInfo.enhancements?.proposals?.inSync !== false
+      || !capabilityDriftInfo.nextActions?.some((action) => action.includes('Repair proposal capability manifest/config drift'))
+    ) {
+      console.error('capability manifest drift info fixture failed');
+      writeResultOutput(result);
+      console.error(JSON.stringify({ capabilityDriftInfo }, null, 2));
+      return { status: failureStatus(result), checks };
     }
 
     result = runHandoff(['upgrade', '--target', targetRoot, '--dry-run']);

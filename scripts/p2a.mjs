@@ -379,6 +379,116 @@ function summarizeArtifact(targetRoot, artifactRoot, isScaffoldProject) {
   };
 }
 
+function objectValue(value) {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+}
+
+function capabilityState(manifest, config, key) {
+  const manifestRecord = objectValue(objectValue(manifest?.enhancements)[key]);
+  const configRecord = objectValue(config?.[key]);
+  const manifestEnabled = manifestRecord.enabled === true;
+  const configEnabled = configRecord.enabled === true;
+  return {
+    manifestRecord,
+    configRecord,
+    manifestPresent: Object.keys(manifestRecord).length > 0,
+    configPresent: Object.keys(configRecord).length > 0,
+    manifestEnabled,
+    configEnabled,
+    enabled: manifestEnabled || configEnabled,
+    inSync: manifestEnabled === configEnabled,
+  };
+}
+
+function summarizeMemoryEnhancement(manifest, config) {
+  const state = capabilityState(manifest, config, 'memory');
+  const configMemory = state.configRecord;
+  const manifestMemory = state.manifestRecord;
+  if (!state.enabled) {
+    return {
+      enabled: false,
+      manifestPresent: state.manifestPresent,
+      configPresent: state.configPresent,
+      manifestEnabled: state.manifestEnabled,
+      configEnabled: state.configEnabled,
+      inSync: state.inSync,
+    };
+  }
+  const serverUrlEnv = stringValue(configMemory.serverUrlEnv) ?? 'P2A_MEMORY_URL';
+  const tokenEnv = stringValue(configMemory.tokenEnv) ?? 'P2A_MEMORY_TOKEN';
+  return {
+    enabled: true,
+    mode: stringValue(manifestMemory.mode) ?? stringValue(configMemory.mode) ?? 'manual_sync',
+    manifestPresent: state.manifestPresent,
+    configPresent: state.configPresent,
+    manifestEnabled: state.manifestEnabled,
+    configEnabled: state.configEnabled,
+    inSync: state.inSync,
+    serverUrlEnv,
+    serverConfigured: Boolean(process.env[serverUrlEnv] || stringValue(configMemory.serverUrl)),
+    tokenEnv,
+    tokenConfigured: Boolean(process.env[tokenEnv] || stringValue(configMemory.token)),
+    statusPolicy: stringValue(configMemory.statusPolicy) ?? 'local_first',
+    pushPolicy: stringValue(configMemory.pushPolicy) ?? 'explicit_approval',
+  };
+}
+
+function resolveProjectRelativePath(targetRoot, filePath) {
+  if (!filePath) return null;
+  return path.isAbsolute(filePath) ? filePath : path.join(targetRoot, filePath);
+}
+
+function countJsonFiles(dirPath) {
+  if (!isDirectory(dirPath)) return 0;
+  return readdirSync(dirPath, { withFileTypes: true })
+    .filter((entry) => entry.isFile() && entry.name.endsWith('.json'))
+    .length;
+}
+
+function summarizeProposalsEnhancement(targetRoot, manifest, config) {
+  const state = capabilityState(manifest, config, 'proposals');
+  const configProposals = state.configRecord;
+  const manifestProposals = state.manifestRecord;
+  if (!state.enabled) {
+    return {
+      enabled: false,
+      manifestPresent: state.manifestPresent,
+      configPresent: state.configPresent,
+      manifestEnabled: state.manifestEnabled,
+      configEnabled: state.configEnabled,
+      inSync: state.inSync,
+    };
+  }
+  const queueDir = stringValue(configProposals.queueDir) ?? '.plan2agent/proposals';
+  const queuePath = resolveProjectRelativePath(targetRoot, queueDir);
+  return {
+    enabled: true,
+    mode: stringValue(manifestProposals.mode) ?? stringValue(configProposals.reviewPolicy) ?? 'manual_curate',
+    manifestPresent: state.manifestPresent,
+    configPresent: state.configPresent,
+    manifestEnabled: state.manifestEnabled,
+    configEnabled: state.configEnabled,
+    inSync: state.inSync,
+    queueDir,
+    queueExists: isDirectory(queuePath),
+    queueJsonFiles: countJsonFiles(queuePath),
+    mineOn: stringArrayValue(configProposals.mineOn),
+    reviewPolicy: stringValue(configProposals.reviewPolicy) ?? 'manual_curate',
+    patchPolicy: stringValue(configProposals.patchPolicy) ?? 'draft_only',
+    approvalRequired: configProposals.approvalRequired !== false,
+  };
+}
+
+function summarizeEnhancements(targetRoot, manifest, config) {
+  const keys = ['devSkills', 'memory', 'gui', 'orchestration', 'proposals'];
+  const enabled = keys.filter((key) => capabilityState(manifest, config, key).enabled);
+  return {
+    enabled,
+    memory: summarizeMemoryEnhancement(manifest, config),
+    proposals: summarizeProposalsEnhancement(targetRoot, manifest, config),
+  };
+}
+
 function parseInfoArgs(argv) {
   const args = {
     target: P2A_PATHS.embedded ? P2A_PATHS.projectRoot : process.cwd(),
@@ -412,6 +522,7 @@ function buildInfo(targetRootInput) {
   const artifacts = discoverArtifactRoots(targetRoot)
     .map((artifactRoot) => summarizeArtifact(targetRoot, artifactRoot, isScaffoldProject));
   const hasP2aDir = isDirectory(path.join(targetRoot, '.plan2agent'));
+  const enhancements = summarizeEnhancements(targetRoot, manifest, config);
   const mode = manifest?.provenance?.mode
     ?? (hasP2aDir ? 'installed' : P2A_PATHS.embedded ? 'embedded' : 'toolkit_or_uninstalled');
   const nextActions = [];
@@ -425,6 +536,25 @@ function buildInfo(targetRootInput) {
       nextActions.push(`Plan the next ready task: node .plan2agent/scripts/p2a.mjs execute plan --artifacts ${artifact.artifactRoot} --task ${artifact.readyTaskIds[0]}`);
     } else if (artifact.taskCounts.total > 0 && artifact.taskCounts.done === artifact.taskCounts.total) {
       nextActions.push(`Validate close readiness: node .plan2agent/scripts/p2a.mjs iteration validate --artifacts ${artifact.artifactRoot} --require-close-ready`);
+    }
+  }
+  if (enhancements.memory.enabled) {
+    if (!enhancements.memory.inSync) {
+      nextActions.push('Repair Memory capability manifest/config drift: node .plan2agent/scripts/p2a.mjs enhance memory');
+    } else if (artifacts.length) {
+      nextActions.push(`Check Memory sync: node .plan2agent/scripts/p2a.mjs memory status --artifacts ${artifacts[0].artifactRoot}`);
+      nextActions.push(`Digest Memory maintenance candidates: node .plan2agent/scripts/p2a.mjs memory digest --artifacts ${artifacts[0].artifactRoot}`);
+    }
+  }
+  if (enhancements.proposals.enabled) {
+    if (!enhancements.proposals.inSync) {
+      nextActions.push('Repair proposal capability manifest/config drift: node .plan2agent/scripts/p2a.mjs enhance proposals');
+    } else {
+      if (artifacts.length) {
+        nextActions.push(`Mine proposal candidates: node .plan2agent/scripts/p2a.mjs proposals mine --artifacts ${artifacts[0].artifactRoot} --dry-run`);
+      }
+      nextActions.push(`Review proposal queue: node .plan2agent/scripts/p2a.mjs proposals digest --proposals ${enhancements.proposals.queueDir}`);
+      nextActions.push(`Preview proposal curation review: node .plan2agent/scripts/p2a.mjs proposals review --proposals ${enhancements.proposals.queueDir} --dry-run`);
     }
   }
   if (!nextActions.length) nextActions.push('No immediate P2A action detected from local files.');
@@ -443,6 +573,7 @@ function buildInfo(targetRootInput) {
       lintCommand: config.lintCommand ?? null,
       typecheckCommand: config.typecheckCommand ?? null,
     } : null,
+    enhancements,
     artifactCount: artifacts.length,
     artifacts,
     nextActions,
@@ -462,6 +593,17 @@ function printInfo(info) {
   console.log(`- artifacts: ${info.artifactCount}`);
   if (info.config) {
     console.log(`- verification: test=${info.config.testCommand ?? 'none'} lint=${info.config.lintCommand ?? 'none'} typecheck=${info.config.typecheckCommand ?? 'none'}`);
+  }
+  if (info.enhancements?.enabled?.length) {
+    console.log(`- enhancements: ${info.enhancements.enabled.join(', ')}`);
+  }
+  if (info.enhancements?.memory?.enabled) {
+    const memory = info.enhancements.memory;
+    console.log(`- memory: mode=${memory.mode} sync=${memory.inSync ? 'ok' : 'drift'} serverEnv=${memory.serverUrlEnv} serverConfigured=${memory.serverConfigured ? 'yes' : 'no'} pushPolicy=${memory.pushPolicy}`);
+  }
+  if (info.enhancements?.proposals?.enabled) {
+    const proposals = info.enhancements.proposals;
+    console.log(`- proposals: queue=${proposals.queueDir} entries=${proposals.queueJsonFiles} sync=${proposals.inSync ? 'ok' : 'drift'} reviewPolicy=${proposals.reviewPolicy} patchPolicy=${proposals.patchPolicy} approvalRequired=${proposals.approvalRequired ? 'yes' : 'no'}`);
   }
   for (const artifact of info.artifacts) {
     const active = artifact.activeIteration ? ` active=${artifact.activeIteration}` : '';

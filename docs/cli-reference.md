@@ -70,7 +70,7 @@ node scripts/p2a_handoff.mjs upgrade --target <project-dir> (--dry-run|--apply) 
 
 `enhance dev-skills`는 기존 scaffold 대상 프로젝트에 provider별 P2A skill/agent/command shim과 development config 기본값을 설치하거나 보강한다. `project.config.json`에는 `devExecution`, `roleProfiles`, `promptTemplates` 기본값을 비파괴 병합하고, `manifest.json.enhancements.devSkills`에는 선택한 provider와 prompt/role/provider guide version을 기록한다. 기존 asset 파일이 대상에 있고 toolkit 내용과 다르면 기본적으로 실패하며, 사람이 dry-run 결과를 검토한 뒤 `--overwrite`를 명시해야 덮어쓴다.
 
-`enhance memory`, `enhance gui`, `enhance orchestration`, `enhance proposals`는 provider asset을 복사하지 않고 capability별 project config 기본값과 `manifest.json.enhancements.<capability>` 기록만 비파괴 병합한다. 이 단계는 Memory sync, GUI project metadata, supervised orchestration, proposal queue를 prototype-first로 켜는 표면이며 실제 외부 push나 provider 실행은 하지 않는다.
+`enhance memory`, `enhance gui`, `enhance orchestration`, `enhance proposals`는 provider asset을 복사하지 않고 capability별 project config 기본값과 `manifest.json.enhancements.<capability>` 기록만 비파괴 병합한다. 이 단계는 Memory sync, GUI project metadata, supervised orchestration, proposal queue를 prototype-first로 켜는 표면이며 실제 외부 push나 provider 실행은 하지 않는다. `enhance memory`는 적용/preview 출력에 `memory status`, `memory push --dry-run`, `memory digest` 다음 명령을 함께 표시하고, `p2a info`와 `p2a_doctor --dev`에서 memory capability 상태를 확인할 수 있게 한다. `enhance proposals`도 `proposals mine --dry-run`, `proposals digest`, `proposals review --dry-run` 다음 명령을 표시하고, proposal queue, manual curation, draft-only patch, approval-required 정책을 `p2a info`와 `p2a_doctor --dev`에 노출한다.
 
 `update`는 기존 scaffold 대상 프로젝트의 runtime script/schema/AI tool asset/generated file을 현재 toolkit 기준과 비교한다. 기본 실행과 `--dry-run`은 preview만 출력하고 파일을 쓰지 않는다. `upgrade --dry-run`도 같은 drift/migration 판정을 재사용한다. 출력은 `unchanged`, `missing`, `would_update`, `manual_review`, `conflict`, `error`로 나뉘고, `.plan2agent/manifest.json` 또는 `project.config.json`을 읽을 수 없거나 target path가 유효하지 않으면 non-zero exit를 반환한다. manifest에서 활성화된 capability의 config가 누락되면 migration preview에 `<capability>_config: would_update`로 표시한다.
 
@@ -648,6 +648,8 @@ node .plan2agent/scripts/p2a_memory.mjs digest \
 
 `status`는 project, iteration, document snapshot, task graph, task, run, document chunk의 로컬 계획을 만들고 Memory `/api/artifacts` 조회 결과와 source id/hash 기준으로 비교한다. 서버 URL은 `--server`, `P2A_MEMORY_URL`, 또는 `project.config.json.memory.serverUrlEnv` 순서로 찾는다. 서버가 설정되지 않으면 로컬 계획과 `not_configured` 상태를 출력하며 파일이나 서버를 변경하지 않는다.
 
+`p2a info --json`은 `enhancements.memory`에 mode, server env, server/token 설정 여부, push policy, manifest/config sync 상태를 노출한다. `p2a_doctor --dev`는 Memory capability가 활성화된 프로젝트에서 memory manifest/config drift, runtime script, server env config, explicit approval push policy, sync tier 기본값을 검사한다. 이 검사는 서버 프로세스가 떠 있어야 통과하는 live probe가 아니라 로컬 설정/안전 정책 점검이다.
+
 `push`는 같은 계획을 Memory write DTO로 변환한다. `--dry-run`은 서버에 접속하지 않고 write 순서와 수량만 보여준다. 실제 서버 write는 `--yes`가 있어야 하며, project → iteration → document snapshots/chunks → task graph → tasks → runs 순서로 upsert한다. 인증이 필요한 Memory 서버는 `--token` 또는 `P2A_MEMORY_TOKEN` 값을 `X-P2A-Local-Token` 헤더로 받는다.
 
 `digest`는 로컬 run index와 proposal queue를 읽어 failed/blocked run, failure class, verification failure/gap, proposal coverage를 요약한다. proposal 후보가 빠진 run이 있으면 `p2a_proposals.mjs mine` 명령을 next action으로 제안하고, 이미 proposed 상태인 항목은 review/curate 흐름으로 연결한다.
@@ -800,6 +802,8 @@ node scripts/run_fixtures.mjs
 ### 워크플로우 D — run 회고에서 개선 proposal 만들기
 
 대상 프로젝트에서 실패/blocked run이나 verification gap이 쌓인 뒤 실행한다.
+
+`p2a enhance proposals`를 적용한 프로젝트는 `.plan2agent/project.config.json.proposals`와 `manifest.json.enhancements.proposals`에 proposal queue capability가 기록된다. `p2a info`는 큐 위치, 큐 JSON 수, manifest/config sync 상태, review/patch/approval 정책을 보여주고, `p2a_doctor --dev`는 proposal manifest/config drift, proposal runtime script, proposal schema, mining signal, manual curation, draft-only patch, approval gate를 로컬 설정 기준으로 검사한다.
 
 ```bash
 node .plan2agent/scripts/p2a_proposals.mjs mine \

@@ -896,6 +896,39 @@ function targetArtifactDir(projectId) {
   return path.join(ARTIFACT_TARGET_BASE, projectId);
 }
 
+function isDirectory(dirPath) {
+  try {
+    return existsSync(dirPath) && lstatSync(dirPath).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+function discoverTargetArtifactRoots(targetRoot) {
+  const artifactsRoot = path.join(targetRoot, P2A_ARTIFACTS_DIR);
+  if (!isDirectory(artifactsRoot)) return [];
+  return readdirSync(artifactsRoot, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => path.join(P2A_ARTIFACTS_DIR, entry.name))
+    .filter((relativePath) => isIterativeArtifactRoot(path.join(targetRoot, relativePath)))
+    .sort((left, right) => left.localeCompare(right));
+}
+
+function preferredEnhanceArtifactArg(targetRoot) {
+  const artifactRoots = discoverTargetArtifactRoots(targetRoot);
+  const artifactRef = artifactRoots[0] ?? path.join(P2A_ARTIFACTS_DIR, '<project_id>');
+  return { artifactRef: normalizePath(artifactRef), hasArtifact: artifactRoots.length > 0 };
+}
+
+function projectRelativeConfigPath(targetRoot, value, fallback) {
+  const raw = typeof value === 'string' && value.trim() ? value.trim() : fallback;
+  if (path.isAbsolute(raw)) {
+    const relative = path.relative(targetRoot, raw);
+    if (relative && !relative.startsWith('..') && !path.isAbsolute(relative)) return normalizePath(relative);
+  }
+  return normalizePath(raw);
+}
+
 function targetGatePath(projectId, gateDir, file) {
   return path.join(targetArtifactDir(projectId), gateDir, file);
 }
@@ -1713,8 +1746,29 @@ function buildEnhanceCapabilityPlan(args, targetRoot) {
     capability: args.enhancement,
     configKey: args.enhancement,
     configUpdatedKeys: mergedConfig.updatedKeys,
+    nextActions: enhanceCapabilityNextActions(args.enhancement, targetRoot, mergedConfig.config),
   };
   return plan;
+}
+
+function enhanceCapabilityNextActions(capability, targetRoot, config) {
+  const source = preferredEnhanceArtifactArg(targetRoot);
+  if (capability === 'memory') {
+    return [
+      `${source.hasArtifact ? 'Check local/Memory sync' : 'After creating an artifact root, check local/Memory sync'}: node .plan2agent/scripts/p2a.mjs memory status --artifacts ${source.artifactRef}`,
+      `${source.hasArtifact ? 'Preview explicit Memory push' : 'After review, preview explicit Memory push'}: node .plan2agent/scripts/p2a.mjs memory push --artifacts ${source.artifactRef} --dry-run`,
+      `${source.hasArtifact ? 'Summarize run/proposal gaps' : 'After runs exist, summarize run/proposal gaps'}: node .plan2agent/scripts/p2a.mjs memory digest --artifacts ${source.artifactRef}`,
+    ];
+  }
+  if (capability === 'proposals') {
+    const queueDir = projectRelativeConfigPath(targetRoot, config?.proposals?.queueDir, path.join('.plan2agent', 'proposals'));
+    return [
+      `${source.hasArtifact ? 'Mine proposal candidates' : 'After runs exist, mine proposal candidates'}: node .plan2agent/scripts/p2a.mjs proposals mine --artifacts ${source.artifactRef} --proposals ${queueDir} --dry-run`,
+      `Review proposal queue: node .plan2agent/scripts/p2a.mjs proposals digest --proposals ${queueDir}`,
+      `Preview curation review: node .plan2agent/scripts/p2a.mjs proposals review --proposals ${queueDir} --dry-run`,
+    ];
+  }
+  return [];
 }
 
 function compareEnhancePlanItem(item) {
@@ -1793,6 +1847,10 @@ function printEnhanceCapabilityPlan(plan, args, targetRoot) {
   for (const item of items.filter((entry) => entry.status !== 'unchanged')) {
     console.log(`- ${item.status}: ${item.action} ${item.source} -> ${item.target}`);
     console.log(`  ${item.detail}`);
+  }
+  if (plan.enhanceSummary.nextActions.length) {
+    console.log('next actions:');
+    for (const action of plan.enhanceSummary.nextActions) console.log(`- ${action}`);
   }
   if (args.dryRun) console.log('dry-run: no files written');
 }
