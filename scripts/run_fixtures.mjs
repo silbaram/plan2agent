@@ -378,6 +378,24 @@ function validateScaffoldFixtureCase() {
       return { status: failureStatus(result), checks };
     }
 
+    const signalDispatchRoot = path.join(tempRoot, 'p2a-signal-dispatch-target');
+    cpSync(targetRoot, signalDispatchRoot, { recursive: true });
+    writeFileSync(
+      path.join(signalDispatchRoot, '.plan2agent', 'scripts', 'p2a_tasks.mjs'),
+      "process.kill(process.pid, 'SIGTERM');\n",
+      'utf8',
+    );
+    result = runTargetP2a(signalDispatchRoot, ['tasks', 'ready']);
+    checks += 1;
+    if (
+      result.status === 0
+      || !result.stderr.includes('p2a error: command terminated by signal SIGTERM')
+    ) {
+      console.error('top-level p2a signal dispatch fixture failed');
+      writeResultOutput(result);
+      return { status: result.status === 0 ? 1 : failureStatus(result), checks };
+    }
+
     const lazyConfigGraphPath = path.join(tempRoot, 'lazy-config-task-graph.json');
     cpSync(path.join(E2E_FIXTURE_ROOT, 'webhook-api-service', 'gate-c-task-graph', 'task-graph.json'), lazyConfigGraphPath);
     writeFileSync(path.join(targetRoot, 'package.json'), `${JSON.stringify({

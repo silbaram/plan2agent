@@ -1,0 +1,134 @@
+{
+  "schema_version": "p2a.spec.v1",
+  "project_id": "technology-recon-reference-recon-open-question",
+  "source_intake": "fixtures/cache-library/intake.answered.json",
+  "product": {
+    "problem": "Build an API that stores submitted records durably.",
+    "target_users": [
+      "Internal operators"
+    ],
+    "goals": [
+      "Accept records and make them queryable"
+    ],
+    "non_goals": [
+      "No analytics dashboard"
+    ],
+    "core_flows": [
+      "A client submits a record and later queries it"
+    ],
+    "screens_or_interfaces": [
+      "HTTP API endpoints"
+    ],
+    "data_model_draft": [
+      "Record with id, payload, and created timestamp"
+    ],
+    "external_integrations": [
+      "PostgreSQL database"
+    ],
+    "success_criteria": [
+      "Records can be created and fetched"
+    ],
+    "constraints": [
+      "No external queue"
+    ]
+  },
+  "implementation": {
+    "architecture": [
+      "Persist records in PostgreSQL behind a repository interface."
+    ],
+    "interfaces": [
+      "POST /records",
+      "GET /records/:id"
+    ],
+    "data_flow": [
+      "Requests validate input, write to storage, and return persisted records."
+    ],
+    "dependencies": [
+      "PostgreSQL database"
+    ],
+    "edge_cases": [
+      "Invalid payloads return an error."
+    ],
+    "verification": [
+      "Integration tests cover create and fetch."
+    ]
+  },
+  "clarifying_question_disposition": [
+    {
+      "id": "CQ-1",
+      "status": "answered",
+      "rationale": "The target runtime question is resolved by the selected v1 runtime decision.",
+      "affects": [
+        "spec.product.screens_or_interfaces",
+        "spec.implementation.architecture"
+      ],
+      "resolved_by": "ND-1 answer: TypeScript/Node.js package"
+    },
+    {
+      "id": "CQ-2",
+      "status": "deferred_non_goal",
+      "rationale": "The approved v1 scope excludes protocol and server compatibility.",
+      "affects": [
+        "spec.product.goals",
+        "spec.product.non_goals"
+      ],
+      "non_goal": "No Redis protocol compatibility and no network server in v1"
+    }
+  ],
+  "open_decisions": [],
+  "approval": "approved",
+  "reference_reconnaissance": {
+    "triggers": [
+      "Gate B selects a database dependency with deployment and maintenance impact."
+    ],
+    "candidates": [
+      {
+        "candidate_id": "REF-1",
+        "title": "PostgreSQL documentation",
+        "source_id": "WEB-1",
+        "source_type": "official_doc",
+        "summary": "Primary documentation for the selected relational database.",
+        "used_for": "Grounded the durable storage choice and repository boundary.",
+        "decision": "selected",
+        "rationale": "PostgreSQL fits durable relational storage while keeping the v1 API implementation conventional."
+      }
+    ],
+    "selected_patterns": [
+      {
+        "candidate_id": "REF-1",
+        "pattern": "Use a repository boundary around PostgreSQL persistence.",
+        "applies_to": [
+          "spec.implementation.architecture",
+          "spec.implementation.data_flow"
+        ],
+        "rationale": "The boundary keeps HTTP handlers independent from database-specific details."
+      }
+    ],
+    "rejected_patterns": [],
+    "open_questions": [
+      "Confirm whether the database choice requires managed hosting constraints before approving Gate B."
+    ]
+  },
+  "evidence": [
+    {
+      "source_id": "USER-1",
+      "title": "Fixture scope",
+      "url": "",
+      "used_for": "Confirmed durable API storage is in scope and an external queue is out of scope."
+    },
+    {
+      "source_id": "WEB-1",
+      "title": "PostgreSQL Documentation",
+      "url": "https://www.postgresql.org/docs/",
+      "used_for": "Grounded the PostgreSQL durable storage choice used by the Gate B implementation plan."
+    }
+  ],
+  "approval_audit": {
+    "approved_by": "user",
+    "approved_at": "2026-07-02",
+    "approved_artifacts": [
+      "fixtures/_negative/technology-recon/reference-recon-open-question-approved-spec.json"
+    ],
+    "approval_note": "Approved fixture intentionally leaves a reference reconnaissance question unresolved."
+  }
+}

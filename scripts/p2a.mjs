@@ -185,6 +185,10 @@ function runScript(scriptPath, args) {
     console.error(`p2a error: failed to run ${scriptPath}: ${result.error.message}`);
     return 1;
   }
+  if (result.signal) {
+    console.error(`p2a error: command terminated by signal ${result.signal}: ${scriptPath}`);
+    return 1;
+  }
   return result.status ?? 0;
 }
 

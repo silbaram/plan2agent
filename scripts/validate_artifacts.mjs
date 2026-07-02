@@ -392,6 +392,10 @@ function validateReferenceReconnaissance(spec) {
   const reconnaissance = spec.reference_reconnaissance;
   if (!reconnaissance) return;
 
+  if (spec.approval === 'approved' && reconnaissance.open_questions.length) {
+    throw new ValidationError('approved spec must not contain reference_reconnaissance.open_questions');
+  }
+
   const evidenceIds = new Set((spec.evidence ?? []).map((item) => item.source_id));
   const candidateIds = reconnaissance.candidates.map((candidate) => candidate.candidate_id);
   if (candidateIds.length !== new Set(candidateIds).size) {
