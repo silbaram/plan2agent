@@ -61,10 +61,13 @@ Plan2Agent 본체 개발자용 진단 스크립트다. `scripts/p2a_tool_manifes
 ```bash
 node scripts/p2a_doctor.mjs --target <project-dir>
 node scripts/p2a_doctor.mjs --target <project-dir> --json
+node scripts/p2a_doctor.mjs --target <project-dir> --dev --json
 node scripts/p2a_doctor.mjs --target <project-dir> --strict
 ```
 
-`--strict`는 warning만 있어도 non-zero exit를 반환한다. 일반 실행은 failure가 있을 때만 non-zero exit를 반환한다.
+출력에는 설치 파일 체크와 별개로 `projectState`가 포함된다. `projectState.state`는 `installed_empty`, `planning_in_progress`, `iteration_init_required`, `execution_ready`, `cycle_close_ready`, `broken_install`, `no_p2a` 중 하나이며, artifact root별 Gate A-D 존재 여부, Gate B approval/open decision 수, Gate C task count/ready 수, Gate D blocker 수, run-index 요약을 함께 보여준다. scaffold 프로젝트에 greenfield Gate A-D bundle이 있으면 `project_state` 체크가 warning으로 표시되고 `p2a_iteration init` 명령을 next action으로 출력한다.
+
+`--dev`는 development skill/config 진단을 추가한다. `manifest.aiToolTargets` 기준으로 Codex/Claude/Gemini provider asset, role profile, `manifest.aiToolFiles`, `project.config.json.providerNativeCapabilities`, `runTracking`, Claude PreToolUse confinement hook 상태를 확인한다. `--strict`는 warning만 있어도 non-zero exit를 반환한다. 일반 실행은 failure가 있을 때만 non-zero exit를 반환한다.
 
 ### `sync_cli_assets.mjs`
 

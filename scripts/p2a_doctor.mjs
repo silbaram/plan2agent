@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /** Diagnose a scaffolded Plan2Agent project from the toolkit checkout. */
 
-import { existsSync, lstatSync, readFileSync } from 'node:fs';
+import { existsSync, lstatSync, readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
 import { pathToFileURL } from 'node:url';
@@ -11,15 +11,68 @@ import {
   REPO_ONLY_SCRIPT_FILES,
 } from './p2a_tool_manifest.mjs';
 
+const GATE_FILES = [
+  ['gate_a_intake', 'Gate A intake', path.join('gate-a-intake', 'intake.json')],
+  ['gate_b_spec', 'Gate B spec', path.join('gate-b-spec', 'spec.json')],
+  ['gate_c_task_graph', 'Gate C task graph', path.join('gate-c-task-graph', 'task-graph.json')],
+  ['gate_d_review', 'Gate D review', path.join('gate-d-review', 'review.json')],
+];
+
+const GREENFIELD_REQUIRED_FILES = [
+  'status.md',
+  ...GATE_FILES.map(([, , relativePath]) => relativePath),
+];
+
+const EMPTY_TASK_COUNTS = {
+  total: 0,
+  ready: 0,
+  todo: 0,
+  inProgress: 0,
+  blocked: 0,
+  done: 0,
+  other: 0,
+};
+
+const DEV_PROVIDER_FILES = {
+  codex: [
+    path.join('.agents', 'skills', 'p2a-dev-execution', 'SKILL.md'),
+    path.join('.agents', 'agents', 'p2a-dev-orchestrator.md'),
+    path.join('.agents', 'agents', 'p2a-implementer.md'),
+    path.join('.agents', 'agents', 'p2a-performance-monitor.md'),
+    path.join('.codex', 'agents', 'p2a-dev-orchestrator.toml'),
+    path.join('.codex', 'agents', 'p2a-implementer.toml'),
+    path.join('.codex', 'agents', 'p2a-performance-monitor.toml'),
+  ],
+  claude: [
+    path.join('.claude', 'skills', 'p2a-dev-execution', 'SKILL.md'),
+    path.join('.claude', 'agents', 'p2a-dev-orchestrator.md'),
+    path.join('.claude', 'agents', 'p2a-implementer.md'),
+    path.join('.claude', 'agents', 'p2a-performance-monitor.md'),
+    path.join('.claude', 'hooks', 'p2a-confine-workspace.mjs'),
+    path.join('.claude', 'settings.json'),
+  ],
+  gemini: [
+    path.join('.agents', 'skills', 'p2a-dev-execution', 'SKILL.md'),
+    path.join('.agents', 'agents', 'p2a-dev-orchestrator.md'),
+    path.join('.agents', 'agents', 'p2a-implementer.md'),
+    path.join('.agents', 'agents', 'p2a-performance-monitor.md'),
+    path.join('.gemini', 'agents', 'p2a-dev-orchestrator.md'),
+    path.join('.gemini', 'agents', 'p2a-implementer.md'),
+    path.join('.gemini', 'agents', 'p2a-performance-monitor.md'),
+    path.join('.gemini', 'commands', 'p2a', 'dev-execution.toml'),
+  ],
+};
+
 function usage() {
   return [
     'Usage:',
-    '  node scripts/p2a_doctor.mjs [--target <project-dir>] [--json] [--strict]',
+    '  node scripts/p2a_doctor.mjs [--target <project-dir>] [--json] [--strict] [--dev]',
     '',
     'Options:',
     '  --target <dir>  Project directory to inspect. Default: current working directory.',
     '  --json          Print machine-readable JSON.',
     '  --strict        Exit non-zero when warnings are present.',
+    '  --dev           Include development skill/config/provider asset checks.',
     '  --help, -h      Show this help.',
   ].join('\n');
 }
@@ -29,6 +82,7 @@ function parseArgs(argv) {
     target: process.cwd(),
     json: false,
     strict: false,
+    dev: false,
     help: false,
   };
   for (let index = 0; index < argv.length; index += 1) {
@@ -42,6 +96,8 @@ function parseArgs(argv) {
       args.json = true;
     } else if (arg === '--strict') {
       args.strict = true;
+    } else if (arg === '--dev') {
+      args.dev = true;
     } else if (arg.startsWith('--')) {
       throw new Error(`unknown option: ${arg}`);
     } else {
@@ -71,6 +127,42 @@ function isDirectory(dirPath) {
   }
 }
 
+function listDirectoryNames(dirPath) {
+  try {
+    return readdirSync(dirPath, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => entry.name)
+      .sort((left, right) => left.localeCompare(right));
+  } catch {
+    return [];
+  }
+}
+
+function stringValue(value) {
+  return typeof value === 'string' && value.trim() ? value : null;
+}
+
+function jsonRecords(value) {
+  return Array.isArray(value)
+    ? value.filter((item) => item && typeof item === 'object' && !Array.isArray(item))
+    : [];
+}
+
+function stringArrayValue(value) {
+  return Array.isArray(value)
+    ? value.filter((item) => typeof item === 'string')
+    : [];
+}
+
+function relativeToTarget(targetRoot, filePath) {
+  const relativePath = path.relative(targetRoot, filePath);
+  if (!relativePath) return '.';
+  if (!relativePath.startsWith('..') && !path.isAbsolute(relativePath)) {
+    return normalizePath(relativePath);
+  }
+  return normalizePath(filePath);
+}
+
 function readJsonObject(filePath) {
   try {
     if (!isFile(filePath)) return { ok: false, data: null, error: 'file is missing' };
@@ -82,6 +174,11 @@ function readJsonObject(filePath) {
   } catch (error) {
     return { ok: false, data: null, error: error.message };
   }
+}
+
+function readOptionalJsonObject(filePath) {
+  if (!isFile(filePath)) return { ok: false, data: null, error: 'file is missing', missing: true };
+  return readJsonObject(filePath);
 }
 
 function check(id, label, status, detail, fields = {}) {
@@ -114,7 +211,414 @@ function manifestListingCheck(id, label, manifest, relativePaths, keys) {
   return check(id, label, 'pass', `manifest lists ${relativePaths.length} expected file(s)`);
 }
 
-function diagnose(targetRootInput) {
+function firstExistingFile(candidates) {
+  return candidates.find((candidate) => isFile(candidate)) ?? null;
+}
+
+function looksLikeArtifactRoot(candidate) {
+  if (!isDirectory(candidate)) return false;
+  if (isFile(path.join(candidate, 'current-spec.json'))) return true;
+  if (isDirectory(path.join(candidate, 'iterations'))) return true;
+  return GATE_FILES.some(([, , relativePath]) => isFile(path.join(candidate, relativePath)));
+}
+
+function discoverArtifactRoots(targetRoot) {
+  const roots = new Set();
+  if (looksLikeArtifactRoot(targetRoot)) roots.add(targetRoot);
+  for (const parentPath of [
+    path.join(targetRoot, 'artifacts'),
+    path.join(targetRoot, '.plan2agent', 'artifacts'),
+  ]) {
+    for (const name of listDirectoryNames(parentPath)) {
+      const candidate = path.join(parentPath, name);
+      if (looksLikeArtifactRoot(candidate)) roots.add(candidate);
+    }
+  }
+  return [...roots].sort((left, right) => left.localeCompare(right));
+}
+
+function hasGreenfieldGateBundle(artifactRoot) {
+  return GREENFIELD_REQUIRED_FILES.every((relativePath) => isFile(path.join(artifactRoot, relativePath)));
+}
+
+function artifactLayout(targetRoot, artifactRoot, isScaffoldProject) {
+  const hasCurrentSpec = isFile(path.join(artifactRoot, 'current-spec.json'));
+  const hasIterations = isDirectory(path.join(artifactRoot, 'iterations'));
+  const hasGreenfieldGateBundleValue = hasGreenfieldGateBundle(artifactRoot);
+  const hasAnyIterationMarker = hasCurrentSpec || hasIterations;
+  const requiresIterationInit = isScaffoldProject && hasGreenfieldGateBundleValue && !hasAnyIterationMarker;
+  const hasIncompleteIterationLayout = isScaffoldProject && hasCurrentSpec !== hasIterations;
+  const kind = hasIncompleteIterationLayout
+    ? 'incomplete_iteration'
+    : hasCurrentSpec && hasIterations
+      ? 'iteration'
+      : hasGreenfieldGateBundleValue
+        ? 'greenfield'
+        : 'unknown';
+  return {
+    kind,
+    hasCurrentSpec,
+    hasIterations,
+    hasGreenfieldGateBundle: hasGreenfieldGateBundleValue,
+    requiresIterationInit,
+    hasIncompleteIterationLayout,
+    initCommand: requiresIterationInit
+      ? `node .plan2agent/scripts/p2a_iteration.mjs init --artifacts ${relativeToTarget(targetRoot, artifactRoot)} --iteration-id v1-mvp`
+      : null,
+  };
+}
+
+function gateFileSummary(targetRoot, searchRoots, id, label, relativePath) {
+  const filePath = firstExistingFile(searchRoots.map((searchRoot) => path.join(searchRoot, relativePath)));
+  if (!filePath) {
+    return { id, label, state: 'missing', relativePath };
+  }
+  const result = readJsonObject(filePath);
+  return {
+    id,
+    label,
+    state: result.ok ? 'present' : 'malformed',
+    relativePath: relativeToTarget(targetRoot, filePath),
+    error: result.ok ? null : result.error,
+  };
+}
+
+function countTasks(taskGraph) {
+  const tasks = jsonRecords(taskGraph?.tasks);
+  const doneTaskIds = new Set(
+    tasks
+      .filter((task) => task.status === 'done')
+      .map((task) => stringValue(task.id))
+      .filter(Boolean),
+  );
+  return tasks.reduce((counts, task) => {
+    const status = stringValue(task.status);
+    const dependencies = stringArrayValue(task.dependencies);
+    const ready = status === 'todo' && dependencies.every((dependency) => doneTaskIds.has(dependency));
+    return {
+      total: counts.total + 1,
+      ready: counts.ready + (ready ? 1 : 0),
+      todo: counts.todo + (status === 'todo' ? 1 : 0),
+      inProgress: counts.inProgress + (status === 'in_progress' ? 1 : 0),
+      blocked: counts.blocked + (status === 'blocked' ? 1 : 0),
+      done: counts.done + (status === 'done' ? 1 : 0),
+      other: counts.other + (!['todo', 'in_progress', 'blocked', 'done'].includes(status) ? 1 : 0),
+    };
+  }, { ...EMPTY_TASK_COUNTS });
+}
+
+function summarizeRuns(targetRoot, artifactRoot) {
+  const runsDir = [
+    path.join(artifactRoot, 'runs'),
+    path.join(path.dirname(artifactRoot), 'runs'),
+    path.join(targetRoot, '.plan2agent', 'runs'),
+  ].find((candidate) => isDirectory(candidate) && isFile(path.join(candidate, 'run-index.json')));
+  if (!runsDir) {
+    return {
+      runIndexPath: null,
+      runCount: 0,
+      latestRunId: null,
+      statusCounts: {},
+      taskRunCount: 0,
+      error: null,
+    };
+  }
+  const runIndexPath = path.join(runsDir, 'run-index.json');
+  const result = readJsonObject(runIndexPath);
+  if (!result.ok) {
+    return {
+      runIndexPath: relativeToTarget(targetRoot, runIndexPath),
+      runCount: 0,
+      latestRunId: null,
+      statusCounts: {},
+      taskRunCount: 0,
+      error: result.error,
+    };
+  }
+  const runs = jsonRecords(result.data.runs);
+  const statusCounts = runs.reduce((counts, run) => {
+    const status = stringValue(run.status) ?? 'unknown';
+    counts[status] = (counts[status] ?? 0) + 1;
+    return counts;
+  }, {});
+  return {
+    runIndexPath: relativeToTarget(targetRoot, runIndexPath),
+    runCount: runs.length,
+    latestRunId: stringValue(runs.at(-1)?.runId),
+    statusCounts,
+    taskRunCount: jsonRecords(result.data.tasks).length,
+    error: null,
+  };
+}
+
+function summarizeArtifact(targetRoot, artifactRoot, isScaffoldProject) {
+  const diagnostics = [];
+  const layout = artifactLayout(targetRoot, artifactRoot, isScaffoldProject);
+  let projectId = path.basename(artifactRoot);
+  let activeIteration = null;
+
+  const currentSpecPath = path.join(artifactRoot, 'current-spec.json');
+  const currentSpecResult = readOptionalJsonObject(currentSpecPath);
+  if (currentSpecResult.ok) {
+    projectId = stringValue(currentSpecResult.data.project_id) ?? projectId;
+    activeIteration = stringValue(currentSpecResult.data.active_iteration);
+  } else if (!currentSpecResult.missing) {
+    diagnostics.push({
+      severity: 'error',
+      message: `current-spec.json is not readable: ${currentSpecResult.error}`,
+    });
+  }
+
+  const iterationRoot = activeIteration ? path.join(artifactRoot, 'iterations', activeIteration) : null;
+  const searchRoots = iterationRoot && isDirectory(iterationRoot)
+    ? [iterationRoot, artifactRoot]
+    : [artifactRoot];
+  const intakePath = firstExistingFile(searchRoots.map((searchRoot) => path.join(searchRoot, 'gate-a-intake', 'intake.json')));
+  const specPath = firstExistingFile(searchRoots.map((searchRoot) => path.join(searchRoot, 'gate-b-spec', 'spec.json')));
+  const taskGraphPath = firstExistingFile(searchRoots.flatMap((searchRoot) => [
+    path.join(searchRoot, 'gate-c-task-graph', 'task-graph.json'),
+    path.join(searchRoot, 'task-graph.json'),
+  ]));
+  const reviewPath = firstExistingFile(searchRoots.map((searchRoot) => path.join(searchRoot, 'gate-d-review', 'review.json')));
+
+  const specResult = specPath ? readJsonObject(specPath) : null;
+  const taskGraphResult = taskGraphPath ? readJsonObject(taskGraphPath) : null;
+  const reviewResult = reviewPath ? readJsonObject(reviewPath) : null;
+  if (specResult?.ok) projectId = stringValue(specResult.data.project_id) ?? projectId;
+  if (taskGraphResult?.ok) projectId = stringValue(taskGraphResult.data.projectId) ?? projectId;
+  if (reviewResult?.ok) projectId = stringValue(reviewResult.data.projectId) ?? projectId;
+
+  for (const [label, result] of [
+    ['Gate B spec', specResult],
+    ['Gate C task graph', taskGraphResult],
+    ['Gate D review', reviewResult],
+  ]) {
+    if (result && !result.ok) {
+      diagnostics.push({ severity: 'error', message: `${label} is not readable: ${result.error}` });
+    }
+  }
+  if (intakePath) {
+    const intakeResult = readJsonObject(intakePath);
+    if (!intakeResult.ok) diagnostics.push({ severity: 'error', message: `Gate A intake is not readable: ${intakeResult.error}` });
+  }
+  if (layout.requiresIterationInit) {
+    diagnostics.push({
+      severity: 'warn',
+      message: 'Greenfield Gate A-D artifacts must be converted with p2a_iteration init before task execution.',
+    });
+  }
+  if (layout.hasIncompleteIterationLayout) {
+    diagnostics.push({
+      severity: 'error',
+      message: 'Iteration layout is incomplete: current-spec.json and iterations/ must exist together.',
+    });
+  }
+
+  const taskCounts = taskGraphResult?.ok ? countTasks(taskGraphResult.data) : { ...EMPTY_TASK_COUNTS };
+  const runSummary = summarizeRuns(targetRoot, artifactRoot);
+  if (runSummary.error) {
+    diagnostics.push({ severity: 'error', message: `run-index.json is not readable: ${runSummary.error}` });
+  }
+
+  return {
+    projectId,
+    artifactRoot: relativeToTarget(targetRoot, artifactRoot),
+    activeIteration,
+    layout,
+    gates: GATE_FILES.map(([id, label, relativePath]) => gateFileSummary(targetRoot, searchRoots, id, label, relativePath)),
+    spec: {
+      path: specPath ? relativeToTarget(targetRoot, specPath) : null,
+      approval: specResult?.ok ? stringValue(specResult.data.approval) : null,
+      openDecisions: specResult?.ok && Array.isArray(specResult.data.open_decisions) ? specResult.data.open_decisions.length : null,
+    },
+    taskGraph: {
+      path: taskGraphPath ? relativeToTarget(targetRoot, taskGraphPath) : null,
+      version: taskGraphResult?.ok ? stringValue(taskGraphResult.data.version) : null,
+      sourceSpec: taskGraphResult?.ok ? stringValue(taskGraphResult.data.sourceSpec) : null,
+      taskCounts,
+    },
+    review: {
+      path: reviewPath ? relativeToTarget(targetRoot, reviewPath) : null,
+      blockingIssues: reviewResult?.ok && Array.isArray(reviewResult.data.blocking_issues) ? reviewResult.data.blocking_issues.length : null,
+    },
+    runs: runSummary,
+    diagnostics,
+  };
+}
+
+function artifactIsCycleCloseReady(artifact) {
+  const counts = artifact.taskGraph.taskCounts;
+  return Boolean(
+    artifact.activeIteration
+      && counts.total > 0
+      && counts.done === counts.total
+      && counts.todo === 0
+      && counts.inProgress === 0
+      && counts.blocked === 0,
+  );
+}
+
+function determineProjectState(targetRoot, artifacts) {
+  const hasInstallMarker = isDirectory(path.join(targetRoot, '.plan2agent'))
+    || isFile(path.join(targetRoot, '.plan2agent', 'manifest.json'))
+    || isFile(path.join(targetRoot, '.plan2agent', 'project.config.json'));
+  const hasArtifactErrors = artifacts.some((artifact) => artifact.diagnostics.some((diagnostic) => diagnostic.severity === 'error'));
+  if (hasArtifactErrors) return 'broken_install';
+  if (artifacts.some((artifact) => artifact.layout.requiresIterationInit)) return 'iteration_init_required';
+  if (artifacts.some(artifactIsCycleCloseReady)) return 'cycle_close_ready';
+  if (artifacts.some((artifact) => artifact.taskGraph.taskCounts.ready > 0 || artifact.runs.runCount > 0)) return 'execution_ready';
+  if (artifacts.length > 0) return 'planning_in_progress';
+  if (hasInstallMarker) return 'installed_empty';
+  return 'no_p2a';
+}
+
+function projectDiagnostics(state, artifacts) {
+  const diagnostics = artifacts.flatMap((artifact) => artifact.diagnostics.map((diagnostic) => ({
+    ...diagnostic,
+    artifactRoot: artifact.artifactRoot,
+  })));
+  if (state === 'no_p2a') diagnostics.push({ severity: 'warn', message: 'No P2A harness or artifact root was found.' });
+  if (state === 'installed_empty') diagnostics.push({ severity: 'ok', message: 'P2A harness files exist, but no planning artifacts were found yet.' });
+  if (state === 'execution_ready') diagnostics.push({ severity: 'ok', message: 'At least one ready task or run record was found.' });
+  if (state === 'cycle_close_ready') diagnostics.push({ severity: 'ok', message: 'All active iteration tasks are done; the iteration is ready to close.' });
+  return diagnostics;
+}
+
+function projectCommands(state, artifacts) {
+  const commands = [];
+  const primaryArtifact = artifacts[0] ?? null;
+  if (primaryArtifact?.layout.requiresIterationInit && primaryArtifact.layout.initCommand) {
+    commands.push({
+      id: 'init_iteration',
+      command: primaryArtifact.layout.initCommand,
+      description: 'Convert greenfield Gate artifacts into the iteration layout before task execution.',
+    });
+  }
+  if (primaryArtifact) {
+    commands.push({
+      id: 'validate',
+      command: primaryArtifact.activeIteration
+        ? `node .plan2agent/scripts/p2a_iteration.mjs validate --artifacts ${primaryArtifact.artifactRoot}`
+        : `node .plan2agent/scripts/validate_artifacts.mjs --artifact-root ${primaryArtifact.artifactRoot}`,
+      description: 'Validate the detected planning artifacts.',
+    });
+  }
+  if (state === 'installed_empty') {
+    commands.push({
+      id: 'import_or_plan',
+      command: 'Start Gate A-D planning or import an existing artifact bundle.',
+      description: 'No canonical artifact root was found yet.',
+    });
+  }
+  return commands;
+}
+
+function summarizeProjectState(targetRoot, manifest) {
+  const isScaffoldProject = manifest?.provenance?.mode === 'scaffold';
+  const artifacts = discoverArtifactRoots(targetRoot)
+    .map((artifactRoot) => summarizeArtifact(targetRoot, artifactRoot, isScaffoldProject));
+  const state = determineProjectState(targetRoot, artifacts);
+  return {
+    state,
+    isScaffoldProject,
+    artifactCount: artifacts.length,
+    artifacts,
+    diagnostics: projectDiagnostics(state, artifacts),
+    commands: projectCommands(state, artifacts),
+  };
+}
+
+function projectStateCheck(projectState) {
+  if (projectState.state === 'broken_install') {
+    return check('project_state', 'Project state', 'fail', 'artifact layout or state diagnostics include errors', { state: projectState.state });
+  }
+  if (projectState.state === 'iteration_init_required') {
+    return check('project_state', 'Project state', 'warn', 'greenfield Gate artifacts require p2a_iteration init before execution', { state: projectState.state });
+  }
+  if (projectState.state === 'no_p2a') {
+    return check('project_state', 'Project state', 'warn', 'no P2A project state was detected', { state: projectState.state });
+  }
+  return check('project_state', 'Project state', 'pass', `state=${projectState.state}`, { state: projectState.state });
+}
+
+function selectedToolTargets(manifest) {
+  const targets = stringArrayValue(manifest?.aiToolTargets)
+    .filter((target) => ['codex', 'claude', 'gemini'].includes(target));
+  return [...new Set(targets)];
+}
+
+function devProviderAssetChecks(targetRoot, targets) {
+  if (!targets.length) {
+    return [check('dev_ai_tool_targets', 'Dev AI tool targets', 'warn', 'no AI tool targets are recorded in manifest.aiToolTargets')];
+  }
+  return targets.map((target) => {
+    const expected = DEV_PROVIDER_FILES[target] ?? [];
+    const missing = expected
+      .map(normalizePath)
+      .filter((relativePath) => !isFile(path.join(targetRoot, relativePath)));
+    return missing.length
+      ? check(`dev_${target}_assets`, `${target} dev assets`, 'fail', `${missing.length} expected development asset(s) are missing`, { missing })
+      : check(`dev_${target}_assets`, `${target} dev assets`, 'pass', `${expected.length} development assets are present`);
+  });
+}
+
+function buildDevReport(targetRoot, manifest, configResult) {
+  const targets = selectedToolTargets(manifest);
+  const checks = [];
+  checks.push(...devProviderAssetChecks(targetRoot, targets));
+
+  const manifestAiToolFiles = stringArrayValue(manifest?.aiToolFiles).map(normalizePath);
+  if (manifestAiToolFiles.length) {
+    const missing = manifestAiToolFiles.filter((relativePath) => !isFile(path.join(targetRoot, relativePath)));
+    checks.push(
+      missing.length
+        ? check('dev_manifest_ai_tool_files', 'Manifest AI tool files', 'fail', `${missing.length} manifest-listed AI tool file(s) are missing`, { missing })
+        : check('dev_manifest_ai_tool_files', 'Manifest AI tool files', 'pass', `${manifestAiToolFiles.length} manifest-listed AI tool files are present`),
+    );
+  } else {
+    checks.push(check('dev_manifest_ai_tool_files', 'Manifest AI tool files', 'warn', 'manifest.aiToolFiles is empty or unavailable'));
+  }
+
+  const config = configResult.ok ? configResult.data : null;
+  const capabilityTargets = targets.filter((target) => config?.providerNativeCapabilities?.[target]);
+  checks.push(
+    targets.length && capabilityTargets.length === targets.length
+      ? check('dev_provider_capabilities', 'Provider capability config', 'pass', `providerNativeCapabilities covers ${targets.join(', ')}`)
+      : check('dev_provider_capabilities', 'Provider capability config', 'warn', 'providerNativeCapabilities does not cover every selected AI tool target', { targets, configured: capabilityTargets }),
+  );
+
+  checks.push(
+    config?.runTracking?.runsDir && config?.runTracking?.defaultIsolation
+      ? check('dev_run_tracking', 'Run tracking config', 'pass', `runsDir=${config.runTracking.runsDir}, defaultIsolation=${config.runTracking.defaultIsolation}`)
+      : check('dev_run_tracking', 'Run tracking config', 'warn', 'runTracking.runsDir/defaultIsolation is not configured'),
+  );
+
+  if (targets.includes('claude')) {
+    const claudeSettingsPath = path.join(targetRoot, '.claude', 'settings.json');
+    const claudeSettings = readJsonObject(claudeSettingsPath);
+    const hookCommand = claudeSettings.ok
+      ? claudeSettings.data.hooks?.PreToolUse?.[0]?.hooks?.[0]?.command
+      : null;
+    const denyRules = claudeSettings.ok && Array.isArray(claudeSettings.data.permissions?.deny)
+      ? claudeSettings.data.permissions.deny
+      : [];
+    checks.push(
+      hookCommand === 'node .claude/hooks/p2a-confine-workspace.mjs'
+        && denyRules.includes('Edit(~/**)')
+        && isFile(path.join(targetRoot, '.claude', 'hooks', 'p2a-confine-workspace.mjs'))
+        ? check('dev_claude_confinement', 'Claude confinement', 'pass', 'settings and PreToolUse confinement hook are installed')
+        : check('dev_claude_confinement', 'Claude confinement', 'fail', 'Claude settings or PreToolUse confinement hook is missing or incomplete'),
+    );
+  }
+
+  return {
+    enabled: true,
+    aiToolTargets: targets,
+    checks,
+  };
+}
+
+function diagnose(targetRootInput, options = {}) {
   const targetRoot = path.resolve(targetRootInput);
   const checks = [];
 
@@ -185,6 +689,11 @@ function diagnose(targetRootInput) {
       : check('verification_commands', 'Verification commands', 'warn', 'no test/lint/typecheck command is configured'),
   );
 
+  const projectState = summarizeProjectState(targetRoot, manifest);
+  checks.push(projectStateCheck(projectState));
+  const dev = options.dev ? buildDevReport(targetRoot, manifest, configResult) : null;
+  if (dev) checks.push(...dev.checks);
+
   const failures = checks.filter((item) => item.status === 'fail').length;
   const warnings = checks.filter((item) => item.status === 'warn').length;
   const passed = checks.filter((item) => item.status === 'pass').length;
@@ -195,6 +704,8 @@ function diagnose(targetRootInput) {
     status,
     summary: { passed, warnings, failures },
     checks,
+    projectState,
+    dev,
     nextActions: nextActions(status, checks),
   };
 }
@@ -211,6 +722,15 @@ function nextActions(status, checks) {
   }
   if (checks.some((item) => item.id === 'verification_commands' && item.status === 'warn')) {
     actions.push('Review .plan2agent/project.config.json and add test/lint/typecheck commands when available.');
+  }
+  if (checks.some((item) => item.id === 'project_state' && item.state === 'iteration_init_required')) {
+    actions.push('Run p2a_iteration init for the detected greenfield artifact root before starting task execution.');
+  }
+  if (checks.some((item) => item.id.startsWith('dev_') && item.status === 'fail')) {
+    actions.push('Regenerate or upgrade AI tool assets for the selected provider targets, then rerun p2a_doctor --dev.');
+  }
+  if (checks.some((item) => item.id === 'dev_provider_capabilities' && item.status === 'warn')) {
+    actions.push('Review .plan2agent/project.config.json providerNativeCapabilities for the selected AI tool targets.');
   }
   if (!actions.length) actions.push('Review failed or warning checks above.');
   return actions;
@@ -230,6 +750,23 @@ function printHuman(report) {
       for (const unexpected of item.unexpected) console.log(`  unexpected: ${unexpected}`);
     }
   }
+  console.log(`project state: ${report.projectState.state}`);
+  console.log(`- scaffold: ${report.projectState.isScaffoldProject ? 'yes' : 'no'}`);
+  console.log(`- artifacts: ${report.projectState.artifactCount}`);
+  for (const artifact of report.projectState.artifacts) {
+    const counts = artifact.taskGraph.taskCounts;
+    console.log(`- ${artifact.projectId}: ${artifact.artifactRoot} (${artifact.layout.kind})`);
+    if (artifact.activeIteration) console.log(`  activeIteration: ${artifact.activeIteration}`);
+    console.log(`  tasks: ${counts.total} total, ${counts.ready} ready, ${counts.done} done, ${counts.blocked} blocked`);
+    console.log(`  runs: ${artifact.runs.runCount}${artifact.runs.latestRunId ? `, latest ${artifact.runs.latestRunId}` : ''}`);
+    console.log(`  gates: ${artifact.gates.map((gate) => `${gate.id}=${gate.state}`).join(', ')}`);
+    if (artifact.layout.requiresIterationInit && artifact.layout.initCommand) {
+      console.log(`  init: ${artifact.layout.initCommand}`);
+    }
+  }
+  if (report.dev) {
+    console.log(`dev targets: ${report.dev.aiToolTargets.length ? report.dev.aiToolTargets.join(', ') : 'none'}`);
+  }
   if (report.nextActions.length) {
     console.log('next actions:');
     for (const action of report.nextActions) console.log(`- ${action}`);
@@ -243,7 +780,7 @@ export function main(argv = process.argv.slice(2)) {
       console.log(usage());
       return 0;
     }
-    const report = diagnose(args.target);
+    const report = diagnose(args.target, { dev: args.dev });
     if (args.json) process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
     else printHuman(report);
     if (report.summary.failures > 0) return 1;

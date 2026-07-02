@@ -345,10 +345,32 @@ function validateScaffoldFixtureCase() {
       || doctorReport.checks.find((check) => check.id === 'runtime_schemas')?.status !== 'pass'
       || doctorReport.checks.find((check) => check.id === 'repo_only_scripts_absent')?.status !== 'pass'
       || doctorReport.checks.find((check) => check.id === 'verification_commands')?.status !== 'pass'
+      || doctorReport.checks.find((check) => check.id === 'project_state')?.status !== 'pass'
+      || doctorReport.projectState?.state !== 'installed_empty'
+      || doctorReport.projectState?.artifactCount !== 0
     ) {
       console.error('p2a_doctor did not pass for a complete scaffold target');
       writeResultOutput(result);
       console.error(JSON.stringify({ doctorReport }, null, 2));
+      return { status: 1, checks };
+    }
+
+    result = runDoctor(['--target', targetRoot, '--dev', '--json']);
+    checks += 1;
+    const devDoctorReport = result.status === 0 ? JSON.parse(result.stdout) : null;
+    if (
+      result.status !== 0
+      || devDoctorReport.schema_version !== 'p2a.doctor.v1'
+      || devDoctorReport.status !== 'pass'
+      || devDoctorReport.summary.failures !== 0
+      || devDoctorReport.dev?.aiToolTargets?.join(',') !== 'codex,claude,gemini'
+      || devDoctorReport.dev?.checks?.some((check) => check.status !== 'pass')
+      || devDoctorReport.checks.find((check) => check.id === 'dev_manifest_ai_tool_files')?.status !== 'pass'
+      || devDoctorReport.checks.find((check) => check.id === 'dev_claude_confinement')?.status !== 'pass'
+    ) {
+      console.error('p2a_doctor --dev did not pass for a complete scaffold target');
+      writeResultOutput(result);
+      console.error(JSON.stringify({ devDoctorReport }, null, 2));
       return { status: 1, checks };
     }
 
@@ -374,6 +396,30 @@ function validateScaffoldFixtureCase() {
     const scaffoldArtifactRoot = path.join(targetRoot, '.plan2agent', 'artifacts', 'webhook-api-service');
     mkdirSync(path.dirname(scaffoldArtifactRoot), { recursive: true });
     cpSync(path.join(E2E_FIXTURE_ROOT, 'webhook-api-service'), scaffoldArtifactRoot, { recursive: true });
+    result = runDoctor(['--target', targetRoot, '--json']);
+    checks += 1;
+    const initDoctorReport = result.status === 0 ? JSON.parse(result.stdout) : null;
+    const initArtifact = initDoctorReport?.projectState?.artifacts?.[0];
+    if (
+      result.status !== 0
+      || initDoctorReport.status !== 'warn'
+      || initDoctorReport.summary.failures !== 0
+      || initDoctorReport.checks.find((check) => check.id === 'project_state')?.status !== 'warn'
+      || initDoctorReport.projectState?.state !== 'iteration_init_required'
+      || initArtifact?.projectId !== 'webhook-api-service'
+      || initArtifact?.layout?.requiresIterationInit !== true
+      || initArtifact?.spec?.approval !== 'approved'
+      || initArtifact?.spec?.openDecisions !== 0
+      || initArtifact?.taskGraph?.taskCounts?.total !== 4
+      || initArtifact?.taskGraph?.taskCounts?.ready !== 1
+      || initArtifact?.review?.blockingIssues !== 0
+      || !initDoctorReport.projectState?.commands?.find((command) => command.id === 'init_iteration')?.command?.includes('p2a_iteration.mjs init')
+    ) {
+      console.error('p2a_doctor did not summarize greenfield scaffold artifacts');
+      writeResultOutput(result);
+      console.error(JSON.stringify({ initDoctorReport }, null, 2));
+      return { status: 1, checks };
+    }
     const initRequiredCases = [
       ['p2a_execute plan without source', () => runTargetExecute(targetRoot, ['plan', '--task', 'task-001'])],
       ['p2a_tasks ready without source', () => runTargetTasks(targetRoot, ['ready'])],
