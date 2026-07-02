@@ -626,6 +626,48 @@ function validateScaffoldFixtureCase() {
       return { status: 1, checks };
     }
 
+    result = runHandoff(['enhance', 'memory', '--target', enhanceTargetRoot, '--dry-run']);
+    checks += 1;
+    const dryRunCapabilityConfig = JSON.parse(readFileSync(enhanceConfigPath, 'utf8'));
+    if (
+      result.status !== 0
+      || !result.stdout.includes('Plan2Agent enhance memory dry run')
+      || !result.stdout.includes('configUpdatedKeys: memory')
+      || !result.stdout.includes('dry-run: no files written')
+      || dryRunCapabilityConfig.memory
+    ) {
+      console.error('enhance memory dry-run fixture failed');
+      writeResultOutput(result);
+      console.error(JSON.stringify({ dryRunCapabilityConfig }, null, 2));
+      return { status: failureStatus(result), checks };
+    }
+
+    for (const capability of ['memory', 'gui', 'orchestration', 'proposals']) {
+      result = runHandoff(['enhance', capability, '--target', enhanceTargetRoot]);
+      checks += 1;
+      if (result.status !== 0 || !result.stdout.includes(`enhance ${capability} complete`)) {
+        console.error(`enhance ${capability} fixture failed`);
+        writeResultOutput(result);
+        return { status: failureStatus(result), checks };
+      }
+    }
+    const enhancedCapabilityConfig = JSON.parse(readFileSync(enhanceConfigPath, 'utf8'));
+    const enhancedCapabilityManifest = JSON.parse(readFileSync(path.join(enhanceTargetRoot, '.plan2agent', 'manifest.json'), 'utf8'));
+    if (
+      enhancedCapabilityConfig.memory?.serverUrlEnv !== 'P2A_MEMORY_URL'
+      || enhancedCapabilityConfig.gui?.commandMode !== 'guidance_only'
+      || enhancedCapabilityConfig.orchestration?.monitorGatePolicy !== 'explicit_plan_only'
+      || enhancedCapabilityConfig.proposals?.patchPolicy !== 'draft_only'
+      || enhancedCapabilityManifest.enhancements?.memory?.configVersion !== 'p2a.memory_config.v1'
+      || enhancedCapabilityManifest.enhancements?.gui?.configKey !== 'gui'
+      || enhancedCapabilityManifest.enhancements?.orchestration?.mode !== 'solo'
+      || enhancedCapabilityManifest.enhancements?.proposals?.mode !== 'manual_curate'
+    ) {
+      console.error('enhance capability config/manifest fixture failed');
+      console.error(JSON.stringify({ enhancedCapabilityConfig, enhancedCapabilityManifest }, null, 2));
+      return { status: 1, checks };
+    }
+
     result = runHandoff(['upgrade', '--target', targetRoot, '--dry-run']);
     checks += 1;
     if (
@@ -657,6 +699,24 @@ function validateScaffoldFixtureCase() {
       || !result.stdout.includes('devExecution,roleProfiles,promptTemplates')
     ) {
       console.error('upgrade dry-run did not preview dev-skills config migration');
+      writeResultOutput(result);
+      return { status: failureStatus(result), checks };
+    }
+
+    const capabilityUpgradeRoot = path.join(tempRoot, 'capability-upgrade-target');
+    cpSync(enhanceTargetRoot, capabilityUpgradeRoot, { recursive: true });
+    const capabilityUpgradeConfigPath = path.join(capabilityUpgradeRoot, '.plan2agent', 'project.config.json');
+    const capabilityUpgradeConfig = JSON.parse(readFileSync(capabilityUpgradeConfigPath, 'utf8'));
+    delete capabilityUpgradeConfig.memory;
+    writeFileSync(capabilityUpgradeConfigPath, `${JSON.stringify(capabilityUpgradeConfig, null, 2)}\n`);
+    result = runHandoff(['upgrade', '--target', capabilityUpgradeRoot, '--dry-run']);
+    checks += 1;
+    if (
+      result.status !== 0
+      || !result.stdout.includes('memory_config: would_update')
+      || !result.stdout.includes('(memory)')
+    ) {
+      console.error('upgrade dry-run did not preview enabled capability config migration');
       writeResultOutput(result);
       return { status: failureStatus(result), checks };
     }

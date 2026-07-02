@@ -69,6 +69,51 @@ export function defaultPromptTemplates() {
   };
 }
 
+export function defaultCapabilityConfig(capability) {
+  if (capability === 'memory') {
+    return {
+      enabled: true,
+      mode: 'manual_sync',
+      serverUrlEnv: 'P2A_MEMORY_URL',
+      projectIdSource: 'manifest',
+      syncTiers: ['trace', 'content', 'analytics', 'search'],
+      statusPolicy: 'local_first',
+      pushPolicy: 'explicit_approval',
+    };
+  }
+  if (capability === 'gui') {
+    return {
+      enabled: true,
+      metadataSource: '.plan2agent/manifest.json',
+      stateSource: 'p2a_doctor_json',
+      defaultView: 'overview',
+      commandMode: 'guidance_only',
+      projectConfigSource: '.plan2agent/project.config.json',
+    };
+  }
+  if (capability === 'orchestration') {
+    return {
+      enabled: true,
+      defaultMode: 'solo',
+      supervisedRun: true,
+      providerRouting: 'project_config',
+      monitorGatePolicy: 'explicit_plan_only',
+      runtimeDir: '.plan2agent/runs',
+    };
+  }
+  if (capability === 'proposals') {
+    return {
+      enabled: true,
+      queueDir: '.plan2agent/proposals',
+      mineOn: ['failed_run', 'blocked_run', 'verification_gap'],
+      reviewPolicy: 'manual_curate',
+      patchPolicy: 'draft_only',
+      approvalRequired: true,
+    };
+  }
+  throw new Error(`unknown capability config: ${capability}`);
+}
+
 export function detectPackageManager(targetRoot) {
   if (existsSync(path.join(targetRoot, 'pnpm-lock.yaml'))) return 'pnpm';
   if (existsSync(path.join(targetRoot, 'yarn.lock'))) return 'yarn';
@@ -212,6 +257,24 @@ export function mergeDevSkillConfig(config) {
     if (!next.runTracking) next.runTracking = defaultRunTracking();
     if (!next.providerNativeCapabilities) next.providerNativeCapabilities = defaultProviderNativeCapabilities();
     addUniqueNote(next, 'Development skill execution defaults were installed by p2a enhance dev-skills');
+  }
+  return { config: next, updatedKeys };
+}
+
+export function mergeCapabilityConfig(config, capability) {
+  const defaults = defaultCapabilityConfig(capability);
+  const next = { ...config };
+  const merged = mergeObjectDefaults(next[capability], defaults);
+  const updatedKeys = [];
+  if (merged.updatedKeys.length || isMissingDefaultValue(next[capability])) {
+    next[capability] = merged.value;
+    updatedKeys.push(capability);
+  }
+  if (updatedKeys.length) {
+    if (!next.schema_version) next.schema_version = 'p2a.project_config.v1';
+    if (!next.runTracking) next.runTracking = defaultRunTracking();
+    if (!next.providerNativeCapabilities) next.providerNativeCapabilities = defaultProviderNativeCapabilities();
+    addUniqueNote(next, `Capability defaults were installed by p2a enhance ${capability}`);
   }
   return { config: next, updatedKeys };
 }
