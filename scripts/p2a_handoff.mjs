@@ -51,6 +51,7 @@ function usage() {
     'Usage:',
     '  node scripts/p2a_handoff.mjs scaffold --target <project-dir> [--tools <list>] [--overwrite] [--dry-run]',
     '  node scripts/p2a_handoff.mjs enhance <capability> --target <project-dir> [--tools <list>] [--overwrite] [--dry-run]',
+    '  node scripts/p2a_handoff.mjs update --target <project-dir> [--tools <list>] [--dry-run]',
     '  node scripts/p2a_handoff.mjs upgrade --target <project-dir> --dry-run [--tools <list>]',
     '  node scripts/p2a_handoff.mjs --project-id <id> --artifacts <path> --target <path> [options]',
     '',
@@ -58,6 +59,7 @@ function usage() {
     'Scaffold:',
     '  scaffold             Install the full co-located P2A planning/development harness into a project.',
     '  enhance <capability> Install or refresh one capability: dev-skills, memory, gui, orchestration, proposals.',
+    '  update               Preview scaffolded harness updates. No files are written.',
     '  upgrade              Preview scaffolded harness file updates. Dry-run only for now.',
     '  --target <path>      Project directory to create or update.',
     '  --tools <list>       Copy portable P2A AI tool assets for scaffold/enhance dev-skills. Use comma list, all, or none. Default: all.',
@@ -112,7 +114,8 @@ function isGitUrl(value) {
 }
 
 function parseArgs(argv) {
-  const command = argv[0] === 'scaffold' || argv[0] === 'upgrade' || argv[0] === 'enhance' ? argv.shift() : 'handoff';
+  const scaffoldCommand = new Set(['scaffold', 'update', 'upgrade', 'enhance']);
+  const command = scaffoldCommand.has(argv[0]) ? argv.shift() : 'handoff';
   const enhancement = command === 'enhance' ? argv.shift() : null;
   const enhancementHelp = enhancement === '--help' || enhancement === '-h';
   const args = {
@@ -122,7 +125,7 @@ function parseArgs(argv) {
     iterationId: DEFAULT_ITERATION_ID,
     iterationIdProvided: false,
     includeIntake: false,
-    tools: command === 'scaffold' || command === 'enhance' ? [...TOOL_TARGET_ORDER] : command === 'upgrade' ? null : [],
+    tools: command === 'scaffold' || command === 'enhance' ? [...TOOL_TARGET_ORDER] : command === 'update' || command === 'upgrade' ? null : [],
     includeTeamBigFive: false,
     teamBigFiveSource: null,
     teamBigFiveTargets: null,
@@ -134,7 +137,7 @@ function parseArgs(argv) {
     const arg = argv[index];
     if (arg === '--help' || arg === '-h') {
       args.help = true;
-    } else if ((command === 'scaffold' || command === 'upgrade' || command === 'enhance') && (arg === '--project-id' || arg === '--artifacts' || arg === '--mode' || arg === '--iteration-id' || arg === '--include-intake' || arg === '--include-team-bigfive' || arg === '--team-bigfive-source' || arg === '--team-bigfive-targets')) {
+    } else if ((command === 'scaffold' || command === 'update' || command === 'upgrade' || command === 'enhance') && (arg === '--project-id' || arg === '--artifacts' || arg === '--mode' || arg === '--iteration-id' || arg === '--include-intake' || arg === '--include-team-bigfive' || arg === '--team-bigfive-source' || arg === '--team-bigfive-targets')) {
       throw new Error(`${arg} is not valid for ${command}`);
     } else if (arg === '--project-id') {
       args.projectId = argv[++index];
@@ -180,7 +183,7 @@ function parseArgs(argv) {
   if (command === 'enhance') {
     if (!VALID_ENHANCEMENTS.has(enhancement)) throw new Error(`enhance requires one of: ${ENHANCEMENT_ORDER.join(', ')}`);
   }
-  if (command === 'scaffold' || command === 'upgrade' || command === 'enhance') {
+  if (command === 'scaffold' || command === 'update' || command === 'upgrade' || command === 'enhance') {
     if (!args.target) throw new Error('--target is required');
     if (command === 'upgrade' && !args.dryRun) throw new Error('upgrade currently supports --dry-run only');
     return args;
@@ -1206,8 +1209,8 @@ function summarizeUpgradeItems(items) {
 }
 
 function buildUpgradeDryRunReport(args, targetRoot) {
-  const manifest = readUpgradeJsonFile(path.join(targetRoot, '.plan2agent', 'manifest.json'), '.plan2agent/manifest.json');
-  const config = readUpgradeJsonFile(path.join(targetRoot, '.plan2agent', 'project.config.json'), '.plan2agent/project.config.json');
+  const manifest = readUpgradeJsonFile(path.join(targetRoot, '.plan2agent', 'manifest.json'), '.plan2agent/manifest.json', args.command);
+  const config = readUpgradeJsonFile(path.join(targetRoot, '.plan2agent', 'project.config.json'), '.plan2agent/project.config.json', args.command);
   const tools = upgradeToolTargets(args, manifest);
   const plan = buildScaffoldPlan({ ...args, tools }, targetRoot);
   const items = plan.map(compareUpgradePlanItem);
@@ -1228,6 +1231,7 @@ function buildUpgradeDryRunReport(args, targetRoot) {
   const status = failures.length ? 'fail' : changes ? 'changes' : 'pass';
   return {
     schema_version: 'p2a.upgrade_dry_run.v1',
+    command: args.command,
     status,
     targetProject: targetRoot,
     aiToolTargets: tools,
@@ -1243,15 +1247,15 @@ function buildUpgradeDryRunReport(args, targetRoot) {
     ],
     failures,
     nextActions: failures.length
-      ? ['Resolve conflicts/errors above before running upgrade again.']
+      ? [`Resolve conflicts/errors above before running ${args.command} again.`]
       : changes
-        ? ['Review listed changes. Actual upgrade writes are intentionally not implemented yet.']
+        ? [`Review listed changes. Actual ${args.command} writes are intentionally not implemented yet.`]
         : [],
   };
 }
 
 function printUpgradeDryRunReport(report) {
-  console.log('Plan2Agent upgrade dry run');
+  console.log(report.command === 'update' ? 'Plan2Agent update preview' : 'Plan2Agent upgrade dry run');
   console.log(`status: ${report.status}`);
   console.log(`targetProject: ${report.targetProject}`);
   console.log(`aiTools: ${report.aiToolTargets.length ? report.aiToolTargets.join(',') : 'none'}`);
@@ -2066,7 +2070,7 @@ export function main(argv = process.argv.slice(2)) {
       return 0;
     }
 
-    if (args.command === 'upgrade') {
+    if (args.command === 'update' || args.command === 'upgrade') {
       if (!existsSync(targetRoot) || !lstatSync(targetRoot).isDirectory()) {
         throw new Error(`--target must be an existing scaffold project directory: ${targetRoot}`);
       }

@@ -720,6 +720,20 @@ function validateScaffoldFixtureCase() {
       return { status: failureStatus(result), checks };
     }
 
+    result = runHandoff(['update', '--target', targetRoot]);
+    checks += 1;
+    if (
+      result.status !== 0
+      || !result.stdout.includes('Plan2Agent update preview')
+      || !result.stdout.includes('status: changes')
+      || !result.stdout.includes('manual_review')
+      || !result.stdout.includes('dry-run: no files written')
+    ) {
+      console.error('update preview fixture failed');
+      writeResultOutput(result);
+      return { status: failureStatus(result), checks };
+    }
+
     const legacyUpgradeRoot = path.join(tempRoot, 'legacy-upgrade-target');
     cpSync(targetRoot, legacyUpgradeRoot, { recursive: true });
     const legacyConfigPath = path.join(legacyUpgradeRoot, '.plan2agent', 'project.config.json');
@@ -773,6 +787,14 @@ function validateScaffoldFixtureCase() {
     checks += 1;
     if (result.status === 0 || !`${result.stdout}${result.stderr}`.includes('upgrade requires .plan2agent/manifest.json')) {
       console.error('upgrade dry-run did not fail for a non-P2A target');
+      writeResultOutput(result);
+      return { status: 1, checks };
+    }
+
+    result = runHandoff(['update', '--target', nonHarnessRoot]);
+    checks += 1;
+    if (result.status === 0 || !`${result.stdout}${result.stderr}`.includes('update requires .plan2agent/manifest.json')) {
+      console.error('update preview did not fail for a non-P2A target');
       writeResultOutput(result);
       return { status: 1, checks };
     }
