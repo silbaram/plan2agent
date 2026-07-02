@@ -159,8 +159,10 @@ scripts/
   run_fixtures.mjs
   p2a_tool_manifest.mjs
   # scaffold-installed project runtime scripts
+  p2a.mjs
   p2a_paths.mjs
   p2a_project_config.mjs
+  p2a_run_commands.mjs
   p2a_iteration.mjs
   p2a_tasks.mjs
   p2a_runs.mjs
@@ -372,7 +374,7 @@ node scripts/run_fixtures.mjs
 
 `run_fixtures.mjs`는 일반 fixture set을 통과 검증하고, `fixtures/_e2e/manifest.json`의 artifact-root fixture는 handoff-ready 상태인지 확인한다. 승인된 Gate B spec은 `approval_audit`까지 확인한다. `fixtures/_negative/manifest.json`에 정의된 중단/실패 fixture는 기대한 실패 메시지가 나오는지 확인한다.
 
-위 세 명령과 `p2a_doctor.mjs`, `p2a_handoff.mjs`는 Plan2Agent 본체 개발자용이며 scaffold 대상 프로젝트에는 설치되지 않는다. 대상 프로젝트에는 `scripts/p2a_tool_manifest.mjs`의 project runtime 목록만 `.plan2agent/scripts/` 아래로 복사된다. run 평가는 `p2a_eval.mjs grade/compare/analyze/generate/digest`로 수행하고, 장기 보존과 회고 검색은 `p2a_memory.mjs status/push/digest`로 Memory 서버와 동기화한다.
+위 세 명령과 `p2a_doctor.mjs`, `p2a_handoff.mjs`는 Plan2Agent 본체 개발자용이며 scaffold 대상 프로젝트에는 설치되지 않는다. 대상 프로젝트에는 `scripts/p2a_tool_manifest.mjs`의 project runtime 목록만 `.plan2agent/scripts/` 아래로 복사된다. 대상 프로젝트에서는 `node .plan2agent/scripts/p2a.mjs info|eval|memory|execute|tasks|runs|iteration|orchestrate|proposals|validate`를 공통 진입점으로 쓸 수 있다. `doctor`, `update`, `upgrade`, `enhance`는 scaffold 시 기록된 toolkit checkout을 찾아 repo-only 스크립트로 위임한다. run 평가는 `p2a.mjs eval grade/compare/analyze/generate/digest`로 수행하고, 장기 보존과 회고 검색은 `p2a.mjs memory status/push/digest`로 Memory 서버와 동기화한다.
 
 artifact gate 확인:
 
@@ -393,16 +395,16 @@ node .plan2agent/scripts/validate_artifacts.mjs --artifact-root .plan2agent/arti
 Co-located scaffold 프로젝트에서는 Gate D까지 통과한 직후 개발을 시작하지 않고, 먼저 greenfield gate bundle을 반복 구조로 전환한다.
 
 ```bash
-node .plan2agent/scripts/p2a_iteration.mjs init \
+node .plan2agent/scripts/p2a.mjs iteration init \
   --artifacts .plan2agent/artifacts/<project_id> \
   --iteration-id v1-mvp
 
-node .plan2agent/scripts/p2a_tasks.mjs <command> \
+node .plan2agent/scripts/p2a.mjs tasks <command> \
   --artifacts .plan2agent/artifacts/<project_id> \
   [task-id]
 ```
 
-이후 정본 task graph는 active iteration 아래의 `iterations/<iter-id>/gate-c-task-graph/task-graph.json`이다. scaffold 프로젝트에서 초기 `gate-c-task-graph/task-graph.json`을 `--graph`로 직접 실행하려 하면 CLI가 `p2a_iteration init`을 먼저 요구한다. legacy handoff 대상 프로젝트처럼 반복 루트가 아닌 산출물을 명시적으로 실행해야 하는 경우에만 `--graph`를 사용한다.
+이후 정본 task graph는 active iteration 아래의 `iterations/<iter-id>/gate-c-task-graph/task-graph.json`이다. scaffold 프로젝트에서 초기 `gate-c-task-graph/task-graph.json`을 `--graph`로 직접 실행하려 하면 CLI가 `p2a.mjs iteration init`을 먼저 요구한다. legacy handoff 대상 프로젝트처럼 반복 루트가 아닌 산출물을 명시적으로 실행해야 하는 경우에만 `--graph`를 사용한다.
 
 명령:
 
@@ -417,13 +419,13 @@ node .plan2agent/scripts/p2a_tasks.mjs <command> \
 
 감독형 개발 진행 루프:
 
-1. 기획 완료 후 `p2a_iteration init`이 끝난 artifact root를 기준으로 `node .plan2agent/scripts/p2a_execute.mjs plan --artifacts .plan2agent/artifacts/<project_id> --task <task-id>`로 단일 task 실행 계획을 확인한다.
-2. `node .plan2agent/scripts/p2a_execute.mjs start --artifacts .plan2agent/artifacts/<project_id> --task <task-id> --agent-tool codex`로 run을 열고 task를 `in_progress`로 바꾼다.
+1. 기획 완료 후 `p2a.mjs iteration init`이 끝난 artifact root를 기준으로 `node .plan2agent/scripts/p2a.mjs execute plan --artifacts .plan2agent/artifacts/<project_id> --task <task-id>`로 단일 task 실행 계획을 확인한다.
+2. `node .plan2agent/scripts/p2a.mjs execute start --artifacts .plan2agent/artifacts/<project_id> --task <task-id> --agent-tool codex`로 run을 열고 task를 `in_progress`로 바꾼다.
 3. 출력된 manual launcher prompt를 Claude Code 또는 Codex 같은 write-capable agent CLI에 붙여넣어 구현 작업을 수행한다. Gemini CLI는 현재 review/monitor 같은 read-only 보조로만 사용한다.
-4. 세션이 끊기면 `node .plan2agent/scripts/p2a_execute.mjs resume --artifacts .plan2agent/artifacts/<project_id> --run-id <run-id>`로 같은 run의 상태와 launcher prompt를 다시 출력한다.
-5. `node .plan2agent/scripts/p2a_execute.mjs finish --artifacts .plan2agent/artifacts/<project_id> --run-id <run-id> --test --lint --typecheck`로 검증, run finish, task `done`/`blocked` 전이를 기록한다.
-6. `start`, `status`, `finish` 출력 footer에는 copy-paste 가능한 `resume`, `status`, `finish`, `review` 명령이 남는다. `review`는 해당 run을 `p2a_proposals.mjs mine --run-id <run-id>` 회고 후보로 연결한다.
-7. 세부 제어가 필요하면 `p2a_tasks.mjs`와 `p2a_runs.mjs`를 직접 사용한다. 각 전이는 저장 전에 task graph 전체를 `.plan2agent/scripts/validate_artifacts.mjs`의 검증 로직으로 재검증하므로 잘못된 graph는 기록되지 않는다.
+4. 세션이 끊기면 `node .plan2agent/scripts/p2a.mjs execute resume --artifacts .plan2agent/artifacts/<project_id> --run-id <run-id>`로 같은 run의 상태와 launcher prompt를 다시 출력한다.
+5. `node .plan2agent/scripts/p2a.mjs execute finish --artifacts .plan2agent/artifacts/<project_id> --run-id <run-id> --test --lint --typecheck`로 검증, run finish, task `done`/`blocked` 전이를 기록한다.
+6. `start`, `status`, `finish` 출력 footer에는 copy-paste 가능한 `resume`, `status`, `finish`, `review` 명령이 남는다. `review`는 해당 run을 `p2a.mjs proposals mine --run-id <run-id>` 회고 후보로 연결한다.
+7. 세부 제어가 필요하면 `p2a.mjs tasks`와 `p2a.mjs runs`를 직접 사용한다. 각 전이는 저장 전에 task graph 전체를 `.plan2agent/scripts/validate_artifacts.mjs`의 검증 로직으로 재검증하므로 잘못된 graph는 기록되지 않는다.
 
 ## Task Graph 기준
 

@@ -1,6 +1,14 @@
 /** Shared copy-paste command builders for Plan2Agent run lifecycle output. */
 
-import { nodeScriptCommand } from './p2a_paths.mjs';
+import { nodeScriptCommand, scriptCommandPath } from './p2a_paths.mjs';
+
+const TOP_LEVEL_COMMANDS = new Map([
+  ['p2a_execute.mjs', 'execute'],
+  ['p2a_tasks.mjs', 'tasks'],
+  ['p2a_runs.mjs', 'runs'],
+  ['p2a_orchestrate.mjs', 'orchestrate'],
+  ['p2a_proposals.mjs', 'proposals'],
+]);
 
 export function shellQuote(value) {
   if (/^[A-Za-z0-9_./:@%+=,-]+$/.test(value)) return value;
@@ -8,6 +16,10 @@ export function shellQuote(value) {
 }
 
 export function commandLine(paths, scriptName, args) {
+  const topLevelCommand = TOP_LEVEL_COMMANDS.get(scriptName);
+  if (topLevelCommand) {
+    return ['node', scriptCommandPath(paths, 'p2a.mjs'), topLevelCommand, ...args].map(shellQuote).join(' ');
+  }
   return nodeScriptCommand(paths, scriptName, args).map(shellQuote).join(' ');
 }
 

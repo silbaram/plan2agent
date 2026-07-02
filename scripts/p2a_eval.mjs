@@ -506,10 +506,10 @@ function gradeScore(verdict, coverage) {
 function gradeNextActions(verdict, source, run) {
   if (verdict === 'pass') return ['No immediate eval follow-up required.'];
   const actions = [
-    `Inspect run evidence: node .plan2agent/scripts/p2a_runs.mjs show --runs ${displayPath(source.runsDir)} --run-id ${run.runId}`,
+    `Inspect run evidence: node .plan2agent/scripts/p2a.mjs runs show --runs ${displayPath(source.runsDir)} --run-id ${run.runId}`,
   ];
   if (run.status === 'failed' || run.status === 'blocked' || verdict === 'needs_evidence') {
-    actions.push(`Mine proposal candidates: node .plan2agent/scripts/p2a_proposals.mjs mine --runs ${displayPath(source.runsDir)} --run-id ${run.runId}`);
+    actions.push(`Mine proposal candidates: node .plan2agent/scripts/p2a.mjs proposals mine --runs ${displayPath(source.runsDir)} --run-id ${run.runId}`);
   }
   return actions;
 }
@@ -651,7 +651,7 @@ function compareSignals(baseline, candidate) {
 function compareNextActions(verdict, candidate) {
   if (verdict === 'pass') return ['No regression follow-up required by local eval compare.'];
   return [
-    `Analyze candidate failures: node .plan2agent/scripts/p2a_eval.mjs analyze --runs ${candidate.runsDir}`,
+    `Analyze candidate failures: node .plan2agent/scripts/p2a.mjs eval analyze --runs ${candidate.runsDir}`,
     'If the issue changes product/implementation scope, open a delta iteration with p2a_iteration open/draft.',
     'If the issue is harness or execution hygiene, add or approve a maintenance task before retrying.',
   ];
@@ -803,7 +803,7 @@ function maintenanceCommandForCluster(source, cluster) {
   if (source.sourceKind !== 'artifacts') return null;
   const title = `Improve ${cluster.classification} handling`;
   return [
-    'node .plan2agent/scripts/p2a_iteration.mjs maintenance add',
+    'node .plan2agent/scripts/p2a.mjs iteration maintenance add',
     '--artifacts',
     shellQuote(displayPath(source.sourcePath)),
     '--title',
@@ -820,21 +820,21 @@ function deltaDraftCommandForCluster(source, cluster) {
   if (!['scope_violation', 'missing_dependency'].includes(cluster.classification)) return null;
   const idea = `Address repeated ${cluster.classification} evidence from ${cluster.runIds.length} run(s).`;
   return [
-    'node .plan2agent/scripts/p2a_iteration.mjs open',
+    'node .plan2agent/scripts/p2a.mjs iteration open',
     '--artifacts',
     shellQuote(displayPath(source.sourcePath)),
     '--iteration-id',
     'v-next',
     '--idea',
     shellQuote(idea),
-    '&& node .plan2agent/scripts/p2a_iteration.mjs draft --artifacts',
+    '&& node .plan2agent/scripts/p2a.mjs iteration draft --artifacts',
     shellQuote(displayPath(source.sourcePath)),
   ].join(' ');
 }
 
 function analyzeNextActions(source, clusters) {
   if (!clusters.length) return ['No failure clusters found in local run evidence.'];
-  const actions = [`Mine proposal candidates: node .plan2agent/scripts/p2a_proposals.mjs mine --runs ${displayPath(source.runsDir)}`];
+  const actions = [`Mine proposal candidates: node .plan2agent/scripts/p2a.mjs proposals mine --runs ${displayPath(source.runsDir)}`];
   if (source.sourceKind === 'artifacts') {
     actions.push('For execution hygiene issues, use the maintenanceCommand from the relevant cluster.');
     actions.push('For product/spec scope issues, use the deltaDraftCommand from the relevant cluster when present.');
@@ -897,7 +897,7 @@ function maintenanceDraftTask(source, analysis, cluster) {
 
 function maintenanceAddCommandForTask(source, task) {
   return [
-    'node .plan2agent/scripts/p2a_iteration.mjs maintenance add',
+    'node .plan2agent/scripts/p2a.mjs iteration maintenance add',
     '--artifacts',
     shellQuote(displayPath(source.sourcePath)),
     '--title',
@@ -936,7 +936,7 @@ function buildMaintenanceDraft(source, analysis) {
     nextActions: tasks.length
       ? [
           'Review this draft before applying it to the maintenance graph.',
-          `Apply after review: node .plan2agent/scripts/p2a_eval.mjs analyze --artifacts ${shellQuote(displayPath(source.sourcePath))} --apply-maintenance --yes`,
+          `Apply after review: node .plan2agent/scripts/p2a.mjs eval analyze --artifacts ${shellQuote(displayPath(source.sourcePath))} --apply-maintenance --yes`,
         ]
       : ['No maintenance tasks were drafted because no failure clusters were found.'],
   };
@@ -1259,7 +1259,7 @@ function buildGenerate(args) {
 function generateNextActions(payload) {
   const digestOutputPath = path.join(payload.outputDir, 'eval-digest.json');
   const actions = [
-    `Summarize generated eval artifacts: node .plan2agent/scripts/p2a_eval.mjs digest --eval ${shellQuote(payload.outputDir)} --output ${shellQuote(digestOutputPath)}`,
+    `Summarize generated eval artifacts: node .plan2agent/scripts/p2a.mjs eval digest --eval ${shellQuote(payload.outputDir)} --output ${shellQuote(digestOutputPath)}`,
   ];
   if (payload.skippedGrades.length) {
     actions.push('Review skippedGrades; runs without a matching task graph cannot receive acceptance coverage grades.');
@@ -1537,7 +1537,7 @@ function buildEvalDigest(args) {
 function evalDigestNextActions(payload) {
   const actions = [];
   if (payload.files.grades + payload.files.analyses + payload.files.compares === 0) {
-    actions.push(`Generate eval artifacts first: node .plan2agent/scripts/p2a_eval.mjs generate --output ${shellQuote(payload.evalDir)}`);
+    actions.push(`Generate eval artifacts first: node .plan2agent/scripts/p2a.mjs eval generate --output ${shellQuote(payload.evalDir)}`);
   }
   if (payload.grades.nonPass.length) {
     actions.push('Review non-pass eval grades and add missing verification evidence or fixes before marking related tasks done.');

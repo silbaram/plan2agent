@@ -14,6 +14,7 @@ import {
   configuredTaskGraphPath,
   nodeScriptCommand,
   resolveP2aPaths,
+  scriptCommandPath,
   singleArtifactProjectRoot,
 } from './p2a_paths.mjs';
 
@@ -2381,6 +2382,13 @@ function markRoleDefaults(runtime, role, status, options = {}) {
 }
 
 function commandLine(scriptName, args) {
+  const topLevelCommand = {
+    'p2a_execute.mjs': 'execute',
+    'p2a_orchestrate.mjs': 'orchestrate',
+  }[scriptName];
+  if (topLevelCommand) {
+    return ['node', scriptCommandPath(P2A_PATHS, 'p2a.mjs'), topLevelCommand, ...args].map(shellQuote).join(' ');
+  }
   return nodeScriptCommand(P2A_PATHS, scriptName, args).map(shellQuote).join(' ');
 }
 

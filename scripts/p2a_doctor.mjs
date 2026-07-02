@@ -263,7 +263,7 @@ function artifactLayout(targetRoot, artifactRoot, isScaffoldProject) {
     requiresIterationInit,
     hasIncompleteIterationLayout,
     initCommand: requiresIterationInit
-      ? `node .plan2agent/scripts/p2a_iteration.mjs init --artifacts ${relativeToTarget(targetRoot, artifactRoot)} --iteration-id v1-mvp`
+      ? `node .plan2agent/scripts/p2a.mjs iteration init --artifacts ${relativeToTarget(targetRoot, artifactRoot)} --iteration-id v1-mvp`
       : null,
   };
 }
@@ -498,7 +498,7 @@ function projectCommands(state, artifacts) {
     commands.push({
       id: 'validate',
       command: primaryArtifact.activeIteration
-        ? `node .plan2agent/scripts/p2a_iteration.mjs validate --artifacts ${primaryArtifact.artifactRoot}`
+        ? `node .plan2agent/scripts/p2a.mjs iteration validate --artifacts ${primaryArtifact.artifactRoot}`
         : `node .plan2agent/scripts/validate_artifacts.mjs --artifact-root ${primaryArtifact.artifactRoot}`,
       description: 'Validate the detected planning artifacts.',
     });
@@ -749,7 +749,7 @@ function nextActions(status, checks) {
     actions.push('Review .plan2agent/project.config.json and add test/lint/typecheck commands when available.');
   }
   if (checks.some((item) => item.id === 'project_state' && item.state === 'iteration_init_required')) {
-    actions.push('Run p2a_iteration init for the detected greenfield artifact root before starting task execution.');
+    actions.push('Run p2a.mjs iteration init for the detected greenfield artifact root before starting task execution.');
   }
   if (checks.some((item) => item.id.startsWith('dev_') && item.status === 'fail')) {
     actions.push('Regenerate or upgrade AI tool assets for the selected provider targets, then rerun p2a_doctor --dev.');

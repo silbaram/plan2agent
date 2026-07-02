@@ -661,7 +661,7 @@ Use this skill only after Plan2Agent legacy handoff has installed approved flat 
 ## Inputs
 
 - A Plan2Agent task id from the handoff task graph recorded in \`.plan2agent/project.config.json.taskGraph\`.
-- The task prompt from \`node .plan2agent/scripts/p2a_execute.mjs start --graph <task-graph> --task <task-id>\` or \`node .plan2agent/scripts/p2a_tasks.mjs prompt --graph <task-graph> <task-id>\`.
+- The task prompt from \`node .plan2agent/scripts/p2a.mjs execute start --graph <task-graph> --task <task-id>\` or \`node .plan2agent/scripts/p2a.mjs tasks prompt --graph <task-graph> <task-id>\`.
 - Optional verification commands from \`.plan2agent/project.config.json\`.
 
 ## Workflow
@@ -670,7 +670,7 @@ Use this skill only after Plan2Agent legacy handoff has installed approved flat 
 2. Split the work into five lanes: coordination, implementation plan, code changes, review, and verification.
 3. Keep all work tied to the task id and source spec refs.
 4. Do not edit approved Plan2Agent artifacts except through the task/status CLIs.
-5. Track execution with \`node .plan2agent/scripts/p2a_execute.mjs start/finish/status\` or the lower-level \`node .plan2agent/scripts/p2a_runs.mjs start/verify/finish\` so runId, changed files, verification, agent tool, and workspace reference are preserved.
+5. Track execution with \`node .plan2agent/scripts/p2a.mjs execute start/finish/status\` or the lower-level \`node .plan2agent/scripts/p2a.mjs runs start/verify/finish\` so runId, changed files, verification, agent tool, and workspace reference are preserved.
 6. Before marking the task done, run or request the configured test, lint, and typecheck commands when available.
 
 ## Output
@@ -1042,19 +1042,20 @@ This repository owns its Plan2Agent planning and development loop in-place.
 
 2. Convert approved planning artifacts into the iteration structure:
 
-   \`node .plan2agent/scripts/p2a_iteration.mjs init --artifacts .plan2agent/artifacts/<project>\`
+   \`node .plan2agent/scripts/p2a.mjs iteration init --artifacts .plan2agent/artifacts/<project>\`
 
 3. Develop from ready tasks and track execution:
 
-   - \`node .plan2agent/scripts/p2a_execute.mjs plan|start|finish|status\`
-   - \`node .plan2agent/scripts/p2a_orchestrate.mjs plan|handoff\`
-   - \`node .plan2agent/scripts/p2a_proposals.mjs mine|review|curate|draft-patch|approve-draft|digest\`
-   - \`node .plan2agent/scripts/p2a_tasks.mjs ready|prompt|start|done\`
-   - \`node .plan2agent/scripts/p2a_runs.mjs start|verify|finish\`
+   - \`node .plan2agent/scripts/p2a.mjs info\`
+   - \`node .plan2agent/scripts/p2a.mjs execute plan|start|finish|status\`
+   - \`node .plan2agent/scripts/p2a.mjs orchestrate plan|handoff\`
+   - \`node .plan2agent/scripts/p2a.mjs proposals mine|review|curate|draft-patch|approve-draft|digest\`
+   - \`node .plan2agent/scripts/p2a.mjs tasks ready|prompt|start|done\`
+   - \`node .plan2agent/scripts/p2a.mjs runs start|verify|finish\`
 
 4. Open the next iteration in this same project:
 
-   \`node .plan2agent/scripts/p2a_iteration.mjs open|draft|context|promote-tasks\`
+   \`node .plan2agent/scripts/p2a.mjs iteration open|draft|context|promote-tasks\`
 
 ## Storage policy
 
@@ -1228,8 +1229,23 @@ function shellQuote(value) {
   return `'${text.replace(/'/g, "'\\''")}'`;
 }
 
+function commandPathFromCwd(filePath) {
+  const absolutePath = path.resolve(filePath);
+  const relativePath = path.relative(path.resolve(process.cwd()), absolutePath);
+  if (relativePath && !relativePath.startsWith('..') && !path.isAbsolute(relativePath)) return relativePath;
+  return absolutePath;
+}
+
 function updateApplyCommand(args, targetRoot) {
-  const parts = ['node', 'scripts/p2a_handoff.mjs', args.command, '--target', targetRoot];
+  const targetP2a = path.join(targetRoot, '.plan2agent', 'scripts', 'p2a.mjs');
+  const targetP2aAvailable = existsSync(targetP2a) && lstatSync(targetP2a).isFile();
+  const targetP2aCommandPath = path.resolve(process.cwd()) === path.resolve(targetRoot)
+    ? path.relative(targetRoot, targetP2a)
+    : targetP2a;
+  const toolkitP2aCommandPath = commandPathFromCwd(path.join(ROOT, 'scripts', 'p2a.mjs'));
+  const parts = targetP2aAvailable
+    ? ['node', targetP2aCommandPath, args.command]
+    : ['node', toolkitP2aCommandPath, args.command, '--target', targetRoot];
   if (args.toolsProvided) parts.push('--tools', args.tools.length ? args.tools.join(',') : 'none');
   parts.push('--apply');
   return parts.map(shellQuote).join(' ');
@@ -2264,15 +2280,16 @@ function printNextSteps(targetRoot) {
   const artifactRoot = artifactRootFromTaskGraphRef(config?.taskGraph);
   console.log(`✅ 인계 완료 — ${targetRoot}`);
   console.log(`다음: cd ${targetRoot}`);
-  console.log(`      node .plan2agent/scripts/p2a_execute.mjs plan ${sourceArg} --task <task-id>`);
-  console.log(`      node .plan2agent/scripts/p2a_orchestrate.mjs plan ${sourceArg} --task <task-id> --output .plan2agent/orchestration/<task-id>.json`);
-  console.log(`      node .plan2agent/scripts/p2a_execute.mjs start ${sourceArg} --task <task-id> --agent-tool <tool>`);
-  console.log(`      node .plan2agent/scripts/p2a_execute.mjs finish ${sourceArg} --run-id <run-id> --test --lint --typecheck`);
-  console.log(`      node .plan2agent/scripts/p2a_proposals.mjs mine ${sourceArg}`);
-  console.log('      node .plan2agent/scripts/p2a_proposals.mjs review --proposals .plan2agent/proposals');
-  console.log('      node .plan2agent/scripts/p2a_proposals.mjs curate --review .plan2agent/proposals/reviews/<review-id>.json');
-  console.log('      node .plan2agent/scripts/p2a_proposals.mjs draft-patch --curation .plan2agent/proposals/curations/<curation-id>.json --candidate-id <candidate-id>');
-  console.log(`      node .plan2agent/scripts/p2a_proposals.mjs approve-draft --draft .plan2agent/proposals/patch-drafts/<draft-id>.json --artifacts ${artifactRoot} --approved-by <name>`);
+  console.log('      node .plan2agent/scripts/p2a.mjs info');
+  console.log(`      node .plan2agent/scripts/p2a.mjs execute plan ${sourceArg} --task <task-id>`);
+  console.log(`      node .plan2agent/scripts/p2a.mjs orchestrate plan ${sourceArg} --task <task-id> --output .plan2agent/orchestration/<task-id>.json`);
+  console.log(`      node .plan2agent/scripts/p2a.mjs execute start ${sourceArg} --task <task-id> --agent-tool <tool>`);
+  console.log(`      node .plan2agent/scripts/p2a.mjs execute finish ${sourceArg} --run-id <run-id> --test --lint --typecheck`);
+  console.log(`      node .plan2agent/scripts/p2a.mjs proposals mine ${sourceArg}`);
+  console.log('      node .plan2agent/scripts/p2a.mjs proposals review --proposals .plan2agent/proposals');
+  console.log('      node .plan2agent/scripts/p2a.mjs proposals curate --review .plan2agent/proposals/reviews/<review-id>.json');
+  console.log('      node .plan2agent/scripts/p2a.mjs proposals draft-patch --curation .plan2agent/proposals/curations/<curation-id>.json --candidate-id <candidate-id>');
+  console.log(`      node .plan2agent/scripts/p2a.mjs proposals approve-draft --draft .plan2agent/proposals/patch-drafts/<draft-id>.json --artifacts ${artifactRoot} --approved-by <name>`);
   console.log('참고: 이 next step은 legacy handoff 대상용입니다. co-located scaffold 프로젝트는 Gate D 이후 p2a_iteration init을 먼저 실행하고 --artifacts를 사용하세요.');
 
   try {

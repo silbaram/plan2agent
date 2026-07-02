@@ -103,7 +103,7 @@ function resolveTaskInputs(args) {
   if (args.maintenance) {
     const graphPath = path.join(iterationState.artifactRoot, 'iterations', 'maintenance', 'gate-c-task-graph', 'task-graph.json');
     if (!existsSync(graphPath)) {
-      throw new Error('no maintenance task graph yet; create one with: node .plan2agent/scripts/p2a_iteration.mjs maintenance add --artifacts <dir> --title ... --accept ...');
+      throw new Error('no maintenance task graph yet; create one with: node .plan2agent/scripts/p2a.mjs iteration maintenance add --artifacts <dir> --title ... --accept ...');
     }
     return {
       ...args,
@@ -386,7 +386,7 @@ async function buildInteractiveArgv(rl) {
     if (source.mode === 'maintenance') {
       graphPath = path.join(iterationState.artifactRoot, 'iterations', 'maintenance', 'gate-c-task-graph', 'task-graph.json');
       if (!existsSync(graphPath)) {
-        throw new Error('no maintenance task graph yet; create one with: node .plan2agent/scripts/p2a_iteration.mjs maintenance add --artifacts <dir> --title ... --accept ...');
+        throw new Error('no maintenance task graph yet; create one with: node .plan2agent/scripts/p2a.mjs iteration maintenance add --artifacts <dir> --title ... --accept ...');
       }
       argv = [selected.command, '--artifacts', artifactsPath, '--maintenance'];
     } else {

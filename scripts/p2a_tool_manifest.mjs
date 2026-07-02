@@ -10,6 +10,7 @@ export const REPO_ONLY_SCRIPT_FILES = [
 ];
 
 export const PROJECT_RUNTIME_SCRIPT_FILES = [
+  'p2a.mjs',
   'p2a_paths.mjs',
   'p2a_project_config.mjs',
   'p2a_run_commands.mjs',

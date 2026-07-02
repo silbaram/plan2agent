@@ -910,7 +910,7 @@ function statusNextActions(connection, sync, plan) {
   if (!connection.server) actions.push(`Set ${DEFAULT_MEMORY_URL_ENV} or pass --server to compare with Memory.`);
   if (sync.summary.missingRemote > 0) {
     if (plan.context.sourceKind === 'graph' || plan.context.sourceKind === 'artifacts') {
-      actions.push(`Preview push: node .plan2agent/scripts/p2a_memory.mjs push --${plan.context.sourceKind === 'graph' ? 'graph' : 'artifacts'} ${plan.context.sourcePath} --dry-run`);
+      actions.push(`Preview push: node .plan2agent/scripts/p2a.mjs memory push --${plan.context.sourceKind === 'graph' ? 'graph' : 'artifacts'} ${plan.context.sourcePath} --dry-run`);
     } else {
       actions.push('Use --artifacts or --graph when you are ready to push full project/task snapshots to Memory.');
     }
@@ -1169,14 +1169,14 @@ function digestNextActions(context, uncoveredCandidateRuns, proposals) {
       : `--runs ${displayPath(context.runsDir)}`;
   const actions = [];
   if (uncoveredCandidateRuns.length || proposals.some((proposal) => proposal.status === 'proposed')) {
-    actions.push(`Analyze failure clusters: node .plan2agent/scripts/p2a_eval.mjs analyze ${sourceFlag}`);
+    actions.push(`Analyze failure clusters: node .plan2agent/scripts/p2a.mjs eval analyze ${sourceFlag}`);
   }
   if (uncoveredCandidateRuns.length) {
-    actions.push(`Mine missing proposal candidates: node .plan2agent/scripts/p2a_proposals.mjs mine ${sourceFlag}`);
+    actions.push(`Mine missing proposal candidates: node .plan2agent/scripts/p2a.mjs proposals mine ${sourceFlag}`);
   }
   if (proposals.some((proposal) => proposal.status === 'proposed')) {
-    actions.push(`Review proposal queue: node .plan2agent/scripts/p2a_proposals.mjs review --proposals ${displayPath(context.proposalsDir)} --dry-run`);
-    actions.push(`Curate approved maintenance candidates after review: node .plan2agent/scripts/p2a_proposals.mjs curate --review <review.json> --proposals ${displayPath(context.proposalsDir)} --dry-run`);
+    actions.push(`Review proposal queue: node .plan2agent/scripts/p2a.mjs proposals review --proposals ${displayPath(context.proposalsDir)} --dry-run`);
+    actions.push(`Curate approved maintenance candidates after review: node .plan2agent/scripts/p2a.mjs proposals curate --review <review.json> --proposals ${displayPath(context.proposalsDir)} --dry-run`);
   }
   if (!actions.length) actions.push('No immediate maintenance proposal action found from local run/proposal evidence.');
   return actions;
