@@ -1,8 +1,66 @@
 # P2A 하네스 고도화 아이디어
 
-작성일: 2026-07-01 · 상태: 아이디어 정리 · 참고 소스: `/Users/qoo10/projects/agents-cli`, `/Users/qoo10/projects/plan2agent-memory`
+작성일: 2026-07-01 · 상태: 완료 · 완료일: 2026-07-02 · 참고 소스: `/Users/qoo10/projects/agents-cli`, `/Users/qoo10/projects/plan2agent-memory`
 
 이 문서는 `google/agents-cli`의 로컬 클론을 검토한 뒤, Plan2Agent(P2A) 하네스 고도화에 참고할 만한 제품/운영 아이디어를 정리한다. 목적은 `agents-cli`의 ADK 기능을 그대로 가져오는 것이 아니라, coding agent를 잘 움직이게 만드는 라이프사이클형 CLI/skill 운영 패턴을 P2A에 맞게 흡수하는 것이다.
+
+## 0. 완료 기록
+
+`plans/04`의 개발 범위는 구현과 실제 Memory 서버 통합검증까지 완료했다. 이 문서의 나머지 본문은 최초 아이디어와 설계 판단을 보존하고, 아래 완료 기록을 최종 상태 기준으로 삼는다.
+
+### 0.1 완료된 기능 범위
+
+| 영역 | 완료 내용 |
+| --- | --- |
+| 진입/진단 | `p2a info`, `p2a_doctor`, `doctor --dev`로 설치 상태, capability drift, provider/dev skill 상태, project state를 확인하는 진입 명령을 정리했다. |
+| 업데이트/업그레이드 | `update`, `upgrade --dry-run`, preview/apply report, 부분 실패 non-zero 처리와 복구 안내를 정리했다. |
+| capability 확장 | `enhance dev-skills`, `enhance memory`, `enhance gui`, `enhance orchestration`, `enhance proposals` 흐름을 capability 단위로 분리했다. |
+| run 구조화 | run schema와 `p2a_runs`에 `reproduction`, `localization`, `fixSummary`, `guard` 기록 흐름을 추가하고, failed/blocked run의 누락을 경고한다. |
+| eval 루프 | `p2a_eval grade/compare/analyze/generate/digest`로 run evidence, acceptance coverage, failure cluster, maintenance draft, digest를 생성한다. |
+| proposal 연결 | `p2a_proposals`가 failed/blocked run, verification gap, structured debug detail 누락을 maintenance proposal 후보로 만든다. |
+| Memory CLI | `p2a_memory status/push/pull --dry-run/search/history/digest`로 로컬 artifact와 Memory 서버의 동기화, 검색, 회고 흐름을 지원한다. |
+| GUI | GUI Overview가 `p2a info`, `p2a_doctor`, update preview/apply report, eval analysis/digest, memory digest/history/search report를 읽어 operational card로 표시한다. |
+
+### 0.2 실제 Memory 서버 통합검증
+
+실제 실행 중인 `plan2agent-memory` 서버와 PostgreSQL DB를 대상으로 통합검증을 수행했다.
+
+| 검증 항목 | 결과 |
+| --- | --- |
+| 서버 health | `http://127.0.0.1:8080/api/health` 응답 `UP` 확인 |
+| 대상 artifact | `/Users/qoo10/projects/plan2agent-memory/.plan2agent/artifacts/p2a-local-artifact-store` |
+| `memory push --dry-run` | project 1, iteration 1, documents 5, task graph 1, tasks 17, runs 19, chunks 35 write plan 확인 |
+| `memory push --yes` | 실제 서버 upsert 성공 |
+| `memory status` 재조회 | `synced=79`, `missingRemote=0`, `remoteDiffers=0`, `extraRemote=0` 확인 |
+| `memory search` | `PostgreSQL` keyword 검색 결과 5건 확인 |
+| `memory history` | remote run timeline 조회 확인 |
+| `memory pull --dry-run` | `alreadyLocal=79`, `remoteDiffers=0`, `remoteOnly=0` 확인 |
+| DB row count | `projects=1`, `iterations=1`, `documents=5`, `task_graphs=1`, `tasks=17`, `runs=19`, `document_chunks=35` 확인 |
+
+통합검증 중 `p2a_memory`가 `p2a-project-*` 형태의 안정 ID를 canonical server ID로 전송해 서버의 UUID 검증에 실패하는 문제가 발견됐다. 이를 deterministic UUID 생성 방식으로 수정했고, fixture에 canonical UUID 검증을 추가했다. 로컬/P2A 식별자는 `sourceProjectId`, `sourceIterationId`, `sourceTaskId`, `sourceRunId`, metadata, source reference로 유지한다.
+
+### 0.3 완료 검증 명령
+
+완료 시점에 아래 검증을 통과했다.
+
+```bash
+node --check scripts/p2a_memory.mjs
+node --check scripts/run_fixtures.mjs
+node scripts/run_fixtures.mjs
+git diff --check
+```
+
+추가로 앞선 구현 범위에서 GUI 타입체크와 테스트도 통과했다.
+
+```bash
+cd apps/p2a-gui
+npm run typecheck
+npm test
+```
+
+### 0.4 남은 처리
+
+기능 개발과 실제 검증은 완료됐다. 남은 작업은 변경사항 커밋, 푸시, 필요 시 release note 또는 후속 계획 문서로의 이관이다.
 
 ## 1. 핵심 판단
 
