@@ -48,12 +48,24 @@ function runTasks(args, options = {}) {
   return spawnSync(process.execPath, [TASKS_CLI, ...args], { cwd: ROOT, encoding: 'utf8', input: options.input });
 }
 
+function runTasksFrom(cwd, args) {
+  return spawnSync(process.execPath, [TASKS_CLI, ...args], { cwd, encoding: 'utf8' });
+}
+
 function runRuns(args, options = {}) {
   return spawnSync(process.execPath, [RUNS_CLI, ...args], { cwd: options.cwd ?? ROOT, encoding: 'utf8' });
 }
 
+function runRunsFrom(cwd, args) {
+  return runRuns(args, { cwd });
+}
+
 function runExecute(args) {
   return spawnSync(process.execPath, [EXECUTE_CLI, ...args], { cwd: ROOT, encoding: 'utf8' });
+}
+
+function runExecuteFrom(cwd, args) {
+  return spawnSync(process.execPath, [EXECUTE_CLI, ...args], { cwd, encoding: 'utf8' });
 }
 
 function runOrchestrate(args) {
@@ -1058,11 +1070,12 @@ function validateScaffoldFixtureCase() {
     writeFileSync(path.join(p2aUpdateRoot, '.plan2agent', 'scripts', 'p2a_eval.mjs'), 'stale runtime script\n', 'utf8');
     result = runTargetP2a(p2aUpdateRoot, ['update', '--dry-run']);
     checks += 1;
+    const targetUpdateApplyCommand = quotedCommand(['node', path.join('.plan2agent', 'scripts', 'p2a.mjs'), 'update', '--apply']);
     if (
       result.status !== 0
       || !result.stdout.includes('Plan2Agent update preview')
       || !result.stdout.includes('report: .plan2agent/update-reports/update-')
-      || !result.stdout.includes('Apply safe updates with: node .plan2agent/scripts/p2a.mjs update --apply')
+      || !result.stdout.includes(`Apply safe updates with: ${targetUpdateApplyCommand}`)
       || !result.stdout.includes('dry-run: no harness files written')
     ) {
       console.error('scaffold target p2a update dispatch failed');
@@ -2602,6 +2615,79 @@ function validateIterationCurrentFixtureCases() {
         return { status: 1, checks };
       }
 
+      const crossCwdRoot = path.join(tempRoot, 'p2a-cross-cwd');
+      const crossCwdGraphPath = path.join(crossCwdRoot, 'gate-c-task-graph', 'task-graph.json');
+      mkdirSync(path.dirname(crossCwdGraphPath), { recursive: true });
+      writeFileSync(crossCwdGraphPath, readFileSync(state.taskGraphPath, 'utf8'), 'utf8');
+      result = runTasksFrom(crossCwdRoot, ['start', '--graph', 'gate-c-task-graph/task-graph.json', 'task-001']);
+      checks += 1;
+      if (result.status !== 0) {
+        console.error(`p2a_tasks cross-cwd start fixture failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: failureStatus(result), checks };
+      }
+      const crossCwdRunId = 'run-fixture-cross-cwd';
+      result = runRunsFrom(crossCwdRoot, [
+        'start',
+        '--graph',
+        'gate-c-task-graph/task-graph.json',
+        '--task',
+        'task-001',
+        '--run-id',
+        crossCwdRunId,
+        '--agent-tool',
+        'codex',
+        '--workspace-ref',
+        'cross-cwd',
+      ]);
+      checks += 1;
+      if (result.status !== 0) {
+        console.error(`p2a_runs cross-cwd start fixture failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: failureStatus(result), checks };
+      }
+      result = runRunsFrom(crossCwdRoot, [
+        'verify',
+        '--graph',
+        'gate-c-task-graph/task-graph.json',
+        '--run-id',
+        crossCwdRunId,
+        '--test-command',
+        `"${process.execPath}" -e "process.exit(0)"`,
+      ]);
+      checks += 1;
+      if (result.status !== 0) {
+        console.error(`p2a_runs cross-cwd verify fixture failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: failureStatus(result), checks };
+      }
+      result = runRunsFrom(crossCwdRoot, ['finish', '--graph', 'gate-c-task-graph/task-graph.json', '--run-id', crossCwdRunId, '--status', 'finished']);
+      checks += 1;
+      if (result.status !== 0) {
+        console.error(`p2a_runs cross-cwd finish fixture failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: failureStatus(result), checks };
+      }
+      const crossCwdRun = JSON.parse(readFileSync(path.join(crossCwdRoot, 'runs', `${crossCwdRunId}.json`), 'utf8'));
+      if (crossCwdRun.taskGraphRef !== realpathSync(crossCwdGraphPath).split(path.sep).join('/')) {
+        console.error(`p2a_runs cross-cwd did not persist canonical taskGraphRef: ${caseData.id}`);
+        console.error(JSON.stringify({ taskGraphRef: crossCwdRun.taskGraphRef, crossCwdGraphPath }, null, 2));
+        return { status: 1, checks };
+      }
+      result = runTasks(['done', '--graph', crossCwdGraphPath, 'task-001']);
+      checks += 1;
+      const crossCwdDoneGraph = JSON.parse(readFileSync(crossCwdGraphPath, 'utf8'));
+      if (
+        result.status !== 0
+        || !result.stdout.includes('task-001 status is now done')
+        || crossCwdDoneGraph.tasks.find((task) => task.id === 'task-001')?.status !== 'done'
+      ) {
+        console.error(`p2a_tasks cross-cwd done fixture failed: ${caseData.id}`);
+        writeResultOutput(result);
+        console.error(JSON.stringify({ crossCwdRun }, null, 2));
+        return { status: failureStatus(result), checks };
+      }
+
       const executeGraphPath = path.join(tempRoot, 'p2a-execute', 'gate-c-task-graph', 'task-graph.json');
       mkdirSync(path.dirname(executeGraphPath), { recursive: true });
       writeFileSync(executeGraphPath, readFileSync(state.taskGraphPath, 'utf8'), 'utf8');
@@ -3774,6 +3860,140 @@ function validateIterationCurrentFixtureCases() {
         return { status: 1, checks };
       }
 
+      const monitorStructuredErrorRunId = 'run-monitor-structured-error';
+      result = runRuns([
+        'start',
+        '--graph',
+        executeMonitorGraphPath,
+        '--task',
+        'task-001',
+        '--run-id',
+        monitorStructuredErrorRunId,
+        '--agent-tool',
+        'codex',
+        '--workspace-ref',
+        'fixture-workspace',
+      ]);
+      checks += 1;
+      if (result.status !== 0) {
+        console.error(`p2a_runs monitor structured error fixture start failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: failureStatus(result), checks };
+      }
+      const monitorStructuredErrorSidecar = {
+        ...executeMonitorPlan,
+        monitorGate: {
+          ...executeMonitorPlan.monitorGate,
+          verdictPath: `${monitorStructuredErrorRunId}.monitor-verdict.json`,
+        },
+        runLink: {
+          runId: monitorStructuredErrorRunId,
+          sidecarRef: `${monitorStructuredErrorRunId}.orchestration.json`,
+        },
+      };
+      writeFileSync(
+        path.join(tempRoot, 'p2a-execute-monitor', 'runs', `${monitorStructuredErrorRunId}.orchestration.json`),
+        `${JSON.stringify(monitorStructuredErrorSidecar, null, 2)}\n`,
+        'utf8',
+      );
+      writeFileSync(path.join(tempRoot, 'p2a-execute-monitor', 'runs', monitorStructuredErrorSidecar.monitorGate.verdictPath), `${JSON.stringify({
+        verdict: 'block',
+        unmet_acceptance: [],
+        verification_concerns: ['Verification evidence is not convincing.'],
+        scope_concerns: [],
+        needs_user_decision: [],
+        note: 'Structured detail error fixture.',
+      })}\n`, 'utf8');
+      result = runRuns([
+        'finish',
+        '--graph',
+        executeMonitorGraphPath,
+        '--run-id',
+        monitorStructuredErrorRunId,
+        '--verification',
+        'test:passed:manual monitor structured error fixture',
+      ]);
+      checks += 1;
+      const monitorStructuredErrorOutput = `${result.stdout ?? ''}${result.stderr ?? ''}`;
+      if (
+        result.status === 0
+        || !monitorStructuredErrorOutput.includes('monitor gate blocked finish: verdict=block; signal=verification_concerns; failureClass=verification_failed')
+        || !monitorStructuredErrorOutput.includes('Monitor gate blocked finish (block -> verification_failed; concerns: verification_concerns=Verification evidence is not convincing.')
+        || !monitorStructuredErrorOutput.includes('blocked monitor finish requires structured detail')
+      ) {
+        console.error(`p2a_runs monitor structured error fixture failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: 1, checks };
+      }
+
+      const multiConcernMonitorRunId = 'run-monitor-multi-concern';
+      result = runRuns([
+        'start',
+        '--graph',
+        executeMonitorGraphPath,
+        '--task',
+        'task-001',
+        '--run-id',
+        multiConcernMonitorRunId,
+        '--agent-tool',
+        'codex',
+        '--workspace-ref',
+        'fixture-workspace',
+      ]);
+      checks += 1;
+      if (result.status !== 0) {
+        console.error(`p2a_runs monitor multi-concern fixture start failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: failureStatus(result), checks };
+      }
+      const multiConcernMonitorSidecar = {
+        ...executeMonitorPlan,
+        monitorGate: {
+          ...executeMonitorPlan.monitorGate,
+          verdictPath: `${multiConcernMonitorRunId}.monitor-verdict.json`,
+        },
+        runLink: {
+          runId: multiConcernMonitorRunId,
+          sidecarRef: `${multiConcernMonitorRunId}.orchestration.json`,
+        },
+      };
+      writeFileSync(
+        path.join(tempRoot, 'p2a-execute-monitor', 'runs', `${multiConcernMonitorRunId}.orchestration.json`),
+        `${JSON.stringify(multiConcernMonitorSidecar, null, 2)}\n`,
+        'utf8',
+      );
+      writeFileSync(path.join(tempRoot, 'p2a-execute-monitor', 'runs', multiConcernMonitorSidecar.monitorGate.verdictPath), `${JSON.stringify({
+        verdict: 'block',
+        unmet_acceptance: [],
+        verification_concerns: ['Verification is incomplete.'],
+        scope_concerns: [],
+        needs_user_decision: ['Owner must choose the retry scope.'],
+        note: 'Multi-concern monitor verdict fixture.',
+      })}\n`, 'utf8');
+      result = runRuns([
+        'finish',
+        '--graph',
+        executeMonitorGraphPath,
+        '--run-id',
+        multiConcernMonitorRunId,
+        '--verification',
+        'test:passed:manual monitor multi concern fixture',
+        ...fixtureFailureDetailArgs('monitor multi concern fixture'),
+      ]);
+      checks += 1;
+      const multiConcernMonitorRun = JSON.parse(readFileSync(path.join(tempRoot, 'p2a-execute-monitor', 'runs', `${multiConcernMonitorRunId}.json`), 'utf8'));
+      if (
+        result.status !== 0
+        || multiConcernMonitorRun.status !== 'blocked'
+        || multiConcernMonitorRun.failure?.class !== 'verification_failed'
+        || multiConcernMonitorRun.failure?.needsUserDecision !== true
+      ) {
+        console.error(`p2a_runs monitor multi-concern fixture lost needsUserDecision: ${caseData.id}`);
+        writeResultOutput(result);
+        console.error(JSON.stringify({ multiConcernMonitorRun }, null, 2));
+        return { status: failureStatus(result), checks };
+      }
+
       const contradictoryMonitorRunId = 'run-execute-monitor-confirm-done-with-concern';
       const contradictoryMonitorGraphPath = copyWebhookTaskGraph(tempRoot, 'p2a-monitor-contradictory');
       const contradictoryMonitorRunsDir = path.join(tempRoot, 'p2a-monitor-contradictory', 'runs');
@@ -3905,6 +4125,215 @@ function validateIterationCurrentFixtureCases() {
         return { status: failureStatus(result), checks };
       }
 
+      result = runTasks(['todo', '--graph', executeMonitorGraphPath, 'task-001']);
+      checks += 1;
+      if (result.status !== 0) {
+        console.error(`p2a_tasks monitor retry todo fixture failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: failureStatus(result), checks };
+      }
+      result = runTasks(['start', '--graph', executeMonitorGraphPath, 'task-001']);
+      checks += 1;
+      if (result.status !== 0) {
+        console.error(`p2a_tasks monitor bypass start fixture failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: failureStatus(result), checks };
+      }
+      const monitorBypassRunId = 'run-monitor-bypass-without-sidecar';
+      result = runRuns([
+        'start',
+        '--graph',
+        executeMonitorGraphPath,
+        '--task',
+        'task-001',
+        '--run-id',
+        monitorBypassRunId,
+        '--agent-tool',
+        'codex',
+        '--workspace-ref',
+        'fixture-workspace',
+      ]);
+      checks += 1;
+      if (result.status !== 0) {
+        console.error(`p2a_runs monitor bypass start fixture failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: failureStatus(result), checks };
+      }
+      result = runRuns([
+        'verify',
+        '--graph',
+        executeMonitorGraphPath,
+        '--run-id',
+        monitorBypassRunId,
+        '--test-command',
+        `"${process.execPath}" -e "process.exit(0)"`,
+      ]);
+      checks += 1;
+      if (result.status !== 0) {
+        console.error(`p2a_runs monitor bypass verify fixture failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: failureStatus(result), checks };
+      }
+      result = runRuns(['finish', '--graph', executeMonitorGraphPath, '--run-id', monitorBypassRunId, '--status', 'finished']);
+      checks += 1;
+      if (result.status !== 0) {
+        console.error(`p2a_runs monitor bypass finish fixture failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: failureStatus(result), checks };
+      }
+      result = runTasks(['done', '--graph', executeMonitorGraphPath, 'task-001']);
+      checks += 1;
+      const monitorBypassDoneOutput = `${result.stdout ?? ''}${result.stderr ?? ''}`;
+      if (
+        result.status === 0
+        || !monitorBypassDoneOutput.includes('this task requires monitor gate evidence')
+        || !monitorBypassDoneOutput.includes('p2a_execute start --orchestration-plan')
+      ) {
+        console.error(`p2a_tasks allowed sidecar-less done after monitor gate requirement: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: 1, checks };
+      }
+      result = runTasks(['todo', '--graph', executeMonitorGraphPath, 'task-001']);
+      checks += 1;
+      if (result.status !== 0) {
+        console.error(`p2a_tasks monitor retry reset fixture failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: failureStatus(result), checks };
+      }
+      const monitorAcceptedRunId = 'run-monitor-accepted-retry';
+      result = runExecute([
+        'start',
+        '--graph',
+        executeMonitorGraphPath,
+        '--spec',
+        state.specPath,
+        '--task',
+        'task-001',
+        '--run-id',
+        monitorAcceptedRunId,
+        '--agent-tool',
+        'codex',
+        '--orchestration-plan',
+        executeMonitorPlanPath,
+        '--workspace',
+        artifactRoot,
+        '--workspace-ref',
+        'fixture-workspace',
+      ]);
+      checks += 1;
+      if (result.status !== 0) {
+        console.error(`p2a_execute monitor accepted retry start fixture failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: failureStatus(result), checks };
+      }
+      const monitorAcceptedSidecar = JSON.parse(readFileSync(path.join(tempRoot, 'p2a-execute-monitor', 'runs', `${monitorAcceptedRunId}.orchestration.json`), 'utf8'));
+      writeFileSync(path.join(tempRoot, 'p2a-execute-monitor', 'runs', monitorAcceptedSidecar.monitorGate.verdictPath), `${JSON.stringify({
+        verdict: 'confirm_done',
+        unmet_acceptance: [],
+        verification_concerns: [],
+        scope_concerns: [],
+        needs_user_decision: [],
+        note: 'Accepted retry fixture.',
+      })}\n`, 'utf8');
+      result = runExecute([
+        'finish',
+        '--graph',
+        executeMonitorGraphPath,
+        '--run-id',
+        monitorAcceptedRunId,
+        '--test-command',
+        `"${process.execPath}" -e "process.exit(0)"`,
+      ]);
+      checks += 1;
+      const monitorAcceptedGraph = JSON.parse(readFileSync(executeMonitorGraphPath, 'utf8'));
+      const monitorAcceptedRun = JSON.parse(readFileSync(path.join(tempRoot, 'p2a-execute-monitor', 'runs', `${monitorAcceptedRunId}.json`), 'utf8'));
+      if (
+        result.status !== 0
+        || !result.stdout.includes('Monitor gate accepted: confirm_done')
+        || monitorAcceptedGraph.tasks.find((task) => task.id === 'task-001')?.status !== 'done'
+        || monitorAcceptedRun.status !== 'finished'
+      ) {
+        console.error(`p2a_execute monitor accepted retry fixture failed: ${caseData.id}`);
+        writeResultOutput(result);
+        console.error(JSON.stringify({ monitorAcceptedRun }, null, 2));
+        return { status: failureStatus(result), checks };
+      }
+
+      const recoveryGraphPath = copyWebhookTaskGraph(tempRoot, 'p2a-execute-closed-run-recovery');
+      result = runExecute([
+        'start',
+        '--graph',
+        recoveryGraphPath,
+        '--spec',
+        state.specPath,
+        '--task',
+        'task-001',
+        '--run-id',
+        'run-closed-recovery',
+        '--agent-tool',
+        'codex',
+        '--orchestration-plan',
+        executeMonitorPlanPath,
+        '--workspace',
+        artifactRoot,
+        '--workspace-ref',
+        'fixture-workspace',
+      ]);
+      checks += 1;
+      if (result.status !== 0) {
+        console.error(`p2a_execute closed-run recovery start fixture failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: failureStatus(result), checks };
+      }
+      const recoveryRunsDir = path.join(tempRoot, 'p2a-execute-closed-run-recovery', 'runs');
+      const recoverySidecar = JSON.parse(readFileSync(path.join(recoveryRunsDir, 'run-closed-recovery.orchestration.json'), 'utf8'));
+      writeFileSync(path.join(recoveryRunsDir, recoverySidecar.monitorGate.verdictPath), `${JSON.stringify({
+        verdict: 'confirm_done',
+        unmet_acceptance: [],
+        verification_concerns: [],
+        scope_concerns: [],
+        needs_user_decision: [],
+        note: 'Closed run recovery fixture.',
+      })}\n`, 'utf8');
+      result = runRuns([
+        'verify',
+        '--graph',
+        recoveryGraphPath,
+        '--run-id',
+        'run-closed-recovery',
+        '--test-command',
+        `"${process.execPath}" -e "process.exit(0)"`,
+      ]);
+      checks += 1;
+      if (result.status !== 0) {
+        console.error(`p2a_runs closed-run recovery verify fixture failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: failureStatus(result), checks };
+      }
+      result = runRuns(['finish', '--graph', recoveryGraphPath, '--run-id', 'run-closed-recovery', '--status', 'finished']);
+      checks += 1;
+      if (result.status !== 0) {
+        console.error(`p2a_runs closed-run recovery raw finish fixture failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: failureStatus(result), checks };
+      }
+      result = runExecute(['finish', '--graph', recoveryGraphPath, '--run-id', 'run-closed-recovery']);
+      checks += 1;
+      const recoveryOutput = `${result.stdout ?? ''}${result.stderr ?? ''}`;
+      const recoveryGraph = JSON.parse(readFileSync(recoveryGraphPath, 'utf8'));
+      const recoveryRuntime = JSON.parse(readFileSync(path.join(recoveryRunsDir, 'run-closed-recovery.orchestration-runtime.json'), 'utf8'));
+      if (
+        result.status !== 0
+        || !recoveryOutput.includes('Run already finished; recovering orchestration runtime and task transition without re-finishing run.')
+        || recoveryGraph.tasks.find((task) => task.id === 'task-001')?.status !== 'done'
+        || recoveryRuntime.status.phase !== 'closed'
+      ) {
+        console.error(`p2a_execute closed-run recovery fixture failed: ${caseData.id}`);
+        writeResultOutput(result);
+        console.error(JSON.stringify({ recoveryRuntime }, null, 2));
+        return { status: failureStatus(result), checks };
+      }
+
       const stopPolicyDir = path.join(tempRoot, 'p2a-policy-stop', 'runs');
       mkdirSync(stopPolicyDir, { recursive: true });
       const stopPolicyRuntimePath = path.join(stopPolicyDir, 'run-policy-stop.orchestration-runtime.json');
@@ -3949,10 +4378,31 @@ function validateIterationCurrentFixtureCases() {
         return { status: failureStatus(result), checks };
       }
 
+      const executeMonitorRunsDir = path.join(tempRoot, 'p2a-execute-monitor', 'runs');
+      const executeMonitorProposalsDir = path.join(tempRoot, 'p2a-execute-monitor', 'proposals');
+      const proposalRunsDir = path.join(tempRoot, 'p2a-execute-monitor-proposal-runs');
+      mkdirSync(proposalRunsDir, { recursive: true });
+      const executeMonitorRunIndex = JSON.parse(readFileSync(path.join(executeMonitorRunsDir, 'run-index.json'), 'utf8'));
+      const baseRunIndexEntry = executeMonitorRunIndex.runs.find((run) => run.runId === 'run-execute-monitor-fixture');
+      cpSync(path.join(executeMonitorRunsDir, 'run-execute-monitor-fixture.json'), path.join(proposalRunsDir, 'run-execute-monitor-fixture.json'));
+      cpSync(path.join(executeMonitorRunsDir, 'run-execute-monitor-fixture.orchestration.json'), path.join(proposalRunsDir, 'run-execute-monitor-fixture.orchestration.json'));
+      cpSync(path.join(executeMonitorRunsDir, 'run-execute-monitor-fixture.monitor-verdict.json'), path.join(proposalRunsDir, 'run-execute-monitor-fixture.monitor-verdict.json'));
+      writeFileSync(path.join(proposalRunsDir, 'run-index.json'), `${JSON.stringify({
+        schema_version: 'p2a.run_index.v1',
+        projectId: executeMonitorRunIndex.projectId,
+        runs: [baseRunIndexEntry],
+        tasks: [{
+          taskId: 'task-001',
+          runIds: ['run-execute-monitor-fixture'],
+          latestRunId: 'run-execute-monitor-fixture',
+        }],
+      }, null, 2)}\n`, 'utf8');
       result = runProposals([
         'mine',
-        '--graph',
-        executeMonitorGraphPath,
+        '--runs',
+        proposalRunsDir,
+        '--proposals',
+        executeMonitorProposalsDir,
       ]);
       checks += 1;
       const proposalOutput = `${result.stdout ?? ''}${result.stderr ?? ''}`;
@@ -3961,7 +4411,6 @@ function validateIterationCurrentFixtureCases() {
         writeResultOutput(result);
         return { status: failureStatus(result), checks };
       }
-      const executeMonitorProposalsDir = path.join(tempRoot, 'p2a-execute-monitor', 'proposals');
       const executeMonitorProposalPath = path.join(executeMonitorProposalsDir, 'proposal-run-execute-monitor-fixture-implementation_incomplete.json');
       const executeMonitorProposal = JSON.parse(readFileSync(executeMonitorProposalPath, 'utf8'));
       if (
@@ -3974,27 +4423,27 @@ function validateIterationCurrentFixtureCases() {
         return { status: 1, checks };
       }
 
-      const executeMonitorRunsDir = path.join(tempRoot, 'p2a-execute-monitor', 'runs');
       const invalidRunId = 'run-execute-monitor-invalid';
-      const executeMonitorRunIndexPath = path.join(executeMonitorRunsDir, 'run-index.json');
-      const executeMonitorRunIndex = JSON.parse(readFileSync(executeMonitorRunIndexPath, 'utf8'));
-      const baseRunIndexEntry = executeMonitorRunIndex.runs.find((run) => run.runId === 'run-execute-monitor-fixture');
-      executeMonitorRunIndex.runs.push({
+      const proposalRunIndexPath = path.join(proposalRunsDir, 'run-index.json');
+      const proposalRunIndex = JSON.parse(readFileSync(proposalRunIndexPath, 'utf8'));
+      proposalRunIndex.runs.push({
         ...baseRunIndexEntry,
         runId: invalidRunId,
         runRef: `${invalidRunId}.json`,
         status: 'finished',
       });
-      const executeMonitorTaskIndex = executeMonitorRunIndex.tasks.find((task) => task.taskId === 'task-001');
-      executeMonitorTaskIndex.runIds.push(invalidRunId);
-      executeMonitorTaskIndex.latestRunId = invalidRunId;
-      writeFileSync(executeMonitorRunIndexPath, `${JSON.stringify(executeMonitorRunIndex, null, 2)}\n`, 'utf8');
-      writeFileSync(path.join(executeMonitorRunsDir, `${invalidRunId}.json`), `{"schema_version":"p2a.run.v1","runId":"${invalidRunId}"}\n`, 'utf8');
+      const proposalTaskIndex = proposalRunIndex.tasks.find((task) => task.taskId === 'task-001');
+      proposalTaskIndex.runIds.push(invalidRunId);
+      proposalTaskIndex.latestRunId = invalidRunId;
+      writeFileSync(proposalRunIndexPath, `${JSON.stringify(proposalRunIndex, null, 2)}\n`, 'utf8');
+      writeFileSync(path.join(proposalRunsDir, `${invalidRunId}.json`), `{"schema_version":"p2a.run.v1","runId":"${invalidRunId}"}\n`, 'utf8');
 
       result = runProposals([
         'mine',
-        '--graph',
-        executeMonitorGraphPath,
+        '--runs',
+        proposalRunsDir,
+        '--proposals',
+        executeMonitorProposalsDir,
         '--overwrite',
       ]);
       checks += 1;
@@ -5088,11 +5537,41 @@ function validateIterationCurrentFixtureCases() {
       const doneTodoOutput = `${result.stdout ?? ''}${result.stderr ?? ''}`;
       if (
         result.status === 0
-        || !doneTodoOutput.includes('task-001 must be blocked or in_progress before todo; current status is done')
+        || !doneTodoOutput.includes('task-001 is done; use todo task-001 --reopen --note <reason> to reopen it explicitly')
       ) {
-        console.error(`p2a_tasks allowed todo from done state: ${caseData.id}`);
+        console.error(`p2a_tasks allowed todo from done state without reopen: ${caseData.id}`);
         writeResultOutput(result);
         return { status: 1, checks };
+      }
+      result = runTasks(['todo', '--graph', doneTransitionGraphPath, 'task-001', '--reopen']);
+      checks += 1;
+      const reopenNoNoteOutput = `${result.stdout ?? ''}${result.stderr ?? ''}`;
+      if (
+        result.status === 0
+        || !reopenNoNoteOutput.includes('task-001 reopen requires --note <reason>')
+      ) {
+        console.error(`p2a_tasks allowed reopen without note: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: 1, checks };
+      }
+      doneTransitionGraph.tasks.find((task) => task.id === 'task-002').status = 'in_progress';
+      doneTransitionGraph.tasks.find((task) => task.id === 'task-002').dependencies = ['task-001'];
+      writeFileSync(doneTransitionGraphPath, `${JSON.stringify(doneTransitionGraph, null, 2)}\n`, 'utf8');
+      result = runTasks(['todo', '--graph', doneTransitionGraphPath, 'task-001', '--reopen', '--note', 'Regression found after done.']);
+      checks += 1;
+      const reopenDoneOutput = `${result.stdout ?? ''}${result.stderr ?? ''}`;
+      const reopenedGraph = JSON.parse(readFileSync(doneTransitionGraphPath, 'utf8'));
+      const reopenedTask = reopenedGraph.tasks.find((task) => task.id === 'task-001');
+      if (
+        result.status !== 0
+        || !reopenDoneOutput.includes('warning: reopening task-001 while dependent task(s) are already in_progress/done: task-002:in_progress')
+        || reopenedTask?.status !== 'todo'
+        || reopenedTask?.blockNote !== 'Regression found after done.'
+      ) {
+        console.error(`p2a_tasks reopen fixture failed: ${caseData.id}`);
+        writeResultOutput(result);
+        console.error(JSON.stringify({ reopenedTask }, null, 2));
+        return { status: failureStatus(result), checks };
       }
 
       const noEvidenceGraphPath = copyWebhookTaskGraph(tempRoot, 'p2a-done-no-evidence');
@@ -5189,6 +5668,45 @@ function validateIterationCurrentFixtureCases() {
         };
         delete run.failure;
         return run;
+      }
+
+      const staleMissingGraphPath = copyWebhookTaskGraph(tempRoot, 'p2a-done-stale-missing-run');
+      result = runTasks(['start', '--graph', staleMissingGraphPath, 'task-001']);
+      checks += 1;
+      if (result.status !== 0) {
+        console.error(`p2a_tasks stale-missing run fixture start failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: failureStatus(result), checks };
+      }
+      const staleMissingRunsDir = path.join(tempRoot, 'p2a-done-stale-missing-run', 'runs');
+      const staleMissingTaskGraphRef = path.resolve(staleMissingGraphPath).split(path.sep).join('/');
+      const staleMissingOldRun = finishedDoneGuardRun({
+        runId: 'run-fixture-stale-missing-old',
+        taskGraphRef: staleMissingTaskGraphRef,
+        updatedAt: '2026-07-02T00:01:00.000Z',
+        finishedAt: '2026-07-02T00:01:00.000Z',
+      });
+      const staleMissingLatestRun = finishedDoneGuardRun({
+        runId: 'run-fixture-stale-missing-latest',
+        taskGraphRef: staleMissingTaskGraphRef,
+        updatedAt: '2026-07-02T00:06:00.000Z',
+        finishedAt: '2026-07-02T00:06:00.000Z',
+      });
+      writeRunEvidenceSet(staleMissingRunsDir, 'task-001', [staleMissingOldRun, staleMissingLatestRun]);
+      unlinkSync(path.join(staleMissingRunsDir, `${staleMissingOldRun.runId}.json`));
+      result = runTasks(['done', '--graph', staleMissingGraphPath, 'task-001']);
+      checks += 1;
+      const staleMissingDoneOutput = `${result.stdout ?? ''}${result.stderr ?? ''}`;
+      const staleMissingGraph = JSON.parse(readFileSync(staleMissingGraphPath, 'utf8'));
+      if (
+        result.status !== 0
+        || !staleMissingDoneOutput.includes(`warning: latest run ${staleMissingOldRun.runId} for task-001 is missing`)
+        || staleMissingGraph.tasks.find((task) => task.id === 'task-001')?.status !== 'done'
+      ) {
+        console.error(`p2a_tasks stale missing old run fixture failed: ${caseData.id}`);
+        writeResultOutput(result);
+        console.error(JSON.stringify({ staleMissingOldRun, staleMissingLatestRun }, null, 2));
+        return { status: failureStatus(result), checks };
       }
 
       const dependencyDoneGraphPath = copyWebhookTaskGraph(tempRoot, 'p2a-done-dependency-recheck');

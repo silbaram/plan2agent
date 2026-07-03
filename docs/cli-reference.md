@@ -364,32 +364,32 @@ node .plan2agent/scripts/p2a_execute.mjs start \
   --orchestration-plan .plan2agent/orchestration/task-001.json
 
 node .plan2agent/scripts/p2a_orchestrate.mjs runtime-status \
-  --runtime .plan2agent/runs/<run-id>.orchestration-runtime.json
+  --runtime .plan2agent/artifacts/<project_id>/runs/<run-id>.orchestration-runtime.json
 
 node .plan2agent/scripts/p2a_orchestrate.mjs record \
-  --runtime .plan2agent/runs/<run-id>.orchestration-runtime.json \
+  --runtime .plan2agent/artifacts/<project_id>/runs/<run-id>.orchestration-runtime.json \
   --role implementer \
   --type status \
   --summary "Implementation session opened"
 
 node .plan2agent/scripts/p2a_orchestrate.mjs next-role \
-  --runtime .plan2agent/runs/<run-id>.orchestration-runtime.json
+  --runtime .plan2agent/artifacts/<project_id>/runs/<run-id>.orchestration-runtime.json
 
 node .plan2agent/scripts/p2a_orchestrate.mjs role-prompt \
-  --runtime .plan2agent/runs/<run-id>.orchestration-runtime.json \
+  --runtime .plan2agent/artifacts/<project_id>/runs/<run-id>.orchestration-runtime.json \
   --role implementer
 
 node .plan2agent/scripts/p2a_orchestrate.mjs runner-guide \
-  --runtime .plan2agent/runs/<run-id>.orchestration-runtime.json \
+  --runtime .plan2agent/artifacts/<project_id>/runs/<run-id>.orchestration-runtime.json \
   --role implementer
 
 node .plan2agent/scripts/p2a_orchestrate.mjs mark-role \
-  --runtime .plan2agent/runs/<run-id>.orchestration-runtime.json \
+  --runtime .plan2agent/artifacts/<project_id>/runs/<run-id>.orchestration-runtime.json \
   --role implementer \
   --role-status complete
 
 node .plan2agent/scripts/p2a_orchestrate.mjs failure-policy \
-  --runtime .plan2agent/runs/<run-id>.orchestration-runtime.json
+  --runtime .plan2agent/artifacts/<project_id>/runs/<run-id>.orchestration-runtime.json
 ```
 
 `p2a_orchestrate plan --graph`도 Gate B/D 전제조건을 검사하지 않는 직접 graph 모드다. 승인된 반복 root가 있으면 `--artifacts`를 사용한다.
@@ -402,7 +402,7 @@ node .plan2agent/scripts/p2a_orchestrate.mjs failure-policy \
 
 `next-role`, `role-prompt`, `mark-role`, `failure-policy`는 감독형 scheduler 명령이다. 이 명령들은 다음 role, provider execution guide, prompt, blocked next action 후보, 실패 후 `retry|ask_user|stop` 정책을 계산하고 사람이 관찰한 상태 전이를 기록할 뿐, Codex/Claude/Gemini CLI, browser, background loop, unofficial API를 실행하지 않는다. `role-prompt`는 provider-native delegation 섹션을 포함해 사용자가 연 foreground 세션 안에서 skill/subagent/custom agent/agent team을 쓰도록 요청할 수 있다. 구독 로그인 기반 사용에서는 사람이 공식 CLI/앱을 직접 열어 prompt를 붙여넣고 결과를 다시 기록한다. monitor role을 `complete`로 기록할 때는 실제 판단값을 `--verdict confirm_done`처럼 함께 넘긴다. 허용 verdict가 아니면 runtime phase는 `blocked`가 되며, 이 runtime은 자동으로 unblock하지 않는다. 계속 진행하려면 `failure-policy`가 제안한 방식에 따라 현재 run을 blocked로 닫고 후속 supervised run이나 maintenance task로 이어간다.
 
-monitor gate가 필요한 plan은 `runs/<runId>.monitor-verdict.json`에 `{"verdict":"confirm_done","unmet_acceptance":[],"verification_concerns":[],"scope_concerns":[],"needs_user_decision":[],"note":""}` 같은 verdict 객체가 있어야 `finish`가 done으로 닫힌다. `{"verdict":"block", ...}` 객체는 채워진 concern 배열을 기준으로 plan의 `failureClassMap`에 매핑되어 blocked 흐름으로 기록된다. raw `p2a_runs finish`도 orchestration sidecar가 있으면 같은 monitor verdict를 요구한다.
+monitor gate가 필요한 plan은 `runs/<runId>.monitor-verdict.json`에 `{"verdict":"confirm_done","unmet_acceptance":[],"verification_concerns":[],"scope_concerns":[],"needs_user_decision":[],"note":""}` 같은 verdict 객체가 있어야 `finish`가 done으로 닫힌다. `{"verdict":"block", ...}` 객체는 채워진 concern 배열을 기준으로 plan의 `failureClassMap`에 매핑되어 blocked 흐름으로 기록된다. 여러 concern 배열이 동시에 채워지면 failure class 매핑 우선순위는 `scope_concerns` → `verification_concerns` → `unmet_acceptance` → `needs_user_decision`이다. raw `p2a_runs finish`도 orchestration sidecar가 있으면 같은 monitor verdict를 요구한다.
 
 ## 7. 개발 진행 — `p2a_tasks.mjs`
 
@@ -422,9 +422,9 @@ node .plan2agent/scripts/p2a_tasks.mjs <command> --artifacts <iterative-project-
 | `start <task-id>` | ready 상태의 `todo` task를 `in_progress`로 바꾼다. |
 | `done <task-id>` | `in_progress` task를 `done`으로 바꾼다. |
 | `block <task-id>` | `todo` 또는 `in_progress` task를 `blocked`로 표시한다. `--note <text>`로 `blockNote`를 남길 수 있다. |
-| `todo <task-id>` | `blocked` 또는 `in_progress` task를 `todo`로 되돌린다. |
+| `todo <task-id>` | `blocked` 또는 `in_progress` task를 `todo`로 되돌린다. `done` task는 `--reopen --note <reason>`을 명시해야 되돌릴 수 있다. |
 
-`done`은 모든 dependency가 여전히 `done`인지 확인한 뒤 최신 run evidence를 확인하는 shortcut guard를 거친다. 최신 run evidence가 없거나, run-index와 실제 run 파일의 주요 필드가 맞지 않거나, 최신 run이 아직 `started`/`failed`/`blocked`이면 `done` 전이가 실패한다. `finished` run이라도 verification이 없거나 `failed`/`skipped`/`not_run` verification이 남아 있으면 실패한다. run의 변경 파일에 `.plan2agent/` 또는 Gate 산출물이 포함된 경우도 사람이 먼저 산출물 변경 의도를 분리해야 하므로 차단한다.
+`done`은 모든 dependency가 여전히 `done`인지 확인한 뒤 최신 run evidence를 확인하는 shortcut guard를 거친다. 최신 run evidence가 없거나, run-index와 실제 run 파일의 주요 필드가 맞지 않거나, 최신 run이 아직 `started`/`failed`/`blocked`이면 `done` 전이가 실패한다. `finished` run이라도 verification이 없거나 `failed`/`skipped`/`not_run` verification이 남아 있으면 실패한다. run의 변경 파일에 `.plan2agent/` 또는 Gate 산출물이 포함된 경우도 사람이 먼저 산출물 변경 의도를 분리해야 하므로 차단한다. 같은 task의 현재 context에 monitor gate가 필요한 과거 run이 있으면, done 증거로 쓰는 최신 run도 monitor sidecar와 concern 없는 accepted verdict를 통과해야 한다.
 
 대표 예시:
 
@@ -477,7 +477,7 @@ node .plan2agent/scripts/p2a_tasks.mjs -i
 
 ## 8. 실행 추적 — `p2a_runs.mjs`
 
-`p2a_runs.mjs`는 task graph schema를 바꾸지 않고 별도 `runs/` 디렉터리에 agent 실행 결과를 기록한다. 반복 artifact root에서는 `.plan2agent/artifacts/<project_id>/runs/`, handoff 대상 프로젝트에서는 기본적으로 `.plan2agent/runs/`를 사용한다.
+`p2a_runs.mjs`는 task graph schema를 바꾸지 않고 별도 `runs/` 디렉터리에 agent 실행 결과를 기록한다. 반복 artifact root에서는 `.plan2agent/artifacts/<project_id>/runs/`를 사용한다. `--graph` 직접 모드에서는 graph가 `gate-c-task-graph/task-graph.json` 아래 있으면 그 sibling인 `.plan2agent/artifacts/<project_id>/runs/`를 사용하고, 그 외 graph 파일은 같은 디렉터리의 `runs/`를 사용한다. scaffold의 `.plan2agent/project.config.json.runTracking.runsDir`는 현재 branch/worktree naming과 함께 표시되는 참고용 기본값이며, `p2a_runs`의 실제 경로 결정은 `--artifacts`, `--graph`, `--runs` 인자를 따른다.
 
 주요 파일:
 
@@ -709,7 +709,7 @@ node .plan2agent/scripts/p2a_memory.mjs digest \
 | `--overwrite` | 대상 파일이 이미 있을 때 덮어쓰기를 허용한다. |
 | `--dry-run` | 파일을 쓰지 않고 gate 검증과 인계 계획 출력만 수행한다. |
 
-인계 전제는 Gate B~D가 통과된 상태다. 특히 `spec.approval`은 `approved`여야 하고, `spec.approval_audit`가 있어야 하며, 모든 intake `CQ-n`은 `spec.clarifying_question_disposition`에서 처분되어야 하고, `spec.open_decisions`와 `review.json.blocking_issues`는 비어 있어야 한다. 반복 구조 root를 넘기면 active 반복 산출물을 `.plan2agent/artifacts/`로 평탄화하고, `task-graph.sourceSpec`은 `spec.json`으로, `spec.source_intake`는 `intake.json`으로 rebase한다. 이때 `intake.json`은 항상 함께 복사되며, 루트 `current-spec.json`은 `.plan2agent/current-spec.json`으로 함께 복사한다. Markdown view 파일은 존재할 때만 함께 복사된다. 반복 history 보존을 위해 iterative root에서는 `--mode move`를 지원하지 않는다. 기본 실행 도구로 `p2a_tasks.mjs`, `p2a_runs.mjs`, `p2a_execute.mjs`, `p2a_orchestrate.mjs`, `p2a_proposals.mjs`, `p2a_eval.mjs`, `p2a_memory.mjs`, `validate_artifacts.mjs`, run/orchestration plan/orchestration runtime/proposal/review/curation/patch-draft schema가 함께 설치되며, `.plan2agent/project.config.json.runTracking`에 기본 runs directory와 branch/worktree naming hint가 기록된다.
+인계 전제는 Gate B~D가 통과된 상태다. 특히 `spec.approval`은 `approved`여야 하고, `spec.approval_audit`가 있어야 하며, 모든 intake `CQ-n`은 `spec.clarifying_question_disposition`에서 처분되어야 하고, `spec.open_decisions`와 `review.json.blocking_issues`는 비어 있어야 한다. 반복 구조 root를 넘기면 active 반복 산출물을 `.plan2agent/artifacts/`로 평탄화하고, `task-graph.sourceSpec`은 `spec.json`으로, `spec.source_intake`는 `intake.json`으로 rebase한다. 이때 `intake.json`은 항상 함께 복사되며, 루트 `current-spec.json`은 `.plan2agent/current-spec.json`으로 함께 복사한다. Markdown view 파일은 존재할 때만 함께 복사된다. 반복 history 보존을 위해 iterative root에서는 `--mode move`를 지원하지 않는다. 기본 실행 도구로 `p2a_tasks.mjs`, `p2a_runs.mjs`, `p2a_execute.mjs`, `p2a_orchestrate.mjs`, `p2a_proposals.mjs`, `p2a_eval.mjs`, `p2a_memory.mjs`, `validate_artifacts.mjs`, run/orchestration plan/orchestration runtime/proposal/review/curation/patch-draft schema가 함께 설치되며, `.plan2agent/project.config.json.runTracking`에 참고용 기본 runs directory와 branch/worktree naming hint가 기록된다. 현재 실행 경로는 이 설정을 자동 소비하지 않고 CLI 인자에서 계산한다.
 
 `--tools`를 지정하면 공통 P2A 원본인 `.agents/skills`, `.agents/agents`와 선택한 CLI별 mirror를 함께 복사한다. `codex`는 `.codex/agents`, `claude`는 `.claude/skills`와 `.claude/agents`, `gemini`는 `.gemini/agents`와 `.gemini/commands/p2a`를 추가한다. 단, `p2a-design-system` skill과 Gemini `design-system.toml` command는 Plan2Agent 본체 UI 개발용 자산이라 대상 프로젝트로 넘기지 않는다. 복사된 파일과 선택한 CLI 범위는 `.plan2agent/manifest.json`의 `aiToolTargets`, `aiToolFiles`, `toolFiles`에 기록된다.
 

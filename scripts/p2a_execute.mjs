@@ -15,7 +15,7 @@ import {
   writeOrchestrationRuntimeForRun,
 } from './p2a_orchestrate.mjs';
 import { resolveIterationState } from './p2a_iteration_state.mjs';
-import { resolveRunsDir } from './p2a_run_paths.mjs';
+import { canonicalTaskGraphRef, resolveRunsDir } from './p2a_run_paths.mjs';
 import {
   assertNoUninitializedScaffoldArtifactRoots,
   assertNotUninitializedScaffoldGraph,
@@ -364,7 +364,7 @@ function resolveSource(args) {
     specPath: args.spec ? path.resolve(args.spec) : null,
     graph,
     runsDir: resolveRunsDir({ graph: args.graph }),
-    taskGraphRef: displayPath(graphPath),
+    taskGraphRef: canonicalTaskGraphRef(graphPath),
   };
 }
 
@@ -678,7 +678,7 @@ function applyMonitorGate(args, source) {
   if (!args.status || args.status === 'finished') args.status = 'blocked';
   if (!args.failureClass) args.failureClass = mappedFailureClass;
   if (!args.failureSource) args.failureSource = 'monitor';
-  if (args.needsUserDecision === null && verdict.failureSignal === 'needs_user_decision') args.needsUserDecision = 'true';
+  if (args.needsUserDecision === null && verdict.needsUserDecision) args.needsUserDecision = 'true';
   return { sidecar, verdict: verdict.failureSignal, accepted: false, failureClass: args.failureClass };
 }
 
@@ -820,6 +820,33 @@ function transitionTaskAfterFinishedRun(args, source, run, successStatus = 0) {
   printChildResult(taskResult);
   if (taskResult.status !== 0) return taskResult.status ?? 1;
   return successStatus;
+}
+
+function printClosedRunFooter(source, run) {
+  printRunCommandFooter(P2A_PATHS, {
+    sourceArgs: source.sourceArgs,
+    runId: run.runId,
+    includeResume: false,
+    includeFinish: false,
+    heading: 'Run commands:',
+  });
+}
+
+function recoverAfterClosedRun(args, source, run) {
+  console.log(`Run already ${run.status}; recovering orchestration runtime and task transition without re-finishing run.`);
+  try {
+    const runtimeUpdate = updateOrchestrationRuntimeAfterFinish(source, run);
+    if (runtimeUpdate?.skipped) {
+      console.log(`Orchestration runtime already closed: ${displayPath(runtimeUpdate.filePath)}`);
+    } else if (runtimeUpdate) {
+      console.log(`Updated orchestration runtime: ${displayPath(runtimeUpdate.filePath)} phase=${runtimeUpdate.runtime.status.phase}`);
+    }
+  } catch (error) {
+    console.error(`warning: orchestration runtime was not updated: ${error.message}`);
+  }
+  const status = transitionTaskAfterFinishedRun(args, source, run, 0);
+  printClosedRunFooter(source, run);
+  return status;
 }
 
 function expectedFailureFinishStatus(result, requestedStatus) {
@@ -969,26 +996,21 @@ function runStatus(args) {
 function runFinish(args) {
   const source = resolveSource(args);
   const approvalLink = resolveApprovalSelection(args, source);
+  const existingRun = readRun(source.runsDir, args.runId);
   if (approvalLink.taskId) {
-    const existingRun = readRun(source.runsDir, args.runId);
     if (existingRun.taskId !== approvalLink.taskId) {
       console.error(`finish refused: run ${existingRun.runId} belongs to ${existingRun.taskId}, not approval task ${approvalLink.taskId}`);
       return 1;
     }
   }
+  if (existingRun.status !== 'started') return recoverAfterClosedRun(args, source, existingRun);
   const closedRuntime = closedOrchestrationRuntimeForRun(source, args.runId);
   if (closedRuntime) {
     console.log(`Orchestration runtime already closed: ${displayPath(closedRuntime.filePath)}`);
-    const run = readRun(source.runsDir, args.runId);
+    const run = existingRun;
     if (run.status !== 'started') {
       const status = transitionTaskAfterFinishedRun(args, source, run, 0);
-      printRunCommandFooter(P2A_PATHS, {
-        sourceArgs: source.sourceArgs,
-        runId: run.runId,
-        includeResume: false,
-        includeFinish: false,
-        heading: 'Run commands:',
-      });
+      printClosedRunFooter(source, run);
       return status;
     }
     console.log('- finishNote: runtime is closed but run is still started; continuing run closeout without appending runtime events.');
@@ -1034,13 +1056,7 @@ function runFinish(args) {
     console.error(`warning: orchestration runtime was not updated: ${error.message}`);
   }
   const status = transitionTaskAfterFinishedRun(args, source, run, finishResult.status ?? 0);
-  printRunCommandFooter(P2A_PATHS, {
-    sourceArgs: source.sourceArgs,
-    runId: run.runId,
-    includeResume: false,
-    includeFinish: false,
-    heading: 'Run commands:',
-  });
+  printClosedRunFooter(source, run);
   return status;
 }
 

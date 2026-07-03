@@ -8,6 +8,7 @@ import { spawnSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 import { loadJson, validateOrchestrationPlanData, validateOrchestrationRuntimeData, validateRunData, validateTaskGraphData, ValidationError } from './validate_artifacts.mjs';
 import { resolveIterationState } from './p2a_iteration_state.mjs';
+import { canonicalTaskGraphRef } from './p2a_run_paths.mjs';
 import {
   assertNoUninitializedScaffoldArtifactRoots,
   assertNotUninitializedScaffoldGraph,
@@ -754,7 +755,7 @@ function resolveSource(args) {
     graphPath,
     specPath: args.spec ? path.resolve(args.spec) : null,
     graph,
-    taskGraphRef: displayPath(graphPath),
+    taskGraphRef: canonicalTaskGraphRef(graphPath),
     sourceSpecRef: args.spec ? displayPath(path.resolve(args.spec)) : graph.sourceSpec ?? null,
   };
 }
@@ -894,7 +895,7 @@ export function normalizeMonitorVerdictData(data) {
   if (typeof data === 'string') {
     const verdict = data.trim();
     if (!verdict) throw new Error('monitor verdict must not be blank');
-    return { verdict, failureSignal: verdict, concerns: {}, concernFields: [], hasConcerns: false, note: null };
+    return { verdict, failureSignal: verdict, concerns: {}, concernFields: [], hasConcerns: false, needsUserDecision: false, note: null };
   }
   if (!data || typeof data !== 'object' || Array.isArray(data)) {
     throw new Error('monitor verdict must be a JSON string or object with a verdict field');
@@ -904,8 +905,9 @@ export function normalizeMonitorVerdictData(data) {
   const concerns = Object.fromEntries(MONITOR_CONCERN_FIELDS.map((field) => [field, monitorConcernValues(data, field)]));
   const concernFields = MONITOR_CONCERN_FIELDS.filter((field) => concerns[field].length > 0);
   const failureSignal = concernFields[0] ?? (verdict === 'block' ? 'block' : verdict);
+  const needsUserDecision = concerns.needs_user_decision.length > 0;
   const note = typeof data.note === 'string' && data.note.trim() ? data.note.trim() : null;
-  return { verdict, failureSignal, concerns, concernFields, hasConcerns: concernFields.length > 0, note };
+  return { verdict, failureSignal, concerns, concernFields, hasConcerns: concernFields.length > 0, needsUserDecision, note };
 }
 
 function orchestrationRole({ roleId, role, profileSelection, agentTool, scope, basePrompt, requiresWrite }) {
@@ -1498,7 +1500,7 @@ function monitorFailureFromRuntime(runtimePath, runtime) {
         source: 'monitor_verdict',
         class: monitorFailureClassForRuntime(runtimePath, runtime, detail.verdict),
         retryable: 'after_fix',
-        needsUserDecision: detail.verdict === 'needs_user_decision',
+        needsUserDecision: detail.needsUserDecision === true || detail.verdict === 'needs_user_decision',
         evidence: `${event.eventId}: ${event.summary}`,
       };
     }

@@ -17,7 +17,7 @@ import {
 } from './validate_artifacts.mjs';
 import { normalizeMonitorVerdictData } from './p2a_orchestrate.mjs';
 import { resolveIterationState } from './p2a_iteration_state.mjs';
-import { DEFAULT_RUNS_DIR, resolveRunsDir } from './p2a_run_paths.mjs';
+import { canonicalTaskGraphRef, DEFAULT_RUNS_DIR, resolveRunsDir } from './p2a_run_paths.mjs';
 import {
   assertNoUninitializedScaffoldArtifactRoots,
   assertNotUninitializedScaffoldGraph,
@@ -364,12 +364,22 @@ function readMonitorVerdict(runsDir, sidecar) {
   }
 }
 
+function monitorConcernSummary(verdict) {
+  const parts = [];
+  for (const field of verdict.concernFields ?? []) {
+    const values = verdict.concerns?.[field] ?? [];
+    if (values.length) parts.push(`${field}=${values.join(' | ')}`);
+  }
+  if (verdict.note) parts.push(`note=${verdict.note}`);
+  return parts.join('; ') || 'no concern details provided';
+}
+
 function applyMonitorGate(args, runsDir, run) {
   const sidecar = readOrchestrationSidecar(runsDir, run.runId);
   if (!sidecar?.monitorGate?.required) return null;
   const verdict = readMonitorVerdict(runsDir, sidecar);
   if (sidecar.monitorGate.acceptedVerdicts.includes(verdict.verdict) && !verdict.hasConcerns) {
-    return { accepted: true, verdict: verdict.verdict };
+    return { accepted: true, verdict: verdict.verdict, concerns: monitorConcernSummary(verdict) };
   }
   const mappedFailureClass = sidecar.monitorGate.failureClassMap[verdict.failureSignal]
     ?? sidecar.monitorGate.failureClassMap[verdict.verdict]
@@ -377,8 +387,14 @@ function applyMonitorGate(args, runsDir, run) {
   args.status = 'blocked';
   if (!args.failureClass) args.failureClass = mappedFailureClass;
   if (!args.failureSource) args.failureSource = 'monitor';
-  if (args.needsUserDecision === null && verdict.failureSignal === 'needs_user_decision') args.needsUserDecision = true;
-  return { accepted: false, verdict: verdict.failureSignal, failureClass: args.failureClass };
+  if (args.needsUserDecision === null && verdict.needsUserDecision) args.needsUserDecision = true;
+  return {
+    accepted: false,
+    verdict: verdict.failureSignal,
+    rawVerdict: verdict.verdict,
+    failureClass: args.failureClass,
+    concerns: monitorConcernSummary(verdict),
+  };
 }
 
 function taskMap(graph) {
@@ -433,7 +449,7 @@ function resolveTaskSource(args) {
     artifactRoot: null,
     graphPath,
     graph,
-    taskGraphRef: displayPath(graphPath),
+    taskGraphRef: canonicalTaskGraphRef(graphPath),
     sourceSpecRef: graph.sourceSpec,
     runsDir: resolveRunsDir(args),
   };
@@ -919,12 +935,15 @@ function missingRequiredFailureDetails(run) {
   return missing;
 }
 
-function assertFailedRunStructuredDetails(run) {
+function assertFailedRunStructuredDetails(run, monitorResult = null) {
   if (run.status !== 'failed' && run.status !== 'blocked') return;
   const missing = missingRequiredFailureDetails(run);
   if (!missing.length) return;
+  const monitorContext = monitorResult && !monitorResult.accepted
+    ? `Monitor gate blocked finish (${monitorResult.rawVerdict ?? monitorResult.verdict} -> ${monitorResult.failureClass}; concerns: ${monitorResult.concerns}). `
+    : '';
   throw new Error([
-    `failed/blocked run requires structured debug detail: ${missing.join(', ')}`,
+    `${monitorContext}failed/blocked run requires structured debug detail: ${missing.join(', ')}`,
     'Add --repro-step/--repro-command/--repro-note, --localization/--localized-file, and --guard/--guard-note before finishing.',
   ].join('. '));
 }
@@ -1056,11 +1075,15 @@ function finishRun(args) {
   run.notes = uniqueStrings([...run.notes, ...args.notes]);
   mergeStructuredRunDetails(run, args);
   const targetStatus = deriveFinishStatus(run, args.status);
-  if (targetStatus === 'finished') applyMonitorGate(args, runsDir, run);
+  const monitorResult = targetStatus === 'finished' ? applyMonitorGate(args, runsDir, run) : null;
+  if (monitorResult && !monitorResult.accepted) {
+    console.error(`monitor gate blocked finish: verdict=${monitorResult.rawVerdict ?? monitorResult.verdict}; signal=${monitorResult.verdict}; failureClass=${monitorResult.failureClass}; concerns=${monitorResult.concerns}`);
+    console.error('blocked monitor finish requires structured detail: add --repro-*/--localization*/--guard* before finishing.');
+  }
   run.status = deriveFinishStatus(run, args.status);
   assertFinishedRunGuard(run);
   const failure = buildFailure(args, run.status);
-  assertFailedRunStructuredDetails(run);
+  assertFailedRunStructuredDetails(run, monitorResult);
   if (failure) run.failure = failure;
   else delete run.failure;
   const now = new Date().toISOString();

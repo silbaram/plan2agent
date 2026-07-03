@@ -6,9 +6,10 @@ import { createInterface } from 'node:readline/promises';
 import path from 'node:path';
 import process from 'node:process';
 import { Readable } from 'node:stream';
-import { validateRunData, validateRunIndexData, validateTaskGraphData, ValidationError } from './validate_artifacts.mjs';
+import { validateOrchestrationPlanData, validateRunData, validateRunIndexData, validateTaskGraphData, ValidationError } from './validate_artifacts.mjs';
+import { normalizeMonitorVerdictData } from './p2a_orchestrate.mjs';
 import { resolveIterationState } from './p2a_iteration_state.mjs';
-import { resolveRunsDir } from './p2a_run_paths.mjs';
+import { canonicalTaskGraphRef, resolveRunsDir } from './p2a_run_paths.mjs';
 import {
   P2A_ARTIFACTS_DIR,
   assertNoUninitializedScaffoldArtifactRoots,
@@ -55,6 +56,7 @@ function usage() {
     '  --spec <path>        Spec JSON path for prompt context. Only supported with --graph.',
     '  --maintenance        With --artifacts, operate on the maintenance task graph.',
     '  --note <text>        For block, record a human follow-up note in blockNote. Repeatable.',
+    '  --reopen             With todo, explicitly reopen a done task. Requires --note.',
   ].join('\n');
 }
 
@@ -75,6 +77,7 @@ function parseArgs(argv) {
   let artifactsPath = null;
   let specPath = null;
   let maintenance = false;
+  let reopen = false;
   const notes = [];
   const positional = [];
   for (let index = 0; index < rest.length; index += 1) {
@@ -87,6 +90,8 @@ function parseArgs(argv) {
       specPath = requiredValue(rest, ++index, '--spec');
     } else if (arg === '--maintenance') {
       maintenance = true;
+    } else if (arg === '--reopen') {
+      reopen = true;
     } else if (arg === '--note') {
       notes.push(requiredValue(rest, ++index, '--note', { allowLeadingDash: true }));
     } else if (arg.startsWith('--')) {
@@ -104,8 +109,9 @@ function parseArgs(argv) {
   if (!graphPath && !artifactsPath) throw new Error('--graph or --artifacts is required');
   if (artifactsPath && specPath) throw new Error('--spec is only supported with --graph; --artifacts uses the active iteration spec');
   if (graphPath) assertNotUninitializedScaffoldGraph(graphPath);
-  if (notes.length && command !== 'block') throw new Error('--note is only supported with block');
-  return { command, graphPath, artifactsPath, specPath, maintenance, notes, taskId: positional[0], extra: positional.slice(1), iterationState: null };
+  if (reopen && command !== 'todo') throw new Error('--reopen is only supported with todo');
+  if (notes.length && command !== 'block' && !(command === 'todo' && reopen)) throw new Error('--note is only supported with block or todo --reopen');
+  return { command, graphPath, artifactsPath, specPath, maintenance, reopen, notes, taskId: positional[0], extra: positional.slice(1), iterationState: null };
 }
 
 function resolveTaskInputs(args) {
@@ -201,8 +207,40 @@ function expectedRunContext(args, graph) {
   return {
     projectId: graph.projectId,
     iterationId: graph.version ?? null,
-    taskGraphRef: formatDisplayPath(path.resolve(args.graphPath)),
+    taskGraphRef: canonicalTaskGraphRef(args.graphPath),
+    graphPath: path.resolve(args.graphPath),
+    graphMode: true,
   };
+}
+
+function normalizeStoredRef(value) {
+  return typeof value === 'string' ? value.split(/[\\/]+/).join('/') : value;
+}
+
+function canonicalLegacyRef(value, basePath) {
+  if (typeof value !== 'string' || !value.trim()) return null;
+  const resolved = path.isAbsolute(value) ? value : path.resolve(basePath, value);
+  return canonicalTaskGraphRef(resolved);
+}
+
+function taskGraphRefMatches(actualRef, expectedContext) {
+  if (!expectedContext) return true;
+  if (normalizeStoredRef(actualRef) === normalizeStoredRef(expectedContext.taskGraphRef)) return true;
+  if (!expectedContext.graphMode || typeof actualRef !== 'string') return false;
+  const bases = [
+    ROOT,
+    process.cwd(),
+    path.dirname(expectedContext.graphPath),
+    path.dirname(path.dirname(expectedContext.graphPath)),
+  ];
+  return bases.some((basePath) => canonicalLegacyRef(actualRef, basePath) === expectedContext.taskGraphRef);
+}
+
+function runMatchesExpectedContext(entry, expectedContext) {
+  if (!expectedContext) return true;
+  return (!Object.hasOwn(entry, 'projectId') || entry.projectId === expectedContext.projectId)
+    && entry.iterationId === expectedContext.iterationId
+    && taskGraphRefMatches(entry.taskGraphRef, expectedContext);
 }
 
 function getByDotPath(data, dotPath) {
@@ -314,9 +352,25 @@ function runEvidenceTime(run, indexEntry) {
   return 0;
 }
 
-function latestRunForTask(args, taskId, options = {}) {
-  const strict = options.strict ?? false;
-  const graph = options.graph;
+function indexEvidenceTime(indexEntry) {
+  for (const value of [indexEntry.finishedAt, indexEntry.startedAt]) {
+    const time = Date.parse(value ?? '');
+    if (!Number.isNaN(time)) return time;
+  }
+  return 0;
+}
+
+function warnLatestRunProblem(message) {
+  console.error(`warning: ${message}`);
+}
+
+function runReadProblem(message, isLatestCandidate, strict) {
+  if (isLatestCandidate) return latestRunProblem(message, strict);
+  warnLatestRunProblem(message);
+  return null;
+}
+
+function runContextCandidates(args, taskId, graph, strict) {
   const runsDir = runsDirForTaskArgs(args);
   if (!runsDir) return latestRunProblem(`no runs directory could be resolved for ${taskId}`, strict);
   const indexPath = path.join(runsDir, 'run-index.json');
@@ -335,46 +389,80 @@ function latestRunForTask(args, taskId, options = {}) {
   const runIds = taskEntry?.runIds ?? [];
   if (!runIds.length) return latestRunProblem(`no latest run evidence found for ${taskId}; finish a successful run before marking the task done`, strict);
   const contextMismatches = [];
-  const candidates = [];
+  const candidateRefs = [];
   for (const [runOrder, runId] of runIds.entries()) {
-    const indexEntry = latestRunIndexEntry(index, taskId, runId, strict);
-    if (!indexEntry) return null;
-    if (expectedContext && (
-      indexEntry.iterationId !== expectedContext.iterationId
-      || indexEntry.taskGraphRef !== expectedContext.taskGraphRef
-    )) {
+    const indexEntry = latestRunIndexEntry(index, taskId, runId, false);
+    if (!indexEntry) {
+      warnLatestRunProblem(`run ${runId} for ${taskId} is missing from run-index runs[]`);
+      continue;
+    }
+    if (expectedContext && !runMatchesExpectedContext(indexEntry, expectedContext)) {
       contextMismatches.push(runId);
       continue;
     }
+    candidateRefs.push({
+      runId,
+      runOrder,
+      indexEntry,
+      evidenceTime: indexEvidenceTime(indexEntry),
+    });
+  }
+  candidateRefs.sort((left, right) => (right.evidenceTime - left.evidenceTime) || (right.runOrder - left.runOrder));
+  return { runsDir, index, expectedContext, contextMismatches, candidateRefs };
+}
+
+function latestRunForTask(args, taskId, options = {}) {
+  const strict = options.strict ?? false;
+  const graph = options.graph;
+  const context = runContextCandidates(args, taskId, graph, strict);
+  if (!context) return null;
+  const { runsDir, index, expectedContext, contextMismatches, candidateRefs } = context;
+  const candidates = [];
+  for (const [candidateIndex, candidateRef] of candidateRefs.entries()) {
+    const { runId, runOrder, indexEntry } = candidateRef;
+    const isLatestCandidate = candidateIndex === 0;
     const runPath = path.join(runsDir, `${runId}.json`);
     if (!existsSync(runPath) || !lstatSync(runPath).isFile()) {
-      return latestRunProblem(`latest run ${runId} for ${taskId} is missing at ${formatDisplayPath(runPath)}`, strict);
+      const problem = runReadProblem(`latest run ${runId} for ${taskId} is missing at ${formatDisplayPath(runPath)}`, isLatestCandidate, strict);
+      if (problem === null) continue;
+      return problem;
     }
     let run;
     try {
       run = JSON.parse(readFileSync(runPath, 'utf8'));
       validateRunData(run);
     } catch (error) {
-      return latestRunProblem(`could not read latest run for ${taskId}: ${error.message}`, strict);
+      const problem = runReadProblem(`could not read latest run for ${taskId}: ${error.message}`, isLatestCandidate, strict);
+      if (problem === null) continue;
+      return problem;
     }
     if (run.runId !== runId) {
-      return latestRunProblem(`latest run evidence mismatch for ${taskId}: index points to ${runId} but file contains ${run.runId}`, strict);
+      const problem = runReadProblem(`latest run evidence mismatch for ${taskId}: index points to ${runId} but file contains ${run.runId}`, isLatestCandidate, strict);
+      if (problem === null) continue;
+      return problem;
     }
     if (run.taskId !== taskId) {
-      return latestRunProblem(`latest run ${run.runId} belongs to ${run.taskId}, not ${taskId}`, strict);
+      const problem = runReadProblem(`latest run ${run.runId} belongs to ${run.taskId}, not ${taskId}`, isLatestCandidate, strict);
+      if (problem === null) continue;
+      return problem;
     }
     if (run.projectId !== index.projectId) {
-      return latestRunProblem(`latest run ${run.runId} projectId ${run.projectId} does not match run-index projectId ${index.projectId}`, strict);
+      const problem = runReadProblem(`latest run ${run.runId} projectId ${run.projectId} does not match run-index projectId ${index.projectId}`, isLatestCandidate, strict);
+      if (problem === null) continue;
+      return problem;
     }
-    if (expectedContext && (
-      run.projectId !== expectedContext.projectId
-      || run.iterationId !== expectedContext.iterationId
-      || run.taskGraphRef !== expectedContext.taskGraphRef
-    )) {
+    if (expectedContext && !runMatchesExpectedContext(run, expectedContext)) {
+      if (isLatestCandidate) return latestRunProblem(`latest run ${run.runId} is outside current task graph context`, strict);
       contextMismatches.push(run.runId);
       continue;
     }
-    assertRunMatchesIndexEntry(taskId, runId, run, indexEntry, strict);
+    try {
+      assertRunMatchesIndexEntry(taskId, runId, run, indexEntry, true);
+    } catch (error) {
+      const problem = runReadProblem(error.message, isLatestCandidate, strict);
+      if (problem === null) continue;
+      return problem;
+    }
     candidates.push({
       run,
       runOrder,
@@ -393,6 +481,54 @@ function latestRunForTask(args, taskId, options = {}) {
 
 function latestRunFailureClass(args, taskId, graph) {
   return latestRunForTask(args, taskId, { graph })?.failure?.class ?? null;
+}
+
+function orchestrationSidecarPath(runsDir, runId) {
+  return path.join(runsDir, `${runId}.orchestration.json`);
+}
+
+function readOrchestrationSidecar(runsDir, runId) {
+  const filePath = orchestrationSidecarPath(runsDir, runId);
+  if (!existsSync(filePath)) return null;
+  return validateOrchestrationPlanData(JSON.parse(readFileSync(filePath, 'utf8')));
+}
+
+function readMonitorVerdict(runsDir, sidecar) {
+  if (!sidecar?.monitorGate?.required) return null;
+  const verdictPath = path.resolve(runsDir, sidecar.monitorGate.verdictPath);
+  if (!existsSync(verdictPath) || !lstatSync(verdictPath).isFile()) {
+    throw new Error(`monitor verdict is missing: ${formatDisplayPath(verdictPath)}`);
+  }
+  return normalizeMonitorVerdictData(JSON.parse(readFileSync(verdictPath, 'utf8')));
+}
+
+function monitorRequiredRunIdsForTask(args, taskId, graph) {
+  const context = runContextCandidates(args, taskId, graph, false);
+  if (!context) return [];
+  const runIds = [];
+  for (const candidateRef of context.candidateRefs) {
+    try {
+      const sidecar = readOrchestrationSidecar(context.runsDir, candidateRef.runId);
+      if (sidecar?.monitorGate?.required) runIds.push(candidateRef.runId);
+    } catch (error) {
+      warnLatestRunProblem(`could not read orchestration sidecar for ${candidateRef.runId}: ${error.message}`);
+    }
+  }
+  return runIds;
+}
+
+function assertMonitorGateDoneEvidence(args, task, graph, run) {
+  const monitorRequiredRunIds = monitorRequiredRunIdsForTask(args, task.id, graph);
+  if (!monitorRequiredRunIds.length) return;
+  const runsDir = runsDirForTaskArgs(args);
+  const sidecar = readOrchestrationSidecar(runsDir, run.runId);
+  if (!sidecar?.monitorGate?.required) {
+    throw new Error(`${task.id} cannot be marked done because this task requires monitor gate evidence from prior run(s): ${monitorRequiredRunIds.join(', ')}. Start the retry with p2a_execute start --orchestration-plan <plan> and finish with an accepted monitor verdict.`);
+  }
+  const verdict = readMonitorVerdict(runsDir, sidecar);
+  if (!sidecar.monitorGate.acceptedVerdicts.includes(verdict.verdict) || verdict.hasConcerns) {
+    throw new Error(`${task.id} cannot be marked done because latest run ${run.runId} has no accepted monitor verdict. Start the retry with p2a_execute start --orchestration-plan <plan> and finish with concern-free verdict ${sidecar.monitorGate.acceptedVerdicts.join('|')}.`);
+  }
 }
 
 function changedPlan2AgentControlFiles(run) {
@@ -443,6 +579,7 @@ function assertDoneShortcutGuard(args, task, graph) {
   if (controlFiles.length) {
     throw new Error(`${task.id} cannot be marked done because latest run ${run.runId} changed Plan2Agent control artifacts: ${controlFiles.join(', ')}`);
   }
+  assertMonitorGateDoneEvidence(args, task, graph, run);
 }
 
 function transitionTask(graph, task, command, args = {}) {
@@ -459,7 +596,10 @@ function transitionTask(graph, task, command, args = {}) {
     assertDoneShortcutGuard(args, task, graph);
     task.status = 'done';
   } else if (command === 'block') {
-    if (task.status !== 'todo' && task.status !== 'in_progress') throw new Error(`${task.id} must be todo or in_progress before block; current status is ${task.status}`);
+    if (task.status !== 'todo' && task.status !== 'in_progress') {
+      const hint = task.status === 'done' ? '; use todo --reopen --note <reason> to reopen a completed task before new work' : '';
+      throw new Error(`${task.id} must be todo or in_progress before block; current status is ${task.status}${hint}`);
+    }
     task.status = 'blocked';
     const failureClass = latestRunFailureClass(args, task.id, graph);
     if (failureClass) task.blockReason = failureClass;
@@ -467,15 +607,27 @@ function transitionTask(graph, task, command, args = {}) {
     if (args.notes?.length) task.blockNote = args.notes.join('\n');
     else delete task.blockNote;
   } else if (command === 'todo') {
+    if (task.status === 'done') {
+      if (!args.reopen) throw new Error(`${task.id} is done; use todo ${task.id} --reopen --note <reason> to reopen it explicitly`);
+      if (!args.notes?.length) throw new Error(`${task.id} reopen requires --note <reason>`);
+      const dependents = graph.tasks.filter((candidate) => candidate.dependencies.includes(task.id) && ['in_progress', 'done'].includes(candidate.status));
+      if (dependents.length) {
+        console.error(`warning: reopening ${task.id} while dependent task(s) are already in_progress/done: ${dependents.map((candidate) => `${candidate.id}:${candidate.status}`).join(', ')}`);
+      }
+      task.status = 'todo';
+      delete task.blockReason;
+      task.blockNote = args.notes.join('\n');
+      return;
+    }
     if (task.status !== 'blocked' && task.status !== 'in_progress') throw new Error(`${task.id} must be blocked or in_progress before todo; current status is ${task.status}`);
     task.status = 'todo';
   }
 }
 
-function clearBlockReasonIfUnblocked(task, command) {
+function clearBlockReasonIfUnblocked(task, command, args = {}) {
   if (command === 'done' || command === 'todo' || command === 'start') {
     delete task.blockReason;
-    delete task.blockNote;
+    if (!(command === 'todo' && args.reopen)) delete task.blockNote;
   }
 }
 
@@ -690,7 +842,7 @@ export function main(argv = process.argv.slice(2)) {
     } else if (VALID_TRANSITIONS.has(args.command)) {
       const task = requireTask(graph, args.taskId);
       transitionTask(graph, task, args.command, args);
-      clearBlockReasonIfUnblocked(task, args.command);
+      clearBlockReasonIfUnblocked(task, args.command, args);
       saveValidatedGraph(args.graphPath, graph);
       console.log(`${task.id} status is now ${task.status}`);
       if (args.command === 'block' && task.blockReason) console.log(`- blockReason: ${task.blockReason}`);

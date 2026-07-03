@@ -82,7 +82,7 @@ Use these inputs:
    }
    ```
 
-   Use `verdict: "block"` and fill the relevant concern array when the task should not be accepted. `p2a_execute finish` and `p2a_runs finish` both enforce this verdict when an orchestration sidecar requires a monitor gate.
+   Use `verdict: "block"` and fill the relevant concern array when the task should not be accepted. When multiple concern arrays are populated, failure-class mapping priority is `scope_concerns` → `verification_concerns` → `unmet_acceptance` → `needs_user_decision`. `p2a_execute finish` and `p2a_runs finish` both enforce this verdict when an orchestration sidecar requires a monitor gate.
 
 7. Finish the run through `p2a_execute`, collecting git state and letting the CLI mark the task done or blocked:
 
