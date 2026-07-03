@@ -75,6 +75,17 @@ function runMemory(args) {
   });
 }
 
+function fixtureFailureDetailArgs(label) {
+  return [
+    '--repro-step',
+    `${label} can be reproduced from the fixture run output.`,
+    '--localization',
+    `${label} is localized by the fixture assertion.`,
+    '--guard',
+    `${label} is guarded by the fixture regression check.`,
+  ];
+}
+
 function runHandoff(args) {
   return spawnSync(process.execPath, [HANDOFF_CLI, ...args], { cwd: ROOT, encoding: 'utf8' });
 }
@@ -1334,6 +1345,19 @@ function evalRunFixture(runId, status = 'finished') {
         needsUserDecision: false,
         source: 'owner',
       },
+      reproduction: {
+        steps: ['Run webhook verification tests against invalid signatures.'],
+        commands: ['npm test -- webhook-verification'],
+        notes: [],
+      },
+      localization: {
+        findings: ['HMAC rejection path still accepts invalid signatures.'],
+        files: ['src/webhook-verification.ts'],
+      },
+      guard: {
+        checks: ['npm test -- webhook-verification covers invalid, expired, and valid signatures.'],
+        notes: [],
+      },
     } : {}),
   };
 }
@@ -1393,7 +1417,6 @@ function validateEvalFixtureCases() {
       || !result.stdout.includes('Plan2Agent eval compare')
       || !result.stdout.includes('verdict: fail')
       || !result.stdout.includes('failed_or_blocked_runs')
-      || !result.stdout.includes('structured_missingReproduction')
     ) {
       console.error('eval compare fixture failed');
       writeResultOutput(result);
@@ -1405,10 +1428,9 @@ function validateEvalFixtureCases() {
     if (
       result.status !== 0
       || !result.stdout.includes('grade: fail')
-      || !result.stdout.includes('missing structured debug detail: reproduction, localization, guard')
-      || !result.stdout.includes('Record structured debug detail before retrying')
+      || !result.stdout.includes('Mine proposal candidates')
     ) {
-      console.error('eval failed-run structured detail grade fixture failed');
+      console.error('eval failed-run grade fixture failed');
       writeResultOutput(result);
       return { status: failureStatus(result), checks };
     }
@@ -1417,10 +1439,10 @@ function validateEvalFixtureCases() {
     checks += 1;
     if (
       result.status !== 0
-      || !result.stdout.includes('proposal-run-eval-failed-structured-debug-detail')
-      || !result.stdout.includes('structured-debug-detail')
+      || !result.stdout.includes('proposal-run-eval-failed-verification_failed')
+      || !result.stdout.includes('verification_failed')
     ) {
-      console.error('proposal structured detail mining fixture failed');
+      console.error('proposal failure mining fixture failed');
       writeResultOutput(result);
       return { status: failureStatus(result), checks };
     }
@@ -1701,16 +1723,43 @@ function validateMemoryFixtureCases() {
 
   result = runMemory(['pull', '--graph', graphPath, '--dry-run']);
   checks += 1;
-  if (result.status === 0 || !result.stdout.includes('Plan2Agent memory pull dry run') || !result.stdout.includes('server: not_configured') || !result.stdout.includes('dry-run: no local files written')) {
+  if (result.status === 0 || !result.stdout.includes('Plan2Agent memory pull dry run') || !result.stdout.includes('server: not_configured') || !result.stdout.includes('dry-run: no artifact files written') || !result.stdout.includes('restore: canApply=no')) {
     console.error('memory pull dry-run not-configured fixture failed');
     writeResultOutput(result);
     return { status: result.status === 0 ? 1 : failureStatus(result), checks };
   }
 
+  const pullReportDir = mkdtempSync(path.join(tmpdir(), 'p2a-memory-pull-report-'));
+  const pullReportPath = path.join(pullReportDir, 'memory-pull-report.json');
+  result = runMemory(['pull', '--graph', graphPath, '--dry-run', '--output', pullReportPath]);
+  checks += 1;
+  const pullReport = existsSync(pullReportPath) ? JSON.parse(readFileSync(pullReportPath, 'utf8')) : null;
+  if (
+    result.status === 0
+    || !pullReport
+    || pullReport.schema_version !== 'p2a.memory_pull_preview.v1'
+    || pullReport.restorePlan?.canApply !== false
+    || pullReport.reportWrites !== 1
+  ) {
+    console.error('memory pull restore report fixture failed');
+    writeResultOutput(result);
+    console.error(JSON.stringify({ pullReport }, null, 2));
+    return { status: result.status === 0 ? 1 : failureStatus(result), checks };
+  }
+  rmSync(pullReportDir, { recursive: true, force: true });
+
   result = runMemory(['pull', '--graph', graphPath]);
   checks += 1;
   if (result.status === 0 || !result.stderr.includes('pull is preview-only for now and requires --dry-run')) {
     console.error('memory pull dry-run guard fixture failed');
+    writeResultOutput(result);
+    return { status: result.status === 0 ? 1 : failureStatus(result), checks };
+  }
+
+  result = runMemory(['pull', '--graph', graphPath, '--apply', '--yes']);
+  checks += 1;
+  if (result.status === 0 || !result.stderr.includes('memory pull --apply is not available')) {
+    console.error('memory pull apply guard fixture failed');
     writeResultOutput(result);
     return { status: result.status === 0 ? 1 : failureStatus(result), checks };
   }
@@ -1877,8 +1926,8 @@ function validateMemoryFixtureCases() {
     checks += 1;
     if (
       result.status !== 0
-      || !result.stdout.includes('structured: reproduction=0/1 localization=0/1 guard=0/1')
-      || !result.stdout.includes('Record structured debug detail for failed/blocked runs')
+      || !result.stdout.includes('structured: reproduction=1/1 localization=1/1 guard=1/1')
+      || !result.stdout.includes('Mine missing proposal candidates')
     ) {
       console.error('memory digest structured detail fixture failed');
       writeResultOutput(result);
@@ -3564,6 +3613,7 @@ function validateIterationCurrentFixtureCases() {
         executeMonitorGraphPath,
         '--run-id',
         'run-execute-monitor-fixture',
+        ...fixtureFailureDetailArgs('monitor blocked finish'),
       ]);
       checks += 1;
       if (result.status !== 0 || !result.stdout.includes('Monitor gate blocked finish: unmet_acceptance -> implementation_incomplete')) {
@@ -3743,9 +3793,8 @@ function validateIterationCurrentFixtureCases() {
       const executeMonitorReview = JSON.parse(readFileSync(executeMonitorReviewPath, 'utf8'));
       if (
         executeMonitorReview.schema_version !== 'p2a.proposal_review.v1'
-        || executeMonitorReview.summary.totalProposals !== 2
+        || executeMonitorReview.summary.totalProposals !== 1
         || !executeMonitorReview.groups.some((group) => group.classification === 'implementation_incomplete' && group.recommendedDisposition === 'defer')
-        || !executeMonitorReview.groups.some((group) => group.classification === 'structured_debug_detail' && group.proposalIds?.includes('proposal-run-execute-monitor-fixture-structured-debug-detail'))
       ) {
         console.error(`p2a_proposals review wrote unexpected review: ${caseData.id}`);
         console.error(JSON.stringify({ executeMonitorReview }, null, 2));
@@ -3780,7 +3829,7 @@ function validateIterationCurrentFixtureCases() {
       const executeMonitorImplementationCandidate = executeMonitorCuration.candidates.find((candidate) => candidate.classification === 'implementation_incomplete');
       if (
         executeMonitorCuration.schema_version !== 'p2a.proposal_curation.v1'
-        || executeMonitorCuration.summary.totalCandidates !== 2
+        || executeMonitorCuration.summary.totalCandidates !== 1
         || executeMonitorImplementationCandidate?.readiness !== 'watch'
         || executeMonitorImplementationCandidate?.separatePatchRequired !== true
       ) {
@@ -4171,6 +4220,7 @@ function validateIterationCurrentFixtureCases() {
         'run-execute-fixture-failed',
         '--test-command',
         `"${process.execPath}" -e "process.exit(1)"`,
+        ...fixtureFailureDetailArgs('execute failed verification'),
       ]);
       checks += 1;
       const executeFailedOutput = `${result.stdout ?? ''}${result.stderr ?? ''}`;
@@ -4495,6 +4545,26 @@ function validateIterationCurrentFixtureCases() {
 
       result = runRuns(['finish', '--artifacts', artifactRoot, '--run-id', failedRunId, '--status', 'failed', '--failure-class', 'verification_failed']);
       checks += 1;
+      const missingStructuredOutput = `${result.stdout ?? ''}${result.stderr ?? ''}`;
+      if (result.status === 0 || !missingStructuredOutput.includes('failed/blocked run requires structured debug detail: reproduction, localization, guard')) {
+        console.error(`p2a_runs did not reject failed finish without structured detail: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: 1, checks };
+      }
+
+      result = runRuns([
+        'finish',
+        '--artifacts',
+        artifactRoot,
+        '--run-id',
+        failedRunId,
+        '--status',
+        'failed',
+        '--failure-class',
+        'verification_failed',
+        ...fixtureFailureDetailArgs('failed fixture'),
+      ]);
+      checks += 1;
       if (result.status !== 1 || !result.stdout.includes('failure: verification_failed retryable=after_fix needsUserDecision=false source=owner')) {
         console.error(`p2a_runs failed fixture did not record verification_failed defaults: ${caseData.id}`);
         writeResultOutput(result);
@@ -4510,7 +4580,20 @@ function validateIterationCurrentFixtureCases() {
         return { status: failureStatus(result), checks };
       }
 
-      result = runRuns(['finish', '--artifacts', artifactRoot, '--run-id', blockedRunId, '--status', 'blocked', '--failure-class', 'implementation_incomplete', '--failure-source', 'monitor']);
+      result = runRuns([
+        'finish',
+        '--artifacts',
+        artifactRoot,
+        '--run-id',
+        blockedRunId,
+        '--status',
+        'blocked',
+        '--failure-class',
+        'implementation_incomplete',
+        '--failure-source',
+        'monitor',
+        ...fixtureFailureDetailArgs('blocked fixture'),
+      ]);
       checks += 1;
       if (result.status !== 0 || !result.stdout.includes('failure: implementation_incomplete retryable=after_fix needsUserDecision=false source=monitor')) {
         console.error(`p2a_runs blocked fixture did not record monitor implementation_incomplete failure: ${caseData.id}`);
@@ -4609,7 +4692,18 @@ function validateIterationCurrentFixtureCases() {
         return { status: failureStatus(result), checks };
       }
 
-      result = runRuns(['finish', '--graph', state.taskGraphPath, '--run-id', graphBlockedRunId, '--status', 'blocked', '--failure-class', 'missing_dependency']);
+      result = runRuns([
+        'finish',
+        '--graph',
+        state.taskGraphPath,
+        '--run-id',
+        graphBlockedRunId,
+        '--status',
+        'blocked',
+        '--failure-class',
+        'missing_dependency',
+        ...fixtureFailureDetailArgs('graph blocked fixture'),
+      ]);
       checks += 1;
       if (result.status !== 0 || !result.stdout.includes('failure: missing_dependency retryable=after_fix needsUserDecision=true source=owner')) {
         console.error(`p2a_runs --graph blocked fixture did not record missing_dependency failure: ${caseData.id}`);
@@ -4667,7 +4761,18 @@ function validateIterationCurrentFixtureCases() {
         writeResultOutput(result);
         return { status: failureStatus(result), checks };
       }
-      result = runRuns(['finish', '--graph', doneGuardGraphPath, '--run-id', doneGuardRunId, '--status', 'failed', '--failure-class', 'verification_failed']);
+      result = runRuns([
+        'finish',
+        '--graph',
+        doneGuardGraphPath,
+        '--run-id',
+        doneGuardRunId,
+        '--status',
+        'failed',
+        '--failure-class',
+        'verification_failed',
+        ...fixtureFailureDetailArgs('done guard failed fixture'),
+      ]);
       checks += 1;
       if (result.status !== 1) {
         console.error(`p2a_runs done guard fixture failed finish did not return failed status: ${caseData.id}`);
@@ -4833,7 +4938,20 @@ function validateIterationCurrentFixtureCases() {
         return { status: 1, checks };
       }
 
-      result = runRuns(['finish', '--artifacts', artifactRoot, '--run-id', otherRunId, '--status', 'failed', '--failure-class', 'other', '--note', 'Fixture cannot classify this failure.']);
+      result = runRuns([
+        'finish',
+        '--artifacts',
+        artifactRoot,
+        '--run-id',
+        otherRunId,
+        '--status',
+        'failed',
+        '--failure-class',
+        'other',
+        '--note',
+        'Fixture cannot classify this failure.',
+        ...fixtureFailureDetailArgs('other failure fixture'),
+      ]);
       checks += 1;
       if (result.status !== 1 || !result.stdout.includes('failure: other retryable=no needsUserDecision=true source=owner')) {
         console.error(`p2a_runs other fixture did not record defaults with note: ${caseData.id}`);
@@ -5968,27 +6086,27 @@ function validateInvalidFailedRunFixtureCase() {
     verification: [],
     notes: [],
   };
-  const index = {
+  const indexFor = (id) => ({
     schema_version: 'p2a.run_index.v1',
     projectId: 'fixture-project',
     runs: [{
-      runId,
+      runId: id,
       taskId: 'task-001',
       iterationId: 'v1-mvp',
       status: 'failed',
       agentTool: 'codex',
       workspaceRef: 'fixture-workspace',
       taskGraphRef: 'iterations/v1-mvp/gate-c-task-graph/task-graph.json',
-      runRef: `${runId}.json`,
+      runRef: `${id}.json`,
       startedAt: now,
       finishedAt: now,
     }],
-    tasks: [{ taskId: 'task-001', runIds: [runId], latestRunId: runId }],
-  };
+    tasks: [{ taskId: 'task-001', runIds: [id], latestRunId: id }],
+  });
 
   try {
     writeFileSync(path.join(runsDir, `${runId}.json`), `${JSON.stringify(run, null, 2)}\n`, 'utf8');
-    writeFileSync(path.join(runsDir, 'run-index.json'), `${JSON.stringify(index, null, 2)}\n`, 'utf8');
+    writeFileSync(path.join(runsDir, 'run-index.json'), `${JSON.stringify(indexFor(runId), null, 2)}\n`, 'utf8');
     const result = runValidator(['--runs-dir', runsDir]);
     const output = `${result.stdout ?? ''}${result.stderr ?? ''}`;
     if (result.status === 0 || !output.includes('failed run must include failure')) {
@@ -5996,7 +6114,62 @@ function validateInvalidFailedRunFixtureCase() {
       writeResultOutput(result);
       return { status: result.status === 0 ? 1 : failureStatus(result), checks: 1 };
     }
-    return { status: 0, checks: 1 };
+
+    const missingStructuredRunId = 'run-invalid-failed-without-structured-detail';
+    const missingStructuredRun = {
+      ...run,
+      runId: missingStructuredRunId,
+      failure: {
+        class: 'verification_failed',
+        retryable: 'after_fix',
+        needsUserDecision: false,
+        source: 'owner',
+      },
+    };
+    writeFileSync(path.join(runsDir, `${missingStructuredRunId}.json`), `${JSON.stringify(missingStructuredRun, null, 2)}\n`, 'utf8');
+    writeFileSync(path.join(runsDir, 'run-index.json'), `${JSON.stringify(indexFor(missingStructuredRunId), null, 2)}\n`, 'utf8');
+    const structuredResult = runValidator(['--runs-dir', runsDir]);
+    const structuredOutput = `${structuredResult.stdout ?? ''}${structuredResult.stderr ?? ''}`;
+    if (
+      structuredResult.status === 0
+      || !structuredOutput.includes('missing required keys: reproduction, localization, guard')
+    ) {
+      console.error('negative fixture invalid failed run without structured detail was not rejected by validator');
+      writeResultOutput(structuredResult);
+      return { status: structuredResult.status === 0 ? 1 : failureStatus(structuredResult), checks: 2 };
+    }
+
+    const emptyStructuredRunId = 'run-invalid-failed-with-empty-structured-detail';
+    const emptyStructuredRun = {
+      ...missingStructuredRun,
+      runId: emptyStructuredRunId,
+      reproduction: {
+        steps: [],
+        commands: [],
+        notes: [],
+      },
+      localization: {
+        findings: [],
+        files: [],
+      },
+      guard: {
+        checks: [],
+        notes: [],
+      },
+    };
+    writeFileSync(path.join(runsDir, `${emptyStructuredRunId}.json`), `${JSON.stringify(emptyStructuredRun, null, 2)}\n`, 'utf8');
+    writeFileSync(path.join(runsDir, 'run-index.json'), `${JSON.stringify(indexFor(emptyStructuredRunId), null, 2)}\n`, 'utf8');
+    const emptyStructuredResult = runValidator(['--runs-dir', runsDir]);
+    const emptyStructuredOutput = `${emptyStructuredResult.stdout ?? ''}${emptyStructuredResult.stderr ?? ''}`;
+    if (
+      emptyStructuredResult.status === 0
+      || !emptyStructuredOutput.includes('failed run must include structured debug detail: reproduction, localization, guard')
+    ) {
+      console.error('negative fixture invalid failed run with empty structured detail was not rejected by validator');
+      writeResultOutput(emptyStructuredResult);
+      return { status: emptyStructuredResult.status === 0 ? 1 : failureStatus(emptyStructuredResult), checks: 3 };
+    }
+    return { status: 0, checks: 3 };
   } finally {
     rmSync(runsDir, { recursive: true, force: true });
   }

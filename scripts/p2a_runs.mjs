@@ -846,6 +846,29 @@ function incompleteVerificationItems(run) {
   return run.verification.filter((item) => item.status === 'skipped' || item.status === 'not_run');
 }
 
+function structuredDetailHasValue(detail, fields) {
+  if (!detail || typeof detail !== 'object' || Array.isArray(detail)) return false;
+  return fields.some((field) => Array.isArray(detail[field]) && detail[field].some((value) => typeof value === 'string' && value.trim()));
+}
+
+function missingRequiredFailureDetails(run) {
+  const missing = [];
+  if (!structuredDetailHasValue(run.reproduction, ['steps', 'commands', 'notes'])) missing.push('reproduction');
+  if (!structuredDetailHasValue(run.localization, ['findings', 'files'])) missing.push('localization');
+  if (!structuredDetailHasValue(run.guard, ['checks', 'notes'])) missing.push('guard');
+  return missing;
+}
+
+function assertFailedRunStructuredDetails(run) {
+  if (run.status !== 'failed' && run.status !== 'blocked') return;
+  const missing = missingRequiredFailureDetails(run);
+  if (!missing.length) return;
+  throw new Error([
+    `failed/blocked run requires structured debug detail: ${missing.join(', ')}`,
+    'Add --repro-step/--repro-command/--repro-note, --localization/--localized-file, and --guard/--guard-note before finishing.',
+  ].join('. '));
+}
+
 function assertFinishedRunGuard(run) {
   if (run.status !== 'finished') return;
   if (run.verification.length === 0) {
@@ -860,18 +883,6 @@ function assertFinishedRunGuard(run) {
   if (incomplete.length) {
     const summary = incomplete.map((item) => `${item.type}:${item.status}`).join(', ');
     throw new Error(`finished run cannot include incomplete verification: ${summary}. Finish this run as failed/blocked with --failure-class, or start a new run with passed verification evidence.`);
-  }
-}
-
-function printRunGuardWarnings(run) {
-  if (run.status === 'failed' || run.status === 'blocked') {
-    const missing = [];
-    if (!run.reproduction) missing.push('reproduction');
-    if (!run.localization) missing.push('localization');
-    if (!run.guard) missing.push('guard');
-    if (missing.length) {
-      console.log(`- guard warning: add structured failure detail before retry/digest: ${missing.join(', ')}`);
-    }
   }
 }
 
@@ -980,6 +991,7 @@ function finishRun(args) {
   run.status = deriveFinishStatus(run, args.status);
   assertFinishedRunGuard(run);
   const failure = buildFailure(args, run.status);
+  assertFailedRunStructuredDetails(run);
   if (failure) run.failure = failure;
   else delete run.failure;
   const now = new Date().toISOString();
@@ -991,7 +1003,6 @@ function finishRun(args) {
   console.log(`- changedFiles: ${run.changedFiles.length}`);
   console.log(`- verification: ${run.verification.length}`);
   if (run.failure) console.log(`- failure: ${run.failure.class} retryable=${run.failure.retryable} needsUserDecision=${run.failure.needsUserDecision} source=${run.failure.source}`);
-  printRunGuardWarnings(run);
   printRunCommandFooter(P2A_PATHS, {
     sourceArgs: sourceRunArgs(args),
     runSourceArgs: runLifecycleSourceArgs(args),

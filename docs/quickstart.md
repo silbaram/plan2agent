@@ -33,7 +33,7 @@ node /path/to/plan2agent/scripts/p2a_handoff.mjs scaffold \
 
 `scaffold`는 co-located 정식 진입점으로, 빈 프로젝트에 하네스와 프로젝트용 `.gitignore`를 설치한다. 설치 후 `<project-dir>`에서 Claude Code/Codex/Gemini를 열고 `/p2a-harness "<한 문장 아이디어>"`를 실행한다. 산출물은 이 프로젝트의 `.plan2agent/artifacts/<project>/gate-*`에 생성된다. 승인 후 `node .plan2agent/scripts/p2a.mjs iteration init --artifacts .plan2agent/artifacts/<project>`로 반복 구조로 전환하고, `p2a.mjs execute`를 기본 진입점으로 개발 task 실행과 run tracking을 진행한다. `p2a.mjs eval grade/compare/analyze/generate/digest`는 run 평가, regression/failure cluster 점검, eval artifact 생성과 요약에 쓰고, `p2a.mjs tasks`/`p2a.mjs runs`는 세부 상태 전이와 run log를 직접 다룰 때 쓴다. 설치 후 drift 점검은 프로젝트 루트에서 `node .plan2agent/scripts/p2a.mjs update --dry-run` 또는 `upgrade --dry-run`으로 확인하고, 검토 후 안전 항목만 적용하려면 `--apply`를 붙인다. preview/apply 결과는 대상 프로젝트의 `.plan2agent/update-reports/`에 남는다. `handoff`는 plan2agent에서 이미 기획한 승인 산출물을 별도 프로젝트로 옮기는 레거시/특수 흐름으로 유지된다.
 
-Scaffold가 생성하는 `.plan2agent/`는 application source git에 커밋하지 않는 로컬 하네스 상태다. 장기 보존, 검색, 재개 기준은 `p2a_memory.mjs status/push/digest` 기반 Plan2Agent Memory 동기화를 기준으로 두고, git commit은 제품 소스코드 변경에 집중한다.
+Scaffold가 생성하는 `.plan2agent/`는 application source git에 커밋하지 않는 로컬 하네스 상태다. 장기 보존, 검색, 재개 기준은 `p2a_memory.mjs status/push/pull/search/history/digest` 기반 Plan2Agent Memory 동기화를 기준으로 두고, git commit은 제품 소스코드 변경에 집중한다.
 
 ```text
 Idea

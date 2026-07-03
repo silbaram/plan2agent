@@ -443,16 +443,6 @@ function structuredRunSummary(run) {
   };
 }
 
-function missingStructuredRunFields(run) {
-  if (!['failed', 'blocked'].includes(run.status)) return [];
-  const summary = structuredRunSummary(run);
-  return [
-    summary.hasReproduction ? null : 'reproduction',
-    summary.hasLocalization ? null : 'localization',
-    summary.hasGuard ? null : 'guard',
-  ].filter(Boolean);
-}
-
 function criterionCoverage(criterion, run) {
   const criterionTokens = [...tokenSet(criterion)];
   const evidenceTokens = tokenSet(evidenceText(run));
@@ -485,10 +475,6 @@ function gradeReasons(run, coverage, verdict) {
   if (failedChecks.length) reasons.push(`${failedChecks.length} verification check(s) failed`);
   const uncovered = coverage.filter((item) => !item.covered);
   if (uncovered.length) reasons.push(`${uncovered.length} acceptance criterion/criteria lack direct local evidence`);
-  const missingStructuredFields = missingStructuredRunFields(run);
-  if (missingStructuredFields.length) {
-    reasons.push(`failed/blocked run is missing structured debug detail: ${missingStructuredFields.join(', ')}`);
-  }
   if (!reasons.length && verdict === 'pass') reasons.push('run finished, verification passed, and acceptance criteria have local evidence');
   return reasons;
 }
@@ -556,10 +542,6 @@ function gradeNextActions(verdict, source, run) {
   ];
   if (run.status === 'failed' || run.status === 'blocked' || verdict === 'needs_evidence') {
     actions.push(`Mine proposal candidates: node .plan2agent/scripts/p2a.mjs proposals mine --runs ${displayPath(source.runsDir)} --run-id ${run.runId}`);
-  }
-  const missingStructuredFields = missingStructuredRunFields(run);
-  if (missingStructuredFields.length) {
-    actions.push(`Record structured debug detail before retrying: node .plan2agent/scripts/p2a.mjs runs record --runs ${displayPath(source.runsDir)} --run-id ${run.runId} --repro-step <step> --localization <finding> --guard <check>`);
   }
   return actions;
 }

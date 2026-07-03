@@ -79,6 +79,15 @@ function usage() {
     '  --collect-git',
     '  --changed-file <path>   Repeatable.',
     '  --note <text>           Repeatable.',
+    '  --repro-step <text>     Required with localization and guard when finishing failed/blocked. Repeatable.',
+    '  --repro-command <cmd>   Append a command that reproduces the observed issue. Repeatable.',
+    '  --repro-note <text>     Append reproduction context. Repeatable.',
+    '  --localization <text>   Required with reproduction and guard when finishing failed/blocked. Repeatable.',
+    '  --localized-file <path> Append a file implicated by localization. Repeatable.',
+    '  --fix-summary <text>    Append a concise summary of the fix. Repeatable.',
+    '  --fix-file <path>       Append a file intentionally changed by the fix. Repeatable.',
+    '  --guard <text>          Required with reproduction and localization when finishing failed/blocked. Repeatable.',
+    '  --guard-note <text>     Append guard context. Repeatable.',
     '  --no-task-transition    Finish the run without marking the task done/blocked.',
     '',
     '  --help, -h          Show this help.',
@@ -110,6 +119,15 @@ function parseArgs(argv) {
     orchestrationPlan: null,
     changedFiles: [],
     notes: [],
+    reproductionSteps: [],
+    reproductionCommands: [],
+    reproductionNotes: [],
+    localizationFindings: [],
+    localizedFiles: [],
+    fixSummaries: [],
+    fixFiles: [],
+    guardChecks: [],
+    guardNotes: [],
     verifyOptions: [],
     status: null,
     failureClass: null,
@@ -145,6 +163,15 @@ function parseArgs(argv) {
     else if (arg === '--orchestration-plan') args.orchestrationPlan = requiredValue(argv, ++index, '--orchestration-plan');
     else if (arg === '--changed-file') args.changedFiles.push(requiredValue(argv, ++index, '--changed-file'));
     else if (arg === '--note') args.notes.push(requiredValue(argv, ++index, '--note'));
+    else if (arg === '--repro-step') args.reproductionSteps.push(requiredValue(argv, ++index, '--repro-step'));
+    else if (arg === '--repro-command') args.reproductionCommands.push(requiredValue(argv, ++index, '--repro-command'));
+    else if (arg === '--repro-note') args.reproductionNotes.push(requiredValue(argv, ++index, '--repro-note'));
+    else if (arg === '--localization') args.localizationFindings.push(requiredValue(argv, ++index, '--localization'));
+    else if (arg === '--localized-file') args.localizedFiles.push(requiredValue(argv, ++index, '--localized-file'));
+    else if (arg === '--fix-summary') args.fixSummaries.push(requiredValue(argv, ++index, '--fix-summary'));
+    else if (arg === '--fix-file') args.fixFiles.push(requiredValue(argv, ++index, '--fix-file'));
+    else if (arg === '--guard') args.guardChecks.push(requiredValue(argv, ++index, '--guard'));
+    else if (arg === '--guard-note') args.guardNotes.push(requiredValue(argv, ++index, '--guard-note'));
     else if (arg === '--test') args.verifyOptions.push('--test');
     else if (arg === '--lint') args.verifyOptions.push('--lint');
     else if (arg === '--typecheck') args.verifyOptions.push('--typecheck');
@@ -208,10 +235,24 @@ function parseArgs(argv) {
   if (args.orchestrationPlan && args.command !== 'start') {
     throw new Error('--orchestration-plan is only supported with start');
   }
-  if (args.command !== 'finish' && (args.status || args.failureClass || args.retryable || args.needsUserDecision !== null || args.failureSource || args.collectGit || args.saveConfig)) {
+  if (args.command !== 'finish' && (args.status || args.failureClass || args.retryable || args.needsUserDecision !== null || args.failureSource || args.collectGit || args.saveConfig || hasStructuredDetailOptions(args))) {
     throw new Error('finish options are only supported with finish');
   }
   return args;
+}
+
+function hasStructuredDetailOptions(args) {
+  return [
+    args.reproductionSteps,
+    args.reproductionCommands,
+    args.reproductionNotes,
+    args.localizationFindings,
+    args.localizedFiles,
+    args.fixSummaries,
+    args.fixFiles,
+    args.guardChecks,
+    args.guardNotes,
+  ].some((values) => values.length > 0);
 }
 
 function requiredValue(argv, index, optionName) {
@@ -527,6 +568,15 @@ function finishRunArgs(args, finalStatus, approval = null) {
   if (args.workspace) runArgs.push('--workspace', args.workspace);
   for (const changedFile of args.changedFiles) runArgs.push('--changed-file', changedFile);
   for (const note of uniqueStrings([...approvalRunNotes(approval), ...args.notes])) runArgs.push('--note', note);
+  for (const step of args.reproductionSteps) runArgs.push('--repro-step', step);
+  for (const command of args.reproductionCommands) runArgs.push('--repro-command', command);
+  for (const note of args.reproductionNotes) runArgs.push('--repro-note', note);
+  for (const finding of args.localizationFindings) runArgs.push('--localization', finding);
+  for (const file of args.localizedFiles) runArgs.push('--localized-file', file);
+  for (const summary of args.fixSummaries) runArgs.push('--fix-summary', summary);
+  for (const file of args.fixFiles) runArgs.push('--fix-file', file);
+  for (const check of args.guardChecks) runArgs.push('--guard', check);
+  for (const note of args.guardNotes) runArgs.push('--guard-note', note);
   return runArgs;
 }
 

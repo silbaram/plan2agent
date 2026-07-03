@@ -696,6 +696,21 @@ export function validateReviewPass(filePath, expectedSources = null) {
   return validateReview(filePath, expectedSources, { requirePass: true });
 }
 
+function hasStructuredDetailValue(section, keys) {
+  if (!section || typeof section !== 'object') return false;
+  return keys.some((key) => Array.isArray(section[key])
+    && section[key].some((value) => typeof value === 'string' && value.trim().length > 0));
+}
+
+function missingRequiredStructuredRunDetails(data) {
+  if (!['failed', 'blocked'].includes(data.status)) return [];
+  return [
+    hasStructuredDetailValue(data.reproduction, ['steps', 'commands', 'notes']) ? null : 'reproduction',
+    hasStructuredDetailValue(data.localization, ['findings', 'files']) ? null : 'localization',
+    hasStructuredDetailValue(data.guard, ['checks', 'notes']) ? null : 'guard',
+  ].filter(Boolean);
+}
+
 export function validateRunData(data) {
   try {
     validateSchema(data, loadJson(SCHEMA_PATHS.run));
@@ -713,6 +728,10 @@ export function validateRunData(data) {
   }
   if (data.status !== 'started' && data.finishedAt === null) {
     throw new ValidationError(`${data.status} run must include finishedAt`);
+  }
+  const missingStructured = missingRequiredStructuredRunDetails(data);
+  if (missingStructured.length) {
+    throw new ValidationError(`${data.status} run must include structured debug detail: ${missingStructured.join(', ')}`);
   }
   return data;
 }

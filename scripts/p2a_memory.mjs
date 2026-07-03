@@ -65,7 +65,7 @@ function usage() {
     'Usage:',
     '  node .plan2agent/scripts/p2a_memory.mjs status (--artifacts <dir>|--graph <path>|--runs <dir>) [--server <url>] [--token <token>] [--json]',
     '  node .plan2agent/scripts/p2a_memory.mjs push (--artifacts <dir>|--graph <path>) [--server <url>] [--token <token>] [--dry-run] [--yes] [--json]',
-    '  node .plan2agent/scripts/p2a_memory.mjs pull (--artifacts <dir>|--graph <path>|--runs <dir>) --dry-run [--server <url>] [--token <token>] [--json]',
+    '  node .plan2agent/scripts/p2a_memory.mjs pull (--artifacts <dir>|--graph <path>|--runs <dir>) --dry-run [--server <url>] [--token <token>] [--output <path>] [--json]',
     '  node .plan2agent/scripts/p2a_memory.mjs search --query <text> [--artifacts <dir>|--graph <path>|--runs <dir>|--global] [--type <kind>] [--source-path <path>] [--limit <n>] [--server <url>] [--token <token>] [--output <path>] [--json]',
     '  node .plan2agent/scripts/p2a_memory.mjs history [--artifacts <dir>|--graph <path>|--runs <dir>|--global] [--project <id>] [--iteration <id>] [--limit <n>] [--server <url>] [--token <token>] [--output <path>] [--json]',
     '  node .plan2agent/scripts/p2a_memory.mjs digest (--artifacts <dir>|--graph <path>|--runs <dir>) [--proposals <dir>] [--output <path>] [--json]',
@@ -73,7 +73,7 @@ function usage() {
     'Commands:',
     '  status   Compare local project, iteration, document, task, run, and chunk snapshots with Memory.',
     '  push     Upsert local snapshots to Memory. Actual writes require --yes.',
-    '  pull     Preview remote Memory snapshots that differ from local files. Dry-run only.',
+    '  pull     Preview remote Memory snapshots that differ from local files and optionally write a restore report. Dry-run only.',
     '  search   Keyword-search Memory snapshots. Uses the current project context unless --global is passed.',
     '  history  Show local and remote Memory artifact lineage as a timeline.',
     '  digest   Summarize failed/blocked runs, verification gaps, and proposal queue candidates.',
@@ -94,8 +94,9 @@ function usage() {
     '  --project <id>      Source project ID filter for history.',
     '  --iteration <id>    Source iteration ID filter for history.',
     `  --limit <n>         Search/history result limit. Defaults: search=${DEFAULT_SEARCH_LIMIT}, history=${DEFAULT_HISTORY_LIMIT}.`,
-    '  --output <path>     Write search/history/digest JSON to a file.',
+    '  --output <path>     Write pull/search/history/digest JSON to a file.',
     '  --dry-run           For push, print the write plan without contacting the server. Required by pull.',
+    '  --apply             Reserved for pull apply; currently rejected until Memory exposes artifact content.',
     '  --yes               Required for push to perform server writes.',
     '  --json              Machine-readable output.',
     '  --help, -h          Show this help.',
@@ -124,6 +125,7 @@ function parseArgs(argv) {
     server: null,
     token: null,
     dryRun: false,
+    apply: false,
     yes: false,
     json: false,
     help: false,
@@ -147,6 +149,7 @@ function parseArgs(argv) {
     else if (arg === '--server') args.server = requiredValue(argv, ++index, '--server');
     else if (arg === '--token') args.token = requiredValue(argv, ++index, '--token');
     else if (arg === '--dry-run') args.dryRun = true;
+    else if (arg === '--apply') args.apply = true;
     else if (arg === '--yes') args.yes = true;
     else if (arg === '--json') args.json = true;
     else if (arg.startsWith('--')) throw new Error(`unknown option: ${arg}`);
@@ -157,12 +160,16 @@ function parseArgs(argv) {
   const sourceCount = [args.artifacts, args.graph, args.runs].filter(Boolean).length;
   if (sourceCount > 1) throw new Error('--artifacts, --graph, and --runs cannot be combined');
   if (args.command === 'push' && args.runs) throw new Error('push requires --artifacts or --graph; --runs is digest/status/pull/search only');
+  if (args.apply && args.command !== 'pull') throw new Error('--apply is only supported by pull');
+  if (args.command === 'pull' && args.apply) {
+    throw new Error('memory pull --apply is not available because the current Memory API exposes metadata/hash lookup but not artifact content. Use pull --dry-run --output <path> to write a restore report.');
+  }
   if (!['push', 'pull'].includes(args.command) && args.dryRun) throw new Error('--dry-run is only supported by push and pull');
   if (args.command === 'pull' && !args.dryRun) throw new Error('pull is preview-only for now and requires --dry-run');
   if (args.command !== 'push' && args.yes) throw new Error('--yes is only supported by push');
   if (args.command !== 'digest' && args.proposals) throw new Error('--proposals is only supported by digest');
-  if (!['search', 'history', 'digest'].includes(args.command) && args.output) {
-    throw new Error('--output is only supported by search, history, and digest');
+  if (!['pull', 'search', 'history', 'digest'].includes(args.command) && args.output) {
+    throw new Error('--output is only supported by pull, search, history, and digest');
   }
   if (args.command !== 'search' && (args.query || args.artifactType || args.sourcePath)) {
     throw new Error('--query, --type, and --source-path are only supported by search');
@@ -1153,11 +1160,14 @@ async function runPull(args) {
     ? compareSync(plan, remote.artifacts)
     : emptySync();
   const preview = buildPullPreview(sync, remoteAvailable);
+  const restorePlan = buildPullRestorePlan(preview);
   const payload = {
     schema_version: 'p2a.memory_pull_preview.v1',
     generatedAt: new Date().toISOString(),
     dryRun: true,
     localWrites: 0,
+    artifactWrites: 0,
+    reportWrites: args.output ? 1 : 0,
     context: plan.context,
     server: {
       url: connection.server,
@@ -1168,13 +1178,15 @@ async function runPull(args) {
     local: plan.summary,
     remote: summarizeRemoteArtifacts(remoteAvailable ? remote.artifacts : []),
     preview,
+    restorePlan,
     skippedRuns: plan.skippedRuns,
     limitations: [
-      'Memory pull is preview-only in this release and does not write local files.',
+      'Memory pull is preview-only in this release and does not write local artifact files.',
       'The current Memory lookup API returns artifact metadata and hashes; content apply is intentionally not performed.',
     ],
     nextActions: pullPreviewNextActions(connection, remote, preview, plan),
   };
+  if (args.output) writeJsonFile(path.resolve(args.output), payload);
   if (args.json) console.log(JSON.stringify(payload, null, 2));
   else printPullPreview(payload);
   return remoteAvailable ? 0 : 1;
@@ -1258,6 +1270,62 @@ function pullRemoteOnlyPreview(item) {
   };
 }
 
+function buildPullRestorePlan(preview) {
+  const entries = [];
+  for (const item of preview.items) {
+    if (item.action === 'review_remote_diff') {
+      entries.push({
+        action: 'manual_restore_required',
+        reason: 'remote_content_unavailable',
+        safety: 'conflict',
+        artifactType: item.artifactType,
+        sourceKey: item.sourceKey,
+        sourcePath: item.sourcePath,
+        remoteArtifactId: item.remoteArtifactId,
+        localContentHash: item.localContentHash,
+        remoteContentHash: item.remoteContentHash,
+        detail: 'Remote hash differs from local, but Memory only exposed metadata. Review search/history output before replacing local content manually.',
+      });
+    } else if (item.action === 'local_only') {
+      entries.push({
+        action: 'push_or_ignore',
+        reason: 'missing_remote',
+        safety: 'local_only',
+        artifactType: item.artifactType,
+        sourceKey: item.sourceKey,
+        sourcePath: item.sourcePath,
+        localContentHash: item.localContentHash,
+        detail: 'Local artifact is not present in Memory. Push it if this local state should be preserved.',
+      });
+    }
+  }
+  for (const item of preview.remoteOnly) {
+    entries.push({
+      action: 'manual_restore_required',
+      reason: 'remote_only',
+      safety: 'no_local_match',
+      artifactType: item.artifactType,
+      sourceKey: item.sourceKey,
+      sourcePath: item.sourcePath,
+      remoteArtifactId: item.remoteArtifactId,
+      remoteContentHash: item.remoteContentHash,
+      detail: 'Memory has no matching local source in this context, but only metadata is available to this client.',
+    });
+  }
+  return {
+    canApply: false,
+    contentEndpointAvailable: false,
+    summary: {
+      total: entries.length,
+      manualRestoreRequired: entries.filter((entry) => entry.action === 'manual_restore_required').length,
+      conflicts: entries.filter((entry) => entry.safety === 'conflict').length,
+      localOnly: entries.filter((entry) => entry.action === 'push_or_ignore').length,
+      applicable: 0,
+    },
+    entries,
+  };
+}
+
 function sourceFlag(context) {
   if (context.sourceKind === 'artifacts') return `--artifacts ${context.sourcePath}`;
   if (context.sourceKind === 'graph') return `--graph ${context.sourcePath}`;
@@ -1279,7 +1347,7 @@ function pullPreviewNextActions(connection, remote, preview, plan) {
     }
   }
   if (preview.summary.remoteDiffers > 0 || preview.summary.remoteOnly > 0) {
-    actions.push('Review remote-only/different artifacts and restore manually from Memory/search output if needed.');
+    actions.push('Write a restore report with --output <path>, then review remote-only/different artifacts before manual restore.');
   }
   if (plan.skippedRuns.length > 0) actions.push('Inspect skipped run records before using Memory as a restore source.');
   if (!actions.length) actions.push('No Memory pull differences detected.');
@@ -1292,10 +1360,12 @@ function printPullPreview(payload) {
   console.log(`- iteration: ${payload.context.iterationId}`);
   console.log(`- source: ${payload.context.sourceKind} ${payload.context.sourcePath}`);
   console.log(`- server: ${payload.server.status}${payload.server.url ? ` (${payload.server.url})` : ''}`);
-  console.log('- dry-run: no local files written');
+  console.log('- dry-run: no artifact files written');
   console.log(`- local: ${formatSummary(payload.local)}`);
   console.log(`- remote: total=${payload.remote.total}`);
   console.log(`- preview: compared=${payload.preview.compared ? 'yes' : 'no'} alreadyLocal=${payload.preview.summary.alreadyLocal} localOnly=${payload.preview.summary.localOnly} remoteDiffers=${payload.preview.summary.remoteDiffers} remoteOnly=${payload.preview.summary.remoteOnly}`);
+  console.log(`- restore: canApply=${payload.restorePlan.canApply ? 'yes' : 'no'} manual=${payload.restorePlan.summary.manualRestoreRequired} conflicts=${payload.restorePlan.summary.conflicts}`);
+  if (payload.reportWrites) console.log(`- report: written`);
   if (payload.skippedRuns.length) console.log(`- skipped runs: ${payload.skippedRuns.length}`);
   if (payload.nextActions.length) {
     console.log('next actions:');
@@ -1969,7 +2039,7 @@ function buildDigest(context, runs, skippedRuns, proposals, skippedProposals) {
       uncoveredCandidateRuns,
     },
     maintenanceCandidates,
-    nextActions: digestNextActions(context, uncoveredCandidateRuns, proposals, structuredEvidence),
+    nextActions: digestNextActions(context, uncoveredCandidateRuns, proposals),
     skippedRuns,
     skippedProposals,
   };
@@ -1997,17 +2067,7 @@ function runStructuredDetailSummary(run) {
   };
 }
 
-function structuredDetailMissingFields(run) {
-  const summary = runStructuredDetailSummary(run);
-  return [
-    summary.hasReproduction ? null : 'reproduction',
-    summary.hasLocalization ? null : 'localization',
-    summary.hasGuard ? null : 'guard',
-  ].filter(Boolean);
-}
-
 function structuredEvidenceDigest(failedRuns) {
-  const missingDetails = [];
   let withReproduction = 0;
   let withLocalization = 0;
   let withFixSummary = 0;
@@ -2018,8 +2078,6 @@ function structuredEvidenceDigest(failedRuns) {
     if (summary.hasLocalization) withLocalization += 1;
     if (summary.hasFixSummary) withFixSummary += 1;
     if (summary.hasGuard) withGuard += 1;
-    const missing = structuredDetailMissingFields(run);
-    if (missing.length) missingDetails.push({ runId: run.runId, missing });
   }
   return {
     failedOrBlockedRuns: failedRuns.length,
@@ -2030,7 +2088,6 @@ function structuredEvidenceDigest(failedRuns) {
     missingReproduction: failedRuns.length - withReproduction,
     missingLocalization: failedRuns.length - withLocalization,
     missingGuard: failedRuns.length - withGuard,
-    missingDetails: missingDetails.slice(0, 20),
   };
 }
 
@@ -2038,7 +2095,7 @@ function riskRank(risk) {
   return { high: 0, medium: 1, low: 2 }[risk] ?? 9;
 }
 
-function digestNextActions(context, uncoveredCandidateRuns, proposals, structuredEvidence) {
+function digestNextActions(context, uncoveredCandidateRuns, proposals) {
   const sourceFlag = context.sourceKind === 'artifacts'
     ? `--artifacts ${displayPath(context.sourcePath)}`
     : context.sourceKind === 'graph'
@@ -2050,10 +2107,6 @@ function digestNextActions(context, uncoveredCandidateRuns, proposals, structure
   }
   if (uncoveredCandidateRuns.length) {
     actions.push(`Mine missing proposal candidates: node .plan2agent/scripts/p2a.mjs proposals mine ${sourceFlag}`);
-  }
-  if (structuredEvidence.missingDetails.length) {
-    const runId = structuredEvidence.missingDetails[0].runId;
-    actions.push(`Record structured debug detail for failed/blocked runs: node .plan2agent/scripts/p2a.mjs runs record ${sourceFlag} --run-id ${runId} --repro-step <step> --localization <finding> --guard <check>`);
   }
   if (proposals.some((proposal) => proposal.status === 'proposed')) {
     actions.push(`Review proposal queue: node .plan2agent/scripts/p2a.mjs proposals review --proposals ${displayPath(context.proposalsDir)} --dry-run`);

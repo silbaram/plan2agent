@@ -434,7 +434,10 @@
       },
       "then": {
         "required": [
-          "failure"
+          "failure",
+          "reproduction",
+          "localization",
+          "guard"
         ]
       }
     },

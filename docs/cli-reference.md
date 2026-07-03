@@ -320,7 +320,7 @@ node .plan2agent/scripts/p2a_execute.mjs finish \
   --typecheck
 ```
 
-`start`는 run을 먼저 만들고 task를 `in_progress`로 바꾼 뒤 manual launcher prompt를 출력한다. `finish`는 verification이 실패하면 기본 failure class를 `verification_failed`로 기록하고 task를 `blocked`로 전이한다. 실패 class를 직접 지정하려면 `--status failed|blocked --failure-class <class>`를 넘긴다.
+`start`는 run을 먼저 만들고 task를 `in_progress`로 바꾼 뒤 manual launcher prompt를 출력한다. `finish`는 verification이 실패하면 기본 failure class를 `verification_failed`로 기록하고 task를 `blocked`로 전이한다. 실패 class를 직접 지정하려면 `--status failed|blocked --failure-class <class>`를 넘긴다. failed/blocked로 닫는 경우에는 `--repro-step` 또는 `--repro-command`, `--localization` 또는 `--localized-file`, `--guard` 또는 `--guard-note`를 함께 남겨야 한다.
 
 ## 6. 감독형 오케스트레이션 계획 — `p2a_orchestrate.mjs`
 
@@ -513,7 +513,7 @@ node .plan2agent/scripts/p2a_runs.mjs list \
 
 `verify`는 `.plan2agent/project.config.json`의 `testCommand`, `lintCommand`, `typecheckCommand`를 읽는다. 설정이 비어 있으면 현재 workspace의 `package.json`, lockfile, Gradle, Maven 파일을 다시 감지해 누락된 기본 명령을 채운 뒤 실행한다. 별도 명령을 쓰려면 `--test-command`, `--lint-command`, `--typecheck-command`, `--verify-command <type:cmd>`를 넘긴다. 명시 명령을 다음 실행의 기본값으로 저장하려면 `--save-config`를 함께 넘긴다. `--isolation branch|worktree`는 격리 기준을 run log에 기록하며, `--create-isolation`을 함께 줄 때만 실제 `git switch -c` 또는 `git worktree add`를 실행한다.
 
-`finish`는 `--status finished`로 닫으려는 run에 통과한 verification evidence가 없거나 `failed`/`skipped`/`not_run` verification이 남아 있으면 non-zero로 거절한다. 아직 verification evidence가 없다면 같은 run에 passed verification을 기록한 뒤 닫을 수 있지만, 이미 `failed`/`skipped`/`not_run` evidence가 남은 run은 `--status failed|blocked --failure-class <class>`로 닫고 새 run에서 성공 검증을 다시 남긴다. `failed`/`blocked` run에 `reproduction`, `localization`, `guard` 구조 필드가 빠진 경우는 후속 분석 품질을 위해 경고한다.
+`finish`는 `--status finished`로 닫으려는 run에 통과한 verification evidence가 없거나 `failed`/`skipped`/`not_run` verification이 남아 있으면 non-zero로 거절한다. 아직 verification evidence가 없다면 같은 run에 passed verification을 기록한 뒤 닫을 수 있지만, 이미 `failed`/`skipped`/`not_run` evidence가 남은 run은 `--status failed|blocked --failure-class <class>`로 닫고 새 run에서 성공 검증을 다시 남긴다. `failed`/`blocked` run은 후속 분석 품질을 위해 `reproduction`, `localization`, `guard` 구조 필드가 필수이며, 빠지면 run 파일을 쓰지 않고 non-zero로 거절한다.
 
 handoff 대상 프로젝트에서는 다음처럼 쓴다.
 
@@ -529,7 +529,7 @@ node .plan2agent/scripts/p2a_runs.mjs finish --run-id run-... --collect-git
 
 ## 9. 개선 proposal 큐 — `p2a_proposals.mjs`
 
-`p2a_proposals.mjs`는 Hermes식 자가 개선 루프의 파일 기반 MVP다. run log, orchestration sidecar, monitor verdict, structured debug detail을 읽어 skill/agent/CLI 개선 후보를 `p2a.skill_proposal.v1` JSON으로 만들고, 사람이 검토할 review/curation artifact, non-applying patch draft, approval artifact를 생성한다. failed/blocked run에 `reproduction`, `localization`, `guard`가 빠져 있으면 structured debug detail 보강 proposal도 생성한다. proposal 적용은 자동으로 하지 않고 승인된 maintenance task를 별도 실행한다.
+`p2a_proposals.mjs`는 Hermes식 자가 개선 루프의 파일 기반 MVP다. run log, orchestration sidecar, monitor verdict, structured debug detail을 읽어 skill/agent/CLI 개선 후보를 `p2a.skill_proposal.v1` JSON으로 만들고, 사람이 검토할 review/curation artifact, non-applying patch draft, approval artifact를 생성한다. failed/blocked run은 schema와 finish 단계에서 `reproduction`, `localization`, `guard`를 필수로 요구하므로, proposal mine은 유효한 실패 run의 failure class와 verification gap을 중심으로 후보를 만든다. proposal 적용은 자동으로 하지 않고 승인된 maintenance task를 별도 실행한다.
 
 기본 저장 위치:
 
@@ -623,9 +623,9 @@ node .plan2agent/scripts/p2a_eval.mjs digest \
 
 `p2a_eval`은 agents-cli eval 제품군과 1:1 parity를 목표로 하지 않는다. P2A에서는 LLM response dataset, optimize, cloud submit/results 대신 로컬 spec/task/run/proposal artifact를 대상으로 하는 보수적인 품질 루프만 제공한다.
 
-`grade`는 한 run을 해당 task의 acceptance criteria와 verification evidence에 대조한다. run이 failed/blocked거나 verification 실패가 있으면 `fail`, verification이 없거나 run이 finished가 아니면 `needs_evidence`, 일부 acceptance evidence만 보이면 `partial`, finished run + verification + acceptance evidence가 모두 맞으면 `pass`를 출력한다. `reproduction`, `localization`, `fixSummary`, `guard`는 acceptance evidence 텍스트와 grade JSON의 `run.structuredEvidence`에 포함되며, failed/blocked run에서 reproduction/localization/guard가 빠지면 후속 기록 명령을 제안한다. 이 평가는 보수적인 로컬 증거 점검이므로 최종 승인 판단은 사람이 run evidence와 task acceptance를 함께 확인한다.
+`grade`는 한 run을 해당 task의 acceptance criteria와 verification evidence에 대조한다. run이 failed/blocked거나 verification 실패가 있으면 `fail`, verification이 없거나 run이 finished가 아니면 `needs_evidence`, 일부 acceptance evidence만 보이면 `partial`, finished run + verification + acceptance evidence가 모두 맞으면 `pass`를 출력한다. `reproduction`, `localization`, `fixSummary`, `guard`는 acceptance evidence 텍스트와 grade JSON의 `run.structuredEvidence`에 포함된다. 신규 run validation 기준에서는 failed/blocked run의 reproduction/localization/guard에 실제 값이 있어야 grade/analyze 입력으로 유효하다. 이 평가는 보수적인 로컬 증거 점검이므로 최종 승인 판단은 사람이 run evidence와 task acceptance를 함께 확인한다.
 
-`compare`는 두 artifact root 또는 runs directory의 run status, verification failure/gap, skipped run, task done count를 비교해 `pass|warn|fail` regression verdict를 낸다. candidate에 failed/blocked run이나 verification failure가 늘면 `fail`, verification gap이나 skipped run이 늘면 `warn`이다. candidate의 failed/blocked run에서 structured debug detail 누락이 baseline보다 늘면 `structured_missingReproduction`, `structured_missingLocalization`, `structured_missingGuard` warning signal을 남긴다.
+`compare`는 두 artifact root 또는 runs directory의 run status, verification failure/gap, skipped run, task done count를 비교해 `pass|warn|fail` regression verdict를 낸다. candidate에 failed/blocked run이나 verification failure가 늘면 `fail`, verification gap이나 skipped run이 늘면 `warn`이다. 신규 run schema 기준에서는 failed/blocked run의 `reproduction`, `localization`, `guard`가 필수이므로, 이 값이 빠진 run은 비교 대상 이전의 artifact validation 단계에서 걸러진다.
 
 `analyze`는 failed/blocked run, failed verification, verification gap을 failure cluster로 묶고 proposal coverage를 계산한다. artifact root를 입력하면 각 cluster에 `p2a_iteration maintenance add` 후보 명령을 붙이고, scope/dependency 계열 cluster는 `p2a_iteration open ... draft`로 Gate A/B delta draft를 여는 명령도 함께 제안한다. 기본 실행은 파일을 자동 수정하지 않으며, `--maintenance-draft <path>`를 주면 maintenance task draft JSON을 저장한다. `--apply-maintenance --yes`는 draft된 maintenance task를 maintenance graph에 적용하고 `eval/maintenance-apply-report.json`을 남긴다. 먼저 확인하려면 `--apply-maintenance --dry-run`을 사용한다.
 
@@ -646,7 +646,8 @@ node .plan2agent/scripts/p2a_memory.mjs push \
 P2A_MEMORY_URL=http://localhost:8080 \
 node .plan2agent/scripts/p2a_memory.mjs pull \
   --artifacts .plan2agent/artifacts/<project_id> \
-  --dry-run
+  --dry-run \
+  --output .plan2agent/artifacts/<project_id>/memory-pull-report.json
 
 P2A_MEMORY_URL=http://localhost:8080 \
 node .plan2agent/scripts/p2a_memory.mjs push \
@@ -672,7 +673,7 @@ node .plan2agent/scripts/p2a_memory.mjs digest \
 
 `p2a info --json`은 `enhancements.memory`에 mode, server env, server/token 설정 여부, push policy, manifest/config sync 상태를 노출한다. `p2a_doctor --dev`는 Memory capability가 활성화된 프로젝트에서 memory manifest/config drift, runtime script, server env config, explicit approval push policy, sync tier 기본값을 검사한다. 이 검사는 서버 프로세스가 떠 있어야 통과하는 live probe가 아니라 로컬 설정/안전 정책 점검이다.
 
-`pull --dry-run`은 Memory `/api/artifacts`의 metadata/hash 조회 결과를 로컬 계획과 비교해 `alreadyLocal`, `localOnly`, `remoteDiffers`, `remoteOnly` preview를 출력한다. 이 명령은 preview-only이며 로컬 파일을 쓰지 않는다. 현재 Memory lookup API는 artifact 본문 적용용 content endpoint가 아니라 metadata/hash 조회 표면이므로, remote-only/different 항목은 사람이 검색/조회 결과를 확인한 뒤 수동 복구 대상으로 판단한다.
+`pull --dry-run`은 Memory `/api/artifacts`의 metadata/hash 조회 결과를 로컬 계획과 비교해 `alreadyLocal`, `localOnly`, `remoteDiffers`, `remoteOnly` preview와 `restorePlan`을 출력한다. `--output <path>`를 주면 같은 payload를 JSON report로 저장해 remote-only/different 항목, 충돌 여부, 수동 복구 필요 사유를 검토할 수 있다. 이 명령은 preview-only이며 로컬 artifact 파일을 쓰지 않는다. 현재 Memory lookup API는 artifact 본문 적용용 content endpoint가 아니라 metadata/hash 조회 표면이므로, `pull --apply`는 명시적으로 거절되고 remote-only/different 항목은 사람이 검색/조회 결과를 확인한 뒤 수동 복구 대상으로 판단한다.
 
 `search`는 Memory `/api/search/keyword`를 호출해 동기화된 document chunk와 snapshot 본문을 keyword로 조회한다. `--artifacts`, `--graph`, `--runs` 중 하나를 주면 CLI가 로컬 context를 읽고 서버 canonical project/iteration id로 scope를 좁힌다. `--global`을 주면 project/iteration filter 없이 검색한다. `--type document|chunk|task|run|graph|project|iteration`, `--source-path`, `--limit`으로 결과를 더 좁힐 수 있다. 현재 서버 keyword index의 주 검색 대상은 document/chunk content이므로 task/run type filter는 해당 artifact가 searchable content로 인덱싱된 경우에만 결과가 나온다. 서버가 설정되지 않았거나 연결할 수 없으면 non-zero exit와 복구 next action을 출력한다.
 
@@ -680,7 +681,7 @@ node .plan2agent/scripts/p2a_memory.mjs digest \
 
 `push`는 같은 계획을 Memory write DTO로 변환한다. `--dry-run`은 서버에 접속하지 않고 write 순서와 수량만 보여준다. 실제 서버 write는 `--yes`가 있어야 하며, project → iteration → document snapshots/chunks → task graph → tasks → runs 순서로 upsert한다. 인증이 필요한 Memory 서버는 `--token` 또는 `P2A_MEMORY_TOKEN` 값을 `X-P2A-Local-Token` 헤더로 받는다.
 
-`digest`는 로컬 run index와 proposal queue를 읽어 failed/blocked run, failure class, verification failure/gap, proposal coverage, structured debug detail coverage를 요약한다. proposal 후보가 빠진 run이 있으면 `p2a_proposals.mjs mine` 명령을 next action으로 제안하고, failed/blocked run에 reproduction/localization/guard가 빠져 있으면 `p2a_runs record`로 보강하는 명령을 제안한다. 이미 proposed 상태인 항목은 review/curate 흐름으로 연결한다.
+`digest`는 로컬 run index와 proposal queue를 읽어 failed/blocked run, failure class, verification failure/gap, proposal coverage, structured debug detail coverage를 요약한다. proposal 후보가 빠진 run이 있으면 `p2a_proposals.mjs mine` 명령을 next action으로 제안한다. failed/blocked run의 reproduction/localization/guard 누락은 신규 schema에서 유효하지 않은 artifact로 취급되며, 이미 proposed 상태인 항목은 review/curate 흐름으로 연결한다.
 
 ## 12. 인계 — `p2a_handoff.mjs`
 

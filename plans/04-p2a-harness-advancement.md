@@ -15,10 +15,10 @@
 | 진입/진단 | `p2a info`, `p2a_doctor`, `doctor --dev`로 설치 상태, capability drift, provider/dev skill 상태, project state를 확인하는 진입 명령을 정리했다. |
 | 업데이트/업그레이드 | `update`, `upgrade --dry-run`, preview/apply report, 부분 실패 non-zero 처리와 복구 안내를 정리했다. |
 | capability 확장 | `enhance dev-skills`, `enhance memory`, `enhance gui`, `enhance orchestration`, `enhance proposals` 흐름을 capability 단위로 분리했다. |
-| run 구조화 | run schema와 `p2a_runs`에 `reproduction`, `localization`, `fixSummary`, `guard` 기록 흐름을 추가하고, failed/blocked run의 누락을 경고한다. |
+| run 구조화 | run schema와 artifact validation, `p2a_runs`에 `reproduction`, `localization`, `fixSummary`, `guard` 기록 흐름을 추가하고, failed/blocked run의 필수 debug detail 누락은 validation/finish에서 차단한다. |
 | eval 루프 | `p2a_eval grade/compare/analyze/generate/digest`로 run evidence, acceptance coverage, failure cluster, maintenance draft, digest를 생성한다. |
-| proposal 연결 | `p2a_proposals`가 failed/blocked run, verification gap, structured debug detail 누락을 maintenance proposal 후보로 만든다. |
-| Memory CLI | `p2a_memory status/push/pull --dry-run/search/history/digest`로 로컬 artifact와 Memory 서버의 동기화, 검색, 회고 흐름을 지원한다. |
+| proposal 연결 | `p2a_proposals`가 유효한 failed/blocked run의 failure class와 verification gap을 maintenance proposal 후보로 만든다. |
+| Memory CLI | `p2a_memory status/push/pull --dry-run/search/history/digest`로 로컬 artifact와 Memory 서버의 동기화, 검색, 회고 흐름을 지원하고, pull은 metadata/hash 기반 restore report를 생성한다. |
 | GUI | GUI Overview가 `p2a info`, `p2a_doctor`, update preview/apply report, eval analysis/digest, memory digest/history/search report를 읽어 operational card로 표시한다. |
 
 ### 0.2 실제 Memory 서버 통합검증
@@ -34,10 +34,12 @@
 | `memory status` 재조회 | `synced=79`, `missingRemote=0`, `remoteDiffers=0`, `extraRemote=0` 확인 |
 | `memory search` | `PostgreSQL` keyword 검색 결과 5건 확인 |
 | `memory history` | remote run timeline 조회 확인 |
-| `memory pull --dry-run` | `alreadyLocal=79`, `remoteDiffers=0`, `remoteOnly=0` 확인 |
+| `memory pull --dry-run` | `alreadyLocal=79`, `remoteDiffers=0`, `remoteOnly=0` preview 확인 |
 | DB row count | `projects=1`, `iterations=1`, `documents=5`, `task_graphs=1`, `tasks=17`, `runs=19`, `document_chunks=35` 확인 |
 
 통합검증 중 `p2a_memory`가 `p2a-project-*` 형태의 안정 ID를 canonical server ID로 전송해 서버의 UUID 검증에 실패하는 문제가 발견됐다. 이를 deterministic UUID 생성 방식으로 수정했고, fixture에 canonical UUID 검증을 추가했다. 로컬/P2A 식별자는 `sourceProjectId`, `sourceIterationId`, `sourceTaskId`, `sourceRunId`, metadata, source reference로 유지한다.
+
+`memory pull --dry-run --output`의 restore report 구조는 local fixture 회귀검증에서 확인했다. 현재 Memory lookup API는 artifact 본문 적용용 content endpoint가 아니므로 `pull --apply`는 명시적으로 거절하고, remote-only/different 항목은 metadata/hash 기반 수동 복구 대상으로 보고한다.
 
 ### 0.3 범위 정리
 
