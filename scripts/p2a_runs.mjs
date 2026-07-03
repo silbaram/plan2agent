@@ -27,6 +27,7 @@ import {
   singleArtifactProjectRoot,
 } from './p2a_paths.mjs';
 import {
+  DEFAULT_VERIFICATION_TIMEOUT_MS,
   detectProjectCommands,
   mergeDetectedProjectConfig,
   mergeExplicitVerificationCommands,
@@ -281,7 +282,7 @@ function hasStructuredDetailOptions(args) {
 
 function requiredValue(argv, index, optionName) {
   const value = argv[index];
-  if (!value) throw new Error(`${optionName} requires a value`);
+  if (!value || value.startsWith('--')) throw new Error(`missing value for ${optionName}`);
   return value;
 }
 
@@ -773,6 +774,12 @@ function verificationSpecs(args, config) {
   });
 }
 
+function verificationTimeoutMs(config) {
+  const value = Number(config?.verificationTimeoutMs);
+  if (Number.isFinite(value) && value > 0) return Math.trunc(value);
+  return DEFAULT_VERIFICATION_TIMEOUT_MS;
+}
+
 function configRequestsNeedDetection(args, config) {
   if (!args.verifyRequests.length) {
     return !configuredCommand(config, 'test') || !configuredCommand(config, 'lint') || !configuredCommand(config, 'typecheck');
@@ -807,7 +814,7 @@ function prepareProjectConfigForVerification(args, runsDir, run, workspacePath) 
   return { config, saved };
 }
 
-function runVerificationCommand(spec, workspacePath) {
+function runVerificationCommand(spec, workspacePath, timeoutMs) {
   if (spec.status === 'skipped') return spec;
   const startedAt = new Date();
   const result = spawnSync(spec.command, {
@@ -815,19 +822,24 @@ function runVerificationCommand(spec, workspacePath) {
     shell: true,
     encoding: 'utf8',
     maxBuffer: 1024 * 1024 * 10,
+    timeout: timeoutMs,
   });
   const finishedAt = new Date();
   const exitCode = typeof result.status === 'number' ? result.status : 1;
+  const timedOut = result.error?.code === 'ETIMEDOUT' || result.signal === 'SIGTERM';
+  const stderrTail = timedOut
+    ? tail([result.stderr, result.error?.message, `verification command timed out after ${timeoutMs}ms`].filter(Boolean).join('\n'))
+    : tail([result.stderr, result.error?.message].filter(Boolean).join('\n'));
   return {
     type: spec.type,
     command: spec.command,
-    status: exitCode === 0 ? 'passed' : 'failed',
+    status: timedOut ? 'failed' : (exitCode === 0 ? 'passed' : 'failed'),
     exitCode,
     durationMs: Math.max(0, finishedAt.getTime() - startedAt.getTime()),
     startedAt: startedAt.toISOString(),
     finishedAt: finishedAt.toISOString(),
     stdoutTail: tail(result.stdout),
-    stderrTail: tail([result.stderr, result.error?.message].filter(Boolean).join('\n')),
+    stderrTail,
     source: spec.source,
   };
 }
@@ -1012,7 +1024,8 @@ function verifyRun(args) {
   const configUpdate = prepareProjectConfigForVerification(args, runsDir, run, workspacePath);
   const config = configUpdate.config;
   const specs = verificationSpecs(args, config);
-  const results = specs.map((spec) => runVerificationCommand(spec, workspacePath));
+  const timeoutMs = verificationTimeoutMs(config);
+  const results = specs.map((spec) => runVerificationCommand(spec, workspacePath, timeoutMs));
   run.verification.push(...results);
   run.updatedAt = new Date().toISOString();
   writeRun(runsDir, run);

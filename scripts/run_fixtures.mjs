@@ -16,6 +16,7 @@ import {
 } from './validate_artifacts.mjs';
 import { compareSync } from './p2a_memory.mjs';
 import { PROJECT_RUNTIME_SCHEMA_FILES, PROJECT_RUNTIME_SCRIPT_FILES } from './p2a_tool_manifest.mjs';
+import { shellQuote } from './p2a_run_commands.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const ROOT = path.resolve(path.dirname(__filename), '..');
@@ -149,9 +150,14 @@ function writeResultOutput(result) {
 
 function writeFakeProviderCli(binDir, command, versionOutput) {
   mkdirSync(binDir, { recursive: true });
-  const commandPath = path.join(binDir, command);
-  writeFileSync(commandPath, `#!/usr/bin/env node\nconsole.log(${JSON.stringify(versionOutput)});\n`, 'utf8');
-  chmodSync(commandPath, 0o755);
+  const commandPath = process.platform === 'win32'
+    ? path.join(binDir, `${command}.cmd`)
+    : path.join(binDir, command);
+  const contents = process.platform === 'win32'
+    ? `@echo off\r\necho ${versionOutput}\r\n`
+    : `#!/usr/bin/env node\nconsole.log(${JSON.stringify(versionOutput)});\n`;
+  writeFileSync(commandPath, contents, 'utf8');
+  if (process.platform !== 'win32') chmodSync(commandPath, 0o755);
   return commandPath;
 }
 
@@ -165,6 +171,10 @@ function normalizeFixturePath(filePath) {
     return relative.split(path.sep).join('/');
   }
   return filePath.split(path.sep).join('/');
+}
+
+function quotedCommand(parts) {
+  return parts.map(shellQuote).join(' ');
 }
 
 function sourceDocumentId(projectId, iterationId, sourcePath) {
@@ -301,6 +311,7 @@ function validateScaffoldFixtureCase() {
       || manifest.provenance?.mode !== 'scaffold'
       || manifest.aiToolTargets.join(',') !== 'codex,claude,gemini'
       || config.testCommand !== null
+      || config.verificationTimeoutMs !== 600000
       || config.runTracking?.runsDir !== '.plan2agent/runs'
       || config.devExecution?.scopePolicy !== 'task_only'
       || config.devExecution?.verificationPolicy !== 'required_for_done'
@@ -416,10 +427,10 @@ function validateScaffoldFixtureCase() {
     );
     result = runTargetP2a(signalDispatchRoot, ['tasks', 'ready']);
     checks += 1;
-    if (
-      result.status === 0
-      || !result.stderr.includes('p2a error: command terminated by signal SIGTERM')
-    ) {
+    const signalDispatchAccepted = process.platform === 'win32'
+      ? result.status !== 0
+      : result.status !== 0 && result.stderr.includes('p2a error: command terminated by signal SIGTERM');
+    if (!signalDispatchAccepted) {
       console.error('top-level p2a signal dispatch fixture failed');
       writeResultOutput(result);
       return { status: result.status === 0 ? 1 : failureStatus(result), checks };
@@ -464,6 +475,7 @@ function validateScaffoldFixtureCase() {
       result.status !== 0
       || lazyConfig.packageManager !== 'npm'
       || lazyConfig.testCommand !== 'npm test'
+      || lazyConfig.verificationTimeoutMs !== 600000
       || !result.stdout.includes('saved detected packageManager,installCommand,testCommand')
       || lazyRun.verification[0]?.status !== 'passed'
       || lazyRun.verification[0]?.command !== 'npm test'
@@ -1043,6 +1055,7 @@ function validateScaffoldFixtureCase() {
 
     const p2aUpdateRoot = path.join(tempRoot, 'p2a-update-target');
     cpSync(targetRoot, p2aUpdateRoot, { recursive: true });
+    writeFileSync(path.join(p2aUpdateRoot, '.plan2agent', 'scripts', 'p2a_eval.mjs'), 'stale runtime script\n', 'utf8');
     result = runTargetP2a(p2aUpdateRoot, ['update', '--dry-run']);
     checks += 1;
     if (
@@ -1077,10 +1090,11 @@ function validateScaffoldFixtureCase() {
     unlinkSync(path.join(legacyP2aMissingRoot, '.plan2agent', 'scripts', 'p2a.mjs'));
     result = runHandoffFrom(tempRoot, ['update', '--target', legacyP2aMissingRoot]);
     checks += 1;
+    const legacyApplyCommand = quotedCommand(['node', P2A_CLI, 'update', '--target', legacyP2aMissingRoot, '--apply']);
     if (
       result.status !== 0
       || !result.stdout.includes('Plan2Agent update preview')
-      || !result.stdout.includes(`Apply safe updates with: node ${P2A_CLI} update --target ${legacyP2aMissingRoot} --apply`)
+      || !result.stdout.includes(`Apply safe updates with: ${legacyApplyCommand}`)
     ) {
       console.error('legacy update preview next action fixture failed');
       writeResultOutput(result);
@@ -2495,6 +2509,33 @@ function validateIterationCurrentFixtureCases() {
         return { status: 1, checks };
       }
 
+      result = runTasks(['ready', '--graph', state.taskGraphPath]);
+      checks += 1;
+      if (
+        result.status !== 0
+        || !result.stderr.includes('--graph mode does not check Gate B/D prerequisites')
+      ) {
+        console.error(`p2a_tasks --graph warning fixture failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: failureStatus(result), checks };
+      }
+
+      const missingValueChecks = [
+        ['p2a_tasks', runTasks(['block', '--graph', state.taskGraphPath, 'task-001', '--note', '--bad'])],
+        ['p2a_runs', runRuns(['finish', '--graph', state.taskGraphPath, '--run-id', 'run-missing-note', '--note', '--collect-git'])],
+        ['p2a_execute', runExecute(['finish', '--graph', state.taskGraphPath, '--run-id', 'run-missing-note', '--note', '--collect-git'])],
+        ['p2a_orchestrate', runOrchestrate(['plan', '--graph', '--task', 'task-001'])],
+      ];
+      for (const [label, checkResult] of missingValueChecks) {
+        checks += 1;
+        const output = `${checkResult.stdout ?? ''}${checkResult.stderr ?? ''}`;
+        if (checkResult.status === 0 || !output.includes('missing value for')) {
+          console.error(`${label} did not reject missing flag value: ${caseData.id}`);
+          writeResultOutput(checkResult);
+          return { status: 1, checks };
+        }
+      }
+
       const executeGraphPath = path.join(tempRoot, 'p2a-execute', 'gate-c-task-graph', 'task-graph.json');
       mkdirSync(path.dirname(executeGraphPath), { recursive: true });
       writeFileSync(executeGraphPath, readFileSync(state.taskGraphPath, 'utf8'), 'utf8');
@@ -2510,8 +2551,32 @@ function validateIterationCurrentFixtureCases() {
         'run-execute-fixture',
       ]);
       checks += 1;
-      if (result.status !== 0 || !result.stdout.includes('Plan2Agent supervised task execution')) {
+      if (
+        result.status !== 0
+        || !result.stdout.includes('Plan2Agent supervised task execution')
+        || !result.stderr.includes('--graph mode does not check Gate B/D prerequisites')
+      ) {
         console.error(`p2a_execute plan fixture check failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: failureStatus(result), checks };
+      }
+
+      result = runOrchestrate([
+        'plan',
+        '--graph',
+        executeGraphPath,
+        '--spec',
+        state.specPath,
+        '--task',
+        'task-001',
+      ]);
+      checks += 1;
+      if (
+        result.status !== 0
+        || !result.stdout.includes('"schema_version": "p2a.orchestration_plan.v1"')
+        || !result.stderr.includes('--graph mode does not check Gate B/D prerequisites')
+      ) {
+        console.error(`p2a_orchestrate --graph warning fixture failed: ${caseData.id}`);
         writeResultOutput(result);
         return { status: failureStatus(result), checks };
       }
@@ -4445,17 +4510,18 @@ function validateIterationCurrentFixtureCases() {
         'Fixture run started.',
       ]);
       checks += 1;
+      const quotedArtifactRoot = shellQuote(artifactRoot);
       if (
         result.status !== 0
         || !result.stdout.includes(`Plan2Agent run started: ${fixtureRunId}`)
         || !result.stdout.includes(`resume: node `)
-        || !result.stdout.includes(`p2a.mjs execute resume --artifacts ${artifactRoot} --run-id ${fixtureRunId}`)
+        || !result.stdout.includes(`p2a.mjs execute resume --artifacts ${quotedArtifactRoot} --run-id ${fixtureRunId}`)
         || !result.stdout.includes(`status: node `)
-        || !result.stdout.includes(`p2a.mjs execute status --artifacts ${artifactRoot} --run-id ${fixtureRunId}`)
+        || !result.stdout.includes(`p2a.mjs execute status --artifacts ${quotedArtifactRoot} --run-id ${fixtureRunId}`)
         || !result.stdout.includes(`finish: node `)
-        || !result.stdout.includes(`p2a.mjs execute finish --artifacts ${artifactRoot} --run-id ${fixtureRunId} --test --lint --typecheck`)
+        || !result.stdout.includes(`p2a.mjs execute finish --artifacts ${quotedArtifactRoot} --run-id ${fixtureRunId} --test --lint --typecheck`)
         || !result.stdout.includes(`review: node `)
-        || !result.stdout.includes(`p2a.mjs proposals mine --artifacts ${artifactRoot} --run-id ${fixtureRunId}`)
+        || !result.stdout.includes(`p2a.mjs proposals mine --artifacts ${quotedArtifactRoot} --run-id ${fixtureRunId}`)
       ) {
         console.error(`p2a_runs start fixture check failed: ${caseData.id}`);
         writeResultOutput(result);
@@ -4846,7 +4912,8 @@ function validateIterationCurrentFixtureCases() {
       }
 
       const graphBlockedRunId = 'run-fixture-graph-blocked';
-      result = runRuns(['start', '--graph', state.taskGraphPath, '--task', 'task-001', '--run-id', graphBlockedRunId, '--agent-tool', 'codex', '--workspace-ref', 'fixture-workspace']);
+      const graphBlockedGraphPath = copyWebhookTaskGraph(tempRoot, 'p2a-graph-blocked');
+      result = runRuns(['start', '--graph', graphBlockedGraphPath, '--task', 'task-001', '--run-id', graphBlockedRunId, '--agent-tool', 'codex', '--workspace-ref', 'fixture-workspace']);
       checks += 1;
       if (result.status !== 0) {
         console.error(`p2a_runs --graph blocked fixture start failed: ${caseData.id}`);
@@ -4857,7 +4924,7 @@ function validateIterationCurrentFixtureCases() {
       result = runRuns([
         'finish',
         '--graph',
-        state.taskGraphPath,
+        graphBlockedGraphPath,
         '--run-id',
         graphBlockedRunId,
         '--status',
@@ -4873,17 +4940,92 @@ function validateIterationCurrentFixtureCases() {
         return { status: failureStatus(result), checks };
       }
 
-      result = runTasks(['block', '--graph', state.taskGraphPath, 'task-001']);
+      result = runTasks(['block', '--graph', graphBlockedGraphPath, 'task-001']);
       checks += 1;
       if (result.status !== 0 || !result.stdout.includes('- blockReason: missing_dependency')) {
         console.error(`p2a_tasks block --graph did not mirror latest run failure class: ${caseData.id}`);
         writeResultOutput(result);
         return { status: failureStatus(result), checks };
       }
-      const graphBlockedTaskGraph = JSON.parse(readFileSync(state.taskGraphPath, 'utf8'));
+      const graphBlockedTaskGraph = JSON.parse(readFileSync(graphBlockedGraphPath, 'utf8'));
       if (graphBlockedTaskGraph.tasks.find((task) => task.id === 'task-001')?.blockReason !== 'missing_dependency') {
         console.error(`p2a_tasks block --graph did not persist blockReason: ${caseData.id}`);
         console.error(JSON.stringify(graphBlockedTaskGraph.tasks.find((task) => task.id === 'task-001'), null, 2));
+        return { status: 1, checks };
+      }
+
+      const blockNoteGraphPath = copyWebhookTaskGraph(tempRoot, 'p2a-block-note');
+      result = runTasks(['block', '--graph', blockNoteGraphPath, 'task-001', '--note', 'Waiting for owner confirmation.']);
+      checks += 1;
+      const blockNoteGraph = JSON.parse(readFileSync(blockNoteGraphPath, 'utf8'));
+      const blockNoteTask = blockNoteGraph.tasks.find((task) => task.id === 'task-001');
+      if (
+        result.status !== 0
+        || !result.stdout.includes('- blockNote: Waiting for owner confirmation.')
+        || blockNoteTask?.status !== 'blocked'
+        || blockNoteTask?.blockNote !== 'Waiting for owner confirmation.'
+      ) {
+        console.error(`p2a_tasks block note fixture failed: ${caseData.id}`);
+        writeResultOutput(result);
+        console.error(JSON.stringify({ blockNoteTask }, null, 2));
+        return { status: failureStatus(result), checks };
+      }
+      result = runTasks(['todo', '--graph', blockNoteGraphPath, 'task-001']);
+      checks += 1;
+      const todoAfterBlockGraph = JSON.parse(readFileSync(blockNoteGraphPath, 'utf8'));
+      const todoAfterBlockTask = todoAfterBlockGraph.tasks.find((task) => task.id === 'task-001');
+      if (
+        result.status !== 0
+        || todoAfterBlockTask?.status !== 'todo'
+        || Object.hasOwn(todoAfterBlockTask, 'blockNote')
+        || Object.hasOwn(todoAfterBlockTask, 'blockReason')
+      ) {
+        console.error(`p2a_tasks todo did not clear block fields: ${caseData.id}`);
+        writeResultOutput(result);
+        console.error(JSON.stringify({ todoAfterBlockTask }, null, 2));
+        return { status: failureStatus(result), checks };
+      }
+
+      const blockedTransitionGraphPath = copyWebhookTaskGraph(tempRoot, 'p2a-blocked-transition-guard');
+      const blockedTransitionGraph = JSON.parse(readFileSync(blockedTransitionGraphPath, 'utf8'));
+      blockedTransitionGraph.tasks.find((task) => task.id === 'task-001').status = 'blocked';
+      writeFileSync(blockedTransitionGraphPath, `${JSON.stringify(blockedTransitionGraph, null, 2)}\n`, 'utf8');
+      result = runTasks(['block', '--graph', blockedTransitionGraphPath, 'task-001']);
+      checks += 1;
+      const blockedBlockOutput = `${result.stdout ?? ''}${result.stderr ?? ''}`;
+      if (
+        result.status === 0
+        || !blockedBlockOutput.includes('task-001 must be todo or in_progress before block; current status is blocked')
+      ) {
+        console.error(`p2a_tasks allowed block from blocked state: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: 1, checks };
+      }
+
+      const doneTransitionGraphPath = copyWebhookTaskGraph(tempRoot, 'p2a-done-transition-guard');
+      const doneTransitionGraph = JSON.parse(readFileSync(doneTransitionGraphPath, 'utf8'));
+      doneTransitionGraph.tasks.find((task) => task.id === 'task-001').status = 'done';
+      writeFileSync(doneTransitionGraphPath, `${JSON.stringify(doneTransitionGraph, null, 2)}\n`, 'utf8');
+      result = runTasks(['block', '--graph', doneTransitionGraphPath, 'task-001']);
+      checks += 1;
+      const doneBlockOutput = `${result.stdout ?? ''}${result.stderr ?? ''}`;
+      if (
+        result.status === 0
+        || !doneBlockOutput.includes('task-001 must be todo or in_progress before block; current status is done')
+      ) {
+        console.error(`p2a_tasks allowed block from done state: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: 1, checks };
+      }
+      result = runTasks(['todo', '--graph', doneTransitionGraphPath, 'task-001']);
+      checks += 1;
+      const doneTodoOutput = `${result.stdout ?? ''}${result.stderr ?? ''}`;
+      if (
+        result.status === 0
+        || !doneTodoOutput.includes('task-001 must be blocked or in_progress before todo; current status is done')
+      ) {
+        console.error(`p2a_tasks allowed todo from done state: ${caseData.id}`);
+        writeResultOutput(result);
         return { status: 1, checks };
       }
 
@@ -4981,6 +5123,91 @@ function validateIterationCurrentFixtureCases() {
         };
         delete run.failure;
         return run;
+      }
+
+      const dependencyDoneGraphPath = copyWebhookTaskGraph(tempRoot, 'p2a-done-dependency-recheck');
+      const dependencyDoneGraph = JSON.parse(readFileSync(dependencyDoneGraphPath, 'utf8'));
+      const dependencyParentTask = dependencyDoneGraph.tasks.find((task) => task.id === 'task-001');
+      const dependencyChildTask = dependencyDoneGraph.tasks.find((task) => task.id === 'task-002');
+      dependencyParentTask.status = 'todo';
+      dependencyChildTask.status = 'in_progress';
+      dependencyChildTask.dependencies = ['task-001'];
+      writeFileSync(dependencyDoneGraphPath, `${JSON.stringify(dependencyDoneGraph, null, 2)}\n`, 'utf8');
+      writeLatestRunEvidence(
+        path.join(tempRoot, 'p2a-done-dependency-recheck', 'runs'),
+        'task-002',
+        finishedDoneGuardRun({
+          runId: 'run-fixture-done-dependency-recheck',
+          taskId: 'task-002',
+          taskTitle: dependencyChildTask.title,
+          taskGraphRef: path.resolve(dependencyDoneGraphPath).split(path.sep).join('/'),
+        }),
+      );
+      result = runTasks(['done', '--graph', dependencyDoneGraphPath, 'task-002']);
+      checks += 1;
+      const dependencyDoneOutput = `${result.stdout ?? ''}${result.stderr ?? ''}`;
+      if (
+        result.status === 0
+        || !dependencyDoneOutput.includes('task-002 cannot be marked done until dependencies are done: task-001')
+      ) {
+        console.error(`p2a_tasks allowed done while dependency regressed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: 1, checks };
+      }
+
+      const timeoutWorkspace = path.join(tempRoot, 'p2a-verification-timeout-workspace');
+      mkdirSync(path.join(timeoutWorkspace, '.plan2agent'), { recursive: true });
+      writeFileSync(path.join(timeoutWorkspace, '.plan2agent', 'project.config.json'), `${JSON.stringify({
+        schema_version: 'p2a.project_config.v1',
+        verificationTimeoutMs: 50,
+      }, null, 2)}\n`, 'utf8');
+      const timeoutGraphPath = copyWebhookTaskGraph(tempRoot, 'p2a-verification-timeout');
+      const timeoutRunId = 'run-fixture-verification-timeout';
+      result = runRuns([
+        'start',
+        '--graph',
+        timeoutGraphPath,
+        '--task',
+        'task-001',
+        '--run-id',
+        timeoutRunId,
+        '--agent-tool',
+        'codex',
+        '--workspace',
+        timeoutWorkspace,
+        '--workspace-ref',
+        'timeout-workspace',
+      ]);
+      checks += 1;
+      if (result.status !== 0) {
+        console.error(`p2a_runs timeout fixture start failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: failureStatus(result), checks };
+      }
+      result = runRuns([
+        'verify',
+        '--graph',
+        timeoutGraphPath,
+        '--run-id',
+        timeoutRunId,
+        '--workspace',
+        timeoutWorkspace,
+        '--test-command',
+        `"${process.execPath}" -e "setTimeout(() => {}, 1000)"`,
+      ]);
+      checks += 1;
+      const timeoutRun = JSON.parse(readFileSync(path.join(tempRoot, 'p2a-verification-timeout', 'runs', `${timeoutRunId}.json`), 'utf8'));
+      const timeoutVerification = timeoutRun.verification.at(-1);
+      if (
+        result.status === 0
+        || !result.stdout.includes('- test: failed')
+        || timeoutVerification?.status !== 'failed'
+        || !timeoutVerification?.stderrTail?.includes('verification command timed out after 50ms')
+      ) {
+        console.error(`p2a_runs verification timeout fixture failed: ${caseData.id}`);
+        writeResultOutput(result);
+        console.error(JSON.stringify({ timeoutVerification }, null, 2));
+        return { status: 1, checks };
       }
 
       writeLatestRunEvidence(doneGuardRunsDir, 'task-001', finishedDoneGuardRun({

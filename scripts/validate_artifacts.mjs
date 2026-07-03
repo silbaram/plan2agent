@@ -656,6 +656,9 @@ export function validateTaskGraphData(data, requireApprovedSpec = null) {
   for (const task of tasks) {
     validateNonBlankStrings(task.acceptanceCriteria, `${task.id}.acceptanceCriteria`);
     validateNonBlankStrings(task.sourceSpecRefs, `${task.id}.sourceSpecRefs`);
+    if (typeof task.blockNote === 'string' && task.blockNote.trim().length === 0) {
+      throw new ValidationError(`${task.id}.blockNote must not be blank`);
+    }
     const unknownDependencies = task.dependencies.filter((dependency) => !taskIdSet.has(dependency));
     if (unknownDependencies.length) {
       throw new ValidationError(`${task.id} has unknown dependencies: ${JSON.stringify(unknownDependencies)}`);

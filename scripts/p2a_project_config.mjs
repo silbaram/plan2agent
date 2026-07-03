@@ -5,6 +5,7 @@ import path from 'node:path';
 
 const ORCHESTRATION_AGENT_TOOLS = new Set(['codex', 'claude', 'manual']);
 const AI_TOOL_TARGETS = new Set(['codex', 'claude', 'gemini']);
+export const DEFAULT_VERIFICATION_TIMEOUT_MS = 600000;
 
 export function defaultRunTracking() {
   return {
@@ -251,6 +252,7 @@ export function buildProjectConfig(targetRoot, teamBigFiveConfig = { enabled: fa
     testCommand: detected.testCommand,
     lintCommand: detected.lintCommand,
     typecheckCommand: detected.typecheckCommand,
+    verificationTimeoutMs: DEFAULT_VERIFICATION_TIMEOUT_MS,
     taskGraph,
     runTracking: defaultRunTracking(),
     teamBigFive: teamBigFiveConfig,
@@ -355,6 +357,10 @@ export function mergeDetectedProjectConfig(config, detected, options = {}) {
       updatedKeys.push(key);
     }
   }
+  if (isEmptyValue(next.verificationTimeoutMs)) {
+    next.verificationTimeoutMs = DEFAULT_VERIFICATION_TIMEOUT_MS;
+    updatedKeys.push('verificationTimeoutMs');
+  }
   if (updatedKeys.length) {
     if (!next.schema_version) next.schema_version = 'p2a.project_config.v1';
     if (!next.runTracking) next.runTracking = defaultRunTracking();
@@ -376,6 +382,10 @@ export function mergeExplicitVerificationCommands(config, verifyRequests, option
       next[key] = request.command;
       updatedKeys.push(key);
     }
+  }
+  if (isEmptyValue(next.verificationTimeoutMs)) {
+    next.verificationTimeoutMs = DEFAULT_VERIFICATION_TIMEOUT_MS;
+    updatedKeys.push('verificationTimeoutMs');
   }
   if (updatedKeys.length) {
     if (!next.schema_version) next.schema_version = 'p2a.project_config.v1';

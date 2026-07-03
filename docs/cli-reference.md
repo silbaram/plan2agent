@@ -291,7 +291,7 @@ node .plan2agent/scripts/p2a_execute.mjs finish \
   --collect-git
 ```
 
-Legacy handoff 대상처럼 반복 루트가 아닌 task graph를 명시해야 하는 경우에는 `--graph`를 사용할 수 있다.
+Legacy handoff 대상처럼 반복 루트가 아닌 task graph를 명시해야 하는 경우에는 `--graph`를 사용할 수 있다. `--graph` 모드는 Gate B 승인, open decision, Gate D blocker 전제조건을 검사하지 않으므로 승인된 반복 실행에는 `--artifacts`를 기본으로 쓴다.
 
 ```bash
 node .plan2agent/scripts/p2a_execute.mjs plan \
@@ -320,7 +320,7 @@ node .plan2agent/scripts/p2a_execute.mjs finish \
   --typecheck
 ```
 
-`start`는 run을 먼저 만들고 task를 `in_progress`로 바꾼 뒤 manual launcher prompt를 출력한다. `finish`는 verification이 실패하면 기본 failure class를 `verification_failed`로 기록하고 task를 `blocked`로 전이한다. 실패 class를 직접 지정하려면 `--status failed|blocked --failure-class <class>`를 넘긴다. failed/blocked로 닫는 경우에는 `--repro-step` 또는 `--repro-command`, `--localization` 또는 `--localized-file`, `--guard` 또는 `--guard-note`를 함께 남겨야 한다.
+`start`는 run을 먼저 만들고 task를 `in_progress`로 바꾼 뒤 manual launcher prompt를 출력한다. `finish`는 verification이 실패하면 기본 failure class를 `verification_failed`로 기록하고 task를 `blocked`로 전이한다. 실패 class를 직접 지정하려면 `--status failed|blocked --failure-class <class>`를 넘긴다. failed/blocked로 닫는 경우에는 `--repro-step` 또는 `--repro-command`, `--localization` 또는 `--localized-file`, `--guard` 또는 `--guard-note`를 함께 남겨야 한다. `--no-task-transition`을 주면 run finish만 수행하고 task `done`/`blocked` 전이는 건너뛴다.
 
 ## 6. 감독형 오케스트레이션 계획 — `p2a_orchestrate.mjs`
 
@@ -392,6 +392,8 @@ node .plan2agent/scripts/p2a_orchestrate.mjs failure-policy \
   --runtime .plan2agent/runs/<run-id>.orchestration-runtime.json
 ```
 
+`p2a_orchestrate plan --graph`도 Gate B/D 전제조건을 검사하지 않는 직접 graph 모드다. 승인된 반복 root가 있으면 `--artifacts`를 사용한다.
+
 `p2a_execute start --orchestration-plan <path>`는 원본 plan을 `runs/<runId>.orchestration.json` sidecar로 연결하고, 같은 run에 `runs/<runId>.orchestration-runtime.json`을 초기화한다. runtime sidecar에는 shared mental model, role assignment, communication log, runtime phase가 들어간다. `record`는 실행 중 질문, 상태, 결정, 검증, monitor verdict 같은 closed-loop 이벤트를 append한다.
 
 `runner-guide`는 plan 또는 runtime에서 role별 provider-native adapter 절차를 출력한다. Codex는 skills/custom agents/명시 subagent prompt, Claude는 agent teams/subagents와 foreground prompt fallback, Gemini는 extensions/custom commands/GEMINI.md 기반 read-only review/monitor 절차를 보여준다. 사용자가 공식 CLI/앱 foreground 세션을 열고 prompt를 붙여넣으면, 그 세션 내부에서 provider-native skill/subagent/custom agent/agent team이 동작할 수 있다. P2A 자체는 guide만 출력하고 provider CLI나 background process를 시작하지 않는다.
@@ -419,10 +421,10 @@ node .plan2agent/scripts/p2a_tasks.mjs <command> --artifacts <iterative-project-
 | `prompt <task-id>` | `suggestedAgentPrompt`, acceptance criteria, task 설명, 참조 spec context, 전체 spec 경로를 함께 출력한다. |
 | `start <task-id>` | ready 상태의 `todo` task를 `in_progress`로 바꾼다. |
 | `done <task-id>` | `in_progress` task를 `done`으로 바꾼다. |
-| `block <task-id>` | task를 `blocked`로 표시한다. |
-| `todo <task-id>` | task를 `todo`로 되돌린다. |
+| `block <task-id>` | `todo` 또는 `in_progress` task를 `blocked`로 표시한다. `--note <text>`로 `blockNote`를 남길 수 있다. |
+| `todo <task-id>` | `blocked` 또는 `in_progress` task를 `todo`로 되돌린다. |
 
-`done`은 최신 run evidence를 확인하는 shortcut guard를 거친다. 최신 run evidence가 없거나, run-index와 실제 run 파일의 주요 필드가 맞지 않거나, 최신 run이 아직 `started`/`failed`/`blocked`이면 `done` 전이가 실패한다. `finished` run이라도 verification이 없거나 `failed`/`skipped`/`not_run` verification이 남아 있으면 실패한다. run의 변경 파일에 `.plan2agent/` 또는 Gate 산출물이 포함된 경우도 사람이 먼저 산출물 변경 의도를 분리해야 하므로 차단한다.
+`done`은 모든 dependency가 여전히 `done`인지 확인한 뒤 최신 run evidence를 확인하는 shortcut guard를 거친다. 최신 run evidence가 없거나, run-index와 실제 run 파일의 주요 필드가 맞지 않거나, 최신 run이 아직 `started`/`failed`/`blocked`이면 `done` 전이가 실패한다. `finished` run이라도 verification이 없거나 `failed`/`skipped`/`not_run` verification이 남아 있으면 실패한다. run의 변경 파일에 `.plan2agent/` 또는 Gate 산출물이 포함된 경우도 사람이 먼저 산출물 변경 의도를 분리해야 하므로 차단한다.
 
 대표 예시:
 
@@ -442,7 +444,7 @@ node .plan2agent/scripts/p2a_tasks.mjs start \
   task-001
 ```
 
-반복 구조로 변환된 artifact는 active iteration을 자동 인식한다. `--maintenance`를 함께 쓰면 active 기능 반복 대신 `iterations/maintenance/gate-c-task-graph/task-graph.json` 단일 그래프를 대상으로 같은 명령을 실행한다. scaffold 프로젝트에서 초기 `gate-c-task-graph/task-graph.json`을 직접 `--graph`로 실행하려 하면 CLI가 `p2a_iteration init`을 요구한다.
+반복 구조로 변환된 artifact는 active iteration을 자동 인식한다. `--maintenance`를 함께 쓰면 active 기능 반복 대신 `iterations/maintenance/gate-c-task-graph/task-graph.json` 단일 그래프를 대상으로 같은 명령을 실행한다. scaffold 프로젝트에서 초기 `gate-c-task-graph/task-graph.json`을 직접 `--graph`로 실행하려 하면 CLI가 `p2a_iteration init`을 요구한다. 그 외 `--graph` 직접 모드는 Gate B/D 전제조건을 검사하지 않으므로 승인된 반복 실행에는 `--artifacts`를 사용한다.
 
 ```bash
 node .plan2agent/scripts/p2a_tasks.mjs ready \
@@ -511,11 +513,11 @@ node .plan2agent/scripts/p2a_runs.mjs list \
   --artifacts .plan2agent/artifacts/<project_id>
 ```
 
-`verify`는 `.plan2agent/project.config.json`의 `testCommand`, `lintCommand`, `typecheckCommand`를 읽는다. 설정이 비어 있으면 현재 workspace의 `package.json`, lockfile, Gradle, Maven 파일을 다시 감지해 누락된 기본 명령을 채운 뒤 실행한다. 별도 명령을 쓰려면 `--test-command`, `--lint-command`, `--typecheck-command`, `--verify-command <type:cmd>`를 넘긴다. 명시 명령을 다음 실행의 기본값으로 저장하려면 `--save-config`를 함께 넘긴다. `--isolation branch|worktree`는 격리 기준을 run log에 기록하며, `--create-isolation`을 함께 줄 때만 실제 `git switch -c` 또는 `git worktree add`를 실행한다.
+`verify`는 `.plan2agent/project.config.json`의 `testCommand`, `lintCommand`, `typecheckCommand`를 읽는다. 설정이 비어 있으면 현재 workspace의 `package.json`, lockfile, Gradle, Maven 파일을 다시 감지해 누락된 기본 명령을 채운 뒤 실행한다. 별도 명령을 쓰려면 `--test-command`, `--lint-command`, `--typecheck-command`, `--verify-command <type:cmd>`를 넘긴다. 명시 명령을 다음 실행의 기본값으로 저장하려면 `--save-config`를 함께 넘긴다. 검증 명령은 `project.config.json.verificationTimeoutMs`를 따르며 기본값은 600000ms다. `record`는 기존 run에 changed file, manual verification, note, 구조화 debug detail을 추가하고, `show`는 run JSON을 출력하며, `validate`는 run 또는 runs directory schema를 검사한다. `--isolation branch|worktree`는 격리 기준을 run log에 기록하며, `--create-isolation`을 함께 줄 때만 실제 `git switch -c` 또는 `git worktree add`를 실행한다.
 
 `finish`는 `--status finished`로 닫으려는 run에 실행된 통과 verification evidence가 없거나 `failed`/`skipped`/`not_run` verification이 남아 있으면 non-zero로 거절한다. `--verification type:passed:text`로 기록한 manual evidence는 보조 기록일 뿐 done/finished 통과 증거로 인정하지 않는다. 아직 verification evidence가 없다면 같은 run에 `p2a_runs verify`로 `source: config|command`, `exitCode: 0` verification을 기록한 뒤 닫을 수 있지만, 이미 `failed`/`skipped`/`not_run` evidence가 남은 run은 `--status failed|blocked --failure-class <class>`로 닫고 새 run에서 성공 검증을 다시 남긴다. `failed`/`blocked` run은 후속 분석 품질을 위해 `reproduction`, `localization`, `guard` 구조 필드가 필수이며, 빠지면 run 파일을 쓰지 않고 non-zero로 거절한다.
 
-handoff 대상 프로젝트에서는 다음처럼 쓴다.
+handoff 대상 프로젝트에서는 다음처럼 쓴다. `p2a_runs --graph`는 실행 전제조건을 검사하지 않는 직접 graph 모드이므로 Gate B/D 검증은 별도 승인 흐름에서 끝나 있어야 한다.
 
 ```bash
 node .plan2agent/scripts/p2a_runs.mjs start \

@@ -675,7 +675,7 @@ function parseEnumValue(value, allowedValues, optionName) {
 
 function requiredValue(argv, index, optionName) {
   const value = argv[index];
-  if (!value) throw new Error(`${optionName} requires a value`);
+  if (!value || value.startsWith('--')) throw new Error(`missing value for ${optionName}`);
   return value;
 }
 
@@ -699,6 +699,10 @@ function displayPath(filePath, root = process.cwd()) {
   const relative = path.relative(root, filePath);
   if (relative && !relative.startsWith('..') && !path.isAbsolute(relative)) return normalizePath(relative);
   return normalizePath(filePath);
+}
+
+function warnGraphMode() {
+  console.error('warning: --graph mode does not check Gate B/D prerequisites; use --artifacts for approved iterative execution.');
 }
 
 function artifactRelativePath(artifactRoot, filePath) {
@@ -739,6 +743,7 @@ function resolveSource(args) {
   }
 
   const graphPath = path.resolve(args.graph);
+  warnGraphMode();
   assertFile(graphPath, 'task graph');
   const graph = loadJson(graphPath);
   validateTaskGraphData(graph);
@@ -2193,7 +2198,7 @@ function liveVersionProbe(provider, rootPath) {
   const result = spawnSync(command, RUNNER_DOCTOR_VERSION_ARGS, {
     cwd: rootPath,
     encoding: 'utf8',
-    shell: false,
+    shell: process.platform === 'win32',
     timeout: 5000,
   });
   const output = `${result.stdout ?? ''}${result.stderr ?? ''}`.trim();

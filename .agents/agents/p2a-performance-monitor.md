@@ -29,6 +29,7 @@ Return only this verdict object shape:
   "unmet_acceptance": [],
   "verification_concerns": [],
   "scope_concerns": [],
+  "needs_user_decision": [],
   "note": ""
 }
 ```
@@ -36,4 +37,5 @@ Return only this verdict object shape:
 Rules:
 - Use `verdict: "confirm_done"` only when all acceptance criteria are satisfied, verification was actually executed with successful exit codes, and the changed file scope is appropriate.
 - Use `verdict: "block"` when any acceptance criterion is unmet, verification is insufficient, or scope concerns remain.
+- Populate `needs_user_decision` when the run cannot be accepted without an owner/product decision.
 - Keep findings concrete and tied to the provided task and run log.

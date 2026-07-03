@@ -46,7 +46,7 @@ function usage() {
     '  prompt <task-id>     Print suggestedAgentPrompt, acceptance criteria, task description, referenced spec context, and full spec path.',
     '  start <task-id>      Mark a ready todo task in_progress.',
     '  done <task-id>       Mark an in_progress task done.',
-    '  block <task-id>      Mark a task blocked.',
+    '  block <task-id>      Mark a todo or in_progress task blocked.',
     '  todo <task-id>       Mark a task todo.',
     '',
     'Options:',
@@ -54,7 +54,18 @@ function usage() {
     '  --artifacts <dir>    Iterative artifact root; uses the active iteration task graph.',
     '  --spec <path>        Spec JSON path for prompt context. Only supported with --graph.',
     '  --maintenance        With --artifacts, operate on the maintenance task graph.',
+    '  --note <text>        For block, record a human follow-up note in blockNote. Repeatable.',
   ].join('\n');
+}
+
+function requiredValue(argv, index, optionName) {
+  const value = argv[index];
+  if (!value || value.startsWith('--')) throw new Error(`missing value for ${optionName}`);
+  return value;
+}
+
+function warnGraphMode() {
+  console.error('warning: --graph mode does not check Gate B/D prerequisites; use --artifacts for approved iterative execution.');
 }
 
 function parseArgs(argv) {
@@ -64,20 +75,20 @@ function parseArgs(argv) {
   let artifactsPath = null;
   let specPath = null;
   let maintenance = false;
+  const notes = [];
   const positional = [];
   for (let index = 0; index < rest.length; index += 1) {
     const arg = rest[index];
     if (arg === '--graph') {
-      graphPath = rest[++index];
-      if (!graphPath) throw new Error('--graph requires a path');
+      graphPath = requiredValue(rest, ++index, '--graph');
     } else if (arg === '--artifacts') {
-      artifactsPath = rest[++index];
-      if (!artifactsPath) throw new Error('--artifacts requires a directory');
+      artifactsPath = requiredValue(rest, ++index, '--artifacts');
     } else if (arg === '--spec') {
-      specPath = rest[++index];
-      if (!specPath) throw new Error('--spec requires a path');
+      specPath = requiredValue(rest, ++index, '--spec');
     } else if (arg === '--maintenance') {
       maintenance = true;
+    } else if (arg === '--note') {
+      notes.push(requiredValue(rest, ++index, '--note'));
     } else if (arg.startsWith('--')) {
       throw new Error(`unknown option: ${arg}`);
     } else {
@@ -93,11 +104,15 @@ function parseArgs(argv) {
   if (!graphPath && !artifactsPath) throw new Error('--graph or --artifacts is required');
   if (artifactsPath && specPath) throw new Error('--spec is only supported with --graph; --artifacts uses the active iteration spec');
   if (graphPath) assertNotUninitializedScaffoldGraph(graphPath);
-  return { command, graphPath, artifactsPath, specPath, maintenance, taskId: positional[0], extra: positional.slice(1), iterationState: null };
+  if (notes.length && command !== 'block') throw new Error('--note is only supported with block');
+  return { command, graphPath, artifactsPath, specPath, maintenance, notes, taskId: positional[0], extra: positional.slice(1), iterationState: null };
 }
 
 function resolveTaskInputs(args) {
-  if (!args.artifactsPath) return args;
+  if (!args.artifactsPath) {
+    warnGraphMode();
+    return args;
+  }
   const requireReady = !args.maintenance;
   const iterationState = resolveIterationState(args.artifactsPath, { requireReady });
   if (args.maintenance) {
@@ -439,19 +454,29 @@ function transitionTask(graph, task, command, args = {}) {
     task.status = 'in_progress';
   } else if (command === 'done') {
     if (task.status !== 'in_progress') throw new Error(`${task.id} must be in_progress before done; current status is ${task.status}`);
+    const incomplete = task.dependencies.filter((dependency) => tasksById.get(dependency)?.status !== 'done');
+    if (incomplete.length) throw new Error(`${task.id} cannot be marked done until dependencies are done: ${incomplete.join(', ')}`);
     assertDoneShortcutGuard(args, task, graph);
     task.status = 'done';
   } else if (command === 'block') {
+    if (task.status !== 'todo' && task.status !== 'in_progress') throw new Error(`${task.id} must be todo or in_progress before block; current status is ${task.status}`);
     task.status = 'blocked';
     const failureClass = latestRunFailureClass(args, task.id, graph);
     if (failureClass) task.blockReason = failureClass;
+    else delete task.blockReason;
+    if (args.notes?.length) task.blockNote = args.notes.join('\n');
+    else delete task.blockNote;
   } else if (command === 'todo') {
+    if (task.status !== 'blocked' && task.status !== 'in_progress') throw new Error(`${task.id} must be blocked or in_progress before todo; current status is ${task.status}`);
     task.status = 'todo';
   }
 }
 
 function clearBlockReasonIfUnblocked(task, command) {
-  if (command === 'done' || command === 'todo' || command === 'start') delete task.blockReason;
+  if (command === 'done' || command === 'todo' || command === 'start') {
+    delete task.blockReason;
+    delete task.blockNote;
+  }
 }
 
 function saveValidatedGraph(graphPath, graph) {
@@ -669,6 +694,7 @@ export function main(argv = process.argv.slice(2)) {
       saveValidatedGraph(args.graphPath, graph);
       console.log(`${task.id} status is now ${task.status}`);
       if (args.command === 'block' && task.blockReason) console.log(`- blockReason: ${task.blockReason}`);
+      if (args.command === 'block' && task.blockNote) console.log(`- blockNote: ${task.blockNote}`);
     } else {
       throw new Error(`unknown command: ${args.command}`);
     }
