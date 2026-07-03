@@ -179,24 +179,24 @@ function parseArgs(argv) {
     else if (arg === '--create-isolation') args.createIsolation = true;
     else if (arg === '--changed-file') args.changedFiles.push(requiredValue(argv, ++index, '--changed-file'));
     else if (arg === '--collect-git') args.collectGit = true;
-    else if (arg === '--note') args.notes.push(requiredValue(argv, ++index, '--note'));
-    else if (arg === '--repro-step') args.reproductionSteps.push(requiredValue(argv, ++index, '--repro-step'));
-    else if (arg === '--repro-command') args.reproductionCommands.push(requiredValue(argv, ++index, '--repro-command'));
-    else if (arg === '--repro-note') args.reproductionNotes.push(requiredValue(argv, ++index, '--repro-note'));
-    else if (arg === '--localization') args.localizationFindings.push(requiredValue(argv, ++index, '--localization'));
+    else if (arg === '--note') args.notes.push(requiredValue(argv, ++index, '--note', { allowLeadingDash: true }));
+    else if (arg === '--repro-step') args.reproductionSteps.push(requiredValue(argv, ++index, '--repro-step', { allowLeadingDash: true }));
+    else if (arg === '--repro-command') args.reproductionCommands.push(requiredValue(argv, ++index, '--repro-command', { allowLeadingDash: true }));
+    else if (arg === '--repro-note') args.reproductionNotes.push(requiredValue(argv, ++index, '--repro-note', { allowLeadingDash: true }));
+    else if (arg === '--localization') args.localizationFindings.push(requiredValue(argv, ++index, '--localization', { allowLeadingDash: true }));
     else if (arg === '--localized-file') args.localizedFiles.push(requiredValue(argv, ++index, '--localized-file'));
-    else if (arg === '--fix-summary') args.fixSummaries.push(requiredValue(argv, ++index, '--fix-summary'));
+    else if (arg === '--fix-summary') args.fixSummaries.push(requiredValue(argv, ++index, '--fix-summary', { allowLeadingDash: true }));
     else if (arg === '--fix-file') args.fixFiles.push(requiredValue(argv, ++index, '--fix-file'));
-    else if (arg === '--guard') args.guardChecks.push(requiredValue(argv, ++index, '--guard'));
-    else if (arg === '--guard-note') args.guardNotes.push(requiredValue(argv, ++index, '--guard-note'));
+    else if (arg === '--guard') args.guardChecks.push(requiredValue(argv, ++index, '--guard', { allowLeadingDash: true }));
+    else if (arg === '--guard-note') args.guardNotes.push(requiredValue(argv, ++index, '--guard-note', { allowLeadingDash: true }));
     else if (arg === '--verification') args.manualVerification.push(parseManualVerification(requiredValue(argv, ++index, '--verification')));
     else if (arg === '--test') args.verifyRequests.push({ type: 'test', command: null, source: 'config' });
     else if (arg === '--lint') args.verifyRequests.push({ type: 'lint', command: null, source: 'config' });
     else if (arg === '--typecheck') args.verifyRequests.push({ type: 'typecheck', command: null, source: 'config' });
-    else if (arg === '--test-command') args.verifyRequests.push({ type: 'test', command: requiredValue(argv, ++index, '--test-command'), source: 'command' });
-    else if (arg === '--lint-command') args.verifyRequests.push({ type: 'lint', command: requiredValue(argv, ++index, '--lint-command'), source: 'command' });
-    else if (arg === '--typecheck-command') args.verifyRequests.push({ type: 'typecheck', command: requiredValue(argv, ++index, '--typecheck-command'), source: 'command' });
-    else if (arg === '--verify-command') args.verifyRequests.push(parseVerifyCommand(requiredValue(argv, ++index, '--verify-command')));
+    else if (arg === '--test-command') args.verifyRequests.push({ type: 'test', command: requiredValue(argv, ++index, '--test-command', { allowLeadingDash: true }), source: 'command' });
+    else if (arg === '--lint-command') args.verifyRequests.push({ type: 'lint', command: requiredValue(argv, ++index, '--lint-command', { allowLeadingDash: true }), source: 'command' });
+    else if (arg === '--typecheck-command') args.verifyRequests.push({ type: 'typecheck', command: requiredValue(argv, ++index, '--typecheck-command', { allowLeadingDash: true }), source: 'command' });
+    else if (arg === '--verify-command') args.verifyRequests.push(parseVerifyCommand(requiredValue(argv, ++index, '--verify-command', { allowLeadingDash: true })));
     else if (arg === '--save-config') args.saveConfig = true;
     else if (arg === '--failure-class') {
       args.failureClass = requiredValue(argv, ++index, '--failure-class');
@@ -280,9 +280,9 @@ function hasStructuredDetailOptions(args) {
   ].some((values) => values.length > 0);
 }
 
-function requiredValue(argv, index, optionName) {
+function requiredValue(argv, index, optionName, options = {}) {
   const value = argv[index];
-  if (!value || value.startsWith('--')) throw new Error(`missing value for ${optionName}`);
+  if (!value || (!options.allowLeadingDash && value.startsWith('--'))) throw new Error(`missing value for ${optionName}`);
   return value;
 }
 

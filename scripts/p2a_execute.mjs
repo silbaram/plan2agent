@@ -168,23 +168,23 @@ function parseArgs(argv) {
     else if (arg === '--create-isolation') args.createIsolation = true;
     else if (arg === '--orchestration-plan') args.orchestrationPlan = requiredValue(argv, ++index, '--orchestration-plan');
     else if (arg === '--changed-file') args.changedFiles.push(requiredValue(argv, ++index, '--changed-file'));
-    else if (arg === '--note') args.notes.push(requiredValue(argv, ++index, '--note'));
-    else if (arg === '--repro-step') args.reproductionSteps.push(requiredValue(argv, ++index, '--repro-step'));
-    else if (arg === '--repro-command') args.reproductionCommands.push(requiredValue(argv, ++index, '--repro-command'));
-    else if (arg === '--repro-note') args.reproductionNotes.push(requiredValue(argv, ++index, '--repro-note'));
-    else if (arg === '--localization') args.localizationFindings.push(requiredValue(argv, ++index, '--localization'));
+    else if (arg === '--note') args.notes.push(requiredValue(argv, ++index, '--note', { allowLeadingDash: true }));
+    else if (arg === '--repro-step') args.reproductionSteps.push(requiredValue(argv, ++index, '--repro-step', { allowLeadingDash: true }));
+    else if (arg === '--repro-command') args.reproductionCommands.push(requiredValue(argv, ++index, '--repro-command', { allowLeadingDash: true }));
+    else if (arg === '--repro-note') args.reproductionNotes.push(requiredValue(argv, ++index, '--repro-note', { allowLeadingDash: true }));
+    else if (arg === '--localization') args.localizationFindings.push(requiredValue(argv, ++index, '--localization', { allowLeadingDash: true }));
     else if (arg === '--localized-file') args.localizedFiles.push(requiredValue(argv, ++index, '--localized-file'));
-    else if (arg === '--fix-summary') args.fixSummaries.push(requiredValue(argv, ++index, '--fix-summary'));
+    else if (arg === '--fix-summary') args.fixSummaries.push(requiredValue(argv, ++index, '--fix-summary', { allowLeadingDash: true }));
     else if (arg === '--fix-file') args.fixFiles.push(requiredValue(argv, ++index, '--fix-file'));
-    else if (arg === '--guard') args.guardChecks.push(requiredValue(argv, ++index, '--guard'));
-    else if (arg === '--guard-note') args.guardNotes.push(requiredValue(argv, ++index, '--guard-note'));
+    else if (arg === '--guard') args.guardChecks.push(requiredValue(argv, ++index, '--guard', { allowLeadingDash: true }));
+    else if (arg === '--guard-note') args.guardNotes.push(requiredValue(argv, ++index, '--guard-note', { allowLeadingDash: true }));
     else if (arg === '--test') args.verifyOptions.push('--test');
     else if (arg === '--lint') args.verifyOptions.push('--lint');
     else if (arg === '--typecheck') args.verifyOptions.push('--typecheck');
-    else if (arg === '--test-command') args.verifyOptions.push('--test-command', requiredValue(argv, ++index, '--test-command'));
-    else if (arg === '--lint-command') args.verifyOptions.push('--lint-command', requiredValue(argv, ++index, '--lint-command'));
-    else if (arg === '--typecheck-command') args.verifyOptions.push('--typecheck-command', requiredValue(argv, ++index, '--typecheck-command'));
-    else if (arg === '--verify-command') args.verifyOptions.push('--verify-command', requiredValue(argv, ++index, '--verify-command'));
+    else if (arg === '--test-command') args.verifyOptions.push('--test-command', requiredValue(argv, ++index, '--test-command', { allowLeadingDash: true }));
+    else if (arg === '--lint-command') args.verifyOptions.push('--lint-command', requiredValue(argv, ++index, '--lint-command', { allowLeadingDash: true }));
+    else if (arg === '--typecheck-command') args.verifyOptions.push('--typecheck-command', requiredValue(argv, ++index, '--typecheck-command', { allowLeadingDash: true }));
+    else if (arg === '--verify-command') args.verifyOptions.push('--verify-command', requiredValue(argv, ++index, '--verify-command', { allowLeadingDash: true }));
     else if (arg === '--save-config') args.saveConfig = true;
     else if (arg === '--status') {
       args.status = requiredValue(argv, ++index, '--status');
@@ -261,9 +261,9 @@ function hasStructuredDetailOptions(args) {
   ].some((values) => values.length > 0);
 }
 
-function requiredValue(argv, index, optionName) {
+function requiredValue(argv, index, optionName, options = {}) {
   const value = argv[index];
-  if (!value || value.startsWith('--')) throw new Error(`missing value for ${optionName}`);
+  if (!value || (!options.allowLeadingDash && value.startsWith('--'))) throw new Error(`missing value for ${optionName}`);
   return value;
 }
 

@@ -2521,9 +2521,9 @@ function validateIterationCurrentFixtureCases() {
       }
 
       const missingValueChecks = [
-        ['p2a_tasks', runTasks(['block', '--graph', state.taskGraphPath, 'task-001', '--note', '--bad'])],
-        ['p2a_runs', runRuns(['finish', '--graph', state.taskGraphPath, '--run-id', 'run-missing-note', '--note', '--collect-git'])],
-        ['p2a_execute', runExecute(['finish', '--graph', state.taskGraphPath, '--run-id', 'run-missing-note', '--note', '--collect-git'])],
+        ['p2a_tasks', runTasks(['ready', '--graph', '--artifacts'])],
+        ['p2a_runs', runRuns(['list', '--graph', '--runs'])],
+        ['p2a_execute', runExecute(['plan', '--graph', '--task', 'task-001'])],
         ['p2a_orchestrate', runOrchestrate(['plan', '--graph', '--task', 'task-001'])],
       ];
       for (const [label, checkResult] of missingValueChecks) {
@@ -2534,6 +2534,72 @@ function validateIterationCurrentFixtureCases() {
           writeResultOutput(checkResult);
           return { status: 1, checks };
         }
+      }
+
+      const leadingDashNoteGraphPath = copyWebhookTaskGraph(tempRoot, 'p2a-leading-dash-note');
+      result = runTasks(['block', '--graph', leadingDashNoteGraphPath, 'task-001', '--note', '--blocked-by-owner']);
+      checks += 1;
+      const leadingDashTaskGraph = JSON.parse(readFileSync(leadingDashNoteGraphPath, 'utf8'));
+      const leadingDashTask = leadingDashTaskGraph.tasks.find((task) => task.id === 'task-001');
+      if (
+        result.status !== 0
+        || leadingDashTask?.status !== 'blocked'
+        || leadingDashTask?.blockNote !== '--blocked-by-owner'
+      ) {
+        console.error(`p2a_tasks rejected leading-dash block note value: ${caseData.id}`);
+        writeResultOutput(result);
+        console.error(JSON.stringify({ leadingDashTask }, null, 2));
+        return { status: failureStatus(result), checks };
+      }
+
+      const leadingDashRunNote = runRuns(['record', '--graph', state.taskGraphPath, '--run-id', 'run-leading-dash-note', '--note', '--blocked-by-owner']);
+      checks += 1;
+      const leadingDashRunNoteOutput = `${leadingDashRunNote.stdout ?? ''}${leadingDashRunNote.stderr ?? ''}`;
+      if (
+        leadingDashRunNote.status === 0
+        || leadingDashRunNoteOutput.includes('missing value for --note')
+        || !leadingDashRunNoteOutput.includes('run-leading-dash-note is missing')
+      ) {
+        console.error(`p2a_runs did not accept leading-dash note value before run lookup: ${caseData.id}`);
+        writeResultOutput(leadingDashRunNote);
+        return { status: 1, checks };
+      }
+
+      const leadingDashExecuteCommand = runExecute(['finish', '--graph', state.taskGraphPath, '--run-id', 'run-leading-dash-command', '--test-command', '--version']);
+      checks += 1;
+      const leadingDashExecuteOutput = `${leadingDashExecuteCommand.stdout ?? ''}${leadingDashExecuteCommand.stderr ?? ''}`;
+      if (
+        leadingDashExecuteCommand.status === 0
+        || leadingDashExecuteOutput.includes('missing value for --test-command')
+        || !leadingDashExecuteOutput.includes('run-leading-dash-command is missing')
+      ) {
+        console.error(`p2a_execute did not accept leading-dash command value before run lookup: ${caseData.id}`);
+        writeResultOutput(leadingDashExecuteCommand);
+        return { status: 1, checks };
+      }
+
+      const leadingDashRuntimePath = path.join(tempRoot, 'missing-leading-dash-runtime.json');
+      const leadingDashOrchestrateSummary = runOrchestrate([
+        'record',
+        '--runtime',
+        leadingDashRuntimePath,
+        '--role',
+        'implementer',
+        '--type',
+        'status',
+        '--summary',
+        '--blocked',
+      ]);
+      checks += 1;
+      const leadingDashOrchestrateOutput = `${leadingDashOrchestrateSummary.stdout ?? ''}${leadingDashOrchestrateSummary.stderr ?? ''}`;
+      if (
+        leadingDashOrchestrateSummary.status === 0
+        || leadingDashOrchestrateOutput.includes('missing value for --summary')
+        || !leadingDashOrchestrateOutput.includes('orchestration runtime is missing')
+      ) {
+        console.error(`p2a_orchestrate did not accept leading-dash summary value before runtime lookup: ${caseData.id}`);
+        writeResultOutput(leadingDashOrchestrateSummary);
+        return { status: 1, checks };
       }
 
       const executeGraphPath = path.join(tempRoot, 'p2a-execute', 'gate-c-task-graph', 'task-graph.json');

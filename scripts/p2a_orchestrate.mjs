@@ -302,8 +302,8 @@ function parseArgs(argv) {
     else if (arg === '--run-id') args.runId = requiredValue(argv, ++index, '--run-id');
     else if (arg === '--role') args.roleId = requiredValue(argv, ++index, '--role');
     else if (arg === '--type') args.eventType = parseEnumValue(requiredValue(argv, ++index, '--type'), RUNTIME_EVENT_TYPES, '--type');
-    else if (arg === '--summary') args.summary = requiredValue(argv, ++index, '--summary');
-    else if (arg === '--detail') args.detail = requiredValue(argv, ++index, '--detail');
+    else if (arg === '--summary') args.summary = requiredValue(argv, ++index, '--summary', { allowLeadingDash: true });
+    else if (arg === '--detail') args.detail = requiredValue(argv, ++index, '--detail', { allowLeadingDash: true });
     else if (arg === '--verdict') args.verdict = requiredValue(argv, ++index, '--verdict').trim();
     else if (arg === '--linked-role') args.linkedRoleId = requiredValue(argv, ++index, '--linked-role');
     else if (arg === '--role-status') args.roleStatus = parseEnumValue(requiredValue(argv, ++index, '--role-status'), RUNTIME_ROLE_STATUSES, '--role-status');
@@ -673,9 +673,9 @@ function parseEnumValue(value, allowedValues, optionName) {
   return value;
 }
 
-function requiredValue(argv, index, optionName) {
+function requiredValue(argv, index, optionName, options = {}) {
   const value = argv[index];
-  if (!value || value.startsWith('--')) throw new Error(`missing value for ${optionName}`);
+  if (!value || (!options.allowLeadingDash && value.startsWith('--'))) throw new Error(`missing value for ${optionName}`);
   return value;
 }
 

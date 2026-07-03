@@ -58,9 +58,9 @@ function usage() {
   ].join('\n');
 }
 
-function requiredValue(argv, index, optionName) {
+function requiredValue(argv, index, optionName, options = {}) {
   const value = argv[index];
-  if (!value || value.startsWith('--')) throw new Error(`missing value for ${optionName}`);
+  if (!value || (!options.allowLeadingDash && value.startsWith('--'))) throw new Error(`missing value for ${optionName}`);
   return value;
 }
 
@@ -88,7 +88,7 @@ function parseArgs(argv) {
     } else if (arg === '--maintenance') {
       maintenance = true;
     } else if (arg === '--note') {
-      notes.push(requiredValue(rest, ++index, '--note'));
+      notes.push(requiredValue(rest, ++index, '--note', { allowLeadingDash: true }));
     } else if (arg.startsWith('--')) {
       throw new Error(`unknown option: ${arg}`);
     } else {
