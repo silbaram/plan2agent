@@ -7,7 +7,13 @@ import path from 'node:path';
 import process from 'node:process';
 import { pathToFileURL } from 'node:url';
 import { loadJson, validateOrchestrationPlanData, validateProposalDraftApprovalData, validateRunData, validateTaskGraphData, ValidationError } from './validate_artifacts.mjs';
-import { orchestrationRuntimePath, readOrchestrationRuntime, recordOrchestrationRuntimeEvent, writeOrchestrationRuntimeForRun } from './p2a_orchestrate.mjs';
+import {
+  normalizeMonitorVerdictData,
+  orchestrationRuntimePath,
+  readOrchestrationRuntime,
+  recordOrchestrationRuntimeEvent,
+  writeOrchestrationRuntimeForRun,
+} from './p2a_orchestrate.mjs';
 import { resolveIterationState } from './p2a_iteration_state.mjs';
 import { resolveRunsDir } from './p2a_run_paths.mjs';
 import {
@@ -647,26 +653,28 @@ function readMonitorVerdict(source, sidecar) {
   const verdictPath = path.resolve(source.runsDir, sidecar.monitorGate.verdictPath);
   assertFile(verdictPath, 'monitor verdict');
   const data = loadJson(verdictPath);
-  const verdict = typeof data === 'string' ? data : data?.verdict;
-  if (typeof verdict !== 'string' || !verdict.trim()) {
-    throw new Error(`monitor verdict must be a JSON string or object with a verdict field: ${displayPath(verdictPath)}`);
+  try {
+    return normalizeMonitorVerdictData(data);
+  } catch (error) {
+    throw new Error(`${error.message}: ${displayPath(verdictPath)}`);
   }
-  return verdict.trim();
 }
 
 function applyMonitorGate(args, source) {
   const sidecar = readOrchestrationSidecar(source.runsDir, args.runId);
   if (!sidecar?.monitorGate?.required) return null;
   const verdict = readMonitorVerdict(source, sidecar);
-  if (sidecar.monitorGate.acceptedVerdicts.includes(verdict)) {
-    return { sidecar, verdict, accepted: true };
+  if (sidecar.monitorGate.acceptedVerdicts.includes(verdict.verdict) && !verdict.hasConcerns) {
+    return { sidecar, verdict: verdict.verdict, accepted: true };
   }
-  const mappedFailureClass = sidecar.monitorGate.failureClassMap[verdict] ?? 'other';
+  const mappedFailureClass = sidecar.monitorGate.failureClassMap[verdict.failureSignal]
+    ?? sidecar.monitorGate.failureClassMap[verdict.verdict]
+    ?? 'other';
   if (!args.status || args.status === 'finished') args.status = 'blocked';
   if (!args.failureClass) args.failureClass = mappedFailureClass;
   if (!args.failureSource) args.failureSource = 'monitor';
-  if (args.needsUserDecision === null && verdict === 'needs_user_decision') args.needsUserDecision = 'true';
-  return { sidecar, verdict, accepted: false, failureClass: args.failureClass };
+  if (args.needsUserDecision === null && verdict.failureSignal === 'needs_user_decision') args.needsUserDecision = 'true';
+  return { sidecar, verdict: verdict.failureSignal, accepted: false, failureClass: args.failureClass };
 }
 
 function updateOrchestrationRuntimeAfterFinish(source, run) {
@@ -967,15 +975,18 @@ function runFinish(args) {
   if (closedRuntime) {
     console.log(`Orchestration runtime already closed: ${displayPath(closedRuntime.filePath)}`);
     const run = readRun(source.runsDir, args.runId);
-    const status = transitionTaskAfterFinishedRun(args, source, run, 0);
-    printRunCommandFooter(P2A_PATHS, {
-      sourceArgs: source.sourceArgs,
-      runId: run.runId,
-      includeResume: false,
-      includeFinish: false,
-      heading: 'Run commands:',
-    });
-    return status;
+    if (run.status !== 'started') {
+      const status = transitionTaskAfterFinishedRun(args, source, run, 0);
+      printRunCommandFooter(P2A_PATHS, {
+        sourceArgs: source.sourceArgs,
+        runId: run.runId,
+        includeResume: false,
+        includeFinish: false,
+        heading: 'Run commands:',
+      });
+      return status;
+    }
+    console.log('- finishNote: runtime is closed but run is still started; continuing run closeout without appending runtime events.');
   }
   let verificationFailed = false;
   if (verifyRequested(args)) {

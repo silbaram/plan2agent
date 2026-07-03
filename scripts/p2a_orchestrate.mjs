@@ -36,6 +36,7 @@ const RUNTIME_PHASES = new Set(['initialized', 'running', 'blocked', 'ready_for_
 const RUNTIME_FAILURE_RETRYABLE = new Set(['yes', 'no', 'after_fix']);
 const RUNTIME_FAILURE_SOURCES = new Set(['run_failure', 'monitor_verdict', 'open_question', 'blocked_runtime', 'closed_runtime', 'none']);
 const DEFAULT_ACCEPTED_MONITOR_VERDICTS = ['confirm_done'];
+const MONITOR_CONCERN_FIELDS = ['scope_concerns', 'verification_concerns', 'unmet_acceptance', 'needs_user_decision'];
 const HIGH_ACCEPTANCE_MONITOR_THRESHOLD = 6;
 const ROLE_PROFILE_SOURCES = new Set(['auto', 'override']);
 const ROLE_PROFILE_TO_ROLE = Object.freeze({
@@ -861,16 +862,45 @@ function buildMonitorPrompt(task) {
   return [
     `Review whether Plan2Agent task ${task.id} can be accepted after implementation.`,
     '',
-    'Return a small JSON verdict file with one of these values:',
-    '- {"verdict":"confirm_done"}',
-    '- {"verdict":"block"}',
-    '- {"verdict":"scope_concerns"}',
-    '- {"verdict":"verification_concerns"}',
-    '- {"verdict":"unmet_acceptance"}',
-    '- {"verdict":"needs_user_decision"}',
+    'Return a small JSON verdict file with this shape:',
+    '{',
+    '  "verdict": "confirm_done" | "block",',
+    '  "unmet_acceptance": [],',
+    '  "verification_concerns": [],',
+    '  "scope_concerns": [],',
+    '  "needs_user_decision": [],',
+    '  "note": ""',
+    '}',
     '',
+    'Use verdict "confirm_done" only when all concern arrays are empty. Use verdict "block" and fill the relevant array(s) when acceptance, verification, scope, or user-decision concerns remain.',
     'Check the run output, changed files, verification results, and acceptance criteria.',
   ].join('\n');
+}
+
+function monitorConcernValues(data, field) {
+  if (!data || typeof data !== 'object') return [];
+  const value = data[field];
+  if (Array.isArray(value)) return value.filter((item) => typeof item === 'string' && item.trim()).map((item) => item.trim());
+  if (typeof value === 'string' && value.trim()) return [value.trim()];
+  return [];
+}
+
+export function normalizeMonitorVerdictData(data) {
+  if (typeof data === 'string') {
+    const verdict = data.trim();
+    if (!verdict) throw new Error('monitor verdict must not be blank');
+    return { verdict, failureSignal: verdict, concerns: {}, concernFields: [], hasConcerns: false, note: null };
+  }
+  if (!data || typeof data !== 'object' || Array.isArray(data)) {
+    throw new Error('monitor verdict must be a JSON string or object with a verdict field');
+  }
+  const verdict = typeof data.verdict === 'string' ? data.verdict.trim() : '';
+  if (!verdict) throw new Error('monitor verdict object must include a non-empty verdict field');
+  const concerns = Object.fromEntries(MONITOR_CONCERN_FIELDS.map((field) => [field, monitorConcernValues(data, field)]));
+  const concernFields = MONITOR_CONCERN_FIELDS.filter((field) => concerns[field].length > 0);
+  const failureSignal = concernFields[0] ?? (verdict === 'block' ? 'block' : verdict);
+  const note = typeof data.note === 'string' && data.note.trim() ? data.note.trim() : null;
+  return { verdict, failureSignal, concerns, concernFields, hasConcerns: concernFields.length > 0, note };
 }
 
 function orchestrationRole({ roleId, role, profileSelection, agentTool, scope, basePrompt, requiresWrite }) {
@@ -1441,7 +1471,19 @@ function latestRuntimeEvent(runtime, type) {
   return [...runtime.communicationLog].reverse().find((event) => event.type === type) ?? null;
 }
 
-function monitorFailureFromRuntime(runtime) {
+function monitorFailureClassForRuntime(runtimePath, runtime, verdict) {
+  if (!runtime.sourcePlanRef) return 'implementation_incomplete';
+  const planPath = path.resolve(path.dirname(runtimePath), runtime.sourcePlanRef);
+  if (!existsSync(planPath)) return 'implementation_incomplete';
+  try {
+    const plan = loadPlan(planPath);
+    return plan.monitorGate.failureClassMap[verdict] ?? 'implementation_incomplete';
+  } catch {
+    return 'implementation_incomplete';
+  }
+}
+
+function monitorFailureFromRuntime(runtimePath, runtime) {
   const event = latestRuntimeEvent(runtime, 'monitor_verdict');
   if (!event?.detail) return null;
   try {
@@ -1449,9 +1491,9 @@ function monitorFailureFromRuntime(runtime) {
     if (detail?.accepted === false) {
       return {
         source: 'monitor_verdict',
-        class: 'implementation_incomplete',
+        class: monitorFailureClassForRuntime(runtimePath, runtime, detail.verdict),
         retryable: 'after_fix',
-        needsUserDecision: false,
+        needsUserDecision: detail.verdict === 'needs_user_decision',
         evidence: `${event.eventId}: ${event.summary}`,
       };
     }
@@ -1461,7 +1503,7 @@ function monitorFailureFromRuntime(runtime) {
   return null;
 }
 
-function runtimeFailureSignal(runtime, runInfo) {
+function runtimeFailureSignal(runtimePath, runtime, runInfo) {
   const runFailure = runInfo.run?.failure ?? null;
   if (runFailure) {
     return {
@@ -1482,7 +1524,7 @@ function runtimeFailureSignal(runtime, runInfo) {
       evidence: `${openQuestion.questionId}: ${openQuestion.summary}`,
     };
   }
-  const monitorFailure = monitorFailureFromRuntime(runtime);
+  const monitorFailure = monitorFailureFromRuntime(runtimePath, runtime);
   if (monitorFailure) return monitorFailure;
   if (runtime.status.needsUserDecision) {
     return {
@@ -1558,7 +1600,7 @@ function failurePolicyPayload(runtimePath) {
   const resolvedRuntimePath = path.resolve(runtimePath);
   const runtime = readOrchestrationRuntime(resolvedRuntimePath);
   const runInfo = readRunForRuntime(resolvedRuntimePath, runtime);
-  const signal = runtimeFailureSignal(runtime, runInfo);
+  const signal = runtimeFailureSignal(resolvedRuntimePath, runtime, runInfo);
   if (!RUNTIME_FAILURE_RETRYABLE.has(signal.retryable)) {
     throw new Error(`unsupported failure retryability in runtime policy: ${signal.retryable}`);
   }

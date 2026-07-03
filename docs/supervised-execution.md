@@ -96,7 +96,7 @@ node .plan2agent/scripts/p2a.mjs execute start \
 node .plan2agent/scripts/p2a.mjs orchestrate mark-role \
   --runtime .plan2agent/runs/<run-id>.orchestration-runtime.json \
   --role <role-id> \
-  --status complete
+  --role-status complete
 ```
 
 7. 검증과 finish:
@@ -143,6 +143,7 @@ monitor gate가 필요한 run은 monitor verdict 없이 `done`으로 닫지 않�
   "unmet_acceptance": [],
   "verification_concerns": [],
   "scope_concerns": [],
+  "needs_user_decision": [],
   "note": ""
 }
 ```

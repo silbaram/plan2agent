@@ -8,12 +8,14 @@ import process from 'node:process';
 import { pathToFileURL } from 'node:url';
 import {
   loadJson,
+  validateOrchestrationPlanData,
   validateRunData,
   validateRunIndexData,
   validateRunsDir,
   validateTaskGraphData,
   ValidationError,
 } from './validate_artifacts.mjs';
+import { normalizeMonitorVerdictData } from './p2a_orchestrate.mjs';
 import { resolveIterationState } from './p2a_iteration_state.mjs';
 import { DEFAULT_RUNS_DIR, resolveRunsDir } from './p2a_run_paths.mjs';
 import {
@@ -98,7 +100,7 @@ function usage() {
     '                          Override whether the failure needs a user decision.',
     '  --failure-source <src>  Override failure source: owner, monitor, implementer.',
     '  --verification <type:status:command>',
-    '                          Manually record a verification result. type: test/lint/typecheck/custom.',
+    '                          Manually record supplemental verification. Manual passed records do not satisfy finished/done guards.',
     '  --test, --lint, --typecheck',
     '                          Run configured command from .plan2agent/project.config.json.',
     '  --test-command <cmd>, --lint-command <cmd>, --typecheck-command <cmd>',
@@ -344,6 +346,40 @@ function loadTaskGraph(graphPath) {
   return graph;
 }
 
+function readOrchestrationSidecar(runsDir, runId) {
+  const filePath = orchestrationSidecarPath(runsDir, runId);
+  if (!existsSync(filePath)) return null;
+  return validateOrchestrationPlanData(loadJson(filePath));
+}
+
+function readMonitorVerdict(runsDir, sidecar) {
+  if (!sidecar?.monitorGate?.required) return null;
+  const verdictPath = path.resolve(runsDir, sidecar.monitorGate.verdictPath);
+  assertFile(verdictPath, 'monitor verdict');
+  try {
+    return normalizeMonitorVerdictData(loadJson(verdictPath));
+  } catch (error) {
+    throw new Error(`${error.message}: ${displayPath(verdictPath)}`);
+  }
+}
+
+function applyMonitorGate(args, runsDir, run) {
+  const sidecar = readOrchestrationSidecar(runsDir, run.runId);
+  if (!sidecar?.monitorGate?.required) return null;
+  const verdict = readMonitorVerdict(runsDir, sidecar);
+  if (sidecar.monitorGate.acceptedVerdicts.includes(verdict.verdict) && !verdict.hasConcerns) {
+    return { accepted: true, verdict: verdict.verdict };
+  }
+  const mappedFailureClass = sidecar.monitorGate.failureClassMap[verdict.failureSignal]
+    ?? sidecar.monitorGate.failureClassMap[verdict.verdict]
+    ?? 'other';
+  args.status = 'blocked';
+  if (!args.failureClass) args.failureClass = mappedFailureClass;
+  if (!args.failureSource) args.failureSource = 'monitor';
+  if (args.needsUserDecision === null && verdict.failureSignal === 'needs_user_decision') args.needsUserDecision = true;
+  return { accepted: false, verdict: verdict.failureSignal, failureClass: args.failureClass };
+}
+
 function taskMap(graph) {
   return new Map(graph.tasks.map((task) => [task.id, task]));
 }
@@ -426,6 +462,11 @@ function generatedRunId(taskId, now = new Date()) {
 function runPath(runsDir, runId) {
   assertSafeRunId(runId);
   return path.join(runsDir, `${runId}.json`);
+}
+
+function orchestrationSidecarPath(runsDir, runId) {
+  assertSafeRunId(runId);
+  return path.join(runsDir, `${runId}.orchestration.json`);
 }
 
 function indexPath(runsDir) {
@@ -792,20 +833,21 @@ function runVerificationCommand(spec, workspacePath) {
 }
 
 function collectGitChangedFiles(workspacePath) {
-  const result = gitCommandResult(['status', '--porcelain=v1'], workspacePath);
+  const result = gitCommandResult(['status', '--porcelain=v1', '-z', '--untracked-files=all'], workspacePath);
   if (result.status !== 0) {
     throw new Error(`git status failed while collecting changed files: ${gitResultToTail(result)}`);
   }
-  return result.stdout
-    .split(/\r?\n/)
-    .filter((line) => line.trim())
-    .map((line) => {
-      const pathField = line.slice(3);
-      const renamed = pathField.match(/^(.+?) -> (.+)$/);
-      if (renamed) return renamed[2];
-      return pathField.trim();
-    })
-    .filter(Boolean);
+  const records = result.stdout.split('\0').filter(Boolean);
+  const changedFiles = [];
+  for (let index = 0; index < records.length; index += 1) {
+    const record = records[index];
+    if (record.length < 4) continue;
+    const status = record.slice(0, 2);
+    const filePath = record.slice(3);
+    if (filePath) changedFiles.push(filePath);
+    if (status.includes('R') || status.includes('C')) index += 1;
+  }
+  return changedFiles;
 }
 
 function hasFailureOptions(args) {
@@ -846,6 +888,12 @@ function incompleteVerificationItems(run) {
   return run.verification.filter((item) => item.status === 'skipped' || item.status === 'not_run');
 }
 
+function executedPassedVerificationItems(run) {
+  return run.verification.filter((item) => item.status === 'passed'
+    && (item.source === 'config' || item.source === 'command')
+    && item.exitCode === 0);
+}
+
 function structuredDetailHasValue(detail, fields) {
   if (!detail || typeof detail !== 'object' || Array.isArray(detail)) return false;
   return fields.some((field) => Array.isArray(detail[field]) && detail[field].some((value) => typeof value === 'string' && value.trim()));
@@ -884,6 +932,9 @@ function assertFinishedRunGuard(run) {
     const summary = incomplete.map((item) => `${item.type}:${item.status}`).join(', ');
     throw new Error(`finished run cannot include incomplete verification: ${summary}. Finish this run as failed/blocked with --failure-class, or start a new run with passed verification evidence.`);
   }
+  if (executedPassedVerificationItems(run).length === 0) {
+    throw new Error('finished run requires at least one executed passed verification with source config|command and exitCode 0. Manual verification records are not sufficient.');
+  }
 }
 
 function startRun(args) {
@@ -913,7 +964,7 @@ function startRun(args) {
     sourceSpecRef: source.sourceSpecRef,
     agentTool: args.agentTool,
     workspaceRef,
-    workspacePath: displayPath(workspacePath),
+    workspacePath,
     isolation,
     status: 'started',
     startedAt: now.toISOString(),
@@ -981,6 +1032,9 @@ function verifyRun(args) {
 function finishRun(args) {
   const runsDir = resolveRunsDir(args);
   const run = readRun(runsDir, args.runId);
+  if (run.status !== 'started') {
+    throw new Error(`run ${run.runId} is already ${run.status}; use record to append evidence instead of finishing it again`);
+  }
   const workspacePath = args.workspace ? path.resolve(args.workspace) : path.resolve(run.workspacePath);
   const changedFiles = [...args.changedFiles];
   if (args.collectGit) changedFiles.push(...collectGitChangedFiles(workspacePath));
@@ -988,6 +1042,8 @@ function finishRun(args) {
   run.verification.push(...args.manualVerification);
   run.notes = uniqueStrings([...run.notes, ...args.notes]);
   mergeStructuredRunDetails(run, args);
+  const targetStatus = deriveFinishStatus(run, args.status);
+  if (targetStatus === 'finished') applyMonitorGate(args, runsDir, run);
   run.status = deriveFinishStatus(run, args.status);
   assertFinishedRunGuard(run);
   const failure = buildFailure(args, run.status);

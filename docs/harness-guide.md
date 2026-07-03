@@ -398,10 +398,10 @@ node .plan2agent/scripts/p2a_iteration.mjs init \
 사용자 관점의 루프는 다음과 같다.
 
 1. `node .plan2agent/scripts/p2a_tasks.mjs ready --artifacts .plan2agent/artifacts/<project_id>`로 지금 시작할 수 있는 task를 확인한다.
-2. 실행할 task를 정한 뒤 `node .plan2agent/scripts/p2a_tasks.mjs start --artifacts .plan2agent/artifacts/<project_id> <task-id>`로 상태를 `in_progress`로 바꾼다. dependency가 완료되지 않은 task는 시작할 수 없다.
-3. `node .plan2agent/scripts/p2a_tasks.mjs prompt --artifacts .plan2agent/artifacts/<project_id> <task-id>`로 agent CLI에 붙여넣을 prompt를 만든다. 출력에는 task의 `suggestedAgentPrompt`와 acceptance criteria가 포함된다.
+2. 실행할 task를 정한 뒤 `node .plan2agent/scripts/p2a_execute.mjs start --artifacts .plan2agent/artifacts/<project_id> --task <task-id>`로 run을 만들고 상태를 `in_progress`로 바꾼다. dependency가 완료되지 않은 task는 시작할 수 없다.
+3. `p2a_execute start`가 출력한 launcher prompt를 agent CLI에 붙여넣는다. 별도 확인이 필요하면 `node .plan2agent/scripts/p2a_tasks.mjs prompt --artifacts .plan2agent/artifacts/<project_id> <task-id>`로 같은 task context를 다시 볼 수 있다.
 4. Claude Code 또는 Codex 같은 write-capable agent 세션에서 prompt를 실행하고, 코드 변경과 검증은 해당 작업 브랜치에서 수행한다. Gemini CLI는 현재 review/monitor 같은 read-only 보조로만 사용한다.
-5. acceptance criteria와 필요한 테스트가 통과하면 먼저 `p2a_runs.mjs verify/finish`로 성공 run evidence를 기록한 뒤 `node .plan2agent/scripts/p2a_tasks.mjs done --artifacts .plan2agent/artifacts/<project_id> <task-id>`로 완료 처리한다. `done`은 최신 run이 `finished`이고 verification이 모두 `passed`인 경우만 허용한다. 막히면 `block`, 재시도해야 하면 `todo`로 상태를 기록한다.
+5. acceptance criteria와 필요한 테스트가 통과하면 `node .plan2agent/scripts/p2a_execute.mjs finish --artifacts .plan2agent/artifacts/<project_id> --run-id <run-id> --test --lint --typecheck --collect-git`로 검증, run closeout, task done/block 전이를 한 번에 기록한다. `done`은 최신 run이 현재 iteration/task graph에 속하고 실행된 verification(`source: config|command`, `exitCode: 0`)이 있는 경우만 허용한다. 막히면 failed/blocked finish에 `--failure-class`, `--repro-step`, `--localization`, `--guard`를 함께 기록한다.
 6. 다시 `ready`를 확인해 다음 dependency-unblocked task를 선택한다.
 
 이미 승인 산출물을 별도 대상 프로젝트로 복사한 legacy handoff 프로젝트에서는 `.plan2agent/project.config.json.taskGraph`가 가리키는 flat graph를 `--graph`로 명시할 수 있다.

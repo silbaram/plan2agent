@@ -171,6 +171,25 @@ function formatDisplayPath(filePath) {
   return displayPath.split(path.sep).join('/');
 }
 
+function artifactRelativePath(artifactRoot, filePath) {
+  return path.relative(artifactRoot, filePath).split(path.sep).join('/');
+}
+
+function expectedRunContext(args, graph) {
+  if (args.iterationState) {
+    return {
+      projectId: args.iterationState.projectId,
+      iterationId: args.maintenance ? 'maintenance' : args.iterationState.activeIteration,
+      taskGraphRef: artifactRelativePath(args.iterationState.artifactRoot, args.graphPath),
+    };
+  }
+  return {
+    projectId: graph.projectId,
+    iterationId: graph.version ?? null,
+    taskGraphRef: formatDisplayPath(path.resolve(args.graphPath)),
+  };
+}
+
 function getByDotPath(data, dotPath) {
   return dotPath.split('.').reduce((current, part) => {
     if (current && typeof current === 'object' && Object.hasOwn(current, part)) return current[part];
@@ -272,8 +291,17 @@ function assertRunMatchesIndexEntry(taskId, runId, run, indexEntry, strict) {
   }
 }
 
+function runEvidenceTime(run, indexEntry) {
+  for (const value of [run.finishedAt, run.updatedAt, run.startedAt, indexEntry.finishedAt, indexEntry.startedAt]) {
+    const time = Date.parse(value ?? '');
+    if (!Number.isNaN(time)) return time;
+  }
+  return 0;
+}
+
 function latestRunForTask(args, taskId, options = {}) {
   const strict = options.strict ?? false;
+  const graph = options.graph;
   const runsDir = runsDirForTaskArgs(args);
   if (!runsDir) return latestRunProblem(`no runs directory could be resolved for ${taskId}`, strict);
   const indexPath = path.join(runsDir, 'run-index.json');
@@ -287,39 +315,69 @@ function latestRunForTask(args, taskId, options = {}) {
   } catch (error) {
     return latestRunProblem(`could not read run-index for ${taskId}: ${error.message}`, strict);
   }
+  const expectedContext = graph ? expectedRunContext(args, graph) : null;
   const taskEntry = index.tasks?.find((entry) => entry.taskId === taskId);
-  const runId = taskEntry?.latestRunId;
-  if (!runId) {
-    return latestRunProblem(`no latest run evidence found for ${taskId}; finish a successful run before marking the task done`, strict);
+  const runIds = taskEntry?.runIds ?? [];
+  if (!runIds.length) return latestRunProblem(`no latest run evidence found for ${taskId}; finish a successful run before marking the task done`, strict);
+  const contextMismatches = [];
+  const candidates = [];
+  for (const [runOrder, runId] of runIds.entries()) {
+    const indexEntry = latestRunIndexEntry(index, taskId, runId, strict);
+    if (!indexEntry) return null;
+    if (expectedContext && (
+      indexEntry.iterationId !== expectedContext.iterationId
+      || indexEntry.taskGraphRef !== expectedContext.taskGraphRef
+    )) {
+      contextMismatches.push(runId);
+      continue;
+    }
+    const runPath = path.join(runsDir, `${runId}.json`);
+    if (!existsSync(runPath) || !lstatSync(runPath).isFile()) {
+      return latestRunProblem(`latest run ${runId} for ${taskId} is missing at ${formatDisplayPath(runPath)}`, strict);
+    }
+    let run;
+    try {
+      run = JSON.parse(readFileSync(runPath, 'utf8'));
+      validateRunData(run);
+    } catch (error) {
+      return latestRunProblem(`could not read latest run for ${taskId}: ${error.message}`, strict);
+    }
+    if (run.runId !== runId) {
+      return latestRunProblem(`latest run evidence mismatch for ${taskId}: index points to ${runId} but file contains ${run.runId}`, strict);
+    }
+    if (run.taskId !== taskId) {
+      return latestRunProblem(`latest run ${run.runId} belongs to ${run.taskId}, not ${taskId}`, strict);
+    }
+    if (run.projectId !== index.projectId) {
+      return latestRunProblem(`latest run ${run.runId} projectId ${run.projectId} does not match run-index projectId ${index.projectId}`, strict);
+    }
+    if (expectedContext && (
+      run.projectId !== expectedContext.projectId
+      || run.iterationId !== expectedContext.iterationId
+      || run.taskGraphRef !== expectedContext.taskGraphRef
+    )) {
+      contextMismatches.push(run.runId);
+      continue;
+    }
+    assertRunMatchesIndexEntry(taskId, runId, run, indexEntry, strict);
+    candidates.push({
+      run,
+      runOrder,
+      evidenceTime: runEvidenceTime(run, indexEntry),
+    });
   }
-  const indexEntry = latestRunIndexEntry(index, taskId, runId, strict);
-  if (!indexEntry) return null;
-  const runPath = path.join(runsDir, `${runId}.json`);
-  if (!existsSync(runPath) || !lstatSync(runPath).isFile()) {
-    return latestRunProblem(`latest run ${runId} for ${taskId} is missing at ${formatDisplayPath(runPath)}`, strict);
+  if (candidates.length) {
+    candidates.sort((left, right) => (right.evidenceTime - left.evidenceTime) || (right.runOrder - left.runOrder));
+    return candidates[0].run;
   }
-  let run;
-  try {
-    run = JSON.parse(readFileSync(runPath, 'utf8'));
-    validateRunData(run);
-  } catch (error) {
-    return latestRunProblem(`could not read latest run for ${taskId}: ${error.message}`, strict);
-  }
-  if (run.runId !== runId) {
-    return latestRunProblem(`latest run evidence mismatch for ${taskId}: index points to ${runId} but file contains ${run.runId}`, strict);
-  }
-  if (run.taskId !== taskId) {
-    return latestRunProblem(`latest run ${run.runId} belongs to ${run.taskId}, not ${taskId}`, strict);
-  }
-  if (run.projectId !== index.projectId) {
-    return latestRunProblem(`latest run ${run.runId} projectId ${run.projectId} does not match run-index projectId ${index.projectId}`, strict);
-  }
-  assertRunMatchesIndexEntry(taskId, runId, run, indexEntry, strict);
-  return run;
+  return latestRunProblem(
+    `no latest run evidence found for ${taskId} in current task graph context${contextMismatches.length ? `; ignored out-of-context run(s): ${contextMismatches.join(', ')}` : ''}`,
+    strict,
+  );
 }
 
-function latestRunFailureClass(args, taskId) {
-  return latestRunForTask(args, taskId)?.failure?.class ?? null;
+function latestRunFailureClass(args, taskId, graph) {
+  return latestRunForTask(args, taskId, { graph })?.failure?.class ?? null;
 }
 
 function changedPlan2AgentControlFiles(run) {
@@ -334,8 +392,14 @@ function changedPlan2AgentControlFiles(run) {
   });
 }
 
-function assertDoneShortcutGuard(args, task) {
-  const run = latestRunForTask(args, task.id, { strict: true });
+function executedPassedVerification(run) {
+  return run.verification.filter((item) => item.status === 'passed'
+    && (item.source === 'config' || item.source === 'command')
+    && item.exitCode === 0);
+}
+
+function assertDoneShortcutGuard(args, task, graph) {
+  const run = latestRunForTask(args, task.id, { strict: true, graph });
   if (!run) {
     throw new Error(`no run evidence found for ${task.id}; finish a successful run before marking the task done`);
   }
@@ -357,6 +421,9 @@ function assertDoneShortcutGuard(args, task) {
   if (incompleteVerification.length) {
     throw new Error(`${task.id} cannot be marked done because latest run ${run.runId} has incomplete verification: ${incompleteVerification.map((item) => `${item.type}:${item.status}`).join(', ')}`);
   }
+  if (executedPassedVerification(run).length === 0) {
+    throw new Error(`${task.id} cannot be marked done because latest run ${run.runId} has no executed passed verification evidence`);
+  }
   const controlFiles = changedPlan2AgentControlFiles(run);
   if (controlFiles.length) {
     throw new Error(`${task.id} cannot be marked done because latest run ${run.runId} changed Plan2Agent control artifacts: ${controlFiles.join(', ')}`);
@@ -372,11 +439,11 @@ function transitionTask(graph, task, command, args = {}) {
     task.status = 'in_progress';
   } else if (command === 'done') {
     if (task.status !== 'in_progress') throw new Error(`${task.id} must be in_progress before done; current status is ${task.status}`);
-    assertDoneShortcutGuard(args, task);
+    assertDoneShortcutGuard(args, task, graph);
     task.status = 'done';
   } else if (command === 'block') {
     task.status = 'blocked';
-    const failureClass = latestRunFailureClass(args, task.id);
+    const failureClass = latestRunFailureClass(args, task.id, graph);
     if (failureClass) task.blockReason = failureClass;
   } else if (command === 'todo') {
     task.status = 'todo';

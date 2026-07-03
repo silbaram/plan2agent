@@ -400,7 +400,7 @@ node .plan2agent/scripts/p2a_orchestrate.mjs failure-policy \
 
 `next-role`, `role-prompt`, `mark-role`, `failure-policy`는 감독형 scheduler 명령이다. 이 명령들은 다음 role, provider execution guide, prompt, blocked next action 후보, 실패 후 `retry|ask_user|stop` 정책을 계산하고 사람이 관찰한 상태 전이를 기록할 뿐, Codex/Claude/Gemini CLI, browser, background loop, unofficial API를 실행하지 않는다. `role-prompt`는 provider-native delegation 섹션을 포함해 사용자가 연 foreground 세션 안에서 skill/subagent/custom agent/agent team을 쓰도록 요청할 수 있다. 구독 로그인 기반 사용에서는 사람이 공식 CLI/앱을 직접 열어 prompt를 붙여넣고 결과를 다시 기록한다. monitor role을 `complete`로 기록할 때는 실제 판단값을 `--verdict confirm_done`처럼 함께 넘긴다. 허용 verdict가 아니면 runtime phase는 `blocked`가 되며, 이 runtime은 자동으로 unblock하지 않는다. 계속 진행하려면 `failure-policy`가 제안한 방식에 따라 현재 run을 blocked로 닫고 후속 supervised run이나 maintenance task로 이어간다.
 
-monitor gate가 필요한 plan은 `runs/<runId>.monitor-verdict.json`에 `{"verdict":"confirm_done"}` 같은 verdict가 있어야 `finish`가 done으로 닫힌다. 허용되지 않은 verdict는 plan의 `failureClassMap`에 따라 기존 run failure class로 변환되어 blocked 흐름으로 기록된다.
+monitor gate가 필요한 plan은 `runs/<runId>.monitor-verdict.json`에 `{"verdict":"confirm_done","unmet_acceptance":[],"verification_concerns":[],"scope_concerns":[],"needs_user_decision":[],"note":""}` 같은 verdict 객체가 있어야 `finish`가 done으로 닫힌다. `{"verdict":"block", ...}` 객체는 채워진 concern 배열을 기준으로 plan의 `failureClassMap`에 매핑되어 blocked 흐름으로 기록된다. raw `p2a_runs finish`도 orchestration sidecar가 있으면 같은 monitor verdict를 요구한다.
 
 ## 7. 개발 진행 — `p2a_tasks.mjs`
 
@@ -513,7 +513,7 @@ node .plan2agent/scripts/p2a_runs.mjs list \
 
 `verify`는 `.plan2agent/project.config.json`의 `testCommand`, `lintCommand`, `typecheckCommand`를 읽는다. 설정이 비어 있으면 현재 workspace의 `package.json`, lockfile, Gradle, Maven 파일을 다시 감지해 누락된 기본 명령을 채운 뒤 실행한다. 별도 명령을 쓰려면 `--test-command`, `--lint-command`, `--typecheck-command`, `--verify-command <type:cmd>`를 넘긴다. 명시 명령을 다음 실행의 기본값으로 저장하려면 `--save-config`를 함께 넘긴다. `--isolation branch|worktree`는 격리 기준을 run log에 기록하며, `--create-isolation`을 함께 줄 때만 실제 `git switch -c` 또는 `git worktree add`를 실행한다.
 
-`finish`는 `--status finished`로 닫으려는 run에 통과한 verification evidence가 없거나 `failed`/`skipped`/`not_run` verification이 남아 있으면 non-zero로 거절한다. 아직 verification evidence가 없다면 같은 run에 passed verification을 기록한 뒤 닫을 수 있지만, 이미 `failed`/`skipped`/`not_run` evidence가 남은 run은 `--status failed|blocked --failure-class <class>`로 닫고 새 run에서 성공 검증을 다시 남긴다. `failed`/`blocked` run은 후속 분석 품질을 위해 `reproduction`, `localization`, `guard` 구조 필드가 필수이며, 빠지면 run 파일을 쓰지 않고 non-zero로 거절한다.
+`finish`는 `--status finished`로 닫으려는 run에 실행된 통과 verification evidence가 없거나 `failed`/`skipped`/`not_run` verification이 남아 있으면 non-zero로 거절한다. `--verification type:passed:text`로 기록한 manual evidence는 보조 기록일 뿐 done/finished 통과 증거로 인정하지 않는다. 아직 verification evidence가 없다면 같은 run에 `p2a_runs verify`로 `source: config|command`, `exitCode: 0` verification을 기록한 뒤 닫을 수 있지만, 이미 `failed`/`skipped`/`not_run` evidence가 남은 run은 `--status failed|blocked --failure-class <class>`로 닫고 새 run에서 성공 검증을 다시 남긴다. `failed`/`blocked` run은 후속 분석 품질을 위해 `reproduction`, `localization`, `guard` 구조 필드가 필수이며, 빠지면 run 파일을 쓰지 않고 non-zero로 거절한다.
 
 handoff 대상 프로젝트에서는 다음처럼 쓴다.
 
