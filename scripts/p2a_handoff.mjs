@@ -30,7 +30,17 @@ import {
 import { resolveIterationState } from './p2a_iteration_state.mjs';
 import { renderIterationIndexMarkdown } from './p2a_iteration.mjs';
 import { P2A_ARTIFACTS_DIR, P2A_SCHEMAS_DIR, P2A_SCRIPTS_DIR, resolveP2aPaths } from './p2a_paths.mjs';
-import { buildProjectConfig, defaultCapabilityConfig, defaultPromptTemplates, mergeCapabilityConfig, mergeDevSkillConfig, resolveOrchestrationAgentTool } from './p2a_project_config.mjs';
+import {
+  buildProjectConfig,
+  defaultCapabilityConfig,
+  defaultPromptTemplates,
+  mergeCapabilityConfig,
+  mergeDevSkillConfig,
+  mergeProjectIdConfig,
+  mergeProjectIdManifest,
+  resolveOrchestrationAgentTool,
+  resolveProjectIdDefault,
+} from './p2a_project_config.mjs';
 import { PROJECT_RUNTIME_SCHEMA_FILES, PROJECT_RUNTIME_SCRIPT_FILES } from './p2a_tool_manifest.mjs';
 
 const P2A_PATHS = resolveP2aPaths(import.meta.url);
@@ -1100,6 +1110,7 @@ history through Plan2Agent Memory or an explicit export when needed.
 
 function buildScaffoldPlan(args, targetRoot, createdAt = new Date().toISOString()) {
   const plan = [];
+  const projectId = resolveProjectIdDefault(targetRoot);
   for (const file of SCAFFOLD_SCRIPT_FILES) {
     pushArtifact(plan, path.join(ROOT, 'scripts', file), targetRoot, targetScriptPath(file));
   }
@@ -1112,6 +1123,7 @@ function buildScaffoldPlan(args, targetRoot, createdAt = new Date().toISOString(
   const schemaFiles = SCAFFOLD_SCHEMA_FILES.map((file) => normalizePath(targetSchemaPath(file)));
   const manifest = {
     schema_version: 'p2a.handoff.v1',
+    projectId,
     provenance: { mode: 'scaffold', createdAt, toolkitRoot: ROOT },
     targetProject: targetRoot,
     createdAt,
@@ -1132,10 +1144,11 @@ function buildScaffoldPlan(args, targetRoot, createdAt = new Date().toISOString(
     pushGeneratedJson(plan, targetRoot, path.join('.claude', 'settings.local.json'), buildClaudeLocalSettings());
   }
   pushGeneratedJson(plan, targetRoot, path.join('.plan2agent', 'manifest.json'), manifest);
-  pushGeneratedJson(plan, targetRoot, path.join('.plan2agent', 'project.config.json'), buildProjectConfig(targetRoot, { enabled: false }));
+  pushGeneratedJson(plan, targetRoot, path.join('.plan2agent', 'project.config.json'), buildProjectConfig(targetRoot, { enabled: false }, { projectId }));
   pushGeneratedText(plan, targetRoot, '.gitignore', renderProjectGitignore());
   pushGeneratedText(plan, targetRoot, 'PLAN2AGENT.md', renderPlan2AgentGuide());
   plan.scaffoldWarnings = claudeCoarseDeny.omitted.map((prefix) => `Claude coarse deny ${prefix}/** omitted because targetProject is under that prefix; the PreToolUse hook enforces the workspace boundary instead.`);
+  plan.projectId = projectId;
   return plan;
 }
 
@@ -1143,6 +1156,7 @@ function printScaffoldPlan(plan, args, targetRoot) {
   console.log(`Plan2Agent scaffold ${args.dryRun ? 'dry run' : 'plan'}`);
   console.log(`aiTools: ${args.tools.length ? args.tools.join(',') : 'none'}`);
   console.log(`targetProject: ${targetRoot}`);
+  console.log(`projectId: ${plan.projectId}`);
   if (plan.scaffoldWarnings?.length) {
     for (const warning of plan.scaffoldWarnings) console.warn(`warning: ${warning}`);
   }
@@ -1284,25 +1298,46 @@ function updateApplyCommand(args, targetRoot) {
   return parts.map(shellQuote).join(' ');
 }
 
-function buildConfigMigrations(config, manifest) {
+function buildConfigMigrations(config, manifest, targetRoot) {
   let nextConfig = config;
+  let nextManifest = manifest;
+  const projectIdConfigMigration = mergeProjectIdConfig(nextConfig, nextManifest, targetRoot);
+  nextConfig = projectIdConfigMigration.config;
+  const projectIdManifestMigration = mergeProjectIdManifest(nextManifest, nextConfig, targetRoot);
+  nextManifest = projectIdManifestMigration.manifest;
   const devConfigMigration = mergeDevSkillConfig(nextConfig);
   nextConfig = devConfigMigration.config;
-  const migrations = [{
-    id: 'dev_skills_config',
-    status: devConfigMigration.updatedKeys.length ? 'would_update' : 'up_to_date',
-    updatedKeys: devConfigMigration.updatedKeys,
-  }];
+  const migrations = [
+    {
+      id: 'project_id_config',
+      target: 'project_config',
+      status: projectIdConfigMigration.updatedKeys.length ? 'would_update' : 'up_to_date',
+      updatedKeys: projectIdConfigMigration.updatedKeys,
+    },
+    {
+      id: 'project_id_manifest',
+      target: 'manifest',
+      status: projectIdManifestMigration.updatedKeys.length ? 'would_update' : 'up_to_date',
+      updatedKeys: projectIdManifestMigration.updatedKeys,
+    },
+    {
+      id: 'dev_skills_config',
+      target: 'project_config',
+      status: devConfigMigration.updatedKeys.length ? 'would_update' : 'up_to_date',
+      updatedKeys: devConfigMigration.updatedKeys,
+    },
+  ];
   for (const capability of enabledCapabilityEnhancements(manifest)) {
     const migration = mergeCapabilityConfig(nextConfig, capability);
     nextConfig = migration.config;
     migrations.push({
       id: `${capability}_config`,
+      target: 'project_config',
       status: migration.updatedKeys.length ? 'would_update' : 'up_to_date',
       updatedKeys: migration.updatedKeys,
     });
   }
-  return { config: nextConfig, migrations };
+  return { config: nextConfig, manifest: nextManifest, migrations };
 }
 
 function buildUpgradeDryRunReport(args, targetRoot) {
@@ -1313,7 +1348,7 @@ function buildUpgradeDryRunReport(args, targetRoot) {
   const items = plan.map(compareUpgradePlanItem);
   const summary = summarizeUpgradeItems(items);
   const failures = items.filter((item) => item.status === 'conflict' || item.status === 'error');
-  const configMigrations = buildConfigMigrations(config, manifest);
+  const configMigrations = buildConfigMigrations(config, manifest, targetRoot);
   const migrationUpdateCount = configMigrations.migrations.reduce((sum, migration) => sum + migration.updatedKeys.length, 0);
   const changes = summary.missing + summary.wouldUpdate + summary.manualReview + migrationUpdateCount;
   const status = failures.length ? 'fail' : changes ? 'changes' : 'pass';
@@ -1338,6 +1373,7 @@ function buildUpgradeDryRunReport(args, targetRoot) {
     _manifest: manifest,
     _config: config,
     _nextConfig: configMigrations.config,
+    _nextManifest: configMigrations.manifest,
   };
 }
 
@@ -1398,7 +1434,7 @@ function applyCandidateStatus(status) {
 }
 
 function publicUpgradeReport(report) {
-  const { _plan, _manifest, _config, _nextConfig, ...publicReport } = report;
+  const { _plan, _manifest, _config, _nextConfig, _nextManifest, ...publicReport } = report;
   return publicReport;
 }
 
@@ -1482,6 +1518,13 @@ function plannedManifestData(report) {
 
 function mergeUpgradeManifest(existingManifest, report, appliedAt, appliedFiles, migrationIds) {
   const plannedManifest = plannedManifestData(report) ?? {};
+  const projectId = [
+    existingManifest.projectId,
+    report._nextManifest?.projectId,
+    report._nextConfig?.projectId,
+    plannedManifest.projectId,
+  ].find((value) => typeof value === 'string' && value.trim())
+    ?? resolveProjectIdDefault(report.targetProject, report._nextConfig, plannedManifest);
   const notes = [
     ...(Array.isArray(existingManifest.notes) ? existingManifest.notes.filter((item) => typeof item === 'string') : []),
     `Harness ${report.command} applied at ${appliedAt}`,
@@ -1499,6 +1542,7 @@ function mergeUpgradeManifest(existingManifest, report, appliedAt, appliedFiles,
   return {
     ...existingManifest,
     schema_version: existingManifest.schema_version ?? 'p2a.handoff.v1',
+    projectId,
     targetProject: existingManifest.targetProject ?? report.targetProject,
     includedTools: uniqueNormalizedList(existingManifest.includedTools, plannedManifest.includedTools),
     aiToolTargets: uniqueNormalizedList(existingManifest.aiToolTargets, report.aiToolTargets),
@@ -1571,15 +1615,19 @@ function executeUpgradeApply(targetRoot, report, previewReport) {
       report.applied.files.push(normalizePath(item.targetRelative));
     }
   }
-  if (report._migrations.length) {
+  const configMigrations = report._migrations.filter((migration) => migration.target !== 'manifest');
+  const manifestMigrations = report._migrations.filter((migration) => migration.target === 'manifest');
+  if (configMigrations.length) {
     writeJsonFile(path.join(targetRoot, '.plan2agent', 'project.config.json'), previewReport._nextConfig);
     report.applied.config = true;
+  }
+  if (report._migrations.length) {
     report.applied.migrations = report._migrations.map((migration) => ({
       id: migration.id,
       updatedKeys: migration.updatedKeys,
     }));
   }
-  const shouldUpdateManifest = report.applied.files.length > 0 || report.applied.config;
+  const shouldUpdateManifest = report.applied.files.length > 0 || report.applied.config || manifestMigrations.length > 0;
   if (shouldUpdateManifest) {
     const nextManifest = mergeUpgradeManifest(
       previewReport._manifest,
@@ -1720,14 +1768,16 @@ function buildEnhanceDevSkillsPlan(args, targetRoot) {
   const config = readUpgradeJsonFile(configPath, '.plan2agent/project.config.json', 'enhance dev-skills');
   const plan = [];
   const toolAssetPlan = pushToolAssets(plan, targetRoot, args.tools);
-  const mergedConfig = mergeDevSkillConfig(config);
-  const nextManifest = mergeEnhanceDevSkillsManifest(manifest, args.tools, toolAssetPlan);
+  const projectIdConfig = mergeProjectIdConfig(config, manifest, targetRoot);
+  const projectIdManifest = mergeProjectIdManifest(manifest, projectIdConfig.config, targetRoot);
+  const mergedConfig = mergeDevSkillConfig(projectIdConfig.config);
+  const nextManifest = mergeEnhanceDevSkillsManifest(projectIdManifest.manifest, args.tools, toolAssetPlan);
   pushGeneratedJson(plan, targetRoot, path.join('.plan2agent', 'manifest.json'), nextManifest);
   pushGeneratedJson(plan, targetRoot, path.join('.plan2agent', 'project.config.json'), mergedConfig.config);
   plan.enhanceSummary = {
     aiToolTargets: args.tools,
     assetFileCount: toolAssetPlan.files.length,
-    configUpdatedKeys: mergedConfig.updatedKeys,
+    configUpdatedKeys: [...new Set([...projectIdConfig.updatedKeys, ...mergedConfig.updatedKeys])],
   };
   return plan;
 }
@@ -1738,14 +1788,16 @@ function buildEnhanceCapabilityPlan(args, targetRoot) {
   const manifest = readUpgradeJsonFile(manifestPath, '.plan2agent/manifest.json', `enhance ${args.enhancement}`);
   const config = readUpgradeJsonFile(configPath, '.plan2agent/project.config.json', `enhance ${args.enhancement}`);
   const plan = [];
-  const mergedConfig = mergeCapabilityConfig(config, args.enhancement);
-  const nextManifest = mergeEnhanceCapabilityManifest(manifest, args.enhancement);
+  const projectIdConfig = mergeProjectIdConfig(config, manifest, targetRoot);
+  const projectIdManifest = mergeProjectIdManifest(manifest, projectIdConfig.config, targetRoot);
+  const mergedConfig = mergeCapabilityConfig(projectIdConfig.config, args.enhancement);
+  const nextManifest = mergeEnhanceCapabilityManifest(projectIdManifest.manifest, args.enhancement);
   pushGeneratedJson(plan, targetRoot, path.join('.plan2agent', 'manifest.json'), nextManifest);
   pushGeneratedJson(plan, targetRoot, path.join('.plan2agent', 'project.config.json'), mergedConfig.config);
   plan.enhanceSummary = {
     capability: args.enhancement,
     configKey: args.enhancement,
-    configUpdatedKeys: mergedConfig.updatedKeys,
+    configUpdatedKeys: [...new Set([...projectIdConfig.updatedKeys, ...mergedConfig.updatedKeys])],
     nextActions: enhanceCapabilityNextActions(args.enhancement, targetRoot, mergedConfig.config, nextManifest),
   };
   return plan;
@@ -1974,6 +2026,7 @@ function buildPlan(paths, args, artifactsRoot, targetRoot, sourceInfo, options =
   };
 
   const projectConfig = buildProjectConfig(targetRoot, teamBigFivePlan.projectConfig, {
+    projectId: args.projectId,
     taskGraph: targetTaskGraphRef,
   });
   plan.push({

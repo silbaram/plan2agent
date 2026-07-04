@@ -39,6 +39,23 @@ export function normalizePath(filePath) {
   return filePath.split(path.sep).join('/');
 }
 
+export function normalizeProjectId(value) {
+  if (typeof value !== 'string') return null;
+  const normalized = value
+    .normalize('NFKD')
+    .replace(/([a-z0-9])([A-Z])/g, '$1-$2')
+    .replace(/([A-Z]+)([A-Z][a-z])/g, '$1-$2')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .replace(/-{2,}/g, '-');
+  return normalized || null;
+}
+
+export function normalizeProjectIdFromPath(targetRoot, fallback = 'project') {
+  return normalizeProjectId(path.basename(path.resolve(targetRoot))) ?? fallback;
+}
+
 export function relativeToProject(projectRoot, filePath) {
   const relative = path.relative(projectRoot, filePath);
   if (relative && !relative.startsWith('..') && !path.isAbsolute(relative)) {

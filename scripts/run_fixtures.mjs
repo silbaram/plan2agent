@@ -321,7 +321,9 @@ function validateScaffoldFixtureCase() {
       || copiedExcludedToolFiles.length
       || manifestDesignSystemFiles.length
       || manifest.provenance?.mode !== 'scaffold'
+      || manifest.projectId !== 'target-project'
       || manifest.aiToolTargets.join(',') !== 'codex,claude,gemini'
+      || config.projectId !== 'target-project'
       || config.testCommand !== null
       || config.verificationTimeoutMs !== 600000
       || config.runTracking?.runsDir !== '.plan2agent/runs'
@@ -761,10 +763,10 @@ function validateScaffoldFixtureCase() {
       return { status: failureStatus(result), checks };
     }
 
-    const dryRunRoot = path.join(tempRoot, 'dry-run-target');
+    const dryRunRoot = path.join(tempRoot, 'P2AProjectIdUXCheck');
     result = runHandoff(['scaffold', '--target', dryRunRoot, '--tools', 'none', '--dry-run']);
     checks += 1;
-    if (result.status !== 0 || existsSync(dryRunRoot)) {
+    if (result.status !== 0 || !result.stdout.includes('projectId: p2-a-project-id-ux-check') || existsSync(dryRunRoot)) {
       console.error('scaffold dry-run fixture failed');
       writeResultOutput(result);
       return { status: failureStatus(result), checks };
@@ -783,13 +785,14 @@ function validateScaffoldFixtureCase() {
     delete enhanceConfig.devExecution;
     delete enhanceConfig.roleProfiles;
     delete enhanceConfig.promptTemplates;
+    delete enhanceConfig.projectId;
     writeFileSync(enhanceConfigPath, `${JSON.stringify(enhanceConfig, null, 2)}\n`);
     result = runHandoff(['enhance', 'dev-skills', '--target', enhanceTargetRoot, '--tools', 'codex', '--dry-run']);
     checks += 1;
     if (
       result.status !== 0
       || !result.stdout.includes('Plan2Agent enhance dev-skills dry run')
-      || !result.stdout.includes('configUpdatedKeys: devExecution,roleProfiles,promptTemplates')
+      || !result.stdout.includes('configUpdatedKeys: projectId,devExecution,roleProfiles,promptTemplates')
       || !result.stdout.includes('dry-run: no files written')
       || existsSync(path.join(enhanceTargetRoot, '.codex', 'agents', 'p2a-implementer.toml'))
     ) {
@@ -804,6 +807,8 @@ function validateScaffoldFixtureCase() {
     if (
       result.status !== 0
       || enhancedConfig.devExecution?.scopePolicy !== 'task_only'
+      || enhancedConfig.projectId !== 'enhance-target'
+      || enhancedManifest.projectId !== 'enhance-target'
       || enhancedConfig.roleProfiles?.monitor?.defaultProfile !== 'manual_monitor'
       || enhancedConfig.promptTemplates?.providerGuide !== 'p2a.provider_guide.v1'
       || !enhancedManifest.aiToolTargets?.includes('codex')
@@ -1121,6 +1126,7 @@ function validateScaffoldFixtureCase() {
     const applyConfigPath = path.join(applyUpdateRoot, '.plan2agent', 'project.config.json');
     const applyConfig = JSON.parse(readFileSync(applyConfigPath, 'utf8'));
     delete applyConfig.devExecution;
+    delete applyConfig.projectId;
     writeFileSync(applyConfigPath, `${JSON.stringify(applyConfig, null, 2)}\n`);
     result = runHandoff(['update', '--target', applyUpdateRoot, '--apply']);
     checks += 1;
@@ -1133,7 +1139,9 @@ function validateScaffoldFixtureCase() {
       || !result.stdout.includes('status: applied')
       || !result.stdout.includes('report: .plan2agent/update-reports/update-')
       || readFileSync(staleRuntimePath, 'utf8') !== readFileSync(path.join(ROOT, 'scripts', 'p2a_eval.mjs'), 'utf8')
+      || appliedUpdateConfig.projectId !== 'target-project'
       || appliedUpdateConfig.devExecution?.scopePolicy !== 'task_only'
+      || appliedUpdateManifest.projectId !== 'target-project'
       || !appliedUpdateManifest.updates?.some((entry) => entry.command === 'update')
 	      || applyUpdateReports.length !== 3
 	    ) {
@@ -1163,19 +1171,57 @@ function validateScaffoldFixtureCase() {
     cpSync(targetRoot, applyUpgradeRoot, { recursive: true });
     const staleSchemaPath = path.join(applyUpgradeRoot, '.plan2agent', 'schemas', 'run.schema.json');
     writeFileSync(staleSchemaPath, '{"stale": true}\n', 'utf8');
+    const applyUpgradeManifestPath = path.join(applyUpgradeRoot, '.plan2agent', 'manifest.json');
+    const applyUpgradeManifestBefore = JSON.parse(readFileSync(applyUpgradeManifestPath, 'utf8'));
+    delete applyUpgradeManifestBefore.projectId;
+    writeFileSync(applyUpgradeManifestPath, `${JSON.stringify(applyUpgradeManifestBefore, null, 2)}\n`);
     result = runHandoff(['upgrade', '--target', applyUpgradeRoot, '--apply']);
     checks += 1;
-    const appliedUpgradeManifest = JSON.parse(readFileSync(path.join(applyUpgradeRoot, '.plan2agent', 'manifest.json'), 'utf8'));
+    const appliedUpgradeManifest = JSON.parse(readFileSync(applyUpgradeManifestPath, 'utf8'));
     if (
       result.status !== 0
       || !result.stdout.includes('Plan2Agent upgrade apply')
       || !result.stdout.includes('status: applied')
       || readFileSync(staleSchemaPath, 'utf8') !== readFileSync(path.join(ROOT, 'schemas', 'run.schema.json'), 'utf8')
+      || appliedUpgradeManifest.projectId !== 'target-project'
       || !appliedUpgradeManifest.updates?.some((entry) => entry.command === 'upgrade')
     ) {
       console.error('upgrade apply fixture failed');
       writeResultOutput(result);
       console.error(JSON.stringify({ appliedUpgradeManifest }, null, 2));
+      return { status: failureStatus(result), checks };
+    }
+
+    const legacyProjectIdRoot = path.join(tempRoot, 'renamed-target');
+    cpSync(targetRoot, legacyProjectIdRoot, { recursive: true });
+    const legacyProjectIdConfigPath = path.join(legacyProjectIdRoot, '.plan2agent', 'project.config.json');
+    const legacyProjectIdManifestPath = path.join(legacyProjectIdRoot, '.plan2agent', 'manifest.json');
+    const legacyArtifactId = 'legacy-artifact-id';
+    const legacyProjectIdConfig = JSON.parse(readFileSync(legacyProjectIdConfigPath, 'utf8'));
+    const legacyProjectIdManifest = JSON.parse(readFileSync(legacyProjectIdManifestPath, 'utf8'));
+    delete legacyProjectIdConfig.projectId;
+    delete legacyProjectIdManifest.projectId;
+    writeFileSync(legacyProjectIdConfigPath, `${JSON.stringify(legacyProjectIdConfig, null, 2)}\n`);
+    writeFileSync(legacyProjectIdManifestPath, `${JSON.stringify(legacyProjectIdManifest, null, 2)}\n`);
+    mkdirSync(path.join(legacyProjectIdRoot, '.plan2agent', 'artifacts', legacyArtifactId), { recursive: true });
+    writeFileSync(
+      path.join(legacyProjectIdRoot, '.plan2agent', 'artifacts', legacyArtifactId, 'current-spec.json'),
+      `${JSON.stringify({ project_id: legacyArtifactId }, null, 2)}\n`,
+      'utf8',
+    );
+    result = runHandoff(['update', '--target', legacyProjectIdRoot, '--apply']);
+    checks += 1;
+    const restoredLegacyProjectIdConfig = JSON.parse(readFileSync(legacyProjectIdConfigPath, 'utf8'));
+    const restoredLegacyProjectIdManifest = JSON.parse(readFileSync(legacyProjectIdManifestPath, 'utf8'));
+    if (
+      result.status !== 0
+      || !result.stdout.includes('Plan2Agent update apply')
+      || restoredLegacyProjectIdConfig.projectId !== legacyArtifactId
+      || restoredLegacyProjectIdManifest.projectId !== legacyArtifactId
+    ) {
+      console.error('legacy artifact projectId recovery fixture failed');
+      writeResultOutput(result);
+      console.error(JSON.stringify({ restoredLegacyProjectIdConfig, restoredLegacyProjectIdManifest }, null, 2));
       return { status: failureStatus(result), checks };
     }
 

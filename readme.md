@@ -143,6 +143,8 @@ cd <project-dir>
 node .plan2agent/scripts/p2a.mjs info
 ```
 
+Scaffold records a default `projectId` in both `.plan2agent/project.config.json` and `.plan2agent/manifest.json` by normalizing the target directory basename to kebab-case. After scaffold, `.plan2agent/project.config.json.projectId` is the source of truth; the directory basename is only the fresh-scaffold seed. If older local artifacts already exist, their artifact/spec/task graph id is used as a recovery fallback before deriving from a renamed directory. Planning artifacts still live under `.plan2agent/artifacts/<project_id>/`, but in scaffold projects users normally use the stored `projectId` instead of inventing a new id for each idea.
+
 ### 2. Start from a one-sentence idea
 
 Open your preferred AI coding tool in the project directory and invoke the P2A harness skill.

@@ -95,7 +95,7 @@ Return intermediate artifacts in fenced code blocks named exactly:
 
 ## Artifact Persistence
 
-In addition to the inline state sections, the harness orchestrator writes canonical JSON artifacts to files so the user and tools can review them before any gate. Use a stable `project_id` (kebab-case, derived from the idea or carried forward) and keep all files for one run under `.plan2agent/artifacts/<project_id>/` using gate-specific folders:
+In addition to the inline state sections, the harness orchestrator writes canonical JSON artifacts to files so the user and tools can review them before any gate. In a scaffold project, use `.plan2agent/project.config.json.projectId` as the canonical `project_id`; if it is missing, fall back to `.plan2agent/manifest.json.projectId`, then an existing artifact/spec/task graph project id, then the target/project root basename normalized to kebab-case. Treat the directory basename as a fresh-scaffold seed, not the source of truth. Only derive a kebab-case id from the idea when no scaffold config, manifest, or existing artifact id exists. Keep all files for one run under `.plan2agent/artifacts/<project_id>/` using gate-specific folders:
 
 - `gate-a-intake/intake.json` — the `intake_json` artifact
 - `gate-b-spec/spec.json` — the `spec_json` artifact

@@ -90,7 +90,7 @@ Gate D의 정본 산출물은 `review_json`이며 파일로는 `gate-d-review/re
 
 ## 3. 산출물 파일과 데이터 계약
 
-하네스 오케스트레이터는 안정적인 kebab-case `project_id`를 사용하고, 한 번의 run에 속한 정본 JSON 파일을 모두 `.plan2agent/artifacts/<project_id>/` 아래의 gate별 폴더에 둔다. Subagent는 read-only이며 파일을 직접 쓰지 않는다. 파일 기록은 하네스 오케스트레이터만 수행한다. `status.md` 같은 Markdown 파일은 필요할 때 JSON에서 생성하는 view다.
+하네스 오케스트레이터는 안정적인 `project_id`를 사용하고, 한 번의 run에 속한 정본 JSON 파일을 모두 `.plan2agent/artifacts/<project_id>/` 아래의 gate별 폴더에 둔다. Co-located scaffold 프로젝트에서는 사용자가 `project_id`를 매번 새로 정하지 않는다. `.plan2agent/project.config.json`의 `projectId`를 정본으로 쓰고, 없으면 `.plan2agent/manifest.json.projectId`, 기존 artifact/spec/task graph에 이미 있는 id, target/project root basename의 kebab-case 정규화값 순서로 fallback한다. 디렉터리 basename은 fresh scaffold의 기본값을 만들기 위한 seed일 뿐이며, 레거시 산출물이 있으면 그 id를 먼저 보존한다. Subagent는 read-only이며 파일을 직접 쓰지 않는다. 파일 기록은 하네스 오케스트레이터만 수행한다. `status.md` 같은 Markdown 파일은 필요할 때 JSON에서 생성하는 view다.
 
 ```text
 .plan2agent/artifacts/<project_id>/
