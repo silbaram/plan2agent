@@ -1389,11 +1389,43 @@ export function validateFixtureDir(fixturePath) {
   if (existsSync(reportPath)) assertFile(reportPath, 'review-report.md');
 }
 
+function usage() {
+  return [
+    'Usage:',
+    '  node .plan2agent/scripts/validate_artifacts.mjs [artifact options]',
+    '',
+    'Options:',
+    '  --artifact-root <dir>               Validate a Gate A-D artifact root.',
+    '  --project-id <id>                   Expected project id for --artifact-root.',
+    '  --intake <path> [--intake-md <path>]',
+    '  --status <path>',
+    '  --spec <path>',
+    '  --task-graph <path> [--require-approved-spec <path>]',
+    '  --review <path> [--require-review-pass]',
+    '  --run <path> | --run-index <path> | --runs-dir <dir>',
+    '  --orchestration-plan <path> | --orchestration-runtime <path>',
+    '  --skill-proposal <path>',
+    '  --proposal-review <path>',
+    '  --proposal-curation <path>',
+    '  --proposal-patch-draft <path>',
+    '  --proposal-draft-approval <path>',
+    '  --eval-index <path>',
+    '  --eval-digest <path>',
+    '  --eval-maintenance-draft <path>',
+    '  --eval-maintenance-apply-report <path>',
+    '  --proposals-dir <dir>',
+    '  --fixture-dir <dir>                 Validate a fixture directory. Repeatable.',
+    '  --require-handoff-ready',
+    '  --help, -h                          Show this help.',
+  ].join('\n');
+}
+
 function parseArgs(argv) {
-  const args = { fixtureDir: [] };
+  const args = { fixtureDir: [], help: false };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
-    if (arg === '--intake') args.intake = argv[++index];
+    if (arg === '--help' || arg === '-h') args.help = true;
+    else if (arg === '--intake') args.intake = argv[++index];
     else if (arg === '--intake-md') args.intakeMd = argv[++index];
     else if (arg === '--status') args.status = argv[++index];
     else if (arg === '--artifact-root') args.artifactRoot = argv[++index];
@@ -1429,6 +1461,10 @@ export function main(argv = process.argv.slice(2)) {
   let args;
   try {
     args = parseArgs(argv);
+    if (args.help) {
+      console.log(usage());
+      return 0;
+    }
     if (args.status) validateStatusDoc(args.status);
     if (args.artifactRoot) {
       validateArtifactRoot(args.artifactRoot, {

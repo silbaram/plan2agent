@@ -849,9 +849,10 @@ function recoverAfterClosedRun(args, source, run) {
   return status;
 }
 
-function expectedFailureFinishStatus(result, requestedStatus) {
+function finishResultAllowsTaskTransition(result, requestedStatus, run) {
+  if (run.status === 'started') return false;
   if (result.status === 0) return true;
-  if (requestedStatus === 'failed' && result.status === 1) return true;
+  if (requestedStatus === 'failed' && result.status === 1 && run.status === 'failed') return true;
   return false;
 }
 
@@ -1042,9 +1043,13 @@ function runFinish(args) {
   console.log('Finishing run...');
   const finishResult = runScript('p2a_runs.mjs', finishRunArgs(args, requestedStatus, approvalLink.approval));
   printChildResult(finishResult);
-  if (!expectedFailureFinishStatus(finishResult, requestedStatus)) return finishResult.status ?? 1;
-
   const run = readRun(source.runsDir, args.runId);
+  if (!finishResultAllowsTaskTransition(finishResult, requestedStatus, run)) {
+    if (run.status === 'started') {
+      console.error(`run finish did not close ${run.runId}; task transition skipped to keep run/task state consistent.`);
+    }
+    return finishResult.status ?? 1;
+  }
   try {
     const runtimeUpdate = updateOrchestrationRuntimeAfterFinish(source, run);
     if (runtimeUpdate?.skipped) {

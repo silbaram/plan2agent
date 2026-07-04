@@ -829,6 +829,10 @@ export default function App() {
   const [collectGit, setCollectGit] = useState(true);
   const [changedFilesInput, setChangedFilesInput] = useState("");
   const [finishNoteInput, setFinishNoteInput] = useState("");
+  const [reproductionInput, setReproductionInput] = useState("");
+  const [localizationInput, setLocalizationInput] = useState("");
+  const [localizedFilesInput, setLocalizedFilesInput] = useState("");
+  const [guardInput, setGuardInput] = useState("");
   const [startResult, setStartResult] = useState<ExecutionCommandResult | null>(null);
   const [finishResult, setFinishResult] = useState<ExecutionCommandResult | null>(null);
   const [operationalState, setOperationalState] =
@@ -1175,6 +1179,17 @@ export default function App() {
     return ["--graph", joinDisplayPath(projectSnapshot?.rootPath ?? "", artifact.taskGraphPath)];
   }
 
+  function appendPreviewListArgs(args: string[], flag: string, value: string): void {
+    for (const item of parseListInput(value)) args.push(flag, item);
+  }
+
+  function appendStructuredFailurePreviewArgs(args: string[]): void {
+    appendPreviewListArgs(args, "--repro-step", reproductionInput);
+    appendPreviewListArgs(args, "--localization", localizationInput);
+    appendPreviewListArgs(args, "--localized-file", localizedFilesInput);
+    appendPreviewListArgs(args, "--guard", guardInput);
+  }
+
   function startPreviewCommand(): string {
     if (!artifact || !selectedTask || !projectSnapshot) return copy.tasks.selectReadyTask;
     const args = [
@@ -1213,6 +1228,7 @@ export default function App() {
       args.push("--failure-class", finishFailureClass);
     }
     if (collectGit) args.push("--collect-git");
+    if (finishStatus !== "finished") appendStructuredFailurePreviewArgs(args);
     return args.map(quoteCommandPart).join(" ");
   }
 
@@ -1377,6 +1393,7 @@ export default function App() {
     setFinishResult(null);
 
     try {
+      const includeFailureEvidence = finishStatus !== "finished";
       const result = await window.p2a.execution.finishRun({
         projectRoot: projectSnapshot.rootPath,
         artifactRoot: artifact.rootPath,
@@ -1394,6 +1411,10 @@ export default function App() {
           : [],
         changedFiles: parseListInput(changedFilesInput),
         notes: parseListInput(finishNoteInput),
+        reproductionSteps: includeFailureEvidence ? parseListInput(reproductionInput) : [],
+        localizationFindings: includeFailureEvidence ? parseListInput(localizationInput) : [],
+        localizedFiles: includeFailureEvidence ? parseListInput(localizedFilesInput) : [],
+        guardChecks: includeFailureEvidence ? parseListInput(guardInput) : [],
       });
       setFinishResult(result);
       setFinishState("idle");
@@ -2616,6 +2637,28 @@ export default function App() {
     const noteRequired =
       requiresFailureClass && finishFailureClass === "other";
     const hasRequiredNote = !noteRequired || parseListInput(finishNoteInput).length > 0;
+    const selectedRunHasFailureEvidence =
+      Boolean(
+        selectedRun?.reproduction &&
+          selectedRun.reproduction.steps.length +
+            selectedRun.reproduction.commands.length +
+            selectedRun.reproduction.notes.length >
+            0,
+      ) &&
+      Boolean(
+        selectedRun?.localization &&
+          selectedRun.localization.findings.length + selectedRun.localization.files.length > 0,
+      ) &&
+      Boolean(
+        selectedRun?.guard && selectedRun.guard.checks.length + selectedRun.guard.notes.length > 0,
+      );
+    const hasRequiredFailureEvidence =
+      !requiresFailureClass ||
+      selectedRunHasFailureEvidence ||
+      (parseListInput(reproductionInput).length > 0 &&
+        (parseListInput(localizationInput).length > 0 ||
+          parseListInput(localizedFilesInput).length > 0) &&
+        parseListInput(guardInput).length > 0);
     const enabledVerification = [
       verifyTest ? "test" : null,
       verifyLint ? "lint" : null,
@@ -2793,6 +2836,56 @@ export default function App() {
                   />
                 </label>
               </div>
+
+              {finishStatus !== "finished" && (
+                <div className="finish-failure-evidence">
+                  <div className="finish-step__head">
+                    <span className="finish-step__index mono">!</span>
+                    <span>
+                      <strong>{copy.terminal.failureEvidence}</strong>
+                      <small>{copy.terminal.failureEvidenceDetail}</small>
+                    </span>
+                  </div>
+                  <div className="form-grid form-grid--two">
+                    <label className="field-label">
+                      <span>{copy.terminal.reproduction}</span>
+                      <textarea
+                        className="supervisor-textarea"
+                        value={reproductionInput}
+                        onChange={(event) => setReproductionInput(event.target.value)}
+                        placeholder="npm test -- webhook-verification"
+                      />
+                    </label>
+                    <label className="field-label">
+                      <span>{copy.terminal.localization}</span>
+                      <textarea
+                        className="supervisor-textarea"
+                        value={localizationInput}
+                        onChange={(event) => setLocalizationInput(event.target.value)}
+                        placeholder="src/service.ts"
+                      />
+                    </label>
+                    <label className="field-label">
+                      <span>{copy.terminal.localizedFiles}</span>
+                      <textarea
+                        className="supervisor-textarea"
+                        value={localizedFilesInput}
+                        onChange={(event) => setLocalizedFilesInput(event.target.value)}
+                        placeholder="src/service.ts"
+                      />
+                    </label>
+                    <label className="field-label">
+                      <span>{copy.terminal.guard}</span>
+                      <textarea
+                        className="supervisor-textarea"
+                        value={guardInput}
+                        onChange={(event) => setGuardInput(event.target.value)}
+                        placeholder="npm test"
+                      />
+                    </label>
+                  </div>
+                </div>
+              )}
             </div>
           </div>
 
@@ -2825,7 +2918,7 @@ export default function App() {
                 className="terminal-control terminal-control--primary"
                 type="button"
                 onClick={finishSelectedRun}
-                disabled={!canFinish || !hasRequiredNote}
+                disabled={!canFinish || !hasRequiredNote || !hasRequiredFailureEvidence}
               >
                 {finishState === "running" ? copy.common.running : copy.terminal.finishRun}
               </button>
@@ -2843,6 +2936,12 @@ export default function App() {
               <div className="diagnostic diagnostic--warn">
                 <AlertTriangle size={14} strokeWidth={1.7} aria-hidden="true" />
                 <span>{copy.terminal.failureClassOtherNote}</span>
+              </div>
+            )}
+            {!hasRequiredFailureEvidence && (
+              <div className="diagnostic diagnostic--warn">
+                <AlertTriangle size={14} strokeWidth={1.7} aria-hidden="true" />
+                <span>{copy.terminal.failureEvidenceRequired}</span>
               </div>
             )}
             {renderFinishFailureDiagnostic()}

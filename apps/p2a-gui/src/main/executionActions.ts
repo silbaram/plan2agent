@@ -277,6 +277,24 @@ function appendVerificationArgs(args: string[], request: ExecutionFinishRunReque
   }
 }
 
+function appendRepeatedArgs(args: string[], flag: string, values: string[] | null | undefined): void {
+  for (const value of normalizeStringList(values ?? [])) {
+    args.push(flag, value);
+  }
+}
+
+function appendStructuredFailureArgs(args: string[], request: ExecutionFinishRunRequest): void {
+  appendRepeatedArgs(args, "--repro-step", request.reproductionSteps);
+  appendRepeatedArgs(args, "--repro-command", request.reproductionCommands);
+  appendRepeatedArgs(args, "--repro-note", request.reproductionNotes);
+  appendRepeatedArgs(args, "--localization", request.localizationFindings);
+  appendRepeatedArgs(args, "--localized-file", request.localizedFiles);
+  appendRepeatedArgs(args, "--fix-summary", request.fixSummaries);
+  appendRepeatedArgs(args, "--fix-file", request.fixFiles);
+  appendRepeatedArgs(args, "--guard", request.guardChecks);
+  appendRepeatedArgs(args, "--guard-note", request.guardNotes);
+}
+
 export function buildStartRunCommand(request: ExecutionStartRunRequest): ExecutionCommand {
   const context = resolveExecutionContext(request);
   const taskId = normalizeTaskId(request.taskId);
@@ -331,6 +349,7 @@ export function buildFinishRunCommand(request: ExecutionFinishRunRequest): Execu
   for (const note of normalizeStringList(request.notes)) {
     args.push("--note", note);
   }
+  if (request.status !== "finished") appendStructuredFailureArgs(args, request);
 
   return {
     cwd: context.projectRoot,

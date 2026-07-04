@@ -2824,6 +2824,13 @@ h3 {
   max-width: 280px;
 }
 
+.finish-failure-evidence {
+  display: grid;
+  gap: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border-1);
+}
+
 .form-grid {
   display: grid;
   gap: 10px;

@@ -52,6 +52,10 @@ function requestFor(projectRoot: string, artifactRoot: string): ExecutionFinishR
     customVerificationCommands: [{ type: "custom", command: "npm run smoke" }],
     changedFiles: ["src/app.ts", "src/app.ts", ""],
     notes: ["verification failed", ""],
+    reproductionSteps: ["npm run smoke", ""],
+    localizationFindings: ["src/app.ts failed smoke verification"],
+    localizedFiles: ["src/app.ts"],
+    guardChecks: ["npm run smoke passes before retry"],
   };
 }
 
@@ -237,7 +241,33 @@ describe("execution action helpers", () => {
         "src/app.ts",
         "--note",
         "verification failed",
+        "--repro-step",
+        "npm run smoke",
+        "--localization",
+        "src/app.ts failed smoke verification",
+        "--localized-file",
+        "src/app.ts",
+        "--guard",
+        "npm run smoke passes before retry",
       ]);
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("does not pass hidden failure evidence when finishing successfully", async () => {
+    const { projectRoot, artifactRoot } = await createProject();
+    try {
+      const command = buildFinishRunCommand({
+        ...requestFor(projectRoot, artifactRoot),
+        status: "finished",
+        failureClass: null,
+      });
+
+      expect(command.args).not.toContain("--repro-step");
+      expect(command.args).not.toContain("--localization");
+      expect(command.args).not.toContain("--localized-file");
+      expect(command.args).not.toContain("--guard");
     } finally {
       await rm(projectRoot, { recursive: true, force: true });
     }
@@ -506,6 +536,10 @@ describe("execution action helpers", () => {
         customVerificationCommands: [{ type: "custom", command: verificationCommand }],
         changedFiles: ["src/broken.ts"],
         notes: ["verification failed"],
+        reproductionSteps: [verificationCommand],
+        localizationFindings: ["custom verification failed in GUI smoke project"],
+        localizedFiles: ["src/broken.ts"],
+        guardChecks: ["rerun the failing custom verification command before retry"],
       });
 
       expect(finishResult.exitCode).toBe(1);
@@ -531,11 +565,20 @@ describe("execution action helpers", () => {
           exitCode: number | null;
           stderrTail: string | null;
         }>;
+        reproduction: { steps: string[] };
+        localization: { findings: string[]; files: string[] };
+        guard: { checks: string[] };
       }>(path.join(projectRoot, "runs", `${runId}.json`));
       expect(run).toMatchObject({
         status: "failed",
         changedFiles: ["src/broken.ts"],
         failure: { class: "verification_failed" },
+        reproduction: { steps: [verificationCommand] },
+        localization: {
+          findings: ["custom verification failed in GUI smoke project"],
+          files: ["src/broken.ts"],
+        },
+        guard: { checks: ["rerun the failing custom verification command before retry"] },
       });
       expect(run.verification).toMatchObject([{ status: "failed", exitCode: 7 }]);
       expect(run.verification[0]?.stderrTail).toContain("gui smoke verification failed");
@@ -552,6 +595,63 @@ describe("execution action helpers", () => {
         failure: { class: "verification_failed" },
         verification: [{ status: "failed", exitCode: 7 }],
       });
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  }, 30000);
+
+  it("does not block the task when failed finish evidence is missing", async () => {
+    const { projectRoot, artifactRoot, taskGraphPath } = await createSmokeProject();
+    const runId = "run-gui-smoke-missing-failure-evidence";
+    const verificationCommand =
+      "node -e \"console.error('gui smoke verification failed'); process.exit(7)\"";
+
+    try {
+      const startResult = await startRun({
+        projectRoot,
+        artifactRoot,
+        taskGraphPath,
+        taskId: "task-001",
+        agentTool: "codex",
+        runId,
+      });
+      expect(startResult.exitCode).toBe(0);
+
+      const finishResult = await finishRun({
+        projectRoot,
+        artifactRoot,
+        taskGraphPath,
+        runId,
+        status: "auto",
+        failureClass: null,
+        collectGit: false,
+        verifyTest: false,
+        verifyLint: false,
+        verifyTypecheck: false,
+        customVerificationCommands: [{ type: "custom", command: verificationCommand }],
+        changedFiles: ["src/broken.ts"],
+        notes: ["verification failed"],
+      });
+
+      expect(finishResult.exitCode).toBe(1);
+      expect(finishResult.stderr).toContain(
+        "failed/blocked run requires structured debug detail",
+      );
+      expect(finishResult.stderr).toContain("task transition skipped");
+
+      const graphAfterFinish = await readJson<{
+        tasks: Array<{ id: string; status: string; blockReason?: string }>;
+      }>(taskGraphPath);
+      expect(graphAfterFinish.tasks.find((task) => task.id === "task-001")).toMatchObject({
+        status: "in_progress",
+      });
+
+      const run = await readJson<{
+        status: string;
+        verification: Array<{ status: string; exitCode: number | null }>;
+      }>(path.join(projectRoot, "runs", `${runId}.json`));
+      expect(run.status).toBe("started");
+      expect(run.verification).toMatchObject([{ status: "failed", exitCode: 7 }]);
     } finally {
       await rm(projectRoot, { recursive: true, force: true });
     }

@@ -608,6 +608,15 @@ export type ExecutionFinishRunRequest = {
   customVerificationCommands: ExecutionCustomVerificationCommand[];
   changedFiles: string[];
   notes: string[];
+  reproductionSteps?: string[];
+  reproductionCommands?: string[];
+  reproductionNotes?: string[];
+  localizationFindings?: string[];
+  localizedFiles?: string[];
+  fixSummaries?: string[];
+  fixFiles?: string[];
+  guardChecks?: string[];
+  guardNotes?: string[];
 };
 
 export type ExecutionFollowUpCommand = {

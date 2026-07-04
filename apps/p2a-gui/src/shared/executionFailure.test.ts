@@ -145,6 +145,25 @@ describe("summarizeFinishRunFailure", () => {
     });
   });
 
+  it("classifies missing structured failure evidence before generic verification failure", () => {
+    expect(
+      summarizeFinishRunFailure(
+        failedResult({
+          stdout: [
+            "Running verification...",
+            "Plan2Agent run verification recorded: run-task-001",
+            "- custom: failed (npm test)",
+          ].join("\n"),
+          stderr:
+            "p2a run command failed: failed/blocked run requires structured debug detail: reproduction, localization, guard",
+        }),
+      ),
+    ).toMatchObject({
+      kind: "failure_evidence_required",
+      title: "Failure evidence required",
+    });
+  });
+
   it("classifies a missing failure class", () => {
     expect(
       summarizeFinishRunFailure(
