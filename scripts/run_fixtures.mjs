@@ -1389,10 +1389,129 @@ function evalRunFixture(runId, status = 'finished') {
   };
 }
 
+function maintenanceEvalRunFixture(runId, approvalId, taskId = 'task-999') {
+  return {
+    schema_version: 'p2a.run.v1',
+    runId,
+    projectId: 'webhook-api-service',
+    taskId,
+    taskTitle: 'Apply approved proposal maintenance',
+    iterationId: 'maintenance',
+    sourceLayout: 'maintenance',
+    taskGraphRef: 'iterations/maintenance/gate-c-task-graph/task-graph.json',
+    sourceSpecRef: 'current-spec.json',
+    agentTool: 'manual',
+    workspaceRef: 'fixture',
+    workspacePath: ROOT,
+    isolation: {
+      mode: 'none',
+      branch: null,
+      worktree: null,
+      baseRef: null,
+      created: false,
+      createCommand: null,
+      createExitCode: null,
+      createOutputTail: null,
+    },
+    status: 'finished',
+    startedAt: '2026-07-02T00:02:00.000Z',
+    updatedAt: '2026-07-02T00:03:00.000Z',
+    finishedAt: '2026-07-02T00:03:00.000Z',
+    changedFiles: ['scripts/p2a_eval.mjs'],
+    verification: [{
+      type: 'test',
+      command: 'node scripts/run_fixtures.mjs --eval-only',
+      status: 'passed',
+      exitCode: 0,
+      durationMs: 1000,
+      startedAt: '2026-07-02T00:02:30.000Z',
+      finishedAt: '2026-07-02T00:02:31.000Z',
+      stdoutTail: 'eval fixtures passed',
+      stderrTail: null,
+      source: 'command',
+    }],
+    notes: [
+      `proposalApproval=${approvalId}`,
+      'proposalPatchDraft=proposal-patch-draft-111111111111',
+      'proposalCandidate=candidate-111111111111',
+    ],
+  };
+}
+
+function writeEvalProposal(proposalsDir, proposal) {
+  mkdirSync(proposalsDir, { recursive: true });
+  writeFileSync(path.join(proposalsDir, `${proposal.proposalId}.json`), `${JSON.stringify({
+    schema_version: 'p2a.skill_proposal.v1',
+    recommendedChange: 'Fixture proposal change.',
+    targetFiles: ['scripts/p2a_eval.mjs'],
+    risk: 'low',
+    evidence: ['fixture evidence'],
+    ...proposal,
+  }, null, 2)}\n`, 'utf8');
+}
+
+function writeSelfImprovementMaintenanceFixture(rootDir) {
+  const approvalId = 'proposal-draft-approval-111111111111';
+  const draftId = 'proposal-patch-draft-111111111111';
+  const candidateId = 'candidate-111111111111';
+  const taskId = 'task-999';
+  const maintenanceGraphPath = path.join(rootDir, 'iterations', 'maintenance', 'gate-c-task-graph', 'task-graph.json');
+  mkdirSync(path.dirname(maintenanceGraphPath), { recursive: true });
+  writeFileSync(maintenanceGraphPath, `${JSON.stringify({
+    schema_version: 'p2a.task_graph.v1',
+    projectId: 'webhook-api-service',
+    version: 'maintenance',
+    sourceSpec: '../../../current-spec.json',
+    tasks: [{
+      id: taskId,
+      title: 'Apply approved proposal maintenance',
+      description: 'Fixture maintenance task linked to an approved proposal.',
+      status: 'done',
+      dependencies: [],
+      acceptanceCriteria: ['Post-maintenance eval fixtures pass.'],
+      targetArea: 'maintenance',
+      suggestedAgentPrompt: 'Apply the approved proposal maintenance fixture.',
+      sourceSpecRefs: [
+        `proposal-draft-approval:${approvalId}`,
+        `proposal-patch-draft:${draftId}`,
+        `proposal-candidate:${candidateId}`,
+      ],
+    }],
+  }, null, 2)}\n`, 'utf8');
+  const approvalPath = path.join(rootDir, 'proposal-draft-approval.json');
+  writeFileSync(approvalPath, `${JSON.stringify({
+    schema_version: 'p2a.proposal_draft_approval.v1',
+    approvalId,
+    approvedAt: '2026-07-02T00:02:00.000Z',
+    approvedBy: 'fixture-reviewer',
+    approvalNote: 'Fixture approval',
+    sourceDraft: 'proposal-patch-draft.json',
+    draftId,
+    candidateId,
+    autoApplyPerformed: false,
+    maintenanceTask: {
+      taskGraph: maintenanceGraphPath,
+      taskId,
+      title: 'Apply approved proposal maintenance',
+      sourceSpecRefs: [
+        `proposal-draft-approval:${approvalId}`,
+        `proposal-patch-draft:${draftId}`,
+        `proposal-candidate:${candidateId}`,
+      ],
+    },
+  }, null, 2)}\n`, 'utf8');
+  return { approvalId, taskId, maintenanceGraphPath, approvalPath };
+}
+
 function writeEvalRuns(runsDir, runs) {
   mkdirSync(runsDir, { recursive: true });
   for (const run of runs) {
     writeFileSync(path.join(runsDir, `${run.runId}.json`), `${JSON.stringify(run, null, 2)}\n`, 'utf8');
+  }
+  const tasksById = new Map();
+  for (const run of runs) {
+    if (!tasksById.has(run.taskId)) tasksById.set(run.taskId, []);
+    tasksById.get(run.taskId).push(run.runId);
   }
   writeFileSync(path.join(runsDir, 'run-index.json'), `${JSON.stringify({
     schema_version: 'p2a.run_index.v1',
@@ -1409,11 +1528,11 @@ function writeEvalRuns(runsDir, runs) {
       startedAt: run.startedAt,
       finishedAt: run.finishedAt,
     })),
-    tasks: [{
-      taskId: 'task-002',
-      runIds: runs.map((run) => run.runId),
-      latestRunId: runs[runs.length - 1]?.runId ?? null,
-    }],
+    tasks: [...tasksById.entries()].map(([taskId, runIds]) => ({
+      taskId,
+      runIds,
+      latestRunId: runIds[runIds.length - 1] ?? null,
+    })),
   }, null, 2)}\n`, 'utf8');
 }
 
@@ -1425,8 +1544,15 @@ function validateEvalFixtureCases() {
     const candidateRunsDir = path.join(tempRoot, 'candidate-runs');
     const passRun = evalRunFixture('run-eval-pass');
     const failedRun = evalRunFixture('run-eval-failed', 'failed');
+    const repeatedFailedRun = evalRunFixture('run-eval-failed-repeat', 'failed');
+    const selfImprovementFixture = writeSelfImprovementMaintenanceFixture(tempRoot);
+    const maintenanceRun = maintenanceEvalRunFixture(
+      'run-eval-maintenance-pass',
+      selfImprovementFixture.approvalId,
+      selfImprovementFixture.taskId,
+    );
     writeEvalRuns(baselineRunsDir, [passRun]);
-    writeEvalRuns(candidateRunsDir, [passRun, failedRun]);
+    writeEvalRuns(candidateRunsDir, [passRun, failedRun, repeatedFailedRun, maintenanceRun]);
 
     const graphPath = path.join(FIXTURE_ROOT, 'webhook-api-service', 'task-graph.json');
     let result = runEval(['grade', '--graph', graphPath, '--run', path.join(baselineRunsDir, 'run-eval-pass.json')]);
@@ -1462,7 +1588,8 @@ function validateEvalFixtureCases() {
       return { status: failureStatus(result), checks };
     }
 
-    result = runProposals(['mine', '--runs', candidateRunsDir, '--dry-run']);
+    const evalProposalsDir = path.join(tempRoot, 'proposals');
+    result = runProposals(['mine', '--runs', candidateRunsDir, '--proposals', evalProposalsDir]);
     checks += 1;
     if (
       result.status !== 0
@@ -1473,6 +1600,33 @@ function validateEvalFixtureCases() {
       writeResultOutput(result);
       return { status: failureStatus(result), checks };
     }
+    const approvedProposalPath = path.join(evalProposalsDir, 'proposal-run-eval-failed-verification_failed.json');
+    const approvedProposal = JSON.parse(readFileSync(approvedProposalPath, 'utf8'));
+    if (
+      approvedProposal.riskRationale !== 'verification_failed can recur across runs and should be corrected before relying on similar execution guidance.'
+      || approvedProposal.quality?.score !== 100
+      || approvedProposal.quality?.band !== 'strong'
+    ) {
+      console.error('proposal quality mining fixture failed');
+      console.error(JSON.stringify({ approvedProposal }, null, 2));
+      return { status: 1, checks };
+    }
+    approvedProposal.status = 'approved';
+    writeFileSync(approvedProposalPath, `${JSON.stringify(approvedProposal, null, 2)}\n`, 'utf8');
+    writeEvalProposal(evalProposalsDir, {
+      proposalId: 'proposal-fixture-rejected',
+      sourceRunId: 'run-eval-failed',
+      problem: 'Fixture rejected proposal.',
+      status: 'rejected',
+      note: 'Rejected in fixture to exercise self-improvement metrics.',
+    });
+    writeEvalProposal(evalProposalsDir, {
+      proposalId: 'proposal-fixture-deferred',
+      sourceRunId: 'run-eval-failed-repeat',
+      problem: 'Fixture deferred proposal.',
+      status: 'deferred',
+      note: 'Deferred in fixture to exercise self-improvement metrics.',
+    });
 
     result = runEval(['analyze', '--runs', candidateRunsDir]);
     checks += 1;
@@ -1530,12 +1684,12 @@ function validateEvalFixtureCases() {
 	    if (
 	      result.status !== 0
 	      || !result.stdout.includes('Plan2Agent eval generate')
-	      || !existsSync(passGradePath)
+      || !existsSync(passGradePath)
       || !existsSync(failedGradePath)
       || !existsSync(analysisPath)
       || evalIndex?.schema_version !== 'p2a.eval_index.v1'
-      || evalIndex?.summary?.grades !== 2
-      || evalIndex?.summary?.nonPassGrades !== 1
+      || evalIndex?.summary?.grades !== 3
+      || evalIndex?.summary?.nonPassGrades !== 2
       || evalIndex?.summary?.clusters !== 1
       || failedGrade?.run?.structuredEvidence?.hasGuard !== true
     ) {
@@ -1568,8 +1722,8 @@ function validateEvalFixtureCases() {
 	    if (
 	      result.status !== 0
 	      || existsSync(staleGradePath)
-	      || regeneratedEvalIndex?.summary?.grades !== 2
-	      || regeneratedEvalIndex?.summary?.nonPassGrades !== 1
+	      || regeneratedEvalIndex?.summary?.grades !== 3
+	      || regeneratedEvalIndex?.summary?.nonPassGrades !== 2
 	    ) {
 	      console.error('eval generate stale output cleanup fixture failed');
 	      writeResultOutput(result);
@@ -1578,7 +1732,13 @@ function validateEvalFixtureCases() {
 
 	    result = runEval(['digest', '--eval', evalOutputDir]);
 	    checks += 1;
-	    if (result.status !== 0 || !result.stdout.includes('Plan2Agent eval digest') || !result.stdout.includes('"pass":1') || !result.stdout.includes('"fail":1')) {
+	    if (
+	      result.status !== 0
+	      || !result.stdout.includes('Plan2Agent eval digest')
+	      || !result.stdout.includes('"pass":1')
+	      || !result.stdout.includes('"fail":2')
+	      || !result.stdout.includes('self-improvement: runs=4 failedOrBlocked=2 proposals=4 approved=1 recurringFailures=1')
+	    ) {
 	      console.error('eval digest fixture failed');
 	      writeResultOutput(result);
 	      return { status: failureStatus(result), checks };
@@ -1610,13 +1770,121 @@ function validateEvalFixtureCases() {
 	      || !existsSync(evalDigestPath)
       || evalDigest?.schema_version !== 'p2a.eval_digest.v1'
       || evalDigest?.grades?.byVerdict?.pass !== 1
-      || evalDigest?.grades?.byVerdict?.fail !== 1
+      || evalDigest?.grades?.byVerdict?.fail !== 2
       || evalDigest?.analyses?.clusters !== 1
+      || evalDigest?.selfImprovement?.runs?.total !== 4
+      || evalDigest?.selfImprovement?.runs?.failedOrBlocked !== 2
+      || evalDigest?.selfImprovement?.runs?.failureEvidence?.complete !== 2
+      || evalDigest?.selfImprovement?.proposals?.byStatus?.approved !== 1
+      || evalDigest?.selfImprovement?.proposals?.byStatus?.rejected !== 1
+      || evalDigest?.selfImprovement?.proposals?.byStatus?.deferred !== 1
+      || evalDigest?.selfImprovement?.proposals?.byStatus?.proposed !== 1
+      || evalDigest?.selfImprovement?.recurringFailures?.clusters !== 1
+      || evalDigest?.selfImprovement?.maintenance?.conversionRate !== 1
+      || evalDigest?.selfImprovement?.maintenance?.postMaintenanceVerification?.successRate !== 1
     ) {
       console.error('eval digest output fixture failed');
 	      writeResultOutput(result);
 	      return { status: failureStatus(result), checks };
 	    }
+
+    const noProposalRoot = path.join(tempRoot, 'self-improvement-no-proposals');
+    const noProposalRunsDir = path.join(noProposalRoot, 'runs');
+    const noProposalEvalDir = path.join(noProposalRoot, 'eval');
+    writeEvalRuns(noProposalRunsDir, [evalRunFixture('run-eval-no-proposal-failed', 'failed')]);
+    mkdirSync(noProposalEvalDir, { recursive: true });
+    writeFileSync(path.join(noProposalEvalDir, 'analysis.json'), `${JSON.stringify({
+      schema_version: 'p2a.eval_analysis.v1',
+      source: {
+        sourceKind: 'runs',
+        sourcePath: noProposalRunsDir,
+        runsDir: noProposalRunsDir,
+        proposalsDir: path.join(noProposalRoot, 'proposals'),
+      },
+      clusters: [],
+    }, null, 2)}\n`, 'utf8');
+    result = runEval(['digest', '--eval', noProposalEvalDir, '--output', path.join(noProposalRoot, 'eval-digest.json')]);
+    checks += 1;
+    const noProposalDigest = JSON.parse(readFileSync(path.join(noProposalRoot, 'eval-digest.json'), 'utf8'));
+    if (
+      result.status !== 0
+      || noProposalDigest.selfImprovement.proposals.total !== 0
+      || noProposalDigest.selfImprovement.proposals.pendingReview !== 0
+      || noProposalDigest.selfImprovement.runs.failureEvidence.complete !== 1
+    ) {
+      console.error('eval digest no-proposal self-improvement fixture failed');
+      writeResultOutput(result);
+      return { status: failureStatus(result), checks };
+    }
+
+    const missingEvidenceEvalDir = path.join(tempRoot, 'self-improvement-missing-evidence', 'eval');
+    mkdirSync(path.join(missingEvidenceEvalDir, 'grades'), { recursive: true });
+    writeFileSync(path.join(missingEvidenceEvalDir, 'grades', 'run-missing-evidence.json'), `${JSON.stringify({
+      schema_version: 'p2a.eval_grade.v1',
+      task: { taskId: 'task-001' },
+      run: {
+        runId: 'run-missing-evidence',
+        status: 'failed',
+        verification: [{ status: 'failed' }],
+        changedFiles: [],
+      },
+      verdict: 'fail',
+      score: 0,
+      acceptanceCoverage: [],
+      reasons: ['missing structured failure evidence fixture'],
+    }, null, 2)}\n`, 'utf8');
+    result = runEval(['digest', '--eval', missingEvidenceEvalDir, '--output', path.join(tempRoot, 'missing-evidence-digest.json')]);
+    checks += 1;
+    const missingEvidenceDigest = JSON.parse(readFileSync(path.join(tempRoot, 'missing-evidence-digest.json'), 'utf8'));
+    if (
+      result.status !== 0
+      || missingEvidenceDigest.selfImprovement.runs.failedOrBlocked !== 1
+      || missingEvidenceDigest.selfImprovement.runs.failureEvidence.incomplete !== 1
+      || missingEvidenceDigest.selfImprovement.runs.failureEvidence.missing.reproduction !== 1
+      || missingEvidenceDigest.selfImprovement.runs.failureEvidence.missing.localization !== 1
+      || missingEvidenceDigest.selfImprovement.runs.failureEvidence.missing.guard !== 1
+    ) {
+      console.error('eval digest missing-evidence self-improvement fixture failed');
+      writeResultOutput(result);
+      return { status: failureStatus(result), checks };
+    }
+
+    const pendingConversionRoot = path.join(tempRoot, 'self-improvement-pending-conversion');
+    const pendingConversionRunsDir = path.join(pendingConversionRoot, 'runs');
+    const pendingConversionProposalsDir = path.join(pendingConversionRoot, 'proposals');
+    const pendingConversionEvalDir = path.join(pendingConversionRoot, 'eval');
+    writeEvalRuns(pendingConversionRunsDir, [evalRunFixture('run-eval-pending-conversion', 'failed')]);
+    writeEvalProposal(pendingConversionProposalsDir, {
+      proposalId: 'proposal-pending-conversion',
+      sourceRunId: 'run-eval-pending-conversion',
+      problem: 'Approved proposal without a maintenance task.',
+      status: 'approved',
+    });
+    mkdirSync(pendingConversionEvalDir, { recursive: true });
+    writeFileSync(path.join(pendingConversionEvalDir, 'analysis.json'), `${JSON.stringify({
+      schema_version: 'p2a.eval_analysis.v1',
+      source: {
+        sourceKind: 'runs',
+        sourcePath: pendingConversionRunsDir,
+        runsDir: pendingConversionRunsDir,
+        proposalsDir: pendingConversionProposalsDir,
+      },
+      clusters: [],
+    }, null, 2)}\n`, 'utf8');
+    result = runEval(['digest', '--eval', pendingConversionEvalDir, '--output', path.join(pendingConversionRoot, 'eval-digest.json')]);
+    checks += 1;
+    const pendingConversionDigest = JSON.parse(readFileSync(path.join(pendingConversionRoot, 'eval-digest.json'), 'utf8'));
+    if (
+      result.status !== 0
+      || pendingConversionDigest.selfImprovement.proposals.byStatus.approved !== 1
+      || pendingConversionDigest.selfImprovement.maintenance.pendingConversions !== 1
+      || pendingConversionDigest.selfImprovement.maintenance.convertedApprovals !== 0
+      || pendingConversionDigest.selfImprovement.maintenance.conversionRate !== 0
+    ) {
+      console.error('eval digest pending-conversion self-improvement fixture failed');
+      writeResultOutput(result);
+      return { status: failureStatus(result), checks };
+    }
 
 	    result = runValidator(['--eval-digest', evalDigestPath]);
 	    checks += 1;
@@ -1946,22 +2214,83 @@ function validateMemoryFixtureCases() {
     return { status: failureStatus(result), checks };
   }
 
-  const digestRunsDir = mkdtempSync(path.join(tmpdir(), 'p2a-memory-digest-runs-'));
+  const digestRoot = mkdtempSync(path.join(tmpdir(), 'p2a-memory-digest-'));
+  const digestRunsDir = path.join(digestRoot, 'runs');
   try {
-    writeEvalRuns(digestRunsDir, [evalRunFixture('run-memory-digest-failed', 'failed')]);
-    result = runMemory(['digest', '--runs', digestRunsDir]);
+    const memoryDigestRun = evalRunFixture('run-memory-digest-failed', 'failed');
+    memoryDigestRun.notes.push('Memory search reference used: run-memory-prior');
+    writeEvalRuns(digestRunsDir, [memoryDigestRun]);
+    mkdirSync(path.join(digestRoot, 'eval'), { recursive: true });
+    writeFileSync(path.join(digestRoot, 'eval', 'memory-search.json'), `${JSON.stringify({
+      schema_version: 'p2a.memory_search.v1',
+      generatedAt: '2026-07-02T00:00:00.000Z',
+      query: { text: 'stale search result' },
+      context: {
+        sourceKind: 'runs',
+        sourcePath: path.join(digestRoot, 'other-runs'),
+        projectId: 'webhook-api-service',
+        iterationId: '1',
+      },
+      summary: {
+        total: 1,
+        byType: { RUN_RECORD: 1 },
+      },
+      results: [{
+        artifactType: 'RUN_RECORD',
+        score: 0.99,
+        sourceIds: {
+          sourceRunId: 'stale-run',
+        },
+      }],
+    }, null, 2)}\n`, 'utf8');
+    writeFileSync(path.join(digestRoot, 'memory-search.json'), `${JSON.stringify({
+      schema_version: 'p2a.memory_search.v1',
+      generatedAt: '2026-07-02T00:00:00.000Z',
+      query: { text: 'prior failed run memory' },
+      context: {
+        sourceKind: 'runs',
+        sourcePath: digestRunsDir,
+        projectId: 'webhook-api-service',
+        iterationId: '1',
+      },
+      summary: {
+        total: 1,
+        byType: { RUN_RECORD: 1 },
+      },
+      results: [{
+        artifactType: 'RUN_RECORD',
+        score: 0.91,
+        sourceIds: {
+          sourceRunId: 'run-memory-prior',
+        },
+      }],
+    }, null, 2)}\n`, 'utf8');
+    const digestOutputPath = path.join(digestRoot, 'memory-digest.json');
+    result = runMemory(['digest', '--runs', digestRunsDir, '--output', digestOutputPath]);
     checks += 1;
     if (
       result.status !== 0
       || !result.stdout.includes('structured: reproduction=1/1 localization=1/1 guard=1/1')
+      || !result.stdout.includes('memory usefulness: searchReports=1 used=1/1 rate=1')
       || !result.stdout.includes('Mine missing proposal candidates')
     ) {
       console.error('memory digest structured detail fixture failed');
       writeResultOutput(result);
       return { status: failureStatus(result), checks };
     }
+    const memoryDigest = JSON.parse(readFileSync(digestOutputPath, 'utf8'));
+    if (
+      memoryDigest.memoryUsefulness?.searchReports !== 1
+      || memoryDigest.memoryUsefulness?.totalResults !== 1
+      || memoryDigest.memoryUsefulness?.usedResults !== 1
+      || memoryDigest.memoryUsefulness?.usedBy?.run !== 1
+    ) {
+      console.error('memory digest usefulness fixture failed');
+      console.error(JSON.stringify({ memoryDigest }, null, 2));
+      return { status: 1, checks };
+    }
   } finally {
-    rmSync(digestRunsDir, { recursive: true, force: true });
+    rmSync(digestRoot, { recursive: true, force: true });
   }
 
   result = runMemory(['push', '--graph', graphPath]);
@@ -4417,6 +4746,9 @@ function validateIterationCurrentFixtureCases() {
         executeMonitorProposal.sourceRunId !== 'run-execute-monitor-fixture'
         || executeMonitorProposal.status !== 'proposed'
         || !executeMonitorProposal.evidence.includes('monitor failure signal: unmet_acceptance')
+        || executeMonitorProposal.quality?.score !== 100
+        || executeMonitorProposal.quality?.band !== 'strong'
+        || !executeMonitorProposal.riskRationale
       ) {
         console.error(`p2a_proposals mine wrote unexpected proposal: ${caseData.id}`);
         console.error(JSON.stringify({ executeMonitorProposal }, null, 2));
@@ -4472,7 +4804,11 @@ function validateIterationCurrentFixtureCases() {
         executeMonitorProposalsDir,
       ]);
       checks += 1;
-      if (result.status !== 0 || !result.stdout.includes('Plan2Agent proposal digest')) {
+      if (
+        result.status !== 0
+        || !result.stdout.includes('Plan2Agent proposal digest')
+        || !result.stdout.includes('quality: average=100 strong=1 medium=0 weak=0 needsAttention=0')
+      ) {
         console.error(`p2a_proposals digest fixture failed: ${caseData.id}`);
         writeResultOutput(result);
         return { status: failureStatus(result), checks };
@@ -4496,6 +4832,7 @@ function validateIterationCurrentFixtureCases() {
       if (
         executeMonitorReview.schema_version !== 'p2a.proposal_review.v1'
         || executeMonitorReview.summary.totalProposals !== 1
+        || executeMonitorReview.summary.quality?.averageScore !== 100
         || !executeMonitorReview.groups.some((group) => group.classification === 'implementation_incomplete' && group.recommendedDisposition === 'defer')
       ) {
         console.error(`p2a_proposals review wrote unexpected review: ${caseData.id}`);
@@ -4532,7 +4869,9 @@ function validateIterationCurrentFixtureCases() {
       if (
         executeMonitorCuration.schema_version !== 'p2a.proposal_curation.v1'
         || executeMonitorCuration.summary.totalCandidates !== 1
+        || executeMonitorCuration.summary.quality?.averageScore !== 100
         || executeMonitorImplementationCandidate?.readiness !== 'watch'
+        || executeMonitorImplementationCandidate?.quality?.band !== 'strong'
         || executeMonitorImplementationCandidate?.separatePatchRequired !== true
       ) {
         console.error(`p2a_proposals curate wrote unexpected curation: ${caseData.id}`);

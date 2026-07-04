@@ -68,10 +68,12 @@ or app session stays foreground-supervised by the user.
 - `p2a eval analyze` clusters failures and verification gaps.
 - `p2a eval generate` writes grade, analysis, compare, and eval index artifacts.
 - `p2a eval digest` summarizes generated evaluation artifacts.
+- Eval digests include self-improvement metrics for failed/blocked run evidence, proposal review status, recurring failure clusters, approved proposal conversion, and post-maintenance verification.
 
 ### Improvement Proposal Loop
 
 - Mine failed or blocked runs into structured improvement proposals.
+- Score proposal quality from evidence, reproduction, impact scope, validation, and risk rationale.
 - Review, curate, draft, and approve proposal artifacts without automatically applying patches.
 - Convert approved proposal drafts into maintenance tasks.
 - Execute approved maintenance tasks through the same supervised execution path.
@@ -82,12 +84,13 @@ or app session stays foreground-supervised by the user.
 - `p2a memory status` compares local artifacts with remote snapshots.
 - `p2a memory push` uploads project, iteration, document, task, graph, and run snapshots.
 - `p2a memory search` and `p2a memory history` support cross-session recall.
-- `p2a memory digest` summarizes failure and proposal history.
+- `p2a memory digest` summarizes failure and proposal history and tracks whether Memory search results were reused by run, proposal, or eval artifacts.
 
 ### GUI Workbench
 
 - Electron-based GUI for project overview, artifacts, tasks, runs, and operational reports.
 - Shows update reports, eval analysis, eval digest, memory digest, memory history, and memory search.
+- Shows an improvement queue with proposal status, quality score, source failure/run, and approved maintenance links.
 - Includes supervised PTY-oriented workflow surfaces for foreground agent sessions.
 
 ### Scaffold, Update, and Drift Checks

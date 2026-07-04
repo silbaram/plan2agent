@@ -67,6 +67,24 @@
             "reject": {"type": "integer", "minimum": 0},
             "needs_more_evidence": {"type": "integer", "minimum": 0}
           }
+        },
+        "quality": {
+          "type": "object",
+          "required": [
+            "averageScore",
+            "strong",
+            "medium",
+            "weak",
+            "needsAttention"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "averageScore": {"type": ["number", "null"], "minimum": 0, "maximum": 100},
+            "strong": {"type": "integer", "minimum": 0},
+            "medium": {"type": "integer", "minimum": 0},
+            "weak": {"type": "integer", "minimum": 0},
+            "needsAttention": {"type": "integer", "minimum": 0}
+          }
         }
       }
     },
@@ -176,6 +194,28 @@
           },
           "separatePatchRequired": {
             "type": "boolean"
+          },
+          "quality": {
+            "type": "object",
+            "required": [
+              "averageScore",
+              "band",
+              "needsAttention",
+              "missing"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "averageScore": {"type": ["number", "null"], "minimum": 0, "maximum": 100},
+              "band": {"type": "string", "enum": ["strong", "medium", "weak"]},
+              "needsAttention": {"type": "integer", "minimum": 0},
+              "missing": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": ["evidence", "reproduction", "impactScope", "validation", "riskExplanation"]
+                }
+              }
+            }
           }
         }
       }

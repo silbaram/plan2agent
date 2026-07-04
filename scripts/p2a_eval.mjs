@@ -8,6 +8,7 @@ import path from 'node:path';
 import process from 'node:process';
 import {
   loadJson,
+  validateProposalDraftApprovalData,
   validateRunData,
   validateRunIndexData,
   validateSkillProposal,
@@ -1471,6 +1472,410 @@ function incrementCounter(target, key) {
   target[key] = (target[key] ?? 0) + 1;
 }
 
+function ratio(numerator, denominator) {
+  if (!denominator) return null;
+  return Number((numerator / denominator).toFixed(3));
+}
+
+function percentLabel(value) {
+  if (value === null || value === undefined) return 'n/a';
+  return `${Math.round(value * 100)}%`;
+}
+
+function resolveArtifactPath(value) {
+  if (!value || typeof value !== 'string') return null;
+  return path.isAbsolute(value) ? path.resolve(value) : path.resolve(P2A_PATHS.projectRoot, value);
+}
+
+function uniquePaths(paths) {
+  return [...new Set(paths.filter(Boolean).map((item) => path.resolve(item)))];
+}
+
+function firstEvalSource(artifacts) {
+  for (const collection of [artifacts.analyses, artifacts.indexes, artifacts.grades]) {
+    for (const item of collection) {
+      if (item.payload?.source && typeof item.payload.source === 'object') return item.payload.source;
+    }
+  }
+  return null;
+}
+
+function digestSourceFromArgs(args) {
+  if (args.evalDir) return null;
+  try {
+    return loadAnalyzeSource(args);
+  } catch {
+    return null;
+  }
+}
+
+function buildDigestSourceContext(args, evalDir, artifacts) {
+  const directSource = digestSourceFromArgs(args);
+  const artifactSource = firstEvalSource(artifacts);
+  const runsDir = directSource?.runsDir
+    ?? resolveArtifactPath(artifactSource?.runsDir)
+    ?? (directoryExists(path.join(path.dirname(evalDir), 'runs')) ? path.join(path.dirname(evalDir), 'runs') : null);
+  const proposalsDir = directSource?.proposalsDir
+    ?? resolveArtifactPath(artifactSource?.proposalsDir)
+    ?? (directoryExists(path.join(path.dirname(evalDir), 'proposals')) ? path.join(path.dirname(evalDir), 'proposals') : null);
+  const sourcePath = directSource?.sourcePath
+    ?? resolveArtifactPath(artifactSource?.sourcePath)
+    ?? null;
+  const sourceKind = directSource?.sourceKind ?? artifactSource?.sourceKind ?? null;
+  const maintenanceGraphPaths = [];
+  if (sourceKind === 'artifacts' && sourcePath) {
+    maintenanceGraphPaths.push(maintenanceGraphPathForSource({ sourcePath }));
+  }
+  const scanRoots = [
+    evalDir,
+    sourcePath && directoryExists(sourcePath) ? sourcePath : null,
+    runsDir ? path.dirname(runsDir) : null,
+    proposalsDir ? path.dirname(proposalsDir) : null,
+  ];
+  return {
+    sourceKind,
+    sourcePath,
+    runsDir,
+    proposalsDir,
+    maintenanceGraphPaths: uniquePaths(maintenanceGraphPaths),
+    scanRoots: uniquePaths(scanRoots).filter((dirPath) => directoryExists(dirPath)),
+  };
+}
+
+function safeJsonFilesRecursive(dirPath, maxFiles = 500) {
+  if (!directoryExists(dirPath)) return [];
+  const files = [];
+  function visit(currentPath) {
+    if (files.length >= maxFiles) return;
+    let entries = [];
+    try {
+      entries = readdirSync(currentPath, { withFileTypes: true })
+        .sort((left, right) => left.name.localeCompare(right.name));
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (files.length >= maxFiles) return;
+      if (entry.name === '.git' || entry.name === 'node_modules') continue;
+      const entryPath = path.join(currentPath, entry.name);
+      if (entry.isDirectory()) visit(entryPath);
+      else if (entry.isFile() && entry.name.endsWith('.json')) files.push(entryPath);
+    }
+  }
+  visit(dirPath);
+  return files;
+}
+
+function readProposalDraftApprovals(scanRoots) {
+  const approvals = [];
+  const skippedApprovals = [];
+  const seenFiles = new Set();
+  for (const root of scanRoots) {
+    for (const filePath of safeJsonFilesRecursive(root)) {
+      const resolved = path.resolve(filePath);
+      if (seenFiles.has(resolved)) continue;
+      seenFiles.add(resolved);
+      try {
+        const payload = loadJson(resolved);
+        if (payload?.schema_version !== 'p2a.proposal_draft_approval.v1') continue;
+        approvals.push({
+          filePath: resolved,
+          payload: validateProposalDraftApprovalData(payload),
+        });
+      } catch (error) {
+        if (path.basename(resolved).includes('approval')) {
+          skippedApprovals.push({ filePath: displayPath(resolved), reason: errorMessage(error) });
+        }
+      }
+    }
+  }
+  return { approvals, skippedApprovals, scannedFiles: seenFiles.size };
+}
+
+function readMaintenanceGraphs(sourceContext, approvals) {
+  const approvalGraphPaths = approvals
+    .map((item) => resolveArtifactPath(item.payload?.maintenanceTask?.taskGraph));
+  const graphPaths = uniquePaths([
+    ...sourceContext.maintenanceGraphPaths,
+    ...approvalGraphPaths,
+  ]).filter((filePath) => fileExists(filePath));
+  const graphs = [];
+  const skippedGraphs = [];
+  for (const graphPath of graphPaths) {
+    try {
+      graphs.push({ filePath: graphPath, graph: validateTaskGraph(graphPath) });
+    } catch (error) {
+      skippedGraphs.push({ filePath: displayPath(graphPath), reason: errorMessage(error) });
+    }
+  }
+  return { graphs, skippedGraphs };
+}
+
+function proposalRefsForTask(task) {
+  return (task.sourceSpecRefs ?? []).filter((ref) => (
+    ref.startsWith('proposal-draft-approval:')
+    || ref.startsWith('proposal-patch-draft:')
+    || ref.startsWith('proposal-candidate:')
+  ));
+}
+
+function notesProposalApprovalId(run) {
+  const note = (run.notes ?? []).find((item) => /^proposalApproval=proposal-draft-approval-[a-f0-9]{12}$/.test(item));
+  return note ? note.slice('proposalApproval='.length) : null;
+}
+
+function verificationOutcome(run) {
+  const checks = Array.isArray(run.verification) ? run.verification : [];
+  if (run.status === 'failed' || run.status === 'blocked' || checks.some((item) => item.status === 'failed')) return 'failed';
+  if (checks.length && checks.every((item) => item.status === 'passed')) return 'passed';
+  return 'not_run';
+}
+
+function runLikeFromGrade(grade) {
+  const run = grade.run ?? {};
+  return {
+    runId: run.runId ?? 'unknown',
+    taskId: grade.task?.taskId ?? 'unknown',
+    status: run.status ?? 'unknown',
+    sourceLayout: null,
+    verification: run.verification ?? [],
+    notes: [],
+    changedFiles: run.changedFiles ?? [],
+    failure: run.failure ?? null,
+    structuredEvidence: run.structuredEvidence ?? null,
+  };
+}
+
+function evidenceSummaryForRun(run) {
+  return run.structuredEvidence ?? structuredRunSummary(run);
+}
+
+function buildRunSelfImprovementSummary(runs, artifacts) {
+  const runLikeItems = runs.length
+    ? runs
+    : artifacts.grades.map((item) => runLikeFromGrade(item.payload));
+  const byStatus = {};
+  let successful = 0;
+  let failedOrBlocked = 0;
+  let failed = 0;
+  let blocked = 0;
+  const incompleteRuns = [];
+  const missing = { reproduction: 0, localization: 0, guard: 0 };
+  for (const run of runLikeItems) {
+    incrementCounter(byStatus, run.status ?? 'unknown');
+    if (run.status === 'finished' && verificationOutcome(run) === 'passed') successful += 1;
+    if (run.status === 'failed') failed += 1;
+    if (run.status === 'blocked') blocked += 1;
+    if (run.status === 'failed' || run.status === 'blocked') {
+      failedOrBlocked += 1;
+      const evidence = evidenceSummaryForRun(run);
+      const missingFields = [];
+      if (!evidence.hasReproduction) missingFields.push('reproduction');
+      if (!evidence.hasLocalization) missingFields.push('localization');
+      if (!evidence.hasGuard) missingFields.push('guard');
+      for (const field of missingFields) missing[field] += 1;
+      if (missingFields.length) {
+        incompleteRuns.push({
+          runId: run.runId,
+          taskId: run.taskId,
+          status: run.status,
+          missing: missingFields,
+        });
+      }
+    }
+  }
+  const complete = failedOrBlocked - incompleteRuns.length;
+  return {
+    source: runs.length ? 'runs' : (artifacts.grades.length ? 'grades' : 'none'),
+    total: runLikeItems.length,
+    byStatus,
+    successful,
+    failed,
+    blocked,
+    failedOrBlocked,
+    failureEvidence: {
+      required: failedOrBlocked,
+      complete,
+      incomplete: incompleteRuns.length,
+      completeRate: ratio(complete, failedOrBlocked),
+      missing,
+      incompleteRuns: incompleteRuns.slice(0, 20),
+    },
+  };
+}
+
+function buildProposalSelfImprovementSummary(proposals, skippedProposals) {
+  const byStatus = { proposed: 0, approved: 0, rejected: 0, deferred: 0 };
+  for (const proposal of proposals) byStatus[proposal.status] = (byStatus[proposal.status] ?? 0) + 1;
+  const reviewed = byStatus.approved + byStatus.rejected + byStatus.deferred;
+  return {
+    total: proposals.length,
+    byStatus,
+    approved: byStatus.approved,
+    rejected: byStatus.rejected,
+    deferred: byStatus.deferred,
+    proposed: byStatus.proposed,
+    reviewed,
+    pendingReview: byStatus.proposed,
+    approvalRate: ratio(byStatus.approved, reviewed),
+    rejectionRate: ratio(byStatus.rejected, reviewed),
+    skipped: skippedProposals.length,
+  };
+}
+
+function buildRecurringFailureSummary(clusters, runs) {
+  const clusterRows = clusters.length
+    ? clusters.map((cluster) => ({
+      classification: cluster.classification,
+      count: cluster.runIds.length,
+      runIds: cluster.runIds,
+      taskIds: cluster.taskIds,
+      proposalCoverage: cluster.proposalCoverage ?? null,
+      recommendation: cluster.recommendation ?? null,
+      maintenanceCommand: cluster.maintenanceCommand ?? null,
+    }))
+    : failureClustersFromRuns(runs);
+  const recurring = clusterRows
+    .filter((cluster) => cluster.count > 1)
+    .sort((left, right) => right.count - left.count || left.classification.localeCompare(right.classification));
+  return {
+    clusters: recurring.length,
+    top: recurring.slice(0, 10),
+  };
+}
+
+function failureClustersFromRuns(runs) {
+  const groups = new Map();
+  for (const run of runs) {
+    const key = clusterKeyForRun(run);
+    if (!key) continue;
+    if (!groups.has(key)) groups.set(key, { classification: key, runIds: [], taskIds: [] });
+    const group = groups.get(key);
+    group.runIds.push(run.runId);
+    group.taskIds.push(run.taskId);
+  }
+  return [...groups.values()].map((group) => ({
+    classification: group.classification,
+    count: group.runIds.length,
+    runIds: sortedUnique(group.runIds),
+    taskIds: sortedUnique(group.taskIds),
+    proposalCoverage: null,
+    recommendation: clusterRecommendation(group.classification),
+    maintenanceCommand: null,
+  }));
+}
+
+function buildMaintenanceSelfImprovementSummary({
+  approvals,
+  maintenanceGraphs,
+  runs,
+  artifacts,
+  proposalSummary,
+}) {
+  const proposalTasks = [];
+  for (const item of maintenanceGraphs.graphs) {
+    for (const task of item.graph.tasks ?? []) {
+      const proposalRefs = proposalRefsForTask(task);
+      if (!proposalRefs.length) continue;
+      proposalTasks.push({
+        taskId: task.id,
+        status: task.status,
+        title: task.title,
+        graphPath: displayPath(item.filePath),
+        proposalRefs,
+      });
+    }
+  }
+
+  const approvalTaskIds = new Set(approvals.map((item) => item.payload.maintenanceTask.taskId));
+  const approvalIds = new Set(approvals.map((item) => item.payload.approvalId));
+  const convertedApprovals = approvals.filter((approval) => proposalTasks.some((task) => (
+    task.taskId === approval.payload.maintenanceTask.taskId
+    && task.proposalRefs.includes(`proposal-draft-approval:${approval.payload.approvalId}`)
+  )));
+  const approvalDenominator = approvals.length || proposalSummary.approved;
+  const convertedCount = approvals.length ? convertedApprovals.length : proposalTasks.length;
+  const boundedConvertedCount = approvalDenominator ? Math.min(convertedCount, approvalDenominator) : convertedCount;
+  const postMaintenanceRuns = runs.filter((run) => {
+    if (run.sourceLayout !== 'maintenance') return false;
+    const noteApproval = notesProposalApprovalId(run);
+    return approvalTaskIds.has(run.taskId) || (noteApproval && (approvalIds.has(noteApproval) || approvals.length === 0));
+  });
+  const verification = { total: postMaintenanceRuns.length, passed: 0, failed: 0, notRun: 0, successRate: null, runs: [] };
+  for (const run of postMaintenanceRuns) {
+    const outcome = verificationOutcome(run);
+    if (outcome === 'passed') verification.passed += 1;
+    else if (outcome === 'failed') verification.failed += 1;
+    else verification.notRun += 1;
+    verification.runs.push({
+      runId: run.runId,
+      taskId: run.taskId,
+      status: run.status,
+      outcome,
+      proposalApprovalId: notesProposalApprovalId(run),
+    });
+  }
+  verification.successRate = ratio(verification.passed, verification.total);
+
+  const applyReports = artifacts.applyReports.map((item) => item.payload);
+  return {
+    approvals: approvals.length,
+    skippedApprovals: maintenanceGraphs.skippedApprovals ?? 0,
+    approvedProposalSignals: approvalDenominator,
+    maintenanceTasksFromProposals: proposalTasks.length,
+    convertedApprovals: boundedConvertedCount,
+    rawConvertedApprovals: convertedCount,
+    pendingConversions: approvalDenominator ? Math.max(approvalDenominator - boundedConvertedCount, 0) : 0,
+    conversionRate: ratio(boundedConvertedCount, approvalDenominator),
+    completedMaintenanceTasks: proposalTasks.filter((task) => task.status === 'done').length,
+    maintenanceTasks: proposalTasks.slice(0, 20),
+    postMaintenanceVerification: verification,
+    applyReports: {
+      total: applyReports.length,
+      applied: applyReports.reduce((sum, report) => sum + (report.summary?.applied ?? 0), 0),
+      skipped: applyReports.reduce((sum, report) => sum + (report.summary?.skipped ?? 0), 0),
+      failed: applyReports.reduce((sum, report) => sum + (report.summary?.failed ?? 0), 0),
+      dryRun: applyReports.reduce((sum, report) => sum + (report.summary?.dryRun ?? 0), 0),
+    },
+  };
+}
+
+function buildSelfImprovementDigest(args, evalDir, artifacts, clusters) {
+  const sourceContext = buildDigestSourceContext(args, evalDir, artifacts);
+  const runsRead = sourceContext.runsDir ? readRuns(sourceContext.runsDir) : { runs: [], skippedRuns: [] };
+  const proposalRead = sourceContext.proposalsDir ? readProposals(sourceContext.proposalsDir) : { proposals: [], skippedProposals: [] };
+  const approvalsRead = readProposalDraftApprovals(sourceContext.scanRoots);
+  const maintenanceGraphs = readMaintenanceGraphs(sourceContext, approvalsRead.approvals);
+  const runSummary = buildRunSelfImprovementSummary(runsRead.runs, artifacts);
+  const proposalSummary = buildProposalSelfImprovementSummary(proposalRead.proposals, proposalRead.skippedProposals);
+  const maintenanceSummary = buildMaintenanceSelfImprovementSummary({
+    approvals: approvalsRead.approvals,
+    maintenanceGraphs: {
+      ...maintenanceGraphs,
+      skippedApprovals: approvalsRead.skippedApprovals.length,
+    },
+    runs: runsRead.runs,
+    artifacts,
+    proposalSummary,
+  });
+  return {
+    sources: {
+      runsDir: sourceContext.runsDir ? displayPath(sourceContext.runsDir) : null,
+      proposalsDir: sourceContext.proposalsDir ? displayPath(sourceContext.proposalsDir) : null,
+      approvalFiles: approvalsRead.approvals.map((item) => displayPath(item.filePath)),
+      maintenanceGraphs: maintenanceGraphs.graphs.map((item) => displayPath(item.filePath)),
+      skippedRuns: runsRead.skippedRuns,
+      skippedProposals: proposalRead.skippedProposals,
+      skippedApprovals: approvalsRead.skippedApprovals,
+      skippedMaintenanceGraphs: maintenanceGraphs.skippedGraphs,
+    },
+    runs: runSummary,
+    proposals: proposalSummary,
+    recurringFailures: buildRecurringFailureSummary(clusters, runsRead.runs),
+    maintenance: maintenanceSummary,
+  };
+}
+
 function buildEvalDigest(args) {
   const evalDir = resolveDigestEvalDir(args);
   const artifacts = readEvalArtifacts(evalDir);
@@ -1542,6 +1947,7 @@ function buildEvalDigest(args) {
   clusters.sort((left, right) => (right.runIds.length - left.runIds.length) || left.classification.localeCompare(right.classification));
   const maintenanceCommands = sortedUnique(clusters.map((cluster) => cluster.maintenanceCommand));
   const deltaDraftCommands = sortedUnique(clusters.map((cluster) => cluster.deltaDraftCommand));
+  const selfImprovement = buildSelfImprovementDigest(args, evalDir, artifacts, clusters);
   const payload = {
     schema_version: 'p2a.eval_digest.v1',
     digestId: `eval-digest-${stableHash({
@@ -1550,6 +1956,12 @@ function buildEvalDigest(args) {
       grades: byVerdict,
       compares: compareByVerdict,
       clusters: clusterByClassification,
+      selfImprovement: {
+        runs: selfImprovement.runs.total,
+        proposals: selfImprovement.proposals.total,
+        approvals: selfImprovement.maintenance.approvals,
+        recurring: selfImprovement.recurringFailures.clusters,
+      },
     })}`,
     generatedAt: new Date().toISOString(),
     evalDir: displayPath(evalDir),
@@ -1586,6 +1998,7 @@ function buildEvalDigest(args) {
       maintenanceCommands: maintenanceCommands.slice(0, 10),
       deltaDraftCommands: deltaDraftCommands.slice(0, 10),
     },
+    selfImprovement,
     skippedFiles: artifacts.skippedFiles,
     nextActions: [],
   };
@@ -1610,6 +2023,21 @@ function evalDigestNextActions(payload) {
   if (payload.analyses.deltaDraftCommands.length) {
     actions.push(`Open a delta iteration for scope-changing findings: ${payload.analyses.deltaDraftCommands[0]}`);
   }
+  if (payload.selfImprovement?.runs?.failureEvidence?.incomplete > 0) {
+    actions.push('Complete missing reproduction/localization/guard evidence for failed or blocked runs before mining more improvements.');
+  }
+  if (payload.selfImprovement?.recurringFailures?.clusters > 0) {
+    actions.push('Review recurring failure clusters; repeated classifications should become proposal or maintenance follow-up work.');
+  }
+  if (payload.selfImprovement?.proposals?.pendingReview > 0) {
+    actions.push('Review pending proposal candidates and approve, reject, or defer them before measuring conversion.');
+  }
+  if (payload.selfImprovement?.maintenance?.pendingConversions > 0) {
+    actions.push('Convert approved proposal signals into maintenance tasks, or record why conversion is intentionally deferred.');
+  }
+  if (payload.selfImprovement?.maintenance?.postMaintenanceVerification?.failed > 0) {
+    actions.push('Inspect failed post-maintenance verification runs before treating the improvement as effective.');
+  }
   if (!actions.length) actions.push('No immediate eval follow-up required from generated artifacts.');
   return actions;
 }
@@ -1622,6 +2050,10 @@ function printEvalDigest(payload, writeResult) {
   console.log(`- acceptance: ${payload.grades.acceptanceCoverage.covered}/${payload.grades.acceptanceCoverage.total} covered`);
   console.log(`- compare: total=${payload.compares.total} byVerdict=${JSON.stringify(payload.compares.byVerdict)} failingSignals=${payload.compares.failingSignals.length}`);
   console.log(`- analysis: total=${payload.analyses.total} clusters=${payload.analyses.clusters} byClassification=${JSON.stringify(payload.analyses.byClassification)}`);
+  console.log(`- self-improvement: runs=${payload.selfImprovement.runs.total} failedOrBlocked=${payload.selfImprovement.runs.failedOrBlocked} proposals=${payload.selfImprovement.proposals.total} approved=${payload.selfImprovement.proposals.approved} recurringFailures=${payload.selfImprovement.recurringFailures.clusters}`);
+  console.log(`- failure evidence: complete=${payload.selfImprovement.runs.failureEvidence.complete}/${payload.selfImprovement.runs.failureEvidence.required} rate=${percentLabel(payload.selfImprovement.runs.failureEvidence.completeRate)}`);
+  console.log(`- maintenance conversion: converted=${payload.selfImprovement.maintenance.convertedApprovals}/${payload.selfImprovement.maintenance.approvedProposalSignals} rate=${percentLabel(payload.selfImprovement.maintenance.conversionRate)}`);
+  console.log(`- post-maintenance verification: passed=${payload.selfImprovement.maintenance.postMaintenanceVerification.passed}/${payload.selfImprovement.maintenance.postMaintenanceVerification.total} rate=${percentLabel(payload.selfImprovement.maintenance.postMaintenanceVerification.successRate)}`);
   if (writeResult.wrote) console.log(`- output: ${displayPath(writeResult.filePath)}`);
   if (payload.nextActions.length) {
     console.log('next actions:');

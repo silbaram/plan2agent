@@ -84,6 +84,119 @@
         "byClassification": { "type": "object" }
       }
     },
+    "selfImprovement": {
+      "type": "object",
+      "required": [
+        "sources",
+        "runs",
+        "proposals",
+        "recurringFailures",
+        "maintenance"
+      ],
+      "additionalProperties": true,
+      "properties": {
+        "sources": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "runs": {
+          "type": "object",
+          "required": [
+            "total",
+            "byStatus",
+            "failedOrBlocked",
+            "failureEvidence"
+          ],
+          "additionalProperties": true,
+          "properties": {
+            "total": { "type": "integer", "minimum": 0 },
+            "byStatus": { "type": "object" },
+            "failedOrBlocked": { "type": "integer", "minimum": 0 },
+            "failureEvidence": {
+              "type": "object",
+              "required": [
+                "required",
+                "complete",
+                "incomplete",
+                "completeRate"
+              ],
+              "additionalProperties": true,
+              "properties": {
+                "required": { "type": "integer", "minimum": 0 },
+                "complete": { "type": "integer", "minimum": 0 },
+                "incomplete": { "type": "integer", "minimum": 0 },
+                "completeRate": { "type": ["number", "null"], "minimum": 0, "maximum": 1 }
+              }
+            }
+          }
+        },
+        "proposals": {
+          "type": "object",
+          "required": [
+            "total",
+            "byStatus",
+            "pendingReview"
+          ],
+          "additionalProperties": true,
+          "properties": {
+            "total": { "type": "integer", "minimum": 0 },
+            "byStatus": { "type": "object" },
+            "pendingReview": { "type": "integer", "minimum": 0 },
+            "approvalRate": { "type": ["number", "null"], "minimum": 0, "maximum": 1 },
+            "rejectionRate": { "type": ["number", "null"], "minimum": 0, "maximum": 1 }
+          }
+        },
+        "recurringFailures": {
+          "type": "object",
+          "required": [
+            "clusters",
+            "top"
+          ],
+          "additionalProperties": true,
+          "properties": {
+            "clusters": { "type": "integer", "minimum": 0 },
+            "top": { "type": "array" }
+          }
+        },
+        "maintenance": {
+          "type": "object",
+          "required": [
+            "approvals",
+            "approvedProposalSignals",
+            "maintenanceTasksFromProposals",
+            "convertedApprovals",
+            "conversionRate",
+            "postMaintenanceVerification"
+          ],
+          "additionalProperties": true,
+          "properties": {
+            "approvals": { "type": "integer", "minimum": 0 },
+            "approvedProposalSignals": { "type": "integer", "minimum": 0 },
+            "maintenanceTasksFromProposals": { "type": "integer", "minimum": 0 },
+            "convertedApprovals": { "type": "integer", "minimum": 0 },
+            "conversionRate": { "type": ["number", "null"], "minimum": 0, "maximum": 1 },
+            "postMaintenanceVerification": {
+              "type": "object",
+              "required": [
+                "total",
+                "passed",
+                "failed",
+                "notRun",
+                "successRate"
+              ],
+              "additionalProperties": true,
+              "properties": {
+                "total": { "type": "integer", "minimum": 0 },
+                "passed": { "type": "integer", "minimum": 0 },
+                "failed": { "type": "integer", "minimum": 0 },
+                "notRun": { "type": "integer", "minimum": 0 },
+                "successRate": { "type": ["number", "null"], "minimum": 0, "maximum": 1 }
+              }
+            }
+          }
+        }
+      }
+    },
     "nextActions": {
       "type": "array",
       "items": { "type": "string", "minLength": 1 }

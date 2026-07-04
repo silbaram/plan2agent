@@ -188,6 +188,9 @@ describe("loadProjectSnapshot", () => {
     const tempRoot = await mkdtemp(path.join(tmpdir(), "p2a-loader-proposals-"));
     try {
       await mkdir(path.join(tempRoot, ".plan2agent", "proposals"), { recursive: true });
+      await mkdir(path.join(tempRoot, ".plan2agent", "proposals", "curations"), { recursive: true });
+      await mkdir(path.join(tempRoot, ".plan2agent", "proposals", "patch-drafts"), { recursive: true });
+      await mkdir(path.join(tempRoot, ".plan2agent", "proposals", "approvals"), { recursive: true });
       await writeFile(
         path.join(tempRoot, ".plan2agent/manifest.json"),
         JSON.stringify({ schema_version: "p2a.manifest.v1" }),
@@ -203,8 +206,48 @@ describe("loadProjectSnapshot", () => {
           recommendedChange: "Create the worktree before checking workspace existence.",
           targetFiles: [".plan2agent/scripts/p2a_runs.mjs", ".agents/skills/p2a-dev-execution/SKILL.md"],
           risk: "low",
-          status: "proposed",
+          riskRationale: "The current start path can fail before the isolated workspace exists.",
+          status: "approved",
+          quality: {
+            score: 80,
+            band: "strong",
+            criteria: {},
+            missing: ["validation"],
+          },
           note: "Repeated workflow issue.",
+        }),
+      );
+      await writeFile(
+        path.join(tempRoot, ".plan2agent/proposals/curations/curation.json"),
+        JSON.stringify({
+          schema_version: "p2a.proposal_curation.v1",
+          candidates: [
+            {
+              candidateId: "candidate-isolation-workspace",
+              proposalIds: ["p2a-runs-create-isolation-workspace-check"],
+            },
+          ],
+        }),
+      );
+      await writeFile(
+        path.join(tempRoot, ".plan2agent/proposals/patch-drafts/draft.json"),
+        JSON.stringify({
+          schema_version: "p2a.proposal_patch_draft.v1",
+          draftId: "proposal-patch-draft-isolation-workspace",
+          candidateId: "candidate-isolation-workspace",
+        }),
+      );
+      await writeFile(
+        path.join(tempRoot, ".plan2agent/proposals/approvals/approval.json"),
+        JSON.stringify({
+          schema_version: "p2a.proposal_draft_approval.v1",
+          approvalId: "proposal-draft-approval-isolation-workspace",
+          draftId: "proposal-patch-draft-isolation-workspace",
+          candidateId: "candidate-isolation-workspace",
+          maintenanceTask: {
+            taskId: "maintenance-self-improvement-isolation-workspace",
+            title: "Fix isolated workspace start guard",
+          },
         }),
       );
 
@@ -214,9 +257,20 @@ describe("loadProjectSnapshot", () => {
       expect(snapshot.proposals[0]).toMatchObject({
         proposalId: "p2a-runs-create-isolation-workspace-check",
         sourceRunId: "run-20260629-task-14-search-tests",
-        status: "proposed",
+        status: "approved",
         risk: "low",
+        riskRationale: "The current start path can fail before the isolated workspace exists.",
         evidenceCount: 1,
+        quality: {
+          score: 80,
+          band: "strong",
+          missing: ["validation"],
+        },
+        approvalId: "proposal-draft-approval-isolation-workspace",
+        candidateId: "candidate-isolation-workspace",
+        patchDraftId: "proposal-patch-draft-isolation-workspace",
+        maintenanceTaskId: "maintenance-self-improvement-isolation-workspace",
+        maintenanceTaskTitle: "Fix isolated workspace start guard",
         relativePath: ".plan2agent/proposals/p2a-runs-create-isolation-workspace-check.json",
       });
       expect(snapshot.diagnostics.some((diagnostic) => diagnostic.message.includes("proposal feedback"))).toBe(true);
@@ -855,6 +909,34 @@ describe("loadProjectSnapshot", () => {
         }),
       );
       await writeFile(
+        path.join(tempRoot, "memory-digest.json"),
+        JSON.stringify({
+          schema_version: "p2a.memory_digest.v1",
+          context: {
+            sourceKind: "artifacts",
+            sourcePath: ".",
+            runsDir: "runs",
+          },
+          runs: {
+            total: 2,
+            failedOrBlocked: 1,
+            verificationFailures: 1,
+            verificationGaps: 0,
+          },
+          proposals: {
+            total: 1,
+            uncoveredCandidateRuns: [],
+          },
+          memoryUsefulness: {
+            searchReports: 1,
+            totalResults: 4,
+            usedResults: 3,
+            unusedResults: 1,
+            usefulnessRate: 0.75,
+          },
+        }),
+      );
+      await writeFile(
         path.join(tempRoot, "memory-search.json"),
         JSON.stringify({
           schema_version: "p2a.memory_search.v1",
@@ -875,12 +957,25 @@ describe("loadProjectSnapshot", () => {
               RUN_RECORD: 1,
             },
           },
+          usage: {
+            usedResults: 3,
+            usefulnessRate: 0.75,
+          },
           results: [],
         }),
       );
 
       const snapshot = await loadProjectSnapshot(tempRoot);
 
+      expect(snapshot.artifacts[0]?.memoryDigest).toMatchObject({
+        sourcePath: "memory-digest.json",
+        totalRuns: 2,
+        failedOrBlocked: 1,
+        memorySearchReports: 1,
+        memoryTotalResults: 4,
+        memoryUsedResults: 3,
+        memoryUsefulnessRate: 0.75,
+      });
       expect(snapshot.artifacts[0]?.memoryHistory).toMatchObject({
         sourcePath: "memory-history.json",
         totalEvents: 3,
@@ -895,6 +990,8 @@ describe("loadProjectSnapshot", () => {
         totalResults: 4,
         documentResults: 3,
         runResults: 1,
+        usedResults: 3,
+        usefulnessRate: 0.75,
       });
     } finally {
       await rm(tempRoot, { recursive: true, force: true });

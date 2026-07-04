@@ -2010,6 +2010,7 @@ function buildDigest(context, runs, skippedRuns, proposals, skippedProposals) {
       sourceRunId: proposal.sourceRunId ?? null,
       problem: proposal.problem,
     }));
+  const memoryUsefulness = buildMemoryUsefulness(context, runs, proposals);
   return {
     schema_version: 'p2a.memory_digest.v1',
     generatedAt: new Date().toISOString(),
@@ -2039,7 +2040,8 @@ function buildDigest(context, runs, skippedRuns, proposals, skippedProposals) {
       uncoveredCandidateRuns,
     },
     maintenanceCandidates,
-    nextActions: digestNextActions(context, uncoveredCandidateRuns, proposals),
+    memoryUsefulness,
+    nextActions: digestNextActions(context, uncoveredCandidateRuns, proposals, memoryUsefulness),
     skippedRuns,
     skippedProposals,
   };
@@ -2095,7 +2097,207 @@ function riskRank(risk) {
   return { high: 0, medium: 1, low: 2 }[risk] ?? 9;
 }
 
-function digestNextActions(context, uncoveredCandidateRuns, proposals) {
+function jsonFilesFromDir(dirPath, maxFiles = 200) {
+  if (!directoryExists(dirPath)) return [];
+  const files = [];
+  function visit(currentPath) {
+    if (files.length >= maxFiles) return;
+    let entries = [];
+    try {
+      entries = readdirSync(currentPath, { withFileTypes: true })
+        .sort((left, right) => left.name.localeCompare(right.name));
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (files.length >= maxFiles) return;
+      if (entry.name === '.git' || entry.name === 'node_modules') continue;
+      const entryPath = path.join(currentPath, entry.name);
+      if (entry.isDirectory()) visit(entryPath);
+      else if (entry.isFile() && entry.name.endsWith('.json')) files.push(entryPath);
+    }
+  }
+  visit(dirPath);
+  return files;
+}
+
+function memorySearchReportPaths(context) {
+  const roots = sortedUnique([
+    context.artifactRoot,
+    context.artifactRoot ? path.join(context.artifactRoot, 'eval') : null,
+    context.runsDir ? path.dirname(context.runsDir) : null,
+    context.runsDir ? path.join(path.dirname(context.runsDir), 'eval') : null,
+    path.join(P2A_PATHS.projectRoot, '.plan2agent'),
+  ]);
+  return sortedUnique(roots.map((root) => path.join(root, 'memory-search.json')));
+}
+
+function memorySearchReportMatchesContext(payload, context) {
+  const reportContext = payload.context && typeof payload.context === 'object' ? payload.context : null;
+  if (!reportContext) return false;
+  if (reportContext.sourceKind !== context.sourceKind) return false;
+  if ((reportContext.projectId ?? null) !== (context.projectId ?? null)) return false;
+  if ((reportContext.iterationId ?? null) !== (context.iterationId ?? null)) return false;
+  const reportSourcePath = typeof reportContext.sourcePath === 'string' ? normalizePath(reportContext.sourcePath) : null;
+  const currentSourcePath = context.sourcePath ? normalizePath(displayPath(context.sourcePath)) : null;
+  return Boolean(reportSourcePath && currentSourcePath && reportSourcePath === currentSourcePath);
+}
+
+function readMemorySearchReports(context) {
+  const reports = [];
+  for (const filePath of memorySearchReportPaths(context)) {
+    const payload = readJsonObject(filePath);
+    if (payload?.schema_version !== 'p2a.memory_search.v1') continue;
+    if (!memorySearchReportMatchesContext(payload, context)) continue;
+    reports.push({ filePath, payload });
+  }
+  return reports;
+}
+
+function runUsageText(run) {
+  return [
+    ...(run.notes ?? []),
+    ...(run.verification ?? []).flatMap((item) => [
+      item.command,
+      item.stdoutTail,
+      item.stderrTail,
+    ]),
+    ...Object.values(run.reproduction ?? {}).flatMap((item) => Array.isArray(item) ? item : [item]),
+    ...Object.values(run.localization ?? {}).flatMap((item) => Array.isArray(item) ? item : [item]),
+    ...Object.values(run.fixSummary ?? {}).flatMap((item) => Array.isArray(item) ? item : [item]),
+    ...Object.values(run.guard ?? {}).flatMap((item) => Array.isArray(item) ? item : [item]),
+  ].filter(Boolean).join('\n');
+}
+
+function proposalUsageText(proposal) {
+  return [
+    proposal.problem,
+    ...(Array.isArray(proposal.evidence) ? proposal.evidence : []),
+    proposal.recommendedChange,
+    proposal.riskRationale,
+    proposal.note,
+  ].filter(Boolean).join('\n');
+}
+
+function evalUsageFiles(context) {
+  const evalDirs = sortedUnique([
+    context.artifactRoot ? path.join(context.artifactRoot, 'eval') : null,
+    context.runsDir ? path.join(path.dirname(context.runsDir), 'eval') : null,
+  ]);
+  return evalDirs.flatMap((dirPath) => jsonFilesFromDir(dirPath))
+    .filter((filePath) => path.basename(filePath) !== 'memory-search.json');
+}
+
+function usageCorpora(context, runs, proposals) {
+  return {
+    run: runs.map((run) => ({ id: run.runId, text: runUsageText(run) })),
+    proposal: proposals.map((proposal) => ({ id: proposal.proposalId, text: proposalUsageText(proposal) })),
+    eval: evalUsageFiles(context).map((filePath) => ({
+      id: displayPath(filePath),
+      text: readFileSync(filePath, 'utf8'),
+    })),
+  };
+}
+
+function usageRef(value, kind) {
+  if (typeof value !== 'string' || value.length < 3) return null;
+  return { value, kind };
+}
+
+function uniqueUsageRefs(refs) {
+  const byKey = new Map();
+  for (const ref of refs.filter(Boolean)) byKey.set(`${ref.kind}:${ref.value}`, ref);
+  return [...byKey.values()].sort((left, right) => (
+    left.value.localeCompare(right.value) || left.kind.localeCompare(right.kind)
+  ));
+}
+
+function resultUsageRefs(result) {
+  const sourceIds = result.sourceIds && typeof result.sourceIds === 'object' ? result.sourceIds : {};
+  const metadata = result.metadata && typeof result.metadata === 'object' ? result.metadata : {};
+  return uniqueUsageRefs([
+    usageRef(result.documentId, 'identity'),
+    usageRef(result.chunkId, 'identity'),
+    usageRef(sourceIds.sourceDocumentId, 'identity'),
+    usageRef(result.sourcePath, 'contextual'),
+    usageRef(result.lineage?.sourcePath, 'contextual'),
+    usageRef(metadata.sourcePath, 'contextual'),
+    usageRef(sourceIds.sourceRunId, 'contextual'),
+    usageRef(metadata.sourceRunId, 'contextual'),
+  ]);
+}
+
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function contextualRefMatch(text, refValue) {
+  if (!text.includes(refValue)) return false;
+  const escaped = escapeRegExp(refValue);
+  const memoryWords = '(?:memory|search|recall|retriev|used|참조|검색)';
+  return new RegExp(
+    `${memoryWords}[^\\n]{0,120}${escaped}|${escaped}[^\\n]{0,120}${memoryWords}`,
+    'i',
+  ).test(text);
+}
+
+function usageRefMatchesText(ref, text) {
+  if (ref.kind === 'identity') return text.includes(ref.value);
+  return contextualRefMatch(text, ref.value);
+}
+
+function matchMemoryResultUsage(result, corpora) {
+  const refs = resultUsageRefs(result);
+  const usedBy = [];
+  for (const [kind, items] of Object.entries(corpora)) {
+    const matches = [];
+    for (const item of items) {
+      const matchedRefs = refs
+        .filter((ref) => usageRefMatchesText(ref, item.text))
+        .map((ref) => ref.value);
+      if (matchedRefs.length) matches.push({ id: item.id, refs: matchedRefs.slice(0, 5) });
+    }
+    if (matches.length) usedBy.push({ kind, matches: matches.slice(0, 5) });
+  }
+  return { refs: refs.map((ref) => ref.value), usedBy };
+}
+
+function buildMemoryUsefulness(context, runs, proposals) {
+  const reports = readMemorySearchReports(context);
+  const corpora = usageCorpora(context, runs, proposals);
+  const usefulResults = [];
+  let totalResults = 0;
+  const usedBy = { run: 0, proposal: 0, eval: 0 };
+  for (const report of reports) {
+    const results = Array.isArray(report.payload.results) ? report.payload.results : [];
+    totalResults += results.length;
+    for (const result of results) {
+      const usage = matchMemoryResultUsage(result, corpora);
+      if (!usage.usedBy.length) continue;
+      for (const entry of usage.usedBy) usedBy[entry.kind] += 1;
+      usefulResults.push({
+        reportPath: displayPath(report.filePath),
+        artifactType: result.artifactType ?? 'UNKNOWN',
+        score: typeof result.score === 'number' ? result.score : null,
+        sourcePath: result.sourcePath ?? result.lineage?.sourcePath ?? null,
+        sourceRunId: result.sourceIds?.sourceRunId ?? result.metadata?.sourceRunId ?? null,
+        usedBy: usage.usedBy,
+        matchedRefs: sortedUnique(usage.usedBy.flatMap((entry) => entry.matches.flatMap((match) => match.refs))).slice(0, 10),
+      });
+    }
+  }
+  return {
+    searchReports: reports.length,
+    totalResults,
+    usedResults: usefulResults.length,
+    unusedResults: Math.max(totalResults - usefulResults.length, 0),
+    usefulnessRate: totalResults ? Number((usefulResults.length / totalResults).toFixed(3)) : null,
+    usedBy,
+    usefulResults: usefulResults.slice(0, 20),
+  };
+}
+
+function digestNextActions(context, uncoveredCandidateRuns, proposals, memoryUsefulness = null) {
   const sourceFlag = context.sourceKind === 'artifacts'
     ? `--artifacts ${displayPath(context.sourcePath)}`
     : context.sourceKind === 'graph'
@@ -2112,6 +2314,9 @@ function digestNextActions(context, uncoveredCandidateRuns, proposals) {
     actions.push(`Review proposal queue: node .plan2agent/scripts/p2a.mjs proposals review --proposals ${displayPath(context.proposalsDir)} --dry-run`);
     actions.push(`Curate approved maintenance candidates after review: node .plan2agent/scripts/p2a.mjs proposals curate --review <review.json> --proposals ${displayPath(context.proposalsDir)} --dry-run`);
   }
+  if (memoryUsefulness?.totalResults > 0 && memoryUsefulness.usedResults === 0) {
+    actions.push('Review Memory search results before treating them as useful; no run, proposal, or eval artifact references them yet.');
+  }
   if (!actions.length) actions.push('No immediate maintenance proposal action found from local run/proposal evidence.');
   return actions;
 }
@@ -2125,6 +2330,9 @@ function printDigest(payload) {
   const classes = Object.entries(payload.runs.failedByClass);
   if (classes.length) console.log(`- failure classes: ${classes.map(([name, count]) => `${name}=${count}`).join(' ')}`);
   console.log(`- proposals: total=${payload.proposals.total} proposed=${payload.proposals.byStatus.proposed ?? 0} candidateRuns=${payload.proposals.candidateRuns} uncoveredCandidateRuns=${payload.proposals.uncoveredCandidateRuns.length}`);
+  if (payload.memoryUsefulness) {
+    console.log(`- memory usefulness: searchReports=${payload.memoryUsefulness.searchReports} used=${payload.memoryUsefulness.usedResults}/${payload.memoryUsefulness.totalResults} rate=${payload.memoryUsefulness.usefulnessRate ?? 'n/a'}`);
+  }
   if (payload.maintenanceCandidates.length) {
     console.log('maintenance candidates:');
     payload.maintenanceCandidates.forEach((candidate) => {

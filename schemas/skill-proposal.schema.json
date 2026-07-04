@@ -48,6 +48,96 @@
       "type": "string",
       "enum": ["low", "medium", "high"]
     },
+    "riskRationale": {
+      "type": "string",
+      "minLength": 1
+    },
+    "quality": {
+      "type": "object",
+      "required": [
+        "score",
+        "band",
+        "criteria",
+        "missing"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "score": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100
+        },
+        "band": {
+          "type": "string",
+          "enum": ["strong", "medium", "weak"]
+        },
+        "criteria": {
+          "type": "object",
+          "required": [
+            "evidence",
+            "reproduction",
+            "impactScope",
+            "validation",
+            "riskExplanation"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "evidence": {
+              "type": "object",
+              "required": ["passed", "detail"],
+              "additionalProperties": false,
+              "properties": {
+                "passed": {"type": "boolean"},
+                "detail": {"type": "string", "minLength": 1}
+              }
+            },
+            "reproduction": {
+              "type": "object",
+              "required": ["passed", "detail"],
+              "additionalProperties": false,
+              "properties": {
+                "passed": {"type": "boolean"},
+                "detail": {"type": "string", "minLength": 1}
+              }
+            },
+            "impactScope": {
+              "type": "object",
+              "required": ["passed", "detail"],
+              "additionalProperties": false,
+              "properties": {
+                "passed": {"type": "boolean"},
+                "detail": {"type": "string", "minLength": 1}
+              }
+            },
+            "validation": {
+              "type": "object",
+              "required": ["passed", "detail"],
+              "additionalProperties": false,
+              "properties": {
+                "passed": {"type": "boolean"},
+                "detail": {"type": "string", "minLength": 1}
+              }
+            },
+            "riskExplanation": {
+              "type": "object",
+              "required": ["passed", "detail"],
+              "additionalProperties": false,
+              "properties": {
+                "passed": {"type": "boolean"},
+                "detail": {"type": "string", "minLength": 1}
+              }
+            }
+          }
+        },
+        "missing": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": ["evidence", "reproduction", "impactScope", "validation", "riskExplanation"]
+          }
+        }
+      }
+    },
     "status": {
       "type": "string",
       "enum": ["proposed", "approved", "rejected", "deferred"],

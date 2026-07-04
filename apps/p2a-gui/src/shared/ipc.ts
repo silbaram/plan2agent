@@ -115,15 +115,31 @@ export type ProposalStatus = "proposed" | "approved" | "rejected" | "deferred";
 
 export type ProposalRisk = "low" | "medium" | "high";
 
+export type ProposalQualityBand = "strong" | "medium" | "weak";
+
+export type ProposalQualitySummary = {
+  score: number | null;
+  band: ProposalQualityBand | null;
+  missing: string[];
+};
+
 export type ProposalSummary = {
   proposalId: string;
   sourceRunId: string | null;
   status: ProposalStatus;
   risk: ProposalRisk;
+  riskRationale: string | null;
   problem: string;
   recommendedChange: string;
   targetFiles: string[];
   evidenceCount: number;
+  quality: ProposalQualitySummary | null;
+  approvalId: string | null;
+  candidateId: string | null;
+  patchDraftId: string | null;
+  maintenanceTaskId: string | null;
+  maintenanceTaskTitle: string | null;
+  maintenanceTaskStatus: string | null;
   relativePath: string;
   note: string | null;
 };
@@ -344,6 +360,10 @@ export type MemoryDigestSummary = {
   verificationGaps: number;
   proposals: number;
   uncoveredCandidateRuns: number;
+  memorySearchReports: number;
+  memoryUsedResults: number;
+  memoryTotalResults: number;
+  memoryUsefulnessRate: number | null;
 };
 
 export type MemoryHistorySummary = {
@@ -365,6 +385,8 @@ export type MemorySearchSummary = {
   documentResults: number;
   runResults: number;
   taskResults: number;
+  usedResults: number;
+  usefulnessRate: number | null;
   latestGeneratedAt: string | null;
 };
 
