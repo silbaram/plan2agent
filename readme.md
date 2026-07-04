@@ -1,479 +1,346 @@
 # Plan2Agent
 
-Plan2Agent(P2A)는 사용자의 한 문장 아이디어를 출발점으로 삼아, 대화로 기획을 보강하고, 개발 가능한 명세와 task graph로 분해한 뒤 실행, 평가, 회고를 파일 기반 artifact로 묶는 planning/development harness다.
+Plan2Agent (P2A) is a local-first planning and supervised execution harness for AI coding agents.
+It turns a one-sentence product idea into approved specs, dependency-aware task graphs, run logs,
+evaluation reports, improvement proposals, and maintenance work that can be executed by tools such
+as Codex, Claude Code, and Gemini CLI.
 
-현재 v1 하네스는 코드 변경을 완전 자동 실행하지 않는다. Claude Code, Codex, Gemini CLI가 공통 skill과 subagent를 사용해 `idea -> intake -> spec -> task graph -> review` 흐름을 수행하고, handoff/scaffold 이후에는 task 상태, agent 실행 결과, eval/proposal/memory report를 파일 기반 sidecar로 기록한다.
+**Search keywords:** AI agent planning, coding agent workflow, agentic software development,
+task graph, product spec generation, supervised execution, AI code review, local-first artifacts,
+Codex, Claude Code, Gemini CLI, eval loop, self-improvement loop, memory server, developer tools.
 
-## 현재 범위
+## What Plan2Agent Does
 
-v1에서 하는 일:
-
-- 한 문장 아이디어를 구조화한다.
-- 부족한 정보를 schema-compatible 질문과 `needs_user_decision`으로 만든다.
-- 승인 게이트를 지켜 제품 명세와 구현 명세를 생성한다.
-- 승인된 구현 명세를 구현 가능한 task graph로 분해한다.
-- task별 agent 실행 prompt 초안을 만든다.
-- 명세와 task graph의 누락, 과대 task, 의존성 오류, gate 위반을 검토한다.
-- 반복 구조에서 close/open, semantic diff task, maintenance task, handoff 기준점을 관리한다.
-- 대상 프로젝트로 산출물과 실행 도구를 handoff한다.
-- agent 실행 결과를 run log로 기록한다.
-- eval/proposal/memory CLI로 실행 결과를 평가하고 장기 보존/검색 backend와 동기화한다.
-- 4개 CLI 구성의 mirror drift를 검사한다.
-
-v1에서 하지 않는 일:
-
-- 실제 코드 변경 자동 실행
-- dependency 설치 또는 shell 기반 구현 작업
-- agent 실행 결과 자동 병합
-- Memory 서버나 DB 자체 운영. P2A는 선택적으로 Plan2Agent Memory 서버에 status/push/pull/search/history/digest를 수행하는 client 역할만 한다.
-
-## 기준 문서
-
-- [제품 로드맵](plans/01-product-roadmap.md)
-- [문서 홈](docs/README.md)
-- [제품 퀵스타트](docs/quickstart.md)
-- [하네스 구현 기준](docs/harness-spec.md)
-- [반복/고도화 개발 스펙](docs/iteration-spec.md)
-- [CLI 사용자 가이드](docs/cli-reference.md)
-
-## 하네스 구조
-
-Canonical 원본은 `.agents/skills/`와 CLI-중립 `.agents/agents/`다. `.agents/agents/*.md` frontmatter는 `capabilities`, `access`, `tier`만 사용하고 특정 CLI의 `tools`/`model` 문법을 넣지 않는다. `.claude/`, `.codex/`, `.gemini/` 아래 agent/skill mirror는 Plan2Agent 본체의 `scripts/sync_cli_assets.mjs`로 생성되는 산출물이므로 직접 수정하지 않는다. Gemini command shim은 수동 관리 대상이다.
-
-공통 canonical 원본:
+Plan2Agent helps teams move from an idea to controlled AI-assisted implementation without losing
+traceability. It keeps JSON artifacts as the source of truth and uses approval gates so an agent
+cannot silently turn unclear requirements into code.
 
 ```text
-.agents/
-  skills/
-    p2a-harness/
-    p2a-intake/
-    p2a-spec/
-    p2a-task-breakdown/
-    p2a-review/
-  agents/
-    p2a-requirements.md
-    p2a-spec-author.md
-    p2a-implementation-planner.md
-    p2a-task-graph.md
-    p2a-quality-reviewer.md
+Idea
+  -> Gate A: intake and decisions
+  -> Gate B: product spec and implementation plan
+  -> Gate C: executable task graph
+  -> Gate D: review and readiness check
+  -> supervised task execution
+  -> run verification and logs
+  -> eval, proposal, memory, and maintenance loops
 ```
 
-Claude Code용 구성:
+P2A is intentionally not a fully autonomous background coding system. It coordinates skills,
+prompts, artifacts, run state, monitor gates, and improvement proposals while the actual agent CLI
+or app session stays foreground-supervised by the user.
 
-```text
-.claude/
-  agents/
-    p2a-requirements.md
-    p2a-spec-author.md
-    p2a-implementation-planner.md
-    p2a-task-graph.md
-    p2a-quality-reviewer.md
-  skills/
-    p2a-harness/
-    p2a-intake/
-    p2a-spec/
-    p2a-task-breakdown/
-    p2a-review/
-```
+## Key Features
 
-Codex용 구성:
+### AI Planning Harness
 
-```text
-.codex/agents/
-  p2a-requirements.toml
-  p2a-spec-author.toml
-  p2a-implementation-planner.toml
-  p2a-task-graph.toml
-  p2a-quality-reviewer.toml
-```
+- Convert a short product idea into structured intake artifacts.
+- Track assumptions, clarifying questions, and `needs_user_decision` items.
+- Generate product specs, implementation specs, and task graphs.
+- Require explicit approval before moving from spec to task execution.
+- Validate artifacts with JSON schemas and gate-specific checks.
 
-Gemini CLI용 구성:
+### Multi-CLI Agent Support
 
-```text
-.gemini/
-  agents/
-    p2a-requirements.md
-    p2a-spec-author.md
-    p2a-implementation-planner.md
-    p2a-task-graph.md
-    p2a-quality-reviewer.md
-  commands/p2a/
-    harness.toml
-    intake.toml
-    spec.toml
-    task-breakdown.toml
-    review.toml
-```
+- Canonical skills and agents live under `.agents/`.
+- Generated mirrors support Claude Code, Codex, and Gemini CLI.
+- CLI-neutral agent metadata is synchronized into provider-specific formats.
+- Mirror drift is checked with `scripts/check_cli_parity.mjs`.
 
-Fixtures, schemas, and checks:
+### Task Graph and Iteration Management
 
-```text
-fixtures/
-  cache-library/
-    status.md
-    input.md
-    intake.blocked.json
-    intake.answered.json
-    spec.approved.json
-    task-graph.json
-    review.json
-    review-report.md
-  webhook-api-service/
-    status.md
-    input.md
-    intake.blocked.json
-    intake.answered.json
-    spec.approved.json
-    task-graph.json
-    review.json
-    review-report.md
-  _e2e/
-    manifest.json
-    webhook-api-service/
-      status.md
-      gate-a-intake/
-      gate-b-spec/
-      gate-c-task-graph/
-      gate-d-review/
-  _negative/
-    manifest.json
-    missing-approval-audit/
-      status.md
-      gate-a-intake/
-      gate-b-spec/
-    promoted-decision-draft/
-      spec.draft.json
-      spec.invalid-missing-open-decision.json
-      task-graph.json
-    review-blocked/
-      review.blocked.json
-schemas/
-  intake.schema.json
-  spec.schema.json
-  task-graph.schema.json
-scripts/
-  # repo-only toolkit scripts
-  p2a_doctor.mjs
-  p2a_handoff.mjs
-  sync_cli_assets.mjs
-  check_cli_parity.mjs
-  run_fixtures.mjs
-  p2a_tool_manifest.mjs
-  # scaffold-installed project runtime scripts
-  p2a.mjs
-  p2a_paths.mjs
-  p2a_project_config.mjs
-  p2a_run_commands.mjs
-  p2a_iteration.mjs
-  p2a_tasks.mjs
-  p2a_runs.mjs
-  p2a_execute.mjs
-  p2a_orchestrate.mjs
-  p2a_proposals.mjs
-  p2a_eval.mjs
-  p2a_memory.mjs
-  p2a_run_paths.mjs
-  p2a_iteration_state.mjs
-  validate_artifacts.mjs
-```
+- Create dependency-aware task graphs with acceptance criteria.
+- Track task states: `todo`, `in_progress`, `done`, and `blocked`.
+- Manage active iterations, next iterations, semantic diff tasks, and maintenance lanes.
+- Preserve closed iterations as append-only history.
 
+### Supervised Execution
 
-## CLI-neutral agent mapping
+- Use `p2a execute` to plan, start, resume, inspect, and finish a single task run.
+- Capture run logs, changed files, verification commands, failure classes, and structured debug data.
+- Enforce monitor gates and verification evidence before marking tasks done.
+- Support provider runner guides for Codex, Claude, Gemini, and manual execution.
 
-`.agents/agents/*.md`는 중립 metadata를 갖고, sync 스크립트가 CLI별 native 설정으로 변환한다.
+### Evaluation Loop
 
-| Neutral metadata | Claude target | Gemini target | Codex target |
-| --- | --- | --- | --- |
-| `capabilities: read` | `tools: Read` | `tools: read_file` | per-tool list 없음 |
-| `capabilities: search` | `tools: Grep`, `Glob` | `tools: grep_search` | per-tool list 없음 |
-| `capabilities: web` | `tools: WebSearch`, `WebFetch` | `tools: google_web_search`, `web_fetch` | 별도 custom-agent web flag를 생성하지 않음 |
-| `access: read-only` | tool set으로 암시 | `kind: local` | `sandbox_mode = "read-only"` |
-| `tier: standard` | `model: sonnet` | `temperature: 0.2`, `max_turns: 10` | `model_reasoning_effort = "medium"` |
+- `p2a eval grade` checks one run against task acceptance and verification evidence.
+- `p2a eval compare` detects regressions between runs or iterations.
+- `p2a eval analyze` clusters failures and verification gaps.
+- `p2a eval generate` writes grade, analysis, compare, and eval index artifacts.
+- `p2a eval digest` summarizes generated evaluation artifacts.
 
-Codex custom agent 공식 스키마는 `name`, `description`, `developer_instructions`를 필수로 하고 `model_reasoning_effort`, `sandbox_mode` 등 config key override를 허용하지만, per-agent web search flag는 문서화된 필드로 확인되지 않아 생성하지 않는다. 따라서 agent 본문은 web 사용을 “where the CLI provides it”로 표현한다.
+### Improvement Proposal Loop
 
-## 역할
+- Mine failed or blocked runs into structured improvement proposals.
+- Review, curate, draft, and approve proposal artifacts without automatically applying patches.
+- Convert approved proposal drafts into maintenance tasks.
+- Execute approved maintenance tasks through the same supervised execution path.
 
-Subagents:
+### Memory Integration
 
-| 이름 | 역할 |
-| --- | --- |
-| `p2a-requirements` | 아이디어를 `intake_json`의 known facts, assumptions, clarification questions, `needs_user_decision`으로 정리 |
-| `p2a-spec-author` | answered intake를 제품 명세와 `spec_json.product`로 변환 |
-| `p2a-implementation-planner` | 승인 가능한 제품 명세를 구현 계획과 `spec_json.implementation`으로 변환 |
-| `p2a-task-graph` | 승인된 구현 계획을 dependency-aware `task_graph_json`으로 분해 |
-| `p2a-quality-reviewer` | 명세, 계획, task graph의 누락, gate 위반, 의존성 오류, 실행 리스크 검토 |
+- Use Plan2Agent Memory as an optional long-term artifact store and search backend.
+- `p2a memory status` compares local artifacts with remote snapshots.
+- `p2a memory push` uploads project, iteration, document, task, graph, and run snapshots.
+- `p2a memory search` and `p2a memory history` support cross-session recall.
+- `p2a memory digest` summarizes failure and proposal history.
 
-Skills:
+### GUI Workbench
 
-| 이름 | 역할 |
-| --- | --- |
-| `p2a-harness` | 전체 workflow orchestration, 단계→subagent 매핑, 승인 gate, resume 규칙 관리 |
-| `p2a-intake` | 초기 아이디어 분석과 schema-compatible 질문 생성 |
-| `p2a-spec` | 제품/구현 명세 생성과 승인 상태 추적 |
-| `p2a-task-breakdown` | 승인된 spec을 task graph로 분해 |
-| `p2a-review` | 산출물 검토와 blocking issue 보고 |
+- Electron-based GUI for project overview, artifacts, tasks, runs, and operational reports.
+- Shows update reports, eval analysis, eval digest, memory digest, memory history, and memory search.
+- Includes supervised PTY-oriented workflow surfaces for foreground agent sessions.
 
-## 표준 산출물 계약
+### Scaffold, Update, and Drift Checks
 
-하네스는 중간 상태를 다음 이름으로 전달한다.
+- Scaffold P2A into a target project as a local `.plan2agent/` harness.
+- Enhance projects with memory, GUI, orchestration, proposals, and dev-skill capabilities.
+- Preview and apply safe toolkit updates with update and upgrade reports.
+- Run doctor and parity checks to find missing files, stale assets, and configuration drift.
 
-| Artifact | Schema | 생성 단계 | 다음 단계로 넘어가는 조건 |
-| --- | --- | --- | --- |
-| `intake_json` | `.plan2agent/schemas/intake.schema.json` | Intake | `status: ready_for_spec` |
-| `spec_json` | `.plan2agent/schemas/spec.schema.json` | Spec | 모든 `CQ-n` disposition 완료, `approval: approved`, `approval_audit` present, `open_decisions: []` |
-| `task_graph_json` | `.plan2agent/schemas/task-graph.schema.json` | Task Breakdown | dependency ids valid and DAG acyclic |
-| `review_json` | `.plan2agent/schemas/review.schema.json` | Review | `blocking_issues: []` |
-| Optional Markdown views | generated from JSON | Review/export | 사람이 읽는 view이며 Gate 판정의 정본은 아님 |
+## Why Use Plan2Agent?
 
-### 산출물 파일 저장
+Plan2Agent is useful when you want AI coding agents to work from explicit product decisions instead
+of vague chat history. It is designed for workflows where traceability, reviewability, and safe
+iteration matter.
 
-하네스 오케스트레이터는 각 단계의 정본 JSON 산출물을 `.plan2agent/artifacts/<project_id>/` 아래 gate별 폴더에 기록한다. Markdown 파일은 필요할 때 JSON에서 생성하는 view/export다.
+Good fit:
 
-- `status.md` — optional generated standing 진행상태 view
-- `gate-a-intake/intake.json` — canonical intake
-- `gate-b-spec/spec.json` — canonical product/implementation spec
-- `gate-c-task-graph/task-graph.json`
-- `gate-d-review/review.json` — Gate D의 machine-readable canonical review result
-- `gate-a-intake/intake.md`, `gate-b-spec/product-spec.md`, `gate-b-spec/implementation-plan.md`, `gate-d-review/review-report.md` — optional generated Markdown views
+- AI-assisted product planning
+- Agent-ready implementation specs
+- Task graph generation for coding agents
+- Supervised Codex, Claude Code, or Gemini CLI workflows
+- Run verification and regression tracking
+- Human-approved self-improvement and maintenance loops
+- Local-first artifact workflows
 
-subagent는 read-only를 유지하며, 파일 기록은 하네스 오케스트레이터만 수행한다. `.plan2agent/scripts/validate_artifacts.mjs`로 이 파일들을 그대로 검증할 수 있다.
+Not a fit:
 
-`.plan2agent/` 아래 planning artifact, run log, proposal, 생성된 하네스 파일은 application source git에 커밋하지 않는 로컬 상태다. 장기 보존과 조회는 Plan2Agent Memory 같은 artifact store에 동기화하는 방향을 기준으로 하며, git commit은 제품 소스코드 변경 이력에 집중한다.
+- Fully autonomous background code execution
+- Unofficial provider API automation
+- Automatic dependency installation, merging, pushing, or PR creation without approval
+- Replacing source control or project management systems
+- Making a remote Memory server the source of truth
 
+## Quick Start
 
-## Evidence와 Web citation 규칙
+### 1. Scaffold P2A into a project
 
-Intake와 spec 단계가 web lookup 또는 외부 문서를 사용하면 결과 JSON의 `evidence` 배열에 source를 남긴다. Web lookup은 해당 CLI가 제공하는 경우에만 사용한다.
-
-- `USER-n`: 사용자가 직접 제공한 요구사항, 답변, pasted artifact
-- `LOCAL-n`: 저장소 또는 로컬 파일에서 읽은 근거
-- `WEB-n`: web lookup으로 확인한 prior art, API, integration, domain behavior
-
-모든 `WEB-n` 항목은 `title`, `url`, `used_for`를 포함해야 하며, web 근거가 질문·가정·제품 결정·integration 선택에 영향을 주면 주변 rationale에서 `source_id`를 언급한다.
-
-## 승인 게이트와 재개 규칙
-
-1. **Gate A — Intake decisions**
-   - `needs_user_decision.status`가 하나라도 `open` 또는 `deferred`이면 intake에서 멈춘다.
-   - 제품 명세는 확정하지 않고, 사용자에게 open/deferred decision만 질문한다.
-
-2. **Gate B — Spec approval**
-   - intake의 모든 `CQ-n`은 `spec_json.clarifying_question_disposition`에서 처분되어야 한다.
-   - `spec_json.approval`이 `approved`가 아니거나, `approval_audit`가 없거나, `open_decisions`가 남아 있으면 task graph를 만들지 않는다.
-   - 승인된 Gate B가 있는 artifact root 또는 fixture는 `spec_json.approval_audit`를 기록해야 한다.
-
-3. **Gate C — Task graph validation**
-   - 모든 dependency는 같은 graph 안의 task id를 참조해야 한다.
-   - dependency graph는 cycle이 없어야 한다.
-   - 모든 task는 acceptance criteria와 source spec reference를 가져야 한다.
-
-4. **Resume**
-   - 사용자가 `ND-1`, `ND-4`처럼 기존 decision에 답하면 해당 decision의 `answer`를 채우고 `status`를 `answered`로 바꾼다.
-   - 변경된 artifact의 downstream 산출물만 다시 만든다.
-   - Markdown artifact만 주어진 경우 다음 단계로 넘어가기 전에 대응 JSON 계약을 재구성한다.
-
-## 구동 방식
-
-이 저장소는 현재 별도 서버를 실행하지 않는다. 각 CLI를 저장소 루트에서 실행하면, 해당 CLI가 repo-scoped skill, subagent, command 파일을 읽어 하네스를 사용한다.
-
-공통 전제:
-
-- 저장소 루트에서 CLI를 시작한다.
-- 새 skill, subagent, command가 인식되지 않으면 CLI를 재시작하거나 reload 명령을 실행한다.
-- v1 하네스는 read-only planning 용도다. 코드 수정, 패키지 설치, shell 실행을 요청하지 않는다.
-
-## Claude Code 사용
-
-저장소 루트에서 Claude Code를 시작한다.
+Run this from any checkout of the Plan2Agent repository:
 
 ```bash
-claude
+node /path/to/plan2agent/scripts/p2a_handoff.mjs scaffold \
+  --target <project-dir> \
+  --tools all
 ```
 
-전체 하네스 실행:
+Then work inside the target project:
+
+```bash
+cd <project-dir>
+node .plan2agent/scripts/p2a.mjs info
+```
+
+### 2. Start from a one-sentence idea
+
+Open your preferred AI coding tool in the project directory and invoke the P2A harness skill.
+
+Claude Code example:
 
 ```text
-/p2a-harness 사용자의 식단 기록을 받아 영양 균형을 분석하고 주간 리포트를 보여주는 앱을 만들고 싶다.
+/p2a-harness Build a small service that receives webhook events, verifies signatures, and exposes delivery history.
 ```
 
-단계별 실행:
-
-```text
-/p2a-intake <한 문장 아이디어>
-/p2a-spec <intake_json과 사용자 답변>
-/p2a-task-breakdown <승인된 spec_json>
-/p2a-review <spec_json과 task_graph_json>
-```
-
-Claude Code의 project skills는 `.claude/skills/`에서 읽히고, project subagents는 `.claude/agents/`에서 읽힌다. 새 디렉터리가 처음 추가된 경우 Claude Code 재시작이 필요할 수 있다.
-
-## Codex 사용
-
-저장소 루트에서 Codex를 시작한 뒤 skill을 명시적으로 호출한다.
+Codex example:
 
 ```text
 Use the $p2a-harness skill on this idea:
-사용자의 식단 기록을 받아 영양 균형을 분석하고 주간 리포트를 보여주는 앱을 만들고 싶다.
+Build a small service that receives webhook events, verifies signatures, and exposes delivery history.
 ```
 
-Codex subagent까지 명시적으로 쓰려면 다음처럼 요청한다.
+Gemini CLI example:
 
 ```text
-Use the $p2a-harness skill.
-Spawn p2a-requirements, p2a-spec-author, p2a-implementation-planner, p2a-task-graph, and p2a-quality-reviewer only for read-only planning.
-Stop at each approval gate and return the named state artifacts.
+/p2a:harness Build a small service that receives webhook events, verifies signatures, and exposes delivery history.
 ```
 
-Codex custom agents는 `.codex/agents/*.toml`에 정의되어 있다. Codex는 subagent를 자동으로 spawn하지 않으므로, 병렬 또는 subagent 작업이 필요하면 prompt에서 명시해야 한다.
-
-## Gemini CLI 사용
-
-저장소 루트에서 Gemini CLI를 시작한다. command 파일을 수정한 직후라면 reload한다.
+The planning flow writes artifacts under:
 
 ```text
-/commands reload
-/commands list
+.plan2agent/artifacts/<project_id>/
+  gate-a-intake/
+  gate-b-spec/
+  gate-c-task-graph/
+  gate-d-review/
 ```
 
-전체 하네스 실행:
-
-```text
-/p2a:harness 사용자의 식단 기록을 받아 영양 균형을 분석하고 주간 리포트를 보여주는 앱을 만들고 싶다.
-```
-
-단계별 실행:
-
-```text
-/p2a:intake <한 문장 아이디어>
-/p2a:spec <intake_json과 사용자 답변>
-/p2a:task-breakdown <승인된 spec_json>
-/p2a:review <spec_json과 task_graph_json>
-```
-
-Gemini CLI에서 `.gemini/commands/p2a/harness.toml`은 `/p2a:harness` 명령이 된다. 하위 디렉터리의 `/`는 command namespace에서 `:`로 변환된다.
-
-## 검증 스크립트
-
-CLI mirror 생성/동기화:
+### 3. Validate and initialize an iteration
 
 ```bash
-node scripts/sync_cli_assets.mjs
-```
+node .plan2agent/scripts/p2a.mjs validate \
+  --artifact-root .plan2agent/artifacts/<project_id> \
+  --project-id <project_id> \
+  --require-handoff-ready
 
-CLI mirror drift 확인(검사 항목: agent mirror 동기화, skill mirror byte 비교, Gemini command shim 내용 검사(skill 이름, `{{args}}`, 필수 필드)):
-
-```bash
-node scripts/check_cli_parity.mjs
-```
-
-Fixture/golden output 확인:
-
-```bash
-node scripts/run_fixtures.mjs
-```
-
-`run_fixtures.mjs`는 일반 fixture set을 통과 검증하고, `fixtures/_e2e/manifest.json`의 artifact-root fixture는 handoff-ready 상태인지 확인한다. 승인된 Gate B spec은 `approval_audit`까지 확인한다. `fixtures/_negative/manifest.json`에 정의된 중단/실패 fixture는 기대한 실패 메시지가 나오는지 확인한다.
-
-위 세 명령과 `p2a_doctor.mjs`, `p2a_handoff.mjs`는 Plan2Agent 본체 개발자용이며 scaffold 대상 프로젝트에는 설치되지 않는다. 대상 프로젝트에는 `scripts/p2a_tool_manifest.mjs`의 project runtime 목록만 `.plan2agent/scripts/` 아래로 복사된다. 대상 프로젝트에서는 `node .plan2agent/scripts/p2a.mjs info|eval|memory|execute|tasks|runs|iteration|orchestrate|proposals|validate`를 공통 진입점으로 쓸 수 있다. `doctor`, `update`, `upgrade`, `enhance`는 scaffold 시 기록된 toolkit checkout을 찾아 repo-only 스크립트로 위임한다. run 평가는 `p2a.mjs eval grade/compare/analyze/generate/digest`로 수행하고, 장기 보존과 회고 검색은 `p2a.mjs memory status/push/pull/search/history/digest`로 Memory 서버와 동기화한다.
-
-artifact gate 확인:
-
-```bash
-node .plan2agent/scripts/validate_artifacts.mjs --intake .plan2agent/artifacts/<project_id>/gate-a-intake/intake.json
-node .plan2agent/scripts/validate_artifacts.mjs --status .plan2agent/artifacts/<project_id>/status.md
-node .plan2agent/scripts/validate_artifacts.mjs --artifact-root .plan2agent/artifacts/<project_id>
-node .plan2agent/scripts/validate_artifacts.mjs --spec .plan2agent/artifacts/<project_id>/gate-b-spec/spec.json
-node .plan2agent/scripts/validate_artifacts.mjs --task-graph .plan2agent/artifacts/<project_id>/gate-c-task-graph/task-graph.json --require-approved-spec .plan2agent/artifacts/<project_id>/gate-b-spec/spec.json
-node .plan2agent/scripts/validate_artifacts.mjs --review .plan2agent/artifacts/<project_id>/gate-d-review/review.json --require-review-pass
-node .plan2agent/scripts/validate_artifacts.mjs --artifact-root .plan2agent/artifacts/<project_id> --project-id <project_id> --require-handoff-ready
-```
-
-`--spec`은 `--intake`를 함께 주면 그 intake를 사용하고, 없으면 `spec.source_intake`를 실제 파일로 자동 연결해 Gate B의 `clarifying_question_disposition` 추적성까지 검사한다. `spec.source_intake`가 명시됐지만 파일로 해석되지 않으면 실패한다. raw `CQ-n`은 `open_decisions`에 넣지 않고, blocker가 되면 `ND-n`으로 승격해 추적한다.
-
-## Task 관리
-
-Co-located scaffold 프로젝트에서는 Gate D까지 통과한 직후 개발을 시작하지 않고, 먼저 greenfield gate bundle을 반복 구조로 전환한다.
-
-```bash
 node .plan2agent/scripts/p2a.mjs iteration init \
   --artifacts .plan2agent/artifacts/<project_id> \
   --iteration-id v1-mvp
+```
 
-node .plan2agent/scripts/p2a.mjs tasks <command> \
+### 4. Run a supervised task
+
+```bash
+node .plan2agent/scripts/p2a.mjs tasks ready \
+  --artifacts .plan2agent/artifacts/<project_id>
+
+node .plan2agent/scripts/p2a.mjs execute plan \
   --artifacts .plan2agent/artifacts/<project_id> \
-  [task-id]
+  --task <task-id>
+
+node .plan2agent/scripts/p2a.mjs execute start \
+  --artifacts .plan2agent/artifacts/<project_id> \
+  --task <task-id> \
+  --agent-tool codex
 ```
 
-이후 정본 task graph는 active iteration 아래의 `iterations/<iter-id>/gate-c-task-graph/task-graph.json`이다. scaffold 프로젝트에서 초기 `gate-c-task-graph/task-graph.json`을 `--graph`로 직접 실행하려 하면 CLI가 `p2a.mjs iteration init`을 먼저 요구한다. legacy handoff 대상 프로젝트처럼 반복 루트가 아닌 산출물을 명시적으로 실행해야 하는 경우에만 `--graph`를 사용한다.
+Paste the generated launcher prompt into your foreground agent session. When the implementation is
+ready, finish the run with explicit verification:
 
-명령:
-
-- `list`: 전체 task의 `id`, `title`, `status`, `dependencies`, ready 여부를 표로 출력한다.
-- `ready`: 모든 dependency가 `done`이고 자신의 상태가 `todo`인 task만 출력한다.
-- `show <task-id>`: acceptance criteria와 source spec refs를 포함한 task 전체 JSON을 출력한다.
-- `prompt <task-id>`: `suggestedAgentPrompt`에 acceptance criteria, task description, 참조 spec 섹션, 전체 명세 경로를 덧붙여 agent CLI에 바로 붙여넣을 수 있는 실행 prompt를 출력한다.
-- `start <task-id>`: 모든 dependency가 `done`인 `todo` task만 `in_progress`로 바꾼다.
-- `done <task-id>`: `in_progress` task만 `done`으로 바꾼다.
-- `block <task-id>`: task를 `blocked`로 표시한다.
-- `todo <task-id>`: task를 `todo`로 되돌린다.
-
-감독형 개발 진행 루프:
-
-1. 기획 완료 후 `p2a.mjs iteration init`이 끝난 artifact root를 기준으로 `node .plan2agent/scripts/p2a.mjs execute plan --artifacts .plan2agent/artifacts/<project_id> --task <task-id>`로 단일 task 실행 계획을 확인한다.
-2. `node .plan2agent/scripts/p2a.mjs execute start --artifacts .plan2agent/artifacts/<project_id> --task <task-id> --agent-tool codex`로 run을 열고 task를 `in_progress`로 바꾼다.
-3. 출력된 manual launcher prompt를 Claude Code 또는 Codex 같은 write-capable agent CLI에 붙여넣어 구현 작업을 수행한다. Gemini CLI는 현재 review/monitor 같은 read-only 보조로만 사용한다.
-4. 세션이 끊기면 `node .plan2agent/scripts/p2a.mjs execute resume --artifacts .plan2agent/artifacts/<project_id> --run-id <run-id>`로 같은 run의 상태와 launcher prompt를 다시 출력한다.
-5. `node .plan2agent/scripts/p2a.mjs execute finish --artifacts .plan2agent/artifacts/<project_id> --run-id <run-id> --test --lint --typecheck`로 검증, run finish, task `done`/`blocked` 전이를 기록한다.
-6. `start`, `status`, `finish` 출력 footer에는 copy-paste 가능한 `resume`, `status`, `finish`, `review` 명령이 남는다. `review`는 해당 run을 `p2a.mjs proposals mine --run-id <run-id>` 회고 후보로 연결한다.
-7. 세부 제어가 필요하면 `p2a.mjs tasks`와 `p2a.mjs runs`를 직접 사용한다. 각 전이는 저장 전에 task graph 전체를 `.plan2agent/scripts/validate_artifacts.mjs`의 검증 로직으로 재검증하므로 잘못된 graph는 기록되지 않는다.
-
-## Task Graph 기준
-
-각 task는 최소한 다음 필드를 가진다.
-
-```json
-{
-  "schema_version": "p2a.task_graph.v1",
-  "projectId": "example-project",
-  "version": "1",
-  "sourceSpec": "example-spec",
-  "tasks": [
-    {
-      "id": "task-001",
-      "title": "Define product spec schema",
-      "description": "Create the first JSON schema for Plan2Agent product specs.",
-      "status": "todo",
-      "dependencies": [],
-      "acceptanceCriteria": [
-        "Schema includes problem, target_users, goals, non_goals, core_flows, constraints"
-      ],
-      "targetArea": "spec-schema",
-      "suggestedAgentPrompt": "Create a Plan2Agent product spec JSON schema. Do not implement unrelated app code.",
-      "sourceSpecRefs": ["spec.product"]
-    }
-  ]
-}
+```bash
+node .plan2agent/scripts/p2a.mjs execute finish \
+  --artifacts .plan2agent/artifacts/<project_id> \
+  --run-id <run-id> \
+  --test \
+  --lint \
+  --typecheck \
+  --collect-git
 ```
 
-기준:
+### 5. Evaluate, review, and improve
 
-- `dependencies`는 task id를 참조한다.
-- 기본 상태는 `todo`다.
-- 완료 기준이 불명확하면 task를 확정하지 않는다.
-- 너무 큰 task는 화면, API, 데이터 모델, 테스트, 문서 단위로 나눈다.
+```bash
+node .plan2agent/scripts/p2a.mjs eval generate \
+  --artifacts .plan2agent/artifacts/<project_id>
 
-## 안전 정책
+node .plan2agent/scripts/p2a.mjs eval digest \
+  --artifacts .plan2agent/artifacts/<project_id>
 
-- v1 하네스는 read-only planning이다.
-- 어떤 skill이나 subagent도 코드 변경을 지시하지 않는다.
-- dependency 설치, shell 실행, git 조작은 v1 workflow에 포함하지 않는다.
-- 하네스 오케스트레이터는 planning 산출물(.md/.json)을 `.plan2agent/artifacts/<project_id>/`에만 기록할 수 있다. 소스코드 변경, 의존성 설치, shell 실행(구현 목적), git 조작은 계속 금지하며, subagent는 read-only를 유지한다.
-- 불명확한 요구사항은 임의 구현하지 않고 `needs_user_decision`으로 남긴다.
-- 실제 구현은 task graph 승인 이후 별도 단계에서 수행한다.
+node .plan2agent/scripts/p2a.mjs proposals mine \
+  --artifacts .plan2agent/artifacts/<project_id>
 
-## 다음 고도화 작업
+node .plan2agent/scripts/p2a.mjs memory digest \
+  --artifacts .plan2agent/artifacts/<project_id>
+```
 
-- CLI asset drift check와 fixture runner의 CI 연결은 사용자 관리 항목으로 유지
-- 완료: `p2a_runs.mjs` 기반 agent 실행 로그, branch/worktree 격리 기준, 결과 diff 연결 sidecar 추가. PTY 기반 agent 자동 실행과 PR 생성은 후속.
-- 완료: `p2a_execute.mjs` 기반 감독형 단일 task 실행기 Phase 1과 PTY+Electron 감독 GUI MVP 추가.
+## Main CLI Surface
+
+Inside a scaffolded project, use the single `p2a.mjs` entrypoint:
+
+| Command | Purpose |
+| --- | --- |
+| `info` | Show project, enhancement, artifact, task, and run summary. |
+| `doctor` | Diagnose local harness configuration and capability drift. |
+| `update` | Preview or apply safe scaffolded toolkit updates. |
+| `upgrade` | Preview or apply broader toolkit/schema/asset migrations. |
+| `enhance` | Enable optional capabilities such as memory, GUI, orchestration, and proposals. |
+| `validate` | Validate intake, spec, task graph, review, run, proposal, eval, and memory artifacts. |
+| `iteration` | Manage active iterations, close/open cycles, diffs, drafts, and maintenance tasks. |
+| `tasks` | List, inspect, prompt, start, reopen, block, or complete tasks. |
+| `runs` | Start, verify, record, finish, show, and validate run logs. |
+| `execute` | Supervise a task lifecycle from plan to verified finish. |
+| `orchestrate` | Build role plans, runtime state, runner guides, and monitor gate flows. |
+| `proposals` | Mine, review, curate, draft, approve, and digest improvement proposals. |
+| `eval` | Grade, compare, analyze, generate, and digest run quality artifacts. |
+| `memory` | Compare, push, pull-preview, search, history, and digest Memory snapshots. |
+
+## Repository Layout
+
+```text
+.agents/                 Canonical skills and CLI-neutral agents
+.claude/                 Generated Claude Code mirrors
+.codex/                  Generated Codex agent mirrors
+.gemini/                 Generated Gemini CLI agents and commands
+apps/p2a-gui/            Electron GUI workbench
+docs/                    User guides and implementation references
+fixtures/                Golden fixtures and negative test fixtures
+plans/                   Roadmap and completed planning notes
+schemas/                 JSON schemas for P2A artifacts
+scripts/                 Toolkit, scaffold, validation, runtime, eval, proposal, and memory CLIs
+```
+
+## Artifact Model
+
+P2A keeps local `.plan2agent/` files as the source of truth.
+
+Core artifacts:
+
+- `intake.json` - requirements, assumptions, and open decisions.
+- `spec.json` - approved product and implementation spec.
+- `task-graph.json` - executable dependency graph.
+- `review.json` - Gate D readiness review.
+- `current-spec.json` - active iteration baseline.
+- `runs/<run-id>.json` - execution record and verification evidence.
+- `proposals/*.json` - improvement candidates and curation artifacts.
+- `eval/*.json` - grade, analysis, compare, index, and digest artifacts.
+- `memory-*.json` - Memory search, history, digest, and pull preview reports.
+
+Generated Markdown files are views for humans. JSON artifacts are canonical.
+
+## Development Checks
+
+For Plan2Agent toolkit development, run from this repository:
+
+```bash
+node scripts/sync_cli_assets.mjs
+node scripts/check_cli_parity.mjs
+node scripts/run_fixtures.mjs
+```
+
+GUI checks:
+
+```bash
+cd apps/p2a-gui
+npm run typecheck
+npm test
+```
+
+The core runtime scripts are Node.js ESM scripts and use the Node.js standard library. The GUI has
+its own npm dependencies under `apps/p2a-gui/`.
+
+## Documentation
+
+- [Quickstart](docs/quickstart.md)
+- [CLI Reference](docs/cli-reference.md)
+- [Harness Guide](docs/harness-guide.md)
+- [Iteration Spec](docs/iteration-spec.md)
+- [Supervised Execution Reference](docs/supervised-execution.md)
+- [Harness Implementation Spec](docs/harness-spec.md)
+- [Product Roadmap](plans/01-product-roadmap.md)
+- [Harness Advancement Notes](plans/04-p2a-harness-advancement.md)
+
+## Suggested GitHub Topics
+
+If you publish this repository publicly, these topics make the project easier to discover:
+
+```text
+ai-agents
+coding-agent
+agentic-workflow
+ai-planning
+task-graph
+spec-generation
+developer-tools
+codex
+claude-code
+gemini-cli
+local-first
+evaluation
+self-improvement
+memory-server
+```
+
+## Project Status
+
+Plan2Agent is an active local-first harness. The current focus is controlled planning, supervised
+execution, deterministic evaluation, proposal-based self-improvement, Memory integration, and GUI
+visibility. Automatic self-modifying patches, autonomous provider execution, and unapproved remote
+side effects are intentionally outside the default safety model.
