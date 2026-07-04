@@ -199,14 +199,14 @@ export function formatUninitializedScaffoldArtifactMessage(infos, subject = 'gre
     return [
       `${subject}: ${info.artifactRootRef}`,
       'This scaffold project must be converted to the iteration layout before task execution.',
-      `Run: node .plan2agent/scripts/p2a_iteration.mjs init --artifacts ${info.artifactRootRef} --iteration-id v1-mvp`,
+      `Run: node .plan2agent/scripts/p2a.mjs iteration init --artifacts ${info.artifactRootRef} --iteration-id v1-mvp`,
     ].join('\n');
   }
   return [
     `${subject}; multiple greenfield artifact roots were found:`,
     ...roots.map((info) => `- ${info.artifactRootRef}`),
     'Convert one of them before task execution, for example:',
-    `node .plan2agent/scripts/p2a_iteration.mjs init --artifacts ${roots[0]?.artifactRootRef ?? '.plan2agent/artifacts/<project_id>'} --iteration-id v1-mvp`,
+    `node .plan2agent/scripts/p2a.mjs iteration init --artifacts ${roots[0]?.artifactRootRef ?? '.plan2agent/artifacts/<project_id>'} --iteration-id v1-mvp`,
   ].join('\n');
 }
 
@@ -285,6 +285,6 @@ export function assertNotUninitializedScaffoldGraph(graphPath, cwd = process.cwd
     `greenfield artifact graph is not ready for execution: ${normalizePath(path.relative(cwd, info.graphPath))}`,
     `Artifact root: ${info.artifactRootRef}`,
     'This scaffold project must be converted to the iteration layout before task execution.',
-    `Run: node .plan2agent/scripts/p2a_iteration.mjs init --artifacts ${info.artifactRootRef} --iteration-id v1-mvp`,
+    `Run: node .plan2agent/scripts/p2a.mjs iteration init --artifacts ${info.artifactRootRef} --iteration-id v1-mvp`,
   ].join('\n'));
 }

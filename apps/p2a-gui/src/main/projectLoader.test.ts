@@ -36,6 +36,7 @@ describe("loadProjectSnapshot", () => {
       dependencies: ["task-001"],
     });
     expect(snapshot.artifacts[0]?.gates.every((gate) => gate.state === "present")).toBe(true);
+    expect(snapshot.doctor).toBeNull();
     expect(snapshot.commands.some((command) => command.id === "validate")).toBe(true);
     expect(snapshot.onboarding).toMatchObject({
       stage: "execution_ready",
@@ -123,6 +124,7 @@ describe("loadProjectSnapshot", () => {
       const snapshot = await loadProjectSnapshot(tempRoot);
 
       expect(snapshot.state).toBe("no_p2a");
+      expect(snapshot.doctor).toBeNull();
       expect(snapshot.artifacts).toHaveLength(0);
       expect(snapshot.commands).toMatchObject([
         {
@@ -137,6 +139,8 @@ describe("loadProjectSnapshot", () => {
         },
       });
       expect(snapshot.onboarding.primaryAction.command).toContain("scaffold");
+      expect(snapshot.onboarding.primaryAction.command).toContain("scripts/p2a_handoff.mjs");
+      expect(snapshot.onboarding.primaryAction.command).not.toContain("/path/to/plan2agent");
     } finally {
       await rm(tempRoot, { recursive: true, force: true });
     }
@@ -162,6 +166,19 @@ describe("loadProjectSnapshot", () => {
         },
       });
       expect(snapshot.onboarding.primaryAction.command).toContain("--artifacts <artifact-root>");
+      expect(snapshot.onboarding.primaryAction.command).toContain("scripts/p2a_handoff.mjs");
+      expect(snapshot.onboarding.primaryAction.command).not.toContain("/path/to/plan2agent");
+      expect(snapshot.doctor).toMatchObject({
+        status: "fail",
+        projectState: "installed_empty",
+      });
+      expect(snapshot.info).toMatchObject({
+        status: "available",
+        mode: "installed",
+        artifactCount: 0,
+      });
+      expect(snapshot.diagnostics.some((diagnostic) => diagnostic.message.includes("p2a_doctor fail"))).toBe(true);
+      expect(snapshot.diagnostics.some((diagnostic) => diagnostic.message.includes("p2a info"))).toBe(true);
     } finally {
       await rm(tempRoot, { recursive: true, force: true });
     }
@@ -203,6 +220,79 @@ describe("loadProjectSnapshot", () => {
         relativePath: ".plan2agent/proposals/p2a-runs-create-isolation-workspace-check.json",
       });
       expect(snapshot.diagnostics.some((diagnostic) => diagnostic.message.includes("proposal feedback"))).toBe(true);
+    } finally {
+      await rm(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("summarizes update preview and apply reports", async () => {
+    const tempRoot = await mkdtemp(path.join(tmpdir(), "p2a-loader-update-reports-"));
+    try {
+      await mkdir(path.join(tempRoot, ".plan2agent", "update-reports"), { recursive: true });
+      await writeFile(
+        path.join(tempRoot, ".plan2agent/manifest.json"),
+        JSON.stringify({ schema_version: "p2a.manifest.v1" }),
+      );
+      await writeFile(
+        path.join(tempRoot, ".plan2agent/update-reports/update-preview.json"),
+        JSON.stringify({
+          schema_version: "p2a.upgrade_dry_run.v1",
+          generatedAt: "2026-06-23T01:00:00.000Z",
+          command: "update",
+          status: "changes",
+          summary: {
+            unchanged: 10,
+            missing: 1,
+            wouldUpdate: 2,
+            manualReview: 1,
+            conflicts: 0,
+            errors: 0,
+          },
+          failures: [],
+        }),
+      );
+      await writeFile(
+        path.join(tempRoot, ".plan2agent/update-reports/update-apply.json"),
+        JSON.stringify({
+          schema_version: "p2a.upgrade_apply.v1",
+          appliedAt: "2026-06-23T01:10:00.000Z",
+          command: "update",
+          status: "applied",
+          preview: {
+            summary: {
+              unchanged: 10,
+              missing: 0,
+              wouldUpdate: 1,
+              manualReview: 0,
+              conflicts: 0,
+              errors: 0,
+            },
+          },
+          blockers: [],
+          applied: {
+            files: [".plan2agent/scripts/p2a_eval.mjs"],
+          },
+        }),
+      );
+
+      const snapshot = await loadProjectSnapshot(tempRoot);
+
+      expect(snapshot.updateReports).toMatchObject([
+        {
+          command: "update",
+          kind: "apply",
+          status: "applied",
+          appliedFiles: 1,
+          changedItems: 1,
+        },
+        {
+          command: "update",
+          kind: "preview",
+          status: "changes",
+          appliedFiles: 0,
+          changedItems: 4,
+        },
+      ]);
     } finally {
       await rm(tempRoot, { recursive: true, force: true });
     }
@@ -621,6 +711,191 @@ describe("loadProjectSnapshot", () => {
           (role) => role.roleId === "implementer",
         )?.prompt,
       ).toContain("Supervision boundary");
+    } finally {
+      await rm(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("does not attach a root memory digest to an unrelated artifact", async () => {
+    const tempRoot = await mkdtemp(path.join(tmpdir(), "p2a-loader-memory-digest-"));
+    try {
+      await mkdir(path.join(tempRoot, "gate-c-task-graph"), { recursive: true });
+      await mkdir(path.join(tempRoot, "runs"), { recursive: true });
+      await mkdir(path.join(tempRoot, ".plan2agent"), { recursive: true });
+      await writeFile(
+        path.join(tempRoot, "gate-c-task-graph/task-graph.json"),
+        JSON.stringify({
+          schema_version: "p2a.task_graph.v1",
+          projectId: "memory-digest-project",
+          version: "1",
+          sourceSpec: "gate-b-spec/spec.json",
+          tasks: [
+            {
+              id: "task-001",
+              title: "Track digest scope",
+              description: "Keep memory digest scope artifact-specific.",
+              status: "done",
+              dependencies: [],
+              acceptanceCriteria: ["Digest scope is artifact-specific"],
+              targetArea: "gui",
+              suggestedAgentPrompt: "Track digest scope.",
+              sourceSpecRefs: ["implementation.gui"],
+            },
+          ],
+        }),
+      );
+      await writeFile(
+        path.join(tempRoot, "runs/run-index.json"),
+        JSON.stringify({
+          schema_version: "p2a.run_index.v1",
+          projectId: "memory-digest-project",
+          runs: [
+            {
+              runId: "run-memory-digest-local",
+              taskId: "task-001",
+              iterationId: "iteration-1",
+              status: "finished",
+              agentTool: "codex",
+              workspaceRef: tempRoot,
+              taskGraphRef: "gate-c-task-graph/task-graph.json",
+              runRef: "run-memory-digest-local.json",
+              startedAt: "2026-06-23T01:00:00.000Z",
+              finishedAt: "2026-06-23T01:10:00.000Z",
+            },
+          ],
+          tasks: [
+            {
+              taskId: "task-001",
+              runIds: ["run-memory-digest-local"],
+              latestRunId: "run-memory-digest-local",
+            },
+          ],
+        }),
+      );
+      await writeFile(
+        path.join(tempRoot, "runs/run-memory-digest-local.json"),
+        JSON.stringify({
+          changedFiles: [],
+          verification: [],
+          notes: [],
+        }),
+      );
+      await writeFile(
+        path.join(tempRoot, ".plan2agent/memory-digest.json"),
+        JSON.stringify({
+          schema_version: "p2a.memory_digest.v1",
+          context: {
+            sourceKind: "artifacts",
+            sourcePath: ".plan2agent/artifacts/other-project",
+            runsDir: ".plan2agent/artifacts/other-project/runs",
+          },
+          runs: {
+            total: 99,
+            failedOrBlocked: 99,
+            verificationFailures: 99,
+            verificationGaps: 99,
+          },
+          proposals: {
+            total: 99,
+            uncoveredCandidateRuns: ["run-other"],
+          },
+        }),
+      );
+
+      const snapshot = await loadProjectSnapshot(tempRoot);
+
+      expect(snapshot.artifacts[0]?.memoryDigest).toMatchObject({
+        source: "local",
+        sourcePath: null,
+        totalRuns: 1,
+        failedOrBlocked: 0,
+      });
+    } finally {
+      await rm(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("summarizes memory history and search reports for an artifact", async () => {
+    const tempRoot = await mkdtemp(path.join(tmpdir(), "p2a-loader-memory-reports-"));
+    try {
+      await mkdir(path.join(tempRoot, "gate-c-task-graph"), { recursive: true });
+      await mkdir(path.join(tempRoot, ".plan2agent"), { recursive: true });
+      await writeFile(
+        path.join(tempRoot, "gate-c-task-graph/task-graph.json"),
+        JSON.stringify({
+          schema_version: "p2a.task_graph.v1",
+          projectId: "memory-report-project",
+          version: "1",
+          sourceSpec: "gate-b-spec/spec.json",
+          tasks: [],
+        }),
+      );
+      await writeFile(
+        path.join(tempRoot, "memory-history.json"),
+        JSON.stringify({
+          schema_version: "p2a.memory_history.v1",
+          generatedAt: "2026-07-02T01:00:00.000Z",
+          context: {
+            sourceKind: "artifacts",
+            sourcePath: ".",
+            runsDir: "runs",
+          },
+          summary: {
+            totalEvents: 3,
+            visibleEvents: 3,
+            localEvents: 2,
+            remoteEvents: 1,
+            failedOrBlockedRuns: 1,
+          },
+          timeline: [
+            {
+              occurredAt: "2026-07-02T01:01:00.000Z",
+            },
+          ],
+        }),
+      );
+      await writeFile(
+        path.join(tempRoot, "memory-search.json"),
+        JSON.stringify({
+          schema_version: "p2a.memory_search.v1",
+          generatedAt: "2026-07-02T01:02:00.000Z",
+          query: {
+            text: "webhook",
+          },
+          context: {
+            sourceKind: "artifacts",
+            sourcePath: ".",
+            runsDir: "runs",
+          },
+          summary: {
+            total: 4,
+            byType: {
+              DOCUMENT_SNAPSHOT: 1,
+              DOCUMENT_CHUNK: 2,
+              RUN_RECORD: 1,
+            },
+          },
+          results: [],
+        }),
+      );
+
+      const snapshot = await loadProjectSnapshot(tempRoot);
+
+      expect(snapshot.artifacts[0]?.memoryHistory).toMatchObject({
+        sourcePath: "memory-history.json",
+        totalEvents: 3,
+        visibleEvents: 3,
+        remoteEvents: 1,
+        failedOrBlockedRuns: 1,
+        latestEventAt: "2026-07-02T01:01:00.000Z",
+      });
+      expect(snapshot.artifacts[0]?.memorySearch).toMatchObject({
+        sourcePath: "memory-search.json",
+        query: "webhook",
+        totalResults: 4,
+        documentResults: 3,
+        runResults: 1,
+      });
     } finally {
       await rm(tempRoot, { recursive: true, force: true });
     }

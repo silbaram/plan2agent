@@ -1,9 +1,23 @@
 /** Shared path resolution helpers for Plan2Agent run artifacts. */
 
+import { realpathSync } from 'node:fs';
 import path from 'node:path';
 import { P2A_DIR } from './p2a_paths.mjs';
 
 export const DEFAULT_RUNS_DIR = path.join(P2A_DIR, 'runs');
+
+export function normalizeRunPath(filePath) {
+  return filePath.split(path.sep).join('/');
+}
+
+export function canonicalTaskGraphRef(graphPath) {
+  const absolutePath = path.resolve(graphPath);
+  try {
+    return normalizeRunPath(realpathSync(absolutePath));
+  } catch {
+    return normalizeRunPath(absolutePath);
+  }
+}
 
 export function defaultRunsDirForGraph(graphPath) {
   const graphDir = path.dirname(graphPath);

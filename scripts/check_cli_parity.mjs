@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 
 const __filename = fileURLToPath(import.meta.url);
 const ROOT = path.resolve(path.dirname(__filename), '..');
-const SKILLS = ['p2a-harness', 'p2a-intake', 'p2a-spec', 'p2a-task-author', 'p2a-dev-execution', 'p2a-task-breakdown', 'p2a-review'];
+const SKILLS = ['p2a-harness', 'p2a-intake', 'p2a-spec', 'p2a-task-author', 'p2a-dev-execution', 'p2a-design-system', 'p2a-task-breakdown', 'p2a-review'];
 const AGENTS = ['p2a-requirements', 'p2a-spec-author', 'p2a-implementation-planner', 'p2a-task-graph', 'p2a-quality-reviewer', 'p2a-skill-curator', 'p2a-performance-monitor', 'p2a-implementer', 'p2a-dev-orchestrator'];
 const GEMINI_COMMANDS = {
   harness: 'p2a-harness',
@@ -17,6 +17,7 @@ const GEMINI_COMMANDS = {
   spec: 'p2a-spec',
   'task-author': 'p2a-task-author',
   'dev-execution': 'p2a-dev-execution',
+  'design-system': 'p2a-design-system',
   'task-breakdown': 'p2a-task-breakdown',
   review: 'p2a-review',
 };

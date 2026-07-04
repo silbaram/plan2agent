@@ -38,17 +38,25 @@ import type {
   ArtifactFileReadResult,
   ArtifactSummary,
   DiagnosticSeverity,
+  DoctorCommandSummary,
+  EvalArtifactSummary,
   ExecutionAgentTool,
   ExecutionCommandResult,
   ExecutionFinishStatus,
   FailureClass,
   GuiConfigSnapshot,
+  InfoCommandSummary,
+  MemoryDigestSummary,
+  MemoryHistorySummary,
+  MemorySearchSummary,
   OnboardingAction,
+  OperationalAction,
   OrchestrationRoleStatus,
   ProposalSummary,
   ProjectSnapshot,
   ProjectWatchEvent,
   RuntimeInfo,
+  UpdateReportSummary,
   UiLocale,
   VerificationType,
   WorkbenchRun,
@@ -69,11 +77,13 @@ type ArtifactFileState =
 type ArtifactDocument = {
   id: string;
   label: string;
-  group: "status" | "gate" | "task" | "run" | "proposal";
+  group: "status" | "gate" | "task" | "run" | "proposal" | "update" | "eval" | "memory";
   relativePath: string;
   meta: string;
   state: string;
 };
+
+type OperationalTone = "ok" | "warn" | "error" | "info";
 
 const failureClassOptions: FailureClass[] = [
   "verification_failed",
@@ -378,9 +388,141 @@ function proposalArtifactDocument(proposal: ProposalSummary, copy: UiCopy): Arti
   };
 }
 
+function updateReportArtifactDocument(report: UpdateReportSummary, copy: UiCopy): ArtifactDocument {
+  const kindLabel = report.kind === "preview" ? copy.operational.preview : copy.operational.apply;
+  return {
+    id: `update:${report.relativePath}`,
+    label: `${report.command} ${kindLabel} ${report.status}`,
+    group: "update",
+    relativePath: report.relativePath,
+    meta: report.createdAt ?? copy.common.none,
+    state: report.status,
+  };
+}
+
+function operationalActionLabel(action: OperationalAction, copy: UiCopy): string {
+  if (action === "update_preview") return copy.operational.runUpdatePreview;
+  if (action === "update_apply") return copy.operational.runUpdateApply;
+  if (action === "eval_generate") return copy.operational.runEvalGenerate;
+  if (action === "eval_analyze") return copy.operational.runEvalAnalyze;
+  if (action === "eval_digest") return copy.operational.runEvalDigest;
+  if (action === "memory_digest") return copy.operational.runMemoryDigest;
+  return copy.operational.runMemoryHistory;
+}
+
+function operationalActionRequiresArtifact(action: OperationalAction): boolean {
+  return (
+    action === "eval_generate" ||
+    action === "eval_analyze" ||
+    action === "eval_digest" ||
+    action === "memory_digest" ||
+    action === "memory_history"
+  );
+}
+
+function hasP2aCommand(snapshot: ProjectSnapshot | null): boolean {
+  return Boolean(snapshot?.checks.some((check) => check.id === "p2a-entry" && check.exists));
+}
+
+function canRunOperationalActions(snapshot: ProjectSnapshot | null): boolean {
+  if (!snapshot || !hasP2aCommand(snapshot)) return false;
+  return snapshot.state !== "no_p2a" && snapshot.state !== "broken_install";
+}
+
+function operationalCardClass(tone: OperationalTone, mode: "button" | "static" = "button"): string {
+  return [
+    "overview-operational-card",
+    `overview-operational-card--${tone}`,
+    mode === "static" ? "overview-operational-card--static" : null,
+  ]
+    .filter(Boolean)
+    .join(" ");
+}
+
+function doctorOperationalTone(doctor: DoctorCommandSummary): OperationalTone {
+  if (doctor.status === "pass") return "ok";
+  if (doctor.status === "warn") return "warn";
+  if (doctor.status === "fail") return "error";
+  return "info";
+}
+
+function infoOperationalTone(info: InfoCommandSummary): OperationalTone {
+  return info.status === "available" ? "ok" : "warn";
+}
+
+function updateReportOperationalTone(report: UpdateReportSummary): OperationalTone {
+  const status = report.status.toLowerCase();
+  if (report.error || status.includes("fail") || status.includes("error")) return "error";
+  if (report.blockers > 0 || status.includes("warn") || status.includes("block")) return "warn";
+  if (status.includes("pass") || status.includes("success") || status.includes("applied")) return "ok";
+  return "info";
+}
+
+function evalDigestArtifactDocument(summary: EvalArtifactSummary, copy: UiCopy): ArtifactDocument | null {
+  const relativePath = summary.digestPath ?? summary.indexPath;
+  if (!relativePath) return null;
+  return {
+    id: `eval:${relativePath}`,
+    label: summary.digestPath ? copy.operational.evalDigest : copy.operational.evalIndex,
+    group: "eval",
+    relativePath,
+    meta: summary.latestGeneratedAt ?? summary.evalDir ?? copy.common.none,
+    state: summary.nonPassGrades > 0 ? "warn" : "present",
+  };
+}
+
+function evalAnalysisArtifactDocument(summary: EvalArtifactSummary, copy: UiCopy): ArtifactDocument | null {
+  if (!summary.analysisPath) return null;
+  return {
+    id: `eval:${summary.analysisPath}`,
+    label: copy.operational.evalAnalysis,
+    group: "eval",
+    relativePath: summary.analysisPath,
+    meta: summary.evalDir ?? copy.common.none,
+    state: summary.maintenanceDraftTasks > 0 || summary.clusters > 0 ? "warn" : "present",
+  };
+}
+
+function memoryDigestArtifactDocument(summary: MemoryDigestSummary, copy: UiCopy): ArtifactDocument | null {
+  if (!summary.sourcePath) return null;
+  return {
+    id: `memory:${summary.sourcePath}`,
+    label: copy.operational.memoryDigest,
+    group: "memory",
+    relativePath: summary.sourcePath,
+    meta: summary.source,
+    state: summary.failedOrBlocked > 0 || summary.verificationGaps > 0 ? "warn" : "present",
+  };
+}
+
+function memoryHistoryArtifactDocument(summary: MemoryHistorySummary, copy: UiCopy): ArtifactDocument | null {
+  if (!summary.sourcePath) return null;
+  return {
+    id: `memory:${summary.sourcePath}`,
+    label: copy.operational.memoryHistory,
+    group: "memory",
+    relativePath: summary.sourcePath,
+    meta: summary.latestEventAt ?? copy.common.none,
+    state: summary.failedOrBlockedRuns > 0 ? "warn" : "present",
+  };
+}
+
+function memorySearchArtifactDocument(summary: MemorySearchSummary, copy: UiCopy): ArtifactDocument | null {
+  if (!summary.sourcePath) return null;
+  return {
+    id: `memory:${summary.sourcePath}`,
+    label: copy.operational.memorySearch,
+    group: "memory",
+    relativePath: summary.sourcePath,
+    meta: summary.query || copy.common.none,
+    state: summary.totalResults > 0 ? "present" : "missing",
+  };
+}
+
 function buildArtifactDocuments(
   artifact: ArtifactSummary | null,
   proposals: ProposalSummary[],
+  updateReports: UpdateReportSummary[],
   copy: UiCopy,
 ): ArtifactDocument[] {
   const documents: ArtifactDocument[] = [];
@@ -433,12 +575,73 @@ function buildArtifactDocuments(
         run.status,
       );
     }
+
+    if (artifact.evalSummary?.indexPath) {
+      addDocument(
+        copy.operational.evalIndex,
+        "eval",
+        artifact.evalSummary.indexPath,
+        `${artifact.evalSummary.gradeCount} ${copy.operational.grades}`,
+        artifact.evalSummary.nonPassGrades > 0 ? "warn" : "present",
+      );
+    }
+    if (artifact.evalSummary?.digestPath) {
+      addDocument(
+        copy.operational.evalDigest,
+        "eval",
+        artifact.evalSummary.digestPath,
+        `${artifact.evalSummary.clusters} ${copy.operational.clusters}`,
+        artifact.evalSummary.nonPassGrades > 0 ? "warn" : "present",
+      );
+    }
+    if (artifact.evalSummary?.analysisPath) {
+      addDocument(
+        copy.operational.evalAnalysis,
+        "eval",
+        artifact.evalSummary.analysisPath,
+        `${artifact.evalSummary.clusters} ${copy.operational.clusters}`,
+        artifact.evalSummary.clusters > 0 ? "warn" : "present",
+      );
+    }
+    if (artifact.memoryDigest?.sourcePath) {
+      addDocument(
+        copy.operational.memoryDigest,
+        "memory",
+        artifact.memoryDigest.sourcePath,
+        `${artifact.memoryDigest.failedOrBlocked} ${copy.operational.failedOrBlocked}`,
+        artifact.memoryDigest.failedOrBlocked > 0 ? "warn" : "present",
+      );
+    }
+    if (artifact.memoryHistory?.sourcePath) {
+      addDocument(
+        copy.operational.memoryHistory,
+        "memory",
+        artifact.memoryHistory.sourcePath,
+        `${artifact.memoryHistory.visibleEvents} ${copy.operational.events}`,
+        artifact.memoryHistory.failedOrBlockedRuns > 0 ? "warn" : "present",
+      );
+    }
+    if (artifact.memorySearch?.sourcePath) {
+      addDocument(
+        copy.operational.memorySearch,
+        "memory",
+        artifact.memorySearch.sourcePath,
+        `${artifact.memorySearch.totalResults} ${copy.operational.results}`,
+        artifact.memorySearch.totalResults > 0 ? "present" : "missing",
+      );
+    }
   }
 
   for (const proposal of proposals) {
     if (seenPaths.has(proposal.relativePath)) continue;
     seenPaths.add(proposal.relativePath);
     documents.push(proposalArtifactDocument(proposal, copy));
+  }
+
+  for (const report of updateReports) {
+    if (seenPaths.has(report.relativePath)) continue;
+    seenPaths.add(report.relativePath);
+    documents.push(updateReportArtifactDocument(report, copy));
   }
 
   return documents;
@@ -626,8 +829,16 @@ export default function App() {
   const [collectGit, setCollectGit] = useState(true);
   const [changedFilesInput, setChangedFilesInput] = useState("");
   const [finishNoteInput, setFinishNoteInput] = useState("");
+  const [reproductionInput, setReproductionInput] = useState("");
+  const [localizationInput, setLocalizationInput] = useState("");
+  const [localizedFilesInput, setLocalizedFilesInput] = useState("");
+  const [guardInput, setGuardInput] = useState("");
   const [startResult, setStartResult] = useState<ExecutionCommandResult | null>(null);
   const [finishResult, setFinishResult] = useState<ExecutionCommandResult | null>(null);
+  const [operationalState, setOperationalState] =
+    useState<ExecutionActionState>("idle");
+  const [operationalAction, setOperationalAction] = useState<OperationalAction | null>(null);
+  const [operationalResult, setOperationalResult] = useState<ExecutionCommandResult | null>(null);
   const [selectedOrchestrationRoleId, setSelectedOrchestrationRoleId] = useState<string | null>(null);
   const [orchestrationState, setOrchestrationState] =
     useState<ExecutionActionState>("idle");
@@ -636,6 +847,7 @@ export default function App() {
   const [orchestrationDetailInput, setOrchestrationDetailInput] = useState("");
   const [orchestrationVerdictInput, setOrchestrationVerdictInput] = useState("");
   const [promptCopyState, setPromptCopyState] = useState<PromptCopyState>("idle");
+  const [followUpCopyState, setFollowUpCopyState] = useState<string | null>(null);
   const [sidebarWidth, setSidebarWidth] = useState(DEFAULT_SIDEBAR_WIDTH);
   const artifactViewerRef = useRef<HTMLElement | null>(null);
   const artifactViewerCloseButtonRef = useRef<HTMLButtonElement | null>(null);
@@ -717,9 +929,10 @@ export default function App() {
     projectSnapshot?.artifacts.find((item) => item.rootPath === selectedArtifactRootPath) ??
     artifact;
   const proposals = projectSnapshot?.proposals ?? [];
+  const updateReports = projectSnapshot?.updateReports ?? [];
   const artifactDocuments = useMemo(
-    () => buildArtifactDocuments(selectedArtifact ?? null, proposals, copy),
-    [copy, proposals, selectedArtifact],
+    () => buildArtifactDocuments(selectedArtifact ?? null, proposals, updateReports, copy),
+    [copy, proposals, selectedArtifact, updateReports],
   );
   const selectedArtifactDocument =
     artifactDocuments.find((document) => document.id === selectedArtifactDocumentId) ??
@@ -785,6 +998,12 @@ export default function App() {
   useEffect(() => {
     setStartResult(null);
   }, [projectSnapshot?.rootPath, selectedTaskId]);
+
+  useEffect(() => {
+    setOperationalState("idle");
+    setOperationalAction(null);
+    setOperationalResult(null);
+  }, [projectSnapshot?.rootPath]);
 
   useEffect(() => {
     const roles = selectedRun?.orchestration?.roles ?? [];
@@ -960,6 +1179,17 @@ export default function App() {
     return ["--graph", joinDisplayPath(projectSnapshot?.rootPath ?? "", artifact.taskGraphPath)];
   }
 
+  function appendPreviewListArgs(args: string[], flag: string, value: string): void {
+    for (const item of parseListInput(value)) args.push(flag, item);
+  }
+
+  function appendStructuredFailurePreviewArgs(args: string[]): void {
+    appendPreviewListArgs(args, "--repro-step", reproductionInput);
+    appendPreviewListArgs(args, "--localization", localizationInput);
+    appendPreviewListArgs(args, "--localized-file", localizedFilesInput);
+    appendPreviewListArgs(args, "--guard", guardInput);
+  }
+
   function startPreviewCommand(): string {
     if (!artifact || !selectedTask || !projectSnapshot) return copy.tasks.selectReadyTask;
     const args = [
@@ -998,7 +1228,111 @@ export default function App() {
       args.push("--failure-class", finishFailureClass);
     }
     if (collectGit) args.push("--collect-git");
+    if (finishStatus !== "finished") appendStructuredFailurePreviewArgs(args);
     return args.map(quoteCommandPart).join(" ");
+  }
+
+  function operationalActionPreviewCommand(action: OperationalAction): string {
+    const args = ["node", ".plan2agent/scripts/p2a.mjs"];
+    if (action === "update_preview") {
+      args.push("update", "--dry-run");
+    } else if (action === "update_apply") {
+      args.push("update", "--apply");
+    } else if (!artifact) {
+      return copy.common.noArtifactRoot;
+    } else if (action === "eval_generate") {
+      args.push("eval", "generate", "--artifacts", artifact.relativePath);
+    } else if (action === "eval_analyze") {
+      args.push(
+        "eval",
+        "analyze",
+        "--artifacts",
+        artifact.relativePath,
+        "--output",
+        `${artifact.relativePath}/eval/analysis.json`,
+      );
+    } else if (action === "eval_digest") {
+      args.push(
+        "eval",
+        "digest",
+        "--eval",
+        `${artifact.relativePath}/eval`,
+        "--output",
+        `${artifact.relativePath}/eval/eval-digest.json`,
+      );
+    } else if (action === "memory_digest") {
+      args.push(
+        "memory",
+        "digest",
+        "--artifacts",
+        artifact.relativePath,
+        "--output",
+        `${artifact.relativePath}/memory-digest.json`,
+      );
+    } else if (action === "memory_history") {
+      args.push(
+        "memory",
+        "history",
+        "--artifacts",
+        artifact.relativePath,
+        "--output",
+        `${artifact.relativePath}/memory-history.json`,
+      );
+    } else {
+      return copy.common.invalid;
+    }
+    return args.map(quoteCommandPart).join(" ");
+  }
+
+  async function runOperationalAction(action: OperationalAction) {
+    if (
+      !projectSnapshot ||
+      !canRunOperationalActions(projectSnapshot) ||
+      (operationalActionRequiresArtifact(action) && !artifact)
+    ) {
+      return;
+    }
+    const previewCommand = operationalActionPreviewCommand(action);
+    if (action === "update_apply") {
+      const confirmed = window.confirm(
+        [
+          copy.operational.applyConfirm,
+          projectSnapshot.rootPath,
+          previewCommand,
+          copy.terminal.confirmContinue,
+        ].join("\n"),
+      );
+      if (!confirmed) return;
+    }
+
+    setOperationalState("running");
+    setOperationalAction(action);
+    setOperationalResult(null);
+
+    try {
+      const result = await window.p2a.operational.runAction({
+        projectRoot: projectSnapshot.rootPath,
+        artifactRoot: artifact?.rootPath ?? null,
+        action,
+      });
+      setOperationalResult(result);
+      setOperationalState(result.exitCode === 0 ? "idle" : "error");
+      await loadProjectPath(projectSnapshot.rootPath, { quiet: true });
+    } catch (error) {
+      setOperationalState("error");
+      setOperationalResult({
+        command: previewCommand,
+        args: [],
+        cwd: projectSnapshot.rootPath,
+        exitCode: 1,
+        stdout: "",
+        stderr: error instanceof Error ? error.message : String(error),
+        followUpCommands: [],
+        startedAt: new Date().toISOString(),
+        finishedAt: new Date().toISOString(),
+        durationMs: 0,
+      });
+    }
   }
 
   async function startSelectedTask() {
@@ -1035,6 +1369,7 @@ export default function App() {
         exitCode: 1,
         stdout: "",
         stderr: error instanceof Error ? error.message : String(error),
+        followUpCommands: [],
         startedAt: new Date().toISOString(),
         finishedAt: new Date().toISOString(),
         durationMs: 0,
@@ -1058,6 +1393,7 @@ export default function App() {
     setFinishResult(null);
 
     try {
+      const includeFailureEvidence = finishStatus !== "finished";
       const result = await window.p2a.execution.finishRun({
         projectRoot: projectSnapshot.rootPath,
         artifactRoot: artifact.rootPath,
@@ -1075,6 +1411,10 @@ export default function App() {
           : [],
         changedFiles: parseListInput(changedFilesInput),
         notes: parseListInput(finishNoteInput),
+        reproductionSteps: includeFailureEvidence ? parseListInput(reproductionInput) : [],
+        localizationFindings: includeFailureEvidence ? parseListInput(localizationInput) : [],
+        localizedFiles: includeFailureEvidence ? parseListInput(localizedFilesInput) : [],
+        guardChecks: includeFailureEvidence ? parseListInput(guardInput) : [],
       });
       setFinishResult(result);
       setFinishState("idle");
@@ -1088,6 +1428,7 @@ export default function App() {
         exitCode: 1,
         stdout: "",
         stderr: error instanceof Error ? error.message : String(error),
+        followUpCommands: [],
         startedAt: new Date().toISOString(),
         finishedAt: new Date().toISOString(),
         durationMs: 0,
@@ -1134,6 +1475,48 @@ export default function App() {
     }
   }
 
+  async function copyFollowUpCommand(commandId: string, command: string) {
+    try {
+      await window.navigator.clipboard.writeText(command);
+      setFollowUpCopyState(commandId);
+      window.setTimeout(() => {
+        setFollowUpCopyState((current) => (current === commandId ? null : current));
+      }, 1600);
+    } catch {
+      setFollowUpCopyState(null);
+    }
+  }
+
+  function renderFollowUpCommands(result: ExecutionCommandResult | null) {
+    if (!result?.followUpCommands.length) return null;
+    return (
+      <div className="follow-up-commands" aria-label={copy.terminal.followUpCommands}>
+        <div className="label">{copy.terminal.followUpCommands}</div>
+        <div className="follow-up-commands__list">
+          {result.followUpCommands.map((item) => {
+            const copyId = `${result.startedAt}:${item.id}`;
+            return (
+              <div className="follow-up-command" key={`${item.id}:${item.command}`}>
+                <span className="mono">{item.label}</span>
+                <code>{item.command}</code>
+                <button
+                  className="terminal-control"
+                  type="button"
+                  onClick={() => void copyFollowUpCommand(copyId, item.command)}
+                  aria-label={`${copy.runs.copyCommand}: ${item.label}`}
+                  title={`${copy.runs.copyCommand}: ${item.label}`}
+                >
+                  <Copy size={13} strokeWidth={1.7} aria-hidden="true" />
+                  <span>{followUpCopyState === copyId ? copy.runs.copied : copy.runs.copyCommand}</span>
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    );
+  }
+
   async function markSelectedOrchestrationRole(roleStatus: OrchestrationRoleStatus) {
     if (
       !projectSnapshot ||
@@ -1170,6 +1553,7 @@ export default function App() {
         exitCode: 1,
         stdout: "",
         stderr: error instanceof Error ? error.message : String(error),
+        followUpCommands: [],
         startedAt: new Date().toISOString(),
         finishedAt: new Date().toISOString(),
         durationMs: 0,
@@ -1195,6 +1579,94 @@ export default function App() {
     const taskMetric = overviewTaskMetric(artifact, projectSnapshot?.state ?? null, locale, copy);
     const runMetric = artifact ? formatCount(artifact.runCount, locale) : "0";
     const showTaskMetric = onboarding?.stage !== "cycle_close_ready";
+    const infoReport = projectSnapshot?.info ?? null;
+    const doctorReport = projectSnapshot?.doctor ?? null;
+    const latestPreviewReport = updateReports.find((report) => report.kind === "preview") ?? null;
+    const latestApplyReport = updateReports.find((report) => report.kind === "apply") ?? null;
+    const evalSummary = artifact?.evalSummary ?? null;
+    const evalDigestDocument = evalSummary ? evalDigestArtifactDocument(evalSummary, copy) : null;
+    const evalAnalysisDocument = evalSummary ? evalAnalysisArtifactDocument(evalSummary, copy) : null;
+    const evalDigestLabel = evalSummary?.digestPath
+      ? copy.operational.evalDigest
+      : evalSummary?.indexPath
+        ? copy.operational.evalIndex
+        : copy.operational.evalSummary;
+    const memoryDigest = artifact?.memoryDigest ?? null;
+    const memoryDigestDocument = memoryDigest ? memoryDigestArtifactDocument(memoryDigest, copy) : null;
+    const memoryHistory = artifact?.memoryHistory ?? null;
+    const memoryHistoryDocument = memoryHistory ? memoryHistoryArtifactDocument(memoryHistory, copy) : null;
+    const memorySearch = artifact?.memorySearch ?? null;
+    const memorySearchDocument = memorySearch ? memorySearchArtifactDocument(memorySearch, copy) : null;
+    const operationalReportCount = [
+      infoReport,
+      doctorReport,
+      latestPreviewReport,
+      latestApplyReport,
+      evalSummary,
+      evalAnalysisDocument,
+      memoryDigest,
+      memoryHistory,
+      memorySearch,
+    ].filter(Boolean).length;
+    const hasOperationalReport = operationalReportCount > 0;
+    const operationalActions: OperationalAction[] = [
+      "update_preview",
+      "update_apply",
+      "eval_generate",
+      "eval_analyze",
+      "eval_digest",
+      "memory_digest",
+      "memory_history",
+    ];
+    const operationalActionsAvailable = canRunOperationalActions(projectSnapshot);
+    const activeOperationalAction = operationalAction ?? "update_preview";
+    const operationalCommand = operationalResult?.command ?? operationalActionPreviewCommand(activeOperationalAction);
+    const showOperationalResult = operationalState === "running" || Boolean(operationalResult);
+
+    const renderOperationalCard = ({
+      document,
+      tone,
+      title,
+      label,
+      summary,
+      detail,
+      footer,
+    }: {
+      document: ArtifactDocument | null;
+      tone: OperationalTone;
+      title: string;
+      label: string;
+      summary: string;
+      detail: string;
+      footer: string;
+    }) => {
+      const className = operationalCardClass(tone, document ? "button" : "static");
+      const content = (
+        <>
+          <span>{label}</span>
+          <strong>{summary}</strong>
+          <small className="mono">{detail}</small>
+          <code>{footer}</code>
+        </>
+      );
+      if (!document) {
+        return (
+          <div className={className} title={title}>
+            {content}
+          </div>
+        );
+      }
+      return (
+        <button
+          className={className}
+          type="button"
+          onClick={() => void openArtifactDocument(document)}
+          title={title}
+        >
+          {content}
+        </button>
+      );
+    };
 
     return (
       <section className="overview-state-panel" aria-label={copy.common.milestones}>
@@ -1316,6 +1788,213 @@ export default function App() {
                   </span>
                 </button>
               ))}
+            </div>
+          </div>
+        )}
+
+        {projectSnapshot && (
+          <div className="overview-operational" aria-label={copy.operational.title}>
+            <div className="overview-operational__head">
+              <span>{copy.operational.title}</span>
+              <strong className="mono">{formatCount(operationalReportCount, locale)}</strong>
+            </div>
+            <div className="overview-operational-actions" aria-label={copy.operational.actions}>
+              {operationalActions.map((action) => {
+                const requiresArtifact = operationalActionRequiresArtifact(action);
+                const isRunning = operationalState === "running" && operationalAction === action;
+                const disabledReason = !operationalActionsAvailable
+                  ? copy.operational.commandUnavailable
+                  : requiresArtifact && !artifact
+                    ? copy.common.noArtifactRoot
+                    : null;
+                return (
+                  <button
+                    className={`terminal-control${
+                      action === "update_preview" ? " terminal-control--primary" : ""
+                    }${action === "update_apply" ? " terminal-control--danger" : ""}`}
+                    key={action}
+                    type="button"
+                    disabled={operationalState === "running" || Boolean(disabledReason)}
+                    onClick={() => void runOperationalAction(action)}
+                    title={disabledReason ?? operationalActionPreviewCommand(action)}
+                  >
+                    <span>{isRunning ? copy.common.running : operationalActionLabel(action, copy)}</span>
+                  </button>
+                );
+              })}
+            </div>
+            {showOperationalResult && (
+              <div className="overview-operational-result">
+                <div className="overview-operational-result__head">
+                  <span>{copy.operational.lastResult}</span>
+                  <strong className="mono">
+                    {operationalState === "running"
+                      ? copy.common.running
+                      : operationalResult
+                        ? `exit ${operationalResult.exitCode} · ${formatMilliseconds(
+                            operationalResult.durationMs,
+                            copy,
+                          )}`
+                        : copy.common.none}
+                  </strong>
+                </div>
+                <div className="command-preview command-preview--compact">
+                  <span>{operationalActionLabel(activeOperationalAction, copy)}</span>
+                  <code>{operationalCommand}</code>
+                </div>
+                {operationalResult && (
+                  <div className="command-output command-output--compact">
+                    <pre>{outputPreview(operationalResult.stdout, copy)}</pre>
+                    <pre>{outputPreview(operationalResult.stderr, copy)}</pre>
+                  </div>
+                )}
+              </div>
+            )}
+            <div className="overview-operational-grid">
+              {!hasOperationalReport && (
+                <div className="empty-inline empty-inline--compact">{copy.operational.noReports}</div>
+              )}
+              {infoReport &&
+                renderOperationalCard({
+                  document: null,
+                  tone: infoOperationalTone(infoReport),
+                  title: infoReport.command,
+                  label: copy.operational.infoReport,
+                  summary: `${infoReport.mode ?? copy.common.unknown} · ${formatCount(
+                    infoReport.artifactCount,
+                    locale,
+                  )} ${copy.common.artifactRoot}`,
+                  detail: infoReport.status === "available"
+                    ? `${formatCount(infoReport.enabledEnhancements.length, locale)} ${
+                        copy.operational.enhancements
+                      } · ${formatCount(infoReport.nextActionCount, locale)} ${
+                        copy.operational.nextActions
+                      }`
+                    : infoReport.error ?? copy.operational.infoUnavailable,
+                  footer: infoReport.firstNextAction ?? infoReport.command,
+                })}
+              {doctorReport &&
+                renderOperationalCard({
+                  document: null,
+                  tone: doctorOperationalTone(doctorReport),
+                  title: doctorReport.command,
+                  label: copy.operational.doctorReport,
+                  summary: `${statusLabel(doctorReport.status, copy)} · ${
+                    doctorReport.projectState ?? copy.common.unknown
+                  }`,
+                  detail: doctorReport.summary
+                    ? `${formatCount(doctorReport.summary.passed, locale)} ${
+                        copy.operational.passed
+                      } · ${formatCount(doctorReport.summary.warnings, locale)} ${
+                        copy.operational.warnings
+                      } · ${formatCount(doctorReport.summary.failures, locale)} ${
+                        copy.operational.failures
+                      }`
+                    : doctorReport.error ?? copy.operational.doctorUnavailable,
+                  footer: doctorReport.command,
+                })}
+              {latestPreviewReport &&
+                renderOperationalCard({
+                  document: updateReportArtifactDocument(latestPreviewReport, copy),
+                  tone: updateReportOperationalTone(latestPreviewReport),
+                  title: latestPreviewReport.relativePath,
+                  label: copy.operational.updatePreview,
+                  summary: `${latestPreviewReport.command} ${statusLabel(latestPreviewReport.status, copy)}`,
+                  detail: `${formatCount(latestPreviewReport.changedItems, locale)} ${
+                    copy.operational.changes
+                  } · ${formatCount(latestPreviewReport.blockers, locale)} ${copy.operational.blockers}`,
+                  footer: latestPreviewReport.relativePath,
+                })}
+              {latestApplyReport &&
+                renderOperationalCard({
+                  document: updateReportArtifactDocument(latestApplyReport, copy),
+                  tone: updateReportOperationalTone(latestApplyReport),
+                  title: latestApplyReport.relativePath,
+                  label: copy.operational.updateApply,
+                  summary: `${latestApplyReport.command} ${statusLabel(latestApplyReport.status, copy)}`,
+                  detail: `${formatCount(latestApplyReport.appliedFiles, locale)} ${
+                    copy.operational.appliedFiles
+                  } · ${formatCount(latestApplyReport.blockers, locale)} ${copy.operational.blockers}`,
+                  footer: latestApplyReport.relativePath,
+                })}
+              {evalSummary &&
+                renderOperationalCard({
+                  document: evalDigestDocument,
+                  tone: evalSummary.nonPassGrades > 0 ? "warn" : "ok",
+                  title: evalSummary.evalDir ?? copy.operational.evalDigest,
+                  label: evalDigestLabel,
+                  summary: `${formatCount(evalSummary.gradeCount, locale)} ${
+                    copy.operational.grades
+                  } · ${formatCount(evalSummary.nonPassGrades, locale)} ${copy.operational.nonPass}`,
+                  detail: `${formatCount(evalSummary.clusters, locale)} ${
+                    copy.operational.clusters
+                  } · ${formatCount(evalSummary.maintenanceDraftTasks, locale)} ${
+                    copy.operational.maintenanceDrafts
+                  }`,
+                  footer: evalDigestDocument?.relativePath ?? evalSummary.evalDir ?? copy.common.none,
+                })}
+              {evalSummary &&
+                evalAnalysisDocument &&
+                renderOperationalCard({
+                  document: evalAnalysisDocument,
+                  tone: evalSummary.maintenanceDraftTasks > 0 || evalSummary.clusters > 0 ? "warn" : "ok",
+                  title: evalAnalysisDocument.relativePath,
+                  label: copy.operational.evalAnalysis,
+                  summary: `${formatCount(evalSummary.clusters, locale)} ${copy.operational.clusters}`,
+                  detail: `${formatCount(evalSummary.maintenanceDraftTasks, locale)} ${
+                    copy.operational.maintenanceDrafts
+                  } · ${evalSummary.latestGeneratedAt ?? copy.common.none}`,
+                  footer: evalAnalysisDocument.relativePath,
+                })}
+              {memoryDigest &&
+                renderOperationalCard({
+                  document: memoryDigestDocument,
+                  tone:
+                    memoryDigest.failedOrBlocked > 0 || memoryDigest.verificationGaps > 0 ? "warn" : "ok",
+                  title: memoryDigest.sourcePath ?? copy.common.localOnly,
+                  label: copy.operational.memoryDigest,
+                  summary: `${formatCount(memoryDigest.totalRuns, locale)} ${
+                    copy.runs.runs
+                  } · ${formatCount(memoryDigest.failedOrBlocked, locale)} ${
+                    copy.operational.failedOrBlocked
+                  }`,
+                  detail: `${formatCount(memoryDigest.verificationGaps, locale)} ${
+                    copy.operational.verificationGaps
+                  } · ${
+                    memoryDigest.source === "local" ? copy.common.localOnly : memoryDigest.sourcePath
+                  }`,
+                  footer: memoryDigest.sourcePath ?? copy.common.localOnly,
+                })}
+              {memoryHistory &&
+                renderOperationalCard({
+                  document: memoryHistoryDocument,
+                  tone: memoryHistory.failedOrBlockedRuns > 0 ? "warn" : "ok",
+                  title: memoryHistory.sourcePath ?? copy.operational.memoryHistory,
+                  label: copy.operational.memoryHistory,
+                  summary: `${formatCount(memoryHistory.visibleEvents, locale)} ${
+                    copy.operational.events
+                  } · ${formatCount(memoryHistory.remoteEvents, locale)} ${
+                    copy.operational.remote
+                  }`,
+                  detail: `${formatCount(memoryHistory.failedOrBlockedRuns, locale)} ${
+                    copy.operational.failedOrBlocked
+                  } · ${memoryHistory.latestEventAt ?? copy.common.none}`,
+                  footer: memoryHistory.sourcePath ?? copy.common.none,
+                })}
+              {memorySearch &&
+                renderOperationalCard({
+                  document: memorySearchDocument,
+                  tone: memorySearch.totalResults > 0 ? "ok" : "info",
+                  title: memorySearch.sourcePath ?? copy.operational.memorySearch,
+                  label: copy.operational.memorySearch,
+                  summary: `${formatCount(memorySearch.totalResults, locale)} ${
+                    copy.operational.results
+                  } · ${memorySearch.query || copy.common.none}`,
+                  detail: `${formatCount(memorySearch.documentResults, locale)} ${
+                    copy.operational.documents
+                  } · ${formatCount(memorySearch.runResults, locale)} ${copy.runs.runs}`,
+                  footer: memorySearch.sourcePath ?? copy.common.none,
+                })}
             </div>
           </div>
         )}
@@ -1917,6 +2596,7 @@ export default function App() {
           </span>
         </div>
         {renderStartFailureDiagnostic(true)}
+        {renderFollowUpCommands(startResult)}
         {startResult && (
           <div className="command-output command-output--compact">
             <pre>{outputPreview(startResult.stdout, copy)}</pre>
@@ -1957,6 +2637,28 @@ export default function App() {
     const noteRequired =
       requiresFailureClass && finishFailureClass === "other";
     const hasRequiredNote = !noteRequired || parseListInput(finishNoteInput).length > 0;
+    const selectedRunHasFailureEvidence =
+      Boolean(
+        selectedRun?.reproduction &&
+          selectedRun.reproduction.steps.length +
+            selectedRun.reproduction.commands.length +
+            selectedRun.reproduction.notes.length >
+            0,
+      ) &&
+      Boolean(
+        selectedRun?.localization &&
+          selectedRun.localization.findings.length + selectedRun.localization.files.length > 0,
+      ) &&
+      Boolean(
+        selectedRun?.guard && selectedRun.guard.checks.length + selectedRun.guard.notes.length > 0,
+      );
+    const hasRequiredFailureEvidence =
+      !requiresFailureClass ||
+      selectedRunHasFailureEvidence ||
+      (parseListInput(reproductionInput).length > 0 &&
+        (parseListInput(localizationInput).length > 0 ||
+          parseListInput(localizedFilesInput).length > 0) &&
+        parseListInput(guardInput).length > 0);
     const enabledVerification = [
       verifyTest ? "test" : null,
       verifyLint ? "lint" : null,
@@ -2134,6 +2836,56 @@ export default function App() {
                   />
                 </label>
               </div>
+
+              {finishStatus !== "finished" && (
+                <div className="finish-failure-evidence">
+                  <div className="finish-step__head">
+                    <span className="finish-step__index mono">!</span>
+                    <span>
+                      <strong>{copy.terminal.failureEvidence}</strong>
+                      <small>{copy.terminal.failureEvidenceDetail}</small>
+                    </span>
+                  </div>
+                  <div className="form-grid form-grid--two">
+                    <label className="field-label">
+                      <span>{copy.terminal.reproduction}</span>
+                      <textarea
+                        className="supervisor-textarea"
+                        value={reproductionInput}
+                        onChange={(event) => setReproductionInput(event.target.value)}
+                        placeholder="npm test -- webhook-verification"
+                      />
+                    </label>
+                    <label className="field-label">
+                      <span>{copy.terminal.localization}</span>
+                      <textarea
+                        className="supervisor-textarea"
+                        value={localizationInput}
+                        onChange={(event) => setLocalizationInput(event.target.value)}
+                        placeholder="src/service.ts"
+                      />
+                    </label>
+                    <label className="field-label">
+                      <span>{copy.terminal.localizedFiles}</span>
+                      <textarea
+                        className="supervisor-textarea"
+                        value={localizedFilesInput}
+                        onChange={(event) => setLocalizedFilesInput(event.target.value)}
+                        placeholder="src/service.ts"
+                      />
+                    </label>
+                    <label className="field-label">
+                      <span>{copy.terminal.guard}</span>
+                      <textarea
+                        className="supervisor-textarea"
+                        value={guardInput}
+                        onChange={(event) => setGuardInput(event.target.value)}
+                        placeholder="npm test"
+                      />
+                    </label>
+                  </div>
+                </div>
+              )}
             </div>
           </div>
 
@@ -2166,7 +2918,7 @@ export default function App() {
                 className="terminal-control terminal-control--primary"
                 type="button"
                 onClick={finishSelectedRun}
-                disabled={!canFinish || !hasRequiredNote}
+                disabled={!canFinish || !hasRequiredNote || !hasRequiredFailureEvidence}
               >
                 {finishState === "running" ? copy.common.running : copy.terminal.finishRun}
               </button>
@@ -2186,7 +2938,14 @@ export default function App() {
                 <span>{copy.terminal.failureClassOtherNote}</span>
               </div>
             )}
+            {!hasRequiredFailureEvidence && (
+              <div className="diagnostic diagnostic--warn">
+                <AlertTriangle size={14} strokeWidth={1.7} aria-hidden="true" />
+                <span>{copy.terminal.failureEvidenceRequired}</span>
+              </div>
+            )}
             {renderFinishFailureDiagnostic()}
+            {renderFollowUpCommands(finishResult)}
             {finishResult && (
               <div className="command-output">
                 <pre>{outputPreview(finishResult.stdout, copy)}</pre>
@@ -2685,6 +3444,80 @@ export default function App() {
             <strong className="mono">{selectedRun.changedFiles.length}</strong>
           </div>
         </div>
+        {(selectedRun.reproduction || selectedRun.localization || selectedRun.fixSummary || selectedRun.guard) && (
+          <>
+            <div className="section-head section-head--tight">
+              <div>
+                <div className="label">{copy.runs.structuredDetails}</div>
+                <h3>{copy.runs.evidence}</h3>
+              </div>
+            </div>
+            <div className="run-structured-list">
+              {selectedRun.reproduction && (
+                <details className="inspector-disclosure">
+                  <summary>
+                    <span className="inspector-disclosure__title">
+                      <span className="label">{copy.runs.reproduction}</span>
+                      <strong>
+                        {formatCount(
+                          selectedRun.reproduction.steps.length + selectedRun.reproduction.commands.length,
+                          locale,
+                        )}
+                      </strong>
+                    </span>
+                  </summary>
+                  <div className="ref-list">
+                    {selectedRun.reproduction.steps.map((item) => <code key={`step-${item}`}>{item}</code>)}
+                    {selectedRun.reproduction.commands.map((item) => <code key={`cmd-${item}`}>{item}</code>)}
+                    {selectedRun.reproduction.notes.map((item) => <code key={`note-${item}`}>{item}</code>)}
+                  </div>
+                </details>
+              )}
+              {selectedRun.localization && (
+                <details className="inspector-disclosure">
+                  <summary>
+                    <span className="inspector-disclosure__title">
+                      <span className="label">{copy.runs.localization}</span>
+                      <strong>{formatCount(selectedRun.localization.findings.length, locale)}</strong>
+                    </span>
+                  </summary>
+                  <div className="ref-list">
+                    {selectedRun.localization.findings.map((item) => <code key={`finding-${item}`}>{item}</code>)}
+                    {selectedRun.localization.files.map((item) => <code key={`loc-file-${item}`}>{item}</code>)}
+                  </div>
+                </details>
+              )}
+              {selectedRun.fixSummary && (
+                <details className="inspector-disclosure">
+                  <summary>
+                    <span className="inspector-disclosure__title">
+                      <span className="label">{copy.runs.fixSummary}</span>
+                      <strong>{formatCount(selectedRun.fixSummary.summaries.length, locale)}</strong>
+                    </span>
+                  </summary>
+                  <div className="ref-list">
+                    {selectedRun.fixSummary.summaries.map((item) => <code key={`fix-${item}`}>{item}</code>)}
+                    {selectedRun.fixSummary.files.map((item) => <code key={`fix-file-${item}`}>{item}</code>)}
+                  </div>
+                </details>
+              )}
+              {selectedRun.guard && (
+                <details className="inspector-disclosure">
+                  <summary>
+                    <span className="inspector-disclosure__title">
+                      <span className="label">{copy.runs.guard}</span>
+                      <strong>{formatCount(selectedRun.guard.checks.length, locale)}</strong>
+                    </span>
+                  </summary>
+                  <div className="ref-list">
+                    {selectedRun.guard.checks.map((item) => <code key={`guard-${item}`}>{item}</code>)}
+                    {selectedRun.guard.notes.map((item) => <code key={`guard-note-${item}`}>{item}</code>)}
+                  </div>
+                </details>
+              )}
+            </div>
+          </>
+        )}
         {selectedOrchestration && (
           <>
             <div className="section-head section-head--tight">

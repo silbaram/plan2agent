@@ -10,6 +10,7 @@ function failedResult(overrides: Partial<ExecutionCommandResult>): ExecutionComm
     exitCode: 1,
     stdout: "",
     stderr: "",
+    followUpCommands: [],
     startedAt: "2026-06-23T00:00:00.000Z",
     finishedAt: "2026-06-23T00:00:01.000Z",
     durationMs: 1000,
@@ -141,6 +142,25 @@ describe("summarizeFinishRunFailure", () => {
     ).toMatchObject({
       kind: "verification_failed",
       title: "Verification failed",
+    });
+  });
+
+  it("classifies missing structured failure evidence before generic verification failure", () => {
+    expect(
+      summarizeFinishRunFailure(
+        failedResult({
+          stdout: [
+            "Running verification...",
+            "Plan2Agent run verification recorded: run-task-001",
+            "- custom: failed (npm test)",
+          ].join("\n"),
+          stderr:
+            "p2a run command failed: failed/blocked run requires structured debug detail: reproduction, localization, guard",
+        }),
+      ),
+    ).toMatchObject({
+      kind: "failure_evidence_required",
+      title: "Failure evidence required",
     });
   });
 

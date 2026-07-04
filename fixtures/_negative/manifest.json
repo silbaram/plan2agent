@@ -34,6 +34,14 @@
         "--spec",
         "fixtures/_negative/technology-recon/prohibition-only-approved-spec.json"
       ]
+    },
+    {
+      "id": "technology-recon-reference-recon-spec-is-valid",
+      "description": "An approved spec may structure Gate B reference reconnaissance when candidates point to existing evidence.",
+      "args": [
+        "--spec",
+        "fixtures/_negative/technology-recon/reference-recon-valid-spec.json"
+      ]
     }
   ],
   "expected_failure": [
@@ -104,6 +112,24 @@
         "fixtures/_negative/technology-recon/dependency-without-web-approved-spec.json"
       ],
       "expected_message": "approved spec with material technology choices requires WEB-n evidence"
+    },
+    {
+      "id": "technology-recon-reference-recon-source-must-exist",
+      "description": "A reference reconnaissance candidate must point to an evidence source_id present in the same spec.",
+      "args": [
+        "--spec",
+        "fixtures/_negative/technology-recon/reference-recon-invalid-source-spec.json"
+      ],
+      "expected_message": "spec.reference_reconnaissance REF-1 references unknown evidence source_id WEB-2"
+    },
+    {
+      "id": "technology-recon-reference-recon-open-questions-block-approval",
+      "description": "An approved spec must not keep unresolved reference reconnaissance questions.",
+      "args": [
+        "--spec",
+        "fixtures/_negative/technology-recon/reference-recon-open-question-approved-spec.json"
+      ],
+      "expected_message": "approved spec must not contain reference_reconnaissance.open_questions"
     }
   ]
 }

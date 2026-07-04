@@ -8,6 +8,7 @@ import {
   type ExecutionFinishRunRequest,
   type ExecutionStartRunRequest,
   type GuiConfigSnapshot,
+  type OperationalActionRequest,
   type OrchestrationMarkRoleRequest,
   type P2AApi,
   type ProjectLoadOptions,
@@ -100,6 +101,10 @@ const p2aApi: P2AApi = {
       ipcRenderer.invoke(IPC_CHANNELS.executionStartRun, request) as Promise<ExecutionCommandResult>,
     finishRun: (request: ExecutionFinishRunRequest) =>
       ipcRenderer.invoke(IPC_CHANNELS.executionFinishRun, request) as Promise<ExecutionCommandResult>,
+  },
+  operational: {
+    runAction: (request: OperationalActionRequest) =>
+      ipcRenderer.invoke(IPC_CHANNELS.operationalRunAction, request) as Promise<ExecutionCommandResult>,
   },
   orchestration: {
     markRole: (request: OrchestrationMarkRoleRequest) =>

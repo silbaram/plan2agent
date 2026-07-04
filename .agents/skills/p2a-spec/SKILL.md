@@ -28,6 +28,7 @@ Return:
 - `open_decisions`
 - `clarifying_question_disposition` inside `spec_json`, with one disposition for every intake `CQ-n`
 - `evidence` inside `spec_json`, preserving intake sources and adding any new `WEB-n` or `LOCAL-n` sources
+- Optional `reference_reconnaissance` inside `spec_json` when Gate B compares reusable technologies, local patterns, prior artifacts, or external implementation approaches
 - Optional generated Markdown views may be returned when useful for export or review, but `spec_json` is the source of truth. The harness persists `gate-b-spec/spec.json` under `.plan2agent/artifacts/<project_id>/` for Gate B. Set `spec_json.source_intake` to the Gate A folder path, for example `.plan2agent/artifacts/<project_id>/gate-a-intake/intake.json`, when the source is a persisted artifact.
 
 ## Required Spec Fields
@@ -68,6 +69,14 @@ During Gate B, before finalizing `implementation.architecture`, run a lightweigh
 Use primary sources first: official docs, release notes, standards documents, package registries, source repositories, or vendor documentation. Use web lookup only for read-only research; do not install dependencies, run implementation commands, or treat popularity signals as sufficient proof.
 
 The Gate B output must compare viable options, explain trade-offs, recommend one option when justified, and state the rationale in the product or implementation spec section it affects. Record every material source in `spec_json.evidence` as `WEB-n` with title, URL, and `used_for`, and cite the source id near the recommendation. If the choice changes product scope or major constraints, keep `approval: draft` and add the relevant `ND-n` to `open_decisions` instead of silently choosing.
+
+When the scan compares concrete reusable patterns or implementation references, add `spec_json.reference_reconnaissance` instead of overloading `evidence`. Use `evidence` for source metadata and `reference_reconnaissance` for decision metadata:
+
+- `triggers`: why reconnaissance was needed, such as a material dependency choice, stale ecosystem risk, or request for current options.
+- `candidates`: `REF-n` entries that point to an existing `evidence[].source_id`, summarize the option, and record `decision` as `selected`, `rejected`, `context`, or `open`.
+- `selected_patterns`: patterns to reuse, with the source `candidate_id`, target spec fields in `applies_to`, and rationale.
+- `rejected_patterns`: patterns intentionally not reused, with the source `candidate_id` and rationale.
+- `open_questions`: unresolved reference or trade-off questions that should remain visible before Gate B approval.
 
 `spec_json.clarifying_question_disposition` must include exactly one item for each intake `clarifying_questions[*].id`. Each item has `id`, `status`, `rationale`, and `affects`, plus the field required by its status:
 

@@ -1,5 +1,9 @@
+import { existsSync } from "node:fs";
 import { readdir, readFile, stat } from "node:fs/promises";
+import { execFile } from "node:child_process";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 import Ajv2020, { type ValidateFunction } from "ajv/dist/2020";
 import intakeSchema from "../../../../schemas/intake.schema.json";
 import reviewSchema from "../../../../schemas/review.schema.json";
@@ -11,6 +15,8 @@ import { DEFAULT_EXECUTION_AGENT_TOOL } from "../shared/ipc";
 import type {
   ArtifactSummary,
   CommandGuidance,
+  DoctorCommandSummary,
+  EvalArtifactSummary,
   ExecutionAgentTool,
   FailureClass,
   FailureRetryability,
@@ -29,6 +35,10 @@ import type {
   ProjectFileCheck,
   ProjectOnboarding,
   ProjectSnapshot,
+  InfoCommandSummary,
+  MemoryDigestSummary,
+  MemoryHistorySummary,
+  MemorySearchSummary,
   RunStatus,
   SchemaValidationSummary,
   TaskCounts,
@@ -41,10 +51,15 @@ import type {
   WorkbenchOrchestrationRole,
   WorkbenchOrchestrationSchedulerHint,
   WorkbenchRunFailure,
+  WorkbenchRunFixSummary,
+  WorkbenchRunGuard,
+  WorkbenchRunLocalization,
   WorkbenchRunOrchestration,
+  WorkbenchRunReproduction,
   WorkbenchRunVerification,
   WorkbenchRun,
   WorkbenchTask,
+  UpdateReportSummary,
 } from "../shared/ipc";
 
 type JsonRecord = Record<string, unknown>;
@@ -77,6 +92,8 @@ const schemaValidators = {
   review: ajv.compile(reviewSchema),
   "run-index": ajv.compile(runIndexSchema),
 } satisfies Record<SchemaValidationSummary["id"], ValidateFunction>;
+const execFileAsync = promisify(execFile);
+let cachedToolkitHandoffScript: string | null = null;
 
 function normalizeRelative(rootPath: string, targetPath: string): string {
   const relativePath = path.relative(rootPath, targetPath);
@@ -209,6 +226,223 @@ function numberValue(value: unknown): number | null {
 
 function shellQuote(value: string): string {
   return `'${value.replace(/'/g, "'\\''")}'`;
+}
+
+function findToolkitRoot(startPath: string): string | null {
+  let current = path.resolve(startPath);
+  if (!existsSync(current)) current = path.dirname(current);
+  while (true) {
+    const handoffScript = path.join(current, "scripts", "p2a_handoff.mjs");
+    const manifestScript = path.join(current, "scripts", "p2a_tool_manifest.mjs");
+    if (existsSync(handoffScript) && existsSync(manifestScript)) return current;
+    const parent = path.dirname(current);
+    if (parent === current) return null;
+    current = parent;
+  }
+}
+
+function currentModuleDir(): string | null {
+  try {
+    return path.dirname(fileURLToPath(import.meta.url));
+  } catch {
+    return null;
+  }
+}
+
+function toolkitHandoffScript(): string {
+  if (cachedToolkitHandoffScript) return cachedToolkitHandoffScript;
+  const candidates = [
+    process.env.P2A_TOOLKIT_ROOT,
+    process.cwd(),
+    currentModuleDir(),
+  ].filter((candidate): candidate is string => typeof candidate === "string" && candidate.trim().length > 0);
+
+  for (const candidate of candidates) {
+    const root = findToolkitRoot(candidate);
+    if (root) {
+      cachedToolkitHandoffScript = path.join(root, "scripts", "p2a_handoff.mjs");
+      return cachedToolkitHandoffScript;
+    }
+  }
+
+  cachedToolkitHandoffScript = path.join(process.cwd(), "scripts", "p2a_handoff.mjs");
+  return cachedToolkitHandoffScript;
+}
+
+function toolkitScript(scriptName: string): string {
+  return path.join(path.dirname(toolkitHandoffScript()), scriptName);
+}
+
+function isDoctorStatus(value: unknown): value is DoctorCommandSummary["status"] {
+  return value === "pass" || value === "warn" || value === "fail";
+}
+
+function doctorCommandSummary(
+  command: string,
+  exitCode: number | null,
+  stdout: string,
+  fallbackError: string | null,
+): DoctorCommandSummary {
+  try {
+    const parsed = JSON.parse(stdout) as unknown;
+    const report = parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as JsonRecord)
+      : null;
+    const summary = report?.summary && typeof report.summary === "object" && !Array.isArray(report.summary)
+      ? (report.summary as JsonRecord)
+      : null;
+    const projectState = report?.projectState && typeof report.projectState === "object" && !Array.isArray(report.projectState)
+      ? (report.projectState as JsonRecord)
+      : null;
+    return {
+      command,
+      status: isDoctorStatus(report?.status) ? report.status : "unavailable",
+      exitCode,
+      summary: summary
+        ? {
+            passed: numberValue(summary.passed) ?? 0,
+            warnings: numberValue(summary.warnings) ?? 0,
+            failures: numberValue(summary.failures) ?? 0,
+          }
+        : null,
+      projectState: stringValue(projectState?.state),
+      error: null,
+    };
+  } catch {
+    return {
+      command,
+      status: "unavailable",
+      exitCode,
+      summary: null,
+      projectState: null,
+      error: fallbackError ?? "p2a_doctor did not return JSON",
+    };
+  }
+}
+
+function infoCommandSummary(
+  command: string,
+  exitCode: number | null,
+  stdout: string,
+  fallbackError: string | null,
+): InfoCommandSummary {
+  try {
+    const parsed = JSON.parse(stdout) as unknown;
+    const report = parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as JsonRecord)
+      : null;
+    const enhancements = recordValue(report?.enhancements);
+    const nextActions = stringArrayValue(report?.nextActions);
+    const schemaVersion = stringValue(report?.schema_version);
+    const status = schemaVersion === "p2a.info.v1" ? "available" : "unavailable";
+    return {
+      command,
+      status,
+      exitCode,
+      mode: stringValue(report?.mode),
+      surface: stringValue(report?.surface),
+      artifactCount: numberValue(report?.artifactCount) ?? 0,
+      enabledEnhancements: stringArrayValue(enhancements?.enabled),
+      nextActionCount: nextActions.length,
+      firstNextAction: nextActions[0] ?? null,
+      error: status === "available"
+        ? null
+        : fallbackError ?? `p2a info returned unexpected schema: ${schemaVersion ?? "none"}`,
+    };
+  } catch {
+    return {
+      command,
+      status: "unavailable",
+      exitCode,
+      mode: null,
+      surface: null,
+      artifactCount: 0,
+      enabledEnhancements: [],
+      nextActionCount: 0,
+      firstNextAction: null,
+      error: fallbackError ?? "p2a info did not return JSON",
+    };
+  }
+}
+
+async function runInfoCommand(rootPath: string): Promise<InfoCommandSummary> {
+  const scriptPath = toolkitScript("p2a.mjs");
+  const command = `node ${shellQuote(scriptPath)} info --target ${shellQuote(rootPath)} --json`;
+  if (!existsSync(scriptPath)) {
+    return {
+      command,
+      status: "unavailable",
+      exitCode: null,
+      mode: null,
+      surface: null,
+      artifactCount: 0,
+      enabledEnhancements: [],
+      nextActionCount: 0,
+      firstNextAction: null,
+      error: `p2a.mjs was not found at ${scriptPath}`,
+    };
+  }
+
+  try {
+    const result = await execFileAsync(process.execPath, [scriptPath, "info", "--target", rootPath, "--json"], {
+      timeout: 5000,
+      maxBuffer: 1024 * 1024,
+    });
+    return infoCommandSummary(command, 0, result.stdout, null);
+  } catch (error) {
+    const detail = error as {
+      code?: unknown;
+      stdout?: unknown;
+      stderr?: unknown;
+      message?: unknown;
+    };
+    const stdout = typeof detail.stdout === "string" ? detail.stdout : "";
+    const stderr = typeof detail.stderr === "string" && detail.stderr.trim().length
+      ? detail.stderr.trim()
+      : typeof detail.message === "string"
+        ? detail.message
+        : null;
+    const exitCode = typeof detail.code === "number" ? detail.code : null;
+    return infoCommandSummary(command, exitCode, stdout, stderr);
+  }
+}
+
+async function runDoctorCommand(rootPath: string): Promise<DoctorCommandSummary> {
+  const scriptPath = toolkitScript("p2a_doctor.mjs");
+  const command = `node ${shellQuote(scriptPath)} --target ${shellQuote(rootPath)} --json`;
+  if (!existsSync(scriptPath)) {
+    return {
+      command,
+      status: "unavailable",
+      exitCode: null,
+      summary: null,
+      projectState: null,
+      error: `p2a_doctor.mjs was not found at ${scriptPath}`,
+    };
+  }
+
+  try {
+    const result = await execFileAsync(process.execPath, [scriptPath, "--target", rootPath, "--json"], {
+      timeout: 5000,
+      maxBuffer: 1024 * 1024,
+    });
+    return doctorCommandSummary(command, 0, result.stdout, null);
+  } catch (error) {
+    const detail = error as {
+      code?: unknown;
+      stdout?: unknown;
+      stderr?: unknown;
+      message?: unknown;
+    };
+    const stdout = typeof detail.stdout === "string" ? detail.stdout : "";
+    const stderr = typeof detail.stderr === "string" && detail.stderr.trim().length
+      ? detail.stderr.trim()
+      : typeof detail.message === "string"
+        ? detail.message
+        : null;
+    const exitCode = typeof detail.code === "number" ? detail.code : null;
+    return doctorCommandSummary(command, exitCode, stdout, stderr);
+  }
 }
 
 function formatAjvErrors(validator: ValidateFunction): string[] {
@@ -431,6 +665,47 @@ function normalizeFailure(runDetail: JsonRecord | null): WorkbenchRunFailure | n
     needsUserDecision,
     source,
   };
+}
+
+function normalizeRunReproduction(runDetail: JsonRecord | null): WorkbenchRunReproduction | null {
+  const reproduction = recordValue(runDetail?.reproduction);
+  if (!reproduction) return null;
+  const normalized = {
+    steps: stringArrayValue(reproduction.steps),
+    commands: stringArrayValue(reproduction.commands),
+    notes: stringArrayValue(reproduction.notes),
+  };
+  return normalized.steps.length || normalized.commands.length || normalized.notes.length ? normalized : null;
+}
+
+function normalizeRunLocalization(runDetail: JsonRecord | null): WorkbenchRunLocalization | null {
+  const localization = recordValue(runDetail?.localization);
+  if (!localization) return null;
+  const normalized = {
+    findings: stringArrayValue(localization.findings),
+    files: stringArrayValue(localization.files),
+  };
+  return normalized.findings.length || normalized.files.length ? normalized : null;
+}
+
+function normalizeRunFixSummary(runDetail: JsonRecord | null): WorkbenchRunFixSummary | null {
+  const fixSummary = recordValue(runDetail?.fixSummary);
+  if (!fixSummary) return null;
+  const normalized = {
+    summaries: stringArrayValue(fixSummary.summaries),
+    files: stringArrayValue(fixSummary.files),
+  };
+  return normalized.summaries.length || normalized.files.length ? normalized : null;
+}
+
+function normalizeRunGuard(runDetail: JsonRecord | null): WorkbenchRunGuard | null {
+  const guard = recordValue(runDetail?.guard);
+  if (!guard) return null;
+  const normalized = {
+    checks: stringArrayValue(guard.checks),
+    notes: stringArrayValue(guard.notes),
+  };
+  return normalized.checks.length || normalized.notes.length ? normalized : null;
 }
 
 async function readRunDetail(runsDir: string, runId: string): Promise<JsonRecord | null> {
@@ -1005,6 +1280,10 @@ async function normalizeRuns(
         changedFiles: stringArrayValue(runDetail?.changedFiles),
         verification: normalizeVerification(runDetail),
         notes: stringArrayValue(runDetail?.notes),
+        reproduction: normalizeRunReproduction(runDetail),
+        localization: normalizeRunLocalization(runDetail),
+        fixSummary: normalizeRunFixSummary(runDetail),
+        guard: normalizeRunGuard(runDetail),
         failure: normalizeFailure(runDetail),
         orchestration,
       };
@@ -1243,6 +1522,254 @@ async function summarizeRuns(rootPath: string, artifactRoot: string): Promise<{
   };
 }
 
+async function readJsonFilesFromDirectory(directoryPath: string): Promise<Array<{ filePath: string; data: JsonRecord }>> {
+  if (!(await existsAs(directoryPath, "directory"))) return [];
+  let entries;
+  try {
+    entries = await readdir(directoryPath, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  const files = await Promise.all(
+    entries
+      .filter((entry) => entry.isFile() && entry.name.endsWith(".json"))
+      .map(async (entry) => {
+        const filePath = path.join(directoryPath, entry.name);
+        try {
+          const data = await readJson(filePath);
+          return data ? { filePath, data } : null;
+        } catch {
+          return null;
+        }
+      }),
+  );
+  return files.filter((item): item is { filePath: string; data: JsonRecord } => item !== null);
+}
+
+async function summarizeEvalArtifacts(rootPath: string, artifactRoot: string): Promise<EvalArtifactSummary | null> {
+  const evalDir = path.join(artifactRoot, "eval");
+  if (!(await existsAs(evalDir, "directory"))) return null;
+  const indexPath = path.join(evalDir, "eval-index.json");
+  const analysisPath = path.join(evalDir, "analysis.json");
+  const index = await readOptionalJson(indexPath);
+  const analysis = await readOptionalJson(analysisPath);
+  const evalFiles = await readJsonFilesFromDirectory(evalDir);
+  const digestFile = evalFiles
+    .filter((item) => item.data.schema_version === "p2a.eval_digest.v1")
+    .sort((left, right) => {
+      const leftTime = stringValue(left.data.generatedAt) ?? "";
+      const rightTime = stringValue(right.data.generatedAt) ?? "";
+      return rightTime.localeCompare(leftTime);
+    })[0] ?? null;
+  const summary = recordValue(index?.summary);
+  const digestGrades = recordValue(digestFile?.data.grades);
+  const digestAnalyses = recordValue(digestFile?.data.analyses);
+  const analysisSummary = recordValue(analysis?.summary);
+  const maintenanceDraft = recordValue(analysis?.maintenanceDraft);
+  const maintenanceDraftSummary = recordValue(maintenanceDraft?.summary);
+  return {
+    evalDir: normalizeRelative(rootPath, evalDir),
+    indexPath: index ? normalizeRelative(rootPath, indexPath) : null,
+    digestPath: digestFile ? normalizeRelative(rootPath, digestFile.filePath) : null,
+    analysisPath: analysis ? normalizeRelative(rootPath, analysisPath) : null,
+    gradeCount: numberValue(summary?.grades) ?? numberValue(digestGrades?.total) ?? 0,
+    nonPassGrades: numberValue(summary?.nonPassGrades) ?? recordArrayValue(digestGrades?.nonPass).length,
+    clusters: numberValue(summary?.clusters) ?? numberValue(digestAnalyses?.clusters) ?? numberValue(analysisSummary?.clusters) ?? 0,
+    maintenanceDraftTasks: numberValue(maintenanceDraftSummary?.tasks) ?? 0,
+    latestGeneratedAt: stringValue(index?.generatedAt) ?? stringValue(digestFile?.data.generatedAt) ?? stringValue(analysis?.generatedAt),
+  };
+}
+
+function localMemoryDigestSummary(runs: WorkbenchRun[]): Omit<MemoryDigestSummary, "sourcePath" | "source" | "proposals" | "uncoveredCandidateRuns"> {
+  const failedOrBlocked = runs.filter((run) => run.status === "failed" || run.status === "blocked").length;
+  const verificationFailures = runs.filter((run) =>
+    run.verification.some((verification) => verification.status === "failed"),
+  ).length;
+  const verificationGaps = runs.filter((run) =>
+    run.status === "finished" && run.verification.length === 0,
+  ).length;
+  return {
+    totalRuns: runs.length,
+    failedOrBlocked,
+    verificationFailures,
+    verificationGaps,
+  };
+}
+
+function resolveProjectRelativePath(rootPath: string, value: string): string {
+  return path.isAbsolute(value) ? path.resolve(value) : path.resolve(rootPath, value);
+}
+
+function sameResolvedPath(left: string, right: string): boolean {
+  return path.resolve(left) === path.resolve(right);
+}
+
+function memoryDigestMatchesArtifact(
+  rootPath: string,
+  artifactRoot: string,
+  digest: JsonRecord,
+  allowMissingContext: boolean,
+): boolean {
+  const context = recordValue(digest.context);
+  const sourcePath = stringValue(context?.sourcePath);
+  const runsDir = stringValue(context?.runsDir);
+  if (!sourcePath && !runsDir) return allowMissingContext;
+
+  const resolvedArtifactRoot = path.resolve(artifactRoot);
+  if (sourcePath && sameResolvedPath(resolveProjectRelativePath(rootPath, sourcePath), resolvedArtifactRoot)) {
+    return true;
+  }
+
+  if (!runsDir) return false;
+  const resolvedRunsDir = resolveProjectRelativePath(rootPath, runsDir);
+  return [
+    path.join(resolvedArtifactRoot, "runs"),
+    path.join(path.dirname(resolvedArtifactRoot), "runs"),
+  ].some((candidate) => sameResolvedPath(resolvedRunsDir, candidate));
+}
+
+async function summarizeMemoryDigest(
+  rootPath: string,
+  artifactRoot: string,
+  runs: WorkbenchRun[],
+): Promise<MemoryDigestSummary | null> {
+  const candidates = [
+    { filePath: path.join(artifactRoot, "memory-digest.json"), allowMissingContext: true },
+    { filePath: path.join(artifactRoot, "eval", "memory-digest.json"), allowMissingContext: true },
+    { filePath: path.join(rootPath, ".plan2agent", "memory-digest.json"), allowMissingContext: false },
+  ];
+  for (const candidate of candidates) {
+    const digest = await readOptionalJson(candidate.filePath);
+    if (digest?.schema_version !== "p2a.memory_digest.v1") continue;
+    if (!memoryDigestMatchesArtifact(rootPath, artifactRoot, digest, candidate.allowMissingContext)) continue;
+    const runSummary = recordValue(digest.runs);
+    const proposalSummary = recordValue(digest.proposals);
+    return {
+      sourcePath: normalizeRelative(rootPath, candidate.filePath),
+      source: "file",
+      totalRuns: numberValue(runSummary?.total) ?? 0,
+      failedOrBlocked: numberValue(runSummary?.failedOrBlocked) ?? 0,
+      verificationFailures: numberValue(runSummary?.verificationFailures) ?? 0,
+      verificationGaps: numberValue(runSummary?.verificationGaps) ?? 0,
+      proposals: numberValue(proposalSummary?.total) ?? 0,
+      uncoveredCandidateRuns: stringArrayValue(proposalSummary?.uncoveredCandidateRuns).length,
+    };
+  }
+  if (runs.length === 0) return null;
+  return {
+    sourcePath: null,
+    source: "local",
+    ...localMemoryDigestSummary(runs),
+    proposals: 0,
+    uncoveredCandidateRuns: 0,
+  };
+}
+
+async function summarizeMemoryHistory(
+  rootPath: string,
+  artifactRoot: string,
+): Promise<MemoryHistorySummary | null> {
+  const candidates = [
+    { filePath: path.join(artifactRoot, "memory-history.json"), allowMissingContext: true },
+    { filePath: path.join(artifactRoot, "eval", "memory-history.json"), allowMissingContext: true },
+    { filePath: path.join(rootPath, ".plan2agent", "memory-history.json"), allowMissingContext: false },
+  ];
+  for (const candidate of candidates) {
+    const history = await readOptionalJson(candidate.filePath);
+    if (history?.schema_version !== "p2a.memory_history.v1") continue;
+    if (!memoryDigestMatchesArtifact(rootPath, artifactRoot, history, candidate.allowMissingContext)) continue;
+    const summary = recordValue(history.summary);
+    const timeline = recordArrayValue(history.timeline);
+    const latestEventAt = timeline
+      .map((item) => stringValue(item.occurredAt))
+      .filter((value): value is string => Boolean(value))
+      .sort((left, right) => right.localeCompare(left))[0] ?? null;
+    return {
+      sourcePath: normalizeRelative(rootPath, candidate.filePath),
+      source: "file",
+      totalEvents: numberValue(summary?.totalEvents) ?? timeline.length,
+      visibleEvents: numberValue(summary?.visibleEvents) ?? timeline.length,
+      localEvents: numberValue(summary?.localEvents) ?? 0,
+      remoteEvents: numberValue(summary?.remoteEvents) ?? 0,
+      failedOrBlockedRuns: numberValue(summary?.failedOrBlockedRuns) ?? 0,
+      latestEventAt,
+    };
+  }
+  return null;
+}
+
+async function summarizeMemorySearch(
+  rootPath: string,
+  artifactRoot: string,
+): Promise<MemorySearchSummary | null> {
+  const candidates = [
+    { filePath: path.join(artifactRoot, "memory-search.json"), allowMissingContext: true },
+    { filePath: path.join(artifactRoot, "eval", "memory-search.json"), allowMissingContext: true },
+    { filePath: path.join(rootPath, ".plan2agent", "memory-search.json"), allowMissingContext: false },
+  ];
+  for (const candidate of candidates) {
+    const search = await readOptionalJson(candidate.filePath);
+    if (search?.schema_version !== "p2a.memory_search.v1") continue;
+    if (!memoryDigestMatchesArtifact(rootPath, artifactRoot, search, candidate.allowMissingContext)) continue;
+    const query = recordValue(search.query);
+    const summary = recordValue(search.summary);
+    const byType = recordValue(summary?.byType);
+    return {
+      sourcePath: normalizeRelative(rootPath, candidate.filePath),
+      source: "file",
+      query: stringValue(query?.text) ?? "",
+      totalResults: numberValue(summary?.total) ?? recordArrayValue(search.results).length,
+      documentResults:
+        (numberValue(byType?.DOCUMENT_SNAPSHOT) ?? 0) +
+        (numberValue(byType?.DOCUMENT_CHUNK) ?? 0),
+      runResults: numberValue(byType?.RUN_RECORD) ?? 0,
+      taskResults: numberValue(byType?.TASK) ?? 0,
+      latestGeneratedAt: stringValue(search.generatedAt),
+    };
+  }
+  return null;
+}
+
+async function summarizeUpdateReports(rootPath: string): Promise<UpdateReportSummary[]> {
+  const reportsDir = path.join(rootPath, ".plan2agent", "update-reports");
+  const reports = await readJsonFilesFromDirectory(reportsDir);
+  return reports
+    .filter((item) =>
+      item.data.schema_version === "p2a.upgrade_apply.v1" ||
+      item.data.schema_version === "p2a.upgrade_dry_run.v1",
+    )
+    .map((item): UpdateReportSummary => {
+      const kind = item.data.schema_version === "p2a.upgrade_apply.v1" ? "apply" : "preview";
+      const applied = recordValue(item.data.applied);
+      const preview = recordValue(item.data.preview);
+      const summary = recordValue(kind === "apply" ? preview?.summary : item.data.summary);
+      const blockers = recordArrayValue(item.data.blockers);
+      const failures = recordArrayValue(item.data.failures);
+      const changedItems = [
+        numberValue(summary?.missing),
+        numberValue(summary?.wouldUpdate),
+        numberValue(summary?.manualReview),
+        numberValue(summary?.conflicts),
+        numberValue(summary?.errors),
+      ].reduce<number>((total, value) => total + (value ?? 0), 0);
+      const createdAt = stringValue(item.data.appliedAt) ?? stringValue(item.data.generatedAt);
+      return {
+        command: stringValue(item.data.command) ?? "update",
+        kind,
+        status: stringValue(item.data.status) ?? "unknown",
+        appliedAt: stringValue(item.data.appliedAt),
+        createdAt,
+        relativePath: normalizeRelative(rootPath, item.filePath),
+        appliedFiles: stringArrayValue(applied?.files).length,
+        changedItems,
+        blockers: kind === "apply" ? blockers.length : failures.length,
+        error: stringValue(item.data.error),
+      };
+    })
+    .sort((left, right) => (right.createdAt ?? "").localeCompare(left.createdAt ?? ""))
+    .slice(0, 10);
+}
+
 async function summarizeArtifact(rootPath: string, artifactRoot: string): Promise<ArtifactSummary> {
   const diagnostics: ProjectDiagnostic[] = [];
   let projectId = path.basename(artifactRoot);
@@ -1303,6 +1830,10 @@ async function summarizeArtifact(rootPath: string, artifactRoot: string): Promis
   }
   const gates = await summarizeGates(artifactRoot, iterationRoot);
   const runSummary = await summarizeRuns(rootPath, artifactRoot);
+  const evalSummary = await summarizeEvalArtifacts(rootPath, artifactRoot);
+  const memoryDigest = await summarizeMemoryDigest(rootPath, artifactRoot, runSummary.runs);
+  const memoryHistory = await summarizeMemoryHistory(rootPath, artifactRoot);
+  const memorySearch = await summarizeMemorySearch(rootPath, artifactRoot);
   const validations: SchemaValidationSummary[] = [];
 
   const intakeValidation = await validateJsonFile({
@@ -1374,6 +1905,10 @@ async function summarizeArtifact(rootPath: string, artifactRoot: string): Promis
     tasks,
     runCount: runSummary.runCount,
     runs: runSummary.runs,
+    evalSummary,
+    memoryDigest,
+    memoryHistory,
+    memorySearch,
     diagnostics,
   };
 }
@@ -1385,6 +1920,7 @@ async function buildFileChecks(rootPath: string): Promise<ProjectFileCheck[]> {
     ["project-config", "project config", ".plan2agent/project.config.json", "file"],
     ["plan-doc", "PLAN2AGENT.md", "PLAN2AGENT.md", "file"],
     ["scripts", "scripts", ".plan2agent/scripts", "directory"],
+    ["p2a-entry", "p2a command", ".plan2agent/scripts/p2a.mjs", "file"],
     ["schemas", "schemas", ".plan2agent/schemas", "directory"],
     ["artifacts", "artifacts", ".plan2agent/artifacts", "directory"],
     ["runs", "runs", ".plan2agent/runs", "directory"],
@@ -1426,6 +1962,8 @@ function buildDiagnostics(
   checks: ProjectFileCheck[],
   artifacts: ArtifactSummary[],
   proposals: ProposalSummary[],
+  info: InfoCommandSummary | null,
+  doctor: DoctorCommandSummary | null,
 ): ProjectDiagnostic[] {
   const diagnostics = artifacts.flatMap((artifact) => artifact.diagnostics);
   const hasPlan2AgentDir = checks.some((check) => check.id === "p2a-dir" && check.exists);
@@ -1473,8 +2011,45 @@ function buildDiagnostics(
       message: `${proposals.length} proposal feedback item(s) found in .plan2agent/proposals.`,
     });
   }
+  if (info) diagnostics.push(infoDiagnostic(info));
+  if (doctor) diagnostics.push(doctorDiagnostic(doctor));
 
   return diagnostics;
+}
+
+function infoDiagnostic(info: InfoCommandSummary): ProjectDiagnostic {
+  if (info.status === "unavailable") {
+    return {
+      severity: "warn",
+      message: `p2a info unavailable: ${info.error ?? "no JSON result"}`,
+    };
+  }
+  return {
+    severity: "ok",
+    message: `p2a info: mode=${info.mode ?? "unknown"}, artifacts=${info.artifactCount}, nextActions=${info.nextActionCount}.`,
+  };
+}
+
+function doctorDiagnostic(doctor: DoctorCommandSummary): ProjectDiagnostic {
+  if (doctor.status === "unavailable") {
+    return {
+      severity: "warn",
+      message: `p2a_doctor unavailable: ${doctor.error ?? "no JSON result"}`,
+    };
+  }
+  const summary = doctor.summary
+    ? `${doctor.summary.passed} passed, ${doctor.summary.warnings} warning(s), ${doctor.summary.failures} failure(s)`
+    : "summary unavailable";
+  if (doctor.status === "fail" && doctor.projectState === "no_p2a") {
+    return {
+      severity: "warn",
+      message: `p2a_doctor reported no installed harness (${summary}).`,
+    };
+  }
+  return {
+    severity: doctor.status === "fail" ? "error" : doctor.status === "warn" ? "warn" : "ok",
+    message: `p2a_doctor ${doctor.status}: ${summary}.`,
+  };
 }
 
 function buildCommands(rootPath: string, state: ProjectDetectionState, artifacts: ArtifactSummary[]): CommandGuidance[] {
@@ -1485,8 +2060,8 @@ function buildCommands(rootPath: string, state: ProjectDetectionState, artifacts
     commands.push({
       id: "setup",
       label: "Setup guidance",
-      command: `node scripts/p2a_handoff.mjs scaffold --target ${shellQuote(rootPath)} --tools all`,
-      description: "Install P2A harness files from an external terminal.",
+      command: setupCommand(rootPath),
+      description: "Install P2A harness files from a Plan2Agent toolkit checkout.",
     });
   }
 
@@ -1494,8 +2069,8 @@ function buildCommands(rootPath: string, state: ProjectDetectionState, artifacts
     commands.push({
       id: "import",
       label: "Import guidance",
-      command: `node scripts/p2a_handoff.mjs --project-id <project-id> --artifacts <artifact-root> --target ${shellQuote(rootPath)} --tools all`,
-      description: "Import an existing planning artifact bundle from an external terminal.",
+      command: importCommand(rootPath),
+      description: "Import an existing planning artifact bundle from a Plan2Agent toolkit checkout.",
     });
   }
   if (primaryArtifact?.requiresIterationInit) {
@@ -1520,11 +2095,11 @@ function buildCommands(rootPath: string, state: ProjectDetectionState, artifacts
 }
 
 function setupCommand(rootPath: string): string {
-  return `node scripts/p2a_handoff.mjs scaffold --target ${shellQuote(rootPath)} --tools all`;
+  return `node ${shellQuote(toolkitHandoffScript())} scaffold --target ${shellQuote(rootPath)} --tools all`;
 }
 
 function importCommand(rootPath: string): string {
-  return `node scripts/p2a_handoff.mjs --project-id <project-id> --artifacts <artifact-root> --target ${shellQuote(rootPath)} --tools all`;
+  return `node ${shellQuote(toolkitHandoffScript())} --project-id <project-id> --artifacts <artifact-root> --target ${shellQuote(rootPath)} --tools all`;
 }
 
 function validateCommand(rootPath: string, artifacts: ArtifactSummary[]): string {
@@ -1555,7 +2130,7 @@ function installAction(rootPath: string): OnboardingAction {
   return {
     id: "install_p2a",
     label: "Install P2A",
-    description: "Install harness files from an external terminal.",
+    description: "Install harness files from a Plan2Agent toolkit checkout.",
     command: setupCommand(rootPath),
     cwd: rootPath,
     targetPath: rootPath,
@@ -1567,7 +2142,7 @@ function importAction(rootPath: string): OnboardingAction {
   return {
     id: "import_plan",
     label: "Import Plan",
-    description: "Import an approved planning artifact bundle into this workspace.",
+    description: "Import an approved planning artifact bundle from a Plan2Agent toolkit checkout.",
     command: importCommand(rootPath),
     cwd: rootPath,
     targetPath: rootPath,
@@ -1820,9 +2395,15 @@ export async function loadProjectSnapshot(
     artifactRoots.map((artifactRoot) => summarizeArtifact(normalizedRootPath, artifactRoot)),
   );
   const proposals = await summarizeProposals(normalizedRootPath);
+  const updateReports = await summarizeUpdateReports(normalizedRootPath);
   const state = determineState(checks, artifacts);
   const primaryArtifact = artifacts[0] ?? null;
-  const diagnostics = buildDiagnostics(state, checks, artifacts, proposals);
+  const hasP2aMarker = checks.some((check) =>
+    (check.id === "p2a-dir" || check.id === "manifest" || check.id === "project-config") && check.exists,
+  );
+  const info = hasP2aMarker ? await runInfoCommand(normalizedRootPath) : null;
+  const doctor = hasP2aMarker ? await runDoctorCommand(normalizedRootPath) : null;
+  const diagnostics = buildDiagnostics(state, checks, artifacts, proposals, info, doctor);
 
   return {
     rootPath: normalizedRootPath,
@@ -1838,7 +2419,10 @@ export async function loadProjectSnapshot(
     artifacts,
     onboarding: buildOnboarding(normalizedRootPath, state, checks, artifacts),
     commands: buildCommands(normalizedRootPath, state, artifacts),
+    info,
+    doctor,
     proposals,
+    updateReports,
     diagnostics,
     generatedAt: new Date().toISOString(),
   };

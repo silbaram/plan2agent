@@ -8,14 +8,16 @@ import process from 'node:process';
 import { pathToFileURL } from 'node:url';
 import {
   loadJson,
+  validateOrchestrationPlanData,
   validateRunData,
   validateRunIndexData,
   validateRunsDir,
   validateTaskGraphData,
   ValidationError,
 } from './validate_artifacts.mjs';
+import { normalizeMonitorVerdictData } from './p2a_orchestrate.mjs';
 import { resolveIterationState } from './p2a_iteration_state.mjs';
-import { DEFAULT_RUNS_DIR, resolveRunsDir } from './p2a_run_paths.mjs';
+import { canonicalTaskGraphRef, DEFAULT_RUNS_DIR, resolveRunsDir } from './p2a_run_paths.mjs';
 import {
   assertNoUninitializedScaffoldArtifactRoots,
   assertNotUninitializedScaffoldGraph,
@@ -25,11 +27,13 @@ import {
   singleArtifactProjectRoot,
 } from './p2a_paths.mjs';
 import {
+  DEFAULT_VERIFICATION_TIMEOUT_MS,
   detectProjectCommands,
   mergeDetectedProjectConfig,
   mergeExplicitVerificationCommands,
   writeProjectConfig,
 } from './p2a_project_config.mjs';
+import { printRunCommandFooter } from './p2a_run_commands.mjs';
 
 const P2A_PATHS = resolveP2aPaths(import.meta.url);
 const ROOT = P2A_PATHS.projectRoot;
@@ -57,9 +61,9 @@ function usage() {
     'Usage:',
     '  node .plan2agent/scripts/p2a_runs.mjs start --artifacts <iterative-project-dir> --task <task-id> --agent-tool <tool> [options]',
     '  node .plan2agent/scripts/p2a_runs.mjs start --graph <task-graph.json> --task <task-id> --agent-tool <tool> [--runs <dir>] [options]',
-    '  node .plan2agent/scripts/p2a_runs.mjs record --run-id <run-id> (--artifacts <dir>|--runs <dir>|--graph <path>) [--changed-file <path> ...] [--verification <type:status:command>] [--note <text>]',
+    '  node .plan2agent/scripts/p2a_runs.mjs record --run-id <run-id> (--artifacts <dir>|--runs <dir>|--graph <path>) [--changed-file <path> ...] [--verification <type:status:command>] [--note <text>] [structured detail options]',
     '  node .plan2agent/scripts/p2a_runs.mjs verify --run-id <run-id> (--artifacts <dir>|--runs <dir>|--graph <path>) [--test] [--lint] [--typecheck] [--test-command <cmd>] [--lint-command <cmd>] [--typecheck-command <cmd>] [--verify-command <type:cmd>]',
-    '  node .plan2agent/scripts/p2a_runs.mjs finish --run-id <run-id> (--artifacts <dir>|--runs <dir>|--graph <path>) [--status finished|failed|blocked] [--failure-class <class>] [--retryable yes|no|after_fix] [--needs-user-decision true|false] [--failure-source owner|monitor|implementer] [--changed-file <path> ...] [--collect-git] [--note <text>]',
+    '  node .plan2agent/scripts/p2a_runs.mjs finish --run-id <run-id> (--artifacts <dir>|--runs <dir>|--graph <path>) [--status finished|failed|blocked] [--failure-class <class>] [--retryable yes|no|after_fix] [--needs-user-decision true|false] [--failure-source owner|monitor|implementer] [--changed-file <path> ...] [--verification <type:status:command>] [--collect-git] [--note <text>] [structured detail options]',
     '  node .plan2agent/scripts/p2a_runs.mjs list (--artifacts <dir>|--runs <dir>|--graph <path>) [--json]',
     '  node .plan2agent/scripts/p2a_runs.mjs show --run-id <run-id> (--artifacts <dir>|--runs <dir>|--graph <path>)',
     '  node .plan2agent/scripts/p2a_runs.mjs validate (--artifacts <dir>|--runs <dir>|--graph <path>) [--run-id <run-id>]',
@@ -82,13 +86,22 @@ function usage() {
     '  --changed-file <path>   Changed file to attach to the run. Repeatable.',
     '  --collect-git           Add changed files from git status in the workspace.',
     '  --note <text>           Append a run note. Repeatable.',
+    '  --repro-step <text>     Append a structured reproduction step. Repeatable.',
+    '  --repro-command <cmd>   Append a command that reproduces the observed issue. Repeatable.',
+    '  --repro-note <text>     Append reproduction context. Repeatable.',
+    '  --localization <text>   Append a problem localization finding. Repeatable.',
+    '  --localized-file <path> Append a file implicated by localization. Repeatable.',
+    '  --fix-summary <text>    Append a concise summary of the fix. Repeatable.',
+    '  --fix-file <path>       Append a file intentionally changed by the fix. Repeatable.',
+    '  --guard <text>          Append a recurrence guard or verification check. Repeatable.',
+    '  --guard-note <text>     Append guard context. Repeatable.',
     '  --failure-class <class> Failure class for failed/blocked finish. One of: verification_failed, test_flake, scope_violation, missing_dependency, environment_failure, implementation_incomplete, other.',
     '  --retryable <value>     Override failure retryability: yes, no, after_fix.',
     '  --needs-user-decision <true|false>',
     '                          Override whether the failure needs a user decision.',
     '  --failure-source <src>  Override failure source: owner, monitor, implementer.',
     '  --verification <type:status:command>',
-    '                          Manually record a verification result. type: test/lint/typecheck/custom.',
+    '                          Manually record supplemental verification. Manual passed records do not satisfy finished/done guards.',
     '  --test, --lint, --typecheck',
     '                          Run configured command from .plan2agent/project.config.json.',
     '  --test-command <cmd>, --lint-command <cmd>, --typecheck-command <cmd>',
@@ -123,6 +136,15 @@ function parseArgs(argv) {
     createIsolation: false,
     changedFiles: [],
     notes: [],
+    reproductionSteps: [],
+    reproductionCommands: [],
+    reproductionNotes: [],
+    localizationFindings: [],
+    localizedFiles: [],
+    fixSummaries: [],
+    fixFiles: [],
+    guardChecks: [],
+    guardNotes: [],
     manualVerification: [],
     verifyRequests: [],
     status: null,
@@ -157,15 +179,24 @@ function parseArgs(argv) {
     else if (arg === '--create-isolation') args.createIsolation = true;
     else if (arg === '--changed-file') args.changedFiles.push(requiredValue(argv, ++index, '--changed-file'));
     else if (arg === '--collect-git') args.collectGit = true;
-    else if (arg === '--note') args.notes.push(requiredValue(argv, ++index, '--note'));
+    else if (arg === '--note') args.notes.push(requiredValue(argv, ++index, '--note', { allowLeadingDash: true }));
+    else if (arg === '--repro-step') args.reproductionSteps.push(requiredValue(argv, ++index, '--repro-step', { allowLeadingDash: true }));
+    else if (arg === '--repro-command') args.reproductionCommands.push(requiredValue(argv, ++index, '--repro-command', { allowLeadingDash: true }));
+    else if (arg === '--repro-note') args.reproductionNotes.push(requiredValue(argv, ++index, '--repro-note', { allowLeadingDash: true }));
+    else if (arg === '--localization') args.localizationFindings.push(requiredValue(argv, ++index, '--localization', { allowLeadingDash: true }));
+    else if (arg === '--localized-file') args.localizedFiles.push(requiredValue(argv, ++index, '--localized-file'));
+    else if (arg === '--fix-summary') args.fixSummaries.push(requiredValue(argv, ++index, '--fix-summary', { allowLeadingDash: true }));
+    else if (arg === '--fix-file') args.fixFiles.push(requiredValue(argv, ++index, '--fix-file'));
+    else if (arg === '--guard') args.guardChecks.push(requiredValue(argv, ++index, '--guard', { allowLeadingDash: true }));
+    else if (arg === '--guard-note') args.guardNotes.push(requiredValue(argv, ++index, '--guard-note', { allowLeadingDash: true }));
     else if (arg === '--verification') args.manualVerification.push(parseManualVerification(requiredValue(argv, ++index, '--verification')));
     else if (arg === '--test') args.verifyRequests.push({ type: 'test', command: null, source: 'config' });
     else if (arg === '--lint') args.verifyRequests.push({ type: 'lint', command: null, source: 'config' });
     else if (arg === '--typecheck') args.verifyRequests.push({ type: 'typecheck', command: null, source: 'config' });
-    else if (arg === '--test-command') args.verifyRequests.push({ type: 'test', command: requiredValue(argv, ++index, '--test-command'), source: 'command' });
-    else if (arg === '--lint-command') args.verifyRequests.push({ type: 'lint', command: requiredValue(argv, ++index, '--lint-command'), source: 'command' });
-    else if (arg === '--typecheck-command') args.verifyRequests.push({ type: 'typecheck', command: requiredValue(argv, ++index, '--typecheck-command'), source: 'command' });
-    else if (arg === '--verify-command') args.verifyRequests.push(parseVerifyCommand(requiredValue(argv, ++index, '--verify-command')));
+    else if (arg === '--test-command') args.verifyRequests.push({ type: 'test', command: requiredValue(argv, ++index, '--test-command', { allowLeadingDash: true }), source: 'command' });
+    else if (arg === '--lint-command') args.verifyRequests.push({ type: 'lint', command: requiredValue(argv, ++index, '--lint-command', { allowLeadingDash: true }), source: 'command' });
+    else if (arg === '--typecheck-command') args.verifyRequests.push({ type: 'typecheck', command: requiredValue(argv, ++index, '--typecheck-command', { allowLeadingDash: true }), source: 'command' });
+    else if (arg === '--verify-command') args.verifyRequests.push(parseVerifyCommand(requiredValue(argv, ++index, '--verify-command', { allowLeadingDash: true })));
     else if (arg === '--save-config') args.saveConfig = true;
     else if (arg === '--failure-class') {
       args.failureClass = requiredValue(argv, ++index, '--failure-class');
@@ -213,6 +244,9 @@ function parseArgs(argv) {
   if (args.command !== 'finish' && (args.failureClass || args.retryable || args.needsUserDecision !== null || args.failureSource)) {
     throw new Error('failure options are only supported with finish');
   }
+  if (!['record', 'finish'].includes(args.command) && hasStructuredDetailOptions(args)) {
+    throw new Error('structured detail options are only supported with record or finish');
+  }
   if (args.saveConfig && args.command !== 'verify') {
     throw new Error('--save-config is only supported with verify');
   }
@@ -232,9 +266,23 @@ function parseArgs(argv) {
   return args;
 }
 
-function requiredValue(argv, index, optionName) {
+function hasStructuredDetailOptions(args) {
+  return [
+    args.reproductionSteps,
+    args.reproductionCommands,
+    args.reproductionNotes,
+    args.localizationFindings,
+    args.localizedFiles,
+    args.fixSummaries,
+    args.fixFiles,
+    args.guardChecks,
+    args.guardNotes,
+  ].some((values) => values.length > 0);
+}
+
+function requiredValue(argv, index, optionName, options = {}) {
   const value = argv[index];
-  if (!value) throw new Error(`${optionName} requires a value`);
+  if (!value || (!options.allowLeadingDash && value.startsWith('--'))) throw new Error(`missing value for ${optionName}`);
   return value;
 }
 
@@ -299,6 +347,56 @@ function loadTaskGraph(graphPath) {
   return graph;
 }
 
+function readOrchestrationSidecar(runsDir, runId) {
+  const filePath = orchestrationSidecarPath(runsDir, runId);
+  if (!existsSync(filePath)) return null;
+  return validateOrchestrationPlanData(loadJson(filePath));
+}
+
+function readMonitorVerdict(runsDir, sidecar) {
+  if (!sidecar?.monitorGate?.required) return null;
+  const verdictPath = path.resolve(runsDir, sidecar.monitorGate.verdictPath);
+  assertFile(verdictPath, 'monitor verdict');
+  try {
+    return normalizeMonitorVerdictData(loadJson(verdictPath));
+  } catch (error) {
+    throw new Error(`${error.message}: ${displayPath(verdictPath)}`);
+  }
+}
+
+function monitorConcernSummary(verdict) {
+  const parts = [];
+  for (const field of verdict.concernFields ?? []) {
+    const values = verdict.concerns?.[field] ?? [];
+    if (values.length) parts.push(`${field}=${values.join(' | ')}`);
+  }
+  if (verdict.note) parts.push(`note=${verdict.note}`);
+  return parts.join('; ') || 'no concern details provided';
+}
+
+function applyMonitorGate(args, runsDir, run) {
+  const sidecar = readOrchestrationSidecar(runsDir, run.runId);
+  if (!sidecar?.monitorGate?.required) return null;
+  const verdict = readMonitorVerdict(runsDir, sidecar);
+  if (sidecar.monitorGate.acceptedVerdicts.includes(verdict.verdict) && !verdict.hasConcerns) {
+    return { accepted: true, verdict: verdict.verdict, concerns: monitorConcernSummary(verdict) };
+  }
+  const mappedFailureClass = sidecar.monitorGate.failureClassMap[verdict.failureSignal]
+    ?? sidecar.monitorGate.failureClassMap[verdict.verdict]
+    ?? 'other';
+  args.status = 'blocked';
+  if (!args.failureClass) args.failureClass = mappedFailureClass;
+  if (!args.failureSource) args.failureSource = 'monitor';
+  if (args.needsUserDecision === null && verdict.needsUserDecision) args.needsUserDecision = true;
+  return {
+    accepted: false,
+    verdict: verdict.failureSignal,
+    rawVerdict: verdict.verdict,
+    failureClass: args.failureClass,
+    concerns: monitorConcernSummary(verdict),
+  };
+}
+
 function taskMap(graph) {
   return new Map(graph.tasks.map((task) => [task.id, task]));
 }
@@ -351,10 +449,20 @@ function resolveTaskSource(args) {
     artifactRoot: null,
     graphPath,
     graph,
-    taskGraphRef: displayPath(graphPath),
+    taskGraphRef: canonicalTaskGraphRef(graphPath),
     sourceSpecRef: graph.sourceSpec,
     runsDir: resolveRunsDir(args),
   };
+}
+
+function sourceRunArgs(args) {
+  if (args.artifacts) return ['--artifacts', args.artifacts, ...(args.maintenance ? ['--maintenance'] : [])];
+  if (args.graph) return ['--graph', args.graph];
+  return null;
+}
+
+function runLifecycleSourceArgs(args) {
+  return sourceRunArgs(args) ?? (args.runs ? ['--runs', args.runs] : null);
 }
 
 function assertSafeRunId(runId) {
@@ -371,6 +479,11 @@ function generatedRunId(taskId, now = new Date()) {
 function runPath(runsDir, runId) {
   assertSafeRunId(runId);
   return path.join(runsDir, `${runId}.json`);
+}
+
+function orchestrationSidecarPath(runsDir, runId) {
+  assertSafeRunId(runId);
+  return path.join(runsDir, `${runId}.orchestration.json`);
 }
 
 function indexPath(runsDir) {
@@ -491,6 +604,62 @@ function uniqueStrings(values) {
     output.push(trimmed);
   }
   return output;
+}
+
+function mergeDetailArray(existing, additions) {
+  return uniqueStrings([...(Array.isArray(existing) ? existing : []), ...additions]);
+}
+
+function maybeDeleteEmptyRunDetail(run, key, fields) {
+  const detail = run[key];
+  if (!detail || typeof detail !== 'object' || Array.isArray(detail)) return;
+  const hasValue = fields.some((field) => Array.isArray(detail[field]) && detail[field].length > 0);
+  if (!hasValue) delete run[key];
+}
+
+function mergeStructuredRunDetails(run, args) {
+  if (!hasStructuredDetailOptions(args)) return;
+  if (args.reproductionSteps.length || args.reproductionCommands.length || args.reproductionNotes.length || run.reproduction) {
+    const existing = run.reproduction && typeof run.reproduction === 'object' && !Array.isArray(run.reproduction)
+      ? run.reproduction
+      : {};
+    run.reproduction = {
+      steps: mergeDetailArray(existing.steps, args.reproductionSteps),
+      commands: mergeDetailArray(existing.commands, args.reproductionCommands),
+      notes: mergeDetailArray(existing.notes, args.reproductionNotes),
+    };
+    maybeDeleteEmptyRunDetail(run, 'reproduction', ['steps', 'commands', 'notes']);
+  }
+  if (args.localizationFindings.length || args.localizedFiles.length || run.localization) {
+    const existing = run.localization && typeof run.localization === 'object' && !Array.isArray(run.localization)
+      ? run.localization
+      : {};
+    run.localization = {
+      findings: mergeDetailArray(existing.findings, args.localizationFindings),
+      files: mergeDetailArray(existing.files, args.localizedFiles),
+    };
+    maybeDeleteEmptyRunDetail(run, 'localization', ['findings', 'files']);
+  }
+  if (args.fixSummaries.length || args.fixFiles.length || run.fixSummary) {
+    const existing = run.fixSummary && typeof run.fixSummary === 'object' && !Array.isArray(run.fixSummary)
+      ? run.fixSummary
+      : {};
+    run.fixSummary = {
+      summaries: mergeDetailArray(existing.summaries, args.fixSummaries),
+      files: mergeDetailArray(existing.files, args.fixFiles),
+    };
+    maybeDeleteEmptyRunDetail(run, 'fixSummary', ['summaries', 'files']);
+  }
+  if (args.guardChecks.length || args.guardNotes.length || run.guard) {
+    const existing = run.guard && typeof run.guard === 'object' && !Array.isArray(run.guard)
+      ? run.guard
+      : {};
+    run.guard = {
+      checks: mergeDetailArray(existing.checks, args.guardChecks),
+      notes: mergeDetailArray(existing.notes, args.guardNotes),
+    };
+    maybeDeleteEmptyRunDetail(run, 'guard', ['checks', 'notes']);
+  }
 }
 
 function resolveWorkspacePath(args) {
@@ -621,6 +790,12 @@ function verificationSpecs(args, config) {
   });
 }
 
+function verificationTimeoutMs(config) {
+  const value = Number(config?.verificationTimeoutMs);
+  if (Number.isFinite(value) && value > 0) return Math.trunc(value);
+  return DEFAULT_VERIFICATION_TIMEOUT_MS;
+}
+
 function configRequestsNeedDetection(args, config) {
   if (!args.verifyRequests.length) {
     return !configuredCommand(config, 'test') || !configuredCommand(config, 'lint') || !configuredCommand(config, 'typecheck');
@@ -655,7 +830,7 @@ function prepareProjectConfigForVerification(args, runsDir, run, workspacePath) 
   return { config, saved };
 }
 
-function runVerificationCommand(spec, workspacePath) {
+function runVerificationCommand(spec, workspacePath, timeoutMs) {
   if (spec.status === 'skipped') return spec;
   const startedAt = new Date();
   const result = spawnSync(spec.command, {
@@ -663,38 +838,44 @@ function runVerificationCommand(spec, workspacePath) {
     shell: true,
     encoding: 'utf8',
     maxBuffer: 1024 * 1024 * 10,
+    timeout: timeoutMs,
   });
   const finishedAt = new Date();
   const exitCode = typeof result.status === 'number' ? result.status : 1;
+  const timedOut = result.error?.code === 'ETIMEDOUT' || result.signal === 'SIGTERM';
+  const stderrTail = timedOut
+    ? tail([result.stderr, result.error?.message, `verification command timed out after ${timeoutMs}ms`].filter(Boolean).join('\n'))
+    : tail([result.stderr, result.error?.message].filter(Boolean).join('\n'));
   return {
     type: spec.type,
     command: spec.command,
-    status: exitCode === 0 ? 'passed' : 'failed',
+    status: timedOut ? 'failed' : (exitCode === 0 ? 'passed' : 'failed'),
     exitCode,
     durationMs: Math.max(0, finishedAt.getTime() - startedAt.getTime()),
     startedAt: startedAt.toISOString(),
     finishedAt: finishedAt.toISOString(),
     stdoutTail: tail(result.stdout),
-    stderrTail: tail([result.stderr, result.error?.message].filter(Boolean).join('\n')),
+    stderrTail,
     source: spec.source,
   };
 }
 
 function collectGitChangedFiles(workspacePath) {
-  const result = gitCommandResult(['status', '--porcelain=v1'], workspacePath);
+  const result = gitCommandResult(['status', '--porcelain=v1', '-z', '--untracked-files=all'], workspacePath);
   if (result.status !== 0) {
     throw new Error(`git status failed while collecting changed files: ${gitResultToTail(result)}`);
   }
-  return result.stdout
-    .split(/\r?\n/)
-    .filter((line) => line.trim())
-    .map((line) => {
-      const pathField = line.slice(3);
-      const renamed = pathField.match(/^(.+?) -> (.+)$/);
-      if (renamed) return renamed[2];
-      return pathField.trim();
-    })
-    .filter(Boolean);
+  const records = result.stdout.split('\0').filter(Boolean);
+  const changedFiles = [];
+  for (let index = 0; index < records.length; index += 1) {
+    const record = records[index];
+    if (record.length < 4) continue;
+    const status = record.slice(0, 2);
+    const filePath = record.slice(3);
+    if (filePath) changedFiles.push(filePath);
+    if (status.includes('R') || status.includes('C')) index += 1;
+  }
+  return changedFiles;
 }
 
 function hasFailureOptions(args) {
@@ -727,6 +908,66 @@ function deriveFinishStatus(run, requestedStatus) {
   return run.verification.some((item) => item.status === 'failed') ? 'failed' : 'finished';
 }
 
+function failedVerificationItems(run) {
+  return run.verification.filter((item) => item.status === 'failed');
+}
+
+function incompleteVerificationItems(run) {
+  return run.verification.filter((item) => item.status === 'skipped' || item.status === 'not_run');
+}
+
+function executedPassedVerificationItems(run) {
+  return run.verification.filter((item) => item.status === 'passed'
+    && (item.source === 'config' || item.source === 'command')
+    && item.exitCode === 0);
+}
+
+function structuredDetailHasValue(detail, fields) {
+  if (!detail || typeof detail !== 'object' || Array.isArray(detail)) return false;
+  return fields.some((field) => Array.isArray(detail[field]) && detail[field].some((value) => typeof value === 'string' && value.trim()));
+}
+
+function missingRequiredFailureDetails(run) {
+  const missing = [];
+  if (!structuredDetailHasValue(run.reproduction, ['steps', 'commands', 'notes'])) missing.push('reproduction');
+  if (!structuredDetailHasValue(run.localization, ['findings', 'files'])) missing.push('localization');
+  if (!structuredDetailHasValue(run.guard, ['checks', 'notes'])) missing.push('guard');
+  return missing;
+}
+
+function assertFailedRunStructuredDetails(run, monitorResult = null) {
+  if (run.status !== 'failed' && run.status !== 'blocked') return;
+  const missing = missingRequiredFailureDetails(run);
+  if (!missing.length) return;
+  const monitorContext = monitorResult && !monitorResult.accepted
+    ? `Monitor gate blocked finish (${monitorResult.rawVerdict ?? monitorResult.verdict} -> ${monitorResult.failureClass}; concerns: ${monitorResult.concerns}). `
+    : '';
+  throw new Error([
+    `${monitorContext}failed/blocked run requires structured debug detail: ${missing.join(', ')}`,
+    'Add --repro-step/--repro-command/--repro-note, --localization/--localized-file, and --guard/--guard-note before finishing.',
+  ].join('. '));
+}
+
+function assertFinishedRunGuard(run) {
+  if (run.status !== 'finished') return;
+  if (run.verification.length === 0) {
+    throw new Error('finished run requires verification evidence. Record a passed verification or finish as failed/blocked with --failure-class.');
+  }
+  const failed = failedVerificationItems(run);
+  if (failed.length) {
+    const summary = failed.map((item) => `${item.type}:${item.command}`).join(', ');
+    throw new Error(`finished run cannot include failed verification: ${summary}. Finish this run as failed/blocked with --failure-class, or start a new run with passed verification evidence.`);
+  }
+  const incomplete = incompleteVerificationItems(run);
+  if (incomplete.length) {
+    const summary = incomplete.map((item) => `${item.type}:${item.status}`).join(', ');
+    throw new Error(`finished run cannot include incomplete verification: ${summary}. Finish this run as failed/blocked with --failure-class, or start a new run with passed verification evidence.`);
+  }
+  if (executedPassedVerificationItems(run).length === 0) {
+    throw new Error('finished run requires at least one executed passed verification with source config|command and exitCode 0. Manual verification records are not sufficient.');
+  }
+}
+
 function startRun(args) {
   const source = resolveTaskSource(args);
   const task = requireTask(source.graph, args.taskId);
@@ -754,7 +995,7 @@ function startRun(args) {
     sourceSpecRef: source.sourceSpecRef,
     agentTool: args.agentTool,
     workspaceRef,
-    workspacePath: displayPath(workspacePath),
+    workspacePath,
     isolation,
     status: 'started',
     startedAt: now.toISOString(),
@@ -770,6 +1011,11 @@ function startRun(args) {
   console.log(`- agentTool: ${run.agentTool}`);
   console.log(`- workspaceRef: ${run.workspaceRef}`);
   console.log(`- runs: ${displayPath(runsDir)}`);
+  printRunCommandFooter(P2A_PATHS, {
+    sourceArgs: sourceRunArgs(args),
+    runSourceArgs: runLifecycleSourceArgs(args),
+    runId: run.runId,
+  });
   return 0;
 }
 
@@ -779,6 +1025,7 @@ function recordRun(args) {
   run.changedFiles = uniqueStrings([...run.changedFiles, ...args.changedFiles]);
   run.verification.push(...args.manualVerification);
   run.notes = uniqueStrings([...run.notes, ...args.notes]);
+  mergeStructuredRunDetails(run, args);
   run.updatedAt = new Date().toISOString();
   writeRun(runsDir, run);
   console.log(`Plan2Agent run recorded: ${run.runId}`);
@@ -796,7 +1043,8 @@ function verifyRun(args) {
   const configUpdate = prepareProjectConfigForVerification(args, runsDir, run, workspacePath);
   const config = configUpdate.config;
   const specs = verificationSpecs(args, config);
-  const results = specs.map((spec) => runVerificationCommand(spec, workspacePath));
+  const timeoutMs = verificationTimeoutMs(config);
+  const results = specs.map((spec) => runVerificationCommand(spec, workspacePath, timeoutMs));
   run.verification.push(...results);
   run.updatedAt = new Date().toISOString();
   writeRun(runsDir, run);
@@ -816,13 +1064,26 @@ function verifyRun(args) {
 function finishRun(args) {
   const runsDir = resolveRunsDir(args);
   const run = readRun(runsDir, args.runId);
+  if (run.status !== 'started') {
+    throw new Error(`run ${run.runId} is already ${run.status}; use record to append evidence instead of finishing it again`);
+  }
   const workspacePath = args.workspace ? path.resolve(args.workspace) : path.resolve(run.workspacePath);
   const changedFiles = [...args.changedFiles];
   if (args.collectGit) changedFiles.push(...collectGitChangedFiles(workspacePath));
   run.changedFiles = uniqueStrings([...run.changedFiles, ...changedFiles]);
+  run.verification.push(...args.manualVerification);
   run.notes = uniqueStrings([...run.notes, ...args.notes]);
+  mergeStructuredRunDetails(run, args);
+  const targetStatus = deriveFinishStatus(run, args.status);
+  const monitorResult = targetStatus === 'finished' ? applyMonitorGate(args, runsDir, run) : null;
+  if (monitorResult && !monitorResult.accepted) {
+    console.error(`monitor gate blocked finish: verdict=${monitorResult.rawVerdict ?? monitorResult.verdict}; signal=${monitorResult.verdict}; failureClass=${monitorResult.failureClass}; concerns=${monitorResult.concerns}`);
+    console.error('blocked monitor finish requires structured detail: add --repro-*/--localization*/--guard* before finishing.');
+  }
   run.status = deriveFinishStatus(run, args.status);
+  assertFinishedRunGuard(run);
   const failure = buildFailure(args, run.status);
+  assertFailedRunStructuredDetails(run, monitorResult);
   if (failure) run.failure = failure;
   else delete run.failure;
   const now = new Date().toISOString();
@@ -834,6 +1095,13 @@ function finishRun(args) {
   console.log(`- changedFiles: ${run.changedFiles.length}`);
   console.log(`- verification: ${run.verification.length}`);
   if (run.failure) console.log(`- failure: ${run.failure.class} retryable=${run.failure.retryable} needsUserDecision=${run.failure.needsUserDecision} source=${run.failure.source}`);
+  printRunCommandFooter(P2A_PATHS, {
+    sourceArgs: sourceRunArgs(args),
+    runSourceArgs: runLifecycleSourceArgs(args),
+    runId: run.runId,
+    includeResume: false,
+    includeFinish: false,
+  });
   return run.status === 'failed' ? 1 : 0;
 }
 

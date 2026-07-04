@@ -5,6 +5,7 @@ import {
   scopeArtifactReadRequest,
   scopeExecutionFinishRunRequest,
   scopeExecutionStartRunRequest,
+  scopeOperationalActionRequest,
   scopeOrchestrationMarkRoleRequest,
   scopeTerminalStartRequest,
 } from "./activeProjectScope";
@@ -122,5 +123,40 @@ describe("active project scope", () => {
         roleStatus: "complete",
       });
     }).toThrow("runtime path must stay inside the active project root");
+  });
+
+  it("scopes operational action artifact roots to the active project", () => {
+    const activeRoot = path.resolve("/tmp/p2a-active");
+
+    expect(
+      scopeOperationalActionRequest(activeRoot, {
+        projectRoot: activeRoot,
+        artifactRoot: ".plan2agent/artifacts/demo",
+        action: "eval_generate",
+      }),
+    ).toEqual({
+      projectRoot: activeRoot,
+      artifactRoot: path.join(activeRoot, ".plan2agent/artifacts/demo"),
+      action: "eval_generate",
+    });
+
+    expect(
+      scopeOperationalActionRequest(activeRoot, {
+        projectRoot: activeRoot,
+        action: "update_preview",
+      }),
+    ).toEqual({
+      projectRoot: activeRoot,
+      artifactRoot: null,
+      action: "update_preview",
+    });
+
+    expect(() => {
+      scopeOperationalActionRequest(activeRoot, {
+        projectRoot: activeRoot,
+        artifactRoot: "../outside",
+        action: "eval_digest",
+      });
+    }).toThrow("artifact root must stay inside the active project root");
   });
 });

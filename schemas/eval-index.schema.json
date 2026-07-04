@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://plan2agent.local/schemas/eval-index.schema.json",
+  "title": "Plan2Agent Eval Index",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "generatedAt",
+    "outputDir",
+    "summary",
+    "files",
+    "nextActions"
+  ],
+  "additionalProperties": true,
+  "properties": {
+    "schema_version": {
+      "const": "p2a.eval_index.v1"
+    },
+    "generatedAt": {
+      "type": "string",
+      "minLength": 1
+    },
+    "outputDir": {
+      "type": "string",
+      "minLength": 1
+    },
+    "summary": {
+      "type": "object",
+      "required": [
+        "grades",
+        "nonPassGrades",
+        "analyses",
+        "clusters"
+      ],
+      "additionalProperties": true,
+      "properties": {
+        "grades": { "type": "integer", "minimum": 0 },
+        "nonPassGrades": { "type": "integer", "minimum": 0 },
+        "analyses": { "type": "integer", "minimum": 0 },
+        "clusters": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "files": {
+      "type": "object",
+      "required": [
+        "index",
+        "grades",
+        "analysis",
+        "compare"
+      ],
+      "additionalProperties": true,
+      "properties": {
+        "index": { "type": "string", "minLength": 1 },
+        "grades": { "type": "array" },
+        "analysis": { "type": ["string", "null"] },
+        "compare": { "type": ["string", "null"] }
+      }
+    },
+    "nextActions": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 }
+    }
+  }
+}

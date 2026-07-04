@@ -23,6 +23,10 @@ const SCHEMA_PATHS = {
   proposal_curation: path.join(P2A_PATHS.schemasDir, 'proposal-curation.schema.json'),
   proposal_patch_draft: path.join(P2A_PATHS.schemasDir, 'proposal-patch-draft.schema.json'),
   proposal_draft_approval: path.join(P2A_PATHS.schemasDir, 'proposal-draft-approval.schema.json'),
+  eval_index: path.join(P2A_PATHS.schemasDir, 'eval-index.schema.json'),
+  eval_digest: path.join(P2A_PATHS.schemasDir, 'eval-digest.schema.json'),
+  eval_maintenance_draft: path.join(P2A_PATHS.schemasDir, 'eval-maintenance-draft.schema.json'),
+  eval_maintenance_apply_report: path.join(P2A_PATHS.schemasDir, 'eval-maintenance-apply-report.schema.json'),
 };
 const GATE_PATHS = {
   statusDoc: 'status.md',
@@ -384,6 +388,34 @@ function validateTechnologyReconnaissanceEvidence(spec) {
   }
 }
 
+function validateReferenceReconnaissance(spec) {
+  const reconnaissance = spec.reference_reconnaissance;
+  if (!reconnaissance) return;
+
+  if (spec.approval === 'approved' && reconnaissance.open_questions.length) {
+    throw new ValidationError('approved spec must not contain reference_reconnaissance.open_questions');
+  }
+
+  const evidenceIds = new Set((spec.evidence ?? []).map((item) => item.source_id));
+  const candidateIds = reconnaissance.candidates.map((candidate) => candidate.candidate_id);
+  if (candidateIds.length !== new Set(candidateIds).size) {
+    throw new ValidationError('spec.reference_reconnaissance candidate_id values must be unique');
+  }
+
+  for (const candidate of reconnaissance.candidates) {
+    if (!evidenceIds.has(candidate.source_id)) {
+      throw new ValidationError(`spec.reference_reconnaissance ${candidate.candidate_id} references unknown evidence source_id ${candidate.source_id}`);
+    }
+  }
+
+  const knownCandidateIds = new Set(candidateIds);
+  for (const pattern of [...reconnaissance.selected_patterns, ...reconnaissance.rejected_patterns]) {
+    if (!knownCandidateIds.has(pattern.candidate_id)) {
+      throw new ValidationError(`spec.reference_reconnaissance pattern references unknown candidate_id ${pattern.candidate_id}`);
+    }
+  }
+}
+
 export function validateIntake(filePath, options = {}) {
   const data = validateAgainstSchema(filePath, 'intake');
   validateEvidence(data.evidence, 'intake');
@@ -437,6 +469,7 @@ export function validateSpec(filePath, intakePath = null) {
   const intake = intakePath ? validateIntake(intakePath) : null;
   validateEvidence(data.evidence, 'spec');
   validateTechnologyReconnaissanceEvidence(data);
+  validateReferenceReconnaissance(data);
   validateClarifyingQuestionDisposition(data, intake);
   if (data.approval === 'approved' && data.open_decisions.length) {
     throw new ValidationError('approved specs must not contain open_decisions');
@@ -623,6 +656,9 @@ export function validateTaskGraphData(data, requireApprovedSpec = null) {
   for (const task of tasks) {
     validateNonBlankStrings(task.acceptanceCriteria, `${task.id}.acceptanceCriteria`);
     validateNonBlankStrings(task.sourceSpecRefs, `${task.id}.sourceSpecRefs`);
+    if (typeof task.blockNote === 'string' && task.blockNote.trim().length === 0) {
+      throw new ValidationError(`${task.id}.blockNote must not be blank`);
+    }
     const unknownDependencies = task.dependencies.filter((dependency) => !taskIdSet.has(dependency));
     if (unknownDependencies.length) {
       throw new ValidationError(`${task.id} has unknown dependencies: ${JSON.stringify(unknownDependencies)}`);
@@ -663,6 +699,21 @@ export function validateReviewPass(filePath, expectedSources = null) {
   return validateReview(filePath, expectedSources, { requirePass: true });
 }
 
+function hasStructuredDetailValue(section, keys) {
+  if (!section || typeof section !== 'object') return false;
+  return keys.some((key) => Array.isArray(section[key])
+    && section[key].some((value) => typeof value === 'string' && value.trim().length > 0));
+}
+
+function missingRequiredStructuredRunDetails(data) {
+  if (!['failed', 'blocked'].includes(data.status)) return [];
+  return [
+    hasStructuredDetailValue(data.reproduction, ['steps', 'commands', 'notes']) ? null : 'reproduction',
+    hasStructuredDetailValue(data.localization, ['findings', 'files']) ? null : 'localization',
+    hasStructuredDetailValue(data.guard, ['checks', 'notes']) ? null : 'guard',
+  ].filter(Boolean);
+}
+
 export function validateRunData(data) {
   try {
     validateSchema(data, loadJson(SCHEMA_PATHS.run));
@@ -680,6 +731,10 @@ export function validateRunData(data) {
   }
   if (data.status !== 'started' && data.finishedAt === null) {
     throw new ValidationError(`${data.status} run must include finishedAt`);
+  }
+  const missingStructured = missingRequiredStructuredRunDetails(data);
+  if (missingStructured.length) {
+    throw new ValidationError(`${data.status} run must include structured debug detail: ${missingStructured.join(', ')}`);
   }
   return data;
 }
@@ -1036,6 +1091,42 @@ export function validateProposalDraftApproval(filePath) {
   return validateProposalDraftApprovalData(loadJson(filePath));
 }
 
+export function validateEvalIndexData(data) {
+  validateSchema(data, loadJson(SCHEMA_PATHS.eval_index));
+  return data;
+}
+
+export function validateEvalIndex(filePath) {
+  return validateEvalIndexData(loadJson(filePath));
+}
+
+export function validateEvalDigestData(data) {
+  validateSchema(data, loadJson(SCHEMA_PATHS.eval_digest));
+  return data;
+}
+
+export function validateEvalDigest(filePath) {
+  return validateEvalDigestData(loadJson(filePath));
+}
+
+export function validateEvalMaintenanceDraftData(data) {
+  validateSchema(data, loadJson(SCHEMA_PATHS.eval_maintenance_draft));
+  return data;
+}
+
+export function validateEvalMaintenanceDraft(filePath) {
+  return validateEvalMaintenanceDraftData(loadJson(filePath));
+}
+
+export function validateEvalMaintenanceApplyReportData(data) {
+  validateSchema(data, loadJson(SCHEMA_PATHS.eval_maintenance_apply_report));
+  return data;
+}
+
+export function validateEvalMaintenanceApplyReport(filePath) {
+  return validateEvalMaintenanceApplyReportData(loadJson(filePath));
+}
+
 export function validateRunsDir(runsDir) {
   if (!existsSync(runsDir)) throw new ValidationError(`runs directory is missing: ${runsDir}`);
   if (!lstatSync(runsDir).isDirectory()) throw new ValidationError(`runs path must be a directory: ${runsDir}`);
@@ -1298,11 +1389,43 @@ export function validateFixtureDir(fixturePath) {
   if (existsSync(reportPath)) assertFile(reportPath, 'review-report.md');
 }
 
+function usage() {
+  return [
+    'Usage:',
+    '  node .plan2agent/scripts/validate_artifacts.mjs [artifact options]',
+    '',
+    'Options:',
+    '  --artifact-root <dir>               Validate a Gate A-D artifact root.',
+    '  --project-id <id>                   Expected project id for --artifact-root.',
+    '  --intake <path> [--intake-md <path>]',
+    '  --status <path>',
+    '  --spec <path>',
+    '  --task-graph <path> [--require-approved-spec <path>]',
+    '  --review <path> [--require-review-pass]',
+    '  --run <path> | --run-index <path> | --runs-dir <dir>',
+    '  --orchestration-plan <path> | --orchestration-runtime <path>',
+    '  --skill-proposal <path>',
+    '  --proposal-review <path>',
+    '  --proposal-curation <path>',
+    '  --proposal-patch-draft <path>',
+    '  --proposal-draft-approval <path>',
+    '  --eval-index <path>',
+    '  --eval-digest <path>',
+    '  --eval-maintenance-draft <path>',
+    '  --eval-maintenance-apply-report <path>',
+    '  --proposals-dir <dir>',
+    '  --fixture-dir <dir>                 Validate a fixture directory. Repeatable.',
+    '  --require-handoff-ready',
+    '  --help, -h                          Show this help.',
+  ].join('\n');
+}
+
 function parseArgs(argv) {
-  const args = { fixtureDir: [] };
+  const args = { fixtureDir: [], help: false };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
-    if (arg === '--intake') args.intake = argv[++index];
+    if (arg === '--help' || arg === '-h') args.help = true;
+    else if (arg === '--intake') args.intake = argv[++index];
     else if (arg === '--intake-md') args.intakeMd = argv[++index];
     else if (arg === '--status') args.status = argv[++index];
     else if (arg === '--artifact-root') args.artifactRoot = argv[++index];
@@ -1320,6 +1443,10 @@ function parseArgs(argv) {
     else if (arg === '--proposal-curation') args.proposalCuration = argv[++index];
     else if (arg === '--proposal-patch-draft') args.proposalPatchDraft = argv[++index];
     else if (arg === '--proposal-draft-approval') args.proposalDraftApproval = argv[++index];
+    else if (arg === '--eval-index') args.evalIndex = argv[++index];
+    else if (arg === '--eval-digest') args.evalDigest = argv[++index];
+    else if (arg === '--eval-maintenance-draft') args.evalMaintenanceDraft = argv[++index];
+    else if (arg === '--eval-maintenance-apply-report') args.evalMaintenanceApplyReport = argv[++index];
     else if (arg === '--proposals-dir') args.proposalsDir = argv[++index];
     else if (arg === '--require-approved-spec') args.requireApprovedSpec = argv[++index];
     else if (arg === '--require-handoff-ready') args.requireHandoffReady = true;
@@ -1334,6 +1461,10 @@ export function main(argv = process.argv.slice(2)) {
   let args;
   try {
     args = parseArgs(argv);
+    if (args.help) {
+      console.log(usage());
+      return 0;
+    }
     if (args.status) validateStatusDoc(args.status);
     if (args.artifactRoot) {
       validateArtifactRoot(args.artifactRoot, {
@@ -1362,6 +1493,10 @@ export function main(argv = process.argv.slice(2)) {
     if (args.proposalCuration) validateProposalCuration(args.proposalCuration);
     if (args.proposalPatchDraft) validateProposalPatchDraft(args.proposalPatchDraft);
     if (args.proposalDraftApproval) validateProposalDraftApproval(args.proposalDraftApproval);
+    if (args.evalIndex) validateEvalIndex(args.evalIndex);
+    if (args.evalDigest) validateEvalDigest(args.evalDigest);
+    if (args.evalMaintenanceDraft) validateEvalMaintenanceDraft(args.evalMaintenanceDraft);
+    if (args.evalMaintenanceApplyReport) validateEvalMaintenanceApplyReport(args.evalMaintenanceApplyReport);
     if (args.proposalsDir) validateProposalsDir(args.proposalsDir);
     for (const fixtureDir of args.fixtureDir) validateFixtureDir(fixtureDir);
   } catch (error) {

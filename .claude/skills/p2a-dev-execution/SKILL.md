@@ -41,8 +41,10 @@ Use these inputs:
 2. Start a run unless the user provided an existing run id. When using Codex, create an isolated worktree so the write-capable implementer is confined by Codex's `workspace-write` sandbox:
 
    ```bash
-   node .plan2agent/scripts/p2a_runs.mjs start --artifacts <dir> --task <id> --agent-tool codex --isolation worktree --worktree <fresh-worktree-path> --create-isolation
+   node .plan2agent/scripts/p2a_execute.mjs start --artifacts <dir> --task <id> --agent-tool codex --isolation worktree --worktree <fresh-worktree-path> --create-isolation
    ```
+
+   Use `p2a_execute start`, not raw `p2a_runs start`, because it creates the run and marks the task `in_progress` in one lifecycle step. If the project has a supervised orchestration plan, pass `--orchestration-plan <path>` so the monitor gate sidecar is attached to the run.
 
    The worktree path must be a fresh empty path, following the `project.config.json` `runTracking.worktreePattern` convention (for example, `../.worktrees/<taskId>-<runId>`).
    Run this command from an existing git workspace; the fresh worktree path does not need to exist before `--create-isolation`.
@@ -55,7 +57,7 @@ Use these inputs:
 
    The spawned `p2a-implementer` subagent performs scoped file edits only. It may optionally run local checks for self-review, but it must not call `p2a_runs verify`, `p2a_runs finish`, or `p2a_tasks done|block`. Unless lifecycle delegation is explicitly requested, those lifecycle steps belong to the main dev-execution owner running this skill.
 
-5. Verify the run with the required checks by actually executing configured or explicitly requested commands:
+5. Verify the run with the required checks by actually executing configured or explicitly requested commands. You may verify before finish:
 
    ```bash
    node .plan2agent/scripts/p2a_runs.mjs verify --run-id <id> --artifacts <dir> --test --lint --typecheck
@@ -63,31 +65,38 @@ Use these inputs:
 
    `p2a_runs verify` must execute the configured or explicitly requested verification commands and capture their exit codes as `source: config` or `source: command`. Do not self-report verification with a manual record; do not use `source: manual` or `exitCode: null` as a substitute for executed verification.
 
-   If the user provides explicit verification commands, pass them through as explicit commands such as `--test-command`, `--lint-command`, or `--typecheck-command`. Config-only verification flags such as `--test`, `--lint`, and `--typecheck` quietly skip checks when the corresponding `project.config.json` command is empty, so use explicit commands whenever config is empty and real verification is required.
+   If the user provides explicit verification commands, pass them through as explicit commands such as `--test-command`, `--lint-command`, or `--typecheck-command`. Config-only verification flags such as `--test`, `--lint`, and `--typecheck` auto-detect project commands when config is empty, then skip only if no command can be detected. Use explicit commands whenever config is empty and real verification is required.
 
-6. Finish the run, collecting git state:
+6. Run the independent monitor gate before finish when the run has an orchestration sidecar. Invoke `p2a-performance-monitor` as a separate subagent when the CLI supports spawning subagents, or perform a separated read-only review pass when spawning is unavailable. Pass the target task id, acceptance criteria, and the latest run log for that task, including `verification`, `changedFiles`, `status`, and `workspaceRef`.
 
-   ```bash
-   node .plan2agent/scripts/p2a_runs.mjs finish --run-id <id> --artifacts <dir> --status finished|failed|blocked --collect-git
+   Write the monitor result to the run's `runs/<runId>.monitor-verdict.json` path using this shape:
+
+   ```json
+   {
+     "verdict": "confirm_done",
+     "unmet_acceptance": [],
+     "verification_concerns": [],
+     "scope_concerns": [],
+     "needs_user_decision": [],
+     "note": ""
+   }
    ```
 
-   When finishing with `--status failed` or `--status blocked`, include `--failure-class <class>` so the run records a structured `failure` object. The supported classes are `verification_failed`, `test_flake`, `scope_violation`, `missing_dependency`, `environment_failure`, `implementation_incomplete`, and `other`. The CLI fills `retryable`, `needsUserDecision`, and `source` from the class defaults; use `--retryable`, `--needs-user-decision`, or `--failure-source` only when the default is wrong. Use `--failure-class other` only as an escape hatch and always include at least one `--note` explaining why no more specific class applies.
+   Use `verdict: "block"` and fill the relevant concern array when the task should not be accepted. When multiple concern arrays are populated, failure-class mapping priority is `scope_concerns` → `verification_concerns` → `unmet_acceptance` → `needs_user_decision`. `p2a_execute finish` and `p2a_runs finish` both enforce this verdict when an orchestration sidecar requires a monitor gate.
+
+7. Finish the run through `p2a_execute`, collecting git state and letting the CLI mark the task done or blocked:
+
+   ```bash
+   node .plan2agent/scripts/p2a_execute.mjs finish --run-id <id> --artifacts <dir> --status finished|failed|blocked --collect-git
+   ```
+
+   You can also pass `--test`, `--lint`, `--typecheck`, or explicit `--*-command` flags to this finish command instead of running step 5 separately.
+
+   When finishing with `--status failed` or `--status blocked`, include `--failure-class <class>` and structured debug detail: at least one `--repro-step` or `--repro-command`, at least one `--localization` or `--localized-file`, and at least one `--guard` or `--guard-note`. The supported classes are `verification_failed`, `test_flake`, `scope_violation`, `missing_dependency`, `environment_failure`, `implementation_incomplete`, and `other`. The CLI fills `retryable`, `needsUserDecision`, and `source` from the class defaults; use `--retryable`, `--needs-user-decision`, or `--failure-source` only when the default is wrong. Use `--failure-class other` only as an escape hatch and always include at least one `--note` explaining why no more specific class applies.
 
    Only classify a failure as `test_flake` when there is concrete evidence such as a failing verification command passing on rerun without code or environment changes. Without that evidence, use `verification_failed` for verification failures.
 
-7. Run the independent monitor gate before marking the task done. Invoke `p2a-performance-monitor` as a separate subagent when the CLI supports spawning subagents, or perform a separated read-only review pass when spawning is unavailable. Pass the target task id, acceptance criteria, and the latest run log for that task, including `verification`, `changedFiles`, `status`, and `workspaceRef`.
-
-   If the monitor returns `verdict: "block"`, do not mark the task done. First finish the run as blocked with `--failure-source monitor` and a failure class derived from the monitor verdict details: `unmet_acceptance` maps to `implementation_incomplete`, `verification_concerns` maps to `verification_failed`, and `scope_concerns` maps to `scope_violation`. Then record the blocker and follow-up reason:
-
-   ```bash
-   node .plan2agent/scripts/p2a_tasks.mjs block --artifacts <dir> <task-id>
-   ```
-
-   If the monitor returns `verdict: "confirm_done"`, mark the task done:
-
-   ```bash
-   node .plan2agent/scripts/p2a_tasks.mjs done --artifacts <dir> <task-id>
-   ```
+   If the monitor verdict blocks the run, do not call `p2a_tasks done`. Finish through `p2a_execute finish` with monitor-sourced failure metadata and structured detail. The CLI maps `unmet_acceptance` to `implementation_incomplete`, `verification_concerns` to `verification_failed`, `scope_concerns` to `scope_violation`, and `needs_user_decision` to `missing_dependency`.
 
 8. Complete the retrospective gate described below.
 

@@ -8,6 +8,7 @@ export type ExecutionFailureKind =
   | "missing_file"
   | "unsupported_agent"
   | "verification_failed"
+  | "failure_evidence_required"
   | "failure_class_required"
   | "run_not_found"
   | "task_transition_skipped"
@@ -126,6 +127,15 @@ export function summarizeFinishRunFailure(
 
   const output = combinedOutput(result);
   const normalizedOutput = output.toLowerCase();
+
+  if (normalizedOutput.includes("failed/blocked run requires structured debug detail")) {
+    return {
+      kind: "failure_evidence_required",
+      title: "Failure evidence required",
+      detail: "The run stayed open because failed or blocked finishes require structured debug detail.",
+      nextAction: "Fill reproduction, localization, and guard evidence, then rerun finish.",
+    };
+  }
 
   if (
     normalizedOutput.includes("verification_failed") ||

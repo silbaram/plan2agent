@@ -7,21 +7,27 @@ import path from 'node:path';
 import process from 'node:process';
 import { pathToFileURL } from 'node:url';
 import { loadJson, validateOrchestrationPlanData, validateProposalDraftApprovalData, validateRunData, validateTaskGraphData, ValidationError } from './validate_artifacts.mjs';
-import { orchestrationRuntimePath, readOrchestrationRuntime, recordOrchestrationRuntimeEvent, writeOrchestrationRuntimeForRun } from './p2a_orchestrate.mjs';
+import {
+  normalizeMonitorVerdictData,
+  orchestrationRuntimePath,
+  readOrchestrationRuntime,
+  recordOrchestrationRuntimeEvent,
+  writeOrchestrationRuntimeForRun,
+} from './p2a_orchestrate.mjs';
 import { resolveIterationState } from './p2a_iteration_state.mjs';
-import { resolveRunsDir } from './p2a_run_paths.mjs';
+import { canonicalTaskGraphRef, resolveRunsDir } from './p2a_run_paths.mjs';
 import {
   assertNoUninitializedScaffoldArtifactRoots,
   assertNotUninitializedScaffoldGraph,
   configuredTaskGraphPath,
-  nodeScriptCommand,
   resolveP2aPaths,
   singleArtifactProjectRoot,
 } from './p2a_paths.mjs';
+import { commandLine as sharedCommandLine, printRunCommandFooter } from './p2a_run_commands.mjs';
 
 const P2A_PATHS = resolveP2aPaths(import.meta.url);
 const ROOT = P2A_PATHS.projectRoot;
-const COMMANDS = new Set(['plan', 'start', 'status', 'finish']);
+const COMMANDS = new Set(['plan', 'start', 'resume', 'status', 'finish']);
 const ISOLATION_MODES = new Set(['none', 'branch', 'worktree']);
 const FINISH_STATUSES = new Set(['finished', 'failed', 'blocked']);
 const FAILURE_CLASSES = new Set(['verification_failed', 'test_flake', 'scope_violation', 'missing_dependency', 'environment_failure', 'implementation_incomplete', 'other']);
@@ -35,12 +41,14 @@ function usage() {
     'Usage:',
     '  node .plan2agent/scripts/p2a_execute.mjs plan (--artifacts <dir>|--graph <path>) [--task <task-id>] [options]',
     '  node .plan2agent/scripts/p2a_execute.mjs start (--artifacts <dir>|--graph <path>) [--task <task-id>] [options]',
+    '  node .plan2agent/scripts/p2a_execute.mjs resume (--artifacts <dir>|--graph <path>) --run-id <run-id>',
     '  node .plan2agent/scripts/p2a_execute.mjs status (--artifacts <dir>|--graph <path>) [--task <task-id>] [--run-id <run-id>]',
     '  node .plan2agent/scripts/p2a_execute.mjs finish (--artifacts <dir>|--graph <path>) --run-id <run-id> [options]',
     '',
     'Commands:',
     '  plan                 Resolve one ready task and print the supervised execution plan. No files are changed.',
     '  start                Create a run, mark the task in_progress, and print the manual launcher prompt.',
+    '  resume               Reprint the selected run context and manual launcher prompt without changing files.',
     '  status               Show task status and the latest or requested run log summary.',
     '  finish               Optionally verify, finish the run, then mark the task done or blocked.',
     '',
@@ -77,6 +85,15 @@ function usage() {
     '  --collect-git',
     '  --changed-file <path>   Repeatable.',
     '  --note <text>           Repeatable.',
+    '  --repro-step <text>     Required with localization and guard when finishing failed/blocked. Repeatable.',
+    '  --repro-command <cmd>   Append a command that reproduces the observed issue. Repeatable.',
+    '  --repro-note <text>     Append reproduction context. Repeatable.',
+    '  --localization <text>   Required with reproduction and guard when finishing failed/blocked. Repeatable.',
+    '  --localized-file <path> Append a file implicated by localization. Repeatable.',
+    '  --fix-summary <text>    Append a concise summary of the fix. Repeatable.',
+    '  --fix-file <path>       Append a file intentionally changed by the fix. Repeatable.',
+    '  --guard <text>          Required with reproduction and localization when finishing failed/blocked. Repeatable.',
+    '  --guard-note <text>     Append guard context. Repeatable.',
     '  --no-task-transition    Finish the run without marking the task done/blocked.',
     '',
     '  --help, -h          Show this help.',
@@ -108,6 +125,15 @@ function parseArgs(argv) {
     orchestrationPlan: null,
     changedFiles: [],
     notes: [],
+    reproductionSteps: [],
+    reproductionCommands: [],
+    reproductionNotes: [],
+    localizationFindings: [],
+    localizedFiles: [],
+    fixSummaries: [],
+    fixFiles: [],
+    guardChecks: [],
+    guardNotes: [],
     verifyOptions: [],
     status: null,
     failureClass: null,
@@ -142,14 +168,23 @@ function parseArgs(argv) {
     else if (arg === '--create-isolation') args.createIsolation = true;
     else if (arg === '--orchestration-plan') args.orchestrationPlan = requiredValue(argv, ++index, '--orchestration-plan');
     else if (arg === '--changed-file') args.changedFiles.push(requiredValue(argv, ++index, '--changed-file'));
-    else if (arg === '--note') args.notes.push(requiredValue(argv, ++index, '--note'));
+    else if (arg === '--note') args.notes.push(requiredValue(argv, ++index, '--note', { allowLeadingDash: true }));
+    else if (arg === '--repro-step') args.reproductionSteps.push(requiredValue(argv, ++index, '--repro-step', { allowLeadingDash: true }));
+    else if (arg === '--repro-command') args.reproductionCommands.push(requiredValue(argv, ++index, '--repro-command', { allowLeadingDash: true }));
+    else if (arg === '--repro-note') args.reproductionNotes.push(requiredValue(argv, ++index, '--repro-note', { allowLeadingDash: true }));
+    else if (arg === '--localization') args.localizationFindings.push(requiredValue(argv, ++index, '--localization', { allowLeadingDash: true }));
+    else if (arg === '--localized-file') args.localizedFiles.push(requiredValue(argv, ++index, '--localized-file'));
+    else if (arg === '--fix-summary') args.fixSummaries.push(requiredValue(argv, ++index, '--fix-summary', { allowLeadingDash: true }));
+    else if (arg === '--fix-file') args.fixFiles.push(requiredValue(argv, ++index, '--fix-file'));
+    else if (arg === '--guard') args.guardChecks.push(requiredValue(argv, ++index, '--guard', { allowLeadingDash: true }));
+    else if (arg === '--guard-note') args.guardNotes.push(requiredValue(argv, ++index, '--guard-note', { allowLeadingDash: true }));
     else if (arg === '--test') args.verifyOptions.push('--test');
     else if (arg === '--lint') args.verifyOptions.push('--lint');
     else if (arg === '--typecheck') args.verifyOptions.push('--typecheck');
-    else if (arg === '--test-command') args.verifyOptions.push('--test-command', requiredValue(argv, ++index, '--test-command'));
-    else if (arg === '--lint-command') args.verifyOptions.push('--lint-command', requiredValue(argv, ++index, '--lint-command'));
-    else if (arg === '--typecheck-command') args.verifyOptions.push('--typecheck-command', requiredValue(argv, ++index, '--typecheck-command'));
-    else if (arg === '--verify-command') args.verifyOptions.push('--verify-command', requiredValue(argv, ++index, '--verify-command'));
+    else if (arg === '--test-command') args.verifyOptions.push('--test-command', requiredValue(argv, ++index, '--test-command', { allowLeadingDash: true }));
+    else if (arg === '--lint-command') args.verifyOptions.push('--lint-command', requiredValue(argv, ++index, '--lint-command', { allowLeadingDash: true }));
+    else if (arg === '--typecheck-command') args.verifyOptions.push('--typecheck-command', requiredValue(argv, ++index, '--typecheck-command', { allowLeadingDash: true }));
+    else if (arg === '--verify-command') args.verifyOptions.push('--verify-command', requiredValue(argv, ++index, '--verify-command', { allowLeadingDash: true }));
     else if (arg === '--save-config') args.saveConfig = true;
     else if (arg === '--status') {
       args.status = requiredValue(argv, ++index, '--status');
@@ -195,26 +230,40 @@ function parseArgs(argv) {
   if (args.spec && args.artifacts) throw new Error('--spec is only supported with --graph; --artifacts uses the active iteration spec');
   if (args.maintenance && !args.artifacts) throw new Error('--maintenance is only supported with --artifacts');
   if (args.graph) assertNotUninitializedScaffoldGraph(args.graph);
-  if (args.command === 'finish' && !args.runId) throw new Error('--run-id is required for finish');
+  if (['finish', 'resume'].includes(args.command) && !args.runId) throw new Error(`--run-id is required for ${args.command}`);
   if (args.command === 'status' && !args.taskId && !args.runId && !args.approval) throw new Error('--task, --approval, or --run-id is required for status');
   if (['plan', 'start'].includes(args.command) && !IMPLEMENTER_AGENT_TOOLS.has(args.agentTool)) {
     throw new Error('--agent-tool for implementation must be one of codex, claude, or manual; Gemini is read-only and may only be used as a reviewer/monitor in p2a_orchestrate plans');
   }
-  if ((args.command === 'plan' || args.command === 'status') && args.verifyOptions.length) {
+  if (['plan', 'resume', 'status'].includes(args.command) && args.verifyOptions.length) {
     throw new Error('verification options are only supported with finish');
   }
   if (args.orchestrationPlan && args.command !== 'start') {
     throw new Error('--orchestration-plan is only supported with start');
   }
-  if (args.command !== 'finish' && (args.status || args.failureClass || args.retryable || args.needsUserDecision !== null || args.failureSource || args.collectGit || args.saveConfig)) {
+  if (args.command !== 'finish' && (args.status || args.failureClass || args.retryable || args.needsUserDecision !== null || args.failureSource || args.collectGit || args.saveConfig || hasStructuredDetailOptions(args))) {
     throw new Error('finish options are only supported with finish');
   }
   return args;
 }
 
-function requiredValue(argv, index, optionName) {
+function hasStructuredDetailOptions(args) {
+  return [
+    args.reproductionSteps,
+    args.reproductionCommands,
+    args.reproductionNotes,
+    args.localizationFindings,
+    args.localizedFiles,
+    args.fixSummaries,
+    args.fixFiles,
+    args.guardChecks,
+    args.guardNotes,
+  ].some((values) => values.length > 0);
+}
+
+function requiredValue(argv, index, optionName, options = {}) {
   const value = argv[index];
-  if (!value) throw new Error(`${optionName} requires a value`);
+  if (!value || (!options.allowLeadingDash && value.startsWith('--'))) throw new Error(`missing value for ${optionName}`);
   return value;
 }
 
@@ -236,6 +285,10 @@ function displayPath(filePath, root = process.cwd()) {
   const relative = path.relative(root, filePath);
   if (relative && !relative.startsWith('..') && !path.isAbsolute(relative)) return normalizePath(relative);
   return normalizePath(filePath);
+}
+
+function warnGraphMode() {
+  console.error('warning: --graph mode does not check Gate B/D prerequisites; use --artifacts for approved iterative execution.');
 }
 
 function artifactRelativePath(artifactRoot, filePath) {
@@ -297,6 +350,7 @@ function resolveSource(args) {
   }
 
   const graphPath = path.resolve(args.graph);
+  warnGraphMode();
   assertFile(graphPath, 'task graph');
   const graph = loadJson(graphPath);
   validateTaskGraphData(graph);
@@ -310,7 +364,7 @@ function resolveSource(args) {
     specPath: args.spec ? path.resolve(args.spec) : null,
     graph,
     runsDir: resolveRunsDir({ graph: args.graph }),
-    taskGraphRef: displayPath(graphPath),
+    taskGraphRef: canonicalTaskGraphRef(graphPath),
   };
 }
 
@@ -461,12 +515,7 @@ function printChildResult(result) {
 }
 
 function commandLine(scriptName, args) {
-  return nodeScriptCommand(P2A_PATHS, scriptName, args).map(shellQuote).join(' ');
-}
-
-function shellQuote(value) {
-  if (/^[A-Za-z0-9_./:@%+=,-]+$/.test(value)) return value;
-  return `'${String(value).replaceAll("'", "'\\''")}'`;
+  return sharedCommandLine(P2A_PATHS, scriptName, args);
 }
 
 function promptArgs(source, taskId) {
@@ -530,6 +579,15 @@ function finishRunArgs(args, finalStatus, approval = null) {
   if (args.workspace) runArgs.push('--workspace', args.workspace);
   for (const changedFile of args.changedFiles) runArgs.push('--changed-file', changedFile);
   for (const note of uniqueStrings([...approvalRunNotes(approval), ...args.notes])) runArgs.push('--note', note);
+  for (const step of args.reproductionSteps) runArgs.push('--repro-step', step);
+  for (const command of args.reproductionCommands) runArgs.push('--repro-command', command);
+  for (const note of args.reproductionNotes) runArgs.push('--repro-note', note);
+  for (const finding of args.localizationFindings) runArgs.push('--localization', finding);
+  for (const file of args.localizedFiles) runArgs.push('--localized-file', file);
+  for (const summary of args.fixSummaries) runArgs.push('--fix-summary', summary);
+  for (const file of args.fixFiles) runArgs.push('--fix-file', file);
+  for (const check of args.guardChecks) runArgs.push('--guard', check);
+  for (const note of args.guardNotes) runArgs.push('--guard-note', note);
   return runArgs;
 }
 
@@ -600,26 +658,28 @@ function readMonitorVerdict(source, sidecar) {
   const verdictPath = path.resolve(source.runsDir, sidecar.monitorGate.verdictPath);
   assertFile(verdictPath, 'monitor verdict');
   const data = loadJson(verdictPath);
-  const verdict = typeof data === 'string' ? data : data?.verdict;
-  if (typeof verdict !== 'string' || !verdict.trim()) {
-    throw new Error(`monitor verdict must be a JSON string or object with a verdict field: ${displayPath(verdictPath)}`);
+  try {
+    return normalizeMonitorVerdictData(data);
+  } catch (error) {
+    throw new Error(`${error.message}: ${displayPath(verdictPath)}`);
   }
-  return verdict.trim();
 }
 
 function applyMonitorGate(args, source) {
   const sidecar = readOrchestrationSidecar(source.runsDir, args.runId);
   if (!sidecar?.monitorGate?.required) return null;
   const verdict = readMonitorVerdict(source, sidecar);
-  if (sidecar.monitorGate.acceptedVerdicts.includes(verdict)) {
-    return { sidecar, verdict, accepted: true };
+  if (sidecar.monitorGate.acceptedVerdicts.includes(verdict.verdict) && !verdict.hasConcerns) {
+    return { sidecar, verdict: verdict.verdict, accepted: true };
   }
-  const mappedFailureClass = sidecar.monitorGate.failureClassMap[verdict] ?? 'other';
+  const mappedFailureClass = sidecar.monitorGate.failureClassMap[verdict.failureSignal]
+    ?? sidecar.monitorGate.failureClassMap[verdict.verdict]
+    ?? 'other';
   if (!args.status || args.status === 'finished') args.status = 'blocked';
   if (!args.failureClass) args.failureClass = mappedFailureClass;
   if (!args.failureSource) args.failureSource = 'monitor';
-  if (args.needsUserDecision === null && verdict === 'needs_user_decision') args.needsUserDecision = 'true';
-  return { sidecar, verdict, accepted: false, failureClass: args.failureClass };
+  if (args.needsUserDecision === null && verdict.needsUserDecision) args.needsUserDecision = 'true';
+  return { sidecar, verdict: verdict.failureSignal, accepted: false, failureClass: args.failureClass };
 }
 
 function updateOrchestrationRuntimeAfterFinish(source, run) {
@@ -762,9 +822,37 @@ function transitionTaskAfterFinishedRun(args, source, run, successStatus = 0) {
   return successStatus;
 }
 
-function expectedFailureFinishStatus(result, requestedStatus) {
+function printClosedRunFooter(source, run) {
+  printRunCommandFooter(P2A_PATHS, {
+    sourceArgs: source.sourceArgs,
+    runId: run.runId,
+    includeResume: false,
+    includeFinish: false,
+    heading: 'Run commands:',
+  });
+}
+
+function recoverAfterClosedRun(args, source, run) {
+  console.log(`Run already ${run.status}; recovering orchestration runtime and task transition without re-finishing run.`);
+  try {
+    const runtimeUpdate = updateOrchestrationRuntimeAfterFinish(source, run);
+    if (runtimeUpdate?.skipped) {
+      console.log(`Orchestration runtime already closed: ${displayPath(runtimeUpdate.filePath)}`);
+    } else if (runtimeUpdate) {
+      console.log(`Updated orchestration runtime: ${displayPath(runtimeUpdate.filePath)} phase=${runtimeUpdate.runtime.status.phase}`);
+    }
+  } catch (error) {
+    console.error(`warning: orchestration runtime was not updated: ${error.message}`);
+  }
+  const status = transitionTaskAfterFinishedRun(args, source, run, 0);
+  printClosedRunFooter(source, run);
+  return status;
+}
+
+function finishResultAllowsTaskTransition(result, requestedStatus, run) {
+  if (run.status === 'started') return false;
   if (result.status === 0) return true;
-  if (requestedStatus === 'failed' && result.status === 1) return true;
+  if (requestedStatus === 'failed' && result.status === 1 && run.status === 'failed') return true;
   return false;
 }
 
@@ -813,9 +901,42 @@ function runStart(args) {
   }
 
   printLauncherPrompt(source, task, runId, approvalLink);
-  console.log('');
-  console.log('Finish command:');
-  console.log(commandLine('p2a_execute.mjs', ['finish', ...sourceRunArgs(args), ...(args.approval ? ['--approval', args.approval] : []), '--run-id', runId, '--test', '--lint', '--typecheck']));
+  printRunCommandFooter(P2A_PATHS, {
+    sourceArgs: source.sourceArgs,
+    runId,
+    heading: 'Run commands:',
+  });
+  return 0;
+}
+
+function runResume(args) {
+  const source = resolveSource(args);
+  const approvalLink = resolveApprovalSelection(args, source);
+  const run = readRun(source.runsDir, args.runId);
+  if (approvalLink.taskId && run.taskId !== approvalLink.taskId) {
+    console.error(`resume refused: run ${run.runId} belongs to ${run.taskId}, not approval task ${approvalLink.taskId}`);
+    return 1;
+  }
+  const task = requireTask(source, run.taskId);
+  console.log('Plan2Agent execution resume');
+  console.log(`- project: ${source.projectId}`);
+  console.log(`- task: ${task.id} - ${task.title}`);
+  console.log(`- taskStatus: ${task.status}`);
+  console.log(`- runId: ${run.runId}`);
+  console.log(`- runStatus: ${run.status}`);
+  console.log(`- agentTool: ${run.agentTool}`);
+  console.log(`- workspaceRef: ${run.workspaceRef}`);
+  if (run.status !== 'started') {
+    console.log('- resumeNote: run is already closed; use status/review commands for follow-up evidence.');
+  }
+  printLauncherPrompt(source, task, run.runId, approvalLink);
+  printRunCommandFooter(P2A_PATHS, {
+    sourceArgs: source.sourceArgs,
+    runId: run.runId,
+    includeResume: false,
+    includeFinish: run.status === 'started',
+    heading: 'Run commands:',
+  });
   return 0;
 }
 
@@ -863,24 +984,37 @@ function runStatus(args) {
     console.log(`- orchestrationRuntime: ${runtime.status.phase} events=${runtime.communicationLog.length} needsUserDecision=${runtime.status.needsUserDecision}`);
   }
   if (run.failure) console.log(`- failure: ${run.failure.class} retryable=${run.failure.retryable} needsUserDecision=${run.failure.needsUserDecision} source=${run.failure.source}`);
+  printRunCommandFooter(P2A_PATHS, {
+    sourceArgs: source.sourceArgs,
+    runId: run.runId,
+    includeResume: run.status === 'started',
+    includeFinish: run.status === 'started',
+    heading: 'Run commands:',
+  });
   return 0;
 }
 
 function runFinish(args) {
   const source = resolveSource(args);
   const approvalLink = resolveApprovalSelection(args, source);
+  const existingRun = readRun(source.runsDir, args.runId);
   if (approvalLink.taskId) {
-    const existingRun = readRun(source.runsDir, args.runId);
     if (existingRun.taskId !== approvalLink.taskId) {
       console.error(`finish refused: run ${existingRun.runId} belongs to ${existingRun.taskId}, not approval task ${approvalLink.taskId}`);
       return 1;
     }
   }
+  if (existingRun.status !== 'started') return recoverAfterClosedRun(args, source, existingRun);
   const closedRuntime = closedOrchestrationRuntimeForRun(source, args.runId);
   if (closedRuntime) {
     console.log(`Orchestration runtime already closed: ${displayPath(closedRuntime.filePath)}`);
-    const run = readRun(source.runsDir, args.runId);
-    return transitionTaskAfterFinishedRun(args, source, run, 0);
+    const run = existingRun;
+    if (run.status !== 'started') {
+      const status = transitionTaskAfterFinishedRun(args, source, run, 0);
+      printClosedRunFooter(source, run);
+      return status;
+    }
+    console.log('- finishNote: runtime is closed but run is still started; continuing run closeout without appending runtime events.');
   }
   let verificationFailed = false;
   if (verifyRequested(args)) {
@@ -909,9 +1043,13 @@ function runFinish(args) {
   console.log('Finishing run...');
   const finishResult = runScript('p2a_runs.mjs', finishRunArgs(args, requestedStatus, approvalLink.approval));
   printChildResult(finishResult);
-  if (!expectedFailureFinishStatus(finishResult, requestedStatus)) return finishResult.status ?? 1;
-
   const run = readRun(source.runsDir, args.runId);
+  if (!finishResultAllowsTaskTransition(finishResult, requestedStatus, run)) {
+    if (run.status === 'started') {
+      console.error(`run finish did not close ${run.runId}; task transition skipped to keep run/task state consistent.`);
+    }
+    return finishResult.status ?? 1;
+  }
   try {
     const runtimeUpdate = updateOrchestrationRuntimeAfterFinish(source, run);
     if (runtimeUpdate?.skipped) {
@@ -922,7 +1060,9 @@ function runFinish(args) {
   } catch (error) {
     console.error(`warning: orchestration runtime was not updated: ${error.message}`);
   }
-  return transitionTaskAfterFinishedRun(args, source, run, finishResult.status ?? 0);
+  const status = transitionTaskAfterFinishedRun(args, source, run, finishResult.status ?? 0);
+  printClosedRunFooter(source, run);
+  return status;
 }
 
 export function main(argv = process.argv.slice(2)) {
@@ -934,6 +1074,7 @@ export function main(argv = process.argv.slice(2)) {
     }
     if (args.command === 'plan') return runPlan(args);
     if (args.command === 'start') return runStart(args);
+    if (args.command === 'resume') return runResume(args);
     if (args.command === 'status') return runStatus(args);
     if (args.command === 'finish') return runFinish(args);
     throw new Error(`unknown command: ${args.command}`);

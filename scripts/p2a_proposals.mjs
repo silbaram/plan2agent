@@ -29,6 +29,7 @@ import {
   resolveP2aPaths,
   singleArtifactProjectRoot,
 } from './p2a_paths.mjs';
+import { normalizeMonitorVerdictData } from './p2a_orchestrate.mjs';
 
 const P2A_PATHS = resolveP2aPaths(import.meta.url);
 const COMMANDS = new Set(['mine', 'list', 'show', 'validate', 'digest', 'review', 'curate', 'draft-patch', 'approve-draft']);
@@ -304,8 +305,7 @@ function readMonitorVerdict(runsDir, sidecar) {
   const verdictPath = path.resolve(runsDir, sidecar.monitorGate.verdictPath);
   if (!existsSync(verdictPath)) return null;
   const data = loadJson(verdictPath);
-  const verdict = typeof data === 'string' ? data : data?.verdict;
-  return typeof verdict === 'string' && verdict.trim() ? verdict.trim() : null;
+  return normalizeMonitorVerdictData(data);
 }
 
 function readMonitorVerdictForMining(runsDir, runId, sidecar) {
@@ -330,6 +330,52 @@ function failedVerificationEvidence(run) {
   return run.verification
     .filter((item) => item.status === 'failed')
     .map((item) => `failed verification: ${item.type} (${item.command})`);
+}
+
+function monitorVerdictEvidence(verdict) {
+  if (!verdict) return [];
+  const evidence = [`monitor verdict: ${verdict.verdict}`];
+  if (verdict.failureSignal && verdict.failureSignal !== verdict.verdict) evidence.push(`monitor failure signal: ${verdict.failureSignal}`);
+  for (const [field, values] of Object.entries(verdict.concerns ?? {})) {
+    if (Array.isArray(values) && values.length) evidence.push(`monitor ${field}: ${values.join('; ')}`);
+  }
+  if (verdict.note) evidence.push(`monitor note: ${verdict.note}`);
+  return evidence;
+}
+
+function detailCount(value) {
+  return Array.isArray(value) ? value.filter(Boolean).length : 0;
+}
+
+function structuredDetailSummary(run) {
+  const reproduction = detailCount(run.reproduction?.steps)
+    + detailCount(run.reproduction?.commands)
+    + detailCount(run.reproduction?.notes);
+  const localization = detailCount(run.localization?.findings)
+    + detailCount(run.localization?.files);
+  const fixSummary = detailCount(run.fixSummary?.summaries)
+    + detailCount(run.fixSummary?.files);
+  const guard = detailCount(run.guard?.checks)
+    + detailCount(run.guard?.notes);
+  return {
+    reproduction,
+    localization,
+    fixSummary,
+    guard,
+    missing: [
+      reproduction > 0 ? null : 'reproduction',
+      localization > 0 ? null : 'localization',
+      guard > 0 ? null : 'guard',
+    ].filter(Boolean),
+  };
+}
+
+function structuredDetailEvidence(run) {
+  const summary = structuredDetailSummary(run);
+  return [
+    `structured detail: reproduction=${summary.reproduction} localization=${summary.localization} fixSummary=${summary.fixSummary} guard=${summary.guard}`,
+    summary.missing.length ? `structured detail missing: ${summary.missing.join(', ')}` : null,
+  ].filter(Boolean);
 }
 
 function targetFilesForFailure(failureClass) {
@@ -367,9 +413,10 @@ function buildFailureProposal(run, sidecar, verdict) {
     `task: ${run.taskId} - ${run.taskTitle}`,
     `failure: ${run.failure.class} retryable=${run.failure.retryable} needsUserDecision=${run.failure.needsUserDecision} source=${run.failure.source}`,
     ...failedVerificationEvidence(run),
+    ...structuredDetailEvidence(run),
   ];
   if (sidecar) evidence.push(`orchestration: ${sidecar.mode} ${sidecar.planId}`);
-  if (verdict) evidence.push(`monitor verdict: ${verdict}`);
+  evidence.push(...monitorVerdictEvidence(verdict));
   const proposal = {
     schema_version: 'p2a.skill_proposal.v1',
     proposalId: `proposal-${safeIdPart(run.runId)}-${safeIdPart(run.failure.class)}`,
@@ -408,18 +455,18 @@ function buildVerificationGapProposal(run) {
 }
 
 function buildMonitorProposal(run, sidecar, verdict) {
-  if (!sidecar?.monitorGate?.required || !verdict || sidecar.monitorGate.acceptedVerdicts.includes(verdict)) return null;
+  if (!sidecar?.monitorGate?.required || !verdict || sidecar.monitorGate.acceptedVerdicts.includes(verdict.verdict)) return null;
   if (run.failure?.source === 'monitor') return null;
   const proposal = {
     schema_version: 'p2a.skill_proposal.v1',
-    proposalId: `proposal-${safeIdPart(run.runId)}-monitor-${safeIdPart(verdict)}`,
+    proposalId: `proposal-${safeIdPart(run.runId)}-monitor-${safeIdPart(verdict.failureSignal)}`,
     sourceRunId: run.runId,
-    problem: `Monitor gate returned ${verdict} for run ${run.runId} but the run was not closed by monitor failure metadata.`,
+    problem: `Monitor gate returned ${verdict.failureSignal} for run ${run.runId} but the run was not closed by monitor failure metadata.`,
     evidence: [
       `runId: ${run.runId}`,
       `task: ${run.taskId} - ${run.taskTitle}`,
       `orchestration: ${sidecar.mode} ${sidecar.planId}`,
-      `monitor verdict: ${verdict}`,
+      ...monitorVerdictEvidence(verdict),
     ],
     recommendedChange: 'Review monitor gate closeout handling so rejected verdicts consistently map to blocked run metadata.',
     targetFiles: ['scripts/p2a_execute.mjs', '.agents/agents/p2a-performance-monitor.md'],

@@ -18,6 +18,7 @@ export const IPC_CHANNELS = {
   terminalExit: "terminal:exit",
   executionStartRun: "execution:startRun",
   executionFinishRun: "execution:finishRun",
+  operationalRunAction: "operational:runAction",
   orchestrationMarkRole: "orchestration:markRole",
 } as const;
 
@@ -160,6 +161,27 @@ export type WorkbenchRunFailure = {
   source: FailureSource;
 };
 
+export type WorkbenchRunReproduction = {
+  steps: string[];
+  commands: string[];
+  notes: string[];
+};
+
+export type WorkbenchRunLocalization = {
+  findings: string[];
+  files: string[];
+};
+
+export type WorkbenchRunFixSummary = {
+  summaries: string[];
+  files: string[];
+};
+
+export type WorkbenchRunGuard = {
+  checks: string[];
+  notes: string[];
+};
+
 export type OrchestrationMode = "solo" | "solo_monitor" | "team";
 
 export type OrchestrationRuntimePhase =
@@ -280,8 +302,70 @@ export type WorkbenchRun = {
   changedFiles: string[];
   verification: WorkbenchRunVerification[];
   notes: string[];
+  reproduction: WorkbenchRunReproduction | null;
+  localization: WorkbenchRunLocalization | null;
+  fixSummary: WorkbenchRunFixSummary | null;
+  guard: WorkbenchRunGuard | null;
   failure: WorkbenchRunFailure | null;
   orchestration: WorkbenchRunOrchestration | null;
+};
+
+export type UpdateReportSummary = {
+  command: string;
+  kind: "preview" | "apply";
+  status: string;
+  appliedAt: string | null;
+  createdAt: string | null;
+  relativePath: string;
+  appliedFiles: number;
+  changedItems: number;
+  blockers: number;
+  error: string | null;
+};
+
+export type EvalArtifactSummary = {
+  evalDir: string | null;
+  indexPath: string | null;
+  digestPath: string | null;
+  analysisPath: string | null;
+  gradeCount: number;
+  nonPassGrades: number;
+  clusters: number;
+  maintenanceDraftTasks: number;
+  latestGeneratedAt: string | null;
+};
+
+export type MemoryDigestSummary = {
+  sourcePath: string | null;
+  source: "file" | "local";
+  totalRuns: number;
+  failedOrBlocked: number;
+  verificationFailures: number;
+  verificationGaps: number;
+  proposals: number;
+  uncoveredCandidateRuns: number;
+};
+
+export type MemoryHistorySummary = {
+  sourcePath: string | null;
+  source: "file";
+  totalEvents: number;
+  visibleEvents: number;
+  localEvents: number;
+  remoteEvents: number;
+  failedOrBlockedRuns: number;
+  latestEventAt: string | null;
+};
+
+export type MemorySearchSummary = {
+  sourcePath: string | null;
+  source: "file";
+  query: string;
+  totalResults: number;
+  documentResults: number;
+  runResults: number;
+  taskResults: number;
+  latestGeneratedAt: string | null;
 };
 
 export type ArtifactSummary = {
@@ -302,6 +386,10 @@ export type ArtifactSummary = {
   tasks: WorkbenchTask[];
   runCount: number;
   runs: WorkbenchRun[];
+  evalSummary: EvalArtifactSummary | null;
+  memoryDigest: MemoryDigestSummary | null;
+  memoryHistory: MemoryHistorySummary | null;
+  memorySearch: MemorySearchSummary | null;
   diagnostics: ProjectDiagnostic[];
 };
 
@@ -310,6 +398,32 @@ export type CommandGuidance = {
   label: string;
   command: string;
   description: string;
+};
+
+export type DoctorCommandSummary = {
+  command: string;
+  status: "pass" | "warn" | "fail" | "unavailable";
+  exitCode: number | null;
+  summary: {
+    passed: number;
+    warnings: number;
+    failures: number;
+  } | null;
+  projectState: string | null;
+  error: string | null;
+};
+
+export type InfoCommandSummary = {
+  command: string;
+  status: "available" | "unavailable";
+  exitCode: number | null;
+  mode: string | null;
+  surface: string | null;
+  artifactCount: number;
+  enabledEnhancements: string[];
+  nextActionCount: number;
+  firstNextAction: string | null;
+  error: string | null;
 };
 
 export type OnboardingStage =
@@ -384,7 +498,10 @@ export type ProjectSnapshot = {
   artifacts: ArtifactSummary[];
   onboarding: ProjectOnboarding;
   commands: CommandGuidance[];
+  info: InfoCommandSummary | null;
+  doctor: DoctorCommandSummary | null;
   proposals: ProposalSummary[];
+  updateReports: UpdateReportSummary[];
   diagnostics: ProjectDiagnostic[];
   generatedAt: string;
 };
@@ -491,6 +608,21 @@ export type ExecutionFinishRunRequest = {
   customVerificationCommands: ExecutionCustomVerificationCommand[];
   changedFiles: string[];
   notes: string[];
+  reproductionSteps?: string[];
+  reproductionCommands?: string[];
+  reproductionNotes?: string[];
+  localizationFindings?: string[];
+  localizedFiles?: string[];
+  fixSummaries?: string[];
+  fixFiles?: string[];
+  guardChecks?: string[];
+  guardNotes?: string[];
+};
+
+export type ExecutionFollowUpCommand = {
+  id: "resume" | "status" | "finish" | "review";
+  label: string;
+  command: string;
 };
 
 export type ExecutionCommandResult = {
@@ -500,9 +632,25 @@ export type ExecutionCommandResult = {
   exitCode: number;
   stdout: string;
   stderr: string;
+  followUpCommands: ExecutionFollowUpCommand[];
   startedAt: string;
   finishedAt: string;
   durationMs: number;
+};
+
+export type OperationalAction =
+  | "update_preview"
+  | "update_apply"
+  | "eval_generate"
+  | "eval_analyze"
+  | "eval_digest"
+  | "memory_digest"
+  | "memory_history";
+
+export type OperationalActionRequest = {
+  projectRoot: string;
+  artifactRoot?: string | null;
+  action: OperationalAction;
 };
 
 export type OrchestrationMarkRoleRequest = {
@@ -550,6 +698,9 @@ export type P2AApi = {
   execution: {
     startRun: (request: ExecutionStartRunRequest) => Promise<ExecutionCommandResult>;
     finishRun: (request: ExecutionFinishRunRequest) => Promise<ExecutionCommandResult>;
+  };
+  operational: {
+    runAction: (request: OperationalActionRequest) => Promise<ExecutionCommandResult>;
   };
   orchestration: {
     markRole: (request: OrchestrationMarkRoleRequest) => Promise<ExecutionCommandResult>;

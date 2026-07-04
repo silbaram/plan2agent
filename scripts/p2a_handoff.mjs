@@ -30,13 +30,16 @@ import {
 import { resolveIterationState } from './p2a_iteration_state.mjs';
 import { renderIterationIndexMarkdown } from './p2a_iteration.mjs';
 import { P2A_ARTIFACTS_DIR, P2A_SCHEMAS_DIR, P2A_SCRIPTS_DIR, resolveP2aPaths } from './p2a_paths.mjs';
-import { buildProjectConfig } from './p2a_project_config.mjs';
+import { buildProjectConfig, defaultCapabilityConfig, defaultPromptTemplates, mergeCapabilityConfig, mergeDevSkillConfig, resolveOrchestrationAgentTool } from './p2a_project_config.mjs';
+import { PROJECT_RUNTIME_SCHEMA_FILES, PROJECT_RUNTIME_SCRIPT_FILES } from './p2a_tool_manifest.mjs';
 
 const P2A_PATHS = resolveP2aPaths(import.meta.url);
 const ROOT = P2A_PATHS.toolRoot;
 const VALID_MODES = new Set(['copy', 'move']);
 const TOOL_TARGET_ORDER = ['codex', 'claude', 'gemini'];
 const VALID_TOOL_TARGETS = new Set(TOOL_TARGET_ORDER);
+const ENHANCEMENT_ORDER = ['dev-skills', 'memory', 'gui', 'orchestration', 'proposals'];
+const VALID_ENHANCEMENTS = new Set(ENHANCEMENT_ORDER);
 const ARTIFACT_TARGET_BASE = P2A_ARTIFACTS_DIR;
 const TEAM_BIGFIVE_HARNESS_DIR = path.join('.plan2agent', 'team-harnesses', 'team-bigfive');
 const TEAM_BIGFIVE_SOURCE_MANIFEST = path.join(TEAM_BIGFIVE_HARNESS_DIR, 'source-manifest.json');
@@ -47,13 +50,19 @@ function usage() {
   return [
     'Usage:',
     '  node scripts/p2a_handoff.mjs scaffold --target <project-dir> [--tools <list>] [--overwrite] [--dry-run]',
+    '  node scripts/p2a_handoff.mjs enhance <capability> --target <project-dir> [--tools <list>] [--overwrite] [--dry-run]',
+    '  node scripts/p2a_handoff.mjs update --target <project-dir> [--tools <list>] [--dry-run|--apply]',
+    '  node scripts/p2a_handoff.mjs upgrade --target <project-dir> (--dry-run|--apply) [--tools <list>]',
     '  node scripts/p2a_handoff.mjs --project-id <id> --artifacts <path> --target <path> [options]',
     '',
     'Options:',
     'Scaffold:',
     '  scaffold             Install the full co-located P2A planning/development harness into a project.',
+    '  enhance <capability> Install or refresh one capability: dev-skills, memory, gui, orchestration, proposals.',
+    '  update               Preview or apply scaffolded harness updates.',
+    '  upgrade              Preview or apply scaffolded harness file updates.',
     '  --target <path>      Project directory to create or update.',
-    '  --tools <list>       Copy portable P2A AI tool assets for codex,claude,gemini. Use comma list, all, or none. Default: all.',
+    '  --tools <list>       Copy portable P2A AI tool assets for scaffold/enhance dev-skills. Use comma list, all, or none. Default: all.',
     '',
     'Handoff options:',
     '  --mode copy|move     Copy artifacts by default; move removes source files after successful write.',
@@ -67,7 +76,8 @@ function usage() {
     '  --team-bigfive-targets <list>',
     '                       Adapter targets for codex,claude,gemini. Defaults to --tools or all.',
     '  --overwrite          Allow replacing existing target files.',
-    '  --dry-run            Validate and print the handoff plan without writing files.',
+    '  --dry-run            Validate and print the plan. update/upgrade also write a local preview report.',
+    '  --apply              Apply safe update/upgrade changes after reviewing the preview.',
     '  --help, -h           Show this help.',
   ].join('\n');
 }
@@ -105,27 +115,33 @@ function isGitUrl(value) {
 }
 
 function parseArgs(argv) {
-  const command = argv[0] === 'scaffold' ? argv.shift() : 'handoff';
+  const scaffoldCommand = new Set(['scaffold', 'update', 'upgrade', 'enhance']);
+  const command = scaffoldCommand.has(argv[0]) ? argv.shift() : 'handoff';
+  const enhancement = command === 'enhance' ? argv.shift() : null;
+  const enhancementHelp = enhancement === '--help' || enhancement === '-h';
   const args = {
     command,
+    enhancement,
     mode: 'copy',
     iterationId: DEFAULT_ITERATION_ID,
     iterationIdProvided: false,
     includeIntake: false,
-    tools: command === 'scaffold' ? [...TOOL_TARGET_ORDER] : [],
+    tools: command === 'scaffold' || command === 'enhance' ? [...TOOL_TARGET_ORDER] : command === 'update' || command === 'upgrade' ? null : [],
     includeTeamBigFive: false,
     teamBigFiveSource: null,
     teamBigFiveTargets: null,
     overwrite: false,
     dryRun: false,
-    help: false,
+    apply: false,
+    help: enhancementHelp,
+    toolsProvided: false,
   };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === '--help' || arg === '-h') {
       args.help = true;
-    } else if (command === 'scaffold' && (arg === '--project-id' || arg === '--artifacts' || arg === '--mode' || arg === '--iteration-id' || arg === '--include-intake' || arg === '--include-team-bigfive' || arg === '--team-bigfive-source' || arg === '--team-bigfive-targets')) {
-      throw new Error(`${arg} is not valid for scaffold`);
+    } else if ((command === 'scaffold' || command === 'update' || command === 'upgrade' || command === 'enhance') && (arg === '--project-id' || arg === '--artifacts' || arg === '--mode' || arg === '--iteration-id' || arg === '--include-intake' || arg === '--include-team-bigfive' || arg === '--team-bigfive-source' || arg === '--team-bigfive-targets')) {
+      throw new Error(`${arg} is not valid for ${command}`);
     } else if (arg === '--project-id') {
       args.projectId = argv[++index];
       if (!args.projectId) throw new Error('--project-id requires a value');
@@ -147,6 +163,7 @@ function parseArgs(argv) {
       args.includeIntake = true;
     } else if (arg === '--tools') {
       args.tools = parseToolTargets(argv[++index]);
+      args.toolsProvided = true;
     } else if (arg === '--include-team-bigfive') {
       args.includeTeamBigFive = true;
     } else if (arg === '--team-bigfive-source') {
@@ -160,6 +177,8 @@ function parseArgs(argv) {
       args.overwrite = true;
     } else if (arg === '--dry-run') {
       args.dryRun = true;
+    } else if (arg === '--apply') {
+      args.apply = true;
     } else if (arg.startsWith('--')) {
       throw new Error(`unknown option: ${arg}`);
     } else {
@@ -167,13 +186,20 @@ function parseArgs(argv) {
     }
   }
   if (args.help) return args;
-  if (command === 'scaffold') {
+  if (command === 'enhance') {
+    if (!VALID_ENHANCEMENTS.has(enhancement)) throw new Error(`enhance requires one of: ${ENHANCEMENT_ORDER.join(', ')}`);
+  }
+  if (command === 'scaffold' || command === 'update' || command === 'upgrade' || command === 'enhance') {
     if (!args.target) throw new Error('--target is required');
+    if (args.apply && args.dryRun) throw new Error('--apply cannot be combined with --dry-run');
+    if (args.apply && command !== 'update' && command !== 'upgrade') throw new Error('--apply is only supported by update and upgrade');
+    if (command === 'upgrade' && !args.dryRun && !args.apply) throw new Error('upgrade requires --dry-run or --apply');
     return args;
   }
   for (const required of ['projectId', 'artifacts', 'target']) {
     if (!args[required]) throw new Error(`--${required.replace(/[A-Z]/g, (match) => `-${match.toLowerCase()}`)} is required`);
   }
+  if (args.apply) throw new Error('--apply is only supported by update and upgrade');
   if (!args.includeTeamBigFive && (args.teamBigFiveSource || args.teamBigFiveTargets)) {
     throw new Error('--team-bigfive-source and --team-bigfive-targets require --include-team-bigfive');
   }
@@ -635,7 +661,7 @@ Use this skill only after Plan2Agent legacy handoff has installed approved flat 
 ## Inputs
 
 - A Plan2Agent task id from the handoff task graph recorded in \`.plan2agent/project.config.json.taskGraph\`.
-- The task prompt from \`node .plan2agent/scripts/p2a_execute.mjs start --graph <task-graph> --task <task-id>\` or \`node .plan2agent/scripts/p2a_tasks.mjs prompt --graph <task-graph> <task-id>\`.
+- The task prompt from \`node .plan2agent/scripts/p2a.mjs execute start --graph <task-graph> --task <task-id>\` or \`node .plan2agent/scripts/p2a.mjs tasks prompt --graph <task-graph> <task-id>\`.
 - Optional verification commands from \`.plan2agent/project.config.json\`.
 
 ## Workflow
@@ -644,7 +670,7 @@ Use this skill only after Plan2Agent legacy handoff has installed approved flat 
 2. Split the work into five lanes: coordination, implementation plan, code changes, review, and verification.
 3. Keep all work tied to the task id and source spec refs.
 4. Do not edit approved Plan2Agent artifacts except through the task/status CLIs.
-5. Track execution with \`node .plan2agent/scripts/p2a_execute.mjs start/finish/status\` or the lower-level \`node .plan2agent/scripts/p2a_runs.mjs start/verify/finish\` so runId, changed files, verification, agent tool, and workspace reference are preserved.
+5. Track execution with \`node .plan2agent/scripts/p2a.mjs execute start/finish/status\` or the lower-level \`node .plan2agent/scripts/p2a.mjs runs start/verify/finish\` so runId, changed files, verification, agent tool, and workspace reference are preserved.
 6. Before marking the task done, run or request the configured test, lint, and typecheck commands when available.
 
 ## Output
@@ -855,8 +881,8 @@ function pushTeamBigFiveAdapter(plan, targetRoot, args) {
 }
 
 
-const SCAFFOLD_SCRIPT_FILES = ['p2a_paths.mjs', 'p2a_project_config.mjs', 'p2a_iteration.mjs', 'p2a_tasks.mjs', 'p2a_runs.mjs', 'p2a_execute.mjs', 'p2a_orchestrate.mjs', 'p2a_proposals.mjs', 'p2a_run_paths.mjs', 'p2a_iteration_state.mjs', 'validate_artifacts.mjs'];
-const SCAFFOLD_SCHEMA_FILES = ['intake.schema.json', 'spec.schema.json', 'task-graph.schema.json', 'task-context.schema.json', 'review.schema.json', 'run.schema.json', 'run-index.schema.json', 'orchestration-plan.schema.json', 'orchestration-runtime.schema.json', 'skill-proposal.schema.json', 'proposal-review.schema.json', 'proposal-curation.schema.json', 'proposal-patch-draft.schema.json', 'proposal-draft-approval.schema.json'];
+const SCAFFOLD_SCRIPT_FILES = PROJECT_RUNTIME_SCRIPT_FILES;
+const SCAFFOLD_SCHEMA_FILES = PROJECT_RUNTIME_SCHEMA_FILES;
 
 function targetScriptPath(file) {
   return path.join(P2A_SCRIPTS_DIR, file);
@@ -868,6 +894,39 @@ function targetSchemaPath(file) {
 
 function targetArtifactDir(projectId) {
   return path.join(ARTIFACT_TARGET_BASE, projectId);
+}
+
+function isDirectory(dirPath) {
+  try {
+    return existsSync(dirPath) && lstatSync(dirPath).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+function discoverTargetArtifactRoots(targetRoot) {
+  const artifactsRoot = path.join(targetRoot, P2A_ARTIFACTS_DIR);
+  if (!isDirectory(artifactsRoot)) return [];
+  return readdirSync(artifactsRoot, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => path.join(P2A_ARTIFACTS_DIR, entry.name))
+    .filter((relativePath) => isIterativeArtifactRoot(path.join(targetRoot, relativePath)))
+    .sort((left, right) => left.localeCompare(right));
+}
+
+function preferredEnhanceArtifactArg(targetRoot) {
+  const artifactRoots = discoverTargetArtifactRoots(targetRoot);
+  const artifactRef = artifactRoots[0] ?? path.join(P2A_ARTIFACTS_DIR, '<project_id>');
+  return { artifactRef: normalizePath(artifactRef), hasArtifact: artifactRoots.length > 0 };
+}
+
+function projectRelativeConfigPath(targetRoot, value, fallback) {
+  const raw = typeof value === 'string' && value.trim() ? value.trim() : fallback;
+  if (path.isAbsolute(raw)) {
+    const relative = path.relative(targetRoot, raw);
+    if (relative && !relative.startsWith('..') && !path.isAbsolute(relative)) return normalizePath(relative);
+  }
+  return normalizePath(raw);
 }
 
 function targetGatePath(projectId, gateDir, file) {
@@ -1016,19 +1075,20 @@ This repository owns its Plan2Agent planning and development loop in-place.
 
 2. Convert approved planning artifacts into the iteration structure:
 
-   \`node .plan2agent/scripts/p2a_iteration.mjs init --artifacts .plan2agent/artifacts/<project>\`
+   \`node .plan2agent/scripts/p2a.mjs iteration init --artifacts .plan2agent/artifacts/<project>\`
 
 3. Develop from ready tasks and track execution:
 
-   - \`node .plan2agent/scripts/p2a_execute.mjs plan|start|finish|status\`
-   - \`node .plan2agent/scripts/p2a_orchestrate.mjs plan|handoff\`
-   - \`node .plan2agent/scripts/p2a_proposals.mjs mine|review|curate|draft-patch|approve-draft|digest\`
-   - \`node .plan2agent/scripts/p2a_tasks.mjs ready|prompt|start|done\`
-   - \`node .plan2agent/scripts/p2a_runs.mjs start|verify|finish\`
+   - \`node .plan2agent/scripts/p2a.mjs info\`
+   - \`node .plan2agent/scripts/p2a.mjs execute plan|start|finish|status\`
+   - \`node .plan2agent/scripts/p2a.mjs orchestrate plan|handoff\`
+   - \`node .plan2agent/scripts/p2a.mjs proposals mine|review|curate|draft-patch|approve-draft|digest\`
+   - \`node .plan2agent/scripts/p2a.mjs tasks ready|prompt|start|done\`
+   - \`node .plan2agent/scripts/p2a.mjs runs start|verify|finish\`
 
 4. Open the next iteration in this same project:
 
-   \`node .plan2agent/scripts/p2a_iteration.mjs open|draft|context|promote-tasks\`
+   \`node .plan2agent/scripts/p2a.mjs iteration open|draft|context|promote-tasks\`
 
 ## Storage policy
 
@@ -1095,6 +1155,719 @@ function printScaffoldPlan(plan, args, targetRoot) {
   if (args.dryRun) console.log('dry-run: no files written');
 }
 
+function readUpgradeJsonFile(filePath, label, operation = 'upgrade') {
+  if (!existsSync(filePath)) throw new Error(`${operation} requires ${label}: ${normalizePath(filePath)}`);
+  try {
+    const parsed = JSON.parse(readFileSync(filePath, 'utf8'));
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      throw new Error('JSON root must be an object');
+    }
+    return parsed;
+  } catch (error) {
+    throw new Error(`upgrade could not read ${label}: ${error.message}`);
+  }
+}
+
+function upgradeToolTargets(args, manifest) {
+  if (Array.isArray(args.tools)) return args.tools;
+  const manifestTargets = Array.isArray(manifest.aiToolTargets)
+    ? manifest.aiToolTargets.filter((target) => typeof target === 'string' && VALID_TOOL_TARGETS.has(target))
+    : [];
+  return TOOL_TARGET_ORDER.filter((target) => manifestTargets.includes(target));
+}
+
+function enabledCapabilityEnhancements(manifest) {
+  const enhancements = manifest.enhancements && typeof manifest.enhancements === 'object' && !Array.isArray(manifest.enhancements)
+    ? manifest.enhancements
+    : {};
+  return ENHANCEMENT_ORDER
+    .filter((capability) => capability !== 'dev-skills')
+    .filter((capability) => enhancements[capability]?.enabled === true);
+}
+
+function plannedItemContent(item) {
+  if (item.type === 'write-json') return item.content ?? `${JSON.stringify(item.data, null, 2)}\n`;
+  if (item.type === 'write-text') return item.content;
+  if (item.type === 'rewrite-json') return item.transform(item.source);
+  return readFileSync(item.source);
+}
+
+function plannedAction(item) {
+  if (item.type === 'write-json' || item.type === 'write-text') return 'generate';
+  if (item.type === 'rewrite-json') return 'copy+rewrite';
+  return 'copy';
+}
+
+function compareUpgradePlanItem(item) {
+  const targetRelative = normalizePath(item.targetRelative);
+  const base = {
+    action: plannedAction(item),
+    target: targetRelative,
+    source: item.source ? normalizePath(path.relative(process.cwd(), item.source)) : '(generated)',
+  };
+  if ((targetRelative === '.plan2agent/manifest.json' || targetRelative === '.plan2agent/project.config.json') && existsSync(item.target)) {
+    if (!lstatSync(item.target).isFile()) {
+      return { ...base, status: 'conflict', detail: 'target path exists but is not a file' };
+    }
+    return {
+      ...base,
+      status: 'unchanged',
+      detail: targetRelative === '.plan2agent/project.config.json'
+        ? 'project config is preserved; safe default migrations are reported separately'
+        : 'manifest is preserved; apply records update history only when safe changes are applied',
+    };
+  }
+  if (!existsSync(item.target)) {
+    return { ...base, status: 'missing', detail: 'target file is missing' };
+  }
+  if (!lstatSync(item.target).isFile()) {
+    return { ...base, status: 'conflict', detail: 'target path exists but is not a file' };
+  }
+  try {
+    const planned = plannedItemContent(item);
+    const plannedBuffer = Buffer.isBuffer(planned) ? planned : Buffer.from(String(planned));
+    const currentBuffer = readFileSync(item.target);
+    return plannedBuffer.equals(currentBuffer)
+      ? { ...base, status: 'unchanged', detail: 'target matches toolkit file' }
+      : { ...base, status: 'would_update', detail: 'target differs from toolkit file' };
+  } catch (error) {
+    return { ...base, status: 'error', detail: error.message };
+  }
+}
+
+function summarizeUpgradeItems(items) {
+  const summary = {
+    total: items.length,
+    unchanged: 0,
+    missing: 0,
+    wouldUpdate: 0,
+    manualReview: 0,
+    conflicts: 0,
+    errors: 0,
+  };
+  for (const item of items) {
+    if (item.status === 'unchanged') summary.unchanged += 1;
+    else if (item.status === 'missing') summary.missing += 1;
+    else if (item.status === 'would_update') summary.wouldUpdate += 1;
+    else if (item.status === 'manual_review') summary.manualReview += 1;
+    else if (item.status === 'conflict') summary.conflicts += 1;
+    else if (item.status === 'error') summary.errors += 1;
+  }
+  return summary;
+}
+
+function shellQuote(value) {
+  const text = String(value);
+  if (/^[A-Za-z0-9_./:@%+=,-]+$/.test(text)) return text;
+  return `'${text.replace(/'/g, "'\\''")}'`;
+}
+
+function commandPathFromCwd(filePath) {
+  const absolutePath = path.resolve(filePath);
+  const relativePath = path.relative(path.resolve(process.cwd()), absolutePath);
+  if (relativePath && !relativePath.startsWith('..') && !path.isAbsolute(relativePath)) return relativePath;
+  return absolutePath;
+}
+
+function updateApplyCommand(args, targetRoot) {
+  const targetP2a = path.join(targetRoot, '.plan2agent', 'scripts', 'p2a.mjs');
+  const targetP2aAvailable = existsSync(targetP2a) && lstatSync(targetP2a).isFile();
+  const targetP2aCommandPath = path.resolve(process.cwd()) === path.resolve(targetRoot)
+    ? path.relative(targetRoot, targetP2a)
+    : targetP2a;
+  const toolkitP2aCommandPath = commandPathFromCwd(path.join(ROOT, 'scripts', 'p2a.mjs'));
+  const parts = targetP2aAvailable
+    ? ['node', targetP2aCommandPath, args.command]
+    : ['node', toolkitP2aCommandPath, args.command, '--target', targetRoot];
+  if (args.toolsProvided) parts.push('--tools', args.tools.length ? args.tools.join(',') : 'none');
+  parts.push('--apply');
+  return parts.map(shellQuote).join(' ');
+}
+
+function buildConfigMigrations(config, manifest) {
+  let nextConfig = config;
+  const devConfigMigration = mergeDevSkillConfig(nextConfig);
+  nextConfig = devConfigMigration.config;
+  const migrations = [{
+    id: 'dev_skills_config',
+    status: devConfigMigration.updatedKeys.length ? 'would_update' : 'up_to_date',
+    updatedKeys: devConfigMigration.updatedKeys,
+  }];
+  for (const capability of enabledCapabilityEnhancements(manifest)) {
+    const migration = mergeCapabilityConfig(nextConfig, capability);
+    nextConfig = migration.config;
+    migrations.push({
+      id: `${capability}_config`,
+      status: migration.updatedKeys.length ? 'would_update' : 'up_to_date',
+      updatedKeys: migration.updatedKeys,
+    });
+  }
+  return { config: nextConfig, migrations };
+}
+
+function buildUpgradeDryRunReport(args, targetRoot) {
+  const manifest = readUpgradeJsonFile(path.join(targetRoot, '.plan2agent', 'manifest.json'), '.plan2agent/manifest.json', args.command);
+  const config = readUpgradeJsonFile(path.join(targetRoot, '.plan2agent', 'project.config.json'), '.plan2agent/project.config.json', args.command);
+  const tools = upgradeToolTargets(args, manifest);
+  const plan = buildScaffoldPlan({ ...args, tools }, targetRoot);
+  const items = plan.map(compareUpgradePlanItem);
+  const summary = summarizeUpgradeItems(items);
+  const failures = items.filter((item) => item.status === 'conflict' || item.status === 'error');
+  const configMigrations = buildConfigMigrations(config, manifest);
+  const migrationUpdateCount = configMigrations.migrations.reduce((sum, migration) => sum + migration.updatedKeys.length, 0);
+  const changes = summary.missing + summary.wouldUpdate + summary.manualReview + migrationUpdateCount;
+  const status = failures.length ? 'fail' : changes ? 'changes' : 'pass';
+  return {
+    schema_version: 'p2a.upgrade_dry_run.v1',
+    generatedAt: new Date().toISOString(),
+    command: args.command,
+    status,
+    targetProject: targetRoot,
+    aiToolTargets: tools,
+    toolsProvided: args.toolsProvided,
+    summary,
+    items,
+    migrations: configMigrations.migrations,
+    failures,
+    nextActions: failures.length
+      ? [`Resolve conflicts/errors above before running ${args.command} again.`]
+      : changes
+        ? [`Review listed changes. Apply safe updates with: ${updateApplyCommand(args, targetRoot)}`]
+        : [],
+    _plan: plan,
+    _manifest: manifest,
+    _config: config,
+    _nextConfig: configMigrations.config,
+  };
+}
+
+function printUpgradeDryRunReport(report) {
+  console.log(report.command === 'update' ? 'Plan2Agent update preview' : 'Plan2Agent upgrade dry run');
+  console.log(`status: ${report.status}`);
+  console.log(`targetProject: ${report.targetProject}`);
+  console.log(`aiTools: ${report.aiToolTargets.length ? report.aiToolTargets.join(',') : 'none'}`);
+  console.log(`summary: ${report.summary.unchanged} unchanged, ${report.summary.missing} missing, ${report.summary.wouldUpdate} update(s), ${report.summary.manualReview} manual review, ${report.summary.conflicts} conflict(s), ${report.summary.errors} error(s)`);
+  const notable = report.items.filter((item) => item.status !== 'unchanged');
+  if (notable.length) {
+    console.log('changes:');
+    for (const item of notable) {
+      console.log(`- ${item.status}: ${item.action} ${item.source} -> ${item.target}`);
+      console.log(`  ${item.detail}`);
+    }
+  } else {
+    console.log('changes: none');
+  }
+  if (report.nextActions.length) {
+    console.log('next actions:');
+    for (const action of report.nextActions) console.log(`- ${action}`);
+  }
+  if (report.migrations.length) {
+    console.log('migrations:');
+    for (const migration of report.migrations) {
+      const keys = migration.updatedKeys.length ? ` (${migration.updatedKeys.join(',')})` : '';
+      console.log(`- ${migration.id}: ${migration.status}${keys}`);
+    }
+  }
+  if (report.reportPath) console.log(`report: ${report.reportPath}`);
+  console.log('dry-run: no harness files written');
+}
+
+function isProjectConfigTarget(targetRelative) {
+  return normalizePath(targetRelative) === '.plan2agent/project.config.json';
+}
+
+function isManifestTarget(targetRelative) {
+  return normalizePath(targetRelative) === '.plan2agent/manifest.json';
+}
+
+function isAutoUpgradableTarget(targetRelative) {
+  const target = normalizePath(targetRelative);
+  return target.startsWith('.plan2agent/scripts/')
+    || target.startsWith('.plan2agent/schemas/')
+    || target.startsWith('.agents/')
+    || target.startsWith('.codex/')
+    || target.startsWith('.claude/skills/')
+    || target.startsWith('.claude/agents/')
+    || target.startsWith('.claude/hooks/')
+    || target.startsWith('.gemini/agents/')
+    || target.startsWith('.gemini/commands/p2a/');
+}
+
+function applyCandidateStatus(status) {
+  return status === 'missing' || status === 'would_update';
+}
+
+function publicUpgradeReport(report) {
+  const { _plan, _manifest, _config, _nextConfig, ...publicReport } = report;
+  return publicReport;
+}
+
+function upgradeApplyBlockers(report) {
+  const blockers = report.failures.map((item) => ({
+    status: item.status,
+    target: item.target,
+    detail: item.detail,
+  }));
+  for (const item of report.items) {
+    if (item.status === 'manual_review' && !isProjectConfigTarget(item.target)) {
+      blockers.push({
+        status: 'manual_review',
+        target: item.target,
+        detail: item.detail,
+      });
+      continue;
+    }
+    if (!applyCandidateStatus(item.status)) continue;
+    if (isManifestTarget(item.target) || isProjectConfigTarget(item.target) || isAutoUpgradableTarget(item.target)) continue;
+    blockers.push({
+      status: 'manual_review',
+      target: item.target,
+      detail: `safe apply does not overwrite ${item.target}; review this generated file manually`,
+    });
+  }
+  return blockers;
+}
+
+function upgradeApplyItems(report) {
+  const itemByTarget = new Map(report.items.map((item) => [normalizePath(item.target), item]));
+  return report._plan.filter((item) => {
+    const target = normalizePath(item.targetRelative);
+    const comparison = itemByTarget.get(target);
+    return comparison && applyCandidateStatus(comparison.status) && isAutoUpgradableTarget(target);
+  });
+}
+
+function changedMigrations(report) {
+  return report.migrations.filter((migration) => migration.updatedKeys.length > 0);
+}
+
+function reportTimestamp(value) {
+  return value.replace(/[-:.]/g, '').replace(/\.\d+Z$/, 'Z');
+}
+
+function reportHash(payload) {
+  return createHash('sha256').update(JSON.stringify(payload)).digest('hex').slice(0, 10);
+}
+
+function upgradeReportRelativePath(command, timestamp, payload) {
+  return normalizePath(path.join(
+    '.plan2agent',
+    'update-reports',
+    `${command}-${reportTimestamp(timestamp)}-${reportHash(payload)}.json`,
+  ));
+}
+
+function writeUpgradePreviewReport(targetRoot, report) {
+  const reportRelative = upgradeReportRelativePath(report.command, report.generatedAt, report);
+  const reportPath = targetPath(targetRoot, reportRelative);
+  const reportWithPath = { ...report, reportPath: reportRelative };
+  mkdirSync(path.dirname(reportPath), { recursive: true });
+  writeFileSync(reportPath, `${JSON.stringify(reportWithPath, null, 2)}\n`, 'utf8');
+  return reportWithPath;
+}
+
+function writeUpgradeApplyReport(targetRoot, report) {
+  const reportRelative = upgradeReportRelativePath(report.command, report.appliedAt, report);
+  const reportPath = targetPath(targetRoot, reportRelative);
+  const reportWithPath = { ...report, reportPath: reportRelative };
+  mkdirSync(path.dirname(reportPath), { recursive: true });
+  writeFileSync(reportPath, `${JSON.stringify(reportWithPath, null, 2)}\n`, 'utf8');
+  return reportWithPath;
+}
+
+function plannedManifestData(report) {
+  const manifestItem = report._plan.find((item) => isManifestTarget(item.targetRelative));
+  return manifestItem?.data ?? null;
+}
+
+function mergeUpgradeManifest(existingManifest, report, appliedAt, appliedFiles, migrationIds) {
+  const plannedManifest = plannedManifestData(report) ?? {};
+  const notes = [
+    ...(Array.isArray(existingManifest.notes) ? existingManifest.notes.filter((item) => typeof item === 'string') : []),
+    `Harness ${report.command} applied at ${appliedAt}`,
+  ];
+  const updates = Array.isArray(existingManifest.updates)
+    ? existingManifest.updates.filter((item) => item && typeof item === 'object' && !Array.isArray(item))
+    : [];
+  updates.push({
+    command: report.command,
+    appliedAt,
+    toolkitRoot: ROOT,
+    files: appliedFiles.length,
+    migrations: migrationIds,
+  });
+  return {
+    ...existingManifest,
+    schema_version: existingManifest.schema_version ?? 'p2a.handoff.v1',
+    targetProject: existingManifest.targetProject ?? report.targetProject,
+    includedTools: uniqueNormalizedList(existingManifest.includedTools, plannedManifest.includedTools),
+    aiToolTargets: uniqueNormalizedList(existingManifest.aiToolTargets, report.aiToolTargets),
+    scriptFiles: uniqueNormalizedList(plannedManifest.scriptFiles, existingManifest.scriptFiles),
+    schemaFiles: uniqueNormalizedList(plannedManifest.schemaFiles, existingManifest.schemaFiles),
+    toolFiles: uniqueNormalizedList(existingManifest.toolFiles, plannedManifest.toolFiles),
+    aiToolFiles: uniqueNormalizedList(existingManifest.aiToolFiles, plannedManifest.aiToolFiles),
+    aiToolGroups: mergeAiToolGroups(existingManifest.aiToolGroups, plannedManifest.aiToolGroups ?? []),
+    provenance: {
+      ...(existingManifest.provenance && typeof existingManifest.provenance === 'object' && !Array.isArray(existingManifest.provenance) ? existingManifest.provenance : {}),
+      toolkitRoot: ROOT,
+      lastUpdatedAt: appliedAt,
+      lastUpdateCommand: report.command,
+    },
+    updates: updates.slice(-20),
+    notes: [...new Set(notes)],
+  };
+}
+
+function writeJsonFile(filePath, data) {
+  mkdirSync(path.dirname(filePath), { recursive: true });
+  writeFileSync(filePath, `${JSON.stringify(data, null, 2)}\n`, 'utf8');
+}
+
+function buildUpgradeApplyReport(args, targetRoot, previewReport) {
+  const appliedAt = new Date().toISOString();
+  const blockers = upgradeApplyBlockers(previewReport);
+  const applyItems = blockers.length ? [] : upgradeApplyItems(previewReport);
+  const migrations = blockers.length ? [] : changedMigrations(previewReport);
+  return {
+    schema_version: 'p2a.upgrade_apply.v1',
+    command: args.command,
+    appliedAt,
+    status: blockers.length ? 'blocked' : 'pending',
+    targetProject: targetRoot,
+    aiToolTargets: previewReport.aiToolTargets,
+    preview: publicUpgradeReport(previewReport),
+    blockers,
+    applied: {
+      files: [],
+      migrations: [],
+      config: false,
+      manifest: false,
+    },
+    error: null,
+    nextActions: [],
+    _applyItems: applyItems,
+    _migrations: migrations,
+  };
+}
+
+function errorDetail(error) {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function publicUpgradeApplyReport(report) {
+  const { _applyItems, _migrations, ...publicReport } = report;
+  return publicReport;
+}
+
+function executeUpgradeApply(targetRoot, report, previewReport) {
+  if (report.blockers.length) {
+    report.nextActions = ['Review blockers above, resolve conflicts/manual review items, then rerun with --apply.'];
+    return report;
+  }
+
+  if (report._applyItems.length) {
+    for (const item of report._applyItems) {
+      writePlanItem(item);
+      report.applied.files.push(normalizePath(item.targetRelative));
+    }
+  }
+  if (report._migrations.length) {
+    writeJsonFile(path.join(targetRoot, '.plan2agent', 'project.config.json'), previewReport._nextConfig);
+    report.applied.config = true;
+    report.applied.migrations = report._migrations.map((migration) => ({
+      id: migration.id,
+      updatedKeys: migration.updatedKeys,
+    }));
+  }
+  const shouldUpdateManifest = report.applied.files.length > 0 || report.applied.config;
+  if (shouldUpdateManifest) {
+    const nextManifest = mergeUpgradeManifest(
+      previewReport._manifest,
+      previewReport,
+      report.appliedAt,
+      report.applied.files,
+      report.applied.migrations.map((migration) => migration.id),
+    );
+    writeJsonFile(path.join(targetRoot, '.plan2agent', 'manifest.json'), nextManifest);
+    report.applied.manifest = true;
+  }
+  if (!report.applied.files.length && !report.applied.config && !report.applied.manifest) {
+    report.status = 'noop';
+    report.nextActions = ['No safe update changes were required.'];
+  } else {
+    report.status = 'applied';
+    report.nextActions = ['Run p2a_doctor --dev against the target project to verify the applied update.'];
+  }
+  return report;
+}
+
+function printUpgradeApplyReport(report) {
+  console.log(report.command === 'update' ? 'Plan2Agent update apply' : 'Plan2Agent upgrade apply');
+  console.log(`status: ${report.status}`);
+  console.log(`targetProject: ${report.targetProject}`);
+  if (report.blockers.length) {
+    console.log('blockers:');
+    for (const blocker of report.blockers) {
+      console.log(`- ${blocker.status}: ${blocker.target}`);
+      console.log(`  ${blocker.detail}`);
+    }
+  }
+  if (report.error) console.log(`error: ${report.error}`);
+  if (report.applied.files.length) {
+    console.log('applied files:');
+    for (const file of report.applied.files) console.log(`- ${file}`);
+  }
+  if (report.applied.migrations.length) {
+    console.log('applied migrations:');
+    for (const migration of report.applied.migrations) {
+      console.log(`- ${migration.id}: ${migration.updatedKeys.join(',')}`);
+    }
+  }
+  console.log(`manifest: ${report.applied.manifest ? 'updated' : 'unchanged'}`);
+  if (report.reportPath) console.log(`report: ${report.reportPath}`);
+  if (report.nextActions.length) {
+    console.log('next actions:');
+    for (const action of report.nextActions) console.log(`- ${action}`);
+  }
+}
+
+function uniqueNormalizedList(...lists) {
+  const seen = new Set();
+  const values = [];
+  for (const list of lists) {
+    if (!Array.isArray(list)) continue;
+    for (const item of list) {
+      if (typeof item !== 'string' || item.trim() === '') continue;
+      const normalized = normalizePath(item);
+      if (seen.has(normalized)) continue;
+      seen.add(normalized);
+      values.push(normalized);
+    }
+  }
+  return values;
+}
+
+function mergeAiToolGroups(existingGroups, nextGroups) {
+  const groupsByKey = new Map();
+  for (const group of Array.isArray(existingGroups) ? existingGroups : []) {
+    if (group?.key && typeof group.key === 'string') groupsByKey.set(group.key, group);
+  }
+  for (const group of nextGroups) groupsByKey.set(group.key, group);
+  return [...groupsByKey.values()].sort((left, right) => left.key.localeCompare(right.key));
+}
+
+function mergeEnhanceDevSkillsManifest(manifest, toolTargets, toolAssetPlan) {
+  const promptTemplates = defaultPromptTemplates();
+  const existingTargets = Array.isArray(manifest.aiToolTargets)
+    ? manifest.aiToolTargets.filter((target) => typeof target === 'string')
+    : [];
+  const includedTools = [
+    ...(Array.isArray(manifest.includedTools) ? manifest.includedTools.filter((item) => typeof item === 'string') : []),
+    ...toolTargets.map((target) => `p2a_${target}_assets`),
+  ];
+  const notes = [
+    ...(Array.isArray(manifest.notes) ? manifest.notes.filter((item) => typeof item === 'string') : []),
+    'Development skill assets and config enhanced by p2a enhance dev-skills',
+  ];
+  return {
+    ...manifest,
+    schema_version: manifest.schema_version ?? 'p2a.handoff.v1',
+    includedTools: [...new Set(includedTools)],
+    aiToolTargets: TOOL_TARGET_ORDER.filter((target) => new Set([...existingTargets, ...toolTargets]).has(target)),
+    toolFiles: uniqueNormalizedList(manifest.toolFiles, toolAssetPlan.files),
+    aiToolFiles: uniqueNormalizedList(manifest.aiToolFiles, toolAssetPlan.files),
+    aiToolGroups: mergeAiToolGroups(manifest.aiToolGroups, toolAssetPlan.groups),
+    enhancements: {
+      ...(manifest.enhancements && typeof manifest.enhancements === 'object' && !Array.isArray(manifest.enhancements) ? manifest.enhancements : {}),
+      devSkills: {
+        enabled: true,
+        aiToolTargets: toolTargets,
+        promptTemplateVersion: promptTemplates.devExecution,
+        roleContractVersion: promptTemplates.roleContract,
+        providerGuideVersion: promptTemplates.providerGuide,
+      },
+    },
+    notes: [...new Set(notes)],
+  };
+}
+
+function mergeEnhanceCapabilityManifest(manifest, capability) {
+  const defaults = defaultCapabilityConfig(capability);
+  const notes = [
+    ...(Array.isArray(manifest.notes) ? manifest.notes.filter((item) => typeof item === 'string') : []),
+    `Capability ${capability} enhanced by p2a enhance ${capability}`,
+  ];
+  return {
+    ...manifest,
+    schema_version: manifest.schema_version ?? 'p2a.handoff.v1',
+    enhancements: {
+      ...(manifest.enhancements && typeof manifest.enhancements === 'object' && !Array.isArray(manifest.enhancements) ? manifest.enhancements : {}),
+      [capability]: {
+        enabled: true,
+        configKey: capability,
+        configVersion: `p2a.${capability}_config.v1`,
+        mode: defaults.mode ?? defaults.defaultMode ?? defaults.commandMode ?? defaults.reviewPolicy ?? 'enabled',
+      },
+    },
+    notes: [...new Set(notes)],
+  };
+}
+
+function buildEnhanceDevSkillsPlan(args, targetRoot) {
+  const manifestPath = path.join(targetRoot, '.plan2agent', 'manifest.json');
+  const configPath = path.join(targetRoot, '.plan2agent', 'project.config.json');
+  const manifest = readUpgradeJsonFile(manifestPath, '.plan2agent/manifest.json', 'enhance dev-skills');
+  const config = readUpgradeJsonFile(configPath, '.plan2agent/project.config.json', 'enhance dev-skills');
+  const plan = [];
+  const toolAssetPlan = pushToolAssets(plan, targetRoot, args.tools);
+  const mergedConfig = mergeDevSkillConfig(config);
+  const nextManifest = mergeEnhanceDevSkillsManifest(manifest, args.tools, toolAssetPlan);
+  pushGeneratedJson(plan, targetRoot, path.join('.plan2agent', 'manifest.json'), nextManifest);
+  pushGeneratedJson(plan, targetRoot, path.join('.plan2agent', 'project.config.json'), mergedConfig.config);
+  plan.enhanceSummary = {
+    aiToolTargets: args.tools,
+    assetFileCount: toolAssetPlan.files.length,
+    configUpdatedKeys: mergedConfig.updatedKeys,
+  };
+  return plan;
+}
+
+function buildEnhanceCapabilityPlan(args, targetRoot) {
+  const manifestPath = path.join(targetRoot, '.plan2agent', 'manifest.json');
+  const configPath = path.join(targetRoot, '.plan2agent', 'project.config.json');
+  const manifest = readUpgradeJsonFile(manifestPath, '.plan2agent/manifest.json', `enhance ${args.enhancement}`);
+  const config = readUpgradeJsonFile(configPath, '.plan2agent/project.config.json', `enhance ${args.enhancement}`);
+  const plan = [];
+  const mergedConfig = mergeCapabilityConfig(config, args.enhancement);
+  const nextManifest = mergeEnhanceCapabilityManifest(manifest, args.enhancement);
+  pushGeneratedJson(plan, targetRoot, path.join('.plan2agent', 'manifest.json'), nextManifest);
+  pushGeneratedJson(plan, targetRoot, path.join('.plan2agent', 'project.config.json'), mergedConfig.config);
+  plan.enhanceSummary = {
+    capability: args.enhancement,
+    configKey: args.enhancement,
+    configUpdatedKeys: mergedConfig.updatedKeys,
+    nextActions: enhanceCapabilityNextActions(args.enhancement, targetRoot, mergedConfig.config, nextManifest),
+  };
+  return plan;
+}
+
+function enhanceCapabilityNextActions(capability, targetRoot, config, manifest) {
+  const source = preferredEnhanceArtifactArg(targetRoot);
+  if (capability === 'memory') {
+    return [
+      `${source.hasArtifact ? 'Check local/Memory sync' : 'After creating an artifact root, check local/Memory sync'}: node .plan2agent/scripts/p2a.mjs memory status --artifacts ${source.artifactRef}`,
+      `${source.hasArtifact ? 'Preview Memory restore diff' : 'After Memory is configured, preview restore diff'}: node .plan2agent/scripts/p2a.mjs memory pull --artifacts ${source.artifactRef} --dry-run`,
+      `${source.hasArtifact ? 'Preview explicit Memory push' : 'After review, preview explicit Memory push'}: node .plan2agent/scripts/p2a.mjs memory push --artifacts ${source.artifactRef} --dry-run`,
+      `${source.hasArtifact ? 'Search Memory history' : 'After Memory contains snapshots, search history'}: node .plan2agent/scripts/p2a.mjs memory search --artifacts ${source.artifactRef} --query <term>`,
+      `${source.hasArtifact ? 'Show Memory timeline' : 'After Memory contains snapshots, show timeline'}: node .plan2agent/scripts/p2a.mjs memory history --artifacts ${source.artifactRef}`,
+      `${source.hasArtifact ? 'Summarize run/proposal gaps' : 'After runs exist, summarize run/proposal gaps'}: node .plan2agent/scripts/p2a.mjs memory digest --artifacts ${source.artifactRef}`,
+    ];
+  }
+  if (capability === 'proposals') {
+    const queueDir = projectRelativeConfigPath(targetRoot, config?.proposals?.queueDir, path.join('.plan2agent', 'proposals'));
+    return [
+      `${source.hasArtifact ? 'Mine proposal candidates' : 'After runs exist, mine proposal candidates'}: node .plan2agent/scripts/p2a.mjs proposals mine --artifacts ${source.artifactRef} --proposals ${queueDir} --dry-run`,
+      `Review proposal queue: node .plan2agent/scripts/p2a.mjs proposals digest --proposals ${queueDir}`,
+      `Preview curation review: node .plan2agent/scripts/p2a.mjs proposals review --proposals ${queueDir} --dry-run`,
+    ];
+  }
+  if (capability === 'orchestration') {
+    const runtimeDir = projectRelativeConfigPath(targetRoot, config?.orchestration?.runtimeDir, path.join('.plan2agent', 'runs'));
+    const orchestrationAgentTool = resolveOrchestrationAgentTool(config, manifest);
+    return [
+      'Check provider runner readiness: node .plan2agent/scripts/p2a.mjs orchestrate runner-doctor --root .',
+      `${source.hasArtifact ? 'Plan supervised orchestration' : 'After a ready task exists, plan supervised orchestration'}: node .plan2agent/scripts/p2a.mjs orchestrate plan --artifacts ${source.artifactRef} --task <task-id> --agent-tool ${orchestrationAgentTool} --output .plan2agent/orchestration/<task-id>.json`,
+      `${source.hasArtifact ? 'Start supervised run with orchestration' : 'After reviewing the plan, start supervised run with orchestration'}: node .plan2agent/scripts/p2a.mjs execute start --artifacts ${source.artifactRef} --task <task-id> --agent-tool ${orchestrationAgentTool} --orchestration-plan .plan2agent/orchestration/<task-id>.json`,
+      `Inspect orchestration runtime after start: node .plan2agent/scripts/p2a.mjs orchestrate runtime-status --runtime ${runtimeDir}/<run-id>.orchestration-runtime.json`,
+    ];
+  }
+  return [];
+}
+
+function compareEnhancePlanItem(item) {
+  const targetRelative = normalizePath(item.targetRelative);
+  const base = {
+    action: plannedAction(item),
+    target: targetRelative,
+    source: item.source ? normalizePath(path.relative(process.cwd(), item.source)) : '(generated)',
+  };
+  if (!existsSync(item.target)) return { ...base, status: 'missing', detail: 'target file is missing' };
+  if (!lstatSync(item.target).isFile()) return { ...base, status: 'conflict', detail: 'target path exists but is not a file' };
+  try {
+    const planned = plannedItemContent(item);
+    const plannedBuffer = Buffer.isBuffer(planned) ? planned : Buffer.from(String(planned));
+    const currentBuffer = readFileSync(item.target);
+    return plannedBuffer.equals(currentBuffer)
+      ? { ...base, status: 'unchanged', detail: 'target already matches planned content' }
+      : { ...base, status: 'would_update', detail: 'target differs from planned content' };
+  } catch (error) {
+    return { ...base, status: 'error', detail: error.message };
+  }
+}
+
+function enhancePlanItems(plan) {
+  return plan.map(compareEnhancePlanItem);
+}
+
+function assertEnhanceNoConflicts(plan, overwrite, capability = 'dev-skills') {
+  const conflicts = [];
+  for (const item of plan) {
+    if (!existsSync(item.target)) continue;
+    if (!lstatSync(item.target).isFile()) {
+      conflicts.push(`${normalizePath(item.targetRelative)} (not a file)`);
+      continue;
+    }
+    if (item.type === 'write-json' || item.type === 'write-text') continue;
+    const currentBuffer = readFileSync(item.target);
+    const planned = plannedItemContent(item);
+    const plannedBuffer = Buffer.isBuffer(planned) ? planned : Buffer.from(String(planned));
+    if (!overwrite && !plannedBuffer.equals(currentBuffer)) {
+      conflicts.push(normalizePath(item.targetRelative));
+    }
+  }
+  if (conflicts.length) {
+    throw new Error(`enhance ${capability} would replace existing file(s); rerun with --overwrite after reviewing: ${conflicts.join(', ')}`);
+  }
+}
+
+function printEnhanceDevSkillsPlan(plan, args, targetRoot) {
+  const items = enhancePlanItems(plan);
+  const summary = summarizeUpgradeItems(items);
+  console.log(`Plan2Agent enhance dev-skills ${args.dryRun ? 'dry run' : 'plan'}`);
+  console.log(`targetProject: ${targetRoot}`);
+  console.log(`aiTools: ${args.tools.length ? args.tools.join(',') : 'none'}`);
+  console.log(`assets: ${plan.enhanceSummary.assetFileCount}`);
+  console.log(`configUpdatedKeys: ${plan.enhanceSummary.configUpdatedKeys.length ? plan.enhanceSummary.configUpdatedKeys.join(',') : 'none'}`);
+  console.log(`summary: ${summary.unchanged} unchanged, ${summary.missing} missing, ${summary.wouldUpdate} update(s), ${summary.conflicts} conflict(s), ${summary.errors} error(s)`);
+  console.log('writes:');
+  for (const item of items.filter((entry) => entry.status !== 'unchanged')) {
+    console.log(`- ${item.status}: ${item.action} ${item.source} -> ${item.target}`);
+    console.log(`  ${item.detail}`);
+  }
+  if (args.dryRun) console.log('dry-run: no files written');
+}
+
+function printEnhanceCapabilityPlan(plan, args, targetRoot) {
+  const items = enhancePlanItems(plan);
+  const summary = summarizeUpgradeItems(items);
+  console.log(`Plan2Agent enhance ${args.enhancement} ${args.dryRun ? 'dry run' : 'plan'}`);
+  console.log(`targetProject: ${targetRoot}`);
+  console.log(`capability: ${args.enhancement}`);
+  console.log(`configKey: ${plan.enhanceSummary.configKey}`);
+  console.log(`configUpdatedKeys: ${plan.enhanceSummary.configUpdatedKeys.length ? plan.enhanceSummary.configUpdatedKeys.join(',') : 'none'}`);
+  console.log(`summary: ${summary.unchanged} unchanged, ${summary.missing} missing, ${summary.wouldUpdate} update(s), ${summary.conflicts} conflict(s), ${summary.errors} error(s)`);
+  console.log('writes:');
+  for (const item of items.filter((entry) => entry.status !== 'unchanged')) {
+    console.log(`- ${item.status}: ${item.action} ${item.source} -> ${item.target}`);
+    console.log(`  ${item.detail}`);
+  }
+  if (plan.enhanceSummary.nextActions.length) {
+    console.log('next actions:');
+    for (const action of plan.enhanceSummary.nextActions) console.log(`- ${action}`);
+  }
+  if (args.dryRun) console.log('dry-run: no files written');
+}
+
 function buildPlan(paths, args, artifactsRoot, targetRoot, sourceInfo, options = {}) {
   const { record = null, createdAt = new Date().toISOString() } = options;
   const plan = [];
@@ -1148,7 +1921,7 @@ function buildPlan(paths, args, artifactsRoot, targetRoot, sourceInfo, options =
   for (const file of SCAFFOLD_SCRIPT_FILES) {
     pushArtifact(plan, path.join(ROOT, 'scripts', file), targetRoot, targetScriptPath(file));
   }
-  for (const schemaFile of ['intake.schema.json', 'spec.schema.json', 'task-graph.schema.json', 'task-context.schema.json', 'review.schema.json', 'run.schema.json', 'run-index.schema.json', 'orchestration-plan.schema.json', 'orchestration-runtime.schema.json', 'skill-proposal.schema.json', 'proposal-review.schema.json', 'proposal-curation.schema.json', 'proposal-patch-draft.schema.json', 'proposal-draft-approval.schema.json']) {
+  for (const schemaFile of SCAFFOLD_SCHEMA_FILES) {
     pushArtifact(plan, path.join(ROOT, 'schemas', schemaFile), targetRoot, targetSchemaPath(schemaFile));
   }
   const toolAssetPlan = pushToolAssets(plan, targetRoot, args.tools);
@@ -1266,19 +2039,21 @@ function printPlan(plan, args, artifactsRoot, targetRoot, sourceInfo) {
   if (args.dryRun) console.log('dry-run: no files written');
 }
 
-function writePlan(plan) {
-  for (const item of plan) mkdirSync(path.dirname(item.target), { recursive: true });
-  for (const item of plan) {
-    if (item.type === 'write-json') {
-      writeFileSync(item.target, item.content ?? `${JSON.stringify(item.data, null, 2)}\n`, 'utf8');
-    } else if (item.type === 'write-text') {
-      writeFileSync(item.target, item.content, 'utf8');
-    } else if (item.type === 'rewrite-json') {
-      writeFileSync(item.target, item.transform(item.source), 'utf8');
-    } else {
-      copyFileSync(item.source, item.target);
-    }
+function writePlanItem(item) {
+  mkdirSync(path.dirname(item.target), { recursive: true });
+  if (item.type === 'write-json') {
+    writeFileSync(item.target, item.content ?? `${JSON.stringify(item.data, null, 2)}\n`, 'utf8');
+  } else if (item.type === 'write-text') {
+    writeFileSync(item.target, item.content, 'utf8');
+  } else if (item.type === 'rewrite-json') {
+    writeFileSync(item.target, item.transform(item.source), 'utf8');
+  } else {
+    copyFileSync(item.source, item.target);
   }
+}
+
+function writePlan(plan) {
+  for (const item of plan) writePlanItem(item);
 }
 
 function cleanupMovedSources(plan, artifactsRoot) {
@@ -1576,15 +2351,16 @@ function printNextSteps(targetRoot) {
   const artifactRoot = artifactRootFromTaskGraphRef(config?.taskGraph);
   console.log(`✅ 인계 완료 — ${targetRoot}`);
   console.log(`다음: cd ${targetRoot}`);
-  console.log(`      node .plan2agent/scripts/p2a_execute.mjs plan ${sourceArg} --task <task-id>`);
-  console.log(`      node .plan2agent/scripts/p2a_orchestrate.mjs plan ${sourceArg} --task <task-id> --output .plan2agent/orchestration/<task-id>.json`);
-  console.log(`      node .plan2agent/scripts/p2a_execute.mjs start ${sourceArg} --task <task-id> --agent-tool <tool>`);
-  console.log(`      node .plan2agent/scripts/p2a_execute.mjs finish ${sourceArg} --run-id <run-id> --test --lint --typecheck`);
-  console.log(`      node .plan2agent/scripts/p2a_proposals.mjs mine ${sourceArg}`);
-  console.log('      node .plan2agent/scripts/p2a_proposals.mjs review --proposals .plan2agent/proposals');
-  console.log('      node .plan2agent/scripts/p2a_proposals.mjs curate --review .plan2agent/proposals/reviews/<review-id>.json');
-  console.log('      node .plan2agent/scripts/p2a_proposals.mjs draft-patch --curation .plan2agent/proposals/curations/<curation-id>.json --candidate-id <candidate-id>');
-  console.log(`      node .plan2agent/scripts/p2a_proposals.mjs approve-draft --draft .plan2agent/proposals/patch-drafts/<draft-id>.json --artifacts ${artifactRoot} --approved-by <name>`);
+  console.log('      node .plan2agent/scripts/p2a.mjs info');
+  console.log(`      node .plan2agent/scripts/p2a.mjs execute plan ${sourceArg} --task <task-id>`);
+  console.log(`      node .plan2agent/scripts/p2a.mjs orchestrate plan ${sourceArg} --task <task-id> --output .plan2agent/orchestration/<task-id>.json`);
+  console.log(`      node .plan2agent/scripts/p2a.mjs execute start ${sourceArg} --task <task-id> --agent-tool <tool>`);
+  console.log(`      node .plan2agent/scripts/p2a.mjs execute finish ${sourceArg} --run-id <run-id> --test --lint --typecheck`);
+  console.log(`      node .plan2agent/scripts/p2a.mjs proposals mine ${sourceArg}`);
+  console.log('      node .plan2agent/scripts/p2a.mjs proposals review --proposals .plan2agent/proposals');
+  console.log('      node .plan2agent/scripts/p2a.mjs proposals curate --review .plan2agent/proposals/reviews/<review-id>.json');
+  console.log('      node .plan2agent/scripts/p2a.mjs proposals draft-patch --curation .plan2agent/proposals/curations/<curation-id>.json --candidate-id <candidate-id>');
+  console.log(`      node .plan2agent/scripts/p2a.mjs proposals approve-draft --draft .plan2agent/proposals/patch-drafts/<draft-id>.json --artifacts ${artifactRoot} --approved-by <name>`);
   console.log('참고: 이 next step은 legacy handoff 대상용입니다. co-located scaffold 프로젝트는 Gate D 이후 p2a_iteration init을 먼저 실행하고 --artifacts를 사용하세요.');
 
   try {
@@ -1666,6 +2442,45 @@ export function main(argv = process.argv.slice(2)) {
     }
 
     const targetRoot = path.resolve(args.target);
+    if (args.command === 'enhance') {
+      if (!existsSync(targetRoot) || !lstatSync(targetRoot).isDirectory()) {
+        throw new Error(`--target must be an existing scaffold project directory: ${targetRoot}`);
+      }
+      const plan = args.enhancement === 'dev-skills'
+        ? buildEnhanceDevSkillsPlan(args, targetRoot)
+        : buildEnhanceCapabilityPlan(args, targetRoot);
+      assertEnhanceNoConflicts(plan, args.overwrite, args.enhancement);
+      if (args.enhancement === 'dev-skills') printEnhanceDevSkillsPlan(plan, args, targetRoot);
+      else printEnhanceCapabilityPlan(plan, args, targetRoot);
+      if (args.dryRun) return 0;
+      writePlan(plan);
+      console.log(`enhance ${args.enhancement} complete`);
+      return 0;
+    }
+
+    if (args.command === 'update' || args.command === 'upgrade') {
+      if (!existsSync(targetRoot) || !lstatSync(targetRoot).isDirectory()) {
+        throw new Error(`--target must be an existing scaffold project directory: ${targetRoot}`);
+      }
+      const report = buildUpgradeDryRunReport(args, targetRoot);
+      if (args.apply) {
+        const applyReport = buildUpgradeApplyReport(args, targetRoot, report);
+        try {
+          executeUpgradeApply(targetRoot, applyReport, report);
+        } catch (error) {
+          applyReport.status = 'failed';
+          applyReport.error = errorDetail(error);
+          applyReport.nextActions = ['Inspect the apply report, restore any partially applied files if needed, then rerun update/upgrade after resolving the failure.'];
+        }
+        const writtenReport = writeUpgradeApplyReport(targetRoot, publicUpgradeApplyReport(applyReport));
+        printUpgradeApplyReport(writtenReport);
+        return ['blocked', 'failed'].includes(writtenReport.status) ? 1 : 0;
+      }
+      const writtenReport = writeUpgradePreviewReport(targetRoot, publicUpgradeReport(report));
+      printUpgradeDryRunReport(writtenReport);
+      return writtenReport.status === 'fail' ? 1 : 0;
+    }
+
     if (args.command === 'scaffold') {
       if (existsSync(targetRoot) && !lstatSync(targetRoot).isDirectory()) {
         throw new Error(`--target must be a directory path, but a non-directory exists: ${targetRoot}`);

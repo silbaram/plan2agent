@@ -41,6 +41,7 @@ Return `review_json` (schema `p2a.review.v1`). An optional `review_report` Markd
 - Every task has concrete acceptance criteria and source spec references.
 - The plan does not silently implement assumptions that were previously marked `needs_user_decision`.
 - Approved specs that choose or recommend a library, framework, runtime, protocol, package, database, cloud service, external API, or other material dependency include Gate B Technology Reconnaissance: primary/current source comparison, a nearby rationale/citation, and at least one relevant `WEB-n` evidence item.
+- If `spec_json.reference_reconnaissance` is present, every candidate must point to an existing `evidence[].source_id`, every selected/rejected pattern must point to a known `REF-n` candidate, and the selected/rejected rationale must be consistent with the Gate B recommendation.
 - Web-grounded decisions have `WEB-n` evidence entries with title, URL, and `used_for` rationale.
 - Treat missing Technology Reconnaissance evidence for a material technology choice as a blocking Gate B issue, not as a non-blocking citation nit.
 

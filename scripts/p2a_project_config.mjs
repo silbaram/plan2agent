@@ -3,6 +3,10 @@
 import { existsSync, lstatSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 
+const ORCHESTRATION_AGENT_TOOLS = new Set(['codex', 'claude', 'manual']);
+const AI_TOOL_TARGETS = new Set(['codex', 'claude', 'gemini']);
+export const DEFAULT_VERIFICATION_TIMEOUT_MS = 600000;
+
 export function defaultRunTracking() {
   return {
     runsDir: '.plan2agent/runs',
@@ -30,6 +34,149 @@ export function defaultProviderNativeCapabilities() {
       geminiContext: 'manual_check',
     },
   };
+}
+
+export function defaultDevExecution() {
+  return {
+    defaultProvider: 'codex',
+    allowedProviders: ['codex', 'claude', 'gemini', 'manual'],
+    writeProviders: ['codex', 'claude'],
+    readOnlyProviders: ['gemini'],
+    defaultIsolation: 'none',
+    scopePolicy: 'task_only',
+    verificationPolicy: 'required_for_done',
+  };
+}
+
+function objectValue(value) {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+}
+
+function normalizedProviderValue(value) {
+  return typeof value === 'string' && value.trim() ? value.trim().toLowerCase() : null;
+}
+
+function normalizedProviderList(value) {
+  return Array.isArray(value)
+    ? value
+      .filter((item) => typeof item === 'string')
+      .map((item) => item.trim().toLowerCase())
+      .filter(Boolean)
+    : [];
+}
+
+function uniqueOrdered(values) {
+  const seen = new Set();
+  const unique = [];
+  for (const value of values) {
+    if (!value || seen.has(value)) continue;
+    seen.add(value);
+    unique.push(value);
+  }
+  return unique;
+}
+
+export function resolveOrchestrationAgentTool(config, manifest) {
+  const defaults = defaultDevExecution();
+  const devExecution = objectValue(config?.devExecution);
+  const configuredAllowed = normalizedProviderList(devExecution.allowedProviders);
+  const configuredWrite = normalizedProviderList(devExecution.writeProviders);
+  const allowedSet = new Set(configuredAllowed.length ? configuredAllowed : defaults.allowedProviders);
+  const writeProviders = configuredWrite.length ? configuredWrite : defaults.writeProviders;
+  const writeSet = new Set(writeProviders);
+  const defaultProvider = normalizedProviderValue(devExecution.defaultProvider) ?? defaults.defaultProvider;
+  const manifestTargets = normalizedProviderList(manifest?.aiToolTargets)
+    .filter((target) => AI_TOOL_TARGETS.has(target));
+  const manifestTargetSet = new Set(manifestTargets);
+  const hasManifestTargets = manifestTargets.length > 0;
+  const candidates = uniqueOrdered([
+    defaultProvider,
+    ...writeProviders,
+    ...configuredAllowed,
+    ...defaults.writeProviders,
+    'manual',
+  ]);
+
+  for (const tool of candidates) {
+    if (!ORCHESTRATION_AGENT_TOOLS.has(tool) || !allowedSet.has(tool)) continue;
+    if (tool === 'manual') return tool;
+    if (!writeSet.has(tool)) continue;
+    if (!hasManifestTargets) continue;
+    if (!manifestTargetSet.has(tool)) continue;
+    return tool;
+  }
+
+  return allowedSet.has('manual') ? 'manual' : '<agent-tool>';
+}
+
+export function defaultRoleProfiles() {
+  return {
+    implementer: {
+      defaultProfile: 'fullstack',
+      allowedProfiles: ['frontend', 'backend', 'fullstack', 'test', 'docs'],
+    },
+    reviewer: {
+      defaultProfile: 'qa',
+      allowedProfiles: ['qa', 'architecture', 'security'],
+    },
+    monitor: {
+      defaultProfile: 'manual_monitor',
+      allowedProfiles: ['manual_monitor', 'qa'],
+    },
+  };
+}
+
+export function defaultPromptTemplates() {
+  return {
+    devExecution: 'p2a.dev_prompt.v1',
+    roleContract: 'p2a.role_contract.v1',
+    providerGuide: 'p2a.provider_guide.v1',
+  };
+}
+
+export function defaultCapabilityConfig(capability) {
+  if (capability === 'memory') {
+    return {
+      enabled: true,
+      mode: 'manual_sync',
+      serverUrlEnv: 'P2A_MEMORY_URL',
+      projectIdSource: 'manifest',
+      syncTiers: ['trace', 'content', 'analytics', 'search'],
+      statusPolicy: 'local_first',
+      pushPolicy: 'explicit_approval',
+    };
+  }
+  if (capability === 'gui') {
+    return {
+      enabled: true,
+      metadataSource: '.plan2agent/manifest.json',
+      stateSource: 'p2a_doctor_json',
+      defaultView: 'overview',
+      commandMode: 'guidance_only',
+      projectConfigSource: '.plan2agent/project.config.json',
+    };
+  }
+  if (capability === 'orchestration') {
+    return {
+      enabled: true,
+      defaultMode: 'solo',
+      supervisedRun: true,
+      providerRouting: 'project_config',
+      monitorGatePolicy: 'explicit_plan_only',
+      runtimeDir: '.plan2agent/runs',
+    };
+  }
+  if (capability === 'proposals') {
+    return {
+      enabled: true,
+      queueDir: '.plan2agent/proposals',
+      mineOn: ['failed_run', 'blocked_run', 'verification_gap'],
+      reviewPolicy: 'manual_curate',
+      patchPolicy: 'draft_only',
+      approvalRequired: true,
+    };
+  }
+  throw new Error(`unknown capability config: ${capability}`);
 }
 
 export function detectPackageManager(targetRoot) {
@@ -105,10 +252,14 @@ export function buildProjectConfig(targetRoot, teamBigFiveConfig = { enabled: fa
     testCommand: detected.testCommand,
     lintCommand: detected.lintCommand,
     typecheckCommand: detected.typecheckCommand,
+    verificationTimeoutMs: DEFAULT_VERIFICATION_TIMEOUT_MS,
     taskGraph,
     runTracking: defaultRunTracking(),
     teamBigFive: teamBigFiveConfig,
     providerNativeCapabilities: defaultProviderNativeCapabilities(),
+    devExecution: defaultDevExecution(),
+    roleProfiles: defaultRoleProfiles(),
+    promptTemplates: defaultPromptTemplates(),
     notes: detected.notes,
   };
 }
@@ -130,6 +281,70 @@ function addUniqueNote(config, note) {
   config.notes = notes;
 }
 
+function isMissingDefaultValue(value) {
+  return isEmptyValue(value) || (Array.isArray(value) && value.length === 0);
+}
+
+function mergeObjectDefaults(target, defaults) {
+  const next = target && typeof target === 'object' && !Array.isArray(target) ? { ...target } : {};
+  const updatedKeys = [];
+  for (const [key, value] of Object.entries(defaults)) {
+    if (value && typeof value === 'object' && !Array.isArray(value)) {
+      const nested = mergeObjectDefaults(next[key], value);
+      if (nested.updatedKeys.length) {
+        next[key] = nested.value;
+        updatedKeys.push(key);
+      }
+    } else if (isMissingDefaultValue(next[key])) {
+      next[key] = value;
+      updatedKeys.push(key);
+    }
+  }
+  return { value: next, updatedKeys };
+}
+
+export function mergeDevSkillConfig(config) {
+  const next = { ...config };
+  const updatedKeys = [];
+  const merges = [
+    ['devExecution', defaultDevExecution()],
+    ['roleProfiles', defaultRoleProfiles()],
+    ['promptTemplates', defaultPromptTemplates()],
+  ];
+  for (const [key, defaults] of merges) {
+    const merged = mergeObjectDefaults(next[key], defaults);
+    if (merged.updatedKeys.length || isMissingDefaultValue(next[key])) {
+      next[key] = merged.value;
+      updatedKeys.push(key);
+    }
+  }
+  if (updatedKeys.length) {
+    if (!next.schema_version) next.schema_version = 'p2a.project_config.v1';
+    if (!next.runTracking) next.runTracking = defaultRunTracking();
+    if (!next.providerNativeCapabilities) next.providerNativeCapabilities = defaultProviderNativeCapabilities();
+    addUniqueNote(next, 'Development skill execution defaults were installed by p2a enhance dev-skills');
+  }
+  return { config: next, updatedKeys };
+}
+
+export function mergeCapabilityConfig(config, capability) {
+  const defaults = defaultCapabilityConfig(capability);
+  const next = { ...config };
+  const merged = mergeObjectDefaults(next[capability], defaults);
+  const updatedKeys = [];
+  if (merged.updatedKeys.length || isMissingDefaultValue(next[capability])) {
+    next[capability] = merged.value;
+    updatedKeys.push(capability);
+  }
+  if (updatedKeys.length) {
+    if (!next.schema_version) next.schema_version = 'p2a.project_config.v1';
+    if (!next.runTracking) next.runTracking = defaultRunTracking();
+    if (!next.providerNativeCapabilities) next.providerNativeCapabilities = defaultProviderNativeCapabilities();
+    addUniqueNote(next, `Capability defaults were installed by p2a enhance ${capability}`);
+  }
+  return { config: next, updatedKeys };
+}
+
 export function mergeDetectedProjectConfig(config, detected, options = {}) {
   const overwrite = options.overwrite === true;
   const next = { ...config };
@@ -141,6 +356,10 @@ export function mergeDetectedProjectConfig(config, detected, options = {}) {
       next[key] = value;
       updatedKeys.push(key);
     }
+  }
+  if (isEmptyValue(next.verificationTimeoutMs)) {
+    next.verificationTimeoutMs = DEFAULT_VERIFICATION_TIMEOUT_MS;
+    updatedKeys.push('verificationTimeoutMs');
   }
   if (updatedKeys.length) {
     if (!next.schema_version) next.schema_version = 'p2a.project_config.v1';
@@ -163,6 +382,10 @@ export function mergeExplicitVerificationCommands(config, verifyRequests, option
       next[key] = request.command;
       updatedKeys.push(key);
     }
+  }
+  if (isEmptyValue(next.verificationTimeoutMs)) {
+    next.verificationTimeoutMs = DEFAULT_VERIFICATION_TIMEOUT_MS;
+    updatedKeys.push('verificationTimeoutMs');
   }
   if (updatedKeys.length) {
     if (!next.schema_version) next.schema_version = 'p2a.project_config.v1';

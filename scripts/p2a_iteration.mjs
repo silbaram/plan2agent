@@ -1171,6 +1171,67 @@ function buildDeltaIntake({ projectId, iterationId, idea, baselineIteration, bas
   };
 }
 
+function initialReferenceReconnaissance(iterationId, idea) {
+  return {
+    triggers: [
+      `Gate B ${iterationId} draft should record reusable local patterns, prior artifacts, Memory results, or primary-source technology references before approval when they affect implementation choices.`,
+    ],
+    candidates: [
+      {
+        candidate_id: 'REF-1',
+        title: 'Gate A intake',
+        source_id: 'LOCAL-1',
+        source_type: 'local_artifact',
+        summary: 'Canonical intake artifact for the current Gate B draft.',
+        used_for: 'Kept product and implementation scope traceable to Gate A.',
+        decision: 'context',
+        rationale: 'The intake defines scope context but does not by itself select an implementation pattern.',
+      },
+      {
+        candidate_id: 'REF-2',
+        title: 'Iteration idea',
+        source_id: 'USER-1',
+        source_type: 'user_input',
+        summary: idea,
+        used_for: 'Scoped the current Gate B draft before task generation.',
+        decision: 'context',
+        rationale: 'The idea constrains the draft and should be supplemented with concrete reference candidates before approving material technology choices.',
+      },
+    ],
+    selected_patterns: [],
+    rejected_patterns: [],
+    open_questions: [],
+  };
+}
+
+function carriedReferenceReconnaissance(baselineSpec, iterationId) {
+  const reconnaissance = baselineSpec.reference_reconnaissance;
+  if (!reconnaissance || !Array.isArray(reconnaissance.candidates)) return null;
+  const candidates = reconnaissance.candidates
+    .filter((candidate) => typeof candidate?.source_id === 'string' && candidate.source_id.startsWith('WEB-'))
+    .map((candidate) => ({
+      ...candidate,
+      used_for: `Carried forward for iteration ${iterationId}: ${candidate.used_for}`,
+      rationale: `Baseline reference still applies unless this delta supersedes it. ${candidate.rationale}`,
+    }));
+  if (!candidates.length) return null;
+  const candidateIds = new Set(candidates.map((candidate) => candidate.candidate_id));
+  return {
+    triggers: [
+      ...asStringArray(reconnaissance.triggers).map((trigger) => `Carried forward baseline Gate B reference for ${iterationId}: ${trigger}`),
+      `Review whether iteration ${iterationId} needs new local or Memory reference candidates before approval.`,
+    ],
+    candidates,
+    selected_patterns: Array.isArray(reconnaissance.selected_patterns)
+      ? reconnaissance.selected_patterns.filter((pattern) => candidateIds.has(pattern.candidate_id))
+      : [],
+    rejected_patterns: Array.isArray(reconnaissance.rejected_patterns)
+      ? reconnaissance.rejected_patterns.filter((pattern) => candidateIds.has(pattern.candidate_id))
+      : [],
+    open_questions: [],
+  };
+}
+
 function buildDeltaSpec({ projectId, iterationId, idea, baselineSpec, baselineSpecRef }) {
   const product = baselineSpec.product;
   const implementation = baselineSpec.implementation;
@@ -1250,6 +1311,7 @@ function buildDeltaSpec({ projectId, iterationId, idea, baselineSpec, baselineSp
       },
       ...baselineWebEvidence,
     ],
+    reference_reconnaissance: carriedReferenceReconnaissance(baselineSpec, iterationId) ?? initialReferenceReconnaissance(iterationId, idea),
   };
 }
 
@@ -1358,6 +1420,7 @@ function buildInitialSpec({ projectId, iterationId, idea, intake }) {
         used_for: idea,
       },
     ],
+    reference_reconnaissance: initialReferenceReconnaissance(iterationId, idea),
   };
 }
 

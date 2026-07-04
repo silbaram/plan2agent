@@ -1,8 +1,76 @@
 # P2A 하네스 고도화 아이디어
 
-작성일: 2026-07-01 · 상태: 아이디어 정리 · 참고 소스: `/Users/qoo10/projects/agents-cli`, `/Users/qoo10/projects/plan2agent-memory`
+작성일: 2026-07-01 · 상태: 완료 · 완료일: 2026-07-02 · 참고 소스: `/Users/qoo10/projects/agents-cli`, `/Users/qoo10/projects/plan2agent-memory`
 
 이 문서는 `google/agents-cli`의 로컬 클론을 검토한 뒤, Plan2Agent(P2A) 하네스 고도화에 참고할 만한 제품/운영 아이디어를 정리한다. 목적은 `agents-cli`의 ADK 기능을 그대로 가져오는 것이 아니라, coding agent를 잘 움직이게 만드는 라이프사이클형 CLI/skill 운영 패턴을 P2A에 맞게 흡수하는 것이다.
+
+## 0. 완료 기록
+
+`plans/04`의 개발 범위는 구현과 실제 Memory 서버 통합검증까지 완료했다. 이 문서의 나머지 본문은 최초 아이디어와 설계 판단을 보존하고, 아래 완료 기록을 최종 상태 기준으로 삼는다.
+
+### 0.1 완료된 기능 범위
+
+| 영역 | 완료 내용 |
+| --- | --- |
+| 진입/진단 | `p2a info`, `p2a_doctor`, `doctor --dev`로 설치 상태, capability drift, provider/dev skill 상태, project state를 확인하는 진입 명령을 정리했다. |
+| 업데이트/업그레이드 | `update`, `upgrade --dry-run`, preview/apply report, 부분 실패 non-zero 처리와 복구 안내를 정리했다. |
+| capability 확장 | `enhance dev-skills`, `enhance memory`, `enhance gui`, `enhance orchestration`, `enhance proposals` 흐름을 capability 단위로 분리했다. |
+| run 구조화 | run schema와 artifact validation, `p2a_runs`에 `reproduction`, `localization`, `fixSummary`, `guard` 기록 흐름을 추가하고, failed/blocked run의 필수 debug detail 누락은 validation/finish에서 차단한다. |
+| eval 루프 | `p2a_eval grade/compare/analyze/generate/digest`로 run evidence, acceptance coverage, failure cluster, maintenance draft, digest를 생성한다. |
+| proposal 연결 | `p2a_proposals`가 유효한 failed/blocked run의 failure class와 verification gap을 maintenance proposal 후보로 만든다. |
+| Memory CLI | `p2a_memory status/push/pull --dry-run/search/history/digest`로 로컬 artifact와 Memory 서버의 동기화, 검색, 회고 흐름을 지원하고, pull은 metadata/hash 기반 restore report를 생성한다. |
+| GUI | GUI Overview가 `p2a info`, `p2a_doctor`, update preview/apply report, eval analysis/digest, memory digest/history/search report를 읽어 operational card로 표시한다. |
+
+### 0.2 실제 Memory 서버 통합검증
+
+실제 실행 중인 `plan2agent-memory` 서버와 PostgreSQL DB를 대상으로 통합검증을 수행했다.
+
+| 검증 항목 | 결과 |
+| --- | --- |
+| 서버 health | `http://127.0.0.1:8080/api/health` 응답 `UP` 확인 |
+| 대상 artifact | `/Users/qoo10/projects/plan2agent-memory/.plan2agent/artifacts/p2a-local-artifact-store` |
+| `memory push --dry-run` | project 1, iteration 1, documents 5, task graph 1, tasks 17, runs 19, chunks 35 write plan 확인 |
+| `memory push --yes` | 실제 서버 upsert 성공 |
+| `memory status` 재조회 | `synced=79`, `missingRemote=0`, `remoteDiffers=0`, `extraRemote=0` 확인 |
+| `memory search` | `PostgreSQL` keyword 검색 결과 5건 확인 |
+| `memory history` | remote run timeline 조회 확인 |
+| `memory pull --dry-run` | `alreadyLocal=79`, `remoteDiffers=0`, `remoteOnly=0` preview 확인 |
+| DB row count | `projects=1`, `iterations=1`, `documents=5`, `task_graphs=1`, `tasks=17`, `runs=19`, `document_chunks=35` 확인 |
+
+통합검증 중 `p2a_memory`가 `p2a-project-*` 형태의 안정 ID를 canonical server ID로 전송해 서버의 UUID 검증에 실패하는 문제가 발견됐다. 이를 deterministic UUID 생성 방식으로 수정했고, fixture에 canonical UUID 검증을 추가했다. 로컬/P2A 식별자는 `sourceProjectId`, `sourceIterationId`, `sourceTaskId`, `sourceRunId`, metadata, source reference로 유지한다.
+
+`memory pull --dry-run --output`의 restore report 구조는 local fixture 회귀검증에서 확인했다. 현재 Memory lookup API는 artifact 본문 적용용 content endpoint가 아니므로 `pull --apply`는 명시적으로 거절하고, remote-only/different 항목은 metadata/hash 기반 수동 복구 대상으로 보고한다.
+
+### 0.3 범위 정리
+
+agents-cli의 기능을 1:1로 복제한 것이 아니라, P2A의 파일 기반 하네스에 맞는 운영 패턴만 선별해 반영했다.
+
+- agents-cli의 `setup` 개념은 P2A에서 별도 `setup` 명령이 아니라 `scaffold`로 대응한다. `scaffold`가 fresh project 설치 진입점이고, 이후 `enhance`, `update`, `upgrade`, `doctor`, `info`가 운영 표면을 나눈다.
+- agents-cli의 eval flywheel은 P2A에서 `p2a_eval grade/compare/analyze/generate/digest`로 변환했다. dataset synthesize, optimize, cloud submit/results 같은 agents-cli 고유 기능은 구현 범위가 아니다.
+- observability는 Cloud Trace/BigQuery가 아니라 Plan2Agent Memory의 artifact snapshot, hash, lineage, keyword search, digest 중심으로 구현했다.
+
+### 0.4 완료 검증 명령
+
+완료 시점에 아래 검증을 통과했다.
+
+```bash
+node --check scripts/p2a_memory.mjs
+node --check scripts/run_fixtures.mjs
+node scripts/run_fixtures.mjs
+git diff --check
+```
+
+추가로 앞선 구현 범위에서 GUI 타입체크와 테스트도 통과했다.
+
+```bash
+cd apps/p2a-gui
+npm run typecheck
+npm test
+```
+
+### 0.5 남은 처리
+
+기능 개발과 실제 검증은 완료됐다. 남은 작업은 변경사항 커밋, 푸시, 필요 시 release note 또는 후속 계획 문서로의 이관이다.
 
 ## 1. 핵심 판단
 
@@ -27,21 +95,21 @@ P2A는 이미 Gate A-D, iteration, task graph, run log, proposal, handoff 구조
 | 영역 | agents-cli 패턴 | P2A 적용 아이디어 |
 | --- | --- | --- |
 | workflow | 전체 개발 단계와 재진입 규칙 | `p2a-workflow` 또는 `p2a-harness`를 상위 orchestration 문서로 유지 |
-| scaffold | create/enhance/upgrade 분리 | `p2a_handoff scaffold`를 setup/enhance/upgrade 명령면으로 정리 |
+| scaffold | create/enhance/upgrade 분리 | `p2a_handoff scaffold`를 `scaffold`/`enhance`/`upgrade` 명령면으로 정리 |
 | develop/code | 코드 보존, 실행 경계, 디버깅 규칙 | `p2a-dev-execution`, implementer/monitor/orchestrator skill과 provider config 고도화 |
-| eval | generate/grade/compare/analyze/optimize | `p2a_eval`로 task/run/spec 품질 평가 루프 설계 |
+| eval | generate/grade/compare/analyze/optimize | `p2a_eval generate/grade/compare/analyze/digest`로 task/run/spec 품질 평가 루프 설계. `optimize`는 P2A 구현 범위가 아님 |
 | deploy/publish | 명시 승인 후 실행 | P2A도 코드 변경, PR, Memory push 같은 외부 효과 작업에 승인 audit 유지 |
 | observability | trace/log/analytics tier 구분 | P2A Memory를 artifact/run/proposal observability backend로 사용 |
 
 P2A의 기존 skill 구조는 이미 CLI별 mirror와 role 분리가 있다. 다음 개선은 skill을 더 늘리는 것보다, 사용자가 "지금 어떤 명령을 실행해야 하는지"를 찾기 쉽게 하는 top-level command surface가 중요하다.
 
-### 2.2 `setup/info/update/doctor` 계열
+### 2.2 `scaffold/info/update/doctor` 계열
 
-`agents-cli`는 설치와 상태 확인을 명령으로 노출한다. P2A도 아래 명령면이 필요하다.
+`agents-cli`는 설치와 상태 확인을 명령으로 노출한다. P2A는 별도 `setup` 명령을 만들지 않고, 아래처럼 `scaffold`를 fresh project 설치 진입점으로 둔다.
 
 | 후보 명령 | 목적 |
 | --- | --- |
-| `p2a setup` | 대상 프로젝트에 `.plan2agent`, schemas, scripts, skills, agents를 설치 |
+| `p2a scaffold` | 대상 프로젝트에 `.plan2agent`, schemas, scripts, skills, agents를 설치 |
 | `p2a info` | active project, active iteration, Gate 상태, task/run 요약, toolkit version 출력 |
 | `p2a update` | scaffolded 프로젝트의 scripts/schemas/skills를 최신 toolkit 기준으로 갱신 |
 | `p2a doctor` | 누락 파일, schema drift, CLI mirror drift, Memory 연결, Node/Docker/git 상태 진단 |
@@ -72,14 +140,14 @@ P2A 적용:
 
 | agents-cli에서 확인한 패턴 | P2A 적용 아이디어 | 우선순위 |
 | --- | --- | --- |
-| `setup`, `info`, `update`가 설치/상태/재설치를 표준 명령으로 제공 | `p2a setup/info/update/doctor`를 top-level 진입점으로 만들고, 실패 시 non-zero exit와 구체적 실패 사유를 출력 | P1 |
+| `setup`, `info`, `update`가 설치/상태/재설치를 표준 명령으로 제공 | P2A에서는 별도 `setup` 명령을 만들지 않고 `p2a scaffold/info/update/doctor`를 top-level 진입점으로 정리하며, 실패 시 non-zero exit와 구체적 실패 사유를 출력 | P1 |
 | `scaffold create/enhance/upgrade --dry-run`으로 신규/기존/업그레이드 흐름 분리 | `p2a scaffold`, `p2a enhance <capability>`, `p2a upgrade --dry-run`으로 하네스 설치와 확장을 분리 | P1 |
 | strict programmatic mode로 필수 인자를 침묵 보정하지 않음 | P2A 명령도 필수 결정이 빠지면 UsageError 또는 Gate blocker로 멈추고, agent가 임의 기본값을 만들지 않게 함 | P1 |
 | release notes에서 `update` 실패를 성공처럼 보이던 문제를 수정 | P2A update/upgrade/memory push도 부분 실패를 성공으로 포장하지 않고 실패 asset 목록과 복구 명령을 남김 | P1 |
 | `run` footer가 copy-paste 가능한 resume command를 출력 | `p2a_runs start/finish`와 GUI supervised run footer에 `resume`, `status`, `finish`, `review` 명령을 출력 | P2 |
 | `agents-cli-manifest.yaml`로 언어 독립 manifest와 config migration 제공 | `.plan2agent/project.config.json`과 후보 `dev.config.json`에 schemaVersion, toolkitVersion, migration preview를 추가 | P2 |
 | scaffold reference project를 `/tmp`에 만들어 필요한 파일만 비교 | `p2a scaffold reference --capability <x>` 또는 `p2a upgrade --dry-run --reference`로 대상 프로젝트를 건드리기 전 diff 확인 | P2 |
-| Quality Flywheel이 dataset -> generate -> grade -> analyze -> optimize를 반복 | `p2a_eval generate/grade/compare/analyze/digest`로 spec/task/run/proposal 품질 루프를 구축 | P2 |
+| Quality Flywheel이 dataset -> generate -> grade -> analyze -> optimize를 반복 | agents-cli와 동등한 eval 제품군이 아니라 `p2a_eval generate/grade/compare/analyze/digest`로 spec/task/run/proposal 품질 루프를 구축 | P2 |
 | observability를 trace, prompt-response log, analytics, third-party tier로 구분 | P2A Memory에 trace/content/analytics/search tier를 두고 GUI가 같은 계층으로 보여주게 함 | P2 |
 | skill phase마다 관련 skill을 다시 읽으라고 명시 | P2A도 Gate/Run/Review 전환 시 필요한 skill과 source artifact를 `p2a info`와 run prompt에 명시 | P2 |
 

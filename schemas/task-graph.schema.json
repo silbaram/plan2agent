@@ -109,6 +109,10 @@
               "implementation_incomplete",
               "other"
             ]
+          },
+          "blockNote": {
+            "type": "string",
+            "minLength": 1
           }
         }
       }

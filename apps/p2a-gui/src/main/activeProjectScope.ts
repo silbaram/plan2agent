@@ -3,6 +3,7 @@ import type {
   ArtifactFileReadRequest,
   ExecutionFinishRunRequest,
   ExecutionStartRunRequest,
+  OperationalActionRequest,
   OrchestrationMarkRoleRequest,
   TerminalSessionStartRequest,
 } from "../shared/ipc";
@@ -103,6 +104,21 @@ export function scopeExecutionFinishRunRequest(
     taskGraphPath: request?.taskGraphPath
       ? resolveInsideActiveProject(projectRoot, request.taskGraphPath, "task graph path")
     : null,
+  };
+}
+
+export function scopeOperationalActionRequest(
+  activeProjectRoot: string | null | undefined,
+  request: OperationalActionRequest | null | undefined,
+): OperationalActionRequest {
+  if (!request) throw new Error("operational:runAction requires a request");
+  const projectRoot = requireActiveProjectRootMatch(activeProjectRoot, request.projectRoot);
+  return {
+    ...request,
+    projectRoot,
+    artifactRoot: request.artifactRoot
+      ? resolveInsideActiveProject(projectRoot, request.artifactRoot, "artifact root")
+      : null,
   };
 }
 
