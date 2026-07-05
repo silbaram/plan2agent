@@ -215,6 +215,11 @@ node .plan2agent/scripts/p2a_iteration.mjs context \
   --artifacts .plan2agent/artifacts/<project_id> \
   --code-root .
 
+node .plan2agent/scripts/p2a_iteration.mjs context \
+  --artifacts .plan2agent/artifacts/<project_id> \
+  --scope maintenance \
+  --code-root .
+
 node .plan2agent/scripts/p2a_iteration.mjs validate \
   --artifacts .plan2agent/artifacts/<project_id> \
   --stage gate-c-draft
@@ -240,7 +245,7 @@ node .plan2agent/scripts/p2a_iteration.mjs maintenance add \
 
 `p2a_iteration.mjs validate`는 반복 구조의 active iteration 포인터, active Gate B-D 산출물, task dependency, review blocker, current-spec composition을 검증한다. `--allow-planning`/`--stage`는 Gate A-ready, Gate B draft/approved, 또는 `gate-c-task-graph/task-graph.draft.json`을 검증하는 Gate C draft 상태를 planning state로 검증한다. `--require-close-ready`를 붙이면 모든 active task가 `done`인지까지 확인한다. 개별 flat task graph가 승인된 spec을 기준으로 생성됐는지 확인할 때는 `validate_artifacts.mjs --task-graph ... --require-approved-spec ...`를 사용한다.
 
-`p2a_iteration.mjs close/open/draft/promote-spec/context/diff-tasks/promote-tasks/compose`는 반복 planning과 task graph 초안/승격을 다룬다. `draft`는 `.plan2agent/artifacts/<project_id>/preflight-research/`의 Feature Radar 산출물을 발견하면 Gate A/B 초안의 `evidence`와 `reference_reconnaissance`에 후보 근거로 반영한다. `diff-tasks`는 `task-graph.draft.json`만 만들고, `promote-tasks`가 사람 승인 audit과 함께 정본 `task-graph.json`으로 승격한다. `p2a_iteration.mjs maintenance add`는 Gate A/B/D 없이 `iterations/maintenance/gate-c-task-graph/task-graph.json`을 lazy 생성하거나 append한다. 필수 옵션은 `--title`과 하나 이상의 `--accept`이며, 선택 옵션은 `--description`, `--area`, `--prompt`, 반복 가능한 `--ref`, 반복 가능한 `--depends`, `--dry-run`이다.
+`p2a_iteration.mjs close/open/draft/promote-spec/context/diff-tasks/promote-tasks/compose`는 반복 planning과 task graph 초안/승격을 다룬다. `context --scope feature`는 기본값이며 active 기능 반복의 task 저작 context를 출력한다. `context --scope maintenance`는 active feature diff를 섞지 않고 `active_iteration: "maintenance"`와 maintenance task 요약을 포함한 유지보수용 context를 출력한다. `draft`는 `.plan2agent/artifacts/<project_id>/preflight-research/`의 Feature Radar 산출물을 발견하면 Gate A/B 초안의 `evidence`와 `reference_reconnaissance`에 후보 근거로 반영한다. `diff-tasks`는 `task-graph.draft.json`만 만들고, `promote-tasks`가 사람 승인 audit과 함께 정본 `task-graph.json`으로 승격한다. `p2a_iteration.mjs maintenance add`는 Gate A/B/D 없이 `iterations/maintenance/gate-c-task-graph/task-graph.json`을 lazy 생성하거나 append한다. 필수 옵션은 `--title`과 하나 이상의 `--accept`이며, 선택 옵션은 `--description`, `--area`, `--prompt`, 반복 가능한 `--ref`, 반복 가능한 `--depends`, `--dry-run`이다.
 
 ### GUI desktop app — `apps/p2a-gui`
 
@@ -424,6 +429,8 @@ node .plan2agent/scripts/p2a_tasks.mjs <command> --artifacts <iterative-project-
 | `block <task-id>` | `todo` 또는 `in_progress` task를 `blocked`로 표시한다. `--note <text>`로 `blockNote`를 남길 수 있다. |
 | `todo <task-id>` | `blocked` 또는 `in_progress` task를 `todo`로 되돌린다. `done` task는 `--reopen --note <reason>`을 명시해야 되돌릴 수 있다. |
 
+`--maintenance`로 `list`/`ready`를 실행하면 일반 표 대신 `target`과 `source`가 보이는 maintenance 표를 출력한다. proposal approval에서 생성된 task는 `proposal-target:*`, `proposal-draft-approval:*`, `proposal-patch-draft:*` 같은 ref가 표시되어 프로젝트 local task와 upstream toolkit/companion task를 구분할 수 있다. `prompt --maintenance <task-id>`는 기존 prompt 뒤에 maintenance graph, target/source refs, `execute start/status --maintenance` next command를 붙여 사람이 바로 실행 흐름으로 넘어갈 수 있게 한다.
+
 `done`은 모든 dependency가 여전히 `done`인지 확인한 뒤 최신 run evidence를 확인하는 shortcut guard를 거친다. 최신 run evidence가 없거나, run-index와 실제 run 파일의 주요 필드가 맞지 않거나, 최신 run이 아직 `started`/`failed`/`blocked`이면 `done` 전이가 실패한다. `finished` run이라도 verification이 없거나 `failed`/`skipped`/`not_run` verification이 남아 있으면 실패한다. run의 변경 파일에 `.plan2agent/` 또는 Gate 산출물이 포함된 경우도 사람이 먼저 산출물 변경 의도를 분리해야 하므로 차단한다. 같은 task의 현재 context에 monitor gate가 필요한 과거 run이 있으면, done 증거로 쓰는 최신 run도 monitor sidecar와 concern 없는 accepted verdict를 통과해야 한다.
 
 대표 예시:
@@ -599,7 +606,7 @@ node .plan2agent/scripts/p2a_proposals.mjs validate \
 
 `draft-patch`는 curation candidate 1건을 `proposals/patch-drafts/<draftId>.json`으로 바꾼다. patch draft에는 targetFiles, intendedChanges, verificationPlan, risks가 들어가지만 실제 파일 diff를 만들거나 적용하지 않는다. `approvalRequired: true`, `autoApplyAllowed: false`가 validator에서 강제된다.
 
-`approve-draft`는 사람이 승인한 patch draft를 `proposals/approvals/<approvalId>.json`으로 기록하고, `iterations/maintenance/gate-c-task-graph/task-graph.json`에 maintenance task를 append한다. 이 명령도 대상 파일을 수정하지 않으며, approval artifact에는 `autoApplyPerformed: false`가 강제된다. 같은 draft를 다시 승인하면 기존 maintenance task를 재사용해 task 중복을 피한다.
+`approve-draft`는 사람이 승인한 patch draft를 `proposals/approvals/<approvalId>.json`으로 기록하고, `iterations/maintenance/gate-c-task-graph/task-graph.json`에 maintenance task를 append한다. 이 명령도 대상 파일을 수정하지 않으며, approval artifact에는 `autoApplyPerformed: false`가 강제된다. 같은 draft를 다시 승인하면 기존 maintenance task를 재사용해 task 중복을 피한다. 사람용 출력에는 생성된 task의 `tasks show`, `tasks prompt --maintenance`, `execute start --approval <approval.json>` next command가 함께 표시된다.
 
 승인된 항목 실행은 `p2a_execute --approval <approval.json>`로 이어간다. 이 옵션은 approval artifact의 `maintenanceTask.taskId`와 task graph의 `sourceSpecRefs`를 대조한 뒤 해당 maintenance task를 plan/start/status/finish 대상으로 선택하고, start run note에 proposal approval/draft/candidate id를 기록한다.
 

@@ -17,6 +17,7 @@ import {
   configuredTaskGraphPath,
   resolveP2aPaths,
 } from './p2a_paths.mjs';
+import { commandLine } from './p2a_run_commands.mjs';
 
 const P2A_PATHS = resolveP2aPaths(import.meta.url);
 const ROOT = P2A_PATHS.projectRoot;
@@ -167,6 +168,58 @@ function printTaskTable(tasks, tasksById) {
   }
 }
 
+function sourceRefWithPrefix(task, prefix) {
+  return (task.sourceSpecRefs ?? []).find((ref) => typeof ref === 'string' && ref.startsWith(prefix)) ?? null;
+}
+
+function sourceRefValue(task, prefix) {
+  const ref = sourceRefWithPrefix(task, prefix);
+  return ref ? ref.slice(prefix.length) : null;
+}
+
+function maintenanceTargetLabel(task) {
+  const proposalTarget = sourceRefValue(task, 'proposal-target:');
+  if (proposalTarget) {
+    const parts = [proposalTarget];
+    const repo = sourceRefValue(task, 'proposal-target-repo:');
+    const area = sourceRefValue(task, 'proposal-target-area:');
+    if (repo) parts.push(`repo=${repo}`);
+    if (area) parts.push(`area=${area}`);
+    return parts.join(' ');
+  }
+  return task.targetArea ?? 'maintenance';
+}
+
+function maintenanceSourceLabel(task) {
+  const preferred = [
+    'proposal-draft-approval:',
+    'proposal-patch-draft:',
+    'proposal-candidate:',
+    'eval-cluster:',
+    'eval-analysis:',
+    'run:',
+  ];
+  for (const prefix of preferred) {
+    const ref = sourceRefWithPrefix(task, prefix);
+    if (ref) return ref;
+  }
+  return task.sourceSpecRefs?.[0] ?? 'maintenance';
+}
+
+function printMaintenanceTaskTable(tasks, tasksById) {
+  console.log('id\tstatus\tready\ttarget\tsource\ttitle');
+  for (const task of tasks) {
+    console.log([
+      task.id,
+      task.status,
+      isReady(task, tasksById) ? 'yes' : 'no',
+      maintenanceTargetLabel(task),
+      maintenanceSourceLabel(task),
+      task.title,
+    ].join('\t'));
+  }
+}
+
 function resolveSourceSpecPath(graph, graphPath, specPath = null) {
   if (specPath) return path.resolve(specPath);
   if (path.isAbsolute(graph.sourceSpec)) return graph.sourceSpec;
@@ -290,7 +343,26 @@ function readSpecForPrompt(specPath, displayPath = specPath) {
   }
 }
 
-function printPrompt(task, graph, graphPath, specPath = null) {
+function printMaintenanceExecutionContext(task, graphPath, args) {
+  console.log('Maintenance execution context:');
+  console.log(`- graph: ${formatDisplayPath(graphPath)}`);
+  console.log(`- task: ${task.id}`);
+  console.log(`- status: ${task.status}`);
+  console.log(`- target: ${maintenanceTargetLabel(task)}`);
+  console.log(`- source: ${maintenanceSourceLabel(task)}`);
+  if (task.sourceSpecRefs?.length) {
+    console.log(`- source refs: ${task.sourceSpecRefs.join(', ')}`);
+  }
+  if (args.artifactsPath) {
+    const artifactRoot = formatDisplayPath(path.resolve(args.artifactsPath));
+    console.log('Next commands:');
+    console.log(`- inspect: ${commandLine(P2A_PATHS, 'p2a_tasks.mjs', ['show', '--artifacts', artifactRoot, '--maintenance', task.id])}`);
+    console.log(`- start: ${commandLine(P2A_PATHS, 'p2a_execute.mjs', ['start', '--artifacts', artifactRoot, '--maintenance', '--task', task.id])}`);
+    console.log(`- status: ${commandLine(P2A_PATHS, 'p2a_execute.mjs', ['status', '--artifacts', artifactRoot, '--maintenance', '--task', task.id])}`);
+  }
+}
+
+function printPrompt(task, graph, graphPath, specPath = null, options = {}) {
   const sourceSpecPath = resolveSourceSpecPath(graph, graphPath, specPath);
   const displaySourceSpecPath = formatDisplayPath(sourceSpecPath);
   const spec = readSpecForPrompt(sourceSpecPath, displaySourceSpecPath);
@@ -310,6 +382,10 @@ function printPrompt(task, graph, graphPath, specPath = null) {
   printSpecContext(task, spec);
   console.log('');
   console.log(`Full spec: ${displaySourceSpecPath}`);
+  if (options.maintenance) {
+    console.log('');
+    printMaintenanceExecutionContext(task, graphPath, options.args);
+  }
 }
 
 function runsDirForTaskArgs(args) {
@@ -832,13 +908,16 @@ export function main(argv = process.argv.slice(2)) {
     const tasksById = taskMap(graph);
 
     if (args.command === 'list') {
-      printTaskTable(graph.tasks, tasksById);
+      if (args.maintenance) printMaintenanceTaskTable(graph.tasks, tasksById);
+      else printTaskTable(graph.tasks, tasksById);
     } else if (args.command === 'ready') {
-      printTaskTable(graph.tasks.filter((task) => isReady(task, tasksById)), tasksById);
+      const readyTasks = graph.tasks.filter((task) => isReady(task, tasksById));
+      if (args.maintenance) printMaintenanceTaskTable(readyTasks, tasksById);
+      else printTaskTable(readyTasks, tasksById);
     } else if (args.command === 'show') {
       console.log(JSON.stringify(requireTask(graph, args.taskId), null, 2));
     } else if (args.command === 'prompt') {
-      printPrompt(requireTask(graph, args.taskId), graph, args.graphPath, args.specPath);
+      printPrompt(requireTask(graph, args.taskId), graph, args.graphPath, args.specPath, { maintenance: args.maintenance, args });
     } else if (VALID_TRANSITIONS.has(args.command)) {
       const task = requireTask(graph, args.taskId);
       transitionTask(graph, task, args.command, args);

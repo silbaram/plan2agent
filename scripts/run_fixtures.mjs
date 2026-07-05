@@ -5716,9 +5716,11 @@ function validateIterationCurrentFixtureCases() {
         return { status: failureStatus(result), checks };
       }
 
-      const executeMonitorApprovalPath = path.join(tempRoot, 'p2a-execute-monitor', 'proposal-draft-approval.json');
-      const executeMonitorApprovalArtifactRoot = path.join(tempRoot, 'p2a-execute-monitor-approval-artifacts');
+      const executeMonitorApprovalPath = path.join(tempRoot, 'p2a execute monitor', 'proposal-draft-approval.json');
+      const executeMonitorApprovalArtifactRoot = path.join(tempRoot, 'p2a execute monitor approval artifacts');
       cpSync(artifactRoot, executeMonitorApprovalArtifactRoot, { recursive: true });
+      const quotedExecuteMonitorApprovalArtifactRoot = shellQuote(normalizeFixturePath(executeMonitorApprovalArtifactRoot));
+      const quotedExecuteMonitorApprovalPath = shellQuote(normalizeFixturePath(executeMonitorApprovalPath));
       result = runProposals([
         'approve-draft',
         '--draft',
@@ -5735,11 +5737,48 @@ function validateIterationCurrentFixtureCases() {
         executeMonitorApprovalPath,
       ]);
       checks += 1;
-      if (result.status !== 0 || !result.stdout.includes('Plan2Agent proposal draft approval')) {
+      if (
+        result.status !== 0
+        || !result.stdout.includes('Plan2Agent proposal draft approval')
+        || !result.stdout.includes('next commands:')
+        || !result.stdout.includes('node scripts/p2a.mjs tasks prompt')
+        || !result.stdout.includes('node scripts/p2a.mjs execute start')
+        || !result.stdout.includes('--approval')
+        || !result.stdout.includes(`--artifacts ${quotedExecuteMonitorApprovalArtifactRoot}`)
+        || !result.stdout.includes(`--approval ${quotedExecuteMonitorApprovalPath}`)
+      ) {
         console.error(`p2a_proposals approve-draft fixture failed: ${caseData.id}`);
         writeResultOutput(result);
         return { status: failureStatus(result), checks };
       }
+
+      result = runProposals([
+        'approve-draft',
+        '--draft',
+        executeMonitorPatchDraftPath,
+        '--artifacts',
+        executeMonitorApprovalArtifactRoot,
+        '--approved-by',
+        'fixture-reviewer',
+        '--approval-note',
+        'Fixture approval',
+        '--proposals',
+        executeMonitorProposalsDir,
+        '--output',
+        path.join(tempRoot, 'p2a-execute-monitor', 'proposal-draft-approval-dry-run.json'),
+        '--dry-run',
+      ]);
+      checks += 1;
+      if (
+        result.status !== 0
+        || !result.stdout.includes('next commands: dry-run only')
+        || result.stdout.includes('execute start')
+      ) {
+        console.error(`p2a_proposals approve-draft dry-run next command fixture failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: failureStatus(result), checks };
+      }
+
       const executeMonitorApproval = JSON.parse(readFileSync(executeMonitorApprovalPath, 'utf8'));
       const executeMonitorMaintenanceGraphPath = path.join(executeMonitorApprovalArtifactRoot, 'iterations', 'maintenance', 'gate-c-task-graph', 'task-graph.json');
       const executeMonitorMaintenanceGraph = JSON.parse(readFileSync(executeMonitorMaintenanceGraphPath, 'utf8'));
@@ -7752,9 +7791,31 @@ function validateIterationCurrentFixtureCases() {
         return { status: 1, checks };
       }
 
+      result = runIteration(['context', '--artifacts', artifactRoot, '--scope', 'maintenance', '--code-root', '.']);
+      checks += 1;
+      const maintenanceContext = result.status === 0 ? JSON.parse(result.stdout) : null;
+      if (
+        result.status !== 0
+        || maintenanceContext?.scope !== 'maintenance'
+        || maintenanceContext?.active_iteration !== 'maintenance'
+        || maintenanceContext?.spec_field_changes?.length !== 0
+        || maintenanceContext?.existing_tasks?.maintenance?.length !== 2
+      ) {
+        console.error(`iteration context --scope maintenance fixture check failed: ${caseData.id}`);
+        writeResultOutput(result);
+        console.error(JSON.stringify({ maintenanceContext }, null, 2));
+        return { status: failureStatus(result), checks };
+      }
+
       result = runTasks(['list', '--artifacts', artifactRoot, '--maintenance']);
       checks += 1;
-      if (result.status !== 0 || !result.stdout.includes('task-001') || !result.stdout.includes('task-002')) {
+      if (
+        result.status !== 0
+        || !result.stdout.includes('id\tstatus\tready\ttarget\tsource\ttitle')
+        || !result.stdout.includes('task-001')
+        || !result.stdout.includes('task-002')
+        || !result.stdout.includes('effective_product.problem')
+      ) {
         console.error(`p2a_tasks list --artifacts --maintenance fixture check failed: ${caseData.id}`);
         writeResultOutput(result);
         return { status: failureStatus(result), checks };
@@ -7762,8 +7823,40 @@ function validateIterationCurrentFixtureCases() {
 
       result = runTasks(['ready', '--artifacts', artifactRoot, '--maintenance']);
       checks += 1;
-      if (result.status !== 0 || !result.stdout.includes('task-001')) {
+      if (
+        result.status !== 0
+        || !result.stdout.includes('id\tstatus\tready\ttarget\tsource\ttitle')
+        || !result.stdout.includes('task-001')
+      ) {
         console.error(`p2a_tasks ready --artifacts --maintenance fixture check failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: failureStatus(result), checks };
+      }
+
+      result = runTasks(['prompt', '--artifacts', artifactRoot, '--maintenance', 'task-001']);
+      checks += 1;
+      if (
+        result.status !== 0
+        || !result.stdout.includes('Maintenance execution context:')
+        || !result.stdout.includes('Next commands:')
+        || !result.stdout.includes('node scripts/p2a.mjs execute start')
+        || !result.stdout.includes('--maintenance --task task-001')
+      ) {
+        console.error(`p2a_tasks prompt --artifacts --maintenance fixture check failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: failureStatus(result), checks };
+      }
+
+      const spacedMaintenanceArtifactRoot = path.join(tempRoot, 'p2a maintenance ux root');
+      cpSync(artifactRoot, spacedMaintenanceArtifactRoot, { recursive: true });
+      const quotedSpacedMaintenanceArtifactRoot = shellQuote(normalizeFixturePath(spacedMaintenanceArtifactRoot));
+      result = runTasks(['prompt', '--artifacts', spacedMaintenanceArtifactRoot, '--maintenance', 'task-001']);
+      checks += 1;
+      if (
+        result.status !== 0
+        || !result.stdout.includes(`--artifacts ${quotedSpacedMaintenanceArtifactRoot}`)
+      ) {
+        console.error(`p2a_tasks prompt --artifacts --maintenance quoted path fixture check failed: ${caseData.id}`);
         writeResultOutput(result);
         return { status: failureStatus(result), checks };
       }

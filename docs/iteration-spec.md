@@ -42,9 +42,9 @@
 | `status.md` 반복 인덱스 | 전체 반복 history, close audit, handoff audit, maintenance 요약을 누적 렌더링한다. | 더 풍부한 사용자용 diff/요약은 후속 UX 항목이다. |
 | baseline-aware Gate A/B | 초기 Gate A-only 초안과 baseline 기반 delta 초안을 만든다. | 구조적 질문 재생성, 사용자 답변 재사용/재처분 로직이 필요하다. |
 | 구조적 diff task | spec field 차이를 semantic group으로 병합/분할하고, 완료 task overlap은 rework로 표시하며, `--force` 시 미완료 active task id/status를 재사용한다. | code-aware/LLM 기반 의미 판단은 후속 실행 레이어에서 다룬다. |
-| agent 저작 task gate | backbone(`context`, `gate-c-draft` 검증, `promote-tasks`), `p2a-task-author` 스킬, 정식 `task-context` schema, provenance sidecar가 구현됐다. 상세 계약은 §10이다. | maintenance draft 승격(`--scope maintenance`/`maintenance add --from-draft`)은 낮은 우선순위 후속이다. |
+| agent 저작 task gate | backbone(`context`, `gate-c-draft` 검증, `promote-tasks`), `p2a-task-author` 스킬, 정식 `task-context` schema, provenance sidecar가 구현됐다. 상세 계약은 §10이다. | maintenance draft 승격(`maintenance add --from-draft`)은 낮은 우선순위 후속이다. |
 | archived close | close artifact 존재 여부/hash 기록과 기본 validate-time archive audit을 제공한다. | 기존 pre-audit artifact migration은 필요할 때 `--skip-archive-audit`로 우회한다. |
-| maintenance 반복 | lazy README, `maintenance add` task 생성, 존재하는 task graph 검증, handoff 시 별도 `.plan2agent/maintenance/task-graph.json` 복사를 제공한다. | maintenance 전용 UX는 후속이다. |
+| maintenance 반복 | lazy README, `maintenance add` task 생성, 존재하는 task graph 검증, `context --scope maintenance`, `tasks --maintenance` source/target 표와 prompt next command, handoff 시 별도 `.plan2agent/maintenance/task-graph.json` 복사를 제공한다. | draft 파일에서 바로 append하는 `maintenance add --from-draft`는 후속이다. |
 | agent 실행 추적 | `p2a_runs.mjs`가 `runs/run-index.json`과 `runs/<runId>.json`을 관리하고, test/lint/typecheck 실행 결과와 git changed files를 수집한다. | PTY 기반 자동 agent orchestration, PR 생성, 병렬 실행 scheduler는 후속이다. |
 
 ### 0-3. 미구현 / 후속 고도화
@@ -567,7 +567,7 @@ handoff는 active 반복의 `task-graph.sourceSpec`을 `spec.json`으로, `spec.
 
 ## 10. Agent 저작 task 게이트
 
-상태: **부분 구현**. backbone(`context` / `validate --stage gate-c-draft` / `promote-tasks`), 저작 스킬(`p2a-task-author`), 정식 context 스키마(`p2a.task_context.v1`), provenance sidecar가 구현됐고, maintenance Phase 1이 남았다.
+상태: **부분 구현**. backbone(`context` / `validate --stage gate-c-draft` / `promote-tasks`), 저작 스킬(`p2a-task-author`), 정식 context 스키마(`p2a.task_context.v1`), provenance sidecar가 구현됐다. maintenance context/실행 UX는 구현됐고, draft 파일을 maintenance graph에 append하는 Phase 1 승격 명령은 남았다.
 
 이 문서는 agent가 task를 저작하고 사람이 게이트에서 확정하는 흐름의 구현 계약을 정의한다. 반복/고도화 개발의 정본 계약은 `docs/iteration-spec.md`이며, 이 문서는 그 위에 붙는 "Agent 저작 task 게이트" 기능의 설계 정본이다. `diff-tasks`는 deterministic semantic draft generator로 유지하고, agent 저작 경로는 더 깊은 맥락 판단을 붙이는 확장 경로다.
 
@@ -581,11 +581,11 @@ handoff는 active 반복의 `task-graph.sourceSpec`을 `spec.json`으로, `spec.
 | 회귀 테스트 | `run_fixtures`(context/gate-c-draft/promote) + `check_cli_parity`(skill mirror) | ✅ |
 | provenance sidecar | `task-graph.draft.meta.json` | ✅ 구현 |
 | 정식 context 스키마 | `.plan2agent/schemas/task-context.schema.json` + `validateTaskContextData` (context가 출력 전 자기검증) | ✅ 구현 |
-| `context --scope maintenance` | — | ⛔ 남음 (현재 `feature`만) |
-| Phase 1 (maintenance 파일럿 + fix/기능 분류) | `maintenance add --from-draft` | ⛔ 남음 (우선순위 낮음) |
+| `context --scope maintenance` | 유지보수 레인 context JSON 출력 | ✅ 구현 |
+| Phase 1 (maintenance 파일럿 + fix/기능 분류) | `context --scope maintenance`, `tasks --maintenance` 실행 UX 구현. `maintenance add --from-draft`는 후속 | ◑ 부분 구현 |
 | `validate`-time audit 강제(승격된 정본) | `current-spec.json.gate_c_approval_audits` | ✅ 구현 |
 
-남은 핵심은 없다. backbone + 저작 스킬로 "AI가 초안 저작 -> 사람 게이트 확정 -> 정본 승격"이 끝에서 끝까지 동작한다. 남은 항목은 maintenance 파일럿이다.
+feature task graph 기준의 핵심 backbone은 끝에서 끝까지 동작한다. maintenance 파일럿은 context/실행 UX가 들어갔고, 남은 항목은 draft 파일을 maintenance graph에 append하는 승격 명령이다.
 
 ### 10-1. 목적과 위치
 
@@ -708,10 +708,10 @@ node .plan2agent/scripts/p2a_iteration.mjs promote-tasks \
 
 | 단계 | 범위 | 게이트 | 상태 |
 | --- | --- | --- | --- |
-| Phase 1 (파일럿) | maintenance 레인 | 사람 confirm + `maintenance add`의 validate-before-write | ⛔ 미구현 (우선순위 낮음) |
+| Phase 1 (파일럿) | maintenance 레인 | `context --scope maintenance`, `tasks --maintenance` 실행 UX. draft append는 사람 confirm + `maintenance add`의 validate-before-write | ◑ 부분 구현 |
 | Phase 2 | feature task graph | Gate C approval audit + `promote-tasks` | ✅ backbone + 저작 스킬 구현 |
 
-Phase 1 흐름: `context --scope maintenance` -> agent가 maintenance task 초안 작성 -> 사람 확인 -> `maintenance add --from-draft`로 검증 후 append. ungated maintenance 특성상 별도 정본/초안 분리 없이 append 직전 사람 confirm을 게이트로 둔다. 단, maintenance는 본질적으로 코드-side 활동이라 planning-side 저작의 실익이 작아 우선순위를 낮춘다(이관된 fix/기능 경계 분류 포함).
+Phase 1 흐름 중 현재 구현된 부분은 `context --scope maintenance`로 유지보수 레인 context를 출력하고, `tasks --maintenance list|ready|prompt`로 source/target과 실행 next command를 확인하는 것이다. 남은 흐름은 agent가 만든 maintenance task 초안 파일을 사람이 확인한 뒤 `maintenance add --from-draft`로 검증 후 append하는 승격 명령이다. ungated maintenance 특성상 별도 정본/초안 분리 없이 append 직전 사람 confirm을 게이트로 둔다. 단, maintenance는 본질적으로 코드-side 활동이라 planning-side 저작의 실익이 작아 우선순위를 낮춘다(이관된 fix/기능 경계 분류 포함).
 
 Phase 2 흐름: `context` -> `p2a-task-author`가 `task-graph.draft.json` 저작 -> 사람 검토 + Gate C approval audit 기록 -> `promote-tasks`로 정본 승격 -> Gate D review -> `p2a_tasks` 실행. `diff-tasks`는 deterministic semantic draft generator로 남고, agent-authored draft 경로와 같은 Gate C approval/promotion 계약으로 수렴한다.
 

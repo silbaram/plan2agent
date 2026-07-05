@@ -30,6 +30,7 @@ import {
   singleArtifactProjectRoot,
 } from './p2a_paths.mjs';
 import { normalizeMonitorVerdictData } from './p2a_orchestrate.mjs';
+import { commandLine } from './p2a_run_commands.mjs';
 
 const P2A_PATHS = resolveP2aPaths(import.meta.url);
 const COMMANDS = new Set(['mine', 'list', 'show', 'validate', 'digest', 'review', 'curate', 'draft-patch', 'approve-draft']);
@@ -1732,6 +1733,16 @@ function runApproveDraft(args) {
   console.log(`- maintenance graph: ${displayPath(maintenancePlan.graphPath)} (${taskGraphAction})`);
   console.log(`- maintenance task: ${maintenancePlan.task.id} (${maintenancePlan.action})`);
   console.log(`- auto apply performed: ${approval.autoApplyPerformed}`);
+  if (args.dryRun) {
+    console.log('next commands: dry-run only; rerun without --dry-run before inspecting or executing this approval.');
+  } else {
+    const artifactArg = displayPath(artifactRoot);
+    const approvalArg = displayPath(filePath);
+    console.log('next commands:');
+    console.log(`- inspect: ${commandLine(P2A_PATHS, 'p2a_tasks.mjs', ['show', '--artifacts', artifactArg, '--maintenance', maintenancePlan.task.id])}`);
+    console.log(`- context: ${commandLine(P2A_PATHS, 'p2a_tasks.mjs', ['prompt', '--artifacts', artifactArg, '--maintenance', maintenancePlan.task.id])}`);
+    console.log(`- start: ${commandLine(P2A_PATHS, 'p2a_execute.mjs', ['start', '--artifacts', artifactArg, '--approval', approvalArg])}`);
+  }
   return 0;
 }
 
