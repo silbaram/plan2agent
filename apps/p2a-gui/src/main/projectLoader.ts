@@ -1476,14 +1476,17 @@ function normalizeProposal(
   const proposalId = stringValue(proposal.proposalId);
   const problem = stringValue(proposal.problem);
   const recommendedChange = stringValue(proposal.recommendedChange);
-  const status = isProposalStatus(proposal.status) ? proposal.status : null;
+  const recordedStatus = isProposalStatus(proposal.status) ? proposal.status : null;
   const risk = isProposalRisk(proposal.risk) ? proposal.risk : null;
-  if (!proposalId || !problem || !recommendedChange || !status || !risk) return null;
+  if (!proposalId || !problem || !recommendedChange || !recordedStatus || !risk) return null;
+  const status: ProposalStatus = maintenanceLink?.approvalId ? "approved" : recordedStatus;
 
   return {
     proposalId,
     sourceRunId: stringValue(proposal.sourceRunId),
     status,
+    recordedStatus,
+    statusSource: maintenanceLink?.approvalId ? "approval" : "proposal",
     risk,
     riskRationale: stringValue(proposal.riskRationale),
     problem,

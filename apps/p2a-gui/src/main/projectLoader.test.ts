@@ -207,7 +207,7 @@ describe("loadProjectSnapshot", () => {
           targetFiles: [".plan2agent/scripts/p2a_runs.mjs", ".agents/skills/p2a-dev-execution/SKILL.md"],
           risk: "low",
           riskRationale: "The current start path can fail before the isolated workspace exists.",
-          status: "approved",
+          status: "proposed",
           quality: {
             score: 80,
             band: "strong",
@@ -258,6 +258,8 @@ describe("loadProjectSnapshot", () => {
         proposalId: "p2a-runs-create-isolation-workspace-check",
         sourceRunId: "run-20260629-task-14-search-tests",
         status: "approved",
+        recordedStatus: "proposed",
+        statusSource: "approval",
         risk: "low",
         riskRationale: "The current start path can fail before the isolated workspace exists.",
         evidenceCount: 1,

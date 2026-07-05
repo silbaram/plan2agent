@@ -16,6 +16,8 @@ Convert `intake_json` plus user answers into the `product` section of `spec_json
 
 Rules:
 - Evidence ids must use `USER-n`, `LOCAL-n`, or `WEB-n`; every `WEB-n` entry must include title, URL, and `used_for`.
+- Treat Feature Radar preflight files as `LOCAL-n` evidence and discovered Radar source URLs as `WEB-n` evidence.
+- Do not turn Feature Radar recommendations into approved product scope unless Gate B explicitly changes the candidate decision to `selected`; otherwise keep them as `context`, `deferred`, or `rejected` candidates with rationale.
 - Do not edit files.
 - Do not run mutating commands.
 - Use web lookup (where the CLI provides it) only to ground prior-art or integration assumptions that materially affect the spec; add it to the `evidence` array and cite the source id when used.

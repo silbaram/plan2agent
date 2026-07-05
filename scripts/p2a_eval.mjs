@@ -8,7 +8,9 @@ import path from 'node:path';
 import process from 'node:process';
 import {
   loadJson,
+  validateProposalCurationData,
   validateProposalDraftApprovalData,
+  validateProposalPatchDraftData,
   validateRunData,
   validateRunIndexData,
   validateSkillProposal,
@@ -28,6 +30,7 @@ import { resolveIterationState } from './p2a_iteration_state.mjs';
 const P2A_PATHS = resolveP2aPaths(import.meta.url);
 const COMMANDS = new Set(['grade', 'compare', 'analyze', 'generate', 'digest']);
 const DEFAULT_PROPOSALS_DIR = path.join('.plan2agent', 'proposals');
+const DEFAULT_DIGEST_RECENT_RUNS = 30;
 const STOP_WORDS = new Set([
   'a',
   'an',
@@ -56,7 +59,7 @@ function usage() {
     '  node .plan2agent/scripts/p2a_eval.mjs compare --baseline <artifacts-or-runs-dir> --candidate <artifacts-or-runs-dir> [--output <path>] [--dry-run] [--json]',
     '  node .plan2agent/scripts/p2a_eval.mjs analyze (--artifacts <dir>|--graph <path>|--runs <dir>) [--proposals <dir>] [--maintenance-draft <path>] [--apply-maintenance [--yes]] [--output <path>] [--dry-run] [--json]',
     '  node .plan2agent/scripts/p2a_eval.mjs generate [--artifacts <dir>|--graph <path> [--runs <dir>]|--runs <dir>] [--baseline <dir> --candidate <dir>] [--proposals <dir>] [--output <dir>] [--dry-run] [--json]',
-    '  node .plan2agent/scripts/p2a_eval.mjs digest [--eval <dir>|--artifacts <dir>|--graph <path>|--runs <dir>] [--output <path>] [--dry-run] [--json]',
+    '  node .plan2agent/scripts/p2a_eval.mjs digest [--eval <dir>|--artifacts <dir>|--graph <path>|--runs <dir>] [--recent-runs <n>] [--output <path>] [--dry-run] [--json]',
     '',
     'Commands:',
     '  grade     Evaluate one run against its task acceptance criteria and verification evidence.',
@@ -79,6 +82,7 @@ function usage() {
     '  --apply-maintenance For analyze with --artifacts, add drafted maintenance tasks to the maintenance graph.',
     '  --yes               Required with --apply-maintenance unless --dry-run is also set.',
     '  --eval <dir>        Generated eval artifact directory for digest.',
+    `  --recent-runs <n>   For digest self-improvement metrics, analyze the most recent n runs. Default: ${DEFAULT_DIGEST_RECENT_RUNS}.`,
     '  --output <path>     Optional output path. For generate this is a directory; otherwise a JSON file.',
     '  --dry-run           Print output plan/result without writing outputs.',
     '  --json              Machine-readable stdout.',
@@ -105,6 +109,7 @@ function parseArgs(argv) {
     applyMaintenance: false,
     yes: false,
     evalDir: null,
+    recentRuns: null,
     output: null,
     dryRun: false,
     json: false,
@@ -126,6 +131,7 @@ function parseArgs(argv) {
     else if (arg === '--apply-maintenance') args.applyMaintenance = true;
     else if (arg === '--yes') args.yes = true;
     else if (arg === '--eval') args.evalDir = requiredValue(argv, ++index, '--eval');
+    else if (arg === '--recent-runs') args.recentRuns = parsePositiveInteger(requiredValue(argv, ++index, '--recent-runs'), '--recent-runs');
     else if (arg === '--output') args.output = requiredValue(argv, ++index, '--output');
     else if (arg === '--dry-run') args.dryRun = true;
     else if (arg === '--json') args.json = true;
@@ -141,6 +147,7 @@ function parseArgs(argv) {
 function validateArgs(args) {
   if (args.command === 'grade') {
     if (args.evalDir) throw new Error('grade does not support --eval');
+    if (args.recentRuns !== null) throw new Error('grade does not support --recent-runs');
     if (args.maintenanceDraft || args.applyMaintenance || args.yes) throw new Error('grade does not support maintenance draft/apply options');
     if (args.runs) throw new Error('grade uses --artifacts or --graph with --run-id, or --run with --graph');
     const sourceCount = [args.artifacts, args.graph].filter(Boolean).length;
@@ -158,13 +165,14 @@ function validateArgs(args) {
   }
   if (args.command === 'compare') {
     if (!args.baseline || !args.candidate) throw new Error('compare requires --baseline and --candidate');
-    if (args.artifacts || args.graph || args.runs || args.run || args.runId || args.proposals || args.evalDir || args.maintenanceDraft || args.applyMaintenance || args.yes) {
+    if (args.artifacts || args.graph || args.runs || args.run || args.runId || args.proposals || args.evalDir || args.recentRuns !== null || args.maintenanceDraft || args.applyMaintenance || args.yes) {
       throw new Error('compare only supports --baseline, --candidate, --output, --dry-run, and --json');
     }
     return;
   }
   if (args.command === 'analyze') {
     if (args.evalDir) throw new Error('analyze does not support --eval');
+    if (args.recentRuns !== null) throw new Error('analyze does not support --recent-runs');
     const sourceCount = [args.artifacts, args.graph, args.runs].filter(Boolean).length;
     if (sourceCount === 0) {
       const defaultArtifacts = singleArtifactProjectRoot();
@@ -189,6 +197,7 @@ function validateArgs(args) {
   }
   if (args.command === 'generate') {
     if (args.evalDir) throw new Error('generate uses --output for the eval artifact directory, not --eval');
+    if (args.recentRuns !== null) throw new Error('generate does not support --recent-runs');
     if (args.maintenanceDraft || args.applyMaintenance || args.yes) throw new Error('generate does not support maintenance draft/apply options');
     if (args.run || args.runId) throw new Error('generate grades all indexed runs; use grade for one --run or --run-id');
     if ((args.baseline && !args.candidate) || (!args.baseline && args.candidate)) {
@@ -232,6 +241,12 @@ function validateArgs(args) {
     }
     if (args.graph) assertNotUninitializedScaffoldGraph(args.graph);
   }
+}
+
+function parsePositiveInteger(value, optionName) {
+  const number = Number(value);
+  if (!Number.isInteger(number) || number <= 0) throw new Error(`${optionName} requires a positive integer`);
+  return number;
 }
 
 function requiredValue(argv, index, optionName) {
@@ -357,10 +372,24 @@ function loadRunForGrade(source, args) {
   return { run, filePath, raw: readFileSync(filePath, 'utf8') };
 }
 
-function readRuns(runsDir) {
-  if (!directoryExists(runsDir)) return { runs: [], skippedRuns: [] };
+function runSortTimestamp(run) {
+  return run.finishedAt ?? run.updatedAt ?? run.startedAt ?? '';
+}
+
+function mostRecentRuns(runs, limit = null) {
+  if (!limit) return runs;
+  return [...runs]
+    .sort((left, right) => (
+      runSortTimestamp(right).localeCompare(runSortTimestamp(left))
+      || right.runId.localeCompare(left.runId)
+    ))
+    .slice(0, limit);
+}
+
+function readRuns(runsDir, options = {}) {
+  if (!directoryExists(runsDir)) return { runs: [], skippedRuns: [], totalRuns: 0 };
   const indexPath = path.join(runsDir, 'run-index.json');
-  if (!fileExists(indexPath)) return { runs: [], skippedRuns: [] };
+  if (!fileExists(indexPath)) return { runs: [], skippedRuns: [], totalRuns: 0 };
   const index = validateRunIndexData(loadJson(indexPath));
   const runs = [];
   const skippedRuns = [];
@@ -373,7 +402,7 @@ function readRuns(runsDir) {
       skippedRuns.push({ runId: entry.runId, reason: errorMessage(error) });
     }
   }
-  return { runs, skippedRuns };
+  return { runs: mostRecentRuns(runs, options.limit ?? null), skippedRuns, totalRuns: runs.length };
 }
 
 function taskForRun(graph, run) {
@@ -1592,6 +1621,179 @@ function readProposalDraftApprovals(scanRoots) {
   return { approvals, skippedApprovals, scannedFiles: seenFiles.size };
 }
 
+function readProposalPatchDraftsAndCurations(scanRoots) {
+  const patchDrafts = [];
+  const curations = [];
+  const skippedPatchDrafts = [];
+  const skippedCurations = [];
+  const seenFiles = new Set();
+  for (const root of scanRoots) {
+    for (const filePath of safeJsonFilesRecursive(root)) {
+      const resolved = path.resolve(filePath);
+      if (seenFiles.has(resolved)) continue;
+      seenFiles.add(resolved);
+      try {
+        const payload = loadJson(resolved);
+        if (payload?.schema_version === 'p2a.proposal_patch_draft.v1') {
+          patchDrafts.push({ filePath: resolved, payload: validateProposalPatchDraftData(payload) });
+        } else if (payload?.schema_version === 'p2a.proposal_curation.v1') {
+          curations.push({ filePath: resolved, payload: validateProposalCurationData(payload) });
+        }
+      } catch (error) {
+        const basename = path.basename(resolved);
+        if (basename.includes('patch-draft')) {
+          skippedPatchDrafts.push({ filePath: displayPath(resolved), reason: errorMessage(error) });
+        } else if (basename.includes('curation')) {
+          skippedCurations.push({ filePath: displayPath(resolved), reason: errorMessage(error) });
+        }
+      }
+    }
+  }
+  return { patchDrafts, curations, skippedPatchDrafts, skippedCurations };
+}
+
+function resolveArtifactReference(value, baseDir = null) {
+  if (!value || typeof value !== 'string') return null;
+  const candidates = path.isAbsolute(value)
+    ? [path.resolve(value)]
+    : [
+      baseDir ? path.resolve(baseDir, value) : null,
+      path.resolve(P2A_PATHS.projectRoot, value),
+    ].filter(Boolean);
+  return candidates.find((candidate) => fileExists(candidate)) ?? candidates[0] ?? null;
+}
+
+function loadPatchDraftReference(filePath) {
+  if (!filePath || !fileExists(filePath)) return null;
+  try {
+    const payload = loadJson(filePath);
+    if (payload?.schema_version !== 'p2a.proposal_patch_draft.v1') return null;
+    return { filePath: path.resolve(filePath), payload: validateProposalPatchDraftData(payload) };
+  } catch {
+    return null;
+  }
+}
+
+function loadCurationReference(filePath) {
+  if (!filePath || !fileExists(filePath)) return null;
+  try {
+    const payload = loadJson(filePath);
+    if (payload?.schema_version !== 'p2a.proposal_curation.v1') return null;
+    return { filePath: path.resolve(filePath), payload: validateProposalCurationData(payload) };
+  } catch {
+    return null;
+  }
+}
+
+function curationProposalIdsForCandidate(curation, candidateId) {
+  if (!candidateId) return [];
+  return sortedUnique((curation?.candidates ?? [])
+    .filter((candidate) => candidate.candidateId === candidateId)
+    .flatMap((candidate) => candidate.proposalIds ?? []));
+}
+
+function buildApprovedProposalSignalIndex(approvals, flowArtifacts) {
+  const patchDraftsById = new Map(flowArtifacts.patchDrafts.map((item) => [item.payload.draftId, item]));
+  const curationsByPath = new Map(flowArtifacts.curations.map((item) => [path.resolve(item.filePath), item]));
+  const proposalsByApprovalId = {};
+  const proposalIds = new Set();
+  const unresolvedApprovals = [];
+
+  function proposalIdsForDraft(draftItem) {
+    if (!draftItem) return [];
+    const draft = draftItem.payload;
+    const sourceCurationPath = resolveArtifactReference(draft.sourceCuration, path.dirname(draftItem.filePath));
+    const curationItem = sourceCurationPath
+      ? curationsByPath.get(path.resolve(sourceCurationPath)) ?? loadCurationReference(sourceCurationPath)
+      : null;
+    const fromSourceCuration = curationProposalIdsForCandidate(curationItem?.payload, draft.candidateId);
+    if (fromSourceCuration.length) return fromSourceCuration;
+    return sortedUnique(flowArtifacts.curations.flatMap((item) => curationProposalIdsForCandidate(item.payload, draft.candidateId)));
+  }
+
+  for (const approval of approvals) {
+    const payload = approval.payload;
+    const sourceDraftPath = resolveArtifactReference(payload.sourceDraft, path.dirname(approval.filePath));
+    const draftItem = patchDraftsById.get(payload.draftId)
+      ?? loadPatchDraftReference(sourceDraftPath);
+    const linkedProposalIds = proposalIdsForDraft(draftItem);
+    proposalsByApprovalId[payload.approvalId] = linkedProposalIds;
+    for (const proposalId of linkedProposalIds) proposalIds.add(proposalId);
+    if (!linkedProposalIds.length) {
+      unresolvedApprovals.push({
+        approvalId: payload.approvalId,
+        draftId: payload.draftId,
+        candidateId: payload.candidateId,
+        filePath: displayPath(approval.filePath),
+      });
+    }
+  }
+
+  return {
+    proposalIds,
+    proposalsByApprovalId,
+    unresolvedApprovals,
+  };
+}
+
+function buildSelfImprovementRunScope(runs, artifacts) {
+  const runIds = runs.length
+    ? runs.map((run) => run.runId)
+    : artifacts.grades.map((item) => item.payload?.run?.runId).filter((runId) => runId && runId !== 'unknown');
+  return {
+    active: runIds.length > 0,
+    source: runs.length ? 'runs' : (artifacts.grades.length ? 'grades' : 'none'),
+    runIds: sortedUnique(runIds),
+  };
+}
+
+function proposalRunIdsFromFlowArtifacts(flowArtifacts) {
+  const runIdsByProposalId = new Map();
+  for (const item of flowArtifacts.curations) {
+    for (const candidate of item.payload.candidates ?? []) {
+      for (const proposalId of candidate.proposalIds ?? []) {
+        const existing = runIdsByProposalId.get(proposalId) ?? [];
+        runIdsByProposalId.set(proposalId, sortedUnique([...existing, ...(candidate.sourceRunIds ?? [])]));
+      }
+    }
+  }
+  return runIdsByProposalId;
+}
+
+function proposalMatchesRunScope(proposal, runScope, proposalRunIdsById) {
+  if (!runScope.active) return true;
+  const runIds = new Set(runScope.runIds);
+  if (proposal.sourceRunId && runIds.has(proposal.sourceRunId)) return true;
+  return (proposalRunIdsById.get(proposal.proposalId) ?? []).some((runId) => runIds.has(runId));
+}
+
+function filterProposalsForRunScope(proposals, runScope, proposalRunIdsById) {
+  if (!runScope.active) return proposals;
+  return proposals.filter((proposal) => proposalMatchesRunScope(proposal, runScope, proposalRunIdsById));
+}
+
+function filterApprovedProposalSignalIndex(approvedSignalIndex, scopedProposalIds, scopeActive) {
+  if (!scopeActive) return approvedSignalIndex;
+  const proposalIds = new Set();
+  const proposalsByApprovalId = {};
+  for (const [approvalId, linkedProposalIds] of Object.entries(approvedSignalIndex.proposalsByApprovalId)) {
+    const scopedLinkedProposalIds = linkedProposalIds.filter((proposalId) => scopedProposalIds.has(proposalId));
+    if (!scopedLinkedProposalIds.length) continue;
+    proposalsByApprovalId[approvalId] = scopedLinkedProposalIds;
+    for (const proposalId of scopedLinkedProposalIds) proposalIds.add(proposalId);
+  }
+  return {
+    proposalIds,
+    proposalsByApprovalId,
+    unresolvedApprovals: [],
+  };
+}
+
+function filterApprovalsForProposalScope(approvals, approvedSignalIndex, scopeActive) {
+  if (!scopeActive) return approvals;
+  return approvals.filter((approval) => (approvedSignalIndex.proposalsByApprovalId[approval.payload.approvalId] ?? []).length > 0);
+}
+
 function readMaintenanceGraphs(sourceContext, approvals) {
   const approvalGraphPaths = approvals
     .map((item) => resolveArtifactPath(item.payload?.maintenanceTask?.taskGraph));
@@ -1616,7 +1818,19 @@ function proposalRefsForTask(task) {
     ref.startsWith('proposal-draft-approval:')
     || ref.startsWith('proposal-patch-draft:')
     || ref.startsWith('proposal-candidate:')
+    || ref.startsWith('proposal:')
+    || ref.startsWith('skill-proposal:')
   ));
+}
+
+function proposalIdRefsForTask(task) {
+  return (task.sourceSpecRefs ?? [])
+    .flatMap((ref) => {
+      if (ref.startsWith('proposal:')) return [ref.slice('proposal:'.length)];
+      if (ref.startsWith('skill-proposal:')) return [ref.slice('skill-proposal:'.length)];
+      return [];
+    })
+    .filter(Boolean);
 }
 
 function notesProposalApprovalId(run) {
@@ -1704,21 +1918,44 @@ function buildRunSelfImprovementSummary(runs, artifacts) {
   };
 }
 
-function buildProposalSelfImprovementSummary(proposals, skippedProposals) {
+function buildProposalSelfImprovementSummary(proposals, skippedProposals, approvedSignalIndex, options = {}) {
   const byStatus = { proposed: 0, approved: 0, rejected: 0, deferred: 0 };
-  for (const proposal of proposals) byStatus[proposal.status] = (byStatus[proposal.status] ?? 0) + 1;
+  const originalByStatus = { proposed: 0, approved: 0, rejected: 0, deferred: 0 };
+  const approvedByArtifact = [];
+  for (const proposal of proposals) {
+    originalByStatus[proposal.status] = (originalByStatus[proposal.status] ?? 0) + 1;
+    const approvedViaArtifact = approvedSignalIndex.proposalIds.has(proposal.proposalId);
+    const effectiveStatus = approvedViaArtifact ? 'approved' : proposal.status;
+    byStatus[effectiveStatus] = (byStatus[effectiveStatus] ?? 0) + 1;
+    if (approvedViaArtifact && proposal.status !== 'approved') {
+      approvedByArtifact.push(proposal.proposalId);
+    }
+  }
   const reviewed = byStatus.approved + byStatus.rejected + byStatus.deferred;
   return {
     total: proposals.length,
     byStatus,
+    originalByStatus,
     approved: byStatus.approved,
     rejected: byStatus.rejected,
     deferred: byStatus.deferred,
     proposed: byStatus.proposed,
     reviewed,
     pendingReview: byStatus.proposed,
+    statusRates: {
+      approved: ratio(byStatus.approved, proposals.length),
+      rejected: ratio(byStatus.rejected, proposals.length),
+      deferred: ratio(byStatus.deferred, proposals.length),
+      proposed: ratio(byStatus.proposed, proposals.length),
+    },
     approvalRate: ratio(byStatus.approved, reviewed),
     rejectionRate: ratio(byStatus.rejected, reviewed),
+    deferredRate: ratio(byStatus.deferred, reviewed),
+    pendingRate: ratio(byStatus.proposed, proposals.length),
+    approvedByArtifact: approvedByArtifact.length,
+    approvedByArtifactProposalIds: approvedByArtifact.slice(0, 20),
+    unresolvedApprovalLinks: approvedSignalIndex.unresolvedApprovals,
+    excludedByRunScope: options.excludedByRunScope ?? 0,
     skipped: skippedProposals.length,
   };
 }
@@ -1767,16 +2004,33 @@ function failureClustersFromRuns(runs) {
 
 function buildMaintenanceSelfImprovementSummary({
   approvals,
+  totalApprovalsAvailable = approvals.length,
   maintenanceGraphs,
   runs,
   artifacts,
   proposalSummary,
+  scopeActive = false,
+  approvedProposalIds = new Set(),
 }) {
+  const scopedApprovalIds = new Set(approvals.map((item) => item.payload.approvalId));
   const proposalTasks = [];
   for (const item of maintenanceGraphs.graphs) {
     for (const task of item.graph.tasks ?? []) {
       const proposalRefs = proposalRefsForTask(task);
       if (!proposalRefs.length) continue;
+      const matchesScopedApproval = proposalRefs.some((ref) => (
+        ref.startsWith('proposal-draft-approval:')
+        && scopedApprovalIds.has(ref.slice('proposal-draft-approval:'.length))
+      ));
+      const matchesScopedApprovedProposal = proposalIdRefsForTask(task)
+        .some((proposalId) => approvedProposalIds.has(proposalId));
+      if (
+        scopeActive
+        && !matchesScopedApproval
+        && !matchesScopedApprovedProposal
+      ) {
+        continue;
+      }
       proposalTasks.push({
         taskId: task.id,
         status: task.status,
@@ -1799,7 +2053,8 @@ function buildMaintenanceSelfImprovementSummary({
   const postMaintenanceRuns = runs.filter((run) => {
     if (run.sourceLayout !== 'maintenance') return false;
     const noteApproval = notesProposalApprovalId(run);
-    return approvalTaskIds.has(run.taskId) || (noteApproval && (approvalIds.has(noteApproval) || approvals.length === 0));
+    return approvalTaskIds.has(run.taskId)
+      || (noteApproval && (approvalIds.has(noteApproval) || (!scopeActive && totalApprovalsAvailable === 0)));
   });
   const verification = { total: postMaintenanceRuns.length, passed: 0, failed: 0, notRun: 0, successRate: null, runs: [] };
   for (const run of postMaintenanceRuns) {
@@ -1820,6 +2075,8 @@ function buildMaintenanceSelfImprovementSummary({
   const applyReports = artifacts.applyReports.map((item) => item.payload);
   return {
     approvals: approvals.length,
+    totalApprovalsAvailable,
+    approvalsExcludedByRunScope: Math.max(totalApprovalsAvailable - approvals.length, 0),
     skippedApprovals: maintenanceGraphs.skippedApprovals ?? 0,
     approvedProposalSignals: approvalDenominator,
     maintenanceTasksFromProposals: proposalTasks.length,
@@ -1842,14 +2099,29 @@ function buildMaintenanceSelfImprovementSummary({
 
 function buildSelfImprovementDigest(args, evalDir, artifacts, clusters) {
   const sourceContext = buildDigestSourceContext(args, evalDir, artifacts);
-  const runsRead = sourceContext.runsDir ? readRuns(sourceContext.runsDir) : { runs: [], skippedRuns: [] };
+  const runLimit = args.recentRuns ?? DEFAULT_DIGEST_RECENT_RUNS;
+  const runsRead = sourceContext.runsDir ? readRuns(sourceContext.runsDir, { limit: runLimit }) : { runs: [], skippedRuns: [], totalRuns: 0 };
   const proposalRead = sourceContext.proposalsDir ? readProposals(sourceContext.proposalsDir) : { proposals: [], skippedProposals: [] };
   const approvalsRead = readProposalDraftApprovals(sourceContext.scanRoots);
-  const maintenanceGraphs = readMaintenanceGraphs(sourceContext, approvalsRead.approvals);
+  const flowArtifacts = readProposalPatchDraftsAndCurations(sourceContext.scanRoots);
+  const approvedSignalIndex = buildApprovedProposalSignalIndex(approvalsRead.approvals, flowArtifacts);
+  const runScope = buildSelfImprovementRunScope(runsRead.runs, artifacts);
+  const proposalRunIdsById = proposalRunIdsFromFlowArtifacts(flowArtifacts);
+  const scopedProposals = filterProposalsForRunScope(proposalRead.proposals, runScope, proposalRunIdsById);
+  const scopedProposalIds = new Set(scopedProposals.map((proposal) => proposal.proposalId));
+  const scopedApprovedSignalIndex = filterApprovedProposalSignalIndex(approvedSignalIndex, scopedProposalIds, runScope.active);
+  const scopedApprovals = filterApprovalsForProposalScope(approvalsRead.approvals, scopedApprovedSignalIndex, runScope.active);
+  const scopedApprovedProposalIds = new Set(scopedProposals
+    .filter((proposal) => proposal.status === 'approved' || scopedApprovedSignalIndex.proposalIds.has(proposal.proposalId))
+    .map((proposal) => proposal.proposalId));
+  const maintenanceGraphs = readMaintenanceGraphs(sourceContext, scopedApprovals);
   const runSummary = buildRunSelfImprovementSummary(runsRead.runs, artifacts);
-  const proposalSummary = buildProposalSelfImprovementSummary(proposalRead.proposals, proposalRead.skippedProposals);
+  const proposalSummary = buildProposalSelfImprovementSummary(scopedProposals, proposalRead.skippedProposals, scopedApprovedSignalIndex, {
+    excludedByRunScope: proposalRead.proposals.length - scopedProposals.length,
+  });
   const maintenanceSummary = buildMaintenanceSelfImprovementSummary({
-    approvals: approvalsRead.approvals,
+    approvals: scopedApprovals,
+    totalApprovalsAvailable: approvalsRead.approvals.length,
     maintenanceGraphs: {
       ...maintenanceGraphs,
       skippedApprovals: approvalsRead.skippedApprovals.length,
@@ -1857,21 +2129,38 @@ function buildSelfImprovementDigest(args, evalDir, artifacts, clusters) {
     runs: runsRead.runs,
     artifacts,
     proposalSummary,
+    scopeActive: runScope.active,
+    approvedProposalIds: scopedApprovedProposalIds,
   });
   return {
     sources: {
       runsDir: sourceContext.runsDir ? displayPath(sourceContext.runsDir) : null,
       proposalsDir: sourceContext.proposalsDir ? displayPath(sourceContext.proposalsDir) : null,
-      approvalFiles: approvalsRead.approvals.map((item) => displayPath(item.filePath)),
+      runLimit,
+      totalRunsAvailable: runsRead.totalRuns ?? runsRead.runs.length,
+      runScope: {
+        source: runScope.source,
+        total: runScope.runIds.length,
+        runIds: runScope.runIds.slice(0, 30),
+      },
+      totalProposalsAvailable: proposalRead.proposals.length,
+      proposalsExcludedByRunScope: proposalRead.proposals.length - scopedProposals.length,
+      totalApprovalsAvailable: approvalsRead.approvals.length,
+      approvalsExcludedByRunScope: approvalsRead.approvals.length - scopedApprovals.length,
+      approvalFiles: scopedApprovals.map((item) => displayPath(item.filePath)),
+      patchDraftFiles: flowArtifacts.patchDrafts.map((item) => displayPath(item.filePath)),
+      curationFiles: flowArtifacts.curations.map((item) => displayPath(item.filePath)),
       maintenanceGraphs: maintenanceGraphs.graphs.map((item) => displayPath(item.filePath)),
       skippedRuns: runsRead.skippedRuns,
       skippedProposals: proposalRead.skippedProposals,
       skippedApprovals: approvalsRead.skippedApprovals,
+      skippedPatchDrafts: flowArtifacts.skippedPatchDrafts,
+      skippedCurations: flowArtifacts.skippedCurations,
       skippedMaintenanceGraphs: maintenanceGraphs.skippedGraphs,
     },
     runs: runSummary,
     proposals: proposalSummary,
-    recurringFailures: buildRecurringFailureSummary(clusters, runsRead.runs),
+    recurringFailures: buildRecurringFailureSummary(runsRead.runs.length ? [] : clusters, runsRead.runs),
     maintenance: maintenanceSummary,
   };
 }

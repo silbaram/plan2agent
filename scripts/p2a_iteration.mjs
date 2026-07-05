@@ -35,6 +35,11 @@ import {
 } from './p2a_iteration_state.mjs';
 import { loadRunsForArtifactRoot } from './p2a_runs.mjs';
 import { resolveP2aPaths } from './p2a_paths.mjs';
+import {
+  buildFeatureRadarEvidence,
+  buildFeatureRadarReferenceCandidates,
+  loadFeatureRadarPreflight,
+} from './p2a_radar_preflight.mjs';
 
 const P2A_PATHS = resolveP2aPaths(import.meta.url);
 const ROOT = P2A_PATHS.projectRoot;
@@ -1421,6 +1426,85 @@ function buildInitialSpec({ projectId, iterationId, idea, intake }) {
       },
     ],
     reference_reconnaissance: initialReferenceReconnaissance(iterationId, idea),
+  };
+}
+
+function featureRadarSummary(preflight) {
+  const runRefs = (preflight.runs ?? []).map((run) => run.ref).filter(Boolean);
+  const parts = [
+    `${runRefs.length} run(s)`,
+    `${preflight.recommendations?.length ?? 0} recommendation(s)`,
+    `${preflight.webSources?.length ?? 0} web source(s)`,
+  ];
+  return `${parts.join(', ')}${runRefs.length ? `: ${runRefs.join(', ')}` : ''}`;
+}
+
+function nextAssumptionId(assumptions) {
+  const highest = (assumptions ?? []).reduce((max, assumption) => {
+    const match = typeof assumption?.id === 'string' ? assumption.id.match(/^A-([0-9]+)$/) : null;
+    return match ? Math.max(max, Number.parseInt(match[1], 10)) : max;
+  }, 0);
+  return `A-${highest + 1}`;
+}
+
+function mergeFeatureRadarIntoIntake(intake, preflight) {
+  if (!preflight.detected) return intake;
+  const evidenceMap = buildFeatureRadarEvidence(preflight, intake.evidence, { includeWeb: false });
+  return {
+    ...intake,
+    known_facts: appendUnique(intake.known_facts, [
+      `Feature Radar preflight research detected and attached for Gate A/B review: ${featureRadarSummary(preflight)}`,
+    ]),
+    assumptions: [
+      ...intake.assumptions,
+      {
+        id: nextAssumptionId(intake.assumptions),
+        statement: 'Feature Radar recommendations are preflight candidates, not approved scope, until Gate B explicitly marks them selected, deferred, or rejected.',
+        risk: 'medium',
+        confirmation_needed: false,
+      },
+    ],
+    evidence: [
+      ...intake.evidence,
+      ...evidenceMap.evidence,
+    ],
+  };
+}
+
+function mergeFeatureRadarIntoSpec(spec, preflight) {
+  if (!preflight.detected) return spec;
+  const evidenceMap = buildFeatureRadarEvidence(preflight, spec.evidence, { includeWeb: true });
+  const reconnaissance = spec.reference_reconnaissance ?? {
+    triggers: [],
+    candidates: [],
+    selected_patterns: [],
+    rejected_patterns: [],
+    open_questions: [],
+  };
+  const radarCandidates = buildFeatureRadarReferenceCandidates(
+    preflight,
+    evidenceMap,
+    reconnaissance.candidates,
+  );
+  return {
+    ...spec,
+    evidence: [
+      ...spec.evidence,
+      ...evidenceMap.evidence,
+    ],
+    reference_reconnaissance: {
+      ...reconnaissance,
+      triggers: appendUnique(reconnaissance.triggers, [
+        `Feature Radar preflight research was detected for this artifact root: ${featureRadarSummary(preflight)}`,
+      ]),
+      candidates: [
+        ...(Array.isArray(reconnaissance.candidates) ? reconnaissance.candidates : []),
+        ...radarCandidates,
+      ],
+      selected_patterns: Array.isArray(reconnaissance.selected_patterns) ? reconnaissance.selected_patterns : [],
+      rejected_patterns: Array.isArray(reconnaissance.rejected_patterns) ? reconnaissance.rejected_patterns : [],
+      open_questions: Array.isArray(reconnaissance.open_questions) ? reconnaissance.open_questions : [],
+    },
   };
 }
 
@@ -3295,7 +3379,8 @@ function draft(args) {
   const initialIntake = baselineSpecRef ? null : validateIntake(initialIntakePath);
   assertWritableDraftFiles(files, artifactRoot, args.force, baselineSpecRef ? {} : { allowExisting: ['intakeJson', 'intakeMd'] });
 
-  const intake = baselineSpecRef
+  const preflight = loadFeatureRadarPreflight(artifactRoot, { projectId });
+  let intake = baselineSpecRef
     ? buildDeltaIntake({
         projectId,
         iterationId: state.activeIteration,
@@ -3304,7 +3389,7 @@ function draft(args) {
         baselineSpecRef,
       })
     : initialIntake;
-  const spec = baselineSpecRef
+  let spec = baselineSpecRef
     ? buildDeltaSpec({
         projectId,
         iterationId: state.activeIteration,
@@ -3318,6 +3403,10 @@ function draft(args) {
         idea,
         intake: initialIntake,
       });
+  if (preflight.detected) {
+    intake = mergeFeatureRadarIntoIntake(intake, preflight);
+    spec = mergeFeatureRadarIntoSpec(spec, preflight);
+  }
   const artifacts = {
     intake_ref: artifactRelativePath(artifactRoot, files.intakeJson),
     spec_ref: artifactRelativePath(artifactRoot, files.specJson),
@@ -3357,6 +3446,9 @@ function draft(args) {
   console.log(`- baseline spec: ${baselineSpecRef ?? 'none'}`);
   console.log(`- intake: ${artifacts.intake_ref}`);
   console.log(`- spec: ${artifacts.spec_ref} (approval=draft)`);
+  if (preflight.detected) {
+    console.log(`- Feature Radar preflight: ${featureRadarSummary(preflight)}`);
+  }
   console.log('Gate A/B artifacts validated; Gate C/D are still pending.');
   return 0;
 }

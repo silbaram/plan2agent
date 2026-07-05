@@ -396,7 +396,8 @@ function validateReferenceReconnaissance(spec) {
     throw new ValidationError('approved spec must not contain reference_reconnaissance.open_questions');
   }
 
-  const evidenceIds = new Set((spec.evidence ?? []).map((item) => item.source_id));
+  const evidenceById = new Map((spec.evidence ?? []).map((item) => [item.source_id, item]));
+  const evidenceIds = new Set(evidenceById.keys());
   const candidateIds = reconnaissance.candidates.map((candidate) => candidate.candidate_id);
   if (candidateIds.length !== new Set(candidateIds).size) {
     throw new ValidationError('spec.reference_reconnaissance candidate_id values must be unique');
@@ -405,6 +406,18 @@ function validateReferenceReconnaissance(spec) {
   for (const candidate of reconnaissance.candidates) {
     if (!evidenceIds.has(candidate.source_id)) {
       throw new ValidationError(`spec.reference_reconnaissance ${candidate.candidate_id} references unknown evidence source_id ${candidate.source_id}`);
+    }
+    const evidence = evidenceById.get(candidate.source_id);
+    const isFeatureRadarCandidate = candidate.origin === 'feature_radar_preflight'
+      || (typeof candidate.title === 'string' && candidate.title.startsWith('Feature Radar:'))
+      || (typeof evidence?.title === 'string' && evidence.title.startsWith('Feature Radar '))
+      || (typeof evidence?.used_for === 'string' && evidence.used_for.includes('Feature Radar'));
+    if (
+      spec.approval === 'approved'
+      && isFeatureRadarCandidate
+      && (candidate.decision === 'context' || candidate.decision === 'open')
+    ) {
+      throw new ValidationError(`approved spec must resolve Feature Radar candidate ${candidate.candidate_id} as selected, rejected, or deferred before Gate B approval`);
     }
   }
 

@@ -68,7 +68,7 @@ or app session stays foreground-supervised by the user.
 - `p2a eval analyze` clusters failures and verification gaps.
 - `p2a eval generate` writes grade, analysis, compare, and eval index artifacts.
 - `p2a eval digest` summarizes generated evaluation artifacts.
-- Eval digests include self-improvement metrics for failed/blocked run evidence, proposal review status, recurring failure clusters, approved proposal conversion, and post-maintenance verification.
+- Eval digests include self-improvement metrics for recent failed/blocked run evidence, proposal review status scoped to source runs, approval-artifact-backed conversion, recurring failure clusters, and post-maintenance verification.
 
 ### Improvement Proposal Loop
 
@@ -99,6 +99,29 @@ or app session stays foreground-supervised by the user.
 - Enhance projects with memory, GUI, orchestration, proposals, and dev-skill capabilities.
 - Preview and apply safe toolkit updates with update and upgrade reports.
 - Run doctor and parity checks to find missing files, stale assets, and configuration drift.
+
+## Companion Projects
+
+P2A can work with optional sibling projects. They are not required for the core planning,
+validation, iteration, execution, eval, or proposal loops, and local `.plan2agent/` artifacts remain
+the source of truth.
+
+| Project | GitHub | Purpose | How P2A Uses It |
+| --- | --- | --- | --- |
+| `plan2agent-memory` | <https://github.com/silbaram/plan2agent-memory> | Optional headless REST service for relational artifact storage, lineage, hash comparison, history, keyword search, and vector-search-ready document chunks. | `p2a memory status/push/pull/search/history/digest` can use the server as a long-term artifact store and search backend. If no Memory server is configured, P2A still runs from local `.plan2agent/` artifacts. |
+| `plan2agent-feature-radar` | <https://github.com/silbaram/plan2agent-feature-radar> | Optional skill/subagent research workflow for early idea research and read-only existing-project analysis across web, docs, GitHub, changelogs, issues, PRs, discussions, and local project signals. | Radar can export `.feature-radar/runs/<project-slug>/` and optionally `.plan2agent/artifacts/<project_id>/preflight-research/`. P2A imports that preflight export as `LOCAL-n`/`WEB-n` evidence and Gate B reference candidates; recommendations stay candidate input until Gate B marks them `selected`, `deferred`, or `rejected`. |
+
+The local `plan2agent-feature-radar` checkout may not have a git remote configured yet; update the
+GitHub link above if the canonical remote differs.
+
+For local toolkit development, these repos are commonly checked out next to this repository:
+
+```text
+projects/
+  plan2agent/
+  plan2agent-memory/
+  plan2agent-feature-radar/
+```
 
 ## Why Use Plan2Agent?
 
@@ -227,7 +250,8 @@ node .plan2agent/scripts/p2a.mjs eval generate \
   --artifacts .plan2agent/artifacts/<project_id>
 
 node .plan2agent/scripts/p2a.mjs eval digest \
-  --artifacts .plan2agent/artifacts/<project_id>
+  --artifacts .plan2agent/artifacts/<project_id> \
+  --recent-runs 30
 
 node .plan2agent/scripts/p2a.mjs proposals mine \
   --artifacts .plan2agent/artifacts/<project_id>

@@ -42,6 +42,10 @@ import {
   resolveProjectIdDefault,
 } from './p2a_project_config.mjs';
 import { PROJECT_RUNTIME_SCHEMA_FILES, PROJECT_RUNTIME_SCRIPT_FILES } from './p2a_tool_manifest.mjs';
+import {
+  FEATURE_RADAR_COPY_FILES,
+  FEATURE_RADAR_PREFLIGHT_DIR,
+} from './p2a_radar_preflight.mjs';
 
 const P2A_PATHS = resolveP2aPaths(import.meta.url);
 const ROOT = P2A_PATHS.toolRoot;
@@ -364,6 +368,21 @@ function pushArtifactIfExists(plan, source, targetRoot, targetRelative, options 
 
 function maintenanceTaskGraphSourcePath(artifactsRoot) {
   return path.join(artifactsRoot, 'iterations', 'maintenance', 'gate-c-task-graph', 'task-graph.json');
+}
+
+function pushFeatureRadarPreflightIfExists(plan, artifactsRoot, targetRoot, projectId) {
+  const sourceDir = path.join(artifactsRoot, FEATURE_RADAR_PREFLIGHT_DIR);
+  if (!existsSync(sourceDir) || !lstatSync(sourceDir).isDirectory()) return [];
+  const copied = [];
+  for (const fileName of FEATURE_RADAR_COPY_FILES) {
+    const sourcePath = path.join(sourceDir, fileName);
+    if (!existsSync(sourcePath)) continue;
+    assertFile(sourcePath, path.join(FEATURE_RADAR_PREFLIGHT_DIR, fileName));
+    const targetRelative = path.join(targetArtifactDir(projectId), FEATURE_RADAR_PREFLIGHT_DIR, fileName);
+    pushArtifact(plan, sourcePath, targetRoot, targetRelative);
+    copied.push(normalizePath(targetRelative));
+  }
+  return copied;
 }
 
 function appendHandoffRecord(currentSpec, record) {
@@ -1969,6 +1988,7 @@ function buildPlan(paths, args, artifactsRoot, targetRoot, sourceInfo, options =
     pushArtifact(plan, maintenanceGraphPath, targetRoot, targetRelative);
     maintenanceFiles.push(normalizePath(targetRelative));
   }
+  const preflightResearchFiles = pushFeatureRadarPreflightIfExists(plan, artifactsRoot, targetRoot, args.projectId);
 
   for (const file of SCAFFOLD_SCRIPT_FILES) {
     pushArtifact(plan, path.join(ROOT, 'scripts', file), targetRoot, targetScriptPath(file));
@@ -2008,6 +2028,7 @@ function buildPlan(paths, args, artifactsRoot, targetRoot, sourceInfo, options =
     aiToolTargets: args.tools,
     externalHarnesses: teamBigFivePlan.externalHarness ? [teamBigFivePlan.externalHarness] : [],
     artifactFiles,
+    preflightResearchFiles,
     currentSpecFile: sourceInfo.currentSpecPath ? '.plan2agent/current-spec.json' : null,
     maintenanceFiles,
     toolFiles,
@@ -2020,6 +2041,7 @@ function buildPlan(paths, args, artifactsRoot, targetRoot, sourceInfo, options =
       `task-graph.sourceSpec rebased to ${targetSpecRef}`,
       `spec.source_intake rebased to ${targetIntakeRef}`,
       sourceInfo.kind === 'iteration' ? `iteration handoff source: ${sourceInfo.iterationId}` : 'greenfield handoff source',
+      preflightResearchFiles.length ? `Feature Radar preflight research copied: ${preflightResearchFiles.length} file(s)` : 'Feature Radar preflight research not present',
       args.tools.length ? `AI tool assets copied for: ${args.tools.join(', ')}` : 'AI tool assets not requested',
       teamBigFivePlan.enabled ? `Team Big Five adapter installed for: ${teamBigFivePlan.targets.join(', ')}` : 'Team Big Five adapter not requested',
     ],

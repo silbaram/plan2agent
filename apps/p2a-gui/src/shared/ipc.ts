@@ -127,6 +127,8 @@ export type ProposalSummary = {
   proposalId: string;
   sourceRunId: string | null;
   status: ProposalStatus;
+  recordedStatus: ProposalStatus;
+  statusSource: "proposal" | "approval";
   risk: ProposalRisk;
   riskRationale: string | null;
   problem: string;

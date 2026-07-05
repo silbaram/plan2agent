@@ -2121,7 +2121,7 @@ function jsonFilesFromDir(dirPath, maxFiles = 200) {
   return files;
 }
 
-function memorySearchReportPaths(context) {
+function memorySearchReportFiles(context) {
   const roots = sortedUnique([
     context.artifactRoot,
     context.artifactRoot ? path.join(context.artifactRoot, 'eval') : null,
@@ -2129,7 +2129,7 @@ function memorySearchReportPaths(context) {
     context.runsDir ? path.join(path.dirname(context.runsDir), 'eval') : null,
     path.join(P2A_PATHS.projectRoot, '.plan2agent'),
   ]);
-  return sortedUnique(roots.map((root) => path.join(root, 'memory-search.json')));
+  return sortedUnique(roots.flatMap((root) => jsonFilesFromDir(root)));
 }
 
 function memorySearchReportMatchesContext(payload, context) {
@@ -2145,7 +2145,7 @@ function memorySearchReportMatchesContext(payload, context) {
 
 function readMemorySearchReports(context) {
   const reports = [];
-  for (const filePath of memorySearchReportPaths(context)) {
+  for (const filePath of memorySearchReportFiles(context)) {
     const payload = readJsonObject(filePath);
     if (payload?.schema_version !== 'p2a.memory_search.v1') continue;
     if (!memorySearchReportMatchesContext(payload, context)) continue;
@@ -2185,7 +2185,7 @@ function evalUsageFiles(context) {
     context.runsDir ? path.join(path.dirname(context.runsDir), 'eval') : null,
   ]);
   return evalDirs.flatMap((dirPath) => jsonFilesFromDir(dirPath))
-    .filter((filePath) => path.basename(filePath) !== 'memory-search.json');
+    .filter((filePath) => readJsonObject(filePath)?.schema_version !== 'p2a.memory_search.v1');
 }
 
 function usageCorpora(context, runs, proposals) {
