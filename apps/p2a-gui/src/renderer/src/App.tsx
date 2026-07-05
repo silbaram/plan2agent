@@ -824,7 +824,9 @@ function proposalSourceText(proposal: ProposalSummary, copy: UiCopy): string {
 
 function proposalMaintenanceText(proposal: ProposalSummary, copy: UiCopy): string {
   if (proposal.maintenanceTaskId) {
-    return `${copy.overview.maintenanceTask}: ${proposal.maintenanceTaskTitle ?? proposal.maintenanceTaskId}`;
+    const taskLabel = proposal.maintenanceTaskTitle ?? proposal.maintenanceTaskId;
+    const status = proposal.maintenanceTaskStatus ? ` · ${statusLabel(proposal.maintenanceTaskStatus, copy)}` : "";
+    return `${copy.overview.maintenanceTask}: ${taskLabel}${status}`;
   }
   if (proposal.approvalId || proposal.status === "approved") return copy.overview.maintenancePending;
   if (proposal.status === "proposed" && (proposal.patchDraftId || proposal.candidateId)) {

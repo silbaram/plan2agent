@@ -7939,12 +7939,264 @@ function validateIterationCurrentFixtureCases() {
         return { status: 1, checks };
       }
 
+      const emptyMaintenanceDraftArtifactRoot = path.join(tempRoot, 'p2a-empty-maintenance-draft-artifacts');
+      cpSync(artifactRoot, emptyMaintenanceDraftArtifactRoot, { recursive: true });
+      const emptyDraftMaintenanceGraphPath = path.join(emptyMaintenanceDraftArtifactRoot, 'iterations', 'maintenance', 'gate-c-task-graph', 'task-graph.json');
+      rmSync(path.join(emptyMaintenanceDraftArtifactRoot, 'iterations', 'maintenance'), { recursive: true, force: true });
+      const emptyMaintenanceDraftPath = path.join(tempRoot, 'p2a-empty-maintenance-draft.json');
+      writeFileSync(emptyMaintenanceDraftPath, `${JSON.stringify({
+        schema_version: 'p2a.eval_maintenance_draft.v1',
+        draftId: 'eval-maintenance-draft-empty-fixture',
+        generatedAt: '2026-01-01T00:00:00.000Z',
+        summary: {
+          clusters: 0,
+          tasks: 0,
+        },
+        tasks: [],
+        nextActions: ['No maintenance tasks were drafted because no failure clusters were found.'],
+      }, null, 2)}\n`, 'utf8');
+
+      result = runIteration([
+        'maintenance',
+        'add',
+        '--artifacts',
+        emptyMaintenanceDraftArtifactRoot,
+        '--from-draft',
+        emptyMaintenanceDraftPath,
+        '--dry-run',
+      ]);
+      checks += 1;
+      if (
+        result.status !== 0
+        || !result.stdout.includes('- draft tasks: 0')
+        || !result.stdout.includes('- appended: 0')
+        || existsSync(emptyDraftMaintenanceGraphPath)
+      ) {
+        console.error(`iteration maintenance add --from-draft empty dry-run fixture failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: failureStatus(result), checks };
+      }
+
+      result = runIteration([
+        'maintenance',
+        'add',
+        '--artifacts',
+        emptyMaintenanceDraftArtifactRoot,
+        '--from-draft',
+        emptyMaintenanceDraftPath,
+        '--yes',
+      ]);
+      checks += 1;
+      if (
+        result.status !== 0
+        || !result.stdout.includes('- draft tasks: 0')
+        || !result.stdout.includes('- appended: 0')
+        || existsSync(emptyDraftMaintenanceGraphPath)
+      ) {
+        console.error(`iteration maintenance add --from-draft empty apply fixture failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: failureStatus(result), checks };
+      }
+
+      const maintenanceFromDraftPath = path.join(tempRoot, 'p2a-maintenance-from-draft.json');
+      writeFileSync(maintenanceFromDraftPath, `${JSON.stringify({
+        schema_version: 'p2a.eval_maintenance_draft.v1',
+        draftId: 'eval-maintenance-draft-fixture',
+        generatedAt: '2026-01-01T00:00:00.000Z',
+        summary: {
+          clusters: 2,
+          tasks: 2,
+        },
+        tasks: [
+          {
+            id: 'draft-maintenance-a',
+            clusterId: 'cluster-maintenance-from-draft-a',
+            title: 'Improve maintenance draft apply',
+            description: 'Fixture task created from a reviewed maintenance draft.',
+            acceptanceCriteria: ['Maintenance draft tasks can be appended after explicit confirmation.'],
+            targetArea: 'verification',
+            suggestedAgentPrompt: 'Append the reviewed maintenance draft task and preserve its trace refs.',
+            sourceSpecRefs: [
+              'eval-analysis:analysis-maintenance-from-draft',
+              'eval-cluster:cluster-maintenance-from-draft-a',
+              'run:run-maintenance-from-draft-a',
+            ],
+          },
+          {
+            id: 'draft-maintenance-b',
+            clusterId: 'cluster-maintenance-from-draft-b',
+            title: 'Run maintenance draft follow-up',
+            acceptanceCriteria: ['Draft-local dependencies are mapped to appended maintenance task ids.'],
+            sourceSpecRefs: ['eval-cluster:cluster-maintenance-from-draft-b'],
+            dependencies: ['draft-maintenance-a'],
+          },
+        ],
+        nextActions: ['Review before applying.'],
+      }, null, 2)}\n`, 'utf8');
+
+      result = runIteration([
+        'maintenance',
+        'add',
+        '--artifacts',
+        artifactRoot,
+        '--from-draft',
+        maintenanceFromDraftPath,
+      ]);
+      checks += 1;
+      if (
+        result.status === 0
+        || !(`${result.stdout ?? ''}${result.stderr ?? ''}`).includes('maintenance add --from-draft requires --yes unless --dry-run is used')
+        || readFileSync(maintenanceGraphPath, 'utf8') !== maintenanceGraphAfterAddsText
+      ) {
+        console.error(`iteration maintenance add --from-draft confirmation guard failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: 1, checks };
+      }
+
+      result = runIteration([
+        'maintenance',
+        'add',
+        '--artifacts',
+        artifactRoot,
+        '--from-draft',
+        maintenanceFromDraftPath,
+        '--dry-run',
+      ]);
+      checks += 1;
+      if (
+        result.status !== 0
+        || !result.stdout.includes('Plan2Agent maintenance draft dry run:')
+        || !result.stdout.includes('- appended: 2')
+        || !result.stdout.includes('- append task-003: Improve maintenance draft apply')
+        || readFileSync(maintenanceGraphPath, 'utf8') !== maintenanceGraphAfterAddsText
+      ) {
+        console.error(`iteration maintenance add --from-draft dry-run fixture failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: failureStatus(result), checks };
+      }
+
+      result = runIteration([
+        'maintenance',
+        'add',
+        '--artifacts',
+        artifactRoot,
+        '--from-draft',
+        maintenanceFromDraftPath,
+        '--yes',
+      ]);
+      checks += 1;
+      const maintenanceGraphAfterDraftText = readFileSync(maintenanceGraphPath, 'utf8');
+      const maintenanceGraphAfterDraft = JSON.parse(maintenanceGraphAfterDraftText);
+      const draftTaskA = maintenanceGraphAfterDraft.tasks.find((task) => task.id === 'task-003');
+      const draftTaskB = maintenanceGraphAfterDraft.tasks.find((task) => task.id === 'task-004');
+      if (
+        result.status !== 0
+        || !result.stdout.includes('Plan2Agent maintenance draft applied:')
+        || !result.stdout.includes('- appended: 2')
+        || maintenanceGraphAfterDraft.tasks?.length !== 4
+        || draftTaskA?.targetArea !== 'verification'
+        || !draftTaskA?.sourceSpecRefs?.includes('eval-cluster:cluster-maintenance-from-draft-a')
+        || JSON.stringify(draftTaskB?.dependencies) !== JSON.stringify(['task-003'])
+      ) {
+        console.error(`iteration maintenance add --from-draft apply fixture failed: ${caseData.id}`);
+        writeResultOutput(result);
+        console.error(JSON.stringify({ draftTaskA, draftTaskB }, null, 2));
+        return { status: failureStatus(result), checks };
+      }
+
+      result = runIteration([
+        'maintenance',
+        'add',
+        '--artifacts',
+        artifactRoot,
+        '--from-draft',
+        maintenanceFromDraftPath,
+        '--yes',
+      ]);
+      checks += 1;
+      if (
+        result.status !== 0
+        || !result.stdout.includes('- appended: 0')
+        || !result.stdout.includes('- skipped: 2')
+        || readFileSync(maintenanceGraphPath, 'utf8') !== maintenanceGraphAfterDraftText
+      ) {
+        console.error(`iteration maintenance add --from-draft duplicate skip fixture failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: failureStatus(result), checks };
+      }
+
+      result = runIteration([
+        'maintenance',
+        'add',
+        '--artifacts',
+        artifactRoot,
+        '--title',
+        'Track legacy proposal maintenance',
+        '--accept',
+        'Legacy proposal refs are tracked without duplicate draft append.',
+        '--ref',
+        'proposal:legacy-maintenance-from-draft',
+      ]);
+      checks += 1;
+      const maintenanceGraphAfterLegacyProposalText = readFileSync(maintenanceGraphPath, 'utf8');
+      if (
+        result.status !== 0
+        || !result.stdout.includes('Plan2Agent maintenance task added: task-005')
+        || JSON.parse(maintenanceGraphAfterLegacyProposalText).tasks?.length !== 5
+      ) {
+        console.error(`iteration maintenance legacy proposal setup failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: failureStatus(result), checks };
+      }
+
+      const maintenanceLegacyProposalDraftPath = path.join(tempRoot, 'p2a-maintenance-legacy-proposal-draft.json');
+      writeFileSync(maintenanceLegacyProposalDraftPath, `${JSON.stringify({
+        schema_version: 'p2a.eval_maintenance_draft.v1',
+        draftId: 'eval-maintenance-draft-legacy-proposal-fixture',
+        generatedAt: '2026-01-01T00:00:00.000Z',
+        summary: {
+          clusters: 1,
+          tasks: 1,
+        },
+        tasks: [
+          {
+            clusterId: 'cluster-maintenance-legacy-proposal',
+            title: 'Avoid duplicate legacy proposal maintenance',
+            acceptanceCriteria: ['Legacy proposal refs are deduped when importing maintenance drafts.'],
+            sourceSpecRefs: ['proposal:legacy-maintenance-from-draft'],
+          },
+        ],
+        nextActions: ['Review before applying.'],
+      }, null, 2)}\n`, 'utf8');
+
+      result = runIteration([
+        'maintenance',
+        'add',
+        '--artifacts',
+        artifactRoot,
+        '--from-draft',
+        maintenanceLegacyProposalDraftPath,
+        '--yes',
+      ]);
+      checks += 1;
+      if (
+        result.status !== 0
+        || !result.stdout.includes('- appended: 0')
+        || !result.stdout.includes('- skipped: 1')
+        || !result.stdout.includes('proposal:legacy-maintenance-from-draft already tracked by task-005')
+        || readFileSync(maintenanceGraphPath, 'utf8') !== maintenanceGraphAfterLegacyProposalText
+      ) {
+        console.error(`iteration maintenance add --from-draft legacy proposal duplicate skip fixture failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: failureStatus(result), checks };
+      }
+
       result = runIteration(['validate', '--artifacts', artifactRoot, '--audit-archive']);
       checks += 1;
       if (
         result.status !== 0
         || !result.stdout.includes('archived audit: 2 closed iteration(s) verified')
-        || !result.stdout.includes('maintenance: 2 task(s) valid')
+        || !result.stdout.includes('maintenance: 5 task(s) valid')
       ) {
         console.error(`iteration archive audit after compose fixture check failed: ${caseData.id}`);
         writeResultOutput(result);

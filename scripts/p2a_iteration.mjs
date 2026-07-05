@@ -23,6 +23,7 @@ import {
   validateReviewPass,
   validateSpec,
   validateApprovalAuditData,
+  validateEvalMaintenanceDraftData,
   validateTaskGraph,
   validateTaskContextData,
   validateTaskGraphData,
@@ -88,6 +89,7 @@ function usage() {
     '  node .plan2agent/scripts/p2a_iteration.mjs diff-tasks --artifacts <iterative-project-dir> [--force]',
     '  node .plan2agent/scripts/p2a_iteration.mjs compose --artifacts <iterative-project-dir> [--allow-conflicts]',
     '  node .plan2agent/scripts/p2a_iteration.mjs maintenance add --artifacts <iterative-project-dir> --title <text> --accept <text> [--accept <text> ...] [--description <text>] [--area <text>] [--prompt <text>] [--ref <value> ...] [--depends <task-id> ...] [--dry-run]',
+    '  node .plan2agent/scripts/p2a_iteration.mjs maintenance add --artifacts <iterative-project-dir> --from-draft <path> [--dry-run|--yes]',
     '',
     'Commands:',
     '  init                  Convert a greenfield artifact root into iterations/<id>/gate-*.',
@@ -155,6 +157,8 @@ function usage() {
     '  --prompt <text>       suggestedAgentPrompt. Defaults to a generated scoped prompt.',
     '  --ref <value>         sourceSpecRefs entry. Repeatable; defaults to maintenance.',
     '  --depends <task-id>   Dependency task id. Repeatable; defaults to none.',
+    '  --from-draft <path>   Append tasks from a reviewed maintenance draft JSON.',
+    '  --yes                 Confirm writing tasks from --from-draft. Not needed with --dry-run.',
     '  --dry-run            Print the task and graph path without writing files.',
   ].join('\n');
 }
@@ -179,13 +183,16 @@ function parseArgs(argv) {
     description: null,
     area: 'maintenance',
     prompt: null,
+    fromDraft: null,
     acceptanceCriteria: [],
     sourceSpecRefs: [],
     dependencies: [],
+    areaProvided: false,
     codeRoot: process.cwd(),
     scope: 'feature',
     approvedBy: null,
     approvalNote: null,
+    yes: false,
   };
   const command = argv[0];
   if (!command) throw new Error(`missing command\n\n${usage()}`);
@@ -275,6 +282,7 @@ function parseArgs(argv) {
       if (!args.description) throw new Error('--description requires a value');
     } else if (arg === '--area') {
       if (command !== 'maintenance' || args.action !== 'add') throw new Error('--area is only supported by maintenance add');
+      args.areaProvided = true;
       args.area = argv[++index];
       if (!args.area) throw new Error('--area requires a value');
     } else if (arg === '--prompt') {
@@ -291,6 +299,13 @@ function parseArgs(argv) {
       const value = argv[++index];
       if (!value) throw new Error('--depends requires a value');
       args.dependencies.push(value);
+    } else if (arg === '--from-draft') {
+      if (command !== 'maintenance' || args.action !== 'add') throw new Error('--from-draft is only supported by maintenance add');
+      args.fromDraft = argv[++index];
+      if (!args.fromDraft) throw new Error('--from-draft requires a path');
+    } else if (arg === '--yes') {
+      if (command !== 'maintenance' || args.action !== 'add') throw new Error('--yes is only supported by maintenance add --from-draft');
+      args.yes = true;
     } else if (arg.startsWith('--')) {
       throw new Error(`unknown option: ${arg}`);
     } else {
@@ -302,8 +317,17 @@ function parseArgs(argv) {
   if (command === 'open' && !args.iterationIdProvided) throw new Error('--iteration-id is required for open');
   if (command === 'open' && (!args.idea || args.idea.trim().length === 0)) throw new Error('--idea is required for open');
   if (command === 'maintenance' && args.action === 'add') {
-    if (!args.title || args.title.trim().length === 0) throw new Error('--title is required for maintenance add');
-    if (!args.acceptanceCriteria.length) throw new Error('--accept is required for maintenance add');
+    if (args.fromDraft) {
+      if (args.title || args.description || args.prompt || args.acceptanceCriteria.length || args.sourceSpecRefs.length || args.dependencies.length || args.areaProvided) {
+        throw new Error('--from-draft cannot be combined with --title, --description, --area, --prompt, --accept, --ref, or --depends');
+      }
+      if (args.yes && args.dryRun) throw new Error('--yes and --dry-run cannot be combined');
+      if (!args.dryRun && !args.yes) throw new Error('maintenance add --from-draft requires --yes unless --dry-run is used');
+    } else {
+      if (args.yes) throw new Error('--yes is only supported with maintenance add --from-draft');
+      if (!args.title || args.title.trim().length === 0) throw new Error('--title is required for maintenance add');
+      if (!args.acceptanceCriteria.length) throw new Error('--accept is required for maintenance add');
+    }
   }
   return args;
 }
@@ -2933,7 +2957,194 @@ function suggestedMaintenancePrompt(title, projectId) {
     'Keep the change minimal and scoped to this fix, and add or update tests/verification as needed.';
 }
 
+const MAINTENANCE_DRAFT_DEDUPE_REF_PREFIXES = [
+  'eval-cluster:',
+  'proposal-draft-approval:',
+  'proposal-patch-draft:',
+  'proposal-candidate:',
+  'proposal:',
+  'skill-proposal:',
+];
+
+function nonBlankString(value, label) {
+  if (typeof value !== 'string' || value.trim().length === 0) {
+    throw new Error(`${label} must be a non-empty string`);
+  }
+  return value.trim();
+}
+
+function optionalNonBlankString(value, label) {
+  if (value === undefined || value === null) return null;
+  return nonBlankString(value, label);
+}
+
+function nonBlankStringArray(value, label, options = {}) {
+  if (value === undefined || value === null) {
+    return options.defaultValue ? [...options.defaultValue] : [];
+  }
+  if (!Array.isArray(value)) throw new Error(`${label} must be an array`);
+  const values = [];
+  const seen = new Set();
+  for (const item of value) {
+    const normalized = nonBlankString(item, `${label}[]`);
+    if (seen.has(normalized)) continue;
+    seen.add(normalized);
+    values.push(normalized);
+  }
+  if (options.requireNonEmpty && values.length === 0) {
+    throw new Error(`${label} must include at least one value`);
+  }
+  return values;
+}
+
+function maintenanceDraftTaskAliases(task, index) {
+  return nonBlankStringArray([task.id, task.taskId, task.clusterId].filter((value) => value !== undefined && value !== null), `draft task ${index + 1} aliases`);
+}
+
+function normalizeMaintenanceDraftTask(task, index, state) {
+  if (!task || typeof task !== 'object' || Array.isArray(task)) {
+    throw new Error(`draft task ${index + 1} must be an object`);
+  }
+  const title = nonBlankString(task.title, `draft task ${index + 1}.title`);
+  const targetArea = optionalNonBlankString(task.targetArea ?? task.area, `draft task ${index + 1}.targetArea`) ?? 'maintenance';
+  const description = optionalNonBlankString(task.description, `draft task ${index + 1}.description`) ?? title;
+  const suggestedAgentPrompt = optionalNonBlankString(
+    task.suggestedAgentPrompt ?? task.prompt,
+    `draft task ${index + 1}.suggestedAgentPrompt`,
+  ) ?? suggestedMaintenancePrompt(title, state.projectId);
+  return {
+    aliases: maintenanceDraftTaskAliases(task, index),
+    title,
+    description,
+    status: 'todo',
+    dependencies: nonBlankStringArray(task.dependencies ?? task.depends, `draft task ${index + 1}.dependencies`),
+    acceptanceCriteria: nonBlankStringArray(task.acceptanceCriteria, `draft task ${index + 1}.acceptanceCriteria`, { requireNonEmpty: true }),
+    targetArea,
+    suggestedAgentPrompt,
+    sourceSpecRefs: nonBlankStringArray(task.sourceSpecRefs, `draft task ${index + 1}.sourceSpecRefs`, { defaultValue: ['maintenance'], requireNonEmpty: true }),
+  };
+}
+
+function maintenanceDraftDedupeRefs(sourceSpecRefs) {
+  return sourceSpecRefs.filter((ref) => MAINTENANCE_DRAFT_DEDUPE_REF_PREFIXES.some((prefix) => ref.startsWith(prefix)));
+}
+
+function maintenanceDedupeRefsByTaskId(tasks) {
+  const refs = new Map();
+  for (const task of tasks) {
+    for (const ref of maintenanceDraftDedupeRefs(task.sourceSpecRefs ?? [])) {
+      if (!refs.has(ref)) refs.set(ref, task.id);
+    }
+  }
+  return refs;
+}
+
+function registerMaintenanceDraftAliases(aliasToTaskId, aliases, taskId) {
+  for (const alias of aliases) {
+    const existing = aliasToTaskId.get(alias);
+    if (existing && existing !== taskId) {
+      throw new Error(`maintenance draft aliases must be unique; ${alias} maps to both ${existing} and ${taskId}`);
+    }
+    aliasToTaskId.set(alias, taskId);
+  }
+}
+
+function normalizeMaintenanceDraftPath(filePath) {
+  return path.resolve(process.cwd(), filePath);
+}
+
+function loadMaintenanceDraft(filePath) {
+  const draftPath = normalizeMaintenanceDraftPath(filePath);
+  const draft = validateEvalMaintenanceDraftData(loadJson(draftPath));
+  return { draftPath, draft };
+}
+
+function addMaintenanceTasksFromDraft(args) {
+  const state = resolveIterationState(args.artifacts, { requireReady: false });
+  const { draftPath, draft } = loadMaintenanceDraft(args.fromDraft);
+  const graphPath = maintenanceTaskGraphPath(state.artifactRoot);
+  const graph = existsSync(graphPath)
+    ? loadJson(graphPath)
+    : initialMaintenanceTaskGraph(state.projectId);
+  if (!Array.isArray(graph.tasks)) graph.tasks = [];
+
+  const normalizedTasks = draft.tasks.map((task, index) => normalizeMaintenanceDraftTask(task, index, state));
+  const dedupeRefs = maintenanceDedupeRefsByTaskId(graph.tasks);
+  const aliasToTaskId = new Map();
+  const plannedTasks = [];
+  const skippedTasks = [];
+
+  for (const task of normalizedTasks) {
+    const duplicateRef = maintenanceDraftDedupeRefs(task.sourceSpecRefs).find((ref) => dedupeRefs.has(ref)) ?? null;
+    if (duplicateRef) {
+      const existingTaskId = dedupeRefs.get(duplicateRef);
+      registerMaintenanceDraftAliases(aliasToTaskId, task.aliases, existingTaskId);
+      skippedTasks.push({
+        title: task.title,
+        ref: duplicateRef,
+        taskId: existingTaskId,
+      });
+      continue;
+    }
+
+    const taskId = nextMaintenanceTaskId([...graph.tasks, ...plannedTasks]);
+    registerMaintenanceDraftAliases(aliasToTaskId, task.aliases, taskId);
+    const plannedTask = {
+      id: taskId,
+      title: task.title,
+      description: task.description,
+      status: task.status,
+      dependencies: task.dependencies,
+      acceptanceCriteria: task.acceptanceCriteria,
+      targetArea: task.targetArea,
+      suggestedAgentPrompt: task.suggestedAgentPrompt,
+      sourceSpecRefs: task.sourceSpecRefs,
+    };
+    plannedTasks.push(plannedTask);
+    for (const ref of maintenanceDraftDedupeRefs(task.sourceSpecRefs)) {
+      if (!dedupeRefs.has(ref)) dedupeRefs.set(ref, taskId);
+    }
+  }
+
+  for (const task of plannedTasks) {
+    task.dependencies = task.dependencies.map((dependency) => aliasToTaskId.get(dependency) ?? dependency);
+  }
+
+  const nextGraph = {
+    ...graph,
+    tasks: [...graph.tasks, ...plannedTasks],
+  };
+  if (nextGraph.tasks.length) validateTaskGraphData(nextGraph);
+
+  const label = args.dryRun ? 'Plan2Agent maintenance draft dry run' : 'Plan2Agent maintenance draft applied';
+  console.log(`${label}:`);
+  console.log(`- draft: ${toRelativeFromRoot(draftPath)}`);
+  console.log(`- graph: ${toRelativeFromRoot(graphPath)}`);
+  console.log(`- draft tasks: ${normalizedTasks.length}`);
+  console.log(`- appended: ${plannedTasks.length}`);
+  console.log(`- skipped: ${skippedTasks.length}`);
+  for (const task of plannedTasks) {
+    console.log(`- append ${task.id}: ${task.title}`);
+  }
+  for (const skipped of skippedTasks) {
+    console.log(`- skip ${skipped.title}: ${skipped.ref} already tracked by ${skipped.taskId}`);
+  }
+  if (args.dryRun) {
+    console.log('- write: no files changed; rerun with --yes to append.');
+    return 0;
+  }
+  if (plannedTasks.length) {
+    mkdirSync(path.dirname(graphPath), { recursive: true });
+    writeJson(graphPath, nextGraph);
+    writeIterationStatus(state.artifactRoot, state.currentSpec);
+  }
+  console.log(`- tasks total: ${nextGraph.tasks.length}`);
+  return 0;
+}
+
 function addMaintenanceTask(args) {
+  if (args.fromDraft) return addMaintenanceTasksFromDraft(args);
+
   const state = resolveIterationState(args.artifacts, { requireReady: false });
   const graphPath = maintenanceTaskGraphPath(state.artifactRoot);
   const graph = existsSync(graphPath)

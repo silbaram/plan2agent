@@ -237,6 +237,16 @@ node .plan2agent/scripts/p2a_iteration.mjs maintenance add \
   --artifacts .plan2agent/artifacts/<project_id> \
   --title "Fix typo" \
   --accept "Typo is fixed"
+
+node .plan2agent/scripts/p2a_iteration.mjs maintenance add \
+  --artifacts .plan2agent/artifacts/<project_id> \
+  --from-draft eval/maintenance-draft.json \
+  --dry-run
+
+node .plan2agent/scripts/p2a_iteration.mjs maintenance add \
+  --artifacts .plan2agent/artifacts/<project_id> \
+  --from-draft eval/maintenance-draft.json \
+  --yes
 ```
 
 `--status`는 generated `status.md` view의 최소 구조만 확인한다. `--artifact-root`는 `.plan2agent/artifacts/<project_id>/` 아래 Gate A-D JSON bundle을 한 번에 검증하며, 승인된 Gate B spec이 있으면 `spec.approval_audit`도 확인한다. `--spec`은 `--intake`가 있으면 그 intake를 사용하고, 없으면 `spec.source_intake`를 실제 파일로 자동 연결해 Gate B traceability를 검사한다. `spec.source_intake`가 명시됐지만 파일로 해석되지 않으면 실패한다.
@@ -245,11 +255,11 @@ node .plan2agent/scripts/p2a_iteration.mjs maintenance add \
 
 `p2a_iteration.mjs validate`는 반복 구조의 active iteration 포인터, active Gate B-D 산출물, task dependency, review blocker, current-spec composition을 검증한다. `--allow-planning`/`--stage`는 Gate A-ready, Gate B draft/approved, 또는 `gate-c-task-graph/task-graph.draft.json`을 검증하는 Gate C draft 상태를 planning state로 검증한다. `--require-close-ready`를 붙이면 모든 active task가 `done`인지까지 확인한다. 개별 flat task graph가 승인된 spec을 기준으로 생성됐는지 확인할 때는 `validate_artifacts.mjs --task-graph ... --require-approved-spec ...`를 사용한다.
 
-`p2a_iteration.mjs close/open/draft/promote-spec/context/diff-tasks/promote-tasks/compose`는 반복 planning과 task graph 초안/승격을 다룬다. `context --scope feature`는 기본값이며 active 기능 반복의 task 저작 context를 출력한다. `context --scope maintenance`는 active feature diff를 섞지 않고 `active_iteration: "maintenance"`와 maintenance task 요약을 포함한 유지보수용 context를 출력한다. `draft`는 `.plan2agent/artifacts/<project_id>/preflight-research/`의 Feature Radar 산출물을 발견하면 Gate A/B 초안의 `evidence`와 `reference_reconnaissance`에 후보 근거로 반영한다. `diff-tasks`는 `task-graph.draft.json`만 만들고, `promote-tasks`가 사람 승인 audit과 함께 정본 `task-graph.json`으로 승격한다. `p2a_iteration.mjs maintenance add`는 Gate A/B/D 없이 `iterations/maintenance/gate-c-task-graph/task-graph.json`을 lazy 생성하거나 append한다. 필수 옵션은 `--title`과 하나 이상의 `--accept`이며, 선택 옵션은 `--description`, `--area`, `--prompt`, 반복 가능한 `--ref`, 반복 가능한 `--depends`, `--dry-run`이다.
+`p2a_iteration.mjs close/open/draft/promote-spec/context/diff-tasks/promote-tasks/compose`는 반복 planning과 task graph 초안/승격을 다룬다. `context --scope feature`는 기본값이며 active 기능 반복의 task 저작 context를 출력한다. `context --scope maintenance`는 active feature diff를 섞지 않고 `active_iteration: "maintenance"`와 maintenance task 요약을 포함한 유지보수용 context를 출력한다. `draft`는 `.plan2agent/artifacts/<project_id>/preflight-research/`의 Feature Radar 산출물을 발견하면 Gate A/B 초안의 `evidence`와 `reference_reconnaissance`에 후보 근거로 반영한다. `diff-tasks`는 `task-graph.draft.json`만 만들고, `promote-tasks`가 사람 승인 audit과 함께 정본 `task-graph.json`으로 승격한다. `p2a_iteration.mjs maintenance add`는 Gate A/B/D 없이 `iterations/maintenance/gate-c-task-graph/task-graph.json`을 lazy 생성하거나 append한다. 단일 task 필수 옵션은 `--title`과 하나 이상의 `--accept`이며, 선택 옵션은 `--description`, `--area`, `--prompt`, 반복 가능한 `--ref`, 반복 가능한 `--depends`, `--dry-run`이다. `--from-draft <file>`은 검토된 maintenance draft의 task들을 한 번에 검증해 append하며, 쓰기 전 `--dry-run`으로 preview하고 실제 append에는 `--yes`가 필요하다. 이미 같은 `eval-cluster:*`/proposal ref가 maintenance graph에 있으면 중복 task는 skip한다.
 
 ### GUI desktop app — `apps/p2a-gui`
 
-GUI는 Electron Forge + React + TypeScript 앱이다. 선택한 프로젝트의 P2A 설치 상태, `p2a info`/`p2a_doctor` 요약, task/run/artifact, update preview/apply report, eval index/analysis/digest, memory digest/history/search report, orchestration runtime/scheduler 상태, PTY session, start/finish lifecycle, 한글/영문 UI를 파일 기반 CLI 계약 위에서 표시한다. GUI의 프로젝트 읽기와 실행 action은 Electron main process의 typed IPC를 거치며, renderer가 임의 파일 경로나 shell API를 직접 호출하지 않는다. operational report action은 `update --dry-run|--apply`, `eval generate/analyze/digest`, `memory digest/history`만 typed IPC로 실행하고, 생성된 JSON report를 artifact browser에서 다시 열 수 있게 한다. orchestration GUI action은 `p2a_orchestrate.mjs mark-role`만 호출해 사람이 관찰한 role 상태를 기록하며, Codex/Claude/Gemini CLI나 browser/background loop를 대신 실행하지 않는다.
+GUI는 Electron Forge + React + TypeScript 앱이다. 선택한 프로젝트의 P2A 설치 상태, `p2a info`/`p2a_doctor` 요약, task/run/artifact, update preview/apply report, eval index/analysis/digest, memory digest/history/search report, orchestration runtime/scheduler 상태, PTY session, start/finish lifecycle, 한글/영문 UI를 파일 기반 CLI 계약 위에서 표시한다. proposal queue는 curation/draft/approval 연결과 승인 후 maintenance task 제목·현재 status를 함께 보여준다. GUI의 프로젝트 읽기와 실행 action은 Electron main process의 typed IPC를 거치며, renderer가 임의 파일 경로나 shell API를 직접 호출하지 않는다. operational report action은 `update --dry-run|--apply`, `eval generate/analyze/digest`, `memory digest/history`만 typed IPC로 실행하고, 생성된 JSON report를 artifact browser에서 다시 열 수 있게 한다. orchestration GUI action은 `p2a_orchestrate.mjs mark-role`만 호출해 사람이 관찰한 role 상태를 기록하며, Codex/Claude/Gemini CLI나 browser/background loop를 대신 실행하지 않는다.
 
 운영 원칙: API 요금제 기반 완전 자동 개발은 비용상 보류한다. 구독 로그인 기반 Codex/Claude/Gemini 사용은 공식 CLI/앱을 사람이 foreground에서 열고 승인·감독하는 방식으로 제한한다. p2a는 role, prompt, order, run state를 조율하고 기록할 뿐, browser/background loop, 세션 쿠키·토큰 재사용, 여러 계정 로테이션, rate limit 우회, 무인 headless 실행을 구현하지 않는다.
 
@@ -646,7 +656,7 @@ node .plan2agent/scripts/p2a_eval.mjs digest \
 
 `compare`는 두 artifact root 또는 runs directory의 run status, verification failure/gap, skipped run, task done count를 비교해 `pass|warn|fail` regression verdict를 낸다. candidate에 failed/blocked run이나 verification failure가 늘면 `fail`, verification gap이나 skipped run이 늘면 `warn`이다. 신규 run schema 기준에서는 failed/blocked run의 `reproduction`, `localization`, `guard`가 필수이므로, 이 값이 빠진 run은 비교 대상 이전의 artifact validation 단계에서 걸러진다.
 
-`analyze`는 failed/blocked run, failed verification, verification gap을 failure cluster로 묶고 proposal coverage를 계산한다. artifact root를 입력하면 각 cluster에 `p2a_iteration maintenance add` 후보 명령을 붙이고, scope/dependency 계열 cluster는 `p2a_iteration open ... draft`로 Gate A/B delta draft를 여는 명령도 함께 제안한다. 기본 실행은 파일을 자동 수정하지 않으며, `--maintenance-draft <path>`를 주면 maintenance task draft JSON을 저장한다. `--apply-maintenance --yes`는 draft된 maintenance task를 maintenance graph에 적용하고 `eval/maintenance-apply-report.json`을 남긴다. 먼저 확인하려면 `--apply-maintenance --dry-run`을 사용한다.
+`analyze`는 failed/blocked run, failed verification, verification gap을 failure cluster로 묶고 proposal coverage를 계산한다. artifact root를 입력하면 각 cluster에 maintenance 후보 명령과 scope/dependency 계열 Gate A/B delta draft 명령을 함께 제안한다. 기본 실행은 파일을 자동 수정하지 않으며, `--maintenance-draft <path>`를 주면 maintenance task draft JSON을 저장한다. 권장 승격 흐름은 저장된 draft를 검토한 뒤 `p2a_iteration maintenance add --from-draft <path> --dry-run`으로 preview하고 `--yes`로 append하는 것이다. `--apply-maintenance --yes`는 analyze 명령 안에서 바로 적용하고 `eval/maintenance-apply-report.json`을 남기는 shortcut이며, 먼저 확인하려면 `--apply-maintenance --dry-run`을 사용한다.
 
 `generate`는 현재 run index를 기준으로 grade files, `analysis.json`, `eval-index.json`을 eval 디렉터리에 생성한다. 같은 출력 디렉터리에 재실행하면 이전 generated grade/index/analysis/compare 파일을 정리하고 새 결과로 대체한다. `digest`는 생성된 eval artifact를 요약하며, GUI에서 digest 문서로 확인하려면 `--output <eval-dir>/eval-digest.json`처럼 파일로 저장한다. self-improvement section은 기본적으로 최신 30개 run을 기준으로 실패 근거, 반복 실패, proposal 전환, post-maintenance verification을 계산하며, `--recent-runs <n>`으로 분석 범위를 바꿀 수 있다. proposal/approval/maintenance 집계는 분석 window 안의 run과 proposal JSON `sourceRunId` 또는 curation candidate `sourceRunIds`로 연결되는 proposal을 기준으로 제한된다. approved proposal 집계는 proposal JSON의 `status`뿐 아니라 `approve-draft`가 남긴 approval artifact와 curation/draft 연결도 effective approval signal로 반영한다. approval artifact가 없는 기존 approved proposal은 maintenance task의 `proposal:<proposalId>` 또는 `skill-proposal:<proposalId>` source ref로 conversion을 연결할 수 있다.
 
@@ -967,11 +977,21 @@ node .plan2agent/scripts/p2a_iteration.mjs maintenance add \
   --accept "Existing examples still render" \
   --ref effective_product.problem
 
+node .plan2agent/scripts/p2a_iteration.mjs maintenance add \
+  --artifacts .plan2agent/artifacts/<project_id> \
+  --from-draft eval/maintenance-draft.json \
+  --dry-run
+
+node .plan2agent/scripts/p2a_iteration.mjs maintenance add \
+  --artifacts .plan2agent/artifacts/<project_id> \
+  --from-draft eval/maintenance-draft.json \
+  --yes
+
 node .plan2agent/scripts/p2a_iteration.mjs validate \
   --artifacts .plan2agent/artifacts/<project_id>
 ```
 
-`maintenance add`는 active 기능 반복이 close-ready가 아니어도 실행할 수 있지만, `compose`, active iteration 회전, close 대상에는 maintenance를 포함하지 않는다.
+`maintenance add`는 active 기능 반복이 close-ready가 아니어도 실행할 수 있지만, `compose`, active iteration 회전, close 대상에는 maintenance를 포함하지 않는다. `--from-draft`는 `p2a_eval analyze --maintenance-draft <file>`가 만든 draft를 읽어 task id를 새로 배정하고, draft-local dependency가 있으면 append된 task id로 매핑한다. 실제 쓰기는 `--yes`를 요구한다.
 
 ---
 

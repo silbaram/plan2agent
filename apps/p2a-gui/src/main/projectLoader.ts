@@ -1380,6 +1380,11 @@ type ProposalMaintenanceLink = {
   maintenanceTaskStatus: string | null;
 };
 
+type MaintenanceTaskSummary = {
+  title: string | null;
+  status: string | null;
+};
+
 function emptyProposalMaintenanceLink(): ProposalMaintenanceLink {
   return {
     approvalId: null,
@@ -1388,6 +1393,32 @@ function emptyProposalMaintenanceLink(): ProposalMaintenanceLink {
     maintenanceTaskId: null,
     maintenanceTaskTitle: null,
     maintenanceTaskStatus: null,
+  };
+}
+
+function resolveProjectPath(rootPath: string, filePath: string | null): string | null {
+  if (!filePath) return null;
+  return path.isAbsolute(filePath) ? filePath : path.join(rootPath, filePath);
+}
+
+async function readMaintenanceTaskSummary(
+  rootPath: string,
+  taskGraphRef: string | null,
+  taskId: string | null,
+  graphCache: Map<string, Promise<JsonRecord | null>>,
+): Promise<MaintenanceTaskSummary | null> {
+  if (!taskGraphRef || !taskId) return null;
+  const taskGraphPath = resolveProjectPath(rootPath, taskGraphRef);
+  if (!taskGraphPath) return null;
+  if (!graphCache.has(taskGraphPath)) {
+    graphCache.set(taskGraphPath, readJson(taskGraphPath).catch(() => null));
+  }
+  const graph = await graphCache.get(taskGraphPath);
+  const task = recordArrayValue(graph?.tasks).find((candidate) => stringValue(candidate.id) === taskId);
+  if (!task) return null;
+  return {
+    title: stringValue(task.title),
+    status: stringValue(task.status),
   };
 }
 
@@ -1412,6 +1443,7 @@ async function summarizeProposalMaintenanceLinks(rootPath: string): Promise<Map<
   const proposalIdsByCandidateId = new Map<string, string[]>();
   const draftById = new Map<string, JsonRecord>();
   const linksByProposalId = new Map<string, ProposalMaintenanceLink>();
+  const maintenanceGraphCache = new Map<string, Promise<JsonRecord | null>>();
 
   for (const item of await readJsonFilesFromDirectory(curationsDir)) {
     if (item.data.schema_version !== "p2a.proposal_curation.v1") continue;
@@ -1449,6 +1481,13 @@ async function summarizeProposalMaintenanceLinks(rootPath: string): Promise<Map<
       (candidateId ? proposalIdsByCandidateId.get(candidateId) : null) ??
       (draft ? stringArrayValue(draft.proposalIds) : []);
     const task = recordValue(item.data.maintenanceTask);
+    const maintenanceTaskId = stringValue(task?.taskId);
+    const taskSummary = await readMaintenanceTaskSummary(
+      rootPath,
+      stringValue(task?.taskGraph),
+      maintenanceTaskId,
+      maintenanceGraphCache,
+    );
     for (const proposalId of proposalIds) {
       const existing = linksByProposalId.get(proposalId) ?? emptyProposalMaintenanceLink();
       linksByProposalId.set(proposalId, {
@@ -1456,9 +1495,9 @@ async function summarizeProposalMaintenanceLinks(rootPath: string): Promise<Map<
         approvalId,
         candidateId: candidateId ?? existing.candidateId,
         patchDraftId: draftId ?? existing.patchDraftId,
-        maintenanceTaskId: stringValue(task?.taskId),
-        maintenanceTaskTitle: stringValue(task?.title),
-        maintenanceTaskStatus: null,
+        maintenanceTaskId,
+        maintenanceTaskTitle: taskSummary?.title ?? stringValue(task?.title),
+        maintenanceTaskStatus: taskSummary?.status ?? null,
       });
     }
   }

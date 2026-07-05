@@ -26,6 +26,7 @@ import {
   singleArtifactProjectRoot,
 } from './p2a_paths.mjs';
 import { resolveIterationState } from './p2a_iteration_state.mjs';
+import { commandLine } from './p2a_run_commands.mjs';
 
 const P2A_PATHS = resolveP2aPaths(import.meta.url);
 const COMMANDS = new Set(['grade', 'compare', 'analyze', 'generate', 'digest']);
@@ -891,17 +892,18 @@ function shellQuote(value) {
 function maintenanceCommandForCluster(source, cluster) {
   if (source.sourceKind !== 'artifacts') return null;
   const title = `Improve ${cluster.classification} handling`;
-  return [
-    'node .plan2agent/scripts/p2a.mjs iteration maintenance add',
+  return commandLine(P2A_PATHS, 'p2a_iteration.mjs', [
+    'maintenance',
+    'add',
     '--artifacts',
-    shellQuote(displayPath(source.sourcePath)),
+    displayPath(source.sourcePath),
     '--title',
-    shellQuote(title),
+    title,
     '--accept',
-    shellQuote(`Future runs avoid or clearly classify ${cluster.classification}.`),
+    `Future runs avoid or clearly classify ${cluster.classification}.`,
     '--ref',
-    shellQuote(`eval-cluster:${cluster.clusterId}`),
-  ].join(' ');
+    `eval-cluster:${cluster.clusterId}`,
+  ]);
 }
 
 function deltaDraftCommandForCluster(source, cluster) {
@@ -909,16 +911,21 @@ function deltaDraftCommandForCluster(source, cluster) {
   if (!['scope_violation', 'missing_dependency'].includes(cluster.classification)) return null;
   const idea = `Address repeated ${cluster.classification} evidence from ${cluster.runIds.length} run(s).`;
   return [
-    'node .plan2agent/scripts/p2a.mjs iteration open',
-    '--artifacts',
-    shellQuote(displayPath(source.sourcePath)),
-    '--iteration-id',
-    'v-next',
-    '--idea',
-    shellQuote(idea),
-    '&& node .plan2agent/scripts/p2a.mjs iteration draft --artifacts',
-    shellQuote(displayPath(source.sourcePath)),
-  ].join(' ');
+    commandLine(P2A_PATHS, 'p2a_iteration.mjs', [
+      'open',
+      '--artifacts',
+      displayPath(source.sourcePath),
+      '--iteration-id',
+      'v-next',
+      '--idea',
+      idea,
+    ]),
+    commandLine(P2A_PATHS, 'p2a_iteration.mjs', [
+      'draft',
+      '--artifacts',
+      displayPath(source.sourcePath),
+    ]),
+  ].join(' && ');
 }
 
 function analyzeNextActions(source, clusters) {
@@ -985,21 +992,22 @@ function maintenanceDraftTask(source, analysis, cluster) {
 }
 
 function maintenanceAddCommandForTask(source, task) {
-  return [
-    'node .plan2agent/scripts/p2a.mjs iteration maintenance add',
+  return commandLine(P2A_PATHS, 'p2a_iteration.mjs', [
+    'maintenance',
+    'add',
     '--artifacts',
-    shellQuote(displayPath(source.sourcePath)),
+    displayPath(source.sourcePath),
     '--title',
-    shellQuote(task.title),
+    task.title,
     '--description',
-    shellQuote(task.description),
+    task.description,
     '--area',
-    shellQuote(task.targetArea),
+    task.targetArea,
     '--prompt',
-    shellQuote(task.suggestedAgentPrompt),
-    ...task.acceptanceCriteria.flatMap((criterion) => ['--accept', shellQuote(criterion)]),
-    ...task.sourceSpecRefs.flatMap((ref) => ['--ref', shellQuote(ref)]),
-  ].join(' ');
+    task.suggestedAgentPrompt,
+    ...task.acceptanceCriteria.flatMap((criterion) => ['--accept', criterion]),
+    ...task.sourceSpecRefs.flatMap((ref) => ['--ref', ref]),
+  ]);
 }
 
 function buildMaintenanceDraft(source, analysis) {
@@ -1025,7 +1033,8 @@ function buildMaintenanceDraft(source, analysis) {
     nextActions: tasks.length
       ? [
           'Review this draft before applying it to the maintenance graph.',
-          `Apply after review: node .plan2agent/scripts/p2a.mjs eval analyze --artifacts ${shellQuote(displayPath(source.sourcePath))} --apply-maintenance --yes`,
+          `Preview after review: ${commandLine(P2A_PATHS, 'p2a_iteration.mjs', ['maintenance', 'add', '--artifacts', displayPath(source.sourcePath), '--from-draft', '<maintenance-draft.json>', '--dry-run'])}`,
+          `Apply after review: ${commandLine(P2A_PATHS, 'p2a_iteration.mjs', ['maintenance', 'add', '--artifacts', displayPath(source.sourcePath), '--from-draft', '<maintenance-draft.json>', '--yes'])}`,
         ]
       : ['No maintenance tasks were drafted because no failure clusters were found.'],
   };
@@ -1222,6 +1231,8 @@ function printAnalyze(payload, writeResult) {
     console.log(`- maintenance draft: tasks=${payload.maintenanceDraft.summary.tasks}`);
     if (payload.maintenanceDraft.outputPath) {
       console.log(`- maintenance draft output: ${payload.maintenanceDraft.outputPath}${payload.maintenanceDraft.dryRun ? ' (dry-run)' : ''}`);
+      console.log(`- maintenance draft preview: ${commandLine(P2A_PATHS, 'p2a_iteration.mjs', ['maintenance', 'add', '--artifacts', displayPath(payload.source.sourcePath), '--from-draft', payload.maintenanceDraft.outputPath, '--dry-run'])}`);
+      console.log(`- maintenance draft apply: ${commandLine(P2A_PATHS, 'p2a_iteration.mjs', ['maintenance', 'add', '--artifacts', displayPath(payload.source.sourcePath), '--from-draft', payload.maintenanceDraft.outputPath, '--yes'])}`);
     }
     if (payload.maintenanceDraft.applyResult) {
       const result = payload.maintenanceDraft.applyResult;

@@ -3,6 +3,7 @@
 import { nodeScriptCommand, scriptCommandPath } from './p2a_paths.mjs';
 
 const TOP_LEVEL_COMMANDS = new Map([
+  ['p2a_iteration.mjs', 'iteration'],
   ['p2a_execute.mjs', 'execute'],
   ['p2a_tasks.mjs', 'tasks'],
   ['p2a_runs.mjs', 'runs'],
