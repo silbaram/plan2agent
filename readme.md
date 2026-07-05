@@ -73,6 +73,7 @@ or app session stays foreground-supervised by the user.
 ### Improvement Proposal Loop
 
 - Mine failed or blocked runs into structured improvement proposals.
+- Mark proposals as project-local, Plan2Agent toolkit, or companion-project upstream candidates.
 - Score proposal quality from evidence, reproduction, impact scope, validation, and risk rationale.
 - Review, curate, draft, and approve proposal artifacts without automatically applying patches.
 - Convert approved proposal drafts into maintenance tasks.
@@ -82,7 +83,7 @@ or app session stays foreground-supervised by the user.
 
 - Use Plan2Agent Memory as an optional long-term artifact store and search backend.
 - `p2a memory status` compares local artifacts with remote snapshots.
-- `p2a memory push` uploads project, iteration, document, task, graph, and run snapshots.
+- `p2a memory push` uploads project, iteration, document, proposal, task, graph, and run snapshots.
 - `p2a memory search` and `p2a memory history` support cross-session recall.
 - `p2a memory digest` summarizes failure and proposal history and tracks whether Memory search results were reused by run, proposal, or eval artifacts.
 

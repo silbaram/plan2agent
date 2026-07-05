@@ -43,6 +43,7 @@ const SEARCH_ARTIFACT_TYPES = new Set([
   'TASK_GRAPH',
   'TASK',
   'RUN_RECORD',
+  'PROPOSAL',
   'DOCUMENT_CHUNK',
 ]);
 const SEARCH_TYPE_ALIASES = new Map([
@@ -56,6 +57,8 @@ const SEARCH_TYPE_ALIASES = new Map([
   ['task', 'TASK'],
   ['run', 'RUN_RECORD'],
   ['run-record', 'RUN_RECORD'],
+  ['proposal', 'PROPOSAL'],
+  ['proposals', 'PROPOSAL'],
   ['chunk', 'DOCUMENT_CHUNK'],
   ['document-chunk', 'DOCUMENT_CHUNK'],
 ]);
@@ -82,14 +85,14 @@ function usage() {
     '  --artifacts <dir>   Iterative artifact root, for example .plan2agent/artifacts/<project_id>.',
     '  --graph <path>      Task graph JSON path. Runs default beside the graph parent.',
     '  --runs <dir>        Explicit runs directory. Supported by status, pull, search, and digest only.',
-    '  --proposals <dir>   Proposal queue directory for digest.',
+    '  --proposals <dir>   Proposal queue directory for digest and proposal snapshot sync.',
     '  --global            For search/history, do not apply current project/iteration filters.',
     '',
     'Memory options:',
     `  --server <url>      Memory server base URL. Default: ${DEFAULT_MEMORY_URL_ENV} or project config memory.serverUrlEnv.`,
     `  --token <token>     X-P2A-Local-Token value. Default: ${DEFAULT_MEMORY_TOKEN_ENV} or project config memory.tokenEnv.`,
     '  --query <text>      Keyword query for search.',
-    '  --type <kind>       Search artifact type: document, chunk, task, run, graph, project, or iteration.',
+    '  --type <kind>       Search artifact type: document, chunk, task, run, graph, project, iteration, or proposal.',
     '  --source-path <path> Search source path filter.',
     '  --project <id>      Source project ID filter for history.',
     '  --iteration <id>    Source iteration ID filter for history.',
@@ -167,7 +170,7 @@ function parseArgs(argv) {
   if (!['push', 'pull'].includes(args.command) && args.dryRun) throw new Error('--dry-run is only supported by push and pull');
   if (args.command === 'pull' && !args.dryRun) throw new Error('pull is preview-only for now and requires --dry-run');
   if (args.command !== 'push' && args.yes) throw new Error('--yes is only supported by push');
-  if (args.command !== 'digest' && args.proposals) throw new Error('--proposals is only supported by digest');
+  if (args.command === 'pull' && args.proposals) throw new Error('--proposals is not supported by pull');
   if (!['pull', 'search', 'history', 'digest'].includes(args.command) && args.output) {
     throw new Error('--output is only supported by pull, search, history, and digest');
   }
@@ -228,14 +231,11 @@ function parsePositiveInteger(value, optionName) {
 
 function normalizeSearchArtifactType(value) {
   const normalized = value.trim().toLowerCase().replace(/[_\s]+/g, '-');
-  if (normalized === 'proposal' || normalized === 'proposals') {
-    throw new Error('Memory search does not support proposal type yet because proposal snapshots are not pushed to Memory');
-  }
   const aliased = SEARCH_TYPE_ALIASES.get(normalized);
   if (aliased) return aliased;
   const upper = value.trim().toUpperCase();
   if (SEARCH_ARTIFACT_TYPES.has(upper)) return upper;
-  throw new Error(`unsupported Memory search type: ${value}; expected document, chunk, task, run, graph, project, or iteration`);
+  throw new Error(`unsupported Memory search type: ${value}; expected document, chunk, task, run, graph, project, iteration, or proposal`);
 }
 
 function normalizeSearchSourcePath(value) {
@@ -562,14 +562,16 @@ function buildMemoryPlan(args) {
   };
 
   const documents = buildDocumentSnapshots(context, projectCanonicalId, iterationCanonicalId, baseMetadata);
+  const proposalSnapshots = buildProposalSnapshots(context, projectCanonicalId, iterationCanonicalId, baseMetadata);
   const taskGraph = buildTaskGraphSnapshot(context, projectCanonicalId, iterationCanonicalId, documents, baseMetadata);
   const tasks = taskGraph ? buildTaskSnapshots(context, projectCanonicalId, iterationCanonicalId, taskGraph, baseMetadata) : [];
   const runs = buildRunSnapshots(context, projectCanonicalId, iterationCanonicalId, tasks, baseMetadata);
-  const chunks = documents.flatMap((document) => document.chunks);
+  const chunks = [...documents, ...proposalSnapshots.proposals].flatMap((document) => document.chunks);
   const syncItems = [
     localItem(project.artifactType, project.id, project.sourceKey, null, project.request.metadata),
     localItem(iteration.artifactType, iteration.id, iteration.sourceKey, null, iteration.request.metadata),
     ...documents.map((document) => localItem('DOCUMENT_SNAPSHOT', document.id, document.sourceKey, document.contentHash, document.request.metadata, document.sourcePath)),
+    ...proposalSnapshots.proposals.map((proposal) => localItem('PROPOSAL', proposal.id, proposal.sourceKey, proposal.contentHash, proposal.request.metadata, proposal.sourcePath)),
     ...(taskGraph ? [localItem('TASK_GRAPH', taskGraph.id, taskGraph.sourceKey, taskGraph.graphHash, taskGraph.request.metadata, taskGraph.sourcePath)] : []),
     ...tasks.map((task) => localItem('TASK', task.id, task.sourceKey, null, task.request.metadata)),
     ...runs.runs.map((run) => localItem('RUN_RECORD', run.id, run.sourceKey, run.contentHash, run.request.metadata, run.sourcePath)),
@@ -590,13 +592,24 @@ function buildMemoryPlan(args) {
     project,
     iteration,
     documents,
+    proposals: proposalSnapshots.proposals,
     taskGraph,
     tasks,
     runs: runs.runs,
     skippedRuns: [...context.runs.skippedRuns, ...runs.skippedRuns],
+    skippedProposals: proposalSnapshots.skippedProposals,
     chunks,
     syncItems,
-    summary: summarizePlan({ documents, chunks, taskGraph, tasks, runs: runs.runs, skippedRuns: [...context.runs.skippedRuns, ...runs.skippedRuns] }),
+    summary: summarizePlan({
+      documents,
+      proposals: proposalSnapshots.proposals,
+      chunks,
+      taskGraph,
+      tasks,
+      runs: runs.runs,
+      skippedRuns: [...context.runs.skippedRuns, ...runs.skippedRuns],
+      skippedProposals: proposalSnapshots.skippedProposals,
+    }),
   };
 }
 
@@ -607,6 +620,7 @@ function localItem(artifactType, artifactId, sourceKey, contentHash, sourceIds, 
     sourceKey,
     contentHash,
     sourcePath,
+    metadata: sourceIds ?? {},
     sourceIds: {
       sourceProjectId: sourceIds.sourceProjectId ?? null,
       sourceIterationId: sourceIds.sourceIterationId ?? null,
@@ -619,16 +633,18 @@ function localItem(artifactType, artifactId, sourceKey, contentHash, sourceIds, 
   };
 }
 
-function summarizePlan({ documents, chunks, taskGraph, tasks, runs, skippedRuns }) {
+function summarizePlan({ documents, proposals, chunks, taskGraph, tasks, runs, skippedRuns, skippedProposals }) {
   return {
     projects: 1,
     iterations: 1,
     documents: documents.length,
+    proposals: proposals.length,
     chunks: chunks.length,
     taskGraphs: taskGraph ? 1 : 0,
     tasks: tasks.length,
     runs: runs.length,
     skippedRuns: skippedRuns.length,
+    skippedProposals: skippedProposals.length,
   };
 }
 
@@ -688,6 +704,68 @@ function documentRole(filePath) {
   if (normalized.endsWith('/gate-c-task-graph/task-graph.json')) return 'task_graph_document';
   if (normalized.endsWith('/gate-d-review/review.json')) return 'review';
   return 'document';
+}
+
+function proposalTarget(proposal) {
+  return proposal.target ?? 'project';
+}
+
+function buildProposalSnapshots(context, projectCanonicalId, iterationCanonicalId, baseMetadata) {
+  const proposals = [];
+  const skippedProposals = [];
+  for (const filePath of proposalFiles(context.proposalsDir)) {
+    try {
+      const raw = readFileSync(filePath, 'utf8');
+      const proposal = validateSkillProposal(filePath);
+      if (!raw.trim()) continue;
+      const sourcePath = displayPath(filePath);
+      const contentHash = hashText(raw);
+      const sourceId = sourceDocumentId(context.projectId, context.iterationId, sourcePath);
+      const documentId = stableId('p2a-proposal', [sourceId, contentHash]);
+      const proposalMetadata = metadata({
+        ...baseMetadata,
+        sourceDocumentId: sourceId,
+        documentRole: 'proposal',
+        proposalId: proposal.proposalId,
+        sourceRunId: proposal.sourceRunId ?? null,
+        proposalStatus: proposal.status,
+        proposalTarget: proposalTarget(proposal),
+        targetRepo: proposal.targetRepo ?? null,
+        targetArea: proposal.targetArea ?? null,
+        upstreamReason: proposal.upstreamReason ?? null,
+        risk: proposal.risk,
+        qualityScore: proposal.quality?.score ?? null,
+        qualityBand: proposal.quality?.band ?? null,
+      });
+      const snapshot = {
+        id: documentId,
+        sourceKey: sourceId,
+        sourcePath,
+        contentHash,
+        content: raw,
+        proposal,
+        request: {
+          documentId,
+          projectId: projectCanonicalId,
+          iterationId: iterationCanonicalId,
+          sourceDocumentId: sourceId,
+          sourcePath,
+          artifactType: 'PROPOSAL',
+          title: `Proposal: ${proposal.proposalId}`,
+          content: raw,
+          contentHash,
+          sourceReference: sourceReference(documentId, filePath),
+          metadata: proposalMetadata,
+        },
+        chunks: [],
+      };
+      snapshot.chunks = buildDocumentChunks(snapshot, projectCanonicalId, iterationCanonicalId);
+      proposals.push(snapshot);
+    } catch (error) {
+      skippedProposals.push({ filePath, reason: errorMessage(error) });
+    }
+  }
+  return { proposals, skippedProposals };
 }
 
 function buildDocumentChunks(document, projectCanonicalId, iterationCanonicalId) {
@@ -1010,7 +1088,7 @@ function remoteKey(item) {
   const sourceIds = item.sourceIds ?? {};
   if (item.artifactType === 'PROJECT') return sourceIds.sourceProjectId ?? item.metadata?.sourceProjectId ?? item.artifactId;
   if (item.artifactType === 'ITERATION') return sourceIds.sourceIterationId ?? item.metadata?.sourceIterationId ?? item.artifactId;
-  if (item.artifactType === 'DOCUMENT_SNAPSHOT') return sourceIds.sourceDocumentId ?? item.sourcePath ?? item.artifactId;
+  if (item.artifactType === 'DOCUMENT_SNAPSHOT' || item.artifactType === 'PROPOSAL') return sourceIds.sourceDocumentId ?? item.sourcePath ?? item.artifactId;
   if (item.artifactType === 'TASK_GRAPH') return sourceIds.sourceTaskGraphId ?? item.artifactId;
   if (item.artifactType === 'TASK') return `${sourceIds.sourceTaskGraphId ?? ''}:${sourceIds.sourceTaskId ?? item.taskId ?? item.artifactId}`;
   if (item.artifactType === 'RUN_RECORD') return `${sourceIds.sourceTaskId ?? ''}:${sourceIds.sourceRunId ?? item.runId ?? item.artifactId}`;
@@ -1023,7 +1101,7 @@ function localKey(item) {
   if (item.artifactType === 'RUN_RECORD') return `${item.sourceIds.sourceTaskId ?? ''}:${item.sourceIds.sourceRunId}`;
   if (item.artifactType === 'PROJECT') return item.sourceIds.sourceProjectId ?? item.sourceKey;
   if (item.artifactType === 'ITERATION') return item.sourceIds.sourceIterationId ?? item.sourceKey;
-  if (item.artifactType === 'DOCUMENT_SNAPSHOT') return item.sourceIds.sourceDocumentId ?? item.sourcePath;
+  if (item.artifactType === 'DOCUMENT_SNAPSHOT' || item.artifactType === 'PROPOSAL') return item.sourceIds.sourceDocumentId ?? item.sourcePath;
   if (item.artifactType === 'TASK_GRAPH') return item.sourceIds.sourceTaskGraphId ?? item.sourceKey;
   if (item.artifactType === 'DOCUMENT_CHUNK') return item.sourceIds.sourceChunkId ?? item.sourceKey;
   return item.sourceKey ?? item.artifactId;
@@ -1114,6 +1192,7 @@ async function runStatus(args) {
     local: plan.summary,
     sync,
     skippedRuns: plan.skippedRuns,
+    skippedProposals: plan.skippedProposals,
     nextActions: statusNextActions(connection, sync, plan),
   };
   if (args.json) console.log(JSON.stringify(payload, null, 2));
@@ -1132,6 +1211,7 @@ function statusNextActions(connection, sync, plan) {
     }
   }
   if (plan.skippedRuns.length > 0) actions.push('Inspect skipped run records before relying on Memory run coverage.');
+  if (plan.skippedProposals.length > 0) actions.push('Inspect skipped proposal records before relying on Memory proposal coverage.');
   return actions;
 }
 
@@ -1144,6 +1224,7 @@ function printStatus(payload) {
   console.log(`- local: ${formatSummary(payload.local)}`);
   console.log(`- sync: synced=${payload.sync.summary.synced} missingRemote=${payload.sync.summary.missingRemote} remoteDiffers=${payload.sync.summary.remoteDiffers} extraRemote=${payload.sync.summary.extraRemote}`);
   if (payload.skippedRuns.length) console.log(`- skipped runs: ${payload.skippedRuns.length}`);
+  if (payload.skippedProposals.length) console.log(`- skipped proposals: ${payload.skippedProposals.length}`);
   if (payload.nextActions.length) {
     console.log('next actions:');
     payload.nextActions.forEach((action) => console.log(`- ${action}`));
@@ -1180,6 +1261,7 @@ async function runPull(args) {
     preview,
     restorePlan,
     skippedRuns: plan.skippedRuns,
+    skippedProposals: plan.skippedProposals,
     limitations: [
       'Memory pull is preview-only in this release and does not write local artifact files.',
       'The current Memory lookup API returns artifact metadata and hashes; content apply is intentionally not performed.',
@@ -1350,6 +1432,7 @@ function pullPreviewNextActions(connection, remote, preview, plan) {
     actions.push('Write a restore report with --output <path>, then review remote-only/different artifacts before manual restore.');
   }
   if (plan.skippedRuns.length > 0) actions.push('Inspect skipped run records before using Memory as a restore source.');
+  if (plan.skippedProposals.length > 0) actions.push('Inspect skipped proposal records before using Memory as a restore source.');
   if (!actions.length) actions.push('No Memory pull differences detected.');
   return actions;
 }
@@ -1367,6 +1450,7 @@ function printPullPreview(payload) {
   console.log(`- restore: canApply=${payload.restorePlan.canApply ? 'yes' : 'no'} manual=${payload.restorePlan.summary.manualRestoreRequired} conflicts=${payload.restorePlan.summary.conflicts}`);
   if (payload.reportWrites) console.log(`- report: written`);
   if (payload.skippedRuns.length) console.log(`- skipped runs: ${payload.skippedRuns.length}`);
+  if (payload.skippedProposals.length) console.log(`- skipped proposals: ${payload.skippedProposals.length}`);
   if (payload.nextActions.length) {
     console.log('next actions:');
     payload.nextActions.forEach((action) => console.log(`- ${action}`));
@@ -1381,7 +1465,8 @@ async function runSearch(args) {
   const server = await memoryHealth(connection);
   const search = await searchRemoteMemory(connection, args, plan);
   const remoteAvailable = Boolean(connection.server && !search.error);
-  const results = remoteAvailable ? normalizeSearchResults(search.results) : [];
+  const rawResults = remoteAvailable ? normalizeSearchResults(search.results) : [];
+  const results = dedupeProposalSearchResults(rawResults);
   const payload = {
     schema_version: 'p2a.memory_search.v1',
     generatedAt: new Date().toISOString(),
@@ -1406,7 +1491,7 @@ async function runSearch(args) {
       status: search.error ? 'unavailable' : server.status,
       detail: search.error ?? server.detail,
     },
-    summary: summarizeSearchResults(results),
+    summary: summarizeSearchResults(results, rawResults),
     results,
     nextActions: searchNextActions(connection, search, results, plan, args),
   };
@@ -1435,7 +1520,65 @@ function normalizeSearchResults(results) {
   }));
 }
 
-function summarizeSearchResults(results) {
+function searchResultDocumentKey(item) {
+  return item.documentId
+    ?? item.sourceIds?.sourceDocumentId
+    ?? item.lineage?.documentId
+    ?? item.sourcePath
+    ?? `${item.artifactType}:${item.chunkId ?? item.contentPreview}`;
+}
+
+function dedupeSearchResultsByDocument(results) {
+  const byDocument = new Map();
+  for (const item of results) {
+    const key = `${item.artifactType}:${searchResultDocumentKey(item)}`;
+    const existing = byDocument.get(key);
+    if (!existing) {
+      byDocument.set(key, {
+        ...item,
+        duplicateMatches: 1,
+        matchReasons: item.matchReason ? [item.matchReason] : [],
+      });
+      continue;
+    }
+    const duplicateMatches = existing.duplicateMatches + 1;
+    const matchReasons = sortedUnique([
+      ...(existing.matchReasons ?? []),
+      item.matchReason,
+    ]);
+    const existingScore = typeof existing.score === 'number' ? existing.score : Number.NEGATIVE_INFINITY;
+    const itemScore = typeof item.score === 'number' ? item.score : Number.NEGATIVE_INFINITY;
+    const best = itemScore > existingScore ? item : existing;
+    byDocument.set(key, {
+      ...best,
+      duplicateMatches,
+      matchReasons,
+    });
+  }
+  return [...byDocument.values()];
+}
+
+function dedupeProposalSearchResults(results) {
+  const proposalResults = results.filter((item) => item.artifactType === 'PROPOSAL');
+  if (!proposalResults.length) return results;
+  const dedupedProposals = dedupeSearchResultsByDocument(proposalResults);
+  const proposalByKey = new Map(dedupedProposals.map((item) => [`${item.artifactType}:${searchResultDocumentKey(item)}`, item]));
+  const emittedProposalKeys = new Set();
+  const output = [];
+  for (const item of results) {
+    if (item.artifactType !== 'PROPOSAL') {
+      output.push(item);
+      continue;
+    }
+    const key = `${item.artifactType}:${searchResultDocumentKey(item)}`;
+    if (emittedProposalKeys.has(key)) continue;
+    emittedProposalKeys.add(key);
+    output.push(proposalByKey.get(key) ?? item);
+  }
+  return output;
+}
+
+function summarizeSearchResults(results, rawResults = results) {
   const byType = {};
   const byMatchReason = {};
   for (const item of results) {
@@ -1445,6 +1588,7 @@ function summarizeSearchResults(results) {
   }
   return {
     total: results.length,
+    rawTotal: rawResults.length,
     byType,
     byMatchReason,
   };
@@ -1497,7 +1641,8 @@ function printSearch(payload) {
       const score = typeof item.score === 'number' ? item.score.toFixed(3) : 'n/a';
       const pathLabel = item.sourcePath ?? 'unknown-source';
       const chunkLabel = item.chunkIndex === null || item.chunkIndex === undefined ? '' : ` chunk=${item.chunkIndex}`;
-      console.log(`${index + 1}. ${item.artifactType} score=${score} match=${item.matchReason ?? 'unknown'}${chunkLabel}`);
+      const duplicateLabel = item.duplicateMatches && item.duplicateMatches > 1 ? ` matches=${item.duplicateMatches}` : '';
+      console.log(`${index + 1}. ${item.artifactType} score=${score} match=${item.matchReason ?? 'unknown'}${chunkLabel}${duplicateLabel}`);
       console.log(`   source: ${pathLabel}`);
       if (item.contentPreview) console.log(`   content: ${item.contentPreview}`);
     });
@@ -1540,6 +1685,7 @@ async function runHistory(args) {
     summary: summarizeHistory(localEvents, remoteEvents, timeline),
     timeline,
     skippedRuns: plan?.skippedRuns ?? [],
+    skippedProposals: plan?.skippedProposals ?? [],
     nextActions: historyNextActions(connection, remote, localEvents, remoteEvents, plan, args),
   };
   if (args.output) writeJsonFile(path.resolve(args.output), payload);
@@ -1606,6 +1752,19 @@ function buildLocalHistoryEvents(plan) {
       contentHash: document.contentHash,
       occurredAt: fileTimestamp(document.sourcePath),
       metadata: document.request.metadata,
+    })),
+    ...plan.proposals.map((proposal) => localHistoryEvent({
+      artifactType: 'PROPOSAL',
+      artifactId: proposal.id,
+      sourceKey: proposal.sourceKey,
+      sourcePath: proposal.sourcePath,
+      projectId: plan.context.projectId,
+      iterationId: plan.context.iterationId,
+      title: proposal.request.title,
+      status: proposal.proposal.status,
+      contentHash: proposal.contentHash,
+      occurredAt: fileTimestamp(proposal.sourcePath),
+      metadata: proposal.request.metadata,
     })),
     ...(plan.taskGraph ? [localHistoryEvent({
       artifactType: 'TASK_GRAPH',
@@ -1813,6 +1972,7 @@ function printHistory(payload) {
     });
   }
   if (payload.skippedRuns.length) console.log(`- skipped runs: ${payload.skippedRuns.length}`);
+  if (payload.skippedProposals.length) console.log(`- skipped proposals: ${payload.skippedProposals.length}`);
   if (payload.nextActions.length) {
     console.log('next actions:');
     payload.nextActions.forEach((action) => console.log(`- ${action}`));
@@ -1824,11 +1984,13 @@ function formatSummary(summary) {
     `projects=${summary.projects}`,
     `iterations=${summary.iterations}`,
     `documents=${summary.documents}`,
+    `proposals=${summary.proposals}`,
     `chunks=${summary.chunks}`,
     `taskGraphs=${summary.taskGraphs}`,
     `tasks=${summary.tasks}`,
     `runs=${summary.runs}`,
     `skippedRuns=${summary.skippedRuns}`,
+    `skippedProposals=${summary.skippedProposals}`,
   ].join(' ');
 }
 
@@ -1849,6 +2011,7 @@ async function runPush(args) {
       },
       local: plan.summary,
       skippedRuns: plan.skippedRuns,
+      skippedProposals: plan.skippedProposals,
       writeOrder: writeOrder(plan),
       nextActions: pushPreviewNextActions(args, connection, plan),
     };
@@ -1869,6 +2032,7 @@ async function runPush(args) {
     },
     local: plan.summary,
     skippedRuns: plan.skippedRuns,
+    skippedProposals: plan.skippedProposals,
     result,
   };
   if (args.json) console.log(JSON.stringify(payload, null, 2));
@@ -1881,6 +2045,7 @@ function writeOrder(plan) {
     { artifactType: 'PROJECT', count: 1 },
     { artifactType: 'ITERATION', count: 1 },
     { artifactType: 'DOCUMENT_SNAPSHOT', count: plan.documents.length },
+    { artifactType: 'PROPOSAL', count: plan.proposals.length },
     { artifactType: 'TASK_GRAPH', count: plan.taskGraph ? 1 : 0 },
     { artifactType: 'TASK', count: plan.tasks.length },
     { artifactType: 'RUN_RECORD', count: plan.runs.length },
@@ -1893,6 +2058,7 @@ function pushPreviewNextActions(args, connection, plan) {
   if (!connection.server) actions.push(`Set ${DEFAULT_MEMORY_URL_ENV} or pass --server before actual push.`);
   if (!args.yes) actions.push('Actual Memory writes require --yes.');
   if (plan.skippedRuns.length) actions.push('Resolve skipped runs if they should be stored in Memory.');
+  if (plan.skippedProposals.length) actions.push('Resolve skipped proposals if they should be stored in Memory.');
   return actions;
 }
 
@@ -1923,7 +2089,7 @@ async function pushPlan(connection, plan) {
   };
   result.project = await memoryPost(connection, '/projects', plan.project.request);
   result.iteration = await memoryPost(connection, `/projects/${encodeURIComponent(plan.project.id)}/iterations`, plan.iteration.request);
-  for (const document of plan.documents) {
+  for (const document of [...plan.documents, ...plan.proposals]) {
     const response = await memoryPost(connection, '/documents/snapshots', document.request);
     result.documents.push(response);
     if (document.chunks.length) {
@@ -1949,7 +2115,8 @@ async function pushPlan(connection, plan) {
   return {
     projectId: result.project?.projectId ?? null,
     iterationId: result.iteration?.iterationId ?? null,
-    documents: result.documents.length,
+    documents: plan.documents.length,
+    proposals: plan.proposals.length,
     taskGraphId: result.taskGraph?.taskGraphId ?? null,
     tasks: result.tasks.length,
     runs: result.runs.length,
@@ -1962,8 +2129,9 @@ function printPushResult(payload) {
   console.log(`- project: ${payload.context.projectId}`);
   console.log(`- iteration: ${payload.context.iterationId}`);
   console.log(`- server: ${payload.server.url}`);
-  console.log(`- wrote: documents=${payload.result.documents} chunks=${payload.result.chunks} taskGraph=${payload.result.taskGraphId ? 1 : 0} tasks=${payload.result.tasks} runs=${payload.result.runs}`);
+  console.log(`- wrote: documents=${payload.result.documents} proposals=${payload.result.proposals} chunks=${payload.result.chunks} taskGraph=${payload.result.taskGraphId ? 1 : 0} tasks=${payload.result.tasks} runs=${payload.result.runs}`);
   if (payload.skippedRuns.length) console.log(`- skipped runs: ${payload.skippedRuns.length}`);
+  if (payload.skippedProposals.length) console.log(`- skipped proposals: ${payload.skippedProposals.length}`);
 }
 
 async function runDigest(args) {

@@ -24,6 +24,23 @@
     "sourceRunId": {
       "type": ["string", "null"]
     },
+    "target": {
+      "type": "string",
+      "enum": ["project", "p2a_toolkit", "companion_project"],
+      "default": "project"
+    },
+    "targetRepo": {
+      "type": ["string", "null"],
+      "minLength": 1
+    },
+    "targetArea": {
+      "type": ["string", "null"],
+      "minLength": 1
+    },
+    "upstreamReason": {
+      "type": ["string", "null"],
+      "minLength": 1
+    },
     "problem": {
       "type": "string",
       "minLength": 1

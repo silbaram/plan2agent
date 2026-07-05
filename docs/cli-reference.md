@@ -545,6 +545,13 @@ node .plan2agent/scripts/p2a_runs.mjs finish --run-id run-... --collect-git
 node .plan2agent/scripts/p2a_proposals.mjs mine \
   --graph .plan2agent/artifacts/<project_id>/gate-c-task-graph/task-graph.json
 
+node .plan2agent/scripts/p2a_proposals.mjs mine \
+  --runs .plan2agent/runs \
+  --proposals .plan2agent/proposals \
+  --target p2a_toolkit \
+  --target-area p2a-harness \
+  --upstream-reason "이 실패 패턴은 개별 프로젝트가 아니라 P2A 하네스에서 고쳐야 함"
+
 node .plan2agent/scripts/p2a_proposals.mjs list \
   --proposals .plan2agent/proposals
 
@@ -579,6 +586,8 @@ node .plan2agent/scripts/p2a_proposals.mjs validate \
 - `failed` 또는 `blocked` run에 `failure.class`가 남아 있는 경우
 - `finished` run인데 verification 기록이 없는 경우
 - monitor gate가 거절 verdict를 냈지만 run failure source가 monitor로 닫히지 않은 경우
+
+`--target`은 proposal의 적용 대상을 기록한다. 기본값은 `project`라서 기존 프로젝트 로컬 개선 큐와 같은 의미로 동작한다. `p2a_toolkit`은 이 proposal이 Plan2Agent 본체 하네스/CLI/스킬 개선 후보라는 뜻이며, `targetRepo`는 고정값 `https://github.com/silbaram/plan2agent`를 쓴다. 다른 repository로 보낼 개선 후보는 `companion_project`와 `--target-repo`를 사용한다. `companion_project`는 Memory, Feature Radar 같은 연동 서브프로젝트 개선 후보에 쓴다. `p2a_toolkit` 또는 `companion_project`는 `--upstream-reason`이 필요하고, `companion_project`는 `--target-repo`도 필요하다. `project` target에는 `--target-repo`, `--target-area`, `--upstream-reason`을 함께 쓸 수 없다. non-project target으로 mine한 proposal은 project-local proposal과 같은 run/failure에서 나오더라도 target-qualified proposalId를 사용하므로 같은 큐 안에서 서로 덮거나 skip하지 않는다. `review`, `curate`, `draft-patch`, `approve-draft`는 target metadata를 보존하므로 사람이 프로젝트 개선과 upstream 개선을 섞지 않고 판단할 수 있다. `approve-draft`는 upstream target을 기본적으로 현재 프로젝트 maintenance task로 전환하지 않는다. 의도적으로 현재 프로젝트 maintenance graph에 추적 task를 남길 때만 `--allow-local-upstream-task`를 함께 사용하며, 이 경우 task에는 `proposal-target:*` source ref와 `upstream:<area>` targetArea가 남는다.
 
 `mine`은 회고 분석용 best-effort 명령이다. run file 한 건이 legacy/손상 상태라 schema 검증에 실패하면 warning으로 건너뛰고 나머지 run을 계속 처리한다. 반대로 `validate`와 `validate_artifacts --runs-dir/--proposals-dir`는 감사용 명령이므로 계속 엄격하게 실패한다.
 
@@ -661,7 +670,7 @@ P2A_MEMORY_URL=http://localhost:8080 \
 node .plan2agent/scripts/p2a_memory.mjs search \
   --artifacts .plan2agent/artifacts/<project_id> \
   --query "verification gap" \
-  --type document
+  --type proposal
 
 node .plan2agent/scripts/p2a_memory.mjs history \
   --artifacts .plan2agent/artifacts/<project_id> \
@@ -672,17 +681,17 @@ node .plan2agent/scripts/p2a_memory.mjs digest \
   --output .plan2agent/artifacts/<project_id>/memory-digest.json
 ```
 
-`status`는 project, iteration, document snapshot, task graph, task, run, document chunk의 로컬 계획을 만들고 Memory `/api/artifacts` 조회 결과와 source id/hash 기준으로 비교한다. 서버 URL은 `--server`, `P2A_MEMORY_URL`, 또는 `project.config.json.memory.serverUrlEnv` 순서로 찾는다. 서버가 설정되지 않으면 로컬 계획과 `not_configured` 상태를 출력하며 파일이나 서버를 변경하지 않는다.
+`status`는 project, iteration, document snapshot, proposal snapshot, task graph, task, run, document chunk의 로컬 계획을 만들고 Memory `/api/artifacts` 조회 결과와 source id/hash 기준으로 비교한다. 서버 URL은 `--server`, `P2A_MEMORY_URL`, 또는 `project.config.json.memory.serverUrlEnv` 순서로 찾는다. 서버가 설정되지 않으면 로컬 계획과 `not_configured` 상태를 출력하며 파일이나 서버를 변경하지 않는다.
 
 `p2a info --json`은 `enhancements.memory`에 mode, server env, server/token 설정 여부, push policy, manifest/config sync 상태를 노출한다. `p2a_doctor --dev`는 Memory capability가 활성화된 프로젝트에서 memory manifest/config drift, runtime script, server env config, explicit approval push policy, sync tier 기본값을 검사한다. 이 검사는 서버 프로세스가 떠 있어야 통과하는 live probe가 아니라 로컬 설정/안전 정책 점검이다.
 
 `pull --dry-run`은 Memory `/api/artifacts`의 metadata/hash 조회 결과를 로컬 계획과 비교해 `alreadyLocal`, `localOnly`, `remoteDiffers`, `remoteOnly` preview와 `restorePlan`을 출력한다. `--output <path>`를 주면 같은 payload를 JSON report로 저장해 remote-only/different 항목, 충돌 여부, 수동 복구 필요 사유를 검토할 수 있다. 이 명령은 preview-only이며 로컬 artifact 파일을 쓰지 않는다. 현재 Memory lookup API는 artifact 본문 적용용 content endpoint가 아니라 metadata/hash 조회 표면이므로, `pull --apply`는 명시적으로 거절되고 remote-only/different 항목은 사람이 검색/조회 결과를 확인한 뒤 수동 복구 대상으로 판단한다.
 
-`search`는 Memory `/api/search/keyword`를 호출해 동기화된 document chunk와 snapshot 본문을 keyword로 조회한다. `--artifacts`, `--graph`, `--runs` 중 하나를 주면 CLI가 로컬 context를 읽고 서버 canonical project/iteration id로 scope를 좁힌다. `--global`을 주면 project/iteration filter 없이 검색한다. `--type document|chunk|task|run|graph|project|iteration`, `--source-path`, `--limit`으로 결과를 더 좁힐 수 있다. 현재 서버 keyword index의 주 검색 대상은 document/chunk content이므로 task/run type filter는 해당 artifact가 searchable content로 인덱싱된 경우에만 결과가 나온다. 서버가 설정되지 않았거나 연결할 수 없으면 non-zero exit와 복구 next action을 출력한다.
+`search`는 Memory `/api/search/keyword`를 호출해 동기화된 document chunk와 snapshot 본문을 keyword로 조회한다. `--artifacts`, `--graph`, `--runs` 중 하나를 주면 CLI가 로컬 context를 읽고 서버 canonical project/iteration id로 scope를 좁힌다. `--global`을 주면 project/iteration filter 없이 검색한다. `--type document|chunk|task|run|graph|project|iteration|proposal`, `--source-path`, `--limit`으로 결과를 더 좁힐 수 있다. 현재 서버 keyword index의 주 검색 대상은 document/chunk/proposal content이므로 task/run type filter는 해당 artifact가 searchable content로 인덱싱된 경우에만 결과가 나온다. `--type proposal` 결과는 proposal/document 단위로 dedupe되며, 서버 raw match 수는 `summary.rawTotal`에 남는다. 서버가 설정되지 않았거나 연결할 수 없으면 non-zero exit와 복구 next action을 출력한다.
 
 `history`는 로컬 plan에서 project, iteration, document snapshot, task graph, task, run record timeline을 만들고, Memory 서버가 설정되어 있으면 `/api/artifacts`의 created/updated/snapshot metadata를 병합한다. `--artifacts`, `--graph`, `--runs`로 현재 context를 지정하거나, 원격 조회만 필요하면 `--global --project <sourceProjectId> [--iteration <sourceIterationId>]`를 사용할 수 있다. `search`, `history`, `digest`는 `--output <path>`로 JSON report를 저장할 수 있으며, GUI는 artifact root의 `memory-search.json`, `memory-history.json`, `memory-digest.json`을 운영 리포트와 문서 브라우저에 표시한다.
 
-`push`는 같은 계획을 Memory write DTO로 변환한다. `--dry-run`은 서버에 접속하지 않고 write 순서와 수량만 보여준다. 실제 서버 write는 `--yes`가 있어야 하며, project → iteration → document snapshots/chunks → task graph → tasks → runs 순서로 upsert한다. 인증이 필요한 Memory 서버는 `--token` 또는 `P2A_MEMORY_TOKEN` 값을 `X-P2A-Local-Token` 헤더로 받는다.
+`push`는 같은 계획을 Memory write DTO로 변환한다. `--dry-run`은 서버에 접속하지 않고 write 순서와 수량만 보여준다. 실제 서버 write는 `--yes`가 있어야 하며, project → iteration → document/proposal snapshots/chunks → task graph → tasks → runs 순서로 upsert한다. proposal snapshot은 `PROPOSAL` artifact type과 `proposalTarget`, `targetRepo`, `targetArea`, `upstreamReason` metadata를 보존한다. 인증이 필요한 Memory 서버는 `--token` 또는 `P2A_MEMORY_TOKEN` 값을 `X-P2A-Local-Token` 헤더로 받는다.
 
 `digest`는 로컬 run index와 proposal queue를 읽어 failed/blocked run, failure class, verification failure/gap, proposal coverage, structured debug detail coverage를 요약한다. proposal 후보가 빠진 run이 있으면 `p2a_proposals.mjs mine` 명령을 next action으로 제안한다. failed/blocked run의 reproduction/localization/guard 누락은 신규 schema에서 유효하지 않은 artifact로 취급되며, 이미 proposed 상태인 항목은 review/curate 흐름으로 연결한다.
 

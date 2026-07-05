@@ -423,8 +423,14 @@ function validateApprovalTaskLink(source, approval) {
     `proposal-draft-approval:${approval.approvalId}`,
     `proposal-patch-draft:${approval.draftId}`,
     `proposal-candidate:${approval.candidateId}`,
+    ...(approval.maintenanceTask.sourceSpecRefs ?? [])
+      .filter((ref) => (
+        ref.startsWith('proposal-target:')
+        || ref.startsWith('proposal-target-repo:')
+        || ref.startsWith('proposal-target-area:')
+      )),
   ];
-  const missingRefs = requiredRefs.filter((ref) => !refs.includes(ref));
+  const missingRefs = [...new Set(requiredRefs)].filter((ref) => !refs.includes(ref));
   if (missingRefs.length) {
     throw new Error(`approval maintenance task ${task.id} is missing sourceSpecRefs: ${missingRefs.join(', ')}`);
   }

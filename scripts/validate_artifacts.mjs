@@ -942,7 +942,26 @@ export function validateSkillProposalData(data) {
   validateSchema(data, loadJson(SCHEMA_PATHS.skill_proposal));
   validateNonBlankStrings(data.targetFiles, `${data.proposalId}.targetFiles`);
   if (data.evidence) validateNonBlankStrings(data.evidence, `${data.proposalId}.evidence`);
+  validateProposalTargetMetadata(data, data.proposalId, { requireUpstreamReason: true });
   return data;
+}
+
+function validateProposalTargetMetadata(data, label, options = {}) {
+  const target = data.target ?? 'project';
+  if (target === 'project') {
+    for (const field of ['targetRepo', 'targetArea', 'upstreamReason']) {
+      if (typeof data[field] === 'string' && data[field].trim().length > 0) {
+        throw new ValidationError(`${label}.${field} requires target to be p2a_toolkit or companion_project`);
+      }
+    }
+    return;
+  }
+  if (typeof data.targetRepo !== 'string' || data.targetRepo.trim().length === 0) {
+    throw new ValidationError(`${label}.targetRepo is required when target is ${target}`);
+  }
+  if (options.requireUpstreamReason && (typeof data.upstreamReason !== 'string' || data.upstreamReason.trim().length === 0)) {
+    throw new ValidationError(`${label}.upstreamReason is required when target is ${target}`);
+  }
 }
 
 export function validateSkillProposal(filePath) {
@@ -992,6 +1011,7 @@ export function validateProposalReviewData(data) {
   }
   const proposalIds = [];
   for (const group of data.groups) {
+    validateProposalTargetMetadata(group, group.groupId);
     validateNonBlankStrings(group.proposalIds, `${group.groupId}.proposalIds`);
     validateNonBlankStrings(group.targetFiles, `${group.groupId}.targetFiles`);
     validateNonBlankStrings(group.sourceRunIds, `${group.groupId}.sourceRunIds`);
@@ -1036,6 +1056,7 @@ export function validateProposalCurationData(data) {
     throw new ValidationError('proposal curation groupId values must be unique');
   }
   for (const candidate of data.candidates) {
+    validateProposalTargetMetadata(candidate, candidate.candidateId);
     validateNonBlankStrings(candidate.proposalIds, `${candidate.candidateId}.proposalIds`);
     validateNonBlankStrings(candidate.targetFiles, `${candidate.candidateId}.targetFiles`);
     validateNonBlankStrings(candidate.sourceRunIds, `${candidate.candidateId}.sourceRunIds`);
@@ -1055,6 +1076,7 @@ export function validateProposalCuration(filePath) {
 
 export function validateProposalPatchDraftData(data) {
   validateSchema(data, loadJson(SCHEMA_PATHS.proposal_patch_draft));
+  validateProposalTargetMetadata(data, data.draftId);
   if (data.approvalRequired !== true) {
     throw new ValidationError('proposal patch draft approvalRequired must be true');
   }
@@ -1087,11 +1109,22 @@ export function validateProposalDraftApprovalData(data) {
   if (data.autoApplyPerformed !== false) {
     throw new ValidationError('proposal draft approval autoApplyPerformed must be false');
   }
+  const target = data.target ?? 'project';
+  validateProposalTargetMetadata(data, data.approvalId);
   if (!data.maintenanceTask.sourceSpecRefs.includes(`proposal-draft-approval:${data.approvalId}`)) {
     throw new ValidationError('proposal draft approval maintenanceTask.sourceSpecRefs must reference approvalId');
   }
   if (!data.maintenanceTask.sourceSpecRefs.includes(`proposal-patch-draft:${data.draftId}`)) {
     throw new ValidationError('proposal draft approval maintenanceTask.sourceSpecRefs must reference draftId');
+  }
+  if (!data.maintenanceTask.sourceSpecRefs.includes(`proposal-target:${target}`)) {
+    throw new ValidationError('proposal draft approval maintenanceTask.sourceSpecRefs must reference target');
+  }
+  if (data.targetRepo && !data.maintenanceTask.sourceSpecRefs.includes(`proposal-target-repo:${data.targetRepo}`)) {
+    throw new ValidationError('proposal draft approval maintenanceTask.sourceSpecRefs must reference targetRepo');
+  }
+  if (data.targetArea && !data.maintenanceTask.sourceSpecRefs.includes(`proposal-target-area:${data.targetArea}`)) {
+    throw new ValidationError('proposal draft approval maintenanceTask.sourceSpecRefs must reference targetArea');
   }
   if (!data.maintenanceTask.sourceSpecRefs.includes(`proposal-candidate:${data.candidateId}`)) {
     throw new ValidationError('proposal draft approval maintenanceTask.sourceSpecRefs must reference candidateId');

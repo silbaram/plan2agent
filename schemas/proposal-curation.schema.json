@@ -134,6 +134,18 @@
             "type": "string",
             "minLength": 1
           },
+          "target": {
+            "type": "string",
+            "enum": ["project", "p2a_toolkit", "companion_project"]
+          },
+          "targetRepo": {
+            "type": ["string", "null"],
+            "minLength": 1
+          },
+          "targetArea": {
+            "type": ["string", "null"],
+            "minLength": 1
+          },
           "title": {
             "type": "string",
             "minLength": 1

@@ -34,11 +34,13 @@ import { normalizeMonitorVerdictData } from './p2a_orchestrate.mjs';
 const P2A_PATHS = resolveP2aPaths(import.meta.url);
 const COMMANDS = new Set(['mine', 'list', 'show', 'validate', 'digest', 'review', 'curate', 'draft-patch', 'approve-draft']);
 const DEFAULT_PROPOSALS_DIR = path.join('.plan2agent', 'proposals');
+const DEFAULT_P2A_TOOLKIT_REPO = 'https://github.com/silbaram/plan2agent';
+const PROPOSAL_TARGETS = new Set(['project', 'p2a_toolkit', 'companion_project']);
 
 function usage() {
   return [
     'Usage:',
-    '  node .plan2agent/scripts/p2a_proposals.mjs mine (--artifacts <dir>|--runs <dir>|--graph <path>) [--run-id <run-id>] [--proposals <dir>] [--dry-run] [--overwrite] [--json]',
+    '  node .plan2agent/scripts/p2a_proposals.mjs mine (--artifacts <dir>|--runs <dir>|--graph <path>) [--run-id <run-id>] [--proposals <dir>] [--target <kind>] [--target-repo <url>] [--target-area <area>] [--upstream-reason <text>] [--dry-run] [--overwrite] [--json]',
     '  node .plan2agent/scripts/p2a_proposals.mjs list [--proposals <dir>] [--json]',
     '  node .plan2agent/scripts/p2a_proposals.mjs show (--proposal <path>|--proposal-id <id>) [--proposals <dir>]',
     '  node .plan2agent/scripts/p2a_proposals.mjs validate [--proposal <path>|--proposals <dir>]',
@@ -70,8 +72,13 @@ function usage() {
     '  --candidate-id <id> Candidate id for draft-patch. Required when curation has multiple candidates.',
     '  --approved-by <name> Human approver recorded for approve-draft.',
     '  --approval-note <text> Optional approval note recorded for approve-draft.',
+    '  --allow-local-upstream-task Allow approve-draft to append a local maintenance task for non-project targets.',
     '  --output <path>     Review/curation/patch-draft/approval output path.',
     '  --run-id <run-id>   Limit mine to one run.',
+    '  --target <kind>     Proposal target for mine: project, p2a_toolkit, or companion_project. Default: project.',
+    `  --target-repo <url> Upstream repository for companion_project proposals. p2a_toolkit always uses ${DEFAULT_P2A_TOOLKIT_REPO}.`,
+    '  --target-area <area> Upstream area/component for target proposals.',
+    '  --upstream-reason <text> Why this project proposal should be handled upstream.',
     '',
     '  --dry-run           Print candidates without writing files.',
     '  --overwrite         Replace an existing proposal file with the same proposalId.',
@@ -101,6 +108,11 @@ function parseArgs(argv) {
     approvalNote: null,
     output: null,
     runId: null,
+    target: null,
+    targetRepo: null,
+    targetArea: null,
+    upstreamReason: null,
+    allowLocalUpstreamTask: false,
     dryRun: false,
     overwrite: false,
     json: false,
@@ -124,6 +136,11 @@ function parseArgs(argv) {
     else if (arg === '--approval-note') args.approvalNote = requiredValue(argv, ++index, '--approval-note');
     else if (arg === '--output') args.output = requiredValue(argv, ++index, '--output');
     else if (arg === '--run-id') args.runId = requiredValue(argv, ++index, '--run-id');
+    else if (arg === '--target') args.target = normalizeProposalTarget(requiredValue(argv, ++index, '--target'));
+    else if (arg === '--target-repo') args.targetRepo = nonBlankOption(requiredValue(argv, ++index, '--target-repo'), '--target-repo');
+    else if (arg === '--target-area') args.targetArea = nonBlankOption(requiredValue(argv, ++index, '--target-area'), '--target-area');
+    else if (arg === '--upstream-reason') args.upstreamReason = nonBlankOption(requiredValue(argv, ++index, '--upstream-reason'), '--upstream-reason');
+    else if (arg === '--allow-local-upstream-task') args.allowLocalUpstreamTask = true;
     else if (arg === '--dry-run') args.dryRun = true;
     else if (arg === '--overwrite') args.overwrite = true;
     else if (arg === '--json') args.json = true;
@@ -163,11 +180,29 @@ function parseArgs(argv) {
   if (args.draft && args.command !== 'approve-draft') throw new Error('--draft is only supported by approve-draft');
   if (args.approvedBy && args.command !== 'approve-draft') throw new Error('--approved-by is only supported by approve-draft');
   if (args.approvalNote && args.command !== 'approve-draft') throw new Error('--approval-note is only supported by approve-draft');
+  if (args.allowLocalUpstreamTask && args.command !== 'approve-draft') throw new Error('--allow-local-upstream-task is only supported by approve-draft');
   if (args.graph) assertNotUninitializedScaffoldGraph(args.graph);
   if (args.output && !['review', 'curate', 'draft-patch', 'approve-draft'].includes(args.command)) {
     throw new Error('--output is only supported by review, curate, draft-patch, or approve-draft');
   }
   if (args.runId) assertSafeRunId(args.runId);
+  if ((args.target || args.targetRepo || args.targetArea || args.upstreamReason) && args.command !== 'mine') {
+    throw new Error('--target, --target-repo, --target-area, and --upstream-reason are only supported by mine');
+  }
+  if (args.targetRepo && !args.target) args.target = 'companion_project';
+  const target = args.target ?? 'project';
+  if (target === 'project' && (args.targetRepo || args.targetArea || args.upstreamReason)) {
+    throw new Error('--target-repo, --target-area, and --upstream-reason require --target p2a_toolkit or --target companion_project');
+  }
+  if (target === 'p2a_toolkit' && args.targetRepo) {
+    throw new Error(`--target-repo cannot override --target p2a_toolkit; use companion_project for non-default repositories. p2a_toolkit uses ${DEFAULT_P2A_TOOLKIT_REPO}`);
+  }
+  if (target !== 'project' && !args.upstreamReason) {
+    throw new Error('--upstream-reason is required when --target is p2a_toolkit or companion_project');
+  }
+  if (target === 'companion_project' && !args.targetRepo) {
+    throw new Error('--target-repo is required when --target is companion_project');
+  }
   return args;
 }
 
@@ -175,6 +210,20 @@ function requiredValue(argv, index, optionName) {
   const value = argv[index];
   if (!value) throw new Error(`${optionName} requires a value`);
   return value;
+}
+
+function nonBlankOption(value, optionName) {
+  const trimmed = value.trim();
+  if (!trimmed) throw new Error(`${optionName} requires a non-empty value`);
+  return trimmed;
+}
+
+function normalizeProposalTarget(value) {
+  const normalized = value.trim();
+  if (!PROPOSAL_TARGETS.has(normalized)) {
+    throw new Error(`unsupported proposal target: ${value}; expected project, p2a_toolkit, or companion_project`);
+  }
+  return normalized;
 }
 
 function assertSafeRunId(runId) {
@@ -485,7 +534,60 @@ function failureRecommendation(failureClass) {
   return recommendations[failureClass] ?? recommendations.other;
 }
 
-function buildFailureProposal(run, sidecar, verdict) {
+function proposalTargetOptions(args) {
+  const target = args.target ?? 'project';
+  return {
+    target,
+    targetRepo: args.targetRepo ?? (target === 'p2a_toolkit' ? DEFAULT_P2A_TOOLKIT_REPO : null),
+    targetArea: args.targetArea ?? null,
+    upstreamReason: args.upstreamReason ?? null,
+  };
+}
+
+function proposalTargetIdSuffix(targetOptions) {
+  const target = targetOptions?.target ?? 'project';
+  if (target === 'project') return '';
+  const parts = [safeIdPart(target)];
+  if (targetOptions?.targetArea) parts.push(safeIdPart(targetOptions.targetArea));
+  if (target === 'companion_project') {
+    parts.push(stableHash({
+      target,
+      targetRepo: targetOptions?.targetRepo ?? null,
+      targetArea: targetOptions?.targetArea ?? null,
+    }));
+  }
+  return parts.join('-');
+}
+
+function proposalIdForTarget(baseProposalId, targetOptions) {
+  const suffix = proposalTargetIdSuffix(targetOptions);
+  return suffix ? `${baseProposalId}-${suffix}` : baseProposalId;
+}
+
+function withProposalTarget(proposal, targetOptions) {
+  const target = targetOptions?.target ?? 'project';
+  return {
+    ...proposal,
+    target,
+    ...(targetOptions?.targetRepo ? { targetRepo: targetOptions.targetRepo } : {}),
+    ...(targetOptions?.targetArea ? { targetArea: targetOptions.targetArea } : {}),
+    ...(targetOptions?.upstreamReason ? { upstreamReason: targetOptions.upstreamReason } : {}),
+  };
+}
+
+function proposalTarget(proposal) {
+  return proposal.target ?? 'project';
+}
+
+function proposalTargetRepo(proposal) {
+  return proposal.targetRepo ?? null;
+}
+
+function proposalTargetArea(proposal) {
+  return proposal.targetArea ?? null;
+}
+
+function buildFailureProposal(run, sidecar, verdict, targetOptions) {
   if (!['failed', 'blocked'].includes(run.status) || !run.failure) return null;
   const evidence = [
     `runId: ${run.runId}`,
@@ -501,7 +603,7 @@ function buildFailureProposal(run, sidecar, verdict) {
   evidence.push(...monitorVerdictEvidence(verdict));
   const proposal = {
     schema_version: 'p2a.skill_proposal.v1',
-    proposalId: `proposal-${safeIdPart(run.runId)}-${safeIdPart(run.failure.class)}`,
+    proposalId: proposalIdForTarget(`proposal-${safeIdPart(run.runId)}-${safeIdPart(run.failure.class)}`, targetOptions),
     sourceRunId: run.runId,
     problem: `Run ${run.runId} ended ${run.status} with ${run.failure.class}.`,
     evidence,
@@ -512,14 +614,14 @@ function buildFailureProposal(run, sidecar, verdict) {
     status: 'proposed',
     note: 'Generated by p2a_proposals.mjs from run failure metadata.',
   };
-  return validateSkillProposalData(withProposalQuality(proposal));
+  return validateSkillProposalData(withProposalQuality(withProposalTarget(proposal, targetOptions)));
 }
 
-function buildVerificationGapProposal(run) {
+function buildVerificationGapProposal(run, targetOptions) {
   if (run.status !== 'finished' || run.verification.length > 0) return null;
   const proposal = {
     schema_version: 'p2a.skill_proposal.v1',
-    proposalId: `proposal-${safeIdPart(run.runId)}-verification-gap`,
+    proposalId: proposalIdForTarget(`proposal-${safeIdPart(run.runId)}-verification-gap`, targetOptions),
     sourceRunId: run.runId,
     problem: `Run ${run.runId} finished without recorded verification.`,
     evidence: [
@@ -535,15 +637,15 @@ function buildVerificationGapProposal(run) {
     status: 'proposed',
     note: 'Generated by p2a_proposals.mjs from a finished run with no verification evidence.',
   };
-  return validateSkillProposalData(withProposalQuality(proposal));
+  return validateSkillProposalData(withProposalQuality(withProposalTarget(proposal, targetOptions)));
 }
 
-function buildMonitorProposal(run, sidecar, verdict) {
+function buildMonitorProposal(run, sidecar, verdict, targetOptions) {
   if (!sidecar?.monitorGate?.required || !verdict || sidecar.monitorGate.acceptedVerdicts.includes(verdict.verdict)) return null;
   if (run.failure?.source === 'monitor') return null;
   const proposal = {
     schema_version: 'p2a.skill_proposal.v1',
-    proposalId: `proposal-${safeIdPart(run.runId)}-monitor-${safeIdPart(verdict.failureSignal)}`,
+    proposalId: proposalIdForTarget(`proposal-${safeIdPart(run.runId)}-monitor-${safeIdPart(verdict.failureSignal)}`, targetOptions),
     sourceRunId: run.runId,
     problem: `Monitor gate returned ${verdict.failureSignal} for run ${run.runId} but the run was not closed by monitor failure metadata.`,
     evidence: [
@@ -559,10 +661,10 @@ function buildMonitorProposal(run, sidecar, verdict) {
     status: 'proposed',
     note: 'Generated by p2a_proposals.mjs from orchestration sidecar monitor evidence.',
   };
-  return validateSkillProposalData(withProposalQuality(proposal));
+  return validateSkillProposalData(withProposalQuality(withProposalTarget(proposal, targetOptions)));
 }
 
-function proposalsForRun(runsDir, run) {
+function proposalsForRun(runsDir, run, targetOptions) {
   const warnings = [];
   const sidecarResult = readSidecarForMining(runsDir, run.runId);
   if (sidecarResult.warning) warnings.push(sidecarResult.warning);
@@ -572,9 +674,9 @@ function proposalsForRun(runsDir, run) {
   const verdict = verdictResult.verdict;
   return {
     proposals: [
-      buildFailureProposal(run, sidecar, verdict),
-      buildVerificationGapProposal(run),
-      buildMonitorProposal(run, sidecar, verdict),
+      buildFailureProposal(run, sidecar, verdict, targetOptions),
+      buildVerificationGapProposal(run, targetOptions),
+      buildMonitorProposal(run, sidecar, verdict, targetOptions),
     ].filter(Boolean),
     warnings,
   };
@@ -614,11 +716,14 @@ function loadProposals(proposalsDir) {
 function digestForProposals(proposals) {
   const byStatus = {};
   const byRisk = {};
+  const byTarget = {};
   const bySourceRun = {};
   const quality = qualitySummaryFor(proposals);
   for (const proposal of proposals) {
     byStatus[proposal.status] = (byStatus[proposal.status] ?? 0) + 1;
     byRisk[proposal.risk] = (byRisk[proposal.risk] ?? 0) + 1;
+    const target = proposalTarget(proposal);
+    byTarget[target] = (byTarget[target] ?? 0) + 1;
     if (proposal.sourceRunId) bySourceRun[proposal.sourceRunId] = (bySourceRun[proposal.sourceRunId] ?? 0) + 1;
   }
   const priority = { high: 0, medium: 1, low: 2 };
@@ -626,6 +731,7 @@ function digestForProposals(proposals) {
     total: proposals.length,
     byStatus,
     byRisk,
+    byTarget,
     quality,
     sourceRunCount: Object.keys(bySourceRun).length,
     proposed: proposals
@@ -636,6 +742,9 @@ function digestForProposals(proposals) {
         risk: proposal.risk,
         qualityScore: proposal.quality?.score ?? null,
         qualityBand: proposal.quality?.band ?? null,
+        target: proposalTarget(proposal),
+        targetRepo: proposalTargetRepo(proposal),
+        targetArea: proposalTargetArea(proposal),
         sourceRunId: proposal.sourceRunId ?? null,
         problem: proposal.problem,
       })),
@@ -685,6 +794,9 @@ function proposalClassification(proposal) {
 
 function proposalGroupKey(proposal) {
   return [
+    proposalTarget(proposal),
+    proposalTargetRepo(proposal) ?? '',
+    proposalTargetArea(proposal) ?? '',
     proposalClassification(proposal),
     sortedUnique(proposal.targetFiles).join(','),
     proposal.recommendedChange,
@@ -778,6 +890,9 @@ function buildProposalReview(proposals, proposalsDir, generatedAt = new Date().t
       risk: highestRisk(groupProposals),
       frequency: groupProposals.length,
       classification: proposalClassification(groupProposals[0]),
+      target: proposalTarget(groupProposals[0]),
+      targetRepo: proposalTargetRepo(groupProposals[0]),
+      targetArea: proposalTargetArea(groupProposals[0]),
       targetFiles: sortedUnique(groupProposals.flatMap((proposal) => proposal.targetFiles)),
       sourceRunIds: sortedUnique(groupProposals.map((proposal) => proposal.sourceRunId).filter(Boolean)),
       statusSummary: statusSummaryFor(groupProposals),
@@ -811,6 +926,9 @@ function buildProposalReview(proposals, proposalsDir, generatedAt = new Date().t
       status: proposal.status,
       risk: proposal.risk,
       sourceRunId: proposal.sourceRunId ?? null,
+      target: proposalTarget(proposal),
+      targetRepo: proposalTargetRepo(proposal),
+      targetArea: proposalTargetArea(proposal),
       targetFiles: sortedUnique(proposal.targetFiles),
       recommendedChange: proposal.recommendedChange,
       qualityScore: proposal.quality?.score ?? null,
@@ -818,6 +936,9 @@ function buildProposalReview(proposals, proposalsDir, generatedAt = new Date().t
     groups: groups.map((group) => ({
       groupId: group.groupId,
       recommendedDisposition: group.recommendedDisposition,
+      target: group.target,
+      targetRepo: group.targetRepo,
+      targetArea: group.targetArea,
       quality: group.quality,
     })),
   })}`;
@@ -966,6 +1087,9 @@ function candidateForGroup(group, proposalsById) {
     groupId: group.groupId,
     proposalIds: group.proposalIds,
     classification: group.classification,
+    target: group.target ?? 'project',
+    targetRepo: group.targetRepo ?? null,
+    targetArea: group.targetArea ?? null,
     title: titleForCandidate(group),
     problemStatement: problemStatementForCandidate(group, representative),
     recommendedChange: recommendedChangeForCandidate(group, representative),
@@ -1125,6 +1249,9 @@ function buildProposalPatchDraft(curation, candidate, proposalsDir, curationPath
   const draftId = `proposal-patch-draft-${stableHash({
     curationId: curation.curationId,
     candidateId: candidate.candidateId,
+    target: candidate.target ?? 'project',
+    targetRepo: candidate.targetRepo ?? null,
+    targetArea: candidate.targetArea ?? null,
     targetFiles: candidate.targetFiles,
     recommendedChange: candidate.recommendedChange,
   })}`;
@@ -1135,6 +1262,9 @@ function buildProposalPatchDraft(curation, candidate, proposalsDir, curationPath
     sourceCuration: displayPath(curationPathForDisplay),
     candidateId: candidate.candidateId,
     classification: candidate.classification,
+    target: candidate.target ?? 'project',
+    targetRepo: candidate.targetRepo ?? null,
+    targetArea: candidate.targetArea ?? null,
     title: `Patch draft: ${candidate.title}`,
     status: 'draft',
     approvalRequired: true,
@@ -1207,13 +1337,40 @@ function buildProposalDraftApprovalId(draft, approvedBy, approvalNote) {
   })}`;
 }
 
+function draftProposalTarget(draft) {
+  return draft.target ?? 'project';
+}
+
 function proposalDraftApprovalRefs(draft, approvalId) {
-  return [
+  const refs = [
     `proposal-draft-approval:${approvalId}`,
     `proposal-patch-draft:${draft.draftId}`,
     `proposal-candidate:${draft.candidateId}`,
     `proposal-classification:${draft.classification}`,
+    `proposal-target:${draftProposalTarget(draft)}`,
   ];
+  if (draft.targetRepo) refs.push(`proposal-target-repo:${draft.targetRepo}`);
+  if (draft.targetArea) refs.push(`proposal-target-area:${draft.targetArea}`);
+  return refs;
+}
+
+function maintenanceTargetAreaForDraft(draft) {
+  const target = draftProposalTarget(draft);
+  if (target === 'project') return 'maintenance';
+  return `upstream:${draft.targetArea ?? target}`;
+}
+
+function proposalTargetLineForDraft(draft) {
+  const parts = [`Target: ${draftProposalTarget(draft)}`];
+  if (draft.targetRepo) parts.push(`repo=${draft.targetRepo}`);
+  if (draft.targetArea) parts.push(`area=${draft.targetArea}`);
+  return parts.join(' ');
+}
+
+function assertLocalUpstreamTaskAllowed(draft, args) {
+  const target = draftProposalTarget(draft);
+  if (target === 'project' || args.allowLocalUpstreamTask) return;
+  throw new Error(`approve-draft refuses to append a local maintenance task for target ${target}. Use --allow-local-upstream-task only when intentionally tracking this upstream proposal in the current project's maintenance graph.`);
 }
 
 function verificationLine(item) {
@@ -1232,7 +1389,7 @@ function patchDraftApprovalTask(projectId, draft, approvalId, taskId) {
   return {
     id: taskId,
     title: `Apply approved proposal patch draft ${draft.draftId}`,
-    description: `Implement the human-approved proposal patch draft ${draft.draftId} for ${draft.title}. Target files: ${targetFiles}.`,
+    description: `Implement the human-approved proposal patch draft ${draft.draftId} for ${draft.title}. ${proposalTargetLineForDraft(draft)}. Target files: ${targetFiles}.`,
     status: 'todo',
     dependencies: [],
     acceptanceCriteria: [
@@ -1240,10 +1397,11 @@ function patchDraftApprovalTask(projectId, draft, approvalId, taskId) {
       'The implementation remains scoped to the approved proposal and does not broaden unrelated harness behavior.',
       'The draft verification plan is run, or any intentionally skipped verification has an owner-approved rationale in the run notes.',
     ],
-    targetArea: 'maintenance',
+    targetArea: maintenanceTargetAreaForDraft(draft),
     suggestedAgentPrompt: [
       `Implement approved Plan2Agent proposal patch draft ${draft.draftId} in project ${projectId}.`,
       `Approval artifact id: ${approvalId}. Candidate: ${draft.candidateId}. Source curation: ${draft.sourceCuration}.`,
+      proposalTargetLineForDraft(draft),
       `Target files: ${targetFiles}.`,
       'Intended changes:',
       intendedChanges,
@@ -1253,6 +1411,32 @@ function patchDraftApprovalTask(projectId, draft, approvalId, taskId) {
     ].join('\n'),
     sourceSpecRefs: proposalDraftApprovalRefs(draft, approvalId),
   };
+}
+
+function backfillExistingApprovalTask(task, draft, approvalId) {
+  let changed = false;
+  if (!Array.isArray(task.sourceSpecRefs)) task.sourceSpecRefs = [];
+  for (const ref of proposalDraftApprovalRefs(draft, approvalId)) {
+    if (!task.sourceSpecRefs.includes(ref)) {
+      task.sourceSpecRefs.push(ref);
+      changed = true;
+    }
+  }
+  const desiredTargetArea = maintenanceTargetAreaForDraft(draft);
+  if (task.targetArea !== desiredTargetArea) {
+    task.targetArea = desiredTargetArea;
+    changed = true;
+  }
+  const targetLine = proposalTargetLineForDraft(draft);
+  if (typeof task.description === 'string' && !task.description.includes(targetLine)) {
+    task.description = `${task.description} ${targetLine}.`;
+    changed = true;
+  }
+  if (typeof task.suggestedAgentPrompt === 'string' && !task.suggestedAgentPrompt.includes(targetLine)) {
+    task.suggestedAgentPrompt = `${task.suggestedAgentPrompt}\n${targetLine}`;
+    changed = true;
+  }
+  return changed;
 }
 
 function planMaintenanceTaskForApproval(artifactRoot, draft, approvalId) {
@@ -1265,9 +1449,8 @@ function planMaintenanceTaskForApproval(artifactRoot, draft, approvalId) {
   const draftRef = `proposal-patch-draft:${draft.draftId}`;
   const existingTask = graph.tasks.find((task) => (task.sourceSpecRefs ?? []).includes(draftRef));
   if (existingTask) {
-    const approvalRef = `proposal-draft-approval:${approvalId}`;
-    if (!existingTask.sourceSpecRefs.includes(approvalRef)) {
-      existingTask.sourceSpecRefs.push(approvalRef);
+    const changed = backfillExistingApprovalTask(existingTask, draft, approvalId);
+    if (changed) {
       validateTaskGraphData(graph);
       return { action: 'updated', graphPath, graph, task: existingTask, shouldWrite: true };
     }
@@ -1295,6 +1478,9 @@ function buildProposalDraftApproval(draft, draftFilePath, maintenancePlan, appro
     sourceDraft: displayPath(draftFilePath),
     draftId: draft.draftId,
     candidateId: draft.candidateId,
+    target: draftProposalTarget(draft),
+    targetRepo: draft.targetRepo ?? null,
+    targetArea: draft.targetArea ?? null,
     autoApplyPerformed: false,
     maintenanceTask: {
       taskGraph: displayPath(maintenancePlan.graphPath),
@@ -1309,9 +1495,12 @@ function assertExistingApprovalMatches(filePath, approval) {
   if (!existsSync(filePath)) return;
   assertFile(filePath, 'approval output');
   const existing = validateProposalDraftApprovalData(loadJson(filePath));
-  const expectedFields = ['approvalId', 'draftId', 'candidateId', 'approvedBy', 'approvalNote', 'autoApplyPerformed'];
+  const expectedFields = ['approvalId', 'draftId', 'candidateId', 'approvedBy', 'approvalNote', 'target', 'targetRepo', 'targetArea', 'autoApplyPerformed'];
   const mismatchedFields = expectedFields.filter((field) => JSON.stringify(existing[field]) !== JSON.stringify(approval[field]));
   if (existing.maintenanceTask.taskId !== approval.maintenanceTask.taskId) mismatchedFields.push('maintenanceTask.taskId');
+  if (JSON.stringify(sortedUnique(existing.maintenanceTask.sourceSpecRefs)) !== JSON.stringify(sortedUnique(approval.maintenanceTask.sourceSpecRefs))) {
+    mismatchedFields.push('maintenanceTask.sourceSpecRefs');
+  }
   if (mismatchedFields.length) {
     throw new Error(`existing approval output does not match requested approval: ${mismatchedFields.join(', ')}`);
   }
@@ -1328,8 +1517,9 @@ function writeApproval(filePath, approval, overwrite = false) {
 function runMine(args) {
   const runsDir = resolveRunsDirForProposals(args);
   const proposalsDir = resolveProposalDir(args);
+  const targetOptions = proposalTargetOptions(args);
   const runScan = readRunsForMining(runsDir, args.runId);
-  const proposalScan = runScan.runs.map((run) => proposalsForRun(runsDir, run));
+  const proposalScan = runScan.runs.map((run) => proposalsForRun(runsDir, run, targetOptions));
   const warnings = proposalScan.flatMap((result) => result.warnings);
   const candidates = uniqueByProposalId(proposalScan.flatMap((result) => result.proposals));
   const results = candidates.map((proposal) => {
@@ -1341,6 +1531,7 @@ function runMine(args) {
     console.log(JSON.stringify({
       runsDir: displayPath(runsDir),
       proposalsDir: displayPath(proposalsDir),
+      target: targetOptions,
       runsScanned: runScan.totalRunRefs,
       runsUsable: runScan.runs.length,
       skippedRuns: runScan.skippedRuns,
@@ -1348,6 +1539,9 @@ function runMine(args) {
       candidates: results.map((result) => ({
         proposalId: result.proposal.proposalId,
         sourceRunId: result.proposal.sourceRunId,
+        target: proposalTarget(result.proposal),
+        targetRepo: proposalTargetRepo(result.proposal),
+        targetArea: proposalTargetArea(result.proposal),
         risk: result.proposal.risk,
         action: result.action,
         filePath: displayPath(result.filePath),
@@ -1358,6 +1552,7 @@ function runMine(args) {
   console.log('Plan2Agent proposal mining');
   console.log(`- runs: ${displayPath(runsDir)}`);
   console.log(`- proposals: ${displayPath(proposalsDir)}`);
+  console.log(`- target: ${targetOptions.target}${targetOptions.targetRepo ? ` (${targetOptions.targetRepo})` : ''}${targetOptions.targetArea ? ` area=${targetOptions.targetArea}` : ''}`);
   console.log(`- runs scanned: ${runScan.totalRunRefs}`);
   console.log(`- runs usable: ${runScan.runs.length}`);
   if (runScan.skippedRuns.length) console.log(`- skipped runs: ${runScan.skippedRuns.length}`);
@@ -1370,7 +1565,7 @@ function runMine(args) {
     console.warn(`warning: ${warning.runId}: ${warning.reason}`);
   }
   for (const result of results) {
-    console.log(`- ${result.action}: ${result.proposal.proposalId} -> ${displayPath(result.filePath)}`);
+    console.log(`- ${result.action}: ${result.proposal.proposalId} target=${proposalTarget(result.proposal)} -> ${displayPath(result.filePath)}`);
   }
   return 0;
 }
@@ -1406,7 +1601,7 @@ function runReview(args) {
   }
   for (const group of review.groups) {
     const quality = group.quality ? ` quality=${group.quality.averageScore ?? 'n/a'}/${group.quality.band}` : '';
-    console.log(`- ${group.groupId} [${group.risk} x${group.frequency}]${quality} ${group.recommendedDisposition}: ${group.classification}`);
+    console.log(`- ${group.groupId} [${group.risk} x${group.frequency}] target=${group.target}${quality} ${group.recommendedDisposition}: ${group.classification}`);
   }
   return 0;
 }
@@ -1446,7 +1641,7 @@ function runCurate(args) {
   }
   for (const candidate of curation.candidates) {
     const quality = candidate.quality ? ` quality=${candidate.quality.averageScore ?? 'n/a'}/${candidate.quality.band}` : '';
-    console.log(`- ${candidate.candidateId} [${candidate.priority} ${candidate.readiness}]${quality} ${candidate.title}`);
+    console.log(`- ${candidate.candidateId} [${candidate.priority} ${candidate.readiness}] target=${candidate.target}${quality} ${candidate.title}`);
   }
   return 0;
 }
@@ -1480,6 +1675,7 @@ function runDraftPatch(args) {
   console.log(`- patch draft: ${displayPath(filePath)}`);
   console.log(`- action: ${writeResult.action}`);
   console.log(`- candidate: ${candidate.candidateId}`);
+  console.log(`- target: ${draft.target}${draft.targetRepo ? ` (${draft.targetRepo})` : ''}${draft.targetArea ? ` area=${draft.targetArea}` : ''}`);
   console.log(`- target files: ${draft.targetFiles.length}`);
   console.log(`- auto apply allowed: ${draft.autoApplyAllowed}`);
   return 0;
@@ -1496,6 +1692,7 @@ function runApproveDraft(args) {
   if (!approvedBy) throw new Error('--approved-by must not be blank');
 
   const draft = validateProposalPatchDraftData(loadJson(draftFilePath));
+  assertLocalUpstreamTaskAllowed(draft, args);
   const approvalId = buildProposalDraftApprovalId(draft, approvedBy, approvalNote);
   const maintenancePlan = planMaintenanceTaskForApproval(artifactRoot, draft, approvalId);
   const approval = buildProposalDraftApproval(draft, draftFilePath, maintenancePlan, approvedBy, approvalNote, approvalId);
@@ -1545,9 +1742,9 @@ function runList(args) {
     console.log(JSON.stringify(proposals, null, 2));
     return 0;
   }
-  console.log('proposalId\tstatus\trisk\tsourceRunId\tproblem');
+  console.log('proposalId\tstatus\trisk\ttarget\tsourceRunId\tproblem');
   for (const proposal of proposals) {
-    console.log(`${proposal.proposalId}\t${proposal.status}\t${proposal.risk}\t${proposal.sourceRunId ?? '-'}\t${proposal.problem}`);
+    console.log(`${proposal.proposalId}\t${proposal.status}\t${proposal.risk}\t${proposalTarget(proposal)}\t${proposal.sourceRunId ?? '-'}\t${proposal.problem}`);
   }
   return 0;
 }
@@ -1584,12 +1781,13 @@ function runDigest(args) {
   console.log(`- total: ${digest.total}`);
   console.log(`- byStatus: ${JSON.stringify(digest.byStatus)}`);
   console.log(`- byRisk: ${JSON.stringify(digest.byRisk)}`);
+  console.log(`- byTarget: ${JSON.stringify(digest.byTarget)}`);
   console.log(`- quality: average=${digest.quality.averageScore ?? 'n/a'} strong=${digest.quality.strong} medium=${digest.quality.medium} weak=${digest.quality.weak} needsAttention=${digest.quality.needsAttention}`);
   console.log(`- sourceRuns: ${digest.sourceRunCount}`);
   console.log('Proposed queue:');
   for (const item of digest.proposed) {
     const quality = item.qualityScore === null ? 'n/a' : `${item.qualityScore}/${item.qualityBand}`;
-    console.log(`- ${item.proposalId} [${item.risk}] quality=${quality} ${item.problem}`);
+    console.log(`- ${item.proposalId} [${item.risk}] target=${item.target} quality=${quality} ${item.problem}`);
   }
   return 0;
 }

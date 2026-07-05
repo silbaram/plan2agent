@@ -12,6 +12,7 @@
     "sourceDraft",
     "draftId",
     "candidateId",
+    "target",
     "autoApplyPerformed",
     "maintenanceTask"
   ],
@@ -46,6 +47,18 @@
     "candidateId": {
       "type": "string",
       "pattern": "^candidate-[a-f0-9]{12}$"
+    },
+    "target": {
+      "type": "string",
+      "enum": ["project", "p2a_toolkit", "companion_project"]
+    },
+    "targetRepo": {
+      "type": ["string", "null"],
+      "minLength": 1
+    },
+    "targetArea": {
+      "type": ["string", "null"],
+      "minLength": 1
     },
     "autoApplyPerformed": {
       "type": "boolean"
