@@ -91,7 +91,29 @@ Codex write-capable runs use native `workspace-write` sandbox confinement inside
 
    Use `verdict: "block"` and fill the relevant concern array when the task should not be accepted. When multiple concern arrays are populated, failure-class mapping priority is `scope_concerns` → `verification_concerns` → `unmet_acceptance` → `needs_user_decision`. `p2a_execute finish` and `p2a_runs finish` both enforce this verdict when an orchestration sidecar requires a monitor gate.
 
-8. Finish the run through `p2a_execute`, collecting git state and letting the CLI mark the task done or blocked:
+8. Run the optional style-rating pass before finish when the target project contains `.plan2agent/style.md` with at least one filled section. Invoke `p2a-style-rater` as a separate read-only subagent when the CLI supports spawning subagents, or perform a separated read-only review pass when spawning is unavailable. Pass the target task id, the run's `changedFiles` list, and the complete `.plan2agent/style.md` contents.
+
+   Write the style-rating result to the run's `runs/<runId>.style-verdict.json` path using this shape:
+
+   ```json
+   {
+     "sections": [
+       {
+         "section": "...",
+         "verdict": "followed|violated|not_applicable",
+         "violations": [
+           { "file": "...", "line": 0, "note": "..." }
+         ]
+       }
+     ],
+     "violationCount": 0,
+     "note": ""
+   }
+   ```
+
+   This style verdict is informational only and must never affect `p2a_execute finish`, `p2a_runs finish`, `p2a_tasks done`, `p2a_tasks block`, monitor verdicts, failure classes, or any done/block decision. If `.plan2agent/style.md` is absent or has no filled sections, skip the pass or record a `not_applicable` result. If `violationCount > 0`, carry the violations forward as candidate evidence for the step 10 retrospective style proposal with `target: "project"` and `targetFiles: [".plan2agent/style.md"]`.
+
+9. Finish the run through `p2a_execute`, collecting git state and letting the CLI mark the task done or blocked:
 
    ```bash
    node .plan2agent/scripts/p2a_execute.mjs finish --run-id <id> --artifacts <dir> --status finished|failed|blocked --collect-git
@@ -105,7 +127,7 @@ Codex write-capable runs use native `workspace-write` sandbox confinement inside
 
    If the monitor verdict blocks the run, do not call `p2a_tasks done`. Finish through `p2a_execute finish` with monitor-sourced failure metadata and structured detail. The CLI maps `unmet_acceptance` to `implementation_incomplete`, `verification_concerns` to `verification_failed`, `scope_concerns` to `scope_violation`, and `needs_user_decision` to `missing_dependency`.
 
-9. Complete the retrospective gate described below.
+10. Complete the retrospective gate described below.
 
 ## Writing boundaries and prohibitions
 
