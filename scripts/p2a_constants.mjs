@@ -27,7 +27,8 @@ export const ROLE_PROFILE_TO_ROLE = Object.freeze({
   manual_monitor: 'monitor',
 });
 
-export const DEFAULT_RUNS_DIR = path.join('.plan2agent', 'runs');
+export const P2A_DIR = '.plan2agent';
+export const DEFAULT_RUNS_DIR = `${P2A_DIR}/runs`;
 
 export const ISOLATION_MODES = new Set(['none', 'branch', 'worktree']);
 
