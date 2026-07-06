@@ -32,6 +32,40 @@ const P2A_PATHS = resolveP2aPaths(import.meta.url);
 const COMMANDS = new Set(['grade', 'compare', 'analyze', 'generate', 'digest']);
 const DEFAULT_PROPOSALS_DIR = path.join('.plan2agent', 'proposals');
 const DEFAULT_DIGEST_RECENT_RUNS = 30;
+const DEFAULT_STABLE_METRICS_PATH = path.join(P2A_PATHS.projectRoot, 'eval', 'stable-metrics.json');
+const BUILTIN_STABLE_METRIC_DEFINITIONS = [
+  {
+    id: 'failed_or_blocked_runs',
+    description: 'Count of run records whose status is failed or blocked in the digest run scope.',
+    calculation: 'selfImprovement.runs.failedOrBlocked',
+    direction: 'lower_is_better',
+  },
+  {
+    id: 'failure_evidence_complete_rate',
+    description: 'Share of failed or blocked runs that include complete reproduction, localization, and guard evidence.',
+    calculation: 'selfImprovement.runs.failureEvidence.completeRate',
+    direction: 'higher_is_better',
+  },
+  {
+    id: 'pending_proposal_reviews',
+    description: 'Count of proposal candidates still pending review after curation and approval artifacts are applied.',
+    calculation: 'selfImprovement.proposals.pendingReview',
+    direction: 'lower_is_better',
+  },
+  {
+    id: 'maintenance_conversion_rate',
+    description: 'Share of approved proposal signals converted into maintenance tasks.',
+    calculation: 'selfImprovement.maintenance.conversionRate',
+    direction: 'higher_is_better',
+  },
+  {
+    id: 'post_maintenance_verification_success_rate',
+    description: 'Share of post-maintenance verification runs that passed.',
+    calculation: 'selfImprovement.maintenance.postMaintenanceVerification.successRate',
+    direction: 'higher_is_better',
+  },
+];
+
 const STOP_WORDS = new Set([
   'a',
   'an',
@@ -1478,6 +1512,7 @@ function readEvalArtifacts(evalDir) {
     compares: [],
     digests: [],
     applyReports: [],
+    stableMetricDefinitions: [],
     skippedFiles: [],
     totalJsonFiles: 0,
   };
@@ -1498,6 +1533,8 @@ function readEvalArtifacts(evalDir) {
         artifacts.digests.push({ filePath, payload });
       } else if (schemaVersion === 'p2a.eval_maintenance_apply_report.v1') {
         artifacts.applyReports.push({ filePath, payload });
+      } else if (schemaVersion === 'p2a.eval_stable_metrics.v1') {
+        artifacts.stableMetricDefinitions.push({ filePath, payload });
       } else {
         artifacts.skippedFiles.push({ filePath: displayPath(filePath), reason: `unsupported schema_version: ${schemaVersion ?? 'missing'}` });
       }
@@ -2302,8 +2339,77 @@ function buildEvalDigest(args) {
     skippedFiles: artifacts.skippedFiles,
     nextActions: [],
   };
+  payload.stableMetrics = buildStableMetrics(evalDir, payload, artifacts);
   payload.nextActions = evalDigestNextActions(payload);
   return payload;
+}
+
+
+function loadStableMetricDefinitions(evalDir) {
+  const candidates = [
+    path.join(evalDir, 'stable-metrics.json'),
+    DEFAULT_STABLE_METRICS_PATH,
+  ];
+  for (const filePath of candidates) {
+    if (!fileExists(filePath)) continue;
+    const payload = loadJson(filePath);
+    const metrics = Array.isArray(payload?.metrics) ? payload.metrics : [];
+    return {
+      sourcePath: displayPath(filePath),
+      metrics: metrics
+        .filter((metric) => metric && typeof metric.id === 'string' && metric.id && typeof metric.calculation === 'string')
+        .map((metric) => ({
+          id: metric.id,
+          description: typeof metric.description === 'string' ? metric.description : '',
+          calculation: metric.calculation,
+          direction: metric.direction === 'lower_is_better' ? 'lower_is_better' : 'higher_is_better',
+        })),
+    };
+  }
+  return { sourcePath: 'builtin:p2a.eval_stable_metrics.v1', metrics: BUILTIN_STABLE_METRIC_DEFINITIONS };
+}
+
+function valueAtPath(source, dottedPath) {
+  return dottedPath.split('.').reduce((current, segment) => (current && Object.hasOwn(current, segment) ? current[segment] : null), source);
+}
+
+function stableMetricTrend(direction, delta) {
+  if (delta === null || delta === 0) return delta === null ? 'baseline' : 'same';
+  const improved = direction === 'lower_is_better' ? delta < 0 : delta > 0;
+  return improved ? 'improved' : 'worsened';
+}
+
+function latestPreviousDigest(artifacts) {
+  const candidates = artifacts.digests
+    .map((item) => item.payload)
+    .filter((payload) => payload?.schema_version === 'p2a.eval_digest.v1')
+    .sort((left, right) => String(right.generatedAt ?? '').localeCompare(String(left.generatedAt ?? '')));
+  return candidates[0] ?? null;
+}
+
+function buildStableMetrics(evalDir, payloadWithoutMetrics, artifacts) {
+  const definitions = loadStableMetricDefinitions(evalDir);
+  const previous = latestPreviousDigest(artifacts);
+  const previousResults = new Map((previous?.stableMetrics?.results ?? []).map((item) => [item.id, item]));
+  const results = definitions.metrics.map((metric) => {
+    const value = valueAtPath(payloadWithoutMetrics, metric.calculation);
+    const previousValue = previousResults.get(metric.id)?.value;
+    const comparable = typeof value === 'number' && typeof previousValue === 'number';
+    const delta = comparable ? Number((value - previousValue).toFixed(3)) : null;
+    return {
+      ...metric,
+      value: value ?? null,
+      previousValue: previousValue ?? null,
+      delta,
+      trend: previous ? stableMetricTrend(metric.direction, delta) : 'baseline',
+    };
+  });
+  return {
+    definitionsPath: definitions.sourcePath,
+    baseline: previous ? false : true,
+    previousDigestId: previous?.digestId ?? null,
+    results,
+  };
 }
 
 function evalDigestNextActions(payload) {
@@ -2346,6 +2452,13 @@ function printEvalDigest(payload, writeResult) {
   console.log('Plan2Agent eval digest');
   console.log(`- eval: ${payload.evalDir}`);
   console.log(`- files: grades=${payload.files.grades} analyses=${payload.files.analyses} compares=${payload.files.compares} digests=${payload.files.digests} applyReports=${payload.files.applyReports} skipped=${payload.files.skipped}`);
+  if (payload.stableMetrics?.results?.length) {
+    console.log(`- stable metrics (${payload.stableMetrics.baseline ? 'baseline' : `vs ${payload.stableMetrics.previousDigestId}`}):`);
+    for (const metric of payload.stableMetrics.results) {
+      const deltaLabel = metric.delta === null ? 'baseline' : `${metric.delta >= 0 ? '+' : ''}${metric.delta}`;
+      console.log(`  - ${metric.id}: delta=${deltaLabel} trend=${metric.trend} value=${metric.value ?? 'n/a'} direction=${metric.direction}`);
+    }
+  }
   console.log(`- grades: total=${payload.grades.total} byVerdict=${JSON.stringify(payload.grades.byVerdict)} averageScore=${payload.grades.averageScore ?? 'n/a'}`);
   console.log(`- acceptance: ${payload.grades.acceptanceCoverage.covered}/${payload.grades.acceptanceCoverage.total} covered`);
   console.log(`- compare: total=${payload.compares.total} byVerdict=${JSON.stringify(payload.compares.byVerdict)} failingSignals=${payload.compares.failingSignals.length}`);
