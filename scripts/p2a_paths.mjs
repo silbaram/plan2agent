@@ -3,9 +3,9 @@
 import { existsSync, lstatSync, readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { GREENFIELD_REQUIRED_FILES } from './p2a_constants.mjs';
+import { GREENFIELD_REQUIRED_FILES, P2A_DIR } from './p2a_constants.mjs';
 
-export const P2A_DIR = '.plan2agent';
+export { P2A_DIR };
 export const P2A_ARTIFACTS_DIR = path.join(P2A_DIR, 'artifacts');
 export const P2A_SCRIPTS_DIR = path.join(P2A_DIR, 'scripts');
 export const P2A_SCHEMAS_DIR = path.join(P2A_DIR, 'schemas');

@@ -5,12 +5,11 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, lstatSync, readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
-import { GATE_FILES } from './p2a_constants.mjs';
+import { DEFAULT_RUNS_DIR, GATE_FILES, GREENFIELD_REQUIRED_FILES } from './p2a_constants.mjs';
 import { resolveOrchestrationAgentTool } from './p2a_project_config.mjs';
 import { resolveP2aPaths } from './p2a_paths.mjs';
 
 const P2A_PATHS = resolveP2aPaths(import.meta.url);
-const GREENFIELD_REQUIRED_FILES = ['status.md', ...GATE_FILES.map(([, , filePath]) => filePath)];
 
 const RUNTIME_COMMANDS = new Map([
   ['iteration', { script: 'p2a_iteration.mjs' }],
@@ -501,7 +500,7 @@ function summarizeOrchestrationEnhancement(manifest, config) {
     supervisedRun: configOrchestration.supervisedRun === true,
     providerRouting: stringValue(configOrchestration.providerRouting) ?? 'project_config',
     monitorGatePolicy: stringValue(configOrchestration.monitorGatePolicy) ?? 'explicit_plan_only',
-    runtimeDir: stringValue(configOrchestration.runtimeDir) ?? '.plan2agent/runs',
+    runtimeDir: stringValue(configOrchestration.runtimeDir) ?? DEFAULT_RUNS_DIR,
   };
 }
 
