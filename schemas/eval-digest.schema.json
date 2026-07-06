@@ -36,10 +36,22 @@
       ],
       "additionalProperties": true,
       "properties": {
-        "grades": { "type": "integer", "minimum": 0 },
-        "analyses": { "type": "integer", "minimum": 0 },
-        "compares": { "type": "integer", "minimum": 0 },
-        "skipped": { "type": "integer", "minimum": 0 }
+        "grades": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "analyses": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "compares": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "skipped": {
+          "type": "integer",
+          "minimum": 0
+        }
       }
     },
     "grades": {
@@ -51,9 +63,16 @@
       ],
       "additionalProperties": true,
       "properties": {
-        "total": { "type": "integer", "minimum": 0 },
-        "byVerdict": { "type": "object" },
-        "nonPass": { "type": "array" }
+        "total": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "byVerdict": {
+          "type": "object"
+        },
+        "nonPass": {
+          "type": "array"
+        }
       }
     },
     "compares": {
@@ -65,9 +84,16 @@
       ],
       "additionalProperties": true,
       "properties": {
-        "total": { "type": "integer", "minimum": 0 },
-        "byVerdict": { "type": "object" },
-        "failingSignals": { "type": "array" }
+        "total": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "byVerdict": {
+          "type": "object"
+        },
+        "failingSignals": {
+          "type": "array"
+        }
       }
     },
     "analyses": {
@@ -79,9 +105,17 @@
       ],
       "additionalProperties": true,
       "properties": {
-        "total": { "type": "integer", "minimum": 0 },
-        "clusters": { "type": "integer", "minimum": 0 },
-        "byClassification": { "type": "object" }
+        "total": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "clusters": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "byClassification": {
+          "type": "object"
+        }
       }
     },
     "selfImprovement": {
@@ -109,9 +143,17 @@
           ],
           "additionalProperties": true,
           "properties": {
-            "total": { "type": "integer", "minimum": 0 },
-            "byStatus": { "type": "object" },
-            "failedOrBlocked": { "type": "integer", "minimum": 0 },
+            "total": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "byStatus": {
+              "type": "object"
+            },
+            "failedOrBlocked": {
+              "type": "integer",
+              "minimum": 0
+            },
             "failureEvidence": {
               "type": "object",
               "required": [
@@ -122,10 +164,26 @@
               ],
               "additionalProperties": true,
               "properties": {
-                "required": { "type": "integer", "minimum": 0 },
-                "complete": { "type": "integer", "minimum": 0 },
-                "incomplete": { "type": "integer", "minimum": 0 },
-                "completeRate": { "type": ["number", "null"], "minimum": 0, "maximum": 1 }
+                "required": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "complete": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "incomplete": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "completeRate": {
+                  "type": [
+                    "number",
+                    "null"
+                  ],
+                  "minimum": 0,
+                  "maximum": 1
+                }
               }
             }
           }
@@ -139,11 +197,33 @@
           ],
           "additionalProperties": true,
           "properties": {
-            "total": { "type": "integer", "minimum": 0 },
-            "byStatus": { "type": "object" },
-            "pendingReview": { "type": "integer", "minimum": 0 },
-            "approvalRate": { "type": ["number", "null"], "minimum": 0, "maximum": 1 },
-            "rejectionRate": { "type": ["number", "null"], "minimum": 0, "maximum": 1 }
+            "total": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "byStatus": {
+              "type": "object"
+            },
+            "pendingReview": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "approvalRate": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "minimum": 0,
+              "maximum": 1
+            },
+            "rejectionRate": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "minimum": 0,
+              "maximum": 1
+            }
           }
         },
         "recurringFailures": {
@@ -154,8 +234,13 @@
           ],
           "additionalProperties": true,
           "properties": {
-            "clusters": { "type": "integer", "minimum": 0 },
-            "top": { "type": "array" }
+            "clusters": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "top": {
+              "type": "array"
+            }
           }
         },
         "maintenance": {
@@ -170,11 +255,30 @@
           ],
           "additionalProperties": true,
           "properties": {
-            "approvals": { "type": "integer", "minimum": 0 },
-            "approvedProposalSignals": { "type": "integer", "minimum": 0 },
-            "maintenanceTasksFromProposals": { "type": "integer", "minimum": 0 },
-            "convertedApprovals": { "type": "integer", "minimum": 0 },
-            "conversionRate": { "type": ["number", "null"], "minimum": 0, "maximum": 1 },
+            "approvals": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "approvedProposalSignals": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "maintenanceTasksFromProposals": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "convertedApprovals": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "conversionRate": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "minimum": 0,
+              "maximum": 1
+            },
             "postMaintenanceVerification": {
               "type": "object",
               "required": [
@@ -186,11 +290,30 @@
               ],
               "additionalProperties": true,
               "properties": {
-                "total": { "type": "integer", "minimum": 0 },
-                "passed": { "type": "integer", "minimum": 0 },
-                "failed": { "type": "integer", "minimum": 0 },
-                "notRun": { "type": "integer", "minimum": 0 },
-                "successRate": { "type": ["number", "null"], "minimum": 0, "maximum": 1 }
+                "total": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "passed": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "failed": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "notRun": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "successRate": {
+                  "type": [
+                    "number",
+                    "null"
+                  ],
+                  "minimum": 0,
+                  "maximum": 1
+                }
               }
             }
           }
@@ -199,7 +322,105 @@
     },
     "nextActions": {
       "type": "array",
-      "items": { "type": "string", "minLength": 1 }
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "stableMetrics": {
+      "type": "object",
+      "required": [
+        "definitionsPath",
+        "baseline",
+        "previousDigestId",
+        "results"
+      ],
+      "additionalProperties": true,
+      "properties": {
+        "definitionsPath": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "baseline": {
+          "type": "boolean"
+        },
+        "previousDigestId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "results": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "id",
+              "description",
+              "calculation",
+              "direction",
+              "value",
+              "previousValue",
+              "delta",
+              "trend"
+            ],
+            "additionalProperties": true,
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "description": {
+                "type": "string"
+              },
+              "calculation": {
+                "type": "string",
+                "minLength": 1
+              },
+              "direction": {
+                "enum": [
+                  "higher_is_better",
+                  "lower_is_better"
+                ]
+              },
+              "value": {
+                "type": [
+                  "number",
+                  "integer",
+                  "string",
+                  "boolean",
+                  "null"
+                ]
+              },
+              "previousValue": {
+                "type": [
+                  "number",
+                  "integer",
+                  "string",
+                  "boolean",
+                  "null"
+                ]
+              },
+              "delta": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "trend": {
+                "enum": [
+                  "baseline",
+                  "improved",
+                  "worsened",
+                  "same"
+                ]
+              }
+            }
+          }
+        }
+      }
     }
   }
 }

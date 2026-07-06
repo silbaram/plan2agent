@@ -8330,6 +8330,10 @@ export function main() {
   writeResultOutput(projectConfigDetectionResult);
   if (projectConfigDetectionResult.status !== 0) return failureStatus(projectConfigDetectionResult);
 
+  const evalStableMetricsResult = runNodeTestFile('tests/eval-stable-metrics.test.mjs');
+  writeResultOutput(evalStableMetricsResult);
+  if (evalStableMetricsResult.status !== 0) return failureStatus(evalStableMetricsResult);
+
   const segments = [`${countNodeTestCases(schemaResult.stdout)} Plan2Agent fixture set test(s)`];
   if (scaffoldResult.checks) segments.push(`${scaffoldResult.checks} scaffold fixture check(s)`);
   if (evalResult.checks) segments.push(`${evalResult.checks} eval fixture check(s)`);
@@ -8338,6 +8342,7 @@ export function main() {
   if (iterationResult.checks) segments.push(`${iterationResult.checks} iteration fixture check(s)`);
   segments.push(`${countNodeTestCases(negativeResult.stdout)} negative fixture test(s)`);
   segments.push(`${countNodeTestCases(projectConfigDetectionResult.stdout)} project config detection test(s)`);
+  segments.push(`${countNodeTestCases(evalStableMetricsResult.stdout)} eval stable metrics test(s)`);
 
   console.log(`Validated ${formatSegments(segments)}`);
   return 0;

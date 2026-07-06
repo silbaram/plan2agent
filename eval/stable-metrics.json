@@ -1,0 +1,35 @@
+{
+  "schema_version": "p2a.eval_stable_metrics.v1",
+  "metrics": [
+    {
+      "id": "failed_or_blocked_runs",
+      "description": "Count of run records whose status is failed or blocked in the digest run scope.",
+      "calculation": "selfImprovement.runs.failedOrBlocked",
+      "direction": "lower_is_better"
+    },
+    {
+      "id": "failure_evidence_complete_rate",
+      "description": "Share of failed or blocked runs that include complete reproduction, localization, and guard evidence.",
+      "calculation": "selfImprovement.runs.failureEvidence.completeRate",
+      "direction": "higher_is_better"
+    },
+    {
+      "id": "pending_proposal_reviews",
+      "description": "Count of proposal candidates still pending review after curation and approval artifacts are applied.",
+      "calculation": "selfImprovement.proposals.pendingReview",
+      "direction": "lower_is_better"
+    },
+    {
+      "id": "maintenance_conversion_rate",
+      "description": "Share of approved proposal signals converted into maintenance tasks.",
+      "calculation": "selfImprovement.maintenance.conversionRate",
+      "direction": "higher_is_better"
+    },
+    {
+      "id": "post_maintenance_verification_success_rate",
+      "description": "Share of post-maintenance verification runs that passed.",
+      "calculation": "selfImprovement.maintenance.postMaintenanceVerification.successRate",
+      "direction": "higher_is_better"
+    }
+  ]
+}
