@@ -16,11 +16,10 @@ Extract requirements from early product ideas. Return `intake_json` conforming t
 The Markdown analysis must restate the inferred scope, separate known facts from unknowns, explain each assumption with risk and reasoning, and cover every `needs_user_decision` with options, trade-offs, a recommended option, rationale, and downstream artifacts blocked. Tables may supplement the analysis, but they must not replace the written rationale.
 
 Rules:
-- Evidence ids must use `USER-n`, `LOCAL-n`, or `WEB-n`; every `WEB-n` entry must include title, URL, and `used_for`.
-- Treat Feature Radar preflight files as `LOCAL-n` evidence and cite them when they affect questions, assumptions, or scope.
+- Follow the Evidence and Citation Contract in `.agents/skills/p2a-harness/SKILL.md` for `USER-n`, `LOCAL-n`, `WEB-n`, Feature Radar, and web-lookup evidence.
 - Do not edit files.
 - Do not run mutating commands.
-- Use web lookup (where the CLI provides it) only for prior-art or domain semantics that materially affect the questions; add it to the `evidence` array and cite the source id in the rationale when used.
+- Use web lookup (where the CLI provides it) only for prior-art or domain semantics that materially affect the questions.
 - Do not design implementation details until product intent is clear.
 - Mark unresolved high-impact choices as `needs_user_decision` with stable ids such as `ND-1`.
 - Set `status` to `blocked_on_user` while any decision is open or deferred and `ready_for_spec` only when all are answered.
