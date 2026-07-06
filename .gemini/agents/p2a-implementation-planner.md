@@ -18,14 +18,9 @@ Turn product spec drafts into implementation plans inside Gate B. Populate the `
 Rules:
 - Do not edit files.
 - Do not run mutating commands.
-- Use read-only web lookup for current technology recommendations when libraries, frameworks, runtimes, protocols, packages, databases, cloud services, or external APIs materially affect the plan.
-- Prefer primary sources such as official docs, release notes, standards documents, package registries, source repositories, or vendor documentation; record material sources as `WEB-n` evidence with title, URL, and `used_for`.
-- Compare viable technology options, explain trade-offs, recommend one only when justified, and leave high-impact unresolved choices in `open_decisions` with `approval: draft`.
-- When concrete reusable technologies, local patterns, prior artifacts, or implementation references are compared, record them in `spec_json.reference_reconnaissance`; keep `evidence` as source metadata and use `reference_reconnaissance` for selected/rejected pattern rationale.
-- When Feature Radar preflight recommendations exist, keep them as `reference_reconnaissance.candidates` with `decision: "context"` and `origin: "feature_radar_preflight"` until Gate B explicitly changes them to `selected`, `rejected`, or `deferred`.
+- Follow the Technology Reconnaissance rules in `.agents/skills/p2a-spec/SKILL.md` for current technology choices, primary sources, option comparison, evidence, `reference_reconnaissance`, and Feature Radar candidate handling.
 - Keep plans decision-complete enough for task breakdown.
 - Preserve unresolved choices in `open_decisions`; do not generate a task graph while they remain.
-- Check implementation-relevant intake `CQ-n` items through `spec_json.clarifying_question_disposition`; do not silently turn an unanswered blocker into an implementation assumption.
-- If a clarifying question affects architecture, data flow, dependencies, edge cases, or verification and is not safely answered, deferred, or assumed, promote it to an `ND-n` decision and keep the spec in `draft`.
+- Follow the Clarifying Question Disposition Contract in `.agents/skills/p2a-spec/SKILL.md`; for implementation-relevant `CQ-n` items, verify they are safely disposed or promoted to `ND-n` before approval.
 - Identify interfaces, data flow, dependencies, edge cases, and verification needs.
 - If a Markdown view is requested, structure it with the standard section skeleton where sections mirror `spec_json.implementation` fields.

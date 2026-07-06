@@ -37,16 +37,7 @@ Each gate is a review checkpoint, not a one-shot hand-off. At every gate: (1) pe
 
 ## Clarifying Question Disposition
 
-`clarifying_questions` (`CQ-n`) are lightweight intake prompts. They do not block Gate A by themselves, but every intake `CQ-n` must be explicitly disposed in `spec_json.clarifying_question_disposition` before Gate B can pass.
-
-Use exactly one disposition per intake `CQ-n`:
-
-- `answered` — the spec incorporates a user answer or an already-resolved decision; include `resolved_by`.
-- `assumed` — the spec proceeds with a low-risk explicit assumption; include `assumption`.
-- `deferred_non_goal` — the question is intentionally out of v1 scope; include `non_goal`.
-- `promoted_to_decision` — the question is high-impact and must be tracked as a formal decision; include `promoted_decision_id`.
-
-Do not put raw `CQ-n` ids in `spec_json.open_decisions`. If a clarifying question blocks product or implementation correctness, promote it to an `ND-n` decision. An unresolved promoted decision remains in `open_decisions` and keeps the spec in `draft`; a resolved promoted decision records `resolution` in the disposition and is removed from `open_decisions`.
+The canonical `CQ-n` disposition statuses and required fields are owned by `.agents/skills/p2a-spec/SKILL.md` under "Clarifying Question Disposition Contract". Harness Gate B blocks unless every intake `CQ-n` is disposed there, no raw `CQ-n` appears in `spec_json.open_decisions`, and unresolved blocking clarifying questions are promoted to `ND-n` decisions that keep the spec in `draft`.
 
 ## Gate A/B Technology Boundary
 

@@ -28,6 +28,11 @@ Use these inputs:
 - `agent-tool`, usually `codex`.
 - Optional existing run id.
 
+
+## Provider Confinement Policy
+
+Codex write-capable runs use native `workspace-write` sandbox confinement inside the assigned run workspace or isolated worktree. Claude write-capable runs require scaffold confinement with deny rules, a PreToolUse hook, and the macOS/Linux OS sandbox, and they must stay on the foreground, human-supervised approval path for now. Do not switch Claude to unattended `permissionMode` auto/background until the cross-OS spike is complete and a human explicitly approves that mode. Gemini remains read-only; do not pursue write-capable Gemini implementers, and use the main-session fallback when execution is needed. For every provider, writes remain limited to the assigned workspace/worktree, and harness files or paths outside that workspace are forbidden.
+
 ## Procedure
 
 1. Confirm the target task is ready and inspect its implementation context:
@@ -49,11 +54,11 @@ Use these inputs:
    The worktree path must be a fresh empty path, following the `project.config.json` `runTracking.worktreePattern` convention (for example, `../.worktrees/<taskId>-<runId>`).
    Run this command from an existing git workspace; the fresh worktree path does not need to exist before `--create-isolation`.
 
-   Codex uses sandbox confinement. Claude write-capable runs require scaffold confinement (deny rules + PreToolUse hook, plus OS sandbox on macOS/Linux) and foreground human supervision for now; do not switch Claude to unattended `permissionMode` auto/background until the cross-OS spike is complete and a human explicitly approves that mode. Gemini is still read-only, so use the main-session fallback for Gemini.
+   Follow the Provider Confinement Policy in this skill for Codex, Claude, and Gemini execution modes.
 
 3. Before implementing, ensure the target project has a committed source-code git baseline, excluding local `.plan2agent/` state. If there is pre-existing untracked application source, commit or intentionally ignore it first; otherwise `p2a_runs finish --collect-git` records the entire untracked source tree as this task's `changedFiles` instead of only the files this task changed.
 
-4. Implement the task while obeying the writing boundaries below. When possible, spawn the `p2a-implementer` subagent to perform the implementation inside the isolated worktree. Codex uses the `workspace-write` sandbox. Claude uses scaffold confinement for write-capable foreground-supervised runs; unattended `permissionMode` auto/background remains deferred until the cross-OS spike and explicit human decision. Gemini remains read-only, so use the main-session fallback for Gemini.
+4. Implement the task while obeying the writing boundaries below and the Provider Confinement Policy in this skill. When possible, spawn the `p2a-implementer` subagent to perform the implementation inside the isolated worktree.
 
    The spawned `p2a-implementer` subagent performs scoped file edits only. It may optionally run local checks for self-review, but it must not call `p2a_runs verify`, `p2a_runs finish`, or `p2a_tasks done|block`. Unless lifecycle delegation is explicitly requested, those lifecycle steps belong to the main dev-execution owner running this skill.
 

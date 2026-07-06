@@ -45,6 +45,6 @@ When `status` is `blocked_on_user`, lead with the analysis narrative (understand
 - Prefer defaults for low-risk details and label them as assumptions.
 - Stop at intake when high-impact decisions remain open or deferred.
 - Do not design the full implementation yet.
-- If prior-art or domain lookup changes a question or assumption, add a `WEB-n` item to `evidence` and cite the source id in the rationale.
+- Follow the Evidence and Citation Contract in `.agents/skills/p2a-harness/SKILL.md` for `USER-n`, `LOCAL-n`, `WEB-n`, Feature Radar, and web-lookup evidence. If prior-art or domain lookup changes a question or assumption, cite the source id in the rationale.
 - Do not edit files or run commands.
 - Do not write files yourself; return your structured content and analysis so the harness orchestrator can persist the artifacts.
