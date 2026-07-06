@@ -491,7 +491,12 @@ function memoryDigestArtifactDocument(summary: MemoryDigestSummary, copy: UiCopy
     group: "memory",
     relativePath: summary.sourcePath,
     meta: summary.source,
-    state: summary.failedOrBlocked > 0 || summary.verificationGaps > 0 ? "warn" : "present",
+    state:
+      summary.failedOrBlocked > 0 ||
+      summary.verificationGaps > 0 ||
+      (summary.memoryTotalResults > 0 && summary.memoryUsedResults === 0)
+        ? "warn"
+        : "present",
   };
 }
 
@@ -515,7 +520,12 @@ function memorySearchArtifactDocument(summary: MemorySearchSummary, copy: UiCopy
     group: "memory",
     relativePath: summary.sourcePath,
     meta: summary.query || copy.common.none,
-    state: summary.totalResults > 0 ? "present" : "missing",
+    state:
+      summary.totalResults > 0 && summary.usedResults === 0
+        ? "warn"
+        : summary.totalResults > 0
+          ? "present"
+          : "missing",
   };
 }
 
@@ -798,6 +808,31 @@ function proposalTargetText(proposal: ProposalSummary, copy: UiCopy): string {
   const visibleTargets = proposal.targetFiles.slice(0, 2).join(", ");
   const hiddenCount = proposal.targetFiles.length - 2;
   return hiddenCount > 0 ? `${visibleTargets} +${hiddenCount}` : visibleTargets;
+}
+
+function proposalQualityText(proposal: ProposalSummary, copy: UiCopy): string {
+  const quality = proposal.quality;
+  if (!quality || quality.score === null || !quality.band) return copy.overview.missingQuality;
+  const missing = quality.missing.length > 0 ? ` · ${quality.missing.join(", ")}` : "";
+  return `${copy.overview.qualityScore} ${quality.score}/100 · ${statusLabel(quality.band, copy)}${missing}`;
+}
+
+function proposalSourceText(proposal: ProposalSummary, copy: UiCopy): string {
+  if (proposal.sourceRunId) return `${copy.overview.sourceRun}: ${proposal.sourceRunId}`;
+  return proposal.riskRationale ?? copy.common.none;
+}
+
+function proposalMaintenanceText(proposal: ProposalSummary, copy: UiCopy): string {
+  if (proposal.maintenanceTaskId) {
+    const taskLabel = proposal.maintenanceTaskTitle ?? proposal.maintenanceTaskId;
+    const status = proposal.maintenanceTaskStatus ? ` · ${statusLabel(proposal.maintenanceTaskStatus, copy)}` : "";
+    return `${copy.overview.maintenanceTask}: ${taskLabel}${status}`;
+  }
+  if (proposal.approvalId || proposal.status === "approved") return copy.overview.maintenancePending;
+  if (proposal.status === "proposed" && (proposal.patchDraftId || proposal.candidateId)) {
+    return copy.overview.approvalPending;
+  }
+  return copy.common.none;
 }
 
 export default function App() {
@@ -1575,7 +1610,7 @@ export default function App() {
       projectSnapshot?.state === "cycle_close_ready"
         ? projectStateLabel(projectSnapshot, copy)
         : activeFlowItem?.title ?? projectStateLabel(projectSnapshot, copy);
-    const visibleProposals = proposals.slice(0, 4);
+    const visibleProposals = proposals.slice(0, 6);
     const taskMetric = overviewTaskMetric(artifact, projectSnapshot?.state ?? null, locale, copy);
     const runMetric = artifact ? formatCount(artifact.runCount, locale) : "0";
     const showTaskMetric = onboarding?.stage !== "cycle_close_ready";
@@ -1768,7 +1803,7 @@ export default function App() {
                   key={proposal.relativePath}
                   type="button"
                   onClick={() => void openArtifactDocument(proposalArtifactDocument(proposal, copy))}
-                  title={proposal.problem}
+                  title={[proposal.problem, proposal.riskRationale].filter(Boolean).join(" ")}
                 >
                   <span className="overview-proposal-row__state">
                     <em className={`status-badge status-badge--${proposal.status}`}>
@@ -1782,8 +1817,13 @@ export default function App() {
                     <strong>{proposal.proposalId}</strong>
                     <small>{proposal.problem}</small>
                   </span>
+                  <span className="overview-proposal-row__quality">
+                    <em>{proposalQualityText(proposal, copy)}</em>
+                    <em>{proposalSourceText(proposal, copy)}</em>
+                  </span>
                   <span className="overview-proposal-row__meta">
                     <em className="mono">{proposalTargetText(proposal, copy)}</em>
+                    <em>{proposalMaintenanceText(proposal, copy)}</em>
                     <em className="mono">{proposal.relativePath}</em>
                   </span>
                 </button>
@@ -1950,7 +1990,11 @@ export default function App() {
                 renderOperationalCard({
                   document: memoryDigestDocument,
                   tone:
-                    memoryDigest.failedOrBlocked > 0 || memoryDigest.verificationGaps > 0 ? "warn" : "ok",
+                    memoryDigest.failedOrBlocked > 0 ||
+                    memoryDigest.verificationGaps > 0 ||
+                    (memoryDigest.memoryTotalResults > 0 && memoryDigest.memoryUsedResults === 0)
+                      ? "warn"
+                      : "ok",
                   title: memoryDigest.sourcePath ?? copy.common.localOnly,
                   label: copy.operational.memoryDigest,
                   summary: `${formatCount(memoryDigest.totalRuns, locale)} ${
@@ -1958,7 +2002,10 @@ export default function App() {
                   } · ${formatCount(memoryDigest.failedOrBlocked, locale)} ${
                     copy.operational.failedOrBlocked
                   }`,
-                  detail: `${formatCount(memoryDigest.verificationGaps, locale)} ${
+                  detail: `${formatCount(memoryDigest.memoryUsedResults, locale)}/${formatCount(
+                    memoryDigest.memoryTotalResults,
+                    locale,
+                  )} ${copy.operational.usefulResults} · ${formatCount(memoryDigest.verificationGaps, locale)} ${
                     copy.operational.verificationGaps
                   } · ${
                     memoryDigest.source === "local" ? copy.common.localOnly : memoryDigest.sourcePath
@@ -1984,13 +2031,20 @@ export default function App() {
               {memorySearch &&
                 renderOperationalCard({
                   document: memorySearchDocument,
-                  tone: memorySearch.totalResults > 0 ? "ok" : "info",
+                  tone:
+                    memorySearch.totalResults > 0 && memorySearch.usedResults === 0
+                      ? "warn"
+                      : memorySearch.totalResults > 0
+                        ? "ok"
+                        : "info",
                   title: memorySearch.sourcePath ?? copy.operational.memorySearch,
                   label: copy.operational.memorySearch,
                   summary: `${formatCount(memorySearch.totalResults, locale)} ${
                     copy.operational.results
                   } · ${memorySearch.query || copy.common.none}`,
-                  detail: `${formatCount(memorySearch.documentResults, locale)} ${
+                  detail: `${formatCount(memorySearch.usedResults, locale)} ${
+                    copy.operational.usefulResults
+                  } · ${formatCount(memorySearch.documentResults, locale)} ${
                     copy.operational.documents
                   } · ${formatCount(memorySearch.runResults, locale)} ${copy.runs.runs}`,
                   footer: memorySearch.sourcePath ?? copy.common.none,

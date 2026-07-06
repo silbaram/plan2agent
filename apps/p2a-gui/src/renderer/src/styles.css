@@ -944,6 +944,7 @@ h3 {
 }
 
 .overview-proposal-row__main,
+.overview-proposal-row__quality,
 .overview-proposal-row__meta {
   min-width: 0;
   display: grid;
@@ -952,11 +953,23 @@ h3 {
 
 .overview-proposal-row__main strong,
 .overview-proposal-row__main small,
+.overview-proposal-row__quality em,
 .overview-proposal-row__meta em {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.overview-proposal-row__quality,
+.overview-proposal-row__meta {
+  color: var(--fg-3);
+  font-size: 11px;
+}
+
+.overview-proposal-row__quality em,
+.overview-proposal-row__meta em {
+  font-style: normal;
 }
 
 .overview-operational {

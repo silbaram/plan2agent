@@ -27,6 +27,7 @@ import type {
   OrchestrationMode,
   OrchestrationRoleStatus,
   OrchestrationRuntimePhase,
+  ProposalQualityBand,
   ProposalRisk,
   ProposalStatus,
   ProposalSummary,
@@ -1370,24 +1371,169 @@ function proposalRiskRank(risk: ProposalRisk): number {
   return 2;
 }
 
-function normalizeProposal(rootPath: string, proposalPath: string, proposal: JsonRecord | null): ProposalSummary | null {
+type ProposalMaintenanceLink = {
+  approvalId: string | null;
+  candidateId: string | null;
+  patchDraftId: string | null;
+  maintenanceTaskId: string | null;
+  maintenanceTaskTitle: string | null;
+  maintenanceTaskStatus: string | null;
+};
+
+type MaintenanceTaskSummary = {
+  title: string | null;
+  status: string | null;
+};
+
+function emptyProposalMaintenanceLink(): ProposalMaintenanceLink {
+  return {
+    approvalId: null,
+    candidateId: null,
+    patchDraftId: null,
+    maintenanceTaskId: null,
+    maintenanceTaskTitle: null,
+    maintenanceTaskStatus: null,
+  };
+}
+
+function resolveProjectPath(rootPath: string, filePath: string | null): string | null {
+  if (!filePath) return null;
+  return path.isAbsolute(filePath) ? filePath : path.join(rootPath, filePath);
+}
+
+async function readMaintenanceTaskSummary(
+  rootPath: string,
+  taskGraphRef: string | null,
+  taskId: string | null,
+  graphCache: Map<string, Promise<JsonRecord | null>>,
+): Promise<MaintenanceTaskSummary | null> {
+  if (!taskGraphRef || !taskId) return null;
+  const taskGraphPath = resolveProjectPath(rootPath, taskGraphRef);
+  if (!taskGraphPath) return null;
+  if (!graphCache.has(taskGraphPath)) {
+    graphCache.set(taskGraphPath, readJson(taskGraphPath).catch(() => null));
+  }
+  const graph = await graphCache.get(taskGraphPath);
+  const task = recordArrayValue(graph?.tasks).find((candidate) => stringValue(candidate.id) === taskId);
+  if (!task) return null;
+  return {
+    title: stringValue(task.title),
+    status: stringValue(task.status),
+  };
+}
+
+function normalizeProposalQuality(proposal: JsonRecord): ProposalSummary["quality"] {
+  const quality = recordValue(proposal.quality);
+  if (!quality) return null;
+  const score = numberValue(quality.score);
+  const band = stringValue(quality.band);
+  if (score === null || !["strong", "medium", "weak"].includes(band ?? "")) return null;
+  return {
+    score,
+    band: band as ProposalQualityBand,
+    missing: stringArrayValue(quality.missing),
+  };
+}
+
+async function summarizeProposalMaintenanceLinks(rootPath: string): Promise<Map<string, ProposalMaintenanceLink>> {
+  const proposalsDir = path.join(rootPath, ".plan2agent", "proposals");
+  const curationsDir = path.join(proposalsDir, "curations");
+  const draftsDir = path.join(proposalsDir, "patch-drafts");
+  const approvalsDir = path.join(proposalsDir, "approvals");
+  const proposalIdsByCandidateId = new Map<string, string[]>();
+  const draftById = new Map<string, JsonRecord>();
+  const linksByProposalId = new Map<string, ProposalMaintenanceLink>();
+  const maintenanceGraphCache = new Map<string, Promise<JsonRecord | null>>();
+
+  for (const item of await readJsonFilesFromDirectory(curationsDir)) {
+    if (item.data.schema_version !== "p2a.proposal_curation.v1") continue;
+    for (const candidate of recordArrayValue(item.data.candidates)) {
+      const candidateId = stringValue(candidate.candidateId);
+      if (!candidateId) continue;
+      proposalIdsByCandidateId.set(candidateId, stringArrayValue(candidate.proposalIds));
+    }
+  }
+
+  for (const item of await readJsonFilesFromDirectory(draftsDir)) {
+    if (item.data.schema_version !== "p2a.proposal_patch_draft.v1") continue;
+    const draftId = stringValue(item.data.draftId);
+    if (!draftId) continue;
+    draftById.set(draftId, item.data);
+    const candidateId = stringValue(item.data.candidateId);
+    const proposalIds =
+      (candidateId ? proposalIdsByCandidateId.get(candidateId) : null) ?? stringArrayValue(item.data.proposalIds);
+    for (const proposalId of proposalIds) {
+      linksByProposalId.set(proposalId, {
+        ...emptyProposalMaintenanceLink(),
+        candidateId,
+        patchDraftId: draftId,
+      });
+    }
+  }
+
+  for (const item of await readJsonFilesFromDirectory(approvalsDir)) {
+    if (item.data.schema_version !== "p2a.proposal_draft_approval.v1") continue;
+    const draftId = stringValue(item.data.draftId);
+    const approvalId = stringValue(item.data.approvalId);
+    const draft = draftId ? draftById.get(draftId) : null;
+    const candidateId = stringValue(item.data.candidateId) ?? stringValue(draft?.candidateId);
+    const proposalIds =
+      (candidateId ? proposalIdsByCandidateId.get(candidateId) : null) ??
+      (draft ? stringArrayValue(draft.proposalIds) : []);
+    const task = recordValue(item.data.maintenanceTask);
+    const maintenanceTaskId = stringValue(task?.taskId);
+    const taskSummary = await readMaintenanceTaskSummary(
+      rootPath,
+      stringValue(task?.taskGraph),
+      maintenanceTaskId,
+      maintenanceGraphCache,
+    );
+    for (const proposalId of proposalIds) {
+      const existing = linksByProposalId.get(proposalId) ?? emptyProposalMaintenanceLink();
+      linksByProposalId.set(proposalId, {
+        ...existing,
+        approvalId,
+        candidateId: candidateId ?? existing.candidateId,
+        patchDraftId: draftId ?? existing.patchDraftId,
+        maintenanceTaskId,
+        maintenanceTaskTitle: taskSummary?.title ?? stringValue(task?.title),
+        maintenanceTaskStatus: taskSummary?.status ?? null,
+      });
+    }
+  }
+
+  return linksByProposalId;
+}
+
+function normalizeProposal(
+  rootPath: string,
+  proposalPath: string,
+  proposal: JsonRecord | null,
+  maintenanceLink: ProposalMaintenanceLink | null,
+): ProposalSummary | null {
   if (proposal?.schema_version !== "p2a.skill_proposal.v1") return null;
   const proposalId = stringValue(proposal.proposalId);
   const problem = stringValue(proposal.problem);
   const recommendedChange = stringValue(proposal.recommendedChange);
-  const status = isProposalStatus(proposal.status) ? proposal.status : null;
+  const recordedStatus = isProposalStatus(proposal.status) ? proposal.status : null;
   const risk = isProposalRisk(proposal.risk) ? proposal.risk : null;
-  if (!proposalId || !problem || !recommendedChange || !status || !risk) return null;
+  if (!proposalId || !problem || !recommendedChange || !recordedStatus || !risk) return null;
+  const status: ProposalStatus = maintenanceLink?.approvalId ? "approved" : recordedStatus;
 
   return {
     proposalId,
     sourceRunId: stringValue(proposal.sourceRunId),
     status,
+    recordedStatus,
+    statusSource: maintenanceLink?.approvalId ? "approval" : "proposal",
     risk,
+    riskRationale: stringValue(proposal.riskRationale),
     problem,
     recommendedChange,
     targetFiles: stringArrayValue(proposal.targetFiles),
     evidenceCount: Array.isArray(proposal.evidence) ? proposal.evidence.length : 0,
+    quality: normalizeProposalQuality(proposal),
+    ...(maintenanceLink ?? emptyProposalMaintenanceLink()),
     relativePath: normalizeRelative(rootPath, proposalPath),
     note: stringValue(proposal.note),
   };
@@ -1401,6 +1547,7 @@ async function summarizeProposals(rootPath: string): Promise<ProposalSummary[]> 
   } catch {
     return [];
   }
+  const maintenanceLinks = await summarizeProposalMaintenanceLinks(rootPath);
 
   const proposals = await Promise.all(
     entries
@@ -1408,7 +1555,10 @@ async function summarizeProposals(rootPath: string): Promise<ProposalSummary[]> 
       .map(async (entry): Promise<ProposalSummary | null> => {
         const proposalPath = path.join(proposalsDir, entry.name);
         try {
-          return normalizeProposal(rootPath, proposalPath, await readJson(proposalPath));
+          const proposal = await readJson(proposalPath);
+          if (!proposal) return null;
+          const proposalId = stringValue(proposal.proposalId);
+          return normalizeProposal(rootPath, proposalPath, proposal, proposalId ? maintenanceLinks.get(proposalId) ?? null : null);
         } catch {
           return null;
         }
@@ -1593,6 +1743,10 @@ function localMemoryDigestSummary(runs: WorkbenchRun[]): Omit<MemoryDigestSummar
     failedOrBlocked,
     verificationFailures,
     verificationGaps,
+    memorySearchReports: 0,
+    memoryUsedResults: 0,
+    memoryTotalResults: 0,
+    memoryUsefulnessRate: null,
   };
 }
 
@@ -1644,6 +1798,7 @@ async function summarizeMemoryDigest(
     if (!memoryDigestMatchesArtifact(rootPath, artifactRoot, digest, candidate.allowMissingContext)) continue;
     const runSummary = recordValue(digest.runs);
     const proposalSummary = recordValue(digest.proposals);
+    const memoryUsefulness = recordValue(digest.memoryUsefulness);
     return {
       sourcePath: normalizeRelative(rootPath, candidate.filePath),
       source: "file",
@@ -1653,6 +1808,10 @@ async function summarizeMemoryDigest(
       verificationGaps: numberValue(runSummary?.verificationGaps) ?? 0,
       proposals: numberValue(proposalSummary?.total) ?? 0,
       uncoveredCandidateRuns: stringArrayValue(proposalSummary?.uncoveredCandidateRuns).length,
+      memorySearchReports: numberValue(memoryUsefulness?.searchReports) ?? 0,
+      memoryUsedResults: numberValue(memoryUsefulness?.usedResults) ?? 0,
+      memoryTotalResults: numberValue(memoryUsefulness?.totalResults) ?? 0,
+      memoryUsefulnessRate: numberValue(memoryUsefulness?.usefulnessRate),
     };
   }
   if (runs.length === 0) return null;
@@ -1713,6 +1872,7 @@ async function summarizeMemorySearch(
     if (!memoryDigestMatchesArtifact(rootPath, artifactRoot, search, candidate.allowMissingContext)) continue;
     const query = recordValue(search.query);
     const summary = recordValue(search.summary);
+    const usage = recordValue(search.usage) ?? recordValue(search.memoryUsefulness);
     const byType = recordValue(summary?.byType);
     return {
       sourcePath: normalizeRelative(rootPath, candidate.filePath),
@@ -1724,6 +1884,8 @@ async function summarizeMemorySearch(
         (numberValue(byType?.DOCUMENT_CHUNK) ?? 0),
       runResults: numberValue(byType?.RUN_RECORD) ?? 0,
       taskResults: numberValue(byType?.TASK) ?? 0,
+      usedResults: numberValue(usage?.usedResults) ?? 0,
+      usefulnessRate: numberValue(usage?.usefulnessRate),
       latestGeneratedAt: stringValue(search.generatedAt),
     };
   }

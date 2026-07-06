@@ -8,6 +8,9 @@ import path from 'node:path';
 import process from 'node:process';
 import {
   loadJson,
+  validateProposalCurationData,
+  validateProposalDraftApprovalData,
+  validateProposalPatchDraftData,
   validateRunData,
   validateRunIndexData,
   validateSkillProposal,
@@ -23,10 +26,12 @@ import {
   singleArtifactProjectRoot,
 } from './p2a_paths.mjs';
 import { resolveIterationState } from './p2a_iteration_state.mjs';
+import { commandLine } from './p2a_run_commands.mjs';
 
 const P2A_PATHS = resolveP2aPaths(import.meta.url);
 const COMMANDS = new Set(['grade', 'compare', 'analyze', 'generate', 'digest']);
 const DEFAULT_PROPOSALS_DIR = path.join('.plan2agent', 'proposals');
+const DEFAULT_DIGEST_RECENT_RUNS = 30;
 const STOP_WORDS = new Set([
   'a',
   'an',
@@ -55,7 +60,7 @@ function usage() {
     '  node .plan2agent/scripts/p2a_eval.mjs compare --baseline <artifacts-or-runs-dir> --candidate <artifacts-or-runs-dir> [--output <path>] [--dry-run] [--json]',
     '  node .plan2agent/scripts/p2a_eval.mjs analyze (--artifacts <dir>|--graph <path>|--runs <dir>) [--proposals <dir>] [--maintenance-draft <path>] [--apply-maintenance [--yes]] [--output <path>] [--dry-run] [--json]',
     '  node .plan2agent/scripts/p2a_eval.mjs generate [--artifacts <dir>|--graph <path> [--runs <dir>]|--runs <dir>] [--baseline <dir> --candidate <dir>] [--proposals <dir>] [--output <dir>] [--dry-run] [--json]',
-    '  node .plan2agent/scripts/p2a_eval.mjs digest [--eval <dir>|--artifacts <dir>|--graph <path>|--runs <dir>] [--output <path>] [--dry-run] [--json]',
+    '  node .plan2agent/scripts/p2a_eval.mjs digest [--eval <dir>|--artifacts <dir>|--graph <path>|--runs <dir>] [--recent-runs <n>] [--output <path>] [--dry-run] [--json]',
     '',
     'Commands:',
     '  grade     Evaluate one run against its task acceptance criteria and verification evidence.',
@@ -78,6 +83,7 @@ function usage() {
     '  --apply-maintenance For analyze with --artifacts, add drafted maintenance tasks to the maintenance graph.',
     '  --yes               Required with --apply-maintenance unless --dry-run is also set.',
     '  --eval <dir>        Generated eval artifact directory for digest.',
+    `  --recent-runs <n>   For digest self-improvement metrics, analyze the most recent n runs. Default: ${DEFAULT_DIGEST_RECENT_RUNS}.`,
     '  --output <path>     Optional output path. For generate this is a directory; otherwise a JSON file.',
     '  --dry-run           Print output plan/result without writing outputs.',
     '  --json              Machine-readable stdout.',
@@ -104,6 +110,7 @@ function parseArgs(argv) {
     applyMaintenance: false,
     yes: false,
     evalDir: null,
+    recentRuns: null,
     output: null,
     dryRun: false,
     json: false,
@@ -125,6 +132,7 @@ function parseArgs(argv) {
     else if (arg === '--apply-maintenance') args.applyMaintenance = true;
     else if (arg === '--yes') args.yes = true;
     else if (arg === '--eval') args.evalDir = requiredValue(argv, ++index, '--eval');
+    else if (arg === '--recent-runs') args.recentRuns = parsePositiveInteger(requiredValue(argv, ++index, '--recent-runs'), '--recent-runs');
     else if (arg === '--output') args.output = requiredValue(argv, ++index, '--output');
     else if (arg === '--dry-run') args.dryRun = true;
     else if (arg === '--json') args.json = true;
@@ -140,6 +148,7 @@ function parseArgs(argv) {
 function validateArgs(args) {
   if (args.command === 'grade') {
     if (args.evalDir) throw new Error('grade does not support --eval');
+    if (args.recentRuns !== null) throw new Error('grade does not support --recent-runs');
     if (args.maintenanceDraft || args.applyMaintenance || args.yes) throw new Error('grade does not support maintenance draft/apply options');
     if (args.runs) throw new Error('grade uses --artifacts or --graph with --run-id, or --run with --graph');
     const sourceCount = [args.artifacts, args.graph].filter(Boolean).length;
@@ -157,13 +166,14 @@ function validateArgs(args) {
   }
   if (args.command === 'compare') {
     if (!args.baseline || !args.candidate) throw new Error('compare requires --baseline and --candidate');
-    if (args.artifacts || args.graph || args.runs || args.run || args.runId || args.proposals || args.evalDir || args.maintenanceDraft || args.applyMaintenance || args.yes) {
+    if (args.artifacts || args.graph || args.runs || args.run || args.runId || args.proposals || args.evalDir || args.recentRuns !== null || args.maintenanceDraft || args.applyMaintenance || args.yes) {
       throw new Error('compare only supports --baseline, --candidate, --output, --dry-run, and --json');
     }
     return;
   }
   if (args.command === 'analyze') {
     if (args.evalDir) throw new Error('analyze does not support --eval');
+    if (args.recentRuns !== null) throw new Error('analyze does not support --recent-runs');
     const sourceCount = [args.artifacts, args.graph, args.runs].filter(Boolean).length;
     if (sourceCount === 0) {
       const defaultArtifacts = singleArtifactProjectRoot();
@@ -188,6 +198,7 @@ function validateArgs(args) {
   }
   if (args.command === 'generate') {
     if (args.evalDir) throw new Error('generate uses --output for the eval artifact directory, not --eval');
+    if (args.recentRuns !== null) throw new Error('generate does not support --recent-runs');
     if (args.maintenanceDraft || args.applyMaintenance || args.yes) throw new Error('generate does not support maintenance draft/apply options');
     if (args.run || args.runId) throw new Error('generate grades all indexed runs; use grade for one --run or --run-id');
     if ((args.baseline && !args.candidate) || (!args.baseline && args.candidate)) {
@@ -231,6 +242,12 @@ function validateArgs(args) {
     }
     if (args.graph) assertNotUninitializedScaffoldGraph(args.graph);
   }
+}
+
+function parsePositiveInteger(value, optionName) {
+  const number = Number(value);
+  if (!Number.isInteger(number) || number <= 0) throw new Error(`${optionName} requires a positive integer`);
+  return number;
 }
 
 function requiredValue(argv, index, optionName) {
@@ -356,10 +373,24 @@ function loadRunForGrade(source, args) {
   return { run, filePath, raw: readFileSync(filePath, 'utf8') };
 }
 
-function readRuns(runsDir) {
-  if (!directoryExists(runsDir)) return { runs: [], skippedRuns: [] };
+function runSortTimestamp(run) {
+  return run.finishedAt ?? run.updatedAt ?? run.startedAt ?? '';
+}
+
+function mostRecentRuns(runs, limit = null) {
+  if (!limit) return runs;
+  return [...runs]
+    .sort((left, right) => (
+      runSortTimestamp(right).localeCompare(runSortTimestamp(left))
+      || right.runId.localeCompare(left.runId)
+    ))
+    .slice(0, limit);
+}
+
+function readRuns(runsDir, options = {}) {
+  if (!directoryExists(runsDir)) return { runs: [], skippedRuns: [], totalRuns: 0 };
   const indexPath = path.join(runsDir, 'run-index.json');
-  if (!fileExists(indexPath)) return { runs: [], skippedRuns: [] };
+  if (!fileExists(indexPath)) return { runs: [], skippedRuns: [], totalRuns: 0 };
   const index = validateRunIndexData(loadJson(indexPath));
   const runs = [];
   const skippedRuns = [];
@@ -372,7 +403,7 @@ function readRuns(runsDir) {
       skippedRuns.push({ runId: entry.runId, reason: errorMessage(error) });
     }
   }
-  return { runs, skippedRuns };
+  return { runs: mostRecentRuns(runs, options.limit ?? null), skippedRuns, totalRuns: runs.length };
 }
 
 function taskForRun(graph, run) {
@@ -861,17 +892,18 @@ function shellQuote(value) {
 function maintenanceCommandForCluster(source, cluster) {
   if (source.sourceKind !== 'artifacts') return null;
   const title = `Improve ${cluster.classification} handling`;
-  return [
-    'node .plan2agent/scripts/p2a.mjs iteration maintenance add',
+  return commandLine(P2A_PATHS, 'p2a_iteration.mjs', [
+    'maintenance',
+    'add',
     '--artifacts',
-    shellQuote(displayPath(source.sourcePath)),
+    displayPath(source.sourcePath),
     '--title',
-    shellQuote(title),
+    title,
     '--accept',
-    shellQuote(`Future runs avoid or clearly classify ${cluster.classification}.`),
+    `Future runs avoid or clearly classify ${cluster.classification}.`,
     '--ref',
-    shellQuote(`eval-cluster:${cluster.clusterId}`),
-  ].join(' ');
+    `eval-cluster:${cluster.clusterId}`,
+  ]);
 }
 
 function deltaDraftCommandForCluster(source, cluster) {
@@ -879,16 +911,21 @@ function deltaDraftCommandForCluster(source, cluster) {
   if (!['scope_violation', 'missing_dependency'].includes(cluster.classification)) return null;
   const idea = `Address repeated ${cluster.classification} evidence from ${cluster.runIds.length} run(s).`;
   return [
-    'node .plan2agent/scripts/p2a.mjs iteration open',
-    '--artifacts',
-    shellQuote(displayPath(source.sourcePath)),
-    '--iteration-id',
-    'v-next',
-    '--idea',
-    shellQuote(idea),
-    '&& node .plan2agent/scripts/p2a.mjs iteration draft --artifacts',
-    shellQuote(displayPath(source.sourcePath)),
-  ].join(' ');
+    commandLine(P2A_PATHS, 'p2a_iteration.mjs', [
+      'open',
+      '--artifacts',
+      displayPath(source.sourcePath),
+      '--iteration-id',
+      'v-next',
+      '--idea',
+      idea,
+    ]),
+    commandLine(P2A_PATHS, 'p2a_iteration.mjs', [
+      'draft',
+      '--artifacts',
+      displayPath(source.sourcePath),
+    ]),
+  ].join(' && ');
 }
 
 function analyzeNextActions(source, clusters) {
@@ -955,21 +992,22 @@ function maintenanceDraftTask(source, analysis, cluster) {
 }
 
 function maintenanceAddCommandForTask(source, task) {
-  return [
-    'node .plan2agent/scripts/p2a.mjs iteration maintenance add',
+  return commandLine(P2A_PATHS, 'p2a_iteration.mjs', [
+    'maintenance',
+    'add',
     '--artifacts',
-    shellQuote(displayPath(source.sourcePath)),
+    displayPath(source.sourcePath),
     '--title',
-    shellQuote(task.title),
+    task.title,
     '--description',
-    shellQuote(task.description),
+    task.description,
     '--area',
-    shellQuote(task.targetArea),
+    task.targetArea,
     '--prompt',
-    shellQuote(task.suggestedAgentPrompt),
-    ...task.acceptanceCriteria.flatMap((criterion) => ['--accept', shellQuote(criterion)]),
-    ...task.sourceSpecRefs.flatMap((ref) => ['--ref', shellQuote(ref)]),
-  ].join(' ');
+    task.suggestedAgentPrompt,
+    ...task.acceptanceCriteria.flatMap((criterion) => ['--accept', criterion]),
+    ...task.sourceSpecRefs.flatMap((ref) => ['--ref', ref]),
+  ]);
 }
 
 function buildMaintenanceDraft(source, analysis) {
@@ -995,7 +1033,8 @@ function buildMaintenanceDraft(source, analysis) {
     nextActions: tasks.length
       ? [
           'Review this draft before applying it to the maintenance graph.',
-          `Apply after review: node .plan2agent/scripts/p2a.mjs eval analyze --artifacts ${shellQuote(displayPath(source.sourcePath))} --apply-maintenance --yes`,
+          `Preview after review: ${commandLine(P2A_PATHS, 'p2a_iteration.mjs', ['maintenance', 'add', '--artifacts', displayPath(source.sourcePath), '--from-draft', '<maintenance-draft.json>', '--dry-run'])}`,
+          `Apply after review: ${commandLine(P2A_PATHS, 'p2a_iteration.mjs', ['maintenance', 'add', '--artifacts', displayPath(source.sourcePath), '--from-draft', '<maintenance-draft.json>', '--yes'])}`,
         ]
       : ['No maintenance tasks were drafted because no failure clusters were found.'],
   };
@@ -1192,6 +1231,8 @@ function printAnalyze(payload, writeResult) {
     console.log(`- maintenance draft: tasks=${payload.maintenanceDraft.summary.tasks}`);
     if (payload.maintenanceDraft.outputPath) {
       console.log(`- maintenance draft output: ${payload.maintenanceDraft.outputPath}${payload.maintenanceDraft.dryRun ? ' (dry-run)' : ''}`);
+      console.log(`- maintenance draft preview: ${commandLine(P2A_PATHS, 'p2a_iteration.mjs', ['maintenance', 'add', '--artifacts', displayPath(payload.source.sourcePath), '--from-draft', payload.maintenanceDraft.outputPath, '--dry-run'])}`);
+      console.log(`- maintenance draft apply: ${commandLine(P2A_PATHS, 'p2a_iteration.mjs', ['maintenance', 'add', '--artifacts', displayPath(payload.source.sourcePath), '--from-draft', payload.maintenanceDraft.outputPath, '--yes'])}`);
     }
     if (payload.maintenanceDraft.applyResult) {
       const result = payload.maintenanceDraft.applyResult;
@@ -1471,6 +1512,670 @@ function incrementCounter(target, key) {
   target[key] = (target[key] ?? 0) + 1;
 }
 
+function ratio(numerator, denominator) {
+  if (!denominator) return null;
+  return Number((numerator / denominator).toFixed(3));
+}
+
+function percentLabel(value) {
+  if (value === null || value === undefined) return 'n/a';
+  return `${Math.round(value * 100)}%`;
+}
+
+function resolveArtifactPath(value) {
+  if (!value || typeof value !== 'string') return null;
+  return path.isAbsolute(value) ? path.resolve(value) : path.resolve(P2A_PATHS.projectRoot, value);
+}
+
+function uniquePaths(paths) {
+  return [...new Set(paths.filter(Boolean).map((item) => path.resolve(item)))];
+}
+
+function firstEvalSource(artifacts) {
+  for (const collection of [artifacts.analyses, artifacts.indexes, artifacts.grades]) {
+    for (const item of collection) {
+      if (item.payload?.source && typeof item.payload.source === 'object') return item.payload.source;
+    }
+  }
+  return null;
+}
+
+function digestSourceFromArgs(args) {
+  if (args.evalDir) return null;
+  try {
+    return loadAnalyzeSource(args);
+  } catch {
+    return null;
+  }
+}
+
+function buildDigestSourceContext(args, evalDir, artifacts) {
+  const directSource = digestSourceFromArgs(args);
+  const artifactSource = firstEvalSource(artifacts);
+  const runsDir = directSource?.runsDir
+    ?? resolveArtifactPath(artifactSource?.runsDir)
+    ?? (directoryExists(path.join(path.dirname(evalDir), 'runs')) ? path.join(path.dirname(evalDir), 'runs') : null);
+  const proposalsDir = directSource?.proposalsDir
+    ?? resolveArtifactPath(artifactSource?.proposalsDir)
+    ?? (directoryExists(path.join(path.dirname(evalDir), 'proposals')) ? path.join(path.dirname(evalDir), 'proposals') : null);
+  const sourcePath = directSource?.sourcePath
+    ?? resolveArtifactPath(artifactSource?.sourcePath)
+    ?? null;
+  const sourceKind = directSource?.sourceKind ?? artifactSource?.sourceKind ?? null;
+  const maintenanceGraphPaths = [];
+  if (sourceKind === 'artifacts' && sourcePath) {
+    maintenanceGraphPaths.push(maintenanceGraphPathForSource({ sourcePath }));
+  }
+  const scanRoots = [
+    evalDir,
+    sourcePath && directoryExists(sourcePath) ? sourcePath : null,
+    runsDir ? path.dirname(runsDir) : null,
+    proposalsDir ? path.dirname(proposalsDir) : null,
+  ];
+  return {
+    sourceKind,
+    sourcePath,
+    runsDir,
+    proposalsDir,
+    maintenanceGraphPaths: uniquePaths(maintenanceGraphPaths),
+    scanRoots: uniquePaths(scanRoots).filter((dirPath) => directoryExists(dirPath)),
+  };
+}
+
+function safeJsonFilesRecursive(dirPath, maxFiles = 500) {
+  if (!directoryExists(dirPath)) return [];
+  const files = [];
+  function visit(currentPath) {
+    if (files.length >= maxFiles) return;
+    let entries = [];
+    try {
+      entries = readdirSync(currentPath, { withFileTypes: true })
+        .sort((left, right) => left.name.localeCompare(right.name));
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (files.length >= maxFiles) return;
+      if (entry.name === '.git' || entry.name === 'node_modules') continue;
+      const entryPath = path.join(currentPath, entry.name);
+      if (entry.isDirectory()) visit(entryPath);
+      else if (entry.isFile() && entry.name.endsWith('.json')) files.push(entryPath);
+    }
+  }
+  visit(dirPath);
+  return files;
+}
+
+function readProposalDraftApprovals(scanRoots) {
+  const approvals = [];
+  const skippedApprovals = [];
+  const seenFiles = new Set();
+  for (const root of scanRoots) {
+    for (const filePath of safeJsonFilesRecursive(root)) {
+      const resolved = path.resolve(filePath);
+      if (seenFiles.has(resolved)) continue;
+      seenFiles.add(resolved);
+      try {
+        const payload = loadJson(resolved);
+        if (payload?.schema_version !== 'p2a.proposal_draft_approval.v1') continue;
+        approvals.push({
+          filePath: resolved,
+          payload: validateProposalDraftApprovalData(payload),
+        });
+      } catch (error) {
+        if (path.basename(resolved).includes('approval')) {
+          skippedApprovals.push({ filePath: displayPath(resolved), reason: errorMessage(error) });
+        }
+      }
+    }
+  }
+  return { approvals, skippedApprovals, scannedFiles: seenFiles.size };
+}
+
+function readProposalPatchDraftsAndCurations(scanRoots) {
+  const patchDrafts = [];
+  const curations = [];
+  const skippedPatchDrafts = [];
+  const skippedCurations = [];
+  const seenFiles = new Set();
+  for (const root of scanRoots) {
+    for (const filePath of safeJsonFilesRecursive(root)) {
+      const resolved = path.resolve(filePath);
+      if (seenFiles.has(resolved)) continue;
+      seenFiles.add(resolved);
+      try {
+        const payload = loadJson(resolved);
+        if (payload?.schema_version === 'p2a.proposal_patch_draft.v1') {
+          patchDrafts.push({ filePath: resolved, payload: validateProposalPatchDraftData(payload) });
+        } else if (payload?.schema_version === 'p2a.proposal_curation.v1') {
+          curations.push({ filePath: resolved, payload: validateProposalCurationData(payload) });
+        }
+      } catch (error) {
+        const basename = path.basename(resolved);
+        if (basename.includes('patch-draft')) {
+          skippedPatchDrafts.push({ filePath: displayPath(resolved), reason: errorMessage(error) });
+        } else if (basename.includes('curation')) {
+          skippedCurations.push({ filePath: displayPath(resolved), reason: errorMessage(error) });
+        }
+      }
+    }
+  }
+  return { patchDrafts, curations, skippedPatchDrafts, skippedCurations };
+}
+
+function resolveArtifactReference(value, baseDir = null) {
+  if (!value || typeof value !== 'string') return null;
+  const candidates = path.isAbsolute(value)
+    ? [path.resolve(value)]
+    : [
+      baseDir ? path.resolve(baseDir, value) : null,
+      path.resolve(P2A_PATHS.projectRoot, value),
+    ].filter(Boolean);
+  return candidates.find((candidate) => fileExists(candidate)) ?? candidates[0] ?? null;
+}
+
+function loadPatchDraftReference(filePath) {
+  if (!filePath || !fileExists(filePath)) return null;
+  try {
+    const payload = loadJson(filePath);
+    if (payload?.schema_version !== 'p2a.proposal_patch_draft.v1') return null;
+    return { filePath: path.resolve(filePath), payload: validateProposalPatchDraftData(payload) };
+  } catch {
+    return null;
+  }
+}
+
+function loadCurationReference(filePath) {
+  if (!filePath || !fileExists(filePath)) return null;
+  try {
+    const payload = loadJson(filePath);
+    if (payload?.schema_version !== 'p2a.proposal_curation.v1') return null;
+    return { filePath: path.resolve(filePath), payload: validateProposalCurationData(payload) };
+  } catch {
+    return null;
+  }
+}
+
+function curationProposalIdsForCandidate(curation, candidateId) {
+  if (!candidateId) return [];
+  return sortedUnique((curation?.candidates ?? [])
+    .filter((candidate) => candidate.candidateId === candidateId)
+    .flatMap((candidate) => candidate.proposalIds ?? []));
+}
+
+function buildApprovedProposalSignalIndex(approvals, flowArtifacts) {
+  const patchDraftsById = new Map(flowArtifacts.patchDrafts.map((item) => [item.payload.draftId, item]));
+  const curationsByPath = new Map(flowArtifacts.curations.map((item) => [path.resolve(item.filePath), item]));
+  const proposalsByApprovalId = {};
+  const proposalIds = new Set();
+  const unresolvedApprovals = [];
+
+  function proposalIdsForDraft(draftItem) {
+    if (!draftItem) return [];
+    const draft = draftItem.payload;
+    const sourceCurationPath = resolveArtifactReference(draft.sourceCuration, path.dirname(draftItem.filePath));
+    const curationItem = sourceCurationPath
+      ? curationsByPath.get(path.resolve(sourceCurationPath)) ?? loadCurationReference(sourceCurationPath)
+      : null;
+    const fromSourceCuration = curationProposalIdsForCandidate(curationItem?.payload, draft.candidateId);
+    if (fromSourceCuration.length) return fromSourceCuration;
+    return sortedUnique(flowArtifacts.curations.flatMap((item) => curationProposalIdsForCandidate(item.payload, draft.candidateId)));
+  }
+
+  for (const approval of approvals) {
+    const payload = approval.payload;
+    const sourceDraftPath = resolveArtifactReference(payload.sourceDraft, path.dirname(approval.filePath));
+    const draftItem = patchDraftsById.get(payload.draftId)
+      ?? loadPatchDraftReference(sourceDraftPath);
+    const linkedProposalIds = proposalIdsForDraft(draftItem);
+    proposalsByApprovalId[payload.approvalId] = linkedProposalIds;
+    for (const proposalId of linkedProposalIds) proposalIds.add(proposalId);
+    if (!linkedProposalIds.length) {
+      unresolvedApprovals.push({
+        approvalId: payload.approvalId,
+        draftId: payload.draftId,
+        candidateId: payload.candidateId,
+        filePath: displayPath(approval.filePath),
+      });
+    }
+  }
+
+  return {
+    proposalIds,
+    proposalsByApprovalId,
+    unresolvedApprovals,
+  };
+}
+
+function buildSelfImprovementRunScope(runs, artifacts) {
+  const runIds = runs.length
+    ? runs.map((run) => run.runId)
+    : artifacts.grades.map((item) => item.payload?.run?.runId).filter((runId) => runId && runId !== 'unknown');
+  return {
+    active: runIds.length > 0,
+    source: runs.length ? 'runs' : (artifacts.grades.length ? 'grades' : 'none'),
+    runIds: sortedUnique(runIds),
+  };
+}
+
+function proposalRunIdsFromFlowArtifacts(flowArtifacts) {
+  const runIdsByProposalId = new Map();
+  for (const item of flowArtifacts.curations) {
+    for (const candidate of item.payload.candidates ?? []) {
+      for (const proposalId of candidate.proposalIds ?? []) {
+        const existing = runIdsByProposalId.get(proposalId) ?? [];
+        runIdsByProposalId.set(proposalId, sortedUnique([...existing, ...(candidate.sourceRunIds ?? [])]));
+      }
+    }
+  }
+  return runIdsByProposalId;
+}
+
+function proposalMatchesRunScope(proposal, runScope, proposalRunIdsById) {
+  if (!runScope.active) return true;
+  const runIds = new Set(runScope.runIds);
+  if (proposal.sourceRunId && runIds.has(proposal.sourceRunId)) return true;
+  return (proposalRunIdsById.get(proposal.proposalId) ?? []).some((runId) => runIds.has(runId));
+}
+
+function filterProposalsForRunScope(proposals, runScope, proposalRunIdsById) {
+  if (!runScope.active) return proposals;
+  return proposals.filter((proposal) => proposalMatchesRunScope(proposal, runScope, proposalRunIdsById));
+}
+
+function filterApprovedProposalSignalIndex(approvedSignalIndex, scopedProposalIds, scopeActive) {
+  if (!scopeActive) return approvedSignalIndex;
+  const proposalIds = new Set();
+  const proposalsByApprovalId = {};
+  for (const [approvalId, linkedProposalIds] of Object.entries(approvedSignalIndex.proposalsByApprovalId)) {
+    const scopedLinkedProposalIds = linkedProposalIds.filter((proposalId) => scopedProposalIds.has(proposalId));
+    if (!scopedLinkedProposalIds.length) continue;
+    proposalsByApprovalId[approvalId] = scopedLinkedProposalIds;
+    for (const proposalId of scopedLinkedProposalIds) proposalIds.add(proposalId);
+  }
+  return {
+    proposalIds,
+    proposalsByApprovalId,
+    unresolvedApprovals: [],
+  };
+}
+
+function filterApprovalsForProposalScope(approvals, approvedSignalIndex, scopeActive) {
+  if (!scopeActive) return approvals;
+  return approvals.filter((approval) => (approvedSignalIndex.proposalsByApprovalId[approval.payload.approvalId] ?? []).length > 0);
+}
+
+function readMaintenanceGraphs(sourceContext, approvals) {
+  const approvalGraphPaths = approvals
+    .map((item) => resolveArtifactPath(item.payload?.maintenanceTask?.taskGraph));
+  const graphPaths = uniquePaths([
+    ...sourceContext.maintenanceGraphPaths,
+    ...approvalGraphPaths,
+  ]).filter((filePath) => fileExists(filePath));
+  const graphs = [];
+  const skippedGraphs = [];
+  for (const graphPath of graphPaths) {
+    try {
+      graphs.push({ filePath: graphPath, graph: validateTaskGraph(graphPath) });
+    } catch (error) {
+      skippedGraphs.push({ filePath: displayPath(graphPath), reason: errorMessage(error) });
+    }
+  }
+  return { graphs, skippedGraphs };
+}
+
+function proposalRefsForTask(task) {
+  return (task.sourceSpecRefs ?? []).filter((ref) => (
+    ref.startsWith('proposal-draft-approval:')
+    || ref.startsWith('proposal-patch-draft:')
+    || ref.startsWith('proposal-candidate:')
+    || ref.startsWith('proposal:')
+    || ref.startsWith('skill-proposal:')
+  ));
+}
+
+function proposalIdRefsForTask(task) {
+  return (task.sourceSpecRefs ?? [])
+    .flatMap((ref) => {
+      if (ref.startsWith('proposal:')) return [ref.slice('proposal:'.length)];
+      if (ref.startsWith('skill-proposal:')) return [ref.slice('skill-proposal:'.length)];
+      return [];
+    })
+    .filter(Boolean);
+}
+
+function notesProposalApprovalId(run) {
+  const note = (run.notes ?? []).find((item) => /^proposalApproval=proposal-draft-approval-[a-f0-9]{12}$/.test(item));
+  return note ? note.slice('proposalApproval='.length) : null;
+}
+
+function verificationOutcome(run) {
+  const checks = Array.isArray(run.verification) ? run.verification : [];
+  if (run.status === 'failed' || run.status === 'blocked' || checks.some((item) => item.status === 'failed')) return 'failed';
+  if (checks.length && checks.every((item) => item.status === 'passed')) return 'passed';
+  return 'not_run';
+}
+
+function runLikeFromGrade(grade) {
+  const run = grade.run ?? {};
+  return {
+    runId: run.runId ?? 'unknown',
+    taskId: grade.task?.taskId ?? 'unknown',
+    status: run.status ?? 'unknown',
+    sourceLayout: null,
+    verification: run.verification ?? [],
+    notes: [],
+    changedFiles: run.changedFiles ?? [],
+    failure: run.failure ?? null,
+    structuredEvidence: run.structuredEvidence ?? null,
+  };
+}
+
+function evidenceSummaryForRun(run) {
+  return run.structuredEvidence ?? structuredRunSummary(run);
+}
+
+function buildRunSelfImprovementSummary(runs, artifacts) {
+  const runLikeItems = runs.length
+    ? runs
+    : artifacts.grades.map((item) => runLikeFromGrade(item.payload));
+  const byStatus = {};
+  let successful = 0;
+  let failedOrBlocked = 0;
+  let failed = 0;
+  let blocked = 0;
+  const incompleteRuns = [];
+  const missing = { reproduction: 0, localization: 0, guard: 0 };
+  for (const run of runLikeItems) {
+    incrementCounter(byStatus, run.status ?? 'unknown');
+    if (run.status === 'finished' && verificationOutcome(run) === 'passed') successful += 1;
+    if (run.status === 'failed') failed += 1;
+    if (run.status === 'blocked') blocked += 1;
+    if (run.status === 'failed' || run.status === 'blocked') {
+      failedOrBlocked += 1;
+      const evidence = evidenceSummaryForRun(run);
+      const missingFields = [];
+      if (!evidence.hasReproduction) missingFields.push('reproduction');
+      if (!evidence.hasLocalization) missingFields.push('localization');
+      if (!evidence.hasGuard) missingFields.push('guard');
+      for (const field of missingFields) missing[field] += 1;
+      if (missingFields.length) {
+        incompleteRuns.push({
+          runId: run.runId,
+          taskId: run.taskId,
+          status: run.status,
+          missing: missingFields,
+        });
+      }
+    }
+  }
+  const complete = failedOrBlocked - incompleteRuns.length;
+  return {
+    source: runs.length ? 'runs' : (artifacts.grades.length ? 'grades' : 'none'),
+    total: runLikeItems.length,
+    byStatus,
+    successful,
+    failed,
+    blocked,
+    failedOrBlocked,
+    failureEvidence: {
+      required: failedOrBlocked,
+      complete,
+      incomplete: incompleteRuns.length,
+      completeRate: ratio(complete, failedOrBlocked),
+      missing,
+      incompleteRuns: incompleteRuns.slice(0, 20),
+    },
+  };
+}
+
+function buildProposalSelfImprovementSummary(proposals, skippedProposals, approvedSignalIndex, options = {}) {
+  const byStatus = { proposed: 0, approved: 0, rejected: 0, deferred: 0 };
+  const originalByStatus = { proposed: 0, approved: 0, rejected: 0, deferred: 0 };
+  const approvedByArtifact = [];
+  for (const proposal of proposals) {
+    originalByStatus[proposal.status] = (originalByStatus[proposal.status] ?? 0) + 1;
+    const approvedViaArtifact = approvedSignalIndex.proposalIds.has(proposal.proposalId);
+    const effectiveStatus = approvedViaArtifact ? 'approved' : proposal.status;
+    byStatus[effectiveStatus] = (byStatus[effectiveStatus] ?? 0) + 1;
+    if (approvedViaArtifact && proposal.status !== 'approved') {
+      approvedByArtifact.push(proposal.proposalId);
+    }
+  }
+  const reviewed = byStatus.approved + byStatus.rejected + byStatus.deferred;
+  return {
+    total: proposals.length,
+    byStatus,
+    originalByStatus,
+    approved: byStatus.approved,
+    rejected: byStatus.rejected,
+    deferred: byStatus.deferred,
+    proposed: byStatus.proposed,
+    reviewed,
+    pendingReview: byStatus.proposed,
+    statusRates: {
+      approved: ratio(byStatus.approved, proposals.length),
+      rejected: ratio(byStatus.rejected, proposals.length),
+      deferred: ratio(byStatus.deferred, proposals.length),
+      proposed: ratio(byStatus.proposed, proposals.length),
+    },
+    approvalRate: ratio(byStatus.approved, reviewed),
+    rejectionRate: ratio(byStatus.rejected, reviewed),
+    deferredRate: ratio(byStatus.deferred, reviewed),
+    pendingRate: ratio(byStatus.proposed, proposals.length),
+    approvedByArtifact: approvedByArtifact.length,
+    approvedByArtifactProposalIds: approvedByArtifact.slice(0, 20),
+    unresolvedApprovalLinks: approvedSignalIndex.unresolvedApprovals,
+    excludedByRunScope: options.excludedByRunScope ?? 0,
+    skipped: skippedProposals.length,
+  };
+}
+
+function buildRecurringFailureSummary(clusters, runs) {
+  const clusterRows = clusters.length
+    ? clusters.map((cluster) => ({
+      classification: cluster.classification,
+      count: cluster.runIds.length,
+      runIds: cluster.runIds,
+      taskIds: cluster.taskIds,
+      proposalCoverage: cluster.proposalCoverage ?? null,
+      recommendation: cluster.recommendation ?? null,
+      maintenanceCommand: cluster.maintenanceCommand ?? null,
+    }))
+    : failureClustersFromRuns(runs);
+  const recurring = clusterRows
+    .filter((cluster) => cluster.count > 1)
+    .sort((left, right) => right.count - left.count || left.classification.localeCompare(right.classification));
+  return {
+    clusters: recurring.length,
+    top: recurring.slice(0, 10),
+  };
+}
+
+function failureClustersFromRuns(runs) {
+  const groups = new Map();
+  for (const run of runs) {
+    const key = clusterKeyForRun(run);
+    if (!key) continue;
+    if (!groups.has(key)) groups.set(key, { classification: key, runIds: [], taskIds: [] });
+    const group = groups.get(key);
+    group.runIds.push(run.runId);
+    group.taskIds.push(run.taskId);
+  }
+  return [...groups.values()].map((group) => ({
+    classification: group.classification,
+    count: group.runIds.length,
+    runIds: sortedUnique(group.runIds),
+    taskIds: sortedUnique(group.taskIds),
+    proposalCoverage: null,
+    recommendation: clusterRecommendation(group.classification),
+    maintenanceCommand: null,
+  }));
+}
+
+function buildMaintenanceSelfImprovementSummary({
+  approvals,
+  totalApprovalsAvailable = approvals.length,
+  maintenanceGraphs,
+  runs,
+  artifacts,
+  proposalSummary,
+  scopeActive = false,
+  approvedProposalIds = new Set(),
+}) {
+  const scopedApprovalIds = new Set(approvals.map((item) => item.payload.approvalId));
+  const proposalTasks = [];
+  for (const item of maintenanceGraphs.graphs) {
+    for (const task of item.graph.tasks ?? []) {
+      const proposalRefs = proposalRefsForTask(task);
+      if (!proposalRefs.length) continue;
+      const matchesScopedApproval = proposalRefs.some((ref) => (
+        ref.startsWith('proposal-draft-approval:')
+        && scopedApprovalIds.has(ref.slice('proposal-draft-approval:'.length))
+      ));
+      const matchesScopedApprovedProposal = proposalIdRefsForTask(task)
+        .some((proposalId) => approvedProposalIds.has(proposalId));
+      if (
+        scopeActive
+        && !matchesScopedApproval
+        && !matchesScopedApprovedProposal
+      ) {
+        continue;
+      }
+      proposalTasks.push({
+        taskId: task.id,
+        status: task.status,
+        title: task.title,
+        graphPath: displayPath(item.filePath),
+        proposalRefs,
+      });
+    }
+  }
+
+  const approvalTaskIds = new Set(approvals.map((item) => item.payload.maintenanceTask.taskId));
+  const approvalIds = new Set(approvals.map((item) => item.payload.approvalId));
+  const convertedApprovals = approvals.filter((approval) => proposalTasks.some((task) => (
+    task.taskId === approval.payload.maintenanceTask.taskId
+    && task.proposalRefs.includes(`proposal-draft-approval:${approval.payload.approvalId}`)
+  )));
+  const approvalDenominator = approvals.length || proposalSummary.approved;
+  const convertedCount = approvals.length ? convertedApprovals.length : proposalTasks.length;
+  const boundedConvertedCount = approvalDenominator ? Math.min(convertedCount, approvalDenominator) : convertedCount;
+  const postMaintenanceRuns = runs.filter((run) => {
+    if (run.sourceLayout !== 'maintenance') return false;
+    const noteApproval = notesProposalApprovalId(run);
+    return approvalTaskIds.has(run.taskId)
+      || (noteApproval && (approvalIds.has(noteApproval) || (!scopeActive && totalApprovalsAvailable === 0)));
+  });
+  const verification = { total: postMaintenanceRuns.length, passed: 0, failed: 0, notRun: 0, successRate: null, runs: [] };
+  for (const run of postMaintenanceRuns) {
+    const outcome = verificationOutcome(run);
+    if (outcome === 'passed') verification.passed += 1;
+    else if (outcome === 'failed') verification.failed += 1;
+    else verification.notRun += 1;
+    verification.runs.push({
+      runId: run.runId,
+      taskId: run.taskId,
+      status: run.status,
+      outcome,
+      proposalApprovalId: notesProposalApprovalId(run),
+    });
+  }
+  verification.successRate = ratio(verification.passed, verification.total);
+
+  const applyReports = artifacts.applyReports.map((item) => item.payload);
+  return {
+    approvals: approvals.length,
+    totalApprovalsAvailable,
+    approvalsExcludedByRunScope: Math.max(totalApprovalsAvailable - approvals.length, 0),
+    skippedApprovals: maintenanceGraphs.skippedApprovals ?? 0,
+    approvedProposalSignals: approvalDenominator,
+    maintenanceTasksFromProposals: proposalTasks.length,
+    convertedApprovals: boundedConvertedCount,
+    rawConvertedApprovals: convertedCount,
+    pendingConversions: approvalDenominator ? Math.max(approvalDenominator - boundedConvertedCount, 0) : 0,
+    conversionRate: ratio(boundedConvertedCount, approvalDenominator),
+    completedMaintenanceTasks: proposalTasks.filter((task) => task.status === 'done').length,
+    maintenanceTasks: proposalTasks.slice(0, 20),
+    postMaintenanceVerification: verification,
+    applyReports: {
+      total: applyReports.length,
+      applied: applyReports.reduce((sum, report) => sum + (report.summary?.applied ?? 0), 0),
+      skipped: applyReports.reduce((sum, report) => sum + (report.summary?.skipped ?? 0), 0),
+      failed: applyReports.reduce((sum, report) => sum + (report.summary?.failed ?? 0), 0),
+      dryRun: applyReports.reduce((sum, report) => sum + (report.summary?.dryRun ?? 0), 0),
+    },
+  };
+}
+
+function buildSelfImprovementDigest(args, evalDir, artifacts, clusters) {
+  const sourceContext = buildDigestSourceContext(args, evalDir, artifacts);
+  const runLimit = args.recentRuns ?? DEFAULT_DIGEST_RECENT_RUNS;
+  const runsRead = sourceContext.runsDir ? readRuns(sourceContext.runsDir, { limit: runLimit }) : { runs: [], skippedRuns: [], totalRuns: 0 };
+  const proposalRead = sourceContext.proposalsDir ? readProposals(sourceContext.proposalsDir) : { proposals: [], skippedProposals: [] };
+  const approvalsRead = readProposalDraftApprovals(sourceContext.scanRoots);
+  const flowArtifacts = readProposalPatchDraftsAndCurations(sourceContext.scanRoots);
+  const approvedSignalIndex = buildApprovedProposalSignalIndex(approvalsRead.approvals, flowArtifacts);
+  const runScope = buildSelfImprovementRunScope(runsRead.runs, artifacts);
+  const proposalRunIdsById = proposalRunIdsFromFlowArtifacts(flowArtifacts);
+  const scopedProposals = filterProposalsForRunScope(proposalRead.proposals, runScope, proposalRunIdsById);
+  const scopedProposalIds = new Set(scopedProposals.map((proposal) => proposal.proposalId));
+  const scopedApprovedSignalIndex = filterApprovedProposalSignalIndex(approvedSignalIndex, scopedProposalIds, runScope.active);
+  const scopedApprovals = filterApprovalsForProposalScope(approvalsRead.approvals, scopedApprovedSignalIndex, runScope.active);
+  const scopedApprovedProposalIds = new Set(scopedProposals
+    .filter((proposal) => proposal.status === 'approved' || scopedApprovedSignalIndex.proposalIds.has(proposal.proposalId))
+    .map((proposal) => proposal.proposalId));
+  const maintenanceGraphs = readMaintenanceGraphs(sourceContext, scopedApprovals);
+  const runSummary = buildRunSelfImprovementSummary(runsRead.runs, artifacts);
+  const proposalSummary = buildProposalSelfImprovementSummary(scopedProposals, proposalRead.skippedProposals, scopedApprovedSignalIndex, {
+    excludedByRunScope: proposalRead.proposals.length - scopedProposals.length,
+  });
+  const maintenanceSummary = buildMaintenanceSelfImprovementSummary({
+    approvals: scopedApprovals,
+    totalApprovalsAvailable: approvalsRead.approvals.length,
+    maintenanceGraphs: {
+      ...maintenanceGraphs,
+      skippedApprovals: approvalsRead.skippedApprovals.length,
+    },
+    runs: runsRead.runs,
+    artifacts,
+    proposalSummary,
+    scopeActive: runScope.active,
+    approvedProposalIds: scopedApprovedProposalIds,
+  });
+  return {
+    sources: {
+      runsDir: sourceContext.runsDir ? displayPath(sourceContext.runsDir) : null,
+      proposalsDir: sourceContext.proposalsDir ? displayPath(sourceContext.proposalsDir) : null,
+      runLimit,
+      totalRunsAvailable: runsRead.totalRuns ?? runsRead.runs.length,
+      runScope: {
+        source: runScope.source,
+        total: runScope.runIds.length,
+        runIds: runScope.runIds.slice(0, 30),
+      },
+      totalProposalsAvailable: proposalRead.proposals.length,
+      proposalsExcludedByRunScope: proposalRead.proposals.length - scopedProposals.length,
+      totalApprovalsAvailable: approvalsRead.approvals.length,
+      approvalsExcludedByRunScope: approvalsRead.approvals.length - scopedApprovals.length,
+      approvalFiles: scopedApprovals.map((item) => displayPath(item.filePath)),
+      patchDraftFiles: flowArtifacts.patchDrafts.map((item) => displayPath(item.filePath)),
+      curationFiles: flowArtifacts.curations.map((item) => displayPath(item.filePath)),
+      maintenanceGraphs: maintenanceGraphs.graphs.map((item) => displayPath(item.filePath)),
+      skippedRuns: runsRead.skippedRuns,
+      skippedProposals: proposalRead.skippedProposals,
+      skippedApprovals: approvalsRead.skippedApprovals,
+      skippedPatchDrafts: flowArtifacts.skippedPatchDrafts,
+      skippedCurations: flowArtifacts.skippedCurations,
+      skippedMaintenanceGraphs: maintenanceGraphs.skippedGraphs,
+    },
+    runs: runSummary,
+    proposals: proposalSummary,
+    recurringFailures: buildRecurringFailureSummary(runsRead.runs.length ? [] : clusters, runsRead.runs),
+    maintenance: maintenanceSummary,
+  };
+}
+
 function buildEvalDigest(args) {
   const evalDir = resolveDigestEvalDir(args);
   const artifacts = readEvalArtifacts(evalDir);
@@ -1542,6 +2247,7 @@ function buildEvalDigest(args) {
   clusters.sort((left, right) => (right.runIds.length - left.runIds.length) || left.classification.localeCompare(right.classification));
   const maintenanceCommands = sortedUnique(clusters.map((cluster) => cluster.maintenanceCommand));
   const deltaDraftCommands = sortedUnique(clusters.map((cluster) => cluster.deltaDraftCommand));
+  const selfImprovement = buildSelfImprovementDigest(args, evalDir, artifacts, clusters);
   const payload = {
     schema_version: 'p2a.eval_digest.v1',
     digestId: `eval-digest-${stableHash({
@@ -1550,6 +2256,12 @@ function buildEvalDigest(args) {
       grades: byVerdict,
       compares: compareByVerdict,
       clusters: clusterByClassification,
+      selfImprovement: {
+        runs: selfImprovement.runs.total,
+        proposals: selfImprovement.proposals.total,
+        approvals: selfImprovement.maintenance.approvals,
+        recurring: selfImprovement.recurringFailures.clusters,
+      },
     })}`,
     generatedAt: new Date().toISOString(),
     evalDir: displayPath(evalDir),
@@ -1586,6 +2298,7 @@ function buildEvalDigest(args) {
       maintenanceCommands: maintenanceCommands.slice(0, 10),
       deltaDraftCommands: deltaDraftCommands.slice(0, 10),
     },
+    selfImprovement,
     skippedFiles: artifacts.skippedFiles,
     nextActions: [],
   };
@@ -1610,6 +2323,21 @@ function evalDigestNextActions(payload) {
   if (payload.analyses.deltaDraftCommands.length) {
     actions.push(`Open a delta iteration for scope-changing findings: ${payload.analyses.deltaDraftCommands[0]}`);
   }
+  if (payload.selfImprovement?.runs?.failureEvidence?.incomplete > 0) {
+    actions.push('Complete missing reproduction/localization/guard evidence for failed or blocked runs before mining more improvements.');
+  }
+  if (payload.selfImprovement?.recurringFailures?.clusters > 0) {
+    actions.push('Review recurring failure clusters; repeated classifications should become proposal or maintenance follow-up work.');
+  }
+  if (payload.selfImprovement?.proposals?.pendingReview > 0) {
+    actions.push('Review pending proposal candidates and approve, reject, or defer them before measuring conversion.');
+  }
+  if (payload.selfImprovement?.maintenance?.pendingConversions > 0) {
+    actions.push('Convert approved proposal signals into maintenance tasks, or record why conversion is intentionally deferred.');
+  }
+  if (payload.selfImprovement?.maintenance?.postMaintenanceVerification?.failed > 0) {
+    actions.push('Inspect failed post-maintenance verification runs before treating the improvement as effective.');
+  }
   if (!actions.length) actions.push('No immediate eval follow-up required from generated artifacts.');
   return actions;
 }
@@ -1622,6 +2350,10 @@ function printEvalDigest(payload, writeResult) {
   console.log(`- acceptance: ${payload.grades.acceptanceCoverage.covered}/${payload.grades.acceptanceCoverage.total} covered`);
   console.log(`- compare: total=${payload.compares.total} byVerdict=${JSON.stringify(payload.compares.byVerdict)} failingSignals=${payload.compares.failingSignals.length}`);
   console.log(`- analysis: total=${payload.analyses.total} clusters=${payload.analyses.clusters} byClassification=${JSON.stringify(payload.analyses.byClassification)}`);
+  console.log(`- self-improvement: runs=${payload.selfImprovement.runs.total} failedOrBlocked=${payload.selfImprovement.runs.failedOrBlocked} proposals=${payload.selfImprovement.proposals.total} approved=${payload.selfImprovement.proposals.approved} recurringFailures=${payload.selfImprovement.recurringFailures.clusters}`);
+  console.log(`- failure evidence: complete=${payload.selfImprovement.runs.failureEvidence.complete}/${payload.selfImprovement.runs.failureEvidence.required} rate=${percentLabel(payload.selfImprovement.runs.failureEvidence.completeRate)}`);
+  console.log(`- maintenance conversion: converted=${payload.selfImprovement.maintenance.convertedApprovals}/${payload.selfImprovement.maintenance.approvedProposalSignals} rate=${percentLabel(payload.selfImprovement.maintenance.conversionRate)}`);
+  console.log(`- post-maintenance verification: passed=${payload.selfImprovement.maintenance.postMaintenanceVerification.passed}/${payload.selfImprovement.maintenance.postMaintenanceVerification.total} rate=${percentLabel(payload.selfImprovement.maintenance.postMaintenanceVerification.successRate)}`);
   if (writeResult.wrote) console.log(`- output: ${displayPath(writeResult.filePath)}`);
   if (payload.nextActions.length) {
     console.log('next actions:');

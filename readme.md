@@ -68,10 +68,13 @@ or app session stays foreground-supervised by the user.
 - `p2a eval analyze` clusters failures and verification gaps.
 - `p2a eval generate` writes grade, analysis, compare, and eval index artifacts.
 - `p2a eval digest` summarizes generated evaluation artifacts.
+- Eval digests include self-improvement metrics for recent failed/blocked run evidence, proposal review status scoped to source runs, approval-artifact-backed conversion, recurring failure clusters, and post-maintenance verification.
 
 ### Improvement Proposal Loop
 
 - Mine failed or blocked runs into structured improvement proposals.
+- Mark proposals as project-local, Plan2Agent toolkit, or companion-project upstream candidates.
+- Score proposal quality from evidence, reproduction, impact scope, validation, and risk rationale.
 - Review, curate, draft, and approve proposal artifacts without automatically applying patches.
 - Convert approved proposal drafts into maintenance tasks.
 - Execute approved maintenance tasks through the same supervised execution path.
@@ -80,14 +83,15 @@ or app session stays foreground-supervised by the user.
 
 - Use Plan2Agent Memory as an optional long-term artifact store and search backend.
 - `p2a memory status` compares local artifacts with remote snapshots.
-- `p2a memory push` uploads project, iteration, document, task, graph, and run snapshots.
+- `p2a memory push` uploads project, iteration, document, proposal, task, graph, and run snapshots.
 - `p2a memory search` and `p2a memory history` support cross-session recall.
-- `p2a memory digest` summarizes failure and proposal history.
+- `p2a memory digest` summarizes failure and proposal history and tracks whether Memory search results were reused by run, proposal, or eval artifacts.
 
 ### GUI Workbench
 
 - Electron-based GUI for project overview, artifacts, tasks, runs, and operational reports.
 - Shows update reports, eval analysis, eval digest, memory digest, memory history, and memory search.
+- Shows an improvement queue with proposal status, quality score, source failure/run, and approved maintenance links.
 - Includes supervised PTY-oriented workflow surfaces for foreground agent sessions.
 
 ### Scaffold, Update, and Drift Checks
@@ -96,6 +100,29 @@ or app session stays foreground-supervised by the user.
 - Enhance projects with memory, GUI, orchestration, proposals, and dev-skill capabilities.
 - Preview and apply safe toolkit updates with update and upgrade reports.
 - Run doctor and parity checks to find missing files, stale assets, and configuration drift.
+
+## Companion Projects
+
+P2A can work with optional sibling projects. They are not required for the core planning,
+validation, iteration, execution, eval, or proposal loops, and local `.plan2agent/` artifacts remain
+the source of truth.
+
+| Project | GitHub | Purpose | How P2A Uses It |
+| --- | --- | --- | --- |
+| `plan2agent-memory` | <https://github.com/silbaram/plan2agent-memory> | Optional headless REST service for relational artifact storage, lineage, hash comparison, history, keyword search, and vector-search-ready document chunks. | `p2a memory status/push/pull/search/history/digest` can use the server as a long-term artifact store and search backend. If no Memory server is configured, P2A still runs from local `.plan2agent/` artifacts. |
+| `plan2agent-feature-radar` | <https://github.com/silbaram/plan2agent-feature-radar> | Optional skill/subagent research workflow for early idea research and read-only existing-project analysis across web, docs, GitHub, changelogs, issues, PRs, discussions, and local project signals. | Radar can export `.feature-radar/runs/<project-slug>/` and optionally `.plan2agent/artifacts/<project_id>/preflight-research/`. P2A imports that preflight export as `LOCAL-n`/`WEB-n` evidence and Gate B reference candidates; recommendations stay candidate input until Gate B marks them `selected`, `deferred`, or `rejected`. |
+
+The local `plan2agent-feature-radar` checkout may not have a git remote configured yet; update the
+GitHub link above if the canonical remote differs.
+
+For local toolkit development, these repos are commonly checked out next to this repository:
+
+```text
+projects/
+  plan2agent/
+  plan2agent-memory/
+  plan2agent-feature-radar/
+```
 
 ## Why Use Plan2Agent?
 
@@ -139,6 +166,8 @@ Then work inside the target project:
 cd <project-dir>
 node .plan2agent/scripts/p2a.mjs info
 ```
+
+Scaffold records a default `projectId` in both `.plan2agent/project.config.json` and `.plan2agent/manifest.json` by normalizing the target directory basename to kebab-case. After scaffold, `.plan2agent/project.config.json.projectId` is the source of truth; the directory basename is only the fresh-scaffold seed. If older local artifacts already exist, their artifact/spec/task graph id is used as a recovery fallback before deriving from a renamed directory. Planning artifacts still live under `.plan2agent/artifacts/<project_id>/`, but in scaffold projects users normally use the stored `projectId` instead of inventing a new id for each idea.
 
 ### 2. Start from a one-sentence idea
 
@@ -222,7 +251,8 @@ node .plan2agent/scripts/p2a.mjs eval generate \
   --artifacts .plan2agent/artifacts/<project_id>
 
 node .plan2agent/scripts/p2a.mjs eval digest \
-  --artifacts .plan2agent/artifacts/<project_id>
+  --artifacts .plan2agent/artifacts/<project_id> \
+  --recent-runs 30
 
 node .plan2agent/scripts/p2a.mjs proposals mine \
   --artifacts .plan2agent/artifacts/<project_id>

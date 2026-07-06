@@ -11,6 +11,7 @@ The Markdown analysis must restate the inferred scope, separate known facts from
 
 Rules:
 - Evidence ids must use `USER-n`, `LOCAL-n`, or `WEB-n`; every `WEB-n` entry must include title, URL, and `used_for`.
+- Treat Feature Radar preflight files as `LOCAL-n` evidence and cite them when they affect questions, assumptions, or scope.
 - Do not edit files.
 - Do not run mutating commands.
 - Use web lookup (where the CLI provides it) only for prior-art or domain semantics that materially affect the questions; add it to the `evidence` array and cite the source id in the rationale when used.

@@ -321,7 +321,9 @@ function validateScaffoldFixtureCase() {
       || copiedExcludedToolFiles.length
       || manifestDesignSystemFiles.length
       || manifest.provenance?.mode !== 'scaffold'
+      || manifest.projectId !== 'target-project'
       || manifest.aiToolTargets.join(',') !== 'codex,claude,gemini'
+      || config.projectId !== 'target-project'
       || config.testCommand !== null
       || config.verificationTimeoutMs !== 600000
       || config.runTracking?.runsDir !== '.plan2agent/runs'
@@ -761,10 +763,10 @@ function validateScaffoldFixtureCase() {
       return { status: failureStatus(result), checks };
     }
 
-    const dryRunRoot = path.join(tempRoot, 'dry-run-target');
+    const dryRunRoot = path.join(tempRoot, 'P2AProjectIdUXCheck');
     result = runHandoff(['scaffold', '--target', dryRunRoot, '--tools', 'none', '--dry-run']);
     checks += 1;
-    if (result.status !== 0 || existsSync(dryRunRoot)) {
+    if (result.status !== 0 || !result.stdout.includes('projectId: p2-a-project-id-ux-check') || existsSync(dryRunRoot)) {
       console.error('scaffold dry-run fixture failed');
       writeResultOutput(result);
       return { status: failureStatus(result), checks };
@@ -783,13 +785,14 @@ function validateScaffoldFixtureCase() {
     delete enhanceConfig.devExecution;
     delete enhanceConfig.roleProfiles;
     delete enhanceConfig.promptTemplates;
+    delete enhanceConfig.projectId;
     writeFileSync(enhanceConfigPath, `${JSON.stringify(enhanceConfig, null, 2)}\n`);
     result = runHandoff(['enhance', 'dev-skills', '--target', enhanceTargetRoot, '--tools', 'codex', '--dry-run']);
     checks += 1;
     if (
       result.status !== 0
       || !result.stdout.includes('Plan2Agent enhance dev-skills dry run')
-      || !result.stdout.includes('configUpdatedKeys: devExecution,roleProfiles,promptTemplates')
+      || !result.stdout.includes('configUpdatedKeys: projectId,devExecution,roleProfiles,promptTemplates')
       || !result.stdout.includes('dry-run: no files written')
       || existsSync(path.join(enhanceTargetRoot, '.codex', 'agents', 'p2a-implementer.toml'))
     ) {
@@ -804,6 +807,8 @@ function validateScaffoldFixtureCase() {
     if (
       result.status !== 0
       || enhancedConfig.devExecution?.scopePolicy !== 'task_only'
+      || enhancedConfig.projectId !== 'enhance-target'
+      || enhancedManifest.projectId !== 'enhance-target'
       || enhancedConfig.roleProfiles?.monitor?.defaultProfile !== 'manual_monitor'
       || enhancedConfig.promptTemplates?.providerGuide !== 'p2a.provider_guide.v1'
       || !enhancedManifest.aiToolTargets?.includes('codex')
@@ -1121,6 +1126,7 @@ function validateScaffoldFixtureCase() {
     const applyConfigPath = path.join(applyUpdateRoot, '.plan2agent', 'project.config.json');
     const applyConfig = JSON.parse(readFileSync(applyConfigPath, 'utf8'));
     delete applyConfig.devExecution;
+    delete applyConfig.projectId;
     writeFileSync(applyConfigPath, `${JSON.stringify(applyConfig, null, 2)}\n`);
     result = runHandoff(['update', '--target', applyUpdateRoot, '--apply']);
     checks += 1;
@@ -1133,7 +1139,9 @@ function validateScaffoldFixtureCase() {
       || !result.stdout.includes('status: applied')
       || !result.stdout.includes('report: .plan2agent/update-reports/update-')
       || readFileSync(staleRuntimePath, 'utf8') !== readFileSync(path.join(ROOT, 'scripts', 'p2a_eval.mjs'), 'utf8')
+      || appliedUpdateConfig.projectId !== 'target-project'
       || appliedUpdateConfig.devExecution?.scopePolicy !== 'task_only'
+      || appliedUpdateManifest.projectId !== 'target-project'
       || !appliedUpdateManifest.updates?.some((entry) => entry.command === 'update')
 	      || applyUpdateReports.length !== 3
 	    ) {
@@ -1163,19 +1171,57 @@ function validateScaffoldFixtureCase() {
     cpSync(targetRoot, applyUpgradeRoot, { recursive: true });
     const staleSchemaPath = path.join(applyUpgradeRoot, '.plan2agent', 'schemas', 'run.schema.json');
     writeFileSync(staleSchemaPath, '{"stale": true}\n', 'utf8');
+    const applyUpgradeManifestPath = path.join(applyUpgradeRoot, '.plan2agent', 'manifest.json');
+    const applyUpgradeManifestBefore = JSON.parse(readFileSync(applyUpgradeManifestPath, 'utf8'));
+    delete applyUpgradeManifestBefore.projectId;
+    writeFileSync(applyUpgradeManifestPath, `${JSON.stringify(applyUpgradeManifestBefore, null, 2)}\n`);
     result = runHandoff(['upgrade', '--target', applyUpgradeRoot, '--apply']);
     checks += 1;
-    const appliedUpgradeManifest = JSON.parse(readFileSync(path.join(applyUpgradeRoot, '.plan2agent', 'manifest.json'), 'utf8'));
+    const appliedUpgradeManifest = JSON.parse(readFileSync(applyUpgradeManifestPath, 'utf8'));
     if (
       result.status !== 0
       || !result.stdout.includes('Plan2Agent upgrade apply')
       || !result.stdout.includes('status: applied')
       || readFileSync(staleSchemaPath, 'utf8') !== readFileSync(path.join(ROOT, 'schemas', 'run.schema.json'), 'utf8')
+      || appliedUpgradeManifest.projectId !== 'target-project'
       || !appliedUpgradeManifest.updates?.some((entry) => entry.command === 'upgrade')
     ) {
       console.error('upgrade apply fixture failed');
       writeResultOutput(result);
       console.error(JSON.stringify({ appliedUpgradeManifest }, null, 2));
+      return { status: failureStatus(result), checks };
+    }
+
+    const legacyProjectIdRoot = path.join(tempRoot, 'renamed-target');
+    cpSync(targetRoot, legacyProjectIdRoot, { recursive: true });
+    const legacyProjectIdConfigPath = path.join(legacyProjectIdRoot, '.plan2agent', 'project.config.json');
+    const legacyProjectIdManifestPath = path.join(legacyProjectIdRoot, '.plan2agent', 'manifest.json');
+    const legacyArtifactId = 'legacy-artifact-id';
+    const legacyProjectIdConfig = JSON.parse(readFileSync(legacyProjectIdConfigPath, 'utf8'));
+    const legacyProjectIdManifest = JSON.parse(readFileSync(legacyProjectIdManifestPath, 'utf8'));
+    delete legacyProjectIdConfig.projectId;
+    delete legacyProjectIdManifest.projectId;
+    writeFileSync(legacyProjectIdConfigPath, `${JSON.stringify(legacyProjectIdConfig, null, 2)}\n`);
+    writeFileSync(legacyProjectIdManifestPath, `${JSON.stringify(legacyProjectIdManifest, null, 2)}\n`);
+    mkdirSync(path.join(legacyProjectIdRoot, '.plan2agent', 'artifacts', legacyArtifactId), { recursive: true });
+    writeFileSync(
+      path.join(legacyProjectIdRoot, '.plan2agent', 'artifacts', legacyArtifactId, 'current-spec.json'),
+      `${JSON.stringify({ project_id: legacyArtifactId }, null, 2)}\n`,
+      'utf8',
+    );
+    result = runHandoff(['update', '--target', legacyProjectIdRoot, '--apply']);
+    checks += 1;
+    const restoredLegacyProjectIdConfig = JSON.parse(readFileSync(legacyProjectIdConfigPath, 'utf8'));
+    const restoredLegacyProjectIdManifest = JSON.parse(readFileSync(legacyProjectIdManifestPath, 'utf8'));
+    if (
+      result.status !== 0
+      || !result.stdout.includes('Plan2Agent update apply')
+      || restoredLegacyProjectIdConfig.projectId !== legacyArtifactId
+      || restoredLegacyProjectIdManifest.projectId !== legacyArtifactId
+    ) {
+      console.error('legacy artifact projectId recovery fixture failed');
+      writeResultOutput(result);
+      console.error(JSON.stringify({ restoredLegacyProjectIdConfig, restoredLegacyProjectIdManifest }, null, 2));
       return { status: failureStatus(result), checks };
     }
 
@@ -1389,10 +1435,204 @@ function evalRunFixture(runId, status = 'finished') {
   };
 }
 
+function maintenanceEvalRunFixture(runId, approvalId, taskId = 'task-999') {
+  return {
+    schema_version: 'p2a.run.v1',
+    runId,
+    projectId: 'webhook-api-service',
+    taskId,
+    taskTitle: 'Apply approved proposal maintenance',
+    iterationId: 'maintenance',
+    sourceLayout: 'maintenance',
+    taskGraphRef: 'iterations/maintenance/gate-c-task-graph/task-graph.json',
+    sourceSpecRef: 'current-spec.json',
+    agentTool: 'manual',
+    workspaceRef: 'fixture',
+    workspacePath: ROOT,
+    isolation: {
+      mode: 'none',
+      branch: null,
+      worktree: null,
+      baseRef: null,
+      created: false,
+      createCommand: null,
+      createExitCode: null,
+      createOutputTail: null,
+    },
+    status: 'finished',
+    startedAt: '2026-07-02T00:02:00.000Z',
+    updatedAt: '2026-07-02T00:03:00.000Z',
+    finishedAt: '2026-07-02T00:03:00.000Z',
+    changedFiles: ['scripts/p2a_eval.mjs'],
+    verification: [{
+      type: 'test',
+      command: 'node scripts/run_fixtures.mjs --eval-only',
+      status: 'passed',
+      exitCode: 0,
+      durationMs: 1000,
+      startedAt: '2026-07-02T00:02:30.000Z',
+      finishedAt: '2026-07-02T00:02:31.000Z',
+      stdoutTail: 'eval fixtures passed',
+      stderrTail: null,
+      source: 'command',
+    }],
+    notes: [
+      `proposalApproval=${approvalId}`,
+      'proposalPatchDraft=proposal-patch-draft-111111111111',
+      'proposalCandidate=candidate-111111111111',
+    ],
+  };
+}
+
+function writeEvalProposal(proposalsDir, proposal) {
+  mkdirSync(proposalsDir, { recursive: true });
+  writeFileSync(path.join(proposalsDir, `${proposal.proposalId}.json`), `${JSON.stringify({
+    schema_version: 'p2a.skill_proposal.v1',
+    recommendedChange: 'Fixture proposal change.',
+    targetFiles: ['scripts/p2a_eval.mjs'],
+    risk: 'low',
+    evidence: ['fixture evidence'],
+    status: 'proposed',
+    ...proposal,
+  }, null, 2)}\n`, 'utf8');
+}
+
+function writeSelfImprovementMaintenanceFixture(rootDir, options = {}) {
+  mkdirSync(rootDir, { recursive: true });
+  const approvalId = options.approvalId ?? 'proposal-draft-approval-111111111111';
+  const draftId = options.draftId ?? 'proposal-patch-draft-111111111111';
+  const candidateId = options.candidateId ?? 'candidate-111111111111';
+  const curationId = options.curationId ?? 'proposal-curation-111111111111';
+  const groupId = options.groupId ?? 'group-111111111111';
+  const proposalIds = options.proposalIds ?? ['proposal-run-eval-failed-verification_failed'];
+  const sourceRunIds = options.sourceRunIds ?? ['run-eval-failed'];
+  const taskId = options.taskId ?? 'task-999';
+  const curationPath = path.join(rootDir, 'proposal-curation.json');
+  const draftPath = path.join(rootDir, 'proposal-patch-draft.json');
+  writeFileSync(curationPath, `${JSON.stringify({
+    schema_version: 'p2a.proposal_curation.v1',
+    curationId,
+    generatedAt: '2026-07-02T00:01:30.000Z',
+    sourceReview: 'proposal-review.json',
+    sourceProposalsDir: 'proposals',
+    summary: {
+      totalCandidates: 1,
+      byReadiness: { patch_candidate: 1, needs_evidence: 0, watch: 0, no_action: 0 },
+      byRecommendedDisposition: { approve: 1, defer: 0, reject: 0, needs_more_evidence: 0 },
+      quality: { averageScore: 100, strong: 1, medium: 0, weak: 0, needsAttention: 0 },
+    },
+    candidates: [{
+      candidateId,
+      groupId,
+      proposalIds,
+      classification: 'verification_failed',
+      title: 'Improve verification failed handling',
+      problemStatement: 'Fixture approved proposal without mutating the proposal status field.',
+      recommendedChange: 'Fixture proposal change.',
+      recommendedDisposition: 'approve',
+      readiness: 'patch_candidate',
+      priority: 'P1',
+      risk: 'medium',
+      frequency: 1,
+      targetFiles: ['scripts/p2a_eval.mjs'],
+      sourceRunIds,
+      evidenceStrength: 'medium',
+      rationale: 'Fixture approval artifact links the proposal to maintenance work.',
+      nextAction: 'Prepare a separate patch for human approval; do not apply automatically.',
+      separatePatchRequired: true,
+      quality: {
+        averageScore: 100,
+        band: 'strong',
+        needsAttention: 0,
+        missing: [],
+      },
+    }],
+  }, null, 2)}\n`, 'utf8');
+  writeFileSync(draftPath, `${JSON.stringify({
+    schema_version: 'p2a.proposal_patch_draft.v1',
+    draftId,
+    generatedAt: '2026-07-02T00:01:45.000Z',
+    sourceCuration: curationPath,
+    candidateId,
+    classification: 'verification_failed',
+    title: 'Patch draft: Improve verification failed handling',
+    status: 'draft',
+    approvalRequired: true,
+    autoApplyAllowed: false,
+    targetFiles: ['scripts/p2a_eval.mjs'],
+    intendedChanges: [{
+      file: 'scripts/p2a_eval.mjs',
+      changeType: 'update',
+      description: 'Fixture approved proposal follow-up.',
+    }],
+    verificationPlan: [{
+      type: 'fixture',
+      command: 'node scripts/run_fixtures.mjs',
+      required: true,
+    }],
+    risks: ['Fixture risk.'],
+    rationale: 'Fixture draft records an approval-ready candidate without mutating source proposals.',
+  }, null, 2)}\n`, 'utf8');
+  const maintenanceGraphPath = path.join(rootDir, 'iterations', 'maintenance', 'gate-c-task-graph', 'task-graph.json');
+  mkdirSync(path.dirname(maintenanceGraphPath), { recursive: true });
+  writeFileSync(maintenanceGraphPath, `${JSON.stringify({
+    schema_version: 'p2a.task_graph.v1',
+    projectId: 'webhook-api-service',
+    version: 'maintenance',
+    sourceSpec: '../../../current-spec.json',
+    tasks: [{
+      id: taskId,
+      title: 'Apply approved proposal maintenance',
+      description: 'Fixture maintenance task linked to an approved proposal.',
+      status: 'done',
+      dependencies: [],
+      acceptanceCriteria: ['Post-maintenance eval fixtures pass.'],
+      targetArea: 'maintenance',
+      suggestedAgentPrompt: 'Apply the approved proposal maintenance fixture.',
+      sourceSpecRefs: [
+        `proposal-draft-approval:${approvalId}`,
+        `proposal-patch-draft:${draftId}`,
+        `proposal-candidate:${candidateId}`,
+        'proposal-target:project',
+      ],
+    }],
+  }, null, 2)}\n`, 'utf8');
+  const approvalPath = path.join(rootDir, 'proposal-draft-approval.json');
+  writeFileSync(approvalPath, `${JSON.stringify({
+    schema_version: 'p2a.proposal_draft_approval.v1',
+    approvalId,
+    approvedAt: '2026-07-02T00:02:00.000Z',
+    approvedBy: 'fixture-reviewer',
+    approvalNote: 'Fixture approval',
+    sourceDraft: draftPath,
+    draftId,
+    candidateId,
+    target: 'project',
+    autoApplyPerformed: false,
+    maintenanceTask: {
+      taskGraph: maintenanceGraphPath,
+      taskId,
+      title: 'Apply approved proposal maintenance',
+      sourceSpecRefs: [
+        `proposal-draft-approval:${approvalId}`,
+        `proposal-patch-draft:${draftId}`,
+        `proposal-candidate:${candidateId}`,
+        'proposal-target:project',
+      ],
+    },
+  }, null, 2)}\n`, 'utf8');
+  return { approvalId, taskId, maintenanceGraphPath, approvalPath };
+}
+
 function writeEvalRuns(runsDir, runs) {
   mkdirSync(runsDir, { recursive: true });
   for (const run of runs) {
     writeFileSync(path.join(runsDir, `${run.runId}.json`), `${JSON.stringify(run, null, 2)}\n`, 'utf8');
+  }
+  const tasksById = new Map();
+  for (const run of runs) {
+    if (!tasksById.has(run.taskId)) tasksById.set(run.taskId, []);
+    tasksById.get(run.taskId).push(run.runId);
   }
   writeFileSync(path.join(runsDir, 'run-index.json'), `${JSON.stringify({
     schema_version: 'p2a.run_index.v1',
@@ -1409,11 +1649,11 @@ function writeEvalRuns(runsDir, runs) {
       startedAt: run.startedAt,
       finishedAt: run.finishedAt,
     })),
-    tasks: [{
-      taskId: 'task-002',
-      runIds: runs.map((run) => run.runId),
-      latestRunId: runs[runs.length - 1]?.runId ?? null,
-    }],
+    tasks: [...tasksById.entries()].map(([taskId, runIds]) => ({
+      taskId,
+      runIds,
+      latestRunId: runIds[runIds.length - 1] ?? null,
+    })),
   }, null, 2)}\n`, 'utf8');
 }
 
@@ -1425,8 +1665,15 @@ function validateEvalFixtureCases() {
     const candidateRunsDir = path.join(tempRoot, 'candidate-runs');
     const passRun = evalRunFixture('run-eval-pass');
     const failedRun = evalRunFixture('run-eval-failed', 'failed');
+    const repeatedFailedRun = evalRunFixture('run-eval-failed-repeat', 'failed');
+    const selfImprovementFixture = writeSelfImprovementMaintenanceFixture(tempRoot);
+    const maintenanceRun = maintenanceEvalRunFixture(
+      'run-eval-maintenance-pass',
+      selfImprovementFixture.approvalId,
+      selfImprovementFixture.taskId,
+    );
     writeEvalRuns(baselineRunsDir, [passRun]);
-    writeEvalRuns(candidateRunsDir, [passRun, failedRun]);
+    writeEvalRuns(candidateRunsDir, [passRun, failedRun, repeatedFailedRun, maintenanceRun]);
 
     const graphPath = path.join(FIXTURE_ROOT, 'webhook-api-service', 'task-graph.json');
     let result = runEval(['grade', '--graph', graphPath, '--run', path.join(baselineRunsDir, 'run-eval-pass.json')]);
@@ -1462,7 +1709,8 @@ function validateEvalFixtureCases() {
       return { status: failureStatus(result), checks };
     }
 
-    result = runProposals(['mine', '--runs', candidateRunsDir, '--dry-run']);
+    const evalProposalsDir = path.join(tempRoot, 'proposals');
+    result = runProposals(['mine', '--runs', candidateRunsDir, '--proposals', evalProposalsDir]);
     checks += 1;
     if (
       result.status !== 0
@@ -1473,6 +1721,32 @@ function validateEvalFixtureCases() {
       writeResultOutput(result);
       return { status: failureStatus(result), checks };
     }
+    const approvedProposalPath = path.join(evalProposalsDir, 'proposal-run-eval-failed-verification_failed.json');
+    const approvedProposal = JSON.parse(readFileSync(approvedProposalPath, 'utf8'));
+    if (
+      approvedProposal.riskRationale !== 'verification_failed can recur across runs and should be corrected before relying on similar execution guidance.'
+      || approvedProposal.quality?.score !== 100
+      || approvedProposal.quality?.band !== 'strong'
+      || approvedProposal.status !== 'proposed'
+    ) {
+      console.error('proposal quality mining fixture failed');
+      console.error(JSON.stringify({ approvedProposal }, null, 2));
+      return { status: 1, checks };
+    }
+    writeEvalProposal(evalProposalsDir, {
+      proposalId: 'proposal-fixture-rejected',
+      sourceRunId: 'run-eval-failed',
+      problem: 'Fixture rejected proposal.',
+      status: 'rejected',
+      note: 'Rejected in fixture to exercise self-improvement metrics.',
+    });
+    writeEvalProposal(evalProposalsDir, {
+      proposalId: 'proposal-fixture-deferred',
+      sourceRunId: 'run-eval-failed-repeat',
+      problem: 'Fixture deferred proposal.',
+      status: 'deferred',
+      note: 'Deferred in fixture to exercise self-improvement metrics.',
+    });
 
     result = runEval(['analyze', '--runs', candidateRunsDir]);
     checks += 1;
@@ -1530,12 +1804,12 @@ function validateEvalFixtureCases() {
 	    if (
 	      result.status !== 0
 	      || !result.stdout.includes('Plan2Agent eval generate')
-	      || !existsSync(passGradePath)
+      || !existsSync(passGradePath)
       || !existsSync(failedGradePath)
       || !existsSync(analysisPath)
       || evalIndex?.schema_version !== 'p2a.eval_index.v1'
-      || evalIndex?.summary?.grades !== 2
-      || evalIndex?.summary?.nonPassGrades !== 1
+      || evalIndex?.summary?.grades !== 3
+      || evalIndex?.summary?.nonPassGrades !== 2
       || evalIndex?.summary?.clusters !== 1
       || failedGrade?.run?.structuredEvidence?.hasGuard !== true
     ) {
@@ -1568,8 +1842,8 @@ function validateEvalFixtureCases() {
 	    if (
 	      result.status !== 0
 	      || existsSync(staleGradePath)
-	      || regeneratedEvalIndex?.summary?.grades !== 2
-	      || regeneratedEvalIndex?.summary?.nonPassGrades !== 1
+	      || regeneratedEvalIndex?.summary?.grades !== 3
+	      || regeneratedEvalIndex?.summary?.nonPassGrades !== 2
 	    ) {
 	      console.error('eval generate stale output cleanup fixture failed');
 	      writeResultOutput(result);
@@ -1578,7 +1852,13 @@ function validateEvalFixtureCases() {
 
 	    result = runEval(['digest', '--eval', evalOutputDir]);
 	    checks += 1;
-	    if (result.status !== 0 || !result.stdout.includes('Plan2Agent eval digest') || !result.stdout.includes('"pass":1') || !result.stdout.includes('"fail":1')) {
+	    if (
+	      result.status !== 0
+	      || !result.stdout.includes('Plan2Agent eval digest')
+	      || !result.stdout.includes('"pass":1')
+	      || !result.stdout.includes('"fail":2')
+	      || !result.stdout.includes('self-improvement: runs=4 failedOrBlocked=2 proposals=4 approved=1 recurringFailures=1')
+	    ) {
 	      console.error('eval digest fixture failed');
 	      writeResultOutput(result);
 	      return { status: failureStatus(result), checks };
@@ -1610,13 +1890,265 @@ function validateEvalFixtureCases() {
 	      || !existsSync(evalDigestPath)
       || evalDigest?.schema_version !== 'p2a.eval_digest.v1'
       || evalDigest?.grades?.byVerdict?.pass !== 1
-      || evalDigest?.grades?.byVerdict?.fail !== 1
+      || evalDigest?.grades?.byVerdict?.fail !== 2
       || evalDigest?.analyses?.clusters !== 1
+      || evalDigest?.selfImprovement?.runs?.total !== 4
+      || evalDigest?.selfImprovement?.runs?.failedOrBlocked !== 2
+      || evalDigest?.selfImprovement?.runs?.failureEvidence?.complete !== 2
+      || evalDigest?.selfImprovement?.proposals?.byStatus?.approved !== 1
+      || evalDigest?.selfImprovement?.proposals?.byStatus?.rejected !== 1
+      || evalDigest?.selfImprovement?.proposals?.byStatus?.deferred !== 1
+      || evalDigest?.selfImprovement?.proposals?.byStatus?.proposed !== 1
+      || evalDigest?.selfImprovement?.proposals?.originalByStatus?.proposed !== 2
+      || evalDigest?.selfImprovement?.proposals?.approvedByArtifact !== 1
+      || evalDigest?.selfImprovement?.recurringFailures?.clusters !== 1
+      || evalDigest?.selfImprovement?.maintenance?.conversionRate !== 1
+      || evalDigest?.selfImprovement?.maintenance?.postMaintenanceVerification?.successRate !== 1
     ) {
       console.error('eval digest output fixture failed');
 	      writeResultOutput(result);
 	      return { status: failureStatus(result), checks };
 	    }
+
+    const recentRoot = path.join(tempRoot, 'self-improvement-recent-runs');
+    const recentRunsDir = path.join(recentRoot, 'runs');
+    const recentEvalDir = path.join(recentRoot, 'eval');
+    const recentProposalsDir = path.join(recentRoot, 'proposals');
+    const recentOldFailedRun = evalRunFixture('run-eval-recent-old-failed', 'failed');
+    const recentMiddlePassRun = evalRunFixture('run-eval-recent-middle-pass');
+    const recentNewFailedRun = evalRunFixture('run-eval-recent-new-failed', 'failed');
+    for (const [run, timestamp] of [
+      [recentOldFailedRun, '2026-07-02T00:01:00.000Z'],
+      [recentMiddlePassRun, '2026-07-02T00:02:00.000Z'],
+      [recentNewFailedRun, '2026-07-02T00:03:00.000Z'],
+    ]) {
+      run.startedAt = timestamp;
+      run.updatedAt = timestamp;
+      run.finishedAt = timestamp;
+    }
+    writeEvalRuns(recentRunsDir, [recentOldFailedRun, recentMiddlePassRun, recentNewFailedRun]);
+    writeSelfImprovementMaintenanceFixture(recentRoot);
+    writeEvalProposal(recentProposalsDir, {
+      proposalId: 'proposal-run-eval-failed-verification_failed',
+      sourceRunId: recentOldFailedRun.runId,
+      problem: 'Out-of-window proposal should not affect recent self-improvement metrics.',
+      status: 'proposed',
+      note: 'Exercises recent run scope filtering.',
+    });
+    const recentCurationLinkedProposalId = 'proposal-curation-source-run-linked';
+    writeSelfImprovementMaintenanceFixture(path.join(recentRoot, 'curation-linked-flow'), {
+      approvalId: 'proposal-draft-approval-222222222222',
+      draftId: 'proposal-patch-draft-222222222222',
+      candidateId: 'candidate-222222222222',
+      curationId: 'proposal-curation-222222222222',
+      groupId: 'group-222222222222',
+      proposalIds: [recentCurationLinkedProposalId],
+      sourceRunIds: [recentNewFailedRun.runId],
+      taskId: 'task-998',
+    });
+    writeEvalProposal(recentProposalsDir, {
+      proposalId: recentCurationLinkedProposalId,
+      sourceRunId: recentOldFailedRun.runId,
+      problem: 'Curation sourceRunIds should link this proposal to the recent run window.',
+      status: 'proposed',
+      note: 'Exercises curation sourceRunIds scope fallback.',
+    });
+    mkdirSync(recentEvalDir, { recursive: true });
+    writeFileSync(path.join(recentEvalDir, 'analysis.json'), `${JSON.stringify({
+      schema_version: 'p2a.eval_analysis.v1',
+      source: {
+        sourceKind: 'runs',
+        sourcePath: recentRunsDir,
+        runsDir: recentRunsDir,
+        proposalsDir: path.join(recentRoot, 'proposals'),
+      },
+      clusters: [],
+    }, null, 2)}\n`, 'utf8');
+    result = runEval(['digest', '--eval', recentEvalDir, '--recent-runs', '2', '--output', path.join(recentRoot, 'eval-digest.json')]);
+    checks += 1;
+    const recentDigest = JSON.parse(readFileSync(path.join(recentRoot, 'eval-digest.json'), 'utf8'));
+    if (
+      result.status !== 0
+      || recentDigest.selfImprovement.sources.runLimit !== 2
+      || recentDigest.selfImprovement.sources.totalRunsAvailable !== 3
+      || recentDigest.selfImprovement.sources.totalProposalsAvailable !== 2
+      || recentDigest.selfImprovement.sources.proposalsExcludedByRunScope !== 1
+      || recentDigest.selfImprovement.runs.total !== 2
+      || recentDigest.selfImprovement.runs.failedOrBlocked !== 1
+      || recentDigest.selfImprovement.runs.failureEvidence.complete !== 1
+      || recentDigest.selfImprovement.proposals.total !== 1
+      || recentDigest.selfImprovement.proposals.approved !== 1
+      || recentDigest.selfImprovement.proposals.approvedByArtifact !== 1
+      || recentDigest.selfImprovement.maintenance.approvals !== 1
+      || recentDigest.selfImprovement.maintenance.totalApprovalsAvailable !== 2
+      || recentDigest.selfImprovement.maintenance.approvalsExcludedByRunScope !== 1
+      || recentDigest.selfImprovement.maintenance.conversionRate !== 1
+    ) {
+      console.error('eval digest recent-runs self-improvement fixture failed');
+      writeResultOutput(result);
+      console.error(JSON.stringify({ recentDigest }, null, 2));
+      return { status: failureStatus(result), checks };
+    }
+
+    const legacyProposalRoot = path.join(tempRoot, 'self-improvement-legacy-approved-proposal');
+    const legacyProposalRunsDir = path.join(legacyProposalRoot, 'runs');
+    const legacyProposalEvalDir = path.join(legacyProposalRoot, 'eval');
+    const legacyProposalId = 'proposal-legacy-approved';
+    const legacyRun = evalRunFixture('run-eval-legacy-approved-failed', 'failed');
+    writeEvalRuns(legacyProposalRunsDir, [legacyRun]);
+    writeEvalProposal(path.join(legacyProposalRoot, 'proposals'), {
+      proposalId: legacyProposalId,
+      sourceRunId: legacyRun.runId,
+      problem: 'Legacy approved proposal should convert through proposal source refs.',
+      status: 'approved',
+      note: 'Exercises approval-artifact-free proposal conversion.',
+    });
+    const legacyMaintenanceGraphPath = path.join(legacyProposalRoot, 'iterations', 'maintenance', 'gate-c-task-graph', 'task-graph.json');
+    mkdirSync(path.dirname(legacyMaintenanceGraphPath), { recursive: true });
+    writeFileSync(legacyMaintenanceGraphPath, `${JSON.stringify({
+      schema_version: 'p2a.task_graph.v1',
+      projectId: 'webhook-api-service',
+      version: 'maintenance',
+      sourceSpec: '../../../current-spec.json',
+      tasks: [{
+        id: 'task-997',
+        title: 'Apply legacy approved proposal maintenance',
+        description: 'Fixture legacy maintenance task linked directly to an approved proposal.',
+        status: 'done',
+        dependencies: [],
+        acceptanceCriteria: ['Legacy proposal maintenance is represented in self-improvement metrics.'],
+        targetArea: 'maintenance',
+        suggestedAgentPrompt: 'Apply the legacy approved proposal.',
+        sourceSpecRefs: [`proposal:${legacyProposalId}`],
+      }],
+    }, null, 2)}\n`, 'utf8');
+    mkdirSync(legacyProposalEvalDir, { recursive: true });
+    writeFileSync(path.join(legacyProposalEvalDir, 'analysis.json'), `${JSON.stringify({
+      schema_version: 'p2a.eval_analysis.v1',
+      source: {
+        sourceKind: 'artifacts',
+        sourcePath: legacyProposalRoot,
+        runsDir: legacyProposalRunsDir,
+        proposalsDir: path.join(legacyProposalRoot, 'proposals'),
+      },
+      clusters: [],
+    }, null, 2)}\n`, 'utf8');
+    result = runEval(['digest', '--eval', legacyProposalEvalDir, '--output', path.join(legacyProposalRoot, 'eval-digest.json')]);
+    checks += 1;
+    const legacyProposalDigest = JSON.parse(readFileSync(path.join(legacyProposalRoot, 'eval-digest.json'), 'utf8'));
+    if (
+      result.status !== 0
+      || legacyProposalDigest.selfImprovement.proposals.total !== 1
+      || legacyProposalDigest.selfImprovement.proposals.approved !== 1
+      || legacyProposalDigest.selfImprovement.maintenance.approvals !== 0
+      || legacyProposalDigest.selfImprovement.maintenance.approvedProposalSignals !== 1
+      || legacyProposalDigest.selfImprovement.maintenance.maintenanceTasksFromProposals !== 1
+      || legacyProposalDigest.selfImprovement.maintenance.convertedApprovals !== 1
+      || legacyProposalDigest.selfImprovement.maintenance.conversionRate !== 1
+    ) {
+      console.error('eval digest legacy approved proposal conversion fixture failed');
+      writeResultOutput(result);
+      console.error(JSON.stringify({ legacyProposalDigest }, null, 2));
+      return { status: failureStatus(result), checks };
+    }
+
+    const noProposalRoot = path.join(tempRoot, 'self-improvement-no-proposals');
+    const noProposalRunsDir = path.join(noProposalRoot, 'runs');
+    const noProposalEvalDir = path.join(noProposalRoot, 'eval');
+    writeEvalRuns(noProposalRunsDir, [evalRunFixture('run-eval-no-proposal-failed', 'failed')]);
+    mkdirSync(noProposalEvalDir, { recursive: true });
+    writeFileSync(path.join(noProposalEvalDir, 'analysis.json'), `${JSON.stringify({
+      schema_version: 'p2a.eval_analysis.v1',
+      source: {
+        sourceKind: 'runs',
+        sourcePath: noProposalRunsDir,
+        runsDir: noProposalRunsDir,
+        proposalsDir: path.join(noProposalRoot, 'proposals'),
+      },
+      clusters: [],
+    }, null, 2)}\n`, 'utf8');
+    result = runEval(['digest', '--eval', noProposalEvalDir, '--output', path.join(noProposalRoot, 'eval-digest.json')]);
+    checks += 1;
+    const noProposalDigest = JSON.parse(readFileSync(path.join(noProposalRoot, 'eval-digest.json'), 'utf8'));
+    if (
+      result.status !== 0
+      || noProposalDigest.selfImprovement.proposals.total !== 0
+      || noProposalDigest.selfImprovement.proposals.pendingReview !== 0
+      || noProposalDigest.selfImprovement.runs.failureEvidence.complete !== 1
+    ) {
+      console.error('eval digest no-proposal self-improvement fixture failed');
+      writeResultOutput(result);
+      return { status: failureStatus(result), checks };
+    }
+
+    const missingEvidenceEvalDir = path.join(tempRoot, 'self-improvement-missing-evidence', 'eval');
+    mkdirSync(path.join(missingEvidenceEvalDir, 'grades'), { recursive: true });
+    writeFileSync(path.join(missingEvidenceEvalDir, 'grades', 'run-missing-evidence.json'), `${JSON.stringify({
+      schema_version: 'p2a.eval_grade.v1',
+      task: { taskId: 'task-001' },
+      run: {
+        runId: 'run-missing-evidence',
+        status: 'failed',
+        verification: [{ status: 'failed' }],
+        changedFiles: [],
+      },
+      verdict: 'fail',
+      score: 0,
+      acceptanceCoverage: [],
+      reasons: ['missing structured failure evidence fixture'],
+    }, null, 2)}\n`, 'utf8');
+    result = runEval(['digest', '--eval', missingEvidenceEvalDir, '--output', path.join(tempRoot, 'missing-evidence-digest.json')]);
+    checks += 1;
+    const missingEvidenceDigest = JSON.parse(readFileSync(path.join(tempRoot, 'missing-evidence-digest.json'), 'utf8'));
+    if (
+      result.status !== 0
+      || missingEvidenceDigest.selfImprovement.runs.failedOrBlocked !== 1
+      || missingEvidenceDigest.selfImprovement.runs.failureEvidence.incomplete !== 1
+      || missingEvidenceDigest.selfImprovement.runs.failureEvidence.missing.reproduction !== 1
+      || missingEvidenceDigest.selfImprovement.runs.failureEvidence.missing.localization !== 1
+      || missingEvidenceDigest.selfImprovement.runs.failureEvidence.missing.guard !== 1
+    ) {
+      console.error('eval digest missing-evidence self-improvement fixture failed');
+      writeResultOutput(result);
+      return { status: failureStatus(result), checks };
+    }
+
+    const pendingConversionRoot = path.join(tempRoot, 'self-improvement-pending-conversion');
+    const pendingConversionRunsDir = path.join(pendingConversionRoot, 'runs');
+    const pendingConversionProposalsDir = path.join(pendingConversionRoot, 'proposals');
+    const pendingConversionEvalDir = path.join(pendingConversionRoot, 'eval');
+    writeEvalRuns(pendingConversionRunsDir, [evalRunFixture('run-eval-pending-conversion', 'failed')]);
+    writeEvalProposal(pendingConversionProposalsDir, {
+      proposalId: 'proposal-pending-conversion',
+      sourceRunId: 'run-eval-pending-conversion',
+      problem: 'Approved proposal without a maintenance task.',
+      status: 'approved',
+    });
+    mkdirSync(pendingConversionEvalDir, { recursive: true });
+    writeFileSync(path.join(pendingConversionEvalDir, 'analysis.json'), `${JSON.stringify({
+      schema_version: 'p2a.eval_analysis.v1',
+      source: {
+        sourceKind: 'runs',
+        sourcePath: pendingConversionRunsDir,
+        runsDir: pendingConversionRunsDir,
+        proposalsDir: pendingConversionProposalsDir,
+      },
+      clusters: [],
+    }, null, 2)}\n`, 'utf8');
+    result = runEval(['digest', '--eval', pendingConversionEvalDir, '--output', path.join(pendingConversionRoot, 'eval-digest.json')]);
+    checks += 1;
+    const pendingConversionDigest = JSON.parse(readFileSync(path.join(pendingConversionRoot, 'eval-digest.json'), 'utf8'));
+    if (
+      result.status !== 0
+      || pendingConversionDigest.selfImprovement.proposals.byStatus.approved !== 1
+      || pendingConversionDigest.selfImprovement.maintenance.pendingConversions !== 1
+      || pendingConversionDigest.selfImprovement.maintenance.convertedApprovals !== 0
+      || pendingConversionDigest.selfImprovement.maintenance.conversionRate !== 0
+    ) {
+      console.error('eval digest pending-conversion self-improvement fixture failed');
+      writeResultOutput(result);
+      return { status: failureStatus(result), checks };
+    }
 
 	    result = runValidator(['--eval-digest', evalDigestPath]);
 	    checks += 1;
@@ -1740,6 +2272,50 @@ function validateMemoryFixtureCases() {
     return { status: failureStatus(result), checks };
   }
 
+  const memoryProposalsDir = mkdtempSync(path.join(tmpdir(), 'p2a-memory-proposals-'));
+  try {
+    writeEvalProposal(memoryProposalsDir, {
+      proposalId: 'proposal-memory-upstream-toolkit',
+      sourceRunId: 'run-memory-upstream-toolkit',
+      target: 'p2a_toolkit',
+      targetRepo: 'https://github.com/silbaram/plan2agent',
+      targetArea: 'p2a-memory',
+      upstreamReason: 'Fixture proposal should be searchable by the Plan2Agent toolkit.',
+      problem: 'Memory should preserve upstream toolkit proposals.',
+      note: 'Exercises proposal snapshot sync into Memory.',
+    });
+
+    result = runMemory(['status', '--graph', graphPath, '--proposals', memoryProposalsDir, '--json']);
+    checks += 1;
+    const memoryProposalStatus = result.status === 0 ? JSON.parse(result.stdout) : null;
+    const memoryProposalItem = memoryProposalStatus?.sync?.items?.find((item) => item.artifactType === 'PROPOSAL');
+    if (
+      result.status !== 0
+      || memoryProposalStatus?.local?.proposals !== 1
+      || memoryProposalItem?.metadata?.proposalTarget !== 'p2a_toolkit'
+      || memoryProposalItem?.metadata?.targetRepo !== 'https://github.com/silbaram/plan2agent'
+    ) {
+      console.error('memory proposal snapshot status fixture failed');
+      writeResultOutput(result);
+      console.error(JSON.stringify({ memoryProposalStatus }, null, 2));
+      return { status: failureStatus(result), checks };
+    }
+
+    result = runMemory(['push', '--graph', graphPath, '--proposals', memoryProposalsDir, '--dry-run']);
+    checks += 1;
+    if (
+      result.status !== 0
+      || !result.stdout.includes('proposals=1')
+      || !result.stdout.includes('PROPOSAL: 1')
+    ) {
+      console.error('memory proposal snapshot push dry-run fixture failed');
+      writeResultOutput(result);
+      return { status: failureStatus(result), checks };
+    }
+  } finally {
+    rmSync(memoryProposalsDir, { recursive: true, force: true });
+  }
+
   result = runMemory(['push', '--graph', graphPath, '--dry-run']);
   checks += 1;
   if (result.status !== 0 || !result.stdout.includes('Plan2Agent memory push dry run') || !result.stdout.includes('dry-run: no server writes') || !result.stdout.includes('DOCUMENT_CHUNK:')) {
@@ -1801,8 +2377,14 @@ function validateMemoryFixtureCases() {
 
   result = runMemory(['search', '--graph', graphPath, '--query', 'webhook', '--type', 'proposal']);
   checks += 1;
-  if (result.status === 0 || !result.stderr.includes('Memory search does not support proposal type yet')) {
-    console.error('memory search unsupported type fixture failed');
+  if (
+    result.status === 0
+    || !result.stdout.includes('Plan2Agent memory search')
+    || !result.stdout.includes('type=PROPOSAL')
+    || !result.stdout.includes('server: not_configured')
+    || !result.stdout.includes('Set P2A_MEMORY_URL or pass --server to search Memory.')
+  ) {
+    console.error('memory search proposal type not-configured fixture failed');
     writeResultOutput(result);
     return { status: result.status === 0 ? 1 : failureStatus(result), checks };
   }
@@ -1946,22 +2528,83 @@ function validateMemoryFixtureCases() {
     return { status: failureStatus(result), checks };
   }
 
-  const digestRunsDir = mkdtempSync(path.join(tmpdir(), 'p2a-memory-digest-runs-'));
+  const digestRoot = mkdtempSync(path.join(tmpdir(), 'p2a-memory-digest-'));
+  const digestRunsDir = path.join(digestRoot, 'runs');
   try {
-    writeEvalRuns(digestRunsDir, [evalRunFixture('run-memory-digest-failed', 'failed')]);
-    result = runMemory(['digest', '--runs', digestRunsDir]);
+    const memoryDigestRun = evalRunFixture('run-memory-digest-failed', 'failed');
+    memoryDigestRun.notes.push('Memory search reference used: run-memory-prior');
+    writeEvalRuns(digestRunsDir, [memoryDigestRun]);
+    mkdirSync(path.join(digestRoot, 'eval'), { recursive: true });
+    writeFileSync(path.join(digestRoot, 'eval', 'memory-search.json'), `${JSON.stringify({
+      schema_version: 'p2a.memory_search.v1',
+      generatedAt: '2026-07-02T00:00:00.000Z',
+      query: { text: 'stale search result' },
+      context: {
+        sourceKind: 'runs',
+        sourcePath: path.join(digestRoot, 'other-runs'),
+        projectId: 'webhook-api-service',
+        iterationId: '1',
+      },
+      summary: {
+        total: 1,
+        byType: { RUN_RECORD: 1 },
+      },
+      results: [{
+        artifactType: 'RUN_RECORD',
+        score: 0.99,
+        sourceIds: {
+          sourceRunId: 'stale-run',
+        },
+      }],
+    }, null, 2)}\n`, 'utf8');
+    writeFileSync(path.join(digestRoot, 'eval', 'prior-memory-result.json'), `${JSON.stringify({
+      schema_version: 'p2a.memory_search.v1',
+      generatedAt: '2026-07-02T00:00:00.000Z',
+      query: { text: 'prior failed run memory' },
+      context: {
+        sourceKind: 'runs',
+        sourcePath: digestRunsDir,
+        projectId: 'webhook-api-service',
+        iterationId: '1',
+      },
+      summary: {
+        total: 1,
+        byType: { RUN_RECORD: 1 },
+      },
+      results: [{
+        artifactType: 'RUN_RECORD',
+        score: 0.91,
+        sourceIds: {
+          sourceRunId: 'run-memory-prior',
+        },
+      }],
+    }, null, 2)}\n`, 'utf8');
+    const digestOutputPath = path.join(digestRoot, 'memory-digest.json');
+    result = runMemory(['digest', '--runs', digestRunsDir, '--output', digestOutputPath]);
     checks += 1;
     if (
       result.status !== 0
       || !result.stdout.includes('structured: reproduction=1/1 localization=1/1 guard=1/1')
+      || !result.stdout.includes('memory usefulness: searchReports=1 used=1/1 rate=1')
       || !result.stdout.includes('Mine missing proposal candidates')
     ) {
       console.error('memory digest structured detail fixture failed');
       writeResultOutput(result);
       return { status: failureStatus(result), checks };
     }
+    const memoryDigest = JSON.parse(readFileSync(digestOutputPath, 'utf8'));
+    if (
+      memoryDigest.memoryUsefulness?.searchReports !== 1
+      || memoryDigest.memoryUsefulness?.totalResults !== 1
+      || memoryDigest.memoryUsefulness?.usedResults !== 1
+      || memoryDigest.memoryUsefulness?.usedBy?.run !== 1
+    ) {
+      console.error('memory digest usefulness fixture failed');
+      console.error(JSON.stringify({ memoryDigest }, null, 2));
+      return { status: 1, checks };
+    }
   } finally {
-    rmSync(digestRunsDir, { recursive: true, force: true });
+    rmSync(digestRoot, { recursive: true, force: true });
   }
 
   result = runMemory(['push', '--graph', graphPath]);
@@ -2330,6 +2973,65 @@ function validateIterationCurrentFixtureCases() {
         latestRunId: runs[runs.length - 1]?.runId ?? null,
       }],
     }, null, 2)}\n`, 'utf8');
+  }
+
+  function writeFeatureRadarPreflightFixture(artifactRoot) {
+    const preflightDir = path.join(artifactRoot, 'preflight-research');
+    mkdirSync(preflightDir, { recursive: true });
+    writeFileSync(
+      path.join(preflightDir, 'collection-report.md'),
+      [
+        '# Feature Radar Collection Report',
+        '',
+        'Recommended direction: prioritize a delivery visibility dashboard before adding broad notification channels.',
+        '',
+      ].join('\n'),
+      'utf8',
+    );
+    writeFileSync(
+      path.join(preflightDir, 'next-iteration-recommendations.md'),
+      [
+        '# Next Iteration Recommendations',
+        '',
+        '| rank | recommendation | action | why now | expected impact | confidence | next step |',
+        '| --- | --- | --- | --- | --- | --- | --- |',
+        '| 1 | Add delivery visibility dashboard | add | repeated operator pain around webhook retries | faster incident triage | high | draft Gate B scope |',
+        '',
+      ].join('\n'),
+      'utf8',
+    );
+    writeFileSync(
+      path.join(preflightDir, 'source-candidates.md'),
+      [
+        '# Source Candidates',
+        '',
+        '- Official reference: https://example.com/feature-radar/webhook-dashboard',
+        '',
+      ].join('\n'),
+      'utf8',
+    );
+    writeFileSync(
+      path.join(preflightDir, 'p2a-context.json'),
+      `${JSON.stringify({
+        schema_version: 'feature_radar.p2a_context.v1',
+        recommendations: [
+          {
+            title: 'Strengthen webhook retry observability',
+            action: 'strengthen',
+            why_now: 'The local project already has delivery tasks, and Radar found visibility gaps.',
+            confidence: 'medium',
+          },
+        ],
+        sources: [
+          {
+            title: 'Feature Radar webhook dashboard reference',
+            url: 'https://example.com/feature-radar/webhook-dashboard',
+            used_for: 'Grounded the visibility dashboard recommendation.',
+          },
+        ],
+      }, null, 2)}\n`,
+      'utf8',
+    );
   }
 
   for (const caseData of cases) {
@@ -4380,6 +5082,7 @@ function validateIterationCurrentFixtureCases() {
 
       const executeMonitorRunsDir = path.join(tempRoot, 'p2a-execute-monitor', 'runs');
       const executeMonitorProposalsDir = path.join(tempRoot, 'p2a-execute-monitor', 'proposals');
+      const executeMonitorUpstreamProposalsDir = path.join(tempRoot, 'p2a-execute-monitor', 'upstream-proposals');
       const proposalRunsDir = path.join(tempRoot, 'p2a-execute-monitor-proposal-runs');
       mkdirSync(proposalRunsDir, { recursive: true });
       const executeMonitorRunIndex = JSON.parse(readFileSync(path.join(executeMonitorRunsDir, 'run-index.json'), 'utf8'));
@@ -4417,10 +5120,429 @@ function validateIterationCurrentFixtureCases() {
         executeMonitorProposal.sourceRunId !== 'run-execute-monitor-fixture'
         || executeMonitorProposal.status !== 'proposed'
         || !executeMonitorProposal.evidence.includes('monitor failure signal: unmet_acceptance')
+        || executeMonitorProposal.target !== 'project'
+        || executeMonitorProposal.quality?.score !== 100
+        || executeMonitorProposal.quality?.band !== 'strong'
+        || !executeMonitorProposal.riskRationale
       ) {
         console.error(`p2a_proposals mine wrote unexpected proposal: ${caseData.id}`);
         console.error(JSON.stringify({ executeMonitorProposal }, null, 2));
         return { status: 1, checks };
+      }
+
+      const upstreamProposalId = 'proposal-run-execute-monitor-fixture-implementation_incomplete-p2a_toolkit-p2a-harness';
+      result = runProposals([
+        'mine',
+        '--runs',
+        proposalRunsDir,
+        '--proposals',
+        executeMonitorUpstreamProposalsDir,
+        '--target',
+        'p2a_toolkit',
+        '--target-area',
+        'p2a-harness',
+        '--upstream-reason',
+        'Fixture upstream proposal should be visible to the Plan2Agent toolkit.',
+      ]);
+      checks += 1;
+      const upstreamProposalOutput = `${result.stdout ?? ''}${result.stderr ?? ''}`;
+      if (
+        result.status !== 0
+        || !upstreamProposalOutput.includes('target: p2a_toolkit')
+        || !upstreamProposalOutput.includes(upstreamProposalId)
+      ) {
+        console.error(`p2a_proposals upstream mine fixture failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: failureStatus(result), checks };
+      }
+      const upstreamProposalPath = path.join(executeMonitorUpstreamProposalsDir, `${upstreamProposalId}.json`);
+      const upstreamProposal = JSON.parse(readFileSync(upstreamProposalPath, 'utf8'));
+      if (
+        upstreamProposal.proposalId !== upstreamProposalId
+        || upstreamProposal.sourceRunId !== 'run-execute-monitor-fixture'
+        || !existsSync(executeMonitorProposalPath)
+        || existsSync(path.join(executeMonitorUpstreamProposalsDir, 'proposal-run-execute-monitor-fixture-implementation_incomplete.json'))
+        || upstreamProposal.target !== 'p2a_toolkit'
+        || upstreamProposal.targetRepo !== 'https://github.com/silbaram/plan2agent'
+        || upstreamProposal.targetArea !== 'p2a-harness'
+        || upstreamProposal.upstreamReason !== 'Fixture upstream proposal should be visible to the Plan2Agent toolkit.'
+      ) {
+        console.error(`p2a_proposals upstream proposal metadata fixture failed: ${caseData.id}`);
+        console.error(JSON.stringify({ upstreamProposal }, null, 2));
+        return { status: 1, checks };
+      }
+
+      const mixedTargetProposalsDir = path.join(tempRoot, 'p2a-execute-monitor', 'mixed-target-proposals');
+      mkdirSync(mixedTargetProposalsDir, { recursive: true });
+      cpSync(executeMonitorProposalPath, path.join(mixedTargetProposalsDir, path.basename(executeMonitorProposalPath)));
+      result = runProposals([
+        'mine',
+        '--runs',
+        proposalRunsDir,
+        '--proposals',
+        mixedTargetProposalsDir,
+        '--target',
+        'p2a_toolkit',
+        '--target-area',
+        'p2a-harness',
+        '--upstream-reason',
+        'Fixture upstream proposal should coexist with the project-local proposal.',
+      ]);
+      checks += 1;
+      const mixedProjectProposalPath = path.join(mixedTargetProposalsDir, path.basename(executeMonitorProposalPath));
+      const mixedTargetProposalPath = path.join(mixedTargetProposalsDir, `${upstreamProposalId}.json`);
+      const mixedTargetProposal = existsSync(mixedTargetProposalPath) ? JSON.parse(readFileSync(mixedTargetProposalPath, 'utf8')) : null;
+      if (
+        result.status !== 0
+        || !existsSync(mixedProjectProposalPath)
+        || mixedTargetProposal?.target !== 'p2a_toolkit'
+        || mixedTargetProposal?.proposalId !== upstreamProposalId
+      ) {
+        console.error(`p2a_proposals project/upstream coexistence fixture failed: ${caseData.id}`);
+        writeResultOutput(result);
+        console.error(JSON.stringify({ mixedTargetProposal }, null, 2));
+        return { status: failureStatus(result), checks };
+      }
+
+      result = runProposals([
+        'mine',
+        '--runs',
+        proposalRunsDir,
+        '--proposals',
+        path.join(tempRoot, 'p2a-execute-monitor', 'invalid-upstream-proposals'),
+        '--target',
+        'p2a_toolkit',
+      ]);
+      checks += 1;
+      if (
+        result.status === 0
+        || !result.stderr.includes('--upstream-reason is required when --target is p2a_toolkit or companion_project')
+      ) {
+        console.error(`p2a_proposals upstream reason guard fixture failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: 1, checks };
+      }
+
+      result = runProposals([
+        'mine',
+        '--runs',
+        proposalRunsDir,
+        '--proposals',
+        path.join(tempRoot, 'p2a-execute-monitor', 'invalid-project-target-metadata'),
+        '--target',
+        'project',
+        '--target-area',
+        'p2a-harness',
+      ]);
+      checks += 1;
+      if (
+        result.status === 0
+        || !result.stderr.includes('--target-repo, --target-area, and --upstream-reason require --target p2a_toolkit or --target companion_project')
+      ) {
+        console.error(`p2a_proposals project target metadata guard fixture failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: 1, checks };
+      }
+
+      result = runProposals([
+        'mine',
+        '--runs',
+        proposalRunsDir,
+        '--proposals',
+        path.join(tempRoot, 'p2a-execute-monitor', 'invalid-toolkit-repo-override'),
+        '--target',
+        'p2a_toolkit',
+        '--target-repo',
+        'https://github.com/example/other-toolkit',
+        '--upstream-reason',
+        'Fixture should reject overriding the fixed Plan2Agent toolkit repository.',
+      ]);
+      checks += 1;
+      if (
+        result.status === 0
+        || !result.stderr.includes('--target-repo cannot override --target p2a_toolkit')
+      ) {
+        console.error(`p2a_proposals toolkit repo override guard fixture failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: 1, checks };
+      }
+
+      result = runProposals([
+        'digest',
+        '--proposals',
+        executeMonitorUpstreamProposalsDir,
+      ]);
+      checks += 1;
+      if (
+        result.status !== 0
+        || !result.stdout.includes('byTarget: {"p2a_toolkit":1}')
+      ) {
+        console.error(`p2a_proposals upstream digest fixture failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: failureStatus(result), checks };
+      }
+
+      result = runProposals([
+        'list',
+        '--proposals',
+        executeMonitorUpstreamProposalsDir,
+      ]);
+      checks += 1;
+      if (
+        result.status !== 0
+        || !result.stdout.includes('proposalId\tstatus\trisk\ttarget\tsourceRunId\tproblem')
+        || !result.stdout.includes('p2a_toolkit')
+      ) {
+        console.error(`p2a_proposals upstream list fixture failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: failureStatus(result), checks };
+      }
+
+      const upstreamReviewPath = path.join(tempRoot, 'p2a-execute-monitor', 'upstream-proposal-review.json');
+      result = runProposals([
+        'review',
+        '--proposals',
+        executeMonitorUpstreamProposalsDir,
+        '--output',
+        upstreamReviewPath,
+      ]);
+      checks += 1;
+      const upstreamReview = existsSync(upstreamReviewPath) ? JSON.parse(readFileSync(upstreamReviewPath, 'utf8')) : null;
+      if (
+        result.status !== 0
+        || upstreamReview?.groups?.[0]?.target !== 'p2a_toolkit'
+        || upstreamReview?.groups?.[0]?.targetRepo !== 'https://github.com/silbaram/plan2agent'
+        || upstreamReview?.groups?.[0]?.targetArea !== 'p2a-harness'
+      ) {
+        console.error(`p2a_proposals upstream review fixture failed: ${caseData.id}`);
+        writeResultOutput(result);
+        console.error(JSON.stringify({ upstreamReview }, null, 2));
+        return { status: failureStatus(result), checks };
+      }
+
+      const upstreamCurationPath = path.join(tempRoot, 'p2a-execute-monitor', 'upstream-proposal-curation.json');
+      result = runProposals([
+        'curate',
+        '--review',
+        upstreamReviewPath,
+        '--proposals',
+        executeMonitorUpstreamProposalsDir,
+        '--output',
+        upstreamCurationPath,
+      ]);
+      checks += 1;
+      const upstreamCuration = existsSync(upstreamCurationPath) ? JSON.parse(readFileSync(upstreamCurationPath, 'utf8')) : null;
+      const upstreamCandidate = upstreamCuration?.candidates?.[0] ?? null;
+      if (
+        result.status !== 0
+        || upstreamCandidate?.target !== 'p2a_toolkit'
+        || upstreamCandidate?.targetRepo !== 'https://github.com/silbaram/plan2agent'
+        || upstreamCandidate?.targetArea !== 'p2a-harness'
+      ) {
+        console.error(`p2a_proposals upstream curation fixture failed: ${caseData.id}`);
+        writeResultOutput(result);
+        console.error(JSON.stringify({ upstreamCuration }, null, 2));
+        return { status: failureStatus(result), checks };
+      }
+
+      const upstreamPatchDraftPath = path.join(tempRoot, 'p2a-execute-monitor', 'upstream-proposal-patch-draft.json');
+      result = runProposals([
+        'draft-patch',
+        '--curation',
+        upstreamCurationPath,
+        '--candidate-id',
+        upstreamCandidate.candidateId,
+        '--proposals',
+        executeMonitorUpstreamProposalsDir,
+        '--output',
+        upstreamPatchDraftPath,
+      ]);
+      checks += 1;
+      const upstreamPatchDraft = existsSync(upstreamPatchDraftPath) ? JSON.parse(readFileSync(upstreamPatchDraftPath, 'utf8')) : null;
+      if (
+        result.status !== 0
+        || upstreamPatchDraft?.target !== 'p2a_toolkit'
+        || upstreamPatchDraft?.targetRepo !== 'https://github.com/silbaram/plan2agent'
+        || upstreamPatchDraft?.targetArea !== 'p2a-harness'
+      ) {
+        console.error(`p2a_proposals upstream patch draft fixture failed: ${caseData.id}`);
+        writeResultOutput(result);
+        console.error(JSON.stringify({ upstreamPatchDraft }, null, 2));
+        return { status: failureStatus(result), checks };
+      }
+
+      const upstreamApprovalPath = path.join(tempRoot, 'p2a-execute-monitor', 'upstream-proposal-draft-approval.json');
+      const upstreamApprovalGuardArtifactRoot = path.join(tempRoot, 'p2a-execute-monitor-upstream-approval-guard-artifacts');
+      cpSync(artifactRoot, upstreamApprovalGuardArtifactRoot, { recursive: true });
+      result = runProposals([
+        'approve-draft',
+        '--draft',
+        upstreamPatchDraftPath,
+        '--artifacts',
+        upstreamApprovalGuardArtifactRoot,
+        '--approved-by',
+        'fixture-reviewer',
+        '--approval-note',
+        'Fixture upstream approval',
+        '--proposals',
+        executeMonitorUpstreamProposalsDir,
+        '--output',
+        path.join(tempRoot, 'p2a-execute-monitor', 'upstream-proposal-draft-approval-guard.json'),
+      ]);
+      checks += 1;
+      const upstreamApprovalGuardGraphPath = path.join(upstreamApprovalGuardArtifactRoot, 'iterations', 'maintenance', 'gate-c-task-graph', 'task-graph.json');
+      if (
+        result.status === 0
+        || !result.stderr.includes('approve-draft refuses to append a local maintenance task for target p2a_toolkit')
+        || existsSync(upstreamApprovalGuardGraphPath)
+      ) {
+        console.error(`p2a_proposals upstream local-task guard fixture failed: ${caseData.id}`);
+        writeResultOutput(result);
+        console.error(JSON.stringify({ upstreamApprovalGuardGraphExists: existsSync(upstreamApprovalGuardGraphPath) }, null, 2));
+        return { status: 1, checks };
+      }
+
+      const upstreamApprovalArtifactRoot = path.join(tempRoot, 'p2a-execute-monitor-upstream-approval-artifacts');
+      cpSync(artifactRoot, upstreamApprovalArtifactRoot, { recursive: true });
+      result = runProposals([
+        'approve-draft',
+        '--draft',
+        upstreamPatchDraftPath,
+        '--artifacts',
+        upstreamApprovalArtifactRoot,
+        '--approved-by',
+        'fixture-reviewer',
+        '--approval-note',
+        'Fixture upstream approval',
+        '--proposals',
+        executeMonitorUpstreamProposalsDir,
+        '--output',
+        upstreamApprovalPath,
+        '--allow-local-upstream-task',
+      ]);
+      checks += 1;
+      const upstreamApproval = existsSync(upstreamApprovalPath) ? JSON.parse(readFileSync(upstreamApprovalPath, 'utf8')) : null;
+      const upstreamMaintenanceGraphPath = path.join(upstreamApprovalArtifactRoot, 'iterations', 'maintenance', 'gate-c-task-graph', 'task-graph.json');
+      const upstreamMaintenanceGraph = existsSync(upstreamMaintenanceGraphPath) ? JSON.parse(readFileSync(upstreamMaintenanceGraphPath, 'utf8')) : null;
+      const upstreamMaintenanceTask = upstreamMaintenanceGraph?.tasks?.find((task) => task.id === upstreamApproval?.maintenanceTask?.taskId);
+      if (
+        result.status !== 0
+        || upstreamApproval?.target !== 'p2a_toolkit'
+        || upstreamApproval?.targetRepo !== 'https://github.com/silbaram/plan2agent'
+        || upstreamApproval?.targetArea !== 'p2a-harness'
+        || upstreamMaintenanceTask?.targetArea !== 'upstream:p2a-harness'
+        || !upstreamMaintenanceTask?.sourceSpecRefs?.includes('proposal-target:p2a_toolkit')
+        || !upstreamMaintenanceTask?.sourceSpecRefs?.includes('proposal-target-repo:https://github.com/silbaram/plan2agent')
+        || !upstreamMaintenanceTask?.sourceSpecRefs?.includes('proposal-target-area:p2a-harness')
+        || !upstreamMaintenanceTask?.description?.includes('Target: p2a_toolkit')
+      ) {
+        console.error(`p2a_proposals upstream approval fixture failed: ${caseData.id}`);
+        writeResultOutput(result);
+        console.error(JSON.stringify({ upstreamApproval, upstreamMaintenanceTask }, null, 2));
+        return { status: failureStatus(result), checks };
+      }
+
+      const staleApprovalArtifactRoot = path.join(tempRoot, 'p2a-execute-monitor-upstream-stale-approval-artifacts');
+      cpSync(artifactRoot, staleApprovalArtifactRoot, { recursive: true });
+      const staleApprovalPath = path.join(tempRoot, 'p2a-execute-monitor', 'upstream-proposal-draft-approval-stale-refs.json');
+      const staleApproval = JSON.parse(JSON.stringify(upstreamApproval));
+      staleApproval.maintenanceTask.sourceSpecRefs = staleApproval.maintenanceTask.sourceSpecRefs
+        .filter((ref) => !ref.startsWith('proposal-classification:'));
+      writeFileSync(staleApprovalPath, `${JSON.stringify(staleApproval, null, 2)}\n`, 'utf8');
+      result = runProposals([
+        'approve-draft',
+        '--draft',
+        upstreamPatchDraftPath,
+        '--artifacts',
+        staleApprovalArtifactRoot,
+        '--approved-by',
+        'fixture-reviewer',
+        '--approval-note',
+        'Fixture upstream approval',
+        '--proposals',
+        executeMonitorUpstreamProposalsDir,
+        '--output',
+        staleApprovalPath,
+        '--allow-local-upstream-task',
+      ]);
+      checks += 1;
+      if (
+        result.status === 0
+        || !result.stderr.includes('maintenanceTask.sourceSpecRefs')
+      ) {
+        console.error(`p2a_proposals stale approval ref guard fixture failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: 1, checks };
+      }
+
+      upstreamMaintenanceTask.sourceSpecRefs = upstreamMaintenanceTask.sourceSpecRefs
+        .filter((ref) => !ref.startsWith('proposal-target'));
+      upstreamMaintenanceTask.targetArea = 'maintenance';
+      upstreamMaintenanceTask.description = upstreamMaintenanceTask.description.replace(' Target: p2a_toolkit repo=https://github.com/silbaram/plan2agent area=p2a-harness.', '');
+      upstreamMaintenanceTask.suggestedAgentPrompt = upstreamMaintenanceTask.suggestedAgentPrompt.replace('\nTarget: p2a_toolkit repo=https://github.com/silbaram/plan2agent area=p2a-harness', '');
+      writeFileSync(upstreamMaintenanceGraphPath, `${JSON.stringify(upstreamMaintenanceGraph, null, 2)}\n`, 'utf8');
+      result = runExecute([
+        'plan',
+        '--artifacts',
+        upstreamApprovalArtifactRoot,
+        '--approval',
+        upstreamApprovalPath,
+        '--run-id',
+        'run-upstream-approval-missing-target-refs',
+        '--agent-tool',
+        'codex',
+        '--workspace',
+        upstreamApprovalArtifactRoot,
+      ]);
+      checks += 1;
+      if (
+        result.status === 0
+        || !result.stderr.includes('proposal-target:p2a_toolkit')
+      ) {
+        console.error(`p2a_execute approval target ref guard fixture failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: 1, checks };
+      }
+
+      result = runProposals([
+        'approve-draft',
+        '--draft',
+        upstreamPatchDraftPath,
+        '--artifacts',
+        upstreamApprovalArtifactRoot,
+        '--approved-by',
+        'fixture-reviewer',
+        '--approval-note',
+        'Fixture upstream approval',
+        '--proposals',
+        executeMonitorUpstreamProposalsDir,
+        '--output',
+        upstreamApprovalPath,
+        '--allow-local-upstream-task',
+      ]);
+      checks += 1;
+      const upstreamMaintenanceGraphAfterBackfill = JSON.parse(readFileSync(upstreamMaintenanceGraphPath, 'utf8'));
+      const upstreamMaintenanceTaskAfterBackfill = upstreamMaintenanceGraphAfterBackfill.tasks.find((task) => task.id === upstreamApproval.maintenanceTask.taskId);
+      if (
+        result.status !== 0
+        || upstreamMaintenanceTaskAfterBackfill?.targetArea !== 'upstream:p2a-harness'
+        || !upstreamMaintenanceTaskAfterBackfill?.sourceSpecRefs?.includes('proposal-target:p2a_toolkit')
+        || !upstreamMaintenanceTaskAfterBackfill?.sourceSpecRefs?.includes('proposal-target-repo:https://github.com/silbaram/plan2agent')
+        || !upstreamMaintenanceTaskAfterBackfill?.sourceSpecRefs?.includes('proposal-target-area:p2a-harness')
+        || !upstreamMaintenanceTaskAfterBackfill?.suggestedAgentPrompt?.includes('Target: p2a_toolkit')
+      ) {
+        console.error(`p2a_proposals upstream existing task backfill fixture failed: ${caseData.id}`);
+        writeResultOutput(result);
+        console.error(JSON.stringify({ upstreamMaintenanceTaskAfterBackfill }, null, 2));
+        return { status: failureStatus(result), checks };
+      }
+
+      result = runValidator(['--proposal-draft-approval', upstreamApprovalPath]);
+      checks += 1;
+      if (result.status !== 0) {
+        console.error(`upstream proposal draft approval validator fixture failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: failureStatus(result), checks };
       }
 
       const invalidRunId = 'run-execute-monitor-invalid';
@@ -4472,7 +5594,11 @@ function validateIterationCurrentFixtureCases() {
         executeMonitorProposalsDir,
       ]);
       checks += 1;
-      if (result.status !== 0 || !result.stdout.includes('Plan2Agent proposal digest')) {
+      if (
+        result.status !== 0
+        || !result.stdout.includes('Plan2Agent proposal digest')
+        || !result.stdout.includes('quality: average=100 strong=1 medium=0 weak=0 needsAttention=0')
+      ) {
         console.error(`p2a_proposals digest fixture failed: ${caseData.id}`);
         writeResultOutput(result);
         return { status: failureStatus(result), checks };
@@ -4496,6 +5622,7 @@ function validateIterationCurrentFixtureCases() {
       if (
         executeMonitorReview.schema_version !== 'p2a.proposal_review.v1'
         || executeMonitorReview.summary.totalProposals !== 1
+        || executeMonitorReview.summary.quality?.averageScore !== 100
         || !executeMonitorReview.groups.some((group) => group.classification === 'implementation_incomplete' && group.recommendedDisposition === 'defer')
       ) {
         console.error(`p2a_proposals review wrote unexpected review: ${caseData.id}`);
@@ -4532,7 +5659,9 @@ function validateIterationCurrentFixtureCases() {
       if (
         executeMonitorCuration.schema_version !== 'p2a.proposal_curation.v1'
         || executeMonitorCuration.summary.totalCandidates !== 1
+        || executeMonitorCuration.summary.quality?.averageScore !== 100
         || executeMonitorImplementationCandidate?.readiness !== 'watch'
+        || executeMonitorImplementationCandidate?.quality?.band !== 'strong'
         || executeMonitorImplementationCandidate?.separatePatchRequired !== true
       ) {
         console.error(`p2a_proposals curate wrote unexpected curation: ${caseData.id}`);
@@ -4587,9 +5716,11 @@ function validateIterationCurrentFixtureCases() {
         return { status: failureStatus(result), checks };
       }
 
-      const executeMonitorApprovalPath = path.join(tempRoot, 'p2a-execute-monitor', 'proposal-draft-approval.json');
-      const executeMonitorApprovalArtifactRoot = path.join(tempRoot, 'p2a-execute-monitor-approval-artifacts');
+      const executeMonitorApprovalPath = path.join(tempRoot, 'p2a execute monitor', 'proposal-draft-approval.json');
+      const executeMonitorApprovalArtifactRoot = path.join(tempRoot, 'p2a execute monitor approval artifacts');
       cpSync(artifactRoot, executeMonitorApprovalArtifactRoot, { recursive: true });
+      const quotedExecuteMonitorApprovalArtifactRoot = shellQuote(normalizeFixturePath(executeMonitorApprovalArtifactRoot));
+      const quotedExecuteMonitorApprovalPath = shellQuote(normalizeFixturePath(executeMonitorApprovalPath));
       result = runProposals([
         'approve-draft',
         '--draft',
@@ -4606,11 +5737,48 @@ function validateIterationCurrentFixtureCases() {
         executeMonitorApprovalPath,
       ]);
       checks += 1;
-      if (result.status !== 0 || !result.stdout.includes('Plan2Agent proposal draft approval')) {
+      if (
+        result.status !== 0
+        || !result.stdout.includes('Plan2Agent proposal draft approval')
+        || !result.stdout.includes('next commands:')
+        || !result.stdout.includes('node scripts/p2a.mjs tasks prompt')
+        || !result.stdout.includes('node scripts/p2a.mjs execute start')
+        || !result.stdout.includes('--approval')
+        || !result.stdout.includes(`--artifacts ${quotedExecuteMonitorApprovalArtifactRoot}`)
+        || !result.stdout.includes(`--approval ${quotedExecuteMonitorApprovalPath}`)
+      ) {
         console.error(`p2a_proposals approve-draft fixture failed: ${caseData.id}`);
         writeResultOutput(result);
         return { status: failureStatus(result), checks };
       }
+
+      result = runProposals([
+        'approve-draft',
+        '--draft',
+        executeMonitorPatchDraftPath,
+        '--artifacts',
+        executeMonitorApprovalArtifactRoot,
+        '--approved-by',
+        'fixture-reviewer',
+        '--approval-note',
+        'Fixture approval',
+        '--proposals',
+        executeMonitorProposalsDir,
+        '--output',
+        path.join(tempRoot, 'p2a-execute-monitor', 'proposal-draft-approval-dry-run.json'),
+        '--dry-run',
+      ]);
+      checks += 1;
+      if (
+        result.status !== 0
+        || !result.stdout.includes('next commands: dry-run only')
+        || result.stdout.includes('execute start')
+      ) {
+        console.error(`p2a_proposals approve-draft dry-run next command fixture failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: failureStatus(result), checks };
+      }
+
       const executeMonitorApproval = JSON.parse(readFileSync(executeMonitorApprovalPath, 'utf8'));
       const executeMonitorMaintenanceGraphPath = path.join(executeMonitorApprovalArtifactRoot, 'iterations', 'maintenance', 'gate-c-task-graph', 'task-graph.json');
       const executeMonitorMaintenanceGraph = JSON.parse(readFileSync(executeMonitorMaintenanceGraphPath, 'utf8'));
@@ -6192,9 +7360,10 @@ function validateIterationCurrentFixtureCases() {
         return { status: 1, checks };
       }
 
+      writeFeatureRadarPreflightFixture(artifactRoot);
       result = runIteration(['draft', '--artifacts', artifactRoot]);
       checks += 1;
-      if (result.status !== 0 || !result.stdout.includes('iteration draft generated')) {
+      if (result.status !== 0 || !result.stdout.includes('iteration draft generated') || !result.stdout.includes('Feature Radar preflight')) {
         console.error(`iteration draft fixture check failed: ${caseData.id}`);
         writeResultOutput(result);
         return { status: failureStatus(result), checks };
@@ -6210,6 +7379,7 @@ function validateIterationCurrentFixtureCases() {
         return { status: failureStatus(result), checks };
       }
       const draftSpec = JSON.parse(readFileSync(draftSpecPath, 'utf8'));
+      const draftIntake = JSON.parse(readFileSync(draftIntakePath, 'utf8'));
       if (
         !draftSpec.reference_reconnaissance
         || !draftSpec.reference_reconnaissance.candidates?.some((candidate) => candidate.candidate_id === 'REF-1')
@@ -6217,6 +7387,20 @@ function validateIterationCurrentFixtureCases() {
       ) {
         console.error(`iteration draft did not include valid Gate B reference reconnaissance: ${caseData.id}`);
         console.error(JSON.stringify(draftSpec.reference_reconnaissance ?? null, null, 2));
+        return { status: 1, checks };
+      }
+      const radarSpecEvidence = draftSpec.evidence.filter((item) => item.title.startsWith('Feature Radar'));
+      if (
+        !draftIntake.known_facts.some((fact) => fact.includes('Feature Radar preflight research detected'))
+        || !draftIntake.evidence.some((item) => item.title === 'Feature Radar next-iteration-recommendations.md')
+        || !radarSpecEvidence.some((item) => item.title === 'Feature Radar next-iteration-recommendations.md')
+        || !draftSpec.evidence.some((item) => item.source_id.startsWith('WEB-') && item.url === 'https://example.com/feature-radar/webhook-dashboard')
+        || !draftSpec.reference_reconnaissance.candidates.some((candidate) => candidate.title.includes('Feature Radar: Add delivery visibility dashboard'))
+        || !draftSpec.reference_reconnaissance.candidates.some((candidate) => candidate.origin === 'feature_radar_preflight')
+        || draftSpec.product.goals.some((goal) => goal.includes('Feature Radar'))
+      ) {
+        console.error(`iteration draft did not consume Feature Radar preflight research: ${caseData.id}`);
+        console.error(JSON.stringify({ intakeEvidence: draftIntake.evidence, specEvidence: draftSpec.evidence, reference: draftSpec.reference_reconnaissance, goals: draftSpec.product.goals }, null, 2));
         return { status: 1, checks };
       }
 
@@ -6278,6 +7462,26 @@ function validateIterationCurrentFixtureCases() {
         approved_artifacts: ['iterations/iter-002/gate-b-spec/spec.json'],
         approval_note: 'Fixture approved iter-002 Gate B draft spec for promotion.',
       };
+      writeFileSync(draftSpecPath, `${JSON.stringify(approvedDraftSpec, null, 2)}\n`, 'utf8');
+      result = runIteration(['promote-spec', '--artifacts', artifactRoot]);
+      checks += 1;
+      const unresolvedRadarOutput = `${result.stdout ?? ''}${result.stderr ?? ''}`;
+      if (result.status === 0 || !unresolvedRadarOutput.includes('approved spec must resolve Feature Radar candidate')) {
+        console.error(`iteration promote-spec did not reject unresolved Feature Radar candidates: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: 1, checks };
+      }
+
+      approvedDraftSpec.reference_reconnaissance.candidates = approvedDraftSpec.reference_reconnaissance.candidates.map((candidate) => (
+        candidate.title.startsWith('Feature Radar:')
+          ? {
+              ...candidate,
+              decision: 'deferred',
+              rationale: `${candidate.rationale} Fixture Gate B explicitly deferred this Radar candidate to a later iteration.`,
+            }
+          : candidate
+      ));
+      approvedDraftSpec.approval_audit.approval_note = 'Fixture approved iter-002 Gate B draft after resolving Feature Radar candidates.';
       writeFileSync(draftSpecPath, `${JSON.stringify(approvedDraftSpec, null, 2)}\n`, 'utf8');
       const iter2TaskGraphPath = path.join(artifactRoot, 'iterations', 'iter-002', 'gate-c-task-graph', 'task-graph.json');
       const iter2DraftPath = path.join(artifactRoot, 'iterations', 'iter-002', 'gate-c-task-graph', 'task-graph.draft.json');
@@ -6587,9 +7791,31 @@ function validateIterationCurrentFixtureCases() {
         return { status: 1, checks };
       }
 
+      result = runIteration(['context', '--artifacts', artifactRoot, '--scope', 'maintenance', '--code-root', '.']);
+      checks += 1;
+      const maintenanceContext = result.status === 0 ? JSON.parse(result.stdout) : null;
+      if (
+        result.status !== 0
+        || maintenanceContext?.scope !== 'maintenance'
+        || maintenanceContext?.active_iteration !== 'maintenance'
+        || maintenanceContext?.spec_field_changes?.length !== 0
+        || maintenanceContext?.existing_tasks?.maintenance?.length !== 2
+      ) {
+        console.error(`iteration context --scope maintenance fixture check failed: ${caseData.id}`);
+        writeResultOutput(result);
+        console.error(JSON.stringify({ maintenanceContext }, null, 2));
+        return { status: failureStatus(result), checks };
+      }
+
       result = runTasks(['list', '--artifacts', artifactRoot, '--maintenance']);
       checks += 1;
-      if (result.status !== 0 || !result.stdout.includes('task-001') || !result.stdout.includes('task-002')) {
+      if (
+        result.status !== 0
+        || !result.stdout.includes('id\tstatus\tready\ttarget\tsource\ttitle')
+        || !result.stdout.includes('task-001')
+        || !result.stdout.includes('task-002')
+        || !result.stdout.includes('effective_product.problem')
+      ) {
         console.error(`p2a_tasks list --artifacts --maintenance fixture check failed: ${caseData.id}`);
         writeResultOutput(result);
         return { status: failureStatus(result), checks };
@@ -6597,8 +7823,40 @@ function validateIterationCurrentFixtureCases() {
 
       result = runTasks(['ready', '--artifacts', artifactRoot, '--maintenance']);
       checks += 1;
-      if (result.status !== 0 || !result.stdout.includes('task-001')) {
+      if (
+        result.status !== 0
+        || !result.stdout.includes('id\tstatus\tready\ttarget\tsource\ttitle')
+        || !result.stdout.includes('task-001')
+      ) {
         console.error(`p2a_tasks ready --artifacts --maintenance fixture check failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: failureStatus(result), checks };
+      }
+
+      result = runTasks(['prompt', '--artifacts', artifactRoot, '--maintenance', 'task-001']);
+      checks += 1;
+      if (
+        result.status !== 0
+        || !result.stdout.includes('Maintenance execution context:')
+        || !result.stdout.includes('Next commands:')
+        || !result.stdout.includes('node scripts/p2a.mjs execute start')
+        || !result.stdout.includes('--maintenance --task task-001')
+      ) {
+        console.error(`p2a_tasks prompt --artifacts --maintenance fixture check failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: failureStatus(result), checks };
+      }
+
+      const spacedMaintenanceArtifactRoot = path.join(tempRoot, 'p2a maintenance ux root');
+      cpSync(artifactRoot, spacedMaintenanceArtifactRoot, { recursive: true });
+      const quotedSpacedMaintenanceArtifactRoot = shellQuote(normalizeFixturePath(spacedMaintenanceArtifactRoot));
+      result = runTasks(['prompt', '--artifacts', spacedMaintenanceArtifactRoot, '--maintenance', 'task-001']);
+      checks += 1;
+      if (
+        result.status !== 0
+        || !result.stdout.includes(`--artifacts ${quotedSpacedMaintenanceArtifactRoot}`)
+      ) {
+        console.error(`p2a_tasks prompt --artifacts --maintenance quoted path fixture check failed: ${caseData.id}`);
         writeResultOutput(result);
         return { status: failureStatus(result), checks };
       }
@@ -6681,12 +7939,264 @@ function validateIterationCurrentFixtureCases() {
         return { status: 1, checks };
       }
 
+      const emptyMaintenanceDraftArtifactRoot = path.join(tempRoot, 'p2a-empty-maintenance-draft-artifacts');
+      cpSync(artifactRoot, emptyMaintenanceDraftArtifactRoot, { recursive: true });
+      const emptyDraftMaintenanceGraphPath = path.join(emptyMaintenanceDraftArtifactRoot, 'iterations', 'maintenance', 'gate-c-task-graph', 'task-graph.json');
+      rmSync(path.join(emptyMaintenanceDraftArtifactRoot, 'iterations', 'maintenance'), { recursive: true, force: true });
+      const emptyMaintenanceDraftPath = path.join(tempRoot, 'p2a-empty-maintenance-draft.json');
+      writeFileSync(emptyMaintenanceDraftPath, `${JSON.stringify({
+        schema_version: 'p2a.eval_maintenance_draft.v1',
+        draftId: 'eval-maintenance-draft-empty-fixture',
+        generatedAt: '2026-01-01T00:00:00.000Z',
+        summary: {
+          clusters: 0,
+          tasks: 0,
+        },
+        tasks: [],
+        nextActions: ['No maintenance tasks were drafted because no failure clusters were found.'],
+      }, null, 2)}\n`, 'utf8');
+
+      result = runIteration([
+        'maintenance',
+        'add',
+        '--artifacts',
+        emptyMaintenanceDraftArtifactRoot,
+        '--from-draft',
+        emptyMaintenanceDraftPath,
+        '--dry-run',
+      ]);
+      checks += 1;
+      if (
+        result.status !== 0
+        || !result.stdout.includes('- draft tasks: 0')
+        || !result.stdout.includes('- appended: 0')
+        || existsSync(emptyDraftMaintenanceGraphPath)
+      ) {
+        console.error(`iteration maintenance add --from-draft empty dry-run fixture failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: failureStatus(result), checks };
+      }
+
+      result = runIteration([
+        'maintenance',
+        'add',
+        '--artifacts',
+        emptyMaintenanceDraftArtifactRoot,
+        '--from-draft',
+        emptyMaintenanceDraftPath,
+        '--yes',
+      ]);
+      checks += 1;
+      if (
+        result.status !== 0
+        || !result.stdout.includes('- draft tasks: 0')
+        || !result.stdout.includes('- appended: 0')
+        || existsSync(emptyDraftMaintenanceGraphPath)
+      ) {
+        console.error(`iteration maintenance add --from-draft empty apply fixture failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: failureStatus(result), checks };
+      }
+
+      const maintenanceFromDraftPath = path.join(tempRoot, 'p2a-maintenance-from-draft.json');
+      writeFileSync(maintenanceFromDraftPath, `${JSON.stringify({
+        schema_version: 'p2a.eval_maintenance_draft.v1',
+        draftId: 'eval-maintenance-draft-fixture',
+        generatedAt: '2026-01-01T00:00:00.000Z',
+        summary: {
+          clusters: 2,
+          tasks: 2,
+        },
+        tasks: [
+          {
+            id: 'draft-maintenance-a',
+            clusterId: 'cluster-maintenance-from-draft-a',
+            title: 'Improve maintenance draft apply',
+            description: 'Fixture task created from a reviewed maintenance draft.',
+            acceptanceCriteria: ['Maintenance draft tasks can be appended after explicit confirmation.'],
+            targetArea: 'verification',
+            suggestedAgentPrompt: 'Append the reviewed maintenance draft task and preserve its trace refs.',
+            sourceSpecRefs: [
+              'eval-analysis:analysis-maintenance-from-draft',
+              'eval-cluster:cluster-maintenance-from-draft-a',
+              'run:run-maintenance-from-draft-a',
+            ],
+          },
+          {
+            id: 'draft-maintenance-b',
+            clusterId: 'cluster-maintenance-from-draft-b',
+            title: 'Run maintenance draft follow-up',
+            acceptanceCriteria: ['Draft-local dependencies are mapped to appended maintenance task ids.'],
+            sourceSpecRefs: ['eval-cluster:cluster-maintenance-from-draft-b'],
+            dependencies: ['draft-maintenance-a'],
+          },
+        ],
+        nextActions: ['Review before applying.'],
+      }, null, 2)}\n`, 'utf8');
+
+      result = runIteration([
+        'maintenance',
+        'add',
+        '--artifacts',
+        artifactRoot,
+        '--from-draft',
+        maintenanceFromDraftPath,
+      ]);
+      checks += 1;
+      if (
+        result.status === 0
+        || !(`${result.stdout ?? ''}${result.stderr ?? ''}`).includes('maintenance add --from-draft requires --yes unless --dry-run is used')
+        || readFileSync(maintenanceGraphPath, 'utf8') !== maintenanceGraphAfterAddsText
+      ) {
+        console.error(`iteration maintenance add --from-draft confirmation guard failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: 1, checks };
+      }
+
+      result = runIteration([
+        'maintenance',
+        'add',
+        '--artifacts',
+        artifactRoot,
+        '--from-draft',
+        maintenanceFromDraftPath,
+        '--dry-run',
+      ]);
+      checks += 1;
+      if (
+        result.status !== 0
+        || !result.stdout.includes('Plan2Agent maintenance draft dry run:')
+        || !result.stdout.includes('- appended: 2')
+        || !result.stdout.includes('- append task-003: Improve maintenance draft apply')
+        || readFileSync(maintenanceGraphPath, 'utf8') !== maintenanceGraphAfterAddsText
+      ) {
+        console.error(`iteration maintenance add --from-draft dry-run fixture failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: failureStatus(result), checks };
+      }
+
+      result = runIteration([
+        'maintenance',
+        'add',
+        '--artifacts',
+        artifactRoot,
+        '--from-draft',
+        maintenanceFromDraftPath,
+        '--yes',
+      ]);
+      checks += 1;
+      const maintenanceGraphAfterDraftText = readFileSync(maintenanceGraphPath, 'utf8');
+      const maintenanceGraphAfterDraft = JSON.parse(maintenanceGraphAfterDraftText);
+      const draftTaskA = maintenanceGraphAfterDraft.tasks.find((task) => task.id === 'task-003');
+      const draftTaskB = maintenanceGraphAfterDraft.tasks.find((task) => task.id === 'task-004');
+      if (
+        result.status !== 0
+        || !result.stdout.includes('Plan2Agent maintenance draft applied:')
+        || !result.stdout.includes('- appended: 2')
+        || maintenanceGraphAfterDraft.tasks?.length !== 4
+        || draftTaskA?.targetArea !== 'verification'
+        || !draftTaskA?.sourceSpecRefs?.includes('eval-cluster:cluster-maintenance-from-draft-a')
+        || JSON.stringify(draftTaskB?.dependencies) !== JSON.stringify(['task-003'])
+      ) {
+        console.error(`iteration maintenance add --from-draft apply fixture failed: ${caseData.id}`);
+        writeResultOutput(result);
+        console.error(JSON.stringify({ draftTaskA, draftTaskB }, null, 2));
+        return { status: failureStatus(result), checks };
+      }
+
+      result = runIteration([
+        'maintenance',
+        'add',
+        '--artifacts',
+        artifactRoot,
+        '--from-draft',
+        maintenanceFromDraftPath,
+        '--yes',
+      ]);
+      checks += 1;
+      if (
+        result.status !== 0
+        || !result.stdout.includes('- appended: 0')
+        || !result.stdout.includes('- skipped: 2')
+        || readFileSync(maintenanceGraphPath, 'utf8') !== maintenanceGraphAfterDraftText
+      ) {
+        console.error(`iteration maintenance add --from-draft duplicate skip fixture failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: failureStatus(result), checks };
+      }
+
+      result = runIteration([
+        'maintenance',
+        'add',
+        '--artifacts',
+        artifactRoot,
+        '--title',
+        'Track legacy proposal maintenance',
+        '--accept',
+        'Legacy proposal refs are tracked without duplicate draft append.',
+        '--ref',
+        'proposal:legacy-maintenance-from-draft',
+      ]);
+      checks += 1;
+      const maintenanceGraphAfterLegacyProposalText = readFileSync(maintenanceGraphPath, 'utf8');
+      if (
+        result.status !== 0
+        || !result.stdout.includes('Plan2Agent maintenance task added: task-005')
+        || JSON.parse(maintenanceGraphAfterLegacyProposalText).tasks?.length !== 5
+      ) {
+        console.error(`iteration maintenance legacy proposal setup failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: failureStatus(result), checks };
+      }
+
+      const maintenanceLegacyProposalDraftPath = path.join(tempRoot, 'p2a-maintenance-legacy-proposal-draft.json');
+      writeFileSync(maintenanceLegacyProposalDraftPath, `${JSON.stringify({
+        schema_version: 'p2a.eval_maintenance_draft.v1',
+        draftId: 'eval-maintenance-draft-legacy-proposal-fixture',
+        generatedAt: '2026-01-01T00:00:00.000Z',
+        summary: {
+          clusters: 1,
+          tasks: 1,
+        },
+        tasks: [
+          {
+            clusterId: 'cluster-maintenance-legacy-proposal',
+            title: 'Avoid duplicate legacy proposal maintenance',
+            acceptanceCriteria: ['Legacy proposal refs are deduped when importing maintenance drafts.'],
+            sourceSpecRefs: ['proposal:legacy-maintenance-from-draft'],
+          },
+        ],
+        nextActions: ['Review before applying.'],
+      }, null, 2)}\n`, 'utf8');
+
+      result = runIteration([
+        'maintenance',
+        'add',
+        '--artifacts',
+        artifactRoot,
+        '--from-draft',
+        maintenanceLegacyProposalDraftPath,
+        '--yes',
+      ]);
+      checks += 1;
+      if (
+        result.status !== 0
+        || !result.stdout.includes('- appended: 0')
+        || !result.stdout.includes('- skipped: 1')
+        || !result.stdout.includes('proposal:legacy-maintenance-from-draft already tracked by task-005')
+        || readFileSync(maintenanceGraphPath, 'utf8') !== maintenanceGraphAfterLegacyProposalText
+      ) {
+        console.error(`iteration maintenance add --from-draft legacy proposal duplicate skip fixture failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: failureStatus(result), checks };
+      }
+
       result = runIteration(['validate', '--artifacts', artifactRoot, '--audit-archive']);
       checks += 1;
       if (
         result.status !== 0
         || !result.stdout.includes('archived audit: 2 closed iteration(s) verified')
-        || !result.stdout.includes('maintenance: 2 task(s) valid')
+        || !result.stdout.includes('maintenance: 5 task(s) valid')
       ) {
         console.error(`iteration archive audit after compose fixture check failed: ${caseData.id}`);
         writeResultOutput(result);
@@ -6761,13 +8271,16 @@ function validateIterationCurrentFixtureCases() {
       const targetTaskGraphPath = path.join(iterationTargetArtifactRoot, 'gate-c-task-graph', 'task-graph.json');
       const targetSpecPath = path.join(iterationTargetArtifactRoot, 'gate-b-spec', 'spec.json');
       const targetIntakePath = path.join(iterationTargetArtifactRoot, 'gate-a-intake', 'intake.json');
+      const targetPreflightPath = path.join(iterationTargetArtifactRoot, 'preflight-research', 'next-iteration-recommendations.md');
       const targetMaintenanceGraphPath = path.join(iterationTargetRoot, '.plan2agent', 'maintenance', 'task-graph.json');
       if (
         !existsSync(targetCurrentSpecPath)
         || !existsSync(targetSpecPath)
         || !existsSync(targetIntakePath)
+        || !existsSync(targetPreflightPath)
         || !existsSync(targetMaintenanceGraphPath)
         || !existsSync(path.join(iterationTargetRoot, '.plan2agent', 'scripts', 'p2a_iteration_state.mjs'))
+        || !existsSync(path.join(iterationTargetRoot, '.plan2agent', 'scripts', 'p2a_radar_preflight.mjs'))
         || !existsSync(path.join(iterationTargetRoot, '.plan2agent', 'scripts', 'p2a_runs.mjs'))
         || !existsSync(path.join(iterationTargetRoot, '.plan2agent', 'scripts', 'p2a_execute.mjs'))
         || !existsSync(path.join(iterationTargetRoot, '.plan2agent', 'scripts', 'p2a_orchestrate.mjs'))
@@ -6796,12 +8309,14 @@ function validateIterationCurrentFixtureCases() {
         || targetManifest.currentSpecFile !== '.plan2agent/current-spec.json'
         || JSON.stringify(targetManifest.maintenanceFiles) !== JSON.stringify(['.plan2agent/maintenance/task-graph.json'])
         || !targetManifest.includedTools.includes('p2a')
+        || !targetManifest.includedTools.includes('p2a_radar_preflight')
         || !targetManifest.includedTools.includes('p2a_runs')
         || !targetManifest.includedTools.includes('p2a_execute')
         || !targetManifest.includedTools.includes('p2a_orchestrate')
         || !targetManifest.includedTools.includes('p2a_proposals')
         || !targetManifest.toolFiles.includes('.plan2agent/scripts/p2a_runs.mjs')
         || !targetManifest.toolFiles.includes('.plan2agent/scripts/p2a.mjs')
+        || !targetManifest.toolFiles.includes('.plan2agent/scripts/p2a_radar_preflight.mjs')
         || !targetManifest.toolFiles.includes('.plan2agent/scripts/p2a_execute.mjs')
         || !targetManifest.toolFiles.includes('.plan2agent/scripts/p2a_orchestrate.mjs')
         || !targetManifest.toolFiles.includes('.plan2agent/scripts/p2a_proposals.mjs')
@@ -6818,6 +8333,7 @@ function validateIterationCurrentFixtureCases() {
 	        || !targetManifest.schemaFiles.includes('.plan2agent/schemas/eval-digest.schema.json')
 	        || !targetManifest.schemaFiles.includes('.plan2agent/schemas/eval-maintenance-draft.schema.json')
 	        || !targetManifest.schemaFiles.includes('.plan2agent/schemas/eval-maintenance-apply-report.schema.json')
+        || !targetManifest.preflightResearchFiles?.includes(`.plan2agent/artifacts/${caseData.project_id}/preflight-research/next-iteration-recommendations.md`)
 	        || targetCurrentSpec.last_handoff?.iteration_id !== 'iter-002'
         || targetCurrentSpec.last_handoff?.maintenance_included !== true
         || sourceCurrentSpecAfterHandoff.last_handoff?.target_project !== iterationTargetRoot
@@ -6885,11 +8401,20 @@ function validateIterationCurrentFixtureCases() {
 
       const approvedIter3Spec = JSON.parse(readFileSync(iter3SpecPath, 'utf8'));
       approvedIter3Spec.approval = 'approved';
+      approvedIter3Spec.reference_reconnaissance.candidates = approvedIter3Spec.reference_reconnaissance.candidates.map((candidate) => (
+        candidate.title.startsWith('Feature Radar:')
+          ? {
+              ...candidate,
+              decision: 'selected',
+              rationale: `${candidate.rationale} Fixture Gate B explicitly accepted this Radar candidate for the composed-baseline iteration.`,
+            }
+          : candidate
+      ));
       approvedIter3Spec.approval_audit = {
         approved_by: 'user',
         approved_at: '2026-06-15',
         approved_artifacts: ['iterations/iter-003/gate-b-spec/spec.json'],
-        approval_note: 'Fixture approved iter-003 Gate B draft spec for promotion.',
+        approval_note: 'Fixture approved iter-003 Gate B draft after resolving Feature Radar candidates.',
       };
       writeFileSync(iter3SpecPath, `${JSON.stringify(approvedIter3Spec, null, 2)}\n`, 'utf8');
       result = runIteration(['promote-spec', '--artifacts', artifactRoot]);

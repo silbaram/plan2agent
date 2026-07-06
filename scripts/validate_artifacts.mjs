@@ -396,7 +396,8 @@ function validateReferenceReconnaissance(spec) {
     throw new ValidationError('approved spec must not contain reference_reconnaissance.open_questions');
   }
 
-  const evidenceIds = new Set((spec.evidence ?? []).map((item) => item.source_id));
+  const evidenceById = new Map((spec.evidence ?? []).map((item) => [item.source_id, item]));
+  const evidenceIds = new Set(evidenceById.keys());
   const candidateIds = reconnaissance.candidates.map((candidate) => candidate.candidate_id);
   if (candidateIds.length !== new Set(candidateIds).size) {
     throw new ValidationError('spec.reference_reconnaissance candidate_id values must be unique');
@@ -405,6 +406,18 @@ function validateReferenceReconnaissance(spec) {
   for (const candidate of reconnaissance.candidates) {
     if (!evidenceIds.has(candidate.source_id)) {
       throw new ValidationError(`spec.reference_reconnaissance ${candidate.candidate_id} references unknown evidence source_id ${candidate.source_id}`);
+    }
+    const evidence = evidenceById.get(candidate.source_id);
+    const isFeatureRadarCandidate = candidate.origin === 'feature_radar_preflight'
+      || (typeof candidate.title === 'string' && candidate.title.startsWith('Feature Radar:'))
+      || (typeof evidence?.title === 'string' && evidence.title.startsWith('Feature Radar '))
+      || (typeof evidence?.used_for === 'string' && evidence.used_for.includes('Feature Radar'));
+    if (
+      spec.approval === 'approved'
+      && isFeatureRadarCandidate
+      && (candidate.decision === 'context' || candidate.decision === 'open')
+    ) {
+      throw new ValidationError(`approved spec must resolve Feature Radar candidate ${candidate.candidate_id} as selected, rejected, or deferred before Gate B approval`);
     }
   }
 
@@ -929,7 +942,26 @@ export function validateSkillProposalData(data) {
   validateSchema(data, loadJson(SCHEMA_PATHS.skill_proposal));
   validateNonBlankStrings(data.targetFiles, `${data.proposalId}.targetFiles`);
   if (data.evidence) validateNonBlankStrings(data.evidence, `${data.proposalId}.evidence`);
+  validateProposalTargetMetadata(data, data.proposalId, { requireUpstreamReason: true });
   return data;
+}
+
+function validateProposalTargetMetadata(data, label, options = {}) {
+  const target = data.target ?? 'project';
+  if (target === 'project') {
+    for (const field of ['targetRepo', 'targetArea', 'upstreamReason']) {
+      if (typeof data[field] === 'string' && data[field].trim().length > 0) {
+        throw new ValidationError(`${label}.${field} requires target to be p2a_toolkit or companion_project`);
+      }
+    }
+    return;
+  }
+  if (typeof data.targetRepo !== 'string' || data.targetRepo.trim().length === 0) {
+    throw new ValidationError(`${label}.targetRepo is required when target is ${target}`);
+  }
+  if (options.requireUpstreamReason && (typeof data.upstreamReason !== 'string' || data.upstreamReason.trim().length === 0)) {
+    throw new ValidationError(`${label}.upstreamReason is required when target is ${target}`);
+  }
 }
 
 export function validateSkillProposal(filePath) {
@@ -979,6 +1011,7 @@ export function validateProposalReviewData(data) {
   }
   const proposalIds = [];
   for (const group of data.groups) {
+    validateProposalTargetMetadata(group, group.groupId);
     validateNonBlankStrings(group.proposalIds, `${group.groupId}.proposalIds`);
     validateNonBlankStrings(group.targetFiles, `${group.groupId}.targetFiles`);
     validateNonBlankStrings(group.sourceRunIds, `${group.groupId}.sourceRunIds`);
@@ -1023,6 +1056,7 @@ export function validateProposalCurationData(data) {
     throw new ValidationError('proposal curation groupId values must be unique');
   }
   for (const candidate of data.candidates) {
+    validateProposalTargetMetadata(candidate, candidate.candidateId);
     validateNonBlankStrings(candidate.proposalIds, `${candidate.candidateId}.proposalIds`);
     validateNonBlankStrings(candidate.targetFiles, `${candidate.candidateId}.targetFiles`);
     validateNonBlankStrings(candidate.sourceRunIds, `${candidate.candidateId}.sourceRunIds`);
@@ -1042,6 +1076,7 @@ export function validateProposalCuration(filePath) {
 
 export function validateProposalPatchDraftData(data) {
   validateSchema(data, loadJson(SCHEMA_PATHS.proposal_patch_draft));
+  validateProposalTargetMetadata(data, data.draftId);
   if (data.approvalRequired !== true) {
     throw new ValidationError('proposal patch draft approvalRequired must be true');
   }
@@ -1074,11 +1109,22 @@ export function validateProposalDraftApprovalData(data) {
   if (data.autoApplyPerformed !== false) {
     throw new ValidationError('proposal draft approval autoApplyPerformed must be false');
   }
+  const target = data.target ?? 'project';
+  validateProposalTargetMetadata(data, data.approvalId);
   if (!data.maintenanceTask.sourceSpecRefs.includes(`proposal-draft-approval:${data.approvalId}`)) {
     throw new ValidationError('proposal draft approval maintenanceTask.sourceSpecRefs must reference approvalId');
   }
   if (!data.maintenanceTask.sourceSpecRefs.includes(`proposal-patch-draft:${data.draftId}`)) {
     throw new ValidationError('proposal draft approval maintenanceTask.sourceSpecRefs must reference draftId');
+  }
+  if (!data.maintenanceTask.sourceSpecRefs.includes(`proposal-target:${target}`)) {
+    throw new ValidationError('proposal draft approval maintenanceTask.sourceSpecRefs must reference target');
+  }
+  if (data.targetRepo && !data.maintenanceTask.sourceSpecRefs.includes(`proposal-target-repo:${data.targetRepo}`)) {
+    throw new ValidationError('proposal draft approval maintenanceTask.sourceSpecRefs must reference targetRepo');
+  }
+  if (data.targetArea && !data.maintenanceTask.sourceSpecRefs.includes(`proposal-target-area:${data.targetArea}`)) {
+    throw new ValidationError('proposal draft approval maintenanceTask.sourceSpecRefs must reference targetArea');
   }
   if (!data.maintenanceTask.sourceSpecRefs.includes(`proposal-candidate:${data.candidateId}`)) {
     throw new ValidationError('proposal draft approval maintenanceTask.sourceSpecRefs must reference candidateId');

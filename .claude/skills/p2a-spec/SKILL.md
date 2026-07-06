@@ -13,6 +13,7 @@ Create a development-ready product and implementation specification from approve
 - User answers for every high-impact `needs_user_decision`.
 - Explicit constraints and non-goals.
 - Optional prior `spec_json` when resuming.
+- Optional Feature Radar preflight research from `.plan2agent/artifacts/<project_id>/preflight-research/`.
 
 ## Ownership
 
@@ -73,10 +74,17 @@ The Gate B output must compare viable options, explain trade-offs, recommend one
 When the scan compares concrete reusable patterns or implementation references, add `spec_json.reference_reconnaissance` instead of overloading `evidence`. Use `evidence` for source metadata and `reference_reconnaissance` for decision metadata:
 
 - `triggers`: why reconnaissance was needed, such as a material dependency choice, stale ecosystem risk, or request for current options.
-- `candidates`: `REF-n` entries that point to an existing `evidence[].source_id`, summarize the option, and record `decision` as `selected`, `rejected`, `context`, or `open`.
+- `candidates`: `REF-n` entries that point to an existing `evidence[].source_id`, summarize the option, and record `decision` as `selected`, `rejected`, `deferred`, `context`, or `open`. Use optional `origin` when a known adapter generated the candidate, such as `feature_radar_preflight`.
 - `selected_patterns`: patterns to reuse, with the source `candidate_id`, target spec fields in `applies_to`, and rationale.
 - `rejected_patterns`: patterns intentionally not reused, with the source `candidate_id` and rationale.
 - `open_questions`: unresolved reference or trade-off questions that should remain visible before Gate B approval.
+
+Feature Radar preflight research follows the same evidence model:
+
+- Copy Markdown/JSON Radar artifacts into `spec_json.evidence` as `LOCAL-n` sources, preserving file paths in `url`.
+- Convert Radar source URLs into `WEB-n` evidence when they materially ground a product or implementation recommendation.
+- Add `next-iteration-recommendations.md`, `capability-gap-analysis.md`, or `p2a-context.json` recommendations as `reference_reconnaissance.candidates` with `decision: "context"` and `origin: "feature_radar_preflight"` until Gate B explicitly changes them to `selected`, `rejected`, or `deferred`.
+- Do not treat a Radar recommendation as approved scope by itself; it only becomes task-generating scope after Gate B approval records the decision.
 
 `spec_json.clarifying_question_disposition` must include exactly one item for each intake `clarifying_questions[*].id`. Each item has `id`, `status`, `rationale`, and `affects`, plus the field required by its status:
 

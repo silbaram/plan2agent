@@ -99,7 +99,7 @@ The harness passes intermediate artifacts with these exact names:
 
 Schema validation is intentionally complemented by `scripts/validate_artifacts.mjs` and scaffold-installed `.plan2agent/scripts/validate_artifacts.mjs`, which perform gate checks that are easier to express procedurally: open/deferred decision blocking, `CQ-n` disposition coverage, spec/intake `open_decisions` traceability including promoted clarifying-question decisions, approved-spec requirement, missing dependency ids, duplicate task ids, and cycle detection.
 
-The harness orchestrator persists canonical JSON artifacts under `.plan2agent/artifacts/<project_id>/` using gate-specific folders (`gate-a-intake/intake.json`, `gate-b-spec/spec.json`, `gate-c-task-graph/task-graph.json`, `gate-d-review/review.json`). Markdown files such as `status.md`, `intake.md`, `product-spec.md`, `implementation-plan.md`, and `review-report.md` are optional generated views for human review/export, not sources of truth. In co-located scaffold projects, Gate D success is followed by `p2a_iteration.mjs init`, which moves root `gate-*` folders into `iterations/<iter-id>/gate-*` before task execution starts. Subagents remain read-only; only the orchestrator writes planning files, and neither the harness nor subagents perform git operations. `.plan2agent/` is local harness state in scaffolded application projects; planning history, run logs, and proposal artifacts are expected to be persisted through Plan2Agent Memory or explicit export rather than application source git.
+The harness orchestrator persists canonical JSON artifacts under `.plan2agent/artifacts/<project_id>/` using gate-specific folders (`gate-a-intake/intake.json`, `gate-b-spec/spec.json`, `gate-c-task-graph/task-graph.json`, `gate-d-review/review.json`). Markdown files such as `status.md`, `intake.md`, `product-spec.md`, `implementation-plan.md`, and `review-report.md` are optional generated views for human review/export, not sources of truth. Optional Feature Radar exports live under `preflight-research/`; they are read-only input evidence, not gate state. In co-located scaffold projects, Gate D success is followed by `p2a_iteration.mjs init`, which moves root `gate-*` folders into `iterations/<iter-id>/gate-*` before task execution starts. Subagents remain read-only; only the orchestrator writes planning files, and neither the harness nor subagents perform git operations. `.plan2agent/` is local harness state in scaffolded application projects; planning history, run logs, and proposal artifacts are expected to be persisted through Plan2Agent Memory or explicit export rather than application source git.
 
 
 ## 7. Evidence and Citation Convention
@@ -112,7 +112,8 @@ Intake and spec artifacts include an `evidence` array so web-grounded or local-s
 - Every `WEB-n` item must include a title, http(s) URL, and `used_for` rationale.
 - If a web source materially changes a question, assumption, product decision, or integration choice, the artifact must include the source in `evidence` and refer to the source id in nearby rationale.
 - Gate B technology recommendations should prefer primary sources such as official docs, release notes, standards documents, package registries, source repositories, or vendor documentation.
-- If Gate B compares concrete reusable technologies, local code patterns, prior artifacts, or external implementation approaches, record the comparison in optional `spec_json.reference_reconnaissance`. Each `REF-n` candidate points to an existing `evidence[].source_id`; selected and rejected patterns point back to those candidates so source metadata stays separate from decision rationale.
+- If Gate B compares concrete reusable technologies, local code patterns, prior artifacts, or external implementation approaches, record the comparison in optional `spec_json.reference_reconnaissance`. Each `REF-n` candidate points to an existing `evidence[].source_id`, records a decision (`selected`, `rejected`, `deferred`, `context`, or `open`), and may include an `origin` value for adapter provenance; selected and rejected patterns point back to those candidates so source metadata stays separate from decision rationale.
+- Feature Radar preflight research under `.plan2agent/artifacts/<project_id>/preflight-research/` is mapped into this same model: Radar files become `LOCAL-n`, discovered source URLs become `WEB-n`, and recommendations become `reference_reconnaissance.candidates` with `decision: "context"` and `origin: "feature_radar_preflight"` until Gate B explicitly changes them to `selected`, `rejected`, or `deferred`.
 
 ## 8. 기준 저장 구조
 
@@ -140,6 +141,7 @@ scripts/p2a_runs.mjs                        # task run log and verification trac
 scripts/p2a_execute.mjs                     # supervised single-task lifecycle runner
 scripts/p2a_orchestrate.mjs                 # supervised orchestration CLI
 scripts/p2a_proposals.mjs                   # proposal mining/review/curation CLI
+scripts/p2a_radar_preflight.mjs             # Feature Radar preflight discovery/adapter helper
 scripts/p2a_run_paths.mjs                   # run directory resolution helper
 scripts/p2a_iteration_state.mjs             # active iteration resolution helper
 ```

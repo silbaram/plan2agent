@@ -11,6 +11,7 @@ Use this workflow to convert an early product idea into development-ready planni
 
 - A one-sentence product or feature idea.
 - Optional clarification answers, constraints, audience, or existing artifacts.
+- Optional Feature Radar preflight research under `.plan2agent/artifacts/<project_id>/preflight-research/`.
 - Optional resume point such as `resume_from: intake`, `resume_from: spec`, or answered decision ids like `ND-1`.
 
 ## Stage to Role Mapping
@@ -95,12 +96,13 @@ Return intermediate artifacts in fenced code blocks named exactly:
 
 ## Artifact Persistence
 
-In addition to the inline state sections, the harness orchestrator writes canonical JSON artifacts to files so the user and tools can review them before any gate. Use a stable `project_id` (kebab-case, derived from the idea or carried forward) and keep all files for one run under `.plan2agent/artifacts/<project_id>/` using gate-specific folders:
+In addition to the inline state sections, the harness orchestrator writes canonical JSON artifacts to files so the user and tools can review them before any gate. In a scaffold project, use `.plan2agent/project.config.json.projectId` as the canonical `project_id`; if it is missing, fall back to `.plan2agent/manifest.json.projectId`, then an existing artifact/spec/task graph project id, then the target/project root basename normalized to kebab-case. Treat the directory basename as a fresh-scaffold seed, not the source of truth. Only derive a kebab-case id from the idea when no scaffold config, manifest, or existing artifact id exists. Keep all files for one run under `.plan2agent/artifacts/<project_id>/` using gate-specific folders:
 
 - `gate-a-intake/intake.json` — the `intake_json` artifact
 - `gate-b-spec/spec.json` — the `spec_json` artifact
 - `gate-c-task-graph/task-graph.json` — the `task_graph_json` artifact
 - `gate-d-review/review.json` — the `review_json` artifact
+- `preflight-research/` — optional copied Feature Radar artifacts. Treat these as read-only input evidence, not gate state.
 
 Optional/generated Markdown views may be written beside the JSON files when needed for export, sharing, or a UI preview: `status.md`, `gate-a-intake/intake.md`, `gate-b-spec/product-spec.md`, `gate-b-spec/implementation-plan.md`, and `gate-d-review/review-report.md`. These Markdown files are never the source of truth; regenerate them from JSON rather than preserving independent edits. Only the harness orchestrator writes files; subagents stay read-only and return their content for the orchestrator to persist. Continue to surface the inline named JSON sections as well so resume and paste-in still work.
 
@@ -136,6 +138,8 @@ Do not retype gate status facts from memory. Pull gate status, task counts, `rea
 - Use `USER-n` for user-provided source material, `LOCAL-n` for repository/local artifacts, and `WEB-n` for web lookup sources.
 - Every `WEB-n` evidence item must include an `https://` or `http://` URL, title, and short `used_for` rationale.
 - If web lookup materially affects a question, assumption, product decision, or integration choice, include the source in `evidence` and refer to its `source_id` in nearby rationale text.
+- If Feature Radar preflight research is present, import its Markdown/JSON files as `LOCAL-n` evidence and any discovered URLs as `WEB-n` evidence. Add Radar recommendations as `reference_reconnaissance.candidates` with `decision: "context"` and `origin: "feature_radar_preflight"` until Gate B changes them to `selected`, `rejected`, or `deferred`.
+- Feature Radar recommendations are candidates, not approved scope. Gate B must state which recommendations are selected, deferred, or rejected before Gate C task generation.
 - Do not use web lookup for implementation execution; it is only allowed for read-only prior-art or domain grounding.
 
 ## Output Modes

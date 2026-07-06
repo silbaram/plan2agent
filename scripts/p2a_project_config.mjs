@@ -1,7 +1,8 @@
 /** Shared Plan2Agent project config detection and merge helpers. */
 
-import { existsSync, lstatSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
+import { P2A_ARTIFACTS_DIR, normalizeProjectId, normalizeProjectIdFromPath } from './p2a_paths.mjs';
 
 const ORCHESTRATION_AGENT_TOOLS = new Set(['codex', 'claude', 'manual']);
 const AI_TOOL_TARGETS = new Set(['codex', 'claude', 'gemini']);
@@ -199,6 +200,52 @@ function readJsonObject(filePath) {
   }
 }
 
+function existingProjectIdValue(value) {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  return normalizeProjectId(trimmed) ? trimmed : null;
+}
+
+function artifactProjectIdFromRoot(artifactRoot, artifactDirName) {
+  const candidates = [
+    [path.join(artifactRoot, 'current-spec.json'), 'project_id'],
+    [path.join(artifactRoot, 'gate-b-spec', 'spec.json'), 'project_id'],
+    [path.join(artifactRoot, 'gate-c-task-graph', 'task-graph.json'), 'projectId'],
+    [path.join(artifactRoot, 'gate-d-review', 'review.json'), 'projectId'],
+  ];
+  for (const [filePath, key] of candidates) {
+    const parsed = readJsonObject(filePath);
+    const projectId = existingProjectIdValue(parsed?.[key]);
+    if (projectId) return projectId;
+  }
+  return normalizeProjectId(artifactDirName);
+}
+
+function existingArtifactProjectId(targetRoot) {
+  const artifactsRoot = path.join(targetRoot, P2A_ARTIFACTS_DIR);
+  try {
+    if (!existsSync(artifactsRoot) || !lstatSync(artifactsRoot).isDirectory()) return null;
+    const entries = readdirSync(artifactsRoot, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .sort((left, right) => left.name.localeCompare(right.name));
+    for (const entry of entries) {
+      const projectId = artifactProjectIdFromRoot(path.join(artifactsRoot, entry.name), entry.name);
+      if (projectId) return projectId;
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+export function resolveProjectIdDefault(targetRoot, config = {}, manifest = {}) {
+  return existingProjectIdValue(config?.projectId)
+    ?? existingProjectIdValue(manifest?.projectId)
+    ?? existingArtifactProjectId(targetRoot)
+    ?? normalizeProjectIdFromPath(targetRoot, null)
+    ?? 'project';
+}
+
 export function detectProjectCommands(targetRoot) {
   const packageManager = detectPackageManager(targetRoot);
   let installCommand = null;
@@ -235,6 +282,7 @@ export function detectProjectCommands(targetRoot) {
 
 export function buildProjectConfig(targetRoot, teamBigFiveConfig = { enabled: false }, options = {}) {
   const taskGraph = options.taskGraph ?? null;
+  const projectId = existingProjectIdValue(options.projectId) ?? resolveProjectIdDefault(targetRoot, options.config, options.manifest);
   const detected = options.emptyCommands
     ? {
         packageManager: null,
@@ -247,6 +295,7 @@ export function buildProjectConfig(targetRoot, teamBigFiveConfig = { enabled: fa
     : detectProjectCommands(targetRoot);
   return {
     schema_version: 'p2a.project_config.v1',
+    projectId,
     packageManager: detected.packageManager,
     installCommand: detected.installCommand,
     testCommand: detected.testCommand,
@@ -262,6 +311,26 @@ export function buildProjectConfig(targetRoot, teamBigFiveConfig = { enabled: fa
     promptTemplates: defaultPromptTemplates(),
     notes: detected.notes,
   };
+}
+
+export function mergeProjectIdConfig(config, manifest, targetRoot) {
+  const next = { ...config };
+  if (existingProjectIdValue(next.projectId)) {
+    return { config: next, updatedKeys: [] };
+  }
+  next.projectId = resolveProjectIdDefault(targetRoot, next, manifest);
+  if (!next.schema_version) next.schema_version = 'p2a.project_config.v1';
+  return { config: next, updatedKeys: ['projectId'] };
+}
+
+export function mergeProjectIdManifest(manifest, config, targetRoot) {
+  const next = { ...manifest };
+  if (existingProjectIdValue(next.projectId)) {
+    return { manifest: next, updatedKeys: [] };
+  }
+  next.projectId = resolveProjectIdDefault(targetRoot, config, next);
+  if (!next.schema_version) next.schema_version = 'p2a.handoff.v1';
+  return { manifest: next, updatedKeys: ['projectId'] };
 }
 
 export function commandKeyForVerificationType(type) {

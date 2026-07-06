@@ -23,6 +23,7 @@ import {
   validateReviewPass,
   validateSpec,
   validateApprovalAuditData,
+  validateEvalMaintenanceDraftData,
   validateTaskGraph,
   validateTaskContextData,
   validateTaskGraphData,
@@ -35,6 +36,11 @@ import {
 } from './p2a_iteration_state.mjs';
 import { loadRunsForArtifactRoot } from './p2a_runs.mjs';
 import { resolveP2aPaths } from './p2a_paths.mjs';
+import {
+  buildFeatureRadarEvidence,
+  buildFeatureRadarReferenceCandidates,
+  loadFeatureRadarPreflight,
+} from './p2a_radar_preflight.mjs';
 
 const P2A_PATHS = resolveP2aPaths(import.meta.url);
 const ROOT = P2A_PATHS.projectRoot;
@@ -44,6 +50,7 @@ const DEFAULT_ITERATION_ID = 'v1-mvp';
 const INIT_REBASED_SOURCE_SPEC = '../gate-b-spec/spec.json';
 const COMMANDS = new Set(['init', 'current', 'validate', 'close', 'open', 'draft', 'context', 'promote-spec', 'promote-tasks', 'diff-tasks', 'compose', 'maintenance']);
 const MAINTENANCE_ACTIONS = new Set(['add']);
+const CONTEXT_SCOPES = new Set(['feature', 'maintenance']);
 const VALIDATE_STAGES = new Set(['ready', 'gate-a', 'gate-b-draft', 'gate-b-approved', 'gate-c-draft']);
 const PRODUCT_FIELDS = [
   'problem',
@@ -76,12 +83,13 @@ function usage() {
     '  node .plan2agent/scripts/p2a_iteration.mjs close --artifacts <iterative-project-dir> [--iteration-id active]',
     '  node .plan2agent/scripts/p2a_iteration.mjs open --artifacts <iterative-project-dir> --iteration-id <id> --idea <text>',
     '  node .plan2agent/scripts/p2a_iteration.mjs draft --artifacts <iterative-project-dir> [--idea <text>] [--force]',
-    '  node .plan2agent/scripts/p2a_iteration.mjs context --artifacts <iterative-project-dir> [--idea <text>] [--code-root <dir>]',
+    '  node .plan2agent/scripts/p2a_iteration.mjs context --artifacts <iterative-project-dir> [--scope feature|maintenance] [--idea <text>] [--code-root <dir>]',
     '  node .plan2agent/scripts/p2a_iteration.mjs promote-spec --artifacts <iterative-project-dir>',
     '  node .plan2agent/scripts/p2a_iteration.mjs promote-tasks --artifacts <iterative-project-dir> [--approved-by <name>] [--approval-note <text>]',
     '  node .plan2agent/scripts/p2a_iteration.mjs diff-tasks --artifacts <iterative-project-dir> [--force]',
     '  node .plan2agent/scripts/p2a_iteration.mjs compose --artifacts <iterative-project-dir> [--allow-conflicts]',
     '  node .plan2agent/scripts/p2a_iteration.mjs maintenance add --artifacts <iterative-project-dir> --title <text> --accept <text> [--accept <text> ...] [--description <text>] [--area <text>] [--prompt <text>] [--ref <value> ...] [--depends <task-id> ...] [--dry-run]',
+    '  node .plan2agent/scripts/p2a_iteration.mjs maintenance add --artifacts <iterative-project-dir> --from-draft <path> [--dry-run|--yes]',
     '',
     'Commands:',
     '  init                  Convert a greenfield artifact root into iterations/<id>/gate-*.',
@@ -127,6 +135,7 @@ function usage() {
     '  --force               Overwrite existing Gate A/B draft files.',
     '',
     'context options:',
+    '  --scope <scope>      Context scope: feature or maintenance. Default: feature.',
     '  --idea <text>         Override the idea included in the emitted context JSON.',
     '  --code-root <dir>     Code root to scan for L1 file-tree signals. Default: current working directory.',
     '',
@@ -148,6 +157,8 @@ function usage() {
     '  --prompt <text>       suggestedAgentPrompt. Defaults to a generated scoped prompt.',
     '  --ref <value>         sourceSpecRefs entry. Repeatable; defaults to maintenance.',
     '  --depends <task-id>   Dependency task id. Repeatable; defaults to none.',
+    '  --from-draft <path>   Append tasks from a reviewed maintenance draft JSON.',
+    '  --yes                 Confirm writing tasks from --from-draft. Not needed with --dry-run.',
     '  --dry-run            Print the task and graph path without writing files.',
   ].join('\n');
 }
@@ -172,12 +183,16 @@ function parseArgs(argv) {
     description: null,
     area: 'maintenance',
     prompt: null,
+    fromDraft: null,
     acceptanceCriteria: [],
     sourceSpecRefs: [],
     dependencies: [],
+    areaProvided: false,
     codeRoot: process.cwd(),
+    scope: 'feature',
     approvedBy: null,
     approvalNote: null,
+    yes: false,
   };
   const command = argv[0];
   if (!command) throw new Error(`missing command\n\n${usage()}`);
@@ -212,6 +227,10 @@ function parseArgs(argv) {
       if (command !== 'context') throw new Error('--code-root is only supported by context');
       args.codeRoot = argv[++index];
       if (!args.codeRoot) throw new Error('--code-root requires a directory');
+    } else if (arg === '--scope') {
+      if (command !== 'context') throw new Error('--scope is only supported by context');
+      args.scope = argv[++index];
+      if (!CONTEXT_SCOPES.has(args.scope)) throw new Error(`--scope must be one of ${[...CONTEXT_SCOPES].join(', ')}`);
     } else if (arg === '--force') {
       if (command !== 'draft' && command !== 'diff-tasks') throw new Error('--force is only supported by draft and diff-tasks');
       args.force = true;
@@ -263,6 +282,7 @@ function parseArgs(argv) {
       if (!args.description) throw new Error('--description requires a value');
     } else if (arg === '--area') {
       if (command !== 'maintenance' || args.action !== 'add') throw new Error('--area is only supported by maintenance add');
+      args.areaProvided = true;
       args.area = argv[++index];
       if (!args.area) throw new Error('--area requires a value');
     } else if (arg === '--prompt') {
@@ -279,6 +299,13 @@ function parseArgs(argv) {
       const value = argv[++index];
       if (!value) throw new Error('--depends requires a value');
       args.dependencies.push(value);
+    } else if (arg === '--from-draft') {
+      if (command !== 'maintenance' || args.action !== 'add') throw new Error('--from-draft is only supported by maintenance add');
+      args.fromDraft = argv[++index];
+      if (!args.fromDraft) throw new Error('--from-draft requires a path');
+    } else if (arg === '--yes') {
+      if (command !== 'maintenance' || args.action !== 'add') throw new Error('--yes is only supported by maintenance add --from-draft');
+      args.yes = true;
     } else if (arg.startsWith('--')) {
       throw new Error(`unknown option: ${arg}`);
     } else {
@@ -290,8 +317,17 @@ function parseArgs(argv) {
   if (command === 'open' && !args.iterationIdProvided) throw new Error('--iteration-id is required for open');
   if (command === 'open' && (!args.idea || args.idea.trim().length === 0)) throw new Error('--idea is required for open');
   if (command === 'maintenance' && args.action === 'add') {
-    if (!args.title || args.title.trim().length === 0) throw new Error('--title is required for maintenance add');
-    if (!args.acceptanceCriteria.length) throw new Error('--accept is required for maintenance add');
+    if (args.fromDraft) {
+      if (args.title || args.description || args.prompt || args.acceptanceCriteria.length || args.sourceSpecRefs.length || args.dependencies.length || args.areaProvided) {
+        throw new Error('--from-draft cannot be combined with --title, --description, --area, --prompt, --accept, --ref, or --depends');
+      }
+      if (args.yes && args.dryRun) throw new Error('--yes and --dry-run cannot be combined');
+      if (!args.dryRun && !args.yes) throw new Error('maintenance add --from-draft requires --yes unless --dry-run is used');
+    } else {
+      if (args.yes) throw new Error('--yes is only supported with maintenance add --from-draft');
+      if (!args.title || args.title.trim().length === 0) throw new Error('--title is required for maintenance add');
+      if (!args.acceptanceCriteria.length) throw new Error('--accept is required for maintenance add');
+    }
   }
   return args;
 }
@@ -1421,6 +1457,85 @@ function buildInitialSpec({ projectId, iterationId, idea, intake }) {
       },
     ],
     reference_reconnaissance: initialReferenceReconnaissance(iterationId, idea),
+  };
+}
+
+function featureRadarSummary(preflight) {
+  const runRefs = (preflight.runs ?? []).map((run) => run.ref).filter(Boolean);
+  const parts = [
+    `${runRefs.length} run(s)`,
+    `${preflight.recommendations?.length ?? 0} recommendation(s)`,
+    `${preflight.webSources?.length ?? 0} web source(s)`,
+  ];
+  return `${parts.join(', ')}${runRefs.length ? `: ${runRefs.join(', ')}` : ''}`;
+}
+
+function nextAssumptionId(assumptions) {
+  const highest = (assumptions ?? []).reduce((max, assumption) => {
+    const match = typeof assumption?.id === 'string' ? assumption.id.match(/^A-([0-9]+)$/) : null;
+    return match ? Math.max(max, Number.parseInt(match[1], 10)) : max;
+  }, 0);
+  return `A-${highest + 1}`;
+}
+
+function mergeFeatureRadarIntoIntake(intake, preflight) {
+  if (!preflight.detected) return intake;
+  const evidenceMap = buildFeatureRadarEvidence(preflight, intake.evidence, { includeWeb: false });
+  return {
+    ...intake,
+    known_facts: appendUnique(intake.known_facts, [
+      `Feature Radar preflight research detected and attached for Gate A/B review: ${featureRadarSummary(preflight)}`,
+    ]),
+    assumptions: [
+      ...intake.assumptions,
+      {
+        id: nextAssumptionId(intake.assumptions),
+        statement: 'Feature Radar recommendations are preflight candidates, not approved scope, until Gate B explicitly marks them selected, deferred, or rejected.',
+        risk: 'medium',
+        confirmation_needed: false,
+      },
+    ],
+    evidence: [
+      ...intake.evidence,
+      ...evidenceMap.evidence,
+    ],
+  };
+}
+
+function mergeFeatureRadarIntoSpec(spec, preflight) {
+  if (!preflight.detected) return spec;
+  const evidenceMap = buildFeatureRadarEvidence(preflight, spec.evidence, { includeWeb: true });
+  const reconnaissance = spec.reference_reconnaissance ?? {
+    triggers: [],
+    candidates: [],
+    selected_patterns: [],
+    rejected_patterns: [],
+    open_questions: [],
+  };
+  const radarCandidates = buildFeatureRadarReferenceCandidates(
+    preflight,
+    evidenceMap,
+    reconnaissance.candidates,
+  );
+  return {
+    ...spec,
+    evidence: [
+      ...spec.evidence,
+      ...evidenceMap.evidence,
+    ],
+    reference_reconnaissance: {
+      ...reconnaissance,
+      triggers: appendUnique(reconnaissance.triggers, [
+        `Feature Radar preflight research was detected for this artifact root: ${featureRadarSummary(preflight)}`,
+      ]),
+      candidates: [
+        ...(Array.isArray(reconnaissance.candidates) ? reconnaissance.candidates : []),
+        ...radarCandidates,
+      ],
+      selected_patterns: Array.isArray(reconnaissance.selected_patterns) ? reconnaissance.selected_patterns : [],
+      rejected_patterns: Array.isArray(reconnaissance.rejected_patterns) ? reconnaissance.rejected_patterns : [],
+      open_questions: Array.isArray(reconnaissance.open_questions) ? reconnaissance.open_questions : [],
+    },
   };
 }
 
@@ -2791,19 +2906,20 @@ function collectCodeSignals(args, state) {
 function context(args) {
   const state = resolveIterationState(args.artifacts, { requireReady: false });
   const effectiveSpec = loadContextEffectiveSpec(state);
+  const scope = args.scope ?? 'feature';
   const contextData = {
     schema_version: 'p2a.task_context.v1',
     project_id: state.projectId,
-    active_iteration: state.activeIteration,
-    scope: 'feature',
-    idea: args.idea ?? state.currentSpec.pending_iteration?.idea ?? null,
+    active_iteration: scope === 'maintenance' ? 'maintenance' : state.activeIteration,
+    scope,
+    idea: scope === 'maintenance' ? (args.idea ?? null) : (args.idea ?? state.currentSpec.pending_iteration?.idea ?? null),
     baseline_effective_spec_ref: state.currentSpec.effective_spec_ref ?? null,
     effective_spec: effectiveSpec,
     existing_tasks: {
       active: summarizeTaskGraphIfPresent(state.taskGraphPath),
       maintenance: summarizeTaskGraphIfPresent(maintenanceTaskGraphPath(state.artifactRoot)),
     },
-    spec_field_changes: contextSpecFieldChanges(state),
+    spec_field_changes: scope === 'maintenance' ? [] : contextSpecFieldChanges(state),
     code_signals: collectCodeSignals(args, state),
   };
   validateTaskContextData(contextData);
@@ -2841,7 +2957,194 @@ function suggestedMaintenancePrompt(title, projectId) {
     'Keep the change minimal and scoped to this fix, and add or update tests/verification as needed.';
 }
 
+const MAINTENANCE_DRAFT_DEDUPE_REF_PREFIXES = [
+  'eval-cluster:',
+  'proposal-draft-approval:',
+  'proposal-patch-draft:',
+  'proposal-candidate:',
+  'proposal:',
+  'skill-proposal:',
+];
+
+function nonBlankString(value, label) {
+  if (typeof value !== 'string' || value.trim().length === 0) {
+    throw new Error(`${label} must be a non-empty string`);
+  }
+  return value.trim();
+}
+
+function optionalNonBlankString(value, label) {
+  if (value === undefined || value === null) return null;
+  return nonBlankString(value, label);
+}
+
+function nonBlankStringArray(value, label, options = {}) {
+  if (value === undefined || value === null) {
+    return options.defaultValue ? [...options.defaultValue] : [];
+  }
+  if (!Array.isArray(value)) throw new Error(`${label} must be an array`);
+  const values = [];
+  const seen = new Set();
+  for (const item of value) {
+    const normalized = nonBlankString(item, `${label}[]`);
+    if (seen.has(normalized)) continue;
+    seen.add(normalized);
+    values.push(normalized);
+  }
+  if (options.requireNonEmpty && values.length === 0) {
+    throw new Error(`${label} must include at least one value`);
+  }
+  return values;
+}
+
+function maintenanceDraftTaskAliases(task, index) {
+  return nonBlankStringArray([task.id, task.taskId, task.clusterId].filter((value) => value !== undefined && value !== null), `draft task ${index + 1} aliases`);
+}
+
+function normalizeMaintenanceDraftTask(task, index, state) {
+  if (!task || typeof task !== 'object' || Array.isArray(task)) {
+    throw new Error(`draft task ${index + 1} must be an object`);
+  }
+  const title = nonBlankString(task.title, `draft task ${index + 1}.title`);
+  const targetArea = optionalNonBlankString(task.targetArea ?? task.area, `draft task ${index + 1}.targetArea`) ?? 'maintenance';
+  const description = optionalNonBlankString(task.description, `draft task ${index + 1}.description`) ?? title;
+  const suggestedAgentPrompt = optionalNonBlankString(
+    task.suggestedAgentPrompt ?? task.prompt,
+    `draft task ${index + 1}.suggestedAgentPrompt`,
+  ) ?? suggestedMaintenancePrompt(title, state.projectId);
+  return {
+    aliases: maintenanceDraftTaskAliases(task, index),
+    title,
+    description,
+    status: 'todo',
+    dependencies: nonBlankStringArray(task.dependencies ?? task.depends, `draft task ${index + 1}.dependencies`),
+    acceptanceCriteria: nonBlankStringArray(task.acceptanceCriteria, `draft task ${index + 1}.acceptanceCriteria`, { requireNonEmpty: true }),
+    targetArea,
+    suggestedAgentPrompt,
+    sourceSpecRefs: nonBlankStringArray(task.sourceSpecRefs, `draft task ${index + 1}.sourceSpecRefs`, { defaultValue: ['maintenance'], requireNonEmpty: true }),
+  };
+}
+
+function maintenanceDraftDedupeRefs(sourceSpecRefs) {
+  return sourceSpecRefs.filter((ref) => MAINTENANCE_DRAFT_DEDUPE_REF_PREFIXES.some((prefix) => ref.startsWith(prefix)));
+}
+
+function maintenanceDedupeRefsByTaskId(tasks) {
+  const refs = new Map();
+  for (const task of tasks) {
+    for (const ref of maintenanceDraftDedupeRefs(task.sourceSpecRefs ?? [])) {
+      if (!refs.has(ref)) refs.set(ref, task.id);
+    }
+  }
+  return refs;
+}
+
+function registerMaintenanceDraftAliases(aliasToTaskId, aliases, taskId) {
+  for (const alias of aliases) {
+    const existing = aliasToTaskId.get(alias);
+    if (existing && existing !== taskId) {
+      throw new Error(`maintenance draft aliases must be unique; ${alias} maps to both ${existing} and ${taskId}`);
+    }
+    aliasToTaskId.set(alias, taskId);
+  }
+}
+
+function normalizeMaintenanceDraftPath(filePath) {
+  return path.resolve(process.cwd(), filePath);
+}
+
+function loadMaintenanceDraft(filePath) {
+  const draftPath = normalizeMaintenanceDraftPath(filePath);
+  const draft = validateEvalMaintenanceDraftData(loadJson(draftPath));
+  return { draftPath, draft };
+}
+
+function addMaintenanceTasksFromDraft(args) {
+  const state = resolveIterationState(args.artifacts, { requireReady: false });
+  const { draftPath, draft } = loadMaintenanceDraft(args.fromDraft);
+  const graphPath = maintenanceTaskGraphPath(state.artifactRoot);
+  const graph = existsSync(graphPath)
+    ? loadJson(graphPath)
+    : initialMaintenanceTaskGraph(state.projectId);
+  if (!Array.isArray(graph.tasks)) graph.tasks = [];
+
+  const normalizedTasks = draft.tasks.map((task, index) => normalizeMaintenanceDraftTask(task, index, state));
+  const dedupeRefs = maintenanceDedupeRefsByTaskId(graph.tasks);
+  const aliasToTaskId = new Map();
+  const plannedTasks = [];
+  const skippedTasks = [];
+
+  for (const task of normalizedTasks) {
+    const duplicateRef = maintenanceDraftDedupeRefs(task.sourceSpecRefs).find((ref) => dedupeRefs.has(ref)) ?? null;
+    if (duplicateRef) {
+      const existingTaskId = dedupeRefs.get(duplicateRef);
+      registerMaintenanceDraftAliases(aliasToTaskId, task.aliases, existingTaskId);
+      skippedTasks.push({
+        title: task.title,
+        ref: duplicateRef,
+        taskId: existingTaskId,
+      });
+      continue;
+    }
+
+    const taskId = nextMaintenanceTaskId([...graph.tasks, ...plannedTasks]);
+    registerMaintenanceDraftAliases(aliasToTaskId, task.aliases, taskId);
+    const plannedTask = {
+      id: taskId,
+      title: task.title,
+      description: task.description,
+      status: task.status,
+      dependencies: task.dependencies,
+      acceptanceCriteria: task.acceptanceCriteria,
+      targetArea: task.targetArea,
+      suggestedAgentPrompt: task.suggestedAgentPrompt,
+      sourceSpecRefs: task.sourceSpecRefs,
+    };
+    plannedTasks.push(plannedTask);
+    for (const ref of maintenanceDraftDedupeRefs(task.sourceSpecRefs)) {
+      if (!dedupeRefs.has(ref)) dedupeRefs.set(ref, taskId);
+    }
+  }
+
+  for (const task of plannedTasks) {
+    task.dependencies = task.dependencies.map((dependency) => aliasToTaskId.get(dependency) ?? dependency);
+  }
+
+  const nextGraph = {
+    ...graph,
+    tasks: [...graph.tasks, ...plannedTasks],
+  };
+  if (nextGraph.tasks.length) validateTaskGraphData(nextGraph);
+
+  const label = args.dryRun ? 'Plan2Agent maintenance draft dry run' : 'Plan2Agent maintenance draft applied';
+  console.log(`${label}:`);
+  console.log(`- draft: ${toRelativeFromRoot(draftPath)}`);
+  console.log(`- graph: ${toRelativeFromRoot(graphPath)}`);
+  console.log(`- draft tasks: ${normalizedTasks.length}`);
+  console.log(`- appended: ${plannedTasks.length}`);
+  console.log(`- skipped: ${skippedTasks.length}`);
+  for (const task of plannedTasks) {
+    console.log(`- append ${task.id}: ${task.title}`);
+  }
+  for (const skipped of skippedTasks) {
+    console.log(`- skip ${skipped.title}: ${skipped.ref} already tracked by ${skipped.taskId}`);
+  }
+  if (args.dryRun) {
+    console.log('- write: no files changed; rerun with --yes to append.');
+    return 0;
+  }
+  if (plannedTasks.length) {
+    mkdirSync(path.dirname(graphPath), { recursive: true });
+    writeJson(graphPath, nextGraph);
+    writeIterationStatus(state.artifactRoot, state.currentSpec);
+  }
+  console.log(`- tasks total: ${nextGraph.tasks.length}`);
+  return 0;
+}
+
 function addMaintenanceTask(args) {
+  if (args.fromDraft) return addMaintenanceTasksFromDraft(args);
+
   const state = resolveIterationState(args.artifacts, { requireReady: false });
   const graphPath = maintenanceTaskGraphPath(state.artifactRoot);
   const graph = existsSync(graphPath)
@@ -3295,7 +3598,8 @@ function draft(args) {
   const initialIntake = baselineSpecRef ? null : validateIntake(initialIntakePath);
   assertWritableDraftFiles(files, artifactRoot, args.force, baselineSpecRef ? {} : { allowExisting: ['intakeJson', 'intakeMd'] });
 
-  const intake = baselineSpecRef
+  const preflight = loadFeatureRadarPreflight(artifactRoot, { projectId });
+  let intake = baselineSpecRef
     ? buildDeltaIntake({
         projectId,
         iterationId: state.activeIteration,
@@ -3304,7 +3608,7 @@ function draft(args) {
         baselineSpecRef,
       })
     : initialIntake;
-  const spec = baselineSpecRef
+  let spec = baselineSpecRef
     ? buildDeltaSpec({
         projectId,
         iterationId: state.activeIteration,
@@ -3318,6 +3622,10 @@ function draft(args) {
         idea,
         intake: initialIntake,
       });
+  if (preflight.detected) {
+    intake = mergeFeatureRadarIntoIntake(intake, preflight);
+    spec = mergeFeatureRadarIntoSpec(spec, preflight);
+  }
   const artifacts = {
     intake_ref: artifactRelativePath(artifactRoot, files.intakeJson),
     spec_ref: artifactRelativePath(artifactRoot, files.specJson),
@@ -3357,6 +3665,9 @@ function draft(args) {
   console.log(`- baseline spec: ${baselineSpecRef ?? 'none'}`);
   console.log(`- intake: ${artifacts.intake_ref}`);
   console.log(`- spec: ${artifacts.spec_ref} (approval=draft)`);
+  if (preflight.detected) {
+    console.log(`- Feature Radar preflight: ${featureRadarSummary(preflight)}`);
+  }
   console.log('Gate A/B artifacts validated; Gate C/D are still pending.');
   return 0;
 }

@@ -335,8 +335,20 @@
                 "enum": [
                   "selected",
                   "rejected",
+                  "deferred",
                   "context",
                   "open"
+                ]
+              },
+              "origin": {
+                "type": "string",
+                "enum": [
+                  "feature_radar_preflight",
+                  "gate_a_intake",
+                  "iteration_idea",
+                  "baseline_reference",
+                  "technology_reconnaissance",
+                  "other"
                 ]
               },
               "rationale": {

@@ -188,6 +188,13 @@ describe("loadProjectSnapshot", () => {
     const tempRoot = await mkdtemp(path.join(tmpdir(), "p2a-loader-proposals-"));
     try {
       await mkdir(path.join(tempRoot, ".plan2agent", "proposals"), { recursive: true });
+      await mkdir(path.join(tempRoot, ".plan2agent", "proposals", "curations"), { recursive: true });
+      await mkdir(path.join(tempRoot, ".plan2agent", "proposals", "patch-drafts"), { recursive: true });
+      await mkdir(path.join(tempRoot, ".plan2agent", "proposals", "approvals"), { recursive: true });
+      await mkdir(
+        path.join(tempRoot, ".plan2agent", "artifacts", "demo", "iterations", "maintenance", "gate-c-task-graph"),
+        { recursive: true },
+      );
       await writeFile(
         path.join(tempRoot, ".plan2agent/manifest.json"),
         JSON.stringify({ schema_version: "p2a.manifest.v1" }),
@@ -203,8 +210,71 @@ describe("loadProjectSnapshot", () => {
           recommendedChange: "Create the worktree before checking workspace existence.",
           targetFiles: [".plan2agent/scripts/p2a_runs.mjs", ".agents/skills/p2a-dev-execution/SKILL.md"],
           risk: "low",
+          riskRationale: "The current start path can fail before the isolated workspace exists.",
           status: "proposed",
+          quality: {
+            score: 80,
+            band: "strong",
+            criteria: {},
+            missing: ["validation"],
+          },
           note: "Repeated workflow issue.",
+        }),
+      );
+      await writeFile(
+        path.join(tempRoot, ".plan2agent/proposals/curations/curation.json"),
+        JSON.stringify({
+          schema_version: "p2a.proposal_curation.v1",
+          candidates: [
+            {
+              candidateId: "candidate-isolation-workspace",
+              proposalIds: ["p2a-runs-create-isolation-workspace-check"],
+            },
+          ],
+        }),
+      );
+      await writeFile(
+        path.join(tempRoot, ".plan2agent/proposals/patch-drafts/draft.json"),
+        JSON.stringify({
+          schema_version: "p2a.proposal_patch_draft.v1",
+          draftId: "proposal-patch-draft-isolation-workspace",
+          candidateId: "candidate-isolation-workspace",
+        }),
+      );
+      await writeFile(
+        path.join(tempRoot, ".plan2agent/proposals/approvals/approval.json"),
+        JSON.stringify({
+          schema_version: "p2a.proposal_draft_approval.v1",
+          approvalId: "proposal-draft-approval-isolation-workspace",
+          draftId: "proposal-patch-draft-isolation-workspace",
+          candidateId: "candidate-isolation-workspace",
+          maintenanceTask: {
+            taskId: "maintenance-self-improvement-isolation-workspace",
+            taskGraph: ".plan2agent/artifacts/demo/iterations/maintenance/gate-c-task-graph/task-graph.json",
+            title: "Fix isolated workspace start guard",
+          },
+        }),
+      );
+      await writeFile(
+        path.join(tempRoot, ".plan2agent/artifacts/demo/iterations/maintenance/gate-c-task-graph/task-graph.json"),
+        JSON.stringify({
+          schema_version: "p2a.task_graph.v1",
+          projectId: "demo",
+          version: "maintenance",
+          sourceSpec: "../../../current-spec.json",
+          tasks: [
+            {
+              id: "maintenance-self-improvement-isolation-workspace",
+              title: "Fix isolated workspace start guard from graph",
+              description: "Track approved proposal execution.",
+              status: "in_progress",
+              dependencies: [],
+              acceptanceCriteria: ["The approved proposal is implemented."],
+              targetArea: "maintenance",
+              suggestedAgentPrompt: "Implement the approved maintenance proposal.",
+              sourceSpecRefs: ["proposal-draft-approval:proposal-draft-approval-isolation-workspace"],
+            },
+          ],
         }),
       );
 
@@ -214,12 +284,98 @@ describe("loadProjectSnapshot", () => {
       expect(snapshot.proposals[0]).toMatchObject({
         proposalId: "p2a-runs-create-isolation-workspace-check",
         sourceRunId: "run-20260629-task-14-search-tests",
-        status: "proposed",
+        status: "approved",
+        recordedStatus: "proposed",
+        statusSource: "approval",
         risk: "low",
+        riskRationale: "The current start path can fail before the isolated workspace exists.",
         evidenceCount: 1,
+        quality: {
+          score: 80,
+          band: "strong",
+          missing: ["validation"],
+        },
+        approvalId: "proposal-draft-approval-isolation-workspace",
+        candidateId: "candidate-isolation-workspace",
+        patchDraftId: "proposal-patch-draft-isolation-workspace",
+        maintenanceTaskId: "maintenance-self-improvement-isolation-workspace",
+        maintenanceTaskTitle: "Fix isolated workspace start guard from graph",
+        maintenanceTaskStatus: "in_progress",
         relativePath: ".plan2agent/proposals/p2a-runs-create-isolation-workspace-check.json",
       });
       expect(snapshot.diagnostics.some((diagnostic) => diagnostic.message.includes("proposal feedback"))).toBe(true);
+    } finally {
+      await rm(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("falls back to approval maintenance task details when the linked graph is unavailable", async () => {
+    const tempRoot = await mkdtemp(path.join(tmpdir(), "p2a-loader-proposal-missing-graph-"));
+    try {
+      await mkdir(path.join(tempRoot, ".plan2agent", "proposals", "curations"), { recursive: true });
+      await mkdir(path.join(tempRoot, ".plan2agent", "proposals", "patch-drafts"), { recursive: true });
+      await mkdir(path.join(tempRoot, ".plan2agent", "proposals", "approvals"), { recursive: true });
+      await writeFile(
+        path.join(tempRoot, ".plan2agent/manifest.json"),
+        JSON.stringify({ schema_version: "p2a.manifest.v1" }),
+      );
+      await writeFile(
+        path.join(tempRoot, ".plan2agent/proposals/proposal-missing-maintenance-graph.json"),
+        JSON.stringify({
+          schema_version: "p2a.skill_proposal.v1",
+          proposalId: "proposal-missing-maintenance-graph",
+          problem: "Approval graph may be unavailable in copied artifacts.",
+          recommendedChange: "Keep proposal queue loading when the linked maintenance graph is missing.",
+          targetFiles: [".plan2agent/scripts/p2a_iteration.mjs"],
+          risk: "low",
+          status: "proposed",
+        }),
+      );
+      await writeFile(
+        path.join(tempRoot, ".plan2agent/proposals/curations/curation.json"),
+        JSON.stringify({
+          schema_version: "p2a.proposal_curation.v1",
+          candidates: [
+            {
+              candidateId: "candidate-missing-maintenance-graph",
+              proposalIds: ["proposal-missing-maintenance-graph"],
+            },
+          ],
+        }),
+      );
+      await writeFile(
+        path.join(tempRoot, ".plan2agent/proposals/patch-drafts/draft.json"),
+        JSON.stringify({
+          schema_version: "p2a.proposal_patch_draft.v1",
+          draftId: "proposal-patch-draft-missing-maintenance-graph",
+          candidateId: "candidate-missing-maintenance-graph",
+        }),
+      );
+      await writeFile(
+        path.join(tempRoot, ".plan2agent/proposals/approvals/approval.json"),
+        JSON.stringify({
+          schema_version: "p2a.proposal_draft_approval.v1",
+          approvalId: "proposal-draft-approval-missing-maintenance-graph",
+          draftId: "proposal-patch-draft-missing-maintenance-graph",
+          candidateId: "candidate-missing-maintenance-graph",
+          maintenanceTask: {
+            taskId: "task-999",
+            taskGraph: ".plan2agent/artifacts/demo/iterations/maintenance/gate-c-task-graph/missing.json",
+            title: "Fallback maintenance task title",
+          },
+        }),
+      );
+
+      const snapshot = await loadProjectSnapshot(tempRoot);
+
+      expect(snapshot.proposals).toHaveLength(1);
+      expect(snapshot.proposals[0]).toMatchObject({
+        proposalId: "proposal-missing-maintenance-graph",
+        status: "approved",
+        maintenanceTaskId: "task-999",
+        maintenanceTaskTitle: "Fallback maintenance task title",
+        maintenanceTaskStatus: null,
+      });
     } finally {
       await rm(tempRoot, { recursive: true, force: true });
     }
@@ -855,6 +1011,34 @@ describe("loadProjectSnapshot", () => {
         }),
       );
       await writeFile(
+        path.join(tempRoot, "memory-digest.json"),
+        JSON.stringify({
+          schema_version: "p2a.memory_digest.v1",
+          context: {
+            sourceKind: "artifacts",
+            sourcePath: ".",
+            runsDir: "runs",
+          },
+          runs: {
+            total: 2,
+            failedOrBlocked: 1,
+            verificationFailures: 1,
+            verificationGaps: 0,
+          },
+          proposals: {
+            total: 1,
+            uncoveredCandidateRuns: [],
+          },
+          memoryUsefulness: {
+            searchReports: 1,
+            totalResults: 4,
+            usedResults: 3,
+            unusedResults: 1,
+            usefulnessRate: 0.75,
+          },
+        }),
+      );
+      await writeFile(
         path.join(tempRoot, "memory-search.json"),
         JSON.stringify({
           schema_version: "p2a.memory_search.v1",
@@ -875,12 +1059,25 @@ describe("loadProjectSnapshot", () => {
               RUN_RECORD: 1,
             },
           },
+          usage: {
+            usedResults: 3,
+            usefulnessRate: 0.75,
+          },
           results: [],
         }),
       );
 
       const snapshot = await loadProjectSnapshot(tempRoot);
 
+      expect(snapshot.artifacts[0]?.memoryDigest).toMatchObject({
+        sourcePath: "memory-digest.json",
+        totalRuns: 2,
+        failedOrBlocked: 1,
+        memorySearchReports: 1,
+        memoryTotalResults: 4,
+        memoryUsedResults: 3,
+        memoryUsefulnessRate: 0.75,
+      });
       expect(snapshot.artifacts[0]?.memoryHistory).toMatchObject({
         sourcePath: "memory-history.json",
         totalEvents: 3,
@@ -895,6 +1092,8 @@ describe("loadProjectSnapshot", () => {
         totalResults: 4,
         documentResults: 3,
         runResults: 1,
+        usedResults: 3,
+        usefulnessRate: 0.75,
       });
     } finally {
       await rm(tempRoot, { recursive: true, force: true });
