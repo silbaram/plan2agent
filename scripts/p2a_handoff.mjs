@@ -550,7 +550,7 @@ function pushToolAssets(plan, targetRoot, toolTargets) {
   return { files, groups };
 }
 
-function pushGenerated(plan, targetRoot, targetRelative, type, content) {
+function pushGenerated(plan, targetRoot, targetRelative, type, content, options = {}) {
   const normalizedTarget = normalizePath(targetRelative);
   const existing = plan.find((item) => normalizePath(item.targetRelative) === normalizedTarget);
   if (existing) {
@@ -563,15 +563,16 @@ function pushGenerated(plan, targetRoot, targetRelative, type, content) {
     targetRelative,
     target: targetPath(targetRoot, targetRelative),
     content,
+    allowExisting: options.allowExisting === true,
   });
 }
 
-function pushGeneratedText(plan, targetRoot, targetRelative, text) {
-  pushGenerated(plan, targetRoot, targetRelative, 'write-text', text.endsWith('\n') ? text : `${text}\n`);
+function pushGeneratedText(plan, targetRoot, targetRelative, text, options = {}) {
+  pushGenerated(plan, targetRoot, targetRelative, 'write-text', text.endsWith('\n') ? text : `${text}\n`, options);
 }
 
-function pushGeneratedJson(plan, targetRoot, targetRelative, data) {
-  pushGenerated(plan, targetRoot, targetRelative, 'write-json', `${JSON.stringify(data, null, 2)}\n`);
+function pushGeneratedJson(plan, targetRoot, targetRelative, data, options = {}) {
+  pushGenerated(plan, targetRoot, targetRelative, 'write-json', `${JSON.stringify(data, null, 2)}\n`, options);
 }
 
 function isUnsafeTeamBigFiveSourcePath(relativePath) {
@@ -1004,6 +1005,39 @@ target/
 `;
 }
 
+function renderPlan2AgentGitignoreBlock(missingLines, claudeLocalMissing) {
+  const lines = [
+    '# Plan2Agent local harness state and artifacts',
+    '# Planning artifacts, run logs, proposals, and generated harness files are local state.',
+    '# Persist them through Plan2Agent Memory instead of committing them with application source.',
+    ...missingLines,
+  ];
+  if (claudeLocalMissing) {
+    lines.push('', '# Claude Code local machine settings', '.claude/settings.local.json');
+  }
+  return lines.join('\n');
+}
+
+function mergeProjectGitignore(existingText) {
+  const existingLines = new Set(existingText.split(/\r?\n/).map((line) => line.trim()));
+  const requiredLines = ['.plan2agent/'];
+  const missingLines = requiredLines.filter((line) => !existingLines.has(line));
+  const claudeLocalMissing = !existingLines.has('.claude/settings.local.json');
+  if (!missingLines.length && !claudeLocalMissing) {
+    return existingText.endsWith('\n') ? existingText : `${existingText}\n`;
+  }
+  const block = renderPlan2AgentGitignoreBlock(missingLines, claudeLocalMissing);
+  const base = existingText.trimEnd();
+  return `${base}${base ? '\n\n' : ''}${block}\n`;
+}
+
+function scaffoldGitignoreContent(targetRoot) {
+  const gitignorePath = path.join(targetRoot, '.gitignore');
+  if (!existsSync(gitignorePath)) return renderProjectGitignore();
+  if (!lstatSync(gitignorePath).isFile()) return renderProjectGitignore();
+  return mergeProjectGitignore(readFileSync(gitignorePath, 'utf8'));
+}
+
 const CLAUDE_COARSE_DENY_PREFIXES = [
   { prefix: '/etc', rules: ['Edit(//etc/**)', 'Write(//etc/**)'], keepForWorkspace: true },
   { prefix: '/bin', rules: ['Edit(//bin/**)', 'Write(//bin/**)'], keepForWorkspace: true },
@@ -1196,13 +1230,18 @@ function buildScaffoldPlan(args, targetRoot, createdAt = new Date().toISOString(
   }
   pushGeneratedJson(plan, targetRoot, path.join('.plan2agent', 'manifest.json'), manifest);
   pushGeneratedJson(plan, targetRoot, path.join('.plan2agent', 'project.config.json'), buildProjectConfig(targetRoot, { enabled: false }, { projectId }));
-  pushGeneratedText(plan, targetRoot, '.gitignore', renderProjectGitignore());
+  pushGeneratedText(plan, targetRoot, '.gitignore', scaffoldGitignoreContent(targetRoot), { allowExisting: true });
   const styleContractRelative = path.join('.plan2agent', 'style.md');
   if (args.command === 'scaffold' && !existsSync(path.join(targetRoot, styleContractRelative))) {
     pushGeneratedText(plan, targetRoot, styleContractRelative, renderStyleContractTemplate());
   }
-  pushGeneratedText(plan, targetRoot, 'PLAN2AGENT.md', renderPlan2AgentGuide());
+  if (args.command !== 'scaffold' || !existsSync(path.join(targetRoot, 'PLAN2AGENT.md'))) {
+    pushGeneratedText(plan, targetRoot, 'PLAN2AGENT.md', renderPlan2AgentGuide());
+  }
   plan.scaffoldWarnings = claudeCoarseDeny.omitted.map((prefix) => `Claude coarse deny ${prefix}/** omitted because targetProject is under that prefix; the PreToolUse hook enforces the workspace boundary instead.`);
+  if (args.command === 'scaffold' && existsSync(path.join(targetRoot, 'PLAN2AGENT.md'))) {
+    plan.scaffoldWarnings.push('Existing PLAN2AGENT.md preserved; review it manually if you want to add the generated Plan2Agent project guide.');
+  }
   plan.projectId = projectId;
   return plan;
 }
@@ -1287,6 +1326,9 @@ function compareUpgradePlanItem(item) {
     };
   }
   if (!existsSync(item.target)) {
+    if (isManualReviewUpgradeTarget(targetRelative)) {
+      return { ...base, status: 'manual_review', detail: 'generated/local file is missing; review before creating it' };
+    }
     return { ...base, status: 'missing', detail: 'target file is missing' };
   }
   if (!lstatSync(item.target).isFile()) {
@@ -1296,9 +1338,13 @@ function compareUpgradePlanItem(item) {
     const planned = plannedItemContent(item);
     const plannedBuffer = Buffer.isBuffer(planned) ? planned : Buffer.from(String(planned));
     const currentBuffer = readFileSync(item.target);
-    return plannedBuffer.equals(currentBuffer)
-      ? { ...base, status: 'unchanged', detail: 'target matches toolkit file' }
-      : { ...base, status: 'would_update', detail: 'target differs from toolkit file' };
+    if (plannedBuffer.equals(currentBuffer)) {
+      return { ...base, status: 'unchanged', detail: 'target matches toolkit file' };
+    }
+    if (isManualReviewUpgradeTarget(targetRelative)) {
+      return { ...base, status: 'manual_review', detail: 'generated/local file differs from the toolkit template; review before replacing it' };
+    }
+    return { ...base, status: 'would_update', detail: 'target differs from toolkit file' };
   } catch (error) {
     return { ...base, status: 'error', detail: error.message };
   }
@@ -1407,6 +1453,7 @@ function buildUpgradeDryRunReport(args, targetRoot) {
   const migrationUpdateCount = configMigrations.migrations.reduce((sum, migration) => sum + migration.updatedKeys.length, 0);
   const changes = summary.missing + summary.wouldUpdate + summary.manualReview + migrationUpdateCount;
   const status = failures.length ? 'fail' : changes ? 'changes' : 'pass';
+  const safeChanges = summary.missing + summary.wouldUpdate + migrationUpdateCount;
   return {
     schema_version: 'p2a.upgrade_dry_run.v1',
     generatedAt: new Date().toISOString(),
@@ -1421,9 +1468,14 @@ function buildUpgradeDryRunReport(args, targetRoot) {
     failures,
     nextActions: failures.length
       ? [`Resolve conflicts/errors above before running ${args.command} again.`]
-      : changes
-        ? [`Review listed changes. Apply safe updates with: ${updateApplyCommand(args, targetRoot)}`]
-        : [],
+      : summary.manualReview > 0
+        ? [
+            `Review manual_review item(s) before applying ${args.command}; safe apply is blocked until they are resolved.`,
+            safeChanges > 0 ? `After resolving manual_review items, rerun preview or apply safe updates with: ${updateApplyCommand(args, targetRoot)}` : `After resolving manual_review items, rerun ${args.command} --dry-run.`,
+          ]
+        : changes
+          ? [`Review listed changes. Apply safe updates with: ${updateApplyCommand(args, targetRoot)}`]
+          : [],
     _plan: plan,
     _manifest: manifest,
     _config: config,
@@ -1482,6 +1534,12 @@ function isAutoUpgradableTarget(targetRelative) {
     || target.startsWith('.claude/hooks/')
     || target.startsWith('.gemini/agents/')
     || target.startsWith('.gemini/commands/p2a/');
+}
+
+function isManualReviewUpgradeTarget(targetRelative) {
+  return !isManifestTarget(targetRelative)
+    && !isProjectConfigTarget(targetRelative)
+    && !isAutoUpgradableTarget(targetRelative);
 }
 
 function applyCandidateStatus(status) {
@@ -2126,7 +2184,9 @@ function rebaseTaskGraphSourceSpec(source, sourceSpecRef) {
 
 function assertNoConflicts(plan, overwrite) {
   if (overwrite) return;
-  const conflicts = plan.filter((item) => existsSync(item.target)).map((item) => normalizePath(item.targetRelative));
+  const conflicts = plan
+    .filter((item) => existsSync(item.target) && (item.allowExisting !== true || !lstatSync(item.target).isFile()))
+    .map((item) => normalizePath(item.targetRelative));
   if (conflicts.length) throw new Error(`target file(s) already exist; rerun with --overwrite to replace: ${conflicts.join(', ')}`);
 }
 

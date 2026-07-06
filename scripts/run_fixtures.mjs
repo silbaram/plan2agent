@@ -242,6 +242,28 @@ function validateScaffoldFixtureCase() {
       return { status: failureStatus(result), checks };
     }
 
+    const existingFilesRoot = path.join(tempRoot, 'existing-files-project');
+    mkdirSync(existingFilesRoot, { recursive: true });
+    writeFileSync(path.join(existingFilesRoot, '.gitignore'), 'CUSTOM_KEEP_ME\n', 'utf8');
+    writeFileSync(path.join(existingFilesRoot, 'PLAN2AGENT.md'), '# Existing guide\nCUSTOM_KEEP_ME\n', 'utf8');
+    result = runHandoff(['scaffold', '--target', existingFilesRoot, '--tools', 'none']);
+    checks += 1;
+    const mergedGitignore = readFileSync(path.join(existingFilesRoot, '.gitignore'), 'utf8');
+    const preservedPlan2AgentGuide = readFileSync(path.join(existingFilesRoot, 'PLAN2AGENT.md'), 'utf8');
+    if (
+      result.status !== 0
+      || !mergedGitignore.includes('CUSTOM_KEEP_ME')
+      || !mergedGitignore.includes('.plan2agent/')
+      || !mergedGitignore.includes('.claude/settings.local.json')
+      || !preservedPlan2AgentGuide.includes('CUSTOM_KEEP_ME')
+      || preservedPlan2AgentGuide.includes('Plan2Agent Project Harness')
+    ) {
+      console.error('scaffold existing generated files were not preserved/merged safely');
+      writeResultOutput(result);
+      console.error(JSON.stringify({ mergedGitignore, preservedPlan2AgentGuide }, null, 2));
+      return { status: failureStatus(result), checks };
+    }
+
     result = runP2a(['info', '--target', path.join(tempRoot, 'missing-info-target'), '--json']);
     checks += 1;
     if (result.status === 0 || !`${result.stdout}${result.stderr}`.includes('--target must be an existing directory')) {
@@ -493,6 +515,20 @@ function validateScaffoldFixtureCase() {
     const partialIterationArtifactRoot = path.join(targetRoot, '.plan2agent', 'artifacts', 'partial-iteration-service');
     cpSync(path.join(E2E_FIXTURE_ROOT, 'webhook-api-service'), partialIterationArtifactRoot, { recursive: true });
     mkdirSync(path.join(partialIterationArtifactRoot, 'iterations'), { recursive: true });
+    result = runTargetP2a(targetRoot, ['info', '--json']);
+    checks += 1;
+    const partialInfo = result.status === 0 ? JSON.parse(result.stdout) : null;
+    const partialInfoArtifact = partialInfo?.artifacts?.find((artifact) => artifact.artifactRoot === '.plan2agent/artifacts/partial-iteration-service');
+    if (
+      result.status !== 0
+      || partialInfoArtifact?.layout?.kind !== 'incomplete_iteration'
+      || !partialInfo.nextActions?.some((action) => action.includes('Repair incomplete iteration layout'))
+    ) {
+      console.error('p2a info did not classify partial scaffold iteration layout as incomplete');
+      writeResultOutput(result);
+      console.error(JSON.stringify({ partialInfoArtifact, nextActions: partialInfo?.nextActions }, null, 2));
+      return { status: failureStatus(result), checks };
+    }
     result = runTargetExecute(targetRoot, [
       'plan',
       '--graph',
@@ -918,12 +954,42 @@ function validateScaffoldFixtureCase() {
       return { status: failureStatus(result), checks };
     }
 
+    const manualReviewUpdateRoot = path.join(tempRoot, 'manual-review-update-target');
+    cpSync(targetRoot, manualReviewUpdateRoot, { recursive: true });
+    writeFileSync(path.join(manualReviewUpdateRoot, 'PLAN2AGENT.md'), '# Locally edited guide\n', 'utf8');
+    result = runHandoff(['update', '--target', manualReviewUpdateRoot, '--dry-run']);
+    checks += 1;
+    if (
+      result.status !== 0
+      || !result.stdout.includes('Plan2Agent update preview')
+      || !result.stdout.includes('1 manual review')
+      || !result.stdout.includes('- manual_review: generate (generated) -> PLAN2AGENT.md')
+      || !result.stdout.includes('safe apply is blocked until they are resolved')
+      || result.stdout.includes('Review listed changes. Apply safe updates with:')
+    ) {
+      console.error('update dry-run did not classify generated/local file drift as manual_review');
+      writeResultOutput(result);
+      return { status: failureStatus(result), checks };
+    }
+    result = runHandoff(['update', '--target', manualReviewUpdateRoot, '--apply']);
+    checks += 1;
+    if (
+      result.status === 0
+      || !result.stdout.includes('Plan2Agent update apply')
+      || !result.stdout.includes('status: blocked')
+      || !result.stdout.includes('manual_review: PLAN2AGENT.md')
+    ) {
+      console.error('update apply did not block unresolved manual_review generated/local file drift');
+      writeResultOutput(result);
+      return { status: 1, checks };
+    }
+
     const p2aUpdateRoot = path.join(tempRoot, 'p2a-update-target');
     cpSync(targetRoot, p2aUpdateRoot, { recursive: true });
     writeFileSync(path.join(p2aUpdateRoot, '.plan2agent', 'scripts', 'p2a_eval.mjs'), 'stale runtime script\n', 'utf8');
-    result = runTargetP2a(p2aUpdateRoot, ['update', '--dry-run']);
+    result = runTargetP2a(p2aUpdateRoot, ['update', '--tools', 'none', '--dry-run']);
     checks += 1;
-    const targetUpdateApplyCommand = quotedCommand(['node', path.join('.plan2agent', 'scripts', 'p2a.mjs'), 'update', '--apply']);
+    const targetUpdateApplyCommand = quotedCommand(['node', path.join('.plan2agent', 'scripts', 'p2a.mjs'), 'update', '--tools', 'none', '--apply']);
     if (
       result.status !== 0
       || !result.stdout.includes('Plan2Agent update preview')
@@ -939,12 +1005,12 @@ function validateScaffoldFixtureCase() {
     const spacedUpdateRoot = path.join(tempRoot, 'target project with spaces');
     cpSync(targetRoot, spacedUpdateRoot, { recursive: true });
     writeFileSync(path.join(spacedUpdateRoot, '.plan2agent', 'scripts', 'p2a_eval.mjs'), 'stale runtime script\n', 'utf8');
-    result = runHandoff(['update', '--target', spacedUpdateRoot]);
+    result = runHandoff(['update', '--target', spacedUpdateRoot, '--tools', 'none']);
     checks += 1;
     if (
       result.status !== 0
       || !result.stdout.includes('Plan2Agent update preview')
-      || !result.stdout.includes(`node '${path.join(spacedUpdateRoot, '.plan2agent', 'scripts', 'p2a.mjs')}' update --apply`)
+      || !result.stdout.includes(`node '${path.join(spacedUpdateRoot, '.plan2agent', 'scripts', 'p2a.mjs')}' update --tools none --apply`)
     ) {
       console.error('update preview next action quoting fixture failed');
       writeResultOutput(result);
@@ -954,9 +1020,9 @@ function validateScaffoldFixtureCase() {
     const legacyP2aMissingRoot = path.join(tempRoot, 'legacy-p2a-missing-target');
     cpSync(targetRoot, legacyP2aMissingRoot, { recursive: true });
     unlinkSync(path.join(legacyP2aMissingRoot, '.plan2agent', 'scripts', 'p2a.mjs'));
-    result = runHandoffFrom(tempRoot, ['update', '--target', legacyP2aMissingRoot]);
+    result = runHandoffFrom(tempRoot, ['update', '--target', legacyP2aMissingRoot, '--tools', 'none']);
     checks += 1;
-    const legacyApplyCommand = quotedCommand(['node', P2A_CLI, 'update', '--target', legacyP2aMissingRoot, '--apply']);
+    const legacyApplyCommand = quotedCommand(['node', P2A_CLI, 'update', '--target', legacyP2aMissingRoot, '--tools', 'none', '--apply']);
     if (
       result.status !== 0
       || !result.stdout.includes('Plan2Agent update preview')
@@ -976,7 +1042,7 @@ function validateScaffoldFixtureCase() {
     delete applyConfig.devExecution;
     delete applyConfig.projectId;
     writeFileSync(applyConfigPath, `${JSON.stringify(applyConfig, null, 2)}\n`);
-    result = runHandoff(['update', '--target', applyUpdateRoot, '--apply']);
+    result = runHandoff(['update', '--target', applyUpdateRoot, '--tools', 'none', '--apply']);
     checks += 1;
     const appliedUpdateConfig = JSON.parse(readFileSync(applyConfigPath, 'utf8'));
     const appliedUpdateManifest = JSON.parse(readFileSync(path.join(applyUpdateRoot, '.plan2agent', 'manifest.json'), 'utf8'));
@@ -998,7 +1064,7 @@ function validateScaffoldFixtureCase() {
       console.error(JSON.stringify({ appliedUpdateConfig, appliedUpdateManifest, applyUpdateReports }, null, 2));
       return { status: failureStatus(result), checks };
     }
-    result = runHandoff(['update', '--target', applyUpdateRoot, '--apply']);
+    result = runHandoff(['update', '--target', applyUpdateRoot, '--tools', 'none', '--apply']);
     checks += 1;
     const applyUpdateReportsAfterNoop = readdirSync(path.join(applyUpdateRoot, '.plan2agent', 'update-reports')).filter((entry) => entry.endsWith('.json'));
     const appliedUpdateManifestAfterNoop = JSON.parse(readFileSync(path.join(applyUpdateRoot, '.plan2agent', 'manifest.json'), 'utf8'));
@@ -1023,7 +1089,7 @@ function validateScaffoldFixtureCase() {
     const applyUpgradeManifestBefore = JSON.parse(readFileSync(applyUpgradeManifestPath, 'utf8'));
     delete applyUpgradeManifestBefore.projectId;
     writeFileSync(applyUpgradeManifestPath, `${JSON.stringify(applyUpgradeManifestBefore, null, 2)}\n`);
-    result = runHandoff(['upgrade', '--target', applyUpgradeRoot, '--apply']);
+    result = runHandoff(['upgrade', '--target', applyUpgradeRoot, '--tools', 'none', '--apply']);
     checks += 1;
     const appliedUpgradeManifest = JSON.parse(readFileSync(applyUpgradeManifestPath, 'utf8'));
     if (
@@ -1057,7 +1123,7 @@ function validateScaffoldFixtureCase() {
       `${JSON.stringify({ project_id: legacyArtifactId }, null, 2)}\n`,
       'utf8',
     );
-    result = runHandoff(['update', '--target', legacyProjectIdRoot, '--apply']);
+    result = runHandoff(['update', '--target', legacyProjectIdRoot, '--tools', 'none', '--apply']);
     checks += 1;
     const restoredLegacyProjectIdConfig = JSON.parse(readFileSync(legacyProjectIdConfigPath, 'utf8'));
     const restoredLegacyProjectIdManifest = JSON.parse(readFileSync(legacyProjectIdManifestPath, 'utf8'));
@@ -1078,7 +1144,7 @@ function validateScaffoldFixtureCase() {
     const conflictRuntimePath = path.join(blockedUpdateRoot, '.plan2agent', 'scripts', 'p2a_eval.mjs');
     rmSync(conflictRuntimePath, { force: true });
     mkdirSync(conflictRuntimePath, { recursive: true });
-    result = runHandoff(['update', '--target', blockedUpdateRoot, '--apply']);
+    result = runHandoff(['update', '--target', blockedUpdateRoot, '--tools', 'none', '--apply']);
     checks += 1;
     const blockedReportsDir = path.join(blockedUpdateRoot, '.plan2agent', 'update-reports');
     const blockedReports = existsSync(blockedReportsDir) ? readdirSync(blockedReportsDir).filter((entry) => entry.endsWith('.json')) : [];
@@ -1102,7 +1168,7 @@ function validateScaffoldFixtureCase() {
     writeFileSync(failedRuntimePath, 'stale runtime script before partial failure\n', 'utf8');
     writeFileSync(failedSchemaPath, '{"stale": "read-only"}\n', 'utf8');
     chmodSync(failedSchemaPath, 0o444);
-    result = runHandoff(['upgrade', '--target', failedApplyRoot, '--apply']);
+    result = runHandoff(['upgrade', '--target', failedApplyRoot, '--tools', 'none', '--apply']);
     checks += 1;
     chmodSync(failedSchemaPath, 0o644);
     const failedReportsDir = path.join(failedApplyRoot, '.plan2agent', 'update-reports');
@@ -1139,7 +1205,7 @@ function validateScaffoldFixtureCase() {
     delete legacyConfig.roleProfiles;
     delete legacyConfig.promptTemplates;
     writeFileSync(legacyConfigPath, `${JSON.stringify(legacyConfig, null, 2)}\n`);
-    result = runHandoff(['upgrade', '--target', legacyUpgradeRoot, '--dry-run']);
+    result = runHandoff(['upgrade', '--target', legacyUpgradeRoot, '--tools', 'none', '--dry-run']);
     checks += 1;
     if (
       result.status !== 0

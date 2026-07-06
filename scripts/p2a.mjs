@@ -327,19 +327,22 @@ function artifactLayout(artifactRoot, isScaffoldProject) {
   const hasCurrentSpec = isFile(path.join(artifactRoot, 'current-spec.json'));
   const hasIterations = isDirectory(path.join(artifactRoot, 'iterations'));
   const hasGreenfieldGateBundleValue = hasGreenfieldGateBundle(artifactRoot);
-  const requiresIterationInit = isScaffoldProject && hasGreenfieldGateBundleValue && !hasCurrentSpec && !hasIterations;
+  const hasAnyIterationMarker = hasCurrentSpec || hasIterations;
+  const requiresIterationInit = isScaffoldProject && hasGreenfieldGateBundleValue && !hasAnyIterationMarker;
+  const hasIncompleteIterationLayout = isScaffoldProject && hasCurrentSpec !== hasIterations;
   return {
-    kind: hasCurrentSpec && hasIterations
+    kind: hasIncompleteIterationLayout
+      ? 'incomplete_iteration'
+      : hasCurrentSpec && hasIterations
       ? 'iteration'
       : hasGreenfieldGateBundleValue
         ? 'greenfield'
-        : hasCurrentSpec !== hasIterations
-          ? 'incomplete_iteration'
-          : 'unknown',
+        : 'unknown',
     hasCurrentSpec,
     hasIterations,
     hasGreenfieldGateBundle: hasGreenfieldGateBundleValue,
     requiresIterationInit,
+    hasIncompleteIterationLayout,
   };
 }
 
@@ -556,7 +559,9 @@ function buildInfo(targetRootInput) {
     nextActions.push('Install a project harness: node scripts/p2a.mjs scaffold --target <project-dir>');
   }
   for (const artifact of artifacts) {
-    if (artifact.layout.requiresIterationInit) {
+    if (artifact.layout.hasIncompleteIterationLayout) {
+      nextActions.push(`Repair incomplete iteration layout before task execution: ${artifact.artifactRoot}`);
+    } else if (artifact.layout.requiresIterationInit) {
       nextActions.push(`Initialize iteration layout: node .plan2agent/scripts/p2a.mjs iteration init --artifacts ${artifact.artifactRoot} --iteration-id v1-mvp`);
     } else if (artifact.readyTaskIds.length) {
       nextActions.push(`Plan the next ready task: node .plan2agent/scripts/p2a.mjs execute plan --artifacts ${artifact.artifactRoot} --task ${artifact.readyTaskIds[0]}`);
