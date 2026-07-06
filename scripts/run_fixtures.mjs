@@ -19,6 +19,8 @@ import { shellQuote } from './p2a_run_commands.mjs';
 import {
   E2E_FIXTURE_ROOT,
   FIXTURE_ROOT,
+  loadE2eFixtureManifest,
+  assertE2eCaseShape,
   fixtureFailureDetailArgs,
   P2A_CLI,
   ROOT,
@@ -141,6 +143,7 @@ function validateScaffoldFixtureCase() {
       path.join('.claude', 'settings.local.json'),
       path.join('.plan2agent', 'project.config.json'),
       path.join('.plan2agent', 'manifest.json'),
+      path.join('.plan2agent', 'style.md'),
       'PLAN2AGENT.md',
       '.gitignore',
     ];
@@ -1107,16 +1110,21 @@ function validateScaffoldFixtureCase() {
 	    const failedReport = failedReports
 	      .map((entry) => JSON.parse(readFileSync(path.join(failedReportsDir, entry), 'utf8')))
 	      .find((report) => report.schema_version === 'p2a.upgrade_apply.v1' && report.status === 'failed') ?? null;
-	    if (
-	      result.status === 0
-	      || !result.stdout.includes('Plan2Agent upgrade apply')
-	      || !result.stdout.includes('status: failed')
-	      || failedReports.length !== 3
-      || failedReport?.status !== 'failed'
-      || !failedReport?.applied?.files?.includes('.plan2agent/scripts/p2a_eval.mjs')
-      || !failedReport?.error
-      || readFileSync(failedRuntimePath, 'utf8') !== readFileSync(path.join(ROOT, 'scripts', 'p2a_eval.mjs'), 'utf8')
-    ) {
+	    const partialFailureObserved = result.status !== 0
+	      && result.stdout.includes('Plan2Agent upgrade apply')
+	      && result.stdout.includes('status: failed')
+	      && failedReports.length === 3
+      && failedReport?.status === 'failed'
+      && failedReport?.applied?.files?.includes('.plan2agent/scripts/p2a_eval.mjs')
+      && failedReport?.error
+      && readFileSync(failedRuntimePath, 'utf8') === readFileSync(path.join(ROOT, 'scripts', 'p2a_eval.mjs'), 'utf8');
+    const readOnlyWriteBypassed = process.getuid?.() === 0
+      && result.status === 0
+      && result.stdout.includes('Plan2Agent upgrade apply')
+      && result.stdout.includes('status: applied')
+      && readFileSync(failedRuntimePath, 'utf8') === readFileSync(path.join(ROOT, 'scripts', 'p2a_eval.mjs'), 'utf8')
+      && readFileSync(failedSchemaPath, 'utf8') === readFileSync(path.join(ROOT, 'schemas', 'run.schema.json'), 'utf8');
+    if (!partialFailureObserved && !readOnlyWriteBypassed) {
       console.error('upgrade apply partial failure report fixture failed');
       writeResultOutput(result);
       console.error(JSON.stringify({ failedReports, failedReport }, null, 2));
@@ -8318,6 +8326,14 @@ export function main() {
   writeResultOutput(negativeResult);
   if (negativeResult.status !== 0) return failureStatus(negativeResult);
 
+  const projectConfigDetectionResult = runNodeTestFile('tests/project-config-detection.test.mjs');
+  writeResultOutput(projectConfigDetectionResult);
+  if (projectConfigDetectionResult.status !== 0) return failureStatus(projectConfigDetectionResult);
+
+  const evalStableMetricsResult = runNodeTestFile('tests/eval-stable-metrics.test.mjs');
+  writeResultOutput(evalStableMetricsResult);
+  if (evalStableMetricsResult.status !== 0) return failureStatus(evalStableMetricsResult);
+
   const segments = [`${countNodeTestCases(schemaResult.stdout)} Plan2Agent fixture set test(s)`];
   if (scaffoldResult.checks) segments.push(`${scaffoldResult.checks} scaffold fixture check(s)`);
   if (evalResult.checks) segments.push(`${evalResult.checks} eval fixture check(s)`);
@@ -8325,6 +8341,8 @@ export function main() {
   segments.push(`${countNodeTestCases(e2eResult.stdout)} e2e fixture test(s)`);
   if (iterationResult.checks) segments.push(`${iterationResult.checks} iteration fixture check(s)`);
   segments.push(`${countNodeTestCases(negativeResult.stdout)} negative fixture test(s)`);
+  segments.push(`${countNodeTestCases(projectConfigDetectionResult.stdout)} project config detection test(s)`);
+  segments.push(`${countNodeTestCases(evalStableMetricsResult.stdout)} eval stable metrics test(s)`);
 
   console.log(`Validated ${formatSegments(segments)}`);
   return 0;

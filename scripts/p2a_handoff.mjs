@@ -1089,6 +1089,38 @@ function buildClaudeLocalSettings() {
   return {};
 }
 
+function renderStyleContractTemplate() {
+  return `# Plan2Agent Style Contract
+
+This file is the project code style contract that implementation agents read at the start of every task.
+Update it only by direct user edits or through an approved Plan2Agent proposal.
+
+## Naming
+
+<!-- Example: Prefer descriptive camelCase names for local variables and functions. -->
+
+## Error handling
+
+<!-- Example: Return actionable error messages and avoid swallowing exceptions silently. -->
+
+## Abstraction & function size
+
+<!-- Example: Keep functions focused; extract helpers when a branch or loop obscures intent. -->
+
+## Comments & docs
+
+<!-- Example: Comment why a non-obvious decision exists, not what straightforward code does. -->
+
+## Testing style
+
+<!-- Example: Name tests after observable behavior and cover regressions with focused cases. -->
+
+## Framework/language specifics
+
+<!-- Example: Follow established framework conventions already present in this repository. -->
+`;
+}
+
 function renderPlan2AgentGuide() {
   return `# Plan2Agent Project Harness
 
@@ -1165,6 +1197,10 @@ function buildScaffoldPlan(args, targetRoot, createdAt = new Date().toISOString(
   pushGeneratedJson(plan, targetRoot, path.join('.plan2agent', 'manifest.json'), manifest);
   pushGeneratedJson(plan, targetRoot, path.join('.plan2agent', 'project.config.json'), buildProjectConfig(targetRoot, { enabled: false }, { projectId }));
   pushGeneratedText(plan, targetRoot, '.gitignore', renderProjectGitignore());
+  const styleContractRelative = path.join('.plan2agent', 'style.md');
+  if (args.command === 'scaffold' && !existsSync(path.join(targetRoot, styleContractRelative))) {
+    pushGeneratedText(plan, targetRoot, styleContractRelative, renderStyleContractTemplate());
+  }
   pushGeneratedText(plan, targetRoot, 'PLAN2AGENT.md', renderPlan2AgentGuide());
   plan.scaffoldWarnings = claudeCoarseDeny.omitted.map((prefix) => `Claude coarse deny ${prefix}/** omitted because targetProject is under that prefix; the PreToolUse hook enforces the workspace boundary instead.`);
   plan.projectId = projectId;
