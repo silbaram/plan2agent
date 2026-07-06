@@ -19,6 +19,8 @@ import { shellQuote } from './p2a_run_commands.mjs';
 import {
   E2E_FIXTURE_ROOT,
   FIXTURE_ROOT,
+  loadE2eFixtureManifest,
+  assertE2eCaseShape,
   fixtureFailureDetailArgs,
   P2A_CLI,
   ROOT,
@@ -141,6 +143,7 @@ function validateScaffoldFixtureCase() {
       path.join('.claude', 'settings.local.json'),
       path.join('.plan2agent', 'project.config.json'),
       path.join('.plan2agent', 'manifest.json'),
+      path.join('.plan2agent', 'style.md'),
       'PLAN2AGENT.md',
       '.gitignore',
     ];
@@ -1107,16 +1110,21 @@ function validateScaffoldFixtureCase() {
 	    const failedReport = failedReports
 	      .map((entry) => JSON.parse(readFileSync(path.join(failedReportsDir, entry), 'utf8')))
 	      .find((report) => report.schema_version === 'p2a.upgrade_apply.v1' && report.status === 'failed') ?? null;
-	    if (
-	      result.status === 0
-	      || !result.stdout.includes('Plan2Agent upgrade apply')
-	      || !result.stdout.includes('status: failed')
-	      || failedReports.length !== 3
-      || failedReport?.status !== 'failed'
-      || !failedReport?.applied?.files?.includes('.plan2agent/scripts/p2a_eval.mjs')
-      || !failedReport?.error
-      || readFileSync(failedRuntimePath, 'utf8') !== readFileSync(path.join(ROOT, 'scripts', 'p2a_eval.mjs'), 'utf8')
-    ) {
+	    const partialFailureObserved = result.status !== 0
+	      && result.stdout.includes('Plan2Agent upgrade apply')
+	      && result.stdout.includes('status: failed')
+	      && failedReports.length === 3
+      && failedReport?.status === 'failed'
+      && failedReport?.applied?.files?.includes('.plan2agent/scripts/p2a_eval.mjs')
+      && failedReport?.error
+      && readFileSync(failedRuntimePath, 'utf8') === readFileSync(path.join(ROOT, 'scripts', 'p2a_eval.mjs'), 'utf8');
+    const readOnlyWriteBypassed = process.getuid?.() === 0
+      && result.status === 0
+      && result.stdout.includes('Plan2Agent upgrade apply')
+      && result.stdout.includes('status: applied')
+      && readFileSync(failedRuntimePath, 'utf8') === readFileSync(path.join(ROOT, 'scripts', 'p2a_eval.mjs'), 'utf8')
+      && readFileSync(failedSchemaPath, 'utf8') === readFileSync(path.join(ROOT, 'schemas', 'run.schema.json'), 'utf8');
+    if (!partialFailureObserved && !readOnlyWriteBypassed) {
       console.error('upgrade apply partial failure report fixture failed');
       writeResultOutput(result);
       console.error(JSON.stringify({ failedReports, failedReport }, null, 2));

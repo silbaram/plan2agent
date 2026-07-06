@@ -58,11 +58,13 @@ Codex write-capable runs use native `workspace-write` sandbox confinement inside
 
 3. Before implementing, ensure the target project has a committed source-code git baseline, excluding local `.plan2agent/` state. If there is pre-existing untracked application source, commit or intentionally ignore it first; otherwise `p2a_runs finish --collect-git` records the entire untracked source tree as this task's `changedFiles` instead of only the files this task changed.
 
-4. Implement the task while obeying the writing boundaries below and the Provider Confinement Policy in this skill. When possible, spawn the `p2a-implementer` subagent to perform the implementation inside the isolated worktree.
+4. Before implementing, check whether the target project contains `.plan2agent/style.md`. If it exists, read it and pass the style contract to the implementer, including any spawned `p2a-implementer` subagent, and require the implementation to follow it. When possible, spawn the `p2a-implementer` subagent to perform the implementation inside the isolated worktree.
+
+5. Implement the task while obeying the writing boundaries below, the project style contract when present, and the Provider Confinement Policy in this skill.
 
    The spawned `p2a-implementer` subagent performs scoped file edits only. It may optionally run local checks for self-review, but it must not call `p2a_runs verify`, `p2a_runs finish`, or `p2a_tasks done|block`. Unless lifecycle delegation is explicitly requested, those lifecycle steps belong to the main dev-execution owner running this skill.
 
-5. Verify the run with the required checks by actually executing configured or explicitly requested commands. You may verify before finish:
+6. Verify the run with the required checks by actually executing configured or explicitly requested commands. You may verify before finish:
 
    ```bash
    node .plan2agent/scripts/p2a_runs.mjs verify --run-id <id> --artifacts <dir> --test --lint --typecheck
@@ -72,7 +74,7 @@ Codex write-capable runs use native `workspace-write` sandbox confinement inside
 
    If the user provides explicit verification commands, pass them through as explicit commands such as `--test-command`, `--lint-command`, or `--typecheck-command`. Config-only verification flags such as `--test`, `--lint`, and `--typecheck` auto-detect project commands when config is empty, then skip only if no command can be detected. Use explicit commands whenever config is empty and real verification is required.
 
-6. Run the independent monitor gate before finish when the run has an orchestration sidecar. Invoke `p2a-performance-monitor` as a separate subagent when the CLI supports spawning subagents, or perform a separated read-only review pass when spawning is unavailable. Pass the target task id, acceptance criteria, and the latest run log for that task, including `verification`, `changedFiles`, `status`, and `workspaceRef`.
+7. Run the independent monitor gate before finish when the run has an orchestration sidecar. Invoke `p2a-performance-monitor` as a separate subagent when the CLI supports spawning subagents, or perform a separated read-only review pass when spawning is unavailable. Pass the target task id, acceptance criteria, and the latest run log for that task, including `verification`, `changedFiles`, `status`, and `workspaceRef`.
 
    Write the monitor result to the run's `runs/<runId>.monitor-verdict.json` path using this shape:
 
@@ -89,7 +91,7 @@ Codex write-capable runs use native `workspace-write` sandbox confinement inside
 
    Use `verdict: "block"` and fill the relevant concern array when the task should not be accepted. When multiple concern arrays are populated, failure-class mapping priority is `scope_concerns` → `verification_concerns` → `unmet_acceptance` → `needs_user_decision`. `p2a_execute finish` and `p2a_runs finish` both enforce this verdict when an orchestration sidecar requires a monitor gate.
 
-7. Finish the run through `p2a_execute`, collecting git state and letting the CLI mark the task done or blocked:
+8. Finish the run through `p2a_execute`, collecting git state and letting the CLI mark the task done or blocked:
 
    ```bash
    node .plan2agent/scripts/p2a_execute.mjs finish --run-id <id> --artifacts <dir> --status finished|failed|blocked --collect-git
@@ -103,7 +105,7 @@ Codex write-capable runs use native `workspace-write` sandbox confinement inside
 
    If the monitor verdict blocks the run, do not call `p2a_tasks done`. Finish through `p2a_execute finish` with monitor-sourced failure metadata and structured detail. The CLI maps `unmet_acceptance` to `implementation_incomplete`, `verification_concerns` to `verification_failed`, `scope_concerns` to `scope_violation`, and `needs_user_decision` to `missing_dependency`.
 
-8. Complete the retrospective gate described below.
+9. Complete the retrospective gate described below.
 
 ## Writing boundaries and prohibitions
 
@@ -115,6 +117,7 @@ Codex write-capable runs use native `workspace-write` sandbox confinement inside
 - Do not access, print, or exfiltrate `.env` files, credentials, or tokens.
 - Do not hide failing verification by marking a task done.
 - Do not automatically self-modify skills or agents.
+- Do not modify `.plan2agent/style.md` during implementation; it is updated only by direct user edits or through the approved proposal path.
 
 ## Output
 
@@ -128,8 +131,8 @@ Return these items to the user:
 
 ## Retrospective
 
-After execution, perform a Hermes-style retrospective gate. Look for repeated mistakes, missing verification, reusable procedures, or unclear boundaries discovered during the run.
+After execution, perform a Hermes-style retrospective gate. Look for repeated mistakes, missing verification, reusable procedures, or unclear boundaries discovered during the run. Explicitly ask: did the user correct code style during this run?
 
-If an improvement is warranted, write it as a skill-proposal schema object rather than freeform markdown and save it inside the project at `.plan2agent/proposals/<proposalId>.json`. The object must conform to `.plan2agent/schemas/skill-proposal.schema.json` with `schema_version: "p2a.skill_proposal.v1"`, a stable non-empty `proposalId`, the source run id when available, concrete evidence, target canonical files, risk, and `status: "proposed"`.
+If an improvement is warranted, write it as a skill-proposal schema object rather than freeform markdown and save it inside the project at `.plan2agent/proposals/<proposalId>.json`. If the user corrected code style, write a proposal with `target: "project"` and `targetFiles: [".plan2agent/style.md"]`; record concrete evidence describing what the user asked to change and how they wanted the style adjusted. The object must conform to `.plan2agent/schemas/skill-proposal.schema.json` with `schema_version: "p2a.skill_proposal.v1"`, a stable non-empty `proposalId`, the source run id when available, concrete evidence, target canonical files, risk, and `status: "proposed"`.
 
 Do not edit any skill, agent, planning artifact, CLI mirror, or other canonical file automatically as part of the retrospective. Leave only the proposal object for later review. A human or the read-only skill curator must review the proposal, and any approved patch must happen in a separate turn after human approval.
