@@ -70,23 +70,23 @@ node scripts/validate_artifacts.mjs --fixture-dir fixtures/cache-library
 
 ## 2. 승인 게이트
 
-각 게이트는 단순 체크리스트가 아니라 사용자 검토 지점이다. 하네스는 해당 단계의 파일을 먼저 저장하고, 근거와 추천을 포함한 읽기 쉬운 요약을 제시한 뒤, 자유 형식 피드백과 구조화된 답변 또는 승인을 명시적으로 요청한다. 사용자가 응답하면 산출물을 수정해 다시 제시하고, 명시적 승인 없이는 다음 단계로 넘어가지 않는다.
+Gate A/B/C/D의 상세 통과·차단 규칙은 `p2a-harness` skill이 유일한 정본이다. 정본: [`.agents/skills/p2a-harness/SKILL.md`](../.agents/skills/p2a-harness/SKILL.md#approval-gates).
 
-### Gate A — Intake decisions
+### Gate A
 
-Intake 결과의 `needs_user_decision.status` 중 하나라도 `open` 또는 `deferred`이면 하네스는 intake 후 멈춘다. 이때 제품 명세를 확정하지 않고, 열린 결정 항목만 사용자에게 묻는다. 각 결정은 질문, 중요한 이유, 선택지별 trade-off, 추천 선택지와 근거, 막고 있는 downstream 산출물을 함께 보여줘야 한다.
+Intake 단계에서 미해결 사용자 결정이 있으면 멈추고, 결정 항목만 근거와 함께 사용자에게 묻는다. 각 게이트는 명시적 사용자 승인 전에는 다음 단계로 넘어가지 않는 검토 지점이다.
 
-### Gate B — Spec approval
+### Gate B
 
-`spec_json.approval`이 `approved`가 아니거나, `spec_json.approval_audit`가 없거나, `spec_json.open_decisions`가 비어 있지 않으면 task graph를 만들지 않는다. 또한 intake의 모든 `CQ-n`은 `spec_json.clarifying_question_disposition`에서 한 번씩 처분되어야 한다. Gate B에서 라이브러리, 프레임워크, 런타임, 프로토콜, DB, 클라우드 서비스, 외부 API를 선택하거나 추천한다면 최신 공식 문서와 패키지/릴리스 정보를 중심으로 가벼운 기술 조사를 수행하고, 근거를 `spec_json.evidence`에 남겨야 한다. 사용자가 제품/구현 spec을 명시적으로 승인하면 승인 감사 정보는 `spec_json.approval_audit`에 기록한다.
+Spec approval, 승인 감사 정보, open decision 해소, 모든 `CQ-n` disposition, 필요한 기술 조사 근거가 갖춰져야 task graph로 넘어간다. 구체적인 disposition 값과 기술 조사 기준은 정본 skill의 Approval Gates 및 Clarifying Question Disposition 절을 따른다.
 
-### Gate C — Task graph validation
+### Gate C
 
-최종 출력 전 task graph를 검증한다. 모든 dependency는 같은 graph 안의 task id를 참조해야 하고, dependency graph는 cycle이 없어야 하며, 모든 task는 acceptance criteria를 가져야 한다. 저장소 기준에서는 task가 source spec reference도 가져야 한다.
+Task graph의 dependency, cycle, acceptance criteria, source spec reference를 검증한다. 이 절은 사용자에게 검증 관점을 요약하며, 세부 차단 조건은 정본 skill과 validator 계약을 따른다.
 
-### Gate D — Review blockers
+### Gate D
 
-Gate D의 정본 산출물은 `review_json`이며 파일로는 `gate-d-review/review.json`에 저장된다. `review-report.md`는 동일 findings를 사람이 읽기 쉽게 렌더링한 선택적 Markdown 보고서다. Validator, iteration, handoff는 `review.json.blocking_issues`가 빈 배열인지 확인해 Gate D 통과 여부를 판단한다. Review에서 blocking issue가 나오면 하네스는 계획이 준비됐다고 말하지 않는다. 대신 blocker 목록과 수정해야 할 artifact section을 반환한다.
+정본 review artifact인 `gate-d-review/review.json`의 blocking issue가 없어야 계획이 준비된 상태가 된다. `review-report.md`는 같은 findings를 렌더링한 선택적 Markdown view일 뿐이다.
 
 ## 3. 산출물 파일과 데이터 계약
 
