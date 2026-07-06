@@ -32,6 +32,7 @@ const RUNNER_DOCTOR_COMMANDS = Object.freeze({
   gemini: 'gemini',
 });
 const RUNNER_DOCTOR_VERSION_ARGS = ['--version'];
+const LIVE_PROBE_TIMEOUT_MS = 15000;
 const RUNTIME_EVENT_TYPES = new Set(['handoff', 'status', 'question', 'answer', 'ack', 'concern', 'decision', 'blocker', 'verification', 'monitor_verdict', 'owner_note']);
 const RUNTIME_ROLE_STATUSES = new Set(['pending', 'active', 'blocked', 'complete', 'skipped']);
 const RUNTIME_PHASES = new Set(['initialized', 'running', 'blocked', 'ready_for_monitor', 'ready_to_finish', 'closed']);
@@ -2190,7 +2191,7 @@ function liveVersionProbe(provider, rootPath) {
     cwd: rootPath,
     encoding: 'utf8',
     shell: process.platform === 'win32',
-    timeout: 5000,
+    timeout: LIVE_PROBE_TIMEOUT_MS,
   });
   const output = `${result.stdout ?? ''}${result.stderr ?? ''}`.trim();
   const firstLine = output.split(/\r?\n/).find(Boolean) ?? null;
