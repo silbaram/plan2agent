@@ -4,11 +4,10 @@ import { spawnSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-
-const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..');
+import { ROOT, EVAL_CLI } from './helpers/fixtures.mjs';
 
 function runDigest(evalDir) {
-  const result = spawnSync(process.execPath, ['scripts/p2a_eval.mjs', 'digest', '--eval', evalDir, '--json'], {
+  const result = spawnSync(process.execPath, [EVAL_CLI, 'digest', '--eval', evalDir, '--json'], {
     cwd: ROOT,
     encoding: 'utf8',
   });
