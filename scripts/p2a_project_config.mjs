@@ -201,6 +201,33 @@ function readJsonObject(filePath) {
   }
 }
 
+function readTextFile(filePath) {
+  try {
+    if (!existsSync(filePath) || !lstatSync(filePath).isFile()) return null;
+    return readFileSync(filePath, 'utf8');
+  } catch {
+    return null;
+  }
+}
+
+function detectGradleLintCommand(targetRoot, gradleRunner) {
+  const buildText = readTextFile(path.join(targetRoot, 'build.gradle'))
+    ?? readTextFile(path.join(targetRoot, 'build.gradle.kts'));
+  if (!buildText) return null;
+  if (/spotless/i.test(buildText)) return `${gradleRunner} spotlessCheck`;
+  if (/ktlint/i.test(buildText)) return `${gradleRunner} ktlintCheck`;
+  if (/checkstyle/i.test(buildText)) return `${gradleRunner} checkstyleMain`;
+  return null;
+}
+
+function detectMavenLintCommand(targetRoot) {
+  const pomText = readTextFile(path.join(targetRoot, 'pom.xml'));
+  if (!pomText) return null;
+  if (/maven-checkstyle-plugin/i.test(pomText)) return 'mvn checkstyle:check';
+  if (/spotless-maven-plugin/i.test(pomText)) return 'mvn spotless:check';
+  return null;
+}
+
 function existingProjectIdValue(value) {
   if (typeof value !== 'string') return null;
   const trimmed = value.trim();
@@ -257,8 +284,16 @@ export function detectProjectCommands(targetRoot) {
   if (packageManager === 'pnpm') installCommand = 'pnpm install';
   else if (packageManager === 'yarn') installCommand = 'yarn install';
   else if (packageManager === 'npm') installCommand = 'npm install';
-  else if (packageManager === 'gradle') testCommand = existsSync(path.join(targetRoot, 'gradlew')) ? './gradlew test' : 'gradle test';
-  else if (packageManager === 'maven') testCommand = 'mvn test';
+  else if (packageManager === 'gradle') {
+    const gradleRunner = existsSync(path.join(targetRoot, 'gradlew')) ? './gradlew' : 'gradle';
+    testCommand = `${gradleRunner} test`;
+    lintCommand = detectGradleLintCommand(targetRoot, gradleRunner);
+    typecheckCommand = `${gradleRunner} classes testClasses`;
+  } else if (packageManager === 'maven') {
+    testCommand = 'mvn test';
+    lintCommand = detectMavenLintCommand(targetRoot);
+    typecheckCommand = 'mvn test-compile';
+  }
 
   if (packageManager === 'npm' || packageManager === 'pnpm' || packageManager === 'yarn') {
     const packageJson = readJsonObject(path.join(targetRoot, 'package.json'));
