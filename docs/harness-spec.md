@@ -71,12 +71,14 @@ If a CLI cannot spawn subagents automatically, the active model executes the sam
 
 ## 4. Approval Gates
 
-- **Gate A — Intake decisions:** If any `needs_user_decision.status` is `open` or `deferred`, stop after intake and ask only those decisions. Do not produce a product spec except as a clearly labeled sketch.
-- **Gate B — Spec approval:** If any intake `CQ-n` is not disposed in `spec_json.clarifying_question_disposition`, `spec_json.approval` is not `approved`, `spec_json.approval_audit` is missing, or `spec_json.open_decisions` is non-empty, stop before task graph generation. When Gate B selects or recommends libraries, frameworks, runtimes, protocols, packages, databases, cloud services, or external APIs, perform read-only technology reconnaissance and record material sources in `spec_json.evidence`.
-- **Gate C — Task graph validation:** Before final output, check that every dependency references a task id, the graph is acyclic, and every task has acceptance criteria.
-- **Gate D — Review blockers:** The canonical Gate D artifact is `review_json` persisted as `gate-d-review/review.json`; `review_report` is an optional Markdown rendering of the same findings. Gate D passes only when `review.json.blocking_issues` is `[]`. If review finds blocking issues, return the blockers and the artifact section that must be revised instead of claiming the plan is ready. Missing Technology Reconnaissance evidence for a material Gate B technology choice is a blocking Gate B issue.
+Gate A/B/C/D의 상세 통과·차단 규칙은 `p2a-harness` skill이 유일한 정본이다. 정본: [`.agents/skills/p2a-harness/SKILL.md`](../.agents/skills/p2a-harness/SKILL.md#approval-gates).
 
-Each gate is a review checkpoint: persist the stage's artifact files, present a readable summary with per-item rationale, invite both free-form feedback and structured approval, revise and re-present on feedback, and advance only on explicit approval.
+- **Gate A:** Intake 단계에서 미해결 사용자 결정이 있으면 멈추고, 결정 항목만 근거와 함께 사용자에게 묻는다.
+- **Gate B:** Spec approval, `approval_audit`, open decision 해소, 모든 `CQ-n` disposition, 필요한 기술 조사 근거가 갖춰져야 task graph로 넘어간다.
+- **Gate C:** Task graph의 dependency, cycle, acceptance criteria, source spec reference를 검증한다.
+- **Gate D:** 정본 review artifact인 `gate-d-review/review.json`의 blocking issue가 없어야 계획이 준비된 상태가 된다.
+
+이 구현 기준 문서는 skill/subagent 계약과 저장소 검증 맥락만 설명하며, 게이트 규칙 전문은 위 정본을 수정한 뒤 CLI mirror를 동기화한다.
 
 ## 5. Resume Contract
 

@@ -6,6 +6,7 @@ import path from 'node:path';
 import process from 'node:process';
 import { spawnSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
+import { ROLE_PROFILE_TO_ROLE } from './p2a_constants.mjs';
 import { loadJson, validateOrchestrationPlanData, validateOrchestrationRuntimeData, validateRunData, validateTaskGraphData, ValidationError } from './validate_artifacts.mjs';
 import { resolveIterationState } from './p2a_iteration_state.mjs';
 import { canonicalTaskGraphRef } from './p2a_run_paths.mjs';
@@ -40,18 +41,6 @@ const DEFAULT_ACCEPTED_MONITOR_VERDICTS = ['confirm_done'];
 const MONITOR_CONCERN_FIELDS = ['scope_concerns', 'verification_concerns', 'unmet_acceptance', 'needs_user_decision'];
 const HIGH_ACCEPTANCE_MONITOR_THRESHOLD = 6;
 const ROLE_PROFILE_SOURCES = new Set(['auto', 'override']);
-const ROLE_PROFILE_TO_ROLE = Object.freeze({
-  owner_supervisor: 'lead',
-  frontend_implementer: 'contributor',
-  backend_implementer: 'contributor',
-  fullstack_implementer: 'contributor',
-  test_implementer: 'contributor',
-  docs_implementer: 'contributor',
-  qa_reviewer: 'reviewer',
-  architecture_reviewer: 'reviewer',
-  security_reviewer: 'reviewer',
-  manual_monitor: 'monitor',
-});
 const IMPLEMENTER_PROFILES = new Set(Object.entries(ROLE_PROFILE_TO_ROLE)
   .filter(([, role]) => role === 'contributor')
   .map(([profile]) => profile));

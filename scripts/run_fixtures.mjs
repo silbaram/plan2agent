@@ -7,7 +7,6 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
 import { spawnSync } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
 import {
   validateOrchestrationPlanData,
   validateOrchestrationRuntimeData,
@@ -17,148 +16,39 @@ import {
 import { compareSync } from './p2a_memory.mjs';
 import { PROJECT_RUNTIME_SCHEMA_FILES, PROJECT_RUNTIME_SCRIPT_FILES } from './p2a_tool_manifest.mjs';
 import { shellQuote } from './p2a_run_commands.mjs';
-
-const __filename = fileURLToPath(import.meta.url);
-const ROOT = path.resolve(path.dirname(__filename), '..');
-const FIXTURE_ROOT = path.join(ROOT, 'fixtures');
-const E2E_FIXTURE_ROOT = path.join(FIXTURE_ROOT, '_e2e');
-const NEGATIVE_FIXTURE_ROOT = path.join(FIXTURE_ROOT, '_negative');
-const VALIDATOR = path.join(ROOT, 'scripts', 'validate_artifacts.mjs');
-const ITERATION_CLI = path.join(ROOT, 'scripts', 'p2a_iteration.mjs');
-const TASKS_CLI = path.join(ROOT, 'scripts', 'p2a_tasks.mjs');
-const RUNS_CLI = path.join(ROOT, 'scripts', 'p2a_runs.mjs');
-const EXECUTE_CLI = path.join(ROOT, 'scripts', 'p2a_execute.mjs');
-const ORCHESTRATE_CLI = path.join(ROOT, 'scripts', 'p2a_orchestrate.mjs');
-const PROPOSALS_CLI = path.join(ROOT, 'scripts', 'p2a_proposals.mjs');
-const EVAL_CLI = path.join(ROOT, 'scripts', 'p2a_eval.mjs');
-const MEMORY_CLI = path.join(ROOT, 'scripts', 'p2a_memory.mjs');
-const HANDOFF_CLI = path.join(ROOT, 'scripts', 'p2a_handoff.mjs');
-const DOCTOR_CLI = path.join(ROOT, 'scripts', 'p2a_doctor.mjs');
-const P2A_CLI = path.join(ROOT, 'scripts', 'p2a.mjs');
-
-function runValidator(args) {
-  return spawnSync(process.execPath, [VALIDATOR, ...args], { cwd: ROOT, encoding: 'utf8' });
-}
-
-function runIteration(args) {
-  return spawnSync(process.execPath, [ITERATION_CLI, ...args], { cwd: ROOT, encoding: 'utf8' });
-}
-
-function runTasks(args, options = {}) {
-  return spawnSync(process.execPath, [TASKS_CLI, ...args], { cwd: ROOT, encoding: 'utf8', input: options.input });
-}
-
-function runTasksFrom(cwd, args) {
-  return spawnSync(process.execPath, [TASKS_CLI, ...args], { cwd, encoding: 'utf8' });
-}
-
-function runRuns(args, options = {}) {
-  return spawnSync(process.execPath, [RUNS_CLI, ...args], { cwd: options.cwd ?? ROOT, encoding: 'utf8' });
-}
-
-function runRunsFrom(cwd, args) {
-  return runRuns(args, { cwd });
-}
-
-function runExecute(args) {
-  return spawnSync(process.execPath, [EXECUTE_CLI, ...args], { cwd: ROOT, encoding: 'utf8' });
-}
-
-function runExecuteFrom(cwd, args) {
-  return spawnSync(process.execPath, [EXECUTE_CLI, ...args], { cwd, encoding: 'utf8' });
-}
-
-function runOrchestrate(args) {
-  return spawnSync(process.execPath, [ORCHESTRATE_CLI, ...args], { cwd: ROOT, encoding: 'utf8' });
-}
-
-function runProposals(args) {
-  return spawnSync(process.execPath, [PROPOSALS_CLI, ...args], { cwd: ROOT, encoding: 'utf8' });
-}
-
-function runEval(args) {
-  return spawnSync(process.execPath, [EVAL_CLI, ...args], { cwd: ROOT, encoding: 'utf8' });
-}
-
-function runMemory(args) {
-  return spawnSync(process.execPath, [MEMORY_CLI, ...args], {
-    cwd: ROOT,
-    encoding: 'utf8',
-    env: { ...process.env, P2A_MEMORY_URL: '', P2A_MEMORY_TOKEN: '' },
-  });
-}
-
-function fixtureFailureDetailArgs(label) {
-  return [
-    '--repro-step',
-    `${label} can be reproduced from the fixture run output.`,
-    '--localization',
-    `${label} is localized by the fixture assertion.`,
-    '--guard',
-    `${label} is guarded by the fixture regression check.`,
-  ];
-}
-
-function runHandoff(args) {
-  return spawnSync(process.execPath, [HANDOFF_CLI, ...args], { cwd: ROOT, encoding: 'utf8' });
-}
-
-function runHandoffFrom(cwd, args) {
-  return spawnSync(process.execPath, [HANDOFF_CLI, ...args], { cwd, encoding: 'utf8' });
-}
-
-function runDoctor(args) {
-  return spawnSync(process.execPath, [DOCTOR_CLI, ...args], { cwd: ROOT, encoding: 'utf8' });
-}
-
-function runP2a(args) {
-  return spawnSync(process.execPath, [P2A_CLI, ...args], { cwd: ROOT, encoding: 'utf8' });
-}
-
-function runTargetP2a(targetRoot, args) {
-  return spawnSync(process.execPath, [path.join(targetRoot, '.plan2agent', 'scripts', 'p2a.mjs'), ...args], { cwd: targetRoot, encoding: 'utf8' });
-}
-
-function runTargetTasks(targetRoot, args) {
-  return spawnSync(process.execPath, [path.join(targetRoot, '.plan2agent', 'scripts', 'p2a_tasks.mjs'), ...args], { cwd: targetRoot, encoding: 'utf8' });
-}
-
-function runTargetRuns(targetRoot, args) {
-  return spawnSync(process.execPath, [path.join(targetRoot, '.plan2agent', 'scripts', 'p2a_runs.mjs'), ...args], { cwd: targetRoot, encoding: 'utf8' });
-}
-
-function runTargetExecute(targetRoot, args) {
-  return spawnSync(process.execPath, [path.join(targetRoot, '.plan2agent', 'scripts', 'p2a_execute.mjs'), ...args], { cwd: targetRoot, encoding: 'utf8' });
-}
-
-function runTargetOrchestrate(targetRoot, args, options = {}) {
-  return spawnSync(process.execPath, [path.join(targetRoot, '.plan2agent', 'scripts', 'p2a_orchestrate.mjs'), ...args], {
-    cwd: targetRoot,
-    encoding: 'utf8',
-    env: options.env,
-  });
-}
-
-function runTargetProposals(targetRoot, args) {
-  return spawnSync(process.execPath, [path.join(targetRoot, '.plan2agent', 'scripts', 'p2a_proposals.mjs'), ...args], { cwd: targetRoot, encoding: 'utf8' });
-}
-
-function runTargetEval(targetRoot, args) {
-  return spawnSync(process.execPath, [path.join(targetRoot, '.plan2agent', 'scripts', 'p2a_eval.mjs'), ...args], { cwd: targetRoot, encoding: 'utf8' });
-}
-
-function runTargetMemory(targetRoot, args) {
-  return spawnSync(process.execPath, [path.join(targetRoot, '.plan2agent', 'scripts', 'p2a_memory.mjs'), ...args], { cwd: targetRoot, encoding: 'utf8' });
-}
-
-function runTargetIteration(targetRoot, args) {
-  return spawnSync(process.execPath, [path.join(targetRoot, '.plan2agent', 'scripts', 'p2a_iteration.mjs'), ...args], { cwd: targetRoot, encoding: 'utf8' });
-}
-
-function writeResultOutput(result) {
-  if (result.stdout) process.stdout.write(result.stdout);
-  if (result.stderr) process.stderr.write(result.stderr);
-}
+import {
+  E2E_FIXTURE_ROOT,
+  FIXTURE_ROOT,
+  fixtureFailureDetailArgs,
+  P2A_CLI,
+  ROOT,
+  runDoctor,
+  runEval,
+  runExecute,
+  runExecuteFrom,
+  runHandoff,
+  runHandoffFrom,
+  runIteration,
+  runMemory,
+  runOrchestrate,
+  runP2a,
+  runProposals,
+  runRuns,
+  runRunsFrom,
+  runTargetEval,
+  runTargetExecute,
+  runTargetIteration,
+  runTargetMemory,
+  runTargetOrchestrate,
+  runTargetP2a,
+  runTargetProposals,
+  runTargetRuns,
+  runTargetTasks,
+  runTasks,
+  runTasksFrom,
+  runValidator,
+  writeResultOutput,
+} from '../tests/helpers/fixtures.mjs';
 
 function writeFakeProviderCli(binDir, command, versionOutput) {
   mkdirSync(binDir, { recursive: true });
@@ -202,35 +92,6 @@ function formatSegments(segments) {
   return `${segments.slice(0, -1).join(', ')}, and ${segments[segments.length - 1]}`;
 }
 
-function loadNegativeFixtureManifest() {
-  const manifestPath = path.join(NEGATIVE_FIXTURE_ROOT, 'manifest.json');
-  if (!existsSync(manifestPath)) {
-    return { expected_pass: [], expected_failure: [] };
-  }
-  return JSON.parse(readFileSync(manifestPath, 'utf8'));
-}
-
-function loadE2eFixtureManifest() {
-  const manifestPath = path.join(E2E_FIXTURE_ROOT, 'manifest.json');
-  if (!existsSync(manifestPath)) {
-    return { cases: [] };
-  }
-  return JSON.parse(readFileSync(manifestPath, 'utf8'));
-}
-
-function assertCaseShape(caseData, groupName) {
-  if (!caseData || typeof caseData !== 'object') {
-    throw new Error(`${groupName} fixture case must be an object`);
-  }
-  if (!caseData.id || typeof caseData.id !== 'string') {
-    throw new Error(`${groupName} fixture case is missing string id`);
-  }
-  if (!Array.isArray(caseData.args) || caseData.args.some((arg) => typeof arg !== 'string')) {
-    throw new Error(`${caseData.id} must provide args as a string array`);
-  }
-}
-
-
 function assertTargetSpecSourceIntake(targetRoot, projectId, caseId, label) {
   const artifactsDir = path.join(targetRoot, '.plan2agent', 'artifacts', projectId);
   const targetSpecPath = path.join(artifactsDir, 'gate-b-spec', 'spec.json');
@@ -250,22 +111,6 @@ function assertTargetSpecSourceIntake(targetRoot, projectId, caseId, label) {
   }
   return { status: 0 };
 }
-
-function assertE2eCaseShape(caseData) {
-  if (!caseData || typeof caseData !== 'object') {
-    throw new Error('e2e fixture case must be an object');
-  }
-  if (!caseData.id || typeof caseData.id !== 'string') {
-    throw new Error('e2e fixture case is missing string id');
-  }
-  if (!caseData.artifact_root || typeof caseData.artifact_root !== 'string') {
-    throw new Error(`${caseData.id} must provide artifact_root`);
-  }
-  if (!caseData.project_id || typeof caseData.project_id !== 'string') {
-    throw new Error(`${caseData.id} must provide project_id`);
-  }
-}
-
 
 function validateScaffoldFixtureCase() {
   const tempRoot = mkdtempSync(path.join(tmpdir(), 'p2a-scaffold-'));
@@ -2613,268 +2458,6 @@ function validateMemoryFixtureCases() {
     console.error('memory push approval guard fixture failed');
     writeResultOutput(result);
     return { status: result.status === 0 ? 1 : failureStatus(result), checks };
-  }
-
-  return { status: 0, checks };
-}
-
-function validateE2eFixtureCases() {
-  const manifest = loadE2eFixtureManifest();
-  const cases = manifest.cases ?? [];
-  let checks = 0;
-
-  for (const caseData of cases) {
-    assertE2eCaseShape(caseData);
-    let result = runValidator([
-      '--artifact-root',
-      caseData.artifact_root,
-      '--project-id',
-      caseData.project_id,
-      '--require-handoff-ready',
-    ]);
-    checks += 1;
-    if (result.status !== 0) {
-      console.error(`e2e fixture check failed: ${caseData.id}`);
-      writeResultOutput(result);
-      return { status: failureStatus(result), checks };
-    }
-
-    const tempRoot = mkdtempSync(path.join(tmpdir(), 'p2a-greenfield-handoff-'));
-    try {
-      const targetRoot = path.join(tempRoot, 'target-project');
-      result = runHandoff([
-        '--project-id',
-        caseData.project_id,
-        '--artifacts',
-        caseData.artifact_root,
-        '--target',
-        targetRoot,
-        '--include-intake',
-      ]);
-      checks += 1;
-      if (result.status !== 0 || !existsSync(path.join(targetRoot, '.plan2agent', 'artifacts', caseData.project_id, 'gate-b-spec', 'spec.json'))) {
-        console.error(`greenfield handoff fixture check failed: ${caseData.id}`);
-        writeResultOutput(result);
-        return { status: failureStatus(result), checks };
-      }
-      if (
-        !existsSync(path.join(targetRoot, '.plan2agent', 'scripts', 'p2a.mjs'))
-        || !existsSync(path.join(targetRoot, '.plan2agent', 'scripts', 'p2a_paths.mjs'))
-        || !existsSync(path.join(targetRoot, '.plan2agent', 'scripts', 'p2a_project_config.mjs'))
-        || !existsSync(path.join(targetRoot, '.plan2agent', 'scripts', 'p2a_run_commands.mjs'))
-        || !existsSync(path.join(targetRoot, '.plan2agent', 'scripts', 'validate_artifacts.mjs'))
-        || !existsSync(path.join(targetRoot, '.plan2agent', 'scripts', 'p2a_iteration_state.mjs'))
-        || !existsSync(path.join(targetRoot, '.plan2agent', 'scripts', 'p2a_runs.mjs'))
-        || !existsSync(path.join(targetRoot, '.plan2agent', 'scripts', 'p2a_execute.mjs'))
-        || !existsSync(path.join(targetRoot, '.plan2agent', 'scripts', 'p2a_orchestrate.mjs'))
-        || !existsSync(path.join(targetRoot, '.plan2agent', 'scripts', 'p2a_proposals.mjs'))
-        || !existsSync(path.join(targetRoot, '.plan2agent', 'scripts', 'p2a_run_paths.mjs'))
-        || !existsSync(path.join(targetRoot, '.plan2agent', 'schemas', 'task-context.schema.json'))
-        || !existsSync(path.join(targetRoot, '.plan2agent', 'schemas', 'run.schema.json'))
-        || !existsSync(path.join(targetRoot, '.plan2agent', 'schemas', 'run-index.schema.json'))
-        || !existsSync(path.join(targetRoot, '.plan2agent', 'schemas', 'orchestration-plan.schema.json'))
-        || !existsSync(path.join(targetRoot, '.plan2agent', 'schemas', 'orchestration-runtime.schema.json'))
-        || !existsSync(path.join(targetRoot, '.plan2agent', 'schemas', 'skill-proposal.schema.json'))
-	        || !existsSync(path.join(targetRoot, '.plan2agent', 'schemas', 'proposal-review.schema.json'))
-	        || !existsSync(path.join(targetRoot, '.plan2agent', 'schemas', 'proposal-curation.schema.json'))
-	        || !existsSync(path.join(targetRoot, '.plan2agent', 'schemas', 'proposal-patch-draft.schema.json'))
-	        || !existsSync(path.join(targetRoot, '.plan2agent', 'schemas', 'proposal-draft-approval.schema.json'))
-	        || !existsSync(path.join(targetRoot, '.plan2agent', 'schemas', 'eval-index.schema.json'))
-	        || !existsSync(path.join(targetRoot, '.plan2agent', 'schemas', 'eval-digest.schema.json'))
-	        || !existsSync(path.join(targetRoot, '.plan2agent', 'schemas', 'eval-maintenance-draft.schema.json'))
-	        || !existsSync(path.join(targetRoot, '.plan2agent', 'schemas', 'eval-maintenance-apply-report.schema.json'))
-	        || existsSync(path.join(targetRoot, '.plan2agent', 'current-spec.json'))
-      ) {
-        console.error(`greenfield handoff wrote unexpected tool/current-spec files: ${caseData.id}`);
-        return { status: 1, checks };
-      }
-      result = assertTargetSpecSourceIntake(targetRoot, caseData.project_id, caseData.id, 'greenfield');
-      checks += 1;
-      if (result.status !== 0) return { status: result.status, checks };
-
-      const targetArtifactRoot = path.join(targetRoot, '.plan2agent', 'artifacts', caseData.project_id);
-      const targetTaskGraphPath = path.join(targetArtifactRoot, 'gate-c-task-graph', 'task-graph.json');
-      result = runTargetTasks(targetRoot, ['ready', '--graph', targetTaskGraphPath]);
-      checks += 1;
-      if (result.status !== 0) {
-        console.error(`greenfield handoff target p2a_tasks execution failed: ${caseData.id}`);
-        writeResultOutput(result);
-        return { status: failureStatus(result), checks };
-      }
-
-      result = runTargetRuns(targetRoot, ['list', '--graph', targetTaskGraphPath]);
-      checks += 1;
-      if (result.status !== 0 || !result.stdout.includes('runId')) {
-        console.error(`greenfield handoff target p2a_runs execution failed: ${caseData.id}`);
-        writeResultOutput(result);
-        return { status: failureStatus(result), checks };
-      }
-
-      result = runTargetExecute(targetRoot, ['plan', '--graph', targetTaskGraphPath, '--task', 'task-001', '--run-id', 'run-target-execute-plan']);
-      checks += 1;
-      if (result.status !== 0 || !result.stdout.includes('Plan2Agent supervised task execution')) {
-        console.error(`greenfield handoff target p2a_execute execution failed: ${caseData.id}`);
-        writeResultOutput(result);
-        return { status: failureStatus(result), checks };
-      }
-
-      result = runTargetOrchestrate(targetRoot, ['plan', '--graph', targetTaskGraphPath, '--task', 'task-001']);
-      checks += 1;
-      if (result.status !== 0 || !result.stdout.includes('"schema_version": "p2a.orchestration_plan.v1"')) {
-        console.error(`greenfield handoff target p2a_orchestrate execution failed: ${caseData.id}`);
-        writeResultOutput(result);
-        return { status: failureStatus(result), checks };
-      }
-
-      result = runTargetProposals(targetRoot, ['list']);
-      checks += 1;
-      if (result.status !== 0 || !result.stdout.includes('proposalId')) {
-        console.error(`greenfield handoff target p2a_proposals execution failed: ${caseData.id}`);
-        writeResultOutput(result);
-        return { status: failureStatus(result), checks };
-      }
-
-      result = runTargetP2a(targetRoot, ['tasks', 'ready', '--graph', targetTaskGraphPath]);
-      checks += 1;
-      if (result.status !== 0 || !result.stdout.includes('task-001')) {
-        console.error(`greenfield handoff target p2a tasks dispatch failed: ${caseData.id}`);
-        writeResultOutput(result);
-        return { status: failureStatus(result), checks };
-      }
-
-      const toolTargetRoot = path.join(tempRoot, 'target-project-tools');
-      result = runHandoff([
-        '--project-id',
-        caseData.project_id,
-        '--artifacts',
-        caseData.artifact_root,
-        '--target',
-        toolTargetRoot,
-        '--tools',
-        'codex,gemini',
-      ]);
-      checks += 1;
-      if (result.status !== 0) {
-        console.error(`greenfield handoff --tools fixture check failed: ${caseData.id}`);
-        writeResultOutput(result);
-        return { status: failureStatus(result), checks };
-      }
-      const expectedToolFiles = [
-        path.join('.agents', 'skills', 'p2a-harness', 'SKILL.md'),
-        path.join('.agents', 'agents', 'p2a-requirements.md'),
-        path.join('.codex', 'agents', 'p2a-task-graph.toml'),
-        path.join('.gemini', 'agents', 'p2a-task-graph.md'),
-        path.join('.gemini', 'commands', 'p2a', 'harness.toml'),
-      ];
-      const missingToolFiles = expectedToolFiles.filter((filePath) => !existsSync(path.join(toolTargetRoot, filePath)));
-      const excludedToolFiles = [
-        path.join('.agents', 'skills', 'p2a-design-system', 'SKILL.md'),
-        path.join('.gemini', 'commands', 'p2a', 'design-system.toml'),
-      ];
-      const copiedExcludedToolFiles = excludedToolFiles.filter((filePath) => existsSync(path.join(toolTargetRoot, filePath)));
-      const toolManifest = JSON.parse(readFileSync(path.join(toolTargetRoot, '.plan2agent', 'manifest.json'), 'utf8'));
-      const manifestDesignSystemFiles = [...(toolManifest.aiToolFiles ?? []), ...(toolManifest.toolFiles ?? [])]
-        .filter((filePath) => filePath.includes('p2a-design-system') || filePath.endsWith('/design-system.toml'));
-      if (
-        missingToolFiles.length
-        || copiedExcludedToolFiles.length
-        || manifestDesignSystemFiles.length
-        || toolManifest.aiToolTargets.join(',') !== 'codex,gemini'
-        || !toolManifest.includedTools.includes('p2a_codex_assets')
-        || !toolManifest.includedTools.includes('p2a_gemini_assets')
-        || !toolManifest.includedTools.includes('p2a_runs')
-        || !toolManifest.includedTools.includes('p2a')
-        || !toolManifest.includedTools.includes('p2a_execute')
-        || !toolManifest.includedTools.includes('p2a_orchestrate')
-        || !toolManifest.includedTools.includes('p2a_proposals')
-        || !toolManifest.toolFiles.includes('.agents/skills/p2a-harness/SKILL.md')
-        || !toolManifest.toolFiles.includes('.gemini/commands/p2a/harness.toml')
-        || !toolManifest.toolFiles.includes('.plan2agent/scripts/p2a.mjs')
-        || !toolManifest.toolFiles.includes('.plan2agent/scripts/p2a_runs.mjs')
-        || !toolManifest.toolFiles.includes('.plan2agent/scripts/p2a_execute.mjs')
-        || !toolManifest.toolFiles.includes('.plan2agent/scripts/p2a_orchestrate.mjs')
-        || !toolManifest.toolFiles.includes('.plan2agent/scripts/p2a_proposals.mjs')
-        || !toolManifest.toolFiles.includes('.plan2agent/scripts/p2a_run_paths.mjs')
-        || !toolManifest.schemaFiles.includes('.plan2agent/schemas/run.schema.json')
-        || !toolManifest.schemaFiles.includes('.plan2agent/schemas/orchestration-plan.schema.json')
-        || !toolManifest.schemaFiles.includes('.plan2agent/schemas/orchestration-runtime.schema.json')
-	        || !toolManifest.schemaFiles.includes('.plan2agent/schemas/proposal-review.schema.json')
-	        || !toolManifest.schemaFiles.includes('.plan2agent/schemas/proposal-curation.schema.json')
-	        || !toolManifest.schemaFiles.includes('.plan2agent/schemas/proposal-patch-draft.schema.json')
-	        || !toolManifest.schemaFiles.includes('.plan2agent/schemas/proposal-draft-approval.schema.json')
-	        || !toolManifest.schemaFiles.includes('.plan2agent/schemas/eval-index.schema.json')
-	        || !toolManifest.schemaFiles.includes('.plan2agent/schemas/eval-digest.schema.json')
-	        || !toolManifest.schemaFiles.includes('.plan2agent/schemas/eval-maintenance-draft.schema.json')
-	        || !toolManifest.schemaFiles.includes('.plan2agent/schemas/eval-maintenance-apply-report.schema.json')
-	      ) {
-        console.error(`greenfield handoff --tools output mismatch: ${caseData.id}`);
-        console.error(JSON.stringify({ missingToolFiles, copiedExcludedToolFiles, manifestDesignSystemFiles, toolManifest }, null, 2));
-        return { status: 1, checks };
-      }
-
-      const teamSourceRoot = path.join(tempRoot, 'team-bigfive-source');
-      mkdirSync(path.join(teamSourceRoot, '_workspace'), { recursive: true });
-      writeFileSync(path.join(teamSourceRoot, 'package.json'), JSON.stringify({ name: 'team-bigfive', version: '1.2.3' }, null, 2));
-      writeFileSync(path.join(teamSourceRoot, 'README.md'), '# Team Big Five fixture\n');
-      writeFileSync(path.join(teamSourceRoot, '.env'), 'SHOULD_NOT_COPY=1\n');
-      writeFileSync(path.join(teamSourceRoot, '_workspace', 'run.log'), 'SHOULD_NOT_COPY\n');
-
-      const teamTargetRoot = path.join(tempRoot, 'target-project-team-bigfive');
-      result = runHandoff([
-        '--project-id',
-        caseData.project_id,
-        '--artifacts',
-        caseData.artifact_root,
-        '--target',
-        teamTargetRoot,
-        '--include-team-bigfive',
-        '--team-bigfive-source',
-        teamSourceRoot,
-        '--team-bigfive-targets',
-        'all',
-      ]);
-      checks += 1;
-      if (result.status !== 0) {
-        console.error(`greenfield handoff Team Big Five fixture check failed: ${caseData.id}`);
-        writeResultOutput(result);
-        return { status: failureStatus(result), checks };
-      }
-      const expectedTeamFiles = [
-        path.join('.plan2agent', 'team-harnesses', 'team-bigfive', 'source-manifest.json'),
-        path.join('.plan2agent', 'team-harnesses', 'team-bigfive', 'adaptation-notes.md'),
-        path.join('.agents', 'skills', 'team-bigfive-kickoff', 'SKILL.md'),
-        path.join('.codex', 'agents', 'team-bigfive-coordinator.toml'),
-        path.join('.claude', 'skills', 'team-bigfive-kickoff', 'SKILL.md'),
-        path.join('.claude', 'agents', 'team-bigfive-coordinator.md'),
-        path.join('.claude-plugin', 'team-bigfive', 'source', 'README.md'),
-        path.join('.gemini', 'agents', 'team-bigfive-coordinator.md'),
-        path.join('.gemini', 'commands', 'p2a', 'team-bigfive.toml'),
-      ];
-      const missingTeamFiles = expectedTeamFiles.filter((filePath) => !existsSync(path.join(teamTargetRoot, filePath)));
-      const teamManifest = JSON.parse(readFileSync(path.join(teamTargetRoot, '.plan2agent', 'manifest.json'), 'utf8'));
-      const teamProjectConfig = JSON.parse(readFileSync(path.join(teamTargetRoot, '.plan2agent', 'project.config.json'), 'utf8'));
-      const teamSourceManifest = JSON.parse(readFileSync(path.join(teamTargetRoot, '.plan2agent', 'team-harnesses', 'team-bigfive', 'source-manifest.json'), 'utf8'));
-      if (
-        missingTeamFiles.length
-        || existsSync(path.join(teamTargetRoot, '.claude-plugin', 'team-bigfive', 'source', '.env'))
-        || existsSync(path.join(teamTargetRoot, '.claude-plugin', 'team-bigfive', 'source', '_workspace', 'run.log'))
-        || !teamManifest.includedTools.includes('team_bigfive_adapter')
-        || teamManifest.externalHarnesses.length !== 1
-        || teamManifest.externalHarnesses[0].name !== 'team-bigfive'
-        || teamManifest.externalHarnesses[0].targets.join(',') !== 'codex,claude,gemini'
-        || teamManifest.externalHarnesses[0].sourceVersion !== '1.2.3'
-        || teamProjectConfig.providerNativeCapabilities?.claude?.agentTeams !== 'manual_check'
-        || teamProjectConfig.providerNativeCapabilities?.codex?.customAgents !== 'manual_check'
-        || teamSourceManifest.source.fileCount !== 2
-        || teamSourceManifest.source.files.some((file) => file.path === '.env' || file.path.startsWith('_workspace/'))
-      ) {
-        console.error(`greenfield handoff Team Big Five output mismatch: ${caseData.id}`);
-        console.error(JSON.stringify({ missingTeamFiles, teamManifest, teamProjectConfig, teamSourceManifest }, null, 2));
-        return { status: 1, checks };
-      }
-    } finally {
-      rmSync(tempRoot, { recursive: true, force: true });
-    }
   }
 
   return { status: 0, checks };
@@ -8316,6 +7899,7 @@ function validateIterationCurrentFixtureCases() {
         || !targetManifest.includedTools.includes('p2a_proposals')
         || !targetManifest.toolFiles.includes('.plan2agent/scripts/p2a_runs.mjs')
         || !targetManifest.toolFiles.includes('.plan2agent/scripts/p2a.mjs')
+        || !targetManifest.toolFiles.includes('.plan2agent/scripts/p2a_constants.mjs')
         || !targetManifest.toolFiles.includes('.plan2agent/scripts/p2a_radar_preflight.mjs')
         || !targetManifest.toolFiles.includes('.plan2agent/scripts/p2a_execute.mjs')
         || !targetManifest.toolFiles.includes('.plan2agent/scripts/p2a_orchestrate.mjs')
@@ -8663,173 +8247,14 @@ function validateIterationCurrentFixtureCases() {
   return { status: 0, checks };
 }
 
-function validateInvalidFailedRunFixtureCase() {
-  const runsDir = mkdtempSync(path.join(tmpdir(), 'p2a-invalid-runs-'));
-  const now = '2026-06-19T00:00:00.000Z';
-  const runId = 'run-invalid-failed-without-failure';
-  const run = {
-    schema_version: 'p2a.run.v1',
-    runId,
-    projectId: 'fixture-project',
-    taskId: 'task-001',
-    taskTitle: 'Invalid failed run fixture',
-    iterationId: 'v1-mvp',
-    sourceLayout: 'iteration',
-    taskGraphRef: 'iterations/v1-mvp/gate-c-task-graph/task-graph.json',
-    sourceSpecRef: '../gate-b-spec/spec.json',
-    agentTool: 'codex',
-    workspaceRef: 'fixture-workspace',
-    workspacePath: '.',
-    isolation: {
-      mode: 'none',
-      branch: null,
-      worktree: null,
-      baseRef: null,
-      created: false,
-      createCommand: null,
-      createExitCode: null,
-      createOutputTail: null,
-    },
-    status: 'failed',
-    startedAt: now,
-    updatedAt: now,
-    finishedAt: now,
-    changedFiles: [],
-    verification: [],
-    notes: [],
-  };
-  const indexFor = (id) => ({
-    schema_version: 'p2a.run_index.v1',
-    projectId: 'fixture-project',
-    runs: [{
-      runId: id,
-      taskId: 'task-001',
-      iterationId: 'v1-mvp',
-      status: 'failed',
-      agentTool: 'codex',
-      workspaceRef: 'fixture-workspace',
-      taskGraphRef: 'iterations/v1-mvp/gate-c-task-graph/task-graph.json',
-      runRef: `${id}.json`,
-      startedAt: now,
-      finishedAt: now,
-    }],
-    tasks: [{ taskId: 'task-001', runIds: [id], latestRunId: id }],
-  });
 
-  try {
-    writeFileSync(path.join(runsDir, `${runId}.json`), `${JSON.stringify(run, null, 2)}\n`, 'utf8');
-    writeFileSync(path.join(runsDir, 'run-index.json'), `${JSON.stringify(indexFor(runId), null, 2)}\n`, 'utf8');
-    const result = runValidator(['--runs-dir', runsDir]);
-    const output = `${result.stdout ?? ''}${result.stderr ?? ''}`;
-    if (result.status === 0 || !output.includes('failed run must include failure')) {
-      console.error('negative fixture invalid failed run without failure was not rejected by validator');
-      writeResultOutput(result);
-      return { status: result.status === 0 ? 1 : failureStatus(result), checks: 1 };
-    }
-
-    const missingStructuredRunId = 'run-invalid-failed-without-structured-detail';
-    const missingStructuredRun = {
-      ...run,
-      runId: missingStructuredRunId,
-      failure: {
-        class: 'verification_failed',
-        retryable: 'after_fix',
-        needsUserDecision: false,
-        source: 'owner',
-      },
-    };
-    writeFileSync(path.join(runsDir, `${missingStructuredRunId}.json`), `${JSON.stringify(missingStructuredRun, null, 2)}\n`, 'utf8');
-    writeFileSync(path.join(runsDir, 'run-index.json'), `${JSON.stringify(indexFor(missingStructuredRunId), null, 2)}\n`, 'utf8');
-    const structuredResult = runValidator(['--runs-dir', runsDir]);
-    const structuredOutput = `${structuredResult.stdout ?? ''}${structuredResult.stderr ?? ''}`;
-    if (
-      structuredResult.status === 0
-      || !structuredOutput.includes('missing required keys: reproduction, localization, guard')
-    ) {
-      console.error('negative fixture invalid failed run without structured detail was not rejected by validator');
-      writeResultOutput(structuredResult);
-      return { status: structuredResult.status === 0 ? 1 : failureStatus(structuredResult), checks: 2 };
-    }
-
-    const emptyStructuredRunId = 'run-invalid-failed-with-empty-structured-detail';
-    const emptyStructuredRun = {
-      ...missingStructuredRun,
-      runId: emptyStructuredRunId,
-      reproduction: {
-        steps: [],
-        commands: [],
-        notes: [],
-      },
-      localization: {
-        findings: [],
-        files: [],
-      },
-      guard: {
-        checks: [],
-        notes: [],
-      },
-    };
-    writeFileSync(path.join(runsDir, `${emptyStructuredRunId}.json`), `${JSON.stringify(emptyStructuredRun, null, 2)}\n`, 'utf8');
-    writeFileSync(path.join(runsDir, 'run-index.json'), `${JSON.stringify(indexFor(emptyStructuredRunId), null, 2)}\n`, 'utf8');
-    const emptyStructuredResult = runValidator(['--runs-dir', runsDir]);
-    const emptyStructuredOutput = `${emptyStructuredResult.stdout ?? ''}${emptyStructuredResult.stderr ?? ''}`;
-    if (
-      emptyStructuredResult.status === 0
-      || !emptyStructuredOutput.includes('failed run must include structured debug detail: reproduction, localization, guard')
-    ) {
-      console.error('negative fixture invalid failed run with empty structured detail was not rejected by validator');
-      writeResultOutput(emptyStructuredResult);
-      return { status: emptyStructuredResult.status === 0 ? 1 : failureStatus(emptyStructuredResult), checks: 3 };
-    }
-    return { status: 0, checks: 3 };
-  } finally {
-    rmSync(runsDir, { recursive: true, force: true });
-  }
+function runNodeTestFile(testFile) {
+  return spawnSync(process.execPath, ['--test', testFile], { cwd: ROOT, encoding: 'utf8' });
 }
 
-function validateNegativeFixtureCases() {
-  const manifest = loadNegativeFixtureManifest();
-  const expectedPass = manifest.expected_pass ?? [];
-  const expectedFailure = manifest.expected_failure ?? [];
-  let checks = 0;
-
-  for (const caseData of expectedPass) {
-    assertCaseShape(caseData, 'expected_pass');
-    const result = runValidator(caseData.args);
-    checks += 1;
-    if (result.status !== 0) {
-      console.error(`negative fixture pass check failed unexpectedly: ${caseData.id}`);
-      writeResultOutput(result);
-      return { status: failureStatus(result), checks };
-    }
-  }
-
-  for (const caseData of expectedFailure) {
-    assertCaseShape(caseData, 'expected_failure');
-    if (!caseData.expected_message || typeof caseData.expected_message !== 'string') {
-      throw new Error(`${caseData.id} must provide expected_message`);
-    }
-    const result = runValidator(caseData.args);
-    checks += 1;
-    const output = `${result.stdout ?? ''}${result.stderr ?? ''}`;
-    if (result.status === 0) {
-      console.error(`negative fixture expected failure but command passed: ${caseData.id}`);
-      writeResultOutput(result);
-      return { status: 1, checks };
-    }
-    if (!output.includes(caseData.expected_message)) {
-      console.error(`negative fixture failed with unexpected message: ${caseData.id}`);
-      console.error(`expected message fragment: ${caseData.expected_message}`);
-      writeResultOutput(result);
-      return { status: 1, checks };
-    }
-  }
-
-  const invalidRunResult = validateInvalidFailedRunFixtureCase();
-  checks += invalidRunResult.checks;
-  if (invalidRunResult.status !== 0) return { status: invalidRunResult.status, checks };
-
-  return { status: 0, checks };
+function countNodeTestCases(stdout) {
+  const match = stdout.match(/^# tests (\d+)$/m);
+  return match ? Number(match[1]) : 0;
 }
 
 export function main() {
@@ -8845,11 +8270,9 @@ export function main() {
     return 1;
   }
 
-  const command = [VALIDATOR];
-  for (const fixtureDir of fixtureDirs) command.push('--fixture-dir', fixtureDir);
-  const result = spawnSync(process.execPath, command, { cwd: ROOT, encoding: 'utf8' });
-  writeResultOutput(result);
-  if (result.status !== 0) return failureStatus(result);
+  const schemaResult = runNodeTestFile('tests/schema-fixtures.test.mjs');
+  writeResultOutput(schemaResult);
+  if (schemaResult.status !== 0) return failureStatus(schemaResult);
 
   let scaffoldResult;
   try {
@@ -8878,14 +8301,9 @@ export function main() {
   }
   if (memoryResult.status !== 0) return memoryResult.status;
 
-  let e2eResult;
-  try {
-    e2eResult = validateE2eFixtureCases();
-  } catch (error) {
-    console.error(`fixture validation failed: ${error.message}`);
-    return 1;
-  }
-  if (e2eResult.status !== 0) return e2eResult.status;
+  const e2eResult = runNodeTestFile('tests/e2e-artifact-root.test.mjs');
+  writeResultOutput(e2eResult);
+  if (e2eResult.status !== 0) return failureStatus(e2eResult);
 
   let iterationResult;
   try {
@@ -8896,22 +8314,17 @@ export function main() {
   }
   if (iterationResult.status !== 0) return iterationResult.status;
 
-  let negativeResult;
-  try {
-    negativeResult = validateNegativeFixtureCases();
-  } catch (error) {
-    console.error(`fixture validation failed: ${error.message}`);
-    return 1;
-  }
-  if (negativeResult.status !== 0) return negativeResult.status;
+  const negativeResult = runNodeTestFile('tests/negative-fixtures.test.mjs');
+  writeResultOutput(negativeResult);
+  if (negativeResult.status !== 0) return failureStatus(negativeResult);
 
-  const segments = [`${fixtureDirs.length} Plan2Agent fixture set(s)`];
+  const segments = [`${countNodeTestCases(schemaResult.stdout)} Plan2Agent fixture set test(s)`];
   if (scaffoldResult.checks) segments.push(`${scaffoldResult.checks} scaffold fixture check(s)`);
   if (evalResult.checks) segments.push(`${evalResult.checks} eval fixture check(s)`);
   if (memoryResult.checks) segments.push(`${memoryResult.checks} memory fixture check(s)`);
-  if (e2eResult.checks) segments.push(`${e2eResult.checks} e2e fixture check(s)`);
+  segments.push(`${countNodeTestCases(e2eResult.stdout)} e2e fixture test(s)`);
   if (iterationResult.checks) segments.push(`${iterationResult.checks} iteration fixture check(s)`);
-  if (negativeResult.checks) segments.push(`${negativeResult.checks} negative fixture check(s)`);
+  segments.push(`${countNodeTestCases(negativeResult.stdout)} negative fixture test(s)`);
 
   console.log(`Validated ${formatSegments(segments)}`);
   return 0;
