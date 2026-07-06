@@ -5,6 +5,7 @@ import { existsSync, lstatSync, readFileSync, readdirSync, realpathSync } from '
 import path from 'node:path';
 import process from 'node:process';
 import { pathToFileURL } from 'node:url';
+import { ROLE_PROFILE_TO_ROLE } from './p2a_constants.mjs';
 import { P2A_DIR, resolveP2aPaths } from './p2a_paths.mjs';
 
 const P2A_PATHS = resolveP2aPaths(import.meta.url);
@@ -38,18 +39,6 @@ const GATE_PATHS = {
   taskGraph: path.join('gate-c-task-graph', 'task-graph.json'),
   reviewReport: path.join('gate-d-review', 'review-report.md'),
   reviewJson: path.join('gate-d-review', 'review.json'),
-};
-const ROLE_PROFILE_TO_ROLE = {
-  owner_supervisor: 'lead',
-  frontend_implementer: 'contributor',
-  backend_implementer: 'contributor',
-  fullstack_implementer: 'contributor',
-  test_implementer: 'contributor',
-  docs_implementer: 'contributor',
-  qa_reviewer: 'reviewer',
-  architecture_reviewer: 'reviewer',
-  security_reviewer: 'reviewer',
-  manual_monitor: 'monitor',
 };
 const ROLE_PROFILE_SOURCES = new Set(['auto', 'override']);
 

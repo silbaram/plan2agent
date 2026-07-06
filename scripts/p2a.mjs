@@ -5,16 +5,11 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, lstatSync, readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
+import { GATE_FILES } from './p2a_constants.mjs';
 import { resolveOrchestrationAgentTool } from './p2a_project_config.mjs';
 import { resolveP2aPaths } from './p2a_paths.mjs';
 
 const P2A_PATHS = resolveP2aPaths(import.meta.url);
-const GATE_FILES = [
-  ['gate_a_intake', 'Gate A intake', path.join('gate-a-intake', 'intake.json')],
-  ['gate_b_spec', 'Gate B spec', path.join('gate-b-spec', 'spec.json')],
-  ['gate_c_task_graph', 'Gate C task graph', path.join('gate-c-task-graph', 'task-graph.json')],
-  ['gate_d_review', 'Gate D review', path.join('gate-d-review', 'review.json')],
-];
 const GREENFIELD_REQUIRED_FILES = ['status.md', ...GATE_FILES.map(([, , filePath]) => filePath)];
 
 const RUNTIME_COMMANDS = new Map([

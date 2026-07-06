@@ -6,6 +6,7 @@ import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import process from 'node:process';
 import { pathToFileURL } from 'node:url';
+import { FAILURE_CLASSES, FAILURE_RETRYABLE, ISOLATION_MODES } from './p2a_constants.mjs';
 import {
   loadJson,
   validateOrchestrationPlanData,
@@ -38,10 +39,7 @@ import { printRunCommandFooter } from './p2a_run_commands.mjs';
 const P2A_PATHS = resolveP2aPaths(import.meta.url);
 const ROOT = P2A_PATHS.projectRoot;
 const COMMANDS = new Set(['start', 'record', 'verify', 'finish', 'list', 'show', 'validate']);
-const ISOLATION_MODES = new Set(['none', 'branch', 'worktree']);
 const RUN_STATUSES = new Set(['started', 'finished', 'failed', 'blocked']);
-const FAILURE_CLASSES = new Set(['verification_failed', 'test_flake', 'scope_violation', 'missing_dependency', 'environment_failure', 'implementation_incomplete', 'other']);
-const FAILURE_RETRYABLE = new Set(['yes', 'no', 'after_fix']);
 const FAILURE_SOURCES = new Set(['owner', 'monitor', 'implementer']);
 const FAILURE_DEFAULTS = {
   verification_failed: { retryable: 'after_fix', needsUserDecision: false, source: 'owner' },

@@ -5,23 +5,12 @@ import { existsSync, lstatSync, readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
 import { pathToFileURL } from 'node:url';
+import { GATE_FILES, GREENFIELD_REQUIRED_FILES } from './p2a_constants.mjs';
 import {
   PROJECT_RUNTIME_SCHEMA_FILES,
   PROJECT_RUNTIME_SCRIPT_FILES,
   REPO_ONLY_SCRIPT_FILES,
 } from './p2a_tool_manifest.mjs';
-
-const GATE_FILES = [
-  ['gate_a_intake', 'Gate A intake', path.join('gate-a-intake', 'intake.json')],
-  ['gate_b_spec', 'Gate B spec', path.join('gate-b-spec', 'spec.json')],
-  ['gate_c_task_graph', 'Gate C task graph', path.join('gate-c-task-graph', 'task-graph.json')],
-  ['gate_d_review', 'Gate D review', path.join('gate-d-review', 'review.json')],
-];
-
-const GREENFIELD_REQUIRED_FILES = [
-  'status.md',
-  ...GATE_FILES.map(([, , relativePath]) => relativePath),
-];
 
 const EMPTY_TASK_COUNTS = {
   total: 0,
