@@ -6,6 +6,7 @@ import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import process from 'node:process';
 import { pathToFileURL } from 'node:url';
+import { FAILURE_CLASSES, FAILURE_RETRYABLE, ISOLATION_MODES } from './p2a_constants.mjs';
 import { loadJson, validateOrchestrationPlanData, validateProposalDraftApprovalData, validateRunData, validateTaskGraphData, ValidationError } from './validate_artifacts.mjs';
 import {
   normalizeMonitorVerdictData,
@@ -28,10 +29,7 @@ import { commandLine as sharedCommandLine, printRunCommandFooter } from './p2a_r
 const P2A_PATHS = resolveP2aPaths(import.meta.url);
 const ROOT = P2A_PATHS.projectRoot;
 const COMMANDS = new Set(['plan', 'start', 'resume', 'status', 'finish']);
-const ISOLATION_MODES = new Set(['none', 'branch', 'worktree']);
 const FINISH_STATUSES = new Set(['finished', 'failed', 'blocked']);
-const FAILURE_CLASSES = new Set(['verification_failed', 'test_flake', 'scope_violation', 'missing_dependency', 'environment_failure', 'implementation_incomplete', 'other']);
-const FAILURE_RETRYABLE = new Set(['yes', 'no', 'after_fix']);
 const FAILURE_SOURCES = new Set(['owner', 'monitor', 'implementer']);
 const IMPLEMENTER_AGENT_TOOLS = new Set(['codex', 'claude', 'manual']);
 const DEFAULT_PROJECT_CONFIG = path.join('.plan2agent', 'project.config.json');

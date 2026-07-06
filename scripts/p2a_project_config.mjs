@@ -2,6 +2,7 @@
 
 import { existsSync, lstatSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
+import { DEFAULT_RUNS_DIR } from './p2a_constants.mjs';
 import { P2A_ARTIFACTS_DIR, normalizeProjectId, normalizeProjectIdFromPath } from './p2a_paths.mjs';
 
 const ORCHESTRATION_AGENT_TOOLS = new Set(['codex', 'claude', 'manual']);
@@ -10,7 +11,7 @@ export const DEFAULT_VERIFICATION_TIMEOUT_MS = 600000;
 
 export function defaultRunTracking() {
   return {
-    runsDir: '.plan2agent/runs',
+    runsDir: DEFAULT_RUNS_DIR,
     defaultIsolation: 'none',
     branchPattern: 'p2a/<taskId>-<runId>',
     worktreePattern: '../.worktrees/<taskId>-<runId>',
@@ -164,7 +165,7 @@ export function defaultCapabilityConfig(capability) {
       supervisedRun: true,
       providerRouting: 'project_config',
       monitorGatePolicy: 'explicit_plan_only',
-      runtimeDir: '.plan2agent/runs',
+      runtimeDir: DEFAULT_RUNS_DIR,
     };
   }
   if (capability === 'proposals') {
