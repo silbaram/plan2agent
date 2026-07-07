@@ -831,11 +831,67 @@ export function normalizeProjectLocalLauncherCommand(command, workspacePath, opt
   return { command, normalized: false, reason: 'not_found' };
 }
 
-export function classifyVerificationSpawnResult(result) {
+const WINDOWS_CMD_BUILTINS = new Set([
+  'assoc', 'break', 'call', 'cd', 'chcp', 'chdir', 'cls', 'color', 'copy', 'date',
+  'del', 'dir', 'echo', 'endlocal', 'erase', 'exit', 'for', 'ftype', 'goto', 'if',
+  'md', 'mkdir', 'mklink', 'move', 'path', 'pause', 'popd', 'prompt', 'pushd', 'rd',
+  'rem', 'ren', 'rename', 'rmdir', 'set', 'setlocal', 'shift', 'start', 'time',
+  'title', 'type', 'ver', 'verify', 'vol',
+]);
+
+function hasWindowsPathSeparator(token) {
+  return token.includes('/') || token.includes('\\');
+}
+
+function pathextCandidates(token, env) {
+  const rawPathext = env?.PATHEXT || '.COM;.EXE;.BAT;.CMD';
+  const extensions = rawPathext.split(';').map((ext) => ext.trim()).filter(Boolean);
+  const lowerToken = token.toLowerCase();
+  const hasKnownExtension = extensions.some((ext) => lowerToken.endsWith(ext.toLowerCase()));
+  return hasKnownExtension ? [token] : [token, ...extensions.map((ext) => `${token}${ext}`)];
+}
+
+function windowsPathEntries(env) {
+  const value = env?.PATH ?? env?.Path ?? env?.path ?? '';
+  return String(value).split(';').filter(Boolean);
+}
+
+function isWindowsCommandResolvable(command, workspacePath, env) {
+  const first = splitFirstCommandToken(command);
+  if (!first?.token) return { resolvable: null, reason: 'missing_command_token' };
+  const token = first.token;
+  if (WINDOWS_CMD_BUILTINS.has(token.toLowerCase())) {
+    return { resolvable: null, reason: 'windows_cmd_builtin' };
+  }
+  if (hasWindowsPathSeparator(token) || token.startsWith('.')) {
+    return { resolvable: existsSync(path.resolve(workspacePath, token)), token };
+  }
+  for (const entry of windowsPathEntries(env)) {
+    for (const candidateName of pathextCandidates(token, env)) {
+      if (existsSync(path.resolve(entry, candidateName))) return { resolvable: true, token };
+    }
+  }
+  return { resolvable: false, token };
+}
+
+export function decodeVerificationOutput(value, options = {}) {
+  const buffer = Buffer.isBuffer(value) ? value : Buffer.from(String(value ?? ''), 'utf8');
+  const utf8 = buffer.toString('utf8');
+  const platform = options.platform ?? process.env.P2A_VERIFY_PLATFORM ?? process.platform;
+  if (platform !== 'win32' || !utf8.includes('�')) return utf8;
+  try {
+    return new TextDecoder('euc-kr').decode(buffer);
+  } catch {
+    return utf8;
+  }
+}
+
+export function classifyVerificationSpawnResult(result, options = {}) {
   if (result?.error?.code === 'ENOENT') {
     return { status: 'unavailable', reason: 'spawn_enoent', hint: 'verification command could not be started (ENOENT)' };
   }
-  const stderr = String(result?.stderr ?? '');
+  const stderr = typeof result?.stderr === 'string' ? result.stderr : decodeVerificationOutput(result?.stderr, options);
+  const stdout = typeof result?.stdout === 'string' ? result.stdout : decodeVerificationOutput(result?.stdout, options);
   const windowsNotFound = /is not recognized as an internal or external command/i.test(stderr)
     || /내부 또는 외부 명령.*(?:이\(가\)|가|이) 아닙니다/.test(stderr);
   const posixShellNotFound = result?.status === 127 && /(?:^|\n).*(?:: not found|: command not found)(?:\n|$)/i.test(stderr);
@@ -844,6 +900,18 @@ export function classifyVerificationSpawnResult(result) {
   }
   if (result?.status === 9009 || windowsNotFound) {
     return { status: 'unavailable', reason: 'windows_command_not_found', hint: 'Windows shell could not resolve the verification command' };
+  }
+  const platform = options.platform ?? process.env.P2A_VERIFY_PLATFORM ?? process.platform;
+  if (platform === 'win32'
+    && typeof result?.status === 'number'
+    && result.status !== 0
+    && stdout.length === 0
+    && options.command
+    && options.workspacePath) {
+    const resolved = isWindowsCommandResolvable(options.command, options.workspacePath, options.env ?? process.env);
+    if (resolved.resolvable === false) {
+      return { status: 'unavailable', reason: 'command_not_resolvable', hint: 'Windows PATH/filesystem lookup could not resolve the verification command' };
+    }
   }
   return { status: null, reason: null, hint: null };
 }
@@ -926,13 +994,14 @@ function runVerificationCommand(spec, workspacePath, timeoutMs) {
   const result = spawnSync(command, {
     cwd: workspacePath,
     shell: true,
-    encoding: 'utf8',
     maxBuffer: 1024 * 1024 * 10,
     timeout: timeoutMs,
   });
   const finishedAt = new Date();
+  result.stdout = decodeVerificationOutput(result.stdout);
+  result.stderr = decodeVerificationOutput(result.stderr);
   const exitCode = typeof result.status === 'number' ? result.status : 1;
-  const unavailable = classifyVerificationSpawnResult(result);
+  const unavailable = classifyVerificationSpawnResult(result, { command, workspacePath });
   const timedOut = result.error?.code === 'ETIMEDOUT' || result.signal === 'SIGTERM';
   const stderrTail = timedOut
     ? tail([result.stderr, result.error?.message, `verification command timed out after ${timeoutMs}ms`].filter(Boolean).join('\n'))

@@ -1,10 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, mkdirSync } from 'node:fs';
+import { chmodSync, mkdtempSync, writeFileSync, mkdirSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {
   classifyVerificationSpawnResult,
+  decodeVerificationOutput,
   normalizeProjectLocalLauncherCommand,
 } from '../scripts/p2a_runs.mjs';
 
@@ -73,4 +74,80 @@ test('skips launcher normalization for complex shell commands', () => {
   assert.equal(normalized.normalized, false);
   assert.equal(normalized.command, './gradlew build && npm test');
   assert.equal(normalized.reason, 'complex_command');
+});
+
+
+test('decodes CP949 Korean cmd stderr and classifies unresolved Windows command by filesystem lookup', () => {
+  const workspace = mkdtempSync(path.join(os.tmpdir(), 'p2a-cp949-'));
+  const cp949Bytes = Buffer.from([
+    39, 120, 39, 192, 186, 40, 180, 194, 41, 32, 179, 187, 186, 206, 32, 182,
+    199, 180, 194, 32, 189, 199, 199, 224, 199, 210, 32, 188, 246, 32, 192,
+    214, 180, 194, 32, 199, 193, 183, 206, 177, 215, 183, 165, 44, 32, 182,
+    199, 180, 194, 32, 185, 232, 196, 161, 32, 198, 196, 192, 207, 192, 204,
+    32, 190, 198, 180, 213, 180, 207, 180, 217, 46,
+  ]);
+  const decoded = decodeVerificationOutput(cp949Bytes, { platform: 'win32' });
+  assert.equal(decoded, "'x'은(는) 내부 또는 실행할 수 있는 프로그램, 또는 배치 파일이 아닙니다.");
+  const result = classifyVerificationSpawnResult(
+    { status: 1, stdout: Buffer.alloc(0), stderr: cp949Bytes },
+    { platform: 'win32', command: 'x', workspacePath: workspace, env: { PATH: '', PATHEXT: '.EXE;.CMD' } },
+  );
+  assert.equal(result.status, 'unavailable');
+  assert.equal(result.reason, 'command_not_resolvable');
+});
+
+test('Windows filesystem lookup keeps existing path-like command resolvable', () => {
+  const workspace = mkdtempSync(path.join(os.tmpdir(), 'p2a-win-path-found-'));
+  writeFileSync(path.join(workspace, 'verify.cmd'), '@echo off\r\n');
+  const result = classifyVerificationSpawnResult(
+    { status: 1, stdout: '', stderr: 'not a recognizable localized error' },
+    { platform: 'win32', command: './verify.cmd', workspacePath: workspace, env: { PATH: '', PATHEXT: '.CMD' } },
+  );
+  assert.equal(result.status, null);
+});
+
+test('Windows filesystem lookup classifies missing path-like command as unavailable', () => {
+  const workspace = mkdtempSync(path.join(os.tmpdir(), 'p2a-win-path-missing-'));
+  const result = classifyVerificationSpawnResult(
+    { status: 1, stdout: '', stderr: 'localized text was unreadable' },
+    { platform: 'win32', command: './missing.cmd test', workspacePath: workspace, env: { PATH: '', PATHEXT: '.CMD' } },
+  );
+  assert.equal(result.status, 'unavailable');
+  assert.equal(result.reason, 'command_not_resolvable');
+});
+
+test('Windows filesystem lookup resolves bare PATH command with PATHEXT', () => {
+  const workspace = mkdtempSync(path.join(os.tmpdir(), 'p2a-win-bare-work-'));
+  const binDir = mkdtempSync(path.join(os.tmpdir(), 'p2a-win-bare-bin-'));
+  const executable = path.join(binDir, 'verify.CMD');
+  writeFileSync(executable, '@echo off\r\n');
+  chmodSync(executable, 0o755);
+  const result = classifyVerificationSpawnResult(
+    { status: 1, stdout: '', stderr: 'not a not-found message' },
+    { platform: 'win32', command: 'verify --flag', workspacePath: workspace, env: { PATH: binDir, PATHEXT: '.EXE;.CMD' } },
+  );
+  assert.equal(result.status, null);
+});
+
+test('Windows filesystem lookup excludes cmd builtins from command_not_resolvable fallback', () => {
+  const workspace = mkdtempSync(path.join(os.tmpdir(), 'p2a-win-builtin-'));
+  const result = classifyVerificationSpawnResult(
+    { status: 1, stdout: '', stderr: 'not a not-found message' },
+    { platform: 'win32', command: 'dir', workspacePath: workspace, env: { PATH: '', PATHEXT: '.EXE;.CMD' } },
+  );
+  assert.equal(result.status, null);
+});
+
+test('Windows filesystem lookup does not classify when stdout is non-empty', () => {
+  const workspace = mkdtempSync(path.join(os.tmpdir(), 'p2a-win-stdout-'));
+  const result = classifyVerificationSpawnResult(
+    { status: 1, stdout: 'work happened', stderr: 'not a not-found message' },
+    { platform: 'win32', command: 'definitely-missing-xyz', workspacePath: workspace, env: { PATH: '', PATHEXT: '.EXE;.CMD' } },
+  );
+  assert.equal(result.status, null);
+});
+
+test('UTF-8 output without replacement characters is not re-decoded as EUC-KR', () => {
+  const text = 'plain utf8 output ✓';
+  assert.equal(decodeVerificationOutput(Buffer.from(text, 'utf8'), { platform: 'win32' }), text);
 });
