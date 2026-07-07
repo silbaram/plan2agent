@@ -728,6 +728,11 @@ export function validateRunData(data) {
     }
     throw error;
   }
+  for (const [index, item] of (data.verification ?? []).entries()) {
+    if (item.status === 'unavailable' && (!item.failureReason || !item.failureHint)) {
+      throw new ValidationError(`verification[${index}] unavailable status must include failureReason and failureHint`);
+    }
+  }
   if (data.status === 'started' && data.finishedAt !== null) {
     throw new ValidationError('started run must have finishedAt null');
   }

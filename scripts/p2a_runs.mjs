@@ -51,7 +51,7 @@ const FAILURE_DEFAULTS = {
   other: { retryable: 'no', needsUserDecision: true, source: 'owner' },
 };
 const VERIFICATION_TYPES = new Set(['test', 'lint', 'typecheck', 'custom']);
-const VERIFICATION_STATUSES = new Set(['passed', 'failed', 'skipped', 'not_run']);
+const VERIFICATION_STATUSES = new Set(['passed', 'failed', 'skipped', 'not_run', 'unavailable']);
 const OUTPUT_TAIL_LIMIT = 4000;
 
 function usage() {
@@ -758,6 +758,164 @@ function configuredCommand(config, type) {
   return null;
 }
 
+function hasShellMetacharactersAfterFirstToken(command, tokenEnd) {
+  const rest = command.slice(tokenEnd);
+  return /[&|;<>()`$*?{}\[\]]/.test(rest) || /\n|\r/.test(rest);
+}
+
+export function splitFirstCommandToken(command) {
+  if (typeof command !== 'string') return null;
+  let index = 0;
+  while (index < command.length && /\s/.test(command[index])) index += 1;
+  if (index >= command.length) return null;
+  const quote = command[index] === '"' || command[index] === "'" ? command[index] : null;
+  const tokenStart = index;
+  let token = '';
+  if (quote) {
+    index += 1;
+    while (index < command.length) {
+      const ch = command[index];
+      if (ch === quote) return { token, start: tokenStart, end: index + 1, quoted: quote };
+      token += ch;
+      index += 1;
+    }
+    return null;
+  }
+  while (index < command.length && !/\s/.test(command[index])) {
+    token += command[index];
+    index += 1;
+  }
+  return { token, start: tokenStart, end: index, quoted: null };
+}
+
+function existingFile(candidate) {
+  try {
+    return existsSync(candidate) && lstatSync(candidate).isFile();
+  } catch {
+    return false;
+  }
+}
+
+function launcherCandidates(token, workspacePath, platform) {
+  const roots = path.isAbsolute(token) ? [''] : [workspacePath, ROOT];
+  const candidates = [];
+  for (const root of roots) {
+    const base = path.resolve(root || path.parse(token).root, root ? token : token);
+    if (platform === 'win32') {
+      candidates.push(`${base}.bat`, `${base}.cmd`);
+    }
+    candidates.push(base);
+  }
+  return candidates;
+}
+
+export function normalizeProjectLocalLauncherCommand(command, workspacePath, options = {}) {
+  const platform = options.platform ?? process.env.P2A_VERIFY_PLATFORM ?? process.platform;
+  const first = splitFirstCommandToken(command);
+  if (!first || !first.token || hasShellMetacharactersAfterFirstToken(command, first.end)) {
+    return { command, normalized: false, reason: 'complex_command' };
+  }
+  const isLocalLike = first.token.startsWith('.') || first.token.includes('/') || first.token.includes('\\') || path.isAbsolute(first.token);
+  if (!isLocalLike) return { command, normalized: false, reason: 'not_project_local' };
+  for (const candidate of launcherCandidates(first.token, workspacePath, platform)) {
+    if (!existingFile(candidate)) continue;
+    const absolute = path.resolve(candidate);
+    const replacement = first.quoted ? `${first.quoted}${absolute}${first.quoted}` : `"${absolute}"`;
+    return {
+      command: `${command.slice(0, first.start)}${replacement}${command.slice(first.end)}`,
+      normalized: true,
+      originalToken: first.token,
+      normalizedToken: absolute,
+    };
+  }
+  return { command, normalized: false, reason: 'not_found' };
+}
+
+const WINDOWS_CMD_BUILTINS = new Set([
+  'assoc', 'break', 'call', 'cd', 'chcp', 'chdir', 'cls', 'color', 'copy', 'date',
+  'del', 'dir', 'echo', 'endlocal', 'erase', 'exit', 'for', 'ftype', 'goto', 'if',
+  'md', 'mkdir', 'mklink', 'move', 'path', 'pause', 'popd', 'prompt', 'pushd', 'rd',
+  'rem', 'ren', 'rename', 'rmdir', 'set', 'setlocal', 'shift', 'start', 'time',
+  'title', 'type', 'ver', 'verify', 'vol',
+]);
+
+function hasWindowsPathSeparator(token) {
+  return token.includes('/') || token.includes('\\');
+}
+
+function pathextCandidates(token, env) {
+  const rawPathext = env?.PATHEXT || '.COM;.EXE;.BAT;.CMD';
+  const extensions = rawPathext.split(';').map((ext) => ext.trim()).filter(Boolean);
+  const lowerToken = token.toLowerCase();
+  const hasKnownExtension = extensions.some((ext) => lowerToken.endsWith(ext.toLowerCase()));
+  return hasKnownExtension ? [token] : [token, ...extensions.map((ext) => `${token}${ext}`)];
+}
+
+function windowsPathEntries(env) {
+  const value = env?.PATH ?? env?.Path ?? env?.path ?? '';
+  return String(value).split(';').filter(Boolean);
+}
+
+function isWindowsCommandResolvable(command, workspacePath, env) {
+  const first = splitFirstCommandToken(command);
+  if (!first?.token) return { resolvable: null, reason: 'missing_command_token' };
+  const token = first.token;
+  if (WINDOWS_CMD_BUILTINS.has(token.toLowerCase())) {
+    return { resolvable: null, reason: 'windows_cmd_builtin' };
+  }
+  if (hasWindowsPathSeparator(token) || token.startsWith('.')) {
+    return { resolvable: existsSync(path.resolve(workspacePath, token)), token };
+  }
+  for (const entry of windowsPathEntries(env)) {
+    for (const candidateName of pathextCandidates(token, env)) {
+      if (existsSync(path.resolve(entry, candidateName))) return { resolvable: true, token };
+    }
+  }
+  return { resolvable: false, token };
+}
+
+export function decodeVerificationOutput(value, options = {}) {
+  const buffer = Buffer.isBuffer(value) ? value : Buffer.from(String(value ?? ''), 'utf8');
+  const utf8 = buffer.toString('utf8');
+  const platform = options.platform ?? process.env.P2A_VERIFY_PLATFORM ?? process.platform;
+  if (platform !== 'win32' || !utf8.includes('�')) return utf8;
+  try {
+    return new TextDecoder('euc-kr').decode(buffer);
+  } catch {
+    return utf8;
+  }
+}
+
+export function classifyVerificationSpawnResult(result, options = {}) {
+  if (result?.error?.code === 'ENOENT') {
+    return { status: 'unavailable', reason: 'spawn_enoent', hint: 'verification command could not be started (ENOENT)' };
+  }
+  const stderr = typeof result?.stderr === 'string' ? result.stderr : decodeVerificationOutput(result?.stderr, options);
+  const stdout = typeof result?.stdout === 'string' ? result.stdout : decodeVerificationOutput(result?.stdout, options);
+  const windowsNotFound = /is not recognized as an internal or external command/i.test(stderr)
+    || /내부 또는 외부 명령.*(?:이\(가\)|가|이) 아닙니다/.test(stderr);
+  const posixShellNotFound = result?.status === 127 && /(?:^|\n).*(?:: not found|: command not found)(?:\n|$)/i.test(stderr);
+  if (posixShellNotFound) {
+    return { status: 'unavailable', reason: 'shell_command_not_found', hint: 'shell could not resolve the verification command' };
+  }
+  if (result?.status === 9009 || windowsNotFound) {
+    return { status: 'unavailable', reason: 'windows_command_not_found', hint: 'Windows shell could not resolve the verification command' };
+  }
+  const platform = options.platform ?? process.env.P2A_VERIFY_PLATFORM ?? process.platform;
+  if (platform === 'win32'
+    && typeof result?.status === 'number'
+    && result.status !== 0
+    && stdout.length === 0
+    && options.command
+    && options.workspacePath) {
+    const resolved = isWindowsCommandResolvable(options.command, options.workspacePath, options.env ?? process.env);
+    if (resolved.resolvable === false) {
+      return { status: 'unavailable', reason: 'command_not_resolvable', hint: 'Windows PATH/filesystem lookup could not resolve the verification command' };
+    }
+  }
+  return { status: null, reason: null, hint: null };
+}
+
 function verificationSpecs(args, config) {
   const requests = [...args.verifyRequests];
   if (!requests.length) {
@@ -830,24 +988,28 @@ function prepareProjectConfigForVerification(args, runsDir, run, workspacePath) 
 
 function runVerificationCommand(spec, workspacePath, timeoutMs) {
   if (spec.status === 'skipped') return spec;
+  const normalized = normalizeProjectLocalLauncherCommand(spec.command, workspacePath);
+  const command = normalized.command;
   const startedAt = new Date();
-  const result = spawnSync(spec.command, {
+  const result = spawnSync(command, {
     cwd: workspacePath,
     shell: true,
-    encoding: 'utf8',
     maxBuffer: 1024 * 1024 * 10,
     timeout: timeoutMs,
   });
   const finishedAt = new Date();
+  result.stdout = decodeVerificationOutput(result.stdout);
+  result.stderr = decodeVerificationOutput(result.stderr);
   const exitCode = typeof result.status === 'number' ? result.status : 1;
+  const unavailable = classifyVerificationSpawnResult(result, { command, workspacePath });
   const timedOut = result.error?.code === 'ETIMEDOUT' || result.signal === 'SIGTERM';
   const stderrTail = timedOut
     ? tail([result.stderr, result.error?.message, `verification command timed out after ${timeoutMs}ms`].filter(Boolean).join('\n'))
     : tail([result.stderr, result.error?.message].filter(Boolean).join('\n'));
   return {
     type: spec.type,
-    command: spec.command,
-    status: timedOut ? 'failed' : (exitCode === 0 ? 'passed' : 'failed'),
+    command,
+    status: unavailable.status ?? (timedOut ? 'failed' : (exitCode === 0 ? 'passed' : 'failed')),
     exitCode,
     durationMs: Math.max(0, finishedAt.getTime() - startedAt.getTime()),
     startedAt: startedAt.toISOString(),
@@ -855,6 +1017,8 @@ function runVerificationCommand(spec, workspacePath, timeoutMs) {
     stdoutTail: tail(result.stdout),
     stderrTail,
     source: spec.source,
+    ...(unavailable.status ? { failureReason: unavailable.reason, failureHint: unavailable.hint } : {}),
+    ...(normalized.normalized ? { originalCommand: spec.command, normalizedCommand: command } : {}),
   };
 }
 
@@ -911,7 +1075,7 @@ function failedVerificationItems(run) {
 }
 
 function incompleteVerificationItems(run) {
-  return run.verification.filter((item) => item.status === 'skipped' || item.status === 'not_run');
+  return run.verification.filter((item) => item.status === 'skipped' || item.status === 'not_run' || item.status === 'unavailable');
 }
 
 function executedPassedVerificationItems(run) {
@@ -1052,11 +1216,15 @@ function verifyRun(args) {
   }
   for (const result of results) {
     console.log(`- ${result.type}: ${result.status} (${result.command})`);
+    if (result.normalizedCommand) console.log(`  normalized: ${result.originalCommand} -> ${result.normalizedCommand}`);
     if (result.status === 'skipped' && result.source === 'config') {
       console.log(`  hint: pass --${result.type}-command <cmd> --save-config to store a project-specific command`);
     }
+    if (result.status === 'unavailable') {
+      console.log(`  hint: verification command was not started; check the command, launcher path, current directory, and environment. ${result.failureHint ?? ''}`.trim());
+    }
   }
-  return results.some((result) => result.status === 'failed') ? 1 : 0;
+  return results.some((result) => result.status === 'failed' || result.status === 'unavailable') ? 1 : 0;
 }
 
 function finishRun(args) {
@@ -1105,7 +1273,7 @@ function finishRun(args) {
 
 function verificationSummary(run) {
   if (!run.verification.length) return '-';
-  const counts = { passed: 0, failed: 0, skipped: 0, not_run: 0 };
+  const counts = { passed: 0, failed: 0, skipped: 0, not_run: 0, unavailable: 0 };
   for (const item of run.verification) counts[item.status] = (counts[item.status] ?? 0) + 1;
   return Object.entries(counts)
     .filter(([, count]) => count > 0)
