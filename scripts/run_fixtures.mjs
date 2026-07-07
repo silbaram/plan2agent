@@ -8400,11 +8400,16 @@ export function main() {
   writeResultOutput(evalStableMetricsResult);
   if (evalStableMetricsResult.status !== 0) return failureStatus(evalStableMetricsResult);
 
+  const verificationRunnerUtilsResult = runNodeTestFile('tests/verification-runner-utils.test.mjs');
+  writeResultOutput(verificationRunnerUtilsResult);
+  if (verificationRunnerUtilsResult.status !== 0) return failureStatus(verificationRunnerUtilsResult);
+
   const segments = [`${countNodeTestCases(schemaResult.stdout)} Plan2Agent fixture set test(s)`];
   if (scaffoldResult.checks) segments.push(`${scaffoldResult.checks} scaffold fixture check(s)`);
   if (evalResult.checks) segments.push(`${evalResult.checks} eval fixture check(s)`);
   if (memoryResult.checks) segments.push(`${memoryResult.checks} memory fixture check(s)`);
   segments.push(`${countNodeTestCases(e2eResult.stdout)} e2e fixture test(s)`);
+  segments.push(`${countNodeTestCases(verificationRunnerUtilsResult.stdout)} verification runner utility test(s)`);
   if (iterationResult.checks) segments.push(`${iterationResult.checks} iteration fixture check(s)`);
   segments.push(`${countNodeTestCases(negativeResult.stdout)} negative fixture test(s)`);
   segments.push(`${countNodeTestCases(projectConfigDetectionResult.stdout)} project config detection test(s)`);
