@@ -51,3 +51,4 @@ Rules:
 - Keep findings concrete and tied to the provided style section and changed file evidence.
 - `violationCount` must equal the total number of violation objects across all sections.
 - This result is informational only and must not decide whether the task is done, blocked, failed, or accepted.
+- When re-rating to refresh an existing verdict file, do not modify any previous verdict; return only the new rating, and leave file history/version management to the calling owner.
