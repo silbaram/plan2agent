@@ -211,7 +211,8 @@
               "passed",
               "failed",
               "skipped",
-              "not_run"
+              "not_run",
+              "unavailable"
             ]
           },
           "exitCode": {
@@ -258,6 +259,34 @@
               "command",
               "manual"
             ]
+          },
+          "failureReason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "minLength": 1
+          },
+          "failureHint": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "minLength": 1
+          },
+          "originalCommand": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "minLength": 1
+          },
+          "normalizedCommand": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "minLength": 1
           }
         }
       }
