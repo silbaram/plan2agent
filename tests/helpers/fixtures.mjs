@@ -15,7 +15,6 @@ export const ITERATION_CLI = path.join(ROOT, 'scripts', 'p2a_iteration.mjs');
 export const TASKS_CLI = path.join(ROOT, 'scripts', 'p2a_tasks.mjs');
 export const RUNS_CLI = path.join(ROOT, 'scripts', 'p2a_runs.mjs');
 export const EXECUTE_CLI = path.join(ROOT, 'scripts', 'p2a_execute.mjs');
-export const ORCHESTRATE_CLI = path.join(ROOT, 'scripts', 'p2a_orchestrate.mjs');
 export const PROPOSALS_CLI = path.join(ROOT, 'scripts', 'p2a_proposals.mjs');
 export const EVAL_CLI = path.join(ROOT, 'scripts', 'p2a_eval.mjs');
 export const MEMORY_CLI = path.join(ROOT, 'scripts', 'p2a_memory.mjs');
@@ -119,13 +118,6 @@ export function runTargetExecute(targetRoot, args) {
   return spawnSync(process.execPath, [path.join(targetRoot, '.plan2agent', 'scripts', 'p2a_execute.mjs'), ...args], { cwd: targetRoot, encoding: 'utf8' });
 }
 
-export function runTargetOrchestrate(targetRoot, args, options = {}) {
-  return spawnSync(process.execPath, [path.join(targetRoot, '.plan2agent', 'scripts', 'p2a_orchestrate.mjs'), ...args], {
-    cwd: targetRoot,
-    encoding: 'utf8',
-    env: options.env,
-  });
-}
 
 export function runTargetProposals(targetRoot, args) {
   return spawnSync(process.execPath, [path.join(targetRoot, '.plan2agent', 'scripts', 'p2a_proposals.mjs'), ...args], { cwd: targetRoot, encoding: 'utf8' });

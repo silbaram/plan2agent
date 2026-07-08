@@ -17,8 +17,6 @@ const SCHEMA_PATHS = {
   review: path.join(P2A_PATHS.schemasDir, 'review.schema.json'),
   run: path.join(P2A_PATHS.schemasDir, 'run.schema.json'),
   run_index: path.join(P2A_PATHS.schemasDir, 'run-index.schema.json'),
-  orchestration_plan: path.join(P2A_PATHS.schemasDir, 'orchestration-plan.schema.json'),
-  orchestration_runtime: path.join(P2A_PATHS.schemasDir, 'orchestration-runtime.schema.json'),
   skill_proposal: path.join(P2A_PATHS.schemasDir, 'skill-proposal.schema.json'),
   proposal_review: path.join(P2A_PATHS.schemasDir, 'proposal-review.schema.json'),
   proposal_curation: path.join(P2A_PATHS.schemasDir, 'proposal-curation.schema.json'),
@@ -789,149 +787,6 @@ export function validateRunIndex(filePath) {
   return validateRunIndexData(loadJson(filePath));
 }
 
-export function validateOrchestrationPlanData(data) {
-  data = normalizeOrchestrationPlanData(data);
-  validateSchema(data, loadJson(SCHEMA_PATHS.orchestration_plan));
-  const roleIds = data.roles.map((role) => role.roleId);
-  if (roleIds.length !== new Set(roleIds).size) {
-    throw new ValidationError('orchestration plan roleId values must be unique');
-  }
-  const providerCapabilities = new Map(data.providerCapabilities.map((capability) => [capability.provider, capability]));
-  if (providerCapabilities.size !== data.providerCapabilities.length) {
-    throw new ValidationError('orchestration plan providerCapabilities[].provider values must be unique');
-  }
-  for (const provider of ['codex', 'claude', 'gemini', 'manual']) {
-    if (!providerCapabilities.has(provider)) {
-      throw new ValidationError(`orchestration plan providerCapabilities is missing ${provider}`);
-    }
-  }
-  const roleIdSet = new Set(roleIds);
-  const unknownPromptRoles = data.handoffPrompts
-    .map((prompt) => prompt.roleId)
-    .filter((roleId) => !roleIdSet.has(roleId));
-  if (unknownPromptRoles.length) {
-    throw new ValidationError(`orchestration plan handoffPrompts reference unknown roleId values: ${JSON.stringify([...new Set(unknownPromptRoles)])}`);
-  }
-  for (const role of data.roles) {
-    const capability = providerCapabilities.get(role.agentTool);
-    if (!capability) throw new ValidationError(`orchestration plan role ${role.roleId} uses provider without capability entry: ${role.agentTool}`);
-    if (!capability.roles.includes(role.role)) {
-      throw new ValidationError(`orchestration plan role ${role.roleId} assigns ${role.role} to unsupported provider ${role.agentTool}`);
-    }
-    if (ROLE_PROFILE_TO_ROLE[role.profile] !== role.role) {
-      throw new ValidationError(`orchestration plan role ${role.roleId} profile ${role.profile} does not match role ${role.role}`);
-    }
-    if (!ROLE_PROFILE_SOURCES.has(role.profileSource)) {
-      throw new ValidationError(`orchestration plan role ${role.roleId} uses unsupported profileSource ${role.profileSource}`);
-    }
-    if (role.profileSource === 'override' && !['implementer', 'reviewer'].includes(role.roleId)) {
-      throw new ValidationError(`orchestration plan role ${role.roleId} cannot use override profileSource`);
-    }
-    validateExecutionGuideForRole(role, `orchestration plan role ${role.roleId}`);
-    if (role.requiresWrite && !capability.writeAllowed) {
-      throw new ValidationError(`orchestration plan role ${role.roleId} requires write but provider ${role.agentTool} is read-only`);
-    }
-  }
-  const implementer = data.roles.find((role) => role.roleId === 'implementer');
-  const reviewer = data.roles.find((role) => role.roleId === 'reviewer');
-  if (implementer && data.providerStrategy.implementationProvider !== implementer.agentTool) {
-    throw new ValidationError('orchestration plan providerStrategy.implementationProvider must match implementer agentTool');
-  }
-  if ((reviewer?.agentTool ?? null) !== data.providerStrategy.reviewProvider) {
-    throw new ValidationError('orchestration plan providerStrategy.reviewProvider must match reviewer agentTool');
-  }
-  if (data.providerStrategy.mixedProviderImplementation !== false) {
-    throw new ValidationError('orchestration plan mixedProviderImplementation must remain false');
-  }
-  if (data.providerStrategy.mode === 'single_provider' && data.providerStrategy.reviewProvider && ![data.providerStrategy.primaryProvider, 'manual'].includes(data.providerStrategy.reviewProvider)) {
-    throw new ValidationError('orchestration plan single_provider mode cannot use a different reviewProvider');
-  }
-  if (data.providerStrategy.mode === 'single_provider_with_read_only_reviewer') {
-    const reviewerCapability = data.providerStrategy.reviewProvider ? providerCapabilities.get(data.providerStrategy.reviewProvider) : null;
-    if (!reviewerCapability || reviewerCapability.writeAllowed || data.providerStrategy.reviewProvider === data.providerStrategy.primaryProvider) {
-      throw new ValidationError('orchestration plan single_provider_with_read_only_reviewer requires a different read-only reviewProvider');
-    }
-  }
-  if (data.monitorGate.required) {
-    if (!data.monitorGate.verdictPath) {
-      throw new ValidationError('orchestration plan monitorGate.verdictPath is required when monitorGate.required is true');
-    }
-    if (!data.monitorGate.acceptedVerdicts.length) {
-      throw new ValidationError('orchestration plan monitorGate.acceptedVerdicts must not be empty when monitorGate.required is true');
-    }
-    const hasMonitor = data.roles.some((role) => role.role === 'monitor');
-    if (!hasMonitor) throw new ValidationError('orchestration plan requires a monitor role when monitorGate.required is true');
-  }
-  return data;
-}
-
-export function validateOrchestrationPlan(filePath) {
-  return validateOrchestrationPlanData(loadJson(filePath));
-}
-
-export function validateOrchestrationRuntimeData(data) {
-  data = normalizeOrchestrationRuntimeData(data);
-  validateSchema(data, loadJson(SCHEMA_PATHS.orchestration_runtime));
-  const roleAssignments = data.sharedMentalModel.roleAssignments;
-  const roleIds = roleAssignments.map((role) => role.roleId);
-  if (roleIds.length !== new Set(roleIds).size) {
-    throw new ValidationError('orchestration runtime roleAssignments[].roleId values must be unique');
-  }
-  const roleIdSet = new Set(roleIds);
-  for (const role of roleAssignments) {
-    if (ROLE_PROFILE_TO_ROLE[role.profile] !== role.role) {
-      throw new ValidationError(`orchestration runtime role ${role.roleId} profile ${role.profile} does not match role ${role.role}`);
-    }
-    if (!ROLE_PROFILE_SOURCES.has(role.profileSource)) {
-      throw new ValidationError(`orchestration runtime role ${role.roleId} uses unsupported profileSource ${role.profileSource}`);
-    }
-    if (role.profileSource === 'override' && !['implementer', 'reviewer'].includes(role.roleId)) {
-      throw new ValidationError(`orchestration runtime role ${role.roleId} cannot use override profileSource`);
-    }
-    validateExecutionGuideForRole(role, `orchestration runtime role ${role.roleId}`);
-  }
-  const eventIds = data.communicationLog.map((event) => event.eventId);
-  if (eventIds.length !== new Set(eventIds).size) {
-    throw new ValidationError('orchestration runtime communicationLog[].eventId values must be unique');
-  }
-  for (const event of data.communicationLog) {
-    if (!roleIdSet.has(event.roleId)) {
-      throw new ValidationError(`orchestration runtime event ${event.eventId} references unknown roleId: ${event.roleId}`);
-    }
-    if (event.linkedRoleId !== null && !roleIdSet.has(event.linkedRoleId)) {
-      throw new ValidationError(`orchestration runtime event ${event.eventId} references unknown linkedRoleId: ${event.linkedRoleId}`);
-    }
-  }
-  for (const decision of data.sharedMentalModel.decisions) {
-    if (!roleIdSet.has(decision.roleId)) {
-      throw new ValidationError(`orchestration runtime decision ${decision.decisionId} references unknown roleId: ${decision.roleId}`);
-    }
-  }
-  for (const question of data.sharedMentalModel.openQuestions) {
-    if (!roleIdSet.has(question.askedByRoleId)) {
-      throw new ValidationError(`orchestration runtime question ${question.questionId} references unknown askedByRoleId: ${question.askedByRoleId}`);
-    }
-    if (question.targetRoleId !== null && !roleIdSet.has(question.targetRoleId)) {
-      throw new ValidationError(`orchestration runtime question ${question.questionId} references unknown targetRoleId: ${question.targetRoleId}`);
-    }
-  }
-  if (data.status.lastEventId !== null && !eventIds.includes(data.status.lastEventId)) {
-    throw new ValidationError(`orchestration runtime status.lastEventId references unknown eventId: ${data.status.lastEventId}`);
-  }
-  const hasBlockedRole = roleAssignments.some((role) => role.status === 'blocked');
-  if ((data.status.phase === 'blocked' || hasBlockedRole) && !data.status.blocked) {
-    throw new ValidationError('orchestration runtime status.blocked must be true when phase or roleAssignments indicate blocked');
-  }
-  if (data.status.phase === 'closed' && data.status.blocked) {
-    throw new ValidationError('orchestration runtime status.blocked must be false when phase is closed');
-  }
-  return data;
-}
-
-export function validateOrchestrationRuntime(filePath) {
-  return validateOrchestrationRuntimeData(loadJson(filePath));
-}
-
 export function validateSkillProposalData(data) {
   validateSchema(data, loadJson(SCHEMA_PATHS.skill_proposal));
   validateNonBlankStrings(data.targetFiles, `${data.proposalId}.targetFiles`);
@@ -1188,23 +1043,10 @@ export function validateRunsDir(runsDir) {
     if (runData.projectId !== index.projectId) {
       throw new ValidationError(`run ${run.runId} projectId does not match run-index projectId`);
     }
-    const runtimePath = path.join(runsDir, `${run.runId}.orchestration-runtime.json`);
-    if (existsSync(runtimePath)) {
-      const runtime = validateOrchestrationRuntime(runtimePath);
-      if (runtime.runId !== run.runId) {
-        throw new ValidationError(`orchestration runtime ${path.basename(runtimePath)} runId does not match run-index ${run.runId}`);
-      }
-      if (runtime.projectId !== index.projectId) {
-        throw new ValidationError(`orchestration runtime ${path.basename(runtimePath)} projectId does not match run-index projectId`);
-      }
-      if (runtime.taskId !== run.taskId) {
-        throw new ValidationError(`orchestration runtime ${path.basename(runtimePath)} taskId does not match run-index taskId`);
-      }
-    }
   }
   const indexedRunFiles = new Set(index.runs.map((run) => `${run.runId}.json`));
   const extraRunFiles = readdirSync(runsDir)
-    .filter((entry) => entry.endsWith('.json') && entry !== 'run-index.json' && !entry.endsWith('.orchestration.json') && !entry.endsWith('.orchestration-runtime.json') && !entry.endsWith('.monitor-verdict.json') && !indexedRunFiles.has(entry));
+    .filter((entry) => entry.endsWith('.json') && entry !== 'run-index.json' && !entry.endsWith('.orchestration.json') && !entry.endsWith('.monitor-gate.json') && !entry.endsWith('.monitor-verdict.json') && !indexedRunFiles.has(entry));
   if (extraRunFiles.length) {
     throw new ValidationError(`runs directory contains unindexed run file(s): ${extraRunFiles.join(', ')}`);
   }
@@ -1443,7 +1285,6 @@ function usage() {
     '  --task-graph <path> [--require-approved-spec <path>]',
     '  --review <path> [--require-review-pass]',
     '  --run <path> | --run-index <path> | --runs-dir <dir>',
-    '  --orchestration-plan <path> | --orchestration-runtime <path>',
     '  --skill-proposal <path>',
     '  --proposal-review <path>',
     '  --proposal-curation <path>',
@@ -1476,8 +1317,6 @@ function parseArgs(argv) {
     else if (arg === '--run') args.run = argv[++index];
     else if (arg === '--run-index') args.runIndex = argv[++index];
     else if (arg === '--runs-dir') args.runsDir = argv[++index];
-    else if (arg === '--orchestration-plan') args.orchestrationPlan = argv[++index];
-    else if (arg === '--orchestration-runtime') args.orchestrationRuntime = argv[++index];
     else if (arg === '--skill-proposal') args.skillProposal = argv[++index];
     else if (arg === '--proposal-review') args.proposalReview = argv[++index];
     else if (arg === '--proposal-curation') args.proposalCuration = argv[++index];
@@ -1526,8 +1365,6 @@ export function main(argv = process.argv.slice(2)) {
     if (args.run) validateRun(args.run);
     if (args.runIndex) validateRunIndex(args.runIndex);
     if (args.runsDir) validateRunsDir(args.runsDir);
-    if (args.orchestrationPlan) validateOrchestrationPlan(args.orchestrationPlan);
-    if (args.orchestrationRuntime) validateOrchestrationRuntime(args.orchestrationRuntime);
     if (args.skillProposal) validateSkillProposal(args.skillProposal);
     if (args.proposalReview) validateProposalReview(args.proposalReview);
     if (args.proposalCuration) validateProposalCuration(args.proposalCuration);

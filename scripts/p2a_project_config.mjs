@@ -161,11 +161,7 @@ export function defaultCapabilityConfig(capability) {
   if (capability === 'orchestration') {
     return {
       enabled: true,
-      defaultMode: 'solo',
-      supervisedRun: true,
-      providerRouting: 'project_config',
-      monitorGatePolicy: 'explicit_plan_only',
-      runtimeDir: DEFAULT_RUNS_DIR,
+      monitorGatePolicy: 'explicit_require_monitor',
     };
   }
   if (capability === 'proposals') {

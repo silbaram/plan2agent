@@ -6,8 +6,8 @@ import { createInterface } from 'node:readline/promises';
 import path from 'node:path';
 import process from 'node:process';
 import { Readable } from 'node:stream';
-import { validateOrchestrationPlanData, validateRunData, validateRunIndexData, validateTaskGraphData, ValidationError } from './validate_artifacts.mjs';
-import { normalizeMonitorVerdictData } from './p2a_orchestrate.mjs';
+import { validateRunData, validateRunIndexData, validateTaskGraphData, ValidationError } from './validate_artifacts.mjs';
+import { normalizeMonitorVerdictData, readMonitorGateSidecar } from './p2a_monitor_gate.mjs';
 import { resolveIterationState } from './p2a_iteration_state.mjs';
 import { canonicalTaskGraphRef, resolveRunsDir } from './p2a_run_paths.mjs';
 import {
@@ -559,19 +559,13 @@ function latestRunFailureClass(args, taskId, graph) {
   return latestRunForTask(args, taskId, { graph })?.failure?.class ?? null;
 }
 
-function orchestrationSidecarPath(runsDir, runId) {
-  return path.join(runsDir, `${runId}.orchestration.json`);
-}
-
 function readOrchestrationSidecar(runsDir, runId) {
-  const filePath = orchestrationSidecarPath(runsDir, runId);
-  if (!existsSync(filePath)) return null;
-  return validateOrchestrationPlanData(JSON.parse(readFileSync(filePath, 'utf8')));
+  return readMonitorGateSidecar(runsDir, runId);
 }
 
 function readMonitorVerdict(runsDir, sidecar) {
-  if (!sidecar?.monitorGate?.required) return null;
-  const verdictPath = path.resolve(runsDir, sidecar.monitorGate.verdictPath);
+  if (!sidecar?.required) return null;
+  const verdictPath = path.resolve(runsDir, sidecar.verdictPath);
   if (!existsSync(verdictPath) || !lstatSync(verdictPath).isFile()) {
     throw new Error(`monitor verdict is missing: ${formatDisplayPath(verdictPath)}`);
   }
@@ -585,9 +579,9 @@ function monitorRequiredRunIdsForTask(args, taskId, graph) {
   for (const candidateRef of context.candidateRefs) {
     try {
       const sidecar = readOrchestrationSidecar(context.runsDir, candidateRef.runId);
-      if (sidecar?.monitorGate?.required) runIds.push(candidateRef.runId);
+      if (sidecar?.required) runIds.push(candidateRef.runId);
     } catch (error) {
-      warnLatestRunProblem(`could not read orchestration sidecar for ${candidateRef.runId}: ${error.message}`);
+      warnLatestRunProblem(`could not read monitor gate sidecar for ${candidateRef.runId}: ${error.message}`);
     }
   }
   return runIds;
@@ -598,12 +592,12 @@ function assertMonitorGateDoneEvidence(args, task, graph, run) {
   if (!monitorRequiredRunIds.length) return;
   const runsDir = runsDirForTaskArgs(args);
   const sidecar = readOrchestrationSidecar(runsDir, run.runId);
-  if (!sidecar?.monitorGate?.required) {
-    throw new Error(`${task.id} cannot be marked done because this task requires monitor gate evidence from prior run(s): ${monitorRequiredRunIds.join(', ')}. Start the retry with p2a_execute start --orchestration-plan <plan> and finish with an accepted monitor verdict.`);
+  if (!sidecar?.required) {
+    throw new Error(`${task.id} cannot be marked done because this task requires monitor gate evidence from prior run(s): ${monitorRequiredRunIds.join(', ')}. Start the retry with p2a_execute start --require-monitor and finish with an accepted monitor verdict.`);
   }
   const verdict = readMonitorVerdict(runsDir, sidecar);
-  if (!sidecar.monitorGate.acceptedVerdicts.includes(verdict.verdict) || verdict.hasConcerns) {
-    throw new Error(`${task.id} cannot be marked done because latest run ${run.runId} has no accepted monitor verdict. Start the retry with p2a_execute start --orchestration-plan <plan> and finish with concern-free verdict ${sidecar.monitorGate.acceptedVerdicts.join('|')}.`);
+  if (!sidecar.acceptedVerdicts.includes(verdict.verdict) || verdict.hasConcerns) {
+    throw new Error(`${task.id} cannot be marked done because latest run ${run.runId} has no accepted monitor verdict. Start the retry with p2a_execute start --require-monitor and finish with concern-free verdict ${sidecar.acceptedVerdicts.join('|')}.`);
   }
 }
 
