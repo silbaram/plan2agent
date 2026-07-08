@@ -69,6 +69,8 @@ Never write `task-graph.json` directly. The canonical graph is created only by `
 - Avoid duplicate work: do not create a new task that duplicates `existing_tasks.active`; for iterative work, add only the incremental work needed on top of existing tasks.
 - Use `existing_tasks.maintenance` as context, but do not turn maintenance pilot work into this draft.
 - Merge trivially connected work; split work that spans multiple target areas.
+- Draft each task so its acceptance criteria are self-satisfiable from that task's explicit scope; do not attach AC that require earlier or later draft tasks to complete.
+- When a draft task adds a framework dependency that triggers auto-configuration, include the minimal required configuration (for example, a datasource URL) in that same task, or explicitly place build-green AC on the later task that owns that configuration.
 - Every task must be traceable: `sourceSpecRefs` must point to actual `effective_spec` product or implementation fields so `validateTaskGraphData` can pass.
 - Do not create tasks for scope that is absent from the approved effective spec.
 - If `spec_field_changes` is non-empty, focus the draft around changed fields rather than re-authoring unchanged baseline scope.

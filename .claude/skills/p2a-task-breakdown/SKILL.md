@@ -49,5 +49,7 @@ Each task must include:
 
 - Use `todo` as the default status.
 - Split oversized tasks before returning.
+- Each task's acceptance criteria must be self-satisfiable from that task's explicit scope; do not require prior or later task work to satisfy an AC.
+- A task that adds a framework dependency which triggers auto-configuration must either include the minimal configuration that auto-configuration requires (for example, a datasource URL) in the same task, or explicitly defer build-green acceptance criteria to the later task that handles that configuration.
 - Do not include implementation code.
 - Do not edit files or run commands.
