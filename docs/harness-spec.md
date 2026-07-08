@@ -141,7 +141,7 @@ scripts/p2a_tasks.mjs                       # task status and dependency managem
 scripts/p2a_project_config.mjs              # project command detection and config merge helper
 scripts/p2a_runs.mjs                        # task run log and verification tracking CLI
 scripts/p2a_execute.mjs                     # supervised single-task lifecycle runner
-scripts/p2a_orchestrate.mjs                 # supervised orchestration CLI
+scripts/p2a_monitor_gate.mjs                 # supervised orchestration CLI
 scripts/p2a_proposals.mjs                   # proposal mining/review/curation CLI
 scripts/p2a_radar_preflight.mjs             # Feature Radar preflight discovery/adapter helper
 scripts/p2a_run_paths.mjs                   # run directory resolution helper

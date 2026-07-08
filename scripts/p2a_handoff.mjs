@@ -1937,13 +1937,10 @@ function enhanceCapabilityNextActions(capability, targetRoot, config, manifest) 
     ];
   }
   if (capability === 'orchestration') {
-    const runtimeDir = projectRelativeConfigPath(targetRoot, config?.orchestration?.runtimeDir, path.join('.plan2agent', 'runs'));
     const orchestrationAgentTool = resolveOrchestrationAgentTool(config, manifest);
     return [
-      'Check provider runner readiness: node .plan2agent/scripts/p2a.mjs orchestrate runner-doctor --root .',
-      `${source.hasArtifact ? 'Plan supervised orchestration' : 'After a ready task exists, plan supervised orchestration'}: node .plan2agent/scripts/p2a.mjs orchestrate plan --artifacts ${source.artifactRef} --task <task-id> --agent-tool ${orchestrationAgentTool} --output .plan2agent/orchestration/<task-id>.json`,
-      `${source.hasArtifact ? 'Start supervised run with orchestration' : 'After reviewing the plan, start supervised run with orchestration'}: node .plan2agent/scripts/p2a.mjs execute start --artifacts ${source.artifactRef} --task <task-id> --agent-tool ${orchestrationAgentTool} --orchestration-plan .plan2agent/orchestration/<task-id>.json`,
-      `Inspect orchestration runtime after start: node .plan2agent/scripts/p2a.mjs orchestrate runtime-status --runtime ${runtimeDir}/<run-id>.orchestration-runtime.json`,
+      `${source.hasArtifact ? 'Start supervised run with monitor gate' : 'After a ready task exists, start supervised run with monitor gate'}: node .plan2agent/scripts/p2a.mjs execute start --artifacts ${source.artifactRef} --task <task-id> --agent-tool ${orchestrationAgentTool} --require-monitor`,
+      'Write monitor verdict before finish: runs/<run-id>.monitor-verdict.json',
     ];
   }
   return [];
@@ -2524,7 +2521,7 @@ function printNextSteps(targetRoot) {
   console.log(`다음: cd ${targetRoot}`);
   console.log('      node .plan2agent/scripts/p2a.mjs info');
   console.log(`      node .plan2agent/scripts/p2a.mjs execute plan ${sourceArg} --task <task-id>`);
-  console.log(`      node .plan2agent/scripts/p2a.mjs orchestrate plan ${sourceArg} --task <task-id> --output .plan2agent/orchestration/<task-id>.json`);
+  console.log(`      node .plan2agent/scripts/p2a.mjs execute start ${sourceArg} --task <task-id> --require-monitor`);
   console.log(`      node .plan2agent/scripts/p2a.mjs execute start ${sourceArg} --task <task-id> --agent-tool <tool>`);
   console.log(`      node .plan2agent/scripts/p2a.mjs execute finish ${sourceArg} --run-id <run-id> --test --lint --typecheck`);
   console.log(`      node .plan2agent/scripts/p2a.mjs proposals mine ${sourceArg}`);

@@ -7,14 +7,8 @@ import path from 'node:path';
 import process from 'node:process';
 import { pathToFileURL } from 'node:url';
 import { FAILURE_CLASSES, FAILURE_RETRYABLE, ISOLATION_MODES } from './p2a_constants.mjs';
-import { loadJson, validateOrchestrationPlanData, validateProposalDraftApprovalData, validateRunData, validateTaskGraphData, ValidationError } from './validate_artifacts.mjs';
-import {
-  normalizeMonitorVerdictData,
-  orchestrationRuntimePath,
-  readOrchestrationRuntime,
-  recordOrchestrationRuntimeEvent,
-  writeOrchestrationRuntimeForRun,
-} from './p2a_orchestrate.mjs';
+import { loadJson, validateProposalDraftApprovalData, validateRunData, validateTaskGraphData, ValidationError } from './validate_artifacts.mjs';
+import { normalizeMonitorVerdictData, readMonitorGateSidecar, writeMonitorGateSidecar } from './p2a_monitor_gate.mjs';
 import { resolveIterationState } from './p2a_iteration_state.mjs';
 import { canonicalTaskGraphRef, resolveRunsDir } from './p2a_run_paths.mjs';
 import {
@@ -68,7 +62,7 @@ function usage() {
     '  --worktree <path>    Worktree to record/create.',
     '  --base-ref <ref>     Git base ref for --create-isolation. Default: HEAD.',
     '  --create-isolation   Ask p2a_runs.mjs to create the branch/worktree before run start.',
-    '  --orchestration-plan <path>  Attach a p2a_orchestrate.mjs plan to the run sidecar.',
+    '  --require-monitor       Require runs/<run-id>.monitor-verdict.json before a finished run can close.',
     '',
     'Finish/verification options:',
     '  --test, --lint, --typecheck',
@@ -120,7 +114,7 @@ function parseArgs(argv) {
     worktree: null,
     baseRef: 'HEAD',
     createIsolation: false,
-    orchestrationPlan: null,
+    requireMonitor: false,
     changedFiles: [],
     notes: [],
     reproductionSteps: [],
@@ -164,7 +158,7 @@ function parseArgs(argv) {
     else if (arg === '--worktree') args.worktree = requiredValue(argv, ++index, '--worktree');
     else if (arg === '--base-ref') args.baseRef = requiredValue(argv, ++index, '--base-ref');
     else if (arg === '--create-isolation') args.createIsolation = true;
-    else if (arg === '--orchestration-plan') args.orchestrationPlan = requiredValue(argv, ++index, '--orchestration-plan');
+    else if (arg === '--require-monitor') args.requireMonitor = true;
     else if (arg === '--changed-file') args.changedFiles.push(requiredValue(argv, ++index, '--changed-file'));
     else if (arg === '--note') args.notes.push(requiredValue(argv, ++index, '--note', { allowLeadingDash: true }));
     else if (arg === '--repro-step') args.reproductionSteps.push(requiredValue(argv, ++index, '--repro-step', { allowLeadingDash: true }));
@@ -231,13 +225,13 @@ function parseArgs(argv) {
   if (['finish', 'resume'].includes(args.command) && !args.runId) throw new Error(`--run-id is required for ${args.command}`);
   if (args.command === 'status' && !args.taskId && !args.runId && !args.approval) throw new Error('--task, --approval, or --run-id is required for status');
   if (['plan', 'start'].includes(args.command) && !IMPLEMENTER_AGENT_TOOLS.has(args.agentTool)) {
-    throw new Error('--agent-tool for implementation must be one of codex, claude, or manual; Gemini is read-only and may only be used as a reviewer/monitor in p2a_orchestrate plans');
+    throw new Error('--agent-tool for implementation must be one of codex, claude, or manual; Gemini is read-only and may only be used as a reviewer/monitor');
   }
   if (['plan', 'resume', 'status'].includes(args.command) && args.verifyOptions.length) {
     throw new Error('verification options are only supported with finish');
   }
-  if (args.orchestrationPlan && args.command !== 'start') {
-    throw new Error('--orchestration-plan is only supported with start');
+  if (args.requireMonitor && args.command !== 'start') {
+    throw new Error('--require-monitor is only supported with start');
   }
   if (args.command !== 'finish' && (args.status || args.failureClass || args.retryable || args.needsUserDecision !== null || args.failureSource || args.collectGit || args.saveConfig || hasStructuredDetailOptions(args))) {
     throw new Error('finish options are only supported with finish');
@@ -610,56 +604,13 @@ function runPath(runsDir, runId) {
   return path.join(runsDir, `${runId}.json`);
 }
 
-function orchestrationSidecarPath(runsDir, runId) {
-  assertSafeRunId(runId);
-  return path.join(runsDir, `${runId}.orchestration.json`);
-}
-
-function readOrchestrationPlan(filePath) {
-  assertFile(filePath, 'orchestration plan');
-  return validateOrchestrationPlanData(loadJson(filePath));
-}
-
-function validateOrchestrationPlanForTask(plan, source, task) {
-  if (plan.projectId !== source.projectId) {
-    throw new Error(`orchestration plan projectId ${JSON.stringify(plan.projectId)} does not match source project ${JSON.stringify(source.projectId)}`);
-  }
-  if (plan.taskId !== task.id) {
-    throw new Error(`orchestration plan taskId ${JSON.stringify(plan.taskId)} does not match selected task ${JSON.stringify(task.id)}`);
-  }
-}
-
 function readOrchestrationSidecar(runsDir, runId) {
-  const filePath = orchestrationSidecarPath(runsDir, runId);
-  if (!existsSync(filePath)) return null;
-  assertFile(filePath, `${runId}.orchestration.json`);
-  return validateOrchestrationPlanData(loadJson(filePath));
-}
-
-function attachOrchestrationPlan(plan, source, runId) {
-  if (!plan) return null;
-  const sidecarRef = `${runId}.orchestration.json`;
-  const verdictRef = `${runId}.monitor-verdict.json`;
-  const sidecar = {
-    ...plan,
-    monitorGate: {
-      ...plan.monitorGate,
-      verdictPath: plan.monitorGate.required ? verdictRef : null,
-    },
-    runLink: {
-      runId,
-      sidecarRef,
-    },
-  };
-  validateOrchestrationPlanData(sidecar);
-  const filePath = orchestrationSidecarPath(source.runsDir, runId);
-  writeFileSync(filePath, `${JSON.stringify(sidecar, null, 2)}\n`, 'utf8');
-  return { filePath, sidecar };
+  return readMonitorGateSidecar(runsDir, runId);
 }
 
 function readMonitorVerdict(source, sidecar) {
-  if (!sidecar?.monitorGate?.required) return null;
-  const verdictPath = path.resolve(source.runsDir, sidecar.monitorGate.verdictPath);
+  if (!sidecar?.required) return null;
+  const verdictPath = path.resolve(source.runsDir, sidecar.verdictPath);
   assertFile(verdictPath, 'monitor verdict');
   const data = loadJson(verdictPath);
   try {
@@ -671,13 +622,13 @@ function readMonitorVerdict(source, sidecar) {
 
 function applyMonitorGate(args, source) {
   const sidecar = readOrchestrationSidecar(source.runsDir, args.runId);
-  if (!sidecar?.monitorGate?.required) return null;
+  if (!sidecar?.required) return null;
   const verdict = readMonitorVerdict(source, sidecar);
-  if (sidecar.monitorGate.acceptedVerdicts.includes(verdict.verdict) && !verdict.hasConcerns) {
+  if (sidecar.acceptedVerdicts.includes(verdict.verdict) && !verdict.hasConcerns) {
     return { sidecar, verdict: verdict.verdict, accepted: true };
   }
-  const mappedFailureClass = sidecar.monitorGate.failureClassMap[verdict.failureSignal]
-    ?? sidecar.monitorGate.failureClassMap[verdict.verdict]
+  const mappedFailureClass = sidecar.failureClassMap[verdict.failureSignal]
+    ?? sidecar.failureClassMap[verdict.verdict]
     ?? 'other';
   if (!args.status || args.status === 'finished') args.status = 'blocked';
   if (!args.failureClass) args.failureClass = mappedFailureClass;
@@ -686,32 +637,12 @@ function applyMonitorGate(args, source) {
   return { sidecar, verdict: verdict.failureSignal, accepted: false, failureClass: args.failureClass };
 }
 
-function updateOrchestrationRuntimeAfterFinish(source, run) {
-  const runtimePath = orchestrationRuntimePath(source.runsDir, run.runId);
-  if (!existsSync(runtimePath)) return null;
-  const currentRuntime = readOrchestrationRuntime(runtimePath);
-  if (currentRuntime.status.phase === 'closed') {
-    return { filePath: runtimePath, runtime: currentRuntime, event: null, skipped: true };
-  }
-  const blocked = run.status !== 'finished';
-  const result = recordOrchestrationRuntimeEvent(runtimePath, {
-    roleId: 'owner',
-    eventType: blocked ? 'blocker' : 'status',
-    summary: `Run ${run.runId} finished with status ${run.status}`,
-    detail: run.failure ? JSON.stringify(run.failure) : null,
-    roleStatus: blocked ? 'blocked' : 'complete',
-    phase: blocked ? 'blocked' : 'closed',
-    requiresOwnerAction: run.failure?.needsUserDecision ?? false,
-  });
-  return { ...result, filePath: runtimePath };
+function updateOrchestrationRuntimeAfterFinish() {
+  return null;
 }
 
-function closedOrchestrationRuntimeForRun(source, runId) {
-  const runtimePath = orchestrationRuntimePath(source.runsDir, runId);
-  if (!existsSync(runtimePath)) return null;
-  const runtime = readOrchestrationRuntime(runtimePath);
-  if (runtime.status.phase !== 'closed') return null;
-  return { filePath: runtimePath, runtime };
+function closedOrchestrationRuntimeForRun() {
+  return null;
 }
 
 function expectedTaskStatusForRun(run) {
@@ -752,7 +683,7 @@ function printExecutionPlan(args, source, task, runId = null, defaults = null, a
     if (defaults.branch) console.log(`- branch: ${defaults.branch}`);
     if (defaults.worktree) console.log(`- worktree: ${displayPath(defaults.worktree)}`);
   }
-  if (args.orchestrationPlan) console.log(`- orchestrationPlan: ${displayPath(path.resolve(args.orchestrationPlan))}`);
+  if (args.requireMonitor) console.log('- monitorGate: required');
   console.log('');
   console.log('Lifecycle:');
   console.log('1. start: create run and mark the task in_progress');
@@ -768,7 +699,7 @@ function printExecutionPlan(args, source, task, runId = null, defaults = null, a
     args.agentTool,
   ];
   if (runId) startArgs.push('--run-id', runId);
-  if (args.orchestrationPlan) startArgs.push('--orchestration-plan', args.orchestrationPlan);
+  if (args.requireMonitor) startArgs.push('--require-monitor');
   console.log(`- ${commandLine('p2a_execute.mjs', startArgs)}`);
   if (runId) {
     console.log(`- ${commandLine('p2a_execute.mjs', ['finish', ...sourceRunArgs(args), ...(args.approval ? ['--approval', args.approval] : []), '--run-id', runId, '--test', '--lint', '--typecheck'])}`);
@@ -879,20 +810,15 @@ function runStart(args) {
   const runId = args.runId ?? generatedRunId(task.id);
   assertSafeRunId(runId);
   const defaults = resolveStartDefaults(args, source, task, runId);
-  const orchestrationPlan = args.orchestrationPlan ? readOrchestrationPlan(path.resolve(args.orchestrationPlan)) : null;
-  if (orchestrationPlan) validateOrchestrationPlanForTask(orchestrationPlan, source, task);
-
   printExecutionPlan(args, source, task, runId, defaults, approvalLink);
   console.log('');
   console.log('Starting run...');
   const runResult = runScript('p2a_runs.mjs', startRunArgs(args, task, runId, defaults, approvalLink.approval));
   printChildResult(runResult);
   if (runResult.status !== 0) return runResult.status ?? 1;
-  const attachedOrchestration = attachOrchestrationPlan(orchestrationPlan, source, runId);
-  if (attachedOrchestration) {
-    console.log(`Attached orchestration sidecar: ${displayPath(attachedOrchestration.filePath)}`);
-    const runtime = writeOrchestrationRuntimeForRun(attachedOrchestration.sidecar, source.runsDir, runId);
-    console.log(`Initialized orchestration runtime: ${displayPath(runtime.filePath)}`);
+  if (args.requireMonitor) {
+    const monitorGate = writeMonitorGateSidecar(source.runsDir, runId);
+    console.log(`Attached monitor gate sidecar: ${displayPath(monitorGate.filePath)}`);
   }
 
   console.log('');
@@ -979,13 +905,7 @@ function runStatus(args) {
   console.log(`- verification: ${run.verification.map((item) => `${item.type}:${item.status}`).join(', ') || '-'}`);
   const sidecar = readOrchestrationSidecar(source.runsDir, run.runId);
   if (sidecar) {
-    console.log(`- orchestration: ${sidecar.mode} ${sidecar.planId}`);
-    if (sidecar.monitorGate.required) console.log(`- monitorGate: ${sidecar.monitorGate.verdictPath}`);
-  }
-  const runtimePath = orchestrationRuntimePath(source.runsDir, run.runId);
-  if (existsSync(runtimePath)) {
-    const runtime = readOrchestrationRuntime(runtimePath);
-    console.log(`- orchestrationRuntime: ${runtime.status.phase} events=${runtime.communicationLog.length} needsUserDecision=${runtime.status.needsUserDecision}`);
+    console.log(`- monitorGate: ${sidecar.verdictPath}`);
   }
   if (run.failure) console.log(`- failure: ${run.failure.class} retryable=${run.failure.retryable} needsUserDecision=${run.failure.needsUserDecision} source=${run.failure.source}`);
   printRunCommandFooter(P2A_PATHS, {

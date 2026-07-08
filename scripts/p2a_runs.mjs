@@ -9,14 +9,13 @@ import { pathToFileURL } from 'node:url';
 import { FAILURE_CLASSES, FAILURE_RETRYABLE, ISOLATION_MODES } from './p2a_constants.mjs';
 import {
   loadJson,
-  validateOrchestrationPlanData,
   validateRunData,
   validateRunIndexData,
   validateRunsDir,
   validateTaskGraphData,
   ValidationError,
 } from './validate_artifacts.mjs';
-import { normalizeMonitorVerdictData } from './p2a_orchestrate.mjs';
+import { normalizeMonitorVerdictData, readMonitorGateSidecar, writeMonitorGateSidecar } from './p2a_monitor_gate.mjs';
 import { resolveIterationState } from './p2a_iteration_state.mjs';
 import { canonicalTaskGraphRef, DEFAULT_RUNS_DIR, resolveRunsDir } from './p2a_run_paths.mjs';
 import {
@@ -81,6 +80,7 @@ function usage() {
     '  --worktree <path>       Worktree path to record or create for worktree isolation.',
     '  --base-ref <ref>        Git base ref for --create-isolation. Default: HEAD.',
     '  --create-isolation      Create the branch/worktree with git before writing the run record.',
+    '  --require-monitor       Require runs/<run-id>.monitor-verdict.json before a finished run can close.',
     '  --changed-file <path>   Changed file to attach to the run. Repeatable.',
     '  --collect-git           Add changed files from git status in the workspace.',
     '  --note <text>           Append a run note. Repeatable.',
@@ -152,6 +152,7 @@ function parseArgs(argv) {
     failureSource: null,
     collectGit: false,
     saveConfig: false,
+    requireMonitor: false,
     json: false,
     help: false,
   };
@@ -175,6 +176,7 @@ function parseArgs(argv) {
     else if (arg === '--worktree') args.worktree = requiredValue(argv, ++index, '--worktree');
     else if (arg === '--base-ref') args.baseRef = requiredValue(argv, ++index, '--base-ref');
     else if (arg === '--create-isolation') args.createIsolation = true;
+    else if (arg === '--require-monitor') args.requireMonitor = true;
     else if (arg === '--changed-file') args.changedFiles.push(requiredValue(argv, ++index, '--changed-file'));
     else if (arg === '--collect-git') args.collectGit = true;
     else if (arg === '--note') args.notes.push(requiredValue(argv, ++index, '--note', { allowLeadingDash: true }));
@@ -346,14 +348,12 @@ function loadTaskGraph(graphPath) {
 }
 
 function readOrchestrationSidecar(runsDir, runId) {
-  const filePath = orchestrationSidecarPath(runsDir, runId);
-  if (!existsSync(filePath)) return null;
-  return validateOrchestrationPlanData(loadJson(filePath));
+  return readMonitorGateSidecar(runsDir, runId);
 }
 
 function readMonitorVerdict(runsDir, sidecar) {
-  if (!sidecar?.monitorGate?.required) return null;
-  const verdictPath = path.resolve(runsDir, sidecar.monitorGate.verdictPath);
+  if (!sidecar?.required) return null;
+  const verdictPath = path.resolve(runsDir, sidecar.verdictPath);
   assertFile(verdictPath, 'monitor verdict');
   try {
     return normalizeMonitorVerdictData(loadJson(verdictPath));
@@ -374,13 +374,13 @@ function monitorConcernSummary(verdict) {
 
 function applyMonitorGate(args, runsDir, run) {
   const sidecar = readOrchestrationSidecar(runsDir, run.runId);
-  if (!sidecar?.monitorGate?.required) return null;
+  if (!sidecar?.required) return null;
   const verdict = readMonitorVerdict(runsDir, sidecar);
-  if (sidecar.monitorGate.acceptedVerdicts.includes(verdict.verdict) && !verdict.hasConcerns) {
+  if (sidecar.acceptedVerdicts.includes(verdict.verdict) && !verdict.hasConcerns) {
     return { accepted: true, verdict: verdict.verdict, concerns: monitorConcernSummary(verdict) };
   }
-  const mappedFailureClass = sidecar.monitorGate.failureClassMap[verdict.failureSignal]
-    ?? sidecar.monitorGate.failureClassMap[verdict.verdict]
+  const mappedFailureClass = sidecar.failureClassMap[verdict.failureSignal]
+    ?? sidecar.failureClassMap[verdict.verdict]
     ?? 'other';
   args.status = 'blocked';
   if (!args.failureClass) args.failureClass = mappedFailureClass;
@@ -1168,6 +1168,7 @@ function startRun(args) {
     notes: uniqueStrings(args.notes),
   };
   writeRun(runsDir, run);
+  if (args.requireMonitor) writeMonitorGateSidecar(runsDir, run.runId);
   console.log(`Plan2Agent run started: ${run.runId}`);
   console.log(`- task: ${run.taskId}`);
   console.log(`- agentTool: ${run.agentTool}`);

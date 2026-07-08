@@ -8,8 +8,6 @@ import path from 'node:path';
 import process from 'node:process';
 import { spawnSync } from 'node:child_process';
 import {
-  validateOrchestrationPlanData,
-  validateOrchestrationRuntimeData,
   validateTaskContextData,
   validateTaskGraphData,
 } from './validate_artifacts.mjs';
@@ -498,7 +496,6 @@ function validateScaffoldFixtureCase() {
       ['p2a_execute plan without source', () => runTargetExecute(targetRoot, ['plan', '--task', 'task-001'])],
       ['p2a_tasks ready without source', () => runTargetTasks(targetRoot, ['ready'])],
       ['p2a_runs start without source', () => runTargetRuns(targetRoot, ['start', '--task', 'task-001', '--agent-tool', 'codex'])],
-      ['p2a_orchestrate plan without source', () => runTargetOrchestrate(targetRoot, ['plan', '--task', 'task-001'])],
       ['p2a_proposals mine without source', () => runTargetProposals(targetRoot, ['mine'])],
     ];
     for (const [label, runCase] of initRequiredCases) {
@@ -562,89 +559,6 @@ function validateScaffoldFixtureCase() {
         writeResultOutput(result);
         return { status: 1, checks };
       }
-    }
-
-    result = runTargetOrchestrate(targetRoot, ['runner-doctor', '--root', targetRoot, '--json']);
-    checks += 1;
-    const runnerDoctor = result.status === 0 ? JSON.parse(result.stdout) : null;
-    if (
-      result.status !== 0
-      || runnerDoctor.schema_version !== 'p2a.provider_runner_doctor.v1'
-      || runnerDoctor.supervisedOnly !== true
-      || runnerDoctor.live !== false
-      || runnerDoctor.startsProcess !== false
-      || runnerDoctor.startsAgentSession !== false
-      || !runnerDoctor.safetyBoundary.includes('does not start Codex')
-      || runnerDoctor.projectConfig.providerNativeCapabilities !== true
-      || runnerDoctor.providers.map((provider) => provider.status).join(',') !== 'ready,ready,ready'
-      || runnerDoctor.providers.find((provider) => provider.provider === 'codex')?.summary.requiredPresent !== 8
-      || runnerDoctor.providers.find((provider) => provider.provider === 'codex')?.capabilitySummary.available !== 2
-      || runnerDoctor.providers.find((provider) => provider.provider === 'codex')?.capabilitySummary.manualCheck !== 1
-      || runnerDoctor.providers.find((provider) => provider.provider === 'claude')?.capabilities.find((capability) => capability.id === 'agentTeams')?.status !== 'manual_check'
-      || runnerDoctor.providers.find((provider) => provider.provider === 'gemini')?.capabilities.find((capability) => capability.id === 'customCommands')?.status !== 'available'
-      || runnerDoctor.providers.find((provider) => provider.provider === 'claude')?.checks.find((check) => check.id === 'claude_workspace_hook')?.present !== true
-      || runnerDoctor.providers.find((provider) => provider.provider === 'gemini')?.checks.find((check) => check.id === 'gemini_context')?.present !== false
-      || runnerDoctor.providers.some((provider) => provider.liveStatus !== 'not_checked')
-    ) {
-      console.error('scaffold target runner-doctor fixture failed');
-      writeResultOutput(result);
-      console.error(JSON.stringify({ runnerDoctor }, null, 2));
-      return { status: failureStatus(result), checks };
-    }
-
-    const capabilityTargetRoot = path.join(tempRoot, 'capability-target');
-    cpSync(targetRoot, capabilityTargetRoot, { recursive: true });
-    const capabilityConfigPath = path.join(capabilityTargetRoot, '.plan2agent', 'project.config.json');
-    const capabilityConfig = JSON.parse(readFileSync(capabilityConfigPath, 'utf8'));
-    capabilityConfig.providerNativeCapabilities.codex.customAgents = {
-      status: 'available',
-      evidence: 'fixture intentionally claims availability while asset is missing',
-    };
-    writeFileSync(capabilityConfigPath, `${JSON.stringify(capabilityConfig, null, 2)}\n`);
-    rmSync(path.join(capabilityTargetRoot, '.codex', 'agents', 'p2a-implementer.toml'));
-    result = runTargetOrchestrate(capabilityTargetRoot, ['runner-doctor', '--root', capabilityTargetRoot, '--provider', 'codex', '--json']);
-    checks += 1;
-    const capabilityDoctor = result.status === 0 ? JSON.parse(result.stdout) : null;
-    const customAgentsCapability = capabilityDoctor?.providers?.[0]?.capabilities?.find((capability) => capability.id === 'customAgents');
-    if (
-      result.status !== 0
-      || customAgentsCapability?.status !== 'manual_check'
-      || customAgentsCapability?.assetPresent !== false
-      || customAgentsCapability?.evidence !== 'fixture intentionally claims availability while asset is missing'
-    ) {
-      console.error('scaffold target runner-doctor capability fixture failed');
-      writeResultOutput(result);
-      console.error(JSON.stringify({ capabilityDoctor }, null, 2));
-      return { status: failureStatus(result), checks };
-    }
-
-    const fakeBinDir = path.join(tempRoot, 'fake-provider-bin');
-    writeFakeProviderCli(fakeBinDir, 'codex', 'codex-cli fixture-1.0.0');
-    writeFakeProviderCli(fakeBinDir, 'claude', 'claude-code fixture-1.0.0');
-    writeFakeProviderCli(fakeBinDir, 'gemini', 'gemini-cli fixture-1.0.0');
-    result = runTargetOrchestrate(targetRoot, ['runner-doctor', '--root', targetRoot, '--provider', 'all', '--live', '--json'], {
-      env: {
-        ...process.env,
-        PATH: `${fakeBinDir}${path.delimiter}${process.env.PATH ?? ''}`,
-      },
-    });
-    checks += 1;
-    const liveRunnerDoctor = result.status === 0 ? JSON.parse(result.stdout) : null;
-    if (
-      result.status !== 0
-      || liveRunnerDoctor.live !== true
-      || liveRunnerDoctor.startsProcess !== true
-      || liveRunnerDoctor.startsAgentSession !== false
-      || !liveRunnerDoctor.safetyBoundary.includes('--version probes')
-      || liveRunnerDoctor.providers.map((provider) => provider.liveStatus).join(',') !== 'available,available,available'
-      || liveRunnerDoctor.providers.find((provider) => provider.provider === 'codex')?.liveChecks[0]?.output !== 'codex-cli fixture-1.0.0'
-      || liveRunnerDoctor.providers.find((provider) => provider.provider === 'claude')?.liveChecks[0]?.startsAgentSession !== false
-      || liveRunnerDoctor.providers.find((provider) => provider.provider === 'gemini')?.liveChecks[0]?.command !== 'gemini'
-    ) {
-      console.error('scaffold target runner-doctor live fixture failed');
-      writeResultOutput(result);
-      console.error(JSON.stringify({ liveRunnerDoctor }, null, 2));
-      return { status: failureStatus(result), checks };
     }
 
     const dryRunRoot = path.join(tempRoot, 'P2AProjectIdUXCheck');
@@ -752,10 +666,7 @@ function validateScaffoldFixtureCase() {
       if (
         capability === 'orchestration'
         && (
-          !result.stdout.includes('Check provider runner readiness: node .plan2agent/scripts/p2a.mjs orchestrate runner-doctor --root .')
-          || !result.stdout.includes('After a ready task exists, plan supervised orchestration: node .plan2agent/scripts/p2a.mjs orchestrate plan --artifacts .plan2agent/artifacts/<project_id> --task <task-id> --agent-tool codex --output .plan2agent/orchestration/<task-id>.json')
-          || !result.stdout.includes('After reviewing the plan, start supervised run with orchestration: node .plan2agent/scripts/p2a.mjs execute start --artifacts .plan2agent/artifacts/<project_id> --task <task-id> --agent-tool codex --orchestration-plan .plan2agent/orchestration/<task-id>.json')
-          || !result.stdout.includes('Inspect orchestration runtime after start: node .plan2agent/scripts/p2a.mjs orchestrate runtime-status --runtime .plan2agent/runs/<run-id>.orchestration-runtime.json')
+          !result.stdout.includes('After a ready task exists, start supervised run with monitor gate: node .plan2agent/scripts/p2a.mjs execute start --artifacts .plan2agent/artifacts/<project_id> --task <task-id> --agent-tool codex --require-monitor')
         )
       ) {
         console.error('enhance orchestration next-actions fixture failed');
@@ -764,72 +675,15 @@ function validateScaffoldFixtureCase() {
       }
     }
 
-    const orchestrationClaudeRoot = path.join(tempRoot, 'orchestration-claude-target');
-    result = runHandoff(['scaffold', '--target', orchestrationClaudeRoot, '--tools', 'claude']);
-    checks += 1;
-    if (result.status !== 0) {
-      console.error('orchestration claude provider scaffold fixture failed');
-      writeResultOutput(result);
-      return { status: failureStatus(result), checks };
-    }
-    result = runHandoff(['enhance', 'orchestration', '--target', orchestrationClaudeRoot]);
-    checks += 1;
-    if (
-      result.status !== 0
-      || !result.stdout.includes('After a ready task exists, plan supervised orchestration: node .plan2agent/scripts/p2a.mjs orchestrate plan --artifacts .plan2agent/artifacts/<project_id> --task <task-id> --agent-tool claude --output .plan2agent/orchestration/<task-id>.json')
-      || !result.stdout.includes('After reviewing the plan, start supervised run with orchestration: node .plan2agent/scripts/p2a.mjs execute start --artifacts .plan2agent/artifacts/<project_id> --task <task-id> --agent-tool claude --orchestration-plan .plan2agent/orchestration/<task-id>.json')
-    ) {
-      console.error('enhance orchestration claude provider next-actions fixture failed');
-      writeResultOutput(result);
-      return { status: failureStatus(result), checks };
-    }
-    const providerArtifactRoot = path.join(orchestrationClaudeRoot, '.plan2agent', 'artifacts', 'provider-check');
-    mkdirSync(providerArtifactRoot, { recursive: true });
-    writeFileSync(path.join(providerArtifactRoot, 'current-spec.json'), `${JSON.stringify({ schema_version: 'p2a.spec.v1', project_id: 'provider-check' }, null, 2)}\n`, 'utf8');
-    result = runTargetP2a(orchestrationClaudeRoot, ['info', '--json']);
-    checks += 1;
-    const claudeProviderInfo = result.status === 0 ? JSON.parse(result.stdout) : null;
-    if (
-      result.status !== 0
-      || !claudeProviderInfo.nextActions?.some((action) => action.includes('orchestrate plan --artifacts .plan2agent/artifacts/provider-check --task <task-id> --agent-tool claude'))
-      || !claudeProviderInfo.nextActions?.some((action) => action.includes('execute start --artifacts .plan2agent/artifacts/provider-check --task <task-id> --agent-tool claude --orchestration-plan'))
-    ) {
-      console.error('p2a info orchestration claude provider next-actions fixture failed');
-      writeResultOutput(result);
-      console.error(JSON.stringify({ claudeProviderInfo }, null, 2));
-      return { status: failureStatus(result), checks };
-    }
-
-    const orchestrationManualRoot = path.join(tempRoot, 'orchestration-manual-target');
-    result = runHandoff(['scaffold', '--target', orchestrationManualRoot, '--tools', 'none']);
-    checks += 1;
-    if (result.status !== 0) {
-      console.error('orchestration manual provider scaffold fixture failed');
-      writeResultOutput(result);
-      return { status: failureStatus(result), checks };
-    }
-    result = runHandoff(['enhance', 'orchestration', '--target', orchestrationManualRoot]);
-    checks += 1;
-    if (
-      result.status !== 0
-      || !result.stdout.includes('After a ready task exists, plan supervised orchestration: node .plan2agent/scripts/p2a.mjs orchestrate plan --artifacts .plan2agent/artifacts/<project_id> --task <task-id> --agent-tool manual --output .plan2agent/orchestration/<task-id>.json')
-      || !result.stdout.includes('After reviewing the plan, start supervised run with orchestration: node .plan2agent/scripts/p2a.mjs execute start --artifacts .plan2agent/artifacts/<project_id> --task <task-id> --agent-tool manual --orchestration-plan .plan2agent/orchestration/<task-id>.json')
-    ) {
-      console.error('enhance orchestration manual provider next-actions fixture failed');
-      writeResultOutput(result);
-      return { status: failureStatus(result), checks };
-    }
-
     const enhancedCapabilityConfig = JSON.parse(readFileSync(enhanceConfigPath, 'utf8'));
     const enhancedCapabilityManifest = JSON.parse(readFileSync(path.join(enhanceTargetRoot, '.plan2agent', 'manifest.json'), 'utf8'));
     if (
       enhancedCapabilityConfig.memory?.serverUrlEnv !== 'P2A_MEMORY_URL'
       || enhancedCapabilityConfig.gui?.commandMode !== 'guidance_only'
-      || enhancedCapabilityConfig.orchestration?.monitorGatePolicy !== 'explicit_plan_only'
+      || enhancedCapabilityConfig.orchestration?.monitorGatePolicy !== 'explicit_require_monitor'
       || enhancedCapabilityConfig.proposals?.patchPolicy !== 'draft_only'
       || enhancedCapabilityManifest.enhancements?.memory?.configVersion !== 'p2a.memory_config.v1'
       || enhancedCapabilityManifest.enhancements?.gui?.configKey !== 'gui'
-      || enhancedCapabilityManifest.enhancements?.orchestration?.mode !== 'solo'
       || enhancedCapabilityManifest.enhancements?.proposals?.mode !== 'manual_curate'
     ) {
       console.error('enhance capability config/manifest fixture failed');
@@ -848,9 +702,7 @@ function validateScaffoldFixtureCase() {
       || enhancedCapabilityInfo.enhancements?.memory?.enabled !== true
       || enhancedCapabilityInfo.enhancements?.memory?.pushPolicy !== 'explicit_approval'
       || enhancedCapabilityInfo.enhancements?.orchestration?.enabled !== true
-      || enhancedCapabilityInfo.enhancements?.orchestration?.defaultMode !== 'solo'
-      || enhancedCapabilityInfo.enhancements?.orchestration?.providerRouting !== 'project_config'
-      || enhancedCapabilityInfo.enhancements?.orchestration?.monitorGatePolicy !== 'explicit_plan_only'
+      || enhancedCapabilityInfo.enhancements?.orchestration?.monitorGatePolicy !== 'explicit_require_monitor'
       || enhancedCapabilityInfo.enhancements?.proposals?.enabled !== true
       || enhancedCapabilityInfo.enhancements?.proposals?.reviewPolicy !== 'manual_curate'
       || enhancedCapabilityInfo.enhancements?.proposals?.patchPolicy !== 'draft_only'
@@ -875,7 +727,6 @@ function validateScaffoldFixtureCase() {
       || !enhancedCapabilityDoctor.checks?.some((item) => item.id === 'capability_memory_push_policy' && item.status === 'pass')
       || !enhancedCapabilityDoctor.checks?.some((item) => item.id === 'capability_orchestration_manifest' && item.status === 'pass')
       || !enhancedCapabilityDoctor.checks?.some((item) => item.id === 'capability_orchestration_config' && item.status === 'pass')
-      || !enhancedCapabilityDoctor.checks?.some((item) => item.id === 'capability_orchestration_provider_routing' && item.status === 'pass')
       || !enhancedCapabilityDoctor.checks?.some((item) => item.id === 'capability_orchestration_monitor_gate' && item.status === 'pass')
       || !enhancedCapabilityDoctor.checks?.some((item) => item.id === 'capability_proposals_manifest' && item.status === 'pass')
       || !enhancedCapabilityDoctor.checks?.some((item) => item.id === 'capability_proposals_config' && item.status === 'pass')
@@ -2896,7 +2747,6 @@ function validateIterationCurrentFixtureCases() {
         ['p2a_tasks', runTasks(['ready', '--graph', '--artifacts'])],
         ['p2a_runs', runRuns(['list', '--graph', '--runs'])],
         ['p2a_execute', runExecute(['plan', '--graph', '--task', 'task-001'])],
-        ['p2a_orchestrate', runOrchestrate(['plan', '--graph', '--task', 'task-001'])],
       ];
       for (const [label, checkResult] of missingValueChecks) {
         checks += 1;
@@ -2947,30 +2797,6 @@ function validateIterationCurrentFixtureCases() {
       ) {
         console.error(`p2a_execute did not accept leading-dash command value before run lookup: ${caseData.id}`);
         writeResultOutput(leadingDashExecuteCommand);
-        return { status: 1, checks };
-      }
-
-      const leadingDashRuntimePath = path.join(tempRoot, 'missing-leading-dash-runtime.json');
-      const leadingDashOrchestrateSummary = runOrchestrate([
-        'record',
-        '--runtime',
-        leadingDashRuntimePath,
-        '--role',
-        'implementer',
-        '--type',
-        'status',
-        '--summary',
-        '--blocked',
-      ]);
-      checks += 1;
-      const leadingDashOrchestrateOutput = `${leadingDashOrchestrateSummary.stdout ?? ''}${leadingDashOrchestrateSummary.stderr ?? ''}`;
-      if (
-        leadingDashOrchestrateSummary.status === 0
-        || leadingDashOrchestrateOutput.includes('missing value for --summary')
-        || !leadingDashOrchestrateOutput.includes('orchestration runtime is missing')
-      ) {
-        console.error(`p2a_orchestrate did not accept leading-dash summary value before runtime lookup: ${caseData.id}`);
-        writeResultOutput(leadingDashOrchestrateSummary);
         return { status: 1, checks };
       }
 
@@ -3072,291 +2898,6 @@ function validateIterationCurrentFixtureCases() {
         return { status: failureStatus(result), checks };
       }
 
-      result = runOrchestrate([
-        'plan',
-        '--graph',
-        executeGraphPath,
-        '--spec',
-        state.specPath,
-        '--task',
-        'task-001',
-      ]);
-      checks += 1;
-      if (
-        result.status !== 0
-        || !result.stdout.includes('"schema_version": "p2a.orchestration_plan.v1"')
-        || !result.stderr.includes('--graph mode does not check Gate B/D prerequisites')
-      ) {
-        console.error(`p2a_orchestrate --graph warning fixture failed: ${caseData.id}`);
-        writeResultOutput(result);
-        return { status: failureStatus(result), checks };
-      }
-
-      const executeOrchestrationPlanPath = path.join(tempRoot, 'p2a-execute', 'orchestration', 'task-001.json');
-      result = runOrchestrate([
-        'plan',
-        '--graph',
-        executeGraphPath,
-        '--spec',
-        state.specPath,
-        '--task',
-        'task-001',
-        '--output',
-        executeOrchestrationPlanPath,
-      ]);
-      checks += 1;
-      if (result.status !== 0 || !result.stdout.includes('Plan2Agent orchestration plan')) {
-        console.error(`p2a_orchestrate plan fixture check failed: ${caseData.id}`);
-        writeResultOutput(result);
-        return { status: failureStatus(result), checks };
-      }
-
-      result = runValidator(['--orchestration-plan', executeOrchestrationPlanPath]);
-      checks += 1;
-      if (result.status !== 0) {
-        console.error(`orchestration plan validator fixture check failed: ${caseData.id}`);
-        writeResultOutput(result);
-        return { status: failureStatus(result), checks };
-      }
-      const executeOrchestrationPlan = JSON.parse(readFileSync(executeOrchestrationPlanPath, 'utf8'));
-      if (
-        executeOrchestrationPlan.mode !== 'solo'
-        || executeOrchestrationPlan.providerStrategy.mode !== 'single_provider'
-        || executeOrchestrationPlan.providerStrategy.primaryProvider !== 'codex'
-        || executeOrchestrationPlan.providerCapabilities.find((capability) => capability.provider === 'gemini')?.writeAllowed !== false
-        || executeOrchestrationPlan.roles.find((role) => role.roleId === 'owner')?.profile !== 'owner_supervisor'
-        || executeOrchestrationPlan.roles.find((role) => role.roleId === 'owner')?.profileSource !== 'auto'
-        || !executeOrchestrationPlan.roles.every((role) => typeof role.profile === 'string' && role.profile.length > 0)
-        || !executeOrchestrationPlan.roles.every((role) => role.profileSource === 'auto' && typeof role.profileReason === 'string' && role.profileReason.length > 0)
-        || !executeOrchestrationPlan.roles.every((role) => role.executionGuide?.startsProcess === false && role.executionGuide?.supervisionRequired === true)
-        || executeOrchestrationPlan.roles.find((role) => role.roleId === 'implementer')?.executionGuide?.recommendedFeature !== 'skills_custom_agents_explicit_subagent_prompt'
-        || executeOrchestrationPlan.monitorGate.required
-        || executeOrchestrationPlan.monitorGate.verdictPath !== null
-      ) {
-        console.error(`p2a_orchestrate default fixture should stay solo: ${caseData.id}`);
-        console.error(JSON.stringify({ executeOrchestrationPlan }, null, 2));
-        return { status: 1, checks };
-      }
-
-      const legacyOrchestrationPlanPath = path.join(tempRoot, 'p2a-execute', 'orchestration', 'task-001-legacy-execution-guide.json');
-      const legacyOrchestrationPlan = JSON.parse(JSON.stringify(executeOrchestrationPlan));
-      legacyOrchestrationPlan.roles.forEach((role) => {
-        delete role.executionGuide;
-      });
-      writeFileSync(legacyOrchestrationPlanPath, `${JSON.stringify(legacyOrchestrationPlan, null, 2)}\n`, 'utf8');
-      result = runValidator(['--orchestration-plan', legacyOrchestrationPlanPath]);
-      checks += 1;
-      if (result.status !== 0) {
-        console.error(`orchestration plan validator should backfill legacy executionGuide: ${caseData.id}`);
-        writeResultOutput(result);
-        return { status: failureStatus(result), checks };
-      }
-      const legacyOrchestrationPlanForDirectValidation = JSON.parse(JSON.stringify(legacyOrchestrationPlan));
-      const normalizedLegacyOrchestrationPlan = validateOrchestrationPlanData(legacyOrchestrationPlanForDirectValidation);
-      checks += 1;
-      if (
-        legacyOrchestrationPlanForDirectValidation.roles.some((role) => role.executionGuide)
-        || !normalizedLegacyOrchestrationPlan.roles.every((role) => role.executionGuide?.startsProcess === false)
-      ) {
-        console.error(`orchestration plan direct validator should normalize without mutating input: ${caseData.id}`);
-        console.error(JSON.stringify({ legacyOrchestrationPlanForDirectValidation, normalizedLegacyOrchestrationPlan }, null, 2));
-        return { status: 1, checks };
-      }
-
-      const mismatchedExecutionGuidePlanPath = path.join(tempRoot, 'p2a-execute', 'orchestration', 'task-001-mismatched-execution-guide.json');
-      const mismatchedExecutionGuidePlan = JSON.parse(JSON.stringify(executeOrchestrationPlan));
-      mismatchedExecutionGuidePlan.roles.find((role) => role.roleId === 'implementer').executionGuide.surface = 'Claude Code foreground session';
-      writeFileSync(mismatchedExecutionGuidePlanPath, `${JSON.stringify(mismatchedExecutionGuidePlan, null, 2)}\n`, 'utf8');
-      result = runValidator(['--orchestration-plan', mismatchedExecutionGuidePlanPath]);
-      checks += 1;
-      if (result.status === 0 || !result.stderr.includes('executionGuide.surface must match codex/contributor')) {
-        console.error(`orchestration plan validator should reject mismatched executionGuide provider: ${caseData.id}`);
-        writeResultOutput(result);
-        return { status: 1, checks };
-      }
-
-      const executeUiProfileGraphPath = path.join(tempRoot, 'p2a-orchestrate-ui-profile', 'gate-c-task-graph', 'task-graph.json');
-      mkdirSync(path.dirname(executeUiProfileGraphPath), { recursive: true });
-      const executeUiProfileGraph = JSON.parse(readFileSync(state.taskGraphPath, 'utf8'));
-      const executeUiProfileTask = executeUiProfileGraph.tasks.find((task) => task.id === 'task-001');
-      executeUiProfileTask.title = 'Build frontend settings screen';
-      executeUiProfileTask.description = 'Add a React UI screen with responsive layout, empty state, and accessible controls.';
-      executeUiProfileTask.targetArea = 'ui';
-      executeUiProfileTask.acceptanceCriteria = ['The UI screen renders responsive controls.', 'Empty and error states are visible.'];
-      executeUiProfileTask.suggestedAgentPrompt = 'Implement the frontend screen without changing backend contracts.';
-      writeFileSync(executeUiProfileGraphPath, `${JSON.stringify(executeUiProfileGraph, null, 2)}\n`, 'utf8');
-      result = runOrchestrate([
-        'plan',
-        '--graph',
-        executeUiProfileGraphPath,
-        '--spec',
-        state.specPath,
-        '--task',
-        'task-001',
-      ]);
-      checks += 1;
-      const executeUiProfilePlan = result.status === 0 ? JSON.parse(result.stdout) : null;
-      if (
-        result.status !== 0
-        || executeUiProfilePlan.roles.find((role) => role.roleId === 'implementer')?.profile !== 'frontend_implementer'
-        || executeUiProfilePlan.roles.find((role) => role.roleId === 'implementer')?.profileSource !== 'auto'
-        || !executeUiProfilePlan.roles.find((role) => role.roleId === 'implementer')?.profileReason.includes('targetArea')
-        || !executeUiProfilePlan.handoffPrompts.find((prompt) => prompt.roleId === 'implementer')?.prompt.includes('Profile: frontend_implementer')
-        || !executeUiProfilePlan.handoffPrompts.find((prompt) => prompt.roleId === 'implementer')?.prompt.includes('Recommended feature: skills_custom_agents_explicit_subagent_prompt')
-      ) {
-        console.error(`p2a_orchestrate UI task should select frontend_implementer: ${caseData.id}`);
-        writeResultOutput(result);
-        console.error(JSON.stringify({ executeUiProfilePlan }, null, 2));
-        return { status: failureStatus(result), checks };
-      }
-
-      result = runOrchestrate([
-        'plan',
-        '--graph',
-        executeUiProfileGraphPath,
-        '--spec',
-        state.specPath,
-        '--task',
-        'task-001',
-        '--implementer-profile',
-        'backend_implementer',
-      ]);
-      checks += 1;
-      const executeOverrideProfilePlan = result.status === 0 ? JSON.parse(result.stdout) : null;
-      if (
-        result.status !== 0
-        || executeOverrideProfilePlan.roles.find((role) => role.roleId === 'implementer')?.profile !== 'backend_implementer'
-        || executeOverrideProfilePlan.roles.find((role) => role.roleId === 'implementer')?.profileSource !== 'override'
-        || !executeOverrideProfilePlan.roles.find((role) => role.roleId === 'implementer')?.profileReason.includes('--implementer-profile')
-      ) {
-        console.error(`p2a_orchestrate should record implementer profile override: ${caseData.id}`);
-        writeResultOutput(result);
-        console.error(JSON.stringify({ executeOverrideProfilePlan }, null, 2));
-        return { status: failureStatus(result), checks };
-      }
-
-      result = runOrchestrate([
-        'plan',
-        '--graph',
-        executeUiProfileGraphPath,
-        '--spec',
-        state.specPath,
-        '--task',
-        'task-001',
-        '--reviewer-profile',
-        'qa_reviewer',
-      ]);
-      checks += 1;
-      if (result.status === 0 || !result.stderr.includes('--reviewer-profile requires a team-mode task')) {
-        console.error(`p2a_orchestrate should reject unused reviewer profile override on solo task: ${caseData.id}`);
-        writeResultOutput(result);
-        return { status: 1, checks };
-      }
-
-      result = runOrchestrate([
-        'plan',
-        '--graph',
-        executeGraphPath,
-        '--spec',
-        state.specPath,
-        '--task',
-        'task-001',
-        '--agent-tool',
-        'gemini',
-      ]);
-      checks += 1;
-      if (result.status === 0 || !result.stderr.includes('Gemini is read-only in P2A orchestration')) {
-        console.error(`p2a_orchestrate should reject Gemini as write implementer: ${caseData.id}`);
-        writeResultOutput(result);
-        return { status: 1, checks };
-      }
-
-      result = runExecute([
-        'plan',
-        '--graph',
-        executeGraphPath,
-        '--spec',
-        state.specPath,
-        '--task',
-        'task-001',
-        '--agent-tool',
-        'gemini',
-      ]);
-      checks += 1;
-      if (result.status === 0 || !result.stderr.includes('Gemini is read-only')) {
-        console.error(`p2a_execute should reject Gemini as write implementer: ${caseData.id}`);
-        writeResultOutput(result);
-        return { status: 1, checks };
-      }
-
-      const executeSlashGraphPath = path.join(tempRoot, 'p2a-orchestrate-slash-area', 'gate-c-task-graph', 'task-graph.json');
-      mkdirSync(path.dirname(executeSlashGraphPath), { recursive: true });
-      const executeSlashGraph = JSON.parse(readFileSync(state.taskGraphPath, 'utf8'));
-      executeSlashGraph.tasks.find((task) => task.id === 'task-001').targetArea = 'auth/login';
-      writeFileSync(executeSlashGraphPath, `${JSON.stringify(executeSlashGraph, null, 2)}\n`, 'utf8');
-      const executeSlashPlanPath = path.join(tempRoot, 'p2a-orchestrate-slash-area', 'orchestration', 'task-001.json');
-      result = runOrchestrate([
-        'plan',
-        '--graph',
-        executeSlashGraphPath,
-        '--spec',
-        state.specPath,
-        '--task',
-        'task-001',
-        '--output',
-        executeSlashPlanPath,
-      ]);
-      checks += 1;
-      if (result.status !== 0) {
-        console.error(`p2a_orchestrate slash targetArea fixture failed: ${caseData.id}`);
-        writeResultOutput(result);
-        return { status: failureStatus(result), checks };
-      }
-      const executeSlashPlan = JSON.parse(readFileSync(executeSlashPlanPath, 'utf8'));
-      if (executeSlashPlan.mode !== 'solo' || executeSlashPlan.riskFlags.includes('multi_area')) {
-        console.error(`p2a_orchestrate slash targetArea fixture produced multi-area false positive: ${caseData.id}`);
-        console.error(JSON.stringify({ executeSlashPlan }, null, 2));
-        return { status: 1, checks };
-      }
-
-      const executeDependencyGraphPath = path.join(tempRoot, 'p2a-orchestrate-dependency-risk', 'gate-c-task-graph', 'task-graph.json');
-      mkdirSync(path.dirname(executeDependencyGraphPath), { recursive: true });
-      const executeDependencyGraph = JSON.parse(readFileSync(state.taskGraphPath, 'utf8'));
-      executeDependencyGraph.tasks.find((task) => task.id === 'task-001').status = 'done';
-      executeDependencyGraph.tasks.find((task) => task.id === 'task-002').status = 'done';
-      const executeDependencyTask = executeDependencyGraph.tasks.find((task) => task.id === 'task-003');
-      executeDependencyTask.dependencies = ['task-001', 'task-002'];
-      executeDependencyTask.status = 'todo';
-      writeFileSync(executeDependencyGraphPath, `${JSON.stringify(executeDependencyGraph, null, 2)}\n`, 'utf8');
-      const executeDependencyPlanPath = path.join(tempRoot, 'p2a-orchestrate-dependency-risk', 'orchestration', 'task-003.json');
-      result = runOrchestrate([
-        'plan',
-        '--graph',
-        executeDependencyGraphPath,
-        '--spec',
-        state.specPath,
-        '--task',
-        'task-003',
-        '--output',
-        executeDependencyPlanPath,
-      ]);
-      checks += 1;
-      if (result.status !== 0) {
-        console.error(`p2a_orchestrate dependency risk fixture failed: ${caseData.id}`);
-        writeResultOutput(result);
-        return { status: failureStatus(result), checks };
-      }
-      const executeDependencyPlan = JSON.parse(readFileSync(executeDependencyPlanPath, 'utf8'));
-      if (
-        executeDependencyPlan.mode !== 'solo'
-        || executeDependencyPlan.monitorGate.required
-        || !executeDependencyPlan.riskFlags.includes('dependency_heavy')
-      ) {
-        console.error(`p2a_orchestrate dependency risk fixture should not require monitor gate: ${caseData.id}`);
-        console.error(JSON.stringify({ executeDependencyPlan }, null, 2));
-        return { status: 1, checks };
-      }
-
       result = runExecute([
         'start',
         '--graph',
@@ -3369,8 +2910,7 @@ function validateIterationCurrentFixtureCases() {
         'run-execute-fixture',
         '--agent-tool',
         'codex',
-        '--orchestration-plan',
-        executeOrchestrationPlanPath,
+        '--require-monitor',
         '--workspace',
         artifactRoot,
         '--workspace-ref',
@@ -3383,35 +2923,11 @@ function validateIterationCurrentFixtureCases() {
         return { status: failureStatus(result), checks };
       }
 
-      const executeSidecarPath = path.join(tempRoot, 'p2a-execute', 'runs', 'run-execute-fixture.orchestration.json');
+      const executeSidecarPath = path.join(tempRoot, 'p2a-execute', 'runs', 'run-execute-fixture.monitor-gate.json');
       const executeSidecar = JSON.parse(readFileSync(executeSidecarPath, 'utf8'));
-      if (executeSidecar.runLink.runId !== 'run-execute-fixture') {
-        console.error(`p2a_execute start did not attach orchestration sidecar: ${caseData.id}`);
+      if (executeSidecar.runId !== 'run-execute-fixture' || executeSidecar.required !== true) {
+        console.error(`p2a_execute start did not attach monitor gate sidecar: ${caseData.id}`);
         console.error(JSON.stringify({ executeSidecar }, null, 2));
-        return { status: 1, checks };
-      }
-      const executeRuntimePath = path.join(tempRoot, 'p2a-execute', 'runs', 'run-execute-fixture.orchestration-runtime.json');
-      result = runValidator(['--orchestration-runtime', executeRuntimePath]);
-      checks += 1;
-      if (result.status !== 0) {
-        console.error(`orchestration runtime validator fixture check failed: ${caseData.id}`);
-        writeResultOutput(result);
-        return { status: failureStatus(result), checks };
-      }
-      const executeRuntime = JSON.parse(readFileSync(executeRuntimePath, 'utf8'));
-      if (
-        executeRuntime.schema_version !== 'p2a.orchestration_runtime.v1'
-        || executeRuntime.runId !== 'run-execute-fixture'
-        || executeRuntime.planId !== executeSidecar.planId
-        || executeRuntime.sharedMentalModel.roleAssignments.length !== executeSidecar.roles.length
-        || executeRuntime.sharedMentalModel.roleAssignments.find((role) => role.roleId === 'implementer')?.profileSource !== executeSidecar.roles.find((role) => role.roleId === 'implementer')?.profileSource
-        || !executeRuntime.sharedMentalModel.roleAssignments.find((role) => role.roleId === 'implementer')?.profileReason
-        || executeRuntime.sharedMentalModel.roleAssignments.find((role) => role.roleId === 'implementer')?.executionGuide?.surface !== 'Codex CLI/app foreground session'
-        || !executeRuntime.communicationLog.some((event) => event.type === 'handoff')
-        || executeRuntime.status.phase !== 'running'
-      ) {
-        console.error(`p2a_execute start wrote unexpected orchestration runtime: ${caseData.id}`);
-        console.error(JSON.stringify({ executeRuntime, executeSidecar }, null, 2));
         return { status: 1, checks };
       }
 
@@ -3514,347 +3030,6 @@ function validateIterationCurrentFixtureCases() {
       }
 
       const legacyRuntimePath = path.join(tempRoot, 'p2a-execute', 'runs', 'run-execute-fixture-legacy.orchestration-runtime.json');
-      const legacyRuntime = JSON.parse(JSON.stringify(executeRuntime));
-      legacyRuntime.sharedMentalModel.roleAssignments.forEach((role) => {
-        delete role.executionGuide;
-      });
-      writeFileSync(legacyRuntimePath, `${JSON.stringify(legacyRuntime, null, 2)}\n`, 'utf8');
-      result = runValidator(['--orchestration-runtime', legacyRuntimePath]);
-      checks += 1;
-      if (result.status !== 0) {
-        console.error(`orchestration runtime validator should backfill legacy executionGuide: ${caseData.id}`);
-        writeResultOutput(result);
-        return { status: failureStatus(result), checks };
-      }
-      const legacyRuntimeForDirectValidation = JSON.parse(JSON.stringify(legacyRuntime));
-      const normalizedLegacyRuntime = validateOrchestrationRuntimeData(legacyRuntimeForDirectValidation);
-      checks += 1;
-      if (
-        legacyRuntimeForDirectValidation.sharedMentalModel.roleAssignments.some((role) => role.executionGuide)
-        || !normalizedLegacyRuntime.sharedMentalModel.roleAssignments.every((role) => role.executionGuide?.startsProcess === false)
-      ) {
-        console.error(`orchestration runtime direct validator should normalize without mutating input: ${caseData.id}`);
-        console.error(JSON.stringify({ legacyRuntimeForDirectValidation, normalizedLegacyRuntime }, null, 2));
-        return { status: 1, checks };
-      }
-      result = runOrchestrate(['next-role', '--runtime', legacyRuntimePath, '--json']);
-      checks += 1;
-      const legacyRuntimeNextRole = result.status === 0 ? JSON.parse(result.stdout) : null;
-      if (
-        result.status !== 0
-        || legacyRuntimeNextRole.nextRole?.executionGuide?.surface !== 'Codex CLI/app foreground session'
-      ) {
-        console.error(`p2a_orchestrate should read legacy runtime without executionGuide: ${caseData.id}`);
-        writeResultOutput(result);
-        console.error(JSON.stringify({ legacyRuntimeNextRole }, null, 2));
-        return { status: failureStatus(result), checks };
-      }
-
-      result = runOrchestrate(['next-role', '--runtime', executeRuntimePath, '--json']);
-      checks += 1;
-      const executeNextRole = result.status === 0 ? JSON.parse(result.stdout) : null;
-      if (
-        result.status !== 0
-        || executeNextRole.nextRole?.roleId !== 'implementer'
-        || executeNextRole.nextRole?.profileSource !== 'auto'
-        || executeNextRole.nextRole?.executionGuide?.startsProcess !== false
-        || !executeNextRole.resolutionHints?.some((hint) => hint.includes('Open codex'))
-        || executeNextRole.startsProcess !== false
-        || executeNextRole.supervisedOnly !== true
-      ) {
-        console.error(`p2a_orchestrate next-role fixture check failed: ${caseData.id}`);
-        writeResultOutput(result);
-        console.error(JSON.stringify({ executeNextRole }, null, 2));
-        return { status: failureStatus(result), checks };
-      }
-
-      result = runOrchestrate(['role-prompt', '--runtime', executeRuntimePath, '--role', 'implementer']);
-      checks += 1;
-      if (
-        result.status !== 0
-        || !result.stdout.includes('Plan2Agent supervised role prompt')
-        || !result.stdout.includes('Profile source: auto')
-        || !result.stdout.includes('Provider surface: Codex CLI/app foreground session')
-        || !result.stdout.includes('startsProcess: false')
-        || !result.stdout.includes('Provider-native delegation')
-        || !result.stdout.includes('Provider-native skills, subagents, custom agents, or agent teams are allowed inside that foreground session')
-        || !result.stdout.includes('P2A itself must not launch provider CLIs')
-      ) {
-        console.error(`p2a_orchestrate role-prompt fixture check failed: ${caseData.id}`);
-        writeResultOutput(result);
-        return { status: failureStatus(result), checks };
-      }
-
-      result = runOrchestrate(['runner-guide', '--runtime', executeRuntimePath, '--role', 'implementer', '--json']);
-      checks += 1;
-      const executeRuntimeRunnerGuide = result.status === 0 ? JSON.parse(result.stdout) : null;
-      if (
-        result.status !== 0
-        || executeRuntimeRunnerGuide.schema_version !== 'p2a.provider_runner_guide.v1'
-        || executeRuntimeRunnerGuide.source.type !== 'runtime'
-        || executeRuntimeRunnerGuide.supervisedOnly !== true
-        || executeRuntimeRunnerGuide.startsProcess !== false
-        || executeRuntimeRunnerGuide.roles[0]?.runnerAdapter?.adapterName !== 'codex_supervised_skills_custom_agents'
-        || !executeRuntimeRunnerGuide.roles[0]?.runnerAdapter?.foregroundSteps?.some((step) => step.includes('foreground Codex session'))
-        || !executeRuntimeRunnerGuide.roles[0]?.actionCommand?.includes('role-prompt')
-      ) {
-        console.error(`p2a_orchestrate runner-guide runtime fixture check failed: ${caseData.id}`);
-        writeResultOutput(result);
-        console.error(JSON.stringify({ executeRuntimeRunnerGuide }, null, 2));
-        return { status: failureStatus(result), checks };
-      }
-
-      result = runOrchestrate(['runner-guide', '--runtime', executeRuntimePath, '--role', 'implementer', '--agent-tool', 'claude']);
-      checks += 1;
-      if (result.status === 0 || !result.stderr.includes('--agent-tool is only supported with plan')) {
-        console.error(`p2a_orchestrate runner-guide should reject ignored provider override: ${caseData.id}`);
-        writeResultOutput(result);
-        return { status: 1, checks };
-      }
-      result = runOrchestrate(['runner-guide', '--runtime', executeRuntimePath, '--role', 'implementer', '--provider', 'codex']);
-      checks += 1;
-      if (result.status === 0 || !result.stderr.includes('runner-guide only supports --plan or --runtime')) {
-        console.error(`p2a_orchestrate runner-guide should reject runner-doctor provider option: ${caseData.id}`);
-        writeResultOutput(result);
-        return { status: 1, checks };
-      }
-
-      result = runOrchestrate([
-        'record',
-        '--runtime',
-        executeRuntimePath,
-        '--role',
-        'implementer',
-        '--type',
-        'status',
-        '--summary',
-        'Implementation session opened',
-        '--role-status',
-        'active',
-      ]);
-      checks += 1;
-      if (result.status !== 0 || !result.stdout.includes('Plan2Agent orchestration runtime event recorded')) {
-        console.error(`p2a_orchestrate record fixture check failed: ${caseData.id}`);
-        writeResultOutput(result);
-        return { status: failureStatus(result), checks };
-      }
-      const executeRuntimeAfterRecord = JSON.parse(readFileSync(executeRuntimePath, 'utf8'));
-      if (
-        !executeRuntimeAfterRecord.communicationLog.some((event) => event.summary === 'Implementation session opened')
-        || executeRuntimeAfterRecord.sharedMentalModel.roleAssignments.find((role) => role.roleId === 'implementer')?.status !== 'active'
-      ) {
-        console.error(`p2a_orchestrate record wrote unexpected runtime state: ${caseData.id}`);
-        console.error(JSON.stringify({ executeRuntimeAfterRecord }, null, 2));
-        return { status: 1, checks };
-      }
-
-      result = runOrchestrate([
-        'record',
-        '--runtime',
-        executeRuntimePath,
-        '--role',
-        'implementer',
-        '--type',
-        'question',
-        '--summary',
-        'Need owner decision before continuing',
-        '--linked-role',
-        'owner',
-      ]);
-      checks += 1;
-      if (result.status !== 0) {
-        console.error(`p2a_orchestrate question record fixture failed: ${caseData.id}`);
-        writeResultOutput(result);
-        return { status: failureStatus(result), checks };
-      }
-      result = runOrchestrate(['next-role', '--runtime', executeRuntimePath, '--json']);
-      checks += 1;
-      const questionNextRole = result.status === 0 ? JSON.parse(result.stdout) : null;
-      if (
-        result.status !== 0
-        || typeof questionNextRole?.reason !== 'string'
-        || !questionNextRole.reason.startsWith('open_question:')
-        || questionNextRole.nextRole?.roleId !== 'owner'
-      ) {
-        console.error(`p2a_orchestrate question should route to owner: ${caseData.id}`);
-        writeResultOutput(result);
-        console.error(JSON.stringify({ questionNextRole }, null, 2));
-        return { status: failureStatus(result), checks };
-      }
-      result = runOrchestrate(['failure-policy', '--runtime', executeRuntimePath, '--json']);
-      checks += 1;
-      const questionFailurePolicy = result.status === 0 ? JSON.parse(result.stdout) : null;
-      if (
-        result.status !== 0
-        || questionFailurePolicy.action !== 'ask_user'
-        || questionFailurePolicy.source.signal !== 'open_question'
-        || questionFailurePolicy.startsProcess !== false
-      ) {
-        console.error(`p2a_orchestrate failure-policy should ask user for open question: ${caseData.id}`);
-        writeResultOutput(result);
-        console.error(JSON.stringify({ questionFailurePolicy }, null, 2));
-        return { status: failureStatus(result), checks };
-      }
-
-      result = runOrchestrate([
-        'record',
-        '--runtime',
-        executeRuntimePath,
-        '--role',
-        'owner',
-        '--type',
-        'answer',
-        '--summary',
-        'Proceed with the scoped implementation',
-      ]);
-      checks += 1;
-      if (result.status !== 0) {
-        console.error(`p2a_orchestrate answer record fixture failed: ${caseData.id}`);
-        writeResultOutput(result);
-        return { status: failureStatus(result), checks };
-      }
-      result = runOrchestrate(['next-role', '--runtime', executeRuntimePath, '--json']);
-      checks += 1;
-      const answerNextRole = result.status === 0 ? JSON.parse(result.stdout) : null;
-      const executeRuntimeAfterAnswer = JSON.parse(readFileSync(executeRuntimePath, 'utf8'));
-      if (
-        result.status !== 0
-        || typeof answerNextRole?.reason !== 'string'
-        || answerNextRole.reason.startsWith('open_question:')
-        || answerNextRole.nextRole?.roleId !== 'implementer'
-        || executeRuntimeAfterAnswer.status.needsUserDecision !== false
-        || executeRuntimeAfterAnswer.sharedMentalModel.openQuestions[0]?.status !== 'answered'
-        || executeRuntimeAfterAnswer.sharedMentalModel.openQuestions[0]?.answer !== 'Proceed with the scoped implementation'
-      ) {
-        console.error(`p2a_orchestrate answer should close open question: ${caseData.id}`);
-        writeResultOutput(result);
-        console.error(JSON.stringify({ answerNextRole, executeRuntimeAfterAnswer }, null, 2));
-        return { status: failureStatus(result), checks };
-      }
-      result = runValidator(['--runs-dir', path.join(tempRoot, 'p2a-execute', 'runs')]);
-      checks += 1;
-      if (result.status !== 0) {
-        console.error(`runs dir validator did not accept orchestration runtime sidecar: ${caseData.id}`);
-        writeResultOutput(result);
-        return { status: failureStatus(result), checks };
-      }
-
-      result = runOrchestrate([
-        'mark-role',
-        '--runtime',
-        executeRuntimePath,
-        '--role',
-        'implementer',
-        '--role-status',
-        'complete',
-        '--summary',
-        'Implementation completed under human supervision',
-      ]);
-      checks += 1;
-      if (result.status !== 0 || !result.stdout.includes('nextRole: owner') || !result.stdout.includes('startsProcess: false')) {
-        console.error(`p2a_orchestrate mark-role solo fixture check failed: ${caseData.id}`);
-        writeResultOutput(result);
-        return { status: failureStatus(result), checks };
-      }
-      const executeRuntimeAfterMark = JSON.parse(readFileSync(executeRuntimePath, 'utf8'));
-      if (
-        executeRuntimeAfterMark.status.phase !== 'ready_to_finish'
-        || executeRuntimeAfterMark.sharedMentalModel.roleAssignments.find((role) => role.roleId === 'implementer')?.status !== 'complete'
-      ) {
-        console.error(`p2a_orchestrate mark-role solo wrote unexpected state: ${caseData.id}`);
-        console.error(JSON.stringify({ executeRuntimeAfterMark }, null, 2));
-        return { status: 1, checks };
-      }
-      if (executeSidecar.monitorGate.required) {
-        writeFileSync(path.join(tempRoot, 'p2a-execute', 'runs', executeSidecar.monitorGate.verdictPath), '{"verdict":"confirm_done"}\n', 'utf8');
-      }
-
-      result = runExecute([
-        'finish',
-        '--graph',
-        executeGraphPath,
-        '--run-id',
-        'run-execute-fixture',
-        '--test-command',
-        `"${process.execPath}" -e "process.exit(0)"`,
-        '--changed-file',
-        'src/execute-fixture.ts',
-      ]);
-      checks += 1;
-      if (result.status !== 0 || !result.stdout.includes('task-001 status is now done')) {
-        console.error(`p2a_execute finish fixture check failed: ${caseData.id}`);
-        writeResultOutput(result);
-        return { status: failureStatus(result), checks };
-      }
-      const executeFinishedGraph = JSON.parse(readFileSync(executeGraphPath, 'utf8'));
-      const executeFinishedRun = JSON.parse(readFileSync(path.join(tempRoot, 'p2a-execute', 'runs', 'run-execute-fixture.json'), 'utf8'));
-      const executeRuntimeAfterFinish = JSON.parse(readFileSync(executeRuntimePath, 'utf8'));
-      if (
-        executeFinishedGraph.tasks.find((task) => task.id === 'task-001')?.status !== 'done'
-        || executeFinishedRun.status !== 'finished'
-        || executeFinishedRun.changedFiles.join(',') !== 'src/execute-fixture.ts'
-        || executeRuntimeAfterFinish.status.phase !== 'closed'
-        || !executeRuntimeAfterFinish.communicationLog.some((event) => event.summary === 'Run run-execute-fixture finished with status finished')
-        || executeRuntimeAfterFinish.sharedMentalModel.roleAssignments.find((role) => role.roleId === 'owner')?.status !== 'complete'
-      ) {
-        console.error(`p2a_execute finish wrote unexpected state: ${caseData.id}`);
-        console.error(JSON.stringify({ executeFinishedGraph, executeFinishedRun, executeRuntimeAfterFinish }, null, 2));
-        return { status: 1, checks };
-      }
-
-      result = runExecute([
-        'finish',
-        '--graph',
-        executeGraphPath,
-        '--run-id',
-        'run-execute-fixture',
-        '--status',
-        'finished',
-      ]);
-      checks += 1;
-      const repeatedFinishRuntime = JSON.parse(readFileSync(executeRuntimePath, 'utf8'));
-      const repeatedFinishOutput = `${result.stdout ?? ''}${result.stderr ?? ''}`;
-      if (
-        !repeatedFinishOutput.includes('Orchestration runtime already closed')
-        || repeatedFinishRuntime.status.phase !== 'closed'
-        || repeatedFinishRuntime.communicationLog.length !== executeRuntimeAfterFinish.communicationLog.length
-      ) {
-        console.error(`p2a_execute repeated finish should not append to closed runtime: ${caseData.id}`);
-        writeResultOutput(result);
-        console.error(JSON.stringify({ executeRuntimeAfterFinish, repeatedFinishRuntime }, null, 2));
-        return { status: 1, checks };
-      }
-
-      const executeGraphNeedingRecovery = JSON.parse(readFileSync(executeGraphPath, 'utf8'));
-      executeGraphNeedingRecovery.tasks = executeGraphNeedingRecovery.tasks.map((task) => (
-        task.id === 'task-001' ? { ...task, status: 'in_progress' } : task
-      ));
-      writeFileSync(executeGraphPath, `${JSON.stringify(executeGraphNeedingRecovery, null, 2)}\n`, 'utf8');
-      result = runExecute([
-        'finish',
-        '--graph',
-        executeGraphPath,
-        '--run-id',
-        'run-execute-fixture',
-        '--status',
-        'finished',
-      ]);
-      checks += 1;
-      const recoveredFinishGraph = JSON.parse(readFileSync(executeGraphPath, 'utf8'));
-      const recoveredFinishRuntime = JSON.parse(readFileSync(executeRuntimePath, 'utf8'));
-      if (
-        result.status !== 0
-        || !(`${result.stdout ?? ''}${result.stderr ?? ''}`).includes('Orchestration runtime already closed')
-        || !(`${result.stdout ?? ''}${result.stderr ?? ''}`).includes('task-001 status is now done')
-        || recoveredFinishGraph.tasks.find((task) => task.id === 'task-001')?.status !== 'done'
-        || recoveredFinishRuntime.communicationLog.length !== executeRuntimeAfterFinish.communicationLog.length
-      ) {
-        console.error(`p2a_execute closed runtime should still recover pending task transition: ${caseData.id}`);
-        writeResultOutput(result);
-        console.error(JSON.stringify({ recoveredFinishGraph, recoveredFinishRuntime }, null, 2));
-        return { status: 1, checks };
-      }
-
       const executeMonitorGraphPath = path.join(tempRoot, 'p2a-execute-monitor', 'gate-c-task-graph', 'task-graph.json');
       mkdirSync(path.dirname(executeMonitorGraphPath), { recursive: true });
       const executeMonitorGraph = JSON.parse(readFileSync(state.taskGraphPath, 'utf8'));
@@ -3862,193 +3037,6 @@ function validateIterationCurrentFixtureCases() {
       executeMonitorTask.targetArea = 'api+ui';
       executeMonitorTask.acceptanceCriteria.push('Monitor gate fixture coverage is recorded.');
       writeFileSync(executeMonitorGraphPath, `${JSON.stringify(executeMonitorGraph, null, 2)}\n`, 'utf8');
-      const executeMonitorPlanPath = path.join(tempRoot, 'p2a-execute-monitor', 'orchestration', 'task-001.json');
-      result = runOrchestrate([
-        'plan',
-        '--graph',
-        executeMonitorGraphPath,
-        '--spec',
-        state.specPath,
-        '--task',
-        'task-001',
-        '--output',
-        executeMonitorPlanPath,
-      ]);
-      checks += 1;
-      if (result.status !== 0) {
-        console.error(`p2a_orchestrate monitor fixture plan failed: ${caseData.id}`);
-        writeResultOutput(result);
-        return { status: failureStatus(result), checks };
-      }
-      const executeMonitorPlan = JSON.parse(readFileSync(executeMonitorPlanPath, 'utf8'));
-      if (
-        executeMonitorPlan.mode !== 'team'
-        || executeMonitorPlan.providerStrategy.mode !== 'single_provider'
-        || executeMonitorPlan.roles.find((role) => role.roleId === 'implementer')?.profile !== 'fullstack_implementer'
-        || executeMonitorPlan.roles.find((role) => role.roleId === 'implementer')?.profileSource !== 'auto'
-        || executeMonitorPlan.roles.find((role) => role.roleId === 'reviewer')?.agentTool !== 'codex'
-        || executeMonitorPlan.roles.find((role) => role.roleId === 'reviewer')?.profile !== 'security_reviewer'
-        || executeMonitorPlan.roles.find((role) => role.roleId === 'reviewer')?.profileSource !== 'auto'
-        || executeMonitorPlan.roles.find((role) => role.roleId === 'monitor')?.profile !== 'manual_monitor'
-        || executeMonitorPlan.roles.find((role) => role.roleId === 'monitor')?.profileReason !== 'fixed manual monitor gate role'
-        || executeMonitorPlan.roles.find((role) => role.roleId === 'reviewer')?.executionGuide?.recommendedFeature !== 'read_only_review_skill_or_custom_agent_prompt'
-        || !executeMonitorPlan.monitorGate.required
-        || !executeMonitorPlan.riskFlags.includes('multi_area')
-      ) {
-        console.error(`p2a_orchestrate monitor fixture should use explicit multi-area team mode: ${caseData.id}`);
-        console.error(JSON.stringify({ executeMonitorPlan }, null, 2));
-        return { status: 1, checks };
-      }
-
-      const executeClaudePlanPath = path.join(tempRoot, 'p2a-orchestrate-claude', 'orchestration', 'task-001.json');
-      result = runOrchestrate([
-        'plan',
-        '--graph',
-        executeMonitorGraphPath,
-        '--spec',
-        state.specPath,
-        '--task',
-        'task-001',
-        '--agent-tool',
-        'claude',
-        '--output',
-        executeClaudePlanPath,
-      ]);
-      checks += 1;
-      if (result.status !== 0) {
-        console.error(`p2a_orchestrate claude team fixture plan failed: ${caseData.id}`);
-        writeResultOutput(result);
-        return { status: failureStatus(result), checks };
-      }
-      const executeClaudePlan = JSON.parse(readFileSync(executeClaudePlanPath, 'utf8'));
-      if (
-        executeClaudePlan.providerStrategy.primaryProvider !== 'claude'
-        || executeClaudePlan.roles.find((role) => role.roleId === 'implementer')?.executionGuide?.recommendedFeature !== 'agent_teams_or_subagents'
-      ) {
-        console.error(`p2a_orchestrate claude team fixture should use provider-native guide: ${caseData.id}`);
-        console.error(JSON.stringify({ executeClaudePlan }, null, 2));
-        return { status: 1, checks };
-      }
-      result = runOrchestrate(['runner-guide', '--plan', executeClaudePlanPath, '--role', 'implementer']);
-      checks += 1;
-      if (
-        result.status !== 0
-        || !result.stdout.includes('claude_supervised_agent_teams_subagents')
-        || !result.stdout.includes('agent teams/subagents')
-        || !result.stdout.includes('startsProcess: false')
-        || !result.stdout.includes('Do not let P2A spawn')
-      ) {
-        console.error(`p2a_orchestrate runner-guide claude fixture check failed: ${caseData.id}`);
-        writeResultOutput(result);
-        return { status: failureStatus(result), checks };
-      }
-
-      result = runOrchestrate([
-        'plan',
-        '--graph',
-        executeMonitorGraphPath,
-        '--spec',
-        state.specPath,
-        '--task',
-        'task-001',
-        '--reviewer-profile',
-        'qa_reviewer',
-      ]);
-      checks += 1;
-      const executeReviewerOverridePlan = result.status === 0 ? JSON.parse(result.stdout) : null;
-      if (
-        result.status !== 0
-        || executeReviewerOverridePlan.roles.find((role) => role.roleId === 'reviewer')?.profile !== 'qa_reviewer'
-        || executeReviewerOverridePlan.roles.find((role) => role.roleId === 'reviewer')?.profileSource !== 'override'
-        || !executeReviewerOverridePlan.roles.find((role) => role.roleId === 'reviewer')?.profileReason.includes('--reviewer-profile')
-      ) {
-        console.error(`p2a_orchestrate should record reviewer profile override on team task: ${caseData.id}`);
-        writeResultOutput(result);
-        console.error(JSON.stringify({ executeReviewerOverridePlan }, null, 2));
-        return { status: failureStatus(result), checks };
-      }
-
-      result = runOrchestrate([
-        'plan',
-        '--graph',
-        executeMonitorGraphPath,
-        '--spec',
-        state.specPath,
-        '--task',
-        'task-001',
-        '--reviewer-profile',
-        'frontend_implementer',
-      ]);
-      checks += 1;
-      if (result.status === 0 || !result.stderr.includes('--reviewer-profile must be one of')) {
-        console.error(`p2a_orchestrate should reject reviewer profile from implementer profile set: ${caseData.id}`);
-        writeResultOutput(result);
-        return { status: 1, checks };
-      }
-
-      result = runOrchestrate([
-        'plan',
-        '--graph',
-        executeMonitorGraphPath,
-        '--spec',
-        state.specPath,
-        '--task',
-        'task-001',
-        '--reviewer-tool',
-        'gemini',
-      ]);
-      checks += 1;
-      const explicitGeminiReviewerPlan = result.status === 0 ? JSON.parse(result.stdout) : null;
-      if (
-        result.status !== 0
-        || explicitGeminiReviewerPlan.providerStrategy.mode !== 'single_provider_with_read_only_reviewer'
-        || explicitGeminiReviewerPlan.roles.find((role) => role.roleId === 'reviewer')?.agentTool !== 'gemini'
-        || explicitGeminiReviewerPlan.roles.find((role) => role.roleId === 'reviewer')?.profile !== 'security_reviewer'
-        || explicitGeminiReviewerPlan.roles.find((role) => role.roleId === 'reviewer')?.executionGuide?.recommendedFeature !== 'extensions_custom_commands_gemini_context'
-        || explicitGeminiReviewerPlan.roles.find((role) => role.roleId === 'reviewer')?.requiresWrite !== false
-      ) {
-        console.error(`p2a_orchestrate should allow Gemini as explicit read-only reviewer: ${caseData.id}`);
-        writeResultOutput(result);
-        console.error(JSON.stringify({ explicitGeminiReviewerPlan }, null, 2));
-        return { status: failureStatus(result), checks };
-      }
-      const explicitGeminiReviewerPlanPath = path.join(tempRoot, 'p2a-orchestrate-gemini-reviewer', 'orchestration', 'task-001.json');
-      mkdirSync(path.dirname(explicitGeminiReviewerPlanPath), { recursive: true });
-      writeFileSync(explicitGeminiReviewerPlanPath, `${JSON.stringify(explicitGeminiReviewerPlan, null, 2)}\n`, 'utf8');
-      result = runOrchestrate(['runner-guide', '--plan', explicitGeminiReviewerPlanPath, '--role', 'reviewer']);
-      checks += 1;
-      if (
-        result.status !== 0
-        || !result.stdout.includes('gemini_read_only_extensions_custom_commands')
-        || !result.stdout.includes('Gemini is read-only')
-        || !result.stdout.includes('without editing files')
-        || !result.stdout.includes('Do not use Gemini for write-required')
-      ) {
-        console.error(`p2a_orchestrate runner-guide gemini fixture check failed: ${caseData.id}`);
-        writeResultOutput(result);
-        return { status: failureStatus(result), checks };
-      }
-
-      result = runOrchestrate([
-        'plan',
-        '--graph',
-        executeMonitorGraphPath,
-        '--spec',
-        state.specPath,
-        '--task',
-        'task-001',
-        '--agent-tool',
-        'codex',
-        '--reviewer-tool',
-        'claude',
-      ]);
-      checks += 1;
-      if (result.status === 0 || !result.stderr.includes('cross-provider reviewers must be read-only')) {
-        console.error(`p2a_orchestrate should reject write-capable cross-provider reviewers: ${caseData.id}`);
-        writeResultOutput(result);
-        return { status: 1, checks };
-      }
-
       result = runExecute([
         'start',
         '--graph',
@@ -4061,8 +3049,7 @@ function validateIterationCurrentFixtureCases() {
         'run-execute-monitor-fixture',
         '--agent-tool',
         'codex',
-        '--orchestration-plan',
-        executeMonitorPlanPath,
+        '--require-monitor',
         '--workspace',
         artifactRoot,
         '--workspace-ref',
@@ -4072,120 +3059,6 @@ function validateIterationCurrentFixtureCases() {
       if (result.status !== 0) {
         console.error(`p2a_execute monitor fixture start failed: ${caseData.id}`);
         writeResultOutput(result);
-        return { status: failureStatus(result), checks };
-      }
-
-      const executeMonitorRuntimePath = path.join(tempRoot, 'p2a-execute-monitor', 'runs', 'run-execute-monitor-fixture.orchestration-runtime.json');
-      result = runOrchestrate(['next-role', '--runtime', executeMonitorRuntimePath, '--json']);
-      checks += 1;
-      const executeMonitorNextRole = result.status === 0 ? JSON.parse(result.stdout) : null;
-      if (
-        result.status !== 0
-        || executeMonitorNextRole.nextRole?.roleId !== 'implementer'
-        || executeMonitorNextRole.startsProcess !== false
-      ) {
-        console.error(`p2a_orchestrate monitor next-role fixture check failed: ${caseData.id}`);
-        writeResultOutput(result);
-        console.error(JSON.stringify({ executeMonitorNextRole }, null, 2));
-        return { status: failureStatus(result), checks };
-      }
-
-      result = runOrchestrate([
-        'mark-role',
-        '--runtime',
-        executeMonitorRuntimePath,
-        '--role',
-        'implementer',
-        '--role-status',
-        'complete',
-      ]);
-      checks += 1;
-      if (result.status !== 0 || !result.stdout.includes('nextRole: reviewer') || !result.stdout.includes('startsProcess: false')) {
-        console.error(`p2a_orchestrate monitor implementer mark-role fixture failed: ${caseData.id}`);
-        writeResultOutput(result);
-        return { status: failureStatus(result), checks };
-      }
-
-      result = runOrchestrate([
-        'mark-role',
-        '--runtime',
-        executeMonitorRuntimePath,
-        '--role',
-        'reviewer',
-        '--role-status',
-        'complete',
-      ]);
-      checks += 1;
-      if (result.status !== 0 || !result.stdout.includes('nextRole: monitor') || !result.stdout.includes('startsProcess: false')) {
-        console.error(`p2a_orchestrate monitor reviewer mark-role fixture failed: ${caseData.id}`);
-        writeResultOutput(result);
-        return { status: failureStatus(result), checks };
-      }
-      const executeMonitorRuntimeAfterMarks = JSON.parse(readFileSync(executeMonitorRuntimePath, 'utf8'));
-      if (
-        executeMonitorRuntimeAfterMarks.status.phase !== 'ready_for_monitor'
-        || executeMonitorRuntimeAfterMarks.sharedMentalModel.roleAssignments.find((role) => role.roleId === 'reviewer')?.status !== 'complete'
-        || executeMonitorRuntimeAfterMarks.sharedMentalModel.roleAssignments.find((role) => role.roleId === 'monitor')?.status !== 'pending'
-      ) {
-        console.error(`p2a_orchestrate monitor scheduler wrote unexpected state: ${caseData.id}`);
-        console.error(JSON.stringify({ executeMonitorRuntimeAfterMarks }, null, 2));
-        return { status: 1, checks };
-      }
-
-      result = runOrchestrate([
-        'mark-role',
-        '--runtime',
-        executeMonitorRuntimePath,
-        '--role',
-        'monitor',
-        '--role-status',
-        'complete',
-      ]);
-      checks += 1;
-      if (result.status === 0 || !result.stderr.includes('--verdict is required when marking monitor complete')) {
-        console.error(`p2a_orchestrate monitor mark-role should require verdict: ${caseData.id}`);
-        writeResultOutput(result);
-        return { status: 1, checks };
-      }
-
-      result = runOrchestrate([
-        'mark-role',
-        '--runtime',
-        executeMonitorRuntimePath,
-        '--role',
-        'monitor',
-        '--role-status',
-        'complete',
-        '--verdict',
-        'verification_concerns',
-      ]);
-      checks += 1;
-      if (
-        result.status !== 0
-        || !result.stdout.includes('phase: blocked')
-        || !result.stdout.includes('nextRole: owner')
-        || !result.stdout.includes('failure-policy --runtime')
-        || !result.stdout.includes('Do not retry inside this blocked runtime')
-        || result.stdout.includes('mark monitor active')
-      ) {
-        console.error(`p2a_orchestrate monitor mark-role should block rejected verdicts: ${caseData.id}`);
-        writeResultOutput(result);
-        return { status: failureStatus(result), checks };
-      }
-      result = runOrchestrate(['failure-policy', '--runtime', executeMonitorRuntimePath, '--json']);
-      checks += 1;
-      const monitorFailurePolicy = result.status === 0 ? JSON.parse(result.stdout) : null;
-      if (
-        result.status !== 0
-        || monitorFailurePolicy.action !== 'retry'
-        || monitorFailurePolicy.failure.class !== 'verification_failed'
-        || monitorFailurePolicy.failure.retryable !== 'after_fix'
-        || monitorFailurePolicy.source.signal !== 'monitor_verdict'
-        || monitorFailurePolicy.startsProcess !== false
-      ) {
-        console.error(`p2a_orchestrate failure-policy should retry after rejected monitor verdict: ${caseData.id}`);
-        writeResultOutput(result);
-        console.error(JSON.stringify({ monitorFailurePolicy }, null, 2));
         return { status: failureStatus(result), checks };
       }
 
@@ -4219,524 +3092,7 @@ function validateIterationCurrentFixtureCases() {
         return { status: 1, checks };
       }
 
-      const monitorStructuredErrorRunId = 'run-monitor-structured-error';
-      result = runRuns([
-        'start',
-        '--graph',
-        executeMonitorGraphPath,
-        '--task',
-        'task-001',
-        '--run-id',
-        monitorStructuredErrorRunId,
-        '--agent-tool',
-        'codex',
-        '--workspace-ref',
-        'fixture-workspace',
-      ]);
-      checks += 1;
-      if (result.status !== 0) {
-        console.error(`p2a_runs monitor structured error fixture start failed: ${caseData.id}`);
-        writeResultOutput(result);
-        return { status: failureStatus(result), checks };
-      }
-      const monitorStructuredErrorSidecar = {
-        ...executeMonitorPlan,
-        monitorGate: {
-          ...executeMonitorPlan.monitorGate,
-          verdictPath: `${monitorStructuredErrorRunId}.monitor-verdict.json`,
-        },
-        runLink: {
-          runId: monitorStructuredErrorRunId,
-          sidecarRef: `${monitorStructuredErrorRunId}.orchestration.json`,
-        },
-      };
-      writeFileSync(
-        path.join(tempRoot, 'p2a-execute-monitor', 'runs', `${monitorStructuredErrorRunId}.orchestration.json`),
-        `${JSON.stringify(monitorStructuredErrorSidecar, null, 2)}\n`,
-        'utf8',
-      );
-      writeFileSync(path.join(tempRoot, 'p2a-execute-monitor', 'runs', monitorStructuredErrorSidecar.monitorGate.verdictPath), `${JSON.stringify({
-        verdict: 'block',
-        unmet_acceptance: [],
-        verification_concerns: ['Verification evidence is not convincing.'],
-        scope_concerns: [],
-        needs_user_decision: [],
-        note: 'Structured detail error fixture.',
-      })}\n`, 'utf8');
-      result = runRuns([
-        'finish',
-        '--graph',
-        executeMonitorGraphPath,
-        '--run-id',
-        monitorStructuredErrorRunId,
-        '--verification',
-        'test:passed:manual monitor structured error fixture',
-      ]);
-      checks += 1;
-      const monitorStructuredErrorOutput = `${result.stdout ?? ''}${result.stderr ?? ''}`;
-      if (
-        result.status === 0
-        || !monitorStructuredErrorOutput.includes('monitor gate blocked finish: verdict=block; signal=verification_concerns; failureClass=verification_failed')
-        || !monitorStructuredErrorOutput.includes('Monitor gate blocked finish (block -> verification_failed; concerns: verification_concerns=Verification evidence is not convincing.')
-        || !monitorStructuredErrorOutput.includes('blocked monitor finish requires structured detail')
-      ) {
-        console.error(`p2a_runs monitor structured error fixture failed: ${caseData.id}`);
-        writeResultOutput(result);
-        return { status: 1, checks };
-      }
-
-      const multiConcernMonitorRunId = 'run-monitor-multi-concern';
-      result = runRuns([
-        'start',
-        '--graph',
-        executeMonitorGraphPath,
-        '--task',
-        'task-001',
-        '--run-id',
-        multiConcernMonitorRunId,
-        '--agent-tool',
-        'codex',
-        '--workspace-ref',
-        'fixture-workspace',
-      ]);
-      checks += 1;
-      if (result.status !== 0) {
-        console.error(`p2a_runs monitor multi-concern fixture start failed: ${caseData.id}`);
-        writeResultOutput(result);
-        return { status: failureStatus(result), checks };
-      }
-      const multiConcernMonitorSidecar = {
-        ...executeMonitorPlan,
-        monitorGate: {
-          ...executeMonitorPlan.monitorGate,
-          verdictPath: `${multiConcernMonitorRunId}.monitor-verdict.json`,
-        },
-        runLink: {
-          runId: multiConcernMonitorRunId,
-          sidecarRef: `${multiConcernMonitorRunId}.orchestration.json`,
-        },
-      };
-      writeFileSync(
-        path.join(tempRoot, 'p2a-execute-monitor', 'runs', `${multiConcernMonitorRunId}.orchestration.json`),
-        `${JSON.stringify(multiConcernMonitorSidecar, null, 2)}\n`,
-        'utf8',
-      );
-      writeFileSync(path.join(tempRoot, 'p2a-execute-monitor', 'runs', multiConcernMonitorSidecar.monitorGate.verdictPath), `${JSON.stringify({
-        verdict: 'block',
-        unmet_acceptance: [],
-        verification_concerns: ['Verification is incomplete.'],
-        scope_concerns: [],
-        needs_user_decision: ['Owner must choose the retry scope.'],
-        note: 'Multi-concern monitor verdict fixture.',
-      })}\n`, 'utf8');
-      result = runRuns([
-        'finish',
-        '--graph',
-        executeMonitorGraphPath,
-        '--run-id',
-        multiConcernMonitorRunId,
-        '--verification',
-        'test:passed:manual monitor multi concern fixture',
-        ...fixtureFailureDetailArgs('monitor multi concern fixture'),
-      ]);
-      checks += 1;
-      const multiConcernMonitorRun = JSON.parse(readFileSync(path.join(tempRoot, 'p2a-execute-monitor', 'runs', `${multiConcernMonitorRunId}.json`), 'utf8'));
-      if (
-        result.status !== 0
-        || multiConcernMonitorRun.status !== 'blocked'
-        || multiConcernMonitorRun.failure?.class !== 'verification_failed'
-        || multiConcernMonitorRun.failure?.needsUserDecision !== true
-      ) {
-        console.error(`p2a_runs monitor multi-concern fixture lost needsUserDecision: ${caseData.id}`);
-        writeResultOutput(result);
-        console.error(JSON.stringify({ multiConcernMonitorRun }, null, 2));
-        return { status: failureStatus(result), checks };
-      }
-
-      const contradictoryMonitorRunId = 'run-execute-monitor-confirm-done-with-concern';
-      const contradictoryMonitorGraphPath = copyWebhookTaskGraph(tempRoot, 'p2a-monitor-contradictory');
-      const contradictoryMonitorRunsDir = path.join(tempRoot, 'p2a-monitor-contradictory', 'runs');
-      result = runRuns([
-        'start',
-        '--graph',
-        contradictoryMonitorGraphPath,
-        '--task',
-        'task-001',
-        '--run-id',
-        contradictoryMonitorRunId,
-        '--agent-tool',
-        'codex',
-        '--workspace-ref',
-        'fixture-workspace',
-      ]);
-      checks += 1;
-      if (result.status !== 0) {
-        console.error(`p2a_runs contradictory monitor fixture start failed: ${caseData.id}`);
-        writeResultOutput(result);
-        return { status: failureStatus(result), checks };
-      }
-      const contradictoryMonitorSidecar = {
-        ...executeMonitorPlan,
-        monitorGate: {
-          ...executeMonitorPlan.monitorGate,
-          verdictPath: `${contradictoryMonitorRunId}.monitor-verdict.json`,
-        },
-        runLink: {
-          runId: contradictoryMonitorRunId,
-          sidecarRef: `${contradictoryMonitorRunId}.orchestration.json`,
-        },
-      };
-      writeFileSync(
-        path.join(contradictoryMonitorRunsDir, `${contradictoryMonitorRunId}.orchestration.json`),
-        `${JSON.stringify(contradictoryMonitorSidecar, null, 2)}\n`,
-        'utf8',
-      );
-      writeFileSync(path.join(contradictoryMonitorRunsDir, contradictoryMonitorSidecar.monitorGate.verdictPath), `${JSON.stringify({
-        verdict: 'confirm_done',
-        unmet_acceptance: [],
-        verification_concerns: ['Monitor reported verification concerns while using confirm_done.'],
-        scope_concerns: [],
-        needs_user_decision: [],
-        note: 'Contradictory monitor verdict fixture.',
-      })}\n`, 'utf8');
-      result = runRuns([
-        'finish',
-        '--graph',
-        contradictoryMonitorGraphPath,
-        '--run-id',
-        contradictoryMonitorRunId,
-        '--verification',
-        'test:passed:manual monitor contradiction fixture',
-        ...fixtureFailureDetailArgs('monitor contradictory verdict fixture'),
-      ]);
-      checks += 1;
-      const contradictoryMonitorOutput = `${result.stdout ?? ''}${result.stderr ?? ''}`;
-      const contradictoryMonitorRun = JSON.parse(readFileSync(path.join(contradictoryMonitorRunsDir, `${contradictoryMonitorRunId}.json`), 'utf8'));
-      if (
-        result.status !== 0
-        || !contradictoryMonitorOutput.includes('- status: blocked')
-        || contradictoryMonitorRun.status !== 'blocked'
-        || contradictoryMonitorRun.failure?.class !== 'verification_failed'
-        || contradictoryMonitorRun.failure?.source !== 'monitor'
-      ) {
-        console.error(`p2a_runs monitor fixture allowed confirm_done with concerns: ${caseData.id}`);
-        writeResultOutput(result);
-        console.error(JSON.stringify({ contradictoryMonitorRun }, null, 2));
-        return { status: result.status === 0 ? 1 : failureStatus(result), checks };
-      }
-
-      const executeMonitorSidecar = JSON.parse(readFileSync(path.join(tempRoot, 'p2a-execute-monitor', 'runs', 'run-execute-monitor-fixture.orchestration.json'), 'utf8'));
-      if (!executeMonitorSidecar.monitorGate.required) {
-        console.error(`p2a_execute monitor fixture did not create required monitor gate: ${caseData.id}`);
-        console.error(JSON.stringify({ executeMonitorSidecar }, null, 2));
-        return { status: 1, checks };
-      }
-      writeFileSync(path.join(tempRoot, 'p2a-execute-monitor', 'runs', executeMonitorSidecar.monitorGate.verdictPath), `${JSON.stringify({
-        verdict: 'block',
-        unmet_acceptance: ['Acceptance criteria are not fully met.'],
-        verification_concerns: [],
-        scope_concerns: [],
-        needs_user_decision: [],
-        note: 'Fixture monitor block.',
-      })}\n`, 'utf8');
-      result = runExecute([
-        'finish',
-        '--graph',
-        executeMonitorGraphPath,
-        '--run-id',
-        'run-execute-monitor-fixture',
-        ...fixtureFailureDetailArgs('monitor blocked finish'),
-      ]);
-      checks += 1;
-      if (result.status !== 0 || !result.stdout.includes('Monitor gate blocked finish: unmet_acceptance -> implementation_incomplete')) {
-        console.error(`p2a_execute monitor fixture did not map blocked verdict: ${caseData.id}`);
-        writeResultOutput(result);
-        return { status: failureStatus(result), checks };
-      }
-      const executeMonitorFinishedGraph = JSON.parse(readFileSync(executeMonitorGraphPath, 'utf8'));
-      const executeMonitorFinishedRun = JSON.parse(readFileSync(path.join(tempRoot, 'p2a-execute-monitor', 'runs', 'run-execute-monitor-fixture.json'), 'utf8'));
-      const executeMonitorFinishedRuntime = JSON.parse(readFileSync(path.join(tempRoot, 'p2a-execute-monitor', 'runs', 'run-execute-monitor-fixture.orchestration-runtime.json'), 'utf8'));
-      if (
-        executeMonitorFinishedGraph.tasks.find((task) => task.id === 'task-001')?.status !== 'blocked'
-        || executeMonitorFinishedRun.status !== 'blocked'
-        || executeMonitorFinishedRun.failure?.class !== 'implementation_incomplete'
-        || executeMonitorFinishedRun.failure?.source !== 'monitor'
-        || executeMonitorFinishedRuntime.status.phase !== 'blocked'
-        || executeMonitorFinishedRuntime.sharedMentalModel.roleAssignments.find((role) => role.roleId === 'owner')?.status !== 'blocked'
-      ) {
-        console.error(`p2a_execute monitor fixture wrote unexpected blocked state: ${caseData.id}`);
-        console.error(JSON.stringify({ executeMonitorFinishedGraph, executeMonitorFinishedRun, executeMonitorFinishedRuntime }, null, 2));
-        return { status: 1, checks };
-      }
-      result = runOrchestrate(['failure-policy', '--runtime', executeMonitorRuntimePath, '--json']);
-      checks += 1;
-      const monitorRunFailurePolicy = result.status === 0 ? JSON.parse(result.stdout) : null;
-      if (
-        result.status !== 0
-        || monitorRunFailurePolicy.action !== 'retry'
-        || monitorRunFailurePolicy.source.signal !== 'run_failure'
-        || monitorRunFailurePolicy.source.runStatus !== 'blocked'
-        || monitorRunFailurePolicy.failure.retryable !== 'after_fix'
-      ) {
-        console.error(`p2a_orchestrate failure-policy should prefer blocked run failure: ${caseData.id}`);
-        writeResultOutput(result);
-        console.error(JSON.stringify({ monitorRunFailurePolicy }, null, 2));
-        return { status: failureStatus(result), checks };
-      }
-
-      result = runTasks(['todo', '--graph', executeMonitorGraphPath, 'task-001']);
-      checks += 1;
-      if (result.status !== 0) {
-        console.error(`p2a_tasks monitor retry todo fixture failed: ${caseData.id}`);
-        writeResultOutput(result);
-        return { status: failureStatus(result), checks };
-      }
-      result = runTasks(['start', '--graph', executeMonitorGraphPath, 'task-001']);
-      checks += 1;
-      if (result.status !== 0) {
-        console.error(`p2a_tasks monitor bypass start fixture failed: ${caseData.id}`);
-        writeResultOutput(result);
-        return { status: failureStatus(result), checks };
-      }
-      const monitorBypassRunId = 'run-monitor-bypass-without-sidecar';
-      result = runRuns([
-        'start',
-        '--graph',
-        executeMonitorGraphPath,
-        '--task',
-        'task-001',
-        '--run-id',
-        monitorBypassRunId,
-        '--agent-tool',
-        'codex',
-        '--workspace-ref',
-        'fixture-workspace',
-      ]);
-      checks += 1;
-      if (result.status !== 0) {
-        console.error(`p2a_runs monitor bypass start fixture failed: ${caseData.id}`);
-        writeResultOutput(result);
-        return { status: failureStatus(result), checks };
-      }
-      result = runRuns([
-        'verify',
-        '--graph',
-        executeMonitorGraphPath,
-        '--run-id',
-        monitorBypassRunId,
-        '--test-command',
-        `"${process.execPath}" -e "process.exit(0)"`,
-      ]);
-      checks += 1;
-      if (result.status !== 0) {
-        console.error(`p2a_runs monitor bypass verify fixture failed: ${caseData.id}`);
-        writeResultOutput(result);
-        return { status: failureStatus(result), checks };
-      }
-      result = runRuns(['finish', '--graph', executeMonitorGraphPath, '--run-id', monitorBypassRunId, '--status', 'finished']);
-      checks += 1;
-      if (result.status !== 0) {
-        console.error(`p2a_runs monitor bypass finish fixture failed: ${caseData.id}`);
-        writeResultOutput(result);
-        return { status: failureStatus(result), checks };
-      }
-      result = runTasks(['done', '--graph', executeMonitorGraphPath, 'task-001']);
-      checks += 1;
-      const monitorBypassDoneOutput = `${result.stdout ?? ''}${result.stderr ?? ''}`;
-      if (
-        result.status === 0
-        || !monitorBypassDoneOutput.includes('this task requires monitor gate evidence')
-        || !monitorBypassDoneOutput.includes('p2a_execute start --orchestration-plan')
-      ) {
-        console.error(`p2a_tasks allowed sidecar-less done after monitor gate requirement: ${caseData.id}`);
-        writeResultOutput(result);
-        return { status: 1, checks };
-      }
-      result = runTasks(['todo', '--graph', executeMonitorGraphPath, 'task-001']);
-      checks += 1;
-      if (result.status !== 0) {
-        console.error(`p2a_tasks monitor retry reset fixture failed: ${caseData.id}`);
-        writeResultOutput(result);
-        return { status: failureStatus(result), checks };
-      }
-      const monitorAcceptedRunId = 'run-monitor-accepted-retry';
-      result = runExecute([
-        'start',
-        '--graph',
-        executeMonitorGraphPath,
-        '--spec',
-        state.specPath,
-        '--task',
-        'task-001',
-        '--run-id',
-        monitorAcceptedRunId,
-        '--agent-tool',
-        'codex',
-        '--orchestration-plan',
-        executeMonitorPlanPath,
-        '--workspace',
-        artifactRoot,
-        '--workspace-ref',
-        'fixture-workspace',
-      ]);
-      checks += 1;
-      if (result.status !== 0) {
-        console.error(`p2a_execute monitor accepted retry start fixture failed: ${caseData.id}`);
-        writeResultOutput(result);
-        return { status: failureStatus(result), checks };
-      }
-      const monitorAcceptedSidecar = JSON.parse(readFileSync(path.join(tempRoot, 'p2a-execute-monitor', 'runs', `${monitorAcceptedRunId}.orchestration.json`), 'utf8'));
-      writeFileSync(path.join(tempRoot, 'p2a-execute-monitor', 'runs', monitorAcceptedSidecar.monitorGate.verdictPath), `${JSON.stringify({
-        verdict: 'confirm_done',
-        unmet_acceptance: [],
-        verification_concerns: [],
-        scope_concerns: [],
-        needs_user_decision: [],
-        note: 'Accepted retry fixture.',
-      })}\n`, 'utf8');
-      result = runExecute([
-        'finish',
-        '--graph',
-        executeMonitorGraphPath,
-        '--run-id',
-        monitorAcceptedRunId,
-        '--test-command',
-        `"${process.execPath}" -e "process.exit(0)"`,
-      ]);
-      checks += 1;
-      const monitorAcceptedGraph = JSON.parse(readFileSync(executeMonitorGraphPath, 'utf8'));
-      const monitorAcceptedRun = JSON.parse(readFileSync(path.join(tempRoot, 'p2a-execute-monitor', 'runs', `${monitorAcceptedRunId}.json`), 'utf8'));
-      if (
-        result.status !== 0
-        || !result.stdout.includes('Monitor gate accepted: confirm_done')
-        || monitorAcceptedGraph.tasks.find((task) => task.id === 'task-001')?.status !== 'done'
-        || monitorAcceptedRun.status !== 'finished'
-      ) {
-        console.error(`p2a_execute monitor accepted retry fixture failed: ${caseData.id}`);
-        writeResultOutput(result);
-        console.error(JSON.stringify({ monitorAcceptedRun }, null, 2));
-        return { status: failureStatus(result), checks };
-      }
-
-      const recoveryGraphPath = copyWebhookTaskGraph(tempRoot, 'p2a-execute-closed-run-recovery');
-      result = runExecute([
-        'start',
-        '--graph',
-        recoveryGraphPath,
-        '--spec',
-        state.specPath,
-        '--task',
-        'task-001',
-        '--run-id',
-        'run-closed-recovery',
-        '--agent-tool',
-        'codex',
-        '--orchestration-plan',
-        executeMonitorPlanPath,
-        '--workspace',
-        artifactRoot,
-        '--workspace-ref',
-        'fixture-workspace',
-      ]);
-      checks += 1;
-      if (result.status !== 0) {
-        console.error(`p2a_execute closed-run recovery start fixture failed: ${caseData.id}`);
-        writeResultOutput(result);
-        return { status: failureStatus(result), checks };
-      }
-      const recoveryRunsDir = path.join(tempRoot, 'p2a-execute-closed-run-recovery', 'runs');
-      const recoverySidecar = JSON.parse(readFileSync(path.join(recoveryRunsDir, 'run-closed-recovery.orchestration.json'), 'utf8'));
-      writeFileSync(path.join(recoveryRunsDir, recoverySidecar.monitorGate.verdictPath), `${JSON.stringify({
-        verdict: 'confirm_done',
-        unmet_acceptance: [],
-        verification_concerns: [],
-        scope_concerns: [],
-        needs_user_decision: [],
-        note: 'Closed run recovery fixture.',
-      })}\n`, 'utf8');
-      result = runRuns([
-        'verify',
-        '--graph',
-        recoveryGraphPath,
-        '--run-id',
-        'run-closed-recovery',
-        '--test-command',
-        `"${process.execPath}" -e "process.exit(0)"`,
-      ]);
-      checks += 1;
-      if (result.status !== 0) {
-        console.error(`p2a_runs closed-run recovery verify fixture failed: ${caseData.id}`);
-        writeResultOutput(result);
-        return { status: failureStatus(result), checks };
-      }
-      result = runRuns(['finish', '--graph', recoveryGraphPath, '--run-id', 'run-closed-recovery', '--status', 'finished']);
-      checks += 1;
-      if (result.status !== 0) {
-        console.error(`p2a_runs closed-run recovery raw finish fixture failed: ${caseData.id}`);
-        writeResultOutput(result);
-        return { status: failureStatus(result), checks };
-      }
-      result = runExecute(['finish', '--graph', recoveryGraphPath, '--run-id', 'run-closed-recovery']);
-      checks += 1;
-      const recoveryOutput = `${result.stdout ?? ''}${result.stderr ?? ''}`;
-      const recoveryGraph = JSON.parse(readFileSync(recoveryGraphPath, 'utf8'));
-      const recoveryRuntime = JSON.parse(readFileSync(path.join(recoveryRunsDir, 'run-closed-recovery.orchestration-runtime.json'), 'utf8'));
-      if (
-        result.status !== 0
-        || !recoveryOutput.includes('Run already finished; recovering orchestration runtime and task transition without re-finishing run.')
-        || recoveryGraph.tasks.find((task) => task.id === 'task-001')?.status !== 'done'
-        || recoveryRuntime.status.phase !== 'closed'
-      ) {
-        console.error(`p2a_execute closed-run recovery fixture failed: ${caseData.id}`);
-        writeResultOutput(result);
-        console.error(JSON.stringify({ recoveryRuntime }, null, 2));
-        return { status: failureStatus(result), checks };
-      }
-
-      const stopPolicyDir = path.join(tempRoot, 'p2a-policy-stop', 'runs');
-      mkdirSync(stopPolicyDir, { recursive: true });
-      const stopPolicyRuntimePath = path.join(stopPolicyDir, 'run-policy-stop.orchestration-runtime.json');
-      const stopPolicyRunPath = path.join(stopPolicyDir, 'run-policy-stop.json');
-      const stopPolicyRuntime = {
-        ...executeMonitorFinishedRuntime,
-        runtimeId: 'runtime-run-policy-stop',
-        runId: 'run-policy-stop',
-        status: {
-          ...executeMonitorFinishedRuntime.status,
-          phase: 'blocked',
-          blocked: true,
-          needsUserDecision: false,
-        },
-      };
-      const stopPolicyRun = {
-        ...executeMonitorFinishedRun,
-        runId: 'run-policy-stop',
-        status: 'blocked',
-        failure: {
-          class: 'scope_violation',
-          retryable: 'no',
-          needsUserDecision: false,
-          source: 'owner',
-        },
-      };
-      writeFileSync(stopPolicyRuntimePath, `${JSON.stringify(stopPolicyRuntime, null, 2)}\n`, 'utf8');
-      writeFileSync(stopPolicyRunPath, `${JSON.stringify(stopPolicyRun, null, 2)}\n`, 'utf8');
-      result = runOrchestrate(['failure-policy', '--runtime', stopPolicyRuntimePath, '--json']);
-      checks += 1;
-      const stopFailurePolicy = result.status === 0 ? JSON.parse(result.stdout) : null;
-      if (
-        result.status !== 0
-        || stopFailurePolicy.action !== 'stop'
-        || stopFailurePolicy.source.signal !== 'run_failure'
-        || stopFailurePolicy.failure.class !== 'scope_violation'
-        || stopFailurePolicy.failure.retryable !== 'no'
-      ) {
-        console.error(`p2a_orchestrate failure-policy should stop non-retryable run failures: ${caseData.id}`);
-        writeResultOutput(result);
-        console.error(JSON.stringify({ stopFailurePolicy }, null, 2));
-        return { status: failureStatus(result), checks };
-      }
-
+      writeFileSync(path.join(tempRoot, 'p2a-execute-monitor', 'runs', 'run-execute-monitor-fixture.monitor-verdict.json'), JSON.stringify({ verdict: 'block', unmet_acceptance: ['Fixture unmet acceptance'] }, null, 2) + '\n', 'utf8');
       const executeMonitorRunsDir = path.join(tempRoot, 'p2a-execute-monitor', 'runs');
       const executeMonitorProposalsDir = path.join(tempRoot, 'p2a-execute-monitor', 'proposals');
       const executeMonitorUpstreamProposalsDir = path.join(tempRoot, 'p2a-execute-monitor', 'upstream-proposals');
@@ -4745,8 +3101,20 @@ function validateIterationCurrentFixtureCases() {
       const executeMonitorRunIndex = JSON.parse(readFileSync(path.join(executeMonitorRunsDir, 'run-index.json'), 'utf8'));
       const baseRunIndexEntry = executeMonitorRunIndex.runs.find((run) => run.runId === 'run-execute-monitor-fixture');
       cpSync(path.join(executeMonitorRunsDir, 'run-execute-monitor-fixture.json'), path.join(proposalRunsDir, 'run-execute-monitor-fixture.json'));
-      cpSync(path.join(executeMonitorRunsDir, 'run-execute-monitor-fixture.orchestration.json'), path.join(proposalRunsDir, 'run-execute-monitor-fixture.orchestration.json'));
+      cpSync(path.join(executeMonitorRunsDir, 'run-execute-monitor-fixture.monitor-gate.json'), path.join(proposalRunsDir, 'run-execute-monitor-fixture.monitor-gate.json'));
       cpSync(path.join(executeMonitorRunsDir, 'run-execute-monitor-fixture.monitor-verdict.json'), path.join(proposalRunsDir, 'run-execute-monitor-fixture.monitor-verdict.json'));
+      const proposalRunPath = path.join(proposalRunsDir, 'run-execute-monitor-fixture.json');
+      const proposalRun = JSON.parse(readFileSync(proposalRunPath, 'utf8'));
+      proposalRun.status = 'blocked';
+      proposalRun.finishedAt = new Date().toISOString();
+      proposalRun.updatedAt = proposalRun.finishedAt;
+      proposalRun.failure = { class: 'implementation_incomplete', retryable: 'after_fix', needsUserDecision: false, source: 'monitor' };
+      proposalRun.reproduction = { steps: ['fixture'], commands: [], notes: [] };
+      proposalRun.localization = { findings: ['fixture'], files: [] };
+      proposalRun.guard = { checks: ['fixture'], notes: [] };
+      writeFileSync(proposalRunPath, `${JSON.stringify(proposalRun, null, 2)}\n`, 'utf8');
+      baseRunIndexEntry.status = 'blocked';
+      baseRunIndexEntry.finishedAt = proposalRun.finishedAt;
       writeFileSync(path.join(proposalRunsDir, 'run-index.json'), `${JSON.stringify({
         schema_version: 'p2a.run_index.v1',
         projectId: executeMonitorRunIndex.projectId,
@@ -4776,7 +3144,6 @@ function validateIterationCurrentFixtureCases() {
       if (
         executeMonitorProposal.sourceRunId !== 'run-execute-monitor-fixture'
         || executeMonitorProposal.status !== 'proposed'
-        || !executeMonitorProposal.evidence.includes('monitor failure signal: unmet_acceptance')
         || executeMonitorProposal.target !== 'project'
         || executeMonitorProposal.quality?.score !== 100
         || executeMonitorProposal.quality?.band !== 'strong'
@@ -7940,11 +6307,9 @@ function validateIterationCurrentFixtureCases() {
         || !existsSync(path.join(iterationTargetRoot, '.plan2agent', 'scripts', 'p2a_radar_preflight.mjs'))
         || !existsSync(path.join(iterationTargetRoot, '.plan2agent', 'scripts', 'p2a_runs.mjs'))
         || !existsSync(path.join(iterationTargetRoot, '.plan2agent', 'scripts', 'p2a_execute.mjs'))
-        || !existsSync(path.join(iterationTargetRoot, '.plan2agent', 'scripts', 'p2a_orchestrate.mjs'))
+        || !existsSync(path.join(iterationTargetRoot, '.plan2agent', 'scripts', 'p2a_monitor_gate.mjs'))
         || !existsSync(path.join(iterationTargetRoot, '.plan2agent', 'scripts', 'p2a_proposals.mjs'))
 	        || !existsSync(path.join(iterationTargetRoot, '.plan2agent', 'schemas', 'run-index.schema.json'))
-	        || !existsSync(path.join(iterationTargetRoot, '.plan2agent', 'schemas', 'orchestration-plan.schema.json'))
-	        || !existsSync(path.join(iterationTargetRoot, '.plan2agent', 'schemas', 'orchestration-runtime.schema.json'))
 	        || !existsSync(path.join(iterationTargetRoot, '.plan2agent', 'schemas', 'eval-index.schema.json'))
 	        || !existsSync(path.join(iterationTargetRoot, '.plan2agent', 'schemas', 'eval-digest.schema.json'))
 	        || !existsSync(path.join(iterationTargetRoot, '.plan2agent', 'schemas', 'eval-maintenance-draft.schema.json'))
@@ -7969,19 +6334,17 @@ function validateIterationCurrentFixtureCases() {
         || !targetManifest.includedTools.includes('p2a_radar_preflight')
         || !targetManifest.includedTools.includes('p2a_runs')
         || !targetManifest.includedTools.includes('p2a_execute')
-        || !targetManifest.includedTools.includes('p2a_orchestrate')
+        || !targetManifest.includedTools.includes('p2a_monitor_gate')
         || !targetManifest.includedTools.includes('p2a_proposals')
         || !targetManifest.toolFiles.includes('.plan2agent/scripts/p2a_runs.mjs')
         || !targetManifest.toolFiles.includes('.plan2agent/scripts/p2a.mjs')
         || !targetManifest.toolFiles.includes('.plan2agent/scripts/p2a_constants.mjs')
         || !targetManifest.toolFiles.includes('.plan2agent/scripts/p2a_radar_preflight.mjs')
         || !targetManifest.toolFiles.includes('.plan2agent/scripts/p2a_execute.mjs')
-        || !targetManifest.toolFiles.includes('.plan2agent/scripts/p2a_orchestrate.mjs')
+        || !targetManifest.toolFiles.includes('.plan2agent/scripts/p2a_monitor_gate.mjs')
         || !targetManifest.toolFiles.includes('.plan2agent/scripts/p2a_proposals.mjs')
         || !targetManifest.schemaFiles.includes('.plan2agent/schemas/task-context.schema.json')
         || !targetManifest.schemaFiles.includes('.plan2agent/schemas/run-index.schema.json')
-        || !targetManifest.schemaFiles.includes('.plan2agent/schemas/orchestration-plan.schema.json')
-        || !targetManifest.schemaFiles.includes('.plan2agent/schemas/orchestration-runtime.schema.json')
         || !targetManifest.schemaFiles.includes('.plan2agent/schemas/skill-proposal.schema.json')
 	        || !targetManifest.schemaFiles.includes('.plan2agent/schemas/proposal-review.schema.json')
 	        || !targetManifest.schemaFiles.includes('.plan2agent/schemas/proposal-curation.schema.json')
