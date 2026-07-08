@@ -151,6 +151,18 @@ Return these items to the user:
 - Recommended task status: `done`, `blocked`, or keep active.
 - Optional skill-proposal schema object file path if the retrospective identifies a reusable process improvement.
 
+## Milestone Review Pass
+
+A milestone review pass is a recommended lightweight, read-only review for catching cross-cutting defects during an iteration. It is informational only and must not block close readiness, task completion, or any done/block decision; apply the same non-blocking principle used for the style-rating pass.
+
+- Timing: run one pass when roughly half of the iteration tasks are complete, and run one more pass before close-ready verification. These are recommended checkpoints, not required gates.
+- Method: perform the pass as a separate read-only review, either with a spawned CLI subagent when available or with an otherwise separated read-only reviewer. Split perspectives across one or two reviewers when useful, for example concurrency and data consistency in one pass, and API, security, and tests in another.
+- Required context injection (맥락 주입): always provide reviewers with all of the following context before they evaluate findings:
+  - The full task graph for the current iteration, including each task's status.
+  - A clear instruction that the review target is only the scope of completed tasks. Reviewers must compare suspected gaps against remaining todo tasks before classifying them, and must distinguish planned unimplemented work from real defects instead of treating all missing future work as blockers.
+  - The project's `.plan2agent/style.md` contents when present, plus the approved spec.
+- Result handling: register confirmed real defects as maintenance tasks, and cite the review source in the maintenance-task evidence. Optionally leave the review summary as a dated Markdown note next to `iterations/<id>/gate-d-review/` for an informational view only; that note is not canonical. Do not edit existing decision records such as `review.json`.
+
 ## Retrospective
 
 After execution, perform a Hermes-style retrospective gate. Look for repeated mistakes, missing verification, reusable procedures, or unclear boundaries discovered during the run. Explicitly ask: did the user correct code style during this run?
