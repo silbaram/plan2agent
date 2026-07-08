@@ -7,7 +7,6 @@ const TOP_LEVEL_COMMANDS = new Map([
   ['p2a_execute.mjs', 'execute'],
   ['p2a_tasks.mjs', 'tasks'],
   ['p2a_runs.mjs', 'runs'],
-  ['p2a_orchestrate.mjs', 'orchestrate'],
   ['p2a_proposals.mjs', 'proposals'],
 ]);
 

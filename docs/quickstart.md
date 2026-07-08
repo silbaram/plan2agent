@@ -244,7 +244,7 @@ node /path/to/plan2agent/scripts/p2a_handoff.mjs \
       p2a_tasks.mjs
       p2a_runs.mjs
       p2a_execute.mjs
-      p2a_orchestrate.mjs
+      p2a_monitor_gate.mjs
       p2a_proposals.mjs
       p2a_run_paths.mjs
       p2a_iteration_state.mjs
@@ -283,23 +283,23 @@ node .plan2agent/scripts/p2a.mjs execute plan \
 복수 agent 역할이나 monitor gate가 필요한 task는 실행 전에 오케스트레이션 계획을 만들 수 있다.
 
 ```bash
-node .plan2agent/scripts/p2a.mjs orchestrate plan \
+node .plan2agent/scripts/p2a.mjs execute start --require-monitor \
   --graph .plan2agent/artifacts/<project_id>/gate-c-task-graph/task-graph.json \
   --task task-001 \
   --output .plan2agent/orchestration/task-001.json
 
-node .plan2agent/scripts/p2a.mjs orchestrate handoff \
+node .plan2agent/scripts/p2a.mjs execute start --require-monitor \
   --plan .plan2agent/orchestration/task-001.json
 
-node .plan2agent/scripts/p2a.mjs orchestrate runner-guide \
+node .plan2agent/scripts/p2a.mjs execute resume \
   --plan .plan2agent/orchestration/task-001.json \
   --role implementer
 
-node .plan2agent/scripts/p2a.mjs orchestrate runner-doctor \
+node .plan2agent/scripts/p2a.mjs doctor --dev \
   --root . \
   --provider all
 
-node .plan2agent/scripts/p2a.mjs orchestrate runner-doctor \
+node .plan2agent/scripts/p2a.mjs doctor --dev \
   --root . \
   --provider codex \
   --live
@@ -307,16 +307,16 @@ node .plan2agent/scripts/p2a.mjs orchestrate runner-doctor \
 
 `runner-guide`는 선택 provider의 공식 foreground 기능을 어떻게 쓰면 되는지 보여주는 안내다. `runner-doctor`는 현재 프로젝트에 필요한 provider 자산과 `.plan2agent/project.config.json.providerNativeCapabilities`의 수동 capability evidence를 파일만 읽어 확인한다. `--live`를 명시하면 provider `--version`만 실행해 CLI 존재와 버전 출력만 확인한다. 둘 다 agent session을 열지 않고, owner가 공식 CLI/앱을 직접 열어 prompt를 붙여넣는 전제를 유지한다. 붙여넣은 foreground 세션 안에서 provider-native skill/subagent/custom agent/agent team을 쓰는 것은 허용되는 감독형 자동화다.
 
-blocked runtime에서는 `node .plan2agent/scripts/p2a.mjs orchestrate failure-policy --runtime <runtime-path>`로 다음 조치를 `retry`, `ask_user`, `stop` 중 하나로 확인한다. 이 명령도 후속 조치만 계산하며 provider CLI나 재시도 run을 자동으로 시작하지 않는다.
+blocked runtime에서는 `node .plan2agent/scripts/p2a.mjs proposals mine --runtime <runtime-path>`로 다음 조치를 `retry`, `ask_user`, `stop` 중 하나로 확인한다. 이 명령도 후속 조치만 계산하며 provider CLI나 재시도 run을 자동으로 시작하지 않는다.
 
-task를 시작하고 run log를 연다. 출력되는 manual launcher prompt를 Codex/Claude 같은 감독형 agent 세션에 붙여넣는다. 오케스트레이션 계획을 만들지 않았다면 `--orchestration-plan` 옵션은 빼고 실행한다. 이 옵션을 넘기면 `runs/<runId>.orchestration.json`과 `runs/<runId>.orchestration-runtime.json`이 함께 생성된다.
+task를 시작하고 run log를 연다. 출력되는 manual launcher prompt를 Codex/Claude 같은 감독형 agent 세션에 붙여넣는다. 오케스트레이션 계획을 만들지 않았다면 `--require-monitor` 옵션은 빼고 실행한다. 이 옵션을 넘기면 `runs/<runId>.orchestration.json`과 `runs/<runId>.monitor-gate.json`이 함께 생성된다.
 
 ```bash
 node .plan2agent/scripts/p2a.mjs execute start \
   --graph .plan2agent/artifacts/<project_id>/gate-c-task-graph/task-graph.json \
   --task task-001 \
   --agent-tool codex \
-  --orchestration-plan .plan2agent/orchestration/task-001.json \
+  --require-monitor \
   --workspace . \
   --workspace-ref target-project
 ```

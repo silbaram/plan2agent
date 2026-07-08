@@ -49,7 +49,7 @@ Codex write-capable runs use native `workspace-write` sandbox confinement inside
    node .plan2agent/scripts/p2a_execute.mjs start --artifacts <dir> --task <id> --agent-tool codex --isolation worktree --worktree <fresh-worktree-path> --create-isolation
    ```
 
-   Use `p2a_execute start`, not raw `p2a_runs start`, because it creates the run and marks the task `in_progress` in one lifecycle step. If the project has a supervised orchestration plan, pass `--orchestration-plan <path>` so the monitor gate sidecar is attached to the run.
+   Use `p2a_execute start`, not raw `p2a_runs start`, because it creates the run and marks the task `in_progress` in one lifecycle step. If the task requires independent monitor evidence, pass `--require-monitor` so the run records a monitor gate requirement.
 
    The worktree path must be a fresh empty path, following the `project.config.json` `runTracking.worktreePattern` convention (for example, `../.worktrees/<taskId>-<runId>`).
    Run this command from an existing git workspace; the fresh worktree path does not need to exist before `--create-isolation`.
@@ -74,7 +74,7 @@ Codex write-capable runs use native `workspace-write` sandbox confinement inside
 
    If the user provides explicit verification commands, pass them through as explicit commands such as `--test-command`, `--lint-command`, or `--typecheck-command`. Config-only verification flags such as `--test`, `--lint`, and `--typecheck` auto-detect project commands when config is empty, then skip only if no command can be detected. Use explicit commands whenever config is empty and real verification is required.
 
-7. Run the independent monitor gate before finish when the run has an orchestration sidecar. Invoke `p2a-performance-monitor` as a separate subagent when the CLI supports spawning subagents, or perform a separated read-only review pass when spawning is unavailable. Pass the target task id, acceptance criteria, and the latest run log for that task, including `verification`, `changedFiles`, `status`, and `workspaceRef`.
+7. Run the independent monitor gate before finish when the run was started with `--require-monitor`. Invoke `p2a-performance-monitor` as a separate subagent when the CLI supports spawning subagents, or perform a separated read-only review pass when spawning is unavailable. Pass the target task id, acceptance criteria, and the latest run log for that task, including `verification`, `changedFiles`, `status`, and `workspaceRef`.
 
    Write the monitor result to the run's `runs/<runId>.monitor-verdict.json` path using this shape:
 
@@ -89,7 +89,7 @@ Codex write-capable runs use native `workspace-write` sandbox confinement inside
    }
    ```
 
-   Use `verdict: "block"` and fill the relevant concern array when the task should not be accepted. When multiple concern arrays are populated, failure-class mapping priority is `scope_concerns` → `verification_concerns` → `unmet_acceptance` → `needs_user_decision`. `p2a_execute finish` and `p2a_runs finish` both enforce this verdict when an orchestration sidecar requires a monitor gate.
+   Use `verdict: "block"` and fill the relevant concern array when the task should not be accepted. When multiple concern arrays are populated, failure-class mapping priority is `scope_concerns` → `verification_concerns` → `unmet_acceptance` → `needs_user_decision`. `p2a_execute finish` and `p2a_runs finish` both enforce this verdict when the run requires a monitor gate.
 
 8. Run the style-rating pass before finish when the target project contains `.plan2agent/style.md` with at least one filled section. If `.plan2agent/style.md` exists and has any filled section, this pass is required before finish. Invoke `p2a-style-rater` as a separate read-only subagent when the CLI supports spawning subagents, or perform a separated read-only review pass when spawning is unavailable. Pass the target task id, the run's `changedFiles` list, and the complete `.plan2agent/style.md` contents. If the pass is skipped for any reason, explicitly record in the run notes that it was skipped and why; silent omission is forbidden.
 
@@ -150,6 +150,18 @@ Return these items to the user:
 - Verification summary with commands and outcomes.
 - Recommended task status: `done`, `blocked`, or keep active.
 - Optional skill-proposal schema object file path if the retrospective identifies a reusable process improvement.
+
+## Milestone Review Pass
+
+A milestone review pass is a recommended lightweight, read-only review for catching cross-cutting defects during an iteration. It is informational only and must not block close readiness, task completion, or any done/block decision; apply the same non-blocking principle used for the style-rating pass.
+
+- Timing: run one pass when roughly half of the iteration tasks are complete, and run one more pass before close-ready verification. These are recommended checkpoints, not required gates.
+- Method: perform the pass as a separate read-only review, either with a spawned CLI subagent when available or with an otherwise separated read-only reviewer. Split perspectives across one or two reviewers when useful, for example concurrency and data consistency in one pass, and API, security, and tests in another.
+- Required context injection (맥락 주입): always provide reviewers with all of the following context before they evaluate findings:
+  - The full task graph for the current iteration, including each task's status.
+  - A clear instruction that the review target is only the scope of completed tasks. Reviewers must compare suspected gaps against remaining todo tasks before classifying them, and must distinguish planned unimplemented work from real defects instead of treating all missing future work as blockers.
+  - The project's `.plan2agent/style.md` contents when present, plus the approved spec.
+- Result handling: register confirmed real defects as maintenance tasks, and cite the review source in the maintenance-task evidence. Optionally leave the review summary as a dated Markdown note next to `iterations/<id>/gate-d-review/` for an informational view only; that note is not canonical. Do not edit existing decision records such as `review.json`.
 
 ## Retrospective
 

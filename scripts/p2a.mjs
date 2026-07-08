@@ -18,7 +18,6 @@ const RUNTIME_COMMANDS = new Map([
   ['run', { script: 'p2a_runs.mjs' }],
   ['runs', { script: 'p2a_runs.mjs' }],
   ['execute', { script: 'p2a_execute.mjs' }],
-  ['orchestrate', { script: 'p2a_orchestrate.mjs' }],
   ['proposal', { script: 'p2a_proposals.mjs' }],
   ['proposals', { script: 'p2a_proposals.mjs' }],
   ['eval', { script: 'p2a_eval.mjs' }],
@@ -46,7 +45,7 @@ function usage() {
     '  node .plan2agent/scripts/p2a.mjs eval <grade|compare|analyze|generate|digest> [options]',
     '  node .plan2agent/scripts/p2a.mjs memory <status|push|pull|search|history|digest> [options]',
     '  node .plan2agent/scripts/p2a.mjs execute <plan|start|resume|status|finish> [options]',
-    '  node .plan2agent/scripts/p2a.mjs tasks|runs|iteration|orchestrate|proposals|validate ...',
+    '  node .plan2agent/scripts/p2a.mjs tasks|runs|iteration|proposals|validate ...',
     '',
     'Repo checkout examples:',
     '  node scripts/p2a.mjs scaffold --target <project-dir>',
@@ -596,10 +595,9 @@ function buildInfo(targetRootInput) {
       nextActions.push('Repair orchestration capability manifest/config drift: node .plan2agent/scripts/p2a.mjs enhance orchestration');
     } else {
       const orchestrationAgentTool = resolveOrchestrationAgentTool(config, manifest);
-      nextActions.push('Check provider runner readiness: node .plan2agent/scripts/p2a.mjs orchestrate runner-doctor --root .');
       if (artifacts.length) {
-        nextActions.push(`Plan supervised orchestration: node .plan2agent/scripts/p2a.mjs orchestrate plan --artifacts ${artifacts[0].artifactRoot} --task <task-id> --agent-tool ${orchestrationAgentTool} --output .plan2agent/orchestration/<task-id>.json`);
-        nextActions.push(`Start supervised run with orchestration: node .plan2agent/scripts/p2a.mjs execute start --artifacts ${artifacts[0].artifactRoot} --task <task-id> --agent-tool ${orchestrationAgentTool} --orchestration-plan .plan2agent/orchestration/<task-id>.json`);
+        nextActions.push(`Start run with monitor gate: node .plan2agent/scripts/p2a.mjs execute start --artifacts ${artifacts[0].artifactRoot} --task <task-id> --agent-tool ${orchestrationAgentTool} --require-monitor`);
+        nextActions.push(`Start supervised run with monitor gate: node .plan2agent/scripts/p2a.mjs execute start --artifacts ${artifacts[0].artifactRoot} --task <task-id> --agent-tool ${orchestrationAgentTool} --require-monitor`);
       }
     }
   }
@@ -653,7 +651,7 @@ function printInfo(info) {
   }
   if (info.enhancements?.orchestration?.enabled) {
     const orchestration = info.enhancements.orchestration;
-    console.log(`- orchestration: mode=${orchestration.defaultMode} sync=${orchestration.inSync ? 'ok' : 'drift'} supervisedRun=${orchestration.supervisedRun ? 'yes' : 'no'} providerRouting=${orchestration.providerRouting} monitorGatePolicy=${orchestration.monitorGatePolicy} runtimeDir=${orchestration.runtimeDir}`);
+    console.log(`- monitor gate: sync=${orchestration.inSync ? 'ok' : 'drift'} policy=${orchestration.monitorGatePolicy}`);
   }
   for (const artifact of info.artifacts) {
     const active = artifact.activeIteration ? ` active=${artifact.activeIteration}` : '';

@@ -25,16 +25,13 @@ const EMPTY_TASK_COUNTS = {
 const DEV_PROVIDER_FILES = {
   codex: [
     path.join('.agents', 'skills', 'p2a-dev-execution', 'SKILL.md'),
-    path.join('.agents', 'agents', 'p2a-dev-orchestrator.md'),
     path.join('.agents', 'agents', 'p2a-implementer.md'),
     path.join('.agents', 'agents', 'p2a-performance-monitor.md'),
-    path.join('.codex', 'agents', 'p2a-dev-orchestrator.toml'),
     path.join('.codex', 'agents', 'p2a-implementer.toml'),
     path.join('.codex', 'agents', 'p2a-performance-monitor.toml'),
   ],
   claude: [
     path.join('.claude', 'skills', 'p2a-dev-execution', 'SKILL.md'),
-    path.join('.claude', 'agents', 'p2a-dev-orchestrator.md'),
     path.join('.claude', 'agents', 'p2a-implementer.md'),
     path.join('.claude', 'agents', 'p2a-performance-monitor.md'),
     path.join('.claude', 'hooks', 'p2a-confine-workspace.mjs'),
@@ -42,10 +39,8 @@ const DEV_PROVIDER_FILES = {
   ],
   gemini: [
     path.join('.agents', 'skills', 'p2a-dev-execution', 'SKILL.md'),
-    path.join('.agents', 'agents', 'p2a-dev-orchestrator.md'),
     path.join('.agents', 'agents', 'p2a-implementer.md'),
     path.join('.agents', 'agents', 'p2a-performance-monitor.md'),
-    path.join('.gemini', 'agents', 'p2a-dev-orchestrator.md'),
     path.join('.gemini', 'agents', 'p2a-implementer.md'),
     path.join('.gemini', 'agents', 'p2a-performance-monitor.md'),
     path.join('.gemini', 'commands', 'p2a', 'dev-execution.toml'),
@@ -60,8 +55,6 @@ const PROPOSAL_SCHEMA_FILES = [
   'proposal-draft-approval.schema.json',
 ];
 const ORCHESTRATION_SCHEMA_FILES = [
-  'orchestration-plan.schema.json',
-  'orchestration-runtime.schema.json',
 ];
 const ORCHESTRATION_MODES = new Set(['solo', 'solo_monitor', 'team']);
 
@@ -684,9 +677,9 @@ function orchestrationCapabilityChecks(targetRoot, state) {
       : check('capability_orchestration_config', 'Orchestration capability config', 'fail', 'manifest enables orchestration but project.config.json orchestration.enabled is not true'),
   );
   checks.push(
-    isFile(path.join(targetRoot, '.plan2agent', 'scripts', 'p2a_orchestrate.mjs'))
-      ? check('capability_orchestration_runtime', 'Orchestration runtime script', 'pass', '.plan2agent/scripts/p2a_orchestrate.mjs is installed')
-      : check('capability_orchestration_runtime', 'Orchestration runtime script', 'fail', 'p2a_orchestrate.mjs is missing from the project runtime'),
+    isFile(path.join(targetRoot, '.plan2agent', 'scripts', 'p2a_monitor_gate.mjs'))
+      ? check('capability_orchestration_runtime', 'Monitor gate helper', 'pass', '.plan2agent/scripts/p2a_monitor_gate.mjs is installed')
+      : check('capability_orchestration_runtime', 'Monitor gate helper', 'fail', 'p2a_monitor_gate.mjs is missing from the project runtime'),
   );
   const missingSchemas = ORCHESTRATION_SCHEMA_FILES
     .map((file) => `.plan2agent/schemas/${file}`)
@@ -697,29 +690,9 @@ function orchestrationCapabilityChecks(targetRoot, state) {
       : check('capability_orchestration_schemas', 'Orchestration schemas', 'pass', `${ORCHESTRATION_SCHEMA_FILES.length} orchestration schemas are installed`),
   );
   checks.push(
-    ORCHESTRATION_MODES.has(orchestrationConfig.defaultMode ?? 'solo')
-      ? check('capability_orchestration_default_mode', 'Orchestration default mode', 'pass', `defaultMode=${orchestrationConfig.defaultMode ?? 'solo'}`)
-      : check('capability_orchestration_default_mode', 'Orchestration default mode', 'fail', `orchestration.defaultMode must be one of ${[...ORCHESTRATION_MODES].join(', ')}`),
-  );
-  checks.push(
-    orchestrationConfig.supervisedRun === true
-      ? check('capability_orchestration_supervision', 'Orchestration supervision', 'pass', 'supervisedRun is enabled')
-      : check('capability_orchestration_supervision', 'Orchestration supervision', 'fail', 'orchestration.supervisedRun must remain true'),
-  );
-  checks.push(
-    orchestrationConfig.providerRouting === 'project_config'
-      ? check('capability_orchestration_provider_routing', 'Orchestration provider routing', 'pass', 'provider routing uses project_config')
-      : check('capability_orchestration_provider_routing', 'Orchestration provider routing', 'fail', 'orchestration.providerRouting must remain project_config'),
-  );
-  checks.push(
-    orchestrationConfig.monitorGatePolicy === 'explicit_plan_only'
-      ? check('capability_orchestration_monitor_gate', 'Orchestration monitor gate', 'pass', 'monitor gates require explicit orchestration plans')
-      : check('capability_orchestration_monitor_gate', 'Orchestration monitor gate', 'fail', 'orchestration.monitorGatePolicy must remain explicit_plan_only'),
-  );
-  checks.push(
-    typeof orchestrationConfig.runtimeDir === 'string' && orchestrationConfig.runtimeDir.trim()
-      ? check('capability_orchestration_runtime_dir', 'Orchestration runtime dir', 'pass', `runtimeDir=${orchestrationConfig.runtimeDir}`)
-      : check('capability_orchestration_runtime_dir', 'Orchestration runtime dir', 'warn', 'orchestration.runtimeDir is not configured; default .plan2agent/runs will be used'),
+    orchestrationConfig.monitorGatePolicy === 'explicit_require_monitor'
+      ? check('capability_orchestration_monitor_gate', 'Orchestration monitor gate', 'pass', 'monitor gates require explicit --require-monitor runs')
+      : check('capability_orchestration_monitor_gate', 'Orchestration monitor gate', 'fail', 'orchestration.monitorGatePolicy must remain explicit_require_monitor'),
   );
   return checks;
 }
@@ -950,11 +923,8 @@ function nextActions(status, checks) {
     || checks.some((item) => item.id === 'capability_orchestration_schemas' && item.status === 'fail')) {
     actions.push('Run p2a.mjs upgrade --dry-run from the scaffolded project, then apply the reviewed orchestration runtime/schema update.');
   }
-  if (checks.some((item) => item.id === 'capability_orchestration_supervision' && item.status === 'fail')
-    || checks.some((item) => item.id === 'capability_orchestration_provider_routing' && item.status === 'fail')
-    || checks.some((item) => item.id === 'capability_orchestration_monitor_gate' && item.status === 'fail')
-    || checks.some((item) => item.id === 'capability_orchestration_default_mode' && item.status === 'fail')) {
-    actions.push('Restore orchestration supervisedRun, providerRouting, monitorGatePolicy, and defaultMode before using supervised orchestration.');
+  if (checks.some((item) => item.id === 'capability_orchestration_monitor_gate' && item.status === 'fail')) {
+    actions.push('Restore orchestration monitorGatePolicy before using monitor-gated execution.');
   }
   if (checks.some((item) => item.id === 'capability_proposals_manifest' && item.status === 'fail')
     || checks.some((item) => item.id === 'capability_proposals_config' && item.status === 'fail')) {
