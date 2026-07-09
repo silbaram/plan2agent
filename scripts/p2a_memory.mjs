@@ -565,15 +565,18 @@ function buildMemoryPlan(args) {
   const proposalSnapshots = buildProposalSnapshots(context, projectCanonicalId, iterationCanonicalId, baseMetadata);
   const taskGraph = buildTaskGraphSnapshot(context, projectCanonicalId, iterationCanonicalId, documents, baseMetadata);
   const tasks = taskGraph ? buildTaskSnapshots(context, projectCanonicalId, iterationCanonicalId, taskGraph, baseMetadata) : [];
-  const runs = buildRunSnapshots(context, projectCanonicalId, iterationCanonicalId, tasks, baseMetadata);
+  const runSync = buildRunSyncSnapshots(context, projectCanonicalId, iterationCanonicalId, taskGraph, tasks, baseMetadata);
+  const taskGraphs = [taskGraph, ...runSync.taskGraphs].filter(Boolean);
+  const allTasks = [...tasks, ...runSync.tasks];
+  const runs = { runs: runSync.runs, skippedRuns: runSync.skippedRuns };
   const chunks = [...documents, ...proposalSnapshots.proposals].flatMap((document) => document.chunks);
   const syncItems = [
     localItem(project.artifactType, project.id, project.sourceKey, null, project.request.metadata),
     localItem(iteration.artifactType, iteration.id, iteration.sourceKey, null, iteration.request.metadata),
     ...documents.map((document) => localItem('DOCUMENT_SNAPSHOT', document.id, document.sourceKey, document.contentHash, document.request.metadata, document.sourcePath)),
     ...proposalSnapshots.proposals.map((proposal) => localItem('PROPOSAL', proposal.id, proposal.sourceKey, proposal.contentHash, proposal.request.metadata, proposal.sourcePath)),
-    ...(taskGraph ? [localItem('TASK_GRAPH', taskGraph.id, taskGraph.sourceKey, taskGraph.graphHash, taskGraph.request.metadata, taskGraph.sourcePath)] : []),
-    ...tasks.map((task) => localItem('TASK', task.id, task.sourceKey, null, task.request.metadata)),
+    ...taskGraphs.map((graph) => localItem('TASK_GRAPH', graph.id, graph.sourceKey, graph.graphHash, graph.request.metadata, graph.sourcePath)),
+    ...allTasks.map((task) => localItem('TASK', task.id, task.sourceKey, null, task.request.metadata)),
     ...runs.runs.map((run) => localItem('RUN_RECORD', run.id, run.sourceKey, run.contentHash, run.request.metadata, run.sourcePath)),
     ...chunks.map((chunk) => localItem('DOCUMENT_CHUNK', chunk.id, chunk.sourceKey, chunk.chunkHash, chunk.request.chunk.metadata, chunk.sourcePath)),
   ];
@@ -594,7 +597,8 @@ function buildMemoryPlan(args) {
     documents,
     proposals: proposalSnapshots.proposals,
     taskGraph,
-    tasks,
+    taskGraphs,
+    tasks: allTasks,
     runs: runs.runs,
     skippedRuns: [...context.runs.skippedRuns, ...runs.skippedRuns],
     skippedProposals: proposalSnapshots.skippedProposals,
@@ -604,8 +608,8 @@ function buildMemoryPlan(args) {
       documents,
       proposals: proposalSnapshots.proposals,
       chunks,
-      taskGraph,
-      tasks,
+      taskGraphs,
+      tasks: allTasks,
       runs: runs.runs,
       skippedRuns: [...context.runs.skippedRuns, ...runs.skippedRuns],
       skippedProposals: proposalSnapshots.skippedProposals,
@@ -633,14 +637,14 @@ function localItem(artifactType, artifactId, sourceKey, contentHash, sourceIds, 
   };
 }
 
-function summarizePlan({ documents, proposals, chunks, taskGraph, tasks, runs, skippedRuns, skippedProposals }) {
+function summarizePlan({ documents, proposals, chunks, taskGraphs, taskGraph, tasks, runs, skippedRuns, skippedProposals }) {
   return {
     projects: 1,
     iterations: 1,
     documents: documents.length,
     proposals: proposals.length,
     chunks: chunks.length,
-    taskGraphs: taskGraph ? 1 : 0,
+    taskGraphs: Array.isArray(taskGraphs) ? taskGraphs.length : (taskGraph ? 1 : 0),
     tasks: tasks.length,
     runs: runs.length,
     skippedRuns: skippedRuns.length,
@@ -928,28 +932,121 @@ function memoryRunStatus(status) {
   return map[status] ?? 'STARTED';
 }
 
-function buildRunSnapshots(context, projectCanonicalId, iterationCanonicalId, tasks, baseMetadata) {
-  const taskBySourceId = new Map(tasks.map((task) => [task.sourceTaskId, task]));
+function buildRunSyncSnapshots(context, projectCanonicalId, activeIterationCanonicalId, activeTaskGraph, activeTasks, baseMetadata) {
+  const graphGroups = new Map();
   const runs = [];
   const skippedRuns = [];
+
+  function ensureGroup(run) {
+    if (context.sourceKind === 'runs') {
+      const key = `runs:${context.iterationId}`;
+      if (!graphGroups.has(key)) graphGroups.set(key, {
+        context,
+        iterationCanonicalId: activeIterationCanonicalId,
+        taskGraph: null,
+        tasks: [],
+        extra: false,
+      });
+      return { group: graphGroups.get(key), graphPath: context.sourcePath };
+    }
+
+    const resolution = resolveRunTaskGraphContext(context, run);
+    if (resolution.error) return resolution;
+    const { graphContext } = resolution;
+    const iterationCanonicalId = stableId('p2a-iteration', [graphContext.projectId, graphContext.iterationId]);
+    const key = normalizePath(graphContext.graphPath);
+    if (!graphGroups.has(key)) {
+      const isActiveGraph = activeTaskGraph && context.graphPath && normalizePath(context.graphPath) === key;
+      if (isActiveGraph) {
+        graphGroups.set(key, {
+          context,
+          iterationCanonicalId: activeIterationCanonicalId,
+          taskGraph: activeTaskGraph,
+          tasks: activeTasks,
+          extra: false,
+        });
+      } else {
+        const graphSnapshot = buildTaskGraphSnapshot(graphContext, projectCanonicalId, iterationCanonicalId, [], graphContext.baseMetadata);
+        const taskSnapshots = graphSnapshot ? buildTaskSnapshots(graphContext, projectCanonicalId, iterationCanonicalId, graphSnapshot, graphContext.baseMetadata) : [];
+        graphGroups.set(key, {
+          context: graphContext,
+          iterationCanonicalId,
+          taskGraph: graphSnapshot,
+          tasks: taskSnapshots,
+          extra: true,
+        });
+      }
+    }
+    return { group: graphGroups.get(key), graphPath: graphContext.graphPath };
+  }
+
   for (const item of context.runs.runs) {
     const { run } = item;
-    const task = taskBySourceId.get(run.taskId);
+    const resolved = ensureGroup(run);
+    if (resolved.error) {
+      skippedRuns.push({ runId: run.runId, reason: resolved.error });
+      continue;
+    }
+    const { group, graphPath } = resolved;
+    const task = group.tasks.find((candidate) => candidate.sourceTaskId === run.taskId);
     if (!task) {
       if (context.sourceKind === 'runs') {
         const taskId = stableId('p2a-task', [context.projectId, context.iterationId, run.taskId]);
-        runs.push(buildRunSnapshot(context, projectCanonicalId, iterationCanonicalId, taskId, baseMetadata, item));
+        runs.push(buildRunSnapshot(context, projectCanonicalId, activeIterationCanonicalId, taskId, baseMetadata, item));
         continue;
       }
       skippedRuns.push({
         runId: run.runId,
-        reason: `run task ${run.taskId} is not in the selected task graph`,
+        reason: `run task ${run.taskId} was not found in task graph ${displayPath(graphPath)}`,
       });
       continue;
     }
-    runs.push(buildRunSnapshot(context, projectCanonicalId, iterationCanonicalId, task.id, baseMetadata, item));
+    runs.push(buildRunSnapshot(group.context, projectCanonicalId, group.iterationCanonicalId, task.id, group.context.baseMetadata ?? baseMetadata, item));
   }
-  return { runs, skippedRuns };
+
+  const extraGroups = [...graphGroups.values()].filter((group) => group.extra);
+  return {
+    taskGraphs: extraGroups.map((group) => group.taskGraph).filter(Boolean),
+    tasks: extraGroups.flatMap((group) => group.tasks),
+    runs,
+    skippedRuns,
+  };
+}
+
+function resolveRunTaskGraphContext(context, run) {
+  if (!context.artifactRoot) return { graphContext: context };
+  const runIterationId = run.sourceLayout === 'maintenance' || run.iterationId === 'maintenance'
+    ? 'maintenance'
+    : run.iterationId;
+  if (!runIterationId) return { error: `run ${run.runId} has no iterationId to resolve a task graph` };
+  const graphPath = path.join(context.artifactRoot, 'iterations', runIterationId, 'gate-c-task-graph', 'task-graph.json');
+  if (!fileExists(graphPath)) return { error: `task graph not found for run iteration ${runIterationId}: ${displayPath(graphPath)}` };
+  try {
+    const graph = validateTaskGraph(graphPath);
+    const rawGraph = readFileSync(graphPath, 'utf8');
+    const iterationBaseMetadata = metadata({
+      sourceProjectId: run.projectId || context.projectId,
+      sourceIterationId: runIterationId,
+      p2aSourceKind: context.sourceKind,
+      sourceLayout: run.sourceLayout,
+    });
+    return {
+      graphContext: {
+        ...context,
+        projectId: run.projectId || context.projectId,
+        iterationId: runIterationId,
+        iterationLabel: runIterationId,
+        currentSpecPath: graphPath,
+        graphPath,
+        graph,
+        rawGraph,
+        documentPaths: [],
+        baseMetadata: iterationBaseMetadata,
+      },
+    };
+  } catch (error) {
+    return { error: `task graph ${displayPath(graphPath)} could not be loaded: ${errorMessage(error)}` };
+  }
 }
 
 function buildRunSnapshot(context, projectCanonicalId, iterationCanonicalId, taskId, baseMetadata, item) {
@@ -957,6 +1054,7 @@ function buildRunSnapshot(context, projectCanonicalId, iterationCanonicalId, tas
   const runId = stableId('p2a-run', [context.projectId, context.iterationId, run.runId]);
   const runMetadata = metadata({
     ...baseMetadata,
+    sourceTaskGraphId: context.graphPath ? sourceTaskGraphId(context.projectId, context.iterationId, displayPath(context.graphPath)) : null,
     sourceTaskId: run.taskId,
     sourceRunId: run.runId,
     taskTitle: run.taskTitle,
@@ -2100,14 +2198,17 @@ async function pushPlan(connection, plan) {
       result.chunks.push(...chunkResponse);
     }
   }
-  if (plan.taskGraph) {
-    result.taskGraph = await memoryPost(connection, '/task-graphs', plan.taskGraph.request);
-  }
-  if (plan.tasks.length) {
-    result.tasks = await memoryPost(connection, '/tasks/bulk', {
-      graphId: plan.taskGraph.id,
-      tasks: plan.tasks.map((task) => task.request),
-    });
+  for (const graph of plan.taskGraphs ?? (plan.taskGraph ? [plan.taskGraph] : [])) {
+    const graphResponse = await memoryPost(connection, '/task-graphs', graph.request);
+    if (!result.taskGraph) result.taskGraph = graphResponse;
+    const graphTasks = plan.tasks.filter((task) => task.request.taskGraphId === graph.id);
+    if (graphTasks.length) {
+      const taskResponses = await memoryPost(connection, '/tasks/bulk', {
+        graphId: graph.id,
+        tasks: graphTasks.map((task) => task.request),
+      });
+      result.tasks.push(...taskResponses);
+    }
   }
   for (const run of plan.runs) {
     result.runs.push(await memoryPost(connection, '/runs', run.request));
@@ -2118,6 +2219,7 @@ async function pushPlan(connection, plan) {
     documents: plan.documents.length,
     proposals: plan.proposals.length,
     taskGraphId: result.taskGraph?.taskGraphId ?? null,
+    taskGraphs: (plan.taskGraphs ?? (plan.taskGraph ? [plan.taskGraph] : [])).length,
     tasks: result.tasks.length,
     runs: result.runs.length,
     chunks: result.chunks.length,
@@ -2129,7 +2231,7 @@ function printPushResult(payload) {
   console.log(`- project: ${payload.context.projectId}`);
   console.log(`- iteration: ${payload.context.iterationId}`);
   console.log(`- server: ${payload.server.url}`);
-  console.log(`- wrote: documents=${payload.result.documents} proposals=${payload.result.proposals} chunks=${payload.result.chunks} taskGraph=${payload.result.taskGraphId ? 1 : 0} tasks=${payload.result.tasks} runs=${payload.result.runs}`);
+  console.log(`- wrote: documents=${payload.result.documents} proposals=${payload.result.proposals} chunks=${payload.result.chunks} taskGraph=${payload.result.taskGraphs ?? (payload.result.taskGraphId ? 1 : 0)} tasks=${payload.result.tasks} runs=${payload.result.runs}`);
   if (payload.skippedRuns.length) console.log(`- skipped runs: ${payload.skippedRuns.length}`);
   if (payload.skippedProposals.length) console.log(`- skipped proposals: ${payload.skippedProposals.length}`);
 }
