@@ -2015,6 +2015,15 @@ function validateEvalFixtureCases() {
 
 function validateMemoryFixtureCases() {
   let checks = 0;
+
+  let attributionResult = spawnSync(process.execPath, ['--test', path.join(ROOT, 'tests', 'memory-run-attribution.test.mjs')], { cwd: ROOT, encoding: 'utf8' });
+  checks += 1;
+  if (attributionResult.status !== 0) {
+    console.error('memory run attribution node:test fixture failed');
+    writeResultOutput(attributionResult);
+    return { status: failureStatus(attributionResult), checks };
+  }
+
   const graphPath = path.join(FIXTURE_ROOT, 'webhook-api-service', 'task-graph.json');
 
   let result = runMemory(['status', '--graph', graphPath]);
