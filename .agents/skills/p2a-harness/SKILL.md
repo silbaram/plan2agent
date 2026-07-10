@@ -74,6 +74,23 @@ This is a narrative-first recommended structure, not a blank form. Preserve the 
 - Carry forward stable artifact ids (`project_id`, `source_intake`, `sourceSpec`) so later stages can trace their source. Use the gate-folder paths for cross-artifact references, for example `.plan2agent/artifacts/<project_id>/gate-a-intake/intake.json` for `source_intake` and `.plan2agent/artifacts/<project_id>/gate-b-spec/spec.json` for `sourceSpec`.
 - If an artifact is pasted in Markdown only, reconstruct the matching JSON contract before advancing to the next gate.
 
+## Starting From Existing Documents
+
+Rich input documents make gates faster, not skippable. Classify document input before
+the first gate:
+
+1. **General design or plan documents** (for example `DESIGN.md`, `PLAN.md`, or files
+   under `docs/`) are `LOCAL-n` input evidence. Run the full pipeline from Gate A: use
+   the documents to populate `known_facts`, reduce open questions, and cite them in
+   rationale. Present the Gate A analysis and stop for approval even when no decision
+   remains open.
+2. **Prior Plan2Agent artifacts available only as Markdown** must be reconstructed into
+   their JSON contracts first. Approval state still governs: a reconstructed spec
+   without a recorded user `approval_audit` is `draft` and stops at Gate B
+3. **Canonical artifacts under `.plan2agent/artifacts/<project_id>/` with recorded
+   approvals** are the only input that justifies resuming past a gate, and only up to
+   the last recorded approval.
+
 ## State Passing Contract
 
 Return intermediate artifacts in fenced code blocks named exactly:
@@ -120,6 +137,11 @@ When Gate B is approved, record this object in `spec_json.approval_audit`:
 
 Use the actual approver label and date available in the conversation. If the exact person is unknown, use `user`; do not invent names.
 
+Record `approval: approved` and `approval_audit` only in direct response to an explicit
+user approval message in the current conversation, and make `approval_note` quote or
+reference that message. Never set `approval: approved` on your own judgmen
+input documents or context imply consent.
+
 ### Facts From Tools
 
 Do not retype gate status facts from memory. Pull gate status, task counts, `ready` / `in_progress` state, approval state, and blocking counts from the artifacts and tools: `spec.json` (`approval`, `open_decisions`), `task-graph.json`, `p2a_tasks` (`list` / `ready`), `validate_artifacts`, and `review.json.blocking_issues`. If a fact cannot be derived from those sources, mark it as unknown or pending rather than inventing it.
@@ -148,5 +170,12 @@ Do not retype gate status facts from memory. Pull gate status, task counts, `rea
 - Treat JSON as canonical. Markdown files are generated views/exports and must not be used as independent state.
 - Do not claim that implementation happened.
 - Mark unresolved decisions as `needs_user_decision`.
+- Existing design or plan documents in the target repository, however complete, are
+  `LOCAL-n` input evidence only. They never justify skipping a gate, producing more than
+  one gate's artifacts, or treating any gate as approved.
+- Broad instructions such as "let's develop this" authorize starting at th
+  applicable gate only; they are not approval for later gates or for implementation.
+- Never produce artifacts for more than one gate in a single turn. After presenting a
+  gate, stop and wait for the user's explicit response.
 - Keep tasks small enough for one agent or developer to complete independently.
 - After Gate D passes in a co-located scaffold project, stop before development execution and direct the user to convert the greenfield gate bundle with `p2a_iteration init`; do not set or recommend `.plan2agent/project.config.json.taskGraph` to the root `gate-c-task-graph/task-graph.json`.
