@@ -29,7 +29,7 @@ import {
 } from './p2a_iteration_state.mjs';
 
 const P2A_PATHS = resolveP2aPaths(import.meta.url);
-const COMMANDS = new Set(['status', 'push', 'pull', 'search', 'history', 'digest']);
+const COMMANDS = new Set(['status', 'push', 'pull', 'search', 'history', 'digest', 'trace', 'impact', 'precedent']);
 const DEFAULT_MEMORY_URL_ENV = 'P2A_MEMORY_URL';
 const DEFAULT_MEMORY_TOKEN_ENV = 'P2A_MEMORY_TOKEN';
 const DEFAULT_ARTIFACT_LIMIT = 5000;
@@ -72,6 +72,9 @@ function usage() {
     '  node .plan2agent/scripts/p2a_memory.mjs search --query <text> [--artifacts <dir>|--graph <path>|--runs <dir>|--global] [--type <kind>] [--source-path <path>] [--limit <n>] [--server <url>] [--token <token>] [--output <path>] [--json]',
     '  node .plan2agent/scripts/p2a_memory.mjs history [--artifacts <dir>|--graph <path>|--runs <dir>|--global] [--project <id>] [--iteration <id>] [--limit <n>] [--server <url>] [--token <token>] [--output <path>] [--json]',
     '  node .plan2agent/scripts/p2a_memory.mjs digest (--artifacts <dir>|--graph <path>|--runs <dir>) [--proposals <dir>] [--output <path>] [--json]',
+    '  node .plan2agent/scripts/p2a_memory.mjs trace --node <naturalKey> [--project <sourceProjectId>] [--direction upstream|downstream|both] [--depth <n>] [--artifacts <dir>|--graph <path>|--runs <dir>|--global] [--server <url>] [--token <token>] [--output <path>] [--json]',
+    '  node .plan2agent/scripts/p2a_memory.mjs impact --node <naturalKey> [--project <sourceProjectId>] [--depth <n>] [--artifacts <dir>|--graph <path>|--runs <dir>|--global] [--server <url>] [--token <token>] [--output <path>] [--json]',
+    '  node .plan2agent/scripts/p2a_memory.mjs precedent --query <text> [--project <sourceProjectId>|--global] [--limit <n>] [--artifacts <dir>|--graph <path>|--runs <dir>] [--server <url>] [--token <token>] [--output <path>] [--json]',
     '',
     'Commands:',
     '  status   Compare local project, iteration, document, task, run, and chunk snapshots with Memory.',
@@ -80,6 +83,9 @@ function usage() {
     '  search   Keyword-search Memory snapshots. Uses the current project context unless --global is passed.',
     '  history  Show local and remote Memory artifact lineage as a timeline.',
     '  digest   Summarize failed/blocked runs, verification gaps, and proposal queue candidates.',
+    '  trace    Trace upstream/downstream artifact lineage from a graph node natural key.',
+    '  impact   Show downstream artifacts impacted by a graph node change.',
+    '  precedent Find prior decision nodes and summarize their downstream run outcomes.',
     '',
     'Source options:',
     '  --artifacts <dir>   Iterative artifact root, for example .plan2agent/artifacts/<project_id>.',
@@ -120,6 +126,9 @@ function parseArgs(argv) {
     query: null,
     artifactType: null,
     sourcePath: null,
+    node: null,
+    direction: null,
+    depth: null,
     limit: null,
     project: null,
     iteration: null,
@@ -144,6 +153,9 @@ function parseArgs(argv) {
     else if (arg === '--query') args.query = requiredValue(argv, ++index, '--query');
     else if (arg === '--type' || arg === '--artifact-type') args.artifactType = normalizeSearchArtifactType(requiredValue(argv, ++index, arg));
     else if (arg === '--source-path') args.sourcePath = normalizeSearchSourcePath(requiredValue(argv, ++index, '--source-path'));
+    else if (arg === '--node') args.node = requiredValue(argv, ++index, '--node').trim();
+    else if (arg === '--direction') args.direction = normalizeTraceDirection(requiredValue(argv, ++index, '--direction'));
+    else if (arg === '--depth') args.depth = parsePositiveInteger(requiredValue(argv, ++index, '--depth'), '--depth');
     else if (arg === '--limit') args.limit = parsePositiveInteger(requiredValue(argv, ++index, '--limit'), '--limit');
     else if (arg === '--project') args.project = requiredValue(argv, ++index, '--project').trim();
     else if (arg === '--iteration') args.iteration = requiredValue(argv, ++index, '--iteration').trim();
@@ -171,22 +183,43 @@ function parseArgs(argv) {
   if (args.command === 'pull' && !args.dryRun) throw new Error('pull is preview-only for now and requires --dry-run');
   if (args.command !== 'push' && args.yes) throw new Error('--yes is only supported by push');
   if (args.command === 'pull' && args.proposals) throw new Error('--proposals is not supported by pull');
-  if (!['pull', 'search', 'history', 'digest'].includes(args.command) && args.output) {
-    throw new Error('--output is only supported by pull, search, history, and digest');
+  if (!['pull', 'search', 'history', 'digest', 'trace', 'impact', 'precedent'].includes(args.command) && args.output) {
+    throw new Error('--output is only supported by pull, search, history, digest, trace, impact, and precedent');
   }
-  if (args.command !== 'search' && (args.query || args.artifactType || args.sourcePath)) {
-    throw new Error('--query, --type, and --source-path are only supported by search');
+  if (!['search', 'precedent'].includes(args.command) && (args.query || args.artifactType || args.sourcePath)) {
+    throw new Error('--query, --type, and --source-path are only supported by search and precedent');
   }
-  if (!['search', 'history'].includes(args.command) && (args.limit || args.global)) {
-    throw new Error('--limit and --global are only supported by search or history');
+  if (!['trace', 'impact'].includes(args.command) && (args.node || args.direction || args.depth)) {
+    throw new Error('--node, --direction, and --depth are only supported by trace and impact');
   }
-  if (args.command !== 'history' && (args.project || args.iteration)) {
-    throw new Error('--project and --iteration are only supported by history');
+  if (!['search', 'history', 'precedent'].includes(args.command) && args.limit) {
+    throw new Error('--limit is only supported by search, history, or precedent');
+  }
+  if (!['search', 'history', 'trace', 'impact', 'precedent'].includes(args.command) && args.global) {
+    throw new Error('--global is only supported by search, history, trace, impact, or precedent');
+  }
+  if (!['history', 'trace', 'impact', 'precedent'].includes(args.command) && (args.project || args.iteration)) {
+    throw new Error('--project and --iteration are only supported by history, trace, impact, or precedent');
+  }
+  if (['trace', 'impact', 'precedent'].includes(args.command) && args.iteration) {
+    throw new Error('--iteration is only supported by history');
+  }
+  if (['trace', 'impact'].includes(args.command)) {
+    if (!trimString(args.node)) throw new Error(`${args.command} requires --node <naturalKey>`);
+    args.node = trimString(args.node);
+    if (args.command === 'impact') args.direction = 'downstream';
+    else args.direction = args.direction ?? 'upstream';
   }
   if (args.command === 'search') {
     if (!trimString(args.query)) throw new Error('search requires --query <text>');
     args.query = trimString(args.query);
     if (args.global && sourceCount > 0) throw new Error('search --global cannot be combined with --artifacts, --graph, or --runs');
+  }
+  if (args.command === 'precedent') {
+    if (!trimString(args.query)) throw new Error('precedent requires --query <text>');
+    args.query = trimString(args.query);
+    if (args.global && sourceCount > 0) throw new Error('precedent --global cannot be combined with --artifacts, --graph, or --runs');
+    if (args.global && args.project) throw new Error('precedent --global cannot be combined with --project');
   }
   if (args.command === 'history') {
     if (args.global && sourceCount > 0) throw new Error('history --global cannot be combined with --artifacts, --graph, or --runs');
@@ -195,7 +228,7 @@ function parseArgs(argv) {
     if (args.iteration !== null && !args.iteration) throw new Error('--iteration requires a non-empty value');
   }
 
-  if (sourceCount === 0 && !(args.command === 'search' && args.global) && !(args.command === 'history' && (args.global || args.project || args.iteration))) {
+  if (sourceCount === 0 && !(args.command === 'search' && args.global) && !(args.command === 'precedent' && (args.global || args.project)) && !(['trace', 'impact'].includes(args.command) && (args.global || args.project)) && !(args.command === 'history' && (args.global || args.project || args.iteration))) {
     const defaultArtifacts = singleArtifactProjectRoot();
     const configuredGraph = configuredTaskGraphPath();
     if (defaultArtifacts) args.artifacts = defaultArtifacts;
@@ -204,8 +237,11 @@ function parseArgs(argv) {
     else if (args.command !== 'search') assertNoUninitializedScaffoldArtifactRoots();
   }
 
-  if (!args.artifacts && !args.graph && !args.runs && !['search', 'history'].includes(args.command)) {
+  if (!args.artifacts && !args.graph && !args.runs && !['search', 'history', 'trace', 'impact', 'precedent'].includes(args.command)) {
     throw new Error('--artifacts, --graph, or --runs is required');
+  }
+  if (['trace', 'impact'].includes(args.command) && !args.artifacts && !args.graph && !args.runs && !args.project) {
+    throw new Error(`${args.command} requires --project 또는 --artifacts로 프로젝트를 지정하라`);
   }
   if (args.command === 'history' && !args.artifacts && !args.graph && !args.runs && !args.global && !args.project && !args.iteration) {
     throw new Error('history requires --artifacts, --graph, --runs, --global, --project, or --iteration');
@@ -227,6 +263,12 @@ function parsePositiveInteger(value, optionName) {
   const number = Number(value);
   if (!Number.isInteger(number) || number <= 0) throw new Error(`${optionName} requires a positive integer`);
   return number;
+}
+
+function normalizeTraceDirection(value) {
+  const normalized = String(value ?? '').trim().toLowerCase();
+  if (['upstream', 'downstream', 'both'].includes(normalized)) return normalized;
+  throw new Error(`unsupported trace direction: ${value}; expected upstream, downstream, or both`);
 }
 
 function normalizeSearchArtifactType(value) {
@@ -449,6 +491,7 @@ function buildArtifactContext(args) {
   const documentPaths = [
     state.statusPath,
     state.currentSpecPath,
+    path.join(state.iterationRoot, 'gate-a-intake', 'intake.json'),
     state.effectiveSpecPath,
     state.specPath,
     state.taskGraphPath,
@@ -570,6 +613,7 @@ function buildMemoryPlan(args) {
   const allTasks = [...tasks, ...runSync.tasks];
   const runs = { runs: runSync.runs, skippedRuns: runSync.skippedRuns };
   const chunks = [...documents, ...proposalSnapshots.proposals].flatMap((document) => document.chunks);
+  const graph = buildGraphIndex(context, projectCanonicalId, iterationCanonicalId, documents, taskGraphs, allTasks, runs.runs, proposalSnapshots.proposals, baseMetadata);
   const syncItems = [
     localItem(project.artifactType, project.id, project.sourceKey, null, project.request.metadata),
     localItem(iteration.artifactType, iteration.id, iteration.sourceKey, null, iteration.request.metadata),
@@ -603,6 +647,7 @@ function buildMemoryPlan(args) {
     skippedRuns: [...context.runs.skippedRuns, ...runs.skippedRuns],
     skippedProposals: proposalSnapshots.skippedProposals,
     chunks,
+    graph,
     syncItems,
     summary: summarizePlan({
       documents,
@@ -613,8 +658,103 @@ function buildMemoryPlan(args) {
       runs: runs.runs,
       skippedRuns: [...context.runs.skippedRuns, ...runs.skippedRuns],
       skippedProposals: proposalSnapshots.skippedProposals,
+      graph,
     }),
   };
+}
+
+
+function buildGraphIndex(context, projectCanonicalId, iterationCanonicalId, documents, taskGraphs, tasks, runs, proposals, baseMetadata) {
+  const nodes = new Map();
+  const edges = new Map();
+  const addNode = (kind, naturalKey, label, extra = {}) => {
+    if (!naturalKey) return null;
+    const nodeId = stableId('p2a-graph-node', [context.projectId, context.iterationId, kind, naturalKey]);
+    const existing = nodes.get(naturalKey);
+    const node = {
+      nodeId: existing?.nodeId ?? nodeId,
+      nodeKind: kind,
+      naturalKey,
+      label: existing?.label ?? label ?? naturalKey,
+      content: existing?.content ?? extra.content ?? null,
+      documentId: existing?.documentId ?? extra.documentId ?? null,
+      taskId: extra.taskId ?? existing?.taskId ?? null,
+      runId: extra.runId ?? existing?.runId ?? null,
+      metadata: metadata({ ...baseMetadata, ...(existing?.metadata ?? {}), ...(extra.metadata ?? {}) }),
+    };
+    nodes.set(naturalKey, node);
+    return node;
+  };
+  const addEdge = (from, to, edgeType, sourceRef = null, extra = {}) => {
+    if (!from || !to) return null;
+    const edgeId = stableId('p2a-graph-edge', [context.projectId, context.iterationId, from.nodeId, to.nodeId, edgeType, extra.key ?? '']);
+    const edge = {
+      edgeId,
+      fromNodeId: from.nodeId,
+      toNodeId: to.nodeId,
+      edgeType,
+      sourceReference: sourceRef,
+      metadata: metadata({ ...baseMetadata, ...(extra.metadata ?? {}) }),
+    };
+    edges.set(edgeId, edge);
+    return edge;
+  };
+  const docByRole = new Map(documents.map((d) => [d.request.metadata.documentRole, d]));
+  for (const d of documents) addNode('document', `document:${d.sourceKey}`, d.request.title, { documentId: d.id, content: d.content.slice(0, 2000), metadata: { sourcePath: d.sourcePath } });
+  const intakeDoc = docByRole.get('document')?.sourcePath?.endsWith('gate-a-intake/intake.json') ? docByRole.get('document') : documents.find((d)=>d.sourcePath.endsWith('gate-a-intake/intake.json'));
+  const specDoc = documents.find((d)=>d.sourcePath.endsWith('gate-b-spec/spec.json'));
+  function readDocJson(doc){ try { return doc ? JSON.parse(doc.content) : null; } catch { return null; } }
+  const evidenceByKey = new Map();
+  const evidenceNode = (ev, doc) => {
+    const key = `evidence:${ev.id ?? ev.source ?? ev.url ?? ev.title ?? stableHash(ev)}`;
+    const n = addNode('evidence', key, ev.title ?? ev.id ?? ev.source ?? key, { content: ev.summary ?? ev.quote ?? ev.content ?? null, documentId: doc?.id, metadata: { evidenceId: ev.id, sourcePath: doc?.sourcePath } });
+    evidenceByKey.set(ev.id ?? key, n); return n;
+  };
+  const intake = readDocJson(intakeDoc);
+  if (intake) {
+    for (const ev of intake.evidence ?? []) evidenceNode(ev, intakeDoc);
+    for (const item of intake.needs_user_decision ?? []) {
+      const n = addNode('decision', `decision:${item.id}`, item.question ?? item.id, { content: JSON.stringify({ question: item.question, answer: item.answer, status: item.status }), documentId: intakeDoc?.id, metadata: { decisionId: item.id, status: item.status } });
+      for (const ref of item.evidence ?? item.evidence_refs ?? item.evidenceIds ?? []) addEdge(n, evidenceByKey.get(ref) ?? addNode('evidence', `evidence:${ref}`, ref), 'EVIDENCED_BY', sourceReference(n.nodeId, path.resolve(P2A_PATHS.projectRoot, intakeDoc.sourcePath), item.id), { key: ref });
+    }
+    for (const item of intake.assumptions ?? []) {
+      const id = item.id ?? stableHash(item);
+      const n = addNode('assumption', `assumption:${id}`, item.statement ?? item.description ?? id, { content: item.statement ?? item.description ?? null, documentId: intakeDoc?.id, metadata: { assumptionId: id, status: item.status } });
+      for (const ref of item.evidence ?? item.evidence_refs ?? item.evidenceIds ?? []) addEdge(n, evidenceByKey.get(ref) ?? addNode('evidence', `evidence:${ref}`, ref), 'EVIDENCED_BY', sourceReference(n.nodeId, path.resolve(P2A_PATHS.projectRoot, intakeDoc.sourcePath), id), { key: ref });
+    }
+    for (const item of intake.clarifying_questions ?? []) {
+      const id = item.id ?? stableHash(item);
+      const n = addNode('clarifying_question', `clarifying_question:${id}`, item.question ?? id, { content: item.question ?? null, documentId: intakeDoc?.id, metadata: { questionId: id, status: item.status } });
+      for (const block of item.blocks ?? []) addEdge(n, addNode('spec_section', `spec_section:${block}`, block), 'BLOCKS', sourceReference(n.nodeId, path.resolve(P2A_PATHS.projectRoot, intakeDoc.sourcePath), id), { key: block });
+    }
+  }
+  const spec = readDocJson(specDoc);
+  if (spec) {
+    const sdoc = addNode('document', `document:${specDoc.sourceKey}`, specDoc.request.title, { documentId: specDoc.id });
+    if (intakeDoc) addEdge(sdoc, addNode('document', `document:${intakeDoc.sourceKey}`, intakeDoc.request.title, { documentId: intakeDoc.id }), 'DERIVED_FROM', sourceReference(sdoc.nodeId, path.resolve(P2A_PATHS.projectRoot, specDoc.sourcePath), 'source_intake'));
+    for (const ev of spec.evidence ?? []) evidenceNode(ev, specDoc);
+    for (const d of spec.clarifying_question_disposition ?? []) addEdge(sdoc, addNode('clarifying_question', `clarifying_question:${d.id ?? d.question_id ?? d.questionId}`, d.id ?? d.question_id ?? d.questionId), 'DISPOSES', sourceReference(sdoc.nodeId, path.resolve(P2A_PATHS.projectRoot, specDoc.sourcePath), 'clarifying_question_disposition'), { key: d.id ?? d.question_id ?? d.questionId, metadata: { disposition: d.disposition ?? d.status } });
+    for (const item of spec.open_decisions ?? []) addNode('decision', `decision:${item.id ?? stableHash(item)}`, item.question ?? item.title ?? item.id, { content: JSON.stringify(item), documentId: specDoc.id, metadata: { status: item.status } });
+  }
+  for (const task of tasks) {
+    const tn = addNode('task', `task:${task.sourceTaskId}`, task.request.title, { taskId: task.id, metadata: { sourceTaskId: task.sourceTaskId, status: task.request.status } });
+    for (const depId of task.request.dependencies ?? []) {
+      const dep = tasks.find((t) => t.id === depId);
+      if (dep) addEdge(tn, addNode('task', `task:${dep.sourceTaskId}`, dep.request.title, { taskId: dep.id }), 'DEPENDS_ON', task.request.sourceReference, { key: dep.sourceTaskId });
+    }
+    for (const ref of JSON.parse(task.request.metadata.sourceSpecRefs ?? '[]')) addEdge(tn, addNode('spec_section', `spec_section:${ref}`, ref), 'DERIVED_FROM', task.request.sourceReference, { key: ref });
+  }
+  for (const run of runs) {
+    const rn = addNode('run', `run:${run.request.sourceRunId}`, run.request.sourceRunId, { runId: run.id, content: run.request.runJson, metadata: { sourceRunId: run.request.sourceRunId, status: run.request.status, failureClass: run.request.metadata.failureClass } });
+    const task = tasks.find((t) => t.id === run.request.taskId);
+    if (task) addEdge(rn, addNode('task', `task:${task.sourceTaskId}`, task.request.title, { taskId: task.id }), 'EXECUTED_FOR', run.request.sourceReference);
+  }
+  for (const proposal of proposals) {
+    const pn = addNode('proposal', `proposal:${proposal.sourceKey}`, proposal.request.title, { documentId: proposal.id, content: proposal.content, metadata: { sourcePath: proposal.sourcePath } });
+    const runId = proposal.request.metadata.sourceRunId ?? proposal.request.metadata.runId;
+    if (runId) addEdge(pn, addNode('run', `run:${runId}`, runId), 'DERIVED_FROM', proposal.request.sourceReference);
+  }
+  return { projectId: projectCanonicalId, iterationId: iterationCanonicalId, nodes: [...nodes.values()], edges: [...edges.values()] };
 }
 
 function localItem(artifactType, artifactId, sourceKey, contentHash, sourceIds, sourcePath = null) {
@@ -637,7 +777,7 @@ function localItem(artifactType, artifactId, sourceKey, contentHash, sourceIds, 
   };
 }
 
-function summarizePlan({ documents, proposals, chunks, taskGraphs, taskGraph, tasks, runs, skippedRuns, skippedProposals }) {
+function summarizePlan({ documents, proposals, chunks, taskGraphs, taskGraph, tasks, runs, skippedRuns, skippedProposals, graph = null }) {
   return {
     projects: 1,
     iterations: 1,
@@ -649,6 +789,8 @@ function summarizePlan({ documents, proposals, chunks, taskGraphs, taskGraph, ta
     runs: runs.length,
     skippedRuns: skippedRuns.length,
     skippedProposals: skippedProposals.length,
+    graphNodes: graph?.nodes?.length ?? 0,
+    graphEdges: graph?.edges?.length ?? 0,
   };
 }
 
@@ -1083,6 +1225,10 @@ function buildRunSnapshot(context, projectCanonicalId, iterationCanonicalId, tas
       metadata: runMetadata,
     },
   };
+}
+
+function isNotFoundError(error) {
+  return / failed with 404(?:\D|$)/.test(errorMessage(error));
 }
 
 async function memoryGet(connection, pathName, searchParams = {}) {
@@ -1757,6 +1903,126 @@ function shellQuote(value) {
   return `'${text.replace(/'/g, "'\\''")}'`;
 }
 
+
+function graphScopeParams(args, plan) {
+  const sourceProjectId = trimString(args.project);
+  return {
+    projectId: plan?.project?.id ?? (sourceProjectId ? stableId('p2a-project', [sourceProjectId]) : null),
+    iterationId: args.global ? null : (plan?.iteration?.id ?? args.iteration ?? null),
+  };
+}
+
+async function fetchGraphTrace(connection, args, plan, direction = args.direction) {
+  return memoryGet(connection, '/graph/trace', {
+    ...graphScopeParams(args, plan),
+    naturalKey: args.node,
+    direction,
+    maxDepth: args.depth ?? 5,
+  });
+}
+
+async function runTrace(args) {
+  const plan = args.artifacts || args.graph || args.runs ? buildMemoryPlan(args) : null;
+  const connection = resolveMemoryConnection(args);
+  const server = await memoryHealth(connection);
+  let trace = null;
+  let error = null;
+  try { trace = await fetchGraphTrace(connection, args, plan); } catch (e) { error = errorMessage(e); }
+  const payload = {
+    schema_version: 'p2a.memory_trace.v1',
+    generatedAt: new Date().toISOString(),
+    query: { naturalKey: args.node, direction: args.direction, maxDepth: args.depth ?? 5, scope: plan ? 'context' : 'global' },
+    context: plan?.context ?? null,
+    server: { url: connection.server, source: connection.serverSource, status: error ? 'unavailable' : server.status, detail: error ?? server.detail },
+    trace,
+  };
+  if (args.output) writeJsonFile(path.resolve(args.output), payload);
+  if (args.json) console.log(JSON.stringify(payload, null, 2)); else printTrace(payload);
+  return trace ? 0 : 1;
+}
+
+function nodeById(trace) { return new Map((trace?.nodes ?? []).map((n) => [n.nodeId, n])); }
+function incomingEdgeLabel(trace, node) {
+  const rootId = trace?.root?.nodeId;
+  if (node.nodeId === rootId) return 'root';
+  const nodes = nodeById(trace);
+  const nodeDepth = node.depth ?? 0;
+  const edge = (trace?.edges ?? []).find((e) => {
+    if (e.fromNodeId !== node.nodeId && e.toNodeId !== node.nodeId) return false;
+    const otherId = e.fromNodeId === node.nodeId ? e.toNodeId : e.fromNodeId;
+    const otherDepth = nodes.get(otherId)?.depth;
+    return typeof otherDepth === 'number' && otherDepth < nodeDepth;
+  }) ?? (trace?.edges ?? []).find((e) => e.fromNodeId === node.nodeId || e.toNodeId === node.nodeId);
+  return edge?.edgeType ?? 'edge';
+}
+function printTrace(payload) {
+  console.log('Plan2Agent memory trace');
+  console.log(`- node: ${payload.query.naturalKey}`);
+  console.log(`- direction: ${payload.query.direction} depth=${payload.query.maxDepth}`);
+  console.log(`- server: ${payload.server.status}${payload.server.url ? ` (${payload.server.url})` : ''}`);
+  if (!payload.trace) return;
+  const nodes = [...(payload.trace.nodes ?? [])].sort((a,b)=>(a.depth??0)-(b.depth??0)||String(a.naturalKey).localeCompare(String(b.naturalKey)));
+  for (const n of nodes) console.log(`${'  '.repeat(n.depth ?? 0)}- [${incomingEdgeLabel(payload.trace,n)}] ${n.nodeKind}/${n.naturalKey} ${n.label ?? ''}`.trimEnd());
+  if (payload.trace.truncated) console.log('- truncated: yes');
+}
+
+async function runImpact(args) {
+  const plan = args.artifacts || args.graph || args.runs ? buildMemoryPlan(args) : null;
+  const connection = resolveMemoryConnection(args);
+  const server = await memoryHealth(connection);
+  let trace = null; let error = null;
+  try { trace = await fetchGraphTrace(connection, { ...args, direction: 'downstream' }, plan, 'downstream'); } catch (e) { error = errorMessage(e); }
+  const byKind = {};
+  for (const n of trace?.nodes ?? []) byKind[n.nodeKind] = (byKind[n.nodeKind] ?? 0) + 1;
+  const payload = { schema_version: 'p2a.memory_impact.v1', generatedAt: new Date().toISOString(), query: { naturalKey: args.node, direction: 'downstream', maxDepth: args.depth ?? 5, scope: plan ? 'context' : 'global' }, context: plan?.context ?? null, server: { url: connection.server, source: connection.serverSource, status: error ? 'unavailable' : server.status, detail: error ?? server.detail }, summary: { impacted: Math.max((trace?.nodes?.length ?? 0) - 1, 0), byKind }, trace };
+  if (args.output) writeJsonFile(path.resolve(args.output), payload);
+  if (args.json) console.log(JSON.stringify(payload, null, 2)); else { console.log('이 노드가 바뀌면 영향받는 하위 산출물'); console.log(`- impacted: ${payload.summary.impacted}`); console.log(`- by kind: ${Object.entries(byKind).map(([k,v])=>`${k}=${v}`).join(' ') || 'none'}`); printTrace({ ...payload, query: { ...payload.query, direction: 'downstream' } }); }
+  return trace ? 0 : 1;
+}
+
+async function runPrecedent(args) {
+  const plan = args.artifacts || args.graph || args.runs ? buildMemoryPlan(args) : null;
+  const connection = resolveMemoryConnection(args);
+  const server = await memoryHealth(connection);
+  let nodesResponse = null; let error = null;
+  try { nodesResponse = await memoryGet(connection, '/graph/nodes', { ...graphScopeParams(args, plan), nodeKind: 'decision', query: args.query, limit: args.limit ?? DEFAULT_SEARCH_LIMIT }); } catch (e) {
+    error = args.global && / failed with 400(?:\D|$)/.test(errorMessage(e))
+      ? 'Memory 서버가 cross-project 그래프 검색을 지원하지 않습니다. --project <id>를 지정하세요'
+      : errorMessage(e);
+  }
+  const decisionNodes = Array.isArray(nodesResponse) ? nodesResponse : (nodesResponse?.nodes ?? []);
+  const decisions = [];
+  if (!error) {
+    for (const node of decisionNodes.slice(0, args.limit ?? DEFAULT_SEARCH_LIMIT)) {
+      let trace = null;
+      try { trace = await memoryGet(connection, '/graph/trace', { ...graphScopeParams(args, plan), naturalKey: node.naturalKey, direction: 'downstream', maxDepth: 8 }); } catch {}
+      const runs = (trace?.nodes ?? []).filter((n) => n.nodeKind === 'run').map((n) => ({ naturalKey: n.naturalKey, label: n.label, status: n.metadata?.status ?? null, failureClass: n.metadata?.failureClass ?? null }));
+      decisions.push({ node, runs, outcome: summarizeRunOutcomes(runs) });
+    }
+  }
+  const payload = { schema_version: 'p2a.memory_precedent.v1', generatedAt: new Date().toISOString(), query: { text: args.query, limit: args.limit ?? DEFAULT_SEARCH_LIMIT, scope: plan ? 'context' : 'global' }, context: plan?.context ?? null, server: { url: connection.server, source: connection.serverSource, status: error ? 'unavailable' : server.status, detail: error ?? server.detail }, summary: { decisions: decisions.length }, decisions };
+  if (args.output) writeJsonFile(path.resolve(args.output), payload);
+  if (args.json) console.log(JSON.stringify(payload, null, 2)); else printPrecedent(payload);
+  return error ? 1 : 0;
+}
+
+function summarizeRunOutcomes(runs) {
+  const byStatus = {};
+  for (const run of runs) byStatus[run.status ?? 'unknown'] = (byStatus[run.status ?? 'unknown'] ?? 0) + 1;
+  return byStatus;
+}
+
+function printPrecedent(payload) {
+  console.log('Plan2Agent memory precedent');
+  console.log(`- query: ${payload.query.text}`);
+  console.log(`- server: ${payload.server.status}${payload.server.url ? ` (${payload.server.url})` : ''}`);
+  console.log(`- decisions: ${payload.summary.decisions}`);
+  for (const item of payload.decisions) {
+    console.log(`- ${item.node.nodeKind}/${item.node.naturalKey}: ${item.node.label ?? ''}`);
+    console.log(`  outcome: ${Object.entries(item.outcome).map(([k,v])=>`${k}=${v}`).join(' ') || 'no downstream runs'}`);
+  }
+}
+
 async function runHistory(args) {
   const plan = args.artifacts || args.graph || args.runs
     ? buildMemoryPlan(args)
@@ -2089,6 +2355,8 @@ function formatSummary(summary) {
     `runs=${summary.runs}`,
     `skippedRuns=${summary.skippedRuns}`,
     `skippedProposals=${summary.skippedProposals}`,
+    `graphNodes=${summary.graphNodes ?? 0}`,
+    `graphEdges=${summary.graphEdges ?? 0}`,
   ].join(' ');
 }
 
@@ -2108,6 +2376,7 @@ async function runPush(args) {
         source: connection.serverSource,
       },
       local: plan.summary,
+      graph: { nodes: plan.graph.nodes.length, edges: plan.graph.edges.length, sampleNodes: plan.graph.nodes.slice(0, 5), sampleEdges: plan.graph.edges.slice(0, 5) },
       skippedRuns: plan.skippedRuns,
       skippedProposals: plan.skippedProposals,
       writeOrder: writeOrder(plan),
@@ -2148,6 +2417,8 @@ function writeOrder(plan) {
     { artifactType: 'TASK', count: plan.tasks.length },
     { artifactType: 'RUN_RECORD', count: plan.runs.length },
     { artifactType: 'DOCUMENT_CHUNK', count: plan.chunks.length },
+    { artifactType: 'GRAPH_NODE', count: plan.graph.nodes.length },
+    { artifactType: 'GRAPH_EDGE', count: plan.graph.edges.length },
   ];
 }
 
@@ -2167,6 +2438,7 @@ function printPushPreview(payload) {
   console.log(`- server: ${payload.server.url ?? 'not_configured'}`);
   console.log('- dry-run: no server writes');
   console.log(`- local: ${formatSummary(payload.local)}`);
+  if (payload.graph) console.log(`- graph: nodes=${payload.graph.nodes} edges=${payload.graph.edges} samples=${payload.graph.sampleNodes.map((node) => node.naturalKey).join(', ') || 'none'}`);
   console.log('- write order:');
   payload.writeOrder.forEach((item) => console.log(`  - ${item.artifactType}: ${item.count}`));
   if (payload.nextActions.length) {
@@ -2184,6 +2456,7 @@ async function pushPlan(connection, plan) {
     tasks: [],
     runs: [],
     chunks: [],
+    graph: null,
   };
   result.project = await memoryPost(connection, '/projects', plan.project.request);
   result.iteration = await memoryPost(connection, `/projects/${encodeURIComponent(plan.project.id)}/iterations`, plan.iteration.request);
@@ -2213,6 +2486,12 @@ async function pushPlan(connection, plan) {
   for (const run of plan.runs) {
     result.runs.push(await memoryPost(connection, '/runs', run.request));
   }
+  try {
+    result.graph = await memoryPost(connection, '/graph/snapshots', plan.graph);
+  } catch (error) {
+    if (!isNotFoundError(error)) throw error;
+    result.graph = { skipped: true, warning: 'Memory server does not support /api/graph/snapshots; graph push skipped.' };
+  }
   return {
     projectId: result.project?.projectId ?? null,
     iterationId: result.iteration?.iterationId ?? null,
@@ -2223,6 +2502,10 @@ async function pushPlan(connection, plan) {
     tasks: result.tasks.length,
     runs: result.runs.length,
     chunks: result.chunks.length,
+    graphNodes: plan.graph.nodes.length,
+    graphEdges: plan.graph.edges.length,
+    graphSkipped: result.graph?.skipped === true,
+    graphWarning: result.graph?.warning ?? null,
   };
 }
 
@@ -2231,7 +2514,8 @@ function printPushResult(payload) {
   console.log(`- project: ${payload.context.projectId}`);
   console.log(`- iteration: ${payload.context.iterationId}`);
   console.log(`- server: ${payload.server.url}`);
-  console.log(`- wrote: documents=${payload.result.documents} proposals=${payload.result.proposals} chunks=${payload.result.chunks} taskGraph=${payload.result.taskGraphs ?? (payload.result.taskGraphId ? 1 : 0)} tasks=${payload.result.tasks} runs=${payload.result.runs}`);
+  console.log(`- wrote: documents=${payload.result.documents} proposals=${payload.result.proposals} chunks=${payload.result.chunks} taskGraph=${payload.result.taskGraphs ?? (payload.result.taskGraphId ? 1 : 0)} tasks=${payload.result.tasks} runs=${payload.result.runs} graphNodes=${payload.result.graphNodes} graphEdges=${payload.result.graphEdges}`);
+  if (payload.result.graphWarning) console.log(`- graph warning: ${payload.result.graphWarning}`);
   if (payload.skippedRuns.length) console.log(`- skipped runs: ${payload.skippedRuns.length}`);
   if (payload.skippedProposals.length) console.log(`- skipped proposals: ${payload.skippedProposals.length}`);
 }
@@ -2619,6 +2903,8 @@ function errorMessage(error) {
   return error instanceof Error && error.message ? error.message : String(error);
 }
 
+export { buildGraphIndex, buildMemoryPlan, graphScopeParams, incomingEdgeLabel };
+
 export async function main(argv = process.argv.slice(2)) {
   const args = parseArgs(argv);
   if (args.help) {
@@ -2630,6 +2916,9 @@ export async function main(argv = process.argv.slice(2)) {
   if (args.command === 'pull') return runPull(args);
   if (args.command === 'search') return runSearch(args);
   if (args.command === 'history') return runHistory(args);
+  if (args.command === 'trace') return runTrace(args);
+  if (args.command === 'impact') return runImpact(args);
+  if (args.command === 'precedent') return runPrecedent(args);
   if (args.command === 'digest') return runDigest(args);
   throw new Error(`unknown command: ${args.command}`);
 }

@@ -630,6 +630,22 @@ node .plan2agent/scripts/p2a_memory.mjs history \
 node .plan2agent/scripts/p2a_memory.mjs digest \
   --artifacts .plan2agent/artifacts/<project_id> \
   --output .plan2agent/artifacts/<project_id>/memory-digest.json
+
+node .plan2agent/scripts/p2a_memory.mjs trace \
+  --artifacts .plan2agent/artifacts/<project_id> \
+  --node decision:ND-1 \
+  --direction upstream \
+  --depth 4
+
+node .plan2agent/scripts/p2a_memory.mjs impact \
+  --artifacts .plan2agent/artifacts/<project_id> \
+  --node spec_section:product.scope \
+  --depth 5
+
+node .plan2agent/scripts/p2a_memory.mjs precedent \
+  --project <project_id> \
+  --query "cache invalidation" \
+  --limit 5
 ```
 
 `status`는 project, iteration, document snapshot, proposal snapshot, task graph, task, run, document chunk의 로컬 계획을 만들고 Memory `/api/artifacts` 조회 결과와 source id/hash 기준으로 비교한다. 서버 URL은 `--server`, `P2A_MEMORY_URL`, 또는 `project.config.json.memory.serverUrlEnv` 순서로 찾는다. 서버가 설정되지 않으면 로컬 계획과 `not_configured` 상태를 출력하며 파일이나 서버를 변경하지 않는다.
@@ -640,9 +656,11 @@ node .plan2agent/scripts/p2a_memory.mjs digest \
 
 `search`는 Memory `/api/search/keyword`를 호출해 동기화된 document chunk와 snapshot 본문을 keyword로 조회한다. `--artifacts`, `--graph`, `--runs` 중 하나를 주면 CLI가 로컬 context를 읽고 서버 canonical project/iteration id로 scope를 좁힌다. `--global`을 주면 project/iteration filter 없이 검색한다. `--type document|chunk|task|run|graph|project|iteration|proposal`, `--source-path`, `--limit`으로 결과를 더 좁힐 수 있다. 현재 서버 keyword index의 주 검색 대상은 document/chunk/proposal content이므로 task/run type filter는 해당 artifact가 searchable content로 인덱싱된 경우에만 결과가 나온다. `--type proposal` 결과는 proposal/document 단위로 dedupe되며, 서버 raw match 수는 `summary.rawTotal`에 남는다. 서버가 설정되지 않았거나 연결할 수 없으면 non-zero exit와 복구 next action을 출력한다.
 
-`history`는 로컬 plan에서 project, iteration, document snapshot, task graph, task, run record timeline을 만들고, Memory 서버가 설정되어 있으면 `/api/artifacts`의 created/updated/snapshot metadata를 병합한다. `--artifacts`, `--graph`, `--runs`로 현재 context를 지정하거나, 원격 조회만 필요하면 `--global --project <sourceProjectId> [--iteration <sourceIterationId>]`를 사용할 수 있다. `search`, `history`, `digest`는 `--output <path>`로 JSON report를 저장할 수 있으며, GUI는 artifact root의 `memory-search.json`, `memory-history.json`, `memory-digest.json`을 운영 리포트와 문서 브라우저에 표시한다.
+`history`는 로컬 plan에서 project, iteration, document snapshot, task graph, task, run record timeline을 만들고, Memory 서버가 설정되어 있으면 `/api/artifacts`의 created/updated/snapshot metadata를 병합한다. `--artifacts`, `--graph`, `--runs`로 현재 context를 지정하거나, 원격 조회만 필요하면 `--global --project <sourceProjectId> [--iteration <sourceIterationId>]`를 사용할 수 있다. `search`, `history`, `digest`, `trace`, `impact`, `precedent`는 `--output <path>`로 JSON report를 저장할 수 있으며, GUI는 artifact root의 `memory-search.json`, `memory-history.json`, `memory-digest.json`을 운영 리포트와 문서 브라우저에 표시한다.
 
-`push`는 같은 계획을 Memory write DTO로 변환한다. `--dry-run`은 서버에 접속하지 않고 write 순서와 수량만 보여준다. 실제 서버 write는 `--yes`가 있어야 하며, project → iteration → document/proposal snapshots/chunks → task graph → tasks → runs 순서로 upsert한다. proposal snapshot은 `PROPOSAL` artifact type과 `proposalTarget`, `targetRepo`, `targetArea`, `upstreamReason` metadata를 보존한다. 인증이 필요한 Memory 서버는 `--token` 또는 `P2A_MEMORY_TOKEN` 값을 `X-P2A-Local-Token` 헤더로 받는다.
+`trace --node <naturalKey>`는 Memory `/api/graph/trace`를 호출해 decision/assumption/evidence/spec_section/task/run/proposal/document 계보를 조회한다. `--direction upstream|downstream|both`와 `--depth <n>`을 지원하며 텍스트 출력은 depth 기반 들여쓰기와 도달 edge type을 보여준다. `impact --node <naturalKey>`는 downstream trace의 sugar command로, "이 노드가 바뀌면 영향받는 하위 산출물" 요약과 kind별 개수를 먼저 출력한다. `precedent --query <text>`는 `/api/graph/nodes?nodeKind=decision` 키워드 검색으로 과거 decision 후보를 찾고 각 decision의 downstream trace에서 run status를 모아 "결정 → 실제 결과" 요약을 출력한다. v1은 임베딩 주입이 없는 기본 환경을 고려해 keyword 기반 graph node 검색을 주 경로로 사용한다.
+
+`push`는 같은 계획을 Memory write DTO로 변환한다. `--dry-run`은 서버에 접속하지 않고 write 순서와 수량만 보여주며 그래프 인덱스 node/edge 개수도 포함한다. 실제 서버 write는 `--yes`가 있어야 하며, project → iteration → document/proposal snapshots/chunks → task graph → tasks → runs → graph snapshot 순서로 upsert한다. graph snapshot은 로컬 artifact에서 파생되는 인덱스이므로 push 때마다 선택 scope 전체를 재계산해 `/api/graph/snapshots`로 원자 교체한다. 구버전 Memory 서버가 graph endpoint를 404로 응답하면 graph push만 경고 후 건너뛰고 기존 artifact push는 성공시킨다. proposal snapshot은 `PROPOSAL` artifact type과 `proposalTarget`, `targetRepo`, `targetArea`, `upstreamReason` metadata를 보존한다. 인증이 필요한 Memory 서버는 `--token` 또는 `P2A_MEMORY_TOKEN` 값을 `X-P2A-Local-Token` 헤더로 받는다.
 
 `digest`는 로컬 run index와 proposal queue를 읽어 failed/blocked run, failure class, verification failure/gap, proposal coverage, structured debug detail coverage를 요약한다. proposal 후보가 빠진 run이 있으면 `p2a_proposals.mjs mine` 명령을 next action으로 제안한다. failed/blocked run의 reproduction/localization/guard 누락은 신규 schema에서 유효하지 않은 artifact로 취급되며, 이미 proposed 상태인 항목은 review/curate 흐름으로 연결한다.
 

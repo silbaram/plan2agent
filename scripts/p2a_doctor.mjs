@@ -24,6 +24,7 @@ const EMPTY_TASK_COUNTS = {
 
 const DEV_PROVIDER_FILES = {
   codex: [
+    path.join('.agents', 'skills', 'p2a-harness', 'SKILL.md'),
     path.join('.agents', 'skills', 'p2a-dev-execution', 'SKILL.md'),
     path.join('.agents', 'agents', 'p2a-implementer.md'),
     path.join('.agents', 'agents', 'p2a-performance-monitor.md'),
@@ -31,6 +32,7 @@ const DEV_PROVIDER_FILES = {
     path.join('.codex', 'agents', 'p2a-performance-monitor.toml'),
   ],
   claude: [
+    path.join('.claude', 'skills', 'p2a-harness', 'SKILL.md'),
     path.join('.claude', 'skills', 'p2a-dev-execution', 'SKILL.md'),
     path.join('.claude', 'agents', 'p2a-implementer.md'),
     path.join('.claude', 'agents', 'p2a-performance-monitor.md'),
@@ -38,6 +40,7 @@ const DEV_PROVIDER_FILES = {
     path.join('.claude', 'settings.json'),
   ],
   gemini: [
+    path.join('.agents', 'skills', 'p2a-harness', 'SKILL.md'),
     path.join('.agents', 'skills', 'p2a-dev-execution', 'SKILL.md'),
     path.join('.agents', 'agents', 'p2a-implementer.md'),
     path.join('.agents', 'agents', 'p2a-performance-monitor.md'),
