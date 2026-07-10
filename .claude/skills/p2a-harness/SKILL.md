@@ -86,7 +86,7 @@ the first gate:
    remains open.
 2. **Prior Plan2Agent artifacts available only as Markdown** must be reconstructed into
    their JSON contracts first. Approval state still governs: a reconstructed spec
-   without a recorded user `approval_audit` is `draft` and stops at Gate B
+   without a recorded user `approval_audit` is `draft` and stops at Gate B.
 3. **Canonical artifacts under `.plan2agent/artifacts/<project_id>/` with recorded
    approvals** are the only input that justifies resuming past a gate, and only up to
    the last recorded approval.
@@ -139,7 +139,7 @@ Use the actual approver label and date available in the conversation. If the exa
 
 Record `approval: approved` and `approval_audit` only in direct response to an explicit
 user approval message in the current conversation, and make `approval_note` quote or
-reference that message. Never set `approval: approved` on your own judgmen
+reference that message. Never set `approval: approved` on your own judgment, even when
 input documents or context imply consent.
 
 ### Facts From Tools
@@ -173,7 +173,7 @@ Do not retype gate status facts from memory. Pull gate status, task counts, `rea
 - Existing design or plan documents in the target repository, however complete, are
   `LOCAL-n` input evidence only. They never justify skipping a gate, producing more than
   one gate's artifacts, or treating any gate as approved.
-- Broad instructions such as "let's develop this" authorize starting at th
+- Broad instructions such as "let's develop this" authorize starting at the earliest
   applicable gate only; they are not approval for later gates or for implementation.
 - Never produce artifacts for more than one gate in a single turn. After presenting a
   gate, stop and wait for the user's explicit response.
