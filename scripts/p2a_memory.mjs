@@ -72,9 +72,9 @@ function usage() {
     '  node .plan2agent/scripts/p2a_memory.mjs search --query <text> [--artifacts <dir>|--graph <path>|--runs <dir>|--global] [--type <kind>] [--source-path <path>] [--limit <n>] [--server <url>] [--token <token>] [--output <path>] [--json]',
     '  node .plan2agent/scripts/p2a_memory.mjs history [--artifacts <dir>|--graph <path>|--runs <dir>|--global] [--project <id>] [--iteration <id>] [--limit <n>] [--server <url>] [--token <token>] [--output <path>] [--json]',
     '  node .plan2agent/scripts/p2a_memory.mjs digest (--artifacts <dir>|--graph <path>|--runs <dir>) [--proposals <dir>] [--output <path>] [--json]',
-    '  node .plan2agent/scripts/p2a_memory.mjs trace --node <naturalKey> [--direction upstream|downstream|both] [--depth <n>] [--artifacts <dir>|--graph <path>|--runs <dir>|--global] [--server <url>] [--token <token>] [--output <path>] [--json]',
-    '  node .plan2agent/scripts/p2a_memory.mjs impact --node <naturalKey> [--depth <n>] [--artifacts <dir>|--graph <path>|--runs <dir>|--global] [--server <url>] [--token <token>] [--output <path>] [--json]',
-    '  node .plan2agent/scripts/p2a_memory.mjs precedent --query <text> [--global] [--limit <n>] [--artifacts <dir>|--graph <path>|--runs <dir>] [--server <url>] [--token <token>] [--output <path>] [--json]',
+    '  node .plan2agent/scripts/p2a_memory.mjs trace --node <naturalKey> [--project <sourceProjectId>] [--direction upstream|downstream|both] [--depth <n>] [--artifacts <dir>|--graph <path>|--runs <dir>|--global] [--server <url>] [--token <token>] [--output <path>] [--json]',
+    '  node .plan2agent/scripts/p2a_memory.mjs impact --node <naturalKey> [--project <sourceProjectId>] [--depth <n>] [--artifacts <dir>|--graph <path>|--runs <dir>|--global] [--server <url>] [--token <token>] [--output <path>] [--json]',
+    '  node .plan2agent/scripts/p2a_memory.mjs precedent --query <text> [--project <sourceProjectId>|--global] [--limit <n>] [--artifacts <dir>|--graph <path>|--runs <dir>] [--server <url>] [--token <token>] [--output <path>] [--json]',
     '',
     'Commands:',
     '  status   Compare local project, iteration, document, task, run, and chunk snapshots with Memory.',
@@ -198,8 +198,11 @@ function parseArgs(argv) {
   if (!['search', 'history', 'trace', 'impact', 'precedent'].includes(args.command) && args.global) {
     throw new Error('--global is only supported by search, history, trace, impact, or precedent');
   }
-  if (args.command !== 'history' && (args.project || args.iteration)) {
-    throw new Error('--project and --iteration are only supported by history');
+  if (!['history', 'trace', 'impact', 'precedent'].includes(args.command) && (args.project || args.iteration)) {
+    throw new Error('--project and --iteration are only supported by history, trace, impact, or precedent');
+  }
+  if (['trace', 'impact', 'precedent'].includes(args.command) && args.iteration) {
+    throw new Error('--iteration is only supported by history');
   }
   if (['trace', 'impact'].includes(args.command)) {
     if (!trimString(args.node)) throw new Error(`${args.command} requires --node <naturalKey>`);
@@ -216,6 +219,7 @@ function parseArgs(argv) {
     if (!trimString(args.query)) throw new Error('precedent requires --query <text>');
     args.query = trimString(args.query);
     if (args.global && sourceCount > 0) throw new Error('precedent --global cannot be combined with --artifacts, --graph, or --runs');
+    if (args.global && args.project) throw new Error('precedent --global cannot be combined with --project');
   }
   if (args.command === 'history') {
     if (args.global && sourceCount > 0) throw new Error('history --global cannot be combined with --artifacts, --graph, or --runs');
@@ -224,7 +228,7 @@ function parseArgs(argv) {
     if (args.iteration !== null && !args.iteration) throw new Error('--iteration requires a non-empty value');
   }
 
-  if (sourceCount === 0 && !(args.command === 'search' && args.global) && !(args.command === 'precedent' && args.global) && !(['trace', 'impact'].includes(args.command) && args.global) && !(args.command === 'history' && (args.global || args.project || args.iteration))) {
+  if (sourceCount === 0 && !(args.command === 'search' && args.global) && !(args.command === 'precedent' && (args.global || args.project)) && !(['trace', 'impact'].includes(args.command) && (args.global || args.project)) && !(args.command === 'history' && (args.global || args.project || args.iteration))) {
     const defaultArtifacts = singleArtifactProjectRoot();
     const configuredGraph = configuredTaskGraphPath();
     if (defaultArtifacts) args.artifacts = defaultArtifacts;
@@ -235,6 +239,9 @@ function parseArgs(argv) {
 
   if (!args.artifacts && !args.graph && !args.runs && !['search', 'history', 'trace', 'impact', 'precedent'].includes(args.command)) {
     throw new Error('--artifacts, --graph, or --runs is required');
+  }
+  if (['trace', 'impact'].includes(args.command) && !args.artifacts && !args.graph && !args.runs && !args.project) {
+    throw new Error(`${args.command} requires --project 또는 --artifacts로 프로젝트를 지정하라`);
   }
   if (args.command === 'history' && !args.artifacts && !args.graph && !args.runs && !args.global && !args.project && !args.iteration) {
     throw new Error('history requires --artifacts, --graph, --runs, --global, --project, or --iteration');
@@ -484,6 +491,7 @@ function buildArtifactContext(args) {
   const documentPaths = [
     state.statusPath,
     state.currentSpecPath,
+    path.join(state.iterationRoot, 'gate-a-intake', 'intake.json'),
     state.effectiveSpecPath,
     state.specPath,
     state.taskGraphPath,
@@ -667,9 +675,9 @@ function buildGraphIndex(context, projectCanonicalId, iterationCanonicalId, docu
       nodeId: existing?.nodeId ?? nodeId,
       nodeKind: kind,
       naturalKey,
-      label: label ?? naturalKey,
-      content: extra.content ?? existing?.content ?? null,
-      documentId: extra.documentId ?? existing?.documentId ?? null,
+      label: existing?.label ?? label ?? naturalKey,
+      content: existing?.content ?? extra.content ?? null,
+      documentId: existing?.documentId ?? extra.documentId ?? null,
       taskId: extra.taskId ?? existing?.taskId ?? null,
       runId: extra.runId ?? existing?.runId ?? null,
       metadata: metadata({ ...baseMetadata, ...(existing?.metadata ?? {}), ...(extra.metadata ?? {}) }),
@@ -1897,8 +1905,9 @@ function shellQuote(value) {
 
 
 function graphScopeParams(args, plan) {
+  const sourceProjectId = trimString(args.project);
   return {
-    projectId: plan?.project?.id ?? args.project ?? null,
+    projectId: plan?.project?.id ?? (sourceProjectId ? stableId('p2a-project', [sourceProjectId]) : null),
     iterationId: args.global ? null : (plan?.iteration?.id ?? args.iteration ?? null),
   };
 }
@@ -1936,7 +1945,14 @@ function nodeById(trace) { return new Map((trace?.nodes ?? []).map((n) => [n.nod
 function incomingEdgeLabel(trace, node) {
   const rootId = trace?.root?.nodeId;
   if (node.nodeId === rootId) return 'root';
-  const edge = (trace?.edges ?? []).find((e) => e.fromNodeId === node.nodeId || e.toNodeId === node.nodeId);
+  const nodes = nodeById(trace);
+  const nodeDepth = node.depth ?? 0;
+  const edge = (trace?.edges ?? []).find((e) => {
+    if (e.fromNodeId !== node.nodeId && e.toNodeId !== node.nodeId) return false;
+    const otherId = e.fromNodeId === node.nodeId ? e.toNodeId : e.fromNodeId;
+    const otherDepth = nodes.get(otherId)?.depth;
+    return typeof otherDepth === 'number' && otherDepth < nodeDepth;
+  }) ?? (trace?.edges ?? []).find((e) => e.fromNodeId === node.nodeId || e.toNodeId === node.nodeId);
   return edge?.edgeType ?? 'edge';
 }
 function printTrace(payload) {
@@ -1969,7 +1985,11 @@ async function runPrecedent(args) {
   const connection = resolveMemoryConnection(args);
   const server = await memoryHealth(connection);
   let nodesResponse = null; let error = null;
-  try { nodesResponse = await memoryGet(connection, '/graph/nodes', { ...graphScopeParams(args, plan), nodeKind: 'decision', query: args.query, limit: args.limit ?? DEFAULT_SEARCH_LIMIT }); } catch (e) { error = errorMessage(e); }
+  try { nodesResponse = await memoryGet(connection, '/graph/nodes', { ...graphScopeParams(args, plan), nodeKind: 'decision', query: args.query, limit: args.limit ?? DEFAULT_SEARCH_LIMIT }); } catch (e) {
+    error = args.global && / failed with 400(?:\D|$)/.test(errorMessage(e))
+      ? 'Memory 서버가 cross-project 그래프 검색을 지원하지 않습니다. --project <id>를 지정하세요'
+      : errorMessage(e);
+  }
   const decisionNodes = Array.isArray(nodesResponse) ? nodesResponse : (nodesResponse?.nodes ?? []);
   const decisions = [];
   if (!error) {
@@ -2882,6 +2902,8 @@ function printDigest(payload) {
 function errorMessage(error) {
   return error instanceof Error && error.message ? error.message : String(error);
 }
+
+export { buildGraphIndex, buildMemoryPlan, graphScopeParams, incomingEdgeLabel };
 
 export async function main(argv = process.argv.slice(2)) {
   const args = parseArgs(argv);
