@@ -643,8 +643,8 @@ node .plan2agent/scripts/p2a_memory.mjs impact \
   --depth 5
 
 node .plan2agent/scripts/p2a_memory.mjs precedent \
+  --project <project_id> \
   --query "cache invalidation" \
-  --global \
   --limit 5
 ```
 

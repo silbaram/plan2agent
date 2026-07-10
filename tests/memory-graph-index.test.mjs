@@ -3,6 +3,7 @@ import path from 'node:path';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { formatCommandResult, makeTempDir, runMemory } from './helpers/fixtures.mjs';
+import { buildMemoryPlan } from '../scripts/p2a_memory.mjs';
 
 function writeJson(filePath, value) {
   mkdirSync(path.dirname(filePath), { recursive: true });
@@ -37,7 +38,7 @@ function makeArtifactRoot() {
     ],
   });
   writeJson(path.join(artifactRoot, 'iterations', 'iter-1', 'gate-d-review', 'review.json'), { schema_version: 'fixture' });
-  const run = { schema_version: 'p2a.run.v1', runId: 'run-1', projectId: 'graph-fixture', taskId: 'task-002', taskTitle: 'Second', iterationId: 'iter-1', sourceLayout: 'iteration', taskGraphRef: 'iterations/iter-1/gate-c-task-graph/task-graph.json', agentTool: 'codex', workspaceRef: 'w', workspacePath: '.', isolation: {}, status: 'finished', startedAt: '2026-07-10T00:00:00.000Z', updatedAt: '2026-07-10T00:00:00.000Z', finishedAt: '2026-07-10T00:00:00.000Z', changedFiles: [], verification: [], notes: [] };
+  const run = { schema_version: 'p2a.run.v1', runId: 'run-1', projectId: 'graph-fixture', taskId: 'task-002', taskTitle: 'Second', iterationId: 'iter-1', sourceLayout: 'iteration', taskGraphRef: 'iterations/iter-1/gate-c-task-graph/task-graph.json', sourceSpecRef: 'iterations/iter-1/gate-b-spec/spec.json', agentTool: 'codex', workspaceRef: 'w', workspacePath: '.', isolation: { mode: 'none', branch: null, worktree: null, baseRef: null, created: false, createCommand: null, createExitCode: null, createOutputTail: null }, status: 'finished', startedAt: '2026-07-10T00:00:00.000Z', updatedAt: '2026-07-10T00:00:00.000Z', finishedAt: '2026-07-10T00:00:00.000Z', changedFiles: [], verification: [], notes: [] };
   writeJson(path.join(artifactRoot, 'runs', 'run-index.json'), { schema_version: 'p2a.run_index.v1', projectId: 'graph-fixture', runs: [{ runId: 'run-1', taskId: 'task-002', iterationId: 'iter-1', status: 'finished', agentTool: 'codex', workspaceRef: 'w', taskGraphRef: 'iterations/iter-1/gate-c-task-graph/task-graph.json', runRef: 'runs/run-1.json', startedAt: run.startedAt, finishedAt: run.finishedAt }], tasks: [{ taskId: 'task-002', runIds: ['run-1'], latestRunId: 'run-1' }] });
   writeJson(path.join(artifactRoot, 'runs', 'run-1.json'), run);
   return { tempRoot, artifactRoot };
@@ -54,8 +55,44 @@ test('memory status includes stable graph index nodes and lineage edges', () => 
     const b = JSON.parse(second.stdout);
     assert.equal(a.local.graphNodes, b.local.graphNodes);
     assert.equal(a.local.graphEdges, b.local.graphEdges);
-    assert.ok(a.local.graphNodes >= 10, JSON.stringify(a.local));
-    assert.ok(a.local.graphEdges >= 4, JSON.stringify(a.local));
+
+    const firstPlan = buildMemoryPlan({ artifacts: artifactRoot, graph: null, runs: null, proposals: null });
+    const secondPlan = buildMemoryPlan({ artifacts: artifactRoot, graph: null, runs: null, proposals: null });
+    assert.deepEqual(
+      firstPlan.graph.nodes.map((node) => [node.naturalKey, node.nodeId]).sort(),
+      secondPlan.graph.nodes.map((node) => [node.naturalKey, node.nodeId]).sort(),
+      'graph node natural keys should map to stable node ids',
+    );
+
+    const nodeById = new Map(firstPlan.graph.nodes.map((node) => [node.nodeId, node]));
+    const naturalKey = (suffix) => firstPlan.graph.nodes.find((node) => node.naturalKey.endsWith(suffix))?.naturalKey ?? suffix;
+    const edgesByType = new Map();
+    for (const edge of firstPlan.graph.edges) {
+      const from = nodeById.get(edge.fromNodeId)?.naturalKey;
+      const to = nodeById.get(edge.toNodeId)?.naturalKey;
+      const key = `${from}->${to}`;
+      if (!edgesByType.has(edge.edgeType)) edgesByType.set(edge.edgeType, new Set());
+      edgesByType.get(edge.edgeType).add(key);
+    }
+    const expectEdge = (type, from, to) => {
+      assert.ok(
+        edgesByType.get(type)?.has(`${from}->${to}`),
+        `expected ${type} edge ${from}->${to}; actual=${JSON.stringify([...firstPlan.graph.edges].map((edge) => ({ type: edge.edgeType, from: nodeById.get(edge.fromNodeId)?.naturalKey, to: nodeById.get(edge.toNodeId)?.naturalKey })))}`,
+      );
+    };
+
+    expectEdge('DEPENDS_ON', 'task:task-002', 'task:task-001');
+    expectEdge('DERIVED_FROM', 'task:task-001', 'spec_section:product.scope');
+    expectEdge('DERIVED_FROM', 'task:task-002', 'spec_section:implementation.plan');
+    expectEdge('DERIVED_FROM', naturalKey('/iterations/iter-1/gate-b-spec/spec.json'), naturalKey('/iterations/iter-1/gate-a-intake/intake.json'));
+    expectEdge('EXECUTED_FOR', 'run:run-1', 'task:task-002');
+    expectEdge('DISPOSES', naturalKey('/iterations/iter-1/gate-b-spec/spec.json'), 'clarifying_question:CQ-1');
+    expectEdge('BLOCKS', 'clarifying_question:CQ-1', 'spec_section:product.scope');
+    expectEdge('EVIDENCED_BY', 'decision:ND-1', 'evidence:EV-1');
+    expectEdge('EVIDENCED_BY', 'assumption:A-1', 'evidence:EV-1');
+
+    const evidence = firstPlan.graph.nodes.find((node) => node.naturalKey === 'evidence:EV-1');
+    assert.equal(evidence?.label, 'Evidence One', 'duplicate evidence node should keep first label');
   } finally {
     rmSync(tempRoot, { recursive: true, force: true });
   }
