@@ -36,6 +36,7 @@ const DEFAULT_ARTIFACT_LIMIT = 5000;
 const DEFAULT_SEARCH_LIMIT = 20;
 const DEFAULT_HISTORY_LIMIT = 100;
 const MAX_CHUNK_CHARS = 2000;
+const MILESTONE_REVIEW_FILENAMES = ['midpoint.json', 'pre_close.json'];
 const SEARCH_ARTIFACT_TYPES = new Set([
   'PROJECT',
   'ITERATION',
@@ -420,6 +421,65 @@ function sourceTaskGraphId(projectId, iterationId, sourcePath) {
   return `${projectId}:${iterationId}:${sourcePath}`;
 }
 
+function sourceIterationIdForPath(context, filePath) {
+  if (!context.artifactRoot || !filePath) return context.iterationId;
+  const relativePath = normalizePath(path.relative(context.artifactRoot, path.resolve(filePath)));
+  const match = /^iterations\/([^/]+)\//.exec(relativePath);
+  return match?.[1] ?? context.iterationId;
+}
+
+function iterationStatus(context, iterationId) {
+  const closedIterations = Array.isArray(context.currentSpec?.closed_iterations)
+    ? context.currentSpec.closed_iterations
+    : [];
+  if (closedIterations.some((item) => item?.iteration_id === iterationId)) return 'ARCHIVED';
+  if (iterationId === context.iterationId || iterationId === 'maintenance') return 'ACTIVE';
+  return 'ARCHIVED';
+}
+
+function iterationSourcePath(context, iterationId) {
+  if (context.artifactRoot) {
+    const iterationMetadataPath = path.join(context.artifactRoot, 'iterations', iterationId, 'iteration.json');
+    if (fileExists(iterationMetadataPath)) return iterationMetadataPath;
+    const taskGraphPath = path.join(context.artifactRoot, 'iterations', iterationId, 'gate-c-task-graph', 'task-graph.json');
+    if (fileExists(taskGraphPath)) return taskGraphPath;
+  }
+  return context.currentSpecPath ?? context.graphPath ?? context.sourcePath ?? P2A_PATHS.projectRoot;
+}
+
+function buildIterationSnapshots(context, projectCanonicalId, sourceIterationIds) {
+  return [...sourceIterationIds]
+    .sort((left, right) => {
+      if (left === context.iterationId) return -1;
+      if (right === context.iterationId) return 1;
+      return left.localeCompare(right);
+    })
+    .map((iterationId) => {
+      const iterationCanonicalId = stableId('p2a-iteration', [context.projectId, iterationId]);
+      const sourcePath = iterationSourcePath(context, iterationId);
+      const iterationMetadata = metadata({
+        sourceProjectId: context.projectId,
+        sourceIterationId: iterationId,
+        p2aSourceKind: context.sourceKind,
+        sourceLayout: iterationId === 'maintenance' ? 'maintenance' : 'iteration',
+      });
+      return {
+        id: iterationCanonicalId,
+        artifactType: 'ITERATION',
+        sourceKey: iterationId,
+        sourcePath: displayPath(sourcePath),
+        request: {
+          iterationId: iterationCanonicalId,
+          sourceIterationId: iterationId,
+          label: iterationId === context.iterationId ? (context.iterationLabel ?? iterationId) : iterationId,
+          status: iterationStatus(context, iterationId),
+          sourceReference: sourceReference(iterationCanonicalId, sourcePath, 'iteration'),
+          metadata: iterationMetadata,
+        },
+      };
+    });
+}
+
 function readRuns(runsDir) {
   if (!directoryExists(runsDir)) return { runs: [], skippedRuns: [], totalRunRefs: 0 };
   const indexPath = path.join(runsDir, 'run-index.json');
@@ -480,6 +540,19 @@ function buildContext(args) {
   return buildRunsOnlyContext(args);
 }
 
+function stableMilestoneReviewPaths(artifactRoot) {
+  const iterationsRoot = path.join(artifactRoot, 'iterations');
+  if (!existsSync(iterationsRoot) || !lstatSync(iterationsRoot).isDirectory()) return [];
+  return readdirSync(iterationsRoot, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory() && entry.name !== 'maintenance')
+    .map((entry) => entry.name)
+    .sort()
+    .flatMap((iterationId) => MILESTONE_REVIEW_FILENAMES.map((fileName) => (
+      path.join(iterationsRoot, iterationId, 'milestone-reviews', fileName)
+    )))
+    .filter(fileExists);
+}
+
 function buildArtifactContext(args) {
   const state = resolveIterationState(args.artifacts, { requireReady: false });
   const graphPath = state.taskGraphPath;
@@ -496,6 +569,7 @@ function buildArtifactContext(args) {
     state.specPath,
     state.taskGraphPath,
     state.reviewPath,
+    ...stableMilestoneReviewPaths(state.artifactRoot),
   ].filter(fileExists);
   return {
     sourceKind: 'artifacts',
@@ -505,6 +579,7 @@ function buildArtifactContext(args) {
     iterationLabel: state.activeIteration,
     artifactRoot: state.artifactRoot,
     currentSpecPath: state.currentSpecPath,
+    currentSpec: state.currentSpec,
     graphPath: hasGraph ? graphPath : null,
     graph,
     rawGraph,
@@ -531,6 +606,7 @@ function buildGraphContext(args) {
     iterationLabel: iterationId,
     artifactRoot: null,
     currentSpecPath: specPath ?? graphPath,
+    currentSpec: null,
     graphPath,
     graph,
     rawGraph,
@@ -553,6 +629,7 @@ function buildRunsOnlyContext(args) {
     iterationLabel: firstRun?.iterationId ?? 'runs',
     artifactRoot: null,
     currentSpecPath: runsDir,
+    currentSpec: null,
     graphPath: null,
     graph: null,
     rawGraph: null,
@@ -590,21 +667,7 @@ function buildMemoryPlan(args) {
     },
   };
 
-  const iteration = {
-    id: iterationCanonicalId,
-    artifactType: 'ITERATION',
-    sourceKey: iterationId,
-    request: {
-      iterationId: iterationCanonicalId,
-      sourceIterationId: iterationId,
-      label: context.iterationLabel ?? iterationId,
-      status: 'ACTIVE',
-      sourceReference: sourceReference(iterationCanonicalId, context.currentSpecPath ?? P2A_PATHS.projectRoot, 'iteration'),
-      metadata: baseMetadata,
-    },
-  };
-
-  const documents = buildDocumentSnapshots(context, projectCanonicalId, iterationCanonicalId, baseMetadata);
+  const documents = buildDocumentSnapshots(context, projectCanonicalId, baseMetadata);
   const proposalSnapshots = buildProposalSnapshots(context, projectCanonicalId, iterationCanonicalId, baseMetadata);
   const taskGraph = buildTaskGraphSnapshot(context, projectCanonicalId, iterationCanonicalId, documents, baseMetadata);
   const tasks = taskGraph ? buildTaskSnapshots(context, projectCanonicalId, iterationCanonicalId, taskGraph, baseMetadata) : [];
@@ -613,10 +676,27 @@ function buildMemoryPlan(args) {
   const allTasks = [...tasks, ...runSync.tasks];
   const runs = { runs: runSync.runs, skippedRuns: runSync.skippedRuns };
   const chunks = [...documents, ...proposalSnapshots.proposals].flatMap((document) => document.chunks);
-  const graph = buildGraphIndex(context, projectCanonicalId, iterationCanonicalId, documents, taskGraphs, allTasks, runs.runs, proposalSnapshots.proposals, baseMetadata);
+  const sourceIterationIds = new Set([iterationId]);
+  for (const item of [...documents, ...proposalSnapshots.proposals, ...taskGraphs, ...allTasks, ...runs.runs]) {
+    const sourceIterationId = item.request?.metadata?.sourceIterationId;
+    if (sourceIterationId) sourceIterationIds.add(sourceIterationId);
+  }
+  const iterations = buildIterationSnapshots(context, projectCanonicalId, sourceIterationIds);
+  const iteration = iterations.find((item) => item.sourceKey === iterationId) ?? iterations[0];
+  const graphs = buildGraphIndexes(
+    context,
+    projectCanonicalId,
+    iterations,
+    documents,
+    taskGraphs,
+    allTasks,
+    runs.runs,
+    proposalSnapshots.proposals,
+  );
+  const graph = graphs.find((item) => item.iterationId === iterationCanonicalId) ?? graphs[0];
   const syncItems = [
     localItem(project.artifactType, project.id, project.sourceKey, null, project.request.metadata),
-    localItem(iteration.artifactType, iteration.id, iteration.sourceKey, null, iteration.request.metadata),
+    ...iterations.map((item) => localItem(item.artifactType, item.id, item.sourceKey, null, item.request.metadata, item.sourcePath)),
     ...documents.map((document) => localItem('DOCUMENT_SNAPSHOT', document.id, document.sourceKey, document.contentHash, document.request.metadata, document.sourcePath)),
     ...proposalSnapshots.proposals.map((proposal) => localItem('PROPOSAL', proposal.id, proposal.sourceKey, proposal.contentHash, proposal.request.metadata, proposal.sourcePath)),
     ...taskGraphs.map((graph) => localItem('TASK_GRAPH', graph.id, graph.sourceKey, graph.graphHash, graph.request.metadata, graph.sourcePath)),
@@ -638,6 +718,7 @@ function buildMemoryPlan(args) {
     },
     project,
     iteration,
+    iterations,
     documents,
     proposals: proposalSnapshots.proposals,
     taskGraph,
@@ -648,9 +729,11 @@ function buildMemoryPlan(args) {
     skippedProposals: proposalSnapshots.skippedProposals,
     chunks,
     graph,
+    graphs,
     syncItems,
     summary: summarizePlan({
       documents,
+      iterations,
       proposals: proposalSnapshots.proposals,
       chunks,
       taskGraphs,
@@ -658,7 +741,7 @@ function buildMemoryPlan(args) {
       runs: runs.runs,
       skippedRuns: [...context.runs.skippedRuns, ...runs.skippedRuns],
       skippedProposals: proposalSnapshots.skippedProposals,
-      graph,
+      graphs,
     }),
   };
 }
@@ -757,6 +840,29 @@ function buildGraphIndex(context, projectCanonicalId, iterationCanonicalId, docu
   return { projectId: projectCanonicalId, iterationId: iterationCanonicalId, nodes: [...nodes.values()], edges: [...edges.values()] };
 }
 
+function buildGraphIndexes(context, projectCanonicalId, iterations, documents, taskGraphs, tasks, runs, proposals) {
+  return iterations.map((iteration) => {
+    const iterationCanonicalId = iteration.id;
+    const iterationContext = {
+      ...context,
+      iterationId: iteration.sourceKey,
+      iterationLabel: iteration.request.label,
+    };
+    const belongsToIteration = (item) => item.request?.iterationId === iterationCanonicalId;
+    return buildGraphIndex(
+      iterationContext,
+      projectCanonicalId,
+      iterationCanonicalId,
+      documents.filter(belongsToIteration),
+      taskGraphs.filter(belongsToIteration),
+      tasks.filter(belongsToIteration),
+      runs.filter(belongsToIteration),
+      proposals.filter(belongsToIteration),
+      iteration.request.metadata,
+    );
+  });
+}
+
 function localItem(artifactType, artifactId, sourceKey, contentHash, sourceIds, sourcePath = null) {
   return {
     artifactType,
@@ -777,10 +883,10 @@ function localItem(artifactType, artifactId, sourceKey, contentHash, sourceIds, 
   };
 }
 
-function summarizePlan({ documents, proposals, chunks, taskGraphs, taskGraph, tasks, runs, skippedRuns, skippedProposals, graph = null }) {
+function summarizePlan({ documents, iterations = [], proposals, chunks, taskGraphs, taskGraph, tasks, runs, skippedRuns, skippedProposals, graphs = [] }) {
   return {
     projects: 1,
-    iterations: 1,
+    iterations: iterations.length || 1,
     documents: documents.length,
     proposals: proposals.length,
     chunks: chunks.length,
@@ -789,12 +895,12 @@ function summarizePlan({ documents, proposals, chunks, taskGraphs, taskGraph, ta
     runs: runs.length,
     skippedRuns: skippedRuns.length,
     skippedProposals: skippedProposals.length,
-    graphNodes: graph?.nodes?.length ?? 0,
-    graphEdges: graph?.edges?.length ?? 0,
+    graphNodes: graphs.reduce((sum, graph) => sum + graph.nodes.length, 0),
+    graphEdges: graphs.reduce((sum, graph) => sum + graph.edges.length, 0),
   };
 }
 
-function buildDocumentSnapshots(context, projectCanonicalId, iterationCanonicalId, baseMetadata) {
+function buildDocumentSnapshots(context, projectCanonicalId, baseMetadata) {
   const seen = new Set();
   return context.documentPaths
     .map((filePath) => path.resolve(filePath))
@@ -808,10 +914,13 @@ function buildDocumentSnapshots(context, projectCanonicalId, iterationCanonicalI
       if (!content.trim()) return null;
       const sourcePath = displayPath(filePath);
       const contentHash = hashText(content);
-      const sourceId = sourceDocumentId(context.projectId, context.iterationId, sourcePath);
+      const sourceIterationId = sourceIterationIdForPath(context, filePath);
+      const iterationCanonicalId = stableId('p2a-iteration', [context.projectId, sourceIterationId]);
+      const sourceId = sourceDocumentId(context.projectId, sourceIterationId, sourcePath);
       const documentId = stableId('p2a-doc', [sourceId, contentHash]);
       const documentMetadata = metadata({
         ...baseMetadata,
+        sourceIterationId,
         sourceDocumentId: sourceId,
         documentRole: documentRole(filePath),
       });
@@ -849,6 +958,7 @@ function documentRole(filePath) {
   if (normalized.endsWith('/gate-b-spec/spec.json')) return 'spec';
   if (normalized.endsWith('/gate-c-task-graph/task-graph.json')) return 'task_graph_document';
   if (normalized.endsWith('/gate-d-review/review.json')) return 'review';
+  if (/\/milestone-reviews\/(?:midpoint|pre_close)\.json$/.test(normalized)) return 'milestone_review';
   return 'document';
 }
 
@@ -2081,6 +2191,7 @@ function historyScope(plan, args) {
 }
 
 function buildLocalHistoryEvents(plan) {
+  const taskGraphPathById = new Map(plan.taskGraphs.map((taskGraph) => [taskGraph.id, taskGraph.sourcePath]));
   const events = [
     localHistoryEvent({
       artifactType: 'PROJECT',
@@ -2093,25 +2204,25 @@ function buildLocalHistoryEvents(plan) {
       occurredAt: fileTimestamp(plan.context.sourcePath),
       metadata: plan.project.request.metadata,
     }),
-    localHistoryEvent({
+    ...plan.iterations.map((iteration) => localHistoryEvent({
       artifactType: 'ITERATION',
-      artifactId: plan.iteration.id,
-      sourceKey: plan.iteration.sourceKey,
-      sourcePath: plan.context.sourcePath,
+      artifactId: iteration.id,
+      sourceKey: iteration.sourceKey,
+      sourcePath: iteration.sourcePath,
       projectId: plan.context.projectId,
-      iterationId: plan.context.iterationId,
-      title: plan.iteration.request.label,
-      status: plan.iteration.request.status,
-      occurredAt: fileTimestamp(plan.context.sourcePath),
-      metadata: plan.iteration.request.metadata,
-    }),
+      iterationId: iteration.sourceKey,
+      title: iteration.request.label,
+      status: iteration.request.status,
+      occurredAt: fileTimestamp(iteration.sourcePath),
+      metadata: iteration.request.metadata,
+    })),
     ...plan.documents.map((document) => localHistoryEvent({
       artifactType: 'DOCUMENT_SNAPSHOT',
       artifactId: document.id,
       sourceKey: document.sourceKey,
       sourcePath: document.sourcePath,
       projectId: plan.context.projectId,
-      iterationId: plan.context.iterationId,
+      iterationId: document.request.metadata.sourceIterationId,
       title: document.request.title,
       contentHash: document.contentHash,
       occurredAt: fileTimestamp(document.sourcePath),
@@ -2123,45 +2234,48 @@ function buildLocalHistoryEvents(plan) {
       sourceKey: proposal.sourceKey,
       sourcePath: proposal.sourcePath,
       projectId: plan.context.projectId,
-      iterationId: plan.context.iterationId,
+      iterationId: proposal.request.metadata.sourceIterationId,
       title: proposal.request.title,
       status: proposal.proposal.status,
       contentHash: proposal.contentHash,
       occurredAt: fileTimestamp(proposal.sourcePath),
       metadata: proposal.request.metadata,
     })),
-    ...(plan.taskGraph ? [localHistoryEvent({
+    ...plan.taskGraphs.map((taskGraph) => localHistoryEvent({
       artifactType: 'TASK_GRAPH',
-      artifactId: plan.taskGraph.id,
-      sourceKey: plan.taskGraph.sourceKey,
-      sourcePath: plan.taskGraph.sourcePath,
+      artifactId: taskGraph.id,
+      sourceKey: taskGraph.sourceKey,
+      sourcePath: taskGraph.sourcePath,
       projectId: plan.context.projectId,
-      iterationId: plan.context.iterationId,
+      iterationId: taskGraph.request.metadata.sourceIterationId,
       title: 'task graph',
-      contentHash: plan.taskGraph.graphHash,
-      occurredAt: fileTimestamp(plan.taskGraph.sourcePath),
-      metadata: plan.taskGraph.request.metadata,
-    })] : []),
-    ...plan.tasks.map((task) => localHistoryEvent({
+      contentHash: taskGraph.graphHash,
+      occurredAt: fileTimestamp(taskGraph.sourcePath),
+      metadata: taskGraph.request.metadata,
+    })),
+    ...plan.tasks.map((task) => {
+      const sourcePath = taskGraphPathById.get(task.request.taskGraphId) ?? plan.context.sourcePath;
+      return localHistoryEvent({
       artifactType: 'TASK',
       artifactId: task.id,
       sourceKey: task.sourceKey,
-      sourcePath: plan.taskGraph?.sourcePath ?? plan.context.sourcePath,
+      sourcePath,
       projectId: plan.context.projectId,
-      iterationId: plan.context.iterationId,
+      iterationId: task.request.metadata.sourceIterationId,
       taskId: task.request.sourceTaskId,
       title: task.request.title,
       status: task.request.status,
-      occurredAt: fileTimestamp(plan.taskGraph?.sourcePath ?? plan.context.sourcePath),
+      occurredAt: fileTimestamp(sourcePath),
       metadata: task.request.metadata,
-    })),
+      });
+    }),
     ...plan.runs.map((run) => localHistoryEvent({
       artifactType: 'RUN_RECORD',
       artifactId: run.id,
       sourceKey: run.sourceKey,
       sourcePath: run.sourcePath,
       projectId: plan.context.projectId,
-      iterationId: plan.context.iterationId,
+      iterationId: run.request.metadata.sourceIterationId,
       taskId: run.request.metadata.sourceTaskId ?? null,
       runId: run.request.sourceRunId,
       title: run.request.metadata.taskTitle ?? run.request.sourceRunId,
@@ -2365,6 +2479,8 @@ async function runPush(args) {
   const connection = resolveMemoryConnection(args);
   const dryRun = args.dryRun || !args.yes;
   if (dryRun) {
+    const graphNodes = plan.graphs.flatMap((graph) => graph.nodes);
+    const graphEdges = plan.graphs.flatMap((graph) => graph.edges);
     const payload = {
       schema_version: 'p2a.memory_push_preview.v1',
       generatedAt: new Date().toISOString(),
@@ -2376,7 +2492,7 @@ async function runPush(args) {
         source: connection.serverSource,
       },
       local: plan.summary,
-      graph: { nodes: plan.graph.nodes.length, edges: plan.graph.edges.length, sampleNodes: plan.graph.nodes.slice(0, 5), sampleEdges: plan.graph.edges.slice(0, 5) },
+      graph: { snapshots: plan.graphs.length, nodes: graphNodes.length, edges: graphEdges.length, sampleNodes: graphNodes.slice(0, 5), sampleEdges: graphEdges.slice(0, 5) },
       skippedRuns: plan.skippedRuns,
       skippedProposals: plan.skippedProposals,
       writeOrder: writeOrder(plan),
@@ -2410,15 +2526,15 @@ async function runPush(args) {
 function writeOrder(plan) {
   return [
     { artifactType: 'PROJECT', count: 1 },
-    { artifactType: 'ITERATION', count: 1 },
+    { artifactType: 'ITERATION', count: plan.iterations.length },
     { artifactType: 'DOCUMENT_SNAPSHOT', count: plan.documents.length },
     { artifactType: 'PROPOSAL', count: plan.proposals.length },
-    { artifactType: 'TASK_GRAPH', count: plan.taskGraph ? 1 : 0 },
+    { artifactType: 'TASK_GRAPH', count: plan.taskGraphs.length },
     { artifactType: 'TASK', count: plan.tasks.length },
     { artifactType: 'RUN_RECORD', count: plan.runs.length },
     { artifactType: 'DOCUMENT_CHUNK', count: plan.chunks.length },
-    { artifactType: 'GRAPH_NODE', count: plan.graph.nodes.length },
-    { artifactType: 'GRAPH_EDGE', count: plan.graph.edges.length },
+    { artifactType: 'GRAPH_NODE', count: plan.graphs.reduce((sum, graph) => sum + graph.nodes.length, 0) },
+    { artifactType: 'GRAPH_EDGE', count: plan.graphs.reduce((sum, graph) => sum + graph.edges.length, 0) },
   ];
 }
 
@@ -2438,7 +2554,7 @@ function printPushPreview(payload) {
   console.log(`- server: ${payload.server.url ?? 'not_configured'}`);
   console.log('- dry-run: no server writes');
   console.log(`- local: ${formatSummary(payload.local)}`);
-  if (payload.graph) console.log(`- graph: nodes=${payload.graph.nodes} edges=${payload.graph.edges} samples=${payload.graph.sampleNodes.map((node) => node.naturalKey).join(', ') || 'none'}`);
+  if (payload.graph) console.log(`- graph: snapshots=${payload.graph.snapshots} nodes=${payload.graph.nodes} edges=${payload.graph.edges} samples=${payload.graph.sampleNodes.map((node) => node.naturalKey).join(', ') || 'none'}`);
   console.log('- write order:');
   payload.writeOrder.forEach((item) => console.log(`  - ${item.artifactType}: ${item.count}`));
   if (payload.nextActions.length) {
@@ -2447,24 +2563,30 @@ function printPushPreview(payload) {
   }
 }
 
-async function pushPlan(connection, plan) {
+async function pushPlan(connection, plan, post = memoryPost) {
   const result = {
     project: null,
     iteration: null,
+    iterations: [],
     documents: [],
     taskGraph: null,
     tasks: [],
     runs: [],
     chunks: [],
     graph: null,
+    graphs: [],
   };
-  result.project = await memoryPost(connection, '/projects', plan.project.request);
-  result.iteration = await memoryPost(connection, `/projects/${encodeURIComponent(plan.project.id)}/iterations`, plan.iteration.request);
+  result.project = await post(connection, '/projects', plan.project.request);
+  for (const iteration of plan.iterations) {
+    const response = await post(connection, `/projects/${encodeURIComponent(plan.project.id)}/iterations`, iteration.request);
+    result.iterations.push(response);
+    if (iteration.id === plan.iteration.id) result.iteration = response;
+  }
   for (const document of [...plan.documents, ...plan.proposals]) {
-    const response = await memoryPost(connection, '/documents/snapshots', document.request);
+    const response = await post(connection, '/documents/snapshots', document.request);
     result.documents.push(response);
     if (document.chunks.length) {
-      const chunkResponse = await memoryPost(connection, '/document-chunks/bulk', {
+      const chunkResponse = await post(connection, '/document-chunks/bulk', {
         documentId: response.documentId,
         chunks: document.chunks.map((chunk) => chunk.request),
       });
@@ -2472,11 +2594,11 @@ async function pushPlan(connection, plan) {
     }
   }
   for (const graph of plan.taskGraphs ?? (plan.taskGraph ? [plan.taskGraph] : [])) {
-    const graphResponse = await memoryPost(connection, '/task-graphs', graph.request);
+    const graphResponse = await post(connection, '/task-graphs', graph.request);
     if (!result.taskGraph) result.taskGraph = graphResponse;
     const graphTasks = plan.tasks.filter((task) => task.request.taskGraphId === graph.id);
     if (graphTasks.length) {
-      const taskResponses = await memoryPost(connection, '/tasks/bulk', {
+      const taskResponses = await post(connection, '/tasks/bulk', {
         graphId: graph.id,
         tasks: graphTasks.map((task) => task.request),
       });
@@ -2484,13 +2606,19 @@ async function pushPlan(connection, plan) {
     }
   }
   for (const run of plan.runs) {
-    result.runs.push(await memoryPost(connection, '/runs', run.request));
+    result.runs.push(await post(connection, '/runs', run.request));
   }
-  try {
-    result.graph = await memoryPost(connection, '/graph/snapshots', plan.graph);
-  } catch (error) {
-    if (!isNotFoundError(error)) throw error;
-    result.graph = { skipped: true, warning: 'Memory server does not support /api/graph/snapshots; graph push skipped.' };
+  for (const graph of plan.graphs) {
+    try {
+      const graphResponse = await post(connection, '/graph/snapshots', graph);
+      result.graphs.push(graphResponse);
+      if (graph.iterationId === plan.iteration.id) result.graph = graphResponse;
+    } catch (error) {
+      if (!isNotFoundError(error)) throw error;
+      result.graph = { skipped: true, warning: 'Memory server does not support /api/graph/snapshots; graph push skipped.' };
+      result.graphs = [result.graph];
+      break;
+    }
   }
   return {
     projectId: result.project?.projectId ?? null,
@@ -2502,8 +2630,10 @@ async function pushPlan(connection, plan) {
     tasks: result.tasks.length,
     runs: result.runs.length,
     chunks: result.chunks.length,
-    graphNodes: plan.graph.nodes.length,
-    graphEdges: plan.graph.edges.length,
+    iterations: result.iterations.length,
+    graphSnapshots: plan.graphs.length,
+    graphNodes: plan.graphs.reduce((sum, graph) => sum + graph.nodes.length, 0),
+    graphEdges: plan.graphs.reduce((sum, graph) => sum + graph.edges.length, 0),
     graphSkipped: result.graph?.skipped === true,
     graphWarning: result.graph?.warning ?? null,
   };
@@ -2514,7 +2644,7 @@ function printPushResult(payload) {
   console.log(`- project: ${payload.context.projectId}`);
   console.log(`- iteration: ${payload.context.iterationId}`);
   console.log(`- server: ${payload.server.url}`);
-  console.log(`- wrote: documents=${payload.result.documents} proposals=${payload.result.proposals} chunks=${payload.result.chunks} taskGraph=${payload.result.taskGraphs ?? (payload.result.taskGraphId ? 1 : 0)} tasks=${payload.result.tasks} runs=${payload.result.runs} graphNodes=${payload.result.graphNodes} graphEdges=${payload.result.graphEdges}`);
+  console.log(`- wrote: iterations=${payload.result.iterations} documents=${payload.result.documents} proposals=${payload.result.proposals} chunks=${payload.result.chunks} taskGraph=${payload.result.taskGraphs ?? (payload.result.taskGraphId ? 1 : 0)} tasks=${payload.result.tasks} runs=${payload.result.runs} graphSnapshots=${payload.result.graphSnapshots} graphNodes=${payload.result.graphNodes} graphEdges=${payload.result.graphEdges}`);
   if (payload.result.graphWarning) console.log(`- graph warning: ${payload.result.graphWarning}`);
   if (payload.skippedRuns.length) console.log(`- skipped runs: ${payload.skippedRuns.length}`);
   if (payload.skippedProposals.length) console.log(`- skipped proposals: ${payload.skippedProposals.length}`);
@@ -2903,7 +3033,7 @@ function errorMessage(error) {
   return error instanceof Error && error.message ? error.message : String(error);
 }
 
-export { buildGraphIndex, buildMemoryPlan, graphScopeParams, incomingEdgeLabel };
+export { buildGraphIndex, buildMemoryPlan, graphScopeParams, incomingEdgeLabel, pushPlan };
 
 export async function main(argv = process.argv.slice(2)) {
   const args = parseArgs(argv);

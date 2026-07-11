@@ -3,7 +3,7 @@ import path from 'node:path';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { formatCommandResult, makeTempDir, runMemory } from './helpers/fixtures.mjs';
-import { buildMemoryPlan } from '../scripts/p2a_memory.mjs';
+import { buildMemoryPlan, pushPlan } from '../scripts/p2a_memory.mjs';
 
 function writeJson(filePath, value) {
   mkdirSync(path.dirname(filePath), { recursive: true });
@@ -38,6 +38,21 @@ function makeArtifactRoot() {
     ],
   });
   writeJson(path.join(artifactRoot, 'iterations', 'iter-1', 'gate-d-review', 'review.json'), { schema_version: 'fixture' });
+  writeJson(path.join(artifactRoot, 'iterations', 'iter-1', 'milestone-reviews', 'midpoint.json'), {
+    schema_version: 'p2a.milestone_review.v1',
+    checkpoint: 'midpoint',
+    note: 'Stable milestone fixture for Memory document persistence.',
+  });
+  writeJson(path.join(artifactRoot, 'iterations', 'iter-1', 'milestone-reviews', 'pre_close.draft.json'), {
+    schema_version: 'p2a.milestone_review.v1',
+    checkpoint: 'pre_close',
+    note: 'Drafts must not be persisted to Memory.',
+  });
+  writeJson(path.join(artifactRoot, 'iterations', 'iter-closed', 'milestone-reviews', 'pre_close.json'), {
+    schema_version: 'p2a.milestone_review.v1',
+    checkpoint: 'pre_close',
+    note: 'Closed iteration milestones must remain discoverable for a later Memory push.',
+  });
   const run = { schema_version: 'p2a.run.v1', runId: 'run-1', projectId: 'graph-fixture', taskId: 'task-002', taskTitle: 'Second', iterationId: 'iter-1', sourceLayout: 'iteration', taskGraphRef: 'iterations/iter-1/gate-c-task-graph/task-graph.json', sourceSpecRef: 'iterations/iter-1/gate-b-spec/spec.json', agentTool: 'codex', workspaceRef: 'w', workspacePath: '.', isolation: { mode: 'none', branch: null, worktree: null, baseRef: null, created: false, createCommand: null, createExitCode: null, createOutputTail: null }, status: 'finished', startedAt: '2026-07-10T00:00:00.000Z', updatedAt: '2026-07-10T00:00:00.000Z', finishedAt: '2026-07-10T00:00:00.000Z', changedFiles: [], verification: [], notes: [] };
   writeJson(path.join(artifactRoot, 'runs', 'run-index.json'), { schema_version: 'p2a.run_index.v1', projectId: 'graph-fixture', runs: [{ runId: 'run-1', taskId: 'task-002', iterationId: 'iter-1', status: 'finished', agentTool: 'codex', workspaceRef: 'w', taskGraphRef: 'iterations/iter-1/gate-c-task-graph/task-graph.json', runRef: 'runs/run-1.json', startedAt: run.startedAt, finishedAt: run.finishedAt }], tasks: [{ taskId: 'task-002', runIds: ['run-1'], latestRunId: 'run-1' }] });
   writeJson(path.join(artifactRoot, 'runs', 'run-1.json'), run);
@@ -58,6 +73,38 @@ test('memory status includes stable graph index nodes and lineage edges', () => 
 
     const firstPlan = buildMemoryPlan({ artifacts: artifactRoot, graph: null, runs: null, proposals: null });
     const secondPlan = buildMemoryPlan({ artifacts: artifactRoot, graph: null, runs: null, proposals: null });
+    const milestoneDocuments = firstPlan.documents
+      .filter((document) => document.request.metadata.documentRole === 'milestone_review');
+    const iterationBySourceId = new Map(firstPlan.iterations.map((iteration) => [iteration.sourceKey, iteration]));
+    assert.equal(firstPlan.iterations.length, 2);
+    assert.equal(iterationBySourceId.get('iter-1')?.request.status, 'ACTIVE');
+    assert.equal(iterationBySourceId.get('iter-closed')?.request.status, 'ARCHIVED');
+    assert.equal(milestoneDocuments.length, 2);
+    assert.deepEqual(
+      milestoneDocuments.map((document) => path.relative(artifactRoot, document.sourcePath)),
+      [
+        path.join('iterations', 'iter-1', 'milestone-reviews', 'midpoint.json'),
+        path.join('iterations', 'iter-closed', 'milestone-reviews', 'pre_close.json'),
+      ],
+    );
+    assert.deepEqual(
+      milestoneDocuments.map((document) => JSON.parse(document.content).checkpoint),
+      ['midpoint', 'pre_close'],
+    );
+    assert.deepEqual(
+      milestoneDocuments.map((document) => document.request.metadata.sourceIterationId),
+      ['iter-1', 'iter-closed'],
+    );
+    assert.deepEqual(
+      milestoneDocuments.map((document) => document.request.iterationId),
+      [iterationBySourceId.get('iter-1').id, iterationBySourceId.get('iter-closed').id],
+    );
+    assert.equal(firstPlan.graphs.length, 2);
+    const activeGraph = firstPlan.graphs.find((graph) => graph.iterationId === iterationBySourceId.get('iter-1').id);
+    const closedGraph = firstPlan.graphs.find((graph) => graph.iterationId === iterationBySourceId.get('iter-closed').id);
+    assert.equal(activeGraph.nodes.some((node) => node.naturalKey.includes('/iter-closed/')), false);
+    assert.equal(closedGraph.nodes.some((node) => node.naturalKey.includes('/iter-closed/')), true);
+    assert.equal(firstPlan.documents.some((document) => document.sourcePath.endsWith('.draft.json')), false);
     assert.deepEqual(
       firstPlan.graph.nodes.map((node) => [node.naturalKey, node.nodeId]).sort(),
       secondPlan.graph.nodes.map((node) => [node.naturalKey, node.nodeId]).sort(),
@@ -93,6 +140,45 @@ test('memory status includes stable graph index nodes and lineage edges', () => 
 
     const evidence = firstPlan.graph.nodes.find((node) => node.naturalKey === 'evidence:EV-1');
     assert.equal(evidence?.label, 'Evidence One', 'duplicate evidence node should keep first label');
+  } finally {
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test('memory push registers every referenced iteration before dependent artifacts', async () => {
+  const { tempRoot, artifactRoot } = makeArtifactRoot();
+  try {
+    const plan = buildMemoryPlan({ artifacts: artifactRoot, graph: null, runs: null, proposals: null });
+    const calls = [];
+    const post = async (_connection, pathName, body) => {
+      calls.push({ pathName, body });
+      if (pathName === '/projects') return { projectId: body.projectId };
+      if (pathName.endsWith('/iterations')) return { iterationId: body.iterationId };
+      if (pathName === '/documents/snapshots') return { documentId: body.documentId };
+      if (pathName === '/document-chunks/bulk') return [];
+      if (pathName === '/task-graphs') return { taskGraphId: body.taskGraphId };
+      if (pathName === '/tasks/bulk') return [];
+      if (pathName === '/runs') return { runId: body.runId };
+      if (pathName === '/graph/snapshots') return { nodeCount: body.nodes.length, edgeCount: body.edges.length };
+      throw new Error(`unexpected Memory path: ${pathName}`);
+    };
+
+    const result = await pushPlan({ server: 'http://memory.invalid' }, plan, post);
+    const iterationCalls = calls.filter((call) => call.pathName.endsWith('/iterations'));
+    const firstDependentCall = calls.findIndex((call) => [
+      '/documents/snapshots',
+      '/task-graphs',
+      '/runs',
+      '/graph/snapshots',
+    ].includes(call.pathName));
+
+    assert.equal(result.iterations, 2);
+    assert.deepEqual(
+      iterationCalls.map((call) => call.body.sourceIterationId),
+      ['iter-1', 'iter-closed'],
+    );
+    assert.equal(calls.slice(1, firstDependentCall).every((call) => call.pathName.endsWith('/iterations')), true);
+    assert.equal(calls.filter((call) => call.pathName === '/graph/snapshots').length, 2);
   } finally {
     rmSync(tempRoot, { recursive: true, force: true });
   }

@@ -126,10 +126,16 @@ test('memory run attribution follows run-owned iteration graph instead of active
     const payload = JSON.parse(result.stdout);
     assert.equal(payload.local.runs, 3, JSON.stringify(payload, null, 2));
     assert.equal(payload.local.skippedRuns, 1);
+    assert.equal(payload.local.iterations, 3);
     assert.equal(payload.local.taskGraphs, 3);
 
     const byRun = new Map(payload.sync.items.filter((item) => item.artifactType === 'RUN_RECORD').map((item) => [item.metadata.sourceRunId, item]));
+    const iterations = payload.sync.items
+      .filter((item) => item.artifactType === 'ITERATION')
+      .map((item) => [item.metadata.sourceIterationId, item.metadata.sourceLayout]);
     const graphByIteration = new Map(payload.sync.items.filter((item) => item.artifactType === 'TASK_GRAPH').map((item) => [item.metadata.sourceIterationId, item.metadata.sourceTaskGraphId]));
+
+    assert.deepEqual(iterations, [['v2', 'iteration'], ['maintenance', 'maintenance'], ['v1', 'iteration']]);
 
     assert.equal(byRun.get('run-active')?.metadata.sourceIterationId, 'v2');
     assert.equal(byRun.get('run-active')?.metadata.sourceTaskGraphId, graphByIteration.get('v2'));
