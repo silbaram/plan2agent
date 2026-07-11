@@ -41,8 +41,8 @@
 | --- | --- | --- |
 | `status.md` 반복 인덱스 | 전체 반복 history, close audit, handoff audit, maintenance 요약을 누적 렌더링한다. | 더 풍부한 사용자용 diff/요약은 후속 UX 항목이다. |
 | baseline-aware Gate A/B | 초기 Gate A-only 초안과 baseline 기반 delta 초안을 만든다. | 구조적 질문 재생성, 사용자 답변 재사용/재처분 로직이 필요하다. |
-| 구조적 diff task | spec field 차이를 semantic group으로 병합/분할하고, 완료 task overlap은 rework로 표시하며, `--force` 시 미완료 active task id/status를 재사용한다. | code-aware/LLM 기반 의미 판단은 후속 실행 레이어에서 다룬다. |
-| agent 저작 task gate | backbone(`context`, `gate-c-draft` 검증, `promote-tasks`), `p2a-task-author` 스킬, 정식 `task-context` schema, provenance sidecar가 구현됐다. 상세 계약은 §10이다. | feature task graph의 기존 done task 보존 강화는 후속이다. |
+| 구조적 diff task | spec field 차이를 semantic group으로 병합/분할하고, 완료 task overlap은 rework로 표시한다. 기존 정본을 `--force`로 다시 만들 수 있는 범위는 모든 task가 `todo`이고 active iteration run history가 없는 실행 전뿐이며 이때 active task id를 재사용한다. | code-aware/LLM 기반 의미 판단은 후속 실행 레이어에서 다룬다. |
+| agent 저작 task gate | backbone(`context`, `gate-c-draft` 검증, `promote-tasks`), `p2a-task-author` 스킬, 정식 `task-context` schema, provenance sidecar가 구현됐다. 정본 교체는 모든 task가 `todo`이고 run history가 없는 실행 전 구간에서만 명시적 `--replace-existing`으로 허용하며, 실행 시작 뒤에는 task를 다시 `todo`로 열어도 새 feature iteration 또는 maintenance lane을 사용한다. 상세 계약은 §10이다. | richer code-aware task authoring은 후속 실행 레이어에서 다룬다. |
 | archived close | close artifact 존재 여부/hash 기록과 기본 validate-time archive audit을 제공한다. | 기존 pre-audit artifact migration은 필요할 때 `--skip-archive-audit`로 우회한다. |
 | maintenance 반복 | lazy README, `maintenance add` task 생성, `maintenance add --from-draft` 승격, 존재하는 task graph 검증, `context --scope maintenance`, `tasks --maintenance` source/target 표와 prompt next command, handoff 시 별도 `.plan2agent/maintenance/task-graph.json` 복사를 제공한다. | GUI에서 후보 승인/실행을 더 풍부하게 조작하는 흐름은 후속이다. |
 | agent 실행 추적 | `p2a_runs.mjs`가 `runs/run-index.json`과 `runs/<runId>.json`을 관리하고, test/lint/typecheck 실행 결과와 git changed files를 수집한다. | PTY 기반 자동 agent orchestration, PR 생성, 병렬 실행 scheduler는 후속이다. |
@@ -136,6 +136,9 @@ open iteration -> task 실행 -> 모든 task done -> 사용자 close -> archived
       gate-d-review/
         review.json
         review-report.md
+      milestone-reviews/
+        midpoint.json                  # optional, informational, one per checkpoint
+        pre_close.json                 # optional, informational, one per checkpoint
     maintenance/
       README.md
       gate-c-task-graph/
@@ -170,6 +173,14 @@ open iteration -> task 실행 -> 모든 task done -> 사용자 close -> archived
 - `sourceSpecRefs`는 `current-spec.json`의 안정적인 spec 항목 id 또는 반복 spec 항목을 가리킨다.
 
 이 규칙은 현재 task graph 계약과 맞다. schema는 top-level `version`과 task별 `status`, `targetArea`, `sourceSpecRefs`를 이미 포함하며, validator는 task id 집합을 만든 뒤 각 `dependencies` 항목이 그 집합에 있는지 확인한다. 따라서 반복 간 dependency를 `dependencies`에 넣지 않으면 schema와 validator를 변경하지 않아도 된다.
+
+### 2-6. milestone review는 checkpoint별 비차단 sidecar다
+
+기능 반복의 중간과 종료 직전 통합 검토는 Gate D `review.json`을 다시 쓰지 않고 `iterations/<iter-id>/milestone-reviews/`에 분리한다. `midpoint.json`과 `pre_close.json`은 각각 최대 한 번만 존재하며, 전체 task graph snapshot과 raw/snapshot hash, 모든 완료 task의 latest successful run ref·raw hash·full immutable run snapshot·finished timestamp·changed files·verification을 함께 보존한다. 따라서 나중에 task graph 상태나 run index가 더 진행되거나 finished run에 합법적인 evidence가 보강돼도 당시 검토 범위와 근거를 재구성할 수 있다.
+
+artifact는 `p2a.milestone_review.v1` schema를 따른다. owner는 `<checkpoint>.<unique-id>.draft.json`을 만든 뒤 `p2a_iteration.mjs promote-milestone --artifacts <root> --draft <path>`를 호출한다. CLI는 draft를 검증하고 hard-link create로 stable 이름을 원자적으로 선점한 프로세스만 `<checkpoint>.json`을 확정한 뒤 winning draft를 삭제한다. 이미 stable 파일이 있으면 덮어쓰지 않고 실패하므로 기존의 비원자적 “없음 확인 후 rename” 경합이 없다.
+
+`confirmed_findings`는 stable finding id와 구조화 evidence를 가져 maintenance `sourceSpecRefs`에서 `milestone-review:<artifact-path>#<finding-id>`로 인용할 수 있다. `planned_todo_not_findings`는 당시 남은 task id를 보존해 같은 계획을 maintenance로 중복 등록하지 않게 한다. 이 sidecar의 존재나 finding 수는 `validate --require-close-ready`, task done/block, Gate D, `close` 조건에 포함되지 않는다.
 
 ## 3. 핵심 원칙
 
@@ -567,7 +578,7 @@ handoff는 active 반복의 `task-graph.sourceSpec`을 `spec.json`으로, `spec.
 
 ## 10. Agent 저작 task 게이트
 
-상태: **부분 구현**. backbone(`context` / `validate --stage gate-c-draft` / `promote-tasks`), 저작 스킬(`p2a-task-author`), 정식 context 스키마(`p2a.task_context.v1`), provenance sidecar가 구현됐다. maintenance context/실행 UX는 구현됐고, draft 파일을 maintenance graph에 append하는 Phase 1 승격 명령은 남았다.
+상태: **핵심 게이트 구현**. backbone(`context` / `validate --stage gate-c-draft` / `promote-tasks`), 저작 스킬(`p2a-task-author`), 정식 context 스키마(`p2a.task_context.v1`), provenance sidecar가 구현됐다. maintenance context/실행 UX와 draft 파일을 maintenance graph에 append하는 Phase 1 승격 명령도 연결됐다.
 
 이 문서는 agent가 task를 저작하고 사람이 게이트에서 확정하는 흐름의 구현 계약을 정의한다. 반복/고도화 개발의 정본 계약은 `docs/iteration-spec.md`이며, 이 문서는 그 위에 붙는 "Agent 저작 task 게이트" 기능의 설계 정본이다. `diff-tasks`는 deterministic semantic draft generator로 유지하고, agent 저작 경로는 더 깊은 맥락 판단을 붙이는 확장 경로다.
 
@@ -668,10 +679,10 @@ node .plan2agent/scripts/p2a_iteration.mjs context \
 | --- | --- | --- | --- |
 | `context` | iterative root, 선택적 idea | §10-4 번들을 stdout으로 출력 | iterative root 해석 실패 |
 | `validate --stage gate-c-draft` | iterative root | active 반복의 `task-graph.draft.json`을 schema/dependency/cycle로 검증(승인 불요) | draft 없음, schema/dependency/cycle 위반 |
-| `promote-tasks` | iterative root | active 반복의 `task-graph.draft.json`을 검증(approved spec 포함)하고 Gate C approval audit을 기록/확인한 뒤 `task-graph.json`으로 승격 | draft 없음, draft 검증 실패, audit 없음 |
+| `promote-tasks` | iterative root | active 반복의 `task-graph.draft.json`을 검증(approved spec 포함)하고 Gate C approval audit을 기록/확인한 뒤 `task-graph.json`으로 승격. 기존 정본 교체는 모든 task가 `todo`이고 active iteration run history가 없을 때 명시적 `--replace-existing`을 준 경우만 허용 | draft 없음, draft 검증 실패, audit 없음, 기존 정본이 있는데 opt-in 없음, 실행이 시작된 정본 교체 시도 |
 | `maintenance add --from-draft <file>` | maintenance 초안 파일 | 초안 task들을 검증 후 maintenance graph에 append (§10-8 Phase 1) | 초안 검증 실패, `--yes` 누락, dependency/cycle 위반 |
 
-`promote-tasks`는 baseline-aware 안전 조건(기존 정본의 `done` task id 보존 등)을 후속에서 강화한다. v1 계약은 schema/추적성/audit 확인까지다. 승격 시 `version`의 `-draft` 접미사를 제거하고, provenance sidecar를 `task-graph.draft.meta.json`에 기록하며, 직전 초안은 `task-graph.draft.json.promoted`로 보존한다.
+`promote-tasks`는 기존 정본이 있으면 기본적으로 교체를 거부한다. 모든 기존 task가 아직 `todo`이고 active iteration run history가 전혀 없는 실행 전 구간에서만 완전한 replacement draft를 사람이 검토한 뒤 `--replace-existing`으로 명시 승인할 수 있다. 하나라도 `in_progress`, `done`, `blocked`이거나 run이 기록됐다면 task를 나중에 `todo`로 다시 열어도 run lineage와 task 의미를 지키기 위해 교체하지 않고 새 feature iteration 또는 maintenance lane을 사용한다. 승격 시 `version`의 `-draft` 접미사를 제거하고, provenance sidecar를 `task-graph.draft.meta.json`에 기록하며, 직전 초안은 `task-graph.draft.json.promoted`로 보존한다.
 
 ### 10-6. Gate C 승인 게이트
 
@@ -687,7 +698,7 @@ node .plan2agent/scripts/p2a_iteration.mjs promote-tasks \
 `promote-tasks` 동작:
 
 1. active 반복의 `task-graph.draft.json`을 읽고 `validateTaskGraphData(draft, specPath)`로 재검증한다(approved spec + open_decisions 비어있음 + schema/dependency/cycle).
-2. (후속) baseline 정본이 있으면 초안이 기존 `done` task를 보존하며 안전하게 대체/확장하는지 확인한다.
+2. baseline 정본이 있으면 기본 승격을 거부한다. 완전한 replacement draft이고 모든 정본 task가 `todo`이며 active iteration run history가 없을 때만 `--replace-existing`을 요구해 교체하며, 실행이 시작된 정본은 task를 다시 열어도 교체하지 않는다.
 3. `current-spec.json.gate_c_approval_audits[active_iteration]`가 현재 draft hash와 일치하거나 `--approved-by`/`--approval-note`로 새 승인 근거가 전달됐는지 확인한다. 없거나 hash가 다르면 승격을 거부한다.
 4. 초안을 `task-graph.json`으로 승격하고, 직전 초안은 `task-graph.draft.json.promoted`로 보존한다.
 
@@ -698,11 +709,11 @@ node .plan2agent/scripts/p2a_iteration.mjs promote-tasks \
 
 ### 10-7. 저작 스킬 `p2a-task-author`
 
-- 입력: §10-4 context 번들. 출력: `task-graph.draft.json`.
-- 책임: 변경 의미를 읽어 task를 병합/분할하고, `existing_tasks`와 중복을 피하며, 각 task의 `sourceSpecRefs`를 effective spec 항목으로 채운다.
-- 제약: read-only planning 원칙을 지켜 코드·의존성 변경이나 정본 직접 쓰기를 하지 않는다. 초안만 쓴다.
+- 입력: §10-4 context 번들. 출력: `p2a-task-author` 서브에이전트가 반환하는 draft JSON과 skill owner가 저장하는 `task-graph.draft.json`.
+- 책임: read-only `p2a-task-author` 서브에이전트가 변경 의미를 읽어 task를 병합/분할하고, `existing_tasks`와 중복을 피하며, 각 task의 `sourceSpecRefs`를 effective spec 항목으로 채운다. skill owner만 반환된 JSON을 초안 파일로 저장하고 검증한다.
+- 제약: 서브에이전트는 파일이나 코드·의존성을 변경하지 않으며 정본을 직접 쓰지 않는다. skill owner도 초안만 쓰고, 정본 승격은 사람 승인 이후 `promote-tasks`가 수행한다.
 - mirror: 기존 skill mirror 규약(`.agents/skills` -> `.claude`/`.gemini`, command shim)을 따르고 `check_cli_parity`로 검증한다. 기존 `p2a-task-breakdown`의 sibling이다.
-- **구현됨**: `.agents/skills/p2a-task-author/SKILL.md` (canonical) + `.claude/skills/p2a-task-author/SKILL.md` mirror + `.gemini/commands/p2a/task-author.toml` shim. mirror/shim은 `sync_cli_assets.mjs`가 생성하고 `check_cli_parity.mjs`가 검증한다. 스킬은 context를 읽어 초안만 저작하고, 검증·audit·`promote-tasks` 절차를 사람 게이트로 인계한다.
+- **구현됨**: `.agents/skills/p2a-task-author/SKILL.md`와 `.agents/agents/p2a-task-author.md` (canonical) + provider별 skill/agent mirror + `.gemini/commands/p2a/task-author.toml` shim. mirror/shim은 `sync_cli_assets.mjs`가 생성하고 `check_cli_parity.mjs`가 검증한다. 서브에이전트는 draft JSON을 반환하고, skill owner는 초안 저장과 검증 후 audit·`promote-tasks` 절차를 사람 게이트로 인계한다.
 
 ### 10-8. 단계별 도입
 
@@ -713,7 +724,7 @@ node .plan2agent/scripts/p2a_iteration.mjs promote-tasks \
 
 Phase 1 흐름은 `context --scope maintenance`로 유지보수 레인 context를 출력하고, `tasks --maintenance list|ready|prompt`로 source/target과 실행 next command를 확인한 뒤, agent나 eval이 만든 maintenance draft를 사람이 검토하고 `maintenance add --from-draft <file> --dry-run`으로 preview한 다음 `--yes`로 append하는 것이다. ungated maintenance 특성상 별도 정본/초안 분리 없이 append 직전 `--yes` 확인을 게이트로 둔다. 중복 `eval-cluster:*`/proposal ref는 append 시 skip되며, draft-local dependency는 새 maintenance task id로 매핑된다. 단, maintenance는 본질적으로 코드-side 활동이라 GUI에서 더 풍부한 후보 승인/실행 조작은 후속으로 둔다(이관된 fix/기능 경계 분류 포함).
 
-Phase 2 흐름: `context` -> `p2a-task-author`가 `task-graph.draft.json` 저작 -> 사람 검토 + Gate C approval audit 기록 -> `promote-tasks`로 정본 승격 -> Gate D review -> `p2a_tasks` 실행. `diff-tasks`는 deterministic semantic draft generator로 남고, agent-authored draft 경로와 같은 Gate C approval/promotion 계약으로 수렴한다.
+Phase 2 흐름: `context` -> read-only `p2a-task-author` 서브에이전트가 draft JSON 반환 -> skill owner가 `task-graph.draft.json` 저장·검증 -> 사람 검토 + Gate C approval audit 기록 -> `promote-tasks`로 정본 승격 -> Gate D review -> `p2a_tasks` 실행. `diff-tasks`는 deterministic semantic draft generator로 남고, agent-authored draft 경로와 같은 Gate C approval/promotion 계약으로 수렴한다.
 
 ### 10-9. 가드레일
 

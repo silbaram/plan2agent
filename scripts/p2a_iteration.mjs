@@ -3,12 +3,14 @@
 
 import {
   existsSync,
+  linkSync,
   lstatSync,
   mkdirSync,
   readFileSync,
   realpathSync,
   readdirSync,
   renameSync,
+  unlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { createHash } from 'node:crypto';
@@ -18,12 +20,14 @@ import { pathToFileURL } from 'node:url';
 import {
   loadJson,
   validateIntake,
+  validateMilestoneReview,
   validateReview,
   validateHandoffReadyArtifactRoot,
   validateReviewPass,
   validateSpec,
   validateApprovalAuditData,
   validateEvalMaintenanceDraftData,
+  validateRunIndexData,
   validateTaskGraph,
   validateTaskContextData,
   validateTaskGraphData,
@@ -48,7 +52,7 @@ const GATE_DIRS = ['gate-a-intake', 'gate-b-spec', 'gate-c-task-graph', 'gate-d-
 const STATUS_ORDER = ['todo', 'in_progress', 'done', 'blocked'];
 const DEFAULT_ITERATION_ID = 'v1-mvp';
 const INIT_REBASED_SOURCE_SPEC = '../gate-b-spec/spec.json';
-const COMMANDS = new Set(['init', 'current', 'validate', 'close', 'open', 'draft', 'context', 'promote-spec', 'promote-tasks', 'diff-tasks', 'compose', 'maintenance']);
+const COMMANDS = new Set(['init', 'current', 'validate', 'close', 'open', 'draft', 'context', 'promote-spec', 'promote-tasks', 'promote-milestone', 'diff-tasks', 'compose', 'maintenance']);
 const MAINTENANCE_ACTIONS = new Set(['add']);
 const CONTEXT_SCOPES = new Set(['feature', 'maintenance']);
 const VALIDATE_STAGES = new Set(['ready', 'gate-a', 'gate-b-draft', 'gate-b-approved', 'gate-c-draft']);
@@ -85,7 +89,8 @@ function usage() {
     '  node .plan2agent/scripts/p2a_iteration.mjs draft --artifacts <iterative-project-dir> [--idea <text>] [--force]',
     '  node .plan2agent/scripts/p2a_iteration.mjs context --artifacts <iterative-project-dir> [--scope feature|maintenance] [--idea <text>] [--code-root <dir>]',
     '  node .plan2agent/scripts/p2a_iteration.mjs promote-spec --artifacts <iterative-project-dir>',
-    '  node .plan2agent/scripts/p2a_iteration.mjs promote-tasks --artifacts <iterative-project-dir> [--approved-by <name>] [--approval-note <text>]',
+    '  node .plan2agent/scripts/p2a_iteration.mjs promote-tasks --artifacts <iterative-project-dir> [--approved-by <name>] [--approval-note <text>] [--replace-existing]',
+    '  node .plan2agent/scripts/p2a_iteration.mjs promote-milestone --artifacts <iterative-project-dir> --draft <unique-draft-path>',
     '  node .plan2agent/scripts/p2a_iteration.mjs diff-tasks --artifacts <iterative-project-dir> [--force]',
     '  node .plan2agent/scripts/p2a_iteration.mjs compose --artifacts <iterative-project-dir> [--allow-conflicts]',
     '  node .plan2agent/scripts/p2a_iteration.mjs maintenance add --artifacts <iterative-project-dir> --title <text> --accept <text> [--accept <text> ...] [--description <text>] [--area <text>] [--prompt <text>] [--ref <value> ...] [--depends <task-id> ...] [--dry-run]',
@@ -101,6 +106,7 @@ function usage() {
     '  context               Print JSON context for agent-authored Gate C task drafting.',
     '  promote-spec          Record an approved active Gate B spec and initialize current-spec when needed.',
     '  promote-tasks         Promote an approved Gate C draft task graph to the canonical graph.',
+    '  promote-milestone     Atomically promote one validated unique milestone-review draft.',
     '  diff-tasks            Generate a task graph draft from active spec changes against the baseline.',
     '  compose               Rebuild current-spec.json as a composed effective spec view.',
     '  maintenance           Manage the always-on maintenance task graph (currently: add).',
@@ -142,6 +148,10 @@ function usage() {
     'promote-tasks options:',
     '  --approved-by <name>   Record Gate C task graph approval in current-spec.json. Defaults to user when --approval-note is present.',
     '  --approval-note <text> Approval rationale recorded with the Gate C audit.',
+    '  --replace-existing     Replace a reviewed complete graph only before any active-iteration task/run execution history exists.',
+    '',
+    'promote-milestone options:',
+    '  --draft <path>         Unique <checkpoint>.<id>.draft.json inside the active iteration milestone-reviews directory.',
     '',
     'diff-tasks options:',
     '  --force               Overwrite existing Gate C task graph draft.',
@@ -192,6 +202,8 @@ function parseArgs(argv) {
     scope: 'feature',
     approvedBy: null,
     approvalNote: null,
+    replaceExisting: false,
+    milestoneDraft: null,
     yes: false,
   };
   const command = argv[0];
@@ -267,6 +279,13 @@ function parseArgs(argv) {
       if (command !== 'promote-tasks') throw new Error('--approval-note is only supported by promote-tasks');
       args.approvalNote = argv[++index];
       if (!args.approvalNote) throw new Error('--approval-note requires a value');
+    } else if (arg === '--replace-existing') {
+      if (command !== 'promote-tasks') throw new Error('--replace-existing is only supported by promote-tasks');
+      args.replaceExisting = true;
+    } else if (arg === '--draft') {
+      if (command !== 'promote-milestone') throw new Error('--draft is only supported by promote-milestone');
+      args.milestoneDraft = argv[++index];
+      if (!args.milestoneDraft) throw new Error('--draft requires a path');
     } else if (arg === '--title') {
       if (command !== 'maintenance' || args.action !== 'add') throw new Error('--title is only supported by maintenance add');
       args.title = argv[++index];
@@ -316,6 +335,7 @@ function parseArgs(argv) {
   if (!args.help && !args.artifacts) throw new Error(`--artifacts is required\n\n${usage()}`);
   if (command === 'open' && !args.iterationIdProvided) throw new Error('--iteration-id is required for open');
   if (command === 'open' && (!args.idea || args.idea.trim().length === 0)) throw new Error('--idea is required for open');
+  if (command === 'promote-milestone' && !args.milestoneDraft) throw new Error('--draft is required for promote-milestone');
   if (command === 'maintenance' && args.action === 'add') {
     if (args.fromDraft) {
       if (args.title || args.description || args.prompt || args.acceptanceCriteria.length || args.sourceSpecRefs.length || args.dependencies.length || args.areaProvided) {
@@ -3384,12 +3404,55 @@ function canonicalDraftVersion(version) {
     : version;
 }
 
+function activeIterationRunHistory(state) {
+  const runIndexPath = path.join(state.artifactRoot, 'runs', 'run-index.json');
+  if (!existsSync(runIndexPath)) return [];
+  const runIndex = validateRunIndexData(loadJson(runIndexPath));
+  if (runIndex.projectId !== state.projectId) {
+    throw new ValidationError(`run-index projectId must match active project ${state.projectId}`);
+  }
+  return runIndex.runs.filter((entry) => entry.iterationId === state.activeIteration);
+}
+
+function assertNoTaskGraphExecutionHistory(state, operation) {
+  const runHistory = activeIterationRunHistory(state);
+  if (!runHistory.length) return;
+  const examples = runHistory.slice(0, 5).map((entry) => `${entry.runId}:${entry.status}`).join(', ');
+  throw new ValidationError(
+    `${operation} cannot replace a task graph after execution history exists; run(s): ${examples}. ` +
+    'Preserve run lineage by opening a new feature iteration or using the maintenance lane',
+  );
+}
+
 function promoteTasks(args) {
   const state = resolveIterationState(args.artifacts, { requireReady: false });
   const draftPath = gateCTaskGraphDraftPath(state);
   if (!existsSync(draftPath)) throw new ValidationError(`gate-c draft not found; author one at ${draftPath} first`);
   const draft = loadJson(draftPath);
   validateTaskGraphData(draft, state.specPath);
+  const preExecutedDraftTasks = draft.tasks.filter((task) => task.status !== 'todo');
+  if (preExecutedDraftTasks.length) {
+    throw new ValidationError(
+      `Gate C draft tasks must all start as todo; non-todo task(s): ${preExecutedDraftTasks.map((task) => `${task.id}:${task.status}`).join(', ')}`,
+    );
+  }
+  if (existsSync(state.taskGraphPath) && !args.replaceExisting) {
+    throw new ValidationError(
+      'canonical task graph already exists; refusing to replace it with a potentially incremental-only draft. ' +
+      'Generate and review a complete replacement with diff-tasks --force, then rerun promote-tasks with --replace-existing',
+    );
+  }
+  if (existsSync(state.taskGraphPath) && args.replaceExisting) {
+    const existingTaskGraph = validateTaskGraph(state.taskGraphPath, state.specPath);
+    const startedTasks = existingTaskGraph.tasks.filter((task) => task.status !== 'todo');
+    if (startedTasks.length) {
+      throw new ValidationError(
+        `cannot replace a canonical task graph after execution has started; non-todo task(s): ${startedTasks.map((task) => `${task.id}:${task.status}`).join(', ')}. ` +
+        'Preserve run lineage by opening a new feature iteration or using the maintenance lane',
+      );
+    }
+    assertNoTaskGraphExecutionHistory(state, 'promote-tasks --replace-existing');
+  }
   const promotedAt = new Date().toISOString();
   const draftSha256 = fileSha256(draftPath);
   const gateCApprovalAudit = resolveGateCApprovalAuditForPromotion(state, args, draftSha256);
@@ -3410,6 +3473,85 @@ function promoteTasks(args) {
   console.log(`- graph: ${toRelativeFromRoot(state.taskGraphPath)}`);
   console.log('- promoted from: task-graph.draft.json');
   console.log(`- provenance: ${toRelativeFromRoot(metaPath)}`);
+  return 0;
+}
+
+const MILESTONE_DRAFT_TOKEN_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+
+export function assertUniqueMilestoneDraftPath(draftPath, reviewDir, checkpoint) {
+  if (path.dirname(draftPath) !== reviewDir) {
+    throw new ValidationError(`milestone draft must be a direct child of ${reviewDir}`);
+  }
+  const filename = path.basename(draftPath);
+  const prefix = `${checkpoint}.`;
+  const suffix = '.draft.json';
+  const token = filename.startsWith(prefix) && filename.endsWith(suffix)
+    ? filename.slice(prefix.length, -suffix.length)
+    : '';
+  if (!MILESTONE_DRAFT_TOKEN_PATTERN.test(token)) {
+    throw new ValidationError(
+      `milestone draft must use unique filename ${checkpoint}.<id>.draft.json; got ${filename}`,
+    );
+  }
+}
+
+export function promoteMilestoneDraftAtomically(draftPath, stablePath, operations = { linkSync, unlinkSync }) {
+  const link = operations.linkSync ?? linkSync;
+  const unlink = operations.unlinkSync ?? unlinkSync;
+  try {
+    link(draftPath, stablePath);
+  } catch (error) {
+    if (error?.code === 'EEXIST') {
+      throw new ValidationError(`milestone checkpoint already exists and will not be overwritten: ${stablePath}`);
+    }
+    throw error;
+  }
+
+  try {
+    unlink(draftPath);
+    return { draftRemoved: true, cleanupError: null };
+  } catch (cleanupError) {
+    try {
+      unlink(stablePath);
+    } catch (rollbackError) {
+      throw new ValidationError(
+        `milestone promotion cleanup failed and rollback could not remove the stable checkpoint: cleanup=${cleanupError?.message ?? cleanupError}; rollback=${rollbackError?.message ?? rollbackError}`,
+      );
+    }
+    throw new ValidationError(
+      `milestone promotion rolled back because unique draft cleanup failed: ${cleanupError?.message ?? cleanupError}`,
+    );
+  }
+}
+
+function promoteMilestone(args) {
+  const state = resolveIterationState(args.artifacts, { requireReady: false });
+  const reviewDir = path.resolve(state.iterationRoot, 'milestone-reviews');
+  const draftPath = path.resolve(process.cwd(), args.milestoneDraft);
+  if (path.dirname(draftPath) !== reviewDir) {
+    throw new ValidationError(`milestone draft must be a direct child of ${reviewDir}`);
+  }
+  if (!existsSync(draftPath)) throw new ValidationError(`milestone draft not found: ${draftPath}`);
+  if (!lstatSync(draftPath).isFile()) throw new ValidationError(`milestone draft must be a regular file: ${draftPath}`);
+
+  const review = validateMilestoneReview(draftPath, {
+    artifactRoot: state.artifactRoot,
+    expectedProjectId: state.projectId,
+    expectedIterationId: state.activeIteration,
+  });
+  if (review.project_id !== state.projectId) {
+    throw new ValidationError(`milestone review project_id must be ${state.projectId}, got ${review.project_id}`);
+  }
+  if (review.iteration_id !== state.activeIteration) {
+    throw new ValidationError(`milestone review iteration_id must be ${state.activeIteration}, got ${review.iteration_id}`);
+  }
+  assertUniqueMilestoneDraftPath(draftPath, reviewDir, review.checkpoint);
+
+  const stablePath = path.join(reviewDir, `${review.checkpoint}.json`);
+  promoteMilestoneDraftAtomically(draftPath, stablePath);
+  console.log(`Plan2Agent milestone review promoted: ${toRelativeFromRoot(stablePath)}`);
+  console.log(`- checkpoint: ${review.checkpoint}`);
+  console.log(`- promoted from: ${toRelativeFromRoot(draftPath)}`);
   return 0;
 }
 
@@ -3497,6 +3639,16 @@ function diffTasks(args) {
   }
   const { baselineSpec, baselineRef } = loadDiffBaseline(state);
   const existingTaskGraph = args.force ? loadExistingTaskGraphIfPresent(state.taskGraphPath) : null;
+  if (existingTaskGraph) {
+    const startedTasks = existingTaskGraph.tasks.filter((task) => task.status !== 'todo');
+    if (startedTasks.length) {
+      throw new ValidationError(
+        `diff-tasks --force cannot replace a task graph after execution has started; non-todo task(s): ${startedTasks.map((task) => `${task.id}:${task.status}`).join(', ')}. ` +
+        'Open a new feature iteration or use the maintenance lane instead',
+      );
+    }
+    assertNoTaskGraphExecutionHistory(state, 'diff-tasks --force');
+  }
   const graph = taskGraphFromSpecChanges({
     projectId: state.projectId,
     iterationId: state.activeIteration,
@@ -3718,6 +3870,7 @@ export function main(argv = process.argv.slice(2)) {
     if (args.command === 'context') return context(args);
     if (args.command === 'promote-spec') return promoteSpec(args);
     if (args.command === 'promote-tasks') return promoteTasks(args);
+    if (args.command === 'promote-milestone') return promoteMilestone(args);
     if (args.command === 'diff-tasks') return diffTasks(args);
     if (args.command === 'compose') return compose(args);
     if (args.command === 'maintenance') return maintenance(args);

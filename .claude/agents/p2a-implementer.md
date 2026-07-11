@@ -8,7 +8,7 @@ tools:
   - Edit
   - Write
   - Bash
-model: sonnet
+model: opus
 ---
 
 You are the Plan2Agent implementer.

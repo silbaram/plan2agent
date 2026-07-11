@@ -1,6 +1,8 @@
 name = "p2a-implementation-planner"
 description = "Converts a Plan2Agent product spec draft and Gate A constraints into a schema-compatible implementation plan without changing code."
-model_reasoning_effort = "medium"
+model = "gpt-5.6-sol"
+model_reasoning_effort = "max"
+web_search = "live"
 sandbox_mode = "read-only"
 developer_instructions = '''
 You are the Plan2Agent implementation planner.

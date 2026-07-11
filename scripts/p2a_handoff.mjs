@@ -22,7 +22,9 @@ import {
   loadJson,
   validateArtifactRoot,
   validateHandoffReadyArtifactRoot,
+  validateMilestoneReview,
   validateReviewPass,
+  validateRunsDir,
   validateSpec,
   validateTaskGraph,
   ValidationError,
@@ -52,8 +54,12 @@ const ROOT = P2A_PATHS.toolRoot;
 const VALID_MODES = new Set(['copy', 'move']);
 const TOOL_TARGET_ORDER = ['codex', 'claude', 'gemini'];
 const VALID_TOOL_TARGETS = new Set(TOOL_TARGET_ORDER);
+const CODEX_AGENT_PROFILE_ORDER = ['quality', 'inherit'];
+const VALID_CODEX_AGENT_PROFILES = new Set(CODEX_AGENT_PROFILE_ORDER);
+const DEFAULT_CODEX_AGENT_PROFILE = 'quality';
 const ENHANCEMENT_ORDER = ['dev-skills', 'memory', 'gui', 'orchestration', 'proposals'];
 const VALID_ENHANCEMENTS = new Set(ENHANCEMENT_ORDER);
+const MILESTONE_REVIEW_CHECKPOINTS = ['midpoint', 'pre_close'];
 const ARTIFACT_TARGET_BASE = P2A_ARTIFACTS_DIR;
 const TEAM_BIGFIVE_HARNESS_DIR = path.join('.plan2agent', 'team-harnesses', 'team-bigfive');
 const TEAM_BIGFIVE_SOURCE_MANIFEST = path.join(TEAM_BIGFIVE_HARNESS_DIR, 'source-manifest.json');
@@ -63,11 +69,11 @@ const DEFAULT_ITERATION_ID = 'active';
 function usage() {
   return [
     'Usage:',
-    '  node scripts/p2a_handoff.mjs scaffold --target <project-dir> [--tools <list>] [--overwrite] [--dry-run]',
-    '  node scripts/p2a_handoff.mjs enhance <capability> --target <project-dir> [--tools <list>] [--overwrite] [--dry-run]',
-    '  node scripts/p2a_handoff.mjs update --target <project-dir> [--tools <list>] [--dry-run|--apply]',
-    '  node scripts/p2a_handoff.mjs upgrade --target <project-dir> (--dry-run|--apply) [--tools <list>]',
-    '  node scripts/p2a_handoff.mjs --project-id <id> --artifacts <path> --target <path> [options]',
+    '  node scripts/p2a_handoff.mjs scaffold --target <project-dir> [--tools <list>] [--codex-profile quality|inherit] [--overwrite] [--dry-run]',
+    '  node scripts/p2a_handoff.mjs enhance <capability> --target <project-dir> [--tools <list>] [--codex-profile quality|inherit] [--overwrite] [--dry-run]',
+    '  node scripts/p2a_handoff.mjs update --target <project-dir> [--tools <list>] [--codex-profile quality|inherit] [--dry-run|--apply]',
+    '  node scripts/p2a_handoff.mjs upgrade --target <project-dir> (--dry-run|--apply) [--tools <list>] [--codex-profile quality|inherit]',
+    '  node scripts/p2a_handoff.mjs --project-id <id> --artifacts <path> --target <path> [--codex-profile quality|inherit] [options]',
     '',
     'Options:',
     'Scaffold:',
@@ -77,6 +83,7 @@ function usage() {
     '  upgrade              Preview or apply scaffolded harness file updates.',
     '  --target <path>      Project directory to create or update.',
     '  --tools <list>       Copy portable P2A AI tool assets for scaffold/enhance dev-skills. Use comma list, all, or none. Default: all.',
+    '  --codex-profile <p>  Codex agent profile: quality pins GPT-5.6 Sol by tier; inherit uses the parent session model/effort. Default: quality.',
     '',
     'Handoff options:',
     '  --mode copy|move     Copy artifacts by default; move removes source files after successful write.',
@@ -124,6 +131,13 @@ function parseRequiredToolTargets(value, optionName) {
   return targets;
 }
 
+function parseCodexAgentProfile(value) {
+  if (typeof value !== 'string' || !VALID_CODEX_AGENT_PROFILES.has(value.trim().toLowerCase())) {
+    throw new Error(`--codex-profile requires one of: ${CODEX_AGENT_PROFILE_ORDER.join(', ')}`);
+  }
+  return value.trim().toLowerCase();
+}
+
 function isGitUrl(value) {
   return /^(https?|ssh|git):\/\//i.test(value) || /^git@[^:]+:.+/.test(value);
 }
@@ -149,6 +163,8 @@ function parseArgs(argv) {
     apply: false,
     help: enhancementHelp,
     toolsProvided: false,
+    codexProfile: command === 'update' || command === 'upgrade' || command === 'enhance' ? null : DEFAULT_CODEX_AGENT_PROFILE,
+    codexProfileProvided: false,
   };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
@@ -178,6 +194,9 @@ function parseArgs(argv) {
     } else if (arg === '--tools') {
       args.tools = parseToolTargets(argv[++index]);
       args.toolsProvided = true;
+    } else if (arg === '--codex-profile') {
+      args.codexProfile = parseCodexAgentProfile(argv[++index]);
+      args.codexProfileProvided = true;
     } else if (arg === '--include-team-bigfive') {
       args.includeTeamBigFive = true;
     } else if (arg === '--team-bigfive-source') {
@@ -385,6 +404,98 @@ function pushFeatureRadarPreflightIfExists(plan, artifactsRoot, targetRoot, proj
   return copied;
 }
 
+function resolveMilestoneBundleReference(artifactsRoot, reference, label, baseDir = artifactsRoot) {
+  if (typeof reference !== 'string' || !reference.trim() || path.isAbsolute(reference)) {
+    throw new ValidationError(`${label} must be a non-empty artifact-root-relative path`);
+  }
+  const sourcePath = path.resolve(baseDir, reference);
+  const relativePath = path.relative(path.resolve(artifactsRoot), sourcePath);
+  if (!relativePath || relativePath.startsWith('..') || path.isAbsolute(relativePath)) {
+    throw new ValidationError(`${label} escapes the artifact root: ${JSON.stringify(reference)}`);
+  }
+  assertFile(sourcePath, label);
+  const realRelativePath = path.relative(realpathSync(artifactsRoot), realpathSync(sourcePath));
+  if (!realRelativePath || realRelativePath.startsWith('..') || path.isAbsolute(realRelativePath)) {
+    throw new ValidationError(`${label} resolves outside the artifact root: ${JSON.stringify(reference)}`);
+  }
+  return { sourcePath, relativePath: normalizePath(relativePath) };
+}
+
+function pushMilestoneReviewBundleIfExists(plan, artifactsRoot, targetRoot, projectId, iterationId) {
+  if (!iterationId) return { reviewFiles: [], evidenceFiles: [] };
+  const reviewFiles = [];
+  const evidenceFiles = [];
+  const copiedTargets = new Set();
+  function pushBundleFile(sourcePath, artifactRelativePath, destinationList) {
+    const targetRelative = normalizePath(path.join(targetArtifactDir(projectId), artifactRelativePath));
+    if (!copiedTargets.has(targetRelative)) {
+      pushArtifact(plan, sourcePath, targetRoot, targetRelative);
+      copiedTargets.add(targetRelative);
+    }
+    if (!destinationList.includes(targetRelative)) destinationList.push(targetRelative);
+  }
+
+  for (const checkpoint of MILESTONE_REVIEW_CHECKPOINTS) {
+    const fileName = `${checkpoint}.json`;
+    const sourcePath = path.join(artifactsRoot, 'iterations', iterationId, 'milestone-reviews', fileName);
+    if (!existsSync(sourcePath)) continue;
+    assertFile(sourcePath, path.join('iterations', iterationId, 'milestone-reviews', fileName));
+    const milestoneReview = validateMilestoneReview(sourcePath);
+    const reviewRelativePath = normalizePath(path.relative(artifactsRoot, sourcePath));
+    pushBundleFile(sourcePath, reviewRelativePath, reviewFiles);
+
+    const taskGraph = resolveMilestoneBundleReference(
+      artifactsRoot,
+      milestoneReview.source.task_graph_ref,
+      `${checkpoint}.source.task_graph_ref`,
+    );
+    const spec = resolveMilestoneBundleReference(
+      artifactsRoot,
+      milestoneReview.source.spec_ref,
+      `${checkpoint}.source.spec_ref`,
+    );
+    pushBundleFile(taskGraph.sourcePath, taskGraph.relativePath, evidenceFiles);
+    pushBundleFile(spec.sourcePath, spec.relativePath, evidenceFiles);
+
+    const specData = loadJson(spec.sourcePath);
+    if (typeof specData.source_intake === 'string' && specData.source_intake.trim()) {
+      const intake = resolveMilestoneBundleReference(
+        artifactsRoot,
+        specData.source_intake,
+        `${checkpoint}.source.spec_ref source_intake`,
+        path.dirname(spec.sourcePath),
+      );
+      pushBundleFile(intake.sourcePath, intake.relativePath, evidenceFiles);
+    }
+
+    const runIndex = resolveMilestoneBundleReference(
+      artifactsRoot,
+      path.join('runs', 'run-index.json'),
+      `${checkpoint} run index`,
+    );
+    const runIndexData = validateRunsDir(path.dirname(runIndex.sourcePath));
+    pushBundleFile(runIndex.sourcePath, runIndex.relativePath, evidenceFiles);
+    for (const indexedRun of runIndexData.runs) {
+      const run = resolveMilestoneBundleReference(
+        artifactsRoot,
+        indexedRun.runRef,
+        `${checkpoint} run-index ${indexedRun.runId}.runRef`,
+        path.dirname(runIndex.sourcePath),
+      );
+      pushBundleFile(run.sourcePath, run.relativePath, evidenceFiles);
+    }
+    for (const evidence of milestoneReview.source.completed_task_evidence) {
+      const expectedRunRef = normalizePath(path.join('runs', `${evidence.run_id}.json`));
+      if (normalizePath(evidence.run_ref) !== expectedRunRef) {
+        throw new ValidationError(
+          `${checkpoint} ${evidence.task_id}.run_ref must be ${JSON.stringify(expectedRunRef)} for a portable handoff bundle`,
+        );
+      }
+    }
+  }
+  return { reviewFiles, evidenceFiles };
+}
+
 function appendHandoffRecord(currentSpec, record) {
   const records = Array.isArray(currentSpec.handoff_records)
     ? currentSpec.handoff_records.filter((item) => item?.handoff_id !== record.handoff_id)
@@ -407,6 +518,7 @@ function handoffRecord(args, targetRoot, sourceInfo, maintenanceIncluded, mainte
     mode: args.mode,
     included_intake: args.includeIntake,
     ai_tool_targets: args.tools,
+    codex_agent_profile: codexAgentProfileRecord(resolveCodexAgentProfile(args.codexProfile), args.tools.includes('codex')),
     maintenance_included: maintenanceIncluded,
     maintenance_task_count: maintenanceTaskCount,
     current_spec_ref: sourceInfo.currentSpecPath ? 'current-spec.json' : null,
@@ -454,6 +566,40 @@ function isPortableGeminiP2aCommand(relativePath) {
   return normalizePath(relativePath) !== 'design-system.toml';
 }
 
+function resolveCodexAgentProfile(value) {
+  if (value == null) return DEFAULT_CODEX_AGENT_PROFILE;
+  return parseCodexAgentProfile(value);
+}
+
+function resolveExistingCodexAgentProfile(args, manifest) {
+  return resolveCodexAgentProfile(
+    args.codexProfile ?? manifest.codexAgentProfile?.name ?? 'inherit',
+  );
+}
+
+function codexAgentProfileRecord(profile, enabled = true) {
+  if (!enabled) return null;
+  if (profile === 'inherit') {
+    return {
+      name: 'inherit',
+      model: null,
+      reasoningEffortByTier: null,
+    };
+  }
+  return {
+    name: 'quality',
+    model: 'gpt-5.6-sol',
+    reasoningEffortByTier: { light: 'medium', standard: 'high', heavy: 'max' },
+  };
+}
+
+function inheritedCodexAgentContent(sourcePath) {
+  const source = readFileSync(sourcePath, 'utf8');
+  return source
+    .replace(/^model\s*=.*\n/m, '')
+    .replace(/^model_reasoning_effort\s*=.*\n/m, '');
+}
+
 function pushToolAssetDirectory(plan, targetRoot, sourceRelativeDir, targetRelativeDir, options = {}) {
   const sourceRoot = path.join(ROOT, sourceRelativeDir);
   if (!existsSync(sourceRoot) || !lstatSync(sourceRoot).isDirectory()) {
@@ -468,13 +614,20 @@ function pushToolAssetDirectory(plan, targetRoot, sourceRelativeDir, targetRelat
       if (existing.source && path.resolve(existing.source) === path.resolve(source)) continue;
       throw new Error(`tool asset target collision: ${normalizePath(targetRelative)}`);
     }
-    pushArtifact(plan, source, targetRoot, targetRelative);
+    if (options.transform) {
+      pushArtifact(plan, source, targetRoot, targetRelative, {
+        type: 'rewrite-text',
+        transform: options.transform,
+      });
+    } else {
+      pushArtifact(plan, source, targetRoot, targetRelative);
+    }
     files.push(normalizePath(targetRelative));
   }
   return files;
 }
 
-function selectedToolAssetSpecs(toolTargets) {
+function selectedToolAssetSpecs(toolTargets, { codexProfile = DEFAULT_CODEX_AGENT_PROFILE } = {}) {
   if (!toolTargets.length) return [];
   const specs = [
     {
@@ -496,6 +649,7 @@ function selectedToolAssetSpecs(toolTargets) {
       source: path.join('.codex', 'agents'),
       target: path.join('.codex', 'agents'),
       filter: isP2aTopLevelAsset,
+      transform: codexProfile === 'inherit' ? inheritedCodexAgentContent : null,
     });
   }
   if (toolTargets.includes('claude')) {
@@ -539,11 +693,14 @@ function selectedToolAssetSpecs(toolTargets) {
   return specs;
 }
 
-function pushToolAssets(plan, targetRoot, toolTargets) {
+function pushToolAssets(plan, targetRoot, toolTargets, { codexProfile = DEFAULT_CODEX_AGENT_PROFILE } = {}) {
   const files = [];
   const groups = [];
-  for (const spec of selectedToolAssetSpecs(toolTargets)) {
-    const groupFiles = pushToolAssetDirectory(plan, targetRoot, spec.source, spec.target, { filter: spec.filter });
+  for (const spec of selectedToolAssetSpecs(toolTargets, { codexProfile })) {
+    const groupFiles = pushToolAssetDirectory(plan, targetRoot, spec.source, spec.target, {
+      filter: spec.filter,
+      transform: spec.transform,
+    });
     files.push(...groupFiles);
     groups.push({ key: spec.key, source: normalizePath(spec.source), target: normalizePath(spec.target), files: groupFiles });
   }
@@ -1196,13 +1353,14 @@ history through Plan2Agent Memory or an explicit export when needed.
 function buildScaffoldPlan(args, targetRoot, createdAt = new Date().toISOString()) {
   const plan = [];
   const projectId = resolveProjectIdDefault(targetRoot);
+  const codexProfile = resolveCodexAgentProfile(args.codexProfile);
   for (const file of SCAFFOLD_SCRIPT_FILES) {
     pushArtifact(plan, path.join(ROOT, 'scripts', file), targetRoot, targetScriptPath(file));
   }
   for (const file of SCAFFOLD_SCHEMA_FILES) {
     pushArtifact(plan, path.join(ROOT, 'schemas', file), targetRoot, targetSchemaPath(file));
   }
-  const toolAssetPlan = pushToolAssets(plan, targetRoot, args.tools);
+  const toolAssetPlan = pushToolAssets(plan, targetRoot, args.tools, { codexProfile });
   const claudeCoarseDeny = args.tools.includes('claude') ? claudeCoarseDenyRules(targetRoot) : { omitted: [] };
   const scriptFiles = SCAFFOLD_SCRIPT_FILES.map((file) => normalizePath(targetScriptPath(file)));
   const schemaFiles = SCAFFOLD_SCHEMA_FILES.map((file) => normalizePath(targetSchemaPath(file)));
@@ -1214,6 +1372,7 @@ function buildScaffoldPlan(args, targetRoot, createdAt = new Date().toISOString(
     createdAt,
     includedTools: [...SCAFFOLD_SCRIPT_FILES.map((file) => file.replace(/\.mjs$/, '')), ...args.tools.map((target) => `p2a_${target}_assets`)],
     aiToolTargets: args.tools,
+    codexAgentProfile: codexAgentProfileRecord(codexProfile, args.tools.includes('codex')),
     scriptFiles,
     schemaFiles,
     toolFiles: [...scriptFiles, ...toolAssetPlan.files],
@@ -1222,6 +1381,7 @@ function buildScaffoldPlan(args, targetRoot, createdAt = new Date().toISOString(
     notes: [
       'co-located scaffold: this project owns greenfield planning, development, and iteration artifacts',
       args.tools.length ? `AI tool assets copied for: ${args.tools.join(', ')}` : 'AI tool assets not requested',
+      args.tools.includes('codex') ? `Codex agent profile: ${codexProfile}` : 'Codex agent profile not applicable',
     ],
   };
   if (args.tools.includes('claude')) {
@@ -1249,6 +1409,7 @@ function buildScaffoldPlan(args, targetRoot, createdAt = new Date().toISOString(
 function printScaffoldPlan(plan, args, targetRoot) {
   console.log(`Plan2Agent scaffold ${args.dryRun ? 'dry run' : 'plan'}`);
   console.log(`aiTools: ${args.tools.length ? args.tools.join(',') : 'none'}`);
+  if (args.tools.includes('codex')) console.log(`codexProfile: ${resolveCodexAgentProfile(args.codexProfile)}`);
   console.log(`targetProject: ${targetRoot}`);
   console.log(`projectId: ${plan.projectId}`);
   if (plan.scaffoldWarnings?.length) {
@@ -1296,13 +1457,13 @@ function enabledCapabilityEnhancements(manifest) {
 function plannedItemContent(item) {
   if (item.type === 'write-json') return item.content ?? `${JSON.stringify(item.data, null, 2)}\n`;
   if (item.type === 'write-text') return item.content;
-  if (item.type === 'rewrite-json') return item.transform(item.source);
+  if (item.type === 'rewrite-json' || item.type === 'rewrite-text') return item.transform(item.source);
   return readFileSync(item.source);
 }
 
 function plannedAction(item) {
   if (item.type === 'write-json' || item.type === 'write-text') return 'generate';
-  if (item.type === 'rewrite-json') return 'copy+rewrite';
+  if (item.type === 'rewrite-json' || item.type === 'rewrite-text') return 'copy+rewrite';
   return 'copy';
 }
 
@@ -1395,6 +1556,7 @@ function updateApplyCommand(args, targetRoot) {
     ? ['node', targetP2aCommandPath, args.command]
     : ['node', toolkitP2aCommandPath, args.command, '--target', targetRoot];
   if (args.toolsProvided) parts.push('--tools', args.tools.length ? args.tools.join(',') : 'none');
+  if (args.codexProfileProvided) parts.push('--codex-profile', args.codexProfile);
   parts.push('--apply');
   return parts.map(shellQuote).join(' ');
 }
@@ -1445,11 +1607,22 @@ function buildUpgradeDryRunReport(args, targetRoot) {
   const manifest = readUpgradeJsonFile(path.join(targetRoot, '.plan2agent', 'manifest.json'), '.plan2agent/manifest.json', args.command);
   const config = readUpgradeJsonFile(path.join(targetRoot, '.plan2agent', 'project.config.json'), '.plan2agent/project.config.json', args.command);
   const tools = upgradeToolTargets(args, manifest);
-  const plan = buildScaffoldPlan({ ...args, tools }, targetRoot);
+  const codexProfile = resolveExistingCodexAgentProfile(args, manifest);
+  const plan = buildScaffoldPlan({ ...args, tools, codexProfile }, targetRoot);
   const items = plan.map(compareUpgradePlanItem);
   const summary = summarizeUpgradeItems(items);
   const failures = items.filter((item) => item.status === 'conflict' || item.status === 'error');
   const configMigrations = buildConfigMigrations(config, manifest, targetRoot);
+  const plannedCodexProfile = codexAgentProfileRecord(codexProfile, tools.includes('codex'));
+  if (plannedCodexProfile && JSON.stringify(manifest.codexAgentProfile ?? null) !== JSON.stringify(plannedCodexProfile)) {
+    configMigrations.manifest = { ...configMigrations.manifest, codexAgentProfile: plannedCodexProfile };
+    configMigrations.migrations.push({
+      id: 'codex_agent_profile_manifest',
+      target: 'manifest',
+      status: 'would_update',
+      updatedKeys: ['codexAgentProfile'],
+    });
+  }
   const migrationUpdateCount = configMigrations.migrations.reduce((sum, migration) => sum + migration.updatedKeys.length, 0);
   const changes = summary.missing + summary.wouldUpdate + summary.manualReview + migrationUpdateCount;
   const status = failures.length ? 'fail' : changes ? 'changes' : 'pass';
@@ -1461,6 +1634,7 @@ function buildUpgradeDryRunReport(args, targetRoot) {
     status,
     targetProject: targetRoot,
     aiToolTargets: tools,
+    codexAgentProfile: plannedCodexProfile,
     toolsProvided: args.toolsProvided,
     summary,
     items,
@@ -1489,6 +1663,7 @@ function printUpgradeDryRunReport(report) {
   console.log(`status: ${report.status}`);
   console.log(`targetProject: ${report.targetProject}`);
   console.log(`aiTools: ${report.aiToolTargets.length ? report.aiToolTargets.join(',') : 'none'}`);
+  if (report.codexAgentProfile) console.log(`codexProfile: ${report.codexAgentProfile.name}`);
   console.log(`summary: ${report.summary.unchanged} unchanged, ${report.summary.missing} missing, ${report.summary.wouldUpdate} update(s), ${report.summary.manualReview} manual review, ${report.summary.conflicts} conflict(s), ${report.summary.errors} error(s)`);
   const notable = report.items.filter((item) => item.status !== 'unchanged');
   if (notable.length) {
@@ -1626,7 +1801,10 @@ function writeUpgradeApplyReport(targetRoot, report) {
 
 function plannedManifestData(report) {
   const manifestItem = report._plan.find((item) => isManifestTarget(item.targetRelative));
-  return manifestItem?.data ?? null;
+  if (!manifestItem) return null;
+  if (manifestItem.data) return manifestItem.data;
+  if (typeof manifestItem.content === 'string') return JSON.parse(manifestItem.content);
+  return null;
 }
 
 function mergeUpgradeManifest(existingManifest, report, appliedAt, appliedFiles, migrationIds) {
@@ -1659,6 +1837,7 @@ function mergeUpgradeManifest(existingManifest, report, appliedAt, appliedFiles,
     targetProject: existingManifest.targetProject ?? report.targetProject,
     includedTools: uniqueNormalizedList(existingManifest.includedTools, plannedManifest.includedTools),
     aiToolTargets: uniqueNormalizedList(existingManifest.aiToolTargets, report.aiToolTargets),
+    codexAgentProfile: plannedManifest.codexAgentProfile ?? existingManifest.codexAgentProfile ?? null,
     scriptFiles: uniqueNormalizedList(plannedManifest.scriptFiles, existingManifest.scriptFiles),
     schemaFiles: uniqueNormalizedList(plannedManifest.schemaFiles, existingManifest.schemaFiles),
     toolFiles: uniqueNormalizedList(existingManifest.toolFiles, plannedManifest.toolFiles),
@@ -1692,6 +1871,7 @@ function buildUpgradeApplyReport(args, targetRoot, previewReport) {
     status: blockers.length ? 'blocked' : 'pending',
     targetProject: targetRoot,
     aiToolTargets: previewReport.aiToolTargets,
+    codexAgentProfile: previewReport.codexAgentProfile,
     preview: publicUpgradeReport(previewReport),
     blockers,
     applied: {
@@ -1817,7 +1997,7 @@ function mergeAiToolGroups(existingGroups, nextGroups) {
   return [...groupsByKey.values()].sort((left, right) => left.key.localeCompare(right.key));
 }
 
-function mergeEnhanceDevSkillsManifest(manifest, toolTargets, toolAssetPlan) {
+function mergeEnhanceDevSkillsManifest(manifest, toolTargets, toolAssetPlan, codexProfile) {
   const promptTemplates = defaultPromptTemplates();
   const existingTargets = Array.isArray(manifest.aiToolTargets)
     ? manifest.aiToolTargets.filter((target) => typeof target === 'string')
@@ -1835,6 +2015,9 @@ function mergeEnhanceDevSkillsManifest(manifest, toolTargets, toolAssetPlan) {
     schema_version: manifest.schema_version ?? 'p2a.handoff.v1',
     includedTools: [...new Set(includedTools)],
     aiToolTargets: TOOL_TARGET_ORDER.filter((target) => new Set([...existingTargets, ...toolTargets]).has(target)),
+    codexAgentProfile: toolTargets.includes('codex')
+      ? codexAgentProfileRecord(codexProfile)
+      : manifest.codexAgentProfile ?? null,
     toolFiles: uniqueNormalizedList(manifest.toolFiles, toolAssetPlan.files),
     aiToolFiles: uniqueNormalizedList(manifest.aiToolFiles, toolAssetPlan.files),
     aiToolGroups: mergeAiToolGroups(manifest.aiToolGroups, toolAssetPlan.groups),
@@ -1880,15 +2063,17 @@ function buildEnhanceDevSkillsPlan(args, targetRoot) {
   const manifest = readUpgradeJsonFile(manifestPath, '.plan2agent/manifest.json', 'enhance dev-skills');
   const config = readUpgradeJsonFile(configPath, '.plan2agent/project.config.json', 'enhance dev-skills');
   const plan = [];
-  const toolAssetPlan = pushToolAssets(plan, targetRoot, args.tools);
+  const codexProfile = resolveExistingCodexAgentProfile(args, manifest);
+  const toolAssetPlan = pushToolAssets(plan, targetRoot, args.tools, { codexProfile });
   const projectIdConfig = mergeProjectIdConfig(config, manifest, targetRoot);
   const projectIdManifest = mergeProjectIdManifest(manifest, projectIdConfig.config, targetRoot);
   const mergedConfig = mergeDevSkillConfig(projectIdConfig.config);
-  const nextManifest = mergeEnhanceDevSkillsManifest(projectIdManifest.manifest, args.tools, toolAssetPlan);
+  const nextManifest = mergeEnhanceDevSkillsManifest(projectIdManifest.manifest, args.tools, toolAssetPlan, codexProfile);
   pushGeneratedJson(plan, targetRoot, path.join('.plan2agent', 'manifest.json'), nextManifest);
   pushGeneratedJson(plan, targetRoot, path.join('.plan2agent', 'project.config.json'), mergedConfig.config);
   plan.enhanceSummary = {
     aiToolTargets: args.tools,
+    codexAgentProfile: codexAgentProfileRecord(codexProfile, args.tools.includes('codex')),
     assetFileCount: toolAssetPlan.files.length,
     configUpdatedKeys: [...new Set([...projectIdConfig.updatedKeys, ...mergedConfig.updatedKeys])],
   };
@@ -1998,6 +2183,7 @@ function printEnhanceDevSkillsPlan(plan, args, targetRoot) {
   console.log(`Plan2Agent enhance dev-skills ${args.dryRun ? 'dry run' : 'plan'}`);
   console.log(`targetProject: ${targetRoot}`);
   console.log(`aiTools: ${args.tools.length ? args.tools.join(',') : 'none'}`);
+  if (plan.enhanceSummary.codexAgentProfile) console.log(`codexProfile: ${plan.enhanceSummary.codexAgentProfile.name}`);
   console.log(`assets: ${plan.enhanceSummary.assetFileCount}`);
   console.log(`configUpdatedKeys: ${plan.enhanceSummary.configUpdatedKeys.length ? plan.enhanceSummary.configUpdatedKeys.join(',') : 'none'}`);
   console.log(`summary: ${summary.unchanged} unchanged, ${summary.missing} missing, ${summary.wouldUpdate} update(s), ${summary.conflicts} conflict(s), ${summary.errors} error(s)`);
@@ -2080,6 +2266,11 @@ function buildPlan(paths, args, artifactsRoot, targetRoot, sourceInfo, options =
     maintenanceFiles.push(normalizePath(targetRelative));
   }
   const preflightResearchFiles = pushFeatureRadarPreflightIfExists(plan, artifactsRoot, targetRoot, args.projectId);
+  const milestoneBundle = sourceInfo.kind === 'iteration'
+    ? pushMilestoneReviewBundleIfExists(plan, artifactsRoot, targetRoot, args.projectId, sourceInfo.iterationId)
+    : { reviewFiles: [], evidenceFiles: [] };
+  const milestoneReviewFiles = milestoneBundle.reviewFiles;
+  const milestoneEvidenceFiles = milestoneBundle.evidenceFiles;
 
   for (const file of SCAFFOLD_SCRIPT_FILES) {
     pushArtifact(plan, path.join(ROOT, 'scripts', file), targetRoot, targetScriptPath(file));
@@ -2087,7 +2278,8 @@ function buildPlan(paths, args, artifactsRoot, targetRoot, sourceInfo, options =
   for (const schemaFile of SCAFFOLD_SCHEMA_FILES) {
     pushArtifact(plan, path.join(ROOT, 'schemas', schemaFile), targetRoot, targetSchemaPath(schemaFile));
   }
-  const toolAssetPlan = pushToolAssets(plan, targetRoot, args.tools);
+  const codexProfile = resolveCodexAgentProfile(args.codexProfile);
+  const toolAssetPlan = pushToolAssets(plan, targetRoot, args.tools, { codexProfile });
   const teamBigFivePlan = pushTeamBigFiveAdapter(plan, targetRoot, args);
 
   const artifactFiles = plan
@@ -2117,9 +2309,12 @@ function buildPlan(paths, args, artifactsRoot, targetRoot, sourceInfo, options =
     createdAt,
     includedTools,
     aiToolTargets: args.tools,
+    codexAgentProfile: codexAgentProfileRecord(codexProfile, args.tools.includes('codex')),
     externalHarnesses: teamBigFivePlan.externalHarness ? [teamBigFivePlan.externalHarness] : [],
     artifactFiles,
     preflightResearchFiles,
+    milestoneReviewFiles,
+    milestoneEvidenceFiles,
     currentSpecFile: sourceInfo.currentSpecPath ? '.plan2agent/current-spec.json' : null,
     maintenanceFiles,
     toolFiles,
@@ -2133,7 +2328,10 @@ function buildPlan(paths, args, artifactsRoot, targetRoot, sourceInfo, options =
       `spec.source_intake rebased to ${targetIntakeRef}`,
       sourceInfo.kind === 'iteration' ? `iteration handoff source: ${sourceInfo.iterationId}` : 'greenfield handoff source',
       preflightResearchFiles.length ? `Feature Radar preflight research copied: ${preflightResearchFiles.length} file(s)` : 'Feature Radar preflight research not present',
+      milestoneReviewFiles.length ? `Milestone reviews copied: ${milestoneReviewFiles.length} file(s)` : 'Milestone reviews not present',
+      milestoneEvidenceFiles.length ? `Milestone evidence bundle copied: ${milestoneEvidenceFiles.length} file(s)` : 'Milestone evidence bundle not present',
       args.tools.length ? `AI tool assets copied for: ${args.tools.join(', ')}` : 'AI tool assets not requested',
+      args.tools.includes('codex') ? `Codex agent profile: ${codexProfile}` : 'Codex agent profile not applicable',
       teamBigFivePlan.enabled ? `Team Big Five adapter installed for: ${teamBigFivePlan.targets.join(', ')}` : 'Team Big Five adapter not requested',
     ],
   };
@@ -2192,6 +2390,7 @@ function printPlan(plan, args, artifactsRoot, targetRoot, sourceInfo) {
   console.log(`projectId: ${args.projectId}`);
   console.log(`mode: ${args.mode}`);
   console.log(`aiTools: ${args.tools.length ? args.tools.join(',') : 'none'}`);
+  if (args.tools.includes('codex')) console.log(`codexProfile: ${resolveCodexAgentProfile(args.codexProfile)}`);
   console.log(`teamBigFive: ${args.includeTeamBigFive ? args.teamBigFiveTargets.join(',') : 'none'}`);
   console.log(`sourceLayout: ${sourceInfo.kind}`);
   if (sourceInfo.iterationId) console.log(`sourceIterationId: ${sourceInfo.iterationId}`);
@@ -2199,7 +2398,7 @@ function printPlan(plan, args, artifactsRoot, targetRoot, sourceInfo) {
   console.log(`targetProject: ${targetRoot}`);
   console.log('writes:');
   for (const item of plan) {
-    const action = item.type === 'write-json' || item.type === 'write-text' ? 'generate' : item.type === 'rewrite-json' ? 'copy+rewrite' : 'copy';
+    const action = item.type === 'write-json' || item.type === 'write-text' ? 'generate' : item.type === 'rewrite-json' || item.type === 'rewrite-text' ? 'copy+rewrite' : 'copy';
     const source = item.source ? normalizePath(path.relative(process.cwd(), item.source)) : '(generated)';
     console.log(`- ${action}: ${source} -> ${normalizePath(item.targetRelative)}`);
   }
@@ -2213,7 +2412,7 @@ function writePlanItem(item) {
     writeFileSync(item.target, item.content ?? `${JSON.stringify(item.data, null, 2)}\n`, 'utf8');
   } else if (item.type === 'write-text') {
     writeFileSync(item.target, item.content, 'utf8');
-  } else if (item.type === 'rewrite-json') {
+  } else if (item.type === 'rewrite-json' || item.type === 'rewrite-text') {
     writeFileSync(item.target, item.transform(item.source), 'utf8');
   } else {
     copyFileSync(item.source, item.target);

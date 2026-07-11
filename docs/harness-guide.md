@@ -482,7 +482,7 @@ CLI mirror와 command shim drift를 검증:
 node scripts/check_cli_parity.mjs
 ```
 
-`check_cli_parity`는 내부적으로 `node scripts/sync_cli_assets.mjs --check`를 실행하고, skill mirror byte 비교, agent mirror 파일 존재 여부, Gemini command shim의 description/prompt/skill name/`{{args}}` 포함 여부를 확인한다. mirror를 실제로 재생성해야 할 때는 다음 명령을 사용한다.
+`check_cli_parity`는 내부적으로 `node scripts/sync_cli_assets.mjs --check`를 실행하고, skill mirror byte 비교, agent mirror 파일 존재 여부, neutral `web` capability의 Codex `web_search = "live"` 매핑, Gemini command shim의 description/prompt/skill name/`{{args}}` 포함 여부를 확인한다. mirror를 실제로 재생성해야 할 때는 다음 명령을 사용한다.
 
 ```bash
 node scripts/sync_cli_assets.mjs

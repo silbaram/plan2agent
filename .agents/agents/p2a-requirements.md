@@ -6,7 +6,7 @@ capabilities:
   - search
   - web
 access: read-only
-tier: standard
+tier: heavy
 ---
 
 You are the Plan2Agent requirements analyst.

@@ -7,13 +7,19 @@ description: Use when authoring a Gate C task graph draft from a Plan2Agent cont
 
 Author a reviewable Gate C task graph draft from an approved active Plan2Agent iteration context. This is a sibling to `p2a-task-breakdown`, but it writes only a draft and hands off to a human approval gate before any canonical task graph is promoted.
 
+## Ownership
+
+- Draft authorship belongs to the read-only `p2a-task-author` subagent.
+- The skill owner obtains the context bundle, passes it to the subagent, reviews the returned draft JSON, and is the only agent that persists `task-graph.draft.json`.
+- If subagents are unavailable, the active skill owner may author the draft locally, but it must preserve the same authorship-versus-persistence boundary.
+
 ## When to use
 
 Use this skill when the active iteration has an approved Gate B spec and needs a Gate C task graph authored as a reviewable draft. The draft is agent-proposed work, not the canonical Gate C artifact; a human must review and approve it before promotion.
 
 ## Inputs
 
-Run the context command to get the `p2a.task_context.v1` JSON bundle:
+The skill owner runs the context command to get the `p2a.task_context.v1` JSON bundle before invoking the task-author subagent:
 
 ```bash
 node .plan2agent/scripts/p2a_iteration.mjs context --artifacts <root>
@@ -21,6 +27,7 @@ node .plan2agent/scripts/p2a_iteration.mjs context --artifacts <root>
 
 Use these context fields:
 
+- `project_id`
 - `effective_spec.product`
 - `effective_spec.implementation`
 - `existing_tasks.active`
@@ -34,7 +41,7 @@ Use `context.code_signals` (the real file tree and recent changed files) to auth
 
 ## Output
 
-Write only this draft artifact, for example with the Write tool:
+The task-author subagent returns the complete draft JSON to the skill owner without writing files. After reviewing that response, the skill owner writes only this draft artifact:
 
 ```text
 iterations/<active_iteration>/gate-c-task-graph/task-graph.draft.json
@@ -43,7 +50,7 @@ iterations/<active_iteration>/gate-c-task-graph/task-graph.draft.json
 The draft must conform to `.plan2agent/schemas/task-graph.schema.json` (`p2a.task_graph.v1`) and include:
 
 - `schema_version`: `p2a.task_graph.v1`
-- `projectId`
+- `projectId`: copied exactly from `context.project_id`.
 - `version`: `<active_iteration>-draft`
 - `sourceSpec`: `../gate-b-spec/spec.json`
 - `tasks[]`
@@ -66,7 +73,8 @@ Never write `task-graph.json` directly. The canonical graph is created only by `
 
 - Split work into small dependent tasks, typically 10-50 tasks for a meaningful iteration.
 - Split large features by screen, API, data, and test boundaries.
-- Avoid duplicate work: do not create a new task that duplicates `existing_tasks.active`; for iterative work, add only the incremental work needed on top of existing tasks.
+- Avoid duplicate work: do not create a new task that duplicates `existing_tasks.active`.
+- If `existing_tasks.active` is non-empty, do not author or persist an incremental-only draft. The context contains task summaries rather than the complete canonical task bodies. When every canonical task is still `todo`, invoke `diff-tasks --force` as the authoritative check: it generates a complete graph only when the active iteration has no run history. Review that result and promote it with explicit `--replace-existing`. Do not infer safety from the bounded `code_signals.recent_changes` summary. If any canonical task is `in_progress`, `done`, or `blocked`, or the CLI reports run history after a task was reopened to `todo`, do not replace the graph: open a new feature iteration or use the maintenance lane so task state and run lineage remain intact.
 - Use `existing_tasks.maintenance` as context, but do not turn maintenance pilot work into this draft.
 - Merge trivially connected work; split work that spans multiple target areas.
 - Draft each task so its acceptance criteria are self-satisfiable from that task's explicit scope; do not attach AC that require earlier or later draft tasks to complete.
@@ -83,7 +91,7 @@ Only author tasks backed by the approved spec. If the requested work changes pro
 
 ## After authoring
 
-After writing the draft, hand it to the human gate with these steps:
+After the skill owner writes the draft, hand it to the human gate with these steps:
 
 1. Validate the draft:
 
@@ -102,8 +110,11 @@ After writing the draft, hand it to the human gate with these steps:
 
    `promote-tasks` records `current-spec.json.gate_c_approval_audits[active_iteration]`, writes `task-graph.draft.meta.json`, and promotes the draft to canonical `task-graph.json`.
 
+   When a canonical task graph already exists, the default promotion is rejected to prevent an incremental-only draft from deleting existing task state. Before execution starts, a complete replacement draft produced and reviewed through `diff-tasks --force` may be promoted only with explicit `--replace-existing`. After any task leaves `todo` or any run is recorded for the active iteration, replacement is rejected even if the task is later reopened to `todo`; the change must use a new feature iteration or maintenance task.
+
 ## Constraints
 
-- This is read-only planning except for writing the draft artifact.
+- The task-author subagent is strictly read-only and returns draft content without writing files or running commands.
+- The skill owner may write only the draft artifact and run the scoped validation command described above.
 - Do not change application code, dependencies, or non-draft artifacts.
 - Do not write canonical `task-graph.json`; promotion is the job of `promote-tasks` after the human approval gate.

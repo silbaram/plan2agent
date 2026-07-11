@@ -57,6 +57,18 @@ Plan2Agent는 CLI별 구현 차이를 감추기 위해 공통 역할 이름과 C
 
 MVP에서는 `p2a-harness`가 상위 skill이고, 나머지 skill은 단계별 재사용 단위다. subagent는 독립 검토와 전문 역할 분리를 위해 사용한다.
 
+### Codex GPT-5.6 품질 프로필
+
+Codex에서는 메인 오케스트레이터를 사용자 또는 세션 설정의 `gpt-5.6-sol` + `ultra`로 실행하고, 생성된 역할별 leaf agent는 자동 재위임이 중첩되지 않도록 `ultra`를 사용하지 않는다. CLI-neutral `tier`는 Codex mirror에서 다음과 같이 변환한다.
+
+| tier | Codex model | reasoning effort | 용도 |
+| --- | --- | --- | --- |
+| `heavy` | `gpt-5.6-sol` | `max` | 요구사항, 명세, 구현 계획, 품질 검토, task draft, 코드 구현 |
+| `standard` | `gpt-5.6-sol` | `high` | task graph, milestone/완료 검토, 개선안 검토 |
+| `light` | `gpt-5.6-sol` | `medium` | 비차단 스타일 판정 |
+
+`ultra`는 메인 오케스트레이터에만 두고 subagent nesting은 기본 `max_depth = 1` 경계를 유지한다. scaffold/handoff의 기본 `--codex-profile quality`는 위 설정을 설치하고 manifest에 기록한다. 모델 접근 권한, 외부 provider, 구형 Codex 호환성이 필요한 배포는 `--codex-profile inherit`을 사용해 agent TOML의 `model`과 `model_reasoning_effort`를 생략하고 부모 세션 설정을 상속한다. update/upgrade는 manifest에 기록된 프로필을 유지한다.
+
 ## 3. 오케스트레이션 계약
 
 | Stage | Skill | Subagent owner | Input artifact | Output artifact | Gate |
@@ -176,13 +188,13 @@ scripts/p2a_iteration_state.mjs             # active iteration resolution helper
 | --- | --- | --- | --- |
 | `capabilities: read` | `Read` | `read_file` | per-tool list 없음 |
 | `capabilities: search` | `Grep`, `Glob` | `grep_search` | per-tool list 없음 |
-| `capabilities: web` | `WebSearch`, `WebFetch` | `google_web_search`, `web_fetch` | 별도 custom-agent web flag 생성 없음 |
+| `capabilities: web` | `WebSearch`, `WebFetch` | `google_web_search`, `web_fetch` | `web_search = "live"` |
 | `access: read-only` | tool set으로 암시 | `kind: local` | `sandbox_mode = "read-only"` |
-| `tier: light` | `model: haiku` | `temperature: 0.1`, `max_turns: 6` | `model_reasoning_effort = "low"` |
-| `tier: standard` | `model: sonnet` | `temperature: 0.2`, `max_turns: 10` | `model_reasoning_effort = "medium"` |
-| `tier: heavy` | `model: opus` | `temperature: 0.2`, `max_turns: 20` | `model_reasoning_effort = "high"` |
+| `tier: light` | `model: haiku` | `temperature: 0.1`, `max_turns: 6` | `model = "gpt-5.6-sol"`, `model_reasoning_effort = "medium"` |
+| `tier: standard` | `model: sonnet` | `temperature: 0.2`, `max_turns: 10` | `model = "gpt-5.6-sol"`, `model_reasoning_effort = "high"` |
+| `tier: heavy` | `model: opus` | `temperature: 0.2`, `max_turns: 20` | `model = "gpt-5.6-sol"`, `model_reasoning_effort = "max"` |
 
-Gemini target fields use the documented subagent keys `kind`, `tools`, `temperature`, and `max_turns`; Gemini web capability maps to documented `google_web_search` and `web_fetch`. Codex custom agents document required `name`/`description`/`developer_instructions` plus config overrides such as `model_reasoning_effort` and `sandbox_mode`; no per-agent web-search flag is emitted.
+Gemini target fields use the documented subagent keys `kind`, `tools`, `temperature`, and `max_turns`; Gemini web capability maps to documented `google_web_search` and `web_fetch`. Codex custom agents use required `name`/`description`/`developer_instructions` plus normal session overrides such as `model`, `model_reasoning_effort`, `web_search`, and `sandbox_mode`. Neutral `web` roles alone receive `web_search = "live"`; other roles inherit the parent web-search mode.
 
 ## 11. CLI별 차이와 하네스 정책
 

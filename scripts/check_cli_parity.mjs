@@ -10,7 +10,7 @@ import { fileURLToPath } from 'node:url';
 const __filename = fileURLToPath(import.meta.url);
 const ROOT = path.resolve(path.dirname(__filename), '..');
 const SKILLS = ['p2a-harness', 'p2a-intake', 'p2a-spec', 'p2a-task-author', 'p2a-dev-execution', 'p2a-design-system', 'p2a-task-breakdown', 'p2a-review'];
-const AGENTS = ['p2a-requirements', 'p2a-spec-author', 'p2a-implementation-planner', 'p2a-task-graph', 'p2a-quality-reviewer', 'p2a-skill-curator', 'p2a-performance-monitor', 'p2a-implementer'];
+const AGENTS = ['p2a-requirements', 'p2a-spec-author', 'p2a-implementation-planner', 'p2a-task-graph', 'p2a-task-author', 'p2a-quality-reviewer', 'p2a-milestone-reviewer', 'p2a-skill-curator', 'p2a-performance-monitor', 'p2a-style-rater', 'p2a-implementer'];
 const GEMINI_COMMANDS = {
   harness: 'p2a-harness',
   intake: 'p2a-intake',
@@ -102,6 +102,15 @@ export function main() {
     const gemini = path.join(ROOT, '.gemini', 'agents', `${agent}.md`);
     const missing = [source, claude, codex, gemini].filter((filePath) => !existsSync(filePath)).map((filePath) => path.relative(ROOT, filePath));
     if (missing.length) return fail(`missing agent mirrors for ${agent}: ${missing.join(', ')}`);
+    const sourceText = readFileSync(source, 'utf8');
+    const codexText = readFileSync(codex, 'utf8');
+    const hasWebCapability = /capabilities:\s*[\s\S]*?^\s*-\s+web\s*$/m.test(sourceText.split(/^---\s*$/m)[1] ?? sourceText);
+    if (hasWebCapability && !/^web_search\s*=\s*"live"\s*$/m.test(codexText)) {
+      return fail(`Codex agent mirror ${agent} must enable live web search for the neutral web capability`);
+    }
+    if (!hasWebCapability && /^web_search\s*=/m.test(codexText)) {
+      return fail(`Codex agent mirror ${agent} must inherit parent web search when neutral web capability is absent`);
+    }
   }
 
   for (const [command, skill] of Object.entries(GEMINI_COMMANDS)) {

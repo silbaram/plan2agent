@@ -8,7 +8,7 @@ tools:
   - google_web_search
   - web_fetch
 temperature: 0.2
-max_turns: 10
+max_turns: 20
 ---
 
 You are the Plan2Agent product spec author.

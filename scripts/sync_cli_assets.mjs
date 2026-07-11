@@ -16,7 +16,8 @@ const TIER_VALUES = new Set(['light', 'standard', 'heavy']);
 const CLAUDE_TOOL_MAP = { read: ['Read'], search: ['Grep', 'Glob'], web: ['WebSearch', 'WebFetch'], edit: ['Edit', 'Write'], shell: ['Bash'] };
 const GEMINI_TOOL_MAP = { read: ['read_file'], search: ['grep_search'], web: ['google_web_search', 'web_fetch'], edit: [], shell: [] };
 const CLAUDE_TIER_MODEL = { light: 'haiku', standard: 'sonnet', heavy: 'opus' };
-const CODEX_TIER_EFFORT = { light: 'low', standard: 'medium', heavy: 'high' };
+const CODEX_TIER_MODEL = { light: 'gpt-5.6-sol', standard: 'gpt-5.6-sol', heavy: 'gpt-5.6-sol' };
+const CODEX_TIER_EFFORT = { light: 'medium', standard: 'high', heavy: 'max' };
 const GEMINI_TIER_CONFIG = {
   light: { temperature: 0.1, max_turns: 6 },
   standard: { temperature: 0.2, max_turns: 10 },
@@ -72,7 +73,7 @@ Return spec_json conforming to .plan2agent/schemas/spec.schema.json and open_dec
 
 {{args}}
 
-Run or use the provided p2a.task_context.v1 context, write only iterations/<active_iteration>/gate-c-task-graph/task-graph.draft.json, never write canonical task-graph.json, and hand off validation, audit, and promote-tasks instructions for human approval.`,
+Run or use the provided p2a.task_context.v1 context. When existing_tasks.active is empty, write only iterations/<active_iteration>/gate-c-task-graph/task-graph.draft.json. When it is non-empty, never write an incremental or partial draft: follow the skill's blocker flow and use the authoritative diff-tasks --force check, which permits a complete replacement only before task or run execution history exists. Never write canonical task-graph.json, and hand off validation, audit, and promote-tasks instructions for human approval.`,
   },
   'dev-execution': {
     skill: 'p2a-dev-execution',
@@ -235,10 +236,13 @@ function renderMarkdownAgent(meta, body, { target }) {
 
 function renderCodexAgent(meta, body) {
   const sandbox = meta.access === 'workspace-write' ? 'workspace-write' : 'read-only';
+  const webSearch = meta.capabilities.includes('web') ? 'web_search = "live"\n' : '';
   return (
     `name = ${tomlBasicString(meta.name)}\n` +
     `description = ${tomlBasicString(meta.description)}\n` +
+    `model = ${tomlBasicString(CODEX_TIER_MODEL[meta.tier])}\n` +
     `model_reasoning_effort = "${CODEX_TIER_EFFORT[meta.tier]}"\n` +
+    webSearch +
     `sandbox_mode = "${sandbox}"\n` +
     'developer_instructions = ' + tomlLiteralMultiline(body, String(meta.name)) + '\n'
   );

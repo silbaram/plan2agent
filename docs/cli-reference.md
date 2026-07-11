@@ -62,13 +62,15 @@ P2A에는 별도 `setup` 명령이 없다. fresh project 설치 진입점은 `sc
 ## 3. Co-located scaffold — `p2a_handoff.mjs scaffold`
 
 ```bash
-node scripts/p2a_handoff.mjs scaffold --target <project-dir> [--tools all|none|codex,claude,gemini] [--overwrite] [--dry-run]
-node scripts/p2a_handoff.mjs enhance <capability> --target <project-dir> [--tools all|none|codex,claude,gemini] [--overwrite] [--dry-run]
-node scripts/p2a_handoff.mjs update --target <project-dir> [--tools all|none|codex,claude,gemini] [--dry-run|--apply]
-node scripts/p2a_handoff.mjs upgrade --target <project-dir> (--dry-run|--apply) [--tools all|none|codex,claude,gemini]
+node scripts/p2a_handoff.mjs scaffold --target <project-dir> [--tools all|none|codex,claude,gemini] [--codex-profile quality|inherit] [--overwrite] [--dry-run]
+node scripts/p2a_handoff.mjs enhance <capability> --target <project-dir> [--tools all|none|codex,claude,gemini] [--codex-profile quality|inherit] [--overwrite] [--dry-run]
+node scripts/p2a_handoff.mjs update --target <project-dir> [--tools all|none|codex,claude,gemini] [--codex-profile quality|inherit] [--dry-run|--apply]
+node scripts/p2a_handoff.mjs upgrade --target <project-dir> (--dry-run|--apply) [--tools all|none|codex,claude,gemini] [--codex-profile quality|inherit]
 ```
 
-`scaffold`는 아직 산출물이 없는 fresh 프로젝트에 P2A 하네스 전체를 1회 설치한다. `.plan2agent/scripts/`에는 `p2a.mjs`, `p2a_paths.mjs`, `p2a_project_config.mjs`, `p2a_run_commands.mjs`, `p2a_iteration.mjs`, `p2a_tasks.mjs`, `p2a_runs.mjs`, `p2a_execute.mjs`, `p2a_monitor_gate.mjs`, `p2a_proposals.mjs`, `p2a_eval.mjs`, `p2a_memory.mjs`, `p2a_radar_preflight.mjs`, `p2a_run_paths.mjs`, `p2a_iteration_state.mjs`, `validate_artifacts.mjs`가 복사되고, `.plan2agent/schemas/`에는 intake/spec/task graph/task context/review/run/run-index/skill-proposal/proposal-review/proposal-curation/proposal-patch-draft/proposal-draft-approval/eval-index/eval-digest/eval-maintenance-draft/eval-maintenance-apply-report schema가 복사된다. `--tools` 기본값은 `all`이며, AI 자산 복사 로직으로 `.agents`, `.claude`, `.codex`, `.gemini` 자산을 설치한다. 단, `p2a-design-system` skill과 Gemini `design-system.toml` command는 Plan2Agent 본체 UI 개발용 자산이므로 scaffold 대상 프로젝트에는 복사하지 않는다. `.plan2agent/project.config.json`, `.plan2agent/manifest.json`, `PLAN2AGENT.md`, 프로젝트용 `.gitignore`도 생성한다. 기존 코드가 있으면 `project.config.json`의 package/test/lint/typecheck 기본값을 감지하고, 빈 프로젝트는 이후 `verify --test` 같은 검증 시점에 다시 감지해 저장한다. 생성된 `.gitignore`는 `.plan2agent/` 전체를 로컬 하네스 상태로 보고 application source git에서 제외한다. `scaffold`는 co-located 정식 진입점으로, 빈 프로젝트에 하네스를 설치한 뒤 기획·개발·반복을 그 프로젝트 안에서 진행하게 한다.
+`scaffold`는 아직 산출물이 없는 fresh 프로젝트에 P2A 하네스 전체를 1회 설치한다. `.plan2agent/scripts/`에는 `p2a.mjs`, `p2a_paths.mjs`, `p2a_project_config.mjs`, `p2a_run_commands.mjs`, `p2a_iteration.mjs`, `p2a_tasks.mjs`, `p2a_runs.mjs`, `p2a_execute.mjs`, `p2a_monitor_gate.mjs`, `p2a_proposals.mjs`, `p2a_eval.mjs`, `p2a_memory.mjs`, `p2a_radar_preflight.mjs`, `p2a_run_paths.mjs`, `p2a_iteration_state.mjs`, `validate_artifacts.mjs`가 복사되고, `.plan2agent/schemas/`에는 intake/spec/task graph/task context/review/run/run-index/milestone-review/skill-proposal/proposal-review/proposal-curation/proposal-patch-draft/proposal-draft-approval/eval-index/eval-digest/eval-maintenance-draft/eval-maintenance-apply-report schema가 복사된다. `--tools` 기본값은 `all`이며, AI 자산 복사 로직으로 `.agents`, `.claude`, `.codex`, `.gemini` 자산을 설치한다. 단, `p2a-design-system` skill과 Gemini `design-system.toml` command는 Plan2Agent 본체 UI 개발용 자산이므로 scaffold 대상 프로젝트에는 복사하지 않는다. `.plan2agent/project.config.json`, `.plan2agent/manifest.json`, `PLAN2AGENT.md`, 프로젝트용 `.gitignore`도 생성한다. 기존 코드가 있으면 `project.config.json`의 package/test/lint/typecheck 기본값을 감지하고, 빈 프로젝트는 이후 `verify --test` 같은 검증 시점에 다시 감지해 저장한다. 생성된 `.gitignore`는 `.plan2agent/` 전체를 로컬 하네스 상태로 보고 application source git에서 제외한다. `scaffold`는 co-located 정식 진입점으로, 빈 프로젝트에 하네스를 설치한 뒤 기획·개발·반복을 그 프로젝트 안에서 진행하게 한다.
+
+Codex agent는 기본 `--codex-profile quality`에서 `gpt-5.6-sol`과 tier별 `medium/high/max` reasoning을 사용한다. 모델 접근 권한, 외부 provider, 구형 Codex 호환성이 필요하면 `--codex-profile inherit`을 선택해 agent TOML의 model/reasoning override를 제거하고 부모 세션 값을 상속한다. 선택은 `.plan2agent/manifest.json.codexAgentProfile`에 기록되며, 별도 override가 없는 update/upgrade는 그 값을 유지한다. 이 필드가 없는 구형 manifest는 기존 부모 모델 상속 동작을 보존하도록 `inherit`으로 migration하며, `quality` 전환은 `--codex-profile quality`를 명시해야 한다.
 
 `enhance dev-skills`는 기존 scaffold 대상 프로젝트에 provider별 P2A skill/agent/command shim과 development config 기본값을 설치하거나 보강한다. `project.config.json`에는 `devExecution`, `roleProfiles`, `promptTemplates` 기본값을 비파괴 병합하고, `manifest.json.enhancements.devSkills`에는 선택한 provider와 prompt/role/provider guide version을 기록한다. 기존 asset 파일이 대상에 있고 toolkit 내용과 다르면 기본적으로 실패하며, 사람이 dry-run 결과를 검토한 뒤 `--overwrite`를 명시해야 덮어쓴다.
 
@@ -78,9 +80,9 @@ node scripts/p2a_handoff.mjs upgrade --target <project-dir> (--dry-run|--apply) 
 
 `update`/`upgrade --dry-run`은 preview report를 `.plan2agent/update-reports/<command>-<timestamp>-<hash>.json`에 기록하고 하네스 파일은 변경하지 않는다. `update --apply`와 `upgrade --apply`는 같은 preview를 먼저 만든 뒤 안전한 항목만 적용한다. 자동 적용 대상은 `.plan2agent/scripts/`, `.plan2agent/schemas/`, provider P2A asset 디렉터리(`.agents/`, `.codex/`, `.claude/skills|agents|hooks/`, `.gemini/agents|commands/p2a/`)와 안전한 `project.config.json` 기본값 migration이다. `.gitignore`, `PLAN2AGENT.md`, Claude settings 같은 애매한 generated/local 파일이나 conflict/error가 있으면 적용 전에 중단하고 non-zero exit를 반환한다. apply 결과와 blocker도 `.plan2agent/update-reports/<command>-<timestamp>-<hash>.json`에 기록되며, 적용된 manifest에는 최근 update/upgrade 기록이 남는다.
 
-P2A planning artifact, run log, proposal, 생성된 runtime helper의 장기 보존은 Plan2Agent Memory 동기화 또는 명시 export를 기준으로 한다. git commit은 제품 소스코드와 사람이 유지할 프로젝트 설정 이력에 집중한다.
+P2A planning artifact, run log, proposal, 생성된 runtime helper의 장기 보존은 Plan2Agent Memory 동기화 또는 명시 export를 기준으로 한다. active와 closed 기능 반복의 안정 milestone review인 `midpoint.json`과 `pre_close.json`도 각각 원래 반복 계보를 유지하는 Memory document snapshot 대상이며, 아직 검증·승격되지 않은 `*.draft.json`과 maintenance 반복은 제외한다. 따라서 다음 반복을 연 뒤 처음 push하더라도 이전 반복의 안정 checkpoint가 해당 closed iteration 아래 함께 보존된다. git commit은 제품 소스코드와 사람이 유지할 프로젝트 설정 이력에 집중한다.
 
-`--artifacts`는 필요 없다. `--dry-run`은 쓸 파일 목록만 출력하고, `--overwrite` 없이는 기존 파일을 덮어쓰지 않는다. 서브커맨드 없이 실행하는 기존 flag 기반 handoff 동작은 하위호환으로 유지된다. `handoff`는 plan2agent에서 이미 기획한 승인 산출물을 별도 프로젝트로 옮길 때 쓰는 레거시/특수 흐름이다.
+`--artifacts`는 필요 없다. `--dry-run`은 쓸 파일 목록만 출력하고, `--overwrite` 없이는 기존 파일을 덮어쓰지 않는다. 서브커맨드 없이 실행하는 기존 flag 기반 handoff 동작은 하위호환으로 유지된다. `handoff`는 plan2agent에서 이미 기획한 승인 산출물을 별도 프로젝트로 옮길 때 쓰는 레거시/특수 흐름이다. 반복 산출물을 인계할 때 먼저 선택된 반복의 안정 milestone review를 검증한 뒤 원래 `iterations/<iteration-id>/milestone-reviews/` 상대 경로로 복사한다. 해당 review가 참조하는 원본 iteration spec/task graph/intake와 `runs/run-index.json`을 같은 artifact-root 상대 경로로 복사하고, index에 포함된 모든 run JSON도 exact copy해 대상에서 `validateRunsDir`와 milestone 검증을 다시 수행할 수 있게 한다. 대상 manifest는 `milestoneReviewFiles`와 `milestoneEvidenceFiles`를 분리해 기록하며, draft milestone review는 인계하지 않는다.
 
 ## 4. 동기화·검증
 
@@ -157,6 +159,9 @@ node .plan2agent/scripts/validate_artifacts.mjs \
   --runs-dir .plan2agent/artifacts/<project_id>/runs
 
 node .plan2agent/scripts/validate_artifacts.mjs \
+  --milestone-review .plan2agent/artifacts/<project_id>/iterations/<iteration-id>/milestone-reviews/<checkpoint>.json
+
+node .plan2agent/scripts/validate_artifacts.mjs \
   --proposals-dir .plan2agent/artifacts/<project_id>/proposals
 
 node .plan2agent/scripts/validate_artifacts.mjs \
@@ -229,6 +234,10 @@ node .plan2agent/scripts/p2a_iteration.mjs promote-tasks \
   --approved-by user \
   --approval-note "Reviewed and approved the Gate C draft task graph."
 
+node .plan2agent/scripts/p2a_iteration.mjs promote-milestone \
+  --artifacts .plan2agent/artifacts/<project_id> \
+  --draft .plan2agent/artifacts/<project_id>/iterations/<iteration-id>/milestone-reviews/<checkpoint>.<id>.draft.json
+
 node .plan2agent/scripts/p2a_iteration.mjs compose \
   --artifacts .plan2agent/artifacts/<project_id> \
   [--allow-conflicts]
@@ -255,7 +264,7 @@ node .plan2agent/scripts/p2a_iteration.mjs maintenance add \
 
 `p2a_iteration.mjs validate`는 반복 구조의 active iteration 포인터, active Gate B-D 산출물, task dependency, review blocker, current-spec composition을 검증한다. `--allow-planning`/`--stage`는 Gate A-ready, Gate B draft/approved, 또는 `gate-c-task-graph/task-graph.draft.json`을 검증하는 Gate C draft 상태를 planning state로 검증한다. `--require-close-ready`를 붙이면 모든 active task가 `done`인지까지 확인한다. 개별 flat task graph가 승인된 spec을 기준으로 생성됐는지 확인할 때는 `validate_artifacts.mjs --task-graph ... --require-approved-spec ...`를 사용한다.
 
-`p2a_iteration.mjs close/open/draft/promote-spec/context/diff-tasks/promote-tasks/compose`는 반복 planning과 task graph 초안/승격을 다룬다. `context --scope feature`는 기본값이며 active 기능 반복의 task 저작 context를 출력한다. `context --scope maintenance`는 active feature diff를 섞지 않고 `active_iteration: "maintenance"`와 maintenance task 요약을 포함한 유지보수용 context를 출력한다. `draft`는 `.plan2agent/artifacts/<project_id>/preflight-research/`의 Feature Radar 산출물을 발견하면 Gate A/B 초안의 `evidence`와 `reference_reconnaissance`에 후보 근거로 반영한다. `diff-tasks`는 `task-graph.draft.json`만 만들고, `promote-tasks`가 사람 승인 audit과 함께 정본 `task-graph.json`으로 승격한다. `p2a_iteration.mjs maintenance add`는 Gate A/B/D 없이 `iterations/maintenance/gate-c-task-graph/task-graph.json`을 lazy 생성하거나 append한다. 단일 task 필수 옵션은 `--title`과 하나 이상의 `--accept`이며, 선택 옵션은 `--description`, `--area`, `--prompt`, 반복 가능한 `--ref`, 반복 가능한 `--depends`, `--dry-run`이다. `--from-draft <file>`은 검토된 maintenance draft의 task들을 한 번에 검증해 append하며, 쓰기 전 `--dry-run`으로 preview하고 실제 append에는 `--yes`가 필요하다. 이미 같은 `eval-cluster:*`/proposal ref가 maintenance graph에 있으면 중복 task는 skip한다.
+`p2a_iteration.mjs close/open/draft/promote-spec/context/diff-tasks/promote-tasks/promote-milestone/compose`는 반복 planning과 task graph·milestone 초안/승격을 다룬다. `context --scope feature`는 기본값이며 active 기능 반복의 task 저작 context를 출력한다. `context --scope maintenance`는 active feature diff를 섞지 않고 `active_iteration: "maintenance"`와 maintenance task 요약을 포함한 유지보수용 context를 출력한다. `draft`는 `.plan2agent/artifacts/<project_id>/preflight-research/`의 Feature Radar 산출물을 발견하면 Gate A/B 초안의 `evidence`와 `reference_reconnaissance`에 후보 근거로 반영한다. `diff-tasks`는 `task-graph.draft.json`만 만들고, `promote-tasks`가 사람 승인 audit과 함께 정본 `task-graph.json`으로 승격한다. `promote-milestone`은 checkpoint와 evidence를 검증한 고유 draft를 기존 안정 파일을 덮어쓰지 않는 원자적 방식으로 `<checkpoint>.json`에 승격한다. `p2a_iteration.mjs maintenance add`는 Gate A/B/D 없이 `iterations/maintenance/gate-c-task-graph/task-graph.json`을 lazy 생성하거나 append한다. 단일 task 필수 옵션은 `--title`과 하나 이상의 `--accept`이며, 선택 옵션은 `--description`, `--area`, `--prompt`, 반복 가능한 `--ref`, 반복 가능한 `--depends`, `--dry-run`이다. `--from-draft <file>`은 검토된 maintenance draft의 task들을 한 번에 검증해 append하며, 쓰기 전 `--dry-run`으로 preview하고 실제 append에는 `--yes`가 필요하다. 이미 같은 `eval-cluster:*`/proposal ref가 maintenance graph에 있으면 중복 task는 skip한다.
 
 ### GUI desktop app — `apps/p2a-gui`
 
@@ -648,7 +657,7 @@ node .plan2agent/scripts/p2a_memory.mjs precedent \
   --limit 5
 ```
 
-`status`는 project, iteration, document snapshot, proposal snapshot, task graph, task, run, document chunk의 로컬 계획을 만들고 Memory `/api/artifacts` 조회 결과와 source id/hash 기준으로 비교한다. 서버 URL은 `--server`, `P2A_MEMORY_URL`, 또는 `project.config.json.memory.serverUrlEnv` 순서로 찾는다. 서버가 설정되지 않으면 로컬 계획과 `not_configured` 상태를 출력하며 파일이나 서버를 변경하지 않는다.
+`status`는 project, 참조된 모든 iteration, document snapshot, proposal snapshot, task graph, task, run, document chunk의 로컬 계획을 만들고 Memory `/api/artifacts` 조회 결과와 source id/hash 기준으로 비교한다. active와 closed 반복의 안정 milestone review인 `milestone-reviews/midpoint.json`과 `pre_close.json`은 원래 반복의 canonical iteration id와 `documentRole: milestone_review`를 가진 document snapshot으로 포함하며 draft 파일은 제외한다. 실제 push는 참조된 iteration을 먼저 모두 등록한 뒤 반복별 document, task graph, task, run, chunk, graph snapshot을 저장한다. 서버 URL은 `--server`, `P2A_MEMORY_URL`, 또는 `project.config.json.memory.serverUrlEnv` 순서로 찾는다. 서버가 설정되지 않으면 로컬 계획과 `not_configured` 상태를 출력하며 파일이나 서버를 변경하지 않는다.
 
 `p2a info --json`은 `enhancements.memory`에 mode, server env, server/token 설정 여부, push policy, manifest/config sync 상태를 노출한다. `p2a_doctor --dev`는 Memory capability가 활성화된 프로젝트에서 memory manifest/config drift, runtime script, server env config, explicit approval push policy, sync tier 기본값을 검사한다. 이 검사는 서버 프로세스가 떠 있어야 통과하는 live probe가 아니라 로컬 설정/안전 정책 점검이다.
 

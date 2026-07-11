@@ -5,8 +5,8 @@ kind: local
 tools:
   - read_file
   - grep_search
-temperature: 0.2
-max_turns: 10
+temperature: 0.1
+max_turns: 6
 ---
 
 You are the Plan2Agent style rater.

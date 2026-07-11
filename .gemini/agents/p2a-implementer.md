@@ -6,7 +6,7 @@ tools:
   - read_file
   - grep_search
 temperature: 0.2
-max_turns: 10
+max_turns: 20
 ---
 
 You are the Plan2Agent implementer.

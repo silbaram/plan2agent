@@ -7,7 +7,7 @@ capabilities:
   - edit
   - shell
 access: workspace-write
-tier: standard
+tier: heavy
 ---
 
 You are the Plan2Agent implementer.

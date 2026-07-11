@@ -2,6 +2,7 @@
 /** Validate Plan2Agent JSON artifacts and golden fixtures with Node.js stdlib only. */
 
 import { existsSync, lstatSync, readFileSync, readdirSync, realpathSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import path from 'node:path';
 import process from 'node:process';
 import { pathToFileURL } from 'node:url';
@@ -17,6 +18,7 @@ const SCHEMA_PATHS = {
   review: path.join(P2A_PATHS.schemasDir, 'review.schema.json'),
   run: path.join(P2A_PATHS.schemasDir, 'run.schema.json'),
   run_index: path.join(P2A_PATHS.schemasDir, 'run-index.schema.json'),
+  milestone_review: path.join(P2A_PATHS.schemasDir, 'milestone-review.schema.json'),
   skill_proposal: path.join(P2A_PATHS.schemasDir, 'skill-proposal.schema.json'),
   proposal_review: path.join(P2A_PATHS.schemasDir, 'proposal-review.schema.json'),
   proposal_curation: path.join(P2A_PATHS.schemasDir, 'proposal-curation.schema.json'),
@@ -787,6 +789,396 @@ export function validateRunIndex(filePath) {
   return validateRunIndexData(loadJson(filePath));
 }
 
+function assertUniqueStrings(values, label) {
+  if (values.length !== new Set(values).size) {
+    throw new ValidationError(`${label} values must be unique`);
+  }
+}
+
+function rawFileSha256(filePath) {
+  return createHash('sha256').update(readFileSync(filePath)).digest('hex');
+}
+
+function deterministicSnapshotSha256(snapshot) {
+  return createHash('sha256').update(JSON.stringify(snapshot)).digest('hex');
+}
+
+export function milestoneSnapshotSha256(taskGraph) {
+  return deterministicSnapshotSha256(taskGraph);
+}
+
+export function milestoneRunSnapshotSha256(run) {
+  return deterministicSnapshotSha256(run);
+}
+
+function parsedTimestamp(value, label) {
+  const timestamp = Date.parse(value);
+  if (Number.isNaN(timestamp)) throw new ValidationError(`${label} must be a valid timestamp`);
+  return timestamp;
+}
+
+export function validateMilestoneReviewData(data) {
+  validateSchema(data, loadJson(SCHEMA_PATHS.milestone_review));
+
+  const graphSnapshot = validateTaskGraphData(data.source.task_graph_snapshot);
+  if (graphSnapshot.projectId !== data.project_id) {
+    throw new ValidationError(`milestone review task_graph_snapshot.projectId must match project_id ${JSON.stringify(data.project_id)}`);
+  }
+  const snapshotSha256 = milestoneSnapshotSha256(graphSnapshot);
+  if (snapshotSha256 !== data.source.task_graph_snapshot_sha256) {
+    throw new ValidationError(`milestone review task_graph_snapshot_sha256 mismatch: expected ${snapshotSha256}`);
+  }
+  parsedTimestamp(data.generated_at, 'milestone review generated_at');
+
+  const counts = data.source.task_counts;
+  const accountedTotal = counts.done + counts.todo + counts.in_progress + counts.blocked;
+  if (accountedTotal !== counts.total) {
+    throw new ValidationError(`milestone review task_counts must sum to total ${counts.total}, got ${accountedTotal}`);
+  }
+
+  const taskSnapshotIds = data.source.task_snapshot.map((item) => item.task_id);
+  assertUniqueStrings(taskSnapshotIds, 'milestone review task snapshot ids');
+  if (taskSnapshotIds.length !== counts.total) {
+    throw new ValidationError(`milestone review task_snapshot must contain ${counts.total} task(s)`);
+  }
+  for (const status of ['done', 'todo', 'in_progress', 'blocked']) {
+    const snapshotCount = data.source.task_snapshot.filter((item) => item.status === status).length;
+    if (snapshotCount !== counts[status]) {
+      throw new ValidationError(`milestone review task_snapshot ${status} count must be ${counts[status]}, got ${snapshotCount}`);
+    }
+  }
+  if (graphSnapshot.tasks.length !== data.source.task_snapshot.length) {
+    throw new ValidationError('milestone review task_snapshot must cover every task in task_graph_snapshot');
+  }
+  for (const item of data.source.task_snapshot) {
+    const graphTask = graphSnapshot.tasks.find((task) => task.id === item.task_id);
+    if (!graphTask || graphTask.title !== item.task_title || graphTask.status !== item.status) {
+      throw new ValidationError(`${item.task_id} task_snapshot must match task_graph_snapshot id/title/status`);
+    }
+  }
+
+  const completedTaskIds = data.source.completed_task_evidence.map((item) => item.task_id);
+  const remainingTaskIds = data.source.remaining_task_ids;
+  assertUniqueStrings(completedTaskIds, 'milestone review completed task ids');
+  assertUniqueStrings(remainingTaskIds, 'milestone review remaining task ids');
+  if (completedTaskIds.length !== counts.done) {
+    throw new ValidationError(`milestone review completed_task_evidence must contain ${counts.done} done task(s)`);
+  }
+  if (remainingTaskIds.length !== counts.total - counts.done) {
+    throw new ValidationError(`milestone review remaining_task_ids must contain ${counts.total - counts.done} task(s)`);
+  }
+  const completedTaskIdSet = new Set(completedTaskIds);
+  const remainingTaskIdSet = new Set(remainingTaskIds);
+  const overlap = completedTaskIds.filter((taskId) => remainingTaskIdSet.has(taskId));
+  if (overlap.length) {
+    throw new ValidationError(`milestone review completed and remaining task ids overlap: ${JSON.stringify(overlap)}`);
+  }
+  const snapshotDoneIds = new Set(data.source.task_snapshot.filter((item) => item.status === 'done').map((item) => item.task_id));
+  const snapshotRemainingIds = new Set(data.source.task_snapshot.filter((item) => item.status !== 'done').map((item) => item.task_id));
+  const completedMismatch = completedTaskIds.filter((taskId) => !snapshotDoneIds.has(taskId));
+  const remainingMismatch = remainingTaskIds.filter((taskId) => !snapshotRemainingIds.has(taskId));
+  if (completedMismatch.length || completedTaskIds.some((taskId) => !taskSnapshotIds.includes(taskId))) {
+    throw new ValidationError(`milestone review completed_task_evidence must match done tasks in task_snapshot: ${JSON.stringify(completedMismatch)}`);
+  }
+  if (remainingMismatch.length || remainingTaskIds.some((taskId) => !taskSnapshotIds.includes(taskId))) {
+    throw new ValidationError(`milestone review remaining_task_ids must match non-done tasks in task_snapshot: ${JSON.stringify(remainingMismatch)}`);
+  }
+
+  for (const item of data.source.completed_task_evidence) {
+    parsedTimestamp(item.run_finished_at, `${item.task_id}.run_finished_at`);
+    const snapshotTask = data.source.task_snapshot.find((task) => task.task_id === item.task_id);
+    if (snapshotTask.task_title !== item.task_title) {
+      throw new ValidationError(`${item.task_id}.task_title must match task_snapshot`);
+    }
+    const runSnapshot = validateRunData(item.run_snapshot);
+    const runSnapshotSha256 = milestoneRunSnapshotSha256(runSnapshot);
+    if (runSnapshotSha256 !== item.run_snapshot_sha256) {
+      throw new ValidationError(`${item.task_id}.run_snapshot_sha256 mismatch: expected ${runSnapshotSha256}`);
+    }
+    const snapshotFields = {
+      runId: item.run_id,
+      taskId: item.task_id,
+      taskTitle: item.task_title,
+      status: 'finished',
+      finishedAt: item.run_finished_at,
+    };
+    for (const [field, expected] of Object.entries(snapshotFields)) {
+      if (runSnapshot[field] !== expected) {
+        throw new ValidationError(`${item.task_id}.run_snapshot ${field} must be ${JSON.stringify(expected)}, got ${JSON.stringify(runSnapshot[field])}`);
+      }
+    }
+    if (!sameJson(runSnapshot.changedFiles, item.changed_files)) {
+      throw new ValidationError(`${item.task_id}.changed_files must exactly match run_snapshot`);
+    }
+    if (!sameJson(normalizedRunVerification(runSnapshot), item.verification)) {
+      throw new ValidationError(`${item.task_id}.verification must exactly match run_snapshot`);
+    }
+    const hasExecutedPass = item.verification.some((verification) => verification.status === 'passed'
+      && verification.exit_code === 0
+      && ['config', 'command'].includes(verification.source));
+    if (!hasExecutedPass) {
+      throw new ValidationError(`${item.task_id}.verification must include an executed config/command check that passed with exit_code 0`);
+    }
+  }
+
+  if (data.checkpoint === 'midpoint') {
+    const threshold = Math.ceil(counts.total / 2);
+    if (counts.done < threshold || counts.done >= counts.total) {
+      throw new ValidationError(`midpoint milestone review requires ${threshold} <= done < ${counts.total}, got ${counts.done}`);
+    }
+  } else if (counts.done !== counts.total || remainingTaskIds.length !== 0) {
+    throw new ValidationError('pre_close milestone review requires every iteration task to be done');
+  }
+
+  const findingIds = data.confirmed_findings.map((finding) => finding.finding_id);
+  assertUniqueStrings(findingIds, 'milestone review finding ids');
+  for (const finding of data.confirmed_findings) {
+    assertUniqueStrings(finding.affected_completed_tasks, `${finding.finding_id}.affected_completed_tasks`);
+    const nonCompleted = finding.affected_completed_tasks.filter((taskId) => !completedTaskIdSet.has(taskId));
+    if (nonCompleted.length) {
+      throw new ValidationError(`${finding.finding_id}.affected_completed_tasks must reference completed task evidence: ${JSON.stringify(nonCompleted)}`);
+    }
+  }
+  for (const [index, item] of data.planned_todo_not_findings.entries()) {
+    assertUniqueStrings(item.covered_by_remaining_tasks, `planned_todo_not_findings[${index}].covered_by_remaining_tasks`);
+    const nonRemaining = item.covered_by_remaining_tasks.filter((taskId) => !remainingTaskIdSet.has(taskId));
+    if (nonRemaining.length) {
+      throw new ValidationError(`planned_todo_not_findings[${index}] must reference remaining tasks: ${JSON.stringify(nonRemaining)}`);
+    }
+  }
+  return data;
+}
+
+function normalizedArtifactRef(reference, label) {
+  if (typeof reference !== 'string' || !reference) throw new ValidationError(`${label} must be a non-empty artifact-root-relative path`);
+  if (reference.includes('\\') || path.posix.isAbsolute(reference) || path.posix.normalize(reference) !== reference) {
+    throw new ValidationError(`${label} must be a normalized artifact-root-relative path`);
+  }
+  if (reference === '..' || reference.startsWith('../') || reference.includes('/../')) {
+    throw new ValidationError(`${label} must not traverse outside the artifact root`);
+  }
+  return reference;
+}
+
+function resolveMilestoneSourceFile(artifactRoot, reference, label) {
+  const normalized = normalizedArtifactRef(reference, label);
+  const resolved = path.resolve(artifactRoot, normalized);
+  const relative = path.relative(artifactRoot, resolved);
+  if (!relative || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+    throw new ValidationError(`${label} must resolve to a file inside the artifact root`);
+  }
+  if (!existsSync(resolved) || !lstatSync(resolved).isFile()) {
+    throw new ValidationError(`${label} does not resolve to a file: ${normalized}`);
+  }
+  const realArtifactRoot = realpathSync(artifactRoot);
+  const realResolved = realpathSync(resolved);
+  const realRelative = path.relative(realArtifactRoot, realResolved);
+  if (!realRelative || realRelative.startsWith(`..${path.sep}`) || path.isAbsolute(realRelative)) {
+    throw new ValidationError(`${label} resolves outside the artifact root through a symbolic link`);
+  }
+  return resolved;
+}
+
+function milestoneFilenameKind(filename, checkpoint) {
+  if (filename === `${checkpoint}.json`) return 'canonical';
+  if (filename === `${checkpoint}.draft.json`) return 'draft';
+  const escapedCheckpoint = checkpoint.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const uniqueDraftPattern = new RegExp(`^${escapedCheckpoint}\\.[A-Za-z0-9][A-Za-z0-9._-]*\\.draft\\.json$`);
+  if (uniqueDraftPattern.test(filename)) return 'draft';
+  throw new ValidationError(
+    `milestone review checkpoint ${checkpoint} must use ${checkpoint}.json, ${checkpoint}.draft.json, or ${checkpoint}.<unique>.draft.json; got ${filename}`,
+  );
+}
+
+function milestonePathContext(filePath, data, options) {
+  const absolutePath = path.resolve(filePath);
+  const milestoneDir = path.dirname(absolutePath);
+  const iterationRoot = path.dirname(milestoneDir);
+  const iterationsRoot = path.dirname(iterationRoot);
+  const inferredArtifactRoot = path.dirname(iterationsRoot);
+  const artifactRoot = path.resolve(options.artifactRoot ?? inferredArtifactRoot);
+  const expectedMilestoneDir = path.join(artifactRoot, 'iterations', data.iteration_id, 'milestone-reviews');
+  if (path.resolve(milestoneDir) !== path.resolve(expectedMilestoneDir)) {
+    throw new ValidationError(`milestone review must be a direct file under iterations/${data.iteration_id}/milestone-reviews`);
+  }
+  if (options.expectedProjectId && data.project_id !== options.expectedProjectId) {
+    throw new ValidationError(`milestone review project_id must be ${JSON.stringify(options.expectedProjectId)}`);
+  }
+  if (options.expectedIterationId && data.iteration_id !== options.expectedIterationId) {
+    throw new ValidationError(`milestone review iteration_id must be ${JSON.stringify(options.expectedIterationId)}`);
+  }
+  return {
+    artifactRoot,
+    kind: milestoneFilenameKind(path.basename(absolutePath), data.checkpoint),
+  };
+}
+
+function graphWithoutMutableTaskState(graph) {
+  return {
+    ...graph,
+    tasks: graph.tasks.map((task) => {
+      const { status, blockReason, blockNote, ...stableTask } = task;
+      return stableTask;
+    }),
+  };
+}
+
+function sameJson(left, right) {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
+function normalizedRunVerification(run) {
+  return run.verification.map((item) => ({
+    type: item.type,
+    command: item.command,
+    status: item.status,
+    exit_code: item.exitCode,
+    source: item.source,
+  }));
+}
+
+const MILESTONE_IMMUTABLE_RUN_FIELDS = [
+  'schema_version',
+  'runId',
+  'projectId',
+  'taskId',
+  'taskTitle',
+  'iterationId',
+  'sourceLayout',
+  'taskGraphRef',
+  'sourceSpecRef',
+  'agentTool',
+  'workspaceRef',
+  'workspacePath',
+  'isolation',
+  'status',
+  'startedAt',
+  'finishedAt',
+];
+
+function latestSuccessfulRunEntry(runIndex, taskId, data, generatedAt) {
+  const candidates = runIndex.runs
+    .map((entry, index) => ({ entry, index }))
+    .filter(({ entry }) => entry.taskId === taskId
+      && entry.status === 'finished'
+      && entry.iterationId === data.iteration_id
+      && normalizedArtifactRef(entry.taskGraphRef, `${entry.runId}.taskGraphRef`) === data.source.task_graph_ref
+      && parsedTimestamp(entry.finishedAt, `${entry.runId}.finishedAt`) <= generatedAt)
+    .sort((left, right) => {
+      const timeDifference = Date.parse(right.entry.finishedAt) - Date.parse(left.entry.finishedAt);
+      return timeDifference || right.index - left.index;
+    });
+  return candidates[0]?.entry ?? null;
+}
+
+function validateMilestoneRunEvidence(data, artifactRoot, kind) {
+  const runIndexPath = resolveMilestoneSourceFile(artifactRoot, 'runs/run-index.json', 'milestone review run-index');
+  const runIndex = validateRunIndex(runIndexPath);
+  if (runIndex.projectId !== data.project_id) {
+    throw new ValidationError(`milestone review run-index projectId must match project_id ${JSON.stringify(data.project_id)}`);
+  }
+  const generatedAt = parsedTimestamp(data.generated_at, 'milestone review generated_at');
+
+  for (const evidence of data.source.completed_task_evidence) {
+    const expectedRunRef = `runs/${evidence.run_id}.json`;
+    if (evidence.run_ref !== expectedRunRef) {
+      throw new ValidationError(`${evidence.task_id}.run_ref must be ${expectedRunRef}`);
+    }
+    const latest = latestSuccessfulRunEntry(runIndex, evidence.task_id, data, generatedAt);
+    if (!latest) {
+      throw new ValidationError(`${evidence.task_id} has no successful finished run in the milestone task-graph context at generated_at`);
+    }
+    if (latest.runId !== evidence.run_id) {
+      throw new ValidationError(`${evidence.task_id}.run_id must reference latest successful finished run ${latest.runId}`);
+    }
+    const runPath = resolveMilestoneSourceFile(artifactRoot, evidence.run_ref, `${evidence.task_id}.run_ref`);
+    const run = validateRun(runPath);
+    const runSnapshot = evidence.run_snapshot;
+    const expectedFields = {
+      projectId: data.project_id,
+      taskId: evidence.task_id,
+      taskTitle: evidence.task_title,
+      iterationId: data.iteration_id,
+      sourceLayout: 'iteration',
+      taskGraphRef: data.source.task_graph_ref,
+      sourceSpecRef: data.source.task_graph_snapshot.sourceSpec,
+      status: 'finished',
+      finishedAt: evidence.run_finished_at,
+    };
+    for (const [field, expected] of Object.entries(expectedFields)) {
+      if (runSnapshot[field] !== expected) {
+        throw new ValidationError(`${evidence.task_id} run_snapshot ${field} must be ${JSON.stringify(expected)}, got ${JSON.stringify(runSnapshot[field])}`);
+      }
+    }
+    if (parsedTimestamp(runSnapshot.finishedAt, `${runSnapshot.runId}.finishedAt`) > generatedAt) {
+      throw new ValidationError(`${evidence.task_id} run_finished_at must not be later than milestone generated_at`);
+    }
+
+    for (const field of MILESTONE_IMMUTABLE_RUN_FIELDS) {
+      if (!sameJson(run[field], runSnapshot[field])) {
+        throw new ValidationError(
+          `${evidence.task_id} run ${field} must match run_snapshot immutable context: expected ${JSON.stringify(runSnapshot[field])}, got ${JSON.stringify(run[field])}`,
+        );
+      }
+    }
+
+    if (kind === 'draft') {
+      if (rawFileSha256(runPath) !== evidence.run_sha256) {
+        throw new ValidationError(`${evidence.task_id}.run_sha256 does not match ${evidence.run_ref}`);
+      }
+      if (!sameJson(run, runSnapshot)) {
+        throw new ValidationError(`${evidence.task_id}.run_snapshot must exactly match ${evidence.run_ref} for draft validation`);
+      }
+    }
+  }
+}
+
+function validateMilestoneSourceArtifacts(data, artifactRoot, kind) {
+  const expectedGraphRef = `iterations/${data.iteration_id}/gate-c-task-graph/task-graph.json`;
+  const expectedSpecRef = `iterations/${data.iteration_id}/gate-b-spec/spec.json`;
+  if (normalizedArtifactRef(data.source.task_graph_ref, 'source.task_graph_ref') !== expectedGraphRef) {
+    throw new ValidationError(`source.task_graph_ref must be ${expectedGraphRef}`);
+  }
+  if (normalizedArtifactRef(data.source.spec_ref, 'source.spec_ref') !== expectedSpecRef) {
+    throw new ValidationError(`source.spec_ref must be ${expectedSpecRef}`);
+  }
+  const graphPath = resolveMilestoneSourceFile(artifactRoot, data.source.task_graph_ref, 'source.task_graph_ref');
+  const specPath = resolveMilestoneSourceFile(artifactRoot, data.source.spec_ref, 'source.spec_ref');
+  const graph = validateTaskGraphData(loadJson(graphPath));
+  const spec = validateSpec(specPath);
+  if (graph.projectId !== data.project_id || spec.project_id !== data.project_id) {
+    throw new ValidationError('milestone review project_id must match task graph and spec project ids');
+  }
+  if (spec.approval !== 'approved' || spec.open_decisions.length) {
+    throw new ValidationError('milestone review source spec must be approved with no open decisions');
+  }
+  const graphSpecPath = path.resolve(path.dirname(graphPath), graph.sourceSpec);
+  if (graphSpecPath !== specPath) {
+    throw new ValidationError('milestone review task graph sourceSpec must resolve to source.spec_ref');
+  }
+
+  const graphSnapshot = data.source.task_graph_snapshot;
+  if (kind === 'draft') {
+    if (rawFileSha256(graphPath) !== data.source.task_graph_sha256) {
+      throw new ValidationError('source.task_graph_sha256 does not match the current task graph file');
+    }
+    if (!sameJson(graph, graphSnapshot)) {
+      throw new ValidationError('source.task_graph_snapshot must exactly match the current task graph for draft validation');
+    }
+  } else if (!sameJson(graphWithoutMutableTaskState(graph), graphWithoutMutableTaskState(graphSnapshot))) {
+    throw new ValidationError('canonical milestone task graph structure differs from its checkpoint snapshot beyond mutable task state');
+  }
+
+  validateMilestoneRunEvidence(data, artifactRoot, kind);
+}
+
+export function validateMilestoneReview(filePath, options = {}) {
+  const data = validateMilestoneReviewData(loadJson(filePath));
+  const context = milestonePathContext(filePath, data, options);
+  validateMilestoneSourceArtifacts(data, context.artifactRoot, context.kind);
+  return data;
+}
+
 export function validateSkillProposalData(data) {
   validateSchema(data, loadJson(SCHEMA_PATHS.skill_proposal));
   validateNonBlankStrings(data.targetFiles, `${data.proposalId}.targetFiles`);
@@ -1045,8 +1437,18 @@ export function validateRunsDir(runsDir) {
     }
   }
   const indexedRunFiles = new Set(index.runs.map((run) => `${run.runId}.json`));
+  const allowedSidecarSuffixes = [
+    '.orchestration.json',
+    '.orchestration-runtime.json',
+    '.monitor-gate.json',
+    '.monitor-verdict.json',
+    '.style-verdict.json',
+  ];
   const extraRunFiles = readdirSync(runsDir)
-    .filter((entry) => entry.endsWith('.json') && entry !== 'run-index.json' && !entry.endsWith('.orchestration.json') && !entry.endsWith('.monitor-gate.json') && !entry.endsWith('.monitor-verdict.json') && !indexedRunFiles.has(entry));
+    .filter((entry) => entry.endsWith('.json')
+      && entry !== 'run-index.json'
+      && !allowedSidecarSuffixes.some((suffix) => entry.endsWith(suffix))
+      && !indexedRunFiles.has(entry));
   if (extraRunFiles.length) {
     throw new ValidationError(`runs directory contains unindexed run file(s): ${extraRunFiles.join(', ')}`);
   }
@@ -1285,6 +1687,7 @@ function usage() {
     '  --task-graph <path> [--require-approved-spec <path>]',
     '  --review <path> [--require-review-pass]',
     '  --run <path> | --run-index <path> | --runs-dir <dir>',
+    '  --milestone-review <path>',
     '  --skill-proposal <path>',
     '  --proposal-review <path>',
     '  --proposal-curation <path>',
@@ -1317,6 +1720,7 @@ function parseArgs(argv) {
     else if (arg === '--run') args.run = argv[++index];
     else if (arg === '--run-index') args.runIndex = argv[++index];
     else if (arg === '--runs-dir') args.runsDir = argv[++index];
+    else if (arg === '--milestone-review') args.milestoneReview = argv[++index];
     else if (arg === '--skill-proposal') args.skillProposal = argv[++index];
     else if (arg === '--proposal-review') args.proposalReview = argv[++index];
     else if (arg === '--proposal-curation') args.proposalCuration = argv[++index];
@@ -1365,6 +1769,7 @@ export function main(argv = process.argv.slice(2)) {
     if (args.run) validateRun(args.run);
     if (args.runIndex) validateRunIndex(args.runIndex);
     if (args.runsDir) validateRunsDir(args.runsDir);
+    if (args.milestoneReview) validateMilestoneReview(args.milestoneReview);
     if (args.skillProposal) validateSkillProposal(args.skillProposal);
     if (args.proposalReview) validateProposalReview(args.proposalReview);
     if (args.proposalCuration) validateProposalCuration(args.proposalCuration);

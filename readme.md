@@ -83,7 +83,7 @@ or app session stays foreground-supervised by the user.
 
 - Use Plan2Agent Memory as an optional long-term artifact store and search backend.
 - `p2a memory status` compares local artifacts with remote snapshots.
-- `p2a memory push` uploads project, iteration, document, proposal, task, graph, and run snapshots.
+- `p2a memory push` uploads project, iteration, document, proposal, task, graph, and run snapshots, including stable milestone reviews as documents.
 - `p2a memory search` and `p2a memory history` support cross-session recall.
 - `p2a memory digest` summarizes failure and proposal history and tracks whether Memory search results were reused by run, proposal, or eval artifacts.
 
@@ -157,7 +157,8 @@ Run this from any checkout of the Plan2Agent repository:
 ```bash
 node /path/to/plan2agent/scripts/p2a_handoff.mjs scaffold \
   --target <project-dir> \
-  --tools all
+  --tools all \
+  --codex-profile quality
 ```
 
 Then work inside the target project:
@@ -167,7 +168,7 @@ cd <project-dir>
 node .plan2agent/scripts/p2a.mjs info
 ```
 
-Scaffold records a default `projectId` in both `.plan2agent/project.config.json` and `.plan2agent/manifest.json` by normalizing the target directory basename to kebab-case. After scaffold, `.plan2agent/project.config.json.projectId` is the source of truth; the directory basename is only the fresh-scaffold seed. If older local artifacts already exist, their artifact/spec/task graph id is used as a recovery fallback before deriving from a renamed directory. Planning artifacts still live under `.plan2agent/artifacts/<project_id>/`, but in scaffold projects users normally use the stored `projectId` instead of inventing a new id for each idea.
+Scaffold records a default `projectId` in both `.plan2agent/project.config.json` and `.plan2agent/manifest.json` by normalizing the target directory basename to kebab-case. After scaffold, `.plan2agent/project.config.json.projectId` is the source of truth; the directory basename is only the fresh-scaffold seed. Codex agents default to the GPT-5.6 Sol `quality` profile; use `--codex-profile inherit` when the target account or provider should inherit the parent session model and reasoning effort. If older local artifacts already exist, their artifact/spec/task graph id is used as a recovery fallback before deriving from a renamed directory. Planning artifacts still live under `.plan2agent/artifacts/<project_id>/`, but in scaffold projects users normally use the stored `projectId` instead of inventing a new id for each idea.
 
 ### 2. Start from a one-sentence idea
 
@@ -307,6 +308,7 @@ Core artifacts:
 - `spec.json` - approved product and implementation spec.
 - `task-graph.json` - executable dependency graph.
 - `review.json` - Gate D readiness review.
+- `iterations/<iteration-id>/milestone-reviews/{midpoint,pre_close}.json` - stable cross-task review evidence persisted as Memory documents and portable handoff bundles.
 - `current-spec.json` - active iteration baseline.
 - `runs/<run-id>.json` - execution record and verification evidence.
 - `proposals/*.json` - improvement candidates and curation artifacts.

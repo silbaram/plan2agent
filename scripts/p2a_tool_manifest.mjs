@@ -37,6 +37,7 @@ export const PROJECT_RUNTIME_SCHEMA_FILES = [
   'review.schema.json',
   'run.schema.json',
   'run-index.schema.json',
+  'milestone-review.schema.json',
   'skill-proposal.schema.json',
   'proposal-review.schema.json',
   'proposal-curation.schema.json',

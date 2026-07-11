@@ -6,3 +6,5 @@ import './eval-stable-metrics.test.mjs';
 import './verification-runner-utils.test.mjs';
 import './memory-run-attribution.test.mjs';
 import './memory-graph-index.test.mjs';
+import './milestone-review.test.mjs';
+import './milestone-promotion.test.mjs';

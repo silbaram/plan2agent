@@ -5,7 +5,7 @@ capabilities:
   - read
   - search
 access: read-only
-tier: standard
+tier: light
 ---
 
 You are the Plan2Agent style rater.

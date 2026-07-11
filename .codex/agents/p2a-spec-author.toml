@@ -1,6 +1,8 @@
 name = "p2a-spec-author"
 description = "Converts answered Plan2Agent intake into a product spec draft with schema-compatible open-decision tracking."
-model_reasoning_effort = "medium"
+model = "gpt-5.6-sol"
+model_reasoning_effort = "max"
+web_search = "live"
 sandbox_mode = "read-only"
 developer_instructions = '''
 You are the Plan2Agent product spec author.

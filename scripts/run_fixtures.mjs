@@ -128,12 +128,23 @@ function validateScaffoldFixtureCase() {
       .map((file) => path.join('.plan2agent', 'scripts', file));
     const expectedSchemas = PROJECT_RUNTIME_SCHEMA_FILES
       .map((file) => path.join('.plan2agent', 'schemas', file));
+    const expectedNewAgentFiles = [
+      path.join('.agents', 'agents', 'p2a-task-author.md'),
+      path.join('.agents', 'agents', 'p2a-milestone-reviewer.md'),
+      path.join('.claude', 'agents', 'p2a-task-author.md'),
+      path.join('.claude', 'agents', 'p2a-milestone-reviewer.md'),
+      path.join('.codex', 'agents', 'p2a-task-author.toml'),
+      path.join('.codex', 'agents', 'p2a-milestone-reviewer.toml'),
+      path.join('.gemini', 'agents', 'p2a-task-author.md'),
+      path.join('.gemini', 'agents', 'p2a-milestone-reviewer.md'),
+    ];
     const expectedToolFiles = [
       path.join('.agents', 'skills', 'p2a-harness', 'SKILL.md'),
       path.join('.claude', 'skills', 'p2a-harness', 'SKILL.md'),
       path.join('.claude', 'hooks', 'p2a-confine-workspace.mjs'),
       path.join('.codex', 'agents', 'p2a-task-graph.toml'),
       path.join('.gemini', 'commands', 'p2a', 'harness.toml'),
+      ...expectedNewAgentFiles,
     ];
     const expectedGenerated = [
       path.join('.claude', 'settings.json'),
@@ -153,21 +164,30 @@ function validateScaffoldFixtureCase() {
     ];
     const copiedExcludedToolFiles = excludedToolFiles.filter((filePath) => existsSync(path.join(targetRoot, filePath)));
     const manifest = JSON.parse(readFileSync(path.join(targetRoot, '.plan2agent', 'manifest.json'), 'utf8'));
+    const missingManifestNewAgentFiles = expectedNewAgentFiles
+      .filter((filePath) => !manifest.aiToolFiles?.includes(filePath));
     const manifestDesignSystemFiles = [...(manifest.aiToolFiles ?? []), ...(manifest.toolFiles ?? [])]
       .filter((filePath) => filePath.includes('p2a-design-system') || filePath.endsWith('/design-system.toml'));
     const config = JSON.parse(readFileSync(path.join(targetRoot, '.plan2agent', 'project.config.json'), 'utf8'));
     const claudeSettings = JSON.parse(readFileSync(path.join(targetRoot, '.claude', 'settings.json'), 'utf8'));
     const claudeLocalSettings = JSON.parse(readFileSync(path.join(targetRoot, '.claude', 'settings.local.json'), 'utf8'));
+    const codexQualityReviewer = readFileSync(path.join(targetRoot, '.codex', 'agents', 'p2a-quality-reviewer.toml'), 'utf8');
     const gitignore = readFileSync(path.join(targetRoot, '.gitignore'), 'utf8');
     const gitignoreLines = new Set(gitignore.split(/\r?\n/));
     const expectedSandboxEnabled = process.platform === 'darwin' || process.platform === 'linux';
     if (
       missingFiles.length
+      || missingManifestNewAgentFiles.length
       || copiedExcludedToolFiles.length
       || manifestDesignSystemFiles.length
       || manifest.provenance?.mode !== 'scaffold'
       || manifest.projectId !== 'target-project'
       || manifest.aiToolTargets.join(',') !== 'codex,claude,gemini'
+      || manifest.codexAgentProfile?.name !== 'quality'
+      || manifest.codexAgentProfile?.model !== 'gpt-5.6-sol'
+      || !/^model\s*=\s*"gpt-5\.6-sol"\s*$/m.test(codexQualityReviewer)
+      || !/^model_reasoning_effort\s*=\s*"max"\s*$/m.test(codexQualityReviewer)
+      || !/^web_search\s*=\s*"live"\s*$/m.test(codexQualityReviewer)
       || config.projectId !== 'target-project'
       || config.testCommand !== null
       || config.verificationTimeoutMs !== 600000
@@ -187,8 +207,65 @@ function validateScaffoldFixtureCase() {
       || !gitignore.includes('node_modules/')
     ) {
       console.error('scaffold output mismatch');
-      console.error(JSON.stringify({ missingFiles, copiedExcludedToolFiles, manifestDesignSystemFiles, manifest, config, claudeSettings, claudeLocalSettings }, null, 2));
+      console.error(JSON.stringify({ missingFiles, missingManifestNewAgentFiles, copiedExcludedToolFiles, manifestDesignSystemFiles, manifest, config, claudeSettings, claudeLocalSettings }, null, 2));
       return { status: 1, checks };
+    }
+
+    const inheritProfileRoot = path.join(tempRoot, 'codex-inherit-project');
+    result = runHandoff(['scaffold', '--target', inheritProfileRoot, '--tools', 'codex', '--codex-profile', 'inherit']);
+    checks += 1;
+    const inheritManifest = result.status === 0
+      ? JSON.parse(readFileSync(path.join(inheritProfileRoot, '.plan2agent', 'manifest.json'), 'utf8'))
+      : null;
+    const inheritReviewerPath = path.join(inheritProfileRoot, '.codex', 'agents', 'p2a-quality-reviewer.toml');
+    const inheritReviewer = existsSync(inheritReviewerPath) ? readFileSync(inheritReviewerPath, 'utf8') : '';
+    if (
+      result.status !== 0
+      || inheritManifest?.codexAgentProfile?.name !== 'inherit'
+      || /^model\s*=/m.test(inheritReviewer)
+      || /^model_reasoning_effort\s*=/m.test(inheritReviewer)
+      || !/^web_search\s*=\s*"live"\s*$/m.test(inheritReviewer)
+    ) {
+      console.error('Codex inherit profile scaffold fixture failed');
+      writeResultOutput(result);
+      console.error(JSON.stringify({ codexAgentProfile: inheritManifest?.codexAgentProfile, inheritReviewer }, null, 2));
+      return { status: failureStatus(result), checks };
+    }
+
+    const inheritManifestPath = path.join(inheritProfileRoot, '.plan2agent', 'manifest.json');
+    const legacyInheritManifest = JSON.parse(readFileSync(inheritManifestPath, 'utf8'));
+    delete legacyInheritManifest.codexAgentProfile;
+    writeFileSync(inheritManifestPath, `${JSON.stringify(legacyInheritManifest, null, 2)}\n`, 'utf8');
+    result = runHandoff(['update', '--target', inheritProfileRoot, '--apply']);
+    checks += 1;
+    const migratedInheritManifest = JSON.parse(readFileSync(inheritManifestPath, 'utf8'));
+    if (
+      result.status !== 0
+      || !result.stdout.includes('status: applied')
+      || migratedInheritManifest.codexAgentProfile?.name !== 'inherit'
+    ) {
+      console.error('Legacy Codex profile migration fixture failed');
+      writeResultOutput(result);
+      console.error(JSON.stringify({ codexAgentProfile: migratedInheritManifest.codexAgentProfile }, null, 2));
+      return { status: failureStatus(result), checks };
+    }
+
+    unlinkSync(inheritReviewerPath);
+    result = runHandoff(['update', '--target', inheritProfileRoot, '--apply']);
+    checks += 1;
+    const restoredInheritReviewer = existsSync(inheritReviewerPath) ? readFileSync(inheritReviewerPath, 'utf8') : '';
+    const restoredInheritManifest = JSON.parse(readFileSync(path.join(inheritProfileRoot, '.plan2agent', 'manifest.json'), 'utf8'));
+    if (
+      result.status !== 0
+      || restoredInheritManifest.codexAgentProfile?.name !== 'inherit'
+      || /^model\s*=/m.test(restoredInheritReviewer)
+      || /^model_reasoning_effort\s*=/m.test(restoredInheritReviewer)
+      || !/^web_search\s*=\s*"live"\s*$/m.test(restoredInheritReviewer)
+    ) {
+      console.error('Codex inherit profile update restore fixture failed');
+      writeResultOutput(result);
+      console.error(JSON.stringify({ codexAgentProfile: restoredInheritManifest.codexAgentProfile, restoredInheritReviewer }, null, 2));
+      return { status: failureStatus(result), checks };
     }
 
     result = runTargetIteration(targetRoot, ['--help']);
@@ -928,6 +1005,30 @@ function validateScaffoldFixtureCase() {
       console.error('update apply idempotency fixture failed');
       writeResultOutput(result);
       console.error(JSON.stringify({ appliedUpdateManifestAfterNoop, applyUpdateReportsAfterNoop }, null, 2));
+      return { status: failureStatus(result), checks };
+    }
+
+    const assetRestoreUpdateRoot = path.join(tempRoot, 'asset-restore-update-target');
+    cpSync(targetRoot, assetRestoreUpdateRoot, { recursive: true });
+    for (const filePath of expectedNewAgentFiles) {
+      unlinkSync(path.join(assetRestoreUpdateRoot, filePath));
+    }
+    result = runHandoff(['update', '--target', assetRestoreUpdateRoot, '--apply']);
+    checks += 1;
+    const unrestoredNewAgentFiles = expectedNewAgentFiles.filter((filePath) => {
+      const restoredPath = path.join(assetRestoreUpdateRoot, filePath);
+      return !existsSync(restoredPath)
+        || readFileSync(restoredPath, 'utf8') !== readFileSync(path.join(ROOT, filePath), 'utf8');
+    });
+    if (
+      result.status !== 0
+      || !result.stdout.includes('Plan2Agent update apply')
+      || !result.stdout.includes('status: applied')
+      || unrestoredNewAgentFiles.length
+    ) {
+      console.error('update apply did not restore new canonical/provider agent assets');
+      writeResultOutput(result);
+      console.error(JSON.stringify({ unrestoredNewAgentFiles }, null, 2));
       return { status: failureStatus(result), checks };
     }
 
@@ -5610,7 +5711,25 @@ function validateIterationCurrentFixtureCases() {
       }
 
       let iter2TaskGraph = JSON.parse(readFileSync(iter2TaskGraphPath, 'utf8'));
+      const iter2CanonicalBeforeReplacement = readFileSync(iter2TaskGraphPath, 'utf8');
       const originalSemanticTaskIds = iter2TaskGraph.tasks.map((task) => task.id);
+      const startedReplacementGraph = JSON.parse(iter2CanonicalBeforeReplacement);
+      startedReplacementGraph.tasks[0].status = 'in_progress';
+      writeFileSync(iter2TaskGraphPath, `${JSON.stringify(startedReplacementGraph, null, 2)}\n`, 'utf8');
+      result = runIteration(['diff-tasks', '--artifacts', artifactRoot, '--force']);
+      checks += 1;
+      const startedDiffOutput = `${result.stdout ?? ''}${result.stderr ?? ''}`;
+      if (
+        result.status === 0
+        || !startedDiffOutput.includes('cannot replace a task graph after execution has started')
+        || existsSync(iter2DraftPath)
+      ) {
+        console.error(`iteration diff-tasks --force did not protect non-todo task state: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: 1, checks };
+      }
+      writeFileSync(iter2TaskGraphPath, iter2CanonicalBeforeReplacement, 'utf8');
+
       result = runIteration(['diff-tasks', '--artifacts', artifactRoot, '--force']);
       checks += 1;
       if (result.status !== 0 || !result.stdout.includes('reused active tasks:') || !existsSync(iter2DraftPath)) {
@@ -5628,7 +5747,90 @@ function validateIterationCurrentFixtureCases() {
 	        return { status: 1, checks };
 	      }
 
-	      result = runIteration(['promote-tasks', '--artifacts', artifactRoot]);
+      const nonTodoPromotionGraph = JSON.parse(iter2CanonicalBeforeReplacement);
+      nonTodoPromotionGraph.tasks[0].status = 'done';
+      writeFileSync(iter2TaskGraphPath, `${JSON.stringify(nonTodoPromotionGraph, null, 2)}\n`, 'utf8');
+      result = runIteration([
+        'promote-tasks',
+        '--artifacts',
+        artifactRoot,
+        '--replace-existing',
+        '--approved-by',
+        'user',
+        '--approval-note',
+        'Fixture must reject replacement after execution starts.',
+      ]);
+      checks += 1;
+      const nonTodoPromotionOutput = `${result.stdout ?? ''}${result.stderr ?? ''}`;
+      if (
+        result.status === 0
+        || !nonTodoPromotionOutput.includes('cannot replace a canonical task graph after execution has started')
+        || !existsSync(iter2DraftPath)
+      ) {
+        console.error(`iteration promote-tasks --replace-existing did not protect non-todo task state: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: 1, checks };
+      }
+      writeFileSync(iter2TaskGraphPath, iter2CanonicalBeforeReplacement, 'utf8');
+
+      const replacementHistoryIndexPath = path.join(runsDir, 'run-index.json');
+      const replacementHistoryIndexBefore = readFileSync(replacementHistoryIndexPath, 'utf8');
+      const replacementHistoryIndex = JSON.parse(replacementHistoryIndexBefore);
+      const replacementHistoryRunId = 'run-task-graph-replacement-history-fixture';
+      const replacementHistoryTaskId = originalSemanticTaskIds[0];
+      replacementHistoryIndex.runs.push({
+        runId: replacementHistoryRunId,
+        taskId: replacementHistoryTaskId,
+        iterationId: 'iter-002',
+        status: 'started',
+        agentTool: 'codex',
+        workspaceRef: 'replacement-history-fixture',
+        taskGraphRef: 'iterations/iter-002/gate-c-task-graph/task-graph.json',
+        runRef: `${replacementHistoryRunId}.json`,
+        startedAt: '2026-07-11T00:00:00.000Z',
+        finishedAt: null,
+      });
+      const replacementHistoryTaskEntry = replacementHistoryIndex.tasks.find((entry) => entry.taskId === replacementHistoryTaskId);
+      if (replacementHistoryTaskEntry) {
+        replacementHistoryTaskEntry.runIds.push(replacementHistoryRunId);
+        replacementHistoryTaskEntry.latestRunId = replacementHistoryRunId;
+      } else {
+        replacementHistoryIndex.tasks.push({
+          taskId: replacementHistoryTaskId,
+          runIds: [replacementHistoryRunId],
+          latestRunId: replacementHistoryRunId,
+        });
+      }
+      writeFileSync(replacementHistoryIndexPath, `${JSON.stringify(replacementHistoryIndex, null, 2)}\n`, 'utf8');
+
+      result = runIteration(['diff-tasks', '--artifacts', artifactRoot, '--force']);
+      checks += 1;
+      const historyDiffOutput = `${result.stdout ?? ''}${result.stderr ?? ''}`;
+      if (
+        result.status === 0
+        || !historyDiffOutput.includes('diff-tasks --force cannot replace a task graph after execution history exists')
+        || !existsSync(iter2DraftPath)
+      ) {
+        console.error(`iteration diff-tasks --force did not protect reopened todo task run lineage: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: 1, checks };
+      }
+
+      result = runIteration(['promote-tasks', '--artifacts', artifactRoot, '--replace-existing']);
+      checks += 1;
+      const historyPromotionOutput = `${result.stdout ?? ''}${result.stderr ?? ''}`;
+      if (
+        result.status === 0
+        || !historyPromotionOutput.includes('promote-tasks --replace-existing cannot replace a task graph after execution history exists')
+        || !existsSync(iter2DraftPath)
+      ) {
+        console.error(`iteration promote-tasks did not protect reopened todo task run lineage: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: 1, checks };
+      }
+      writeFileSync(replacementHistoryIndexPath, replacementHistoryIndexBefore, 'utf8');
+
+	      result = runIteration(['promote-tasks', '--artifacts', artifactRoot, '--replace-existing']);
 	      checks += 1;
 	      const staleGateCAuditOutput = `${result.stdout ?? ''}${result.stderr ?? ''}`;
 	      if (result.status === 0 || !staleGateCAuditOutput.includes('does not match current task-graph.draft.json')) {
@@ -5641,6 +5843,29 @@ function validateIterationCurrentFixtureCases() {
 	        'promote-tasks',
 	        '--artifacts',
         artifactRoot,
+        '--approved-by',
+        'user',
+        '--approval-note',
+        'Fixture reviewed regenerated semantic diff task graph.',
+      ]);
+      checks += 1;
+      const replaceExistingGuardOutput = `${result.stdout ?? ''}${result.stderr ?? ''}`;
+      if (
+        result.status === 0
+        || !replaceExistingGuardOutput.includes('refusing to replace it with a potentially incremental-only draft')
+        || readFileSync(iter2TaskGraphPath, 'utf8') !== iter2CanonicalBeforeReplacement
+        || !existsSync(iter2DraftPath)
+      ) {
+        console.error(`iteration promote-tasks did not guard existing canonical graph: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: 1, checks };
+      }
+
+	      result = runIteration([
+	        'promote-tasks',
+	        '--artifacts',
+        artifactRoot,
+        '--replace-existing',
         '--approved-by',
         'user',
         '--approval-note',
@@ -6257,12 +6482,168 @@ function validateIterationCurrentFixtureCases() {
         return { status: 1, checks };
       }
 
+      const milestoneHandoffArtifactRoot = path.join(tempRoot, 'milestone-handoff-artifacts');
+      cpSync(artifactRoot, milestoneHandoffArtifactRoot, { recursive: true });
+      const milestoneTaskGraphRef = 'iterations/iter-002/gate-c-task-graph/task-graph.json';
+      const milestoneSpecRef = 'iterations/iter-002/gate-b-spec/spec.json';
+      const milestoneTaskGraphPath = path.join(milestoneHandoffArtifactRoot, milestoneTaskGraphRef);
+      const milestoneTaskGraph = JSON.parse(readFileSync(milestoneTaskGraphPath, 'utf8'));
+      for (const task of milestoneTaskGraph.tasks) task.status = 'done';
+      const milestoneTaskGraphText = `${JSON.stringify(milestoneTaskGraph, null, 2)}\n`;
+      writeFileSync(milestoneTaskGraphPath, milestoneTaskGraphText, 'utf8');
+
+      const milestoneRunsDir = path.join(milestoneHandoffArtifactRoot, 'runs');
+      rmSync(milestoneRunsDir, { recursive: true, force: true });
+      mkdirSync(milestoneRunsDir, { recursive: true });
+      const milestoneRunStartedAt = '2026-07-11T00:00:00.000Z';
+      const milestoneRunFinishedAt = '2026-07-11T00:01:00.000Z';
+      const milestoneGeneratedAt = '2026-07-11T00:02:00.000Z';
+      const milestoneRunIndexEntries = [];
+      const milestoneRunIndexTasks = [];
+      const milestoneCompletedTaskEvidence = [];
+      for (const task of milestoneTaskGraph.tasks) {
+        const runId = `run-milestone-${task.id}`;
+        const changedFiles = [`src/${task.id}.mjs`];
+        const verification = [{
+          type: 'test',
+          command: `node --test ${task.id}`,
+          status: 'passed',
+          exitCode: 0,
+          durationMs: 1,
+          startedAt: milestoneRunStartedAt,
+          finishedAt: milestoneRunFinishedAt,
+          stdoutTail: '',
+          stderrTail: '',
+          source: 'command',
+        }];
+        const run = {
+          schema_version: 'p2a.run.v1',
+          runId,
+          projectId: caseData.project_id,
+          taskId: task.id,
+          taskTitle: task.title,
+          iterationId: 'iter-002',
+          sourceLayout: 'iteration',
+          taskGraphRef: milestoneTaskGraphRef,
+          sourceSpecRef: milestoneTaskGraph.sourceSpec,
+          agentTool: 'codex',
+          workspaceRef: 'milestone-handoff-fixture',
+          workspacePath: '.',
+          isolation: {
+            mode: 'none',
+            branch: null,
+            worktree: null,
+            baseRef: null,
+            created: false,
+            createCommand: null,
+            createExitCode: null,
+            createOutputTail: null,
+          },
+          status: 'finished',
+          startedAt: milestoneRunStartedAt,
+          updatedAt: milestoneRunFinishedAt,
+          finishedAt: milestoneRunFinishedAt,
+          changedFiles,
+          verification,
+          notes: ['Synthetic milestone handoff evidence.'],
+        };
+        const runText = `${JSON.stringify(run, null, 2)}\n`;
+        writeFileSync(path.join(milestoneRunsDir, `${runId}.json`), runText, 'utf8');
+        milestoneRunIndexEntries.push({
+          runId,
+          taskId: task.id,
+          iterationId: 'iter-002',
+          status: 'finished',
+          agentTool: 'codex',
+          workspaceRef: 'milestone-handoff-fixture',
+          taskGraphRef: milestoneTaskGraphRef,
+          runRef: `${runId}.json`,
+          startedAt: milestoneRunStartedAt,
+          finishedAt: milestoneRunFinishedAt,
+        });
+        milestoneRunIndexTasks.push({ taskId: task.id, runIds: [runId], latestRunId: runId });
+        milestoneCompletedTaskEvidence.push({
+          task_id: task.id,
+          task_title: task.title,
+          run_id: runId,
+          run_ref: `runs/${runId}.json`,
+          run_sha256: hashText(runText),
+          run_snapshot: run,
+          run_snapshot_sha256: hashText(JSON.stringify(run)),
+          run_finished_at: milestoneRunFinishedAt,
+          changed_files: changedFiles,
+          verification: verification.map((item) => ({
+            type: item.type,
+            command: item.command,
+            status: item.status,
+            exit_code: item.exitCode,
+            source: item.source,
+          })),
+        });
+      }
+      writeFileSync(path.join(milestoneRunsDir, 'run-index.json'), `${JSON.stringify({
+        schema_version: 'p2a.run_index.v1',
+        projectId: caseData.project_id,
+        runs: milestoneRunIndexEntries,
+        tasks: milestoneRunIndexTasks,
+      }, null, 2)}\n`, 'utf8');
+
+      const sourceMilestoneReviewDir = path.join(milestoneHandoffArtifactRoot, 'iterations', 'iter-002', 'milestone-reviews');
+      const sourcePreCloseReviewPath = path.join(sourceMilestoneReviewDir, 'pre_close.json');
+      const sourceMidpointDraftPath = path.join(sourceMilestoneReviewDir, 'midpoint.fixture.draft.json');
+      mkdirSync(sourceMilestoneReviewDir, { recursive: true });
+      writeFileSync(sourcePreCloseReviewPath, `${JSON.stringify({
+        schema_version: 'p2a.milestone_review.v1',
+        project_id: caseData.project_id,
+        iteration_id: 'iter-002',
+        checkpoint: 'pre_close',
+        generated_at: milestoneGeneratedAt,
+        source: {
+          task_graph_ref: milestoneTaskGraphRef,
+          task_graph_sha256: hashText(milestoneTaskGraphText),
+          task_graph_snapshot: milestoneTaskGraph,
+          task_graph_snapshot_sha256: hashText(JSON.stringify(milestoneTaskGraph)),
+          spec_ref: milestoneSpecRef,
+          style_ref: null,
+          task_counts: {
+            total: milestoneTaskGraph.tasks.length,
+            done: milestoneTaskGraph.tasks.length,
+            todo: 0,
+            in_progress: 0,
+            blocked: 0,
+          },
+          task_snapshot: milestoneTaskGraph.tasks.map((task) => ({
+            task_id: task.id,
+            task_title: task.title,
+            status: task.status,
+          })),
+          completed_task_evidence: milestoneCompletedTaskEvidence,
+          remaining_task_ids: [],
+        },
+        confirmed_findings: [],
+        planned_todo_not_findings: [],
+        note: 'Legacy handoff persistence fixture.',
+      }, null, 2)}\n`, 'utf8');
+      writeFileSync(sourceMidpointDraftPath, `${JSON.stringify({
+        schema_version: 'p2a.milestone_review.v1',
+        checkpoint: 'midpoint',
+        note: 'Draft milestone reviews must not be handed off.',
+      }, null, 2)}\n`, 'utf8');
+
+      result = runValidator(['--milestone-review', sourcePreCloseReviewPath]);
+      checks += 1;
+      if (result.status !== 0) {
+        console.error(`source milestone handoff bundle validation failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: failureStatus(result), checks };
+      }
+
       const iterationDryRunTargetRoot = path.join(tempRoot, 'target-iteration-dry-run');
       result = runHandoff([
         '--project-id',
         caseData.project_id,
         '--artifacts',
-        artifactRoot,
+        milestoneHandoffArtifactRoot,
         '--target',
         iterationDryRunTargetRoot,
         '--iteration-id',
@@ -6275,6 +6656,9 @@ function validateIterationCurrentFixtureCases() {
         || !result.stdout.includes('sourceIterationId: iter-002')
         || !result.stdout.includes('copy+rewrite:')
         || !result.stdout.includes(`gate-b-spec/spec.json -> .plan2agent/artifacts/${caseData.project_id}/gate-b-spec/spec.json`)
+        || !result.stdout.includes(`.plan2agent/artifacts/${caseData.project_id}/iterations/iter-002/milestone-reviews/pre_close.json`)
+        || !result.stdout.includes(`.plan2agent/artifacts/${caseData.project_id}/runs/run-index.json`)
+        || result.stdout.includes('midpoint.fixture.draft.json')
       ) {
         console.error(`iteration handoff --iteration-id active dry-run fixture check failed: ${caseData.id}`);
         writeResultOutput(result);
@@ -6286,7 +6670,7 @@ function validateIterationCurrentFixtureCases() {
         '--project-id',
         caseData.project_id,
         '--artifacts',
-        artifactRoot,
+        milestoneHandoffArtifactRoot,
         '--target',
         iterationTargetRoot,
         '--include-intake',
@@ -6304,12 +6688,24 @@ function validateIterationCurrentFixtureCases() {
       const targetSpecPath = path.join(iterationTargetArtifactRoot, 'gate-b-spec', 'spec.json');
       const targetIntakePath = path.join(iterationTargetArtifactRoot, 'gate-a-intake', 'intake.json');
       const targetPreflightPath = path.join(iterationTargetArtifactRoot, 'preflight-research', 'next-iteration-recommendations.md');
+      const targetPreCloseReviewRelative = `.plan2agent/artifacts/${caseData.project_id}/iterations/iter-002/milestone-reviews/pre_close.json`;
+      const targetPreCloseReviewPath = path.join(iterationTargetRoot, targetPreCloseReviewRelative);
+      const targetMidpointDraftPath = path.join(iterationTargetArtifactRoot, 'iterations', 'iter-002', 'milestone-reviews', 'midpoint.fixture.draft.json');
+      const expectedMilestoneEvidenceFiles = [
+        milestoneTaskGraphRef,
+        milestoneSpecRef,
+        'iterations/iter-002/gate-a-intake/intake.json',
+        'runs/run-index.json',
+        ...milestoneRunIndexEntries.map((entry) => `runs/${entry.runId}.json`),
+      ].map((filePath) => `.plan2agent/artifacts/${caseData.project_id}/${filePath}`);
       const targetMaintenanceGraphPath = path.join(iterationTargetRoot, '.plan2agent', 'maintenance', 'task-graph.json');
       if (
         !existsSync(targetCurrentSpecPath)
         || !existsSync(targetSpecPath)
         || !existsSync(targetIntakePath)
         || !existsSync(targetPreflightPath)
+        || !existsSync(targetPreCloseReviewPath)
+        || existsSync(targetMidpointDraftPath)
         || !existsSync(targetMaintenanceGraphPath)
         || !existsSync(path.join(iterationTargetRoot, '.plan2agent', 'scripts', 'p2a_iteration_state.mjs'))
         || !existsSync(path.join(iterationTargetRoot, '.plan2agent', 'scripts', 'p2a_radar_preflight.mjs'))
@@ -6328,7 +6724,7 @@ function validateIterationCurrentFixtureCases() {
       }
       const targetManifest = JSON.parse(readFileSync(targetManifestPath, 'utf8'));
       const targetCurrentSpec = JSON.parse(readFileSync(targetCurrentSpecPath, 'utf8'));
-      const sourceCurrentSpecAfterHandoff = JSON.parse(readFileSync(path.join(artifactRoot, 'current-spec.json'), 'utf8'));
+      const sourceCurrentSpecAfterHandoff = JSON.parse(readFileSync(path.join(milestoneHandoffArtifactRoot, 'current-spec.json'), 'utf8'));
       const targetTaskGraph = JSON.parse(readFileSync(targetTaskGraphPath, 'utf8'));
       const targetSpec = JSON.parse(readFileSync(targetSpecPath, 'utf8'));
       const expectedTargetSpecRef = `.plan2agent/artifacts/${caseData.project_id}/gate-b-spec/spec.json`;
@@ -6361,8 +6757,13 @@ function validateIterationCurrentFixtureCases() {
 	        || !targetManifest.schemaFiles.includes('.plan2agent/schemas/eval-index.schema.json')
 	        || !targetManifest.schemaFiles.includes('.plan2agent/schemas/eval-digest.schema.json')
 	        || !targetManifest.schemaFiles.includes('.plan2agent/schemas/eval-maintenance-draft.schema.json')
-	        || !targetManifest.schemaFiles.includes('.plan2agent/schemas/eval-maintenance-apply-report.schema.json')
+        || !targetManifest.schemaFiles.includes('.plan2agent/schemas/eval-maintenance-apply-report.schema.json')
         || !targetManifest.preflightResearchFiles?.includes(`.plan2agent/artifacts/${caseData.project_id}/preflight-research/next-iteration-recommendations.md`)
+	        || JSON.stringify(targetManifest.milestoneReviewFiles) !== JSON.stringify([targetPreCloseReviewRelative])
+	        || expectedMilestoneEvidenceFiles.some((filePath) => !targetManifest.milestoneEvidenceFiles?.includes(filePath))
+	        || targetManifest.milestoneEvidenceFiles?.length !== expectedMilestoneEvidenceFiles.length
+	        || !targetManifest.artifactFiles.includes(targetPreCloseReviewRelative)
+	        || expectedMilestoneEvidenceFiles.some((filePath) => !targetManifest.artifactFiles.includes(filePath))
 	        || targetCurrentSpec.last_handoff?.iteration_id !== 'iter-002'
         || targetCurrentSpec.last_handoff?.maintenance_included !== true
         || sourceCurrentSpecAfterHandoff.last_handoff?.target_project !== iterationTargetRoot
@@ -6377,6 +6778,14 @@ function validateIterationCurrentFixtureCases() {
       result = assertTargetSpecSourceIntake(iterationTargetRoot, caseData.project_id, caseData.id, 'iteration');
       checks += 1;
       if (result.status !== 0) return { status: result.status, checks };
+
+      result = runTargetP2a(iterationTargetRoot, ['validate', '--milestone-review', targetPreCloseReviewPath]);
+      checks += 1;
+      if (result.status !== 0) {
+        console.error(`iteration handoff target milestone evidence bundle validation failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: failureStatus(result), checks };
+      }
 
       result = runTargetTasks(iterationTargetRoot, ['ready', '--graph', targetTaskGraphPath]);
       checks += 1;
@@ -6573,6 +6982,25 @@ function validateIterationCurrentFixtureCases() {
         return { status: 1, checks };
       }
 
+      const taskAuthorContract = readFileSync(path.join(ROOT, '.agents', 'agents', 'p2a-task-author.md'), 'utf8');
+      const requiredTaskAuthorContractFragments = [
+        '`schema_version: "p2a.task_graph.v1"`',
+        'map `projectId` exactly from `context.project_id`',
+        '`tasks` array',
+        ...['id', 'title', 'description', 'status', 'dependencies', 'acceptanceCriteria', 'targetArea', 'suggestedAgentPrompt', 'sourceSpecRefs']
+          .map((field) => `\`${field}\``),
+        '`diff-tasks --force`',
+        '`promote-tasks --replace-existing`',
+      ];
+      const missingTaskAuthorContractFragments = requiredTaskAuthorContractFragments
+        .filter((fragment) => !taskAuthorContract.includes(fragment));
+      checks += 1;
+      if (missingTaskAuthorContractFragments.length) {
+        console.error(`task-author agent schema/safe-replacement contract fixture check failed: ${caseData.id}`);
+        console.error(JSON.stringify({ missingTaskAuthorContractFragments }, null, 2));
+        return { status: 1, checks };
+      }
+
       const iter3TaskGraphPath = path.join(artifactRoot, 'iterations', 'iter-003', 'gate-c-task-graph', 'task-graph.json');
       const iter3DraftPath = path.join(artifactRoot, 'iterations', 'iter-003', 'gate-c-task-graph', 'task-graph.draft.json');
       const iter3Draft = JSON.parse(JSON.stringify(iter2TaskGraph));
@@ -6602,6 +7030,32 @@ function validateIterationCurrentFixtureCases() {
       const cycleDraftOutput = `${result.stdout ?? ''}${result.stderr ?? ''}`;
       if (result.status === 0 || !cycleDraftOutput.includes('dependency cycle')) {
         console.error(`iteration gate-c-draft cycle fixture check failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: 1, checks };
+      }
+      writeFileSync(iter3DraftPath, `${JSON.stringify(iter3Draft, null, 2)}\n`, 'utf8');
+
+      const preExecutedIter3Draft = JSON.parse(JSON.stringify(iter3Draft));
+      preExecutedIter3Draft.tasks[0].status = 'done';
+      writeFileSync(iter3DraftPath, `${JSON.stringify(preExecutedIter3Draft, null, 2)}\n`, 'utf8');
+      result = runIteration([
+        'promote-tasks',
+        '--artifacts',
+        artifactRoot,
+        '--approved-by',
+        'user',
+        '--approval-note',
+        'Fixture must reject a draft that fabricates execution status.',
+      ]);
+      checks += 1;
+      const preExecutedDraftOutput = `${result.stdout ?? ''}${result.stderr ?? ''}`;
+      if (
+        result.status === 0
+        || !preExecutedDraftOutput.includes('Gate C draft tasks must all start as todo')
+        || existsSync(iter3TaskGraphPath)
+        || !existsSync(iter3DraftPath)
+      ) {
+        console.error(`iteration promote-tasks accepted pre-executed draft task state: ${caseData.id}`);
         writeResultOutput(result);
         return { status: 1, checks };
       }
@@ -6775,12 +7229,22 @@ export function main() {
   writeResultOutput(verificationRunnerUtilsResult);
   if (verificationRunnerUtilsResult.status !== 0) return failureStatus(verificationRunnerUtilsResult);
 
+  const milestoneReviewResult = runNodeTestFile('tests/milestone-review.test.mjs');
+  writeResultOutput(milestoneReviewResult);
+  if (milestoneReviewResult.status !== 0) return failureStatus(milestoneReviewResult);
+
+  const milestonePromotionResult = runNodeTestFile('tests/milestone-promotion.test.mjs');
+  writeResultOutput(milestonePromotionResult);
+  if (milestonePromotionResult.status !== 0) return failureStatus(milestonePromotionResult);
+
   const segments = [`${countNodeTestCases(schemaResult.stdout)} Plan2Agent fixture set test(s)`];
   if (scaffoldResult.checks) segments.push(`${scaffoldResult.checks} scaffold fixture check(s)`);
   if (evalResult.checks) segments.push(`${evalResult.checks} eval fixture check(s)`);
   if (memoryResult.checks) segments.push(`${memoryResult.checks} memory fixture check(s)`);
   segments.push(`${countNodeTestCases(e2eResult.stdout)} e2e fixture test(s)`);
   segments.push(`${countNodeTestCases(verificationRunnerUtilsResult.stdout)} verification runner utility test(s)`);
+  segments.push(`${countNodeTestCases(milestoneReviewResult.stdout)} milestone review test(s)`);
+  segments.push(`${countNodeTestCases(milestonePromotionResult.stdout)} milestone promotion test(s)`);
   if (iterationResult.checks) segments.push(`${iterationResult.checks} iteration fixture check(s)`);
   segments.push(`${countNodeTestCases(negativeResult.stdout)} negative fixture test(s)`);
   segments.push(`${countNodeTestCases(projectConfigDetectionResult.stdout)} project config detection test(s)`);
