@@ -35,6 +35,7 @@ const DEFAULT_MEMORY_TOKEN_ENV = 'P2A_MEMORY_TOKEN';
 const DEFAULT_ARTIFACT_LIMIT = 5000;
 const DEFAULT_SEARCH_LIMIT = 20;
 const DEFAULT_HISTORY_LIMIT = 100;
+const MAX_PAGED_REQUESTS = 10000;
 const MAX_CHUNK_CHARS = 2000;
 const MILESTONE_REVIEW_FILENAMES = ['midpoint.json', 'pre_close.json'];
 const SEARCH_ARTIFACT_TYPES = new Set([
@@ -1354,6 +1355,60 @@ async function memoryGet(connection, pathName, searchParams = {}) {
   return memoryRequest(connection, 'GET', pathName, null, searchParams);
 }
 
+async function fetchPagedMemoryItems(connection, pathName, searchParams = {}, options = {}) {
+  const get = options.get ?? memoryGet;
+  const pageSize = options.pageSize ?? searchParams.limit;
+  const maxItems = options.maxItems ?? null;
+  if (!Number.isInteger(pageSize) || pageSize <= 0) {
+    throw new Error(`Memory GET ${pathName} requires a positive page size`);
+  }
+  if (maxItems !== null && (!Number.isInteger(maxItems) || maxItems <= 0)) {
+    throw new Error(`Memory GET ${pathName} requires a positive maximum item count`);
+  }
+
+  const baseParams = { ...searchParams };
+  let cursor = baseParams.cursor ?? null;
+  delete baseParams.limit;
+  delete baseParams.cursor;
+  const seenCursors = new Set(cursor === null ? [] : [cursor]);
+  const items = [];
+
+  for (let requestCount = 0; requestCount < MAX_PAGED_REQUESTS; requestCount += 1) {
+    const remaining = maxItems === null ? pageSize : Math.min(pageSize, maxItems - items.length);
+    const response = await get(connection, pathName, {
+      ...baseParams,
+      limit: remaining,
+      cursor,
+    });
+
+    // Keep compatibility with Memory deployments that predate the paged response contract.
+    if (Array.isArray(response)) {
+      items.push(...response.slice(0, maxItems === null ? response.length : maxItems - items.length));
+      return items;
+    }
+    if (!response || typeof response !== 'object' || !Array.isArray(response.items)) {
+      throw new Error(`Memory GET ${pathName} returned an invalid paged response; expected { items, nextCursor }`);
+    }
+
+    const available = maxItems === null ? response.items.length : maxItems - items.length;
+    items.push(...response.items.slice(0, available));
+    if (maxItems !== null && items.length >= maxItems) return items;
+
+    const nextCursor = response.nextCursor ?? null;
+    if (nextCursor === null) return items;
+    if (typeof nextCursor !== 'string' || nextCursor.length === 0) {
+      throw new Error(`Memory GET ${pathName} returned an invalid nextCursor`);
+    }
+    if (seenCursors.has(nextCursor)) {
+      throw new Error(`Memory GET ${pathName} returned a repeated nextCursor`);
+    }
+    seenCursors.add(nextCursor);
+    cursor = nextCursor;
+  }
+
+  throw new Error(`Memory GET ${pathName} exceeded ${MAX_PAGED_REQUESTS} paged requests`);
+}
+
 async function memoryPost(connection, pathName, body) {
   return memoryRequest(connection, 'POST', pathName, body);
 }
@@ -1403,11 +1458,12 @@ async function memoryHealth(connection) {
 async function fetchRemoteArtifacts(connection, plan) {
   if (!connection.server) return { artifacts: [], error: null };
   try {
-    const artifacts = await memoryGet(connection, '/artifacts', {
+    const artifacts = await fetchPagedMemoryItems(connection, '/artifacts', {
       sourceProjectId: plan.context.projectId,
-      limit: DEFAULT_ARTIFACT_LIMIT,
+    }, {
+      pageSize: DEFAULT_ARTIFACT_LIMIT,
     });
-    return { artifacts: Array.isArray(artifacts) ? artifacts : [], error: null };
+    return { artifacts, error: null };
   } catch (error) {
     return { artifacts: [], error: errorMessage(error) };
   }
@@ -1424,8 +1480,12 @@ async function searchRemoteMemory(connection, args, plan) {
     limit: args.limit ?? DEFAULT_SEARCH_LIMIT,
   };
   try {
-    const results = await memoryGet(connection, '/search/keyword', searchParams);
-    return { results: Array.isArray(results) ? results : [], error: null };
+    const limit = args.limit ?? DEFAULT_SEARCH_LIMIT;
+    const results = await fetchPagedMemoryItems(connection, '/search/keyword', searchParams, {
+      pageSize: limit,
+      maxItems: limit,
+    });
+    return { results, error: null };
   } catch (error) {
     return { results: [], error: errorMessage(error) };
   }
@@ -1440,8 +1500,12 @@ async function fetchRemoteHistoryArtifacts(connection, args, plan) {
   else if (args.project) searchParams.sourceProjectId = args.project;
   if (!plan && args.iteration) searchParams.sourceIterationId = args.iteration;
   try {
-    const artifacts = await memoryGet(connection, '/artifacts', searchParams);
-    return { artifacts: Array.isArray(artifacts) ? artifacts : [], error: null };
+    const limit = args.limit ?? DEFAULT_HISTORY_LIMIT;
+    const artifacts = await fetchPagedMemoryItems(connection, '/artifacts', searchParams, {
+      pageSize: limit,
+      maxItems: limit,
+    });
+    return { artifacts, error: null };
   } catch (error) {
     return { artifacts: [], error: errorMessage(error) };
   }
@@ -3091,7 +3155,7 @@ function errorMessage(error) {
   return error instanceof Error && error.message ? error.message : String(error);
 }
 
-export { buildGraphIndex, buildMemoryPlan, graphScopeParams, graphSourceReference, incomingEdgeLabel, pushPlan, validateMemoryWritePlan };
+export { buildGraphIndex, buildMemoryPlan, fetchPagedMemoryItems, graphScopeParams, graphSourceReference, incomingEdgeLabel, pushPlan, validateMemoryWritePlan };
 
 export async function main(argv = process.argv.slice(2)) {
   const args = parseArgs(argv);
