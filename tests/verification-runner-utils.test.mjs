@@ -1,13 +1,16 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { chmodSync, mkdtempSync, writeFileSync, mkdirSync } from 'node:fs';
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
 import {
   classifyVerificationSpawnResult,
   decodeVerificationOutput,
   normalizeProjectLocalLauncherCommand,
+  runVerificationCommand,
 } from '../scripts/p2a_runs.mjs';
+import { RUNS_CLI } from './helpers/fixtures.mjs';
 
 test('classifies spawn ENOENT as unavailable', () => {
   assert.deepEqual(classifyVerificationSpawnResult({ error: { code: 'ENOENT' }, status: null, stderr: '' }), {
@@ -32,6 +35,116 @@ test('classifies POSIX shell not-found exit as unavailable', () => {
   const result = classifyVerificationSpawnResult({ status: 127, stderr: '/bin/sh: 1: definitely-missing-xyz: not found\n' });
   assert.equal(result.status, 'unavailable');
   assert.equal(result.reason, 'shell_command_not_found');
+});
+
+test('classifies a command-substitution executable failure as unavailable even when the outer command exits zero', () => {
+  const result = classifyVerificationSpawnResult({
+    status: 0,
+    stderr: '/bin/sh: p2a-definitely-missing-command: command not found\n',
+  });
+  assert.equal(result.status, 'unavailable');
+  assert.equal(result.reason, 'shell_command_not_found');
+});
+
+test('classifies a missing absolute executable reported by POSIX shell as unavailable', () => {
+  const result = classifyVerificationSpawnResult({
+    status: 0,
+    stderr: '/bin/sh: /private/tmp/missing/gofmt: No such file or directory\n',
+  });
+  assert.equal(result.status, 'unavailable');
+  assert.equal(result.reason, 'shell_command_not_found');
+});
+
+test('classifies a bash line-numbered nested command failure as unavailable', () => {
+  const result = classifyVerificationSpawnResult({
+    status: 0,
+    stderr: '/bin/bash: line 1: p2a-definitely-missing-command: command not found\n',
+  });
+  assert.equal(result.status, 'unavailable');
+  assert.equal(result.reason, 'shell_command_not_found');
+});
+
+test('runtime verification rejects a command-substitution false pass', { skip: process.platform === 'win32' }, () => {
+  const result = runVerificationCommand({
+    type: 'custom',
+    command: 'test -z "$(p2a-definitely-missing-command-xyz)"',
+    source: 'command',
+  }, process.cwd(), 10000);
+
+  assert.equal(result.exitCode, 0, 'the outer test demonstrates the shell false-pass condition');
+  assert.equal(result.status, 'unavailable');
+  assert.equal(result.failureReason, 'shell_command_not_found');
+  assert.match(result.stderrTail, /p2a-definitely-missing-command-xyz/);
+});
+
+test('p2a_runs verify returns failure and records unavailable for a command-substitution false pass', { skip: process.platform === 'win32' }, () => {
+  const workspace = mkdtempSync(path.join(os.tmpdir(), 'p2a-verify-false-pass-'));
+  const runsDir = path.join(workspace, 'runs');
+  mkdirSync(runsDir);
+  const runPath = path.join(runsDir, 'run-false-pass.json');
+  const now = '2026-07-12T00:00:00.000Z';
+  writeFileSync(runPath, `${JSON.stringify({
+    schema_version: 'p2a.run.v1',
+    runId: 'run-false-pass',
+    projectId: 'verification-fixture',
+    taskId: 'task-001',
+    taskTitle: 'Reject shell false pass',
+    iterationId: 'v1',
+    sourceLayout: 'graph',
+    taskGraphRef: 'task-graph.json',
+    sourceSpecRef: 'spec.json',
+    agentTool: 'codex',
+    workspaceRef: workspace,
+    workspacePath: workspace,
+    isolation: {
+      mode: 'none',
+      branch: null,
+      worktree: null,
+      baseRef: null,
+      created: false,
+      createCommand: null,
+      createExitCode: null,
+      createOutputTail: null,
+    },
+    status: 'started',
+    startedAt: now,
+    updatedAt: now,
+    finishedAt: null,
+    changedFiles: [],
+    verification: [],
+    notes: [],
+  }, null, 2)}\n`, 'utf8');
+
+  try {
+    const result = spawnSync(process.execPath, [
+      RUNS_CLI,
+      'verify',
+      '--runs',
+      runsDir,
+      '--run-id',
+      'run-false-pass',
+      '--verify-command',
+      'custom:test -z "$(p2a-definitely-missing-command-xyz)"',
+    ], { cwd: workspace, encoding: 'utf8' });
+    const run = JSON.parse(readFileSync(runPath, 'utf8'));
+
+    assert.equal(result.status, 1);
+    assert.match(result.stdout, /custom: unavailable/);
+    assert.equal(run.verification.length, 1);
+    assert.equal(run.verification[0].status, 'unavailable');
+    assert.equal(run.verification[0].exitCode, 0);
+    assert.equal(run.verification[0].failureReason, 'shell_command_not_found');
+  } finally {
+    rmSync(workspace, { recursive: true, force: true });
+  }
+});
+
+test('does not reject successful commands for unrelated stderr output', () => {
+  assert.deepEqual(classifyVerificationSpawnResult({ status: 0, stderr: 'warning: optional cache was skipped\n' }), {
+    status: null,
+    reason: null,
+    hint: null,
+  });
 });
 
 test('keeps normal non-zero command exits as regular failed verification', () => {

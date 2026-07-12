@@ -949,9 +949,9 @@ export function classifyVerificationSpawnResult(result, options = {}) {
   const stdout = typeof result?.stdout === 'string' ? result.stdout : decodeVerificationOutput(result?.stdout, options);
   const windowsNotFound = /is not recognized as an internal or external command/i.test(stderr)
     || /내부 또는 외부 명령.*(?:이\(가\)|가|이) 아닙니다/.test(stderr);
-  const posixShellNotFound = result?.status === 127 && /(?:^|\n).*(?:: not found|: command not found)(?:\n|$)/i.test(stderr);
+  const posixShellNotFound = /(?:^|\n)(?:\/(?:usr\/)?bin\/)?(?:ba|da|z|k)?sh(?:: (?:line )?\d+)?: (?:command not found: .+|.+(?:: not found|: command not found|: No such file or directory))(?:\n|$)/i.test(stderr);
   if (posixShellNotFound) {
-    return { status: 'unavailable', reason: 'shell_command_not_found', hint: 'shell could not resolve the verification command' };
+    return { status: 'unavailable', reason: 'shell_command_not_found', hint: 'shell could not resolve an executable in the verification command' };
   }
   if (result?.status === 9009 || windowsNotFound) {
     return { status: 'unavailable', reason: 'windows_command_not_found', hint: 'Windows shell could not resolve the verification command' };
@@ -1041,7 +1041,7 @@ function prepareProjectConfigForVerification(args, runsDir, run, workspacePath) 
   return { config, saved };
 }
 
-function runVerificationCommand(spec, workspacePath, timeoutMs) {
+export function runVerificationCommand(spec, workspacePath, timeoutMs) {
   if (spec.status === 'skipped') return spec;
   const normalized = normalizeProjectLocalLauncherCommand(spec.command, workspacePath);
   const command = normalized.command;
