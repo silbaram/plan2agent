@@ -401,6 +401,15 @@ function sourceReference(canonicalServerId, filePath, fragment = null) {
   };
 }
 
+function graphSourceReference(value) {
+  if (typeof value === 'string') return value.trim() || null;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const base = trimString(value.path) ?? trimString(value.uri) ?? trimString(value.canonicalServerId);
+  if (!base) return null;
+  const fragment = trimString(value.fragment);
+  return fragment ? `${base}#${fragment}` : base;
+}
+
 function metadata(values) {
   return Object.fromEntries(
     Object.entries(values)
@@ -776,7 +785,7 @@ function buildGraphIndex(context, projectCanonicalId, iterationCanonicalId, docu
       fromNodeId: from.nodeId,
       toNodeId: to.nodeId,
       edgeType,
-      sourceReference: sourceRef,
+      sourceReference: graphSourceReference(sourceRef),
       metadata: metadata({ ...baseMetadata, ...(extra.metadata ?? {}) }),
     };
     edges.set(edgeId, edge);
@@ -2476,6 +2485,7 @@ function formatSummary(summary) {
 
 async function runPush(args) {
   const plan = buildMemoryPlan(args);
+  validateMemoryWritePlan(plan);
   const connection = resolveMemoryConnection(args);
   const dryRun = args.dryRun || !args.yes;
   if (dryRun) {
@@ -2563,7 +2573,55 @@ function printPushPreview(payload) {
   }
 }
 
+function assertGraphString(value, field, options = {}) {
+  if (value === null && options.nullable) return;
+  if (typeof value !== 'string' || !value.trim()) throw new Error(`Memory graph payload ${field} must be a non-empty string${options.nullable ? ' or null' : ''}`);
+}
+
+function assertGraphMetadata(value, field) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(`Memory graph payload ${field} must be an object`);
+  for (const [key, item] of Object.entries(value)) {
+    if (typeof item !== 'string') throw new Error(`Memory graph payload ${field}.${key} must be a string`);
+  }
+}
+
+function validateGraphSnapshotPayload(graph, graphIndex) {
+  assertGraphString(graph?.projectId, `graphs[${graphIndex}].projectId`);
+  if (graph?.iterationId !== null) assertGraphString(graph?.iterationId, `graphs[${graphIndex}].iterationId`, { nullable: true });
+  if (!Array.isArray(graph?.nodes)) throw new Error(`Memory graph payload graphs[${graphIndex}].nodes must be an array`);
+  if (!Array.isArray(graph?.edges)) throw new Error(`Memory graph payload graphs[${graphIndex}].edges must be an array`);
+  const nodeIds = new Set();
+  graph.nodes.forEach((node, nodeIndex) => {
+    const prefix = `graphs[${graphIndex}].nodes[${nodeIndex}]`;
+    for (const field of ['nodeId', 'nodeKind', 'naturalKey', 'label']) assertGraphString(node?.[field], `${prefix}.${field}`);
+    for (const field of ['content', 'documentId', 'taskId', 'runId']) {
+      if (node?.[field] !== null && node?.[field] !== undefined) assertGraphString(node[field], `${prefix}.${field}`, { nullable: true });
+    }
+    assertGraphMetadata(node?.metadata, `${prefix}.metadata`);
+    if (nodeIds.has(node.nodeId)) throw new Error(`Memory graph payload ${prefix}.nodeId is duplicated: ${node.nodeId}`);
+    nodeIds.add(node.nodeId);
+  });
+  graph.edges.forEach((edge, edgeIndex) => {
+    const prefix = `graphs[${graphIndex}].edges[${edgeIndex}]`;
+    for (const field of ['edgeId', 'fromNodeId', 'toNodeId', 'edgeType']) assertGraphString(edge?.[field], `${prefix}.${field}`);
+    if (edge?.sourceReference !== null && edge?.sourceReference !== undefined) {
+      assertGraphString(edge.sourceReference, `${prefix}.sourceReference`, { nullable: true });
+    }
+    assertGraphMetadata(edge?.metadata, `${prefix}.metadata`);
+    if (!nodeIds.has(edge.fromNodeId)) throw new Error(`Memory graph payload ${prefix}.fromNodeId is not present in snapshot nodes: ${edge.fromNodeId}`);
+    if (!nodeIds.has(edge.toNodeId)) throw new Error(`Memory graph payload ${prefix}.toNodeId is not present in snapshot nodes: ${edge.toNodeId}`);
+  });
+}
+
+function validateMemoryWritePlan(plan) {
+  if (!plan || typeof plan !== 'object') throw new Error('Memory write plan must be an object');
+  if (!Array.isArray(plan.graphs)) throw new Error('Memory write plan graphs must be an array');
+  plan.graphs.forEach(validateGraphSnapshotPayload);
+  return plan;
+}
+
 async function pushPlan(connection, plan, post = memoryPost) {
+  validateMemoryWritePlan(plan);
   const result = {
     project: null,
     iteration: null,
@@ -3033,7 +3091,7 @@ function errorMessage(error) {
   return error instanceof Error && error.message ? error.message : String(error);
 }
 
-export { buildGraphIndex, buildMemoryPlan, graphScopeParams, incomingEdgeLabel, pushPlan };
+export { buildGraphIndex, buildMemoryPlan, graphScopeParams, graphSourceReference, incomingEdgeLabel, pushPlan, validateMemoryWritePlan };
 
 export async function main(argv = process.argv.slice(2)) {
   const args = parseArgs(argv);

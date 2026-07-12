@@ -10,6 +10,19 @@ function writeJson(filePath, value) {
   writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
 }
 
+function assertGraphWireContract(graph) {
+  const nodeIds = new Set(graph.nodes.map((node) => node.nodeId));
+  for (const node of graph.nodes) {
+    assert.ok(Object.values(node.metadata).every((value) => typeof value === 'string'));
+  }
+  for (const edge of graph.edges) {
+    assert.ok(edge.sourceReference === null || typeof edge.sourceReference === 'string');
+    assert.ok(Object.values(edge.metadata).every((value) => typeof value === 'string'));
+    assert.ok(nodeIds.has(edge.fromNodeId));
+    assert.ok(nodeIds.has(edge.toNodeId));
+  }
+}
+
 function makeArtifactRoot() {
   const tempRoot = makeTempDir('p2a-memory-graph-');
   const artifactRoot = path.join(tempRoot, 'graph-fixture');
@@ -100,6 +113,7 @@ test('memory status includes stable graph index nodes and lineage edges', () => 
       [iterationBySourceId.get('iter-1').id, iterationBySourceId.get('iter-closed').id],
     );
     assert.equal(firstPlan.graphs.length, 2);
+    firstPlan.graphs.forEach(assertGraphWireContract);
     const activeGraph = firstPlan.graphs.find((graph) => graph.iterationId === iterationBySourceId.get('iter-1').id);
     const closedGraph = firstPlan.graphs.find((graph) => graph.iterationId === iterationBySourceId.get('iter-closed').id);
     assert.equal(activeGraph.nodes.some((node) => node.naturalKey.includes('/iter-closed/')), false);
@@ -138,6 +152,9 @@ test('memory status includes stable graph index nodes and lineage edges', () => 
     expectEdge('EVIDENCED_BY', 'decision:ND-1', 'evidence:EV-1');
     expectEdge('EVIDENCED_BY', 'assumption:A-1', 'evidence:EV-1');
 
+    const cqEdge = firstPlan.graph.edges.find((edge) => edge.edgeType === 'BLOCKS');
+    assert.match(cqEdge?.sourceReference ?? '', /gate-a-intake\/intake\.json#CQ-1$/);
+
     const evidence = firstPlan.graph.nodes.find((node) => node.naturalKey === 'evidence:EV-1');
     assert.equal(evidence?.label, 'Evidence One', 'duplicate evidence node should keep first label');
   } finally {
@@ -159,7 +176,10 @@ test('memory push registers every referenced iteration before dependent artifact
       if (pathName === '/task-graphs') return { taskGraphId: body.taskGraphId };
       if (pathName === '/tasks/bulk') return [];
       if (pathName === '/runs') return { runId: body.runId };
-      if (pathName === '/graph/snapshots') return { nodeCount: body.nodes.length, edgeCount: body.edges.length };
+      if (pathName === '/graph/snapshots') {
+        assertGraphWireContract(body);
+        return { nodeCount: body.nodes.length, edgeCount: body.edges.length };
+      }
       throw new Error(`unexpected Memory path: ${pathName}`);
     };
 
@@ -179,6 +199,25 @@ test('memory push registers every referenced iteration before dependent artifact
     );
     assert.equal(calls.slice(1, firstDependentCall).every((call) => call.pathName.endsWith('/iterations')), true);
     assert.equal(calls.filter((call) => call.pathName === '/graph/snapshots').length, 2);
+  } finally {
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test('memory push rejects an invalid graph wire payload before the first remote write', async () => {
+  const { tempRoot, artifactRoot } = makeArtifactRoot();
+  try {
+    const plan = buildMemoryPlan({ artifacts: artifactRoot, graph: null, runs: null, proposals: null });
+    plan.graphs[0].edges[0].sourceReference = { path: 'gate-a-intake/intake.json', fragment: 'CQ-1' };
+    const calls = [];
+    await assert.rejects(
+      pushPlan({ server: 'http://memory.invalid' }, plan, async (_connection, pathName) => {
+        calls.push(pathName);
+        return {};
+      }),
+      /sourceReference must be a non-empty string or null/,
+    );
+    assert.deepEqual(calls, []);
   } finally {
     rmSync(tempRoot, { recursive: true, force: true });
   }
