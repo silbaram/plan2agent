@@ -28,12 +28,15 @@ import {
 } from './p2a_paths.mjs';
 import {
   DEFAULT_VERIFICATION_TIMEOUT_MS,
+  allocateRunId,
+  assertRunIdReservationOwnership,
   detectProjectCommands,
   mergeDetectedProjectConfig,
   mergeExplicitVerificationCommands,
+  releaseRunIdReservation,
   writeProjectConfig,
 } from './p2a_project_config.mjs';
-import { printRunCommandFooter } from './p2a_run_commands.mjs';
+import { commandLine as sharedCommandLine, printRunCommandFooter } from './p2a_run_commands.mjs';
 
 const P2A_PATHS = resolveP2aPaths(import.meta.url);
 const ROOT = P2A_PATHS.projectRoot;
@@ -72,6 +75,7 @@ function usage() {
     '  --maintenance           With --artifacts, use the maintenance task graph as source context.',
     '  --task <task-id>        Task id for start.',
     '  --run-id <run-id>       Stable run id. Must start with run-. Generated for start when omitted.',
+    '  --run-reservation-token <token>  Reservation owner token emitted by a failed sequential start retry.',
     '  --agent-tool <tool>     Agent/CLI tool that performed the run, such as codex, claude, gemini.',
     '  --workspace <dir>       Workspace path for verification commands. Defaults to cwd or --worktree.',
     '  --workspace-ref <ref>   Human-readable workspace reference. Defaults to --workspace display path.',
@@ -124,6 +128,7 @@ function parseArgs(argv) {
     maintenance: false,
     taskId: null,
     runId: null,
+    runReservationToken: null,
     agentTool: null,
     workspace: null,
     workspaceRef: null,
@@ -155,6 +160,7 @@ function parseArgs(argv) {
     requireMonitor: false,
     json: false,
     help: false,
+    originalArgv: [...argv],
   };
 
   for (let index = 1; index < argv.length; index += 1) {
@@ -166,6 +172,7 @@ function parseArgs(argv) {
     else if (arg === '--maintenance') args.maintenance = true;
     else if (arg === '--task') args.taskId = requiredValue(argv, ++index, '--task');
     else if (arg === '--run-id') args.runId = requiredValue(argv, ++index, '--run-id');
+    else if (arg === '--run-reservation-token') args.runReservationToken = requiredValue(argv, ++index, '--run-reservation-token');
     else if (arg === '--agent-tool') args.agentTool = requiredValue(argv, ++index, '--agent-tool');
     else if (arg === '--workspace') args.workspace = requiredValue(argv, ++index, '--workspace');
     else if (arg === '--workspace-ref') args.workspaceRef = requiredValue(argv, ++index, '--workspace-ref');
@@ -262,6 +269,9 @@ function parseArgs(argv) {
   }
   if (['record', 'verify', 'finish', 'show'].includes(args.command) && !args.runId) {
     throw new Error(`--run-id is required for ${args.command}`);
+  }
+  if (args.runReservationToken && (args.command !== 'start' || !args.runId)) {
+    throw new Error('--run-reservation-token requires start with --run-id');
   }
   return args;
 }
@@ -467,11 +477,6 @@ function assertSafeRunId(runId) {
   if (!/^run-[A-Za-z0-9._-]+$/.test(runId ?? '')) {
     throw new Error(`run id must match run-[A-Za-z0-9._-]+, got ${JSON.stringify(runId)}`);
   }
-}
-
-function generatedRunId(taskId, now = new Date()) {
-  const timestamp = now.toISOString().replace(/[^0-9A-Za-z]+/g, '-').replace(/^-|-$/g, '');
-  return `run-${timestamp}-${taskId}`;
 }
 
 function runPath(runsDir, runId) {
@@ -688,6 +693,23 @@ function gitCommandResult(args, cwd) {
   return spawnSync('git', args, { cwd, encoding: 'utf8', maxBuffer: 1024 * 1024 * 10 });
 }
 
+function gitBranchName(cwd) {
+  const result = gitCommandResult(['symbolic-ref', '--quiet', '--short', 'HEAD'], cwd);
+  return result.status === 0 ? result.stdout.trim() : null;
+}
+
+function gitLocalBranchExists(cwd, branch) {
+  return gitCommandResult(['show-ref', '--verify', '--quiet', `refs/heads/${branch}`], cwd).status === 0;
+}
+
+function reusedIsolation(isolation, command, detail) {
+  isolation.created = true;
+  isolation.createCommand = command;
+  isolation.createExitCode = 0;
+  isolation.createOutputTail = detail;
+  return isolation;
+}
+
 function prepareIsolation(args, workspacePath, runId, taskId) {
   const mode = args.isolation;
   const branch = mode === 'none' ? args.branch : args.branch ?? `p2a/${taskId}-${runId}`;
@@ -708,9 +730,25 @@ function prepareIsolation(args, workspacePath, runId, taskId) {
   if (mode === 'none') throw new Error('--create-isolation requires --isolation branch or worktree');
   if (mode === 'worktree' && !worktree) throw new Error('--isolation worktree requires --worktree');
 
-  const gitArgs = mode === 'branch'
-    ? ['switch', '-c', branch, baseRef]
-    : ['worktree', 'add', '-b', branch, worktree, baseRef];
+  let gitArgs;
+  if (mode === 'branch') {
+    if (gitBranchName(workspacePath) === branch) {
+      return reusedIsolation(isolation, `git switch ${branch}`, `reused existing branch ${branch}`);
+    }
+    gitArgs = gitLocalBranchExists(workspacePath, branch)
+      ? ['switch', branch]
+      : ['switch', '-c', branch, baseRef];
+  } else {
+    if (existsSync(worktree)) {
+      if (lstatSync(worktree).isDirectory() && gitBranchName(worktree) === branch) {
+        return reusedIsolation(isolation, `git worktree reuse ${worktree} ${branch}`, `reused existing worktree ${worktree} on ${branch}`);
+      }
+      throw new Error(`worktree path already exists but is not the reserved branch ${branch}: ${worktree}`);
+    }
+    gitArgs = gitLocalBranchExists(workspacePath, branch)
+      ? ['worktree', 'add', worktree, branch]
+      : ['worktree', 'add', '-b', branch, worktree, baseRef];
+  }
   const result = gitCommandResult(gitArgs, workspacePath);
   isolation.created = result.status === 0;
   isolation.createCommand = `git ${gitArgs.join(' ')}`;
@@ -749,6 +787,23 @@ function loadProjectConfigWithPath(runsDir, run, workspacePath) {
   const workspaceConfig = path.join(workspacePath, P2A_PROJECT_CONFIG);
   const fallbackPath = existsSync(path.dirname(workspaceConfig)) ? workspaceConfig : null;
   return { config: {}, path: fallbackPath };
+}
+
+function loadStartProjectConfig(runsDir, source, workspacePath) {
+  return loadProjectConfigWithPath(runsDir, { taskGraphRef: source.taskGraphRef }, workspacePath).config;
+}
+
+function setOptionValue(argv, option, value) {
+  const optionIndex = argv.indexOf(option);
+  if (optionIndex === -1) argv.push(option, value);
+  else argv[optionIndex + 1] = value;
+}
+
+function startRetryCommand(args, runId, reservationToken = null) {
+  const retryArgs = [...args.originalArgv];
+  setOptionValue(retryArgs, '--run-id', runId);
+  if (reservationToken) setOptionValue(retryArgs, '--run-reservation-token', reservationToken);
+  return sharedCommandLine(P2A_PATHS, 'p2a_runs.mjs', retryArgs);
 }
 
 function configuredCommand(config, type) {
@@ -1135,16 +1190,28 @@ function startRun(args) {
   const task = requireTask(source.graph, args.taskId);
   const runsDir = source.runsDir;
   const now = new Date();
-  const runId = args.runId ?? generatedRunId(task.id, now);
-  assertSafeRunId(runId);
-  if (existsSync(runPath(runsDir, runId))) throw new Error(`run already exists: ${runId}`);
+  const configWorkspacePath = path.resolve(args.workspace ?? process.cwd());
   const workspacePath = resolveWorkspacePath(args);
   const isolationBasePath = resolveIsolationBasePath(args, workspacePath);
   const createsWorktree = args.createIsolation && args.isolation === 'worktree';
   assertDirectory(createsWorktree ? isolationBasePath : workspacePath, '--workspace');
+  if (args.createIsolation && args.isolation === 'none') throw new Error('--create-isolation requires --isolation branch or worktree');
+  if (createsWorktree && !args.worktree) throw new Error('--isolation worktree requires --worktree');
+  const allocation = args.runId
+    ? { runId: args.runId, reserved: false, reservationToken: args.runReservationToken }
+    : allocateRunId(runsDir, task.id, loadStartProjectConfig(runsDir, source, configWorkspacePath).runTracking, now);
+  const runId = allocation.runId;
+  assertSafeRunId(runId);
+  assertRunIdReservationOwnership(runsDir, runId, allocation.reservationToken);
+  if (existsSync(runPath(runsDir, runId))) throw new Error(`run already exists: ${runId}`);
   const workspaceRef = args.workspaceRef ?? displayPath(workspacePath);
-  const isolation = prepareIsolation(args, isolationBasePath, runId, task.id);
-  if (createsWorktree) assertDirectory(workspacePath, '--workspace');
+  let isolation;
+  try {
+    isolation = prepareIsolation(args, isolationBasePath, runId, task.id);
+    if (createsWorktree) assertDirectory(workspacePath, '--workspace');
+  } catch (error) {
+    throw new Error(`${error.message}\nRetry with the same run id after correcting the isolation failure: ${startRetryCommand(args, runId, allocation.reservationToken)}`);
+  }
   const run = {
     schema_version: 'p2a.run.v1',
     runId,
@@ -1168,6 +1235,7 @@ function startRun(args) {
     notes: uniqueStrings(args.notes),
   };
   writeRun(runsDir, run);
+  releaseRunIdReservation(runsDir, run.runId, allocation.reservationToken);
   if (args.requireMonitor) writeMonitorGateSidecar(runsDir, run.runId);
   console.log(`Plan2Agent run started: ${run.runId}`);
   console.log(`- task: ${run.taskId}`);

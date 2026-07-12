@@ -439,6 +439,8 @@ node .plan2agent/scripts/p2a_tasks.mjs -i
 
 `p2a_runs.mjs`는 task graph schema를 바꾸지 않고 별도 `runs/` 디렉터리에 agent 실행 결과를 기록한다. 반복 artifact root에서는 `.plan2agent/artifacts/<project_id>/runs/`를 사용한다. `--graph` 직접 모드에서는 graph가 `gate-c-task-graph/task-graph.json` 아래 있으면 그 sibling인 `.plan2agent/artifacts/<project_id>/runs/`를 사용하고, 그 외 graph 파일은 같은 디렉터리의 `runs/`를 사용한다. scaffold의 `.plan2agent/project.config.json.runTracking.runsDir`는 현재 branch/worktree naming과 함께 표시되는 참고용 기본값이며, `p2a_runs`의 실제 경로 결정은 `--artifacts`, `--graph`, `--runs` 인자를 따른다.
 
+`runTracking.runIdStrategy`는 `timestamp`와 `task-sequence`를 지원하며 기본값은 기존과 동일한 `timestamp`다. `task-sequence`를 선택하면 `runIdPattern`의 `<taskId>`와 `<sequence>` 토큰을 사용해 task별 attempt id를 원자적으로 예약한다. 예를 들어 `"runIdStrategy": "task-sequence"`, `"runIdPattern": "run-<taskId>-<sequence:3>"`은 `run-task-008-001`을 만든다. 명시적 `--run-id`가 항상 우선하며 기존 run artifact는 자동으로 이름을 바꾸지 않는다. task-sequence implicit start가 isolation 생성 전에 실패하면 소유권 토큰과 예약 id가 포함된 copy-paste 재시도 명령이 출력된다. 원인을 고친 뒤 출력된 명령 전체를 사용해야 하며, 새 implicit start는 다음 sequence를 새 attempt로 할당한다. timestamp 전략도 실패 시 선택된 동일 id의 재시도 명령을 출력하지만 별도 예약 파일은 만들지 않는다.
+
 주요 파일:
 
 - `runs/run-index.json` — task별 runId 목록과 latestRunId를 담는 index

@@ -1,6 +1,7 @@
 /** Shared Plan2Agent project config detection and merge helpers. */
 
-import { existsSync, lstatSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { closeSync, existsSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, unlinkSync, writeFileSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { DEFAULT_RUNS_DIR } from './p2a_constants.mjs';
 import { P2A_ARTIFACTS_DIR, normalizeProjectId, normalizeProjectIdFromPath } from './p2a_paths.mjs';
@@ -8,14 +9,168 @@ import { P2A_ARTIFACTS_DIR, normalizeProjectId, normalizeProjectIdFromPath } fro
 const ORCHESTRATION_AGENT_TOOLS = new Set(['codex', 'claude', 'manual']);
 const AI_TOOL_TARGETS = new Set(['codex', 'claude', 'gemini']);
 export const DEFAULT_VERIFICATION_TIMEOUT_MS = 600000;
+export const RUN_ID_STRATEGIES = new Set(['timestamp', 'task-sequence']);
+const DEFAULT_RUN_ID_PATTERN = 'run-<taskId>-<sequence:3>';
+const RUN_ID_RESERVATION_DIR = '.run-id-reservations';
 
 export function defaultRunTracking() {
   return {
     runsDir: DEFAULT_RUNS_DIR,
     defaultIsolation: 'none',
+    runIdStrategy: 'timestamp',
+    runIdPattern: DEFAULT_RUN_ID_PATTERN,
     branchPattern: 'p2a/<taskId>-<runId>',
     worktreePattern: '../.worktrees/<taskId>-<runId>',
   };
+}
+
+function timestampRunId(taskId, now = new Date()) {
+  const timestamp = now.toISOString().replace(/[^0-9A-Za-z]+/g, '-').replace(/^-|-$/g, '');
+  return `run-${timestamp}-${taskId}`;
+}
+
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function runIdPatternParts(pattern, taskId) {
+  if (typeof pattern !== 'string' || !pattern.trim()) throw new Error('project config runTracking.runIdPattern must be a non-empty string');
+  const tokenPattern = /<taskId>|\{taskId\}|<sequence(?::(\d+))?>|\{sequence(?::(\d+))?\}/g;
+  let cursor = 0;
+  let regex = '^';
+  let hasTaskId = false;
+  let hasSequence = false;
+  let match;
+  while ((match = tokenPattern.exec(pattern)) !== null) {
+    regex += escapeRegExp(pattern.slice(cursor, match.index));
+    if (match[0] === '<taskId>' || match[0] === '{taskId}') {
+      regex += escapeRegExp(taskId);
+      hasTaskId = true;
+    } else {
+      const width = Number(match[1] ?? match[2] ?? 1);
+      if (!Number.isInteger(width) || width < 1 || width > 12) throw new Error('run id sequence width must be between 1 and 12');
+      regex += `(\\d{${width},})`;
+      hasSequence = true;
+    }
+    cursor = match.index + match[0].length;
+  }
+  regex += `${escapeRegExp(pattern.slice(cursor))}$`;
+  if (!hasTaskId || !hasSequence) {
+    throw new Error('project config runTracking.runIdPattern must include <taskId> and <sequence> tokens');
+  }
+  return new RegExp(regex);
+}
+
+function formatSequentialRunId(pattern, taskId, sequence) {
+  const formatted = pattern
+    .replaceAll('<taskId>', taskId)
+    .replaceAll('{taskId}', taskId)
+    .replace(/<sequence(?::(\d+))?>|\{sequence(?::(\d+))?\}/g, (_token, angleWidth, braceWidth) => {
+      const width = Number(angleWidth ?? braceWidth ?? 1);
+      return String(sequence).padStart(width, '0');
+    });
+  if (!/^run-[A-Za-z0-9._-]+$/.test(formatted)) {
+    throw new Error(`project config runTracking.runIdPattern produced unsafe run id ${JSON.stringify(formatted)}`);
+  }
+  return formatted;
+}
+
+function reservationDir(runsDir) {
+  return path.join(runsDir, RUN_ID_RESERVATION_DIR);
+}
+
+function reservationPath(runsDir, runId) {
+  return path.join(reservationDir(runsDir), `${runId}.json`);
+}
+
+function existingSequentialRunIds(runsDir) {
+  const ids = [];
+  for (const directory of [runsDir, reservationDir(runsDir)]) {
+    if (!existsSync(directory) || !lstatSync(directory).isDirectory()) continue;
+    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+      if (!entry.isFile() || !entry.name.endsWith('.json')) continue;
+      ids.push(entry.name.slice(0, -'.json'.length));
+    }
+  }
+  return ids;
+}
+
+function nextSequentialRunId(runsDir, taskId, runTracking = {}) {
+  const pattern = runTracking.runIdPattern ?? DEFAULT_RUN_ID_PATTERN;
+  const matcher = runIdPatternParts(pattern, taskId);
+  let maxSequence = 0;
+  for (const runId of existingSequentialRunIds(runsDir)) {
+    const match = matcher.exec(runId);
+    if (!match) continue;
+    const sequence = Number(match[1]);
+    if (Number.isSafeInteger(sequence) && sequence > maxSequence) maxSequence = sequence;
+  }
+  const sequence = maxSequence + 1;
+  return { runId: formatSequentialRunId(pattern, taskId, sequence), sequence };
+}
+
+function runIdStrategy(runTracking = {}) {
+  const strategy = runTracking.runIdStrategy ?? 'timestamp';
+  if (!RUN_ID_STRATEGIES.has(strategy)) {
+    throw new Error(`project config runTracking.runIdStrategy must be one of ${[...RUN_ID_STRATEGIES].join(', ')}, got ${JSON.stringify(strategy)}`);
+  }
+  return strategy;
+}
+
+export function previewRunId(runsDir, taskId, runTracking = {}, now = new Date()) {
+  if (runIdStrategy(runTracking) === 'timestamp') return timestampRunId(taskId, now);
+  return nextSequentialRunId(runsDir, taskId, runTracking).runId;
+}
+
+export function allocateRunId(runsDir, taskId, runTracking = {}, now = new Date()) {
+  if (runIdStrategy(runTracking) === 'timestamp') return { runId: timestampRunId(taskId, now), reserved: false, reservationToken: null };
+  mkdirSync(reservationDir(runsDir), { recursive: true });
+  while (true) {
+    const allocation = nextSequentialRunId(runsDir, taskId, runTracking);
+    const filePath = reservationPath(runsDir, allocation.runId);
+    const reservationToken = randomUUID();
+    let descriptor;
+    try {
+      descriptor = openSync(filePath, 'wx');
+    } catch (error) {
+      if (error?.code === 'EEXIST') continue;
+      throw error;
+    }
+    try {
+      writeFileSync(descriptor, `${JSON.stringify({
+        runId: allocation.runId,
+        taskId,
+        sequence: allocation.sequence,
+        reservationToken,
+        reservedAt: now.toISOString(),
+      }, null, 2)}\n`, 'utf8');
+    } finally {
+      closeSync(descriptor);
+    }
+    return { runId: allocation.runId, reserved: true, reservationPath: filePath, reservationToken };
+  }
+}
+
+export function assertRunIdReservationOwnership(runsDir, runId, reservationToken = null) {
+  const filePath = reservationPath(runsDir, runId);
+  if (!existsSync(filePath)) return false;
+  let reservation;
+  try {
+    reservation = JSON.parse(readFileSync(filePath, 'utf8'));
+  } catch (error) {
+    throw new Error(`run id reservation is malformed for ${runId}: ${error.message}`);
+  }
+  if (!reservationToken || reservation.reservationToken !== reservationToken) {
+    throw new Error(`run id ${runId} is reserved by another start attempt; use its printed retry command or choose a different explicit --run-id`);
+  }
+  return true;
+}
+
+export function releaseRunIdReservation(runsDir, runId, reservationToken = null) {
+  const filePath = reservationPath(runsDir, runId);
+  if (!assertRunIdReservationOwnership(runsDir, runId, reservationToken)) return false;
+  unlinkSync(filePath);
+  return true;
 }
 
 export function defaultProviderNativeCapabilities() {

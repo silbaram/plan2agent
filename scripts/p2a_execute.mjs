@@ -19,6 +19,7 @@ import {
   singleArtifactProjectRoot,
 } from './p2a_paths.mjs';
 import { commandLine as sharedCommandLine, printRunCommandFooter } from './p2a_run_commands.mjs';
+import { allocateRunId, previewRunId, releaseRunIdReservation } from './p2a_project_config.mjs';
 
 const P2A_PATHS = resolveP2aPaths(import.meta.url);
 const ROOT = P2A_PATHS.projectRoot;
@@ -55,6 +56,7 @@ function usage() {
     '  --approval <path>    Proposal draft approval JSON; selects its maintenance task and implies --maintenance.',
     '  --agent-tool <tool>  Write implementer label: codex, claude, or manual. Default: codex.',
     '  --run-id <run-id>    Stable run id for start; generated when omitted.',
+    '  --run-reservation-token <token>  Reservation owner token emitted by a failed sequential start retry.',
     '  --workspace <dir>    Workspace path for implementation/verification. Default: cwd.',
     '  --workspace-ref <r>  Human-readable workspace reference.',
     '  --isolation <mode>   none, branch, or worktree. Defaults to project config runTracking.defaultIsolation or none.',
@@ -107,6 +109,7 @@ function parseArgs(argv) {
     approval: null,
     agentTool: 'codex',
     runId: null,
+    runReservationToken: null,
     workspace: null,
     workspaceRef: null,
     isolation: null,
@@ -149,6 +152,7 @@ function parseArgs(argv) {
     else if (arg === '--approval') args.approval = requiredValue(argv, ++index, '--approval');
     else if (arg === '--agent-tool') args.agentTool = requiredValue(argv, ++index, '--agent-tool');
     else if (arg === '--run-id') args.runId = requiredValue(argv, ++index, '--run-id');
+    else if (arg === '--run-reservation-token') args.runReservationToken = requiredValue(argv, ++index, '--run-reservation-token');
     else if (arg === '--workspace') args.workspace = requiredValue(argv, ++index, '--workspace');
     else if (arg === '--workspace-ref') args.workspaceRef = requiredValue(argv, ++index, '--workspace-ref');
     else if (arg === '--isolation') {
@@ -223,6 +227,9 @@ function parseArgs(argv) {
   if (args.maintenance && !args.artifacts) throw new Error('--maintenance is only supported with --artifacts');
   if (args.graph) assertNotUninitializedScaffoldGraph(args.graph);
   if (['finish', 'resume'].includes(args.command) && !args.runId) throw new Error(`--run-id is required for ${args.command}`);
+  if (args.runReservationToken && (args.command !== 'start' || !args.runId)) {
+    throw new Error('--run-reservation-token requires start with --run-id');
+  }
   if (args.command === 'status' && !args.taskId && !args.runId && !args.approval) throw new Error('--task, --approval, or --run-id is required for status');
   if (['plan', 'start'].includes(args.command) && !IMPLEMENTER_AGENT_TOOLS.has(args.agentTool)) {
     throw new Error('--agent-tool for implementation must be one of codex, claude, or manual; Gemini is read-only and may only be used as a reviewer/monitor');
@@ -459,11 +466,6 @@ function uniqueStrings(values) {
   return output;
 }
 
-function generatedRunId(taskId, now = new Date()) {
-  const timestamp = now.toISOString().replace(/[^0-9A-Za-z]+/g, '-').replace(/^-|-$/g, '');
-  return `run-${timestamp}-${taskId}`;
-}
-
 function assertSafeRunId(runId) {
   if (!/^run-[A-Za-z0-9._-]+$/.test(runId ?? '')) {
     throw new Error(`run id must match run-[A-Za-z0-9._-]+, got ${JSON.stringify(runId)}`);
@@ -478,10 +480,10 @@ function fillPattern(pattern, values) {
     .replaceAll('{runId}', values.runId);
 }
 
-function resolveStartDefaults(args, source, task, runId) {
-  const workspacePath = path.resolve(args.workspace ?? process.cwd());
+function resolveStartDefaults(args, source, task, runId, options = {}) {
+  const workspacePath = options.workspacePath ?? path.resolve(args.workspace ?? process.cwd());
   assertDirectory(workspacePath, '--workspace');
-  const config = loadProjectConfig(source, workspacePath);
+  const config = options.config ?? loadProjectConfig(source, workspacePath);
   const runTracking = config.runTracking ?? {};
   const isolation = args.isolation ?? runTracking.defaultIsolation ?? 'none';
   if (!ISOLATION_MODES.has(isolation)) throw new Error(`project config runTracking.defaultIsolation must be one of none, branch, worktree, got ${JSON.stringify(isolation)}`);
@@ -492,6 +494,34 @@ function resolveStartDefaults(args, source, task, runId) {
     worktree = path.resolve(workspacePath, fillPattern(runTracking.worktreePattern, values));
   }
   return { workspacePath, config, isolation, branch, worktree };
+}
+
+function resolveStartIdentity(args, source, task, options = {}) {
+  const workspacePath = path.resolve(args.workspace ?? process.cwd());
+  assertDirectory(workspacePath, '--workspace');
+  const config = loadProjectConfig(source, workspacePath);
+  const previewId = args.runId ?? previewRunId(source.runsDir, task.id, config.runTracking);
+  assertSafeRunId(previewId);
+  const previewDefaults = resolveStartDefaults(args, source, task, previewId, { config, workspacePath });
+  if (args.runId || !options.reserve) {
+    return {
+      runId: previewId,
+      reserved: false,
+      reservationToken: args.runReservationToken,
+      defaults: previewDefaults,
+    };
+  }
+  const allocation = allocateRunId(source.runsDir, task.id, config.runTracking);
+  assertSafeRunId(allocation.runId);
+  try {
+    return {
+      ...allocation,
+      defaults: resolveStartDefaults(args, source, task, allocation.runId, { config, workspacePath }),
+    };
+  } catch (error) {
+    if (allocation.reserved) releaseRunIdReservation(source.runsDir, allocation.runId, allocation.reservationToken);
+    throw error;
+  }
 }
 
 function childEnv() {
@@ -541,6 +571,32 @@ function sourceSelectionArgs(args, taskId) {
   return args.approval ? ['--approval', args.approval] : ['--task', taskId];
 }
 
+function executeStartArgs(args, task, runId, defaults) {
+  const startArgs = [
+    'start',
+    ...sourceRunArgs(args),
+    ...sourceSelectionArgs(args, task.id),
+    '--agent-tool',
+    args.agentTool,
+    '--run-id',
+    runId,
+    '--workspace',
+    defaults.workspacePath,
+    '--isolation',
+    defaults.isolation,
+  ];
+  if (args.workspaceRef) startArgs.push('--workspace-ref', args.workspaceRef);
+  if (args.runReservationToken) startArgs.push('--run-reservation-token', args.runReservationToken);
+  if (defaults.branch) startArgs.push('--branch', defaults.branch);
+  if (defaults.worktree) startArgs.push('--worktree', defaults.worktree);
+  if (args.baseRef) startArgs.push('--base-ref', args.baseRef);
+  if (args.createIsolation) startArgs.push('--create-isolation');
+  if (args.requireMonitor) startArgs.push('--require-monitor');
+  for (const changedFile of args.changedFiles) startArgs.push('--changed-file', changedFile);
+  for (const note of args.notes) startArgs.push('--note', note);
+  return startArgs;
+}
+
 function startRunArgs(args, task, runId, defaults, approval = null) {
   const runArgs = [
     'start',
@@ -557,6 +613,7 @@ function startRunArgs(args, task, runId, defaults, approval = null) {
     defaults.isolation,
   ];
   if (args.workspaceRef) runArgs.push('--workspace-ref', args.workspaceRef);
+  if (args.runReservationToken) runArgs.push('--run-reservation-token', args.runReservationToken);
   if (defaults.branch) runArgs.push('--branch', defaults.branch);
   if (defaults.worktree) runArgs.push('--worktree', defaults.worktree);
   if (args.baseRef) runArgs.push('--base-ref', args.baseRef);
@@ -691,15 +748,7 @@ function printExecutionPlan(args, source, task, runId = null, defaults = null, a
   console.log('3. finish: run verification, finish the run, then mark the task done or blocked');
   console.log('');
   console.log('Useful commands:');
-  const startArgs = [
-    'start',
-    ...sourceRunArgs(args),
-    ...sourceSelectionArgs(args, task.id),
-    '--agent-tool',
-    args.agentTool,
-  ];
-  if (runId) startArgs.push('--run-id', runId);
-  if (args.requireMonitor) startArgs.push('--require-monitor');
+  const startArgs = executeStartArgs(args, task, runId, defaults);
   console.log(`- ${commandLine('p2a_execute.mjs', startArgs)}`);
   if (runId) {
     console.log(`- ${commandLine('p2a_execute.mjs', ['finish', ...sourceRunArgs(args), ...(args.approval ? ['--approval', args.approval] : []), '--run-id', runId, '--test', '--lint', '--typecheck'])}`);
@@ -795,8 +844,8 @@ function runPlan(args) {
   const source = resolveSource(args);
   const approvalLink = resolveApprovalSelection(args, source);
   const task = selectReadyTask(source, approvalLink.taskId);
-  const runId = args.runId ?? generatedRunId(task.id);
-  const defaults = resolveStartDefaults(args, source, task, runId);
+  const identity = resolveStartIdentity(args, source, task, { reserve: false });
+  const { runId, defaults } = identity;
   printExecutionPlan(args, source, task, runId, defaults, approvalLink);
   console.log('');
   console.log(`Prompt preview command: ${commandLine('p2a_tasks.mjs', promptArgs(source, task.id))}`);
@@ -807,15 +856,19 @@ function runStart(args) {
   const source = resolveSource(args);
   const approvalLink = resolveApprovalSelection(args, source);
   const task = selectReadyTask(source, approvalLink.taskId);
-  const runId = args.runId ?? generatedRunId(task.id);
-  assertSafeRunId(runId);
-  const defaults = resolveStartDefaults(args, source, task, runId);
+  const identity = resolveStartIdentity(args, source, task, { reserve: true });
+  const { runId, defaults } = identity;
+  args.runReservationToken = identity.reservationToken;
   printExecutionPlan(args, source, task, runId, defaults, approvalLink);
   console.log('');
   console.log('Starting run...');
   const runResult = runScript('p2a_runs.mjs', startRunArgs(args, task, runId, defaults, approvalLink.approval));
   printChildResult(runResult);
-  if (runResult.status !== 0) return runResult.status ?? 1;
+  if (runResult.status !== 0) {
+    console.error('Run start failed before lifecycle setup completed. Correct the reported cause, then retry with the same reserved run id:');
+    console.error(commandLine('p2a_execute.mjs', executeStartArgs(args, task, runId, defaults)));
+    return runResult.status ?? 1;
+  }
   if (args.requireMonitor) {
     const monitorGate = writeMonitorGateSidecar(source.runsDir, runId);
     console.log(`Attached monitor gate sidecar: ${displayPath(monitorGate.filePath)}`);
