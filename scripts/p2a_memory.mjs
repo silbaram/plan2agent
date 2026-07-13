@@ -2684,6 +2684,34 @@ function validateMemoryWritePlan(plan) {
   return plan;
 }
 
+function canonicalTaskGraphId(graph, response) {
+  if (!response || typeof response !== 'object' || Array.isArray(response)) {
+    throw new Error(`Memory task graph upsert returned an invalid response for ${graph.sourceKey}`);
+  }
+  const taskGraphId = trimString(response.taskGraphId);
+  if (!taskGraphId) {
+    throw new Error(`Memory task graph upsert did not return taskGraphId for ${graph.sourceKey}`);
+  }
+  const expectedFields = {
+    projectId: graph.request.projectId,
+    iterationId: graph.request.iterationId,
+    sourceTaskGraphId: graph.request.sourceTaskGraphId,
+    graphHash: graph.request.graphHash,
+  };
+  for (const [field, expected] of Object.entries(expectedFields)) {
+    const actual = trimString(response[field]);
+    if (!actual) {
+      throw new Error(`Memory task graph upsert did not return ${field} for ${graph.sourceKey}`);
+    }
+    if (actual !== expected) {
+      throw new Error(
+        `Memory task graph upsert returned stale or mismatched ${field} for ${graph.sourceKey}: expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`,
+      );
+    }
+  }
+  return taskGraphId;
+}
+
 async function pushPlan(connection, plan, post = memoryPost) {
   validateMemoryWritePlan(plan);
   const result = {
@@ -2715,14 +2743,20 @@ async function pushPlan(connection, plan, post = memoryPost) {
       result.chunks.push(...chunkResponse);
     }
   }
-  for (const graph of plan.taskGraphs ?? (plan.taskGraph ? [plan.taskGraph] : [])) {
+  const taskGraphs = plan.taskGraphs ?? (plan.taskGraph ? [plan.taskGraph] : []);
+  const canonicalTaskGraphIds = new Map();
+  for (const graph of taskGraphs) {
     const graphResponse = await post(connection, '/task-graphs', graph.request);
     if (!result.taskGraph) result.taskGraph = graphResponse;
+    canonicalTaskGraphIds.set(graph.id, canonicalTaskGraphId(graph, graphResponse));
+  }
+  for (const graph of taskGraphs) {
     const graphTasks = plan.tasks.filter((task) => task.request.taskGraphId === graph.id);
     if (graphTasks.length) {
+      const canonicalGraphId = canonicalTaskGraphIds.get(graph.id);
       const taskResponses = await post(connection, '/tasks/bulk', {
-        graphId: graph.id,
-        tasks: graphTasks.map((task) => task.request),
+        graphId: canonicalGraphId,
+        tasks: graphTasks.map((task) => ({ ...task.request, taskGraphId: canonicalGraphId })),
       });
       result.tasks.push(...taskResponses);
     }
@@ -2748,7 +2782,7 @@ async function pushPlan(connection, plan, post = memoryPost) {
     documents: plan.documents.length,
     proposals: plan.proposals.length,
     taskGraphId: result.taskGraph?.taskGraphId ?? null,
-    taskGraphs: (plan.taskGraphs ?? (plan.taskGraph ? [plan.taskGraph] : [])).length,
+    taskGraphs: taskGraphs.length,
     tasks: result.tasks.length,
     runs: result.runs.length,
     chunks: result.chunks.length,

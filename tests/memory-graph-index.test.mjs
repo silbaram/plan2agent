@@ -1,9 +1,11 @@
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { once } from 'node:events';
+import { createServer } from 'node:http';
 import path from 'node:path';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { formatCommandResult, makeTempDir, runMemory } from './helpers/fixtures.mjs';
-import { buildMemoryPlan, pushPlan } from '../scripts/p2a_memory.mjs';
+import { buildMemoryPlan, compareSync, pushPlan } from '../scripts/p2a_memory.mjs';
 
 function writeJson(filePath, value) {
   mkdirSync(path.dirname(filePath), { recursive: true });
@@ -173,7 +175,13 @@ test('memory push registers every referenced iteration before dependent artifact
       if (pathName.endsWith('/iterations')) return { iterationId: body.iterationId };
       if (pathName === '/documents/snapshots') return { documentId: body.documentId };
       if (pathName === '/document-chunks/bulk') return [];
-      if (pathName === '/task-graphs') return { taskGraphId: body.taskGraphId };
+      if (pathName === '/task-graphs') return {
+        taskGraphId: body.taskGraphId,
+        projectId: body.projectId,
+        iterationId: body.iterationId,
+        sourceTaskGraphId: body.sourceTaskGraphId,
+        graphHash: body.graphHash,
+      };
       if (pathName === '/tasks/bulk') return [];
       if (pathName === '/runs') return { runId: body.runId };
       if (pathName === '/graph/snapshots') {
@@ -199,6 +207,213 @@ test('memory push registers every referenced iteration before dependent artifact
     );
     assert.equal(calls.slice(1, firstDependentCall).every((call) => call.pathName.endsWith('/iterations')), true);
     assert.equal(calls.filter((call) => call.pathName === '/graph/snapshots').length, 2);
+  } finally {
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test('memory push uses the canonical task graph id returned by the server', async () => {
+  const { tempRoot, artifactRoot } = makeArtifactRoot();
+  try {
+    const plan = buildMemoryPlan({ artifacts: artifactRoot, graph: null, runs: null, proposals: null });
+    const canonicalIds = new Map(plan.taskGraphs.map((graph, index) => [graph.id, `00000000-0000-5000-8000-${String(index + 1).padStart(12, '0')}`]));
+    const calls = [];
+    const post = async (_connection, pathName, body) => {
+      calls.push({ pathName, body });
+      if (pathName === '/projects') return { projectId: body.projectId };
+      if (pathName.endsWith('/iterations')) return { iterationId: body.iterationId };
+      if (pathName === '/documents/snapshots') return { documentId: body.documentId };
+      if (pathName === '/document-chunks/bulk') return [];
+      if (pathName === '/task-graphs') return {
+        taskGraphId: canonicalIds.get(body.taskGraphId),
+        projectId: body.projectId,
+        iterationId: body.iterationId,
+        sourceTaskGraphId: body.sourceTaskGraphId,
+        graphHash: body.graphHash,
+      };
+      if (pathName === '/tasks/bulk') return body.tasks;
+      if (pathName === '/runs') return { runId: body.runId };
+      if (pathName === '/graph/snapshots') return { nodeCount: body.nodes.length, edgeCount: body.edges.length };
+      throw new Error(`unexpected Memory path: ${pathName}`);
+    };
+
+    const result = await pushPlan({ server: 'http://memory.invalid' }, plan, post);
+    const taskCalls = calls.filter((call) => call.pathName === '/tasks/bulk');
+    assert.equal(result.tasks, plan.tasks.length);
+    assert.equal(result.runs, plan.runs.length);
+    assert.equal(taskCalls.length, plan.taskGraphs.length);
+    for (const call of taskCalls) {
+      assert.ok(call.body.tasks.length > 0);
+      assert.ok(call.body.tasks.every((task) => task.taskGraphId === call.body.graphId));
+      assert.ok([...canonicalIds.values()].includes(call.body.graphId));
+    }
+    assert.equal(calls.filter((call) => call.pathName === '/runs').length, plan.runs.length);
+  } finally {
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test('memory push converges over authenticated HTTP after a task graph content-changing re-push', async () => {
+  const { tempRoot, artifactRoot } = makeArtifactRoot();
+  let server = null;
+  try {
+    const canonicalIds = new Map();
+    const remoteGraphs = new Map();
+    const remoteTasks = new Map();
+    const remoteRuns = new Map();
+    const calls = [];
+    const token = 'memory-http-e2e-token';
+    server = createServer((request, response) => {
+      void (async () => {
+        assert.equal(request.method, 'POST');
+        assert.equal(request.headers['x-p2a-local-token'], token);
+        const apiPath = new URL(request.url, 'http://127.0.0.1').pathname;
+        assert.match(apiPath, /^\/api\//);
+        const pathName = apiPath.slice('/api'.length);
+        const chunks = [];
+        for await (const chunk of request) chunks.push(chunk);
+        const body = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+        calls.push({ pathName, body });
+
+        let result;
+        if (pathName === '/projects') result = { projectId: body.projectId };
+        else if (pathName.endsWith('/iterations')) result = { iterationId: body.iterationId };
+        else if (pathName === '/documents/snapshots') result = { documentId: body.documentId };
+        else if (pathName === '/document-chunks/bulk') result = [];
+        else if (pathName === '/task-graphs') {
+          const canonicalId = canonicalIds.get(body.sourceTaskGraphId)
+            ?? `00000000-0000-5000-8000-${String(canonicalIds.size + 1).padStart(12, '0')}`;
+          canonicalIds.set(body.sourceTaskGraphId, canonicalId);
+          result = {
+            taskGraphId: canonicalId,
+            projectId: body.projectId,
+            iterationId: body.iterationId,
+            sourceTaskGraphId: body.sourceTaskGraphId,
+            graphHash: body.graphHash,
+          };
+          remoteGraphs.set(body.sourceTaskGraphId, result);
+        } else if (pathName === '/tasks/bulk') {
+          const graph = [...remoteGraphs.values()].find((candidate) => candidate.taskGraphId === body.graphId);
+          assert.ok(graph, `canonical task graph ${body.graphId} must exist before task upload`);
+          assert.equal(body.tasks.every((task) => task.taskGraphId === body.graphId), true);
+          for (const task of body.tasks) {
+            remoteTasks.set(task.taskId, {
+              artifactType: 'TASK',
+              artifactId: task.taskId,
+              taskId: task.taskId,
+              sourceIds: {
+                sourceTaskGraphId: graph.sourceTaskGraphId,
+                sourceTaskId: task.sourceTaskId,
+              },
+            });
+          }
+          result = body.tasks;
+        } else if (pathName === '/runs') {
+          const task = remoteTasks.get(body.taskId);
+          assert.ok(task, `task ${body.taskId} must exist before run upload`);
+          result = {
+            artifactType: 'RUN_RECORD',
+            artifactId: body.runId,
+            runId: body.runId,
+            sourceIds: {
+              sourceTaskId: task.sourceIds.sourceTaskId,
+              sourceRunId: body.sourceRunId,
+            },
+          };
+          remoteRuns.set(body.runId, result);
+        } else if (pathName === '/graph/snapshots') {
+          result = { nodeCount: body.nodes.length, edgeCount: body.edges.length };
+        } else {
+          throw new Error(`unexpected Memory path: ${pathName}`);
+        }
+        response.writeHead(201, { 'Content-Type': 'application/json' });
+        response.end(JSON.stringify(result));
+      })().catch((error) => {
+        response.writeHead(500, { 'Content-Type': 'application/json' });
+        response.end(JSON.stringify({ error: error.message }));
+      });
+    });
+    server.listen(0, '127.0.0.1');
+    await once(server, 'listening');
+    const address = server.address();
+    const connection = { server: `http://127.0.0.1:${address.port}`, token };
+
+    const initialPlan = buildMemoryPlan({ artifacts: artifactRoot, graph: null, runs: null, proposals: null });
+    const initialResult = await pushPlan(connection, initialPlan);
+    const initialGraph = initialPlan.taskGraphs[0];
+    const initialCanonicalId = canonicalIds.get(initialGraph.sourceKey);
+    assert.equal(initialResult.runs, initialPlan.runs.length);
+
+    const graphPath = path.join(artifactRoot, 'iterations', 'iter-1', 'gate-c-task-graph', 'task-graph.json');
+    const changedGraph = JSON.parse(readFileSync(graphPath, 'utf8'));
+    changedGraph.tasks[0].description = 'changed after the initial Memory push';
+    writeJson(graphPath, changedGraph);
+    const changedPlan = buildMemoryPlan({ artifacts: artifactRoot, graph: null, runs: null, proposals: null });
+    const changedTaskGraph = changedPlan.taskGraphs.find((graph) => graph.sourceKey === initialGraph.sourceKey);
+    assert.notEqual(changedTaskGraph.id, initialGraph.id);
+
+    const retryCallStart = calls.length;
+    const changedResult = await pushPlan(connection, changedPlan);
+    const retryCalls = calls.slice(retryCallStart);
+    assert.equal(canonicalIds.get(changedTaskGraph.sourceKey), initialCanonicalId);
+    assert.equal(changedResult.tasks, changedPlan.tasks.length);
+    assert.equal(changedResult.runs, changedPlan.runs.length);
+    assert.equal(retryCalls.filter((call) => call.pathName === '/tasks/bulk').length, changedPlan.taskGraphs.length);
+    assert.equal(retryCalls.filter((call) => call.pathName === '/runs').length, changedPlan.runs.length);
+
+    const remoteArtifacts = [
+      ...[...remoteGraphs.values()].map((graph) => ({
+        artifactType: 'TASK_GRAPH',
+        artifactId: graph.taskGraphId,
+        contentHash: graph.graphHash,
+        sourceIds: { sourceTaskGraphId: graph.sourceTaskGraphId },
+      })),
+      ...remoteTasks.values(),
+      ...remoteRuns.values(),
+    ];
+    const convergedTypes = new Set(['TASK_GRAPH', 'TASK', 'RUN_RECORD']);
+    const convergedSyncItems = changedPlan.syncItems.filter((item) => convergedTypes.has(item.artifactType));
+    const sync = compareSync({
+      syncItems: convergedSyncItems,
+    }, remoteArtifacts);
+    assert.deepEqual(sync.summary, {
+      totalLocal: convergedSyncItems.length,
+      synced: convergedSyncItems.length,
+      missingRemote: 0,
+      remoteDiffers: 0,
+      extraRemote: 0,
+    });
+  } finally {
+    if (server?.listening) await new Promise((resolve) => server.close(resolve));
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test('memory push rejects a stale task graph response before dependent writes', async () => {
+  const { tempRoot, artifactRoot } = makeArtifactRoot();
+  try {
+    const plan = buildMemoryPlan({ artifacts: artifactRoot, graph: null, runs: null, proposals: null });
+    const calls = [];
+    await assert.rejects(
+      pushPlan({ server: 'http://memory.invalid' }, plan, async (_connection, pathName, body) => {
+        calls.push(pathName);
+        if (pathName === '/projects') return { projectId: body.projectId };
+        if (pathName.endsWith('/iterations')) return { iterationId: body.iterationId };
+        if (pathName === '/documents/snapshots') return { documentId: body.documentId };
+        if (pathName === '/document-chunks/bulk') return [];
+        if (pathName === '/task-graphs') return {
+          taskGraphId: body.taskGraphId,
+          projectId: body.projectId,
+          iterationId: body.iterationId,
+          sourceTaskGraphId: body.sourceTaskGraphId,
+          graphHash: 'stale-graph-hash',
+        };
+        throw new Error(`unexpected dependent write: ${pathName}`);
+      }),
+      /stale or mismatched graphHash/,
+    );
+    assert.equal(calls.includes('/tasks/bulk'), false);
+    assert.equal(calls.includes('/runs'), false);
   } finally {
     rmSync(tempRoot, { recursive: true, force: true });
   }
