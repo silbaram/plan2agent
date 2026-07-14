@@ -579,7 +579,7 @@ function devProviderAssetChecks(targetRoot, targets) {
 }
 
 function enabledCapabilityEnhancements(manifest, config) {
-  return ['memory', 'gui', 'orchestration', 'proposals']
+  return ['memory', 'orchestration', 'proposals']
     .filter((capability) => capabilityState(manifest, config, capability).enabled);
 }
 

@@ -57,7 +57,7 @@ const VALID_TOOL_TARGETS = new Set(TOOL_TARGET_ORDER);
 const CODEX_AGENT_PROFILE_ORDER = ['quality', 'inherit'];
 const VALID_CODEX_AGENT_PROFILES = new Set(CODEX_AGENT_PROFILE_ORDER);
 const DEFAULT_CODEX_AGENT_PROFILE = 'quality';
-const ENHANCEMENT_ORDER = ['dev-skills', 'memory', 'gui', 'orchestration', 'proposals'];
+const ENHANCEMENT_ORDER = ['dev-skills', 'memory', 'orchestration', 'proposals'];
 const VALID_ENHANCEMENTS = new Set(ENHANCEMENT_ORDER);
 const MILESTONE_REVIEW_CHECKPOINTS = ['midpoint', 'pre_close'];
 const ARTIFACT_TARGET_BASE = P2A_ARTIFACTS_DIR;
@@ -78,7 +78,7 @@ function usage() {
     'Options:',
     'Scaffold:',
     '  scaffold             Install the full co-located P2A planning/development harness into a project.',
-    '  enhance <capability> Install or refresh one capability: dev-skills, memory, gui, orchestration, proposals.',
+    '  enhance <capability> Install or refresh one capability: dev-skills, memory, orchestration, proposals.',
     '  update               Preview or apply scaffolded harness updates.',
     '  upgrade              Preview or apply scaffolded harness file updates.',
     '  --target <path>      Project directory to create or update.',
@@ -557,14 +557,6 @@ function isP2aTopLevelAsset(relativePath) {
   return firstSegment.startsWith('p2a-');
 }
 
-function isPortableP2aTopLevelAsset(relativePath) {
-  const [firstSegment] = normalizePath(relativePath).split('/');
-  return isP2aTopLevelAsset(relativePath) && firstSegment !== 'p2a-design-system';
-}
-
-function isPortableGeminiP2aCommand(relativePath) {
-  return normalizePath(relativePath) !== 'design-system.toml';
-}
 
 function resolveCodexAgentProfile(value) {
   if (value == null) return DEFAULT_CODEX_AGENT_PROFILE;
@@ -634,7 +626,7 @@ function selectedToolAssetSpecs(toolTargets, { codexProfile = DEFAULT_CODEX_AGEN
       key: 'common-skills',
       source: path.join('.agents', 'skills'),
       target: path.join('.agents', 'skills'),
-      filter: isPortableP2aTopLevelAsset,
+      filter: isP2aTopLevelAsset,
     },
     {
       key: 'common-agents',
@@ -658,7 +650,7 @@ function selectedToolAssetSpecs(toolTargets, { codexProfile = DEFAULT_CODEX_AGEN
         key: 'claude-skills',
         source: path.join('.claude', 'skills'),
         target: path.join('.claude', 'skills'),
-        filter: isPortableP2aTopLevelAsset,
+        filter: isP2aTopLevelAsset,
       },
       {
         key: 'claude-agents',
@@ -686,7 +678,7 @@ function selectedToolAssetSpecs(toolTargets, { codexProfile = DEFAULT_CODEX_AGEN
         key: 'gemini-commands',
         source: path.join('.gemini', 'commands', 'p2a'),
         target: path.join('.gemini', 'commands', 'p2a'),
-        filter: isPortableGeminiP2aCommand,
+        filter: () => true,
       },
     );
   }

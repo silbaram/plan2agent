@@ -20,7 +20,6 @@ Plan2Agent는 Gate A-D planning harness 이후, 승인된 ready task 1건을 사
 | milestone review | `p2a-milestone-reviewer`가 완료된 task 범위의 통합 결함을 중간·종료 직전에 비차단 검토 |
 | Hermes proposal loop | `p2a.mjs proposals mine/review/curate/draft-patch/approve-draft/digest` |
 | provider-native guide | Codex, Claude, Gemini용 role prompt, runner guide, runner doctor, capability evidence |
-| GUI 표시 | `apps/p2a-gui`의 task/run/artifact, PTY session, monitor gate/scheduler 표시 |
 
 이 실행 계층은 여러 agent를 무인으로 돌리는 scheduler가 아니다. P2A는 ready task, role, prompt, runtime 상태, monitor gate, proposal artifact를 조율하고, 실제 agent CLI/앱 세션은 사용자가 foreground에서 열어 감독한다.
 

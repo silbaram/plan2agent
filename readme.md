@@ -87,17 +87,10 @@ or app session stays foreground-supervised by the user.
 - `p2a memory search` and `p2a memory history` support cross-session recall.
 - `p2a memory digest` summarizes failure and proposal history and tracks whether Memory search results were reused by run, proposal, or eval artifacts.
 
-### GUI Workbench
-
-- Electron-based GUI for project overview, artifacts, tasks, runs, and operational reports.
-- Shows update reports, eval analysis, eval digest, memory digest, memory history, and memory search.
-- Shows an improvement queue with proposal status, quality score, source failure/run, and approved maintenance links.
-- Includes supervised PTY-oriented workflow surfaces for foreground agent sessions.
-
 ### Scaffold, Update, and Drift Checks
 
 - Scaffold P2A into a target project as a local `.plan2agent/` harness.
-- Enhance projects with memory, GUI, orchestration, proposals, and dev-skill capabilities.
+- Enhance projects with memory, orchestration, proposals, and dev-skill capabilities.
 - Preview and apply safe toolkit updates with update and upgrade reports.
 - Run doctor and parity checks to find missing files, stale assets, and configuration drift.
 
@@ -272,7 +265,7 @@ Inside a scaffolded project, use the single `p2a.mjs` entrypoint:
 | `doctor` | Diagnose local harness configuration and capability drift. |
 | `update` | Preview or apply safe scaffolded toolkit updates. |
 | `upgrade` | Preview or apply broader toolkit/schema/asset migrations. |
-| `enhance` | Enable optional capabilities such as memory, GUI, orchestration, and proposals. |
+| `enhance` | Enable optional capabilities such as memory, orchestration, and proposals. |
 | `validate` | Validate intake, spec, task graph, review, run, proposal, eval, and memory artifacts. |
 | `iteration` | Manage active iterations, close/open cycles, diffs, drafts, and maintenance tasks. |
 | `tasks` | List, inspect, prompt, start, reopen, block, or complete tasks. |
@@ -290,7 +283,6 @@ Inside a scaffolded project, use the single `p2a.mjs` entrypoint:
 .claude/                 Generated Claude Code mirrors
 .codex/                  Generated Codex agent mirrors
 .gemini/                 Generated Gemini CLI agents and commands
-apps/p2a-gui/            Electron GUI workbench
 docs/                    User guides and implementation references
 fixtures/                Golden fixtures and negative test fixtures
 plans/                   Roadmap and completed planning notes
@@ -327,16 +319,7 @@ node scripts/check_cli_parity.mjs
 node scripts/run_fixtures.mjs
 ```
 
-GUI checks:
-
-```bash
-cd apps/p2a-gui
-npm run typecheck
-npm test
-```
-
-The core runtime scripts are Node.js ESM scripts and use the Node.js standard library. The GUI has
-its own npm dependencies under `apps/p2a-gui/`.
+The core runtime scripts are Node.js ESM scripts and use the Node.js standard library.
 
 ## Documentation
 
@@ -373,6 +356,6 @@ memory-server
 ## Project Status
 
 Plan2Agent is an active local-first harness. The current focus is controlled planning, supervised
-execution, deterministic evaluation, proposal-based self-improvement, Memory integration, and GUI
+execution, deterministic evaluation, proposal-based self-improvement, Memory integration
 visibility. Automatic self-modifying patches, autonomous provider execution, and unapproved remote
 side effects are intentionally outside the default safety model.
