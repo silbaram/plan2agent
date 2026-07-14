@@ -507,7 +507,7 @@ function summarizeOrchestrationEnhancement(manifest, config) {
 }
 
 function summarizeEnhancements(targetRoot, manifest, config) {
-  const keys = ['devSkills', 'memory', 'gui', 'orchestration', 'proposals'];
+  const keys = ['devSkills', 'memory', 'orchestration', 'proposals'];
   const enabled = keys.filter((key) => capabilityState(manifest, config, key).enabled);
   return {
     enabled,

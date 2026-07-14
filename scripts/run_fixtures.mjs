@@ -157,17 +157,9 @@ function validateScaffoldFixtureCase() {
     ];
     const missingFiles = [...expectedScripts, ...expectedSchemas, ...expectedToolFiles, ...expectedGenerated]
       .filter((filePath) => !existsSync(path.join(targetRoot, filePath)));
-    const excludedToolFiles = [
-      path.join('.agents', 'skills', 'p2a-design-system', 'SKILL.md'),
-      path.join('.claude', 'skills', 'p2a-design-system', 'SKILL.md'),
-      path.join('.gemini', 'commands', 'p2a', 'design-system.toml'),
-    ];
-    const copiedExcludedToolFiles = excludedToolFiles.filter((filePath) => existsSync(path.join(targetRoot, filePath)));
     const manifest = JSON.parse(readFileSync(path.join(targetRoot, '.plan2agent', 'manifest.json'), 'utf8'));
     const missingManifestNewAgentFiles = expectedNewAgentFiles
       .filter((filePath) => !manifest.aiToolFiles?.includes(filePath));
-    const manifestDesignSystemFiles = [...(manifest.aiToolFiles ?? []), ...(manifest.toolFiles ?? [])]
-      .filter((filePath) => filePath.includes('p2a-design-system') || filePath.endsWith('/design-system.toml'));
     const config = JSON.parse(readFileSync(path.join(targetRoot, '.plan2agent', 'project.config.json'), 'utf8'));
     const claudeSettings = JSON.parse(readFileSync(path.join(targetRoot, '.claude', 'settings.json'), 'utf8'));
     const claudeLocalSettings = JSON.parse(readFileSync(path.join(targetRoot, '.claude', 'settings.local.json'), 'utf8'));
@@ -178,8 +170,6 @@ function validateScaffoldFixtureCase() {
     if (
       missingFiles.length
       || missingManifestNewAgentFiles.length
-      || copiedExcludedToolFiles.length
-      || manifestDesignSystemFiles.length
       || manifest.provenance?.mode !== 'scaffold'
       || manifest.projectId !== 'target-project'
       || manifest.aiToolTargets.join(',') !== 'codex,claude,gemini'
@@ -207,7 +197,7 @@ function validateScaffoldFixtureCase() {
       || !gitignore.includes('node_modules/')
     ) {
       console.error('scaffold output mismatch');
-      console.error(JSON.stringify({ missingFiles, missingManifestNewAgentFiles, copiedExcludedToolFiles, manifestDesignSystemFiles, manifest, config, claudeSettings, claudeLocalSettings }, null, 2));
+      console.error(JSON.stringify({ missingFiles, missingManifestNewAgentFiles, manifest, config, claudeSettings, claudeLocalSettings }, null, 2));
       return { status: 1, checks };
     }
 
@@ -723,7 +713,7 @@ function validateScaffoldFixtureCase() {
       return { status: failureStatus(result), checks };
     }
 
-    for (const capability of ['memory', 'gui', 'orchestration', 'proposals']) {
+    for (const capability of ['memory', 'orchestration', 'proposals']) {
       result = runHandoff(['enhance', capability, '--target', enhanceTargetRoot]);
       checks += 1;
       if (result.status !== 0 || !result.stdout.includes(`enhance ${capability} complete`)) {
@@ -755,11 +745,9 @@ function validateScaffoldFixtureCase() {
     const enhancedCapabilityManifest = JSON.parse(readFileSync(path.join(enhanceTargetRoot, '.plan2agent', 'manifest.json'), 'utf8'));
     if (
       enhancedCapabilityConfig.memory?.serverUrlEnv !== 'P2A_MEMORY_URL'
-      || enhancedCapabilityConfig.gui?.commandMode !== 'guidance_only'
       || enhancedCapabilityConfig.orchestration?.monitorGatePolicy !== 'explicit_require_monitor'
       || enhancedCapabilityConfig.proposals?.patchPolicy !== 'draft_only'
       || enhancedCapabilityManifest.enhancements?.memory?.configVersion !== 'p2a.memory_config.v1'
-      || enhancedCapabilityManifest.enhancements?.gui?.configKey !== 'gui'
       || enhancedCapabilityManifest.enhancements?.proposals?.mode !== 'manual_curate'
     ) {
       console.error('enhance capability config/manifest fixture failed');

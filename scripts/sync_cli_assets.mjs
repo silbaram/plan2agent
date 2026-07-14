@@ -84,15 +84,6 @@ Run or use the provided p2a.task_context.v1 context. When existing_tasks.active 
 
 Confirm the task is ready, start or use the run, implement only inside the target workspaceRef or worktree, run verify, finish with collected git state, update task status, and return the execution summary.`,
   },
-  'design-system': {
-    skill: 'p2a-design-system',
-    description: 'Design or implement Plan2Agent GUI screens using the P2A design system.',
-    prompt: `Use the Plan2Agent p2a-design-system skill for the following GUI design or implementation request:
-
-{{args}}
-
-Read the packaged Harness and DevSync references inside the p2a-design-system skill before acting. Use Harness as the primary visual language, DevSync for dense developer-tool primitives, and preserve P2A operator workflows for gates, tasks, runs, PTY sessions, approvals, and verification.`,
-  },
   'task-breakdown': {
     skill: 'p2a-task-breakdown',
     description: 'Create a Plan2Agent task graph from an approved implementation spec.',
