@@ -289,7 +289,6 @@ Inside a scaffolded project, use the single `p2a.mjs` entrypoint:
 .claude/                 Generated Claude Code mirrors
 .codex/                  Generated Codex agent mirrors
 .gemini/                 Generated Gemini CLI agents and commands
-apps/p2a-gui/            Electron GUI workbench
 docs/                    User guides and implementation references
 fixtures/                Golden fixtures and negative test fixtures
 plans/                   Roadmap and completed planning notes
@@ -325,16 +324,7 @@ node scripts/check_cli_parity.mjs
 node scripts/run_fixtures.mjs
 ```
 
-GUI checks:
-
-```bash
-cd apps/p2a-gui
-npm run typecheck
-npm test
-```
-
-The core runtime scripts are Node.js ESM scripts and use the Node.js standard library. The GUI has
-its own npm dependencies under `apps/p2a-gui/`.
+The core runtime scripts are Node.js ESM scripts and use the Node.js standard library.
 
 ## Documentation
 
