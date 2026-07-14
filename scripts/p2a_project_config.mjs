@@ -303,16 +303,6 @@ export function defaultCapabilityConfig(capability) {
       pushPolicy: 'explicit_approval',
     };
   }
-  if (capability === 'gui') {
-    return {
-      enabled: true,
-      metadataSource: '.plan2agent/manifest.json',
-      stateSource: 'p2a_doctor_json',
-      defaultView: 'overview',
-      commandMode: 'guidance_only',
-      projectConfigSource: '.plan2agent/project.config.json',
-    };
-  }
   if (capability === 'orchestration') {
     return {
       enabled: true,

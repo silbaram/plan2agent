@@ -44,7 +44,7 @@
 | 구조적 diff task | spec field 차이를 semantic group으로 병합/분할하고, 완료 task overlap은 rework로 표시한다. 기존 정본을 `--force`로 다시 만들 수 있는 범위는 모든 task가 `todo`이고 active iteration run history가 없는 실행 전뿐이며 이때 active task id를 재사용한다. | code-aware/LLM 기반 의미 판단은 후속 실행 레이어에서 다룬다. |
 | agent 저작 task gate | backbone(`context`, `gate-c-draft` 검증, `promote-tasks`), `p2a-task-author` 스킬, 정식 `task-context` schema, provenance sidecar가 구현됐다. 정본 교체는 모든 task가 `todo`이고 run history가 없는 실행 전 구간에서만 명시적 `--replace-existing`으로 허용하며, 실행 시작 뒤에는 task를 다시 `todo`로 열어도 새 feature iteration 또는 maintenance lane을 사용한다. 상세 계약은 §10이다. | richer code-aware task authoring은 후속 실행 레이어에서 다룬다. |
 | archived close | close artifact 존재 여부/hash 기록과 기본 validate-time archive audit을 제공한다. | 기존 pre-audit artifact migration은 필요할 때 `--skip-archive-audit`로 우회한다. |
-| maintenance 반복 | lazy README, `maintenance add` task 생성, `maintenance add --from-draft` 승격, 존재하는 task graph 검증, `context --scope maintenance`, `tasks --maintenance` source/target 표와 prompt next command, handoff 시 별도 `.plan2agent/maintenance/task-graph.json` 복사를 제공한다. | GUI에서 후보 승인/실행을 더 풍부하게 조작하는 흐름은 후속이다. |
+| maintenance 반복 | lazy README, `maintenance add` task 생성, `maintenance add --from-draft` 승격, 존재하는 task graph 검증, `context --scope maintenance`, `tasks --maintenance` source/target 표와 prompt next command, handoff 시 별도 `.plan2agent/maintenance/task-graph.json` 복사를 제공한다. | 후보 승인/실행 조작은 CLI와 agent 대화 표면을 기준으로 유지한다. |
 | agent 실행 추적 | `p2a_runs.mjs`가 `runs/run-index.json`과 `runs/<runId>.json`을 관리하고, test/lint/typecheck 실행 결과와 git changed files를 수집한다. | PTY 기반 자동 agent orchestration, PR 생성, 병렬 실행 scheduler는 후속이다. |
 
 ### 0-3. 미구현 / 후속 고도화
@@ -722,7 +722,7 @@ node .plan2agent/scripts/p2a_iteration.mjs promote-tasks \
 | Phase 1 (파일럿) | maintenance 레인 | `context --scope maintenance`, `tasks --maintenance` 실행 UX, `maintenance add --from-draft`의 `--dry-run`/`--yes` confirm + validate-before-write | ✅ 구현 |
 | Phase 2 | feature task graph | Gate C approval audit + `promote-tasks` | ✅ backbone + 저작 스킬 구현 |
 
-Phase 1 흐름은 `context --scope maintenance`로 유지보수 레인 context를 출력하고, `tasks --maintenance list|ready|prompt`로 source/target과 실행 next command를 확인한 뒤, agent나 eval이 만든 maintenance draft를 사람이 검토하고 `maintenance add --from-draft <file> --dry-run`으로 preview한 다음 `--yes`로 append하는 것이다. ungated maintenance 특성상 별도 정본/초안 분리 없이 append 직전 `--yes` 확인을 게이트로 둔다. 중복 `eval-cluster:*`/proposal ref는 append 시 skip되며, draft-local dependency는 새 maintenance task id로 매핑된다. 단, maintenance는 본질적으로 코드-side 활동이라 GUI에서 더 풍부한 후보 승인/실행 조작은 후속으로 둔다(이관된 fix/기능 경계 분류 포함).
+Phase 1 흐름은 `context --scope maintenance`로 유지보수 레인 context를 출력하고, `tasks --maintenance list|ready|prompt`로 source/target과 실행 next command를 확인한 뒤, agent나 eval이 만든 maintenance draft를 사람이 검토하고 `maintenance add --from-draft <file> --dry-run`으로 preview한 다음 `--yes`로 append하는 것이다. ungated maintenance 특성상 별도 정본/초안 분리 없이 append 직전 `--yes` 확인을 게이트로 둔다. 중복 `eval-cluster:*`/proposal ref는 append 시 skip되며, draft-local dependency는 새 maintenance task id로 매핑된다. 단, maintenance는 본질적으로 코드-side 활동이라 후보 승인/실행 조작은 CLI와 agent 대화 표면을 기준으로 유지한다(이관된 fix/기능 경계 분류 포함).
 
 Phase 2 흐름: `context` -> read-only `p2a-task-author` 서브에이전트가 draft JSON 반환 -> skill owner가 `task-graph.draft.json` 저장·검증 -> 사람 검토 + Gate C approval audit 기록 -> `promote-tasks`로 정본 승격 -> Gate D review -> `p2a_tasks` 실행. `diff-tasks`는 deterministic semantic draft generator로 남고, agent-authored draft 경로와 같은 Gate C approval/promotion 계약으로 수렴한다.
 

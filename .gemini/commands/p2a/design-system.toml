@@ -1,8 +1,0 @@
-description = "Design or implement Plan2Agent GUI screens using the P2A design system."
-prompt = """
-Use the Plan2Agent p2a-design-system skill for the following GUI design or implementation request:
-
-{{args}}
-
-Read the packaged Harness and DevSync references inside the p2a-design-system skill before acting. Use Harness as the primary visual language, DevSync for dense developer-tool primitives, and preserve P2A operator workflows for gates, tasks, runs, PTY sessions, approvals, and verification.
-"""
