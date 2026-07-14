@@ -146,15 +146,7 @@ function validateScaffoldFixtureCase() {
     ];
     const missingFiles = [...expectedScripts, ...expectedSchemas, ...expectedToolFiles, ...expectedGenerated]
       .filter((filePath) => !existsSync(path.join(targetRoot, filePath)));
-    const excludedToolFiles = [
-      path.join('.agents', 'skills', 'p2a-design-system', 'SKILL.md'),
-      path.join('.claude', 'skills', 'p2a-design-system', 'SKILL.md'),
-      path.join('.gemini', 'commands', 'p2a', 'design-system.toml'),
-    ];
-    const copiedExcludedToolFiles = excludedToolFiles.filter((filePath) => existsSync(path.join(targetRoot, filePath)));
     const manifest = JSON.parse(readFileSync(path.join(targetRoot, '.plan2agent', 'manifest.json'), 'utf8'));
-    const manifestDesignSystemFiles = [...(manifest.aiToolFiles ?? []), ...(manifest.toolFiles ?? [])]
-      .filter((filePath) => filePath.includes('p2a-design-system') || filePath.endsWith('/design-system.toml'));
     const config = JSON.parse(readFileSync(path.join(targetRoot, '.plan2agent', 'project.config.json'), 'utf8'));
     const claudeSettings = JSON.parse(readFileSync(path.join(targetRoot, '.claude', 'settings.json'), 'utf8'));
     const claudeLocalSettings = JSON.parse(readFileSync(path.join(targetRoot, '.claude', 'settings.local.json'), 'utf8'));
@@ -163,8 +155,6 @@ function validateScaffoldFixtureCase() {
     const expectedSandboxEnabled = process.platform === 'darwin' || process.platform === 'linux';
     if (
       missingFiles.length
-      || copiedExcludedToolFiles.length
-      || manifestDesignSystemFiles.length
       || manifest.provenance?.mode !== 'scaffold'
       || manifest.projectId !== 'target-project'
       || manifest.aiToolTargets.join(',') !== 'codex,claude,gemini'

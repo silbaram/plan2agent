@@ -60,14 +60,6 @@ node scripts/run_fixtures.mjs
 git diff --check
 ```
 
-추가로 앞선 구현 범위에서 GUI 타입체크와 테스트도 통과했다.
-
-```bash
-cd apps/p2a-gui
-npm run typecheck
-npm test
-```
-
 ### 0.5 남은 처리
 
 기능 개발과 실제 검증은 완료됐다. 남은 작업은 변경사항 커밋, 푸시, 필요 시 release note 또는 후속 계획 문서로의 이관이다.

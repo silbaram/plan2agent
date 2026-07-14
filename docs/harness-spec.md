@@ -230,7 +230,6 @@ Gemini target fields use the documented subagent keys `kind`, `tools`, `temperat
 - validation script가 schema subset, dependency id, duplicate id, cycle, unresolved decision gate, `CQ-n` disposition coverage, spec/intake decision traceability를 검사한다.
 - fixture/golden output이 intake blocked, intake answered, approved spec, task graph, review report path를 포함한다.
 - CLI mirror 생성 스크립트가 CLI-중립 canonical `.agents/agents` source에서 Claude/Codex/Gemini target을 재생성한다.
-- scaffold/handoff는 Plan2Agent 본체 UI 개발 전용인 `p2a-design-system` skill과 Gemini `design-system.toml` command를 대상 프로젝트로 복사하지 않는다.
 
 ## 14. 현재 보완 필요 항목
 

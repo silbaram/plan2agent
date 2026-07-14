@@ -445,15 +445,6 @@ function isP2aTopLevelAsset(relativePath) {
   return firstSegment.startsWith('p2a-');
 }
 
-function isPortableP2aTopLevelAsset(relativePath) {
-  const [firstSegment] = normalizePath(relativePath).split('/');
-  return isP2aTopLevelAsset(relativePath) && firstSegment !== 'p2a-design-system';
-}
-
-function isPortableGeminiP2aCommand(relativePath) {
-  return normalizePath(relativePath) !== 'design-system.toml';
-}
-
 function pushToolAssetDirectory(plan, targetRoot, sourceRelativeDir, targetRelativeDir, options = {}) {
   const sourceRoot = path.join(ROOT, sourceRelativeDir);
   if (!existsSync(sourceRoot) || !lstatSync(sourceRoot).isDirectory()) {
@@ -481,7 +472,7 @@ function selectedToolAssetSpecs(toolTargets) {
       key: 'common-skills',
       source: path.join('.agents', 'skills'),
       target: path.join('.agents', 'skills'),
-      filter: isPortableP2aTopLevelAsset,
+      filter: isP2aTopLevelAsset,
     },
     {
       key: 'common-agents',
@@ -504,7 +495,7 @@ function selectedToolAssetSpecs(toolTargets) {
         key: 'claude-skills',
         source: path.join('.claude', 'skills'),
         target: path.join('.claude', 'skills'),
-        filter: isPortableP2aTopLevelAsset,
+        filter: isP2aTopLevelAsset,
       },
       {
         key: 'claude-agents',
@@ -532,7 +523,6 @@ function selectedToolAssetSpecs(toolTargets) {
         key: 'gemini-commands',
         source: path.join('.gemini', 'commands', 'p2a'),
         target: path.join('.gemini', 'commands', 'p2a'),
-        filter: isPortableGeminiP2aCommand,
       },
     );
   }
@@ -910,7 +900,6 @@ function pushTeamBigFiveAdapter(plan, targetRoot, args) {
   };
 }
 
-
 const SCAFFOLD_SCRIPT_FILES = PROJECT_RUNTIME_SCRIPT_FILES;
 const SCAFFOLD_SCHEMA_FILES = PROJECT_RUNTIME_SCHEMA_FILES;
 
@@ -974,7 +963,6 @@ function targetSpecJsonPath(projectId) {
 function targetTaskGraphPath(projectId) {
   return targetGatePath(projectId, 'gate-c-task-graph', 'task-graph.json');
 }
-
 
 function renderProjectGitignore() {
   return `# Plan2Agent local harness state and artifacts
