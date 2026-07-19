@@ -142,7 +142,7 @@
               },
               "run_ref": {
                 "type": "string",
-                "pattern": "^runs/run-[A-Za-z0-9._-]+\\.json$"
+                "pattern": "^runs/(?:[A-Za-z0-9][A-Za-z0-9._-]*/)?run-[A-Za-z0-9._-]+\\.json$"
               },
               "run_sha256": {
                 "type": "string",

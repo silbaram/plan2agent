@@ -1,8 +1,18 @@
 #!/usr/bin/env node
 /** Track Plan2Agent agent execution runs without mutating the task graph schema. */
 
-import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  realpathSync,
+  renameSync,
+  unlinkSync,
+} from 'node:fs';
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import path from 'node:path';
 import process from 'node:process';
 import { pathToFileURL } from 'node:url';
@@ -15,9 +25,38 @@ import {
   validateTaskGraphData,
   ValidationError,
 } from './validate_artifacts.mjs';
-import { normalizeMonitorVerdictData, readMonitorGateSidecar, writeMonitorGateSidecar } from './p2a_monitor_gate.mjs';
+import { normalizeMonitorGateSidecar, normalizeMonitorVerdictData, readMonitorGateSidecar } from './p2a_monitor_gate.mjs';
 import { resolveIterationState } from './p2a_iteration_state.mjs';
-import { canonicalTaskGraphRef, DEFAULT_RUNS_DIR, resolveRunsDir } from './p2a_run_paths.mjs';
+import {
+  assertUnmanagedGraphMutation,
+  assertRunIndexCanInitialize,
+  assertSafeRunId,
+  assertStartableRunId,
+  canonicalTaskGraphRef,
+  canonicalRunRef,
+  DEFAULT_RUNS_DIR,
+  indexedRunRef,
+  legacyRunRef,
+  legacyRunsDirForGraph,
+  resolveRunsDir,
+  runFilePath,
+  runSidecarPath,
+  runSidecarRef,
+  taskGraphRefMatchesGraph,
+  unindexedRunRecordRefs,
+} from './p2a_run_paths.mjs';
+import {
+  assertNoPendingRunMigration,
+  atomicWriteJson,
+  atomicWriteText,
+  migrationJournalPath,
+  RUN_STORE_LOCK_FILE,
+  RUN_STORE_REAPER_LOCK_FILE,
+  RUN_STORE_REDIRECT_FILE,
+  runWriteTransactionPath,
+  writeRunStoreRedirect,
+  withRunStoreLocks,
+} from './p2a_run_store.mjs';
 import {
   assertNoUninitializedScaffoldArtifactRoots,
   assertNotUninitializedScaffoldGraph,
@@ -28,19 +67,21 @@ import {
 } from './p2a_paths.mjs';
 import {
   DEFAULT_VERIFICATION_TIMEOUT_MS,
+  RUN_ID_RESERVATION_DIR,
   allocateRunId,
   assertRunIdReservationOwnership,
   detectProjectCommands,
   mergeDetectedProjectConfig,
   mergeExplicitVerificationCommands,
   releaseRunIdReservation,
+  runIdReservationIsActive,
   writeProjectConfig,
 } from './p2a_project_config.mjs';
 import { commandLine as sharedCommandLine, printRunCommandFooter } from './p2a_run_commands.mjs';
 
 const P2A_PATHS = resolveP2aPaths(import.meta.url);
 const ROOT = P2A_PATHS.projectRoot;
-const COMMANDS = new Set(['start', 'record', 'verify', 'finish', 'list', 'show', 'validate']);
+const COMMANDS = new Set(['start', 'record', 'verify', 'finish', 'list', 'show', 'validate', 'migrate-layout']);
 const RUN_STATUSES = new Set(['started', 'finished', 'failed', 'blocked']);
 const FAILURE_SOURCES = new Set(['owner', 'monitor', 'implementer']);
 const FAILURE_DEFAULTS = {
@@ -55,6 +96,13 @@ const FAILURE_DEFAULTS = {
 const VERIFICATION_TYPES = new Set(['test', 'lint', 'typecheck', 'custom']);
 const VERIFICATION_STATUSES = new Set(['passed', 'failed', 'skipped', 'not_run', 'unavailable']);
 const OUTPUT_TAIL_LIMIT = 4000;
+const RUN_SIDECAR_SUFFIXES = [
+  '.orchestration.json',
+  '.orchestration-runtime.json',
+  '.monitor-gate.json',
+  '.monitor-verdict.json',
+  '.style-verdict.json',
+];
 
 function usage() {
   return [
@@ -67,10 +115,11 @@ function usage() {
     '  node .plan2agent/scripts/p2a_runs.mjs list (--artifacts <dir>|--runs <dir>|--graph <path>) [--json]',
     '  node .plan2agent/scripts/p2a_runs.mjs show --run-id <run-id> (--artifacts <dir>|--runs <dir>|--graph <path>)',
     '  node .plan2agent/scripts/p2a_runs.mjs validate (--artifacts <dir>|--runs <dir>|--graph <path>) [--run-id <run-id>]',
+    '  node .plan2agent/scripts/p2a_runs.mjs migrate-layout (--artifacts <dir>|--runs <dir>|--graph <path>) [--dry-run] --yes',
     '',
     'Options:',
     '  --artifacts <dir>       Iterative artifact root; writes runs/ under that root.',
-    '  --graph <path>          Task graph JSON path. Defaults runs to ../runs beside the graph parent.',
+    '  --graph <path>          Legacy task graph path. Managed iteration graph mutations require --artifacts.',
     '  --runs <dir>            Explicit runs directory containing run-index.json and run files.',
     '  --maintenance           With --artifacts, use the maintenance task graph as source context.',
     '  --task <task-id>        Task id for start.',
@@ -84,7 +133,7 @@ function usage() {
     '  --worktree <path>       Worktree path to record or create for worktree isolation.',
     '  --base-ref <ref>        Git base ref for --create-isolation. Default: HEAD.',
     '  --create-isolation      Create the branch/worktree with git before writing the run record.',
-    '  --require-monitor       Require runs/<run-id>.monitor-verdict.json before a finished run can close.',
+    '  --require-monitor       Require the run\'s co-located .monitor-verdict.json before a finished run can close.',
     '  --changed-file <path>   Changed file to attach to the run. Repeatable.',
     '  --collect-git           Add changed files from git status in the workspace.',
     '  --note <text>           Append a run note. Repeatable.',
@@ -112,6 +161,8 @@ function usage() {
     '                          Run a custom command; type is optional and defaults to custom.',
     '  --save-config           Persist detected or explicit test/lint/typecheck commands to project.config.json.',
     '  --json                  Machine-readable output for list.',
+    '  --dry-run               Preview run partitioning and legacy per-iteration index consolidation.',
+    '  --yes                   Confirm migrate-layout file moves, index merge, and legacy index removal.',
     '  --help, -h              Show this help.',
   ].join('\n');
 }
@@ -159,6 +210,8 @@ function parseArgs(argv) {
     saveConfig: false,
     requireMonitor: false,
     json: false,
+    dryRun: false,
+    yes: false,
     help: false,
     originalArgv: [...argv],
   };
@@ -222,6 +275,8 @@ function parseArgs(argv) {
       args.status = requiredValue(argv, ++index, '--status');
       if (!RUN_STATUSES.has(args.status) || args.status === 'started') throw new Error('--status must be finished, failed, or blocked');
     } else if (arg === '--json') args.json = true;
+    else if (arg === '--dry-run') args.dryRun = true;
+    else if (arg === '--yes') args.yes = true;
     else if (arg.startsWith('--')) throw new Error(`unknown option: ${arg}`);
     else throw new Error(`unexpected argument: ${arg}`);
   }
@@ -243,6 +298,9 @@ function parseArgs(argv) {
   if (args.artifacts && args.graph) throw new Error('--artifacts and --graph cannot be used together');
   if (args.maintenance && !args.artifacts) throw new Error('--maintenance is only supported with --artifacts');
   if (args.graph) assertNotUninitializedScaffoldGraph(args.graph);
+  if (args.graph && ['start', 'record', 'verify', 'finish'].includes(args.command)) {
+    assertUnmanagedGraphMutation(args.graph, `p2a_runs ${args.command}`);
+  }
   if (args.command === 'start') {
     if (!args.taskId) throw new Error('--task is required for start');
     if (!args.agentTool) throw new Error('--agent-tool is required for start');
@@ -272,6 +330,12 @@ function parseArgs(argv) {
   }
   if (args.runReservationToken && (args.command !== 'start' || !args.runId)) {
     throw new Error('--run-reservation-token requires start with --run-id');
+  }
+  if ((args.dryRun || args.yes) && args.command !== 'migrate-layout') {
+    throw new Error('--dry-run and --yes are only supported with migrate-layout');
+  }
+  if (args.command === 'migrate-layout' && !args.dryRun && !args.yes) {
+    throw new Error('migrate-layout requires --yes, or use --dry-run to preview');
   }
   return args;
 }
@@ -355,6 +419,26 @@ function loadTaskGraph(graphPath) {
   const graph = loadJson(graphPath);
   validateTaskGraphData(graph);
   return graph;
+}
+
+function taskGraphFingerprint(graph) {
+  return createHash('sha256').update(JSON.stringify(graph)).digest('hex');
+}
+
+function assertStartTaskGraphUnchanged(source, expectedFingerprint, runId) {
+  let currentGraph;
+  try {
+    currentGraph = loadTaskGraph(source.graphPath);
+  } catch (error) {
+    throw new Error(
+      `task graph changed or became unavailable while run ${runId} was preparing isolation; no run was written: ${error.message}`,
+    );
+  }
+  if (taskGraphFingerprint(currentGraph) !== expectedFingerprint) {
+    throw new Error(
+      `task graph changed while run ${runId} was preparing isolation; no run was written. Re-read the task graph and start the task again.`,
+    );
+  }
 }
 
 function readOrchestrationSidecar(runsDir, runId) {
@@ -463,6 +547,25 @@ function resolveTaskSource(args) {
   };
 }
 
+function runMatchesSourceContext(run, source) {
+  return run.projectId === source.projectId
+    && run.iterationId === source.iterationId
+    && run.sourceLayout === source.sourceLayout
+    && taskGraphRefMatchesGraph(run.taskGraphRef, source.graphPath, source.artifactRoot);
+}
+
+function assertRunMatchesSourceContext(run, source) {
+  if (runMatchesSourceContext(run, source)) return;
+  throw new Error(
+    `run ${run.runId} is outside the current run context: expected ${source.sourceLayout} `
+    + `iteration ${source.iterationId ?? 'null'} for ${source.taskGraphRef}`,
+  );
+}
+
+function mutationSource(args) {
+  return args.artifacts || args.graph ? resolveTaskSource(args) : null;
+}
+
 function sourceRunArgs(args) {
   if (args.artifacts) return ['--artifacts', args.artifacts, ...(args.maintenance ? ['--maintenance'] : [])];
   if (args.graph) return ['--graph', args.graph];
@@ -473,20 +576,9 @@ function runLifecycleSourceArgs(args) {
   return sourceRunArgs(args) ?? (args.runs ? ['--runs', args.runs] : null);
 }
 
-function assertSafeRunId(runId) {
-  if (!/^run-[A-Za-z0-9._-]+$/.test(runId ?? '')) {
-    throw new Error(`run id must match run-[A-Za-z0-9._-]+, got ${JSON.stringify(runId)}`);
-  }
-}
-
-function runPath(runsDir, runId) {
-  assertSafeRunId(runId);
-  return path.join(runsDir, `${runId}.json`);
-}
-
 function orchestrationSidecarPath(runsDir, runId) {
   assertSafeRunId(runId);
-  return path.join(runsDir, `${runId}.orchestration.json`);
+  return runSidecarPath(runsDir, runId, '.orchestration.json');
 }
 
 function indexPath(runsDir) {
@@ -510,7 +602,7 @@ function loadIndex(runsDir, projectId = 'unknown') {
   return index;
 }
 
-function runIndexEntry(run) {
+function runIndexEntry(run, runRef = canonicalRunRef(run)) {
   return {
     runId: run.runId,
     taskId: run.taskId,
@@ -519,7 +611,7 @@ function runIndexEntry(run) {
     agentTool: run.agentTool,
     workspaceRef: run.workspaceRef,
     taskGraphRef: run.taskGraphRef,
-    runRef: `${run.runId}.json`,
+    runRef,
     startedAt: run.startedAt,
     finishedAt: run.finishedAt,
   };
@@ -544,39 +636,180 @@ function rebuildTaskRunIndex(runs) {
 function writeIndex(runsDir, index) {
   index.tasks = rebuildTaskRunIndex(index.runs);
   validateRunIndexData(index);
-  writeJson(indexPath(runsDir), index);
+  atomicWriteJson(indexPath(runsDir), index);
 }
 
-function upsertIndexRun(runsDir, run) {
-  const index = loadIndex(runsDir, run.projectId);
+function upsertIndexRun(runsDir, index, run, preferredRunRef = null) {
   if (index.projectId === 'unknown') index.projectId = run.projectId;
   if (index.projectId !== run.projectId) {
     throw new Error(`run projectId ${run.projectId} does not match run-index projectId ${index.projectId}`);
   }
-  const nextEntry = runIndexEntry(run);
   const existingIndex = index.runs.findIndex((entry) => entry.runId === run.runId);
+  const runRef = existingIndex === -1
+    ? (preferredRunRef ?? canonicalRunRef(run))
+    : indexedRunRef(runsDir, run.runId, index);
+  const nextEntry = runIndexEntry(run, runRef);
   if (existingIndex === -1) index.runs.push(nextEntry);
   else index.runs[existingIndex] = nextEntry;
-  writeIndex(runsDir, index);
 }
 
 function writeJson(filePath, data) {
-  mkdirSync(path.dirname(filePath), { recursive: true });
-  writeFileSync(filePath, `${JSON.stringify(data, null, 2)}\n`, 'utf8');
+  atomicWriteJson(filePath, data);
 }
 
 export function readRun(runsDir, runId) {
-  const filePath = runPath(runsDir, runId);
+  const filePath = runFilePath(runsDir, runId);
   assertFile(filePath, runId);
   const run = loadJson(filePath);
   validateRunData(run);
   return run;
 }
 
-function writeRun(runsDir, run) {
+function runWriteJournalPath(runsDir) {
+  return runWriteTransactionPath(runsDir);
+}
+
+function completeRunWriteTransaction(runsDir, transaction) {
+  if (transaction?.schema_version !== 'p2a.run_write_transaction.v1') {
+    throw new Error(`invalid pending run write transaction in ${runWriteJournalPath(runsDir)}`);
+  }
+  validateRunData(transaction.run);
+  validateRunIndexData(transaction.index);
+  const entry = transaction.index.runs.find((candidate) => candidate.runId === transaction.run.runId);
+  if (!entry || entry.runRef !== transaction.runRef || transaction.index.projectId !== transaction.run.projectId) {
+    throw new Error(`pending run write transaction does not match run ${transaction.run.runId}`);
+  }
+  for (const field of ['runId', 'taskId', 'iterationId', 'status', 'agentTool', 'workspaceRef', 'taskGraphRef', 'startedAt', 'finishedAt']) {
+    if (JSON.stringify(entry[field]) !== JSON.stringify(transaction.run[field])) {
+      throw new Error(`pending run write transaction index ${field} does not match run ${transaction.run.runId}`);
+    }
+  }
+  const expectedRef = entry.runRef;
+  if (![legacyRunRef(transaction.run.runId), canonicalRunRef(transaction.run)].includes(expectedRef)) {
+    throw new Error(`pending run write transaction has unsupported runRef ${JSON.stringify(expectedRef)}`);
+  }
+  if (transaction.monitorGate !== undefined) {
+    assertNoIndexedRunSidecarCollision(runsDir, transaction.index, transaction.run.runId, transaction.runRef, '.monitor-gate.json');
+  }
+  atomicWriteJson(path.join(runsDir, expectedRef), transaction.run);
+  atomicWriteJson(indexPath(runsDir), transaction.index);
+  if (transaction.monitorGate !== undefined) {
+    const monitorGate = normalizeMonitorGateSidecar(transaction.monitorGate, transaction.run.runId, transaction.runRef);
+    const expectedVerdictRef = runSidecarRef(transaction.runRef, '.monitor-verdict.json');
+    if (monitorGate.runId !== transaction.run.runId
+      || monitorGate.required !== true
+      || monitorGate.verdictPath !== expectedVerdictRef) {
+      throw new Error(`pending run write transaction has an invalid monitor gate for ${transaction.run.runId}`);
+    }
+    atomicWriteJson(path.join(runsDir, runSidecarRef(transaction.runRef, '.monitor-gate.json')), monitorGate);
+  }
+  if (transaction.reservation !== undefined) {
+    if (transaction.reservation?.runId !== transaction.run.runId
+      || typeof transaction.reservation?.token !== 'string'
+      || !transaction.reservation.token) {
+      throw new Error(`pending run write transaction has an invalid reservation for ${transaction.run.runId}`);
+    }
+    releaseRunIdReservation(runsDir, transaction.run.runId, transaction.reservation.token);
+  }
+  unlinkSync(runWriteJournalPath(runsDir));
+}
+
+function recoverPendingRunWrite(runsDir) {
+  const journalPath = runWriteJournalPath(runsDir);
+  if (!existsSync(journalPath)) return false;
+  completeRunWriteTransaction(runsDir, JSON.parse(readFileSync(journalPath, 'utf8')));
+  return true;
+}
+
+function assertNoIndexedRunSidecarCollision(runsDir, index, runId, runRef, suffix) {
+  const sidecarRef = runSidecarRef(runRef, suffix);
+  const conflictingRun = index.runs.find((entry) => (
+    entry.runId !== runId
+    && indexedRunRef(runsDir, entry.runId, index) === sidecarRef
+  ));
+  if (conflictingRun) {
+    throw new Error(
+      `sidecar path ${sidecarRef} for ${runId} collides with indexed run ${conflictingRun.runId}; `
+      + 'rename or migrate the conflicting legacy run before creating this sidecar',
+    );
+  }
+  return sidecarRef;
+}
+
+function commitRunWrite(runsDir, runRef, run, index, options = {}) {
+  index.tasks = rebuildTaskRunIndex(index.runs);
+  validateRunIndexData(index);
+  if (options.monitorGateRequired) {
+    const sidecarRef = assertNoIndexedRunSidecarCollision(runsDir, index, run.runId, runRef, '.monitor-gate.json');
+    if (existsSync(path.join(runsDir, sidecarRef))) {
+      throw new Error(`monitor gate sidecar path already exists and cannot be overwritten: ${sidecarRef}`);
+    }
+  }
+  const transaction = {
+    schema_version: 'p2a.run_write_transaction.v1',
+    runRef,
+    run,
+    index,
+  };
+  if (options.monitorGateRequired) {
+    transaction.monitorGate = normalizeMonitorGateSidecar({ required: true }, run.runId, runRef);
+  }
+  if (options.reservationToken) {
+    transaction.reservation = { runId: run.runId, token: options.reservationToken };
+  }
+  atomicWriteJson(runWriteJournalPath(runsDir), transaction);
+  completeRunWriteTransaction(runsDir, transaction);
+}
+
+function readRunForUpdate(runsDir, runId) {
+  return withRunStoreLocks([runsDir], () => {
+    assertNoPendingRunMigration(runsDir);
+    recoverPendingRunWrite(runsDir);
+    const run = readRun(runsDir, runId);
+    return { run, expectedRun: JSON.stringify(run) };
+  });
+}
+
+function writeRun(runsDir, run, options = {}) {
   validateRunData(run);
-  writeJson(runPath(runsDir, run.runId), run);
-  upsertIndexRun(runsDir, run);
+  return withRunStoreLocks([runsDir], () => {
+    assertNoPendingRunMigration(runsDir);
+    recoverPendingRunWrite(runsDir);
+    const index = loadIndex(runsDir, run.projectId);
+    const existing = index.runs.find((entry) => entry.runId === run.runId);
+    const legacyRef = legacyRunRef(run.runId);
+    const canonicalRef = canonicalRunRef(run);
+    const existingUnindexedRef = existsSync(path.join(runsDir, legacyRef))
+      ? legacyRef
+      : (existsSync(path.join(runsDir, canonicalRef)) ? canonicalRef : null);
+    if (options.createOnly) assertRunIndexCanInitialize(runsDir);
+    if (!existsSync(indexPath(runsDir))) {
+      const unindexedRefs = unindexedRunRecordRefs(runsDir);
+      const hasOtherRunRecords = unindexedRefs.some((ref) => ref !== existingUnindexedRef);
+      if (!existingUnindexedRef || hasOtherRunRecords) {
+        assertRunIndexCanInitialize(runsDir);
+      }
+    }
+    if (options.createOnly && (
+      existing
+      || existingUnindexedRef
+    )) {
+      throw new Error(`run already exists: ${run.runId}`);
+    }
+    if (options.expectedRun !== undefined) {
+      const currentRef = existing ? indexedRunRef(runsDir, run.runId, index) : existingUnindexedRef;
+      if (!currentRef) throw new Error(`run ${run.runId} changed concurrently; retry the command`);
+      const current = loadJson(path.join(runsDir, currentRef));
+      if (JSON.stringify(current) !== options.expectedRun) {
+        throw new Error(`run ${run.runId} changed concurrently; retry the command`);
+      }
+    }
+    const runRef = existing
+      ? indexedRunRef(runsDir, run.runId, index)
+      : (existingUnindexedRef ?? canonicalRef);
+    upsertIndexRun(runsDir, index, run, runRef);
+    commitRunWrite(runsDir, runRef, run, index, options);
+  });
 }
 
 export function loadRunsForArtifactRoot(artifactRoot) {
@@ -1188,6 +1421,7 @@ function assertFinishedRunGuard(run) {
 function startRun(args) {
   const source = resolveTaskSource(args);
   const task = requireTask(source.graph, args.taskId);
+  const initialTaskGraphFingerprint = taskGraphFingerprint(source.graph);
   const runsDir = source.runsDir;
   const now = new Date();
   const configWorkspacePath = path.resolve(args.workspace ?? process.cwd());
@@ -1197,13 +1431,19 @@ function startRun(args) {
   assertDirectory(createsWorktree ? isolationBasePath : workspacePath, '--workspace');
   if (args.createIsolation && args.isolation === 'none') throw new Error('--create-isolation requires --isolation branch or worktree');
   if (createsWorktree && !args.worktree) throw new Error('--isolation worktree requires --worktree');
-  const allocation = args.runId
-    ? { runId: args.runId, reserved: false, reservationToken: args.runReservationToken }
-    : allocateRunId(runsDir, task.id, loadStartProjectConfig(runsDir, source, configWorkspacePath).runTracking, now);
+  const allocation = withRunStoreLocks([runsDir], () => {
+    assertNoPendingRunMigration(runsDir);
+    recoverPendingRunWrite(runsDir);
+    return args.runId
+      ? { runId: args.runId, reserved: false, reservationToken: args.runReservationToken }
+      : allocateRunId(runsDir, task.id, loadStartProjectConfig(runsDir, source, configWorkspacePath).runTracking, now);
+  });
   const runId = allocation.runId;
-  assertSafeRunId(runId);
-  assertRunIdReservationOwnership(runsDir, runId, allocation.reservationToken);
-  if (existsSync(runPath(runsDir, runId))) throw new Error(`run already exists: ${runId}`);
+  assertStartableRunId(runId);
+  const initialReservationOwned = assertRunIdReservationOwnership(runsDir, runId, allocation.reservationToken);
+  if (allocation.reservationToken && !initialReservationOwned) {
+    throw new Error(`run id reservation disappeared before start could prepare isolation: ${runId}`);
+  }
   const workspaceRef = args.workspaceRef ?? displayPath(workspacePath);
   let isolation;
   try {
@@ -1234,14 +1474,34 @@ function startRun(args) {
     verification: args.manualVerification,
     notes: uniqueStrings(args.notes),
   };
-  writeRun(runsDir, run);
-  releaseRunIdReservation(runsDir, run.runId, allocation.reservationToken);
-  if (args.requireMonitor) writeMonitorGateSidecar(runsDir, run.runId);
+  withRunStoreLocks([runsDir], () => {
+    assertNoPendingRunMigration(runsDir);
+    if (allocation.reservationToken
+      && !assertRunIdReservationOwnership(runsDir, run.runId, allocation.reservationToken)) {
+      throw new Error(`run id reservation disappeared before start could commit the run: ${run.runId}`);
+    }
+    try {
+      // Task-graph replacement also holds the run-store lock. Rechecking the
+      // graph here makes replacement and run commit mutually exclusive without
+      // taking the graph lock, which may be owned by the supervising parent.
+      assertStartTaskGraphUnchanged(source, initialTaskGraphFingerprint, run.runId);
+    } catch (error) {
+      if (allocation.reservationToken) {
+        releaseRunIdReservation(runsDir, run.runId, allocation.reservationToken);
+      }
+      throw error;
+    }
+    writeRun(runsDir, run, {
+      createOnly: true,
+      monitorGateRequired: args.requireMonitor,
+      reservationToken: allocation.reservationToken,
+    });
+  });
   console.log(`Plan2Agent run started: ${run.runId}`);
   console.log(`- task: ${run.taskId}`);
   console.log(`- agentTool: ${run.agentTool}`);
   console.log(`- workspaceRef: ${run.workspaceRef}`);
-  console.log(`- runs: ${displayPath(runsDir)}`);
+  console.log(`- runFile: ${displayPath(runFilePath(runsDir, run.runId))}`);
   printRunCommandFooter(P2A_PATHS, {
     sourceArgs: sourceRunArgs(args),
     runSourceArgs: runLifecycleSourceArgs(args),
@@ -1251,14 +1511,16 @@ function startRun(args) {
 }
 
 function recordRun(args) {
-  const runsDir = resolveRunsDir(args);
-  const run = readRun(runsDir, args.runId);
+  const source = mutationSource(args);
+  const runsDir = source?.runsDir ?? resolveRunsDir(args);
+  const { run, expectedRun } = readRunForUpdate(runsDir, args.runId);
+  if (source) assertRunMatchesSourceContext(run, source);
   run.changedFiles = uniqueStrings([...run.changedFiles, ...args.changedFiles]);
   run.verification.push(...args.manualVerification);
   run.notes = uniqueStrings([...run.notes, ...args.notes]);
   mergeStructuredRunDetails(run, args);
   run.updatedAt = new Date().toISOString();
-  writeRun(runsDir, run);
+  writeRun(runsDir, run, { expectedRun });
   console.log(`Plan2Agent run recorded: ${run.runId}`);
   console.log(`- changedFiles: ${run.changedFiles.length}`);
   console.log(`- verification: ${run.verification.length}`);
@@ -1267,8 +1529,10 @@ function recordRun(args) {
 }
 
 function verifyRun(args) {
-  const runsDir = resolveRunsDir(args);
-  const run = readRun(runsDir, args.runId);
+  const source = mutationSource(args);
+  const runsDir = source?.runsDir ?? resolveRunsDir(args);
+  const { run, expectedRun } = readRunForUpdate(runsDir, args.runId);
+  if (source) assertRunMatchesSourceContext(run, source);
   const workspacePath = args.workspace ? path.resolve(args.workspace) : path.resolve(run.workspacePath);
   assertDirectory(workspacePath, 'run workspace');
   const configUpdate = prepareProjectConfigForVerification(args, runsDir, run, workspacePath);
@@ -1278,7 +1542,7 @@ function verifyRun(args) {
   const results = specs.map((spec) => runVerificationCommand(spec, workspacePath, timeoutMs));
   run.verification.push(...results);
   run.updatedAt = new Date().toISOString();
-  writeRun(runsDir, run);
+  writeRun(runsDir, run, { expectedRun });
   console.log(`Plan2Agent run verification recorded: ${run.runId}`);
   for (const saved of configUpdate.saved) {
     console.log(`- projectConfig: saved ${saved.source} ${saved.keys.join(',')} to ${displayPath(saved.path)}`);
@@ -1297,8 +1561,10 @@ function verifyRun(args) {
 }
 
 function finishRun(args) {
-  const runsDir = resolveRunsDir(args);
-  const run = readRun(runsDir, args.runId);
+  const source = mutationSource(args);
+  const runsDir = source?.runsDir ?? resolveRunsDir(args);
+  const { run, expectedRun } = readRunForUpdate(runsDir, args.runId);
+  if (source) assertRunMatchesSourceContext(run, source);
   if (run.status !== 'started') {
     throw new Error(`run ${run.runId} is already ${run.status}; use record to append evidence instead of finishing it again`);
   }
@@ -1324,7 +1590,7 @@ function finishRun(args) {
   const now = new Date().toISOString();
   run.updatedAt = now;
   run.finishedAt = now;
-  writeRun(runsDir, run);
+  writeRun(runsDir, run, { expectedRun });
   console.log(`Plan2Agent run finished: ${run.runId}`);
   console.log(`- status: ${run.status}`);
   console.log(`- changedFiles: ${run.changedFiles.length}`);
@@ -1359,7 +1625,7 @@ function listRuns(args) {
   }
   console.log('runId\ttaskId\tstatus\tagentTool\tworkspaceRef\tverification\tfinishedAt');
   for (const entry of index.runs) {
-    const run = existsSync(runPath(runsDir, entry.runId)) ? readRun(runsDir, entry.runId) : null;
+    const run = existsSync(runFilePath(runsDir, entry.runId, index)) ? readRun(runsDir, entry.runId) : null;
     console.log(`${entry.runId}\t${entry.taskId}\t${entry.status}\t${entry.agentTool}\t${entry.workspaceRef}\t${run ? verificationSummary(run) : '-'}\t${entry.finishedAt ?? '-'}`);
   }
   return 0;
@@ -1369,6 +1635,442 @@ function showRun(args) {
   const run = readRun(resolveRunsDir(args), args.runId);
   console.log(JSON.stringify(run, null, 2));
   return 0;
+}
+
+function migrationSidecarReplacement(filePath, suffix, targetRunRef) {
+  if (!['.monitor-gate.json', '.orchestration.json'].includes(suffix)) return null;
+  const data = JSON.parse(readFileSync(filePath, 'utf8'));
+  const verdictRef = runSidecarRef(targetRunRef, '.monitor-verdict.json');
+  let changed = false;
+  if (suffix === '.monitor-gate.json' && data?.verdictPath !== verdictRef) {
+    data.verdictPath = verdictRef;
+    changed = true;
+  }
+  if (suffix === '.orchestration.json' && data?.monitorGate?.verdictPath && data.monitorGate.verdictPath !== verdictRef) {
+    data.monitorGate.verdictPath = verdictRef;
+    changed = true;
+  }
+  if (!changed) return null;
+  return `${JSON.stringify(data, null, 2)}\n`;
+}
+
+function hasRunIndex(runsDir) {
+  return existsSync(indexPath(runsDir)) && lstatSync(indexPath(runsDir)).isFile();
+}
+
+function legacyMigrationCandidateRunsDirs(args, targetRunsDir) {
+  if (args.runs) return [];
+  const candidates = [];
+  if (args.graph) {
+    const legacyRunsDir = legacyRunsDirForGraph(path.resolve(args.graph));
+    if (legacyRunsDir) candidates.push(legacyRunsDir);
+  } else if (args.artifacts) {
+    const iterationsDir = path.join(path.resolve(args.artifacts), 'iterations');
+    if (existsSync(iterationsDir) && lstatSync(iterationsDir).isDirectory()) {
+      for (const entry of readdirSync(iterationsDir, { withFileTypes: true })) {
+        if (entry.isDirectory()) candidates.push(path.join(iterationsDir, entry.name, 'runs'));
+      }
+    }
+  }
+  const normalizedTarget = path.resolve(targetRunsDir);
+  return [...new Set(candidates.map((candidate) => path.resolve(candidate)))]
+    .filter((candidate) => candidate !== normalizedTarget)
+    .sort();
+}
+
+function legacyMigrationRunsDirs(args, targetRunsDir) {
+  return legacyMigrationCandidateRunsDirs(args, targetRunsDir).filter((candidate) => hasRunIndex(candidate));
+}
+
+function isPathInside(rootPath, candidatePath) {
+  const relative = path.relative(path.resolve(rootPath), path.resolve(candidatePath));
+  return relative === '' || (!relative.startsWith(`..${path.sep}`) && relative !== '..' && !path.isAbsolute(relative));
+}
+
+function migrationFileSha256(filePath) {
+  return createHash('sha256').update(readFileSync(filePath)).digest('hex');
+}
+
+function migrationSourceFileIsEphemeral(ref) {
+  return ref === RUN_STORE_LOCK_FILE
+    || ref === RUN_STORE_REAPER_LOCK_FILE
+    || ref === RUN_STORE_REDIRECT_FILE
+    || ref.startsWith(`${RUN_STORE_REAPER_LOCK_FILE}.claim-`);
+}
+
+function migrationSourcePrecondition(runsDir) {
+  const resolvedRunsDir = path.resolve(runsDir);
+  const files = [];
+  function visit(directory, prefix = '') {
+    for (const entry of readdirSync(directory, { withFileTypes: true }).sort((left, right) => left.name.localeCompare(right.name))) {
+      const ref = normalizePath(path.join(prefix, entry.name));
+      const filePath = path.join(directory, entry.name);
+      if (!prefix && migrationSourceFileIsEphemeral(ref)) continue;
+      if (entry.isDirectory()) visit(filePath, ref);
+      else if (entry.isFile()) files.push({ ref, sha256: migrationFileSha256(filePath) });
+    }
+  }
+  visit(resolvedRunsDir);
+  return { runsDir: resolvedRunsDir, files };
+}
+
+function validateMigrationSourcePreconditions(journal, allowedRunsDirs, journalFile) {
+  if (!Array.isArray(journal.sourcePreconditions)) {
+    throw new Error(`run layout migration journal is missing source preconditions: ${displayPath(journalFile)}`);
+  }
+  const retired = new Set(journal.retiredRunsDirs.map((runsDir) => path.resolve(runsDir)));
+  const allowed = new Set(allowedRunsDirs.map((runsDir) => path.resolve(runsDir)));
+  const seen = new Set();
+  for (const precondition of journal.sourcePreconditions) {
+    const runsDir = path.resolve(precondition?.runsDir ?? '');
+    if (!retired.has(runsDir) || !allowed.has(runsDir) || seen.has(runsDir) || !Array.isArray(precondition?.files)) {
+      throw new Error(`run layout migration source precondition is invalid: ${displayPath(journalFile)}`);
+    }
+    seen.add(runsDir);
+    const refs = new Set();
+    for (const file of precondition.files) {
+      const resolvedFile = path.resolve(runsDir, file?.ref ?? '');
+      const normalizedRef = normalizePath(path.relative(runsDir, resolvedFile));
+      if (typeof file?.ref !== 'string'
+        || file.ref !== normalizedRef
+        || !isPathInside(runsDir, resolvedFile)
+        || resolvedFile === runsDir
+        || refs.has(file.ref)
+        || !/^[a-f0-9]{64}$/.test(file.sha256 ?? '')) {
+        throw new Error(`run layout migration source precondition file is invalid: ${displayPath(journalFile)}`);
+      }
+      refs.add(file.ref);
+    }
+  }
+  if (seen.size !== retired.size) {
+    throw new Error(`run layout migration journal does not cover every retired source: ${displayPath(journalFile)}`);
+  }
+}
+
+function assertMigrationSourcesUnchanged(targetRunsDir, journal) {
+  const movesBySource = new Map(journal.moves.map((move) => [path.resolve(move.source), path.resolve(move.target)]));
+  for (const precondition of journal.sourcePreconditions) {
+    const current = migrationSourcePrecondition(precondition.runsDir);
+    const expectedFiles = new Map(precondition.files.map((file) => [file.ref, file.sha256]));
+    const currentFiles = new Map(current.files.map((file) => [file.ref, file.sha256]));
+    for (const [ref, sha256] of currentFiles) {
+      if (!expectedFiles.has(ref)) {
+        throw new Error(`legacy run store changed after migration journal creation; unexpected file: ${displayPath(path.join(precondition.runsDir, ref))}`);
+      }
+      if (expectedFiles.get(ref) !== sha256) {
+        throw new Error(`legacy run store changed after migration journal creation: ${displayPath(path.join(precondition.runsDir, ref))}`);
+      }
+    }
+    for (const ref of expectedFiles.keys()) {
+      if (currentFiles.has(ref)) continue;
+      const source = path.resolve(precondition.runsDir, ref);
+      const moveTarget = movesBySource.get(source);
+      if (moveTarget && existsSync(moveTarget)) continue;
+      const sourceMoves = journal.moves.filter((move) => isPathInside(precondition.runsDir, move.source));
+      const completedSource = sourceMoves.every((move) => !existsSync(move.source) && existsSync(move.target));
+      if (ref === 'run-index.json' && completedSource && existsSync(indexPath(targetRunsDir))) continue;
+      throw new Error(`legacy run store changed after migration journal creation; missing file: ${displayPath(source)}`);
+    }
+  }
+}
+
+function readMigrationJournal(targetRunsDir, allowedRunsDirs) {
+  const journalFile = migrationJournalPath(targetRunsDir);
+  if (!existsSync(journalFile)) return null;
+  const journal = JSON.parse(readFileSync(journalFile, 'utf8'));
+  if (journal?.schema_version !== 'p2a.run_layout_migration.v1') {
+    throw new Error(`invalid run layout migration journal: ${displayPath(journalFile)}`);
+  }
+  if (path.resolve(journal.targetRunsDir) !== path.resolve(targetRunsDir)) {
+    throw new Error(`run layout migration journal target does not match ${displayPath(targetRunsDir)}`);
+  }
+  if (!Array.isArray(journal.sourceRunsDirs)
+    || !Array.isArray(journal.legacyIndexFiles)
+    || !Array.isArray(journal.moves)
+    || (Object.hasOwn(journal, 'retiredRunsDirs') && !Array.isArray(journal.retiredRunsDirs))) {
+    throw new Error(`run layout migration journal is incomplete: ${displayPath(journalFile)}`);
+  }
+  journal.retiredRunsDirs ??= journal.legacyIndexFiles.map((filePath) => path.dirname(filePath));
+  journal.sourcePreconditions ??= journal.retiredRunsDirs.length ? null : [];
+  const allowed = new Set(allowedRunsDirs.map((runsDir) => path.resolve(runsDir)));
+  for (const sourceRunsDir of journal.sourceRunsDirs) {
+    if (!allowed.has(path.resolve(sourceRunsDir))) {
+      throw new Error(`run layout migration journal source is outside this command scope: ${displayPath(sourceRunsDir)}`);
+    }
+  }
+  validateRunIndexData(journal.mergedIndex);
+  for (const move of journal.moves) {
+    if (!journal.sourceRunsDirs.some((runsDir) => isPathInside(runsDir, move.source))) {
+      throw new Error(`run layout migration source escapes its runs directory: ${displayPath(move.source)}`);
+    }
+    if (!isPathInside(targetRunsDir, move.target)) {
+      throw new Error(`run layout migration target escapes target runs: ${displayPath(move.target)}`);
+    }
+    if (move.replacement !== null && typeof move.replacement !== 'string') {
+      throw new Error(`run layout migration replacement must be text or null: ${displayPath(move.target)}`);
+    }
+  }
+  for (const legacyIndexFile of journal.legacyIndexFiles) {
+    if (!journal.sourceRunsDirs.some((runsDir) => path.resolve(legacyIndexFile) === path.resolve(indexPath(runsDir)))) {
+      throw new Error(`run layout migration legacy index is outside its runs directory: ${displayPath(legacyIndexFile)}`);
+    }
+  }
+  for (const retiredRunsDir of journal.retiredRunsDirs) {
+    const resolvedRetiredRunsDir = path.resolve(retiredRunsDir);
+    if (!allowed.has(resolvedRetiredRunsDir)
+      || !journal.sourceRunsDirs.some((runsDir) => path.resolve(runsDir) === resolvedRetiredRunsDir)
+      || resolvedRetiredRunsDir === path.resolve(targetRunsDir)) {
+      throw new Error(`run layout migration retired store is outside this command scope: ${displayPath(retiredRunsDir)}`);
+    }
+  }
+  validateMigrationSourcePreconditions(journal, allowedRunsDirs, journalFile);
+  return journal;
+}
+
+function completeMigrationJournal(targetRunsDir, journal) {
+  assertMigrationSourcesUnchanged(targetRunsDir, journal);
+  const moveStates = journal.moves.map((move) => ({
+    move,
+    sourceExists: existsSync(move.source),
+    targetExists: existsSync(move.target),
+  }));
+  for (const { move, sourceExists, targetExists } of moveStates) {
+    if (sourceExists && targetExists) {
+      throw new Error(`run layout migration has both source and target files: ${displayPath(move.source)} -> ${displayPath(move.target)}`);
+    }
+    if (!sourceExists && !targetExists) {
+      throw new Error(`run layout migration lost both source and target files: ${displayPath(move.source)} -> ${displayPath(move.target)}`);
+    }
+  }
+  for (const retiredRunsDir of journal.retiredRunsDirs ?? []) {
+    writeRunStoreRedirect(retiredRunsDir, targetRunsDir);
+  }
+  for (const { move, sourceExists } of moveStates) {
+    if (sourceExists) {
+      mkdirSync(path.dirname(move.target), { recursive: true });
+      renameSync(move.source, move.target);
+    }
+    if (move.replacement !== null) atomicWriteText(move.target, move.replacement);
+  }
+  writeIndex(targetRunsDir, structuredClone(journal.mergedIndex));
+  validateRunsDir(targetRunsDir);
+  for (const legacyIndexFile of journal.legacyIndexFiles) {
+    if (existsSync(legacyIndexFile)) unlinkSync(legacyIndexFile);
+  }
+  unlinkSync(migrationJournalPath(targetRunsDir));
+}
+
+function migrationReservationFiles(sourceRunsDir, targetRunsDir) {
+  const sourceReservationDir = path.join(sourceRunsDir, RUN_ID_RESERVATION_DIR);
+  if (!existsSync(sourceReservationDir)) return [];
+  if (!lstatSync(sourceReservationDir).isDirectory()) {
+    throw new Error(`run id reservations path must be a directory: ${displayPath(sourceReservationDir)}`);
+  }
+  return readdirSync(sourceReservationDir, { withFileTypes: true }).map((entry) => {
+    if (!entry.isFile()) {
+      throw new Error(`run id reservation must be a regular file: ${displayPath(path.join(sourceReservationDir, entry.name))}`);
+    }
+    if (!entry.name.endsWith('.json')) {
+      throw new Error(`run id reservation filename must end with .json: ${displayPath(path.join(sourceReservationDir, entry.name))}`);
+    }
+    const runId = entry.name.slice(0, -'.json'.length);
+    assertSafeRunId(runId);
+    const source = path.join(sourceReservationDir, entry.name);
+    let reservation;
+    try {
+      reservation = JSON.parse(readFileSync(source, 'utf8'));
+    } catch (error) {
+      throw new Error(`run id reservation is malformed for ${runId}: ${error.message}`);
+    }
+    if (!Number.isInteger(reservation?.ownerPid) || reservation.ownerPid <= 0) {
+      throw new Error(`cannot safely migrate legacy reservation ${runId} without ownerPid; wait for or explicitly clear the legacy start first`);
+    }
+    if (runIdReservationIsActive(reservation)) {
+      throw new Error(`cannot migrate legacy runs while start still owns reservation ${runId} (pid ${reservation.ownerPid})`);
+    }
+    return {
+      runId,
+      source,
+      target: path.join(targetRunsDir, RUN_ID_RESERVATION_DIR, entry.name),
+    };
+  });
+}
+
+function migrationEntryTime(entry) {
+  const timestamp = Date.parse(entry.startedAt);
+  return Number.isFinite(timestamp) ? timestamp : Number.MAX_SAFE_INTEGER;
+}
+
+function planAndMigrateRunLayout(args, targetRunsDir, legacyRunsDirs) {
+  if (!hasRunIndex(targetRunsDir)) assertRunIndexCanInitialize(targetRunsDir);
+  const sourceRunsDirs = [
+    ...(hasRunIndex(targetRunsDir) ? [targetRunsDir] : []),
+    ...legacyRunsDirs,
+  ];
+  if (!sourceRunsDirs.length) assertFile(indexPath(targetRunsDir), 'run-index.json');
+
+  const sourceStates = sourceRunsDirs.map((runsDir) => {
+    validateRunsDir(runsDir);
+    return {
+      runsDir,
+      index: loadIndex(runsDir),
+    };
+  });
+  const projectIds = [...new Set(sourceStates.map((state) => state.index.projectId))];
+  if (projectIds.length !== 1) {
+    throw new Error(`cannot merge run indexes with different projectIds: ${projectIds.join(', ')}`);
+  }
+
+  const mergedEntries = [];
+  const seenRunIds = new Map();
+  let mergedOrder = 0;
+  for (const state of sourceStates) {
+    for (const entry of state.index.runs) {
+      const priorRunsDir = seenRunIds.get(entry.runId);
+      if (priorRunsDir) {
+        throw new Error(`cannot merge duplicate run id ${entry.runId} from ${displayPath(priorRunsDir)} and ${displayPath(state.runsDir)}`);
+      }
+      seenRunIds.set(entry.runId, state.runsDir);
+      mergedEntries.push({
+        entry: { ...entry, runRef: canonicalRunRef(entry) },
+        order: mergedOrder,
+      });
+      mergedOrder += 1;
+    }
+  }
+  if (sourceStates.length > 1) {
+    mergedEntries.sort((left, right) => migrationEntryTime(left.entry) - migrationEntryTime(right.entry) || left.order - right.order);
+  }
+  const mergedIndex = {
+    schema_version: 'p2a.run_index.v1',
+    projectId: projectIds[0],
+    runs: mergedEntries.map(({ entry }) => entry),
+    tasks: rebuildTaskRunIndex(mergedEntries.map(({ entry }) => entry)),
+  };
+  validateRunIndexData(mergedIndex);
+  const migrations = [];
+  const plannedTargets = new Set();
+
+  for (const state of sourceStates) {
+    for (const entry of state.index.runs) {
+      const sourceRef = indexedRunRef(state.runsDir, entry.runId, state.index);
+      const targetRef = canonicalRunRef(entry);
+      const sameRoot = path.resolve(state.runsDir) === path.resolve(targetRunsDir);
+      if (sameRoot && sourceRef === targetRef) continue;
+      const files = [{
+        suffix: '.json',
+        source: path.join(state.runsDir, sourceRef),
+        target: path.join(targetRunsDir, targetRef),
+      }];
+      assertFile(files[0].source, entry.runId);
+      for (const suffix of RUN_SIDECAR_SUFFIXES) {
+        const source = runSidecarPath(state.runsDir, entry.runId, suffix, state.index);
+        if (!existsSync(source)) continue;
+        files.push({ suffix, source, target: path.join(targetRunsDir, runSidecarRef(targetRef, suffix)) });
+      }
+      for (const file of files) {
+        const normalizedTarget = path.resolve(file.target);
+        if (plannedTargets.has(normalizedTarget) || existsSync(file.target)) {
+          throw new Error(`migrate-layout target already exists: ${displayPath(file.target)}`);
+        }
+        plannedTargets.add(normalizedTarget);
+      }
+      migrations.push({ entry, sourceRunsDir: state.runsDir, sourceRef, targetRef, files });
+    }
+  }
+
+  const reservationMoves = legacyRunsDirs.flatMap((sourceRunsDir) => migrationReservationFiles(sourceRunsDir, targetRunsDir));
+  for (const reservation of reservationMoves) {
+    if (seenRunIds.has(reservation.runId)) {
+      throw new Error(`cannot merge run id reservation ${reservation.runId} because that run id already exists`);
+    }
+    const normalizedTarget = path.resolve(reservation.target);
+    if (plannedTargets.has(normalizedTarget) || existsSync(reservation.target)) {
+      throw new Error(`migrate-layout reservation target already exists: ${displayPath(reservation.target)}`);
+    }
+    plannedTargets.add(normalizedTarget);
+  }
+
+  console.log('Plan2Agent run layout migration');
+  console.log(`- target runs: ${displayPath(targetRunsDir)}`);
+  for (const legacyRunsDir of legacyRunsDirs) console.log(`- merge legacy runs: ${displayPath(legacyRunsDir)}`);
+  console.log(`- run records: ${migrations.length}`);
+  for (const migration of migrations) {
+    const sourceLabel = path.resolve(migration.sourceRunsDir) === path.resolve(targetRunsDir)
+      ? migration.sourceRef
+      : `${displayPath(migration.sourceRunsDir)}/${migration.sourceRef}`;
+    console.log(`- ${sourceLabel} -> ${migration.targetRef}${migration.files.length > 1 ? ` (+${migration.files.length - 1} sidecar(s))` : ''}`);
+  }
+  if (reservationMoves.length) console.log(`- run id reservations: ${reservationMoves.length}`);
+  if (args.dryRun || (migrations.length === 0 && legacyRunsDirs.length === 0)) {
+    console.log(args.dryRun ? '- result: dry-run; source layouts validated; no files changed' : '- result: already iteration-partitioned and validated');
+    return 0;
+  }
+
+  const journal = {
+    schema_version: 'p2a.run_layout_migration.v1',
+    targetRunsDir: path.resolve(targetRunsDir),
+    sourceRunsDirs: [...new Set([targetRunsDir, ...sourceRunsDirs].map((runsDir) => path.resolve(runsDir)))],
+    retiredRunsDirs: legacyRunsDirs.map((runsDir) => path.resolve(runsDir)),
+    sourcePreconditions: legacyRunsDirs.map((runsDir) => migrationSourcePrecondition(runsDir)),
+    mergedIndex,
+    legacyIndexFiles: legacyRunsDirs.map((runsDir) => indexPath(runsDir)),
+    moves: [
+      ...migrations.flatMap((migration) => migration.files.map((file) => ({
+        source: path.resolve(file.source),
+        target: path.resolve(file.target),
+        replacement: migrationSidecarReplacement(file.source, file.suffix, migration.targetRef),
+      }))),
+      ...reservationMoves.map((reservation) => ({
+        source: path.resolve(reservation.source),
+        target: path.resolve(reservation.target),
+        replacement: null,
+      })),
+    ],
+  };
+  atomicWriteJson(migrationJournalPath(targetRunsDir), journal);
+  const persistedJournal = readMigrationJournal(targetRunsDir, journal.sourceRunsDirs);
+  completeMigrationJournal(targetRunsDir, persistedJournal);
+  console.log(`- result: migrated into ${displayPath(targetRunsDir)} and validated`);
+  return 0;
+}
+
+function migrateRunLayout(args) {
+  const targetRunsDir = resolveRunsDir(args);
+  const candidateLegacyRunsDirs = legacyMigrationCandidateRunsDirs(args, targetRunsDir);
+  const allowedRunsDirs = [targetRunsDir, ...candidateLegacyRunsDirs];
+  const pending = readMigrationJournal(targetRunsDir, allowedRunsDirs);
+  const initialLegacyRunsDirs = legacyMigrationRunsDirs(args, targetRunsDir);
+  if (args.dryRun) {
+    if (pending) {
+      console.log('Plan2Agent run layout migration');
+      console.log(`- target runs: ${displayPath(targetRunsDir)}`);
+      console.log(`- pending moves: ${pending.moves.length}`);
+      console.log('- result: incomplete migration journal found; use --yes to resume; no files changed');
+      return 0;
+    }
+    for (const runsDir of [targetRunsDir, ...initialLegacyRunsDirs]) {
+      if (existsSync(runWriteJournalPath(runsDir))) {
+        throw new Error(`run write recovery is pending; run a mutating runs command before migration dry-run: ${displayPath(runWriteJournalPath(runsDir))}`);
+      }
+    }
+    return planAndMigrateRunLayout(args, targetRunsDir, initialLegacyRunsDirs);
+  }
+  const lockDirs = pending?.sourceRunsDirs ?? [targetRunsDir, ...initialLegacyRunsDirs];
+  return withRunStoreLocks(lockDirs, () => {
+    const currentJournal = readMigrationJournal(targetRunsDir, allowedRunsDirs);
+    if (currentJournal) {
+      console.log('Plan2Agent run layout migration');
+      console.log(`- target runs: ${displayPath(targetRunsDir)}`);
+      console.log(`- pending moves: ${currentJournal.moves.length}`);
+      completeMigrationJournal(targetRunsDir, currentJournal);
+      console.log(`- result: resumed migration into ${displayPath(targetRunsDir)} and validated`);
+      return 0;
+    }
+    const legacyRunsDirs = initialLegacyRunsDirs.filter((runsDir) => hasRunIndex(runsDir));
+    for (const runsDir of [targetRunsDir, ...legacyRunsDirs]) recoverPendingRunWrite(runsDir);
+    return planAndMigrateRunLayout(args, targetRunsDir, legacyRunsDirs);
+  });
 }
 
 function validateRuns(args) {
@@ -1397,6 +2099,7 @@ export function main(argv = process.argv.slice(2)) {
     if (args.command === 'list') return listRuns(args);
     if (args.command === 'show') return showRun(args);
     if (args.command === 'validate') return validateRuns(args);
+    if (args.command === 'migrate-layout') return migrateRunLayout(args);
     throw new Error(`unknown command: ${args.command}`);
   } catch (error) {
     const prefix = error instanceof ValidationError ? 'p2a run validation failed' : 'p2a run command failed';

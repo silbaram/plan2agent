@@ -88,7 +88,7 @@ function writeRunSet(artifactRoot) {
       agentTool: item.agentTool,
       workspaceRef: item.workspaceRef,
       taskGraphRef: item.taskGraphRef,
-      runRef: `runs/${item.runId}.json`,
+      runRef: `${item.runId}.json`,
       startedAt: item.startedAt,
       finishedAt: item.finishedAt,
     })),

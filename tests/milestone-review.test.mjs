@@ -20,7 +20,7 @@ import {
   validateRunsDir,
   ValidationError,
 } from '../scripts/validate_artifacts.mjs';
-import { ROOT } from './helpers/fixtures.mjs';
+import { ROOT, runRuns } from './helpers/fixtures.mjs';
 
 const PROJECT_ID = 'webhook-api-service';
 const ITERATION_ID = 'iter-002';
@@ -335,6 +335,64 @@ describe('milestone review artifact contract', () => {
       writeRunIndex(bundle.runsDir, bundle.runs);
 
       assert.deepEqual(validateMilestoneReview(bundle.reviewPath), data);
+    } finally {
+      rmSync(bundle.artifactRoot, { recursive: true, force: true });
+    }
+  });
+
+  test('keeps a promoted milestone valid after legacy run files migrate into the iteration directory', () => {
+    const data = midpointReview();
+    const bundle = writeBundle(data, 'midpoint.json');
+    try {
+      const result = runRuns(['migrate-layout', '--runs', bundle.runsDir, '--yes']);
+      assert.equal(result.status, 0, result.stderr);
+      assert.deepEqual(validateMilestoneReview(bundle.reviewPath), data);
+      assert.equal(validateRunsDir(bundle.runsDir).runs.every((run) => run.runRef.startsWith(`${ITERATION_ID}/`)), true);
+    } finally {
+      rmSync(bundle.artifactRoot, { recursive: true, force: true });
+    }
+  });
+
+  test('accepts a new milestone draft that references partitioned run evidence', () => {
+    const data = midpointReview();
+    const bundle = writeBundle(data);
+    try {
+      const migration = runRuns(['migrate-layout', '--runs', bundle.runsDir, '--yes']);
+      assert.equal(migration.status, 0, migration.stderr);
+      const index = validateRunsDir(bundle.runsDir);
+      for (const evidence of data.source.completed_task_evidence) {
+        const runEntry = index.runs.find((entry) => entry.runId === evidence.run_id);
+        assert.ok(runEntry);
+        evidence.run_ref = `runs/${runEntry.runRef}`;
+      }
+      writeFileSync(bundle.reviewPath, `${JSON.stringify(data, null, 2)}\n`, 'utf8');
+
+      assert.deepEqual(validateMilestoneReview(bundle.reviewPath), data);
+    } finally {
+      rmSync(bundle.artifactRoot, { recursive: true, force: true });
+    }
+  });
+
+  test('rejects graph-mode run identity even when it resolves to the milestone task graph', () => {
+    const data = midpointReview();
+    const bundle = writeBundle(data);
+    try {
+      const evidence = data.source.completed_task_evidence[0];
+      const legacyRun = bundle.runs[0];
+      legacyRun.sourceLayout = 'graph';
+      legacyRun.taskGraphRef = bundle.graphPath;
+      evidence.run_snapshot = structuredClone(legacyRun);
+      evidence.run_snapshot_sha256 = milestoneRunSnapshotSha256(evidence.run_snapshot);
+      const runPath = path.join(bundle.runsDir, `${legacyRun.runId}.json`);
+      writeFileSync(runPath, `${JSON.stringify(legacyRun, null, 2)}\n`, 'utf8');
+      evidence.run_sha256 = rawFileSha256(runPath);
+      writeRunIndex(bundle.runsDir, bundle.runs);
+      writeFileSync(bundle.reviewPath, `${JSON.stringify(data, null, 2)}\n`, 'utf8');
+
+      assert.throws(
+        () => validateMilestoneReview(bundle.reviewPath),
+        /has no successful finished run in the milestone task-graph context/,
+      );
     } finally {
       rmSync(bundle.artifactRoot, { recursive: true, force: true });
     }

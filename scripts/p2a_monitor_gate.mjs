@@ -1,7 +1,9 @@
 /** Shared monitor gate helpers for Plan2Agent run lifecycle. */
 
 import path from 'node:path';
-import { existsSync, lstatSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, readFileSync } from 'node:fs';
+import { indexedRunRef, runSidecarPath, runSidecarRef } from './p2a_run_paths.mjs';
+import { atomicWriteJson } from './p2a_run_store.mjs';
 
 export const MONITOR_CONCERN_FIELDS = ['scope_concerns', 'verification_concerns', 'unmet_acceptance', 'needs_user_decision'];
 export const DEFAULT_MONITOR_ACCEPTED_VERDICTS = ['confirm_done'];
@@ -19,12 +21,12 @@ function assertSafeRunId(runId) {
 
 export function monitorGateSidecarPath(runsDir, runId) {
   assertSafeRunId(runId);
-  return path.join(runsDir, `${runId}.monitor-gate.json`);
+  return runSidecarPath(runsDir, runId, '.monitor-gate.json');
 }
 
 export function monitorVerdictPath(runsDir, runId) {
   assertSafeRunId(runId);
-  return path.join(runsDir, `${runId}.monitor-verdict.json`);
+  return runSidecarPath(runsDir, runId, '.monitor-verdict.json');
 }
 
 function monitorConcernValues(data, field) {
@@ -54,7 +56,7 @@ export function normalizeMonitorVerdictData(data) {
   return { verdict, failureSignal, concerns, concernFields, hasConcerns: concernFields.length > 0, needsUserDecision, note };
 }
 
-export function normalizeMonitorGateSidecar(data, runId = null) {
+export function normalizeMonitorGateSidecar(data, runId = null, runRef = null) {
   const gate = data && typeof data === 'object' && !Array.isArray(data) ? data : {};
   return {
     schema_version: 'p2a.monitor_gate.v1',
@@ -62,7 +64,7 @@ export function normalizeMonitorGateSidecar(data, runId = null) {
     required: gate.required === true,
     verdictPath: typeof gate.verdictPath === 'string' && gate.verdictPath.trim()
       ? gate.verdictPath.trim()
-      : (runId ? `${runId}.monitor-verdict.json` : null),
+      : (runId ? runSidecarRef(runRef ?? `${runId}.json`, '.monitor-verdict.json') : null),
     acceptedVerdicts: Array.isArray(gate.acceptedVerdicts) && gate.acceptedVerdicts.length
       ? gate.acceptedVerdicts.filter((item) => typeof item === 'string' && item.trim()).map((item) => item.trim())
       : [...DEFAULT_MONITOR_ACCEPTED_VERDICTS],
@@ -71,9 +73,10 @@ export function normalizeMonitorGateSidecar(data, runId = null) {
 }
 
 export function writeMonitorGateSidecar(runsDir, runId) {
-  const sidecar = normalizeMonitorGateSidecar({ required: true }, runId);
+  const runRef = indexedRunRef(runsDir, runId);
+  const sidecar = normalizeMonitorGateSidecar({ required: true }, runId, runRef);
   const filePath = monitorGateSidecarPath(runsDir, runId);
-  writeFileSync(filePath, `${JSON.stringify(sidecar, null, 2)}\n`, 'utf8');
+  atomicWriteJson(filePath, sidecar);
   return { filePath, sidecar };
 }
 
@@ -81,5 +84,5 @@ export function readMonitorGateSidecar(runsDir, runId) {
   const filePath = monitorGateSidecarPath(runsDir, runId);
   if (!existsSync(filePath)) return null;
   if (!lstatSync(filePath).isFile()) throw new Error(`monitor gate sidecar must be a file: ${filePath}`);
-  return normalizeMonitorGateSidecar(JSON.parse(readFileSync(filePath, 'utf8')), runId);
+  return normalizeMonitorGateSidecar(JSON.parse(readFileSync(filePath, 'utf8')), runId, indexedRunRef(runsDir, runId));
 }

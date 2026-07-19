@@ -16,7 +16,7 @@ import {
   validateSkillProposal,
   validateTaskGraph,
 } from './validate_artifacts.mjs';
-import { resolveRunsDir } from './p2a_run_paths.mjs';
+import { resolveRunsDir, runFilePath as indexedRunFilePath } from './p2a_run_paths.mjs';
 import {
   assertNoUninitializedScaffoldArtifactRoots,
   assertNotUninitializedScaffoldGraph,
@@ -397,7 +397,7 @@ function resolveDigestEvalDir(args) {
 
 function runFilePath(runsDir, runId) {
   if (!/^run-[A-Za-z0-9._-]+$/.test(runId ?? '')) throw new Error(`run id must match run-[A-Za-z0-9._-]+, got ${JSON.stringify(runId)}`);
-  return path.join(runsDir, `${runId}.json`);
+  return indexedRunFilePath(runsDir, runId);
 }
 
 function loadRunForGrade(source, args) {

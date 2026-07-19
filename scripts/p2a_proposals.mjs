@@ -20,7 +20,7 @@ import {
   validateTaskGraphData,
   ValidationError,
 } from './validate_artifacts.mjs';
-import { DEFAULT_RUNS_DIR, resolveRunsDir } from './p2a_run_paths.mjs';
+import { DEFAULT_RUNS_DIR, resolveRunsDir, runFilePath, runSidecarPath } from './p2a_run_paths.mjs';
 import {
   assertNoUninitializedScaffoldArtifactRoots,
   assertNotUninitializedScaffoldGraph,
@@ -30,6 +30,7 @@ import {
 } from './p2a_paths.mjs';
 import { normalizeMonitorVerdictData } from './p2a_monitor_gate.mjs';
 import { commandLine } from './p2a_run_commands.mjs';
+import { atomicWriteJson, withRunStoreLocks } from './p2a_run_store.mjs';
 
 const P2A_PATHS = resolveP2aPaths(import.meta.url);
 const COMMANDS = new Set(['mine', 'list', 'show', 'validate', 'digest', 'review', 'curate', 'draft-patch', 'approve-draft']);
@@ -264,7 +265,7 @@ function resolveProposalDir(args) {
 
 function runPath(runsDir, runId) {
   assertSafeRunId(runId);
-  return path.join(runsDir, `${runId}.json`);
+  return runFilePath(runsDir, runId);
 }
 
 function runIndexPath(runsDir) {
@@ -273,7 +274,7 @@ function runIndexPath(runsDir) {
 
 function orchestrationSidecarPath(runsDir, runId) {
   assertSafeRunId(runId);
-  return path.join(runsDir, `${runId}.orchestration.json`);
+  return runSidecarPath(runsDir, runId, '.orchestration.json');
 }
 
 function proposalPath(proposalsDir, proposalId) {
@@ -1465,7 +1466,7 @@ function planMaintenanceTaskForApproval(artifactRoot, draft, approvalId) {
 
 function writeMaintenanceTaskGraph(graphPath, graph) {
   mkdirSync(path.dirname(graphPath), { recursive: true });
-  writeFileSync(graphPath, `${JSON.stringify(graph, null, 2)}\n`, 'utf8');
+  atomicWriteJson(graphPath, graph);
 }
 
 function buildProposalDraftApproval(draft, draftFilePath, maintenancePlan, approvedBy, approvalNote, approvalId, approvedAt = new Date().toISOString()) {
@@ -1694,24 +1695,31 @@ function runApproveDraft(args) {
   const draft = validateProposalPatchDraftData(loadJson(draftFilePath));
   assertLocalUpstreamTaskAllowed(draft, args);
   const approvalId = buildProposalDraftApprovalId(draft, approvedBy, approvalNote);
-  const maintenancePlan = planMaintenanceTaskForApproval(artifactRoot, draft, approvalId);
-  const approval = buildProposalDraftApproval(draft, draftFilePath, maintenancePlan, approvedBy, approvalNote, approvalId);
   const requestedFilePath = args.output ? path.resolve(args.output) : null;
-  if (requestedFilePath) assertApprovalOutputPath(proposalsDir, requestedFilePath);
-  const filePath = requestedFilePath ?? approvalPath(proposalsDir, approval.approvalId);
-  if (!args.dryRun && !args.overwrite) assertExistingApprovalMatches(filePath, approval);
+  const graphPath = maintenanceTaskGraphPathForArtifactRoot(artifactRoot);
+  const approve = () => {
+    const maintenancePlan = planMaintenanceTaskForApproval(artifactRoot, draft, approvalId);
+    const approval = buildProposalDraftApproval(draft, draftFilePath, maintenancePlan, approvedBy, approvalNote, approvalId);
+    if (requestedFilePath) assertApprovalOutputPath(proposalsDir, requestedFilePath);
+    const filePath = requestedFilePath ?? approvalPath(proposalsDir, approval.approvalId);
+    if (!args.dryRun && !args.overwrite) assertExistingApprovalMatches(filePath, approval);
 
-  const taskGraphAction = args.dryRun
-    ? 'dry-run'
-    : maintenancePlan.shouldWrite
-      ? 'written'
-      : 'unchanged';
-  if (!args.dryRun && maintenancePlan.shouldWrite) {
-    writeMaintenanceTaskGraph(maintenancePlan.graphPath, maintenancePlan.graph);
-  }
-  const writeResult = args.dryRun
-    ? { action: 'dry-run', filePath }
-    : writeApproval(filePath, approval, args.overwrite);
+    const taskGraphAction = args.dryRun
+      ? 'dry-run'
+      : maintenancePlan.shouldWrite
+        ? 'written'
+        : 'unchanged';
+    if (!args.dryRun && maintenancePlan.shouldWrite) {
+      writeMaintenanceTaskGraph(maintenancePlan.graphPath, maintenancePlan.graph);
+    }
+    const writeResult = args.dryRun
+      ? { action: 'dry-run', filePath }
+      : writeApproval(filePath, approval, args.overwrite);
+    return { maintenancePlan, approval, filePath, taskGraphAction, writeResult };
+  };
+  const { maintenancePlan, approval, filePath, taskGraphAction, writeResult } = args.dryRun
+    ? approve()
+    : withRunStoreLocks([path.dirname(graphPath)], approve);
 
   if (args.json) {
     console.log(JSON.stringify({

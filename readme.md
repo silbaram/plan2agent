@@ -302,7 +302,9 @@ Core artifacts:
 - `review.json` - Gate D readiness review.
 - `iterations/<iteration-id>/milestone-reviews/{midpoint,pre_close}.json` - stable cross-task review evidence persisted as Memory documents and portable handoff bundles.
 - `current-spec.json` - active iteration baseline.
-- `runs/<run-id>.json` - execution record and verification evidence.
+- `runs/run-index.json` - global run lookup and latest-run index.
+- `runs/<iteration-id>/<run-id>.json` - iteration-partitioned execution record and verification evidence; legacy flat run files remain readable.
+- Legacy per-iteration run stores are retired with `.run-store-redirect.json` after migration so stale writers cannot recreate split indexes; managed iteration mutations require `--artifacts` rather than `--graph`.
 - `proposals/*.json` - improvement candidates and curation artifacts.
 - `eval/*.json` - grade, analysis, compare, index, and digest artifacts.
 - `memory-*.json` - Memory search, history, digest, and pull preview reports.

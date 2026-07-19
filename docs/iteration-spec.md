@@ -45,7 +45,7 @@
 | agent 저작 task gate | backbone(`context`, `gate-c-draft` 검증, `promote-tasks`), `p2a-task-author` 스킬, 정식 `task-context` schema, provenance sidecar가 구현됐다. 정본 교체는 모든 task가 `todo`이고 run history가 없는 실행 전 구간에서만 명시적 `--replace-existing`으로 허용하며, 실행 시작 뒤에는 task를 다시 `todo`로 열어도 새 feature iteration 또는 maintenance lane을 사용한다. 상세 계약은 §10이다. | richer code-aware task authoring은 후속 실행 레이어에서 다룬다. |
 | archived close | close artifact 존재 여부/hash 기록과 기본 validate-time archive audit을 제공한다. | 기존 pre-audit artifact migration은 필요할 때 `--skip-archive-audit`로 우회한다. |
 | maintenance 반복 | lazy README, `maintenance add` task 생성, `maintenance add --from-draft` 승격, 존재하는 task graph 검증, `context --scope maintenance`, `tasks --maintenance` source/target 표와 prompt next command, handoff 시 별도 `.plan2agent/maintenance/task-graph.json` 복사를 제공한다. | 후보 승인/실행 조작은 CLI와 agent 대화 표면을 기준으로 유지한다. |
-| agent 실행 추적 | `p2a_runs.mjs`가 `runs/run-index.json`과 `runs/<runId>.json`을 관리하고, test/lint/typecheck 실행 결과와 git changed files를 수집한다. | PTY 기반 자동 agent orchestration, PR 생성, 병렬 실행 scheduler는 후속이다. |
+| agent 실행 추적 | `p2a_runs.mjs`가 전역 `runs/run-index.json`과 iteration별 `runs/<iterationId>/<runId>.json`을 관리하고, test/lint/typecheck 실행 결과와 git changed files를 수집한다. run/index 갱신은 project lock, atomic write, 중단 복구 journal을 사용한다. legacy 평면 run과 이전 `iterations/<iterationId>/runs/` index는 source/target lock과 재개 가능한 journal을 거친 전역 migration을 지원한다. `--graph` 실행은 경로와 무관하게 graph provenance를 유지하고 milestone 증거에서 제외한다. | PTY 기반 자동 agent orchestration, PR 생성, 병렬 실행 scheduler는 후속이다. |
 
 ### 0-3. 미구현 / 후속 고도화
 

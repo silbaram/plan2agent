@@ -13,7 +13,7 @@ import {
   validateSkillProposal,
   validateTaskGraph,
 } from './validate_artifacts.mjs';
-import { resolveRunsDir } from './p2a_run_paths.mjs';
+import { resolveRunsDir, runFilePath } from './p2a_run_paths.mjs';
 import {
   assertNoUninitializedScaffoldArtifactRoots,
   assertNotUninitializedScaffoldGraph,
@@ -499,7 +499,7 @@ function readRuns(runsDir) {
   const skippedRuns = [];
   for (const entry of index.runs) {
     const runId = entry.runId;
-    const runPath = path.join(runsDir, `${runId}.json`);
+    const runPath = runFilePath(runsDir, runId, index);
     try {
       if (!fileExists(runPath)) throw new Error(`run file is missing: ${runPath}`);
       const run = validateRunData(loadJson(runPath));

@@ -21,5 +21,6 @@ __pycache__/
 
 # JavaScript dependencies
 node_modules/
+.vite/
 
 artifacts/lightweight-embedded-redis

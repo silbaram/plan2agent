@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /** Manage Plan2Agent task graph status and dependency workflow. */
 
-import { existsSync, lstatSync, readFileSync, realpathSync, readdirSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, readFileSync, realpathSync, readdirSync } from 'node:fs';
 import { createInterface } from 'node:readline/promises';
 import path from 'node:path';
 import process from 'node:process';
@@ -9,7 +9,14 @@ import { Readable } from 'node:stream';
 import { validateRunData, validateRunIndexData, validateTaskGraphData, ValidationError } from './validate_artifacts.mjs';
 import { normalizeMonitorVerdictData, readMonitorGateSidecar } from './p2a_monitor_gate.mjs';
 import { resolveIterationState } from './p2a_iteration_state.mjs';
-import { canonicalTaskGraphRef, resolveRunsDir } from './p2a_run_paths.mjs';
+import {
+  assertUnmanagedGraphMutation,
+  isSupportedRunRef,
+  resolveRunsDir,
+  runFilePath,
+  taskGraphContextForGraph,
+  taskGraphRefMatchesGraph,
+} from './p2a_run_paths.mjs';
 import {
   P2A_ARTIFACTS_DIR,
   assertNoUninitializedScaffoldArtifactRoots,
@@ -18,6 +25,7 @@ import {
   resolveP2aPaths,
 } from './p2a_paths.mjs';
 import { commandLine } from './p2a_run_commands.mjs';
+import { atomicWriteJson, withRunStoreLocks } from './p2a_run_store.mjs';
 
 const P2A_PATHS = resolveP2aPaths(import.meta.url);
 const ROOT = P2A_PATHS.projectRoot;
@@ -52,7 +60,7 @@ function usage() {
     '  todo <task-id>       Mark a task todo.',
     '',
     'Options:',
-    '  --graph <path>       Task graph JSON path. Defaults to .plan2agent/project.config.json taskGraph when available.',
+    '  --graph <path>       Legacy task graph path. Managed iteration graph mutations require --artifacts.',
     '  --artifacts <dir>    Iterative artifact root; uses the active iteration task graph.',
     '  --spec <path>        Spec JSON path for prompt context. Only supported with --graph.',
     '  --maintenance        With --artifacts, operate on the maintenance task graph.',
@@ -117,6 +125,9 @@ function parseArgs(argv) {
 
 function resolveTaskInputs(args) {
   if (!args.artifactsPath) {
+    if (VALID_TRANSITIONS.has(args.command)) {
+      assertUnmanagedGraphMutation(args.graphPath, `p2a_tasks ${args.command}`);
+    }
     warnGraphMode();
     return args;
   }
@@ -255,13 +266,19 @@ function expectedRunContext(args, graph) {
       projectId: args.iterationState.projectId,
       iterationId: args.maintenance ? 'maintenance' : args.iterationState.activeIteration,
       taskGraphRef: artifactRelativePath(args.iterationState.artifactRoot, args.graphPath),
+      graphPath: path.resolve(args.graphPath),
+      artifactRoot: args.iterationState.artifactRoot,
+      sourceLayout: args.maintenance ? 'maintenance' : 'iteration',
     };
   }
+  const graphContext = taskGraphContextForGraph(args.graphPath, graph.version ?? null);
   return {
     projectId: graph.projectId,
-    iterationId: graph.version ?? null,
-    taskGraphRef: canonicalTaskGraphRef(args.graphPath),
-    graphPath: path.resolve(args.graphPath),
+    iterationId: graphContext.iterationId,
+    taskGraphRef: graphContext.taskGraphRef,
+    graphPath: graphContext.graphPath,
+    artifactRoot: graphContext.artifactRoot,
+    sourceLayout: graphContext.sourceLayout,
     graphMode: true,
   };
 }
@@ -270,29 +287,17 @@ function normalizeStoredRef(value) {
   return typeof value === 'string' ? value.split(/[\\/]+/).join('/') : value;
 }
 
-function canonicalLegacyRef(value, basePath) {
-  if (typeof value !== 'string' || !value.trim()) return null;
-  const resolved = path.isAbsolute(value) ? value : path.resolve(basePath, value);
-  return canonicalTaskGraphRef(resolved);
-}
-
 function taskGraphRefMatches(actualRef, expectedContext) {
   if (!expectedContext) return true;
   if (normalizeStoredRef(actualRef) === normalizeStoredRef(expectedContext.taskGraphRef)) return true;
-  if (!expectedContext.graphMode || typeof actualRef !== 'string') return false;
-  const bases = [
-    ROOT,
-    process.cwd(),
-    path.dirname(expectedContext.graphPath),
-    path.dirname(path.dirname(expectedContext.graphPath)),
-  ];
-  return bases.some((basePath) => canonicalLegacyRef(actualRef, basePath) === expectedContext.taskGraphRef);
+  return taskGraphRefMatchesGraph(actualRef, expectedContext.graphPath, expectedContext.artifactRoot);
 }
 
 function runMatchesExpectedContext(entry, expectedContext) {
   if (!expectedContext) return true;
   return (!Object.hasOwn(entry, 'projectId') || entry.projectId === expectedContext.projectId)
     && entry.iterationId === expectedContext.iterationId
+    && (!Object.hasOwn(entry, 'sourceLayout') || entry.sourceLayout === expectedContext.sourceLayout)
     && taskGraphRefMatches(entry.taskGraphRef, expectedContext);
 }
 
@@ -413,8 +418,7 @@ function assertRunMatchesIndexEntry(taskId, runId, run, indexEntry, strict) {
   for (const field of ['runId', 'taskId', 'iterationId', 'status', 'agentTool', 'workspaceRef', 'taskGraphRef', 'startedAt', 'finishedAt']) {
     if (JSON.stringify(run[field]) !== JSON.stringify(indexEntry[field])) mismatches.push(`${field}:index=${indexEntry[field] ?? 'null'} file=${run[field] ?? 'null'}`);
   }
-  const expectedRunRef = `${run.runId}.json`;
-  if (indexEntry.runRef !== expectedRunRef) mismatches.push(`runRef:index=${indexEntry.runRef} file=${expectedRunRef}`);
+  if (!isSupportedRunRef(indexEntry)) mismatches.push(`runRef:index=${indexEntry.runRef} is unsupported`);
   if (mismatches.length) {
     latestRunProblem(`latest run evidence mismatch for ${taskId} (${runId}): ${mismatches.join(', ')}`, strict);
   }
@@ -497,7 +501,7 @@ function latestRunForTask(args, taskId, options = {}) {
   for (const [candidateIndex, candidateRef] of candidateRefs.entries()) {
     const { runId, runOrder, indexEntry } = candidateRef;
     const isLatestCandidate = candidateIndex === 0;
-    const runPath = path.join(runsDir, `${runId}.json`);
+    const runPath = runFilePath(runsDir, runId, index);
     if (!existsSync(runPath) || !lstatSync(runPath).isFile()) {
       const problem = runReadProblem(`latest run ${runId} for ${taskId} is missing at ${formatDisplayPath(runPath)}`, isLatestCandidate, strict);
       if (problem === null) continue;
@@ -703,7 +707,7 @@ function clearBlockReasonIfUnblocked(task, command, args = {}) {
 
 function saveValidatedGraph(graphPath, graph) {
   validateTaskGraphData(graph);
-  writeFileSync(graphPath, `${JSON.stringify(graph, null, 2)}\n`, 'utf8');
+  atomicWriteJson(graphPath, graph);
 }
 
 function isCancel(input) {
@@ -897,10 +901,25 @@ export function main(argv = process.argv.slice(2)) {
     if (args.extra?.length) throw new Error(`unexpected extra argument(s): ${args.extra.join(', ')}`);
     args = resolveTaskInputs(args);
 
+    if (VALID_TRANSITIONS.has(args.command)) {
+      const task = withRunStoreLocks([path.dirname(args.graphPath)], () => {
+        const graph = loadGraph(args.graphPath);
+        validateTaskGraphData(graph);
+        const currentTask = requireTask(graph, args.taskId);
+        transitionTask(graph, currentTask, args.command, args);
+        clearBlockReasonIfUnblocked(currentTask, args.command, args);
+        saveValidatedGraph(args.graphPath, graph);
+        return currentTask;
+      });
+      console.log(`${task.id} status is now ${task.status}`);
+      if (args.command === 'block' && task.blockReason) console.log(`- blockReason: ${task.blockReason}`);
+      if (args.command === 'block' && task.blockNote) console.log(`- blockNote: ${task.blockNote}`);
+      return 0;
+    }
+
     const graph = loadGraph(args.graphPath);
     validateTaskGraphData(graph);
     const tasksById = taskMap(graph);
-
     if (args.command === 'list') {
       if (args.maintenance) printMaintenanceTaskTable(graph.tasks, tasksById);
       else printTaskTable(graph.tasks, tasksById);
@@ -912,14 +931,6 @@ export function main(argv = process.argv.slice(2)) {
       console.log(JSON.stringify(requireTask(graph, args.taskId), null, 2));
     } else if (args.command === 'prompt') {
       printPrompt(requireTask(graph, args.taskId), graph, args.graphPath, args.specPath, { maintenance: args.maintenance, args });
-    } else if (VALID_TRANSITIONS.has(args.command)) {
-      const task = requireTask(graph, args.taskId);
-      transitionTask(graph, task, args.command, args);
-      clearBlockReasonIfUnblocked(task, args.command, args);
-      saveValidatedGraph(args.graphPath, graph);
-      console.log(`${task.id} status is now ${task.status}`);
-      if (args.command === 'block' && task.blockReason) console.log(`- blockReason: ${task.blockReason}`);
-      if (args.command === 'block' && task.blockNote) console.log(`- blockNote: ${task.blockNote}`);
     } else {
       throw new Error(`unknown command: ${args.command}`);
     }

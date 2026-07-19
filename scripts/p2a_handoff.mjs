@@ -32,6 +32,7 @@ import {
 import { resolveIterationState } from './p2a_iteration_state.mjs';
 import { renderIterationIndexMarkdown } from './p2a_iteration.mjs';
 import { P2A_ARTIFACTS_DIR, P2A_SCHEMAS_DIR, P2A_SCRIPTS_DIR, resolveP2aPaths } from './p2a_paths.mjs';
+import { artifactRunRef, legacyRunRef } from './p2a_run_paths.mjs';
 import {
   buildProjectConfig,
   defaultCapabilityConfig,
@@ -485,8 +486,10 @@ function pushMilestoneReviewBundleIfExists(plan, artifactsRoot, targetRoot, proj
       pushBundleFile(run.sourcePath, run.relativePath, evidenceFiles);
     }
     for (const evidence of milestoneReview.source.completed_task_evidence) {
-      const expectedRunRef = normalizePath(path.join('runs', `${evidence.run_id}.json`));
-      if (normalizePath(evidence.run_ref) !== expectedRunRef) {
+      const indexedRun = runIndexData.runs.find((run) => run.runId === evidence.run_id);
+      const expectedRunRef = indexedRun ? artifactRunRef(indexedRun.runRef) : null;
+      const legacyEvidenceRef = normalizePath(path.join('runs', legacyRunRef(evidence.run_id)));
+      if (!indexedRun || ![expectedRunRef, legacyEvidenceRef].includes(normalizePath(evidence.run_ref))) {
         throw new ValidationError(
           `${checkpoint} ${evidence.task_id}.run_ref must be ${JSON.stringify(expectedRunRef)} for a portable handoff bundle`,
         );
@@ -2117,7 +2120,7 @@ function enhanceCapabilityNextActions(capability, targetRoot, config, manifest) 
     const orchestrationAgentTool = resolveOrchestrationAgentTool(config, manifest);
     return [
       `${source.hasArtifact ? 'Start supervised run with monitor gate' : 'After a ready task exists, start supervised run with monitor gate'}: node .plan2agent/scripts/p2a.mjs execute start --artifacts ${source.artifactRef} --task <task-id> --agent-tool ${orchestrationAgentTool} --require-monitor`,
-      'Write monitor verdict before finish: runs/<run-id>.monitor-verdict.json',
+      'Write the monitor verdict beside the indexed run before finish: runs/<run-index entry runRef without .json>.monitor-verdict.json',
     ];
   }
   return [];

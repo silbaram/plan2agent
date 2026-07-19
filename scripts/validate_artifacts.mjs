@@ -8,6 +8,15 @@ import process from 'node:process';
 import { pathToFileURL } from 'node:url';
 import { ROLE_PROFILE_TO_ROLE } from './p2a_constants.mjs';
 import { P2A_DIR, resolveP2aPaths } from './p2a_paths.mjs';
+import {
+  artifactRunRef,
+  canonicalRunRef,
+  isRunRecordFile,
+  isSupportedRunRef,
+  legacyRunRef,
+  normalizeIndexedRunRef,
+  taskGraphRefMatchesGraph,
+} from './p2a_run_paths.mjs';
 
 const P2A_PATHS = resolveP2aPaths(import.meta.url);
 const SCHEMA_PATHS = {
@@ -766,6 +775,13 @@ export function validateRunIndexData(data) {
     throw new ValidationError('run-index tasks[].taskId values must be unique');
   }
   const runIdSet = new Set(runIds);
+  for (const run of data.runs) {
+    if (!isSupportedRunRef(run)) {
+      throw new ValidationError(
+        `run-index ${run.runId}.runRef must be ${legacyRunRef(run.runId)} or ${canonicalRunRef(run)}`,
+      );
+    }
+  }
   for (const task of data.tasks) {
     const missing = task.runIds.filter((runId) => !runIdSet.has(runId));
     if (missing.length) throw new ValidationError(`${task.taskId} references unknown run ids: ${JSON.stringify(missing)}`);
@@ -1056,22 +1072,31 @@ const MILESTONE_IMMUTABLE_RUN_FIELDS = [
   'finishedAt',
 ];
 
-function latestSuccessfulRunEntry(runIndex, taskId, data, generatedAt) {
+function latestSuccessfulRunEntry(runIndex, taskId, data, generatedAt, graphPath, artifactRoot) {
   const candidates = runIndex.runs
     .map((entry, index) => ({ entry, index }))
     .filter(({ entry }) => entry.taskId === taskId
       && entry.status === 'finished'
       && entry.iterationId === data.iteration_id
-      && normalizedArtifactRef(entry.taskGraphRef, `${entry.runId}.taskGraphRef`) === data.source.task_graph_ref
+      && taskGraphRefMatchesGraph(entry.taskGraphRef, graphPath, artifactRoot)
       && parsedTimestamp(entry.finishedAt, `${entry.runId}.finishedAt`) <= generatedAt)
     .sort((left, right) => {
       const timeDifference = Date.parse(right.entry.finishedAt) - Date.parse(left.entry.finishedAt);
       return timeDifference || right.index - left.index;
     });
-  return candidates[0]?.entry ?? null;
+  for (const candidate of candidates) {
+    const runPath = resolveMilestoneSourceFile(
+      artifactRoot,
+      artifactRunRef(candidate.entry.runRef),
+      `${candidate.entry.runId}.runRef`,
+    );
+    const run = validateRun(runPath);
+    if (run.sourceLayout === 'iteration') return { ...candidate, run, runPath };
+  }
+  return null;
 }
 
-function validateMilestoneRunEvidence(data, artifactRoot, kind) {
+function validateMilestoneRunEvidence(data, artifactRoot, kind, graphPath) {
   const runIndexPath = resolveMilestoneSourceFile(artifactRoot, 'runs/run-index.json', 'milestone review run-index');
   const runIndex = validateRunIndex(runIndexPath);
   if (runIndex.projectId !== data.project_id) {
@@ -1080,19 +1105,21 @@ function validateMilestoneRunEvidence(data, artifactRoot, kind) {
   const generatedAt = parsedTimestamp(data.generated_at, 'milestone review generated_at');
 
   for (const evidence of data.source.completed_task_evidence) {
-    const expectedRunRef = `runs/${evidence.run_id}.json`;
-    if (evidence.run_ref !== expectedRunRef) {
-      throw new ValidationError(`${evidence.task_id}.run_ref must be ${expectedRunRef}`);
-    }
-    const latest = latestSuccessfulRunEntry(runIndex, evidence.task_id, data, generatedAt);
+    const latest = latestSuccessfulRunEntry(runIndex, evidence.task_id, data, generatedAt, graphPath, artifactRoot);
     if (!latest) {
       throw new ValidationError(`${evidence.task_id} has no successful finished run in the milestone task-graph context at generated_at`);
     }
-    if (latest.runId !== evidence.run_id) {
-      throw new ValidationError(`${evidence.task_id}.run_id must reference latest successful finished run ${latest.runId}`);
+    if (latest.entry.runId !== evidence.run_id) {
+      throw new ValidationError(`${evidence.task_id}.run_id must reference latest successful finished run ${latest.entry.runId}`);
     }
-    const runPath = resolveMilestoneSourceFile(artifactRoot, evidence.run_ref, `${evidence.task_id}.run_ref`);
-    const run = validateRun(runPath);
+    const expectedRunRef = artifactRunRef(latest.entry.runRef);
+    const legacyEvidenceRef = `runs/${legacyRunRef(evidence.run_id)}`;
+    if (![expectedRunRef, legacyEvidenceRef].includes(evidence.run_ref)
+      || (kind === 'draft' && evidence.run_ref !== expectedRunRef)) {
+      throw new ValidationError(`${evidence.task_id}.run_ref must be ${expectedRunRef}`);
+    }
+    const runPath = latest.runPath;
+    const run = latest.run;
     const runSnapshot = evidence.run_snapshot;
     const expectedFields = {
       projectId: data.project_id,
@@ -1169,7 +1196,7 @@ function validateMilestoneSourceArtifacts(data, artifactRoot, kind) {
     throw new ValidationError('canonical milestone task graph structure differs from its checkpoint snapshot beyond mutable task state');
   }
 
-  validateMilestoneRunEvidence(data, artifactRoot, kind);
+  validateMilestoneRunEvidence(data, artifactRoot, kind, graphPath);
 }
 
 export function validateMilestoneReview(filePath, options = {}) {
@@ -1421,12 +1448,10 @@ export function validateRunsDir(runsDir) {
   assertFile(indexPath, 'run-index.json');
   const index = validateRunIndex(indexPath);
   for (const run of index.runs) {
-    const runPath = path.join(runsDir, `${run.runId}.json`);
+    const normalizedRunRef = normalizeIndexedRunRef(run.runRef, run.runId);
+    const runPath = path.join(runsDir, normalizedRunRef);
     assertFile(runPath, run.runRef);
     const runData = validateRun(runPath);
-    if (run.runRef !== `${run.runId}.json`) {
-      throw new ValidationError(`run-index ${run.runId}.runRef must be ${run.runId}.json`);
-    }
     for (const field of ['runId', 'taskId', 'iterationId', 'status', 'agentTool', 'workspaceRef', 'taskGraphRef', 'startedAt', 'finishedAt']) {
       if (JSON.stringify(run[field]) !== JSON.stringify(runData[field])) {
         throw new ValidationError(`run-index ${run.runId}.${field} does not match run file`);
@@ -1436,7 +1461,7 @@ export function validateRunsDir(runsDir) {
       throw new ValidationError(`run ${run.runId} projectId does not match run-index projectId`);
     }
   }
-  const indexedRunFiles = new Set(index.runs.map((run) => `${run.runId}.json`));
+  const indexedRunFiles = new Set(index.runs.map((run) => normalizeIndexedRunRef(run.runRef, run.runId)));
   const allowedSidecarSuffixes = [
     '.orchestration.json',
     '.orchestration-runtime.json',
@@ -1444,11 +1469,23 @@ export function validateRunsDir(runsDir) {
     '.monitor-verdict.json',
     '.style-verdict.json',
   ];
-  const extraRunFiles = readdirSync(runsDir)
-    .filter((entry) => entry.endsWith('.json')
-      && entry !== 'run-index.json'
-      && !allowedSidecarSuffixes.some((suffix) => entry.endsWith(suffix))
-      && !indexedRunFiles.has(entry));
+  const candidateRunFiles = [];
+  for (const entry of readdirSync(runsDir, { withFileTypes: true })) {
+    if (entry.isFile()) {
+      candidateRunFiles.push(entry.name);
+      continue;
+    }
+    if (!entry.isDirectory() || entry.name.startsWith('.')) continue;
+    for (const child of readdirSync(path.join(runsDir, entry.name), { withFileTypes: true })) {
+      if (child.isFile()) candidateRunFiles.push(`${entry.name}/${child.name}`);
+    }
+  }
+  const extraRunFiles = candidateRunFiles
+    .filter((entry) => {
+      if (!entry.endsWith('.json') || entry === 'run-index.json' || indexedRunFiles.has(entry)) return false;
+      if (!allowedSidecarSuffixes.some((suffix) => entry.endsWith(suffix))) return true;
+      return isRunRecordFile(path.join(runsDir, entry));
+    });
   if (extraRunFiles.length) {
     throw new ValidationError(`runs directory contains unindexed run file(s): ${extraRunFiles.join(', ')}`);
   }

@@ -40,6 +40,7 @@ import {
 } from './p2a_iteration_state.mjs';
 import { loadRunsForArtifactRoot } from './p2a_runs.mjs';
 import { resolveP2aPaths } from './p2a_paths.mjs';
+import { atomicWriteJson, withRunStoreLocks } from './p2a_run_store.mjs';
 import {
   buildFeatureRadarEvidence,
   buildFeatureRadarReferenceCandidates,
@@ -3079,10 +3080,7 @@ function loadMaintenanceDraft(filePath) {
   return { draftPath, draft };
 }
 
-function addMaintenanceTasksFromDraft(args) {
-  const state = resolveIterationState(args.artifacts, { requireReady: false });
-  const { draftPath, draft } = loadMaintenanceDraft(args.fromDraft);
-  const graphPath = maintenanceTaskGraphPath(state.artifactRoot);
+function applyMaintenanceTasksFromDraft(args, state, draftPath, draft, graphPath) {
   const graph = existsSync(graphPath)
     ? loadJson(graphPath)
     : initialMaintenanceTaskGraph(state.projectId);
@@ -3155,50 +3153,69 @@ function addMaintenanceTasksFromDraft(args) {
   }
   if (plannedTasks.length) {
     mkdirSync(path.dirname(graphPath), { recursive: true });
-    writeJson(graphPath, nextGraph);
+    atomicWriteJson(graphPath, nextGraph);
     writeIterationStatus(state.artifactRoot, state.currentSpec);
   }
   console.log(`- tasks total: ${nextGraph.tasks.length}`);
   return 0;
 }
 
+function addMaintenanceTasksFromDraft(args) {
+  const initialState = resolveIterationState(args.artifacts, { requireReady: false });
+  const { draftPath, draft } = loadMaintenanceDraft(args.fromDraft);
+  const graphPath = maintenanceTaskGraphPath(initialState.artifactRoot);
+  const apply = () => {
+    const state = resolveIterationState(args.artifacts, { requireReady: false });
+    return applyMaintenanceTasksFromDraft(args, state, draftPath, draft, graphPath);
+  };
+  return args.dryRun
+    ? apply()
+    : withRunStoreLocks([path.dirname(graphPath)], apply);
+}
+
 function addMaintenanceTask(args) {
   if (args.fromDraft) return addMaintenanceTasksFromDraft(args);
 
-  const state = resolveIterationState(args.artifacts, { requireReady: false });
-  const graphPath = maintenanceTaskGraphPath(state.artifactRoot);
-  const graph = existsSync(graphPath)
-    ? loadJson(graphPath)
-    : initialMaintenanceTaskGraph(state.projectId);
-  const task = {
-    id: nextMaintenanceTaskId(graph.tasks ?? []),
-    title: args.title,
-    description: args.description ?? args.title,
-    status: 'todo',
-    dependencies: args.dependencies,
-    acceptanceCriteria: args.acceptanceCriteria,
-    targetArea: args.area,
-    suggestedAgentPrompt: args.prompt ?? suggestedMaintenancePrompt(args.title, state.projectId),
-    sourceSpecRefs: args.sourceSpecRefs.length ? args.sourceSpecRefs : ['maintenance'],
-  };
+  const initialState = resolveIterationState(args.artifacts, { requireReady: false });
+  const graphPath = maintenanceTaskGraphPath(initialState.artifactRoot);
+  const apply = () => {
+    const state = resolveIterationState(args.artifacts, { requireReady: false });
+    const graph = existsSync(graphPath)
+      ? loadJson(graphPath)
+      : initialMaintenanceTaskGraph(state.projectId);
+    const task = {
+      id: nextMaintenanceTaskId(graph.tasks ?? []),
+      title: args.title,
+      description: args.description ?? args.title,
+      status: 'todo',
+      dependencies: args.dependencies,
+      acceptanceCriteria: args.acceptanceCriteria,
+      targetArea: args.area,
+      suggestedAgentPrompt: args.prompt ?? suggestedMaintenancePrompt(args.title, state.projectId),
+      sourceSpecRefs: args.sourceSpecRefs.length ? args.sourceSpecRefs : ['maintenance'],
+    };
 
-  graph.tasks.push(task);
-  validateTaskGraphData(graph);
+    graph.tasks.push(task);
+    validateTaskGraphData(graph);
 
-  if (args.dryRun) {
-    console.log('Plan2Agent maintenance task dry run:');
+    if (args.dryRun) {
+      console.log('Plan2Agent maintenance task dry run:');
+      console.log(`- graph: ${toRelativeFromRoot(graphPath)}`);
+      console.log(`- task: ${JSON.stringify(task, null, 2)}`);
+      return 0;
+    }
+
+    mkdirSync(path.dirname(graphPath), { recursive: true });
+    atomicWriteJson(graphPath, graph);
+    writeIterationStatus(state.artifactRoot, state.currentSpec);
+    console.log(`Plan2Agent maintenance task added: ${task.id}`);
     console.log(`- graph: ${toRelativeFromRoot(graphPath)}`);
-    console.log(`- task: ${JSON.stringify(task, null, 2)}`);
+    console.log(`- tasks: ${graph.tasks.length}`);
     return 0;
-  }
-
-  mkdirSync(path.dirname(graphPath), { recursive: true });
-  writeJson(graphPath, graph);
-  writeIterationStatus(state.artifactRoot, state.currentSpec);
-  console.log(`Plan2Agent maintenance task added: ${task.id}`);
-  console.log(`- graph: ${toRelativeFromRoot(graphPath)}`);
-  console.log(`- tasks: ${graph.tasks.length}`);
-  return 0;
+  };
+  return args.dryRun
+    ? apply()
+    : withRunStoreLocks([path.dirname(graphPath)], apply);
 }
 
 function maintenance(args) {
@@ -3424,7 +3441,7 @@ function assertNoTaskGraphExecutionHistory(state, operation) {
   );
 }
 
-function promoteTasks(args) {
+function promoteTasksLocked(args) {
   const state = resolveIterationState(args.artifacts, { requireReady: false });
   const draftPath = gateCTaskGraphDraftPath(state);
   if (!existsSync(draftPath)) throw new ValidationError(`gate-c draft not found; author one at ${draftPath} first`);
@@ -3465,7 +3482,7 @@ function promoteTasks(args) {
     ...draft,
     version: canonicalDraftVersion(draft.version),
   };
-  writeJson(state.taskGraphPath, promoted);
+  atomicWriteJson(state.taskGraphPath, promoted);
   renameSync(draftPath, `${draftPath}.promoted`);
   writeIterationStatus(state.artifactRoot, nextCurrentSpec);
 
@@ -3474,6 +3491,13 @@ function promoteTasks(args) {
   console.log('- promoted from: task-graph.draft.json');
   console.log(`- provenance: ${toRelativeFromRoot(metaPath)}`);
   return 0;
+}
+
+function promoteTasks(args) {
+  const state = resolveIterationState(args.artifacts, { requireReady: false });
+  const lockDirs = [path.dirname(state.taskGraphPath)];
+  if (args.replaceExisting) lockDirs.push(path.join(state.artifactRoot, 'runs'));
+  return withRunStoreLocks(lockDirs, () => promoteTasksLocked(args));
 }
 
 const MILESTONE_DRAFT_TOKEN_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;

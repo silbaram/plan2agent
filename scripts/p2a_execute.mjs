@@ -7,10 +7,18 @@ import path from 'node:path';
 import process from 'node:process';
 import { pathToFileURL } from 'node:url';
 import { FAILURE_CLASSES, FAILURE_RETRYABLE, ISOLATION_MODES } from './p2a_constants.mjs';
-import { loadJson, validateProposalDraftApprovalData, validateRunData, validateTaskGraphData, ValidationError } from './validate_artifacts.mjs';
-import { normalizeMonitorVerdictData, readMonitorGateSidecar, writeMonitorGateSidecar } from './p2a_monitor_gate.mjs';
+import { loadJson, validateProposalDraftApprovalData, validateRunData, validateRunIndexData, validateTaskGraphData, ValidationError } from './validate_artifacts.mjs';
+import { monitorGateSidecarPath, normalizeMonitorVerdictData, readMonitorGateSidecar } from './p2a_monitor_gate.mjs';
 import { resolveIterationState } from './p2a_iteration_state.mjs';
-import { canonicalTaskGraphRef, resolveRunsDir } from './p2a_run_paths.mjs';
+import {
+  assertUnmanagedGraphMutation,
+  assertSafeRunId,
+  assertStartableRunId,
+  canonicalTaskGraphRef,
+  resolveRunsDir,
+  runFilePath,
+  taskGraphRefMatchesGraph,
+} from './p2a_run_paths.mjs';
 import {
   assertNoUninitializedScaffoldArtifactRoots,
   assertNotUninitializedScaffoldGraph,
@@ -18,6 +26,7 @@ import {
   resolveP2aPaths,
   singleArtifactProjectRoot,
 } from './p2a_paths.mjs';
+import { atomicWriteJson, runWriteTransactionPath, withRunStoreLocks } from './p2a_run_store.mjs';
 import { commandLine as sharedCommandLine, printRunCommandFooter } from './p2a_run_commands.mjs';
 import { allocateRunId, previewRunId, releaseRunIdReservation } from './p2a_project_config.mjs';
 
@@ -47,7 +56,7 @@ function usage() {
     '',
     'Source options:',
     '  --artifacts <dir>    Iterative artifact root; uses the active iteration task graph.',
-    '  --graph <path>       Task graph JSON path.',
+    '  --graph <path>       Legacy task graph path. Managed iteration start/finish require --artifacts.',
     '  --spec <path>        Spec JSON path for prompt context. Only supported with --graph.',
     '  --maintenance        With --artifacts, use the maintenance task graph.',
     '',
@@ -64,7 +73,7 @@ function usage() {
     '  --worktree <path>    Worktree to record/create.',
     '  --base-ref <ref>     Git base ref for --create-isolation. Default: HEAD.',
     '  --create-isolation   Ask p2a_runs.mjs to create the branch/worktree before run start.',
-    '  --require-monitor       Require runs/<run-id>.monitor-verdict.json before a finished run can close.',
+    '  --require-monitor       Require the run\'s co-located .monitor-verdict.json before a finished run can close.',
     '',
     'Finish/verification options:',
     '  --test, --lint, --typecheck',
@@ -226,6 +235,9 @@ function parseArgs(argv) {
   if (args.spec && args.artifacts) throw new Error('--spec is only supported with --graph; --artifacts uses the active iteration spec');
   if (args.maintenance && !args.artifacts) throw new Error('--maintenance is only supported with --artifacts');
   if (args.graph) assertNotUninitializedScaffoldGraph(args.graph);
+  if (args.graph && ['start', 'finish'].includes(args.command)) {
+    assertUnmanagedGraphMutation(args.graph, `p2a_execute ${args.command}`);
+  }
   if (['finish', 'resume'].includes(args.command) && !args.runId) throw new Error(`--run-id is required for ${args.command}`);
   if (args.runReservationToken && (args.command !== 'start' || !args.runId)) {
     throw new Error('--run-reservation-token requires start with --run-id');
@@ -401,6 +413,51 @@ function selectReadyTask(source, taskId = null) {
   return ready[0];
 }
 
+function currentSourceGraph(source) {
+  const graph = loadJson(source.graphPath);
+  validateTaskGraphData(graph);
+  return { ...source, graph };
+}
+
+function claimTaskForRunStart(source, task) {
+  task.status = 'in_progress';
+  delete task.blockReason;
+  delete task.blockNote;
+  atomicWriteJson(source.graphPath, source.graph);
+}
+
+function hasStartedRunForTask(source, taskId) {
+  // A child may have durably journaled a started run before its index entry was
+  // published. Fail closed so a later forward recovery cannot create a started
+  // run for a task that this parent already rolled back to todo.
+  if (existsSync(runWriteTransactionPath(source.runsDir))) return true;
+  const indexFile = runsIndexPath(source.runsDir);
+  if (!existsSync(indexFile)) return false;
+  try {
+    const index = validateRunIndexData(loadJson(indexFile));
+    return index.runs.some((entry) => (
+      entry.taskId === taskId
+      && entry.status === 'started'
+      && entry.iterationId === source.iterationId
+      && taskGraphRefMatchesGraph(entry.taskGraphRef, source.graphPath, source.artifactRoot)
+    ));
+  } catch {
+    // Preserve an in-progress task if run evidence cannot be inspected safely.
+    return true;
+  }
+}
+
+function rollbackTaskRunStartClaim(source, taskId) {
+  const current = currentSourceGraph(source);
+  const task = requireTask(current, taskId);
+  if (task.status !== 'in_progress' || hasStartedRunForTask(current, taskId)) return false;
+  task.status = 'todo';
+  delete task.blockReason;
+  delete task.blockNote;
+  atomicWriteJson(current.graphPath, current.graph);
+  return true;
+}
+
 function requireTask(source, taskId) {
   const task = taskMap(source.graph).get(taskId);
   if (!task) throw new Error(`unknown task id: ${taskId}`);
@@ -466,12 +523,6 @@ function uniqueStrings(values) {
   return output;
 }
 
-function assertSafeRunId(runId) {
-  if (!/^run-[A-Za-z0-9._-]+$/.test(runId ?? '')) {
-    throw new Error(`run id must match run-[A-Za-z0-9._-]+, got ${JSON.stringify(runId)}`);
-  }
-}
-
 function fillPattern(pattern, values) {
   return pattern
     .replaceAll('<taskId>', values.taskId)
@@ -501,7 +552,7 @@ function resolveStartIdentity(args, source, task, options = {}) {
   assertDirectory(workspacePath, '--workspace');
   const config = loadProjectConfig(source, workspacePath);
   const previewId = args.runId ?? previewRunId(source.runsDir, task.id, config.runTracking);
-  assertSafeRunId(previewId);
+  assertStartableRunId(previewId);
   const previewDefaults = resolveStartDefaults(args, source, task, previewId, { config, workspacePath });
   if (args.runId || !options.reserve) {
     return {
@@ -512,7 +563,7 @@ function resolveStartIdentity(args, source, task, options = {}) {
     };
   }
   const allocation = allocateRunId(source.runsDir, task.id, config.runTracking);
-  assertSafeRunId(allocation.runId);
+  assertStartableRunId(allocation.runId);
   try {
     return {
       ...allocation,
@@ -551,10 +602,6 @@ function promptArgs(source, taskId) {
   if (!source.artifactRoot && source.specPath) args.push('--spec', source.specPath);
   args.push(taskId);
   return args;
-}
-
-function startTaskArgs(source, taskId) {
-  return ['start', ...source.sourceArgs, taskId];
 }
 
 function finishTaskArgs(source, taskId, status) {
@@ -618,6 +665,7 @@ function startRunArgs(args, task, runId, defaults, approval = null) {
   if (defaults.worktree) runArgs.push('--worktree', defaults.worktree);
   if (args.baseRef) runArgs.push('--base-ref', args.baseRef);
   if (args.createIsolation) runArgs.push('--create-isolation');
+  if (args.requireMonitor) runArgs.push('--require-monitor');
   for (const changedFile of args.changedFiles) runArgs.push('--changed-file', changedFile);
   for (const note of uniqueStrings([...approvalRunNotes(approval), ...args.notes])) runArgs.push('--note', note);
   return runArgs;
@@ -658,7 +706,7 @@ function runsIndexPath(runsDir) {
 
 function runPath(runsDir, runId) {
   assertSafeRunId(runId);
-  return path.join(runsDir, `${runId}.json`);
+  return runFilePath(runsDir, runId);
 }
 
 function readOrchestrationSidecar(runsDir, runId) {
@@ -714,11 +762,40 @@ function readRun(runsDir, runId) {
   return run;
 }
 
-function latestRunIdForTask(runsDir, taskId) {
+function runMatchesSourceContext(run, source) {
+  return run.projectId === source.projectId
+    && run.iterationId === source.iterationId
+    && run.sourceLayout === source.sourceLayout
+    && taskGraphRefMatchesGraph(run.taskGraphRef, source.graphPath, source.artifactRoot);
+}
+
+function assertRunMatchesSourceContext(run, source) {
+  if (runMatchesSourceContext(run, source)) return;
+  throw new Error(
+    `run ${run.runId} is outside the current execution context: expected ${source.sourceLayout} `
+    + `iteration ${source.iterationId ?? 'null'} for ${source.taskGraphRef}`,
+  );
+}
+
+function latestRunIdForTask(runsDir, taskId, source) {
   const indexFile = runsIndexPath(runsDir);
   if (!existsSync(indexFile)) return null;
-  const index = loadJson(indexFile);
-  return index.tasks?.find((task) => task.taskId === taskId)?.latestRunId ?? null;
+  const index = validateRunIndexData(loadJson(indexFile));
+  if (index.projectId !== source.projectId) {
+    throw new Error(`run-index projectId ${index.projectId} does not match execution project ${source.projectId}`);
+  }
+  for (let indexPosition = index.runs.length - 1; indexPosition >= 0; indexPosition -= 1) {
+    const entry = index.runs[indexPosition];
+    if (
+      entry.taskId === taskId
+      && entry.iterationId === source.iterationId
+      && taskGraphRefMatchesGraph(entry.taskGraphRef, source.graphPath, source.artifactRoot)
+    ) {
+      const run = readRun(runsDir, entry.runId);
+      if (run.taskId === taskId && runMatchesSourceContext(run, source)) return entry.runId;
+    }
+  }
+  return null;
 }
 
 function printExecutionPlan(args, source, task, runId = null, defaults = null, approvalLink = null) {
@@ -853,49 +930,55 @@ function runPlan(args) {
 }
 
 function runStart(args) {
-  const source = resolveSource(args);
-  const approvalLink = resolveApprovalSelection(args, source);
-  const task = selectReadyTask(source, approvalLink.taskId);
-  const identity = resolveStartIdentity(args, source, task, { reserve: true });
-  const { runId, defaults } = identity;
-  args.runReservationToken = identity.reservationToken;
-  printExecutionPlan(args, source, task, runId, defaults, approvalLink);
-  console.log('');
-  console.log('Starting run...');
-  const runResult = runScript('p2a_runs.mjs', startRunArgs(args, task, runId, defaults, approvalLink.approval));
-  printChildResult(runResult);
-  if (runResult.status !== 0) {
-    console.error('Run start failed before lifecycle setup completed. Correct the reported cause, then retry with the same reserved run id:');
-    console.error(commandLine('p2a_execute.mjs', executeStartArgs(args, task, runId, defaults)));
-    return runResult.status ?? 1;
-  }
-  if (args.requireMonitor) {
-    const monitorGate = writeMonitorGateSidecar(source.runsDir, runId);
-    console.log(`Attached monitor gate sidecar: ${displayPath(monitorGate.filePath)}`);
-  }
+  const initialSource = resolveSource(args);
+  return withRunStoreLocks([path.dirname(initialSource.graphPath)], () => {
+    const source = currentSourceGraph(initialSource);
+    const approvalLink = resolveApprovalSelection(args, source);
+    const task = selectReadyTask(source, approvalLink.taskId);
+    const identity = resolveStartIdentity(args, source, task, { reserve: true });
+    const { runId, defaults } = identity;
+    args.runReservationToken = identity.reservationToken;
+    try {
+      claimTaskForRunStart(source, task);
+    } catch (error) {
+      if (identity.reserved) releaseRunIdReservation(source.runsDir, runId, identity.reservationToken);
+      throw error;
+    }
 
-  console.log('');
-  console.log('Marking task in_progress...');
-  const taskResult = runScript('p2a_tasks.mjs', startTaskArgs(source, task.id));
-  printChildResult(taskResult);
-  if (taskResult.status !== 0) {
-    console.error(`warning: run ${runId} was started but task ${task.id} was not marked in_progress`);
-    return taskResult.status ?? 1;
-  }
+    printExecutionPlan(args, source, task, runId, defaults, approvalLink);
+    console.log('');
+    console.log('Task marked in_progress. Starting run...');
+    const runResult = runScript('p2a_runs.mjs', startRunArgs(args, task, runId, defaults, approvalLink.approval));
+    printChildResult(runResult);
+    if (runResult.status !== 0) {
+      if (rollbackTaskRunStartClaim(source, task.id)) {
+        console.error(`Task transition rolled back: ${task.id} returned to todo because run ${runId} did not start.`);
+      } else {
+        console.error(`warning: task ${task.id} remains in_progress because started-run evidence could not be ruled out.`);
+      }
+      console.error('Run start failed before lifecycle setup completed. Correct the reported cause, then retry with the same reserved run id:');
+      console.error(commandLine('p2a_execute.mjs', executeStartArgs(args, task, runId, defaults)));
+      return runResult.status ?? 1;
+    }
+    if (args.requireMonitor) {
+      console.log(`Attached monitor gate sidecar: ${displayPath(monitorGateSidecarPath(source.runsDir, runId))}`);
+    }
 
-  printLauncherPrompt(source, task, runId, approvalLink);
-  printRunCommandFooter(P2A_PATHS, {
-    sourceArgs: source.sourceArgs,
-    runId,
-    heading: 'Run commands:',
+    printLauncherPrompt(source, task, runId, approvalLink);
+    printRunCommandFooter(P2A_PATHS, {
+      sourceArgs: source.sourceArgs,
+      runId,
+      heading: 'Run commands:',
+    });
+    return 0;
   });
-  return 0;
 }
 
 function runResume(args) {
   const source = resolveSource(args);
   const approvalLink = resolveApprovalSelection(args, source);
   const run = readRun(source.runsDir, args.runId);
+  assertRunMatchesSourceContext(run, source);
   if (approvalLink.taskId && run.taskId !== approvalLink.taskId) {
     console.error(`resume refused: run ${run.runId} belongs to ${run.taskId}, not approval task ${approvalLink.taskId}`);
     return 1;
@@ -929,8 +1012,9 @@ function runStatus(args) {
   const explicitRun = args.runId ? readRun(source.runsDir, args.runId) : null;
   const taskId = approvalLink.taskId ?? explicitRun?.taskId ?? null;
   const task = taskId ? requireTask(source, taskId) : null;
-  const runId = explicitRun?.runId ?? (task ? latestRunIdForTask(source.runsDir, task.id) : null);
+  const runId = explicitRun?.runId ?? (task ? latestRunIdForTask(source.runsDir, task.id, source) : null);
   const run = runId ? (explicitRun ?? readRun(source.runsDir, runId)) : null;
+  if (run) assertRunMatchesSourceContext(run, source);
   if (approvalLink.taskId && run && run.taskId !== approvalLink.taskId) {
     console.error(`status refused: run ${run.runId} belongs to ${run.taskId}, not approval task ${approvalLink.taskId}`);
     return 1;
@@ -975,6 +1059,7 @@ function runFinish(args) {
   const source = resolveSource(args);
   const approvalLink = resolveApprovalSelection(args, source);
   const existingRun = readRun(source.runsDir, args.runId);
+  assertRunMatchesSourceContext(existingRun, source);
   if (approvalLink.taskId) {
     if (existingRun.taskId !== approvalLink.taskId) {
       console.error(`finish refused: run ${existingRun.runId} belongs to ${existingRun.taskId}, not approval task ${approvalLink.taskId}`);

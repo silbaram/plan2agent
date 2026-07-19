@@ -3,6 +3,7 @@ import './negative-fixtures.test.mjs';
 import './e2e-artifact-root.test.mjs';
 import './project-config-detection.test.mjs';
 import './run-id-strategy.test.mjs';
+import './run-layout.test.mjs';
 import './eval-stable-metrics.test.mjs';
 import './verification-runner-utils.test.mjs';
 import './memory-run-attribution.test.mjs';

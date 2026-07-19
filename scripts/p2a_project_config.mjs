@@ -3,15 +3,17 @@
 import { closeSync, existsSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, unlinkSync, writeFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
+import process from 'node:process';
 import { DEFAULT_RUNS_DIR } from './p2a_constants.mjs';
 import { P2A_ARTIFACTS_DIR, normalizeProjectId, normalizeProjectIdFromPath } from './p2a_paths.mjs';
+import { assertRunIndexCanInitialize, assertStartableRunId } from './p2a_run_paths.mjs';
 
 const ORCHESTRATION_AGENT_TOOLS = new Set(['codex', 'claude', 'manual']);
 const AI_TOOL_TARGETS = new Set(['codex', 'claude', 'gemini']);
 export const DEFAULT_VERIFICATION_TIMEOUT_MS = 600000;
 export const RUN_ID_STRATEGIES = new Set(['timestamp', 'task-sequence']);
 const DEFAULT_RUN_ID_PATTERN = 'run-<taskId>-<sequence:3>';
-const RUN_ID_RESERVATION_DIR = '.run-id-reservations';
+export const RUN_ID_RESERVATION_DIR = '.run-id-reservations';
 
 export function defaultRunTracking() {
   return {
@@ -69,8 +71,10 @@ function formatSequentialRunId(pattern, taskId, sequence) {
       const width = Number(angleWidth ?? braceWidth ?? 1);
       return String(sequence).padStart(width, '0');
     });
-  if (!/^run-[A-Za-z0-9._-]+$/.test(formatted)) {
-    throw new Error(`project config runTracking.runIdPattern produced unsafe run id ${JSON.stringify(formatted)}`);
+  try {
+    assertStartableRunId(formatted);
+  } catch (error) {
+    throw new Error(`project config runTracking.runIdPattern produced invalid run id ${JSON.stringify(formatted)}: ${error.message}`);
   }
   return formatted;
 }
@@ -85,6 +89,10 @@ function reservationPath(runsDir, runId) {
 
 function existingSequentialRunIds(runsDir) {
   const ids = [];
+  const runIndex = readJsonObject(path.join(runsDir, 'run-index.json'));
+  for (const entry of runIndex?.runs ?? []) {
+    if (typeof entry?.runId === 'string') ids.push(entry.runId);
+  }
   for (const directory of [runsDir, reservationDir(runsDir)]) {
     if (!existsSync(directory) || !lstatSync(directory).isDirectory()) continue;
     for (const entry of readdirSync(directory, { withFileTypes: true })) {
@@ -118,15 +126,25 @@ function runIdStrategy(runTracking = {}) {
 }
 
 export function previewRunId(runsDir, taskId, runTracking = {}, now = new Date()) {
-  if (runIdStrategy(runTracking) === 'timestamp') return timestampRunId(taskId, now);
-  return nextSequentialRunId(runsDir, taskId, runTracking).runId;
+  assertRunIndexCanInitialize(runsDir);
+  const runId = runIdStrategy(runTracking) === 'timestamp'
+    ? timestampRunId(taskId, now)
+    : nextSequentialRunId(runsDir, taskId, runTracking).runId;
+  assertStartableRunId(runId);
+  return runId;
 }
 
 export function allocateRunId(runsDir, taskId, runTracking = {}, now = new Date()) {
-  if (runIdStrategy(runTracking) === 'timestamp') return { runId: timestampRunId(taskId, now), reserved: false, reservationToken: null };
+  assertRunIndexCanInitialize(runsDir);
+  if (runIdStrategy(runTracking) === 'timestamp') {
+    const runId = timestampRunId(taskId, now);
+    assertStartableRunId(runId);
+    return { runId, reserved: false, reservationToken: null };
+  }
   mkdirSync(reservationDir(runsDir), { recursive: true });
   while (true) {
     const allocation = nextSequentialRunId(runsDir, taskId, runTracking);
+    assertStartableRunId(allocation.runId);
     const filePath = reservationPath(runsDir, allocation.runId);
     const reservationToken = randomUUID();
     let descriptor;
@@ -143,11 +161,23 @@ export function allocateRunId(runsDir, taskId, runTracking = {}, now = new Date(
         sequence: allocation.sequence,
         reservationToken,
         reservedAt: now.toISOString(),
+        ownerPid: process.pid,
       }, null, 2)}\n`, 'utf8');
     } finally {
       closeSync(descriptor);
     }
     return { runId: allocation.runId, reserved: true, reservationPath: filePath, reservationToken };
+  }
+}
+
+export function runIdReservationIsActive(reservation) {
+  const ownerPid = reservation?.ownerPid;
+  if (!Number.isInteger(ownerPid) || ownerPid <= 0) return false;
+  try {
+    process.kill(ownerPid, 0);
+    return true;
+  } catch (error) {
+    return error?.code === 'EPERM';
   }
 }
 

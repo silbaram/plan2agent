@@ -14,6 +14,7 @@ import {
 import { compareSync } from './p2a_memory.mjs';
 import { PROJECT_RUNTIME_SCHEMA_FILES, PROJECT_RUNTIME_SCRIPT_FILES } from './p2a_tool_manifest.mjs';
 import { shellQuote } from './p2a_run_commands.mjs';
+import { runFilePath, runSidecarPath, runSidecarRef } from './p2a_run_paths.mjs';
 import {
   E2E_FIXTURE_ROOT,
   FIXTURE_ROOT,
@@ -418,7 +419,7 @@ function validateScaffoldFixtureCase() {
     ]);
     checks += 1;
     const lazyConfig = JSON.parse(readFileSync(path.join(targetRoot, '.plan2agent', 'project.config.json'), 'utf8'));
-    const lazyRun = JSON.parse(readFileSync(path.join(tempRoot, 'runs', 'run-lazy-config.json'), 'utf8'));
+    const lazyRun = JSON.parse(readFileSync(runFilePath(path.join(tempRoot, 'runs'), 'run-lazy-config'), 'utf8'));
     if (
       result.status !== 0
       || lazyConfig.packageManager !== 'npm'
@@ -2871,7 +2872,7 @@ function validateIterationCurrentFixtureCases() {
         return { status: failureStatus(result), checks };
       }
 
-      const leadingDashRunNote = runRuns(['record', '--graph', state.taskGraphPath, '--run-id', 'run-leading-dash-note', '--note', '--blocked-by-owner']);
+      const leadingDashRunNote = runRuns(['record', '--artifacts', artifactRoot, '--run-id', 'run-leading-dash-note', '--note', '--blocked-by-owner']);
       checks += 1;
       const leadingDashRunNoteOutput = `${leadingDashRunNote.stdout ?? ''}${leadingDashRunNote.stderr ?? ''}`;
       if (
@@ -2884,7 +2885,7 @@ function validateIterationCurrentFixtureCases() {
         return { status: 1, checks };
       }
 
-      const leadingDashExecuteCommand = runExecute(['finish', '--graph', state.taskGraphPath, '--run-id', 'run-leading-dash-command', '--test-command', '--version']);
+      const leadingDashExecuteCommand = runExecute(['finish', '--artifacts', artifactRoot, '--run-id', 'run-leading-dash-command', '--test-command', '--version']);
       checks += 1;
       const leadingDashExecuteOutput = `${leadingDashExecuteCommand.stdout ?? ''}${leadingDashExecuteCommand.stderr ?? ''}`;
       if (
@@ -2950,7 +2951,9 @@ function validateIterationCurrentFixtureCases() {
         writeResultOutput(result);
         return { status: failureStatus(result), checks };
       }
-      const crossCwdRun = JSON.parse(readFileSync(path.join(crossCwdRoot, 'runs', `${crossCwdRunId}.json`), 'utf8'));
+      const crossCwdRun = JSON.parse(
+        readFileSync(runFilePath(path.join(crossCwdRoot, 'runs'), crossCwdRunId), 'utf8'),
+      );
       if (crossCwdRun.taskGraphRef !== realpathSync(crossCwdGraphPath).split(path.sep).join('/')) {
         console.error(`p2a_runs cross-cwd did not persist canonical taskGraphRef: ${caseData.id}`);
         console.error(JSON.stringify({ taskGraphRef: crossCwdRun.taskGraphRef, crossCwdGraphPath }, null, 2));
@@ -3020,7 +3023,8 @@ function validateIterationCurrentFixtureCases() {
         return { status: failureStatus(result), checks };
       }
 
-      const executeSidecarPath = path.join(tempRoot, 'p2a-execute', 'runs', 'run-execute-fixture.monitor-gate.json');
+      const executeRunsDir = path.join(tempRoot, 'p2a-execute', 'runs');
+      const executeSidecarPath = runSidecarPath(executeRunsDir, 'run-execute-fixture', '.monitor-gate.json');
       const executeSidecar = JSON.parse(readFileSync(executeSidecarPath, 'utf8'));
       if (executeSidecar.runId !== 'run-execute-fixture' || executeSidecar.required !== true) {
         console.error(`p2a_execute start did not attach monitor gate sidecar: ${caseData.id}`);
@@ -3107,7 +3111,8 @@ function validateIterationCurrentFixtureCases() {
         writeResultOutput(result);
         return { status: failureStatus(result), checks };
       }
-      const executeIsolationRun = JSON.parse(readFileSync(path.join(tempRoot, 'p2a-execute-isolation', 'runs', 'run-execute-create-worktree.json'), 'utf8'));
+      const executeIsolationRunsDir = path.join(tempRoot, 'p2a-execute-isolation', 'runs');
+      const executeIsolationRun = JSON.parse(readFileSync(runFilePath(executeIsolationRunsDir, 'run-execute-create-worktree'), 'utf8'));
       const executeIsolationGraph = JSON.parse(readFileSync(executeIsolationGraphPath, 'utf8'));
       const expectedExecuteWorktreePath = realpathSync(executeIsolationWorktree);
       const recordedExecuteWorkspacePath = path.resolve(ROOT, executeIsolationRun.workspacePath);
@@ -3189,18 +3194,19 @@ function validateIterationCurrentFixtureCases() {
         return { status: 1, checks };
       }
 
-      writeFileSync(path.join(tempRoot, 'p2a-execute-monitor', 'runs', 'run-execute-monitor-fixture.monitor-verdict.json'), JSON.stringify({ verdict: 'block', unmet_acceptance: ['Fixture unmet acceptance'] }, null, 2) + '\n', 'utf8');
       const executeMonitorRunsDir = path.join(tempRoot, 'p2a-execute-monitor', 'runs');
+      writeFileSync(runSidecarPath(executeMonitorRunsDir, 'run-execute-monitor-fixture', '.monitor-verdict.json'), JSON.stringify({ verdict: 'block', unmet_acceptance: ['Fixture unmet acceptance'] }, null, 2) + '\n', 'utf8');
       const executeMonitorProposalsDir = path.join(tempRoot, 'p2a-execute-monitor', 'proposals');
       const executeMonitorUpstreamProposalsDir = path.join(tempRoot, 'p2a-execute-monitor', 'upstream-proposals');
       const proposalRunsDir = path.join(tempRoot, 'p2a-execute-monitor-proposal-runs');
       mkdirSync(proposalRunsDir, { recursive: true });
       const executeMonitorRunIndex = JSON.parse(readFileSync(path.join(executeMonitorRunsDir, 'run-index.json'), 'utf8'));
       const baseRunIndexEntry = executeMonitorRunIndex.runs.find((run) => run.runId === 'run-execute-monitor-fixture');
-      cpSync(path.join(executeMonitorRunsDir, 'run-execute-monitor-fixture.json'), path.join(proposalRunsDir, 'run-execute-monitor-fixture.json'));
-      cpSync(path.join(executeMonitorRunsDir, 'run-execute-monitor-fixture.monitor-gate.json'), path.join(proposalRunsDir, 'run-execute-monitor-fixture.monitor-gate.json'));
-      cpSync(path.join(executeMonitorRunsDir, 'run-execute-monitor-fixture.monitor-verdict.json'), path.join(proposalRunsDir, 'run-execute-monitor-fixture.monitor-verdict.json'));
-      const proposalRunPath = path.join(proposalRunsDir, 'run-execute-monitor-fixture.json');
+      const proposalRunPath = path.join(proposalRunsDir, baseRunIndexEntry.runRef);
+      mkdirSync(path.dirname(proposalRunPath), { recursive: true });
+      cpSync(runFilePath(executeMonitorRunsDir, 'run-execute-monitor-fixture'), proposalRunPath);
+      cpSync(runSidecarPath(executeMonitorRunsDir, 'run-execute-monitor-fixture', '.monitor-gate.json'), path.join(proposalRunsDir, runSidecarRef(baseRunIndexEntry.runRef, '.monitor-gate.json')));
+      cpSync(runSidecarPath(executeMonitorRunsDir, 'run-execute-monitor-fixture', '.monitor-verdict.json'), path.join(proposalRunsDir, runSidecarRef(baseRunIndexEntry.runRef, '.monitor-verdict.json')));
       const proposalRun = JSON.parse(readFileSync(proposalRunPath, 'utf8'));
       proposalRun.status = 'blocked';
       proposalRun.finishedAt = new Date().toISOString();
@@ -4029,7 +4035,7 @@ function validateIterationCurrentFixtureCases() {
         return { status: failureStatus(result), checks };
       }
 
-      const executeApprovedRunPath = path.join(executeMonitorApprovalArtifactRoot, 'runs', 'run-approved-proposal-fixture.json');
+      const executeApprovedRunPath = runFilePath(path.join(executeMonitorApprovalArtifactRoot, 'runs'), 'run-approved-proposal-fixture');
       const executeApprovedStartedRun = JSON.parse(readFileSync(executeApprovedRunPath, 'utf8'));
       if (
         executeApprovedStartedRun.sourceLayout !== 'maintenance'
@@ -4164,7 +4170,10 @@ function validateIterationCurrentFixtureCases() {
         writeResultOutput(result);
         return { status: failureStatus(result), checks };
       }
-      const executeFinishTraceRunPath = path.join(executeFinishTraceArtifactRoot, 'runs', `${executeFinishTraceRunId}.json`);
+      const executeFinishTraceRunPath = runFilePath(
+        path.join(executeFinishTraceArtifactRoot, 'runs'),
+        executeFinishTraceRunId,
+      );
       const executeFinishTraceRun = JSON.parse(readFileSync(executeFinishTraceRunPath, 'utf8'));
       if (
         !executeFinishTraceRun.notes.includes(`proposalApproval=${executeMonitorApproval.approvalId}`)
@@ -4263,7 +4272,7 @@ function validateIterationCurrentFixtureCases() {
         return { status: 1, checks };
       }
       const executeSkippedGraph = JSON.parse(readFileSync(executeSkippedGraphPath, 'utf8'));
-      const executeSkippedRun = JSON.parse(readFileSync(path.join(tempRoot, 'p2a-execute-not-in-progress', 'runs', 'run-execute-fixture-not-in-progress.json'), 'utf8'));
+      const executeSkippedRun = JSON.parse(readFileSync(runFilePath(path.join(tempRoot, 'p2a-execute-not-in-progress', 'runs'), 'run-execute-fixture-not-in-progress'), 'utf8'));
       if (
         executeSkippedGraph.tasks.find((task) => task.id === 'task-001')?.status !== 'todo'
         || executeSkippedRun.status !== 'finished'
@@ -4455,7 +4464,7 @@ function validateIterationCurrentFixtureCases() {
         writeResultOutput(result);
         return { status: failureStatus(result), checks };
       }
-      const collectGitRun = JSON.parse(readFileSync(path.join(runsDir, `${collectGitRunId}.json`), 'utf8'));
+      const collectGitRun = JSON.parse(readFileSync(runFilePath(runsDir, collectGitRunId), 'utf8'));
       const collectGitFiles = new Set(collectGitRun.changedFiles);
       if (
         collectGitRun.changedFiles.length !== 2
@@ -4520,7 +4529,7 @@ function validateIterationCurrentFixtureCases() {
         writeResultOutput(result);
         return { status: failureStatus(result), checks };
       }
-      const isolationRun = JSON.parse(readFileSync(path.join(runsDir, `${isolationRunId}.json`), 'utf8'));
+      const isolationRun = JSON.parse(readFileSync(runFilePath(runsDir, isolationRunId), 'utf8'));
       const expectedWorktreePath = realpathSync(isolationWorktree);
       const recordedWorkspacePath = path.resolve(isolationBaseWorkspace, isolationRun.workspacePath);
       const recordedIsolationWorktree = path.resolve(isolationBaseWorkspace, isolationRun.isolation.worktree);
@@ -4929,7 +4938,7 @@ function validateIterationCurrentFixtureCases() {
         return { status: 1, checks };
       }
       const doneGuardRunsDir = path.join(tempRoot, 'p2a-done-guard', 'runs');
-      const doneGuardRunPath = path.join(doneGuardRunsDir, `${doneGuardRunId}.json`);
+      const doneGuardRunPath = runFilePath(doneGuardRunsDir, doneGuardRunId);
       const doneGuardBaseRun = JSON.parse(readFileSync(doneGuardRunPath, 'utf8'));
       unlinkSync(doneGuardRunPath);
       result = runTasks(['done', '--graph', doneGuardGraphPath, 'task-001']);
@@ -5069,7 +5078,12 @@ function validateIterationCurrentFixtureCases() {
         `"${process.execPath}" -e "setTimeout(() => {}, 1000)"`,
       ]);
       checks += 1;
-      const timeoutRun = JSON.parse(readFileSync(path.join(tempRoot, 'p2a-verification-timeout', 'runs', `${timeoutRunId}.json`), 'utf8'));
+      const timeoutRun = JSON.parse(
+        readFileSync(
+          runFilePath(path.join(tempRoot, 'p2a-verification-timeout', 'runs'), timeoutRunId),
+          'utf8',
+        ),
+      );
       const timeoutVerification = timeoutRun.verification.at(-1);
       if (
         result.status === 0
@@ -5342,7 +5356,7 @@ function validateIterationCurrentFixtureCases() {
         writeResultOutput(result);
         return { status: failureStatus(result), checks };
       }
-      const fixtureRun = JSON.parse(readFileSync(path.join(runsDir, `${fixtureRunId}.json`), 'utf8'));
+      const fixtureRun = JSON.parse(readFileSync(runFilePath(runsDir, fixtureRunId), 'utf8'));
       const fixtureRunIndex = JSON.parse(readFileSync(path.join(runsDir, 'run-index.json'), 'utf8'));
       if (
         fixtureRun.agentTool !== 'codex'
@@ -7209,6 +7223,14 @@ export function main() {
   writeResultOutput(projectConfigDetectionResult);
   if (projectConfigDetectionResult.status !== 0) return failureStatus(projectConfigDetectionResult);
 
+  const runIdStrategyResult = runNodeTestFile('tests/run-id-strategy.test.mjs');
+  writeResultOutput(runIdStrategyResult);
+  if (runIdStrategyResult.status !== 0) return failureStatus(runIdStrategyResult);
+
+  const runLayoutResult = runNodeTestFile('tests/run-layout.test.mjs');
+  writeResultOutput(runLayoutResult);
+  if (runLayoutResult.status !== 0) return failureStatus(runLayoutResult);
+
   const evalStableMetricsResult = runNodeTestFile('tests/eval-stable-metrics.test.mjs');
   writeResultOutput(evalStableMetricsResult);
   if (evalStableMetricsResult.status !== 0) return failureStatus(evalStableMetricsResult);
@@ -7236,6 +7258,8 @@ export function main() {
   if (iterationResult.checks) segments.push(`${iterationResult.checks} iteration fixture check(s)`);
   segments.push(`${countNodeTestCases(negativeResult.stdout)} negative fixture test(s)`);
   segments.push(`${countNodeTestCases(projectConfigDetectionResult.stdout)} project config detection test(s)`);
+  segments.push(`${countNodeTestCases(runIdStrategyResult.stdout)} run id strategy test(s)`);
+  segments.push(`${countNodeTestCases(runLayoutResult.stdout)} run layout test(s)`);
   segments.push(`${countNodeTestCases(evalStableMetricsResult.stdout)} eval stable metrics test(s)`);
 
   console.log(`Validated ${formatSegments(segments)}`);
