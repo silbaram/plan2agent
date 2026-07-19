@@ -8,7 +8,7 @@ export { DEFAULT_RUNS_DIR };
 const RUN_ID_PATTERN = /^run-[A-Za-z0-9._-]+$/;
 const RUN_PARTITION_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 const UNSCOPED_RUN_PARTITION = 'unscoped';
-const RUN_SIDECAR_SUFFIXES = [
+export const RUN_SIDECAR_SUFFIXES = [
   '.orchestration.json',
   '.orchestration-runtime.json',
   '.monitor-gate.json',
@@ -17,6 +17,32 @@ const RUN_SIDECAR_SUFFIXES = [
 ];
 const RUN_SIDECAR_ID_SUFFIXES = RUN_SIDECAR_SUFFIXES
   .map((suffix) => suffix.slice(0, -'.json'.length));
+
+export function runIndexEvidenceTime(indexEntry) {
+  for (const value of [indexEntry?.finishedAt, indexEntry?.startedAt]) {
+    const time = Date.parse(value ?? '');
+    if (!Number.isNaN(time)) return time;
+  }
+  return 0;
+}
+
+export function runEvidenceTime(run, indexEntry) {
+  for (const value of [run?.finishedAt, run?.updatedAt, run?.startedAt, indexEntry?.finishedAt, indexEntry?.startedAt]) {
+    const time = Date.parse(value ?? '');
+    if (!Number.isNaN(time)) return time;
+  }
+  return 0;
+}
+
+export function compareRunIndexEvidence(left, right) {
+  return runIndexEvidenceTime(right.indexEntry) - runIndexEvidenceTime(left.indexEntry)
+    || right.runOrder - left.runOrder;
+}
+
+export function compareRunEvidence(left, right) {
+  return runEvidenceTime(right.run, right.indexEntry) - runEvidenceTime(left.run, left.indexEntry)
+    || right.runOrder - left.runOrder;
+}
 
 export function normalizeRunPath(filePath) {
   return filePath.split(path.sep).join('/');

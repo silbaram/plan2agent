@@ -32,8 +32,9 @@ import {
   RUN_STORE_LOCK_FILE,
   RUN_STORE_REAPER_LOCK_FILE,
   RUN_STORE_REDIRECT_FILE,
+  withRunStoreLocks,
 } from '../scripts/p2a_run_store.mjs';
-import { validateRunsDir } from '../scripts/validate_artifacts.mjs';
+import { validateRunIndexData, validateRunsDir } from '../scripts/validate_artifacts.mjs';
 import { RUNS_CLI, runExecute, runRuns, runTasks } from './helpers/fixtures.mjs';
 
 const ITERATION_ID = 'iter-002';
@@ -145,6 +146,25 @@ describe('iteration-partitioned run layout', () => {
 
       assert.equal(statSync(filePath).mode & 0o777, 0o644);
       assert.deepEqual(JSON.parse(readFileSync(filePath, 'utf8')), { after: true });
+    } finally {
+      rmSync(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  test('multi-store release attempts every lock and preserves the primary operation error', () => {
+    const tempRoot = mkdtempSync(path.join(tmpdir(), 'p2a-run-layout-release-all-'));
+    try {
+      const firstRunsDir = path.join(tempRoot, 'a-runs');
+      const secondRunsDir = path.join(tempRoot, 'b-runs');
+      assert.throws(
+        () => withRunStoreLocks([firstRunsDir, secondRunsDir], () => {
+          writeFileSync(path.join(secondRunsDir, RUN_STORE_LOCK_FILE), '{corrupt lock', 'utf8');
+          throw new Error('primary operation failure');
+        }),
+        /primary operation failure/,
+      );
+      assert.equal(existsSync(path.join(firstRunsDir, RUN_STORE_LOCK_FILE)), false);
+      assert.equal(existsSync(path.join(secondRunsDir, RUN_STORE_LOCK_FILE)), true);
     } finally {
       rmSync(tempRoot, { recursive: true, force: true });
     }
@@ -374,6 +394,132 @@ describe('iteration-partitioned run layout', () => {
       assert.match(result.stdout, /runId: run-current-graph/);
       assert.doesNotMatch(result.stdout, /runId: run-current-iteration/);
       assert.doesNotMatch(result.stdout, /runId: run-prior-iteration/);
+    } finally {
+      rmSync(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  test('task completion and execute status use the same timestamp ordering for the latest run', () => {
+    const tempRoot = mkdtempSync(path.join(tmpdir(), 'p2a-run-layout-latest-order-'));
+    try {
+      const runsDir = path.join(tempRoot, 'runs');
+      const graphPath = path.join(tempRoot, 'task-graph.json');
+      const graph = taskGraph();
+      graph.tasks[0].status = 'in_progress';
+      writeJson(graphPath, graph);
+      const taskGraphRef = canonicalTaskGraphRef(graphPath);
+      const successfulRun = {
+        ...startedRun('run-successful-older-entry'),
+        sourceLayout: 'graph',
+        taskGraphRef,
+        status: 'finished',
+        startedAt: '2026-07-18T00:09:00.000Z',
+        updatedAt: '2026-07-18T00:10:00.000Z',
+        finishedAt: '2026-07-18T00:10:00.000Z',
+        changedFiles: ['src/success.js'],
+        verification: [{
+          type: 'test',
+          command: 'node --test',
+          status: 'passed',
+          exitCode: 0,
+          durationMs: 1,
+          startedAt: '2026-07-18T00:09:30.000Z',
+          finishedAt: '2026-07-18T00:09:31.000Z',
+          stdoutTail: null,
+          stderrTail: null,
+          source: 'command',
+        }],
+      };
+      const failedLatestRun = {
+        ...startedRun('run-failed-latest-entry'),
+        sourceLayout: 'graph',
+        taskGraphRef,
+        status: 'failed',
+        startedAt: '2026-07-18T00:04:00.000Z',
+        updatedAt: '2026-07-18T00:05:00.000Z',
+        finishedAt: '2026-07-18T00:05:00.000Z',
+        reproduction: { steps: ['Reproduce the failure.'], commands: [], notes: [] },
+        localization: { findings: ['The latest run failed.'], files: [] },
+        guard: { checks: ['Keep the task in progress.'], notes: [] },
+        failure: {
+          class: 'verification_failed',
+          retryable: 'after_fix',
+          needsUserDecision: false,
+          source: 'owner',
+        },
+      };
+      const successfulRef = canonicalRunRef(successfulRun);
+      const failedRef = canonicalRunRef(failedLatestRun);
+      writeJson(path.join(runsDir, successfulRef), successfulRun);
+      writeJson(path.join(runsDir, failedRef), failedLatestRun);
+      const index = {
+        schema_version: 'p2a.run_index.v1',
+        projectId: graph.projectId,
+        runs: [
+          runIndex(successfulRun, successfulRef).runs[0],
+          runIndex(failedLatestRun, failedRef).runs[0],
+        ],
+        tasks: [{
+          taskId: 'task-001',
+          runIds: [successfulRun.runId, failedLatestRun.runId],
+          latestRunId: failedLatestRun.runId,
+        }],
+      };
+      writeJson(path.join(runsDir, 'run-index.json'), index);
+
+      const status = runExecute(['status', '--graph', graphPath, '--task', 'task-001']);
+      assert.equal(status.status, 0, status.stderr);
+      assert.match(status.stdout, new RegExp(`runId: ${successfulRun.runId}`));
+
+      writeJson(path.join(runsDir, successfulRef), { ...successfulRun, agentTool: 'other-agent' });
+      const inconsistentStatus = runExecute(['status', '--graph', graphPath, '--task', 'task-001']);
+      assert.equal(inconsistentStatus.status, 1);
+      assert.match(inconsistentStatus.stderr, /run-index evidence mismatch.*agentTool/);
+      writeJson(path.join(runsDir, successfulRef), successfulRun);
+
+      const done = runTasks(['done', '--graph', graphPath, 'task-001']);
+      assert.equal(done.status, 0, done.stderr);
+      assert.equal(JSON.parse(readFileSync(graphPath, 'utf8')).tasks[0].status, 'done');
+
+      const invalidIndex = structuredClone(index);
+      invalidIndex.tasks[0].latestRunId = successfulRun.runId;
+      assert.throws(
+        () => validateRunIndexData(invalidIndex),
+        /latestRunId must be the last runIds entry/,
+      );
+    } finally {
+      rmSync(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  test('todo --reopen is rejected unless the task is done', () => {
+    const tempRoot = mkdtempSync(path.join(tmpdir(), 'p2a-run-layout-reopen-contract-'));
+    try {
+      const graphPath = path.join(tempRoot, 'task-graph.json');
+      const graph = taskGraph();
+      graph.tasks[0].status = 'blocked';
+      graph.tasks[0].blockReason = 'other';
+      graph.tasks[0].blockNote = 'original blocker';
+      writeJson(graphPath, graph);
+
+      const result = runTasks([
+        'todo', '--graph', graphPath, 'task-001', '--reopen', '--note', 'replacement note',
+      ]);
+      assert.equal(result.status, 1);
+      assert.match(result.stderr, /--reopen is only valid when the current status is done/);
+      assert.deepEqual(JSON.parse(readFileSync(graphPath, 'utf8')), graph);
+
+      graph.tasks[0].status = 'done';
+      delete graph.tasks[0].blockReason;
+      delete graph.tasks[0].blockNote;
+      writeJson(graphPath, graph);
+      const reopened = runTasks([
+        'todo', '--graph', graphPath, 'task-001', '--reopen', '--note', 'replacement note',
+      ]);
+      assert.equal(reopened.status, 0, reopened.stderr);
+      const reopenedTask = JSON.parse(readFileSync(graphPath, 'utf8')).tasks[0];
+      assert.equal(reopenedTask.status, 'todo');
+      assert.equal(reopenedTask.blockNote, 'replacement note');
     } finally {
       rmSync(tempRoot, { recursive: true, force: true });
     }
@@ -759,6 +905,25 @@ describe('iteration-partitioned run layout', () => {
       assert.throws(
         () => validateRunsDir(runsDir),
         new RegExp(`unindexed run file\\(s\\): .*${legacyRef.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`),
+      );
+    } finally {
+      rmSync(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  test('validateRunsDir rejects nested directories inside a run partition', () => {
+    const tempRoot = mkdtempSync(path.join(tmpdir(), 'p2a-run-layout-nested-entry-'));
+    try {
+      const runsDir = path.join(tempRoot, 'runs');
+      const run = startedRun('run-task-001-001');
+      const runRef = canonicalRunRef(run);
+      writeJson(path.join(runsDir, runRef), run);
+      writeJson(path.join(runsDir, 'run-index.json'), runIndex(run, runRef));
+      writeJson(path.join(runsDir, ITERATION_ID, 'nested', 'run-hidden.json'), run);
+
+      assert.throws(
+        () => validateRunsDir(runsDir),
+        /unsupported nested entry\(s\): iter-002\/nested/,
       );
     } finally {
       rmSync(tempRoot, { recursive: true, force: true });

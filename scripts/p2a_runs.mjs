@@ -39,6 +39,7 @@ import {
   legacyRunRef,
   legacyRunsDirForGraph,
   resolveRunsDir,
+  RUN_SIDECAR_SUFFIXES,
   runFilePath,
   runSidecarPath,
   runSidecarRef,
@@ -96,14 +97,6 @@ const FAILURE_DEFAULTS = {
 const VERIFICATION_TYPES = new Set(['test', 'lint', 'typecheck', 'custom']);
 const VERIFICATION_STATUSES = new Set(['passed', 'failed', 'skipped', 'not_run', 'unavailable']);
 const OUTPUT_TAIL_LIMIT = 4000;
-const RUN_SIDECAR_SUFFIXES = [
-  '.orchestration.json',
-  '.orchestration-runtime.json',
-  '.monitor-gate.json',
-  '.monitor-verdict.json',
-  '.style-verdict.json',
-];
-
 function usage() {
   return [
     'Usage:',

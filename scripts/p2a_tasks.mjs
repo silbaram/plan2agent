@@ -11,6 +11,8 @@ import { normalizeMonitorVerdictData, readMonitorGateSidecar } from './p2a_monit
 import { resolveIterationState } from './p2a_iteration_state.mjs';
 import {
   assertUnmanagedGraphMutation,
+  compareRunEvidence,
+  compareRunIndexEvidence,
   isSupportedRunRef,
   resolveRunsDir,
   runFilePath,
@@ -424,22 +426,6 @@ function assertRunMatchesIndexEntry(taskId, runId, run, indexEntry, strict) {
   }
 }
 
-function runEvidenceTime(run, indexEntry) {
-  for (const value of [run.finishedAt, run.updatedAt, run.startedAt, indexEntry.finishedAt, indexEntry.startedAt]) {
-    const time = Date.parse(value ?? '');
-    if (!Number.isNaN(time)) return time;
-  }
-  return 0;
-}
-
-function indexEvidenceTime(indexEntry) {
-  for (const value of [indexEntry.finishedAt, indexEntry.startedAt]) {
-    const time = Date.parse(value ?? '');
-    if (!Number.isNaN(time)) return time;
-  }
-  return 0;
-}
-
 function warnLatestRunProblem(message) {
   console.error(`warning: ${message}`);
 }
@@ -484,10 +470,9 @@ function runContextCandidates(args, taskId, graph, strict) {
       runId,
       runOrder,
       indexEntry,
-      evidenceTime: indexEvidenceTime(indexEntry),
     });
   }
-  candidateRefs.sort((left, right) => (right.evidenceTime - left.evidenceTime) || (right.runOrder - left.runOrder));
+  candidateRefs.sort(compareRunIndexEvidence);
   return { runsDir, index, expectedContext, contextMismatches, candidateRefs };
 }
 
@@ -543,14 +528,10 @@ function latestRunForTask(args, taskId, options = {}) {
       if (problem === null) continue;
       return problem;
     }
-    candidates.push({
-      run,
-      runOrder,
-      evidenceTime: runEvidenceTime(run, indexEntry),
-    });
+    candidates.push({ run, runOrder, indexEntry });
   }
   if (candidates.length) {
-    candidates.sort((left, right) => (right.evidenceTime - left.evidenceTime) || (right.runOrder - left.runOrder));
+    candidates.sort(compareRunEvidence);
     return candidates[0].run;
   }
   return latestRunProblem(
@@ -692,6 +673,9 @@ function transitionTask(graph, task, command, args = {}) {
       delete task.blockReason;
       task.blockNote = args.notes.join('\n');
       return;
+    }
+    if (args.reopen) {
+      throw new Error(`${task.id} --reopen is only valid when the current status is done; current status is ${task.status}`);
     }
     if (task.status !== 'blocked' && task.status !== 'in_progress') throw new Error(`${task.id} must be blocked or in_progress before todo; current status is ${task.status}`);
     task.status = 'todo';

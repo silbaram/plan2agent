@@ -7,7 +7,7 @@ import test from 'node:test';
 import { pathToFileURL } from 'node:url';
 
 import { allocateRunId, previewRunId } from '../scripts/p2a_project_config.mjs';
-import { runFilePath } from '../scripts/p2a_run_paths.mjs';
+import { canonicalRunRef, canonicalTaskGraphRef, runFilePath } from '../scripts/p2a_run_paths.mjs';
 import { runWriteTransactionPath, withRunStoreLocks } from '../scripts/p2a_run_store.mjs';
 import {
   E2E_FIXTURE_ROOT,
@@ -39,9 +39,13 @@ function executeCli(args, cwd = ROOT) {
   return spawnSync(process.execPath, [EXECUTE_CLI, ...args], { cwd, encoding: 'utf8' });
 }
 
-function executeCliAsync(args, cwd = ROOT) {
+function executeCliAsync(args, cwd = ROOT, options = {}) {
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [EXECUTE_CLI, ...args], { cwd, encoding: 'utf8' });
+    const child = spawn(process.execPath, [EXECUTE_CLI, ...args], {
+      cwd,
+      encoding: 'utf8',
+      env: options.env ?? process.env,
+    });
     let stdout = '';
     let stderr = '';
     child.stdout.on('data', (chunk) => { stdout += chunk; });
@@ -177,6 +181,77 @@ function installBlockingPostCheckoutHook(workspace, readyPath, releasePath) {
     `while (!existsSync(${JSON.stringify(releasePath)})) Atomics.wait(waitBuffer, 0, 0, 25);`,
   ].join('\n'), 'utf8');
   if (process.platform !== 'win32') chmodSync(hookPath, 0o755);
+}
+
+function installFailingBlockingPostCheckoutHook(workspace, readyPath, releasePath) {
+  const hookPath = path.join(workspace, '.git', 'hooks', 'post-checkout');
+  writeFileSync(hookPath, [
+    '#!/usr/bin/env node',
+    "const { existsSync, writeFileSync } = require('node:fs');",
+    `writeFileSync(${JSON.stringify(readyPath)}, 'ready\\n');`,
+    'const waitBuffer = new Int32Array(new SharedArrayBuffer(4));',
+    `while (!existsSync(${JSON.stringify(releasePath)})) Atomics.wait(waitBuffer, 0, 0, 25);`,
+    'process.exitCode = 1;',
+  ].join('\n'), 'utf8');
+  if (process.platform !== 'win32') chmodSync(hookPath, 0o755);
+}
+
+function pendingStartedRunTransaction(graphPath, graph, taskId = 'task-002') {
+  const now = '2026-07-19T00:00:00.000Z';
+  const run = {
+    schema_version: 'p2a.run.v1',
+    runId: 'run-unrelated-pending',
+    projectId: graph.projectId,
+    taskId,
+    taskTitle: graph.tasks.find((task) => task.id === taskId)?.title ?? 'Unrelated task',
+    iterationId: graph.version,
+    sourceLayout: 'graph',
+    taskGraphRef: canonicalTaskGraphRef(graphPath),
+    sourceSpecRef: graph.sourceSpec,
+    agentTool: 'codex',
+    workspaceRef: 'unrelated-workspace',
+    workspacePath: path.dirname(graphPath),
+    isolation: {
+      mode: 'none',
+      branch: null,
+      worktree: null,
+      baseRef: null,
+      created: false,
+      createCommand: null,
+      createExitCode: null,
+      createOutputTail: null,
+    },
+    status: 'started',
+    startedAt: now,
+    updatedAt: now,
+    finishedAt: null,
+    changedFiles: [],
+    verification: [],
+    notes: [],
+  };
+  const runRef = canonicalRunRef(run);
+  return {
+    schema_version: 'p2a.run_write_transaction.v1',
+    runRef,
+    run,
+    index: {
+      schema_version: 'p2a.run_index.v1',
+      projectId: graph.projectId,
+      runs: [{
+        runId: run.runId,
+        taskId: run.taskId,
+        iterationId: run.iterationId,
+        status: run.status,
+        agentTool: run.agentTool,
+        workspaceRef: run.workspaceRef,
+        taskGraphRef: run.taskGraphRef,
+        runRef,
+        startedAt: run.startedAt,
+        finishedAt: run.finishedAt,
+      }],
+      tasks: [{ taskId: run.taskId, runIds: [run.runId], latestRunId: run.runId }],
+    },
+  };
 }
 
 function sequentialTracking() {
@@ -568,6 +643,45 @@ test('p2a_execute keeps a task claimed when pending run recovery blocks start', 
   assert.match(result.stderr, /remains in_progress because started-run evidence could not be ruled out/);
   const graph = JSON.parse(readFileSync(graphPath, 'utf8'));
   assert.equal(graph.tasks.find((task) => task.id === 'task-001')?.status, 'in_progress');
+  assert.equal(existsSync(runWriteTransactionPath(runsDir)), true);
+});
+
+test('p2a_execute rolls back a failed start when a pending run belongs to another task', async () => {
+  const root = tempRoot('execute-unrelated-pending-run-write');
+  const graphPath = path.join(root, 'gate-c-task-graph', 'task-graph.json');
+  const workspace = path.join(root, 'workspace');
+  const worktree = path.join(root, 'worktree');
+  const runsDir = path.join(root, 'runs');
+  const readyPath = path.join(root, 'hook-ready');
+  const releasePath = path.join(root, 'hook-release');
+  mkdirSync(path.dirname(graphPath), { recursive: true });
+  writeFileSync(graphPath, readFileSync(TASK_GRAPH_FIXTURE, 'utf8'), 'utf8');
+  const graph = JSON.parse(readFileSync(graphPath, 'utf8'));
+  const gitEnv = gitHooksEnv(path.join(workspace, '.git', 'hooks'));
+  initGitWorkspace(workspace, { env: gitEnv });
+  installFailingBlockingPostCheckoutHook(workspace, readyPath, releasePath);
+
+  const startPromise = executeCliAsync([
+    'start', '--graph', graphPath, '--task', 'task-001', '--agent-tool', 'codex',
+    '--workspace', workspace, '--isolation', 'worktree', '--worktree', worktree,
+    '--base-ref', 'HEAD', '--create-isolation',
+  ], ROOT, { env: gitEnv });
+  try {
+    await waitForPath(readyPath);
+    mkdirSync(runsDir, { recursive: true });
+    writeFileSync(
+      runWriteTransactionPath(runsDir),
+      `${JSON.stringify(pendingStartedRunTransaction(graphPath, graph), null, 2)}\n`,
+      'utf8',
+    );
+  } finally {
+    writeFileSync(releasePath, 'release\n', 'utf8');
+  }
+
+  const result = await startPromise;
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /returned to todo because run .* did not start/);
+  assert.equal(JSON.parse(readFileSync(graphPath, 'utf8')).tasks[0].status, 'todo');
   assert.equal(existsSync(runWriteTransactionPath(runsDir)), true);
 });
 

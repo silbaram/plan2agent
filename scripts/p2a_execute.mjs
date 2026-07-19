@@ -15,6 +15,8 @@ import {
   assertSafeRunId,
   assertStartableRunId,
   canonicalTaskGraphRef,
+  compareRunEvidence,
+  compareRunIndexEvidence,
   resolveRunsDir,
   runFilePath,
   taskGraphRefMatchesGraph,
@@ -37,6 +39,17 @@ const FINISH_STATUSES = new Set(['finished', 'failed', 'blocked']);
 const FAILURE_SOURCES = new Set(['owner', 'monitor', 'implementer']);
 const IMPLEMENTER_AGENT_TOOLS = new Set(['codex', 'claude', 'manual']);
 const DEFAULT_PROJECT_CONFIG = path.join('.plan2agent', 'project.config.json');
+const RUN_INDEX_EVIDENCE_FIELDS = [
+  'runId',
+  'taskId',
+  'iterationId',
+  'status',
+  'agentTool',
+  'workspaceRef',
+  'taskGraphRef',
+  'startedAt',
+  'finishedAt',
+];
 
 function usage() {
   return [
@@ -426,11 +439,41 @@ function claimTaskForRunStart(source, task) {
   atomicWriteJson(source.graphPath, source.graph);
 }
 
+function pendingRunWriteMatchesTask(source, taskId) {
+  const transactionPath = runWriteTransactionPath(source.runsDir);
+  if (!existsSync(transactionPath)) return false;
+  let transaction;
+  try {
+    transaction = loadJson(transactionPath);
+    if (transaction?.schema_version !== 'p2a.run_write_transaction.v1') return null;
+    validateRunData(transaction.run);
+    validateRunIndexData(transaction.index);
+    const entry = transaction.index.runs.find((candidate) => candidate.runId === transaction.run.runId);
+    if (!entry || entry.runRef !== transaction.runRef || transaction.index.projectId !== transaction.run.projectId) {
+      return null;
+    }
+    for (const field of RUN_INDEX_EVIDENCE_FIELDS) {
+      if (JSON.stringify(entry[field]) !== JSON.stringify(transaction.run[field])) return null;
+    }
+  } catch (error) {
+    if (error?.code === 'ENOENT') return false;
+    return null;
+  }
+  if (transaction.run.taskId === taskId && runMatchesSourceContext(transaction.run, source)) return true;
+  return transaction.index.runs.some((entry) => (
+    entry.taskId === taskId
+    && entry.status === 'started'
+    && entry.iterationId === source.iterationId
+    && taskGraphRefMatchesGraph(entry.taskGraphRef, source.graphPath, source.artifactRoot)
+  ));
+}
+
 function hasStartedRunForTask(source, taskId) {
   // A child may have durably journaled a started run before its index entry was
   // published. Fail closed so a later forward recovery cannot create a started
   // run for a task that this parent already rolled back to todo.
-  if (existsSync(runWriteTransactionPath(source.runsDir))) return true;
+  const pendingRunMatch = pendingRunWriteMatchesTask(source, taskId);
+  if (pendingRunMatch === null || pendingRunMatch) return true;
   const indexFile = runsIndexPath(source.runsDir);
   if (!existsSync(indexFile)) return false;
   try {
@@ -762,6 +805,21 @@ function readRun(runsDir, runId) {
   return run;
 }
 
+function assertRunMatchesIndexEntry(run, indexEntry, indexProjectId) {
+  const mismatches = [];
+  for (const field of RUN_INDEX_EVIDENCE_FIELDS) {
+    if (JSON.stringify(run[field]) !== JSON.stringify(indexEntry[field])) {
+      mismatches.push(`${field}:index=${indexEntry[field] ?? 'null'} file=${run[field] ?? 'null'}`);
+    }
+  }
+  if (run.projectId !== indexProjectId) {
+    mismatches.push(`projectId:index=${indexProjectId} file=${run.projectId}`);
+  }
+  if (mismatches.length) {
+    throw new Error(`run-index evidence mismatch for ${indexEntry.runId}: ${mismatches.join(', ')}`);
+  }
+}
+
 function runMatchesSourceContext(run, source) {
   return run.projectId === source.projectId
     && run.iterationId === source.iterationId
@@ -784,18 +842,32 @@ function latestRunIdForTask(runsDir, taskId, source) {
   if (index.projectId !== source.projectId) {
     throw new Error(`run-index projectId ${index.projectId} does not match execution project ${source.projectId}`);
   }
-  for (let indexPosition = index.runs.length - 1; indexPosition >= 0; indexPosition -= 1) {
-    const entry = index.runs[indexPosition];
-    if (
+  const candidates = index.runs
+    .map((indexEntry, runOrder) => ({ indexEntry, runOrder }))
+    .filter(({ indexEntry: entry }) => (
       entry.taskId === taskId
       && entry.iterationId === source.iterationId
       && taskGraphRefMatchesGraph(entry.taskGraphRef, source.graphPath, source.artifactRoot)
-    ) {
-      const run = readRun(runsDir, entry.runId);
-      if (run.taskId === taskId && runMatchesSourceContext(run, source)) return entry.runId;
+    ))
+    .sort(compareRunIndexEvidence);
+  const resolved = [];
+  for (const [candidateIndex, candidate] of candidates.entries()) {
+    let run;
+    try {
+      run = readRun(runsDir, candidate.indexEntry.runId);
+      assertRunMatchesIndexEntry(run, candidate.indexEntry, index.projectId);
+    } catch (error) {
+      if (candidateIndex === 0) throw error;
+      console.error(`warning: skipped invalid older run ${candidate.indexEntry.runId}: ${error.message}`);
+      continue;
     }
+    if (run.taskId !== taskId || !runMatchesSourceContext(run, source)) {
+      continue;
+    }
+    resolved.push({ ...candidate, run });
   }
-  return null;
+  resolved.sort(compareRunEvidence);
+  return resolved[0]?.run.runId ?? null;
 }
 
 function printExecutionPlan(args, source, task, runId = null, defaults = null, approvalLink = null) {

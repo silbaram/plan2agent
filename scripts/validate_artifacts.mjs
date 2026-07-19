@@ -15,6 +15,7 @@ import {
   isSupportedRunRef,
   legacyRunRef,
   normalizeIndexedRunRef,
+  RUN_SIDECAR_SUFFIXES,
   taskGraphRefMatchesGraph,
 } from './p2a_run_paths.mjs';
 
@@ -792,6 +793,10 @@ export function validateRunIndexData(data) {
     if (JSON.stringify(indexedRuns) !== JSON.stringify(task.runIds)) {
       throw new ValidationError(`${task.taskId} runIds must match runs[] order`);
     }
+    const expectedLatestRunId = task.runIds.at(-1) ?? null;
+    if (task.latestRunId !== expectedLatestRunId) {
+      throw new ValidationError(`${task.taskId} latestRunId must be the last runIds entry: ${expectedLatestRunId ?? 'null'}`);
+    }
   }
   const taskIdSet = new Set(indexedTaskIds);
   const missingTasks = data.runs.map((run) => run.taskId).filter((taskId) => !taskIdSet.has(taskId));
@@ -1462,14 +1467,8 @@ export function validateRunsDir(runsDir) {
     }
   }
   const indexedRunFiles = new Set(index.runs.map((run) => normalizeIndexedRunRef(run.runRef, run.runId)));
-  const allowedSidecarSuffixes = [
-    '.orchestration.json',
-    '.orchestration-runtime.json',
-    '.monitor-gate.json',
-    '.monitor-verdict.json',
-    '.style-verdict.json',
-  ];
   const candidateRunFiles = [];
+  const unsupportedEntries = [];
   for (const entry of readdirSync(runsDir, { withFileTypes: true })) {
     if (entry.isFile()) {
       candidateRunFiles.push(entry.name);
@@ -1477,13 +1476,18 @@ export function validateRunsDir(runsDir) {
     }
     if (!entry.isDirectory() || entry.name.startsWith('.')) continue;
     for (const child of readdirSync(path.join(runsDir, entry.name), { withFileTypes: true })) {
-      if (child.isFile()) candidateRunFiles.push(`${entry.name}/${child.name}`);
+      const childRef = `${entry.name}/${child.name}`;
+      if (child.isFile()) candidateRunFiles.push(childRef);
+      else unsupportedEntries.push(childRef);
     }
+  }
+  if (unsupportedEntries.length) {
+    throw new ValidationError(`runs directory contains unsupported nested entry(s): ${unsupportedEntries.join(', ')}`);
   }
   const extraRunFiles = candidateRunFiles
     .filter((entry) => {
       if (!entry.endsWith('.json') || entry === 'run-index.json' || indexedRunFiles.has(entry)) return false;
-      if (!allowedSidecarSuffixes.some((suffix) => entry.endsWith(suffix))) return true;
+      if (!RUN_SIDECAR_SUFFIXES.some((suffix) => entry.endsWith(suffix))) return true;
       return isRunRecordFile(path.join(runsDir, entry));
     });
   if (extraRunFiles.length) {

@@ -288,12 +288,44 @@ export function withRunStoreLocks(runsDirs, callback, options = {}) {
   const timeoutMs = options.timeoutMs ?? LOCK_WAIT_TIMEOUT_MS;
   const normalized = [...new Set(runsDirs.map((runsDir) => path.resolve(runsDir)))].sort();
   const locks = [];
+  let result;
+  let operationError = null;
+  let operationFailed = false;
   try {
     for (const runsDir of normalized) locks.push(acquireLock(runsDir, timeoutMs));
-    return callback();
-  } finally {
-    for (const lock of locks.reverse()) releaseLock(lock);
+    result = callback();
+  } catch (error) {
+    operationFailed = true;
+    operationError = error;
   }
+
+  const releaseErrors = [];
+  for (const lock of locks.reverse()) {
+    try {
+      releaseLock(lock);
+    } catch (error) {
+      releaseErrors.push(error);
+    }
+  }
+  if (operationFailed) {
+    if (releaseErrors.length && operationError !== null
+      && (typeof operationError === 'object' || typeof operationError === 'function')) {
+      try {
+        Object.defineProperty(operationError, 'releaseErrors', {
+          value: releaseErrors,
+          configurable: true,
+        });
+      } catch {
+        // Preserve the primary operation error even when it cannot carry suppressed release errors.
+      }
+    }
+    throw operationError;
+  }
+  if (releaseErrors.length === 1) throw releaseErrors[0];
+  if (releaseErrors.length > 1) {
+    throw new AggregateError(releaseErrors, `failed to release ${releaseErrors.length} run store locks`);
+  }
+  return result;
 }
 
 export function atomicWriteText(filePath, text) {
@@ -329,7 +361,7 @@ export function atomicWriteText(filePath, text) {
     if (descriptor !== null) {
       try { closeSync(descriptor); } catch { /* best effort */ }
     }
-    if (existsSync(tempPath)) unlinkSync(tempPath);
+    try { unlinkSync(tempPath); } catch { /* best effort; preserve the primary write error */ }
   }
 }
 
