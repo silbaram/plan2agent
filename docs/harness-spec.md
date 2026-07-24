@@ -152,7 +152,7 @@ scripts/p2a_iteration.mjs                   # iteration init/open/close/maintena
 scripts/p2a_tasks.mjs                       # task status and dependency management CLI
 scripts/p2a_project_config.mjs              # project command detection and config merge helper
 scripts/p2a_runs.mjs                        # task run log and verification tracking CLI
-scripts/p2a_execute.mjs                     # supervised single-task lifecycle runner
+scripts/p2a_execute.mjs                     # supervised single-task lifecycle primitive
 scripts/p2a_monitor_gate.mjs                 # supervised orchestration CLI
 scripts/p2a_proposals.mjs                   # proposal mining/review/curation CLI
 scripts/p2a_radar_preflight.mjs             # Feature Radar preflight discovery/adapter helper
@@ -213,7 +213,7 @@ Gemini target fields use the documented subagent keys `kind`, `tools`, `temperat
 - Plan2Agent v1은 세 CLI 모두에서 같은 역할 이름을 사용하되, CLI별 문법은 renderer가 생성한다.
 - 각 CLI의 subagent는 read-only planning 역할로 제한한다.
 - Intake/spec 단계는 prior-art 근거가 필요한 경우 read-only web lookup을 허용할 수 있다.
-- 실제 코드 변경 세션은 사람이 감독하는 foreground CLI/app에서 수행하고, P2A는 task/run/orchestration 상태를 파일로 기록한다.
+- 실제 코드 변경 세션은 사람이 감독하는 foreground CLI/app에서 수행하고, P2A는 task/run/orchestration 상태를 파일로 기록한다. 같은 ready snapshot의 bounded batch도 task별 단건 run을 유지하며 main owner가 start·로컬 통합·검증·finish를 직렬 소유한다.
 - skill은 workflow 재사용 단위이고, subagent는 context 격리와 전문 역할 분리를 위한 단위다.
 
 ## 12. 구현 및 고도화 순서
@@ -254,6 +254,7 @@ Gemini target fields use the documented subagent keys `kind`, `tools`, `temperat
 - CLI mirror drift check와 fixture runner의 CI 연결은 사용자 관리 항목으로 둔다.
 - 완료: `p2a_runs.mjs`로 파일 기반 agent 실행 로그, branch/worktree 격리 기준, changed files, verification 결과를 기록한다. PTY 기반 agent 자동 실행과 PR 생성은 후속이다.
 - 완료: `p2a_execute.mjs`로 ready task 1건의 plan/start/finish/status를 묶는 Phase 1 감독형 실행기를 제공한다. Codex/Claude 구현 세션 자체는 foreground 감독형으로 유지한다.
+- 완료: `p2a-dev-execution`이 한 ready snapshot에서 독립 task의 직렬 start, 격리 worktree 병렬 구현, canonical integration branch로의 직렬 로컬 통합·검증·finish를 조율한다. 신규 batch CLI, headless scheduler, mixed-provider write, 자동 충돌 해결, remote merge는 포함하지 않는다.
 
 ## 15. 공식 레퍼런스
 

@@ -6,7 +6,7 @@
 
 ## 1. 현재 결론
 
-Plan2Agent는 Gate A-D planning harness 이후, 승인된 ready task 1건을 사람이 감독하는 foreground agent 세션으로 실행하고 결과를 파일 기반 run log로 추적하는 흐름을 제공한다.
+Plan2Agent는 Gate A-D planning harness 이후, 승인된 ready task 1건 또는 한 ready snapshot의 bounded batch를 사람이 감독하는 foreground agent 세션으로 실행하고 결과를 task별 파일 기반 run log로 추적하는 흐름을 제공한다.
 
 완료된 범위:
 
@@ -14,6 +14,7 @@ Plan2Agent는 Gate A-D planning harness 이후, 승인된 ready task 1건을 사
 | --- | --- |
 | task/run tracking | `p2a.mjs tasks`, `p2a.mjs runs`, run/run-index schema |
 | 감독형 단일 task 실행 | `p2a.mjs execute plan/start/resume/status/finish` |
+| 감독형 ready batch | `p2a-dev-execution` owner가 직렬 start, 격리 worktree 병렬 구현, 직렬 로컬 통합·검증·finish를 조율 |
 | 감독형 orchestration | `p2a.mjs execute start --require-monitor/show/validate/handoff/next-role/role-prompt/mark-role/failure-policy` |
 | runtime sidecar | `runs/<iterationId>/<runId>.orchestration.json`, `runs/<iterationId>/<runId>.monitor-gate.json`, 위반이 있을 때만 생성하는 `.style-verdict.json` |
 | monitor gate | `p2a-performance-monitor`와 monitor verdict 기반 finish 차단 |
@@ -21,7 +22,7 @@ Plan2Agent는 Gate A-D planning harness 이후, 승인된 ready task 1건을 사
 | Hermes proposal loop | `p2a.mjs proposals mine/review/curate/draft-patch/approve-draft/digest` |
 | provider-native guide | Codex, Claude, Gemini용 role prompt, runner guide, runner doctor, capability evidence |
 
-이 실행 계층은 여러 agent를 무인으로 돌리는 scheduler가 아니다. P2A는 ready task, role, prompt, runtime 상태, monitor gate, proposal artifact를 조율하고, 실제 agent CLI/앱 세션은 사용자가 foreground에서 열어 감독한다.
+이 실행 계층은 여러 agent를 무인으로 돌리는 scheduler가 아니다. P2A는 ready task, role, prompt, runtime 상태, monitor gate, proposal artifact를 조율하고, 실제 agent CLI/앱 세션은 사용자가 foreground에서 열어 감독한다. Batch mode도 같은 foreground 세션 안에서 provider-native write subagent를 bounded하게 병렬 실행할 뿐, start·통합·검증·finish 소유권은 main owner에게 남는다.
 
 ## 2. 감독형 자동화 경계
 
@@ -29,6 +30,8 @@ Plan2Agent는 Gate A-D planning harness 이후, 승인된 ready task 1건을 사
 
 - 사용자가 공식 Codex/Claude/Gemini CLI 또는 앱을 foreground로 열고 P2A가 출력한 prompt를 붙여넣는다.
 - 해당 foreground 세션 내부에서 provider-native skill, subagent, custom agent, agent team, extension을 사용한다.
+- 한 ready snapshot에서 독립 task를 고르고, 동일 write-capable provider의 격리 worktree implementer를 bounded하게 병렬 실행한다.
+- 사용자가 승인한 canonical integration branch/worktree에 main owner가 결과를 하나씩 로컬 통합하고 통합 상태를 검증한다.
 - P2A는 role prompt, next role, monitor gate, run state, proposal state를 파일로 기록한다.
 - 결과는 사용자가 확인한 뒤 `p2a.mjs execute finish`, `p2a.mjs write monitor verdict`, `p2a.mjs proposals approve-draft` 같은 명령으로 명시 기록한다.
 
@@ -38,7 +41,8 @@ Plan2Agent는 Gate A-D planning harness 이후, 승인된 ready task 1건을 사
 - Codex/Claude/Gemini CLI를 background/headless로 무인 실행하는 방식.
 - browser loop, 세션 쿠키/토큰 재사용, 계정 로테이션, rate limit 우회.
 - 여러 provider가 같은 파일을 동시에 수정하는 mixed-provider implementation.
-- approval 없는 patch 적용, PR 생성, push, merge.
+- 자동 충돌 해결, dirty worktree 강제 삭제, 파괴적 reset.
+- approval 없는 patch 적용, PR 생성, push, remote merge.
 
 ## 3. Provider 전략
 
@@ -52,6 +56,8 @@ Plan2Agent는 Gate A-D planning harness 이후, 승인된 ready task 1건을 사
 | Manual | provider-native 기능이 없거나 위험한 경우 사람이 직접 실행하고 결과만 기록한다. |
 
 P2A는 provider capability matrix와 role profile을 바탕으로 implementer, reviewer, monitor role을 배정한다. 계정 내부 team/subagent/extension 자동 introspection은 비목표이며, `runner-doctor --live`도 provider `--version` probe 수준으로 제한한다.
+
+Batch write는 Codex 또는 foreground 승인·confinement가 충족된 Claude처럼 write-capable subagent를 별도 worktree에 가둘 수 있을 때만 사용한다. Gemini는 read-only 정책을 유지하며, write 요청은 ready task 또는 frozen batch context를 write-capable foreground owner에게 handoff한다. 안전한 병렬 write capacity가 1인 write-capable provider만 기존 단건 흐름으로 fallback한다.
 
 ## 4. 표준 실행 흐름
 
@@ -112,6 +118,23 @@ node .plan2agent/scripts/p2a.mjs execute finish \
 ```
 
 자세한 옵션은 [CLI 사용자 가이드](cli-reference.md)의 `p2a_execute.mjs`, `p2a_monitor_gate.mjs`, `p2a_proposals.mjs` 섹션을 기준으로 삼는다.
+
+### 4.1 감독형 ready batch
+
+`p2a-dev-execution` batch mode는 신규 batch CLI나 batch run을 만들지 않는다. 모든 task는 기존 단건 CLI와 고유 run id를 그대로 사용한다.
+
+1. main owner가 `p2a_tasks ready` 결과를 ready snapshot으로 고정하고 동시성 상한 안에서 batch를 선택한다. 같은 파일, 공유 설정, DB schema, API 계약처럼 알려진 integration surface가 겹치면 batch에서 제외하거나 concurrency를 1로 낮춘다.
+2. committed canonical integration head를 `batchBase`로 정하고, task마다 같은 base의 fresh branch/worktree를 만든다. `p2a_execute start`는 main이 task별로 직렬 호출한다.
+3. task별 `p2a-implementer`는 자기 worktree에서 파일 편집과 self-check만 병렬 수행한다. lifecycle, harness, 다른 worktree, canonical integration 상태는 수정하지 않는다.
+4. main이 완료 결과를 하나씩 scope 검토하고 task별 changed-file 목록을 동결한 뒤 reproducible commit 또는 patch로 만든다.
+5. 최신 canonical integration head에서 integration candidate를 만들고 결과를 적용한다. 충돌을 자동 해결하지 않으며, task worktree 검증과 별개로 candidate에서 필수 verification을 실행한다.
+6. integration base/ref/workspace를 `INTEGRATION:` run note로 남기고 task별 changed files를 명시 기록한다. 누적 integration worktree의 전체 git status를 한 task에 귀속하지 않는다.
+7. 충돌이 없고 필수 verification이 통과했으며 필요한 monitor gate가 acceptance를 확인한 candidate만 canonical integration branch에 반영한다. style-rating은 적용 대상이면 실행하고 기록하되, 기존 계약처럼 정보성 근거로만 남기고 canonical 반영이나 `done`/`blocked` 판단을 직접 차단하지 않는다. 그 뒤에만 `p2a_execute finish`로 run을 `finished`, task를 `done`으로 전이한다.
+8. batch harvest 후 `ready`를 다시 계산하고 다음 batch worktree는 최신 canonical integration head에서 시작한다.
+
+spawn, scope, integration, verification 또는 monitor가 실패한 task는 canonical integration branch를 전진시키거나 `done` 처리하지 않는다. 기존 structured failure contract로 `blocked`/`failed` 처리하거나 사용자 결정이 필요하면 active로 유지한다. 다른 독립 task의 직렬 harvest는 계속할 수 있다.
+
+dirty, unmerged, failed, blocked task 또는 integration-candidate worktree는 자동 제거하지 않는다. 결과가 canonical integration branch와 run evidence에 durable하게 남은 accepted worktree만 사용자 확인 또는 승인된 cleanup 정책에 따라 정리할 수 있다.
 
 ## 5. Run과 orchestration artifact
 
@@ -192,15 +215,19 @@ node .plan2agent/scripts/p2a.mjs proposals approve-draft --draft .plan2agent/pro
 - Gate D review blocker가 없어야 한다.
 - ready task와 acceptance criteria가 있어야 한다.
 - 실패한 verification을 숨기고 task를 `done` 처리하지 않는다.
+- isolated worktree 결과가 승인된 canonical integration branch에 반영되기 전에 task를 `done` 처리하지 않는다.
 - task scope 밖 변경 파일은 run note 또는 blocker로 남긴다.
 - `.plan2agent/`, `.agents/`, `.claude/`, `.codex/`, `.gemini/`, `scripts/`, `schemas/` 같은 harness/install 파일은 일반 application task의 수정 대상이 아니다.
-- destructive cleanup, push, merge, PR 생성은 자동으로 하지 않는다.
+- destructive cleanup, push, remote merge, PR 생성은 자동으로 하지 않는다. 승인된 batch mode의 로컬 integration만 main owner가 직렬 수행한다.
 
 ## 9. 후속 후보
 
 현재 완료 기능 위에 남은 후보는 다음이다.
 
 - agent-generated monitor gate.
+- `p2a_execute batch` 같은 persistent batch state/CLI UX.
+- integration commit/patch와 verification workspace의 run schema provenance.
+- conflict-aware batch planning과 target-path overlap hint.
 - PR 생성과 리뷰 상태 연동.
 - code-aware spec 역생성과 결과 diff 병합.
 - Memory 서버 기반 cross-session recall, run/proposal 검색, failure trend 분석.

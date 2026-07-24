@@ -45,7 +45,7 @@
 | agent 저작 task gate | backbone(`context`, `gate-c-draft` 검증, `promote-tasks`), `p2a-task-author` 스킬, 정식 `task-context` schema, provenance sidecar가 구현됐다. 정본 교체는 모든 task가 `todo`이고 run history가 없는 실행 전 구간에서만 명시적 `--replace-existing`으로 허용하며, 실행 시작 뒤에는 task를 다시 `todo`로 열어도 새 feature iteration 또는 maintenance lane을 사용한다. 상세 계약은 §10이다. | richer code-aware task authoring은 후속 실행 레이어에서 다룬다. |
 | archived close | close artifact 존재 여부/hash 기록과 기본 validate-time archive audit을 제공한다. | 기존 pre-audit artifact migration은 필요할 때 `--skip-archive-audit`로 우회한다. |
 | maintenance 반복 | lazy README, `maintenance add` task 생성, `maintenance add --from-draft` 승격, 존재하는 task graph 검증, `context --scope maintenance`, `tasks --maintenance` source/target 표와 prompt next command, handoff 시 별도 `.plan2agent/maintenance/task-graph.json` 복사를 제공한다. | 후보 승인/실행 조작은 CLI와 agent 대화 표면을 기준으로 유지한다. |
-| agent 실행 추적 | `p2a_runs.mjs`가 전역 `runs/run-index.json`과 iteration별 `runs/<iterationId>/<runId>.json`을 관리하고, test/lint/typecheck 실행 결과와 git changed files를 수집한다. run/index 갱신은 project lock, atomic write, 중단 복구 journal을 사용한다. legacy 평면 run과 이전 `iterations/<iterationId>/runs/` index는 source/target lock과 재개 가능한 journal을 거친 전역 migration을 지원한다. `--graph` 실행은 경로와 무관하게 graph provenance를 유지하고 milestone 증거에서 제외한다. | PTY 기반 자동 agent orchestration, PR 생성, 병렬 실행 scheduler는 후속이다. |
+| agent 실행 추적 | `p2a_runs.mjs`가 전역 `runs/run-index.json`과 iteration별 `runs/<iterationId>/<runId>.json`을 관리하고, test/lint/typecheck 실행 결과와 git changed files를 수집한다. run/index 갱신은 project lock, atomic write, 중단 복구 journal을 사용한다. legacy 평면 run과 이전 `iterations/<iterationId>/runs/` index는 source/target lock과 재개 가능한 journal을 거친 전역 migration을 지원한다. `--graph` 실행은 경로와 무관하게 graph provenance를 유지하고 milestone 증거에서 제외한다. `p2a-dev-execution`은 한 ready snapshot의 bounded batch에서 task별 직렬 start, 격리 worktree 병렬 구현, 직렬 로컬 통합·검증·finish를 조율한다. | PTY/headless 자동 scheduler, persistent batch CLI, PR 생성은 후속이다. |
 
 ### 0-3. 미구현 / 후속 고도화
 
@@ -53,7 +53,7 @@
 | --- | --- | --- |
 | P2 | maintenance task graph 정식 운영 | 생성/검증/handoff 정책은 구현됐고, maintenance 전용 UX가 더 필요하다. |
 | P2 | archived 감사 정책 강화 | 기본 검증 강제는 구현됐고, 대규모 legacy migration 도구는 필요 시 후속이다. |
-| P3 | agent 자동 실행 orchestration, PR 생성, 병렬 실행 scheduler | run log와 선택적 branch/worktree 생성은 구현됐고, agent를 직접 구동·감시하는 실행기는 후속이다. |
+| P3 | agent 자동 실행 orchestration, PR 생성, 병렬 실행 scheduler | foreground skill-level bounded batch는 구현됐고, agent를 직접 headless로 구동·감시하는 scheduler와 persistent batch CLI는 후속이다. |
 | P3 | brownfield code-aware intake, 병렬/branch/worktree별 반복 | 파일 기반 단일 반복 루프가 안정된 뒤 확장한다. |
 
 ## 1. 배경과 목적
@@ -110,7 +110,7 @@ open iteration -> task 실행 -> 모든 task done -> 사용자 close -> archived
 - 반복 전환은 암묵적으로 일어나지 않는다. 모든 task done과 사용자 close가 모두 만족될 때만 마감한다.
 - 마감 시 해당 반복을 `archived`로 동결하고, 루트 `status.md` 반복 인덱스에 표시한다.
 - 마감 시 필요하면 개발 대상 프로젝트로 재인계하고, P2A 산출물 기준점은 Plan2Agent Memory 또는 명시 export에 남긴다. git commit은 제품 소스코드 기준점에만 사용한다.
-- 병렬 반복, branch별 반복, worktree별 반복은 후속 고도화로 둔다.
+- 한 active iteration 안에서 ready task의 foreground bounded batch는 허용한다. 동시에 여러 iteration을 여는 병렬 반복, branch별 반복, worktree별 planning lane은 후속 고도화로 둔다.
 
 이 결정은 현재 task 상태 CLI가 단일 task graph를 기준으로 동작하는 단순성을 유지한다. 활성 반복 인식은 “현재 어떤 task graph를 볼 것인가”의 선택 문제로 제한한다.
 
@@ -745,7 +745,7 @@ Phase 2 흐름: `context` -> read-only `p2a-task-author` 서브에이전트가 d
 이 문서의 비목표:
 
 - 기존 코드베이스를 자동으로 읽고 spec을 역생성하는 brownfield code-aware intake
-- 병렬 반복 scheduler, branch별 반복, worktree별 반복 planning lane
+- multi-iteration 병렬 scheduler, branch별 반복, worktree별 반복 planning lane
 - agent 자동 실행, PTY 제어, PR 생성, 결과 diff 자동 병합
 - DB, pgvector, Neo4j 기반 plan-code 계보 저장
 
@@ -772,7 +772,7 @@ Phase 2 흐름: `context` -> read-only `p2a-task-author` 서브에이전트가 d
 | 9 | archived append-only 감사 | 완료 | close 시 artifact 존재 여부/hash를 기록하고 기본 `validate`에서 변경을 감지한다. legacy/migration은 `--skip-archive-audit`로 우회한다. |
 | 10 | 구조적 diff 기반 재작업 task 생성 | 완료 | `diff-tasks`가 semantic group, 완료 task overlap 기반 rework, `--force` 미완료 task reuse, question disposition 재처분 acceptance를 생성한다. |
 | 11 | maintenance task graph 운영 | 완료 | `maintenance add`가 graph를 lazy 생성/append하고 validate가 schema/dependency를 검증하며 handoff 시 별도 maintenance graph로 복사한다. |
-| 12 | agent 실행 추적 | 완료 | `p2a_runs.mjs`가 run-index/run log, task별 runId, changedFiles, verification, agentTool, workspaceRef, 선택적 branch/worktree 격리 생성, test/lint/typecheck 결과 수집을 제공한다. |
+| 12 | agent 실행 추적 | 완료 | `p2a_runs.mjs`가 run-index/run log, task별 runId, changedFiles, verification, agentTool, workspaceRef, 선택적 branch/worktree 격리 생성, test/lint/typecheck 결과 수집을 제공한다. `p2a-dev-execution`은 같은 ready snapshot의 task를 bounded parallel implementer worktree에 배정하고 main owner가 start·로컬 통합·검증·finish를 직렬화한다. |
 
 ## 13. 검증 메모
 

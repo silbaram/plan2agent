@@ -1,37 +1,43 @@
 ---
 name: p2a-dev-execution
-description: Use when implementing a single ready Plan2Agent task into real code changes and recording the run, without touching planning artifacts.
+description: Use when implementing one ready Plan2Agent task or a bounded batch of independent ready tasks into real code changes and recording each run, without touching planning artifacts.
 ---
 
 # Plan2Agent Dev Execution
 
-Implement one approved, ready Plan2Agent task as real code changes in its target project, record the run, and hand back verification results. This skill is for execution only: it does not author planning artifacts, change gates, or broaden the approved task scope.
+Implement one approved ready Plan2Agent task, or a bounded batch from one ready snapshot, as real code changes in its target project. Record every task as its own run and hand back verification and integration results. This skill is for execution only: it does not author planning artifacts, change gates, or broaden any approved task scope.
 
 ## When to use
 
 Use this skill only when all of these conditions are true before starting:
 
-- The task is exposed by `p2a_tasks ready`.
+- Every selected task is exposed by the same `p2a_tasks ready` snapshot.
 - The Gate B spec is approved and `open_decisions` is empty.
 - The Gate D review has no blockers.
-- The task has acceptance criteria.
+- Every selected task has acceptance criteria.
 - The user explicitly asks for implementation execution.
 
 If any condition is missing, stop and report the missing prerequisite instead of implementing.
+
+Use single-task mode unless the user asks to execute multiple ready tasks, or explicitly accepts a proposed bounded batch. Batch mode is supervised orchestration inside one foreground session, not permission to start a headless scheduler.
 
 ## Inputs
 
 Use these inputs:
 
 - Artifact root, or `--graph` when operating from an explicit task graph.
-- Ready task id.
+- One ready task id, or an exact list selected from one ready snapshot.
 - `agent-tool`, usually `codex`.
-- Optional existing run id.
+- Optional existing run id per task.
+- Optional maximum batch concurrency, capped by the foreground provider's available write-capable subagent slots.
+- For batch mode, a user-approved canonical integration branch/worktree, an owner-only per-task integration-candidate worktree/branch strategy, and its committed base ref.
 
 
 ## Provider Confinement Policy
 
-Codex write-capable runs use native `workspace-write` sandbox confinement inside the assigned run workspace or isolated worktree. Claude write-capable runs require scaffold confinement with deny rules, a PreToolUse hook, and the macOS/Linux OS sandbox, and they must stay on the foreground, human-supervised approval path for now. Do not switch Claude to unattended `permissionMode` auto/background until the cross-OS spike is complete and a human explicitly approves that mode. Gemini remains read-only; do not pursue write-capable Gemini implementers, and use the main-session fallback when execution is needed. For every provider, writes remain limited to the assigned workspace/worktree, and harness files or paths outside that workspace are forbidden.
+Codex write-capable runs use native `workspace-write` sandbox confinement inside the assigned run workspace or isolated worktree. Claude write-capable runs require scaffold confinement with deny rules, a PreToolUse hook, and the macOS/Linux OS sandbox, and they must stay on the foreground, human-supervised approval path for now. Do not switch Claude to unattended `permissionMode` auto/background until the cross-OS spike is complete and a human explicitly approves that mode. Gemini remains read-only; do not pursue write-capable Gemini implementers. For Gemini, main-session fallback means stopping write execution and handing the ready task or frozen batch to a foreground write-capable Codex or approved Claude owner; it is not a single-task write fallback inside Gemini. For every provider, writes remain limited to the assigned workspace/worktree, and harness files or paths outside that workspace are forbidden.
+
+Batch mode must use one write-capable provider within one foreground supervised session. Do not mix providers in one write batch. When the provider cannot create independently confined write-capable subagents, or available capacity is one, fall back to the single-task procedure.
 
 ## Procedure
 
@@ -156,15 +162,84 @@ Codex write-capable runs use native `workspace-write` sandbox confinement inside
 
 11. Complete the retrospective gate described below.
 
+## Supervised Batch Owner Procedure
+
+Batch mode wraps the single-task lifecycle; it does not create a batch run, change schemas, or delegate lifecycle ownership. Each task keeps its own run id, worktree, verification evidence, monitor verdict, style result, finish, milestone eligibility check, and retrospective.
+
+### 1. Freeze one ready snapshot and select a bounded batch
+
+Run `p2a_tasks ready` once and freeze that result as the current ready snapshot. Select at most the user-approved concurrency limit and never add tasks that become ready while the batch is running. Because ready tasks already have every declared dependency in `done`, no selected task can directly depend on another selected task.
+
+Before starting, inspect task descriptions, target areas, acceptance criteria, and known implementation surfaces. Remove tasks from the batch, or reduce concurrency to one, when they are likely to overlap on the same files, shared configuration, database schema, generated artifacts, API contracts, or another integration-sensitive resource. Worktrees isolate edits; they do not eliminate integration conflicts or hidden semantic dependencies.
+
+Establish a committed `batchBase`, a user-approved canonical integration branch/worktree, and a fresh owner-only integration-candidate worktree/branch strategy. Do not use a dirty user checkout as either integration target. The canonical integration branch is the only base that may open the next dependency batch; a task worktree or integration candidate by itself is never canonical.
+
+### 2. Start every run serially
+
+The main dev-execution owner calls `p2a_execute start` once per selected task, one at a time. Use a fresh worktree and branch for each task and pass the same committed `--base-ref <batch-base>`:
+
+```bash
+node .plan2agent/scripts/p2a_execute.mjs start \
+  --artifacts <dir> \
+  --task <task-id> \
+  --agent-tool codex \
+  --isolation worktree \
+  --worktree <fresh-task-worktree> \
+  --base-ref <batch-base> \
+  --create-isolation
+```
+
+Maintain an owner-side mapping for `taskId`, `runId`, `branch`, `worktree`, `baseRef`, and implementer. Do not spawn an implementer when its start failed. A failed start does not require canceling runs that were already started for other independent tasks.
+
+Only the main owner may call `p2a_execute start`, `p2a_runs record|verify|finish`, `p2a_execute finish`, or `p2a_tasks done|block`. This remains true even when lifecycle CLIs are internally lock-safe.
+
+### 3. Spawn implementations in parallel
+
+After the selected runs have started, spawn one `p2a-implementer` per task inside its assigned worktree, up to the approved concurrency limit. Pass each implementer only its task prompt, acceptance criteria, constraints, style contract, run identity, and worktree boundary.
+
+Each implementer performs scoped file edits and optional local self-checks only. It must return changed files, checks, results, and blockers to the main owner. It must not edit planning artifacts, harness files, another worktree, the canonical integration worktree, or lifecycle state. Agent completion order does not control harvest order.
+
+### 4. Harvest and integrate one task at a time
+
+The main owner harvests one completed result at a time:
+
+1. Inspect the task worktree diff and reject scope drift or boundary violations.
+2. Freeze the task-specific changed-file list before creating a commit or patch. Do not attribute the cumulative integration worktree status to one task.
+3. Materialize a reproducible task-scoped commit or patch under main-owner control.
+4. Apply it to an integration candidate based on the latest canonical integration head. Do not auto-resolve conflicts and do not advance the canonical integration branch yet.
+5. Run configured or explicit verification against the integrated candidate. Task-worktree self-checks do not replace integrated-state verification.
+6. Record the exact task changed files and an `INTEGRATION:` run note containing the candidate base, integrated commit or patch identity, and verification workspace. When verification runs outside the original task worktree, pass `--workspace <integration-candidate>` explicitly.
+7. Run the existing monitor gate and style-rating passes against the task evidence and integrated candidate when they apply.
+8. Advance the canonical integration branch only after the candidate is conflict-free, required verification passed, and required monitor evidence accepts it.
+9. Only after the canonical integration branch contains the accepted task result, call `p2a_execute finish` and allow the task to transition to `done`.
+
+In batch mode, do not rely on `--collect-git` from the cumulative integration worktree for task attribution. Record the frozen task-specific changed files explicitly. A clean integration worktree after committing is valid when the run already contains the correct changed-file evidence.
+
+If spawn, scope review, integration, verification, or a required monitor gate fails, do not advance the canonical integration branch for that task and do not mark it `done`. Close it through the existing structured `failed` or `blocked` contract when the cause is known, or keep it active when user input is required before a truthful close. Other independent task results may continue through serial harvest.
+
+### 5. Recompute ready only after the batch harvest
+
+After every selected task has been harvested or given a truthful non-done disposition, run `p2a_tasks ready` again. Start the next batch from the latest canonical integration head. A dependent task must not start from its predecessor's isolated task branch or from the old batch base.
+
+Evaluate milestone review eligibility after each successful serial finish, using the task-graph state at that point. Do not run milestone passes concurrently and do not use their informational findings as a substitute for integrated-state verification.
+
+### 6. Preserve recoverability and clean up safely
+
+Never force-remove a dirty, unmerged, failed, or blocked task or integration-candidate worktree. An accepted task or integration-candidate worktree becomes a cleanup candidate only after its task result is durably present on the canonical integration branch and its run evidence contains the recovery references. A failed or blocked integration candidate remains recoverable until the user explicitly chooses a cleanup path. Cleanup still requires explicit user confirmation or an already approved project cleanup policy.
+
+Do not use destructive reset, forced branch movement, automatic conflict resolution, remote push, PR creation, or remote merge as part of this batch procedure.
+
 ## Writing boundaries and prohibitions
 
 - Implement only inside the separate target project. Do not write to the Plan2Agent repository itself, including `.agents/`, `.claude/`, `.codex/`, `.gemini/`, `.plan2agent/scripts/`, `.plan2agent/schemas/`, `plans/`, or `docs/`.
-- Limit implementation writes to the run `workspaceRef` or worktree. The main dev-execution owner may also write the lifecycle artifacts explicitly defined by this skill: run verdicts, milestone-review JSON, and retrospective proposals. Spawned implementation and review subagents remain unable to write those lifecycle artifacts.
+- Limit implementation writes to the run `workspaceRef` or worktree. In supervised batch mode, the main dev-execution owner may also create task-scoped local commits or patches and write to the approved canonical integration worktree plus the owner-only integration-candidate worktree created from its latest head. The main owner may write the lifecycle artifacts explicitly defined by this skill: run verdicts, milestone-review JSON, and retrospective proposals. Spawned implementation and review subagents remain unable to write integration or lifecycle artifacts.
 - Do not add or rewrite requirements by bypassing planning artifacts.
 - Do not install dependencies without grounded evidence from the approved task, existing project conventions, or explicit user approval.
 - In a co-located project where harness files live alongside app code, do not run interactive scaffolders that may overwrite or prompt in a non-empty directory, such as `npm create vite .`. Write config files manually and install only dependencies.
 - Do not access, print, or exfiltrate `.env` files, credentials, or tokens.
 - Do not hide failing verification by marking a task done.
+- Do not mark an isolated-worktree task done before its accepted result is present on the approved canonical integration branch.
+- Do not perform remote push, PR creation, or remote merge from this skill.
 - Do not automatically self-modify skills or agents.
 - Do not modify `.plan2agent/style.md` during implementation; it is updated only by direct user edits or through the approved proposal path.
 
@@ -175,6 +250,7 @@ Return these items to the user:
 - Summary of implemented changes.
 - `changedFiles` list.
 - Verification summary with commands and outcomes.
+- For batch mode, the ready snapshot, task/run/worktree mapping, harvest disposition, and canonical integration ref for every selected task.
 - Recommended task status: `done`, `blocked`, or keep active.
 - Optional skill-proposal schema object file path if the retrospective identifies a reusable process improvement.
 

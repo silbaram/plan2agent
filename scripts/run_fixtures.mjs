@@ -7231,6 +7231,10 @@ export function main() {
   writeResultOutput(runLayoutResult);
   if (runLayoutResult.status !== 0) return failureStatus(runLayoutResult);
 
+  const supervisedBatchExecutionResult = runNodeTestFile('tests/supervised-batch-execution.test.mjs');
+  writeResultOutput(supervisedBatchExecutionResult);
+  if (supervisedBatchExecutionResult.status !== 0) return failureStatus(supervisedBatchExecutionResult);
+
   const evalStableMetricsResult = runNodeTestFile('tests/eval-stable-metrics.test.mjs');
   writeResultOutput(evalStableMetricsResult);
   if (evalStableMetricsResult.status !== 0) return failureStatus(evalStableMetricsResult);
@@ -7260,6 +7264,7 @@ export function main() {
   segments.push(`${countNodeTestCases(projectConfigDetectionResult.stdout)} project config detection test(s)`);
   segments.push(`${countNodeTestCases(runIdStrategyResult.stdout)} run id strategy test(s)`);
   segments.push(`${countNodeTestCases(runLayoutResult.stdout)} run layout test(s)`);
+  segments.push(`${countNodeTestCases(supervisedBatchExecutionResult.stdout)} supervised batch execution test(s)`);
   segments.push(`${countNodeTestCases(evalStableMetricsResult.stdout)} eval stable metrics test(s)`);
 
   console.log(`Validated ${formatSegments(segments)}`);
