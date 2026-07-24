@@ -82,7 +82,7 @@ Run or use the provided p2a.task_context.v1 context. When existing_tasks.active 
 
 {{args}}
 
-Gemini is read-only. Do not start a run, edit a worktree, create an integration candidate, record lifecycle evidence, advance a canonical branch, or finish a task. For any write request, return the exact ready task or frozen batch context and hand it off to a foreground Codex or approved Claude owner. That write-capable owner must use the candidate-first batch procedure from the skill. Gemini may provide read-only planning, review, or monitor assistance only.`,
+Gemini is read-only. Do not start a run, edit a worktree, create an integration candidate, record lifecycle evidence, advance a canonical branch, or finish a task. For any write request, return the exact ready task or frozen batch context and hand it off to a foreground Codex or approved Claude owner. For one ready task, that write-capable owner must use the skill's single-task procedure. For a frozen batch of independent ready tasks, that owner must use the candidate-first batch procedure. Gemini may provide read-only planning, review, or monitor assistance only.`,
   },
   'task-breakdown': {
     skill: 'p2a-task-breakdown',

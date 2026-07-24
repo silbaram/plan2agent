@@ -195,6 +195,8 @@ test('batch execution contract is present in canonical and generated provider su
   assert.match(gemini, /Gemini is read-only/);
   assert.match(gemini, /Do not start a run, edit a worktree, create an integration candidate/);
   assert.match(gemini, /hand it off to a foreground Codex or approved Claude owner/);
+  assert.match(gemini, /For one ready task, that write-capable owner must use the skill's single-task procedure/);
+  assert.match(gemini, /For a frozen batch of independent ready tasks, that owner must use the candidate-first batch procedure/);
   assert.match(gemini, /candidate-first batch procedure/);
 });
 
