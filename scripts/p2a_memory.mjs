@@ -722,6 +722,8 @@ function buildMemoryPlan(args) {
       sourceKind: context.sourceKind,
       sourcePath: displayPath(context.sourcePath),
       projectId,
+      sourceProjectId: projectId,
+      canonicalProjectId: projectCanonicalId,
       iterationId,
       runsDir: context.runsDir ? displayPath(context.runsDir) : null,
       proposalsDir: context.proposalsDir ? displayPath(context.proposalsDir) : null,
@@ -1473,7 +1475,7 @@ async function searchRemoteMemory(connection, args, plan) {
   if (!connection.server) return { results: [], error: null };
   const searchParams = {
     q: args.query,
-    projectId: plan?.project.id ?? null,
+    projectId: plan?.context.canonicalProjectId ?? plan?.project.id ?? null,
     iterationId: plan?.iteration.id ?? null,
     artifactType: args.artifactType,
     sourcePath: args.sourcePath,
@@ -1645,6 +1647,7 @@ function statusNextActions(connection, sync, plan) {
 function printStatus(payload) {
   console.log('Plan2Agent memory status');
   console.log(`- project: ${payload.context.projectId}`);
+  console.log(`- canonical project ID: ${payload.context.canonicalProjectId}`);
   console.log(`- iteration: ${payload.context.iterationId}`);
   console.log(`- source: ${payload.context.sourceKind} ${payload.context.sourcePath}`);
   console.log(`- server: ${payload.server.status}${payload.server.url ? ` (${payload.server.url})` : ''}`);
@@ -1867,6 +1870,7 @@ function pullPreviewNextActions(connection, remote, preview, plan) {
 function printPullPreview(payload) {
   console.log('Plan2Agent memory pull dry run');
   console.log(`- project: ${payload.context.projectId}`);
+  console.log(`- canonical project ID: ${payload.context.canonicalProjectId}`);
   console.log(`- iteration: ${payload.context.iterationId}`);
   console.log(`- source: ${payload.context.sourceKind} ${payload.context.sourcePath}`);
   console.log(`- server: ${payload.server.status}${payload.server.url ? ` (${payload.server.url})` : ''}`);
@@ -1908,6 +1912,8 @@ async function runSearch(args) {
       sourceKind: plan.context.sourceKind,
       sourcePath: displayPath(plan.context.sourcePath),
       projectId: plan.context.projectId,
+      sourceProjectId: plan.context.sourceProjectId,
+      canonicalProjectId: plan.context.canonicalProjectId,
       iterationId: plan.context.iterationId,
       serverProjectId: plan.project.id,
       serverIterationId: plan.iteration.id,
@@ -2054,6 +2060,7 @@ function printSearch(payload) {
   console.log('Plan2Agent memory search');
   console.log(`- query: ${payload.query.text}`);
   console.log(`- scope: ${payload.context ? `${payload.context.projectId} ${payload.context.iterationId}` : 'global'}`);
+  if (payload.context) console.log(`- canonical project ID: ${payload.context.canonicalProjectId}`);
   console.log(`- server: ${payload.server.status}${payload.server.url ? ` (${payload.server.url})` : ''}`);
   const filters = [
     payload.query.artifactType ? `type=${payload.query.artifactType}` : null,
@@ -2090,7 +2097,7 @@ function shellQuote(value) {
 function graphScopeParams(args, plan) {
   const sourceProjectId = trimString(args.project);
   return {
-    projectId: plan?.project?.id ?? (sourceProjectId ? stableId('p2a-project', [sourceProjectId]) : null),
+    projectId: plan?.context?.canonicalProjectId ?? plan?.project?.id ?? (sourceProjectId ? stableId('p2a-project', [sourceProjectId]) : null),
     iterationId: args.global ? null : (plan?.iteration?.id ?? args.iteration ?? null),
   };
 }
@@ -2505,6 +2512,7 @@ function printHistory(payload) {
   console.log('Plan2Agent memory history');
   console.log(`- scope: ${payload.scope.mode}${payload.scope.projectId ? ` project=${payload.scope.projectId}` : ''}${payload.scope.iterationId ? ` iteration=${payload.scope.iterationId}` : ''}`);
   if (payload.context) console.log(`- source: ${payload.context.sourceKind} ${payload.context.sourcePath}`);
+  if (payload.context) console.log(`- canonical project ID: ${payload.context.canonicalProjectId}`);
   console.log(`- server: ${payload.server.status}${payload.server.url ? ` (${payload.server.url})` : ''}`);
   console.log(`- events: total=${payload.summary.totalEvents} visible=${payload.summary.visibleEvents} local=${payload.summary.localEvents} remote=${payload.summary.remoteEvents} failedOrBlockedRuns=${payload.summary.failedOrBlockedRuns}`);
   const types = Object.entries(payload.summary.byType);
@@ -2624,6 +2632,7 @@ function pushPreviewNextActions(args, connection, plan) {
 function printPushPreview(payload) {
   console.log('Plan2Agent memory push dry run');
   console.log(`- project: ${payload.context.projectId}`);
+  console.log(`- canonical project ID: ${payload.context.canonicalProjectId}`);
   console.log(`- iteration: ${payload.context.iterationId}`);
   console.log(`- server: ${payload.server.url ?? 'not_configured'}`);
   console.log('- dry-run: no server writes');
@@ -2798,6 +2807,7 @@ async function pushPlan(connection, plan, post = memoryPost) {
 function printPushResult(payload) {
   console.log('Plan2Agent memory push');
   console.log(`- project: ${payload.context.projectId}`);
+  console.log(`- canonical project ID: ${payload.context.canonicalProjectId}`);
   console.log(`- iteration: ${payload.context.iterationId}`);
   console.log(`- server: ${payload.server.url}`);
   console.log(`- wrote: iterations=${payload.result.iterations} documents=${payload.result.documents} proposals=${payload.result.proposals} chunks=${payload.result.chunks} taskGraph=${payload.result.taskGraphs ?? (payload.result.taskGraphId ? 1 : 0)} tasks=${payload.result.tasks} runs=${payload.result.runs} graphSnapshots=${payload.result.graphSnapshots} graphNodes=${payload.result.graphNodes} graphEdges=${payload.result.graphEdges}`);

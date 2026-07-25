@@ -1421,6 +1421,8 @@ function startRun(args) {
   const workspacePath = resolveWorkspacePath(args);
   const isolationBasePath = resolveIsolationBasePath(args, workspacePath);
   const createsWorktree = args.createIsolation && args.isolation === 'worktree';
+  // A fresh worktree is the future workspace: validate its existing Git base
+  // before creation, then validate the worktree itself after prepareIsolation.
   assertDirectory(createsWorktree ? isolationBasePath : workspacePath, '--workspace');
   if (args.createIsolation && args.isolation === 'none') throw new Error('--create-isolation requires --isolation branch or worktree');
   if (createsWorktree && !args.worktree) throw new Error('--isolation worktree requires --worktree');

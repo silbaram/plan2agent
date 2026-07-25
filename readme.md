@@ -85,6 +85,7 @@ or app session stays foreground-supervised by the user.
 - `p2a memory status` compares local artifacts with remote snapshots.
 - `p2a memory push` uploads project, iteration, document, proposal, task, graph, and run snapshots, including stable milestone reviews as documents.
 - `p2a memory search` and `p2a memory history` support cross-session recall.
+- Memory output keeps the human-facing source key in legacy `context.projectId` and explicit `context.sourceProjectId`, while `context.canonicalProjectId` exposes the server UUID required by direct `/api/search/*` calls.
 - `p2a memory digest` summarizes failure and proposal history and tracks whether Memory search results were reused by run, proposal, or eval artifacts.
 
 ### Scaffold, Update, and Drift Checks

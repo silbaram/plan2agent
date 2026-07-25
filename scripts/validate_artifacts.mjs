@@ -928,6 +928,9 @@ export function validateMilestoneReviewData(data) {
         throw new ValidationError(`${item.task_id}.run_snapshot ${field} must be ${JSON.stringify(expected)}, got ${JSON.stringify(runSnapshot[field])}`);
       }
     }
+    if (item.workspace_ref !== undefined && runSnapshot.workspaceRef !== item.workspace_ref) {
+      throw new ValidationError(`${item.task_id}.workspace_ref must exactly match run_snapshot.workspaceRef`);
+    }
     if (!sameJson(runSnapshot.changedFiles, item.changed_files)) {
       throw new ValidationError(`${item.task_id}.changed_files must exactly match run_snapshot`);
     }
@@ -1126,6 +1129,9 @@ function validateMilestoneRunEvidence(data, artifactRoot, kind, graphPath) {
     const runPath = latest.runPath;
     const run = latest.run;
     const runSnapshot = evidence.run_snapshot;
+    if (kind === 'draft' && evidence.workspace_ref === undefined) {
+      throw new ValidationError(`${evidence.task_id}.workspace_ref is required for milestone review draft validation`);
+    }
     const expectedFields = {
       projectId: data.project_id,
       taskId: evidence.task_id,

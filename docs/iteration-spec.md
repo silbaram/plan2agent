@@ -176,7 +176,7 @@ open iteration -> task 실행 -> 모든 task done -> 사용자 close -> archived
 
 ### 2-6. milestone review는 checkpoint별 비차단 sidecar다
 
-기능 반복의 중간과 종료 직전 통합 검토는 Gate D `review.json`을 다시 쓰지 않고 `iterations/<iter-id>/milestone-reviews/`에 분리한다. `midpoint.json`과 `pre_close.json`은 각각 최대 한 번만 존재하며, 전체 task graph snapshot과 raw/snapshot hash, 모든 완료 task의 latest successful run ref·raw hash·full immutable run snapshot·finished timestamp·changed files·verification을 함께 보존한다. 따라서 나중에 task graph 상태나 run index가 더 진행되거나 finished run에 합법적인 evidence가 보강돼도 당시 검토 범위와 근거를 재구성할 수 있다.
+기능 반복의 중간과 종료 직전 통합 검토는 Gate D `review.json`을 다시 쓰지 않고 `iterations/<iter-id>/milestone-reviews/`에 분리한다. `midpoint.json`과 `pre_close.json`은 각각 최대 한 번만 존재하며, 전체 task graph snapshot과 raw/snapshot hash, 모든 완료 task의 latest successful run ref·raw hash·full immutable run snapshot·finished timestamp·workspace ref·changed files·verification을 함께 보존한다. reviewer는 각 changed file을 완료 run의 workspace/worktree/branch에서 먼저 확인한 뒤 현재 또는 main worktree와 비교하므로, 아직 merge되지 않은 완료 코드를 오래된 main 내용으로 오인하지 않는다. 따라서 나중에 task graph 상태나 run index가 더 진행되거나 finished run에 합법적인 evidence가 보강돼도 당시 검토 범위와 근거를 재구성할 수 있다.
 
 artifact는 `p2a.milestone_review.v1` schema를 따른다. owner는 `<checkpoint>.<unique-id>.draft.json`을 만든 뒤 `p2a_iteration.mjs promote-milestone --artifacts <root> --draft <path>`를 호출한다. CLI는 draft를 검증하고 hard-link create로 stable 이름을 원자적으로 선점한 프로세스만 `<checkpoint>.json`을 확정한 뒤 winning draft를 삭제한다. 이미 stable 파일이 있으면 덮어쓰지 않고 실패하므로 기존의 비원자적 “없음 확인 후 rename” 경합이 없다.
 

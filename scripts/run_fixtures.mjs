@@ -2115,10 +2115,17 @@ function validateMemoryFixtureCases() {
   }
 
   const graphPath = path.join(FIXTURE_ROOT, 'webhook-api-service', 'task-graph.json');
+  const canonicalMemoryProjectId = '2810dbd3-2cd5-5f09-8cfc-a9c2095404fe';
 
   let result = runMemory(['status', '--graph', graphPath]);
   checks += 1;
-  if (result.status !== 0 || !result.stdout.includes('Plan2Agent memory status') || !result.stdout.includes('documents=2') || !result.stdout.includes('taskGraphs=1')) {
+  if (
+    result.status !== 0
+    || !result.stdout.includes('Plan2Agent memory status')
+    || !result.stdout.includes(`canonical project ID: ${canonicalMemoryProjectId}`)
+    || !result.stdout.includes('documents=2')
+    || !result.stdout.includes('taskGraphs=1')
+  ) {
     console.error('memory status fixture failed');
     writeResultOutput(result);
     return { status: failureStatus(result), checks };
@@ -2132,6 +2139,9 @@ function validateMemoryFixtureCases() {
   if (
     result.status !== 0
     || memoryStatusJson?.schema_version !== 'p2a.memory_status.v1'
+    || memoryStatusJson?.context?.projectId !== 'webhook-api-service'
+    || memoryStatusJson?.context?.sourceProjectId !== 'webhook-api-service'
+    || memoryStatusJson?.context?.canonicalProjectId !== canonicalMemoryProjectId
     || !uuidPattern.test(memoryProjectItem?.artifactId ?? '')
     || memoryProjectItem?.artifactId?.startsWith('p2a-project-')
   ) {
@@ -2186,7 +2196,13 @@ function validateMemoryFixtureCases() {
 
   result = runMemory(['push', '--graph', graphPath, '--dry-run']);
   checks += 1;
-  if (result.status !== 0 || !result.stdout.includes('Plan2Agent memory push dry run') || !result.stdout.includes('dry-run: no server writes') || !result.stdout.includes('DOCUMENT_CHUNK:')) {
+  if (
+    result.status !== 0
+    || !result.stdout.includes('Plan2Agent memory push dry run')
+    || !result.stdout.includes(`canonical project ID: ${canonicalMemoryProjectId}`)
+    || !result.stdout.includes('dry-run: no server writes')
+    || !result.stdout.includes('DOCUMENT_CHUNK:')
+  ) {
     console.error('memory push dry-run fixture failed');
     writeResultOutput(result);
     return { status: failureStatus(result), checks };
@@ -2237,7 +2253,13 @@ function validateMemoryFixtureCases() {
 
   result = runMemory(['search', '--graph', graphPath, '--query', 'webhook', '--type', 'document']);
   checks += 1;
-  if (result.status === 0 || !result.stdout.includes('Plan2Agent memory search') || !result.stdout.includes('server: not_configured') || !result.stdout.includes('Set P2A_MEMORY_URL or pass --server to search Memory.')) {
+  if (
+    result.status === 0
+    || !result.stdout.includes('Plan2Agent memory search')
+    || !result.stdout.includes(`canonical project ID: ${canonicalMemoryProjectId}`)
+    || !result.stdout.includes('server: not_configured')
+    || !result.stdout.includes('Set P2A_MEMORY_URL or pass --server to search Memory.')
+  ) {
     console.error('memory search not-configured fixture failed');
     writeResultOutput(result);
     return { status: result.status === 0 ? 1 : failureStatus(result), checks };
@@ -2274,6 +2296,7 @@ function validateMemoryFixtureCases() {
   if (
     result.status !== 0
     || !result.stdout.includes('Plan2Agent memory history')
+    || !result.stdout.includes(`canonical project ID: ${canonicalMemoryProjectId}`)
     || !result.stdout.includes('server: not_configured')
     || !result.stdout.includes('TASK_GRAPH=')
     || !result.stdout.includes('Set P2A_MEMORY_URL or pass --server to include remote Memory history.')
@@ -6573,6 +6596,7 @@ function validateIterationCurrentFixtureCases() {
           run_snapshot: run,
           run_snapshot_sha256: hashText(JSON.stringify(run)),
           run_finished_at: milestoneRunFinishedAt,
+          workspace_ref: run.workspaceRef,
           changed_files: changedFiles,
           verification: verification.map((item) => ({
             type: item.type,

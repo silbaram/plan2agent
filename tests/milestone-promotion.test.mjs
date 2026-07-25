@@ -255,6 +255,7 @@ describe('milestone review atomic promotion', () => {
             run_snapshot: run,
             run_snapshot_sha256: milestoneRunSnapshotSha256(run),
             run_finished_at: run.finishedAt,
+            workspace_ref: run.workspaceRef,
             changed_files: run.changedFiles,
             verification: run.verification.map((verification) => ({
               type: verification.type,

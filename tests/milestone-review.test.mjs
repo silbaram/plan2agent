@@ -91,6 +91,7 @@ function completedTaskEvidence(index) {
     run_ref: `runs/run-task-${suffix}.json`,
     run_sha256: 'b'.repeat(64),
     run_finished_at: `2026-07-11T00:0${index}:00.000Z`,
+    workspace_ref: `fixture-workspace-${index}`,
     changed_files: [`src/task-${suffix}.mjs`],
     verification: normalizedVerification(index),
   };
@@ -192,7 +193,7 @@ function fullRun(evidence, overrides = {}) {
     taskGraphRef: overrides.taskGraphRef ?? TASK_GRAPH_REF,
     sourceSpecRef: '../gate-b-spec/spec.json',
     agentTool: 'codex',
-    workspaceRef: `fixture-workspace-${index}`,
+    workspaceRef: overrides.workspaceRef ?? evidence.workspace_ref ?? `fixture-workspace-${index}`,
     workspacePath: `/tmp/fixture-workspace-${index}`,
     isolation: {
       mode: 'none',
@@ -337,6 +338,30 @@ describe('milestone review artifact contract', () => {
       assert.deepEqual(validateMilestoneReview(bundle.reviewPath), data);
     } finally {
       rmSync(bundle.artifactRoot, { recursive: true, force: true });
+    }
+  });
+
+  test('requires workspace_ref for new drafts while preserving canonical legacy reviews', () => {
+    const draftData = midpointReview();
+    const draftBundle = writeBundle(draftData);
+    try {
+      delete draftData.source.completed_task_evidence[0].workspace_ref;
+      writeFileSync(draftBundle.reviewPath, `${JSON.stringify(draftData, null, 2)}\n`, 'utf8');
+      assert.throws(
+        () => validateMilestoneReview(draftBundle.reviewPath),
+        /workspace_ref is required for milestone review draft validation/,
+      );
+    } finally {
+      rmSync(draftBundle.artifactRoot, { recursive: true, force: true });
+    }
+
+    const canonicalData = midpointReview();
+    delete canonicalData.source.completed_task_evidence[0].workspace_ref;
+    const canonicalBundle = writeBundle(canonicalData, 'midpoint.json');
+    try {
+      assert.deepEqual(validateMilestoneReview(canonicalBundle.reviewPath), canonicalData);
+    } finally {
+      rmSync(canonicalBundle.artifactRoot, { recursive: true, force: true });
     }
   });
 
@@ -495,6 +520,7 @@ describe('milestone review artifact contract', () => {
       ['run_sha256', (evidence) => { evidence.run_sha256 = '0'.repeat(64); }, /run_sha256 does not match/],
       ['run_snapshot_sha256', (evidence) => { evidence.run_snapshot_sha256 = '0'.repeat(64); }, /run_snapshot_sha256 mismatch/],
       ['run_finished_at', (evidence) => { evidence.run_finished_at = '2026-07-11T00:09:00.000Z'; }, /run_snapshot finishedAt must be/],
+      ['workspace_ref', (evidence) => { evidence.workspace_ref = 'not-the-run-workspace'; }, /workspace_ref must exactly match/],
       ['changed_files', (evidence) => { evidence.changed_files = ['src/not-the-run-file.mjs']; }, /changed_files must exactly match/],
       ['verification', (evidence) => { evidence.verification[0].command = 'node --test different'; }, /verification must exactly match/],
     ];

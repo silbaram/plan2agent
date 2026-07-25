@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
@@ -303,6 +303,41 @@ test('allocates task-scoped sequential ids atomically across concurrent processe
     'run-task-008-007',
     'run-task-008-008',
   ]);
+});
+
+test('creates a fresh worktree before validating the same path passed as workspace', () => {
+  const root = tempRoot('fresh-worktree-workspace');
+  const graphPath = path.join(root, 'gate-c-task-graph', 'task-graph.json');
+  const repository = path.join(root, 'repository');
+  const worktree = path.join(root, 'worktree');
+  try {
+    mkdirSync(path.dirname(graphPath), { recursive: true });
+    writeFileSync(graphPath, readFileSync(TASK_GRAPH_FIXTURE, 'utf8'), 'utf8');
+    initGitWorkspace(repository);
+
+    const result = runCli([
+      'start',
+      '--graph', graphPath,
+      '--task', 'task-001',
+      '--run-id', 'run-fresh-worktree-workspace',
+      '--agent-tool', 'codex',
+      '--workspace', worktree,
+      '--isolation', 'worktree',
+      '--worktree', worktree,
+      '--base-ref', 'HEAD',
+      '--create-isolation',
+    ], repository);
+
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(existsSync(worktree), true);
+    const run = JSON.parse(
+      readFileSync(runFilePath(path.join(root, 'runs'), 'run-fresh-worktree-workspace'), 'utf8'),
+    );
+    assert.equal(run.workspacePath, path.resolve(worktree));
+    assert.equal(run.isolation.created, true);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test('preserves an allocated id across isolation failure and explicit retry', () => {
