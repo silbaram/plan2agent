@@ -26,7 +26,7 @@ import {
   singleArtifactProjectRoot,
 } from './p2a_paths.mjs';
 import { resolveIterationState } from './p2a_iteration_state.mjs';
-import { commandLine } from './p2a_run_commands.mjs';
+import { commandLine, shellQuote } from './p2a_run_commands.mjs';
 
 const P2A_PATHS = resolveP2aPaths(import.meta.url);
 const COMMANDS = new Set(['grade', 'compare', 'analyze', 'generate', 'digest']);
@@ -836,11 +836,6 @@ function clusterRecommendation(key) {
   return recommendations[key] ?? recommendations.other;
 }
 
-function buildAnalyze(args) {
-  const source = loadAnalyzeSource(args);
-  return buildAnalyzeForSource(source, args.proposals);
-}
-
 function buildAnalyzeForSource(source, proposalsArg = null) {
   const proposalsDir = proposalsArg ? path.resolve(proposalsArg) : source.proposalsDir ?? DEFAULT_PROPOSALS_DIR;
   const runs = readRuns(source.runsDir);
@@ -915,12 +910,6 @@ function buildAnalyzeForSource(source, proposalsArg = null) {
 
 function sortedUnique(values) {
   return [...new Set(values.filter(Boolean))].sort((left, right) => left.localeCompare(right));
-}
-
-function shellQuote(value) {
-  const text = String(value);
-  if (/^[A-Za-z0-9_./:=,+-]+$/.test(text)) return text;
-  return `'${text.replace(/'/g, `'\\''`)}'`;
 }
 
 function maintenanceCommandForCluster(source, cluster) {

@@ -6,6 +6,7 @@ import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSy
 import path from 'node:path';
 import process from 'node:process';
 import { pathToFileURL } from 'node:url';
+import { DEFAULT_MEMORY_REQUEST_TIMEOUT_MS } from './p2a_constants.mjs';
 import {
   loadJson,
   validateRunData,
@@ -27,17 +28,27 @@ import {
   resolveIterationState,
   resolveTaskGraphSourceSpec,
 } from './p2a_iteration_state.mjs';
+import { shellQuote } from './p2a_run_commands.mjs';
 
 const P2A_PATHS = resolveP2aPaths(import.meta.url);
 const COMMANDS = new Set(['status', 'push', 'pull', 'search', 'history', 'digest', 'trace', 'impact', 'precedent']);
+const SEARCH_MODES = new Set(['keyword', 'semantic', 'hybrid']);
 const DEFAULT_MEMORY_URL_ENV = 'P2A_MEMORY_URL';
 const DEFAULT_MEMORY_TOKEN_ENV = 'P2A_MEMORY_TOKEN';
 const DEFAULT_ARTIFACT_LIMIT = 5000;
 const DEFAULT_SEARCH_LIMIT = 20;
 const DEFAULT_HISTORY_LIMIT = 100;
+const DEFAULT_HYBRID_CANDIDATE_LIMIT = 80;
+const MAX_GRAPH_TRACE_DEPTH = 30;
 const MAX_PAGED_REQUESTS = 10000;
 const MAX_CHUNK_CHARS = 2000;
+const RUN_MEMORY_RECALL_SUFFIX = '.memory-recall.json';
 const MILESTONE_REVIEW_FILENAMES = ['midpoint.json', 'pre_close.json'];
+const ITERATION_MEMORY_FILENAMES = [
+  'iteration.json',
+  path.join('gate-a-intake', 'memory-recall.json'),
+  path.join('gate-a-intake', 'memory-recall-cross-project.json'),
+];
 const SEARCH_ARTIFACT_TYPES = new Set([
   'PROJECT',
   'ITERATION',
@@ -68,21 +79,21 @@ const SEARCH_TYPE_ALIASES = new Map([
 function usage() {
   return [
     'Usage:',
-    '  node .plan2agent/scripts/p2a_memory.mjs status (--artifacts <dir>|--graph <path>|--runs <dir>) [--server <url>] [--token <token>] [--json]',
+    '  node .plan2agent/scripts/p2a_memory.mjs status (--artifacts <dir>|--graph <path>|--runs <dir>) [--server <url>] [--token <token>] [--timeout-ms <n>] [--output <path>] [--json]',
     '  node .plan2agent/scripts/p2a_memory.mjs push (--artifacts <dir>|--graph <path>) [--server <url>] [--token <token>] [--dry-run] [--yes] [--json]',
     '  node .plan2agent/scripts/p2a_memory.mjs pull (--artifacts <dir>|--graph <path>|--runs <dir>) --dry-run [--server <url>] [--token <token>] [--output <path>] [--json]',
-    '  node .plan2agent/scripts/p2a_memory.mjs search --query <text> [--artifacts <dir>|--graph <path>|--runs <dir>|--global] [--type <kind>] [--source-path <path>] [--limit <n>] [--server <url>] [--token <token>] [--output <path>] [--json]',
+    '  node .plan2agent/scripts/p2a_memory.mjs search --query <text> [--mode keyword|semantic|hybrid] [--artifacts <dir>|--graph <path>|--runs <dir>|--project <sourceProjectId>|--global] [--exclude-project <sourceProjectId>] [--type <kind>] [--source-path <path>] [--limit <n>] [--server <url>] [--token <token>] [--output <path>] [--json]',
     '  node .plan2agent/scripts/p2a_memory.mjs history [--artifacts <dir>|--graph <path>|--runs <dir>|--global] [--project <id>] [--iteration <id>] [--limit <n>] [--server <url>] [--token <token>] [--output <path>] [--json]',
     '  node .plan2agent/scripts/p2a_memory.mjs digest (--artifacts <dir>|--graph <path>|--runs <dir>) [--proposals <dir>] [--output <path>] [--json]',
-    '  node .plan2agent/scripts/p2a_memory.mjs trace --node <naturalKey> [--project <sourceProjectId>] [--direction upstream|downstream|both] [--depth <n>] [--artifacts <dir>|--graph <path>|--runs <dir>|--global] [--server <url>] [--token <token>] [--output <path>] [--json]',
-    '  node .plan2agent/scripts/p2a_memory.mjs impact --node <naturalKey> [--project <sourceProjectId>] [--depth <n>] [--artifacts <dir>|--graph <path>|--runs <dir>|--global] [--server <url>] [--token <token>] [--output <path>] [--json]',
+    '  node .plan2agent/scripts/p2a_memory.mjs trace --node <naturalKey> [--project <sourceProjectId>] [--direction upstream|downstream|both] [--depth <1-30>] [--artifacts <dir>|--graph <path>|--runs <dir>] [--server <url>] [--token <token>] [--output <path>] [--json]',
+    '  node .plan2agent/scripts/p2a_memory.mjs impact --node <naturalKey> [--project <sourceProjectId>] [--depth <1-30>] [--artifacts <dir>|--graph <path>|--runs <dir>] [--server <url>] [--token <token>] [--output <path>] [--json]',
     '  node .plan2agent/scripts/p2a_memory.mjs precedent --query <text> [--project <sourceProjectId>|--global] [--limit <n>] [--artifacts <dir>|--graph <path>|--runs <dir>] [--server <url>] [--token <token>] [--output <path>] [--json]',
     '',
     'Commands:',
     '  status   Compare local project, iteration, document, task, run, and chunk snapshots with Memory.',
     '  push     Upsert local snapshots to Memory. Actual writes require --yes.',
     '  pull     Preview remote Memory snapshots that differ from local files and optionally write a restore report. Dry-run only.',
-    '  search   Keyword-search Memory snapshots. Uses the current project context unless --global is passed.',
+    '  search   Search Memory snapshots with keyword, semantic, or hybrid retrieval.',
     '  history  Show local and remote Memory artifact lineage as a timeline.',
     '  digest   Summarize failed/blocked runs, verification gaps, and proposal queue candidates.',
     '  trace    Trace upstream/downstream artifact lineage from a graph node natural key.',
@@ -92,17 +103,21 @@ function usage() {
     'Source options:',
     '  --artifacts <dir>   Iterative artifact root, for example .plan2agent/artifacts/<project_id>.',
     '  --graph <path>      Task graph JSON path. Runs default beside the graph parent.',
-    '  --runs <dir>        Explicit runs directory. Supported by status, pull, search, and digest only.',
+    '  --runs <dir>        Explicit runs directory. Supported by status, pull, search, history, digest, trace, and impact.',
     '  --proposals <dir>   Proposal queue directory for digest and proposal snapshot sync.',
-    '  --global            For search/history, do not apply current project/iteration filters.',
+    '  --global            For search, history, or precedent, do not apply current project/iteration filters.',
     '',
     'Memory options:',
     `  --server <url>      Memory server base URL. Default: ${DEFAULT_MEMORY_URL_ENV} or project config memory.serverUrlEnv.`,
     `  --token <token>     X-P2A-Local-Token value. Default: ${DEFAULT_MEMORY_TOKEN_ENV} or project config memory.tokenEnv.`,
-    '  --query <text>      Keyword query for search.',
+    `  --timeout-ms <n>    Per-request timeout. Default: project config memory.requestTimeoutMs or ${DEFAULT_MEMORY_REQUEST_TIMEOUT_MS}.`,
+    '  --query <text>      Query text for search.',
+    '  --mode <kind>       Search mode: keyword, semantic, or hybrid. Default: keyword.',
     '  --type <kind>       Search artifact type: document, chunk, task, run, graph, project, iteration, or proposal.',
     '  --source-path <path> Search source path filter.',
-    '  --project <id>      Source project ID filter for history.',
+    `  --depth <n>         Trace/impact traversal depth (1-${MAX_GRAPH_TRACE_DEPTH}). Default: 5.`,
+    '  --project <id>      Source project ID filter for project-wide search/history/graph queries.',
+    '  --exclude-project <id> Exclude one source project from global search results.',
     '  --iteration <id>    Source iteration ID filter for history.',
     `  --limit <n>         Search/history result limit. Defaults: search=${DEFAULT_SEARCH_LIMIT}, history=${DEFAULT_HISTORY_LIMIT}.`,
     '  --output <path>     Write pull/search/history/digest JSON to a file.',
@@ -126,6 +141,7 @@ function parseArgs(argv) {
     runs: null,
     proposals: null,
     query: null,
+    searchMode: null,
     artifactType: null,
     sourcePath: null,
     node: null,
@@ -133,11 +149,13 @@ function parseArgs(argv) {
     depth: null,
     limit: null,
     project: null,
+    excludeProject: null,
     iteration: null,
     output: null,
     global: false,
     server: null,
     token: null,
+    timeoutMs: null,
     dryRun: false,
     apply: false,
     yes: false,
@@ -153,18 +171,21 @@ function parseArgs(argv) {
     else if (arg === '--runs') args.runs = requiredValue(argv, ++index, '--runs');
     else if (arg === '--proposals') args.proposals = requiredValue(argv, ++index, '--proposals');
     else if (arg === '--query') args.query = requiredValue(argv, ++index, '--query');
+    else if (arg === '--mode') args.searchMode = requiredValue(argv, ++index, '--mode').trim().toLowerCase();
     else if (arg === '--type' || arg === '--artifact-type') args.artifactType = normalizeSearchArtifactType(requiredValue(argv, ++index, arg));
     else if (arg === '--source-path') args.sourcePath = normalizeSearchSourcePath(requiredValue(argv, ++index, '--source-path'));
     else if (arg === '--node') args.node = requiredValue(argv, ++index, '--node').trim();
     else if (arg === '--direction') args.direction = normalizeTraceDirection(requiredValue(argv, ++index, '--direction'));
-    else if (arg === '--depth') args.depth = parsePositiveInteger(requiredValue(argv, ++index, '--depth'), '--depth');
+    else if (arg === '--depth') args.depth = parseGraphDepth(requiredValue(argv, ++index, '--depth'));
     else if (arg === '--limit') args.limit = parsePositiveInteger(requiredValue(argv, ++index, '--limit'), '--limit');
     else if (arg === '--project') args.project = requiredValue(argv, ++index, '--project').trim();
+    else if (arg === '--exclude-project') args.excludeProject = requiredValue(argv, ++index, '--exclude-project').trim();
     else if (arg === '--iteration') args.iteration = requiredValue(argv, ++index, '--iteration').trim();
     else if (arg === '--output') args.output = requiredValue(argv, ++index, '--output');
     else if (arg === '--global') args.global = true;
     else if (arg === '--server') args.server = requiredValue(argv, ++index, '--server');
     else if (arg === '--token') args.token = requiredValue(argv, ++index, '--token');
+    else if (arg === '--timeout-ms') args.timeoutMs = parsePositiveInteger(requiredValue(argv, ++index, '--timeout-ms'), '--timeout-ms');
     else if (arg === '--dry-run') args.dryRun = true;
     else if (arg === '--apply') args.apply = true;
     else if (arg === '--yes') args.yes = true;
@@ -185,11 +206,20 @@ function parseArgs(argv) {
   if (args.command === 'pull' && !args.dryRun) throw new Error('pull is preview-only for now and requires --dry-run');
   if (args.command !== 'push' && args.yes) throw new Error('--yes is only supported by push');
   if (args.command === 'pull' && args.proposals) throw new Error('--proposals is not supported by pull');
-  if (!['pull', 'search', 'history', 'digest', 'trace', 'impact', 'precedent'].includes(args.command) && args.output) {
-    throw new Error('--output is only supported by pull, search, history, digest, trace, impact, and precedent');
+  if (!['status', 'pull', 'search', 'history', 'digest', 'trace', 'impact', 'precedent'].includes(args.command) && args.output) {
+    throw new Error('--output is only supported by status, pull, search, history, digest, trace, impact, and precedent');
   }
-  if (!['search', 'precedent'].includes(args.command) && (args.query || args.artifactType || args.sourcePath)) {
-    throw new Error('--query, --type, and --source-path are only supported by search and precedent');
+  if (!['search', 'precedent'].includes(args.command) && args.query) {
+    throw new Error('--query is only supported by search and precedent');
+  }
+  if (args.command !== 'search' && (args.artifactType || args.sourcePath)) {
+    throw new Error('--type and --source-path are only supported by search');
+  }
+  if (args.command !== 'search' && args.searchMode) {
+    throw new Error('--mode is only supported by search');
+  }
+  if (args.command !== 'search' && args.excludeProject) {
+    throw new Error('--exclude-project is only supported by search');
   }
   if (!['trace', 'impact'].includes(args.command) && (args.node || args.direction || args.depth)) {
     throw new Error('--node, --direction, and --depth are only supported by trace and impact');
@@ -197,11 +227,11 @@ function parseArgs(argv) {
   if (!['search', 'history', 'precedent'].includes(args.command) && args.limit) {
     throw new Error('--limit is only supported by search, history, or precedent');
   }
-  if (!['search', 'history', 'trace', 'impact', 'precedent'].includes(args.command) && args.global) {
-    throw new Error('--global is only supported by search, history, trace, impact, or precedent');
+  if (!['search', 'history', 'precedent'].includes(args.command) && args.global) {
+    throw new Error('--global is only supported by search, history, or precedent');
   }
-  if (!['history', 'trace', 'impact', 'precedent'].includes(args.command) && (args.project || args.iteration)) {
-    throw new Error('--project and --iteration are only supported by history, trace, impact, or precedent');
+  if (!['search', 'history', 'trace', 'impact', 'precedent'].includes(args.command) && (args.project || args.iteration)) {
+    throw new Error('--project and --iteration are only supported by search, history, trace, impact, or precedent');
   }
   if (['trace', 'impact', 'precedent'].includes(args.command) && args.iteration) {
     throw new Error('--iteration is only supported by history');
@@ -215,7 +245,14 @@ function parseArgs(argv) {
   if (args.command === 'search') {
     if (!trimString(args.query)) throw new Error('search requires --query <text>');
     args.query = trimString(args.query);
+    args.searchMode = normalizeSearchMode(args.searchMode ?? 'keyword');
+    if (args.iteration) throw new Error('--iteration is only supported by history');
     if (args.global && sourceCount > 0) throw new Error('search --global cannot be combined with --artifacts, --graph, or --runs');
+    if (args.global && args.project) throw new Error('search --global cannot be combined with --project');
+    if (args.excludeProject && !args.global) throw new Error('search --exclude-project requires --global');
+    if (args.excludeProject !== null && !args.excludeProject) throw new Error('--exclude-project requires a non-empty value');
+    if (args.project && sourceCount > 0) throw new Error('search --project cannot be combined with --artifacts, --graph, or --runs');
+    if (args.project !== null && !args.project) throw new Error('--project requires a non-empty value');
   }
   if (args.command === 'precedent') {
     if (!trimString(args.query)) throw new Error('precedent requires --query <text>');
@@ -230,7 +267,7 @@ function parseArgs(argv) {
     if (args.iteration !== null && !args.iteration) throw new Error('--iteration requires a non-empty value');
   }
 
-  if (sourceCount === 0 && !(args.command === 'search' && args.global) && !(args.command === 'precedent' && (args.global || args.project)) && !(['trace', 'impact'].includes(args.command) && (args.global || args.project)) && !(args.command === 'history' && (args.global || args.project || args.iteration))) {
+  if (sourceCount === 0 && !(args.command === 'search' && (args.global || args.project)) && !(args.command === 'precedent' && (args.global || args.project)) && !(['trace', 'impact'].includes(args.command) && args.project) && !(args.command === 'history' && (args.global || args.project || args.iteration))) {
     const defaultArtifacts = singleArtifactProjectRoot();
     const configuredGraph = configuredTaskGraphPath();
     if (defaultArtifacts) args.artifacts = defaultArtifacts;
@@ -243,7 +280,7 @@ function parseArgs(argv) {
     throw new Error('--artifacts, --graph, or --runs is required');
   }
   if (['trace', 'impact'].includes(args.command) && !args.artifacts && !args.graph && !args.runs && !args.project) {
-    throw new Error(`${args.command} requires --project 또는 --artifacts로 프로젝트를 지정하라`);
+    throw new Error(`${args.command} requires --project, --artifacts, --graph, or --runs`);
   }
   if (args.command === 'history' && !args.artifacts && !args.graph && !args.runs && !args.global && !args.project && !args.iteration) {
     throw new Error('history requires --artifacts, --graph, --runs, --global, --project, or --iteration');
@@ -261,10 +298,26 @@ function requiredValue(argv, index, optionName) {
   return value;
 }
 
+function normalizeSearchMode(value) {
+  const normalized = trimString(value)?.toLowerCase();
+  if (!normalized || !SEARCH_MODES.has(normalized)) {
+    throw new Error(`unsupported Memory search mode: ${value}; expected keyword, semantic, or hybrid`);
+  }
+  return normalized;
+}
+
 function parsePositiveInteger(value, optionName) {
   const number = Number(value);
   if (!Number.isInteger(number) || number <= 0) throw new Error(`${optionName} requires a positive integer`);
   return number;
+}
+
+function parseGraphDepth(value) {
+  const depth = parsePositiveInteger(value, '--depth');
+  if (depth > MAX_GRAPH_TRACE_DEPTH) {
+    throw new Error(`--depth must be between 1 and ${MAX_GRAPH_TRACE_DEPTH}`);
+  }
+  return depth;
 }
 
 function normalizeTraceDirection(value) {
@@ -326,9 +379,15 @@ function resolveMemoryConnection(args) {
   const token = trimString(args.token)
     ?? trimString(process.env[tokenEnv])
     ?? trimString(memoryConfig.token);
+  const configuredTimeoutMs = Number(memoryConfig.requestTimeoutMs);
+  const timeoutMs = args.timeoutMs
+    ?? (Number.isInteger(configuredTimeoutMs) && configuredTimeoutMs > 0
+      ? configuredTimeoutMs
+      : DEFAULT_MEMORY_REQUEST_TIMEOUT_MS);
   return {
     server,
     token,
+    timeoutMs,
     serverSource: args.server ? 'arg' : process.env[urlEnv] ? `env:${urlEnv}` : memoryConfig.serverUrl ? 'project_config' : 'not_configured',
     tokenSource: token ? (args.token ? 'arg' : process.env[tokenEnv] ? `env:${tokenEnv}` : 'project_config') : 'not_configured',
   };
@@ -419,6 +478,46 @@ function metadata(values) {
   );
 }
 
+function graphMetadataStringList(value) {
+  if (typeof value !== 'string' || !value.trim()) return [];
+  try {
+    const parsed = JSON.parse(value);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.map((item) => trimString(item)).filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+function graphReferenceCandidates(metadataValue) {
+  const candidates = new Map();
+  const addCandidate = (candidateId, decision) => {
+    const normalizedId = trimString(candidateId);
+    if (!normalizedId) return;
+    const normalizedDecision = trimString(decision);
+    candidates.set(`${normalizedId}\u0000${normalizedDecision ?? ''}`, {
+      candidateId: normalizedId,
+      decision: normalizedDecision,
+    });
+  };
+  const serialized = metadataValue?.referenceCandidates;
+  if (typeof serialized === 'string') {
+    try {
+      const parsed = JSON.parse(serialized);
+      if (Array.isArray(parsed)) {
+        for (const candidate of parsed) addCandidate(candidate?.candidateId, candidate?.decision);
+      }
+    } catch {
+      // Ignore malformed optional provenance from an older graph snapshot.
+    }
+  }
+  addCandidate(metadataValue?.candidateId, metadataValue?.decision);
+  return [...candidates.values()].sort((left, right) => (
+    left.candidateId.localeCompare(right.candidateId)
+      || String(left.decision ?? '').localeCompare(String(right.decision ?? ''))
+  ));
+}
+
 function sortedUnique(values) {
   return [...new Set(values.filter(Boolean))].sort((left, right) => left.localeCompare(right));
 }
@@ -432,10 +531,17 @@ function sourceTaskGraphId(projectId, iterationId, sourcePath) {
 }
 
 function sourceIterationIdForPath(context, filePath) {
-  if (!context.artifactRoot || !filePath) return context.iterationId;
-  const relativePath = normalizePath(path.relative(context.artifactRoot, path.resolve(filePath)));
-  const match = /^iterations\/([^/]+)\//.exec(relativePath);
-  return match?.[1] ?? context.iterationId;
+  if (!filePath) return context.iterationId;
+  const resolvedPath = path.resolve(filePath);
+  if (context.artifactRoot) {
+    const relativePath = normalizePath(path.relative(context.artifactRoot, resolvedPath));
+    const match = /^iterations\/([^/]+)\//.exec(relativePath);
+    if (match) return match[1];
+  }
+  const recalledRun = context.runs?.runs?.find((item) => (
+    retryMemoryReportPath(item.filePath) === resolvedPath
+  ))?.run;
+  return recalledRun?.iterationId ?? context.iterationId;
 }
 
 function iterationStatus(context, iterationId) {
@@ -563,6 +669,29 @@ function stableMilestoneReviewPaths(artifactRoot) {
     .filter(fileExists);
 }
 
+function stableIterationMemoryPaths(artifactRoot) {
+  const iterationsRoot = path.join(artifactRoot, 'iterations');
+  if (!existsSync(iterationsRoot) || !lstatSync(iterationsRoot).isDirectory()) return [];
+  return readdirSync(iterationsRoot, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory() && entry.name !== 'maintenance')
+    .map((entry) => entry.name)
+    .sort()
+    .flatMap((iterationId) => ITERATION_MEMORY_FILENAMES.map((fileName) => (
+      path.join(iterationsRoot, iterationId, fileName)
+    )))
+    .filter(fileExists);
+}
+
+function retryMemoryReportPath(runFilePath) {
+  return `${runFilePath.slice(0, -'.json'.length)}${RUN_MEMORY_RECALL_SUFFIX}`;
+}
+
+function retryMemoryReportPaths(runs) {
+  return runs.runs
+    .map((item) => retryMemoryReportPath(item.filePath))
+    .filter(fileExists);
+}
+
 function buildArtifactContext(args) {
   const state = resolveIterationState(args.artifacts, { requireReady: false });
   const graphPath = state.taskGraphPath;
@@ -580,6 +709,8 @@ function buildArtifactContext(args) {
     state.taskGraphPath,
     state.reviewPath,
     ...stableMilestoneReviewPaths(state.artifactRoot),
+    ...stableIterationMemoryPaths(state.artifactRoot),
+    ...retryMemoryReportPaths(runs),
   ].filter(fileExists);
   return {
     sourceKind: 'artifacts',
@@ -620,7 +751,7 @@ function buildGraphContext(args) {
     graphPath,
     graph,
     rawGraph,
-    documentPaths: [specPath, graphPath].filter(fileExists),
+    documentPaths: [specPath, graphPath, ...retryMemoryReportPaths(runs)].filter(fileExists),
     runsDir,
     runs,
     proposalsDir: defaultProposalsDir(args, runsDir),
@@ -782,16 +913,59 @@ function buildGraphIndex(context, projectCanonicalId, iterationCanonicalId, docu
   };
   const addEdge = (from, to, edgeType, sourceRef = null, extra = {}) => {
     if (!from || !to) return null;
-    const edgeId = stableId('p2a-graph-edge', [context.projectId, context.iterationId, from.nodeId, to.nodeId, edgeType, extra.key ?? '']);
+    const edgeKey = JSON.stringify([from.nodeId, to.nodeId, edgeType]);
+    const sourceReference = graphSourceReference(sourceRef);
+    const existing = edges.get(edgeKey);
+    if (existing) {
+      const sourceReferences = sortedUnique([
+        existing.sourceReference,
+        sourceReference,
+        ...graphMetadataStringList(existing.metadata?.sourceReferences),
+        ...graphMetadataStringList(extra.metadata?.sourceReferences),
+      ]);
+      const referenceCandidates = graphReferenceCandidates(existing.metadata)
+        .concat(graphReferenceCandidates(extra.metadata));
+      const deduplicatedCandidates = new Map(
+        referenceCandidates.map((candidate) => [
+          `${candidate.candidateId}\u0000${candidate.decision ?? ''}`,
+          candidate,
+        ]),
+      );
+      const mergedMetadata = {
+        ...baseMetadata,
+        ...(existing.metadata ?? {}),
+        ...(extra.metadata ?? {}),
+      };
+      if (sourceReferences.length > 1) mergedMetadata.sourceReferences = JSON.stringify(sourceReferences);
+      else delete mergedMetadata.sourceReferences;
+      if (deduplicatedCandidates.size > 0) {
+        delete mergedMetadata.candidateId;
+        delete mergedMetadata.decision;
+        mergedMetadata.referenceCandidates = JSON.stringify(
+          [...deduplicatedCandidates.values()].sort((left, right) => (
+            left.candidateId.localeCompare(right.candidateId)
+              || String(left.decision ?? '').localeCompare(String(right.decision ?? ''))
+          )),
+        );
+      }
+      const edge = {
+        ...existing,
+        sourceReference: sourceReferences[0] ?? null,
+        metadata: metadata(mergedMetadata),
+      };
+      edges.set(edgeKey, edge);
+      return edge;
+    }
+    const edgeId = stableId('p2a-graph-edge', [context.projectId, context.iterationId, from.nodeId, to.nodeId, edgeType]);
     const edge = {
       edgeId,
       fromNodeId: from.nodeId,
       toNodeId: to.nodeId,
       edgeType,
-      sourceReference: graphSourceReference(sourceRef),
+      sourceReference,
       metadata: metadata({ ...baseMetadata, ...(extra.metadata ?? {}) }),
     };
-    edges.set(edgeId, edge);
+    edges.set(edgeKey, edge);
     return edge;
   };
   const docByRole = new Map(documents.map((d) => [d.request.metadata.documentRole, d]));
@@ -799,23 +973,72 @@ function buildGraphIndex(context, projectCanonicalId, iterationCanonicalId, docu
   const intakeDoc = docByRole.get('document')?.sourcePath?.endsWith('gate-a-intake/intake.json') ? docByRole.get('document') : documents.find((d)=>d.sourcePath.endsWith('gate-a-intake/intake.json'));
   const specDoc = documents.find((d)=>d.sourcePath.endsWith('gate-b-spec/spec.json'));
   function readDocJson(doc){ try { return doc ? JSON.parse(doc.content) : null; } catch { return null; } }
+  const referenceBase = (value) => {
+    const text = trimString(value);
+    if (!text) return null;
+    const fragmentIndex = text.indexOf('#');
+    return fragmentIndex === -1 ? text : text.slice(0, fragmentIndex);
+  };
+  const referenceMatches = (reference, candidates) => {
+    const base = referenceBase(reference);
+    if (!base) return false;
+    return candidates.some((candidate) => {
+      const candidateBase = referenceBase(candidate);
+      if (!candidateBase) return false;
+      if (candidateBase === base) return true;
+      if (candidateBase.includes('://') || base.includes('://')) return false;
+      const normalizedCandidate = normalizePath(candidateBase).replace(/^\.\//, '');
+      const normalizedBase = normalizePath(base).replace(/^\.\//, '');
+      return normalizedCandidate === normalizedBase
+        || normalizedCandidate.endsWith(`/${normalizedBase}`)
+        || normalizedBase.endsWith(`/${normalizedCandidate}`);
+    });
+  };
+  const documentForMemoryReference = (reference) => documents.find((document) => referenceMatches(reference, [
+    document.sourcePath,
+    document.request?.sourceReference?.path,
+    document.request?.sourceReference?.uri,
+    document.request?.sourceReference?.canonicalServerId,
+  ]));
+  const runForMemoryReference = (reference) => runs.find((run) => referenceMatches(reference, [
+    run.sourcePath,
+    run.request?.sourceReference?.path,
+    run.request?.sourceReference?.uri,
+    run.request?.sourceReference?.canonicalServerId,
+    run.request?.sourceRunId,
+    `run:${run.request?.sourceRunId}`,
+  ]));
   const evidenceByKey = new Map();
+  const evidenceLookupKey = (doc, evidenceId) => `${doc?.id ?? 'unknown-document'}:${evidenceId}`;
   const evidenceNode = (ev, doc) => {
-    const key = `evidence:${ev.id ?? ev.source ?? ev.url ?? ev.title ?? stableHash(ev)}`;
-    const n = addNode('evidence', key, ev.title ?? ev.id ?? ev.source ?? key, { content: ev.summary ?? ev.quote ?? ev.content ?? null, documentId: doc?.id, metadata: { evidenceId: ev.id, sourcePath: doc?.sourcePath } });
-    evidenceByKey.set(ev.id ?? key, n); return n;
+    const evidenceId = ev.source_id ?? ev.id ?? ev.source ?? null;
+    const localKey = evidenceId ?? ev.url ?? ev.title ?? stableHash(ev);
+    const key = `evidence:${doc?.sourceKey ?? 'unknown-document'}:${localKey}`;
+    const n = addNode('evidence', key, ev.title ?? evidenceId ?? key, {
+      content: ev.used_for ?? ev.summary ?? ev.quote ?? ev.content ?? null,
+      documentId: doc?.id,
+      metadata: { evidenceId, sourcePath: doc?.sourcePath },
+    });
+    evidenceByKey.set(evidenceLookupKey(doc, evidenceId ?? localKey), n);
+    return n;
   };
   const intake = readDocJson(intakeDoc);
+  const intakeDocumentNode = intakeDoc
+    ? addNode('document', `document:${intakeDoc.sourceKey}`, intakeDoc.request.title, { documentId: intakeDoc.id })
+    : null;
+  const decisionById = new Map();
   if (intake) {
     for (const ev of intake.evidence ?? []) evidenceNode(ev, intakeDoc);
     for (const item of intake.needs_user_decision ?? []) {
       const n = addNode('decision', `decision:${item.id}`, item.question ?? item.id, { content: JSON.stringify({ question: item.question, answer: item.answer, status: item.status }), documentId: intakeDoc?.id, metadata: { decisionId: item.id, status: item.status } });
-      for (const ref of item.evidence ?? item.evidence_refs ?? item.evidenceIds ?? []) addEdge(n, evidenceByKey.get(ref) ?? addNode('evidence', `evidence:${ref}`, ref), 'EVIDENCED_BY', sourceReference(n.nodeId, path.resolve(P2A_PATHS.projectRoot, intakeDoc.sourcePath), item.id), { key: ref });
+      decisionById.set(item.id, n);
+      addEdge(intakeDocumentNode, n, 'DERIVED_FROM', sourceReference(intakeDocumentNode?.nodeId, path.resolve(P2A_PATHS.projectRoot, intakeDoc.sourcePath), item.id), { key: item.id });
+      for (const ref of item.evidence ?? item.evidence_refs ?? item.evidenceIds ?? []) addEdge(n, evidenceByKey.get(evidenceLookupKey(intakeDoc, ref)) ?? addNode('evidence', `evidence:${intakeDoc.sourceKey}:${ref}`, ref), 'EVIDENCED_BY', sourceReference(n.nodeId, path.resolve(P2A_PATHS.projectRoot, intakeDoc.sourcePath), item.id), { key: ref });
     }
     for (const item of intake.assumptions ?? []) {
       const id = item.id ?? stableHash(item);
       const n = addNode('assumption', `assumption:${id}`, item.statement ?? item.description ?? id, { content: item.statement ?? item.description ?? null, documentId: intakeDoc?.id, metadata: { assumptionId: id, status: item.status } });
-      for (const ref of item.evidence ?? item.evidence_refs ?? item.evidenceIds ?? []) addEdge(n, evidenceByKey.get(ref) ?? addNode('evidence', `evidence:${ref}`, ref), 'EVIDENCED_BY', sourceReference(n.nodeId, path.resolve(P2A_PATHS.projectRoot, intakeDoc.sourcePath), id), { key: ref });
+      for (const ref of item.evidence ?? item.evidence_refs ?? item.evidenceIds ?? []) addEdge(n, evidenceByKey.get(evidenceLookupKey(intakeDoc, ref)) ?? addNode('evidence', `evidence:${intakeDoc.sourceKey}:${ref}`, ref), 'EVIDENCED_BY', sourceReference(n.nodeId, path.resolve(P2A_PATHS.projectRoot, intakeDoc.sourcePath), id), { key: ref });
     }
     for (const item of intake.clarifying_questions ?? []) {
       const id = item.id ?? stableHash(item);
@@ -828,8 +1051,57 @@ function buildGraphIndex(context, projectCanonicalId, iterationCanonicalId, docu
     const sdoc = addNode('document', `document:${specDoc.sourceKey}`, specDoc.request.title, { documentId: specDoc.id });
     if (intakeDoc) addEdge(sdoc, addNode('document', `document:${intakeDoc.sourceKey}`, intakeDoc.request.title, { documentId: intakeDoc.id }), 'DERIVED_FROM', sourceReference(sdoc.nodeId, path.resolve(P2A_PATHS.projectRoot, specDoc.sourcePath), 'source_intake'));
     for (const ev of spec.evidence ?? []) evidenceNode(ev, specDoc);
-    for (const d of spec.clarifying_question_disposition ?? []) addEdge(sdoc, addNode('clarifying_question', `clarifying_question:${d.id ?? d.question_id ?? d.questionId}`, d.id ?? d.question_id ?? d.questionId), 'DISPOSES', sourceReference(sdoc.nodeId, path.resolve(P2A_PATHS.projectRoot, specDoc.sourcePath), 'clarifying_question_disposition'), { key: d.id ?? d.question_id ?? d.questionId, metadata: { disposition: d.disposition ?? d.status } });
-    for (const item of spec.open_decisions ?? []) addNode('decision', `decision:${item.id ?? stableHash(item)}`, item.question ?? item.title ?? item.id, { content: JSON.stringify(item), documentId: specDoc.id, metadata: { status: item.status } });
+    for (const candidate of spec.reference_reconnaissance?.candidates ?? []) {
+      const evidence = evidenceByKey.get(evidenceLookupKey(specDoc, candidate.source_id));
+      if (evidence) {
+        addEdge(
+          sdoc,
+          evidence,
+          'EVIDENCED_BY',
+          sourceReference(sdoc.nodeId, path.resolve(P2A_PATHS.projectRoot, specDoc.sourcePath), candidate.candidate_id),
+          { key: candidate.candidate_id, metadata: { candidateId: candidate.candidate_id, decision: candidate.decision } },
+        );
+      }
+    }
+    for (const d of spec.clarifying_question_disposition ?? []) {
+      const questionId = d.id ?? d.question_id ?? d.questionId;
+      addEdge(
+        sdoc,
+        addNode('clarifying_question', `clarifying_question:${questionId}`, questionId),
+        'DISPOSES',
+        sourceReference(sdoc.nodeId, path.resolve(P2A_PATHS.projectRoot, specDoc.sourcePath), 'clarifying_question_disposition'),
+        { key: questionId, metadata: { disposition: d.disposition ?? d.status } },
+      );
+      const promotedDecisionId = d.promoted_decision_id ?? d.promotedDecisionId ?? null;
+      if (promotedDecisionId) {
+        const decision = addNode('decision', `decision:${promotedDecisionId}`, promotedDecisionId, {
+          content: JSON.stringify({
+            resolution: d.resolution ?? null,
+            status: d.status ?? d.disposition ?? null,
+          }),
+          documentId: specDoc.id,
+          metadata: { decisionId: promotedDecisionId, status: d.status ?? d.disposition },
+        });
+        decisionById.set(promotedDecisionId, decision);
+        addEdge(
+          sdoc,
+          decision,
+          'DERIVED_FROM',
+          sourceReference(sdoc.nodeId, path.resolve(P2A_PATHS.projectRoot, specDoc.sourcePath), promotedDecisionId),
+          { key: promotedDecisionId },
+        );
+      }
+    }
+    for (const item of spec.open_decisions ?? []) {
+      const id = typeof item === 'string' ? item : (item?.id ?? stableHash(item));
+      const n = addNode('decision', `decision:${id}`, typeof item === 'string' ? item : (item.question ?? item.title ?? item.id), {
+        content: JSON.stringify(item),
+        documentId: specDoc.id,
+        metadata: { decisionId: id, status: typeof item === 'string' ? 'open' : item.status },
+      });
+      decisionById.set(id, n);
+      addEdge(sdoc, n, 'DERIVED_FROM', sourceReference(sdoc.nodeId, path.resolve(P2A_PATHS.projectRoot, specDoc.sourcePath), id), { key: id });
+    }
   }
   for (const task of tasks) {
     const tn = addNode('task', `task:${task.sourceTaskId}`, task.request.title, { taskId: task.id, metadata: { sourceTaskId: task.sourceTaskId, status: task.request.status } });
@@ -837,7 +1109,55 @@ function buildGraphIndex(context, projectCanonicalId, iterationCanonicalId, docu
       const dep = tasks.find((t) => t.id === depId);
       if (dep) addEdge(tn, addNode('task', `task:${dep.sourceTaskId}`, dep.request.title, { taskId: dep.id }), 'DEPENDS_ON', task.request.sourceReference, { key: dep.sourceTaskId });
     }
-    for (const ref of JSON.parse(task.request.metadata.sourceSpecRefs ?? '[]')) addEdge(tn, addNode('spec_section', `spec_section:${ref}`, ref), 'DERIVED_FROM', task.request.sourceReference, { key: ref });
+    for (const ref of JSON.parse(task.request.metadata.sourceSpecRefs ?? '[]')) {
+      const reference = String(ref);
+      if (reference.startsWith('memory:')) {
+        const memoryReference = reference.slice('memory:'.length).trim();
+        if (!memoryReference) {
+          throw new Error(`task ${task.sourceTaskId} Memory sourceSpecRef must include a report or result reference`);
+        }
+        const memoryDocument = documentForMemoryReference(memoryReference);
+        const memoryRun = runForMemoryReference(memoryReference);
+        const target = memoryDocument
+          ? addNode('document', `document:${memoryDocument.sourceKey}`, memoryDocument.request.title, {
+              documentId: memoryDocument.id,
+              content: memoryDocument.content.slice(0, 2000),
+              metadata: { sourcePath: memoryDocument.sourcePath, referenceKind: 'memory' },
+            })
+          : memoryRun
+            ? addNode('run', `run:${memoryRun.request.sourceRunId}`, memoryRun.request.sourceRunId, {
+                runId: memoryRun.id,
+                content: memoryRun.request.runJson,
+                metadata: {
+                  sourceRunId: memoryRun.request.sourceRunId,
+                  status: memoryRun.request.status,
+                  failureClass: memoryRun.request.metadata.failureClass,
+                  referenceKind: 'memory',
+                },
+              })
+            : addNode('evidence', `memory_reference:${memoryReference}`, memoryReference, {
+                content: `Planning Memory reference: ${memoryReference}`,
+                metadata: { memoryReference, referenceKind: 'memory' },
+              });
+        addEdge(tn, target, 'EVIDENCED_BY', memoryReference, { key: reference });
+        continue;
+      }
+      const decisionId = reference.match(/^(?:decision:)?(ND-\d+)$/)?.[1];
+      if (decisionId) {
+        const decision = decisionById.get(decisionId) ?? addNode('decision', `decision:${decisionId}`, decisionId, {
+          content: 'Decision referenced through planning Memory or another approved lineage source.',
+          metadata: { decisionId, referenceKind: 'external' },
+        });
+        addEdge(tn, decision, 'DERIVED_FROM', task.request.sourceReference, { key: `decision:${decisionId}` });
+        continue;
+      }
+      const section = addNode('spec_section', `spec_section:${reference}`, reference);
+      addEdge(tn, section, 'DERIVED_FROM', task.request.sourceReference, { key: reference });
+      if (specDoc) {
+        const sdoc = addNode('document', `document:${specDoc.sourceKey}`, specDoc.request.title, { documentId: specDoc.id });
+        addEdge(section, sdoc, 'DERIVED_FROM', sourceReference(section.nodeId, path.resolve(P2A_PATHS.projectRoot, specDoc.sourcePath), reference), { key: reference });
+      }
+    }
   }
   for (const run of runs) {
     const rn = addNode('run', `run:${run.request.sourceRunId}`, run.request.sourceRunId, { runId: run.id, content: run.request.runJson, metadata: { sourceRunId: run.request.sourceRunId, status: run.request.status, failureClass: run.request.metadata.failureClass } });
@@ -922,7 +1242,7 @@ function buildDocumentSnapshots(context, projectCanonicalId, baseMetadata) {
       return true;
     })
     .map((filePath) => {
-      const content = readFileSync(filePath, 'utf8');
+      const content = memoryDocumentContent(filePath, readFileSync(filePath, 'utf8'));
       if (!content.trim()) return null;
       const sourcePath = displayPath(filePath);
       const contentHash = hashText(content);
@@ -963,10 +1283,26 @@ function buildDocumentSnapshots(context, projectCanonicalId, baseMetadata) {
     .filter(Boolean);
 }
 
+function memoryDocumentContent(filePath, rawContent) {
+  if (!normalizePath(filePath).endsWith('/iteration.json')) return rawContent;
+  try {
+    const parsed = JSON.parse(rawContent);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return rawContent;
+    const { memory_freshness: _memoryFreshness, ...stableIterationMetadata } = parsed;
+    return `${JSON.stringify(stableIterationMetadata, null, 2)}\n`;
+  } catch {
+    return rawContent;
+  }
+}
+
 function documentRole(filePath) {
   const normalized = normalizePath(filePath);
   if (normalized.endsWith('/current-spec.json')) return 'current_spec';
   if (normalized.endsWith('/status.md')) return 'status';
+  if (normalized.endsWith('/iteration.json')) return 'iteration_metadata';
+  if (normalized.endsWith('/memory-status.json')) return 'memory_status';
+  if (/\/gate-a-intake\/memory-recall(?:-cross-project)?\.json$/.test(normalized)) return 'memory_recall';
+  if (normalized.endsWith(RUN_MEMORY_RECALL_SUFFIX)) return 'memory_retry_recall';
   if (normalized.endsWith('/gate-b-spec/spec.json')) return 'spec';
   if (normalized.endsWith('/gate-c-task-graph/task-graph.json')) return 'task_graph_document';
   if (normalized.endsWith('/gate-d-review/review.json')) return 'review';
@@ -1357,6 +1693,19 @@ async function memoryGet(connection, pathName, searchParams = {}) {
   return memoryRequest(connection, 'GET', pathName, null, searchParams);
 }
 
+function appendPagedItems(items, candidates, maxItems, options = {}) {
+  const acceptItem = options.acceptItem ?? (() => true);
+  const onRejected = options.onRejected ?? (() => {});
+  for (const item of candidates) {
+    if (maxItems !== null && items.length >= maxItems) break;
+    if (!acceptItem(item)) {
+      onRejected(item);
+      continue;
+    }
+    items.push(item);
+  }
+}
+
 async function fetchPagedMemoryItems(connection, pathName, searchParams = {}, options = {}) {
   const get = options.get ?? memoryGet;
   const pageSize = options.pageSize ?? searchParams.limit;
@@ -1376,24 +1725,22 @@ async function fetchPagedMemoryItems(connection, pathName, searchParams = {}, op
   const items = [];
 
   for (let requestCount = 0; requestCount < MAX_PAGED_REQUESTS; requestCount += 1) {
-    const remaining = maxItems === null ? pageSize : Math.min(pageSize, maxItems - items.length);
     const response = await get(connection, pathName, {
       ...baseParams,
-      limit: remaining,
+      limit: pageSize,
       cursor,
     });
 
     // Keep compatibility with Memory deployments that predate the paged response contract.
     if (Array.isArray(response)) {
-      items.push(...response.slice(0, maxItems === null ? response.length : maxItems - items.length));
+      appendPagedItems(items, response, maxItems, options);
       return items;
     }
     if (!response || typeof response !== 'object' || !Array.isArray(response.items)) {
       throw new Error(`Memory GET ${pathName} returned an invalid paged response; expected { items, nextCursor }`);
     }
 
-    const available = maxItems === null ? response.items.length : maxItems - items.length;
-    items.push(...response.items.slice(0, available));
+    appendPagedItems(items, response.items, maxItems, options);
     if (maxItems !== null && items.length >= maxItems) return items;
 
     const nextCursor = response.nextCursor ?? null;
@@ -1409,6 +1756,57 @@ async function fetchPagedMemoryItems(connection, pathName, searchParams = {}, op
   }
 
   throw new Error(`Memory GET ${pathName} exceeded ${MAX_PAGED_REQUESTS} paged requests`);
+}
+
+async function fetchPagedMemoryPostItems(connection, pathName, requestBody = {}, options = {}) {
+  const post = options.post ?? memoryPost;
+  const pageSize = options.pageSize ?? requestBody.limit;
+  const maxItems = options.maxItems ?? null;
+  if (!Number.isInteger(pageSize) || pageSize <= 0) {
+    throw new Error(`Memory POST ${pathName} requires a positive page size`);
+  }
+  if (maxItems !== null && (!Number.isInteger(maxItems) || maxItems <= 0)) {
+    throw new Error(`Memory POST ${pathName} requires a positive maximum item count`);
+  }
+
+  const baseBody = { ...requestBody };
+  let cursor = baseBody.cursor ?? null;
+  delete baseBody.limit;
+  delete baseBody.cursor;
+  const seenCursors = new Set(cursor === null ? [] : [cursor]);
+  const items = [];
+
+  for (let requestCount = 0; requestCount < MAX_PAGED_REQUESTS; requestCount += 1) {
+    const response = await post(connection, pathName, {
+      ...baseBody,
+      limit: pageSize,
+      cursor,
+    });
+
+    if (Array.isArray(response)) {
+      appendPagedItems(items, response, maxItems, options);
+      return items;
+    }
+    if (!response || typeof response !== 'object' || !Array.isArray(response.items)) {
+      throw new Error(`Memory POST ${pathName} returned an invalid paged response; expected { items, nextCursor }`);
+    }
+
+    appendPagedItems(items, response.items, maxItems, options);
+    if (maxItems !== null && items.length >= maxItems) return items;
+
+    const nextCursor = response.nextCursor ?? null;
+    if (nextCursor === null) return items;
+    if (typeof nextCursor !== 'string' || nextCursor.length === 0) {
+      throw new Error(`Memory POST ${pathName} returned an invalid nextCursor`);
+    }
+    if (seenCursors.has(nextCursor)) {
+      throw new Error(`Memory POST ${pathName} returned a repeated nextCursor`);
+    }
+    seenCursors.add(nextCursor);
+    cursor = nextCursor;
+  }
+
+  throw new Error(`Memory POST ${pathName} exceeded ${MAX_PAGED_REQUESTS} paged requests`);
 }
 
 async function memoryPost(connection, pathName, body) {
@@ -1428,6 +1826,7 @@ async function memoryRequest(connection, method, pathName, body = null, searchPa
     method,
     headers,
     body: body === null ? undefined : JSON.stringify(body),
+    signal: AbortSignal.timeout(connection.timeoutMs ?? DEFAULT_MEMORY_REQUEST_TIMEOUT_MS),
   });
   const text = await response.text();
   let parsed = null;
@@ -1471,25 +1870,225 @@ async function fetchRemoteArtifacts(connection, plan) {
   }
 }
 
-async function searchRemoteMemory(connection, args, plan) {
-  if (!connection.server) return { results: [], error: null };
-  const searchParams = {
+function memorySearchRequest(args, plan) {
+  const sourceProjectId = trimString(args.project);
+  const requestedLimit = args.limit ?? DEFAULT_SEARCH_LIMIT;
+  return {
     q: args.query,
-    projectId: plan?.context.canonicalProjectId ?? plan?.project.id ?? null,
-    iterationId: plan?.iteration.id ?? null,
+    projectId: sourceProjectId
+      ? stableId('p2a-project', [sourceProjectId])
+      : (plan?.context.canonicalProjectId ?? plan?.project.id ?? null),
+    iterationId: sourceProjectId || args.global ? null : (plan?.iteration.id ?? null),
     artifactType: args.artifactType,
     sourcePath: args.sourcePath,
-    limit: args.limit ?? DEFAULT_SEARCH_LIMIT,
+    limit: args.excludeProject ? Math.min(Math.max(requestedLimit * 4, 80), 100) : requestedLimit,
+  };
+}
+
+function memoryResultProjectIds(item) {
+  return [
+    item?.sourceIds?.sourceProjectId,
+    item?.metadata?.sourceProjectId,
+    item?.metadata?.source_project_id,
+    item?.lineage?.sourceProjectId,
+    item?.projectId,
+  ].map(trimString).filter(Boolean);
+}
+
+function memoryResultBelongsToProject(item, sourceProjectId) {
+  if (!sourceProjectId) return false;
+  const canonicalProjectId = stableId('p2a-project', [sourceProjectId]);
+  const projectIds = memoryResultProjectIds(item);
+  return projectIds.includes(sourceProjectId) || projectIds.includes(canonicalProjectId);
+}
+
+async function fetchMemorySearchMode(connection, mode, request, options = {}) {
+  const limit = request.limit ?? DEFAULT_SEARCH_LIMIT;
+  const maxItems = options.maxItems ?? limit;
+  if (mode === 'keyword') {
+    return fetchPagedMemoryItems(connection, '/search/keyword', request, {
+      pageSize: limit,
+      maxItems,
+      acceptItem: options.acceptItem,
+      onRejected: options.onRejected,
+      get: options.get,
+    });
+  }
+  const requestBody = {
+    ...request,
+    // Current servers accept omission, while older v2 binaries required an
+    // explicit empty object during Kotlin/Jackson construction.
+    metadataFilters: {},
+  };
+  if (mode === 'hybrid') {
+    requestBody.candidateLimit = options.candidateLimit
+      ?? Math.max(DEFAULT_HYBRID_CANDIDATE_LIMIT, limit * 4);
+  }
+  return fetchPagedMemoryPostItems(connection, `/search/${mode}`, requestBody, {
+    pageSize: limit,
+    maxItems,
+    acceptItem: options.acceptItem,
+    onRejected: options.onRejected,
+    post: options.post,
+  });
+}
+
+function memorySearchResultKey(item) {
+  return item?.chunkId
+    ?? item?.documentId
+    ?? item?.sourceReference?.canonicalServerId
+    ?? [
+      item?.projectId,
+      item?.iterationId,
+      item?.artifactType,
+      item?.sourcePath ?? item?.lineage?.sourcePath,
+      item?.chunkIndex,
+      item?.content,
+    ].map((value) => String(value ?? '')).join('\u0000');
+}
+
+function mergeMemorySearchResults(primary, supplemental, limit) {
+  const merged = [];
+  const seen = new Set();
+  for (const item of [...primary, ...supplemental]) {
+    const key = memorySearchResultKey(item);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    merged.push(item);
+    if (merged.length >= limit) break;
+  }
+  return merged;
+}
+
+async function searchRemoteMemory(connection, args, plan, options = {}) {
+  const requestedMode = args.searchMode ?? 'keyword';
+  if (!connection.server) {
+    return {
+      results: [],
+      error: null,
+      requestedMode,
+      effectiveMode: null,
+      fallback: null,
+    };
+  }
+  const request = memorySearchRequest(args, plan);
+  const requestedLimit = args.limit ?? DEFAULT_SEARCH_LIMIT;
+  const fetchWithProjectExclusion = async (mode) => {
+    let excluded = 0;
+    const results = await fetchMemorySearchMode(connection, mode, request, {
+      ...options,
+      maxItems: requestedLimit,
+      acceptItem: args.excludeProject
+        ? (item) => !memoryResultBelongsToProject(item, args.excludeProject)
+        : undefined,
+      onRejected: args.excludeProject
+        ? () => { excluded += 1; }
+        : undefined,
+    });
+    return { results, excluded };
   };
   try {
-    const limit = args.limit ?? DEFAULT_SEARCH_LIMIT;
-    const results = await fetchPagedMemoryItems(connection, '/search/keyword', searchParams, {
-      pageSize: limit,
-      maxItems: limit,
-    });
-    return { results, error: null };
-  } catch (error) {
-    return { results: [], error: errorMessage(error) };
+    const fetched = await fetchWithProjectExclusion(requestedMode);
+    if (
+      requestedMode === 'hybrid'
+      && args.excludeProject
+      && fetched.excluded > 0
+      && fetched.results.length < requestedLimit
+    ) {
+      try {
+        const keywordFetched = await fetchWithProjectExclusion('keyword');
+        const supplemental = fetched.results.length > 0;
+        return {
+          results: mergeMemorySearchResults(fetched.results, keywordFetched.results, requestedLimit),
+          excluded: keywordFetched.excluded,
+          error: null,
+          requestedMode,
+          effectiveMode: supplemental ? 'hybrid' : 'keyword',
+          fallback: {
+            from: requestedMode,
+            to: 'keyword',
+            reason: 'Hybrid candidate window was exhausted before cross-project filtering filled the requested result limit.',
+            supplemental,
+          },
+        };
+      } catch (fallbackError) {
+        const fallbackDetail = `Hybrid candidate window was exhausted after project exclusion; keyword fallback failed: ${errorMessage(fallbackError)}`;
+        if (fetched.results.length > 0) {
+          return {
+            results: fetched.results,
+            excluded: fetched.excluded,
+            error: null,
+            warning: fallbackDetail,
+            requestedMode,
+            effectiveMode: requestedMode,
+            fallback: {
+              from: requestedMode,
+              to: 'keyword',
+              reason: 'Hybrid candidate window was exhausted before cross-project filtering filled the requested result limit.',
+              supplemental: true,
+              error: errorMessage(fallbackError),
+            },
+          };
+        }
+        return {
+          results: [],
+          excluded: fetched.excluded,
+          error: fallbackDetail,
+          requestedMode,
+          effectiveMode: null,
+          fallback: {
+            from: requestedMode,
+            to: 'keyword',
+            reason: 'Hybrid candidate window was exhausted before cross-project filtering filled the requested result limit.',
+          },
+        };
+      }
+    }
+    return {
+      results: fetched.results,
+      excluded: fetched.excluded,
+      error: null,
+      requestedMode,
+      effectiveMode: requestedMode,
+      fallback: null,
+    };
+  } catch (primaryError) {
+    if (requestedMode === 'keyword') {
+      return {
+        results: [],
+        error: errorMessage(primaryError),
+        requestedMode,
+        effectiveMode: null,
+        fallback: null,
+      };
+    }
+    try {
+      const fetched = await fetchWithProjectExclusion('keyword');
+      return {
+        results: fetched.results,
+        excluded: fetched.excluded,
+        error: null,
+        requestedMode,
+        effectiveMode: 'keyword',
+        fallback: {
+          from: requestedMode,
+          to: 'keyword',
+          reason: errorMessage(primaryError),
+        },
+      };
+    } catch (fallbackError) {
+      return {
+        results: [],
+        error: `${errorMessage(primaryError)}; keyword fallback failed: ${errorMessage(fallbackError)}`,
+        requestedMode,
+        effectiveMode: null,
+        fallback: {
+          from: requestedMode,
+          to: 'keyword',
+          reason: errorMessage(primaryError),
+        },
+      };
+    }
   }
 }
 
@@ -1605,8 +2204,10 @@ function remoteTimestamp(value) {
 async function runStatus(args) {
   const plan = buildMemoryPlan(args);
   const connection = resolveMemoryConnection(args);
-  const server = await memoryHealth(connection);
-  const remote = await fetchRemoteArtifacts(connection, plan);
+  const [server, remote] = await Promise.all([
+    memoryHealth(connection),
+    fetchRemoteArtifacts(connection, plan),
+  ]);
   const sync = compareSync(plan, remote.artifacts);
   const payload = {
     schema_version: 'p2a.memory_status.v1',
@@ -1615,6 +2216,7 @@ async function runStatus(args) {
     server: {
       url: connection.server,
       source: connection.serverSource,
+      timeoutMs: connection.timeoutMs,
       status: remote.error ? 'unavailable' : server.status,
       detail: remote.error ?? server.detail,
     },
@@ -1622,16 +2224,28 @@ async function runStatus(args) {
     sync,
     skippedRuns: plan.skippedRuns,
     skippedProposals: plan.skippedProposals,
-    nextActions: statusNextActions(connection, sync, plan),
+    nextActions: statusNextActions(connection, sync, plan, {
+      serverStatus: remote.error ? 'unavailable' : server.status,
+      remoteError: remote.error,
+    }),
   };
+  if (args.output) writeJsonFile(path.resolve(args.output), payload);
   if (args.json) console.log(JSON.stringify(payload, null, 2));
-  else printStatus(payload);
-  return 0;
+  else {
+    printStatus(payload);
+    if (payload.server.status === 'unavailable') {
+      console.warn('WARNING: Memory server connection failed. Local work is intact, but remote synchronization could not be verified.');
+    }
+  }
+  return connection.server && payload.server.status !== 'up' ? 1 : 0;
 }
 
-function statusNextActions(connection, sync, plan) {
+function statusNextActions(connection, sync, plan, server = {}) {
   const actions = [];
   if (!connection.server) actions.push(`Set ${DEFAULT_MEMORY_URL_ENV} or pass --server to compare with Memory.`);
+  else if (server.serverStatus === 'unavailable') {
+    actions.push(`Restore Memory connectivity before relying on remote sync status${server.remoteError ? `: ${server.remoteError}` : '.'}`);
+  }
   if (sync.summary.missingRemote > 0) {
     if (plan.context.sourceKind === 'graph' || plan.context.sourceKind === 'artifacts') {
       actions.push(`Preview push: node .plan2agent/scripts/p2a.mjs memory push --${plan.context.sourceKind === 'graph' ? 'graph' : 'artifacts'} ${plan.context.sourcePath} --dry-run`);
@@ -1892,6 +2506,16 @@ async function runSearch(args) {
   const plan = args.artifacts || args.graph || args.runs
     ? buildMemoryPlan(args)
     : null;
+  const projectContext = args.project ? {
+    sourceKind: 'project',
+    sourcePath: null,
+    projectId: args.project,
+    sourceProjectId: args.project,
+    canonicalProjectId: stableId('p2a-project', [args.project]),
+    iterationId: null,
+    runsDir: null,
+    proposalsDir: null,
+  } : null;
   const connection = resolveMemoryConnection(args);
   const server = await memoryHealth(connection);
   const search = await searchRemoteMemory(connection, args, plan);
@@ -1903,10 +2527,14 @@ async function runSearch(args) {
     generatedAt: new Date().toISOString(),
     query: {
       text: args.query,
+      mode: search.requestedMode,
+      effectiveMode: search.effectiveMode,
+      fallback: search.fallback,
       artifactType: args.artifactType,
       sourcePath: args.sourcePath,
       limit: args.limit ?? DEFAULT_SEARCH_LIMIT,
-      scope: plan ? 'context' : 'global',
+      excludeProject: args.excludeProject,
+      scope: plan ? 'context' : (projectContext ? 'project' : 'global'),
     },
     context: plan ? {
       sourceKind: plan.context.sourceKind,
@@ -1917,14 +2545,14 @@ async function runSearch(args) {
       iterationId: plan.context.iterationId,
       serverProjectId: plan.project.id,
       serverIterationId: plan.iteration.id,
-    } : null,
+    } : projectContext,
     server: {
       url: connection.server,
       source: connection.serverSource,
       status: search.error ? 'unavailable' : server.status,
-      detail: search.error ?? server.detail,
+      detail: search.error ?? search.warning ?? server.detail,
     },
-    summary: summarizeSearchResults(results, rawResults),
+    summary: { ...summarizeSearchResults(results, rawResults), excludedByProject: search.excluded ?? 0 },
     results,
     nextActions: searchNextActions(connection, search, results, plan, args),
   };
@@ -1939,6 +2567,11 @@ function normalizeSearchResults(results) {
     artifactType: item.artifactType ?? 'UNKNOWN',
     score: typeof item.score === 'number' ? item.score : null,
     matchReason: item.matchReason ?? null,
+    distanceMetric: item.distanceMetric ?? null,
+    embeddingModel: item.embeddingModel ?? null,
+    embeddingVersion: item.embeddingVersion ?? null,
+    keyword: item.keyword ?? null,
+    vector: item.vector ?? null,
     projectId: item.projectId ?? null,
     iterationId: item.iterationId ?? null,
     documentId: item.documentId ?? null,
@@ -1949,6 +2582,8 @@ function normalizeSearchResults(results) {
     contentPreview: searchContentPreview(item.content),
     lineage: item.lineage ?? null,
     sourceIds: item.sourceIds ?? {},
+    sourceReference: item.sourceReference ?? null,
+    citation: item.citation ?? null,
     metadata: item.metadata ?? {},
   }));
 }
@@ -2041,11 +2676,17 @@ function searchNextActions(connection, search, results, plan, args) {
     actions.push(`Set ${DEFAULT_MEMORY_URL_ENV} or pass --server to search Memory.`);
   } else if (search.error) {
     actions.push('Fix Memory server connectivity before relying on search results.');
+  } else if (search.warning) {
+    actions.push(`Memory search returned partial results; retry the keyword supplement when available: ${search.warning}`);
   } else if (!results.length) {
     if (plan) {
       actions.push(`Try a broader Memory search: node .plan2agent/scripts/p2a.mjs memory search --query ${shellQuote(args.query)} --global`);
+    } else if (args.project) {
+      actions.push(`Push ${args.project} artifacts to Memory or retry with --global to broaden the search scope.`);
+    } else if (args.excludeProject) {
+      actions.push(`No cross-project matches remained after excluding ${args.excludeProject}; verify that other projects have been pushed to Memory.`);
     } else {
-      actions.push('Push project artifacts to Memory before relying on cross-project search.');
+      actions.push('Push relevant project artifacts to Memory before relying on global search.');
     }
   } else {
     actions.push('Inspect matching Memory content before restoring files or drafting maintenance work.');
@@ -2059,8 +2700,18 @@ function searchNextActions(connection, search, results, plan, args) {
 function printSearch(payload) {
   console.log('Plan2Agent memory search');
   console.log(`- query: ${payload.query.text}`);
-  console.log(`- scope: ${payload.context ? `${payload.context.projectId} ${payload.context.iterationId}` : 'global'}`);
+  const scope = payload.query.scope === 'project'
+    ? `${payload.context.projectId} all-iterations`
+    : payload.context
+      ? `${payload.context.projectId} ${payload.context.iterationId}`
+      : 'global';
+  console.log(`- scope: ${scope}`);
   if (payload.context) console.log(`- canonical project ID: ${payload.context.canonicalProjectId}`);
+  console.log(`- mode: requested=${payload.query.mode} effective=${payload.query.effectiveMode ?? 'not_executed'}`);
+  if (payload.query.fallback) {
+    console.log(`- fallback: ${payload.query.fallback.from}->${payload.query.fallback.to} (${payload.query.fallback.reason})`);
+    if (payload.query.fallback.error) console.log(`- fallback warning: ${payload.query.fallback.error}`);
+  }
   console.log(`- server: ${payload.server.status}${payload.server.url ? ` (${payload.server.url})` : ''}`);
   const filters = [
     payload.query.artifactType ? `type=${payload.query.artifactType}` : null,
@@ -2087,13 +2738,6 @@ function printSearch(payload) {
   }
 }
 
-function shellQuote(value) {
-  const text = String(value ?? '');
-  if (/^[A-Za-z0-9_./:=+-]+$/.test(text)) return text;
-  return `'${text.replace(/'/g, "'\\''")}'`;
-}
-
-
 function graphScopeParams(args, plan) {
   const sourceProjectId = trimString(args.project);
   return {
@@ -2111,17 +2755,50 @@ async function fetchGraphTrace(connection, args, plan, direction = args.directio
   });
 }
 
+function normalizeMemoryTrace(trace) {
+  if (!trace || typeof trace !== 'object') return trace;
+  const normalizeNode = (entry, fallbackDepth = null) => {
+    const node = entry?.node && typeof entry.node === 'object' ? entry.node : entry;
+    if (!node || typeof node !== 'object') return null;
+    const depth = entry?.depth ?? node.depth ?? fallbackDepth;
+    const normalized = {
+      ...node,
+      nodeKind: typeof node.nodeKind === 'string' ? node.nodeKind.toLowerCase() : node.nodeKind,
+    };
+    return depth === null || depth === undefined ? normalized : { ...normalized, depth };
+  };
+  return {
+    ...trace,
+    root: normalizeNode(trace.root, 0),
+    nodes: (trace.nodes ?? []).map((entry) => normalizeNode(entry)).filter(Boolean),
+  };
+}
+
+function graphScopeLabel(args, plan) {
+  if (plan) return 'context';
+  if (trimString(args.project)) return 'project';
+  return 'global';
+}
+
+function precedentTraceScope(node, args, plan) {
+  const fallback = graphScopeParams(args, plan);
+  return {
+    projectId: node?.projectId ?? fallback.projectId,
+    iterationId: node?.iterationId ?? fallback.iterationId,
+  };
+}
+
 async function runTrace(args) {
   const plan = args.artifacts || args.graph || args.runs ? buildMemoryPlan(args) : null;
   const connection = resolveMemoryConnection(args);
   const server = await memoryHealth(connection);
   let trace = null;
   let error = null;
-  try { trace = await fetchGraphTrace(connection, args, plan); } catch (e) { error = errorMessage(e); }
+  try { trace = normalizeMemoryTrace(await fetchGraphTrace(connection, args, plan)); } catch (e) { error = errorMessage(e); }
   const payload = {
     schema_version: 'p2a.memory_trace.v1',
     generatedAt: new Date().toISOString(),
-    query: { naturalKey: args.node, direction: args.direction, maxDepth: args.depth ?? 5, scope: plan ? 'context' : 'global' },
+    query: { naturalKey: args.node, direction: args.direction, maxDepth: args.depth ?? 5, scope: graphScopeLabel(args, plan) },
     context: plan?.context ?? null,
     server: { url: connection.server, source: connection.serverSource, status: error ? 'unavailable' : server.status, detail: error ?? server.detail },
     trace,
@@ -2161,10 +2838,10 @@ async function runImpact(args) {
   const connection = resolveMemoryConnection(args);
   const server = await memoryHealth(connection);
   let trace = null; let error = null;
-  try { trace = await fetchGraphTrace(connection, { ...args, direction: 'downstream' }, plan, 'downstream'); } catch (e) { error = errorMessage(e); }
+  try { trace = normalizeMemoryTrace(await fetchGraphTrace(connection, { ...args, direction: 'downstream' }, plan, 'downstream')); } catch (e) { error = errorMessage(e); }
   const byKind = {};
   for (const n of trace?.nodes ?? []) byKind[n.nodeKind] = (byKind[n.nodeKind] ?? 0) + 1;
-  const payload = { schema_version: 'p2a.memory_impact.v1', generatedAt: new Date().toISOString(), query: { naturalKey: args.node, direction: 'downstream', maxDepth: args.depth ?? 5, scope: plan ? 'context' : 'global' }, context: plan?.context ?? null, server: { url: connection.server, source: connection.serverSource, status: error ? 'unavailable' : server.status, detail: error ?? server.detail }, summary: { impacted: Math.max((trace?.nodes?.length ?? 0) - 1, 0), byKind }, trace };
+  const payload = { schema_version: 'p2a.memory_impact.v1', generatedAt: new Date().toISOString(), query: { naturalKey: args.node, direction: 'downstream', maxDepth: args.depth ?? 5, scope: graphScopeLabel(args, plan) }, context: plan?.context ?? null, server: { url: connection.server, source: connection.serverSource, status: error ? 'unavailable' : server.status, detail: error ?? server.detail }, summary: { impacted: Math.max((trace?.nodes?.length ?? 0) - 1, 0), byKind }, trace };
   if (args.output) writeJsonFile(path.resolve(args.output), payload);
   if (args.json) console.log(JSON.stringify(payload, null, 2)); else { console.log('이 노드가 바뀌면 영향받는 하위 산출물'); console.log(`- impacted: ${payload.summary.impacted}`); console.log(`- by kind: ${Object.entries(byKind).map(([k,v])=>`${k}=${v}`).join(' ') || 'none'}`); printTrace({ ...payload, query: { ...payload.query, direction: 'downstream' } }); }
   return trace ? 0 : 1;
@@ -2182,18 +2859,25 @@ async function runPrecedent(args) {
   }
   const decisionNodes = Array.isArray(nodesResponse) ? nodesResponse : (nodesResponse?.nodes ?? []);
   const decisions = [];
+  let traceFailures = 0;
   if (!error) {
     for (const node of decisionNodes.slice(0, args.limit ?? DEFAULT_SEARCH_LIMIT)) {
-      let trace = null;
-      try { trace = await memoryGet(connection, '/graph/trace', { ...graphScopeParams(args, plan), naturalKey: node.naturalKey, direction: 'downstream', maxDepth: 8 }); } catch {}
+      let trace = null; let traceError = null;
+      const nodeScope = precedentTraceScope(node, args, plan);
+      try {
+        trace = normalizeMemoryTrace(await memoryGet(connection, '/graph/trace', { ...nodeScope, naturalKey: node.naturalKey, direction: 'downstream', maxDepth: 8 }));
+      } catch (traceFailure) {
+        traceError = errorMessage(traceFailure);
+        traceFailures += 1;
+      }
       const runs = (trace?.nodes ?? []).filter((n) => n.nodeKind === 'run').map((n) => ({ naturalKey: n.naturalKey, label: n.label, status: n.metadata?.status ?? null, failureClass: n.metadata?.failureClass ?? null }));
-      decisions.push({ node, runs, outcome: summarizeRunOutcomes(runs) });
+      decisions.push({ node, runs, outcome: summarizeRunOutcomes(runs), traceError });
     }
   }
-  const payload = { schema_version: 'p2a.memory_precedent.v1', generatedAt: new Date().toISOString(), query: { text: args.query, limit: args.limit ?? DEFAULT_SEARCH_LIMIT, scope: plan ? 'context' : 'global' }, context: plan?.context ?? null, server: { url: connection.server, source: connection.serverSource, status: error ? 'unavailable' : server.status, detail: error ?? server.detail }, summary: { decisions: decisions.length }, decisions };
+  const payload = { schema_version: 'p2a.memory_precedent.v1', generatedAt: new Date().toISOString(), query: { text: args.query, limit: args.limit ?? DEFAULT_SEARCH_LIMIT, scope: graphScopeLabel(args, plan) }, context: plan?.context ?? null, server: { url: connection.server, source: connection.serverSource, status: error ? 'unavailable' : (traceFailures ? 'degraded' : server.status), detail: error ?? (traceFailures ? `${traceFailures} decision trace request(s) failed` : server.detail) }, summary: { decisions: decisions.length, traced: decisions.length - traceFailures, traceFailures }, decisions };
   if (args.output) writeJsonFile(path.resolve(args.output), payload);
   if (args.json) console.log(JSON.stringify(payload, null, 2)); else printPrecedent(payload);
-  return error ? 1 : 0;
+  return error || traceFailures ? 1 : 0;
 }
 
 function summarizeRunOutcomes(runs) {
@@ -2209,7 +2893,7 @@ function printPrecedent(payload) {
   console.log(`- decisions: ${payload.summary.decisions}`);
   for (const item of payload.decisions) {
     console.log(`- ${item.node.nodeKind}/${item.node.naturalKey}: ${item.node.label ?? ''}`);
-    console.log(`  outcome: ${Object.entries(item.outcome).map(([k,v])=>`${k}=${v}`).join(' ') || 'no downstream runs'}`);
+    console.log(`  outcome: ${item.traceError ? `trace failed (${item.traceError})` : (Object.entries(item.outcome).map(([k,v])=>`${k}=${v}`).join(' ') || 'no downstream runs')}`);
   }
 }
 
@@ -2664,6 +3348,8 @@ function validateGraphSnapshotPayload(graph, graphIndex) {
   if (!Array.isArray(graph?.nodes)) throw new Error(`Memory graph payload graphs[${graphIndex}].nodes must be an array`);
   if (!Array.isArray(graph?.edges)) throw new Error(`Memory graph payload graphs[${graphIndex}].edges must be an array`);
   const nodeIds = new Set();
+  const edgeIds = new Set();
+  const edgeTriples = new Set();
   graph.nodes.forEach((node, nodeIndex) => {
     const prefix = `graphs[${graphIndex}].nodes[${nodeIndex}]`;
     for (const field of ['nodeId', 'nodeKind', 'naturalKey', 'label']) assertGraphString(node?.[field], `${prefix}.${field}`);
@@ -2683,6 +3369,14 @@ function validateGraphSnapshotPayload(graph, graphIndex) {
     assertGraphMetadata(edge?.metadata, `${prefix}.metadata`);
     if (!nodeIds.has(edge.fromNodeId)) throw new Error(`Memory graph payload ${prefix}.fromNodeId is not present in snapshot nodes: ${edge.fromNodeId}`);
     if (!nodeIds.has(edge.toNodeId)) throw new Error(`Memory graph payload ${prefix}.toNodeId is not present in snapshot nodes: ${edge.toNodeId}`);
+    if (edge.fromNodeId === edge.toNodeId) throw new Error(`Memory graph payload ${prefix} must not be a self-loop`);
+    if (edgeIds.has(edge.edgeId)) throw new Error(`Memory graph payload ${prefix}.edgeId is duplicated: ${edge.edgeId}`);
+    edgeIds.add(edge.edgeId);
+    const edgeTriple = JSON.stringify([edge.fromNodeId, edge.toNodeId, edge.edgeType]);
+    if (edgeTriples.has(edgeTriple)) {
+      throw new Error(`Memory graph payload ${prefix} duplicates semantic edge ${edge.fromNodeId} -> ${edge.toNodeId} (${edge.edgeType})`);
+    }
+    edgeTriples.add(edgeTriple);
   });
 }
 
@@ -2947,8 +3641,10 @@ function riskRank(risk) {
   return { high: 0, medium: 1, low: 2 }[risk] ?? 9;
 }
 
-function jsonFilesFromDir(dirPath, maxFiles = 200) {
+function jsonFilesFromDir(dirPath, options = {}) {
   if (!directoryExists(dirPath)) return [];
+  const maxFiles = options.maxFiles ?? Number.POSITIVE_INFINITY;
+  const acceptFile = options.acceptFile ?? (() => true);
   const files = [];
   function visit(currentPath) {
     if (files.length >= maxFiles) return;
@@ -2964,27 +3660,61 @@ function jsonFilesFromDir(dirPath, maxFiles = 200) {
       if (entry.name === '.git' || entry.name === 'node_modules') continue;
       const entryPath = path.join(currentPath, entry.name);
       if (entry.isDirectory()) visit(entryPath);
-      else if (entry.isFile() && entry.name.endsWith('.json')) files.push(entryPath);
+      else if (entry.isFile() && entry.name.endsWith('.json') && acceptFile(entryPath)) files.push(entryPath);
     }
   }
   visit(dirPath);
   return files;
 }
 
-function memorySearchReportFiles(context) {
-  const roots = sortedUnique([
-    context.artifactRoot,
-    context.artifactRoot ? path.join(context.artifactRoot, 'eval') : null,
-    context.runsDir ? path.dirname(context.runsDir) : null,
-    context.runsDir ? path.join(path.dirname(context.runsDir), 'eval') : null,
-    path.join(P2A_PATHS.projectRoot, '.plan2agent'),
-  ]);
-  return sortedUnique(roots.flatMap((root) => jsonFilesFromDir(root)));
+function isMemorySearchReportPath(filePath) {
+  const fileName = path.basename(filePath);
+  return fileName.endsWith('.json') && /memory/i.test(fileName);
 }
 
-function memorySearchReportMatchesContext(payload, context) {
+function minimalDirectoryRoots(values) {
+  const roots = sortedUnique(values.map((value) => value ? path.resolve(value) : null))
+    .sort((left, right) => left.length - right.length || left.localeCompare(right));
+  const selected = [];
+  for (const root of roots) {
+    const nested = selected.some((parent) => {
+      const relative = path.relative(parent, root);
+      return relative === '' || (relative && !relative.startsWith('..') && !path.isAbsolute(relative));
+    });
+    if (!nested) selected.push(root);
+  }
+  return selected;
+}
+
+function memorySearchReportFiles(context) {
+  const scopedRoots = [
+    context.artifactRoot,
+    context.runsDir,
+    context.runsDir ? path.join(path.dirname(context.runsDir), 'eval') : null,
+  ];
+  const roots = minimalDirectoryRoots(scopedRoots);
+  if (!roots.length) roots.push(path.join(P2A_PATHS.projectRoot, '.plan2agent'));
+  return sortedUnique(roots.flatMap((root) => jsonFilesFromDir(root, {
+    acceptFile: isMemorySearchReportPath,
+  })));
+}
+
+function pathStaysInside(rootPath, filePath) {
+  if (!rootPath || !filePath) return false;
+  const relative = path.relative(path.resolve(rootPath), path.resolve(filePath));
+  return relative !== '' && !relative.startsWith('..') && !path.isAbsolute(relative);
+}
+
+function memorySearchReportMatchesContext(payload, context, filePath = null) {
+  if (payload.query?.scope === 'global') {
+    return payload.query?.excludeProject === context.projectId
+      && pathStaysInside(context.artifactRoot, filePath);
+  }
   const reportContext = payload.context && typeof payload.context === 'object' ? payload.context : null;
   if (!reportContext) return false;
+  if (payload.query?.scope === 'project') {
+    return (reportContext.projectId ?? null) === (context.projectId ?? null);
+  }
   if (reportContext.sourceKind !== context.sourceKind) return false;
   if ((reportContext.projectId ?? null) !== (context.projectId ?? null)) return false;
   if ((reportContext.iterationId ?? null) !== (context.iterationId ?? null)) return false;
@@ -2998,7 +3728,7 @@ function readMemorySearchReports(context) {
   for (const filePath of memorySearchReportFiles(context)) {
     const payload = readJsonObject(filePath);
     if (payload?.schema_version !== 'p2a.memory_search.v1') continue;
-    if (!memorySearchReportMatchesContext(payload, context)) continue;
+    if (!memorySearchReportMatchesContext(payload, context, filePath)) continue;
     reports.push({ filePath, payload });
   }
   return reports;
@@ -3199,7 +3929,23 @@ function errorMessage(error) {
   return error instanceof Error && error.message ? error.message : String(error);
 }
 
-export { buildGraphIndex, buildMemoryPlan, fetchPagedMemoryItems, graphScopeParams, graphSourceReference, incomingEdgeLabel, pushPlan, validateMemoryWritePlan };
+export {
+  buildGraphIndex,
+  buildMemoryPlan,
+  fetchPagedMemoryItems,
+  fetchPagedMemoryPostItems,
+  graphScopeParams,
+  graphSourceReference,
+  incomingEdgeLabel,
+  memorySearchReportMatchesContext,
+  normalizeMemoryTrace,
+  precedentTraceScope,
+  pushPlan,
+  readMemorySearchReports,
+  searchNextActions,
+  searchRemoteMemory,
+  validateMemoryWritePlan,
+};
 
 export async function main(argv = process.argv.slice(2)) {
   const args = parseArgs(argv);

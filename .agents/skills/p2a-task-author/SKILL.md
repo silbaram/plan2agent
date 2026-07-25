@@ -33,6 +33,7 @@ Use these context fields:
 - `existing_tasks.active`
 - `existing_tasks.maintenance`
 - `spec_field_changes`
+- `planning_memory`
 - `idea`
 - `active_iteration`
 - `code_signals`
@@ -65,7 +66,7 @@ Each task must include:
 - `acceptanceCriteria`: at least one concrete criterion.
 - `targetArea`
 - `suggestedAgentPrompt`: a paste-ready, scope-bounded prompt for the implementing agent.
-- `sourceSpecRefs`: at least one reference to a real `effective_spec` field, such as `implementation.architecture`.
+- `sourceSpecRefs`: at least one reference to a real `effective_spec` field, such as `implementation.architecture`; add Memory and decision lineage refs only in addition to this field.
 
 Never write `task-graph.json` directly. The canonical graph is created only by `promote-tasks` after human approval.
 
@@ -80,6 +81,7 @@ Never write `task-graph.json` directly. The canonical graph is created only by `
 - Draft each task so its acceptance criteria are self-satisfiable from that task's explicit scope; do not attach AC that require earlier or later draft tasks to complete.
 - When a draft task adds a framework dependency that triggers auto-configuration, include the minimal required configuration (for example, a datasource URL) in that same task, or explicitly place build-green AC on the later task that owns that configuration.
 - Every task must be traceable: `sourceSpecRefs` must point to actual `effective_spec` product or implementation fields so `validateTaskGraphData` can pass.
+- Inspect `planning_memory.layers`, `relevant_results`, and `relevant_failures` before authoring. When a result materially changes decomposition, dependencies, acceptance criteria, or failure mitigation, add `memory:<report_ref or source_reference>` and any applicable `decision:ND-n` to the affected task's `sourceSpecRefs`. Turn relevant failed/blocked history into an explicit mitigation or regression AC. Do not cite irrelevant history or treat unavailable/unconfigured Memory as a blocker.
 - Do not create tasks for scope that is absent from the approved effective spec.
 - If `spec_field_changes` is non-empty, focus the draft around changed fields rather than re-authoring unchanged baseline scope.
 - Do not put cross-iteration dependencies in `dependencies`; record prerequisites from prior iterations in `description` and `sourceSpecRefs` instead.

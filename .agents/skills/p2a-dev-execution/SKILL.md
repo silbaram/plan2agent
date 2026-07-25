@@ -49,6 +49,10 @@ Batch mode must use one write-capable provider within one foreground supervised 
 
    Use the task `prompt` to understand the scoped work, acceptance criteria, target area, and relevant constraints.
 
+   If this is a retry after the same task's latest run ended `failed` or `blocked`, inspect that run's failure class and localization before starting the new run. When Memory is configured, run one same-project hybrid search using the task title, failure class, and localization, filter to relevant run history when useful, and save the report beside the failed run as `<failed-run-id>.memory-recall.json`. Do not query Memory for a normal first attempt.
+
+   Use a retrieved failure only when it is materially similar. After starting the retry, add one run note in the form `MEMORY_RETRY: sourceRun=<id>; report=<path>; applied=<mitigation or none>; status=<succeeded|fallback|failed|skipped>`. If retrieval falls back or fails, preserve that status and continue unless the user explicitly requires Memory history; never claim that no similar failure exists.
+
 2. Start a run unless the user provided an existing run id. When using Codex, create an isolated worktree so the write-capable implementer is confined by Codex's `workspace-write` sandbox:
 
    ```bash
@@ -233,7 +237,7 @@ Do not use destructive reset, forced branch movement, automatic conflict resolut
 ## Writing boundaries and prohibitions
 
 - Implement only inside the separate target project. Do not write to the Plan2Agent repository itself, including `.agents/`, `.claude/`, `.codex/`, `.gemini/`, `.plan2agent/scripts/`, `.plan2agent/schemas/`, `plans/`, or `docs/`.
-- Limit implementation writes to the run `workspaceRef` or worktree. In supervised batch mode, the main dev-execution owner may also create task-scoped local commits or patches and write to the approved canonical integration worktree plus the owner-only integration-candidate worktree created from its latest head. The main owner may write the lifecycle artifacts explicitly defined by this skill: run verdicts, milestone-review JSON, and retrospective proposals. Spawned implementation and review subagents remain unable to write integration or lifecycle artifacts.
+- Limit implementation writes to the run `workspaceRef` or worktree. In supervised batch mode, the main dev-execution owner may also create task-scoped local commits or patches and write to the approved canonical integration worktree plus the owner-only integration-candidate worktree created from its latest head. The main owner may write the lifecycle artifacts explicitly defined by this skill: retry Memory reports and notes, run verdicts, milestone-review JSON, and retrospective proposals. Spawned implementation and review subagents remain unable to write integration or lifecycle artifacts.
 - Do not add or rewrite requirements by bypassing planning artifacts.
 - Do not install dependencies without grounded evidence from the approved task, existing project conventions, or explicit user approval.
 - In a co-located project where harness files live alongside app code, do not run interactive scaffolders that may overwrite or prompt in a non-empty directory, such as `npm create vite .`. Write config files manually and install only dependencies.

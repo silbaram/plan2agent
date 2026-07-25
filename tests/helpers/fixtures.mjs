@@ -50,14 +50,6 @@ export function runExecute(args) {
   return spawnSync(process.execPath, [EXECUTE_CLI, ...args], { cwd: ROOT, encoding: 'utf8' });
 }
 
-export function runExecuteFrom(cwd, args) {
-  return spawnSync(process.execPath, [EXECUTE_CLI, ...args], { cwd, encoding: 'utf8' });
-}
-
-export function runOrchestrate(args) {
-  return spawnSync(process.execPath, [ORCHESTRATE_CLI, ...args], { cwd: ROOT, encoding: 'utf8' });
-}
-
 export function runProposals(args) {
   return spawnSync(process.execPath, [PROPOSALS_CLI, ...args], { cwd: ROOT, encoding: 'utf8' });
 }

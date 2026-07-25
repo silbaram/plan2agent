@@ -19,3 +19,4 @@ Rules:
 - Every dependency must reference a task id in the same graph.
 - The graph must be acyclic.
 - Split oversized tasks before returning.
+- Inspect supplied planning Memory context. When it materially changes a task or exposes a relevant prior failure, encode the mitigation in acceptance criteria and add `memory:`/`decision:` lineage refs alongside a real spec-field ref.

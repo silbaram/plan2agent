@@ -14,6 +14,7 @@ Create a development-ready product and implementation specification from approve
 - Explicit constraints and non-goals.
 - Optional prior `spec_json` when resuming.
 - Optional Feature Radar preflight research from `.plan2agent/artifacts/<project_id>/preflight-research/`.
+- Optional same-project, conditional cross-project, or targeted Gate B Memory recall reports prepared by the harness.
 
 ## Ownership
 
@@ -144,4 +145,5 @@ Suggested Korean section labels for implementation plans: 아키텍처, 인터�
 - Do not invent API providers, storage engines, or UI frameworks unless the user already selected them.
 - Do not rely on stale model memory for current technology recommendations; use Technology Reconnaissance when the choice materially affects the plan.
 - Preserve intake evidence and follow the Evidence and Citation Contract in `.agents/skills/p2a-harness/SKILL.md` for sources that materially affect the spec.
+- Apply the Planning Memory Recall contract from `p2a-harness`: reuse both Gate A layers, run a targeted Gate B recall only when needed, and cite every consumed report as `LOCAL-n` with its query, requested/effective mode, fallback, and actual result reference. Treat retrieved history as context until the spec explicitly selects or rejects it, and preserve relevant prior failure signals for Gate C.
 - Do not edit files or run commands.

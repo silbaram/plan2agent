@@ -62,6 +62,7 @@ import {
   assertNoUninitializedScaffoldArtifactRoots,
   assertNotUninitializedScaffoldGraph,
   configuredTaskGraphPath,
+  normalizePath,
   P2A_PROJECT_CONFIG,
   resolveP2aPaths,
   singleArtifactProjectRoot,
@@ -391,10 +392,6 @@ function assertFile(filePath, label) {
 function assertDirectory(dirPath, label) {
   if (!existsSync(dirPath)) throw new Error(`${label} is missing: ${dirPath}`);
   if (!lstatSync(dirPath).isDirectory()) throw new Error(`${label} must be a directory: ${dirPath}`);
-}
-
-function normalizePath(filePath) {
-  return filePath.split(path.sep).join('/');
 }
 
 function displayPath(filePath, root = process.cwd()) {

@@ -6,8 +6,7 @@ import { createHash } from 'node:crypto';
 import path from 'node:path';
 import process from 'node:process';
 import { pathToFileURL } from 'node:url';
-import { ROLE_PROFILE_TO_ROLE } from './p2a_constants.mjs';
-import { P2A_DIR, resolveP2aPaths } from './p2a_paths.mjs';
+import { normalizePath, P2A_DIR, resolveP2aPaths } from './p2a_paths.mjs';
 import {
   artifactRunRef,
   canonicalRunRef,
@@ -50,7 +49,6 @@ const GATE_PATHS = {
   reviewReport: path.join('gate-d-review', 'review-report.md'),
   reviewJson: path.join('gate-d-review', 'review.json'),
 };
-const ROLE_PROFILE_SOURCES = new Set(['auto', 'override']);
 
 function expectedExecutionGuide(agentTool, role, profile) {
   if (agentTool === 'codex') {
@@ -62,9 +60,7 @@ function expectedExecutionGuide(agentTool, role, profile) {
       fallbackMode: 'single supervised role prompt',
       supervisionRequired: true,
       startsProcess: false,
-      constraints: [
-        'Open Codex manually in the foreground workspace.',
-      ],
+      constraints: ['Open Codex manually in the foreground workspace.'],
     };
   }
   if (agentTool === 'claude') {
@@ -76,9 +72,7 @@ function expectedExecutionGuide(agentTool, role, profile) {
       fallbackMode: 'supervised foreground role prompt',
       supervisionRequired: true,
       startsProcess: false,
-      constraints: [
-        'Open Claude Code manually in the foreground workspace.',
-      ],
+      constraints: ['Open Claude Code manually in the foreground workspace.'],
     };
   }
   if (agentTool === 'gemini') {
@@ -88,9 +82,7 @@ function expectedExecutionGuide(agentTool, role, profile) {
       fallbackMode: 'read-only supervised role prompt',
       supervisionRequired: true,
       startsProcess: false,
-      constraints: [
-        'Use Gemini only for read-only planning, review, or monitor support.',
-      ],
+      constraints: ['Use Gemini only for read-only planning, review, or monitor support.'],
     };
   }
   return {
@@ -109,10 +101,6 @@ function expectedExecutionGuide(agentTool, role, profile) {
   };
 }
 
-function cloneJsonData(data) {
-  return JSON.parse(JSON.stringify(data));
-}
-
 function roleWithExecutionGuide(role) {
   if (role.executionGuide) return role;
   return {
@@ -121,43 +109,27 @@ function roleWithExecutionGuide(role) {
   };
 }
 
+/**
+ * @deprecated Kept as a compatibility export for scaffolded runtime consumers.
+ */
 export function normalizeOrchestrationPlanData(data) {
-  const normalized = cloneJsonData(data);
+  const normalized = JSON.parse(JSON.stringify(data));
   if (Array.isArray(normalized?.roles)) {
     normalized.roles = normalized.roles.map(roleWithExecutionGuide);
   }
   return normalized;
 }
 
+/**
+ * @deprecated Kept as a compatibility export for scaffolded runtime consumers.
+ */
 export function normalizeOrchestrationRuntimeData(data) {
-  const normalized = cloneJsonData(data);
+  const normalized = JSON.parse(JSON.stringify(data));
   const roleAssignments = normalized?.sharedMentalModel?.roleAssignments;
   if (Array.isArray(roleAssignments)) {
     normalized.sharedMentalModel.roleAssignments = roleAssignments.map(roleWithExecutionGuide);
   }
   return normalized;
-}
-
-function validateExecutionGuide(guide, label) {
-  if (guide.supervisionRequired !== true) {
-    throw new ValidationError(`${label} executionGuide.supervisionRequired must be true`);
-  }
-  if (guide.startsProcess !== false) {
-    throw new ValidationError(`${label} executionGuide.startsProcess must be false`);
-  }
-  if (!Array.isArray(guide.constraints) || guide.constraints.length === 0) {
-    throw new ValidationError(`${label} executionGuide.constraints must not be empty`);
-  }
-}
-
-function validateExecutionGuideForRole(role, label) {
-  validateExecutionGuide(role.executionGuide, label);
-  const expected = expectedExecutionGuide(role.agentTool, role.role, role.profile);
-  for (const field of ['surface', 'recommendedFeature', 'fallbackMode']) {
-    if (role.executionGuide[field] !== expected[field]) {
-      throw new ValidationError(`${label} executionGuide.${field} must match ${role.agentTool}/${role.role}`);
-    }
-  }
 }
 
 export class ValidationError extends Error {
@@ -1545,10 +1517,6 @@ function requireGateFiles(paths, keys, gateLabel) {
     throw new ValidationError(`${gateLabel} is incomplete; missing ${missing.map((key) => GATE_PATHS[key]).join(', ')}`);
   }
   for (const key of keys) assertFile(paths[key], GATE_PATHS[key]);
-}
-
-function normalizePath(filePath) {
-  return filePath.split(path.sep).join('/');
 }
 
 function normalizeReference(reference) {

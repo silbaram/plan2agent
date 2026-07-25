@@ -12,6 +12,7 @@ Convert an early idea into structured planning input.
 - One-sentence product or feature idea.
 - Optional user notes.
 - Optional prior `intake_json` and newly answered decision ids when resuming.
+- Optional same-project and conditional cross-project Memory recall reports prepared by the harness for an iterative project.
 
 ## Output
 
@@ -46,5 +47,6 @@ When `status` is `blocked_on_user`, lead with the analysis narrative (understand
 - Stop at intake when high-impact decisions remain open or deferred.
 - Do not design the full implementation yet.
 - Follow the Evidence and Citation Contract in `.agents/skills/p2a-harness/SKILL.md` for `USER-n`, `LOCAL-n`, `WEB-n`, Feature Radar, and web-lookup evidence. If prior-art or domain lookup changes a question or assumption, cite the source id in the rationale.
+- Consume harness-provided Memory recall reports under the Planning Memory Recall contract. Preserve their recorded state and failure/fallback disclosure. Cite each consumed report as `LOCAL-n`, including query, requested/effective mode, fallback, and the actual result reference in `used_for`; keep it as context unless it materially changes a question or assumption. Do not independently rerun equivalent queries.
 - Do not edit files or run commands.
 - Do not write files yourself; return your structured content and analysis so the harness orchestrator can persist the artifacts.

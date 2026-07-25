@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /** Supervise one Plan2Agent task lifecycle with the existing task/run CLIs. */
 
-import { existsSync, lstatSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, realpathSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import process from 'node:process';
@@ -25,6 +25,7 @@ import {
   assertNoUninitializedScaffoldArtifactRoots,
   assertNotUninitializedScaffoldGraph,
   configuredTaskGraphPath,
+  normalizePath,
   resolveP2aPaths,
   singleArtifactProjectRoot,
 } from './p2a_paths.mjs';
@@ -299,10 +300,6 @@ function assertFile(filePath, label) {
 function assertDirectory(dirPath, label) {
   if (!existsSync(dirPath)) throw new Error(`${label} is missing: ${dirPath}`);
   if (!lstatSync(dirPath).isDirectory()) throw new Error(`${label} must be a directory: ${dirPath}`);
-}
-
-function normalizePath(filePath) {
-  return filePath.split(path.sep).join('/');
 }
 
 function displayPath(filePath, root = process.cwd()) {

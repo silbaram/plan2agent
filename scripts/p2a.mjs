@@ -5,9 +5,9 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, lstatSync, readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
-import { DEFAULT_RUNS_DIR, GATE_FILES, GREENFIELD_REQUIRED_FILES } from './p2a_constants.mjs';
+import { DEFAULT_MEMORY_REQUEST_TIMEOUT_MS, DEFAULT_RUNS_DIR, GATE_FILES, GREENFIELD_REQUIRED_FILES } from './p2a_constants.mjs';
 import { resolveOrchestrationAgentTool } from './p2a_project_config.mjs';
-import { resolveP2aPaths } from './p2a_paths.mjs';
+import { normalizePath, resolveP2aPaths } from './p2a_paths.mjs';
 
 const P2A_PATHS = resolveP2aPaths(import.meta.url);
 
@@ -43,7 +43,7 @@ function usage() {
     '  node .plan2agent/scripts/p2a.mjs upgrade (--dry-run|--apply)',
     '  node .plan2agent/scripts/p2a.mjs enhance <capability> [--dry-run] [--overwrite]',
     '  node .plan2agent/scripts/p2a.mjs eval <grade|compare|analyze|generate|digest> [options]',
-    '  node .plan2agent/scripts/p2a.mjs memory <status|push|pull|search|history|digest> [options]',
+    '  node .plan2agent/scripts/p2a.mjs memory <status|push|pull|search|history|digest|trace|impact|precedent> [options]',
     '  node .plan2agent/scripts/p2a.mjs execute <plan|start|resume|status|finish> [options]',
     '  node .plan2agent/scripts/p2a.mjs tasks|runs|iteration|proposals|validate ...',
     '',
@@ -59,10 +59,6 @@ function usage() {
     '  update, upgrade, enhance, and doctor use the toolkit checkout recorded in .plan2agent/manifest.json when run inside a scaffold project.',
     '  --help, -h  Show this help.',
   ].join('\n');
-}
-
-function normalizePath(filePath) {
-  return filePath.split(path.sep).join('/');
 }
 
 function isFile(filePath) {
@@ -425,6 +421,9 @@ function summarizeMemoryEnhancement(manifest, config) {
     serverConfigured: Boolean(process.env[serverUrlEnv] || stringValue(configMemory.serverUrl)),
     tokenEnv,
     tokenConfigured: Boolean(process.env[tokenEnv] || stringValue(configMemory.token)),
+    requestTimeoutMs: Number.isInteger(configMemory.requestTimeoutMs) && configMemory.requestTimeoutMs > 0
+      ? configMemory.requestTimeoutMs
+      : DEFAULT_MEMORY_REQUEST_TIMEOUT_MS,
     statusPolicy: stringValue(configMemory.statusPolicy) ?? 'local_first',
     pushPolicy: stringValue(configMemory.pushPolicy) ?? 'explicit_approval',
   };
@@ -574,7 +573,7 @@ function buildInfo(targetRootInput) {
     } else if (artifacts.length) {
       nextActions.push(`Check Memory sync: node .plan2agent/scripts/p2a.mjs memory status --artifacts ${artifacts[0].artifactRoot}`);
       nextActions.push(`Preview Memory pull: node .plan2agent/scripts/p2a.mjs memory pull --artifacts ${artifacts[0].artifactRoot} --dry-run`);
-      nextActions.push(`Search Memory history: node .plan2agent/scripts/p2a.mjs memory search --artifacts ${artifacts[0].artifactRoot} --query <term>`);
+      nextActions.push(`Search project Memory history: node .plan2agent/scripts/p2a.mjs memory search --project ${artifacts[0].projectId} --mode hybrid --query <term>`);
       nextActions.push(`Show Memory timeline: node .plan2agent/scripts/p2a.mjs memory history --artifacts ${artifacts[0].artifactRoot}`);
       nextActions.push(`Digest Memory maintenance candidates: node .plan2agent/scripts/p2a.mjs memory digest --artifacts ${artifacts[0].artifactRoot}`);
     }
@@ -643,7 +642,7 @@ function printInfo(info) {
   }
   if (info.enhancements?.memory?.enabled) {
     const memory = info.enhancements.memory;
-    console.log(`- memory: mode=${memory.mode} sync=${memory.inSync ? 'ok' : 'drift'} serverEnv=${memory.serverUrlEnv} serverConfigured=${memory.serverConfigured ? 'yes' : 'no'} pushPolicy=${memory.pushPolicy}`);
+    console.log(`- memory: mode=${memory.mode} sync=${memory.inSync ? 'ok' : 'drift'} serverEnv=${memory.serverUrlEnv} serverConfigured=${memory.serverConfigured ? 'yes' : 'no'} timeoutMs=${memory.requestTimeoutMs} pushPolicy=${memory.pushPolicy}`);
   }
   if (info.enhancements?.proposals?.enabled) {
     const proposals = info.enhancements.proposals;

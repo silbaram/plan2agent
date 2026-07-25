@@ -12,6 +12,7 @@ Review planning artifacts before implementation starts.
 - `spec_json`.
 - `task_graph_json`.
 - Optional intake artifact for decision traceability.
+- Optional `iteration.json` planning Memory state and cited Memory search reports.
 
 ## Output
 
@@ -45,6 +46,9 @@ Return `review_json` (schema `p2a.review.v1`). An optional `review_report` Markd
 - If `spec_json.reference_reconnaissance` is present, every candidate must point to an existing `evidence[].source_id`, every selected/rejected pattern must point to a known `REF-n` candidate, and the selected/rejected rationale must be consistent with the Gate B recommendation.
 - Web-grounded decisions have `WEB-n` evidence entries with title, URL, and `used_for` rationale.
 - Treat missing Technology Reconnaissance evidence for a material technology choice as a blocking Gate B issue, not as a non-blocking citation nit.
+- When Gate A/B or a task claims Memory use, verify that the cited report exists, is `p2a.memory_search.v1`, matches the recorded query and scope, discloses requested/effective mode and fallback, and identifies the source path, source reference, or natural key actually used.
+- When `planning_memory.relevant_failures` contains a material failed/blocked precedent, verify that an affected task has a concrete mitigation or regression acceptance criterion and carries both a real spec-field ref and the applicable `memory:`/`decision:` lineage refs.
+- Do not block because Memory is disabled, unconfigured, unavailable, skipped honestly, or irrelevant. Block an invalid claim of Memory use, a missing claimed report/citation, or an ignored material prior failure.
 
 ## Rules
 

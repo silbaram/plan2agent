@@ -5,6 +5,7 @@ import {
   readdirSync,
 } from 'node:fs';
 import path from 'node:path';
+import { normalizePath } from './p2a_paths.mjs';
 
 export const FEATURE_RADAR_PREFLIGHT_DIR = 'preflight-research';
 
@@ -41,10 +42,6 @@ const LOCAL_USED_FOR = {
   'p2a-context.json': 'Structured Feature Radar context prepared for P2A ingestion.',
   'handoff-manifest.md': 'Feature Radar handoff provenance for the copied preflight research.',
 };
-
-function normalizePath(filePath) {
-  return String(filePath).split(path.sep).join('/');
-}
 
 function isDirectory(filePath) {
   return existsSync(filePath) && lstatSync(filePath).isDirectory();

@@ -31,8 +31,9 @@ import {
 } from './validate_artifacts.mjs';
 import { resolveIterationState } from './p2a_iteration_state.mjs';
 import { renderIterationIndexMarkdown } from './p2a_iteration.mjs';
-import { P2A_ARTIFACTS_DIR, P2A_SCHEMAS_DIR, P2A_SCRIPTS_DIR, resolveP2aPaths } from './p2a_paths.mjs';
+import { normalizePath, P2A_ARTIFACTS_DIR, P2A_SCHEMAS_DIR, P2A_SCRIPTS_DIR, resolveP2aPaths } from './p2a_paths.mjs';
 import { artifactRunRef, legacyRunRef } from './p2a_run_paths.mjs';
+import { shellQuote } from './p2a_run_commands.mjs';
 import {
   buildProjectConfig,
   defaultCapabilityConfig,
@@ -1527,12 +1528,6 @@ function summarizeUpgradeItems(items) {
   return summary;
 }
 
-function shellQuote(value) {
-  const text = String(value);
-  if (/^[A-Za-z0-9_./:@%+=,-]+$/.test(text)) return text;
-  return `'${text.replace(/'/g, "'\\''")}'`;
-}
-
 function commandPathFromCwd(filePath) {
   const absolutePath = path.resolve(filePath);
   const relativePath = path.relative(path.resolve(process.cwd()), absolutePath);
@@ -2099,11 +2094,16 @@ function buildEnhanceCapabilityPlan(args, targetRoot) {
 function enhanceCapabilityNextActions(capability, targetRoot, config, manifest) {
   const source = preferredEnhanceArtifactArg(targetRoot);
   if (capability === 'memory') {
+    const projectId = typeof config?.projectId === 'string' && config.projectId.trim()
+      ? config.projectId.trim()
+      : source.hasArtifact
+        ? path.basename(source.artifactRef)
+        : '<project_id>';
     return [
       `${source.hasArtifact ? 'Check local/Memory sync' : 'After creating an artifact root, check local/Memory sync'}: node .plan2agent/scripts/p2a.mjs memory status --artifacts ${source.artifactRef}`,
       `${source.hasArtifact ? 'Preview Memory restore diff' : 'After Memory is configured, preview restore diff'}: node .plan2agent/scripts/p2a.mjs memory pull --artifacts ${source.artifactRef} --dry-run`,
       `${source.hasArtifact ? 'Preview explicit Memory push' : 'After review, preview explicit Memory push'}: node .plan2agent/scripts/p2a.mjs memory push --artifacts ${source.artifactRef} --dry-run`,
-      `${source.hasArtifact ? 'Search Memory history' : 'After Memory contains snapshots, search history'}: node .plan2agent/scripts/p2a.mjs memory search --artifacts ${source.artifactRef} --query <term>`,
+      `${source.hasArtifact ? 'Search project Memory history' : 'After Memory contains snapshots, search project history'}: node .plan2agent/scripts/p2a.mjs memory search --project ${projectId} --mode hybrid --query <term>`,
       `${source.hasArtifact ? 'Show Memory timeline' : 'After Memory contains snapshots, show timeline'}: node .plan2agent/scripts/p2a.mjs memory history --artifacts ${source.artifactRef}`,
       `${source.hasArtifact ? 'Summarize run/proposal gaps' : 'After runs exist, summarize run/proposal gaps'}: node .plan2agent/scripts/p2a.mjs memory digest --artifacts ${source.artifactRef}`,
     ];
@@ -2348,10 +2348,6 @@ function buildPlan(paths, args, artifactsRoot, targetRoot, sourceInfo, options =
     data: projectConfig,
   });
   return plan;
-}
-
-function normalizePath(filePath) {
-  return filePath.split(path.sep).join('/');
 }
 
 function rebaseSpecSourceIntake(source, sourceIntakeRef, sourceSpecRef) {

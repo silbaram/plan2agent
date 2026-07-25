@@ -4,7 +4,7 @@ import { closeSync, existsSync, lstatSync, mkdirSync, openSync, readFileSync, re
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import process from 'node:process';
-import { DEFAULT_RUNS_DIR } from './p2a_constants.mjs';
+import { DEFAULT_MEMORY_REQUEST_TIMEOUT_MS, DEFAULT_RUNS_DIR } from './p2a_constants.mjs';
 import { P2A_ARTIFACTS_DIR, normalizeProjectId, normalizeProjectIdFromPath } from './p2a_paths.mjs';
 import { assertRunIndexCanInitialize, assertStartableRunId } from './p2a_run_paths.mjs';
 
@@ -327,6 +327,7 @@ export function defaultCapabilityConfig(capability) {
       enabled: true,
       mode: 'manual_sync',
       serverUrlEnv: 'P2A_MEMORY_URL',
+      requestTimeoutMs: DEFAULT_MEMORY_REQUEST_TIMEOUT_MS,
       projectIdSource: 'manifest',
       syncTiers: ['trace', 'content', 'analytics', 'search'],
       statusPolicy: 'local_first',

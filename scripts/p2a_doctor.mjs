@@ -11,6 +11,7 @@ import {
   PROJECT_RUNTIME_SCRIPT_FILES,
   REPO_ONLY_SCRIPT_FILES,
 } from './p2a_tool_manifest.mjs';
+import { normalizePath } from './p2a_paths.mjs';
 
 const EMPTY_TASK_COUNTS = {
   total: 0,
@@ -59,8 +60,6 @@ const PROPOSAL_SCHEMA_FILES = [
 ];
 const ORCHESTRATION_SCHEMA_FILES = [
 ];
-const ORCHESTRATION_MODES = new Set(['solo', 'solo_monitor', 'team']);
-
 function usage() {
   return [
     'Usage:',
@@ -103,10 +102,6 @@ function parseArgs(argv) {
     }
   }
   return args;
-}
-
-function normalizePath(filePath) {
-  return filePath.split(path.sep).join('/');
 }
 
 function isFile(filePath) {
@@ -607,6 +602,11 @@ function memoryCapabilityChecks(targetRoot, state) {
     typeof memoryConfig.serverUrlEnv === 'string' && memoryConfig.serverUrlEnv.trim()
       ? check('capability_memory_server_env', 'Memory server env config', 'pass', `server URL env is ${memoryConfig.serverUrlEnv}`)
       : check('capability_memory_server_env', 'Memory server env config', 'warn', 'memory.serverUrlEnv is not configured; --server will be required for status/push'),
+  );
+  checks.push(
+    Number.isInteger(memoryConfig.requestTimeoutMs) && memoryConfig.requestTimeoutMs > 0
+      ? check('capability_memory_timeout', 'Memory request timeout', 'pass', `request timeout is ${memoryConfig.requestTimeoutMs}ms`)
+      : check('capability_memory_timeout', 'Memory request timeout', 'warn', 'memory.requestTimeoutMs is missing or invalid; runtime default will be used'),
   );
   checks.push(
     memoryConfig.pushPolicy === 'explicit_approval'

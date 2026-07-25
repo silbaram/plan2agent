@@ -103,6 +103,10 @@ MVP 이후에는 이미 만들어진 산출물과 대상 프로젝트 위에 작
 open iteration -> task 실행 -> 모든 task done -> 사용자 close -> archived -> next iteration open
 ```
 
+Memory가 활성화되고 연결된 iterative root에서는 next iteration을 연 뒤 Gate A 분석 전에 same-project hybrid recall을 수행하고 결과를 새 iteration의 `gate-a-intake/memory-recall.json`에 보존한다. Architecture/protocol/migration/auth·security/external integration/data·queue/performance·reliability/failure 같은 reusable concern일 때만 `--global --exclude-project <current>` cross-project recall을 `memory-recall-cross-project.json`으로 추가한다. `iteration.json.planning_memory`는 `not_configured|pending|succeeded|fallback|failed|skipped`와 이전 `memory-status.json`의 `fresh|stale|unavailable|unchecked`를 기록한다. `draft`는 보고서를 실제로 소비해 query/requested/effective/fallback/source가 있는 `LOCAL-n` evidence와 bounded Gate C context를 만들며, 서버 장애나 미설정을 prior-history 부재로 해석하지 않는다.
+
+`iteration close`는 Memory가 설정된 경우 기본 5000ms 요청 제한과 기본 15000ms 전체 close-time 제한으로 read-only status를 자동 실행해 `memory-status.json`을 남긴다. archive metadata는 검사 전에 유효한 `unchecked` 상태로 기록되므로 프로세스가 중단돼도 `pending`인 archive가 남지 않는다. 검사는 고유한 임시 출력만 읽고 완료 후 최종 보고서를 교체하므로 이전 보고서가 현재 실패를 숨길 수 없다. 연결 실패는 정상적인 archive를 되돌리지 않지만 최종 `memory_freshness.status=unavailable`, `unavailable` 보고서, 사용자 경고를 남긴다. `memory-status.json`과 `iteration.json.memory_freshness`는 동기화 판정을 스스로 변경하지 않도록 Memory document snapshot에서 제외한다. 설정된 서버가 응답하지 않을 때 `memory status` 자체는 보고서를 쓴 뒤 non-zero로 종료하므로 자동화에서도 실패를 감지할 수 있다.
+
 규칙:
 
 - 동시에 열린 기능 반복은 1개다.
@@ -654,6 +658,15 @@ node .plan2agent/scripts/p2a_iteration.mjs context \
   "spec_field_changes": [
     { "section": "implementation", "field": "architecture", "specRef": "implementation.architecture" }
   ],
+  "planning_memory": {
+    "status": "succeeded",
+    "baseline_freshness": { "status": "fresh", "report_ref": "iterations/iter-001/memory-status.json", "detail": "..." },
+    "layers": [
+      { "scope": "project", "status": "succeeded", "report_ref": "iterations/iter-002/gate-a-intake/memory-recall.json", "query": "...", "requested_mode": "hybrid", "effective_mode": "hybrid", "fallback": null, "result_count": 2 }
+    ],
+    "relevant_results": [],
+    "relevant_failures": []
+  },
   "code_signals": {
     "code_root": ".",
     "file_tree": ["src/Demo.kt"],
@@ -668,6 +681,7 @@ node .plan2agent/scripts/p2a_iteration.mjs context \
 - `effective_spec`은 `current-spec.json`의 effective view(또는 thin pointer가 가리키는 active spec)에서 읽는다.
 - `existing_tasks`는 중복 저작과 재사용 판단을 돕기 위해 active 반복과 maintenance graph의 task 요약을 함께 제공한다.
 - `spec_field_changes`는 baseline이 있으면 `diff-tasks`와 같은 field 비교 결과를 재사용한다.
+- `planning_memory`는 recall/freshness 상태와 최대한 작게 정규화한 result/failure reference를 제공한다. History가 task boundary/dependency/AC를 바꿀 때만 실제 spec field ref 옆에 `memory:`/`decision:` refs와 concrete mitigation을 남긴다.
 - `code_signals`는 L1 실제 파일 트리(`--code-root`, 하네스/빌드/의존성 디렉터리 제외, cap 적용)와 L2 run log 기반 최근 변경 파일을 제공한다. L3 git diff와 L4 코드 요약은 후속이다.
 - `context`는 어떤 파일도 쓰지 않는다.
 - `scope`는 `feature`가 기본값이며, `--scope maintenance`는 유지보수 레인 context를 출력한다.
@@ -710,7 +724,7 @@ node .plan2agent/scripts/p2a_iteration.mjs promote-tasks \
 ### 10-7. 저작 스킬 `p2a-task-author`
 
 - 입력: §10-4 context 번들. 출력: `p2a-task-author` 서브에이전트가 반환하는 draft JSON과 skill owner가 저장하는 `task-graph.draft.json`.
-- 책임: read-only `p2a-task-author` 서브에이전트가 변경 의미를 읽어 task를 병합/분할하고, `existing_tasks`와 중복을 피하며, 각 task의 `sourceSpecRefs`를 effective spec 항목으로 채운다. skill owner만 반환된 JSON을 초안 파일로 저장하고 검증한다.
+- 책임: read-only `p2a-task-author` 서브에이전트가 변경 의미와 `planning_memory`를 읽어 task를 병합/분할하고, `existing_tasks`와 중복을 피하며, 각 task의 `sourceSpecRefs`를 effective spec 항목으로 채운다. Material prior failure가 있으면 affected task에 mitigation/regression AC와 `memory:`/`decision:` lineage ref를 real spec field ref 옆에 추가한다. skill owner만 반환된 JSON을 초안 파일로 저장하고 검증한다.
 - 제약: 서브에이전트는 파일이나 코드·의존성을 변경하지 않으며 정본을 직접 쓰지 않는다. skill owner도 초안만 쓰고, 정본 승격은 사람 승인 이후 `promote-tasks`가 수행한다.
 - mirror: 기존 skill mirror 규약(`.agents/skills` -> `.claude`/`.gemini`, command shim)을 따르고 `check_cli_parity`로 검증한다. 기존 `p2a-task-breakdown`의 sibling이다.
 - **구현됨**: `.agents/skills/p2a-task-author/SKILL.md`와 `.agents/agents/p2a-task-author.md` (canonical) + provider별 skill/agent mirror + `.gemini/commands/p2a/task-author.toml` shim. mirror/shim은 `sync_cli_assets.mjs`가 생성하고 `check_cli_parity.mjs`가 검증한다. 서브에이전트는 draft JSON을 반환하고, skill owner는 초안 저장과 검증 후 audit·`promote-tasks` 절차를 사람 게이트로 인계한다.

@@ -20,6 +20,7 @@ Use these context fields:
 - `existing_tasks.active`
 - `existing_tasks.maintenance`
 - `spec_field_changes`
+- `planning_memory`
 - `idea`
 - `active_iteration`
 - `code_signals`
@@ -31,6 +32,7 @@ Draft requirements:
 - Include a non-empty `tasks` array. Every task must contain exactly the schema fields `id`, `title`, `description`, `status`, `dependencies`, `acceptanceCriteria`, `targetArea`, `suggestedAgentPrompt`, and `sourceSpecRefs` (plus schema-permitted block fields only when applicable).
 - Create sequential `task-NNN` ids with `status: "todo"` and a `dependencies` array.
 - Give every task a non-empty title and description, concrete self-satisfiable acceptance criteria, a target area, a paste-ready bounded agent prompt, and at least one valid `sourceSpecRefs` entry.
+- Inspect `planning_memory` before decomposition. When prior history changes task boundaries, dependencies, acceptance criteria, or failure mitigation, add `memory:<report or result reference>` and any applicable `decision:ND-n` refs alongside at least one real effective-spec field. Turn material prior failed/blocked history into a concrete mitigation or regression criterion; ignore irrelevant results and do not block on unavailable Memory alone.
 - Keep dependencies acyclic and limited to task ids in the same draft.
 - Use `code_signals` to propose incremental work and do not turn maintenance pilot work into feature scope.
 - If `existing_tasks.active` is non-empty, do not return an incremental-only or partial replacement draft: the context contains summaries, not the full canonical tasks needed for safe preservation. When every existing task is still `todo`, return a concrete blocker telling the skill owner to attempt the authoritative `diff-tasks --force` check, which also rejects any active-iteration run history, then review the complete replacement draft and opt into `promote-tasks --replace-existing` after human approval. Do not infer the absence of active-iteration history from the bounded `code_signals.recent_changes` summary. If any task is `in_progress`, `done`, or `blocked`, direct the owner to a new feature iteration or maintenance lane immediately; the CLI also forbids replacement when a task was reopened to `todo` but run history remains.

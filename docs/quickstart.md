@@ -36,7 +36,7 @@ Codex는 기본 `quality` 프로필에서 GPT-5.6 Sol과 tier별 reasoning을 �
 
 `scaffold`는 co-located 정식 진입점으로, 빈 프로젝트에 하네스와 프로젝트용 `.gitignore`를 설치한다. fresh scaffold에서는 `<project-dir>`의 basename을 kebab-case로 정규화한 값이 기본 `projectId` seed가 되고, 그 값이 `.plan2agent/project.config.json`과 `.plan2agent/manifest.json`에 저장된다. 이후 정본은 디렉터리명이 아니라 project config의 `projectId`다. 설치 후 `<project-dir>`에서 Claude Code/Codex/Gemini를 열고 `/p2a-harness "<한 문장 아이디어>"`를 실행한다. 산출물은 이 프로젝트의 `.plan2agent/artifacts/<project_id>/gate-*`에 생성되며, `<project_id>`는 보통 scaffold가 저장한 `projectId`다. 승인 후 `node .plan2agent/scripts/p2a.mjs iteration init --artifacts .plan2agent/artifacts/<project_id>`로 반복 구조로 전환하고, `p2a.mjs execute`를 기본 진입점으로 개발 task 실행과 run tracking을 진행한다. `p2a.mjs eval grade/compare/analyze/generate/digest`는 run 평가, regression/failure cluster 점검, eval artifact 생성과 요약에 쓰고, `p2a.mjs tasks`/`p2a.mjs runs`는 세부 상태 전이와 run log를 직접 다룰 때 쓴다. 설치 후 drift 점검은 프로젝트 루트에서 `node .plan2agent/scripts/p2a.mjs update --dry-run` 또는 `upgrade --dry-run`으로 확인하고, 검토 후 안전 항목만 적용하려면 `--apply`를 붙인다. preview/apply 결과는 대상 프로젝트의 `.plan2agent/update-reports/`에 남는다. `handoff`는 plan2agent에서 이미 기획한 승인 산출물을 별도 프로젝트로 옮기는 레거시/특수 흐름으로 유지된다.
 
-Scaffold가 생성하는 `.plan2agent/`는 application source git에 커밋하지 않는 로컬 하네스 상태다. 장기 보존, 검색, 재개 기준은 `p2a_memory.mjs status/push/pull/search/history/digest` 기반 Plan2Agent Memory 동기화를 기준으로 두고, git commit은 제품 소스코드 변경에 집중한다.
+Scaffold가 생성하는 `.plan2agent/`는 application source git에 커밋하지 않는 로컬 하네스 상태다. 장기 보존, 검색, 재개 기준은 `p2a_memory.mjs status/push/pull/search/history/digest/trace/impact/precedent` 기반 Plan2Agent Memory 동기화를 기준으로 두고, git commit은 제품 소스코드 변경에 집중한다.
 
 ```text
 Idea
@@ -161,6 +161,8 @@ node .plan2agent/scripts/p2a.mjs iteration close \
   --artifacts .plan2agent/artifacts/<project_id>
 ```
 
+Memory가 설정돼 있으면 `close`는 요청별 제한과 기본 15초 전체 제한이 있는 read-only `memory status --output iterations/<closed>/memory-status.json`을 자동 실행한다. 서버 연결 실패나 전체 timeout이 있어도 유효한 archive는 유지하지만 새 `unavailable` 보고서와 명확한 경고를 남겨 동기화가 확인되지 않았음을 알린다. 이전 보고서는 현재 검사 결과로 재사용하지 않는다. 함께 출력되는 `memory push --dry-run`을 검토한 뒤 사용자가 실제 `memory push --yes`를 승인했다면 push가 끝난 뒤 기록된 status 명령을 다시 실행한다. 이 로컬 보고서는 다음 `open`의 freshness 기준이 되지만 Memory snapshot 자체에는 포함되지 않는다.
+
 다음 변경을 연다.
 
 ```bash
@@ -169,6 +171,29 @@ node .plan2agent/scripts/p2a.mjs iteration open \
   --iteration-id iter-002 \
   --idea "Add follow-up dashboard"
 ```
+
+Memory가 활성화되고 서버가 설정된 반복 프로젝트에서는 `iteration open`이 project recall 명령과 이전 반복의 Memory freshness를 안내하고 `iteration.json.planning_memory`에 상태를 남긴다. Gate A 분석 전에 프로젝트의 모든 과거 반복을 hybrid 검색하고 결과를 새 반복 아래에 보존한다.
+
+```bash
+node .plan2agent/scripts/p2a.mjs memory search \
+  --project <project_id> \
+  --mode hybrid \
+  --query "Add follow-up dashboard" \
+  --output .plan2agent/artifacts/<project_id>/iterations/iter-002/gate-a-intake/memory-recall.json
+```
+
+아이디어가 architecture/protocol/migration/auth·security/external integration/data·queue/performance·reliability/failure concern을 포함하면 `iteration open`이 현재 프로젝트를 제외한 두 번째 명령도 안내한다.
+
+```bash
+node .plan2agent/scripts/p2a.mjs memory search \
+  --global \
+  --exclude-project <project_id> \
+  --mode hybrid \
+  --query "Harden webhook retry reliability" \
+  --output .plan2agent/artifacts/<project_id>/iterations/iter-002/gate-a-intake/memory-recall-cross-project.json
+```
+
+`iteration draft`는 보고서를 읽어 상태를 `succeeded|fallback|failed|skipped`로 확정하고 Gate A/B `LOCAL-n` evidence 및 Gate C `planning_memory` context로 전달한다. 관련 결정이 발견되면 `memory precedent`, `memory impact`, `memory trace`로 downstream 결과와 계보를 확인한다. 인용에는 query, requested/effective mode, fallback, 실제 source path/reference/natural key를 남기며 retrieved history를 자동 승인하지 않는다. 서버 전체가 응답하지 않으면 “과거 이력이 없다”고 간주하지 않고 실패와 미참조 사실을 남긴다. Memory가 비활성화되었거나 연결 정보가 없으면 `not_configured`를 기록하고 local-first 흐름을 계속한다.
 
 Gate A/B 초안을 만든다.
 
@@ -202,6 +227,8 @@ node .plan2agent/scripts/p2a.mjs iteration context \
 ```
 
 `diff-tasks` 또는 agent가 만든 `task-graph.draft.json`을 검증하고, 사람이 승인한 뒤 Gate C approval audit을 `current-spec.json`에 기록하며 정본으로 승격한다.
+
+Agent 저작 경로는 `context.planning_memory`를 함께 검토한다. prior failure나 decision이 task boundary/dependency/AC를 실제로 바꾸면 해당 task에 concrete mitigation AC를 추가하고, 실제 spec field ref와 함께 `memory:<report-or-result-ref>` 및 적용 가능한 `decision:ND-n`을 `sourceSpecRefs`에 기록한다. Gate D는 보고서 query/scope/mode/fallback/source 인용과 이 mitigation을 검증하며, Memory 미설정·장애 자체는 blocker로 취급하지 않는다.
 
 ```bash
 node .plan2agent/scripts/p2a.mjs iteration validate \
@@ -310,7 +337,7 @@ node .plan2agent/scripts/p2a.mjs doctor --dev \
 
 `runner-guide`는 선택 provider의 공식 foreground 기능을 어떻게 쓰면 되는지 보여주는 안내다. `runner-doctor`는 현재 프로젝트에 필요한 provider 자산과 `.plan2agent/project.config.json.providerNativeCapabilities`의 수동 capability evidence를 파일만 읽어 확인한다. `--live`를 명시하면 provider `--version`만 실행해 CLI 존재와 버전 출력만 확인한다. 둘 다 agent session을 열지 않고, owner가 공식 CLI/앱을 직접 열어 prompt를 붙여넣는 전제를 유지한다. 붙여넣은 foreground 세션 안에서 provider-native skill/subagent/custom agent/agent team을 쓰는 것은 허용되는 감독형 자동화다.
 
-blocked runtime에서는 `node .plan2agent/scripts/p2a.mjs proposals mine --runtime <runtime-path>`로 다음 조치를 `retry`, `ask_user`, `stop` 중 하나로 확인한다. 이 명령도 후속 조치만 계산하며 provider CLI나 재시도 run을 자동으로 시작하지 않는다.
+blocked runtime에서는 `node .plan2agent/scripts/p2a.mjs proposals mine --runtime <runtime-path>`로 다음 조치를 `retry`, `ask_user`, `stop` 중 하나로 확인한다. 이 명령도 후속 조치만 계산하며 provider CLI나 재시도 run을 자동으로 시작하지 않는다. 같은 task의 latest run이 `failed|blocked`인 retry에서만 실행 owner가 task title + failure class + localization으로 같은 프로젝트 Memory를 한 번 조회하고 `<failed-run-id>.memory-recall.json`과 `MEMORY_RETRY:` run note를 남긴다. 첫 시도에는 이 조회를 하지 않으며, 유사성이 없는 결과는 적용하지 않는다.
 
 task를 시작하고 run log를 연다. 출력되는 manual launcher prompt를 Codex/Claude 같은 감독형 agent 세션에 붙여넣는다. 오케스트레이션 계획을 만들지 않았다면 `--require-monitor` 옵션은 빼고 실행한다. 이 옵션을 넘기면 run과 같은 `runs/<iterationId>/` 디렉터리에 orchestration/monitor sidecar가 함께 생성된다.
 

@@ -26,12 +26,10 @@ import {
   runDoctor,
   runEval,
   runExecute,
-  runExecuteFrom,
   runHandoff,
   runHandoffFrom,
   runIteration,
   runMemory,
-  runOrchestrate,
   runP2a,
   runProposals,
   runRuns,
@@ -49,19 +47,6 @@ import {
   runValidator,
   writeResultOutput,
 } from '../tests/helpers/fixtures.mjs';
-
-function writeFakeProviderCli(binDir, command, versionOutput) {
-  mkdirSync(binDir, { recursive: true });
-  const commandPath = process.platform === 'win32'
-    ? path.join(binDir, `${command}.cmd`)
-    : path.join(binDir, command);
-  const contents = process.platform === 'win32'
-    ? `@echo off\r\necho ${versionOutput}\r\n`
-    : `#!/usr/bin/env node\nconsole.log(${JSON.stringify(versionOutput)});\n`;
-  writeFileSync(commandPath, contents, 'utf8');
-  if (process.platform !== 'win32') chmodSync(commandPath, 0o755);
-  return commandPath;
-}
 
 function hashText(value) {
   return createHash('sha256').update(value).digest('hex');
@@ -703,7 +688,7 @@ function validateScaffoldFixtureCase() {
       || !result.stdout.includes('configUpdatedKeys: memory')
       || !result.stdout.includes('After creating an artifact root, check local/Memory sync: node .plan2agent/scripts/p2a.mjs memory status --artifacts .plan2agent/artifacts/<project_id>')
       || !result.stdout.includes('After Memory is configured, preview restore diff: node .plan2agent/scripts/p2a.mjs memory pull --artifacts .plan2agent/artifacts/<project_id> --dry-run')
-      || !result.stdout.includes('After Memory contains snapshots, search history: node .plan2agent/scripts/p2a.mjs memory search --artifacts .plan2agent/artifacts/<project_id> --query <term>')
+      || !result.stdout.includes('After Memory contains snapshots, search project history: node .plan2agent/scripts/p2a.mjs memory search --project enhance-target --mode hybrid --query <term>')
       || !result.stdout.includes('After Memory contains snapshots, show timeline: node .plan2agent/scripts/p2a.mjs memory history --artifacts .plan2agent/artifacts/<project_id>')
       || !result.stdout.includes('dry-run: no files written')
       || dryRunCapabilityConfig.memory
@@ -746,6 +731,7 @@ function validateScaffoldFixtureCase() {
     const enhancedCapabilityManifest = JSON.parse(readFileSync(path.join(enhanceTargetRoot, '.plan2agent', 'manifest.json'), 'utf8'));
     if (
       enhancedCapabilityConfig.memory?.serverUrlEnv !== 'P2A_MEMORY_URL'
+      || enhancedCapabilityConfig.memory?.requestTimeoutMs !== 5000
       || enhancedCapabilityConfig.orchestration?.monitorGatePolicy !== 'explicit_require_monitor'
       || enhancedCapabilityConfig.proposals?.patchPolicy !== 'draft_only'
       || enhancedCapabilityManifest.enhancements?.memory?.configVersion !== 'p2a.memory_config.v1'
@@ -766,6 +752,7 @@ function validateScaffoldFixtureCase() {
       || !enhancedCapabilityInfo.enhancements?.enabled?.includes('proposals')
       || enhancedCapabilityInfo.enhancements?.memory?.enabled !== true
       || enhancedCapabilityInfo.enhancements?.memory?.pushPolicy !== 'explicit_approval'
+      || enhancedCapabilityInfo.enhancements?.memory?.requestTimeoutMs !== 5000
       || enhancedCapabilityInfo.enhancements?.orchestration?.enabled !== true
       || enhancedCapabilityInfo.enhancements?.orchestration?.monitorGatePolicy !== 'explicit_require_monitor'
       || enhancedCapabilityInfo.enhancements?.proposals?.enabled !== true
@@ -789,6 +776,7 @@ function validateScaffoldFixtureCase() {
       || !enhancedCapabilityDoctor.dev?.capabilities?.includes('proposals')
       || !enhancedCapabilityDoctor.checks?.some((item) => item.id === 'capability_memory_manifest' && item.status === 'pass')
       || !enhancedCapabilityDoctor.checks?.some((item) => item.id === 'capability_memory_config' && item.status === 'pass')
+      || !enhancedCapabilityDoctor.checks?.some((item) => item.id === 'capability_memory_timeout' && item.status === 'pass')
       || !enhancedCapabilityDoctor.checks?.some((item) => item.id === 'capability_memory_push_policy' && item.status === 'pass')
       || !enhancedCapabilityDoctor.checks?.some((item) => item.id === 'capability_orchestration_manifest' && item.status === 'pass')
       || !enhancedCapabilityDoctor.checks?.some((item) => item.id === 'capability_orchestration_config' && item.status === 'pass')
@@ -2257,10 +2245,36 @@ function validateMemoryFixtureCases() {
     result.status === 0
     || !result.stdout.includes('Plan2Agent memory search')
     || !result.stdout.includes(`canonical project ID: ${canonicalMemoryProjectId}`)
+    || !result.stdout.includes('mode: requested=keyword effective=not_executed')
     || !result.stdout.includes('server: not_configured')
     || !result.stdout.includes('Set P2A_MEMORY_URL or pass --server to search Memory.')
   ) {
     console.error('memory search not-configured fixture failed');
+    writeResultOutput(result);
+    return { status: result.status === 0 ? 1 : failureStatus(result), checks };
+  }
+
+  result = runMemory(['search', '--project', 'webhook-api-service', '--mode', 'hybrid', '--query', 'webhook', '--json']);
+  checks += 1;
+  const projectHybridSearchPayload = result.stdout ? JSON.parse(result.stdout) : null;
+  if (
+    result.status === 0
+    || projectHybridSearchPayload?.query?.mode !== 'hybrid'
+    || projectHybridSearchPayload?.query?.scope !== 'project'
+    || projectHybridSearchPayload?.context?.projectId !== 'webhook-api-service'
+    || projectHybridSearchPayload?.context?.canonicalProjectId !== canonicalMemoryProjectId
+    || projectHybridSearchPayload?.context?.iterationId !== null
+  ) {
+    console.error('memory project-wide hybrid search fixture failed');
+    writeResultOutput(result);
+    console.error(JSON.stringify({ projectHybridSearchPayload }, null, 2));
+    return { status: result.status === 0 ? 1 : failureStatus(result), checks };
+  }
+
+  result = runMemory(['search', '--project', 'webhook-api-service', '--mode', 'invalid', '--query', 'webhook']);
+  checks += 1;
+  if (result.status === 0 || !result.stderr.includes('unsupported Memory search mode')) {
+    console.error('memory search mode validation fixture failed');
     writeResultOutput(result);
     return { status: result.status === 0 ? 1 : failureStatus(result), checks };
   }
@@ -6914,7 +6928,7 @@ function validateIterationCurrentFixtureCases() {
       mkdirSync(path.join(contextCodeRoot, 'scripts'), { recursive: true });
       writeFileSync(path.join(contextCodeRoot, 'src', 'Demo.kt'), 'class Demo\n', 'utf8');
       writeFileSync(path.join(contextCodeRoot, '.plan2agent', 'scripts', 'ignored.js'), 'ignored\n', 'utf8');
-      writeFileSync(path.join(contextCodeRoot, 'scripts', 'ignored.js'), 'ignored\n', 'utf8');
+      writeFileSync(path.join(contextCodeRoot, 'scripts', 'application.js'), 'application script\n', 'utf8');
 
       const contextRunsDir = path.join(artifactRoot, 'runs');
       mkdirSync(contextRunsDir, { recursive: true });
@@ -6978,6 +6992,7 @@ function validateIterationCurrentFixtureCases() {
           || taskContext.active_iteration !== 'iter-003'
           || !taskContext.effective_spec
           || !taskContext.existing_tasks
+          || !taskContext.planning_memory
           || !taskContext.code_signals
         ) {
           throw new Error('context JSON contract mismatch');
@@ -6994,7 +7009,10 @@ function validateIterationCurrentFixtureCases() {
         if (!codeSignals.file_tree.includes('src/Demo.kt')) {
           throw new Error('context code_signals file_tree missing src/Demo.kt');
         }
-        if (codeSignals.file_tree.some((filePath) => filePath.includes('.plan2agent') || filePath.startsWith('scripts/'))) {
+        if (!codeSignals.file_tree.includes('scripts/application.js')) {
+          throw new Error('context code_signals file_tree missing application scripts');
+        }
+        if (codeSignals.file_tree.some((filePath) => filePath.includes('.plan2agent'))) {
           throw new Error('context code_signals file_tree included excluded directories');
         }
         const recentChange = codeSignals.recent_changes.find((change) => change.runId === 'run-context-fixture');
@@ -7013,6 +7031,7 @@ function validateIterationCurrentFixtureCases() {
         '`schema_version: "p2a.task_graph.v1"`',
         'map `projectId` exactly from `context.project_id`',
         '`tasks` array',
+        '`planning_memory`',
         ...['id', 'title', 'description', 'status', 'dependencies', 'acceptanceCriteria', 'targetArea', 'suggestedAgentPrompt', 'sourceSpecRefs']
           .map((field) => `\`${field}\``),
         '`diff-tasks --force`',

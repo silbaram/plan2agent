@@ -2,7 +2,7 @@
 /** Mine and review Plan2Agent retrospective proposal candidates from run logs. */
 
 import { createHash } from 'node:crypto';
-import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, readdirSync, realpathSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
 import { pathToFileURL } from 'node:url';
@@ -25,6 +25,7 @@ import {
   assertNoUninitializedScaffoldArtifactRoots,
   assertNotUninitializedScaffoldGraph,
   configuredTaskGraphPath,
+  normalizePath,
   resolveP2aPaths,
   singleArtifactProjectRoot,
 } from './p2a_paths.mjs';
@@ -241,10 +242,6 @@ function assertFile(filePath, label) {
 function assertDirectory(dirPath, label) {
   if (!existsSync(dirPath)) throw new Error(`${label} is missing: ${dirPath}`);
   if (!lstatSync(dirPath).isDirectory()) throw new Error(`${label} must be a directory: ${dirPath}`);
-}
-
-function normalizePath(filePath) {
-  return filePath.split(path.sep).join('/');
 }
 
 function displayPath(filePath, root = process.cwd()) {

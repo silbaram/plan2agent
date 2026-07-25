@@ -82,9 +82,12 @@ or app session stays foreground-supervised by the user.
 ### Memory Integration
 
 - Use Plan2Agent Memory as an optional long-term artifact store and search backend.
-- `p2a memory status` compares local artifacts with remote snapshots.
-- `p2a memory push` uploads project, iteration, document, proposal, task, graph, and run snapshots, including stable milestone reviews as documents.
-- `p2a memory search` and `p2a memory history` support cross-session recall.
+- `p2a memory status` compares local artifacts with remote snapshots, applies a bounded request timeout, persists a freshness report with `--output`, and exits non-zero when a configured server is unavailable.
+- `p2a memory push` uploads project, iteration, document, proposal, task, graph, and run snapshots, including stable milestone reviews, stable iteration metadata, and recall reports as documents. It excludes `memory-status.json` and the volatile `iteration.json.memory_freshness` field so a sync check does not invalidate itself.
+- `p2a memory search` supports backward-compatible keyword retrieval plus explicit semantic/hybrid modes, project-wide cross-iteration scope, conditional global recall with `--exclude-project`, and keyword fallback; `p2a memory history` supports cross-session recall.
+- `p2a memory trace/impact/precedent` expose normalized decision-to-spec-to-task-to-run lineage and downstream outcomes.
+- Iteration planning records recall as `not_configured`, `pending`, `succeeded`, `fallback`, `failed`, or `skipped`; Gate C context carries relevant results/failures, and Gate D validates claimed citations and mitigations.
+- `iteration close` automatically performs the read-only freshness check when Memory is configured, with per-request and overall close-time limits. Connection failure or timeout does not undo a valid archive, but it atomically replaces the local status report with `unavailable` and prints a prominent warning that synchronization was not verified.
 - Memory output keeps the human-facing source key in legacy `context.projectId` and explicit `context.sourceProjectId`, while `context.canonicalProjectId` exposes the server UUID required by direct `/api/search/*` calls.
 - `p2a memory digest` summarizes failure and proposal history and tracks whether Memory search results were reused by run, proposal, or eval artifacts.
 
@@ -103,7 +106,7 @@ the source of truth.
 
 | Project | GitHub | Purpose | How P2A Uses It |
 | --- | --- | --- | --- |
-| `plan2agent-memory` | <https://github.com/silbaram/plan2agent-memory> | Optional headless REST service for relational artifact storage, lineage, hash comparison, history, keyword search, and vector-search-ready document chunks. | `p2a memory status/push/pull/search/history/digest` can use the server as a long-term artifact store and search backend. If no Memory server is configured, P2A still runs from local `.plan2agent/` artifacts. |
+| `plan2agent-memory` | <https://github.com/silbaram/plan2agent-memory> | Optional headless REST service for relational artifact storage, lineage, hash comparison, history, keyword search, and vector-search-ready document chunks. | `p2a memory status/push/pull/search/history/digest/trace/impact/precedent` can use the server as a long-term artifact store, search backend, and lineage query surface. If no Memory server is configured, P2A still runs from local `.plan2agent/` artifacts. |
 | `plan2agent-feature-radar` | <https://github.com/silbaram/plan2agent-feature-radar> | Optional skill/subagent research workflow for early idea research and read-only existing-project analysis across web, docs, GitHub, changelogs, issues, PRs, discussions, and local project signals. | Radar can export `.feature-radar/runs/<project-slug>/` and optionally `.plan2agent/artifacts/<project_id>/preflight-research/`. P2A imports that preflight export as `LOCAL-n`/`WEB-n` evidence and Gate B reference candidates; recommendations stay candidate input until Gate B marks them `selected`, `deferred`, or `rejected`. |
 
 The local `plan2agent-feature-radar` checkout may not have a git remote configured yet; update the
@@ -275,7 +278,7 @@ Inside a scaffolded project, use the single `p2a.mjs` entrypoint:
 | `orchestrate` | Build role plans, runtime state, runner guides, and monitor gate flows. |
 | `proposals` | Mine, review, curate, draft, approve, and digest improvement proposals. |
 | `eval` | Grade, compare, analyze, generate, and digest run quality artifacts. |
-| `memory` | Compare, push, pull-preview, search, history, and digest Memory snapshots. |
+| `memory` | Compare, push, pull-preview, search, history, digest, trace, impact, and inspect precedent from Memory snapshots. |
 
 ## Repository Layout
 

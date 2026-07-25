@@ -35,3 +35,6 @@ export const ISOLATION_MODES = new Set(['none', 'branch', 'worktree']);
 export const FAILURE_CLASSES = new Set(['verification_failed', 'test_flake', 'scope_violation', 'missing_dependency', 'environment_failure', 'implementation_incomplete', 'other']);
 
 export const FAILURE_RETRYABLE = new Set(['yes', 'no', 'after_fix']);
+
+export const DEFAULT_MEMORY_REQUEST_TIMEOUT_MS = 5000;
+export const DEFAULT_MEMORY_CLOSE_TIMEOUT_MS = 15000;

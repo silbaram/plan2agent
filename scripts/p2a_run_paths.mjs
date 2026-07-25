@@ -14,6 +14,7 @@ export const RUN_SIDECAR_SUFFIXES = [
   '.monitor-gate.json',
   '.monitor-verdict.json',
   '.style-verdict.json',
+  '.memory-recall.json',
 ];
 const RUN_SIDECAR_ID_SUFFIXES = RUN_SIDECAR_SUFFIXES
   .map((suffix) => suffix.slice(0, -'.json'.length));

@@ -30,8 +30,8 @@ If the CLI cannot spawn subagents automatically, run the matching skill locally 
 
 - **Gate A — Intake decisions:** If any `needs_user_decision.status` is `open` or `deferred`, stop after intake and ask only those decisions. Do not produce a product spec except as a clearly labeled sketch.
 - **Gate B — Spec approval:** If any intake `CQ-n` is not disposed in `spec_json.clarifying_question_disposition`, `spec_json.approval` is not `approved`, `spec_json.approval_audit` is missing, or `spec_json.open_decisions` is non-empty, stop before task graph generation. When Gate B selects or recommends libraries, frameworks, runtimes, protocols, packages, databases, cloud services, external APIs, or external services, apply the `p2a-spec` Technology Reconnaissance rules before approval and record material sources in `spec_json.evidence`. Missing Technology Reconnaissance evidence for a material Gate B technology choice is a blocking Gate B issue. When Gate B is approved, record the Gate B approval audit in `spec_json.approval_audit`.
-- **Gate C — Task graph validation:** Before final output, check that every dependency references a task id in the same graph, the graph is acyclic, and every task has acceptance criteria. Repository validation also requires each task to carry source spec references.
-- **Gate D — Review blockers:** The canonical Gate D artifact is `review_json` persisted as `gate-d-review/review.json`; `review_report` / `review-report.md` is an optional Markdown rendering of the same findings. Gate D passes only when `review.json.blocking_issues` is `[]`. If review finds blocking issues, return the blockers and the artifact section that must be revised instead of claiming the plan is ready.
+- **Gate C — Task graph validation:** Before final output, check that every dependency references a task id in the same graph, the graph is acyclic, and every task has acceptance criteria. Repository validation also requires each task to carry source spec references. Inspect `context.planning_memory` before decomposition. When retrieved history changes a task boundary, dependency, acceptance criterion, or failure mitigation, add a `memory:<report path or source reference>` ref and any applicable `decision:ND-n` ref alongside at least one real effective-spec field.
+- **Gate D — Review blockers:** The canonical Gate D artifact is `review_json` persisted as `gate-d-review/review.json`; `review_report` / `review-report.md` is an optional Markdown rendering of the same findings. Gate D passes only when `review.json.blocking_issues` is `[]`. Validate claimed Memory report/citation integrity and confirm that tasks address any material prior failure carried into Gate C. Memory being disabled, unavailable, or irrelevant is not itself a blocker; an invalid claim of use or an ignored material failure is. If review finds blocking issues, return the blockers and the artifact section that must be revised instead of claiming the plan is ready.
 
 Each gate is a review checkpoint, not a one-shot hand-off. At every gate: (1) persist the stage's canonical JSON artifact files and optionally refresh generated Markdown views, (2) present a readable summary with per-item rationale and recommendations, (3) explicitly invite both open-ended feedback and structured answers or approval, (4) revise the JSON artifacts and re-present them when the user responds, and (5) advance only after the user explicitly approves. Never infer approval from silence.
 
@@ -44,6 +44,48 @@ The canonical `CQ-n` disposition statuses and required fields are owned by `.age
 Gate A identifies product scope, hard constraints, and architecture-changing choices; it does not design the full stack. If a technology choice changes the product boundary or major implementation model, such as runtime, deployment shape, persistence requirement, protocol compatibility, cloud dependency, or library-vs-service posture, ask it as a Gate A `needs_user_decision`.
 
 Gate B chooses or recommends the concrete stack within the approved Gate A constraints. Use read-only technology reconnaissance in Gate B when current ecosystem knowledge matters, compare viable options, record material sources in `spec_json.evidence`, and leave high-impact unresolved choices in `spec_json.open_decisions` instead of silently deciding.
+
+## Planning Memory Recall
+
+For an iterative artifact root with at least one closed iteration, use Memory recall only when `.plan2agent/project.config.json` has `memory.enabled: true` and the configured server URL or `serverUrlEnv` value is available. Do not read `.env` files to discover connection values. Record recall state as `not_configured`, `pending`, `succeeded`, `fallback`, `failed`, or `skipped` in `iteration.json`; Memory being optional never permits a false claim that history was checked.
+
+Before writing the Gate A analysis:
+
+1. Run one same-project hybrid search using the change idea and save the report under the new iteration:
+
+   ```bash
+   node .plan2agent/scripts/p2a.mjs memory search \
+     --project <project_id> \
+     --mode hybrid \
+     --query "<change idea>" \
+     --output .plan2agent/artifacts/<project_id>/iterations/<iteration_id>/gate-a-intake/memory-recall.json
+   ```
+
+2. If the idea touches a reusable architecture, protocol, migration, authentication/security, external integration, data/storage, queue, performance, reliability, incident, or failure-handling concern, run a second cross-project search. Exclude the current project and persist a separate report:
+
+   ```bash
+   node .plan2agent/scripts/p2a.mjs memory search \
+     --global \
+     --exclude-project <project_id> \
+     --mode hybrid \
+     --query "<change idea>" \
+     --output .plan2agent/artifacts/<project_id>/iterations/<iteration_id>/gate-a-intake/memory-recall-cross-project.json
+   ```
+
+   Skip this layer for ordinary project-local wording; do not run global recall mechanically.
+3. Inspect relevant matches instead of treating retrieval as approval or fact. When a result identifies a decision natural key, use project-scoped `memory precedent`, `memory impact`, or `memory trace` to inspect its downstream outcomes and lineage.
+4. Consume the saved reports before drafting Gate A/B. Add each consumed report as `LOCAL-n` evidence and record the query, requested/effective mode, fallback, and actual source path, source reference, or natural key in `used_for`. A report may be retained as `context` without adopting its recommendation.
+
+Before Gate B technology reconnaissance, run one additional targeted hybrid search only when architecture, dependencies, protocols, or external integrations need historical grounding and the Gate A report does not already answer the question. Preserve the same report-and-citation contract; do not repeat an equivalent query merely to satisfy the procedure.
+
+Treat Memory as optional supporting evidence:
+
+- If semantic or hybrid retrieval falls back to keyword successfully, continue and record the fallback shown in the report.
+- If the configured Memory server is unavailable and keyword fallback also fails, preserve the failure report, tell the user that historical Memory evidence was not consulted, and continue without claiming that no prior history exists.
+- If a pending report was not produced before drafting, record `skipped` rather than silently treating recall as successful.
+- Stop for recovery only when the user explicitly requires Memory history before planning. On resume, restart at recall and preserve already-written upstream artifacts instead of regenerating them.
+
+`iteration close` automatically runs a bounded, read-only `memory status --output <closed-iteration>/memory-status.json` check when Memory is configured. Preserve archive completion if the server is unavailable, but emit a prominent warning that sync was not verified, persist `unavailable`, and never claim historical coverage. Also present a non-mutating `memory push --dry-run` preview. Actual push remains an explicit external write requiring user approval and `--yes`; after an approved push, rerun the recorded status command. On the next `iteration open`, carry `fresh`, `stale`, `unavailable`, or `unchecked` into `planning_memory.baseline_freshness`.
 
 ## Analysis and Decision Presentation
 

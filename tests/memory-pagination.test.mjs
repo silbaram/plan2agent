@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { fetchPagedMemoryItems } from '../scripts/p2a_memory.mjs';
+import { fetchPagedMemoryItems, fetchPagedMemoryPostItems } from '../scripts/p2a_memory.mjs';
 
 const connection = { server: 'https://memory.example.test' };
 
@@ -58,7 +58,7 @@ test('paged Memory lookup respects a caller result limit', async () => {
   });
 
   assert.deepEqual(items.map((item) => item.id), ['result-1', 'result-2', 'result-3']);
-  assert.deepEqual(calls.map((call) => call.limit), [2, 1]);
+  assert.deepEqual(calls.map((call) => call.limit), [2, 2]);
 });
 
 test('paged Memory lookup remains compatible with legacy array responses', async () => {
@@ -88,4 +88,51 @@ test('paged Memory lookup rejects a repeated cursor', async () => {
     }),
     /repeated nextCursor/,
   );
+});
+
+test('paged Memory POST search follows nextCursor and preserves the request body', async () => {
+  const calls = [];
+  const pages = new Map([
+    [null, { items: [{ id: 'result-1' }], nextCursor: 'cursor-1' }],
+    ['cursor-1', { items: [{ id: 'result-2' }], nextCursor: null }],
+  ]);
+  const items = await fetchPagedMemoryPostItems(connection, '/search/hybrid', {
+    q: 'decision',
+    projectId: 'project-1',
+    limit: 2,
+  }, {
+    pageSize: 2,
+    post: async (_connection, pathName, body) => {
+      calls.push({ pathName, body });
+      return pages.get(body.cursor);
+    },
+  });
+
+  assert.deepEqual(items.map((item) => item.id), ['result-1', 'result-2']);
+  assert.deepEqual(calls.map((call) => call.pathName), ['/search/hybrid', '/search/hybrid']);
+  assert.deepEqual(calls.map((call) => call.body.cursor), [null, 'cursor-1']);
+  assert.ok(calls.every((call) => call.body.q === 'decision' && call.body.projectId === 'project-1'));
+});
+
+test('paged Memory POST search keeps the page contract stable when the caller limit ends mid-page', async () => {
+  const calls = [];
+  const items = await fetchPagedMemoryPostItems(connection, '/search/hybrid', {
+    q: 'decision',
+    projectId: 'project-1',
+    limit: 2,
+  }, {
+    pageSize: 2,
+    maxItems: 3,
+    post: async (_connection, _pathName, body) => {
+      calls.push(body);
+      if (body.cursor === null) {
+        return { items: [{ id: 'result-1' }, { id: 'result-2' }], nextCursor: 'cursor-1' };
+      }
+      assert.equal(body.limit, 2, 'cursor-bound POST requests must keep the original page size');
+      return { items: [{ id: 'result-3' }, { id: 'result-4' }], nextCursor: null };
+    },
+  });
+
+  assert.deepEqual(items.map((item) => item.id), ['result-1', 'result-2', 'result-3']);
+  assert.deepEqual(calls.map((call) => call.limit), [2, 2]);
 });
