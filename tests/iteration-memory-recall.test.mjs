@@ -17,6 +17,7 @@ import {
   memoryFreshnessFromStatusReport,
   mergePlanningMemoryIntoIntake,
   mergePlanningMemoryIntoSpec,
+  planningMemoryIncompleteWarningLines,
   planningMemoryRecallCommand,
   planningMemoryRecallPlan,
   planningMemoryValidationErrors,
@@ -138,6 +139,107 @@ test('ordinary product wording skips the cross-project layer without disabling p
     assert.equal(plan.layers.cross_project.status, 'skipped');
     assert.equal(plan.layers.cross_project.command, null);
   });
+});
+
+test('planning recall warnings disclose incomplete history, report paths, and failure details', () => {
+  const failedLines = planningMemoryIncompleteWarningLines({
+    status: 'failed',
+    layers: {
+      project: {
+        scope: 'project',
+        status: 'failed',
+        report_ref: 'iterations/iter-002/gate-a-intake/memory-recall.json',
+        detail: 'Memory server unavailable.',
+      },
+      cross_project: {
+        scope: 'cross_project',
+        required: false,
+        status: 'skipped',
+        report_ref: 'iterations/iter-002/gate-a-intake/memory-recall-cross-project.json',
+        detail: 'No reusable cross-project concern was detected.',
+      },
+    },
+  });
+
+  assert.match(failedLines.join('\n'), /continued without complete historical Memory evidence/);
+  assert.match(failedLines.join('\n'), /does not mean that no prior decisions or failures exist/);
+  assert.match(failedLines.join('\n'), /report=iterations\/iter-002\/gate-a-intake\/memory-recall\.json/);
+  assert.match(failedLines.join('\n'), /detail=Memory server unavailable/);
+  assert.doesNotMatch(failedLines.join('\n'), /memory-recall-cross-project\.json/);
+
+  const skippedLines = planningMemoryIncompleteWarningLines({
+    status: 'skipped',
+    layers: {
+      project: {
+        scope: 'project',
+        status: 'skipped',
+        report_ref: 'iterations/iter-003/gate-a-intake/memory-recall.json',
+        detail: 'Recall report was not created before draft.',
+      },
+      cross_project: {
+        scope: 'cross_project',
+        required: true,
+        status: 'skipped',
+        report_ref: 'iterations/iter-003/gate-a-intake/memory-recall-cross-project.json',
+        detail: 'Recall report was not created before draft.',
+      },
+    },
+  });
+
+  assert.match(skippedLines.join('\n'), /is incomplete \(overall=skipped\)/);
+  assert.match(skippedLines.join('\n'), /memory-recall\.json/);
+  assert.match(skippedLines.join('\n'), /memory-recall-cross-project\.json/);
+
+  const fallbackWithSkippedCrossProject = planningMemoryIncompleteWarningLines({
+    status: 'fallback',
+    layers: {
+      project: {
+        scope: 'project',
+        status: 'fallback',
+        report_ref: 'iterations/iter-004/gate-a-intake/memory-recall.json',
+      },
+      cross_project: {
+        scope: 'cross_project',
+        required: true,
+        status: 'skipped',
+        report_ref: 'iterations/iter-004/gate-a-intake/memory-recall-cross-project.json',
+        detail: 'Recall report was not created before draft.',
+      },
+    },
+  });
+  assert.match(fallbackWithSkippedCrossProject.join('\n'), /is incomplete \(overall=fallback\)/);
+  assert.match(fallbackWithSkippedCrossProject.join('\n'), /memory-recall-cross-project\.json/);
+
+  const skippedProjectWithFallbackCrossProject = planningMemoryIncompleteWarningLines({
+    status: 'fallback',
+    layers: {
+      project: {
+        scope: 'project',
+        status: 'skipped',
+        report_ref: 'iterations/iter-005/gate-a-intake/memory-recall.json',
+        detail: 'Recall report was not created before draft.',
+      },
+      cross_project: {
+        scope: 'cross_project',
+        required: true,
+        status: 'fallback',
+        report_ref: 'iterations/iter-005/gate-a-intake/memory-recall-cross-project.json',
+      },
+    },
+  });
+  assert.match(skippedProjectWithFallbackCrossProject.join('\n'), /is incomplete \(overall=fallback\)/);
+  assert.match(skippedProjectWithFallbackCrossProject.join('\n'), /memory-recall\.json/);
+  assert.doesNotMatch(skippedProjectWithFallbackCrossProject.join('\n'), /memory-recall-cross-project\.json/);
+
+  assert.deepEqual(planningMemoryIncompleteWarningLines({
+    status: 'fallback',
+    layers: {
+      project: { scope: 'project', status: 'fallback' },
+      cross_project: { scope: 'cross_project', required: true, status: 'fallback' },
+    },
+  }), []);
+  assert.deepEqual(planningMemoryIncompleteWarningLines({ status: 'succeeded' }), []);
+  assert.deepEqual(planningMemoryIncompleteWarningLines({ status: 'not_configured' }), []);
 });
 
 test('code signals keep application scripts, schemas, artifacts, and run sources', () => {
@@ -489,6 +591,33 @@ test('configured iteration close archives successfully and warns when Memory is 
       readdirSync(iterationRoot).filter((entry) => entry.startsWith('.memory-status.')),
       [],
     );
+
+    result = runTargetP2a(targetRoot, [
+      'iteration',
+      'open',
+      '--artifacts',
+      artifactRoot,
+      '--iteration-id',
+      'iter-002',
+      '--idea',
+      'Add follow-up dashboard',
+    ]);
+    assert.equal(result.status, 0, formatCommandResult(result));
+    assert.match(result.stdout, /planning recall \(project\)/);
+
+    result = runTargetP2a(targetRoot, ['iteration', 'draft', '--artifacts', artifactRoot]);
+    assert.equal(result.status, 0, formatCommandResult(result));
+    assert.match(result.stdout, /planning Memory: skipped/);
+    assert.match(result.stderr, /continued without complete historical Memory evidence/);
+    assert.match(result.stderr, /does not mean that no prior decisions or failures exist/);
+    assert.match(result.stderr, /report=iterations\/iter-002\/gate-a-intake\/memory-recall\.json/);
+    assert.match(result.stderr, /detail=Recall report was not created before draft/);
+
+    const nextMetadata = JSON.parse(readFileSync(
+      path.join(artifactRoot, 'iterations', 'iter-002', 'iteration.json'),
+      'utf8',
+    ));
+    assert.equal(nextMetadata.planning_memory.status, 'skipped');
   } finally {
     rmSync(tempRoot, { recursive: true, force: true });
   }

@@ -4343,6 +4343,25 @@ function planningMemoryOverallStatus(layers) {
   return 'not_configured';
 }
 
+export function planningMemoryIncompleteWarningLines(memory) {
+  const incompleteLayers = [
+    ['project', memory?.layers?.project],
+    ['cross-project', memory?.layers?.cross_project],
+  ].filter(([label, layer]) => (
+    ['failed', 'skipped'].includes(layer?.status)
+    && (label === 'project' || layer.required)
+  ));
+  if (!incompleteLayers.length) return [];
+  const lines = [
+    `WARNING: Planning Memory recall is incomplete (overall=${memory?.status ?? 'unknown'}); planning continued without complete historical Memory evidence.`,
+    'WARNING: This does not mean that no prior decisions or failures exist.',
+  ];
+  incompleteLayers.forEach(([label, layer]) => {
+    lines.push(`- planning Memory recall (${label}): status=${layer.status}; report=${layer.report_ref ?? 'not recorded'}; detail=${layer.detail ?? 'not available'}`);
+  });
+  return lines;
+}
+
 function consumePlanningMemory(metadata, state, idea) {
   const initial = metadata.planning_memory ?? planningMemoryRecallPlan({
     projectId: state.projectId,
@@ -4677,6 +4696,7 @@ function draft(args) {
   console.log(`- intake: ${artifacts.intake_ref}`);
   console.log(`- spec: ${artifacts.spec_ref} (approval=draft)`);
   console.log(`- planning Memory: ${planningMemory.status} (project=${planningMemory.layers.project.status}, cross-project=${planningMemory.layers.cross_project.status})`);
+  planningMemoryIncompleteWarningLines(planningMemory).forEach((line) => console.warn(line));
   if (preflight.detected) {
     console.log(`- Feature Radar preflight: ${featureRadarSummary(preflight)}`);
   }
