@@ -113,7 +113,7 @@ for (const caseData of manifest.cases ?? []) {
       assert.equal(targetNext.command.kind, 'cli');
       assert.deepEqual(targetNext.command.argv, [
         'execute', 'plan',
-        '--artifacts', path.join('.plan2agent', 'artifacts', caseData.project_id),
+        '--artifacts', path.join('.plan2agent', 'artifacts', caseData.project_id).split(path.sep).join('/'),
         '--task', 'task-001',
       ]);
 
