@@ -31,10 +31,10 @@ Plan2Agent 문서는 사용자 흐름, CLI 사용법, 산출물 계약, 구현 �
 4. [반복/고도화 개발 스펙](iteration-spec.md)  
    `current-spec.json`, `iterations/`, close/open, semantic diff, maintenance, run log의 정식 동작 계약을 확인할 때 본다.
 
-5. [감독형 개발 실행 레퍼런스](supervised-execution.md)
-   ready task 실행, monitor gate, monitor gate, proposal loop의 완료 기능 계약을 확인할 때 본다.
+5. [감독형 개발 실행 레퍼런스](supervised-execution.md)<br>
+   ready task 실행, monitor gate, milestone review, retry recovery, proposal loop의 완료 기능 계약을 확인할 때 본다.
 
-6. [하네스 구현 기준](harness-spec.md)
+6. [하네스 구현 기준](harness-spec.md)<br>
    skill/subagent mirror, CLI-neutral agent contract, 구현 원칙을 수정할 때 본다.
 
 ## 목적별 바로가기
