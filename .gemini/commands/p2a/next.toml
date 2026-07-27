@@ -1,0 +1,8 @@
+description = "Show the single Plan2Agent next action for the current project state."
+prompt = """
+Use the Plan2Agent p2a-next skill for the following context:
+
+{{args}}
+
+Call p2a.mjs next --json as the decision authority. Do not reproduce state conditions or execute a CLI command without the user approving it.
+"""

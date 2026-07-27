@@ -9,6 +9,22 @@ import {
   runHandoff,
 } from './helpers/fixtures.mjs';
 
+test('scaffold guide directs users through p2a next', () => {
+  const targetRoot = makeTempDir('p2a-next-guide-');
+  try {
+    const result = runHandoff(['scaffold', '--target', targetRoot, '--tools', 'none']);
+    assert.equal(result.status, 0, formatCommandResult(result));
+
+    const guide = readFileSync(path.join(targetRoot, 'PLAN2AGENT.md'), 'utf8');
+    assert.match(guide, /node \.plan2agent\/scripts\/p2a\.mjs next/);
+    assert.match(guide, /\/p2a-next/);
+    assert.doesNotMatch(guide, /p2a\.mjs info/);
+    assert.doesNotMatch(guide, /p2a\.mjs execute plan/);
+  } finally {
+    rmSync(targetRoot, { recursive: true, force: true });
+  }
+});
+
 test('update restores a missing style contract without overwriting a project-defined contract', () => {
   const targetRoot = makeTempDir('p2a-style-contract-update-');
   const stylePath = path.join(targetRoot, '.plan2agent', 'style.md');

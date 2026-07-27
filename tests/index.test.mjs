@@ -16,3 +16,4 @@ import './memory-search-modes.test.mjs';
 import './milestone-review.test.mjs';
 import './milestone-promotion.test.mjs';
 import './validate-artifacts-compatibility.test.mjs';
+import './next-decision.test.mjs';

@@ -204,6 +204,12 @@ export function validateSchema(instance, schema, instancePath = '$') {
       validateSchemaComposition(instance, subschema, `${instancePath}.allOf[${index}]`, instancePath);
     }
   }
+  if (schema.oneOf) {
+    const matchCount = schema.oneOf.filter((subschema) => schemaMatches(instance, subschema)).length;
+    if (matchCount !== 1) {
+      throw new ValidationError(`${instancePath} must match exactly one oneOf schema (matched ${matchCount})`);
+    }
+  }
 
   if (Object.hasOwn(schema, 'const') && instance !== schema.const) {
     throw new ValidationError(`${instancePath} must equal ${JSON.stringify(schema.const)}`);
