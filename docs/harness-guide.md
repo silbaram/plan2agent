@@ -414,6 +414,8 @@ node .plan2agent/scripts/p2a_iteration.mjs init \
 
 검증 스크립트는 JSON schema subset 검사와 procedural gate 검사를 함께 수행한다. 모든 명령은 저장소 루트에서 실행한다.
 
+실행 run을 `finished`로 닫거나 task를 `done`으로 전이하려면 verification evidence가 모두 `passed`여야 한다. `skipped`, `not_run`, `unavailable` 또는 failed verification이 있는 run은 성공 완료 근거가 될 수 없다. 프로젝트 설정이나 검증 명령을 고친 뒤 새 run에서 실제 실행된 `config|command` verification을 `passed`로 남기거나, run을 `failed`/`blocked`로 닫는다.
+
 ### 8.1 단일 artifact 검증
 
 Intake만 검증:

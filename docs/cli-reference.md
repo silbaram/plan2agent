@@ -69,6 +69,8 @@ node scripts/p2a_handoff.mjs upgrade --target <project-dir> (--dry-run|--apply) 
 
 `scaffold`는 아직 산출물이 없는 fresh 프로젝트에 P2A 하네스 전체를 1회 설치한다. `.plan2agent/scripts/`에는 `p2a.mjs`, `p2a_paths.mjs`, `p2a_project_config.mjs`, `p2a_run_commands.mjs`, `p2a_iteration.mjs`, `p2a_tasks.mjs`, `p2a_runs.mjs`, `p2a_execute.mjs`, `p2a_monitor_gate.mjs`, `p2a_proposals.mjs`, `p2a_eval.mjs`, `p2a_memory.mjs`, `p2a_radar_preflight.mjs`, `p2a_run_paths.mjs`, `p2a_run_store.mjs`, `p2a_iteration_state.mjs`, `validate_artifacts.mjs`가 복사되고, `.plan2agent/schemas/`에는 intake/spec/task graph/task context/review/run/run-index/milestone-review/skill-proposal/proposal-review/proposal-curation/proposal-patch-draft/proposal-draft-approval/eval-index/eval-digest/eval-maintenance-draft/eval-maintenance-apply-report schema가 복사된다. `--tools` 기본값은 `all`이며, AI 자산 복사 로직으로 `.agents`, `.claude`, `.codex`, `.gemini` 자산을 설치한다. `.plan2agent/project.config.json`, `.plan2agent/manifest.json`, `PLAN2AGENT.md`, 프로젝트용 `.gitignore`도 생성한다. 기존 코드가 있으면 `project.config.json`의 package/test/lint/typecheck 기본값을 감지하고, 빈 프로젝트는 이후 `verify --test` 같은 검증 시점에 다시 감지해 저장한다. 생성된 `.gitignore`는 `.plan2agent/` 전체를 로컬 하네스 상태로 보고 application source git에서 제외한다. `scaffold`는 co-located 정식 진입점으로, 빈 프로젝트에 하네스를 설치한 뒤 기획·개발·반복을 그 프로젝트 안에서 진행하게 한다.
 
+fresh scaffold의 기본 `projectId`는 `<project-dir>` basename을 kebab-case로 정규화한 값이다. 이 값은 `.plan2agent/project.config.json`과 `.plan2agent/manifest.json`에 기록되며, 이후 정본은 디렉터리 이름이 아니라 project config의 `projectId`다.
+
 Codex agent는 기본 `--codex-profile quality`에서 `gpt-5.6-sol`과 tier별 `medium/high/max` reasoning을 사용한다. 모델 접근 권한, 외부 provider, 구형 Codex 호환성이 필요하면 `--codex-profile inherit`을 선택해 agent TOML의 model/reasoning override를 제거하고 부모 세션 값을 상속한다. 선택은 `.plan2agent/manifest.json.codexAgentProfile`에 기록되며, 별도 override가 없는 update/upgrade는 그 값을 유지한다. 이 필드가 없는 구형 manifest는 기존 부모 모델 상속 동작을 보존하도록 `inherit`으로 migration하며, `quality` 전환은 `--codex-profile quality`를 명시해야 한다.
 
 `enhance dev-skills`는 기존 scaffold 대상 프로젝트에 provider별 P2A skill/agent/command shim과 development config 기본값을 설치하거나 보강한다. `project.config.json`에는 `devExecution`, `roleProfiles`, `promptTemplates` 기본값을 비파괴 병합하고, `manifest.json.enhancements.devSkills`에는 선택한 provider와 prompt/role/provider guide version을 기록한다. 기존 asset 파일이 대상에 있고 toolkit 내용과 다르면 기본적으로 실패하며, 사람이 dry-run 결과를 검토한 뒤 `--overwrite`를 명시해야 덮어쓴다.
@@ -387,6 +389,8 @@ node .plan2agent/scripts/p2a_execute.mjs finish \
 
 `start`가 출력한 prompt를 Claude Code 또는 Codex 같은 write-capable agent CLI에 붙여넣고 구현한다. Gemini CLI는 현재 review/monitor 같은 read-only 보조로만 사용한다. `resume`은 같은 run의 상태와 launcher prompt를 다시 출력하며 파일을 변경하지 않는다. `finish`는 검증 결과를 run log에 기록하고 task를 `done` 또는 `blocked`로 전이한다. 실행 footer에는 `resume`, `status`, `finish`, `review` 명령이 남고, `review`는 해당 run을 `p2a_proposals.mjs mine --run-id <run-id>` 회고 후보 생성으로 연결한다.
 
+`p2a_execute.mjs start --require-monitor`는 run과 같은 `runs/<iterationId>/`에 `<run-id>.monitor-gate.json` sidecar를 만들고, 해당 run은 연결된 `.monitor-verdict.json` 없이는 `finished`로 닫을 수 없다. monitor gate가 필요하지 않은 단일 task에는 이 옵션을 붙이지 않는다.
+
 #### `p2a-dev-execution` bounded ready batch
 
 Batch mode는 `p2a_execute`의 단건 계약을 바꾸지 않는다. Main owner가 다음 순서를 지킨다.
@@ -417,6 +421,8 @@ node scripts/run_fixtures.mjs
 대상 프로젝트에서 실패/blocked run이나 verification gap이 쌓인 뒤 실행한다.
 
 `p2a enhance proposals`를 적용한 프로젝트는 `.plan2agent/project.config.json.proposals`와 `manifest.json.enhancements.proposals`에 proposal queue capability가 기록된다. `p2a info`는 큐 위치, 큐 JSON 수, manifest/config sync 상태, review/patch/approval 정책을 보여주고, `p2a_doctor --dev`는 proposal manifest/config drift, proposal runtime script, proposal schema, mining signal, manual curation, draft-only patch, approval gate를 로컬 설정 기준으로 검사한다.
+
+`mine`은 기록된 run log와 monitor sidecar를 읽어 회고 후보만 만든다. provider CLI나 재시도 run을 자동으로 시작하지 않으며, blocked run의 `retry`, `ask_user`, `stop` 결정과 후속 실행은 owner가 별도로 기록·수행한다.
 
 ```bash
 node .plan2agent/scripts/p2a_proposals.mjs mine \

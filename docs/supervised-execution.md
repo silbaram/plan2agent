@@ -20,7 +20,7 @@ Plan2Agent는 Gate A-D planning harness 이후, 승인된 ready task 1건 또는
 | monitor gate | `p2a-performance-monitor`와 monitor verdict 기반 finish 차단 |
 | milestone review | `p2a-milestone-reviewer`가 완료된 task 범위의 통합 결함을 중간·종료 직전에 비차단 검토 |
 | Hermes proposal loop | `p2a.mjs proposals mine/review/curate/draft-patch/approve-draft/digest` |
-| provider-native guide | Codex, Claude, Gemini용 role prompt, runner guide, runner doctor, capability evidence |
+| provider-native guide | Codex, Claude, Gemini용 role prompt와 capability evidence |
 
 이 실행 계층은 여러 agent를 무인으로 돌리는 scheduler가 아니다. P2A는 ready task, role, prompt, runtime 상태, monitor gate, proposal artifact를 조율하고, 실제 agent CLI/앱 세션은 사용자가 foreground에서 열어 감독한다. Batch mode도 같은 foreground 세션 안에서 provider-native write subagent를 bounded하게 병렬 실행할 뿐, start·통합·검증·finish 소유권은 main owner에게 남는다.
 
@@ -55,7 +55,7 @@ Plan2Agent는 Gate A-D planning harness 이후, 승인된 ready task 1건 또는
 | Gemini | read-only planning/review/monitor 보조. write-required role에는 배정하지 않는다. |
 | Manual | provider-native 기능이 없거나 위험한 경우 사람이 직접 실행하고 결과만 기록한다. |
 
-P2A는 provider capability matrix와 role profile을 바탕으로 implementer, reviewer, monitor role을 배정한다. 계정 내부 team/subagent/extension 자동 introspection은 비목표이며, `runner-doctor --live`도 provider `--version` probe 수준으로 제한한다.
+P2A는 provider capability matrix와 role profile을 바탕으로 implementer, reviewer, monitor role을 배정한다. 계정 내부 team/subagent/extension 자동 introspection은 비목표이며, provider CLI의 설치·버전 확인과 foreground 실행은 owner가 직접 수행한다.
 
 Batch write는 Codex 또는 foreground 승인·confinement가 충족된 Claude처럼 write-capable subagent를 별도 worktree에 가둘 수 있을 때만 사용한다. Gemini는 read-only 정책을 유지하며, write 요청은 ready task 또는 frozen batch context를 write-capable foreground owner에게 handoff한다. 안전한 병렬 write capacity가 1인 write-capable provider만 기존 단건 흐름으로 fallback한다.
 
@@ -174,6 +174,8 @@ monitor gate가 필요한 run은 monitor verdict 없이 `done`으로 닫지 않�
 ```
 
 허용되지 않은 verdict, verification 실패, scope drift가 있으면 run은 blocked 또는 failed 상태로 닫고, `p2a.mjs proposals mine` 또는 `p2a.mjs proposals mine`으로 후속 조치를 만든다. 여러 concern 배열이 동시에 채워지면 failure class 매핑 우선순위는 `scope_concerns` → `verification_concerns` → `unmet_acceptance` → `needs_user_decision`이다.
+
+같은 task의 latest run이 `failed` 또는 `blocked`인 retry에서만 실행 owner는 task title, failure class, localization으로 같은 프로젝트 Memory를 한 번 조회할 수 있다. 보고서는 `<failed-run-id>.memory-recall.json`으로 보존하고, 재시도 run에는 `MEMORY_RETRY: sourceRun=<id>; report=<path>; applied=<mitigation or none>; status=<succeeded|fallback|failed|skipped>` note를 남긴다. 첫 시도에는 이 조회를 하지 않으며, 유사성이 없는 결과는 적용하지 않는다.
 
 `p2a.mjs execute start/status/finish`와 직접 `p2a.mjs runs start/finish` 출력 footer에는 copy-paste 가능한 `resume`, `status`, `finish`, `review` 명령이 남는다. `resume`은 `p2a.mjs execute resume --run-id <run-id>`로 같은 run의 launcher prompt를 다시 출력하고, `review`는 `p2a.mjs proposals mine --run-id <run-id>`로 실행 회고 후보를 생성한다.
 
