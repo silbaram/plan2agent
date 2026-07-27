@@ -1418,30 +1418,16 @@ function renderPlan2AgentGuide() {
 
 This repository owns its Plan2Agent planning and development loop in-place.
 
-## Start a greenfield plan
+## Start or resume work
 
-1. Open Claude Code, Codex, or Gemini in this directory and run:
+Use one state-based entry point whenever you begin or finish a Plan2Agent action:
 
-   \`/p2a-harness "<one sentence idea>"\`
+- Terminal: \`node .plan2agent/scripts/p2a.mjs next\`
+- Claude Code, Codex, or Gemini agent session: \`/p2a-next\`
 
-   Planning Gates A-D write artifacts under \`.plan2agent/artifacts/<project>/gate-*\`.
+The result provides exactly one next action and its reason. Continue a returned skill in the same agent session; review and approve a returned CLI or approval action before running it. After that action is complete, run \`next\` again.
 
-2. Convert approved planning artifacts into the iteration structure:
-
-   \`node .plan2agent/scripts/p2a.mjs iteration init --artifacts .plan2agent/artifacts/<project>\`
-
-3. Develop from ready tasks and track execution:
-
-   - \`node .plan2agent/scripts/p2a.mjs info\`
-   - \`node .plan2agent/scripts/p2a.mjs execute plan|start|finish|status\`
-   - \`node .plan2agent/scripts/p2a.mjs orchestrate plan|handoff\`
-   - \`node .plan2agent/scripts/p2a.mjs proposals mine|review|curate|draft-patch|approve-draft|digest\`
-   - \`node .plan2agent/scripts/p2a.mjs tasks ready|prompt|start|done\`
-   - \`node .plan2agent/scripts/p2a.mjs runs start|verify|finish\`
-
-4. Open the next iteration in this same project:
-
-   \`node .plan2agent/scripts/p2a.mjs iteration open|draft|context|promote-tasks\`
+Planning Gates A-D, iteration artifacts, execution runs, and proposal records remain under \`.plan2agent/artifacts/<project>/\` and \`.plan2agent/proposals/\`. Treat individual P2A CLI commands as references: use them only when \`next\` returns them.
 
 ## Storage policy
 
@@ -2947,19 +2933,6 @@ function argvValue(argv, option) {
   return index === -1 ? null : argv[index + 1];
 }
 
-function artifactRootFromTaskGraphRef(taskGraphRef) {
-  if (!taskGraphRef) return '.plan2agent/artifacts/<projectId>';
-  const graphDir = path.dirname(taskGraphRef);
-  if (path.basename(graphDir) !== 'gate-c-task-graph') return path.dirname(taskGraphRef);
-  const parent = path.dirname(graphDir);
-  const parentBase = path.basename(parent);
-  if (parentBase === 'maintenance' || parentBase.startsWith('iter-')) {
-    const iterationsDir = path.dirname(parent);
-    if (path.basename(iterationsDir) === 'iterations') return normalizePath(path.dirname(iterationsDir));
-  }
-  return normalizePath(parent);
-}
-
 function printNextSteps(targetRoot) {
   let config = null;
   try {
@@ -2967,23 +2940,11 @@ function printNextSteps(targetRoot) {
   } catch {
     config = null;
   }
-  const sourceArg = config?.taskGraph
-    ? `--graph ${normalizePath(config.taskGraph)}`
-    : '--graph .plan2agent/artifacts/<projectId>/gate-c-task-graph/task-graph.json';
-  const artifactRoot = artifactRootFromTaskGraphRef(config?.taskGraph);
   console.log(`✅ 인계 완료 — ${targetRoot}`);
   console.log(`다음: cd ${targetRoot}`);
-  console.log('      node .plan2agent/scripts/p2a.mjs info');
-  console.log(`      node .plan2agent/scripts/p2a.mjs execute plan ${sourceArg} --task <task-id>`);
-  console.log(`      node .plan2agent/scripts/p2a.mjs execute start ${sourceArg} --task <task-id> --require-monitor`);
-  console.log(`      node .plan2agent/scripts/p2a.mjs execute start ${sourceArg} --task <task-id> --agent-tool <tool>`);
-  console.log(`      node .plan2agent/scripts/p2a.mjs execute finish ${sourceArg} --run-id <run-id> --test --lint --typecheck`);
-  console.log(`      node .plan2agent/scripts/p2a.mjs proposals mine ${sourceArg}`);
-  console.log('      node .plan2agent/scripts/p2a.mjs proposals review --proposals .plan2agent/proposals');
-  console.log('      node .plan2agent/scripts/p2a.mjs proposals curate --review .plan2agent/proposals/reviews/<review-id>.json');
-  console.log('      node .plan2agent/scripts/p2a.mjs proposals draft-patch --curation .plan2agent/proposals/curations/<curation-id>.json --candidate-id <candidate-id>');
-  console.log(`      node .plan2agent/scripts/p2a.mjs proposals approve-draft --draft .plan2agent/proposals/patch-drafts/<draft-id>.json --artifacts ${artifactRoot} --approved-by <name>`);
-  console.log('참고: 이 next step은 legacy handoff 대상용입니다. co-located scaffold 프로젝트는 Gate D 이후 p2a_iteration init을 먼저 실행하고 --artifacts를 사용하세요.');
+  console.log('      node .plan2agent/scripts/p2a.mjs next');
+  console.log('      agent session: /p2a-next');
+  console.log('참고: next가 반환한 CLI 또는 승인 행동만 검토 후 진행하고, 완료 뒤 next를 다시 실행하세요.');
 
   try {
     if (!config) throw new Error('missing config');

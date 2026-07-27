@@ -2,9 +2,10 @@
 /** Top-level Plan2Agent command dispatcher for repo and scaffold project use. */
 
 import { spawnSync } from 'node:child_process';
-import { existsSync, lstatSync, readFileSync, readdirSync } from 'node:fs';
+import { existsSync, lstatSync, readFileSync, readdirSync, realpathSync } from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
+import { fileURLToPath } from 'node:url';
 import { DEFAULT_MEMORY_REQUEST_TIMEOUT_MS, DEFAULT_RUNS_DIR, GATE_FILES, GREENFIELD_REQUIRED_FILES } from './p2a_constants.mjs';
 import { resolveOrchestrationAgentTool } from './p2a_project_config.mjs';
 import { normalizePath, resolveP2aPaths } from './p2a_paths.mjs';
@@ -37,6 +38,7 @@ const TOOLKIT_COMMANDS = new Map([
 function usage() {
   return [
     'Usage:',
+    '  node .plan2agent/scripts/p2a.mjs next [--target <dir>] [--project-id <id>] [--json]',
     '  node .plan2agent/scripts/p2a.mjs info [--json]',
     '  node .plan2agent/scripts/p2a.mjs doctor [--dev] [--json] [--strict]',
     '  node .plan2agent/scripts/p2a.mjs update [--dry-run|--apply]',
@@ -288,7 +290,7 @@ function readyTaskIds(taskGraph) {
     .filter(Boolean);
 }
 
-function summarizeRuns(targetRoot, artifactRoot) {
+function inspectRuns(targetRoot, artifactRoot) {
   const runsDir = [
     path.join(artifactRoot, 'runs'),
     path.join(path.dirname(artifactRoot), 'runs'),
@@ -296,10 +298,13 @@ function summarizeRuns(targetRoot, artifactRoot) {
   ].find((candidate) => isDirectory(candidate) && isFile(path.join(candidate, 'run-index.json')));
   if (!runsDir) {
     return {
-      runIndexPath: null,
-      runCount: 0,
-      latestRunId: null,
-      statusCounts: {},
+      records: [],
+      summary: {
+        runIndexPath: null,
+        runCount: 0,
+        latestRunId: null,
+        statusCounts: {},
+      },
     };
   }
   const runIndexPath = path.join(runsDir, 'run-index.json');
@@ -311,11 +316,18 @@ function summarizeRuns(targetRoot, artifactRoot) {
     return counts;
   }, {});
   return {
-    runIndexPath: relativeToTarget(targetRoot, runIndexPath),
-    runCount: runs.length,
-    latestRunId: stringValue(runs.at(-1)?.runId),
-    statusCounts,
+    records: runs,
+    summary: {
+      runIndexPath: relativeToTarget(targetRoot, runIndexPath),
+      runCount: runs.length,
+      latestRunId: stringValue(runs.at(-1)?.runId),
+      statusCounts,
+    },
   };
+}
+
+function summarizeRuns(targetRoot, artifactRoot) {
+  return inspectRuns(targetRoot, artifactRoot).summary;
 }
 
 function artifactLayout(artifactRoot, isScaffoldProject) {
@@ -341,34 +353,71 @@ function artifactLayout(artifactRoot, isScaffoldProject) {
   };
 }
 
-function summarizeArtifact(targetRoot, artifactRoot, isScaffoldProject) {
+function artifactSearchRoots(artifactRoot, activeIteration) {
+  const iterationRoot = activeIteration ? path.join(artifactRoot, 'iterations', activeIteration) : null;
+  return iterationRoot && isDirectory(iterationRoot) ? [iterationRoot, artifactRoot] : [artifactRoot];
+}
+
+function firstGateFile(searchRoots, gateDirectory, filename) {
+  return firstExistingFile(searchRoots.map((root) => path.join(root, gateDirectory, filename)));
+}
+
+function inspectArtifact(targetRoot, artifactRoot, isScaffoldProject) {
   const layout = artifactLayout(artifactRoot, isScaffoldProject);
   const currentSpec = readJsonObject(path.join(artifactRoot, 'current-spec.json'));
   const activeIteration = stringValue(currentSpec?.active_iteration);
   const projectId = stringValue(currentSpec?.project_id) ?? path.basename(artifactRoot);
-  const iterationRoot = activeIteration ? path.join(artifactRoot, 'iterations', activeIteration) : null;
-  const searchRoots = iterationRoot && isDirectory(iterationRoot) ? [iterationRoot, artifactRoot] : [artifactRoot];
+  const searchRoots = artifactSearchRoots(artifactRoot, activeIteration);
+  const intakePath = firstGateFile(searchRoots, 'gate-a-intake', 'intake.json');
+  const specPath = firstGateFile(searchRoots, 'gate-b-spec', 'spec.json');
   const taskGraphPath = firstExistingFile(searchRoots.flatMap((root) => [
     path.join(root, 'gate-c-task-graph', 'task-graph.json'),
     path.join(root, 'task-graph.json'),
   ]));
-  const reviewPath = firstExistingFile(searchRoots.map((root) => path.join(root, 'gate-d-review', 'review.json')));
+  const reviewPath = firstGateFile(searchRoots, 'gate-d-review', 'review.json');
+  const intake = intakePath ? readJsonObject(intakePath) : null;
+  const spec = specPath ? readJsonObject(specPath) : null;
   const taskGraph = taskGraphPath ? readJsonObject(taskGraphPath) : null;
   const review = reviewPath ? readJsonObject(reviewPath) : null;
-  const readyTasks = readyTaskIds(taskGraph);
+  const runs = inspectRuns(targetRoot, artifactRoot);
+  const tasks = jsonRecords(taskGraph?.tasks);
   return {
     projectId,
-    artifactRoot: relativeToTarget(targetRoot, artifactRoot),
+    artifactRoot,
     layout,
     activeIteration,
-    taskGraphPath: taskGraphPath ? relativeToTarget(targetRoot, taskGraphPath) : null,
-    taskCounts: countTasks(taskGraph),
+    currentSpec,
+    gates: {
+      intakePath,
+      intake,
+      specPath,
+      spec,
+      taskGraphPath,
+      taskGraph,
+      reviewPath,
+      review,
+    },
+    tasks,
+    runs,
+  };
+}
+
+function summarizeArtifact(targetRoot, inspected) {
+  const { gates } = inspected;
+  const readyTasks = readyTaskIds(gates.taskGraph);
+  return {
+    projectId: inspected.projectId,
+    artifactRoot: relativeToTarget(targetRoot, inspected.artifactRoot),
+    layout: inspected.layout,
+    activeIteration: inspected.activeIteration,
+    taskGraphPath: gates.taskGraphPath ? relativeToTarget(targetRoot, gates.taskGraphPath) : null,
+    taskCounts: countTasks(gates.taskGraph),
     readyTaskIds: readyTasks,
     review: {
-      path: reviewPath ? relativeToTarget(targetRoot, reviewPath) : null,
-      blockingIssues: jsonRecords(review?.blocking_issues).length,
+      path: gates.reviewPath ? relativeToTarget(targetRoot, gates.reviewPath) : null,
+      blockingIssues: jsonRecords(gates.review?.blocking_issues).length,
     },
-    runs: summarizeRuns(targetRoot, artifactRoot),
+    runs: inspected.runs.summary,
   };
 }
 
@@ -538,7 +587,359 @@ function parseInfoArgs(argv) {
   return args;
 }
 
-function buildInfo(targetRootInput) {
+function parseNextArgs(argv) {
+  const args = {
+    target: P2A_PATHS.embedded ? P2A_PATHS.projectRoot : process.cwd(),
+    projectId: null,
+    json: false,
+    help: false,
+  };
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index];
+    if (arg === '--help' || arg === '-h') {
+      args.help = true;
+    } else if (arg === '--json') {
+      args.json = true;
+    } else if (arg === '--target') {
+      args.target = argv[++index];
+      if (!args.target) throw new Error('--target requires a project directory');
+    } else if (arg === '--project-id') {
+      args.projectId = argv[++index];
+      if (!args.projectId) throw new Error('--project-id requires a project id');
+    } else {
+      throw new Error(`unknown next option: ${arg}`);
+    }
+  }
+  return args;
+}
+
+function commandTarget(targetRoot) {
+  return path.resolve(process.cwd()) === targetRoot ? '.' : targetRoot;
+}
+
+function commandArtifact(targetRoot, artifactRoot) {
+  return path.resolve(process.cwd()) === targetRoot
+    ? relativeToTarget(targetRoot, artifactRoot)
+    : artifactRoot;
+}
+
+function commandProjectPath(targetRoot, filePath) {
+  return path.resolve(process.cwd()) === targetRoot
+    ? relativeToTarget(targetRoot, filePath)
+    : filePath;
+}
+
+function minedProposalRunIds(targetRoot, proposals) {
+  const queuePath = resolveProjectRelativePath(targetRoot, proposals.queueDir);
+  if (!isDirectory(queuePath)) return new Set();
+  const runIds = new Set();
+  for (const entry of readdirSync(queuePath, { withFileTypes: true })) {
+    if (!entry.isFile() || !entry.name.endsWith('.json')) continue;
+    const sourceRunId = stringValue(readJsonObject(path.join(queuePath, entry.name))?.sourceRunId);
+    if (sourceRunId) runIds.add(sourceRunId);
+  }
+  return runIds;
+}
+
+function cliNextAction(state, reason, argv) {
+  return {
+    state,
+    reason,
+    command: {
+      kind: 'cli',
+      argv,
+      display: `p2a ${argv.join(' ')}`,
+    },
+  };
+}
+
+function skillNextAction(state, reason, display) {
+  return {
+    state,
+    reason,
+    command: {
+      kind: 'skill',
+      display,
+    },
+  };
+}
+
+function approvalNextAction(state, reason, display) {
+  return {
+    state,
+    reason,
+    command: {
+      kind: 'approval',
+      display,
+    },
+  };
+}
+
+function taskIdsWithStatus(tasks, status) {
+  return tasks
+    .filter((task) => task.status === status)
+    .map((task) => stringValue(task.id))
+    .filter(Boolean);
+}
+
+function isClosedIteration(currentSpec, activeIteration) {
+  if (!activeIteration) return false;
+  const closed = [
+    currentSpec?.last_closed_iteration,
+    ...jsonRecords(currentSpec?.closed_iterations),
+  ];
+  return closed.some((record) => (
+    record?.iteration_id === activeIteration && record?.status === 'archived'
+  ));
+}
+
+function runsForActiveIteration(records, activeIteration) {
+  return records.filter((run) => {
+    const iterationId = stringValue(run.iterationId);
+    return activeIteration ? iterationId === activeIteration : !iterationId;
+  });
+}
+
+function inspectionForArtifact(targetRoot, artifact, inspectedArtifacts) {
+  const artifactRoot = path.resolve(targetRoot, artifact.artifactRoot);
+  return inspectedArtifacts.find((candidate) => candidate.artifactRoot === artifactRoot) ?? null;
+}
+
+function selectNextArtifact(info, targetRoot, requestedProjectId, inspectedArtifacts) {
+  const artifacts = info.artifacts;
+  if (requestedProjectId) {
+    const matches = artifacts.filter((artifact) => artifact.projectId === requestedProjectId);
+    if (!matches.length) throw new Error(`no artifact found for --project-id ${JSON.stringify(requestedProjectId)}`);
+    if (matches.length > 1) throw new Error(`multiple artifacts use project id ${JSON.stringify(requestedProjectId)}`);
+    return { artifact: matches[0] };
+  }
+  if (artifacts.length === 1) return { artifact: artifacts[0] };
+  const active = artifacts.filter((artifact) => {
+    const inspected = inspectionForArtifact(targetRoot, artifact, inspectedArtifacts);
+    return inspected && artifact.activeIteration && !isClosedIteration(
+      inspected.currentSpec,
+      artifact.activeIteration,
+    );
+  });
+  if (active.length === 1) return { artifact: active[0] };
+  const projectIds = artifacts.map((artifact) => artifact.projectId).sort();
+  return {
+    selection: cliNextAction(
+      'project_selection_required',
+      `Multiple artifact roots are available (${projectIds.join(', ')}). Select one project explicitly.`,
+      ['next', '--project-id', '<project-id>'],
+    ),
+  };
+}
+
+function buildNextDecisionContext(info, targetRoot, requestedProjectId, inspectedArtifacts) {
+  const hasHarness = isDirectory(path.join(targetRoot, '.plan2agent'));
+  const context = { info, targetRoot, hasHarness };
+  if (!hasHarness || !info.artifacts.length) return context;
+
+  const selected = selectNextArtifact(info, targetRoot, requestedProjectId, inspectedArtifacts);
+  if (selected.selection) return { ...context, selection: selected.selection };
+
+  const artifactRoot = path.resolve(targetRoot, selected.artifact.artifactRoot);
+  const detail = inspectionForArtifact(targetRoot, selected.artifact, inspectedArtifacts);
+  if (!detail) throw new Error(`artifact inspection is unavailable: ${artifactRoot}`);
+  const { gates } = detail;
+  const activeRuns = runsForActiveIteration(detail.runs.records, detail.activeIteration);
+  const taskCounts = countTasks(gates.taskGraph);
+  const proposals = info.enhancements.proposals;
+  const minedRunIds = proposals.enabled ? minedProposalRunIds(targetRoot, proposals) : new Set();
+  const unminedFailedOrBlockedRun = activeRuns.find((run) => {
+    const runId = stringValue(run.runId);
+    return Boolean(runId)
+      && ['failed', 'blocked'].includes(run.status)
+      && !minedRunIds.has(runId);
+  });
+  return {
+    ...context,
+    artifactRoot,
+    artifactArg: commandArtifact(targetRoot, artifactRoot),
+    projectId: detail.projectId,
+    detail,
+    gates,
+    gateAExists: Boolean(gates.intakePath),
+    gateBExists: Boolean(gates.specPath),
+    gateCExists: Boolean(gates.taskGraphPath),
+    gateDExists: Boolean(gates.reviewPath),
+    reviewBlockingIssues: jsonRecords(gates.review?.blocking_issues).length,
+    activeRuns,
+    startedRun: activeRuns.find((run) => run.status === 'started' && stringValue(run.runId)),
+    readyIds: readyTaskIds(gates.taskGraph),
+    blockedTaskIds: taskIdsWithStatus(detail.tasks, 'blocked'),
+    allTasksDone: taskCounts.total > 0 && taskCounts.done === taskCounts.total,
+    closedIteration: isClosedIteration(detail.currentSpec, detail.activeIteration),
+    proposalQueueArg: proposals.enabled
+      ? commandProjectPath(targetRoot, resolveProjectRelativePath(targetRoot, proposals.queueDir))
+      : null,
+    unminedFailedOrBlockedRun,
+  };
+}
+
+export const NEXT_DECISION_RULES = [
+  {
+    state: 'uninitialized',
+    kind: 'cli',
+    when: (context) => !context.hasHarness,
+    reason: () => 'This project has no .plan2agent directory.',
+    command: (context) => ['scaffold', '--target', commandTarget(context.targetRoot)],
+  },
+  {
+    state: 'initialized_without_artifacts',
+    kind: 'skill',
+    when: (context) => context.hasHarness && !context.info.artifacts.length,
+    reason: () => 'The harness is installed, but no planning artifact root exists yet.',
+    command: () => '/p2a-harness "<one-sentence idea>"',
+  },
+  {
+    state: 'incomplete_iteration_layout',
+    kind: 'cli',
+    when: (context) => context.detail.layout.hasIncompleteIterationLayout,
+    reason: () => 'current-spec.json and iterations/ do not form a complete iteration layout.',
+    command: (context) => ['iteration', 'validate', '--artifacts', context.artifactArg],
+  },
+  {
+    state: (context) => (context.gates.intake?.status === 'ready_for_spec'
+      ? 'gate_a_ready_for_spec'
+      : 'gate_a_needs_approval'),
+    kind: (context) => (context.gates.intake?.status === 'ready_for_spec' ? 'skill' : 'approval'),
+    when: (context) => context.gateAExists && !context.gateBExists,
+    reason: (context) => (context.gates.intake?.status === 'ready_for_spec'
+      ? 'Gate A intake has no remaining user decisions and is ready for specification.'
+      : 'Gate A intake still needs a human decision or approval before a specification can be written.'),
+    command: (context) => (context.gates.intake?.status === 'ready_for_spec'
+      ? '/p2a-spec'
+      : `Review and approve ${path.join(context.artifactArg, 'gate-a-intake', 'intake.json')}.`),
+  },
+  {
+    state: 'gate_b_needs_approval',
+    kind: 'approval',
+    when: (context) => context.gateBExists && context.gates.spec?.approval !== 'approved',
+    reason: () => 'The Gate B specification is still a draft.',
+    command: (context) => `Review ${path.join(context.artifactArg, 'gate-b-spec', 'spec.json')}, approve it, and record approval_audit.`,
+  },
+  {
+    state: 'gate_b_approved_needs_tasks',
+    kind: 'skill',
+    when: (context) => context.gateBExists && context.gates.spec?.approval === 'approved' && !context.gateCExists,
+    reason: () => 'The approved Gate B specification has no Gate C task graph yet.',
+    command: () => '/p2a-task-breakdown',
+  },
+  {
+    state: (context) => (context.gateDExists ? 'gate_d_blocked' : 'gate_c_needs_review'),
+    kind: (context) => (context.gateDExists ? 'approval' : 'skill'),
+    when: (context) => context.gateCExists && (!context.gateDExists || context.reviewBlockingIssues > 0),
+    reason: (context) => (context.gateDExists
+      ? `Gate D review has ${context.reviewBlockingIssues} blocking issue(s).`
+      : 'The Gate C task graph exists but has not passed Gate D review.'),
+    command: (context) => (context.gateDExists
+      ? `Resolve the blockers in ${path.join(context.artifactArg, 'gate-d-review', 'review.json')}, then run p2a next again.`
+      : '/p2a-review'),
+  },
+  {
+    state: 'gate_d_passed_needs_iteration_init',
+    kind: 'cli',
+    when: (context) => context.gateDExists && context.detail.layout.requiresIterationInit,
+    reason: () => 'Gate D passed with no blocking issues, but the iteration layout has not been initialized.',
+    command: (context) => ['iteration', 'init', '--artifacts', context.artifactArg],
+  },
+  {
+    state: 'run_started',
+    kind: 'cli',
+    when: (context) => Boolean(context.startedRun),
+    reason: (context) => `Run ${context.startedRun.runId} is still open and should be resumed before starting new work.`,
+    command: (context) => ['execute', 'resume', '--artifacts', context.artifactArg, '--run-id', context.startedRun.runId],
+  },
+  {
+    state: 'ready_task_available',
+    kind: 'cli',
+    when: (context) => context.readyIds.length > 0,
+    reason: (context) => `Task ${context.readyIds[0]} is ready to plan for supervised execution.`,
+    command: (context) => ['execute', 'plan', '--artifacts', context.artifactArg, '--task', context.readyIds[0]],
+  },
+  {
+    state: 'tasks_blocked',
+    kind: 'cli',
+    when: (context) => context.blockedTaskIds.length > 0 && !context.readyIds.length,
+    reason: (context) => `No task is ready and task ${context.blockedTaskIds[0]} is blocked.`,
+    command: (context) => ['tasks', 'show', '--artifacts', context.artifactArg, context.blockedTaskIds[0]],
+  },
+  {
+    state: 'iteration_ready_to_close',
+    kind: 'cli',
+    when: (context) => context.allTasksDone && !context.closedIteration,
+    reason: () => 'Every task in the active iteration is done and the iteration is still open.',
+    command: (context) => ['iteration', 'close', '--artifacts', context.artifactArg],
+  },
+  {
+    state: 'run_evidence_needs_proposal_mining',
+    kind: 'cli',
+    when: (context) => Boolean(context.unminedFailedOrBlockedRun),
+    reason: (context) => `Run ${context.unminedFailedOrBlockedRun.runId} has not been mined for proposals yet.`,
+    command: (context) => [
+      'proposals',
+      'mine',
+      '--artifacts',
+      context.artifactArg,
+      '--run-id',
+      context.unminedFailedOrBlockedRun.runId,
+      '--proposals',
+      context.proposalQueueArg,
+    ],
+  },
+  {
+    state: 'iteration_complete',
+    kind: 'cli',
+    when: (context) => context.allTasksDone && context.closedIteration,
+    reason: () => 'The active iteration is closed; start the next iteration when a new change idea is ready.',
+    command: (context) => ['iteration', 'open', '--artifacts', context.artifactArg, '--iteration-id', '<id>', '--idea', '<change idea>'],
+  },
+];
+
+function resolveNextRuleValue(value, context) {
+  return typeof value === 'function' ? value(context) : value;
+}
+
+function actionForNextRule(rule, context) {
+  const state = resolveNextRuleValue(rule.state, context);
+  const kind = resolveNextRuleValue(rule.kind, context);
+  const reason = rule.reason(context);
+  const command = rule.command(context);
+  if (kind === 'cli') return cliNextAction(state, reason, command);
+  if (kind === 'skill') return skillNextAction(state, reason, command);
+  return approvalNextAction(state, reason, command);
+}
+
+function decideNextAction(context) {
+  if (context.selection) return context.selection;
+  const rule = NEXT_DECISION_RULES.find((candidate) => candidate.when(context));
+  if (rule) return actionForNextRule(rule, context);
+  return cliNextAction(
+    'state_needs_inspection',
+    'The current artifact combination does not match a safe automatic next-action rule.',
+    ['info'],
+  );
+}
+
+function buildNext(targetRootInput, requestedProjectId) {
+  const snapshot = buildInfoSnapshot(targetRootInput);
+  const { info } = snapshot;
+  const targetRoot = info.target;
+  const context = buildNextDecisionContext(info, targetRoot, requestedProjectId, snapshot.inspectedArtifacts);
+  const action = decideNextAction(context);
+  return {
+    schema_version: 'p2a.next.v1',
+    generatedAt: new Date().toISOString(),
+    target: targetRoot,
+    projectId: context.projectId ?? null,
+    ...action,
+  };
+}
+
+function buildInfoSnapshot(targetRootInput) {
   const targetRoot = path.resolve(targetRootInput);
   if (!isDirectory(targetRoot)) {
     throw new Error(`--target must be an existing directory: ${targetRoot}`);
@@ -546,8 +947,10 @@ function buildInfo(targetRootInput) {
   const manifest = readManifest(targetRoot);
   const config = readJsonObject(path.join(targetRoot, '.plan2agent', 'project.config.json'));
   const isScaffoldProject = manifest?.provenance?.mode === 'scaffold';
-  const artifacts = discoverArtifactRoots(targetRoot)
-    .map((artifactRoot) => summarizeArtifact(targetRoot, artifactRoot, isScaffoldProject));
+  const inspectedArtifacts = discoverArtifactRoots(targetRoot)
+    .map((artifactRoot) => inspectArtifact(targetRoot, artifactRoot, isScaffoldProject));
+  const artifacts = inspectedArtifacts
+    .map((inspected) => summarizeArtifact(targetRoot, inspected));
   const hasP2aDir = isDirectory(path.join(targetRoot, '.plan2agent'));
   const enhancements = summarizeEnhancements(targetRoot, manifest, config);
   const mode = manifest?.provenance?.mode
@@ -601,7 +1004,7 @@ function buildInfo(targetRootInput) {
     }
   }
   if (!nextActions.length) nextActions.push('No immediate P2A action detected from local files.');
-  return {
+  const info = {
     schema_version: 'p2a.info.v1',
     generatedAt: new Date().toISOString(),
     target: targetRoot,
@@ -621,6 +1024,11 @@ function buildInfo(targetRootInput) {
     artifacts,
     nextActions,
   };
+  return { info, inspectedArtifacts };
+}
+
+function buildInfo(targetRootInput) {
+  return buildInfoSnapshot(targetRootInput).info;
 }
 
 function formatStatusCounts(statusCounts) {
@@ -660,8 +1068,7 @@ function printInfo(info) {
     if (artifact.readyTaskIds.length) console.log(`    ready: ${artifact.readyTaskIds.join(', ')}`);
     if (artifact.review.blockingIssues) console.log(`    review blockers: ${artifact.review.blockingIssues}`);
   }
-  console.log('Next actions:');
-  for (const action of info.nextActions) console.log(`- ${action}`);
+  console.log('Next: p2a next');
 }
 
 function runInfo(argv) {
@@ -688,12 +1095,47 @@ function runInfo(argv) {
   }
 }
 
+function printNext(next) {
+  console.log('Plan2Agent next');
+  console.log(`- target: ${next.target}`);
+  if (next.projectId) console.log(`- projectId: ${next.projectId}`);
+  console.log(`- state: ${next.state}`);
+  console.log('Next action:');
+  console.log(`  ${next.command.display}`);
+  console.log(`Reason: ${next.reason}`);
+}
+
+function runNext(argv) {
+  let args;
+  try {
+    args = parseNextArgs(argv);
+  } catch (error) {
+    console.error(`p2a next error: ${error.message}`);
+    console.error('Run with --help for usage.');
+    return 1;
+  }
+  if (args.help) {
+    console.log('Usage: node .plan2agent/scripts/p2a.mjs next [--target <dir>] [--project-id <id>] [--json]');
+    return 0;
+  }
+  try {
+    const next = buildNext(args.target, args.projectId);
+    if (args.json) console.log(JSON.stringify(next, null, 2));
+    else printNext(next);
+    return 0;
+  } catch (error) {
+    console.error(`p2a next error: ${error.message}`);
+    return 1;
+  }
+}
+
 function main(argv = process.argv.slice(2)) {
   const [command, ...commandArgs] = argv;
   if (!command || command === '--help' || command === '-h' || command === 'help') {
     console.log(usage());
     return 0;
   }
+  if (command === 'next') return runNext(commandArgs);
   if (command === 'info' || command === 'status') return runInfo(commandArgs);
   if (RUNTIME_COMMANDS.has(command)) return dispatchRuntime(command, commandArgs);
   if (TOOLKIT_COMMANDS.has(command)) return dispatchToolkit(command, commandArgs);
@@ -702,4 +1144,6 @@ function main(argv = process.argv.slice(2)) {
   return 1;
 }
 
-process.exitCode = main();
+if (process.argv[1] && realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url))) {
+  process.exitCode = main();
+}

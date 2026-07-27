@@ -71,6 +71,7 @@ for (const caseData of manifest.cases ?? []) {
         ['.plan2agent', 'scripts', 'p2a_proposals.mjs'],
         ['.plan2agent', 'scripts', 'p2a_run_paths.mjs'],
         ['.plan2agent', 'schemas', 'task-context.schema.json'],
+        ['.plan2agent', 'schemas', 'next.schema.json'],
         ['.plan2agent', 'schemas', 'run.schema.json'],
         ['.plan2agent', 'schemas', 'run-index.schema.json'],
         ['.plan2agent', 'schemas', 'skill-proposal.schema.json'],
@@ -104,6 +105,17 @@ for (const caseData of manifest.cases ?? []) {
       result = runTargetP2a(targetRoot, ['tasks', 'ready', '--graph', targetTaskGraphPath]);
       assertOk(result, `greenfield handoff target p2a tasks dispatch failed: ${caseData.id}`);
       assert.match(result.stdout, /task-001/);
+      result = runTargetP2a(targetRoot, ['next', '--json']);
+      assertOk(result, `greenfield handoff target p2a next failed: ${caseData.id}`);
+      const targetNext = JSON.parse(result.stdout);
+      assert.equal(targetNext.schema_version, 'p2a.next.v1');
+      assert.equal(targetNext.state, 'ready_task_available');
+      assert.equal(targetNext.command.kind, 'cli');
+      assert.deepEqual(targetNext.command.argv, [
+        'execute', 'plan',
+        '--artifacts', path.join('.plan2agent', 'artifacts', caseData.project_id),
+        '--task', 'task-001',
+      ]);
 
       const toolTargetRoot = path.join(tempRoot, 'target-project-tools');
       result = runHandoff(['--project-id', caseData.project_id, '--artifacts', caseData.artifact_root, '--target', toolTargetRoot, '--tools', 'codex,gemini']);
@@ -118,10 +130,12 @@ for (const caseData of manifest.cases ?? []) {
       ];
       const expectedToolFiles = [
         path.join('.agents', 'skills', 'p2a-harness', 'SKILL.md'),
+        path.join('.agents', 'skills', 'p2a-next', 'SKILL.md'),
         path.join('.agents', 'agents', 'p2a-requirements.md'),
         path.join('.codex', 'agents', 'p2a-task-graph.toml'),
         path.join('.gemini', 'agents', 'p2a-task-graph.md'),
         path.join('.gemini', 'commands', 'p2a', 'harness.toml'),
+        path.join('.gemini', 'commands', 'p2a', 'next.toml'),
         ...expectedNewAgentFiles,
       ];
       const missingToolFiles = expectedToolFiles.filter((filePath) => !existsSync(path.join(toolTargetRoot, filePath)));
@@ -129,13 +143,13 @@ for (const caseData of manifest.cases ?? []) {
       assert.deepEqual({ missingToolFiles }, { missingToolFiles: [] });
       assert.equal(toolManifest.aiToolTargets.join(','), 'codex,gemini');
       for (const includedTool of ['p2a_codex_assets', 'p2a_gemini_assets', 'p2a_runs', 'p2a', 'p2a_execute', 'p2a_monitor_gate', 'p2a_proposals']) assert.ok(toolManifest.includedTools.includes(includedTool));
-      for (const toolFile of ['.agents/skills/p2a-harness/SKILL.md', '.gemini/commands/p2a/harness.toml', '.plan2agent/scripts/p2a.mjs', '.plan2agent/scripts/p2a_constants.mjs', '.plan2agent/scripts/p2a_runs.mjs', '.plan2agent/scripts/p2a_execute.mjs', '.plan2agent/scripts/p2a_monitor_gate.mjs', '.plan2agent/scripts/p2a_proposals.mjs', '.plan2agent/scripts/p2a_run_paths.mjs']) assert.ok(toolManifest.toolFiles.includes(toolFile), `${toolFile} missing from manifest`);
+      for (const toolFile of ['.agents/skills/p2a-harness/SKILL.md', '.agents/skills/p2a-next/SKILL.md', '.gemini/commands/p2a/harness.toml', '.gemini/commands/p2a/next.toml', '.plan2agent/scripts/p2a.mjs', '.plan2agent/scripts/p2a_constants.mjs', '.plan2agent/scripts/p2a_runs.mjs', '.plan2agent/scripts/p2a_execute.mjs', '.plan2agent/scripts/p2a_monitor_gate.mjs', '.plan2agent/scripts/p2a_proposals.mjs', '.plan2agent/scripts/p2a_run_paths.mjs']) assert.ok(toolManifest.toolFiles.includes(toolFile), `${toolFile} missing from manifest`);
       for (const toolFile of expectedNewAgentFiles) {
         const manifestToolFile = toolFile.split(path.sep).join('/');
         assert.ok(toolManifest.aiToolFiles.includes(manifestToolFile), `${manifestToolFile} missing from manifest.aiToolFiles`);
         assert.ok(toolManifest.toolFiles.includes(manifestToolFile), `${manifestToolFile} missing from manifest.toolFiles`);
       }
-      for (const schemaFile of ['.plan2agent/schemas/run.schema.json', '.plan2agent/schemas/proposal-review.schema.json', '.plan2agent/schemas/proposal-curation.schema.json', '.plan2agent/schemas/proposal-patch-draft.schema.json', '.plan2agent/schemas/proposal-draft-approval.schema.json', '.plan2agent/schemas/eval-index.schema.json', '.plan2agent/schemas/eval-digest.schema.json', '.plan2agent/schemas/eval-maintenance-draft.schema.json', '.plan2agent/schemas/eval-maintenance-apply-report.schema.json']) assert.ok(toolManifest.schemaFiles.includes(schemaFile), `${schemaFile} missing from manifest`);
+      for (const schemaFile of ['.plan2agent/schemas/next.schema.json', '.plan2agent/schemas/run.schema.json', '.plan2agent/schemas/proposal-review.schema.json', '.plan2agent/schemas/proposal-curation.schema.json', '.plan2agent/schemas/proposal-patch-draft.schema.json', '.plan2agent/schemas/proposal-draft-approval.schema.json', '.plan2agent/schemas/eval-index.schema.json', '.plan2agent/schemas/eval-digest.schema.json', '.plan2agent/schemas/eval-maintenance-draft.schema.json', '.plan2agent/schemas/eval-maintenance-apply-report.schema.json']) assert.ok(toolManifest.schemaFiles.includes(schemaFile), `${schemaFile} missing from manifest`);
 
       const teamSourceRoot = path.join(tempRoot, 'team-bigfive-source');
       mkdirSync(path.join(teamSourceRoot, '_workspace'), { recursive: true });

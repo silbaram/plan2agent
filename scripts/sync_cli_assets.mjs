@@ -57,6 +57,15 @@ Return intake_json conforming to .plan2agent/schemas/intake.schema.json and a ta
 
 Return review_json with blocking issues, non-blocking risks, missing acceptance criteria, oversized tasks, dependency issues, schema_or_gate_issues, and recommended changes. Generate Markdown only as an optional view.`,
   },
+  next: {
+    skill: 'p2a-next',
+    description: 'Show the single Plan2Agent next action for the current project state.',
+    prompt: `Use the Plan2Agent p2a-next skill for the following context:
+
+{{args}}
+
+Call p2a.mjs next --json as the decision authority. Do not reproduce state conditions or execute a CLI command without the user approving it.`,
+  },
   spec: {
     skill: 'p2a-spec',
     description: 'Create a Plan2Agent product and implementation spec from answered intake.',

@@ -31,6 +31,7 @@ export const PROJECT_RUNTIME_SCRIPT_FILES = [
 ];
 
 export const PROJECT_RUNTIME_SCHEMA_FILES = [
+  'next.schema.json',
   'intake.schema.json',
   'spec.schema.json',
   'task-graph.schema.json',
