@@ -174,10 +174,20 @@ function conflictingBatchTaskGraph() {
 
 test('batch execution contract is present in canonical and generated provider surfaces', () => {
   const canonical = readFileSync(path.join(ROOT, '.agents', 'skills', 'p2a-dev-execution', 'SKILL.md'), 'utf8');
+  const canonicalReference = readFileSync(
+    path.join(ROOT, '.agents', 'skills', 'p2a-dev-execution', 'references', 'batch-execution.md'),
+    'utf8',
+  );
   const claude = readFileSync(path.join(ROOT, '.claude', 'skills', 'p2a-dev-execution', 'SKILL.md'), 'utf8');
+  const claudeReference = readFileSync(
+    path.join(ROOT, '.claude', 'skills', 'p2a-dev-execution', 'references', 'batch-execution.md'),
+    'utf8',
+  );
   const gemini = readFileSync(path.join(ROOT, '.gemini', 'commands', 'p2a', 'dev-execution.toml'), 'utf8');
 
   assert.equal(claude, canonical);
+  assert.equal(claudeReference, canonicalReference);
+  const canonicalSurface = `${canonical}\n${canonicalReference}`;
   for (const required of [
     '## Supervised Batch Owner Procedure',
     'Freeze one ready snapshot',
@@ -190,7 +200,7 @@ test('batch execution contract is present in canonical and generated provider su
     'owner-only integration-candidate worktree',
     'fall back to the single-task procedure',
   ]) {
-    assert.match(canonical, new RegExp(required.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+    assert.match(canonicalSurface, new RegExp(required.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
   }
   assert.match(gemini, /Gemini is read-only/);
   assert.match(gemini, /Do not start a run, edit a worktree, create an integration candidate/);
@@ -198,6 +208,13 @@ test('batch execution contract is present in canonical and generated provider su
   assert.match(gemini, /For one ready task, that write-capable owner must use the skill's single-task procedure/);
   assert.match(gemini, /For a frozen batch of independent ready tasks, that owner must use the candidate-first batch procedure/);
   assert.match(gemini, /candidate-first batch procedure/);
+  for (const reference of [
+    'references/batch-execution.md',
+    'references/milestone-review.md',
+  ]) {
+    assert.match(gemini, new RegExp(reference.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  }
+  assert.match(gemini, /otherwise do not read it/);
 });
 
 test('two ready tasks can overlap in isolated worktrees and finish only after serial integration', async () => {

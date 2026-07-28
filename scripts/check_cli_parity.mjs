@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /** Check that Plan2Agent CLI configuration mirrors and command shims stay in sync. */
 
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync, existsSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
 import { spawnSync } from 'node:child_process';
@@ -74,7 +74,30 @@ function checkGeminiCommand(command, skill) {
   if (typeof prompt !== 'string' || !prompt.trim()) return `Gemini command shim ${label} has missing or empty prompt`;
   if (!prompt.includes(skill)) return `Gemini command shim ${label} prompt must include skill name ${skill}`;
   if (!prompt.includes('{{args}}')) return `Gemini command shim ${label} prompt must include {{args}}`;
+  const skillRoot = path.join(ROOT, '.agents', 'skills', skill);
+  const references = relativeFileList(skillRoot).filter((relativeFile) => relativeFile.split(path.sep)[0] === 'references');
+  for (const relativeFile of references) {
+    const normalizedPath = relativeFile.split(path.sep).join('/');
+    if (!prompt.includes(normalizedPath)) return `Gemini command shim ${label} must include reference path ${normalizedPath}`;
+  }
+  if (references.length && !prompt.includes('otherwise do not read it')) {
+    return `Gemini command shim ${label} must include conditional reference guidance`;
+  }
   return null;
+}
+
+function relativeFileList(sourceRoot) {
+  const files = [];
+  function visit(directory) {
+    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+      const absolute = path.join(directory, entry.name);
+      const relative = path.relative(sourceRoot, absolute);
+      if (entry.isDirectory()) visit(absolute);
+      else if (entry.isFile()) files.push(relative);
+    }
+  }
+  visit(sourceRoot);
+  return files.sort((a, b) => a.localeCompare(b));
 }
 
 export function main() {
@@ -88,11 +111,20 @@ export function main() {
   }
 
   for (const skill of SKILLS) {
-    const source = path.join(ROOT, '.agents', 'skills', skill, 'SKILL.md');
-    const mirror = path.join(ROOT, '.claude', 'skills', skill, 'SKILL.md');
-    if (!existsSync(source)) return fail(`missing source skill ${source}`);
-    if (!existsSync(mirror)) return fail(`missing Claude skill mirror ${mirror}`);
-    if (!readFileSync(source).equals(readFileSync(mirror))) return fail(`skill mirror drift for ${skill}`);
+    const sourceRoot = path.join(ROOT, '.agents', 'skills', skill);
+    const mirrorRoot = path.join(ROOT, '.claude', 'skills', skill);
+    if (!existsSync(sourceRoot)) return fail(`missing source skill ${sourceRoot}`);
+    if (!existsSync(mirrorRoot)) return fail(`missing Claude skill mirror ${mirrorRoot}`);
+    const sourceFiles = relativeFileList(sourceRoot);
+    const mirrorFiles = relativeFileList(mirrorRoot);
+    if (sourceFiles.join('\n') !== mirrorFiles.join('\n')) return fail(`skill mirror file list drift for ${skill}`);
+    for (const relativeFile of sourceFiles) {
+      const source = path.join(sourceRoot, relativeFile);
+      const mirror = path.join(mirrorRoot, relativeFile);
+      if (!readFileSync(source).equals(readFileSync(mirror))) {
+        return fail(`skill mirror drift for ${skill}/${relativeFile.split(path.sep).join('/')}`);
+      }
+    }
   }
 
   for (const agent of AGENTS) {
