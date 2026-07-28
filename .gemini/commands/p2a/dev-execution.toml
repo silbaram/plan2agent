@@ -9,6 +9,5 @@ Gemini is read-only. Do not start a run, edit a worktree, create an integration 
 Conditional references for p2a-dev-execution (resolve relative to its SKILL.md):
 - references/batch-execution.md
 - references/milestone-review.md
-- references/retrospective.md
 Read a reference only when its entry condition in SKILL.md is satisfied; otherwise do not read it.
 """
