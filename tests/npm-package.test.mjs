@@ -9,11 +9,7 @@ import { ROOT, formatCommandResult, makeTempDir, runP2aFrom } from './helpers/fi
 
 function spawnPortable(command, args, options) {
   if (process.platform !== 'win32') return spawnSync(command, args, options);
-  const commandLine = [command, ...args]
-    .map((value) => `"${String(value).replaceAll('"', '""')}"`)
-    .join(' ');
-  const commandShell = options?.env?.ComSpec ?? process.env.ComSpec ?? 'cmd.exe';
-  return spawnSync(commandShell, ['/d', '/s', '/c', commandLine], options);
+  return spawnSync(command, args, { ...options, shell: true });
 }
 
 test('package metadata exposes the p2a global CLI and required runtime assets', () => {
