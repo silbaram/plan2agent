@@ -1,368 +1,257 @@
 # Plan2Agent
 
-Plan2Agent (P2A) is a local-first planning and supervised execution harness for AI coding agents.
-It turns a one-sentence product idea into approved specs, dependency-aware task graphs, run logs,
-evaluation reports, improvement proposals, and maintenance work that can be executed by tools such
-as Codex, Claude Code, and Gemini CLI.
+[![npm version](https://img.shields.io/npm/v/plan2agent.svg)](https://www.npmjs.com/package/plan2agent)
+[![npm downloads](https://img.shields.io/npm/dm/plan2agent.svg)](https://www.npmjs.com/package/plan2agent)
+[![Node.js 20+](https://img.shields.io/badge/Node.js-20%2B-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-**Search keywords:** AI agent planning, coding agent workflow, agentic software development,
-task graph, product spec generation, supervised execution, AI code review, local-first artifacts,
-Codex, Claude Code, Gemini CLI, eval loop, self-improvement loop, memory server, developer tools.
+[English](readme.md) | [한국어](README.ko-KR.md)
 
-## What Plan2Agent Does
+Turn a one-sentence product idea into approved specs, dependency-aware tasks, and verified AI coding runs.
 
-Plan2Agent helps teams move from an idea to controlled AI-assisted implementation without losing
-traceability. It keeps JSON artifacts as the source of truth and uses approval gates so an agent
-cannot silently turn unclear requirements into code.
+## Install in 30 seconds
 
-```text
-Idea
-  -> Gate A: intake and decisions
-  -> Gate B: product spec and implementation plan
-  -> Gate C: executable task graph
-  -> Gate D: review and readiness check
-  -> supervised task execution
-  -> run verification and logs
-  -> eval, proposal, memory, and maintenance loops
-```
-
-P2A is intentionally not a fully autonomous background coding system. It coordinates skills,
-prompts, artifacts, run state, monitor gates, and improvement proposals while the actual agent CLI
-or app session stays foreground-supervised by the user.
-
-## Key Features
-
-### AI Planning Harness
-
-- Convert a short product idea into structured intake artifacts.
-- Track assumptions, clarifying questions, and `needs_user_decision` items.
-- Generate product specs, implementation specs, and task graphs.
-- Require explicit approval before moving from spec to task execution.
-- Validate artifacts with JSON schemas and gate-specific checks.
-
-### Multi-CLI Agent Support
-
-- Canonical skills and agents live under `.agents/`.
-- Generated mirrors support Claude Code, Codex, and Gemini CLI.
-- CLI-neutral agent metadata is synchronized into provider-specific formats.
-- Mirror drift is checked with `scripts/check_cli_parity.mjs`.
-
-### Task Graph and Iteration Management
-
-- Create dependency-aware task graphs with acceptance criteria.
-- Track task states: `todo`, `in_progress`, `done`, and `blocked`.
-- Manage active iterations, next iterations, semantic diff tasks, and maintenance lanes.
-- Preserve closed iterations as append-only history.
-
-### Supervised Execution
-
-- Use `p2a execute` to plan, start, resume, inspect, and finish a single task run.
-- Capture run logs, changed files, verification commands, failure classes, and structured debug data.
-- Enforce monitor gates and verification evidence before marking tasks done.
-- Support provider runner guides for Codex, Claude, Gemini, and manual execution.
-
-### Evaluation Loop
-
-- `p2a eval grade` checks one run against task acceptance and verification evidence.
-- `p2a eval compare` detects regressions between runs or iterations.
-- `p2a eval analyze` clusters failures and verification gaps.
-- `p2a eval generate` writes grade, analysis, compare, and eval index artifacts.
-- `p2a eval digest` summarizes generated evaluation artifacts.
-- Eval digests include self-improvement metrics for recent failed/blocked run evidence, proposal review status scoped to source runs, approval-artifact-backed conversion, recurring failure clusters, and post-maintenance verification.
-
-### Improvement Proposal Loop
-
-- Mine failed or blocked runs into structured improvement proposals.
-- Mark proposals as project-local, Plan2Agent toolkit, or companion-project upstream candidates.
-- Score proposal quality from evidence, reproduction, impact scope, validation, and risk rationale.
-- Review, curate, draft, and approve proposal artifacts without automatically applying patches.
-- Convert approved proposal drafts into maintenance tasks.
-- Execute approved maintenance tasks through the same supervised execution path.
-
-### Memory Integration
-
-- Use Plan2Agent Memory as an optional long-term artifact store and search backend.
-- `p2a memory status` compares local artifacts with remote snapshots, applies a bounded request timeout, persists a freshness report with `--output`, and exits non-zero when a configured server is unavailable.
-- `p2a memory push` uploads project, iteration, document, proposal, task, graph, and run snapshots, including stable milestone reviews, stable iteration metadata, and recall reports as documents. It excludes `memory-status.json` and the volatile `iteration.json.memory_freshness` field so a sync check does not invalidate itself.
-- `p2a memory search` supports backward-compatible keyword retrieval plus explicit semantic/hybrid modes, project-wide cross-iteration scope, conditional global recall with `--exclude-project`, and keyword fallback; `p2a memory history` supports cross-session recall.
-- `p2a memory trace/impact/precedent` expose normalized decision-to-spec-to-task-to-run lineage and downstream outcomes.
-- Iteration planning records recall as `not_configured`, `pending`, `succeeded`, `fallback`, `failed`, or `skipped`; Gate C context carries relevant results/failures, and Gate D validates claimed citations and mitigations.
-- `iteration close` automatically performs the read-only freshness check when Memory is configured, with per-request and overall close-time limits. Connection failure or timeout does not undo a valid archive, but it atomically replaces the local status report with `unavailable` and prints a prominent warning that synchronization was not verified.
-- Memory output keeps the human-facing source key in legacy `context.projectId` and explicit `context.sourceProjectId`, while `context.canonicalProjectId` exposes the server UUID required by direct `/api/search/*` calls.
-- `p2a memory digest` summarizes failure and proposal history and tracks whether Memory search results were reused by run, proposal, or eval artifacts.
-
-### Scaffold, Update, and Drift Checks
-
-- Scaffold P2A into a target project as a local `.plan2agent/` harness.
-- Enhance projects with memory, orchestration, proposals, and dev-skill capabilities.
-- Preview and apply safe toolkit updates with update and upgrade reports.
-- Run doctor and parity checks to find missing files, stale assets, and configuration drift.
-
-## Companion Projects
-
-P2A can work with optional sibling projects. They are not required for the core planning,
-validation, iteration, execution, eval, or proposal loops, and local `.plan2agent/` artifacts remain
-the source of truth.
-
-| Project | GitHub | Purpose | How P2A Uses It |
-| --- | --- | --- | --- |
-| `plan2agent-memory` | <https://github.com/silbaram/plan2agent-memory> | Optional headless REST service for relational artifact storage, lineage, hash comparison, history, keyword search, and vector-search-ready document chunks. | `p2a memory status/push/pull/search/history/digest/trace/impact/precedent` can use the server as a long-term artifact store, search backend, and lineage query surface. If no Memory server is configured, P2A still runs from local `.plan2agent/` artifacts. |
-| `plan2agent-feature-radar` | <https://github.com/silbaram/plan2agent-feature-radar> | Optional skill/subagent research workflow for early idea research and read-only existing-project analysis across web, docs, GitHub, changelogs, issues, PRs, discussions, and local project signals. | Radar can export `.feature-radar/runs/<project-slug>/` and optionally `.plan2agent/artifacts/<project_id>/preflight-research/`. P2A imports that preflight export as `LOCAL-n`/`WEB-n` evidence and Gate B reference candidates; recommendations stay candidate input until Gate B marks them `selected`, `deferred`, or `rejected`. |
-
-The local `plan2agent-feature-radar` checkout may not have a git remote configured yet; update the
-GitHub link above if the canonical remote differs.
-
-For local toolkit development, these repos are commonly checked out next to this repository:
-
-```text
-projects/
-  plan2agent/
-  plan2agent-memory/
-  plan2agent-feature-radar/
-```
-
-## Why Use Plan2Agent?
-
-Plan2Agent is useful when you want AI coding agents to work from explicit product decisions instead
-of vague chat history. It is designed for workflows where traceability, reviewability, and safe
-iteration matter.
-
-Good fit:
-
-- AI-assisted product planning
-- Agent-ready implementation specs
-- Task graph generation for coding agents
-- Supervised Codex, Claude Code, or Gemini CLI workflows
-- Run verification and regression tracking
-- Human-approved self-improvement and maintenance loops
-- Local-first artifact workflows
-
-Not a fit:
-
-- Fully autonomous background code execution
-- Unofficial provider API automation
-- Automatic dependency installation, merging, pushing, or PR creation without approval
-- Replacing source control or project management systems
-- Making a remote Memory server the source of truth
-
-## Quick Start
-
-### 1. Initialize P2A in a project
-
-Install the package globally, then initialize the target project:
+Plan2Agent requires Node.js 20 or newer.
 
 ```bash
 npm install -g plan2agent
-p2a init \
-  --target <project-dir> \
-  --tools all \
-  --codex-profile quality
-```
-
-Then work inside the target project:
-
-```bash
 cd <project-dir>
-p2a info
+p2a init --tools all --codex-profile quality
+p2a next
 ```
 
-`p2a init` records a default `projectId` in both `.plan2agent/project.config.json` and `.plan2agent/manifest.json` by normalizing the target directory basename to kebab-case. After initialization, `.plan2agent/project.config.json.projectId` is the source of truth; the directory basename is only the fresh-init seed. Codex agents default to the GPT-5.6 Sol `quality` profile; use `--codex-profile inherit` when the target account or provider should inherit the parent session model and reasoning effort. If older local artifacts already exist, their artifact/spec/task graph id is used as a recovery fallback before deriving from a renamed directory. Planning artifacts still live under `.plan2agent/artifacts/<project_id>/`, but initialized projects normally use the stored `projectId` instead of inventing a new id for each idea.
+`p2a next` reads the local project state and returns one concrete next action. Run it again whenever
+you finish a planning, approval, or development step.
 
-### 2. Start from a one-sentence idea
+## Your first plan in 5 minutes
 
-Open your preferred AI coding tool in the project directory and invoke the P2A harness skill.
+After initialization, open Codex, Claude Code, or Gemini CLI in the project directory and give the
+planning harness a product idea.
 
-Claude Code example:
+| Agent | Example |
+| --- | --- |
+| Codex | `Use the $p2a-harness skill to plan a service that receives webhooks, verifies signatures, and shows delivery history.` |
+| Claude Code | `/p2a-harness Plan a service that receives webhooks, verifies signatures, and shows delivery history.` |
+| Gemini CLI | `/p2a:harness Plan a service that receives webhooks, verifies signatures, and shows delivery history.` |
+
+The harness pauses at explicit review gates instead of silently turning unclear requirements into
+code:
 
 ```text
-/p2a-harness Build a small service that receives webhook events, verifies signatures, and exposes delivery history.
+One-sentence idea
+  -> Gate A: facts, assumptions, and user decisions
+  -> Gate B: product spec and implementation plan
+  -> Gate C: dependency-aware task graph
+  -> Gate D: blocker and readiness review
+  -> supervised implementation and verification
+  -> evaluation and improvement proposals
 ```
 
-Codex example:
-
-```text
-Use the $p2a-harness skill on this idea:
-Build a small service that receives webhook events, verifies signatures, and exposes delivery history.
-```
-
-Gemini CLI example:
-
-```text
-/p2a:harness Build a small service that receives webhook events, verifies signatures, and exposes delivery history.
-```
-
-The planning flow writes artifacts under:
-
-```text
-.plan2agent/artifacts/<project_id>/
-  gate-a-intake/
-  gate-b-spec/
-  gate-c-task-graph/
-  gate-d-review/
-```
-
-### 3. Validate and initialize an iteration
+Each gate writes reviewable files under `.plan2agent/artifacts/<project_id>/`. Approve the decisions
+in the active gate, complete the suggested action, and run:
 
 ```bash
-p2a validate \
-  --artifact-root .plan2agent/artifacts/<project_id> \
-  --project-id <project_id> \
-  --require-handoff-ready
-
-p2a iteration init \
-  --artifacts .plan2agent/artifacts/<project_id> \
-  --iteration-id v1-mvp
+p2a next
 ```
 
-### 4. Run a supervised task
+When Gate D is clear, `next` guides the transition into supervised task execution and subsequent
+iterations.
+
+## Why Plan2Agent
+
+AI coding tools are effective at implementation, but chat history is a fragile place to keep
+requirements, approvals, dependencies, and verification evidence. Plan2Agent adds a durable control
+layer around those tools.
+
+| Need | Plan2Agent approach |
+| --- | --- |
+| Clear decisions before code | Four human approval gates preserve facts, assumptions, open decisions, and approval state. |
+| Traceable implementation work | Specs map to dependency-aware tasks with acceptance criteria and source references. |
+| Reviewable agent execution | Tasks run in foreground-supervised sessions with run logs, changed files, and verification evidence. |
+| Portable project state | Local JSON artifacts remain canonical across Codex, Claude Code, and Gemini CLI. |
+| Controlled improvement | Evaluation and proposal flows recommend maintenance without silently applying self-modifying patches. |
+
+Plan2Agent coordinates the workflow; it does not replace your coding agent, source control, or
+project management system.
+
+## What gets written
+
+Planning and execution state stays local to the project:
+
+```text
+.plan2agent/
+  project.config.json
+  artifacts/<project_id>/
+    gate-a-intake/
+      intake.json
+    gate-b-spec/
+      spec.json
+    gate-c-task-graph/
+      task-graph.json
+    gate-d-review/
+      review.json
+    current-spec.json
+    iterations/
+    runs/
+    eval/
+    proposals/
+```
+
+JSON files are the source of truth and are validated against the schemas shipped with the package.
+Generated Markdown is a human-readable view. Closed iterations and finished run evidence provide
+an auditable history for later reviews.
+
+## Core workflow
+
+### 1. Plan with approval gates
+
+The planning harness turns an idea into structured intake, product and implementation specs, a task
+graph, and a readiness review. It records uncertainty as an assumption or user decision rather than
+inventing a requirement.
+
+### 2. Execute one ready task
+
+After Gate D, use `p2a next` to identify the next safe action. A task execution records its agent
+tool, workspace, changed files, verification commands, result, and failure classification. A task is
+not done until required evidence passes the monitor gate.
+
+For direct control of a ready task:
 
 ```bash
-p2a tasks ready \
-  --artifacts .plan2agent/artifacts/<project_id>
-
 p2a execute plan \
   --artifacts .plan2agent/artifacts/<project_id> \
   --task <task-id>
-
-p2a execute start \
-  --artifacts .plan2agent/artifacts/<project_id> \
-  --task <task-id> \
-  --agent-tool codex
 ```
 
-Paste the generated launcher prompt into your foreground agent session. When the implementation is
-ready, finish the run with explicit verification:
+See the [Supervised Execution Reference](docs/supervised-execution.md) for start, resume, finish,
+retry, batch, and milestone-review procedures.
 
-```bash
-p2a execute finish \
-  --artifacts .plan2agent/artifacts/<project_id> \
-  --run-id <run-id> \
-  --test \
-  --lint \
-  --typecheck \
-  --collect-git
-```
+### 3. Iterate without losing the baseline
 
-### 5. Evaluate, review, and improve
+Iterations preserve the approved spec, derive change tasks, track maintenance work, and archive
+closed history. `p2a next` guides close/open transitions; `p2a iteration` exposes the lower-level
+controls.
 
-```bash
-p2a eval generate \
-  --artifacts .plan2agent/artifacts/<project_id>
+### 4. Evaluate and improve
 
-p2a eval digest \
-  --artifacts .plan2agent/artifacts/<project_id> \
-  --recent-runs 30
+The eval flow grades run evidence, compares results, and groups recurring failures. The proposal
+flow can turn supported findings into human-reviewed maintenance tasks. It never applies a patch
+merely because a proposal exists.
 
-p2a proposals mine \
-  --artifacts .plan2agent/artifacts/<project_id>
+### 5. Recall optional long-term context
 
-p2a memory digest \
-  --artifacts .plan2agent/artifacts/<project_id>
-```
+[Plan2Agent Memory](https://github.com/silbaram/plan2agent-memory) is an optional store and search
+backend for artifacts, history, and lineage. Local `.plan2agent/` files remain canonical when Memory
+is unavailable or not configured.
 
-## Main CLI Surface
+## CLI at a glance
 
-Inside an initialized project, use the single `p2a` entrypoint:
+Plan2Agent installs one `p2a` entrypoint:
 
 | Command | Purpose |
 | --- | --- |
-| `info` | Show project, enhancement, artifact, task, and run summary. |
-| `doctor` | Diagnose local harness configuration and capability drift. |
-| `update` | Preview or apply safe package-managed configuration and provider-asset updates. |
-| `upgrade` | Preview or apply broader toolkit/schema/asset migrations. |
-| `enhance` | Enable optional capabilities such as memory, orchestration, and proposals. |
-| `validate` | Validate intake, spec, task graph, review, run, proposal, eval, and memory artifacts. |
-| `iteration` | Manage active iterations, close/open cycles, diffs, drafts, and maintenance tasks. |
-| `tasks` | List, inspect, prompt, start, reopen, block, or complete tasks. |
-| `runs` | Start, verify, record, finish, show, and validate run logs. |
-| `execute` | Supervise a task lifecycle from plan to verified finish. |
-| `orchestrate` | Build role plans, runtime state, runner guides, and monitor gate flows. |
-| `proposals` | Mine, review, curate, draft, approve, and digest improvement proposals. |
-| `eval` | Grade, compare, analyze, generate, and digest run quality artifacts. |
-| `memory` | Compare, push, pull-preview, search, history, digest, trace, impact, and inspect precedent from Memory snapshots. |
+| `p2a init` | Initialize project state and provider assets. |
+| `p2a next` | Return one state-based next action and its reason. |
+| `p2a info` | Show project, artifact, task, and run status. |
+| `p2a doctor` | Diagnose configuration, assets, and local drift. |
+| `p2a update` | Preview or apply safe package-managed asset updates. |
+| `p2a upgrade` | Preview or apply broader toolkit migrations. |
+| `p2a enhance` | Enable optional capabilities such as Memory and proposals. |
+| `p2a validate` | Validate planning, task, run, eval, proposal, and Memory artifacts. |
+| `p2a iteration` | Manage iteration initialization, close/open cycles, diffs, and maintenance. |
+| `p2a tasks` | Inspect and transition task state. |
+| `p2a runs` | Record, verify, finish, and inspect run evidence. |
+| `p2a execute` | Supervise a task from plan through verified finish. |
+| `p2a eval` | Grade, compare, analyze, generate, and summarize evaluations. |
+| `p2a proposals` | Mine, review, curate, approve, and summarize improvement proposals. |
+| `p2a memory` | Check, synchronize, search, and inspect optional Memory data. |
 
-## Repository Layout
+Run `p2a --help` for the top-level command surface and use the
+[CLI Reference](docs/cli-reference.md) for detailed options and examples.
 
-```text
-.agents/                 Canonical skills and CLI-neutral agents
-.claude/                 Generated Claude Code mirrors
-.codex/                  Generated Codex agent mirrors
-.gemini/                 Generated Gemini CLI agents and commands
-docs/                    User guides and implementation references
-fixtures/                Golden fixtures and negative test fixtures
-plans/                   Roadmap and completed planning notes
-schemas/                 JSON schemas for P2A artifacts
-scripts/                 Toolkit, scaffold, validation, runtime, eval, proposal, and memory CLIs
-```
+## Safety model
 
-## Artifact Model
+Plan2Agent is intentionally human-supervised and local-first.
 
-P2A keeps local `.plan2agent/` files as the source of truth.
+It is a good fit when you want:
 
-Core artifacts:
+- explicit product decisions before implementation;
+- reviewable specs and agent-ready task graphs;
+- foreground Codex, Claude Code, or Gemini CLI execution;
+- verification evidence and regression history;
+- human-approved maintenance and improvement loops.
 
-- `intake.json` - requirements, assumptions, and open decisions.
-- `spec.json` - approved product and implementation spec.
-- `task-graph.json` - executable dependency graph.
-- `review.json` - Gate D readiness review.
-- `iterations/<iteration-id>/milestone-reviews/{midpoint,pre_close}.json` - stable cross-task review evidence persisted as Memory documents and portable handoff bundles.
-- `current-spec.json` - active iteration baseline.
-- `runs/run-index.json` - global run lookup and latest-run index.
-- `runs/<iteration-id>/<run-id>.json` - iteration-partitioned execution record and verification evidence; legacy flat run files remain readable.
-- Legacy per-iteration run stores are retired with `.run-store-redirect.json` after migration so stale writers cannot recreate split indexes; managed iteration mutations require `--artifacts` rather than `--graph`.
-- `proposals/*.json` - improvement candidates and curation artifacts.
-- `eval/*.json` - grade, analysis, compare, index, and digest artifacts.
-- `memory-*.json` - Memory search, history, digest, and pull preview reports.
+It is not designed for:
 
-Generated Markdown files are views for humans. JSON artifacts are canonical.
+- unattended background coding;
+- unofficial provider API automation;
+- automatic dependency installation, merging, pushing, or PR creation without approval;
+- treating a remote service as the canonical project state;
+- replacing Git or an issue tracker.
 
-## Development Checks
+## Provider support
 
-For Plan2Agent toolkit development, run from this repository:
+Canonical skills and subagent definitions live under `.agents/`. Plan2Agent generates and validates
+provider-specific surfaces for:
+
+- Codex
+- Claude Code
+- Gemini CLI
+
+Parity checks keep provider mirrors aligned with the canonical definitions. The agent itself stays
+in the foreground tool session; Plan2Agent does not call provider APIs directly.
+
+## Companion projects
+
+The core planning, validation, iteration, execution, eval, and proposal flows work without companion
+services.
+
+| Project | Purpose |
+| --- | --- |
+| [plan2agent-memory](https://github.com/silbaram/plan2agent-memory) | Optional artifact history, search, hash comparison, and lineage service. |
+| [plan2agent-feature-radar](https://github.com/silbaram/plan2agent-feature-radar) | Optional research workflow that exports evidence for planning without selecting requirements automatically. |
+
+## Documentation
+
+- [Quickstart](docs/quickstart.md) — shortest path from installation to the first Gate artifacts
+- [CLI Reference](docs/cli-reference.md) — commands, options, and examples
+- [Harness Guide](docs/harness-guide.md) — Gate A-D, schemas, evidence, and troubleshooting
+- [Iteration Spec](docs/iteration-spec.md) — iteration layout, diffs, close/open, and run tracking
+- [Supervised Execution Reference](docs/supervised-execution.md) — task execution, monitor gates, retries, and reviews
+- [Harness Implementation Spec](docs/harness-spec.md) — skills, subagents, mirrors, and implementation rules
+- [Product Roadmap](plans/01-product-roadmap.md) — current product direction and remaining work
+
+## Developing Plan2Agent
+
+Clone the repository, use Node.js 20 or newer, and run:
 
 ```bash
+npm test
+npm run test:package
 node scripts/sync_cli_assets.mjs
 node scripts/check_cli_parity.mjs
 node scripts/run_fixtures.mjs
 ```
 
-The core runtime scripts are Node.js ESM scripts and use the Node.js standard library.
-
-## Documentation
-
-- [Quickstart](docs/quickstart.md)
-- [CLI Reference](docs/cli-reference.md)
-- [Harness Guide](docs/harness-guide.md)
-- [Iteration Spec](docs/iteration-spec.md)
-- [Supervised Execution Reference](docs/supervised-execution.md)
-- [Harness Implementation Spec](docs/harness-spec.md)
-- [Product Roadmap](plans/01-product-roadmap.md)
-- [Harness Advancement Notes](plans/04-p2a-harness-advancement.md)
-
-## Suggested GitHub Topics
-
-If you publish this repository publicly, these topics make the project easier to discover:
+The runtime is Node.js ESM and uses the Node.js standard library. Repository structure:
 
 ```text
-ai-agents
-coding-agent
-agentic-workflow
-ai-planning
-task-graph
-spec-generation
-developer-tools
-codex
-claude-code
-gemini-cli
-local-first
-evaluation
-self-improvement
-memory-server
+.agents/       canonical skills and CLI-neutral subagents
+.claude/       generated Claude Code mirrors
+.codex/        generated Codex mirrors
+.gemini/       generated Gemini CLI commands and agents
+docs/          user guides and implementation references
+fixtures/      golden and negative fixtures
+plans/         roadmap and completed planning notes
+schemas/       JSON schemas for Plan2Agent artifacts
+scripts/       toolkit, validation, runtime, eval, proposal, and Memory CLIs
 ```
 
-## Project Status
+## Project status
 
-Plan2Agent is an active local-first harness. The current focus is controlled planning, supervised
-execution, deterministic evaluation, proposal-based self-improvement, Memory integration
-visibility. Automatic self-modifying patches, autonomous provider execution, and unapproved remote
-side effects are intentionally outside the default safety model.
+Plan2Agent is under active development. Version `0.1.0` establishes the public npm package and the
+local-first planning, supervised execution, evaluation, proposal, and optional Memory workflows.
+Autonomous provider execution and unapproved remote side effects remain outside the default safety
+model.
+
+Plan2Agent is available under the [MIT License](LICENSE).
