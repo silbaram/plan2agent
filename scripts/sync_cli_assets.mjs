@@ -46,7 +46,7 @@ Rules:
 
 {{args}}
 
-Return intake_json conforming to .plan2agent/schemas/intake.schema.json and a table of open needs_user_decision items when blocked.`,
+Return intake_json conforming to the p2a package schema intake.schema.json and a table of open needs_user_decision items when blocked.`,
   },
   review: {
     skill: 'p2a-review',
@@ -64,7 +64,7 @@ Return review_json with blocking issues, non-blocking risks, missing acceptance 
 
 {{args}}
 
-Call p2a.mjs next --json as the decision authority. Do not reproduce state conditions or execute a CLI command without the user approving it.`,
+Call p2a next --json as the decision authority. Do not reproduce state conditions or execute a CLI command without the user approving it.`,
   },
   spec: {
     skill: 'p2a-spec',
@@ -73,7 +73,7 @@ Call p2a.mjs next --json as the decision authority. Do not reproduce state condi
 
 {{args}}
 
-Return spec_json conforming to .plan2agent/schemas/spec.schema.json and open_decisions. Keep approval as draft until explicitly approved; when approved, include approval_audit. Generate Markdown only as an optional view.`,
+Return spec_json conforming to the p2a package schema spec.schema.json and open_decisions. Keep approval as draft until explicitly approved; when approved, include approval_audit. Generate Markdown only as an optional view.`,
   },
   'task-author': {
     skill: 'p2a-task-author',
@@ -100,7 +100,7 @@ Gemini is read-only. Do not start a run, edit a worktree, create an integration 
 
 {{args}}
 
-Return task_graph_json conforming to .plan2agent/schemas/task-graph.schema.json only. Do not implement tasks. Reject the request if the spec is not approved or open decisions remain.`,
+Return task_graph_json conforming to the p2a package schema task-graph.schema.json only. Do not implement tasks. Reject the request if the spec is not approved or open decisions remain.`,
   },
 };
 

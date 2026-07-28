@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -7,12 +7,9 @@ import {
   formatCommandResult,
   loadE2eFixtureManifest,
   makeTempDir,
+  ROOT,
+  runEmbeddedTargetP2a,
   runHandoff,
-  runTargetExecute,
-  runTargetP2a,
-  runTargetProposals,
-  runTargetRuns,
-  runTargetTasks,
   runValidator,
 } from './helpers/fixtures.mjs';
 
@@ -58,54 +55,31 @@ for (const caseData of manifest.cases ?? []) {
       assertOk(result, `greenfield handoff fixture check failed: ${caseData.id}`);
       assert.ok(existsSync(path.join(targetRoot, '.plan2agent', 'artifacts', caseData.project_id, 'gate-b-spec', 'spec.json')));
 
-      const expectedRuntimeFiles = [
-        ['.plan2agent', 'scripts', 'p2a.mjs'],
-        ['.plan2agent', 'scripts', 'p2a_paths.mjs'],
-        ['.plan2agent', 'scripts', 'p2a_project_config.mjs'],
-        ['.plan2agent', 'scripts', 'p2a_run_commands.mjs'],
-        ['.plan2agent', 'scripts', 'validate_artifacts.mjs'],
-        ['.plan2agent', 'scripts', 'p2a_iteration_state.mjs'],
-        ['.plan2agent', 'scripts', 'p2a_runs.mjs'],
-        ['.plan2agent', 'scripts', 'p2a_execute.mjs'],
-        ['.plan2agent', 'scripts', 'p2a_monitor_gate.mjs'],
-        ['.plan2agent', 'scripts', 'p2a_proposals.mjs'],
-        ['.plan2agent', 'scripts', 'p2a_run_paths.mjs'],
-        ['.plan2agent', 'schemas', 'task-context.schema.json'],
-        ['.plan2agent', 'schemas', 'next.schema.json'],
-        ['.plan2agent', 'schemas', 'run.schema.json'],
-        ['.plan2agent', 'schemas', 'run-index.schema.json'],
-        ['.plan2agent', 'schemas', 'skill-proposal.schema.json'],
-        ['.plan2agent', 'schemas', 'proposal-review.schema.json'],
-        ['.plan2agent', 'schemas', 'proposal-curation.schema.json'],
-        ['.plan2agent', 'schemas', 'proposal-patch-draft.schema.json'],
-        ['.plan2agent', 'schemas', 'proposal-draft-approval.schema.json'],
-        ['.plan2agent', 'schemas', 'eval-index.schema.json'],
-        ['.plan2agent', 'schemas', 'eval-digest.schema.json'],
-        ['.plan2agent', 'schemas', 'eval-maintenance-draft.schema.json'],
-        ['.plan2agent', 'schemas', 'eval-maintenance-apply-report.schema.json'],
-      ];
-      const missingRuntimeFiles = expectedRuntimeFiles.map((parts) => path.join(...parts)).filter((filePath) => !existsSync(path.join(targetRoot, filePath)));
-      assert.deepEqual(missingRuntimeFiles, [], `greenfield handoff missing runtime files: ${caseData.id}`);
+      assert.equal(existsSync(path.join(targetRoot, '.plan2agent', 'scripts', 'p2a.mjs')), true, `greenfield handoff missing runtime CLI: ${caseData.id}`);
+      assert.equal(existsSync(path.join(targetRoot, '.plan2agent', 'schemas', 'next.schema.json')), true, `greenfield handoff missing runtime schema: ${caseData.id}`);
+      const targetManifest = JSON.parse(readFileSync(path.join(targetRoot, '.plan2agent', 'manifest.json'), 'utf8'));
+      assert.equal(realpathSync(targetManifest.provenance.toolkitRoot), realpathSync(ROOT));
+      assert.equal('runtime' in targetManifest, false);
       assert.equal(existsSync(path.join(targetRoot, '.plan2agent', 'current-spec.json')), false, `greenfield handoff wrote current-spec: ${caseData.id}`);
       assertTargetSpecSourceIntake(targetRoot, caseData.project_id, caseData.id, 'greenfield');
 
       const targetArtifactRoot = path.join(targetRoot, '.plan2agent', 'artifacts', caseData.project_id);
       const targetTaskGraphPath = path.join(targetArtifactRoot, 'gate-c-task-graph', 'task-graph.json');
-      result = runTargetTasks(targetRoot, ['ready', '--graph', targetTaskGraphPath]);
+      result = runEmbeddedTargetP2a(targetRoot, ['tasks', 'ready', '--graph', targetTaskGraphPath]);
       assertOk(result, `greenfield handoff target p2a_tasks execution failed: ${caseData.id}`);
-      result = runTargetRuns(targetRoot, ['list', '--graph', targetTaskGraphPath]);
+      result = runEmbeddedTargetP2a(targetRoot, ['runs', 'list', '--graph', targetTaskGraphPath]);
       assertOk(result, `greenfield handoff target p2a_runs execution failed: ${caseData.id}`);
       assert.match(result.stdout, /runId/);
-      result = runTargetExecute(targetRoot, ['plan', '--graph', targetTaskGraphPath, '--task', 'task-001', '--run-id', 'run-target-execute-plan']);
+      result = runEmbeddedTargetP2a(targetRoot, ['execute', 'plan', '--graph', targetTaskGraphPath, '--task', 'task-001', '--run-id', 'run-target-execute-plan']);
       assertOk(result, `greenfield handoff target p2a_execute execution failed: ${caseData.id}`);
       assert.match(result.stdout, /Plan2Agent supervised task execution/);
-      result = runTargetProposals(targetRoot, ['list']);
+      result = runEmbeddedTargetP2a(targetRoot, ['proposals', 'list']);
       assertOk(result, `greenfield handoff target p2a_proposals execution failed: ${caseData.id}`);
       assert.match(result.stdout, /proposalId/);
-      result = runTargetP2a(targetRoot, ['tasks', 'ready', '--graph', targetTaskGraphPath]);
+      result = runEmbeddedTargetP2a(targetRoot, ['tasks', 'ready', '--graph', targetTaskGraphPath]);
       assertOk(result, `greenfield handoff target p2a tasks dispatch failed: ${caseData.id}`);
       assert.match(result.stdout, /task-001/);
-      result = runTargetP2a(targetRoot, ['next', '--json']);
+      result = runEmbeddedTargetP2a(targetRoot, ['next', '--json']);
       assertOk(result, `greenfield handoff target p2a next failed: ${caseData.id}`);
       const targetNext = JSON.parse(result.stdout);
       assert.equal(targetNext.schema_version, 'p2a.next.v1');
@@ -142,14 +116,19 @@ for (const caseData of manifest.cases ?? []) {
       const toolManifest = JSON.parse(readFileSync(path.join(toolTargetRoot, '.plan2agent', 'manifest.json'), 'utf8'));
       assert.deepEqual({ missingToolFiles }, { missingToolFiles: [] });
       assert.equal(toolManifest.aiToolTargets.join(','), 'codex,gemini');
-      for (const includedTool of ['p2a_codex_assets', 'p2a_gemini_assets', 'p2a_runs', 'p2a', 'p2a_execute', 'p2a_monitor_gate', 'p2a_proposals']) assert.ok(toolManifest.includedTools.includes(includedTool));
-      for (const toolFile of ['.agents/skills/p2a-harness/SKILL.md', '.agents/skills/p2a-next/SKILL.md', '.gemini/commands/p2a/harness.toml', '.gemini/commands/p2a/next.toml', '.plan2agent/scripts/p2a.mjs', '.plan2agent/scripts/p2a_constants.mjs', '.plan2agent/scripts/p2a_runs.mjs', '.plan2agent/scripts/p2a_execute.mjs', '.plan2agent/scripts/p2a_monitor_gate.mjs', '.plan2agent/scripts/p2a_proposals.mjs', '.plan2agent/scripts/p2a_run_paths.mjs']) assert.ok(toolManifest.toolFiles.includes(toolFile), `${toolFile} missing from manifest`);
+      for (const includedTool of ['p2a_codex_assets', 'p2a_gemini_assets']) assert.ok(toolManifest.includedTools.includes(includedTool));
+      for (const toolFile of ['.agents/skills/p2a-harness/SKILL.md', '.agents/skills/p2a-next/SKILL.md', '.gemini/commands/p2a/harness.toml', '.gemini/commands/p2a/next.toml']) assert.ok(toolManifest.toolFiles.includes(toolFile), `${toolFile} missing from manifest`);
       for (const toolFile of expectedNewAgentFiles) {
         const manifestToolFile = toolFile.split(path.sep).join('/');
         assert.ok(toolManifest.aiToolFiles.includes(manifestToolFile), `${manifestToolFile} missing from manifest.aiToolFiles`);
         assert.ok(toolManifest.toolFiles.includes(manifestToolFile), `${manifestToolFile} missing from manifest.toolFiles`);
       }
-      for (const schemaFile of ['.plan2agent/schemas/next.schema.json', '.plan2agent/schemas/run.schema.json', '.plan2agent/schemas/proposal-review.schema.json', '.plan2agent/schemas/proposal-curation.schema.json', '.plan2agent/schemas/proposal-patch-draft.schema.json', '.plan2agent/schemas/proposal-draft-approval.schema.json', '.plan2agent/schemas/eval-index.schema.json', '.plan2agent/schemas/eval-digest.schema.json', '.plan2agent/schemas/eval-maintenance-draft.schema.json', '.plan2agent/schemas/eval-maintenance-apply-report.schema.json']) assert.ok(toolManifest.schemaFiles.includes(schemaFile), `${schemaFile} missing from manifest`);
+      assert.ok(toolManifest.schemaFiles.includes('.plan2agent/schemas/next.schema.json'));
+      const installedSkill = readFileSync(
+        path.join(toolTargetRoot, '.agents', 'skills', 'p2a-dev-execution', 'SKILL.md'),
+        'utf8',
+      );
+      assert.match(installedSkill, /node \.plan2agent\/scripts\/p2a\.mjs tasks ready/);
 
       const teamSourceRoot = path.join(tempRoot, 'team-bigfive-source');
       mkdirSync(path.join(teamSourceRoot, '_workspace'), { recursive: true });

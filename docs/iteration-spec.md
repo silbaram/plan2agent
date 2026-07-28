@@ -14,25 +14,25 @@
 
 | 범위 | 구현 | 검증 기준 |
 | --- | --- | --- |
-| greenfield -> iteration 변환 | `p2a_iteration.mjs init` | 기존 `gate-*` 산출물을 `iterations/<iter-id>/gate-*`로 이동하고, 이동된 spec/task/review를 재검증한다. |
+| greenfield -> iteration 변환 | `p2a iteration init` | 기존 `gate-*` 산출물을 `iterations/<iter-id>/gate-*`로 이동하고, 이동된 spec/task/review를 재검증한다. |
 | root index 생성 | `current-spec.json`, generated `status.md`, `iterations/maintenance/README.md` | thin current-spec pointer와 optional status view를 생성한다. |
-| active iteration 해석 | `p2a_iteration.mjs current` | `current-spec.json.active_iteration`을 정본으로 active 경로를 출력한다. |
-| task CLI 반복 적응 | `p2a_tasks.mjs --artifacts` | active 반복의 `task-graph.json`을 자동 선택해 ready/prompt/start/done 전이를 수행하고, `--maintenance`로 maintenance 레인도 선택할 수 있다. |
-| agent run 추적 | `p2a_runs.mjs start/verify/finish` | `runs/`에 task별 runId, changedFiles, verification, agentTool, workspaceRef, branch/worktree 격리 기준을 기록한다. |
-| Gate B-D ready 검증 | `p2a_iteration.mjs validate` | active 반복의 approved spec, task graph, review pass, task dependency를 검증한다. |
-| close-ready 검증 | `p2a_iteration.mjs validate --require-close-ready` | active 반복의 모든 task가 `done`인지 추가 확인한다. |
-| planning stage 검증 | `p2a_iteration.mjs validate --allow-planning`, `--stage` | Gate A-ready, Gate B draft, Gate B approved 상태를 Gate B-D 누락 실패 없이 검증한다. |
-| 반복 close | `p2a_iteration.mjs close` | close-ready active 반복을 `archived` metadata로 표시하고 `current-spec.json.closed_iterations`에 기록한다. |
-| archived 감사 | `p2a_iteration.mjs validate` | close 시 기록한 artifact 존재 여부/hash와 현재 파일 상태를 기본 검증으로 비교한다. legacy/migration 상황은 `--skip-archive-audit`로 우회한다. |
-| 다음 반복 open | `p2a_iteration.mjs open` | archived + composed baseline 위에 새 active 반복 skeleton과 `pending_iteration`을 생성한다. |
-| Gate A/B draft | `p2a_iteration.mjs draft` | Gate A-only 초기 반복은 Gate B 초안을 만들고, baseline이 있는 반복은 delta Gate A/B 초안을 생성한다. |
-| Gate B 승인 반영 | `p2a_iteration.mjs promote-spec` | approved active spec을 기록하고, 초기 반복처럼 baseline이 없던 경우 `effective_spec_ref`를 설정한다. |
-| agent 저작 Gate C backbone | `p2a_iteration.mjs context`, `validate --stage gate-c-draft`, `promote-tasks` | task 작성용 context JSON 출력, draft task graph 검증, 사람 승인 audit 이후 canonical task graph 승격을 제공한다. 상세 계약은 §10이다. |
-| diff 기반 task graph 초안 | `p2a_iteration.mjs diff-tasks` | active spec과 baseline spec의 field 차이를 semantic group으로 병합/분할해 Gate C task graph 초안을 생성한다. |
-| current-spec composition | `p2a_iteration.mjs compose` | approved + close-ready 반복들을 `effective_product`, `effective_implementation`으로 조합한다. |
-| maintenance graph 생성/검증 | `p2a_iteration.mjs maintenance add`, `validate` | maintenance task graph를 lazy 생성/append하고, 존재하면 schema/dependency를 검증한다. |
-| co-located scaffold | `p2a_handoff.mjs scaffold` | 정식 진입점. 빈 코드 프로젝트에 반복 CLI, schema, AI 자산, project config, manifest, 시작 가이드, 프로젝트용 `.gitignore`를 설치해 이후 기획·개발·반복을 그 프로젝트 안에서 수행하게 한다. |
-| 반복 handoff | `p2a_handoff.mjs --iteration-id active` | 레거시/특수 흐름. plan2agent에서 이미 기획한 산출물을 별도 프로젝트로 옮길 때 active 반복 산출물, `.plan2agent/current-spec.json`, maintenance graph를 대상 프로젝트에 복사하고 handoff 기준점을 기록한다. |
+| active iteration 해석 | `p2a iteration current` | `current-spec.json.active_iteration`을 정본으로 active 경로를 출력한다. |
+| task CLI 반복 적응 | `p2a tasks --artifacts` | active 반복의 `task-graph.json`을 자동 선택해 ready/prompt/start/done 전이를 수행하고, `--maintenance`로 maintenance 레인도 선택할 수 있다. |
+| agent run 추적 | `p2a runs start/verify/finish` | `runs/`에 task별 runId, changedFiles, verification, agentTool, workspaceRef, branch/worktree 격리 기준을 기록한다. |
+| Gate B-D ready 검증 | `p2a iteration validate` | active 반복의 approved spec, task graph, review pass, task dependency를 검증한다. |
+| close-ready 검증 | `p2a iteration validate --require-close-ready` | active 반복의 모든 task가 `done`인지 추가 확인한다. |
+| planning stage 검증 | `p2a iteration validate --allow-planning`, `--stage` | Gate A-ready, Gate B draft, Gate B approved 상태를 Gate B-D 누락 실패 없이 검증한다. |
+| 반복 close | `p2a iteration close` | close-ready active 반복을 `archived` metadata로 표시하고 `current-spec.json.closed_iterations`에 기록한다. |
+| archived 감사 | `p2a iteration validate` | close 시 기록한 artifact 존재 여부/hash와 현재 파일 상태를 기본 검증으로 비교한다. legacy/migration 상황은 `--skip-archive-audit`로 우회한다. |
+| 다음 반복 open | `p2a iteration open` | archived + composed baseline 위에 새 active 반복 skeleton과 `pending_iteration`을 생성한다. |
+| Gate A/B draft | `p2a iteration draft` | Gate A-only 초기 반복은 Gate B 초안을 만들고, baseline이 있는 반복은 delta Gate A/B 초안을 생성한다. |
+| Gate B 승인 반영 | `p2a iteration promote-spec` | approved active spec을 기록하고, 초기 반복처럼 baseline이 없던 경우 `effective_spec_ref`를 설정한다. |
+| agent 저작 Gate C backbone | `p2a iteration context`, `validate --stage gate-c-draft`, `promote-tasks` | task 작성용 context JSON 출력, draft task graph 검증, 사람 승인 audit 이후 canonical task graph 승격을 제공한다. 상세 계약은 §10이다. |
+| diff 기반 task graph 초안 | `p2a iteration diff-tasks` | active spec과 baseline spec의 field 차이를 semantic group으로 병합/분할해 Gate C task graph 초안을 생성한다. |
+| current-spec composition | `p2a iteration compose` | approved + close-ready 반복들을 `effective_product`, `effective_implementation`으로 조합한다. |
+| maintenance graph 생성/검증 | `p2a iteration maintenance add`, `validate` | maintenance task graph를 lazy 생성/append하고, 존재하면 schema/dependency를 검증한다. |
+| package init | `p2a init` | 정식 진입점. 빈 코드 프로젝트에 project config, manifest, 시작 가이드, 프로젝트용 `.gitignore`, 선택한 AI 자산을 설치한다. 반복 CLI와 schema는 전역 `p2a` 패키지가 제공한다. |
+| 반복 handoff | `p2a handoff --iteration-id active` | 레거시/특수 흐름. plan2agent에서 이미 기획한 산출물을 별도 프로젝트로 옮길 때 active 반복 산출물, `.plan2agent/current-spec.json`, maintenance graph를 대상 프로젝트에 복사하고 handoff 기준점을 기록한다. |
 | 회귀 fixture | `scripts/run_fixtures.mjs` | Plan2Agent 본체 저장소에서 greenfield -> init -> current -> tasks ready -> close -> open -> validate/current, draft/compose/handoff 흐름을 검증한다. |
 
 ### 0-2. 부분 구현
@@ -45,7 +45,7 @@
 | agent 저작 task gate | backbone(`context`, `gate-c-draft` 검증, `promote-tasks`), `p2a-task-author` 스킬, 정식 `task-context` schema, provenance sidecar가 구현됐다. 정본 교체는 모든 task가 `todo`이고 run history가 없는 실행 전 구간에서만 명시적 `--replace-existing`으로 허용하며, 실행 시작 뒤에는 task를 다시 `todo`로 열어도 새 feature iteration 또는 maintenance lane을 사용한다. 상세 계약은 §10이다. | richer code-aware task authoring은 후속 실행 레이어에서 다룬다. |
 | archived close | close artifact 존재 여부/hash 기록과 기본 validate-time archive audit을 제공한다. | 기존 pre-audit artifact migration은 필요할 때 `--skip-archive-audit`로 우회한다. |
 | maintenance 반복 | lazy README, `maintenance add` task 생성, `maintenance add --from-draft` 승격, 존재하는 task graph 검증, `context --scope maintenance`, `tasks --maintenance` source/target 표와 prompt next command, handoff 시 별도 `.plan2agent/maintenance/task-graph.json` 복사를 제공한다. | 후보 승인/실행 조작은 CLI와 agent 대화 표면을 기준으로 유지한다. |
-| agent 실행 추적 | `p2a_runs.mjs`가 전역 `runs/run-index.json`과 iteration별 `runs/<iterationId>/<runId>.json`을 관리하고, test/lint/typecheck 실행 결과와 git changed files를 수집한다. run/index 갱신은 project lock, atomic write, 중단 복구 journal을 사용한다. legacy 평면 run과 이전 `iterations/<iterationId>/runs/` index는 source/target lock과 재개 가능한 journal을 거친 전역 migration을 지원한다. `--graph` 실행은 경로와 무관하게 graph provenance를 유지하고 milestone 증거에서 제외한다. `p2a-dev-execution`은 한 ready snapshot의 bounded batch에서 task별 직렬 start, 격리 worktree 병렬 구현, 직렬 로컬 통합·검증·finish를 조율한다. | PTY/headless 자동 scheduler, persistent batch CLI, PR 생성은 후속이다. |
+| agent 실행 추적 | `p2a runs`가 전역 `runs/run-index.json`과 iteration별 `runs/<iterationId>/<runId>.json`을 관리하고, test/lint/typecheck 실행 결과와 git changed files를 수집한다. run/index 갱신은 project lock, atomic write, 중단 복구 journal을 사용한다. legacy 평면 run과 이전 `iterations/<iterationId>/runs/` index는 source/target lock과 재개 가능한 journal을 거친 전역 migration을 지원한다. `--graph` 실행은 경로와 무관하게 graph provenance를 유지하고 milestone 증거에서 제외한다. `p2a-dev-execution`은 한 ready snapshot의 bounded batch에서 task별 직렬 start, 격리 worktree 병렬 구현, 직렬 로컬 통합·검증·finish를 조율한다. | PTY/headless 자동 scheduler, persistent batch CLI, PR 생성은 후속이다. |
 
 ### 0-3. 미구현 / 후속 고도화
 
@@ -60,7 +60,7 @@
 
 Plan2Agent의 핵심 가치는 기획의 변경 사항이 agent가 실행 가능한 명세와 task로 이어지고, 그 과정과 결과가 시맨틱 문서로 남는 순환 시스템을 만드는 것이다.
 
-현재 권장 v1 greenfield 흐름은 `p2a_handoff.mjs scaffold --target <project>`로 코드 프로젝트에 하네스를 설치한 뒤, 그 프로젝트가 다음 한 바퀴의 앞쪽과 뒤쪽을 모두 소유한다. 기존 handoff는 이미 다른 위치에 만들어진 planning bundle을 복사해야 하는 특수 상황에 남겨둔다.
+현재 권장 v1 greenfield 흐름은 `p2a init --target <project>`로 코드 프로젝트에 하네스를 설치한 뒤, 그 프로젝트가 다음 한 바퀴의 앞쪽과 뒤쪽을 모두 소유한다. 기존 handoff는 이미 다른 위치에 만들어진 planning bundle을 복사해야 하는 특수 상황에 남겨둔다.
 
 현재 v1 greenfield 흐름은 다음 한 바퀴의 앞쪽을 담당한다.
 
@@ -151,11 +151,11 @@ Memory가 활성화되고 연결된 iterative root에서는 next iteration을 �
 
 `current-spec.json`은 모든 완료 반복의 유효 spec을 조합한 현재 기준이며, active iteration pointer와 다음 intake/spec 단계가 읽는 baseline을 담는다. `status.md`와 사람용 Markdown view는 이 JSON 상태에서 생성하는 읽기용 인덱스이며 제어 흐름의 정본이 아니다.
 
-현재 구현은 첫 반복에서는 thin pointer를 만들고, 반복이 2개 이상 close-ready 상태가 되면 `p2a_iteration.mjs compose`로 `current-spec.json` 조합본을 생성한다.
+현재 구현은 첫 반복에서는 thin pointer를 만들고, 반복이 2개 이상 close-ready 상태가 되면 `p2a iteration compose`로 `current-spec.json` 조합본을 생성한다.
 
 ### 2-4. `maintenance`는 작은 변경의 집이다
 
-`maintenance`는 작은 fix, 문서 수정, 패치성 변경을 모으는 상시 반복이다. 가벼운 fix를 위해 매번 전체 Gate A-D를 강제하지 않고 task graph 중심으로 관리한다. 생성 CLI는 `p2a_iteration.mjs maintenance add`이며, 첫 task에서 `iterations/maintenance/gate-c-task-graph/task-graph.json`을 lazy 생성하고 이후 task를 append한다.
+`maintenance`는 작은 fix, 문서 수정, 패치성 변경을 모으는 상시 반복이다. 가벼운 fix를 위해 매번 전체 Gate A-D를 강제하지 않고 task graph 중심으로 관리한다. 생성 CLI는 `p2a iteration maintenance add`이며, 첫 task에서 `iterations/maintenance/gate-c-task-graph/task-graph.json`을 lazy 생성하고 이후 task를 append한다.
 
 다만 제품 의미가 바뀌는 변경은 `maintenance`에 넣지 않는다. 사용자 흐름, API, 데이터 모델, 성공 기준, 보안/운영성 기준이 바뀌면 별도 기능 반복을 열어 Gate A-D를 다시 통과한다.
 
@@ -182,7 +182,7 @@ Memory가 활성화되고 연결된 iterative root에서는 next iteration을 �
 
 기능 반복의 중간과 종료 직전 통합 검토는 Gate D `review.json`을 다시 쓰지 않고 `iterations/<iter-id>/milestone-reviews/`에 분리한다. `midpoint.json`과 `pre_close.json`은 각각 최대 한 번만 존재하며, 전체 task graph snapshot과 raw/snapshot hash, 모든 완료 task의 latest successful run ref·raw hash·full immutable run snapshot·finished timestamp·workspace ref·changed files·verification을 함께 보존한다. reviewer는 각 changed file을 완료 run의 workspace/worktree/branch에서 먼저 확인한 뒤 현재 또는 main worktree와 비교하므로, 아직 merge되지 않은 완료 코드를 오래된 main 내용으로 오인하지 않는다. 따라서 나중에 task graph 상태나 run index가 더 진행되거나 finished run에 합법적인 evidence가 보강돼도 당시 검토 범위와 근거를 재구성할 수 있다.
 
-artifact는 `p2a.milestone_review.v1` schema를 따른다. owner는 `<checkpoint>.<unique-id>.draft.json`을 만든 뒤 `p2a_iteration.mjs promote-milestone --artifacts <root> --draft <path>`를 호출한다. CLI는 draft를 검증하고 hard-link create로 stable 이름을 원자적으로 선점한 프로세스만 `<checkpoint>.json`을 확정한 뒤 winning draft를 삭제한다. 이미 stable 파일이 있으면 덮어쓰지 않고 실패하므로 기존의 비원자적 “없음 확인 후 rename” 경합이 없다.
+artifact는 `p2a.milestone_review.v1` schema를 따른다. owner는 `<checkpoint>.<unique-id>.draft.json`을 만든 뒤 `p2a iteration promote-milestone --artifacts <root> --draft <path>`를 호출한다. CLI는 draft를 검증하고 hard-link create로 stable 이름을 원자적으로 선점한 프로세스만 `<checkpoint>.json`을 확정한 뒤 winning draft를 삭제한다. 이미 stable 파일이 있으면 덮어쓰지 않고 실패하므로 기존의 비원자적 “없음 확인 후 rename” 경합이 없다.
 
 `confirmed_findings`는 stable finding id와 구조화 evidence를 가져 maintenance `sourceSpecRefs`에서 `milestone-review:<artifact-path>#<finding-id>`로 인용할 수 있다. `planned_todo_not_findings`는 당시 남은 task id를 보존해 같은 계획을 maintenance로 중복 등록하지 않게 한다. 이 sidecar의 존재나 finding 수는 `validate --require-close-ready`, task done/block, Gate D, `close` 조건에 포함되지 않는다.
 
@@ -202,11 +202,11 @@ artifact는 `p2a.milestone_review.v1` schema를 따른다. owner는 `<checkpoint
 | 항목 | 재사용 방식 |
 | --- | --- |
 | Gate A-D | 반복마다 기존 intake/spec/task/review 게이트 한 벌을 재사용한다. |
-| task graph schema | `.plan2agent/schemas/task-graph.schema.json`을 그대로 사용한다. |
-| artifact validator | `.plan2agent/scripts/validate_artifacts.mjs`를 반복 내부 gate 검증에 재사용한다. |
+| task graph schema | `p2a` package schema `task-graph.schema.json`을 그대로 사용한다. |
+| artifact validator | `p2a validate`를 반복 내부 gate 검증에 재사용한다. |
 | task graph/task 필드 | top-level `version`과 task별 `status`, `targetArea`, `sourceSpecRefs`를 반복 개발의 versioning, 상태, 영역 태그, spec trace에 사용한다. |
 | source git | 제품 소스코드 기준점을 남긴다. P2A 반복 산출물과 run history는 Plan2Agent Memory 또는 명시 export에 보존한다. |
-| `p2a_handoff` | 활성 반복 산출물과 `current-spec.json`을 대상 프로젝트로 다시 동기화하는 흐름에 재사용한다. |
+| `p2a handoff` | 활성 반복 산출물과 `current-spec.json`을 대상 프로젝트로 다시 동기화하는 흐름에 재사용한다. |
 
 ### 신규
 
@@ -217,7 +217,7 @@ artifact는 `p2a.milestone_review.v1` schema를 따른다. owner는 `<checkpoint
 | `status.md` 반복 인덱스 | 반복 목록, 상태, close 시점, handoff 기준점을 보여주는 generated view다. |
 | `current-spec.json` 조합 | 닫힌 반복 spec과 maintenance 변경 중 현재 유효한 기준을 하나로 조합한다. |
 | 반복 open/close | 새 반복 생성, 완료 검증, archived 표시, 다음 반복 open을 명령화한다. |
-| handoff 적응 | `p2a_handoff --overwrite`로 대상 프로젝트의 `.plan2agent` 기준 산출물을 최신 반복 기준으로 덮어쓴다. |
+| handoff 적응 | `p2a handoff --overwrite`로 대상 프로젝트의 `.plan2agent` 기준 산출물을 최신 반복 기준으로 덮어쓴다. |
 
 중요한 제한은 schema와 validator를 불필요하게 바꾸지 않는 것이다. 교차 의존을 느슨한 전제 참조로 두는 결정 덕분에 task graph의 단일 정본과 검증 규칙을 유지한다.
 
@@ -241,13 +241,13 @@ status.md/current-spec.json 갱신
   + Plan2Agent Memory checkpoint
       |
       v
-p2a_handoff --overwrite
+p2a handoff --overwrite
       |
       v
 대상 프로젝트 .plan2agent 동기화
       |
       v
-p2a_tasks로 이어서 개발
+p2a tasks로 이어서 개발
 ```
 
 세부 흐름:
@@ -258,14 +258,14 @@ p2a_tasks로 이어서 개발
 4. task breakdown은 새 반복 안에서만 자기완결 `task-graph.draft.json`을 만들고, 사람 승인 후 `promote-tasks`가 `task-graph.json`으로 승격한다.
 5. 루트 `status.md`는 `current-spec.json.active_iteration`에서 생성되는 view로 갱신할 수 있다.
 6. 반복 실행 중 task 상태 변경은 활성 반복의 task graph에만 적용한다.
-7. 반복 close 시 `current-spec.json`을 갱신하고, 필요하면 `p2a_handoff --overwrite`로 대상 프로젝트를 동기화한다.
+7. 반복 close 시 `current-spec.json`을 갱신하고, 필요하면 `p2a handoff --overwrite`로 대상 프로젝트를 동기화한다.
 
 ## 6. 명령 계약
 
 ### 6-1. 현재 구현된 명령
 
 ```bash
-node .plan2agent/scripts/p2a_iteration.mjs init \
+p2a iteration init \
   --artifacts .plan2agent/artifacts/<project_id> \
   --iteration-id v1-mvp
 ```
@@ -275,24 +275,24 @@ node .plan2agent/scripts/p2a_iteration.mjs init \
 1. 기존 `gate-a-intake/`, `gate-b-spec/`, `gate-c-task-graph/`, `gate-d-review/`를 `iterations/<iteration-id>/` 아래로 이동한다.
 2. 루트 `status.md`는 반복 인덱스로 재작성한다.
 3. 루트 `current-spec.json`은 `iterations/<iteration-id>/gate-b-spec/spec.json`을 가리키는 thin pointer로 생성한다.
-4. `iterations/maintenance/README.md`를 만든다. 빈 task graph는 `.plan2agent/schemas/task-graph.schema.json`의 최소 task 수 제약을 위반하므로 만들지 않는다.
+4. `iterations/maintenance/README.md`를 만든다. 빈 task graph는 `p2a` package schema `task-graph.schema.json`의 최소 task 수 제약을 위반하므로 만들지 않는다.
 5. 이동된 spec, task graph, review를 다시 검증한다.
 
 ```bash
-node .plan2agent/scripts/p2a_iteration.mjs current --artifacts .plan2agent/artifacts/<project_id>
+p2a iteration current --artifacts .plan2agent/artifacts/<project_id>
 ```
 
-`current`는 active iteration id, task graph 경로, current spec 경로를 출력해 `p2a_tasks`와 후속 handoff가 같은 기준을 읽게 한다.
+`current`는 active iteration id, task graph 경로, current spec 경로를 출력해 `p2a tasks`와 후속 handoff가 같은 기준을 읽게 한다.
 
 ```bash
-node .plan2agent/scripts/p2a_iteration.mjs validate \
+p2a iteration validate \
   --artifacts .plan2agent/artifacts/<project_id>
 ```
 
 `validate`는 `current-spec.json.active_iteration`, active iteration Gate B-D JSON 산출물, Gate B/C approval audit, task graph dependency, Gate D review blocker 여부를 확인한다. `status.md`는 generated view라서 `--status`로 명시 검증할 때만 구조를 확인한다.
 
 ```bash
-node .plan2agent/scripts/p2a_iteration.mjs validate \
+p2a iteration validate \
   --artifacts .plan2agent/artifacts/<project_id> \
   --require-close-ready
 ```
@@ -300,15 +300,15 @@ node .plan2agent/scripts/p2a_iteration.mjs validate \
 `--require-close-ready`는 모든 active iteration task가 `done`인지 추가로 확인한다.
 
 ```bash
-node .plan2agent/scripts/p2a_iteration.mjs validate \
+p2a iteration validate \
   --artifacts .plan2agent/artifacts/<project_id> \
   --allow-planning
 
-node .plan2agent/scripts/p2a_iteration.mjs validate \
+p2a iteration validate \
   --artifacts .plan2agent/artifacts/<project_id> \
   --stage gate-a
 
-node .plan2agent/scripts/p2a_iteration.mjs validate \
+p2a iteration validate \
   --artifacts .plan2agent/artifacts/<project_id> \
   --stage gate-b-approved
 ```
@@ -316,7 +316,7 @@ node .plan2agent/scripts/p2a_iteration.mjs validate \
 `--allow-planning`은 active 반복이 아직 Gate B-D ready 상태가 아니어도 Gate A-ready, Gate B draft, Gate B approved planning state를 정상 상태로 검증한다. `--stage`는 기대 stage를 명시해 잘못된 상태 전이를 잡는다.
 
 ```bash
-node .plan2agent/scripts/p2a_iteration.mjs validate \
+p2a iteration validate \
   --artifacts .plan2agent/artifacts/<project_id> \
   --audit-archive
 ```
@@ -324,14 +324,14 @@ node .plan2agent/scripts/p2a_iteration.mjs validate \
 `--audit-archive`는 `close` 시점에 기록한 artifact 존재 여부/hash와 현재 파일 상태를 비교해 archived 반복 변경을 감지한다. close 이후 파일 내용이 바뀌거나, close 시점에 없던 감사 대상 파일이 새로 생겨도 실패한다.
 
 ```bash
-node .plan2agent/scripts/p2a_iteration.mjs close \
+p2a iteration close \
   --artifacts .plan2agent/artifacts/<project_id>
 ```
 
 `close`는 active 반복의 Gate B-D 통과, `review.json.blocking_issues: []`, 모든 task `done`을 재확인한 뒤 `iterations/<iter-id>/iteration.json`을 `status: "archived"`로 갱신한다. 루트 `current-spec.json`에는 `last_closed_iteration`과 `closed_iterations`가 기록되고, `status.md` 반복 인덱스에는 close 시점이 남는다. active pointer는 닫힌 반복에 그대로 유지된다. `--iteration-id active`가 기본값이며, 현재 구현은 active 반복 close만 지원한다.
 
 ```bash
-node .plan2agent/scripts/p2a_iteration.mjs open \
+p2a iteration open \
   --artifacts .plan2agent/artifacts/<project_id> \
   --iteration-id <next-iter-id> \
   --idea "<change idea>"
@@ -340,7 +340,7 @@ node .plan2agent/scripts/p2a_iteration.mjs open \
 `open`은 현재 active 반복이 `close`로 archived 되었고 `current-spec.json.closed_iterations`/`last_closed_iteration`에 기록된 경우에만 새 반복 skeleton을 생성한다. 닫힌 반복이 2개 이상이면 `current-spec.json.effective_spec_ref`가 조합본(`current-spec.json`)이어야 하므로, 다음 반복을 열기 전에 `compose`를 실행해야 한다. 새 반복에는 `iteration.json`, `README.md`, Gate A-D 디렉터리, Gate A/B 작성 위치 안내가 생기며, `current-spec.json.active_iteration`은 새 반복을 가리킨다. 루트 `status.md`는 그 상태에서 생성되는 view다. 이 시점에는 baseline-aware spec 자동 생성은 하지 않으므로 Gate B-D JSON 산출물이 생기기 전까지 `validate`는 실패한다.
 
 ```bash
-node .plan2agent/scripts/p2a_iteration.mjs draft \
+p2a iteration draft \
   --artifacts .plan2agent/artifacts/<project_id>
 ```
 
@@ -359,21 +359,21 @@ node .plan2agent/scripts/p2a_iteration.mjs draft \
 기본 동작은 기존 Gate A/B 파일이 있으면 중단한다. 변경 아이디어를 덮어 쓰려면 `--idea "<change idea>"`, 기존 초안을 재생성하려면 `--force`를 명시한다. 생성된 `spec.json`은 `approval: "draft"`이므로 Gate C task graph 생성 전 사용자 검토와 승인 단계가 필요하다. `current-spec.json.effective_spec_ref`는 계속 baseline spec을 가리키고, 새 반복 spec은 `pending_iteration.artifacts.spec_ref`에 기록된다.
 
 ```bash
-node .plan2agent/scripts/p2a_iteration.mjs promote-spec \
+p2a iteration promote-spec \
   --artifacts .plan2agent/artifacts/<project_id>
 ```
 
 `promote-spec`는 active 반복의 Gate B `spec.json`이 `approval: "approved"`이고 `open_decisions`가 비어 있는지 검증한 뒤 `iteration.json`과 `current-spec.json.pending_iteration`에 `gate_b_approved` 상태를 기록한다. 초기 Gate A-only 반복처럼 `current-spec.json.effective_spec_ref`가 없던 경우에는 active spec을 현재 유효 spec으로 설정한다. 이미 baseline이 있는 후속 반복에서는 baseline pointer와 `composed_from/source_specs` 조합본을 보존하고, 실제 current-effective 반영은 Gate C/D와 close/compose 이후 수행한다.
 
 ```bash
-node .plan2agent/scripts/p2a_iteration.mjs diff-tasks \
+p2a iteration diff-tasks \
   --artifacts .plan2agent/artifacts/<project_id>
 ```
 
 `diff-tasks`는 approved active spec과 baseline spec을 field 단위로 비교한 뒤, 변경을 requirements/security/integration/api/ui/data/delivery/architecture/verification semantic group으로 병합/분할해 `iterations/<iter-id>/gate-c-task-graph/task-graph.draft.json` 초안을 생성한다. 초기 반복처럼 baseline이 없으면 active spec 전체를 구현 대상으로 보고 semantic group을 만든다. 닫힌 반복의 완료 task와 `sourceSpecRefs`가 겹치면 새 task title을 `Rework ...`로 표시하고 description/prompt에 이전 task overlap을 남긴다. implementation group이 있으면 verification task가 후속 dependency로 붙으며, clarifying question disposition과 사용자 답변 재처분 검토는 requirements/verification task acceptance에 포함된다. 기존 draft나 canonical task graph가 있으면 중단하며, 재생성하려면 `--force`를 명시한다. `--force`는 기존 active graph의 미완료 task와 semantic group이 겹칠 때 task id/status를 재사용해 새 draft를 만든다. 정본 `task-graph.json`과 Gate C approval audit은 `promote-tasks`에서만 기록한다.
 
 ```bash
-node .plan2agent/scripts/p2a_iteration.mjs maintenance add \
+p2a iteration maintenance add \
   --artifacts .plan2agent/artifacts/<project_id> \
   --title "Fix typo" \
   --accept "Typo is fixed"
@@ -382,10 +382,10 @@ node .plan2agent/scripts/p2a_iteration.mjs maintenance add \
 `maintenance add`는 `resolveIterationState(..., requireReady: false)` 기준으로 iterative root와 project id만 확인한다. 생성되는 graph는 기존 `p2a.task_graph.v1` 스키마를 그대로 사용하며 `version: "maintenance"`, `sourceSpec: "../../../current-spec.json"`를 기록한다. `--ref`가 없으면 `sourceSpecRefs`는 `["maintenance"]`이고, `--ref effective_product.problem`처럼 현재 baseline의 추적 위치를 free string으로 지정할 수 있다. `--depends`는 같은 maintenance graph 안의 기존 task id만 허용되며, 쓰기 전 `validateTaskGraphData`로 schema, 중복 id, dependency, cycle을 재검증한다.
 
 ```bash
-node .plan2agent/scripts/p2a_iteration.mjs compose \
+p2a iteration compose \
   --artifacts .plan2agent/artifacts/<project_id>
 
-node .plan2agent/scripts/p2a_iteration.mjs compose \
+p2a iteration compose \
   --artifacts .plan2agent/artifacts/<project_id> \
   --allow-conflicts
 ```
@@ -417,7 +417,7 @@ node .plan2agent/scripts/p2a_iteration.mjs compose \
 }
 ```
 
-Gate A만 완료된 초기 planning 반복은 아직 approved spec이 없으므로 임시로 다음 형태를 허용한다. 이 형태는 `p2a_iteration current`의 active pointer 해석 대상이지만, 현재 `p2a_iteration validate`의 통과 대상은 아니다.
+Gate A만 완료된 초기 planning 반복은 아직 approved spec이 없으므로 임시로 다음 형태를 허용한다. 이 형태는 `p2a iteration current`의 active pointer 해석 대상이지만, 현재 `p2a iteration validate`의 통과 대상은 아니다.
 
 ```json
 {
@@ -438,7 +438,7 @@ Gate A만 완료된 초기 planning 반복은 아직 approved spec이 없으므�
 }
 ```
 
-Gate B가 승인되면 `p2a_iteration.mjs promote-spec`로 `effective_spec_ref`를 `iterations/v1-mvp/gate-b-spec/spec.json`로 갱신한다.
+Gate B가 승인되면 `p2a iteration promote-spec`로 `effective_spec_ref`를 `iterations/v1-mvp/gate-b-spec/spec.json`로 갱신한다.
 
 `open`과 `draft` 중인 반복은 `pending_iteration`을 함께 기록한다.
 
@@ -494,7 +494,7 @@ Gate B가 승인되면 `p2a_iteration.mjs promote-spec`로 `effective_spec_ref`�
 
 ## 8. 검증 계약
 
-반복 구조 validator는 `p2a_iteration.mjs validate`에서 시작한다. 현재 구현은 **Gate B-D가 존재하는 실행 가능한 반복**을 대상으로 한다.
+반복 구조 validator는 `p2a iteration validate`에서 시작한다. 현재 구현은 **Gate B-D가 존재하는 실행 가능한 반복**을 대상으로 한다.
 
 - `current-spec.json.active_iteration`이 실제 `iterations/<id>/`와 일치한다.
 - active iteration의 Gate B-D 산출물이 존재하고 기존 JSON schema 검증을 통과한다.
@@ -507,18 +507,18 @@ Gate B가 승인되면 `p2a_iteration.mjs promote-spec`로 `effective_spec_ref`�
 - Gate A만 완료된 반복(`gate_a_ready`)은 `--allow-planning` 또는 `--stage gate-a`로 검증한다.
 - Gate B draft는 `--allow-planning` 또는 `--stage gate-b-draft`로 검증한다.
 - Gate B approved는 `--stage gate-b-approved`로 검증한다.
-- maintenance 반복은 `p2a_iteration.mjs maintenance add`로 task graph를 lazy 생성/append하고, `iterations/maintenance/gate-c-task-graph/task-graph.json`이 존재하면 schema/dependency를 검증한다.
+- maintenance 반복은 `p2a iteration maintenance add`로 task graph를 lazy 생성/append하고, `iterations/maintenance/gate-c-task-graph/task-graph.json`이 존재하면 schema/dependency를 검증한다.
 - archived 반복은 `--audit-archive`를 명시하면 close 시점의 artifact 존재 여부/hash와 현재 파일 상태를 비교한다.
 
-기존 `validate_artifacts.mjs --artifact-root`는 greenfield root 구조를 검증한다. 반복 구조 검증은 `p2a_iteration.mjs validate`가 담당한다.
+기존 `validate_artifacts.mjs --artifact-root`는 greenfield root 구조를 검증한다. 반복 구조 검증은 `p2a iteration validate`가 담당한다.
 
 현재 명령:
 
 ```bash
-node .plan2agent/scripts/p2a_iteration.mjs validate \
+p2a iteration validate \
   --artifacts .plan2agent/artifacts/<project_id>
 
-node .plan2agent/scripts/p2a_iteration.mjs validate \
+p2a iteration validate \
   --artifacts .plan2agent/artifacts/<project_id> \
   --require-close-ready
 ```
@@ -526,11 +526,11 @@ node .plan2agent/scripts/p2a_iteration.mjs validate \
 planning stage 검증:
 
 ```bash
-node .plan2agent/scripts/p2a_iteration.mjs validate \
+p2a iteration validate \
   --artifacts .plan2agent/artifacts/<project_id> \
   --stage gate-a
 
-node .plan2agent/scripts/p2a_iteration.mjs validate \
+p2a iteration validate \
   --artifacts .plan2agent/artifacts/<project_id> \
   --allow-planning
 ```
@@ -546,7 +546,7 @@ node .plan2agent/scripts/p2a_iteration.mjs validate \
 
 ## 9. handoff 적응
 
-기존 `p2a_handoff.mjs`는 greenfield `.plan2agent/artifacts/<project_id>/gate-*` root를 계속 지원한다. 반복 구조 root(`current-spec.json` + `iterations/`)를 넘기면 기본값은 active 반복 인계다.
+기존 `p2a handoff`는 greenfield `.plan2agent/artifacts/<project_id>/gate-*` root를 계속 지원한다. 반복 구조 root(`current-spec.json` + `iterations/`)를 넘기면 기본값은 active 반복 인계다.
 
 1. `--iteration-id <id>`를 명시해 특정 반복을 인계한다.
 2. `current-spec.json.active_iteration`을 읽어 active 반복을 자동 선택한다.
@@ -555,7 +555,7 @@ node .plan2agent/scripts/p2a_iteration.mjs validate \
 기본값은 `--iteration-id active`다. 다만 명령형 재현성을 위해 특정 iteration id override도 제공한다.
 
 ```bash
-node scripts/p2a_handoff.mjs \
+p2a handoff \
   --project-id <project_id> \
   --artifacts .plan2agent/artifacts/<project_id> \
   --target /path/to/project \
@@ -589,13 +589,13 @@ handoff는 active 반복의 `task-graph.sourceSpec`을 `spec.json`으로, `spec.
 
 | 조각 | 명령/파일 | 상태 |
 | --- | --- | --- |
-| 컨텍스트 번들 | `p2a_iteration.mjs context` | ✅ 구현 |
-| 초안 검증 | `p2a_iteration.mjs validate --stage gate-c-draft` | ✅ 구현 |
-| 승인 게이트 | `p2a_iteration.mjs promote-tasks` + `current-spec.json` Gate C approval audit | ✅ 구현 |
+| 컨텍스트 번들 | `p2a iteration context` | ✅ 구현 |
+| 초안 검증 | `p2a iteration validate --stage gate-c-draft` | ✅ 구현 |
+| 승인 게이트 | `p2a iteration promote-tasks` + `current-spec.json` Gate C approval audit | ✅ 구현 |
 | 저작 스킬 | `.agents/skills/p2a-task-author/SKILL.md` (+ `.claude` mirror, Gemini shim) | ✅ 구현 |
 | 회귀 테스트 | `run_fixtures`(context/gate-c-draft/promote) + `check_cli_parity`(skill mirror) | ✅ |
 | provenance sidecar | `task-graph.draft.meta.json` | ✅ 구현 |
-| 정식 context 스키마 | `.plan2agent/schemas/task-context.schema.json` + `validateTaskContextData` (context가 출력 전 자기검증) | ✅ 구현 |
+| 정식 context 스키마 | `p2a` package schema `task-context.schema.json` + `validateTaskContextData` (context가 출력 전 자기검증) | ✅ 구현 |
 | `context --scope maintenance` | 유지보수 레인 context JSON 출력 | ✅ 구현 |
 | Phase 1 (maintenance 파일럿 + fix/기능 분류) | `context --scope maintenance`, `tasks --maintenance` 실행 UX, `maintenance add --from-draft` 구현 | ✅ 구현 |
 | `validate`-time audit 강제(승격된 정본) | `current-spec.json.gate_c_approval_audits` | ✅ 구현 |
@@ -606,14 +606,14 @@ feature task graph 기준의 핵심 backbone은 끝에서 끝까지 동작한다
 
 - 문제: deterministic `diff-tasks`는 spec field 차이를 semantic group으로 병합/분할하고 rework/reuse를 표시하지만, code-aware 판단이나 복잡한 task 재구성까지 맡기지는 않는다.
 - 해법: 기획층(Gate C)에 **agent 저작 + 사람 승인 게이트**를 추가한다. agent는 현재 기준 맥락을 읽어 richer task 초안을 쓰고, 사람이 게이트에서 승격을 확정한다.
-- 불변: 실행층(`p2a_tasks`)과 `.plan2agent/schemas/task-graph.schema.json`은 바꾸지 않는다. agent 출력도 기존 `p2a.task_graph.v1`을 따른다.
+- 불변: 실행층(`p2a tasks`)과 `p2a` package schema `task-graph.schema.json`은 바꾸지 않는다. agent 출력도 기존 `p2a.task_graph.v1`을 따른다.
 - 로드맵 연결: `plans/01-product-roadmap.md`의 승인 게이트와 diff 기반 고도화 방향을 Gate C approval/promotion 계약으로 구체화한다.
 
 ### 10-2. 핵심 원칙
 
 | 원칙 | 계약 |
 | --- | --- |
-| 초안 분리 | agent 출력은 `task-graph.draft.json`에만 쓴다. 정본 `task-graph.json`은 직접 쓰지 않는다. `p2a_tasks`는 정본만 읽으므로 미승인 task가 실행 대상(`ready`/`start`)에 노출되지 않는다. |
+| 초안 분리 | agent 출력은 `task-graph.draft.json`에만 쓴다. 정본 `task-graph.json`은 직접 쓰지 않는다. `p2a tasks`는 정본만 읽으므로 미승인 task가 실행 대상(`ready`/`start`)에 노출되지 않는다. |
 | 게이트 승인 | 초안 -> 정본 승격은 사람의 명시 승인과 `current-spec.json.gate_c_approval_audits` 기록으로만 일어난다. 자동 승격은 없다. |
 | 추적성 강제 | 승격 전 `validateTaskGraphData`가 schema·중복 id·dependency·cycle을 검사하고, `sourceSpecRefs` 최소 1 제약으로 agent 출력에도 spec 추적을 강제한다. |
 
@@ -629,10 +629,10 @@ feature task graph 기준의 핵심 backbone은 끝에서 끝까지 동작한다
 
 ### 10-4. 컨텍스트 번들 계약
 
-`p2a_iteration.mjs context`는 agent가 task를 저작하는 데 필요한 현재 기준 맥락을 읽기 전용 JSON으로 모은다.
+`p2a iteration context`는 agent가 task를 저작하는 데 필요한 현재 기준 맥락을 읽기 전용 JSON으로 모은다.
 
 ```bash
-node .plan2agent/scripts/p2a_iteration.mjs context \
+p2a iteration context \
   --artifacts .plan2agent/artifacts/<project_id> \
   [--idea "<change idea>"] \
   [--code-root <dir>]
@@ -685,7 +685,7 @@ node .plan2agent/scripts/p2a_iteration.mjs context \
 - `code_signals`는 L1 실제 파일 트리(`--code-root`, 하네스/빌드/의존성 디렉터리 제외, cap 적용)와 L2 run log 기반 최근 변경 파일을 제공한다. L3 git diff와 L4 코드 요약은 후속이다.
 - `context`는 어떤 파일도 쓰지 않는다.
 - `scope`는 `feature`가 기본값이며, `--scope maintenance`는 유지보수 레인 context를 출력한다.
-- 출력은 `.plan2agent/schemas/task-context.schema.json`(`p2a.task_context.v1`)을 따르며, `context` 명령이 출력 전 `validateTaskContextData`로 자기검증해 무효 context를 내보내지 않는다.
+- 출력은 `p2a` package schema `task-context.schema.json`(`p2a.task_context.v1`)을 따르며, `context` 명령이 출력 전 `validateTaskContextData`로 자기검증해 무효 context를 내보내지 않는다.
 
 ### 10-5. 명령 계약
 
@@ -703,7 +703,7 @@ node .plan2agent/scripts/p2a_iteration.mjs context \
 승인 사실은 `current-spec.json.gate_c_approval_audits[active_iteration]`에 남기며, 승인 audit은 현재 `task-graph.draft.json`의 `draft_sha256`과 묶인다. draft가 재생성되면 기존 audit은 재사용되지 않으므로 다시 승인해야 한다. 명령행에서 바로 기록할 때는 다음처럼 실행한다.
 
 ```bash
-node .plan2agent/scripts/p2a_iteration.mjs promote-tasks \
+p2a iteration promote-tasks \
   --artifacts .plan2agent/artifacts/<project_id> \
   --approved-by user \
   --approval-note "<검토 근거 — 무엇을 보고 승격을 승인했는지>"
@@ -738,14 +738,14 @@ node .plan2agent/scripts/p2a_iteration.mjs promote-tasks \
 
 Phase 1 흐름은 `context --scope maintenance`로 유지보수 레인 context를 출력하고, `tasks --maintenance list|ready|prompt`로 source/target과 실행 next command를 확인한 뒤, agent나 eval이 만든 maintenance draft를 사람이 검토하고 `maintenance add --from-draft <file> --dry-run`으로 preview한 다음 `--yes`로 append하는 것이다. ungated maintenance 특성상 별도 정본/초안 분리 없이 append 직전 `--yes` 확인을 게이트로 둔다. 중복 `eval-cluster:*`/proposal ref는 append 시 skip되며, draft-local dependency는 새 maintenance task id로 매핑된다. 단, maintenance는 본질적으로 코드-side 활동이라 후보 승인/실행 조작은 CLI와 agent 대화 표면을 기준으로 유지한다(이관된 fix/기능 경계 분류 포함).
 
-Phase 2 흐름: `context` -> read-only `p2a-task-author` 서브에이전트가 draft JSON 반환 -> skill owner가 `task-graph.draft.json` 저장·검증 -> 사람 검토 + Gate C approval audit 기록 -> `promote-tasks`로 정본 승격 -> Gate D review -> `p2a_tasks` 실행. `diff-tasks`는 deterministic semantic draft generator로 남고, agent-authored draft 경로와 같은 Gate C approval/promotion 계약으로 수렴한다.
+Phase 2 흐름: `context` -> read-only `p2a-task-author` 서브에이전트가 draft JSON 반환 -> skill owner가 `task-graph.draft.json` 저장·검증 -> 사람 검토 + Gate C approval audit 기록 -> `promote-tasks`로 정본 승격 -> Gate D review -> `p2a tasks` 실행. `diff-tasks`는 deterministic semantic draft generator로 남고, agent-authored draft 경로와 같은 Gate C approval/promotion 계약으로 수렴한다.
 
 ### 10-9. 가드레일
 
 - 자동 승격 금지: 승격은 항상 Gate C approval audit이 선행한다.
 - 추적성 완화 금지: `sourceSpecRefs` 최소 1 제약을 agent 출력에도 적용한다.
-- 실행층 불변: 저작/승격 로직을 `p2a_tasks` 상태 전이 명령에 넣지 않는다.
-- 초안 격리: `task-graph.draft.json`은 승격 전까지 `p2a_tasks`/`p2a_handoff` 대상이 아니다.
+- 실행층 불변: 저작/승격 로직을 `p2a tasks` 상태 전이 명령에 넣지 않는다.
+- 초안 격리: `task-graph.draft.json`은 승격 전까지 `p2a tasks`/`p2a handoff` 대상이 아니다.
 - 비목표 경계 유지: deterministic `diff-tasks`와 agent-authored draft는 모두 Gate C approval/promotion을 거친다. 자동 정본 승격, 자동 병합, agent 자동 실행 orchestration은 여전히 비목표다.
 
 ### 10-10. 검증/회귀 계획
@@ -769,24 +769,24 @@ Phase 2 흐름: `context` -> read-only `p2a-task-author` 서브에이전트가 d
 
 | 순서 | 조각 | 상태 | 이유 |
 | --- | --- | --- | --- |
-| 1 | 레이아웃/인덱스 규약 + greenfield migration | 완료 | `p2a_iteration.mjs init`으로 Gate B-D까지 있는 greenfield bundle을 반복 구조로 변환한다. |
+| 1 | 레이아웃/인덱스 규약 + greenfield migration | 완료 | `p2a iteration init`으로 Gate B-D까지 있는 greenfield bundle을 반복 구조로 변환한다. |
 | 1-1 | Gate A-only artifact 반복 동기화 | 부분 완료 | `lightweight-embedded-redis`처럼 Gate A만 있는 artifact는 반복 구조에서 해석/검증/draft 가능하다. 자동 migration 명령은 아직 없다. |
 | 2 | `status.md` 반복 인덱스 | 완료 | 전체 반복 history, close audit, handoff audit, maintenance 요약을 누적 렌더링한다. |
-| 3 | `current-spec.json` 조합 규칙 | 완료 | `p2a_iteration.mjs compose`가 approved + close-ready 반복들을 current-effective view로 조합한다. |
-| 4 | `p2a_tasks` active iteration 인식 | 완료 | `--artifacts`가 active 반복 graph를 찾아 task 조회와 상태 변경에 사용한다. |
-| 4-1 | Gate B-D 반복 구조 validator | 완료 | `p2a_iteration.mjs validate`가 active 반복 구조와 close-ready 조건을 검증한다. |
+| 3 | `current-spec.json` 조합 규칙 | 완료 | `p2a iteration compose`가 approved + close-ready 반복들을 current-effective view로 조합한다. |
+| 4 | `p2a tasks` active iteration 인식 | 완료 | `--artifacts`가 active 반복 graph를 찾아 task 조회와 상태 변경에 사용한다. |
+| 4-1 | Gate B-D 반복 구조 validator | 완료 | `p2a iteration validate`가 active 반복 구조와 close-ready 조건을 검증한다. |
 | 4-2 | Gate A-ready/planning validator | 완료 | `--stage`와 `--allow-planning`이 Gate A-only, Gate B draft, Gate B approved 상태를 검증한다. |
-| 4-3 | 반복 open skeleton | 완료 | `p2a_iteration.mjs open`이 archived + composed baseline 위에 새 반복 디렉터리와 metadata를 만든다. |
+| 4-3 | 반복 open skeleton | 완료 | `p2a iteration open`이 archived + composed baseline 위에 새 반복 디렉터리와 metadata를 만든다. |
 | 5 | baseline-aware Gate A/B draft | 부분 완료 | `draft`가 Gate A-only 초기 Gate B 초안과 baseline 기반 delta intake/spec 초안을 만든다. 질문 재생성 고도화는 후속이다. |
 | 5-1 | Gate B 승인 반영 | 완료 | `promote-spec`가 approved active spec을 기록하고, 후속 반복에서는 baseline/composition pointer를 보존한다. |
 | 5-2 | diff 기반 task graph 초안 | 완료 | `diff-tasks`가 spec field 차이를 semantic group으로 병합/분할하고 rework/reuse/verification dependency를 기록한 Gate C task graph 초안을 만든다. |
-| 6 | handoff 적응 | 완료 | `p2a_handoff.mjs`가 active 반복 산출물, current-effective view, maintenance graph를 대상 프로젝트로 복사하고 handoff 기준점을 기록한다. |
+| 6 | handoff 적응 | 완료 | `p2a handoff`가 active 반복 산출물, current-effective view, maintenance graph를 대상 프로젝트로 복사하고 handoff 기준점을 기록한다. |
 | 7 | 반복 open/close 명령 | 완료 | 반복 생성, close-ready 마감, archived metadata 표시, composed baseline 기준 다음 반복 open을 자동화한다. |
 | 8 | 반복 fixture/golden | 완료 | greenfield -> init -> current -> tasks ready -> close -> open -> validate/current root 흐름과 draft/compose/handoff 회귀를 고정했다. |
 | 9 | archived append-only 감사 | 완료 | close 시 artifact 존재 여부/hash를 기록하고 기본 `validate`에서 변경을 감지한다. legacy/migration은 `--skip-archive-audit`로 우회한다. |
 | 10 | 구조적 diff 기반 재작업 task 생성 | 완료 | `diff-tasks`가 semantic group, 완료 task overlap 기반 rework, `--force` 미완료 task reuse, question disposition 재처분 acceptance를 생성한다. |
 | 11 | maintenance task graph 운영 | 완료 | `maintenance add`가 graph를 lazy 생성/append하고 validate가 schema/dependency를 검증하며 handoff 시 별도 maintenance graph로 복사한다. |
-| 12 | agent 실행 추적 | 완료 | `p2a_runs.mjs`가 run-index/run log, task별 runId, changedFiles, verification, agentTool, workspaceRef, 선택적 branch/worktree 격리 생성, test/lint/typecheck 결과 수집을 제공한다. `p2a-dev-execution`은 같은 ready snapshot의 task를 bounded parallel implementer worktree에 배정하고 main owner가 start·로컬 통합·검증·finish를 직렬화한다. |
+| 12 | agent 실행 추적 | 완료 | `p2a runs`가 run-index/run log, task별 runId, changedFiles, verification, agentTool, workspaceRef, 선택적 branch/worktree 격리 생성, test/lint/typecheck 결과 수집을 제공한다. `p2a-dev-execution`은 같은 ready snapshot의 task를 bounded parallel implementer worktree에 배정하고 main owner가 start·로컬 통합·검증·finish를 직렬화한다. |
 
 ## 13. 검증 메모
 

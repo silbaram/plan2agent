@@ -50,7 +50,7 @@ Plan2Agent 하네스는 한 문장 제품 아이디어를 바로 코드로 구�
 
 ### 1.1 전제조건과 첫 검증
 
-- **명령 실행 위치를 구분한다.** Plan2Agent 본체 검증/개발 스크립트는 `/workspace/plan2agent` 같은 Plan2Agent 저장소 루트에서 실행한다. scaffold로 하네스를 설치한 실제 프로젝트의 런타임 명령은 `.plan2agent/`가 생성된 프로젝트 루트에서 실행한다.
+- **명령 실행 위치를 구분한다.** Plan2Agent 본체 검증/개발 스크립트는 `/workspace/plan2agent` 같은 Plan2Agent 저장소 루트에서 실행한다. 실제 프로젝트의 런타임 명령은 `p2a init`으로 상태를 만든 프로젝트 루트에서 전역 `p2a`로 실행한다.
 - **Node.js가 필요하다.** 검증/동기화/fixture/task 관리 스크립트는 `#!/usr/bin/env node`로 실행되는 ESM(`.mjs`) 스크립트다. 별도 npm dependency를 설치하지 않고 Node.js 표준 라이브러리만 사용한다.
 - **v1 하네스는 read-only planning이다.** 하네스와 subagent는 제품 기획 산출물(`.md`, `.json`)을 만드는 데 집중한다. 코드 변경, dependency 설치, 구현 목적 shell 실행, git 조작은 v1 workflow에 포함하지 않는다. 단, 이 저장소의 검증 스크립트를 실행해 산출물 계약을 확인하는 것은 문서화된 검증 절차다.
 - **클론 직후 첫 검증은 fixture와 CLI parity를 확인한다.** 아래 두 명령이 통과하면 스키마/게이트 검증과 CLI mirror 상태가 기본적으로 맞아 있다.
@@ -60,7 +60,7 @@ node scripts/run_fixtures.mjs
 node scripts/check_cli_parity.mjs
 ```
 
-주의: `check_cli_parity.mjs`, `run_fixtures.mjs`, `sync_cli_assets.mjs`는 Plan2Agent 본체 개발자용 스크립트이며 scaffold 대상 프로젝트에는 설치되지 않는다. scaffold 대상 프로젝트에서는 `.plan2agent/scripts/validate_artifacts.mjs`, `.plan2agent/scripts/p2a_iteration.mjs`, `.plan2agent/scripts/p2a_execute.mjs` 같은 런타임 명령만 사용한다.
+주의: `check_cli_parity.mjs`, `run_fixtures.mjs`, `sync_cli_assets.mjs`는 Plan2Agent 본체 개발자용 스크립트이며 `init` 대상 프로젝트에는 설치되지 않는다. 대상 프로젝트에서는 `p2a validate`, `p2a iteration`, `p2a execute` 같은 패키지 런타임 명령만 사용한다.
 
 개별 fixture만 빠르게 확인하려면 Plan2Agent 본체 저장소 루트에서 다음 명령을 사용한다.
 
@@ -116,7 +116,7 @@ Task graph의 dependency, cycle, acceptance criteria, source spec reference를 �
 | `gate-a-intake/intake.md` | 선택적 generated view다. 사람이 읽는 intake 분석을 보여주지만 정본은 `intake.json`이다. |
 | `gate-b-spec/product-spec.md` | 선택적 generated view다. 제품 명세를 Markdown으로 보여주지만 정본은 `spec.json.product`다. |
 | `gate-b-spec/implementation-plan.md` | 선택적 generated view다. 구현 계획을 Markdown으로 보여주지만 정본은 `spec.json.implementation`이다. |
-| `gate-b-spec/spec.json` | 제품/구현 명세의 구조화 원본이다. `.plan2agent/schemas/spec.schema.json` 계약을 따르며 approval 상태, approval audit, open decisions, clarifying question disposition을 포함한다. |
+| `gate-b-spec/spec.json` | 제품/구현 명세의 구조화 원본이다. `p2a` package schema `spec.schema.json` 계약을 따르며 approval 상태, approval audit, open decisions, clarifying question disposition을 포함한다. |
 | `gate-c-task-graph/task-graph.json` | 승인된 spec에서 생성된 task graph다. task id, dependency, acceptance criteria, target area, suggested agent prompt, source spec reference를 담는다. |
 | `gate-d-review/review.json` | Gate D의 machine-readable canonical review result다. Validator, iteration 전환, handoff 준비 여부는 이 파일의 `blocking_issues`가 빈 배열인지로 판단한다. |
 | `gate-d-review/review-report.md` | 선택적 generated view다. `review.json`의 동일 findings를 사람이 읽기 쉽게 렌더링한다. |
@@ -127,11 +127,11 @@ Task graph의 dependency, cycle, acceptance criteria, source spec reference를 �
 
 | 대화 상태 섹션 | 파일 저장 위치 | 스키마/계약 | Gate 통과 조건 |
 | --- | --- | --- | --- |
-| `intake_json` | `.plan2agent/artifacts/<project_id>/gate-a-intake/intake.json` | `.plan2agent/schemas/intake.schema.json` (`schema_version: p2a.intake.v1`) | 모든 high-impact 결정이 `answered`가 되어 `status: ready_for_spec`일 때 다음 단계로 간다. |
+| `intake_json` | `.plan2agent/artifacts/<project_id>/gate-a-intake/intake.json` | `p2a` package schema `intake.schema.json` (`schema_version: p2a.intake.v1`) | 모든 high-impact 결정이 `answered`가 되어 `status: ready_for_spec`일 때 다음 단계로 간다. |
 | optional Markdown views | `.plan2agent/artifacts/<project_id>/**.md` | JSON에서 생성되는 view/export다. | Gate 판정의 정본으로 쓰지 않는다. |
-| `spec_json` | `.plan2agent/artifacts/<project_id>/gate-b-spec/spec.json` | `.plan2agent/schemas/spec.schema.json` (`schema_version: p2a.spec.v1`) | 모든 `CQ-n`이 처분되고, `approval: approved`, `approval_audit` present, `open_decisions: []`일 때 task graph를 만들 수 있다. |
-| `task_graph_json` | `.plan2agent/artifacts/<project_id>/gate-c-task-graph/task-graph.json` | `.plan2agent/schemas/task-graph.schema.json` (`schema_version: p2a.task_graph.v1`) | dependency id가 모두 존재하고, task id가 중복되지 않으며, graph가 DAG여야 한다. |
-| `review_json` | `.plan2agent/artifacts/<project_id>/gate-d-review/review.json` | `.plan2agent/schemas/review.schema.json` (`schema_version: p2a.review.v1`) | `blocking_issues: []`일 때만 Gate D가 통과한다. |
+| `spec_json` | `.plan2agent/artifacts/<project_id>/gate-b-spec/spec.json` | `p2a` package schema `spec.schema.json` (`schema_version: p2a.spec.v1`) | 모든 `CQ-n`이 처분되고, `approval: approved`, `approval_audit` present, `open_decisions: []`일 때 task graph를 만들 수 있다. |
+| `task_graph_json` | `.plan2agent/artifacts/<project_id>/gate-c-task-graph/task-graph.json` | `p2a` package schema `task-graph.schema.json` (`schema_version: p2a.task_graph.v1`) | dependency id가 모두 존재하고, task id가 중복되지 않으며, graph가 DAG여야 한다. |
+| `review_json` | `.plan2agent/artifacts/<project_id>/gate-d-review/review.json` | `p2a` package schema `review.schema.json` (`schema_version: p2a.review.v1`) | `blocking_issues: []`일 때만 Gate D가 통과한다. |
 | optional `review_report` | `.plan2agent/artifacts/<project_id>/gate-d-review/review-report.md` | Markdown rendering of `review_json` | 사람이 읽는 리뷰 보고서이며 Gate D 판정의 정본은 아니다. |
 
 승인된 Gate B가 있으면 `spec_json.approval_audit`에 아래 구조를 포함한다.
@@ -149,7 +149,7 @@ Task graph의 dependency, cycle, acceptance criteria, source spec reference를 �
 
 ### 3.2 주요 스키마 필드
 
-`.plan2agent/schemas/intake.schema.json`의 핵심 필드는 다음과 같다.
+`p2a` package schema `intake.schema.json`의 핵심 필드는 다음과 같다.
 
 | 필드 | 의미 |
 | --- | --- |
@@ -163,7 +163,7 @@ Task graph의 dependency, cycle, acceptance criteria, source spec reference를 �
 | `status` | unresolved decision이 있으면 `blocked_on_user`, 모두 답변되면 `ready_for_spec`이다. |
 | `evidence` | `USER-n`, `LOCAL-n`, `WEB-n` source 객체 목록이다. |
 
-`.plan2agent/schemas/spec.schema.json`의 핵심 필드는 다음과 같다.
+`p2a` package schema `spec.schema.json`의 핵심 필드는 다음과 같다.
 
 | 필드 | 의미 |
 | --- | --- |
@@ -179,7 +179,7 @@ Task graph의 dependency, cycle, acceptance criteria, source spec reference를 �
 | `reference_reconnaissance` | optional Gate B 기술/패턴 조사 기록이다. 후보 `REF-n`, 연결된 `evidence[].source_id`, decision(`selected`/`rejected`/`deferred`/`context`/`open`), optional `origin`, 선택/기각 패턴, 남은 질문을 담아 source metadata와 decision metadata를 분리한다. |
 | `evidence` | intake evidence를 보존하고 spec에서 새로 사용한 local/web 근거를 추가한다. |
 
-`.plan2agent/schemas/task-graph.schema.json`의 핵심 필드는 다음과 같다.
+`p2a` package schema `task-graph.schema.json`의 핵심 필드는 다음과 같다.
 
 | 필드 | 의미 |
 | --- | --- |
@@ -210,11 +210,11 @@ Intake와 spec artifact는 `evidence` 배열을 가진다. 이 배열은 결정�
 - Gate B 기술 추천에는 공식 문서, 릴리스 노트, 표준 문서, 패키지 레지스트리, source repository, vendor documentation 같은 primary source를 우선 사용한다.
 - 승인된 spec이 라이브러리, 프레임워크, 런타임, 프로토콜, 패키지, 데이터베이스, 클라우드 서비스, 외부 API 같은 material technology choice를 담고 있으면 최소 하나의 관련 `WEB-n` evidence가 필요하다.
 - Gate B에서 구체적인 외부 기술, 로컬 코드 패턴, prior artifact를 비교했다면 `reference_reconnaissance`에 후보 `REF-n`과 선택/기각 이유를 기록한다. 후보의 `source_id`는 반드시 `evidence`에 존재해야 하며, `decision`은 `selected`, `rejected`, `deferred`, `context`, `open` 중 하나다. Adapter가 후보를 만들었다면 `origin`으로 출처를 기록하고, `selected_patterns`와 `rejected_patterns`는 존재하는 `candidate_id`를 참조해야 한다.
-- `p2a_iteration draft`가 생성하는 Gate B 초안은 Gate A intake와 iteration idea를 `reference_reconnaissance.candidates`의 context 후보로 남긴다. 후속 iteration draft는 baseline의 WEB 기반 reference 후보를 carry-forward하므로, 승인 전에 새 기술 선택이나 로컬 패턴 재사용 근거가 있으면 추가 `REF-n` 후보와 선택/기각 패턴으로 보강한다.
-- `.plan2agent/artifacts/<project_id>/preflight-research/`에 Feature Radar 산출물이 있으면 `p2a_iteration draft`는 Markdown/JSON 파일을 `LOCAL-n` evidence로, 발견한 URL을 `WEB-n` evidence로 가져온다. `next-iteration-recommendations.md`, `capability-gap-analysis.md`, `p2a-context.json`의 추천은 `reference_reconnaissance.candidates`에 `decision: "context"`와 `origin: "feature_radar_preflight"`로 들어간다.
+- `p2a iteration draft`가 생성하는 Gate B 초안은 Gate A intake와 iteration idea를 `reference_reconnaissance.candidates`의 context 후보로 남긴다. 후속 iteration draft는 baseline의 WEB 기반 reference 후보를 carry-forward하므로, 승인 전에 새 기술 선택이나 로컬 패턴 재사용 근거가 있으면 추가 `REF-n` 후보와 선택/기각 패턴으로 보강한다.
+- `.plan2agent/artifacts/<project_id>/preflight-research/`에 Feature Radar 산출물이 있으면 `p2a iteration draft`는 Markdown/JSON 파일을 `LOCAL-n` evidence로, 발견한 URL을 `WEB-n` evidence로 가져온다. `next-iteration-recommendations.md`, `capability-gap-analysis.md`, `p2a-context.json`의 추천은 `reference_reconnaissance.candidates`에 `decision: "context"`와 `origin: "feature_radar_preflight"`로 들어간다.
 - Feature Radar 추천은 승인된 scope가 아니라 Gate B 후보 근거다. Gate B 승인 전에 어떤 추천을 `selected`/`deferred`/`rejected`로 처리할지 spec rationale이나 approval note에 남겨야 하며, Gate C task는 승인된 항목에서만 생성한다.
 - read-only web lookup은 prior art 또는 domain grounding 용도다. 구현 실행, dependency 설치, 코드 변경을 위해 사용하지 않는다.
-- `.plan2agent/scripts/validate_artifacts.mjs`는 evidence `source_id` 중복, `WEB-n` URL 형식, 승인된 spec의 material technology choice에 대한 최소 `WEB-n` 존재, `reference_reconnaissance`의 evidence/candidate 참조 무결성을 검사한다. `--review`는 review artifact의 schema 유효성을 확인하고, `--require-review-pass`를 함께 쓰면 Gate D 통과 조건인 `review.json.blocking_issues: []`까지 확인한다. 다만 title/used_for의 내용 품질은 사람이 review해야 하므로, Gate D에서 근거가 실제 결정 근처에 인용됐는지 확인한다.
+- `p2a validate`는 evidence `source_id` 중복, `WEB-n` URL 형식, 승인된 spec의 material technology choice에 대한 최소 `WEB-n` 존재, `reference_reconnaissance`의 evidence/candidate 참조 무결성을 검사한다. `--review`는 review artifact의 schema 유효성을 확인하고, `--require-review-pass`를 함께 쓰면 Gate D 통과 조건인 `review.json.blocking_issues: []`까지 확인한다. 다만 title/used_for의 내용 품질은 사람이 review해야 하므로, Gate D에서 근거가 실제 결정 근처에 인용됐는지 확인한다.
 
 ## 4. 재개(resume)
 
@@ -392,18 +392,18 @@ Gemini CLI에서는 `.gemini/commands/p2a/harness.toml` shim이 `/p2a:harness` �
 Co-located scaffold 프로젝트에서는 Gate D 정본 `review.json.blocking_issues`가 빈 배열인 것이 확인된 직후 root `gate-*` 산출물을 먼저 반복 구조로 변환한다. 개발 진행의 정본 task graph는 변환 후 `iterations/<iter-id>/gate-c-task-graph/task-graph.json`이며, 사용자는 root `gate-c-task-graph/task-graph.json`을 직접 실행하지 않는다.
 
 ```bash
-node .plan2agent/scripts/p2a_iteration.mjs init \
+p2a iteration init \
   --artifacts .plan2agent/artifacts/<project_id> \
   --iteration-id v1-mvp
 ```
 
 사용자 관점의 루프는 다음과 같다.
 
-1. `node .plan2agent/scripts/p2a_tasks.mjs ready --artifacts .plan2agent/artifacts/<project_id>`로 지금 시작할 수 있는 task를 확인한다.
-2. 실행할 task를 정한 뒤 `node .plan2agent/scripts/p2a_execute.mjs start --artifacts .plan2agent/artifacts/<project_id> --task <task-id>`로 run을 만들고 상태를 `in_progress`로 바꾼다. dependency가 완료되지 않은 task는 시작할 수 없다.
-3. `p2a_execute start`가 출력한 launcher prompt를 agent CLI에 붙여넣는다. 별도 확인이 필요하면 `node .plan2agent/scripts/p2a_tasks.mjs prompt --artifacts .plan2agent/artifacts/<project_id> <task-id>`로 같은 task context를 다시 볼 수 있다.
+1. `p2a tasks ready --artifacts .plan2agent/artifacts/<project_id>`로 지금 시작할 수 있는 task를 확인한다.
+2. 실행할 task를 정한 뒤 `p2a execute start --artifacts .plan2agent/artifacts/<project_id> --task <task-id>`로 run을 만들고 상태를 `in_progress`로 바꾼다. dependency가 완료되지 않은 task는 시작할 수 없다.
+3. `p2a execute start`가 출력한 launcher prompt를 agent CLI에 붙여넣는다. 별도 확인이 필요하면 `p2a tasks prompt --artifacts .plan2agent/artifacts/<project_id> <task-id>`로 같은 task context를 다시 볼 수 있다.
 4. Claude Code 또는 Codex 같은 write-capable agent 세션에서 prompt를 실행하고, 코드 변경과 검증은 해당 작업 브랜치에서 수행한다. Gemini CLI는 현재 review/monitor 같은 read-only 보조로만 사용한다.
-5. acceptance criteria와 필요한 테스트가 통과하면 `node .plan2agent/scripts/p2a_execute.mjs finish --artifacts .plan2agent/artifacts/<project_id> --run-id <run-id> --test --lint --typecheck --collect-git`로 검증, run closeout, task done/block 전이를 한 번에 기록한다. `done`은 최신 run이 현재 iteration/task graph에 속하고 실행된 verification(`source: config|command`, `exitCode: 0`)이 있는 경우만 허용한다. 막히면 failed/blocked finish에 `--failure-class`, `--repro-step`, `--localization`, `--guard`를 함께 기록한다.
+5. acceptance criteria와 필요한 테스트가 통과하면 `p2a execute finish --artifacts .plan2agent/artifacts/<project_id> --run-id <run-id> --test --lint --typecheck --collect-git`로 검증, run closeout, task done/block 전이를 한 번에 기록한다. `done`은 최신 run이 현재 iteration/task graph에 속하고 실행된 verification(`source: config|command`, `exitCode: 0`)이 있는 경우만 허용한다. 막히면 failed/blocked finish에 `--failure-class`, `--repro-step`, `--localization`, `--guard`를 함께 기록한다.
 6. 다시 `ready`를 확인해 다음 dependency-unblocked task를 선택한다.
 
 이미 승인 산출물을 별도 대상 프로젝트로 복사한 legacy handoff 프로젝트에서는 `.plan2agent/project.config.json.taskGraph`가 가리키는 flat graph를 `--graph`로 명시할 수 있다.
@@ -421,46 +421,46 @@ node .plan2agent/scripts/p2a_iteration.mjs init \
 Intake만 검증:
 
 ```bash
-node .plan2agent/scripts/validate_artifacts.mjs --intake .plan2agent/artifacts/<project_id>/gate-a-intake/intake.json
+p2a validate --intake .plan2agent/artifacts/<project_id>/gate-a-intake/intake.json
 ```
 
 상태 문서만 검증:
 
 ```bash
-node .plan2agent/scripts/validate_artifacts.mjs --status .plan2agent/artifacts/<project_id>/status.md
+p2a validate --status .plan2agent/artifacts/<project_id>/status.md
 ```
 
 artifact root의 Gate bundle을 한 번에 검증:
 
 ```bash
-node .plan2agent/scripts/validate_artifacts.mjs --artifact-root .plan2agent/artifacts/<project_id>
+p2a validate --artifact-root .plan2agent/artifacts/<project_id>
 ```
 
 Spec과 intake traceability를 함께 검증:
 
 ```bash
-node .plan2agent/scripts/validate_artifacts.mjs --intake .plan2agent/artifacts/<project_id>/gate-a-intake/intake.json --spec .plan2agent/artifacts/<project_id>/gate-b-spec/spec.json
+p2a validate --intake .plan2agent/artifacts/<project_id>/gate-a-intake/intake.json --spec .plan2agent/artifacts/<project_id>/gate-b-spec/spec.json
 ```
 
 반복 artifact bundle의 active iteration을 검증:
 
 ```bash
-node .plan2agent/scripts/p2a_iteration.mjs validate --artifacts .plan2agent/artifacts/<project_id>
+p2a iteration validate --artifacts .plan2agent/artifacts/<project_id>
 ```
 
 active iteration을 close-ready 조건까지 검증:
 
 ```bash
-node .plan2agent/scripts/p2a_iteration.mjs validate --artifacts .plan2agent/artifacts/<project_id> --require-close-ready
+p2a iteration validate --artifacts .plan2agent/artifacts/<project_id> --require-close-ready
 ```
 
 Gate D pass까지 포함한 handoff readiness 검증:
 
 ```bash
-node .plan2agent/scripts/validate_artifacts.mjs --artifact-root .plan2agent/artifacts/<project_id> --project-id <project_id> --require-handoff-ready
+p2a validate --artifact-root .plan2agent/artifacts/<project_id> --project-id <project_id> --require-handoff-ready
 ```
 
-주의: co-located scaffold 프로젝트는 `p2a_iteration init` 이후 `p2a_iteration validate --artifacts`를 기본 검증으로 사용한다. `validate_artifacts.mjs --task-graph --require-approved-spec`는 개별 flat graph나 legacy handoff artifact를 직접 검증할 때 사용한다. 이때 spec의 `source_intake`가 실제 파일로 해석되면 validator가 그 intake까지 연결해 CQ disposition traceability도 확인한다.
+주의: `p2a init` 프로젝트는 `p2a iteration init` 이후 `p2a iteration validate --artifacts`를 기본 검증으로 사용한다. `validate_artifacts.mjs --task-graph --require-approved-spec`는 Plan2Agent 본체에서 개별 flat graph나 legacy handoff artifact를 직접 검증할 때 사용한다. 이때 spec의 `source_intake`가 실제 파일로 해석되면 validator가 그 intake까지 연결해 CQ disposition traceability도 확인한다.
 
 ### 8.2 fixture와 CLI parity 검증
 
@@ -494,7 +494,7 @@ node scripts/sync_cli_assets.mjs
 
 | 검사 | 기준 | 대표 실패 메시지 |
 | --- | --- | --- |
-| Schema required/additional/type/enum/const | `.plan2agent/schemas/*.schema.json`의 필수 키, 타입, enum, const, pattern, minLength/minItems subset을 검사한다. | `$ missing required keys: ...`, `$ contains unsupported keys: ...`, `$.schema_version must equal ...` |
+| Schema required/additional/type/enum/const | `p2a` package schema `*.schema.json`의 필수 키, 타입, enum, const, pattern, minLength/minItems subset을 검사한다. | `$ missing required keys: ...`, `$ contains unsupported keys: ...`, `$.schema_version must equal ...` |
 | Evidence 중복/WEB URL | `evidence[].source_id`는 중복될 수 없고, `WEB-n` URL은 `http://` 또는 `https://`로 시작해야 한다. | `intake.evidence source_id values must be unique`, `spec.evidence WEB-1 must include an http(s) url` |
 | Gate B 기술 조사 최소 근거 | 승인된 spec이 material technology choice를 담고 있으면 최소 하나의 관련 `WEB-n` evidence가 필요하다. | `approved spec with material technology choices requires WEB-n evidence ...` |
 | Feature Radar 후보 처리 | 승인된 spec에서 Feature Radar 후보가 `context` 또는 `open`으로 남아 있으면 실패한다. | `approved spec must resolve Feature Radar candidate REF-1 as selected, rejected, or deferred before Gate B approval` |
@@ -534,7 +534,7 @@ node scripts/sync_cli_assets.mjs
 | `task ids must be unique` | 같은 `task-001` 같은 id가 두 번 이상 있다. | task id를 안정적으로 다시 부여하고 dependency 참조도 함께 수정한다. |
 | `has unknown dependencies` | task가 존재하지 않는 dependency id를 참조한다. | dependency 오타를 고치거나 누락된 선행 task를 추가한다. |
 | `task graph contains a dependency cycle` | task dependency가 서로 물고 있어 시작 가능한 순서가 없다. | cycle에 포함된 task의 선후관계를 다시 설계한다. |
-| `$ contains unsupported keys` 또는 `$ missing required keys` | JSON artifact가 schema와 맞지 않는다. | `.plan2agent/schemas/intake.schema.json`, `.plan2agent/schemas/spec.schema.json`, `.plan2agent/schemas/task-graph.schema.json`의 required/additionalProperties 규칙에 맞춘다. |
+| `$ contains unsupported keys` 또는 `$ missing required keys` | JSON artifact가 schema와 맞지 않는다. | `p2a` package schema `intake.schema.json`, `p2a` package schema `spec.schema.json`, `p2a` package schema `task-graph.schema.json`의 required/additionalProperties 규칙에 맞춘다. |
 | `WEB-1 must include an http(s) url` | web evidence의 URL이 비어 있거나 http(s)가 아니다. | 실제 참조한 웹 문서의 `http://` 또는 `https://` URL을 넣는다. |
 | CLI가 skill 또는 subagent를 못 알아본다. | CLI가 mirror 파일을 아직 로드하지 않았거나 mirror drift가 있다. | Plan2Agent 저장소 루트에서 CLI를 재시작한다. Gemini CLI command는 `/commands reload` 후 `/commands list`를 확인한다. 필요하면 `node scripts/sync_cli_assets.mjs`와 `node scripts/check_cli_parity.mjs`를 실행한다. |
 | `parity failed: skill mirror drift ...` | `.agents/skills` 원본과 `.claude/skills` mirror가 다르다. | canonical `.agents` 쪽 변경을 기준으로 Plan2Agent 저장소 루트에서 `node scripts/sync_cli_assets.mjs`를 실행하고 parity를 재검사한다. |
@@ -566,7 +566,7 @@ node scripts/sync_cli_assets.mjs
 - 다회차 기획과 반복/고도화 개발 구조는 `docs/iteration-spec.md`를 본다. 이 문서는 iteration layout, `current-spec.json`, active iteration, maintenance, open/close 후보 명령을 정의한다.
 - 사용자 시작점과 문서 탐색은 `docs/README.md`와 `docs/quickstart.md`를 먼저 본다. CLI별 세부 명령은 `docs/cli-reference.md`를 본다.
 - 하네스 한계: Gate A-D planning 단계는 코드 변경, dependency 설치, 구현 목적 shell 실행을 하지 않는다. 승인된 task 이후의 감독형 실행 흐름은 `docs/supervised-execution.md`를 본다.
-- 실행 추적: handoff 이후 `p2a_runs.mjs`가 파일 기반 run log, changed files, verification, workspace/branch/worktree 참조를 기록한다. agent 자동 실행 orchestration은 후속이다.
+- 실행 추적: handoff 이후 `p2a runs`가 파일 기반 run log, changed files, verification, workspace/branch/worktree 참조를 기록한다. agent 자동 실행 orchestration은 후속이다.
 
 무엇을 보강했는지:
 

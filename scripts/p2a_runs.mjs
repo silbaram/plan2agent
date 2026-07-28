@@ -83,6 +83,7 @@ import { commandLine as sharedCommandLine, printRunCommandFooter } from './p2a_r
 
 const P2A_PATHS = resolveP2aPaths(import.meta.url);
 const ROOT = P2A_PATHS.projectRoot;
+const PROJECT_RUNS_DIR = path.join(ROOT, DEFAULT_RUNS_DIR);
 const COMMANDS = new Set(['start', 'record', 'verify', 'finish', 'list', 'show', 'validate', 'migrate-layout']);
 const RUN_STATUSES = new Set(['started', 'finished', 'failed', 'blocked']);
 const FAILURE_SOURCES = new Set(['owner', 'monitor', 'implementer']);
@@ -101,15 +102,15 @@ const OUTPUT_TAIL_LIMIT = 4000;
 function usage() {
   return [
     'Usage:',
-    '  node .plan2agent/scripts/p2a_runs.mjs start --artifacts <iterative-project-dir> --task <task-id> --agent-tool <tool> [options]',
-    '  node .plan2agent/scripts/p2a_runs.mjs start --graph <task-graph.json> --task <task-id> --agent-tool <tool> [--runs <dir>] [options]',
-    '  node .plan2agent/scripts/p2a_runs.mjs record --run-id <run-id> (--artifacts <dir>|--runs <dir>|--graph <path>) [--changed-file <path> ...] [--verification <type:status:command>] [--note <text>] [structured detail options]',
-    '  node .plan2agent/scripts/p2a_runs.mjs verify --run-id <run-id> (--artifacts <dir>|--runs <dir>|--graph <path>) [--test] [--lint] [--typecheck] [--test-command <cmd>] [--lint-command <cmd>] [--typecheck-command <cmd>] [--verify-command <type:cmd>]',
-    '  node .plan2agent/scripts/p2a_runs.mjs finish --run-id <run-id> (--artifacts <dir>|--runs <dir>|--graph <path>) [--status finished|failed|blocked] [--failure-class <class>] [--retryable yes|no|after_fix] [--needs-user-decision true|false] [--failure-source owner|monitor|implementer] [--changed-file <path> ...] [--verification <type:status:command>] [--collect-git] [--note <text>] [structured detail options]',
-    '  node .plan2agent/scripts/p2a_runs.mjs list (--artifacts <dir>|--runs <dir>|--graph <path>) [--json]',
-    '  node .plan2agent/scripts/p2a_runs.mjs show --run-id <run-id> (--artifacts <dir>|--runs <dir>|--graph <path>)',
-    '  node .plan2agent/scripts/p2a_runs.mjs validate (--artifacts <dir>|--runs <dir>|--graph <path>) [--run-id <run-id>]',
-    '  node .plan2agent/scripts/p2a_runs.mjs migrate-layout (--artifacts <dir>|--runs <dir>|--graph <path>) [--dry-run] --yes',
+    '  p2a runs start --artifacts <iterative-project-dir> --task <task-id> --agent-tool <tool> [options]',
+    '  p2a runs start --graph <task-graph.json> --task <task-id> --agent-tool <tool> [--runs <dir>] [options]',
+    '  p2a runs record --run-id <run-id> (--artifacts <dir>|--runs <dir>|--graph <path>) [--changed-file <path> ...] [--verification <type:status:command>] [--note <text>] [structured detail options]',
+    '  p2a runs verify --run-id <run-id> (--artifacts <dir>|--runs <dir>|--graph <path>) [--test] [--lint] [--typecheck] [--test-command <cmd>] [--lint-command <cmd>] [--typecheck-command <cmd>] [--verify-command <type:cmd>]',
+    '  p2a runs finish --run-id <run-id> (--artifacts <dir>|--runs <dir>|--graph <path>) [--status finished|failed|blocked] [--failure-class <class>] [--retryable yes|no|after_fix] [--needs-user-decision true|false] [--failure-source owner|monitor|implementer] [--changed-file <path> ...] [--verification <type:status:command>] [--collect-git] [--note <text>] [structured detail options]',
+    '  p2a runs list (--artifacts <dir>|--runs <dir>|--graph <path>) [--json]',
+    '  p2a runs show --run-id <run-id> (--artifacts <dir>|--runs <dir>|--graph <path>)',
+    '  p2a runs validate (--artifacts <dir>|--runs <dir>|--graph <path>) [--run-id <run-id>]',
+    '  p2a runs migrate-layout (--artifacts <dir>|--runs <dir>|--graph <path>) [--dry-run] --yes',
     '',
     'Options:',
     '  --artifacts <dir>       Iterative artifact root; writes runs/ under that root.',
@@ -283,7 +284,7 @@ function parseArgs(argv) {
     if (defaultArtifacts) args.artifacts = defaultArtifacts;
     else if (configuredGraph) args.graph = configuredGraph;
     else if (args.command === 'start') assertNoUninitializedScaffoldArtifactRoots();
-    else if (existsSync(DEFAULT_RUNS_DIR)) args.runs = DEFAULT_RUNS_DIR;
+    else if (existsSync(PROJECT_RUNS_DIR)) args.runs = PROJECT_RUNS_DIR;
     else assertNoUninitializedScaffoldArtifactRoots();
     if (!args.artifacts && !args.graph && !args.runs) {
       throw new Error('--artifacts, --graph, or --runs is required');
@@ -293,7 +294,7 @@ function parseArgs(argv) {
   if (args.maintenance && !args.artifacts) throw new Error('--maintenance is only supported with --artifacts');
   if (args.graph) assertNotUninitializedScaffoldGraph(args.graph);
   if (args.graph && ['start', 'record', 'verify', 'finish'].includes(args.command)) {
-    assertUnmanagedGraphMutation(args.graph, `p2a_runs ${args.command}`);
+    assertUnmanagedGraphMutation(args.graph, `p2a runs ${args.command}`);
   }
   if (args.command === 'start') {
     if (!args.taskId) throw new Error('--task is required for start');

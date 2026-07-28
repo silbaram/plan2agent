@@ -26,7 +26,7 @@ Create a development-ready product and implementation specification from approve
 
 Return:
 
-- `spec_json` conforming to `.plan2agent/schemas/spec.schema.json`
+- `spec_json` conforming to `p2a` package schema `spec.schema.json`
 - `open_decisions`
 - `clarifying_question_disposition` inside `spec_json`, with one disposition for every intake `CQ-n`
 - `evidence` inside `spec_json`, preserving intake sources and adding any new `WEB-n` or `LOCAL-n` sources

@@ -94,37 +94,49 @@ export function runP2a(args) {
   return spawnSync(process.execPath, [P2A_CLI, ...args], { cwd: ROOT, encoding: 'utf8' });
 }
 
+export function runP2aFrom(cwd, args) {
+  return spawnSync(process.execPath, [P2A_CLI, ...args], { cwd, encoding: 'utf8' });
+}
+
 export function runTargetP2a(targetRoot, args) {
-  return spawnSync(process.execPath, [path.join(targetRoot, '.plan2agent', 'scripts', 'p2a.mjs'), ...args], { cwd: targetRoot, encoding: 'utf8' });
+  return runP2aFrom(targetRoot, args);
+}
+
+export function runEmbeddedTargetP2a(targetRoot, args) {
+  return spawnSync(
+    process.execPath,
+    [path.join(targetRoot, '.plan2agent', 'scripts', 'p2a.mjs'), ...args],
+    { cwd: targetRoot, encoding: 'utf8' },
+  );
 }
 
 export function runTargetTasks(targetRoot, args) {
-  return spawnSync(process.execPath, [path.join(targetRoot, '.plan2agent', 'scripts', 'p2a_tasks.mjs'), ...args], { cwd: targetRoot, encoding: 'utf8' });
+  return runTargetP2a(targetRoot, ['tasks', ...args]);
 }
 
 export function runTargetRuns(targetRoot, args) {
-  return spawnSync(process.execPath, [path.join(targetRoot, '.plan2agent', 'scripts', 'p2a_runs.mjs'), ...args], { cwd: targetRoot, encoding: 'utf8' });
+  return runTargetP2a(targetRoot, ['runs', ...args]);
 }
 
 export function runTargetExecute(targetRoot, args) {
-  return spawnSync(process.execPath, [path.join(targetRoot, '.plan2agent', 'scripts', 'p2a_execute.mjs'), ...args], { cwd: targetRoot, encoding: 'utf8' });
+  return runTargetP2a(targetRoot, ['execute', ...args]);
 }
 
 
 export function runTargetProposals(targetRoot, args) {
-  return spawnSync(process.execPath, [path.join(targetRoot, '.plan2agent', 'scripts', 'p2a_proposals.mjs'), ...args], { cwd: targetRoot, encoding: 'utf8' });
+  return runTargetP2a(targetRoot, ['proposals', ...args]);
 }
 
 export function runTargetEval(targetRoot, args) {
-  return spawnSync(process.execPath, [path.join(targetRoot, '.plan2agent', 'scripts', 'p2a_eval.mjs'), ...args], { cwd: targetRoot, encoding: 'utf8' });
+  return runTargetP2a(targetRoot, ['eval', ...args]);
 }
 
 export function runTargetMemory(targetRoot, args) {
-  return spawnSync(process.execPath, [path.join(targetRoot, '.plan2agent', 'scripts', 'p2a_memory.mjs'), ...args], { cwd: targetRoot, encoding: 'utf8' });
+  return runTargetP2a(targetRoot, ['memory', ...args]);
 }
 
 export function runTargetIteration(targetRoot, args) {
-  return spawnSync(process.execPath, [path.join(targetRoot, '.plan2agent', 'scripts', 'p2a_iteration.mjs'), ...args], { cwd: targetRoot, encoding: 'utf8' });
+  return runTargetP2a(targetRoot, ['iteration', ...args]);
 }
 
 export function failureStatus(result) {

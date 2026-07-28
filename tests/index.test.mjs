@@ -17,3 +17,4 @@ import './milestone-review.test.mjs';
 import './milestone-promotion.test.mjs';
 import './validate-artifacts-compatibility.test.mjs';
 import './next-decision.test.mjs';
+import './npm-package.test.mjs';

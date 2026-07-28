@@ -22,7 +22,7 @@ Use this skill when the active iteration has an approved Gate B spec and needs a
 The skill owner runs the context command to get the `p2a.task_context.v1` JSON bundle before invoking the task-author subagent:
 
 ```bash
-node .plan2agent/scripts/p2a_iteration.mjs context --artifacts <root>
+p2a iteration context --artifacts <root>
 ```
 
 Use these context fields:
@@ -48,7 +48,7 @@ The task-author subagent returns the complete draft JSON to the skill owner with
 iterations/<active_iteration>/gate-c-task-graph/task-graph.draft.json
 ```
 
-The draft must conform to `.plan2agent/schemas/task-graph.schema.json` (`p2a.task_graph.v1`) and include:
+The draft must conform to `p2a` package schema `task-graph.schema.json` (`p2a.task_graph.v1`) and include:
 
 - `schema_version`: `p2a.task_graph.v1`
 - `projectId`: copied exactly from `context.project_id`.
@@ -98,13 +98,13 @@ After the skill owner writes the draft, hand it to the human gate with these ste
 1. Validate the draft:
 
    ```bash
-   node .plan2agent/scripts/p2a_iteration.mjs validate --artifacts <root> --stage gate-c-draft
+   p2a iteration validate --artifacts <root> --stage gate-c-draft
    ```
 
 2. If the human approves after review, promote the approved draft and record the Gate C audit in `current-spec.json`:
 
    ```bash
-   node .plan2agent/scripts/p2a_iteration.mjs promote-tasks \
+   p2a iteration promote-tasks \
      --artifacts <root> \
      --approved-by user \
      --approval-note "<review rationale>"

@@ -31,7 +31,13 @@ import {
 } from './validate_artifacts.mjs';
 import { resolveIterationState } from './p2a_iteration_state.mjs';
 import { renderIterationIndexMarkdown } from './p2a_iteration.mjs';
-import { normalizePath, P2A_ARTIFACTS_DIR, P2A_SCHEMAS_DIR, P2A_SCRIPTS_DIR, resolveP2aPaths } from './p2a_paths.mjs';
+import {
+  normalizePath,
+  P2A_ARTIFACTS_DIR,
+  P2A_SCHEMAS_DIR,
+  P2A_SCRIPTS_DIR,
+  resolveP2aPaths,
+} from './p2a_paths.mjs';
 import { artifactRunRef, legacyRunRef } from './p2a_run_paths.mjs';
 import { shellQuote } from './p2a_run_commands.mjs';
 import {
@@ -45,7 +51,10 @@ import {
   resolveOrchestrationAgentTool,
   resolveProjectIdDefault,
 } from './p2a_project_config.mjs';
-import { PROJECT_RUNTIME_SCHEMA_FILES, PROJECT_RUNTIME_SCRIPT_FILES } from './p2a_tool_manifest.mjs';
+import {
+  PROJECT_RUNTIME_SCHEMA_FILES,
+  PROJECT_RUNTIME_SCRIPT_FILES,
+} from './p2a_tool_manifest.mjs';
 import {
   FEATURE_RADAR_COPY_FILES,
   FEATURE_RADAR_PREFLIGHT_DIR,
@@ -68,24 +77,58 @@ const TEAM_BIGFIVE_SOURCE_MANIFEST = path.join(TEAM_BIGFIVE_HARNESS_DIR, 'source
 const TEAM_BIGFIVE_ADAPTATION_NOTES = path.join(TEAM_BIGFIVE_HARNESS_DIR, 'adaptation-notes.md');
 const DEFAULT_ITERATION_ID = 'active';
 const MANAGED_FILE_HASH_PATTERN = /^[a-f0-9]{64}$/;
+const INITIALIZE_COMMANDS = new Set(['init', 'scaffold']);
+const SCAFFOLD_SCRIPT_FILES = PROJECT_RUNTIME_SCRIPT_FILES;
+const SCAFFOLD_SCHEMA_FILES = PROJECT_RUNTIME_SCHEMA_FILES;
+
+function readPackageCoordinates() {
+  const packagePath = path.join(ROOT, 'package.json');
+  try {
+    const packageJson = JSON.parse(readFileSync(packagePath, 'utf8'));
+    if (typeof packageJson.name !== 'string' || !packageJson.name.trim()) {
+      throw new Error('name must be a non-empty string');
+    }
+    if (typeof packageJson.version !== 'string' || !packageJson.version.trim()) {
+      throw new Error('version must be a non-empty string');
+    }
+    return {
+      packageName: packageJson.name.trim(),
+      packageVersion: packageJson.version.trim(),
+    };
+  } catch (error) {
+    throw new Error(`Plan2Agent package metadata is unavailable at ${normalizePath(packagePath)}: ${error.message}`);
+  }
+}
+
+function targetScriptPath(file) {
+  return path.join(P2A_SCRIPTS_DIR, file);
+}
+
+function targetSchemaPath(file) {
+  return path.join(P2A_SCHEMAS_DIR, file);
+}
+
+function isInitializeCommand(command) {
+  return INITIALIZE_COMMANDS.has(command);
+}
 
 function usage() {
   return [
     'Usage:',
-    '  node scripts/p2a_handoff.mjs scaffold --target <project-dir> [--tools <list>] [--codex-profile quality|inherit] [--overwrite] [--dry-run]',
-    '  node scripts/p2a_handoff.mjs enhance <capability> --target <project-dir> [--tools <list>] [--codex-profile quality|inherit] [--overwrite] [--dry-run]',
-    '  node scripts/p2a_handoff.mjs update --target <project-dir> [--tools <list>] [--codex-profile quality|inherit] [--dry-run|--apply] [--prune]',
-    '  node scripts/p2a_handoff.mjs upgrade --target <project-dir> (--dry-run|--apply) [--tools <list>] [--codex-profile quality|inherit] [--prune]',
-    '  node scripts/p2a_handoff.mjs --project-id <id> --artifacts <path> --target <path> [--codex-profile quality|inherit] [options]',
+    '  p2a init [--target <project-dir>] [--tools <list>] [--codex-profile quality|inherit] [--overwrite] [--dry-run]',
+    '  p2a enhance <capability> [--target <project-dir>] [--tools <list>] [--codex-profile quality|inherit] [--overwrite] [--dry-run]',
+    '  p2a update [--target <project-dir>] [--tools <list>] [--codex-profile quality|inherit] [--dry-run|--apply] [--prune]',
+    '  p2a upgrade [--target <project-dir>] (--dry-run|--apply) [--tools <list>] [--codex-profile quality|inherit] [--prune]',
+    '  p2a handoff --project-id <id> --artifacts <path> --target <path> [--codex-profile quality|inherit] [options]',
     '',
     'Options:',
-    'Scaffold:',
-    '  scaffold             Install the full co-located P2A planning/development harness into a project.',
+    'Initialization:',
+    '  init                 Initialize project state and selected AI tool assets. Runtime scripts and schemas stay in the installed package.',
     '  enhance <capability> Install or refresh one capability: dev-skills, memory, orchestration, proposals.',
     '  update               Preview or apply scaffolded harness updates.',
     '  upgrade              Preview or apply scaffolded harness file updates.',
-    '  --target <path>      Project directory to create or update.',
-    '  --tools <list>       Copy portable P2A AI tool assets for scaffold/enhance dev-skills. Use comma list, all, or none. Default: all.',
+    '  --target <path>      Project directory to initialize or update. Defaults to the current directory through p2a.',
+    '  --tools <list>       Copy portable P2A AI tool assets for init/enhance dev-skills. Use comma list, all, or none. Default: all.',
     '  --codex-profile <p>  Codex agent profile: quality pins GPT-5.6 Sol by tier; inherit uses the parent session model/effort. Default: quality.',
     '',
     'Handoff options:',
@@ -147,8 +190,8 @@ function isGitUrl(value) {
 }
 
 function parseArgs(argv) {
-  const scaffoldCommand = new Set(['scaffold', 'update', 'upgrade', 'enhance']);
-  const command = scaffoldCommand.has(argv[0]) ? argv.shift() : 'handoff';
+  const harnessCommand = new Set(['init', 'scaffold', 'update', 'upgrade', 'enhance']);
+  const command = harnessCommand.has(argv[0]) ? argv.shift() : 'handoff';
   const enhancement = command === 'enhance' ? argv.shift() : null;
   const enhancementHelp = enhancement === '--help' || enhancement === '-h';
   const args = {
@@ -158,7 +201,7 @@ function parseArgs(argv) {
     iterationId: DEFAULT_ITERATION_ID,
     iterationIdProvided: false,
     includeIntake: false,
-    tools: command === 'scaffold' || command === 'enhance' ? [...TOOL_TARGET_ORDER] : command === 'update' || command === 'upgrade' ? null : [],
+    tools: isInitializeCommand(command) || command === 'enhance' ? [...TOOL_TARGET_ORDER] : command === 'update' || command === 'upgrade' ? null : [],
     includeTeamBigFive: false,
     teamBigFiveSource: null,
     teamBigFiveTargets: null,
@@ -175,7 +218,7 @@ function parseArgs(argv) {
     const arg = argv[index];
     if (arg === '--help' || arg === '-h') {
       args.help = true;
-    } else if ((command === 'scaffold' || command === 'update' || command === 'upgrade' || command === 'enhance') && (arg === '--project-id' || arg === '--artifacts' || arg === '--mode' || arg === '--iteration-id' || arg === '--include-intake' || arg === '--include-team-bigfive' || arg === '--team-bigfive-source' || arg === '--team-bigfive-targets')) {
+    } else if ((isInitializeCommand(command) || command === 'update' || command === 'upgrade' || command === 'enhance') && (arg === '--project-id' || arg === '--artifacts' || arg === '--mode' || arg === '--iteration-id' || arg === '--include-intake' || arg === '--include-team-bigfive' || arg === '--team-bigfive-source' || arg === '--team-bigfive-targets')) {
       throw new Error(`${arg} is not valid for ${command}`);
     } else if (arg === '--project-id') {
       args.projectId = argv[++index];
@@ -229,7 +272,7 @@ function parseArgs(argv) {
   if (command === 'enhance') {
     if (!VALID_ENHANCEMENTS.has(enhancement)) throw new Error(`enhance requires one of: ${ENHANCEMENT_ORDER.join(', ')}`);
   }
-  if (command === 'scaffold' || command === 'update' || command === 'upgrade' || command === 'enhance') {
+  if (isInitializeCommand(command) || command === 'update' || command === 'upgrade' || command === 'enhance') {
     if (!args.target) throw new Error('--target is required');
     if (args.apply && args.dryRun) throw new Error('--apply cannot be combined with --dry-run');
     if (args.apply && command !== 'update' && command !== 'upgrade') throw new Error('--apply is only supported by update and upgrade');
@@ -701,6 +744,22 @@ function inheritedCodexAgentContent(sourcePath) {
     .replace(/^model_reasoning_effort\s*=.*\n/m, '');
 }
 
+const P2A_SUBCOMMAND_PATTERN = /\bp2a (?=(?:doctor|enhance|eval|execute|handoff|info|init|iteration|memory|next|proposal|proposals|run|runs|scaffold|task|tasks|update|upgrade|validate)\b)/g;
+
+function legacyRuntimeCommandContent(source) {
+  return source.replace(
+    P2A_SUBCOMMAND_PATTERN,
+    'node .plan2agent/scripts/p2a.mjs ',
+  );
+}
+
+function legacyRuntimeAssetContent(sourcePath, initialTransform = null) {
+  const source = initialTransform
+    ? initialTransform(sourcePath)
+    : readFileSync(sourcePath, 'utf8');
+  return legacyRuntimeCommandContent(source);
+}
+
 function pushToolAssetDirectory(plan, targetRoot, sourceRelativeDir, targetRelativeDir, options = {}) {
   const sourceRoot = path.join(ROOT, sourceRelativeDir);
   if (!existsSync(sourceRoot) || !lstatSync(sourceRoot).isDirectory()) {
@@ -794,13 +853,24 @@ function selectedToolAssetSpecs(toolTargets, { codexProfile = DEFAULT_CODEX_AGEN
   return specs;
 }
 
-function pushToolAssets(plan, targetRoot, toolTargets, { codexProfile = DEFAULT_CODEX_AGENT_PROFILE } = {}) {
+function pushToolAssets(
+  plan,
+  targetRoot,
+  toolTargets,
+  {
+    codexProfile = DEFAULT_CODEX_AGENT_PROFILE,
+    legacyRuntime = false,
+  } = {},
+) {
   const files = [];
   const groups = [];
   for (const spec of selectedToolAssetSpecs(toolTargets, { codexProfile })) {
+    const transform = legacyRuntime
+      ? (sourcePath) => legacyRuntimeAssetContent(sourcePath, spec.transform)
+      : spec.transform;
     const groupFiles = pushToolAssetDirectory(plan, targetRoot, spec.source, spec.target, {
       filter: spec.filter,
-      transform: spec.transform,
+      transform,
     });
     files.push(...groupFiles);
     groups.push({ key: spec.key, source: normalizePath(spec.source), target: normalizePath(spec.target), files: groupFiles });
@@ -949,7 +1019,7 @@ Use this skill only after Plan2Agent legacy handoff has installed approved flat 
 ## Inputs
 
 - A Plan2Agent task id from the handoff task graph recorded in \`.plan2agent/project.config.json.taskGraph\`.
-- The task prompt from \`node .plan2agent/scripts/p2a.mjs execute start --graph <task-graph> --task <task-id>\` or \`node .plan2agent/scripts/p2a.mjs tasks prompt --graph <task-graph> <task-id>\`.
+- The task prompt from \`p2a execute start --graph <task-graph> --task <task-id>\` or \`p2a tasks prompt --graph <task-graph> <task-id>\`.
 - Optional verification commands from \`.plan2agent/project.config.json\`.
 
 ## Workflow
@@ -958,7 +1028,7 @@ Use this skill only after Plan2Agent legacy handoff has installed approved flat 
 2. Split the work into five lanes: coordination, implementation plan, code changes, review, and verification.
 3. Keep all work tied to the task id and source spec refs.
 4. Do not edit approved Plan2Agent artifacts except through the task/status CLIs.
-5. Track execution with \`node .plan2agent/scripts/p2a.mjs execute start/finish/status\` or the lower-level \`node .plan2agent/scripts/p2a.mjs runs start/verify/finish\` so runId, changed files, verification, agent tool, and workspace reference are preserved.
+5. Track execution with \`p2a execute start/finish/status\` or the lower-level \`p2a runs start/verify/finish\` so runId, changed files, verification, agent tool, and workspace reference are preserved.
 6. Before marking the task done, run or request the configured test, lint, and typecheck commands when available.
 
 ## Output
@@ -979,7 +1049,7 @@ Coordinate complex tasks through five lanes:
 - review: inspect behavioral regressions, missing tests, and scope drift.
 - verification: run or request test/lint/typecheck commands from project.config.json.
 
-Do not modify .plan2agent/artifacts/* directly. Use .plan2agent/scripts/p2a_execute.mjs for supervised task lifecycle records, or .plan2agent/scripts/p2a_tasks.mjs and .plan2agent/scripts/p2a_runs.mjs for lower-level task state and run records. Do not run package install, destructive git commands, or external network operations unless the user explicitly approves them. When finished, report the run id, changed files, verification commands, results, and any remaining blockers. Target adapter: ${target}.`;
+Do not modify .plan2agent/artifacts/* directly. Use p2a execute for supervised task lifecycle records, or p2a tasks and p2a runs for lower-level task state and run records. Do not run package install, destructive git commands, or external network operations unless the user explicitly approves them. When finished, report the run id, changed files, verification commands, results, and any remaining blockers. Target adapter: ${target}.`;
 }
 
 function tomlString(value) {
@@ -1067,7 +1137,7 @@ Local source files are fingerprinted in source-manifest.json. For Claude targets
 `;
 }
 
-function pushTeamBigFiveAdapter(plan, targetRoot, args) {
+function pushTeamBigFiveAdapter(plan, targetRoot, args, { legacyRuntime = false } = {}) {
   if (!args.includeTeamBigFive) {
     return {
       enabled: false,
@@ -1083,6 +1153,9 @@ function pushTeamBigFiveAdapter(plan, targetRoot, args) {
   const sourceInfo = resolveTeamBigFiveSource(args.teamBigFiveSource);
   const files = [];
   const groups = [];
+  const runtimeContent = legacyRuntime
+    ? legacyRuntimeCommandContent
+    : (content) => content;
 
   const sourceManifest = teamBigFiveSourceManifest(sourceInfo, targets);
   pushGeneratedJson(plan, targetRoot, TEAM_BIGFIVE_SOURCE_MANIFEST, sourceManifest);
@@ -1094,14 +1167,14 @@ function pushTeamBigFiveAdapter(plan, targetRoot, args) {
   const needsCommonSkill = targets.includes('codex') || targets.includes('gemini');
   if (needsCommonSkill) {
     const skillPath = path.join('.agents', 'skills', 'team-bigfive-kickoff', 'SKILL.md');
-    pushGeneratedText(plan, targetRoot, skillPath, teamBigFiveSkillMarkdown());
+    pushGeneratedText(plan, targetRoot, skillPath, runtimeContent(teamBigFiveSkillMarkdown()));
     files.push(normalizePath(skillPath));
     groups.push({ key: 'team-bigfive-common-skill', files: [normalizePath(skillPath)] });
   }
 
   if (targets.includes('codex')) {
     const adapterFiles = [path.join('.codex', 'agents', 'team-bigfive-coordinator.toml')];
-    pushGeneratedText(plan, targetRoot, adapterFiles[0], renderCodexTeamBigFiveAgent());
+    pushGeneratedText(plan, targetRoot, adapterFiles[0], runtimeContent(renderCodexTeamBigFiveAgent()));
     files.push(...adapterFiles.map(normalizePath));
     groups.push({ key: 'team-bigfive-codex', files: adapterFiles.map(normalizePath) });
   }
@@ -1111,8 +1184,8 @@ function pushTeamBigFiveAdapter(plan, targetRoot, args) {
       path.join('.claude', 'skills', 'team-bigfive-kickoff', 'SKILL.md'),
       path.join('.claude', 'agents', 'team-bigfive-coordinator.md'),
     ];
-    pushGeneratedText(plan, targetRoot, adapterFiles[0], teamBigFiveSkillMarkdown());
-    pushGeneratedText(plan, targetRoot, adapterFiles[1], renderClaudeTeamBigFiveAgent());
+    pushGeneratedText(plan, targetRoot, adapterFiles[0], runtimeContent(teamBigFiveSkillMarkdown()));
+    pushGeneratedText(plan, targetRoot, adapterFiles[1], runtimeContent(renderClaudeTeamBigFiveAgent()));
     files.push(...adapterFiles.map(normalizePath));
 
     const sourceCopyFiles = [];
@@ -1132,7 +1205,7 @@ function pushTeamBigFiveAdapter(plan, targetRoot, args) {
       path.join('.gemini', 'agents', 'team-bigfive-coordinator.md'),
       path.join('.gemini', 'commands', 'p2a', 'team-bigfive.toml'),
     ];
-    pushGeneratedText(plan, targetRoot, adapterFiles[0], renderGeminiTeamBigFiveAgent());
+    pushGeneratedText(plan, targetRoot, adapterFiles[0], runtimeContent(renderGeminiTeamBigFiveAgent()));
     pushGeneratedText(plan, targetRoot, adapterFiles[1], renderGeminiTeamBigFiveCommand());
     files.push(...adapterFiles.map(normalizePath));
     groups.push({ key: 'team-bigfive-gemini', files: adapterFiles.map(normalizePath) });
@@ -1168,17 +1241,6 @@ function pushTeamBigFiveAdapter(plan, targetRoot, args) {
   };
 }
 
-
-const SCAFFOLD_SCRIPT_FILES = PROJECT_RUNTIME_SCRIPT_FILES;
-const SCAFFOLD_SCHEMA_FILES = PROJECT_RUNTIME_SCHEMA_FILES;
-
-function targetScriptPath(file) {
-  return path.join(P2A_SCRIPTS_DIR, file);
-}
-
-function targetSchemaPath(file) {
-  return path.join(P2A_SCHEMAS_DIR, file);
-}
 
 function targetArtifactDir(projectId) {
   return path.join(ARTIFACT_TARGET_BASE, projectId);
@@ -1413,7 +1475,10 @@ Update it only by direct user edits or through an approved Plan2Agent proposal.
 `;
 }
 
-function renderPlan2AgentGuide() {
+function renderPlan2AgentGuide(legacyRuntime = false) {
+  const terminalNextCommand = legacyRuntime
+    ? 'node .plan2agent/scripts/p2a.mjs next'
+    : 'p2a next';
   return `# Plan2Agent Project Harness
 
 This repository owns its Plan2Agent planning and development loop in-place.
@@ -1422,7 +1487,7 @@ This repository owns its Plan2Agent planning and development loop in-place.
 
 Use one state-based entry point whenever you begin or finish a Plan2Agent action:
 
-- Terminal: \`node .plan2agent/scripts/p2a.mjs next\`
+- Terminal: \`${terminalNextCommand}\`
 - Claude Code, Codex, or Gemini agent session: \`/p2a-next\`
 
 The result provides exactly one next action and its reason. Continue a returned skill in the same agent session; review and approve a returned CLI or approval action before running it. After that action is complete, run \`next\` again.
@@ -1437,20 +1502,37 @@ history through Plan2Agent Memory or an explicit export when needed.
 `;
 }
 
-function buildScaffoldPlan(args, targetRoot, createdAt = new Date().toISOString()) {
+function buildScaffoldPlan(
+  args,
+  targetRoot,
+  createdAt = new Date().toISOString(),
+  options = {},
+) {
   const plan = [];
   const projectId = resolveProjectIdDefault(targetRoot);
   const codexProfile = resolveCodexAgentProfile(args.codexProfile);
-  for (const file of SCAFFOLD_SCRIPT_FILES) {
-    pushArtifact(plan, path.join(ROOT, 'scripts', file), targetRoot, targetScriptPath(file));
+  const legacyRuntime = options.legacyRuntime
+    ?? (['init', 'scaffold'].includes(args.command) && P2A_PATHS.toolkitCheckout);
+  const packageCoordinates = readPackageCoordinates();
+  if (legacyRuntime) {
+    for (const file of SCAFFOLD_SCRIPT_FILES) {
+      pushArtifact(plan, path.join(ROOT, 'scripts', file), targetRoot, targetScriptPath(file));
+    }
+    for (const file of SCAFFOLD_SCHEMA_FILES) {
+      pushArtifact(plan, path.join(ROOT, 'schemas', file), targetRoot, targetSchemaPath(file));
+    }
   }
-  for (const file of SCAFFOLD_SCHEMA_FILES) {
-    pushArtifact(plan, path.join(ROOT, 'schemas', file), targetRoot, targetSchemaPath(file));
-  }
-  const toolAssetPlan = pushToolAssets(plan, targetRoot, args.tools, { codexProfile });
+  const toolAssetPlan = pushToolAssets(plan, targetRoot, args.tools, {
+    codexProfile,
+    legacyRuntime,
+  });
   const claudeCoarseDeny = args.tools.includes('claude') ? claudeCoarseDenyRules(targetRoot) : { omitted: [] };
-  const scriptFiles = SCAFFOLD_SCRIPT_FILES.map((file) => normalizePath(targetScriptPath(file)));
-  const schemaFiles = SCAFFOLD_SCHEMA_FILES.map((file) => normalizePath(targetSchemaPath(file)));
+  const scriptFiles = legacyRuntime
+    ? SCAFFOLD_SCRIPT_FILES.map((file) => normalizePath(targetScriptPath(file)))
+    : [];
+  const schemaFiles = legacyRuntime
+    ? SCAFFOLD_SCHEMA_FILES.map((file) => normalizePath(targetSchemaPath(file)))
+    : [];
   const managedFiles = plannedManagedFileRecords(plan, {
     scriptFiles,
     schemaFiles,
@@ -1459,10 +1541,19 @@ function buildScaffoldPlan(args, targetRoot, createdAt = new Date().toISOString(
   const manifest = {
     schema_version: 'p2a.handoff.v1',
     projectId,
-    provenance: { mode: 'scaffold', createdAt, toolkitRoot: ROOT },
+    provenance: {
+      mode: args.command === 'scaffold' ? 'scaffold' : 'init',
+      createdAt,
+      ...packageCoordinates,
+      ...(legacyRuntime ? { toolkitRoot: ROOT } : {}),
+    },
+    ...(legacyRuntime ? {} : { runtime: { mode: 'package', command: 'p2a' } }),
     targetProject: targetRoot,
     createdAt,
-    includedTools: [...SCAFFOLD_SCRIPT_FILES.map((file) => file.replace(/\.mjs$/, '')), ...args.tools.map((target) => `p2a_${target}_assets`)],
+    includedTools: [
+      ...(legacyRuntime ? SCAFFOLD_SCRIPT_FILES.map((file) => file.replace(/\.mjs$/, '')) : []),
+      ...args.tools.map((target) => `p2a_${target}_assets`),
+    ],
     aiToolTargets: args.tools,
     codexAgentProfile: codexAgentProfileRecord(codexProfile, args.tools.includes('codex')),
     scriptFiles,
@@ -1472,7 +1563,9 @@ function buildScaffoldPlan(args, targetRoot, createdAt = new Date().toISOString(
     aiToolGroups: toolAssetPlan.groups,
     managedFiles,
     notes: [
-      'co-located scaffold: this project owns greenfield planning, development, and iteration artifacts',
+      legacyRuntime
+        ? 'co-located scaffold: this project owns greenfield planning, development, and iteration artifacts'
+        : 'package runtime: this project owns Plan2Agent state and provider assets while the p2a package supplies commands and schemas',
       args.tools.length ? `AI tool assets copied for: ${args.tools.join(', ')}` : 'AI tool assets not requested',
       args.tools.includes('codex') ? `Codex agent profile: ${codexProfile}` : 'Codex agent profile not applicable',
     ],
@@ -1489,7 +1582,7 @@ function buildScaffoldPlan(args, targetRoot, createdAt = new Date().toISOString(
     pushGeneratedText(plan, targetRoot, styleContractRelative, renderStyleContractTemplate());
   }
   if (args.command !== 'scaffold' || !existsSync(path.join(targetRoot, 'PLAN2AGENT.md'))) {
-    pushGeneratedText(plan, targetRoot, 'PLAN2AGENT.md', renderPlan2AgentGuide());
+    pushGeneratedText(plan, targetRoot, 'PLAN2AGENT.md', renderPlan2AgentGuide(legacyRuntime));
   }
   plan.scaffoldWarnings = claudeCoarseDeny.omitted.map((prefix) => `Claude coarse deny ${prefix}/** omitted because targetProject is under that prefix; the PreToolUse hook enforces the workspace boundary instead.`);
   if (args.command === 'scaffold' && existsSync(path.join(targetRoot, 'PLAN2AGENT.md'))) {
@@ -1500,7 +1593,7 @@ function buildScaffoldPlan(args, targetRoot, createdAt = new Date().toISOString(
 }
 
 function printScaffoldPlan(plan, args, targetRoot) {
-  console.log(`Plan2Agent scaffold ${args.dryRun ? 'dry run' : 'plan'}`);
+  console.log(`Plan2Agent ${args.command} ${args.dryRun ? 'dry run' : 'plan'}`);
   console.log(`aiTools: ${args.tools.length ? args.tools.join(',') : 'none'}`);
   if (args.tools.includes('codex')) console.log(`codexProfile: ${resolveCodexAgentProfile(args.codexProfile)}`);
   console.log(`targetProject: ${targetRoot}`);
@@ -1652,28 +1745,33 @@ function summarizeUpgradeItems(items) {
   return summary;
 }
 
-function commandPathFromCwd(filePath) {
-  const absolutePath = path.resolve(filePath);
-  const relativePath = path.relative(path.resolve(process.cwd()), absolutePath);
-  if (relativePath && !relativePath.startsWith('..') && !path.isAbsolute(relativePath)) return relativePath;
-  return absolutePath;
+function projectP2aCommandLine(targetRoot, manifest, args) {
+  const targetP2a = path.join(targetRoot, '.plan2agent', 'scripts', 'p2a.mjs');
+  const legacyRuntime = manifest?.runtime?.mode !== 'package'
+    && existsSync(targetP2a)
+    && lstatSync(targetP2a).isFile();
+  if (!legacyRuntime) return ['p2a', ...args].map(shellQuote).join(' ');
+
+  const relativePath = path.relative(process.cwd(), targetP2a);
+  const commandPath = relativePath && !relativePath.startsWith('..') && !path.isAbsolute(relativePath)
+    ? normalizePath(relativePath)
+    : normalizePath(targetP2a);
+  return ['node', commandPath, ...args].map(shellQuote).join(' ');
 }
 
 function updateApplyCommand(args, targetRoot, { prune = args.prune === true } = {}) {
-  const targetP2a = path.join(targetRoot, '.plan2agent', 'scripts', 'p2a.mjs');
-  const targetP2aAvailable = existsSync(targetP2a) && lstatSync(targetP2a).isFile();
-  const targetP2aCommandPath = path.resolve(process.cwd()) === path.resolve(targetRoot)
-    ? path.relative(targetRoot, targetP2a)
-    : targetP2a;
-  const toolkitP2aCommandPath = commandPathFromCwd(path.join(ROOT, 'scripts', 'p2a.mjs'));
-  const parts = targetP2aAvailable
-    ? ['node', targetP2aCommandPath, args.command]
-    : ['node', toolkitP2aCommandPath, args.command, '--target', targetRoot];
+  let manifest = null;
+  try {
+    manifest = JSON.parse(readFileSync(path.join(targetRoot, '.plan2agent', 'manifest.json'), 'utf8'));
+  } catch {
+    manifest = null;
+  }
+  const parts = [args.command, '--target', targetRoot];
   if (args.toolsProvided) parts.push('--tools', args.tools.length ? args.tools.join(',') : 'none');
   if (args.codexProfileProvided) parts.push('--codex-profile', args.codexProfile);
   parts.push('--apply');
   if (prune) parts.push('--prune');
-  return parts.map(shellQuote).join(' ');
+  return projectP2aCommandLine(targetRoot, manifest, parts);
 }
 
 function buildConfigMigrations(config, manifest, targetRoot) {
@@ -1744,7 +1842,15 @@ function buildUpgradeDryRunReport(args, targetRoot) {
   const config = readUpgradeJsonFile(path.join(targetRoot, '.plan2agent', 'project.config.json'), '.plan2agent/project.config.json', args.command);
   const tools = upgradeToolTargets(args, manifest);
   const codexProfile = resolveExistingCodexAgentProfile(args, manifest);
-  const plan = buildScaffoldPlan({ ...args, tools, codexProfile }, targetRoot);
+  const legacyRuntime = P2A_PATHS.toolkitCheckout
+    && ['handoff', 'init', 'scaffold'].includes(manifest?.provenance?.mode)
+    && manifest?.runtime?.mode !== 'package';
+  const plan = buildScaffoldPlan(
+    { ...args, tools, codexProfile },
+    targetRoot,
+    new Date().toISOString(),
+    { legacyRuntime },
+  );
   pushRetiredScaffoldFileCandidates(plan, targetRoot, manifest, args);
   const items = plan.map(compareUpgradePlanItem);
   const summary = summarizeUpgradeItems(items);
@@ -2284,7 +2390,11 @@ function buildEnhanceDevSkillsPlan(args, targetRoot) {
   const config = readUpgradeJsonFile(configPath, '.plan2agent/project.config.json', 'enhance dev-skills');
   const plan = [];
   const codexProfile = resolveExistingCodexAgentProfile(args, manifest);
-  const toolAssetPlan = pushToolAssets(plan, targetRoot, args.tools, { codexProfile });
+  const legacyRuntime = manifest?.runtime?.mode !== 'package';
+  const toolAssetPlan = pushToolAssets(plan, targetRoot, args.tools, {
+    codexProfile,
+    legacyRuntime,
+  });
   const managedFiles = plannedManagedFileRecords(plan, { aiToolGroups: toolAssetPlan.groups });
   const projectIdConfig = mergeProjectIdConfig(config, manifest, targetRoot);
   const projectIdManifest = mergeProjectIdManifest(manifest, projectIdConfig.config, targetRoot);
@@ -2324,6 +2434,7 @@ function buildEnhanceCapabilityPlan(args, targetRoot) {
 
 function enhanceCapabilityNextActions(capability, targetRoot, config, manifest) {
   const source = preferredEnhanceArtifactArg(targetRoot);
+  const command = (args) => projectP2aCommandLine(targetRoot, manifest, args);
   if (capability === 'memory') {
     const projectId = typeof config?.projectId === 'string' && config.projectId.trim()
       ? config.projectId.trim()
@@ -2331,26 +2442,26 @@ function enhanceCapabilityNextActions(capability, targetRoot, config, manifest) 
         ? path.basename(source.artifactRef)
         : '<project_id>';
     return [
-      `${source.hasArtifact ? 'Check local/Memory sync' : 'After creating an artifact root, check local/Memory sync'}: node .plan2agent/scripts/p2a.mjs memory status --artifacts ${source.artifactRef}`,
-      `${source.hasArtifact ? 'Preview Memory restore diff' : 'After Memory is configured, preview restore diff'}: node .plan2agent/scripts/p2a.mjs memory pull --artifacts ${source.artifactRef} --dry-run`,
-      `${source.hasArtifact ? 'Preview explicit Memory push' : 'After review, preview explicit Memory push'}: node .plan2agent/scripts/p2a.mjs memory push --artifacts ${source.artifactRef} --dry-run`,
-      `${source.hasArtifact ? 'Search project Memory history' : 'After Memory contains snapshots, search project history'}: node .plan2agent/scripts/p2a.mjs memory search --project ${projectId} --mode hybrid --query <term>`,
-      `${source.hasArtifact ? 'Show Memory timeline' : 'After Memory contains snapshots, show timeline'}: node .plan2agent/scripts/p2a.mjs memory history --artifacts ${source.artifactRef}`,
-      `${source.hasArtifact ? 'Summarize run/proposal gaps' : 'After runs exist, summarize run/proposal gaps'}: node .plan2agent/scripts/p2a.mjs memory digest --artifacts ${source.artifactRef}`,
+      `${source.hasArtifact ? 'Check local/Memory sync' : 'After creating an artifact root, check local/Memory sync'}: ${command(['memory', 'status', '--artifacts', source.artifactRef])}`,
+      `${source.hasArtifact ? 'Preview Memory restore diff' : 'After Memory is configured, preview restore diff'}: ${command(['memory', 'pull', '--artifacts', source.artifactRef, '--dry-run'])}`,
+      `${source.hasArtifact ? 'Preview explicit Memory push' : 'After review, preview explicit Memory push'}: ${command(['memory', 'push', '--artifacts', source.artifactRef, '--dry-run'])}`,
+      `${source.hasArtifact ? 'Search project Memory history' : 'After Memory contains snapshots, search project history'}: ${command(['memory', 'search', '--project', projectId, '--mode', 'hybrid', '--query', '<term>'])}`,
+      `${source.hasArtifact ? 'Show Memory timeline' : 'After Memory contains snapshots, show timeline'}: ${command(['memory', 'history', '--artifacts', source.artifactRef])}`,
+      `${source.hasArtifact ? 'Summarize run/proposal gaps' : 'After runs exist, summarize run/proposal gaps'}: ${command(['memory', 'digest', '--artifacts', source.artifactRef])}`,
     ];
   }
   if (capability === 'proposals') {
     const queueDir = projectRelativeConfigPath(targetRoot, config?.proposals?.queueDir, path.join('.plan2agent', 'proposals'));
     return [
-      `${source.hasArtifact ? 'Mine proposal candidates' : 'After runs exist, mine proposal candidates'}: node .plan2agent/scripts/p2a.mjs proposals mine --artifacts ${source.artifactRef} --proposals ${queueDir} --dry-run`,
-      `Review proposal queue: node .plan2agent/scripts/p2a.mjs proposals digest --proposals ${queueDir}`,
-      `Preview curation review: node .plan2agent/scripts/p2a.mjs proposals review --proposals ${queueDir} --dry-run`,
+      `${source.hasArtifact ? 'Mine proposal candidates' : 'After runs exist, mine proposal candidates'}: ${command(['proposals', 'mine', '--artifacts', source.artifactRef, '--proposals', queueDir, '--dry-run'])}`,
+      `Review proposal queue: ${command(['proposals', 'digest', '--proposals', queueDir])}`,
+      `Preview curation review: ${command(['proposals', 'review', '--proposals', queueDir, '--dry-run'])}`,
     ];
   }
   if (capability === 'orchestration') {
     const orchestrationAgentTool = resolveOrchestrationAgentTool(config, manifest);
     return [
-      `${source.hasArtifact ? 'Start supervised run with monitor gate' : 'After a ready task exists, start supervised run with monitor gate'}: node .plan2agent/scripts/p2a.mjs execute start --artifacts ${source.artifactRef} --task <task-id> --agent-tool ${orchestrationAgentTool} --require-monitor`,
+      `${source.hasArtifact ? 'Start supervised run with monitor gate' : 'After a ready task exists, start supervised run with monitor gate'}: ${command(['execute', 'start', '--artifacts', source.artifactRef, '--task', '<task-id>', '--agent-tool', orchestrationAgentTool, '--require-monitor'])}`,
       'Write the monitor verdict beside the indexed run before finish: runs/<run-index entry runRef without .json>.monitor-verdict.json',
     ];
   }
@@ -2443,7 +2554,11 @@ function printEnhanceCapabilityPlan(plan, args, targetRoot) {
 }
 
 function buildPlan(paths, args, artifactsRoot, targetRoot, sourceInfo, options = {}) {
-  const { record = null, createdAt = new Date().toISOString() } = options;
+  const {
+    record = null,
+    createdAt = new Date().toISOString(),
+    legacyRuntime = P2A_PATHS.toolkitCheckout,
+  } = options;
   const plan = [];
   const artifactTargetDir = targetArtifactDir(args.projectId);
   const targetIntakeRef = normalizePath(targetIntakeJsonPath(args.projectId));
@@ -2498,46 +2613,62 @@ function buildPlan(paths, args, artifactsRoot, targetRoot, sourceInfo, options =
   const milestoneReviewFiles = milestoneBundle.reviewFiles;
   const milestoneEvidenceFiles = milestoneBundle.evidenceFiles;
 
-  for (const file of SCAFFOLD_SCRIPT_FILES) {
-    pushArtifact(plan, path.join(ROOT, 'scripts', file), targetRoot, targetScriptPath(file));
-  }
-  for (const schemaFile of SCAFFOLD_SCHEMA_FILES) {
-    pushArtifact(plan, path.join(ROOT, 'schemas', schemaFile), targetRoot, targetSchemaPath(schemaFile));
-  }
   const codexProfile = resolveCodexAgentProfile(args.codexProfile);
-  const toolAssetPlan = pushToolAssets(plan, targetRoot, args.tools, { codexProfile });
-  const teamBigFivePlan = pushTeamBigFiveAdapter(plan, targetRoot, args);
+  if (legacyRuntime) {
+    for (const file of SCAFFOLD_SCRIPT_FILES) {
+      pushArtifact(plan, path.join(ROOT, 'scripts', file), targetRoot, targetScriptPath(file));
+    }
+    for (const file of SCAFFOLD_SCHEMA_FILES) {
+      pushArtifact(plan, path.join(ROOT, 'schemas', file), targetRoot, targetSchemaPath(file));
+    }
+  }
+  const toolAssetPlan = pushToolAssets(plan, targetRoot, args.tools, {
+    codexProfile,
+    legacyRuntime,
+  });
+  const teamBigFivePlan = pushTeamBigFiveAdapter(plan, targetRoot, args, { legacyRuntime });
+  const scriptFiles = legacyRuntime
+    ? SCAFFOLD_SCRIPT_FILES.map((file) => normalizePath(targetScriptPath(file)))
+    : [];
+  const schemaFiles = legacyRuntime
+    ? SCAFFOLD_SCHEMA_FILES.map((file) => normalizePath(targetSchemaPath(file)))
+    : [];
 
   const artifactFiles = plan
     .filter((item) => item.targetRelative.startsWith(`${artifactTargetDir}${path.sep}`) || item.targetRelative.startsWith(`${artifactTargetDir}/`))
     .map((item) => normalizePath(item.targetRelative));
-  const schemaFiles = plan
-    .filter((item) => item.targetRelative.startsWith(`${P2A_SCHEMAS_DIR}${path.sep}`) || item.targetRelative.startsWith(`${P2A_SCHEMAS_DIR}/`))
-    .map((item) => normalizePath(item.targetRelative));
-  const p2aToolFiles = SCAFFOLD_SCRIPT_FILES.map((file) => normalizePath(targetScriptPath(file)));
   const toolFiles = [
-    ...p2aToolFiles,
+    ...scriptFiles,
     ...toolAssetPlan.files,
     ...teamBigFivePlan.files,
   ];
   const managedFiles = plannedManagedFileRecords(plan, {
-    scriptFiles: p2aToolFiles,
+    scriptFiles,
     schemaFiles,
     aiToolGroups: toolAssetPlan.groups,
   });
-  const includedTools = SCAFFOLD_SCRIPT_FILES.map((file) => file.replace(/\.mjs$/, ''));
+  const includedTools = legacyRuntime
+    ? SCAFFOLD_SCRIPT_FILES.map((file) => file.replace(/\.mjs$/, ''))
+    : [];
   for (const target of args.tools) includedTools.push(`p2a_${target}_assets`);
   if (teamBigFivePlan.enabled) includedTools.push('team_bigfive_adapter');
 
   const manifest = {
     schema_version: 'p2a.handoff.v1',
     projectId: args.projectId,
+    provenance: {
+      mode: 'handoff',
+      createdAt,
+      ...readPackageCoordinates(),
+      ...(legacyRuntime ? { toolkitRoot: ROOT } : {}),
+    },
     sourceArtifacts: artifactsRoot,
     sourceLayout: sourceInfo.kind,
     sourceIterationId: sourceInfo.iterationId,
     targetProject: targetRoot,
     handoffMode: args.mode,
     createdAt,
+    ...(legacyRuntime ? {} : { runtime: { mode: 'package', command: 'p2a' } }),
     includedTools,
     aiToolTargets: args.tools,
     codexAgentProfile: codexAgentProfileRecord(codexProfile, args.tools.includes('codex')),
@@ -2548,6 +2679,7 @@ function buildPlan(paths, args, artifactsRoot, targetRoot, sourceInfo, options =
     milestoneEvidenceFiles,
     currentSpecFile: sourceInfo.currentSpecPath ? '.plan2agent/current-spec.json' : null,
     maintenanceFiles,
+    scriptFiles,
     toolFiles,
     aiToolFiles: toolAssetPlan.files,
     aiToolGroups: toolAssetPlan.groups,
@@ -2935,14 +3067,23 @@ function argvValue(argv, option) {
 
 function printNextSteps(targetRoot) {
   let config = null;
+  let manifest = null;
   try {
     config = JSON.parse(readFileSync(path.join(targetRoot, '.plan2agent', 'project.config.json'), 'utf8'));
   } catch {
     config = null;
   }
+  try {
+    manifest = JSON.parse(readFileSync(path.join(targetRoot, '.plan2agent', 'manifest.json'), 'utf8'));
+  } catch {
+    manifest = null;
+  }
+  const nextCommand = manifest?.runtime?.mode === 'package'
+    ? 'p2a next'
+    : 'node .plan2agent/scripts/p2a.mjs next';
   console.log(`✅ 인계 완료 — ${targetRoot}`);
   console.log(`다음: cd ${targetRoot}`);
-  console.log('      node .plan2agent/scripts/p2a.mjs next');
+  console.log(`      ${nextCommand}`);
   console.log('      agent session: /p2a-next');
   console.log('참고: next가 반환한 CLI 또는 승인 행동만 검토 후 진행하고, 완료 뒤 next를 다시 실행하세요.');
 
@@ -3064,7 +3205,7 @@ export function main(argv = process.argv.slice(2)) {
       return writtenReport.status === 'fail' ? 1 : 0;
     }
 
-    if (args.command === 'scaffold') {
+    if (isInitializeCommand(args.command)) {
       if (existsSync(targetRoot) && !lstatSync(targetRoot).isDirectory()) {
         throw new Error(`--target must be a directory path, but a non-directory exists: ${targetRoot}`);
       }
@@ -3073,7 +3214,7 @@ export function main(argv = process.argv.slice(2)) {
       printScaffoldPlan(plan, args, targetRoot);
       if (args.dryRun) return 0;
       writePlan(plan);
-      console.log('scaffold complete');
+      console.log(`${args.command} complete`);
       return 0;
     }
 

@@ -40,7 +40,7 @@ import {
   serializeIterationState,
 } from './p2a_iteration_state.mjs';
 import { loadRunsForArtifactRoot } from './p2a_runs.mjs';
-import { resolveP2aPaths, scriptCommandPath } from './p2a_paths.mjs';
+import { resolveP2aPaths } from './p2a_paths.mjs';
 import { atomicWriteJson, withRunStoreLocks } from './p2a_run_store.mjs';
 import { shellQuote } from './p2a_run_commands.mjs';
 import {
@@ -89,20 +89,20 @@ const IMPLEMENTATION_FIELDS = [
 function usage() {
   return [
     'Usage:',
-    '  node .plan2agent/scripts/p2a_iteration.mjs init --artifacts <greenfield-project-dir> [--iteration-id v1-mvp] [--dry-run]',
-    '  node .plan2agent/scripts/p2a_iteration.mjs current --artifacts <iterative-project-dir> [--json]',
-    '  node .plan2agent/scripts/p2a_iteration.mjs validate --artifacts <iterative-project-dir> [--require-close-ready] [--allow-planning] [--stage ready|gate-a|gate-b-draft|gate-b-approved|gate-c-draft] [--skip-archive-audit]',
-    '  node .plan2agent/scripts/p2a_iteration.mjs close --artifacts <iterative-project-dir> [--iteration-id active]',
-    '  node .plan2agent/scripts/p2a_iteration.mjs open --artifacts <iterative-project-dir> --iteration-id <id> --idea <text>',
-    '  node .plan2agent/scripts/p2a_iteration.mjs draft --artifacts <iterative-project-dir> [--idea <text>] [--force]',
-    '  node .plan2agent/scripts/p2a_iteration.mjs context --artifacts <iterative-project-dir> [--scope feature|maintenance] [--idea <text>] [--code-root <dir>]',
-    '  node .plan2agent/scripts/p2a_iteration.mjs promote-spec --artifacts <iterative-project-dir>',
-    '  node .plan2agent/scripts/p2a_iteration.mjs promote-tasks --artifacts <iterative-project-dir> [--approved-by <name>] [--approval-note <text>] [--replace-existing]',
-    '  node .plan2agent/scripts/p2a_iteration.mjs promote-milestone --artifacts <iterative-project-dir> --draft <unique-draft-path>',
-    '  node .plan2agent/scripts/p2a_iteration.mjs diff-tasks --artifacts <iterative-project-dir> [--force]',
-    '  node .plan2agent/scripts/p2a_iteration.mjs compose --artifacts <iterative-project-dir> [--allow-conflicts]',
-    '  node .plan2agent/scripts/p2a_iteration.mjs maintenance add --artifacts <iterative-project-dir> --title <text> --accept <text> [--accept <text> ...] [--description <text>] [--area <text>] [--prompt <text>] [--ref <value> ...] [--depends <task-id> ...] [--dry-run]',
-    '  node .plan2agent/scripts/p2a_iteration.mjs maintenance add --artifacts <iterative-project-dir> --from-draft <path> [--dry-run|--yes]',
+    '  p2a iteration init --artifacts <greenfield-project-dir> [--iteration-id v1-mvp] [--dry-run]',
+    '  p2a iteration current --artifacts <iterative-project-dir> [--json]',
+    '  p2a iteration validate --artifacts <iterative-project-dir> [--require-close-ready] [--allow-planning] [--stage ready|gate-a|gate-b-draft|gate-b-approved|gate-c-draft] [--skip-archive-audit]',
+    '  p2a iteration close --artifacts <iterative-project-dir> [--iteration-id active]',
+    '  p2a iteration open --artifacts <iterative-project-dir> --iteration-id <id> --idea <text>',
+    '  p2a iteration draft --artifacts <iterative-project-dir> [--idea <text>] [--force]',
+    '  p2a iteration context --artifacts <iterative-project-dir> [--scope feature|maintenance] [--idea <text>] [--code-root <dir>]',
+    '  p2a iteration promote-spec --artifacts <iterative-project-dir>',
+    '  p2a iteration promote-tasks --artifacts <iterative-project-dir> [--approved-by <name>] [--approval-note <text>] [--replace-existing]',
+    '  p2a iteration promote-milestone --artifacts <iterative-project-dir> --draft <unique-draft-path>',
+    '  p2a iteration diff-tasks --artifacts <iterative-project-dir> [--force]',
+    '  p2a iteration compose --artifacts <iterative-project-dir> [--allow-conflicts]',
+    '  p2a iteration maintenance add --artifacts <iterative-project-dir> --title <text> --accept <text> [--accept <text> ...] [--description <text>] [--area <text>] [--prompt <text>] [--ref <value> ...] [--depends <task-id> ...] [--dry-run]',
+    '  p2a iteration maintenance add --artifacts <iterative-project-dir> --from-draft <path> [--dry-run|--yes]',
     '',
     'Commands:',
     '  init                  Convert a greenfield artifact root into iterations/<id>/gate-*.',
@@ -808,9 +808,9 @@ export function renderIterationIndexMarkdown(artifactRoot, currentSpec) {
     `### Close Audit\n\n${renderClosedIterationAudit(currentSpec)}\n` +
     `### Handoff Audit\n\n${renderHandoffAudit(currentSpec)}\n` +
     `## 4. 다음\n\n` +
-    `- 새 기능 → \`p2a_iteration open --iteration-id <next> --idea <text>\`\n` +
-    `- 작은 fix → \`p2a_iteration maintenance add ...\`\n` +
-    `- 검증 → \`p2a_iteration validate --artifacts <dir>\` (closed iteration archive audit 기본 수행)\n\n` +
+    `- 새 기능 → \`p2a iteration open --iteration-id <next> --idea <text>\`\n` +
+    `- 작은 fix → \`p2a iteration maintenance add ...\`\n` +
+    `- 검증 → \`p2a iteration validate --artifacts <dir>\` (closed iteration archive audit 기본 수행)\n\n` +
     `## 5. 변경 이력\n\n` +
     `- status generated from current-spec.json for active iteration \`${activeIteration}\`.\n`;
 }
@@ -1000,7 +1000,7 @@ function assertArchivedBaselineForOpen(currentSpec, artifactRoot, iterationId) {
 
   const metadata = loadOptionalIterationMetadata(artifactRoot, iterationId);
   if (metadata?.status !== 'archived') {
-    throw new ValidationError(`open requires active iteration ${JSON.stringify(iterationId)} to be archived by \`p2a_iteration close\``);
+    throw new ValidationError(`open requires active iteration ${JSON.stringify(iterationId)} to be archived by \`p2a iteration close\``);
   }
 
   const closedIterations = currentSpec.closed_iterations ?? [];
@@ -1019,7 +1019,7 @@ function assertArchivedBaselineForOpen(currentSpec, artifactRoot, iterationId) {
   }
 
   if (closedIterations.length > 1 && currentSpec.effective_spec_ref !== 'current-spec.json') {
-    throw new ValidationError('open requires current-spec.json composition after multiple closed iterations; run `p2a_iteration compose` first');
+    throw new ValidationError('open requires current-spec.json composition after multiple closed iterations; run `p2a iteration compose` first');
   }
   validateCurrentSpecCompositionData(currentSpec, artifactRoot, { requireNoOpenDecisions: true });
 }
@@ -1099,7 +1099,7 @@ function loadIterationMetadata(iterationRoot) {
 function activePendingIteration(state) {
   const pending = state.currentSpec.pending_iteration;
   if (!pending || typeof pending !== 'object') {
-    throw new Error('draft requires a planning iteration opened by `p2a_iteration open`; current-spec.json.pending_iteration is missing');
+    throw new Error('draft requires a planning iteration opened by `p2a iteration open`; current-spec.json.pending_iteration is missing');
   }
   if (pending.iteration_id !== state.activeIteration) {
     throw new Error(`current-spec.json.pending_iteration.iteration_id must match active_iteration ${JSON.stringify(state.activeIteration)}`);
@@ -1121,7 +1121,7 @@ function assertWritableDraftFiles(files, artifactRoot, force, options = {}) {
 function draftIdea(args, pending, metadata) {
   const idea = args.idea ?? pending.idea ?? metadata.idea;
   if (!idea || idea.trim().length === 0) {
-    throw new Error('draft requires --idea or an idea stored by `p2a_iteration open`');
+    throw new Error('draft requires --idea or an idea stored by `p2a iteration open`');
   }
   return idea.trim();
 }
@@ -3384,7 +3384,7 @@ function close(args) {
   if (['failed', 'skipped'].includes(planningMemory?.status)) {
     console.warn(`WARNING: Planning Memory recall ended as ${planningMemory.status}; historical Memory evidence was not fully consulted.`);
   }
-  console.log('Active pointer remains on the closed baseline so `p2a_iteration open` can create the next iteration.');
+  console.log('Active pointer remains on the closed baseline so `p2a iteration open` can create the next iteration.');
   return 0;
 }
 
@@ -3424,7 +3424,7 @@ function promoteSpec(args) {
   const gateBApprovalAudit = gateBApprovalAuditForIteration(
     spec.approval_audit,
     state.activeIteration,
-    'Gate B approval recorded by p2a_iteration promote-spec after approved spec with no open decisions.',
+    'Gate B approval recorded by p2a iteration promote-spec after approved spec with no open decisions.',
   );
   const nextCurrentSpec = currentSpecForPromotedSpec(
     state.currentSpec,
@@ -3854,8 +3854,7 @@ function planningMemorySearchCommand({
   global = false,
 }) {
   const command = [
-    'node',
-    scriptCommandPath(P2A_PATHS, 'p2a.mjs'),
+    'p2a',
     'memory',
     'search',
     ...(global
@@ -3934,8 +3933,7 @@ export function memoryFreshnessFromStatusReport(report, expectedContext = {}) {
 
 function closeMemoryCommands(artifactRoot, memoryStatusPath, requestTimeoutMs) {
   const statusCommand = [
-    'node',
-    scriptCommandPath(P2A_PATHS, 'p2a.mjs'),
+    'p2a',
     'memory',
     'status',
     '--artifacts',
@@ -3946,8 +3944,7 @@ function closeMemoryCommands(artifactRoot, memoryStatusPath, requestTimeoutMs) {
     planningMemoryDisplayPath(ROOT, memoryStatusPath),
   ].map((value) => shellQuote(String(value))).join(' ');
   const pushPreviewCommand = [
-    'node',
-    scriptCommandPath(P2A_PATHS, 'p2a.mjs'),
+    'p2a',
     'memory',
     'push',
     '--artifacts',
@@ -4757,7 +4754,7 @@ export function main(argv = process.argv.slice(2)) {
     throw new Error(`unknown command: ${args.command}`);
   } catch (error) {
     if (error instanceof SyntaxError || error instanceof ValidationError || error.code || error.message) {
-      console.error(`p2a_iteration failed: ${error.message}`);
+      console.error(`p2a iteration failed: ${error.message}`);
       return 1;
     }
     throw error;

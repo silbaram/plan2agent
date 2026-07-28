@@ -35,22 +35,23 @@ import { atomicWriteJson, withRunStoreLocks } from './p2a_run_store.mjs';
 
 const P2A_PATHS = resolveP2aPaths(import.meta.url);
 const COMMANDS = new Set(['mine', 'list', 'show', 'validate', 'digest', 'review', 'curate', 'draft-patch', 'approve-draft']);
-const DEFAULT_PROPOSALS_DIR = path.join('.plan2agent', 'proposals');
+const PROJECT_RUNS_DIR = path.join(P2A_PATHS.projectRoot, DEFAULT_RUNS_DIR);
+const DEFAULT_PROPOSALS_DIR = path.join(P2A_PATHS.projectRoot, '.plan2agent', 'proposals');
 const DEFAULT_P2A_TOOLKIT_REPO = 'https://github.com/silbaram/plan2agent';
 const PROPOSAL_TARGETS = new Set(['project', 'p2a_toolkit', 'companion_project']);
 
 function usage() {
   return [
     'Usage:',
-    '  node .plan2agent/scripts/p2a_proposals.mjs mine (--artifacts <dir>|--runs <dir>|--graph <path>) [--run-id <run-id>] [--proposals <dir>] [--target <kind>] [--target-repo <url>] [--target-area <area>] [--upstream-reason <text>] [--dry-run] [--overwrite] [--json]',
-    '  node .plan2agent/scripts/p2a_proposals.mjs list [--proposals <dir>] [--json]',
-    '  node .plan2agent/scripts/p2a_proposals.mjs show (--proposal <path>|--proposal-id <id>) [--proposals <dir>]',
-    '  node .plan2agent/scripts/p2a_proposals.mjs validate [--proposal <path>|--proposals <dir>]',
-    '  node .plan2agent/scripts/p2a_proposals.mjs digest [--proposals <dir>] [--json]',
-    '  node .plan2agent/scripts/p2a_proposals.mjs review [--proposals <dir>] [--output <path>] [--dry-run] [--overwrite] [--json]',
-    '  node .plan2agent/scripts/p2a_proposals.mjs curate --review <path> [--proposals <dir>] [--output <path>] [--dry-run] [--overwrite] [--json]',
-    '  node .plan2agent/scripts/p2a_proposals.mjs draft-patch --curation <path> [--candidate-id <id>] [--proposals <dir>] [--output <path>] [--dry-run] [--overwrite] [--json]',
-    '  node .plan2agent/scripts/p2a_proposals.mjs approve-draft --draft <path> --artifacts <iterative-project-dir> --approved-by <name> [--approval-note <text>] [--proposals <dir>] [--output <path>] [--dry-run] [--overwrite] [--json]',
+    '  p2a proposals mine (--artifacts <dir>|--runs <dir>|--graph <path>) [--run-id <run-id>] [--proposals <dir>] [--target <kind>] [--target-repo <url>] [--target-area <area>] [--upstream-reason <text>] [--dry-run] [--overwrite] [--json]',
+    '  p2a proposals list [--proposals <dir>] [--json]',
+    '  p2a proposals show (--proposal <path>|--proposal-id <id>) [--proposals <dir>]',
+    '  p2a proposals validate [--proposal <path>|--proposals <dir>]',
+    '  p2a proposals digest [--proposals <dir>] [--json]',
+    '  p2a proposals review [--proposals <dir>] [--output <path>] [--dry-run] [--overwrite] [--json]',
+    '  p2a proposals curate --review <path> [--proposals <dir>] [--output <path>] [--dry-run] [--overwrite] [--json]',
+    '  p2a proposals draft-patch --curation <path> [--candidate-id <id>] [--proposals <dir>] [--output <path>] [--dry-run] [--overwrite] [--json]',
+    '  p2a proposals approve-draft --draft <path> --artifacts <iterative-project-dir> --approved-by <name> [--approval-note <text>] [--proposals <dir>] [--output <path>] [--dry-run] [--overwrite] [--json]',
     '',
     'Commands:',
     '  mine       Read run logs and monitor gate sidecars, then write proposed skill-proposal JSON files.',
@@ -158,7 +159,7 @@ function parseArgs(argv) {
     const configuredGraph = configuredTaskGraphPath();
     if (defaultArtifacts) args.artifacts = defaultArtifacts;
     else if (configuredGraph) args.graph = configuredGraph;
-    else if (existsSync(DEFAULT_RUNS_DIR)) args.runs = DEFAULT_RUNS_DIR;
+    else if (existsSync(PROJECT_RUNS_DIR)) args.runs = PROJECT_RUNS_DIR;
     else assertNoUninitializedScaffoldArtifactRoots();
     if (!args.artifacts && !args.graph && !args.runs) {
       throw new Error('--artifacts, --graph, or --runs is required for mine');

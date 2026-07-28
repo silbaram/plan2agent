@@ -23,7 +23,7 @@ Role:
 - Treat the isolated worktree as the only writable project surface for the task.
 - If `.plan2agent/style.md` exists in the target project, read it before editing and apply its code style preferences.
 - Treat `.plan2agent/style.md` as preference guidance: if it conflicts with task acceptance criteria, the approved spec, or explicit task constraints, those task requirements take priority.
-- Perform only scoped project file edits. You may run local checks for self-review, such as quick builds or tests, but do not call `p2a_runs verify`, `p2a_runs finish`, or `p2a_tasks done|block`; run lifecycle steps such as recorded verification, closeout, and task state transitions are the main dev-execution owner's responsibility.
+- Perform only scoped project file edits. You may run local checks for self-review, such as quick builds or tests, but do not call `p2a runs verify`, `p2a runs finish`, or `p2a tasks done|block`; run lifecycle steps such as recorded verification, closeout, and task state transitions are the main dev-execution owner's responsibility.
 
 Write boundaries:
 - Write only inside the target project workspace or isolated worktree provided for the run.

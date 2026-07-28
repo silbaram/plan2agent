@@ -147,12 +147,13 @@ Not a fit:
 
 ## Quick Start
 
-### 1. Scaffold P2A into a project
+### 1. Initialize P2A in a project
 
-Run this from any checkout of the Plan2Agent repository:
+Install the package globally, then initialize the target project:
 
 ```bash
-node /path/to/plan2agent/scripts/p2a_handoff.mjs scaffold \
+npm install -g plan2agent
+p2a init \
   --target <project-dir> \
   --tools all \
   --codex-profile quality
@@ -162,10 +163,10 @@ Then work inside the target project:
 
 ```bash
 cd <project-dir>
-node .plan2agent/scripts/p2a.mjs info
+p2a info
 ```
 
-Scaffold records a default `projectId` in both `.plan2agent/project.config.json` and `.plan2agent/manifest.json` by normalizing the target directory basename to kebab-case. After scaffold, `.plan2agent/project.config.json.projectId` is the source of truth; the directory basename is only the fresh-scaffold seed. Codex agents default to the GPT-5.6 Sol `quality` profile; use `--codex-profile inherit` when the target account or provider should inherit the parent session model and reasoning effort. If older local artifacts already exist, their artifact/spec/task graph id is used as a recovery fallback before deriving from a renamed directory. Planning artifacts still live under `.plan2agent/artifacts/<project_id>/`, but in scaffold projects users normally use the stored `projectId` instead of inventing a new id for each idea.
+`p2a init` records a default `projectId` in both `.plan2agent/project.config.json` and `.plan2agent/manifest.json` by normalizing the target directory basename to kebab-case. After initialization, `.plan2agent/project.config.json.projectId` is the source of truth; the directory basename is only the fresh-init seed. Codex agents default to the GPT-5.6 Sol `quality` profile; use `--codex-profile inherit` when the target account or provider should inherit the parent session model and reasoning effort. If older local artifacts already exist, their artifact/spec/task graph id is used as a recovery fallback before deriving from a renamed directory. Planning artifacts still live under `.plan2agent/artifacts/<project_id>/`, but initialized projects normally use the stored `projectId` instead of inventing a new id for each idea.
 
 ### 2. Start from a one-sentence idea
 
@@ -203,12 +204,12 @@ The planning flow writes artifacts under:
 ### 3. Validate and initialize an iteration
 
 ```bash
-node .plan2agent/scripts/p2a.mjs validate \
+p2a validate \
   --artifact-root .plan2agent/artifacts/<project_id> \
   --project-id <project_id> \
   --require-handoff-ready
 
-node .plan2agent/scripts/p2a.mjs iteration init \
+p2a iteration init \
   --artifacts .plan2agent/artifacts/<project_id> \
   --iteration-id v1-mvp
 ```
@@ -216,14 +217,14 @@ node .plan2agent/scripts/p2a.mjs iteration init \
 ### 4. Run a supervised task
 
 ```bash
-node .plan2agent/scripts/p2a.mjs tasks ready \
+p2a tasks ready \
   --artifacts .plan2agent/artifacts/<project_id>
 
-node .plan2agent/scripts/p2a.mjs execute plan \
+p2a execute plan \
   --artifacts .plan2agent/artifacts/<project_id> \
   --task <task-id>
 
-node .plan2agent/scripts/p2a.mjs execute start \
+p2a execute start \
   --artifacts .plan2agent/artifacts/<project_id> \
   --task <task-id> \
   --agent-tool codex
@@ -233,7 +234,7 @@ Paste the generated launcher prompt into your foreground agent session. When the
 ready, finish the run with explicit verification:
 
 ```bash
-node .plan2agent/scripts/p2a.mjs execute finish \
+p2a execute finish \
   --artifacts .plan2agent/artifacts/<project_id> \
   --run-id <run-id> \
   --test \
@@ -245,29 +246,29 @@ node .plan2agent/scripts/p2a.mjs execute finish \
 ### 5. Evaluate, review, and improve
 
 ```bash
-node .plan2agent/scripts/p2a.mjs eval generate \
+p2a eval generate \
   --artifacts .plan2agent/artifacts/<project_id>
 
-node .plan2agent/scripts/p2a.mjs eval digest \
+p2a eval digest \
   --artifacts .plan2agent/artifacts/<project_id> \
   --recent-runs 30
 
-node .plan2agent/scripts/p2a.mjs proposals mine \
+p2a proposals mine \
   --artifacts .plan2agent/artifacts/<project_id>
 
-node .plan2agent/scripts/p2a.mjs memory digest \
+p2a memory digest \
   --artifacts .plan2agent/artifacts/<project_id>
 ```
 
 ## Main CLI Surface
 
-Inside a scaffolded project, use the single `p2a.mjs` entrypoint:
+Inside an initialized project, use the single `p2a` entrypoint:
 
 | Command | Purpose |
 | --- | --- |
 | `info` | Show project, enhancement, artifact, task, and run summary. |
 | `doctor` | Diagnose local harness configuration and capability drift. |
-| `update` | Preview or apply safe scaffolded toolkit updates. |
+| `update` | Preview or apply safe package-managed configuration and provider-asset updates. |
 | `upgrade` | Preview or apply broader toolkit/schema/asset migrations. |
 | `enhance` | Enable optional capabilities such as memory, orchestration, and proposals. |
 | `validate` | Validate intake, spec, task graph, review, run, proposal, eval, and memory artifacts. |

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { existsSync, readFileSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { test } from 'node:test';
 import {
@@ -9,14 +9,14 @@ import {
   runHandoff,
 } from './helpers/fixtures.mjs';
 
-test('scaffold guide directs users through p2a next', () => {
+test('checkout scaffold guide directs users through the co-located runtime', () => {
   const targetRoot = makeTempDir('p2a-next-guide-');
   try {
     const result = runHandoff(['scaffold', '--target', targetRoot, '--tools', 'none']);
     assert.equal(result.status, 0, formatCommandResult(result));
 
     const guide = readFileSync(path.join(targetRoot, 'PLAN2AGENT.md'), 'utf8');
-    assert.match(guide, /node \.plan2agent\/scripts\/p2a\.mjs next/);
+    assert.match(guide, /`node \.plan2agent\/scripts\/p2a\.mjs next`/);
     assert.match(guide, /\/p2a-next/);
     assert.doesNotMatch(guide, /p2a\.mjs info/);
     assert.doesNotMatch(guide, /p2a\.mjs execute plan/);
@@ -62,9 +62,9 @@ test('update discovers retired managed files from the manifest and prunes only u
     assert.equal(result.status, 0, formatCommandResult(result));
 
     const retiredContent = '// formerly managed helper\n';
+    mkdirSync(path.dirname(retiredPath), { recursive: true });
     writeFileSync(retiredPath, retiredContent, 'utf8');
     const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
-    assert.ok(manifest.managedFiles.length > 0);
     manifest.includedTools.push('p2a_retired_example');
     manifest.scriptFiles.push(retiredRelative);
     manifest.toolFiles.push(retiredRelative);
@@ -108,6 +108,7 @@ test('update reports legacy or modified retired files without deleting them', ()
     let result = runHandoff(['scaffold', '--target', targetRoot, '--tools', 'none']);
     assert.equal(result.status, 0, formatCommandResult(result));
 
+    mkdirSync(path.dirname(legacyPath), { recursive: true });
     writeFileSync(legacyPath, '// legacy file without an installation hash\n', 'utf8');
     writeFileSync(modifiedPath, '// locally modified file\n', 'utf8');
     const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));

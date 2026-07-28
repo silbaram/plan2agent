@@ -1,0 +1,45 @@
+{
+  "name": "plan2agent",
+  "version": "0.1.0",
+  "description": "Spec-driven development harness for AI coding agents with human-in-the-loop approval gates.",
+  "keywords": [
+    "spec-driven-development",
+    "ai-coding-agent",
+    "human-in-the-loop",
+    "task-graph",
+    "coding-agent",
+    "claude-code",
+    "codex",
+    "gemini-cli",
+    "agentic-sdlc",
+    "developer-tools",
+    "cli"
+  ],
+  "type": "module",
+  "bin": {
+    "p2a": "scripts/p2a.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "files": [
+    "scripts",
+    "schemas",
+    ".agents",
+    ".claude",
+    ".codex",
+    ".gemini"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/silbaram/plan2agent.git"
+  },
+  "homepage": "https://github.com/silbaram/plan2agent#readme",
+  "bugs": {
+    "url": "https://github.com/silbaram/plan2agent/issues"
+  },
+  "scripts": {
+    "test": "node --test tests/index.test.mjs",
+    "test:package": "node --test tests/npm-package.test.mjs"
+  }
+}

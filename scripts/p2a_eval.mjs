@@ -30,7 +30,9 @@ import { commandLine, shellQuote } from './p2a_run_commands.mjs';
 
 const P2A_PATHS = resolveP2aPaths(import.meta.url);
 const COMMANDS = new Set(['grade', 'compare', 'analyze', 'generate', 'digest']);
-const DEFAULT_PROPOSALS_DIR = path.join('.plan2agent', 'proposals');
+const PROJECT_RUNS_DIR = path.join(P2A_PATHS.projectRoot, '.plan2agent', 'runs');
+const PROJECT_EVAL_DIR = path.join(P2A_PATHS.projectRoot, '.plan2agent', 'eval');
+const DEFAULT_PROPOSALS_DIR = path.join(P2A_PATHS.projectRoot, '.plan2agent', 'proposals');
 const DEFAULT_DIGEST_RECENT_RUNS = 30;
 const DEFAULT_STABLE_METRICS_PATH = path.join(P2A_PATHS.projectRoot, 'eval', 'stable-metrics.json');
 const BUILTIN_STABLE_METRIC_DEFINITIONS = [
@@ -90,11 +92,11 @@ const STOP_WORDS = new Set([
 function usage() {
   return [
     'Usage:',
-    '  node .plan2agent/scripts/p2a_eval.mjs grade (--artifacts <dir>|--graph <path>) (--run-id <id>|--run <path>) [--output <path>] [--dry-run] [--json]',
-    '  node .plan2agent/scripts/p2a_eval.mjs compare --baseline <artifacts-or-runs-dir> --candidate <artifacts-or-runs-dir> [--output <path>] [--dry-run] [--json]',
-    '  node .plan2agent/scripts/p2a_eval.mjs analyze (--artifacts <dir>|--graph <path>|--runs <dir>) [--proposals <dir>] [--maintenance-draft <path>] [--apply-maintenance [--yes]] [--output <path>] [--dry-run] [--json]',
-    '  node .plan2agent/scripts/p2a_eval.mjs generate [--artifacts <dir>|--graph <path> [--runs <dir>]|--runs <dir>] [--baseline <dir> --candidate <dir>] [--proposals <dir>] [--output <dir>] [--dry-run] [--json]',
-    '  node .plan2agent/scripts/p2a_eval.mjs digest [--eval <dir>|--artifacts <dir>|--graph <path>|--runs <dir>] [--recent-runs <n>] [--output <path>] [--dry-run] [--json]',
+    '  p2a eval grade (--artifacts <dir>|--graph <path>) (--run-id <id>|--run <path>) [--output <path>] [--dry-run] [--json]',
+    '  p2a eval compare --baseline <artifacts-or-runs-dir> --candidate <artifacts-or-runs-dir> [--output <path>] [--dry-run] [--json]',
+    '  p2a eval analyze (--artifacts <dir>|--graph <path>|--runs <dir>) [--proposals <dir>] [--maintenance-draft <path>] [--apply-maintenance [--yes]] [--output <path>] [--dry-run] [--json]',
+    '  p2a eval generate [--artifacts <dir>|--graph <path> [--runs <dir>]|--runs <dir>] [--baseline <dir> --candidate <dir>] [--proposals <dir>] [--output <dir>] [--dry-run] [--json]',
+    '  p2a eval digest [--eval <dir>|--artifacts <dir>|--graph <path>|--runs <dir>] [--recent-runs <n>] [--output <path>] [--dry-run] [--json]',
     '',
     'Commands:',
     '  grade     Evaluate one run against its task acceptance criteria and verification evidence.',
@@ -214,7 +216,7 @@ function validateArgs(args) {
       const configuredGraph = configuredTaskGraphPath();
       if (defaultArtifacts) args.artifacts = defaultArtifacts;
       else if (configuredGraph) args.graph = configuredGraph;
-      else if (existsSync(path.join('.plan2agent', 'runs'))) args.runs = path.join('.plan2agent', 'runs');
+      else if (existsSync(PROJECT_RUNS_DIR)) args.runs = PROJECT_RUNS_DIR;
       else assertNoUninitializedScaffoldArtifactRoots();
     }
     if ([args.artifacts, args.graph, args.runs].filter(Boolean).length !== 1) {
@@ -245,7 +247,7 @@ function validateArgs(args) {
       const configuredGraph = configuredTaskGraphPath();
       if (defaultArtifacts) args.artifacts = defaultArtifacts;
       else if (configuredGraph) args.graph = configuredGraph;
-      else if (existsSync(path.join('.plan2agent', 'runs'))) args.runs = path.join('.plan2agent', 'runs');
+      else if (existsSync(PROJECT_RUNS_DIR)) args.runs = PROJECT_RUNS_DIR;
       else assertNoUninitializedScaffoldArtifactRoots();
     }
     if (args.proposals && !args.artifacts && !args.graph && !args.runs) {
@@ -265,10 +267,10 @@ function validateArgs(args) {
     if (sourceCount === 0) {
       const defaultArtifacts = singleArtifactProjectRoot();
       const configuredGraph = configuredTaskGraphPath();
-      if (existsSync(path.join('.plan2agent', 'eval'))) args.evalDir = path.join('.plan2agent', 'eval');
+      if (existsSync(PROJECT_EVAL_DIR)) args.evalDir = PROJECT_EVAL_DIR;
       else if (defaultArtifacts) args.artifacts = defaultArtifacts;
       else if (configuredGraph) args.graph = configuredGraph;
-      else if (existsSync(path.join('.plan2agent', 'runs'))) args.runs = path.join('.plan2agent', 'runs');
+      else if (existsSync(PROJECT_RUNS_DIR)) args.runs = PROJECT_RUNS_DIR;
       else assertNoUninitializedScaffoldArtifactRoots();
     }
     if ([args.evalDir, args.artifacts, args.graph, args.runs].filter(Boolean).length !== 1) {
@@ -386,7 +388,7 @@ function evalOutputDirForSource(source) {
 function resolveGenerateOutputDir(args, source) {
   if (args.output) return path.resolve(args.output);
   if (source) return evalOutputDirForSource(source);
-  return path.resolve('.plan2agent', 'eval');
+  return PROJECT_EVAL_DIR;
 }
 
 function resolveDigestEvalDir(args) {
@@ -603,10 +605,10 @@ function gradeScore(verdict, coverage) {
 function gradeNextActions(verdict, source, run) {
   if (verdict === 'pass') return ['No immediate eval follow-up required.'];
   const actions = [
-    `Inspect run evidence: node .plan2agent/scripts/p2a.mjs runs show --runs ${displayPath(source.runsDir)} --run-id ${run.runId}`,
+    `Inspect run evidence: p2a runs show --runs ${displayPath(source.runsDir)} --run-id ${run.runId}`,
   ];
   if (run.status === 'failed' || run.status === 'blocked' || verdict === 'needs_evidence') {
-    actions.push(`Mine proposal candidates: node .plan2agent/scripts/p2a.mjs proposals mine --runs ${displayPath(source.runsDir)} --run-id ${run.runId}`);
+    actions.push(`Mine proposal candidates: p2a proposals mine --runs ${displayPath(source.runsDir)} --run-id ${run.runId}`);
   }
   return actions;
 }
@@ -775,8 +777,8 @@ function compareSignals(baseline, candidate) {
 function compareNextActions(verdict, candidate) {
   if (verdict === 'pass') return ['No regression follow-up required by local eval compare.'];
   return [
-    `Analyze candidate failures: node .plan2agent/scripts/p2a.mjs eval analyze --runs ${candidate.runsDir}`,
-    'If the issue changes product/implementation scope, open a delta iteration with p2a_iteration open/draft.',
+    `Analyze candidate failures: p2a eval analyze --runs ${candidate.runsDir}`,
+    'If the issue changes product/implementation scope, open a delta iteration with p2a iteration open/draft.',
     'If the issue is harness or execution hygiene, add or approve a maintenance task before retrying.',
   ];
 }
@@ -953,7 +955,7 @@ function deltaDraftCommandForCluster(source, cluster) {
 
 function analyzeNextActions(source, clusters) {
   if (!clusters.length) return ['No failure clusters found in local run evidence.'];
-  const actions = [`Mine proposal candidates: node .plan2agent/scripts/p2a.mjs proposals mine --runs ${displayPath(source.runsDir)}`];
+  const actions = [`Mine proposal candidates: p2a proposals mine --runs ${displayPath(source.runsDir)}`];
   if (source.sourceKind === 'artifacts') {
     actions.push('For execution hygiene issues, use the maintenanceCommand from the relevant cluster.');
     actions.push('For product/spec scope issues, use the deltaDraftCommand from the relevant cluster when present.');
@@ -1197,7 +1199,7 @@ function applyMaintenanceDraft(source, draft, args) {
       results.push(maintenanceTaskApplyResult(
         item.task,
         status,
-        status === 'failed' ? 'p2a_iteration maintenance add dry-run failed' : null,
+        status === 'failed' ? 'p2a iteration maintenance add dry-run failed' : null,
         result,
       ));
     }
@@ -1211,7 +1213,7 @@ function applyMaintenanceDraft(source, draft, args) {
       preflightFailures.push(maintenanceTaskApplyResult(
         item.task,
         'failed',
-        'p2a_iteration maintenance add dry-run preflight failed',
+        'p2a iteration maintenance add dry-run preflight failed',
         result,
       ));
     }
@@ -1231,7 +1233,7 @@ function applyMaintenanceDraft(source, draft, args) {
     results.push(maintenanceTaskApplyResult(
       item.task,
       status,
-      status === 'failed' ? 'p2a_iteration maintenance add failed' : null,
+      status === 'failed' ? 'p2a iteration maintenance add failed' : null,
       result,
     ));
   }
@@ -1382,7 +1384,7 @@ function buildGenerate(args) {
 function generateNextActions(payload) {
   const digestOutputPath = path.join(payload.outputDir, 'eval-digest.json');
   const actions = [
-    `Summarize generated eval artifacts: node .plan2agent/scripts/p2a.mjs eval digest --eval ${shellQuote(payload.outputDir)} --output ${shellQuote(digestOutputPath)}`,
+    `Summarize generated eval artifacts: p2a eval digest --eval ${shellQuote(payload.outputDir)} --output ${shellQuote(digestOutputPath)}`,
   ];
   if (payload.skippedGrades.length) {
     actions.push('Review skippedGrades; runs without a matching task graph cannot receive acceptance coverage grades.');
@@ -2404,7 +2406,7 @@ function buildStableMetrics(evalDir, payloadWithoutMetrics, artifacts) {
 function evalDigestNextActions(payload) {
   const actions = [];
   if (payload.files.grades + payload.files.analyses + payload.files.compares === 0) {
-    actions.push(`Generate eval artifacts first: node .plan2agent/scripts/p2a.mjs eval generate --output ${shellQuote(payload.evalDir)}`);
+    actions.push(`Generate eval artifacts first: p2a eval generate --output ${shellQuote(payload.evalDir)}`);
   }
   if (payload.grades.nonPass.length) {
     actions.push('Review non-pass eval grades and add missing verification evidence or fixes before marking related tasks done.');
@@ -2538,6 +2540,6 @@ main()
     process.exitCode = status;
   })
   .catch((error) => {
-    console.error(`p2a_eval error: ${errorMessage(error)}`);
+    console.error(`p2a eval error: ${errorMessage(error)}`);
     process.exitCode = 1;
   });

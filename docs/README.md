@@ -7,23 +7,23 @@ Plan2Agent 문서는 사용자 흐름, CLI 사용법, 산출물 계약, 구현 �
 | 원하는 일 | 사용하는 것 | 결과 |
 | --- | --- | --- |
 | 아이디어를 기획 산출물로 만들기 | P2A skills/subagents | `.plan2agent/artifacts/<project_id>/gate-*` |
-| 산출물 검증하기 | `p2a.mjs validate`, `p2a.mjs iteration` | schema/gate 오류 조기 발견 |
-| 다음 반복 열기 | `p2a.mjs iteration` | `iterations/<iter-id>/`와 `current-spec.json` |
+| 산출물 검증하기 | `p2a validate`, `p2a iteration` | schema/gate 오류 조기 발견 |
+| 다음 반복 열기 | `p2a iteration` | `iterations/<iter-id>/`와 `current-spec.json` |
 | 변경분 task 만들기 | `diff-tasks`, `context`, `promote-tasks` | semantic 또는 agent-authored draft task graph |
-| 대상 프로젝트로 넘기기 | `p2a_handoff.mjs`, 이후 `p2a.mjs` | `.plan2agent/`와 실행 CLI 설치 |
-| 현재 상태 보기 | `p2a.mjs info` | active artifact, task/run 요약 |
-| 감독형 단일 task 실행 | `p2a.mjs execute` | task/run lifecycle 반자동 진행 |
-| 개발 task 실행 관리 | `p2a.mjs tasks` | ready/prompt/start/done 상태 전이 |
-| agent 실행 결과 기록 | `p2a.mjs runs` | `runs/run-index.json`, `runs/<iterationId>/<runId>.json` |
-| 실행 회고 개선 후보 만들기 | `p2a.mjs proposals` | `proposals/<proposalId>.json`와 review/curation/approval artifact |
+| 대상 프로젝트로 넘기기 | `p2a handoff`, 이후 `p2a` | `.plan2agent/`와 실행 CLI 설치 |
+| 현재 상태 보기 | `p2a info` | active artifact, task/run 요약 |
+| 감독형 단일 task 실행 | `p2a execute` | task/run lifecycle 반자동 진행 |
+| 개발 task 실행 관리 | `p2a tasks` | ready/prompt/start/done 상태 전이 |
+| agent 실행 결과 기록 | `p2a runs` | `runs/run-index.json`, `runs/<iterationId>/<runId>.json` |
+| 실행 회고 개선 후보 만들기 | `p2a proposals` | `proposals/<proposalId>.json`와 review/curation/approval artifact |
 
 ## 추천 읽기 순서
 
 1. [Quickstart](quickstart.md)  
-   scaffold 설치부터 첫 Gate 산출물 확인까지의 최단 경로.
+   전역 `p2a init`부터 첫 Gate 산출물 확인까지의 최단 경로.
 
 2. [CLI 사용자 가이드](cli-reference.md)  
-   실제 명령과 옵션 예시. `p2a_iteration`, `p2a_tasks`, `p2a_runs`, `p2a_handoff`, 검증 명령을 실행할 때 본다.
+   실제 명령과 옵션 예시. `p2a iteration`, `p2a tasks`, `p2a runs`, `p2a handoff`, 검증 명령을 실행할 때 본다.
 
 3. [하네스 사용자 가이드](harness-guide.md)  
    Gate A-D 산출물, schema, approval audit, evidence, troubleshooting을 자세히 확인할 때 본다.

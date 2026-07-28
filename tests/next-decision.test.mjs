@@ -152,7 +152,7 @@ test('next chooses one read-only action for every primary state', () => {
     {
       id: 'uninitialized',
       setup: () => makeTempDir('p2a-next-uninitialized-'),
-      expected: (root) => ['uninitialized', 'cli', ['scaffold', '--target', root]],
+      expected: (root) => ['uninitialized', 'cli', ['init', '--target', root]],
     },
     {
       id: 'initialized without artifacts',
@@ -505,7 +505,7 @@ test('next schema declares the CLI, skill, and approval command shapes', () => {
 
 test('p2a-next skill delegates to the CLI without duplicating decision rules', () => {
   const skill = readFileSync(new URL('../.agents/skills/p2a-next/SKILL.md', import.meta.url), 'utf8');
-  assert.match(skill, /p2a\.mjs next --json/);
+  assert.match(skill, /p2a next --json/);
   assert.match(skill, /kind: cli/);
   assert.match(skill, /kind: skill/);
   assert.match(skill, /kind: approval/);

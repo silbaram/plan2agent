@@ -48,8 +48,8 @@ const TASK_ID_COMMANDS = new Set(['show', 'prompt', 'start', 'done', 'block', 't
 function usage() {
   return [
     'Usage:',
-    '  node .plan2agent/scripts/p2a_tasks.mjs <command> --graph <path> [--spec <path>] [task-id]',
-    '  node .plan2agent/scripts/p2a_tasks.mjs <command> --artifacts <iterative-project-dir> [task-id]',
+    '  p2a tasks <command> --graph <path> [--spec <path>] [task-id]',
+    '  p2a tasks <command> --artifacts <iterative-project-dir> [task-id]',
     '',
     'Commands:',
     '  list                 Show all tasks with readiness.',
@@ -128,7 +128,7 @@ function parseArgs(argv) {
 function resolveTaskInputs(args) {
   if (!args.artifactsPath) {
     if (VALID_TRANSITIONS.has(args.command)) {
-      assertUnmanagedGraphMutation(args.graphPath, `p2a_tasks ${args.command}`);
+      assertUnmanagedGraphMutation(args.graphPath, `p2a tasks ${args.command}`);
     }
     warnGraphMode();
     return args;
@@ -138,7 +138,7 @@ function resolveTaskInputs(args) {
   if (args.maintenance) {
     const graphPath = path.join(iterationState.artifactRoot, 'iterations', 'maintenance', 'gate-c-task-graph', 'task-graph.json');
     if (!existsSync(graphPath)) {
-      throw new Error('no maintenance task graph yet; create one with: node .plan2agent/scripts/p2a.mjs iteration maintenance add --artifacts <dir> --title ... --accept ...');
+      throw new Error('no maintenance task graph yet; create one with: p2a iteration maintenance add --artifacts <dir> --title ... --accept ...');
     }
     return {
       ...args,
@@ -578,11 +578,11 @@ function assertMonitorGateDoneEvidence(args, task, graph, run) {
   const runsDir = runsDirForTaskArgs(args);
   const sidecar = readOrchestrationSidecar(runsDir, run.runId);
   if (!sidecar?.required) {
-    throw new Error(`${task.id} cannot be marked done because this task requires monitor gate evidence from prior run(s): ${monitorRequiredRunIds.join(', ')}. Start the retry with p2a_execute start --require-monitor and finish with an accepted monitor verdict.`);
+    throw new Error(`${task.id} cannot be marked done because this task requires monitor gate evidence from prior run(s): ${monitorRequiredRunIds.join(', ')}. Start the retry with p2a execute start --require-monitor and finish with an accepted monitor verdict.`);
   }
   const verdict = readMonitorVerdict(runsDir, sidecar);
   if (!sidecar.acceptedVerdicts.includes(verdict.verdict) || verdict.hasConcerns) {
-    throw new Error(`${task.id} cannot be marked done because latest run ${run.runId} has no accepted monitor verdict. Start the retry with p2a_execute start --require-monitor and finish with concern-free verdict ${sidecar.acceptedVerdicts.join('|')}.`);
+    throw new Error(`${task.id} cannot be marked done because latest run ${run.runId} has no accepted monitor verdict. Start the retry with p2a execute start --require-monitor and finish with concern-free verdict ${sidecar.acceptedVerdicts.join('|')}.`);
   }
 }
 
@@ -737,12 +737,12 @@ function interactiveArtifactsDefault() {
 }
 
 function listArtifactProjectDefaults() {
-  const artifactsRoot = path.join(process.cwd(), P2A_ARTIFACTS_DIR);
+  const artifactsRoot = path.join(ROOT, P2A_ARTIFACTS_DIR);
   if (!existsSync(artifactsRoot)) return [];
   try {
     return readdirSync(artifactsRoot, { withFileTypes: true })
       .filter((entry) => entry.isDirectory())
-      .map((entry) => path.join(P2A_ARTIFACTS_DIR, entry.name))
+      .map((entry) => path.join(artifactsRoot, entry.name))
       .filter((candidate) => isIterativeArtifactRoot(candidate))
       .sort();
   } catch {
@@ -786,7 +786,7 @@ async function buildInteractiveArgv(rl) {
     if (source.mode === 'maintenance') {
       graphPath = path.join(iterationState.artifactRoot, 'iterations', 'maintenance', 'gate-c-task-graph', 'task-graph.json');
       if (!existsSync(graphPath)) {
-        throw new Error('no maintenance task graph yet; create one with: node .plan2agent/scripts/p2a.mjs iteration maintenance add --artifacts <dir> --title ... --accept ...');
+        throw new Error('no maintenance task graph yet; create one with: p2a iteration maintenance add --artifacts <dir> --title ... --accept ...');
       }
       argv = [selected.command, '--artifacts', artifactsPath, '--maintenance'];
     } else {
