@@ -856,7 +856,11 @@ export function validateMilestoneReviewData(data) {
     }
   }
 
-  const completedTaskIds = data.source.completed_task_evidence.map((item) => item.task_id);
+  const completedTaskEvidence = data.source.completed_task_evidence.map((item) => ({
+    item,
+    runSnapshot: validateRunData(item.run_snapshot),
+  }));
+  const completedTaskIds = completedTaskEvidence.map(({ runSnapshot }) => runSnapshot.taskId);
   const remainingTaskIds = data.source.remaining_task_ids;
   assertUniqueStrings(completedTaskIds, 'milestone review completed task ids');
   assertUniqueStrings(remainingTaskIds, 'milestone review remaining task ids');
@@ -883,43 +887,46 @@ export function validateMilestoneReviewData(data) {
     throw new ValidationError(`milestone review remaining_task_ids must match non-done tasks in task_snapshot: ${JSON.stringify(remainingMismatch)}`);
   }
 
-  for (const item of data.source.completed_task_evidence) {
-    parsedTimestamp(item.run_finished_at, `${item.task_id}.run_finished_at`);
-    const snapshotTask = data.source.task_snapshot.find((task) => task.task_id === item.task_id);
-    if (snapshotTask.task_title !== item.task_title) {
-      throw new ValidationError(`${item.task_id}.task_title must match task_snapshot`);
+  for (const { item, runSnapshot } of completedTaskEvidence) {
+    const taskId = runSnapshot.taskId;
+    parsedTimestamp(runSnapshot.finishedAt, `${taskId}.run_snapshot.finishedAt`);
+    const snapshotTask = data.source.task_snapshot.find((task) => task.task_id === taskId);
+    if (snapshotTask.task_title !== runSnapshot.taskTitle) {
+      throw new ValidationError(`${taskId}.run_snapshot.taskTitle must match task_snapshot`);
     }
-    const runSnapshot = validateRunData(item.run_snapshot);
     const runSnapshotSha256 = milestoneRunSnapshotSha256(runSnapshot);
     if (runSnapshotSha256 !== item.run_snapshot_sha256) {
-      throw new ValidationError(`${item.task_id}.run_snapshot_sha256 mismatch: expected ${runSnapshotSha256}`);
+      throw new ValidationError(`${taskId}.run_snapshot_sha256 mismatch: expected ${runSnapshotSha256}`);
     }
     const snapshotFields = {
       runId: item.run_id,
       taskId: item.task_id,
       taskTitle: item.task_title,
-      status: 'finished',
       finishedAt: item.run_finished_at,
     };
     for (const [field, expected] of Object.entries(snapshotFields)) {
-      if (runSnapshot[field] !== expected) {
-        throw new ValidationError(`${item.task_id}.run_snapshot ${field} must be ${JSON.stringify(expected)}, got ${JSON.stringify(runSnapshot[field])}`);
+      if (expected !== undefined && runSnapshot[field] !== expected) {
+        throw new ValidationError(`${taskId}.run_snapshot ${field} must be ${JSON.stringify(expected)}, got ${JSON.stringify(runSnapshot[field])}`);
       }
     }
+    if (runSnapshot.status !== 'finished') {
+      throw new ValidationError(`${taskId}.run_snapshot status must be "finished", got ${JSON.stringify(runSnapshot.status)}`);
+    }
     if (item.workspace_ref !== undefined && runSnapshot.workspaceRef !== item.workspace_ref) {
-      throw new ValidationError(`${item.task_id}.workspace_ref must exactly match run_snapshot.workspaceRef`);
+      throw new ValidationError(`${taskId}.workspace_ref must exactly match run_snapshot.workspaceRef`);
     }
-    if (!sameJson(runSnapshot.changedFiles, item.changed_files)) {
-      throw new ValidationError(`${item.task_id}.changed_files must exactly match run_snapshot`);
+    if (item.changed_files !== undefined && !sameJson(runSnapshot.changedFiles, item.changed_files)) {
+      throw new ValidationError(`${taskId}.changed_files must exactly match run_snapshot`);
     }
-    if (!sameJson(normalizedRunVerification(runSnapshot), item.verification)) {
-      throw new ValidationError(`${item.task_id}.verification must exactly match run_snapshot`);
+    const verification = normalizedRunVerification(runSnapshot);
+    if (item.verification !== undefined && !sameJson(verification, item.verification)) {
+      throw new ValidationError(`${taskId}.verification must exactly match run_snapshot`);
     }
-    const hasExecutedPass = item.verification.some((verification) => verification.status === 'passed'
-      && verification.exit_code === 0
-      && ['config', 'command'].includes(verification.source));
+    const hasExecutedPass = verification.some((entry) => entry.status === 'passed'
+      && entry.exit_code === 0
+      && ['config', 'command'].includes(entry.source));
     if (!hasExecutedPass) {
-      throw new ValidationError(`${item.task_id}.verification must include an executed config/command check that passed with exit_code 0`);
+      throw new ValidationError(`${taskId}.run_snapshot verification must include an executed config/command check that passed with exit_code 0`);
     }
   }
 
@@ -1091,59 +1098,55 @@ function validateMilestoneRunEvidence(data, artifactRoot, kind, graphPath) {
   const generatedAt = parsedTimestamp(data.generated_at, 'milestone review generated_at');
 
   for (const evidence of data.source.completed_task_evidence) {
-    const latest = latestSuccessfulRunEntry(runIndex, evidence.task_id, data, generatedAt, graphPath, artifactRoot);
+    const runSnapshot = evidence.run_snapshot;
+    const taskId = runSnapshot.taskId;
+    const runId = runSnapshot.runId;
+    const latest = latestSuccessfulRunEntry(runIndex, taskId, data, generatedAt, graphPath, artifactRoot);
     if (!latest) {
-      throw new ValidationError(`${evidence.task_id} has no successful finished run in the milestone task-graph context at generated_at`);
+      throw new ValidationError(`${taskId} has no successful finished run in the milestone task-graph context at generated_at`);
     }
-    if (latest.entry.runId !== evidence.run_id) {
-      throw new ValidationError(`${evidence.task_id}.run_id must reference latest successful finished run ${latest.entry.runId}`);
+    if (latest.entry.runId !== runId) {
+      throw new ValidationError(`${taskId}.run_snapshot.runId must reference latest successful finished run ${latest.entry.runId}`);
     }
     const expectedRunRef = artifactRunRef(latest.entry.runRef);
-    const legacyEvidenceRef = `runs/${legacyRunRef(evidence.run_id)}`;
+    const legacyEvidenceRef = `runs/${legacyRunRef(runId)}`;
     if (![expectedRunRef, legacyEvidenceRef].includes(evidence.run_ref)
       || (kind === 'draft' && evidence.run_ref !== expectedRunRef)) {
-      throw new ValidationError(`${evidence.task_id}.run_ref must be ${expectedRunRef}`);
+      throw new ValidationError(`${taskId}.run_ref must be ${expectedRunRef}`);
     }
     const runPath = latest.runPath;
     const run = latest.run;
-    const runSnapshot = evidence.run_snapshot;
-    if (kind === 'draft' && evidence.workspace_ref === undefined) {
-      throw new ValidationError(`${evidence.task_id}.workspace_ref is required for milestone review draft validation`);
-    }
     const expectedFields = {
       projectId: data.project_id,
-      taskId: evidence.task_id,
-      taskTitle: evidence.task_title,
       iterationId: data.iteration_id,
       sourceLayout: 'iteration',
       taskGraphRef: data.source.task_graph_ref,
       sourceSpecRef: data.source.task_graph_snapshot.sourceSpec,
       status: 'finished',
-      finishedAt: evidence.run_finished_at,
     };
     for (const [field, expected] of Object.entries(expectedFields)) {
       if (runSnapshot[field] !== expected) {
-        throw new ValidationError(`${evidence.task_id} run_snapshot ${field} must be ${JSON.stringify(expected)}, got ${JSON.stringify(runSnapshot[field])}`);
+        throw new ValidationError(`${taskId} run_snapshot ${field} must be ${JSON.stringify(expected)}, got ${JSON.stringify(runSnapshot[field])}`);
       }
     }
     if (parsedTimestamp(runSnapshot.finishedAt, `${runSnapshot.runId}.finishedAt`) > generatedAt) {
-      throw new ValidationError(`${evidence.task_id} run_finished_at must not be later than milestone generated_at`);
+      throw new ValidationError(`${taskId} run_snapshot.finishedAt must not be later than milestone generated_at`);
     }
 
     for (const field of MILESTONE_IMMUTABLE_RUN_FIELDS) {
       if (!sameJson(run[field], runSnapshot[field])) {
         throw new ValidationError(
-          `${evidence.task_id} run ${field} must match run_snapshot immutable context: expected ${JSON.stringify(runSnapshot[field])}, got ${JSON.stringify(run[field])}`,
+          `${taskId} run ${field} must match run_snapshot immutable context: expected ${JSON.stringify(runSnapshot[field])}, got ${JSON.stringify(run[field])}`,
         );
       }
     }
 
     if (kind === 'draft') {
       if (rawFileSha256(runPath) !== evidence.run_sha256) {
-        throw new ValidationError(`${evidence.task_id}.run_sha256 does not match ${evidence.run_ref}`);
+        throw new ValidationError(`${taskId}.run_sha256 does not match ${evidence.run_ref}`);
       }
       if (!sameJson(run, runSnapshot)) {
-        throw new ValidationError(`${evidence.task_id}.run_snapshot must exactly match ${evidence.run_ref} for draft validation`);
+        throw new ValidationError(`${taskId}.run_snapshot must exactly match ${evidence.run_ref} for draft validation`);
       }
     }
   }

@@ -635,12 +635,14 @@ function pushMilestoneReviewBundleIfExists(plan, artifactsRoot, targetRoot, proj
       pushBundleFile(run.sourcePath, run.relativePath, evidenceFiles);
     }
     for (const evidence of milestoneReview.source.completed_task_evidence) {
-      const indexedRun = runIndexData.runs.find((run) => run.runId === evidence.run_id);
+      const runId = evidence.run_snapshot.runId;
+      const taskId = evidence.run_snapshot.taskId;
+      const indexedRun = runIndexData.runs.find((run) => run.runId === runId);
       const expectedRunRef = indexedRun ? artifactRunRef(indexedRun.runRef) : null;
-      const legacyEvidenceRef = normalizePath(path.join('runs', legacyRunRef(evidence.run_id)));
+      const legacyEvidenceRef = normalizePath(path.join('runs', legacyRunRef(runId)));
       if (!indexedRun || ![expectedRunRef, legacyEvidenceRef].includes(normalizePath(evidence.run_ref))) {
         throw new ValidationError(
-          `${checkpoint} ${evidence.task_id}.run_ref must be ${JSON.stringify(expectedRunRef)} for a portable handoff bundle`,
+          `${checkpoint} ${taskId}.run_ref must be ${JSON.stringify(expectedRunRef)} for a portable handoff bundle`,
         );
       }
     }

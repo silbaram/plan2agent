@@ -67,6 +67,16 @@ function normalizedVerification(index) {
   }];
 }
 
+function normalizedRunVerification(run) {
+  return run.verification.map((item) => ({
+    type: item.type,
+    command: item.command,
+    status: item.status,
+    exit_code: item.exitCode,
+    source: item.source,
+  }));
+}
+
 function supplementalRunVerification() {
   return {
     type: 'lint',
@@ -82,22 +92,27 @@ function supplementalRunVerification() {
   };
 }
 
-function completedTaskEvidence(index) {
+function completedTaskDerivedFields(index) {
   const suffix = String(index).padStart(3, '0');
-  const evidence = {
+  return {
     task_id: `task-${suffix}`,
     task_title: `Completed task ${index}`,
     run_id: `run-task-${suffix}`,
-    run_ref: `runs/run-task-${suffix}.json`,
-    run_sha256: 'b'.repeat(64),
     run_finished_at: `2026-07-11T00:0${index}:00.000Z`,
     workspace_ref: `fixture-workspace-${index}`,
     changed_files: [`src/task-${suffix}.mjs`],
     verification: normalizedVerification(index),
   };
-  const runSnapshot = fullRun(evidence);
+}
+
+function completedTaskEvidence(index, { includeDerivedFields = false } = {}) {
+  const suffix = String(index).padStart(3, '0');
+  const derivedFields = completedTaskDerivedFields(index);
+  const runSnapshot = fullRun(derivedFields);
   return {
-    ...evidence,
+    ...(includeDerivedFields ? derivedFields : {}),
+    run_ref: `runs/run-task-${suffix}.json`,
+    run_sha256: 'b'.repeat(64),
     run_snapshot: runSnapshot,
     run_snapshot_sha256: milestoneRunSnapshotSha256(runSnapshot),
   };
@@ -168,9 +183,14 @@ function midpointReview() {
 }
 
 function fullRun(evidence, overrides = {}) {
-  const index = Number.parseInt(evidence.task_id.slice('task-'.length), 10);
-  const finishedAt = overrides.finishedAt ?? evidence.run_finished_at;
-  const verification = (overrides.verification ?? evidence.verification).map((item) => ({
+  const sourceRun = evidence.run_snapshot ?? {};
+  const taskId = evidence.task_id ?? sourceRun.taskId;
+  const index = Number.parseInt(taskId.slice('task-'.length), 10);
+  const finishedAt = overrides.finishedAt ?? evidence.run_finished_at ?? sourceRun.finishedAt;
+  const sourceVerification = overrides.verification
+    ?? evidence.verification
+    ?? normalizedRunVerification(sourceRun);
+  const verification = sourceVerification.map((item) => ({
     type: item.type,
     command: item.command,
     status: item.status,
@@ -184,16 +204,16 @@ function fullRun(evidence, overrides = {}) {
   }));
   return {
     schema_version: 'p2a.run.v1',
-    runId: overrides.runId ?? evidence.run_id,
+    runId: overrides.runId ?? evidence.run_id ?? sourceRun.runId,
     projectId: overrides.projectId ?? PROJECT_ID,
-    taskId: overrides.taskId ?? evidence.task_id,
-    taskTitle: overrides.taskTitle ?? evidence.task_title,
+    taskId: overrides.taskId ?? taskId,
+    taskTitle: overrides.taskTitle ?? evidence.task_title ?? sourceRun.taskTitle,
     iterationId: overrides.iterationId ?? ITERATION_ID,
     sourceLayout: 'iteration',
     taskGraphRef: overrides.taskGraphRef ?? TASK_GRAPH_REF,
     sourceSpecRef: '../gate-b-spec/spec.json',
     agentTool: 'codex',
-    workspaceRef: overrides.workspaceRef ?? evidence.workspace_ref ?? `fixture-workspace-${index}`,
+    workspaceRef: overrides.workspaceRef ?? evidence.workspace_ref ?? sourceRun.workspaceRef ?? `fixture-workspace-${index}`,
     workspacePath: `/tmp/fixture-workspace-${index}`,
     isolation: {
       mode: 'none',
@@ -209,7 +229,7 @@ function fullRun(evidence, overrides = {}) {
     startedAt: '2026-07-11T00:00:00.000Z',
     updatedAt: finishedAt,
     finishedAt,
-    changedFiles: overrides.changedFiles ?? evidence.changed_files,
+    changedFiles: overrides.changedFiles ?? evidence.changed_files ?? sourceRun.changedFiles,
     verification,
     notes: [],
   };
@@ -281,9 +301,24 @@ function addRun(bundle, run) {
 }
 
 describe('milestone review artifact contract', () => {
-  test('accepts a complete in-memory midpoint evidence snapshot', () => {
+  test('accepts compact completed-task evidence derived from run_snapshot', () => {
     const data = midpointReview();
     assert.equal(validateMilestoneReviewData(data), data);
+  });
+
+  test('accepts legacy derived fields and still rejects them when they drift from run_snapshot', () => {
+    const legacyData = midpointReview();
+    legacyData.source.completed_task_evidence = [
+      completedTaskEvidence(1, { includeDerivedFields: true }),
+      completedTaskEvidence(2, { includeDerivedFields: true }),
+    ];
+    assert.equal(validateMilestoneReviewData(legacyData), legacyData);
+
+    legacyData.source.completed_task_evidence[0].changed_files = ['src/not-the-run-file.mjs'];
+    assert.throws(
+      () => validateMilestoneReviewData(legacyData),
+      /changed_files must exactly match run_snapshot/,
+    );
   });
 
   test('cross-validates a unique draft against task graph, spec, run-index, and run files', () => {
@@ -341,22 +376,16 @@ describe('milestone review artifact contract', () => {
     }
   });
 
-  test('requires workspace_ref for new drafts while preserving canonical legacy reviews', () => {
+  test('accepts compact new drafts and canonical artifacts without duplicated workspace_ref', () => {
     const draftData = midpointReview();
     const draftBundle = writeBundle(draftData);
     try {
-      delete draftData.source.completed_task_evidence[0].workspace_ref;
-      writeFileSync(draftBundle.reviewPath, `${JSON.stringify(draftData, null, 2)}\n`, 'utf8');
-      assert.throws(
-        () => validateMilestoneReview(draftBundle.reviewPath),
-        /workspace_ref is required for milestone review draft validation/,
-      );
+      assert.deepEqual(validateMilestoneReview(draftBundle.reviewPath), draftData);
     } finally {
       rmSync(draftBundle.artifactRoot, { recursive: true, force: true });
     }
 
     const canonicalData = midpointReview();
-    delete canonicalData.source.completed_task_evidence[0].workspace_ref;
     const canonicalBundle = writeBundle(canonicalData, 'midpoint.json');
     try {
       assert.deepEqual(validateMilestoneReview(canonicalBundle.reviewPath), canonicalData);
@@ -386,7 +415,7 @@ describe('milestone review artifact contract', () => {
       assert.equal(migration.status, 0, migration.stderr);
       const index = validateRunsDir(bundle.runsDir);
       for (const evidence of data.source.completed_task_evidence) {
-        const runEntry = index.runs.find((entry) => entry.runId === evidence.run_id);
+        const runEntry = index.runs.find((entry) => entry.runId === evidence.run_snapshot.runId);
         assert.ok(runEntry);
         evidence.run_ref = `runs/${runEntry.runRef}`;
       }
@@ -519,10 +548,16 @@ describe('milestone review artifact contract', () => {
     const mutations = [
       ['run_sha256', (evidence) => { evidence.run_sha256 = '0'.repeat(64); }, /run_sha256 does not match/],
       ['run_snapshot_sha256', (evidence) => { evidence.run_snapshot_sha256 = '0'.repeat(64); }, /run_snapshot_sha256 mismatch/],
+      ['task_id', (evidence) => { evidence.task_id = 'task-999'; }, /run_snapshot taskId must be/],
+      ['task_title', (evidence) => { evidence.task_title = 'Different task title'; }, /run_snapshot taskTitle must be/],
+      ['run_id', (evidence) => { evidence.run_id = 'run-different'; }, /run_snapshot runId must be/],
       ['run_finished_at', (evidence) => { evidence.run_finished_at = '2026-07-11T00:09:00.000Z'; }, /run_snapshot finishedAt must be/],
       ['workspace_ref', (evidence) => { evidence.workspace_ref = 'not-the-run-workspace'; }, /workspace_ref must exactly match/],
       ['changed_files', (evidence) => { evidence.changed_files = ['src/not-the-run-file.mjs']; }, /changed_files must exactly match/],
-      ['verification', (evidence) => { evidence.verification[0].command = 'node --test different'; }, /verification must exactly match/],
+      ['verification', (evidence) => {
+        evidence.verification = normalizedVerification(1);
+        evidence.verification[0].command = 'node --test different';
+      }, /verification must exactly match/],
     ];
     for (const [label, mutate, expected] of mutations) {
       const data = midpointReview();
@@ -601,15 +636,19 @@ describe('milestone review artifact contract', () => {
 
   test('rejects completed evidence without an executed passing check and cross-scope findings', () => {
     const verificationData = midpointReview();
-    verificationData.source.completed_task_evidence[0].verification = [{
+    const verificationEvidence = verificationData.source.completed_task_evidence[0];
+    verificationEvidence.run_snapshot.verification = [{
       type: 'test',
       command: 'node --test',
       status: 'skipped',
-      exit_code: null,
+      exitCode: null,
+      durationMs: 1,
+      startedAt: '2026-07-11T00:00:00.000Z',
+      finishedAt: '2026-07-11T00:01:00.000Z',
+      stdoutTail: null,
+      stderrTail: null,
       source: 'manual',
     }];
-    const verificationEvidence = verificationData.source.completed_task_evidence[0];
-    verificationEvidence.run_snapshot = fullRun(verificationEvidence);
     verificationEvidence.run_snapshot_sha256 = milestoneRunSnapshotSha256(verificationEvidence.run_snapshot);
     assert.throws(
       () => validateMilestoneReviewData(verificationData),
