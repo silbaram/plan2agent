@@ -249,7 +249,14 @@ function renderCodexAgent(meta, body) {
 }
 
 function renderGeminiCommand(command) {
-  const escapedPrompt = command.prompt.replaceAll('"""', '\\"\\"\\"');
+  const skillRoot = path.join(SKILL_SOURCE, command.skill);
+  const references = relativeFileList(skillRoot).filter((relativeFile) => relativeFile.split(path.sep)[0] === 'references');
+  const referenceGuidance = references.length
+    ? `\n\nConditional references for ${command.skill} (resolve relative to its SKILL.md):\n${references
+        .map((relativeFile) => `- ${relativeFile.split(path.sep).join('/')}`)
+        .join('\n')}\nRead a reference only when its entry condition in SKILL.md is satisfied; otherwise do not read it.`
+    : '';
+  const escapedPrompt = `${command.prompt}${referenceGuidance}`.replaceAll('"""', '\\"\\"\\"');
   return `description = ${tomlBasicString(command.description)}\nprompt = \"\"\"\n${escapedPrompt}\n\"\"\"\n`;
 }
 

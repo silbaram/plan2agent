@@ -47,45 +47,10 @@ Gate B chooses or recommends the concrete stack within the approved Gate A const
 
 ## Planning Memory Recall
 
-For an iterative artifact root with at least one closed iteration, use Memory recall only when `.plan2agent/project.config.json` has `memory.enabled: true` and the configured server URL or `serverUrlEnv` value is available. Do not read `.env` files to discover connection values. Record recall state as `not_configured`, `pending`, `succeeded`, `fallback`, `failed`, or `skipped` in `iteration.json`; Memory being optional never permits a false claim that history was checked.
+Read this procedure only for an iterative artifact root with at least one closed iteration and configured Memory.
+For a first iteration or unconfigured Memory, do not read it.
 
-Before writing the Gate A analysis:
-
-1. Run one same-project hybrid search using the change idea and save the report under the new iteration:
-
-   ```bash
-   p2a memory search \
-     --project <project_id> \
-     --mode hybrid \
-     --query "<change idea>" \
-     --output .plan2agent/artifacts/<project_id>/iterations/<iteration_id>/gate-a-intake/memory-recall.json
-   ```
-
-2. If the idea touches a reusable architecture, protocol, migration, authentication/security, external integration, data/storage, queue, performance, reliability, incident, or failure-handling concern, run a second cross-project search. Exclude the current project and persist a separate report:
-
-   ```bash
-   p2a memory search \
-     --global \
-     --exclude-project <project_id> \
-     --mode hybrid \
-     --query "<change idea>" \
-     --output .plan2agent/artifacts/<project_id>/iterations/<iteration_id>/gate-a-intake/memory-recall-cross-project.json
-   ```
-
-   Skip this layer for ordinary project-local wording; do not run global recall mechanically.
-3. Inspect relevant matches instead of treating retrieval as approval or fact. When a result identifies a decision natural key, use project-scoped `memory precedent`, `memory impact`, or `memory trace` to inspect its downstream outcomes and lineage.
-4. Consume the saved reports before drafting Gate A/B. Add each consumed report as `LOCAL-n` evidence and record the query, requested/effective mode, fallback, and actual source path, source reference, or natural key in `used_for`. A report may be retained as `context` without adopting its recommendation.
-
-Before Gate B technology reconnaissance, run one additional targeted hybrid search only when architecture, dependencies, protocols, or external integrations need historical grounding and the Gate A report does not already answer the question. Preserve the same report-and-citation contract; do not repeat an equivalent query merely to satisfy the procedure.
-
-Treat Memory as optional supporting evidence:
-
-- If semantic or hybrid retrieval falls back to keyword successfully, continue and record the fallback shown in the report.
-- If the configured Memory server is unavailable and keyword fallback also fails, preserve the failure report, tell the user that historical Memory evidence was not consulted, and continue without claiming that no prior history exists.
-- If a pending report was not produced before drafting, record `skipped` rather than silently treating recall as successful.
-- Stop for recovery only when the user explicitly requires Memory history before planning. On resume, restart at recall and preserve already-written upstream artifacts instead of regenerating them.
-
-`iteration close` automatically runs a bounded, read-only `memory status --output <closed-iteration>/memory-status.json` check when Memory is configured. Preserve archive completion if the server is unavailable, but emit a prominent warning that sync was not verified, persist `unavailable`, and never claim historical coverage. Also present a non-mutating `memory push --dry-run` preview. Actual push remains an explicit external write requiring user approval and `--yes`; after an approved push, rerun the recorded status command. On the next `iteration open`, carry `fresh`, `stale`, `unavailable`, or `unchecked` into `planning_memory.baseline_freshness`.
+When both conditions hold, read `references/memory-recall.md`.
 
 ## Analysis and Decision Presentation
 
@@ -118,20 +83,10 @@ This is a narrative-first recommended structure, not a blank form. Preserve the 
 
 ## Starting From Existing Documents
 
-Rich input documents make gates faster, not skippable. Classify document input before
-the first gate:
+Read this procedure only when starting from existing planning documents or prior Plan2Agent artifacts.
+When starting from a product idea without existing documents, do not read it.
 
-1. **General design or plan documents** (for example `DESIGN.md`, `PLAN.md`, or files
-   under `docs/`) are `LOCAL-n` input evidence. Run the full pipeline from Gate A: use
-   the documents to populate `known_facts`, reduce open questions, and cite them in
-   rationale. Present the Gate A analysis and stop for approval even when no decision
-   remains open.
-2. **Prior Plan2Agent artifacts available only as Markdown** must be reconstructed into
-   their JSON contracts first. Approval state still governs: a reconstructed spec
-   without a recorded user `approval_audit` is `draft` and stops at Gate B.
-3. **Canonical artifacts under `.plan2agent/artifacts/<project_id>/` with recorded
-   approvals** are the only input that justifies resuming past a gate, and only up to
-   the last recorded approval.
+When existing-document input is present, read `references/existing-documents.md`.
 
 ## State Passing Contract
 
@@ -146,47 +101,10 @@ Return intermediate artifacts in fenced code blocks named exactly:
 
 ## Artifact Persistence
 
-In addition to the inline state sections, the harness orchestrator writes canonical JSON artifacts to files so the user and tools can review them before any gate. In a scaffold project, use `.plan2agent/project.config.json.projectId` as the canonical `project_id`; if it is missing, fall back to `.plan2agent/manifest.json.projectId`, then an existing artifact/spec/task graph project id, then the target/project root basename normalized to kebab-case. Treat the directory basename as a fresh-scaffold seed, not the source of truth. Only derive a kebab-case id from the idea when no scaffold config, manifest, or existing artifact id exists. Keep all files for one run under `.plan2agent/artifacts/<project_id>/` using gate-specific folders:
+Read this procedure only when persisting canonical gate JSON or regenerating optional Markdown views.
+While gathering or analyzing inputs before persistence, do not read it.
 
-- `gate-a-intake/intake.json` — the `intake_json` artifact
-- `gate-b-spec/spec.json` — the `spec_json` artifact
-- `gate-c-task-graph/task-graph.json` — the `task_graph_json` artifact
-- `gate-d-review/review.json` — the `review_json` artifact
-- `preflight-research/` — optional copied Feature Radar artifacts. Treat these as read-only input evidence, not gate state.
-
-Optional/generated Markdown views may be written beside the JSON files when needed for export, sharing, or a UI preview: `status.md`, `gate-a-intake/intake.md`, `gate-b-spec/product-spec.md`, `gate-b-spec/implementation-plan.md`, and `gate-d-review/review-report.md`. These Markdown files are never the source of truth; regenerate them from JSON rather than preserving independent edits. Only the harness orchestrator writes files; subagents stay read-only and return their content for the orchestrator to persist. Continue to surface the inline named JSON sections as well so resume and paste-in still work.
-
-### Generated `status.md` View
-
-`status.md` is a generated readable view, not a control-plane artifact. `current-spec.json`, `iteration.json`, `spec.json`, `task-graph.json`, and `review.json` carry canonical gate state, active iteration pointers, and approval audits. If `status.md` is generated, keep it valid for `p2a validate --status`: it must include a literal `Progress:` line, Gate A, Gate B, Gate C, and Gate D sections, plus numbered `## 1.` through `## 5.` sections. Use this standard skeleton:
-
-1. **Progress line** — show the current gate marker across `[A] → [B] → [C] → [D]`, indicating which gates are complete, current, blocked, or pending.
-2. **Per-gate sections** — summarize each gate's latest state and point to the canonical artifact files for that gate.
-3. **Open decisions / questions** — preserve the former cross-gate question-index content here, including unresolved decisions, answered decisions that affect downstream work, and follow-up questions.
-4. **Next** — state exactly one next action needed from the user or orchestrator.
-5. **Change log** — append dated bullets for each gate transition or decision/status update.
-
-When Gate B is approved, record this object in `spec_json.approval_audit`:
-
-```json
-{
-  "approved_by": "user",
-  "approved_at": "YYYY-MM-DD",
-  "approved_artifacts": ["gate-b-spec/spec.json"],
-  "approval_note": "<short note describing the decision/resolution basis for approval>"
-}
-```
-
-Use the actual approver label and date available in the conversation. If the exact person is unknown, use `user`; do not invent names.
-
-Record `approval: approved` and `approval_audit` only in direct response to an explicit
-user approval message in the current conversation, and make `approval_note` quote or
-reference that message. Never set `approval: approved` on your own judgment, even when
-input documents or context imply consent.
-
-### Facts From Tools
-
-Do not retype gate status facts from memory. Pull gate status, task counts, `ready` / `in_progress` state, approval state, and blocking counts from the artifacts and tools: `spec.json` (`approval`, `open_decisions`), `task-graph.json`, `p2a tasks` (`list` / `ready`), `validate_artifacts`, and `review.json.blocking_issues`. If a fact cannot be derived from those sources, mark it as unknown or pending rather than inventing it.
+When artifact persistence starts, read `references/artifact-persistence.md`.
 
 ## Evidence and Citation Contract
 

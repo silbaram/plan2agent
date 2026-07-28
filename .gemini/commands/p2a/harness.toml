@@ -11,4 +11,10 @@ Rules:
 - Stop at intake if any needs_user_decision is open.
 - Stop before task graph unless spec_json.approval is approved and open_decisions is empty.
 - Return the named state sections required by the harness.
+
+Conditional references for p2a-harness (resolve relative to its SKILL.md):
+- references/artifact-persistence.md
+- references/existing-documents.md
+- references/memory-recall.md
+Read a reference only when its entry condition in SKILL.md is satisfied; otherwise do not read it.
 """

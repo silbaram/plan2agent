@@ -169,70 +169,10 @@ Batch mode must use one write-capable provider within one foreground supervised 
 
 ## Supervised Batch Owner Procedure
 
-Batch mode wraps the single-task lifecycle; it does not create a batch run, change schemas, or delegate lifecycle ownership. Each task keeps its own run id, worktree, verification evidence, monitor verdict, style result, finish, milestone eligibility check, and retrospective.
+Read this procedure only when running two or more independent ready tasks in parallel.
+If executing a single task, do not read it.
 
-### 1. Freeze one ready snapshot and select a bounded batch
-
-Run `p2a tasks ready` once and freeze that result as the current ready snapshot. Select at most the user-approved concurrency limit and never add tasks that become ready while the batch is running. Because ready tasks already have every declared dependency in `done`, no selected task can directly depend on another selected task.
-
-Before starting, inspect task descriptions, target areas, acceptance criteria, and known implementation surfaces. Remove tasks from the batch, or reduce concurrency to one, when they are likely to overlap on the same files, shared configuration, database schema, generated artifacts, API contracts, or another integration-sensitive resource. Worktrees isolate edits; they do not eliminate integration conflicts or hidden semantic dependencies.
-
-Establish a committed `batchBase`, a user-approved canonical integration branch/worktree, and a fresh owner-only integration-candidate worktree/branch strategy. Do not use a dirty user checkout as either integration target. The canonical integration branch is the only base that may open the next dependency batch; a task worktree or integration candidate by itself is never canonical.
-
-### 2. Start every run serially
-
-The main dev-execution owner calls `p2a execute start` once per selected task, one at a time. Use a fresh worktree and branch for each task and pass the same committed `--base-ref <batch-base>`:
-
-```bash
-p2a execute start \
-  --artifacts <dir> \
-  --task <task-id> \
-  --agent-tool codex \
-  --isolation worktree \
-  --worktree <fresh-task-worktree> \
-  --base-ref <batch-base> \
-  --create-isolation
-```
-
-Maintain an owner-side mapping for `taskId`, `runId`, `branch`, `worktree`, `baseRef`, and implementer. Do not spawn an implementer when its start failed. A failed start does not require canceling runs that were already started for other independent tasks.
-
-Only the main owner may call `p2a execute start`, `p2a runs record|verify|finish`, `p2a execute finish`, or `p2a tasks done|block`. This remains true even when lifecycle CLIs are internally lock-safe.
-
-### 3. Spawn implementations in parallel
-
-After the selected runs have started, spawn one `p2a-implementer` per task inside its assigned worktree, up to the approved concurrency limit. Pass each implementer only its task prompt, acceptance criteria, constraints, style contract, run identity, and worktree boundary.
-
-Each implementer performs scoped file edits and optional local self-checks only. It must return changed files, checks, results, and blockers to the main owner. It must not edit planning artifacts, harness files, another worktree, the canonical integration worktree, or lifecycle state. Agent completion order does not control harvest order.
-
-### 4. Harvest and integrate one task at a time
-
-The main owner harvests one completed result at a time:
-
-1. Inspect the task worktree diff and reject scope drift or boundary violations.
-2. Freeze the task-specific changed-file list before creating a commit or patch. Do not attribute the cumulative integration worktree status to one task.
-3. Materialize a reproducible task-scoped commit or patch under main-owner control.
-4. Apply it to an integration candidate based on the latest canonical integration head. Do not auto-resolve conflicts and do not advance the canonical integration branch yet.
-5. Run configured or explicit verification against the integrated candidate. Task-worktree self-checks do not replace integrated-state verification.
-6. Record the exact task changed files and an `INTEGRATION:` run note containing the candidate base, integrated commit or patch identity, and verification workspace. When verification runs outside the original task worktree, pass `--workspace <integration-candidate>` explicitly.
-7. Run the existing monitor gate and style-rating passes against the task evidence and integrated candidate when they apply.
-8. Advance the canonical integration branch only after the candidate is conflict-free, required verification passed, and required monitor evidence accepts it.
-9. Only after the canonical integration branch contains the accepted task result, call `p2a execute finish` and allow the task to transition to `done`.
-
-In batch mode, do not rely on `--collect-git` from the cumulative integration worktree for task attribution. Record the frozen task-specific changed files explicitly. A clean integration worktree after committing is valid when the run already contains the correct changed-file evidence.
-
-If spawn, scope review, integration, verification, or a required monitor gate fails, do not advance the canonical integration branch for that task and do not mark it `done`. Close it through the existing structured `failed` or `blocked` contract when the cause is known, or keep it active when user input is required before a truthful close. Other independent task results may continue through serial harvest.
-
-### 5. Recompute ready only after the batch harvest
-
-After every selected task has been harvested or given a truthful non-done disposition, run `p2a tasks ready` again. Start the next batch from the latest canonical integration head. A dependent task must not start from its predecessor's isolated task branch or from the old batch base.
-
-Evaluate milestone review eligibility after each successful serial finish, using the task-graph state at that point. Do not run milestone passes concurrently and do not use their informational findings as a substitute for integrated-state verification.
-
-### 6. Preserve recoverability and clean up safely
-
-Never force-remove a dirty, unmerged, failed, or blocked task or integration-candidate worktree. An accepted task or integration-candidate worktree becomes a cleanup candidate only after its task result is durably present on the canonical integration branch and its run evidence contains the recovery references. A failed or blocked integration candidate remains recoverable until the user explicitly chooses a cleanup path. Cleanup still requires explicit user confirmation or an already approved project cleanup policy.
-
-Do not use destructive reset, forced branch movement, automatic conflict resolution, remote push, PR creation, or remote merge as part of this batch procedure.
+When parallel execution is confirmed, read `references/batch-execution.md`.
 
 ## Writing boundaries and prohibitions
 
@@ -261,58 +201,15 @@ Return these items to the user:
 
 ## Milestone Review Pass
 
-A milestone review pass is a recommended lightweight, read-only review for catching cross-cutting defects during an iteration. It is informational only and must not block close readiness, task completion, or any done/block decision; apply the same non-blocking principle used for the style-rating pass.
+Read this procedure only after `p2a execute finish` makes a task done and `done >= ceil(total / 2)` (midpoint) or `done == total` (pre_close).
+During any other task execution, do not read it.
+For maintenance tasks or explicit standalone graphs, do not read it.
 
-### Checkpoint selection and duplicate prevention
-
-Evaluate checkpoint eligibility after each successful `p2a execute finish` that marks a feature-iteration task done:
-
-- `midpoint` is eligible when `done >= ceil(total / 2)` and `done < total`.
-- `pre_close` is eligible when `done == total`, immediately before the user performs close-ready verification.
-- Maintenance and explicit standalone graphs do not create feature-iteration milestone reviews.
-
-Use exactly one stable path per iteration/checkpoint:
-
-- `iterations/<iteration-id>/milestone-reviews/midpoint.json`
-- `iterations/<iteration-id>/milestone-reviews/pre_close.json`
-
-If the eligible checkpoint's file already exists, validate it with `validate_artifacts.mjs --milestone-review` and skip the pass. Never overwrite, append a dated duplicate, or silently repair an existing checkpoint file. If an existing file is invalid, report the invalid informational artifact and continue the task/close flow without treating it as a gate. If the midpoint window has already passed because all tasks are done, do not backfill it; evaluate only `pre_close`.
-
-### Required context injection (맥락 주입)
-
-Before invoking the reviewer, the main dev-execution owner must build one evidence envelope from a single task-graph snapshot and pass all of it to the reviewer:
-
-- The full current iteration task graph, including every task status, preserved as `task_graph_snapshot`, plus a `task_snapshot` of each task's id/title/status, a task-count snapshot, the raw task-graph file `task_graph_sha256`, and the schema-defined deterministic `task_graph_snapshot_sha256`.
-- The approved product and implementation spec and its reference.
-- The complete `.plan2agent/style.md` contents and reference when the file has at least one filled section; otherwise use `style_ref: null`.
-- For every `done` task, evidence from its latest successful finished run: `task_id`, `task_title`, `run_id`, artifact-root-relative `run_ref` formed as `runs/<run-index entry runRef>` (normally `runs/<iteration_id>/<run_id>.json`, with legacy flat refs still readable), raw run-file `run_sha256`, the complete parsed `p2a.run.v1` object preserved as immutable `run_snapshot`, deterministic `run_snapshot_sha256 = sha256(JSON.stringify(run_snapshot))`, `run_finished_at`, `workspace_ref` copied exactly from `run_snapshot.workspaceRef`, the complete `changedFiles` list normalized as `changed_files`, and the complete verification summary normalized to `type`, `command`, `status`, `exit_code`, and `source`.
-- The ids of every remaining `todo`, `in_progress`, or `blocked` task.
-- A clear instruction that only completed scope is under review, every suspected gap must be compared against remaining tasks before classification, and every `changed_files` path must be inspected in its run's `workspace_ref` or immutable isolation worktree/branch before a difference in the current or main worktree is classified as a finding.
-
-Each completed task must have a resolvable successful run whose raw file matches `run_sha256`, whose parsed object exactly matches `run_snapshot` and `run_snapshot_sha256` at draft validation time, whose `workspace_ref` exactly matches `run_snapshot.workspaceRef`, and whose finish time matches `run_finished_at`. It also needs an explicit changed-file list (which may be empty) and at least one executed `source: config|command` verification that passed with exit code 0. The reviewer must resolve the completed code from `workspace_ref`; when that worktree is no longer present, it may use `run_snapshot.isolation.worktree` or inspect `run_snapshot.isolation.branch` with read-only git operations. If neither completed workspace nor branch is inspectable, treat the reviewer input as incomplete and do not create the canonical checkpoint file. The immutable snapshot keeps the checkpoint historically valid if a finished run later receives a legal `record` or `verify` evidence append; mutable current evidence must not rewrite the checkpoint snapshot. If any completed-task evidence is missing, do not invoke a partial review and do not create the canonical checkpoint file. Record the non-blocking skip reason in the current response or run notes and retry the still-eligible checkpoint after evidence is repaired.
-
-Invoke `p2a-milestone-reviewer` as a separate read-only subagent when available, or perform an otherwise separated read-only review using the same contract. Split review perspectives across at most two instances when useful, then have the main owner deduplicate their results into one checkpoint artifact.
-
-### Persistence and result handling
-
-The main owner, not the reviewer, combines the immutable source envelope with the reviewer result and adds `schema_version: "p2a.milestone_review.v1"`, `project_id`, `iteration_id`, and `generated_at`. The complete object must match `p2a` package schema `milestone-review.schema.json`.
-
-Write first to a unique draft in the checkpoint directory, using `iterations/<iteration-id>/milestone-reviews/<checkpoint>.<unique-id>.draft.json`. Never use one shared draft filename and never rename a draft into the stable path yourself. Promote through the iteration CLI, which validates the unique draft and then atomically claims the stable checkpoint path with a hard-link create that fails if another owner has already won:
-
-```bash
-p2a iteration promote-milestone \
-  --artifacts <artifact-root> \
-  --draft <artifact-root>/iterations/<iteration-id>/milestone-reviews/<checkpoint>.<unique-id>.draft.json
-```
-
-On success the CLI creates `<checkpoint>.json` atomically and removes the winning unique draft. If the stable path already exists, the CLI never overwrites it and leaves the losing draft untouched; validate the stable artifact before discarding that draft. Invalid drafts are not canonical and must not be promoted. This single promotion command replaces the non-atomic check-then-rename sequence.
-
-Consume `confirmed_findings` as maintenance-task candidates only after checking the remaining feature tasks and existing maintenance graph again. Preserve `planned_todo_not_findings` in the JSON so planned work is not duplicated. When registering a confirmed finding, cite `milestone-review:iterations/<iteration-id>/milestone-reviews/<checkpoint>.json#<finding_id>` in maintenance `sourceSpecRefs`/`--ref` evidence. The milestone JSON is the stable informational source; do not create a competing Markdown source and do not edit Gate D decision records such as `review.json`.
+When a checkpoint condition is met, read `references/milestone-review.md`.
 
 ## Retrospective
 
-After execution, perform a Hermes-style retrospective gate. Look for repeated mistakes, missing verification, reusable procedures, or unclear boundaries discovered during the run. Explicitly ask: did the user correct code style during this run?
+Read this procedure only after execution reaches the retrospective gate.
+Before execution finishes or when no retrospective is being performed, do not read it.
 
-If an improvement is warranted, write it as a skill-proposal schema object rather than freeform markdown and save it inside the project at `.plan2agent/proposals/<proposalId>.json`. If the user corrected code style, write a proposal with `target: "project"` and `targetFiles: [".plan2agent/style.md"]`; record concrete evidence describing what the user asked to change and how they wanted the style adjusted. The object must conform to `p2a` package schema `skill-proposal.schema.json` with `schema_version: "p2a.skill_proposal.v1"`, a stable non-empty `proposalId`, the source run id when available, concrete evidence, target canonical files, risk, and `status: "proposed"`.
-
-Do not edit any skill, agent, planning artifact, CLI mirror, or other canonical file automatically as part of the retrospective. Leave only the proposal object for later review. A human or the read-only skill curator must review the proposal, and any approved patch must happen in a separate turn after human approval.
+When the gate is reached, read `references/retrospective.md`.
