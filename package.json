@@ -2,6 +2,7 @@
   "name": "plan2agent",
   "version": "0.1.0",
   "description": "Spec-driven development harness for AI coding agents with human-in-the-loop approval gates.",
+  "license": "MIT",
   "keywords": [
     "spec-driven-development",
     "ai-coding-agent",

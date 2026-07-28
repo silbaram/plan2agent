@@ -16,6 +16,7 @@ test('package metadata exposes the p2a global CLI and required runtime assets', 
   const packageJson = JSON.parse(readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
   assert.equal(packageJson.bin.p2a, 'scripts/p2a.mjs');
   assert.equal(packageJson.engines.node, '>=20');
+  assert.equal(packageJson.license, 'MIT');
   assert.ok(packageJson.keywords.includes('spec-driven-development'));
   assert.equal(packageJson.repository.url, 'git+https://github.com/silbaram/plan2agent.git');
   assert.equal(packageJson.homepage, 'https://github.com/silbaram/plan2agent#readme');
@@ -241,7 +242,7 @@ test('npm pack dry run includes the global CLI runtime', () => {
     });
     assert.equal(packed.status, 0, formatCommandResult(packed));
     const files = new Set(JSON.parse(packed.stdout)[0].files.map((file) => file.path));
-    for (const requiredPath of ['package.json', 'scripts/p2a.mjs', 'scripts/p2a_handoff.mjs', 'schemas/next.schema.json', '.agents/skills/p2a-next/SKILL.md']) {
+    for (const requiredPath of ['package.json', 'LICENSE', 'scripts/p2a.mjs', 'scripts/p2a_handoff.mjs', 'schemas/next.schema.json', '.agents/skills/p2a-next/SKILL.md']) {
       assert.ok(files.has(requiredPath), `${requiredPath} must be present in npm pack output`);
     }
     assert.ok(files.has('readme.md'), 'npm must include the project readme automatically');
