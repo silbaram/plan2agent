@@ -25,7 +25,7 @@ Use these context fields:
 - `code_signals`
 
 Draft requirements:
-- Return one complete object conforming to `.plan2agent/schemas/task-graph.schema.json`; do not omit required fields or return a partial task list.
+- Return one complete object conforming to `p2a` package schema `task-graph.schema.json`; do not omit required fields or return a partial task list.
 - Set `schema_version: "p2a.task_graph.v1"` and map `projectId` exactly from `context.project_id`.
 - Use `version: "<active_iteration>-draft"` and `sourceSpec: "../gate-b-spec/spec.json"`.
 - Include a non-empty `tasks` array. Every task must contain exactly the schema fields `id`, `title`, `description`, `status`, `dependencies`, `acceptanceCriteria`, `targetArea`, `suggestedAgentPrompt`, and `sourceSpecRefs` (plus schema-permitted block fields only when applicable).

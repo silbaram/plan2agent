@@ -9,7 +9,7 @@ Use the CLI result as the only decision authority. Do not infer, list, or encode
 
 ## Procedure
 
-1. Run `node .plan2agent/scripts/p2a.mjs next --json` from the target project. Pass `--project-id <id>` only when the user selected an artifact explicitly.
+1. Run `p2a next --json` from the target project. Pass `--project-id <id>` only when the user selected an artifact explicitly.
 2. Parse the one returned `command`, `reason`, and `state`.
 3. Present the result in the conversation using the returned reason.
 

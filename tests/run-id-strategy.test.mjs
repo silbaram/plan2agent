@@ -414,7 +414,7 @@ test('p2a_execute prints an exact same-id retry and completes with that identity
   let result = executeCli([...baseArgs, '--base-ref', 'refs/heads/p2a-missing-ref']);
   assert.equal(result.status, 1);
   assert.match(result.stderr, /retry with the same reserved run id/i);
-  assert.match(result.stderr, /p2a\.mjs execute start .*--run-id run-task-001-001/);
+  assert.match(result.stderr, /p2a execute start .*--run-id run-task-001-001/);
   assert.equal(JSON.parse(readFileSync(graphPath, 'utf8')).tasks.find((task) => task.id === 'task-001')?.status, 'todo');
   const reservationToken = retryReservationToken(result.stderr);
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-/** Diagnose a scaffolded Plan2Agent project from the toolkit checkout. */
+/** Diagnose a Plan2Agent project through the p2a package CLI. */
 
 import { existsSync, lstatSync, readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
@@ -63,7 +63,7 @@ const ORCHESTRATION_SCHEMA_FILES = [
 function usage() {
   return [
     'Usage:',
-    '  node scripts/p2a_doctor.mjs [--target <project-dir>] [--json] [--strict] [--dev]',
+    '  p2a doctor [--target <project-dir>] [--json] [--strict] [--dev]',
     '',
     'Options:',
     '  --target <dir>  Project directory to inspect. Default: current working directory.',
@@ -274,7 +274,7 @@ function artifactLayout(targetRoot, artifactRoot, isScaffoldProject) {
     requiresIterationInit,
     hasIncompleteIterationLayout,
     initCommand: requiresIterationInit
-      ? `node .plan2agent/scripts/p2a.mjs iteration init --artifacts ${relativeToTarget(targetRoot, artifactRoot)} --iteration-id v1-mvp`
+      ? `p2a iteration init --artifacts ${relativeToTarget(targetRoot, artifactRoot)} --iteration-id v1-mvp`
       : null,
   };
 }
@@ -415,7 +415,7 @@ function summarizeArtifact(targetRoot, artifactRoot, isScaffoldProject) {
   if (layout.requiresIterationInit) {
     diagnostics.push({
       severity: 'warn',
-      message: 'Greenfield Gate A-D artifacts must be converted with p2a_iteration init before task execution.',
+      message: 'Greenfield Gate A-D artifacts must be converted with p2a iteration init before task execution.',
     });
   }
   if (layout.hasIncompleteIterationLayout) {
@@ -509,8 +509,8 @@ function projectCommands(state, artifacts) {
     commands.push({
       id: 'validate',
       command: primaryArtifact.activeIteration
-        ? `node .plan2agent/scripts/p2a.mjs iteration validate --artifacts ${primaryArtifact.artifactRoot}`
-        : `node .plan2agent/scripts/validate_artifacts.mjs --artifact-root ${primaryArtifact.artifactRoot}`,
+        ? `p2a iteration validate --artifacts ${primaryArtifact.artifactRoot}`
+        : `p2a validate --artifact-root ${primaryArtifact.artifactRoot}`,
       description: 'Validate the detected planning artifacts.',
     });
   }
@@ -525,7 +525,7 @@ function projectCommands(state, artifacts) {
 }
 
 function summarizeProjectState(targetRoot, manifest) {
-  const isScaffoldProject = manifest?.provenance?.mode === 'scaffold';
+  const isScaffoldProject = ['init', 'scaffold'].includes(manifest?.provenance?.mode);
   const artifacts = discoverArtifactRoots(targetRoot)
     .map((artifactRoot) => summarizeArtifact(targetRoot, artifactRoot, isScaffoldProject));
   const state = determineProjectState(targetRoot, artifacts);
@@ -544,7 +544,7 @@ function projectStateCheck(projectState) {
     return check('project_state', 'Project state', 'fail', 'artifact layout or state diagnostics include errors', { state: projectState.state });
   }
   if (projectState.state === 'iteration_init_required') {
-    return check('project_state', 'Project state', 'warn', 'greenfield Gate artifacts require p2a_iteration init before execution', { state: projectState.state });
+    return check('project_state', 'Project state', 'warn', 'greenfield Gate artifacts require p2a iteration init before execution', { state: projectState.state });
   }
   if (projectState.state === 'no_p2a') {
     return check('project_state', 'Project state', 'warn', 'no P2A project state was detected', { state: projectState.state });
@@ -584,7 +584,11 @@ function capabilityManifestCheck(capability, label, state) {
     : check(`capability_${capability}_manifest`, `${label} capability manifest`, 'fail', `project config enables ${capability} but manifest.enhancements.${capability}.enabled is not true`);
 }
 
-function memoryCapabilityChecks(targetRoot, state) {
+function usesPackageRuntime(manifest) {
+  return manifest?.runtime?.mode === 'package' && manifest.runtime.command === 'p2a';
+}
+
+function memoryCapabilityChecks(targetRoot, state, packageRuntime) {
   const memoryConfig = state.configRecord;
   const checks = [];
   checks.push(capabilityManifestCheck('memory', 'Memory', state));
@@ -594,7 +598,9 @@ function memoryCapabilityChecks(targetRoot, state) {
       : check('capability_memory_config', 'Memory capability config', 'fail', 'manifest enables Memory but project.config.json memory.enabled is not true'),
   );
   checks.push(
-    isFile(path.join(targetRoot, '.plan2agent', 'scripts', 'p2a_memory.mjs'))
+    packageRuntime
+      ? check('capability_memory_runtime', 'Memory runtime', 'pass', 'Memory runtime is supplied by the p2a package')
+      : isFile(path.join(targetRoot, '.plan2agent', 'scripts', 'p2a_memory.mjs'))
       ? check('capability_memory_runtime', 'Memory runtime script', 'pass', '.plan2agent/scripts/p2a_memory.mjs is installed')
       : check('capability_memory_runtime', 'Memory runtime script', 'fail', 'p2a_memory.mjs is missing from the project runtime'),
   );
@@ -622,7 +628,7 @@ function memoryCapabilityChecks(targetRoot, state) {
   return checks;
 }
 
-function proposalsCapabilityChecks(targetRoot, state) {
+function proposalsCapabilityChecks(targetRoot, state, packageRuntime) {
   const proposalsConfig = state.configRecord;
   const checks = [];
   checks.push(capabilityManifestCheck('proposals', 'Proposal', state));
@@ -632,17 +638,19 @@ function proposalsCapabilityChecks(targetRoot, state) {
       : check('capability_proposals_config', 'Proposal capability config', 'fail', 'manifest enables proposals but project.config.json proposals.enabled is not true'),
   );
   checks.push(
-    isFile(path.join(targetRoot, '.plan2agent', 'scripts', 'p2a_proposals.mjs'))
+    packageRuntime
+      ? check('capability_proposals_runtime', 'Proposal runtime', 'pass', 'Proposal runtime is supplied by the p2a package')
+      : isFile(path.join(targetRoot, '.plan2agent', 'scripts', 'p2a_proposals.mjs'))
       ? check('capability_proposals_runtime', 'Proposal runtime script', 'pass', '.plan2agent/scripts/p2a_proposals.mjs is installed')
       : check('capability_proposals_runtime', 'Proposal runtime script', 'fail', 'p2a_proposals.mjs is missing from the project runtime'),
   );
-  const missingSchemas = PROPOSAL_SCHEMA_FILES
+  const missingSchemas = packageRuntime ? [] : PROPOSAL_SCHEMA_FILES
     .map((file) => `.plan2agent/schemas/${file}`)
     .filter((relativePath) => !isFile(path.join(targetRoot, relativePath)));
   checks.push(
     missingSchemas.length
       ? check('capability_proposals_schemas', 'Proposal schemas', 'fail', `${missingSchemas.length} proposal schema file(s) are missing`, { missing: missingSchemas })
-      : check('capability_proposals_schemas', 'Proposal schemas', 'pass', `${PROPOSAL_SCHEMA_FILES.length} proposal schemas are installed`),
+      : check('capability_proposals_schemas', 'Proposal schemas', 'pass', packageRuntime ? 'Proposal schemas are supplied by the p2a package' : `${PROPOSAL_SCHEMA_FILES.length} proposal schemas are installed`),
   );
   const mineOn = stringArrayValue(proposalsConfig.mineOn);
   const missingMineSignals = ['failed_run', 'blocked_run', 'verification_gap']
@@ -670,7 +678,7 @@ function proposalsCapabilityChecks(targetRoot, state) {
   return checks;
 }
 
-function orchestrationCapabilityChecks(targetRoot, state) {
+function orchestrationCapabilityChecks(targetRoot, state, packageRuntime) {
   const orchestrationConfig = state.configRecord;
   const checks = [];
   checks.push(capabilityManifestCheck('orchestration', 'Orchestration', state));
@@ -680,17 +688,19 @@ function orchestrationCapabilityChecks(targetRoot, state) {
       : check('capability_orchestration_config', 'Orchestration capability config', 'fail', 'manifest enables orchestration but project.config.json orchestration.enabled is not true'),
   );
   checks.push(
-    isFile(path.join(targetRoot, '.plan2agent', 'scripts', 'p2a_monitor_gate.mjs'))
+    packageRuntime
+      ? check('capability_orchestration_runtime', 'Monitor gate runtime', 'pass', 'Monitor gate runtime is supplied by the p2a package')
+      : isFile(path.join(targetRoot, '.plan2agent', 'scripts', 'p2a_monitor_gate.mjs'))
       ? check('capability_orchestration_runtime', 'Monitor gate helper', 'pass', '.plan2agent/scripts/p2a_monitor_gate.mjs is installed')
       : check('capability_orchestration_runtime', 'Monitor gate helper', 'fail', 'p2a_monitor_gate.mjs is missing from the project runtime'),
   );
-  const missingSchemas = ORCHESTRATION_SCHEMA_FILES
+  const missingSchemas = packageRuntime ? [] : ORCHESTRATION_SCHEMA_FILES
     .map((file) => `.plan2agent/schemas/${file}`)
     .filter((relativePath) => !isFile(path.join(targetRoot, relativePath)));
   checks.push(
     missingSchemas.length
       ? check('capability_orchestration_schemas', 'Orchestration schemas', 'fail', `${missingSchemas.length} orchestration schema file(s) are missing`, { missing: missingSchemas })
-      : check('capability_orchestration_schemas', 'Orchestration schemas', 'pass', `${ORCHESTRATION_SCHEMA_FILES.length} orchestration schemas are installed`),
+      : check('capability_orchestration_schemas', 'Orchestration schemas', 'pass', packageRuntime ? 'Orchestration schemas are supplied by the p2a package' : `${ORCHESTRATION_SCHEMA_FILES.length} orchestration schemas are installed`),
   );
   checks.push(
     orchestrationConfig.monitorGatePolicy === 'explicit_require_monitor'
@@ -702,11 +712,12 @@ function orchestrationCapabilityChecks(targetRoot, state) {
 
 function buildCapabilityReport(targetRoot, manifest, configResult) {
   const config = configResult.ok ? configResult.data : null;
+  const packageRuntime = usesPackageRuntime(manifest);
   const enabled = enabledCapabilityEnhancements(manifest, config);
   const checks = [];
-  if (enabled.includes('memory')) checks.push(...memoryCapabilityChecks(targetRoot, capabilityState(manifest, config, 'memory')));
-  if (enabled.includes('orchestration')) checks.push(...orchestrationCapabilityChecks(targetRoot, capabilityState(manifest, config, 'orchestration')));
-  if (enabled.includes('proposals')) checks.push(...proposalsCapabilityChecks(targetRoot, capabilityState(manifest, config, 'proposals')));
+  if (enabled.includes('memory')) checks.push(...memoryCapabilityChecks(targetRoot, capabilityState(manifest, config, 'memory'), packageRuntime));
+  if (enabled.includes('orchestration')) checks.push(...orchestrationCapabilityChecks(targetRoot, capabilityState(manifest, config, 'orchestration'), packageRuntime));
+  if (enabled.includes('proposals')) checks.push(...proposalsCapabilityChecks(targetRoot, capabilityState(manifest, config, 'proposals'), packageRuntime));
   return { enabled, checks };
 }
 
@@ -828,20 +839,25 @@ function diagnose(targetRootInput, options = {}) {
       : check('project_config', 'Project config', 'fail', `project.config.json is not readable: ${configResult.error}`, { path: '.plan2agent/project.config.json' }),
   );
 
-  const runtimeScriptPaths = PROJECT_RUNTIME_SCRIPT_FILES.map((file) => `.plan2agent/scripts/${file}`);
+  const packageRuntime = usesPackageRuntime(manifest);
+  const runtimeScriptPaths = packageRuntime ? [] : PROJECT_RUNTIME_SCRIPT_FILES.map((file) => `.plan2agent/scripts/${file}`);
   const missingRuntimeScripts = runtimeScriptPaths.filter((relativePath) => !isFile(path.join(targetRoot, relativePath)));
   checks.push(
-    missingRuntimeScripts.length
-      ? check('runtime_scripts', 'Runtime scripts', 'fail', `${missingRuntimeScripts.length} runtime script(s) are missing`, { missing: missingRuntimeScripts })
-      : check('runtime_scripts', 'Runtime scripts', 'pass', `${runtimeScriptPaths.length} runtime scripts are present`),
+    packageRuntime
+      ? check('runtime_scripts', 'Runtime scripts', 'pass', 'runtime scripts are supplied by the p2a package')
+      : missingRuntimeScripts.length
+        ? check('runtime_scripts', 'Runtime scripts', 'fail', `${missingRuntimeScripts.length} runtime script(s) are missing`, { missing: missingRuntimeScripts })
+        : check('runtime_scripts', 'Runtime scripts', 'pass', `${runtimeScriptPaths.length} runtime scripts are present`),
   );
 
-  const runtimeSchemaPaths = PROJECT_RUNTIME_SCHEMA_FILES.map((file) => `.plan2agent/schemas/${file}`);
+  const runtimeSchemaPaths = packageRuntime ? [] : PROJECT_RUNTIME_SCHEMA_FILES.map((file) => `.plan2agent/schemas/${file}`);
   const missingRuntimeSchemas = runtimeSchemaPaths.filter((relativePath) => !isFile(path.join(targetRoot, relativePath)));
   checks.push(
-    missingRuntimeSchemas.length
-      ? check('runtime_schemas', 'Runtime schemas', 'fail', `${missingRuntimeSchemas.length} runtime schema file(s) are missing`, { missing: missingRuntimeSchemas })
-      : check('runtime_schemas', 'Runtime schemas', 'pass', `${runtimeSchemaPaths.length} runtime schemas are present`),
+    packageRuntime
+      ? check('runtime_schemas', 'Runtime schemas', 'pass', 'runtime schemas are supplied by the p2a package')
+      : missingRuntimeSchemas.length
+        ? check('runtime_schemas', 'Runtime schemas', 'fail', `${missingRuntimeSchemas.length} runtime schema file(s) are missing`, { missing: missingRuntimeSchemas })
+        : check('runtime_schemas', 'Runtime schemas', 'pass', `${runtimeSchemaPaths.length} runtime schemas are present`),
   );
 
   const misplacedRepoOnlyScripts = REPO_ONLY_SCRIPT_FILES
@@ -900,7 +916,7 @@ function nextActions(status, checks) {
     actions.push('Review .plan2agent/project.config.json and add test/lint/typecheck commands when available.');
   }
   if (checks.some((item) => item.id === 'project_state' && item.state === 'iteration_init_required')) {
-    actions.push('Run p2a.mjs iteration init for the detected greenfield artifact root before starting task execution.');
+    actions.push('Run p2a iteration init for the detected greenfield artifact root before starting task execution.');
   }
   if (checks.some((item) => item.id.startsWith('dev_') && item.status === 'fail')) {
     actions.push('Regenerate or upgrade AI tool assets for the selected provider targets, then rerun p2a_doctor --dev.');
@@ -910,32 +926,32 @@ function nextActions(status, checks) {
   }
   if (checks.some((item) => item.id === 'capability_memory_manifest' && item.status === 'fail')
     || checks.some((item) => item.id === 'capability_memory_config' && item.status === 'fail')) {
-    actions.push('Run p2a.mjs enhance memory or upgrade --dry-run to restore Memory capability config.');
+    actions.push('Run p2a enhance memory or upgrade --dry-run to restore Memory capability config.');
   }
   if (checks.some((item) => item.id === 'capability_memory_runtime' && item.status === 'fail')) {
-    actions.push('Run p2a.mjs upgrade --dry-run from the scaffolded project, then apply the reviewed runtime update.');
+    actions.push('Run p2a upgrade --dry-run from the scaffolded project, then apply the reviewed runtime update.');
   }
   if (checks.some((item) => item.id === 'capability_memory_push_policy' && item.status === 'fail')) {
     actions.push('Restore memory.pushPolicy to explicit_approval before enabling Memory push.');
   }
   if (checks.some((item) => item.id === 'capability_orchestration_manifest' && item.status === 'fail')
     || checks.some((item) => item.id === 'capability_orchestration_config' && item.status === 'fail')) {
-    actions.push('Run p2a.mjs enhance orchestration or upgrade --dry-run to restore orchestration capability config.');
+    actions.push('Run p2a enhance orchestration or upgrade --dry-run to restore orchestration capability config.');
   }
   if (checks.some((item) => item.id === 'capability_orchestration_runtime' && item.status === 'fail')
     || checks.some((item) => item.id === 'capability_orchestration_schemas' && item.status === 'fail')) {
-    actions.push('Run p2a.mjs upgrade --dry-run from the scaffolded project, then apply the reviewed orchestration runtime/schema update.');
+    actions.push('Run p2a upgrade --dry-run from the scaffolded project, then apply the reviewed orchestration runtime/schema update.');
   }
   if (checks.some((item) => item.id === 'capability_orchestration_monitor_gate' && item.status === 'fail')) {
     actions.push('Restore orchestration monitorGatePolicy before using monitor-gated execution.');
   }
   if (checks.some((item) => item.id === 'capability_proposals_manifest' && item.status === 'fail')
     || checks.some((item) => item.id === 'capability_proposals_config' && item.status === 'fail')) {
-    actions.push('Run p2a.mjs enhance proposals or upgrade --dry-run to restore proposal capability config.');
+    actions.push('Run p2a enhance proposals or upgrade --dry-run to restore proposal capability config.');
   }
   if (checks.some((item) => item.id === 'capability_proposals_runtime' && item.status === 'fail')
     || checks.some((item) => item.id === 'capability_proposals_schemas' && item.status === 'fail')) {
-    actions.push('Run p2a.mjs upgrade --dry-run from the scaffolded project, then apply the reviewed proposal runtime/schema update.');
+    actions.push('Run p2a upgrade --dry-run from the scaffolded project, then apply the reviewed proposal runtime/schema update.');
   }
   if (checks.some((item) => item.id === 'capability_proposals_review_policy' && item.status === 'fail')
     || checks.some((item) => item.id === 'capability_proposals_patch_policy' && item.status === 'fail')

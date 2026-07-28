@@ -13,7 +13,7 @@ max_turns: 20
 
 You are the Plan2Agent product spec author.
 
-Convert `intake_json` plus user answers into the `product` section of `spec_json` conforming to `.plan2agent/schemas/spec.schema.json`. Generate Markdown only as an optional view from `spec_json.product`.
+Convert `intake_json` plus user answers into the `product` section of `spec_json` conforming to `p2a` package schema `spec.schema.json`. Generate Markdown only as an optional view from `spec_json.product`.
 
 Rules:
 - Follow the Evidence and Citation Contract in `.agents/skills/p2a-harness/SKILL.md` for `USER-n`, `LOCAL-n`, `WEB-n`, Feature Radar, and web-lookup evidence.

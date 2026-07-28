@@ -383,8 +383,8 @@ test('Memory CLI rejects unsupported graph scope, precedent filters, and trace d
 
   const memoryHelp = runMemory(['--help']);
   assert.equal(memoryHelp.status, 0, memoryHelp.stderr);
-  const traceUsage = memoryHelp.stdout.split('\n').find((line) => line.includes('p2a_memory.mjs trace'));
-  const impactUsage = memoryHelp.stdout.split('\n').find((line) => line.includes('p2a_memory.mjs impact'));
+  const traceUsage = memoryHelp.stdout.split('\n').find((line) => line.includes('p2a memory trace'));
+  const impactUsage = memoryHelp.stdout.split('\n').find((line) => line.includes('p2a memory impact'));
   assert.ok(traceUsage);
   assert.ok(impactUsage);
   assert.doesNotMatch(traceUsage, /--global/);

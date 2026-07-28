@@ -55,11 +55,11 @@ const RUN_INDEX_EVIDENCE_FIELDS = [
 function usage() {
   return [
     'Usage:',
-    '  node .plan2agent/scripts/p2a_execute.mjs plan (--artifacts <dir>|--graph <path>) [--task <task-id>] [options]',
-    '  node .plan2agent/scripts/p2a_execute.mjs start (--artifacts <dir>|--graph <path>) [--task <task-id>] [options]',
-    '  node .plan2agent/scripts/p2a_execute.mjs resume (--artifacts <dir>|--graph <path>) --run-id <run-id>',
-    '  node .plan2agent/scripts/p2a_execute.mjs status (--artifacts <dir>|--graph <path>) [--task <task-id>] [--run-id <run-id>]',
-    '  node .plan2agent/scripts/p2a_execute.mjs finish (--artifacts <dir>|--graph <path>) --run-id <run-id> [options]',
+    '  p2a execute plan (--artifacts <dir>|--graph <path>) [--task <task-id>] [options]',
+    '  p2a execute start (--artifacts <dir>|--graph <path>) [--task <task-id>] [options]',
+    '  p2a execute resume (--artifacts <dir>|--graph <path>) --run-id <run-id>',
+    '  p2a execute status (--artifacts <dir>|--graph <path>) [--task <task-id>] [--run-id <run-id>]',
+    '  p2a execute finish (--artifacts <dir>|--graph <path>) --run-id <run-id> [options]',
     '',
     'Commands:',
     '  plan                 Resolve one ready task and print the supervised execution plan. No files are changed.',
@@ -250,7 +250,7 @@ function parseArgs(argv) {
   if (args.maintenance && !args.artifacts) throw new Error('--maintenance is only supported with --artifacts');
   if (args.graph) assertNotUninitializedScaffoldGraph(args.graph);
   if (args.graph && ['start', 'finish'].includes(args.command)) {
-    assertUnmanagedGraphMutation(args.graph, `p2a_execute ${args.command}`);
+    assertUnmanagedGraphMutation(args.graph, `p2a execute ${args.command}`);
   }
   if (['finish', 'resume'].includes(args.command) && !args.runId) throw new Error(`--run-id is required for ${args.command}`);
   if (args.runReservationToken && (args.command !== 'start' || !args.runId)) {
@@ -319,6 +319,7 @@ function artifactRelativePath(artifactRoot, filePath) {
 function loadProjectConfig(source, workspacePath) {
   const candidates = [
     path.join(workspacePath, DEFAULT_PROJECT_CONFIG),
+    path.join(ROOT, DEFAULT_PROJECT_CONFIG),
     path.join(process.cwd(), DEFAULT_PROJECT_CONFIG),
   ];
   if (source.artifactRoot) candidates.push(path.join(source.artifactRoot, 'project.config.json'));
@@ -914,7 +915,7 @@ function printLauncherPrompt(source, task, runId, approvalLink = null) {
   console.log('Boundaries:');
   console.log('- Make only code/test/doc changes required by this task and its acceptance criteria.');
   console.log('- Do not edit Plan2Agent task graph, run logs, or planning artifacts directly.');
-  console.log('- The owner will run p2a_execute finish or p2a_runs verify/finish after implementation.');
+  console.log('- The owner will run p2a execute finish or p2a runs verify/finish after implementation.');
   console.log('- Report changed files, verification commands, results, and blockers.');
   console.log('');
   const promptResult = runScript('p2a_tasks.mjs', promptArgs(source, task.id));

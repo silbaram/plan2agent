@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-/** Top-level Plan2Agent command dispatcher for repo and scaffold project use. */
+/** Top-level Plan2Agent command dispatcher for the npm package and legacy projects. */
 
 import { spawnSync } from 'node:child_process';
 import { existsSync, lstatSync, readFileSync, readdirSync, realpathSync } from 'node:fs';
@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { DEFAULT_MEMORY_REQUEST_TIMEOUT_MS, DEFAULT_RUNS_DIR, GATE_FILES, GREENFIELD_REQUIRED_FILES } from './p2a_constants.mjs';
 import { resolveOrchestrationAgentTool } from './p2a_project_config.mjs';
 import { normalizePath, resolveP2aPaths } from './p2a_paths.mjs';
+import { p2aCommandLine } from './p2a_run_commands.mjs';
 
 const P2A_PATHS = resolveP2aPaths(import.meta.url);
 
@@ -28,7 +29,8 @@ const RUNTIME_COMMANDS = new Map([
 
 const TOOLKIT_COMMANDS = new Map([
   ['doctor', { script: 'p2a_doctor.mjs', forwardsCommand: false, defaultTargetWhenEmbedded: true }],
-  ['scaffold', { script: 'p2a_handoff.mjs', forwardsCommand: true, defaultTargetWhenEmbedded: false }],
+  ['init', { script: 'p2a_handoff.mjs', forwardsCommand: true, defaultTargetWhenEmbedded: true }],
+  ['scaffold', { script: 'p2a_handoff.mjs', forwardsCommand: true, defaultTargetWhenEmbedded: true }],
   ['enhance', { script: 'p2a_handoff.mjs', forwardsCommand: true, defaultTargetWhenEmbedded: true }],
   ['update', { script: 'p2a_handoff.mjs', forwardsCommand: true, defaultTargetWhenEmbedded: true }],
   ['upgrade', { script: 'p2a_handoff.mjs', forwardsCommand: true, defaultTargetWhenEmbedded: true }],
@@ -38,27 +40,25 @@ const TOOLKIT_COMMANDS = new Map([
 function usage() {
   return [
     'Usage:',
-    '  node .plan2agent/scripts/p2a.mjs next [--target <dir>] [--project-id <id>] [--json]',
-    '  node .plan2agent/scripts/p2a.mjs info [--json]',
-    '  node .plan2agent/scripts/p2a.mjs doctor [--dev] [--json] [--strict]',
-    '  node .plan2agent/scripts/p2a.mjs update [--dry-run|--apply]',
-    '  node .plan2agent/scripts/p2a.mjs upgrade (--dry-run|--apply)',
-    '  node .plan2agent/scripts/p2a.mjs enhance <capability> [--dry-run] [--overwrite]',
-    '  node .plan2agent/scripts/p2a.mjs eval <grade|compare|analyze|generate|digest> [options]',
-    '  node .plan2agent/scripts/p2a.mjs memory <status|push|pull|search|history|digest|trace|impact|precedent> [options]',
-    '  node .plan2agent/scripts/p2a.mjs execute <plan|start|resume|status|finish> [options]',
-    '  node .plan2agent/scripts/p2a.mjs tasks|runs|iteration|proposals|validate ...',
+    '  p2a init [--target <dir>] [--tools <list>] [--codex-profile quality|inherit]',
+    '  p2a next [--target <dir>] [--project-id <id>] [--json]',
+    '  p2a info [--target <dir>] [--json]',
+    '  p2a doctor [--target <dir>] [--dev] [--json] [--strict]',
+    '  p2a update [--target <dir>] [--dry-run|--apply]',
+    '  p2a upgrade [--target <dir>] (--dry-run|--apply)',
+    '  p2a enhance <capability> [--target <dir>] [--dry-run] [--overwrite]',
+    '  p2a eval <grade|compare|analyze|generate|digest> [options]',
+    '  p2a memory <status|push|pull|search|history|digest|trace|impact|precedent> [options]',
+    '  p2a execute <plan|start|resume|status|finish> [options]',
+    '  p2a tasks|runs|iteration|proposals|validate ...',
     '',
-    'Repo checkout examples:',
-    '  node scripts/p2a.mjs scaffold --target <project-dir>',
-    '  node scripts/p2a.mjs doctor --target <project-dir> --dev',
-    '',
-    'Scaffold project examples:',
-    '  node .plan2agent/scripts/p2a.mjs info',
-    '  node .plan2agent/scripts/p2a.mjs eval generate --artifacts .plan2agent/artifacts/<project>',
+    'Examples:',
+    '  p2a init --target <project-dir>',
+    '  p2a doctor --target <project-dir> --dev',
+    '  p2a eval generate --artifacts .plan2agent/artifacts/<project>',
     '',
     'Notes:',
-    '  update, upgrade, enhance, and doctor use the toolkit checkout recorded in .plan2agent/manifest.json when run inside a scaffold project.',
+    '  Install Plan2Agent globally before using p2a. New projects keep only project state and provider assets in .plan2agent/.',
     '  --help, -h  Show this help.',
   ].join('\n');
 }
@@ -162,7 +162,7 @@ function withDefaultToolkitTarget(command, args) {
     return [args[0], args[1], '--target', P2A_PATHS.projectRoot, ...args.slice(2)];
   }
   if (command === 'enhance') return args;
-  if (['update', 'upgrade', 'scaffold'].includes(command)) {
+  if (['init', 'update', 'upgrade', 'scaffold'].includes(command)) {
     return [args[0], '--target', P2A_PATHS.projectRoot, ...args.slice(1)];
   }
   return withDefaultTarget(args);
@@ -205,7 +205,7 @@ function dispatchToolkit(command, commandArgs) {
     return 1;
   }
   const forwardedArgs = mapping.forwardsCommand ? [command, ...commandArgs] : commandArgs;
-  const args = P2A_PATHS.embedded && mapping.defaultTargetWhenEmbedded
+  const args = mapping.defaultTargetWhenEmbedded
     ? withDefaultToolkitTarget(command, forwardedArgs)
     : forwardedArgs;
   return runScript(scriptPath, args);
@@ -567,7 +567,7 @@ function summarizeEnhancements(targetRoot, manifest, config) {
 
 function parseInfoArgs(argv) {
   const args = {
-    target: P2A_PATHS.embedded ? P2A_PATHS.projectRoot : process.cwd(),
+    target: P2A_PATHS.projectRoot,
     json: false,
     help: false,
   };
@@ -589,7 +589,7 @@ function parseInfoArgs(argv) {
 
 function parseNextArgs(argv) {
   const args = {
-    target: P2A_PATHS.embedded ? P2A_PATHS.projectRoot : process.cwd(),
+    target: P2A_PATHS.projectRoot,
     projectId: null,
     json: false,
     help: false,
@@ -648,7 +648,7 @@ function cliNextAction(state, reason, argv) {
     command: {
       kind: 'cli',
       argv,
-      display: `p2a ${argv.join(' ')}`,
+      display: p2aCommandLine(P2A_PATHS, argv),
     },
   };
 }
@@ -785,7 +785,7 @@ export const NEXT_DECISION_RULES = [
     kind: 'cli',
     when: (context) => !context.hasHarness,
     reason: () => 'This project has no .plan2agent directory.',
-    command: (context) => ['scaffold', '--target', commandTarget(context.targetRoot)],
+    command: (context) => ['init', '--target', commandTarget(context.targetRoot)],
   },
   {
     state: 'initialized_without_artifacts',
@@ -836,7 +836,7 @@ export const NEXT_DECISION_RULES = [
       ? `Gate D review has ${context.reviewBlockingIssues} blocking issue(s).`
       : 'The Gate C task graph exists but has not passed Gate D review.'),
     command: (context) => (context.gateDExists
-      ? `Resolve the blockers in ${path.join(context.artifactArg, 'gate-d-review', 'review.json')}, then run p2a next again.`
+      ? `Resolve the blockers in ${path.join(context.artifactArg, 'gate-d-review', 'review.json')}, then run ${p2aCommandLine(P2A_PATHS, ['next'])} again.`
       : '/p2a-review'),
   },
   {
@@ -946,7 +946,7 @@ function buildInfoSnapshot(targetRootInput) {
   }
   const manifest = readManifest(targetRoot);
   const config = readJsonObject(path.join(targetRoot, '.plan2agent', 'project.config.json'));
-  const isScaffoldProject = manifest?.provenance?.mode === 'scaffold';
+  const isScaffoldProject = ['init', 'scaffold'].includes(manifest?.provenance?.mode);
   const inspectedArtifacts = discoverArtifactRoots(targetRoot)
     .map((artifactRoot) => inspectArtifact(targetRoot, artifactRoot, isScaffoldProject));
   const artifacts = inspectedArtifacts
@@ -955,51 +955,59 @@ function buildInfoSnapshot(targetRootInput) {
   const enhancements = summarizeEnhancements(targetRoot, manifest, config);
   const mode = manifest?.provenance?.mode
     ?? (hasP2aDir ? 'installed' : P2A_PATHS.embedded ? 'embedded' : 'toolkit_or_uninstalled');
+  const p2aCommand = (args) => p2aCommandLine(P2A_PATHS, args);
   const nextActions = [];
   if (!hasP2aDir) {
-    nextActions.push('Install a project harness: node scripts/p2a.mjs scaffold --target <project-dir>');
+    nextActions.push(`Install a project harness: ${p2aCommand(['init', '--target', '<project-dir>'])}`);
   }
   for (const artifact of artifacts) {
     if (artifact.layout.hasIncompleteIterationLayout) {
       nextActions.push(`Repair incomplete iteration layout before task execution: ${artifact.artifactRoot}`);
     } else if (artifact.layout.requiresIterationInit) {
-      nextActions.push(`Initialize iteration layout: node .plan2agent/scripts/p2a.mjs iteration init --artifacts ${artifact.artifactRoot} --iteration-id v1-mvp`);
+      nextActions.push(`Initialize iteration layout: ${p2aCommand(['iteration', 'init', '--artifacts', artifact.artifactRoot, '--iteration-id', 'v1-mvp'])}`);
     } else if (artifact.readyTaskIds.length) {
-      nextActions.push(`Plan the next ready task: node .plan2agent/scripts/p2a.mjs execute plan --artifacts ${artifact.artifactRoot} --task ${artifact.readyTaskIds[0]}`);
+      nextActions.push(`Plan the next ready task: ${p2aCommand(['execute', 'plan', '--artifacts', artifact.artifactRoot, '--task', artifact.readyTaskIds[0]])}`);
     } else if (artifact.taskCounts.total > 0 && artifact.taskCounts.done === artifact.taskCounts.total) {
-      nextActions.push(`Validate close readiness: node .plan2agent/scripts/p2a.mjs iteration validate --artifacts ${artifact.artifactRoot} --require-close-ready`);
+      nextActions.push(`Validate close readiness: ${p2aCommand(['iteration', 'validate', '--artifacts', artifact.artifactRoot, '--require-close-ready'])}`);
     }
   }
   if (enhancements.memory.enabled) {
     if (!enhancements.memory.inSync) {
-      nextActions.push('Repair Memory capability manifest/config drift: node .plan2agent/scripts/p2a.mjs enhance memory');
+      nextActions.push(`Repair Memory capability manifest/config drift: ${p2aCommand(['enhance', 'memory'])}`);
     } else if (artifacts.length) {
-      nextActions.push(`Check Memory sync: node .plan2agent/scripts/p2a.mjs memory status --artifacts ${artifacts[0].artifactRoot}`);
-      nextActions.push(`Preview Memory pull: node .plan2agent/scripts/p2a.mjs memory pull --artifacts ${artifacts[0].artifactRoot} --dry-run`);
-      nextActions.push(`Search project Memory history: node .plan2agent/scripts/p2a.mjs memory search --project ${artifacts[0].projectId} --mode hybrid --query <term>`);
-      nextActions.push(`Show Memory timeline: node .plan2agent/scripts/p2a.mjs memory history --artifacts ${artifacts[0].artifactRoot}`);
-      nextActions.push(`Digest Memory maintenance candidates: node .plan2agent/scripts/p2a.mjs memory digest --artifacts ${artifacts[0].artifactRoot}`);
+      nextActions.push(`Check Memory sync: ${p2aCommand(['memory', 'status', '--artifacts', artifacts[0].artifactRoot])}`);
+      nextActions.push(`Preview Memory pull: ${p2aCommand(['memory', 'pull', '--artifacts', artifacts[0].artifactRoot, '--dry-run'])}`);
+      nextActions.push(`Search project Memory history: ${p2aCommand(['memory', 'search', '--project', artifacts[0].projectId, '--mode', 'hybrid', '--query', '<term>'])}`);
+      nextActions.push(`Show Memory timeline: ${p2aCommand(['memory', 'history', '--artifacts', artifacts[0].artifactRoot])}`);
+      nextActions.push(`Digest Memory maintenance candidates: ${p2aCommand(['memory', 'digest', '--artifacts', artifacts[0].artifactRoot])}`);
     }
   }
   if (enhancements.proposals.enabled) {
     if (!enhancements.proposals.inSync) {
-      nextActions.push('Repair proposal capability manifest/config drift: node .plan2agent/scripts/p2a.mjs enhance proposals');
+      nextActions.push(`Repair proposal capability manifest/config drift: ${p2aCommand(['enhance', 'proposals'])}`);
     } else {
       if (artifacts.length) {
-        nextActions.push(`Mine proposal candidates: node .plan2agent/scripts/p2a.mjs proposals mine --artifacts ${artifacts[0].artifactRoot} --dry-run`);
+        nextActions.push(`Mine proposal candidates: ${p2aCommand(['proposals', 'mine', '--artifacts', artifacts[0].artifactRoot, '--dry-run'])}`);
       }
-      nextActions.push(`Review proposal queue: node .plan2agent/scripts/p2a.mjs proposals digest --proposals ${enhancements.proposals.queueDir}`);
-      nextActions.push(`Preview proposal curation review: node .plan2agent/scripts/p2a.mjs proposals review --proposals ${enhancements.proposals.queueDir} --dry-run`);
+      nextActions.push(`Review proposal queue: ${p2aCommand(['proposals', 'digest', '--proposals', enhancements.proposals.queueDir])}`);
+      nextActions.push(`Preview proposal curation review: ${p2aCommand(['proposals', 'review', '--proposals', enhancements.proposals.queueDir, '--dry-run'])}`);
     }
   }
   if (enhancements.orchestration.enabled) {
     if (!enhancements.orchestration.inSync) {
-      nextActions.push('Repair orchestration capability manifest/config drift: node .plan2agent/scripts/p2a.mjs enhance orchestration');
+      nextActions.push(`Repair orchestration capability manifest/config drift: ${p2aCommand(['enhance', 'orchestration'])}`);
     } else {
       const orchestrationAgentTool = resolveOrchestrationAgentTool(config, manifest);
       if (artifacts.length) {
-        nextActions.push(`Start run with monitor gate: node .plan2agent/scripts/p2a.mjs execute start --artifacts ${artifacts[0].artifactRoot} --task <task-id> --agent-tool ${orchestrationAgentTool} --require-monitor`);
-        nextActions.push(`Start supervised run with monitor gate: node .plan2agent/scripts/p2a.mjs execute start --artifacts ${artifacts[0].artifactRoot} --task <task-id> --agent-tool ${orchestrationAgentTool} --require-monitor`);
+        const monitorCommand = p2aCommand([
+          'execute', 'start',
+          '--artifacts', artifacts[0].artifactRoot,
+          '--task', '<task-id>',
+          '--agent-tool', orchestrationAgentTool,
+          '--require-monitor',
+        ]);
+        nextActions.push(`Start run with monitor gate: ${monitorCommand}`);
+        nextActions.push(`Start supervised run with monitor gate: ${monitorCommand}`);
       }
     }
   }
@@ -1008,7 +1016,9 @@ function buildInfoSnapshot(targetRootInput) {
     schema_version: 'p2a.info.v1',
     generatedAt: new Date().toISOString(),
     target: targetRoot,
-    surface: P2A_PATHS.embedded ? 'project_runtime' : 'toolkit_checkout',
+    surface: P2A_PATHS.embedded
+      ? 'project_runtime'
+      : P2A_PATHS.toolkitCheckout ? 'toolkit_checkout' : 'package_runtime',
     mode,
     toolkitRoot: P2A_PATHS.embedded
       ? stringValue(manifest?.provenance?.toolkitRoot)
@@ -1068,7 +1078,7 @@ function printInfo(info) {
     if (artifact.readyTaskIds.length) console.log(`    ready: ${artifact.readyTaskIds.join(', ')}`);
     if (artifact.review.blockingIssues) console.log(`    review blockers: ${artifact.review.blockingIssues}`);
   }
-  console.log('Next: p2a next');
+  console.log(`Next: ${p2aCommandLine(P2A_PATHS, ['next'])}`);
 }
 
 function runInfo(argv) {
@@ -1081,7 +1091,7 @@ function runInfo(argv) {
     return 1;
   }
   if (args.help) {
-    console.log('Usage: node .plan2agent/scripts/p2a.mjs info [--target <dir>] [--json]');
+    console.log('Usage: p2a info [--target <dir>] [--json]');
     return 0;
   }
   try {
@@ -1115,7 +1125,7 @@ function runNext(argv) {
     return 1;
   }
   if (args.help) {
-    console.log('Usage: node .plan2agent/scripts/p2a.mjs next [--target <dir>] [--project-id <id>] [--json]');
+    console.log('Usage: p2a next [--target <dir>] [--project-id <id>] [--json]');
     return 0;
   }
   try {

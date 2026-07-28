@@ -8,20 +8,17 @@ Plan2Agent는 한 문장 아이디어를 승인 가능한 제품·구현 명세�
 
 ## 설치
 
-새 프로젝트에 co-located scaffold를 설치한다. 아래 명령은 Plan2Agent 본체 저장소에서 실행한다.
+Plan2Agent를 전역 설치한 뒤 새 프로젝트를 초기화한다.
 
 ```bash
-node /path/to/plan2agent/scripts/p2a_handoff.mjs scaffold \
-  --target <project-dir> \
+npm install -g plan2agent
+cd <project-dir>
+p2a init \
   --tools all \
   --codex-profile quality
 ```
 
-```bash
-cd <project-dir>
-```
-
-`--codex-profile quality`는 권장 Codex 설정을 설치한다. 부모 세션의 모델·reasoning 설정을 그대로 써야 하면 `inherit`을 선택한다. 설치가 만드는 `.plan2agent/`는 로컬 하네스 상태이므로 애플리케이션 소스 git에 커밋하지 않는다.
+`--codex-profile quality`는 권장 Codex 설정을 설치한다. 부모 세션의 모델·reasoning 설정을 그대로 써야 하면 `inherit`을 선택한다. 초기화는 `.plan2agent/`의 상태·설정과 선택한 AI tool 자산만 만들며, 실행 코드와 schema는 전역 `p2a` 패키지에 남는다. `.plan2agent/`는 애플리케이션 소스 git에 커밋하지 않는다.
 
 ## 첫 산출물 만들기
 
@@ -30,7 +27,7 @@ cd <project-dir>
 터미널에서는 다음 명령을 실행한다.
 
 ```bash
-node .plan2agent/scripts/p2a.mjs next
+p2a next
 ```
 
 Codex, Claude Code 또는 Gemini CLI agent 세션에서는 `/p2a-next`를 사용한다. 결과가 skill이면 같은 세션에서 이어서 진행하고, CLI 또는 승인 행동이면 이유를 확인한 뒤 사용자가 결정한다. `next`가 초기 기획 skill을 반환하면 한 문장 아이디어를 제공한다.
@@ -42,7 +39,7 @@ Codex, Claude Code 또는 Gemini CLI agent 세션에서는 `/p2a-next`를 사용
 각 행동을 마친 뒤 다시 `next`를 실행한다.
 
 ```bash
-node .plan2agent/scripts/p2a.mjs next
+p2a next
 ```
 
 출력의 state와 reason을 확인한다. Gate B의 `approval: approved`와 빈 `open_decisions`, Gate D의 blocker 없음이 개발 시작 조건이다.
@@ -65,7 +62,7 @@ legacy handoff, run log, monitor gate, proposal 회고 같은 상세 흐름은 [
 
 ## 다음에 볼 문서
 
-- [CLI 사용자 가이드](cli-reference.md) — scaffold 옵션, 명령별 사용법, legacy handoff와 proposal 흐름
+- [CLI 사용자 가이드](cli-reference.md) — `init` 옵션, 명령별 사용법, legacy handoff와 proposal 흐름
 - [하네스 사용자 가이드](harness-guide.md) — Gate A-D, 산출물 schema, 검증과 문제 해결
 - [반복/고도화 개발 스펙](iteration-spec.md) — 반복 구조, close/open, 변경분 task 계약
 - [감독형 개발 실행 레퍼런스](supervised-execution.md) — ready task 실행, monitor gate, milestone review, retry recovery

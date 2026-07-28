@@ -15,10 +15,17 @@ export function shellQuote(value) {
   return `'${String(value).replaceAll("'", "'\\''")}'`;
 }
 
+export function p2aCommandLine(paths, args) {
+  const launcher = paths.embedded
+    ? ['node', scriptCommandPath(paths, 'p2a.mjs')]
+    : ['p2a'];
+  return [...launcher, ...args].map(shellQuote).join(' ');
+}
+
 export function commandLine(paths, scriptName, args) {
   const topLevelCommand = TOP_LEVEL_COMMANDS.get(scriptName);
   if (topLevelCommand) {
-    return ['node', scriptCommandPath(paths, 'p2a.mjs'), topLevelCommand, ...args].map(shellQuote).join(' ');
+    return p2aCommandLine(paths, [topLevelCommand, ...args]);
   }
   return nodeScriptCommand(paths, scriptName, args).map(shellQuote).join(' ');
 }

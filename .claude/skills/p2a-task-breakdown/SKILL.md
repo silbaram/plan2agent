@@ -9,7 +9,7 @@ Break an approved implementation spec into tasks that an agent or developer can 
 
 ## Inputs
 
-- `spec_json` conforming to `.plan2agent/schemas/spec.schema.json`.
+- `spec_json` conforming to `p2a` package schema `spec.schema.json`.
 - `spec_json.approval: approved`.
 - `spec_json.open_decisions: []`.
 - Every intake `CQ-n` has a valid `spec_json.clarifying_question_disposition`.
@@ -18,7 +18,7 @@ Break an approved implementation spec into tasks that an agent or developer can 
 
 ## Output
 
-Return a `task_graph_json` object conforming to `.plan2agent/schemas/task-graph.schema.json` with:
+Return a `task_graph_json` object conforming to `p2a` package schema `task-graph.schema.json` with:
 
 - `schema_version`: `p2a.task_graph.v1`
 - `projectId`

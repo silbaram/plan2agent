@@ -1697,7 +1697,7 @@ export function validateFixtureDir(fixturePath) {
 function usage() {
   return [
     'Usage:',
-    '  node .plan2agent/scripts/validate_artifacts.mjs [artifact options]',
+    '  p2a validate [artifact options]',
     '',
     'Options:',
     '  --artifact-root <dir>               Validate a Gate A-D artifact root.',

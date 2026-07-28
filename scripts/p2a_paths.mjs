@@ -11,20 +11,39 @@ export const P2A_SCRIPTS_DIR = path.join(P2A_DIR, 'scripts');
 export const P2A_SCHEMAS_DIR = path.join(P2A_DIR, 'schemas');
 export const P2A_PROJECT_CONFIG = path.join(P2A_DIR, 'project.config.json');
 export const P2A_MANIFEST = path.join(P2A_DIR, 'manifest.json');
+
+export function findP2aProjectRoot(startPath = process.cwd()) {
+  const fallback = path.resolve(startPath);
+  let candidate = fallback;
+  while (true) {
+    if (isDirectory(path.join(candidate, P2A_DIR))) return candidate;
+    const parent = path.dirname(candidate);
+    if (parent === candidate) return fallback;
+    candidate = parent;
+  }
+}
+
 export function resolveP2aPaths(importMetaUrl) {
   const filename = fileURLToPath(importMetaUrl);
   const scriptDir = path.dirname(filename);
-  const toolRoot = path.resolve(scriptDir, '..');
-  const embedded = path.basename(toolRoot) === P2A_DIR;
-  const projectRoot = embedded ? path.resolve(toolRoot, '..') : toolRoot;
+  const runtimeRoot = path.resolve(scriptDir, '..');
+  const embedded = path.basename(runtimeRoot) === P2A_DIR;
+  // The runtime can be an npm package, a toolkit checkout, or a legacy copy
+  // inside .plan2agent/.  It must never determine the caller's project when
+  // it is installed globally.
+  const projectRoot = embedded ? path.resolve(runtimeRoot, '..') : findP2aProjectRoot();
   return {
     filename,
     scriptDir,
-    toolRoot,
+    runtimeRoot,
+    // Keep this alias for internal callers while runtimeRoot becomes the
+    // explicit name used by new code.
+    toolRoot: runtimeRoot,
     projectRoot,
-    scriptsDir: path.join(toolRoot, 'scripts'),
-    schemasDir: path.join(toolRoot, 'schemas'),
+    scriptsDir: path.join(runtimeRoot, 'scripts'),
+    schemasDir: path.join(runtimeRoot, 'schemas'),
     embedded,
+    toolkitCheckout: existsSync(path.join(runtimeRoot, '.git')),
   };
 }
 
@@ -69,32 +88,32 @@ function isIterativeArtifactRoot(candidate) {
   return existsSync(path.join(candidate, 'current-spec.json')) && existsSync(path.join(candidate, 'iterations'));
 }
 
-export function artifactProjectRoots(cwd = process.cwd()) {
+export function artifactProjectRoots(cwd = findP2aProjectRoot()) {
   const artifactsRoot = path.join(cwd, P2A_ARTIFACTS_DIR);
   if (!existsSync(artifactsRoot)) return [];
   try {
     return readdirSync(artifactsRoot, { withFileTypes: true })
       .filter((entry) => entry.isDirectory())
-      .map((entry) => path.join(P2A_ARTIFACTS_DIR, entry.name))
-      .filter((candidate) => isIterativeArtifactRoot(path.join(cwd, candidate)))
+      .map((entry) => path.join(artifactsRoot, entry.name))
+      .filter((candidate) => isIterativeArtifactRoot(candidate))
       .sort();
   } catch {
     return [];
   }
 }
 
-export function singleArtifactProjectRoot(cwd = process.cwd()) {
+export function singleArtifactProjectRoot(cwd = findP2aProjectRoot()) {
   const roots = artifactProjectRoots(cwd);
   return roots.length === 1 ? roots[0] : null;
 }
 
-export function configuredTaskGraphPath(cwd = process.cwd()) {
+export function configuredTaskGraphPath(cwd = findP2aProjectRoot()) {
   const configPath = path.join(cwd, P2A_PROJECT_CONFIG);
   if (!existsSync(configPath)) return null;
   try {
     const config = JSON.parse(readFileSync(configPath, 'utf8'));
     if (typeof config?.taskGraph !== 'string' || config.taskGraph.trim() === '') return null;
-    return config.taskGraph;
+    return path.resolve(cwd, config.taskGraph);
   } catch {
     return null;
   }
@@ -159,12 +178,12 @@ function hasIncompleteIterationLayout(info) {
   return info.hasCurrentSpec !== info.hasIterations;
 }
 
-export function isScaffoldProject(cwd = process.cwd()) {
+export function isScaffoldProject(cwd = findP2aProjectRoot()) {
   const manifest = readJsonIfPresent(path.join(cwd, P2A_MANIFEST));
-  return manifest?.provenance?.mode === 'scaffold';
+  return ['init', 'scaffold'].includes(manifest?.provenance?.mode);
 }
 
-export function uninitializedScaffoldArtifactRootInfos(cwd = process.cwd()) {
+export function uninitializedScaffoldArtifactRootInfos(cwd = findP2aProjectRoot()) {
   if (!isScaffoldProject(cwd)) return [];
   const artifactsRoot = path.join(cwd, P2A_ARTIFACTS_DIR);
   if (!existsSync(artifactsRoot)) return [];
@@ -183,7 +202,7 @@ export function uninitializedScaffoldArtifactRootInfos(cwd = process.cwd()) {
   }
 }
 
-function incompleteScaffoldArtifactRootInfos(cwd = process.cwd()) {
+function incompleteScaffoldArtifactRootInfos(cwd = findP2aProjectRoot()) {
   if (!isScaffoldProject(cwd)) return [];
   const artifactsRoot = path.join(cwd, P2A_ARTIFACTS_DIR);
   if (!existsSync(artifactsRoot)) return [];
@@ -209,14 +228,14 @@ export function formatUninitializedScaffoldArtifactMessage(infos, subject = 'gre
     return [
       `${subject}: ${info.artifactRootRef}`,
       'This scaffold project must be converted to the iteration layout before task execution.',
-      `Run: node .plan2agent/scripts/p2a.mjs iteration init --artifacts ${info.artifactRootRef} --iteration-id v1-mvp`,
+      `Run: p2a iteration init --artifacts ${info.artifactRootRef} --iteration-id v1-mvp`,
     ].join('\n');
   }
   return [
     `${subject}; multiple greenfield artifact roots were found:`,
     ...roots.map((info) => `- ${info.artifactRootRef}`),
     'Convert one of them before task execution, for example:',
-    `node .plan2agent/scripts/p2a.mjs iteration init --artifacts ${roots[0]?.artifactRootRef ?? '.plan2agent/artifacts/<project_id>'} --iteration-id v1-mvp`,
+    `p2a iteration init --artifacts ${roots[0]?.artifactRootRef ?? '.plan2agent/artifacts/<project_id>'} --iteration-id v1-mvp`,
   ].join('\n');
 }
 
@@ -237,7 +256,7 @@ function formatIncompleteScaffoldArtifactMessage(infos, subject = 'iteration lay
   ].join('\n');
 }
 
-export function assertNoUninitializedScaffoldArtifactRoots(cwd = process.cwd()) {
+export function assertNoUninitializedScaffoldArtifactRoots(cwd = findP2aProjectRoot()) {
   const incompleteInfos = incompleteScaffoldArtifactRootInfos(cwd);
   if (incompleteInfos.length) throw new Error(formatIncompleteScaffoldArtifactMessage(incompleteInfos));
   const infos = uninitializedScaffoldArtifactRootInfos(cwd);
@@ -246,7 +265,8 @@ export function assertNoUninitializedScaffoldArtifactRoots(cwd = process.cwd()) 
 }
 
 function scaffoldGraphArtifactRootInfo(graphPath, cwd = process.cwd()) {
-  if (!isScaffoldProject(cwd)) return null;
+  const projectRoot = findP2aProjectRoot(cwd);
+  if (!isScaffoldProject(projectRoot)) return null;
   if (typeof graphPath !== 'string' || graphPath.trim().length === 0) return null;
 
   const resolvedGraphPath = path.resolve(cwd, graphPath);
@@ -256,7 +276,7 @@ function scaffoldGraphArtifactRootInfo(graphPath, cwd = process.cwd()) {
   if (path.basename(gateDir) !== 'gate-c-task-graph') return null;
 
   const artifactRoot = path.dirname(gateDir);
-  const artifactsRoot = path.resolve(cwd, P2A_ARTIFACTS_DIR);
+  const artifactsRoot = path.resolve(projectRoot, P2A_ARTIFACTS_DIR);
   if (!isPathInside(artifactRoot, artifactsRoot)) return null;
 
   const artifactRelative = path.relative(artifactsRoot, artifactRoot);
@@ -264,7 +284,7 @@ function scaffoldGraphArtifactRootInfo(graphPath, cwd = process.cwd()) {
   if (artifactRelative.split(path.sep).length !== 1) return null;
 
   return {
-    ...scaffoldArtifactRootInfo(cwd, path.basename(artifactRoot), artifactRoot),
+    ...scaffoldArtifactRootInfo(projectRoot, path.basename(artifactRoot), artifactRoot),
     graphPath: resolvedGraphPath,
   };
 }
@@ -295,6 +315,6 @@ export function assertNotUninitializedScaffoldGraph(graphPath, cwd = process.cwd
     `greenfield artifact graph is not ready for execution: ${normalizePath(path.relative(cwd, info.graphPath))}`,
     `Artifact root: ${info.artifactRootRef}`,
     'This scaffold project must be converted to the iteration layout before task execution.',
-    `Run: node .plan2agent/scripts/p2a.mjs iteration init --artifacts ${info.artifactRootRef} --iteration-id v1-mvp`,
+    `Run: p2a iteration init --artifacts ${info.artifactRootRef} --iteration-id v1-mvp`,
   ].join('\n'));
 }

@@ -54,7 +54,7 @@ Before writing the Gate A analysis:
 1. Run one same-project hybrid search using the change idea and save the report under the new iteration:
 
    ```bash
-   node .plan2agent/scripts/p2a.mjs memory search \
+   p2a memory search \
      --project <project_id> \
      --mode hybrid \
      --query "<change idea>" \
@@ -64,7 +64,7 @@ Before writing the Gate A analysis:
 2. If the idea touches a reusable architecture, protocol, migration, authentication/security, external integration, data/storage, queue, performance, reliability, incident, or failure-handling concern, run a second cross-project search. Exclude the current project and persist a separate report:
 
    ```bash
-   node .plan2agent/scripts/p2a.mjs memory search \
+   p2a memory search \
      --global \
      --exclude-project <project_id> \
      --mode hybrid \
@@ -142,7 +142,7 @@ Return intermediate artifacts in fenced code blocks named exactly:
 - `task_graph_json`
 - `review_json`
 
-`intake_json`, `spec_json`, `task_graph_json`, and `review_json` must conform to `.plan2agent/schemas/intake.schema.json`, `.plan2agent/schemas/spec.schema.json`, `.plan2agent/schemas/task-graph.schema.json`, and `.plan2agent/schemas/review.schema.json` respectively. `intake_json.evidence` and `spec_json.evidence` carry all user, local, and web sources used by the run.
+`intake_json`, `spec_json`, `task_graph_json`, and `review_json` must conform to `p2a` package schema `intake.schema.json`, `p2a` package schema `spec.schema.json`, `p2a` package schema `task-graph.schema.json`, and `p2a` package schema `review.schema.json` respectively. `intake_json.evidence` and `spec_json.evidence` carry all user, local, and web sources used by the run.
 
 ## Artifact Persistence
 
@@ -158,7 +158,7 @@ Optional/generated Markdown views may be written beside the JSON files when need
 
 ### Generated `status.md` View
 
-`status.md` is a generated readable view, not a control-plane artifact. `current-spec.json`, `iteration.json`, `spec.json`, `task-graph.json`, and `review.json` carry canonical gate state, active iteration pointers, and approval audits. If `status.md` is generated, keep it valid for `.plan2agent/scripts/validate_artifacts.mjs --status`: it must include a literal `Progress:` line, Gate A, Gate B, Gate C, and Gate D sections, plus numbered `## 1.` through `## 5.` sections. Use this standard skeleton:
+`status.md` is a generated readable view, not a control-plane artifact. `current-spec.json`, `iteration.json`, `spec.json`, `task-graph.json`, and `review.json` carry canonical gate state, active iteration pointers, and approval audits. If `status.md` is generated, keep it valid for `p2a validate --status`: it must include a literal `Progress:` line, Gate A, Gate B, Gate C, and Gate D sections, plus numbered `## 1.` through `## 5.` sections. Use this standard skeleton:
 
 1. **Progress line** — show the current gate marker across `[A] → [B] → [C] → [D]`, indicating which gates are complete, current, blocked, or pending.
 2. **Per-gate sections** — summarize each gate's latest state and point to the canonical artifact files for that gate.
@@ -186,7 +186,7 @@ input documents or context imply consent.
 
 ### Facts From Tools
 
-Do not retype gate status facts from memory. Pull gate status, task counts, `ready` / `in_progress` state, approval state, and blocking counts from the artifacts and tools: `spec.json` (`approval`, `open_decisions`), `task-graph.json`, `p2a_tasks` (`list` / `ready`), `validate_artifacts`, and `review.json.blocking_issues`. If a fact cannot be derived from those sources, mark it as unknown or pending rather than inventing it.
+Do not retype gate status facts from memory. Pull gate status, task counts, `ready` / `in_progress` state, approval state, and blocking counts from the artifacts and tools: `spec.json` (`approval`, `open_decisions`), `task-graph.json`, `p2a tasks` (`list` / `ready`), `validate_artifacts`, and `review.json.blocking_issues`. If a fact cannot be derived from those sources, mark it as unknown or pending rather than inventing it.
 
 ## Evidence and Citation Contract
 
@@ -201,7 +201,7 @@ Do not retype gate status facts from memory. Pull gate status, task counts, `rea
 
 - **Blocked intake:** Write `gate-a-intake/intake.json`, optionally generate `gate-a-intake/intake.md`, present the analysis narrative and per-decision recommendations, invite feedback and answers, and stop at Gate A.
 - **Draft spec:** Write `gate-b-spec/spec.json` with `approval: draft`, optionally generate product/implementation Markdown views, present it for review, and stop at Gate B before the task graph.
-- **Approved planning output:** Write all canonical JSON artifact files, optionally refresh generated Markdown views, and return the state sections after gates pass. In a co-located scaffold project, make the next action `node .plan2agent/scripts/p2a_iteration.mjs init --artifacts .plan2agent/artifacts/<project_id> --iteration-id v1-mvp` and explicitly state that development must not start from the root `gate-c-task-graph/task-graph.json`.
+- **Approved planning output:** Write all canonical JSON artifact files, optionally refresh generated Markdown views, and return the state sections after gates pass. In a co-located scaffold project, make the next action `p2a iteration init --artifacts .plan2agent/artifacts/<project_id> --iteration-id v1-mvp` and explicitly state that development must not start from the root `gate-c-task-graph/task-graph.json`.
 - **Resume output:** Regenerate only the downstream JSON artifacts and optional generated views, plus a short changelog of which decisions were applied.
 
 ## Rules
@@ -220,4 +220,4 @@ Do not retype gate status facts from memory. Pull gate status, task counts, `rea
 - Never produce artifacts for more than one gate in a single turn. After presenting a
   gate, stop and wait for the user's explicit response.
 - Keep tasks small enough for one agent or developer to complete independently.
-- After Gate D passes in a co-located scaffold project, stop before development execution and direct the user to convert the greenfield gate bundle with `p2a_iteration init`; do not set or recommend `.plan2agent/project.config.json.taskGraph` to the root `gate-c-task-graph/task-graph.json`.
+- After Gate D passes in a co-located scaffold project, stop before development execution and direct the user to convert the greenfield gate bundle with `p2a iteration init`; do not set or recommend `.plan2agent/project.config.json.taskGraph` to the root `gate-c-task-graph/task-graph.json`.

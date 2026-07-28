@@ -31,6 +31,8 @@ import {
 import { shellQuote } from './p2a_run_commands.mjs';
 
 const P2A_PATHS = resolveP2aPaths(import.meta.url);
+const PROJECT_RUNS_DIR = path.join(P2A_PATHS.projectRoot, '.plan2agent', 'runs');
+const PROJECT_PROPOSALS_DIR = path.join(P2A_PATHS.projectRoot, '.plan2agent', 'proposals');
 const COMMANDS = new Set(['status', 'push', 'pull', 'search', 'history', 'digest', 'trace', 'impact', 'precedent']);
 const SEARCH_MODES = new Set(['keyword', 'semantic', 'hybrid']);
 const DEFAULT_MEMORY_URL_ENV = 'P2A_MEMORY_URL';
@@ -79,15 +81,15 @@ const SEARCH_TYPE_ALIASES = new Map([
 function usage() {
   return [
     'Usage:',
-    '  node .plan2agent/scripts/p2a_memory.mjs status (--artifacts <dir>|--graph <path>|--runs <dir>) [--server <url>] [--token <token>] [--timeout-ms <n>] [--output <path>] [--json]',
-    '  node .plan2agent/scripts/p2a_memory.mjs push (--artifacts <dir>|--graph <path>) [--server <url>] [--token <token>] [--dry-run] [--yes] [--json]',
-    '  node .plan2agent/scripts/p2a_memory.mjs pull (--artifacts <dir>|--graph <path>|--runs <dir>) --dry-run [--server <url>] [--token <token>] [--output <path>] [--json]',
-    '  node .plan2agent/scripts/p2a_memory.mjs search --query <text> [--mode keyword|semantic|hybrid] [--artifacts <dir>|--graph <path>|--runs <dir>|--project <sourceProjectId>|--global] [--exclude-project <sourceProjectId>] [--type <kind>] [--source-path <path>] [--limit <n>] [--server <url>] [--token <token>] [--output <path>] [--json]',
-    '  node .plan2agent/scripts/p2a_memory.mjs history [--artifacts <dir>|--graph <path>|--runs <dir>|--global] [--project <id>] [--iteration <id>] [--limit <n>] [--server <url>] [--token <token>] [--output <path>] [--json]',
-    '  node .plan2agent/scripts/p2a_memory.mjs digest (--artifacts <dir>|--graph <path>|--runs <dir>) [--proposals <dir>] [--output <path>] [--json]',
-    '  node .plan2agent/scripts/p2a_memory.mjs trace --node <naturalKey> [--project <sourceProjectId>] [--direction upstream|downstream|both] [--depth <1-30>] [--artifacts <dir>|--graph <path>|--runs <dir>] [--server <url>] [--token <token>] [--output <path>] [--json]',
-    '  node .plan2agent/scripts/p2a_memory.mjs impact --node <naturalKey> [--project <sourceProjectId>] [--depth <1-30>] [--artifacts <dir>|--graph <path>|--runs <dir>] [--server <url>] [--token <token>] [--output <path>] [--json]',
-    '  node .plan2agent/scripts/p2a_memory.mjs precedent --query <text> [--project <sourceProjectId>|--global] [--limit <n>] [--artifacts <dir>|--graph <path>|--runs <dir>] [--server <url>] [--token <token>] [--output <path>] [--json]',
+    '  p2a memory status (--artifacts <dir>|--graph <path>|--runs <dir>) [--server <url>] [--token <token>] [--timeout-ms <n>] [--output <path>] [--json]',
+    '  p2a memory push (--artifacts <dir>|--graph <path>) [--server <url>] [--token <token>] [--dry-run] [--yes] [--json]',
+    '  p2a memory pull (--artifacts <dir>|--graph <path>|--runs <dir>) --dry-run [--server <url>] [--token <token>] [--output <path>] [--json]',
+    '  p2a memory search --query <text> [--mode keyword|semantic|hybrid] [--artifacts <dir>|--graph <path>|--runs <dir>|--project <sourceProjectId>|--global] [--exclude-project <sourceProjectId>] [--type <kind>] [--source-path <path>] [--limit <n>] [--server <url>] [--token <token>] [--output <path>] [--json]',
+    '  p2a memory history [--artifacts <dir>|--graph <path>|--runs <dir>|--global] [--project <id>] [--iteration <id>] [--limit <n>] [--server <url>] [--token <token>] [--output <path>] [--json]',
+    '  p2a memory digest (--artifacts <dir>|--graph <path>|--runs <dir>) [--proposals <dir>] [--output <path>] [--json]',
+    '  p2a memory trace --node <naturalKey> [--project <sourceProjectId>] [--direction upstream|downstream|both] [--depth <1-30>] [--artifacts <dir>|--graph <path>|--runs <dir>] [--server <url>] [--token <token>] [--output <path>] [--json]',
+    '  p2a memory impact --node <naturalKey> [--project <sourceProjectId>] [--depth <1-30>] [--artifacts <dir>|--graph <path>|--runs <dir>] [--server <url>] [--token <token>] [--output <path>] [--json]',
+    '  p2a memory precedent --query <text> [--project <sourceProjectId>|--global] [--limit <n>] [--artifacts <dir>|--graph <path>|--runs <dir>] [--server <url>] [--token <token>] [--output <path>] [--json]',
     '',
     'Commands:',
     '  status   Compare local project, iteration, document, task, run, and chunk snapshots with Memory.',
@@ -272,7 +274,7 @@ function parseArgs(argv) {
     const configuredGraph = configuredTaskGraphPath();
     if (defaultArtifacts) args.artifacts = defaultArtifacts;
     else if (configuredGraph) args.graph = configuredGraph;
-    else if (['digest', 'search', 'history'].includes(args.command) && existsSync(path.join('.plan2agent', 'runs'))) args.runs = path.join('.plan2agent', 'runs');
+    else if (['digest', 'search', 'history'].includes(args.command) && existsSync(PROJECT_RUNS_DIR)) args.runs = PROJECT_RUNS_DIR;
     else if (args.command !== 'search') assertNoUninitializedScaffoldArtifactRoots();
   }
 
@@ -642,7 +644,7 @@ function defaultProposalsDir(args, runsDir, artifactRoot = null) {
   if (args.proposals) return path.resolve(args.proposals);
   if (artifactRoot) return path.join(artifactRoot, 'proposals');
   if (runsDir) return path.join(path.dirname(runsDir), 'proposals');
-  return path.resolve('.plan2agent', 'proposals');
+  return PROJECT_PROPOSALS_DIR;
 }
 
 function graphSourceSpecPath(graph, graphPath) {
@@ -2248,7 +2250,7 @@ function statusNextActions(connection, sync, plan, server = {}) {
   }
   if (sync.summary.missingRemote > 0) {
     if (plan.context.sourceKind === 'graph' || plan.context.sourceKind === 'artifacts') {
-      actions.push(`Preview push: node .plan2agent/scripts/p2a.mjs memory push --${plan.context.sourceKind === 'graph' ? 'graph' : 'artifacts'} ${plan.context.sourcePath} --dry-run`);
+      actions.push(`Preview push: p2a memory push --${plan.context.sourceKind === 'graph' ? 'graph' : 'artifacts'} ${plan.context.sourcePath} --dry-run`);
     } else {
       actions.push('Use --artifacts or --graph when you are ready to push full project/task snapshots to Memory.');
     }
@@ -2467,7 +2469,7 @@ function pullPreviewNextActions(connection, remote, preview, plan) {
   }
   if (preview.summary.localOnly > 0) {
     if (plan.context.sourceKind === 'graph' || plan.context.sourceKind === 'artifacts') {
-      actions.push(`Preview push for local-only artifacts: node .plan2agent/scripts/p2a.mjs memory push ${sourceFlag(plan.context)} --dry-run`);
+      actions.push(`Preview push for local-only artifacts: p2a memory push ${sourceFlag(plan.context)} --dry-run`);
     } else {
       actions.push('Use --artifacts or --graph when you are ready to push full local snapshots to Memory.');
     }
@@ -2680,7 +2682,7 @@ function searchNextActions(connection, search, results, plan, args) {
     actions.push(`Memory search returned partial results; retry the keyword supplement when available: ${search.warning}`);
   } else if (!results.length) {
     if (plan) {
-      actions.push(`Try a broader Memory search: node .plan2agent/scripts/p2a.mjs memory search --query ${shellQuote(args.query)} --global`);
+      actions.push(`Try a broader Memory search: p2a memory search --query ${shellQuote(args.query)} --global`);
     } else if (args.project) {
       actions.push(`Push ${args.project} artifacts to Memory or retry with --global to broaden the search scope.`);
     } else if (args.excludeProject) {
@@ -2691,7 +2693,7 @@ function searchNextActions(connection, search, results, plan, args) {
   } else {
     actions.push('Inspect matching Memory content before restoring files or drafting maintenance work.');
     if (plan) {
-      actions.push(`Compare current local state with Memory: node .plan2agent/scripts/p2a.mjs memory pull ${sourceFlag(plan.context)} --dry-run`);
+      actions.push(`Compare current local state with Memory: p2a memory pull ${sourceFlag(plan.context)} --dry-run`);
     }
   }
   return actions;
@@ -3180,13 +3182,13 @@ function historyNextActions(connection, remote, localEvents, remoteEvents, plan,
     actions.push('Push project artifacts to Memory before relying on cross-session history.');
   }
   if (plan && localEvents.length) {
-    actions.push(`Search this project history: node .plan2agent/scripts/p2a.mjs memory search ${sourceFlag(plan.context)} --query <term>`);
+    actions.push(`Search this project history: p2a memory search ${sourceFlag(plan.context)} --query <term>`);
   } else if (args.project) {
-    actions.push(`Search remote project history: node .plan2agent/scripts/p2a.mjs memory search --query <term> --global`);
+    actions.push(`Search remote project history: p2a memory search --query <term> --global`);
   }
   if (plan && localEvents.some(isFailedOrBlockedRunEvent)) {
-    actions.push(`Summarize maintenance candidates: node .plan2agent/scripts/p2a.mjs memory digest ${sourceFlag(plan.context)}`);
-    actions.push(`Analyze failure clusters: node .plan2agent/scripts/p2a.mjs eval analyze ${sourceFlag(plan.context)}`);
+    actions.push(`Summarize maintenance candidates: p2a memory digest ${sourceFlag(plan.context)}`);
+    actions.push(`Analyze failure clusters: p2a eval analyze ${sourceFlag(plan.context)}`);
   }
   if (!actions.length) actions.push('No immediate Memory history action found.');
   return actions;
@@ -3885,14 +3887,14 @@ function digestNextActions(context, uncoveredCandidateRuns, proposals, memoryUse
       : `--runs ${displayPath(context.runsDir)}`;
   const actions = [];
   if (uncoveredCandidateRuns.length || proposals.some((proposal) => proposal.status === 'proposed')) {
-    actions.push(`Analyze failure clusters: node .plan2agent/scripts/p2a.mjs eval analyze ${sourceFlag}`);
+    actions.push(`Analyze failure clusters: p2a eval analyze ${sourceFlag}`);
   }
   if (uncoveredCandidateRuns.length) {
-    actions.push(`Mine missing proposal candidates: node .plan2agent/scripts/p2a.mjs proposals mine ${sourceFlag}`);
+    actions.push(`Mine missing proposal candidates: p2a proposals mine ${sourceFlag}`);
   }
   if (proposals.some((proposal) => proposal.status === 'proposed')) {
-    actions.push(`Review proposal queue: node .plan2agent/scripts/p2a.mjs proposals review --proposals ${displayPath(context.proposalsDir)} --dry-run`);
-    actions.push(`Curate approved maintenance candidates after review: node .plan2agent/scripts/p2a.mjs proposals curate --review <review.json> --proposals ${displayPath(context.proposalsDir)} --dry-run`);
+    actions.push(`Review proposal queue: p2a proposals review --proposals ${displayPath(context.proposalsDir)} --dry-run`);
+    actions.push(`Curate approved maintenance candidates after review: p2a proposals curate --review <review.json> --proposals ${displayPath(context.proposalsDir)} --dry-run`);
   }
   if (memoryUsefulness?.totalResults > 0 && memoryUsefulness.usedResults === 0) {
     actions.push('Review Memory search results before treating them as useful; no run, proposal, or eval artifact references them yet.');
@@ -3980,7 +3982,7 @@ if (isDirectEntry()) {
       process.exitCode = status;
     })
     .catch((error) => {
-      console.error(`p2a_memory error: ${errorMessage(error)}`);
+      console.error(`p2a memory error: ${errorMessage(error)}`);
       process.exitCode = 1;
     });
 }
