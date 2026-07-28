@@ -115,16 +115,10 @@
           "items": {
             "type": "object",
             "required": [
-              "task_id",
-              "task_title",
-              "run_id",
               "run_ref",
               "run_sha256",
               "run_snapshot",
-              "run_snapshot_sha256",
-              "run_finished_at",
-              "changed_files",
-              "verification"
+              "run_snapshot_sha256"
             ],
             "additionalProperties": false,
             "properties": {

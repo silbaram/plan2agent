@@ -6510,7 +6510,7 @@ function validateIterationCurrentFixtureCases() {
       const sourcePreCloseReviewPath = path.join(sourceMilestoneReviewDir, 'pre_close.json');
       const sourceMidpointDraftPath = path.join(sourceMilestoneReviewDir, 'midpoint.fixture.draft.json');
       mkdirSync(sourceMilestoneReviewDir, { recursive: true });
-      writeFileSync(sourcePreCloseReviewPath, `${JSON.stringify({
+      const legacyMilestoneReview = {
         schema_version: 'p2a.milestone_review.v1',
         project_id: caseData.project_id,
         iteration_id: 'iter-002',
@@ -6541,7 +6541,8 @@ function validateIterationCurrentFixtureCases() {
         confirmed_findings: [],
         planned_todo_not_findings: [],
         note: 'Legacy handoff persistence fixture.',
-      }, null, 2)}\n`, 'utf8');
+      };
+      writeFileSync(sourcePreCloseReviewPath, `${JSON.stringify(legacyMilestoneReview, null, 2)}\n`, 'utf8');
       writeFileSync(sourceMidpointDraftPath, `${JSON.stringify({
         schema_version: 'p2a.milestone_review.v1',
         checkpoint: 'midpoint',
@@ -6703,6 +6704,47 @@ function validateIterationCurrentFixtureCases() {
       checks += 1;
       if (result.status !== 0) {
         console.error(`iteration handoff target milestone evidence bundle validation failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: failureStatus(result), checks };
+      }
+
+      const compactMilestoneReview = structuredClone(legacyMilestoneReview);
+      compactMilestoneReview.source.completed_task_evidence = milestoneCompletedTaskEvidence.map((evidence) => ({
+        run_ref: evidence.run_ref,
+        run_sha256: evidence.run_sha256,
+        run_snapshot: evidence.run_snapshot,
+        run_snapshot_sha256: evidence.run_snapshot_sha256,
+      }));
+      compactMilestoneReview.note = 'Compact handoff persistence fixture.';
+      writeFileSync(sourcePreCloseReviewPath, `${JSON.stringify(compactMilestoneReview, null, 2)}\n`, 'utf8');
+
+      result = runValidator(['--milestone-review', sourcePreCloseReviewPath]);
+      checks += 1;
+      if (result.status !== 0) {
+        console.error(`compact source milestone handoff bundle validation failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: failureStatus(result), checks };
+      }
+
+      const compactIterationDryRunTargetRoot = path.join(tempRoot, 'target-compact-iteration-dry-run');
+      result = runHandoff([
+        '--project-id',
+        caseData.project_id,
+        '--artifacts',
+        milestoneHandoffArtifactRoot,
+        '--target',
+        compactIterationDryRunTargetRoot,
+        '--iteration-id',
+        'active',
+        '--dry-run',
+      ]);
+      checks += 1;
+      if (
+        result.status !== 0
+        || !result.stdout.includes(`.plan2agent/artifacts/${caseData.project_id}/iterations/iter-002/milestone-reviews/pre_close.json`)
+        || !result.stdout.includes(`.plan2agent/artifacts/${caseData.project_id}/runs/run-index.json`)
+      ) {
+        console.error(`compact iteration handoff dry-run fixture check failed: ${caseData.id}`);
         writeResultOutput(result);
         return { status: failureStatus(result), checks };
       }
