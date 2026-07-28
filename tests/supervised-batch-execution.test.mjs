@@ -28,6 +28,11 @@ function git(cwd, args) {
   return result.stdout.trim();
 }
 
+function configureFixtureGit(cwd) {
+  git(cwd, ['config', '--local', 'core.autocrlf', 'false']);
+  git(cwd, ['config', '--local', 'core.eol', 'lf']);
+}
+
 function executeResult(args) {
   return spawnSync(process.execPath, [EXECUTE_CLI, ...args], {
     cwd: ROOT,
@@ -232,6 +237,7 @@ test('two ready tasks can overlap in isolated worktrees and finish only after se
     writeFileSync(path.join(workspace, 'baseline.txt'), 'baseline\n', 'utf8');
 
     git(workspace, ['init']);
+    configureFixtureGit(workspace);
     git(workspace, ['add', 'baseline.txt']);
     git(workspace, ['-c', 'user.email=p2a@example.invalid', '-c', 'user.name=P2A Batch Fixture', 'commit', '-m', 'initial']);
     const batchBase = git(workspace, ['rev-parse', 'HEAD']);
@@ -434,6 +440,7 @@ test('integration conflict blocks only the conflicting task and preserves canoni
     writeFileSync(path.join(workspace, 'shared.txt'), 'base\n', 'utf8');
 
     git(workspace, ['init']);
+    configureFixtureGit(workspace);
     git(workspace, ['add', 'shared.txt']);
     git(workspace, [
       '-c', 'user.email=p2a@example.invalid',
