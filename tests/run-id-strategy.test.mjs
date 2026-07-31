@@ -7,7 +7,10 @@ import { createHash } from 'node:crypto';
 import test from 'node:test';
 import { pathToFileURL } from 'node:url';
 
-import { withIterationCloseRollback } from '../scripts/p2a_iteration.mjs';
+import {
+  EXPLICIT_INTAKE_MARKDOWN_MARKER,
+  withIterationCloseRollback,
+} from '../scripts/p2a_iteration.mjs';
 import { allocateRunId, previewRunId } from '../scripts/p2a_project_config.mjs';
 import { canonicalRunRef, canonicalTaskGraphRef, runFilePath } from '../scripts/p2a_run_paths.mjs';
 import { runWriteTransactionPath, withRunStoreLocks } from '../scripts/p2a_run_store.mjs';
@@ -1644,6 +1647,266 @@ test('handoff recording participates in the artifact-state lock', async () => {
   }
 });
 
+test('handoff regenerates an explicit intake Markdown export from canonical JSON', () => {
+  const artifactRoot = initializedArtifactRoot('handoff-canonical-intake-export');
+  const targetParent = tempRoot('handoff-canonical-intake-export-target');
+  const targetRoot = path.join(targetParent, 'target');
+  const sourceIntakeMarkdownPath = path.join(
+    artifactRoot,
+    'iterations',
+    'v1-mvp',
+    'gate-a-intake',
+    'intake.md',
+  );
+  try {
+    writeFileSync(
+      sourceIntakeMarkdownPath,
+      '# Legacy automatic intake view\n\nstale sentinel\n',
+      'utf8',
+    );
+    const result = handoffCli([
+      '--project-id',
+      'webhook-api-service',
+      '--artifacts',
+      artifactRoot,
+      '--target',
+      targetRoot,
+      '--include-intake',
+    ]);
+    assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+    const targetIntakeMarkdownPath = path.join(
+      targetRoot,
+      '.plan2agent',
+      'artifacts',
+      'webhook-api-service',
+      'gate-a-intake',
+      'intake.md',
+    );
+    const targetIntakeMarkdown = readFileSync(targetIntakeMarkdownPath, 'utf8');
+    assert.ok(targetIntakeMarkdown.startsWith(`${EXPLICIT_INTAKE_MARKDOWN_MARKER}\n`));
+    assert.match(targetIntakeMarkdown, /^# Intake$/m);
+    assert.match(targetIntakeMarkdown, /confirmation_needed: true/);
+    assert.match(
+      targetIntakeMarkdown,
+      /impact: Determines framework choice, package layout, typing, and test tooling\./,
+    );
+    assert.match(
+      targetIntakeMarkdown,
+      /node-ts — TypeScript\/Node\.js: Implement a typed HTTP service with Node\.js tooling\./,
+    );
+    assert.match(
+      targetIntakeMarkdown,
+      /recommended: node-ts — TypeScript\/Node\.js: Implement a typed HTTP service with Node\.js tooling\./,
+    );
+    assert.doesNotMatch(targetIntakeMarkdown, /stale sentinel|Legacy automatic intake view/);
+    assert.match(readFileSync(sourceIntakeMarkdownPath, 'utf8'), /stale sentinel/);
+
+    const repeatResult = handoffCli([
+      '--project-id',
+      'webhook-api-service',
+      '--artifacts',
+      artifactRoot,
+      '--target',
+      targetRoot,
+      '--overwrite',
+    ]);
+    assert.equal(repeatResult.status, 0, `${repeatResult.stdout}${repeatResult.stderr}`);
+    const sourceCurrentSpec = JSON.parse(readFileSync(
+      path.join(artifactRoot, 'current-spec.json'),
+      'utf8',
+    ));
+    assert.equal(sourceCurrentSpec.handoff_records.at(-1)?.included_intake, true);
+    const targetManifest = JSON.parse(readFileSync(
+      path.join(targetRoot, '.plan2agent', 'manifest.json'),
+      'utf8',
+    ));
+    assert.equal(
+      targetManifest.artifactFiles.includes(
+        '.plan2agent/artifacts/webhook-api-service/gate-a-intake/intake.md',
+      ),
+      true,
+    );
+  } finally {
+    rmSync(artifactRoot, { recursive: true, force: true });
+    rmSync(targetParent, { recursive: true, force: true });
+  }
+});
+
+test('repeat handoff refreshes an existing explicit intake export and removes an unmarked legacy view', () => {
+  const artifactRoot = tempRoot('handoff-repeat-intake-export');
+  const targetParent = tempRoot('handoff-repeat-intake-export-target');
+  const targetRoot = path.join(targetParent, 'target');
+  const targetIntakeMarkdownPath = path.join(
+    targetRoot,
+    '.plan2agent',
+    'artifacts',
+    'webhook-api-service',
+    'gate-a-intake',
+    'intake.md',
+  );
+  try {
+    cpSync(
+      path.join(E2E_FIXTURE_ROOT, 'webhook-api-service'),
+      artifactRoot,
+      { recursive: true },
+    );
+    mkdirSync(path.dirname(targetIntakeMarkdownPath), { recursive: true });
+    const unmarkedTargetIntake = '# User-authored unmarked intake\n\nkeep this file\n';
+    writeFileSync(targetIntakeMarkdownPath, unmarkedTargetIntake, 'utf8');
+    const protectedResult = handoffCli([
+      '--project-id',
+      'webhook-api-service',
+      '--artifacts',
+      artifactRoot,
+      '--target',
+      targetRoot,
+    ]);
+    assert.notEqual(protectedResult.status, 0);
+    assert.match(
+      `${protectedResult.stdout}${protectedResult.stderr}`,
+      /rerun with --overwrite to replace/,
+    );
+    assert.equal(readFileSync(targetIntakeMarkdownPath, 'utf8'), unmarkedTargetIntake);
+
+    const firstResult = handoffCli([
+      '--project-id',
+      'webhook-api-service',
+      '--artifacts',
+      artifactRoot,
+      '--target',
+      targetRoot,
+      '--include-intake',
+      '--overwrite',
+    ]);
+    assert.equal(firstResult.status, 0, `${firstResult.stdout}${firstResult.stderr}`);
+    assert.ok(
+      readFileSync(targetIntakeMarkdownPath, 'utf8')
+        .startsWith(`${EXPLICIT_INTAKE_MARKDOWN_MARKER}\n`),
+    );
+
+    const sourceIntakePath = path.join(artifactRoot, 'gate-a-intake', 'intake.json');
+    const sourceSpecPath = path.join(artifactRoot, 'gate-b-spec', 'spec.json');
+    const sourceIntake = JSON.parse(readFileSync(sourceIntakePath, 'utf8'));
+    sourceIntake.summary = 'Updated canonical intake summary for repeat handoff.';
+    const sourceIntakeText = `${JSON.stringify(sourceIntake, null, 2)}\n`;
+    writeFileSync(sourceIntakePath, sourceIntakeText, 'utf8');
+    const sourceSpec = JSON.parse(readFileSync(sourceSpecPath, 'utf8'));
+    sourceSpec.source_intake_sha256 = createHash('sha256')
+      .update(sourceIntakeText)
+      .digest('hex');
+    writeFileSync(sourceSpecPath, `${JSON.stringify(sourceSpec, null, 2)}\n`, 'utf8');
+
+    const refreshResult = handoffCli([
+      '--project-id',
+      'webhook-api-service',
+      '--artifacts',
+      artifactRoot,
+      '--target',
+      targetRoot,
+      '--overwrite',
+    ]);
+    assert.equal(refreshResult.status, 0, `${refreshResult.stdout}${refreshResult.stderr}`);
+    assert.match(
+      readFileSync(targetIntakeMarkdownPath, 'utf8'),
+      /Updated canonical intake summary for repeat handoff\./,
+    );
+
+    writeFileSync(targetIntakeMarkdownPath, '# Legacy automatic intake view\n\nstale\n', 'utf8');
+    const cleanupResult = handoffCli([
+      '--project-id',
+      'webhook-api-service',
+      '--artifacts',
+      artifactRoot,
+      '--target',
+      targetRoot,
+      '--overwrite',
+    ]);
+    assert.equal(cleanupResult.status, 0, `${cleanupResult.stdout}${cleanupResult.stderr}`);
+    assert.equal(existsSync(targetIntakeMarkdownPath), false);
+    const targetManifest = JSON.parse(readFileSync(
+      path.join(targetRoot, '.plan2agent', 'manifest.json'),
+      'utf8',
+    ));
+    assert.equal(
+      targetManifest.artifactFiles.includes(
+        '.plan2agent/artifacts/webhook-api-service/gate-a-intake/intake.md',
+      ),
+      false,
+    );
+  } finally {
+    rmSync(artifactRoot, { recursive: true, force: true });
+    rmSync(targetParent, { recursive: true, force: true });
+  }
+});
+
+test('move handoff removes a source intake Markdown after regenerating its target export', () => {
+  const artifactRoot = tempRoot('handoff-move-canonical-intake-export');
+  const targetParent = tempRoot('handoff-move-canonical-intake-export-target');
+  const targetRoot = path.join(targetParent, 'target');
+  const sourceIntakeMarkdownPath = path.join(
+    artifactRoot,
+    'gate-a-intake',
+    'intake.md',
+  );
+  try {
+    cpSync(
+      path.join(E2E_FIXTURE_ROOT, 'webhook-api-service'),
+      artifactRoot,
+      { recursive: true },
+    );
+    const dryRunResult = handoffCli([
+      '--project-id',
+      'webhook-api-service',
+      '--artifacts',
+      artifactRoot,
+      '--target',
+      targetRoot,
+      '--mode',
+      'move',
+      '--include-intake',
+      '--dry-run',
+    ]);
+    assert.equal(dryRunResult.status, 0, `${dryRunResult.stdout}${dryRunResult.stderr}`);
+    assert.match(
+      dryRunResult.stdout,
+      /move cleanup: source files above and supplemental sources below will be removed after successful writes/,
+    );
+    assert.match(dryRunResult.stdout, /- remove: .*gate-a-intake\/intake\.md/);
+    assert.equal(existsSync(sourceIntakeMarkdownPath), true);
+    assert.equal(existsSync(targetRoot), false);
+
+    const result = handoffCli([
+      '--project-id',
+      'webhook-api-service',
+      '--artifacts',
+      artifactRoot,
+      '--target',
+      targetRoot,
+      '--mode',
+      'move',
+      '--include-intake',
+    ]);
+    assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+    assert.equal(existsSync(sourceIntakeMarkdownPath), false);
+    assert.equal(
+      existsSync(path.join(artifactRoot, 'gate-a-intake', 'intake.json')),
+      false,
+    );
+    const targetIntakeMarkdown = readFileSync(path.join(
+      targetRoot,
+      '.plan2agent',
+      'artifacts',
+      'webhook-api-service',
+      'gate-a-intake',
+      'intake.md',
+    ), 'utf8');
+    assert.ok(targetIntakeMarkdown.startsWith(`${EXPLICIT_INTAKE_MARKDOWN_MARKER}\n`));
+  } finally {
+    rmSync(artifactRoot, { recursive: true, force: true });
+    rmSync(targetParent, { recursive: true, force: true });
+  }
+});
+
 test('handoff waits for the active task-graph lock before validating or writing', async () => {
   const artifactRoot = initializedArtifactRoot('handoff-task-graph-lock');
   const targetParent = tempRoot('handoff-task-graph-lock-target');
@@ -1875,6 +2138,7 @@ test('failed move restores staged source artifacts and rolls back the target', {
       targetRoot,
       '--mode',
       'move',
+      '--include-intake',
     ], { cwd: ROOT, encoding: 'utf8' });
 
     assert.notEqual(result.status, 0);
@@ -1885,6 +2149,10 @@ test('failed move restores staged source artifacts and rolls back the target', {
     );
     assert.equal(
       existsSync(path.join(artifactRoot, 'gate-d-review', 'review.json')),
+      true,
+    );
+    assert.equal(
+      existsSync(path.join(artifactRoot, 'gate-a-intake', 'intake.md')),
       true,
     );
     assert.equal(existsSync(targetRoot), false);

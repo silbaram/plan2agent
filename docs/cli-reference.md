@@ -253,6 +253,8 @@ p2a iteration maintenance add \
 
 반복 구조 root를 인계할 때 maintenance task graph가 있으면 `.plan2agent/maintenance/task-graph.json`으로 별도 복사한다. active feature graph와 병합하지 않으며, `manifest.json.maintenanceFiles`와 `current-spec.json.handoff_records`에 handoff 기준점이 남는다. `preflight-research/`가 있으면 알려진 Feature Radar 파일도 대상 `.plan2agent/artifacts/<project_id>/preflight-research/`로 복사하고 `manifest.json.preflightResearchFiles`에 기록한다.
 
+`--include-intake`는 source의 기존 `intake.md`를 신뢰하거나 복사하지 않는다. handoff가 rebase한 canonical `intake.json`에서 explicit-export marker가 포함된 최신 Markdown export를 생성하므로, 이전 버전의 자동 생성 view나 stale Markdown이 대상에 전달되지 않는다.
+
 권장 순서는 dry-run으로 계획을 확인한 뒤 실제 인계를 실행하는 것이다.
 
 ```bash

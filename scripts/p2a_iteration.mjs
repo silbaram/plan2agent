@@ -1169,20 +1169,57 @@ function iterationReadme(iterationId, idea, previousIterationId, effectiveSpecRe
     `Baseline iteration: ${previousIterationId}\n\n` +
     `Baseline effective spec: ${effectiveSpecRef}\n\n` +
     `Change idea:\n\n${idea}\n\n` +
-    `Expected artifacts:\n\n` +
+    `Expected canonical artifacts:\n\n` +
     `- gate-a-intake/intake.json\n` +
-    `- gate-a-intake/intake.md\n` +
-    `- gate-b-spec/product-spec.md\n` +
-    `- gate-b-spec/implementation-plan.md\n` +
     `- gate-b-spec/spec.json\n` +
     `- gate-c-task-graph/task-graph.json\n` +
-    `- gate-d-review/review-report.md\n` +
-    `- gate-d-review/review.json\n`;
+    `- gate-d-review/review.json\n\n` +
+    `Optional generated views/exports:\n\n` +
+    `- gate-a-intake/intake.md (explicit Markdown export only)\n` +
+    `- gate-b-spec/product-spec.md\n` +
+    `- gate-b-spec/implementation-plan.md\n` +
+    `- gate-d-review/review-report.md\n`;
 }
 
 function gateReadme(gateLabel, iterationId) {
   return `# ${gateLabel}\n\n` +
     `이 디렉터리는 ${iterationId} 반복의 ${gateLabel} 산출물을 작성하는 위치입니다.\n`;
+}
+
+const CANONICAL_ITERATION_ARTIFACTS = [
+  'gate-a-intake/intake.json',
+  'gate-b-spec/spec.json',
+  'gate-c-task-graph/task-graph.json',
+  'gate-d-review/review.json',
+];
+
+const OPTIONAL_ITERATION_ARTIFACTS = [
+  'gate-a-intake/intake.md',
+  'gate-b-spec/product-spec.md',
+  'gate-b-spec/implementation-plan.md',
+  'gate-d-review/review-report.md',
+];
+
+function withCurrentIterationArtifactManifest(metadata) {
+  const previousExpected = Array.isArray(metadata?.expected_artifacts)
+    ? metadata.expected_artifacts.filter((item) => (
+        typeof item === 'string'
+        && !OPTIONAL_ITERATION_ARTIFACTS.includes(item)
+      ))
+    : [];
+  const requiredArtifacts = [...CANONICAL_ITERATION_ARTIFACTS];
+  const effectiveSpecRef = metadata?.baseline?.effective_spec_ref;
+  if (isComposedBaselineReference(effectiveSpecRef) && effectiveSpecRef !== 'current-spec.json') {
+    requiredArtifacts.unshift('baseline/current-spec.json');
+  }
+  const previousOptional = Array.isArray(metadata?.optional_artifacts)
+    ? metadata.optional_artifacts.filter((item) => typeof item === 'string')
+    : [];
+  return {
+    ...metadata,
+    expected_artifacts: [...new Set([...requiredArtifacts, ...previousExpected])],
+    optional_artifacts: [...new Set([...OPTIONAL_ITERATION_ARTIFACTS, ...previousOptional])],
+  };
 }
 
 function iterationMetadata(
@@ -1195,20 +1232,7 @@ function iterationMetadata(
   effectiveSpecSha256,
   planningMemory = null,
 ) {
-  const expectedArtifacts = [
-    'gate-a-intake/intake.json',
-    'gate-a-intake/intake.md',
-    'gate-b-spec/product-spec.md',
-    'gate-b-spec/implementation-plan.md',
-    'gate-b-spec/spec.json',
-    'gate-c-task-graph/task-graph.json',
-    'gate-d-review/review-report.md',
-    'gate-d-review/review.json',
-  ];
-  if (isComposedBaselineReference(effectiveSpecRef) && effectiveSpecRef !== 'current-spec.json') {
-    expectedArtifacts.unshift('baseline/current-spec.json');
-  }
-  return {
+  return withCurrentIterationArtifactManifest({
     schema_version: 'p2a.iteration_metadata.v1',
     project_id: projectId,
     iteration_id: iterationId,
@@ -1224,8 +1248,7 @@ function iterationMetadata(
         : {}),
     },
     planning_memory: planningMemory,
-    expected_artifacts: expectedArtifacts,
-  };
+  });
 }
 
 function draftArtifactPaths(iterationRoot) {
@@ -1257,13 +1280,67 @@ function activePendingIteration(state) {
 
 function assertWritableDraftFiles(files, artifactRoot, force, options = {}) {
   const allowExisting = new Set(options.allowExisting ?? []);
+  const fileStats = assertWritableDraftFilePaths(files, artifactRoot);
   const existing = Object.entries(files)
-    .filter(([key, filePath]) => !allowExisting.has(key) && existsSync(filePath))
+    .filter(([key]) => !allowExisting.has(key) && fileStats.get(key))
     .map(([, filePath]) => filePath);
   if (existing.length && !force) {
     const summary = existing.map((filePath) => artifactRelativePath(artifactRoot, filePath)).join(', ');
     throw new Error(`Gate A/B draft files already exist: ${summary}. Re-run with --force to overwrite them.`);
   }
+}
+
+function assertWritableDraftFilePaths(files, artifactRoot) {
+  const labels = {
+    intakeJson: 'Gate A intake JSON snapshot',
+    intakeMd: 'Gate A intake Markdown export',
+  };
+  const fileStats = new Map();
+  for (const [key, filePath] of Object.entries(files)) {
+    fileStats.set(
+      key,
+      assertWritableArtifactFilePath(
+        filePath,
+        artifactRoot,
+        labels[key] ?? 'Gate A/B draft artifact',
+      ),
+    );
+  }
+  return fileStats;
+}
+
+function assertWritableArtifactFilePath(filePath, artifactRoot, label) {
+  const rootPath = path.resolve(artifactRoot);
+  const targetPath = path.resolve(filePath);
+  const relativePath = path.relative(rootPath, targetPath);
+  if (
+    !relativePath
+    || relativePath === '..'
+    || relativePath.startsWith(`..${path.sep}`)
+    || path.isAbsolute(relativePath)
+  ) {
+    throw new ValidationError(`${label} must resolve inside the artifact root`);
+  }
+
+  let currentPath = rootPath;
+  for (const segment of relativePath.split(path.sep).slice(0, -1)) {
+    currentPath = path.join(currentPath, segment);
+    const stat = lstatIfPresent(currentPath);
+    if (!stat) break;
+    if (stat.isSymbolicLink()) {
+      throw new ValidationError(`${label} parent directory must not be a symbolic link: ${currentPath}`);
+    }
+    if (!stat.isDirectory()) {
+      throw new ValidationError(`${label} parent must be a directory: ${currentPath}`);
+    }
+  }
+
+  const targetStat = lstatIfPresent(targetPath);
+  if (targetStat && !targetStat.isFile()) {
+    throw new ValidationError(`${label} must be a regular file: ${targetPath}`);
+  }
+  if (targetStat) assertFileInsideArtifactRoot(targetPath, artifactRoot, label);
+  return targetStat;
 }
 
 function draftIdea(args, pending, metadata) {
@@ -1971,20 +2048,45 @@ function mergeFeatureRadarIntoSpec(spec, preflight) {
   };
 }
 
-function renderIntakeMarkdown(intake) {
+export const EXPLICIT_INTAKE_MARKDOWN_MARKER = '<!-- plan2agent:intake-md-export=explicit -->';
+
+function renderIntakeDecisionMarkdown(item) {
+  const options = Array.isArray(item.options) ? item.options : [];
+  const recommendedOption = options.find((option) => option?.id === item.default);
+  const optionLines = options.length
+    ? options.map((option) => (
+        `  - ${option.id} — ${option.label}: ${option.description}`
+      )).join('\n')
+    : '  - None recorded.';
+  const recommendation = recommendedOption
+    ? `${recommendedOption.id} — ${recommendedOption.label}: ${recommendedOption.description}`
+    : item.default ?? 'none';
+  return `### ${item.id} — ${item.question}\n\n` +
+    `- status: ${item.status}\n` +
+    `${item.answer ? `- answer: ${item.answer}\n` : ''}` +
+    `- impact: ${item.impact ?? 'Not recorded.'}\n` +
+    `- options:\n${optionLines}\n` +
+    `- recommended: ${recommendation}\n` +
+    `- potential blocks: ${(item.blocks ?? []).join(', ') || 'legacy/unspecified'}\n` +
+    `- affected fields: ${(item.affected_fields ?? item.blocks ?? []).join(', ') || 'none'}`;
+}
+
+function renderIntakeClarifyingQuestionMarkdown(item) {
+  return `### ${item.id} — ${item.question}\n\n` +
+    `- status: ${item.status ?? 'unspecified'}\n` +
+    `${item.answer ? `- answer: ${item.answer}\n` : ''}` +
+    `- why it matters: ${item.why_it_matters}\n` +
+    `${item.canonical_effect ? `- canonical effect: ${item.canonical_effect}\n` : ''}` +
+    `- potential blocks: ${(item.blocks ?? []).join(', ') || 'none'}\n` +
+    `- affected fields: ${(item.affected_fields ?? item.blocks ?? []).join(', ') || 'none'}`;
+}
+
+export function renderIntakeMarkdown(intake, options = {}) {
   const decisions = intake.needs_user_decision.length
-    ? markdownList(intake.needs_user_decision.map((item) => (
-        `${item.id}: ${item.question} (status: ${item.status}${item.answer ? `; answer: ${item.answer}` : ''}; ` +
-        `potential blocks: ${(item.blocks ?? []).join(', ') || 'legacy/unspecified'}; ` +
-        `affected fields: ${(item.affected_fields ?? item.blocks ?? []).join(', ') || 'none'})`
-      )))
+    ? intake.needs_user_decision.map(renderIntakeDecisionMarkdown).join('\n\n')
     : 'No formal user decisions in the current intake.';
   const questions = intake.clarifying_questions.length
-    ? markdownList(intake.clarifying_questions.map((item) => (
-        `${item.id}: ${item.question} (status: ${item.status ?? 'unspecified'}${item.answer ? `; answer: ${item.answer}` : ''}; ` +
-        `potential blocks: ${(item.blocks ?? []).join(', ') || 'none'}; ` +
-        `affected fields: ${(item.affected_fields ?? item.blocks ?? []).join(', ') || 'none'})`
-      )))
+    ? intake.clarifying_questions.map(renderIntakeClarifyingQuestionMarkdown).join('\n\n')
     : 'No clarifying questions in the current intake.';
   const interview = intake.interview
     ? `## Interview State\n\n` +
@@ -2019,11 +2121,17 @@ function renderIntakeMarkdown(intake) {
           )))
         : 'No reusable clarifying-question dispositions were found.'}\n\n`
     : '';
-  return `# Intake\n\n` +
+  const provenance = options.explicitExport
+    ? `${EXPLICIT_INTAKE_MARKDOWN_MARKER}\n\n`
+    : '';
+  return provenance + `# Intake\n\n` +
     `## Idea\n\n${intake.idea}\n\n` +
     `## Summary\n\n${intake.summary}\n\n` +
     `## Known Facts\n\n${markdownList(intake.known_facts)}\n\n` +
-    `## Assumptions\n\n${markdownList(intake.assumptions.map((item) => `${item.id}: ${item.statement} (risk: ${item.risk})`))}\n\n` +
+    `## Assumptions\n\n${markdownList(intake.assumptions.map((item) => (
+      `${item.id}: ${item.statement} ` +
+      `(risk: ${item.risk}; confirmation_needed: ${item.confirmation_needed})`
+    )))}\n\n` +
     interview +
     baseline +
     `## Decisions\n\n${decisions}\n\n` +
@@ -2209,8 +2317,9 @@ function currentSpecForPromotedSpec(currentSpec, iterationId, promotedAt, artifa
 }
 
 function iterationMetadataForDraft(metadata, idea, draftedAt, artifacts, planningMemory = metadata.planning_memory ?? null) {
+  const planningMetadata = withCurrentIterationArtifactManifest(metadata);
   return {
-    ...metadata,
+    ...planningMetadata,
     status: 'gate_b_draft',
     idea,
     drafted_at: draftedAt,
@@ -2225,7 +2334,7 @@ function iterationMetadataAfterGateAForceReset(metadata) {
     approved_spec_artifacts: _approvedSpecArtifacts,
     ...planningMetadata
   } = metadata;
-  return planningMetadata;
+  return withCurrentIterationArtifactManifest(planningMetadata);
 }
 
 function iterationMetadataForGateAInterview(
@@ -2250,12 +2359,13 @@ function iterationMetadataForGateAInterview(
 }
 
 function iterationMetadataForPromotedSpec(metadata, projectId, iterationId, promotedAt, artifacts) {
+  const planningMetadata = withCurrentIterationArtifactManifest(metadata ?? {
+    schema_version: 'p2a.iteration_metadata.v1',
+    project_id: projectId,
+    iteration_id: iterationId,
+  });
   return {
-    ...(metadata ?? {
-      schema_version: 'p2a.iteration_metadata.v1',
-      project_id: projectId,
-      iteration_id: iterationId,
-    }),
+    ...planningMetadata,
     project_id: metadata?.project_id ?? projectId,
     iteration_id: metadata?.iteration_id ?? iterationId,
     status: 'gate_b_approved',
@@ -2265,12 +2375,13 @@ function iterationMetadataForPromotedSpec(metadata, projectId, iterationId, prom
 }
 
 function iterationMetadataForClose(metadata, projectId, iterationId, closedAt, record, memoryFreshness = null) {
+  const planningMetadata = withCurrentIterationArtifactManifest(metadata ?? {
+    schema_version: 'p2a.iteration_metadata.v1',
+    project_id: projectId,
+    iteration_id: iterationId,
+  });
   return {
-    ...(metadata ?? {
-      schema_version: 'p2a.iteration_metadata.v1',
-      project_id: projectId,
-      iteration_id: iterationId,
-    }),
+    ...planningMetadata,
     project_id: metadata?.project_id ?? projectId,
     iteration_id: metadata?.iteration_id ?? iterationId,
     status: 'archived',
@@ -5543,10 +5654,237 @@ function assertGateAForceResetSafe(state) {
   assertNoTaskGraphExecutionHistory(state, 'draft --force');
 }
 
+function lstatIfPresent(filePath) {
+  try {
+    return lstatSync(filePath);
+  } catch (error) {
+    if (error?.code === 'ENOENT') return null;
+    throw error;
+  }
+}
+
 function invalidateGateADownstreamArtifacts(state, files) {
+  const intakeMarkdownStat = lstatIfPresent(files.intakeMd);
+  if (intakeMarkdownStat) {
+    if (!intakeMarkdownStat.isFile()) {
+      throw new ValidationError(
+        `Gate A intake Markdown export must be a regular file: ${files.intakeMd}`,
+      );
+    }
+    unlinkSync(files.intakeMd);
+  }
   for (const filePath of gateAForceResetArtifactPaths(state, files)) {
     if (existsSync(filePath)) unlinkSync(filePath);
   }
+}
+
+const MAX_GATE_A_GUIDANCE_ITEMS = 3;
+const MAX_GATE_A_GUIDANCE_TEXT_LENGTH = 240;
+
+function gateAInterviewGuidanceText(value) {
+  if (typeof value !== 'string') return '';
+  const normalized = value.trim().replace(/\s+/g, ' ');
+  if (normalized.length <= MAX_GATE_A_GUIDANCE_TEXT_LENGTH) return normalized;
+  return `${normalized.slice(0, MAX_GATE_A_GUIDANCE_TEXT_LENGTH - 1)}…`;
+}
+
+function gateAInterviewGuidanceSentence(value) {
+  const text = gateAInterviewGuidanceText(value);
+  if (!text || /[.!?…]$/.test(text)) return text;
+  return `${text}.`;
+}
+
+function gateAInterviewDecisionGuidance(item) {
+  const options = Array.isArray(item?.options) ? item.options : [];
+  const defaultOption = options.find((option) => option?.id === item?.default);
+  const selectedOptions = options.slice(0, MAX_GATE_A_GUIDANCE_ITEMS);
+  if (defaultOption && !selectedOptions.includes(defaultOption)) {
+    selectedOptions[selectedOptions.length - 1] = defaultOption;
+  }
+  const visibleOptions = selectedOptions
+    .map((option) => {
+      const id = gateAInterviewGuidanceText(option?.id);
+      const label = gateAInterviewGuidanceText(option?.label);
+      const description = gateAInterviewGuidanceText(option?.description);
+      return `${id}=${label}${description ? ` — ${description}` : ''}`;
+    });
+  if (options.length > visibleOptions.length) {
+    visibleOptions.push(`${options.length - visibleOptions.length} more option(s)`);
+  }
+  const defaultId = gateAInterviewGuidanceText(item?.default);
+  const defaultLabel = gateAInterviewGuidanceText(defaultOption?.label);
+  return {
+    options: visibleOptions.join(' | '),
+    recommendation: defaultId
+      ? `${defaultId}${defaultLabel ? `=${defaultLabel}` : ''}`
+      : '',
+  };
+}
+
+function gateAInterviewBlockerSummary(intake) {
+  const blockers = [];
+  let totalBlockers = 0;
+  const addBlocker = (render) => {
+    totalBlockers += 1;
+    if (blockers.length < MAX_GATE_A_GUIDANCE_ITEMS) blockers.push(render());
+  };
+  for (const item of Array.isArray(intake.clarifying_questions)
+    ? intake.clarifying_questions
+    : []) {
+    if (item?.status !== 'open') continue;
+    addBlocker(() => (
+      `${gateAInterviewGuidanceText(item.id)}: ${gateAInterviewGuidanceText(item.question)}`
+    ));
+  }
+  for (const item of Array.isArray(intake.needs_user_decision)
+    ? intake.needs_user_decision
+    : []) {
+    if (item?.status === 'answered') continue;
+    addBlocker(() => {
+      const guidance = gateAInterviewDecisionGuidance(item);
+      const details = [
+        guidance.options ? `options: ${guidance.options}` : '',
+        guidance.recommendation ? `recommended: ${guidance.recommendation}` : '',
+      ].filter(Boolean).join('; ');
+      return `${gateAInterviewGuidanceText(item?.id)}: ` +
+        `${gateAInterviewGuidanceText(item?.question)}` +
+        `${details ? ` (${details})` : ''}`;
+    });
+  }
+  for (const item of Array.isArray(intake.interview?.discovery_dimensions)
+    ? intake.interview.discovery_dimensions
+    : []) {
+    if (item?.status !== 'open') continue;
+    addBlocker(() => (
+      `dimension ${gateAInterviewGuidanceText(item.dimension)}: ` +
+      `${gateAInterviewGuidanceText(item.summary) || 'needs clarification'}`
+    ));
+  }
+  if (intake.interview?.has_unasked_high_impact_questions) {
+    addBlocker(() => (
+      'unsurfaced high-impact input remains and must be materialized by the interview before it can be answered'
+    ));
+  }
+  if (intake.interview?.new_blocker) {
+    addBlocker(() => (
+      'a newly introduced blocker must be materialized by the interview before it can be answered'
+    ));
+  }
+  if (totalBlockers > blockers.length) {
+    blockers.push(`${totalBlockers - blockers.length} more unresolved item(s)`);
+  }
+  return blockers.join('; ');
+}
+
+function gateAInterviewAssumptionSummary(intake) {
+  const assumptions = [];
+  let totalAssumptions = 0;
+  for (const item of Array.isArray(intake.assumptions) ? intake.assumptions : []) {
+    if (item?.confirmation_needed !== true) continue;
+    totalAssumptions += 1;
+    if (assumptions.length < MAX_GATE_A_GUIDANCE_ITEMS) {
+      const risk = gateAInterviewGuidanceText(item.risk);
+      assumptions.push(
+        `${gateAInterviewGuidanceText(item.id)}: ` +
+        `${gateAInterviewGuidanceText(item.statement)}` +
+        `${risk ? ` (risk: ${risk})` : ''}`,
+      );
+    }
+  }
+  if (totalAssumptions > assumptions.length) {
+    assumptions.push(
+      `${totalAssumptions - assumptions.length} more recommended assumption(s)`,
+    );
+  }
+  return assumptions.join('; ');
+}
+
+function gateAInterviewHasMaterializedBlockers(intake) {
+  return (Array.isArray(intake.clarifying_questions)
+    ? intake.clarifying_questions
+    : []).some((item) => item?.status === 'open')
+    || (Array.isArray(intake.needs_user_decision)
+      ? intake.needs_user_decision
+      : []).some((item) => item?.status !== 'answered')
+    || (Array.isArray(intake.interview?.discovery_dimensions)
+      ? intake.interview.discovery_dimensions
+      : []).some((item) => item?.status === 'open');
+}
+
+function gateAInterviewDraftMessages(intake) {
+  const blockers = gateAInterviewBlockerSummary(intake);
+  const recommendedAssumptions = gateAInterviewAssumptionSummary(intake);
+  const hasMaterializedBlockers = gateAInterviewHasMaterializedBlockers(intake);
+  const softLimitSummary = intake.interview?.state === 'paused' &&
+    intake.interview?.stop_reason === 'soft_limit'
+    ? gateAInterviewGuidanceSentence(intake.summary)
+    : '';
+  const summaryContext = softLimitSummary
+    ? ` Current understanding: ${softLimitSummary}`
+    : '';
+  const blockerContext = blockers ? ` Unresolved items: ${blockers}.` : '';
+  const assumptionContext = recommendedAssumptions
+    ? ` Recommended assumptions: ${recommendedAssumptions}.`
+    : '';
+  const pausedChoice = hasMaterializedBlockers
+    ? recommendedAssumptions
+      ? 'Choose whether to continue the interview, answer a listed unresolved item directly, explicitly accept a recommended assumption, or keep it paused.'
+      : 'Choose whether to continue the interview, answer a listed unresolved item directly, or keep it paused.'
+    : recommendedAssumptions
+      ? 'Choose whether to continue the interview, explicitly accept a recommended assumption, or keep it paused.'
+      : 'Choose whether to continue the interview or keep it paused.';
+  return {
+    interview_active: [
+      'Plan2Agent Gate A interview ready.',
+      '- Continue the planning conversation with /p2a-harness resume_from: interview.',
+    ],
+    ready_for_gate_a_summary: [
+      'Plan2Agent Gate A summary ready.',
+      '- Present the Gate A understanding with /p2a-harness resume_from: gate-a-summary.',
+    ],
+    awaiting_gate_a_confirmation: [
+      'Plan2Agent Gate A summary is awaiting confirmation.',
+      '- Review and explicitly confirm the Gate A understanding before recording approval.',
+    ],
+    paused: [
+      'Plan2Agent Gate A interview paused.',
+      `-${summaryContext}${blockerContext}${assumptionContext} ${pausedChoice}`,
+    ],
+    blocked_on_user: [
+      'Plan2Agent Gate A interview is blocked on user input.',
+      recommendedAssumptions
+        ? `-${blockerContext}${assumptionContext} Answer the listed unresolved items directly, explicitly accept a recommended assumption, or defer an item.`
+        : `-${blockerContext} Answer the listed unresolved items directly or explicitly defer an item.`,
+    ],
+  }[intake.interview?.state] ?? [
+    'Plan2Agent Gate A state updated.',
+    '- Run p2a next to inspect the required Gate A action.',
+  ];
+}
+
+function syncGateAInterviewMarkdown(files, intake, artifactRoot) {
+  const intakeMarkdownStat = lstatIfPresent(files.intakeMd);
+  if (!intakeMarkdownStat) return;
+  if (!intakeMarkdownStat.isFile()) {
+    throw new ValidationError(
+      `Gate A intake Markdown export must be a regular file: ${files.intakeMd}`,
+    );
+  }
+  assertFileInsideArtifactRoot(
+    files.intakeMd,
+    artifactRoot,
+    'Gate A intake Markdown export',
+  );
+  const currentView = readFileSync(files.intakeMd, 'utf8');
+  const [firstLine] = currentView.split(/\r\n|\n|\r/, 1);
+  if (firstLine !== EXPLICIT_INTAKE_MARKDOWN_MARKER) {
+    unlinkSync(files.intakeMd);
+    return;
+  }
+  atomicWriteText(
+    files.intakeMd,
+    renderIntakeMarkdown(intake, { explicitExport: true }),
+  );
 }
 
 function draftTransactionPaths(state, options = {}) {
@@ -5561,10 +5899,26 @@ function draftTransactionPaths(state, options = {}) {
         ]),
     files.intakeJson,
     files.intakeMd,
+    path.join(state.iterationRoot, 'README.md'),
     path.join(state.iterationRoot, 'iteration.json'),
     state.currentSpecPath,
     path.join(state.artifactRoot, 'status.md'),
   ];
+}
+
+function writeIterationMetadataAndReadme(state, metadata) {
+  const readmePath = path.join(state.iterationRoot, 'README.md');
+  assertWritableArtifactFilePath(readmePath, state.artifactRoot, 'iteration README');
+  writeJson(path.join(state.iterationRoot, 'iteration.json'), metadata);
+  atomicWriteText(
+    readmePath,
+    iterationReadme(
+      state.activeIteration,
+      metadata.idea,
+      metadata.baseline?.iteration_id ?? 'none',
+      metadata.baseline?.effective_spec_ref ?? 'none',
+    ),
+  );
 }
 
 function captureDraftSnapshot(state, options = {}) {
@@ -5780,6 +6134,12 @@ function draftWithState(args, state) {
   }
   const projectId = state.projectId;
   const files = draftArtifactPaths(state.iterationRoot);
+  assertWritableDraftFilePaths(files, artifactRoot);
+  assertWritableArtifactFilePath(
+    path.join(state.iterationRoot, 'README.md'),
+    artifactRoot,
+    'iteration README',
+  );
   const existingIntake = !args.force && existsSync(files.intakeJson)
     ? loadJson(files.intakeJson)
     : null;
@@ -5795,7 +6155,6 @@ function draftWithState(args, state) {
   assertWritableDraftFiles(files, artifactRoot, args.force, {
     allowExisting: ['intakeJson', 'intakeMd'],
   });
-
   const preflight = loadFeatureRadarPreflight(artifactRoot, { projectId });
   const resetDeltaIntake = Boolean(baselineSpecRef) && (args.force || !existsSync(files.intakeJson));
   const resetGreenfieldIntake = !baselineSpecRef && args.force;
@@ -5856,7 +6215,6 @@ function draftWithState(args, state) {
   if (args.force) invalidateGateADownstreamArtifacts(state, files);
   if (writeGeneratedIntake) {
     writeJson(files.intakeJson, intake);
-    writeFileSync(files.intakeMd, renderIntakeMarkdown(intake), 'utf8');
   }
 
   const artifacts = {
@@ -5878,10 +6236,18 @@ function draftWithState(args, state) {
     ? iterationMetadataAfterGateAForceReset(metadata)
     : metadata;
   if (intake.status !== 'ready_for_spec') {
+    syncGateAInterviewMarkdown(files, intake, artifactRoot);
     validateIntake(files.intakeJson, { artifactRoot });
-    writeJson(
-      path.join(state.iterationRoot, 'iteration.json'),
-      iterationMetadataForGateAInterview(planningMetadata, idea, draftedAt, artifacts, intake, planningMemory),
+    writeIterationMetadataAndReadme(
+      state,
+      iterationMetadataForGateAInterview(
+        planningMetadata,
+        idea,
+        draftedAt,
+        artifacts,
+        intake,
+        planningMemory,
+      ),
     );
     const nextCurrentSpec = currentSpecForGateAInterview(
       currentSpec,
@@ -5894,10 +6260,10 @@ function draftWithState(args, state) {
     writeJson(state.currentSpecPath, nextCurrentSpec);
     writeIterationStatus(state.artifactRoot, nextCurrentSpec);
 
-    console.log(`Plan2Agent Gate A interview draft generated: ${toRelativeFromRoot(state.iterationRoot)}`);
+    const [headline, nextAction] = gateAInterviewDraftMessages(intake);
+    console.log(headline);
     console.log(`- active iteration: ${state.activeIteration}`);
-    console.log(`- baseline spec: ${baselineSpecRef ?? 'none'}`);
-    console.log(`- intake: ${artifacts.intake_ref} (state=${intake.interview?.state ?? intake.status})`);
+    console.log(nextAction);
     console.log('- Gate B synthesis is blocked until Gate A is explicitly confirmed.');
     console.log(`- planning Memory: ${planningMemory.status} (project=${planningMemory.layers.project.status}, cross-project=${planningMemory.layers.cross_project.status})`);
     planningMemoryIncompleteWarningLines(planningMemory).forEach((line) => console.warn(line));
@@ -5907,7 +6273,7 @@ function draftWithState(args, state) {
     return 0;
   }
 
-  writeFileSync(files.intakeMd, renderIntakeMarkdown(intake), 'utf8');
+  syncGateAInterviewMarkdown(files, intake, artifactRoot);
   let spec = baselineSpecRef
     ? buildDeltaSpec({
         projectId,
@@ -5928,24 +6294,24 @@ function draftWithState(args, state) {
   if (preflight.detected) {
     spec = mergeFeatureRadarIntoSpec(spec, preflight);
   }
-  writeFileSync(files.productSpecMd, renderProductSpecMarkdown(spec, {
+  atomicWriteText(files.productSpecMd, renderProductSpecMarkdown(spec, {
     iterationId: state.activeIteration,
     idea,
     baselineSpecRef: baselineSpecRef ?? 'none',
     baselineSpec,
-  }), 'utf8');
-  writeFileSync(files.implementationPlanMd, renderImplementationPlanMarkdown(spec, {
+  }));
+  atomicWriteText(files.implementationPlanMd, renderImplementationPlanMarkdown(spec, {
     iterationId: state.activeIteration,
     idea,
     baselineSpecRef: baselineSpecRef ?? 'none',
     baselineSpec,
-  }), 'utf8');
+  }));
   writeJson(files.specJson, spec);
 
   validateIntake(files.intakeJson, { artifactRoot });
   validateSpec(files.specJson, files.intakeJson, { artifactRoot });
-  writeJson(
-    path.join(state.iterationRoot, 'iteration.json'),
+  writeIterationMetadataAndReadme(
+    state,
     iterationMetadataForDraft(planningMetadata, idea, draftedAt, artifacts, planningMemory),
   );
   const nextCurrentSpec = currentSpecForDraft(currentSpec, state.activeIteration, idea, draftedAt, artifacts);

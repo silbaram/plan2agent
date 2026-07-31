@@ -129,8 +129,8 @@ Memory가 활성화되고 연결된 iterative root에서는 next iteration을 �
   iterations/
     <iter-id>/
       gate-a-intake/
-        intake.json
-        intake.md
+        intake.json                    # canonical
+        intake.md                      # optional explicit Markdown export
       gate-b-spec/
         product-spec.md
         implementation-plan.md
@@ -350,10 +350,10 @@ p2a iteration draft \
 
 baseline-aware Gate A는 기존 source intake/spec에서 답변된 `ND-n`과 `CQ-n` disposition을 `baseline_context`에 provenance와 함께 보존한다. harness는 관련 답변을 재사용하고 변경되거나 충돌하는 영역만 다시 질문한다. 사용자가 Gate A 이해 요약을 명시적으로 확인하면 `intake.interview.state: "gate_a_confirmed"`, `status: "ready_for_spec"`, `approval_audit`을 기록한다. 같은 harness session에서 `draft`를 이어 호출하면 그때 Gate B 초안과 delta-first Markdown view를 생성한다.
 
-생성 산출물:
+생성 산출물과 선택적 view:
 
 - `iterations/<iter-id>/gate-a-intake/intake.json`
-- `iterations/<iter-id>/gate-a-intake/intake.md`
+- `iterations/<iter-id>/gate-a-intake/intake.md` (사용자가 명시적으로 요청한 경우만)
 - `iterations/<iter-id>/gate-b-spec/spec.json`
 - `iterations/<iter-id>/gate-b-spec/product-spec.md`
 - `iterations/<iter-id>/gate-b-spec/implementation-plan.md`
@@ -432,8 +432,7 @@ Gate A만 완료된 초기 planning 반복은 아직 approved spec이 없으므�
     "iteration_id": "v1-mvp",
     "status": "gate_a_ready",
     "artifacts": {
-      "intake_ref": "iterations/v1-mvp/gate-a-intake/intake.json",
-      "intake_markdown_ref": "iterations/v1-mvp/gate-a-intake/intake.md"
+      "intake_ref": "iterations/v1-mvp/gate-a-intake/intake.json"
     }
   },
   "note": "Gate B spec is not available yet."
@@ -577,7 +576,7 @@ p2a handoff \
 - `.plan2agent/artifacts/status.md`
 - `.plan2agent/current-spec.json`
 
-handoff는 active 반복의 `task-graph.sourceSpec`을 `spec.json`으로, `spec.source_intake`를 `intake.json`으로 rebase하고, traceability 검증을 위해 active 반복의 `gate-a-intake/intake.json`을 항상 `.plan2agent/artifacts/intake.json`으로 함께 복사한다. `--include-intake`를 붙이면 사람용 `intake.md`도 `.plan2agent/artifacts/`로 추가 복사한다. 반복 history 보존을 위해 iterative root에서는 `--mode move`를 지원하지 않고 `copy`만 허용한다. maintenance task graph가 있으면 active graph와 병합하지 않고 `.plan2agent/maintenance/task-graph.json`으로 별도 복사한다.
+handoff는 active 반복의 `task-graph.sourceSpec`을 `spec.json`으로, `spec.source_intake`를 `intake.json`으로 rebase하고, traceability 검증을 위해 active 반복의 `gate-a-intake/intake.json`을 항상 `.plan2agent/artifacts/<project_id>/gate-a-intake/intake.json`으로 함께 복사한다. `--include-intake`를 붙이면 기존 Markdown 파일을 복사하지 않고 대상에 기록할 canonical `intake.json`에서 explicit-export marker가 있는 최신 사람용 `.plan2agent/artifacts/<project_id>/gate-a-intake/intake.md`를 다시 생성한다. 반복 history 보존을 위해 iterative root에서는 `--mode move`를 지원하지 않고 `copy`만 허용한다. maintenance task graph가 있으면 active graph와 병합하지 않고 `.plan2agent/maintenance/task-graph.json`으로 별도 복사한다.
 
 `--tools codex,claude,gemini|all`은 반복 handoff에도 동일하게 적용된다. 산출물과 `current-spec.json`을 복사한 뒤 대상 프로젝트에 공통 `.agents/skills`, `.agents/agents`와 선택한 CLI별 `.codex`, `.claude`, `.gemini` P2A 자산을 설치하고, 설치 목록을 `.plan2agent/manifest.json`에 기록한다.
 

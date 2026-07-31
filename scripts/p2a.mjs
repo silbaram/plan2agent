@@ -905,6 +905,129 @@ function gateANextReason(intake) {
   }[interviewState];
 }
 
+const MAX_GATE_A_GUIDANCE_ITEMS = 3;
+const MAX_GATE_A_GUIDANCE_TEXT_LENGTH = 240;
+
+function gateAGuidanceText(value) {
+  const normalized = stringValue(value)?.replace(/\s+/g, ' ');
+  if (!normalized || normalized.length <= MAX_GATE_A_GUIDANCE_TEXT_LENGTH) {
+    return normalized;
+  }
+  return `${normalized.slice(0, MAX_GATE_A_GUIDANCE_TEXT_LENGTH - 1)}…`;
+}
+
+function boundedGateAGuidance(visibleItems, totalItems, remainderLabel) {
+  if (totalItems > visibleItems.length) {
+    visibleItems.push(`${totalItems - visibleItems.length} more ${remainderLabel}`);
+  }
+  return visibleItems.join('; ');
+}
+
+function gateAGuidanceSentence(value) {
+  const text = gateAGuidanceText(value);
+  if (!text || /[.!?…]$/.test(text)) return text;
+  return `${text}.`;
+}
+
+function gateADecisionGuidance(item) {
+  const options = jsonRecords(item?.options);
+  const defaultOption = options.find((option) => option.id === item?.default);
+  const selectedOptions = options.slice(0, MAX_GATE_A_GUIDANCE_ITEMS);
+  if (defaultOption && !selectedOptions.includes(defaultOption)) {
+    selectedOptions[selectedOptions.length - 1] = defaultOption;
+  }
+  const visibleOptions = selectedOptions
+    .map((option) => {
+      const id = gateAGuidanceText(option.id);
+      const label = gateAGuidanceText(option.label);
+      const description = gateAGuidanceText(option.description);
+      return `${id}=${label}${description ? ` — ${description}` : ''}`;
+    });
+  if (options.length > visibleOptions.length) {
+    visibleOptions.push(`${options.length - visibleOptions.length} more option(s)`);
+  }
+  const defaultId = gateAGuidanceText(item?.default);
+  const defaultLabel = gateAGuidanceText(defaultOption?.label);
+  return {
+    options: visibleOptions.join(' | '),
+    recommendation: defaultId
+      ? `${defaultId}${defaultLabel ? `=${defaultLabel}` : ''}`
+      : '',
+  };
+}
+
+function gateABlockerSummary(intake) {
+  const blockers = [];
+  let totalBlockers = 0;
+  const addBlocker = (render) => {
+    totalBlockers += 1;
+    if (blockers.length < MAX_GATE_A_GUIDANCE_ITEMS) blockers.push(render());
+  };
+  for (const item of jsonRecords(intake?.clarifying_questions)) {
+    if (item.status !== 'open') continue;
+    addBlocker(() => `${gateAGuidanceText(item.id)}: ${gateAGuidanceText(item.question)}`);
+  }
+  for (const item of jsonRecords(intake?.needs_user_decision)) {
+    if (item.status === 'answered') continue;
+    addBlocker(() => {
+      const guidance = gateADecisionGuidance(item);
+      const details = [
+        guidance.options ? `options: ${guidance.options}` : '',
+        guidance.recommendation ? `recommended: ${guidance.recommendation}` : '',
+      ].filter(Boolean).join('; ');
+      return `${gateAGuidanceText(item.id)}: ${gateAGuidanceText(item.question)}` +
+        `${details ? ` (${details})` : ''}`;
+    });
+  }
+  for (const item of jsonRecords(intake?.interview?.discovery_dimensions)) {
+    if (item.status !== 'open') continue;
+    addBlocker(() => (
+      `dimension ${gateAGuidanceText(item.dimension)}: ` +
+      `${gateAGuidanceText(item.summary) || 'needs clarification'}`
+    ));
+  }
+  if (intake?.interview?.has_unasked_high_impact_questions) {
+    addBlocker(() => (
+      'unsurfaced high-impact input remains and must be materialized by the interview before it can be answered'
+    ));
+  }
+  if (intake?.interview?.new_blocker) {
+    addBlocker(() => (
+      'a newly introduced blocker must be materialized by the interview before it can be answered'
+    ));
+  }
+  return boundedGateAGuidance(blockers, totalBlockers, 'unresolved item(s)');
+}
+
+function gateAAssumptionSummary(intake) {
+  const assumptions = [];
+  let totalAssumptions = 0;
+  for (const item of jsonRecords(intake?.assumptions)) {
+    if (item.confirmation_needed !== true) continue;
+    totalAssumptions += 1;
+    if (assumptions.length >= MAX_GATE_A_GUIDANCE_ITEMS) continue;
+    const risk = gateAGuidanceText(item.risk);
+    assumptions.push(
+      `${gateAGuidanceText(item.id)}: ${gateAGuidanceText(item.statement)}` +
+      `${risk ? ` (risk: ${risk})` : ''}`,
+    );
+  }
+  return boundedGateAGuidance(
+    assumptions,
+    totalAssumptions,
+    'recommended assumption(s)',
+  );
+}
+
+function gateAHasMaterializedBlockers(intake) {
+  return jsonRecords(intake?.clarifying_questions)
+    .some((item) => item.status === 'open')
+    || jsonRecords(intake?.needs_user_decision)
+      .some((item) => item.status !== 'answered')
+    || jsonRecords(intake?.interview?.discovery_dimensions)
+      .some((item) => item.status === 'open');
+}
+
 function gateANextCommand(intake, intakePath) {
   const interviewState = intake?.interview?.state;
   if (!interviewState) {
@@ -912,12 +1035,40 @@ function gateANextCommand(intake, intakePath) {
       ? '/p2a-spec'
       : `Review and approve ${intakePath}.`;
   }
+  const blockers = gateABlockerSummary(intake);
+  const assumptions = gateAAssumptionSummary(intake);
+  const hasMaterializedBlockers = gateAHasMaterializedBlockers(intake);
+  const softLimitSummary = interviewState === 'paused' &&
+    intake?.interview?.stop_reason === 'soft_limit'
+    ? gateAGuidanceSentence(intake?.summary)
+    : '';
+  const summaryContext = softLimitSummary
+    ? ` Current understanding: ${softLimitSummary}`
+    : '';
+  const unresolvedContext = blockers
+    ? ` Unresolved items: ${blockers} —`
+    : '';
+  const assumptionContext = assumptions
+    ? ` Recommended assumptions: ${assumptions}.`
+    : ' No recommended assumptions are currently recorded.';
+  const pausedChoice = hasMaterializedBlockers
+    ? assumptions
+      ? 'Choose whether to continue the interview, answer a listed unresolved item directly, explicitly accept a listed recommended assumption, or keep it paused.'
+      : 'Choose whether to continue the interview, answer a listed unresolved item directly, or keep it paused.'
+    : assumptions
+      ? 'Choose whether to continue the interview, explicitly accept a listed recommended assumption, or keep it paused.'
+      : 'Choose whether to continue the interview or keep it paused.';
+  const blockedChoice = assumptions
+    ? 'Answer the listed unresolved items directly, explicitly accept a listed recommended assumption, or defer an item.'
+    : 'Answer the listed unresolved items directly or explicitly defer an item.';
   return {
     interview_active: '/p2a-harness resume_from: interview',
     ready_for_gate_a_summary: '/p2a-harness resume_from: gate-a-summary',
     awaiting_gate_a_confirmation: `Review and confirm ${intakePath}; then record the Gate A approval_audit.`,
-    paused: `Choose whether to continue the Gate A interview in ${intakePath}, accept the recommended assumptions, or keep it paused.`,
-    blocked_on_user: `Resolve the remaining blockers in ${intakePath} or explicitly accept the recommended assumptions.`,
+    paused: `The Gate A interview is paused.${summaryContext}${unresolvedContext}${assumptionContext} ${pausedChoice}`,
+    blocked_on_user: blockers
+      ? `Resolve these Gate A blockers: ${blockers} —${assumptionContext} ${blockedChoice}`
+      : `Resolve the remaining Gate A blockers.${assumptionContext} Provide the missing high-impact input directly or explicitly defer it.`,
     gate_a_confirmed: '/p2a-harness resume_from: spec',
   }[interviewState];
 }

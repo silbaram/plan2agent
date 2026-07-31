@@ -38,7 +38,11 @@ import {
   resolveIterationState,
   validateCurrentSpecCompositionData,
 } from './p2a_iteration_state.mjs';
-import { renderIterationIndexMarkdown } from './p2a_iteration.mjs';
+import {
+  EXPLICIT_INTAKE_MARKDOWN_MARKER,
+  renderIntakeMarkdown,
+  renderIterationIndexMarkdown,
+} from './p2a_iteration.mjs';
 import {
   normalizePath,
   P2A_ARTIFACTS_DIR,
@@ -147,7 +151,7 @@ function usage() {
     'Handoff options:',
     '  --mode copy|move     Copy artifacts by default; move removes source files after successful write.',
     '  --iteration-id <id>  Use iterative artifacts. The id must match current-spec.json active_iteration; default: active.',
-    '  --include-intake     Include generated gate-a-intake/intake.md when present (intake.json is always copied).',
+    '  --include-intake     Generate an explicit gate-a-intake/intake.md export from canonical intake.json.',
     '  --tools <list>       Copy portable P2A AI tool assets for codex,claude,gemini. Use comma list or all.',
     '  --include-team-bigfive',
     '                       Install Team Big Five adapter files for selected CLI targets.',
@@ -1351,6 +1355,21 @@ function pushGeneratedText(plan, targetRoot, targetRelative, text, options = {})
 
 function pushGeneratedJson(plan, targetRoot, targetRelative, data, options = {}) {
   pushGenerated(plan, targetRoot, targetRelative, 'write-json', `${JSON.stringify(data, null, 2)}\n`, options);
+}
+
+function hasExplicitIntakeMarkdownMarker(content) {
+  const [firstLine = ''] = String(content).split(/\r\n|\n|\r/, 1);
+  return firstLine === EXPLICIT_INTAKE_MARKDOWN_MARKER;
+}
+
+function pushVerifiedFileRemoval(plan, targetRoot, targetRelative, content) {
+  plan.push({
+    type: 'remove-file',
+    targetRelative,
+    target: targetPath(targetRoot, targetRelative),
+    expectedSha256: sha256Value(content),
+    allowExisting: false,
+  });
 }
 
 function isUnsafeTeamBigFiveSourcePath(relativePath) {
@@ -3040,9 +3059,62 @@ function buildPlan(paths, args, artifactsRoot, targetRoot, sourceInfo, options =
     type: 'rewrite-json',
     transform: () => targetIntakeContent,
   });
-  if (args.includeIntake) {
-    pushArtifactIfExists(plan, paths.intakeMd, targetRoot, path.join(artifactTargetDir, 'gate-a-intake', 'intake.md'));
+  const targetIntakeMarkdownRelative = path.join(
+    artifactTargetDir,
+    'gate-a-intake',
+    'intake.md',
+  );
+  const targetIntakeMarkdownPath = targetPath(targetRoot, targetIntakeMarkdownRelative);
+  let refreshTargetIntakeMarkdown = args.includeIntake;
+  const existingTargetIntakeMarkdownStat = args.includeIntake
+    ? null
+    : lstatIfPresent(targetIntakeMarkdownPath);
+  if (existingTargetIntakeMarkdownStat) {
+    const targetIntakeMarkdownStat = existingTargetIntakeMarkdownStat;
+    if (!targetIntakeMarkdownStat.isFile()) {
+      throw new ValidationError(
+        `existing target Gate A intake Markdown must be a regular file: ${targetIntakeMarkdownPath}`,
+      );
+    }
+    const existingTargetIntakeMarkdown = readFileSync(targetIntakeMarkdownPath, 'utf8');
+    if (hasExplicitIntakeMarkdownMarker(existingTargetIntakeMarkdown)) {
+      refreshTargetIntakeMarkdown = true;
+    } else {
+      pushVerifiedFileRemoval(
+        plan,
+        targetRoot,
+        targetIntakeMarkdownRelative,
+        existingTargetIntakeMarkdown,
+      );
+    }
   }
+  if (refreshTargetIntakeMarkdown) {
+    const targetIntake = JSON.parse(targetIntakeContent);
+    const intakeMarkdown = renderIntakeMarkdown(targetIntake, { explicitExport: true });
+    if (!intakeMarkdown.startsWith(`${EXPLICIT_INTAKE_MARKDOWN_MARKER}\n`)) {
+      throw new ValidationError('generated Gate A intake Markdown export is missing its explicit-export marker');
+    }
+    pushGeneratedText(
+      plan,
+      targetRoot,
+      targetIntakeMarkdownRelative,
+      intakeMarkdown,
+    );
+    if (args.includeIntake && args.mode === 'move') {
+      try {
+        const sourceIntakeMarkdownStat = lstatSync(paths.intakeMd);
+        if (sourceIntakeMarkdownStat.isFile() || sourceIntakeMarkdownStat.isSymbolicLink()) {
+          plan.moveCleanupSources = [
+            ...(Array.isArray(plan.moveCleanupSources) ? plan.moveCleanupSources : []),
+            paths.intakeMd,
+          ];
+        }
+      } catch (error) {
+        if (error?.code !== 'ENOENT') throw error;
+      }
+    }
+  }
+  if (record) record.included_intake = refreshTargetIntakeMarkdown;
 
   const currentSpecWithPortableApprovals = record && sourceInfo.currentSpec
     ? bundleCurrentSpecApprovalAudits(
@@ -3127,6 +3199,7 @@ function buildPlan(paths, args, artifactsRoot, targetRoot, sourceInfo, options =
     : [];
 
   const artifactFiles = plan
+    .filter((item) => item.type !== 'remove-file')
     .filter((item) => item.targetRelative.startsWith(`${artifactTargetDir}${path.sep}`) || item.targetRelative.startsWith(`${artifactTargetDir}/`))
     .map((item) => normalizePath(item.targetRelative));
   const toolFiles = [
@@ -3273,15 +3346,36 @@ function printPlan(plan, args, artifactsRoot, targetRoot, sourceInfo) {
   console.log(`targetProject: ${targetRoot}`);
   console.log('writes:');
   for (const item of plan) {
-    const action = item.type === 'write-json' || item.type === 'write-text' ? 'generate' : item.type === 'rewrite-json' || item.type === 'rewrite-text' ? 'copy+rewrite' : 'copy';
+    const action = item.type === 'remove-file' ? 'remove' : item.type === 'write-json' || item.type === 'write-text' ? 'generate' : item.type === 'rewrite-json' || item.type === 'rewrite-text' ? 'copy+rewrite' : 'copy';
     const source = item.source ? normalizePath(path.relative(process.cwd(), item.source)) : '(generated)';
     console.log(`- ${action}: ${source} -> ${normalizePath(item.targetRelative)}`);
   }
-  if (args.mode === 'move') console.log('move cleanup: source files above will be removed after successful writes');
+  if (args.mode === 'move') {
+    const supplementalCleanupSources = [...new Set(
+      Array.isArray(plan.moveCleanupSources) ? plan.moveCleanupSources : [],
+    )];
+    console.log(
+      `move cleanup: source files above${supplementalCleanupSources.length ? ' and supplemental sources below' : ''} will be removed after successful writes`,
+    );
+    for (const source of supplementalCleanupSources) {
+      console.log(`- remove: ${normalizePath(path.relative(process.cwd(), source))}`);
+    }
+  }
   if (args.dryRun) console.log('dry-run: no files written');
 }
 
 function writePlanItem(item) {
+  if (item.type === 'remove-file') {
+    if (!existsSync(item.target)) return;
+    if (!lstatSync(item.target).isFile()) {
+      throw new Error(`handoff removal target is not a regular file: ${item.target}`);
+    }
+    if (sha256Value(readFileSync(item.target)) !== item.expectedSha256) {
+      throw new Error(`handoff removal target changed after planning: ${item.target}`);
+    }
+    unlinkSync(item.target);
+    return;
+  }
   if (item.type === 'delete-file') {
     if (existsSync(item.target)) {
       if (item.safeTarget !== true || item.pruneRequested !== true || !item.installedSha256) {
@@ -3425,9 +3519,11 @@ function restorePlanTargetSnapshot(snapshot, targetRoot) {
 
 function cleanupMovedSources(plan, artifactsRoot) {
   const artifactRootResolved = path.resolve(artifactsRoot);
-  const sources = [...new Set(plan
-    .filter((item) => item.source)
-    .map((item) => path.resolve(item.source))
+  const sources = [...new Set([
+    ...plan.filter((item) => item.source).map((item) => item.source),
+    ...(Array.isArray(plan.moveCleanupSources) ? plan.moveCleanupSources : []),
+  ]
+    .map((source) => path.resolve(source))
     .filter((source) => {
       const relative = path.relative(artifactRootResolved, source);
       return relative && !relative.startsWith('..') && !path.isAbsolute(relative);
@@ -3758,7 +3854,12 @@ async function buildInteractiveArgv(rl) {
   if (!target) return null;
   const mode = await askMode(rl);
   if (!mode) return null;
-  const includeIntake = await askYesNo(rl, 'include-intake?', 'gate-a-intake 산출물도 포함', false);
+  const includeIntake = await askYesNo(
+    rl,
+    'include-intake?',
+    'canonical intake.json에서 명시적 Markdown export 생성',
+    false,
+  );
   if (includeIntake === null) return null;
   const tools = await askToolTargets(rl);
   if (tools === null) return null;

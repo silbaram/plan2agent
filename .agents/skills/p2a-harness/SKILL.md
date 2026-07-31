@@ -33,7 +33,7 @@ If the CLI cannot spawn subagents automatically, run the matching skill locally 
 - **Gate C — Task graph validation:** Before final output, check that every dependency references a task id in the same graph, the graph is acyclic, and every task has acceptance criteria. Repository validation also requires each task to carry source spec references. Inspect `context.planning_memory` before decomposition. When retrieved history changes a task boundary, dependency, acceptance criterion, or failure mitigation, add a `memory:<report path or source reference>` ref and any applicable `decision:ND-n` ref alongside at least one real effective-spec field.
 - **Gate D — Review blockers:** The canonical Gate D artifact is `review_json` persisted as `gate-d-review/review.json`; `review_report` / `review-report.md` is an optional Markdown rendering of the same findings. Gate D passes only when `review.json.blocking_issues` is `[]`. Validate claimed Memory report/citation integrity and confirm that tasks address any material prior failure carried into Gate C. Memory being disabled, unavailable, or irrelevant is not itself a blocker; an invalid claim of use or an ignored material failure is. If review finds blocking issues, return the blockers and the artifact section that must be revised instead of claiming the plan is ready.
 
-Each gate is a review checkpoint, not a one-shot hand-off. At every gate: (1) persist the stage's canonical JSON artifact files and optionally refresh generated Markdown views, (2) present a readable summary with per-item rationale and recommendations, (3) explicitly invite both open-ended feedback and structured answers or approval, (4) revise the JSON artifacts and re-present them when the user responds, and (5) advance only after the user explicitly approves. Never infer approval from silence.
+Each gate is a review checkpoint, not a one-shot hand-off. At every gate: (1) persist the stage's canonical JSON artifact files, (2) present a readable summary with per-item rationale and recommendations when that gate reaches its review point, (3) explicitly invite both open-ended feedback and structured answers or approval, (4) revise the JSON artifacts when the user responds, and (5) advance only after the user explicitly approves. During active Gate A rounds, treat JSON persistence as silent recovery bookkeeping and delay the readable artifact summary until Gate A summary readiness. Never infer approval from silence.
 
 ## Discovery Interview Loop
 
@@ -52,12 +52,16 @@ Gate A and Gate B remain separate canonical artifacts and approvals. Do not add 
 
 Use `intake_json.interview` as the bounded working snapshot. Do not preserve or repeatedly inject the full transcript. Each round consumes the latest snapshot, the newest user answer, open decisions, and material evidence only.
 
+Persist `gate-a-intake/intake.json` silently after the initial interview state and after every round so `resume_from: interview` remains safe. During `interview_active`, `paused`, or `blocked_on_user`, do not announce the write, present the JSON as an artifact, or include the named `intake_json` block in the user-facing reply. Do not generate `gate-a-intake/intake.md` during these states unless the user explicitly requests a Markdown export. First present the organized understanding as an artifact when the Gate A summary is ready.
+
+Keep active rounds conversational. Start with a useful interpretation, recommendation, or answer to the user's latest question and briefly explain why. Weave the next 1 to 3 questions into natural prose, invite free-form answers and follow-up questions, and allow the user to steer the discussion. Do not lead with headings, a questionnaire, a decision table, an artifact inventory, or instructions to fill fields. Present formal comparison tables and the full decision inventory only with the Gate A summary or an explicitly requested export.
+
 For each round:
 
 1. Merge the user's free-form answer into existing stable `CQ-n`, `ND-n`, facts, assumptions, and discovery dimension dispositions. Keep CQ/ND `blocks` as potential impacts. Set resolved CQ/ND `canonical_effect` to `change` with exact non-empty actual canonical `affected_fields`, or to `preserve_baseline` with empty `affected_fields` only for an explicit existing-baseline preservation answer.
 2. Count the round as progress only when a fact, answer, or disposition changed.
 3. Recompute readiness from the structured state.
-4. If not ready, ask only the 1 to 3 highest-impact remaining questions.
+4. If not ready and `interview.state` remains `interview_active`, respond conversationally with relevant guidance and ask only the 1 to 3 highest-impact remaining questions. If the state is `paused` or `blocked_on_user`, do not generate another question batch; present only the existing blockers, confirmation-needed recommendations, and allowed human choices.
 5. If ready, present the Gate A summary and wait for explicit confirmation.
 
 The eight required discovery dimensions and their dispositions are defined in `p2a-intake`. Readiness requires every dimension disposed, no unresolved high-impact question/decision, no unasked high-impact candidate, and no newly introduced blocker.
@@ -94,17 +98,18 @@ When both conditions hold, read `references/memory-recall.md`.
 
 ## Analysis and Decision Presentation
 
-Before asking the user to decide anything, present a written analysis — do not jump straight to a list of options.
+Before asking the user to decide anything, provide enough analysis to make the choice meaningful. During active interview rounds, keep that analysis conversational and scoped to the current 1 to 3 questions. Do not front-load the complete intake analysis or a formal planning document.
 
-The analysis must include:
+For each active-round question:
 
-- A restatement of the idea and the scope you inferred, separating what is clear from what is unknown.
-- Each assumption with its risk level and the reasoning behind it.
-- For every `needs_user_decision`: the question, why it matters, each option with its concrete trade-offs, a recommended option with explicit rationale grounded in the stated goals, constraints, and any prior art, and non-empty canonical `spec.product.*` or `spec.implementation.*` field refs in `blocks`.
+- Acknowledge or answer what the user just said before asking the next question.
+- Explain why the question matters in plain language.
+- Give a recommendation and brief rationale when a useful default exists.
+- Invite a free-form answer, correction, or follow-up instead of requiring the user to select a form option.
 
-Write this analysis into the conversation and the structured `intake_json` fields. Generate `intake.md` only as an optional view/export when the user or UI needs a Markdown document. Treat decision-making as a dialogue: invite the user to correct your understanding and give free-form feedback, not only to pick options. Do not collapse several distinct high-impact decisions into a single multi-select that hides their individual rationale; ask 1 to 3 high-impact questions per round.
+Record the complete structured analysis in `intake_json` silently as the interview progresses. When Gate A summary readiness is reached, present the organized understanding for the first time: restate the idea and inferred scope, separate clear facts from unknowns, explain each assumption with its risk and reasoning, and cover every `needs_user_decision` with why it matters, concrete option trade-offs, a recommended option with rationale, and the affected canonical fields in `blocks`. Do not collapse distinct high-impact decisions into one multi-select.
 
-If `intake.md` is generated, it should follow this recommended soft template, mapping each narrative section to the matching `intake_json` field without changing JSON field names:
+Generate `intake.md` only when the user explicitly requests a Markdown export; presenting the Gate A summary in the conversation does not itself create the file. Prefix an explicit export with the exact first line `<!-- plan2agent:intake-md-export=explicit -->` so the runtime can distinguish it from Markdown that older versions generated automatically. Never generate it automatically during an active, paused, or blocked interview. If generated, follow this recommended soft template, mapping each narrative section to the matching `intake_json` field without changing JSON field names:
 
 1. **Understanding** — restate the idea and inferred scope from `known_facts`, separating what is clear from what remains unknown.
 2. **Assumptions** — cover `assumptions` using each item's `id`, `statement`, `risk`, reasoning, and `confirmation_needed`.
@@ -116,7 +121,7 @@ This is a narrative-first recommended structure, not a blank form. Preserve the 
 
 ## Resume Rules
 
-- When the user answers `CQ-n` or `ND-n`, merge the answer into the existing item, update its status and affected discovery dimensions, update round/no-progress counters, and recompute `intake_json.interview`. Do not renumber or recreate answered ids. If a generated `gate-a-intake/intake.md` view exists, refresh it from JSON instead of editing it as a second source of truth.
+- When the user answers `CQ-n` or `ND-n`, merge the answer into the existing item, update its status and affected discovery dimensions, update round/no-progress counters, and recompute `intake_json.interview`. Do not renumber or recreate answered ids. Refresh an existing user-requested `gate-a-intake/intake.md` export from JSON instead of editing it as a second source of truth, but do not create a new Markdown view during an active round.
 - On `resume_from: interview`, continue only the current interview batch or select the next 1 to 3 questions after merging new answers.
 - On `resume_from: gate-a-summary`, present the compact summary and set `awaiting_gate_a_confirmation`; do not synthesize Gate B in advance.
 - On `resume_from: spec`, require a validated `gate_a_confirmed` state and Gate A `approval_audit`, then synthesize Gate B in the same session.
@@ -142,6 +147,8 @@ Return intermediate artifacts in fenced code blocks named exactly:
 
 `intake_json`, `spec_json`, `task_graph_json`, and `review_json` must conform to `p2a` package schema `intake.schema.json`, `p2a` package schema `spec.schema.json`, `p2a` package schema `task-graph.schema.json`, and `p2a` package schema `review.schema.json` respectively. `intake_json.evidence` and `spec_json.evidence` carry all user, local, and web sources used by the run.
 
+The active Gate A interview is the exception to inline artifact presentation: persist the canonical `intake_json` file silently, but do not emit its fenced block until the Gate A summary is presented or the user explicitly asks to inspect/export the structured state.
+
 ## Artifact Persistence
 
 In addition to the inline state sections, the harness orchestrator writes canonical JSON artifacts to files so the user and tools can review them before any gate. In a scaffold project, use `.plan2agent/project.config.json.projectId` as the canonical `project_id`; if it is missing, fall back to `.plan2agent/manifest.json.projectId`, then an existing artifact/spec/task graph project id, then the target/project root basename normalized to kebab-case. Treat the directory basename as a fresh-scaffold seed, not the source of truth. Only derive a kebab-case id from the idea when no scaffold config, manifest, or existing artifact id exists. Keep all files for one run under `.plan2agent/artifacts/<project_id>/` using gate-specific folders:
@@ -152,7 +159,7 @@ In addition to the inline state sections, the harness orchestrator writes canoni
 - `gate-d-review/review.json` — the `review_json` artifact
 - `preflight-research/` — optional copied Feature Radar artifacts. Treat these as read-only input evidence, not gate state.
 
-Optional/generated Markdown views may be written beside the JSON files when needed for export, sharing, or a UI preview: `status.md`, `gate-a-intake/intake.md`, `gate-b-spec/product-spec.md`, `gate-b-spec/implementation-plan.md`, and `gate-d-review/review-report.md`. These Markdown files are never the source of truth; regenerate them from JSON rather than preserving independent edits. Only the harness orchestrator writes files; subagents stay read-only and return their content for the orchestrator to persist. Continue to surface the inline named JSON sections as well so resume and paste-in still work.
+Optional/generated Markdown views may be written beside the JSON files when needed for export, sharing, or a UI preview: `status.md`, `gate-a-intake/intake.md`, `gate-b-spec/product-spec.md`, `gate-b-spec/implementation-plan.md`, and `gate-d-review/review-report.md`. These Markdown files are never the source of truth; regenerate them from JSON rather than preserving independent edits. Only the harness orchestrator writes files; subagents stay read-only and return structured content for the orchestrator to persist. During an active, paused, or blocked Gate A interview, silently update `intake.json` after each round and do not generate `intake.md` unless the user explicitly requests an export. Surface the named `intake_json` section with the Gate A summary, not before.
 
 ### Generated `status.md` View
 
@@ -199,11 +206,13 @@ Do not retype gate status facts from memory. Pull gate status, task counts, `rea
 
 ## Output Modes
 
-- **Active or blocked interview:** Write `gate-a-intake/intake.json`, optionally generate `gate-a-intake/intake.md`, present the current understanding and the bounded question batch or blockers, invite free-form answers, and stop at Gate A.
-- **Gate A confirmation:** Present the compact understanding summary, invite corrections or explicit confirmation, and stop without creating Gate B. After confirmation is received in the next user turn, persist the Gate A audit and create only the Gate B draft in that turn.
+- **Active interview:** Silently write `gate-a-intake/intake.json` as recovery bookkeeping after each round. Do not announce, inline, or present the snapshot as an artifact. Do not generate `gate-a-intake/intake.md` unless the user explicitly requests a Markdown export. Reply as a natural planning conversation: acknowledge or answer the user's latest message, offer a recommendation with brief rationale when useful, weave in at most 1 to 3 questions, invite free-form answers and follow-up questions, and stop at Gate A.
+- **Paused interview:** Silently write `gate-a-intake/intake.json` without generating a new question batch or automatically resuming the interview. Do not announce, inline, or present the snapshot as an artifact, and do not generate `gate-a-intake/intake.md` unless the user explicitly requests a Markdown export. Present the current understanding, blockers, and confirmation-needed recommendations, then offer the choices to continue, accept a recommendation, answer an existing blocker, or remain paused.
+- **Blocked interview:** Silently write `gate-a-intake/intake.json` without generating a new question batch or automatically resuming the interview. Do not announce, inline, or present the snapshot as an artifact, and do not generate `gate-a-intake/intake.md` unless the user explicitly requests a Markdown export. Present only materialized CQ, ND, or discovery-dimension blockers and confirmation-needed recommendations; ask the user to answer an existing item directly, accept a recommendation, or defer an item. At `hard_limit`, every blocker must already be materialized and no continue-interview choice is allowed.
+- **Gate A confirmation:** Present the compact organized understanding for the first time, generate `gate-a-intake/intake.md` only if the user explicitly requests the Markdown export, invite corrections or explicit confirmation, and stop without creating Gate B. After confirmation is received in the next user turn, persist the Gate A audit and create only the Gate B draft in that turn.
 - **Draft spec:** Write `gate-b-spec/spec.json` with `approval: draft`, optionally generate product/implementation Markdown views, present it for review, and stop at Gate B before the task graph.
 - **Approved planning output:** Write all canonical JSON artifact files, optionally refresh generated Markdown views, and return the state sections after gates pass. In a co-located scaffold project, make the next action `p2a iteration init --artifacts .plan2agent/artifacts/<project_id> --iteration-id v1-mvp` and explicitly state that development must not start from the root `gate-c-task-graph/task-graph.json`.
-- **Resume output:** Regenerate only the downstream JSON artifacts and optional generated views, plus a short changelog of which decisions were applied.
+- **Resume output:** During an active Gate A resume, silently refresh only `intake.json` and continue the conversation without an artifact changelog or new Markdown view. After Gate A, regenerate only the downstream JSON artifacts and requested/generated views, plus a short changelog of which decisions were applied.
 
 ## Rules
 
@@ -211,6 +220,7 @@ Do not retype gate status facts from memory. Pull gate status, task counts, `rea
 - Do NOT edit application or source code, install dependencies, run shell commands for implementation, or perform git operations.
 - Subagents remain strictly read-only; only the harness orchestrator persists artifact files.
 - Treat JSON as canonical. Markdown files are generated views/exports and must not be used as independent state.
+- Keep active Gate A persistence invisible in the user-facing conversation. Never lead an interview round with an artifact write notice, an `intake_json` dump, or a generated `intake.md`.
 - Do not claim that implementation happened.
 - Mark unresolved decisions as `needs_user_decision` with non-empty canonical spec field refs in `blocks`.
 - Before Gate A confirmation, require every resolved CQ/ND to declare `canonical_effect`: `change` requires non-empty actual `affected_fields`, while `preserve_baseline` requires an existing baseline and empty `affected_fields`. Cover every actual CQ/ND and non-open discovery dimension `affected_fields` entry with deterministic `interview.spec_updates`. In greenfield work, every confirmed/assumed dimension must affect at least one canonical field or be marked `not_applicable`, and every update must use `replace` because no baseline canonical field exists. Cite contributing questions and dimensions, use replace/remove rather than append when current input overrides the baseline, and reject no-op updates.
