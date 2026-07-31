@@ -25,7 +25,7 @@
 | 반복 close | `p2a iteration close` | close-ready active 반복을 `archived` metadata로 표시하고 `current-spec.json.closed_iterations`에 기록한다. |
 | archived 감사 | `p2a iteration validate` | close 시 기록한 artifact 존재 여부/hash와 현재 파일 상태를 기본 검증으로 비교한다. legacy/migration 상황은 `--skip-archive-audit`로 우회한다. |
 | 다음 반복 open | `p2a iteration open` | archived + composed baseline 위에 새 active 반복 skeleton과 `pending_iteration`을 생성한다. |
-| Gate A/B draft | `p2a iteration draft` | Gate A-only 초기 반복은 Gate B 초안을 만들고, baseline이 있는 반복은 delta Gate A/B 초안을 생성한다. |
+| Gate A/B draft | `p2a iteration draft` | Gate A-only 초기 반복은 확인된 intake로 Gate B 초안을 만들고, baseline이 있는 반복은 먼저 interview-aware Gate A를 만든 뒤 명시적 Gate A 확인 후 delta Gate B를 생성한다. |
 | Gate B 승인 반영 | `p2a iteration promote-spec` | approved active spec을 기록하고, 초기 반복처럼 baseline이 없던 경우 `effective_spec_ref`를 설정한다. |
 | agent 저작 Gate C backbone | `p2a iteration context`, `validate --stage gate-c-draft`, `promote-tasks` | task 작성용 context JSON 출력, draft task graph 검증, 사람 승인 audit 이후 canonical task graph 승격을 제공한다. 상세 계약은 §10이다. |
 | diff 기반 task graph 초안 | `p2a iteration diff-tasks` | active spec과 baseline spec의 field 차이를 semantic group으로 병합/분할해 Gate C task graph 초안을 생성한다. |
@@ -40,7 +40,7 @@
 | 범위 | 현재 구현 | 남은 구현 |
 | --- | --- | --- |
 | `status.md` 반복 인덱스 | 전체 반복 history, close audit, handoff audit, maintenance 요약을 누적 렌더링한다. | 더 풍부한 사용자용 diff/요약은 후속 UX 항목이다. |
-| baseline-aware Gate A/B | 초기 Gate A-only 초안과 baseline 기반 delta 초안을 만든다. | 구조적 질문 재생성, 사용자 답변 재사용/재처분 로직이 필요하다. |
+| baseline-aware Gate A/B | 구조화된 interview state, 1~3개 첫 질문 batch, Gate A 명시적 확인 차단, baseline 답변/disposition provenance, full-shaped spec의 delta-first view를 제공한다. | 질문 문구와 변경 영향의 고도화된 의미 판단은 harness agent가 수행하며 품질 평가는 지속 dogfooding한다. |
 | 구조적 diff task | spec field 차이를 semantic group으로 병합/분할하고, 완료 task overlap은 rework로 표시한다. 기존 정본을 `--force`로 다시 만들 수 있는 범위는 모든 task가 `todo`이고 active iteration run history가 없는 실행 전뿐이며 이때 active task id를 재사용한다. | code-aware/LLM 기반 의미 판단은 후속 실행 레이어에서 다룬다. |
 | agent 저작 task gate | backbone(`context`, `gate-c-draft` 검증, `promote-tasks`), `p2a-task-author` 스킬, 정식 `task-context` schema, provenance sidecar가 구현됐다. 정본 교체는 모든 task가 `todo`이고 run history가 없는 실행 전 구간에서만 명시적 `--replace-existing`으로 허용하며, 실행 시작 뒤에는 task를 다시 `todo`로 열어도 새 feature iteration 또는 maintenance lane을 사용한다. 상세 계약은 §10이다. | richer code-aware task authoring은 후속 실행 레이어에서 다룬다. |
 | archived close | close artifact 존재 여부/hash 기록과 기본 validate-time archive audit을 제공한다. | 기존 pre-audit artifact migration은 필요할 때 `--skip-archive-audit`로 우회한다. |
@@ -337,16 +337,18 @@ p2a iteration open \
   --idea "<change idea>"
 ```
 
-`open`은 현재 active 반복이 `close`로 archived 되었고 `current-spec.json.closed_iterations`/`last_closed_iteration`에 기록된 경우에만 새 반복 skeleton을 생성한다. 닫힌 반복이 2개 이상이면 `current-spec.json.effective_spec_ref`가 조합본(`current-spec.json`)이어야 하므로, 다음 반복을 열기 전에 `compose`를 실행해야 한다. 새 반복에는 `iteration.json`, `README.md`, Gate A-D 디렉터리, Gate A/B 작성 위치 안내가 생기며, `current-spec.json.active_iteration`은 새 반복을 가리킨다. 루트 `status.md`는 그 상태에서 생성되는 view다. 이 시점에는 baseline-aware spec 자동 생성은 하지 않으므로 Gate B-D JSON 산출물이 생기기 전까지 `validate`는 실패한다.
+`open`은 현재 active 반복이 `close`로 archived 되었고 `current-spec.json.closed_iterations`/`last_closed_iteration`에 기록된 경우에만 새 반복 skeleton을 생성한다. 닫힌 반복이 2개 이상이면 `current-spec.json.effective_spec_ref`가 조합본(`current-spec.json`)이고 모든 closed 반복이 `composed_from`에 포함돼야 하므로, 다음 반복을 열기 전에 최신 `compose`를 실행해야 한다. composed baseline은 새 반복의 `baseline/current-spec.json`에 immutable snapshot으로 저장하고 SHA-256을 pending state와 iteration metadata에 기록한다. 새 반복에는 `iteration.json`, `README.md`, Gate A-D 디렉터리, Gate A/B 작성 위치 안내가 생기며, `current-spec.json.active_iteration`은 새 반복을 가리킨다. 루트 `status.md`는 그 상태에서 생성되는 view다. 이 시점에는 baseline-aware spec 자동 생성은 하지 않으므로 Gate B-D JSON 산출물이 생기기 전까지 `validate`는 실패한다.
 
 ```bash
 p2a iteration draft \
   --artifacts .plan2agent/artifacts/<project_id>
 ```
 
-`draft`는 `open`으로 저장된 `current-spec.json.pending_iteration.idea`와 `baseline_effective_spec_ref`를 읽어 active 반복의 Gate A/B 초안을 생성한다.
+`draft`는 `open`으로 저장된 `current-spec.json.pending_iteration.idea`, `baseline_effective_spec_ref`, `baseline_effective_spec_sha256`을 읽는다. composed baseline이면 immutable snapshot의 hash와 current-effective composition 일치를 먼저 검증한다. baseline이 있는 반복의 첫 호출은 1~3개 질문 batch와 canonical `affected_fields`를 가진 8개 discovery dimension disposition을 포함한 Gate A interview 초안만 생성한다. 질문의 `blocks`는 잠재 영향이고 답변 후 `affected_fields`는 실제 변경이다. Resolved CQ/ND는 `canonical_effect`를 명시하며, `change`는 non-empty `affected_fields`, 기존 baseline 유지 답변은 `preserve_baseline`과 빈 `affected_fields`를 기록하고 no-op update를 만들지 않는다. 질문 없이 readiness에 도달하더라도 변경 dimension은 실제 값을 바꾸는 exact `spec_updates`와 `source_dimension_ids`를 기록해야 한다. 이 시점에는 Gate B `spec.json`을 만들지 않는다.
 
 초기 Gate A-only 반복에서는 `baseline_effective_spec_ref`가 없어도 기존 `gate-a-intake/intake.json`을 사용해 Gate B 초안을 생성한다. 이 경우 기존 intake 파일은 유지하고 Gate B 산출물만 쓴다.
+
+baseline-aware Gate A는 기존 source intake/spec에서 답변된 `ND-n`과 `CQ-n` disposition을 `baseline_context`에 provenance와 함께 보존한다. harness는 관련 답변을 재사용하고 변경되거나 충돌하는 영역만 다시 질문한다. 사용자가 Gate A 이해 요약을 명시적으로 확인하면 `intake.interview.state: "gate_a_confirmed"`, `status: "ready_for_spec"`, `approval_audit`을 기록한다. 같은 harness session에서 `draft`를 이어 호출하면 그때 Gate B 초안과 delta-first Markdown view를 생성한다.
 
 생성 산출물:
 
@@ -356,7 +358,7 @@ p2a iteration draft \
 - `iterations/<iter-id>/gate-b-spec/product-spec.md`
 - `iterations/<iter-id>/gate-b-spec/implementation-plan.md`
 
-기본 동작은 기존 Gate A/B 파일이 있으면 중단한다. 변경 아이디어를 덮어 쓰려면 `--idea "<change idea>"`, 기존 초안을 재생성하려면 `--force`를 명시한다. 생성된 `spec.json`은 `approval: "draft"`이므로 Gate C task graph 생성 전 사용자 검토와 승인 단계가 필요하다. `current-spec.json.effective_spec_ref`는 계속 baseline spec을 가리키고, 새 반복 spec은 `pending_iteration.artifacts.spec_ref`에 기록된다.
+기본 동작은 기존 Gate B 파일이 있으면 중단한다. 확인 전 Gate A intake가 있으면 이를 덮어쓰지 않고 현재 interview 상태를 유지한다. 변경 아이디어를 덮어 쓰려면 `--idea "<change idea>"`, Gate A/B 초안을 처음부터 재생성하려면 `--force`를 명시한다. `--force`로 baseline-aware 초안을 재생성하면 이전 Gate B draft를 제거하고 새 Gate A interview부터 다시 시작한다. 생성된 `spec.json`은 `approval: "draft"`이므로 Gate C task graph 생성 전 사용자 검토와 승인 단계가 필요하다. `current-spec.json.effective_spec_ref`는 계속 baseline spec을 가리키고, 새 반복 spec은 `pending_iteration.artifacts.spec_ref`에 기록된다.
 
 ```bash
 p2a iteration promote-spec \
@@ -450,6 +452,7 @@ Gate B가 승인되면 `p2a iteration promote-spec`로 `effective_spec_ref`를 `
     "idea": "변경 아이디어",
     "baseline_iteration": "v1-mvp",
     "baseline_effective_spec_ref": "iterations/v1-mvp/gate-b-spec/spec.json",
+    "baseline_effective_spec_sha256": "<sha256>",
     "artifacts": {
       "intake_ref": "iterations/iter-002/gate-a-intake/intake.json",
       "spec_ref": "iterations/iter-002/gate-b-spec/spec.json"
@@ -539,7 +542,7 @@ p2a iteration validate \
 
 - active 반복 디렉터리가 존재한다.
 - `gate-a-intake/intake.json`이 schema 검증을 통과한다.
-- `current-spec.json.pending_iteration.status`가 `gate_a_ready`, `active_planning`, `gate_b_draft` 중 하나다.
+- `current-spec.json.pending_iteration.status`가 `active_planning`, `gate_a_interview`, `gate_a_ready`, `gate_b_draft`, `gate_b_approved` 중 하나다.
 - Gate B-D 누락은 실패가 아니라 pending 상태로 보고한다.
 
 후속 validator 확장은 legacy archive migration과 agent 실행 결과 audit이다.
@@ -548,11 +551,11 @@ p2a iteration validate \
 
 기존 `p2a handoff`는 greenfield `.plan2agent/artifacts/<project_id>/gate-*` root를 계속 지원한다. 반복 구조 root(`current-spec.json` + `iterations/`)를 넘기면 기본값은 active 반복 인계다.
 
-1. `--iteration-id <id>`를 명시해 특정 반복을 인계한다.
-2. `current-spec.json.active_iteration`을 읽어 active 반복을 자동 선택한다.
+1. `current-spec.json.active_iteration`을 읽어 active 반복을 선택한다.
+2. `--iteration-id <id>`를 명시한 경우에도 해당 id가 active 반복과 일치하는지 확인한다.
 3. 대상 프로젝트에는 `.plan2agent/artifacts/`에 active 반복 산출물을 배치하고, `.plan2agent/current-spec.json`도 함께 배치한다.
 
-기본값은 `--iteration-id active`다. 다만 명령형 재현성을 위해 특정 iteration id override도 제공한다.
+기본값은 `--iteration-id active`다. 특정 iteration id를 명시할 수 있지만 비활성·과거 반복은 Gate bundle과 current spec 상태가 어긋나므로 인계를 거부한다.
 
 ```bash
 p2a handoff \
@@ -647,7 +650,7 @@ p2a iteration context \
   "active_iteration": "iter-002",
   "scope": "feature",
   "idea": "변경 아이디어 또는 버그 설명",
-  "baseline_effective_spec_ref": "current-spec.json",
+  "baseline_effective_spec_ref": "iterations/iter-002/baseline/current-spec.json",
   "effective_spec": { "product": {}, "implementation": {} },
   "existing_tasks": {
     "active": [
@@ -777,7 +780,7 @@ Phase 2 흐름: `context` -> read-only `p2a-task-author` 서브에이전트가 d
 | 4-1 | Gate B-D 반복 구조 validator | 완료 | `p2a iteration validate`가 active 반복 구조와 close-ready 조건을 검증한다. |
 | 4-2 | Gate A-ready/planning validator | 완료 | `--stage`와 `--allow-planning`이 Gate A-only, Gate B draft, Gate B approved 상태를 검증한다. |
 | 4-3 | 반복 open skeleton | 완료 | `p2a iteration open`이 archived + composed baseline 위에 새 반복 디렉터리와 metadata를 만든다. |
-| 5 | baseline-aware Gate A/B draft | 부분 완료 | `draft`가 Gate A-only 초기 Gate B 초안과 baseline 기반 delta intake/spec 초안을 만든다. 질문 재생성 고도화는 후속이다. |
+| 5 | baseline-aware Gate A/B draft | 완료 | `draft`가 baseline 답변/disposition provenance를 가진 Gate A interview를 먼저 만들고, explicit Gate A confirmation 뒤에만 full-shaped delta spec과 delta-first review view를 생성한다. 1~3개 batch, 3/5 round, no-progress 2회, `p2a next` 전이 계약은 schema/validator/skill/test로 고정한다. |
 | 5-1 | Gate B 승인 반영 | 완료 | `promote-spec`가 approved active spec을 기록하고, 후속 반복에서는 baseline/composition pointer를 보존한다. |
 | 5-2 | diff 기반 task graph 초안 | 완료 | `diff-tasks`가 spec field 차이를 semantic group으로 병합/분할하고 rework/reuse/verification dependency를 기록한 Gate C task graph 초안을 만든다. |
 | 6 | handoff 적응 | 완료 | `p2a handoff`가 active 반복 산출물, current-effective view, maintenance graph를 대상 프로젝트로 복사하고 handoff 기준점을 기록한다. |

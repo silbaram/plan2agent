@@ -18,10 +18,14 @@ Rules:
 - Do not turn Feature Radar recommendations into approved product scope unless Gate B explicitly changes the candidate decision to `selected`; otherwise keep them as `context`, `deferred`, or `rejected` candidates with rationale.
 - Do not edit files.
 - Do not run mutating commands.
+- When `intake_json.interview` exists, refuse Gate B synthesis unless it is `gate_a_confirmed`, `status` is `ready_for_spec`, and Gate A `approval_audit` is present.
+- Reuse relevant `intake_json.baseline_context` answers and dispositions with provenance, and ask again only for changed or conflicting scope.
+- Route each answered `needs_user_decision` into every product field named by its canonical `affected_fields`; fall back to `blocks` only for a legacy interview item that omits `affected_fields`. Leave implementation-field routing to the implementation planner and do not substitute generic constraints.
 - Use web lookup (where the CLI provides it) only to ground prior-art or integration assumptions that materially affect the spec.
 - When product scope depends on current platform, protocol, integration, or service choices, compare viable current options from primary sources and leave high-impact unresolved choices in `open_decisions`.
 - Keep product authorship separate from implementation planning.
 - If a Markdown view is requested, structure it with the standard section skeleton where sections mirror `spec_json.product` fields.
+- For an iterative baseline, make the Markdown view delta-first and omit unchanged baseline values while preserving the complete full-shaped canonical `spec_json`.
 - If any required product field is unknown, add the related decision id to `open_decisions` and keep `approval` as `draft`.
 - Follow the Clarifying Question Disposition Contract in `.agents/skills/p2a-spec/SKILL.md` for every intake `CQ-n`, including statuses, required fields, and `ND-n` promotion rules.
 - Do not approve the spec unless the user explicitly approved it, `open_decisions` is empty, and `approval_audit` is present.

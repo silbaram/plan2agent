@@ -2,6 +2,7 @@
 /** Handoff approved Plan2Agent artifacts into a target project without executing build/install/codegen. */
 
 import {
+  chmodSync,
   copyFileSync,
   existsSync,
   lstatSync,
@@ -9,11 +10,13 @@ import {
   readFileSync,
   readdirSync,
   realpathSync,
+  renameSync,
+  rmSync,
   rmdirSync,
   unlinkSync,
   writeFileSync,
 } from 'node:fs';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { createInterface } from 'node:readline/promises';
 import path from 'node:path';
 import process from 'node:process';
@@ -21,7 +24,9 @@ import { Readable } from 'node:stream';
 import {
   loadJson,
   validateArtifactRoot,
+  validateApprovalAuditData,
   validateHandoffReadyArtifactRoot,
+  validateIntake,
   validateMilestoneReview,
   validateReviewPass,
   validateRunsDir,
@@ -29,7 +34,10 @@ import {
   validateTaskGraph,
   ValidationError,
 } from './validate_artifacts.mjs';
-import { resolveIterationState } from './p2a_iteration_state.mjs';
+import {
+  resolveIterationState,
+  validateCurrentSpecCompositionData,
+} from './p2a_iteration_state.mjs';
 import { renderIterationIndexMarkdown } from './p2a_iteration.mjs';
 import {
   normalizePath,
@@ -59,6 +67,11 @@ import {
   FEATURE_RADAR_COPY_FILES,
   FEATURE_RADAR_PREFLIGHT_DIR,
 } from './p2a_radar_preflight.mjs';
+import {
+  atomicWriteJson,
+  atomicWriteText,
+  withRunStoreLocks,
+} from './p2a_run_store.mjs';
 
 const P2A_PATHS = resolveP2aPaths(import.meta.url);
 const ROOT = P2A_PATHS.toolRoot;
@@ -133,7 +146,7 @@ function usage() {
     '',
     'Handoff options:',
     '  --mode copy|move     Copy artifacts by default; move removes source files after successful write.',
-    '  --iteration-id <id>  Use iterative artifacts. Default: active when --artifacts is an iterative root.',
+    '  --iteration-id <id>  Use iterative artifacts. The id must match current-spec.json active_iteration; default: active.',
     '  --include-intake     Include generated gate-a-intake/intake.md when present (intake.json is always copied).',
     '  --tools <list>       Copy portable P2A AI tool assets for codex,claude,gemini. Use comma list or all.',
     '  --include-team-bigfive',
@@ -369,19 +382,34 @@ function assertNoCurrentSpecOpenDecisions(currentSpec) {
 
 function validateIterationHandoffSource(artifactsRoot, projectId, iterationIdArg) {
   assertSafeIterationId(iterationIdArg);
-  const state = iterationIdArg === DEFAULT_ITERATION_ID
-    ? resolveIterationState(artifactsRoot)
-    : resolveIterationState(artifactsRoot, { requireReady: false });
-  const iterationId = iterationIdArg === DEFAULT_ITERATION_ID ? state.activeIteration : iterationIdArg;
+  const structuralState = resolveIterationState(artifactsRoot, { requireReady: false });
+  const iterationId = iterationIdArg === DEFAULT_ITERATION_ID
+    ? structuralState.activeIteration
+    : iterationIdArg;
+  if (iterationId !== structuralState.activeIteration) {
+    throw new ValidationError(
+      `handoff --iteration-id must select the active iteration ${JSON.stringify(structuralState.activeIteration)}, got ${JSON.stringify(iterationId)}`,
+    );
+  }
+  const state = resolveIterationState(artifactsRoot);
   const paths = iterationGatePaths(artifactsRoot, iterationId, state.currentSpecPath);
 
   assertFile(paths.currentSpec, 'current-spec.json');
   assertNoCurrentSpecOpenDecisions(state.currentSpec);
+  validateCurrentSpecCompositionData(state.currentSpec, artifactsRoot, {
+    requireNoOpenDecisions: true,
+  });
   assertFile(paths.specJson, `iterations/${iterationId}/gate-b-spec/spec.json`);
   assertFile(paths.taskGraph, `iterations/${iterationId}/gate-c-task-graph/task-graph.json`);
   assertFile(paths.reviewJson, `iterations/${iterationId}/gate-d-review/review.json`);
+  assertFile(paths.intakeJson, `iterations/${iterationId}/gate-a-intake/intake.json`);
+  validateIntake(paths.intakeJson, { artifactRoot: artifactsRoot });
 
-  const spec = validateSpec(paths.specJson);
+  const spec = validateSpec(
+    paths.specJson,
+    paths.intakeJson,
+    { artifactRoot: artifactsRoot },
+  );
   if (spec.approval !== 'approved') throw new ValidationError('handoff requires spec.approval to be approved');
   if (spec.open_decisions.length) throw new ValidationError('handoff requires spec.open_decisions to be empty');
   assertProjectId('spec.project_id', spec.project_id, projectId);
@@ -571,6 +599,286 @@ function resolveMilestoneBundleReference(artifactsRoot, reference, label, baseDi
   return { sourcePath, relativePath: normalizePath(relativePath) };
 }
 
+function projectRelativeBundleCandidate(baseDir, reference) {
+  if (
+    !reference.startsWith('.plan2agent/')
+    && !reference.startsWith(`.plan2agent${path.sep}`)
+  ) {
+    return null;
+  }
+  let current = path.resolve(baseDir);
+  while (true) {
+    const p2aDir = path.join(current, '.plan2agent');
+    if (existsSync(p2aDir) && lstatSync(p2aDir).isDirectory()) {
+      return path.resolve(current, reference);
+    }
+    const parent = path.dirname(current);
+    if (parent === current) return null;
+    current = parent;
+  }
+}
+
+function resolveSpecSourceIntakeBundleReference(
+  artifactsRoot,
+  reference,
+  label,
+  specDir,
+) {
+  if (typeof reference !== 'string' || !reference.trim() || path.isAbsolute(reference)) {
+    throw new ValidationError(`${label} must be a non-empty relative path`);
+  }
+  const root = path.resolve(artifactsRoot);
+  const candidates = [
+    path.resolve(specDir, reference),
+    path.resolve(root, reference),
+    projectRelativeBundleCandidate(specDir, reference),
+  ].filter(Boolean);
+  const seen = new Set();
+  for (const sourcePath of candidates) {
+    const normalizedSource = path.resolve(sourcePath);
+    if (seen.has(normalizedSource)) continue;
+    seen.add(normalizedSource);
+    const relativePath = path.relative(root, normalizedSource);
+    if (
+      !relativePath
+      || relativePath.startsWith('..')
+      || path.isAbsolute(relativePath)
+      || !existsSync(normalizedSource)
+      || !lstatSync(normalizedSource).isFile()
+    ) {
+      continue;
+    }
+    const realRelativePath = path.relative(realpathSync(root), realpathSync(normalizedSource));
+    if (
+      !realRelativePath
+      || realRelativePath.startsWith('..')
+      || path.isAbsolute(realRelativePath)
+    ) {
+      continue;
+    }
+    return {
+      sourcePath: normalizedSource,
+      relativePath: normalizePath(relativePath),
+    };
+  }
+  throw new ValidationError(
+    `${label} cannot be resolved inside the artifact root: ${JSON.stringify(reference)}`,
+  );
+}
+
+function appendCurrentSpecSourceReferences(
+  references,
+  currentSpec,
+  artifactsRoot,
+  label,
+) {
+  for (const [sourceIndex, sourceSpec] of (currentSpec.source_specs ?? []).entries()) {
+    assertSafeIterationId(sourceSpec.iteration_id);
+    references.push({
+      label: `${label}.source_specs[${sourceIndex}].spec_ref`,
+      reference: sourceSpec.spec_ref,
+      baseDir: artifactsRoot,
+    });
+    references.push(
+      {
+        label: `${label}.source_specs[${sourceIndex}] task graph`,
+        reference: normalizePath(path.join(
+          'iterations',
+          sourceSpec.iteration_id,
+          'gate-c-task-graph',
+          'task-graph.json',
+        )),
+        baseDir: artifactsRoot,
+      },
+      {
+        label: `${label}.source_specs[${sourceIndex}] review`,
+        reference: normalizePath(path.join(
+          'iterations',
+          sourceSpec.iteration_id,
+          'gate-d-review',
+          'review.json',
+        )),
+        baseDir: artifactsRoot,
+      },
+    );
+    const metadataRef = normalizePath(path.join(
+      'iterations',
+      sourceSpec.iteration_id,
+      'iteration.json',
+    ));
+    const metadataPath = path.join(artifactsRoot, metadataRef);
+    if (existsSync(metadataPath) && lstatSync(metadataPath).isFile()) {
+      references.push({
+        label: `${label}.source_specs[${sourceIndex}] iteration metadata`,
+        reference: metadataRef,
+        baseDir: artifactsRoot,
+      });
+    }
+  }
+}
+
+function pushPortableArtifactReferenceBundle(
+  plan,
+  references,
+  artifactsRoot,
+  targetRoot,
+  projectId,
+) {
+  const plannedByTarget = new Map(
+    plan.map((item) => [normalizePath(item.targetRelative), item]),
+  );
+  const visitedSources = new Set();
+  for (let index = 0; index < references.length; index += 1) {
+    const {
+      label,
+      reference,
+      baseDir,
+      referenceKind = 'artifact-root',
+    } = references[index];
+    const resolved = referenceKind === 'spec-source-intake'
+      ? resolveSpecSourceIntakeBundleReference(
+          artifactsRoot,
+          reference,
+          label,
+          baseDir,
+        )
+      : resolveMilestoneBundleReference(
+          artifactsRoot,
+          reference,
+          label,
+          baseDir,
+        );
+    const sourceRealPath = realpathSync(resolved.sourcePath);
+    if (visitedSources.has(sourceRealPath)) continue;
+    visitedSources.add(sourceRealPath);
+    const targetRelative = normalizePath(path.join(
+      targetArtifactDir(projectId),
+      resolved.relativePath,
+    ));
+    const existing = plannedByTarget.get(targetRelative);
+    if (existing) {
+      if (
+        !existing.source
+        || realpathSync(existing.source) !== realpathSync(resolved.sourcePath)
+      ) {
+        throw new ValidationError(
+          `${label} target collides with a different planned artifact: ${targetRelative}`,
+        );
+      }
+    } else {
+      pushArtifact(plan, resolved.sourcePath, targetRoot, targetRelative);
+      plannedByTarget.set(targetRelative, plan.at(-1));
+    }
+
+    const sourceData = loadJson(resolved.sourcePath);
+    if (
+      sourceData.schema_version === 'p2a.spec.v1'
+      && typeof sourceData.source_intake === 'string'
+      && sourceData.source_intake.trim()
+    ) {
+      references.push({
+        label: `${label}.source_intake`,
+        reference: sourceData.source_intake,
+        baseDir: path.dirname(resolved.sourcePath),
+        referenceKind: 'spec-source-intake',
+      });
+    }
+    if (
+      sourceData.schema_version === 'p2a.current_spec.v1'
+      && Array.isArray(sourceData.source_specs)
+    ) {
+      appendCurrentSpecSourceReferences(
+        references,
+        sourceData,
+        artifactsRoot,
+        label,
+      );
+    }
+    if (sourceData.schema_version === 'p2a.intake.v1' && sourceData.baseline_context) {
+      references.push(
+        {
+          label: `${label}.baseline_context.spec_ref`,
+          reference: sourceData.baseline_context.spec_ref,
+          baseDir: artifactsRoot,
+        },
+        ...(sourceData.baseline_context.reused_answers ?? []).map((item, answerIndex) => ({
+          label: `${label}.baseline_context.reused_answers[${answerIndex}].source_intake`,
+          reference: item.source_intake,
+          baseDir: artifactsRoot,
+        })),
+        ...(sourceData.baseline_context.reused_question_dispositions ?? [])
+          .map((item, dispositionIndex) => ({
+            label: `${label}.baseline_context.reused_question_dispositions[${dispositionIndex}].source_spec`,
+            reference: item.source_spec,
+            baseDir: artifactsRoot,
+          })),
+      );
+    }
+  }
+}
+
+function pushIntakeBaselineContextBundleIfPresent(
+  plan,
+  intakePath,
+  artifactsRoot,
+  targetRoot,
+  projectId,
+) {
+  const intake = loadJson(intakePath);
+  const baselineContext = intake.baseline_context;
+  if (!baselineContext) return;
+
+  pushPortableArtifactReferenceBundle(
+    plan,
+    [
+      {
+        label: 'baseline_context.spec_ref',
+        reference: baselineContext.spec_ref,
+        baseDir: artifactsRoot,
+      },
+      ...(baselineContext.reused_answers ?? []).map((item, index) => ({
+        label: `baseline_context.reused_answers[${index}].source_intake`,
+        reference: item.source_intake,
+        baseDir: artifactsRoot,
+      })),
+      ...(baselineContext.reused_question_dispositions ?? []).map((item, index) => ({
+        label: `baseline_context.reused_question_dispositions[${index}].source_spec`,
+        reference: item.source_spec,
+        baseDir: artifactsRoot,
+      })),
+    ],
+    artifactsRoot,
+    targetRoot,
+    projectId,
+  );
+}
+
+function pushCurrentSpecCompositionBundleIfPresent(
+  plan,
+  currentSpec,
+  artifactsRoot,
+  targetRoot,
+  projectId,
+) {
+  if (!Array.isArray(currentSpec?.source_specs) || !currentSpec.source_specs.length) {
+    return;
+  }
+  const references = [];
+  appendCurrentSpecSourceReferences(
+    references,
+    currentSpec,
+    artifactsRoot,
+    'current-spec.json',
+  );
+  pushPortableArtifactReferenceBundle(
+    plan,
+    references,
+    artifactsRoot,
+    targetRoot,
+    projectId,
+  );
+}
+
 function pushMilestoneReviewBundleIfExists(plan, artifactsRoot, targetRoot, projectId, iterationId) {
   if (!iterationId) return { reviewFiles: [], evidenceFiles: [] };
   const reviewFiles = [];
@@ -609,7 +917,7 @@ function pushMilestoneReviewBundleIfExists(plan, artifactsRoot, targetRoot, proj
 
     const specData = loadJson(spec.sourcePath);
     if (typeof specData.source_intake === 'string' && specData.source_intake.trim()) {
-      const intake = resolveMilestoneBundleReference(
+      const intake = resolveSpecSourceIntakeBundleReference(
         artifactsRoot,
         specData.source_intake,
         `${checkpoint}.source.spec_ref source_intake`,
@@ -659,6 +967,146 @@ function appendHandoffRecord(currentSpec, record) {
     last_handoff: record,
     handoff_records: [...records, record],
   };
+}
+
+function resolveOptionalApprovalEvidence(artifactsRoot, reference, label) {
+  if (typeof reference !== 'string' || !reference.trim() || path.isAbsolute(reference)) {
+    throw new ValidationError(`${label} must be a non-empty artifact-root-relative path`);
+  }
+  const sourcePath = path.resolve(artifactsRoot, reference);
+  const relativePath = path.relative(path.resolve(artifactsRoot), sourcePath);
+  if (!relativePath || relativePath.startsWith('..') || path.isAbsolute(relativePath)) {
+    throw new ValidationError(`${label} escapes the artifact root: ${JSON.stringify(reference)}`);
+  }
+  if (!existsSync(sourcePath)) return null;
+  assertFile(sourcePath, label);
+  const realRelativePath = path.relative(realpathSync(artifactsRoot), realpathSync(sourcePath));
+  if (!realRelativePath || realRelativePath.startsWith('..') || path.isAbsolute(realRelativePath)) {
+    throw new ValidationError(`${label} resolves outside the artifact root: ${JSON.stringify(reference)}`);
+  }
+  return {
+    sourcePath,
+    relativePath: normalizePath(relativePath),
+  };
+}
+
+function pushApprovalEvidence(plan, sourcePath, targetRoot, targetRelative, label) {
+  const normalizedTarget = normalizePath(targetRelative);
+  const existing = plan.find(
+    (item) => normalizePath(item.targetRelative) === normalizedTarget,
+  );
+  if (existing) {
+    if (
+      !existing.source
+      || realpathSync(existing.source) !== realpathSync(sourcePath)
+    ) {
+      throw new ValidationError(
+        `${label} target collides with a different planned artifact: ${normalizedTarget}`,
+      );
+    }
+    return;
+  }
+  pushArtifact(plan, sourcePath, targetRoot, normalizedTarget);
+}
+
+function gateCApprovalEvidence(artifactsRoot, iterationId, audit) {
+  const canonicalRef = normalizePath(
+    path.join('iterations', iterationId, 'gate-c-task-graph', 'task-graph.json'),
+  );
+  if (!audit.draft_sha256) {
+    return resolveMilestoneBundleReference(
+      artifactsRoot,
+      canonicalRef,
+      `gate_c_approval_audits.${iterationId} canonical task graph`,
+    );
+  }
+
+  const auditRefs = [
+    ...(Array.isArray(audit.approved_artifacts) ? audit.approved_artifacts : []),
+    audit.approved_source,
+  ].filter((reference) => typeof reference === 'string' && reference.trim());
+  const candidateRefs = [];
+  for (const reference of auditRefs) {
+    candidateRefs.push(reference);
+    if (!reference.endsWith('.promoted')) candidateRefs.push(`${reference}.promoted`);
+  }
+  candidateRefs.push(
+    `iterations/${iterationId}/gate-c-task-graph/task-graph.draft.json.promoted`,
+    canonicalRef,
+  );
+
+  for (const reference of [...new Set(candidateRefs.map(normalizePath))]) {
+    const resolved = resolveOptionalApprovalEvidence(
+      artifactsRoot,
+      reference,
+      `gate_c_approval_audits.${iterationId} approval evidence`,
+    );
+    if (
+      resolved
+      && sha256Value(readFileSync(resolved.sourcePath)) === audit.draft_sha256
+    ) {
+      return resolved;
+    }
+  }
+  throw new ValidationError(
+    `gate_c_approval_audits.${iterationId}.draft_sha256 does not match any preserved approval evidence`,
+  );
+}
+
+function bundleCurrentSpecApprovalAudits(
+  plan,
+  currentSpec,
+  selectedIterationId,
+  artifactsRoot,
+  targetRoot,
+  projectId,
+  targetSpecRef,
+) {
+  const next = JSON.parse(JSON.stringify(currentSpec));
+  for (const [iterationId, audit] of Object.entries(next.gate_b_approval_audits ?? {})) {
+    assertSafeIterationId(iterationId);
+    validateApprovalAuditData(audit, `gate_b_approval_audits.${iterationId}`);
+    const source = resolveMilestoneBundleReference(
+      artifactsRoot,
+      `iterations/${iterationId}/gate-b-spec/spec.json`,
+      `gate_b_approval_audits.${iterationId} approved spec`,
+    );
+    const targetRef = iterationId === selectedIterationId
+      ? targetSpecRef
+      : normalizePath(path.join(targetArtifactDir(projectId), source.relativePath));
+    pushApprovalEvidence(
+      plan,
+      source.sourcePath,
+      targetRoot,
+      targetRef,
+      `gate_b_approval_audits.${iterationId}`,
+    );
+    audit.approved_artifacts = [targetRef];
+    if (Object.hasOwn(audit, 'approved_source')) audit.approved_source = targetRef;
+  }
+
+  for (const [iterationId, audit] of Object.entries(next.gate_c_approval_audits ?? {})) {
+    assertSafeIterationId(iterationId);
+    validateApprovalAuditData(audit, `gate_c_approval_audits.${iterationId}`);
+    const source = gateCApprovalEvidence(artifactsRoot, iterationId, audit);
+    const targetRef = iterationId === selectedIterationId
+      ? normalizePath(path.join(
+          targetArtifactDir(projectId),
+          'gate-c-task-graph',
+          path.basename(source.relativePath),
+        ))
+      : normalizePath(path.join(targetArtifactDir(projectId), source.relativePath));
+    pushApprovalEvidence(
+      plan,
+      source.sourcePath,
+      targetRoot,
+      targetRef,
+      `gate_c_approval_audits.${iterationId}`,
+    );
+    audit.approved_artifacts = [targetRef];
+    if (Object.hasOwn(audit, 'approved_source')) audit.approved_source = targetRef;
+  }
+  return next;
 }
 
 function handoffRecord(args, targetRoot, sourceInfo, maintenanceIncluded, maintenanceTaskCount, createdAt) {
@@ -2566,21 +3014,49 @@ function buildPlan(paths, args, artifactsRoot, targetRoot, sourceInfo, options =
   const targetIntakeRef = normalizePath(targetIntakeJsonPath(args.projectId));
   const targetSpecRef = normalizePath(targetSpecJsonPath(args.projectId));
   const targetTaskGraphRef = normalizePath(targetTaskGraphPath(args.projectId));
+  assertFile(paths.intakeJson, 'gate-a-intake/intake.json');
+  const targetIntakeContent = rebaseIntakeApprovalAudit(
+    paths.intakeJson,
+    targetIntakeRef,
+    sourceInfo.iterationId,
+  );
+  const targetIntakeSha256 = sha256Value(targetIntakeContent);
   pushArtifactIfExists(plan, paths.productSpec, targetRoot, path.join(artifactTargetDir, 'gate-b-spec', 'product-spec.md'));
   pushArtifactIfExists(plan, paths.implementationPlan, targetRoot, path.join(artifactTargetDir, 'gate-b-spec', 'implementation-plan.md'));
-  pushArtifact(plan, paths.specJson, targetRoot, targetSpecJsonPath(args.projectId), { type: 'rewrite-json', transform: (source) => rebaseSpecSourceIntake(source, targetIntakeRef, targetSpecRef) });
+  pushArtifact(plan, paths.specJson, targetRoot, targetSpecJsonPath(args.projectId), {
+    type: 'rewrite-json',
+    transform: (source) => rebaseSpecSourceIntake(
+      source,
+      targetIntakeRef,
+      targetSpecRef,
+      targetIntakeSha256,
+    ),
+  });
   pushArtifact(plan, paths.taskGraph, targetRoot, targetTaskGraphPath(args.projectId), { type: 'rewrite-json', transform: (source) => rebaseTaskGraphSourceSpec(source, targetSpecRef) });
   pushArtifactIfExists(plan, paths.reviewReport, targetRoot, path.join(artifactTargetDir, 'gate-d-review', 'review-report.md'));
   pushArtifact(plan, paths.reviewJson, targetRoot, path.join(artifactTargetDir, 'gate-d-review', 'review.json'));
 
-  assertFile(paths.intakeJson, 'gate-a-intake/intake.json');
-  pushArtifact(plan, paths.intakeJson, targetRoot, targetIntakeJsonPath(args.projectId));
+  pushArtifact(plan, paths.intakeJson, targetRoot, targetIntakeJsonPath(args.projectId), {
+    type: 'rewrite-json',
+    transform: () => targetIntakeContent,
+  });
   if (args.includeIntake) {
     pushArtifactIfExists(plan, paths.intakeMd, targetRoot, path.join(artifactTargetDir, 'gate-a-intake', 'intake.md'));
   }
 
-  const currentSpecForHandoff = record && sourceInfo.currentSpec
-    ? appendHandoffRecord(sourceInfo.currentSpec, record)
+  const currentSpecWithPortableApprovals = record && sourceInfo.currentSpec
+    ? bundleCurrentSpecApprovalAudits(
+        plan,
+        sourceInfo.currentSpec,
+        sourceInfo.iterationId,
+        artifactsRoot,
+        targetRoot,
+        args.projectId,
+        targetSpecRef,
+      )
+    : null;
+  const currentSpecForHandoff = currentSpecWithPortableApprovals
+    ? appendHandoffRecord(currentSpecWithPortableApprovals, record)
     : null;
   if (currentSpecForHandoff) {
     pushGeneratedText(
@@ -2599,6 +3075,13 @@ function buildPlan(paths, args, artifactsRoot, targetRoot, sourceInfo, options =
       pushArtifact(plan, sourceInfo.currentSpecPath, targetRoot, path.join('.plan2agent', 'current-spec.json'));
     }
   }
+  pushCurrentSpecCompositionBundleIfPresent(
+    plan,
+    currentSpecForHandoff,
+    artifactsRoot,
+    targetRoot,
+    args.projectId,
+  );
 
   const maintenanceGraphPath = sourceInfo.kind === 'iteration' ? maintenanceTaskGraphSourcePath(artifactsRoot) : null;
   const maintenanceFiles = [];
@@ -2614,6 +3097,13 @@ function buildPlan(paths, args, artifactsRoot, targetRoot, sourceInfo, options =
     : { reviewFiles: [], evidenceFiles: [] };
   const milestoneReviewFiles = milestoneBundle.reviewFiles;
   const milestoneEvidenceFiles = milestoneBundle.evidenceFiles;
+  pushIntakeBaselineContextBundleIfPresent(
+    plan,
+    paths.intakeJson,
+    artifactsRoot,
+    targetRoot,
+    args.projectId,
+  );
 
   const codexProfile = resolveCodexAgentProfile(args.codexProfile);
   if (legacyRuntime) {
@@ -2721,13 +3211,36 @@ function buildPlan(paths, args, artifactsRoot, targetRoot, sourceInfo, options =
   return plan;
 }
 
-function rebaseSpecSourceIntake(source, sourceIntakeRef, sourceSpecRef) {
+function rebaseSpecSourceIntake(
+  source,
+  sourceIntakeRef,
+  sourceSpecRef,
+  sourceIntakeSha256,
+) {
   const spec = loadJson(source);
   spec.source_intake = sourceIntakeRef;
+  spec.source_intake_sha256 = sourceIntakeSha256;
   if (spec.approval_audit) {
     spec.approval_audit.approved_artifacts = [sourceSpecRef];
   }
   return `${JSON.stringify(spec, null, 2)}\n`;
+}
+
+function rebaseIntakeApprovalAudit(source, targetIntakeRef, sourceIterationId = null) {
+  const intake = loadJson(source);
+  if (intake.interview && sourceIterationId) {
+    const recordedIterationId = intake.interview.seed_iteration_id;
+    if (recordedIterationId && recordedIterationId !== sourceIterationId) {
+      throw new ValidationError(
+        `intake.interview.seed_iteration_id must match handoff iteration ${JSON.stringify(sourceIterationId)}, got ${JSON.stringify(recordedIterationId)}`,
+      );
+    }
+    intake.interview.seed_iteration_id = sourceIterationId;
+  }
+  if (intake.approval_audit) {
+    intake.approval_audit.approved_artifacts = [targetIntakeRef];
+  }
+  return `${JSON.stringify(intake, null, 2)}\n`;
 }
 
 function rebaseTaskGraphSourceSpec(source, sourceSpecRef) {
@@ -2798,27 +3311,237 @@ function writePlan(plan) {
   for (const item of plan) writePlanItem(item);
 }
 
-function cleanupMovedSources(plan, artifactsRoot) {
-  const artifactRootResolved = path.resolve(artifactsRoot);
-  for (const item of plan) {
-    if (!item.source) continue;
-    const source = path.resolve(item.source);
-    const relative = path.relative(artifactRootResolved, source);
-    const isArtifactSource = relative && !relative.startsWith('..') && !path.isAbsolute(relative);
-    if (isArtifactSource && existsSync(source)) unlinkSync(source);
-  }
-  for (const directory of ['gate-a-intake', 'gate-b-spec', 'gate-c-task-graph', 'gate-d-review']) {
-    const directoryPath = path.join(artifactRootResolved, directory);
-    if (existsSync(directoryPath) && readdirSync(directoryPath).length === 0) rmdirSync(directoryPath);
+function lstatIfPresent(filePath) {
+  try {
+    return lstatSync(filePath);
+  } catch (error) {
+    if (error?.code === 'ENOENT') return null;
+    throw error;
   }
 }
 
-function recordSourceHandoff(artifactsRoot, sourceInfo, record) {
+function capturePlanTargetSnapshot(plan, targetRoot) {
+  const resolvedTargetRoot = path.resolve(targetRoot);
+  const targetPaths = [...new Set(plan.map((item) => path.resolve(item.target)))];
+  const existingDirectories = new Set();
+  for (const targetPath of targetPaths) {
+    let directory = path.dirname(targetPath);
+    while (
+      directory === resolvedTargetRoot
+      || (
+        path.relative(resolvedTargetRoot, directory)
+        && !path.relative(resolvedTargetRoot, directory).startsWith('..')
+        && !path.isAbsolute(path.relative(resolvedTargetRoot, directory))
+      )
+    ) {
+      const stat = lstatIfPresent(directory);
+      if (stat) {
+        if (!stat.isDirectory()) {
+          throw new Error(`handoff target ancestor must be a directory: ${directory}`);
+        }
+        existingDirectories.add(directory);
+      }
+      if (directory === resolvedTargetRoot) break;
+      directory = path.dirname(directory);
+    }
+  }
+  return {
+    existingDirectories,
+    targetPaths,
+    files: targetPaths.map((filePath) => {
+      const stat = lstatIfPresent(filePath);
+      if (!stat) return { filePath, kind: 'absent' };
+      if (!stat.isFile()) {
+        throw new Error(`handoff target must be a regular file when it exists: ${filePath}`);
+      }
+      return {
+        filePath,
+        kind: 'file',
+        contents: readFileSync(filePath),
+        mode: stat.mode,
+      };
+    }),
+  };
+}
+
+function restorePlanTargetSnapshot(snapshot, targetRoot) {
+  const failures = [];
+  for (const item of [...snapshot.files].reverse()) {
+    try {
+      if (item.kind === 'absent') {
+        const stat = lstatIfPresent(item.filePath);
+        if (!stat) continue;
+        if (!stat.isFile() && !stat.isSymbolicLink()) {
+          throw new Error('rollback target was created as a non-file');
+        }
+        unlinkSync(item.filePath);
+        continue;
+      }
+      const stat = lstatIfPresent(item.filePath);
+      if (stat) {
+        if (!stat.isFile()) throw new Error('rollback target is no longer a file');
+      } else {
+        mkdirSync(path.dirname(item.filePath), { recursive: true });
+      }
+      writeFileSync(item.filePath, item.contents);
+      chmodSync(item.filePath, item.mode);
+    } catch (error) {
+      failures.push(`${item.filePath}: ${error.message}`);
+    }
+  }
+
+  const resolvedTargetRoot = path.resolve(targetRoot);
+  const createdDirectories = new Set();
+  for (const targetPath of snapshot.targetPaths) {
+    let directory = path.dirname(targetPath);
+    while (
+      directory === resolvedTargetRoot
+      || (
+        path.relative(resolvedTargetRoot, directory)
+        && !path.relative(resolvedTargetRoot, directory).startsWith('..')
+        && !path.isAbsolute(path.relative(resolvedTargetRoot, directory))
+      )
+    ) {
+      if (!snapshot.existingDirectories.has(directory)) createdDirectories.add(directory);
+      if (directory === resolvedTargetRoot) break;
+      directory = path.dirname(directory);
+    }
+  }
+  for (const directory of [...createdDirectories].sort((left, right) => right.length - left.length)) {
+    try {
+      if (
+        existsSync(directory)
+        && lstatSync(directory).isDirectory()
+        && readdirSync(directory).length === 0
+      ) {
+        rmdirSync(directory);
+      }
+    } catch (error) {
+      failures.push(`${directory}: ${error.message}`);
+    }
+  }
+  return failures;
+}
+
+function cleanupMovedSources(plan, artifactsRoot) {
+  const artifactRootResolved = path.resolve(artifactsRoot);
+  const sources = [...new Set(plan
+    .filter((item) => item.source)
+    .map((item) => path.resolve(item.source))
+    .filter((source) => {
+      const relative = path.relative(artifactRootResolved, source);
+      return relative && !relative.startsWith('..') && !path.isAbsolute(relative);
+    }))];
+  const stagingRoot = path.join(
+    artifactRootResolved,
+    `.handoff-move.${process.pid}.${randomUUID()}`,
+  );
+  const staged = [];
+  try {
+    mkdirSync(stagingRoot);
+    for (const source of sources) {
+      const relative = path.relative(artifactRootResolved, source);
+      const stagedPath = path.join(stagingRoot, relative);
+      mkdirSync(path.dirname(stagedPath), { recursive: true });
+      renameSync(source, stagedPath);
+      staged.push({ source, stagedPath });
+    }
+  } catch (error) {
+    const rollbackFailures = [];
+    for (const item of [...staged].reverse()) {
+      try {
+        if (!existsSync(item.stagedPath)) continue;
+        mkdirSync(path.dirname(item.source), { recursive: true });
+        renameSync(item.stagedPath, item.source);
+      } catch (rollbackError) {
+        rollbackFailures.push(`${item.source}: ${rollbackError.message}`);
+      }
+    }
+    try {
+      rmSync(stagingRoot, { recursive: true, force: true });
+    } catch (rollbackError) {
+      rollbackFailures.push(`${stagingRoot}: ${rollbackError.message}`);
+    }
+    if (rollbackFailures.length) {
+      throw new Error(
+        `${error.message}; move source rollback failed: ${rollbackFailures.join('; ')}`,
+        { cause: error },
+      );
+    }
+    throw error;
+  }
+  try {
+    rmSync(stagingRoot, { recursive: true, force: true });
+  } catch (error) {
+    console.warn(
+      `WARNING: move completed, but staged source cleanup failed at ${stagingRoot}: ${error.message}`,
+    );
+  }
+  for (const directory of ['gate-a-intake', 'gate-b-spec', 'gate-c-task-graph', 'gate-d-review']) {
+    const directoryPath = path.join(artifactRootResolved, directory);
+    try {
+      if (existsSync(directoryPath) && readdirSync(directoryPath).length === 0) {
+        rmdirSync(directoryPath);
+      }
+    } catch (error) {
+      console.warn(
+        `WARNING: move completed, but empty source directory cleanup failed at ${directoryPath}: ${error.message}`,
+      );
+    }
+  }
+}
+
+function recordSourceHandoffLocked(artifactsRoot, sourceInfo, record) {
   if (!record || !sourceInfo.currentSpecPath) return;
-  const currentSpec = loadJson(sourceInfo.currentSpecPath);
+  const currentSpecBefore = readFileSync(sourceInfo.currentSpecPath);
+  const statusPath = path.join(artifactsRoot, 'status.md');
+  const statusBefore = !existsSync(statusPath)
+    ? { kind: 'absent' }
+    : lstatSync(statusPath).isFile()
+      ? { kind: 'file', contents: readFileSync(statusPath) }
+      : { kind: 'other' };
+  const currentSpec = JSON.parse(currentSpecBefore.toString('utf8'));
+  if (currentSpec.active_iteration !== sourceInfo.iterationId) {
+    throw new ValidationError(
+      `handoff source iteration changed while preparing the target: expected ${JSON.stringify(sourceInfo.iterationId)}, got ${JSON.stringify(currentSpec.active_iteration)}`,
+    );
+  }
   const nextCurrentSpec = appendHandoffRecord(currentSpec, record);
-  writeFileSync(sourceInfo.currentSpecPath, `${JSON.stringify(nextCurrentSpec, null, 2)}\n`, 'utf8');
-  writeFileSync(path.join(artifactsRoot, 'status.md'), renderIterationIndexMarkdown(artifactsRoot, nextCurrentSpec), 'utf8');
+  const nextStatus = renderIterationIndexMarkdown(
+    artifactsRoot,
+    nextCurrentSpec,
+  );
+  try {
+    atomicWriteJson(sourceInfo.currentSpecPath, nextCurrentSpec);
+    atomicWriteText(statusPath, nextStatus);
+  } catch (error) {
+    const rollbackFailures = [];
+    try {
+      atomicWriteText(sourceInfo.currentSpecPath, currentSpecBefore);
+    } catch (rollbackError) {
+      rollbackFailures.push(`current-spec.json: ${rollbackError.message}`);
+    }
+    try {
+      if (statusBefore.kind === 'file') {
+        atomicWriteText(statusPath, statusBefore.contents);
+      } else if (
+        statusBefore.kind === 'absent'
+        && existsSync(statusPath)
+        && lstatSync(statusPath).isFile()
+      ) {
+        unlinkSync(statusPath);
+      }
+    } catch (rollbackError) {
+      rollbackFailures.push(`status.md: ${rollbackError.message}`);
+    }
+    if (rollbackFailures.length) {
+      throw new Error(
+        `${error.message}; source handoff record rollback failed: ${rollbackFailures.join('; ')}`,
+        { cause: error },
+      );
+    }
+    throw error;
+  }
 }
 
 function isCancel(input) {
@@ -3228,22 +3951,89 @@ export function main(argv = process.argv.slice(2)) {
       throw new Error(`--target must be a directory path, but a non-directory exists: ${targetRoot}`);
     }
 
-    const sourceInfo = resolveHandoffSource(artifactsRoot, args);
-    const createdAt = new Date().toISOString();
-    const maintenanceGraphPath = sourceInfo.kind === 'iteration' ? maintenanceTaskGraphSourcePath(artifactsRoot) : null;
-    const maintenanceIncluded = Boolean(maintenanceGraphPath && existsSync(maintenanceGraphPath));
-    const record = sourceInfo.kind === 'iteration'
-      ? handoffRecord(args, targetRoot, sourceInfo, maintenanceIncluded, maintenanceIncluded ? maintenanceTaskCount(maintenanceGraphPath) : 0, createdAt)
-      : null;
-    const plan = buildPlan(sourceInfo.paths, args, artifactsRoot, targetRoot, sourceInfo, { record, createdAt });
-    assertNoConflicts(plan, args.overwrite);
-    printPlan(plan, args, artifactsRoot, targetRoot, sourceInfo);
-    if (args.dryRun) return 0;
-    writePlan(plan);
-    recordSourceHandoff(artifactsRoot, sourceInfo, record);
-    if (args.mode === 'move') cleanupMovedSources(plan, artifactsRoot);
-    console.log('handoff complete');
-    return 0;
+    const executeHandoff = (sourceInfo = resolveHandoffSource(artifactsRoot, args)) => {
+      const createdAt = new Date().toISOString();
+      const maintenanceGraphPath = sourceInfo.kind === 'iteration'
+        ? maintenanceTaskGraphSourcePath(artifactsRoot)
+        : null;
+      const maintenanceIncluded = Boolean(
+        maintenanceGraphPath && existsSync(maintenanceGraphPath),
+      );
+      const record = sourceInfo.kind === 'iteration'
+        ? handoffRecord(
+            args,
+            targetRoot,
+            sourceInfo,
+            maintenanceIncluded,
+            maintenanceIncluded
+              ? maintenanceTaskCount(maintenanceGraphPath)
+              : 0,
+            createdAt,
+          )
+        : null;
+      const plan = buildPlan(
+        sourceInfo.paths,
+        args,
+        artifactsRoot,
+        targetRoot,
+        sourceInfo,
+        { record, createdAt },
+      );
+      assertNoConflicts(plan, args.overwrite);
+      printPlan(plan, args, artifactsRoot, targetRoot, sourceInfo);
+      if (args.dryRun) return 0;
+      const targetSnapshot = capturePlanTargetSnapshot(plan, targetRoot);
+      try {
+        writePlan(plan);
+        if (sourceInfo.kind === 'iteration') {
+          recordSourceHandoffLocked(artifactsRoot, sourceInfo, record);
+        }
+        if (args.mode === 'move') cleanupMovedSources(plan, artifactsRoot);
+      } catch (error) {
+        const rollbackFailures = restorePlanTargetSnapshot(targetSnapshot, targetRoot);
+        if (rollbackFailures.length) {
+          throw new Error(
+            `${error.message}; handoff target rollback failed: ${rollbackFailures.join('; ')}`,
+            { cause: error },
+          );
+        }
+        throw error;
+      }
+      console.log('handoff complete');
+      return 0;
+    };
+
+    if (!isIterativeArtifactRoot(artifactsRoot)) return executeHandoff();
+
+    const initialSourceInfo = resolveHandoffSource(artifactsRoot, args);
+    const maintenanceGraphPath = maintenanceTaskGraphSourcePath(artifactsRoot);
+    const runsDir = path.join(artifactsRoot, 'runs');
+    const lockDirs = [
+      path.join(artifactsRoot, 'iterations'),
+      path.dirname(initialSourceInfo.paths.taskGraph),
+    ];
+    if (existsSync(maintenanceGraphPath)) {
+      lockDirs.push(path.dirname(maintenanceGraphPath));
+    }
+    if (existsSync(runsDir) && lstatSync(runsDir).isDirectory()) {
+      lockDirs.push(runsDir);
+    }
+    return withRunStoreLocks(
+      lockDirs,
+      () => {
+        const lockedSourceInfo = resolveHandoffSource(artifactsRoot, args);
+        if (
+          lockedSourceInfo.iterationId !== initialSourceInfo.iterationId
+          || path.resolve(lockedSourceInfo.paths.taskGraph)
+            !== path.resolve(initialSourceInfo.paths.taskGraph)
+        ) {
+          throw new ValidationError(
+            'handoff source iteration changed while waiting for state locks; retry the command',
+          );
+        }
+        return executeHandoff(lockedSourceInfo);
+      },
+    );
   } catch (error) {
     const prefix = error instanceof ValidationError ? 'handoff gate validation failed' : 'p2a handoff failed';
     console.error(`${prefix}: ${error.message}`);

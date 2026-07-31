@@ -431,9 +431,9 @@ p2a validate \
 
 `digest` 결과는 빠른 현황 요약이고, `review`/`curate`/`draft-patch`/`approve-draft` 결과는 승인 판단과 후속 task 연결용 artifact다. 적용은 자동으로 하지 않고, 승인된 maintenance task를 별도 실행해서 반영한다.
 
-### 워크플로우 E — 반복 열기와 Gate A/B 초안 생성
+### 워크플로우 E — 반복 열기와 Gate A interview/Gate B 초안 생성
 
-기존 active 반복의 모든 task가 `done`이면 반복을 close하고, 닫힌 반복이 2개 이상일 때는 compose로 current-effective 기준을 갱신한 뒤 다음 반복을 열어 baseline-aware Gate A/B draft를 생성할 수 있다.
+기존 active 반복의 모든 task가 `done`이면 반복을 close하고, 닫힌 반복이 2개 이상일 때는 compose로 current-effective 기준을 갱신한 뒤 다음 반복을 연다. baseline이 있는 첫 `draft`는 Gate A interview만 생성하며 `spec.json`은 만들지 않는다. harness가 대화를 진행하고 사용자의 명시적 Gate A 확인을 `intake.json`에 기록한 뒤 같은 session에서 `draft`를 다시 호출하면 Gate B 초안이 생성된다.
 
 ```bash
 p2a iteration validate \
@@ -453,7 +453,14 @@ p2a iteration draft \
 
 p2a iteration validate \
   --artifacts .plan2agent/artifacts/<project_id> \
-  --allow-planning
+  --stage gate-a
+
+# harness interview -> Gate A summary -> explicit confirmation
+# confirmed intake: interview.state=gate_a_confirmed,
+# status=ready_for_spec, approval_audit present
+
+p2a iteration draft \
+  --artifacts .plan2agent/artifacts/<project_id>
 
 p2a validate \
   --intake .plan2agent/artifacts/<project_id>/iterations/iter-002/gate-a-intake/intake.json \

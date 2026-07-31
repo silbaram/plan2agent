@@ -12,13 +12,13 @@ Use this workflow to convert an early product idea into development-ready planni
 - A one-sentence product or feature idea.
 - Optional clarification answers, constraints, audience, or existing artifacts.
 - Optional Feature Radar preflight research under `.plan2agent/artifacts/<project_id>/preflight-research/`.
-- Optional resume point such as `resume_from: intake`, `resume_from: spec`, or answered decision ids like `ND-1`.
+- Optional resume point such as `resume_from: interview`, `resume_from: gate-a-summary`, `resume_from: spec`, or answered question/decision ids like `CQ-1` or `ND-1`.
 
 ## Stage to Role Mapping
 
 | Stage | Skill | Subagent owner | Input artifact | Output artifact |
 | --- | --- | --- | --- | --- |
-| 1. Intake | `p2a-intake` | `p2a-requirements` | raw idea and notes | `intake_json` (`p2a.intake.v1`) |
+| 1. Discovery and intake | `p2a-intake` | `p2a-requirements` | raw idea, notes, and optional baseline context | interview-aware `intake_json` (`p2a.intake.v1`) |
 | 2. Product spec | `p2a-spec` | `p2a-spec-author` | intake plus answered decisions | `spec_json.product` (`p2a.spec.v1`) |
 | 3. Implementation plan | `p2a-spec` | `p2a-implementation-planner` | product spec draft plus Gate A constraints | `spec_json.implementation` (`p2a.spec.v1`) |
 | 4. Task graph | `p2a-task-breakdown` | `p2a-task-graph` | approved implementation spec | `task_graph_json` (`p2a.task_graph.v1`) |
@@ -28,12 +28,52 @@ If the CLI cannot spawn subagents automatically, run the matching skill locally 
 
 ## Approval Gates
 
-- **Gate A — Intake decisions:** If any `needs_user_decision.status` is `open` or `deferred`, stop after intake and ask only those decisions. Do not produce a product spec except as a clearly labeled sketch.
+- **Gate A — Understanding confirmation:** Run the bounded discovery interview until its readiness/guard contract stops it. If any high-impact question or decision remains unresolved, or `interview.state` is not `gate_a_confirmed`, stop at Gate A. Present a compact understanding summary and require explicit confirmation recorded in `intake_json.approval_audit`. Do not produce Gate B before confirmation.
 - **Gate B — Spec approval:** If any intake `CQ-n` is not disposed in `spec_json.clarifying_question_disposition`, `spec_json.approval` is not `approved`, `spec_json.approval_audit` is missing, or `spec_json.open_decisions` is non-empty, stop before task graph generation. When Gate B selects or recommends libraries, frameworks, runtimes, protocols, packages, databases, cloud services, external APIs, or external services, apply the `p2a-spec` Technology Reconnaissance rules before approval and record material sources in `spec_json.evidence`. Missing Technology Reconnaissance evidence for a material Gate B technology choice is a blocking Gate B issue. When Gate B is approved, record the Gate B approval audit in `spec_json.approval_audit`.
 - **Gate C — Task graph validation:** Before final output, check that every dependency references a task id in the same graph, the graph is acyclic, and every task has acceptance criteria. Repository validation also requires each task to carry source spec references. Inspect `context.planning_memory` before decomposition. When retrieved history changes a task boundary, dependency, acceptance criterion, or failure mitigation, add a `memory:<report path or source reference>` ref and any applicable `decision:ND-n` ref alongside at least one real effective-spec field.
 - **Gate D — Review blockers:** The canonical Gate D artifact is `review_json` persisted as `gate-d-review/review.json`; `review_report` / `review-report.md` is an optional Markdown rendering of the same findings. Gate D passes only when `review.json.blocking_issues` is `[]`. Validate claimed Memory report/citation integrity and confirm that tasks address any material prior failure carried into Gate C. Memory being disabled, unavailable, or irrelevant is not itself a blocker; an invalid claim of use or an ignored material failure is. If review finds blocking issues, return the blockers and the artifact section that must be revised instead of claiming the plan is ready.
 
 Each gate is a review checkpoint, not a one-shot hand-off. At every gate: (1) persist the stage's canonical JSON artifact files and optionally refresh generated Markdown views, (2) present a readable summary with per-item rationale and recommendations, (3) explicitly invite both open-ended feedback and structured answers or approval, (4) revise the JSON artifacts and re-present them when the user responds, and (5) advance only after the user explicitly approves. Never infer approval from silence.
+
+## Discovery Interview Loop
+
+The user experience from a one-line idea through Gate B is one continuous planning session:
+
+```text
+one-line idea
+  -> adaptive discovery rounds
+  -> Gate A understanding summary
+  -> explicit Gate A confirmation
+  -> same-session Gate B synthesis
+  -> explicit Gate B approval
+```
+
+Gate A and Gate B remain separate canonical artifacts and approvals. Do not add a gate, merge `intake.json` and `spec.json`, or approve an unseen Gate B together with Gate A.
+
+Use `intake_json.interview` as the bounded working snapshot. Do not preserve or repeatedly inject the full transcript. Each round consumes the latest snapshot, the newest user answer, open decisions, and material evidence only.
+
+For each round:
+
+1. Merge the user's free-form answer into existing stable `CQ-n`, `ND-n`, facts, assumptions, and discovery dimension dispositions. Keep CQ/ND `blocks` as potential impacts. Set resolved CQ/ND `canonical_effect` to `change` with exact non-empty actual canonical `affected_fields`, or to `preserve_baseline` with empty `affected_fields` only for an explicit existing-baseline preservation answer.
+2. Count the round as progress only when a fact, answer, or disposition changed.
+3. Recompute readiness from the structured state.
+4. If not ready, ask only the 1 to 3 highest-impact remaining questions.
+5. If ready, present the Gate A summary and wait for explicit confirmation.
+
+The eight required discovery dimensions and their dispositions are defined in `p2a-intake`. Readiness requires every dimension disposed, no unresolved high-impact question/decision, no unasked high-impact candidate, and no newly introduced blocker.
+
+Enforce these guardrails:
+
+- soft limit at 3 rounds: present the current summary, blockers, and recommended assumptions; ask whether to continue. Continue questioning only after the user explicitly chooses continue and record `soft_limit_acknowledged: true`;
+- hard limit at 5 rounds: stop automatic questioning;
+- no-progress limit at 2 consecutive rounds: stop automatic questioning;
+- hard/no-progress stop with blockers: `blocked_on_user`, never Gate A complete or Gate B entry.
+
+If the user asks to stop or summarize, stop the interview and present the candidate summary. With blockers, offer answer, explicit recommended-assumption acceptance, defer/pause, or later resume. Without blockers, move to `awaiting_gate_a_confirmation`.
+
+After explicit confirmation, write `intake_json.approval_audit`, set `interview.state: gate_a_confirmed` and `status: ready_for_spec`, then continue directly to Gate B in this same session. Do not require the user to invoke another command or open another agent session.
+
+For iterative work, inspect `intake_json.baseline_context` before asking new questions. Preserve its immutable `spec_ref` and `spec_sha256`, and reuse relevant prior answers and question dispositions with provenance. Ask again only when the change affects their scope or conflicts with the baseline. Never silently overwrite a reused answer; record the current-iteration override under a current stable decision id.
 
 ## Clarifying Question Disposition
 
@@ -60,9 +100,9 @@ The analysis must include:
 
 - A restatement of the idea and the scope you inferred, separating what is clear from what is unknown.
 - Each assumption with its risk level and the reasoning behind it.
-- For every `needs_user_decision`: the question, why it matters, each option with its concrete trade-offs, a recommended option with explicit rationale grounded in the stated goals, constraints, and any prior art, and which downstream artifacts or decisions it blocks.
+- For every `needs_user_decision`: the question, why it matters, each option with its concrete trade-offs, a recommended option with explicit rationale grounded in the stated goals, constraints, and any prior art, and non-empty canonical `spec.product.*` or `spec.implementation.*` field refs in `blocks`.
 
-Write this analysis into the conversation and the structured `intake_json` fields. Generate `intake.md` only as an optional view/export when the user or UI needs a Markdown document. Treat decision-making as a dialogue: invite the user to correct your understanding and give free-form feedback, not only to pick options. Do not collapse several distinct high-impact decisions into a single multi-select that hides their individual rationale; ask in small, clearly explained batches.
+Write this analysis into the conversation and the structured `intake_json` fields. Generate `intake.md` only as an optional view/export when the user or UI needs a Markdown document. Treat decision-making as a dialogue: invite the user to correct your understanding and give free-form feedback, not only to pick options. Do not collapse several distinct high-impact decisions into a single multi-select that hides their individual rationale; ask 1 to 3 high-impact questions per round.
 
 If `intake.md` is generated, it should follow this recommended soft template, mapping each narrative section to the matching `intake_json` field without changing JSON field names:
 
@@ -76,9 +116,12 @@ This is a narrative-first recommended structure, not a blank form. Preserve the 
 
 ## Resume Rules
 
-- When the user answers decisions such as `ND-1` or `ND-4`, merge the answers into `intake_json.needs_user_decision[*].answer`, set those decisions to `answered`, and recompute `intake_json.status`. If a generated `gate-a-intake/intake.md` view exists, refresh it from JSON instead of editing it as a second source of truth.
+- When the user answers `CQ-n` or `ND-n`, merge the answer into the existing item, update its status and affected discovery dimensions, update round/no-progress counters, and recompute `intake_json.interview`. Do not renumber or recreate answered ids. If a generated `gate-a-intake/intake.md` view exists, refresh it from JSON instead of editing it as a second source of truth.
+- On `resume_from: interview`, continue only the current interview batch or select the next 1 to 3 questions after merging new answers.
+- On `resume_from: gate-a-summary`, present the compact summary and set `awaiting_gate_a_confirmation`; do not synthesize Gate B in advance.
+- On `resume_from: spec`, require a validated `gate_a_confirmed` state and Gate A `approval_audit`, then synthesize Gate B in the same session.
 - Resume from the earliest stage whose input changed. For example, changed intake answers invalidate spec, implementation plan, task graph, and review.
-- Carry forward stable artifact ids (`project_id`, `source_intake`, `sourceSpec`) so later stages can trace their source. Use the gate-folder paths for cross-artifact references, for example `.plan2agent/artifacts/<project_id>/gate-a-intake/intake.json` for `source_intake` and `.plan2agent/artifacts/<project_id>/gate-b-spec/spec.json` for `sourceSpec`.
+- Carry forward stable artifact ids (`project_id`, `source_intake`, `sourceSpec`) so later stages can trace their source. Use the gate-folder paths for cross-artifact references, for example `.plan2agent/artifacts/<project_id>/gate-a-intake/intake.json` for `source_intake` and `.plan2agent/artifacts/<project_id>/gate-b-spec/spec.json` for `sourceSpec`. For interview-aware Gate B, bind `spec_json` to the exact persisted Gate A bytes with `source_intake_sha256`; if Gate A changes, regenerate Gate B instead of refreshing the hash on the stale spec.
 - If an artifact is pasted in Markdown only, reconstruct the matching JSON contract before advancing to the next gate.
 
 ## Starting From Existing Documents
@@ -134,6 +177,8 @@ When Gate B is approved, record this object in `spec_json.approval_audit`:
 
 Use the actual approver label and date available in the conversation. If the exact person is unknown, use `user`; do not invent names.
 
+When Gate A is confirmed, record the same audit shape in `intake_json.approval_audit`, using `approved_artifacts: ["gate-a-intake/intake.json"]`. Record it only in direct response to explicit confirmation of the presented Gate A understanding summary.
+
 Record `approval: approved` and `approval_audit` only in direct response to an explicit
 user approval message in the current conversation, and make `approval_note` quote or
 reference that message. Never set `approval: approved` on your own judgment, even when
@@ -154,7 +199,8 @@ Do not retype gate status facts from memory. Pull gate status, task counts, `rea
 
 ## Output Modes
 
-- **Blocked intake:** Write `gate-a-intake/intake.json`, optionally generate `gate-a-intake/intake.md`, present the analysis narrative and per-decision recommendations, invite feedback and answers, and stop at Gate A.
+- **Active or blocked interview:** Write `gate-a-intake/intake.json`, optionally generate `gate-a-intake/intake.md`, present the current understanding and the bounded question batch or blockers, invite free-form answers, and stop at Gate A.
+- **Gate A confirmation:** Present the compact understanding summary, invite corrections or explicit confirmation, and stop without creating Gate B. After confirmation is received in the next user turn, persist the Gate A audit and create only the Gate B draft in that turn.
 - **Draft spec:** Write `gate-b-spec/spec.json` with `approval: draft`, optionally generate product/implementation Markdown views, present it for review, and stop at Gate B before the task graph.
 - **Approved planning output:** Write all canonical JSON artifact files, optionally refresh generated Markdown views, and return the state sections after gates pass. In a co-located scaffold project, make the next action `p2a iteration init --artifacts .plan2agent/artifacts/<project_id> --iteration-id v1-mvp` and explicitly state that development must not start from the root `gate-c-task-graph/task-graph.json`.
 - **Resume output:** Regenerate only the downstream JSON artifacts and optional generated views, plus a short changelog of which decisions were applied.
@@ -166,7 +212,8 @@ Do not retype gate status facts from memory. Pull gate status, task counts, `rea
 - Subagents remain strictly read-only; only the harness orchestrator persists artifact files.
 - Treat JSON as canonical. Markdown files are generated views/exports and must not be used as independent state.
 - Do not claim that implementation happened.
-- Mark unresolved decisions as `needs_user_decision`.
+- Mark unresolved decisions as `needs_user_decision` with non-empty canonical spec field refs in `blocks`.
+- Before Gate A confirmation, require every resolved CQ/ND to declare `canonical_effect`: `change` requires non-empty actual `affected_fields`, while `preserve_baseline` requires an existing baseline and empty `affected_fields`. Cover every actual CQ/ND and non-open discovery dimension `affected_fields` entry with deterministic `interview.spec_updates`. In greenfield work, every confirmed/assumed dimension must affect at least one canonical field or be marked `not_applicable`, and every update must use `replace` because no baseline canonical field exists. Cite contributing questions and dimensions, use replace/remove rather than append when current input overrides the baseline, and reject no-op updates.
 - Existing design or plan documents in the target repository, however complete, are
   `LOCAL-n` input evidence only. They never justify skipping a gate, producing more than
   one gate's artifacts, or treating any gate as approved.

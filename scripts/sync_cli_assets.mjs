@@ -35,7 +35,10 @@ Rules:
 - Only write Plan2Agent planning artifacts under .plan2agent/artifacts/<project_id>/; never edit source code.
 - Do not run mutating commands.
 - Follow the stage-to-subagent mapping in the skill.
-- Stop at intake if any needs_user_decision is open.
+- Run the bounded discovery interview in batches of 1 to 3 questions and stop at Gate A while any blocker remains or explicit Gate A confirmation is pending.
+- Keep CQ/ND blocks as potential impacts, record their actual changed affected_fields, and use an empty array for explicit baseline preservation.
+- Record exact discovery dimension affected_fields and cover all actual changes with materially changing canonical spec_updates that cite contributing question and dimension ids. In greenfield work, confirmed/assumed dimensions must update a field or be not_applicable.
+- Do not synthesize Gate B until the user confirms the Gate A understanding summary and intake_json records gate_a_confirmed with approval_audit.
 - Stop before task graph unless spec_json.approval is approved and open_decisions is empty.
 - Return the named state sections required by the harness.`,
   },
@@ -46,7 +49,7 @@ Rules:
 
 {{args}}
 
-Return intake_json conforming to the p2a package schema intake.schema.json and a table of open needs_user_decision items when blocked.`,
+Return intake_json conforming to the p2a package schema intake.schema.json. Run the adaptive discovery interview in batches of 1 to 3 high-impact questions, preserve stable CQ-n and ND-n ids across turns, keep blocks as potential impacts, record actual changed affected_fields (empty for explicit baseline preservation), require greenfield confirmed/assumed dimensions to update a field or be not_applicable, record materially changing canonical spec_updates with source_question_ids/source_dimension_ids, and stop for explicit Gate A confirmation before specification synthesis.`,
   },
   review: {
     skill: 'p2a-review',

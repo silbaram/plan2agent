@@ -2,7 +2,7 @@
 /** Mine and review Plan2Agent retrospective proposal candidates from run logs. */
 
 import { createHash } from 'node:crypto';
-import { existsSync, lstatSync, mkdirSync, readdirSync, realpathSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, unlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
 import { pathToFileURL } from 'node:url';
@@ -31,7 +31,11 @@ import {
 } from './p2a_paths.mjs';
 import { normalizeMonitorVerdictData } from './p2a_monitor_gate.mjs';
 import { commandLine } from './p2a_run_commands.mjs';
-import { atomicWriteJson, withRunStoreLocks } from './p2a_run_store.mjs';
+import { atomicWriteJson, atomicWriteText, withRunStoreLocks } from './p2a_run_store.mjs';
+import {
+  resolveIterationState,
+  validateMaintenanceTaskGraphProject,
+} from './p2a_iteration_state.mjs';
 
 const P2A_PATHS = resolveP2aPaths(import.meta.url);
 const COMMANDS = new Set(['mine', 'list', 'show', 'validate', 'digest', 'review', 'curate', 'draft-patch', 'approve-draft']);
@@ -1295,20 +1299,6 @@ function maintenanceTaskGraphPathForArtifactRoot(artifactRoot) {
   return path.join(artifactRoot, 'iterations', 'maintenance', 'gate-c-task-graph', 'task-graph.json');
 }
 
-function loadProjectIdForApproval(artifactRoot, graphPath) {
-  const currentSpecPath = path.join(artifactRoot, 'current-spec.json');
-  if (existsSync(currentSpecPath)) {
-    const currentSpec = loadJson(currentSpecPath);
-    if (typeof currentSpec.project_id === 'string' && currentSpec.project_id.trim()) return currentSpec.project_id.trim();
-    if (typeof currentSpec.projectId === 'string' && currentSpec.projectId.trim()) return currentSpec.projectId.trim();
-  }
-  if (existsSync(graphPath)) {
-    const graph = loadJson(graphPath);
-    if (typeof graph.projectId === 'string' && graph.projectId.trim()) return graph.projectId.trim();
-  }
-  return path.basename(path.resolve(artifactRoot)) || 'plan2agent-project';
-}
-
 function initialMaintenanceTaskGraph(projectId) {
   return {
     schema_version: 'p2a.task_graph.v1',
@@ -1438,12 +1428,13 @@ function backfillExistingApprovalTask(task, draft, approvalId) {
   return changed;
 }
 
-function planMaintenanceTaskForApproval(artifactRoot, draft, approvalId) {
-  const graphPath = maintenanceTaskGraphPathForArtifactRoot(artifactRoot);
-  const projectId = loadProjectIdForApproval(artifactRoot, graphPath);
+function planMaintenanceTaskForApproval(state, draft, approvalId) {
+  const graphPath = maintenanceTaskGraphPathForArtifactRoot(state.artifactRoot);
+  const projectId = state.projectId;
   const graph = existsSync(graphPath)
     ? loadJson(graphPath)
     : initialMaintenanceTaskGraph(projectId);
+  validateMaintenanceTaskGraphProject(state, graph);
   if (!Array.isArray(graph.tasks)) graph.tasks = [];
   const draftRef = `proposal-patch-draft:${draft.draftId}`;
   const existingTask = graph.tasks.find((task) => (task.sourceSpecRefs ?? []).includes(draftRef));
@@ -1509,8 +1500,40 @@ function writeApproval(filePath, approval, overwrite = false) {
   const existed = existsSync(filePath);
   if (existed && !overwrite) return { action: 'skipped', filePath };
   mkdirSync(path.dirname(filePath), { recursive: true });
-  writeFileSync(filePath, `${JSON.stringify(approval, null, 2)}\n`, 'utf8');
+  atomicWriteJson(filePath, approval);
   return { action: existed ? 'overwritten' : 'written', filePath };
+}
+
+function captureApprovalTransactionFiles(filePaths) {
+  return [...new Set(filePaths.map((filePath) => path.resolve(filePath)))]
+    .map((filePath) => {
+      if (!existsSync(filePath)) return { filePath, kind: 'absent' };
+      const stat = lstatSync(filePath);
+      if (!stat.isFile()) return { filePath, kind: 'other' };
+      return { filePath, kind: 'file', contents: readFileSync(filePath) };
+    });
+}
+
+function restoreApprovalTransactionFiles(snapshot) {
+  const failures = [];
+  for (const item of [...snapshot].reverse()) {
+    try {
+      if (item.kind === 'other') continue;
+      if (item.kind === 'absent') {
+        if (!existsSync(item.filePath)) continue;
+        const stat = lstatSync(item.filePath);
+        if (!stat.isFile() && !stat.isSymbolicLink()) {
+          throw new Error('rollback target was created as a non-file');
+        }
+        unlinkSync(item.filePath);
+        continue;
+      }
+      atomicWriteText(item.filePath, item.contents);
+    } catch (error) {
+      failures.push(`${item.filePath}: ${error.message}`);
+    }
+  }
+  return failures;
 }
 
 function runMine(args) {
@@ -1696,7 +1719,8 @@ function runApproveDraft(args) {
   const requestedFilePath = args.output ? path.resolve(args.output) : null;
   const graphPath = maintenanceTaskGraphPathForArtifactRoot(artifactRoot);
   const approve = () => {
-    const maintenancePlan = planMaintenanceTaskForApproval(artifactRoot, draft, approvalId);
+    const state = resolveIterationState(artifactRoot, { requireReady: false });
+    const maintenancePlan = planMaintenanceTaskForApproval(state, draft, approvalId);
     const approval = buildProposalDraftApproval(draft, draftFilePath, maintenancePlan, approvedBy, approvalNote, approvalId);
     if (requestedFilePath) assertApprovalOutputPath(proposalsDir, requestedFilePath);
     const filePath = requestedFilePath ?? approvalPath(proposalsDir, approval.approvalId);
@@ -1707,17 +1731,38 @@ function runApproveDraft(args) {
       : maintenancePlan.shouldWrite
         ? 'written'
         : 'unchanged';
-    if (!args.dryRun && maintenancePlan.shouldWrite) {
-      writeMaintenanceTaskGraph(maintenancePlan.graphPath, maintenancePlan.graph);
+    let writeResult;
+    if (args.dryRun) {
+      writeResult = { action: 'dry-run', filePath };
+    } else {
+      const snapshot = captureApprovalTransactionFiles([
+        maintenancePlan.graphPath,
+        filePath,
+      ]);
+      try {
+        if (maintenancePlan.shouldWrite) {
+          writeMaintenanceTaskGraph(maintenancePlan.graphPath, maintenancePlan.graph);
+        }
+        writeResult = writeApproval(filePath, approval, args.overwrite);
+      } catch (error) {
+        const rollbackFailures = restoreApprovalTransactionFiles(snapshot);
+        if (rollbackFailures.length) {
+          throw new Error(
+            `${error.message}; proposal approval rollback failed: ${rollbackFailures.join('; ')}`,
+            { cause: error },
+          );
+        }
+        throw error;
+      }
     }
-    const writeResult = args.dryRun
-      ? { action: 'dry-run', filePath }
-      : writeApproval(filePath, approval, args.overwrite);
     return { maintenancePlan, approval, filePath, taskGraphAction, writeResult };
   };
   const { maintenancePlan, approval, filePath, taskGraphAction, writeResult } = args.dryRun
     ? approve()
-    : withRunStoreLocks([path.dirname(graphPath)], approve);
+    : withRunStoreLocks([
+        path.join(artifactRoot, 'iterations'),
+        path.dirname(graphPath),
+      ], approve);
 
   if (args.json) {
     console.log(JSON.stringify({

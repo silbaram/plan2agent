@@ -31,7 +31,8 @@ Plan2Agent 하네스는 한 문장 제품 아이디어를 바로 코드로 구�
 
 ```text
 한 문장 아이디어
-  -> Intake(Gate A)
+  -> Discovery interview
+  -> Intake understanding confirmation(Gate A)
   -> Product spec + Implementation plan(Gate B)
   -> Task graph(Gate C)
   -> Review(Gate D)
@@ -40,7 +41,7 @@ Plan2Agent 하네스는 한 문장 제품 아이디어를 바로 코드로 구�
 
 | 단계 | 담당 skill | 주요 역할 | 산출물 |
 | --- | --- | --- | --- |
-| 1. Intake | `p2a-intake` | 아이디어를 사실, 가정, 질문, 사용자 결정 항목으로 구조화한다. | `intake_json` |
+| 1. Discovery + Intake | `p2a-intake` | 아이디어를 1~3개씩 묻는 적응형 인터뷰로 구체화하고 이해 요약을 Gate A에서 확인한다. | interview-aware `intake_json` |
 | 2. Product spec | `p2a-spec` | 답변된 intake를 제품 목표, 범위, 사용자 흐름, 성공 기준으로 정리한다. | `spec_json.product` |
 | 3. Implementation plan | `p2a-spec` | 승인 가능한 제품 명세를 아키텍처, 인터페이스, 데이터 흐름, 검증 계획으로 바꾼다. | `spec_json.implementation` |
 | 4. Task graph | `p2a-task-breakdown` | 승인된 구현 명세를 의존성 있는 작은 task로 분해한다. | `task_graph_json` |
@@ -74,7 +75,9 @@ Gate A/B/C/D의 상세 통과·차단 규칙은 `p2a-harness` skill이 유일한
 
 ### Gate A
 
-Intake 단계에서 미해결 사용자 결정이 있으면 멈추고, 결정 항목만 근거와 함께 사용자에게 묻는다. 각 게이트는 명시적 사용자 승인 전에는 다음 단계로 넘어가지 않는 검토 지점이다.
+한 문장 아이디어부터 1~3개 질문씩 적응형 discovery interview를 진행한다. 8개 필수 discovery 영역이 처분되고 high-impact blocker와 새 질문 후보가 없어지면 이해 요약을 제시한다. 사용자가 이 요약을 명시적으로 확인해야 `intake_json.approval_audit`을 기록하고 Gate B로 간다. interview 종료, Gate A 확인, Gate B 승인은 서로 다른 전이다.
+
+기본 guard는 soft 3 rounds, hard 5 rounds, no-progress 2회다. hard/no-progress로 멈췄는데 blocker가 남으면 `blocked_on_user`를 유지한다. Gate A 확인 뒤 Gate B는 같은 harness 대화에서 이어지며 별도 명령이나 agent session 전환을 요구하지 않는다.
 
 ### Gate B
 
@@ -127,7 +130,7 @@ Task graph의 dependency, cycle, acceptance criteria, source spec reference를 �
 
 | 대화 상태 섹션 | 파일 저장 위치 | 스키마/계약 | Gate 통과 조건 |
 | --- | --- | --- | --- |
-| `intake_json` | `.plan2agent/artifacts/<project_id>/gate-a-intake/intake.json` | `p2a` package schema `intake.schema.json` (`schema_version: p2a.intake.v1`) | 모든 high-impact 결정이 `answered`가 되어 `status: ready_for_spec`일 때 다음 단계로 간다. |
+| `intake_json` | `.plan2agent/artifacts/<project_id>/gate-a-intake/intake.json` | `p2a` package schema `intake.schema.json` (`schema_version: p2a.intake.v1`) | interview-aware artifact는 readiness 충족 후 사용자가 Gate A 요약을 확인해 `gate_a_confirmed`, `approval_audit`, `status: ready_for_spec`가 모두 있어야 다음 단계로 간다. |
 | optional Markdown views | `.plan2agent/artifacts/<project_id>/**.md` | JSON에서 생성되는 view/export다. | Gate 판정의 정본으로 쓰지 않는다. |
 | `spec_json` | `.plan2agent/artifacts/<project_id>/gate-b-spec/spec.json` | `p2a` package schema `spec.schema.json` (`schema_version: p2a.spec.v1`) | 모든 `CQ-n`이 처분되고, `approval: approved`, `approval_audit` present, `open_decisions: []`일 때 task graph를 만들 수 있다. |
 | `task_graph_json` | `.plan2agent/artifacts/<project_id>/gate-c-task-graph/task-graph.json` | `p2a` package schema `task-graph.schema.json` (`schema_version: p2a.task_graph.v1`) | dependency id가 모두 존재하고, task id가 중복되지 않으며, graph가 DAG여야 한다. |
@@ -147,6 +150,8 @@ Task graph의 dependency, cycle, acceptance criteria, source spec reference를 �
 
 `validate_artifacts.mjs --artifact-root`와 fixture 검증은 승인된 spec이 있을 때 이 JSON audit의 존재와 네 필드를 확인한다.
 
+Gate A 확인도 같은 audit shape를 `intake_json.approval_audit`에 사용한다. `approved_artifacts`에는 `gate-a-intake/intake.json`이 포함되어야 한다.
+
 ### 3.2 주요 스키마 필드
 
 `p2a` package schema `intake.schema.json`의 핵심 필드는 다음과 같다.
@@ -158,9 +163,12 @@ Task graph의 dependency, cycle, acceptance criteria, source spec reference를 �
 | `summary` | 하네스가 이해한 제품 아이디어를 한 문단으로 재진술한 내용이다. |
 | `known_facts` | 사용자가 직접 말했거나 입력에서 확정된 사실 목록이다. |
 | `assumptions` | `A-1` 형식 id, 진술, 위험도(`low`/`medium`/`high`), 확인 필요 여부를 담는다. |
-| `clarifying_questions` | `CQ-1` 형식 id, 질문, 중요한 이유, 어떤 downstream 영역을 막는지(`blocks`)를 담는다. |
-| `needs_user_decision` | `ND-1` 형식 id, 질문, 최소 2개 option, impact, default, status(`open`/`answered`/`deferred`), optional answer를 담는다. |
-| `status` | unresolved decision이 있으면 `blocked_on_user`, 모두 답변되면 `ready_for_spec`이다. |
+| `clarifying_questions` | `CQ-1` 형식 id, 질문, 중요한 이유, 잠재 downstream 영향(`blocks`)을 담는다. interview-aware resolved 항목은 `status`(`answered`/`assumed`/`not_applicable`), 처리된 `answer`, `canonical_effect`(`change`/`preserve_baseline`), 답변으로 실제 변경된 canonical `affected_fields`를 추가한다. `change`는 non-empty `affected_fields`, 기존 baseline 유지 답변은 `preserve_baseline`과 빈 `affected_fields`를 사용한다. |
+| `needs_user_decision` | `ND-1` 형식 id, 질문, 최소 2개 option, impact, 잠재 canonical 영향의 `blocks`, answered 상태의 `canonical_effect`, 실제 변경된 `affected_fields`, default, status(`open`/`answered`/`deferred`), optional answer를 담는다. Interview-aware intake에서는 `blocks`가 비어 있으면 안 된다. |
+| `interview` | state, round/no-progress counters, canonical `affected_fields`를 가진 8개 discovery dimension disposition, canonical field별 `spec_updates`(`append`/`replace`/`remove`, question/dimension provenance 포함), asked/current question ids, 남은 high-impact 질문과 blocker 신호, stop reason을 담는 bounded working snapshot이다. |
+| `approval_audit` | `interview.state: gate_a_confirmed`일 때 필요한 명시적 Gate A 확인 기록이다. |
+| `baseline_context` | 반복 개발에서 immutable baseline `spec_ref`/`spec_sha256`과 이전 answered `ND-n`, `CQ-n` disposition을 source intake/spec provenance와 함께 보존한다. |
+| `status` | interview-aware artifact는 Gate A 확인 전 `blocked_on_user`, 확인 후 `ready_for_spec`이다. `interview`가 없는 기존 artifact는 종전 decision 기반 규칙을 유지한다. |
 | `evidence` | `USER-n`, `LOCAL-n`, `WEB-n` source 객체 목록이다. |
 
 `p2a` package schema `spec.schema.json`의 핵심 필드는 다음과 같다.
@@ -170,6 +178,7 @@ Task graph의 dependency, cycle, acceptance criteria, source spec reference를 �
 | `schema_version` | spec artifact 버전이다. 값은 반드시 `p2a.spec.v1`이다. |
 | `project_id` | 한 run의 안정적인 프로젝트 id다. artifact 경로의 `<project_id>`와 맞춰 추적한다. |
 | `source_intake` | 이 spec이 근거로 삼은 intake 파일 또는 artifact 참조다. persisted artifact를 가리킬 때는 `.plan2agent/artifacts/<project_id>/gate-a-intake/intake.json` 형식을 사용한다. |
+| `source_intake_sha256` | interview-aware Gate B가 생성될 때 persisted `intake.json` 원본 bytes의 SHA-256을 기록한다. 이후 Gate A가 변경되면 기존 Gate B 검증이 실패하므로 spec을 다시 생성해야 한다. |
 | `product` | 문제, 대상 사용자, 목표, non-goals, core flows, interfaces, data model draft, external integrations, success criteria, constraints를 담는다. |
 | `implementation` | architecture, interfaces, data flow, dependencies, edge cases, verification을 담는다. |
 | `clarifying_question_disposition` | Gate B에서 각 intake `CQ-n`을 어떻게 처리했는지 기록한다. 상태는 `answered`, `assumed`, `deferred_non_goal`, `promoted_to_decision` 중 하나다. |
@@ -210,7 +219,7 @@ Intake와 spec artifact는 `evidence` 배열을 가진다. 이 배열은 결정�
 - Gate B 기술 추천에는 공식 문서, 릴리스 노트, 표준 문서, 패키지 레지스트리, source repository, vendor documentation 같은 primary source를 우선 사용한다.
 - 승인된 spec이 라이브러리, 프레임워크, 런타임, 프로토콜, 패키지, 데이터베이스, 클라우드 서비스, 외부 API 같은 material technology choice를 담고 있으면 최소 하나의 관련 `WEB-n` evidence가 필요하다.
 - Gate B에서 구체적인 외부 기술, 로컬 코드 패턴, prior artifact를 비교했다면 `reference_reconnaissance`에 후보 `REF-n`과 선택/기각 이유를 기록한다. 후보의 `source_id`는 반드시 `evidence`에 존재해야 하며, `decision`은 `selected`, `rejected`, `deferred`, `context`, `open` 중 하나다. Adapter가 후보를 만들었다면 `origin`으로 출처를 기록하고, `selected_patterns`와 `rejected_patterns`는 존재하는 `candidate_id`를 참조해야 한다.
-- `p2a iteration draft`가 생성하는 Gate B 초안은 Gate A intake와 iteration idea를 `reference_reconnaissance.candidates`의 context 후보로 남긴다. 후속 iteration draft는 baseline의 WEB 기반 reference 후보를 carry-forward하므로, 승인 전에 새 기술 선택이나 로컬 패턴 재사용 근거가 있으면 추가 `REF-n` 후보와 선택/기각 패턴으로 보강한다.
+- baseline이 있는 `p2a iteration draft` 첫 호출은 Gate A interview만 만들고 Gate B를 만들지 않는다. 명시적 Gate A 확인이 `intake.json`에 기록된 뒤 같은 harness session에서 다시 호출할 때 Gate B 초안을 만든다. Gate B 초안은 Gate A intake와 iteration idea를 `reference_reconnaissance.candidates`의 context 후보로 남기고 baseline의 WEB 기반 reference 후보를 carry-forward한다.
 - `.plan2agent/artifacts/<project_id>/preflight-research/`에 Feature Radar 산출물이 있으면 `p2a iteration draft`는 Markdown/JSON 파일을 `LOCAL-n` evidence로, 발견한 URL을 `WEB-n` evidence로 가져온다. `next-iteration-recommendations.md`, `capability-gap-analysis.md`, `p2a-context.json`의 추천은 `reference_reconnaissance.candidates`에 `decision: "context"`와 `origin: "feature_radar_preflight"`로 들어간다.
 - Feature Radar 추천은 승인된 scope가 아니라 Gate B 후보 근거다. Gate B 승인 전에 어떤 추천을 `selected`/`deferred`/`rejected`로 처리할지 spec rationale이나 approval note에 남겨야 하며, Gate C task는 승인된 항목에서만 생성한다.
 - read-only web lookup은 prior art 또는 domain grounding 용도다. 구현 실행, dependency 설치, 코드 변경을 위해 사용하지 않는다.
@@ -218,7 +227,9 @@ Intake와 spec artifact는 `evidence` 배열을 가진다. 이 배열은 결정�
 
 ## 4. 재개(resume)
 
-사용자가 `ND-1`, `ND-4` 같은 decision id에 답하면 하네스는 해당 `needs_user_decision[*].answer`를 채우고 `status`를 `answered`로 바꾼 뒤 `intake_json.status`를 다시 계산한다. `intake.md`가 존재하면 JSON에서 다시 생성해 view가 낡지 않게 한다.
+사용자가 `CQ-1`, `ND-1` 같은 id 또는 자연어로 답하면 하네스는 기존 id에 answer/status를 병합하고 discovery dimension, round, no-progress, readiness를 다시 계산한다. 답한 질문을 새 id로 다시 만들지 않는다. `intake.md`가 존재하면 JSON에서 다시 생성해 view가 낡지 않게 한다.
+
+사용자가 Gate A 이해 요약을 확인하면 `gate_a_confirmed`와 `approval_audit`을 기록하고 같은 대화에서 Gate B synthesis로 이어간다. baseline-aware 반복에서는 `baseline_context`의 관련 답변을 재사용하고, 충돌이 있을 때만 현재 반복 decision으로 override를 기록한다.
 
 재개는 입력이 바뀐 가장 이른 단계부터 다시 생성한다.
 
@@ -439,7 +450,7 @@ p2a validate --artifact-root .plan2agent/artifacts/<project_id>
 Spec과 intake traceability를 함께 검증:
 
 ```bash
-p2a validate --intake .plan2agent/artifacts/<project_id>/gate-a-intake/intake.json --spec .plan2agent/artifacts/<project_id>/gate-b-spec/spec.json
+p2a validate --artifact-root .plan2agent/artifacts/<project_id> --intake .plan2agent/artifacts/<project_id>/gate-a-intake/intake.json --spec .plan2agent/artifacts/<project_id>/gate-b-spec/spec.json
 ```
 
 반복 artifact bundle의 active iteration을 검증:
@@ -502,6 +513,7 @@ node scripts/sync_cli_assets.mjs
 | artifact root bundle | `--artifact-root`는 Gate A-D의 JSON 정본 파일을 검증한다. 승인된 Gate B spec은 `spec.approval_audit`를 가져야 한다. | `Gate B is incomplete; missing ...`, `Gate C cannot be validated before Gate B spec exists`, `spec.approval_audit is required when spec.approval is approved` |
 | handoff readiness | `--require-handoff-ready`는 artifact root가 Gate B approved, Gate C valid, `review.json.blocking_issues: []`인 Gate D passed 상태인지 확인한다. | `artifact root is not handoff-ready: ...` |
 | 미해결 결정 차단 | `needs_user_decision.status`가 `open` 또는 `deferred`이면 intake status는 `blocked_on_user`여야 한다. 모두 닫히면 `ready_for_spec`이어야 한다. | `intake.status must be ... when unresolved decisions are ...` |
+| interview readiness/guard | 8개 discovery dimension은 정확히 한 번씩 있어야 하고 canonical `affected_fields`를 선언해야 하며, batch는 최대 3개다. Resolved CQ/ND는 `canonical_effect`를 선언하고, `change`는 non-empty `affected_fields`, `preserve_baseline`은 기존 baseline과 empty `affected_fields`를 요구한다. Greenfield의 confirmed/assumed dimension은 실제 필드를 갱신하거나 `not_applicable`이어야 하고 baseline이 없으므로 update는 `replace`만 사용한다. summary/confirmation/confirmed 상태는 open dimension·질문·결정·새 blocker가 없어야 하고 모든 실제 affected field가 provenance가 있는, 실질적으로 값을 바꾸는 `spec_updates`로 덮여야 하며 Gate A confirmed에는 approval audit이 필요하다. | `intake.interview...`, `intake.approval_audit is required ...` |
 | decision answer/status 일관성 | `answered` decision은 `answer`가 있어야 하고, `open`/`deferred` decision은 `answer`를 가지면 안 된다. `--intake-md`를 명시하면 generated `intake.md`의 명백한 answered-vs-open 불일치도 실패한다. | `ND-1 is answered but has no answer`, `ND-1 is unresolved but has an answer` |
 | CQ disposition 추적성 | `--spec`과 `--intake`를 함께 주면 모든 intake `CQ-n`이 `clarifying_question_disposition`에 정확히 한 번 있어야 한다. | `spec.clarifying_question_disposition is missing intake clarifying questions: ...` |
 | CQ disposition 상태별 필수값 | `answered`는 `resolved_by`, `assumed`는 `assumption`, `deferred_non_goal`은 `non_goal`, `promoted_to_decision`은 `promoted_decision_id`가 필요하며, 다른 status용 detail field를 섞으면 안 된다. | `CQ-1 disposition status answered requires resolved_by`, `CQ-1 disposition status answered does not allow fields: ...` |

@@ -26,7 +26,10 @@ import {
   ValidationError,
 } from './validate_artifacts.mjs';
 import { normalizeMonitorGateSidecar, normalizeMonitorVerdictData, readMonitorGateSidecar } from './p2a_monitor_gate.mjs';
-import { resolveIterationState } from './p2a_iteration_state.mjs';
+import {
+  resolveIterationState,
+  validateMaintenanceTaskGraphProject,
+} from './p2a_iteration_state.mjs';
 import {
   assertUnmanagedGraphMutation,
   assertRunIndexCanInitialize,
@@ -416,7 +419,7 @@ function taskGraphFingerprint(graph) {
   return createHash('sha256').update(JSON.stringify(graph)).digest('hex');
 }
 
-function assertStartTaskGraphUnchanged(source, expectedFingerprint, runId) {
+export function assertStartTaskSourceUnchanged(source, expectedFingerprint, runId) {
   let currentGraph;
   try {
     currentGraph = loadTaskGraph(source.graphPath);
@@ -429,6 +432,24 @@ function assertStartTaskGraphUnchanged(source, expectedFingerprint, runId) {
     throw new Error(
       `task graph changed while run ${runId} was preparing isolation; no run was written. Re-read the task graph and start the task again.`,
     );
+  }
+  if (source.sourceLayout === 'maintenance') {
+    let currentState;
+    try {
+      currentState = resolveIterationState(source.artifactRoot, {
+        requireReady: false,
+      });
+      validateMaintenanceTaskGraphProject(currentState, currentGraph);
+    } catch (error) {
+      throw new Error(
+        `maintenance project state changed while run ${runId} was preparing isolation; no run was written: ${error.message}`,
+      );
+    }
+    if (currentState.projectId !== source.projectId) {
+      throw new Error(
+        `maintenance project identity changed while run ${runId} was preparing isolation; no run was written`,
+      );
+    }
   }
 }
 
@@ -497,6 +518,7 @@ function resolveTaskSource(args) {
     if (args.maintenance) {
       const graphPath = path.join(state.artifactRoot, 'iterations', 'maintenance', 'gate-c-task-graph', 'task-graph.json');
       const graph = loadTaskGraph(graphPath);
+      validateMaintenanceTaskGraphProject(state, graph);
       return {
         projectId: state.projectId,
         sourceLayout: 'maintenance',
@@ -1477,7 +1499,7 @@ function startRun(args) {
       // Task-graph replacement also holds the run-store lock. Rechecking the
       // graph here makes replacement and run commit mutually exclusive without
       // taking the graph lock, which may be owned by the supervising parent.
-      assertStartTaskGraphUnchanged(source, initialTaskGraphFingerprint, run.runId);
+      assertStartTaskSourceUnchanged(source, initialTaskGraphFingerprint, run.runId);
     } catch (error) {
       if (allocation.reservationToken) {
         releaseRunIdReservation(runsDir, run.runId, allocation.reservationToken);

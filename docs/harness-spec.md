@@ -14,8 +14,10 @@ v1 하네스는 실제 코드 변경을 자동 실행하지 않는다. 대신 �
 
 v1 책임:
 
-- 사용자의 한 문장 아이디어를 구조화한다.
-- 부족한 정보를 schema-compatible 질문 목록과 `needs_user_decision`으로 만든다.
+- 사용자의 한 문장 아이디어를 bounded adaptive interview로 구조화한다.
+- 부족한 정보를 round당 1~3개의 schema-compatible 질문과 `needs_user_decision`으로 만든다.
+- soft 3 rounds, hard 5 rounds, no-progress 2회의 결정론적 종료 계약을 적용한다.
+- compact Gate A 이해 요약을 명시적으로 확인받은 뒤 같은 session에서 Gate B를 이어간다.
 - 승인 게이트를 지켜 제품 명세와 구현 명세를 생성한다.
 - 구현 가능한 task graph로 분해한다.
 - task별 agent 실행 prompt 초안을 만든다.
@@ -39,7 +41,7 @@ Plan2Agent는 CLI별 구현 차이를 감추기 위해 공통 역할 이름과 C
 
 | 이름 | 역할 | v1 권한 |
 | --- | --- | --- |
-| `p2a-requirements` | 한 문장 아이디어를 `intake_json`으로 변환 | read-only, optional web lookup |
+| `p2a-requirements` | 한 문장 아이디어를 adaptive interview와 confirmed `intake_json`으로 변환 | read-only, optional web lookup |
 | `p2a-spec-author` | answered intake를 제품 명세와 `spec_json.product`로 변환 | read-only, optional web lookup |
 | `p2a-implementation-planner` | 승인 가능한 제품 명세를 구현 계획과 `spec_json.implementation`으로 변환 | read-only, optional web lookup |
 | `p2a-task-graph` | 승인된 구현 계획을 agent 실행 가능한 `task_graph_json`으로 분해 | read-only |
@@ -49,7 +51,7 @@ Plan2Agent는 CLI별 구현 차이를 감추기 위해 공통 역할 이름과 C
 
 | 이름 | 역할 | 입력 | 출력 |
 | --- | --- | --- | --- |
-| `p2a-intake` | 아이디어를 받아 질문 목록 생성 | 한 문장 아이디어, optional resume answers | `intake_json` |
+| `p2a-intake` | 아이디어를 받아 bounded interview와 Gate A understanding state 생성 | 한 문장 아이디어, optional baseline/resume answers | interview-aware `intake_json` |
 | `p2a-spec` | 답변을 제품/구현 명세로 정리 | answered intake | `spec_json` |
 | `p2a-task-breakdown` | 승인된 구현 명세를 task graph로 분해 | approved `spec_json` | `task_graph_json` |
 | `p2a-review` | 산출물을 검토하고 수정 요청 생성 | spec, task graph | `review_json` |
@@ -73,7 +75,7 @@ Codex에서는 메인 오케스트레이터를 사용자 또는 세션 설정의
 
 | Stage | Skill | Subagent owner | Input artifact | Output artifact | Gate |
 | --- | --- | --- | --- | --- | --- |
-| 1. Intake | `p2a-intake` | `p2a-requirements` | raw idea and notes | `intake_json` | Gate A |
+| 1. Discovery + Intake | `p2a-intake` | `p2a-requirements` | raw idea, notes, and optional baseline context | interview-aware `intake_json` | Gate A |
 | 2. Product spec | `p2a-spec` | `p2a-spec-author` | intake plus answered decisions | product part of `spec_json` | Gate B |
 | 3. Implementation plan | `p2a-spec` | `p2a-implementation-planner` | product spec draft plus Gate A constraints | implementation part of `spec_json` | Gate B |
 | 4. Task graph | `p2a-task-breakdown` | `p2a-task-graph` | approved `spec_json` | `task_graph_json` | Gate C |
@@ -85,7 +87,7 @@ If a CLI cannot spawn subagents automatically, the active model executes the sam
 
 Gate A/B/C/D의 상세 통과·차단 규칙은 `p2a-harness` skill이 유일한 정본이다. 정본: [`.agents/skills/p2a-harness/SKILL.md`](../.agents/skills/p2a-harness/SKILL.md#approval-gates).
 
-- **Gate A:** Intake 단계에서 미해결 사용자 결정이 있으면 멈추고, 결정 항목만 근거와 함께 사용자에게 묻는다.
+- **Gate A:** 8개 discovery 영역과 high-impact 질문을 bounded interview로 처분하고 compact 이해 요약을 제시한다. 사용자의 명시적 확인과 `intake.approval_audit` 전에는 Gate B로 넘어가지 않는다.
 - **Gate B:** Spec approval, `approval_audit`, open decision 해소, 모든 `CQ-n` disposition, 필요한 기술 조사 근거가 갖춰져야 task graph로 넘어간다.
 - **Gate C:** Task graph의 dependency, cycle, acceptance criteria, source spec reference를 검증한다.
 - **Gate D:** 정본 review artifact인 `gate-d-review/review.json`의 blocking issue가 없어야 계획이 준비된 상태가 된다.
@@ -94,9 +96,11 @@ Gate A/B/C/D의 상세 통과·차단 규칙은 `p2a-harness` skill이 유일한
 
 ## 5. Resume Contract
 
-- When the user answers decisions such as `ND-1` or `ND-4`, merge the answers into `intake_json.needs_user_decision[*].answer`, set those decisions to `answered`, and recompute `intake_json.status`.
+- When the user answers `CQ-n` or `ND-n`, keep `blocks` as potential impacts and record `canonical_effect: change` with actual non-empty canonical `affected_fields`, or `canonical_effect: preserve_baseline` with empty `affected_fields` only for explicit preservation of an existing baseline. Update discovery dispositions and their canonical `affected_fields`, update round/no-progress counters, record deterministic, materially changing canonical `spec_updates` (`append`, `replace`, or `remove`) for every actual affected field, and recompute `intake_json.interview`. Greenfield confirmed/assumed dimensions must update a canonical field or be `not_applicable`; because no baseline canonical field exists, greenfield updates must use `replace`. Question-free readiness still requires dimension-sourced canonical updates.
+- Keep `status: blocked_on_user` until the presented Gate A understanding is explicitly confirmed; then record `approval_audit`, set `gate_a_confirmed`, and continue to Gate B in the same harness session.
+- Preserve the iterative `baseline_context.spec_ref`/`spec_sha256`, reuse relevant answers and dispositions with provenance, and record current-iteration overrides instead of mutating baseline records.
 - Resume from the earliest stage whose input changed. Changed intake answers invalidate spec, implementation plan, task graph, and review.
-- Carry forward stable artifact ids (`project_id`, `source_intake`, `sourceSpec`) so later stages can trace their source.
+- Carry forward stable artifact ids (`project_id`, `source_intake`, `sourceSpec`) so later stages can trace their source. Interview-aware Gate B also records `source_intake_sha256` for the exact persisted Gate A bytes so later Gate A changes invalidate the stale spec.
 - If an artifact is pasted in Markdown only, reconstruct the matching JSON contract before advancing to the next gate.
 
 ## 6. State and Schema Contract
@@ -105,13 +109,13 @@ The harness passes intermediate artifacts with these exact names:
 
 | Artifact | Schema or format | Required next-step condition |
 | --- | --- | --- |
-| `intake_json` | `p2a` package schema `intake.schema.json` | `status: ready_for_spec` |
+| `intake_json` | `p2a` package schema `intake.schema.json` | legacy: `status: ready_for_spec`; interview-aware: `gate_a_confirmed`, Gate A `approval_audit`, and `status: ready_for_spec` |
 | `spec_json` | `p2a` package schema `spec.schema.json` | all `CQ-n` dispositions recorded, `approval: approved`, `approval_audit` present, and `open_decisions: []` |
 | `task_graph_json` | `p2a` package schema `task-graph.schema.json` | dependency ids valid and DAG acyclic |
 | `review_json` | `p2a` package schema `review.schema.json` | `blocking_issues: []` |
 | Optional Markdown views | Generated from JSON | human review/export only; not gate decision sources |
 
-Schema validation is intentionally complemented by `scripts/validate_artifacts.mjs` and scaffold-installed `p2a validate`, which perform gate checks that are easier to express procedurally: open/deferred decision blocking, `CQ-n` disposition coverage, spec/intake `open_decisions` traceability including promoted clarifying-question decisions, approved-spec requirement, missing dependency ids, duplicate task ids, and cycle detection.
+Schema validation is intentionally complemented by `scripts/validate_artifacts.mjs` and scaffold-installed `p2a validate`, which perform gate checks that are easier to express procedurally: interview dimension/readiness/guard validation, Gate A approval audit enforcement, open/deferred decision blocking, `CQ-n` disposition coverage, spec/intake `open_decisions` traceability including promoted clarifying-question decisions, approved-spec requirement, missing dependency ids, duplicate task ids, and cycle detection.
 
 The harness orchestrator persists canonical JSON artifacts under `.plan2agent/artifacts/<project_id>/` using gate-specific folders (`gate-a-intake/intake.json`, `gate-b-spec/spec.json`, `gate-c-task-graph/task-graph.json`, `gate-d-review/review.json`). Markdown files such as `status.md`, `intake.md`, `product-spec.md`, `implementation-plan.md`, and `review-report.md` are optional generated views for human review/export, not sources of truth. Optional Feature Radar exports live under `preflight-research/`; they are read-only input evidence, not gate state. In a project initialized by `p2a init`, Gate D success is followed by `p2a iteration init`, which moves root `gate-*` folders into `iterations/<iter-id>/gate-*` before task execution starts. Subagents remain read-only; only the orchestrator writes planning files, and neither the harness nor subagents perform git operations. `.plan2agent/` is local harness state in application projects; runtime commands and schemas are supplied by the installed package, while planning history, run logs, and proposal artifacts are expected to be persisted through Plan2Agent Memory or explicit export rather than application source git.
 

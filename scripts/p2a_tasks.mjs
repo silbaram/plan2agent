@@ -8,7 +8,10 @@ import process from 'node:process';
 import { Readable } from 'node:stream';
 import { validateRunData, validateRunIndexData, validateTaskGraphData, ValidationError } from './validate_artifacts.mjs';
 import { normalizeMonitorVerdictData, readMonitorGateSidecar } from './p2a_monitor_gate.mjs';
-import { resolveIterationState } from './p2a_iteration_state.mjs';
+import {
+  resolveIterationState,
+  validateMaintenanceTaskGraphProject,
+} from './p2a_iteration_state.mjs';
 import {
   assertUnmanagedGraphMutation,
   compareRunEvidence,
@@ -886,9 +889,19 @@ export function main(argv = process.argv.slice(2)) {
     args = resolveTaskInputs(args);
 
     if (VALID_TRANSITIONS.has(args.command)) {
-      const task = withRunStoreLocks([path.dirname(args.graphPath)], () => {
+      const lockDirs = [path.dirname(args.graphPath)];
+      if (args.maintenance) {
+        lockDirs.push(path.join(args.iterationState.artifactRoot, 'iterations'));
+      }
+      const task = withRunStoreLocks(lockDirs, () => {
         const graph = loadGraph(args.graphPath);
         validateTaskGraphData(graph);
+        if (args.maintenance) {
+          const currentState = resolveIterationState(args.artifactsPath, {
+            requireReady: false,
+          });
+          validateMaintenanceTaskGraphProject(currentState, graph);
+        }
         const currentTask = requireTask(graph, args.taskId);
         transitionTask(graph, currentTask, args.command, args);
         clearBlockReasonIfUnblocked(currentTask, args.command, args);
@@ -903,6 +916,7 @@ export function main(argv = process.argv.slice(2)) {
 
     const graph = loadGraph(args.graphPath);
     validateTaskGraphData(graph);
+    if (args.maintenance) validateMaintenanceTaskGraphProject(args.iterationState, graph);
     const tasksById = taskMap(graph);
     if (args.command === 'list') {
       if (args.maintenance) printMaintenanceTaskTable(graph.tasks, tasksById);

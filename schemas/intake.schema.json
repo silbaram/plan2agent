@@ -96,6 +96,50 @@
             "items": {
               "type": "string"
             }
+          },
+          "affected_fields": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "enum": [
+                "spec.product.problem",
+                "spec.product.target_users",
+                "spec.product.goals",
+                "spec.product.non_goals",
+                "spec.product.core_flows",
+                "spec.product.screens_or_interfaces",
+                "spec.product.data_model_draft",
+                "spec.product.external_integrations",
+                "spec.product.success_criteria",
+                "spec.product.constraints",
+                "spec.implementation.architecture",
+                "spec.implementation.interfaces",
+                "spec.implementation.data_flow",
+                "spec.implementation.dependencies",
+                "spec.implementation.edge_cases",
+                "spec.implementation.verification"
+              ]
+            }
+          },
+          "canonical_effect": {
+            "type": "string",
+            "enum": [
+              "change",
+              "preserve_baseline"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "open",
+              "answered",
+              "assumed",
+              "not_applicable"
+            ]
+          },
+          "answer": {
+            "type": "string"
           }
         }
       }
@@ -153,6 +197,64 @@
             "type": "string",
             "minLength": 1
           },
+          "blocks": {
+            "type": "array",
+            "minItems": 1,
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "enum": [
+                "spec.product.problem",
+                "spec.product.target_users",
+                "spec.product.goals",
+                "spec.product.non_goals",
+                "spec.product.core_flows",
+                "spec.product.screens_or_interfaces",
+                "spec.product.data_model_draft",
+                "spec.product.external_integrations",
+                "spec.product.success_criteria",
+                "spec.product.constraints",
+                "spec.implementation.architecture",
+                "spec.implementation.interfaces",
+                "spec.implementation.data_flow",
+                "spec.implementation.dependencies",
+                "spec.implementation.edge_cases",
+                "spec.implementation.verification"
+              ]
+            }
+          },
+          "affected_fields": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "enum": [
+                "spec.product.problem",
+                "spec.product.target_users",
+                "spec.product.goals",
+                "spec.product.non_goals",
+                "spec.product.core_flows",
+                "spec.product.screens_or_interfaces",
+                "spec.product.data_model_draft",
+                "spec.product.external_integrations",
+                "spec.product.success_criteria",
+                "spec.product.constraints",
+                "spec.implementation.architecture",
+                "spec.implementation.interfaces",
+                "spec.implementation.data_flow",
+                "spec.implementation.dependencies",
+                "spec.implementation.edge_cases",
+                "spec.implementation.verification"
+              ]
+            }
+          },
+          "canonical_effect": {
+            "type": "string",
+            "enum": [
+              "change",
+              "preserve_baseline"
+            ]
+          },
           "default": {
             "type": "string",
             "minLength": 1
@@ -167,6 +269,368 @@
           },
           "answer": {
             "type": "string"
+          }
+        }
+      }
+    },
+    "interview": {
+      "type": "object",
+      "required": [
+        "state",
+        "round",
+        "no_progress_rounds",
+        "discovery_dimensions",
+        "asked_question_ids",
+        "current_question_ids",
+        "has_unasked_high_impact_questions",
+        "new_blocker",
+        "stop_reason"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "seed_iteration_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9._-]+$"
+        },
+        "state": {
+          "type": "string",
+          "enum": [
+            "interview_active",
+            "ready_for_gate_a_summary",
+            "awaiting_gate_a_confirmation",
+            "paused",
+            "blocked_on_user",
+            "gate_a_confirmed"
+          ]
+        },
+        "round": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 5
+        },
+        "no_progress_rounds": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 2
+        },
+        "soft_limit_acknowledged": {
+          "type": "boolean"
+        },
+        "discovery_dimensions": {
+          "type": "array",
+          "minItems": 8,
+          "maxItems": 8,
+          "items": {
+            "type": "object",
+            "required": [
+              "dimension",
+              "status",
+              "summary",
+              "affected_fields"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "dimension": {
+                "type": "string",
+                "enum": [
+                  "target_users",
+                  "core_problem",
+                  "expected_outcome",
+                  "mvp_scope",
+                  "non_goals",
+                  "success_criteria",
+                  "constraints_and_risks",
+                  "integrations_and_compatibility"
+                ]
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "confirmed",
+                  "assumed",
+                  "not_applicable",
+                  "open"
+                ]
+              },
+              "summary": {
+                "type": "string",
+                "minLength": 1
+              },
+              "source_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "pattern": "^(WEB|USER|LOCAL)-[0-9]+$"
+                }
+              },
+              "affected_fields": {
+                "type": "array",
+                "uniqueItems": true,
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "spec.product.problem",
+                    "spec.product.target_users",
+                    "spec.product.goals",
+                    "spec.product.non_goals",
+                    "spec.product.core_flows",
+                    "spec.product.screens_or_interfaces",
+                    "spec.product.data_model_draft",
+                    "spec.product.external_integrations",
+                    "spec.product.success_criteria",
+                    "spec.product.constraints",
+                    "spec.implementation.architecture",
+                    "spec.implementation.interfaces",
+                    "spec.implementation.data_flow",
+                    "spec.implementation.dependencies",
+                    "spec.implementation.edge_cases",
+                    "spec.implementation.verification"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "spec_updates": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "field",
+              "operation",
+              "values",
+              "source_question_ids"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "field": {
+                "type": "string",
+                "enum": [
+                  "spec.product.problem",
+                  "spec.product.target_users",
+                  "spec.product.goals",
+                  "spec.product.non_goals",
+                  "spec.product.core_flows",
+                  "spec.product.screens_or_interfaces",
+                  "spec.product.data_model_draft",
+                  "spec.product.external_integrations",
+                  "spec.product.success_criteria",
+                  "spec.product.constraints",
+                  "spec.implementation.architecture",
+                  "spec.implementation.interfaces",
+                  "spec.implementation.data_flow",
+                  "spec.implementation.dependencies",
+                  "spec.implementation.edge_cases",
+                  "spec.implementation.verification"
+                ]
+              },
+              "operation": {
+                "type": "string",
+                "enum": [
+                  "append",
+                  "replace",
+                  "remove"
+                ]
+              },
+              "values": {
+                "type": "array",
+                "uniqueItems": true,
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "pattern": "\\S"
+                }
+              },
+              "source_question_ids": {
+                "type": "array",
+                "uniqueItems": true,
+                "items": {
+                  "type": "string",
+                  "pattern": "^(CQ|ND)-[0-9]+$"
+                }
+              },
+              "source_dimension_ids": {
+                "type": "array",
+                "uniqueItems": true,
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "target_users",
+                    "core_problem",
+                    "expected_outcome",
+                    "mvp_scope",
+                    "non_goals",
+                    "success_criteria",
+                    "constraints_and_risks",
+                    "integrations_and_compatibility"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "asked_question_ids": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^(CQ|ND)-[0-9]+$"
+          }
+        },
+        "current_question_ids": {
+          "type": "array",
+          "maxItems": 3,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^(CQ|ND)-[0-9]+$"
+          }
+        },
+        "has_unasked_high_impact_questions": {
+          "type": "boolean"
+        },
+        "new_blocker": {
+          "type": "boolean"
+        },
+        "stop_reason": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            null,
+            "readiness",
+            "user_requested",
+            "soft_limit",
+            "hard_limit",
+            "no_progress"
+          ]
+        }
+      }
+    },
+    "approval_audit": {
+      "type": "object",
+      "required": [
+        "approved_by",
+        "approved_at",
+        "approved_artifacts",
+        "approval_note"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "approved_by": {
+          "type": "string",
+          "minLength": 1
+        },
+        "approved_at": {
+          "type": "string",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}"
+        },
+        "approved_artifacts": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "approval_note": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "baseline_context": {
+      "type": "object",
+      "required": [
+        "spec_ref",
+        "reused_answers",
+        "reused_question_dispositions"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "spec_ref": {
+          "type": "string",
+          "minLength": 1
+        },
+        "spec_sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "reused_answers": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "id",
+              "question",
+              "answer",
+              "source_intake"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "type": "string",
+                "pattern": "^ND-[0-9]+$"
+              },
+              "question": {
+                "type": "string",
+                "minLength": 1
+              },
+              "answer": {
+                "type": "string",
+                "minLength": 1
+              },
+              "source_intake": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
+        },
+        "reused_question_dispositions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "id",
+              "status",
+              "resolution",
+              "affects",
+              "source_spec"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "type": "string",
+                "pattern": "^CQ-[0-9]+$"
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "answered",
+                  "assumed",
+                  "deferred_non_goal",
+                  "promoted_to_decision"
+                ]
+              },
+              "resolution": {
+                "type": "string",
+                "minLength": 1
+              },
+              "affects": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "source_spec": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
           }
         }
       }

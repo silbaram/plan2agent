@@ -19,6 +19,7 @@ Rules:
 - Follow the Technology Reconnaissance rules in `.agents/skills/p2a-spec/SKILL.md` for current technology choices, primary sources, option comparison, evidence, `reference_reconnaissance`, and Feature Radar candidate handling.
 - Keep plans decision-complete enough for task breakdown.
 - Preserve unresolved choices in `open_decisions`; do not generate a task graph while they remain.
+- Route each answered `needs_user_decision` into every implementation field named by its canonical `affected_fields`; fall back to `blocks` only for a legacy interview item that omits `affected_fields`. Leave product-field routing to the product spec author and do not substitute generic architecture entries.
 - Follow the Clarifying Question Disposition Contract in `.agents/skills/p2a-spec/SKILL.md`; for implementation-relevant `CQ-n` items, verify they are safely disposed or promoted to `ND-n` before approval.
 - Identify interfaces, data flow, dependencies, edge cases, and verification needs.
 - If a Markdown view is requested, structure it with the standard section skeleton where sections mirror `spec_json.implementation` fields.
