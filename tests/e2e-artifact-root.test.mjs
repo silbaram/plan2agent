@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -23,7 +23,17 @@ function assertTargetSpecSourceIntake(targetRoot, projectId, caseId, label) {
   const targetIntakePath = path.join(artifactsDir, 'gate-a-intake', 'intake.json');
   const targetIntakeRef = `.plan2agent/artifacts/${projectId}/gate-a-intake/intake.json`;
   const targetSpec = JSON.parse(readFileSync(targetSpecPath, 'utf8'));
-  assert.ok(existsSync(targetIntakePath) && targetSpec.source_intake === targetIntakeRef, `${label} handoff source_intake mismatch: ${caseId}`);
+  const targetIntake = existsSync(targetIntakePath)
+    ? JSON.parse(readFileSync(targetIntakePath, 'utf8'))
+    : null;
+  assert.ok(targetIntake && targetSpec.source_intake === targetIntakeRef, `${label} handoff source_intake mismatch: ${caseId}`);
+  if (targetIntake.approval_audit) {
+    assert.deepEqual(
+      targetIntake.approval_audit.approved_artifacts,
+      [targetIntakeRef],
+      `${label} handoff Gate A approval audit mismatch: ${caseId}`,
+    );
+  }
 }
 
 const manifest = loadE2eFixtureManifest();
@@ -42,6 +52,26 @@ for (const caseData of manifest.cases ?? []) {
 
     const tempRoot = makeTempDir('p2a-greenfield-handoff-');
     try {
+      const invalidArtifactRoot = path.join(tempRoot, 'invalid-baseline-context');
+      cpSync(caseData.artifact_root, invalidArtifactRoot, { recursive: true });
+      const invalidIntakePath = path.join(invalidArtifactRoot, 'gate-a-intake', 'intake.json');
+      const invalidIntake = JSON.parse(readFileSync(invalidIntakePath, 'utf8'));
+      invalidIntake.baseline_context = {
+        spec_ref: 'missing/spec.json',
+        reused_answers: [],
+        reused_question_dispositions: [],
+      };
+      writeFileSync(invalidIntakePath, `${JSON.stringify(invalidIntake, null, 2)}\n`, 'utf8');
+      result = runValidator([
+        '--artifact-root',
+        invalidArtifactRoot,
+        '--project-id',
+        caseData.project_id,
+        '--require-handoff-ready',
+      ]);
+      assert.notEqual(result.status, 0);
+      assert.match(`${result.stdout}${result.stderr}`, /baseline_context\.spec_ref is missing/);
+
       const targetRoot = path.join(tempRoot, 'target-project');
       result = runHandoff([
         '--project-id',
@@ -87,9 +117,18 @@ for (const caseData of manifest.cases ?? []) {
       assert.equal(targetNext.command.kind, 'cli');
       assert.deepEqual(targetNext.command.argv, [
         'execute', 'plan',
-        '--artifacts', path.join('.plan2agent', 'artifacts', caseData.project_id).split(path.sep).join('/'),
+        '--graph',
+        path.join(
+          '.plan2agent',
+          'artifacts',
+          caseData.project_id,
+          'gate-c-task-graph',
+          'task-graph.json',
+        ).split(path.sep).join('/'),
         '--task', 'task-001',
       ]);
+      result = runEmbeddedTargetP2a(targetRoot, targetNext.command.argv);
+      assertOk(result, `greenfield handoff target p2a next recommendation failed: ${caseData.id}`);
 
       const toolTargetRoot = path.join(tempRoot, 'target-project-tools');
       result = runHandoff(['--project-id', caseData.project_id, '--artifacts', caseData.artifact_root, '--target', toolTargetRoot, '--tools', 'codex,gemini']);

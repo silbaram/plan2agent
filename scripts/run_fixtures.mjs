@@ -49,6 +49,146 @@ function hashText(value) {
   return createHash('sha256').update(value).digest('hex');
 }
 
+const DISCOVERY_FIXTURE_ANSWERS = {
+  'CQ-1': 'Delivery status refreshes within five seconds and contract tests verify the result.',
+  'CQ-2': 'Include operator dashboard delivery status; CSV export remains out of scope.',
+  'CQ-3': 'Add operations users while preserving existing webhook integrations and signature compatibility.',
+};
+
+const DISCOVERY_FIXTURE_SUMMARIES = {
+  target_users: 'Operations users monitor delivery status from the dashboard.',
+  core_problem: 'Operators cannot currently see delivery status without inspecting raw events.',
+  expected_outcome: 'Delivery status becomes visible within five seconds.',
+  mvp_scope: 'The MVP contains the operator delivery-status dashboard only.',
+  non_goals: 'CSV export and historical analytics remain out of scope.',
+  success_criteria: 'Contract tests verify status visibility within five seconds.',
+  constraints_and_risks: 'Existing webhook behavior and signature verification must not regress.',
+  integrations_and_compatibility: 'Existing webhook integrations and signature contracts remain compatible.',
+};
+
+const DISCOVERY_FIXTURE_DECISION_ANSWER = 'Operations leads are the approved dashboard audience.';
+
+const DISCOVERY_FIXTURE_AFFECTED_FIELDS = {
+  target_users: ['spec.product.target_users'],
+  core_problem: ['spec.product.problem'],
+  expected_outcome: ['spec.product.success_criteria', 'spec.implementation.verification'],
+  mvp_scope: ['spec.product.goals', 'spec.product.core_flows'],
+  non_goals: ['spec.product.non_goals'],
+  success_criteria: ['spec.product.success_criteria', 'spec.implementation.verification'],
+  constraints_and_risks: ['spec.product.constraints', 'spec.implementation.edge_cases'],
+  integrations_and_compatibility: [
+    'spec.product.external_integrations',
+    'spec.implementation.interfaces',
+  ],
+};
+
+function discoverySpecUpdates(intake) {
+  const updates = new Map();
+  function addSource(field, value, sourceField, sourceId) {
+    const existing = updates.get(field) ?? {
+      field,
+      operation: field === 'spec.product.target_users' ? 'replace' : 'append',
+      values: [],
+      source_question_ids: [],
+      source_dimension_ids: [],
+    };
+    existing.values = [...new Set([...existing.values, value])];
+    existing[sourceField] = [...new Set([...existing[sourceField], sourceId])];
+    updates.set(field, existing);
+  }
+  for (const dimension of intake.interview?.discovery_dimensions ?? []) {
+    if (dimension.status === 'open') continue;
+    for (const field of dimension.affected_fields ?? []) {
+      addSource(field, dimension.summary, 'source_dimension_ids', dimension.dimension);
+    }
+  }
+  const questions = [
+    ...(intake.clarifying_questions ?? []).filter((item) => (
+      ['answered', 'assumed', 'not_applicable'].includes(item.status)
+    )),
+    ...(intake.needs_user_decision ?? []).filter((item) => item.status === 'answered'),
+  ];
+  for (const source of questions) {
+    for (const field of source.affected_fields ?? source.blocks ?? []) {
+      addSource(field, source.answer, 'source_question_ids', source.id);
+    }
+  }
+  return [...updates.values()];
+}
+
+function confirmDiscoveryIntake(intakePath, approvedArtifactRef, contentSuffix = '') {
+  const intake = JSON.parse(readFileSync(intakePath, 'utf8'));
+  intake.clarifying_questions = (intake.clarifying_questions ?? []).map((question) => ({
+    ...question,
+    status: 'answered',
+    answer: `${DISCOVERY_FIXTURE_ANSWERS[question.id] ?? `Fixture answer for ${question.id}`}${contentSuffix}`,
+    affected_fields: [...question.blocks],
+    canonical_effect: 'change',
+  }));
+  intake.needs_user_decision = (intake.needs_user_decision ?? []).map((decision) => ({
+    ...decision,
+    status: 'answered',
+    answer: `${decision.answer ?? decision.default}${contentSuffix}`,
+    affected_fields: [...(decision.blocks ?? [])],
+    canonical_effect: 'change',
+  }));
+  intake.needs_user_decision.push({
+    id: 'ND-1',
+    question: 'Which user group is the approved dashboard audience?',
+    options: [
+      {
+        id: 'operations-leads',
+        label: 'Operations leads',
+        description: 'Limit the dashboard to operations leads for the current iteration.',
+      },
+      {
+        id: 'all-operators',
+        label: 'All operators',
+        description: 'Expose the dashboard to every operator in the current iteration.',
+      },
+    ],
+    impact: 'Changes the canonical target user and success criteria.',
+    blocks: ['spec.product.target_users', 'spec.product.success_criteria'],
+    affected_fields: ['spec.product.target_users', 'spec.product.success_criteria'],
+    canonical_effect: 'change',
+    default: 'operations-leads',
+    status: 'answered',
+    answer: `${DISCOVERY_FIXTURE_DECISION_ANSWER}${contentSuffix}`,
+  });
+  intake.interview = {
+    ...intake.interview,
+    state: 'gate_a_confirmed',
+    round: Math.max(2, intake.interview.round),
+    no_progress_rounds: 0,
+    discovery_dimensions: intake.interview.discovery_dimensions.map((dimension) => ({
+      ...dimension,
+      status: 'confirmed',
+      summary: `${DISCOVERY_FIXTURE_SUMMARIES[dimension.dimension] ?? `Fixture confirmed ${dimension.dimension}.`}${contentSuffix}`,
+      affected_fields: [...DISCOVERY_FIXTURE_AFFECTED_FIELDS[dimension.dimension]],
+    })),
+    asked_question_ids: [
+      ...new Set([
+        ...intake.interview.asked_question_ids,
+        ...intake.needs_user_decision.map((decision) => decision.id),
+      ]),
+    ],
+    current_question_ids: [],
+    has_unasked_high_impact_questions: false,
+    new_blocker: false,
+    stop_reason: 'readiness',
+  };
+  intake.interview.spec_updates = discoverySpecUpdates(intake);
+  intake.approval_audit = {
+    approved_by: 'user',
+    approved_at: '2026-07-29',
+    approved_artifacts: [approvedArtifactRef],
+    approval_note: 'Fixture user explicitly confirmed the Gate A understanding summary.',
+  };
+  intake.status = 'ready_for_spec';
+  writeFileSync(intakePath, `${JSON.stringify(intake, null, 2)}\n`, 'utf8');
+  return intake;
+}
+
 function normalizeFixturePath(filePath) {
   const relative = path.relative(ROOT, filePath);
   if (relative && !relative.startsWith('..') && !path.isAbsolute(relative)) {
@@ -80,9 +220,39 @@ function assertTargetSpecSourceIntake(targetRoot, projectId, caseId, label) {
   const targetIntakePath = path.join(artifactsDir, 'gate-a-intake', 'intake.json');
   const targetIntakeRef = `.plan2agent/artifacts/${projectId}/gate-a-intake/intake.json`;
   const targetSpec = JSON.parse(readFileSync(targetSpecPath, 'utf8'));
-  if (!existsSync(targetIntakePath) || targetSpec.source_intake !== targetIntakeRef) {
+  const targetIntake = existsSync(targetIntakePath)
+    ? JSON.parse(readFileSync(targetIntakePath, 'utf8'))
+    : null;
+  const intakeAuditMatches = !targetIntake?.approval_audit
+    || JSON.stringify(targetIntake.approval_audit.approved_artifacts) === JSON.stringify([targetIntakeRef]);
+  const baselineContextRefs = targetIntake?.baseline_context
+    ? [
+        targetIntake.baseline_context.spec_ref,
+        ...(targetIntake.baseline_context.reused_answers ?? []).map((item) => item.source_intake),
+        ...(targetIntake.baseline_context.reused_question_dispositions ?? []).map((item) => item.source_spec),
+      ]
+    : [];
+  const missingBaselineContextRefs = baselineContextRefs.filter((reference) => {
+    const resolved = path.resolve(artifactsDir, reference);
+    const relative = path.relative(artifactsDir, resolved);
+    return !relative
+      || relative.startsWith('..')
+      || path.isAbsolute(relative)
+      || !existsSync(resolved);
+  });
+  if (
+    !targetIntake
+    || targetSpec.source_intake !== targetIntakeRef
+    || !intakeAuditMatches
+    || missingBaselineContextRefs.length
+  ) {
     console.error(`${label} handoff spec.source_intake/intake.json mismatch: ${caseId}`);
-    console.error(JSON.stringify({ source_intake: targetSpec.source_intake, intakeExists: existsSync(targetIntakePath) }, null, 2));
+    console.error(JSON.stringify({
+      source_intake: targetSpec.source_intake,
+      intakeExists: Boolean(targetIntake),
+      intakeApprovedArtifacts: targetIntake?.approval_audit?.approved_artifacts ?? null,
+      missingBaselineContextRefs,
+    }, null, 2));
     return { status: 1 };
   }
   const result = runValidator(['--artifact-root', artifactsDir, '--project-id', projectId, '--require-handoff-ready']);
@@ -5413,14 +5583,79 @@ function validateIterationCurrentFixtureCases() {
       writeFeatureRadarPreflightFixture(artifactRoot);
       result = runIteration(['draft', '--artifacts', artifactRoot]);
       checks += 1;
-      if (result.status !== 0 || !result.stdout.includes('iteration draft generated') || !result.stdout.includes('Feature Radar preflight')) {
-        console.error(`iteration draft fixture check failed: ${caseData.id}`);
+      if (result.status !== 0 || !result.stdout.includes('Gate A interview draft generated') || !result.stdout.includes('Feature Radar preflight')) {
+        console.error(`iteration Gate A interview draft fixture check failed: ${caseData.id}`);
         writeResultOutput(result);
         return { status: failureStatus(result), checks };
       }
 
       const draftIntakePath = path.join(artifactRoot, 'iterations', 'iter-002', 'gate-a-intake', 'intake.json');
+      const draftIntakeViewPath = path.join(artifactRoot, 'iterations', 'iter-002', 'gate-a-intake', 'intake.md');
       const draftSpecPath = path.join(artifactRoot, 'iterations', 'iter-002', 'gate-b-spec', 'spec.json');
+      const interviewDraft = JSON.parse(readFileSync(draftIntakePath, 'utf8'));
+      const interviewDraftView = readFileSync(draftIntakeViewPath, 'utf8');
+      const targetUsersDimension = interviewDraft.interview?.discovery_dimensions
+        .find((item) => item.dimension === 'target_users');
+      const baselineDeltaQuestion = interviewDraft.clarifying_questions
+        .find((item) => item.id === 'CQ-3');
+      if (
+        existsSync(draftSpecPath)
+        || interviewDraft.interview?.state !== 'interview_active'
+        || interviewDraft.interview.current_question_ids.length < 1
+        || interviewDraft.interview.current_question_ids.length > 3
+        || !interviewDraft.baseline_context
+        || !interviewDraft.baseline_context.reused_answers.length
+        || !interviewDraft.baseline_context.reused_question_dispositions.length
+        || !targetUsersDimension?.summary.includes('Baseline target users')
+        || !baselineDeltaQuestion?.question.includes('baseline')
+        || !interviewDraftView.includes('### Reused Question Dispositions')
+      ) {
+        console.error(`iteration Gate A interview draft did not enforce confirmation or baseline reuse context: ${caseData.id}`);
+        console.error(JSON.stringify(interviewDraft, null, 2));
+        return { status: 1, checks };
+      }
+      result = runIteration([
+        'draft',
+        '--artifacts',
+        artifactRoot,
+        '--idea',
+        'A different idea that was not interviewed',
+      ]);
+      checks += 1;
+      if (
+        result.status === 0
+        || !result.stderr.includes('does not match existing Gate A intake idea')
+      ) {
+        console.error(`iteration draft did not reject an idea that differs from the existing Gate A intake: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: 1, checks };
+      }
+      const intakeAfterRejectedIdea = JSON.parse(readFileSync(draftIntakePath, 'utf8'));
+      const currentSpecAfterRejectedIdea = JSON.parse(readFileSync(path.join(artifactRoot, 'current-spec.json'), 'utf8'));
+      if (
+        intakeAfterRejectedIdea.idea !== interviewDraft.idea
+        || currentSpecAfterRejectedIdea.pending_iteration?.idea !== interviewDraft.idea
+      ) {
+        console.error(`rejected draft idea mutated Gate A/current-spec state: ${caseData.id}`);
+        console.error(JSON.stringify({
+          intakeIdea: intakeAfterRejectedIdea.idea,
+          pendingIdea: currentSpecAfterRejectedIdea.pending_iteration?.idea,
+          expected: interviewDraft.idea,
+        }, null, 2));
+        return { status: 1, checks };
+      }
+      confirmDiscoveryIntake(
+        draftIntakePath,
+        'iterations/iter-002/gate-a-intake/intake.json',
+      );
+      result = runIteration(['draft', '--artifacts', artifactRoot]);
+      checks += 1;
+      if (result.status !== 0 || !result.stdout.includes('iteration draft generated') || !result.stdout.includes('Feature Radar preflight')) {
+        console.error(`iteration Gate B draft after Gate A confirmation failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: failureStatus(result), checks };
+      }
+
       result = runValidator(['--intake', draftIntakePath, '--spec', draftSpecPath]);
       checks += 1;
       if (result.status !== 0) {
@@ -5437,6 +5672,20 @@ function validateIterationCurrentFixtureCases() {
       ) {
         console.error(`iteration draft did not include valid Gate B reference reconnaissance: ${caseData.id}`);
         console.error(JSON.stringify(draftSpec.reference_reconnaissance ?? null, null, 2));
+        return { status: 1, checks };
+      }
+      if (
+        !draftSpec.product.target_users.some((item) => item.includes(DISCOVERY_FIXTURE_SUMMARIES.target_users))
+        || !draftSpec.product.target_users.some((item) => item.includes(DISCOVERY_FIXTURE_DECISION_ANSWER))
+        || !draftSpec.product.success_criteria.some((item) => item.includes(DISCOVERY_FIXTURE_ANSWERS['CQ-1']))
+        || !draftSpec.product.success_criteria.some((item) => item.includes(DISCOVERY_FIXTURE_DECISION_ANSWER))
+        || !draftSpec.product.goals.some((item) => item.includes(DISCOVERY_FIXTURE_ANSWERS['CQ-2']))
+        || !draftSpec.product.external_integrations.some((item) => item.includes(DISCOVERY_FIXTURE_ANSWERS['CQ-3']))
+        || !draftSpec.implementation.verification.some((item) => item.includes(DISCOVERY_FIXTURE_ANSWERS['CQ-1']))
+        || !draftSpec.implementation.interfaces.some((item) => item.includes(DISCOVERY_FIXTURE_SUMMARIES.integrations_and_compatibility))
+      ) {
+        console.error(`iteration Gate B draft dropped confirmed Gate A interview content: ${caseData.id}`);
+        console.error(JSON.stringify({ product: draftSpec.product, implementation: draftSpec.implementation }, null, 2));
         return { status: 1, checks };
       }
       const radarSpecEvidence = draftSpec.evidence.filter((item) => item.title.startsWith('Feature Radar'));
@@ -5855,9 +6104,25 @@ function validateIterationCurrentFixtureCases() {
       const iter2MetadataPath = path.join(artifactRoot, 'iterations', 'iter-002', 'iteration.json');
       const originalIter2MetadataText = readFileSync(iter2MetadataPath, 'utf8');
       const currentSpecBeforeConflictCompose = readFileSync(state.currentSpecPath, 'utf8');
+      const staleIterationId = 'iter-stale-baseline';
+      const staleIterationRoot = path.join(artifactRoot, 'iterations', staleIterationId);
+      cpSync(
+        path.join(artifactRoot, 'iterations', 'v1-mvp'),
+        staleIterationRoot,
+        { recursive: true },
+      );
       const conflictIter2Metadata = JSON.parse(originalIter2MetadataText);
-      conflictIter2Metadata.baseline.effective_spec_ref = 'iterations/non-existent/gate-b-spec/spec.json';
+      conflictIter2Metadata.opened_at = '2026-01-02T00:00:00.000Z';
+      const staleMetadataPath = path.join(staleIterationRoot, 'iteration.json');
+      const staleMetadata = JSON.parse(readFileSync(staleMetadataPath, 'utf8'));
+      staleMetadata.iteration_id = staleIterationId;
+      staleMetadata.opened_at = '2026-01-03T00:00:00.000Z';
+      staleMetadata.baseline = {
+        iteration_id: 'v1-mvp',
+        effective_spec_ref: 'iterations/v1-mvp/gate-b-spec/spec.json',
+      };
       writeFileSync(iter2MetadataPath, `${JSON.stringify(conflictIter2Metadata, null, 2)}\n`, 'utf8');
+      writeFileSync(staleMetadataPath, `${JSON.stringify(staleMetadata, null, 2)}\n`, 'utf8');
       result = runIteration(['compose', '--artifacts', artifactRoot]);
       checks += 1;
       const conflictComposeOutput = `${result.stdout ?? ''}${result.stderr ?? ''}`;
@@ -5884,6 +6149,7 @@ function validateIterationCurrentFixtureCases() {
       }
       writeFileSync(state.currentSpecPath, currentSpecBeforeConflictCompose, 'utf8');
       writeFileSync(iter2MetadataPath, originalIter2MetadataText, 'utf8');
+      rmSync(staleIterationRoot, { recursive: true, force: true });
 
       result = runIteration(['compose', '--artifacts', artifactRoot]);
       checks += 1;
@@ -6783,14 +7049,37 @@ function validateIterationCurrentFixtureCases() {
 
       result = runIteration(['draft', '--artifacts', artifactRoot]);
       checks += 1;
-      if (result.status !== 0 || !result.stdout.includes('iteration draft generated')) {
-        console.error(`iteration draft from composed current-spec fixture check failed: ${caseData.id}`);
+      if (result.status !== 0 || !result.stdout.includes('Gate A interview draft generated')) {
+        console.error(`iteration Gate A interview draft from composed current-spec fixture check failed: ${caseData.id}`);
         writeResultOutput(result);
         return { status: failureStatus(result), checks };
       }
 
       const iter3SpecPath = path.join(artifactRoot, 'iterations', 'iter-003', 'gate-b-spec', 'spec.json');
       const iter3IntakePath = path.join(artifactRoot, 'iterations', 'iter-003', 'gate-a-intake', 'intake.json');
+      const iter3Interview = JSON.parse(readFileSync(iter3IntakePath, 'utf8'));
+      if (
+        existsSync(iter3SpecPath)
+        || iter3Interview.interview?.state !== 'interview_active'
+        || !iter3Interview.baseline_context?.reused_answers.length
+      ) {
+        console.error(`composed baseline Gate A interview did not preserve reusable answer provenance: ${caseData.id}`);
+        console.error(JSON.stringify(iter3Interview, null, 2));
+        return { status: 1, checks };
+      }
+      confirmDiscoveryIntake(
+        iter3IntakePath,
+        'iterations/iter-003/gate-a-intake/intake.json',
+        ' Iteration 3 refines this for composed baseline reporting.',
+      );
+      result = runIteration(['draft', '--artifacts', artifactRoot]);
+      checks += 1;
+      if (result.status !== 0 || !result.stdout.includes('iteration draft generated')) {
+        console.error(`iteration Gate B draft from composed current-spec fixture check failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: failureStatus(result), checks };
+      }
+
       result = runValidator(['--intake', iter3IntakePath, '--spec', iter3SpecPath]);
       checks += 1;
       if (result.status !== 0) {
@@ -7103,6 +7392,148 @@ function validateIterationCurrentFixtureCases() {
       if (result.status !== 0 || !result.stdout.includes('active iteration: iter-003')) {
         console.error(`iteration current fixture did not ignore stale status/current-spec mismatch: ${caseData.id}`);
         writeResultOutput(result);
+        return { status: 1, checks };
+      }
+
+      const closeReadyIter3TaskGraph = JSON.parse(readFileSync(iter3TaskGraphPath, 'utf8'));
+      for (const task of closeReadyIter3TaskGraph.tasks) task.status = 'done';
+      writeFileSync(
+        iter3TaskGraphPath,
+        `${JSON.stringify(closeReadyIter3TaskGraph, null, 2)}\n`,
+        'utf8',
+      );
+      const iter3ReviewPath = path.join(
+        artifactRoot,
+        'iterations',
+        'iter-003',
+        'gate-d-review',
+        'review.json',
+      );
+      const iter3ReviewReportPath = path.join(
+        artifactRoot,
+        'iterations',
+        'iter-003',
+        'gate-d-review',
+        'review-report.md',
+      );
+      cpSync(closedBaselineReviewPath, iter3ReviewPath);
+      cpSync(closedBaselineReviewReportPath, iter3ReviewReportPath);
+      const iter3Review = JSON.parse(readFileSync(iter3ReviewPath, 'utf8'));
+      iter3Review.sourceSpec = '../gate-b-spec/spec.json';
+      iter3Review.sourceTaskGraph = '../gate-c-task-graph/task-graph.json';
+      writeFileSync(iter3ReviewPath, `${JSON.stringify(iter3Review, null, 2)}\n`, 'utf8');
+
+      result = runIteration(['close', '--artifacts', artifactRoot]);
+      checks += 1;
+      if (result.status !== 0 || !result.stdout.includes('iteration closed')) {
+        console.error(`iteration close iter-003 fixture check failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: failureStatus(result), checks };
+      }
+
+      result = runIteration([
+        'open',
+        '--artifacts',
+        artifactRoot,
+        '--iteration-id',
+        'iter-before-third-compose',
+        '--idea',
+        'Must not skip the latest closed iteration',
+      ]);
+      checks += 1;
+      const staleThirdOpenOutput = `${result.stdout ?? ''}${result.stderr ?? ''}`;
+      if (
+        result.status === 0
+        || !staleThirdOpenOutput.includes('missing ["iter-003"]')
+        || !staleThirdOpenOutput.includes('iteration compose')
+      ) {
+        console.error(`iteration open skipped the latest closed composition source: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: 1, checks };
+      }
+
+      result = runIteration(['compose', '--artifacts', artifactRoot]);
+      checks += 1;
+      if (result.status !== 0 || !result.stdout.includes('current spec composed')) {
+        console.error(`iteration compose iter-003 immutable baseline fixture check failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: failureStatus(result), checks };
+      }
+
+      result = runIteration(['validate', '--artifacts', artifactRoot, '--require-close-ready']);
+      checks += 1;
+      if (result.status !== 0 || !result.stdout.includes('close-ready: all tasks done')) {
+        console.error(`iteration validate after iter-003 composition failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: failureStatus(result), checks };
+      }
+
+      const postIter3HandoffTarget = path.join(tempRoot, 'post-iter-003-handoff-target');
+      result = runHandoff([
+        '--project-id',
+        caseData.project_id,
+        '--artifacts',
+        artifactRoot,
+        '--target',
+        postIter3HandoffTarget,
+        '--iteration-id',
+        'iter-003',
+      ]);
+      checks += 1;
+      if (result.status !== 0) {
+        console.error(`iteration handoff after iter-003 composition failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: failureStatus(result), checks };
+      }
+
+      const iter4Id = 'iter-004';
+      result = runIteration([
+        'open',
+        '--artifacts',
+        artifactRoot,
+        '--iteration-id',
+        iter4Id,
+        '--idea',
+        'Verify immutable composed baseline snapshots',
+      ]);
+      checks += 1;
+      if (result.status !== 0 || !result.stdout.includes('iteration opened')) {
+        console.error(`iteration open iter-004 after composition failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: failureStatus(result), checks };
+      }
+      const iter4CurrentSpec = JSON.parse(readFileSync(state.currentSpecPath, 'utf8'));
+      const iter4BaselineRef = `iterations/${iter4Id}/baseline/current-spec.json`;
+      const iter4BaselinePath = path.join(artifactRoot, iter4BaselineRef);
+      if (
+        iter4CurrentSpec.pending_iteration?.baseline_effective_spec_ref !== iter4BaselineRef
+        || !existsSync(iter4BaselinePath)
+        || iter4CurrentSpec.pending_iteration?.baseline_effective_spec_sha256
+          !== hashText(readFileSync(iter4BaselinePath))
+      ) {
+        console.error(`iteration open did not persist an immutable composed baseline snapshot: ${caseData.id}`);
+        console.error(JSON.stringify(iter4CurrentSpec.pending_iteration, null, 2));
+        return { status: 1, checks };
+      }
+
+      result = runIteration(['draft', '--artifacts', artifactRoot]);
+      checks += 1;
+      if (result.status !== 0 || !result.stdout.includes('Gate A interview draft generated')) {
+        console.error(`iteration draft from immutable composed baseline failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: failureStatus(result), checks };
+      }
+      const iter4Intake = JSON.parse(readFileSync(
+        path.join(artifactRoot, 'iterations', iter4Id, 'gate-a-intake', 'intake.json'),
+        'utf8',
+      ));
+      if (
+        iter4Intake.baseline_context?.spec_ref !== iter4BaselineRef
+        || iter4Intake.baseline_context?.spec_sha256
+          !== iter4CurrentSpec.pending_iteration.baseline_effective_spec_sha256
+      ) {
+        console.error(`iteration Gate A did not bind the immutable composed baseline hash: ${caseData.id}`);
+        console.error(JSON.stringify(iter4Intake.baseline_context, null, 2));
         return { status: 1, checks };
       }
     } finally {

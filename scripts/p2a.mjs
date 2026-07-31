@@ -2,6 +2,7 @@
 /** Top-level Plan2Agent command dispatcher for the npm package and legacy projects. */
 
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { existsSync, lstatSync, readFileSync, readdirSync, realpathSync } from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
@@ -10,6 +11,14 @@ import { DEFAULT_MEMORY_REQUEST_TIMEOUT_MS, DEFAULT_RUNS_DIR, GATE_FILES, GREENF
 import { resolveOrchestrationAgentTool } from './p2a_project_config.mjs';
 import { normalizePath, resolveP2aPaths } from './p2a_paths.mjs';
 import { p2aCommandLine } from './p2a_run_commands.mjs';
+import { resolveIterationState } from './p2a_iteration_state.mjs';
+import {
+  validateIntake,
+  validateReview,
+  validateRunsDir,
+  validateSpec,
+  validateTaskGraph,
+} from './validate_artifacts.mjs';
 
 const P2A_PATHS = resolveP2aPaths(import.meta.url);
 
@@ -84,6 +93,15 @@ function readJsonObject(filePath) {
     if (!isFile(filePath)) return null;
     const parsed = JSON.parse(readFileSync(filePath, 'utf8'));
     return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function rawFileSha256(filePath) {
+  try {
+    if (!isFile(filePath)) return null;
+    return createHash('sha256').update(readFileSync(filePath)).digest('hex');
   } catch {
     return null;
   }
@@ -298,6 +316,7 @@ function inspectRuns(targetRoot, artifactRoot) {
   ].find((candidate) => isDirectory(candidate) && isFile(path.join(candidate, 'run-index.json')));
   if (!runsDir) {
     return {
+      runsDir: null,
       records: [],
       summary: {
         runIndexPath: null,
@@ -316,6 +335,7 @@ function inspectRuns(targetRoot, artifactRoot) {
     return counts;
   }, {});
   return {
+    runsDir,
     records: runs,
     summary: {
       runIndexPath: relativeToTarget(targetRoot, runIndexPath),
@@ -362,10 +382,49 @@ function firstGateFile(searchRoots, gateDirectory, filename) {
   return firstExistingFile(searchRoots.map((root) => path.join(root, gateDirectory, filename)));
 }
 
+function artifactReferenceMatchesPath(
+  reference,
+  artifactRoot,
+  referenceFilePath,
+  expectedPath,
+) {
+  if (typeof reference !== 'string' || !reference.trim()) return false;
+  if (path.isAbsolute(reference)) {
+    return path.resolve(reference) === path.resolve(expectedPath);
+  }
+  const normalizedReference = normalizePath(reference)
+    .replace(/\\/g, '/')
+    .replace(/^\.\//, '');
+  const artifactRelative = normalizePath(path.relative(artifactRoot, expectedPath));
+  const referenceDirectory = path.dirname(referenceFilePath);
+  const gateRoot = path.dirname(referenceDirectory);
+  return new Set([
+    normalizePath(path.relative(referenceDirectory, expectedPath)),
+    normalizePath(path.relative(gateRoot, expectedPath)),
+    artifactRelative,
+    `${path.basename(artifactRoot)}/${artifactRelative}`,
+    `.plan2agent/artifacts/${path.basename(artifactRoot)}/${artifactRelative}`,
+  ]).has(normalizedReference);
+}
+
 function inspectArtifact(targetRoot, artifactRoot, isScaffoldProject) {
   const layout = artifactLayout(artifactRoot, isScaffoldProject);
-  const currentSpec = readJsonObject(path.join(artifactRoot, 'current-spec.json'));
-  const activeIteration = stringValue(currentSpec?.active_iteration);
+  const currentSpecPath = path.join(artifactRoot, 'current-spec.json');
+  const currentSpec = readJsonObject(currentSpecPath);
+  let iterationState = null;
+  let currentSpecValidationError = null;
+  if (layout.kind === 'iteration') {
+    if (!currentSpec) {
+      currentSpecValidationError = 'The canonical current-spec.json is unreadable.';
+    } else {
+      try {
+        iterationState = resolveIterationState(artifactRoot, { requireReady: false });
+      } catch (error) {
+        currentSpecValidationError = error instanceof Error ? error.message : String(error);
+      }
+    }
+  }
+  const activeIteration = iterationState?.activeIteration ?? null;
   const projectId = stringValue(currentSpec?.project_id) ?? path.basename(artifactRoot);
   const searchRoots = artifactSearchRoots(artifactRoot, activeIteration);
   const intakePath = firstGateFile(searchRoots, 'gate-a-intake', 'intake.json');
@@ -376,9 +435,117 @@ function inspectArtifact(targetRoot, artifactRoot, isScaffoldProject) {
   ]));
   const reviewPath = firstGateFile(searchRoots, 'gate-d-review', 'review.json');
   const intake = intakePath ? readJsonObject(intakePath) : null;
+  let intakeValid = false;
+  let intakeValidationError = null;
+  if (intakePath && intake) {
+    try {
+      validateIntake(intakePath, { artifactRoot });
+      intakeValid = true;
+    } catch (error) {
+      intakeValidationError = error instanceof Error ? error.message : String(error);
+    }
+  }
   const spec = specPath ? readJsonObject(specPath) : null;
+  let specValid = false;
+  let specValidationError = null;
+  if (specPath && spec) {
+    try {
+      validateSpec(specPath, intakePath, { artifactRoot });
+      specValid = true;
+    } catch (error) {
+      specValidationError = error instanceof Error ? error.message : String(error);
+    }
+  } else if (specPath) {
+    specValidationError = 'The canonical Gate B specification is unreadable.';
+  }
   const taskGraph = taskGraphPath ? readJsonObject(taskGraphPath) : null;
+  let taskGraphValid = false;
+  let taskGraphValidationError = null;
+  if (taskGraphPath && taskGraph) {
+    try {
+      const validatedTaskGraph = validateTaskGraph(taskGraphPath, specPath);
+      if (spec?.project_id && validatedTaskGraph.projectId !== spec.project_id) {
+        throw new Error('Gate C task graph projectId must match Gate B spec.project_id');
+      }
+      if (
+        specPath
+        && !artifactReferenceMatchesPath(
+          validatedTaskGraph.sourceSpec,
+          artifactRoot,
+          taskGraphPath,
+          specPath,
+        )
+      ) {
+        throw new Error('Gate C task graph sourceSpec must reference the canonical Gate B specification');
+      }
+      taskGraphValid = true;
+    } catch (error) {
+      taskGraphValidationError = error instanceof Error ? error.message : String(error);
+    }
+  } else if (taskGraphPath) {
+    taskGraphValidationError = 'The canonical Gate C task graph is unreadable.';
+  }
   const review = reviewPath ? readJsonObject(reviewPath) : null;
+  let reviewValid = false;
+  let reviewValidationError = null;
+  if (reviewPath && review) {
+    try {
+      const validatedReview = validateReview(reviewPath);
+      const expectedProjectId = taskGraph?.projectId ?? spec?.project_id;
+      if (
+        expectedProjectId
+        && validatedReview.projectId !== expectedProjectId
+      ) {
+        throw new Error('Gate D review projectId must match the Gate C task graph');
+      }
+      if (
+        specPath
+        && !artifactReferenceMatchesPath(
+          validatedReview.sourceSpec,
+          artifactRoot,
+          reviewPath,
+          specPath,
+        )
+      ) {
+        throw new Error('Gate D review sourceSpec must reference the canonical Gate B specification');
+      }
+      if (
+        taskGraphPath
+        && !artifactReferenceMatchesPath(
+          validatedReview.sourceTaskGraph,
+          artifactRoot,
+          reviewPath,
+          taskGraphPath,
+        )
+      ) {
+        throw new Error('Gate D review sourceTaskGraph must reference the canonical Gate C task graph');
+      }
+      reviewValid = true;
+    } catch (error) {
+      reviewValidationError = error instanceof Error ? error.message : String(error);
+    }
+  } else if (reviewPath) {
+    reviewValidationError = 'The canonical Gate D review is unreadable.';
+  }
+  let currentSpecValid = layout.kind !== 'iteration' || Boolean(iterationState);
+  const shouldValidateReadyIteration = (
+    layout.kind === 'iteration'
+    && currentSpecValid
+    && intakeValid
+    && specValid
+    && spec?.approval === 'approved'
+    && taskGraphValid
+    && reviewValid
+    && stringArrayValue(review?.blocking_issues).length === 0
+  );
+  if (shouldValidateReadyIteration) {
+    try {
+      iterationState = resolveIterationState(artifactRoot);
+    } catch (error) {
+      currentSpecValid = false;
+      currentSpecValidationError = error instanceof Error ? error.message : String(error);
+    }
+  }
   const runs = inspectRuns(targetRoot, artifactRoot);
   const tasks = jsonRecords(taskGraph?.tasks);
   return {
@@ -387,15 +554,26 @@ function inspectArtifact(targetRoot, artifactRoot, isScaffoldProject) {
     layout,
     activeIteration,
     currentSpec,
+    currentSpecReadable: Boolean(currentSpec),
+    currentSpecValid,
+    currentSpecValidationError,
     gates: {
       intakePath,
       intake,
+      intakeValid,
+      intakeValidationError,
       specPath,
       spec,
+      specValid,
+      specValidationError,
       taskGraphPath,
       taskGraph,
+      taskGraphValid,
+      taskGraphValidationError,
       reviewPath,
       review,
+      reviewValid,
+      reviewValidationError,
     },
     tasks,
     runs,
@@ -415,7 +593,7 @@ function summarizeArtifact(targetRoot, inspected) {
     readyTaskIds: readyTasks,
     review: {
       path: gates.reviewPath ? relativeToTarget(targetRoot, gates.reviewPath) : null,
-      blockingIssues: jsonRecords(gates.review?.blocking_issues).length,
+      blockingIssues: stringArrayValue(gates.review?.blocking_issues).length,
     },
     runs: inspected.runs.summary,
   };
@@ -629,6 +807,16 @@ function commandProjectPath(targetRoot, filePath) {
     : filePath;
 }
 
+function taskSourceArgs(context) {
+  if (context.detail.layout.kind === 'iteration') {
+    return ['--artifacts', context.artifactArg];
+  }
+  return [
+    '--graph',
+    commandProjectPath(context.targetRoot, context.gates.taskGraphPath),
+  ];
+}
+
 function minedProposalRunIds(targetRoot, proposals) {
   const queuePath = resolveProjectRelativePath(targetRoot, proposals.queueDir);
   if (!isDirectory(queuePath)) return new Set();
@@ -673,6 +861,73 @@ function approvalNextAction(state, reason, display) {
       display,
     },
   };
+}
+
+function gateANextState(intake) {
+  const interviewState = intake?.interview?.state;
+  if (!interviewState) {
+    return intake?.status === 'ready_for_spec'
+      ? 'gate_a_ready_for_spec'
+      : 'gate_a_needs_approval';
+  }
+  return {
+    interview_active: 'gate_a_interview_active',
+    ready_for_gate_a_summary: 'gate_a_summary_ready',
+    awaiting_gate_a_confirmation: 'gate_a_needs_confirmation',
+    paused: 'gate_a_interview_paused',
+    blocked_on_user: 'gate_a_blocked_on_user',
+    gate_a_confirmed: 'gate_a_confirmed_ready_for_spec',
+  }[interviewState];
+}
+
+function gateANextKind(intake) {
+  const interviewState = intake?.interview?.state;
+  if (!interviewState) return intake?.status === 'ready_for_spec' ? 'skill' : 'approval';
+  return ['awaiting_gate_a_confirmation', 'paused', 'blocked_on_user'].includes(interviewState)
+    ? 'approval'
+    : 'skill';
+}
+
+function gateANextReason(intake) {
+  const interviewState = intake?.interview?.state;
+  if (!interviewState) {
+    return intake?.status === 'ready_for_spec'
+      ? 'Gate A intake has no remaining user decisions and is ready for specification.'
+      : 'Gate A intake still needs a human decision or approval before a specification can be written.';
+  }
+  return {
+    interview_active: `Gate A discovery interview round ${intake.interview.round} has an active question batch.`,
+    ready_for_gate_a_summary: 'Discovery readiness is satisfied; present the Gate A understanding summary next.',
+    awaiting_gate_a_confirmation: 'The Gate A understanding summary is waiting for explicit user confirmation.',
+    paused: `The Gate A interview is paused after ${intake.interview.stop_reason}.`,
+    blocked_on_user: `The Gate A interview stopped on ${intake.interview.stop_reason} with unresolved high-impact input.`,
+    gate_a_confirmed: 'Gate A was explicitly confirmed and the same planning session can continue to Gate B synthesis.',
+  }[interviewState];
+}
+
+function gateANextCommand(intake, intakePath) {
+  const interviewState = intake?.interview?.state;
+  if (!interviewState) {
+    return intake?.status === 'ready_for_spec'
+      ? '/p2a-spec'
+      : `Review and approve ${intakePath}.`;
+  }
+  return {
+    interview_active: '/p2a-harness resume_from: interview',
+    ready_for_gate_a_summary: '/p2a-harness resume_from: gate-a-summary',
+    awaiting_gate_a_confirmation: `Review and confirm ${intakePath}; then record the Gate A approval_audit.`,
+    paused: `Choose whether to continue the Gate A interview in ${intakePath}, accept the recommended assumptions, or keep it paused.`,
+    blocked_on_user: `Resolve the remaining blockers in ${intakePath} or explicitly accept the recommended assumptions.`,
+    gate_a_confirmed: '/p2a-harness resume_from: spec',
+  }[interviewState];
+}
+
+function gateAInvalidatesGateB(gates) {
+  if (!gates.intake?.interview || !gates.specPath) return false;
+  if (gates.intake.interview.state !== 'gate_a_confirmed') return true;
+  const expectedIntakeSha256 = stringValue(gates.spec?.source_intake_sha256);
+  const actualIntakeSha256 = rawFileSha256(gates.intakePath);
+  return !expectedIntakeSha256 || !actualIntakeSha256 || expectedIntakeSha256 !== actualIntakeSha256;
 }
 
 function taskIdsWithStatus(tasks, status) {
@@ -747,13 +1002,30 @@ function buildNextDecisionContext(info, targetRoot, requestedProjectId, inspecte
   const activeRuns = runsForActiveIteration(detail.runs.records, detail.activeIteration);
   const taskCounts = countTasks(gates.taskGraph);
   const proposals = info.enhancements.proposals;
-  const minedRunIds = proposals.enabled ? minedProposalRunIds(targetRoot, proposals) : new Set();
-  const unminedFailedOrBlockedRun = activeRuns.find((run) => {
-    const runId = stringValue(run.runId);
-    return Boolean(runId)
-      && ['failed', 'blocked'].includes(run.status)
-      && !minedRunIds.has(runId);
-  });
+  const minedRunIds = proposals.enabled
+    ? minedProposalRunIds(targetRoot, proposals)
+    : null;
+  const failedOrBlockedRunCandidate = proposals.enabled
+    ? activeRuns.find((run) => {
+        const runId = stringValue(run.runId);
+        return Boolean(runId)
+          && ['failed', 'blocked'].includes(run.status)
+          && !minedRunIds.has(runId);
+      })
+    : null;
+  let runEvidenceValidationError = null;
+  if (failedOrBlockedRunCandidate) {
+    try {
+      validateRunsDir(detail.runs.runsDir);
+    } catch (error) {
+      runEvidenceValidationError = error instanceof Error
+        ? error.message
+        : String(error);
+    }
+  }
+  const unminedFailedOrBlockedRun = runEvidenceValidationError
+    ? null
+    : failedOrBlockedRunCandidate;
   return {
     ...context,
     artifactRoot,
@@ -762,10 +1034,26 @@ function buildNextDecisionContext(info, targetRoot, requestedProjectId, inspecte
     detail,
     gates,
     gateAExists: Boolean(gates.intakePath),
+    gateAReadable: Boolean(gates.intake),
+    gateAValid: gates.intakeValid === true,
+    gateAValidationError: gates.intakeValidationError,
+    currentSpecReadable: detail.currentSpecReadable,
+    currentSpecValid: detail.currentSpecValid,
+    currentSpecValidationError: detail.currentSpecValidationError,
     gateBExists: Boolean(gates.specPath),
+    gateBReadable: Boolean(gates.spec),
+    gateBValid: gates.specValid === true,
+    gateBValidationError: gates.specValidationError,
+    gateAInvalidatesGateB: gateAInvalidatesGateB(gates),
     gateCExists: Boolean(gates.taskGraphPath),
+    gateCReadable: Boolean(gates.taskGraph),
+    gateCValid: gates.taskGraphValid === true,
+    gateCValidationError: gates.taskGraphValidationError,
     gateDExists: Boolean(gates.reviewPath),
-    reviewBlockingIssues: jsonRecords(gates.review?.blocking_issues).length,
+    gateDReadable: Boolean(gates.review),
+    gateDValid: gates.reviewValid === true,
+    gateDValidationError: gates.reviewValidationError,
+    reviewBlockingIssues: stringArrayValue(gates.review?.blocking_issues).length,
     activeRuns,
     startedRun: activeRuns.find((run) => run.status === 'started' && stringValue(run.runId)),
     readyIds: readyTaskIds(gates.taskGraph),
@@ -775,6 +1063,7 @@ function buildNextDecisionContext(info, targetRoot, requestedProjectId, inspecte
     proposalQueueArg: proposals.enabled
       ? commandProjectPath(targetRoot, resolveProjectRelativePath(targetRoot, proposals.queueDir))
       : null,
+    runEvidenceValidationError,
     unminedFailedOrBlockedRun,
   };
 }
@@ -802,31 +1091,150 @@ export const NEXT_DECISION_RULES = [
     command: (context) => ['iteration', 'validate', '--artifacts', context.artifactArg],
   },
   {
-    state: (context) => (context.gates.intake?.status === 'ready_for_spec'
-      ? 'gate_a_ready_for_spec'
-      : 'gate_a_needs_approval'),
-    kind: (context) => (context.gates.intake?.status === 'ready_for_spec' ? 'skill' : 'approval'),
-    when: (context) => context.gateAExists && !context.gateBExists,
-    reason: (context) => (context.gates.intake?.status === 'ready_for_spec'
-      ? 'Gate A intake has no remaining user decisions and is ready for specification.'
-      : 'Gate A intake still needs a human decision or approval before a specification can be written.'),
-    command: (context) => (context.gates.intake?.status === 'ready_for_spec'
-      ? '/p2a-spec'
-      : `Review and approve ${path.join(context.artifactArg, 'gate-a-intake', 'intake.json')}.`),
+    state: 'invalid_iteration_state',
+    kind: 'cli',
+    when: (context) => (
+      context.detail.layout.kind === 'iteration'
+      && !context.currentSpecValid
+    ),
+    reason: (context) => (
+      !context.currentSpecReadable
+        ? 'The canonical current-spec.json is unreadable.'
+        : `The canonical iteration state is invalid: ${context.currentSpecValidationError ?? 'validation failed'}`
+    ),
+    command: (context) => ['iteration', 'validate', '--artifacts', context.artifactArg],
+  },
+  {
+    state: 'invalid_gate_a',
+    kind: 'cli',
+    when: (context) => (
+      (context.gateAExists && !context.gateAValid)
+      || (
+        !context.gateAExists
+        && (
+          context.gateBExists
+          || context.gateCExists
+          || context.gateDExists
+        )
+      )
+    ),
+    reason: (context) => {
+      if (!context.gateAExists) {
+        return 'Downstream gate artifacts exist, but the canonical Gate A intake is missing.';
+      }
+      if (!context.gateAReadable) {
+        return 'The canonical Gate A intake is unreadable.';
+      }
+      return `The canonical Gate A intake is invalid: ${context.gateAValidationError ?? 'validation failed'}`;
+    },
+    command: (context) => (
+      context.detail.layout.kind === 'iteration'
+        ? [
+            'iteration',
+            'validate',
+            '--artifacts',
+            context.artifactArg,
+            '--allow-planning',
+            '--stage',
+            'gate-a',
+          ]
+        : ['validate', '--artifact-root', context.artifactArg]
+    ),
+  },
+  {
+    state: (context) => gateANextState(context.gates.intake),
+    kind: (context) => gateANextKind(context.gates.intake),
+    when: (context) => (
+      context.gateAValid
+      && (!context.gateBExists || context.gateAInvalidatesGateB)
+    ),
+    reason: (context) => (
+      context.gateAInvalidatesGateB
+        ? 'Gate A is not confirmed for the existing Gate B specification, or its persisted bytes have changed; resume from Gate A before continuing downstream.'
+        : gateANextReason(context.gates.intake)
+    ),
+    command: (context) => gateANextCommand(
+      context.gates.intake,
+      commandProjectPath(context.targetRoot, context.gates.intakePath),
+    ),
+  },
+  {
+    state: 'invalid_gate_b',
+    kind: 'cli',
+    when: (context) => context.gateBExists && !context.gateBValid,
+    reason: (context) => (
+      context.gateBReadable
+        ? `The canonical Gate B specification is invalid: ${context.gateBValidationError ?? 'validation failed'}`
+        : 'The canonical Gate B specification is unreadable.'
+    ),
+    command: (context) => (
+      context.detail.layout.kind === 'iteration'
+        ? [
+            'iteration',
+            'validate',
+            '--artifacts',
+            context.artifactArg,
+            '--allow-planning',
+            '--stage',
+            context.gates.spec?.approval === 'approved'
+              ? 'gate-b-approved'
+              : 'gate-b-draft',
+          ]
+        : ['validate', '--artifact-root', context.artifactArg]
+    ),
   },
   {
     state: 'gate_b_needs_approval',
     kind: 'approval',
-    when: (context) => context.gateBExists && context.gates.spec?.approval !== 'approved',
+    when: (context) => (
+      context.gateBValid
+      && context.gates.spec?.approval !== 'approved'
+    ),
     reason: () => 'The Gate B specification is still a draft.',
-    command: (context) => `Review ${path.join(context.artifactArg, 'gate-b-spec', 'spec.json')}, approve it, and record approval_audit.`,
+    command: (context) => `Review ${commandProjectPath(context.targetRoot, context.gates.specPath)}, approve it, and record approval_audit.`,
   },
   {
     state: 'gate_b_approved_needs_tasks',
     kind: 'skill',
-    when: (context) => context.gateBExists && context.gates.spec?.approval === 'approved' && !context.gateCExists,
+    when: (context) => (
+      context.gateBValid
+      && context.gates.spec?.approval === 'approved'
+      && !context.gateCExists
+    ),
     reason: () => 'The approved Gate B specification has no Gate C task graph yet.',
     command: () => '/p2a-task-breakdown',
+  },
+  {
+    state: 'invalid_gate_c',
+    kind: 'cli',
+    when: (context) => context.gateCExists && !context.gateCValid,
+    reason: (context) => (
+      context.gateCReadable
+        ? `The canonical Gate C task graph is invalid: ${context.gateCValidationError ?? 'validation failed'}`
+        : 'The canonical Gate C task graph is unreadable.'
+    ),
+    command: (context) => [
+      'validate',
+      '--task-graph',
+      commandProjectPath(context.targetRoot, context.gates.taskGraphPath),
+      '--require-approved-spec',
+      commandProjectPath(context.targetRoot, context.gates.specPath),
+    ],
+  },
+  {
+    state: 'invalid_gate_d',
+    kind: 'cli',
+    when: (context) => context.gateDExists && !context.gateDValid,
+    reason: (context) => (
+      context.gateDReadable
+        ? `The canonical Gate D review is invalid: ${context.gateDValidationError ?? 'validation failed'}`
+        : 'The canonical Gate D review is unreadable.'
+    ),
+    command: (context) => [
+      'validate',
+      '--review',
+      commandProjectPath(context.targetRoot, context.gates.reviewPath),
+    ],
   },
   {
     state: (context) => (context.gateDExists ? 'gate_d_blocked' : 'gate_c_needs_review'),
@@ -836,7 +1244,7 @@ export const NEXT_DECISION_RULES = [
       ? `Gate D review has ${context.reviewBlockingIssues} blocking issue(s).`
       : 'The Gate C task graph exists but has not passed Gate D review.'),
     command: (context) => (context.gateDExists
-      ? `Resolve the blockers in ${path.join(context.artifactArg, 'gate-d-review', 'review.json')}, then run ${p2aCommandLine(P2A_PATHS, ['next'])} again.`
+      ? `Resolve the blockers in ${commandProjectPath(context.targetRoot, context.gates.reviewPath)}, then run ${p2aCommandLine(P2A_PATHS, ['next'])} again.`
       : '/p2a-review'),
   },
   {
@@ -847,32 +1255,86 @@ export const NEXT_DECISION_RULES = [
     command: (context) => ['iteration', 'init', '--artifacts', context.artifactArg],
   },
   {
+    state: 'invalid_run_evidence',
+    kind: 'cli',
+    when: (context) => Boolean(context.runEvidenceValidationError),
+    reason: (context) => (
+      `The run store is invalid and must be repaired before proposal mining: ${context.runEvidenceValidationError}`
+    ),
+    command: (context) => [
+      'runs',
+      'validate',
+      '--artifacts',
+      context.artifactArg,
+    ],
+  },
+  {
     state: 'run_started',
     kind: 'cli',
     when: (context) => Boolean(context.startedRun),
     reason: (context) => `Run ${context.startedRun.runId} is still open and should be resumed before starting new work.`,
-    command: (context) => ['execute', 'resume', '--artifacts', context.artifactArg, '--run-id', context.startedRun.runId],
+    command: (context) => [
+      'execute',
+      'resume',
+      ...taskSourceArgs(context),
+      '--run-id',
+      context.startedRun.runId,
+    ],
   },
   {
     state: 'ready_task_available',
     kind: 'cli',
     when: (context) => context.readyIds.length > 0,
     reason: (context) => `Task ${context.readyIds[0]} is ready to plan for supervised execution.`,
-    command: (context) => ['execute', 'plan', '--artifacts', context.artifactArg, '--task', context.readyIds[0]],
+    command: (context) => [
+      'execute',
+      'plan',
+      ...taskSourceArgs(context),
+      '--task',
+      context.readyIds[0],
+    ],
   },
   {
     state: 'tasks_blocked',
     kind: 'cli',
     when: (context) => context.blockedTaskIds.length > 0 && !context.readyIds.length,
     reason: (context) => `No task is ready and task ${context.blockedTaskIds[0]} is blocked.`,
-    command: (context) => ['tasks', 'show', '--artifacts', context.artifactArg, context.blockedTaskIds[0]],
+    command: (context) => [
+      'tasks',
+      'show',
+      ...taskSourceArgs(context),
+      context.blockedTaskIds[0],
+    ],
   },
   {
-    state: 'iteration_ready_to_close',
-    kind: 'cli',
-    when: (context) => context.allTasksDone && !context.closedIteration,
-    reason: () => 'Every task in the active iteration is done and the iteration is still open.',
-    command: (context) => ['iteration', 'close', '--artifacts', context.artifactArg],
+    state: (context) => (
+      context.detail.layout.kind === 'iteration'
+        ? 'iteration_ready_to_close'
+        : 'flat_execution_complete'
+    ),
+    kind: (context) => (
+      context.detail.layout.kind === 'iteration'
+        ? 'cli'
+        : 'approval'
+    ),
+    when: (context) => (
+      context.allTasksDone
+      && !context.closedIteration
+      && (
+        context.detail.layout.kind === 'iteration'
+        || !context.unminedFailedOrBlockedRun
+      )
+    ),
+    reason: (context) => (
+      context.detail.layout.kind === 'iteration'
+        ? 'Every task in the active iteration is done and the iteration is still open.'
+        : 'Every task in the handed-off flat artifact bundle is done; this layout has no iteration state to close.'
+    ),
+    command: (context) => (
+      context.detail.layout.kind === 'iteration'
+        ? ['iteration', 'close', '--artifacts', context.artifactArg]
+        : `Review the completed task and run evidence under ${context.artifactArg}; no iteration close is required for this flat handoff.`
+    ),
   },
   {
     state: 'run_evidence_needs_proposal_mining',
@@ -968,7 +1430,11 @@ function buildInfoSnapshot(targetRootInput) {
     } else if (artifact.readyTaskIds.length) {
       nextActions.push(`Plan the next ready task: ${p2aCommand(['execute', 'plan', '--artifacts', artifact.artifactRoot, '--task', artifact.readyTaskIds[0]])}`);
     } else if (artifact.taskCounts.total > 0 && artifact.taskCounts.done === artifact.taskCounts.total) {
-      nextActions.push(`Validate close readiness: ${p2aCommand(['iteration', 'validate', '--artifacts', artifact.artifactRoot, '--require-close-ready'])}`);
+      if (artifact.layout.kind === 'iteration') {
+        nextActions.push(`Validate close readiness: ${p2aCommand(['iteration', 'validate', '--artifacts', artifact.artifactRoot, '--require-close-ready'])}`);
+      } else {
+        nextActions.push(`Review completed flat handoff evidence under ${artifact.artifactRoot}; no iteration close is required.`);
+      }
     }
   }
   if (enhancements.memory.enabled) {

@@ -4,5 +4,5 @@ Use the Plan2Agent p2a-intake skill for the following idea or resume context:
 
 {{args}}
 
-Return intake_json conforming to the p2a package schema intake.schema.json and a table of open needs_user_decision items when blocked.
+Return intake_json conforming to the p2a package schema intake.schema.json. Run the adaptive discovery interview in batches of 1 to 3 high-impact questions, preserve stable CQ-n and ND-n ids across turns, keep blocks as potential impacts, record actual changed affected_fields (empty for explicit baseline preservation), require greenfield confirmed/assumed dimensions to update a field or be not_applicable, record materially changing canonical spec_updates with source_question_ids/source_dimension_ids, and stop for explicit Gate A confirmation before specification synthesis.
 """

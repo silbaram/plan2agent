@@ -17,7 +17,7 @@ function writeJson(filePath, value) {
 function project(options = {}) {
   const root = makeTempDir('p2a-next-');
   const manifest = {
-    provenance: { mode: 'scaffold' },
+    provenance: { mode: options.mode ?? 'scaffold' },
     enhancements: options.proposals ? { proposals: { enabled: true } } : {},
   };
   writeJson(join(root, '.plan2agent', 'manifest.json'), manifest);
@@ -35,28 +35,102 @@ function gateRoot(artifactRoot, iterationId = null) {
   return iterationId ? join(artifactRoot, 'iterations', iterationId) : artifactRoot;
 }
 
+function currentProjectId(artifactRoot) {
+  const currentSpecPath = join(artifactRoot, 'current-spec.json');
+  if (!existsSync(currentSpecPath)) return null;
+  try {
+    return JSON.parse(readFileSync(currentSpecPath, 'utf8')).project_id ?? null;
+  } catch {
+    return null;
+  }
+}
+
 function writeGateA(artifactRoot, status = 'blocked_on_user', iterationId = null) {
-  writeJson(join(gateRoot(artifactRoot, iterationId), 'gate-a-intake', 'intake.json'), { status });
+  const fixtureName = status === 'ready_for_spec'
+    ? 'intake.answered.json'
+    : 'intake.blocked.json';
+  const intake = JSON.parse(readFileSync(
+    join(FIXTURE_ROOT, 'cache-library', fixtureName),
+    'utf8',
+  ));
+  writeJson(
+    join(gateRoot(artifactRoot, iterationId), 'gate-a-intake', 'intake.json'),
+    intake,
+  );
 }
 
 function writeGateB(artifactRoot, approval = 'approved', iterationId = null) {
-  writeJson(join(gateRoot(artifactRoot, iterationId), 'gate-b-spec', 'spec.json'), { approval });
+  const spec = JSON.parse(readFileSync(
+    join(FIXTURE_ROOT, 'cache-library', 'spec.approved.json'),
+    'utf8',
+  ));
+  spec.source_intake = '../gate-a-intake/intake.json';
+  spec.project_id = currentProjectId(artifactRoot) ?? spec.project_id;
+  spec.approval = approval;
+  if (approval !== 'approved') delete spec.approval_audit;
+  writeJson(
+    join(gateRoot(artifactRoot, iterationId), 'gate-b-spec', 'spec.json'),
+    spec,
+  );
 }
 
 function writeGateC(artifactRoot, tasks, iterationId = null) {
-  writeJson(join(gateRoot(artifactRoot, iterationId), 'gate-c-task-graph', 'task-graph.json'), { tasks });
+  writeJson(
+    join(gateRoot(artifactRoot, iterationId), 'gate-c-task-graph', 'task-graph.json'),
+    {
+      schema_version: 'p2a.task_graph.v1',
+      projectId: currentProjectId(artifactRoot) ?? 'cache-library',
+      version: iterationId ?? 'v1',
+      sourceSpec: '../gate-b-spec/spec.json',
+      tasks,
+    },
+  );
 }
 
 function writeGateD(artifactRoot, blockingIssues = [], iterationId = null) {
-  writeJson(join(gateRoot(artifactRoot, iterationId), 'gate-d-review', 'review.json'), { blocking_issues: blockingIssues });
+  const review = JSON.parse(readFileSync(
+    join(FIXTURE_ROOT, 'cache-library', 'review.json'),
+    'utf8',
+  ));
+  review.sourceSpec = '../gate-b-spec/spec.json';
+  review.sourceTaskGraph = '../gate-c-task-graph/task-graph.json';
+  review.projectId = currentProjectId(artifactRoot) ?? review.projectId;
+  review.blocking_issues = blockingIssues.map((issue) => (
+    typeof issue === 'string' ? issue : issue.id ?? JSON.stringify(issue)
+  ));
+  writeJson(
+    join(gateRoot(artifactRoot, iterationId), 'gate-d-review', 'review.json'),
+    review,
+  );
 }
 
 function writeIteration(artifactRoot, projectId = 'sample', options = {}) {
   const iterationId = options.iterationId ?? 'v1';
   mkdirSync(join(artifactRoot, 'iterations', iterationId), { recursive: true });
+  const approvalAudit = {
+    approved_by: 'user',
+    approved_at: '2026-07-31',
+    approved_artifacts: [
+      `iterations/${iterationId}/gate-b-spec/spec.json`,
+    ],
+    approval_note: 'Fixture approval for next-action readiness.',
+  };
   const currentSpec = {
+    schema_version: 'p2a.current_spec.v1',
     project_id: projectId,
     active_iteration: iterationId,
+    effective_spec_ref: `iterations/${iterationId}/gate-b-spec/spec.json`,
+    gate_b_approval_audits: {
+      [iterationId]: approvalAudit,
+    },
+    gate_c_approval_audits: {
+      [iterationId]: {
+        ...approvalAudit,
+        approved_artifacts: [
+          `iterations/${iterationId}/gate-c-task-graph/task-graph.json`,
+        ],
+      },
+    },
     ...(options.closed ? {
       last_closed_iteration: { iteration_id: iterationId, status: 'archived' },
       closed_iterations: [{ iteration_id: iterationId, status: 'archived' }],
@@ -67,11 +141,121 @@ function writeIteration(artifactRoot, projectId = 'sample', options = {}) {
 }
 
 function task(id, status, dependencies = []) {
-  return { id, status, dependencies };
+  return {
+    id,
+    title: `Task ${id}`,
+    description: `Implement ${id}.`,
+    status,
+    dependencies,
+    acceptanceCriteria: [`${id} meets its acceptance criteria.`],
+    targetArea: 'src',
+    suggestedAgentPrompt: `Implement ${id} from the approved specification.`,
+    sourceSpecRefs: ['product.goals'],
+  };
 }
 
 function writeRuns(artifactRoot, runs) {
-  writeJson(join(artifactRoot, 'runs', 'run-index.json'), { runs });
+  const projectId = currentProjectId(artifactRoot) ?? 'cache-library';
+  const runRecords = runs.map((run, index) => {
+    const taskId = run.taskId ?? 'task-001';
+    const startedAt = run.startedAt ?? `2026-07-31T00:00:0${index}.000Z`;
+    const finishedAt = run.status === 'started'
+      ? null
+      : run.finishedAt ?? `2026-07-31T00:01:0${index}.000Z`;
+    const taskGraphRef = run.taskGraphRef ?? (
+      run.iterationId
+        ? `iterations/${run.iterationId}/gate-c-task-graph/task-graph.json`
+        : 'gate-c-task-graph/task-graph.json'
+    );
+    const sourceSpecRef = run.sourceSpecRef ?? (
+      run.iterationId
+        ? `iterations/${run.iterationId}/gate-b-spec/spec.json`
+        : 'gate-b-spec/spec.json'
+    );
+    return {
+      schema_version: 'p2a.run.v1',
+      runId: run.runId,
+      projectId,
+      taskId,
+      taskTitle: `Task ${taskId}`,
+      iterationId: run.iterationId ?? null,
+      sourceLayout: run.iterationId ? 'iteration' : 'handoff',
+      taskGraphRef,
+      sourceSpecRef,
+      agentTool: 'codex',
+      workspaceRef: 'fixture-workspace',
+      workspacePath: '.',
+      isolation: {
+        mode: 'none',
+        branch: null,
+        worktree: null,
+        baseRef: null,
+        created: false,
+        createCommand: null,
+        createExitCode: null,
+        createOutputTail: null,
+      },
+      status: run.status,
+      startedAt,
+      updatedAt: finishedAt ?? startedAt,
+      finishedAt,
+      changedFiles: [],
+      verification: [],
+      notes: [],
+      ...(['failed', 'blocked'].includes(run.status) ? {
+        failure: {
+          class: 'implementation_incomplete',
+          retryable: 'after_fix',
+          needsUserDecision: false,
+          source: 'owner',
+        },
+        reproduction: {
+          steps: ['Reproduce the fixture failure.'],
+          commands: [],
+          notes: [],
+        },
+        localization: {
+          findings: ['The fixture run records a localized failure.'],
+          files: [],
+        },
+        guard: {
+          checks: ['Validate the repaired run evidence.'],
+          notes: [],
+        },
+      } : {}),
+    };
+  });
+  for (const run of runRecords) {
+    writeJson(join(artifactRoot, 'runs', `${run.runId}.json`), run);
+  }
+  const indexedRuns = runRecords.map((run) => ({
+    runId: run.runId,
+    taskId: run.taskId,
+    iterationId: run.iterationId,
+    status: run.status,
+    agentTool: run.agentTool,
+    workspaceRef: run.workspaceRef,
+    taskGraphRef: run.taskGraphRef,
+    runRef: `${run.runId}.json`,
+    startedAt: run.startedAt,
+    finishedAt: run.finishedAt,
+  }));
+  const taskIds = [...new Set(indexedRuns.map((run) => run.taskId))];
+  writeJson(join(artifactRoot, 'runs', 'run-index.json'), {
+    schema_version: 'p2a.run_index.v1',
+    projectId,
+    runs: indexedRuns,
+    tasks: taskIds.map((taskId) => {
+      const runIds = indexedRuns
+        .filter((run) => run.taskId === taskId)
+        .map((run) => run.runId);
+      return {
+        taskId,
+        runIds,
+        latestRunId: runIds.at(-1) ?? null,
+      };
+    }),
+  });
 }
 
 function next(root, args = []) {
@@ -124,6 +308,21 @@ function installFixtureArtifact(root, fixtureRoot, projectId, layout) {
   for (const [source, destination] of files) {
     copyFixtureFile(join(fixtureRoot, source), join(artifactRoot, destination));
   }
+  const specPath = join(artifactRoot, 'gate-b-spec', 'spec.json');
+  const spec = JSON.parse(readFileSync(specPath, 'utf8'));
+  spec.source_intake = '../gate-a-intake/intake.json';
+  writeJson(specPath, spec);
+
+  const taskGraphPath = join(artifactRoot, 'gate-c-task-graph', 'task-graph.json');
+  const taskGraph = JSON.parse(readFileSync(taskGraphPath, 'utf8'));
+  taskGraph.sourceSpec = '../gate-b-spec/spec.json';
+  writeJson(taskGraphPath, taskGraph);
+
+  const reviewPath = join(artifactRoot, 'gate-d-review', 'review.json');
+  const review = JSON.parse(readFileSync(reviewPath, 'utf8'));
+  review.sourceSpec = '../gate-b-spec/spec.json';
+  review.sourceTaskGraph = '../gate-c-task-graph/task-graph.json';
+  writeJson(reviewPath, review);
   return artifactRoot;
 }
 
@@ -357,6 +556,294 @@ test('next chooses one read-only action for every primary state', () => {
   }
 });
 
+test('next blocks downstream work when Gate A is missing, unreadable, or invalid', () => {
+  for (const variant of ['missing', 'unreadable', 'invalid']) {
+    const root = project();
+    try {
+      const rootArtifact = artifact(root);
+      if (variant === 'unreadable') {
+        const intakePath = join(rootArtifact, 'gate-a-intake', 'intake.json');
+        mkdirSync(dirname(intakePath), { recursive: true });
+        writeFileSync(intakePath, '{ invalid json\n', 'utf8');
+      } else if (variant === 'invalid') {
+        writeGateA(rootArtifact, 'ready_for_spec');
+        const intakePath = join(rootArtifact, 'gate-a-intake', 'intake.json');
+        const intake = JSON.parse(readFileSync(intakePath, 'utf8'));
+        intake.interview = { state: 'gate_a_confirmed' };
+        writeJson(intakePath, intake);
+      }
+      writeGateB(rootArtifact);
+      writeGateC(rootArtifact, [task('task-001', 'todo')]);
+      writeGateD(rootArtifact);
+
+      assertAction(
+        next(root),
+        'invalid_gate_a',
+        'cli',
+        ['validate', '--artifact-root', rootArtifact],
+      );
+    } finally {
+      remove(root);
+    }
+  }
+});
+
+test('next routes an unreadable or invalid Gate A to recovery without downstream artifacts', () => {
+  for (const variant of ['unreadable', 'invalid']) {
+    const root = project();
+    try {
+      const rootArtifact = artifact(root);
+      const intakePath = join(rootArtifact, 'gate-a-intake', 'intake.json');
+      if (variant === 'unreadable') {
+        mkdirSync(dirname(intakePath), { recursive: true });
+        writeFileSync(intakePath, '{ invalid json\n', 'utf8');
+      } else {
+        writeGateA(rootArtifact, 'ready_for_spec');
+        const intake = JSON.parse(readFileSync(intakePath, 'utf8'));
+        intake.interview = { state: 'gate_a_confirmed' };
+        writeJson(intakePath, intake);
+      }
+
+      assertAction(
+        next(root),
+        'invalid_gate_a',
+        'cli',
+        ['validate', '--artifact-root', rootArtifact],
+      );
+    } finally {
+      remove(root);
+    }
+  }
+});
+
+test('next recommends and runs the iterative Gate A validator for an invalid active intake', () => {
+  const root = project();
+  try {
+    const rootArtifact = artifact(root);
+    const iterationId = 'iter-002';
+    writeJson(join(rootArtifact, 'current-spec.json'), {
+      schema_version: 'p2a.current_spec.v1',
+      project_id: 'sample',
+      active_iteration: iterationId,
+      pending_iteration: {
+        iteration_id: iterationId,
+        status: 'gate_a_interview',
+      },
+    });
+    writeGateA(rootArtifact, 'ready_for_spec', iterationId);
+    const intakePath = join(
+      rootArtifact,
+      'iterations',
+      iterationId,
+      'gate-a-intake',
+      'intake.json',
+    );
+    const intake = JSON.parse(readFileSync(intakePath, 'utf8'));
+    intake.interview = { state: 'gate_a_confirmed' };
+    writeJson(intakePath, intake);
+
+    const payload = next(root);
+    const expectedCommand = [
+      'iteration',
+      'validate',
+      '--artifacts',
+      rootArtifact,
+      '--allow-planning',
+      '--stage',
+      'gate-a',
+    ];
+    assertAction(payload, 'invalid_gate_a', 'cli', expectedCommand);
+
+    const validation = runP2a(payload.command.argv);
+    assert.notEqual(validation.status, 0);
+    assert.match(
+      `${validation.stdout}${validation.stderr}`,
+      /\$\.interview missing required keys/,
+    );
+  } finally {
+    remove(root);
+  }
+});
+
+test('next routes an unreadable or structurally invalid current spec to iteration recovery', () => {
+  for (const variant of ['unreadable', 'missing-active-iteration']) {
+    const root = project();
+    try {
+      const rootArtifact = artifact(root);
+      mkdirSync(join(rootArtifact, 'iterations', 'iter-002'), { recursive: true });
+      const currentSpecPath = join(rootArtifact, 'current-spec.json');
+      if (variant === 'unreadable') {
+        writeFileSync(currentSpecPath, '{ invalid json\n', 'utf8');
+      } else {
+        writeJson(currentSpecPath, {
+          schema_version: 'p2a.current_spec.v1',
+          project_id: 'sample',
+        });
+      }
+
+      const payload = next(root);
+      const expectedCommand = [
+        'iteration',
+        'validate',
+        '--artifacts',
+        rootArtifact,
+      ];
+      assertAction(payload, 'invalid_iteration_state', 'cli', expectedCommand);
+
+      const validation = runP2a(payload.command.argv);
+      assert.notEqual(validation.status, 0);
+      assert.match(
+        `${validation.stdout}${validation.stderr}`,
+        variant === 'unreadable'
+          ? /JSON at position/
+          : /active_iteration must be a non-empty string/,
+      );
+    } finally {
+      remove(root);
+    }
+  }
+});
+
+test('next routes full iteration readiness failures before recommending task execution', () => {
+  const cases = [
+    {
+      id: 'invalid composition',
+      mutate: (currentSpec) => {
+        currentSpec.effective_spec_ref = 'current-spec.json';
+      },
+      error: /current-spec\.json source_specs must be a non-empty array for composition/,
+    },
+    {
+      id: 'project mismatch',
+      mutate: (currentSpec) => {
+        currentSpec.project_id = 'other-project';
+      },
+      error: /spec\.project_id .* to match current-spec\.json project_id/,
+    },
+    {
+      id: 'missing project identity',
+      mutate: (currentSpec) => {
+        delete currentSpec.project_id;
+      },
+      error: /current-spec\.json project_id must be a non-empty string/,
+    },
+    {
+      id: 'stale pending baseline',
+      mutate: (currentSpec, iterationId) => {
+        currentSpec.pending_iteration = {
+          iteration_id: iterationId,
+          status: 'gate_d_passed',
+          baseline_iteration: 'v0',
+          baseline_effective_spec_ref: `iterations/${iterationId}/gate-b-spec/spec.json`,
+        };
+      },
+      error: /iteration metadata baseline iteration null must match pending baseline iteration "v0"/,
+    },
+  ];
+
+  for (const caseData of cases) {
+    const root = project();
+    try {
+      const rootArtifact = artifact(root);
+      const iterationId = writeIteration(rootArtifact);
+      writeGateA(rootArtifact, 'ready_for_spec', iterationId);
+      writeGateB(rootArtifact, 'approved', iterationId);
+      writeGateC(rootArtifact, [task('task-001', 'todo')], iterationId);
+      writeGateD(rootArtifact, [], iterationId);
+
+      const currentSpecPath = join(rootArtifact, 'current-spec.json');
+      const currentSpec = JSON.parse(readFileSync(currentSpecPath, 'utf8'));
+      caseData.mutate(currentSpec, iterationId);
+      writeJson(currentSpecPath, currentSpec);
+
+      const payload = next(root);
+      assertAction(payload, 'invalid_iteration_state', 'cli', [
+        'iteration',
+        'validate',
+        '--artifacts',
+        rootArtifact,
+      ]);
+      assert.match(payload.reason, caseData.error);
+
+      const validation = runP2a(payload.command.argv);
+      assert.notEqual(validation.status, 0, caseData.id);
+      assert.match(
+        `${validation.stdout}${validation.stderr}`,
+        caseData.error,
+      );
+    } finally {
+      remove(root);
+    }
+  }
+});
+
+test('next rejects invalid Gate B, Gate C, and Gate D artifacts before downstream work', () => {
+  const cases = [
+    {
+      state: 'invalid_gate_b',
+      setup: (rootArtifact) => {
+        writeGateA(rootArtifact, 'ready_for_spec');
+        writeGateB(rootArtifact);
+        const specPath = join(rootArtifact, 'gate-b-spec', 'spec.json');
+        const spec = JSON.parse(readFileSync(specPath, 'utf8'));
+        delete spec.product.problem;
+        writeJson(specPath, spec);
+      },
+      error: /\$\.product missing required keys: problem/,
+    },
+    {
+      state: 'invalid_gate_c',
+      setup: (rootArtifact) => {
+        writeGateA(rootArtifact, 'ready_for_spec');
+        writeGateB(rootArtifact);
+        writeGateC(rootArtifact, [task('task-001', 'todo')]);
+        const graphPath = join(
+          rootArtifact,
+          'gate-c-task-graph',
+          'task-graph.json',
+        );
+        const graph = JSON.parse(readFileSync(graphPath, 'utf8'));
+        delete graph.tasks[0].title;
+        writeJson(graphPath, graph);
+      },
+      error: /\$\.tasks\[0\] missing required keys: title/,
+    },
+    {
+      state: 'invalid_gate_d',
+      setup: (rootArtifact) => {
+        writeGateA(rootArtifact, 'ready_for_spec');
+        writeGateB(rootArtifact);
+        writeGateC(rootArtifact, [task('task-001', 'todo')]);
+        writeGateD(rootArtifact);
+        const reviewPath = join(rootArtifact, 'gate-d-review', 'review.json');
+        const review = JSON.parse(readFileSync(reviewPath, 'utf8'));
+        delete review.recommended_changes;
+        writeJson(reviewPath, review);
+      },
+      error: /\$ missing required keys: recommended_changes/,
+    },
+  ];
+
+  for (const caseData of cases) {
+    const root = project();
+    try {
+      const rootArtifact = artifact(root);
+      caseData.setup(rootArtifact);
+      const payload = next(root);
+      assertAction(payload, caseData.state, 'cli');
+
+      const validation = runP2a(payload.command.argv);
+      assert.notEqual(validation.status, 0);
+      assert.match(
+        `${validation.stdout}${validation.stderr}`,
+        caseData.error,
+      );
+    } finally {
+      remove(root);
+    }
+  }
+});
+
 test('next requires a project id only when multiple artifact roots are ambiguous', () => {
   const root = project();
   try {
@@ -394,6 +881,34 @@ test('next ignores open runs from an earlier iteration', () => {
   }
 });
 
+test('next points iterative Gate B and Gate D approvals at active iteration artifacts', () => {
+  const root = project();
+  try {
+    const rootArtifact = artifact(root);
+    const iterationId = writeIteration(rootArtifact, 'sample', { iterationId: 'v2' });
+    writeGateA(rootArtifact, 'ready_for_spec', iterationId);
+    writeGateB(rootArtifact, 'draft', iterationId);
+
+    let payload = next(root);
+    assertAction(payload, 'gate_b_needs_approval', 'approval');
+    assert.ok(payload.command.display.includes(
+      join(rootArtifact, 'iterations', iterationId, 'gate-b-spec', 'spec.json'),
+    ));
+
+    writeGateB(rootArtifact, 'approved', iterationId);
+    writeGateC(rootArtifact, [task('task-001', 'todo')], iterationId);
+    writeGateD(rootArtifact, [{ id: 'BLOCK-1' }], iterationId);
+
+    payload = next(root);
+    assertAction(payload, 'gate_d_blocked', 'approval');
+    assert.ok(payload.command.display.includes(
+      join(rootArtifact, 'iterations', iterationId, 'gate-d-review', 'review.json'),
+    ));
+  } finally {
+    remove(root);
+  }
+});
+
 test('next mines a failed run only once before opening a closed iteration', () => {
   const root = project({ proposals: true });
   try {
@@ -417,6 +932,77 @@ test('next mines a failed run only once before opening a closed iteration', () =
     assertAction(next(root), 'iteration_complete', 'cli', [
       'iteration', 'open', '--artifacts', artifactPath(root), '--iteration-id', '<id>', '--idea', '<change idea>',
     ]);
+  } finally {
+    remove(root);
+  }
+});
+
+test('next mines flat handoff run evidence before reporting execution complete', () => {
+  const root = project({ mode: 'handoff', proposals: true });
+  try {
+    const rootArtifact = artifact(root);
+    writeGateA(rootArtifact, 'ready_for_spec');
+    writeGateB(rootArtifact, 'approved');
+    writeGateC(rootArtifact, [task('task-001', 'done')]);
+    writeGateD(rootArtifact);
+    writeRuns(rootArtifact, [{ runId: 'run-001', status: 'failed' }]);
+
+    assertAction(next(root), 'run_evidence_needs_proposal_mining', 'cli', [
+      'proposals', 'mine', '--artifacts', artifactPath(root), '--run-id', 'run-001',
+      '--proposals', join(root, '.plan2agent', 'proposals'),
+    ]);
+
+    writeJson(join(root, '.plan2agent', 'proposals', 'proposal-run-001.json'), {
+      sourceRunId: 'run-001',
+    });
+
+    assertAction(next(root), 'flat_execution_complete', 'approval');
+  } finally {
+    remove(root);
+  }
+});
+
+test('next reports flat execution complete when proposal mining is disabled', () => {
+  const root = project({ mode: 'handoff' });
+  try {
+    const rootArtifact = artifact(root);
+    writeGateA(rootArtifact, 'ready_for_spec');
+    writeGateB(rootArtifact, 'approved');
+    writeGateC(rootArtifact, [task('task-001', 'done')]);
+    writeGateD(rootArtifact);
+    writeRuns(rootArtifact, [{ runId: 'run-001', status: 'failed' }]);
+
+    const payload = next(root);
+    assertAction(payload, 'flat_execution_complete', 'approval');
+    assert.equal(JSON.stringify(payload).includes('"--proposals",null'), false);
+  } finally {
+    remove(root);
+  }
+});
+
+test('next routes missing run evidence to an executable validation command', () => {
+  const root = project({ mode: 'handoff', proposals: true });
+  try {
+    const rootArtifact = artifact(root);
+    writeGateA(rootArtifact, 'ready_for_spec');
+    writeGateB(rootArtifact, 'approved');
+    writeGateC(rootArtifact, [task('task-001', 'done')]);
+    writeGateD(rootArtifact);
+    writeRuns(rootArtifact, [{ runId: 'run-001', status: 'failed' }]);
+    rmSync(join(rootArtifact, 'runs', 'run-001.json'));
+
+    const payload = next(root);
+    assertAction(payload, 'invalid_run_evidence', 'cli', [
+      'runs', 'validate', '--artifacts', artifactPath(root),
+    ]);
+
+    const validation = runP2a(payload.command.argv);
+    assert.notEqual(validation.status, 0);
+    assert.match(
+      `${validation.stdout}${validation.stderr}`,
+      /run-001\.json.*missing|missing.*run-001\.json/,
+    );
+    assertAction(next(root), 'invalid_run_evidence', 'cli', payload.command.argv);
   } finally {
     remove(root);
   }
@@ -453,8 +1039,8 @@ test('info keeps its JSON contract and points human output to next', () => {
   }
 });
 
-test('next keeps the fourteen ordered decision rules required by the contract', () => {
-  assert.equal(NEXT_DECISION_RULES.length, 14);
+test('next keeps the twenty ordered decision rules required by the contract', () => {
+  assert.equal(NEXT_DECISION_RULES.length, 20);
   for (const rule of NEXT_DECISION_RULES) {
     assert.equal(typeof rule.when, 'function');
     assert.equal(typeof rule.reason, 'function');

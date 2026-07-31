@@ -27,6 +27,7 @@ export const PROJECT_RUNTIME_SCRIPT_FILES = [
   'p2a_run_paths.mjs',
   'p2a_run_store.mjs',
   'p2a_iteration_state.mjs',
+  'p2a_spec_model.mjs',
   'validate_artifacts.mjs',
 ];
 

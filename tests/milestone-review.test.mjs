@@ -268,15 +268,27 @@ function writeBundle(data, filename = `${data.checkpoint}.fixture.draft.json`) {
   const artifactRoot = mkdtempSync(path.join(tmpdir(), 'p2a-milestone-review-'));
   const iterationRoot = path.join(artifactRoot, 'iterations', data.iteration_id);
   const graphPath = path.join(iterationRoot, 'gate-c-task-graph', 'task-graph.json');
+  const intakePath = path.join(iterationRoot, 'gate-a-intake', 'intake.json');
   const specPath = path.join(iterationRoot, 'gate-b-spec', 'spec.json');
   const milestoneDir = path.join(iterationRoot, 'milestone-reviews');
   const runsDir = path.join(artifactRoot, 'runs');
-  for (const dir of [path.dirname(graphPath), path.dirname(specPath), milestoneDir, runsDir]) {
+  for (const dir of [
+    path.dirname(graphPath),
+    path.dirname(intakePath),
+    path.dirname(specPath),
+    milestoneDir,
+    runsDir,
+  ]) {
     mkdirSync(dir, { recursive: true });
   }
 
   writeFileSync(graphPath, `${JSON.stringify(data.source.task_graph_snapshot, null, 2)}\n`, 'utf8');
   data.source.task_graph_sha256 = rawFileSha256(graphPath);
+  const intake = JSON.parse(readFileSync(
+    path.join(ROOT, 'fixtures', '_e2e', 'webhook-api-service', 'gate-a-intake', 'intake.json'),
+    'utf8',
+  ));
+  writeFileSync(intakePath, `${JSON.stringify(intake, null, 2)}\n`, 'utf8');
   const spec = JSON.parse(readFileSync(path.join(ROOT, 'fixtures', '_e2e', 'webhook-api-service', 'gate-b-spec', 'spec.json'), 'utf8'));
   writeFileSync(specPath, `${JSON.stringify(spec, null, 2)}\n`, 'utf8');
 

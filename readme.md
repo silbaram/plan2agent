@@ -7,7 +7,8 @@
 
 [English](readme.md) | [한국어](README.ko-KR.md)
 
-Turn a one-sentence product idea into approved specs, dependency-aware tasks, and verified AI coding runs.
+Turn a one-sentence product idea into a confirmed product understanding, approved specs,
+dependency-aware tasks, and verified AI coding runs.
 
 ## Install in 30 seconds
 
@@ -26,7 +27,7 @@ you finish a planning, approval, or development step.
 ## Your first plan in 5 minutes
 
 After initialization, open Codex, Claude Code, or Gemini CLI in the project directory and give the
-planning harness a product idea.
+planning harness a product idea. You do not need to write a complete requirements document first.
 
 | Agent | Example |
 | --- | --- |
@@ -34,18 +35,30 @@ planning harness a product idea.
 | Claude Code | `/p2a-harness Plan a service that receives webhooks, verifies signatures, and shows delivery history.` |
 | Gemini CLI | `/p2a:harness Plan a service that receives webhooks, verifies signatures, and shows delivery history.` |
 
-The harness pauses at explicit review gates instead of silently turning unclear requirements into
-code:
+The harness starts a bounded discovery interview, asking one to three high-impact questions at a
+time. It keeps question ids stable, records concrete answers, and turns confirmed answers into
+canonical product and implementation fields instead of leaving the decisions only in chat.
+
+At round three, the harness presents a soft-limit summary and asks whether to continue, accept the
+current understanding, or pause. It stops at five rounds or after two no-progress rounds. Unresolved
+high-impact blockers remain visible and cannot be silently assumed away.
+
+The resulting workflow pauses at explicit review gates instead of silently turning unclear
+requirements into code:
 
 ```text
 One-sentence idea
-  -> Gate A: facts, assumptions, and user decisions
+  -> Discovery interview: 1-3 focused questions per round
+  -> Gate A: confirmed understanding and explicit user approval
   -> Gate B: product spec and implementation plan
   -> Gate C: dependency-aware task graph
   -> Gate D: blocker and readiness review
   -> supervised implementation and verification
   -> evaluation and improvement proposals
 ```
+
+Gate A confirmation and Gate B approval are separate decisions. Once you explicitly confirm the
+Gate A understanding summary, the harness continues to Gate B in the same agent session.
 
 Each gate writes reviewable files under `.plan2agent/artifacts/<project_id>/`. Approve the decisions
 in the active gate, complete the suggested action, and run:
@@ -65,7 +78,7 @@ layer around those tools.
 
 | Need | Plan2Agent approach |
 | --- | --- |
-| Clear decisions before code | Four human approval gates preserve facts, assumptions, open decisions, and approval state. |
+| Clear decisions before code | A bounded discovery interview and four human approval gates preserve answers, assumptions, open decisions, and approval state. |
 | Traceable implementation work | Specs map to dependency-aware tasks with acceptance criteria and source references. |
 | Reviewable agent execution | Tasks run in foreground-supervised sessions with run logs, changed files, and verification evidence. |
 | Portable project state | Local JSON artifacts remain canonical across Codex, Claude Code, and Gemini CLI. |
@@ -106,8 +119,10 @@ an auditable history for later reviews.
 ### 1. Plan with approval gates
 
 The planning harness turns an idea into structured intake, product and implementation specs, a task
-graph, and a readiness review. It records uncertainty as an assumption or user decision rather than
-inventing a requirement.
+graph, and a readiness review. Gate A interviews the user across the required discovery areas,
+presents a compact understanding summary, and requires explicit confirmation. The same session then
+continues to Gate B. It records uncertainty as an assumption or user decision rather than inventing
+a requirement.
 
 ### 2. Execute one ready task
 
@@ -129,8 +144,9 @@ retry, batch, and milestone-review procedures.
 ### 3. Iterate without losing the baseline
 
 Iterations preserve the approved spec, derive change tasks, track maintenance work, and archive
-closed history. `p2a next` guides close/open transitions; `p2a iteration` exposes the lower-level
-controls.
+closed history. A later Gate A reuses relevant confirmed answers from the baseline and asks again
+only where the new idea changes or conflicts with them. `p2a next` guides close/open transitions;
+`p2a iteration` exposes the lower-level controls.
 
 ### 4. Evaluate and improve
 

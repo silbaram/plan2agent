@@ -9,9 +9,10 @@ Create a development-ready product and implementation specification from approve
 
 ## Inputs
 
-- `intake_json` with `status: ready_for_spec`.
+- `intake_json` with `status: ready_for_spec`; when `interview` is present, it must also have `interview.state: gate_a_confirmed` and a valid Gate A `approval_audit`.
 - User answers for every high-impact `needs_user_decision`.
 - Explicit constraints and non-goals.
+- Optional `intake_json.baseline_context` with an immutable baseline `spec_ref`/`spec_sha256` and prior answers/question dispositions that may be reused when the current change does not affect them.
 - Optional prior `spec_json` when resuming.
 - Optional Feature Radar preflight research from `.plan2agent/artifacts/<project_id>/preflight-research/`.
 - Optional same-project, conditional cross-project, or targeted Gate B Memory recall reports prepared by the harness.
@@ -32,6 +33,7 @@ Return:
 - `evidence` inside `spec_json`, preserving intake sources and adding any new `WEB-n` or `LOCAL-n` sources
 - Optional `reference_reconnaissance` inside `spec_json` when Gate B compares reusable technologies, local patterns, prior artifacts, or external implementation approaches
 - Optional generated Markdown views may be returned when useful for export or review, but `spec_json` is the source of truth. The harness persists `gate-b-spec/spec.json` under `.plan2agent/artifacts/<project_id>/` for Gate B. Set `spec_json.source_intake` to the Gate A folder path, for example `.plan2agent/artifacts/<project_id>/gate-a-intake/intake.json`, when the source is a persisted artifact.
+- When `intake_json.interview` exists, compute the SHA-256 of the exact persisted `intake.json` bytes and record it as `spec_json.source_intake_sha256`. Recompute it only when regenerating Gate B from the changed intake; never update the hash merely to make a stale spec validate.
 
 ## Required Spec Fields
 
@@ -87,6 +89,17 @@ Feature Radar preflight research follows the same evidence model:
 - Add `next-iteration-recommendations.md`, `capability-gap-analysis.md`, or `p2a-context.json` recommendations as `reference_reconnaissance.candidates` with `decision: "context"` and `origin: "feature_radar_preflight"` until Gate B explicitly changes them to `selected`, `rejected`, or `deferred`.
 - Do not treat a Radar recommendation as approved scope by itself; it only becomes task-generating scope after Gate B approval records the decision.
 
+## Baseline Answer Reuse
+
+For iterative Gate B synthesis, inspect `intake_json.baseline_context` before generating a new decision or disposition.
+
+- Reuse a prior answer or disposition when the current change does not affect its recorded scope.
+- Preserve `source_intake` or `source_spec` provenance in the explanation and evidence.
+- If the current interview explicitly overrides a prior answer, prefer the current answer and state the conflict and resolution. Do not mutate or silently replace the baseline record.
+- Apply `intake_json.interview.spec_updates` deterministically to the complete baseline-shaped spec: `append` adds unique values, `replace` replaces the canonical field, and `remove` deletes the named values. Reject an update that leaves the field unchanged; a `canonical_effect: preserve_baseline` answer has empty `affected_fields` and emits no update, while `canonical_effect: change` must have affected fields and updates. Treat both `source_question_ids` and `source_dimension_ids` as provenance only; do not infer merge semantics again from free-form answer or dimension summary text.
+- Generate a new question only for changed or newly ambiguous scope. Do not re-ask an already answered baseline question merely because a new iteration started.
+- Keep the canonical `p2a.spec.v1` full-shaped for compatibility. In iterative Markdown review views, show the delta and affected fields first and omit unchanged baseline values, while making clear that `spec.json` remains complete.
+
 ## Clarifying Question Disposition Contract
 
 `spec_json.clarifying_question_disposition` is the canonical disposition record for every intake `CQ-n`. It must include exactly one item for each intake `clarifying_questions[*].id`. Each item has `id`, `status`, `rationale`, and `affects`, plus exactly the supporting field required by its status:
@@ -98,11 +111,15 @@ Feature Radar preflight research follows the same evidence model:
 
 Do not include detail fields from other statuses in the same disposition item. Only `ND-n` ids may appear in `open_decisions`; never put raw `CQ-n` ids there. If a clarifying question is still a blocker, promote it to a new `ND-n` decision, list that `ND-n` in `open_decisions`, and keep `approval: draft`. If the promoted decision is already resolved, include `resolution` in its disposition and omit it from `open_decisions`.
 
+When an interview-aware intake gives a `CQ-n` the status `answered`, `assumed`, or `not_applicable`, map its recorded answer directly to the corresponding Gate B disposition instead of replacing it with a generic assumption.
+
 ## Optional Markdown View
 
 Generate Markdown only as a view/export from `spec_json`, not as a second artifact to maintain by hand. Use this as a narrative-first soft template, not a fixed blank form. Each section should contain explanatory prose first, with tables only as supporting structure; a table must not replace the explanation. Keep JSON field names and schema unchanged. Render section titles and labels in the user's language while preserving the underlying English JSON field names.
 
 Each Markdown section should state the corresponding `spec_json` field in one line so the JSON-to-Markdown mapping is explicit. Optional helper sections, such as an overview diagram or unresolved Gate B decisions, may be added, but they must not replace the field-mapped sections below.
+
+For a baseline-aware iteration, a delta-first Markdown view may replace the repeated full field rendering: list the changed `product.*` or `implementation.*` refs and concise added/removed values, then state that unchanged baseline fields are omitted from the view and remain present in canonical `spec.json`.
 
 `product-spec.md` mirrors `spec_json.product` in field order, one section per field:
 
@@ -132,6 +149,7 @@ Suggested Korean section labels for implementation plans: 아키텍처, 인터�
 
 ## Approval Contract
 
+- Do not start Gate B when interview-aware Gate A lacks explicit confirmation or `intake_json.approval_audit`.
 - Use `approval: draft` until the user explicitly approves the product and implementation spec.
 - Use `approval: approved` only when every intake `CQ-n` is disposed, promoted decisions are resolved, `open_decisions` is empty, and the user has approved the spec.
 - When `approval: approved`, include `spec_json.approval_audit` with `approved_by`, `approved_at`, `approved_artifacts`, and `approval_note`. Use `approved_artifacts: ["gate-b-spec/spec.json"]` for a greenfield Gate B bundle unless a more specific project-relative JSON path is known.
@@ -141,6 +159,7 @@ Suggested Korean section labels for implementation plans: 아키텍처, 인터�
 ## Rules
 
 - If a required field is unknown, add the related decision id to `open_decisions` and keep approval as `draft`.
+- Route every answered `needs_user_decision` into each canonical `spec.product.*` or `spec.implementation.*` field named by that decision's `affected_fields`; fall back to `blocks` only for a legacy interview item that omits `affected_fields`. Do not place every decision into generic constraints or architecture fields.
 - Keep non-goals explicit.
 - Do not invent API providers, storage engines, or UI frameworks unless the user already selected them.
 - Do not rely on stale model memory for current technology recommendations; use Technology Reconnaissance when the choice materially affects the plan.

@@ -9,7 +9,10 @@ import { pathToFileURL } from 'node:url';
 import { FAILURE_CLASSES, FAILURE_RETRYABLE, ISOLATION_MODES } from './p2a_constants.mjs';
 import { loadJson, validateProposalDraftApprovalData, validateRunData, validateRunIndexData, validateTaskGraphData, ValidationError } from './validate_artifacts.mjs';
 import { monitorGateSidecarPath, normalizeMonitorVerdictData, readMonitorGateSidecar } from './p2a_monitor_gate.mjs';
-import { resolveIterationState } from './p2a_iteration_state.mjs';
+import {
+  resolveIterationState,
+  validateMaintenanceTaskGraphProject,
+} from './p2a_iteration_state.mjs';
 import {
   assertUnmanagedGraphMutation,
   assertSafeRunId,
@@ -342,6 +345,7 @@ function resolveSource(args) {
       assertFile(graphPath, 'maintenance task graph');
       const graph = loadJson(graphPath);
       validateTaskGraphData(graph);
+      validateMaintenanceTaskGraphProject(state, graph);
       return {
         projectId: state.projectId,
         sourceArgs: ['--artifacts', args.artifacts, '--maintenance'],
