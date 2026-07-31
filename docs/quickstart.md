@@ -1,6 +1,6 @@
 # Plan2Agent Quickstart
 
-Plan2Agent는 한 문장 아이디어를 승인 가능한 제품·구현 명세와 실행 가능한 task graph로 바꾸는 파일 기반 planning harness다.
+Plan2Agent는 한 문장 아이디어를 bounded discovery interview로 구체화하고, 사용자가 확인한 제품 이해를 승인 가능한 제품·구현 명세와 실행 가능한 task graph로 바꾸는 파일 기반 planning harness다.
 
 이 문서는 새 프로젝트에서 첫 Gate 산출물을 만드는 최단 경로만 다룬다. 명령 옵션과 실행 계약은 [CLI 사용자 가이드](cli-reference.md), Gate와 산출물 계약은 [하네스 사용자 가이드](harness-guide.md)를 기준으로 삼는다.
 
@@ -30,9 +30,27 @@ p2a init \
 p2a next
 ```
 
-Codex, Claude Code 또는 Gemini CLI agent 세션에서는 `/p2a-next`를 사용한다. 결과가 skill이면 같은 세션에서 이어서 진행하고, CLI 또는 승인 행동이면 이유를 확인한 뒤 사용자가 결정한다. `next`가 초기 기획 skill을 반환하면 한 문장 아이디어를 제공한다.
+Codex, Claude Code 또는 Gemini CLI agent 세션에서는 `/p2a-next`를 사용한다. 결과가 skill이면 같은 세션에서 이어서 진행하고, CLI 또는 승인 행동이면 이유를 확인한 뒤 사용자가 결정한다. `next`가 초기 기획 skill을 반환하면 한 문장 아이디어를 제공한다. 완성된 요구사항 문서를 먼저 만들 필요는 없다.
 
-하네스는 Gate A intake, Gate B spec, Gate C task graph, Gate D review 산출물을 `.plan2agent/artifacts/<project_id>/`에 만든다. Gate B를 승인하기 전에는 구현을 시작하지 않는다.
+예를 들어 Codex에서는 다음처럼 시작한다.
+
+```text
+Use the $p2a-harness skill to plan a service that receives webhooks,
+verifies signatures, and shows delivery history.
+```
+
+하네스는 다음 순서로 진행한다.
+
+1. 한 번에 1~3개의 high-impact 질문을 묻고 답변을 기존 `CQ-n`/`ND-n` ID에 기록한다.
+2. 필수 discovery 영역과 남은 blocker를 다시 계산한다. 이미 답한 질문을 새 ID로 반복하지 않는다.
+3. 3라운드에서는 현재 이해를 요약하고 계속 인터뷰할지, 현재 이해를 확인할지, 일시 중지할지 묻는다.
+4. 5라운드 또는 무진전 2회에 도달하면 자동으로 중단하고 해결되지 않은 blocker를 사용자에게 돌려준다.
+5. 질문과 blocker가 정리되면 Gate A 이해 요약을 제시한다. 사용자가 이를 명시적으로 확인해야 Gate A가 완료된다.
+6. Gate A가 확인되면 같은 agent 세션에서 Gate B 제품 명세와 구현 계획을 만든다.
+
+Gate A 이해 확인과 Gate B 승인은 서로 다른 결정이다. Gate A 확인 전에는 Gate B를 만들지 않으며, Gate B를 승인하기 전에는 구현을 시작하지 않는다.
+
+하네스는 Gate A intake, Gate B spec, Gate C task graph, Gate D review 산출물을 `.plan2agent/artifacts/<project_id>/`에 만든다.
 
 ## 결과 확인
 
@@ -42,11 +60,15 @@ Codex, Claude Code 또는 Gemini CLI agent 세션에서는 `/p2a-next`를 사용
 p2a next
 ```
 
-출력의 state와 reason을 확인한다. Gate B의 `approval: approved`와 빈 `open_decisions`, Gate D의 blocker 없음이 개발 시작 조건이다.
+출력의 state와 reason을 확인한다. Gate A는 `interview.state: gate_a_confirmed`, `status: ready_for_spec`, `approval_audit`이 모두 있어야 완료된다. Gate B의 `approval: approved`와 빈 `open_decisions`, Gate D의 blocker 없음이 개발 시작 조건이다.
+
+인터뷰가 soft limit에서 멈추면 사용자가 계속 진행, 현재 이해 확인, 일시 중지 중 하나를 결정한다. `p2a next`는 이 결정을 건너뛰고 자동 재개하지 않는다.
 
 ## 승인 후 개발 계속하기
 
 Gate D까지 통과하면 `next`가 초기 산출물을 반복 구조로 전환하는 CLI 행동을 반환한다. 사용자가 실행을 승인한 뒤에도 `next`를 다시 실행해 ready task의 실행 계획, run 시작·종료, 다음 반복 close/open 행동을 순서대로 확인한다.
+
+후속 iteration의 Gate A는 baseline에 저장된 관련 답변과 disposition을 재사용한다. 새 아이디어가 기존 결정과 달라지거나 충돌하는 영역만 다시 질문하고, 확인된 변경만 다음 Gate B에 반영한다.
 
 legacy handoff, run log, monitor gate, proposal 회고 같은 상세 흐름은 [감독형 개발 실행 레퍼런스](supervised-execution.md)를 본다.
 
@@ -55,6 +77,7 @@ legacy handoff, run log, monitor gate, proposal 회고 같은 상세 흐름은 [
 | 파일 | 언제 보는가 |
 | --- | --- |
 | `.plan2agent/artifacts/<project_id>/status.md` | 현재 Gate와 다음 행동을 빠르게 확인할 때 |
+| `gate-a-intake/intake.json` | 인터뷰 질문·답변, discovery 상태, Gate A 이해 확인 기록을 확인할 때 |
 | `gate-b-spec/spec.json` | 승인된 제품·구현 요구사항을 확인할 때 |
 | `gate-c-task-graph/task-graph.json` | 구현 가능한 task와 dependency를 확인할 때 |
 | `gate-d-review/review.json` | Gate D blocker와 리뷰 결과를 확인할 때 |
