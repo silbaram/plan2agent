@@ -1666,6 +1666,15 @@ function validateInterviewState(intake, unresolvedDecisions) {
   if (interview.soft_limit_acknowledged && interview.round < 3) {
     throw new ValidationError('soft_limit_acknowledged requires interview.round to be at least 3');
   }
+  if (
+    interview.state === 'paused'
+    && interview.stop_reason === 'soft_limit'
+    && interview.soft_limit_acknowledged
+  ) {
+    throw new ValidationError(
+      'a soft-limit pause cannot be acknowledged until the interview resumes',
+    );
+  }
   if (['ready_for_gate_a_summary', 'awaiting_gate_a_confirmation', 'gate_a_confirmed'].includes(interview.state) && !readiness) {
     throw new ValidationError(
       `intake.interview state ${interview.state} requires readiness; open dimensions=${JSON.stringify(openDimensions)}, unresolved questions=${JSON.stringify(unresolvedQuestionIds)}, unresolved decisions=${JSON.stringify(unresolvedDecisions)}`,
@@ -1712,6 +1721,14 @@ function validateInterviewState(intake, unresolvedDecisions) {
     );
   }
   if (
+    interview.state === 'blocked_on_user'
+    && (interview.has_unasked_high_impact_questions || interview.new_blocker)
+  ) {
+    throw new ValidationError(
+      'blocked interview blockers must be materialized as an open CQ, ND, or discovery dimension before automatic questioning stops',
+    );
+  }
+  if (
     !readiness
     && interview.round < 5
     && interview.no_progress_rounds >= 2
@@ -1753,6 +1770,13 @@ export function validateIntake(filePath, options = {}) {
   }
   const unresolvedDecisions = [];
   for (const decision of data.needs_user_decision) {
+    const optionIds = decision.options.map((option) => option.id);
+    if (optionIds.length !== new Set(optionIds).size) {
+      throw new ValidationError(`${decision.id} option id values must be unique`);
+    }
+    if (!optionIds.includes(decision.default)) {
+      throw new ValidationError(`${decision.id} default must match one of its option ids`);
+    }
     if (decision.status === 'open' || decision.status === 'deferred') {
       unresolvedDecisions.push(decision.id);
     }

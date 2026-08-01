@@ -47,7 +47,7 @@ Plan2Agent 하네스는 한 문장 제품 아이디어를 바로 코드로 구�
 | 4. Task graph | `p2a-task-breakdown` | 승인된 구현 명세를 의존성 있는 작은 task로 분해한다. | `task_graph_json` |
 | 5. Review | `p2a-review` | 명세와 task graph의 누락, gate 위반, 의존성 오류, 실행 리스크를 검토한다. | `review_json` |
 
-하네스는 대화 안에서도 `intake_json`, `spec_json`, `task_graph_json`, `review_json`이라는 이름의 상태 섹션을 반환한다. 동시에 각 단계의 정본 JSON 산출물을 `.plan2agent/artifacts/<project_id>/` 아래 gate별 폴더에 저장한다. Markdown은 필요할 때 JSON에서 생성하는 사람용 view/export다.
+하네스는 각 단계의 정본 JSON 산출물을 `.plan2agent/artifacts/<project_id>/` 아래 gate별 폴더에 저장하고, review point에서는 `intake_json`, `spec_json`, `task_graph_json`, `review_json`이라는 이름의 상태 섹션을 대화에도 반환한다. 활성 Gate A 인터뷰는 예외다. `intake.json`은 재개용으로 라운드마다 조용히 저장하지만 Gate A 요약 전에는 산출물로 언급하거나 inline JSON으로 제시하지 않는다. Markdown은 필요할 때 JSON에서 생성하는 사람용 view/export다.
 
 ### 1.1 전제조건과 첫 검증
 
@@ -79,6 +79,23 @@ Gate A/B/C/D의 상세 통과·차단 규칙은 `p2a-harness` skill이 유일한
 
 기본 guard는 soft 3 rounds, hard 5 rounds, no-progress 2회다. hard/no-progress로 멈췄는데 blocker가 남으면 `blocked_on_user`를 유지한다. Gate A 확인 뒤 Gate B는 같은 harness 대화에서 이어지며 별도 명령이나 agent session 전환을 요구하지 않는다.
 
+Gate A의 사용자 경험은 대화 우선이다. 첫 응답부터 문서 생성 안내, 정형화된 질문지,
+결정 표, 전체 가정 목록을 제시하지 않는다. 사용자의 최신 말에 먼저 답하거나 유용한
+추천과 짧은 근거를 제시하고, 다음 1~3개 질문을 자연어 대화에 섞는다. 사용자는 자유롭게
+답하고 이해를 교정하거나 에이전트에게 되물을 수 있다.
+
+하네스는 대화와 별개로 `gate-a-intake/intake.json`을 최초 상태와 매 라운드 이후
+갱신한다. 이는 세션 유실 후 `resume_from: interview`를 지원하기 위한 silent
+bookkeeping이며, 활성·일시중지·차단 상태에서는 파일 기록을 대화에서 알리거나 JSON을
+inline artifact로 노출하지 않는다. `gate-a-intake/intake.md`는 사용자의 명시적인
+Markdown export 요청에만 생성한다. export의 첫 줄에는
+`<!-- plan2agent:intake-md-export=explicit -->` marker를 기록해 이전 버전의 자동 생성
+view와 구분한다.
+
+readiness에 도달하면 “지금까지 정리하면 이렇습니다”라는 compact Gate A 요약에서
+처음으로 전체 이해, 가정, 결정과 근거를 구조화해 보여준다. 비교표나 전체 decision
+inventory가 필요하다면 이 시점에 사용한다.
+
 ### Gate B
 
 Spec approval, 승인 감사 정보, open decision 해소, 모든 `CQ-n` disposition, 필요한 기술 조사 근거가 갖춰져야 task graph로 넘어간다. 구체적인 disposition 값과 기술 조사 기준은 정본 skill의 Approval Gates 및 Clarifying Question Disposition 절을 따른다.
@@ -100,7 +117,7 @@ Task graph의 dependency, cycle, acceptance criteria, source spec reference를 �
 ├── status.md                         # optional generated view
 ├── gate-a-intake/
 │   ├── intake.json                    # canonical
-│   └── intake.md                      # optional generated view
+│   └── intake.md                      # explicit request-only generated view
 ├── gate-b-spec/
 │   ├── spec.json                      # canonical
 │   ├── product-spec.md                # optional generated view
@@ -115,8 +132,8 @@ Task graph의 dependency, cycle, acceptance criteria, source spec reference를 �
 | 파일 저장 위치 | 역할 |
 | --- | --- |
 | `status.md` | JSON에서 생성되는 standing 진행상태 view다. progress line, 게이트별 정본 파일 링크, 열린 결정, 단일 다음 액션, 변경 이력을 보여주지만 제어 흐름의 정본은 아니다. |
-| `gate-a-intake/intake.json` | `intake_json` 구조화 산출물이다. 원문 아이디어, known facts, assumptions, clarifying questions, `needs_user_decision`, evidence, intake status를 담는다. |
-| `gate-a-intake/intake.md` | 선택적 generated view다. 사람이 읽는 intake 분석을 보여주지만 정본은 `intake.json`이다. |
+| `gate-a-intake/intake.json` | `intake_json` 구조화 산출물이다. 원문 아이디어, known facts, assumptions, clarifying questions, `needs_user_decision`, evidence, intake status를 담는다. 활성 인터뷰 중에도 재개를 위해 라운드마다 조용히 갱신한다. |
+| `gate-a-intake/intake.md` | 사용자의 명시적 export 요청에서만 만드는 generated view다. 첫 줄의 explicit-export marker로 이전 자동 생성 view와 구분하며 정본은 항상 `intake.json`이다. |
 | `gate-b-spec/product-spec.md` | 선택적 generated view다. 제품 명세를 Markdown으로 보여주지만 정본은 `spec.json.product`다. |
 | `gate-b-spec/implementation-plan.md` | 선택적 generated view다. 구현 계획을 Markdown으로 보여주지만 정본은 `spec.json.implementation`이다. |
 | `gate-b-spec/spec.json` | 제품/구현 명세의 구조화 원본이다. `p2a` package schema `spec.schema.json` 계약을 따르며 approval 상태, approval audit, open decisions, clarifying question disposition을 포함한다. |
@@ -227,7 +244,7 @@ Intake와 spec artifact는 `evidence` 배열을 가진다. 이 배열은 결정�
 
 ## 4. 재개(resume)
 
-사용자가 `CQ-1`, `ND-1` 같은 id 또는 자연어로 답하면 하네스는 기존 id에 answer/status를 병합하고 discovery dimension, round, no-progress, readiness를 다시 계산한다. 답한 질문을 새 id로 다시 만들지 않는다. `intake.md`가 존재하면 JSON에서 다시 생성해 view가 낡지 않게 한다.
+사용자가 `CQ-1`, `ND-1` 같은 id 또는 자연어로 답하면 하네스는 기존 id에 answer/status를 병합하고 discovery dimension, round, no-progress, readiness를 다시 계산한다. 답한 질문을 새 id로 다시 만들지 않는다. 이 갱신은 `intake.json`에 조용히 저장하고 대화는 사용자의 최신 말에 답하는 방식으로 이어간다. explicit-export marker가 있는 `intake.md`는 JSON에서 다시 생성해 view가 낡지 않게 한다. marker가 없는 이전 버전의 자동 생성 view는 제거하며, 활성 인터뷰 재개만으로 새 Markdown view를 만들지는 않는다.
 
 사용자가 Gate A 이해 요약을 확인하면 `gate_a_confirmed`와 `approval_audit`을 기록하고 같은 대화에서 Gate B synthesis로 이어간다. baseline-aware 반복에서는 `baseline_context`의 관련 답변을 재사용하고, 충돌이 있을 때만 현재 반복 decision으로 override를 기록한다.
 
@@ -260,7 +277,7 @@ Intake와 spec artifact는 `evidence` 배열을 가진다. 이 배열은 결정�
 /p2a-harness Redis처럼 TTL과 LRU eviction을 지원하는 embeddable in-memory cache library를 만들고 싶다.
 ```
 
-단계별로 실행할 때는 `/p2a-intake`, `/p2a-spec`, `/p2a-task-breakdown`, `/p2a-review`를 사용할 수 있다.
+단계별로 실행할 때는 `/p2a-intake`, `/p2a-spec`, `/p2a-task-breakdown`, `/p2a-review`를 사용할 수 있다. 독립적으로 `/p2a-intake`를 호출하면 결과를 저장할 부모 harness가 없으므로 대화형 응답 뒤에 이름 붙은 `intake_json` 블록을 함께 반환한다. JSON을 사용자에게 보이지 않고 조용히 저장하는 계약은 전체 `/p2a-harness`가 intake 단계를 호출할 때만 적용된다.
 
 ### Codex
 

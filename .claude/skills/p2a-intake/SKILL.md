@@ -32,9 +32,9 @@ Return an `intake_json` object conforming to `p2a` package schema `intake.schema
 - `evidence`: source objects with `source_id`, `title`, `url`, and `used_for`
 - `status`: for interview-aware intake, `blocked_on_user` until `interview.state` is `gate_a_confirmed`, then `ready_for_spec`; legacy intake without `interview` retains the existing decision-based status rule
 
-- Also produce a human-readable analysis in the conversation. The harness may generate `intake.md` as an optional view/export from `intake_json`, but `intake_json` is the source of truth. The analysis should follow the harness soft template and contain the restated understanding, each assumption with its reasoning, and for every `needs_user_decision` the option trade-offs, a recommended option with rationale, the downstream artifacts it blocks, and the current decision `status` (`open`, `answered`, or `deferred`). If a decision is `answered`, clearly show the selected option/answer in prose, for example `선택: <option label>` or `Selected: <option label>`.
+- Also produce a conversation-ready response. During an active interview, make it a natural reply to the user's latest message rather than a Markdown intake report: acknowledge or answer first, offer a recommendation with brief rationale when useful, ask at most 1 to 3 questions in prose, and invite free-form answers or follow-up questions. During a paused interview, do not generate a new question batch or auto-resume; present the current blockers and confirmation-needed recommendations and offer the choices to continue, accept a recommendation, answer an existing blocker, or remain paused. During a blocked interview, do not generate a new question batch or offer automatic continuation; present materialized blockers and let the user answer an existing item directly, accept a recommendation, or defer it. At `hard_limit`, clear `has_unasked_high_impact_questions` and `new_blocker` only after representing every remaining blocker as an open CQ, ND, or discovery dimension. When the harness invokes this skill, return the complete `intake_json` privately to the harness for silent persistence. When the user invokes this skill directly without a parent harness, include the complete state in a named `intake_json` fenced block after the conversational response so the resumable state is not lost. Produce the full human-readable analysis only for the Gate A summary or an explicitly requested export; then include the restated understanding, each assumption with reasoning, and every `needs_user_decision` with option trade-offs, recommendation, rationale, blocked artifacts, and current status.
 
-When `status` is `blocked_on_user`, lead with the analysis narrative (understanding, assumptions with reasoning, and per-decision trade-offs and recommendations). A Markdown decision table may supplement it but must not replace the explanation.
+When `status` is `blocked_on_user`, explain the immediate blocker conversationally and offer the relevant choices without dumping the complete intake. Reserve headings, decision tables, and the full structured inventory for the Gate A summary or an explicitly requested export.
 
 ## Decision IDs
 
@@ -43,18 +43,18 @@ When `status` is `blocked_on_user`, lead with the analysis narrative (understand
 - Do not create a semantically duplicate question under a new id. Keep an unanswered question on its existing id, and keep answered ids in `interview.asked_question_ids`.
 - For `clarifying_questions`, set `status` to `open`, `answered`, `assumed`, or `not_applicable`. `answered`, `assumed`, and `not_applicable` require a non-empty `answer`.
 - Mark a decision `answered` only when the user's answer selects or clearly overrides an option.
-- On resume, when you set a decision to `answered` in `intake_json.needs_user_decision`, update the conversational summary and any generated `intake.md` view from the JSON. Do not maintain Markdown as a second editable source.
+- On resume, when you set a decision to `answered` in `intake_json.needs_user_decision`, update the conversational response and any previously user-requested `intake.md` export from the JSON. Do not create a new Markdown view during an active round or maintain Markdown as a second editable source.
 - `intake_json` is canonical for each `needs_user_decision` status and selected answer.
 
 ## Discovery Interview
 
-Treat the first idea as the start of an adaptive interview, not a request for the user to author a requirements document.
+Treat the first idea as the start of an adaptive planning conversation, not a request for the user to author or review a requirements document.
 
-1. Restate the current understanding and separate confirmed facts, assumptions, and open areas.
+1. Respond to the idea naturally. Offer a useful interpretation or recommendation with a brief reason before asking for more detail; do not announce artifact creation or present the full structured intake.
 2. Select only the 1 to 3 highest-impact unanswered questions for the round.
-3. Explain why each question matters. For a formal `ND-n`, include concrete options, trade-offs, a recommended default, and the affected canonical `spec.product.*` or `spec.implementation.*` fields in `blocks`.
+3. Weave the questions into conversational prose, explain why they matter, and invite free-form answers and the user's own questions. For a formal `ND-n`, keep concrete options, trade-offs, a recommended default, and affected canonical fields in the returned JSON, but do not force the user through a comparison table or form.
 4. Merge free-form answers into the existing stable ids, facts, assumptions, and discovery dimension dispositions. Keep `blocks` as the question's potential impact. For every resolved CQ/ND, set `canonical_effect: change` and record the exact changed fields in `affected_fields`, or set `canonical_effect: preserve_baseline` with empty `affected_fields` only when the answer explicitly preserves an existing baseline. Record the exact changed canonical fields in each dimension's `affected_fields`. For every resolved question, decision, or affected dimension, record one deterministic `interview.spec_updates` entry per affected canonical field: `append`, `replace`, or `remove`, the exact canonical values, all contributing `source_question_ids`, and any contributing `source_dimension_ids`. Without `baseline_context`, use `replace`; `append` and `remove` require a baseline canonical field.
-5. Recompute readiness and either ask the next bounded batch or present the Gate A understanding summary.
+5. Recompute readiness. If the interview remains active, return the next conversational response and bounded question batch while the harness silently persists `intake.json`. If it is paused or blocked, return the current blockers, confirmation-needed recommendations, and state-appropriate human choices without generating a new batch. If ready, present the organized Gate A understanding summary.
 
 The required discovery dimensions are:
 
@@ -81,6 +81,8 @@ Before readiness, remove an unasked low-impact `CQ-n` that is no longer needed o
 Every actual `affected_fields` entry of an `answered`, `assumed`, or `not_applicable` `CQ-n`, every answered `ND-n`, and every non-open discovery dimension must be covered by `interview.spec_updates`. For compatibility, a resolved legacy interview item without `affected_fields` treats `blocks` as its actual fields. Every resolved interview-aware CQ/ND must record `canonical_effect`: `change` requires non-empty actual `affected_fields`, while `preserve_baseline` requires `baseline_context`, empty `affected_fields`, and no no-op update. A question-free ready interview must still record at least one dimension-sourced canonical update. Greenfield updates without `baseline_context` must use `replace`. Use `replace` or `remove` when current input supersedes baseline content; never preserve a conflicting baseline value by merely appending the answer text. A field may have only one update, but that update may cite multiple contributing question and dimension ids. Every update must materially change its Gate B field; do not append an existing value or remove a missing value merely to satisfy completeness.
 
 When readiness is met, clear `current_question_ids`, set `state: ready_for_gate_a_summary`, and record `stop_reason: readiness`. Present the compact Gate A understanding summary, then set `state: awaiting_gate_a_confirmation`. Do not produce Gate B until the user explicitly confirms the summary.
+
+Do not propose or generate `intake.md` while `interview.state` is `interview_active`, `paused`, or `blocked_on_user` unless the user explicitly requests a Markdown export. An explicit export must start with `<!-- plan2agent:intake-md-export=explicit -->` so the harness can preserve it across resumes without retaining legacy automatic views. The harness still persists `intake.json` after every round for safe resume. First expose the organized structured understanding with the Gate A summary.
 
 If the user says to summarize, stop, or accept the recommendations, stop asking automatically. Apply explicitly accepted recommendations as assumptions. If readiness is then met, present the Gate A summary with `stop_reason: user_requested`; otherwise set `state: blocked_on_user` and show the remaining blockers and the choices to answer, accept a recommendation, defer, or pause.
 
@@ -111,10 +113,11 @@ For iterative work, read relevant `baseline_context.reused_answers` and `reused_
 ## Rules
 
 - Ask only questions that materially change product scope, data shape, UI flow, or implementation risk.
+- Keep active rounds conversational: answer or acknowledge first, explain recommendations briefly, invite free-form replies, and avoid headings, questionnaires, tables, artifact inventories, and JSON dumps.
 - Prefer defaults for low-risk details and label them as assumptions.
 - Stop at intake when high-impact decisions remain open or deferred, the interview is paused/blocked, or Gate A confirmation is pending.
 - Do not design the full implementation yet.
 - Follow the Evidence and Citation Contract in `.agents/skills/p2a-harness/SKILL.md` for `USER-n`, `LOCAL-n`, `WEB-n`, Feature Radar, and web-lookup evidence. If prior-art or domain lookup changes a question or assumption, cite the source id in the rationale.
 - Consume harness-provided Memory recall reports under the Planning Memory Recall contract. Preserve their recorded state and failure/fallback disclosure. Cite each consumed report as `LOCAL-n`, including query, requested/effective mode, fallback, and the actual result reference in `used_for`; keep it as context unless it materially changes a question or assumption. Do not independently rerun equivalent queries.
 - Do not edit files or run commands.
-- Do not write files yourself; return your structured content and analysis so the harness orchestrator can persist the artifacts.
+- Do not write files yourself. When invoked by the harness, return `intake_json` and the conversation-ready response so the harness orchestrator can persist the JSON silently and control when any Markdown view is generated. In a direct invocation with no parent harness, surface the same canonical state in a named `intake_json` fenced block after the response.

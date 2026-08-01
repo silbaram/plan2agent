@@ -5583,7 +5583,7 @@ function validateIterationCurrentFixtureCases() {
       writeFeatureRadarPreflightFixture(artifactRoot);
       result = runIteration(['draft', '--artifacts', artifactRoot]);
       checks += 1;
-      if (result.status !== 0 || !result.stdout.includes('Gate A interview draft generated') || !result.stdout.includes('Feature Radar preflight')) {
+      if (result.status !== 0 || !result.stdout.includes('Gate A interview ready') || !result.stdout.includes('Feature Radar preflight')) {
         console.error(`iteration Gate A interview draft fixture check failed: ${caseData.id}`);
         writeResultOutput(result);
         return { status: failureStatus(result), checks };
@@ -5593,7 +5593,6 @@ function validateIterationCurrentFixtureCases() {
       const draftIntakeViewPath = path.join(artifactRoot, 'iterations', 'iter-002', 'gate-a-intake', 'intake.md');
       const draftSpecPath = path.join(artifactRoot, 'iterations', 'iter-002', 'gate-b-spec', 'spec.json');
       const interviewDraft = JSON.parse(readFileSync(draftIntakePath, 'utf8'));
-      const interviewDraftView = readFileSync(draftIntakeViewPath, 'utf8');
       const targetUsersDimension = interviewDraft.interview?.discovery_dimensions
         .find((item) => item.dimension === 'target_users');
       const baselineDeltaQuestion = interviewDraft.clarifying_questions
@@ -5608,9 +5607,9 @@ function validateIterationCurrentFixtureCases() {
         || !interviewDraft.baseline_context.reused_question_dispositions.length
         || !targetUsersDimension?.summary.includes('Baseline target users')
         || !baselineDeltaQuestion?.question.includes('baseline')
-        || !interviewDraftView.includes('### Reused Question Dispositions')
+        || existsSync(draftIntakeViewPath)
       ) {
-        console.error(`iteration Gate A interview draft did not enforce confirmation or baseline reuse context: ${caseData.id}`);
+        console.error(`iteration Gate A interview draft did not enforce silent JSON-only persistence or baseline reuse context: ${caseData.id}`);
         console.error(JSON.stringify(interviewDraft, null, 2));
         return { status: 1, checks };
       }
@@ -7049,7 +7048,7 @@ function validateIterationCurrentFixtureCases() {
 
       result = runIteration(['draft', '--artifacts', artifactRoot]);
       checks += 1;
-      if (result.status !== 0 || !result.stdout.includes('Gate A interview draft generated')) {
+      if (result.status !== 0 || !result.stdout.includes('Gate A interview ready')) {
         console.error(`iteration Gate A interview draft from composed current-spec fixture check failed: ${caseData.id}`);
         writeResultOutput(result);
         return { status: failureStatus(result), checks };
@@ -7518,7 +7517,7 @@ function validateIterationCurrentFixtureCases() {
 
       result = runIteration(['draft', '--artifacts', artifactRoot]);
       checks += 1;
-      if (result.status !== 0 || !result.stdout.includes('Gate A interview draft generated')) {
+      if (result.status !== 0 || !result.stdout.includes('Gate A interview ready')) {
         console.error(`iteration draft from immutable composed baseline failed: ${caseData.id}`);
         writeResultOutput(result);
         return { status: failureStatus(result), checks };

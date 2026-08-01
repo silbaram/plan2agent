@@ -3,9 +3,11 @@ import { createHash } from 'node:crypto';
 import {
   cpSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   readFileSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -31,7 +33,10 @@ import {
   composeCanonicalSpecSources,
   compositionSourceContractError,
 } from '../scripts/p2a_spec_model.mjs';
-import { validateCurrentSpecCompositionData } from '../scripts/p2a_iteration.mjs';
+import {
+  renderIntakeMarkdown,
+  validateCurrentSpecCompositionData,
+} from '../scripts/p2a_iteration.mjs';
 
 const DIMENSIONS = [
   'target_users',
@@ -57,6 +62,9 @@ const DIMENSION_FIELDS = {
     'spec.implementation.interfaces',
   ],
 };
+
+const REPOSITORY_ROOT = dirname(FIXTURE_ROOT);
+const EXPLICIT_INTAKE_MARKDOWN_MARKER = '<!-- plan2agent:intake-md-export=explicit -->';
 
 function writeJson(filePath, value) {
   mkdirSync(dirname(filePath), { recursive: true });
@@ -244,6 +252,55 @@ function validateTempIntake(intake) {
   }
 }
 
+test('explicit intake Markdown preserves assumption confirmation and decision context', () => {
+  const intake = intakeForInterview('interview_active');
+  intake.assumptions = [
+    {
+      id: 'A-1',
+      statement: 'Start with local deployment.',
+      risk: 'low',
+      confirmation_needed: true,
+    },
+    {
+      id: 'A-2',
+      statement: 'Use the existing authentication boundary.',
+      risk: 'medium',
+      confirmation_needed: false,
+    },
+  ];
+  intake.needs_user_decision = [{
+    id: 'ND-1',
+    question: 'Where should the dashboard run?',
+    options: [
+      {
+        id: 'local-web',
+        label: 'Local web app',
+        description: 'Keep deployment and access local.',
+      },
+      {
+        id: 'hosted-web',
+        label: 'Hosted web app',
+        description: 'Allow remote access with deployment overhead.',
+      },
+    ],
+    impact: 'Changes deployment and access boundaries.',
+    blocks: ['spec.product.constraints'],
+    affected_fields: [],
+    default: 'local-web',
+    status: 'open',
+  }];
+
+  const markdown = renderIntakeMarkdown(intake, { explicitExport: true });
+  assert.ok(markdown.startsWith(`${EXPLICIT_INTAKE_MARKDOWN_MARKER}\n`));
+  assert.match(markdown, /A-1: Start with local deployment\. \(risk: low; confirmation_needed: true\)/);
+  assert.match(markdown, /A-2: Use the existing authentication boundary\. \(risk: medium; confirmation_needed: false\)/);
+  assert.match(markdown, /impact: Changes deployment and access boundaries\./);
+  assert.match(markdown, /local-web — Local web app: Keep deployment and access local\./);
+  assert.match(markdown, /hosted-web — Hosted web app: Allow remote access with deployment overhead\./);
+  assert.match(markdown, /recommended: local-web — Local web app: Keep deployment and access local\./);
+  assert.match(markdown, /why it matters: The answer determines the primary flow\./);
+});
+
 function nextForIntake(intake) {
   const root = makeTempDir('p2a-discovery-next-');
   const artifactRoot = join(root, '.plan2agent', 'artifacts', 'sample');
@@ -347,6 +404,130 @@ function confirmGeneratedIntake(intakePath, approvedArtifactRef) {
   writeJson(intakePath, intake);
   return intake;
 }
+
+test('conversation-first Gate A contract keeps JSON snapshots quiet and delays intake Markdown', () => {
+  const harnessSkill = readFileSync(
+    join(REPOSITORY_ROOT, '.agents', 'skills', 'p2a-harness', 'SKILL.md'),
+    'utf8',
+  );
+  const intakeSkill = readFileSync(
+    join(REPOSITORY_ROOT, '.agents', 'skills', 'p2a-intake', 'SKILL.md'),
+    'utf8',
+  );
+  const requirementsAgent = readFileSync(
+    join(REPOSITORY_ROOT, '.agents', 'agents', 'p2a-requirements.md'),
+    'utf8',
+  );
+  const geminiHarnessCommand = readFileSync(
+    join(REPOSITORY_ROOT, '.gemini', 'commands', 'p2a', 'harness.toml'),
+    'utf8',
+  );
+  const geminiIntakeCommand = readFileSync(
+    join(REPOSITORY_ROOT, '.gemini', 'commands', 'p2a', 'intake.toml'),
+    'utf8',
+  );
+
+  assert.match(
+    harnessSkill,
+    /Persist `gate-a-intake\/intake\.json` silently after the initial interview state and after every round/,
+  );
+  assert.match(
+    harnessSkill,
+    /do not announce the write, present the JSON as an artifact, or include the named `intake_json` block/,
+  );
+  assert.match(
+    harnessSkill,
+    /Do not generate `gate-a-intake\/intake\.md` during these states unless the user explicitly requests a Markdown export/,
+  );
+  assert.match(
+    harnessSkill,
+    /Reply as a natural planning conversation: acknowledge or answer the user's latest message/,
+  );
+  assert.doesNotMatch(
+    harnessSkill,
+    /\*\*Active or blocked interview:\*\* Write `gate-a-intake\/intake\.json`, optionally generate `gate-a-intake\/intake\.md`/,
+  );
+
+  assert.match(
+    intakeSkill,
+    /make it a natural reply to the user's latest message rather than a Markdown intake report/,
+  );
+  assert.match(
+    intakeSkill,
+    /do not announce artifact creation or present the full structured intake/,
+  );
+  assert.match(
+    intakeSkill,
+    /Do not propose or generate `intake\.md` while `interview\.state` is `interview_active`, `paused`, or `blocked_on_user`/,
+  );
+  assert.match(
+    intakeSkill,
+    /During a paused interview, do not generate a new question batch or auto-resume/,
+  );
+  assert.match(
+    intakeSkill,
+    /During a blocked interview, do not generate a new question batch or offer automatic continuation/,
+  );
+  assert.match(
+    intakeSkill,
+    /When the user invokes this skill directly without a parent harness, include the complete state in a named `intake_json` fenced block/,
+  );
+
+  assert.match(
+    requirementsAgent,
+    /plus a conversation-ready response for the harness/,
+  );
+  assert.match(
+    requirementsAgent,
+    /Do not produce a Markdown intake report, comparison table, artifact inventory, or JSON dump/,
+  );
+  assert.match(
+    requirementsAgent,
+    /During a paused interview, do not generate a new question batch or auto-resume/,
+  );
+  assert.match(
+    requirementsAgent,
+    /During a blocked interview, do not generate a new question batch or offer automatic continuation/,
+  );
+  assert.doesNotMatch(
+    requirementsAgent,
+    /plus a narrative-first Markdown intake analysis/,
+  );
+
+  assert.match(
+    geminiHarnessCommand,
+    /Keep active Gate A rounds conversational/,
+  );
+  assert.match(
+    geminiHarnessCommand,
+    /Silently persist gate-a-intake\/intake\.json after every round/,
+  );
+  assert.match(
+    geminiHarnessCommand,
+    /active, paused, and blocked Gate A keep intake_json out of the user-facing reply/,
+  );
+  assert.match(
+    geminiIntakeCommand,
+    /reply as a natural planning conversation/,
+  );
+  assert.match(
+    geminiIntakeCommand,
+    /This standalone command has no parent harness/,
+  );
+  assert.match(
+    geminiIntakeCommand,
+    /return the complete canonical state in a named intake_json fenced block/,
+  );
+  assert.match(
+    geminiIntakeCommand,
+    /During a blocked round, do not generate a new question batch or offer automatic continuation/,
+  );
+  assert.match(
+    geminiIntakeCommand,
+    /intake\.md is allowed only when the user explicitly requests a Markdown export/,
+  );
+  assert.match(geminiIntakeCommand, /plan2agent:intake-md-export=explicit/);
+});
 
 test('custom schema validation enforces array cardinality', () => {
   assert.doesNotThrow(() => validateSchema(
@@ -472,6 +653,18 @@ test('interview guardrails reject oversized batches and invalid no-progress cont
   }));
   assert.equal(continuedAfterSoftLimit.interview.soft_limit_acknowledged, true);
 
+  assert.throws(
+    () => validateTempIntake(intakeForInterview('paused', {
+      round: 3,
+      stopReason: 'soft_limit',
+      softLimitAcknowledged: true,
+    })),
+    (error) => (
+      error instanceof ValidationError
+      && /soft-limit pause cannot be acknowledged until the interview resumes/.test(error.message)
+    ),
+  );
+
   const resolvedCurrent = intakeForInterview('interview_active');
   resolvedCurrent.clarifying_questions[0].status = 'answered';
   resolvedCurrent.clarifying_questions[0].answer = 'Operations users';
@@ -524,9 +717,35 @@ test('interview guardrails reject oversized batches and invalid no-progress cont
 
   assert.throws(
     () => validateTempIntake(intakeForInterview('blocked_on_user', {
+      round: 5,
+      stopReason: 'hard_limit',
+      hasUnasked: true,
+      newBlocker: true,
+    })),
+    (error) => (
+      error instanceof ValidationError
+      && /blocked interview blockers must be materialized as an open CQ, ND, or discovery dimension/.test(error.message)
+    ),
+  );
+
+  assert.throws(
+    () => validateTempIntake(intakeForInterview('blocked_on_user', {
+      round: 2,
+      stopReason: 'user_requested',
+      hasUnasked: true,
+    })),
+    (error) => (
+      error instanceof ValidationError
+      && /blocked interview blockers must be materialized as an open CQ, ND, or discovery dimension/.test(error.message)
+    ),
+  );
+
+  assert.throws(
+    () => validateTempIntake(intakeForInterview('blocked_on_user', {
       round: 4,
       noProgressRounds: 2,
       stopReason: 'user_requested',
+      hasUnasked: false,
     })),
     (error) => (
       error instanceof ValidationError
@@ -591,6 +810,20 @@ test('interview questions and decisions require canonical blocked fields for Gat
   assert.deepEqual(
     validated.needs_user_decision[0].blocks,
     ['spec.product.target_users', 'spec.product.success_criteria'],
+  );
+
+  const duplicateDecisionOptionIds = structuredClone(withDecision);
+  duplicateDecisionOptionIds.needs_user_decision[0].options[1].id = 'operations';
+  assert.throws(
+    () => validateTempIntake(duplicateDecisionOptionIds),
+    (error) => error instanceof ValidationError && /option id values must be unique/.test(error.message),
+  );
+
+  const unknownDecisionDefault = structuredClone(withDecision);
+  unknownDecisionDefault.needs_user_decision[0].default = 'missing-option';
+  assert.throws(
+    () => validateTempIntake(unknownDecisionDefault),
+    (error) => error instanceof ValidationError && /default must match one of its option ids/.test(error.message),
   );
 
   const blankDecisionAnswer = structuredClone(withDecision);
@@ -2194,7 +2427,11 @@ test('p2a next exposes one interview-aware action for every Gate A transition', 
     ['ready_for_gate_a_summary', {}, 'gate_a_summary_ready', 'skill', 'resume_from: gate-a-summary'],
     ['awaiting_gate_a_confirmation', {}, 'gate_a_needs_confirmation', 'approval', 'record the Gate A approval_audit'],
     ['paused', { round: 3, stopReason: 'soft_limit' }, 'gate_a_interview_paused', 'approval', 'Choose whether to continue'],
-    ['blocked_on_user', { round: 5, stopReason: 'hard_limit' }, 'gate_a_blocked_on_user', 'approval', 'remaining blockers'],
+    ['blocked_on_user', {
+      round: 5,
+      stopReason: 'hard_limit',
+      hasUnasked: false,
+    }, 'gate_a_blocked_on_user', 'approval', 'CQ-1: Who uses the dashboard?'],
     ['gate_a_confirmed', {}, 'gate_a_confirmed_ready_for_spec', 'skill', 'resume_from: spec'],
   ];
   for (const [interviewState, options, expectedState, kind, displayFragment] of cases) {
@@ -2272,15 +2509,669 @@ test('p2a next prioritizes changed Gate A over an existing stale Gate B', () => 
   }
 });
 
-test('p2a next points iterative Gate A approval actions at the active intake', () => {
-  const intake = intakeForInterview('paused', {
+test('p2a next keeps paused and blocked Gate A guidance independent of the silent intake snapshot', () => {
+  const blockedIntake = intakeForInterview('blocked_on_user', {
+    round: 5,
+    stopReason: 'hard_limit',
+  });
+  blockedIntake.needs_user_decision.push({
+    id: 'ND-1',
+    question: 'Where should the dashboard run?',
+    options: [
+      {
+        id: 'local-web',
+        label: 'Local web app',
+        description: 'Run the dashboard locally in a browser.',
+      },
+      {
+        id: 'hosted',
+        label: 'Hosted service',
+        description: 'Deploy the dashboard for shared access.',
+      },
+    ],
+    impact: 'The choice determines the deployment shape.',
+    blocks: ['spec.implementation.architecture'],
+    affected_fields: [],
+    default: 'local-web',
+    status: 'open',
+  });
+  blockedIntake.interview.asked_question_ids.push('ND-1');
+  blockedIntake.interview.discovery_dimensions = DIMENSIONS.map((dimension) => ({
+    dimension,
+    status: 'not_applicable',
+    summary: `${dimension} does not apply`,
+    source_ids: ['USER-1'],
+    affected_fields: [],
+  }));
+  blockedIntake.interview.has_unasked_high_impact_questions = false;
+  const questionlessBlockedIntake = intakeForInterview('blocked_on_user', {
+    round: 5,
+    stopReason: 'hard_limit',
+    hasUnasked: false,
+    newBlocker: false,
+  });
+  questionlessBlockedIntake.clarifying_questions = [];
+  questionlessBlockedIntake.needs_user_decision = [];
+  questionlessBlockedIntake.interview.asked_question_ids = [];
+  questionlessBlockedIntake.interview.current_question_ids = [];
+  questionlessBlockedIntake.interview.discovery_dimensions = DIMENSIONS.map(
+    (dimension, index) => ({
+      dimension,
+      status: index === 0 ? 'open' : 'not_applicable',
+      summary: index === 0
+        ? 'Target users still need clarification'
+        : `${dimension} does not apply`,
+      source_ids: ['USER-1'],
+      affected_fields: [],
+    }),
+  );
+  questionlessBlockedIntake.interview.spec_updates = [];
+  const pausedIntake = intakeForInterview('paused', {
     round: 3,
     stopReason: 'soft_limit',
+    hasUnasked: false,
   });
-  const { payload, intakePath } = nextForIterativeIntake(intake);
-  assert.equal(payload.state, 'gate_a_interview_paused');
-  assert.equal(payload.command.kind, 'approval');
-  assert.match(payload.command.display, new RegExp(intakePath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  pausedIntake.interview.discovery_dimensions = DIMENSIONS.map((dimension) => ({
+    dimension,
+    status: 'not_applicable',
+    summary: `${dimension} does not apply`,
+    source_ids: ['USER-1'],
+    affected_fields: [],
+  }));
+  pausedIntake.assumptions = [
+    {
+      id: 'A-1',
+      statement: 'Start with a local-only dashboard.',
+      risk: 'low',
+      confirmation_needed: true,
+    },
+    {
+      id: 'A-2',
+      statement: 'Gate C remains a separate planning step.',
+      risk: 'low',
+      confirmation_needed: false,
+    },
+  ];
+  const pausedWithoutRecommendedAssumptions = structuredClone(pausedIntake);
+  pausedWithoutRecommendedAssumptions.assumptions[0].confirmation_needed = false;
+  const pausedWithOnlyUnsurfacedInput = structuredClone(
+    pausedWithoutRecommendedAssumptions,
+  );
+  pausedWithOnlyUnsurfacedInput.clarifying_questions = [];
+  pausedWithOnlyUnsurfacedInput.needs_user_decision = [];
+  pausedWithOnlyUnsurfacedInput.interview.asked_question_ids = [];
+  pausedWithOnlyUnsurfacedInput.interview.current_question_ids = [];
+  pausedWithOnlyUnsurfacedInput.interview.has_unasked_high_impact_questions = true;
+  pausedWithOnlyUnsurfacedInput.interview.discovery_dimensions = DIMENSIONS.map(
+    (dimension) => ({
+      dimension,
+      status: 'not_applicable',
+      summary: `${dimension} does not apply`,
+      source_ids: ['USER-1'],
+      affected_fields: [],
+    }),
+  );
+  pausedWithOnlyUnsurfacedInput.interview.spec_updates = [];
+  const largeGuidanceIntake = structuredClone(blockedIntake);
+  for (let index = 2; index <= 5; index += 1) {
+    largeGuidanceIntake.clarifying_questions.push({
+      id: `CQ-${index}`,
+      question: `Additional blocker ${index}?`,
+      why_it_matters: `Blocker ${index} changes the implementation boundary.`,
+      blocks: ['spec.product.constraints'],
+      affected_fields: [],
+      status: 'open',
+    });
+    largeGuidanceIntake.interview.asked_question_ids.push(`CQ-${index}`);
+  }
+  largeGuidanceIntake.assumptions = Array.from({ length: 5 }, (_, index) => ({
+    id: `A-${index + 1}`,
+    statement: `Recommended assumption ${index + 1}.`,
+    risk: 'low',
+    confirmation_needed: true,
+  }));
+  const cases = [
+    {
+      intake: pausedIntake,
+      state: 'gate_a_interview_paused',
+      display: 'The Gate A interview is paused. Current understanding: Add a delivery dashboard to the existing service. Unresolved items: CQ-1: Who uses the dashboard? — Recommended assumptions: A-1: Start with a local-only dashboard. (risk: low). Choose whether to continue the interview, answer a listed unresolved item directly, explicitly accept a listed recommended assumption, or keep it paused.',
+    },
+    {
+      intake: pausedWithoutRecommendedAssumptions,
+      state: 'gate_a_interview_paused',
+      display: 'The Gate A interview is paused. Current understanding: Add a delivery dashboard to the existing service. Unresolved items: CQ-1: Who uses the dashboard? — No recommended assumptions are currently recorded. Choose whether to continue the interview, answer a listed unresolved item directly, or keep it paused.',
+    },
+    {
+      intake: pausedWithOnlyUnsurfacedInput,
+      state: 'gate_a_interview_paused',
+      display: 'The Gate A interview is paused. Current understanding: Add a delivery dashboard to the existing service. Unresolved items: unsurfaced high-impact input remains and must be materialized by the interview before it can be answered — No recommended assumptions are currently recorded. Choose whether to continue the interview or keep it paused.',
+    },
+    {
+      intake: blockedIntake,
+      state: 'gate_a_blocked_on_user',
+      display: 'Resolve these Gate A blockers: CQ-1: Who uses the dashboard?; ND-1: Where should the dashboard run? (options: local-web=Local web app — Run the dashboard locally in a browser. | hosted=Hosted service — Deploy the dashboard for shared access.; recommended: local-web=Local web app) — No recommended assumptions are currently recorded. Answer the listed unresolved items directly or explicitly defer an item.',
+    },
+    {
+      intake: questionlessBlockedIntake,
+      state: 'gate_a_blocked_on_user',
+      display: 'Resolve these Gate A blockers: dimension target_users: Target users still need clarification — No recommended assumptions are currently recorded. Answer the listed unresolved items directly or explicitly defer an item.',
+    },
+  ];
+  for (const testCase of cases) {
+    const { payload, intakePath } = nextForIterativeIntake(testCase.intake);
+    assert.equal(payload.state, testCase.state);
+    assert.equal(payload.command.kind, 'approval');
+    assert.equal(payload.command.display, testCase.display);
+    assert.doesNotMatch(
+      payload.command.display,
+      new RegExp(intakePath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')),
+    );
+    if (testCase.intake === pausedWithOnlyUnsurfacedInput) {
+      assert.doesNotMatch(payload.command.display, /answer a listed unresolved item/);
+    }
+  }
+  const { payload: largeGuidancePayload } = nextForIterativeIntake(largeGuidanceIntake);
+  assert.match(
+    largeGuidancePayload.command.display,
+    /CQ-1: Who uses the dashboard\?; CQ-2: Additional blocker 2\?; CQ-3: Additional blocker 3\?; 3 more unresolved item\(s\)/,
+  );
+  assert.doesNotMatch(largeGuidancePayload.command.display, /CQ-4:/);
+  assert.match(
+    largeGuidancePayload.command.display,
+    /A-1: Recommended assumption 1\. \(risk: low\); A-2: Recommended assumption 2\. \(risk: low\); A-3: Recommended assumption 3\. \(risk: low\); 2 more recommended assumption\(s\)/,
+  );
+  assert.doesNotMatch(largeGuidancePayload.command.display, /A-4:/);
+
+  const manyDecisionOptionsIntake = structuredClone(blockedIntake);
+  manyDecisionOptionsIntake.needs_user_decision[0].options.push(
+    {
+      id: 'desktop',
+      label: 'Desktop app',
+      description: 'Package the dashboard for desktop use.',
+    },
+    {
+      id: 'mobile',
+      label: 'Mobile app',
+      description: 'Package the dashboard for mobile use.',
+    },
+    {
+      id: 'terminal',
+      label: 'Terminal app',
+      description: 'Expose the dashboard in a terminal.',
+    },
+  );
+  manyDecisionOptionsIntake.needs_user_decision[0].default = 'terminal';
+  const { payload: manyDecisionOptionsPayload } = nextForIterativeIntake(
+    manyDecisionOptionsIntake,
+  );
+  assert.match(
+    manyDecisionOptionsPayload.command.display,
+    /local-web=Local web app .* \| hosted=Hosted service .* \| terminal=Terminal app — Expose the dashboard in a terminal\. \| 2 more option\(s\); recommended: terminal=Terminal app/,
+  );
+  assert.doesNotMatch(manyDecisionOptionsPayload.command.display, /desktop=|mobile=/);
+
+  const longGuidanceIntake = structuredClone(blockedIntake);
+  longGuidanceIntake.clarifying_questions[0].question =
+    `Long blocker ${'x'.repeat(5_000)} END-OF-BLOCKER`;
+  longGuidanceIntake.assumptions = [{
+    id: 'A-1',
+    statement: `Long assumption ${'y'.repeat(5_000)} END-OF-ASSUMPTION`,
+    risk: 'low',
+    confirmation_needed: true,
+  }];
+  const { payload: longGuidancePayload } = nextForIterativeIntake(longGuidanceIntake);
+  assert.ok(longGuidancePayload.command.display.length < 1_500);
+  assert.match(longGuidancePayload.command.display, /…/);
+  assert.doesNotMatch(
+    longGuidancePayload.command.display,
+    /END-OF-BLOCKER|END-OF-ASSUMPTION/,
+  );
+});
+
+test('active Gate A draft persists only a resumable JSON snapshot', () => {
+  const root = makeTempDir('p2a-discovery-active-json-only-');
+  const artifactRoot = join(
+    root,
+    '.plan2agent',
+    'artifacts',
+    'webhook-api-service',
+  );
+  const iterationId = 'iter-002';
+  const iterationRoot = join(artifactRoot, 'iterations', iterationId);
+  const intakePath = join(iterationRoot, 'gate-a-intake', 'intake.json');
+  const intakeViewPath = join(iterationRoot, 'gate-a-intake', 'intake.md');
+
+  try {
+    cpSync(join(FIXTURE_ROOT, '_e2e', 'webhook-api-service'), artifactRoot, {
+      recursive: true,
+    });
+    writeJson(join(root, '.plan2agent', 'manifest.json'), {
+      provenance: { mode: 'scaffold' },
+      enhancements: {},
+    });
+
+    let result = runIteration(['init', '--artifacts', artifactRoot]);
+    assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+
+    const baselineSpecPath = join(
+      artifactRoot,
+      'iterations',
+      'v1-mvp',
+      'gate-b-spec',
+      'spec.json',
+    );
+    const baselineSpec = JSON.parse(readFileSync(baselineSpecPath, 'utf8'));
+    baselineSpec.source_intake =
+      '.plan2agent/artifacts/webhook-api-service/iterations/v1-mvp/gate-a-intake/intake.json';
+    writeJson(baselineSpecPath, baselineSpec);
+
+    const baselineTaskGraphPath = join(
+      artifactRoot,
+      'iterations',
+      'v1-mvp',
+      'gate-c-task-graph',
+      'task-graph.json',
+    );
+    const baselineTaskGraph = JSON.parse(readFileSync(baselineTaskGraphPath, 'utf8'));
+    baselineTaskGraph.tasks = baselineTaskGraph.tasks.map((task) => ({
+      ...task,
+      status: 'done',
+    }));
+    writeJson(baselineTaskGraphPath, baselineTaskGraph);
+
+    result = runIteration(['close', '--artifacts', artifactRoot]);
+    assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+    result = runIteration([
+      'open',
+      '--artifacts',
+      artifactRoot,
+      '--iteration-id',
+      iterationId,
+      '--idea',
+      'Add a delivery dashboard',
+    ]);
+    assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+    const openedMetadata = JSON.parse(readFileSync(
+      join(iterationRoot, 'iteration.json'),
+      'utf8',
+    ));
+    assert.equal(openedMetadata.expected_artifacts.includes('gate-a-intake/intake.md'), false);
+    assert.equal(openedMetadata.optional_artifacts.includes('gate-a-intake/intake.md'), true);
+    const iterationReadme = readFileSync(join(iterationRoot, 'README.md'), 'utf8');
+    assert.match(iterationReadme, /Optional generated views\/exports:/);
+    assert.match(iterationReadme, /intake\.md \(explicit Markdown export only\)/);
+
+    const legacyMetadata = structuredClone(openedMetadata);
+    legacyMetadata.expected_artifacts = [
+      ...legacyMetadata.expected_artifacts,
+      ...legacyMetadata.optional_artifacts,
+    ];
+    delete legacyMetadata.optional_artifacts;
+    writeJson(join(iterationRoot, 'iteration.json'), legacyMetadata);
+    writeFileSync(
+      join(iterationRoot, 'README.md'),
+      '# iter-002\n\nExpected artifacts:\n\n- gate-a-intake/intake.md\n',
+      'utf8',
+    );
+
+    result = runIteration(['draft', '--artifacts', artifactRoot]);
+    assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+    assert.match(result.stdout, /Gate A interview ready/);
+    assert.doesNotMatch(result.stdout, /gate-a-intake|intake\.json|intake\.md/);
+    assert.equal(existsSync(intakePath), true);
+    assert.equal(existsSync(intakeViewPath), false);
+    const migratedMetadata = JSON.parse(readFileSync(
+      join(iterationRoot, 'iteration.json'),
+      'utf8',
+    ));
+    assert.equal(migratedMetadata.expected_artifacts.includes('gate-a-intake/intake.md'), false);
+    assert.equal(migratedMetadata.optional_artifacts.includes('gate-a-intake/intake.md'), true);
+    const migratedReadme = readFileSync(join(iterationRoot, 'README.md'), 'utf8');
+    assert.match(migratedReadme, /Expected canonical artifacts:/);
+    assert.match(migratedReadme, /Optional generated views\/exports:/);
+    const intake = JSON.parse(readFileSync(intakePath, 'utf8'));
+    assert.equal(intake.interview?.state, 'interview_active');
+
+    result = runP2a(['next', '--target', root, '--json']);
+    assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+    const nextPayload = JSON.parse(result.stdout);
+    assert.equal(nextPayload.state, 'gate_a_interview_active');
+    assert.equal(nextPayload.command.display, '/p2a-harness resume_from: interview');
+
+    const pausedIntake = structuredClone(intake);
+    pausedIntake.interview.state = 'paused';
+    pausedIntake.interview.round = 3;
+    pausedIntake.interview.current_question_ids = [];
+    pausedIntake.interview.stop_reason = 'soft_limit';
+    const outsideReadmePath = join(root, 'outside-readme.md');
+    if (process.platform !== 'win32') {
+      writeFileSync(outsideReadmePath, 'outside sentinel\n', 'utf8');
+      rmSync(join(iterationRoot, 'README.md'));
+      symlinkSync(outsideReadmePath, join(iterationRoot, 'README.md'));
+    }
+    writeJson(intakePath, pausedIntake);
+    result = runIteration(['draft', '--artifacts', artifactRoot]);
+    if (process.platform !== 'win32') {
+      assert.notEqual(result.status, 0);
+      assert.match(`${result.stdout}${result.stderr}`, /iteration README must be a regular file/);
+      assert.equal(readFileSync(outsideReadmePath, 'utf8'), 'outside sentinel\n');
+      assert.equal(lstatSync(join(iterationRoot, 'README.md')).isSymbolicLink(), true);
+      rmSync(join(iterationRoot, 'README.md'));
+
+      const missingReadmePath = join(root, 'missing-readme.md');
+      symlinkSync(missingReadmePath, join(iterationRoot, 'README.md'));
+      result = runIteration(['draft', '--artifacts', artifactRoot]);
+      assert.notEqual(result.status, 0);
+      assert.match(`${result.stdout}${result.stderr}`, /iteration README must be a regular file/);
+      assert.equal(lstatSync(join(iterationRoot, 'README.md')).isSymbolicLink(), true);
+      assert.equal(existsSync(missingReadmePath), false);
+      rmSync(join(iterationRoot, 'README.md'));
+
+      writeFileSync(
+        join(iterationRoot, 'README.md'),
+        '# iter-002\n\nExpected artifacts:\n\n- gate-a-intake/intake.md\n',
+        'utf8',
+      );
+      result = runIteration(['draft', '--artifacts', artifactRoot]);
+    }
+    assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+    assert.match(result.stdout, /Gate A interview paused/);
+    assert.ok(
+      result.stdout.includes(`Current understanding: ${pausedIntake.summary}`),
+    );
+    assert.match(result.stdout, /Unresolved items: CQ-1:/);
+    assert.match(result.stdout, /more unresolved item\(s\)/);
+    assert.match(result.stdout, /Choose whether to continue the interview/);
+    assert.match(result.stdout, /answer a listed unresolved item directly/);
+    assert.doesNotMatch(result.stdout, /accept the current understanding/);
+    assert.doesNotMatch(result.stdout, /accept (?:a|the) recommended assumption/);
+    assert.doesNotMatch(result.stdout, /resume_from: interview|gate-a-intake|intake\.json/);
+    if (process.platform !== 'win32') {
+      assert.equal(readFileSync(outsideReadmePath, 'utf8'), 'outside sentinel\n');
+      assert.equal(lstatSync(join(iterationRoot, 'README.md')).isFile(), true);
+      assert.equal(lstatSync(join(iterationRoot, 'README.md')).isSymbolicLink(), false);
+    }
+
+    const pausedWithDecisionRecommendation = structuredClone(pausedIntake);
+    pausedWithDecisionRecommendation.clarifying_questions = [];
+    pausedWithDecisionRecommendation.needs_user_decision = [{
+      id: 'ND-1',
+      question: 'Where should the dashboard run?',
+      options: [
+        {
+          id: 'local-web',
+          label: 'Local web app',
+          description: 'Run the dashboard only on the local machine.',
+        },
+        {
+          id: 'hosted-web',
+          label: 'Hosted web app',
+          description: 'Deploy the dashboard for remote access.',
+        },
+        {
+          id: 'desktop',
+          label: 'Desktop app',
+          description: 'Package the dashboard for desktop use.',
+        },
+        {
+          id: 'terminal',
+          label: 'Terminal app',
+          description: 'Expose the dashboard in a terminal.',
+        },
+      ],
+      impact: 'The choice changes deployment and access boundaries.',
+      blocks: ['spec.product.constraints'],
+      affected_fields: [],
+      default: 'terminal',
+      status: 'open',
+    }];
+    pausedWithDecisionRecommendation.interview.asked_question_ids = ['ND-1'];
+    writeJson(intakePath, pausedWithDecisionRecommendation);
+    result = runIteration(['draft', '--artifacts', artifactRoot]);
+    assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+    assert.match(
+      result.stdout,
+      /ND-1: Where should the dashboard run\? \(options: local-web=Local web app — Run the dashboard only on the local machine\. \| hosted-web=Hosted web app — Deploy the dashboard for remote access\. \| terminal=Terminal app — Expose the dashboard in a terminal\. \| 1 more option\(s\); recommended: terminal=Terminal app\)/,
+    );
+    assert.doesNotMatch(result.stdout, /accept (?:a|the) recommended assumption/);
+
+    const dimensionBlockedDraftIntake = structuredClone(intake);
+    dimensionBlockedDraftIntake.status = 'blocked_on_user';
+    dimensionBlockedDraftIntake.clarifying_questions = [];
+    dimensionBlockedDraftIntake.needs_user_decision = [];
+    dimensionBlockedDraftIntake.interview.state = 'blocked_on_user';
+    dimensionBlockedDraftIntake.interview.round = 5;
+    dimensionBlockedDraftIntake.interview.asked_question_ids = [];
+    dimensionBlockedDraftIntake.interview.current_question_ids = [];
+    dimensionBlockedDraftIntake.interview.discovery_dimensions = DIMENSIONS.map(
+      (dimension, index) => ({
+        dimension,
+        status: index === 0 ? 'open' : 'not_applicable',
+        summary: index === 0
+          ? 'Target users require direct user input'
+          : `${dimension} does not apply`,
+        source_ids: ['USER-1'],
+        affected_fields: [],
+      }),
+    );
+    dimensionBlockedDraftIntake.interview.has_unasked_high_impact_questions = false;
+    dimensionBlockedDraftIntake.interview.new_blocker = false;
+    dimensionBlockedDraftIntake.interview.stop_reason = 'hard_limit';
+    dimensionBlockedDraftIntake.interview.spec_updates = [];
+    writeJson(intakePath, dimensionBlockedDraftIntake);
+    result = runIteration(['draft', '--artifacts', artifactRoot]);
+    assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+    assert.match(
+      result.stdout,
+      /dimension target_users: Target users require direct user input/,
+    );
+    assert.match(
+      result.stdout,
+      /Answer the listed unresolved items directly or explicitly defer an item/,
+    );
+    assert.doesNotMatch(result.stdout, /continue the Gate A interview/);
+
+    const pausedWithRecommendation = structuredClone(pausedIntake);
+    pausedWithRecommendation.assumptions.push({
+      id: 'A-3',
+      statement: 'Start with a local-only dashboard.',
+      risk: 'low',
+      confirmation_needed: true,
+    });
+    writeJson(intakePath, pausedWithRecommendation);
+    result = runIteration(['draft', '--artifacts', artifactRoot]);
+    assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+    assert.match(
+      result.stdout,
+      /Recommended assumptions: A-3: Start with a local-only dashboard\. \(risk: low\)/,
+    );
+    assert.match(
+      result.stdout,
+      /answer a listed unresolved item directly, explicitly accept a recommended assumption/,
+    );
+
+    const pausedWithLongGuidance = structuredClone(pausedIntake);
+    pausedWithLongGuidance.clarifying_questions[0].question =
+      `Long blocker ${'x'.repeat(5_000)} END-OF-BLOCKER`;
+    pausedWithLongGuidance.assumptions.push({
+      id: 'A-3',
+      statement: `Long assumption ${'y'.repeat(5_000)} END-OF-ASSUMPTION`,
+      risk: 'low',
+      confirmation_needed: true,
+    });
+    writeJson(intakePath, pausedWithLongGuidance);
+    result = runIteration(['draft', '--artifacts', artifactRoot]);
+    assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+    assert.ok(result.stdout.length < 2_000);
+    assert.match(result.stdout, /…/);
+    assert.doesNotMatch(result.stdout, /END-OF-BLOCKER|END-OF-ASSUMPTION/);
+
+    const pausedWithOnlyUnsurfacedInput = structuredClone(pausedIntake);
+    pausedWithOnlyUnsurfacedInput.clarifying_questions = [];
+    pausedWithOnlyUnsurfacedInput.needs_user_decision = [];
+    pausedWithOnlyUnsurfacedInput.assumptions = [];
+    pausedWithOnlyUnsurfacedInput.interview.asked_question_ids = [];
+    pausedWithOnlyUnsurfacedInput.interview.current_question_ids = [];
+    pausedWithOnlyUnsurfacedInput.interview.discovery_dimensions = DIMENSIONS.map(
+      (dimension) => ({
+        dimension,
+        status: 'not_applicable',
+        summary: `${dimension} does not apply`,
+        source_ids: ['USER-1'],
+        affected_fields: [],
+      }),
+    );
+    pausedWithOnlyUnsurfacedInput.interview.spec_updates = [];
+    pausedWithOnlyUnsurfacedInput.interview.has_unasked_high_impact_questions = true;
+    writeJson(intakePath, pausedWithOnlyUnsurfacedInput);
+    result = runIteration(['draft', '--artifacts', artifactRoot]);
+    assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+    assert.match(
+      result.stdout,
+      /Choose whether to continue the interview or keep it paused/,
+    );
+    assert.doesNotMatch(result.stdout, /answer a listed unresolved item/);
+
+    const blockedIntake = structuredClone(intake);
+    blockedIntake.interview.state = 'blocked_on_user';
+    blockedIntake.interview.round = 5;
+    blockedIntake.interview.current_question_ids = [];
+    blockedIntake.interview.has_unasked_high_impact_questions = false;
+    blockedIntake.interview.new_blocker = false;
+    blockedIntake.interview.stop_reason = 'hard_limit';
+    writeJson(intakePath, blockedIntake);
+    result = runIteration(['draft', '--artifacts', artifactRoot]);
+    assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+    assert.match(result.stdout, /Gate A interview is blocked on user input/);
+    assert.match(
+      result.stdout,
+      /Answer the listed unresolved items directly or explicitly defer an item/,
+    );
+    assert.doesNotMatch(result.stdout, /continue the Gate A interview/);
+    assert.doesNotMatch(result.stdout, /accept (?:a|the) recommended assumption/);
+    assert.doesNotMatch(result.stdout, /resume_from: interview|gate-a-intake|intake\.json/);
+    assert.equal(existsSync(intakeViewPath), false);
+
+    const resolvedIntake = confirmGeneratedIntake(
+      intakePath,
+      `iterations/${iterationId}/gate-a-intake/intake.json`,
+    );
+    delete resolvedIntake.approval_audit;
+    resolvedIntake.status = 'blocked_on_user';
+
+    const summaryReadyIntake = structuredClone(resolvedIntake);
+    summaryReadyIntake.interview.state = 'ready_for_gate_a_summary';
+    writeJson(intakePath, summaryReadyIntake);
+    result = runIteration(['draft', '--artifacts', artifactRoot]);
+    assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+    assert.match(result.stdout, /Gate A summary ready/);
+    assert.match(result.stdout, /resume_from: gate-a-summary/);
+    assert.doesNotMatch(result.stdout, /resume_from: interview/);
+    assert.equal(existsSync(intakeViewPath), false);
+
+    writeFileSync(
+      intakeViewPath,
+      '# Intake\n\n## Interview State\n\n- state: ready_for_gate_a_summary\n',
+      'utf8',
+    );
+    writeJson(intakePath, summaryReadyIntake);
+    result = runIteration(['draft', '--artifacts', artifactRoot]);
+    assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+    assert.equal(
+      existsSync(intakeViewPath),
+      false,
+      'an unmarked Markdown view from the legacy automatic writer must be removed',
+    );
+
+    writeFileSync(
+      intakeViewPath,
+      `${EXPLICIT_INTAKE_MARKDOWN_MARKER}\r\n\r\n# Explicit Gate A Markdown export\r\n`,
+      'utf8',
+    );
+    writeJson(intakePath, summaryReadyIntake);
+    result = runIteration(['draft', '--artifacts', artifactRoot]);
+    assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+    assert.equal(existsSync(intakeViewPath), true);
+    let refreshedIntakeView = readFileSync(intakeViewPath, 'utf8');
+    assert.ok(refreshedIntakeView.startsWith(`${EXPLICIT_INTAKE_MARKDOWN_MARKER}\n`));
+    assert.match(refreshedIntakeView, /state: ready_for_gate_a_summary/);
+
+    if (process.platform !== 'win32') {
+      const outsideIntakeViewPath = join(root, 'outside-intake-export.md');
+      const outsideIntakeView =
+        `${EXPLICIT_INTAKE_MARKDOWN_MARKER}\n\n# Outside sentinel\n`;
+      writeFileSync(outsideIntakeViewPath, outsideIntakeView, 'utf8');
+      rmSync(intakeViewPath);
+      symlinkSync(outsideIntakeViewPath, intakeViewPath);
+      writeJson(intakePath, summaryReadyIntake);
+      result = runIteration(['draft', '--artifacts', artifactRoot]);
+      assert.notEqual(result.status, 0);
+      assert.match(
+        `${result.stdout}${result.stderr}`,
+        /Gate A intake Markdown export must be a regular file/,
+      );
+      assert.equal(readFileSync(outsideIntakeViewPath, 'utf8'), outsideIntakeView);
+      assert.equal(lstatSync(intakeViewPath).isSymbolicLink(), true);
+      rmSync(intakeViewPath);
+
+      const missingOutsideIntakeViewPath = join(root, 'missing-intake-export.md');
+      symlinkSync(missingOutsideIntakeViewPath, intakeViewPath);
+      writeJson(intakePath, summaryReadyIntake);
+      result = runIteration(['draft', '--artifacts', artifactRoot]);
+      assert.notEqual(result.status, 0);
+      assert.match(
+        `${result.stdout}${result.stderr}`,
+        /Gate A intake Markdown export must be a regular file/,
+      );
+      assert.equal(lstatSync(intakeViewPath).isSymbolicLink(), true);
+      assert.equal(existsSync(missingOutsideIntakeViewPath), false);
+      rmSync(intakeViewPath);
+
+      writeFileSync(
+        intakeViewPath,
+        `${EXPLICIT_INTAKE_MARKDOWN_MARKER}\n\n# Explicit Gate A Markdown export\n`,
+        'utf8',
+      );
+      result = runIteration(['draft', '--artifacts', artifactRoot]);
+      assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+      refreshedIntakeView = readFileSync(intakeViewPath, 'utf8');
+      assert.match(refreshedIntakeView, /state: ready_for_gate_a_summary/);
+    }
+
+    const pausedFromSummaryIntake = structuredClone(pausedIntake);
+    pausedFromSummaryIntake.summary = 'Paused directly after reviewing the Gate A summary.';
+    writeJson(intakePath, pausedFromSummaryIntake);
+    result = runIteration(['draft', '--artifacts', artifactRoot]);
+    assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+    assert.match(result.stdout, /Gate A interview paused/);
+    assert.equal(existsSync(intakeViewPath), true);
+    refreshedIntakeView = readFileSync(intakeViewPath, 'utf8');
+    assert.match(refreshedIntakeView, /Paused directly after reviewing the Gate A summary/);
+    assert.match(refreshedIntakeView, /state: paused/);
+
+    const resumedActiveIntake = structuredClone(intake);
+    resumedActiveIntake.summary = 'Updated after feedback on the Gate A summary.';
+    writeJson(intakePath, resumedActiveIntake);
+    result = runIteration(['draft', '--artifacts', artifactRoot]);
+    assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+    assert.match(result.stdout, /Gate A interview ready/);
+    assert.equal(existsSync(intakeViewPath), true);
+    refreshedIntakeView = readFileSync(intakeViewPath, 'utf8');
+    assert.match(refreshedIntakeView, /Updated after feedback on the Gate A summary/);
+    assert.match(refreshedIntakeView, /state: interview_active/);
+
+    const awaitingConfirmationIntake = structuredClone(resolvedIntake);
+    awaitingConfirmationIntake.interview.state = 'awaiting_gate_a_confirmation';
+    writeJson(intakePath, awaitingConfirmationIntake);
+    result = runIteration(['draft', '--artifacts', artifactRoot]);
+    assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+    assert.match(result.stdout, /Gate A summary is awaiting confirmation/);
+    assert.match(result.stdout, /explicitly confirm the Gate A understanding/);
+    assert.doesNotMatch(result.stdout, /resume_from: interview/);
+    assert.match(readFileSync(intakeViewPath, 'utf8'), /state: awaiting_gate_a_confirmation/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test('draft --force protects execution history and invalidates every downstream gate before restarting Gate A', () => {
@@ -2503,6 +3394,23 @@ test('draft --force protects execution history and invalidates every downstream 
       /spec\.product\.target_users must not leave the canonical Gate B field empty/,
     );
 
+    if (process.platform !== 'win32') {
+      const outsideProductSpecPath = join(root, 'outside-product-spec.md');
+      symlinkSync(outsideProductSpecPath, productSpecPath);
+      writeJson(intakePath, confirmedIntake);
+      result = runIteration(['draft', '--artifacts', artifactRoot]);
+      assert.notEqual(result.status, 0);
+      assert.match(`${result.stdout}${result.stderr}`, /Gate A\/B draft artifact must be a regular file/);
+      assert.equal(lstatSync(productSpecPath).isSymbolicLink(), true);
+      assert.equal(existsSync(outsideProductSpecPath), false);
+      rmSync(productSpecPath);
+    }
+
+    writeFileSync(
+      intakeViewPath,
+      `${EXPLICIT_INTAKE_MARKDOWN_MARKER}\n\n# Explicit Gate A Markdown export\n`,
+      'utf8',
+    );
     writeJson(intakePath, confirmedIntake);
     result = runIteration(['draft', '--artifacts', artifactRoot]);
     assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
@@ -2907,6 +3815,22 @@ test('draft --force protects execution history and invalidates every downstream 
     assert.equal(existsSync(reviewPath), true);
 
     writeJson(taskGraphPath, canonicalTaskGraph);
+    if (process.platform !== 'win32') {
+      const explicitIntakeView = readFileSync(intakeViewPath);
+      const missingForceResetTarget = join(root, 'missing-force-reset-export.md');
+      rmSync(intakeViewPath);
+      symlinkSync(missingForceResetTarget, intakeViewPath);
+      result = runIteration(['draft', '--artifacts', artifactRoot, '--force']);
+      assert.notEqual(result.status, 0);
+      assert.match(
+        `${result.stdout}${result.stderr}`,
+        /Gate A intake Markdown export must be a regular file/,
+      );
+      assert.equal(lstatSync(intakeViewPath).isSymbolicLink(), true);
+      assert.equal(existsSync(missingForceResetTarget), false);
+      rmSync(intakeViewPath);
+      writeFileSync(intakeViewPath, explicitIntakeView);
+    }
     const rollbackPaths = [
       intakePath,
       intakeViewPath,
