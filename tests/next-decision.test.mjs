@@ -179,7 +179,7 @@ function writeRuns(artifactRoot, runs) {
       taskId,
       taskTitle: `Task ${taskId}`,
       iterationId: run.iterationId ?? null,
-      sourceLayout: run.iterationId ? 'iteration' : 'handoff',
+      sourceLayout: run.sourceLayout ?? (run.iterationId ? 'iteration' : 'handoff'),
       taskGraphRef,
       sourceSpecRef,
       agentTool: 'codex',
@@ -863,7 +863,7 @@ test('next requires a project id only when multiple artifact roots are ambiguous
   }
 });
 
-test('next ignores open runs from an earlier iteration', () => {
+test('next ignores open runs outside the active iteration task-graph context', () => {
   const root = project();
   try {
     const rootArtifact = artifact(root);
@@ -872,7 +872,16 @@ test('next ignores open runs from an earlier iteration', () => {
     writeGateB(rootArtifact, 'approved', iterationId);
     writeGateC(rootArtifact, [task('task-001', 'todo')], iterationId);
     writeGateD(rootArtifact, [], iterationId);
-    writeRuns(rootArtifact, [{ runId: 'run-v1', iterationId: 'v1', status: 'started' }]);
+    writeRuns(rootArtifact, [
+      { runId: 'run-v1', iterationId: 'v1', status: 'started' },
+      {
+        runId: 'run-v2-unrelated-graph',
+        iterationId,
+        sourceLayout: 'graph',
+        taskGraphRef: '/tmp/unrelated-task-graph.json',
+        status: 'started',
+      },
+    ]);
 
     const payload = next(root);
     assertAction(payload, 'ready_task_available', 'cli', ['execute', 'plan', '--artifacts', artifactPath(root), '--task', 'task-001']);
@@ -1039,13 +1048,34 @@ test('info keeps its JSON contract and points human output to next', () => {
   }
 });
 
-test('next keeps the twenty ordered decision rules required by the contract', () => {
-  assert.equal(NEXT_DECISION_RULES.length, 20);
+test('next keeps the twenty-one ordered decision rules required by the contract', () => {
+  assert.equal(NEXT_DECISION_RULES.length, 21);
   for (const rule of NEXT_DECISION_RULES) {
     assert.equal(typeof rule.when, 'function');
     assert.equal(typeof rule.reason, 'function');
     assert.equal(typeof rule.command, 'function');
   }
+});
+
+test('next routes completed visual tasks through the canonical final review command before close', () => {
+  const rule = NEXT_DECISION_RULES.find((candidate) => candidate.state === 'final_visual_review_required');
+  const visualTask = { id: 'task-007' };
+  const context = {
+    allTasksDone: true,
+    closedIteration: false,
+    detail: { layout: { kind: 'iteration' } },
+    visualTaskNeedingFinalReview: visualTask,
+    artifactArg: '.plan2agent/artifacts/sample',
+  };
+  assert.equal(rule.when(context), true);
+  assert.deepEqual(rule.command(context), [
+    'execute',
+    'review',
+    '--artifacts',
+    '.plan2agent/artifacts/sample',
+    '--task',
+    'task-007',
+  ]);
 });
 
 test('next returns exact commands for cache, webhook, and e2e fixture states', () => {

@@ -20,7 +20,7 @@
 | task CLI 반복 적응 | `p2a tasks --artifacts` | active 반복의 `task-graph.json`을 자동 선택해 ready/prompt/start/done 전이를 수행하고, `--maintenance`로 maintenance 레인도 선택할 수 있다. |
 | agent run 추적 | `p2a runs start/verify/finish` | `runs/`에 task별 runId, changedFiles, verification, agentTool, workspaceRef, branch/worktree 격리 기준을 기록한다. |
 | Gate B-D ready 검증 | `p2a iteration validate` | active 반복의 approved spec, task graph, review pass, task dependency를 검증한다. |
-| close-ready 검증 | `p2a iteration validate --require-close-ready` | active 반복의 모든 task가 `done`인지 추가 확인한다. |
+| close-ready 검증 | `p2a iteration validate --require-close-ready` | active 반복의 모든 task가 `done`인지 확인하고, visual evidence가 이후 task 변경보다 최신인지 검증한다. |
 | planning stage 검증 | `p2a iteration validate --allow-planning`, `--stage` | Gate A-ready, Gate B draft, Gate B approved 상태를 Gate B-D 누락 실패 없이 검증한다. |
 | 반복 close | `p2a iteration close` | close-ready active 반복을 `archived` metadata로 표시하고 `current-spec.json.closed_iterations`에 기록한다. |
 | archived 감사 | `p2a iteration validate` | close 시 기록한 artifact 존재 여부/hash와 현재 파일 상태를 기본 검증으로 비교한다. legacy/migration 상황은 `--skip-archive-audit`로 우회한다. |
@@ -46,6 +46,7 @@
 | archived close | close artifact 존재 여부/hash 기록과 기본 validate-time archive audit을 제공한다. | 기존 pre-audit artifact migration은 필요할 때 `--skip-archive-audit`로 우회한다. |
 | maintenance 반복 | lazy README, `maintenance add` task 생성, `maintenance add --from-draft` 승격, 존재하는 task graph 검증, `context --scope maintenance`, `tasks --maintenance` source/target 표와 prompt next command, handoff 시 별도 `.plan2agent/maintenance/task-graph.json` 복사를 제공한다. | 후보 승인/실행 조작은 CLI와 agent 대화 표면을 기준으로 유지한다. |
 | agent 실행 추적 | `p2a runs`가 전역 `runs/run-index.json`과 iteration별 `runs/<iterationId>/<runId>.json`을 관리하고, test/lint/typecheck 실행 결과와 git changed files를 수집한다. run/index 갱신은 project lock, atomic write, 중단 복구 journal을 사용한다. legacy 평면 run과 이전 `iterations/<iterationId>/runs/` index는 source/target lock과 재개 가능한 journal을 거친 전역 migration을 지원한다. `--graph` 실행은 경로와 무관하게 graph provenance를 유지하고 milestone 증거에서 제외한다. `p2a-dev-execution`은 한 ready snapshot의 bounded batch에서 task별 직렬 start, 격리 worktree 병렬 구현, 직렬 로컬 통합·검증·finish를 조율한다. | PTY/headless 자동 scheduler, persistent batch CLI, PR 생성은 후속이다. |
+| Visual Experience Track | 반복별 spec이 `none|minimal|reuse|full`과 current/deferred timing을 선언한다. `full + current_iteration`은 승인된 screen contract와 dependency-closed offline HTML prototype을 Gate B에 묶고, 모든 task의 명시적 `workKind`, exact-once screen-state-viewport 소유권, 해시 검증되는 PNG·접근성 sidecar gate를 전달한다. | 브라우저 renderer 자체는 provider 도구를 사용하며 P2A가 별도 headless browser farm을 운영하지 않는다. |
 
 ### 0-3. 미구현 / 후속 고도화
 
@@ -135,6 +136,8 @@ Memory가 활성화되고 연결된 iterative root에서는 next iteration을 �
         product-spec.md
         implementation-plan.md
         spec.json
+        experience-spec.json             # conditional: full + current_iteration
+        visual-design/VD-1/               # conditional offline HTML candidate
       gate-c-task-graph/
         task-graph.json
       gate-d-review/
@@ -297,7 +300,7 @@ p2a iteration validate \
   --require-close-ready
 ```
 
-`--require-close-ready`는 모든 active iteration task가 `done`인지 추가로 확인한다.
+`--require-close-ready`는 모든 active iteration task가 `done`인지 추가로 확인한다. Visual task가 있으면 run start에 기록한 immutable task-contract SHA-256, finish에서 검증·저장한 workspace snapshot SHA-256과 `visualReviewEvidenceSha256`, 원본 task/run `visualReview` 계약, sidecar workspace identity/revision과 evidence를 다시 검증한다. 최신 visual run은 `p2a execute review`가 연 canonical integration workspace의 변경 없는 review-only run이어야 하고 현재 workspace revision과 일치해야 한다. 이후 실제 canonical 통합 변경이나 sidecar 변경으로 evidence가 stale해졌다면 새 review-only run으로 최종 상태를 다시 캡처한다. 격리 worktree에서 종료됐지만 통합되지 않은 run의 timestamp만으로 canonical evidence를 stale 처리하지 않는다.
 
 ```bash
 p2a iteration validate \

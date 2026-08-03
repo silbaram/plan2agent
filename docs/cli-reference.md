@@ -25,7 +25,7 @@ Plan2Agent 본체 개발에서만 `scripts/sync_cli_assets.mjs`, `scripts/check_
 2. Plan2Agent 본체 저장소에서는 `scripts/validate_artifacts.mjs`, `scripts/run_fixtures.mjs`, `scripts/check_cli_parity.mjs`로 fixture와 CLI 구성을 검증한다. `init` 대상 프로젝트에서는 `p2a validate`와 `p2a iteration`로 산출물을 검증한다.
 3. 새 프로젝트는 먼저 `p2a init --target <project-dir> --tools all`로 하네스를 설치하고 같은 저장소 안에서 기획부터 반복까지 진행한다. 외부 산출물을 옮기는 경우에만 기존 handoff로 승인된 산출물을 개발 대상 저장소의 `.plan2agent/artifacts/`로 인계한다.
 4. 대상 저장소에서는 `p2a info`로 현재 상태를 확인하고, `p2a execute plan/start`로 ready task 1건의 run을 열어 감독형 agent prompt를 출력한다. 여러 독립 ready task를 실행할 때도 batch CLI를 만들지 않고 `p2a-dev-execution` owner가 같은 ready snapshot에서 task별 `execute start`를 직렬 호출한다. 세션이 끊기면 `p2a execute resume`으로 같은 run prompt를 다시 출력한다. 복수 agent 역할이나 monitor gate가 필요한 task는 `p2a execute start --require-monitor`로 task별 실행 계획을 만든다.
-5. `p2a execute status/finish`로 run 상태 확인, verification, run finish, task done/block 전이를 묶어 기록한다. 세부 제어가 필요하면 `p2a tasks`와 `p2a runs`를 직접 사용한다.
+5. `p2a execute status/finish`로 run 상태 확인, verification, run finish, task done/block 전이를 묶어 기록한다. Full visual iteration의 모든 구현을 통합한 뒤에는 `p2a execute review`로 이미 완료된 visual task의 canonical no-change 검토 run을 연다. 세부 제어가 필요하면 `p2a tasks`와 `p2a runs`를 직접 사용한다.
 6. 실패, blocked monitor verdict, verification gap이 쌓이면 `p2a proposals mine/review/curate/draft-patch/approve-draft/digest`로 개선 proposal queue, curator review artifact, approval-ready curation artifact, non-applying patch draft, 승인 artifact를 만든다. proposal 적용은 승인된 maintenance task를 별도 실행해서 진행한다.
 7. `p2a eval grade/compare/analyze/generate/digest`로 run acceptance 증거, iteration regression, 실패 클러스터를 평가하고 proposal/maintenance/delta draft 경로로 연결한다.
 8. 장기 보존이나 회고 검색이 필요하면 `p2a memory status/push/pull/search/history/trace/impact/precedent/digest`로 로컬 산출물과 Memory 서버 snapshot의 차이, 검색 결과, 계보, timeline, 유지보수 후보를 확인하고, 명시 승인 후 push한다. `memory search`는 하위호환 기본값인 `keyword`와 명시적 `semantic`/`hybrid` 모드를 지원한다. `--project <sourceProjectId>`는 해당 프로젝트의 모든 반복을 검색하고, 조건부 cross-project recall은 `--global --exclude-project <sourceProjectId>`로 현재 프로젝트를 제외한다.
@@ -126,6 +126,15 @@ p2a validate \
 p2a validate \
   --review .plan2agent/artifacts/<project_id>/gate-d-review/review.json \
   --require-review-pass
+
+p2a validate \
+  --visual-experience .plan2agent/artifacts/<project_id>/gate-b-spec/experience-spec.json
+
+p2a validate \
+  --visual-prototype .plan2agent/artifacts/<project_id>/gate-b-spec/visual-design/VD-1/prototype.json
+
+p2a validate \
+  --visual-review .plan2agent/artifacts/<project_id>/runs/<iteration-id>/<run-id>.visual-review.json
 
 p2a validate \
   --runs-dir .plan2agent/artifacts/<project_id>/runs
@@ -232,9 +241,11 @@ p2a iteration maintenance add \
 
 `--status`는 generated `status.md` view의 최소 구조만 확인한다. `--artifact-root`는 `.plan2agent/artifacts/<project_id>/` 아래 Gate A-D JSON bundle을 한 번에 검증하며, 승인된 Gate B spec이 있으면 `spec.approval_audit`도 확인한다. `--spec`은 `--intake`가 있으면 그 intake를 사용하고, 없으면 `spec.source_intake`를 실제 파일로 자동 연결해 Gate B traceability를 검사한다. `spec.source_intake`가 명시됐지만 파일로 해석되지 않으면 실패한다.
 
+`--visual-experience`, `--visual-prototype`, `--visual-review`는 Gate B의 screen composition, prototype 디렉터리의 모든 regular file이 manifest 해시 집합에 포함된 passive offline HTML/CSS bundle, 실제 PNG·접근성 JSON의 해시와 capture metadata를 포함한 UI run verdict를 개별 검증한다. Full mode는 최소 두 후보를 요구하고, 각 screen state는 진입점에서 local anchor로 도달 가능한 HTML/fragment에 매핑되어야 한다. Prototype은 `script-src 'none'` CSP를 사용하며 executable JavaScript, inline event handler, 외부 navigation을 허용하지 않는다. Prototype manifest와 각 선언 파일은 해시·parse 전에 25MiB 상한을 적용하며 PNG chunk ordering, indexed palette, scanline 구조도 검증한다. `--runs-dir`는 새 `p2a.run.v2` finished run을 원본 task graph의 task와 승인 spec에 다시 결합해 run-start `taskContractSha256`, `visualReview` 계약, sidecar workspace identity/revision과 run에 봉인된 `visualReviewEvidenceSha256`이 정확히 일치하는지 확인하고, UI run에는 evidence-backed `confirm_ui` sidecar를 요구한다. Graph mode에서는 `--runs`가 원본 graph와 다른 디렉터리를 가리키거나 graph가 project-relative source spec을 참조해도 실제로 해석된 spec의 artifact root에서 provenance를 검증하며, 성공 finish 전에 같은 검사를 수행한다. `p2a runs validate --run-id`도 schema-only shortcut을 사용하지 않고 run store 전체의 index와 provenance를 함께 검증한다. 기존 `p2a.run.v1` non-visual 이력은 digest 없이도 계속 읽을 수 있으며 진행 중 v1 run은 finish 시 v2로 승격된다.
+
 `--run`, `--run-index`, `--runs-dir`는 `p2a runs`가 만든 run log와 index의 schema 및 상호 참조를 검증한다. `--require-monitor`, `--monitor-gate`, `--skill-proposal`, `--proposal-review`, `--proposal-curation`, `--proposal-patch-draft`, `--proposal-draft-approval`, `--proposals-dir`는 monitor gate sidecar와 Hermes식 proposal queue/review/curation/patch draft/approval artifact를 검증한다.
 
-`p2a iteration validate`는 반복 구조의 active iteration 포인터, active Gate B-D 산출물, task dependency, review blocker, current-spec composition과 planning Memory 상태/보고서/`LOCAL-n` 인용 정합성을 검증한다. `--allow-planning`/`--stage`는 Gate A-ready, Gate B draft/approved, 또는 `gate-c-task-graph/task-graph.draft.json`을 검증하는 Gate C draft 상태를 planning state로 검증한다. `--require-close-ready`를 붙이면 모든 active task가 `done`인지까지 확인한다. 개별 flat task graph가 승인된 spec을 기준으로 생성됐는지 확인할 때는 `validate_artifacts.mjs --task-graph ... --require-approved-spec ...`를 사용한다.
+`p2a iteration validate`는 반복 구조의 active iteration 포인터, active Gate B-D 산출물, task dependency, review blocker, current-spec composition과 planning Memory 상태/보고서/`LOCAL-n` 인용 정합성을 검증한다. `--allow-planning`/`--stage`는 Gate A-ready, Gate B draft/approved, 또는 `gate-c-task-graph/task-graph.draft.json`을 검증하는 Gate C draft 상태를 planning state로 검증한다. `--require-close-ready`를 붙이면 모든 active task가 `done`인지 확인하며, visual task의 최신 run이 `p2a execute review`가 연 `runKind: final_visual_review` canonical integration workspace의 변경 없는 run인지, 봉인된 workspace revision이 현재 canonical revision과 같은지, sidecar와 evidence digest가 여전히 유효한지 검증한다. 개별 flat task graph가 승인된 spec을 기준으로 생성됐는지 확인할 때는 `validate_artifacts.mjs --task-graph ... --require-approved-spec ...`를 사용한다.
 
 `p2a iteration close/open/draft/promote-spec/context/diff-tasks/promote-tasks/promote-milestone/compose`는 반복 planning과 task graph·milestone 초안/승격을 다룬다. `context --scope feature`는 기본값이며 active 기능 반복의 task 저작 context를 출력한다. `context --scope maintenance`는 active feature diff를 섞지 않고 `active_iteration: "maintenance"`와 maintenance task 요약을 포함한 유지보수용 context를 출력한다. `draft`는 `.plan2agent/artifacts/<project_id>/preflight-research/`의 Feature Radar 산출물을 발견하면 Gate A/B 초안의 `evidence`와 `reference_reconnaissance`에 후보 근거로 반영한다. `diff-tasks`는 `task-graph.draft.json`만 만들고, `promote-tasks`가 사람 승인 audit과 함께 정본 `task-graph.json`으로 승격한다. `promote-milestone`은 checkpoint와 evidence를 검증한 고유 draft를 기존 안정 파일을 덮어쓰지 않는 원자적 방식으로 `<checkpoint>.json`에 승격한다. `p2a iteration maintenance add`는 Gate A/B/D 없이 `iterations/maintenance/gate-c-task-graph/task-graph.json`을 lazy 생성하거나 append한다. 단일 task 필수 옵션은 `--title`과 하나 이상의 `--accept`이며, 선택 옵션은 `--description`, `--area`, `--prompt`, 반복 가능한 `--ref`, 반복 가능한 `--depends`, `--dry-run`이다. `--from-draft <file>`은 검토된 maintenance draft의 task들을 한 번에 검증해 append하며, 쓰기 전 `--dry-run`으로 preview하고 실제 append에는 `--yes`가 필요하다. 이미 같은 `eval-cluster:*`/proposal ref가 maintenance graph에 있으면 중복 task는 skip한다.
 
@@ -354,9 +365,16 @@ p2a execute finish \
   --lint \
   --typecheck \
   --collect-git
+
+# full visual iteration의 구현 통합이 끝난 뒤, 완료된 visual task마다 실행
+p2a execute review \
+  --graph .plan2agent/artifacts/<project_id>/gate-c-task-graph/task-graph.json \
+  --task task-001 \
+  --agent-tool gemini \
+  --workspace "$PWD"
 ```
 
-`start`가 출력한 prompt를 Claude Code 또는 Codex 같은 write-capable agent CLI에 붙여넣고 구현한다. Gemini CLI는 현재 review/monitor 같은 read-only 보조로만 사용한다. `resume`은 같은 run의 상태와 launcher prompt를 다시 출력하며 파일을 변경하지 않는다. `finish`는 검증 결과를 run log에 기록하고 task를 `done` 또는 `blocked`로 전이한다. 실행 footer에는 `resume`, `status`, `finish`, `review` 명령이 남고, `review`는 해당 run을 `p2a proposals mine --run-id <run-id>` 회고 후보 생성으로 연결한다.
+`start`가 출력한 prompt를 Claude Code 또는 Codex 같은 write-capable agent CLI에 붙여넣고 구현한다. Gemini CLI는 `execute review`나 monitor 같은 read-only 보조에 사용할 수 있다. `resume`은 일반 구현 run에는 launcher prompt를, `runKind: final_visual_review` run에는 동일한 capture/revision/finish 지침을 다시 출력하며 파일을 변경하지 않는다. 일반 구현 run의 `finish`는 검증 결과를 run log에 기록하고 task를 `done` 또는 `blocked`로 전이한다. `execute review`는 완료된 visual task를 다시 열지 않고 canonical workspace의 `isolation: none`, 빈 `changedFiles` run을 시작한다. 이 review가 confirm되면 task는 `done`을 유지하고, failed/blocked로 끝나면 같은 task를 사유와 함께 `todo`로 reopen하여 다음 `p2a next`가 구현 remediation을 안내한다. 이미 봉인된 final review보다 workspace가 변경된 경우 `p2a next`는 새 review를 안내한다. 봉인된 sidecar/evidence 자체가 변경되거나 누락된 경우에는 새 review로 과거 감사 손상을 가리지 않고 `p2a runs validate` 복구 경로를 안내한다. 실행 footer의 별도 proposal `review` 링크는 해당 run을 `p2a proposals mine --run-id <run-id>` 회고 후보 생성으로 연결한다.
 
 `p2a execute start --require-monitor`는 run과 같은 `runs/<iterationId>/`에 `<run-id>.monitor-gate.json` sidecar를 만들고, 해당 run은 연결된 `.monitor-verdict.json` 없이는 `finished`로 닫을 수 없다. monitor gate가 필요하지 않은 단일 task에는 이 옵션을 붙이지 않는다.
 

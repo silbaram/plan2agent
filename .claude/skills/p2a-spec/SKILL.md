@@ -52,6 +52,18 @@ Return:
 
 `spec_json` must include an `evidence` array that follows the Evidence and Citation Contract in `.agents/skills/p2a-harness/SKILL.md`.
 
+Newly authored specs must also include `spec_json.visual_experience` with:
+
+- `has_visual_interface`
+- `design_scope`: `none`, `minimal`, `reuse`, or `full`
+- `design_timing`: `not_applicable`, `current_iteration`, or `deferred_iteration`
+- a concrete `rationale`
+- `experience_spec_ref` for `full + current_iteration`
+- `experience_spec_sha256` for the exact approved visual experience bytes in `full + current_iteration`
+- `design_system_refs` for `reuse + current_iteration`
+
+Treat this as an iteration-scoped decision. Function-first work may choose `minimal` now or `full + deferred_iteration`; a later iteration can choose `full + current_iteration`. When `full + current_iteration` is selected, invoke `p2a-visual-experience` and keep Gate B draft until its HTML prototype and experience contract are explicitly approved.
+
 `spec_json.implementation` must include:
 
 - architecture
@@ -153,6 +165,7 @@ Suggested Korean section labels for implementation plans: 아키텍처, 인터�
 - Use `approval: draft` until the user explicitly approves the product and implementation spec.
 - Use `approval: approved` only when every intake `CQ-n` is disposed, promoted decisions are resolved, `open_decisions` is empty, and the user has approved the spec.
 - When `approval: approved`, include `spec_json.approval_audit` with `approved_by`, `approved_at`, `approved_artifacts`, and `approval_note`. Use `approved_artifacts: ["gate-b-spec/spec.json"]` for a greenfield Gate B bundle unless a more specific project-relative JSON path is known.
+- For `visual_experience.design_scope: full` with `design_timing: current_iteration`, include the approved `experience-spec.json` in `approval_audit.approved_artifacts`; schema-valid prose alone is not sufficient for Gate B approval.
 - Do not advance to task breakdown while `approval` is `draft`.
 - Present the structured spec and any generated views for review, and request explicit user approval before advancing past Gate B.
 

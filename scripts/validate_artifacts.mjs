@@ -6,15 +6,19 @@ import { createHash } from 'node:crypto';
 import path from 'node:path';
 import process from 'node:process';
 import { pathToFileURL } from 'node:url';
+import { inflateSync } from 'node:zlib';
 import { normalizePath, P2A_DIR, resolveP2aPaths } from './p2a_paths.mjs';
 import {
   artifactRunRef,
   canonicalRunRef,
+  defaultArtifactRootForGraph,
   isRunRecordFile,
   isSupportedRunRef,
   legacyRunRef,
   normalizeIndexedRunRef,
   RUN_SIDECAR_SUFFIXES,
+  runSidecarPath,
+  taskContractSha256,
   taskGraphRefMatchesGraph,
 } from './p2a_run_paths.mjs';
 import {
@@ -34,6 +38,9 @@ const SCHEMA_PATHS = {
   review: path.join(P2A_PATHS.schemasDir, 'review.schema.json'),
   run: path.join(P2A_PATHS.schemasDir, 'run.schema.json'),
   run_index: path.join(P2A_PATHS.schemasDir, 'run-index.schema.json'),
+  visual_experience: path.join(P2A_PATHS.schemasDir, 'visual-experience.schema.json'),
+  visual_prototype: path.join(P2A_PATHS.schemasDir, 'visual-prototype.schema.json'),
+  visual_review: path.join(P2A_PATHS.schemasDir, 'visual-review.schema.json'),
   milestone_review: path.join(P2A_PATHS.schemasDir, 'milestone-review.schema.json'),
   skill_proposal: path.join(P2A_PATHS.schemasDir, 'skill-proposal.schema.json'),
   proposal_review: path.join(P2A_PATHS.schemasDir, 'proposal-review.schema.json'),
@@ -1905,6 +1912,7 @@ export function validateSpec(filePath, intakePath = null, options = {}) {
     throw new ValidationError('approved specs must not contain open_decisions');
   }
   validateSpecApprovalAudit(data);
+  validateSpecVisualExperience(data, filePath, artifactRoot);
 
   if (intake) {
     const intakeDecisions = new Map(intake.needs_user_decision.map((decision) => [decision.id, decision.status]));
@@ -1987,6 +1995,2374 @@ export function validateCurrentSpecGateCApprovalAudit(currentSpec, iterationId) 
     throw new ValidationError(`current-spec.json gate_c_approval_audits.${iterationId} is required for promoted Gate C task graph`);
   }
   return validateApprovalAuditData(audit, `current-spec.json gate_c_approval_audits.${iterationId}`);
+}
+
+function visualArtifactRoot(filePath, artifactRoot = null) {
+  if (artifactRoot) return path.resolve(artifactRoot);
+  const parent = path.dirname(path.resolve(filePath));
+  if (path.basename(parent) !== 'gate-b-spec') return parent;
+  const container = path.dirname(parent);
+  const iterationsDir = path.dirname(container);
+  return path.basename(iterationsDir) === 'iterations'
+    ? path.dirname(iterationsDir)
+    : container;
+}
+
+function safeRelativeArtifactPath(reference, label) {
+  if (typeof reference !== 'string' || !reference.trim()) {
+    throw new ValidationError(`${label} must be a non-empty path`);
+  }
+  const normalized = normalizeReference(reference.trim());
+  if (
+    path.isAbsolute(normalized)
+    || normalized === '..'
+    || normalized.startsWith('../')
+    || normalized.split('/').includes('..')
+  ) {
+    throw new ValidationError(`${label} must be a relative path that does not traverse outside its artifact directory`);
+  }
+  return normalized;
+}
+
+function requireRunScopedVisualEvidence(reference, expectedContract, label) {
+  if (!expectedContract?.iteration_id || !expectedContract?.run_id) return;
+  const prefix = `visual-evidence/${expectedContract.iteration_id}/${expectedContract.run_id}/`;
+  if (!reference.startsWith(prefix) || reference.length === prefix.length) {
+    throw new ValidationError(`${label} must stay under ${prefix}`);
+  }
+}
+
+function resolveVisualReference(reference, sourcePath, artifactRoot = null) {
+  if (!reference || typeof reference !== 'string') return null;
+  const baseDir = path.dirname(path.resolve(sourcePath));
+  const candidates = path.isAbsolute(reference)
+    ? [reference]
+    : [
+        path.resolve(baseDir, reference),
+        artifactRoot ? path.resolve(artifactRoot, reference) : null,
+        path.resolve(process.cwd(), reference),
+        resolveProjectRelativeReference(reference, baseDir),
+      ];
+  return candidates
+    .filter(Boolean)
+    .find((candidate) => existsSync(candidate) && lstatSync(candidate).isFile()) ?? null;
+}
+
+function requireVisualReference(reference, sourcePath, artifactRoot, label) {
+  const resolved = resolveVisualReference(reference, sourcePath, artifactRoot);
+  if (!resolved) {
+    throw new ValidationError(`${label} cannot be resolved to a file: ${JSON.stringify(reference)}`);
+  }
+  assertFileInsideArtifactRoot(resolved, visualArtifactRoot(sourcePath, artifactRoot), label);
+  return resolved;
+}
+
+function referenceMatchesVisualFile(reference, sourcePath, targetPath, artifactRoot = null) {
+  const resolved = resolveVisualReference(reference, sourcePath, artifactRoot);
+  if (resolved) return realpathSync(resolved) === realpathSync(targetPath);
+  const normalized = normalizeReference(reference);
+  const candidates = new Set([
+    normalizePath(path.relative(path.dirname(sourcePath), targetPath)),
+    normalizePath(path.relative(visualArtifactRoot(sourcePath, artifactRoot), targetPath)),
+    normalizePath(path.basename(targetPath)),
+  ]);
+  return candidates.has(normalized);
+}
+
+function uniqueObjectIds(items, field, label) {
+  const ids = items.map((item) => item[field]);
+  if (ids.length !== new Set(ids).size) {
+    throw new ValidationError(`${label} ${field} values must be unique`);
+  }
+}
+
+function requireSubset(values, allowed, label) {
+  const allowedSet = new Set(allowed);
+  const unknown = values.filter((value) => !allowedSet.has(value));
+  if (unknown.length) {
+    throw new ValidationError(`${label} contains values outside the approved visual contract: ${JSON.stringify(unknown)}`);
+  }
+}
+
+function requireSameSet(values, expected, label) {
+  requireSubset(values, expected, label);
+  requireSubset(expected, values, label);
+}
+
+const OFFLINE_PROTOTYPE_CSP = new Map([
+  ['default-src', ["'none'"]],
+  ['script-src', ["'none'"]],
+  ['style-src', ["'self'", "'unsafe-inline'"]],
+  ['img-src', ["'self'", 'data:', 'blob:']],
+  ['font-src', ["'self'", 'data:']],
+  ['connect-src', ["'none'"]],
+  ['object-src', ["'none'"]],
+  ['frame-src', ["'none'"]],
+  ['child-src', ["'none'"]],
+  ['worker-src', ["'none'"]],
+  ['form-action', ["'none'"]],
+  ['base-uri', ["'none'"]],
+]);
+
+function htmlAttributeValue(tag, name) {
+  const escapedName = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const match = tag.match(new RegExp(
+    `\\b${escapedName}\\s*=\\s*(?:"([^"]*)"|'([^']*)'|([^\\s"'=<>\u0060]+))`,
+    'i',
+  ));
+  return match ? (match[1] ?? match[2] ?? match[3]) : null;
+}
+
+const HTML_VOID_ELEMENTS = new Set([
+  'area',
+  'base',
+  'br',
+  'col',
+  'embed',
+  'hr',
+  'img',
+  'input',
+  'link',
+  'meta',
+  'param',
+  'source',
+  'track',
+  'wbr',
+]);
+const HTML_RAW_TEXT_ELEMENTS = new Set([
+  'iframe',
+  'noembed',
+  'noframes',
+  'noscript',
+  'script',
+  'style',
+  'textarea',
+  'title',
+  'xmp',
+]);
+
+function parseHtmlTagAttributes(tag, nameOffset) {
+  const attributes = new Map();
+  let offset = nameOffset;
+  while (offset < tag.length) {
+    while (/\s/.test(tag[offset] ?? '')) offset += 1;
+    if (offset >= tag.length || tag[offset] === '>' || (tag[offset] === '/' && tag[offset + 1] === '>')) break;
+    const nameStart = offset;
+    while (offset < tag.length && !/[\s"'<>/=]/.test(tag[offset])) offset += 1;
+    if (offset === nameStart) {
+      offset += 1;
+      continue;
+    }
+    const name = tag.slice(nameStart, offset).toLowerCase();
+    while (/\s/.test(tag[offset] ?? '')) offset += 1;
+    let value = null;
+    if (tag[offset] === '=') {
+      offset += 1;
+      while (/\s/.test(tag[offset] ?? '')) offset += 1;
+      if (tag[offset] === '"' || tag[offset] === "'") {
+        const quote = tag[offset];
+        offset += 1;
+        const valueStart = offset;
+        while (offset < tag.length && tag[offset] !== quote) offset += 1;
+        value = tag.slice(valueStart, offset);
+        if (tag[offset] === quote) offset += 1;
+      } else {
+        const valueStart = offset;
+        while (offset < tag.length && !/[\s"'`=<>]/.test(tag[offset])) offset += 1;
+        value = tag.slice(valueStart, offset);
+      }
+    }
+    if (!attributes.has(name)) attributes.set(name, value);
+  }
+  return attributes;
+}
+
+function htmlTagEnd(content, start) {
+  let quote = null;
+  for (let offset = start + 1; offset < content.length; offset += 1) {
+    const character = content[offset];
+    if (quote) {
+      if (character === quote) quote = null;
+    } else if (character === '"' || character === "'") {
+      quote = character;
+    } else if (character === '>') {
+      return offset;
+    }
+  }
+  return -1;
+}
+
+const CSS_VISIBILITY_PROPERTIES = new Set(['display', 'visibility', 'content-visibility']);
+
+function cssWithoutComments(value) {
+  let result = '';
+  let quote = null;
+  for (let offset = 0; offset < value.length; offset += 1) {
+    const character = value[offset];
+    if (quote) {
+      result += character;
+      if (character === '\\') {
+        if (offset + 1 < value.length) result += value[++offset];
+        if (result.endsWith('\\\r') && value[offset + 1] === '\n') result += value[++offset];
+      } else if (character === quote) {
+        quote = null;
+      }
+      continue;
+    }
+    if (character === '"' || character === "'") {
+      quote = character;
+      result += character;
+      continue;
+    }
+    if (character === '\\') {
+      result += character;
+      if (offset + 1 < value.length) result += value[++offset];
+      if (result.endsWith('\\\r') && value[offset + 1] === '\n') result += value[++offset];
+      continue;
+    }
+    if (character === '/' && value[offset + 1] === '*') {
+      const commentEnd = value.indexOf('*/', offset + 2);
+      result += ' ';
+      if (commentEnd < 0) break;
+      offset = commentEnd + 1;
+      continue;
+    }
+    result += character;
+  }
+  return result;
+}
+
+function splitCssDeclarations(style) {
+  const declarations = [];
+  let buffer = '';
+  let quote = null;
+  let depth = 0;
+  for (let offset = 0; offset < style.length; offset += 1) {
+    const character = style[offset];
+    if (quote) {
+      buffer += character;
+      if (character === '\\') {
+        if (offset + 1 < style.length) buffer += style[++offset];
+        if (buffer.endsWith('\\\r') && style[offset + 1] === '\n') buffer += style[++offset];
+      } else if (character === quote) {
+        quote = null;
+      }
+      continue;
+    }
+    if (character === '"' || character === "'") {
+      quote = character;
+      buffer += character;
+      continue;
+    }
+    if (character === '\\') {
+      buffer += character;
+      if (offset + 1 < style.length) buffer += style[++offset];
+      continue;
+    }
+    if (character === '(' || character === '[' || character === '{') depth += 1;
+    else if (character === ')' || character === ']' || character === '}') depth = Math.max(0, depth - 1);
+    if (character === ';' && depth === 0) {
+      declarations.push(buffer);
+      buffer = '';
+    } else {
+      buffer += character;
+    }
+  }
+  if (buffer.trim()) declarations.push(buffer);
+  return declarations;
+}
+
+function cssDeclarationColon(declaration) {
+  let quote = null;
+  let depth = 0;
+  for (let offset = 0; offset < declaration.length; offset += 1) {
+    const character = declaration[offset];
+    if (quote) {
+      if (character === '\\') {
+        offset += 1;
+        if (declaration[offset] === '\r' && declaration[offset + 1] === '\n') offset += 1;
+      } else if (character === quote) {
+        quote = null;
+      }
+      continue;
+    }
+    if (character === '"' || character === "'") {
+      quote = character;
+      continue;
+    }
+    if (character === '\\') {
+      offset += 1;
+      continue;
+    }
+    if (character === '(' || character === '[' || character === '{') depth += 1;
+    else if (character === ')' || character === ']' || character === '}') depth = Math.max(0, depth - 1);
+    else if (character === ':' && depth === 0) return offset;
+  }
+  return -1;
+}
+
+function decodeCssIdentifier(value, label) {
+  let decoded = '';
+  for (let offset = 0; offset < value.length; offset += 1) {
+    const character = value[offset];
+    if (character !== '\\') {
+      decoded += character;
+      continue;
+    }
+    if (offset + 1 >= value.length || /[\r\n\f]/.test(value[offset + 1])) {
+      throw new ValidationError(`${label} contains an invalid CSS escape`);
+    }
+    const hexMatch = value.slice(offset + 1).match(/^[0-9a-f]{1,6}/i);
+    if (hexMatch) {
+      const codePoint = Number.parseInt(hexMatch[0], 16);
+      decoded += (
+        codePoint === 0
+        || codePoint > 0x10ffff
+        || (codePoint >= 0xd800 && codePoint <= 0xdfff)
+      ) ? '\ufffd' : String.fromCodePoint(codePoint);
+      offset += hexMatch[0].length;
+      if (value[offset + 1] === '\r' && value[offset + 2] === '\n') offset += 2;
+      else if (/[ \t\r\n\f]/.test(value[offset + 1] ?? '')) offset += 1;
+      continue;
+    }
+    decoded += value[offset + 1];
+    offset += 1;
+  }
+  return decoded;
+}
+
+function cssVisibilityDeclarations(style, label = 'CSS declaration') {
+  if (typeof style !== 'string') return [];
+  const declarations = [];
+  const withoutComments = cssWithoutComments(style);
+  for (const declaration of splitCssDeclarations(withoutComments)) {
+    const separator = cssDeclarationColon(declaration);
+    if (separator < 0) continue;
+    const rawProperty = declaration.slice(0, separator).trim();
+    const property = decodeCssIdentifier(rawProperty, label).toLowerCase();
+    if (!CSS_VISIBILITY_PROPERTIES.has(property)) continue;
+    const rawValue = declaration.slice(separator + 1).trim();
+    const important = /\s*!important\s*$/i.test(rawValue);
+    const value = rawValue
+      .replace(/\s*!important\s*$/i, '')
+      .trim()
+      .toLowerCase();
+    if (!value) continue;
+    if (value.includes('var(') || value.includes('\\')) {
+      throw new ValidationError(`${label} uses an unsupported dynamic ${property} value`);
+    }
+    declarations.push({ property, value, important });
+  }
+  return declarations;
+}
+
+function cssMediaCanApplyToScreen(media) {
+  if (typeof media !== 'string' || !media.trim()) return true;
+  return media.split(',').some((query) => {
+    const normalized = query.trim().toLowerCase().replace(/\s+/g, ' ');
+    if (!normalized || normalized === 'not all') return false;
+    if (/^(?:only )?print\b/.test(normalized)) return false;
+    if (/^not (?:only )?screen\b/.test(normalized)) return false;
+    return true;
+  });
+}
+
+function cssMatchingBrace(content, openingOffset) {
+  let depth = 0;
+  let quote = null;
+  for (let offset = openingOffset; offset < content.length; offset += 1) {
+    const character = content[offset];
+    if (quote) {
+      if (character === '\\') offset += 1;
+      else if (character === quote) quote = null;
+      continue;
+    }
+    if (character === '"' || character === "'") quote = character;
+    else if (character === '{') depth += 1;
+    else if (character === '}') {
+      depth -= 1;
+      if (depth === 0) return offset;
+    }
+  }
+  return -1;
+}
+
+function nextCssMediaOffset(content, start) {
+  let quote = null;
+  for (let offset = start; offset < content.length; offset += 1) {
+    const character = content[offset];
+    if (quote) {
+      if (character === '\\') offset += 1;
+      else if (character === quote) quote = null;
+      continue;
+    }
+    if (character === '"' || character === "'") {
+      quote = character;
+      continue;
+    }
+    if (
+      character === '@'
+      && content.slice(offset, offset + 6).toLowerCase() === '@media'
+      && !/[A-Za-z0-9_-]/.test(content[offset + 6] ?? '')
+    ) return offset;
+  }
+  return -1;
+}
+
+function cssWithoutInactiveScreenMedia(content) {
+  const withoutComments = cssWithoutComments(content);
+  let result = '';
+  let offset = 0;
+  while (offset < withoutComments.length) {
+    const mediaOffset = nextCssMediaOffset(withoutComments, offset);
+    if (mediaOffset < 0) {
+      result += withoutComments.slice(offset);
+      break;
+    }
+    result += withoutComments.slice(offset, mediaOffset);
+    const delimiter = nextCssRuleDelimiter(withoutComments, mediaOffset + 6);
+    if (!delimiter || delimiter.character !== '{') {
+      result += withoutComments.slice(mediaOffset);
+      break;
+    }
+    const closingOffset = cssMatchingBrace(withoutComments, delimiter.offset);
+    if (closingOffset < 0) {
+      result += withoutComments.slice(mediaOffset);
+      break;
+    }
+    const media = withoutComments.slice(mediaOffset + 6, delimiter.offset);
+    if (cssMediaCanApplyToScreen(media)) {
+      result += cssWithoutInactiveScreenMedia(
+        withoutComments.slice(delimiter.offset + 1, closingOffset),
+      );
+    }
+    offset = closingOffset + 1;
+  }
+  return result;
+}
+
+function splitCssSelectorList(selectorList) {
+  const selectors = [];
+  let buffer = '';
+  let quote = null;
+  let depth = 0;
+  for (const character of selectorList) {
+    if (quote) {
+      buffer += character;
+      if (character === quote) quote = null;
+      continue;
+    }
+    if (character === '"' || character === "'") {
+      quote = character;
+      buffer += character;
+      continue;
+    }
+    if (character === '[' || character === '(') depth += 1;
+    else if (character === ']' || character === ')') depth = Math.max(0, depth - 1);
+    if (character === ',' && depth === 0) {
+      selectors.push(buffer.trim());
+      buffer = '';
+    } else {
+      buffer += character;
+    }
+  }
+  if (buffer.trim()) selectors.push(buffer.trim());
+  return selectors;
+}
+
+function nextCssRuleDelimiter(content, start) {
+  let quote = null;
+  let depth = 0;
+  for (let offset = start; offset < content.length; offset += 1) {
+    const character = content[offset];
+    if (quote) {
+      if (character === '\\') offset += 1;
+      else if (character === quote) quote = null;
+      continue;
+    }
+    if (character === '"' || character === "'") {
+      quote = character;
+      continue;
+    }
+    if (character === '(' || character === '[') depth += 1;
+    else if (character === ')' || character === ']') depth = Math.max(0, depth - 1);
+    else if (depth === 0 && (character === '{' || character === ';')) {
+      return { character, offset };
+    }
+  }
+  return null;
+}
+
+function cssContainsNestedRule(content) {
+  let offset = 0;
+  while (offset < content.length) {
+    const delimiter = nextCssRuleDelimiter(content, offset);
+    if (!delimiter) return false;
+    if (delimiter.character === '{') return true;
+    offset = delimiter.offset + 1;
+  }
+  return false;
+}
+
+function cssStyleRuleBlocks(content, options = {}) {
+  const rules = [];
+  let offset = 0;
+  while (offset < content.length) {
+    while (/\s|;/.test(content[offset] ?? '')) offset += 1;
+    if (offset >= content.length) break;
+    const delimiter = nextCssRuleDelimiter(content, offset);
+    if (!delimiter) break;
+    if (delimiter.character === ';') {
+      offset = delimiter.offset + 1;
+      continue;
+    }
+    const prelude = content.slice(offset, delimiter.offset).trim();
+    const closingOffset = cssMatchingBrace(content, delimiter.offset);
+    if (closingOffset < 0) break;
+    const body = content.slice(delimiter.offset + 1, closingOffset);
+    if (prelude.startsWith('@')) {
+      const atRule = prelude.match(/^@([A-Za-z-]+)/)?.[1]?.toLowerCase();
+      const nestedBlocks = cssStyleRuleBlocks(body, {
+        layered: options.layered || atRule === 'layer',
+      });
+      const containsVisibilityRules = nestedBlocks.some((block) => (
+        cssVisibilityDeclarations(block.declarations).length > 0
+      ));
+      if (prelude.includes('\\') && containsVisibilityRules) {
+        throw new ValidationError(
+          'stylesheet visibility rules must not use escaped CSS at-rule names',
+        );
+      }
+      if (atRule === 'layer') {
+        rules.push(...nestedBlocks);
+      } else if (['container', 'document', 'scope', 'supports'].includes(atRule)) {
+        if (containsVisibilityRules) {
+          throw new ValidationError(
+            `stylesheet visibility rules must not use unsupported conditional or scoped @${atRule} rules`,
+          );
+        }
+      }
+    } else if (prelude) {
+      if (
+        cssContainsNestedRule(body)
+        && /\b(?:display|visibility|content-visibility)\s*:/i.test(body)
+      ) {
+        throw new ValidationError('stylesheet visibility rules must not use unsupported CSS nesting');
+      }
+      rules.push({
+        selectorList: prelude,
+        declarations: body,
+        layered: Boolean(options.layered),
+      });
+    }
+    offset = closingOffset + 1;
+  }
+  return rules;
+}
+
+function cssVisibilityRules(content) {
+  const rules = [];
+  const activeContent = cssWithoutInactiveScreenMedia(content);
+  let sourceOrder = 0;
+  for (const block of cssStyleRuleBlocks(activeContent)) {
+    const declarations = cssVisibilityDeclarations(
+      block.declarations,
+      'stylesheet visibility declaration',
+    );
+    if (!declarations.length) continue;
+    if (block.layered) {
+      throw new ValidationError(
+        'stylesheet visibility rules must not use unsupported CSS cascade layers',
+      );
+    }
+    for (const selector of splitCssSelectorList(block.selectorList)) {
+      const normalized = selector.trim();
+      if (!normalized || normalized.startsWith('@')) continue;
+      if (!cssSelectorSupported(normalized)) {
+        throw new ValidationError(
+          `stylesheet visibility rule uses an unsupported selector: ${JSON.stringify(normalized)}`,
+        );
+      }
+      rules.push({
+        selector: normalized,
+        specificity: cssSelectorSpecificity(normalized),
+        sourceOrder,
+        declarations,
+      });
+      sourceOrder += 1;
+    }
+  }
+  return rules;
+}
+
+function splitCssSelector(selector) {
+  const parts = [];
+  let buffer = '';
+  let pendingCombinator = null;
+  let quote = null;
+  let depth = 0;
+  const pushPart = () => {
+    const compound = buffer.trim();
+    if (!compound) return;
+    parts.push({
+      compound,
+      combinator: parts.length ? (pendingCombinator ?? ' ') : null,
+    });
+    buffer = '';
+    pendingCombinator = null;
+  };
+  for (const character of selector) {
+    if (quote) {
+      buffer += character;
+      if (character === quote) quote = null;
+      continue;
+    }
+    if (character === '"' || character === "'") {
+      quote = character;
+      buffer += character;
+      continue;
+    }
+    if (character === '[' || character === '(') {
+      depth += 1;
+      buffer += character;
+      continue;
+    }
+    if (character === ']' || character === ')') {
+      depth = Math.max(0, depth - 1);
+      buffer += character;
+      continue;
+    }
+    if (depth === 0 && ['+', '~', ','].includes(character)) return null;
+    if (depth === 0 && character === '>') {
+      pushPart();
+      pendingCombinator = '>';
+      continue;
+    }
+    if (depth === 0 && /\s/.test(character)) {
+      if (buffer.trim()) {
+        pushPart();
+        pendingCombinator = ' ';
+      } else if (parts.length && pendingCombinator === null) {
+        pendingCombinator = ' ';
+      }
+      continue;
+    }
+    buffer += character;
+  }
+  if (quote || depth !== 0 || (pendingCombinator !== null && !buffer.trim())) return null;
+  pushPart();
+  return parts.length ? parts : null;
+}
+
+function cssCompoundMatches(element, compound) {
+  let remaining = compound.trim();
+  const typeMatch = remaining.match(/^(\*|[A-Za-z][A-Za-z0-9-]*)/);
+  if (typeMatch) {
+    if (typeMatch[1] !== '*' && element.tagName !== typeMatch[1].toLowerCase()) return false;
+    remaining = remaining.slice(typeMatch[0].length);
+  }
+  while (remaining) {
+    const classMatch = remaining.match(/^\.([A-Za-z_][A-Za-z0-9_-]*)/);
+    if (classMatch) {
+      const classes = (element.attributes.get('class') ?? '').split(/\s+/).filter(Boolean);
+      if (!classes.includes(classMatch[1])) return false;
+      remaining = remaining.slice(classMatch[0].length);
+      continue;
+    }
+    const idMatch = remaining.match(/^#([A-Za-z_][A-Za-z0-9_-]*)/);
+    if (idMatch) {
+      if (element.attributes.get('id') !== idMatch[1]) return false;
+      remaining = remaining.slice(idMatch[0].length);
+      continue;
+    }
+    if (remaining.startsWith('[')) {
+      const attributeEnd = remaining.indexOf(']');
+      if (attributeEnd < 0) return false;
+      const expression = remaining.slice(1, attributeEnd).trim();
+      const attributeMatch = expression.match(
+        /^([^\s~|^$*!=]+)\s*(?:(~=|=)\s*(?:"([^"]*)"|'([^']*)'|([^\s]+)))?$/,
+      );
+      if (!attributeMatch) return false;
+      const name = attributeMatch[1].toLowerCase();
+      if (!element.attributes.has(name)) return false;
+      const operator = attributeMatch[2];
+      if (operator) {
+        const actual = element.attributes.get(name) ?? '';
+        const expected = attributeMatch[3] ?? attributeMatch[4] ?? attributeMatch[5] ?? '';
+        if (operator === '=' && actual !== expected) return false;
+        if (operator === '~=' && !actual.split(/\s+/).includes(expected)) return false;
+      }
+      remaining = remaining.slice(attributeEnd + 1);
+      continue;
+    }
+    return false;
+  }
+  return true;
+}
+
+function cssCompoundSupported(compound) {
+  let remaining = compound.trim();
+  const typeMatch = remaining.match(/^(\*|[A-Za-z][A-Za-z0-9-]*)/);
+  if (typeMatch) remaining = remaining.slice(typeMatch[0].length);
+  while (remaining) {
+    const classMatch = remaining.match(/^\.([A-Za-z_][A-Za-z0-9_-]*)/);
+    if (classMatch) {
+      remaining = remaining.slice(classMatch[0].length);
+      continue;
+    }
+    const idMatch = remaining.match(/^#([A-Za-z_][A-Za-z0-9_-]*)/);
+    if (idMatch) {
+      remaining = remaining.slice(idMatch[0].length);
+      continue;
+    }
+    if (remaining.startsWith('[')) {
+      const attributeEnd = remaining.indexOf(']');
+      if (attributeEnd < 0) return false;
+      const expression = remaining.slice(1, attributeEnd).trim();
+      if (!/^([^\s~|^$*!=]+)\s*(?:(~=|=)\s*(?:"([^"]*)"|'([^']*)'|([^\s]+)))?$/.test(expression)) {
+        return false;
+      }
+      remaining = remaining.slice(attributeEnd + 1);
+      continue;
+    }
+    return false;
+  }
+  return true;
+}
+
+function cssSelectorSupported(selector) {
+  const parts = splitCssSelector(selector);
+  return Boolean(parts?.every((part) => cssCompoundSupported(part.compound)));
+}
+
+function cssSelectorSpecificity(selector) {
+  const parts = splitCssSelector(selector) ?? [];
+  const specificity = [0, 0, 0, 0];
+  for (const { compound } of parts) {
+    let remaining = compound.trim();
+    const typeMatch = remaining.match(/^(\*|[A-Za-z][A-Za-z0-9-]*)/);
+    if (typeMatch) {
+      if (typeMatch[1] !== '*') specificity[3] += 1;
+      remaining = remaining.slice(typeMatch[0].length);
+    }
+    while (remaining) {
+      const classMatch = remaining.match(/^\.[A-Za-z_][A-Za-z0-9_-]*/);
+      if (classMatch) {
+        specificity[2] += 1;
+        remaining = remaining.slice(classMatch[0].length);
+        continue;
+      }
+      const idMatch = remaining.match(/^#[A-Za-z_][A-Za-z0-9_-]*/);
+      if (idMatch) {
+        specificity[1] += 1;
+        remaining = remaining.slice(idMatch[0].length);
+        continue;
+      }
+      if (remaining.startsWith('[')) {
+        const attributeEnd = remaining.indexOf(']');
+        specificity[2] += 1;
+        remaining = remaining.slice(attributeEnd + 1);
+        continue;
+      }
+      break;
+    }
+  }
+  return specificity;
+}
+
+function compareCssSpecificity(left, right) {
+  for (let index = 0; index < Math.max(left.length, right.length); index += 1) {
+    const difference = (left[index] ?? 0) - (right[index] ?? 0);
+    if (difference !== 0) return difference;
+  }
+  return 0;
+}
+
+function cssSelectorMatches(element, ancestors, selector) {
+  const parts = splitCssSelector(selector);
+  if (!parts || !cssCompoundMatches(element, parts.at(-1).compound)) return false;
+  let ancestorIndex = ancestors.length - 1;
+  for (let partIndex = parts.length - 2; partIndex >= 0; partIndex -= 1) {
+    const relation = parts[partIndex + 1].combinator;
+    if (relation === '>') {
+      if (
+        ancestorIndex < 0
+        || !cssCompoundMatches(ancestors[ancestorIndex], parts[partIndex].compound)
+      ) return false;
+      ancestorIndex -= 1;
+      continue;
+    }
+    while (
+      ancestorIndex >= 0
+      && !cssCompoundMatches(ancestors[ancestorIndex], parts[partIndex].compound)
+    ) ancestorIndex -= 1;
+    if (ancestorIndex < 0) return false;
+    ancestorIndex -= 1;
+  }
+  return true;
+}
+
+function cssVisibilityForElement(element, ancestors, rules, inlineStyle) {
+  const winners = new Map();
+  const consider = (declaration, specificity, sourceOrder) => {
+    const current = winners.get(declaration.property);
+    if (
+      !current
+      || Number(declaration.important) > Number(current.important)
+      || (
+        declaration.important === current.important
+        && (
+          compareCssSpecificity(specificity, current.specificity) > 0
+          || (
+            compareCssSpecificity(specificity, current.specificity) === 0
+            && sourceOrder >= current.sourceOrder
+          )
+        )
+      )
+    ) {
+      winners.set(declaration.property, { ...declaration, specificity, sourceOrder });
+    }
+  };
+  for (const rule of rules) {
+    if (!cssSelectorMatches(element, ancestors, rule.selector)) continue;
+    for (const [index, declaration] of rule.declarations.entries()) {
+      consider(declaration, rule.specificity, (rule.sourceOrder * 1000) + index);
+    }
+  }
+  const inlineDeclarations = cssVisibilityDeclarations(
+    decodeHtmlUrlReference(inlineStyle ?? ''),
+    'inline style visibility declaration',
+  );
+  for (const [index, declaration] of inlineDeclarations.entries()) {
+    consider(
+      declaration,
+      [1, 0, 0, 0],
+      Number.MAX_SAFE_INTEGER - inlineDeclarations.length + index,
+    );
+  }
+  return winners;
+}
+
+function renderedHtmlElements(content, visibilityRules = [], options = {}) {
+  const elements = [];
+  const stack = [];
+  const lowerContent = content.toLowerCase();
+  let offset = 0;
+  while (offset < content.length) {
+    const activeRawTextElement = stack.at(-1)?.rawTextElement;
+    if (activeRawTextElement) {
+      const closingOffset = lowerContent.indexOf(`</${activeRawTextElement}`, offset);
+      if (closingOffset < 0) break;
+      offset = closingOffset;
+    }
+    const tagStart = content.indexOf('<', offset);
+    if (tagStart < 0) break;
+    if (content.startsWith('<!--', tagStart)) {
+      const commentEnd = content.indexOf('-->', tagStart + 4);
+      if (commentEnd < 0) break;
+      offset = commentEnd + 3;
+      continue;
+    }
+    if (content.startsWith('<![CDATA[', tagStart)) {
+      const cdataEnd = content.indexOf(']]>', tagStart + 9);
+      if (cdataEnd < 0) break;
+      offset = cdataEnd + 3;
+      continue;
+    }
+    const tagEnd = htmlTagEnd(content, tagStart);
+    if (tagEnd < 0) break;
+    const tag = content.slice(tagStart, tagEnd + 1);
+    const closingMatch = tag.match(/^<\s*\/\s*([A-Za-z][A-Za-z0-9:-]*)/);
+    if (closingMatch) {
+      const tagName = closingMatch[1].toLowerCase();
+      let stackIndex = stack.length - 1;
+      while (stackIndex >= 0 && stack[stackIndex].tagName !== tagName) stackIndex -= 1;
+      if (stackIndex >= 0) stack.length = stackIndex;
+      offset = tagEnd + 1;
+      continue;
+    }
+    const openingMatch = tag.match(/^<\s*([A-Za-z][A-Za-z0-9:-]*)/);
+    if (!openingMatch) {
+      offset = tagEnd + 1;
+      continue;
+    }
+    const tagName = openingMatch[1].toLowerCase();
+    const attributes = parseHtmlTagAttributes(tag, openingMatch[0].length);
+    const element = { tagName, attributes };
+    const ancestors = stack.map((item) => ({
+      tagName: item.tagName,
+      attributes: item.attributes,
+    }));
+    const parentInactive = stack.at(-1)?.inactive ?? false;
+    const parentTreeSuppressed = stack.at(-1)?.treeSuppressed ?? false;
+    const parentVisibilityHidden = stack.at(-1)?.visibilityHidden ?? false;
+    const inactive = parentInactive || tagName === 'template' || tagName === 'noscript';
+    const cssVisibility = cssVisibilityForElement(
+      element,
+      ancestors,
+      visibilityRules,
+      attributes.get('style'),
+    );
+    const visibilityValue = cssVisibility.get('visibility')?.value;
+    const visibilityHidden = ['hidden', 'collapse'].includes(visibilityValue)
+      || (
+        !['visible', 'initial', 'revert', 'revert-layer'].includes(visibilityValue)
+        && parentVisibilityHidden
+      );
+    const treeSuppressed = parentTreeSuppressed
+      || inactive
+      || attributes.has('hidden')
+      || (options.excludeInert && attributes.has('inert'))
+      || (tagName === 'dialog' && !attributes.has('open'))
+      || cssVisibility.get('display')?.value === 'none'
+      || cssVisibility.get('content-visibility')?.value === 'hidden';
+    const suppressed = treeSuppressed || visibilityHidden;
+    const rawTextElement = HTML_RAW_TEXT_ELEMENTS.has(tagName) ? tagName : null;
+    let textContent = null;
+    if (rawTextElement) {
+      const closingOffset = lowerContent.indexOf(`</${rawTextElement}`, tagEnd + 1);
+      textContent = content.slice(tagEnd + 1, closingOffset < 0 ? content.length : closingOffset);
+    }
+    if (
+      !suppressed
+      || options.includeSuppressed
+      || (options.includeActiveStyles && ['link', 'style'].includes(tagName) && !inactive)
+    ) {
+      elements.push({ ...element, sourceOffset: tagStart, textContent });
+    }
+    const selfClosing = /\/\s*>$/.test(tag);
+    if (!selfClosing && !HTML_VOID_ELEMENTS.has(tagName)) {
+      stack.push({
+        tagName,
+        attributes,
+        inactive,
+        suppressed,
+        treeSuppressed,
+        visibilityHidden,
+        rawTextElement,
+      });
+    }
+    offset = tagEnd + 1;
+  }
+  return elements;
+}
+
+function assertOfflinePrototypeCsp(content, label) {
+  const metaTag = renderedHtmlElements(content, [], { includeSuppressed: true }).find((element) => (
+    element.tagName === 'meta'
+    && decodeHtmlUrlReference(element.attributes.get('http-equiv') ?? '').trim().toLowerCase()
+      === 'content-security-policy'
+  ));
+  if (!metaTag) {
+    throw new ValidationError(`${label} must declare a Content-Security-Policy meta tag for network_policy offline`);
+  }
+  const policyOffset = metaTag.sourceOffset;
+  const prefix = content.slice(0, policyOffset);
+  if (!/^\s*(?:<!doctype\s+html\s*>\s*)?(?:<html(?:\s[^>]*)?>\s*)?(?:<head(?:\s[^>]*)?>\s*)?$/i.test(prefix)) {
+    throw new ValidationError(`${label} Content-Security-Policy must precede all prototype content`);
+  }
+  const policyText = decodeHtmlUrlReference(metaTag.attributes.get('content') ?? '');
+  if (!policyText) {
+    throw new ValidationError(`${label} Content-Security-Policy must not be empty`);
+  }
+  const directives = new Map();
+  for (const rawDirective of policyText.split(';')) {
+    const tokens = rawDirective.trim().split(/\s+/).filter(Boolean);
+    if (!tokens.length) continue;
+    const name = tokens.shift().toLowerCase();
+    if (directives.has(name)) {
+      throw new ValidationError(`${label} Content-Security-Policy repeats directive ${name}`);
+    }
+    directives.set(name, tokens.map((token) => token.toLowerCase()));
+  }
+  const additionalDirectives = [...directives.keys()].filter(
+    (name) => !OFFLINE_PROTOTYPE_CSP.has(name),
+  );
+  if (additionalDirectives.length) {
+    throw new ValidationError(
+      `${label} Content-Security-Policy must not include additional directives: ${additionalDirectives.join(', ')}`,
+    );
+  }
+  for (const [name, expectedTokens] of OFFLINE_PROTOTYPE_CSP) {
+    const actualTokens = directives.get(name);
+    if (
+      !actualTokens
+      || actualTokens.length !== expectedTokens.length
+      || expectedTokens.some((token) => !actualTokens.includes(token))
+    ) {
+      throw new ValidationError(
+        `${label} Content-Security-Policy ${name} must be exactly ${expectedTokens.join(' ')}`,
+      );
+    }
+  }
+}
+
+function assertOfflinePrototypeContent(filePath, mediaType, label) {
+  if (!['text/html', 'text/css', 'image/svg+xml'].includes(mediaType)) return;
+  const content = readFileSync(filePath, 'utf8');
+  if (mediaType === 'text/html') assertOfflinePrototypeCsp(content, label);
+  const remoteResource = /(?:src|srcset|href|data|action|formaction|poster|ping)\s*=\s*(?:["']\s*)?(?:https?:)?\/\//i.test(content)
+    || /url\(\s*["']?(?:https?:)?\/\//i.test(content)
+    || /@import\s+(?:url\()?\s*["']?(?:https?:)?\/\//i.test(content)
+    || /\bimport\s*(?:\(|[^;]*?from\s*)["'](?:https?:)?\/\//i.test(content);
+  const decodedMetaRefresh = mediaType === 'text/html'
+    && renderedHtmlElements(content, [], { includeSuppressed: true }).some((element) => (
+      element.tagName === 'meta'
+      && decodeHtmlUrlReference(element.attributes.get('http-equiv') ?? '').trim().toLowerCase()
+        === 'refresh'
+    ));
+  const browserRedirect = decodedMetaRefresh
+    || /<meta\b[^>]*\bhttp-equiv\s*=\s*(?:["']\s*)?refresh\b/i.test(content)
+    || /\blocation\s*\.\s*(?:assign|replace)\s*\(/.test(content)
+    || /\blocation(?:\s*\.\s*href)?\s*=/.test(content)
+    || /\b(?:window|globalThis|top|parent|self)\s*\.\s*open\b/.test(content)
+    || /\b(?:window|globalThis|top|parent|self)\s*\[\s*["']open["']\s*\]/.test(content)
+    || /(?:^|[^.\w$])open\s*\(/m.test(content);
+  const networkApi = /\b(?:fetch|XMLHttpRequest|WebSocket|EventSource|Worker|SharedWorker|importScripts)\s*\(/.test(content)
+    || /\bnavigator\s*\.\s*sendBeacon\s*\(/.test(content)
+    || /\baxios\s*\.\s*(?:get|post|put|patch|delete|request)\s*\(/.test(content);
+  if (remoteResource || browserRedirect || networkApi) {
+    throw new ValidationError(`${label} violates network_policy offline`);
+  }
+  if (
+    ['text/html', 'image/svg+xml'].includes(mediaType)
+    && (
+      /<script\b/i.test(content)
+      || /\son[a-z][a-z0-9_-]*\s*=/i.test(content)
+    )
+  ) {
+    throw new ValidationError(`${label} must not contain executable script or event handlers`);
+  }
+}
+
+const PROTOTYPE_MEDIA_TYPE_EXTENSIONS = new Map([
+  ['text/html', new Set(['.html', '.htm'])],
+  ['text/css', new Set(['.css'])],
+  ['application/json', new Set(['.json'])],
+  ['image/svg+xml', new Set(['.svg'])],
+  ['image/png', new Set(['.png'])],
+  ['image/jpeg', new Set(['.jpg', '.jpeg'])],
+  ['image/webp', new Set(['.webp'])],
+  ['font/woff', new Set(['.woff'])],
+  ['font/woff2', new Set(['.woff2'])],
+]);
+const PROTOTYPE_MAX_FILE_BYTES = 25 * 1024 * 1024;
+
+function assertPrototypeFileSize(filePath, label) {
+  const fileSize = lstatSync(filePath).size;
+  if (fileSize > PROTOTYPE_MAX_FILE_BYTES) {
+    throw new ValidationError(
+      `${label} file size exceeds the ${PROTOTYPE_MAX_FILE_BYTES} byte limit`,
+    );
+  }
+}
+
+function assertPrototypeMediaType(entry) {
+  const extension = path.posix.extname(normalizePath(entry.path)).toLowerCase();
+  if (!PROTOTYPE_MEDIA_TYPE_EXTENSIONS.get(entry.media_type)?.has(extension)) {
+    throw new ValidationError(
+      `visual prototype file media_type ${JSON.stringify(entry.media_type)} does not match its extension: ${entry.path}`,
+    );
+  }
+}
+
+function assertPrototypeFileContentType(filePath, entry) {
+  const label = `visual prototype file ${entry.path}`;
+  if (entry.media_type === 'image/png') {
+    validatedPngDimensions(filePath, label);
+    return;
+  }
+  const buffer = readFileSync(filePath);
+  if (entry.media_type === 'image/jpeg') {
+    if (buffer.length < 4 || buffer[0] !== 0xff || buffer[1] !== 0xd8 || buffer.at(-2) !== 0xff || buffer.at(-1) !== 0xd9) {
+      throw new ValidationError(`${label} content does not match media_type image/jpeg`);
+    }
+    return;
+  }
+  if (entry.media_type === 'image/webp') {
+    if (buffer.length < 12 || buffer.toString('ascii', 0, 4) !== 'RIFF' || buffer.toString('ascii', 8, 12) !== 'WEBP') {
+      throw new ValidationError(`${label} content does not match media_type image/webp`);
+    }
+    return;
+  }
+  if (entry.media_type === 'font/woff' && buffer.toString('ascii', 0, 4) !== 'wOFF') {
+    throw new ValidationError(`${label} content does not match media_type font/woff`);
+  }
+  if (entry.media_type === 'font/woff2' && buffer.toString('ascii', 0, 4) !== 'wOF2') {
+    throw new ValidationError(`${label} content does not match media_type font/woff2`);
+  }
+  if (entry.media_type === 'application/json') {
+    try {
+      JSON.parse(buffer.toString('utf8'));
+    } catch (error) {
+      throw new ValidationError(`${label} content does not match media_type application/json: ${error.message}`);
+    }
+  }
+  if (entry.media_type === 'image/svg+xml' && !/<svg\b/i.test(buffer.toString('utf8'))) {
+    throw new ValidationError(`${label} content does not match media_type image/svg+xml`);
+  }
+}
+
+const HTML_URL_ENTITY_VALUES = new Map([
+  ['amp', '&'],
+  ['apos', "'"],
+  ['gt', '>'],
+  ['lt', '<'],
+  ['quot', '"'],
+  ['colon', ':'],
+  ['sol', '/'],
+  ['bsol', '\\'],
+  ['tab', '\t'],
+  ['newline', '\n'],
+]);
+
+function decodeHtmlUrlReference(value) {
+  return value
+    .replace(/&#(?:x([0-9a-f]+)|([0-9]+));?/gi, (match, hex, decimal) => {
+      const codePoint = Number.parseInt(hex ?? decimal, hex ? 16 : 10);
+      if (!Number.isInteger(codePoint) || codePoint < 0 || codePoint > 0x10ffff) return match;
+      try {
+        return String.fromCodePoint(codePoint);
+      } catch {
+        return match;
+      }
+    })
+    .replace(/&([a-z]+);?/gi, (match, name) => HTML_URL_ENTITY_VALUES.get(name.toLowerCase()) ?? match);
+}
+
+function addPrototypeReference(references, rawReference, sourceEntryPath, label, options = {}) {
+  const reference = (options.html ? decodeHtmlUrlReference(rawReference) : rawReference).trim();
+  if (
+    !reference
+    || reference.startsWith('#')
+    || reference.startsWith('?')
+  ) return;
+  const schemeReference = reference.replace(/[\u0000-\u0020]+/g, '');
+  if (/^(?:data|blob):/i.test(schemeReference) && options.allowEmbeddedData) return;
+  if (/^(?:\/\/|[A-Za-z][A-Za-z0-9+.-]*:)/.test(schemeReference)) {
+    throw new ValidationError(`${label} violates network_policy offline: ${JSON.stringify(reference)}`);
+  }
+  const withoutFragment = reference.split('#', 1)[0].split('?', 1)[0];
+  if (!withoutFragment) return;
+  if (withoutFragment.startsWith('/')) {
+    throw new ValidationError(`${label} must use a prototype-relative resource path: ${JSON.stringify(reference)}`);
+  }
+  let decoded;
+  try {
+    decoded = decodeURIComponent(withoutFragment);
+  } catch {
+    throw new ValidationError(`${label} contains an invalid encoded resource path: ${JSON.stringify(reference)}`);
+  }
+  const sourceDir = path.posix.dirname(normalizePath(sourceEntryPath));
+  const normalized = safeRelativeArtifactPath(
+    path.posix.normalize(path.posix.join(sourceDir, normalizePath(decoded))),
+    label,
+  );
+  references.add(normalized);
+}
+
+function prototypeLocalReferences(filePath, entry) {
+  if (!['text/html', 'text/css', 'image/svg+xml'].includes(entry.media_type)) {
+    return new Set();
+  }
+  const content = readFileSync(filePath, 'utf8');
+  const references = new Set();
+  const add = (reference, kind, options = {}) => addPrototypeReference(
+    references,
+    reference,
+    entry.path,
+    `visual prototype ${entry.path} ${kind}`,
+    options,
+  );
+  for (const match of content.matchAll(/\b(src|href|data|action|formaction|poster|ping)\s*=\s*["']([^"']+)["']/gi)) {
+    const attribute = match[1].toLowerCase();
+    add(match[2], 'resource reference', {
+      html: ['text/html', 'image/svg+xml'].includes(entry.media_type),
+      allowEmbeddedData: ['src', 'poster'].includes(attribute),
+    });
+  }
+  for (const match of content.matchAll(/\b(src|href|data|action|formaction|poster|ping)\s*=\s*([^\s"'`=<>]+)/gi)) {
+    const attribute = match[1].toLowerCase();
+    add(match[2], 'unquoted resource reference', {
+      html: ['text/html', 'image/svg+xml'].includes(entry.media_type),
+      allowEmbeddedData: ['src', 'poster'].includes(attribute),
+    });
+  }
+  for (const match of content.matchAll(/\bsrcset\s*=\s*["']([^"']+)["']/gi)) {
+    for (const candidate of match[1].split(',')) add(candidate.trim().split(/\s+/, 1)[0], 'srcset reference');
+  }
+  for (const match of content.matchAll(/\bsrcset\s*=\s*([^\s"'`=<>]+)/gi)) {
+    for (const candidate of match[1].split(',')) add(candidate.trim(), 'unquoted srcset reference');
+  }
+  for (const match of content.matchAll(/url\(\s*["']?([^"')]+)["']?\s*\)/gi)) {
+    add(match[1], 'CSS url', { allowEmbeddedData: true });
+  }
+  for (const match of content.matchAll(/@import\s+(?:url\()?\s*["']([^"']+)["']/gi)) add(match[1], 'CSS import');
+  return references;
+}
+
+function normalizePrototypeNavigationReference(rawReference, sourceEntryPath, label, options = {}) {
+  const reference = decodeHtmlUrlReference(rawReference).trim();
+  if (!reference || reference.startsWith('?')) return null;
+  const schemeReference = reference.replace(/[\u0000-\u0020]+/g, '');
+  if (/^(?:\/\/|[A-Za-z][A-Za-z0-9+.-]*:)/.test(schemeReference)) return null;
+  if (reference.startsWith('/')) {
+    throw new ValidationError(`${label} must use a prototype-relative path: ${JSON.stringify(reference)}`);
+  }
+  const [rawPath, rawFragment = ''] = reference.split('#', 2);
+  const withoutQuery = rawPath.split('?', 1)[0];
+  let decodedPath;
+  let fragment;
+  try {
+    decodedPath = decodeURIComponent(withoutQuery);
+    fragment = decodeURIComponent(rawFragment);
+  } catch {
+    throw new ValidationError(`${label} contains invalid URL encoding: ${JSON.stringify(reference)}`);
+  }
+  const sourceDir = path.posix.dirname(normalizePath(sourceEntryPath));
+  const referenceBase = withoutQuery
+    ? (options.rootRelative ? '.' : sourceDir)
+    : sourceDir;
+  const referencePath = decodedPath || path.posix.basename(sourceEntryPath);
+  const resolvedPath = safeRelativeArtifactPath(
+    path.posix.normalize(path.posix.join(referenceBase, normalizePath(referencePath))),
+    label,
+  );
+  return { path: resolvedPath, fragment };
+}
+
+function cssImportReferences(content, sourceEntryPath) {
+  const references = [];
+  for (const match of content.matchAll(
+    /@import\s+(?:url\(\s*)?(?:"([^"]+)"|'([^']+)'|([^\s);]+))/gi,
+  )) {
+    const rawReference = match[1] ?? match[2] ?? match[3];
+    const reference = normalizePrototypeNavigationReference(
+      rawReference,
+      sourceEntryPath,
+      `visual prototype ${sourceEntryPath} CSS import`,
+    );
+    if (reference) {
+      let tail = content
+        .slice(match.index + match[0].length)
+        .split(';', 1)[0]
+        .replace(/^\s*\)\s*/, '')
+        .trim();
+      const layerPrefix = tail.match(/^layer(?:\s*\([^)]*\))?\s*/i);
+      if (layerPrefix) tail = tail.slice(layerPrefix[0].length).trim();
+      references.push({
+        path: reference.path,
+        media: tail,
+        layered: Boolean(layerPrefix || tail.includes('\\')),
+      });
+    }
+  }
+  return references;
+}
+
+function prototypeRenderedHtmlElements(filePath, entry, entriesByPath, prototypeDir, options = {}) {
+  const content = readFileSync(filePath, 'utf8');
+  const structuralElements = renderedHtmlElements(content, [], { includeActiveStyles: true });
+  const cssContents = [];
+  function appendCssContent(cssContent, sourceEntryPath, ancestors = new Set(), layered = false) {
+    for (const reference of cssImportReferences(cssContent, sourceEntryPath)) {
+      if (cssMediaCanApplyToScreen(reference.media)) {
+        appendCssPath(reference.path, ancestors, layered || reference.layered);
+      }
+    }
+    cssContents.push(layered ? `@layer {${cssContent}}` : cssContent);
+  }
+  function appendCssPath(referencePath, ancestors = new Set(), layered = false) {
+    const normalized = normalizePath(referencePath);
+    const cssEntry = entriesByPath.get(normalized);
+    if (cssEntry?.media_type !== 'text/css' || ancestors.has(normalized)) return;
+    const nextAncestors = new Set(ancestors);
+    nextAncestors.add(normalized);
+    const cssContent = readFileSync(path.resolve(prototypeDir, normalized), 'utf8');
+    appendCssContent(cssContent, cssEntry.path, nextAncestors, layered);
+  }
+
+  for (const element of structuralElements) {
+    if (element.tagName === 'style') {
+      const media = decodeHtmlUrlReference(element.attributes.get('media') ?? '');
+      if (cssMediaCanApplyToScreen(media)) {
+        appendCssContent(element.textContent ?? '', entry.path);
+      }
+      continue;
+    }
+    if (element.tagName !== 'link') continue;
+    const rel = decodeHtmlUrlReference(element.attributes.get('rel') ?? '')
+      .toLowerCase()
+      .split(/\s+/)
+      .filter(Boolean);
+    const href = element.attributes.get('href');
+    const media = decodeHtmlUrlReference(element.attributes.get('media') ?? '');
+    if (
+      !rel.includes('stylesheet')
+      || rel.includes('alternate')
+      || element.attributes.has('disabled')
+      || !cssMediaCanApplyToScreen(media)
+      || typeof href !== 'string'
+    ) continue;
+    const reference = normalizePrototypeNavigationReference(
+      href,
+      entry.path,
+      `visual prototype ${entry.path} stylesheet href`,
+    );
+    if (reference) appendCssPath(reference.path);
+  }
+
+  const visibilityRules = cssVisibilityRules(cssContents.join('\n'));
+  return renderedHtmlElements(content, visibilityRules, options);
+}
+
+function prototypeAnchorReferences(filePath, entry, entriesByPath, prototypeDir) {
+  if (entry.media_type !== 'text/html') return [];
+  const references = [];
+  for (const element of prototypeRenderedHtmlElements(
+    filePath,
+    entry,
+    entriesByPath,
+    prototypeDir,
+    { excludeInert: true },
+  )) {
+    if (element.tagName !== 'a') continue;
+    const href = element.attributes.get('href');
+    if (typeof href !== 'string') continue;
+    const reference = normalizePrototypeNavigationReference(
+      href,
+      entry.path,
+      `visual prototype ${entry.path} anchor href`,
+    );
+    if (reference) references.push(reference);
+  }
+  return references;
+}
+
+function htmlHasFragmentTarget(filePath, entry, fragment, entriesByPath, prototypeDir) {
+  if (!fragment) return true;
+  for (const element of prototypeRenderedHtmlElements(
+    filePath,
+    entry,
+    entriesByPath,
+    prototypeDir,
+  )) {
+    const id = element.attributes.get('id');
+    const name = element.attributes.get('name');
+    if (
+      (id !== undefined && id !== null && decodeHtmlUrlReference(id) === fragment)
+      || (
+        element.tagName === 'a'
+        && name !== undefined
+        && name !== null
+        && decodeHtmlUrlReference(name) === fragment
+      )
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function validatePrototypeStateArtifacts(data, prototypeDir) {
+  const entriesByPath = new Map(data.files.map((entry) => [normalizePath(entry.path), entry]));
+  const reachableDocuments = new Set([normalizePath(data.entrypoint)]);
+  const reachableFragments = new Set();
+  const pending = [normalizePath(data.entrypoint)];
+  while (pending.length) {
+    const sourcePath = pending.shift();
+    const sourceEntry = entriesByPath.get(sourcePath);
+    const sourceFile = path.resolve(prototypeDir, sourcePath);
+    for (const reference of prototypeAnchorReferences(
+      sourceFile,
+      sourceEntry,
+      entriesByPath,
+      prototypeDir,
+    )) {
+      const target = entriesByPath.get(reference.path);
+      if (!target || target.media_type !== 'text/html') continue;
+      if (reference.fragment) reachableFragments.add(`${reference.path}#${reference.fragment}`);
+      if (!reachableDocuments.has(reference.path)) {
+        reachableDocuments.add(reference.path);
+        pending.push(reference.path);
+      }
+    }
+  }
+
+  for (const screen of data.screen_states) {
+    uniqueObjectIds(screen.state_artifacts, 'state', `${screen.screen_id}.state_artifacts`);
+    requireSameSet(
+      screen.state_artifacts.map((artifact) => artifact.state),
+      screen.states,
+      `${screen.screen_id}.state_artifacts states`,
+    );
+    for (const artifact of screen.state_artifacts) {
+      const reference = normalizePrototypeNavigationReference(
+        artifact.artifact_ref,
+        data.entrypoint,
+        `${screen.screen_id} ${artifact.state} artifact_ref`,
+        { rootRelative: true },
+      );
+      if (!reference) {
+        throw new ValidationError(`${screen.screen_id} ${artifact.state} artifact_ref must reference local HTML`);
+      }
+      const target = entriesByPath.get(reference.path);
+      if (!target || target.media_type !== 'text/html') {
+        throw new ValidationError(
+          `${screen.screen_id} ${artifact.state} artifact_ref must reference a declared HTML file: ${artifact.artifact_ref}`,
+        );
+      }
+      const targetFile = path.resolve(prototypeDir, reference.path);
+      if (!htmlHasFragmentTarget(
+        targetFile,
+        target,
+        reference.fragment,
+        entriesByPath,
+        prototypeDir,
+      )) {
+        throw new ValidationError(
+          `${screen.screen_id} ${artifact.state} artifact_ref fragment does not exist: ${artifact.artifact_ref}`,
+        );
+      }
+      const reachable = reference.fragment
+        ? reachableFragments.has(`${reference.path}#${reference.fragment}`)
+        : reachableDocuments.has(reference.path);
+      if (!reachable) {
+        throw new ValidationError(
+          `${screen.screen_id} ${artifact.state} artifact_ref is not reachable from ${data.entrypoint}: ${artifact.artifact_ref}`,
+        );
+      }
+    }
+  }
+}
+
+export function validateVisualPrototypeData(data) {
+  validateSchema(data, loadJson(SCHEMA_PATHS.visual_prototype));
+  uniqueObjectIds(data.files, 'path', 'visual prototype files');
+  uniqueObjectIds(data.screen_states, 'screen_id', 'visual prototype screen_states');
+  for (const screen of data.screen_states) {
+    uniqueObjectIds(screen.state_artifacts, 'state', `${screen.screen_id}.state_artifacts`);
+    requireSameSet(
+      screen.state_artifacts.map((artifact) => artifact.state),
+      screen.states,
+      `${screen.screen_id}.state_artifacts states`,
+    );
+  }
+  const entrypoint = data.files.find((entry) => entry.path === data.entrypoint);
+  if (!entrypoint || entrypoint.media_type !== 'text/html') {
+    throw new ValidationError('visual prototype entrypoint must be listed in files with media_type text/html');
+  }
+  for (const [index, entry] of data.files.entries()) {
+    safeRelativeArtifactPath(entry.path, `visual prototype files[${index}].path`);
+    assertPrototypeMediaType(entry);
+  }
+  if (data.status === 'approved') {
+    if (!data.approval_audit) {
+      throw new ValidationError('approved visual prototypes must include approval_audit');
+    }
+    validateApprovalAuditData(data.approval_audit, 'visual prototype approval_audit');
+    if (!data.approval_audit.approved_artifacts.includes(data.entrypoint)) {
+      throw new ValidationError('approved visual prototype approval_audit.approved_artifacts must include entrypoint');
+    }
+  } else if (data.approval_audit) {
+    throw new ValidationError('candidate visual prototypes must not include approval_audit');
+  }
+  return data;
+}
+
+function prototypeBundleFiles(prototypeDir) {
+  const files = [];
+  const directories = [prototypeDir];
+  const unsupported = [];
+  while (directories.length) {
+    const directory = directories.shift();
+    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+      const entryPath = path.join(directory, entry.name);
+      const relative = normalizePath(path.relative(prototypeDir, entryPath));
+      if (entry.isDirectory()) {
+        directories.push(entryPath);
+      } else if (entry.isFile()) {
+        files.push(relative);
+      } else {
+        unsupported.push(relative);
+      }
+    }
+  }
+  if (unsupported.length) {
+    throw new ValidationError(
+      `visual prototype directory contains unsupported entry(s): ${unsupported.sort().join(', ')}`,
+    );
+  }
+  return files.sort();
+}
+
+export function validateVisualPrototype(filePath, options = {}) {
+  assertFile(filePath, 'visual prototype manifest');
+  assertPrototypeFileSize(filePath, 'visual prototype manifest');
+  const data = validateVisualPrototypeData(loadJson(filePath));
+  const prototypeDir = path.dirname(path.resolve(filePath));
+  const manifestPaths = new Set(data.files.map((entry) => normalizePath(entry.path)));
+  const manifestRef = normalizePath(path.relative(prototypeDir, path.resolve(filePath)));
+  const allowedBundleFiles = new Set([manifestRef, ...manifestPaths]);
+  const undeclaredBundleFiles = prototypeBundleFiles(prototypeDir)
+    .filter((reference) => !allowedBundleFiles.has(reference));
+  if (undeclaredBundleFiles.length) {
+    throw new ValidationError(
+      `visual prototype directory contains file(s) missing from the manifest: ${undeclaredBundleFiles.join(', ')}`,
+    );
+  }
+  for (const entry of data.files) {
+    const relative = safeRelativeArtifactPath(entry.path, `visual prototype file ${entry.path}`);
+    const artifactPath = path.resolve(prototypeDir, relative);
+    assertFile(artifactPath, `visual prototype file ${entry.path}`);
+    assertFileInsideArtifactRoot(artifactPath, prototypeDir, `visual prototype file ${entry.path}`);
+    assertPrototypeFileSize(artifactPath, `visual prototype file ${entry.path}`);
+    if (rawFileSha256(artifactPath) !== entry.sha256) {
+      throw new ValidationError(`visual prototype file hash does not match manifest: ${entry.path}`);
+    }
+    assertPrototypeFileContentType(artifactPath, entry);
+    assertOfflinePrototypeContent(artifactPath, entry.media_type, `visual prototype file ${entry.path}`);
+    for (const reference of prototypeLocalReferences(artifactPath, entry)) {
+      if (!manifestPaths.has(reference)) {
+        throw new ValidationError(
+          `visual prototype file ${entry.path} references undeclared manifest file: ${reference}`,
+        );
+      }
+    }
+  }
+  validatePrototypeStateArtifacts(data, prototypeDir);
+  for (const [field, expected] of Object.entries(options.expected ?? {})) {
+    if (data[field] !== expected) {
+      throw new ValidationError(`visual prototype ${field} must be ${JSON.stringify(expected)}, got ${JSON.stringify(data[field])}`);
+    }
+  }
+  return data;
+}
+
+export function validateVisualExperienceData(data) {
+  validateSchema(data, loadJson(SCHEMA_PATHS.visual_experience));
+  uniqueObjectIds(data.visual_direction.candidates, 'id', 'visual direction candidates');
+  uniqueObjectIds(data.screens, 'id', 'visual experience screens');
+  uniqueObjectIds(data.validation.viewports, 'name', 'visual experience viewports');
+  for (const screen of data.screens) {
+    uniqueObjectIds(screen.regions, 'id', `${screen.id}.regions`);
+  }
+  const screenStateUnion = [...new Set(data.screens.flatMap((screen) => screen.states))];
+  requireSameSet(
+    data.validation.required_states,
+    screenStateUnion,
+    'visual experience validation.required_states',
+  );
+  const candidateIds = new Set(data.visual_direction.candidates.map((candidate) => candidate.id));
+  for (const candidate of data.visual_direction.candidates) {
+    const canonicalRef = `visual-design/${candidate.id}/prototype.json`;
+    if (normalizeReference(candidate.prototype_manifest_ref) !== canonicalRef) {
+      throw new ValidationError(`${candidate.id}.prototype_manifest_ref must be ${JSON.stringify(canonicalRef)}`);
+    }
+  }
+  const selected = data.visual_direction.selected_candidate;
+  if (selected !== null && !candidateIds.has(selected)) {
+    throw new ValidationError(`visual_direction.selected_candidate is unknown: ${JSON.stringify(selected)}`);
+  }
+  if (data.approval === 'approved') {
+    if (!selected) throw new ValidationError('approved visual experience must select a candidate');
+    if (!data.approval_audit) throw new ValidationError('approved visual experience must include approval_audit');
+    validateApprovalAuditData(data.approval_audit, 'visual experience approval_audit');
+    const selectedCandidate = data.visual_direction.candidates.find((candidate) => candidate.id === selected);
+    if (!data.approval_audit.approved_artifacts.includes(selectedCandidate.prototype_manifest_ref)) {
+      throw new ValidationError('visual experience approval_audit.approved_artifacts must include the selected prototype manifest');
+    }
+  } else if (data.approval_audit) {
+    throw new ValidationError('draft visual experience must not include approval_audit');
+  }
+  return data;
+}
+
+export function validateVisualExperience(filePath, options = {}) {
+  const data = validateVisualExperienceData(loadJson(filePath));
+  const artifactRoot = visualArtifactRoot(filePath, options.artifactRoot);
+  const selectedId = data.visual_direction.selected_candidate;
+  let selectedPrototype = null;
+  let selectedPrototypePath = null;
+  for (const candidate of data.visual_direction.candidates) {
+    const manifestPath = requireVisualReference(
+      candidate.prototype_manifest_ref,
+      filePath,
+      artifactRoot,
+      `${candidate.id}.prototype_manifest_ref`,
+    );
+    const prototype = validateVisualPrototype(manifestPath, {
+      expected: { project_id: data.project_id, candidate_id: candidate.id },
+    });
+    if (rawFileSha256(manifestPath) !== candidate.prototype_manifest_sha256) {
+      throw new ValidationError(`${candidate.id} prototype manifest hash does not match visual experience`);
+    }
+    if (!referenceMatchesVisualFile(prototype.experience_spec_ref, manifestPath, filePath, artifactRoot)) {
+      throw new ValidationError(`${candidate.id} prototype experience_spec_ref must reference its visual experience spec`);
+    }
+    if (candidate.id === selectedId) {
+      selectedPrototype = prototype;
+      selectedPrototypePath = manifestPath;
+    } else if (data.approval === 'approved' && prototype.status !== 'candidate') {
+      throw new ValidationError(`${candidate.id} must remain a candidate when another visual direction is selected`);
+    }
+  }
+  if (data.approval === 'approved') {
+    if (selectedPrototype.status !== 'approved') {
+      throw new ValidationError('the selected visual prototype must have status approved');
+    }
+    const screenIds = data.screens.map((screen) => screen.id);
+    const prototypeScreenIds = selectedPrototype.screen_states.map((screen) => screen.screen_id);
+    const viewportNames = data.validation.viewports.map((viewport) => viewport.name);
+    requireSameSet(screenIds, prototypeScreenIds, 'selected prototype screens');
+    const prototypeStatesByScreen = new Map(
+      selectedPrototype.screen_states.map((screen) => [screen.screen_id, screen.states]),
+    );
+    for (const screen of data.screens) {
+      requireSameSet(
+        screen.states,
+        prototypeStatesByScreen.get(screen.id) ?? [],
+        `selected prototype ${screen.id} states`,
+      );
+    }
+    requireSameSet(viewportNames, selectedPrototype.viewports, 'selected prototype viewports');
+    if (!data.approval_audit.approved_artifacts.some((reference) => (
+      referenceMatchesVisualFile(reference, filePath, selectedPrototypePath, artifactRoot)
+    ))) {
+      throw new ValidationError('visual experience approval_audit must reference the selected prototype manifest');
+    }
+  }
+  for (const [field, expected] of Object.entries(options.expected ?? {})) {
+    if (data[field] !== expected) {
+      throw new ValidationError(`visual experience ${field} must be ${JSON.stringify(expected)}, got ${JSON.stringify(data[field])}`);
+    }
+  }
+  return data;
+}
+
+function resolveVisualReviewSourceSpec(expectedContract, artifactRoot, options = {}) {
+  const sourceSpecRef = expectedContract?.source_spec_ref;
+  if (typeof sourceSpecRef !== 'string' || !sourceSpecRef.trim()) {
+    throw new ValidationError('visual review run contract source_spec_ref must be a non-empty string');
+  }
+  const candidates = [];
+  if (path.isAbsolute(sourceSpecRef)) candidates.push(sourceSpecRef);
+  const taskGraphRef = expectedContract?.task_graph_ref;
+  if (typeof taskGraphRef === 'string' && taskGraphRef.trim()) {
+    const taskGraphPath = path.isAbsolute(taskGraphRef)
+      ? taskGraphRef
+      : path.resolve(artifactRoot, taskGraphRef);
+    candidates.push(path.resolve(path.dirname(taskGraphPath), sourceSpecRef));
+    const projectRelative = resolveProjectRelativeReference(sourceSpecRef, path.dirname(taskGraphPath));
+    if (projectRelative) candidates.push(projectRelative);
+  }
+  candidates.push(path.resolve(artifactRoot, sourceSpecRef));
+  candidates.push(path.resolve(process.cwd(), sourceSpecRef));
+  const sourceSpecPath = candidates.find(
+    (candidate) => existsSync(candidate) && lstatSync(candidate).isFile(),
+  );
+  if (!sourceSpecPath) {
+    throw new ValidationError(
+      `visual review source_spec_ref cannot be resolved: ${JSON.stringify(sourceSpecRef)}`,
+    );
+  }
+  if (options.requireInsideArtifactRoot !== false) {
+    assertFileInsideArtifactRoot(sourceSpecPath, artifactRoot, 'visual review source_spec_ref');
+  }
+  return sourceSpecPath;
+}
+
+export function validateVisualReviewSourceArtifacts(expectedContract, options = {}) {
+  const artifactRoot = path.resolve(
+    options.sourceArtifactRoot
+    ?? options.artifactRoot
+    ?? process.cwd(),
+  );
+  const sourceSpecPath = resolveVisualReviewSourceSpec(expectedContract, artifactRoot);
+  const sourceSpec = loadJson(sourceSpecPath);
+  const experienceRef = expectedContract?.source_experience_ref;
+  const prototypeRef = expectedContract?.source_prototype_ref;
+  const expectedExperienceHash = expectedContract?.experience_spec_sha256;
+  const expectedPrototypeHash = expectedContract?.prototype_manifest_sha256;
+  for (const [field, value] of [
+    ['source_experience_ref', experienceRef],
+    ['source_prototype_ref', prototypeRef],
+  ]) {
+    if (typeof value !== 'string' || !value.trim()) {
+      throw new ValidationError(`visual review run contract ${field} must be a non-empty string`);
+    }
+  }
+  for (const [field, value] of [
+    ['experience_spec_sha256', expectedExperienceHash],
+    ['prototype_manifest_sha256', expectedPrototypeHash],
+  ]) {
+    if (typeof value !== 'string' || !/^[a-f0-9]{64}$/.test(value)) {
+      throw new ValidationError(`visual review run contract ${field} must be a SHA-256 hex digest`);
+    }
+  }
+
+  const experiencePath = path.resolve(path.dirname(sourceSpecPath), safeRelativeArtifactPath(
+    experienceRef,
+    'visual review source_experience_ref',
+  ));
+  assertFile(experiencePath, 'visual review approved experience');
+  assertFileInsideArtifactRoot(experiencePath, artifactRoot, 'visual review approved experience');
+  if (sourceSpec.project_id !== expectedContract?.project_id) {
+    throw new ValidationError('visual review source spec project_id does not match the run contract');
+  }
+  if (sourceSpec.approval !== 'approved') {
+    throw new ValidationError('visual review source spec must remain approved');
+  }
+  const sourceVisual = sourceSpec.visual_experience;
+  if (
+    sourceVisual?.has_visual_interface !== true
+    || sourceVisual.design_scope !== 'full'
+    || sourceVisual.design_timing !== 'current_iteration'
+    || sourceVisual.experience_spec_sha256 !== expectedExperienceHash
+    || !referenceMatchesVisualFile(sourceVisual.experience_spec_ref, sourceSpecPath, experiencePath, artifactRoot)
+  ) {
+    throw new ValidationError('visual review source spec no longer approves the run experience contract');
+  }
+  if (!sourceSpec.approval_audit?.approved_artifacts?.some((reference) => (
+    referenceMatchesVisualFile(reference, sourceSpecPath, experiencePath, artifactRoot)
+  ))) {
+    throw new ValidationError('visual review source spec approval audit must include the approved experience');
+  }
+  if (rawFileSha256(experiencePath) !== expectedExperienceHash) {
+    throw new ValidationError('visual review approved experience hash does not match the run contract');
+  }
+  const experience = validateVisualExperience(experiencePath, {
+    artifactRoot,
+    expected: {
+      ...(expectedContract.project_id ? { project_id: expectedContract.project_id } : {}),
+      mode: 'full',
+    },
+  });
+  if (experience.approval !== 'approved') {
+    throw new ValidationError('visual review source experience must remain approved');
+  }
+  if (!referenceMatchesVisualFile(experience.source_spec_ref, experiencePath, sourceSpecPath, artifactRoot)) {
+    throw new ValidationError('visual review source experience must reference the run source spec');
+  }
+  const selected = experience.visual_direction.candidates.find(
+    (candidate) => candidate.id === experience.visual_direction.selected_candidate,
+  );
+  if (
+    !selected
+    || normalizeReference(selected.prototype_manifest_ref) !== normalizeReference(prototypeRef)
+    || selected.prototype_manifest_sha256 !== expectedPrototypeHash
+  ) {
+    throw new ValidationError('visual review selected prototype does not match the run contract');
+  }
+  const prototypePath = path.resolve(path.dirname(experiencePath), safeRelativeArtifactPath(
+    prototypeRef,
+    'visual review source_prototype_ref',
+  ));
+  assertFile(prototypePath, 'visual review approved prototype manifest');
+  assertFileInsideArtifactRoot(prototypePath, artifactRoot, 'visual review approved prototype manifest');
+  if (rawFileSha256(prototypePath) !== expectedPrototypeHash) {
+    throw new ValidationError('visual review approved prototype manifest hash does not match the run contract');
+  }
+  return { sourceSpecPath, experiencePath, prototypePath, experience };
+}
+
+function pngCrc32(buffer) {
+  let crc = 0xffffffff;
+  for (const byte of buffer) {
+    crc ^= byte;
+    for (let bit = 0; bit < 8; bit += 1) {
+      crc = (crc >>> 1) ^ ((crc & 1) ? 0xedb88320 : 0);
+    }
+  }
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
+const PNG_COLOR_TYPE_CHANNELS = new Map([
+  [0, 1],
+  [2, 3],
+  [3, 1],
+  [4, 2],
+  [6, 4],
+]);
+
+const PNG_COLOR_TYPE_BIT_DEPTHS = new Map([
+  [0, new Set([1, 2, 4, 8, 16])],
+  [2, new Set([8, 16])],
+  [3, new Set([1, 2, 4, 8])],
+  [4, new Set([8, 16])],
+  [6, new Set([8, 16])],
+]);
+
+const PNG_ADAM7_PASSES = [
+  [0, 0, 8, 8],
+  [4, 0, 8, 8],
+  [0, 4, 4, 8],
+  [2, 0, 4, 4],
+  [0, 2, 2, 4],
+  [1, 0, 2, 2],
+  [0, 1, 1, 2],
+];
+
+const PNG_MAX_DIMENSION = 16_384;
+const PNG_MAX_PIXELS = 64 * 1024 * 1024;
+const PNG_MAX_DECOMPRESSED_BYTES = 256 * 1024 * 1024;
+
+function pngPassDimension(size, start, step) {
+  return size <= start ? 0 : Math.ceil((size - start) / step);
+}
+
+function pngImageLayout(dimensions, format, label) {
+  if (
+    !format
+    || format.compressionMethod !== 0
+    || format.filterMethod !== 0
+    || ![0, 1].includes(format.interlaceMethod)
+  ) {
+    throw new ValidationError(`${label} has an unsupported PNG image format`);
+  }
+  const channels = PNG_COLOR_TYPE_CHANNELS.get(format.colorType);
+  if (!channels || !PNG_COLOR_TYPE_BIT_DEPTHS.get(format.colorType)?.has(format.bitDepth)) {
+    throw new ValidationError(`${label} has an invalid PNG color type or bit depth`);
+  }
+  if (dimensions.width > PNG_MAX_DIMENSION || dimensions.height > PNG_MAX_DIMENSION) {
+    throw new ValidationError(`${label} PNG dimensions exceed the ${PNG_MAX_DIMENSION}px limit`);
+  }
+  if (dimensions.width * dimensions.height > PNG_MAX_PIXELS) {
+    throw new ValidationError(`${label} PNG pixel count exceeds the ${PNG_MAX_PIXELS} pixel limit`);
+  }
+  const bitsPerPixel = channels * format.bitDepth;
+  const passes = format.interlaceMethod === 0
+    ? [[0, 0, 1, 1]]
+    : PNG_ADAM7_PASSES;
+  let decompressedBytes = 0;
+  for (const [startX, startY, stepX, stepY] of passes) {
+    const passWidth = pngPassDimension(dimensions.width, startX, stepX);
+    const passHeight = pngPassDimension(dimensions.height, startY, stepY);
+    if (!passWidth || !passHeight) continue;
+    const rowBytes = Math.ceil((passWidth * bitsPerPixel) / 8);
+    decompressedBytes += passHeight * (rowBytes + 1);
+  }
+  if (decompressedBytes > PNG_MAX_DECOMPRESSED_BYTES) {
+    throw new ValidationError(
+      `${label} PNG decompressed image data exceeds the ${PNG_MAX_DECOMPRESSED_BYTES} byte limit`,
+    );
+  }
+  return { bitsPerPixel, passes, decompressedBytes };
+}
+
+function validatePngImageData(imageData, dimensions, format, label, layout = null) {
+  const { bitsPerPixel, passes } = layout ?? pngImageLayout(dimensions, format, label);
+  const bytesPerPixel = Math.max(1, Math.ceil(bitsPerPixel / 8));
+  let offset = 0;
+  for (const [startX, startY, stepX, stepY] of passes) {
+    const passWidth = pngPassDimension(dimensions.width, startX, stepX);
+    const passHeight = pngPassDimension(dimensions.height, startY, stepY);
+    if (!passWidth || !passHeight) continue;
+    const rowBytes = Math.ceil((passWidth * bitsPerPixel) / 8);
+    let previousRow = Buffer.alloc(rowBytes);
+    for (let row = 0; row < passHeight; row += 1) {
+      if (offset >= imageData.length) {
+        throw new ValidationError(`${label} PNG pixel data is shorter than its declared dimensions`);
+      }
+      const filter = imageData[offset];
+      if (filter > 4) {
+        throw new ValidationError(`${label} contains an invalid PNG scanline filter`);
+      }
+      offset += 1;
+      const filteredRow = imageData.subarray(offset, offset + rowBytes);
+      offset += rowBytes;
+      if (offset > imageData.length) {
+        throw new ValidationError(`${label} PNG pixel data is shorter than its declared dimensions`);
+      }
+      const reconstructedRow = Buffer.alloc(rowBytes);
+      for (let column = 0; column < rowBytes; column += 1) {
+        const left = column >= bytesPerPixel ? reconstructedRow[column - bytesPerPixel] : 0;
+        const above = previousRow[column] ?? 0;
+        const upperLeft = column >= bytesPerPixel ? previousRow[column - bytesPerPixel] : 0;
+        let predictor = 0;
+        if (filter === 1) predictor = left;
+        else if (filter === 2) predictor = above;
+        else if (filter === 3) predictor = Math.floor((left + above) / 2);
+        else if (filter === 4) {
+          const estimate = left + above - upperLeft;
+          const leftDistance = Math.abs(estimate - left);
+          const aboveDistance = Math.abs(estimate - above);
+          const upperLeftDistance = Math.abs(estimate - upperLeft);
+          predictor = leftDistance <= aboveDistance && leftDistance <= upperLeftDistance
+            ? left
+            : (aboveDistance <= upperLeftDistance ? above : upperLeft);
+        }
+        reconstructedRow[column] = (filteredRow[column] + predictor) & 0xff;
+      }
+      if (format.colorType === 3) {
+        for (let pixel = 0; pixel < passWidth; pixel += 1) {
+          const bitOffset = pixel * format.bitDepth;
+          const byte = reconstructedRow[Math.floor(bitOffset / 8)];
+          const shift = 8 - format.bitDepth - (bitOffset % 8);
+          const paletteIndex = (byte >>> shift) & ((1 << format.bitDepth) - 1);
+          if (paletteIndex >= format.paletteEntries) {
+            throw new ValidationError(`${label} contains a PNG palette index without a PLTE entry`);
+          }
+        }
+      }
+      previousRow = reconstructedRow;
+    }
+  }
+  if (offset !== imageData.length) {
+    throw new ValidationError(`${label} PNG pixel data length does not match its declared dimensions`);
+  }
+}
+
+function validatedPngDimensions(filePath, label) {
+  const fileSize = lstatSync(filePath).size;
+  if (fileSize > PROTOTYPE_MAX_FILE_BYTES) {
+    throw new ValidationError(`${label} PNG file size exceeds the ${PROTOTYPE_MAX_FILE_BYTES} byte limit`);
+  }
+  const buffer = readFileSync(filePath);
+  const signature = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
+  if (buffer.length < 45 || !buffer.subarray(0, 8).equals(signature)) {
+    throw new ValidationError(`${label} must be a valid PNG image`);
+  }
+  let offset = 8;
+  let dimensions = null;
+  let imageFormat = null;
+  let hasImageData = false;
+  let hasEnd = false;
+  let hasPalette = false;
+  let idatSequenceEnded = false;
+  const imageDataChunks = [];
+  while (offset + 12 <= buffer.length) {
+    const length = buffer.readUInt32BE(offset);
+    const chunkEnd = offset + 12 + length;
+    if (chunkEnd > buffer.length) throw new ValidationError(`${label} contains a truncated PNG chunk`);
+    const type = buffer.toString('ascii', offset + 4, offset + 8);
+    if (!/^[A-Za-z]{4}$/.test(type) || !/[A-Z]/.test(type[2])) {
+      throw new ValidationError(`${label} contains an invalid PNG chunk type`);
+    }
+    const expectedCrc = buffer.readUInt32BE(offset + 8 + length);
+    const actualCrc = pngCrc32(buffer.subarray(offset + 4, offset + 8 + length));
+    if (expectedCrc !== actualCrc) throw new ValidationError(`${label} contains an invalid PNG chunk checksum`);
+    if (!['IHDR', 'PLTE', 'IDAT', 'IEND'].includes(type) && /[A-Z]/.test(type[0])) {
+      throw new ValidationError(`${label} contains unknown critical PNG chunk ${type}`);
+    }
+    if (hasImageData && type !== 'IDAT') idatSequenceEnded = true;
+    if (type === 'IHDR') {
+      if (dimensions || offset !== 8 || length !== 13) throw new ValidationError(`${label} has an invalid PNG header`);
+      dimensions = {
+        width: buffer.readUInt32BE(offset + 8),
+        height: buffer.readUInt32BE(offset + 12),
+      };
+      if (!dimensions.width || !dimensions.height) throw new ValidationError(`${label} has invalid PNG dimensions`);
+      imageFormat = {
+        bitDepth: buffer[offset + 16],
+        colorType: buffer[offset + 17],
+        compressionMethod: buffer[offset + 18],
+        filterMethod: buffer[offset + 19],
+        interlaceMethod: buffer[offset + 20],
+      };
+    } else if (type === 'PLTE') {
+      if (!dimensions || hasPalette || hasImageData || length < 3 || length > 768 || length % 3 !== 0) {
+        throw new ValidationError(`${label} has an invalid PNG palette`);
+      }
+      hasPalette = true;
+      imageFormat.paletteEntries = length / 3;
+    } else if (type === 'IDAT') {
+      if (!dimensions || idatSequenceEnded) {
+        throw new ValidationError(`${label} has invalid PNG image-data chunk ordering`);
+      }
+      hasImageData = true;
+      imageDataChunks.push(buffer.subarray(offset + 8, offset + 8 + length));
+    } else if (type === 'IEND') {
+      if (!hasImageData || length !== 0 || chunkEnd !== buffer.length) throw new ValidationError(`${label} has an invalid PNG terminator`);
+      hasEnd = true;
+      break;
+    }
+    offset = chunkEnd;
+  }
+  if (!dimensions || !hasImageData || !hasEnd) {
+    throw new ValidationError(`${label} must contain PNG header, image data, and terminator chunks`);
+  }
+  if (imageFormat.colorType === 3) {
+    if (!hasPalette) throw new ValidationError(`${label} indexed-color PNG must contain a PLTE chunk`);
+    if (imageFormat.paletteEntries > (1 << imageFormat.bitDepth)) {
+      throw new ValidationError(`${label} PNG palette has more entries than its indexed bit depth allows`);
+    }
+  } else if ([0, 4].includes(imageFormat.colorType) && hasPalette) {
+    throw new ValidationError(`${label} PNG color type must not contain a PLTE chunk`);
+  }
+  const layout = pngImageLayout(dimensions, imageFormat, label);
+  let imageData;
+  try {
+    imageData = inflateSync(Buffer.concat(imageDataChunks), {
+      maxOutputLength: layout.decompressedBytes,
+    });
+  } catch (error) {
+    throw new ValidationError(`${label} contains invalid compressed PNG image data: ${error.message}`);
+  }
+  validatePngImageData(imageData, dimensions, imageFormat, label, layout);
+  return dimensions;
+}
+
+function validateAccessibilityReportData(data, expected = {}) {
+  if (!data || typeof data !== 'object' || Array.isArray(data)) {
+    throw new ValidationError('visual accessibility report must be a JSON object');
+  }
+  if (data.schema_version !== 'p2a.visual_accessibility_report.v1') {
+    throw new ValidationError('visual accessibility report schema_version must be p2a.visual_accessibility_report.v1');
+  }
+  for (const field of ['tool', 'standard', 'scanned_at']) {
+    if (typeof data[field] !== 'string' || !data[field].trim()) {
+      throw new ValidationError(`visual accessibility report ${field} must be a non-empty string`);
+    }
+  }
+  const scannedAt = Date.parse(data.scanned_at);
+  if (Number.isNaN(scannedAt)) {
+    throw new ValidationError('visual accessibility report scanned_at must be a valid timestamp');
+  }
+  if (expected.startedAt !== undefined) {
+    const startedAt = Date.parse(expected.startedAt);
+    if (Number.isNaN(startedAt)) {
+      throw new ValidationError('visual accessibility report run contract started_at must be a valid timestamp');
+    }
+    if (scannedAt < startedAt) {
+      throw new ValidationError('visual accessibility report scanned_at must not predate the run start');
+    }
+  }
+  if (expected.notBefore !== undefined) {
+    const notBefore = Date.parse(expected.notBefore);
+    if (Number.isNaN(notBefore)) {
+      throw new ValidationError('visual accessibility report final integration cutoff must be a valid timestamp');
+    }
+    if (scannedAt < notBefore) {
+      throw new ValidationError('visual accessibility report scanned_at must not predate the final integration cutoff');
+    }
+  }
+  if (expected.reviewedAt !== undefined) {
+    const reviewedAt = Date.parse(expected.reviewedAt);
+    if (Number.isNaN(reviewedAt)) {
+      throw new ValidationError('visual accessibility report reviewed_at contract must be a valid timestamp');
+    }
+    if (scannedAt > reviewedAt) {
+      throw new ValidationError('visual accessibility report scanned_at must not be later than reviewed_at');
+    }
+  }
+  if (expected.finishedAt !== undefined) {
+    const finishedAt = Date.parse(expected.finishedAt);
+    if (Number.isNaN(finishedAt)) {
+      throw new ValidationError('visual accessibility report run contract finished_at must be a valid timestamp');
+    }
+    if (scannedAt > finishedAt) {
+      throw new ValidationError('visual accessibility report scanned_at must not be later than the run finish');
+    }
+  }
+  if (!Array.isArray(data.page_urls) || !data.page_urls.length || data.page_urls.some((value) => typeof value !== 'string' || !value.trim())) {
+    throw new ValidationError('visual accessibility report page_urls must be a non-empty string array');
+  }
+  if (!Array.isArray(data.violations)) {
+    throw new ValidationError('visual accessibility report violations must be an array');
+  }
+  const allowedImpacts = new Set(['critical', 'serious', 'moderate', 'minor', null]);
+  for (const [index, violation] of data.violations.entries()) {
+    if (!violation || typeof violation !== 'object' || Array.isArray(violation)) {
+      throw new ValidationError(`visual accessibility report violations[${index}] must be an object`);
+    }
+    if (typeof violation.id !== 'string' || !violation.id.trim() || !allowedImpacts.has(violation.impact)) {
+      throw new ValidationError(`visual accessibility report violations[${index}] must include id and a supported impact`);
+    }
+    if (!Array.isArray(violation.nodes)) {
+      throw new ValidationError(`visual accessibility report violations[${index}].nodes must be an array`);
+    }
+  }
+  if (expected.standard !== undefined && data.standard !== expected.standard) {
+    throw new ValidationError('visual accessibility report standard does not match the run contract');
+  }
+  if (expected.pageUrls) requireSameSet(data.page_urls, expected.pageUrls, 'visual accessibility report page_urls');
+  return data;
+}
+
+export function validateVisualReviewData(data, expectedContract = null) {
+  validateSchema(data, loadJson(SCHEMA_PATHS.visual_review));
+  const resultKeys = data.results.map((result) => `${result.screen_id}\u0000${result.state}\u0000${result.viewport}`);
+  if (resultKeys.length !== new Set(resultKeys).size) {
+    throw new ValidationError('visual review screen/state/viewport result combinations must be unique');
+  }
+  if (expectedContract) {
+    for (const field of [
+      'run_id',
+      'task_id',
+      'workspace_ref',
+      'workspace_revision_sha256',
+      'source_experience_ref',
+      'source_prototype_ref',
+    ]) {
+      if (expectedContract[field] !== undefined && data[field] !== expectedContract[field]) {
+        throw new ValidationError(`visual review ${field} must be ${JSON.stringify(expectedContract[field])}, got ${JSON.stringify(data[field])}`);
+      }
+    }
+    const expectedKeys = [];
+    for (const screen of expectedContract.screen_states ?? []) {
+      for (const state of screen.states ?? []) {
+        for (const viewport of expectedContract.viewports ?? []) {
+          expectedKeys.push(`${screen.screen_id}\u0000${state}\u0000${viewport.name}`);
+        }
+      }
+    }
+    const actual = new Set(resultKeys);
+    const missing = expectedKeys.filter((key) => !actual.has(key));
+    if (missing.length) {
+      throw new ValidationError(`visual review is missing ${missing.length} required screen/state/viewport result(s)`);
+    }
+    const expected = new Set(expectedKeys);
+    const extra = resultKeys.filter((key) => !expected.has(key));
+    if (extra.length) {
+      throw new ValidationError(`visual review contains ${extra.length} screen/state/viewport result(s) outside the run contract`);
+    }
+    const expectedViewports = new Map((expectedContract.viewports ?? []).map((viewport) => [viewport.name, viewport]));
+    for (const result of data.results) {
+      const viewport = expectedViewports.get(result.viewport);
+      if (!viewport || result.width !== viewport.width || (viewport.height !== null && result.height !== viewport.height)) {
+        throw new ValidationError(`visual review ${result.screen_id}/${result.state}/${result.viewport} dimensions do not match the run contract`);
+      }
+    }
+    if (
+      expectedContract.accessibility_standard !== undefined
+      && data.accessibility.standard !== expectedContract.accessibility_standard
+    ) {
+      throw new ValidationError('visual review accessibility.standard does not match the run contract');
+    }
+  }
+  const reviewedAt = Date.parse(data.reviewed_at);
+  if (Number.isNaN(reviewedAt)) {
+    throw new ValidationError('visual review reviewed_at must be a valid timestamp');
+  }
+  const startedAt = expectedContract?.started_at === undefined
+    ? null
+    : Date.parse(expectedContract.started_at);
+  if (startedAt !== null && Number.isNaN(startedAt)) {
+    throw new ValidationError('visual review run contract started_at must be a valid timestamp');
+  }
+  const finishedAt = expectedContract?.finished_at === undefined
+    ? null
+    : Date.parse(expectedContract.finished_at);
+  if (finishedAt !== null && Number.isNaN(finishedAt)) {
+    throw new ValidationError('visual review run contract finished_at must be a valid timestamp');
+  }
+  if (startedAt !== null && finishedAt !== null && finishedAt < startedAt) {
+    throw new ValidationError('visual review run contract finished_at must not predate started_at');
+  }
+  const evidenceNotBefore = expectedContract?.evidence_not_before === undefined
+    ? null
+    : Date.parse(expectedContract.evidence_not_before);
+  if (evidenceNotBefore !== null && Number.isNaN(evidenceNotBefore)) {
+    throw new ValidationError('visual review final integration cutoff must be a valid timestamp');
+  }
+  if (startedAt !== null && reviewedAt < startedAt) {
+    throw new ValidationError('visual review reviewed_at must not predate the run start');
+  }
+  if (evidenceNotBefore !== null && reviewedAt < evidenceNotBefore) {
+    throw new ValidationError('visual review reviewed_at must not predate the final integration cutoff');
+  }
+  if (finishedAt !== null && reviewedAt > finishedAt) {
+    throw new ValidationError('visual review reviewed_at must not be later than the run finish');
+  }
+  for (const [index, result] of data.results.entries()) {
+    const capturedAt = Date.parse(result.captured_at);
+    if (Number.isNaN(capturedAt)) {
+      throw new ValidationError(`visual review results[${index}].captured_at must be a valid timestamp`);
+    }
+    if (startedAt !== null && capturedAt < startedAt) {
+      throw new ValidationError(`visual review results[${index}].captured_at must not predate the run start`);
+    }
+    if (evidenceNotBefore !== null && capturedAt < evidenceNotBefore) {
+      throw new ValidationError(`visual review results[${index}].captured_at must not predate the final integration cutoff`);
+    }
+    if (finishedAt !== null && capturedAt > finishedAt) {
+      throw new ValidationError(`visual review results[${index}].captured_at must not be later than the run finish`);
+    }
+    if (capturedAt > reviewedAt) {
+      throw new ValidationError(`visual review results[${index}].captured_at must not be later than reviewed_at`);
+    }
+    try {
+      const captureUrl = new URL(result.capture_url);
+      if (!['http:', 'https:'].includes(captureUrl.protocol)) throw new Error('unsupported protocol');
+    } catch {
+      throw new ValidationError(`visual review results[${index}].capture_url must be an absolute http or https URL`);
+    }
+  }
+  if (data.accessibility.status !== 'not_run' && (!data.accessibility.report_ref || !data.accessibility.report_sha256)) {
+    throw new ValidationError('executed visual review accessibility must include report_ref and report_sha256');
+  }
+  if (data.accessibility.status === 'not_run' && (data.accessibility.report_ref || data.accessibility.report_sha256)) {
+    throw new ValidationError('not_run visual review accessibility must not include report evidence');
+  }
+  if (data.verdict === 'confirm_ui') {
+    const failed = data.results.filter((result) => result.status !== 'passed' || result.concerns.length);
+    if (failed.length || data.concerns.length) {
+      throw new ValidationError('confirm_ui visual review must have only passed results and no concerns');
+    }
+    if (data.accessibility.status !== 'passed' || data.accessibility.critical_violations !== 0) {
+      throw new ValidationError('confirm_ui visual review requires passed accessibility with zero critical violations');
+    }
+  }
+  return data;
+}
+
+export function validateVisualReview(filePath, expectedContract = null, options = {}) {
+  const data = validateVisualReviewData(loadJson(filePath), expectedContract);
+  const expectedName = `${data.run_id}.visual-review.json`;
+  if (path.basename(filePath) !== expectedName) {
+    throw new ValidationError(`visual review filename must be ${expectedName}`);
+  }
+  if (expectedContract) {
+    validateVisualReviewSourceArtifacts(expectedContract, options);
+  }
+  if (options.requireEvidenceFiles !== false) {
+    let evidenceRoot = options.artifactRoot ? path.resolve(options.artifactRoot) : null;
+    if (!evidenceRoot) {
+      let current = path.dirname(path.resolve(filePath));
+      while (true) {
+        if (path.basename(current) === 'runs') {
+          evidenceRoot = path.dirname(current);
+          break;
+        }
+        const parent = path.dirname(current);
+        if (parent === current) break;
+        current = parent;
+      }
+    }
+    evidenceRoot ??= path.dirname(path.resolve(filePath));
+    for (const [index, result] of data.results.entries()) {
+      const artifactRef = safeRelativeArtifactPath(
+        result.artifact_ref,
+        `visual review results[${index}].artifact_ref`,
+      );
+      requireRunScopedVisualEvidence(
+        artifactRef,
+        expectedContract,
+        `visual review results[${index}].artifact_ref`,
+      );
+      const artifactPath = path.resolve(evidenceRoot, artifactRef);
+      if (!existsSync(artifactPath) || !lstatSync(artifactPath).isFile()) {
+        throw new ValidationError(`visual review results[${index}].artifact_ref cannot be resolved: ${JSON.stringify(result.artifact_ref)}`);
+      }
+      assertFileInsideArtifactRoot(artifactPath, evidenceRoot, `visual review results[${index}].artifact_ref`);
+      if (path.extname(artifactPath).toLowerCase() !== '.png' || result.media_type !== 'image/png') {
+        throw new ValidationError(`visual review results[${index}] evidence must be a PNG image`);
+      }
+      if (rawFileSha256(artifactPath) !== result.artifact_sha256) {
+        throw new ValidationError(`visual review results[${index}].artifact_sha256 does not match its screenshot`);
+      }
+      const dimensions = validatedPngDimensions(artifactPath, `visual review results[${index}].artifact_ref`);
+      if (dimensions.width !== result.width || dimensions.height !== result.height) {
+        throw new ValidationError(`visual review results[${index}] dimensions do not match its screenshot`);
+      }
+    }
+    if (data.accessibility.report_ref) {
+      const reportRef = safeRelativeArtifactPath(
+        data.accessibility.report_ref,
+        'visual review accessibility.report_ref',
+      );
+      requireRunScopedVisualEvidence(
+        reportRef,
+        expectedContract,
+        'visual review accessibility.report_ref',
+      );
+      const reportPath = path.resolve(evidenceRoot, reportRef);
+      if (!existsSync(reportPath) || !lstatSync(reportPath).isFile()) {
+        throw new ValidationError(`visual review accessibility.report_ref cannot be resolved: ${JSON.stringify(data.accessibility.report_ref)}`);
+      }
+      assertFileInsideArtifactRoot(reportPath, evidenceRoot, 'visual review accessibility.report_ref');
+      if (path.extname(reportPath).toLowerCase() !== '.json') {
+        throw new ValidationError('visual review accessibility.report_ref must reference a JSON report');
+      }
+      if (rawFileSha256(reportPath) !== data.accessibility.report_sha256) {
+        throw new ValidationError('visual review accessibility.report_sha256 does not match its report');
+      }
+      let report;
+      try {
+        report = JSON.parse(readFileSync(reportPath, 'utf8'));
+      } catch (error) {
+        throw new ValidationError(`visual accessibility report is not valid JSON: ${error.message}`);
+      }
+      validateAccessibilityReportData(report, {
+        standard: data.accessibility.standard,
+        pageUrls: [...new Set(data.results.map((result) => result.capture_url))],
+        ...(expectedContract?.started_at ? { startedAt: expectedContract.started_at } : {}),
+        ...(expectedContract?.evidence_not_before ? { notBefore: expectedContract.evidence_not_before } : {}),
+        ...(expectedContract?.finished_at ? { finishedAt: expectedContract.finished_at } : {}),
+        reviewedAt: data.reviewed_at,
+      });
+      const criticalViolations = report.violations.filter((violation) => violation.impact === 'critical').length;
+      if (criticalViolations !== data.accessibility.critical_violations) {
+        throw new ValidationError('visual review accessibility.critical_violations does not match its report');
+      }
+    }
+  }
+  return data;
+}
+
+function validateSpecVisualExperience(spec, specPath, artifactRoot = null) {
+  const visual = spec.visual_experience;
+  if (!visual) return null;
+  const hasExperienceRef = Boolean(visual.experience_spec_ref);
+  const hasExperienceHash = Boolean(visual.experience_spec_sha256);
+  if (hasExperienceRef !== hasExperienceHash) {
+    throw new ValidationError('visual_experience experience_spec_ref and experience_spec_sha256 must be provided together');
+  }
+  if (!visual.has_visual_interface && hasExperienceHash) {
+    throw new ValidationError('non-visual specs must not include an experience spec hash');
+  }
+  if (visual.has_visual_interface && spec.product.screens_or_interfaces.length === 0) {
+    throw new ValidationError('visual_experience.has_visual_interface true requires product.screens_or_interfaces');
+  }
+  const supportsExperienceArtifact = (
+    visual.has_visual_interface
+    && ['full', 'reuse'].includes(visual.design_scope)
+    && visual.design_timing === 'current_iteration'
+  );
+  if (hasExperienceRef && !supportsExperienceArtifact) {
+    throw new ValidationError(
+      'visual_experience experience_spec_ref is only allowed for full or reuse current_iteration visual experience',
+    );
+  }
+  const requiresApprovedExperience = (
+    supportsExperienceArtifact
+    && hasExperienceRef
+    && spec.approval === 'approved'
+  );
+  if (!requiresApprovedExperience) return null;
+  const experiencePath = requireVisualReference(
+    visual.experience_spec_ref,
+    specPath,
+    artifactRoot,
+    'spec.visual_experience.experience_spec_ref',
+  );
+  const experience = validateVisualExperience(experiencePath, {
+    artifactRoot,
+    expected: { project_id: spec.project_id, mode: visual.design_scope },
+  });
+  if (visual.design_scope === 'reuse') {
+    requireSubset(
+      visual.design_system_refs,
+      experience.design_system.references,
+      'spec.visual_experience.design_system_refs',
+    );
+  }
+  if (rawFileSha256(experiencePath) !== visual.experience_spec_sha256) {
+    throw new ValidationError('spec.visual_experience.experience_spec_sha256 does not match the visual experience artifact');
+  }
+  if (experience.approval !== 'approved') {
+    throw new ValidationError('approved full visual scope requires an approved visual experience');
+  }
+  if (!referenceMatchesVisualFile(experience.source_spec_ref, experiencePath, specPath, artifactRoot)) {
+    throw new ValidationError('visual experience source_spec_ref must reference its source spec');
+  }
+  if (!spec.approval_audit.approved_artifacts.some((reference) => (
+    referenceMatchesVisualFile(reference, specPath, experiencePath, artifactRoot)
+  ))) {
+    throw new ValidationError('spec.approval_audit.approved_artifacts must include the approved visual experience');
+  }
+  return { experience, experiencePath };
 }
 
 function validateClarifyingQuestionDisposition(spec, intake = null) {
@@ -2086,16 +4462,23 @@ export function validateTaskContextData(data) {
 export function validateTaskGraphData(data, requireApprovedSpec = null) {
   const schema = loadJson(SCHEMA_PATHS.task_graph);
   validateSchema(data, schema);
+  let approvedSpec = null;
+  let approvedVisual = null;
   if (requireApprovedSpec) {
     const specReference = loadJson(requireApprovedSpec);
     const sourceIntakePath = requireSpecSourceIntake(requireApprovedSpec, specReference);
-    const spec = validateSpec(requireApprovedSpec, sourceIntakePath);
-    if (spec.approval !== 'approved') {
+    approvedSpec = validateSpec(requireApprovedSpec, sourceIntakePath);
+    if (approvedSpec.approval !== 'approved') {
       throw new ValidationError('task graph generation is blocked until spec.approval is approved');
     }
-    if (spec.open_decisions.length) {
+    if (approvedSpec.open_decisions.length) {
       throw new ValidationError('task graph generation is blocked while spec.open_decisions is non-empty');
     }
+    approvedVisual = validateSpecVisualExperience(
+      approvedSpec,
+      requireApprovedSpec,
+      inferArtifactRootFromIntakePath(sourceIntakePath),
+    );
   }
 
   const tasks = data.tasks;
@@ -2104,6 +4487,8 @@ export function validateTaskGraphData(data, requireApprovedSpec = null) {
     throw new ValidationError('task ids must be unique');
   }
   const taskIdSet = new Set(taskIds);
+  const visualReviewEnabled = Boolean(approvedVisual?.experience.validation.visual_review_required);
+  const visualCaseOwners = new Map();
 
   const graph = new Map();
   for (const task of tasks) {
@@ -2112,11 +4497,106 @@ export function validateTaskGraphData(data, requireApprovedSpec = null) {
     if (typeof task.blockNote === 'string' && task.blockNote.trim().length === 0) {
       throw new ValidationError(`${task.id}.blockNote must not be blank`);
     }
+    if (visualReviewEnabled && !task.workKind) {
+      throw new ValidationError(`${task.id}.workKind is required when the approved visual experience requires visual review`);
+    }
+    const requiresVisualReview = visualReviewEnabled && ['ui', 'mixed'].includes(task.workKind);
+    if (requiresVisualReview && !task.visualReview) {
+      throw new ValidationError(`${task.id} implements a visual-review-required experience and must include visualReview`);
+    }
+    if (visualReviewEnabled && task.workKind === 'non_ui' && task.visualReview) {
+      throw new ValidationError(`${task.id} is classified non_ui and must not include visualReview`);
+    }
+    if (task.visualReview && requireApprovedSpec && !visualReviewEnabled) {
+      throw new ValidationError(`${task.id}.visualReview is only allowed when the approved current-iteration visual experience requires review`);
+    }
+    if (task.visualReview && visualReviewEnabled) {
+      const { experience, experiencePath } = approvedVisual;
+      const selected = experience.visual_direction.candidates.find(
+        (candidate) => candidate.id === experience.visual_direction.selected_candidate,
+      );
+      const artifactRoot = inferArtifactRootFromIntakePath(requireSpecSourceIntake(requireApprovedSpec, approvedSpec));
+      const prototypePath = requireVisualReference(
+        selected.prototype_manifest_ref,
+        experiencePath,
+        artifactRoot,
+        `${task.id}.visualReview.prototypeManifestRef`,
+      );
+      if (!referenceMatchesVisualFile(task.visualReview.experienceSpecRef, requireApprovedSpec, experiencePath, artifactRoot)) {
+        throw new ValidationError(`${task.id}.visualReview.experienceSpecRef must reference the approved visual experience`);
+      }
+      if (task.visualReview.experienceSpecSha256 !== approvedSpec.visual_experience.experience_spec_sha256) {
+        throw new ValidationError(`${task.id}.visualReview.experienceSpecSha256 must match the approved visual experience`);
+      }
+      if (!referenceMatchesVisualFile(task.visualReview.prototypeManifestRef, requireApprovedSpec, prototypePath, artifactRoot)) {
+        throw new ValidationError(`${task.id}.visualReview.prototypeManifestRef must reference the selected prototype`);
+      }
+      if (task.visualReview.prototypeManifestSha256 !== selected.prototype_manifest_sha256) {
+        throw new ValidationError(`${task.id}.visualReview.prototypeManifestSha256 must match the selected prototype`);
+      }
+      if (task.visualReview.accessibilityStandard !== experience.validation.accessibility_standard) {
+        throw new ValidationError(`${task.id}.visualReview.accessibilityStandard must match the approved visual experience`);
+      }
+      uniqueObjectIds(task.visualReview.screenStates, 'screenId', `${task.id}.visualReview.screenStates`);
+      uniqueObjectIds(task.visualReview.viewports, 'name', `${task.id}.visualReview.viewports`);
+      const experienceScreens = new Map(experience.screens.map((screen) => [screen.id, screen]));
+      const experienceViewports = new Map(experience.validation.viewports.map((viewport) => [viewport.name, viewport]));
+      for (const screenState of task.visualReview.screenStates) {
+        const screen = experienceScreens.get(screenState.screenId);
+        if (!screen) {
+          throw new ValidationError(`${task.id}.visualReview.screenStates contains unknown screen ${JSON.stringify(screenState.screenId)}`);
+        }
+        requireSubset(
+          screenState.states,
+          screen.states,
+          `${task.id}.visualReview.screenStates.${screenState.screenId}.states`,
+        );
+      }
+      for (const viewport of task.visualReview.viewports) {
+        const approvedViewport = experienceViewports.get(viewport.name);
+        if (!approvedViewport) {
+          throw new ValidationError(`${task.id}.visualReview.viewports contains unknown viewport ${JSON.stringify(viewport.name)}`);
+        }
+        if (viewport.width !== approvedViewport.width || viewport.height !== approvedViewport.height) {
+          throw new ValidationError(`${task.id}.visualReview viewport ${JSON.stringify(viewport.name)} dimensions must match the approved visual experience`);
+        }
+      }
+      for (const screenState of task.visualReview.screenStates) {
+        for (const state of screenState.states) {
+          for (const viewport of task.visualReview.viewports) {
+            const key = `${screenState.screenId}\u0000${state}\u0000${viewport.name}`;
+            if (visualCaseOwners.has(key)) {
+              throw new ValidationError(
+                `visual review case ${screenState.screenId}/${state}/${viewport.name} is owned by both ${visualCaseOwners.get(key)} and ${task.id}`,
+              );
+            }
+            visualCaseOwners.set(key, task.id);
+          }
+        }
+      }
+    }
     const unknownDependencies = task.dependencies.filter((dependency) => !taskIdSet.has(dependency));
     if (unknownDependencies.length) {
       throw new ValidationError(`${task.id} has unknown dependencies: ${JSON.stringify(unknownDependencies)}`);
     }
     graph.set(task.id, [...task.dependencies]);
+  }
+
+  if (visualReviewEnabled) {
+    const expectedVisualCases = [];
+    for (const screen of approvedVisual.experience.screens) {
+      for (const state of screen.states) {
+        for (const viewport of approvedVisual.experience.validation.viewports) {
+          expectedVisualCases.push(`${screen.id}\u0000${state}\u0000${viewport.name}`);
+        }
+      }
+    }
+    const missing = expectedVisualCases.filter((key) => !visualCaseOwners.has(key));
+    if (missing.length) {
+      throw new ValidationError(
+        `task graph does not assign ${missing.length} approved screen/state/viewport visual review case(s) to a ui or mixed task`,
+      );
+    }
   }
 
   detectCycles(graph);
@@ -2519,9 +4999,14 @@ const MILESTONE_IMMUTABLE_RUN_FIELDS = [
   'sourceLayout',
   'taskGraphRef',
   'sourceSpecRef',
+  'runKind',
+  'taskContractSha256',
   'agentTool',
   'workspaceRef',
   'workspacePath',
+  'workspaceRevisionSha256',
+  'visualReviewEvidenceSha256',
+  'visualReview',
   'isolation',
   'status',
   'startedAt',
@@ -2896,6 +5381,140 @@ export function validateEvalMaintenanceApplyReport(filePath) {
   return validateEvalMaintenanceApplyReportData(loadJson(filePath));
 }
 
+export function resolveRunTaskGraphPath(runData, artifactRoot) {
+  const reference = runData.taskGraphRef;
+  if (typeof reference !== 'string' || !reference.trim()) {
+    throw new ValidationError(`finished run ${runData.runId} taskGraphRef must be a non-empty string`);
+  }
+  const candidates = path.isAbsolute(reference)
+    ? [reference]
+    : [
+        path.resolve(artifactRoot, reference),
+        resolveProjectRelativeReference(reference, artifactRoot),
+      ].filter(Boolean);
+  const graphPath = candidates.find(
+    (candidate) => existsSync(candidate) && lstatSync(candidate).isFile(),
+  );
+  if (!graphPath) {
+    throw new ValidationError(
+      `finished run ${runData.runId} taskGraphRef cannot be resolved inside the artifact root: ${JSON.stringify(reference)}`,
+    );
+  }
+  const externalGraphReference = (
+    runData.sourceLayout === 'graph'
+    && path.isAbsolute(reference)
+  );
+  if (!externalGraphReference) {
+    assertFileInsideArtifactRoot(graphPath, artifactRoot, `finished run ${runData.runId} taskGraphRef`);
+  }
+  return graphPath;
+}
+
+export function validateRunTaskContract(runData, artifactRoot) {
+  const taskGraphPath = resolveRunTaskGraphPath(runData, artifactRoot);
+  let sourceArtifactRoot = runData.sourceLayout === 'graph'
+    ? defaultArtifactRootForGraph(realpathSync(taskGraphPath))
+    : path.resolve(artifactRoot);
+  const graphData = loadJson(taskGraphPath);
+  const rawTask = graphData.tasks?.find((candidate) => candidate.id === runData.taskId);
+  const rawVisualContract = Boolean(rawTask?.visualReview?.required || runData.visualReview?.required);
+  let sourceSpecPath = null;
+  let maintenanceSource = false;
+  try {
+    sourceSpecPath = resolveVisualReviewSourceSpec({
+      source_spec_ref: runData.sourceSpecRef,
+      task_graph_ref: taskGraphPath,
+    }, sourceArtifactRoot, {
+      requireInsideArtifactRoot: runData.sourceLayout !== 'graph',
+    });
+    if (runData.sourceLayout === 'graph') {
+      sourceArtifactRoot = visualArtifactRoot(sourceSpecPath);
+    }
+    if (runData.sourceLayout === 'maintenance') {
+      const sourceData = loadJson(sourceSpecPath);
+      if (sourceData.schema_version !== 'p2a.current_spec.v1') {
+        throw new ValidationError(
+          `finished maintenance run ${runData.runId} sourceSpecRef must reference current-spec.json`,
+        );
+      }
+      if (sourceData.project_id !== runData.projectId) {
+        throw new ValidationError(
+          `finished maintenance run ${runData.runId} projectId does not match current-spec.json`,
+        );
+      }
+      maintenanceSource = true;
+    }
+  } catch (error) {
+    if (rawVisualContract || runData.schema_version === 'p2a.run.v2') throw error;
+  }
+  const graph = validateTaskGraphData(graphData, maintenanceSource ? null : sourceSpecPath);
+  const task = graph.tasks.find((candidate) => candidate.id === runData.taskId);
+  if (!task) {
+    throw new ValidationError(
+      `finished run ${runData.runId} taskId ${runData.taskId} is missing from its source task graph`,
+    );
+  }
+  const currentTaskContractSha256 = taskContractSha256(task);
+  const requiresTaskContract = (
+    runData.schema_version === 'p2a.run.v2'
+    || task.visualReview?.required
+    || runData.visualReview?.required
+  );
+  if (requiresTaskContract && runData.taskContractSha256 === undefined) {
+    throw new ValidationError(
+      `finished run ${runData.runId} taskContractSha256 is required to preserve the immutable task contract recorded at start`,
+    );
+  }
+  if (
+    runData.taskContractSha256 !== undefined
+    && runData.taskContractSha256 !== currentTaskContractSha256
+  ) {
+    throw new ValidationError(
+      `finished run ${runData.runId} taskContractSha256 does not match the immutable task contract recorded at start`,
+    );
+  }
+  if (sourceSpecPath) {
+    const artifactRelativeGraphSpec = path.resolve(sourceArtifactRoot, graph.sourceSpec);
+    const graphSourceSpecPath = resolveExistingFileReference(
+      graph.sourceSpec,
+      path.dirname(taskGraphPath),
+    ) ?? (
+      existsSync(artifactRelativeGraphSpec) && lstatSync(artifactRelativeGraphSpec).isFile()
+        ? artifactRelativeGraphSpec
+        : null
+    );
+    if (!graphSourceSpecPath) {
+      throw new ValidationError(`finished run ${runData.runId} source task graph sourceSpec cannot be resolved`);
+    }
+    assertFileInsideArtifactRoot(
+      graphSourceSpecPath,
+      sourceArtifactRoot,
+      `finished run ${runData.runId} source task graph sourceSpec`,
+    );
+    if (realpathSync(graphSourceSpecPath) !== realpathSync(sourceSpecPath)) {
+      throw new ValidationError(
+        `finished run ${runData.runId} sourceSpecRef does not match its source task graph`,
+      );
+    }
+  }
+  if (graph.projectId !== runData.projectId) {
+    throw new ValidationError(`finished run ${runData.runId} projectId does not match its source task graph`);
+  }
+  const expectedVisualReview = task.visualReview ?? null;
+  const actualVisualReview = runData.visualReview ?? null;
+  if (!sameJson(actualVisualReview, expectedVisualReview)) {
+    throw new ValidationError(
+      `finished run ${runData.runId} visualReview must exactly match task ${runData.taskId} in its source task graph`,
+    );
+  }
+  return {
+    task,
+    graph,
+    taskGraphPath,
+    sourceArtifactRoot,
+  };
+}
+
 export function validateRunsDir(runsDir) {
   if (!existsSync(runsDir)) throw new ValidationError(`runs directory is missing: ${runsDir}`);
   if (!lstatSync(runsDir).isDirectory()) throw new ValidationError(`runs path must be a directory: ${runsDir}`);
@@ -2914,6 +5533,66 @@ export function validateRunsDir(runsDir) {
     }
     if (runData.projectId !== index.projectId) {
       throw new ValidationError(`run ${run.runId} projectId does not match run-index projectId`);
+    }
+    const source = runData.status === 'finished'
+      ? validateRunTaskContract(runData, path.dirname(path.resolve(runsDir)))
+      : null;
+    if (source?.task.visualReview?.required) {
+      const visualContract = source.task.visualReview;
+      if (!/^[a-f0-9]{64}$/.test(runData.workspaceRevisionSha256 ?? '')) {
+        throw new ValidationError(
+          `finished run ${runData.runId} workspaceRevisionSha256 is required for visual evidence`,
+        );
+      }
+      const visualReviewPath = runSidecarPath(
+        runsDir,
+        runData.runId,
+        '.visual-review.json',
+        index,
+      );
+      assertFile(visualReviewPath, `${runData.runId} visual review`);
+      const visualReviewSha256 = rawFileSha256(visualReviewPath);
+      const visualReview = validateVisualReview(visualReviewPath, {
+        run_id: runData.runId,
+        task_id: runData.taskId,
+        workspace_ref: runData.workspaceRef,
+        workspace_revision_sha256: runData.workspaceRevisionSha256,
+        iteration_id: runData.iterationId,
+        started_at: runData.startedAt,
+        finished_at: runData.finishedAt,
+        project_id: runData.projectId,
+        source_spec_ref: runData.sourceSpecRef,
+        task_graph_ref: runData.taskGraphRef,
+        source_experience_ref: visualContract.experienceSpecRef,
+        experience_spec_sha256: visualContract.experienceSpecSha256,
+        source_prototype_ref: visualContract.prototypeManifestRef,
+        prototype_manifest_sha256: visualContract.prototypeManifestSha256,
+        screen_states: visualContract.screenStates.map((screen) => ({
+          screen_id: screen.screenId,
+          states: screen.states,
+        })),
+        viewports: visualContract.viewports,
+        accessibility_standard: visualContract.accessibilityStandard,
+      }, {
+        artifactRoot: path.dirname(runsDir),
+        sourceArtifactRoot: source.sourceArtifactRoot,
+      });
+      if (rawFileSha256(visualReviewPath) !== visualReviewSha256) {
+        throw new ValidationError(`finished run ${runData.runId} visual review changed during validation`);
+      }
+      if (!/^[a-f0-9]{64}$/.test(runData.visualReviewEvidenceSha256 ?? '')) {
+        throw new ValidationError(
+          `finished run ${runData.runId} visualReviewEvidenceSha256 is required for visual evidence`,
+        );
+      }
+      if (runData.visualReviewEvidenceSha256 !== visualReviewSha256) {
+        throw new ValidationError(
+          `finished run ${runData.runId} visualReviewEvidenceSha256 does not match its visual review sidecar`,
+        );
+      }
+      if (visualReview.verdict !== 'confirm_ui') {
+        throw new ValidationError(`finished run ${runData.runId} requires visual review verdict confirm_ui`);
+      }
     }
   }
   const indexedRunFiles = new Set(index.runs.map((run) => normalizeIndexedRunRef(run.runRef, run.runId)));
@@ -3179,6 +5858,7 @@ function usage() {
     '  --spec <path>',
     '  --task-graph <path> [--require-approved-spec <path>]',
     '  --review <path> [--require-review-pass]',
+    '  --visual-experience <path> | --visual-prototype <path> | --visual-review <path>',
     '  --run <path> | --run-index <path> | --runs-dir <dir>',
     '  --milestone-review <path>',
     '  --skill-proposal <path>',
@@ -3210,6 +5890,9 @@ function parseArgs(argv) {
     else if (arg === '--spec') args.spec = argv[++index];
     else if (arg === '--task-graph') args.taskGraph = argv[++index];
     else if (arg === '--review') args.review = argv[++index];
+    else if (arg === '--visual-experience') args.visualExperience = argv[++index];
+    else if (arg === '--visual-prototype') args.visualPrototype = argv[++index];
+    else if (arg === '--visual-review') args.visualReview = argv[++index];
     else if (arg === '--run') args.run = argv[++index];
     else if (arg === '--run-index') args.runIndex = argv[++index];
     else if (arg === '--runs-dir') args.runsDir = argv[++index];
@@ -3282,6 +5965,9 @@ export function main(argv = process.argv.slice(2)) {
       throw new ValidationError('--require-review-pass requires --review');
     }
     if (args.review) validateReview(args.review, null, { requirePass: args.requireReviewPass });
+    if (args.visualExperience) validateVisualExperience(args.visualExperience);
+    if (args.visualPrototype) validateVisualPrototype(args.visualPrototype);
+    if (args.visualReview) validateVisualReview(args.visualReview);
     if (args.run) validateRun(args.run);
     if (args.runIndex) validateRunIndex(args.runIndex);
     if (args.runsDir) validateRunsDir(args.runsDir);

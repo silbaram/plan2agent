@@ -31,3 +31,4 @@ Rules:
 - If any required product field is unknown, add the related decision id to `open_decisions` and keep `approval` as `draft`.
 - Follow the Clarifying Question Disposition Contract in `.agents/skills/p2a-spec/SKILL.md` for every intake `CQ-n`, including statuses, required fields, and `ND-n` promotion rules.
 - Do not approve the spec unless the user explicitly approved it, `open_decisions` is empty, and `approval_audit` is present.
+- Classify every newly authored spec with `visual_experience`. For a screen-bearing product, state whether this iteration is `minimal`, `reuse`, or `full` and whether full design is current or deferred; do not equate the mere presence of a screen with automatic full visual design.

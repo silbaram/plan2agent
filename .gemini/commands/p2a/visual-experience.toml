@@ -1,0 +1,8 @@
+description = "Create and approve a structured visual experience with offline HTML prototype candidates."
+prompt = """
+Use the Plan2Agent p2a-visual-experience skill for the following Gate B visual context:
+
+{{args}}
+
+Classify the current iteration as none, minimal, reuse, or full. Run the full visual procedure only for full + current_iteration. Keep candidates offline and hash-bound, persist them only under gate-b-spec/visual-design through the harness owner, and require explicit human selection and approval before Gate B can pass.
+"""

@@ -432,6 +432,169 @@
         }
       }
     },
+    "visual_experience": {
+      "type": "object",
+      "required": [
+        "has_visual_interface",
+        "design_scope",
+        "design_timing",
+        "rationale"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "has_visual_interface": {
+          "type": "boolean"
+        },
+        "design_scope": {
+          "type": "string",
+          "enum": [
+            "none",
+            "minimal",
+            "reuse",
+            "full"
+          ]
+        },
+        "design_timing": {
+          "type": "string",
+          "enum": [
+            "not_applicable",
+            "current_iteration",
+            "deferred_iteration"
+          ]
+        },
+        "rationale": {
+          "type": "string",
+          "minLength": 1
+        },
+        "experience_spec_ref": {
+          "const": "experience-spec.json"
+        },
+        "experience_spec_sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "design_system_refs": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "has_visual_interface": {
+                "const": false
+              }
+            },
+            "required": [
+              "has_visual_interface"
+            ]
+          },
+          "then": {
+            "properties": {
+              "design_scope": {
+                "const": "none"
+              },
+              "design_timing": {
+                "const": "not_applicable"
+              }
+            },
+            "not": {
+              "required": [
+                "experience_spec_ref"
+              ]
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "has_visual_interface": {
+                "const": true
+              }
+            },
+            "required": [
+              "has_visual_interface"
+            ]
+          },
+          "then": {
+            "allOf": [
+              {
+                "not": {
+                  "properties": {
+                    "design_scope": {
+                      "const": "none"
+                    }
+                  },
+                  "required": [
+                    "design_scope"
+                  ]
+                }
+              },
+              {
+                "not": {
+                  "properties": {
+                    "design_timing": {
+                      "const": "not_applicable"
+                    }
+                  },
+                  "required": [
+                    "design_timing"
+                  ]
+                }
+              }
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "design_scope": {
+                "const": "full"
+              },
+              "design_timing": {
+                "const": "current_iteration"
+              }
+            },
+            "required": [
+              "design_scope",
+              "design_timing"
+            ]
+          },
+          "then": {
+            "required": [
+              "experience_spec_ref",
+              "experience_spec_sha256"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "design_scope": {
+                "const": "reuse"
+              },
+              "design_timing": {
+                "const": "current_iteration"
+              }
+            },
+            "required": [
+              "design_scope",
+              "design_timing"
+            ]
+          },
+          "then": {
+            "required": [
+              "design_system_refs"
+            ]
+          }
+        }
+      ]
+    },
     "evidence": {
       "type": "array",
       "items": {

@@ -17,6 +17,7 @@ import {
   assertUnmanagedGraphMutation,
   assertSafeRunId,
   assertStartableRunId,
+  canonicalWorkspacePathForArtifactRoot,
   canonicalTaskGraphRef,
   compareRunEvidence,
   compareRunIndexEvidence,
@@ -38,10 +39,11 @@ import { allocateRunId, previewRunId, releaseRunIdReservation } from './p2a_proj
 
 const P2A_PATHS = resolveP2aPaths(import.meta.url);
 const ROOT = P2A_PATHS.projectRoot;
-const COMMANDS = new Set(['plan', 'start', 'resume', 'status', 'finish']);
+const COMMANDS = new Set(['plan', 'start', 'review', 'resume', 'status', 'finish']);
 const FINISH_STATUSES = new Set(['finished', 'failed', 'blocked']);
 const FAILURE_SOURCES = new Set(['owner', 'monitor', 'implementer']);
 const IMPLEMENTER_AGENT_TOOLS = new Set(['codex', 'claude', 'manual']);
+const REVIEWER_AGENT_TOOLS = new Set(['codex', 'claude', 'gemini', 'manual']);
 const DEFAULT_PROJECT_CONFIG = path.join('.plan2agent', 'project.config.json');
 const RUN_INDEX_EVIDENCE_FIELDS = [
   'runId',
@@ -60,6 +62,7 @@ function usage() {
     'Usage:',
     '  p2a execute plan (--artifacts <dir>|--graph <path>) [--task <task-id>] [options]',
     '  p2a execute start (--artifacts <dir>|--graph <path>) [--task <task-id>] [options]',
+    '  p2a execute review (--artifacts <dir>|--graph <path>) [--task <task-id>] [options]',
     '  p2a execute resume (--artifacts <dir>|--graph <path>) --run-id <run-id>',
     '  p2a execute status (--artifacts <dir>|--graph <path>) [--task <task-id>] [--run-id <run-id>]',
     '  p2a execute finish (--artifacts <dir>|--graph <path>) --run-id <run-id> [options]',
@@ -67,6 +70,7 @@ function usage() {
     'Commands:',
     '  plan                 Resolve one ready task and print the supervised execution plan. No files are changed.',
     '  start                Create a run, mark the task in_progress, and print the manual launcher prompt.',
+    '  review               Start a no-change final visual review run for a completed visual task.',
     '  resume               Reprint the selected run context and manual launcher prompt without changing files.',
     '  status               Show task status and the latest or requested run log summary.',
     '  finish               Optionally verify, finish the run, then mark the task done or blocked.',
@@ -77,7 +81,7 @@ function usage() {
     '  --spec <path>        Spec JSON path for prompt context. Only supported with --graph.',
     '  --maintenance        With --artifacts, use the maintenance task graph.',
     '',
-    'Start/plan options:',
+    'Start/plan/review options:',
     '  --task <task-id>     Task to execute. If omitted, there must be exactly one ready task.',
     '  --approval <path>    Proposal draft approval JSON; selects its maintenance task and implies --maintenance.',
     '  --agent-tool <tool>  Write implementer label: codex, claude, or manual. Default: codex.',
@@ -252,16 +256,19 @@ function parseArgs(argv) {
   if (args.spec && args.artifacts) throw new Error('--spec is only supported with --graph; --artifacts uses the active iteration spec');
   if (args.maintenance && !args.artifacts) throw new Error('--maintenance is only supported with --artifacts');
   if (args.graph) assertNotUninitializedScaffoldGraph(args.graph);
-  if (args.graph && ['start', 'finish'].includes(args.command)) {
+  if (args.graph && ['start', 'review', 'finish'].includes(args.command)) {
     assertUnmanagedGraphMutation(args.graph, `p2a execute ${args.command}`);
   }
   if (['finish', 'resume'].includes(args.command) && !args.runId) throw new Error(`--run-id is required for ${args.command}`);
-  if (args.runReservationToken && (args.command !== 'start' || !args.runId)) {
-    throw new Error('--run-reservation-token requires start with --run-id');
+  if (args.runReservationToken && (!['start', 'review'].includes(args.command) || !args.runId)) {
+    throw new Error('--run-reservation-token requires start or review with --run-id');
   }
   if (args.command === 'status' && !args.taskId && !args.runId && !args.approval) throw new Error('--task, --approval, or --run-id is required for status');
   if (['plan', 'start'].includes(args.command) && !IMPLEMENTER_AGENT_TOOLS.has(args.agentTool)) {
     throw new Error('--agent-tool for implementation must be one of codex, claude, or manual; Gemini is read-only and may only be used as a reviewer/monitor');
+  }
+  if (args.command === 'review' && !REVIEWER_AGENT_TOOLS.has(args.agentTool)) {
+    throw new Error('--agent-tool for visual review must be one of codex, claude, gemini, or manual');
   }
   if (['plan', 'resume', 'status'].includes(args.command) && args.verifyOptions.length) {
     throw new Error('verification options are only supported with finish');
@@ -426,6 +433,29 @@ function selectReadyTask(source, taskId = null) {
     throw new Error(`multiple ready tasks found; pass --task. Ready tasks: ${summary}`);
   }
   return ready[0];
+}
+
+function selectCompletedVisualTask(source, taskId = null) {
+  const candidates = source.graph.tasks.filter((task) => (
+    task.status === 'done' && task.visualReview?.required
+  ));
+  if (taskId) {
+    const task = requireTask(source, taskId);
+    if (task.status !== 'done') {
+      throw new Error(`${task.id} must be done before final visual review; current status is ${task.status}`);
+    }
+    if (!task.visualReview?.required) {
+      throw new Error(`${task.id} does not require visual review`);
+    }
+    return task;
+  }
+  if (candidates.length === 0) throw new Error('no completed visual task is available for final review');
+  if (candidates.length > 1) {
+    throw new Error(
+      `multiple completed visual tasks are available; pass --task. Visual tasks: ${candidates.map((task) => task.id).join(', ')}`,
+    );
+  }
+  return candidates[0];
 }
 
 function currentSourceGraph(source) {
@@ -620,6 +650,31 @@ function resolveStartIdentity(args, source, task, options = {}) {
   }
 }
 
+function finalReviewWorkspace(args, source) {
+  if (args.changedFiles.length) {
+    throw new Error('final visual review is review-only and does not allow --changed-file');
+  }
+  if (args.createIsolation || args.branch || args.worktree || (args.isolation && args.isolation !== 'none')) {
+    throw new Error('final visual review must use --isolation none in the canonical integration workspace');
+  }
+  if (!source.artifactRoot && !args.workspace) {
+    throw new Error('--workspace is required for final visual review in --graph mode');
+  }
+  const canonicalWorkspacePath = source.artifactRoot
+    ? canonicalWorkspacePathForArtifactRoot(source.artifactRoot)
+    : path.resolve(args.workspace);
+  assertDirectory(canonicalWorkspacePath, 'canonical integration workspace');
+  if (
+    args.workspace
+    && realpathSync(path.resolve(args.workspace)) !== realpathSync(canonicalWorkspacePath)
+  ) {
+    throw new Error(
+      `final visual review workspace must be the canonical integration workspace ${canonicalWorkspacePath}`,
+    );
+  }
+  return canonicalWorkspacePath;
+}
+
 function childEnv() {
   return { ...process.env, NO_COLOR: process.env.NO_COLOR ?? '1' };
 }
@@ -652,6 +707,18 @@ function promptArgs(source, taskId) {
 function finishTaskArgs(source, taskId, status) {
   const transition = status === 'finished' ? 'done' : 'block';
   return [transition, ...source.sourceArgs, taskId];
+}
+
+function reopenTaskAfterFinalReviewArgs(source, run) {
+  const failureClass = run.failure?.class ?? run.status;
+  return [
+    'todo',
+    ...source.sourceArgs,
+    run.taskId,
+    '--reopen',
+    '--note',
+    `Final visual review ${run.runId} ended ${run.status} (${failureClass}); implementation remediation is required before another final review.`,
+  ];
 }
 
 function sourceRunArgs(args) {
@@ -704,6 +771,7 @@ function startRunArgs(args, task, runId, defaults, approval = null) {
     '--isolation',
     defaults.isolation,
   ];
+  if (args.runKind) runArgs.push('--run-kind', args.runKind);
   if (args.workspaceRef) runArgs.push('--workspace-ref', args.workspaceRef);
   if (args.runReservationToken) runArgs.push('--run-reservation-token', args.runReservationToken);
   if (defaults.branch) runArgs.push('--branch', defaults.branch);
@@ -927,6 +995,21 @@ function printLauncherPrompt(source, task, runId, approvalLink = null) {
   console.log('---');
 }
 
+function printFinalVisualReviewInstructions(args, source, task, runId, workspacePath) {
+  console.log('');
+  console.log('Plan2Agent final visual review');
+  console.log(`- task: ${task.id} - ${task.title}`);
+  console.log(`- runId: ${runId}`);
+  console.log(`- workspace: ${displayPath(workspacePath)}`);
+  console.log('- isolation: none');
+  console.log('- changedFiles: 0');
+  console.log('');
+  console.log('Next:');
+  console.log(`1. Snapshot the canonical workspace: ${commandLine('p2a_runs.mjs', ['revision', ...source.sourceArgs, '--run-id', runId])}`);
+  console.log('2. Capture every assigned screen/state/viewport and write the accessibility report plus .visual-review.json sidecar.');
+  console.log(`3. Finish without changing task state: ${commandLine('p2a_execute.mjs', ['finish', ...source.sourceArgs, '--run-id', runId, '--test', '--lint', '--typecheck'])}`);
+}
+
 function verifyRequested(args) {
   return args.verifyOptions.length > 0;
 }
@@ -940,6 +1023,32 @@ function transitionTaskAfterFinishedRun(args, source, run, successStatus = 0) {
   const expectedTaskStatus = expectedTaskStatusForRun(run);
   if (args.noTaskTransition) {
     console.log('Task transition skipped by --no-task-transition');
+    return successStatus;
+  }
+  if (run.runKind === 'final_visual_review') {
+    if (run.status === 'finished') {
+      if (task.status !== 'done') {
+        console.error(`final visual review transition skipped: ${task.id} must remain done after a confirming review; current status is ${task.status}`);
+        return 1;
+      }
+      console.log(`Task transition already applied: ${task.id} remains done after final visual review`);
+      return successStatus;
+    }
+    if (task.status === 'todo' || task.status === 'in_progress') {
+      console.log(`Final visual review remediation already started: ${task.id} status is ${task.status}`);
+      return successStatus;
+    }
+    if (task.status !== 'done') {
+      console.error(`final visual review remediation skipped: ${task.id} must be done before reopen; current status is ${task.status}`);
+      return 1;
+    }
+    console.log(`Reopening task ${task.id} after ${run.status} final visual review...`);
+    const reopenResult = runScript(
+      'p2a_tasks.mjs',
+      reopenTaskAfterFinalReviewArgs(source, run),
+    );
+    printChildResult(reopenResult);
+    if (reopenResult.status !== 0) return reopenResult.status ?? 1;
     return successStatus;
   }
   if (task.status === expectedTaskStatus) {
@@ -1048,6 +1157,56 @@ function runStart(args) {
   });
 }
 
+function runReview(args) {
+  const initialSource = resolveSource(args);
+  return withRunStoreLocks([path.dirname(initialSource.graphPath)], () => {
+    const source = currentSourceGraph(initialSource);
+    if (args.approval || args.maintenance) {
+      throw new Error('final visual review is only supported for a feature iteration task');
+    }
+    const task = selectCompletedVisualTask(source, args.taskId);
+    if (hasStartedRunForTask(source, task.id)) {
+      throw new Error(`${task.id} already has a started run; finish or block it before final visual review`);
+    }
+    const workspacePath = finalReviewWorkspace(args, source);
+    args.workspace = workspacePath;
+    args.isolation = 'none';
+    args.runKind = 'final_visual_review';
+    args.notes = uniqueStrings([
+      ...args.notes,
+      `FINAL_VISUAL_REVIEW: canonical workspace=${workspacePath}`,
+    ]);
+    const identity = resolveStartIdentity(args, source, task, { reserve: true });
+    const { runId, defaults } = identity;
+    args.runReservationToken = identity.reservationToken;
+    const runResult = runScript(
+      'p2a_runs.mjs',
+      startRunArgs(args, task, runId, defaults),
+    );
+    printChildResult(runResult);
+    if (runResult.status !== 0) {
+      console.error('Final visual review run did not start. Correct the cause, then retry with the same reserved run id:');
+      console.error(commandLine('p2a_execute.mjs', [
+        'review',
+        ...source.sourceArgs,
+        '--task', task.id,
+        '--agent-tool', args.agentTool,
+        '--run-id', runId,
+        '--workspace', workspacePath,
+        ...(identity.reservationToken ? ['--run-reservation-token', identity.reservationToken] : []),
+      ]));
+      return runResult.status ?? 1;
+    }
+    printFinalVisualReviewInstructions(args, source, task, runId, workspacePath);
+    printRunCommandFooter(P2A_PATHS, {
+      sourceArgs: source.sourceArgs,
+      runId,
+      heading: 'Run commands:',
+    });
+    return 0;
+  });
+}
+
 function runResume(args) {
   const source = resolveSource(args);
   const approvalLink = resolveApprovalSelection(args, source);
@@ -1069,7 +1228,11 @@ function runResume(args) {
   if (run.status !== 'started') {
     console.log('- resumeNote: run is already closed; use status/review commands for follow-up evidence.');
   }
-  printLauncherPrompt(source, task, run.runId, approvalLink);
+  if (run.runKind === 'final_visual_review') {
+    printFinalVisualReviewInstructions(args, source, task, run.runId, run.workspacePath);
+  } else {
+    printLauncherPrompt(source, task, run.runId, approvalLink);
+  }
   printRunCommandFooter(P2A_PATHS, {
     sourceArgs: source.sourceArgs,
     runId: run.runId,
@@ -1210,6 +1373,7 @@ export function main(argv = process.argv.slice(2)) {
     }
     if (args.command === 'plan') return runPlan(args);
     if (args.command === 'start') return runStart(args);
+    if (args.command === 'review') return runReview(args);
     if (args.command === 'resume') return runResume(args);
     if (args.command === 'status') return runStatus(args);
     if (args.command === 'finish') return runFinish(args);

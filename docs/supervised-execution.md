@@ -89,6 +89,8 @@ p2a execute start \
 
 5. 독립 monitor 결과를 run 파일 옆의 `.monitor-verdict.json` sidecar에 기록한다. 예를 들어 run ref가 `runs/<iteration-id>/<run-id>.json`이면 verdict 경로는 `runs/<iteration-id>/<run-id>.monitor-verdict.json`이다. 이 파일은 CLI 명령으로 임의 생성하는 대신, foreground 실행 owner가 §6의 표준 JSON shape으로 작성한다.
 
+   `full + current_iteration` task는 `workKind`로 UI 책임을 명시한다. Task/run에 `visualReview.required`가 있으면 `p2a runs revision`으로 application workspace snapshot SHA-256을 계산한 뒤 실제 앱의 screen/state/viewport별 정확한 크기의 PNG와 `p2a.visual_accessibility_report.v1` 보고서를 만들고, 파일 SHA-256·capture metadata·workspace identity/revision과 승인된 experience/prototype 비교 결과를 `.visual-review.json`에 기록한다. Workspace snapshot은 symlink file target의 실제 bytes를 포함하되 제외 디렉터리를 symlink alias로 다시 포함하지 않으며, workspace 밖의 directory symlink는 범위가 불명확하므로 거부한다. Run start는 상태·block metadata를 제외한 immutable task 계약 SHA-256을 고정하고, finish는 sidecar revision을 현재 workspace와 비교해 저장하는 동시에 sidecar 바이트를 `visualReviewEvidenceSha256`으로 run에 봉인한다. Done/run-directory/close-ready는 workspace revision과 이 evidence digest를 모두 다시 검증한다. 이 sidecar는 정보성 style rating과 달리 성공 finish를 차단하는 필수 게이트다. 모든 구현 통합 후 `p2a execute review --artifacts <root> --task <done-visual-task>`로 `runKind: final_visual_review`인 최종 review-only run을 열며, 명령은 canonical workspace, isolation 없음, 변경 파일 없음을 강제한다. Close-ready와 `p2a next`는 이 run의 봉인된 revision 및 evidence digest를 현재 canonical workspace와 비교한다. Review가 failed/blocked로 끝나면 task는 `todo`로 reopen되어 구현 remediation을 거친 뒤 새 final review를 수행한다.
+
 6. 검증과 finish:
 
 ```bash
@@ -131,6 +133,8 @@ dirty, unmerged, failed, blocked task 또는 integration-candidate worktree는 �
 | `.plan2agent/artifacts/<project>/runs/<iterationId>/<runId>.orchestration.json` | 실행 당시 monitor gate snapshot |
 | `.plan2agent/artifacts/<project>/runs/<iterationId>/<runId>.monitor-gate.json` | shared mental model, role assignment, communication log, runtime phase |
 | `.plan2agent/artifacts/<project>/runs/<iterationId>/<runId>.style-verdict.json` | `violationCount > 0`인 style review 근거. 0건·미적용·생략은 run note에 기록하고 파일은 만들지 않음 |
+| `.plan2agent/artifacts/<project>/runs/<iterationId>/<runId>.visual-review.json` | UI task의 실제 렌더링·접근성 증거와 `confirm_ui|block` verdict. `visualReview.required` run의 성공 finish를 차단함 |
+| `.plan2agent/artifacts/<project>/visual-evidence/<iterationId>/<runId>/` | visual review가 참조하는 실제 앱 screenshot과 접근성 보고서. run store 밖에 두어 run-index/migration 계약과 분리함 |
 | `.plan2agent/artifacts/<project>/iterations/<iteration-id>/milestone-reviews/{midpoint,pre_close}.json` | 완료 task의 run evidence를 포함하는 checkpoint별 비차단 통합 리뷰 |
 | `.plan2agent/proposals/*.json` | 실행 회고 기반 개선 후보 |
 | `.plan2agent/proposals/reviews/*.json` | proposal deterministic review |
@@ -138,7 +142,7 @@ dirty, unmerged, failed, blocked task 또는 integration-candidate worktree는 �
 | `.plan2agent/proposals/patch-drafts/*.json` | 적용하지 않는 patch draft |
 | `.plan2agent/proposals/approvals/*.json` | 사람이 승인한 proposal draft와 maintenance task 연결 |
 
-`task-graph.schema.json`과 `run.schema.json`을 불필요하게 키우지 않고, 실행 계획과 runtime 상태는 sidecar로 분리한다.
+Task와 run에는 작은 `visualReview` snapshot만 두고, 화면별 실제 렌더링 결과와 접근성 판정은 sidecar로 분리한다. 일반 task는 이 필드를 갖지 않으므로 기존 실행 계약과 호환된다.
 
 ## 6. Monitor gate와 failure policy
 

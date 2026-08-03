@@ -18,7 +18,8 @@
       "additionalProperties": false,
       "properties": {
         "product": {"type": "object"},
-        "implementation": {"type": "object"}
+        "implementation": {"type": "object"},
+        "visual_experience": {"type": "object"}
       }
     },
     "existing_tasks": {
@@ -35,7 +36,9 @@
             "title": {"type": "string", "minLength": 1},
             "status": {"type": "string", "enum": ["todo", "blocked", "in_progress", "done"]},
             "targetArea": {"type": "string", "minLength": 1},
-            "sourceSpecRefs": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}}
+            "workKind": {"type": "string", "enum": ["ui", "non_ui", "mixed"]},
+            "sourceSpecRefs": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
+            "visualReview": {"type": "object"}
           }
         }},
         "maintenance": {"type": "array", "items": {
@@ -47,7 +50,9 @@
             "title": {"type": "string", "minLength": 1},
             "status": {"type": "string", "enum": ["todo", "blocked", "in_progress", "done"]},
             "targetArea": {"type": "string", "minLength": 1},
-            "sourceSpecRefs": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}}
+            "workKind": {"type": "string", "enum": ["ui", "non_ui", "mixed"]},
+            "sourceSpecRefs": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
+            "visualReview": {"type": "object"}
           }
         }}
       }

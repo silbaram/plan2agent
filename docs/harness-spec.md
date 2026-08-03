@@ -44,8 +44,10 @@ Plan2Agent는 CLI별 구현 차이를 감추기 위해 공통 역할 이름과 C
 | `p2a-requirements` | 한 문장 아이디어를 adaptive interview와 confirmed `intake_json`으로 변환 | read-only, optional web lookup |
 | `p2a-spec-author` | answered intake를 제품 명세와 `spec_json.product`로 변환 | read-only, optional web lookup |
 | `p2a-implementation-planner` | 승인 가능한 제품 명세를 구현 계획과 `spec_json.implementation`으로 변환 | read-only, optional web lookup |
+| `p2a-visual-designer` | screen composition contract에서 offline HTML prototype 후보를 생성 | read-only |
 | `p2a-task-graph` | 승인된 구현 계획을 agent 실행 가능한 `task_graph_json`으로 분해 | read-only |
 | `p2a-quality-reviewer` | 명세, 계획, task graph의 누락, gate 위반, 의존성 오류 검토 | read-only |
+| `p2a-visual-reviewer` | 실제 앱 렌더링을 승인된 experience/prototype과 비교해 UI 완료를 판정 | read-only |
 
 ### Skills
 
@@ -53,6 +55,7 @@ Plan2Agent는 CLI별 구현 차이를 감추기 위해 공통 역할 이름과 C
 | --- | --- | --- | --- |
 | `p2a-intake` | 아이디어를 받아 bounded interview와 Gate A understanding state 생성 | 한 문장 아이디어, optional baseline/resume answers | interview-aware `intake_json` |
 | `p2a-spec` | 답변을 제품/구현 명세로 정리 | answered intake | `spec_json` |
+| `p2a-visual-experience` | 화면 구성과 offline HTML 후보를 만들고 사람 선택을 Gate B에 기록 | `full + current_iteration` Gate B draft | `experience-spec.json`, candidate manifests/files |
 | `p2a-task-breakdown` | 승인된 구현 명세를 task graph로 분해 | approved `spec_json` | `task_graph_json` |
 | `p2a-review` | 산출물을 검토하고 수정 요청 생성 | spec, task graph | `review_json` |
 | `p2a-harness` | 전체 흐름을 orchestration하는 상위 workflow | idea, answers, or existing artifacts | gated state artifacts |
@@ -78,6 +81,7 @@ Codex에서는 메인 오케스트레이터를 사용자 또는 세션 설정의
 | 1. Discovery + Intake | `p2a-intake` | `p2a-requirements` | raw idea, notes, and optional baseline context | interview-aware `intake_json` | Gate A |
 | 2. Product spec | `p2a-spec` | `p2a-spec-author` | intake plus answered decisions | product part of `spec_json` | Gate B |
 | 3. Implementation plan | `p2a-spec` | `p2a-implementation-planner` | product spec draft plus Gate A constraints | implementation part of `spec_json` | Gate B |
+| 3.5 Visual experience (conditional) | `p2a-visual-experience` | `p2a-visual-designer` | `full + current_iteration` Gate B draft | approved experience + offline HTML prototype | Gate B |
 | 4. Task graph | `p2a-task-breakdown` | `p2a-task-graph` | approved `spec_json` | `task_graph_json` | Gate C |
 | 5. Review | `p2a-review` | `p2a-quality-reviewer` | spec and task graph | `review_json` | Gate D |
 
@@ -88,7 +92,7 @@ If a CLI cannot spawn subagents automatically, the active model executes the sam
 Gate A/B/C/D의 상세 통과·차단 규칙은 `p2a-harness` skill이 유일한 정본이다. 정본: [`.agents/skills/p2a-harness/SKILL.md`](../.agents/skills/p2a-harness/SKILL.md#approval-gates).
 
 - **Gate A:** 8개 discovery 영역과 high-impact 질문을 bounded interview로 처분하고 compact 이해 요약을 제시한다. 사용자의 명시적 확인과 `intake.approval_audit` 전에는 Gate B로 넘어가지 않는다.
-- **Gate B:** Spec approval, `approval_audit`, open decision 해소, 모든 `CQ-n` disposition, 필요한 기술 조사 근거가 갖춰져야 task graph로 넘어간다.
+- **Gate B:** Spec approval, `approval_audit`, open decision 해소, 모든 `CQ-n` disposition, 필요한 기술 조사 근거가 갖춰져야 task graph로 넘어간다. `full + current_iteration`이면 사용자가 선택·승인한 hash-bound offline HTML prototype과 experience contract도 필요하다.
 - **Gate C:** Task graph의 dependency, cycle, acceptance criteria, source spec reference를 검증한다.
 - **Gate D:** 정본 review artifact인 `gate-d-review/review.json`의 blocking issue가 없어야 계획이 준비된 상태가 된다.
 
@@ -239,13 +243,13 @@ Gemini target fields use the documented subagent keys `kind`, `tools`, `temperat
 하네스 scaffold는 다음을 만족해야 한다.
 
 - 세 CLI 모두 같은 Plan2Agent role 이름을 가진다.
-- 세 CLI 모두 `p2a-harness`에 해당하는 상위 workflow를 가진다.
+- 세 CLI 모두 `p2a-harness`에 해당하는 상위 workflow와 conditional `p2a-visual-experience` workflow를 가진다.
 - `p2a-harness`는 단계별 subagent mapping, approval gate, resume rule, state passing contract를 명시한다.
 - 세 CLI 모두 task graph 생성 전 사용자 결정이 필요한 항목을 `needs_user_decision`으로 남긴다.
 - 어떤 skill이나 subagent도 v1에서 코드 변경을 지시하지 않는다.
-- `intake_json`, `spec_json`, `task_graph_json`은 schema 파일을 가진다.
+- `intake_json`, `spec_json`, `task_graph_json`, visual experience/prototype/review artifact는 schema 파일을 가진다.
 - task graph는 최소 필드 `id`, `title`, `description`, `dependencies`, `acceptanceCriteria`, `targetArea`, `suggestedAgentPrompt`, `sourceSpecRefs`를 가진다.
-- validation script가 schema subset, dependency id, duplicate id, cycle, unresolved decision gate, `CQ-n` disposition coverage, spec/intake decision traceability를 검사한다.
+- validation script가 schema subset, dependency id, duplicate id, cycle, unresolved decision gate, `CQ-n` disposition coverage, spec/intake decision traceability, visual experience/prototype hash와 UI review coverage를 검사한다.
 - fixture/golden output이 intake blocked, intake answered, approved spec, task graph, review report path를 포함한다.
 - CLI mirror 생성 스크립트가 CLI-중립 canonical `.agents/agents` source에서 Claude/Codex/Gemini target을 재생성한다.
 

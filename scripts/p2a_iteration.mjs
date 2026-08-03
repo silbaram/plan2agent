@@ -32,9 +32,11 @@ import {
   validateApprovalAuditData,
   validateEvalMaintenanceDraftData,
   validateRunIndexData,
+  validateRunsDir,
   validateTaskGraph,
   validateTaskContextData,
   validateTaskGraphData,
+  validateVisualExperience,
   ValidationError,
 } from './validate_artifacts.mjs';
 import {
@@ -73,6 +75,12 @@ import {
   isComposedBaselineReference,
   PRODUCT_FIELDS,
 } from './p2a_spec_model.mjs';
+import { assertFinalVisualReviewRunReady } from './p2a_visual_review_gate.mjs';
+import {
+  compareRunEvidence,
+  taskGraphContextForGraph,
+  taskGraphRefMatchesGraph,
+} from './p2a_run_paths.mjs';
 
 const P2A_PATHS = resolveP2aPaths(import.meta.url);
 const ROOT = P2A_PATHS.projectRoot;
@@ -630,18 +638,58 @@ function artifactAuditEntry(artifactRoot, reference) {
     : { present: false, sha256: null };
 }
 
-function closedIterationArtifactRefs(iterationId) {
+function closedIterationVisualArtifactRefs(iterationId, artifactRoot) {
+  const gateBRoot = path.join(artifactRoot, 'iterations', iterationId, 'gate-b-spec');
+  const refs = [];
+  const experiencePath = path.join(gateBRoot, 'experience-spec.json');
+  if (existsSync(experiencePath) && lstatSync(experiencePath).isFile()) {
+    refs.push(normalizeDisplayPath(path.relative(artifactRoot, experiencePath)));
+  }
+  const visualDesignRoot = path.join(gateBRoot, 'visual-design');
+  if (!existsSync(visualDesignRoot)) return refs;
+  if (!lstatSync(visualDesignRoot).isDirectory()) {
+    throw new ValidationError(`closed iteration visual-design path must be a directory: ${visualDesignRoot}`);
+  }
+  const directories = [visualDesignRoot];
+  while (directories.length) {
+    const directory = directories.shift();
+    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+      const entryPath = path.join(directory, entry.name);
+      if (entry.isDirectory()) directories.push(entryPath);
+      else if (entry.isFile()) refs.push(normalizeDisplayPath(path.relative(artifactRoot, entryPath)));
+      else {
+        throw new ValidationError(
+          `closed iteration visual-design contains unsupported entry: ${entryPath}`,
+        );
+      }
+    }
+  }
+  return refs.sort();
+}
+
+function closedIterationArtifactRefs(iterationId, artifactRoot) {
+  const experienceRef = `iterations/${iterationId}/gate-b-spec/experience-spec.json`;
+  const visualRefs = closedIterationVisualArtifactRefs(iterationId, artifactRoot)
+    .filter((reference) => reference !== experienceRef);
   return [
     canonicalComposedBaselineSnapshotRef(iterationId),
     `iterations/${iterationId}/gate-a-intake/intake.json`,
     `iterations/${iterationId}/gate-a-intake/intake.md`,
     `iterations/${iterationId}/gate-b-spec/product-spec.md`,
     `iterations/${iterationId}/gate-b-spec/implementation-plan.md`,
+    experienceRef,
     sourceSpecRef(iterationId),
     taskGraphRef(iterationId),
     `iterations/${iterationId}/gate-d-review/review-report.md`,
     reviewRef(iterationId),
+    ...visualRefs,
   ];
+}
+
+function isClosedIterationVisualArtifactRef(reference, iterationId) {
+  const gateBPrefix = `iterations/${iterationId}/gate-b-spec/`;
+  return reference === `${gateBPrefix}experience-spec.json`
+    || reference.startsWith(`${gateBPrefix}visual-design/`);
 }
 
 function artifactHashes(artifactRoot, references) {
@@ -1085,7 +1133,7 @@ function closeRecord(iterationId, closedAt, taskGraph, effectiveSpecRef, artifac
     review_ref: reviewRef(iterationId),
     task_count: taskGraph.tasks?.length ?? 0,
     task_status_counts: countStatuses(taskGraph.tasks ?? []),
-    artifact_hashes: artifactHashes(artifactRoot, closedIterationArtifactRefs(iterationId)),
+    artifact_hashes: artifactHashes(artifactRoot, closedIterationArtifactRefs(iterationId, artifactRoot)),
   };
 }
 
@@ -1889,6 +1937,32 @@ function applyConfirmedIntakeToSpec(spec, intake) {
   return next;
 }
 
+function inferredVisualExperience(idea, intake) {
+  const signals = JSON.stringify({
+    idea,
+    summary: intake.summary,
+    known_facts: intake.known_facts,
+    answers: [
+      ...(intake.clarifying_questions ?? []).map((item) => item.answer),
+      ...(intake.needs_user_decision ?? []).map((item) => item.answer),
+    ],
+  });
+  const hasVisualInterface = /\b(?:ui|ux|front[ -]?end|web[ -]?app|mobile[ -]?app|dashboard|screen|page|visual interface)\b|화면|프론트엔드|웹앱|모바일 앱|대시보드|페이지/i.test(signals);
+  return hasVisualInterface
+    ? {
+        has_visual_interface: true,
+        design_scope: 'minimal',
+        design_timing: 'current_iteration',
+        rationale: 'The deterministic draft detected a visual-interface signal and defaults to function-first minimal UI; Gate B may explicitly select reuse, full, or deferral.',
+      }
+    : {
+        has_visual_interface: false,
+        design_scope: 'none',
+        design_timing: 'not_applicable',
+        rationale: 'The deterministic draft found no explicit visual-interface signal; Gate B must change this classification if the iteration adds a rendered screen.',
+      };
+}
+
 function buildDeltaSpec({ projectId, iterationId, idea, baselineSpec, baselineSpecRef, intake }) {
   const product = baselineSpec.product;
   const implementation = baselineSpec.implementation;
@@ -1906,6 +1980,7 @@ function buildDeltaSpec({ projectId, iterationId, idea, baselineSpec, baselineSp
     source_intake: '../gate-a-intake/intake.json',
     product: cloneJson(product),
     implementation: cloneJson(implementation),
+    visual_experience: inferredVisualExperience(idea, intake),
     clarifying_question_disposition: intakeQuestionDispositions(
       intake,
       'The confirmed Gate A delta intake carries this question into Gate B as an explicit assumption.',
@@ -1944,6 +2019,7 @@ function buildInitialSpec({ projectId, iterationId, idea, intake }) {
     source_intake: '../gate-a-intake/intake.json',
     product,
     implementation,
+    visual_experience: inferredVisualExperience(idea, intake),
     clarifying_question_disposition: intakeQuestionDispositions(
       intake,
       'Initial Gate B draft keeps this question as an explicit implementation assumption unless the user overrides it before approval.',
@@ -2145,6 +2221,19 @@ function deltaChangeMarkdown(spec, baselineSpec, section) {
   return markdownList(changeSummaryLines({ changes }));
 }
 
+function visualExperienceMarkdown(spec) {
+  const visual = spec.visual_experience;
+  if (!visual) return '- Not classified (legacy spec).';
+  return [
+    `- Visual interface: ${visual.has_visual_interface ? 'yes' : 'no'}`,
+    `- Scope: ${visual.design_scope}`,
+    `- Timing: ${visual.design_timing}`,
+    `- Rationale: ${visual.rationale}`,
+    ...(visual.experience_spec_ref ? [`- Experience spec: ${visual.experience_spec_ref}`] : []),
+    ...(visual.design_system_refs?.length ? [`- Design system: ${visual.design_system_refs.join(', ')}`] : []),
+  ].join('\n');
+}
+
 function renderProductSpecMarkdown(spec, { iterationId, idea, baselineSpecRef, baselineSpec = null }) {
   if (baselineSpec) {
     return `# Product Spec\n\n` +
@@ -2154,6 +2243,7 @@ function renderProductSpecMarkdown(spec, { iterationId, idea, baselineSpecRef, b
       `Approval: ${spec.approval}\n\n` +
       `## Delta\n\n${idea}\n\n` +
       `## Changed Product Fields\n\n${deltaChangeMarkdown(spec, baselineSpec, 'product')}\n\n` +
+      `## Visual Experience\n\n${visualExperienceMarkdown(spec)}\n\n` +
       `## Baseline-Preserved Fields\n\n` +
       `Unchanged baseline values are intentionally omitted from this review view. ` +
       `The complete backward-compatible specification remains in \`spec.json\`.\n`;
@@ -2170,6 +2260,7 @@ function renderProductSpecMarkdown(spec, { iterationId, idea, baselineSpecRef, b
     `## Non-Goals\n\n${markdownList(spec.product.non_goals)}\n\n` +
     `## Core Flows\n\n${markdownList(spec.product.core_flows)}\n\n` +
     `## Interfaces\n\n${markdownList(spec.product.screens_or_interfaces)}\n\n` +
+    `## Visual Experience\n\n${visualExperienceMarkdown(spec)}\n\n` +
     `## Success Criteria\n\n${markdownList(spec.product.success_criteria)}\n`;
 }
 
@@ -2574,6 +2665,24 @@ function collectDetailedSpecChanges(baselineSpec, activeSpec) {
       'clarifying_question_disposition',
     ));
   }
+  const activeVisualExperience = activeSpec.visual_experience ?? null;
+  const baselineVisualExperience = baselineSpec?.visual_experience ?? null;
+  const implementsCurrentVisualExperience = (
+    activeVisualExperience?.has_visual_interface === true
+    && ['reuse', 'full'].includes(activeVisualExperience.design_scope)
+    && activeVisualExperience.design_timing === 'current_iteration'
+  );
+  if (
+    implementsCurrentVisualExperience
+    && !jsonEqual(baselineVisualExperience, activeVisualExperience)
+  ) {
+    changes.push(detailedSpecChange(
+      { spec: { visual_experience: baselineVisualExperience } },
+      { spec: { visual_experience: activeVisualExperience } },
+      'spec',
+      'visual_experience',
+    ));
+  }
   return changes;
 }
 
@@ -2585,6 +2694,7 @@ function keywordHits(text, keywords) {
 function semanticAreaScore(area, change) {
   if (area.id === 'verification' && change.specRef === 'implementation.verification') return 100;
   if (area.id === 'requirements' && change.specRef === 'clarifying_question_disposition') return 100;
+  if (area.id === 'ui' && change.specRef === 'visual_experience') return 100;
   const corpus = [
     change.section,
     change.field,
@@ -2908,17 +3018,105 @@ function semanticTasksFromGroups({ projectId, iterationId, groups, baselineRef, 
   });
 }
 
-function taskGraphFromSpecChanges({ projectId, iterationId, activeSpec, baselineSpec, baselineRef, existingTaskGraph = null, historicalTasks = [] }) {
+function expandVisualSemanticGroups(groups, visualReview) {
+  if (!visualReview || visualReview.screenStates.length < 2) return groups;
+  const uiGroupIndex = groups.findIndex((group) => group.areaId === 'ui');
+  if (uiGroupIndex < 0) return groups;
+  const uiGroup = groups[uiGroupIndex];
+  return groups.flatMap((group, index) => (
+    index === uiGroupIndex
+      ? visualReview.screenStates.map((screenState) => ({
+          ...group,
+          label: `${uiGroup.label} (${screenState.screenId})`,
+        }))
+      : [group]
+  ));
+}
+
+function deterministicVisualReviewContract(activeSpec, specPath, artifactRoot) {
+  const visual = activeSpec.visual_experience;
+  if (
+    visual?.design_scope !== 'full'
+    || visual.design_timing !== 'current_iteration'
+    || !visual.experience_spec_ref
+  ) return null;
+  const experiencePath = path.resolve(path.dirname(specPath), visual.experience_spec_ref);
+  const experience = validateVisualExperience(experiencePath, {
+    artifactRoot,
+    expected: { project_id: activeSpec.project_id, mode: 'full' },
+  });
+  const selected = experience.visual_direction.candidates.find(
+    (candidate) => candidate.id === experience.visual_direction.selected_candidate,
+  );
+  if (!selected) {
+    throw new ValidationError('full current-iteration visual experience must select a prototype before diff task generation');
+  }
+  return {
+    required: true,
+    experienceSpecRef: visual.experience_spec_ref,
+    experienceSpecSha256: visual.experience_spec_sha256,
+    prototypeManifestRef: selected.prototype_manifest_ref,
+    prototypeManifestSha256: selected.prototype_manifest_sha256,
+    screenStates: experience.screens.map((screen) => ({
+      screenId: screen.id,
+      states: cloneJson(screen.states),
+    })),
+    viewports: cloneJson(experience.validation.viewports),
+    accessibilityStandard: experience.validation.accessibility_standard,
+  };
+}
+
+function applyDeterministicVisualTaskContract(tasks, visualReview) {
+  if (!visualReview) return tasks;
+  const uiOwnerIndexes = tasks
+    .map((task, index) => ({ task, index }))
+    .filter(({ task }) => task.targetArea === 'ui')
+    .map(({ index }) => index);
+  const fallbackOwnerIndex = tasks.findIndex((task) => task.targetArea !== 'verification');
+  const ownerIndexes = uiOwnerIndexes.length ? uiOwnerIndexes : [fallbackOwnerIndex];
+  if (ownerIndexes[0] < 0) {
+    throw new ValidationError('full current-iteration visual experience requires at least one implementation task');
+  }
+  if (ownerIndexes.length !== visualReview.screenStates.length && ownerIndexes.length !== 1) {
+    throw new ValidationError(
+      'visual task generation must assign either one owner or one owner per approved screen',
+    );
+  }
+  const reviewByOwnerIndex = new Map(ownerIndexes.map((ownerIndex, ownerOrder) => [
+    ownerIndex,
+    {
+      ...cloneJson(visualReview),
+      screenStates: ownerIndexes.length === 1
+        ? cloneJson(visualReview.screenStates)
+        : [cloneJson(visualReview.screenStates[ownerOrder])],
+    },
+  ]));
+  return tasks.map((task, index) => {
+    const assignedReview = reviewByOwnerIndex.get(index);
+    return {
+      ...task,
+      workKind: assignedReview
+        ? (task.targetArea === 'ui' ? 'ui' : 'mixed')
+        : 'non_ui',
+      ...(assignedReview ? { visualReview: assignedReview } : {}),
+    };
+  });
+}
+
+export function taskGraphFromSpecChanges({ projectId, iterationId, activeSpec, baselineSpec, baselineRef, existingTaskGraph = null, historicalTasks = [], visualReview = null }) {
   const detailedChanges = collectDetailedSpecChanges(baselineSpec, activeSpec);
-  const groups = addSyntheticVerificationGroup(semanticGroupsFromChanges(activeSpec, detailedChanges));
-  const tasks = semanticTasksFromGroups({
+  const groups = addSyntheticVerificationGroup(expandVisualSemanticGroups(
+    semanticGroupsFromChanges(activeSpec, detailedChanges),
+    visualReview,
+  ));
+  const tasks = applyDeterministicVisualTaskContract(semanticTasksFromGroups({
     projectId,
     iterationId,
     groups,
     baselineRef,
     existingTaskGraph,
     historicalTasks,
-  });
+  }), visualReview);
   return {
     schema_version: 'p2a.task_graph.v1',
     projectId,
@@ -3127,13 +3325,31 @@ function printPlan(plan, dryRun) {
   }
 }
 
-function rebaseMovedSpecSourceIntake(source) {
+function rebaseMovedGateBApprovalReference(reference, iterationId) {
+  if (typeof reference !== 'string') return reference;
+  const normalized = reference.replaceAll('\\', '/');
+  const marker = 'gate-b-spec/';
+  const markerIndex = normalized.lastIndexOf(marker);
+  if (markerIndex === -1) return reference;
+  const prefix = normalized.slice(0, markerIndex);
+  if (/(?:^|\/)iterations\/[^/]+\/$/.test(prefix)) return reference;
+  return prefix + 'iterations/' + iterationId + '/' + normalized.slice(markerIndex);
+}
+
+function rebaseMovedSpecReferences(source, iterationId) {
   const sourceText = readFileSync(source, 'utf8');
-  const pattern = /(\"source_intake\"\s*:\s*)(\"(?:[^\"\\]|\\.)*\")/;
-  const match = sourceText.match(pattern);
-  if (!match) throw new Error(`could not find source_intake in ${source}`);
-  if (JSON.parse(match[2]) === INIT_REBASED_SOURCE_INTAKE) return sourceText;
-  const rewritten = sourceText.replace(pattern, `$1${JSON.stringify(INIT_REBASED_SOURCE_INTAKE)}`);
+  const spec = JSON.parse(sourceText);
+  if (typeof spec.source_intake !== 'string') {
+    throw new Error('could not find source_intake in ' + source);
+  }
+  spec.source_intake = INIT_REBASED_SOURCE_INTAKE;
+  if (Array.isArray(spec.approval_audit?.approved_artifacts)) {
+    spec.approval_audit.approved_artifacts = spec.approval_audit.approved_artifacts.map(
+      (reference) => rebaseMovedGateBApprovalReference(reference, iterationId),
+    );
+  }
+  const rewritten = JSON.stringify(spec, null, 2) + '\n';
+  if (rewritten === sourceText) return sourceText;
   atomicWriteText(source, rewritten);
   return sourceText;
 }
@@ -3169,7 +3385,7 @@ function applyPlan(paths, iterationId, plan) {
       renameSync(move.from, move.to);
       moved.push(move);
     }
-    originalMovedSpec = rebaseMovedSpecSourceIntake(paths.movedSpecJson);
+    originalMovedSpec = rebaseMovedSpecReferences(paths.movedSpecJson, iterationId);
     originalMovedTaskGraph = rebaseMovedTaskGraphSourceSpec(paths.movedTaskGraph);
     const movedFacts = validateMoved(paths);
     const projectId = projectIdFrom(paths.artifactRoot, movedFacts.spec, movedFacts.taskGraph);
@@ -3272,6 +3488,53 @@ function assertCloseReadyTasks(taskGraph) {
     const summary = incomplete.map((task) => `${task.id}:${task.status}`).join(', ');
     throw new ValidationError(`close-ready validation requires all tasks done; incomplete tasks: ${summary}`);
   }
+}
+
+export function validateCloseReadyVisualEvidence({
+  artifactRoot,
+  activeIteration,
+  taskGraphPath,
+  taskGraph,
+}) {
+  const visualTasks = taskGraph.tasks.filter((task) => task.visualReview?.required);
+  if (!visualTasks.length) return 0;
+  const runsDir = path.join(path.resolve(artifactRoot), 'runs');
+  validateRunsDir(runsDir);
+  const expectedSourceLayout = taskGraphContextForGraph(taskGraphPath).sourceLayout;
+  const currentRuns = loadRunsForArtifactRoot(artifactRoot)
+    .filter((run) => (
+      run.iterationId === activeIteration
+      && run.sourceLayout === expectedSourceLayout
+      && taskGraphRefMatchesGraph(run.taskGraphRef, taskGraphPath, artifactRoot)
+    ));
+  const activeRuns = currentRuns.filter((run) => run.status === 'started');
+  if (activeRuns.length) {
+    throw new ValidationError(
+      `close-ready visual validation requires no active run(s): ${activeRuns.map((run) => run.runId).join(', ')}`,
+    );
+  }
+  for (const task of visualTasks) {
+    const reviewHint = `Run p2a execute review --artifacts ${artifactRoot} --task ${task.id} after canonical integration.`;
+    const taskRuns = currentRuns
+      .map((run, runOrder) => ({ run, runOrder }))
+      .filter(({ run }) => run.taskId === task.id)
+      .sort(compareRunEvidence);
+    const latestRun = taskRuns[0]?.run;
+    try {
+      assertFinalVisualReviewRunReady({
+        runsDir,
+        run: latestRun,
+        taskId: task.id,
+        artifactRoot,
+        graphPath: taskGraphPath,
+      });
+    } catch (error) {
+      throw new ValidationError(
+        `close-ready visual validation failed: ${error.message}. ${reviewHint}`,
+      );
+    }
+  }
+  return visualTasks.length;
 }
 
 function loadReadyIterationFacts(artifactRoot) {
@@ -3453,7 +3716,9 @@ function summarizeTask(task) {
     title: task.title,
     status: task.status,
     targetArea: task.targetArea,
+    ...(task.workKind ? { workKind: task.workKind } : {}),
     sourceSpecRefs: task.sourceSpecRefs,
+    ...(task.visualReview ? { visualReview: cloneJson(task.visualReview) } : {}),
   };
 }
 
@@ -3463,10 +3728,15 @@ function summarizeTaskGraphIfPresent(graphPath) {
 }
 
 function loadContextEffectiveSpec(state) {
+  const activeSpec = existsSync(state.specPath) ? loadJson(state.specPath) : null;
+  const visualExperience = activeSpec?.visual_experience
+    ? { visual_experience: cloneJson(activeSpec.visual_experience) }
+    : {};
   if (state.currentSpec.effective_product && state.currentSpec.effective_implementation) {
     return {
       product: cloneJson(state.currentSpec.effective_product),
       implementation: cloneJson(state.currentSpec.effective_implementation),
+      ...visualExperience,
     };
   }
   const fallbackPath = existsSync(state.effectiveSpecPath) ? state.effectiveSpecPath : state.specPath;
@@ -3474,6 +3744,7 @@ function loadContextEffectiveSpec(state) {
   return {
     product: cloneJson(data.product ?? {}),
     implementation: cloneJson(data.implementation ?? {}),
+    ...(data.visual_experience ? { visual_experience: cloneJson(data.visual_experience) } : visualExperience),
   };
 }
 
@@ -3941,6 +4212,26 @@ function auditArchivedIterations(currentSpec, artifactRoot) {
     if (!closed.artifact_hashes || typeof closed.artifact_hashes !== 'object' || Array.isArray(closed.artifact_hashes)) {
       throw new ValidationError(`closed iteration ${closed.iteration_id} is missing artifact_hashes; re-close or migrate audit metadata`);
     }
+    const expectedVisualRefs = new Set(Object.entries(closed.artifact_hashes)
+      .filter(([reference, audit]) => (
+        isClosedIterationVisualArtifactRef(reference.replaceAll('\\', '/'), closed.iteration_id)
+        && (typeof audit === 'string' || audit?.present === true)
+      ))
+      .map(([reference]) => reference.replaceAll('\\', '/')));
+    const currentVisualRefs = new Set(
+      closedIterationVisualArtifactRefs(closed.iteration_id, resolvedArtifactRoot),
+    );
+    const addedVisualRefs = [...currentVisualRefs].filter((reference) => !expectedVisualRefs.has(reference));
+    const removedVisualRefs = [...expectedVisualRefs].filter((reference) => !currentVisualRefs.has(reference));
+    if (addedVisualRefs.length || removedVisualRefs.length) {
+      const details = [
+        ...(addedVisualRefs.length ? [`added ${addedVisualRefs.join(', ')}`] : []),
+        ...(removedVisualRefs.length ? [`removed ${removedVisualRefs.join(', ')}`] : []),
+      ].join('; ');
+      throw new ValidationError(
+        `closed iteration ${closed.iteration_id} visual artifact set changed after close: ${details}`,
+      );
+    }
     for (const [reference, expectedAudit] of Object.entries(closed.artifact_hashes)) {
       const normalizedReference = typeof reference === 'string'
         ? reference.replaceAll('\\', '/')
@@ -4023,7 +4314,15 @@ function validateIteration(args) {
   validatePlanningMemoryEvidence(planningMemory, spec, state.specPath, state.artifactRoot);
   const taskGraph = validateTaskGraph(state.taskGraphPath, state.specPath);
   validateReviewPass(state.reviewPath);
-  if (args.requireCloseReady) assertCloseReadyTasks(taskGraph);
+  if (args.requireCloseReady) {
+    assertCloseReadyTasks(taskGraph);
+    validateCloseReadyVisualEvidence({
+      artifactRoot: state.artifactRoot,
+      activeIteration: state.activeIteration,
+      taskGraphPath: state.taskGraphPath,
+      taskGraph,
+    });
+  }
   const maintenance = validateMaintenanceTaskGraphIfPresent(state);
   const archivedAuditCount = args.skipArchiveAudit ? null : auditArchivedIterations(state.currentSpec, state.artifactRoot);
 
@@ -4046,6 +4345,12 @@ function closeLocked(args, artifactRoot) {
 
   const facts = loadReadyIterationFacts(artifactRoot);
   assertCloseReadyTasks(facts.taskGraph);
+  validateCloseReadyVisualEvidence({
+    artifactRoot,
+    activeIteration: facts.state.activeIteration,
+    taskGraphPath: facts.state.taskGraphPath,
+    taskGraph: facts.taskGraph,
+  });
   const activeMetadata = loadOptionalIterationMetadata(artifactRoot, facts.state.activeIteration);
   const planningMemory = activeMetadata?.planning_memory ?? null;
   const planningMemoryErrors = planningMemoryValidationErrors(planningMemory, artifactRoot, facts.state.projectId, activeMetadata?.idea);
@@ -4157,6 +4462,7 @@ function close(args) {
     [
       artifactStateLockDir(artifactRoot),
       path.dirname(initialState.taskGraphPath),
+      path.join(artifactRoot, 'runs'),
     ],
     () => {
       const lockedState = resolveIterationState(artifactRoot, { requireReady: false });
@@ -4643,6 +4949,7 @@ function diffTasksLocked(args) {
     baselineRef,
     existingTaskGraph,
     historicalTasks: historicalCompletedTasks(state),
+    visualReview: deterministicVisualReviewContract(activeSpec, state.specPath, state.artifactRoot),
   });
   const draft = {
     ...graph,

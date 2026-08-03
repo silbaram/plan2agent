@@ -23,6 +23,8 @@ import process from 'node:process';
 import { Readable } from 'node:stream';
 import {
   loadJson,
+  milestoneRunSnapshotSha256,
+  milestoneSnapshotSha256,
   validateArtifactRoot,
   validateApprovalAuditData,
   validateHandoffReadyArtifactRoot,
@@ -50,7 +52,7 @@ import {
   P2A_SCRIPTS_DIR,
   resolveP2aPaths,
 } from './p2a_paths.mjs';
-import { artifactRunRef, legacyRunRef } from './p2a_run_paths.mjs';
+import { artifactRunRef, legacyRunRef, runSidecarRef } from './p2a_run_paths.mjs';
 import { shellQuote } from './p2a_run_commands.mjs';
 import {
   buildProjectConfig,
@@ -467,6 +469,12 @@ function sha256Value(value) {
   return createHash('sha256').update(content).digest('hex');
 }
 
+function sameFileContent(left, right) {
+  const leftContent = Buffer.isBuffer(left) ? left : Buffer.from(String(left));
+  const rightContent = Buffer.isBuffer(right) ? right : Buffer.from(String(right));
+  return leftContent.equals(rightContent);
+}
+
 function normalizeManagedFileRecords(records) {
   const recordsByPath = new Map();
   for (const record of Array.isArray(records) ? records : []) {
@@ -586,21 +594,98 @@ function pushFeatureRadarPreflightIfExists(plan, artifactsRoot, targetRoot, proj
   return copied;
 }
 
+function resolveVisualBundleReference(reference, sourcePath, artifactsRoot, label) {
+  const candidates = path.isAbsolute(reference)
+    ? [reference]
+    : [
+        path.resolve(path.dirname(sourcePath), reference),
+        path.resolve(artifactsRoot, reference),
+      ];
+  const resolved = candidates.find((candidate) => existsSync(candidate) && lstatSync(candidate).isFile());
+  if (!resolved) throw new ValidationError(`${label} cannot be resolved: ${JSON.stringify(reference)}`);
+  const realRoot = realpathSync(artifactsRoot);
+  const realResolved = realpathSync(resolved);
+  const relative = path.relative(realRoot, realResolved);
+  if (!relative || relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+    throw new ValidationError(`${label} resolves outside the artifact root`);
+  }
+  return resolved;
+}
+
+function pushVisualExperienceBundleIfExists(plan, specPath, artifactsRoot, targetRoot, projectId) {
+  const spec = loadJson(specPath);
+  const reference = spec.visual_experience?.experience_spec_ref;
+  if (!reference) return [];
+  const experiencePath = resolveVisualBundleReference(
+    reference,
+    specPath,
+    artifactsRoot,
+    'visual experience reference',
+  );
+  const sourceGateB = path.dirname(specPath);
+  const files = new Set([experiencePath]);
+  const experience = loadJson(experiencePath);
+  for (const candidate of experience.visual_direction?.candidates ?? []) {
+    const manifestPath = resolveVisualBundleReference(
+      candidate.prototype_manifest_ref,
+      experiencePath,
+      artifactsRoot,
+      `${candidate.id} prototype manifest`,
+    );
+    files.add(manifestPath);
+    const manifest = loadJson(manifestPath);
+    for (const entry of manifest.files ?? []) {
+      const filePath = path.resolve(path.dirname(manifestPath), entry.path);
+      assertFile(filePath, `${candidate.id} prototype file ${entry.path}`);
+      files.add(filePath);
+    }
+  }
+  const copied = [];
+  for (const sourcePath of [...files].sort()) {
+    const relative = path.relative(sourceGateB, sourcePath);
+    if (!relative || relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+      throw new ValidationError(`visual experience artifact must stay under gate-b-spec: ${sourcePath}`);
+    }
+    const targetRelative = path.join(targetArtifactDir(projectId), 'gate-b-spec', relative);
+    pushArtifact(plan, sourcePath, targetRoot, targetRelative);
+    copied.push(normalizePath(targetRelative));
+  }
+  return copied;
+}
+
+class NonPortableArtifactReferenceError extends ValidationError {}
+
 function resolveMilestoneBundleReference(artifactsRoot, reference, label, baseDir = artifactsRoot) {
-  if (typeof reference !== 'string' || !reference.trim() || path.isAbsolute(reference)) {
-    throw new ValidationError(`${label} must be a non-empty artifact-root-relative path`);
+  if (typeof reference !== 'string' || !reference.trim()) {
+    throw new ValidationError(`${label} must be a non-empty path inside the artifact root`);
   }
-  const sourcePath = path.resolve(baseDir, reference);
-  const relativePath = path.relative(path.resolve(artifactsRoot), sourcePath);
-  if (!relativePath || relativePath.startsWith('..') || path.isAbsolute(relativePath)) {
-    throw new ValidationError(`${label} escapes the artifact root: ${JSON.stringify(reference)}`);
-  }
+  const sourcePath = path.isAbsolute(reference)
+    ? path.resolve(reference)
+    : path.resolve(baseDir, reference);
   assertFile(sourcePath, label);
-  const realRelativePath = path.relative(realpathSync(artifactsRoot), realpathSync(sourcePath));
-  if (!realRelativePath || realRelativePath.startsWith('..') || path.isAbsolute(realRelativePath)) {
-    throw new ValidationError(`${label} resolves outside the artifact root: ${JSON.stringify(reference)}`);
+  const relativePath = path.relative(realpathSync(artifactsRoot), realpathSync(sourcePath));
+  if (!relativePath || relativePath.startsWith('..') || path.isAbsolute(relativePath)) {
+    throw new NonPortableArtifactReferenceError(
+      `${label} resolves outside the artifact root: ${JSON.stringify(reference)}`,
+    );
   }
   return { sourcePath, relativePath: normalizePath(relativePath) };
+}
+
+function portableVisualEvidenceTarget(reference, label) {
+  if (typeof reference !== 'string' || !reference.trim()) {
+    throw new ValidationError(`${label} must be a non-empty relative path`);
+  }
+  const normalized = normalizePath(reference.trim()).replace(/^\.\//, '');
+  if (
+    path.isAbsolute(normalized)
+    || normalized === '..'
+    || normalized.startsWith('../')
+    || normalized.split('/').includes('..')
+  ) {
+    throw new ValidationError(`${label} must stay inside the artifact root`);
+  }
+  return normalized;
 }
 
 function projectRelativeBundleCandidate(baseDir, reference) {
@@ -628,28 +713,31 @@ function resolveSpecSourceIntakeBundleReference(
   label,
   specDir,
 ) {
-  if (typeof reference !== 'string' || !reference.trim() || path.isAbsolute(reference)) {
-    throw new ValidationError(`${label} must be a non-empty relative path`);
+  if (typeof reference !== 'string' || !reference.trim()) {
+    throw new ValidationError(`${label} must be a non-empty path`);
   }
   const root = path.resolve(artifactsRoot);
-  const candidates = [
-    path.resolve(specDir, reference),
-    path.resolve(root, reference),
-    projectRelativeBundleCandidate(specDir, reference),
-  ].filter(Boolean);
+  const candidates = path.isAbsolute(reference)
+    ? [path.resolve(reference)]
+    : [
+        path.resolve(specDir, reference),
+        path.resolve(root, reference),
+        projectRelativeBundleCandidate(specDir, reference),
+      ].filter(Boolean);
   const seen = new Set();
+  let foundExternalReference = false;
   for (const sourcePath of candidates) {
     const normalizedSource = path.resolve(sourcePath);
     if (seen.has(normalizedSource)) continue;
     seen.add(normalizedSource);
+    if (!existsSync(normalizedSource) || !lstatSync(normalizedSource).isFile()) continue;
     const relativePath = path.relative(root, normalizedSource);
     if (
       !relativePath
       || relativePath.startsWith('..')
       || path.isAbsolute(relativePath)
-      || !existsSync(normalizedSource)
-      || !lstatSync(normalizedSource).isFile()
     ) {
+      foundExternalReference = true;
       continue;
     }
     const realRelativePath = path.relative(realpathSync(root), realpathSync(normalizedSource));
@@ -658,12 +746,18 @@ function resolveSpecSourceIntakeBundleReference(
       || realRelativePath.startsWith('..')
       || path.isAbsolute(realRelativePath)
     ) {
+      foundExternalReference = true;
       continue;
     }
     return {
       sourcePath: normalizedSource,
-      relativePath: normalizePath(relativePath),
+      relativePath: normalizePath(realRelativePath),
     };
+  }
+  if (foundExternalReference) {
+    throw new NonPortableArtifactReferenceError(
+      `${label} resolves outside the artifact root: ${JSON.stringify(reference)}`,
+    );
   }
   throw new ValidationError(
     `${label} cannot be resolved inside the artifact root: ${JSON.stringify(reference)}`,
@@ -673,7 +767,7 @@ function resolveSpecSourceIntakeBundleReference(
 function appendCurrentSpecSourceReferences(
   references,
   currentSpec,
-  artifactsRoot,
+  sourceArtifactRoot,
   label,
 ) {
   for (const [sourceIndex, sourceSpec] of (currentSpec.source_specs ?? []).entries()) {
@@ -681,7 +775,7 @@ function appendCurrentSpecSourceReferences(
     references.push({
       label: `${label}.source_specs[${sourceIndex}].spec_ref`,
       reference: sourceSpec.spec_ref,
-      baseDir: artifactsRoot,
+      baseDir: sourceArtifactRoot,
     });
     references.push(
       {
@@ -692,7 +786,7 @@ function appendCurrentSpecSourceReferences(
           'gate-c-task-graph',
           'task-graph.json',
         )),
-        baseDir: artifactsRoot,
+        baseDir: sourceArtifactRoot,
       },
       {
         label: `${label}.source_specs[${sourceIndex}] review`,
@@ -702,7 +796,7 @@ function appendCurrentSpecSourceReferences(
           'gate-d-review',
           'review.json',
         )),
-        baseDir: artifactsRoot,
+        baseDir: sourceArtifactRoot,
       },
     );
     const metadataRef = normalizePath(path.join(
@@ -710,35 +804,64 @@ function appendCurrentSpecSourceReferences(
       sourceSpec.iteration_id,
       'iteration.json',
     ));
-    const metadataPath = path.join(artifactsRoot, metadataRef);
+    const metadataPath = path.join(sourceArtifactRoot, metadataRef);
     if (existsSync(metadataPath) && lstatSync(metadataPath).isFile()) {
       references.push({
         label: `${label}.source_specs[${sourceIndex}] iteration metadata`,
         reference: metadataRef,
-        baseDir: artifactsRoot,
+        baseDir: sourceArtifactRoot,
+      });
+    }
+  }
+  for (const [closedIndex, closed] of (currentSpec.closed_iterations ?? []).entries()) {
+    for (const [reference, audit] of Object.entries(closed?.artifact_hashes ?? {})) {
+      if (typeof audit !== 'string' && audit?.present !== true) continue;
+      references.push({
+        label: `${label}.closed_iterations[${closedIndex}].artifact_hashes[${JSON.stringify(reference)}]`,
+        reference,
+        baseDir: sourceArtifactRoot,
+        inspectJson: false,
       });
     }
   }
 }
 
-function pushPortableArtifactReferenceBundle(
-  plan,
-  references,
-  artifactsRoot,
-  targetRoot,
-  projectId,
-) {
-  const plannedByTarget = new Map(
-    plan.map((item) => [normalizePath(item.targetRelative), item]),
-  );
-  const visitedSources = new Set();
-  for (let index = 0; index < references.length; index += 1) {
+function inferBundleArtifactRootFromIntakePath(intakePath, fallbackRoot) {
+  const resolvedIntakePath = path.resolve(intakePath);
+  const gateADir = path.dirname(resolvedIntakePath);
+  if (path.basename(gateADir) === 'gate-a-intake') {
+    const gateContainer = path.dirname(gateADir);
+    const gateContainerParent = path.dirname(gateContainer);
+    return path.basename(gateContainerParent) === 'iterations'
+      ? path.dirname(gateContainerParent)
+      : gateContainer;
+  }
+  let current = path.dirname(resolvedIntakePath);
+  const outerRoot = path.resolve(fallbackRoot);
+  while (pathIsAtOrUnder(current, outerRoot)) {
+    const currentSpecPath = path.join(current, 'current-spec.json');
+    if (existsSync(currentSpecPath) && lstatSync(currentSpecPath).isFile()) return current;
+    if (current === outerRoot) break;
+    current = path.dirname(current);
+  }
+  return outerRoot;
+}
+
+function resolvePortableArtifactReferenceBundle(references, artifactsRoot) {
+  const pendingReferences = [...references];
+  const resolvedFiles = [];
+  const copiedSources = new Map();
+  const inspectedJsonSources = new Set();
+  for (let index = 0; index < pendingReferences.length; index += 1) {
     const {
       label,
       reference,
       baseDir,
       referenceKind = 'artifact-root',
-    } = references[index];
+      inspectJson = true,
+      sourceArtifactRoot = artifactsRoot,
+      targetRelativePath = null,
+    } = pendingReferences[index];
     const resolved = referenceKind === 'spec-source-intake'
       ? resolveSpecSourceIntakeBundleReference(
           artifactsRoot,
@@ -753,34 +876,34 @@ function pushPortableArtifactReferenceBundle(
           baseDir,
         );
     const sourceRealPath = realpathSync(resolved.sourcePath);
-    if (visitedSources.has(sourceRealPath)) continue;
-    visitedSources.add(sourceRealPath);
-    const targetRelative = normalizePath(path.join(
-      targetArtifactDir(projectId),
-      resolved.relativePath,
-    ));
-    const existing = plannedByTarget.get(targetRelative);
-    if (existing) {
-      if (
-        !existing.source
-        || realpathSync(existing.source) !== realpathSync(resolved.sourcePath)
-      ) {
-        throw new ValidationError(
-          `${label} target collides with a different planned artifact: ${targetRelative}`,
-        );
-      }
-    } else {
-      pushArtifact(plan, resolved.sourcePath, targetRoot, targetRelative);
-      plannedByTarget.set(targetRelative, plan.at(-1));
+    const portableRelativePath = normalizePath(targetRelativePath ?? resolved.relativePath);
+    const existingSource = copiedSources.get(sourceRealPath);
+    if (existingSource && existingSource.relativePath !== portableRelativePath) {
+      throw new ValidationError(
+        `${label} requires conflicting portable target paths for the same artifact: ${existingSource.relativePath} and ${portableRelativePath}`,
+      );
+    }
+    if (existingSource && inspectJson) existingSource.inspectJson = true;
+    const resolvedFile = existingSource ?? {
+      ...resolved,
+      relativePath: portableRelativePath,
+      label,
+      inspectJson,
+    };
+    if (!existingSource) {
+      copiedSources.set(sourceRealPath, resolvedFile);
+      resolvedFiles.push(resolvedFile);
     }
 
+    if (!inspectJson || inspectedJsonSources.has(sourceRealPath)) continue;
+    inspectedJsonSources.add(sourceRealPath);
     const sourceData = loadJson(resolved.sourcePath);
     if (
       sourceData.schema_version === 'p2a.spec.v1'
       && typeof sourceData.source_intake === 'string'
       && sourceData.source_intake.trim()
     ) {
-      references.push({
+      pendingReferences.push({
         label: `${label}.source_intake`,
         reference: sourceData.source_intake,
         baseDir: path.dirname(resolved.sourcePath),
@@ -788,35 +911,503 @@ function pushPortableArtifactReferenceBundle(
       });
     }
     if (
+      sourceData.schema_version === 'p2a.spec.v1'
+      && typeof sourceData.visual_experience?.experience_spec_ref === 'string'
+      && sourceData.visual_experience.experience_spec_ref.trim()
+    ) {
+      pendingReferences.push({
+        label: `${label}.visual_experience.experience_spec_ref`,
+        reference: sourceData.visual_experience.experience_spec_ref,
+        baseDir: path.dirname(resolved.sourcePath),
+        targetRelativePath: portableVisualChildPath(
+          resolvedFile.relativePath,
+          sourceData.visual_experience.experience_spec_ref,
+          `${label}.visual_experience.experience_spec_ref`,
+        ),
+      });
+    }
+    if (sourceData.schema_version === 'p2a.visual_experience.v1') {
+      pendingReferences.push(
+        {
+          label: `${label}.source_spec_ref`,
+          reference: sourceData.source_spec_ref,
+          baseDir: path.dirname(resolved.sourcePath),
+          targetRelativePath: portableVisualChildPath(
+            resolvedFile.relativePath,
+            sourceData.source_spec_ref,
+            `${label}.source_spec_ref`,
+          ),
+        },
+        ...(sourceData.visual_direction?.candidates ?? []).map((candidate, candidateIndex) => ({
+          label: `${label}.visual_direction.candidates[${candidateIndex}].prototype_manifest_ref`,
+          reference: candidate.prototype_manifest_ref,
+          baseDir: path.dirname(resolved.sourcePath),
+          targetRelativePath: portableVisualChildPath(
+            resolvedFile.relativePath,
+            candidate.prototype_manifest_ref,
+            `${label}.visual_direction.candidates[${candidateIndex}].prototype_manifest_ref`,
+          ),
+        })),
+      );
+    }
+    if (sourceData.schema_version === 'p2a.visual_prototype.v1') {
+      pendingReferences.push(
+        {
+          label: `${label}.experience_spec_ref`,
+          reference: sourceData.experience_spec_ref,
+          baseDir: path.dirname(resolved.sourcePath),
+          targetRelativePath: portableVisualChildPath(
+            resolvedFile.relativePath,
+            sourceData.experience_spec_ref,
+            `${label}.experience_spec_ref`,
+          ),
+        },
+        ...(sourceData.files ?? []).map((entry, fileIndex) => ({
+          label: `${label}.files[${fileIndex}].path`,
+          reference: entry.path,
+          baseDir: path.dirname(resolved.sourcePath),
+          inspectJson: false,
+          targetRelativePath: portableVisualChildPath(
+            resolvedFile.relativePath,
+            entry.path,
+            `${label}.files[${fileIndex}].path`,
+          ),
+        })),
+      );
+    }
+    if (
       sourceData.schema_version === 'p2a.current_spec.v1'
       && Array.isArray(sourceData.source_specs)
     ) {
       appendCurrentSpecSourceReferences(
-        references,
+        pendingReferences,
         sourceData,
-        artifactsRoot,
+        sourceArtifactRoot,
         label,
       );
     }
     if (sourceData.schema_version === 'p2a.intake.v1' && sourceData.baseline_context) {
-      references.push(
+      const sourceArtifactRoot = inferBundleArtifactRootFromIntakePath(
+        resolved.sourcePath,
+        artifactsRoot,
+      );
+      pendingReferences.push(
         {
           label: `${label}.baseline_context.spec_ref`,
           reference: sourceData.baseline_context.spec_ref,
-          baseDir: artifactsRoot,
+          baseDir: sourceArtifactRoot,
+          sourceArtifactRoot,
         },
         ...(sourceData.baseline_context.reused_answers ?? []).map((item, answerIndex) => ({
           label: `${label}.baseline_context.reused_answers[${answerIndex}].source_intake`,
           reference: item.source_intake,
-          baseDir: artifactsRoot,
+          baseDir: sourceArtifactRoot,
+          sourceArtifactRoot,
         })),
         ...(sourceData.baseline_context.reused_question_dispositions ?? [])
           .map((item, dispositionIndex) => ({
             label: `${label}.baseline_context.reused_question_dispositions[${dispositionIndex}].source_spec`,
             reference: item.source_spec,
-            baseDir: artifactsRoot,
+            baseDir: sourceArtifactRoot,
+            sourceArtifactRoot,
           })),
       );
+    }
+  }
+  return resolvedFiles;
+}
+
+function portableBundleRelativeReference(sourceRelativePath, targetRelativePath) {
+  const reference = path.posix.relative(
+    path.posix.dirname(normalizePath(sourceRelativePath)),
+    normalizePath(targetRelativePath),
+  );
+  return reference || path.posix.basename(normalizePath(targetRelativePath));
+}
+
+function portableVisualChildPath(parentRelativePath, reference, label) {
+  if (
+    typeof reference !== 'string'
+    || !reference.trim()
+    || path.isAbsolute(reference)
+    || path.win32.isAbsolute(reference)
+  ) {
+    throw new ValidationError(`${label} must be a non-empty relative visual artifact path`);
+  }
+  const targetRelativePath = path.posix.normalize(path.posix.join(
+    path.posix.dirname(normalizePath(parentRelativePath)),
+    normalizePath(reference),
+  ));
+  if (
+    !targetRelativePath
+    || targetRelativePath === '..'
+    || targetRelativePath.startsWith('../')
+    || path.posix.isAbsolute(targetRelativePath)
+  ) {
+    throw new ValidationError(`${label} escapes the portable artifact root`);
+  }
+  return targetRelativePath;
+}
+
+function portableBundleRootRelative(sourceRoot, artifactsRoot) {
+  const relative = path.relative(realpathSync(artifactsRoot), realpathSync(sourceRoot));
+  if (relative === '') return '';
+  if (relative.startsWith('..') || path.isAbsolute(relative)) {
+    throw new NonPortableArtifactReferenceError(
+      `portable artifact dependency root resolves outside the artifact root: ${sourceRoot}`,
+    );
+  }
+  return normalizePath(relative);
+}
+
+function portableBundleArtifactReference(rootRelativePath, targetRelativePath) {
+  const reference = path.posix.relative(
+    rootRelativePath || '.',
+    normalizePath(targetRelativePath),
+  );
+  if (!reference || reference.startsWith('../') || path.posix.isAbsolute(reference)) {
+    throw new ValidationError(
+      `portable artifact dependency escapes its source artifact root: ${targetRelativePath}`,
+    );
+  }
+  return reference;
+}
+
+function portableArtifactBundleContents(
+  resolvedFiles,
+  artifactsRoot,
+  projectId,
+  existingPlan = [],
+) {
+  const filesByRealPath = new Map(
+    resolvedFiles.map((file) => [realpathSync(file.sourcePath), file]),
+  );
+  const plannedByTarget = new Map(
+    existingPlan.map((item) => [normalizePath(item.targetRelative), item]),
+  );
+  const contentsByRealPath = new Map();
+  const resolving = new Set();
+
+  function recordForResolvedReference(resolved, label) {
+    const record = filesByRealPath.get(realpathSync(resolved.sourcePath));
+    if (!record) {
+      throw new ValidationError(`${label} is missing from its portable dependency closure`);
+    }
+    return record;
+  }
+
+  function artifactRootForIntake(intakeRecord) {
+    return inferBundleArtifactRootFromIntakePath(intakeRecord.sourcePath, artifactsRoot);
+  }
+
+  function artifactRootReference(sourceRoot, targetRecord) {
+    return portableBundleArtifactReference(
+      portableBundleRootRelative(sourceRoot, artifactsRoot),
+      targetRecord.relativePath,
+    );
+  }
+
+  function resolveKnownApprovalArtifact(reference, sourceRecord, sourceRoot) {
+    if (typeof reference !== 'string' || !reference.trim()) return null;
+    const candidates = path.isAbsolute(reference)
+      ? [reference]
+      : [
+          path.resolve(path.dirname(sourceRecord.sourcePath), reference),
+          path.resolve(sourceRoot, reference),
+          projectRelativeBundleCandidate(path.dirname(sourceRecord.sourcePath), reference),
+        ].filter(Boolean);
+    for (const candidate of candidates) {
+      if (!existsSync(candidate) || !lstatSync(candidate).isFile()) continue;
+      const targetRecord = filesByRealPath.get(realpathSync(candidate));
+      if (targetRecord) return targetRecord;
+    }
+    return null;
+  }
+
+  function rebaseKnownApprovalArtifacts(
+    data,
+    sourceRecord,
+    sourceRoot,
+    referenceStyle = 'artifact-root',
+  ) {
+    if (!Array.isArray(data.approval_audit?.approved_artifacts)) return;
+    data.approval_audit.approved_artifacts = data.approval_audit.approved_artifacts.map(
+      (reference) => {
+        const targetRecord = resolveKnownApprovalArtifact(
+          reference,
+          sourceRecord,
+          sourceRoot,
+        );
+        if (!targetRecord) return reference;
+        return data.schema_version === 'p2a.spec.v1' || referenceStyle === 'relative'
+          ? portableBundleRelativeReference(sourceRecord.relativePath, targetRecord.relativePath)
+          : artifactRootReference(sourceRoot, targetRecord);
+      },
+    );
+  }
+
+  function portableContent(record) {
+    const sourceRealPath = realpathSync(record.sourcePath);
+    if (contentsByRealPath.has(sourceRealPath)) return contentsByRealPath.get(sourceRealPath);
+    const targetRelative = normalizePath(path.join(
+      targetArtifactDir(projectId),
+      record.relativePath,
+    ));
+    const existing = plannedByTarget.get(targetRelative);
+    if (existing && existing.type !== 'copy') {
+      const content = plannedItemContent(existing);
+      contentsByRealPath.set(sourceRealPath, content);
+      return content;
+    }
+    const rawContent = readFileSync(record.sourcePath);
+    if (record.inspectJson === false || path.extname(record.sourcePath) !== '.json') {
+      contentsByRealPath.set(sourceRealPath, rawContent);
+      return rawContent;
+    }
+    if (resolving.has(sourceRealPath)) {
+      throw new ValidationError(
+        `portable artifact dependency closure contains a rewrite cycle through ${record.relativePath}`,
+      );
+    }
+    resolving.add(sourceRealPath);
+    try {
+      const sourceData = loadJson(record.sourcePath);
+      const portableData = structuredClone(sourceData);
+      if (
+        portableData.schema_version === 'p2a.spec.v1'
+        && typeof portableData.source_intake === 'string'
+        && portableData.source_intake.trim()
+      ) {
+        const intakeRecord = recordForResolvedReference(
+          resolveSpecSourceIntakeBundleReference(
+            artifactsRoot,
+            portableData.source_intake,
+            `${record.label}.source_intake`,
+            path.dirname(record.sourcePath),
+          ),
+          `${record.label}.source_intake`,
+        );
+        portableData.source_intake = portableBundleRelativeReference(
+          record.relativePath,
+          intakeRecord.relativePath,
+        );
+        if (portableData.source_intake_sha256) {
+          portableData.source_intake_sha256 = sha256Value(portableContent(intakeRecord));
+        }
+        rebaseKnownApprovalArtifacts(
+          portableData,
+          record,
+          artifactRootForIntake(intakeRecord),
+        );
+      }
+      if (
+        portableData.schema_version === 'p2a.spec.v1'
+        && typeof portableData.visual_experience?.experience_spec_ref === 'string'
+        && portableData.visual_experience.experience_spec_ref.trim()
+      ) {
+        const experienceRecord = recordForResolvedReference(
+          resolveMilestoneBundleReference(
+            artifactsRoot,
+            portableData.visual_experience.experience_spec_ref,
+            `${record.label}.visual_experience.experience_spec_ref`,
+            path.dirname(record.sourcePath),
+          ),
+          `${record.label}.visual_experience.experience_spec_ref`,
+        );
+        portableData.visual_experience.experience_spec_ref = portableBundleRelativeReference(
+          record.relativePath,
+          experienceRecord.relativePath,
+        );
+        if (portableData.visual_experience.experience_spec_sha256) {
+          portableData.visual_experience.experience_spec_sha256 = sha256Value(
+            portableContent(experienceRecord),
+          );
+        }
+      }
+      if (portableData.schema_version === 'p2a.visual_experience.v1') {
+        const sourceSpecRecord = recordForResolvedReference(
+          resolveMilestoneBundleReference(
+            artifactsRoot,
+            portableData.source_spec_ref,
+            `${record.label}.source_spec_ref`,
+            path.dirname(record.sourcePath),
+          ),
+          `${record.label}.source_spec_ref`,
+        );
+        portableData.source_spec_ref = portableBundleRelativeReference(
+          record.relativePath,
+          sourceSpecRecord.relativePath,
+        );
+        for (const [candidateIndex, candidate] of (
+          portableData.visual_direction?.candidates ?? []
+        ).entries()) {
+          const manifestRecord = recordForResolvedReference(
+            resolveMilestoneBundleReference(
+              artifactsRoot,
+              candidate.prototype_manifest_ref,
+              `${record.label}.visual_direction.candidates[${candidateIndex}].prototype_manifest_ref`,
+              path.dirname(record.sourcePath),
+            ),
+            `${record.label}.visual_direction.candidates[${candidateIndex}].prototype_manifest_ref`,
+          );
+          candidate.prototype_manifest_ref = portableBundleRelativeReference(
+            record.relativePath,
+            manifestRecord.relativePath,
+          );
+          candidate.prototype_manifest_sha256 = sha256Value(portableContent(manifestRecord));
+        }
+        rebaseKnownApprovalArtifacts(portableData, record, artifactsRoot, 'relative');
+      }
+      if (portableData.schema_version === 'p2a.visual_prototype.v1') {
+        const experienceRecord = recordForResolvedReference(
+          resolveMilestoneBundleReference(
+            artifactsRoot,
+            portableData.experience_spec_ref,
+            `${record.label}.experience_spec_ref`,
+            path.dirname(record.sourcePath),
+          ),
+          `${record.label}.experience_spec_ref`,
+        );
+        portableData.experience_spec_ref = portableBundleRelativeReference(
+          record.relativePath,
+          experienceRecord.relativePath,
+        );
+        for (const [fileIndex, entry] of portableData.files.entries()) {
+          const fileRecord = recordForResolvedReference(
+            resolveMilestoneBundleReference(
+              artifactsRoot,
+              entry.path,
+              `${record.label}.files[${fileIndex}].path`,
+              path.dirname(record.sourcePath),
+            ),
+            `${record.label}.files[${fileIndex}].path`,
+          );
+          entry.path = portableBundleRelativeReference(
+            record.relativePath,
+            fileRecord.relativePath,
+          );
+          entry.sha256 = sha256Value(portableContent(fileRecord));
+        }
+        rebaseKnownApprovalArtifacts(portableData, record, artifactsRoot, 'relative');
+      }
+      if (portableData.schema_version === 'p2a.intake.v1') {
+        const sourceRoot = artifactRootForIntake(record);
+        const baselineContext = portableData.baseline_context;
+        if (baselineContext) {
+          const baselineSpecRecord = recordForResolvedReference(
+            resolveMilestoneBundleReference(
+              artifactsRoot,
+              baselineContext.spec_ref,
+              `${record.label}.baseline_context.spec_ref`,
+              sourceRoot,
+            ),
+            `${record.label}.baseline_context.spec_ref`,
+          );
+          baselineContext.spec_ref = artifactRootReference(sourceRoot, baselineSpecRecord);
+          if (baselineContext.spec_sha256) {
+            baselineContext.spec_sha256 = sha256Value(portableContent(baselineSpecRecord));
+          }
+          for (const [answerIndex, answer] of baselineContext.reused_answers.entries()) {
+            const sourceIntakeRecord = recordForResolvedReference(
+              resolveMilestoneBundleReference(
+                artifactsRoot,
+                answer.source_intake,
+                `${record.label}.baseline_context.reused_answers[${answerIndex}].source_intake`,
+                sourceRoot,
+              ),
+              `${record.label}.baseline_context.reused_answers[${answerIndex}].source_intake`,
+            );
+            answer.source_intake = artifactRootReference(sourceRoot, sourceIntakeRecord);
+          }
+          const dispositions = baselineContext.reused_question_dispositions;
+          for (const [dispositionIndex, disposition] of dispositions.entries()) {
+            const sourceSpecRecord = recordForResolvedReference(
+              resolveMilestoneBundleReference(
+                artifactsRoot,
+                disposition.source_spec,
+                `${record.label}.baseline_context.reused_question_dispositions[${dispositionIndex}].source_spec`,
+                sourceRoot,
+              ),
+              `${record.label}.baseline_context.reused_question_dispositions[${dispositionIndex}].source_spec`,
+            );
+            disposition.source_spec = artifactRootReference(sourceRoot, sourceSpecRecord);
+          }
+        }
+        rebaseKnownApprovalArtifacts(portableData, record, sourceRoot);
+      }
+      const dataChanged = JSON.stringify(portableData) !== JSON.stringify(sourceData);
+      const content = dataChanged
+        ? `${JSON.stringify(portableData, null, 2)}\n`
+        : rawContent;
+      contentsByRealPath.set(sourceRealPath, content);
+      return content;
+    } finally {
+      resolving.delete(sourceRealPath);
+    }
+  }
+
+  for (const file of resolvedFiles) portableContent(file);
+  return contentsByRealPath;
+}
+
+function pushPortableArtifactReferenceBundle(
+  plan,
+  references,
+  artifactsRoot,
+  targetRoot,
+  projectId,
+) {
+  const plannedByTarget = new Map(
+    plan.map((item) => [normalizePath(item.targetRelative), item]),
+  );
+  const resolvedFiles = resolvePortableArtifactReferenceBundle(references, artifactsRoot);
+  const portableContents = portableArtifactBundleContents(
+    resolvedFiles,
+    artifactsRoot,
+    projectId,
+    plan,
+  );
+  for (const resolved of resolvedFiles) {
+    const targetRelative = normalizePath(path.join(
+      targetArtifactDir(projectId),
+      resolved.relativePath,
+    ));
+    const portableContent = portableContents.get(realpathSync(resolved.sourcePath));
+    const rewritesSource = !sameFileContent(
+      readFileSync(resolved.sourcePath),
+      portableContent,
+    );
+    const existing = plannedByTarget.get(targetRelative);
+    if (existing) {
+      if (
+        !existing.source
+        || realpathSync(existing.source) !== realpathSync(resolved.sourcePath)
+      ) {
+        throw new ValidationError(
+          `${resolved.label} target collides with a different planned artifact: ${targetRelative}`,
+        );
+      }
+      if (rewritesSource) {
+        if (existing.type === 'copy') {
+          existing.type = 'rewrite-json';
+          existing.transform = () => portableContent;
+        } else if (!sameFileContent(plannedItemContent(existing), portableContent)) {
+          throw new ValidationError(
+            `${resolved.label} target requires conflicting portable rewrites: ${targetRelative}`,
+          );
+        }
+      }
+    } else {
+      pushArtifact(
+        plan,
+        resolved.sourcePath,
+        targetRoot,
+        targetRelative,
+        rewritesSource
+          ? { type: 'rewrite-json', transform: () => portableContent }
+          : {},
+      );
+      plannedByTarget.set(targetRelative, plan.at(-1));
     }
   }
 }
@@ -883,18 +1474,251 @@ function pushCurrentSpecCompositionBundleIfPresent(
   );
 }
 
+function currentSpecWithPortableClosedArtifactHashes(currentSpec, plan, projectId) {
+  if (!currentSpec || !Array.isArray(currentSpec.closed_iterations)) return currentSpec;
+  const next = structuredClone(currentSpec);
+  const artifactTargetRoot = normalizePath(targetArtifactDir(projectId));
+  const plannedByTarget = new Map(
+    plan.map((item) => [normalizePath(item.targetRelative), item]),
+  );
+
+  for (const closed of next.closed_iterations) {
+    for (const [reference, audit] of Object.entries(closed?.artifact_hashes ?? {})) {
+      if (typeof audit !== 'string' && audit?.present !== true) continue;
+      const targetRelative = normalizePath(path.posix.join(
+        artifactTargetRoot,
+        normalizePath(reference),
+      ));
+      const planned = plannedByTarget.get(targetRelative);
+      if (!planned) {
+        throw new ValidationError(
+          `closed iteration ${closed.iteration_id} artifact is missing from the portable handoff plan: ${reference}`,
+        );
+      }
+      const portableSha256 = sha256Value(plannedItemContent(planned));
+      closed.artifact_hashes[reference] = typeof audit === 'string'
+        ? portableSha256
+        : { ...audit, sha256: portableSha256 };
+    }
+  }
+
+  if (next.last_closed_iteration?.iteration_id) {
+    const matchingClosed = next.closed_iterations.find(
+      (closed) => closed.iteration_id === next.last_closed_iteration.iteration_id,
+    );
+    if (matchingClosed) {
+      next.last_closed_iteration = {
+        ...next.last_closed_iteration,
+        artifact_hashes: structuredClone(matchingClosed.artifact_hashes),
+      };
+    }
+  }
+  return next;
+}
+
 function pushMilestoneReviewBundleIfExists(plan, artifactsRoot, targetRoot, projectId, iterationId) {
   if (!iterationId) return { reviewFiles: [], evidenceFiles: [] };
   const reviewFiles = [];
   const evidenceFiles = [];
-  const copiedTargets = new Set();
-  function pushBundleFile(sourcePath, artifactRelativePath, destinationList) {
+  const copiedTargets = new Set(plan.map((item) => normalizePath(item.targetRelative)));
+  function pushBundleFile(sourcePath, artifactRelativePath, destinationList, options = {}) {
     const targetRelative = normalizePath(path.join(targetArtifactDir(projectId), artifactRelativePath));
     if (!copiedTargets.has(targetRelative)) {
-      pushArtifact(plan, sourcePath, targetRoot, targetRelative);
+      pushArtifact(plan, sourcePath, targetRoot, targetRelative, options);
       copiedTargets.add(targetRelative);
+    } else if (options.type === 'rewrite-json') {
+      const existing = plan.find(
+        (item) => normalizePath(item.targetRelative) === targetRelative,
+      );
+      if (
+        !existing?.source
+        || realpathSync(existing.source) !== realpathSync(sourcePath)
+      ) {
+        throw new ValidationError(
+          `milestone bundle target collides with a different planned artifact: ${targetRelative}`,
+        );
+      }
+      if (existing.type === 'copy') {
+        existing.type = 'rewrite-json';
+        existing.transform = options.transform;
+      } else if (
+        existing.type !== 'rewrite-json'
+        || existing.transform(existing.source) !== options.transform(sourcePath)
+      ) {
+        throw new ValidationError(
+          `milestone bundle target requires conflicting rewrites: ${targetRelative}`,
+        );
+      }
     }
     if (!destinationList.includes(targetRelative)) destinationList.push(targetRelative);
+  }
+
+  function resolveRunSourceBundle(runData, checkpoint, indexedRun) {
+    const taskGraphLabel = `${checkpoint} run-index ${indexedRun.runId} task graph`;
+    const runTaskGraph = resolveMilestoneBundleReference(
+      artifactsRoot,
+      runData.taskGraphRef,
+      taskGraphLabel,
+    );
+    const files = [{ ...runTaskGraph, label: taskGraphLabel }];
+    const runTaskGraphData = loadJson(runTaskGraph.sourcePath);
+
+    const requiresSourceArtifact = (
+      runData.schema_version === 'p2a.run.v2'
+      || runData.visualReview?.required
+      || runData.status !== 'finished'
+      || path.isAbsolute(runData.sourceSpecRef)
+      || path.isAbsolute(runTaskGraphData.sourceSpec)
+    );
+    if (!requiresSourceArtifact) {
+      return { runTaskGraph, files, portableSourceSpecRef: null };
+    }
+
+    const sourceSpecLabel = `${checkpoint} run-index ${indexedRun.runId} source spec`;
+    const sourceFiles = resolvePortableArtifactReferenceBundle([{
+      label: sourceSpecLabel,
+      reference: runData.sourceSpecRef,
+      baseDir: path.dirname(runTaskGraph.sourcePath),
+      referenceKind: path.isAbsolute(runData.sourceSpecRef)
+        ? 'artifact-root'
+        : 'spec-source-intake',
+    }], artifactsRoot);
+    const runSourceSpec = sourceFiles[0];
+    const portableSourceSpecRef = path.posix.relative(
+      path.posix.dirname(runTaskGraph.relativePath),
+      runSourceSpec.relativePath,
+    );
+    const sourceRealPaths = new Set(files.map((file) => realpathSync(file.sourcePath)));
+    for (const file of sourceFiles) {
+      const sourceRealPath = realpathSync(file.sourcePath);
+      if (sourceRealPaths.has(sourceRealPath)) continue;
+      sourceRealPaths.add(sourceRealPath);
+      files.push(file);
+    }
+    return { runTaskGraph, files, portableSourceSpecRef };
+  }
+
+  function portableTaskGraphText(source, portableSourceSpecRef) {
+    const portableTaskGraph = loadJson(source);
+    portableTaskGraph.sourceSpec = portableSourceSpecRef;
+    return `${JSON.stringify(portableTaskGraph, null, 2)}\n`;
+  }
+
+  function portableRunData(
+    runBundle,
+    portableTaskGraphRef,
+    portableSourceSpecRef = runBundle.sourceBundle.portableSourceSpecRef,
+  ) {
+    const portableRun = structuredClone(runBundle.runData);
+    if (portableTaskGraphRef) portableRun.taskGraphRef = portableTaskGraphRef;
+    if (portableSourceSpecRef) portableRun.sourceSpecRef = portableSourceSpecRef;
+    return portableRun;
+  }
+
+  function portableRunText(runBundle, portableTaskGraphRef, portableSourceSpecRef) {
+    return `${JSON.stringify(portableRunData(
+      runBundle,
+      portableTaskGraphRef,
+      portableSourceSpecRef,
+    ), null, 2)}\n`;
+  }
+
+  function pushRunSourceBundle(bundle, portableSourceSpecRef) {
+    const portableContents = portableArtifactBundleContents(
+      bundle.files,
+      artifactsRoot,
+      projectId,
+      plan,
+    );
+    for (const file of bundle.files) {
+      const rewritesTaskGraph = (
+        portableSourceSpecRef
+        && realpathSync(file.sourcePath) === realpathSync(bundle.runTaskGraph.sourcePath)
+      );
+      const portableContent = rewritesTaskGraph
+        ? portableTaskGraphText(file.sourcePath, portableSourceSpecRef)
+        : portableContents.get(realpathSync(file.sourcePath));
+      const rewritesSource = !sameFileContent(
+        readFileSync(file.sourcePath),
+        portableContent,
+      );
+      pushBundleFile(
+        file.sourcePath,
+        file.relativePath,
+        evidenceFiles,
+        rewritesSource
+          ? {
+              type: 'rewrite-json',
+              transform: () => portableContent,
+            }
+          : {},
+      );
+    }
+  }
+
+  function resolvePortableRunBundle(runIndex, checkpoint, indexedRun) {
+    if (!taskGraphIsPortable(indexedRun.taskGraphRef)) return null;
+    const run = resolveMilestoneBundleReference(
+      artifactsRoot,
+      indexedRun.runRef,
+      `${checkpoint} run-index ${indexedRun.runId}.runRef`,
+      path.dirname(runIndex.sourcePath),
+    );
+    const runData = loadJson(run.sourcePath);
+    try {
+      const sourceBundle = resolveRunSourceBundle(runData, checkpoint, indexedRun);
+      if (runData.status === 'started' && runData.visualReview?.required) {
+        throw new ValidationError(
+          `handoff cannot port started visual run ${indexedRun.runId}; finish or block the run before handoff so visual evidence cannot remain bound to ${runData.workspacePath}`,
+        );
+      }
+      return {
+        indexedRun,
+        run,
+        runData,
+        sourceBundle,
+      };
+    } catch (error) {
+      if (error instanceof NonPortableArtifactReferenceError) return null;
+      throw error;
+    }
+  }
+
+  function taskGraphIsPortable(reference) {
+    if (!path.isAbsolute(reference)) return true;
+    const absoluteReference = path.resolve(reference);
+    if (!existsSync(absoluteReference)) {
+      return pathIsAtOrUnder(absoluteReference, path.resolve(artifactsRoot));
+    }
+    try {
+      return pathIsAtOrUnder(realpathSync(absoluteReference), realpathSync(artifactsRoot));
+    } catch {
+      return false;
+    }
+  }
+
+  function portableRunIndexText(source, portableRunIds, portableTaskGraphRefs) {
+    const portableRunIndex = loadJson(source);
+    portableRunIndex.runs = (portableRunIndex.runs ?? [])
+      .filter((indexedRun) => portableRunIds.has(indexedRun.runId));
+    for (const indexedRun of portableRunIndex.runs) {
+      const portableRef = portableTaskGraphRefs.get(indexedRun.runId);
+      if (portableRef) indexedRun.taskGraphRef = portableRef;
+    }
+    const taskEntries = [];
+    const taskEntriesById = new Map();
+    for (const indexedRun of portableRunIndex.runs) {
+      if (!taskEntriesById.has(indexedRun.taskId)) {
+        const taskEntry = { taskId: indexedRun.taskId, runIds: [], latestRunId: null };
+        taskEntriesById.set(indexedRun.taskId, taskEntry);
+        taskEntries.push(taskEntry);
+      }
+      const taskEntry = taskEntriesById.get(indexedRun.taskId);
+      taskEntry.runIds.push(indexedRun.runId);
+      taskEntry.latestRunId = indexedRun.runId;
+    }
+    portableRunIndex.tasks = taskEntries;
+    return `${JSON.stringify(portableRunIndex, null, 2)}\n`;
   }
 
   for (const checkpoint of MILESTONE_REVIEW_CHECKPOINTS) {
@@ -936,15 +1760,167 @@ function pushMilestoneReviewBundleIfExists(plan, artifactsRoot, targetRoot, proj
       `${checkpoint} run index`,
     );
     const runIndexData = validateRunsDir(path.dirname(runIndex.sourcePath));
-    pushBundleFile(runIndex.sourcePath, runIndex.relativePath, evidenceFiles);
-    for (const indexedRun of runIndexData.runs) {
-      const run = resolveMilestoneBundleReference(
-        artifactsRoot,
-        indexedRun.runRef,
-        `${checkpoint} run-index ${indexedRun.runId}.runRef`,
-        path.dirname(runIndex.sourcePath),
+    const portableRunBundles = runIndexData.runs
+      .map((indexedRun) => resolvePortableRunBundle(runIndex, checkpoint, indexedRun))
+      .filter(Boolean);
+    const portableRuns = portableRunBundles.map((bundle) => bundle.indexedRun);
+    const portableRunIds = new Set(portableRuns.map((indexedRun) => indexedRun.runId));
+    const portableTaskGraphRefs = new Map();
+    const portableTaskGraphSourceSpecRefs = new Map();
+    for (const { indexedRun, sourceBundle } of portableRunBundles) {
+      const normalizedTaskGraphRef = path.isAbsolute(indexedRun.taskGraphRef)
+        ? null
+        : normalizePath(indexedRun.taskGraphRef).replace(/^\.\//, '');
+      if (normalizedTaskGraphRef !== sourceBundle.runTaskGraph.relativePath) {
+        portableTaskGraphRefs.set(indexedRun.runId, sourceBundle.runTaskGraph.relativePath);
+      }
+      if (sourceBundle.portableSourceSpecRef) {
+        const taskGraphRealPath = realpathSync(sourceBundle.runTaskGraph.sourcePath);
+        const existingRef = portableTaskGraphSourceSpecRefs.get(taskGraphRealPath);
+        if (existingRef && existingRef !== sourceBundle.portableSourceSpecRef) {
+          throw new ValidationError(
+            `${checkpoint} run task graph requires conflicting portable source specs: ${sourceBundle.runTaskGraph.relativePath}`,
+          );
+        }
+        portableTaskGraphSourceSpecRefs.set(
+          taskGraphRealPath,
+          sourceBundle.portableSourceSpecRef,
+        );
+      }
+    }
+    pushBundleFile(
+      runIndex.sourcePath,
+      runIndex.relativePath,
+      evidenceFiles,
+      portableTaskGraphRefs.size || portableRuns.length !== runIndexData.runs.length
+        ? {
+            type: 'rewrite-json',
+            transform: (source) => portableRunIndexText(
+              source,
+              portableRunIds,
+              portableTaskGraphRefs,
+            ),
+          }
+        : {},
+    );
+    for (const {
+      indexedRun,
+      run,
+      runData,
+      sourceBundle,
+    } of portableRunBundles) {
+      const portableTaskGraphRef = portableTaskGraphRefs.get(indexedRun.runId);
+      const portableSourceSpecRef = portableTaskGraphSourceSpecRefs.get(
+        realpathSync(sourceBundle.runTaskGraph.sourcePath),
+      ) ?? sourceBundle.portableSourceSpecRef;
+      pushBundleFile(
+        run.sourcePath,
+        run.relativePath,
+        evidenceFiles,
+        portableTaskGraphRef || portableSourceSpecRef
+          ? {
+              type: 'rewrite-json',
+              transform: () => portableRunText(
+                { runData, sourceBundle },
+                portableTaskGraphRef,
+                portableSourceSpecRef,
+              ),
+            }
+          : {},
       );
-      pushBundleFile(run.sourcePath, run.relativePath, evidenceFiles);
+      pushRunSourceBundle(sourceBundle, portableSourceSpecRef);
+      if (runData.status === 'finished' && runData.visualReview?.required) {
+        const sidecar = resolveMilestoneBundleReference(
+          artifactsRoot,
+          runSidecarRef(indexedRun.runRef, '.visual-review.json'),
+          `${checkpoint} run-index ${indexedRun.runId} visual review`,
+          path.dirname(runIndex.sourcePath),
+        );
+        pushBundleFile(sidecar.sourcePath, sidecar.relativePath, evidenceFiles);
+        const visualReview = loadJson(sidecar.sourcePath);
+        const visualEvidenceRefs = [
+          ...(visualReview.results ?? []).map((result) => result.artifact_ref),
+          visualReview.accessibility?.report_ref,
+        ].filter(Boolean);
+        for (const [evidenceIndex, reference] of visualEvidenceRefs.entries()) {
+          const evidenceLabel = `${checkpoint} run-index ${indexedRun.runId} visual evidence ${evidenceIndex + 1}`;
+          const visualEvidence = resolveMilestoneBundleReference(
+            artifactsRoot,
+            reference,
+            evidenceLabel,
+          );
+          // Preserve the sidecar's validated reference as a regular target file even
+          // when the source reached the bytes through an artifact-root symlink alias.
+          pushBundleFile(
+            visualEvidence.sourcePath,
+            portableVisualEvidenceTarget(reference, evidenceLabel),
+            evidenceFiles,
+          );
+        }
+      }
+    }
+    const portableRunBundlesById = new Map(
+      portableRunBundles.map((bundle) => [bundle.indexedRun.runId, bundle]),
+    );
+    const milestoneTaskGraphSourceSpecRef = portableTaskGraphSourceSpecRefs.get(
+      realpathSync(taskGraph.sourcePath),
+    );
+    const rewritesCompletedEvidence = milestoneReview.source.completed_task_evidence.some(
+      (evidence) => {
+        const runBundle = portableRunBundlesById.get(evidence.run_snapshot.runId);
+        return Boolean(
+          runBundle
+          && (
+            portableTaskGraphRefs.has(runBundle.indexedRun.runId)
+            || portableTaskGraphSourceSpecRefs.has(
+              realpathSync(runBundle.sourceBundle.runTaskGraph.sourcePath),
+            )
+          )
+        );
+      },
+    );
+    if (milestoneTaskGraphSourceSpecRef || rewritesCompletedEvidence) {
+      pushBundleFile(
+        sourcePath,
+        reviewRelativePath,
+        reviewFiles,
+        {
+          type: 'rewrite-json',
+          transform: (source) => {
+            const portableReview = loadJson(source);
+            if (milestoneTaskGraphSourceSpecRef) {
+              portableReview.source.task_graph_snapshot.sourceSpec = milestoneTaskGraphSourceSpecRef;
+              portableReview.source.task_graph_snapshot_sha256 = milestoneSnapshotSha256(
+                portableReview.source.task_graph_snapshot,
+              );
+              portableReview.source.task_graph_sha256 = sha256Value(portableTaskGraphText(
+                taskGraph.sourcePath,
+                milestoneTaskGraphSourceSpecRef,
+              ));
+            }
+            for (const evidence of portableReview.source.completed_task_evidence) {
+              const runBundle = portableRunBundlesById.get(evidence.run_snapshot.runId);
+              if (!runBundle) continue;
+              const portableTaskGraphRef = portableTaskGraphRefs.get(runBundle.indexedRun.runId);
+              const portableSourceSpecRef = portableTaskGraphSourceSpecRefs.get(
+                realpathSync(runBundle.sourceBundle.runTaskGraph.sourcePath),
+              ) ?? runBundle.sourceBundle.portableSourceSpecRef;
+              if (!portableTaskGraphRef && !portableSourceSpecRef) continue;
+              const portableRunSnapshot = structuredClone(evidence.run_snapshot);
+              if (portableTaskGraphRef) portableRunSnapshot.taskGraphRef = portableTaskGraphRef;
+              if (portableSourceSpecRef) portableRunSnapshot.sourceSpecRef = portableSourceSpecRef;
+              evidence.run_snapshot = portableRunSnapshot;
+              evidence.run_snapshot_sha256 = milestoneRunSnapshotSha256(portableRunSnapshot);
+              evidence.run_sha256 = sha256Value(portableRunText(
+                runBundle,
+                portableTaskGraphRef,
+                portableSourceSpecRef,
+              ));
+            }
+            return `${JSON.stringify(portableReview, null, 2)}\n`;
+          },
+        },
+      );
     }
     for (const evidence of milestoneReview.source.completed_task_evidence) {
       const runId = evidence.run_snapshot.runId;
@@ -3034,8 +4010,18 @@ function buildPlan(paths, args, artifactsRoot, targetRoot, sourceInfo, options =
   const targetSpecRef = normalizePath(targetSpecJsonPath(args.projectId));
   const targetTaskGraphRef = normalizePath(targetTaskGraphPath(args.projectId));
   assertFile(paths.intakeJson, 'gate-a-intake/intake.json');
-  const targetIntakeContent = rebaseIntakeApprovalAudit(
-    paths.intakeJson,
+  const portableIntakeFiles = resolvePortableArtifactReferenceBundle([{
+    label: 'gate-a-intake/intake.json',
+    reference: paths.intakeJson,
+    baseDir: artifactsRoot,
+  }], artifactsRoot);
+  const portableIntakeContents = portableArtifactBundleContents(
+    portableIntakeFiles,
+    artifactsRoot,
+    args.projectId,
+  );
+  const targetIntakeContent = rebaseIntakeApprovalAuditContent(
+    portableIntakeContents.get(realpathSync(paths.intakeJson)),
     targetIntakeRef,
     sourceInfo.iterationId,
   );
@@ -3051,6 +4037,13 @@ function buildPlan(paths, args, artifactsRoot, targetRoot, sourceInfo, options =
       targetIntakeSha256,
     ),
   });
+  pushVisualExperienceBundleIfExists(
+    plan,
+    paths.specJson,
+    artifactsRoot,
+    targetRoot,
+    args.projectId,
+  );
   pushArtifact(plan, paths.taskGraph, targetRoot, targetTaskGraphPath(args.projectId), { type: 'rewrite-json', transform: (source) => rebaseTaskGraphSourceSpec(source, targetSpecRef) });
   pushArtifactIfExists(plan, paths.reviewReport, targetRoot, path.join(artifactTargetDir, 'gate-d-review', 'review-report.md'));
   pushArtifact(plan, paths.reviewJson, targetRoot, path.join(artifactTargetDir, 'gate-d-review', 'review.json'));
@@ -3130,23 +4123,6 @@ function buildPlan(paths, args, artifactsRoot, targetRoot, sourceInfo, options =
   const currentSpecForHandoff = currentSpecWithPortableApprovals
     ? appendHandoffRecord(currentSpecWithPortableApprovals, record)
     : null;
-  if (currentSpecForHandoff) {
-    pushGeneratedText(
-      plan,
-      targetRoot,
-      path.join(artifactTargetDir, 'status.md'),
-      renderIterationIndexMarkdown(artifactsRoot, currentSpecForHandoff),
-    );
-  } else {
-    pushArtifactIfExists(plan, paths.statusDoc, targetRoot, path.join(artifactTargetDir, 'status.md'));
-  }
-  if (sourceInfo.currentSpecPath) {
-    if (currentSpecForHandoff) {
-      pushGeneratedJson(plan, targetRoot, path.join('.plan2agent', 'current-spec.json'), currentSpecForHandoff);
-    } else {
-      pushArtifact(plan, sourceInfo.currentSpecPath, targetRoot, path.join('.plan2agent', 'current-spec.json'));
-    }
-  }
   pushCurrentSpecCompositionBundleIfPresent(
     plan,
     currentSpecForHandoff,
@@ -3176,6 +4152,33 @@ function buildPlan(paths, args, artifactsRoot, targetRoot, sourceInfo, options =
     targetRoot,
     args.projectId,
   );
+  const portableCurrentSpecForHandoff = currentSpecWithPortableClosedArtifactHashes(
+    currentSpecForHandoff,
+    plan,
+    args.projectId,
+  );
+  if (portableCurrentSpecForHandoff) {
+    pushGeneratedText(
+      plan,
+      targetRoot,
+      path.join(artifactTargetDir, 'status.md'),
+      renderIterationIndexMarkdown(artifactsRoot, portableCurrentSpecForHandoff),
+    );
+  } else {
+    pushArtifactIfExists(plan, paths.statusDoc, targetRoot, path.join(artifactTargetDir, 'status.md'));
+  }
+  if (sourceInfo.currentSpecPath) {
+    if (portableCurrentSpecForHandoff) {
+      pushGeneratedJson(
+        plan,
+        targetRoot,
+        path.join('.plan2agent', 'current-spec.json'),
+        portableCurrentSpecForHandoff,
+      );
+    } else {
+      pushArtifact(plan, sourceInfo.currentSpecPath, targetRoot, path.join('.plan2agent', 'current-spec.json'));
+    }
+  }
 
   const codexProfile = resolveCodexAgentProfile(args.codexProfile);
   if (legacyRuntime) {
@@ -3293,14 +4296,25 @@ function rebaseSpecSourceIntake(
   const spec = loadJson(source);
   spec.source_intake = sourceIntakeRef;
   spec.source_intake_sha256 = sourceIntakeSha256;
+  const targetExperienceRef = spec.visual_experience?.experience_spec_ref
+    ? normalizePath(path.join(path.dirname(sourceSpecRef), 'experience-spec.json'))
+    : null;
+  if (targetExperienceRef) {
+    spec.visual_experience.experience_spec_ref = 'experience-spec.json';
+  }
   if (spec.approval_audit) {
-    spec.approval_audit.approved_artifacts = [sourceSpecRef];
+    spec.approval_audit.approved_artifacts = [
+      sourceSpecRef,
+      ...(targetExperienceRef ? [targetExperienceRef] : []),
+    ];
   }
   return `${JSON.stringify(spec, null, 2)}\n`;
 }
 
-function rebaseIntakeApprovalAudit(source, targetIntakeRef, sourceIterationId = null) {
-  const intake = loadJson(source);
+function rebaseIntakeApprovalAuditContent(sourceContent, targetIntakeRef, sourceIterationId = null) {
+  const intake = JSON.parse(Buffer.isBuffer(sourceContent)
+    ? sourceContent.toString('utf8')
+    : String(sourceContent));
   if (intake.interview && sourceIterationId) {
     const recordedIterationId = intake.interview.seed_iteration_id;
     if (recordedIterationId && recordedIterationId !== sourceIterationId) {

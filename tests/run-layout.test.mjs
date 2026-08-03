@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import {
   chmodSync,
+  cpSync,
   existsSync,
   mkdtempSync,
   mkdirSync,
@@ -26,6 +27,7 @@ import {
   runFilePath,
   runSidecarPath,
   runSidecarRef,
+  taskContractSha256,
   taskGraphRefMatchesGraph,
 } from '../scripts/p2a_run_paths.mjs';
 import {
@@ -72,6 +74,7 @@ function startedRun(runId = 'run-task-001-001') {
     sourceLayout: 'iteration',
     taskGraphRef: `iterations/${ITERATION_ID}/gate-c-task-graph/task-graph.json`,
     sourceSpecRef: '../gate-b-spec/spec.json',
+    taskContractSha256: taskContractSha256(taskGraph().tasks[0]),
     agentTool: 'codex',
     workspaceRef: 'fixture-workspace',
     workspacePath: '.',
@@ -133,6 +136,15 @@ function taskGraph() {
       sourceSpecRefs: ['implementation.architecture'],
     }],
   };
+}
+
+function writeApprovedRunSource(root, projectId = 'run-layout-fixture') {
+  const fixtureRoot = path.resolve('fixtures/_e2e/webhook-api-service');
+  const intake = JSON.parse(readFileSync(path.join(fixtureRoot, 'gate-a-intake', 'intake.json'), 'utf8'));
+  const spec = JSON.parse(readFileSync(path.join(fixtureRoot, 'gate-b-spec', 'spec.json'), 'utf8'));
+  spec.project_id = projectId;
+  writeJson(path.join(root, 'gate-a-intake', 'intake.json'), intake);
+  writeJson(path.join(root, 'gate-b-spec', 'spec.json'), spec);
 }
 
 describe('iteration-partitioned run layout', () => {
@@ -497,6 +509,156 @@ describe('iteration-partitioned run layout', () => {
         () => validateRunIndexData(invalidIndex),
         /latestRunId must be the last runIds entry/,
       );
+    } finally {
+      rmSync(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  test('finish --runs resolves the source graph before sealing the task contract', () => {
+    const tempRoot = mkdtempSync(path.join(tmpdir(), 'p2a-run-layout-finish-runs-contract-'));
+    try {
+      const runsDir = path.join(tempRoot, 'runs');
+      const graphPath = path.join(tempRoot, 'gate-c-task-graph', 'task-graph.json');
+      const graph = taskGraph();
+      writeApprovedRunSource(tempRoot);
+      writeJson(graphPath, graph);
+      const runId = 'run-finish-runs-contract';
+      const started = runRuns([
+        'start',
+        '--graph', graphPath,
+        '--task', 'task-001',
+        '--run-id', runId,
+        '--agent-tool', 'codex',
+        '--workspace', tempRoot,
+      ]);
+      assert.equal(started.status, 0, started.stderr);
+
+      const runPath = runFilePath(runsDir, runId);
+      const run = JSON.parse(readFileSync(runPath, 'utf8'));
+      run.verification = [{
+        type: 'test',
+        command: 'node --test',
+        status: 'passed',
+        exitCode: 0,
+        durationMs: 1,
+        startedAt: run.startedAt,
+        finishedAt: run.startedAt,
+        stdoutTail: 'passed',
+        stderrTail: '',
+        source: 'command',
+      }];
+      writeJson(runPath, run);
+
+      const changedGraph = structuredClone(graph);
+      changedGraph.tasks[0].title = 'Changed after run start';
+      writeJson(graphPath, changedGraph);
+      const rejected = runRuns([
+        'finish', '--runs', runsDir, '--run-id', runId, '--status', 'finished',
+      ]);
+      assert.equal(rejected.status, 1);
+      assert.match(rejected.stderr, /task contract changed after start/);
+      assert.equal(JSON.parse(readFileSync(runPath, 'utf8')).status, 'started');
+
+      writeJson(graphPath, graph);
+      const legacyRun = JSON.parse(readFileSync(runPath, 'utf8'));
+      legacyRun.schema_version = 'p2a.run.v1';
+      delete legacyRun.taskContractSha256;
+      writeJson(runPath, legacyRun);
+      const finished = runRuns([
+        'finish', '--runs', runsDir, '--run-id', runId, '--status', 'finished',
+      ]);
+      assert.equal(finished.status, 0, finished.stderr);
+      const upgradedRun = JSON.parse(readFileSync(runPath, 'utf8'));
+      assert.equal(upgradedRun.schema_version, 'p2a.run.v2');
+      assert.equal(upgradedRun.taskContractSha256, taskContractSha256(graph.tasks[0]));
+    } finally {
+      rmSync(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  test('custom run stores validate graph provenance from the external source root', () => {
+    const tempRoot = mkdtempSync(path.join(tmpdir(), 'p2a-run-layout-external-store-'));
+    try {
+      const sourceRoot = path.join(tempRoot, 'source');
+      const runsDir = path.join(tempRoot, 'store', 'runs');
+      cpSync(path.resolve('fixtures/_e2e/webhook-api-service'), sourceRoot, { recursive: true });
+      const graphPath = path.join(sourceRoot, 'gate-c-task-graph', 'task-graph.json');
+      const runId = 'run-external-store-provenance';
+
+      let result = runRuns([
+        'start',
+        '--graph', graphPath,
+        '--runs', runsDir,
+        '--task', 'task-001',
+        '--run-id', runId,
+        '--agent-tool', 'codex',
+        '--workspace', sourceRoot,
+      ]);
+      assert.equal(result.status, 0, result.stderr);
+
+      result = runRuns([
+        'verify', '--runs', runsDir, '--run-id', runId,
+        '--workspace', sourceRoot, '--test-command', 'true',
+      ]);
+      assert.equal(result.status, 0, result.stderr);
+
+      result = runRuns([
+        'finish', '--graph', graphPath, '--runs', runsDir,
+        '--run-id', runId, '--status', 'finished',
+      ]);
+      assert.equal(result.status, 0, result.stderr);
+
+      result = runRuns(['validate', '--runs', runsDir]);
+      assert.equal(result.status, 0, result.stderr);
+      result = runRuns(['validate', '--runs', runsDir, '--run-id', runId]);
+      assert.equal(result.status, 0, result.stderr);
+    } finally {
+      rmSync(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  test('finish and targeted validation reject v2 runs whose source spec is missing', () => {
+    const tempRoot = mkdtempSync(path.join(tmpdir(), 'p2a-run-layout-missing-source-spec-'));
+    try {
+      const runsDir = path.join(tempRoot, 'runs');
+      const graphPath = path.join(tempRoot, 'gate-c-task-graph', 'task-graph.json');
+      const graph = taskGraph();
+      const runId = 'run-missing-source-spec';
+      writeJson(graphPath, graph);
+
+      let result = runRuns([
+        'start', '--graph', graphPath, '--task', 'task-001',
+        '--run-id', runId, '--agent-tool', 'codex', '--workspace', tempRoot,
+      ]);
+      assert.equal(result.status, 0, result.stderr);
+      result = runRuns([
+        'verify', '--runs', runsDir, '--run-id', runId,
+        '--workspace', tempRoot, '--test-command', 'true',
+      ]);
+      assert.equal(result.status, 0, result.stderr);
+
+      const rejected = runRuns([
+        'finish', '--runs', runsDir, '--run-id', runId, '--status', 'finished',
+      ]);
+      assert.equal(rejected.status, 1);
+      assert.match(rejected.stderr, /source_spec_ref cannot be resolved/);
+      const runPath = runFilePath(runsDir, runId);
+      assert.equal(JSON.parse(readFileSync(runPath, 'utf8')).status, 'started');
+
+      const invalidFinishedRun = JSON.parse(readFileSync(runPath, 'utf8'));
+      invalidFinishedRun.status = 'finished';
+      invalidFinishedRun.finishedAt = new Date().toISOString();
+      invalidFinishedRun.updatedAt = invalidFinishedRun.finishedAt;
+      writeJson(runPath, invalidFinishedRun);
+      const indexPath = path.join(runsDir, 'run-index.json');
+      const index = JSON.parse(readFileSync(indexPath, 'utf8'));
+      index.runs[0].status = 'finished';
+      index.runs[0].finishedAt = invalidFinishedRun.finishedAt;
+      writeJson(indexPath, index);
+
+      const targeted = runRuns(['validate', '--runs', runsDir, '--run-id', runId]);
+      assert.equal(targeted.status, 1);
+      assert.match(targeted.stderr, /source_spec_ref cannot be resolved/);
     } finally {
       rmSync(tempRoot, { recursive: true, force: true });
     }
@@ -1136,6 +1298,7 @@ describe('iteration-partitioned run layout', () => {
       const run = startedRun('run-write-resume');
       const runRef = canonicalRunRef(run);
       const priorIndex = runIndex(run, runRef);
+      writeJson(path.join(tempRoot, run.taskGraphRef), taskGraph());
       writeJson(path.join(runsDir, runRef), run);
       writeJson(path.join(runsDir, 'run-index.json'), priorIndex);
 
@@ -1168,6 +1331,7 @@ describe('iteration-partitioned run layout', () => {
       const runRef = canonicalRunRef(run);
       const index = runIndex(run, runRef);
       const reservationToken = 'monitor-start-reservation';
+      writeJson(path.join(tempRoot, run.taskGraphRef), taskGraph());
       writeJson(path.join(runsDir, '.run-write-transaction'), {
         schema_version: 'p2a.run_write_transaction.v1',
         runRef,

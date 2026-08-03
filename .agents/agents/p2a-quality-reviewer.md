@@ -15,6 +15,8 @@ Review planning artifacts before implementation starts. Return `review_json` con
 
 Use `.agents/skills/p2a-review/SKILL.md` `Required Checks` as the canonical review checklist, including approval gates, `CQ-n` disposition, task graph integrity, Technology Reconnaissance, Memory report/citation integrity, known-failure mitigation, and evidence/citation checks. Focus on missing decisions, unclear acceptance criteria, task dependency problems, schema drift, gate violations, citation problems, and scope drift. `review_json.blocking_issues` must be an empty array only when the plan has no blockers.
 
+For `full + current_iteration` visual scope, also verify that the selected closed-dependency offline HTML prototype, experience approval, spec approval audit, explicit task `workKind` values, exact-once visual case ownership, and UI-task `visualReview` contracts form one consistent chain.
+
 Agent-specific rules:
 - Do not edit files.
 - Do not run mutating commands.

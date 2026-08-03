@@ -51,6 +51,7 @@ One-sentence idea
   -> Discovery interview: 1-3 focused questions per round
   -> Gate A: confirmed understanding and explicit user approval
   -> Gate B: product spec and implementation plan
+     -> conditional visual experience: structured screens + approved offline HTML prototype
   -> Gate C: dependency-aware task graph
   -> Gate D: blocker and readiness review
   -> supervised implementation and verification
@@ -99,6 +100,8 @@ Planning and execution state stays local to the project:
       intake.json
     gate-b-spec/
       spec.json
+      experience-spec.json       # conditional
+      visual-design/              # conditional offline HTML prototypes
     gate-c-task-graph/
       task-graph.json
     gate-d-review/
@@ -177,7 +180,7 @@ Plan2Agent installs one `p2a` entrypoint:
 | `p2a iteration` | Manage iteration initialization, close/open cycles, diffs, and maintenance. |
 | `p2a tasks` | Inspect and transition task state. |
 | `p2a runs` | Record, verify, finish, and inspect run evidence. |
-| `p2a execute` | Supervise a task from plan through verified finish. |
+| `p2a execute` | Supervise implementation and canonical final visual-review runs through verified finish. |
 | `p2a eval` | Grade, compare, analyze, generate, and summarize evaluations. |
 | `p2a proposals` | Mine, review, curate, approve, and summarize improvement proposals. |
 | `p2a memory` | Check, synchronize, search, and inspect optional Memory data. |
