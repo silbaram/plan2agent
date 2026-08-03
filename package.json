@@ -1,6 +1,6 @@
 {
   "name": "plan2agent",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Spec-driven development harness for AI coding agents with human-in-the-loop approval gates.",
   "license": "MIT",
   "keywords": [
@@ -41,6 +41,7 @@
   },
   "scripts": {
     "test": "node --test tests/index.test.mjs",
+    "test:full": "node scripts/run_fixtures.mjs",
     "test:package": "node --test tests/npm-package.test.mjs"
   }
 }

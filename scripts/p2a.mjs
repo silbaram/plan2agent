@@ -1129,26 +1129,24 @@ function runsForActiveIteration(records, activeIteration) {
   });
 }
 
-function completedVisualTaskNeedingReview(tasks, activeRuns, options) {
-  for (const task of tasks) {
-    if (task.status !== 'done' || !task.visualReview?.required) continue;
-    const latestRun = activeRuns
-      .map((run, runOrder) => ({ run, runOrder }))
-      .filter(({ run }) => run.taskId === task.id)
-      .sort(compareRunEvidence)[0]?.run;
-    try {
-      assertFinalVisualReviewRunReady({
-        runsDir: options.runsDir,
-        run: latestRun,
-        taskId: task.id,
-        artifactRoot: options.artifactRoot,
-        graphPath: options.graphPath,
-      });
-    } catch {
-      return task;
-    }
+function iterationVisualReviewNeeded(tasks, activeRuns, options) {
+  if (!tasks.some((task) => task.status === 'done' && task.visualImpact)) return false;
+  const latestRun = activeRuns
+    .map((run, runOrder) => ({ run, runOrder }))
+    .filter(({ run }) => run.runKind === 'final_visual_review')
+    .sort(compareRunEvidence)[0]?.run;
+  try {
+    assertFinalVisualReviewRunReady({
+      runsDir: options.runsDir,
+      run: latestRun,
+      taskId: 'the active iteration',
+      artifactRoot: options.artifactRoot,
+      graphPath: options.graphPath,
+    });
+    return false;
+  } catch {
+    return true;
   }
-  return null;
 }
 
 function inspectionForArtifact(targetRoot, artifact, inspectedArtifacts) {
@@ -1208,7 +1206,7 @@ function buildNextDecisionContext(info, targetRoot, requestedProjectId, inspecte
   const needsCloseReadyVisualAudit = (
     allTasksDone
     && detail.layout.kind === 'iteration'
-    && detail.tasks.some((task) => task.visualReview?.required)
+    && detail.tasks.some((task) => task.visualImpact)
   );
   const proposals = info.enhancements.proposals;
   const minedRunIds = proposals.enabled
@@ -1238,16 +1236,16 @@ function buildNextDecisionContext(info, targetRoot, requestedProjectId, inspecte
   const unminedFailedOrBlockedRun = runEvidenceValidationError
     ? null
     : failedOrBlockedRunCandidate;
-  const visualTaskNeedingFinalReview = (
+  const visualReviewNeeded = (
     allTasksDone
     && detail.layout.kind === 'iteration'
   )
-    ? completedVisualTaskNeedingReview(detail.tasks, activeRuns, {
+    ? iterationVisualReviewNeeded(detail.tasks, activeRuns, {
         runsDir: detail.runs.runsDir,
         artifactRoot,
         graphPath: gates.taskGraphPath,
       })
-    : null;
+    : false;
   return {
     ...context,
     artifactRoot,
@@ -1278,7 +1276,7 @@ function buildNextDecisionContext(info, targetRoot, requestedProjectId, inspecte
     reviewBlockingIssues: stringArrayValue(gates.review?.blocking_issues).length,
     activeRuns,
     startedRun: activeRuns.find((run) => run.status === 'started' && stringValue(run.runId)),
-    visualTaskNeedingFinalReview,
+    visualReviewNeeded,
     readyIds: readyTaskIds(gates.taskGraph),
     blockedTaskIds: taskIdsWithStatus(detail.tasks, 'blocked'),
     allTasksDone,
@@ -1536,18 +1534,16 @@ export const NEXT_DECISION_RULES = [
       context.allTasksDone
       && !context.closedIteration
       && context.detail.layout.kind === 'iteration'
-      && Boolean(context.visualTaskNeedingFinalReview)
+      && context.visualReviewNeeded
     ),
     reason: (context) => (
-      `Completed visual task ${context.visualTaskNeedingFinalReview.id} still needs a canonical no-change review run.`
+      'The completed visual iteration still needs one canonical pre-close review run.'
     ),
     command: (context) => [
       'execute',
       'review',
       '--artifacts',
       context.artifactArg,
-      '--task',
-      context.visualTaskNeedingFinalReview.id,
     ],
   },
   {

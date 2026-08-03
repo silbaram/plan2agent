@@ -67,7 +67,7 @@ Each task must include:
 - `targetArea`
 - `suggestedAgentPrompt`: a paste-ready, scope-bounded prompt for the implementing agent.
 - `sourceSpecRefs`: at least one reference to a real `effective_spec` field, such as `implementation.architecture`; add Memory and decision lineage refs only in addition to this field.
-- `workKind: ui | non_ui | mixed` on every task when the effective spec selects `full + current_iteration`; include `visualReview` only for `ui` or `mixed`, copy the canonical approved experience and selected prototype references, and scope screen-state cases plus exact viewport objects so every approved case is owned exactly once across the graph.
+- `workKind: ui | non_ui | mixed` on every task when the effective spec selects `full + current_iteration`; include lightweight `visualImpact.screenStates` only for `ui` or `mixed`. Overlap is allowed because impact routes remediation and does not own final-review cases.
 
 Never write `task-graph.json` directly. The canonical graph is created only by `promote-tasks` after human approval.
 

@@ -61,30 +61,20 @@ Define the cross-screen design system strategy, semantic token rules, component 
 10. After explicit selection and approval, set only the selected prototype to `status: approved`, record its `approval_audit`, set the experience `selected_candidate`, `approval: approved`, and its `approval_audit`, then recompute the selected manifest hash in the experience if any approved file or manifest field changed.
 11. Record the final experience SHA-256 in `spec_json.visual_experience.experience_spec_sha256` and include `gate-b-spec/experience-spec.json` in `spec_json.approval_audit.approved_artifacts`. Gate B approval covers the product/implementation spec and the selected visual direction together.
 
-## Task and Run Handoff
+## Task Impact and Iteration Review
 
-When the approved current-iteration experience sets `validation.visual_review_required: true` (required for `full`, forbidden for `reuse`), classify every task explicitly with `workKind: ui | non_ui | mixed`. Every `ui` or `mixed` task must include `visualReview`; a `non_ui` task must not include it:
+When the approved current-iteration experience sets `validation.visual_review_required: true` (required for `full`, forbidden for `reuse`), classify every task explicitly with `workKind: ui | non_ui | mixed`. Every `ui` or `mixed` task must include only its lightweight `visualImpact`; a `non_ui` task must not include it:
 
 ```json
 {
   "workKind": "ui",
-  "visualReview": {
-    "required": true,
-    "experienceSpecRef": "experience-spec.json",
-    "experienceSpecSha256": "<approved experience-spec.json SHA-256>",
-    "prototypeManifestRef": "visual-design/VD-1/prototype.json",
-    "prototypeManifestSha256": "<approved selected prototype.json SHA-256>",
-    "screenStates": [{"screenId": "SCREEN-1", "states": ["ready", "error"]}],
-    "viewports": [
-      {"name": "desktop", "width": 1440, "height": 900},
-      {"name": "mobile", "width": 390, "height": 844}
-    ],
-    "accessibilityStandard": "WCAG 2.2 AA"
+  "visualImpact": {
+    "screenStates": [{"screenId": "SCREEN-1", "states": ["ready", "error"]}]
   }
 }
 ```
 
-Scope each task to only the screen/state/viewport cases it owns. Across the task graph, every approved case must be owned exactly once. Run start stores a deterministic SHA-256 of the immutable task contract and copies the visual contract unchanged. A visual run cannot finish successfully without a `confirm_ui` sidecar covering every declared case and carrying the workspace identity plus a workspace snapshot SHA-256 that finish recomputes and persists into the run. Finish also seals the exact sidecar bytes in `visualReviewEvidenceSha256`; later task completion, run-directory validation, and portable handoff reject any sidecar drift. These gates all re-resolve the run's source spec and require the approved experience and selected prototype manifest to remain present, approved, and byte-for-byte equal to their recorded hashes.
+Scope each task to the screen/state cases it can affect. Overlap is allowed because task impact is routing metadata, not exclusive review ownership. Normal implementation runs finish from their functional verification and do not carry visual evidence. After all visual implementation is integrated, `p2a execute review --artifacts <artifact-root>` opens one canonical `final_visual_review` run for the active iteration. That run derives the complete approved screen/state/viewport/accessibility contract directly from Gate B, captures the actual application once, and seals the confirming sidecar bytes in `visualReviewEvidenceSha256`. Close-ready, run-directory validation, and portable handoff reject stale or changed final-review evidence.
 
 ## Boundaries
 

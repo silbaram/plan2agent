@@ -246,11 +246,14 @@ Clone the repository, use Node.js 20 or newer, and run:
 
 ```bash
 npm test
+npm run test:full
 npm run test:package
 node scripts/sync_cli_assets.mjs
 node scripts/check_cli_parity.mjs
 node scripts/run_fixtures.mjs
 ```
+
+`npm run test:full` is the named long-running fixture gate, including the completed/resumable handoff portability matrix. The direct fixture command remains available for repository development and debugging.
 
 The runtime is Node.js ESM and uses the Node.js standard library. Repository structure:
 
@@ -268,9 +271,10 @@ scripts/       toolkit, validation, runtime, eval, proposal, and Memory CLIs
 
 ## Project status
 
-Plan2Agent is under active development. Version `0.1.0` establishes the public npm package and the
-local-first planning, supervised execution, evaluation, proposal, and optional Memory workflows.
-Autonomous provider execution and unapproved remote side effects remain outside the default safety
-model.
+Plan2Agent is under active development. Version `0.2.0` extends the public npm package with an
+iteration-level visual experience and final-review lifecycle, portable handoff evidence, and stricter
+execution validation alongside the local-first planning, supervised execution, evaluation, proposal,
+and optional Memory workflows. Autonomous provider execution and unapproved remote side effects
+remain outside the default safety model.
 
 Plan2Agent is available under the [MIT License](LICENSE).

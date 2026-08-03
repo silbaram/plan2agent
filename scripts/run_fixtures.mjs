@@ -6972,20 +6972,13 @@ function validateIterationCurrentFixtureCases() {
       writeFileSync(milestoneSpecPath, `${JSON.stringify(milestoneSpec, null, 2)}\n`, 'utf8');
       const milestoneTaskGraphPath = path.join(milestoneHandoffArtifactRoot, milestoneTaskGraphRef);
       const milestoneTaskGraph = JSON.parse(readFileSync(milestoneTaskGraphPath, 'utf8'));
-      milestoneTaskGraph.sourceSpec = '../gate-b-spec/./spec.json';
+      milestoneTaskGraph.sourceSpec = '../gate-b-spec/spec.json';
       for (const [taskIndex, task] of milestoneTaskGraph.tasks.entries()) {
         task.status = 'done';
         task.workKind = taskIndex === 0 ? 'ui' : 'non_ui';
         if (taskIndex === 0) {
-          task.visualReview = {
-            required: true,
-            experienceSpecRef: 'experience-spec.json',
-            experienceSpecSha256: milestoneVisualArtifacts.experienceSpecSha256,
-            prototypeManifestRef: 'visual-design/VD-1/prototype.json',
-            prototypeManifestSha256: milestoneVisualArtifacts.prototypeManifestSha256,
+          task.visualImpact = {
             screenStates: [{ screenId: 'SCREEN-1', states: ['ready'] }],
-            viewports: [{ name: 'desktop', width: 240, height: 240 }],
-            accessibilityStandard: 'WCAG 2.2 AA',
           };
         }
       }
@@ -7092,15 +7085,8 @@ function validateIterationCurrentFixtureCases() {
           workKind: 'ui',
           suggestedAgentPrompt: 'Verify and preserve the historical visual evidence.',
           sourceSpecRefs: ['visual_experience'],
-          visualReview: {
-            required: true,
-            experienceSpecRef: 'experience-spec.json',
-            experienceSpecSha256: historicalVisualArtifacts.experienceSpecSha256,
-            prototypeManifestRef: 'visual-design/VD-1/prototype.json',
-            prototypeManifestSha256: historicalVisualArtifacts.prototypeManifestSha256,
+          visualImpact: {
             screenStates: [{ screenId: 'SCREEN-1', states: ['ready'] }],
-            viewports: [{ name: 'desktop', width: 240, height: 240 }],
-            accessibilityStandard: 'WCAG 2.2 AA',
           },
         }],
       }, null, 2)}\n`, 'utf8');
@@ -7178,7 +7164,7 @@ function validateIterationCurrentFixtureCases() {
       const externalStartedVisualRunId = 'run-external-source-started-visual-omitted';
       for (const [taskIndex, task] of milestoneTaskGraph.tasks.entries()) {
         const runId = `run-milestone-${task.id}`;
-        const changedFiles = [`src/${task.id}.mjs`];
+        const changedFiles = taskIndex === 0 ? [] : [`src/${task.id}.mjs`];
         const verification = [{
           type: 'test',
           command: `node --test ${task.id}`,
@@ -7192,7 +7178,7 @@ function validateIterationCurrentFixtureCases() {
           source: 'command',
         }];
         const run = {
-          schema_version: 'p2a.run.v1',
+          schema_version: 'p2a.run.v2',
           runId,
           projectId: caseData.project_id,
           taskId: task.id,
@@ -7225,6 +7211,7 @@ function validateIterationCurrentFixtureCases() {
           notes: ['Synthetic milestone handoff evidence.'],
         };
         if (taskIndex === 0) {
+          run.runKind = 'final_visual_review';
           run.visualReview = {
             required: true,
             experienceSpecRef: 'experience-spec.json',
@@ -7263,9 +7250,9 @@ function validateIterationCurrentFixtureCases() {
           }, null, 2)}\n`;
           writeFileSync(accessibilityPath, accessibilityText, 'utf8');
           const visualReview = {
-            schema_version: 'p2a.visual_review.v1',
+            schema_version: 'p2a.visual_review.v2',
             run_id: runId,
-            task_id: task.id,
+            iteration_id: run.iterationId,
             workspace_ref: run.workspaceRef,
             workspace_revision_sha256: run.workspaceRevisionSha256,
             source_experience_ref: run.visualReview.experienceSpecRef,
@@ -7341,7 +7328,7 @@ function validateIterationCurrentFixtureCases() {
       }
 
       const legacyGraphRunId = 'run-legacy-graph-portable';
-      const legacyGraphTask = milestoneTaskGraph.tasks.find((task) => !task.visualReview?.required);
+      const legacyGraphTask = milestoneTaskGraph.tasks.find((task) => !task.visualImpact);
       const legacyGraphRun = {
         schema_version: 'p2a.run.v2',
         runId: legacyGraphRunId,
@@ -7718,7 +7705,7 @@ function validateIterationCurrentFixtureCases() {
         workKind: 'non_ui',
         suggestedAgentPrompt: 'Finish the handed-off legacy v1 run from its portable source closure.',
       };
-      delete legacyV1UnfinishedTask.visualReview;
+      delete legacyV1UnfinishedTask.visualImpact;
       legacyV1UnfinishedGraph.tasks.push(legacyV1UnfinishedTask);
       writeFileSync(
         legacyV1UnfinishedGraphPath,
@@ -7883,7 +7870,7 @@ function validateIterationCurrentFixtureCases() {
       legacyGraphTaskIndex.latestRunId = externalSourceRunId;
 
       const externalStartedVisualTask = milestoneTaskGraph.tasks.find(
-        (task) => task.visualReview?.required,
+        (task) => task.visualImpact,
       );
       const externalStartedVisualRun = {
         ...externalSourceRun,
@@ -7891,7 +7878,17 @@ function validateIterationCurrentFixtureCases() {
         taskId: externalStartedVisualTask.id,
         taskTitle: externalStartedVisualTask.title,
         taskContractSha256: taskContractSha256(externalStartedVisualTask),
-        visualReview: structuredClone(externalStartedVisualTask.visualReview),
+        runKind: 'final_visual_review',
+        visualReview: {
+          required: true,
+          experienceSpecRef: 'experience-spec.json',
+          experienceSpecSha256: milestoneVisualArtifacts.experienceSpecSha256,
+          prototypeManifestRef: 'visual-design/VD-1/prototype.json',
+          prototypeManifestSha256: milestoneVisualArtifacts.prototypeManifestSha256,
+          screenStates: [{ screenId: 'SCREEN-1', states: ['ready'] }],
+          viewports: [{ name: 'desktop', width: 240, height: 240 }],
+          accessibilityStandard: 'WCAG 2.2 AA',
+        },
         workspaceRef: 'external-source-started-visual-handoff-fixture',
         status: 'started',
         updatedAt: milestoneRunStartedAt,
@@ -8066,7 +8063,7 @@ function validateIterationCurrentFixtureCases() {
         startedAt: historicalRunStartedAt,
         updatedAt: historicalRunFinishedAt,
         finishedAt: historicalRunFinishedAt,
-        changedFiles: ['src/historical-visual.mjs'],
+        changedFiles: [],
         verification: [{
           type: 'test',
           command: 'node --test historical-visual',
@@ -8080,6 +8077,7 @@ function validateIterationCurrentFixtureCases() {
           source: 'command',
         }],
         notes: ['Synthetic historical visual evidence with its own task graph provenance.'],
+        runKind: 'final_visual_review',
         visualReview: {
           required: true,
           experienceSpecRef: 'experience-spec.json',
@@ -8259,6 +8257,8 @@ function validateIterationCurrentFixtureCases() {
         milestoneHandoffArtifactRoot,
         '--target',
         path.join(tempRoot, 'target-started-visual-rejected'),
+        '--run-transfer',
+        'resumable',
         '--dry-run',
       ]);
       checks += 1;
@@ -8291,10 +8291,13 @@ function validateIterationCurrentFixtureCases() {
       if (
         result.status !== 0
         || !result.stdout.includes('sourceIterationId: iter-002')
+        || !result.stdout.includes('runTransfer: completed')
         || !result.stdout.includes('copy+rewrite:')
         || !result.stdout.includes(`gate-b-spec/spec.json -> .plan2agent/artifacts/${caseData.project_id}/gate-b-spec/spec.json`)
         || !result.stdout.includes(`.plan2agent/artifacts/${caseData.project_id}/iterations/iter-002/milestone-reviews/pre_close.json`)
         || !result.stdout.includes(`.plan2agent/artifacts/${caseData.project_id}/runs/run-index.json`)
+        || result.stdout.includes(unfinishedGraphRunId)
+        || result.stdout.includes(legacyV1UnfinishedRunId)
         || result.stdout.includes('midpoint.fixture.draft.json')
       ) {
         console.error(`iteration handoff --iteration-id active dry-run fixture check failed: ${caseData.id}`);
@@ -8310,6 +8313,8 @@ function validateIterationCurrentFixtureCases() {
         milestoneHandoffArtifactRoot,
         '--target',
         iterationTargetRoot,
+        '--run-transfer',
+        'resumable',
         '--include-intake',
       ]);
       checks += 1;

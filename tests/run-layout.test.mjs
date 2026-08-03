@@ -782,6 +782,60 @@ describe('iteration-partitioned run layout', () => {
     }
   });
 
+  test('migrate-schema upgrades finished v1 evidence after validating canonical provenance', () => {
+    const tempRoot = mkdtempSync(path.join(tmpdir(), 'p2a-run-schema-migrate-'));
+    try {
+      const sourceRoot = path.join(tempRoot, 'source');
+      const runsDir = path.join(tempRoot, 'runs');
+      cpSync(path.resolve('fixtures/_e2e/webhook-api-service'), sourceRoot, { recursive: true });
+      const graphPath = path.join(sourceRoot, 'gate-c-task-graph', 'task-graph.json');
+      const runId = 'run-schema-migration';
+
+      let result = runRuns([
+        'start', '--graph', graphPath, '--runs', runsDir,
+        '--task', 'task-001', '--run-id', runId,
+        '--agent-tool', 'codex', '--workspace', sourceRoot,
+      ]);
+      assert.equal(result.status, 0, result.stderr);
+      result = runRuns([
+        'verify', '--runs', runsDir, '--run-id', runId,
+        '--workspace', sourceRoot, '--test-command', 'true',
+      ]);
+      assert.equal(result.status, 0, result.stderr);
+      result = runRuns([
+        'finish', '--graph', graphPath, '--runs', runsDir,
+        '--run-id', runId, '--status', 'finished',
+      ]);
+      assert.equal(result.status, 0, result.stderr);
+
+      const runPath = runFilePath(runsDir, runId);
+      const legacyRun = JSON.parse(readFileSync(runPath, 'utf8'));
+      legacyRun.schema_version = 'p2a.run.v1';
+      delete legacyRun.taskContractSha256;
+      writeJson(runPath, legacyRun);
+      validateRunsDir(runsDir);
+
+      const dryRun = runRuns([
+        'migrate-schema', '--runs', runsDir, '--run-id', runId, '--dry-run',
+      ]);
+      assert.equal(dryRun.status, 0, dryRun.stderr);
+      assert.match(dryRun.stdout, /p2a\.run\.v1 -> p2a\.run\.v2/);
+      assert.equal(JSON.parse(readFileSync(runPath, 'utf8')).schema_version, 'p2a.run.v1');
+
+      const migration = runRuns([
+        'migrate-schema', '--runs', runsDir, '--run-id', runId, '--yes',
+      ]);
+      assert.equal(migration.status, 0, migration.stderr);
+      const upgradedRun = JSON.parse(readFileSync(runPath, 'utf8'));
+      const graph = JSON.parse(readFileSync(graphPath, 'utf8'));
+      assert.equal(upgradedRun.schema_version, 'p2a.run.v2');
+      assert.equal(upgradedRun.taskContractSha256, taskContractSha256(graph.tasks[0]));
+      validateRunsDir(runsDir);
+    } finally {
+      rmSync(tempRoot, { recursive: true, force: true });
+    }
+  });
+
   test('migrate-layout consolidates the previous per-iteration graph runs directory into the global index', () => {
     const tempRoot = mkdtempSync(path.join(tmpdir(), 'p2a-run-layout-consolidate-'));
     try {

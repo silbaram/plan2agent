@@ -37,7 +37,7 @@ Each task must include:
 - `targetArea`
 - `suggestedAgentPrompt`
 - `sourceSpecRefs`
-- explicit `workKind: ui | non_ui | mixed` for every task under an approved `full + current_iteration` visual experience, with `visualReview` on `ui` and `mixed` tasks and exact-once ownership of all approved screen-state-viewport cases
+- explicit `workKind: ui | non_ui | mixed` for every task under an approved `full + current_iteration` visual experience, with lightweight and optionally overlapping `visualImpact.screenStates` on `ui` and `mixed` tasks
 
 ## Validation Gates
 

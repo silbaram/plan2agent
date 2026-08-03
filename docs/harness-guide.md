@@ -229,7 +229,7 @@ Gate A 확인도 같은 audit shape를 `intake_json.approval_audit`에 사용한
 | `tasks[].dependencies` | 먼저 완료되어야 하는 `task-n` id 목록이다. 모두 같은 graph 안에 존재해야 한다. |
 | `tasks[].acceptanceCriteria` | task 완료 판단 기준이다. 최소 1개 이상이어야 한다. |
 | `tasks[].sourceSpecRefs` | task가 어떤 spec section에서 나왔는지 추적하는 참조 목록이다. 최소 1개 이상이어야 한다. |
-| `tasks[].workKind`, `tasks[].visualReview` | `full + current_iteration`에서는 모든 task를 `ui|non_ui|mixed`로 명시 분류한다. `ui|mixed`에만 visual review를 붙이고, 승인된 experience/prototype과 이 task가 책임지는 screen별 state 및 정확한 viewport 크기를 고정한다. 전체 승인 case는 task graph에서 정확히 한 번 소유되어야 한다. |
+| `tasks[].workKind`, `tasks[].visualImpact` | `full + current_iteration`에서는 모든 task를 `ui|non_ui|mixed`로 명시 분류한다. `ui|mixed`에는 이 task가 영향 줄 수 있는 screen/state만 가볍게 기록한다. 영향 범위는 겹칠 수 있으며 Gate B hash·viewport·접근성 계약은 task에 복제하지 않는다. |
 
 ### 3.3 evidence와 인용 규칙
 
@@ -443,9 +443,9 @@ p2a iteration init \
 2. 실행할 task를 정한 뒤 `p2a execute start --artifacts .plan2agent/artifacts/<project_id> --task <task-id>`로 run을 만들고 상태를 `in_progress`로 바꾼다. dependency가 완료되지 않은 task는 시작할 수 없다.
 3. `p2a execute start`가 출력한 launcher prompt를 agent CLI에 붙여넣는다. 별도 확인이 필요하면 `p2a tasks prompt --artifacts .plan2agent/artifacts/<project_id> <task-id>`로 같은 task context를 다시 볼 수 있다.
 4. Claude Code 또는 Codex 같은 write-capable agent 세션에서 prompt를 실행하고, 코드 변경과 검증은 해당 작업 브랜치에서 수행한다. Gemini CLI는 현재 review/monitor 같은 read-only 보조로만 사용한다.
-5. UI task에 `visualReview`가 있으면 먼저 `p2a runs revision --run-id <run-id> --artifacts .plan2agent/artifacts/<project_id>`으로 현재 application workspace revision을 계산하고, 실제 앱을 지정 screen/state/viewport 크기로 렌더링해 PNG screenshot과 `p2a.visual_accessibility_report.v1` JSON을 artifact root의 `visual-evidence/<iteration-id>/<run-id>/`에 남긴다. sidecar에는 각 파일의 SHA-256, 실제 크기, capture URL·시각, run의 workspace identity와 `workspace_revision_sha256`을 포함하고 독립 visual reviewer의 `confirm_ui`를 기록한다. Prototype 화면 자체를 구현 증거로 재사용할 수 없다. 모든 구현을 통합한 뒤 `p2a execute review --artifacts .plan2agent/artifacts/<project_id> --task <done-visual-task-id> --agent-tool <reviewer>`로 최종 review-only run을 연다. 이 명령은 완료 task를 다시 열지 않고 canonical integration workspace, `isolation: none`, 빈 `changedFiles`를 강제한다. Capture 후 canonical workspace revision이 바뀌면 새 review run이 필요하다.
-6. acceptance criteria와 필요한 테스트가 통과하면 `p2a execute finish --artifacts .plan2agent/artifacts/<project_id> --run-id <run-id> --test --lint --typecheck --collect-git`로 검증, run closeout, task done/block 전이를 한 번에 기록한다. `done`은 최신 run이 현재 iteration/task graph에 속하고 실행된 verification(`source: config|command`, `exitCode: 0`)이 있는 경우만 허용한다. `visualReview`가 있는 task는 evidence-backed `confirm_ui`도 필요하며, finish는 검증한 sidecar의 정확한 바이트 해시를 run의 `visualReviewEvidenceSha256`에 봉인한다. 막히면 failed/blocked finish에 `--failure-class`, `--repro-step`, `--localization`, `--guard`를 함께 기록한다.
-7. 다시 `ready`를 확인해 다음 dependency-unblocked task를 선택한다.
+5. UI task의 `visualImpact`는 구현 중 확인할 screen/state 범위만 알려 준다. 일반 구현 run에는 visual sidecar를 만들지 않으며, 승인 prototype은 구현 방향으로 사용하되 구현 증거로 재사용하지 않는다.
+6. acceptance criteria와 필요한 테스트가 통과하면 `p2a execute finish --artifacts .plan2agent/artifacts/<project_id> --run-id <run-id> --test --lint --typecheck --collect-git`로 검증, run closeout, task done/block 전이를 한 번에 기록한다. `done`은 최신 run이 현재 iteration/task graph에 속하고 실행된 verification(`source: config|command`, `exitCode: 0`)이 있는 경우만 허용한다. 막히면 failed/blocked finish에 `--failure-class`, `--repro-step`, `--localization`, `--guard`를 함께 기록한다. 이후 다시 `ready`를 확인해 다음 task를 진행한다.
+7. 모든 task를 완료하고 canonical workspace에 통합한 뒤 `p2a execute review --artifacts .plan2agent/artifacts/<project_id> --agent-tool <reviewer>`로 iteration당 하나의 최종 review-only run을 연다. 이 run은 Gate B에서 전체 승인 screen/state/viewport/접근성 계약을 직접 가져오며 `isolation: none`과 빈 `changedFiles`를 강제한다. 실제 앱의 전체 matrix를 `visual-evidence/<iteration-id>/<run-id>/`에 캡처하고 독립 reviewer의 `confirm_ui` sidecar를 finish하면 정확한 바이트 해시가 `visualReviewEvidenceSha256`에 봉인된다. Capture 뒤 canonical workspace가 바뀌면 새 review run이 필요하다.
 
 이미 승인 산출물을 별도 대상 프로젝트로 복사한 legacy handoff 프로젝트에서는 `.plan2agent/project.config.json.taskGraph`가 가리키는 flat graph를 `--graph`로 명시할 수 있다.
 

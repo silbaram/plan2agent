@@ -106,38 +106,13 @@
               "minLength": 1
             }
           },
-          "visualReview": {
+          "visualImpact": {
             "type": "object",
             "required": [
-              "required",
-              "experienceSpecRef",
-              "experienceSpecSha256",
-              "prototypeManifestRef",
-              "prototypeManifestSha256",
-              "screenStates",
-              "viewports",
-              "accessibilityStandard"
+              "screenStates"
             ],
             "additionalProperties": false,
             "properties": {
-              "required": {
-                "const": true
-              },
-              "experienceSpecRef": {
-                "const": "experience-spec.json"
-              },
-              "experienceSpecSha256": {
-                "type": "string",
-                "pattern": "^[a-f0-9]{64}$"
-              },
-              "prototypeManifestRef": {
-                "type": "string",
-                "pattern": "^visual-design/VD-[0-9]+/prototype\\.json$"
-              },
-              "prototypeManifestSha256": {
-                "type": "string",
-                "pattern": "^[a-f0-9]{64}$"
-              },
               "screenStates": {
                 "type": "array",
                 "minItems": 1,
@@ -164,40 +139,6 @@
                     }
                   }
                 }
-              },
-              "viewports": {
-                "type": "array",
-                "minItems": 1,
-                "items": {
-                  "type": "object",
-                  "required": [
-                    "name",
-                    "width",
-                    "height"
-                  ],
-                  "additionalProperties": false,
-                  "properties": {
-                    "name": {
-                      "type": "string",
-                      "minLength": 1
-                    },
-                    "width": {
-                      "type": "integer",
-                      "minimum": 240
-                    },
-                    "height": {
-                      "type": [
-                        "integer",
-                        "null"
-                      ],
-                      "minimum": 240
-                    }
-                  }
-                }
-              },
-              "accessibilityStandard": {
-                "type": "string",
-                "minLength": 1
               }
             }
           },

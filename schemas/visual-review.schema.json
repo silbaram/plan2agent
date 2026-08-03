@@ -4,9 +4,7 @@
   "title": "Plan2Agent Run Visual Review",
   "type": "object",
   "required": [
-    "schema_version",
     "run_id",
-    "task_id",
     "workspace_ref",
     "workspace_revision_sha256",
     "source_experience_ref",
@@ -18,14 +16,55 @@
     "concerns",
     "note"
   ],
+  "oneOf": [
+    {
+      "required": [
+        "schema_version",
+        "iteration_id"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "p2a.visual_review.v2"
+        }
+      },
+      "not": {
+        "required": [
+          "task_id"
+        ]
+      }
+    },
+    {
+      "required": [
+        "schema_version",
+        "task_id"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "p2a.visual_review.v1"
+        }
+      },
+      "not": {
+        "required": [
+          "iteration_id"
+        ]
+      }
+    }
+  ],
   "additionalProperties": false,
   "properties": {
     "schema_version": {
-      "const": "p2a.visual_review.v1"
+      "enum": [
+        "p2a.visual_review.v1",
+        "p2a.visual_review.v2"
+      ]
     },
     "run_id": {
       "type": "string",
       "pattern": "^run-[A-Za-z0-9._-]+$"
+    },
+    "iteration_id": {
+      "type": "string",
+      "minLength": 1
     },
     "task_id": {
       "type": "string",

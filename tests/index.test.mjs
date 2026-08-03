@@ -3,6 +3,7 @@ import './negative-fixtures.test.mjs';
 import './e2e-artifact-root.test.mjs';
 import './project-config-detection.test.mjs';
 import './harness-update-style-contract.test.mjs';
+import './handoff-portability.test.mjs';
 import './iteration-memory-recall.test.mjs';
 import './run-id-strategy.test.mjs';
 import './run-layout.test.mjs';

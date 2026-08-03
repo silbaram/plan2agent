@@ -20,4 +20,4 @@ Rules:
 - The graph must be acyclic.
 - Split oversized tasks before returning.
 - Inspect supplied planning Memory context. When it materially changes a task or exposes a relevant prior failure, encode the mitigation in acceptance criteria and add `memory:`/`decision:` lineage refs alongside a real spec-field ref.
-- When the approved spec uses `full + current_iteration`, classify every task as `workKind: ui | non_ui | mixed`; attach `visualReview` to every `ui` or `mixed` task with canonical approved experience/prototype refs, their exact approved SHA-256 values, and only that task's screen-state cases and exact viewport objects. Every approved case must be owned exactly once across the graph.
+- When the approved spec uses `full + current_iteration`, classify every task as `workKind: ui | non_ui | mixed`; attach lightweight `visualImpact.screenStates` to every `ui` or `mixed` task. Impact scopes may overlap and must not duplicate the iteration-level review contract.

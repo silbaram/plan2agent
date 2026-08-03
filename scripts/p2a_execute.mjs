@@ -70,7 +70,7 @@ function usage() {
     'Commands:',
     '  plan                 Resolve one ready task and print the supervised execution plan. No files are changed.',
     '  start                Create a run, mark the task in_progress, and print the manual launcher prompt.',
-    '  review               Start a no-change final visual review run for a completed visual task.',
+    '  review               Start the single no-change pre-close visual review run for the iteration.',
     '  resume               Reprint the selected run context and manual launcher prompt without changing files.',
     '  status               Show task status and the latest or requested run log summary.',
     '  finish               Optionally verify, finish the run, then mark the task done or blocked.',
@@ -82,7 +82,7 @@ function usage() {
     '  --maintenance        With --artifacts, use the maintenance task graph.',
     '',
     'Start/plan/review options:',
-    '  --task <task-id>     Task to execute. If omitted, there must be exactly one ready task.',
+    '  --task <task-id>     Task to execute; for review, optional remediation owner. Start/plan require one ready task when omitted.',
     '  --approval <path>    Proposal draft approval JSON; selects its maintenance task and implies --maintenance.',
     '  --agent-tool <tool>  Write implementer label: codex, claude, or manual. Default: codex.',
     '  --run-id <run-id>    Stable run id for start; generated when omitted.',
@@ -437,24 +437,19 @@ function selectReadyTask(source, taskId = null) {
 
 function selectCompletedVisualTask(source, taskId = null) {
   const candidates = source.graph.tasks.filter((task) => (
-    task.status === 'done' && task.visualReview?.required
+    task.status === 'done' && task.visualImpact
   ));
   if (taskId) {
     const task = requireTask(source, taskId);
     if (task.status !== 'done') {
       throw new Error(`${task.id} must be done before final visual review; current status is ${task.status}`);
     }
-    if (!task.visualReview?.required) {
-      throw new Error(`${task.id} does not require visual review`);
+    if (!task.visualImpact) {
+      throw new Error(`${task.id} does not affect the approved visual experience`);
     }
     return task;
   }
   if (candidates.length === 0) throw new Error('no completed visual task is available for final review');
-  if (candidates.length > 1) {
-    throw new Error(
-      `multiple completed visual tasks are available; pass --task. Visual tasks: ${candidates.map((task) => task.id).join(', ')}`,
-    );
-  }
   return candidates[0];
 }
 
@@ -998,7 +993,8 @@ function printLauncherPrompt(source, task, runId, approvalLink = null) {
 function printFinalVisualReviewInstructions(args, source, task, runId, workspacePath) {
   console.log('');
   console.log('Plan2Agent final visual review');
-  console.log(`- task: ${task.id} - ${task.title}`);
+  console.log(`- iteration: ${source.iterationId}`);
+  console.log(`- remediation owner: ${task.id} - ${task.title}`);
   console.log(`- runId: ${runId}`);
   console.log(`- workspace: ${displayPath(workspacePath)}`);
   console.log('- isolation: none');
@@ -1006,7 +1002,7 @@ function printFinalVisualReviewInstructions(args, source, task, runId, workspace
   console.log('');
   console.log('Next:');
   console.log(`1. Snapshot the canonical workspace: ${commandLine('p2a_runs.mjs', ['revision', ...source.sourceArgs, '--run-id', runId])}`);
-  console.log('2. Capture every assigned screen/state/viewport and write the accessibility report plus .visual-review.json sidecar.');
+  console.log('2. Capture the complete approved screen/state/viewport matrix and write the accessibility report plus .visual-review.json sidecar.');
   console.log(`3. Finish without changing task state: ${commandLine('p2a_execute.mjs', ['finish', ...source.sourceArgs, '--run-id', runId, '--test', '--lint', '--typecheck'])}`);
 }
 
@@ -1164,9 +1160,16 @@ function runReview(args) {
     if (args.approval || args.maintenance) {
       throw new Error('final visual review is only supported for a feature iteration task');
     }
+    const unfinishedTasks = source.graph.tasks.filter((candidate) => candidate.status !== 'done');
+    if (unfinishedTasks.length) {
+      throw new Error(
+        `final visual review requires every iteration task to be done; unfinished task(s): ${unfinishedTasks.map((candidate) => `${candidate.id}:${candidate.status}`).join(', ')}`,
+      );
+    }
     const task = selectCompletedVisualTask(source, args.taskId);
-    if (hasStartedRunForTask(source, task.id)) {
-      throw new Error(`${task.id} already has a started run; finish or block it before final visual review`);
+    const activeTask = source.graph.tasks.find((candidate) => hasStartedRunForTask(source, candidate.id));
+    if (activeTask) {
+      throw new Error(`${activeTask.id} already has a started run; finish or block it before final visual review`);
     }
     const workspacePath = finalReviewWorkspace(args, source);
     args.workspace = workspacePath;
@@ -1174,7 +1177,7 @@ function runReview(args) {
     args.runKind = 'final_visual_review';
     args.notes = uniqueStrings([
       ...args.notes,
-      `FINAL_VISUAL_REVIEW: canonical workspace=${workspacePath}`,
+      `FINAL_VISUAL_REVIEW: iteration=${source.iterationId}; canonical workspace=${workspacePath}`,
     ]);
     const identity = resolveStartIdentity(args, source, task, { reserve: true });
     const { runId, defaults } = identity;
@@ -1189,7 +1192,6 @@ function runReview(args) {
       console.error(commandLine('p2a_execute.mjs', [
         'review',
         ...source.sourceArgs,
-        '--task', task.id,
         '--agent-tool', args.agentTool,
         '--run-id', runId,
         '--workspace', workspacePath,

@@ -6,8 +6,8 @@ import { createHash } from 'node:crypto';
 import path from 'node:path';
 import process from 'node:process';
 import { pathToFileURL } from 'node:url';
-import { inflateSync } from 'node:zlib';
 import { normalizePath, P2A_DIR, resolveP2aPaths } from './p2a_paths.mjs';
+import { validatedPngDimensions } from './p2a_visual_media.mjs';
 import {
   artifactRunRef,
   canonicalRunRef,
@@ -2192,658 +2192,7 @@ function htmlTagEnd(content, start) {
   return -1;
 }
 
-const CSS_VISIBILITY_PROPERTIES = new Set(['display', 'visibility', 'content-visibility']);
-
-function cssWithoutComments(value) {
-  let result = '';
-  let quote = null;
-  for (let offset = 0; offset < value.length; offset += 1) {
-    const character = value[offset];
-    if (quote) {
-      result += character;
-      if (character === '\\') {
-        if (offset + 1 < value.length) result += value[++offset];
-        if (result.endsWith('\\\r') && value[offset + 1] === '\n') result += value[++offset];
-      } else if (character === quote) {
-        quote = null;
-      }
-      continue;
-    }
-    if (character === '"' || character === "'") {
-      quote = character;
-      result += character;
-      continue;
-    }
-    if (character === '\\') {
-      result += character;
-      if (offset + 1 < value.length) result += value[++offset];
-      if (result.endsWith('\\\r') && value[offset + 1] === '\n') result += value[++offset];
-      continue;
-    }
-    if (character === '/' && value[offset + 1] === '*') {
-      const commentEnd = value.indexOf('*/', offset + 2);
-      result += ' ';
-      if (commentEnd < 0) break;
-      offset = commentEnd + 1;
-      continue;
-    }
-    result += character;
-  }
-  return result;
-}
-
-function splitCssDeclarations(style) {
-  const declarations = [];
-  let buffer = '';
-  let quote = null;
-  let depth = 0;
-  for (let offset = 0; offset < style.length; offset += 1) {
-    const character = style[offset];
-    if (quote) {
-      buffer += character;
-      if (character === '\\') {
-        if (offset + 1 < style.length) buffer += style[++offset];
-        if (buffer.endsWith('\\\r') && style[offset + 1] === '\n') buffer += style[++offset];
-      } else if (character === quote) {
-        quote = null;
-      }
-      continue;
-    }
-    if (character === '"' || character === "'") {
-      quote = character;
-      buffer += character;
-      continue;
-    }
-    if (character === '\\') {
-      buffer += character;
-      if (offset + 1 < style.length) buffer += style[++offset];
-      continue;
-    }
-    if (character === '(' || character === '[' || character === '{') depth += 1;
-    else if (character === ')' || character === ']' || character === '}') depth = Math.max(0, depth - 1);
-    if (character === ';' && depth === 0) {
-      declarations.push(buffer);
-      buffer = '';
-    } else {
-      buffer += character;
-    }
-  }
-  if (buffer.trim()) declarations.push(buffer);
-  return declarations;
-}
-
-function cssDeclarationColon(declaration) {
-  let quote = null;
-  let depth = 0;
-  for (let offset = 0; offset < declaration.length; offset += 1) {
-    const character = declaration[offset];
-    if (quote) {
-      if (character === '\\') {
-        offset += 1;
-        if (declaration[offset] === '\r' && declaration[offset + 1] === '\n') offset += 1;
-      } else if (character === quote) {
-        quote = null;
-      }
-      continue;
-    }
-    if (character === '"' || character === "'") {
-      quote = character;
-      continue;
-    }
-    if (character === '\\') {
-      offset += 1;
-      continue;
-    }
-    if (character === '(' || character === '[' || character === '{') depth += 1;
-    else if (character === ')' || character === ']' || character === '}') depth = Math.max(0, depth - 1);
-    else if (character === ':' && depth === 0) return offset;
-  }
-  return -1;
-}
-
-function decodeCssIdentifier(value, label) {
-  let decoded = '';
-  for (let offset = 0; offset < value.length; offset += 1) {
-    const character = value[offset];
-    if (character !== '\\') {
-      decoded += character;
-      continue;
-    }
-    if (offset + 1 >= value.length || /[\r\n\f]/.test(value[offset + 1])) {
-      throw new ValidationError(`${label} contains an invalid CSS escape`);
-    }
-    const hexMatch = value.slice(offset + 1).match(/^[0-9a-f]{1,6}/i);
-    if (hexMatch) {
-      const codePoint = Number.parseInt(hexMatch[0], 16);
-      decoded += (
-        codePoint === 0
-        || codePoint > 0x10ffff
-        || (codePoint >= 0xd800 && codePoint <= 0xdfff)
-      ) ? '\ufffd' : String.fromCodePoint(codePoint);
-      offset += hexMatch[0].length;
-      if (value[offset + 1] === '\r' && value[offset + 2] === '\n') offset += 2;
-      else if (/[ \t\r\n\f]/.test(value[offset + 1] ?? '')) offset += 1;
-      continue;
-    }
-    decoded += value[offset + 1];
-    offset += 1;
-  }
-  return decoded;
-}
-
-function cssVisibilityDeclarations(style, label = 'CSS declaration') {
-  if (typeof style !== 'string') return [];
-  const declarations = [];
-  const withoutComments = cssWithoutComments(style);
-  for (const declaration of splitCssDeclarations(withoutComments)) {
-    const separator = cssDeclarationColon(declaration);
-    if (separator < 0) continue;
-    const rawProperty = declaration.slice(0, separator).trim();
-    const property = decodeCssIdentifier(rawProperty, label).toLowerCase();
-    if (!CSS_VISIBILITY_PROPERTIES.has(property)) continue;
-    const rawValue = declaration.slice(separator + 1).trim();
-    const important = /\s*!important\s*$/i.test(rawValue);
-    const value = rawValue
-      .replace(/\s*!important\s*$/i, '')
-      .trim()
-      .toLowerCase();
-    if (!value) continue;
-    if (value.includes('var(') || value.includes('\\')) {
-      throw new ValidationError(`${label} uses an unsupported dynamic ${property} value`);
-    }
-    declarations.push({ property, value, important });
-  }
-  return declarations;
-}
-
-function cssMediaCanApplyToScreen(media) {
-  if (typeof media !== 'string' || !media.trim()) return true;
-  return media.split(',').some((query) => {
-    const normalized = query.trim().toLowerCase().replace(/\s+/g, ' ');
-    if (!normalized || normalized === 'not all') return false;
-    if (/^(?:only )?print\b/.test(normalized)) return false;
-    if (/^not (?:only )?screen\b/.test(normalized)) return false;
-    return true;
-  });
-}
-
-function cssMatchingBrace(content, openingOffset) {
-  let depth = 0;
-  let quote = null;
-  for (let offset = openingOffset; offset < content.length; offset += 1) {
-    const character = content[offset];
-    if (quote) {
-      if (character === '\\') offset += 1;
-      else if (character === quote) quote = null;
-      continue;
-    }
-    if (character === '"' || character === "'") quote = character;
-    else if (character === '{') depth += 1;
-    else if (character === '}') {
-      depth -= 1;
-      if (depth === 0) return offset;
-    }
-  }
-  return -1;
-}
-
-function nextCssMediaOffset(content, start) {
-  let quote = null;
-  for (let offset = start; offset < content.length; offset += 1) {
-    const character = content[offset];
-    if (quote) {
-      if (character === '\\') offset += 1;
-      else if (character === quote) quote = null;
-      continue;
-    }
-    if (character === '"' || character === "'") {
-      quote = character;
-      continue;
-    }
-    if (
-      character === '@'
-      && content.slice(offset, offset + 6).toLowerCase() === '@media'
-      && !/[A-Za-z0-9_-]/.test(content[offset + 6] ?? '')
-    ) return offset;
-  }
-  return -1;
-}
-
-function cssWithoutInactiveScreenMedia(content) {
-  const withoutComments = cssWithoutComments(content);
-  let result = '';
-  let offset = 0;
-  while (offset < withoutComments.length) {
-    const mediaOffset = nextCssMediaOffset(withoutComments, offset);
-    if (mediaOffset < 0) {
-      result += withoutComments.slice(offset);
-      break;
-    }
-    result += withoutComments.slice(offset, mediaOffset);
-    const delimiter = nextCssRuleDelimiter(withoutComments, mediaOffset + 6);
-    if (!delimiter || delimiter.character !== '{') {
-      result += withoutComments.slice(mediaOffset);
-      break;
-    }
-    const closingOffset = cssMatchingBrace(withoutComments, delimiter.offset);
-    if (closingOffset < 0) {
-      result += withoutComments.slice(mediaOffset);
-      break;
-    }
-    const media = withoutComments.slice(mediaOffset + 6, delimiter.offset);
-    if (cssMediaCanApplyToScreen(media)) {
-      result += cssWithoutInactiveScreenMedia(
-        withoutComments.slice(delimiter.offset + 1, closingOffset),
-      );
-    }
-    offset = closingOffset + 1;
-  }
-  return result;
-}
-
-function splitCssSelectorList(selectorList) {
-  const selectors = [];
-  let buffer = '';
-  let quote = null;
-  let depth = 0;
-  for (const character of selectorList) {
-    if (quote) {
-      buffer += character;
-      if (character === quote) quote = null;
-      continue;
-    }
-    if (character === '"' || character === "'") {
-      quote = character;
-      buffer += character;
-      continue;
-    }
-    if (character === '[' || character === '(') depth += 1;
-    else if (character === ']' || character === ')') depth = Math.max(0, depth - 1);
-    if (character === ',' && depth === 0) {
-      selectors.push(buffer.trim());
-      buffer = '';
-    } else {
-      buffer += character;
-    }
-  }
-  if (buffer.trim()) selectors.push(buffer.trim());
-  return selectors;
-}
-
-function nextCssRuleDelimiter(content, start) {
-  let quote = null;
-  let depth = 0;
-  for (let offset = start; offset < content.length; offset += 1) {
-    const character = content[offset];
-    if (quote) {
-      if (character === '\\') offset += 1;
-      else if (character === quote) quote = null;
-      continue;
-    }
-    if (character === '"' || character === "'") {
-      quote = character;
-      continue;
-    }
-    if (character === '(' || character === '[') depth += 1;
-    else if (character === ')' || character === ']') depth = Math.max(0, depth - 1);
-    else if (depth === 0 && (character === '{' || character === ';')) {
-      return { character, offset };
-    }
-  }
-  return null;
-}
-
-function cssContainsNestedRule(content) {
-  let offset = 0;
-  while (offset < content.length) {
-    const delimiter = nextCssRuleDelimiter(content, offset);
-    if (!delimiter) return false;
-    if (delimiter.character === '{') return true;
-    offset = delimiter.offset + 1;
-  }
-  return false;
-}
-
-function cssStyleRuleBlocks(content, options = {}) {
-  const rules = [];
-  let offset = 0;
-  while (offset < content.length) {
-    while (/\s|;/.test(content[offset] ?? '')) offset += 1;
-    if (offset >= content.length) break;
-    const delimiter = nextCssRuleDelimiter(content, offset);
-    if (!delimiter) break;
-    if (delimiter.character === ';') {
-      offset = delimiter.offset + 1;
-      continue;
-    }
-    const prelude = content.slice(offset, delimiter.offset).trim();
-    const closingOffset = cssMatchingBrace(content, delimiter.offset);
-    if (closingOffset < 0) break;
-    const body = content.slice(delimiter.offset + 1, closingOffset);
-    if (prelude.startsWith('@')) {
-      const atRule = prelude.match(/^@([A-Za-z-]+)/)?.[1]?.toLowerCase();
-      const nestedBlocks = cssStyleRuleBlocks(body, {
-        layered: options.layered || atRule === 'layer',
-      });
-      const containsVisibilityRules = nestedBlocks.some((block) => (
-        cssVisibilityDeclarations(block.declarations).length > 0
-      ));
-      if (prelude.includes('\\') && containsVisibilityRules) {
-        throw new ValidationError(
-          'stylesheet visibility rules must not use escaped CSS at-rule names',
-        );
-      }
-      if (atRule === 'layer') {
-        rules.push(...nestedBlocks);
-      } else if (['container', 'document', 'scope', 'supports'].includes(atRule)) {
-        if (containsVisibilityRules) {
-          throw new ValidationError(
-            `stylesheet visibility rules must not use unsupported conditional or scoped @${atRule} rules`,
-          );
-        }
-      }
-    } else if (prelude) {
-      if (
-        cssContainsNestedRule(body)
-        && /\b(?:display|visibility|content-visibility)\s*:/i.test(body)
-      ) {
-        throw new ValidationError('stylesheet visibility rules must not use unsupported CSS nesting');
-      }
-      rules.push({
-        selectorList: prelude,
-        declarations: body,
-        layered: Boolean(options.layered),
-      });
-    }
-    offset = closingOffset + 1;
-  }
-  return rules;
-}
-
-function cssVisibilityRules(content) {
-  const rules = [];
-  const activeContent = cssWithoutInactiveScreenMedia(content);
-  let sourceOrder = 0;
-  for (const block of cssStyleRuleBlocks(activeContent)) {
-    const declarations = cssVisibilityDeclarations(
-      block.declarations,
-      'stylesheet visibility declaration',
-    );
-    if (!declarations.length) continue;
-    if (block.layered) {
-      throw new ValidationError(
-        'stylesheet visibility rules must not use unsupported CSS cascade layers',
-      );
-    }
-    for (const selector of splitCssSelectorList(block.selectorList)) {
-      const normalized = selector.trim();
-      if (!normalized || normalized.startsWith('@')) continue;
-      if (!cssSelectorSupported(normalized)) {
-        throw new ValidationError(
-          `stylesheet visibility rule uses an unsupported selector: ${JSON.stringify(normalized)}`,
-        );
-      }
-      rules.push({
-        selector: normalized,
-        specificity: cssSelectorSpecificity(normalized),
-        sourceOrder,
-        declarations,
-      });
-      sourceOrder += 1;
-    }
-  }
-  return rules;
-}
-
-function splitCssSelector(selector) {
-  const parts = [];
-  let buffer = '';
-  let pendingCombinator = null;
-  let quote = null;
-  let depth = 0;
-  const pushPart = () => {
-    const compound = buffer.trim();
-    if (!compound) return;
-    parts.push({
-      compound,
-      combinator: parts.length ? (pendingCombinator ?? ' ') : null,
-    });
-    buffer = '';
-    pendingCombinator = null;
-  };
-  for (const character of selector) {
-    if (quote) {
-      buffer += character;
-      if (character === quote) quote = null;
-      continue;
-    }
-    if (character === '"' || character === "'") {
-      quote = character;
-      buffer += character;
-      continue;
-    }
-    if (character === '[' || character === '(') {
-      depth += 1;
-      buffer += character;
-      continue;
-    }
-    if (character === ']' || character === ')') {
-      depth = Math.max(0, depth - 1);
-      buffer += character;
-      continue;
-    }
-    if (depth === 0 && ['+', '~', ','].includes(character)) return null;
-    if (depth === 0 && character === '>') {
-      pushPart();
-      pendingCombinator = '>';
-      continue;
-    }
-    if (depth === 0 && /\s/.test(character)) {
-      if (buffer.trim()) {
-        pushPart();
-        pendingCombinator = ' ';
-      } else if (parts.length && pendingCombinator === null) {
-        pendingCombinator = ' ';
-      }
-      continue;
-    }
-    buffer += character;
-  }
-  if (quote || depth !== 0 || (pendingCombinator !== null && !buffer.trim())) return null;
-  pushPart();
-  return parts.length ? parts : null;
-}
-
-function cssCompoundMatches(element, compound) {
-  let remaining = compound.trim();
-  const typeMatch = remaining.match(/^(\*|[A-Za-z][A-Za-z0-9-]*)/);
-  if (typeMatch) {
-    if (typeMatch[1] !== '*' && element.tagName !== typeMatch[1].toLowerCase()) return false;
-    remaining = remaining.slice(typeMatch[0].length);
-  }
-  while (remaining) {
-    const classMatch = remaining.match(/^\.([A-Za-z_][A-Za-z0-9_-]*)/);
-    if (classMatch) {
-      const classes = (element.attributes.get('class') ?? '').split(/\s+/).filter(Boolean);
-      if (!classes.includes(classMatch[1])) return false;
-      remaining = remaining.slice(classMatch[0].length);
-      continue;
-    }
-    const idMatch = remaining.match(/^#([A-Za-z_][A-Za-z0-9_-]*)/);
-    if (idMatch) {
-      if (element.attributes.get('id') !== idMatch[1]) return false;
-      remaining = remaining.slice(idMatch[0].length);
-      continue;
-    }
-    if (remaining.startsWith('[')) {
-      const attributeEnd = remaining.indexOf(']');
-      if (attributeEnd < 0) return false;
-      const expression = remaining.slice(1, attributeEnd).trim();
-      const attributeMatch = expression.match(
-        /^([^\s~|^$*!=]+)\s*(?:(~=|=)\s*(?:"([^"]*)"|'([^']*)'|([^\s]+)))?$/,
-      );
-      if (!attributeMatch) return false;
-      const name = attributeMatch[1].toLowerCase();
-      if (!element.attributes.has(name)) return false;
-      const operator = attributeMatch[2];
-      if (operator) {
-        const actual = element.attributes.get(name) ?? '';
-        const expected = attributeMatch[3] ?? attributeMatch[4] ?? attributeMatch[5] ?? '';
-        if (operator === '=' && actual !== expected) return false;
-        if (operator === '~=' && !actual.split(/\s+/).includes(expected)) return false;
-      }
-      remaining = remaining.slice(attributeEnd + 1);
-      continue;
-    }
-    return false;
-  }
-  return true;
-}
-
-function cssCompoundSupported(compound) {
-  let remaining = compound.trim();
-  const typeMatch = remaining.match(/^(\*|[A-Za-z][A-Za-z0-9-]*)/);
-  if (typeMatch) remaining = remaining.slice(typeMatch[0].length);
-  while (remaining) {
-    const classMatch = remaining.match(/^\.([A-Za-z_][A-Za-z0-9_-]*)/);
-    if (classMatch) {
-      remaining = remaining.slice(classMatch[0].length);
-      continue;
-    }
-    const idMatch = remaining.match(/^#([A-Za-z_][A-Za-z0-9_-]*)/);
-    if (idMatch) {
-      remaining = remaining.slice(idMatch[0].length);
-      continue;
-    }
-    if (remaining.startsWith('[')) {
-      const attributeEnd = remaining.indexOf(']');
-      if (attributeEnd < 0) return false;
-      const expression = remaining.slice(1, attributeEnd).trim();
-      if (!/^([^\s~|^$*!=]+)\s*(?:(~=|=)\s*(?:"([^"]*)"|'([^']*)'|([^\s]+)))?$/.test(expression)) {
-        return false;
-      }
-      remaining = remaining.slice(attributeEnd + 1);
-      continue;
-    }
-    return false;
-  }
-  return true;
-}
-
-function cssSelectorSupported(selector) {
-  const parts = splitCssSelector(selector);
-  return Boolean(parts?.every((part) => cssCompoundSupported(part.compound)));
-}
-
-function cssSelectorSpecificity(selector) {
-  const parts = splitCssSelector(selector) ?? [];
-  const specificity = [0, 0, 0, 0];
-  for (const { compound } of parts) {
-    let remaining = compound.trim();
-    const typeMatch = remaining.match(/^(\*|[A-Za-z][A-Za-z0-9-]*)/);
-    if (typeMatch) {
-      if (typeMatch[1] !== '*') specificity[3] += 1;
-      remaining = remaining.slice(typeMatch[0].length);
-    }
-    while (remaining) {
-      const classMatch = remaining.match(/^\.[A-Za-z_][A-Za-z0-9_-]*/);
-      if (classMatch) {
-        specificity[2] += 1;
-        remaining = remaining.slice(classMatch[0].length);
-        continue;
-      }
-      const idMatch = remaining.match(/^#[A-Za-z_][A-Za-z0-9_-]*/);
-      if (idMatch) {
-        specificity[1] += 1;
-        remaining = remaining.slice(idMatch[0].length);
-        continue;
-      }
-      if (remaining.startsWith('[')) {
-        const attributeEnd = remaining.indexOf(']');
-        specificity[2] += 1;
-        remaining = remaining.slice(attributeEnd + 1);
-        continue;
-      }
-      break;
-    }
-  }
-  return specificity;
-}
-
-function compareCssSpecificity(left, right) {
-  for (let index = 0; index < Math.max(left.length, right.length); index += 1) {
-    const difference = (left[index] ?? 0) - (right[index] ?? 0);
-    if (difference !== 0) return difference;
-  }
-  return 0;
-}
-
-function cssSelectorMatches(element, ancestors, selector) {
-  const parts = splitCssSelector(selector);
-  if (!parts || !cssCompoundMatches(element, parts.at(-1).compound)) return false;
-  let ancestorIndex = ancestors.length - 1;
-  for (let partIndex = parts.length - 2; partIndex >= 0; partIndex -= 1) {
-    const relation = parts[partIndex + 1].combinator;
-    if (relation === '>') {
-      if (
-        ancestorIndex < 0
-        || !cssCompoundMatches(ancestors[ancestorIndex], parts[partIndex].compound)
-      ) return false;
-      ancestorIndex -= 1;
-      continue;
-    }
-    while (
-      ancestorIndex >= 0
-      && !cssCompoundMatches(ancestors[ancestorIndex], parts[partIndex].compound)
-    ) ancestorIndex -= 1;
-    if (ancestorIndex < 0) return false;
-    ancestorIndex -= 1;
-  }
-  return true;
-}
-
-function cssVisibilityForElement(element, ancestors, rules, inlineStyle) {
-  const winners = new Map();
-  const consider = (declaration, specificity, sourceOrder) => {
-    const current = winners.get(declaration.property);
-    if (
-      !current
-      || Number(declaration.important) > Number(current.important)
-      || (
-        declaration.important === current.important
-        && (
-          compareCssSpecificity(specificity, current.specificity) > 0
-          || (
-            compareCssSpecificity(specificity, current.specificity) === 0
-            && sourceOrder >= current.sourceOrder
-          )
-        )
-      )
-    ) {
-      winners.set(declaration.property, { ...declaration, specificity, sourceOrder });
-    }
-  };
-  for (const rule of rules) {
-    if (!cssSelectorMatches(element, ancestors, rule.selector)) continue;
-    for (const [index, declaration] of rule.declarations.entries()) {
-      consider(declaration, rule.specificity, (rule.sourceOrder * 1000) + index);
-    }
-  }
-  const inlineDeclarations = cssVisibilityDeclarations(
-    decodeHtmlUrlReference(inlineStyle ?? ''),
-    'inline style visibility declaration',
-  );
-  for (const [index, declaration] of inlineDeclarations.entries()) {
-    consider(
-      declaration,
-      [1, 0, 0, 0],
-      Number.MAX_SAFE_INTEGER - inlineDeclarations.length + index,
-    );
-  }
-  return winners;
-}
-
-function renderedHtmlElements(content, visibilityRules = [], options = {}) {
+function renderedHtmlElements(content, options = {}) {
   const elements = [];
   const stack = [];
   const lowerContent = content.toLowerCase();
@@ -2889,34 +2238,15 @@ function renderedHtmlElements(content, visibilityRules = [], options = {}) {
     const tagName = openingMatch[1].toLowerCase();
     const attributes = parseHtmlTagAttributes(tag, openingMatch[0].length);
     const element = { tagName, attributes };
-    const ancestors = stack.map((item) => ({
-      tagName: item.tagName,
-      attributes: item.attributes,
-    }));
     const parentInactive = stack.at(-1)?.inactive ?? false;
     const parentTreeSuppressed = stack.at(-1)?.treeSuppressed ?? false;
-    const parentVisibilityHidden = stack.at(-1)?.visibilityHidden ?? false;
     const inactive = parentInactive || tagName === 'template' || tagName === 'noscript';
-    const cssVisibility = cssVisibilityForElement(
-      element,
-      ancestors,
-      visibilityRules,
-      attributes.get('style'),
-    );
-    const visibilityValue = cssVisibility.get('visibility')?.value;
-    const visibilityHidden = ['hidden', 'collapse'].includes(visibilityValue)
-      || (
-        !['visible', 'initial', 'revert', 'revert-layer'].includes(visibilityValue)
-        && parentVisibilityHidden
-      );
     const treeSuppressed = parentTreeSuppressed
       || inactive
       || attributes.has('hidden')
       || (options.excludeInert && attributes.has('inert'))
-      || (tagName === 'dialog' && !attributes.has('open'))
-      || cssVisibility.get('display')?.value === 'none'
-      || cssVisibility.get('content-visibility')?.value === 'hidden';
-    const suppressed = treeSuppressed || visibilityHidden;
+      || (tagName === 'dialog' && !attributes.has('open'));
+    const suppressed = treeSuppressed;
     const rawTextElement = HTML_RAW_TEXT_ELEMENTS.has(tagName) ? tagName : null;
     let textContent = null;
     if (rawTextElement) {
@@ -2938,7 +2268,6 @@ function renderedHtmlElements(content, visibilityRules = [], options = {}) {
         inactive,
         suppressed,
         treeSuppressed,
-        visibilityHidden,
         rawTextElement,
       });
     }
@@ -2948,7 +2277,7 @@ function renderedHtmlElements(content, visibilityRules = [], options = {}) {
 }
 
 function assertOfflinePrototypeCsp(content, label) {
-  const metaTag = renderedHtmlElements(content, [], { includeSuppressed: true }).find((element) => (
+  const metaTag = renderedHtmlElements(content, { includeSuppressed: true }).find((element) => (
     element.tagName === 'meta'
     && decodeHtmlUrlReference(element.attributes.get('http-equiv') ?? '').trim().toLowerCase()
       === 'content-security-policy'
@@ -3006,7 +2335,7 @@ function assertOfflinePrototypeContent(filePath, mediaType, label) {
     || /@import\s+(?:url\()?\s*["']?(?:https?:)?\/\//i.test(content)
     || /\bimport\s*(?:\(|[^;]*?from\s*)["'](?:https?:)?\/\//i.test(content);
   const decodedMetaRefresh = mediaType === 'text/html'
-    && renderedHtmlElements(content, [], { includeSuppressed: true }).some((element) => (
+    && renderedHtmlElements(content, { includeSuppressed: true }).some((element) => (
       element.tagName === 'meta'
       && decodeHtmlUrlReference(element.attributes.get('http-equiv') ?? '').trim().toLowerCase()
         === 'refresh'
@@ -3231,89 +2560,9 @@ function normalizePrototypeNavigationReference(rawReference, sourceEntryPath, la
   return { path: resolvedPath, fragment };
 }
 
-function cssImportReferences(content, sourceEntryPath) {
-  const references = [];
-  for (const match of content.matchAll(
-    /@import\s+(?:url\(\s*)?(?:"([^"]+)"|'([^']+)'|([^\s);]+))/gi,
-  )) {
-    const rawReference = match[1] ?? match[2] ?? match[3];
-    const reference = normalizePrototypeNavigationReference(
-      rawReference,
-      sourceEntryPath,
-      `visual prototype ${sourceEntryPath} CSS import`,
-    );
-    if (reference) {
-      let tail = content
-        .slice(match.index + match[0].length)
-        .split(';', 1)[0]
-        .replace(/^\s*\)\s*/, '')
-        .trim();
-      const layerPrefix = tail.match(/^layer(?:\s*\([^)]*\))?\s*/i);
-      if (layerPrefix) tail = tail.slice(layerPrefix[0].length).trim();
-      references.push({
-        path: reference.path,
-        media: tail,
-        layered: Boolean(layerPrefix || tail.includes('\\')),
-      });
-    }
-  }
-  return references;
-}
-
 function prototypeRenderedHtmlElements(filePath, entry, entriesByPath, prototypeDir, options = {}) {
   const content = readFileSync(filePath, 'utf8');
-  const structuralElements = renderedHtmlElements(content, [], { includeActiveStyles: true });
-  const cssContents = [];
-  function appendCssContent(cssContent, sourceEntryPath, ancestors = new Set(), layered = false) {
-    for (const reference of cssImportReferences(cssContent, sourceEntryPath)) {
-      if (cssMediaCanApplyToScreen(reference.media)) {
-        appendCssPath(reference.path, ancestors, layered || reference.layered);
-      }
-    }
-    cssContents.push(layered ? `@layer {${cssContent}}` : cssContent);
-  }
-  function appendCssPath(referencePath, ancestors = new Set(), layered = false) {
-    const normalized = normalizePath(referencePath);
-    const cssEntry = entriesByPath.get(normalized);
-    if (cssEntry?.media_type !== 'text/css' || ancestors.has(normalized)) return;
-    const nextAncestors = new Set(ancestors);
-    nextAncestors.add(normalized);
-    const cssContent = readFileSync(path.resolve(prototypeDir, normalized), 'utf8');
-    appendCssContent(cssContent, cssEntry.path, nextAncestors, layered);
-  }
-
-  for (const element of structuralElements) {
-    if (element.tagName === 'style') {
-      const media = decodeHtmlUrlReference(element.attributes.get('media') ?? '');
-      if (cssMediaCanApplyToScreen(media)) {
-        appendCssContent(element.textContent ?? '', entry.path);
-      }
-      continue;
-    }
-    if (element.tagName !== 'link') continue;
-    const rel = decodeHtmlUrlReference(element.attributes.get('rel') ?? '')
-      .toLowerCase()
-      .split(/\s+/)
-      .filter(Boolean);
-    const href = element.attributes.get('href');
-    const media = decodeHtmlUrlReference(element.attributes.get('media') ?? '');
-    if (
-      !rel.includes('stylesheet')
-      || rel.includes('alternate')
-      || element.attributes.has('disabled')
-      || !cssMediaCanApplyToScreen(media)
-      || typeof href !== 'string'
-    ) continue;
-    const reference = normalizePrototypeNavigationReference(
-      href,
-      entry.path,
-      `visual prototype ${entry.path} stylesheet href`,
-    );
-    if (reference) appendCssPath(reference.path);
-  }
-
-  const visibilityRules = cssVisibilityRules(cssContents.join('\n'));
-  return renderedHtmlElements(content, visibilityRules, options);
+  return renderedHtmlElements(content, options);
 }
 
 function prototypeAnchorReferences(filePath, entry, entriesByPath, prototypeDir) {
@@ -3766,243 +3015,6 @@ export function validateVisualReviewSourceArtifacts(expectedContract, options = 
   return { sourceSpecPath, experiencePath, prototypePath, experience };
 }
 
-function pngCrc32(buffer) {
-  let crc = 0xffffffff;
-  for (const byte of buffer) {
-    crc ^= byte;
-    for (let bit = 0; bit < 8; bit += 1) {
-      crc = (crc >>> 1) ^ ((crc & 1) ? 0xedb88320 : 0);
-    }
-  }
-  return (crc ^ 0xffffffff) >>> 0;
-}
-
-const PNG_COLOR_TYPE_CHANNELS = new Map([
-  [0, 1],
-  [2, 3],
-  [3, 1],
-  [4, 2],
-  [6, 4],
-]);
-
-const PNG_COLOR_TYPE_BIT_DEPTHS = new Map([
-  [0, new Set([1, 2, 4, 8, 16])],
-  [2, new Set([8, 16])],
-  [3, new Set([1, 2, 4, 8])],
-  [4, new Set([8, 16])],
-  [6, new Set([8, 16])],
-]);
-
-const PNG_ADAM7_PASSES = [
-  [0, 0, 8, 8],
-  [4, 0, 8, 8],
-  [0, 4, 4, 8],
-  [2, 0, 4, 4],
-  [0, 2, 2, 4],
-  [1, 0, 2, 2],
-  [0, 1, 1, 2],
-];
-
-const PNG_MAX_DIMENSION = 16_384;
-const PNG_MAX_PIXELS = 64 * 1024 * 1024;
-const PNG_MAX_DECOMPRESSED_BYTES = 256 * 1024 * 1024;
-
-function pngPassDimension(size, start, step) {
-  return size <= start ? 0 : Math.ceil((size - start) / step);
-}
-
-function pngImageLayout(dimensions, format, label) {
-  if (
-    !format
-    || format.compressionMethod !== 0
-    || format.filterMethod !== 0
-    || ![0, 1].includes(format.interlaceMethod)
-  ) {
-    throw new ValidationError(`${label} has an unsupported PNG image format`);
-  }
-  const channels = PNG_COLOR_TYPE_CHANNELS.get(format.colorType);
-  if (!channels || !PNG_COLOR_TYPE_BIT_DEPTHS.get(format.colorType)?.has(format.bitDepth)) {
-    throw new ValidationError(`${label} has an invalid PNG color type or bit depth`);
-  }
-  if (dimensions.width > PNG_MAX_DIMENSION || dimensions.height > PNG_MAX_DIMENSION) {
-    throw new ValidationError(`${label} PNG dimensions exceed the ${PNG_MAX_DIMENSION}px limit`);
-  }
-  if (dimensions.width * dimensions.height > PNG_MAX_PIXELS) {
-    throw new ValidationError(`${label} PNG pixel count exceeds the ${PNG_MAX_PIXELS} pixel limit`);
-  }
-  const bitsPerPixel = channels * format.bitDepth;
-  const passes = format.interlaceMethod === 0
-    ? [[0, 0, 1, 1]]
-    : PNG_ADAM7_PASSES;
-  let decompressedBytes = 0;
-  for (const [startX, startY, stepX, stepY] of passes) {
-    const passWidth = pngPassDimension(dimensions.width, startX, stepX);
-    const passHeight = pngPassDimension(dimensions.height, startY, stepY);
-    if (!passWidth || !passHeight) continue;
-    const rowBytes = Math.ceil((passWidth * bitsPerPixel) / 8);
-    decompressedBytes += passHeight * (rowBytes + 1);
-  }
-  if (decompressedBytes > PNG_MAX_DECOMPRESSED_BYTES) {
-    throw new ValidationError(
-      `${label} PNG decompressed image data exceeds the ${PNG_MAX_DECOMPRESSED_BYTES} byte limit`,
-    );
-  }
-  return { bitsPerPixel, passes, decompressedBytes };
-}
-
-function validatePngImageData(imageData, dimensions, format, label, layout = null) {
-  const { bitsPerPixel, passes } = layout ?? pngImageLayout(dimensions, format, label);
-  const bytesPerPixel = Math.max(1, Math.ceil(bitsPerPixel / 8));
-  let offset = 0;
-  for (const [startX, startY, stepX, stepY] of passes) {
-    const passWidth = pngPassDimension(dimensions.width, startX, stepX);
-    const passHeight = pngPassDimension(dimensions.height, startY, stepY);
-    if (!passWidth || !passHeight) continue;
-    const rowBytes = Math.ceil((passWidth * bitsPerPixel) / 8);
-    let previousRow = Buffer.alloc(rowBytes);
-    for (let row = 0; row < passHeight; row += 1) {
-      if (offset >= imageData.length) {
-        throw new ValidationError(`${label} PNG pixel data is shorter than its declared dimensions`);
-      }
-      const filter = imageData[offset];
-      if (filter > 4) {
-        throw new ValidationError(`${label} contains an invalid PNG scanline filter`);
-      }
-      offset += 1;
-      const filteredRow = imageData.subarray(offset, offset + rowBytes);
-      offset += rowBytes;
-      if (offset > imageData.length) {
-        throw new ValidationError(`${label} PNG pixel data is shorter than its declared dimensions`);
-      }
-      const reconstructedRow = Buffer.alloc(rowBytes);
-      for (let column = 0; column < rowBytes; column += 1) {
-        const left = column >= bytesPerPixel ? reconstructedRow[column - bytesPerPixel] : 0;
-        const above = previousRow[column] ?? 0;
-        const upperLeft = column >= bytesPerPixel ? previousRow[column - bytesPerPixel] : 0;
-        let predictor = 0;
-        if (filter === 1) predictor = left;
-        else if (filter === 2) predictor = above;
-        else if (filter === 3) predictor = Math.floor((left + above) / 2);
-        else if (filter === 4) {
-          const estimate = left + above - upperLeft;
-          const leftDistance = Math.abs(estimate - left);
-          const aboveDistance = Math.abs(estimate - above);
-          const upperLeftDistance = Math.abs(estimate - upperLeft);
-          predictor = leftDistance <= aboveDistance && leftDistance <= upperLeftDistance
-            ? left
-            : (aboveDistance <= upperLeftDistance ? above : upperLeft);
-        }
-        reconstructedRow[column] = (filteredRow[column] + predictor) & 0xff;
-      }
-      if (format.colorType === 3) {
-        for (let pixel = 0; pixel < passWidth; pixel += 1) {
-          const bitOffset = pixel * format.bitDepth;
-          const byte = reconstructedRow[Math.floor(bitOffset / 8)];
-          const shift = 8 - format.bitDepth - (bitOffset % 8);
-          const paletteIndex = (byte >>> shift) & ((1 << format.bitDepth) - 1);
-          if (paletteIndex >= format.paletteEntries) {
-            throw new ValidationError(`${label} contains a PNG palette index without a PLTE entry`);
-          }
-        }
-      }
-      previousRow = reconstructedRow;
-    }
-  }
-  if (offset !== imageData.length) {
-    throw new ValidationError(`${label} PNG pixel data length does not match its declared dimensions`);
-  }
-}
-
-function validatedPngDimensions(filePath, label) {
-  const fileSize = lstatSync(filePath).size;
-  if (fileSize > PROTOTYPE_MAX_FILE_BYTES) {
-    throw new ValidationError(`${label} PNG file size exceeds the ${PROTOTYPE_MAX_FILE_BYTES} byte limit`);
-  }
-  const buffer = readFileSync(filePath);
-  const signature = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
-  if (buffer.length < 45 || !buffer.subarray(0, 8).equals(signature)) {
-    throw new ValidationError(`${label} must be a valid PNG image`);
-  }
-  let offset = 8;
-  let dimensions = null;
-  let imageFormat = null;
-  let hasImageData = false;
-  let hasEnd = false;
-  let hasPalette = false;
-  let idatSequenceEnded = false;
-  const imageDataChunks = [];
-  while (offset + 12 <= buffer.length) {
-    const length = buffer.readUInt32BE(offset);
-    const chunkEnd = offset + 12 + length;
-    if (chunkEnd > buffer.length) throw new ValidationError(`${label} contains a truncated PNG chunk`);
-    const type = buffer.toString('ascii', offset + 4, offset + 8);
-    if (!/^[A-Za-z]{4}$/.test(type) || !/[A-Z]/.test(type[2])) {
-      throw new ValidationError(`${label} contains an invalid PNG chunk type`);
-    }
-    const expectedCrc = buffer.readUInt32BE(offset + 8 + length);
-    const actualCrc = pngCrc32(buffer.subarray(offset + 4, offset + 8 + length));
-    if (expectedCrc !== actualCrc) throw new ValidationError(`${label} contains an invalid PNG chunk checksum`);
-    if (!['IHDR', 'PLTE', 'IDAT', 'IEND'].includes(type) && /[A-Z]/.test(type[0])) {
-      throw new ValidationError(`${label} contains unknown critical PNG chunk ${type}`);
-    }
-    if (hasImageData && type !== 'IDAT') idatSequenceEnded = true;
-    if (type === 'IHDR') {
-      if (dimensions || offset !== 8 || length !== 13) throw new ValidationError(`${label} has an invalid PNG header`);
-      dimensions = {
-        width: buffer.readUInt32BE(offset + 8),
-        height: buffer.readUInt32BE(offset + 12),
-      };
-      if (!dimensions.width || !dimensions.height) throw new ValidationError(`${label} has invalid PNG dimensions`);
-      imageFormat = {
-        bitDepth: buffer[offset + 16],
-        colorType: buffer[offset + 17],
-        compressionMethod: buffer[offset + 18],
-        filterMethod: buffer[offset + 19],
-        interlaceMethod: buffer[offset + 20],
-      };
-    } else if (type === 'PLTE') {
-      if (!dimensions || hasPalette || hasImageData || length < 3 || length > 768 || length % 3 !== 0) {
-        throw new ValidationError(`${label} has an invalid PNG palette`);
-      }
-      hasPalette = true;
-      imageFormat.paletteEntries = length / 3;
-    } else if (type === 'IDAT') {
-      if (!dimensions || idatSequenceEnded) {
-        throw new ValidationError(`${label} has invalid PNG image-data chunk ordering`);
-      }
-      hasImageData = true;
-      imageDataChunks.push(buffer.subarray(offset + 8, offset + 8 + length));
-    } else if (type === 'IEND') {
-      if (!hasImageData || length !== 0 || chunkEnd !== buffer.length) throw new ValidationError(`${label} has an invalid PNG terminator`);
-      hasEnd = true;
-      break;
-    }
-    offset = chunkEnd;
-  }
-  if (!dimensions || !hasImageData || !hasEnd) {
-    throw new ValidationError(`${label} must contain PNG header, image data, and terminator chunks`);
-  }
-  if (imageFormat.colorType === 3) {
-    if (!hasPalette) throw new ValidationError(`${label} indexed-color PNG must contain a PLTE chunk`);
-    if (imageFormat.paletteEntries > (1 << imageFormat.bitDepth)) {
-      throw new ValidationError(`${label} PNG palette has more entries than its indexed bit depth allows`);
-    }
-  } else if ([0, 4].includes(imageFormat.colorType) && hasPalette) {
-    throw new ValidationError(`${label} PNG color type must not contain a PLTE chunk`);
-  }
-  const layout = pngImageLayout(dimensions, imageFormat, label);
-  let imageData;
-  try {
-    imageData = inflateSync(Buffer.concat(imageDataChunks), {
-      maxOutputLength: layout.decompressedBytes,
-    });
-  } catch (error) {
-    throw new ValidationError(`${label} contains invalid compressed PNG image data: ${error.message}`);
-  }
-  validatePngImageData(imageData, dimensions, imageFormat, label, layout);
-  return dimensions;
-}
-
 function validateAccessibilityReportData(data, expected = {}) {
   if (!data || typeof data !== 'object' || Array.isArray(data)) {
     throw new ValidationError('visual accessibility report must be a JSON object');
@@ -4089,7 +3101,7 @@ export function validateVisualReviewData(data, expectedContract = null) {
   if (expectedContract) {
     for (const field of [
       'run_id',
-      'task_id',
+      'iteration_id',
       'workspace_ref',
       'workspace_revision_sha256',
       'source_experience_ref',
@@ -4365,6 +3377,34 @@ function validateSpecVisualExperience(spec, specPath, artifactRoot = null) {
   return { experience, experiencePath };
 }
 
+export function approvedVisualReviewContract(specPath, artifactRoot = null) {
+  const specReference = loadJson(specPath);
+  const sourceIntakePath = resolveSpecSourceIntake(specPath, specReference);
+  const spec = validateSpec(specPath, sourceIntakePath, { artifactRoot });
+  const approvedVisual = validateSpecVisualExperience(spec, specPath, artifactRoot);
+  if (!approvedVisual?.experience.validation.visual_review_required) return null;
+  const { experience } = approvedVisual;
+  const selected = experience.visual_direction.candidates.find(
+    (candidate) => candidate.id === experience.visual_direction.selected_candidate,
+  );
+  if (!selected) {
+    throw new ValidationError('approved visual review contract requires a selected prototype');
+  }
+  return {
+    required: true,
+    experienceSpecRef: spec.visual_experience.experience_spec_ref,
+    experienceSpecSha256: spec.visual_experience.experience_spec_sha256,
+    prototypeManifestRef: selected.prototype_manifest_ref,
+    prototypeManifestSha256: selected.prototype_manifest_sha256,
+    screenStates: experience.screens.map((screen) => ({
+      screenId: screen.id,
+      states: structuredClone(screen.states),
+    })),
+    viewports: structuredClone(experience.validation.viewports),
+    accessibilityStandard: experience.validation.accessibility_standard,
+  };
+}
+
 function validateClarifyingQuestionDisposition(spec, intake = null) {
   const dispositions = spec.clarifying_question_disposition;
   const dispositionIds = dispositions.map((item) => item.id);
@@ -4488,7 +3528,6 @@ export function validateTaskGraphData(data, requireApprovedSpec = null) {
   }
   const taskIdSet = new Set(taskIds);
   const visualReviewEnabled = Boolean(approvedVisual?.experience.validation.visual_review_required);
-  const visualCaseOwners = new Map();
 
   const graph = new Map();
   for (const task of tasks) {
@@ -4500,79 +3539,30 @@ export function validateTaskGraphData(data, requireApprovedSpec = null) {
     if (visualReviewEnabled && !task.workKind) {
       throw new ValidationError(`${task.id}.workKind is required when the approved visual experience requires visual review`);
     }
-    const requiresVisualReview = visualReviewEnabled && ['ui', 'mixed'].includes(task.workKind);
-    if (requiresVisualReview && !task.visualReview) {
-      throw new ValidationError(`${task.id} implements a visual-review-required experience and must include visualReview`);
+    const hasVisualImpact = visualReviewEnabled && ['ui', 'mixed'].includes(task.workKind);
+    if (hasVisualImpact && !task.visualImpact) {
+      throw new ValidationError(`${task.id} implements a visual experience and must include visualImpact`);
     }
-    if (visualReviewEnabled && task.workKind === 'non_ui' && task.visualReview) {
-      throw new ValidationError(`${task.id} is classified non_ui and must not include visualReview`);
+    if (visualReviewEnabled && task.workKind === 'non_ui' && task.visualImpact) {
+      throw new ValidationError(`${task.id} is classified non_ui and must not include visualImpact`);
     }
-    if (task.visualReview && requireApprovedSpec && !visualReviewEnabled) {
-      throw new ValidationError(`${task.id}.visualReview is only allowed when the approved current-iteration visual experience requires review`);
+    if (task.visualImpact && requireApprovedSpec && !visualReviewEnabled) {
+      throw new ValidationError(`${task.id}.visualImpact is only allowed when the approved current-iteration visual experience requires review`);
     }
-    if (task.visualReview && visualReviewEnabled) {
-      const { experience, experiencePath } = approvedVisual;
-      const selected = experience.visual_direction.candidates.find(
-        (candidate) => candidate.id === experience.visual_direction.selected_candidate,
-      );
-      const artifactRoot = inferArtifactRootFromIntakePath(requireSpecSourceIntake(requireApprovedSpec, approvedSpec));
-      const prototypePath = requireVisualReference(
-        selected.prototype_manifest_ref,
-        experiencePath,
-        artifactRoot,
-        `${task.id}.visualReview.prototypeManifestRef`,
-      );
-      if (!referenceMatchesVisualFile(task.visualReview.experienceSpecRef, requireApprovedSpec, experiencePath, artifactRoot)) {
-        throw new ValidationError(`${task.id}.visualReview.experienceSpecRef must reference the approved visual experience`);
-      }
-      if (task.visualReview.experienceSpecSha256 !== approvedSpec.visual_experience.experience_spec_sha256) {
-        throw new ValidationError(`${task.id}.visualReview.experienceSpecSha256 must match the approved visual experience`);
-      }
-      if (!referenceMatchesVisualFile(task.visualReview.prototypeManifestRef, requireApprovedSpec, prototypePath, artifactRoot)) {
-        throw new ValidationError(`${task.id}.visualReview.prototypeManifestRef must reference the selected prototype`);
-      }
-      if (task.visualReview.prototypeManifestSha256 !== selected.prototype_manifest_sha256) {
-        throw new ValidationError(`${task.id}.visualReview.prototypeManifestSha256 must match the selected prototype`);
-      }
-      if (task.visualReview.accessibilityStandard !== experience.validation.accessibility_standard) {
-        throw new ValidationError(`${task.id}.visualReview.accessibilityStandard must match the approved visual experience`);
-      }
-      uniqueObjectIds(task.visualReview.screenStates, 'screenId', `${task.id}.visualReview.screenStates`);
-      uniqueObjectIds(task.visualReview.viewports, 'name', `${task.id}.visualReview.viewports`);
+    if (task.visualImpact && visualReviewEnabled) {
+      const { experience } = approvedVisual;
+      uniqueObjectIds(task.visualImpact.screenStates, 'screenId', `${task.id}.visualImpact.screenStates`);
       const experienceScreens = new Map(experience.screens.map((screen) => [screen.id, screen]));
-      const experienceViewports = new Map(experience.validation.viewports.map((viewport) => [viewport.name, viewport]));
-      for (const screenState of task.visualReview.screenStates) {
+      for (const screenState of task.visualImpact.screenStates) {
         const screen = experienceScreens.get(screenState.screenId);
         if (!screen) {
-          throw new ValidationError(`${task.id}.visualReview.screenStates contains unknown screen ${JSON.stringify(screenState.screenId)}`);
+          throw new ValidationError(`${task.id}.visualImpact.screenStates contains unknown screen ${JSON.stringify(screenState.screenId)}`);
         }
         requireSubset(
           screenState.states,
           screen.states,
-          `${task.id}.visualReview.screenStates.${screenState.screenId}.states`,
+          `${task.id}.visualImpact.screenStates.${screenState.screenId}.states`,
         );
-      }
-      for (const viewport of task.visualReview.viewports) {
-        const approvedViewport = experienceViewports.get(viewport.name);
-        if (!approvedViewport) {
-          throw new ValidationError(`${task.id}.visualReview.viewports contains unknown viewport ${JSON.stringify(viewport.name)}`);
-        }
-        if (viewport.width !== approvedViewport.width || viewport.height !== approvedViewport.height) {
-          throw new ValidationError(`${task.id}.visualReview viewport ${JSON.stringify(viewport.name)} dimensions must match the approved visual experience`);
-        }
-      }
-      for (const screenState of task.visualReview.screenStates) {
-        for (const state of screenState.states) {
-          for (const viewport of task.visualReview.viewports) {
-            const key = `${screenState.screenId}\u0000${state}\u0000${viewport.name}`;
-            if (visualCaseOwners.has(key)) {
-              throw new ValidationError(
-                `visual review case ${screenState.screenId}/${state}/${viewport.name} is owned by both ${visualCaseOwners.get(key)} and ${task.id}`,
-              );
-            }
-            visualCaseOwners.set(key, task.id);
-          }
-        }
       }
     }
     const unknownDependencies = task.dependencies.filter((dependency) => !taskIdSet.has(dependency));
@@ -4582,21 +3572,10 @@ export function validateTaskGraphData(data, requireApprovedSpec = null) {
     graph.set(task.id, [...task.dependencies]);
   }
 
-  if (visualReviewEnabled) {
-    const expectedVisualCases = [];
-    for (const screen of approvedVisual.experience.screens) {
-      for (const state of screen.states) {
-        for (const viewport of approvedVisual.experience.validation.viewports) {
-          expectedVisualCases.push(`${screen.id}\u0000${state}\u0000${viewport.name}`);
-        }
-      }
-    }
-    const missing = expectedVisualCases.filter((key) => !visualCaseOwners.has(key));
-    if (missing.length) {
-      throw new ValidationError(
-        `task graph does not assign ${missing.length} approved screen/state/viewport visual review case(s) to a ui or mixed task`,
-      );
-    }
+  if (visualReviewEnabled && !tasks.some((task) => task.visualImpact)) {
+    throw new ValidationError(
+      'task graph must include at least one ui or mixed task with visualImpact for the approved visual experience',
+    );
   }
 
   detectCycles(graph);
@@ -5416,8 +4395,7 @@ export function validateRunTaskContract(runData, artifactRoot) {
     ? defaultArtifactRootForGraph(realpathSync(taskGraphPath))
     : path.resolve(artifactRoot);
   const graphData = loadJson(taskGraphPath);
-  const rawTask = graphData.tasks?.find((candidate) => candidate.id === runData.taskId);
-  const rawVisualContract = Boolean(rawTask?.visualReview?.required || runData.visualReview?.required);
+  const rawVisualContract = Boolean(runData.visualReview?.required);
   let sourceSpecPath = null;
   let maintenanceSource = false;
   try {
@@ -5457,7 +4435,6 @@ export function validateRunTaskContract(runData, artifactRoot) {
   const currentTaskContractSha256 = taskContractSha256(task);
   const requiresTaskContract = (
     runData.schema_version === 'p2a.run.v2'
-    || task.visualReview?.required
     || runData.visualReview?.required
   );
   if (requiresTaskContract && runData.taskContractSha256 === undefined) {
@@ -5500,12 +4477,19 @@ export function validateRunTaskContract(runData, artifactRoot) {
   if (graph.projectId !== runData.projectId) {
     throw new ValidationError(`finished run ${runData.runId} projectId does not match its source task graph`);
   }
-  const expectedVisualReview = task.visualReview ?? null;
   const actualVisualReview = runData.visualReview ?? null;
-  if (!sameJson(actualVisualReview, expectedVisualReview)) {
-    throw new ValidationError(
-      `finished run ${runData.runId} visualReview must exactly match task ${runData.taskId} in its source task graph`,
-    );
+  if (actualVisualReview) {
+    if (runData.runKind !== 'final_visual_review') {
+      throw new ValidationError(
+        `finished run ${runData.runId} visualReview is only allowed for runKind final_visual_review`,
+      );
+    }
+    const expectedVisualReview = approvedVisualReviewContract(sourceSpecPath, sourceArtifactRoot);
+    if (!expectedVisualReview || !sameJson(actualVisualReview, expectedVisualReview)) {
+      throw new ValidationError(
+        `finished run ${runData.runId} visualReview must match the complete approved iteration visual contract`,
+      );
+    }
   }
   return {
     task,
@@ -5537,8 +4521,8 @@ export function validateRunsDir(runsDir) {
     const source = runData.status === 'finished'
       ? validateRunTaskContract(runData, path.dirname(path.resolve(runsDir)))
       : null;
-    if (source?.task.visualReview?.required) {
-      const visualContract = source.task.visualReview;
+    if (runData.status === 'finished' && runData.visualReview?.required) {
+      const visualContract = runData.visualReview;
       if (!/^[a-f0-9]{64}$/.test(runData.workspaceRevisionSha256 ?? '')) {
         throw new ValidationError(
           `finished run ${runData.runId} workspaceRevisionSha256 is required for visual evidence`,
@@ -5552,12 +4536,23 @@ export function validateRunsDir(runsDir) {
       );
       assertFile(visualReviewPath, `${runData.runId} visual review`);
       const visualReviewSha256 = rawFileSha256(visualReviewPath);
+      const visualReviewSchemaVersion = loadJson(visualReviewPath).schema_version;
+      if (
+        runData.schema_version === 'p2a.run.v2'
+        && runData.runKind === 'final_visual_review'
+        && visualReviewSchemaVersion !== 'p2a.visual_review.v2'
+      ) {
+        throw new ValidationError(
+          `finished final visual review run ${runData.runId} requires p2a.visual_review.v2 evidence`,
+        );
+      }
       const visualReview = validateVisualReview(visualReviewPath, {
         run_id: runData.runId,
-        task_id: runData.taskId,
+        ...(visualReviewSchemaVersion === 'p2a.visual_review.v1'
+          ? { task_id: runData.taskId }
+          : { iteration_id: runData.iterationId }),
         workspace_ref: runData.workspaceRef,
         workspace_revision_sha256: runData.workspaceRevisionSha256,
-        iteration_id: runData.iterationId,
         started_at: runData.startedAt,
         finished_at: runData.finishedAt,
         project_id: runData.projectId,

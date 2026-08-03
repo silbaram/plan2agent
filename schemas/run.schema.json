@@ -414,6 +414,47 @@
         }
       }
     },
+    "visualFeedback": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "reviewedAt",
+          "reviewer",
+          "verdict",
+          "concerns",
+          "note"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "reviewedAt": {
+            "type": "string",
+            "minLength": 1
+          },
+          "reviewer": {
+            "type": "string",
+            "minLength": 1
+          },
+          "verdict": {
+            "type": "string",
+            "enum": [
+              "note",
+              "concern"
+            ]
+          },
+          "concerns": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "note": {
+            "type": "string"
+          }
+        }
+      }
+    },
     "reproduction": {
       "type": "object",
       "required": [
@@ -563,6 +604,23 @@
     }
   },
   "allOf": [
+    {
+      "if": {
+        "required": [
+          "visualReview"
+        ]
+      },
+      "then": {
+        "required": [
+          "runKind"
+        ],
+        "properties": {
+          "runKind": {
+            "const": "final_visual_review"
+          }
+        }
+      }
+    },
     {
       "if": {
         "properties": {

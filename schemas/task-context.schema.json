@@ -38,7 +38,7 @@
             "targetArea": {"type": "string", "minLength": 1},
             "workKind": {"type": "string", "enum": ["ui", "non_ui", "mixed"]},
             "sourceSpecRefs": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
-            "visualReview": {"type": "object"}
+            "visualImpact": {"type": "object"}
           }
         }},
         "maintenance": {"type": "array", "items": {
@@ -52,7 +52,7 @@
             "targetArea": {"type": "string", "minLength": 1},
             "workKind": {"type": "string", "enum": ["ui", "non_ui", "mixed"]},
             "sourceSpecRefs": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
-            "visualReview": {"type": "object"}
+            "visualImpact": {"type": "object"}
           }
         }}
       }

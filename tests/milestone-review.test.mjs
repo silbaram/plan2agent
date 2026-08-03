@@ -532,13 +532,13 @@ describe('milestone review artifact contract', () => {
           data.source.completed_task_evidence[0].run_snapshot_sha256 = milestoneRunSnapshotSha256(snapshot);
         },
         (run) => { delete run.runKind; },
+        /missing required keys: runKind/,
       ],
       ['taskContractSha256', null, (run) => { run.taskContractSha256 = '0'.repeat(64); }],
       ['workspaceRevisionSha256', null, (run) => { run.workspaceRevisionSha256 = '3'.repeat(64); }],
       ['visualReviewEvidenceSha256', null, (run) => { run.visualReviewEvidenceSha256 = '4'.repeat(64); }],
-      ['visualReview', null, (run) => { run.visualReview = visualReview; }],
     ];
-    for (const [field, prepare, mutate] of cases) {
+    for (const [field, prepare, mutate, expected] of cases) {
       const data = midpointReview();
       prepare?.(data);
       const bundle = writeBundle(data, 'midpoint.json');
@@ -552,7 +552,7 @@ describe('milestone review artifact contract', () => {
         );
         assert.throws(
           () => validateMilestoneReview(bundle.reviewPath),
-          new RegExp(`run ${field} must match run_snapshot immutable context`),
+          expected ?? new RegExp(`run ${field} must match run_snapshot immutable context`),
           field,
         );
       } finally {

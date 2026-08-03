@@ -1057,14 +1057,13 @@ test('next keeps the twenty-one ordered decision rules required by the contract'
   }
 });
 
-test('next routes completed visual tasks through the canonical final review command before close', () => {
+test('next routes a completed visual iteration through one canonical final review command before close', () => {
   const rule = NEXT_DECISION_RULES.find((candidate) => candidate.state === 'final_visual_review_required');
-  const visualTask = { id: 'task-007' };
   const context = {
     allTasksDone: true,
     closedIteration: false,
     detail: { layout: { kind: 'iteration' } },
-    visualTaskNeedingFinalReview: visualTask,
+    visualReviewNeeded: true,
     artifactArg: '.plan2agent/artifacts/sample',
   };
   assert.equal(rule.when(context), true);
@@ -1073,8 +1072,6 @@ test('next routes completed visual tasks through the canonical final review comm
     'review',
     '--artifacts',
     '.plan2agent/artifacts/sample',
-    '--task',
-    'task-007',
   ]);
 });
 

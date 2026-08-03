@@ -6,7 +6,6 @@ import { createInterface } from 'node:readline/promises';
 import path from 'node:path';
 import process from 'node:process';
 import { Readable } from 'node:stream';
-import { isDeepStrictEqual } from 'node:util';
 import {
   validateRunData,
   validateRunIndexData,
@@ -618,19 +617,7 @@ function executedPassedVerification(run) {
 }
 
 function assertVisualReviewDoneEvidence(args, task, run) {
-  if (task.visualReview?.required) {
-    if (!run.visualReview?.required) {
-      throw new Error(
-        `${task.id} cannot be marked done because latest run ${run.runId} is missing the task visualReview contract`,
-      );
-    }
-    if (!isDeepStrictEqual(run.visualReview, task.visualReview)) {
-      throw new Error(
-        `${task.id} cannot be marked done because latest run ${run.runId} visualReview does not match the task contract`,
-      );
-    }
-  }
-  if (!task.visualReview?.required && !run.visualReview?.required) return;
+  if (!run.visualReview?.required) return;
   try {
     const runsDir = runsDirForTaskArgs(args);
     const artifactRoot = path.dirname(path.resolve(runsDir));

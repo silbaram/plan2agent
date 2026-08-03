@@ -3,6 +3,7 @@
 export const REPO_ONLY_SCRIPT_FILES = [
   'p2a_doctor.mjs',
   'p2a_handoff.mjs',
+  'p2a_handoff_portability.mjs',
   'sync_cli_assets.mjs',
   'check_cli_parity.mjs',
   'run_fixtures.mjs',
@@ -21,6 +22,7 @@ export const PROJECT_RUNTIME_SCRIPT_FILES = [
   'p2a_execute.mjs',
   'p2a_monitor_gate.mjs',
   'p2a_visual_review_gate.mjs',
+  'p2a_visual_media.mjs',
   'p2a_proposals.mjs',
   'p2a_eval.mjs',
   'p2a_memory.mjs',

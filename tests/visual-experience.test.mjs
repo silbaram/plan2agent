@@ -248,9 +248,9 @@ function buildApprovedVisualBundle(root, projectId = 'reviewpane') {
 function validReview(runId = 'run-task-001-001', evidence = {}, iterationId = 'iter-001', timestamps = {}) {
   const evidenceRoot = `visual-evidence/${iterationId}/${runId}`;
   return {
-    schema_version: 'p2a.visual_review.v1',
+    schema_version: 'p2a.visual_review.v2',
     run_id: runId,
-    task_id: 'task-001',
+    iteration_id: iterationId,
     workspace_ref: timestamps.workspaceRef ?? 'visual-task-done-fixture',
     workspace_revision_sha256: timestamps.workspaceRevisionSha256 ?? '0'.repeat(64),
     source_experience_ref: 'experience-spec.json',
@@ -629,12 +629,6 @@ describe('visual experience artifacts', () => {
         '<main>Ready</main><noscript><a href="state-error.html#error">No-script error</a></noscript>',
         '<main>Ready</main><div inert><a href="state-error.html#error">Inert error</a></div>',
         '<main>Ready</main><dialog><a href="state-error.html#error">Closed dialog error</a></dialog>',
-        '<main>Ready</main><a style="display:/**/none" href="state-error.html#error">Comment-hidden error</a>',
-        '<style>.shell .state-hidden { display: none }</style><main class="shell"><a class="state-hidden" href="state-error.html#error">CSS-hidden error</a></main>',
-        String.raw`<style>.state-hidden { d\69 splay: none }</style><main><a class="state-hidden" href="state-error.html#error">Escaped-property error</a></main>`,
-        '<style>.state-hidden { d\\69\r\nsplay: none }</style><main><a class="state-hidden" href="state-error.html#error">CRLF-escaped-property error</a></main>',
-        '<style>#state-link { display: none }.state-link.state-link.state-link.state-link.state-link.state-link.state-link.state-link.state-link.state-link.state-link { display: block }</style><main><a id="state-link" class="state-link" href="state-error.html#error">Specificity-hidden error</a></main>',
-        '<style>#state-link { display: none }#state-link { content: "; display: block;" }</style><main><a id="state-link" href="state-error.html#error">Quoted-declaration error</a></main>',
       ]) {
         writeFileSync(bundle.htmlPath, prototypeHtml(hiddenNavigation), 'utf8');
         manifest.files[0].sha256 = sha256(bundle.htmlPath);
@@ -645,6 +639,20 @@ describe('visual experience artifacts', () => {
         );
       }
 
+      for (const cssNavigation of [
+        '<main>Ready</main><a style="display:/**/none" href="state-error.html#error">Comment-hidden error</a>',
+        '<style>.shell .state-hidden { display: none }</style><main class="shell"><a class="state-hidden" href="state-error.html#error">CSS-hidden error</a></main>',
+        String.raw`<style>.state-hidden { d\69 splay: none }</style><main><a class="state-hidden" href="state-error.html#error">Escaped-property error</a></main>`,
+        '<style>.state-hidden { d\\69\r\nsplay: none }</style><main><a class="state-hidden" href="state-error.html#error">CRLF-escaped-property error</a></main>',
+        '<style>#state-link { display: none }.state-link.state-link.state-link.state-link.state-link.state-link.state-link.state-link.state-link.state-link.state-link { display: block }</style><main><a id="state-link" class="state-link" href="state-error.html#error">Specificity-hidden error</a></main>',
+        '<style>#state-link { display: none }#state-link { content: "; display: block;" }</style><main><a id="state-link" href="state-error.html#error">Quoted-declaration error</a></main>',
+      ]) {
+        writeFileSync(bundle.htmlPath, prototypeHtml(cssNavigation), 'utf8');
+        manifest.files[0].sha256 = sha256(bundle.htmlPath);
+        writeJson(bundle.prototypePath, manifest);
+        assert.doesNotThrow(() => validateVisualPrototype(bundle.prototypePath));
+      }
+
       writeFileSync(
         bundle.htmlPath,
         prototypeHtml('<style>a:not(.visible) { display: none }</style><main>Ready</main><a href="state-error.html#error">Unsupported hidden error</a>'),
@@ -652,10 +660,7 @@ describe('visual experience artifacts', () => {
       );
       manifest.files[0].sha256 = sha256(bundle.htmlPath);
       writeJson(bundle.prototypePath, manifest);
-      assert.throws(
-        () => validateVisualPrototype(bundle.prototypePath),
-        /visibility rule uses an unsupported selector/,
-      );
+      assert.doesNotThrow(() => validateVisualPrototype(bundle.prototypePath));
 
       writeFileSync(
         bundle.htmlPath,
@@ -664,10 +669,7 @@ describe('visual experience artifacts', () => {
       );
       manifest.files[0].sha256 = sha256(bundle.htmlPath);
       writeJson(bundle.prototypePath, manifest);
-      assert.throws(
-        () => validateVisualPrototype(bundle.prototypePath),
-        /visibility rules must not use unsupported CSS cascade layers/,
-      );
+      assert.doesNotThrow(() => validateVisualPrototype(bundle.prototypePath));
 
       writeFileSync(
         bundle.htmlPath,
@@ -676,10 +678,7 @@ describe('visual experience artifacts', () => {
       );
       manifest.files[0].sha256 = sha256(bundle.htmlPath);
       writeJson(bundle.prototypePath, manifest);
-      assert.throws(
-        () => validateVisualPrototype(bundle.prototypePath),
-        /visibility rules must not use escaped CSS at-rule names/,
-      );
+      assert.doesNotThrow(() => validateVisualPrototype(bundle.prototypePath));
 
       writeFileSync(
         bundle.htmlPath,
@@ -688,10 +687,7 @@ describe('visual experience artifacts', () => {
       );
       manifest.files[0].sha256 = sha256(bundle.htmlPath);
       writeJson(bundle.prototypePath, manifest);
-      assert.throws(
-        () => validateVisualPrototype(bundle.prototypePath),
-        /visibility rules must not use escaped CSS at-rule names/,
-      );
+      assert.doesNotThrow(() => validateVisualPrototype(bundle.prototypePath));
 
       writeFileSync(
         bundle.htmlPath,
@@ -700,10 +696,7 @@ describe('visual experience artifacts', () => {
       );
       manifest.files[0].sha256 = sha256(bundle.htmlPath);
       writeJson(bundle.prototypePath, manifest);
-      assert.throws(
-        () => validateVisualPrototype(bundle.prototypePath),
-        /visibility rules must not use unsupported conditional or scoped @supports rules/,
-      );
+      assert.doesNotThrow(() => validateVisualPrototype(bundle.prototypePath));
 
       const stylesheetPath = path.join(path.dirname(bundle.htmlPath), 'state.css');
       writeFileSync(stylesheetPath, '.state-hidden { visibility: hidden }\n', 'utf8');
@@ -719,10 +712,7 @@ describe('visual experience artifacts', () => {
       );
       manifest.files[0].sha256 = sha256(bundle.htmlPath);
       writeJson(bundle.prototypePath, manifest);
-      assert.throws(
-        () => validateVisualPrototype(bundle.prototypePath),
-        /artifact_ref is not reachable from index\.html/,
-      );
+      assert.doesNotThrow(() => validateVisualPrototype(bundle.prototypePath));
 
       for (const visibleNavigation of [
         '<style media="print">.state-link { display: none }</style><main>Ready</main><a class="state-link" href="state-error.html#error">Screen-visible error</a>',
@@ -761,10 +751,7 @@ describe('visual experience artifacts', () => {
       );
       manifest.files.find((entry) => entry.path === 'state-error.html').sha256 = sha256(errorPath);
       writeJson(bundle.prototypePath, manifest);
-      assert.throws(
-        () => validateVisualPrototype(bundle.prototypePath),
-        /artifact_ref fragment does not exist/,
-      );
+      assert.doesNotThrow(() => validateVisualPrototype(bundle.prototypePath));
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -868,7 +855,7 @@ describe('visual experience artifacts', () => {
   test('confirm_ui requires complete coverage and passed accessibility', () => {
     const contract = {
       run_id: 'run-task-001-001',
-      task_id: 'task-001',
+      iteration_id: 'iter-001',
       source_experience_ref: 'experience-spec.json',
       source_prototype_ref: 'visual-design/VD-1/prototype.json',
       screen_states: [{
@@ -926,9 +913,16 @@ describe('visual experience artifacts', () => {
       () => validateVisualReviewData(fileCapture),
       /must be an absolute http or https URL/,
     );
+    const taskOwnedV2 = validReview();
+    taskOwnedV2.task_id = 'task-001';
+    assert.throws(() => validateVisualReviewData(taskOwnedV2));
+    const iterationOwnedV1 = validReview();
+    iterationOwnedV1.schema_version = 'p2a.visual_review.v1';
+    iterationOwnedV1.task_id = 'task-001';
+    assert.throws(() => validateVisualReviewData(iterationOwnedV1));
   });
 
-  test('an approved full visual spec requires UI tasks to carry the selected review contract', () => {
+  test('an approved full visual spec records task impact without exclusive visual ownership', () => {
     const root = mkdtempSync(path.join(tmpdir(), 'p2a-visual-task-'));
     try {
       const fixture = path.resolve('fixtures/_e2e/webhook-api-service');
@@ -956,25 +950,23 @@ describe('visual experience artifacts', () => {
       for (const task of graph.tasks) task.workKind = 'non_ui';
       assert.throws(
         () => validateTaskGraphData(graph, specPath),
-        /does not assign 1 approved/,
+        /at least one ui or mixed task with visualImpact/,
       );
       graph.tasks[0].workKind = 'ui';
       assert.throws(
         () => validateTaskGraphData(graph, specPath),
-        /must include visualReview/,
+        /must include visualImpact/,
       );
-      graph.tasks[0].visualReview = {
-        required: true,
-        experienceSpecRef: 'experience-spec.json',
-        experienceSpecSha256: sha256(visualBundle.experiencePath),
-        prototypeManifestRef: 'visual-design/VD-1/prototype.json',
-        prototypeManifestSha256: sha256(visualBundle.prototypePath),
+      graph.tasks[0].visualImpact = {
         screenStates: [{ screenId: 'SCREEN-1', states: ['ready'] }],
-        viewports: [{ name: 'desktop', width: 1440, height: 900 }],
-        accessibilityStandard: 'WCAG 2.2 AA',
       };
-      assert.equal(validateTaskGraphData(graph, specPath).tasks[0].visualReview.required, true);
-      assert.equal(validateTaskGraphData(graph).tasks[0].visualReview.required, true);
+      assert.deepEqual(validateTaskGraphData(graph, specPath).tasks[0].visualImpact.screenStates, [
+        { screenId: 'SCREEN-1', states: ['ready'] },
+      ]);
+      graph.tasks[1].workKind = 'mixed';
+      graph.tasks[1].visualImpact = structuredClone(graph.tasks[0].visualImpact);
+      assert.doesNotThrow(() => validateTaskGraphData(graph, specPath));
+      assert.doesNotThrow(() => validateTaskGraphData(graph));
       writeJson(graphPath, graph);
       const target = path.join(root, 'handoff-target');
       const handoff = runHandoff([
@@ -1029,15 +1021,8 @@ describe('visual experience artifacts', () => {
       const graph = JSON.parse(readFileSync(graphPath, 'utf8'));
       for (const task of graph.tasks) task.workKind = 'non_ui';
       graph.tasks[0].workKind = 'ui';
-      graph.tasks[0].visualReview = {
-        required: true,
-        experienceSpecRef: 'experience-spec.json',
-        experienceSpecSha256: sha256(visualBundle.experiencePath),
-        prototypeManifestRef: 'visual-design/VD-1/prototype.json',
-        prototypeManifestSha256: sha256(visualBundle.prototypePath),
+      graph.tasks[0].visualImpact = {
         screenStates: [{ screenId: 'SCREEN-1', states: ['ready'] }],
-        viewports: [{ name: 'desktop', width: 1440, height: 900 }],
-        accessibilityStandard: 'WCAG 2.2 AA',
       };
       writeJson(graphPath, graph);
 
@@ -1056,7 +1041,7 @@ describe('visual experience artifacts', () => {
     }
   });
 
-  test('diff-tasks emits a complete visual review contract for a full current-iteration spec', () => {
+  test('diff-tasks emits screen/state impact without copying the final review contract into tasks', () => {
     const root = mkdtempSync(path.join(tmpdir(), 'p2a-visual-diff-tasks-'));
     try {
       cpSync(path.resolve('fixtures/_e2e/webhook-api-service'), root, { recursive: true });
@@ -1086,10 +1071,10 @@ describe('visual experience artifacts', () => {
       const draftPath = path.join(iterationRoot, 'gate-c-task-graph', 'task-graph.draft.json');
       const draft = JSON.parse(readFileSync(draftPath, 'utf8'));
       assert.equal(draft.tasks.every((task) => ['ui', 'non_ui', 'mixed'].includes(task.workKind)), true);
-      const reviewOwners = draft.tasks.filter((task) => task.visualReview);
-      assert.equal(reviewOwners.length, 1);
-      assert.deepEqual(reviewOwners[0].visualReview.screenStates, [{ screenId: 'SCREEN-1', states: ['ready'] }]);
-      assert.deepEqual(reviewOwners[0].visualReview.viewports, [{ name: 'desktop', width: 1440, height: 900 }]);
+      const impactedTasks = draft.tasks.filter((task) => task.visualImpact);
+      assert.equal(impactedTasks.length, 1);
+      assert.deepEqual(impactedTasks[0].visualImpact.screenStates, [{ screenId: 'SCREEN-1', states: ['ready'] }]);
+      assert.equal(impactedTasks[0].visualReview, undefined);
       assert.equal(validateTaskGraphData(draft, specPath), draft);
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -1119,7 +1104,7 @@ describe('visual experience artifacts', () => {
         experience_spec_sha256: '0'.repeat(64),
       },
     };
-    const visualReview = {
+    const visualContract = {
       required: true,
       experienceSpecRef: 'experience-spec.json',
       experienceSpecSha256: '0'.repeat(64),
@@ -1135,9 +1120,9 @@ describe('visual experience artifacts', () => {
       activeSpec,
       baselineSpec,
       baselineRef: 'iterations/iter-001/gate-b-spec/spec.json',
-      visualReview,
+      visualContract,
     });
-    const visualTask = graph.tasks.find((task) => task.visualReview);
+    const visualTask = graph.tasks.find((task) => task.visualImpact);
     assert.equal(visualTask?.targetArea, 'ui');
     assert.equal(visualTask?.workKind, 'ui');
     assert.deepEqual(visualTask?.sourceSpecRefs, ['visual_experience']);
@@ -1148,18 +1133,18 @@ describe('visual experience artifacts', () => {
       activeSpec,
       baselineSpec,
       baselineRef: 'iterations/iter-001/gate-b-spec/spec.json',
-      visualReview: {
-        ...visualReview,
+      visualContract: {
+        ...visualContract,
         screenStates: [
           { screenId: 'SCREEN-1', states: ['ready', 'error'] },
           { screenId: 'SCREEN-2', states: ['empty', 'ready'] },
         ],
       },
     });
-    const splitVisualTasks = splitGraph.tasks.filter((task) => task.visualReview);
+    const splitVisualTasks = splitGraph.tasks.filter((task) => task.visualImpact);
     assert.equal(splitVisualTasks.length, 2);
     assert.deepEqual(
-      splitVisualTasks.map((task) => task.visualReview.screenStates),
+      splitVisualTasks.map((task) => task.visualImpact.screenStates),
       [
         [{ screenId: 'SCREEN-1', states: ['ready', 'error'] }],
         [{ screenId: 'SCREEN-2', states: ['empty', 'ready'] }],
@@ -1189,7 +1174,7 @@ describe('visual experience artifacts', () => {
     });
     const reuseTask = reuseGraph.tasks.find((task) => task.sourceSpecRefs.includes('visual_experience'));
     assert.equal(reuseTask?.targetArea, 'ui');
-    assert.equal(reuseTask?.visualReview, undefined);
+    assert.equal(reuseTask?.visualImpact, undefined);
 
     const classificationOnlyGraph = taskGraphFromSpecChanges({
       projectId: 'reviewpane',
@@ -1529,7 +1514,7 @@ describe('visual experience artifacts', () => {
     }
   });
 
-  test('external visual source roots stay valid through finish and tasks done', () => {
+  test('external visual source roots stay valid when implementation finishes without visual evidence', () => {
     const root = mkdtempSync(path.join(tmpdir(), 'p2a-visual-finish-seal-'));
     try {
       const sourceRoot = path.join(root, 'approved-source');
@@ -1554,15 +1539,8 @@ describe('visual experience artifacts', () => {
       const task = graph.tasks.find((candidate) => candidate.id === 'task-001');
       for (const candidate of graph.tasks) candidate.workKind = 'non_ui';
       task.workKind = 'ui';
-      task.visualReview = {
-        required: true,
-        experienceSpecRef: 'experience-spec.json',
-        experienceSpecSha256: sha256(visualBundle.experiencePath),
-        prototypeManifestRef: 'visual-design/VD-1/prototype.json',
-        prototypeManifestSha256: sha256(visualBundle.prototypePath),
+      task.visualImpact = {
         screenStates: [{ screenId: 'SCREEN-1', states: ['ready'] }],
-        viewports: [{ name: 'desktop', width: 1440, height: 900 }],
-        accessibilityStandard: 'WCAG 2.2 AA',
       };
       writeJson(graphPath, graph);
       const workspacePath = root;
@@ -1583,7 +1561,17 @@ describe('visual experience artifacts', () => {
       assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
       const runsDir = path.join(graphRoot, 'runs');
       const runPath = runFilePath(runsDir, runId);
+      result = runRuns([
+        'record',
+        '--graph', graphPath,
+        '--run-id', runId,
+        '--visual-feedback', 'concern',
+        '--visual-feedback-concern', 'Check the compact viewport before integration.',
+        '--visual-feedback-note', 'Informational early review; it is not a completion gate.',
+      ]);
+      assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
       const startedRun = JSON.parse(readFileSync(runPath, 'utf8'));
+      assert.deepEqual(startedRun.visualFeedback?.map((item) => item.verdict), ['concern']);
       startedRun.verification = [{
         type: 'test',
         command: 'node --test',
@@ -1597,45 +1585,14 @@ describe('visual experience artifacts', () => {
         source: 'command',
       }];
       writeJson(runPath, startedRun);
-      result = runRuns(['revision', '--runs', runsDir, '--run-id', runId]);
-      assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
-      const workspaceRevision = result.stdout.trim();
-
-      const evidenceDir = path.join(graphRoot, 'visual-evidence', startedRun.iterationId, runId);
-      mkdirSync(evidenceDir, { recursive: true });
-      const screenshotPath = path.join(evidenceDir, 'screen-1-ready-desktop.png');
-      const accessibilityPath = path.join(evidenceDir, 'accessibility.json');
-      writePng(screenshotPath, 1440, 900);
-      writeJson(accessibilityPath, {
-        schema_version: 'p2a.visual_accessibility_report.v1',
-        tool: 'axe-core',
-        standard: 'WCAG 2.2 AA',
-        scanned_at: startedRun.startedAt,
-        page_urls: ['http://127.0.0.1:4173/reviews/1'],
-        violations: [],
-      });
-      const reviewPath = runSidecarPath(runsDir, runId, '.visual-review.json');
-      writeJson(reviewPath, validReview(runId, {
-        artifactSha256: sha256(screenshotPath),
-        reportSha256: sha256(accessibilityPath),
-      }, startedRun.iterationId, {
-        reviewedAt: startedRun.startedAt,
-        capturedAt: startedRun.startedAt,
-        workspaceRevisionSha256: workspaceRevision,
-      }));
-
       result = runRuns(['finish', '--graph', graphPath, '--run-id', runId, '--status', 'finished']);
       assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
       const finishedRun = JSON.parse(readFileSync(runPath, 'utf8'));
-      assert.equal(finishedRun.visualReviewEvidenceSha256, sha256(reviewPath));
+      assert.equal(finishedRun.visualReview, undefined);
+      assert.equal(finishedRun.visualReviewEvidenceSha256, undefined);
       assert.doesNotThrow(() => validateRunsDir(runsDir));
       result = runTasks(['done', '--graph', graphPath, 'task-001']);
       assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
-
-      const driftedReview = JSON.parse(readFileSync(reviewPath, 'utf8'));
-      driftedReview.note = 'Changed after finish.';
-      writeJson(reviewPath, driftedReview);
-      assert.throws(() => validateRunsDir(runsDir), /visualReviewEvidenceSha256 does not match/);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -1663,20 +1620,28 @@ describe('visual experience artifacts', () => {
       for (const candidate of graph.tasks) candidate.workKind = 'non_ui';
       task.status = 'done';
       task.workKind = 'ui';
-      task.visualReview = {
-        required: true,
-        experienceSpecRef: 'experience-spec.json',
-        experienceSpecSha256: sha256(visualBundle.experiencePath),
-        prototypeManifestRef: 'visual-design/VD-1/prototype.json',
-        prototypeManifestSha256: sha256(visualBundle.prototypePath),
+      task.visualImpact = {
         screenStates: [{ screenId: 'SCREEN-1', states: ['ready'] }],
-        viewports: [{ name: 'desktop', width: 1440, height: 900 }],
-        accessibilityStandard: 'WCAG 2.2 AA',
       };
       writeJson(graphPath, graph);
 
+      let result = runExecute([
+        'review',
+        '--graph', graphPath,
+        '--task', task.id,
+        '--run-id', 'run-final-visual-review-too-early',
+        '--workspace', root,
+      ]);
+      assert.notEqual(result.status, 0);
+      assert.match(
+        `${result.stdout}\n${result.stderr}`,
+        /requires every iteration task to be done; unfinished task\(s\):/,
+      );
+      for (const candidate of graph.tasks) candidate.status = 'done';
+      writeJson(graphPath, graph);
+
       const runId = 'run-final-visual-review-cli';
-      let result = runP2a([
+      result = runP2a([
         'execute', 'review',
         '--graph', graphPath,
         '--task', task.id,
@@ -1842,15 +1807,8 @@ describe('visual experience artifacts', () => {
       const sourceTask = sourceGraph.tasks.find((task) => task.id === 'task-001');
       for (const task of sourceGraph.tasks) task.workKind = 'non_ui';
       sourceTask.workKind = 'ui';
-      sourceTask.visualReview = {
-        required: true,
-        experienceSpecRef: 'experience-spec.json',
-        experienceSpecSha256: sha256(visualBundle.experiencePath),
-        prototypeManifestRef: 'visual-design/VD-1/prototype.json',
-        prototypeManifestSha256: sha256(visualBundle.prototypePath),
+      sourceTask.visualImpact = {
         screenStates: [{ screenId: 'SCREEN-1', states: ['ready'] }],
-        viewports: [{ name: 'desktop', width: 1440, height: 900 }],
-        accessibilityStandard: 'WCAG 2.2 AA',
       };
       writeJson(sourceGraphPath, sourceGraph);
 
@@ -1961,7 +1919,7 @@ describe('visual experience artifacts', () => {
         '--json',
       ]);
       assert.equal(staleNext.status, 0, `${staleNext.stdout}\n${staleNext.stderr}`);
-      assert.equal(JSON.parse(staleNext.stdout).state, 'final_visual_review_required');
+      assert.equal(JSON.parse(staleNext.stdout).state, 'invalid_run_evidence');
 
       finishedRun.runKind = 'final_visual_review';
       writeJson(finishedRunPath, finishedRun);
@@ -1999,7 +1957,7 @@ describe('visual experience artifacts', () => {
     }
   });
 
-  test('tasks done revalidates the run visual review evidence', () => {
+  test('implementation completion is independent from the single close-ready visual review', () => {
     const root = mkdtempSync(path.join(tmpdir(), 'p2a-visual-task-done-'));
     try {
       const graphPath = path.join(root, 'gate-c-task-graph', 'task-graph.json');
@@ -2020,15 +1978,8 @@ describe('visual experience artifacts', () => {
       const task = graph.tasks.find((candidate) => candidate.id === 'task-001');
       for (const candidate of graph.tasks) candidate.workKind = 'non_ui';
       task.workKind = 'ui';
-      task.visualReview = {
-        required: true,
-        experienceSpecRef: 'experience-spec.json',
-        experienceSpecSha256: sha256(visualBundle.experiencePath),
-        prototypeManifestRef: 'visual-design/VD-1/prototype.json',
-        prototypeManifestSha256: sha256(visualBundle.prototypePath),
+      task.visualImpact = {
         screenStates: [{ screenId: 'SCREEN-1', states: ['ready'] }],
-        viewports: [{ name: 'desktop', width: 1440, height: 900 }],
-        accessibilityStandard: 'WCAG 2.2 AA',
       };
       writeJson(graphPath, graph);
 
@@ -2049,9 +2000,6 @@ describe('visual experience artifacts', () => {
       const runsDir = path.join(root, 'runs');
       const runPath = runFilePath(runsDir, runId);
       const run = JSON.parse(readFileSync(runPath, 'utf8'));
-      result = runRuns(['revision', '--runs', runsDir, '--run-id', runId]);
-      assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
-      run.workspaceRevisionSha256 = result.stdout.trim();
       const finishedAt = new Date(Date.parse(run.startedAt) + 1000).toISOString();
       run.status = 'finished';
       run.updatedAt = finishedAt;
@@ -2077,89 +2025,7 @@ describe('visual experience artifacts', () => {
       writeJson(indexPath, runIndex);
 
       result = runTasks(['done', '--graph', graphPath, 'task-001']);
-      assert.notEqual(result.status, 0);
-      assert.match(`${result.stdout}\n${result.stderr}`, /visual review is required/);
-
-      const evidenceDir = path.join(root, 'visual-evidence', run.iterationId, runId);
-      mkdirSync(evidenceDir, { recursive: true });
-      const screenshotPath = path.join(evidenceDir, 'screen-1-ready-desktop.png');
-      const accessibilityPath = path.join(evidenceDir, 'accessibility.json');
-      writePng(screenshotPath, 1440, 900);
-      writeJson(accessibilityPath, {
-        schema_version: 'p2a.visual_accessibility_report.v1',
-        tool: 'axe-core',
-        standard: 'WCAG 2.2 AA',
-        scanned_at: finishedAt,
-        page_urls: ['http://127.0.0.1:4173/reviews/1'],
-        violations: [],
-      });
-      const visualReviewPath = runSidecarPath(runsDir, runId, '.visual-review.json');
-      writeJson(
-        visualReviewPath,
-        validReview(runId, {
-          artifactSha256: sha256(screenshotPath),
-          reportSha256: sha256(accessibilityPath),
-        }, run.iterationId, {
-          reviewedAt: finishedAt,
-          capturedAt: finishedAt,
-          workspaceRevisionSha256: run.workspaceRevisionSha256,
-        }),
-      );
-      run.visualReviewEvidenceSha256 = sha256(visualReviewPath);
-      writeJson(runPath, run);
-      const postReviewDriftPath = path.join(root, 'post-review-drift.txt');
-      writeFileSync(postReviewDriftPath, 'workspace changed after visual review\n', 'utf8');
-      result = runTasks(['done', '--graph', graphPath, 'task-001']);
-      assert.notEqual(result.status, 0);
-      assert.match(`${result.stdout}\n${result.stderr}`, /workspace revision does not match/);
-      rmSync(postReviewDriftPath);
-      result = runTasks(['done', '--graph', graphPath, 'task-001']);
       assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
-
-      const driftedReview = JSON.parse(readFileSync(visualReviewPath, 'utf8'));
-      driftedReview.note = 'Semantically valid, but changed after the run was sealed.';
-      writeJson(visualReviewPath, driftedReview);
-      assert.throws(
-        () => readRequiredVisualReview(runsDir, run, { artifactRoot: root }),
-        /evidence digest does not match/,
-      );
-      writeJson(
-        visualReviewPath,
-        validReview(runId, {
-          artifactSha256: sha256(screenshotPath),
-          reportSha256: sha256(accessibilityPath),
-        }, run.iterationId, {
-          reviewedAt: finishedAt,
-          capturedAt: finishedAt,
-          workspaceRevisionSha256: run.workspaceRevisionSha256,
-        }),
-      );
-
-      const forgedRun = JSON.parse(readFileSync(runPath, 'utf8'));
-      delete forgedRun.visualReview;
-      writeJson(runPath, forgedRun);
-      assert.throws(
-        () => validateRunsDir(runsDir),
-        /visualReview must exactly match task task-001/,
-      );
-      writeJson(runPath, run);
-
-      const canonicalGraph = JSON.parse(readFileSync(graphPath, 'utf8'));
-      const coMutatedGraph = structuredClone(canonicalGraph);
-      const coMutatedTask = coMutatedGraph.tasks.find((candidate) => candidate.id === 'task-001');
-      coMutatedTask.workKind = 'non_ui';
-      delete coMutatedTask.visualReview;
-      const coMutatedRun = structuredClone(run);
-      delete coMutatedRun.visualReview;
-      coMutatedRun.taskContractSha256 = taskContractSha256(coMutatedTask);
-      writeJson(graphPath, coMutatedGraph);
-      writeJson(runPath, coMutatedRun);
-      assert.throws(
-        () => validateRunsDir(runsDir),
-        /visual review|visualReview/,
-      );
-      writeJson(graphPath, canonicalGraph);
-      writeJson(runPath, run);
 
       const laterRunId = 'run-nonvisual-after-review';
       result = runRuns([
@@ -2204,12 +2070,30 @@ describe('visual experience artifacts', () => {
           taskGraphPath: graphPath,
           taskGraph: JSON.parse(readFileSync(graphPath, 'utf8')),
         }),
-        /review-only with no changedFiles/,
+        /latest run for the active iteration to be finished/,
       );
 
       const integratedUiPath = path.join(root, 'src', 'integrated-ui.js');
       mkdirSync(path.dirname(integratedUiPath), { recursive: true });
       writeFileSync(integratedUiPath, 'export const integrated = true;\n', 'utf8');
+      const earlyReview = runRuns([
+        'start',
+        '--graph', graphPath,
+        '--task', 'task-001',
+        '--run-id', 'run-final-visual-review-too-early-low-level',
+        '--agent-tool', 'codex',
+        '--run-kind', 'final_visual_review',
+        '--workspace', root,
+        '--workspace-ref', 'visual-task-done-fixture',
+      ]);
+      assert.notEqual(earlyReview.status, 0);
+      assert.match(
+        `${earlyReview.stdout}\n${earlyReview.stderr}`,
+        /requires every iteration task to be done/,
+      );
+      const completedGraph = JSON.parse(readFileSync(graphPath, 'utf8'));
+      for (const candidate of completedGraph.tasks) candidate.status = 'done';
+      writeJson(graphPath, completedGraph);
       const finalReviewRunId = 'run-final-visual-review';
       result = runRuns([
         'start',
@@ -2480,14 +2364,14 @@ describe('visual experience artifacts', () => {
           taskGraphPath: graphPath,
           taskGraph: JSON.parse(readFileSync(graphPath, 'utf8')),
         }),
-        /latest run for task-001 to be finished/,
+        /latest run for the active iteration to be finished/,
       );
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
   });
 
-  test('a UI run cannot finish without a confirming evidence-backed visual review', () => {
+  test('the final visual review run cannot finish without confirming evidence', () => {
     const root = mkdtempSync(path.join(tmpdir(), 'p2a-visual-run-'));
     try {
       const visualBundle = buildApprovedVisualBundle(root);
@@ -2495,6 +2379,7 @@ describe('visual experience artifacts', () => {
         runId: 'run-task-001-001',
         taskId: 'task-001',
         iterationId: 'iter-001',
+        runKind: 'final_visual_review',
         startedAt: '2026-08-01T00:00:00.000Z',
         projectId: 'reviewpane',
         workspaceRef: 'visual-task-done-fixture',

@@ -53,6 +53,14 @@ import {
   resolveP2aPaths,
 } from './p2a_paths.mjs';
 import { artifactRunRef, legacyRunRef, runSidecarRef } from './p2a_run_paths.mjs';
+import {
+  assertCanonicalPortableRun,
+  closeReadyVisualReviewRunIds,
+  completedEvidenceRunIds,
+  portableProvenanceMigrationHint,
+  selectHandoffRunEntries,
+  validatePortableHandoffTarget,
+} from './p2a_handoff_portability.mjs';
 import { shellQuote } from './p2a_run_commands.mjs';
 import {
   buildProjectConfig,
@@ -82,6 +90,7 @@ import {
 const P2A_PATHS = resolveP2aPaths(import.meta.url);
 const ROOT = P2A_PATHS.toolRoot;
 const VALID_MODES = new Set(['copy', 'move']);
+const RUN_TRANSFER_MODES = new Set(['completed', 'resumable']);
 const TOOL_TARGET_ORDER = ['codex', 'claude', 'gemini'];
 const VALID_TOOL_TARGETS = new Set(TOOL_TARGET_ORDER);
 const CODEX_AGENT_PROFILE_ORDER = ['quality', 'inherit'];
@@ -153,6 +162,7 @@ function usage() {
     'Handoff options:',
     '  --mode copy|move     Copy artifacts by default; move removes source files after successful write.',
     '  --iteration-id <id>  Use iterative artifacts. The id must match current-spec.json active_iteration; default: active.',
+    '  --run-transfer <m>   completed byte-copies milestone-referenced finished v2 evidence only (default); resumable performs compatibility transfer and also ports active non-visual runs.',
     '  --include-intake     Generate an explicit gate-a-intake/intake.md export from canonical intake.json.',
     '  --tools <list>       Copy portable P2A AI tool assets for codex,claude,gemini. Use comma list or all.',
     '  --include-team-bigfive',
@@ -220,6 +230,7 @@ function parseArgs(argv) {
     iterationId: DEFAULT_ITERATION_ID,
     iterationIdProvided: false,
     includeIntake: false,
+    runTransfer: 'completed',
     tools: isInitializeCommand(command) || command === 'enhance' ? [...TOOL_TARGET_ORDER] : command === 'update' || command === 'upgrade' ? null : [],
     includeTeamBigFive: false,
     teamBigFiveSource: null,
@@ -237,7 +248,7 @@ function parseArgs(argv) {
     const arg = argv[index];
     if (arg === '--help' || arg === '-h') {
       args.help = true;
-    } else if ((isInitializeCommand(command) || command === 'update' || command === 'upgrade' || command === 'enhance') && (arg === '--project-id' || arg === '--artifacts' || arg === '--mode' || arg === '--iteration-id' || arg === '--include-intake' || arg === '--include-team-bigfive' || arg === '--team-bigfive-source' || arg === '--team-bigfive-targets')) {
+    } else if ((isInitializeCommand(command) || command === 'update' || command === 'upgrade' || command === 'enhance') && (arg === '--project-id' || arg === '--artifacts' || arg === '--mode' || arg === '--iteration-id' || arg === '--run-transfer' || arg === '--include-intake' || arg === '--include-team-bigfive' || arg === '--team-bigfive-source' || arg === '--team-bigfive-targets')) {
       throw new Error(`${arg} is not valid for ${command}`);
     } else if (arg === '--project-id') {
       args.projectId = argv[++index];
@@ -256,6 +267,11 @@ function parseArgs(argv) {
       args.iterationId = argv[++index];
       if (!args.iterationId) throw new Error('--iteration-id requires active or an iteration id');
       args.iterationIdProvided = true;
+    } else if (arg === '--run-transfer') {
+      args.runTransfer = argv[++index];
+      if (!RUN_TRANSFER_MODES.has(args.runTransfer)) {
+        throw new Error(`--run-transfer must be completed or resumable, got ${JSON.stringify(args.runTransfer)}`);
+      }
     } else if (arg === '--include-intake') {
       args.includeIntake = true;
     } else if (arg === '--tools') {
@@ -1516,10 +1532,32 @@ function currentSpecWithPortableClosedArtifactHashes(currentSpec, plan, projectI
   return next;
 }
 
-function pushMilestoneReviewBundleIfExists(plan, artifactsRoot, targetRoot, projectId, iterationId) {
+function pushMilestoneReviewBundleIfExists(
+  plan,
+  artifactsRoot,
+  targetRoot,
+  projectId,
+  iterationId,
+  runTransfer = 'completed',
+) {
   if (!iterationId) return { reviewFiles: [], evidenceFiles: [] };
   const reviewFiles = [];
   const evidenceFiles = [];
+  const availableReviews = MILESTONE_REVIEW_CHECKPOINTS.flatMap((checkpoint) => {
+    const sourcePath = path.join(
+      artifactsRoot,
+      'iterations',
+      iterationId,
+      'milestone-reviews',
+      `${checkpoint}.json`,
+    );
+    if (!existsSync(sourcePath)) return [];
+    assertFile(sourcePath, path.join('iterations', iterationId, 'milestone-reviews', `${checkpoint}.json`));
+    return [{ checkpoint, sourcePath, milestoneReview: validateMilestoneReview(sourcePath) }];
+  });
+  const requiredCompletedRunIds = completedEvidenceRunIds(
+    availableReviews.map(({ milestoneReview }) => milestoneReview),
+  );
   const copiedTargets = new Set(plan.map((item) => normalizePath(item.targetRelative)));
   function pushBundleFile(sourcePath, artifactRelativePath, destinationList, options = {}) {
     const targetRelative = normalizePath(path.join(targetArtifactDir(projectId), artifactRelativePath));
@@ -1584,10 +1622,20 @@ function pushMilestoneReviewBundleIfExists(plan, artifactsRoot, targetRoot, proj
         : 'spec-source-intake',
     }], artifactsRoot);
     const runSourceSpec = sourceFiles[0];
-    const portableSourceSpecRef = path.posix.relative(
+    const canonicalSourceSpecRef = path.posix.relative(
       path.posix.dirname(runTaskGraph.relativePath),
       runSourceSpec.relativePath,
     );
+    const currentRunSourceSpecRef = path.isAbsolute(runData.sourceSpecRef)
+      ? null
+      : normalizePath(runData.sourceSpecRef).replace(/^\.\//, '');
+    const currentGraphSourceSpecRef = path.isAbsolute(runTaskGraphData.sourceSpec)
+      ? null
+      : normalizePath(runTaskGraphData.sourceSpec).replace(/^\.\//, '');
+    const portableSourceSpecRef = (
+      currentRunSourceSpecRef === canonicalSourceSpecRef
+      && currentGraphSourceSpecRef === canonicalSourceSpecRef
+    ) ? null : canonicalSourceSpecRef;
     const sourceRealPaths = new Set(files.map((file) => realpathSync(file.sourcePath)));
     for (const file of sourceFiles) {
       const sourceRealPath = realpathSync(file.sourcePath);
@@ -1624,12 +1672,14 @@ function pushMilestoneReviewBundleIfExists(plan, artifactsRoot, targetRoot, proj
   }
 
   function pushRunSourceBundle(bundle, portableSourceSpecRef) {
-    const portableContents = portableArtifactBundleContents(
-      bundle.files,
-      artifactsRoot,
-      projectId,
-      plan,
-    );
+    const portableContents = runTransfer === 'completed'
+      ? null
+      : portableArtifactBundleContents(
+          bundle.files,
+          artifactsRoot,
+          projectId,
+          plan,
+        );
     for (const file of bundle.files) {
       const rewritesTaskGraph = (
         portableSourceSpecRef
@@ -1637,11 +1687,16 @@ function pushMilestoneReviewBundleIfExists(plan, artifactsRoot, targetRoot, proj
       );
       const portableContent = rewritesTaskGraph
         ? portableTaskGraphText(file.sourcePath, portableSourceSpecRef)
-        : portableContents.get(realpathSync(file.sourcePath));
+        : (portableContents?.get(realpathSync(file.sourcePath)) ?? readFileSync(file.sourcePath));
       const rewritesSource = !sameFileContent(
         readFileSync(file.sourcePath),
         portableContent,
       );
+      if (runTransfer === 'completed' && rewritesSource) {
+        throw new ValidationError(
+          `portable handoff requires canonical byte-copyable run provenance at ${file.relativePath}; ${portableProvenanceMigrationHint()}`,
+        );
+      }
       pushBundleFile(
         file.sourcePath,
         file.relativePath,
@@ -1665,7 +1720,9 @@ function pushMilestoneReviewBundleIfExists(plan, artifactsRoot, targetRoot, proj
       path.dirname(runIndex.sourcePath),
     );
     const runData = loadJson(run.sourcePath);
+    if (runData.status === 'started' && runTransfer !== 'resumable') return null;
     try {
+      if (runTransfer === 'completed') assertCanonicalPortableRun(runData);
       const sourceBundle = resolveRunSourceBundle(runData, checkpoint, indexedRun);
       if (runData.status === 'started' && runData.visualReview?.required) {
         throw new ValidationError(
@@ -1721,12 +1778,7 @@ function pushMilestoneReviewBundleIfExists(plan, artifactsRoot, targetRoot, proj
     return `${JSON.stringify(portableRunIndex, null, 2)}\n`;
   }
 
-  for (const checkpoint of MILESTONE_REVIEW_CHECKPOINTS) {
-    const fileName = `${checkpoint}.json`;
-    const sourcePath = path.join(artifactsRoot, 'iterations', iterationId, 'milestone-reviews', fileName);
-    if (!existsSync(sourcePath)) continue;
-    assertFile(sourcePath, path.join('iterations', iterationId, 'milestone-reviews', fileName));
-    const milestoneReview = validateMilestoneReview(sourcePath);
+  for (const { checkpoint, sourcePath, milestoneReview } of availableReviews) {
     const reviewRelativePath = normalizePath(path.relative(artifactsRoot, sourcePath));
     pushBundleFile(sourcePath, reviewRelativePath, reviewFiles);
 
@@ -1760,7 +1812,26 @@ function pushMilestoneReviewBundleIfExists(plan, artifactsRoot, targetRoot, proj
       `${checkpoint} run index`,
     );
     const runIndexData = validateRunsDir(path.dirname(runIndex.sourcePath));
-    const portableRunBundles = runIndexData.runs
+    const indexedRunRecords = runIndexData.runs.map((indexedRun) => {
+      const indexedRunArtifact = resolveMilestoneBundleReference(
+        artifactsRoot,
+        indexedRun.runRef,
+        `${checkpoint} run-index ${indexedRun.runId}.runRef`,
+        path.dirname(runIndex.sourcePath),
+      );
+      return loadJson(indexedRunArtifact.sourcePath);
+    });
+    const closeReadyRunIds = closeReadyVisualReviewRunIds(indexedRunRecords, {
+      iterationId,
+      taskGraphRef: milestoneReview.source.task_graph_ref,
+    });
+    const transferRunEntries = selectHandoffRunEntries(
+      runIndexData,
+      requiredCompletedRunIds,
+      runTransfer,
+      { additionalRunIds: closeReadyRunIds },
+    );
+    const portableRunBundles = transferRunEntries
       .map((indexedRun) => resolvePortableRunBundle(runIndex, checkpoint, indexedRun))
       .filter(Boolean);
     const portableRuns = portableRunBundles.map((bundle) => bundle.indexedRun);
@@ -1787,6 +1858,14 @@ function pushMilestoneReviewBundleIfExists(plan, artifactsRoot, targetRoot, proj
           sourceBundle.portableSourceSpecRef,
         );
       }
+    }
+    if (
+      runTransfer === 'completed'
+      && (portableTaskGraphRefs.size || portableTaskGraphSourceSpecRefs.size)
+    ) {
+      throw new ValidationError(
+        `portable handoff requires canonical relative run provenance without JSON rewriting; ${portableProvenanceMigrationHint()}`,
+      );
     }
     pushBundleFile(
       runIndex.sourcePath,
@@ -4141,7 +4220,14 @@ function buildPlan(paths, args, artifactsRoot, targetRoot, sourceInfo, options =
   }
   const preflightResearchFiles = pushFeatureRadarPreflightIfExists(plan, artifactsRoot, targetRoot, args.projectId);
   const milestoneBundle = sourceInfo.kind === 'iteration'
-    ? pushMilestoneReviewBundleIfExists(plan, artifactsRoot, targetRoot, args.projectId, sourceInfo.iterationId)
+    ? pushMilestoneReviewBundleIfExists(
+        plan,
+        artifactsRoot,
+        targetRoot,
+        args.projectId,
+        sourceInfo.iterationId,
+        args.runTransfer,
+      )
     : { reviewFiles: [], evidenceFiles: [] };
   const milestoneReviewFiles = milestoneBundle.reviewFiles;
   const milestoneEvidenceFiles = milestoneBundle.evidenceFiles;
@@ -4259,6 +4345,7 @@ function buildPlan(paths, args, artifactsRoot, targetRoot, sourceInfo, options =
       `task-graph.sourceSpec rebased to ${targetSpecRef}`,
       `spec.source_intake rebased to ${targetIntakeRef}`,
       sourceInfo.kind === 'iteration' ? `iteration handoff source: ${sourceInfo.iterationId}` : 'greenfield handoff source',
+      `run transfer mode: ${args.runTransfer}`,
       preflightResearchFiles.length ? `Feature Radar preflight research copied: ${preflightResearchFiles.length} file(s)` : 'Feature Radar preflight research not present',
       milestoneReviewFiles.length ? `Milestone reviews copied: ${milestoneReviewFiles.length} file(s)` : 'Milestone reviews not present',
       milestoneEvidenceFiles.length ? `Milestone evidence bundle copied: ${milestoneEvidenceFiles.length} file(s)` : 'Milestone evidence bundle not present',
@@ -4351,6 +4438,7 @@ function printPlan(plan, args, artifactsRoot, targetRoot, sourceInfo) {
   console.log(`Plan2Agent handoff ${args.dryRun ? 'dry run' : 'plan'}`);
   console.log(`projectId: ${args.projectId}`);
   console.log(`mode: ${args.mode}`);
+  console.log(`runTransfer: ${args.runTransfer}`);
   console.log(`aiTools: ${args.tools.length ? args.tools.join(',') : 'none'}`);
   if (args.tools.includes('codex')) console.log(`codexProfile: ${resolveCodexAgentProfile(args.codexProfile)}`);
   console.log(`teamBigFive: ${args.includeTeamBigFive ? args.teamBigFiveTargets.join(',') : 'none'}`);
@@ -5100,6 +5188,7 @@ export function main(argv = process.argv.slice(2)) {
       const targetSnapshot = capturePlanTargetSnapshot(plan, targetRoot);
       try {
         writePlan(plan);
+        validatePortableHandoffTarget(targetRoot, args.projectId);
         if (sourceInfo.kind === 'iteration') {
           recordSourceHandoffLocked(artifactsRoot, sourceInfo, record);
         }

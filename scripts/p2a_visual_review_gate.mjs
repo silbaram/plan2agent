@@ -1,4 +1,4 @@
-/** Enforce the visual-review sidecar required by UI implementation tasks. */
+/** Enforce the iteration-level visual-review sidecar required before close. */
 
 import { existsSync, lstatSync, readFileSync, realpathSync } from 'node:fs';
 import { createHash } from 'node:crypto';
@@ -18,10 +18,9 @@ export function expectedVisualReviewContract(run, options = {}) {
   const finishedAt = options.finishedAt ?? run.finishedAt;
   return {
     run_id: run.runId,
-    task_id: run.taskId,
+    iteration_id: run.iterationId,
     workspace_ref: run.workspaceRef,
     workspace_revision_sha256: run.workspaceRevisionSha256,
-    iteration_id: run.iterationId,
     started_at: run.startedAt,
     ...(finishedAt ? { finished_at: finishedAt } : {}),
     ...(options.notBefore ? { evidence_not_before: options.notBefore } : {}),
@@ -65,6 +64,14 @@ export function readRequiredVisualReviewEvidence(runsDir, run, options = {}) {
     });
   } catch (error) {
     throw new Error(`visual review is invalid for run ${run.runId}: ${error.message}`);
+  }
+  if (
+    run.runKind === 'final_visual_review'
+    && review.schema_version !== 'p2a.visual_review.v2'
+  ) {
+    throw new Error(
+      `final visual review run ${run.runId} requires iteration-owned p2a.visual_review.v2 evidence`,
+    );
   }
   if (review.verdict !== 'confirm_ui') {
     const concerns = review.concerns.length ? review.concerns.join(' | ') : (review.note || 'no details provided');

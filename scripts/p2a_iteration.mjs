@@ -36,7 +36,7 @@ import {
   validateTaskGraph,
   validateTaskContextData,
   validateTaskGraphData,
-  validateVisualExperience,
+  approvedVisualReviewContract,
   ValidationError,
 } from './validate_artifacts.mjs';
 import {
@@ -3018,14 +3018,14 @@ function semanticTasksFromGroups({ projectId, iterationId, groups, baselineRef, 
   });
 }
 
-function expandVisualSemanticGroups(groups, visualReview) {
-  if (!visualReview || visualReview.screenStates.length < 2) return groups;
+function expandVisualSemanticGroups(groups, visualContract) {
+  if (!visualContract || visualContract.screenStates.length < 2) return groups;
   const uiGroupIndex = groups.findIndex((group) => group.areaId === 'ui');
   if (uiGroupIndex < 0) return groups;
   const uiGroup = groups[uiGroupIndex];
   return groups.flatMap((group, index) => (
     index === uiGroupIndex
-      ? visualReview.screenStates.map((screenState) => ({
+      ? visualContract.screenStates.map((screenState) => ({
           ...group,
           label: `${uiGroup.label} (${screenState.screenId})`,
         }))
@@ -3033,41 +3033,8 @@ function expandVisualSemanticGroups(groups, visualReview) {
   ));
 }
 
-function deterministicVisualReviewContract(activeSpec, specPath, artifactRoot) {
-  const visual = activeSpec.visual_experience;
-  if (
-    visual?.design_scope !== 'full'
-    || visual.design_timing !== 'current_iteration'
-    || !visual.experience_spec_ref
-  ) return null;
-  const experiencePath = path.resolve(path.dirname(specPath), visual.experience_spec_ref);
-  const experience = validateVisualExperience(experiencePath, {
-    artifactRoot,
-    expected: { project_id: activeSpec.project_id, mode: 'full' },
-  });
-  const selected = experience.visual_direction.candidates.find(
-    (candidate) => candidate.id === experience.visual_direction.selected_candidate,
-  );
-  if (!selected) {
-    throw new ValidationError('full current-iteration visual experience must select a prototype before diff task generation');
-  }
-  return {
-    required: true,
-    experienceSpecRef: visual.experience_spec_ref,
-    experienceSpecSha256: visual.experience_spec_sha256,
-    prototypeManifestRef: selected.prototype_manifest_ref,
-    prototypeManifestSha256: selected.prototype_manifest_sha256,
-    screenStates: experience.screens.map((screen) => ({
-      screenId: screen.id,
-      states: cloneJson(screen.states),
-    })),
-    viewports: cloneJson(experience.validation.viewports),
-    accessibilityStandard: experience.validation.accessibility_standard,
-  };
-}
-
-function applyDeterministicVisualTaskContract(tasks, visualReview) {
-  if (!visualReview) return tasks;
+function applyDeterministicVisualImpact(tasks, visualContract) {
+  if (!visualContract) return tasks;
   const uiOwnerIndexes = tasks
     .map((task, index) => ({ task, index }))
     .filter(({ task }) => task.targetArea === 'ui')
@@ -3077,46 +3044,40 @@ function applyDeterministicVisualTaskContract(tasks, visualReview) {
   if (ownerIndexes[0] < 0) {
     throw new ValidationError('full current-iteration visual experience requires at least one implementation task');
   }
-  if (ownerIndexes.length !== visualReview.screenStates.length && ownerIndexes.length !== 1) {
-    throw new ValidationError(
-      'visual task generation must assign either one owner or one owner per approved screen',
-    );
-  }
-  const reviewByOwnerIndex = new Map(ownerIndexes.map((ownerIndex, ownerOrder) => [
+  const impactByOwnerIndex = new Map(ownerIndexes.map((ownerIndex, ownerOrder) => [
     ownerIndex,
     {
-      ...cloneJson(visualReview),
-      screenStates: ownerIndexes.length === 1
-        ? cloneJson(visualReview.screenStates)
-        : [cloneJson(visualReview.screenStates[ownerOrder])],
+      screenStates: ownerIndexes.length === visualContract.screenStates.length
+        ? [cloneJson(visualContract.screenStates[ownerOrder])]
+        : cloneJson(visualContract.screenStates),
     },
   ]));
   return tasks.map((task, index) => {
-    const assignedReview = reviewByOwnerIndex.get(index);
+    const visualImpact = impactByOwnerIndex.get(index);
     return {
       ...task,
-      workKind: assignedReview
+      workKind: visualImpact
         ? (task.targetArea === 'ui' ? 'ui' : 'mixed')
         : 'non_ui',
-      ...(assignedReview ? { visualReview: assignedReview } : {}),
+      ...(visualImpact ? { visualImpact } : {}),
     };
   });
 }
 
-export function taskGraphFromSpecChanges({ projectId, iterationId, activeSpec, baselineSpec, baselineRef, existingTaskGraph = null, historicalTasks = [], visualReview = null }) {
+export function taskGraphFromSpecChanges({ projectId, iterationId, activeSpec, baselineSpec, baselineRef, existingTaskGraph = null, historicalTasks = [], visualContract = null }) {
   const detailedChanges = collectDetailedSpecChanges(baselineSpec, activeSpec);
   const groups = addSyntheticVerificationGroup(expandVisualSemanticGroups(
     semanticGroupsFromChanges(activeSpec, detailedChanges),
-    visualReview,
+    visualContract,
   ));
-  const tasks = applyDeterministicVisualTaskContract(semanticTasksFromGroups({
+  const tasks = applyDeterministicVisualImpact(semanticTasksFromGroups({
     projectId,
     iterationId,
     groups,
     baselineRef,
     existingTaskGraph,
     historicalTasks,
-  }), visualReview);
+  }), visualContract);
   return {
     schema_version: 'p2a.task_graph.v1',
     projectId,
@@ -3496,7 +3457,7 @@ export function validateCloseReadyVisualEvidence({
   taskGraphPath,
   taskGraph,
 }) {
-  const visualTasks = taskGraph.tasks.filter((task) => task.visualReview?.required);
+  const visualTasks = taskGraph.tasks.filter((task) => task.visualImpact);
   if (!visualTasks.length) return 0;
   const runsDir = path.join(path.resolve(artifactRoot), 'runs');
   validateRunsDir(runsDir);
@@ -3513,28 +3474,25 @@ export function validateCloseReadyVisualEvidence({
       `close-ready visual validation requires no active run(s): ${activeRuns.map((run) => run.runId).join(', ')}`,
     );
   }
-  for (const task of visualTasks) {
-    const reviewHint = `Run p2a execute review --artifacts ${artifactRoot} --task ${task.id} after canonical integration.`;
-    const taskRuns = currentRuns
-      .map((run, runOrder) => ({ run, runOrder }))
-      .filter(({ run }) => run.taskId === task.id)
-      .sort(compareRunEvidence);
-    const latestRun = taskRuns[0]?.run;
-    try {
-      assertFinalVisualReviewRunReady({
-        runsDir,
-        run: latestRun,
-        taskId: task.id,
-        artifactRoot,
-        graphPath: taskGraphPath,
-      });
-    } catch (error) {
-      throw new ValidationError(
-        `close-ready visual validation failed: ${error.message}. ${reviewHint}`,
-      );
-    }
+  const reviewHint = `Run p2a execute review --artifacts ${artifactRoot} after canonical integration.`;
+  const latestRun = currentRuns
+    .map((run, runOrder) => ({ run, runOrder }))
+    .filter(({ run }) => run.runKind === 'final_visual_review')
+    .sort(compareRunEvidence)[0]?.run;
+  try {
+    assertFinalVisualReviewRunReady({
+      runsDir,
+      run: latestRun,
+      taskId: 'the active iteration',
+      artifactRoot,
+      graphPath: taskGraphPath,
+    });
+  } catch (error) {
+    throw new ValidationError(
+      `close-ready visual validation failed: ${error.message}. ${reviewHint}`,
+    );
   }
-  return visualTasks.length;
+  return 1;
 }
 
 function loadReadyIterationFacts(artifactRoot) {
@@ -3718,7 +3676,7 @@ function summarizeTask(task) {
     targetArea: task.targetArea,
     ...(task.workKind ? { workKind: task.workKind } : {}),
     sourceSpecRefs: task.sourceSpecRefs,
-    ...(task.visualReview ? { visualReview: cloneJson(task.visualReview) } : {}),
+    ...(task.visualImpact ? { visualImpact: cloneJson(task.visualImpact) } : {}),
   };
 }
 
@@ -4949,7 +4907,7 @@ function diffTasksLocked(args) {
     baselineRef,
     existingTaskGraph,
     historicalTasks: historicalCompletedTasks(state),
-    visualReview: deterministicVisualReviewContract(activeSpec, state.specPath, state.artifactRoot),
+    visualContract: approvedVisualReviewContract(state.specPath, state.artifactRoot),
   });
   const draft = {
     ...graph,

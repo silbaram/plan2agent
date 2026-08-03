@@ -7,6 +7,8 @@ import test from 'node:test';
 
 import { ROOT, formatCommandResult, makeTempDir, runP2aFrom } from './helpers/fixtures.mjs';
 
+const PACKAGE_VERSION = JSON.parse(readFileSync(path.join(ROOT, 'package.json'), 'utf8')).version;
+
 function spawnPortable(command, args, options) {
   if (process.platform !== 'win32') return spawnSync(command, args, options);
   return spawnSync(command, args, { ...options, shell: true });
@@ -39,7 +41,7 @@ test('checkout init preserves the legacy co-located runtime', () => {
     const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
     assert.equal(manifest.provenance.mode, 'init');
     assert.equal(manifest.provenance.packageName, 'plan2agent');
-    assert.equal(manifest.provenance.packageVersion, '0.1.0');
+    assert.equal(manifest.provenance.packageVersion, PACKAGE_VERSION);
     assert.equal(realpathSync(manifest.provenance.toolkitRoot), realpathSync(ROOT));
     assert.equal('runtime' in manifest, false);
     assert.ok(manifest.scriptFiles.includes('.plan2agent/scripts/p2a.mjs'));
@@ -157,7 +159,7 @@ test('checkout scaffold preserves the legacy co-located runtime', () => {
     const manifest = JSON.parse(readFileSync(path.join(targetRoot, '.plan2agent', 'manifest.json'), 'utf8'));
     assert.equal(manifest.provenance.mode, 'scaffold');
     assert.equal(manifest.provenance.packageName, 'plan2agent');
-    assert.equal(manifest.provenance.packageVersion, '0.1.0');
+    assert.equal(manifest.provenance.packageVersion, PACKAGE_VERSION);
     assert.equal(realpathSync(manifest.provenance.toolkitRoot), realpathSync(ROOT));
     assert.equal('runtime' in manifest, false);
     assert.ok(manifest.scriptFiles.includes('.plan2agent/scripts/p2a.mjs'));
@@ -299,7 +301,7 @@ test('the packed p2a binary supports core commands without a local runtime copy'
     assert.doesNotMatch(packageSkill, /node \.plan2agent\/scripts\/p2a\.mjs tasks ready/);
     const manifest = JSON.parse(readFileSync(path.join(targetRoot, '.plan2agent', 'manifest.json'), 'utf8'));
     assert.equal(manifest.provenance.packageName, 'plan2agent');
-    assert.equal(manifest.provenance.packageVersion, '0.1.0');
+    assert.equal(manifest.provenance.packageVersion, PACKAGE_VERSION);
 
     const nestedRoot = path.join(targetRoot, 'src', 'nested');
     mkdirSync(nestedRoot, { recursive: true });
