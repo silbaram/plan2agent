@@ -86,6 +86,14 @@
             "description": "Single area label by default. When a task intentionally spans multiple areas, separate area labels with comma, plus, ampersand, or the word 'and'. Slash is treated as a literal label character, not a multi-area separator.",
             "minLength": 1
           },
+          "workKind": {
+            "type": "string",
+            "enum": [
+              "ui",
+              "non_ui",
+              "mixed"
+            ]
+          },
           "suggestedAgentPrompt": {
             "type": "string",
             "minLength": 1
@@ -96,6 +104,42 @@
             "items": {
               "type": "string",
               "minLength": 1
+            }
+          },
+          "visualImpact": {
+            "type": "object",
+            "required": [
+              "screenStates"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "screenStates": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "screenId",
+                    "states"
+                  ],
+                  "additionalProperties": false,
+                  "properties": {
+                    "screenId": {
+                      "type": "string",
+                      "pattern": "^SCREEN-[0-9]+$"
+                    },
+                    "states": {
+                      "type": "array",
+                      "minItems": 1,
+                      "uniqueItems": true,
+                      "items": {
+                        "type": "string",
+                        "minLength": 1
+                      }
+                    }
+                  }
+                }
+              }
             }
           },
           "blockReason": {

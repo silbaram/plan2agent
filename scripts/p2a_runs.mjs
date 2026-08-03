@@ -18,7 +18,10 @@ import process from 'node:process';
 import { pathToFileURL } from 'node:url';
 import { FAILURE_CLASSES, FAILURE_RETRYABLE, ISOLATION_MODES } from './p2a_constants.mjs';
 import {
+  approvedVisualReviewContract,
   loadJson,
+  resolveRunTaskGraphPath,
+  validateRunTaskContract,
   validateRunData,
   validateRunIndexData,
   validateRunsDir,
@@ -26,6 +29,7 @@ import {
   ValidationError,
 } from './validate_artifacts.mjs';
 import { normalizeMonitorGateSidecar, normalizeMonitorVerdictData, readMonitorGateSidecar } from './p2a_monitor_gate.mjs';
+import { readRequiredVisualReviewEvidence } from './p2a_visual_review_gate.mjs';
 import {
   resolveIterationState,
   validateMaintenanceTaskGraphProject,
@@ -35,9 +39,11 @@ import {
   assertRunIndexCanInitialize,
   assertSafeRunId,
   assertStartableRunId,
+  canonicalWorkspacePathForArtifactRoot,
   canonicalTaskGraphRef,
   canonicalRunRef,
   DEFAULT_RUNS_DIR,
+  defaultArtifactRootForGraph,
   indexedRunRef,
   legacyRunRef,
   legacyRunsDirForGraph,
@@ -46,8 +52,11 @@ import {
   runFilePath,
   runSidecarPath,
   runSidecarRef,
+  taskContractSha256,
   taskGraphRefMatchesGraph,
   unindexedRunRecordRefs,
+  workspaceRevisionExcludedPathsForRun,
+  workspaceRevisionSha256,
 } from './p2a_run_paths.mjs';
 import {
   assertNoPendingRunMigration,
@@ -87,8 +96,10 @@ import { commandLine as sharedCommandLine, printRunCommandFooter } from './p2a_r
 const P2A_PATHS = resolveP2aPaths(import.meta.url);
 const ROOT = P2A_PATHS.projectRoot;
 const PROJECT_RUNS_DIR = path.join(ROOT, DEFAULT_RUNS_DIR);
-const COMMANDS = new Set(['start', 'record', 'verify', 'finish', 'list', 'show', 'validate', 'migrate-layout']);
+const COMMANDS = new Set(['start', 'record', 'verify', 'finish', 'list', 'show', 'revision', 'validate', 'migrate-layout', 'migrate-schema']);
 const RUN_STATUSES = new Set(['started', 'finished', 'failed', 'blocked']);
+const RUN_KINDS = new Set(['final_visual_review']);
+const VISUAL_FEEDBACK_VERDICTS = new Set(['note', 'concern']);
 const FAILURE_SOURCES = new Set(['owner', 'monitor', 'implementer']);
 const FAILURE_DEFAULTS = {
   verification_failed: { retryable: 'after_fix', needsUserDecision: false, source: 'owner' },
@@ -107,13 +118,15 @@ function usage() {
     'Usage:',
     '  p2a runs start --artifacts <iterative-project-dir> --task <task-id> --agent-tool <tool> [options]',
     '  p2a runs start --graph <task-graph.json> --task <task-id> --agent-tool <tool> [--runs <dir>] [options]',
-    '  p2a runs record --run-id <run-id> (--artifacts <dir>|--runs <dir>|--graph <path>) [--changed-file <path> ...] [--verification <type:status:command>] [--note <text>] [structured detail options]',
+    '  p2a runs record --run-id <run-id> (--artifacts <dir>|--runs <dir>|--graph <path>) [--changed-file <path> ...] [--verification <type:status:command>] [--note <text>] [--visual-feedback note|concern] [structured detail options]',
     '  p2a runs verify --run-id <run-id> (--artifacts <dir>|--runs <dir>|--graph <path>) [--test] [--lint] [--typecheck] [--test-command <cmd>] [--lint-command <cmd>] [--typecheck-command <cmd>] [--verify-command <type:cmd>]',
     '  p2a runs finish --run-id <run-id> (--artifacts <dir>|--runs <dir>|--graph <path>) [--status finished|failed|blocked] [--failure-class <class>] [--retryable yes|no|after_fix] [--needs-user-decision true|false] [--failure-source owner|monitor|implementer] [--changed-file <path> ...] [--verification <type:status:command>] [--collect-git] [--note <text>] [structured detail options]',
     '  p2a runs list (--artifacts <dir>|--runs <dir>|--graph <path>) [--json]',
     '  p2a runs show --run-id <run-id> (--artifacts <dir>|--runs <dir>|--graph <path>)',
+    '  p2a runs revision --run-id <run-id> (--artifacts <dir>|--runs <dir>|--graph <path>)',
     '  p2a runs validate (--artifacts <dir>|--runs <dir>|--graph <path>) [--run-id <run-id>]',
     '  p2a runs migrate-layout (--artifacts <dir>|--runs <dir>|--graph <path>) [--dry-run] --yes',
+    '  p2a runs migrate-schema (--artifacts <dir>|--runs <dir>|--graph <path>) [--run-id <run-id>] [--dry-run] --yes',
     '',
     'Options:',
     '  --artifacts <dir>       Iterative artifact root; writes runs/ under that root.',
@@ -124,6 +137,7 @@ function usage() {
     '  --run-id <run-id>       Stable run id. Must start with run-. Generated for start when omitted.',
     '  --run-reservation-token <token>  Reservation owner token emitted by a failed sequential start retry.',
     '  --agent-tool <tool>     Agent/CLI tool that performed the run, such as codex, claude, gemini.',
+    '  --run-kind <kind>       Structured run purpose. Supported value: final_visual_review.',
     '  --workspace <dir>       Workspace path for verification commands. Defaults to cwd or --worktree.',
     '  --workspace-ref <ref>   Human-readable workspace reference. Defaults to --workspace display path.',
     '  --isolation <mode>      none, branch, or worktree. Default: none.',
@@ -135,6 +149,9 @@ function usage() {
     '  --changed-file <path>   Changed file to attach to the run. Repeatable.',
     '  --collect-git           Add changed files from git status in the workspace.',
     '  --note <text>           Append a run note. Repeatable.',
+    '  --visual-feedback <verdict>  Append optional, non-gating implementation feedback: note or concern.',
+    '  --visual-feedback-note <text>  Explanation for the visual feedback.',
+    '  --visual-feedback-concern <text>  Concern found during early visual review. Repeatable.',
     '  --repro-step <text>     Append a structured reproduction step. Repeatable.',
     '  --repro-command <cmd>   Append a command that reproduces the observed issue. Repeatable.',
     '  --repro-note <text>     Append reproduction context. Repeatable.',
@@ -159,8 +176,8 @@ function usage() {
     '                          Run a custom command; type is optional and defaults to custom.',
     '  --save-config           Persist detected or explicit test/lint/typecheck commands to project.config.json.',
     '  --json                  Machine-readable output for list.',
-    '  --dry-run               Preview run partitioning and legacy per-iteration index consolidation.',
-    '  --yes                   Confirm migrate-layout file moves, index merge, and legacy index removal.',
+    '  --dry-run               Preview the selected layout or schema migration without writing files.',
+    '  --yes                   Confirm the selected layout or schema migration.',
     '  --help, -h              Show this help.',
   ].join('\n');
 }
@@ -179,6 +196,7 @@ function parseArgs(argv) {
     runId: null,
     runReservationToken: null,
     agentTool: null,
+    runKind: null,
     workspace: null,
     workspaceRef: null,
     isolation: 'none',
@@ -188,6 +206,9 @@ function parseArgs(argv) {
     createIsolation: false,
     changedFiles: [],
     notes: [],
+    visualFeedbackVerdict: null,
+    visualFeedbackNote: null,
+    visualFeedbackConcerns: [],
     reproductionSteps: [],
     reproductionCommands: [],
     reproductionNotes: [],
@@ -225,6 +246,10 @@ function parseArgs(argv) {
     else if (arg === '--run-id') args.runId = requiredValue(argv, ++index, '--run-id');
     else if (arg === '--run-reservation-token') args.runReservationToken = requiredValue(argv, ++index, '--run-reservation-token');
     else if (arg === '--agent-tool') args.agentTool = requiredValue(argv, ++index, '--agent-tool');
+    else if (arg === '--run-kind') {
+      args.runKind = requiredValue(argv, ++index, '--run-kind');
+      if (!RUN_KINDS.has(args.runKind)) throw new Error('--run-kind must be final_visual_review');
+    }
     else if (arg === '--workspace') args.workspace = requiredValue(argv, ++index, '--workspace');
     else if (arg === '--workspace-ref') args.workspaceRef = requiredValue(argv, ++index, '--workspace-ref');
     else if (arg === '--isolation') {
@@ -238,6 +263,14 @@ function parseArgs(argv) {
     else if (arg === '--changed-file') args.changedFiles.push(requiredValue(argv, ++index, '--changed-file'));
     else if (arg === '--collect-git') args.collectGit = true;
     else if (arg === '--note') args.notes.push(requiredValue(argv, ++index, '--note', { allowLeadingDash: true }));
+    else if (arg === '--visual-feedback') {
+      args.visualFeedbackVerdict = requiredValue(argv, ++index, '--visual-feedback');
+      if (!VISUAL_FEEDBACK_VERDICTS.has(args.visualFeedbackVerdict)) {
+        throw new Error('--visual-feedback must be note or concern');
+      }
+    }
+    else if (arg === '--visual-feedback-note') args.visualFeedbackNote = requiredValue(argv, ++index, '--visual-feedback-note', { allowLeadingDash: true });
+    else if (arg === '--visual-feedback-concern') args.visualFeedbackConcerns.push(requiredValue(argv, ++index, '--visual-feedback-concern', { allowLeadingDash: true }));
     else if (arg === '--repro-step') args.reproductionSteps.push(requiredValue(argv, ++index, '--repro-step', { allowLeadingDash: true }));
     else if (arg === '--repro-command') args.reproductionCommands.push(requiredValue(argv, ++index, '--repro-command', { allowLeadingDash: true }));
     else if (arg === '--repro-note') args.reproductionNotes.push(requiredValue(argv, ++index, '--repro-note', { allowLeadingDash: true }));
@@ -304,6 +337,22 @@ function parseArgs(argv) {
     if (!args.agentTool) throw new Error('--agent-tool is required for start');
     if (args.runs && !args.graph && !args.artifacts) throw new Error('start requires --artifacts or --graph so the task can be resolved');
   }
+  if (args.runKind && args.command !== 'start') {
+    throw new Error('--run-kind is only supported with start');
+  }
+  const hasVisualFeedbackDetails = args.visualFeedbackNote !== null || args.visualFeedbackConcerns.length > 0;
+  if ((args.visualFeedbackVerdict || hasVisualFeedbackDetails) && args.command !== 'record') {
+    throw new Error('visual feedback options are only supported with record');
+  }
+  if (hasVisualFeedbackDetails && !args.visualFeedbackVerdict) {
+    throw new Error('--visual-feedback-note and --visual-feedback-concern require --visual-feedback');
+  }
+  if (args.visualFeedbackVerdict === 'note' && !args.visualFeedbackNote) {
+    throw new Error('--visual-feedback note requires --visual-feedback-note');
+  }
+  if (args.visualFeedbackVerdict === 'concern' && args.visualFeedbackConcerns.length === 0) {
+    throw new Error('--visual-feedback concern requires at least one --visual-feedback-concern');
+  }
   if (args.command !== 'finish' && (args.failureClass || args.retryable || args.needsUserDecision !== null || args.failureSource)) {
     throw new Error('failure options are only supported with finish');
   }
@@ -323,17 +372,18 @@ function parseArgs(argv) {
       throw new Error('--failure-class other requires at least one --note explaining why the failure could not be classified');
     }
   }
-  if (['record', 'verify', 'finish', 'show'].includes(args.command) && !args.runId) {
+  if (['record', 'verify', 'finish', 'show', 'revision'].includes(args.command) && !args.runId) {
     throw new Error(`--run-id is required for ${args.command}`);
   }
   if (args.runReservationToken && (args.command !== 'start' || !args.runId)) {
     throw new Error('--run-reservation-token requires start with --run-id');
   }
-  if ((args.dryRun || args.yes) && args.command !== 'migrate-layout') {
-    throw new Error('--dry-run and --yes are only supported with migrate-layout');
+  const migrationCommands = new Set(['migrate-layout', 'migrate-schema']);
+  if ((args.dryRun || args.yes) && !migrationCommands.has(args.command)) {
+    throw new Error('--dry-run and --yes are only supported with migrate-layout or migrate-schema');
   }
-  if (args.command === 'migrate-layout' && !args.dryRun && !args.yes) {
-    throw new Error('migrate-layout requires --yes, or use --dry-run to preview');
+  if (migrationCommands.has(args.command) && !args.dryRun && !args.yes) {
+    throw new Error(`${args.command} requires --yes, or use --dry-run to preview`);
   }
   return args;
 }
@@ -511,6 +561,23 @@ function requireTask(graph, taskId) {
   return task;
 }
 
+function taskSourceSpecPath(source) {
+  const reference = source.sourceSpecRef;
+  const candidates = path.isAbsolute(reference)
+    ? [reference]
+    : [
+        path.resolve(path.dirname(source.graphPath), reference),
+        path.resolve(source.artifactRoot, reference),
+      ];
+  const resolved = candidates.find((candidate) => (
+    existsSync(candidate) && lstatSync(candidate).isFile()
+  ));
+  if (!resolved) {
+    throw new Error(`task graph sourceSpec cannot be resolved: ${JSON.stringify(reference)}`);
+  }
+  return resolved;
+}
+
 function resolveTaskSource(args) {
   if (args.artifacts) {
     const artifactRoot = path.resolve(args.artifacts);
@@ -551,7 +618,7 @@ function resolveTaskSource(args) {
     projectId: graph.projectId,
     sourceLayout: 'graph',
     iterationId: graph.version ?? null,
-    artifactRoot: null,
+    artifactRoot: defaultArtifactRootForGraph(graphPath),
     graphPath,
     graph,
     taskGraphRef: canonicalTaskGraphRef(graphPath),
@@ -577,6 +644,24 @@ function assertRunMatchesSourceContext(run, source) {
 
 function mutationSource(args) {
   return args.artifacts || args.graph ? resolveTaskSource(args) : null;
+}
+
+function runOnlyTaskSource(runsDir, run) {
+  const artifactRoot = path.dirname(path.resolve(runsDir));
+  const graphPath = resolveRunTaskGraphPath(run, artifactRoot);
+  const graph = loadTaskGraph(graphPath);
+  if (graph.projectId !== run.projectId) {
+    throw new Error(
+      `run ${run.runId} projectId ${run.projectId} does not match task graph projectId ${graph.projectId}`,
+    );
+  }
+  return {
+    artifactRoot: run.sourceLayout === 'graph'
+      ? defaultArtifactRootForGraph(graphPath)
+      : artifactRoot,
+    graphPath,
+    graph,
+  };
 }
 
 function sourceRunArgs(args) {
@@ -1441,6 +1526,46 @@ function startRun(args) {
   const workspacePath = resolveWorkspacePath(args);
   const isolationBasePath = resolveIsolationBasePath(args, workspacePath);
   const createsWorktree = args.createIsolation && args.isolation === 'worktree';
+  if (args.runKind === 'final_visual_review') {
+    const unfinishedTasks = source.graph.tasks.filter((candidate) => candidate.status !== 'done');
+    if (unfinishedTasks.length) {
+      throw new Error(
+        `final visual review requires every iteration task to be done; unfinished task(s): ${unfinishedTasks.map((candidate) => `${candidate.id}:${candidate.status}`).join(', ')}`,
+      );
+    }
+    if (task.status !== 'done') {
+      throw new Error(`final visual review run requires ${task.id} to be done; current status is ${task.status}`);
+    }
+    if (!task.visualImpact) {
+      throw new Error(`final visual review run requires ${task.id} to carry visualImpact`);
+    }
+    if (args.changedFiles.length) {
+      throw new Error('final visual review run does not allow --changed-file');
+    }
+    if (args.isolation !== 'none' || args.createIsolation || args.branch || args.worktree) {
+      throw new Error('final visual review run requires --isolation none without branch/worktree creation');
+    }
+    if (source.sourceLayout === 'graph' && !args.workspace) {
+      throw new Error('--workspace is required for final visual review in --graph mode');
+    }
+    if (source.sourceLayout !== 'graph') {
+      const canonicalWorkspacePath = canonicalWorkspacePathForArtifactRoot(source.artifactRoot);
+      if (realpathSync(workspacePath) !== realpathSync(canonicalWorkspacePath)) {
+        throw new Error(
+          `final visual review workspace must be the canonical integration workspace ${canonicalWorkspacePath}`,
+        );
+      }
+    }
+  }
+  const visualReview = args.runKind === 'final_visual_review'
+    ? approvedVisualReviewContract(
+        taskSourceSpecPath(source),
+        source.sourceLayout === 'graph' ? null : source.artifactRoot,
+      )
+    : null;
+  if (args.runKind === 'final_visual_review' && !visualReview) {
+    throw new Error('final visual review run requires an approved full current-iteration visual contract');
+  }
   // A fresh worktree is the future workspace: validate its existing Git base
   // before creation, then validate the worktree itself after prepareIsolation.
   assertDirectory(createsWorktree ? isolationBasePath : workspacePath, '--workspace');
@@ -1468,7 +1593,7 @@ function startRun(args) {
     throw new Error(`${error.message}\nRetry with the same run id after correcting the isolation failure: ${startRetryCommand(args, runId, allocation.reservationToken)}`);
   }
   const run = {
-    schema_version: 'p2a.run.v1',
+    schema_version: 'p2a.run.v2',
     runId,
     projectId: source.projectId,
     taskId: task.id,
@@ -1477,6 +1602,8 @@ function startRun(args) {
     sourceLayout: source.sourceLayout,
     taskGraphRef: source.taskGraphRef,
     sourceSpecRef: source.sourceSpecRef,
+    ...(args.runKind ? { runKind: args.runKind } : {}),
+    taskContractSha256: taskContractSha256(task),
     agentTool: args.agentTool,
     workspaceRef,
     workspacePath,
@@ -1488,6 +1615,7 @@ function startRun(args) {
     changedFiles: uniqueStrings(args.changedFiles),
     verification: args.manualVerification,
     notes: uniqueStrings(args.notes),
+    ...(visualReview ? { visualReview } : {}),
   };
   withRunStoreLocks([runsDir], () => {
     assertNoPendingRunMigration(runsDir);
@@ -1533,6 +1661,16 @@ function recordRun(args) {
   run.changedFiles = uniqueStrings([...run.changedFiles, ...args.changedFiles]);
   run.verification.push(...args.manualVerification);
   run.notes = uniqueStrings([...run.notes, ...args.notes]);
+  if (args.visualFeedbackVerdict) {
+    run.visualFeedback ??= [];
+    run.visualFeedback.push({
+      reviewedAt: new Date().toISOString(),
+      reviewer: run.agentTool,
+      verdict: args.visualFeedbackVerdict,
+      concerns: uniqueStrings(args.visualFeedbackConcerns),
+      note: args.visualFeedbackNote ?? '',
+    });
+  }
   mergeStructuredRunDetails(run, args);
   run.updatedAt = new Date().toISOString();
   writeRun(runsDir, run, { expectedRun });
@@ -1580,6 +1718,17 @@ function finishRun(args) {
   const runsDir = source?.runsDir ?? resolveRunsDir(args);
   const { run, expectedRun } = readRunForUpdate(runsDir, args.runId);
   if (source) assertRunMatchesSourceContext(run, source);
+  const taskSource = source ?? runOnlyTaskSource(runsDir, run);
+  const task = requireTask(taskSource.graph, run.taskId);
+  const currentContractSha256 = taskContractSha256(task);
+  if (run.taskContractSha256 === undefined && run.schema_version === 'p2a.run.v1') {
+    run.schema_version = 'p2a.run.v2';
+    run.taskContractSha256 = currentContractSha256;
+  } else if (run.taskContractSha256 !== currentContractSha256) {
+    throw new Error(
+      `run ${run.runId} task contract changed after start; expected ${run.taskContractSha256}, got ${currentContractSha256}. Start a new run from the current task graph.`,
+    );
+  }
   if (run.status !== 'started') {
     throw new Error(`run ${run.runId} is already ${run.status}; use record to append evidence instead of finishing it again`);
   }
@@ -1590,21 +1739,69 @@ function finishRun(args) {
   run.verification.push(...args.manualVerification);
   run.notes = uniqueStrings([...run.notes, ...args.notes]);
   mergeStructuredRunDetails(run, args);
-  const targetStatus = deriveFinishStatus(run, args.status);
-  const monitorResult = targetStatus === 'finished' ? applyMonitorGate(args, runsDir, run) : null;
+  const requestedStatus = deriveFinishStatus(run, args.status);
+  const monitorResult = requestedStatus === 'finished' ? applyMonitorGate(args, runsDir, run) : null;
   if (monitorResult && !monitorResult.accepted) {
     console.error(`monitor gate blocked finish: verdict=${monitorResult.rawVerdict ?? monitorResult.verdict}; signal=${monitorResult.verdict}; failureClass=${monitorResult.failureClass}; concerns=${monitorResult.concerns}`);
     console.error('blocked monitor finish requires structured detail: add --repro-*/--localization*/--guard* before finishing.');
   }
-  run.status = deriveFinishStatus(run, args.status);
+  const finalStatus = deriveFinishStatus(run, args.status);
+  const validatedSource = finalStatus === 'finished'
+    ? validateRunTaskContract(run, path.dirname(path.resolve(runsDir)))
+    : null;
+  const visualReviewCutoff = new Date().toISOString();
+  if (finalStatus === 'finished') {
+    let workspaceRevision = null;
+    if (run.visualReview?.required) {
+      if (realpathSync(workspacePath) !== realpathSync(path.resolve(run.workspacePath))) {
+        throw new Error(
+          `run ${run.runId} visual evidence must be finalized in its recorded workspacePath`,
+        );
+      }
+      workspaceRevision = workspaceRevisionSha256(
+        workspacePath,
+        workspaceRevisionExcludedPathsForRun(
+          runsDir,
+          run,
+          {
+            artifactRoot: taskSource.artifactRoot,
+            graphPath: taskSource.graphPath,
+            workspacePath,
+          },
+        ),
+      );
+    }
+    const visualReviewEvidence = readRequiredVisualReviewEvidence(
+      runsDir,
+      run,
+      {
+        finishedAt: visualReviewCutoff,
+        artifactRoot: path.dirname(path.resolve(runsDir)),
+        sourceArtifactRoot: validatedSource.sourceArtifactRoot,
+      },
+    );
+    if (
+      visualReviewEvidence
+      && visualReviewEvidence.review.workspace_revision_sha256 !== workspaceRevision
+    ) {
+      throw new Error(
+        `run ${run.runId} visual review workspace revision does not match the current workspace; recapture the evidence`,
+      );
+    }
+    if (workspaceRevision) run.workspaceRevisionSha256 = workspaceRevision;
+    if (visualReviewEvidence) {
+      run.visualReviewEvidenceSha256 = visualReviewEvidence.reviewSha256;
+    }
+  }
+  run.status = finalStatus;
   assertFinishedRunGuard(run);
   const failure = buildFailure(args, run.status);
   assertFailedRunStructuredDetails(run, monitorResult);
   if (failure) run.failure = failure;
   else delete run.failure;
-  const now = new Date().toISOString();
-  run.updatedAt = now;
-  run.finishedAt = now;
+  const finishedAt = new Date().toISOString();
+  run.updatedAt = finishedAt;
+  run.finishedAt = finishedAt;
   writeRun(runsDir, run, { expectedRun });
   console.log(`Plan2Agent run finished: ${run.runId}`);
   console.log(`- status: ${run.status}`);
@@ -1649,6 +1846,29 @@ function listRuns(args) {
 function showRun(args) {
   const run = readRun(resolveRunsDir(args), args.runId);
   console.log(JSON.stringify(run, null, 2));
+  return 0;
+}
+
+function showWorkspaceRevision(args) {
+  const runsDir = resolveRunsDir(args);
+  const run = readRun(runsDir, args.runId);
+  const workspacePath = args.workspace ? path.resolve(args.workspace) : path.resolve(run.workspacePath);
+  assertDirectory(workspacePath, '--workspace');
+  if (
+    run.visualReview?.required
+    && realpathSync(workspacePath) !== realpathSync(path.resolve(run.workspacePath))
+  ) {
+    throw new Error(`run ${run.runId} visual revision must be computed from its recorded workspacePath`);
+  }
+  const taskSource = run.visualReview?.required ? runOnlyTaskSource(runsDir, run) : null;
+  console.log(workspaceRevisionSha256(
+    workspacePath,
+    workspaceRevisionExcludedPathsForRun(runsDir, run, {
+      artifactRoot: taskSource?.artifactRoot,
+      graphPath: taskSource?.graphPath ?? args.graph,
+      workspacePath,
+    }),
+  ));
   return 0;
 }
 
@@ -2088,10 +2308,79 @@ function migrateRunLayout(args) {
   });
 }
 
+function migrateRunSchema(args) {
+  const runsDir = resolveRunsDir(args);
+  return withRunStoreLocks([runsDir], () => {
+    assertNoPendingRunMigration(runsDir);
+    recoverPendingRunWrite(runsDir);
+    const runIndex = validateRunsDir(runsDir);
+    const selectedEntries = args.runId
+      ? runIndex.runs.filter((entry) => entry.runId === args.runId)
+      : runIndex.runs;
+    if (args.runId && selectedEntries.length === 0) {
+      throw new Error(`unknown run id: ${args.runId}`);
+    }
+
+    const upgrades = [];
+    const skipped = [];
+    const artifactRoot = path.dirname(path.resolve(runsDir));
+    for (const entry of selectedEntries) {
+      const run = readRun(runsDir, entry.runId);
+      if (run.schema_version === 'p2a.run.v2') {
+        skipped.push({ runId: run.runId, reason: 'already p2a.run.v2' });
+        continue;
+      }
+      if (run.status !== 'finished') {
+        skipped.push({ runId: run.runId, reason: `status ${run.status}; only finished evidence is migrated` });
+        continue;
+      }
+      const source = validateRunTaskContract(run, artifactRoot);
+      const upgraded = {
+        ...run,
+        schema_version: 'p2a.run.v2',
+        taskContractSha256: taskContractSha256(source.task),
+      };
+      validateRunData(upgraded);
+      validateRunTaskContract(upgraded, artifactRoot);
+      upgrades.push({
+        run: upgraded,
+        expectedRun: JSON.stringify(run),
+        runRef: indexedRunRef(runsDir, run.runId, runIndex),
+      });
+    }
+
+    console.log('Plan2Agent run schema migration');
+    console.log(`- runs: ${displayPath(runsDir)}`);
+    console.log(`- upgrades: ${upgrades.length}`);
+    for (const upgrade of upgrades) console.log(`- ${upgrade.run.runId}: p2a.run.v1 -> p2a.run.v2`);
+    for (const item of skipped) console.log(`- skip ${item.runId}: ${item.reason}`);
+    if (args.dryRun) {
+      console.log('- result: dry-run; source provenance validated; no files changed');
+      return 0;
+    }
+
+    const mutableIndex = loadIndex(runsDir);
+    for (const upgrade of upgrades) {
+      const current = loadJson(path.join(runsDir, upgrade.runRef));
+      if (JSON.stringify(current) !== upgrade.expectedRun) {
+        throw new Error(`run ${upgrade.run.runId} changed while preparing schema migration`);
+      }
+      upsertIndexRun(runsDir, mutableIndex, upgrade.run, upgrade.runRef);
+      commitRunWrite(runsDir, upgrade.runRef, upgrade.run, mutableIndex);
+    }
+    validateRunsDir(runsDir);
+    console.log(`- result: migrated ${upgrades.length} finished run(s) and validated`);
+    return 0;
+  });
+}
+
 function validateRuns(args) {
   const runsDir = resolveRunsDir(args);
   if (args.runId) {
-    validateRunData(readRun(runsDir, args.runId));
+    const index = validateRunsDir(runsDir);
+    if (!index.runs.some((run) => run.runId === args.runId)) {
+      throw new ValidationError(`unknown run id: ${args.runId}`);
+    }
     console.log(`Plan2Agent run validation passed: ${args.runId}`);
   } else {
     validateRunsDir(runsDir);
@@ -2113,8 +2402,10 @@ export function main(argv = process.argv.slice(2)) {
     if (args.command === 'finish') return finishRun(args);
     if (args.command === 'list') return listRuns(args);
     if (args.command === 'show') return showRun(args);
+    if (args.command === 'revision') return showWorkspaceRevision(args);
     if (args.command === 'validate') return validateRuns(args);
     if (args.command === 'migrate-layout') return migrateRunLayout(args);
+    if (args.command === 'migrate-schema') return migrateRunSchema(args);
     throw new Error(`unknown command: ${args.command}`);
   } catch (error) {
     const prefix = error instanceof ValidationError ? 'p2a run validation failed' : 'p2a run command failed';

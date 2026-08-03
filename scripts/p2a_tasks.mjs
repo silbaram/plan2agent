@@ -6,8 +6,15 @@ import { createInterface } from 'node:readline/promises';
 import path from 'node:path';
 import process from 'node:process';
 import { Readable } from 'node:stream';
-import { validateRunData, validateRunIndexData, validateTaskGraphData, ValidationError } from './validate_artifacts.mjs';
+import {
+  validateRunData,
+  validateRunIndexData,
+  validateRunTaskContract,
+  validateTaskGraphData,
+  ValidationError,
+} from './validate_artifacts.mjs';
 import { normalizeMonitorVerdictData, readMonitorGateSidecar } from './p2a_monitor_gate.mjs';
+import { readRequiredVisualReview } from './p2a_visual_review_gate.mjs';
 import {
   resolveIterationState,
   validateMaintenanceTaskGraphProject,
@@ -21,6 +28,8 @@ import {
   runFilePath,
   taskGraphContextForGraph,
   taskGraphRefMatchesGraph,
+  workspaceRevisionExcludedPathsForRun,
+  workspaceRevisionSha256,
 } from './p2a_run_paths.mjs';
 import {
   P2A_ARTIFACTS_DIR,
@@ -607,6 +616,44 @@ function executedPassedVerification(run) {
     && item.exitCode === 0);
 }
 
+function assertVisualReviewDoneEvidence(args, task, run) {
+  if (!run.visualReview?.required) return;
+  try {
+    const runsDir = runsDirForTaskArgs(args);
+    const artifactRoot = path.dirname(path.resolve(runsDir));
+    const source = validateRunTaskContract(run, artifactRoot);
+    readRequiredVisualReview(runsDir, run, {
+      artifactRoot,
+      sourceArtifactRoot: source.sourceArtifactRoot,
+    });
+    if (run.visualReview?.required) {
+      const workspacePath = path.resolve(run.workspacePath);
+      if (!existsSync(workspacePath) || !lstatSync(workspacePath).isDirectory()) {
+        throw new Error(`recorded visual review workspace is missing: ${workspacePath}`);
+      }
+      const currentRevision = workspaceRevisionSha256(
+        workspacePath,
+        workspaceRevisionExcludedPathsForRun(
+          runsDir,
+          run,
+          {
+            artifactRoot: args.iterationState?.artifactRoot,
+            graphPath: args.graphPath,
+            workspacePath,
+          },
+        ),
+      );
+      if (run.workspaceRevisionSha256 !== currentRevision) {
+        throw new Error('visual review workspace revision does not match the current workspace');
+      }
+    }
+  } catch (error) {
+    throw new Error(
+      `${task.id} cannot be marked done because latest run ${run.runId} visual review evidence is invalid: ${error.message}`,
+    );
+  }
+}
+
 function assertDoneShortcutGuard(args, task, graph) {
   const run = latestRunForTask(args, task.id, { strict: true, graph });
   if (!run) {
@@ -637,6 +684,7 @@ function assertDoneShortcutGuard(args, task, graph) {
   if (controlFiles.length) {
     throw new Error(`${task.id} cannot be marked done because latest run ${run.runId} changed Plan2Agent control artifacts: ${controlFiles.join(', ')}`);
   }
+  assertVisualReviewDoneEvidence(args, task, run);
   assertMonitorGateDoneEvidence(args, task, graph, run);
 }
 

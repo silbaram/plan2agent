@@ -20,7 +20,7 @@
 | task CLI 반복 적응 | `p2a tasks --artifacts` | active 반복의 `task-graph.json`을 자동 선택해 ready/prompt/start/done 전이를 수행하고, `--maintenance`로 maintenance 레인도 선택할 수 있다. |
 | agent run 추적 | `p2a runs start/verify/finish` | `runs/`에 task별 runId, changedFiles, verification, agentTool, workspaceRef, branch/worktree 격리 기준을 기록한다. |
 | Gate B-D ready 검증 | `p2a iteration validate` | active 반복의 approved spec, task graph, review pass, task dependency를 검증한다. |
-| close-ready 검증 | `p2a iteration validate --require-close-ready` | active 반복의 모든 task가 `done`인지 추가 확인한다. |
+| close-ready 검증 | `p2a iteration validate --require-close-ready` | active 반복의 모든 task가 `done`인지 확인하고, visual evidence가 이후 task 변경보다 최신인지 검증한다. |
 | planning stage 검증 | `p2a iteration validate --allow-planning`, `--stage` | Gate A-ready, Gate B draft, Gate B approved 상태를 Gate B-D 누락 실패 없이 검증한다. |
 | 반복 close | `p2a iteration close` | close-ready active 반복을 `archived` metadata로 표시하고 `current-spec.json.closed_iterations`에 기록한다. |
 | archived 감사 | `p2a iteration validate` | close 시 기록한 artifact 존재 여부/hash와 현재 파일 상태를 기본 검증으로 비교한다. legacy/migration 상황은 `--skip-archive-audit`로 우회한다. |
@@ -46,6 +46,7 @@
 | archived close | close artifact 존재 여부/hash 기록과 기본 validate-time archive audit을 제공한다. | 기존 pre-audit artifact migration은 필요할 때 `--skip-archive-audit`로 우회한다. |
 | maintenance 반복 | lazy README, `maintenance add` task 생성, `maintenance add --from-draft` 승격, 존재하는 task graph 검증, `context --scope maintenance`, `tasks --maintenance` source/target 표와 prompt next command, handoff 시 별도 `.plan2agent/maintenance/task-graph.json` 복사를 제공한다. | 후보 승인/실행 조작은 CLI와 agent 대화 표면을 기준으로 유지한다. |
 | agent 실행 추적 | `p2a runs`가 전역 `runs/run-index.json`과 iteration별 `runs/<iterationId>/<runId>.json`을 관리하고, test/lint/typecheck 실행 결과와 git changed files를 수집한다. run/index 갱신은 project lock, atomic write, 중단 복구 journal을 사용한다. legacy 평면 run과 이전 `iterations/<iterationId>/runs/` index는 source/target lock과 재개 가능한 journal을 거친 전역 migration을 지원한다. `--graph` 실행은 경로와 무관하게 graph provenance를 유지하고 milestone 증거에서 제외한다. `p2a-dev-execution`은 한 ready snapshot의 bounded batch에서 task별 직렬 start, 격리 worktree 병렬 구현, 직렬 로컬 통합·검증·finish를 조율한다. | PTY/headless 자동 scheduler, persistent batch CLI, PR 생성은 후속이다. |
+| Visual Experience Track | 반복별 spec이 `none|minimal|reuse|full`과 current/deferred timing을 선언한다. `full + current_iteration`은 승인된 screen contract와 dependency-closed offline HTML prototype을 Gate B에 묶고, task에는 명시적 `workKind`와 가벼운 `visualImpact`만 전달하며, 통합 뒤 전체 matrix를 한 번 검증하는 pre-close PNG·접근성 sidecar gate를 둔다. | 브라우저 renderer 자체는 provider 도구를 사용하며 P2A가 별도 headless browser farm을 운영하지 않는다. |
 
 ### 0-3. 미구현 / 후속 고도화
 
@@ -135,6 +136,8 @@ Memory가 활성화되고 연결된 iterative root에서는 next iteration을 �
         product-spec.md
         implementation-plan.md
         spec.json
+        experience-spec.json             # conditional: full + current_iteration
+        visual-design/VD-1/               # conditional offline HTML candidate
       gate-c-task-graph/
         task-graph.json
       gate-d-review/
@@ -297,7 +300,7 @@ p2a iteration validate \
   --require-close-ready
 ```
 
-`--require-close-ready`는 모든 active iteration task가 `done`인지 추가로 확인한다.
+`--require-close-ready`는 모든 active iteration task가 `done`인지 추가로 확인한다. `visualImpact` task가 있으면 `p2a execute review`가 연 iteration당 하나의 canonical, 변경 없는 review-only run을 요구한다. 이 run의 `visualReview`는 Gate B의 전체 승인 계약과 일치해야 하며, finish에서 봉인한 workspace snapshot SHA-256·`visualReviewEvidenceSha256`·sidecar workspace identity/revision·evidence를 다시 검증한다. 이후 실제 canonical 통합 변경이나 sidecar 변경으로 evidence가 stale해졌다면 새 review-only run으로 최종 상태를 다시 캡처한다. 격리 worktree에서 종료됐지만 통합되지 않은 구현 run의 timestamp만으로 canonical evidence를 stale 처리하지 않는다.
 
 ```bash
 p2a iteration validate \
@@ -576,7 +579,7 @@ p2a handoff \
 - `.plan2agent/artifacts/status.md`
 - `.plan2agent/current-spec.json`
 
-handoff는 active 반복의 `task-graph.sourceSpec`을 `spec.json`으로, `spec.source_intake`를 `intake.json`으로 rebase하고, traceability 검증을 위해 active 반복의 `gate-a-intake/intake.json`을 항상 `.plan2agent/artifacts/<project_id>/gate-a-intake/intake.json`으로 함께 복사한다. `--include-intake`를 붙이면 기존 Markdown 파일을 복사하지 않고 대상에 기록할 canonical `intake.json`에서 explicit-export marker가 있는 최신 사람용 `.plan2agent/artifacts/<project_id>/gate-a-intake/intake.md`를 다시 생성한다. 반복 history 보존을 위해 iterative root에서는 `--mode move`를 지원하지 않고 `copy`만 허용한다. maintenance task graph가 있으면 active graph와 병합하지 않고 `.plan2agent/maintenance/task-graph.json`으로 별도 복사한다.
+handoff는 active 반복의 `task-graph.sourceSpec`을 `spec.json`으로, `spec.source_intake`를 `intake.json`으로 rebase하고, traceability 검증을 위해 active 반복의 `gate-a-intake/intake.json`을 항상 `.plan2agent/artifacts/<project_id>/gate-a-intake/intake.json`으로 함께 복사한다. `--include-intake`를 붙이면 기존 Markdown 파일을 복사하지 않고 대상에 기록할 canonical `intake.json`에서 explicit-export marker가 있는 최신 사람용 `.plan2agent/artifacts/<project_id>/gate-a-intake/intake.md`를 다시 생성한다. `--run-transfer completed`가 기본값이며 milestone review가 직접 참조한 canonical `p2a.run.v2` finished evidence와 동일 iteration/task graph의 최신 finished `final_visual_review` evidence를 복사한다. 후자는 pre-close milestone 뒤에 생성되는 close-ready 증거이므로 milestone snapshot에 아직 직접 참조되지 않아도 포함된다. 이 portable 경로는 run·provenance JSON의 자동 migration/rewrite를 수행하지 않는다. Run layout은 `p2a runs migrate-layout`, finished v1 schema는 `p2a runs migrate-schema`, non-canonical provenance reference는 명시적 import/migration workflow로 handoff 전에 정규화한다. 진행 중 non-visual run이나 구형 호환 이력까지 source closure와 함께 재개해야 할 때만 `--run-transfer resumable`을 명시한다. 진행 중 final visual review는 canonical workspace에 묶여 있으므로 resumable 인계도 거부하며 먼저 finish 또는 block해야 한다. Handoff는 쓰기 뒤 target Gate A-D bundle과 run store를 재검증하고 실패 시 target을 rollback한다. 반복 history 보존을 위해 iterative root에서는 `--mode move`를 지원하지 않고 `copy`만 허용한다. maintenance task graph가 있으면 active graph와 병합하지 않고 `.plan2agent/maintenance/task-graph.json`으로 별도 복사한다.
 
 `--tools codex,claude,gemini|all`은 반복 handoff에도 동일하게 적용된다. 산출물과 `current-spec.json`을 복사한 뒤 대상 프로젝트에 공통 `.agents/skills`, `.agents/agents`와 선택한 CLI별 `.codex`, `.claude`, `.gemini` P2A 자산을 설치하고, 설치 목록을 `.plan2agent/manifest.json`에 기록한다.
 

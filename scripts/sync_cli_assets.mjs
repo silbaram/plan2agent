@@ -81,6 +81,15 @@ Call p2a next --json as the decision authority. Do not reproduce state condition
 
 Return spec_json conforming to the p2a package schema spec.schema.json and open_decisions. Keep approval as draft until explicitly approved; when approved, include approval_audit. Generate Markdown only as an optional view.`,
   },
+  'visual-experience': {
+    skill: 'p2a-visual-experience',
+    description: 'Create and approve a structured visual experience with offline HTML prototype candidates.',
+    prompt: `Use the Plan2Agent p2a-visual-experience skill for the following Gate B visual context:
+
+{{args}}
+
+Classify the current iteration as none, minimal, reuse, or full. Run the full visual procedure only for full + current_iteration. Keep candidates offline and hash-bound, persist them only under gate-b-spec/visual-design through the harness owner, and require explicit human selection and approval before Gate B can pass.`,
+  },
   'task-author': {
     skill: 'p2a-task-author',
     description: 'Author a Gate C task graph draft from a Plan2Agent context bundle.',

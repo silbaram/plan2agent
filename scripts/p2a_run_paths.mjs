@@ -1,8 +1,20 @@
 /** Shared path resolution helpers for Plan2Agent run artifacts. */
 
-import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import {
+  closeSync,
+  existsSync,
+  lstatSync,
+  openSync,
+  readdirSync,
+  readFileSync,
+  readlinkSync,
+  readSync,
+  realpathSync,
+} from 'node:fs';
 import path from 'node:path';
 import { DEFAULT_RUNS_DIR } from './p2a_constants.mjs';
+import { RUN_STORE_LOCK_FILE } from './p2a_run_store.mjs';
 export { DEFAULT_RUNS_DIR };
 
 const RUN_ID_PATTERN = /^run-[A-Za-z0-9._-]+$/;
@@ -14,6 +26,7 @@ export const RUN_SIDECAR_SUFFIXES = [
   '.monitor-gate.json',
   '.monitor-verdict.json',
   '.style-verdict.json',
+  '.visual-review.json',
   '.memory-recall.json',
 ];
 const RUN_SIDECAR_ID_SUFFIXES = RUN_SIDECAR_SUFFIXES
@@ -47,6 +60,251 @@ export function compareRunEvidence(left, right) {
 
 export function normalizeRunPath(filePath) {
   return filePath.split(path.sep).join('/');
+}
+
+function canonicalJson(value) {
+  if (Array.isArray(value)) return `[${value.map((item) => canonicalJson(item)).join(',')}]`;
+  if (value && typeof value === 'object') {
+    return `{${Object.keys(value).sort().map((key) => (
+      `${JSON.stringify(key)}:${canonicalJson(value[key])}`
+    )).join(',')}}`;
+  }
+  return JSON.stringify(value);
+}
+
+export function immutableTaskContract(task) {
+  const { status, blockReason, blockNote, ...contract } = task;
+  return contract;
+}
+
+export function taskContractSha256(task) {
+  const contract = {
+    schema_version: 'p2a.task_contract.v1',
+    task: immutableTaskContract(task),
+  };
+  return createHash('sha256').update(canonicalJson(contract)).digest('hex');
+}
+
+export function canonicalWorkspacePathForArtifactRoot(artifactRoot) {
+  const resolvedArtifactRoot = path.resolve(artifactRoot);
+  const lexicalArtifactsDir = path.dirname(resolvedArtifactRoot);
+  const lexicalP2aDir = path.dirname(lexicalArtifactsDir);
+  if (
+    path.basename(lexicalArtifactsDir) === 'artifacts'
+    && path.basename(lexicalP2aDir) === '.plan2agent'
+  ) {
+    return resolvedRealPath(path.dirname(lexicalP2aDir));
+  }
+  let canonicalArtifactRoot = resolvedArtifactRoot;
+  try {
+    canonicalArtifactRoot = realpathSync(resolvedArtifactRoot);
+  } catch {
+    // Preserve path-only behavior for callers that are validating a future layout.
+  }
+  const artifactsDir = path.dirname(canonicalArtifactRoot);
+  const p2aDir = path.dirname(artifactsDir);
+  return (
+    path.basename(artifactsDir) === 'artifacts'
+    && path.basename(p2aDir) === '.plan2agent'
+  ) ? path.dirname(p2aDir) : canonicalArtifactRoot;
+}
+
+function pathIsInside(rootPath, candidatePath) {
+  const relative = path.relative(rootPath, candidatePath);
+  return relative === '' || (
+    relative !== '..'
+    && !relative.startsWith(`..${path.sep}`)
+    && !path.isAbsolute(relative)
+  );
+}
+
+function resolvedRealPath(candidatePath) {
+  const resolved = path.resolve(candidatePath);
+  try {
+    return realpathSync(resolved);
+  } catch {
+    return resolved;
+  }
+}
+
+function hashFileInChunks(hash, filePath) {
+  const descriptor = openSync(filePath, 'r');
+  const buffer = Buffer.allocUnsafe(64 * 1024);
+  try {
+    while (true) {
+      const bytesRead = readSync(descriptor, buffer, 0, buffer.length, null);
+      if (bytesRead === 0) break;
+      hash.update(buffer.subarray(0, bytesRead));
+    }
+  } finally {
+    closeSync(descriptor);
+  }
+}
+
+export function workspaceRevisionSha256(workspacePath, excludedPaths = []) {
+  const workspaceRoot = realpathSync(path.resolve(workspacePath));
+  const requestedExclusions = excludedPaths
+    .filter(Boolean)
+    .map((candidate) => {
+      const resolved = path.resolve(candidate);
+      try {
+        return realpathSync(resolved);
+      } catch {
+        return resolved;
+      }
+    });
+  const excludeLegacyRootArtifacts = requestedExclusions.includes(workspaceRoot);
+  const excludedRoots = requestedExclusions
+    .filter((candidate) => candidate !== workspaceRoot && pathIsInside(workspaceRoot, candidate));
+  const rootArtifactEntries = new Set([
+    'runs',
+    'visual-evidence',
+    'iterations',
+    'gate-a-intake',
+    'gate-b-spec',
+    'gate-c-task-graph',
+    'gate-d-review',
+    'milestone-reviews',
+    'preflight-research',
+    'proposals',
+  ]);
+  const ignoredEntryNames = new Set(['.git', '.plan2agent', 'node_modules']);
+  const legacyRootControlEntries = new Set(['current-spec.json', 'status.md', 'iteration.json']);
+  const hash = createHash('sha256');
+  hash.update('p2a.workspace_revision.v1\0');
+
+  function excludedWorkspacePath(candidatePath) {
+    if (excludedRoots.some((excludedRoot) => pathIsInside(excludedRoot, candidatePath))) {
+      return true;
+    }
+    if (!pathIsInside(workspaceRoot, candidatePath)) return false;
+    const relative = path.relative(workspaceRoot, candidatePath);
+    if (!relative) return false;
+    const segments = relative.split(path.sep);
+    if (segments.some((segment) => ignoredEntryNames.has(segment))) return true;
+    return excludeLegacyRootArtifacts
+      && segments.length === 1
+      && (rootArtifactEntries.has(segments[0]) || legacyRootControlEntries.has(segments[0]));
+  }
+
+  function visit(directory, prefix = '', ancestorDirectories = new Set()) {
+    const realDirectory = realpathSync(directory);
+    if (ancestorDirectories.has(realDirectory)) {
+      throw new Error(`workspace revision encountered a symbolic-link directory cycle at ${prefix || '.'}`);
+    }
+    const nextAncestors = new Set(ancestorDirectories);
+    nextAncestors.add(realDirectory);
+    const entries = readdirSync(directory, { withFileTypes: true })
+      .sort((left, right) => left.name.localeCompare(right.name));
+    for (const entry of entries) {
+      const entryPath = path.join(directory, entry.name);
+      if (excludedWorkspacePath(entryPath)) continue;
+      const relative = normalizeRunPath(path.join(prefix, entry.name));
+      const stat = lstatSync(entryPath);
+      if (stat.isDirectory()) {
+        hash.update(`directory\0${relative}\0`);
+        visit(entryPath, relative, nextAncestors);
+      } else if (stat.isFile()) {
+        hash.update(`file\0${relative}\0${stat.mode & 0o111}\0${stat.size}\0`);
+        hashFileInChunks(hash, entryPath);
+        hash.update('\0');
+      } else if (stat.isSymbolicLink()) {
+        const linkTarget = readlinkSync(entryPath);
+        let targetPath;
+        try {
+          targetPath = realpathSync(entryPath);
+        } catch (error) {
+          throw new Error(
+            `workspace revision cannot resolve symbolic link ${relative}: ${error.message}`,
+            { cause: error },
+          );
+        }
+        const targetStat = lstatSync(targetPath);
+        const targetInsideWorkspace = pathIsInside(workspaceRoot, targetPath);
+        if (!targetInsideWorkspace && targetStat.isDirectory()) {
+          throw new Error(
+            `workspace revision cannot follow symbolic-link directory ${relative} outside the workspace`,
+          );
+        }
+        if (targetInsideWorkspace && excludedWorkspacePath(targetPath)) continue;
+        hash.update(`symlink\0${relative}\0${linkTarget}\0`);
+        if (targetStat.isDirectory()) {
+          hash.update(`symlink-directory\0${relative}\0`);
+          visit(targetPath, relative, nextAncestors);
+        } else if (targetStat.isFile()) {
+          hash.update(`symlink-file\0${relative}\0${targetStat.mode & 0o111}\0${targetStat.size}\0`);
+          hashFileInChunks(hash, targetPath);
+          hash.update('\0');
+        } else {
+          hash.update(`symlink-special\0${relative}\0${targetStat.mode}\0`);
+        }
+      } else {
+        hash.update(`special\0${relative}\0${stat.mode}\0`);
+      }
+    }
+  }
+
+  visit(workspaceRoot);
+  return hash.digest('hex');
+}
+
+export function workspaceRevisionExcludedPaths(
+  runsDir,
+  artifactRoot = null,
+  graphPath = null,
+  workspacePath = null,
+) {
+  const resolvedRunsDir = resolvedRealPath(runsDir);
+  if (artifactRoot) {
+    const resolvedArtifactRoot = path.resolve(artifactRoot);
+    return [
+      resolvedArtifactRoot,
+      resolvedRunsDir,
+      path.join(resolvedArtifactRoot, 'visual-evidence'),
+    ];
+  }
+  const resolvedWorkspace = workspacePath ? resolvedRealPath(workspacePath) : null;
+  const resolvedGraphPath = graphPath ? resolvedRealPath(graphPath) : null;
+  const legacyArtifactRoot = (
+    resolvedWorkspace === path.dirname(resolvedRunsDir)
+    && resolvedGraphPath === path.join(
+      resolvedWorkspace,
+      'gate-c-task-graph',
+      'task-graph.json',
+    )
+  )
+    ? resolvedWorkspace
+    : null;
+  return [
+    legacyArtifactRoot,
+    resolvedRunsDir,
+    path.join(path.dirname(resolvedRunsDir), 'visual-evidence'),
+    graphPath ? path.resolve(graphPath) : null,
+    graphPath ? path.join(path.dirname(path.resolve(graphPath)), RUN_STORE_LOCK_FILE) : null,
+  ];
+}
+
+export function workspaceRevisionExcludedPathsForRun(
+  runsDir,
+  run,
+  options = {},
+) {
+  const managedLayout = ['iteration', 'maintenance'].includes(run?.sourceLayout);
+  const artifactRoot = managedLayout
+    ? (options.artifactRoot ?? path.dirname(path.resolve(runsDir)))
+    : null;
+  const graphPath = managedLayout
+    ? null
+    : (
+        options.graphPath
+        ?? (path.isAbsolute(run?.taskGraphRef ?? '') ? run.taskGraphRef : null)
+      );
+  return workspaceRevisionExcludedPaths(
+    runsDir,
+    artifactRoot,
+    graphPath,
+    options.workspacePath ?? run?.workspacePath ?? null,
+  );
 }
 
 export function assertSafeRunId(runId) {
@@ -124,7 +382,7 @@ export function isRunRecordFile(filePath) {
   if (!RUN_SIDECAR_SUFFIXES.some((suffix) => filename.endsWith(suffix))) return true;
   try {
     const data = JSON.parse(readFileSync(filePath, 'utf8'));
-    return data?.schema_version === 'p2a.run.v1' && data.runId === runId;
+    return ['p2a.run.v1', 'p2a.run.v2'].includes(data?.schema_version) && data.runId === runId;
   } catch {
     return false;
   }
@@ -293,6 +551,10 @@ export function defaultRunsDirForGraph(graphPath) {
     return path.resolve(graphDir, '..', 'runs');
   }
   return path.resolve(graphDir, 'runs');
+}
+
+export function defaultArtifactRootForGraph(graphPath) {
+  return path.dirname(defaultRunsDirForGraph(graphPath));
 }
 
 export function resolveRunsDir(args) {

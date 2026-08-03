@@ -2374,6 +2374,55 @@ test('archived artifact audits reject references outside the artifact root', () 
   }
 });
 
+test('archived artifact audits reject visual files added after close', () => {
+  const artifactRoot = initializedArtifactRoot('archive-audit-visual-file-set');
+  try {
+    const graphPath = path.join(
+      artifactRoot,
+      'iterations',
+      'v1-mvp',
+      'gate-c-task-graph',
+      'task-graph.json',
+    );
+    const graph = JSON.parse(readFileSync(graphPath, 'utf8'));
+    graph.tasks = graph.tasks.map((task) => ({ ...task, status: 'done' }));
+    writeFileSync(graphPath, `${JSON.stringify(graph, null, 2)}\n`, 'utf8');
+    let result = spawnSync(process.execPath, [
+      ITERATION_CLI,
+      'close',
+      '--artifacts',
+      artifactRoot,
+    ], { cwd: ROOT, encoding: 'utf8' });
+    assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+
+    const injectedVisualPath = path.join(
+      artifactRoot,
+      'iterations',
+      'v1-mvp',
+      'gate-b-spec',
+      'visual-design',
+      'VD-99',
+      'injected.html',
+    );
+    mkdirSync(path.dirname(injectedVisualPath), { recursive: true });
+    writeFileSync(injectedVisualPath, '<!doctype html><title>Injected</title>\n', 'utf8');
+
+    result = spawnSync(process.execPath, [
+      ITERATION_CLI,
+      'validate',
+      '--artifacts',
+      artifactRoot,
+    ], { cwd: ROOT, encoding: 'utf8' });
+    assert.notEqual(result.status, 0);
+    assert.match(
+      `${result.stdout}${result.stderr}`,
+      /visual artifact set changed after close: added .*injected\.html/,
+    );
+  } finally {
+    rmSync(artifactRoot, { recursive: true, force: true });
+  }
+});
+
 test('maintenance add participates in the shared task-graph lock', async () => {
   const artifactRoot = initializedArtifactRoot('maintenance-add-graph-lock');
   const graphPath = path.join(artifactRoot, 'iterations', 'maintenance', 'gate-c-task-graph', 'task-graph.json');

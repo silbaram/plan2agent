@@ -28,7 +28,10 @@
   "additionalProperties": false,
   "properties": {
     "schema_version": {
-      "const": "p2a.run.v1"
+      "enum": [
+        "p2a.run.v1",
+        "p2a.run.v2"
+      ]
     },
     "runId": {
       "type": "string",
@@ -69,6 +72,16 @@
       "type": "string",
       "minLength": 1
     },
+    "runKind": {
+      "type": "string",
+      "enum": [
+        "final_visual_review"
+      ]
+    },
+    "taskContractSha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
     "agentTool": {
       "type": "string",
       "minLength": 1
@@ -80,6 +93,14 @@
     "workspacePath": {
       "type": "string",
       "minLength": 1
+    },
+    "workspaceRevisionSha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "visualReviewEvidenceSha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
     },
     "isolation": {
       "type": "object",
@@ -298,6 +319,142 @@
         "minLength": 1
       }
     },
+    "visualReview": {
+      "type": "object",
+      "required": [
+        "required",
+        "experienceSpecRef",
+        "experienceSpecSha256",
+        "prototypeManifestRef",
+        "prototypeManifestSha256",
+        "screenStates",
+        "viewports",
+        "accessibilityStandard"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "required": {
+          "const": true
+        },
+        "experienceSpecRef": {
+          "const": "experience-spec.json"
+        },
+        "experienceSpecSha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "prototypeManifestRef": {
+          "type": "string",
+          "pattern": "^visual-design/VD-[0-9]+/prototype\\.json$"
+        },
+        "prototypeManifestSha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "screenStates": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": [
+              "screenId",
+              "states"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "screenId": {
+                "type": "string",
+                "pattern": "^SCREEN-[0-9]+$"
+              },
+              "states": {
+                "type": "array",
+                "minItems": 1,
+                "uniqueItems": true,
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            }
+          }
+        },
+        "viewports": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": [
+              "name",
+              "width",
+              "height"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "name": {
+                "type": "string",
+                "minLength": 1
+              },
+              "width": {
+                "type": "integer",
+                "minimum": 240
+              },
+              "height": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "minimum": 240
+              }
+            }
+          }
+        },
+        "accessibilityStandard": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "visualFeedback": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "reviewedAt",
+          "reviewer",
+          "verdict",
+          "concerns",
+          "note"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "reviewedAt": {
+            "type": "string",
+            "minLength": 1
+          },
+          "reviewer": {
+            "type": "string",
+            "minLength": 1
+          },
+          "verdict": {
+            "type": "string",
+            "enum": [
+              "note",
+              "concern"
+            ]
+          },
+          "concerns": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "note": {
+            "type": "string"
+          }
+        }
+      }
+    },
     "reproduction": {
       "type": "object",
       "required": [
@@ -447,6 +604,69 @@
     }
   },
   "allOf": [
+    {
+      "if": {
+        "required": [
+          "visualReview"
+        ]
+      },
+      "then": {
+        "required": [
+          "runKind"
+        ],
+        "properties": {
+          "runKind": {
+            "const": "final_visual_review"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "runKind": {
+            "const": "final_visual_review"
+          }
+        },
+        "required": [
+          "runKind"
+        ]
+      },
+      "then": {
+        "required": [
+          "visualReview"
+        ],
+        "properties": {
+          "changedFiles": {
+            "maxItems": 0
+          },
+          "isolation": {
+            "properties": {
+              "mode": {
+                "const": "none"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "schema_version": {
+            "const": "p2a.run.v2"
+          }
+        },
+        "required": [
+          "schema_version"
+        ]
+      },
+      "then": {
+        "required": [
+          "taskContractSha256"
+        ]
+      }
+    },
     {
       "if": {
         "properties": {

@@ -12,6 +12,8 @@ import { resolveOrchestrationAgentTool } from './p2a_project_config.mjs';
 import { normalizePath, resolveP2aPaths } from './p2a_paths.mjs';
 import { p2aCommandLine } from './p2a_run_commands.mjs';
 import { resolveIterationState } from './p2a_iteration_state.mjs';
+import { compareRunEvidence, taskGraphRefMatchesGraph } from './p2a_run_paths.mjs';
+import { assertFinalVisualReviewRunReady } from './p2a_visual_review_gate.mjs';
 import {
   validateIntake,
   validateReview,
@@ -58,7 +60,7 @@ function usage() {
     '  p2a enhance <capability> [--target <dir>] [--dry-run] [--overwrite]',
     '  p2a eval <grade|compare|analyze|generate|digest> [options]',
     '  p2a memory <status|push|pull|search|history|digest|trace|impact|precedent> [options]',
-    '  p2a execute <plan|start|resume|status|finish> [options]',
+    '  p2a execute <plan|start|review|resume|status|finish> [options]',
     '  p2a tasks|runs|iteration|proposals|validate ...',
     '',
     'Examples:',
@@ -328,7 +330,28 @@ function inspectRuns(targetRoot, artifactRoot) {
   }
   const runIndexPath = path.join(runsDir, 'run-index.json');
   const runIndex = readJsonObject(runIndexPath);
-  const runs = jsonRecords(runIndex?.runs);
+  const indexedRuns = jsonRecords(runIndex?.runs);
+  const runs = indexedRuns.map((indexedRun) => {
+    const runRef = stringValue(indexedRun.runRef);
+    if (!runRef) return indexedRun;
+    const runPath = path.resolve(runsDir, runRef);
+    try {
+      const realRunsDir = realpathSync(runsDir);
+      const realRunPath = realpathSync(runPath);
+      const relative = path.relative(realRunsDir, realRunPath);
+      if (!relative || relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+        return indexedRun;
+      }
+    } catch {
+      return indexedRun;
+    }
+    const run = readJsonObject(runPath);
+    if (!run) return indexedRun;
+    for (const field of ['runId', 'taskId', 'iterationId', 'status', 'startedAt', 'finishedAt']) {
+      if (JSON.stringify(run[field]) !== JSON.stringify(indexedRun[field])) return indexedRun;
+    }
+    return run;
+  });
   const statusCounts = runs.reduce((counts, run) => {
     const status = stringValue(run.status) ?? 'unknown';
     counts[status] = (counts[status] ?? 0) + 1;
@@ -340,7 +363,7 @@ function inspectRuns(targetRoot, artifactRoot) {
     summary: {
       runIndexPath: relativeToTarget(targetRoot, runIndexPath),
       runCount: runs.length,
-      latestRunId: stringValue(runs.at(-1)?.runId),
+      latestRunId: stringValue(indexedRuns.at(-1)?.runId),
       statusCounts,
     },
   };
@@ -1106,6 +1129,26 @@ function runsForActiveIteration(records, activeIteration) {
   });
 }
 
+function iterationVisualReviewNeeded(tasks, activeRuns, options) {
+  if (!tasks.some((task) => task.status === 'done' && task.visualImpact)) return false;
+  const latestRun = activeRuns
+    .map((run, runOrder) => ({ run, runOrder }))
+    .filter(({ run }) => run.runKind === 'final_visual_review')
+    .sort(compareRunEvidence)[0]?.run;
+  try {
+    assertFinalVisualReviewRunReady({
+      runsDir: options.runsDir,
+      run: latestRun,
+      taskId: 'the active iteration',
+      artifactRoot: options.artifactRoot,
+      graphPath: options.graphPath,
+    });
+    return false;
+  } catch {
+    return true;
+  }
+}
+
 function inspectionForArtifact(targetRoot, artifact, inspectedArtifacts) {
   const artifactRoot = path.resolve(targetRoot, artifact.artifactRoot);
   return inspectedArtifacts.find((candidate) => candidate.artifactRoot === artifactRoot) ?? null;
@@ -1150,8 +1193,21 @@ function buildNextDecisionContext(info, targetRoot, requestedProjectId, inspecte
   const detail = inspectionForArtifact(targetRoot, selected.artifact, inspectedArtifacts);
   if (!detail) throw new Error(`artifact inspection is unavailable: ${artifactRoot}`);
   const { gates } = detail;
-  const activeRuns = runsForActiveIteration(detail.runs.records, detail.activeIteration);
+  const iterationScopedRuns = runsForActiveIteration(detail.runs.records, detail.activeIteration);
+  const activeRuns = detail.layout.kind === 'iteration'
+    ? iterationScopedRuns.filter((run) => (
+        run.sourceLayout === 'iteration'
+        && gates.taskGraphPath
+        && taskGraphRefMatchesGraph(run.taskGraphRef, gates.taskGraphPath, artifactRoot)
+      ))
+    : iterationScopedRuns;
   const taskCounts = countTasks(gates.taskGraph);
+  const allTasksDone = taskCounts.total > 0 && taskCounts.done === taskCounts.total;
+  const needsCloseReadyVisualAudit = (
+    allTasksDone
+    && detail.layout.kind === 'iteration'
+    && detail.tasks.some((task) => task.visualImpact)
+  );
   const proposals = info.enhancements.proposals;
   const minedRunIds = proposals.enabled
     ? minedProposalRunIds(targetRoot, proposals)
@@ -1165,7 +1221,10 @@ function buildNextDecisionContext(info, targetRoot, requestedProjectId, inspecte
       })
     : null;
   let runEvidenceValidationError = null;
-  if (failedOrBlockedRunCandidate) {
+  if (
+    detail.runs.runsDir
+    && (failedOrBlockedRunCandidate || needsCloseReadyVisualAudit)
+  ) {
     try {
       validateRunsDir(detail.runs.runsDir);
     } catch (error) {
@@ -1177,6 +1236,16 @@ function buildNextDecisionContext(info, targetRoot, requestedProjectId, inspecte
   const unminedFailedOrBlockedRun = runEvidenceValidationError
     ? null
     : failedOrBlockedRunCandidate;
+  const visualReviewNeeded = (
+    allTasksDone
+    && detail.layout.kind === 'iteration'
+  )
+    ? iterationVisualReviewNeeded(detail.tasks, activeRuns, {
+        runsDir: detail.runs.runsDir,
+        artifactRoot,
+        graphPath: gates.taskGraphPath,
+      })
+    : false;
   return {
     ...context,
     artifactRoot,
@@ -1207,9 +1276,10 @@ function buildNextDecisionContext(info, targetRoot, requestedProjectId, inspecte
     reviewBlockingIssues: stringArrayValue(gates.review?.blocking_issues).length,
     activeRuns,
     startedRun: activeRuns.find((run) => run.status === 'started' && stringValue(run.runId)),
+    visualReviewNeeded,
     readyIds: readyTaskIds(gates.taskGraph),
     blockedTaskIds: taskIdsWithStatus(detail.tasks, 'blocked'),
-    allTasksDone: taskCounts.total > 0 && taskCounts.done === taskCounts.total,
+    allTasksDone,
     closedIteration: isClosedIteration(detail.currentSpec, detail.activeIteration),
     proposalQueueArg: proposals.enabled
       ? commandProjectPath(targetRoot, resolveProjectRelativePath(targetRoot, proposals.queueDir))
@@ -1410,7 +1480,7 @@ export const NEXT_DECISION_RULES = [
     kind: 'cli',
     when: (context) => Boolean(context.runEvidenceValidationError),
     reason: (context) => (
-      `The run store is invalid and must be repaired before proposal mining: ${context.runEvidenceValidationError}`
+      `The run store is invalid and must be repaired before continuing: ${context.runEvidenceValidationError}`
     ),
     command: (context) => [
       'runs',
@@ -1455,6 +1525,25 @@ export const NEXT_DECISION_RULES = [
       'show',
       ...taskSourceArgs(context),
       context.blockedTaskIds[0],
+    ],
+  },
+  {
+    state: 'final_visual_review_required',
+    kind: 'cli',
+    when: (context) => (
+      context.allTasksDone
+      && !context.closedIteration
+      && context.detail.layout.kind === 'iteration'
+      && context.visualReviewNeeded
+    ),
+    reason: (context) => (
+      'The completed visual iteration still needs one canonical pre-close review run.'
+    ),
+    command: (context) => [
+      'execute',
+      'review',
+      '--artifacts',
+      context.artifactArg,
     ],
   },
   {

@@ -1,0 +1,230 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://plan2agent.local/schemas/visual-review.schema.json",
+  "title": "Plan2Agent Run Visual Review",
+  "type": "object",
+  "required": [
+    "run_id",
+    "workspace_ref",
+    "workspace_revision_sha256",
+    "source_experience_ref",
+    "source_prototype_ref",
+    "reviewed_at",
+    "results",
+    "accessibility",
+    "verdict",
+    "concerns",
+    "note"
+  ],
+  "oneOf": [
+    {
+      "required": [
+        "schema_version",
+        "iteration_id"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "p2a.visual_review.v2"
+        }
+      },
+      "not": {
+        "required": [
+          "task_id"
+        ]
+      }
+    },
+    {
+      "required": [
+        "schema_version",
+        "task_id"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "p2a.visual_review.v1"
+        }
+      },
+      "not": {
+        "required": [
+          "iteration_id"
+        ]
+      }
+    }
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "enum": [
+        "p2a.visual_review.v1",
+        "p2a.visual_review.v2"
+      ]
+    },
+    "run_id": {
+      "type": "string",
+      "pattern": "^run-[A-Za-z0-9._-]+$"
+    },
+    "iteration_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "task_id": {
+      "type": "string",
+      "pattern": "^task-[0-9]+$"
+    },
+    "workspace_ref": {
+      "type": "string",
+      "minLength": 1
+    },
+    "workspace_revision_sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "source_experience_ref": {
+      "type": "string",
+      "minLength": 1
+    },
+    "source_prototype_ref": {
+      "type": "string",
+      "minLength": 1
+    },
+    "reviewed_at": {
+      "type": "string",
+      "minLength": 1
+    },
+    "results": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": [
+          "screen_id",
+          "state",
+          "viewport",
+          "artifact_ref",
+          "artifact_sha256",
+          "media_type",
+          "width",
+          "height",
+          "capture_url",
+          "captured_at",
+          "status",
+          "concerns"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "screen_id": {
+            "type": "string",
+            "pattern": "^SCREEN-[0-9]+$"
+          },
+          "state": {
+            "type": "string",
+            "minLength": 1
+          },
+          "viewport": {
+            "type": "string",
+            "minLength": 1
+          },
+          "artifact_ref": {
+            "type": "string",
+            "minLength": 1
+          },
+          "artifact_sha256": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          },
+          "media_type": {
+            "const": "image/png"
+          },
+          "width": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "height": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "capture_url": {
+            "type": "string",
+            "minLength": 1
+          },
+          "captured_at": {
+            "type": "string",
+            "minLength": 1
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "passed",
+              "failed"
+            ]
+          },
+          "concerns": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        }
+      }
+    },
+    "accessibility": {
+      "type": "object",
+      "required": [
+        "status",
+        "report_ref",
+        "report_sha256",
+        "standard",
+        "critical_violations"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": [
+            "passed",
+            "failed",
+            "not_run"
+          ]
+        },
+        "report_ref": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "report_sha256": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "standard": {
+          "type": "string",
+          "minLength": 1
+        },
+        "critical_violations": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "verdict": {
+      "type": "string",
+      "enum": [
+        "confirm_ui",
+        "block"
+      ]
+    },
+    "concerns": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "note": {
+      "type": "string"
+    }
+  }
+}

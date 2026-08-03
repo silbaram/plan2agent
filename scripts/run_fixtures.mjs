@@ -2,18 +2,19 @@
 /** Run Plan2Agent fixture/golden validation for positive, e2e, iteration, and negative fixture cases. */
 
 import { createHash } from 'node:crypto';
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, readdirSync, renameSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, readdirSync, renameSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
 import { spawnSync } from 'node:child_process';
+import { deflateSync } from 'node:zlib';
 import {
   validateTaskContextData,
   validateTaskGraphData,
 } from './validate_artifacts.mjs';
 import { compareSync } from './p2a_memory.mjs';
 import { shellQuote } from './p2a_run_commands.mjs';
-import { runFilePath, runSidecarPath, runSidecarRef } from './p2a_run_paths.mjs';
+import { runFilePath, runSidecarPath, runSidecarRef, taskContractSha256 } from './p2a_run_paths.mjs';
 import {
   E2E_FIXTURE_ROOT,
   FIXTURE_ROOT,
@@ -47,6 +48,174 @@ import {
 
 function hashText(value) {
   return createHash('sha256').update(value).digest('hex');
+}
+
+function crc32(buffer) {
+  let crc = 0xffffffff;
+  for (const byte of buffer) {
+    crc ^= byte;
+    for (let bit = 0; bit < 8; bit += 1) crc = (crc >>> 1) ^ ((crc & 1) ? 0xedb88320 : 0);
+  }
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
+function pngChunk(type, data) {
+  const typeBuffer = Buffer.from(type, 'ascii');
+  const length = Buffer.alloc(4);
+  length.writeUInt32BE(data.length);
+  const checksum = Buffer.alloc(4);
+  checksum.writeUInt32BE(crc32(Buffer.concat([typeBuffer, data])));
+  return Buffer.concat([length, typeBuffer, data, checksum]);
+}
+
+function writePng(filePath, width, height) {
+  const header = Buffer.alloc(13);
+  header.writeUInt32BE(width, 0);
+  header.writeUInt32BE(height, 4);
+  header[8] = 8;
+  header[9] = 0;
+  const rows = Buffer.alloc((width + 1) * height);
+  mkdirSync(path.dirname(filePath), { recursive: true });
+  writeFileSync(filePath, Buffer.concat([
+    Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]),
+    pngChunk('IHDR', header),
+    pngChunk('IDAT', deflateSync(rows)),
+    pngChunk('IEND', Buffer.alloc(0)),
+  ]));
+}
+
+function writeSyntheticApprovedVisualBundle(gateBRoot, projectId, marker = 'Ready') {
+  const candidateDir = path.join(gateBRoot, 'visual-design', 'VD-1');
+  const alternateCandidateDir = path.join(gateBRoot, 'visual-design', 'VD-2');
+  const experiencePath = path.join(gateBRoot, 'experience-spec.json');
+  const prototypePath = path.join(candidateDir, 'prototype.json');
+  const htmlPath = path.join(candidateDir, 'index.html');
+  const alternatePrototypePath = path.join(alternateCandidateDir, 'prototype.json');
+  const alternateHtmlPath = path.join(alternateCandidateDir, 'index.html');
+  mkdirSync(candidateDir, { recursive: true });
+  mkdirSync(alternateCandidateDir, { recursive: true });
+  const csp = [
+    "default-src 'none'",
+    "script-src 'none'",
+    "style-src 'self' 'unsafe-inline'",
+    "img-src 'self' data: blob:",
+    "font-src 'self' data:",
+    "connect-src 'none'",
+    "object-src 'none'",
+    "frame-src 'none'",
+    "child-src 'none'",
+    "worker-src 'none'",
+    "form-action 'none'",
+    "base-uri 'none'",
+  ].join('; ');
+  const htmlText = `<!doctype html><meta http-equiv="Content-Security-Policy" content="${csp}"><title>Fixture review</title><main>${marker}</main>\n`;
+  writeFileSync(htmlPath, htmlText, 'utf8');
+  const alternateHtmlText = `<!doctype html><meta http-equiv="Content-Security-Policy" content="${csp}"><title>Fixture split review</title><main>${marker} in split view</main>\n`;
+  writeFileSync(alternateHtmlPath, alternateHtmlText, 'utf8');
+  const approvalAudit = (approvedArtifacts) => ({
+    approved_by: 'fixture-owner',
+    approved_at: '2026-07-10T23:59:00.000Z',
+    approved_artifacts: approvedArtifacts,
+    approval_note: 'Synthetic approved visual artifact for portable milestone evidence.',
+  });
+  const prototypeText = `${JSON.stringify({
+    schema_version: 'p2a.visual_prototype.v1',
+    project_id: projectId,
+    experience_spec_ref: '../../experience-spec.json',
+    candidate_id: 'VD-1',
+    status: 'approved',
+    entrypoint: 'index.html',
+    screen_states: [{
+      screen_id: 'SCREEN-1',
+      states: ['ready'],
+      state_artifacts: [{ state: 'ready', artifact_ref: 'index.html' }],
+    }],
+    viewports: ['desktop'],
+    network_policy: 'offline',
+    files: [{ path: 'index.html', sha256: hashText(htmlText), media_type: 'text/html' }],
+    approval_audit: approvalAudit(['index.html']),
+  }, null, 2)}\n`;
+  writeFileSync(prototypePath, prototypeText, 'utf8');
+  const alternatePrototypeText = `${JSON.stringify({
+    schema_version: 'p2a.visual_prototype.v1',
+    project_id: projectId,
+    experience_spec_ref: '../../experience-spec.json',
+    candidate_id: 'VD-2',
+    status: 'candidate',
+    entrypoint: 'index.html',
+    screen_states: [{
+      screen_id: 'SCREEN-1',
+      states: ['ready'],
+      state_artifacts: [{ state: 'ready', artifact_ref: 'index.html' }],
+    }],
+    viewports: ['desktop'],
+    network_policy: 'offline',
+    files: [{ path: 'index.html', sha256: hashText(alternateHtmlText), media_type: 'text/html' }],
+  }, null, 2)}\n`;
+  writeFileSync(alternatePrototypePath, alternatePrototypeText, 'utf8');
+  const experienceText = `${JSON.stringify({
+    schema_version: 'p2a.visual_experience.v1',
+    project_id: projectId,
+    source_spec_ref: 'spec.json',
+    mode: 'full',
+    visual_direction: {
+      keywords: ['focused'],
+      references: [],
+      avoid: ['fixture clutter'],
+      candidates: [
+        {
+          id: 'VD-1',
+          title: 'Fixture review',
+          summary: 'A deterministic visual-review fixture.',
+          tradeoffs: ['Minimal styling'],
+          prototype_manifest_ref: 'visual-design/VD-1/prototype.json',
+          prototype_manifest_sha256: hashText(prototypeText),
+        },
+        {
+          id: 'VD-2',
+          title: 'Fixture split review',
+          summary: 'A deterministic alternate visual-review fixture.',
+          tradeoffs: ['Higher information density'],
+          prototype_manifest_ref: 'visual-design/VD-2/prototype.json',
+          prototype_manifest_sha256: hashText(alternatePrototypeText),
+        },
+      ],
+      selected_candidate: 'VD-1',
+    },
+    design_system: {
+      strategy: 'new',
+      references: [],
+      token_rules: ['Use semantic color tokens'],
+      component_rules: ['Keep the primary action visible'],
+    },
+    screens: [{
+      id: 'SCREEN-1',
+      name: 'Fixture review',
+      route: '/reviews/:id',
+      user_goal: 'Review one fixture state.',
+      entry_points: ['Fixture runner'],
+      primary_action: 'Confirm fixture',
+      secondary_actions: ['Inspect details'],
+      regions: [{ id: 'content', purpose: 'Show fixture evidence', priority: 'primary' }],
+      states: ['ready'],
+      success_exit: 'The fixture review is confirmed.',
+      responsive_rules: ['Keep content visible at 240px'],
+      accessibility_requirements: ['Keyboard access for the primary action'],
+    }],
+    validation: {
+      viewports: [{ name: 'desktop', width: 240, height: 240 }],
+      required_states: ['ready'],
+      accessibility_standard: 'WCAG 2.2 AA',
+      visual_review_required: true,
+    },
+    approval: 'approved',
+    approval_audit: approvalAudit(['visual-design/VD-1/prototype.json']),
+  }, null, 2)}\n`;
+  writeFileSync(experiencePath, experienceText, 'utf8');
+  return {
+    experienceSpecSha256: hashText(experienceText),
+    prototypeManifestSha256: hashText(prototypeText),
+  };
 }
 
 const DISCOVERY_FIXTURE_ANSWERS = {
@@ -2591,10 +2760,31 @@ function validateIterationCurrentFixtureCases() {
   let checks = 0;
 
   function copyWebhookTaskGraph(tempRoot, name) {
-    const graphPath = path.join(tempRoot, name, 'gate-c-task-graph', 'task-graph.json');
+    const targetRoot = path.join(tempRoot, name);
+    const sourceRoot = path.join(E2E_FIXTURE_ROOT, 'webhook-api-service');
+    const graphPath = path.join(targetRoot, 'gate-c-task-graph', 'task-graph.json');
     mkdirSync(path.dirname(graphPath), { recursive: true });
-    cpSync(path.join(E2E_FIXTURE_ROOT, 'webhook-api-service', 'gate-c-task-graph', 'task-graph.json'), graphPath);
+    cpSync(path.join(sourceRoot, 'gate-a-intake'), path.join(targetRoot, 'gate-a-intake'), { recursive: true });
+    cpSync(path.join(sourceRoot, 'gate-b-spec'), path.join(targetRoot, 'gate-b-spec'), { recursive: true });
+    cpSync(path.join(sourceRoot, 'gate-c-task-graph', 'task-graph.json'), graphPath);
     return graphPath;
+  }
+
+  function copyTaskSourceProvenance(state, targetRoot) {
+    const sourceSpecDir = path.dirname(state.specPath);
+    cpSync(
+      path.join(path.dirname(sourceSpecDir), 'gate-a-intake'),
+      path.join(targetRoot, 'gate-a-intake'),
+      { recursive: true },
+    );
+    cpSync(sourceSpecDir, path.join(targetRoot, 'gate-b-spec'), { recursive: true });
+  }
+
+  function copyCurrentTaskGraph(state, graphPath) {
+    const targetRoot = path.dirname(path.dirname(graphPath));
+    mkdirSync(path.dirname(graphPath), { recursive: true });
+    copyTaskSourceProvenance(state, targetRoot);
+    writeFileSync(graphPath, readFileSync(state.taskGraphPath, 'utf8'), 'utf8');
   }
 
   function passedFixtureVerification(command) {
@@ -2985,8 +3175,7 @@ function validateIterationCurrentFixtureCases() {
 
       const crossCwdRoot = path.join(tempRoot, 'p2a-cross-cwd');
       const crossCwdGraphPath = path.join(crossCwdRoot, 'gate-c-task-graph', 'task-graph.json');
-      mkdirSync(path.dirname(crossCwdGraphPath), { recursive: true });
-      writeFileSync(crossCwdGraphPath, readFileSync(state.taskGraphPath, 'utf8'), 'utf8');
+      copyCurrentTaskGraph(state, crossCwdGraphPath);
       result = runTasksFrom(crossCwdRoot, ['start', '--graph', 'gate-c-task-graph/task-graph.json', 'task-001']);
       checks += 1;
       if (result.status !== 0) {
@@ -3059,8 +3248,7 @@ function validateIterationCurrentFixtureCases() {
       }
 
       const executeGraphPath = path.join(tempRoot, 'p2a-execute', 'gate-c-task-graph', 'task-graph.json');
-      mkdirSync(path.dirname(executeGraphPath), { recursive: true });
-      writeFileSync(executeGraphPath, readFileSync(state.taskGraphPath, 'utf8'), 'utf8');
+      copyCurrentTaskGraph(state, executeGraphPath);
       result = runExecute([
         'plan',
         '--graph',
@@ -3143,9 +3331,8 @@ function validateIterationCurrentFixtureCases() {
       const executeIsolationGraphPath = path.join(tempRoot, 'p2a-execute-isolation', 'gate-c-task-graph', 'task-graph.json');
       const executeIsolationWorkspace = path.join(tempRoot, 'execute-isolation-workspace');
       const executeIsolationWorktree = path.join(tempRoot, 'execute-isolation-worktree');
-      mkdirSync(path.dirname(executeIsolationGraphPath), { recursive: true });
+      copyCurrentTaskGraph(state, executeIsolationGraphPath);
       mkdirSync(executeIsolationWorkspace, { recursive: true });
-      writeFileSync(executeIsolationGraphPath, readFileSync(state.taskGraphPath, 'utf8'), 'utf8');
       writeFileSync(path.join(executeIsolationWorkspace, 'baseline.txt'), 'baseline\n', 'utf8');
       result = spawnSync('git', ['init'], { cwd: executeIsolationWorkspace, encoding: 'utf8' });
       checks += 1;
@@ -3219,6 +3406,7 @@ function validateIterationCurrentFixtureCases() {
       const legacyRuntimePath = path.join(tempRoot, 'p2a-execute', 'runs', 'run-execute-fixture-legacy.orchestration-runtime.json');
       const executeMonitorGraphPath = path.join(tempRoot, 'p2a-execute-monitor', 'gate-c-task-graph', 'task-graph.json');
       mkdirSync(path.dirname(executeMonitorGraphPath), { recursive: true });
+      copyTaskSourceProvenance(state, path.dirname(path.dirname(executeMonitorGraphPath)));
       const executeMonitorGraph = JSON.parse(readFileSync(state.taskGraphPath, 'utf8'));
       const executeMonitorTask = executeMonitorGraph.tasks.find((task) => task.id === 'task-001');
       executeMonitorTask.targetArea = 'api+ui';
@@ -4271,8 +4459,7 @@ function validateIterationCurrentFixtureCases() {
       }
 
       const executeFailedGraphPath = path.join(tempRoot, 'p2a-execute-failed', 'gate-c-task-graph', 'task-graph.json');
-      mkdirSync(path.dirname(executeFailedGraphPath), { recursive: true });
-      writeFileSync(executeFailedGraphPath, readFileSync(state.taskGraphPath, 'utf8'), 'utf8');
+      copyCurrentTaskGraph(state, executeFailedGraphPath);
       result = runExecute([
         'start',
         '--graph',
@@ -4316,8 +4503,7 @@ function validateIterationCurrentFixtureCases() {
       }
 
       const executeSkippedGraphPath = path.join(tempRoot, 'p2a-execute-not-in-progress', 'gate-c-task-graph', 'task-graph.json');
-      mkdirSync(path.dirname(executeSkippedGraphPath), { recursive: true });
-      writeFileSync(executeSkippedGraphPath, readFileSync(state.taskGraphPath, 'utf8'), 'utf8');
+      copyCurrentTaskGraph(state, executeSkippedGraphPath);
       result = runRuns([
         'start',
         '--graph',
@@ -6666,13 +6852,272 @@ function validateIterationCurrentFixtureCases() {
 
       const milestoneHandoffArtifactRoot = path.join(tempRoot, 'milestone-handoff-artifacts');
       cpSync(artifactRoot, milestoneHandoffArtifactRoot, { recursive: true });
+      const composedVisualIterationId = 'v1-mvp';
+      const composedVisualGateBRoot = path.join(
+        milestoneHandoffArtifactRoot,
+        'iterations',
+        composedVisualIterationId,
+        'gate-b-spec',
+      );
+      writeSyntheticApprovedVisualBundle(
+        composedVisualGateBRoot,
+        caseData.project_id,
+        'Composed visual history',
+      );
+      const composedVisualExperiencePath = path.join(composedVisualGateBRoot, 'experience-spec.json');
+      const composedVisualExperience = JSON.parse(readFileSync(composedVisualExperiencePath, 'utf8'));
+      composedVisualExperience.mode = 'reuse';
+      composedVisualExperience.design_system.strategy = 'existing';
+      composedVisualExperience.design_system.references = ['src/ui-system.css'];
+      composedVisualExperience.validation.visual_review_required = false;
+      const composedVisualExperienceText = `${JSON.stringify(composedVisualExperience, null, 2)}\n`;
+      writeFileSync(composedVisualExperiencePath, composedVisualExperienceText, 'utf8');
+      const composedVisualSpecRef = `iterations/${composedVisualIterationId}/gate-b-spec/spec.json`;
+      const composedVisualSpecPath = path.join(milestoneHandoffArtifactRoot, composedVisualSpecRef);
+      const composedVisualSpec = JSON.parse(readFileSync(composedVisualSpecPath, 'utf8'));
+      composedVisualSpec.source_intake = '../gate-a-intake/./intake.json';
+      composedVisualSpec.visual_experience = {
+        has_visual_interface: true,
+        design_scope: 'reuse',
+        design_timing: 'current_iteration',
+        rationale: 'The composed source keeps its approved reusable visual contract portable.',
+        experience_spec_ref: 'experience-spec.json',
+        experience_spec_sha256: hashText(composedVisualExperienceText),
+        design_system_refs: ['src/ui-system.css'],
+      };
+      if (!composedVisualSpec.approval_audit.approved_artifacts.includes('experience-spec.json')) {
+        composedVisualSpec.approval_audit.approved_artifacts.push('experience-spec.json');
+      }
+      const composedVisualSpecText = `${JSON.stringify(composedVisualSpec, null, 2)}\n`;
+      writeFileSync(composedVisualSpecPath, composedVisualSpecText, 'utf8');
+      const composedDependentIntakePath = path.join(
+        milestoneHandoffArtifactRoot,
+        'iterations',
+        'iter-002',
+        'gate-a-intake',
+        'intake.json',
+      );
+      const composedDependentIntake = JSON.parse(readFileSync(composedDependentIntakePath, 'utf8'));
+      composedDependentIntake.baseline_context.spec_sha256 = hashText(composedVisualSpecText);
+      const composedDependentIntakeText = `${JSON.stringify(composedDependentIntake, null, 2)}\n`;
+      writeFileSync(composedDependentIntakePath, composedDependentIntakeText, 'utf8');
+      const composedDependentSpecPath = path.join(
+        milestoneHandoffArtifactRoot,
+        'iterations',
+        'iter-002',
+        'gate-b-spec',
+        'spec.json',
+      );
+      const composedDependentSpec = JSON.parse(readFileSync(composedDependentSpecPath, 'utf8'));
+      composedDependentSpec.source_intake_sha256 = hashText(composedDependentIntakeText);
+      writeFileSync(
+        composedDependentSpecPath,
+        `${JSON.stringify(composedDependentSpec, null, 2)}\n`,
+        'utf8',
+      );
+      const composedVisualArtifactRefs = [
+        `iterations/${composedVisualIterationId}/gate-b-spec/experience-spec.json`,
+        `iterations/${composedVisualIterationId}/gate-b-spec/visual-design/VD-1/prototype.json`,
+        `iterations/${composedVisualIterationId}/gate-b-spec/visual-design/VD-1/index.html`,
+        `iterations/${composedVisualIterationId}/gate-b-spec/visual-design/VD-2/prototype.json`,
+        `iterations/${composedVisualIterationId}/gate-b-spec/visual-design/VD-2/index.html`,
+      ];
+      const composedCurrentSpecPath = path.join(milestoneHandoffArtifactRoot, 'current-spec.json');
+      const composedCurrentSpecForHandoff = JSON.parse(readFileSync(composedCurrentSpecPath, 'utf8'));
+      const composedClosedIteration = composedCurrentSpecForHandoff.closed_iterations.find(
+        (closed) => closed.iteration_id === composedVisualIterationId,
+      );
+      composedClosedIteration.artifact_hashes[composedVisualSpecRef] = {
+        present: true,
+        sha256: hashText(composedVisualSpecText),
+      };
+      for (const reference of composedVisualArtifactRefs) {
+        composedClosedIteration.artifact_hashes[reference] = {
+          present: true,
+          sha256: hashText(readFileSync(path.join(milestoneHandoffArtifactRoot, reference))),
+        };
+      }
+      writeFileSync(
+        composedCurrentSpecPath,
+        `${JSON.stringify(composedCurrentSpecForHandoff, null, 2)}\n`,
+        'utf8',
+      );
       const milestoneTaskGraphRef = 'iterations/iter-002/gate-c-task-graph/task-graph.json';
       const milestoneSpecRef = 'iterations/iter-002/gate-b-spec/spec.json';
+      const milestoneVisualArtifacts = writeSyntheticApprovedVisualBundle(
+        path.join(milestoneHandoffArtifactRoot, 'iterations', 'iter-002', 'gate-b-spec'),
+        caseData.project_id,
+      );
+      const milestoneVisualArtifactRefs = [
+        'iterations/iter-002/gate-b-spec/experience-spec.json',
+        'iterations/iter-002/gate-b-spec/visual-design/VD-1/prototype.json',
+        'iterations/iter-002/gate-b-spec/visual-design/VD-1/index.html',
+        'iterations/iter-002/gate-b-spec/visual-design/VD-2/prototype.json',
+        'iterations/iter-002/gate-b-spec/visual-design/VD-2/index.html',
+      ];
+      const milestoneSpecPath = path.join(milestoneHandoffArtifactRoot, milestoneSpecRef);
+      const milestoneSpec = JSON.parse(readFileSync(milestoneSpecPath, 'utf8'));
+      milestoneSpec.visual_experience = {
+        has_visual_interface: true,
+        design_scope: 'full',
+        design_timing: 'current_iteration',
+        rationale: 'Synthetic milestone evidence binds one run to an approved visual experience.',
+        experience_spec_ref: 'experience-spec.json',
+        experience_spec_sha256: milestoneVisualArtifacts.experienceSpecSha256,
+      };
+      const milestoneExperienceApprovalRef = 'iterations/iter-002/gate-b-spec/experience-spec.json';
+      if (!milestoneSpec.approval_audit.approved_artifacts.includes(milestoneExperienceApprovalRef)) {
+        milestoneSpec.approval_audit.approved_artifacts.push(milestoneExperienceApprovalRef);
+      }
+      writeFileSync(milestoneSpecPath, `${JSON.stringify(milestoneSpec, null, 2)}\n`, 'utf8');
       const milestoneTaskGraphPath = path.join(milestoneHandoffArtifactRoot, milestoneTaskGraphRef);
       const milestoneTaskGraph = JSON.parse(readFileSync(milestoneTaskGraphPath, 'utf8'));
-      for (const task of milestoneTaskGraph.tasks) task.status = 'done';
+      milestoneTaskGraph.sourceSpec = '../gate-b-spec/spec.json';
+      for (const [taskIndex, task] of milestoneTaskGraph.tasks.entries()) {
+        task.status = 'done';
+        task.workKind = taskIndex === 0 ? 'ui' : 'non_ui';
+        if (taskIndex === 0) {
+          task.visualImpact = {
+            screenStates: [{ screenId: 'SCREEN-1', states: ['ready'] }],
+          };
+        }
+      }
       const milestoneTaskGraphText = `${JSON.stringify(milestoneTaskGraph, null, 2)}\n`;
       writeFileSync(milestoneTaskGraphPath, milestoneTaskGraphText, 'utf8');
+      const milestoneClosedIteration = composedCurrentSpecForHandoff.closed_iterations.find(
+        (closed) => closed.iteration_id === 'iter-002',
+      );
+      for (const reference of milestoneVisualArtifactRefs) {
+        milestoneClosedIteration.artifact_hashes[reference] = {
+          present: true,
+          sha256: hashText(readFileSync(path.join(milestoneHandoffArtifactRoot, reference))),
+        };
+      }
+      if (composedCurrentSpecForHandoff.last_closed_iteration?.iteration_id === 'iter-002') {
+        composedCurrentSpecForHandoff.last_closed_iteration.artifact_hashes = structuredClone(
+          milestoneClosedIteration.artifact_hashes,
+        );
+      }
+      writeFileSync(
+        composedCurrentSpecPath,
+        `${JSON.stringify(composedCurrentSpecForHandoff, null, 2)}\n`,
+        'utf8',
+      );
+
+      const historicalVisualRootRef = 'run-sources/historical-visual';
+      const historicalTaskGraphRef = `${historicalVisualRootRef}/gate-c-task-graph/task-graph.json`;
+      const historicalSpecRef = '../gate-b-spec/spec.json';
+      const historicalGateBRoot = path.join(
+        milestoneHandoffArtifactRoot,
+        historicalVisualRootRef,
+        'gate-b-spec',
+      );
+      const historicalVisualArtifacts = writeSyntheticApprovedVisualBundle(
+        historicalGateBRoot,
+        caseData.project_id,
+        'Historical visual contract',
+      );
+      const historicalVisualRoot = path.join(
+        milestoneHandoffArtifactRoot,
+        historicalVisualRootRef,
+      );
+      const historicalIntakePath = path.join(
+        historicalVisualRoot,
+        'gate-a-intake',
+        'intake.json',
+      );
+      mkdirSync(path.dirname(historicalIntakePath), { recursive: true });
+      cpSync(composedDependentIntakePath, historicalIntakePath);
+      cpSync(
+        path.join(milestoneHandoffArtifactRoot, 'iterations'),
+        path.join(historicalVisualRoot, 'iterations'),
+        { recursive: true },
+      );
+      cpSync(
+        composedCurrentSpecPath,
+        path.join(historicalVisualRoot, 'current-spec.json'),
+      );
+      const historicalIntake = JSON.parse(readFileSync(historicalIntakePath, 'utf8'));
+      const historicalBaselineDependencyRefs = [
+        historicalIntake.baseline_context.spec_ref,
+        ...(historicalIntake.baseline_context.reused_answers ?? [])
+          .map((item) => item.source_intake),
+        ...(historicalIntake.baseline_context.reused_question_dispositions ?? [])
+          .map((item) => item.source_spec),
+      ].map((reference) => `${historicalVisualRootRef}/${reference}`);
+      const historicalSpec = structuredClone(milestoneSpec);
+      historicalSpec.source_intake = '../gate-a-intake/intake.json';
+      historicalSpec.source_intake_sha256 = hashText(readFileSync(historicalIntakePath));
+      historicalSpec.visual_experience = {
+        has_visual_interface: true,
+        design_scope: 'full',
+        design_timing: 'current_iteration',
+        rationale: 'Historical run evidence remains bound to its original approved visual contract.',
+        experience_spec_ref: 'experience-spec.json',
+        experience_spec_sha256: historicalVisualArtifacts.experienceSpecSha256,
+      };
+      historicalSpec.approval_audit = {
+        approved_by: 'fixture-owner',
+        approved_at: '2026-07-10T23:59:00.000Z',
+        approved_artifacts: ['experience-spec.json'],
+        approval_note: 'Synthetic historical visual contract approved for provenance testing.',
+      };
+      writeFileSync(
+        path.join(historicalGateBRoot, 'spec.json'),
+        `${JSON.stringify(historicalSpec, null, 2)}\n`,
+        'utf8',
+      );
+      const historicalTaskGraphPath = path.join(milestoneHandoffArtifactRoot, historicalTaskGraphRef);
+      mkdirSync(path.dirname(historicalTaskGraphPath), { recursive: true });
+      writeFileSync(historicalTaskGraphPath, `${JSON.stringify({
+        schema_version: 'p2a.task_graph.v1',
+        projectId: caseData.project_id,
+        version: 'iter-historical',
+        sourceSpec: historicalSpecRef,
+        tasks: [{
+          id: 'task-999',
+          title: 'Preserve historical visual provenance',
+          description: 'Retain the approved historical visual evidence bundle.',
+          status: 'done',
+          dependencies: [],
+          acceptanceCriteria: ['The historical visual evidence remains portable and verifiable.'],
+          targetArea: 'ui',
+          workKind: 'ui',
+          suggestedAgentPrompt: 'Verify and preserve the historical visual evidence.',
+          sourceSpecRefs: ['visual_experience'],
+          visualImpact: {
+            screenStates: [{ screenId: 'SCREEN-1', states: ['ready'] }],
+          },
+        }],
+      }, null, 2)}\n`, 'utf8');
+
+      const externalSourceRoot = path.join(tempRoot, 'external-approved-source');
+      cpSync(
+        path.join(milestoneHandoffArtifactRoot, 'iterations'),
+        path.join(externalSourceRoot, 'iterations'),
+        { recursive: true },
+      );
+      cpSync(
+        composedCurrentSpecPath,
+        path.join(externalSourceRoot, 'current-spec.json'),
+      );
+      const externalSourceSpecPath = path.join(
+        externalSourceRoot,
+        milestoneSpecRef,
+      );
+      const internalGraphExternalSpecRef = 'run-sources/internal-graph-external-spec/task-graph.json';
+      const internalGraphExternalSpecPath = path.join(
+        milestoneHandoffArtifactRoot,
+        internalGraphExternalSpecRef,
+      );
+      const internalGraphExternalSpec = structuredClone(milestoneTaskGraph);
+      internalGraphExternalSpec.sourceSpec = externalSourceSpecPath;
+      mkdirSync(path.dirname(internalGraphExternalSpecPath), { recursive: true });
+      writeFileSync(
+        internalGraphExternalSpecPath,
+        `${JSON.stringify(internalGraphExternalSpec, null, 2)}\n`,
+        'utf8',
+      );
 
       const milestoneRunsDir = path.join(milestoneHandoffArtifactRoot, 'runs');
       rmSync(milestoneRunsDir, { recursive: true, force: true });
@@ -6683,9 +7128,43 @@ function validateIterationCurrentFixtureCases() {
       const milestoneRunIndexEntries = [];
       const milestoneRunIndexTasks = [];
       const milestoneCompletedTaskEvidence = [];
-      for (const task of milestoneTaskGraph.tasks) {
+      const milestoneVisualRunId = `run-milestone-${milestoneTaskGraph.tasks[0].id}`;
+      const milestoneVisualEvidenceBase = `visual-evidence/iter-002/${milestoneVisualRunId}`;
+      const milestoneVisualCanonicalBase = `${milestoneVisualEvidenceBase}/canonical`;
+      const milestoneVisualAliasBase = `${milestoneVisualEvidenceBase}/capture-alias`;
+      const milestoneVisualScreenshotRef = `${milestoneVisualAliasBase}/screen-1-ready-desktop.png`;
+      const milestoneVisualAccessibilityRef = `${milestoneVisualAliasBase}/accessibility.json`;
+      const milestoneVisualSidecarRef = `runs/${milestoneVisualRunId}.visual-review.json`;
+      const historicalVisualRunId = 'run-historical-visual';
+      const historicalVisualTaskId = 'task-999';
+      const historicalVisualIterationId = 'iter-historical';
+      const historicalVisualEvidenceBase = `visual-evidence/${historicalVisualIterationId}/${historicalVisualRunId}`;
+      const historicalVisualScreenshotRef = `${historicalVisualEvidenceBase}/screen-1-ready-desktop.png`;
+      const historicalVisualAccessibilityRef = `${historicalVisualEvidenceBase}/accessibility.json`;
+      const historicalVisualSidecarRef = `runs/${historicalVisualRunId}.visual-review.json`;
+      const startedVisualRunId = 'run-started-visual-handoff-rejected';
+      const maintenanceRunId = 'run-maintenance-portable';
+      const maintenanceTaskId = 'task-900';
+      const maintenanceTaskGraphRef = 'iterations/maintenance/gate-c-task-graph/task-graph.json';
+      const unfinishedGraphRunId = 'run-unfinished-graph-portable';
+      const unfinishedGraphRef = 'run-sources/unfinished-graph/task-graph.json';
+      const relativeSymlinkGraphRunId = 'run-relative-symlink-graph-portable';
+      const relativeSymlinkGraphAliasRef = 'run-sources/relative-graph-alias';
+      const relativeSymlinkGraphRef = `${relativeSymlinkGraphAliasRef}/task-graph.json`;
+      const internalAbsoluteSourceRunId = 'run-internal-absolute-source-portable';
+      const internalAbsoluteSourceGraphRef = 'run-sources/internal-absolute-source/task-graph.json';
+      const symlinkedAbsoluteSourceRunId = 'run-symlinked-absolute-source-portable';
+      const symlinkedAbsoluteSourceGraphRef = 'run-sources/symlinked-absolute-source/task-graph.json';
+      const artifactRootAliasRef = 'run-sources/artifact-root-alias';
+      const legacyV1UnfinishedRunId = 'run-legacy-v1-unfinished-portable';
+      const legacyV1UnfinishedRootRef = 'run-sources/legacy-v1-unfinished';
+      const legacyV1UnfinishedGraphRef = `${legacyV1UnfinishedRootRef}/gate-c-task-graph/task-graph.json`;
+      const externalGraphRunId = 'run-external-graph-omitted';
+      const externalSourceRunId = 'run-external-source-omitted';
+      const externalStartedVisualRunId = 'run-external-source-started-visual-omitted';
+      for (const [taskIndex, task] of milestoneTaskGraph.tasks.entries()) {
         const runId = `run-milestone-${task.id}`;
-        const changedFiles = [`src/${task.id}.mjs`];
+        const changedFiles = taskIndex === 0 ? [] : [`src/${task.id}.mjs`];
         const verification = [{
           type: 'test',
           command: `node --test ${task.id}`,
@@ -6699,7 +7178,7 @@ function validateIterationCurrentFixtureCases() {
           source: 'command',
         }];
         const run = {
-          schema_version: 'p2a.run.v1',
+          schema_version: 'p2a.run.v2',
           runId,
           projectId: caseData.project_id,
           taskId: task.id,
@@ -6708,9 +7187,11 @@ function validateIterationCurrentFixtureCases() {
           sourceLayout: 'iteration',
           taskGraphRef: milestoneTaskGraphRef,
           sourceSpecRef: milestoneTaskGraph.sourceSpec,
+          taskContractSha256: taskContractSha256(task),
           agentTool: 'codex',
           workspaceRef: 'milestone-handoff-fixture',
           workspacePath: '.',
+          workspaceRevisionSha256: hashText('milestone-handoff-fixture-revision'),
           isolation: {
             mode: 'none',
             branch: null,
@@ -6729,6 +7210,87 @@ function validateIterationCurrentFixtureCases() {
           verification,
           notes: ['Synthetic milestone handoff evidence.'],
         };
+        if (taskIndex === 0) {
+          run.runKind = 'final_visual_review';
+          run.visualReview = {
+            required: true,
+            experienceSpecRef: 'experience-spec.json',
+            experienceSpecSha256: milestoneVisualArtifacts.experienceSpecSha256,
+            prototypeManifestRef: 'visual-design/VD-1/prototype.json',
+            prototypeManifestSha256: milestoneVisualArtifacts.prototypeManifestSha256,
+            screenStates: [{ screenId: 'SCREEN-1', states: ['ready'] }],
+            viewports: [{ name: 'desktop', width: 240, height: 240 }],
+            accessibilityStandard: 'WCAG 2.2 AA',
+          };
+          const canonicalEvidenceDir = path.join(
+            milestoneHandoffArtifactRoot,
+            milestoneVisualCanonicalBase,
+          );
+          const aliasEvidenceDir = path.join(
+            milestoneHandoffArtifactRoot,
+            milestoneVisualAliasBase,
+          );
+          mkdirSync(canonicalEvidenceDir, { recursive: true });
+          symlinkSync(
+            path.relative(path.dirname(aliasEvidenceDir), canonicalEvidenceDir),
+            aliasEvidenceDir,
+            'dir',
+          );
+          const screenshotPath = path.join(canonicalEvidenceDir, 'screen-1-ready-desktop.png');
+          const accessibilityPath = path.join(canonicalEvidenceDir, 'accessibility.json');
+          writePng(screenshotPath, 240, 240);
+          mkdirSync(path.dirname(accessibilityPath), { recursive: true });
+          const accessibilityText = `${JSON.stringify({
+            schema_version: 'p2a.visual_accessibility_report.v1',
+            tool: 'axe-core',
+            standard: 'WCAG 2.2 AA',
+            scanned_at: milestoneRunFinishedAt,
+            page_urls: ['http://127.0.0.1:4173/reviews/1'],
+            violations: [],
+          }, null, 2)}\n`;
+          writeFileSync(accessibilityPath, accessibilityText, 'utf8');
+          const visualReview = {
+            schema_version: 'p2a.visual_review.v2',
+            run_id: runId,
+            iteration_id: run.iterationId,
+            workspace_ref: run.workspaceRef,
+            workspace_revision_sha256: run.workspaceRevisionSha256,
+            source_experience_ref: run.visualReview.experienceSpecRef,
+            source_prototype_ref: run.visualReview.prototypeManifestRef,
+            reviewed_at: milestoneRunFinishedAt,
+            results: [{
+              screen_id: 'SCREEN-1',
+              state: 'ready',
+              viewport: 'desktop',
+              artifact_ref: milestoneVisualScreenshotRef,
+              artifact_sha256: hashText(readFileSync(screenshotPath)),
+              media_type: 'image/png',
+              width: 240,
+              height: 240,
+              capture_url: 'http://127.0.0.1:4173/reviews/1',
+              captured_at: milestoneRunFinishedAt,
+              status: 'passed',
+              concerns: [],
+            }],
+            accessibility: {
+              status: 'passed',
+              report_ref: milestoneVisualAccessibilityRef,
+              report_sha256: hashText(accessibilityText),
+              standard: 'WCAG 2.2 AA',
+              critical_violations: 0,
+            },
+            verdict: 'confirm_ui',
+            concerns: [],
+            note: 'Synthetic visual review evidence for milestone handoff.',
+          };
+          const visualReviewText = `${JSON.stringify(visualReview, null, 2)}\n`;
+          run.visualReviewEvidenceSha256 = hashText(visualReviewText);
+          writeFileSync(
+            path.join(milestoneRunsDir, `${runId}.visual-review.json`),
+            visualReviewText,
+            'utf8',
+          );
+        }
         const runText = `${JSON.stringify(run, null, 2)}\n`;
         writeFileSync(path.join(milestoneRunsDir, `${runId}.json`), runText, 'utf8');
         milestoneRunIndexEntries.push({
@@ -6764,12 +7326,837 @@ function validateIterationCurrentFixtureCases() {
           })),
         });
       }
-      writeFileSync(path.join(milestoneRunsDir, 'run-index.json'), `${JSON.stringify({
+
+      const legacyGraphRunId = 'run-legacy-graph-portable';
+      const legacyGraphTask = milestoneTaskGraph.tasks.find((task) => !task.visualImpact);
+      const legacyGraphRun = {
+        schema_version: 'p2a.run.v2',
+        runId: legacyGraphRunId,
+        projectId: caseData.project_id,
+        taskId: legacyGraphTask.id,
+        taskTitle: legacyGraphTask.title,
+        iterationId: 'iter-002',
+        sourceLayout: 'graph',
+        taskGraphRef: milestoneTaskGraphPath,
+        sourceSpecRef: milestoneSpecPath,
+        taskContractSha256: taskContractSha256(legacyGraphTask),
+        agentTool: 'codex',
+        workspaceRef: 'legacy-graph-handoff-fixture',
+        workspacePath: '.',
+        isolation: {
+          mode: 'none',
+          branch: null,
+          worktree: null,
+          baseRef: null,
+          created: false,
+          createCommand: null,
+          createExitCode: null,
+          createOutputTail: null,
+        },
+        status: 'finished',
+        startedAt: milestoneRunStartedAt,
+        updatedAt: milestoneRunFinishedAt,
+        finishedAt: milestoneRunFinishedAt,
+        changedFiles: ['src/legacy-graph-portable.mjs'],
+        verification: [{
+          type: 'test',
+          command: 'node --test legacy-graph-portable',
+          status: 'passed',
+          exitCode: 0,
+          durationMs: 1,
+          startedAt: milestoneRunStartedAt,
+          finishedAt: milestoneRunFinishedAt,
+          stdoutTail: '',
+          stderrTail: '',
+          source: 'command',
+        }],
+        notes: ['Synthetic legacy graph-mode provenance with an absolute in-root task graph reference.'],
+      };
+      writeFileSync(
+        path.join(milestoneRunsDir, `${legacyGraphRunId}.json`),
+        `${JSON.stringify(legacyGraphRun, null, 2)}\n`,
+        'utf8',
+      );
+      milestoneRunIndexEntries.push({
+        runId: legacyGraphRunId,
+        taskId: legacyGraphTask.id,
+        iterationId: legacyGraphRun.iterationId,
+        status: 'finished',
+        agentTool: legacyGraphRun.agentTool,
+        workspaceRef: legacyGraphRun.workspaceRef,
+        taskGraphRef: legacyGraphRun.taskGraphRef,
+        runRef: `${legacyGraphRunId}.json`,
+        startedAt: milestoneRunStartedAt,
+        finishedAt: milestoneRunFinishedAt,
+      });
+      const legacyGraphTaskIndex = milestoneRunIndexTasks.find(
+        (task) => task.taskId === legacyGraphTask.id,
+      );
+      legacyGraphTaskIndex.runIds.push(legacyGraphRunId);
+      legacyGraphTaskIndex.latestRunId = legacyGraphRunId;
+
+      const unfinishedGraphPath = path.join(milestoneHandoffArtifactRoot, unfinishedGraphRef);
+      const unfinishedGraph = structuredClone(milestoneTaskGraph);
+      unfinishedGraph.sourceSpec = '../../iterations/iter-002/gate-b-spec/spec.json';
+      mkdirSync(path.dirname(unfinishedGraphPath), { recursive: true });
+      writeFileSync(unfinishedGraphPath, `${JSON.stringify(unfinishedGraph, null, 2)}\n`, 'utf8');
+      const unfinishedGraphRun = {
+        schema_version: 'p2a.run.v2',
+        runId: unfinishedGraphRunId,
+        projectId: caseData.project_id,
+        taskId: legacyGraphTask.id,
+        taskTitle: legacyGraphTask.title,
+        iterationId: 'iter-002',
+        sourceLayout: 'graph',
+        taskGraphRef: unfinishedGraphPath,
+        sourceSpecRef: unfinishedGraph.sourceSpec,
+        taskContractSha256: taskContractSha256(legacyGraphTask),
+        agentTool: 'codex',
+        workspaceRef: 'unfinished-graph-handoff-fixture',
+        workspacePath: milestoneHandoffArtifactRoot,
+        isolation: {
+          mode: 'none',
+          branch: null,
+          worktree: null,
+          baseRef: null,
+          created: false,
+          createCommand: null,
+          createExitCode: null,
+          createOutputTail: null,
+        },
+        status: 'started',
+        startedAt: milestoneRunStartedAt,
+        updatedAt: milestoneRunStartedAt,
+        finishedAt: null,
+        changedFiles: [],
+        verification: [{
+          type: 'test',
+          command: 'node --test unfinished-graph-portable',
+          status: 'passed',
+          exitCode: 0,
+          durationMs: 1,
+          startedAt: milestoneRunStartedAt,
+          finishedAt: milestoneRunFinishedAt,
+          stdoutTail: '',
+          stderrTail: '',
+          source: 'command',
+        }],
+        notes: ['Synthetic unfinished graph run whose source bundle must remain finishable after handoff.'],
+      };
+      writeFileSync(
+        path.join(milestoneRunsDir, `${unfinishedGraphRunId}.json`),
+        `${JSON.stringify(unfinishedGraphRun, null, 2)}\n`,
+        'utf8',
+      );
+      milestoneRunIndexEntries.push({
+        runId: unfinishedGraphRunId,
+        taskId: legacyGraphTask.id,
+        iterationId: unfinishedGraphRun.iterationId,
+        status: 'started',
+        agentTool: unfinishedGraphRun.agentTool,
+        workspaceRef: unfinishedGraphRun.workspaceRef,
+        taskGraphRef: unfinishedGraphRun.taskGraphRef,
+        runRef: `${unfinishedGraphRunId}.json`,
+        startedAt: milestoneRunStartedAt,
+        finishedAt: null,
+      });
+      legacyGraphTaskIndex.runIds.push(unfinishedGraphRunId);
+      legacyGraphTaskIndex.latestRunId = unfinishedGraphRunId;
+
+      symlinkSync(
+        path.basename(path.dirname(unfinishedGraphRef)),
+        path.join(milestoneHandoffArtifactRoot, relativeSymlinkGraphAliasRef),
+        'dir',
+      );
+      const relativeSymlinkGraphRun = {
+        ...legacyGraphRun,
+        runId: relativeSymlinkGraphRunId,
+        taskGraphRef: relativeSymlinkGraphRef,
+        sourceSpecRef: unfinishedGraph.sourceSpec,
+        workspaceRef: 'relative-symlink-graph-handoff-fixture',
+        workspacePath: milestoneHandoffArtifactRoot,
+        changedFiles: ['src/relative-symlink-graph-portable.mjs'],
+        verification: [{
+          type: 'test',
+          command: 'node --test relative-symlink-graph-portable',
+          status: 'passed',
+          exitCode: 0,
+          durationMs: 1,
+          startedAt: milestoneRunStartedAt,
+          finishedAt: milestoneRunFinishedAt,
+          stdoutTail: '',
+          stderrTail: '',
+          source: 'command',
+        }],
+        notes: ['Synthetic relative directory symlink task graph reference that must be canonicalized.'],
+      };
+      writeFileSync(
+        path.join(milestoneRunsDir, `${relativeSymlinkGraphRunId}.json`),
+        `${JSON.stringify(relativeSymlinkGraphRun, null, 2)}\n`,
+        'utf8',
+      );
+      milestoneRunIndexEntries.push({
+        runId: relativeSymlinkGraphRunId,
+        taskId: legacyGraphTask.id,
+        iterationId: relativeSymlinkGraphRun.iterationId,
+        status: 'finished',
+        agentTool: relativeSymlinkGraphRun.agentTool,
+        workspaceRef: relativeSymlinkGraphRun.workspaceRef,
+        taskGraphRef: relativeSymlinkGraphRun.taskGraphRef,
+        runRef: `${relativeSymlinkGraphRunId}.json`,
+        startedAt: milestoneRunStartedAt,
+        finishedAt: milestoneRunFinishedAt,
+      });
+      legacyGraphTaskIndex.runIds.push(relativeSymlinkGraphRunId);
+      legacyGraphTaskIndex.latestRunId = relativeSymlinkGraphRunId;
+
+      const internalAbsoluteSourceGraphPath = path.join(
+        milestoneHandoffArtifactRoot,
+        internalAbsoluteSourceGraphRef,
+      );
+      const internalAbsoluteSourceGraph = structuredClone(milestoneTaskGraph);
+      internalAbsoluteSourceGraph.sourceSpec = milestoneSpecPath;
+      mkdirSync(path.dirname(internalAbsoluteSourceGraphPath), { recursive: true });
+      writeFileSync(
+        internalAbsoluteSourceGraphPath,
+        `${JSON.stringify(internalAbsoluteSourceGraph, null, 2)}\n`,
+        'utf8',
+      );
+      const internalAbsoluteSourceRun = {
+        ...legacyGraphRun,
+        runId: internalAbsoluteSourceRunId,
+        taskGraphRef: internalAbsoluteSourceGraphPath,
+        sourceSpecRef: milestoneSpecPath,
+        workspaceRef: 'internal-absolute-source-handoff-fixture',
+        workspacePath: milestoneHandoffArtifactRoot,
+        changedFiles: ['src/internal-absolute-source-portable.mjs'],
+        verification: [{
+          type: 'test',
+          command: 'node --test internal-absolute-source-portable',
+          status: 'passed',
+          exitCode: 0,
+          durationMs: 1,
+          startedAt: milestoneRunStartedAt,
+          finishedAt: milestoneRunFinishedAt,
+          stdoutTail: '',
+          stderrTail: '',
+          source: 'command',
+        }],
+        notes: ['Synthetic internal absolute source spec references that must be rewritten after handoff.'],
+      };
+      writeFileSync(
+        path.join(milestoneRunsDir, `${internalAbsoluteSourceRunId}.json`),
+        `${JSON.stringify(internalAbsoluteSourceRun, null, 2)}\n`,
+        'utf8',
+      );
+      milestoneRunIndexEntries.push({
+        runId: internalAbsoluteSourceRunId,
+        taskId: legacyGraphTask.id,
+        iterationId: internalAbsoluteSourceRun.iterationId,
+        status: 'finished',
+        agentTool: internalAbsoluteSourceRun.agentTool,
+        workspaceRef: internalAbsoluteSourceRun.workspaceRef,
+        taskGraphRef: internalAbsoluteSourceRun.taskGraphRef,
+        runRef: `${internalAbsoluteSourceRunId}.json`,
+        startedAt: milestoneRunStartedAt,
+        finishedAt: milestoneRunFinishedAt,
+      });
+      legacyGraphTaskIndex.runIds.push(internalAbsoluteSourceRunId);
+      legacyGraphTaskIndex.latestRunId = internalAbsoluteSourceRunId;
+
+      const artifactRootAliasPath = path.join(milestoneHandoffArtifactRoot, artifactRootAliasRef);
+      symlinkSync('..', artifactRootAliasPath, 'dir');
+      const symlinkedSourceSpecPath = path.join(
+        artifactRootAliasPath,
+        milestoneSpecRef,
+      );
+      const symlinkedAbsoluteSourceGraphPath = path.join(
+        milestoneHandoffArtifactRoot,
+        symlinkedAbsoluteSourceGraphRef,
+      );
+      const symlinkedAbsoluteSourceGraph = structuredClone(milestoneTaskGraph);
+      const symlinkedSourceSpecRef = path.relative(
+        path.dirname(symlinkedAbsoluteSourceGraphPath),
+        symlinkedSourceSpecPath,
+      ).split(path.sep).join('/');
+      symlinkedAbsoluteSourceGraph.sourceSpec = symlinkedSourceSpecRef;
+      mkdirSync(path.dirname(symlinkedAbsoluteSourceGraphPath), { recursive: true });
+      writeFileSync(
+        symlinkedAbsoluteSourceGraphPath,
+        `${JSON.stringify(symlinkedAbsoluteSourceGraph, null, 2)}\n`,
+        'utf8',
+      );
+      const symlinkedAbsoluteSourceRun = {
+        ...legacyGraphRun,
+        runId: symlinkedAbsoluteSourceRunId,
+        taskGraphRef: symlinkedAbsoluteSourceGraphPath,
+        sourceSpecRef: symlinkedSourceSpecRef,
+        workspaceRef: 'symlinked-absolute-source-handoff-fixture',
+        workspacePath: milestoneHandoffArtifactRoot,
+        changedFiles: ['src/symlinked-absolute-source-portable.mjs'],
+        verification: [{
+          type: 'test',
+          command: 'node --test symlinked-absolute-source-portable',
+          status: 'passed',
+          exitCode: 0,
+          durationMs: 1,
+          startedAt: milestoneRunStartedAt,
+          finishedAt: milestoneRunFinishedAt,
+          stdoutTail: '',
+          stderrTail: '',
+          source: 'command',
+        }],
+        notes: ['Synthetic in-root symlink alias that must resolve to the copied canonical source spec.'],
+      };
+      writeFileSync(
+        path.join(milestoneRunsDir, `${symlinkedAbsoluteSourceRunId}.json`),
+        `${JSON.stringify(symlinkedAbsoluteSourceRun, null, 2)}\n`,
+        'utf8',
+      );
+      milestoneRunIndexEntries.push({
+        runId: symlinkedAbsoluteSourceRunId,
+        taskId: legacyGraphTask.id,
+        iterationId: symlinkedAbsoluteSourceRun.iterationId,
+        status: 'finished',
+        agentTool: symlinkedAbsoluteSourceRun.agentTool,
+        workspaceRef: symlinkedAbsoluteSourceRun.workspaceRef,
+        taskGraphRef: symlinkedAbsoluteSourceRun.taskGraphRef,
+        runRef: `${symlinkedAbsoluteSourceRunId}.json`,
+        startedAt: milestoneRunStartedAt,
+        finishedAt: milestoneRunFinishedAt,
+      });
+      legacyGraphTaskIndex.runIds.push(symlinkedAbsoluteSourceRunId);
+      legacyGraphTaskIndex.latestRunId = symlinkedAbsoluteSourceRunId;
+
+      const legacyV1UnfinishedRoot = path.join(
+        milestoneHandoffArtifactRoot,
+        legacyV1UnfinishedRootRef,
+      );
+      cpSync(historicalVisualRoot, legacyV1UnfinishedRoot, { recursive: true });
+      const legacyV1CandidateRoot = path.join(
+        legacyV1UnfinishedRoot,
+        'gate-b-spec',
+        'visual-design',
+      );
+      const legacyV1CandidatePath = path.join(legacyV1CandidateRoot, 'VD-1');
+      const legacyV1CandidateBackingPath = path.join(legacyV1CandidateRoot, 'VD-1-source');
+      renameSync(legacyV1CandidatePath, legacyV1CandidateBackingPath);
+      symlinkSync('VD-1-source', legacyV1CandidatePath, 'dir');
+      const legacyV1DependencyAliasRef = `${legacyV1UnfinishedRootRef}/dependency-alias`;
+      symlinkSync('.', path.join(milestoneHandoffArtifactRoot, legacyV1DependencyAliasRef), 'dir');
+      const legacyV1VisualAliasRef = `${legacyV1UnfinishedRootRef}/visual-alias`;
+      symlinkSync('gate-b-spec', path.join(milestoneHandoffArtifactRoot, legacyV1VisualAliasRef), 'dir');
+      const legacyV1UnfinishedIntakePath = path.join(
+        legacyV1UnfinishedRoot,
+        'gate-a-intake',
+        'intake.json',
+      );
+      const legacyV1UnfinishedIntake = JSON.parse(
+        readFileSync(legacyV1UnfinishedIntakePath, 'utf8'),
+      );
+      legacyV1UnfinishedIntake.baseline_context.spec_ref = (
+        `dependency-alias/${legacyV1UnfinishedIntake.baseline_context.spec_ref}`
+      );
+      for (const answer of legacyV1UnfinishedIntake.baseline_context.reused_answers ?? []) {
+        answer.source_intake = `dependency-alias/${answer.source_intake}`;
+      }
+      for (const disposition of (
+        legacyV1UnfinishedIntake.baseline_context.reused_question_dispositions ?? []
+      )) {
+        disposition.source_spec = `dependency-alias/${disposition.source_spec}`;
+      }
+      const legacyV1UnfinishedIntakeText = `${JSON.stringify(legacyV1UnfinishedIntake, null, 2)}\n`;
+      writeFileSync(legacyV1UnfinishedIntakePath, legacyV1UnfinishedIntakeText, 'utf8');
+      const legacyV1UnfinishedSpecPath = path.join(
+        legacyV1UnfinishedRoot,
+        'gate-b-spec',
+        'spec.json',
+      );
+      const legacyV1UnfinishedSpec = JSON.parse(
+        readFileSync(legacyV1UnfinishedSpecPath, 'utf8'),
+      );
+      legacyV1UnfinishedSpec.source_intake = legacyV1UnfinishedIntakePath;
+      legacyV1UnfinishedSpec.source_intake_sha256 = hashText(legacyV1UnfinishedIntakeText);
+      legacyV1UnfinishedSpec.approval_audit.approved_artifacts = [path.join(
+        milestoneHandoffArtifactRoot,
+        legacyV1VisualAliasRef,
+        'experience-spec.json',
+      )];
+      writeFileSync(
+        legacyV1UnfinishedSpecPath,
+        `${JSON.stringify(legacyV1UnfinishedSpec, null, 2)}\n`,
+        'utf8',
+      );
+      const legacyV1UnfinishedGraphPath = path.join(
+        milestoneHandoffArtifactRoot,
+        legacyV1UnfinishedGraphRef,
+      );
+      const legacyV1UnfinishedGraph = JSON.parse(
+        readFileSync(legacyV1UnfinishedGraphPath, 'utf8'),
+      );
+      const legacyV1UnfinishedTask = {
+        ...legacyGraphTask,
+        id: 'task-998',
+        title: 'Resume a legacy v1 run after handoff',
+        description: 'Keep the unique source closure needed when an unfinished v1 run upgrades on finish.',
+        dependencies: [],
+        acceptanceCriteria: ['The handed-off v1 run can upgrade and finish without its original artifact root.'],
+        targetArea: 'runtime',
+        workKind: 'non_ui',
+        suggestedAgentPrompt: 'Finish the handed-off legacy v1 run from its portable source closure.',
+      };
+      delete legacyV1UnfinishedTask.visualImpact;
+      legacyV1UnfinishedGraph.tasks.push(legacyV1UnfinishedTask);
+      writeFileSync(
+        legacyV1UnfinishedGraphPath,
+        `${JSON.stringify(legacyV1UnfinishedGraph, null, 2)}\n`,
+        'utf8',
+      );
+      const legacyV1UnfinishedRun = {
+        ...unfinishedGraphRun,
+        schema_version: 'p2a.run.v1',
+        runId: legacyV1UnfinishedRunId,
+        taskId: legacyV1UnfinishedTask.id,
+        taskTitle: legacyV1UnfinishedTask.title,
+        iterationId: 'iter-historical',
+        taskGraphRef: legacyV1UnfinishedGraphPath,
+        sourceSpecRef: legacyV1UnfinishedGraph.sourceSpec,
+        workspaceRef: 'legacy-v1-unfinished-handoff-fixture',
+        workspacePath: milestoneHandoffArtifactRoot,
+        verification: [{
+          type: 'test',
+          command: 'node --test legacy-v1-unfinished-portable',
+          status: 'passed',
+          exitCode: 0,
+          durationMs: 1,
+          startedAt: milestoneRunStartedAt,
+          finishedAt: milestoneRunFinishedAt,
+          stdoutTail: '',
+          stderrTail: '',
+          source: 'command',
+        }],
+        notes: ['Synthetic unfinished legacy v1 run with a unique source dependency closure.'],
+      };
+      delete legacyV1UnfinishedRun.taskContractSha256;
+      writeFileSync(
+        path.join(milestoneRunsDir, `${legacyV1UnfinishedRunId}.json`),
+        `${JSON.stringify(legacyV1UnfinishedRun, null, 2)}\n`,
+        'utf8',
+      );
+      milestoneRunIndexEntries.push({
+        runId: legacyV1UnfinishedRunId,
+        taskId: legacyV1UnfinishedTask.id,
+        iterationId: legacyV1UnfinishedRun.iterationId,
+        status: 'started',
+        agentTool: legacyV1UnfinishedRun.agentTool,
+        workspaceRef: legacyV1UnfinishedRun.workspaceRef,
+        taskGraphRef: legacyV1UnfinishedRun.taskGraphRef,
+        runRef: `${legacyV1UnfinishedRunId}.json`,
+        startedAt: milestoneRunStartedAt,
+        finishedAt: null,
+      });
+      milestoneRunIndexTasks.push({
+        taskId: legacyV1UnfinishedTask.id,
+        runIds: [legacyV1UnfinishedRunId],
+        latestRunId: legacyV1UnfinishedRunId,
+      });
+
+      const externalGraphPath = path.join(tempRoot, 'external-graph-source', 'task-graph.json');
+      mkdirSync(path.dirname(externalGraphPath), { recursive: true });
+      writeFileSync(externalGraphPath, `${JSON.stringify(milestoneTaskGraph, null, 2)}\n`, 'utf8');
+      const externalGraphRun = {
+        schema_version: 'p2a.run.v1',
+        runId: externalGraphRunId,
+        projectId: caseData.project_id,
+        taskId: legacyGraphTask.id,
+        taskTitle: legacyGraphTask.title,
+        iterationId: 'iter-002',
+        sourceLayout: 'graph',
+        taskGraphRef: externalGraphPath,
+        sourceSpecRef: milestoneTaskGraph.sourceSpec,
+        taskContractSha256: taskContractSha256(legacyGraphTask),
+        agentTool: 'codex',
+        workspaceRef: 'external-graph-handoff-fixture',
+        workspacePath: tempRoot,
+        isolation: {
+          mode: 'none',
+          branch: null,
+          worktree: null,
+          baseRef: null,
+          created: false,
+          createCommand: null,
+          createExitCode: null,
+          createOutputTail: null,
+        },
+        status: 'finished',
+        startedAt: milestoneRunStartedAt,
+        updatedAt: milestoneRunFinishedAt,
+        finishedAt: milestoneRunFinishedAt,
+        changedFiles: ['src/external-graph-history.mjs'],
+        verification: [{
+          type: 'test',
+          command: 'node --test external-graph-history',
+          status: 'passed',
+          exitCode: 0,
+          durationMs: 1,
+          startedAt: milestoneRunStartedAt,
+          finishedAt: milestoneRunFinishedAt,
+          stdoutTail: '',
+          stderrTail: '',
+          source: 'command',
+        }],
+        notes: ['Synthetic valid external graph history that must not block milestone handoff.'],
+      };
+      writeFileSync(
+        path.join(milestoneRunsDir, `${externalGraphRunId}.json`),
+        `${JSON.stringify(externalGraphRun, null, 2)}\n`,
+        'utf8',
+      );
+      milestoneRunIndexEntries.push({
+        runId: externalGraphRunId,
+        taskId: legacyGraphTask.id,
+        iterationId: externalGraphRun.iterationId,
+        status: 'finished',
+        agentTool: externalGraphRun.agentTool,
+        workspaceRef: externalGraphRun.workspaceRef,
+        taskGraphRef: externalGraphRun.taskGraphRef,
+        runRef: `${externalGraphRunId}.json`,
+        startedAt: milestoneRunStartedAt,
+        finishedAt: milestoneRunFinishedAt,
+      });
+      legacyGraphTaskIndex.runIds.push(externalGraphRunId);
+      legacyGraphTaskIndex.latestRunId = externalGraphRunId;
+
+      const externalSourceRun = {
+        ...legacyGraphRun,
+        runId: externalSourceRunId,
+        taskGraphRef: internalGraphExternalSpecPath,
+        sourceSpecRef: externalSourceSpecPath,
+        workspaceRef: 'external-source-handoff-fixture',
+        workspacePath: milestoneHandoffArtifactRoot,
+        changedFiles: ['src/external-source-history.mjs'],
+        verification: [{
+          type: 'test',
+          command: 'node --test external-source-history',
+          status: 'passed',
+          exitCode: 0,
+          durationMs: 1,
+          startedAt: milestoneRunStartedAt,
+          finishedAt: milestoneRunFinishedAt,
+          stdoutTail: '',
+          stderrTail: '',
+          source: 'command',
+        }],
+        notes: ['Synthetic internal graph with an external approved source spec.'],
+      };
+      writeFileSync(
+        path.join(milestoneRunsDir, `${externalSourceRunId}.json`),
+        `${JSON.stringify(externalSourceRun, null, 2)}\n`,
+        'utf8',
+      );
+      milestoneRunIndexEntries.push({
+        runId: externalSourceRunId,
+        taskId: legacyGraphTask.id,
+        iterationId: externalSourceRun.iterationId,
+        status: 'finished',
+        agentTool: externalSourceRun.agentTool,
+        workspaceRef: externalSourceRun.workspaceRef,
+        taskGraphRef: externalSourceRun.taskGraphRef,
+        runRef: `${externalSourceRunId}.json`,
+        startedAt: milestoneRunStartedAt,
+        finishedAt: milestoneRunFinishedAt,
+      });
+      legacyGraphTaskIndex.runIds.push(externalSourceRunId);
+      legacyGraphTaskIndex.latestRunId = externalSourceRunId;
+
+      const externalStartedVisualTask = milestoneTaskGraph.tasks.find(
+        (task) => task.visualImpact,
+      );
+      const externalStartedVisualRun = {
+        ...externalSourceRun,
+        runId: externalStartedVisualRunId,
+        taskId: externalStartedVisualTask.id,
+        taskTitle: externalStartedVisualTask.title,
+        taskContractSha256: taskContractSha256(externalStartedVisualTask),
+        runKind: 'final_visual_review',
+        visualReview: {
+          required: true,
+          experienceSpecRef: 'experience-spec.json',
+          experienceSpecSha256: milestoneVisualArtifacts.experienceSpecSha256,
+          prototypeManifestRef: 'visual-design/VD-1/prototype.json',
+          prototypeManifestSha256: milestoneVisualArtifacts.prototypeManifestSha256,
+          screenStates: [{ screenId: 'SCREEN-1', states: ['ready'] }],
+          viewports: [{ name: 'desktop', width: 240, height: 240 }],
+          accessibilityStandard: 'WCAG 2.2 AA',
+        },
+        workspaceRef: 'external-source-started-visual-handoff-fixture',
+        status: 'started',
+        updatedAt: milestoneRunStartedAt,
+        finishedAt: null,
+        changedFiles: [],
+        notes: ['Synthetic started visual run with an external source closure that must be omitted.'],
+      };
+      delete externalStartedVisualRun.workspaceRevisionSha256;
+      delete externalStartedVisualRun.visualReviewEvidenceSha256;
+      writeFileSync(
+        path.join(milestoneRunsDir, `${externalStartedVisualRunId}.json`),
+        `${JSON.stringify(externalStartedVisualRun, null, 2)}\n`,
+        'utf8',
+      );
+      milestoneRunIndexEntries.push({
+        runId: externalStartedVisualRunId,
+        taskId: externalStartedVisualTask.id,
+        iterationId: externalStartedVisualRun.iterationId,
+        status: 'started',
+        agentTool: externalStartedVisualRun.agentTool,
+        workspaceRef: externalStartedVisualRun.workspaceRef,
+        taskGraphRef: externalStartedVisualRun.taskGraphRef,
+        runRef: `${externalStartedVisualRunId}.json`,
+        startedAt: milestoneRunStartedAt,
+        finishedAt: null,
+      });
+      const externalStartedVisualTaskIndex = milestoneRunIndexTasks.find(
+        (task) => task.taskId === externalStartedVisualTask.id,
+      );
+      externalStartedVisualTaskIndex.runIds.push(externalStartedVisualRunId);
+      externalStartedVisualTaskIndex.latestRunId = externalStartedVisualRunId;
+
+      const milestoneMaintenanceTaskGraphPath = path.join(
+        milestoneHandoffArtifactRoot,
+        maintenanceTaskGraphRef,
+      );
+      const milestoneMaintenanceTaskGraph = JSON.parse(
+        readFileSync(milestoneMaintenanceTaskGraphPath, 'utf8'),
+      );
+      const portableMaintenanceTask = {
+        id: maintenanceTaskId,
+        title: 'Preserve portable maintenance provenance',
+        description: 'Keep maintenance run task and current-spec provenance in milestone handoff bundles.',
+        status: 'done',
+        dependencies: [],
+        acceptanceCriteria: ['The handed-off global run store validates maintenance run provenance.'],
+        targetArea: 'maintenance',
+        suggestedAgentPrompt: 'Validate maintenance run provenance after handoff.',
+        sourceSpecRefs: ['maintenance'],
+      };
+      milestoneMaintenanceTaskGraph.tasks.push(portableMaintenanceTask);
+      writeFileSync(
+        milestoneMaintenanceTaskGraphPath,
+        `${JSON.stringify(milestoneMaintenanceTaskGraph, null, 2)}\n`,
+        'utf8',
+      );
+      const maintenanceRun = {
+        schema_version: 'p2a.run.v2',
+        runId: maintenanceRunId,
+        projectId: caseData.project_id,
+        taskId: maintenanceTaskId,
+        taskTitle: portableMaintenanceTask.title,
+        iterationId: 'maintenance',
+        sourceLayout: 'maintenance',
+        taskGraphRef: maintenanceTaskGraphRef,
+        sourceSpecRef: milestoneMaintenanceTaskGraph.sourceSpec,
+        taskContractSha256: taskContractSha256(portableMaintenanceTask),
+        agentTool: 'codex',
+        workspaceRef: 'maintenance-handoff-fixture',
+        workspacePath: '.',
+        isolation: {
+          mode: 'none',
+          branch: null,
+          worktree: null,
+          baseRef: null,
+          created: false,
+          createCommand: null,
+          createExitCode: null,
+          createOutputTail: null,
+        },
+        status: 'finished',
+        startedAt: milestoneRunStartedAt,
+        updatedAt: milestoneRunFinishedAt,
+        finishedAt: milestoneRunFinishedAt,
+        changedFiles: ['scripts/maintenance-portable.mjs'],
+        verification: [{
+          type: 'test',
+          command: 'node --test maintenance-portable',
+          status: 'passed',
+          exitCode: 0,
+          durationMs: 1,
+          startedAt: milestoneRunStartedAt,
+          finishedAt: milestoneRunFinishedAt,
+          stdoutTail: '',
+          stderrTail: '',
+          source: 'command',
+        }],
+        notes: ['Synthetic maintenance provenance outside the milestone task graph.'],
+      };
+      writeFileSync(
+        path.join(milestoneRunsDir, `${maintenanceRunId}.json`),
+        `${JSON.stringify(maintenanceRun, null, 2)}\n`,
+        'utf8',
+      );
+      milestoneRunIndexEntries.push({
+        runId: maintenanceRunId,
+        taskId: maintenanceTaskId,
+        iterationId: 'maintenance',
+        status: 'finished',
+        agentTool: maintenanceRun.agentTool,
+        workspaceRef: maintenanceRun.workspaceRef,
+        taskGraphRef: maintenanceTaskGraphRef,
+        runRef: `${maintenanceRunId}.json`,
+        startedAt: milestoneRunStartedAt,
+        finishedAt: milestoneRunFinishedAt,
+      });
+      milestoneRunIndexTasks.push({
+        taskId: maintenanceTaskId,
+        runIds: [maintenanceRunId],
+        latestRunId: maintenanceRunId,
+      });
+
+      const historicalRunStartedAt = '2026-07-10T00:00:00.000Z';
+      const historicalRunFinishedAt = '2026-07-10T00:01:00.000Z';
+      const historicalScreenshotPath = path.join(
+        milestoneHandoffArtifactRoot,
+        historicalVisualScreenshotRef,
+      );
+      const historicalAccessibilityPath = path.join(
+        milestoneHandoffArtifactRoot,
+        historicalVisualAccessibilityRef,
+      );
+      writePng(historicalScreenshotPath, 240, 240);
+      mkdirSync(path.dirname(historicalAccessibilityPath), { recursive: true });
+      const historicalAccessibilityText = `${JSON.stringify({
+        schema_version: 'p2a.visual_accessibility_report.v1',
+        tool: 'axe-core',
+        standard: 'WCAG 2.2 AA',
+        scanned_at: historicalRunFinishedAt,
+        page_urls: ['http://127.0.0.1:4173/historical-review'],
+        violations: [],
+      }, null, 2)}\n`;
+      writeFileSync(historicalAccessibilityPath, historicalAccessibilityText, 'utf8');
+      const historicalRun = {
+        schema_version: 'p2a.run.v1',
+        runId: historicalVisualRunId,
+        projectId: caseData.project_id,
+        taskId: historicalVisualTaskId,
+        taskTitle: 'Preserve historical visual provenance',
+        iterationId: historicalVisualIterationId,
+        sourceLayout: 'iteration',
+        taskGraphRef: historicalTaskGraphRef,
+        sourceSpecRef: historicalSpecRef,
+        taskContractSha256: taskContractSha256(
+          JSON.parse(readFileSync(historicalTaskGraphPath, 'utf8')).tasks[0],
+        ),
+        agentTool: 'codex',
+        workspaceRef: 'historical-visual-handoff-fixture',
+        workspacePath: '.',
+        workspaceRevisionSha256: hashText('historical-visual-handoff-fixture-revision'),
+        isolation: {
+          mode: 'none',
+          branch: null,
+          worktree: null,
+          baseRef: null,
+          created: false,
+          createCommand: null,
+          createExitCode: null,
+          createOutputTail: null,
+        },
+        status: 'finished',
+        startedAt: historicalRunStartedAt,
+        updatedAt: historicalRunFinishedAt,
+        finishedAt: historicalRunFinishedAt,
+        changedFiles: [],
+        verification: [{
+          type: 'test',
+          command: 'node --test historical-visual',
+          status: 'passed',
+          exitCode: 0,
+          durationMs: 1,
+          startedAt: historicalRunStartedAt,
+          finishedAt: historicalRunFinishedAt,
+          stdoutTail: '',
+          stderrTail: '',
+          source: 'command',
+        }],
+        notes: ['Synthetic historical visual evidence with its own task graph provenance.'],
+        runKind: 'final_visual_review',
+        visualReview: {
+          required: true,
+          experienceSpecRef: 'experience-spec.json',
+          experienceSpecSha256: historicalVisualArtifacts.experienceSpecSha256,
+          prototypeManifestRef: 'visual-design/VD-1/prototype.json',
+          prototypeManifestSha256: historicalVisualArtifacts.prototypeManifestSha256,
+          screenStates: [{ screenId: 'SCREEN-1', states: ['ready'] }],
+          viewports: [{ name: 'desktop', width: 240, height: 240 }],
+          accessibilityStandard: 'WCAG 2.2 AA',
+        },
+      };
+      const historicalVisualReview = {
+        schema_version: 'p2a.visual_review.v1',
+        run_id: historicalVisualRunId,
+        task_id: historicalVisualTaskId,
+        workspace_ref: historicalRun.workspaceRef,
+        workspace_revision_sha256: historicalRun.workspaceRevisionSha256,
+        source_experience_ref: historicalRun.visualReview.experienceSpecRef,
+        source_prototype_ref: historicalRun.visualReview.prototypeManifestRef,
+        reviewed_at: historicalRunFinishedAt,
+        results: [{
+          screen_id: 'SCREEN-1',
+          state: 'ready',
+          viewport: 'desktop',
+          artifact_ref: historicalVisualScreenshotRef,
+          artifact_sha256: hashText(readFileSync(historicalScreenshotPath)),
+          media_type: 'image/png',
+          width: 240,
+          height: 240,
+          capture_url: 'http://127.0.0.1:4173/historical-review',
+          captured_at: historicalRunFinishedAt,
+          status: 'passed',
+          concerns: [],
+        }],
+        accessibility: {
+          status: 'passed',
+          report_ref: historicalVisualAccessibilityRef,
+          report_sha256: hashText(historicalAccessibilityText),
+          standard: 'WCAG 2.2 AA',
+          critical_violations: 0,
+        },
+        verdict: 'confirm_ui',
+        concerns: [],
+        note: 'Historical visual evidence remains valid after a later milestone handoff.',
+      };
+      const historicalVisualReviewText = `${JSON.stringify(historicalVisualReview, null, 2)}\n`;
+      historicalRun.visualReviewEvidenceSha256 = hashText(historicalVisualReviewText);
+      const historicalRunText = `${JSON.stringify(historicalRun, null, 2)}\n`;
+      writeFileSync(path.join(milestoneRunsDir, `${historicalVisualRunId}.json`), historicalRunText, 'utf8');
+      writeFileSync(
+        path.join(milestoneRunsDir, `${historicalVisualRunId}.visual-review.json`),
+        historicalVisualReviewText,
+        'utf8',
+      );
+      milestoneRunIndexEntries.push({
+        runId: historicalVisualRunId,
+        taskId: historicalVisualTaskId,
+        iterationId: historicalVisualIterationId,
+        status: 'finished',
+        agentTool: 'codex',
+        workspaceRef: historicalRun.workspaceRef,
+        taskGraphRef: historicalTaskGraphRef,
+        runRef: `${historicalVisualRunId}.json`,
+        startedAt: historicalRunStartedAt,
+        finishedAt: historicalRunFinishedAt,
+      });
+      milestoneRunIndexTasks.push({
+        taskId: historicalVisualTaskId,
+        runIds: [historicalVisualRunId],
+        latestRunId: historicalVisualRunId,
+      });
+      const milestoneRunIndexPath = path.join(milestoneRunsDir, 'run-index.json');
+      const milestoneRunIndexText = `${JSON.stringify({
         schema_version: 'p2a.run_index.v1',
         projectId: caseData.project_id,
         runs: milestoneRunIndexEntries,
         tasks: milestoneRunIndexTasks,
-      }, null, 2)}\n`, 'utf8');
+      }, null, 2)}\n`;
+      writeFileSync(milestoneRunIndexPath, milestoneRunIndexText, 'utf8');
 
       const sourceMilestoneReviewDir = path.join(milestoneHandoffArtifactRoot, 'iterations', 'iter-002', 'milestone-reviews');
       const sourcePreCloseReviewPath = path.join(sourceMilestoneReviewDir, 'pre_close.json');
@@ -6822,6 +8209,72 @@ function validateIterationCurrentFixtureCases() {
         return { status: failureStatus(result), checks };
       }
 
+      const startedVisualRun = {
+        ...historicalRun,
+        runId: startedVisualRunId,
+        workspaceRef: 'started-visual-handoff-rejected-fixture',
+        workspacePath: milestoneHandoffArtifactRoot,
+        status: 'started',
+        updatedAt: historicalRunStartedAt,
+        finishedAt: null,
+        changedFiles: [],
+      };
+      delete startedVisualRun.workspaceRevisionSha256;
+      delete startedVisualRun.visualReviewEvidenceSha256;
+      const startedVisualRunPath = path.join(milestoneRunsDir, `${startedVisualRunId}.json`);
+      writeFileSync(
+        startedVisualRunPath,
+        `${JSON.stringify(startedVisualRun, null, 2)}\n`,
+        'utf8',
+      );
+      const startedVisualRunIndex = JSON.parse(milestoneRunIndexText);
+      startedVisualRunIndex.runs.push({
+        runId: startedVisualRunId,
+        taskId: historicalVisualTaskId,
+        iterationId: historicalVisualIterationId,
+        status: 'started',
+        agentTool: startedVisualRun.agentTool,
+        workspaceRef: startedVisualRun.workspaceRef,
+        taskGraphRef: historicalTaskGraphRef,
+        runRef: `${startedVisualRunId}.json`,
+        startedAt: historicalRunStartedAt,
+        finishedAt: null,
+      });
+      const startedVisualTaskIndex = startedVisualRunIndex.tasks.find(
+        (task) => task.taskId === historicalVisualTaskId,
+      );
+      startedVisualTaskIndex.runIds.push(startedVisualRunId);
+      startedVisualTaskIndex.latestRunId = startedVisualRunId;
+      writeFileSync(
+        milestoneRunIndexPath,
+        `${JSON.stringify(startedVisualRunIndex, null, 2)}\n`,
+        'utf8',
+      );
+      result = runHandoff([
+        '--project-id',
+        caseData.project_id,
+        '--artifacts',
+        milestoneHandoffArtifactRoot,
+        '--target',
+        path.join(tempRoot, 'target-started-visual-rejected'),
+        '--run-transfer',
+        'resumable',
+        '--dry-run',
+      ]);
+      checks += 1;
+      if (
+        result.status === 0
+        || !`${result.stdout}\n${result.stderr}`.includes(
+          `handoff cannot port started visual run ${startedVisualRunId}`,
+        )
+      ) {
+        console.error(`iteration handoff started visual run rejection failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: 1, checks };
+      }
+      writeFileSync(milestoneRunIndexPath, milestoneRunIndexText, 'utf8');
+      rmSync(startedVisualRunPath, { force: true });
+
       const iterationDryRunTargetRoot = path.join(tempRoot, 'target-iteration-dry-run');
       result = runHandoff([
         '--project-id',
@@ -6838,10 +8291,13 @@ function validateIterationCurrentFixtureCases() {
       if (
         result.status !== 0
         || !result.stdout.includes('sourceIterationId: iter-002')
+        || !result.stdout.includes('runTransfer: completed')
         || !result.stdout.includes('copy+rewrite:')
         || !result.stdout.includes(`gate-b-spec/spec.json -> .plan2agent/artifacts/${caseData.project_id}/gate-b-spec/spec.json`)
         || !result.stdout.includes(`.plan2agent/artifacts/${caseData.project_id}/iterations/iter-002/milestone-reviews/pre_close.json`)
         || !result.stdout.includes(`.plan2agent/artifacts/${caseData.project_id}/runs/run-index.json`)
+        || result.stdout.includes(unfinishedGraphRunId)
+        || result.stdout.includes(legacyV1UnfinishedRunId)
         || result.stdout.includes('midpoint.fixture.draft.json')
       ) {
         console.error(`iteration handoff --iteration-id active dry-run fixture check failed: ${caseData.id}`);
@@ -6857,6 +8313,8 @@ function validateIterationCurrentFixtureCases() {
         milestoneHandoffArtifactRoot,
         '--target',
         iterationTargetRoot,
+        '--run-transfer',
+        'resumable',
         '--include-intake',
       ]);
       checks += 1;
@@ -6875,12 +8333,58 @@ function validateIterationCurrentFixtureCases() {
       const targetPreCloseReviewRelative = `.plan2agent/artifacts/${caseData.project_id}/iterations/iter-002/milestone-reviews/pre_close.json`;
       const targetPreCloseReviewPath = path.join(iterationTargetRoot, targetPreCloseReviewRelative);
       const targetMidpointDraftPath = path.join(iterationTargetArtifactRoot, 'iterations', 'iter-002', 'milestone-reviews', 'midpoint.fixture.draft.json');
+      const expectedComposedVisualFiles = composedVisualArtifactRefs.map(
+        (filePath) => `.plan2agent/artifacts/${caseData.project_id}/${filePath}`,
+      );
       const expectedMilestoneEvidenceFiles = [
         milestoneTaskGraphRef,
         milestoneSpecRef,
         'iterations/iter-002/gate-a-intake/intake.json',
         'runs/run-index.json',
-        ...milestoneRunIndexEntries.map((entry) => `runs/${entry.runId}.json`),
+        ...milestoneRunIndexEntries
+          .filter((entry) => ![
+            externalGraphRunId,
+            externalSourceRunId,
+            externalStartedVisualRunId,
+          ].includes(entry.runId))
+          .map((entry) => `runs/${entry.runId}.json`),
+        unfinishedGraphRef,
+        internalAbsoluteSourceGraphRef,
+        symlinkedAbsoluteSourceGraphRef,
+        legacyV1UnfinishedGraphRef,
+        `${legacyV1UnfinishedRootRef}/gate-b-spec/spec.json`,
+        `${legacyV1UnfinishedRootRef}/gate-b-spec/experience-spec.json`,
+        `${legacyV1UnfinishedRootRef}/gate-b-spec/visual-design/VD-1/prototype.json`,
+        `${legacyV1UnfinishedRootRef}/gate-b-spec/visual-design/VD-1/index.html`,
+        `${legacyV1UnfinishedRootRef}/gate-b-spec/visual-design/VD-2/prototype.json`,
+        `${legacyV1UnfinishedRootRef}/gate-b-spec/visual-design/VD-2/index.html`,
+        `${legacyV1UnfinishedRootRef}/gate-a-intake/intake.json`,
+        ...historicalBaselineDependencyRefs.map((reference) => reference.replace(
+          historicalVisualRootRef,
+          legacyV1UnfinishedRootRef,
+        )),
+        'iterations/iter-002/gate-b-spec/experience-spec.json',
+        'iterations/iter-002/gate-b-spec/visual-design/VD-1/prototype.json',
+        'iterations/iter-002/gate-b-spec/visual-design/VD-1/index.html',
+        'iterations/iter-002/gate-b-spec/visual-design/VD-2/prototype.json',
+        'iterations/iter-002/gate-b-spec/visual-design/VD-2/index.html',
+        milestoneVisualSidecarRef,
+        milestoneVisualScreenshotRef,
+        milestoneVisualAccessibilityRef,
+        maintenanceTaskGraphRef,
+        'current-spec.json',
+        historicalTaskGraphRef,
+        `${historicalVisualRootRef}/gate-b-spec/spec.json`,
+        `${historicalVisualRootRef}/gate-b-spec/experience-spec.json`,
+        `${historicalVisualRootRef}/gate-b-spec/visual-design/VD-1/prototype.json`,
+        `${historicalVisualRootRef}/gate-b-spec/visual-design/VD-1/index.html`,
+        `${historicalVisualRootRef}/gate-b-spec/visual-design/VD-2/prototype.json`,
+        `${historicalVisualRootRef}/gate-b-spec/visual-design/VD-2/index.html`,
+        `${historicalVisualRootRef}/gate-a-intake/intake.json`,
+        ...historicalBaselineDependencyRefs,
+        historicalVisualSidecarRef,
+        historicalVisualScreenshotRef,
+        historicalVisualAccessibilityRef,
       ].map((filePath) => `.plan2agent/artifacts/${caseData.project_id}/${filePath}`);
       const targetMaintenanceGraphPath = path.join(iterationTargetRoot, '.plan2agent', 'maintenance', 'task-graph.json');
       if (
@@ -6910,9 +8414,130 @@ function validateIterationCurrentFixtureCases() {
       const targetCurrentSpec = JSON.parse(readFileSync(targetCurrentSpecPath, 'utf8'));
       const sourceCurrentSpecAfterHandoff = JSON.parse(readFileSync(path.join(milestoneHandoffArtifactRoot, 'current-spec.json'), 'utf8'));
       const targetTaskGraph = JSON.parse(readFileSync(targetTaskGraphPath, 'utf8'));
+      const targetComposedVisualSpecPath = path.join(
+        iterationTargetArtifactRoot,
+        composedVisualSpecRef,
+      );
+      const targetComposedVisualSpec = JSON.parse(
+        readFileSync(targetComposedVisualSpecPath, 'utf8'),
+      );
+      const targetComposedClosedIteration = targetCurrentSpec.closed_iterations.find(
+        (closed) => closed.iteration_id === composedVisualIterationId,
+      );
+      const targetComposedSpecAudit = targetComposedClosedIteration?.artifact_hashes?.[
+        composedVisualSpecRef
+      ];
+      const targetLastClosedTaskGraphAudit = targetCurrentSpec.last_closed_iteration
+        ?.artifact_hashes?.[milestoneTaskGraphRef];
+      const targetMilestoneTaskGraph = JSON.parse(
+        readFileSync(path.join(iterationTargetArtifactRoot, milestoneTaskGraphRef), 'utf8'),
+      );
+      const targetMilestoneReview = JSON.parse(readFileSync(targetPreCloseReviewPath, 'utf8'));
       const targetSpec = JSON.parse(readFileSync(targetSpecPath, 'utf8'));
+      const targetRunIndex = JSON.parse(
+        readFileSync(path.join(iterationTargetArtifactRoot, 'runs', 'run-index.json'), 'utf8'),
+      );
+      const targetLegacyGraphRun = JSON.parse(
+        readFileSync(path.join(iterationTargetArtifactRoot, 'runs', `${legacyGraphRunId}.json`), 'utf8'),
+      );
+      const targetLegacyGraphIndexEntry = targetRunIndex.runs.find(
+        (entry) => entry.runId === legacyGraphRunId,
+      );
+      const targetUnfinishedGraphRun = JSON.parse(
+        readFileSync(path.join(iterationTargetArtifactRoot, 'runs', `${unfinishedGraphRunId}.json`), 'utf8'),
+      );
+      const targetUnfinishedGraphIndexEntry = targetRunIndex.runs.find(
+        (entry) => entry.runId === unfinishedGraphRunId,
+      );
+      const targetRelativeSymlinkGraphRun = JSON.parse(
+        readFileSync(
+          path.join(iterationTargetArtifactRoot, 'runs', `${relativeSymlinkGraphRunId}.json`),
+          'utf8',
+        ),
+      );
+      const targetRelativeSymlinkGraphIndexEntry = targetRunIndex.runs.find(
+        (entry) => entry.runId === relativeSymlinkGraphRunId,
+      );
+      const targetInternalAbsoluteSourceRun = JSON.parse(
+        readFileSync(
+          path.join(iterationTargetArtifactRoot, 'runs', `${internalAbsoluteSourceRunId}.json`),
+          'utf8',
+        ),
+      );
+      const targetInternalAbsoluteSourceIndexEntry = targetRunIndex.runs.find(
+        (entry) => entry.runId === internalAbsoluteSourceRunId,
+      );
+      const targetInternalAbsoluteSourceGraph = JSON.parse(
+        readFileSync(path.join(iterationTargetArtifactRoot, internalAbsoluteSourceGraphRef), 'utf8'),
+      );
+      const targetSymlinkedAbsoluteSourceRun = JSON.parse(
+        readFileSync(
+          path.join(iterationTargetArtifactRoot, 'runs', `${symlinkedAbsoluteSourceRunId}.json`),
+          'utf8',
+        ),
+      );
+      const targetSymlinkedAbsoluteSourceIndexEntry = targetRunIndex.runs.find(
+        (entry) => entry.runId === symlinkedAbsoluteSourceRunId,
+      );
+      const targetSymlinkedAbsoluteSourceGraph = JSON.parse(
+        readFileSync(path.join(iterationTargetArtifactRoot, symlinkedAbsoluteSourceGraphRef), 'utf8'),
+      );
+      const targetLegacyV1UnfinishedRun = JSON.parse(
+        readFileSync(
+          path.join(iterationTargetArtifactRoot, 'runs', `${legacyV1UnfinishedRunId}.json`),
+          'utf8',
+        ),
+      );
+      const targetLegacyV1UnfinishedIndexEntry = targetRunIndex.runs.find(
+        (entry) => entry.runId === legacyV1UnfinishedRunId,
+      );
+      const targetLegacyV1UnfinishedSpec = JSON.parse(readFileSync(
+        path.join(
+          iterationTargetArtifactRoot,
+          legacyV1UnfinishedRootRef,
+          'gate-b-spec',
+          'spec.json',
+        ),
+        'utf8',
+      ));
+      const targetLegacyV1UnfinishedIntakePath = path.join(
+        iterationTargetArtifactRoot,
+        legacyV1UnfinishedRootRef,
+        'gate-a-intake',
+        'intake.json',
+      );
+      const targetLegacyV1UnfinishedIntake = JSON.parse(
+        readFileSync(targetLegacyV1UnfinishedIntakePath, 'utf8'),
+      );
+      const targetExternalGraphRunPath = path.join(
+        iterationTargetArtifactRoot,
+        'runs',
+        `${externalGraphRunId}.json`,
+      );
+      const targetExternalSourceRunPath = path.join(
+        iterationTargetArtifactRoot,
+        'runs',
+        `${externalSourceRunId}.json`,
+      );
+      const targetExternalStartedVisualRunPath = path.join(
+        iterationTargetArtifactRoot,
+        'runs',
+        `${externalStartedVisualRunId}.json`,
+      );
       const expectedTargetSpecRef = `.plan2agent/artifacts/${caseData.project_id}/gate-b-spec/spec.json`;
       const expectedTargetIntakeRef = `.plan2agent/artifacts/${caseData.project_id}/gate-a-intake/intake.json`;
+      const expectedPortableAbsoluteSourceSpecRef = path.relative(
+        path.dirname(internalAbsoluteSourceGraphRef),
+        milestoneSpecRef,
+      ).split(path.sep).join('/');
+      const expectedPortableMilestoneSourceSpecRef = path.relative(
+        path.dirname(milestoneTaskGraphRef),
+        milestoneSpecRef,
+      ).split(path.sep).join('/');
+      const expectedPortableSymlinkedSourceSpecRef = path.relative(
+        path.dirname(symlinkedAbsoluteSourceGraphRef),
+        milestoneSpecRef,
+      ).split(path.sep).join('/');
       if (
         targetManifest.sourceLayout !== 'iteration'
         || targetManifest.sourceIterationId !== 'iter-002'
@@ -6947,17 +8572,91 @@ function validateIterationCurrentFixtureCases() {
         || !targetManifest.preflightResearchFiles?.includes(`.plan2agent/artifacts/${caseData.project_id}/preflight-research/next-iteration-recommendations.md`)
 	        || JSON.stringify(targetManifest.milestoneReviewFiles) !== JSON.stringify([targetPreCloseReviewRelative])
 	        || expectedMilestoneEvidenceFiles.some((filePath) => !targetManifest.milestoneEvidenceFiles?.includes(filePath))
-	        || targetManifest.milestoneEvidenceFiles?.length !== expectedMilestoneEvidenceFiles.length
 	        || !targetManifest.artifactFiles.includes(targetPreCloseReviewRelative)
 	        || expectedMilestoneEvidenceFiles.some((filePath) => !targetManifest.artifactFiles.includes(filePath))
+	        || expectedComposedVisualFiles.some((filePath) => !targetManifest.artifactFiles.includes(filePath))
+	        || expectedComposedVisualFiles.some((filePath) => !existsSync(path.join(iterationTargetRoot, filePath)))
 	        || targetCurrentSpec.last_handoff?.iteration_id !== 'iter-002'
+        || targetComposedVisualSpec.source_intake !== '../gate-a-intake/intake.json'
+        || (typeof targetComposedSpecAudit === 'string'
+          ? targetComposedSpecAudit
+          : targetComposedSpecAudit?.sha256) !== hashText(readFileSync(targetComposedVisualSpecPath))
+        || (typeof targetLastClosedTaskGraphAudit === 'string'
+          ? targetLastClosedTaskGraphAudit
+          : targetLastClosedTaskGraphAudit?.sha256) !== hashText(readFileSync(
+          path.join(iterationTargetArtifactRoot, milestoneTaskGraphRef),
+        ))
         || targetCurrentSpec.last_handoff?.maintenance_included !== true
         || sourceCurrentSpecAfterHandoff.last_handoff?.target_project !== iterationTargetRoot
         || targetTaskGraph.sourceSpec !== expectedTargetSpecRef
+        || targetMilestoneTaskGraph.sourceSpec !== expectedPortableMilestoneSourceSpecRef
+        || targetMilestoneReview.source.task_graph_snapshot.sourceSpec !== expectedPortableMilestoneSourceSpecRef
+        || targetMilestoneReview.source.completed_task_evidence.some((evidence) => (
+          evidence.run_snapshot.taskGraphRef !== milestoneTaskGraphRef
+          || evidence.run_snapshot.sourceSpecRef !== expectedPortableMilestoneSourceSpecRef
+        ))
         || targetSpec.source_intake !== expectedTargetIntakeRef
+        || targetLegacyGraphRun.taskGraphRef !== milestoneTaskGraphRef
+        || targetLegacyGraphRun.sourceSpecRef !== expectedPortableMilestoneSourceSpecRef
+        || targetLegacyGraphIndexEntry?.taskGraphRef !== milestoneTaskGraphRef
+        || targetUnfinishedGraphRun.taskGraphRef !== unfinishedGraphRef
+        || targetUnfinishedGraphIndexEntry?.taskGraphRef !== unfinishedGraphRef
+        || !existsSync(path.join(iterationTargetArtifactRoot, unfinishedGraphRef))
+        || targetRelativeSymlinkGraphRun.taskGraphRef !== unfinishedGraphRef
+        || targetRelativeSymlinkGraphIndexEntry?.taskGraphRef !== unfinishedGraphRef
+        || existsSync(path.join(iterationTargetArtifactRoot, relativeSymlinkGraphAliasRef))
+        || targetInternalAbsoluteSourceRun.taskGraphRef !== internalAbsoluteSourceGraphRef
+        || targetInternalAbsoluteSourceIndexEntry?.taskGraphRef !== internalAbsoluteSourceGraphRef
+        || targetInternalAbsoluteSourceRun.sourceSpecRef !== expectedPortableAbsoluteSourceSpecRef
+        || targetInternalAbsoluteSourceGraph.sourceSpec !== expectedPortableAbsoluteSourceSpecRef
+        || targetSymlinkedAbsoluteSourceRun.taskGraphRef !== symlinkedAbsoluteSourceGraphRef
+        || targetSymlinkedAbsoluteSourceIndexEntry?.taskGraphRef !== symlinkedAbsoluteSourceGraphRef
+        || targetSymlinkedAbsoluteSourceRun.sourceSpecRef !== expectedPortableSymlinkedSourceSpecRef
+        || targetSymlinkedAbsoluteSourceGraph.sourceSpec !== expectedPortableSymlinkedSourceSpecRef
+        || existsSync(path.join(iterationTargetArtifactRoot, artifactRootAliasRef))
+        || targetLegacyV1UnfinishedRun.schema_version !== 'p2a.run.v1'
+        || targetLegacyV1UnfinishedRun.taskContractSha256 !== undefined
+        || targetLegacyV1UnfinishedRun.taskGraphRef !== legacyV1UnfinishedGraphRef
+        || targetLegacyV1UnfinishedIndexEntry?.taskGraphRef !== legacyV1UnfinishedGraphRef
+        || targetLegacyV1UnfinishedSpec.source_intake !== '../gate-a-intake/intake.json'
+        || targetLegacyV1UnfinishedSpec.source_intake_sha256 !== hashText(
+          readFileSync(targetLegacyV1UnfinishedIntakePath),
+        )
+        || !targetLegacyV1UnfinishedSpec.approval_audit.approved_artifacts.includes(
+          'experience-spec.json',
+        )
+        || targetLegacyV1UnfinishedIntake.baseline_context.spec_ref.startsWith('dependency-alias/')
+        || targetLegacyV1UnfinishedIntake.baseline_context.reused_answers.some(
+          (answer) => answer.source_intake.startsWith('dependency-alias/'),
+        )
+        || targetLegacyV1UnfinishedIntake.baseline_context.reused_question_dispositions.some(
+          (disposition) => disposition.source_spec.startsWith('dependency-alias/'),
+        )
+        || existsSync(path.join(iterationTargetArtifactRoot, legacyV1DependencyAliasRef))
+        || existsSync(path.join(iterationTargetArtifactRoot, legacyV1VisualAliasRef))
+        || existsSync(path.join(
+          iterationTargetArtifactRoot,
+          legacyV1UnfinishedRootRef,
+          'gate-b-spec',
+          'visual-design',
+          'VD-1-source',
+        ))
+        || !existsSync(path.join(
+          iterationTargetArtifactRoot,
+          legacyV1UnfinishedRootRef,
+          'gate-b-spec',
+          'spec.json',
+        ))
+        || targetRunIndex.runs.some((entry) => entry.runId === externalGraphRunId)
+        || existsSync(targetExternalGraphRunPath)
+        || targetRunIndex.runs.some((entry) => entry.runId === externalSourceRunId)
+        || existsSync(targetExternalSourceRunPath)
+        || targetRunIndex.runs.some((entry) => entry.runId === externalStartedVisualRunId)
+        || existsSync(targetExternalStartedVisualRunPath)
+        || existsSync(path.join(iterationTargetArtifactRoot, internalGraphExternalSpecRef))
       ) {
         console.error(`iteration handoff manifest/task graph contract mismatch: ${caseData.id}`);
-        console.error(JSON.stringify({ targetManifest, targetCurrentSpec, sourceCurrentSpecAfterHandoff, targetTaskGraphSourceSpec: targetTaskGraph.sourceSpec, targetSpecSourceIntake: targetSpec.source_intake }, null, 2));
+        console.error(JSON.stringify({ targetManifest, targetCurrentSpec, sourceCurrentSpecAfterHandoff, targetTaskGraphSourceSpec: targetTaskGraph.sourceSpec, targetSpecSourceIntake: targetSpec.source_intake, targetLegacyGraphRunTaskGraphRef: targetLegacyGraphRun.taskGraphRef, targetLegacyGraphIndexTaskGraphRef: targetLegacyGraphIndexEntry?.taskGraphRef, targetUnfinishedGraphRunTaskGraphRef: targetUnfinishedGraphRun.taskGraphRef, targetUnfinishedGraphIndexTaskGraphRef: targetUnfinishedGraphIndexEntry?.taskGraphRef, targetInternalAbsoluteSourceRunTaskGraphRef: targetInternalAbsoluteSourceRun.taskGraphRef, targetInternalAbsoluteSourceRunSourceSpecRef: targetInternalAbsoluteSourceRun.sourceSpecRef, targetInternalAbsoluteSourceGraphSourceSpec: targetInternalAbsoluteSourceGraph.sourceSpec, targetLegacyV1UnfinishedRunTaskGraphRef: targetLegacyV1UnfinishedRun.taskGraphRef, targetLegacyV1UnfinishedIndexTaskGraphRef: targetLegacyV1UnfinishedIndexEntry?.taskGraphRef, targetExternalGraphRunPresent: targetRunIndex.runs.some((entry) => entry.runId === externalGraphRunId), targetExternalSourceRunPresent: targetRunIndex.runs.some((entry) => entry.runId === externalSourceRunId) }, null, 2));
         return { status: 1, checks };
       }
 
@@ -6965,10 +8664,109 @@ function validateIterationCurrentFixtureCases() {
       checks += 1;
       if (result.status !== 0) return { status: result.status, checks };
 
+      result = runTargetP2a(iterationTargetRoot, [
+        'validate',
+        '--spec',
+        path.join(iterationTargetArtifactRoot, composedVisualSpecRef),
+      ]);
+      checks += 1;
+      if (result.status !== 0) {
+        console.error(`iteration handoff composed visual source bundle validation failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: failureStatus(result), checks };
+      }
+
       result = runTargetP2a(iterationTargetRoot, ['validate', '--milestone-review', targetPreCloseReviewPath]);
       checks += 1;
       if (result.status !== 0) {
         console.error(`iteration handoff target milestone evidence bundle validation failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: failureStatus(result), checks };
+      }
+
+      result = runTargetP2a(iterationTargetRoot, ['validate', '--runs-dir', path.join(iterationTargetArtifactRoot, 'runs')]);
+      checks += 1;
+      if (result.status !== 0) {
+        console.error(`iteration handoff target visual run evidence validation failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: failureStatus(result), checks };
+      }
+
+      const portableArchiveAuditRoot = path.join(tempRoot, 'target-portable-archive-audit');
+      cpSync(iterationTargetArtifactRoot, portableArchiveAuditRoot, { recursive: true });
+      cpSync(
+        targetCurrentSpecPath,
+        path.join(portableArchiveAuditRoot, 'current-spec.json'),
+      );
+      result = runTargetIteration(iterationTargetRoot, [
+        'validate',
+        '--artifacts',
+        portableArchiveAuditRoot,
+        '--audit-archive',
+      ]);
+      checks += 1;
+      if (result.status !== 0) {
+        console.error(`iteration handoff target archived artifact audit failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: failureStatus(result), checks };
+      }
+
+      result = runTargetRuns(iterationTargetRoot, [
+        'finish',
+        '--runs',
+        path.join(iterationTargetArtifactRoot, 'runs'),
+        '--run-id',
+        unfinishedGraphRunId,
+        '--status',
+        'finished',
+        '--workspace',
+        iterationTargetRoot,
+      ]);
+      checks += 1;
+      if (result.status !== 0) {
+        console.error(`iteration handoff unfinished graph run could not finish from its copied source bundle: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: failureStatus(result), checks };
+      }
+
+      result = runTargetRuns(iterationTargetRoot, [
+        'finish',
+        '--runs',
+        path.join(iterationTargetArtifactRoot, 'runs'),
+        '--run-id',
+        legacyV1UnfinishedRunId,
+        '--status',
+        'finished',
+        '--workspace',
+        iterationTargetRoot,
+      ]);
+      checks += 1;
+      if (result.status !== 0) {
+        console.error(`iteration handoff legacy v1 run could not finish from its copied source closure: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: failureStatus(result), checks };
+      }
+      const finishedTargetLegacyV1Run = JSON.parse(
+        readFileSync(
+          path.join(iterationTargetArtifactRoot, 'runs', `${legacyV1UnfinishedRunId}.json`),
+          'utf8',
+        ),
+      );
+      checks += 1;
+      if (
+        finishedTargetLegacyV1Run.schema_version !== 'p2a.run.v2'
+        || finishedTargetLegacyV1Run.status !== 'finished'
+        || typeof finishedTargetLegacyV1Run.taskContractSha256 !== 'string'
+      ) {
+        console.error(`iteration handoff legacy v1 run did not upgrade on finish: ${caseData.id}`);
+        console.error(JSON.stringify(finishedTargetLegacyV1Run, null, 2));
+        return { status: 1, checks };
+      }
+
+      result = runTargetP2a(iterationTargetRoot, ['validate', '--runs-dir', path.join(iterationTargetArtifactRoot, 'runs')]);
+      checks += 1;
+      if (result.status !== 0) {
+        console.error(`iteration handoff finished graph runs did not validate after resume: ${caseData.id}`);
         writeResultOutput(result);
         return { status: failureStatus(result), checks };
       }

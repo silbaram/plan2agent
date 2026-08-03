@@ -21,6 +21,7 @@ Use this workflow to convert an early product idea into development-ready planni
 | 1. Discovery and intake | `p2a-intake` | `p2a-requirements` | raw idea, notes, and optional baseline context | interview-aware `intake_json` (`p2a.intake.v1`) |
 | 2. Product spec | `p2a-spec` | `p2a-spec-author` | intake plus answered decisions | `spec_json.product` (`p2a.spec.v1`) |
 | 3. Implementation plan | `p2a-spec` | `p2a-implementation-planner` | product spec draft plus Gate A constraints | `spec_json.implementation` (`p2a.spec.v1`) |
+| 3.5 Visual experience (conditional) | `p2a-visual-experience` | `p2a-visual-designer` | screen-bearing Gate B draft with `full + current_iteration` | approved `experience-spec.json` plus offline HTML prototype |
 | 4. Task graph | `p2a-task-breakdown` | `p2a-task-graph` | approved implementation spec | `task_graph_json` (`p2a.task_graph.v1`) |
 | 5. Review | `p2a-review` | `p2a-quality-reviewer` | spec and task graph | `review_json` (`p2a.review.v1`) |
 
@@ -29,7 +30,7 @@ If the CLI cannot spawn subagents automatically, run the matching skill locally 
 ## Approval Gates
 
 - **Gate A — Understanding confirmation:** Run the bounded discovery interview until its readiness/guard contract stops it. If any high-impact question or decision remains unresolved, or `interview.state` is not `gate_a_confirmed`, stop at Gate A. Present a compact understanding summary and require explicit confirmation recorded in `intake_json.approval_audit`. Do not produce Gate B before confirmation.
-- **Gate B — Spec approval:** If any intake `CQ-n` is not disposed in `spec_json.clarifying_question_disposition`, `spec_json.approval` is not `approved`, `spec_json.approval_audit` is missing, or `spec_json.open_decisions` is non-empty, stop before task graph generation. When Gate B selects or recommends libraries, frameworks, runtimes, protocols, packages, databases, cloud services, external APIs, or external services, apply the `p2a-spec` Technology Reconnaissance rules before approval and record material sources in `spec_json.evidence`. Missing Technology Reconnaissance evidence for a material Gate B technology choice is a blocking Gate B issue. When Gate B is approved, record the Gate B approval audit in `spec_json.approval_audit`.
+- **Gate B — Spec approval:** If any intake `CQ-n` is not disposed in `spec_json.clarifying_question_disposition`, `spec_json.approval` is not `approved`, `spec_json.approval_audit` is missing, or `spec_json.open_decisions` is non-empty, stop before task graph generation. When Gate B selects or recommends libraries, frameworks, runtimes, protocols, packages, databases, cloud services, external APIs, or external services, apply the `p2a-spec` Technology Reconnaissance rules before approval and record material sources in `spec_json.evidence`. Missing Technology Reconnaissance evidence for a material Gate B technology choice is a blocking Gate B issue. Classify every newly authored spec with `visual_experience`. For `full + current_iteration`, run `p2a-visual-experience`; Gate B remains draft until the user selects and explicitly approves a hash-bound offline HTML prototype and `experience-spec.json`. Include that experience artifact in the Gate B approval audit. When Gate B is approved, record the Gate B approval audit in `spec_json.approval_audit`.
 - **Gate C — Task graph validation:** Before final output, check that every dependency references a task id in the same graph, the graph is acyclic, and every task has acceptance criteria. Repository validation also requires each task to carry source spec references. Inspect `context.planning_memory` before decomposition. When retrieved history changes a task boundary, dependency, acceptance criterion, or failure mitigation, add a `memory:<report path or source reference>` ref and any applicable `decision:ND-n` ref alongside at least one real effective-spec field.
 - **Gate D — Review blockers:** The canonical Gate D artifact is `review_json` persisted as `gate-d-review/review.json`; `review_report` / `review-report.md` is an optional Markdown rendering of the same findings. Gate D passes only when `review.json.blocking_issues` is `[]`. Validate claimed Memory report/citation integrity and confirm that tasks address any material prior failure carried into Gate C. Memory being disabled, unavailable, or irrelevant is not itself a blocker; an invalid claim of use or an ignored material failure is. If review finds blocking issues, return the blockers and the artifact section that must be revised instead of claiming the plan is ready.
 
@@ -155,11 +156,13 @@ In addition to the inline state sections, the harness orchestrator writes canoni
 
 - `gate-a-intake/intake.json` — the `intake_json` artifact
 - `gate-b-spec/spec.json` — the `spec_json` artifact
+- `gate-b-spec/experience-spec.json` — conditional canonical visual contract for `full + current_iteration`
+- `gate-b-spec/visual-design/VD-<n>/` — conditional hash-bound passive offline HTML/CSS prototype candidates and manifests
 - `gate-c-task-graph/task-graph.json` — the `task_graph_json` artifact
 - `gate-d-review/review.json` — the `review_json` artifact
 - `preflight-research/` — optional copied Feature Radar artifacts. Treat these as read-only input evidence, not gate state.
 
-Optional/generated Markdown views may be written beside the JSON files when needed for export, sharing, or a UI preview: `status.md`, `gate-a-intake/intake.md`, `gate-b-spec/product-spec.md`, `gate-b-spec/implementation-plan.md`, and `gate-d-review/review-report.md`. These Markdown files are never the source of truth; regenerate them from JSON rather than preserving independent edits. Only the harness orchestrator writes files; subagents stay read-only and return structured content for the orchestrator to persist. During an active, paused, or blocked Gate A interview, silently update `intake.json` after each round and do not generate `intake.md` unless the user explicitly requests an export. Surface the named `intake_json` section with the Gate A summary, not before.
+Optional/generated Markdown views may be written beside the JSON files when needed for export, sharing, or a UI preview: `status.md`, `gate-a-intake/intake.md`, `gate-b-spec/product-spec.md`, `gate-b-spec/implementation-plan.md`, and `gate-d-review/review-report.md`. These Markdown files are never the source of truth; regenerate them from JSON rather than preserving independent edits. The conditional visual track may additionally write only its declared offline prototype files under `gate-b-spec/visual-design/`; their manifests and approval state remain canonical JSON. Only the harness orchestrator writes files; subagents stay read-only and return structured content for the orchestrator to persist. During an active, paused, or blocked Gate A interview, silently update `intake.json` after each round and do not generate `intake.md` unless the user explicitly requests an export. Surface the named `intake_json` section with the Gate A summary, not before.
 
 ### Generated `status.md` View
 
@@ -216,7 +219,7 @@ Do not retype gate status facts from memory. Pull gate status, task counts, `rea
 
 ## Rules
 
-- You MAY create or update Plan2Agent planning artifacts (`.md` / `.json`) under `.plan2agent/artifacts/<project_id>/`.
+- You MAY create or update Plan2Agent planning artifacts (`.md` / `.json`) under `.plan2agent/artifacts/<project_id>/`. When `p2a-visual-experience` is active, you MAY also create only its manifest-listed passive offline HTML/CSS/image/font assets under `gate-b-spec/visual-design/`.
 - Do NOT edit application or source code, install dependencies, run shell commands for implementation, or perform git operations.
 - Subagents remain strictly read-only; only the harness orchestrator persists artifact files.
 - Treat JSON as canonical. Markdown files are generated views/exports and must not be used as independent state.

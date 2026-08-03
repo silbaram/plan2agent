@@ -40,6 +40,8 @@ Return `review_json` (schema `p2a.review.v1`). An optional `review_report` Markd
 - Every task dependency references an existing task id.
 - The task graph has no cycles.
 - Every task has concrete acceptance criteria and source spec references.
+- Every newly authored spec classifies its visual-interface scope and timing. For `full + current_iteration`, the approved spec references an approved visual experience, selected hash-valid offline HTML prototype, and matching approval audits.
+- Every task under `full + current_iteration` has an explicit `workKind`; every `ui` or `mixed` task carries lightweight `visualImpact.screenStates`, `non_ui` tasks do not, and tasks do not duplicate Gate B hashes, viewports, accessibility rules, or exclusive final-review ownership.
 - Tasks that add dependencies have acceptance criteria that are self-satisfiable from that task's scope, especially when auto-configuration side effects could break builds or context loading unless handled in the same task.
 - The plan does not silently implement assumptions that were previously marked `needs_user_decision`.
 - Approved specs that choose or recommend a library, framework, runtime, protocol, package, database, cloud service, external API, or other material dependency include Gate B Technology Reconnaissance: primary/current source comparison, a nearby rationale/citation, and at least one relevant `WEB-n` evidence item.

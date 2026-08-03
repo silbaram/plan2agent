@@ -20,6 +20,7 @@ import {
   validateRunsDir,
   ValidationError,
 } from '../scripts/validate_artifacts.mjs';
+import { taskContractSha256 } from '../scripts/p2a_run_paths.mjs';
 import { ROOT, runRuns } from './helpers/fixtures.mjs';
 
 const PROJECT_ID = 'webhook-api-service';
@@ -212,6 +213,9 @@ function fullRun(evidence, overrides = {}) {
     sourceLayout: 'iteration',
     taskGraphRef: overrides.taskGraphRef ?? TASK_GRAPH_REF,
     sourceSpecRef: '../gate-b-spec/spec.json',
+    taskContractSha256: overrides.taskContractSha256
+      ?? sourceRun.taskContractSha256
+      ?? taskContractSha256(task(index, 'done')),
     agentTool: 'codex',
     workspaceRef: overrides.workspaceRef ?? evidence.workspace_ref ?? sourceRun.workspaceRef ?? `fixture-workspace-${index}`,
     workspacePath: `/tmp/fixture-workspace-${index}`,
@@ -503,6 +507,57 @@ describe('milestone review artifact contract', () => {
       );
     } finally {
       rmSync(bundle.artifactRoot, { recursive: true, force: true });
+    }
+  });
+
+  test('rejects canonical validation when sealed run provenance drifts', () => {
+    const visualReview = {
+      required: true,
+      experienceSpecRef: 'experience-spec.json',
+      experienceSpecSha256: '1'.repeat(64),
+      prototypeManifestRef: 'visual-design/VD-1/prototype.json',
+      prototypeManifestSha256: '2'.repeat(64),
+      screenStates: [{ screenId: 'SCREEN-1', states: ['ready'] }],
+      viewports: [{ name: 'desktop', width: 1440, height: 900 }],
+      accessibilityStandard: 'WCAG 2.2 AA',
+    };
+    const cases = [
+      [
+        'runKind',
+        (data) => {
+          const snapshot = data.source.completed_task_evidence[0].run_snapshot;
+          snapshot.runKind = 'final_visual_review';
+          snapshot.visualReview = visualReview;
+          snapshot.changedFiles = [];
+          data.source.completed_task_evidence[0].run_snapshot_sha256 = milestoneRunSnapshotSha256(snapshot);
+        },
+        (run) => { delete run.runKind; },
+        /missing required keys: runKind/,
+      ],
+      ['taskContractSha256', null, (run) => { run.taskContractSha256 = '0'.repeat(64); }],
+      ['workspaceRevisionSha256', null, (run) => { run.workspaceRevisionSha256 = '3'.repeat(64); }],
+      ['visualReviewEvidenceSha256', null, (run) => { run.visualReviewEvidenceSha256 = '4'.repeat(64); }],
+    ];
+    for (const [field, prepare, mutate, expected] of cases) {
+      const data = midpointReview();
+      prepare?.(data);
+      const bundle = writeBundle(data, 'midpoint.json');
+      try {
+        const changedRun = bundle.runs[0];
+        mutate(changedRun);
+        writeFileSync(
+          path.join(bundle.runsDir, `${changedRun.runId}.json`),
+          `${JSON.stringify(changedRun, null, 2)}\n`,
+          'utf8',
+        );
+        assert.throws(
+          () => validateMilestoneReview(bundle.reviewPath),
+          expected ?? new RegExp(`run ${field} must match run_snapshot immutable context`),
+          field,
+        );
+      } finally {
+        rmSync(bundle.artifactRoot, { recursive: true, force: true });
+      }
     }
   });
 
