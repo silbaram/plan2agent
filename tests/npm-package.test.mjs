@@ -68,7 +68,7 @@ test('checkout init preserves the legacy co-located runtime', () => {
 
     const next = runEmbedded(targetRoot, ['next', '--json']);
     assert.equal(next.status, 0, formatCommandResult(next));
-    assert.equal(JSON.parse(next.stdout).state, 'initialized_without_artifacts');
+    assert.equal(JSON.parse(next.stdout).state, 'entry_missing');
 
     const doctor = runEmbedded(targetRoot, ['doctor', '--json']);
     assert.equal(doctor.status, 0, formatCommandResult(doctor));
@@ -124,7 +124,7 @@ test('checkout init preserves the legacy co-located runtime', () => {
 
     const nestedNext = runEmbedded(nestedRoot, ['next', '--json']);
     assert.equal(nestedNext.status, 0, formatCommandResult(nestedNext));
-    assert.equal(JSON.parse(nestedNext.stdout).state, 'initialized_without_artifacts');
+    assert.equal(JSON.parse(nestedNext.stdout).state, 'entry_missing');
 
     const embeddedArtifactRoot = path.join(
       targetRoot,

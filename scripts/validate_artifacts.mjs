@@ -28,6 +28,7 @@ import {
   composeCanonicalSpecSources,
   isComposedBaselineReference,
 } from './p2a_spec_model.mjs';
+import { inspectEntryDocument } from './p2a_radar_preflight.mjs';
 
 const P2A_PATHS = resolveP2aPaths(import.meta.url);
 const SCHEMA_PATHS = {
@@ -4840,12 +4841,27 @@ export function validateFixtureDir(fixturePath) {
   if (existsSync(reportPath)) assertFile(reportPath, 'review-report.md');
 }
 
+export function validateEntryDocument(entryPath) {
+  const entry = inspectEntryDocument(entryPath);
+  if (!entry.valid) {
+    throw new ValidationError(entry.errors.join('; '));
+  }
+  console.log(`Plan2Agent entry validation passed: ${entry.path}`);
+  console.log('- document: present and non-empty Markdown/text');
+  console.log('- scope: what will be built is described');
+  console.log(`- limits: ${entry.webSourceCount} web source(s), ${entry.recommendationCount} recommendation(s)`);
+  console.log(`- provenance: ${entry.sourceKind === 'feature_radar_preflight' ? 'Feature Radar handoff confirmed' : 'user document'}`);
+  for (const warning of entry.warnings) console.warn(`warning: ${warning}`);
+  return entry;
+}
+
 function usage() {
   return [
     'Usage:',
     '  p2a validate [artifact options]',
     '',
     'Options:',
+    '  --entry <path>                     Validate a Markdown/text entry document.',
     '  --artifact-root <dir>               Validate a Gate A-D artifact root.',
     '  --project-id <id>                   Expected project id for --artifact-root.',
     '  --intake <path> [--intake-md <path>]',
@@ -4877,6 +4893,10 @@ function parseArgs(argv) {
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === '--help' || arg === '-h') args.help = true;
+    else if (arg === '--entry') {
+      args.entry = argv[++index];
+      if (!args.entry) throw new ValidationError('--entry requires a document path');
+    }
     else if (arg === '--intake') args.intake = argv[++index];
     else if (arg === '--intake-md') args.intakeMd = argv[++index];
     else if (arg === '--status') args.status = argv[++index];
@@ -4919,6 +4939,7 @@ export function main(argv = process.argv.slice(2)) {
       console.log(usage());
       return 0;
     }
+    if (args.entry) validateEntryDocument(args.entry);
     if (args.status) validateStatusDoc(args.status);
     if (args.artifactRoot) {
       validateArtifactRoot(args.artifactRoot, {

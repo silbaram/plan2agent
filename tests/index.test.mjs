@@ -19,5 +19,6 @@ import './milestone-promotion.test.mjs';
 import './validate-artifacts-compatibility.test.mjs';
 import './visual-experience.test.mjs';
 import './next-decision.test.mjs';
+import './entry-contract.test.mjs';
 import './discovery-interview.test.mjs';
 import './npm-package.test.mjs';

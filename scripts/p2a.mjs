@@ -15,6 +15,10 @@ import { resolveIterationState } from './p2a_iteration_state.mjs';
 import { compareRunEvidence, taskGraphRefMatchesGraph } from './p2a_run_paths.mjs';
 import { assertFinalVisualReviewRunReady } from './p2a_visual_review_gate.mjs';
 import {
+  discoverEntryDocument,
+  discoverFeatureRadarPreflightRuns,
+} from './p2a_radar_preflight.mjs';
+import {
   validateIntake,
   validateReview,
   validateRunsDir,
@@ -52,7 +56,7 @@ function usage() {
   return [
     'Usage:',
     '  p2a init [--target <dir>] [--tools <list>] [--codex-profile quality|inherit]',
-    '  p2a next [--target <dir>] [--project-id <id>] [--json]',
+    '  p2a next [--target <dir>] [--project-id <id>] [--entry <path>] [--json]',
     '  p2a info [--target <dir>] [--json]',
     '  p2a doctor [--target <dir>] [--dev] [--json] [--strict]',
     '  p2a update [--target <dir>] [--dry-run|--apply]',
@@ -241,6 +245,8 @@ function looksLikeArtifactRoot(candidate) {
       isFile(path.join(candidate, 'current-spec.json'))
       || isDirectory(path.join(candidate, 'iterations'))
       || GATE_FILES.some(([, , relativePath]) => isFile(path.join(candidate, relativePath)))
+      || discoverFeatureRadarPreflightRuns(candidate, { includeNative: false })
+        .some((run) => run.source_kind === 'p2a-preflight')
     );
 }
 
@@ -449,6 +455,10 @@ function inspectArtifact(targetRoot, artifactRoot, isScaffoldProject) {
   }
   const activeIteration = iterationState?.activeIteration ?? null;
   const projectId = stringValue(currentSpec?.project_id) ?? path.basename(artifactRoot);
+  const entry = discoverEntryDocument(artifactRoot, {
+    projectId,
+    repeatedDevelopment: layout.kind === 'iteration',
+  });
   const searchRoots = artifactSearchRoots(artifactRoot, activeIteration);
   const intakePath = firstGateFile(searchRoots, 'gate-a-intake', 'intake.json');
   const specPath = firstGateFile(searchRoots, 'gate-b-spec', 'spec.json');
@@ -580,6 +590,7 @@ function inspectArtifact(targetRoot, artifactRoot, isScaffoldProject) {
     currentSpecReadable: Boolean(currentSpec),
     currentSpecValid,
     currentSpecValidationError,
+    entry,
     gates: {
       intakePath,
       intake,
@@ -611,6 +622,7 @@ function summarizeArtifact(targetRoot, inspected) {
     artifactRoot: relativeToTarget(targetRoot, inspected.artifactRoot),
     layout: inspected.layout,
     activeIteration: inspected.activeIteration,
+    entry: summarizeEntry(targetRoot, inspected.entry),
     taskGraphPath: gates.taskGraphPath ? relativeToTarget(targetRoot, gates.taskGraphPath) : null,
     taskCounts: countTasks(gates.taskGraph),
     readyTaskIds: readyTasks,
@@ -619,6 +631,25 @@ function summarizeArtifact(targetRoot, inspected) {
       blockingIssues: stringArrayValue(gates.review?.blocking_issues).length,
     },
     runs: inspected.runs.summary,
+  };
+}
+
+function summarizeEntry(targetRoot, entry) {
+  if (!entry) return null;
+  return {
+    path: relativeToTarget(targetRoot, entry.path),
+    sourceKind: entry.sourceKind,
+    selection: entry.selection,
+    sequence: entry.sequence,
+    manifestPath: entry.manifestPath
+      ? relativeToTarget(targetRoot, entry.manifestPath)
+      : null,
+    sourceComplete: entry.sourceComplete,
+    valid: entry.valid,
+    errors: entry.errors,
+    warnings: entry.warnings,
+    webSourceCount: entry.webSourceCount,
+    recommendationCount: entry.recommendationCount,
   };
 }
 
@@ -792,6 +823,7 @@ function parseNextArgs(argv) {
   const args = {
     target: P2A_PATHS.projectRoot,
     projectId: null,
+    entry: null,
     json: false,
     help: false,
   };
@@ -807,6 +839,9 @@ function parseNextArgs(argv) {
     } else if (arg === '--project-id') {
       args.projectId = argv[++index];
       if (!args.projectId) throw new Error('--project-id requires a project id');
+    } else if (arg === '--entry') {
+      args.entry = argv[++index];
+      if (!args.entry) throw new Error('--entry requires a document path');
     } else {
       throw new Error(`unknown next option: ${arg}`);
     }
@@ -1181,9 +1216,25 @@ function selectNextArtifact(info, targetRoot, requestedProjectId, inspectedArtif
   };
 }
 
-function buildNextDecisionContext(info, targetRoot, requestedProjectId, inspectedArtifacts, reviewPasses) {
+function buildNextDecisionContext(
+  info,
+  targetRoot,
+  requestedProjectId,
+  inspectedArtifacts,
+  reviewPasses,
+  explicitEntry,
+) {
   const hasHarness = isDirectory(path.join(targetRoot, '.plan2agent'));
-  const context = { info, targetRoot, hasHarness, reviewPasses };
+  const context = {
+    info,
+    targetRoot,
+    hasHarness,
+    reviewPasses,
+    entry: explicitEntry,
+    entryArg: explicitEntry ? commandProjectPath(targetRoot, explicitEntry.path) : null,
+    projectId: requestedProjectId,
+    hasCanonicalPlanningState: false,
+  };
   if (!hasHarness || !info.artifacts.length) return context;
 
   const selected = selectNextArtifact(info, targetRoot, requestedProjectId, inspectedArtifacts);
@@ -1193,6 +1244,15 @@ function buildNextDecisionContext(info, targetRoot, requestedProjectId, inspecte
   const detail = inspectionForArtifact(targetRoot, selected.artifact, inspectedArtifacts);
   if (!detail) throw new Error(`artifact inspection is unavailable: ${artifactRoot}`);
   const { gates } = detail;
+  const entry = explicitEntry ?? detail.entry;
+  const hasCanonicalPlanningState = Boolean(
+    detail.layout.hasCurrentSpec
+    || detail.layout.hasIterations
+    || gates.intakePath
+    || gates.specPath
+    || gates.taskGraphPath
+    || gates.reviewPath
+  );
   const iterationScopedRuns = runsForActiveIteration(detail.runs.records, detail.activeIteration);
   const activeRuns = detail.layout.kind === 'iteration'
     ? iterationScopedRuns.filter((run) => (
@@ -1254,6 +1314,9 @@ function buildNextDecisionContext(info, targetRoot, requestedProjectId, inspecte
     artifactRoot,
     artifactArg: commandArtifact(targetRoot, artifactRoot),
     projectId: detail.projectId,
+    entry,
+    entryArg: entry ? commandProjectPath(targetRoot, entry.path) : null,
+    hasCanonicalPlanningState,
     detail,
     gates,
     gateAExists: Boolean(gates.intakePath),
@@ -1301,11 +1364,30 @@ export const NEXT_DECISION_RULES = [
     command: (context) => ['init', '--target', commandTarget(context.targetRoot)],
   },
   {
-    state: 'initialized_without_artifacts',
+    state: 'entry_missing',
+    kind: 'approval',
+    when: (context) => (
+      context.hasHarness
+      && !context.hasCanonicalPlanningState
+      && !context.entry
+    ),
+    reason: () => 'No primary Markdown or text entry document was found.',
+    command: () => (
+      'Provide a concise idea document, then run p2a next --entry <path>.'
+    ),
+  },
+  {
+    state: 'gate_what',
     kind: 'skill',
-    when: (context) => context.hasHarness && !context.info.artifacts.length,
-    reason: () => 'The harness is installed, but no planning artifact root exists yet.',
-    command: () => '/p2a-harness "<one-sentence idea>"',
+    when: (context) => (
+      context.hasHarness
+      && !context.hasCanonicalPlanningState
+      && context.entry?.valid === true
+    ),
+    reason: (context) => (
+      `The entry document is ready for scope confirmation: ${context.entryArg}`
+    ),
+    command: (context) => `/p2a-harness --entry ${JSON.stringify(context.entryArg)}`,
   },
   {
     state: 'incomplete_iteration_layout',
@@ -1630,8 +1712,8 @@ function decideNextAction(context) {
   );
 }
 
-function buildNext(targetRootInput, requestedProjectId) {
-  const snapshot = buildInfoSnapshot(targetRootInput);
+function buildNext(targetRootInput, requestedProjectId, entryPath) {
+  const snapshot = buildInfoSnapshot(targetRootInput, { entryPath });
   const { info } = snapshot;
   const targetRoot = info.target;
   const context = buildNextDecisionContext(
@@ -1640,7 +1722,15 @@ function buildNext(targetRootInput, requestedProjectId) {
     requestedProjectId,
     snapshot.inspectedArtifacts,
     snapshot.reviewPasses,
+    snapshot.explicitEntry,
   );
+  if (
+    context.entry
+    && context.entry.valid !== true
+    && !context.hasCanonicalPlanningState
+  ) {
+    throw new Error(`entry document is invalid: ${context.entry.errors.join('; ')}`);
+  }
   const action = decideNextAction(context);
   return {
     schema_version: 'p2a.next.v1',
@@ -1651,7 +1741,7 @@ function buildNext(targetRootInput, requestedProjectId) {
   };
 }
 
-function buildInfoSnapshot(targetRootInput) {
+function buildInfoSnapshot(targetRootInput, options = {}) {
   const targetRoot = path.resolve(targetRootInput);
   if (!isDirectory(targetRoot)) {
     throw new Error(`--target must be an existing directory: ${targetRoot}`);
@@ -1662,6 +1752,16 @@ function buildInfoSnapshot(targetRootInput) {
   const isScaffoldProject = ['init', 'scaffold'].includes(manifest?.provenance?.mode);
   const inspectedArtifacts = discoverArtifactRoots(targetRoot)
     .map((artifactRoot) => inspectArtifact(targetRoot, artifactRoot, isScaffoldProject));
+  const explicitEntry = options.entryPath
+    ? discoverEntryDocument(targetRoot, {
+        entryPath: options.entryPath,
+        baseDir: targetRoot,
+      })
+    : null;
+  const autoEntries = inspectedArtifacts
+    .map((artifact) => artifact.entry)
+    .filter(Boolean);
+  const selectedEntry = explicitEntry ?? (autoEntries.length === 1 ? autoEntries[0] : null);
   const artifacts = inspectedArtifacts
     .map((inspected) => summarizeArtifact(targetRoot, inspected));
   const hasP2aDir = isDirectory(path.join(targetRoot, '.plan2agent'));
@@ -1672,6 +1772,17 @@ function buildInfoSnapshot(targetRootInput) {
   const nextActions = [];
   if (!hasP2aDir) {
     nextActions.push(`Install a project harness: ${p2aCommand(['init', '--target', '<project-dir>'])}`);
+  }
+  if (selectedEntry) {
+    const entryArg = relativeToTarget(targetRoot, selectedEntry.path);
+    if (selectedEntry.valid) {
+      nextActions.push(`Validate the entry document: ${p2aCommand(['validate', '--entry', entryArg])}`);
+      nextActions.push(`Confirm the entry scope: /p2a-harness --entry ${JSON.stringify(entryArg)}`);
+    } else {
+      nextActions.push(`Repair the entry document: ${selectedEntry.errors.join('; ')}`);
+    }
+  } else if (hasP2aDir && !artifacts.length) {
+    nextActions.push('Provide a Markdown or text idea document, then run p2a next --entry <path>.');
   }
   for (const artifact of artifacts) {
     if (artifact.layout.hasIncompleteIterationLayout) {
@@ -1746,12 +1857,13 @@ function buildInfoSnapshot(targetRootInput) {
       lintCommand: config.lintCommand ?? null,
       typecheckCommand: config.typecheckCommand ?? null,
     } : null,
+    ...(selectedEntry ? { entry: summarizeEntry(targetRoot, selectedEntry) } : {}),
     enhancements,
     artifactCount: artifacts.length,
     artifacts,
     nextActions,
   };
-  return { info, inspectedArtifacts, reviewPasses };
+  return { info, inspectedArtifacts, reviewPasses, explicitEntry };
 }
 
 function buildInfo(targetRootInput) {
@@ -1769,6 +1881,9 @@ function printInfo(info) {
   console.log(`- surface: ${info.surface}`);
   console.log(`- mode: ${info.mode}`);
   console.log(`- artifacts: ${info.artifactCount}`);
+  if (info.entry) {
+    console.log(`- entry: ${info.entry.path} (${info.entry.valid ? 'valid' : 'invalid'}, ${info.entry.sourceKind})`);
+  }
   if (info.config) {
     console.log(`- verification: test=${info.config.testCommand ?? 'none'} lint=${info.config.lintCommand ?? 'none'} typecheck=${info.config.typecheckCommand ?? 'none'}`);
   }
@@ -1842,11 +1957,11 @@ function runNext(argv) {
     return 1;
   }
   if (args.help) {
-    console.log('Usage: p2a next [--target <dir>] [--project-id <id>] [--json]');
+    console.log('Usage: p2a next [--target <dir>] [--project-id <id>] [--entry <path>] [--json]');
     return 0;
   }
   try {
-    const next = buildNext(args.target, args.projectId);
+    const next = buildNext(args.target, args.projectId, args.entry);
     if (args.json) console.log(JSON.stringify(next, null, 2));
     else printNext(next);
     return 0;

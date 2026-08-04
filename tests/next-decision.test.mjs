@@ -356,7 +356,7 @@ test('next chooses one read-only action for every primary state', () => {
     {
       id: 'initialized without artifacts',
       setup: () => project(),
-      expected: () => ['initialized_without_artifacts', 'skill'],
+      expected: () => ['entry_missing', 'approval'],
     },
     {
       id: 'incomplete iteration',
@@ -1048,8 +1048,8 @@ test('info keeps its JSON contract and points human output to next', () => {
   }
 });
 
-test('next keeps the twenty-one ordered decision rules required by the contract', () => {
-  assert.equal(NEXT_DECISION_RULES.length, 21);
+test('next keeps the twenty-two ordered decision rules required by the contract', () => {
+  assert.equal(NEXT_DECISION_RULES.length, 22);
   for (const rule of NEXT_DECISION_RULES) {
     assert.equal(typeof rule.when, 'function');
     assert.equal(typeof rule.reason, 'function');

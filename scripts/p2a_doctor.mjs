@@ -13,6 +13,10 @@ import {
 } from './p2a_tool_manifest.mjs';
 import { normalizePath } from './p2a_paths.mjs';
 import { resolveReviewPasses } from './p2a_project_config.mjs';
+import {
+  discoverEntryDocument,
+  discoverFeatureRadarPreflightRuns,
+} from './p2a_radar_preflight.mjs';
 
 const EMPTY_TASK_COUNTS = {
   total: 0,
@@ -231,7 +235,9 @@ function looksLikeArtifactRoot(candidate) {
   if (!isDirectory(candidate)) return false;
   if (isFile(path.join(candidate, 'current-spec.json'))) return true;
   if (isDirectory(path.join(candidate, 'iterations'))) return true;
-  return GATE_FILES.some(([, , relativePath]) => isFile(path.join(candidate, relativePath)));
+  if (GATE_FILES.some(([, , relativePath]) => isFile(path.join(candidate, relativePath)))) return true;
+  return discoverFeatureRadarPreflightRuns(candidate, { includeNative: false })
+    .some((run) => run.source_kind === 'p2a-preflight');
 }
 
 function discoverArtifactRoots(targetRoot) {
@@ -381,6 +387,17 @@ function summarizeArtifact(targetRoot, artifactRoot, isScaffoldProject) {
     });
   }
 
+  const entry = discoverEntryDocument(artifactRoot, {
+    projectId,
+    repeatedDevelopment: layout.kind === 'iteration',
+  });
+  if (entry && !entry.valid) {
+    diagnostics.push({
+      severity: 'error',
+      message: `Entry document is invalid: ${entry.errors.join('; ')}`,
+    });
+  }
+
   const iterationRoot = activeIteration ? path.join(artifactRoot, 'iterations', activeIteration) : null;
   const searchRoots = iterationRoot && isDirectory(iterationRoot)
     ? [iterationRoot, artifactRoot]
@@ -437,6 +454,12 @@ function summarizeArtifact(targetRoot, artifactRoot, isScaffoldProject) {
     artifactRoot: relativeToTarget(targetRoot, artifactRoot),
     activeIteration,
     layout,
+    entry: entry ? {
+      path: relativeToTarget(targetRoot, entry.path),
+      sourceKind: entry.sourceKind,
+      valid: entry.valid,
+      warnings: entry.warnings,
+    } : null,
     gates: GATE_FILES.map(([id, label, relativePath]) => gateFileSummary(targetRoot, searchRoots, id, label, relativePath)),
     spec: {
       path: specPath ? relativeToTarget(targetRoot, specPath) : null,
@@ -509,9 +532,11 @@ function projectCommands(state, artifacts) {
   if (primaryArtifact) {
     commands.push({
       id: 'validate',
-      command: primaryArtifact.activeIteration
-        ? `p2a iteration validate --artifacts ${primaryArtifact.artifactRoot}`
-        : `p2a validate --artifact-root ${primaryArtifact.artifactRoot}`,
+      command: primaryArtifact.entry && primaryArtifact.layout.kind === 'unknown'
+        ? `p2a validate --entry ${primaryArtifact.entry.path}`
+        : primaryArtifact.activeIteration
+          ? `p2a iteration validate --artifacts ${primaryArtifact.artifactRoot}`
+          : `p2a validate --artifact-root ${primaryArtifact.artifactRoot}`,
       description: 'Validate the detected planning artifacts.',
     });
   }
@@ -999,6 +1024,7 @@ function printHuman(report) {
     const counts = artifact.taskGraph.taskCounts;
     console.log(`- ${artifact.projectId}: ${artifact.artifactRoot} (${artifact.layout.kind})`);
     if (artifact.activeIteration) console.log(`  activeIteration: ${artifact.activeIteration}`);
+    if (artifact.entry) console.log(`  entry: ${artifact.entry.path} (${artifact.entry.valid ? 'valid' : 'invalid'})`);
     console.log(`  tasks: ${counts.total} total, ${counts.ready} ready, ${counts.done} done, ${counts.blocked} blocked`);
     console.log(`  runs: ${artifact.runs.runCount}${artifact.runs.latestRunId ? `, latest ${artifact.runs.latestRunId}` : ''}`);
     console.log(`  gates: ${artifact.gates.map((gate) => `${gate.id}=${gate.state}`).join(', ')}`);
