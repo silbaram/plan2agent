@@ -89,6 +89,23 @@ test('entry confirmation dialogue stays compact and preserves the existing gate 
   assert.match(geminiCommand, /no fixed question or round limit/);
 });
 
+test('entry contract documentation records discovery, validation, dialogue, and compatibility boundaries', () => {
+  const contract = readFileSync(path.join(ROOT, 'docs', 'entry-contract.md'), 'utf8');
+  assert.match(contract, /## 2\. 최소 문서 계약/);
+  assert.match(contract, /## 3\. 발견과 우선순위/);
+  assert.match(contract, /`p2a next --entry <path>`/);
+  assert.match(contract, /collection-report\.md/);
+  assert.match(contract, /next-iteration-recommendations\.md/);
+  assert.match(contract, /handoff-manifest\.md/);
+  assert.match(contract, /12개를 초과하거나 추천 항목이 8개를 초과하면.*warning/);
+  assert.match(contract, /`state: entry_missing`/);
+  assert.match(contract, /`state: gate_what`/);
+  assert.match(contract, /## 6\. 범위 확인 대화/);
+  assert.match(contract, /`selected`, `rejected`, `deferred`/);
+  assert.match(contract, /기존 intake\/requirements 인터뷰/);
+  assert.match(contract, /approved spec이 없을 때 downstream task 생성을 막는 규칙/);
+});
+
 test('a thin user-authored entry document validates and enters scope confirmation without Radar', () => {
   const root = project();
   try {
