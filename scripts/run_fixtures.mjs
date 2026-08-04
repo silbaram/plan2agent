@@ -508,6 +508,10 @@ function validateScaffoldFixtureCase() {
       || config.runTracking?.runsDir !== '.plan2agent/runs'
       || config.devExecution?.scopePolicy !== 'task_only'
       || config.devExecution?.verificationPolicy !== 'required_for_done'
+      || config.devExecution?.reviewPasses?.monitor !== 'opt_in'
+      || config.devExecution?.reviewPasses?.style !== 'off'
+      || config.devExecution?.reviewPasses?.milestone !== 'off'
+      || config.devExecution?.reviewPasses?.visual !== 'off'
       || config.roleProfiles?.implementer?.defaultProfile !== 'fullstack'
       || config.promptTemplates?.devExecution !== 'p2a.dev_prompt.v1'
       || !claudeSettings.permissions?.deny?.includes('Edit(~/**)')
@@ -1001,6 +1005,10 @@ function validateScaffoldFixtureCase() {
     if (
       result.status !== 0
       || enhancedConfig.devExecution?.scopePolicy !== 'task_only'
+      || enhancedConfig.devExecution?.reviewPasses?.monitor !== 'opt_in'
+      || enhancedConfig.devExecution?.reviewPasses?.style !== 'off'
+      || enhancedConfig.devExecution?.reviewPasses?.milestone !== 'off'
+      || enhancedConfig.devExecution?.reviewPasses?.visual !== 'off'
       || enhancedConfig.projectId !== 'enhance-target'
       || enhancedManifest.projectId !== 'enhance-target'
       || enhancedConfig.roleProfiles?.monitor?.defaultProfile !== 'manual_monitor'
