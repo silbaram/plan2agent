@@ -12,6 +12,12 @@ import { resolveOrchestrationAgentTool, resolveReviewPasses } from './p2a_projec
 import { normalizePath, resolveP2aPaths } from './p2a_paths.mjs';
 import { p2aCommandLine } from './p2a_run_commands.mjs';
 import { resolveIterationState } from './p2a_iteration_state.mjs';
+import {
+  constitutionApprovalState,
+  decisionLedgerPath,
+  readDecisions,
+  scopeApprovalState,
+} from './p2a_decision_ledger.mjs';
 import { compareRunEvidence, taskGraphRefMatchesGraph } from './p2a_run_paths.mjs';
 import { assertFinalVisualReviewRunReady } from './p2a_visual_review_gate.mjs';
 import {
@@ -29,6 +35,8 @@ import {
 const P2A_PATHS = resolveP2aPaths(import.meta.url);
 
 const RUNTIME_COMMANDS = new Map([
+  ['decide', { script: 'p2a_decisions.mjs', forwardsCommand: true }],
+  ['decisions', { script: 'p2a_decisions.mjs', forwardsCommand: true }],
   ['shape', { script: 'p2a_shape.mjs' }],
   ['iteration', { script: 'p2a_iteration.mjs' }],
   ['task', { script: 'p2a_tasks.mjs' }],
@@ -58,7 +66,9 @@ function usage() {
     'Usage:',
     '  p2a init [--target <dir>] [--tools <list>] [--codex-profile quality|inherit]',
     '  p2a next [--target <dir>] [--project-id <id>] [--entry <path>] [--json]',
-    '  p2a shape [approve|migrate-style] [options]',
+    '  p2a decide --quote <user-utterance> [--target <dir>|--artifacts <dir>]',
+    '  p2a decisions [--why <file-path>] [--target <dir>|--artifacts <dir>] [--json]',
+    '  p2a shape [approve|revoke|migrate-style] [options]',
     '  p2a info [--target <dir>] [--json]',
     '  p2a doctor [--target <dir>] [--dev] [--json] [--strict]',
     '  p2a update [--target <dir>] [--dry-run|--apply]',
@@ -217,7 +227,7 @@ function dispatchRuntime(command, commandArgs) {
     console.error(`p2a error: runtime command "${command}" is unavailable because ${mapping.script} is missing`);
     return 1;
   }
-  return runScript(scriptPath, commandArgs);
+  return runScript(scriptPath, mapping.forwardsCommand ? [command, ...commandArgs] : commandArgs);
 }
 
 function dispatchToolkit(command, commandArgs) {
@@ -956,6 +966,30 @@ function inspectConstitution(targetRoot) {
   }
 }
 
+function inspectDecisions(artifactRoot) {
+  const ledgerPath = decisionLedgerPath(artifactRoot);
+  if (!existsSync(ledgerPath)) {
+    return { path: ledgerPath, exists: false, valid: true, records: [], error: null };
+  }
+  try {
+    return {
+      path: ledgerPath,
+      exists: true,
+      valid: true,
+      records: readDecisions(artifactRoot, { required: true }),
+      error: null,
+    };
+  } catch (error) {
+    return {
+      path: ledgerPath,
+      exists: true,
+      valid: false,
+      records: [],
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
 function gateAInvalidatesGateB(gates) {
   if (!gates.intake || !gates.specPath) return false;
   if (gates.intake.status !== 'ready_for_spec' || !gates.intake.approval_audit) return true;
@@ -1104,6 +1138,7 @@ function buildNextDecisionContext(
   const detail = inspectionForArtifact(targetRoot, selected.artifact, inspectedArtifacts);
   if (!detail) throw new Error(`artifact inspection is unavailable: ${artifactRoot}`);
   const { gates } = detail;
+  const decisions = inspectDecisions(artifactRoot);
   const entry = explicitEntry ?? detail.entry;
   const canonicalPlanningState = hasCanonicalPlanningState(detail);
   const iterationScopedRuns = runsForActiveIteration(detail.runs.records, detail.activeIteration);
@@ -1162,7 +1197,7 @@ function buildNextDecisionContext(
         graphPath: gates.taskGraphPath,
       })
     : false;
-  const constitution = (
+  let constitution = (
     context.constitution.valid
     && context.constitution.data?.projectId !== detail.projectId
   )
@@ -1170,11 +1205,50 @@ function buildNextDecisionContext(
         ...context.constitution,
         valid: false,
         error: `constitution projectId ${JSON.stringify(context.constitution.data.projectId)} does not match selected project ${JSON.stringify(detail.projectId)}`,
-      }
+    }
     : context.constitution;
+  if (constitution.valid && decisions.valid && constitution.exists) {
+    const approval = constitutionApprovalState(
+      decisions.records,
+      rawFileSha256(constitution.path),
+      constitution.approved,
+      { allowLegacyFallback: !decisions.exists },
+    );
+    constitution = {
+      ...constitution,
+      approved: approval.approved,
+      approvalSource: approval.source,
+      approvalDecision: approval.event,
+    };
+  }
+  const intakeScopeRef = gates.intakePath
+    ? normalizePath(path.relative(artifactRoot, gates.intakePath))
+    : null;
+  const specScopeRef = gates.specPath
+    ? normalizePath(path.relative(artifactRoot, gates.specPath))
+    : null;
+  const gateAApproval = gates.intakePath && decisions.valid
+    ? scopeApprovalState(
+        decisions.records,
+        intakeScopeRef,
+        rawFileSha256(gates.intakePath),
+        gates.intake?.status === 'ready_for_spec' && Boolean(gates.intake?.approval_audit),
+        { allowLegacyFallback: !decisions.exists },
+      )
+    : { approved: false, source: 'approval_audit', event: null };
+  const gateBApproval = gates.specPath && decisions.valid
+    ? scopeApprovalState(
+        decisions.records,
+        specScopeRef,
+        rawFileSha256(gates.specPath),
+        gates.spec?.approval === 'approved' && Boolean(gates.spec?.approval_audit),
+        { allowLegacyFallback: !decisions.exists },
+      )
+    : { approved: false, source: 'approval_audit', event: null };
   return {
     ...context,
     constitution,
+    decisions,
     artifactRoot,
     artifactArg: commandArtifact(targetRoot, artifactRoot),
     projectId: detail.projectId,
@@ -1187,6 +1261,9 @@ function buildNextDecisionContext(
     gateAReadable: Boolean(gates.intake),
     gateAValid: gates.intakeValid === true,
     gateAValidationError: gates.intakeValidationError,
+    gateAApproved: gateAApproval.approved,
+    gateAApprovalSource: gateAApproval.source,
+    gateAApprovalDecision: gateAApproval.event,
     currentSpecReadable: detail.currentSpecReadable,
     currentSpecValid: detail.currentSpecValid,
     currentSpecValidationError: detail.currentSpecValidationError,
@@ -1194,6 +1271,9 @@ function buildNextDecisionContext(
     gateBReadable: Boolean(gates.spec),
     gateBValid: gates.specValid === true,
     gateBValidationError: gates.specValidationError,
+    gateBApproved: gateBApproval.approved,
+    gateBApprovalSource: gateBApproval.source,
+    gateBApprovalDecision: gateBApproval.event,
     gateAInvalidatesGateB: gateAInvalidatesGateB(gates),
     gateCExists: Boolean(gates.taskGraphPath),
     gateCReadable: Boolean(gates.taskGraph),
@@ -1278,6 +1358,18 @@ export const NEXT_DECISION_RULES = [
     command: (context) => ['iteration', 'validate', '--artifacts', context.artifactArg],
   },
   {
+    state: 'invalid_decisions',
+    kind: 'cli',
+    when: (context) => context.decisions?.exists && !context.decisions.valid,
+    reason: (context) => `The decision ledger is invalid: ${context.decisions.error ?? 'validation failed'}`,
+    command: (context) => [
+      'validate',
+      '--decisions',
+      '--artifacts',
+      context.artifactArg,
+    ],
+  },
+  {
     state: 'invalid_gate_a',
     kind: 'cli',
     when: (context) => (
@@ -1329,7 +1421,7 @@ export const NEXT_DECISION_RULES = [
     kind: (context) => context.constitution.exists ? 'approval' : 'skill',
     when: (context) => (
       context.gateAValid
-      && context.gates.intake?.status === 'ready_for_spec'
+      && context.gateAApproved
       && !context.constitution.approved
       && (
         context.constitution.exists
@@ -1348,21 +1440,29 @@ export const NEXT_DECISION_RULES = [
     ),
   },
   {
-    state: (context) => gateANextState(context.gates.intake),
-    kind: (context) => gateANextKind(context.gates.intake),
+    state: (context) => context.gateAApproved
+      ? gateANextState(context.gates.intake)
+      : 'gate_a_needs_approval',
+    kind: (context) => context.gateAApproved
+      ? gateANextKind(context.gates.intake)
+      : 'approval',
     when: (context) => (
       context.gateAValid
-      && (!context.gateBExists || context.gateAInvalidatesGateB)
+      && (!context.gateAApproved || !context.gateBExists || context.gateAInvalidatesGateB)
     ),
     reason: (context) => (
-      context.gateAInvalidatesGateB
+      !context.gateAApproved
+        ? 'Gate ① scope is not approved by the decision ledger or legacy approval audit.'
+        : context.gateAInvalidatesGateB
         ? 'Gate A is not confirmed for the existing Gate B specification, or its persisted bytes have changed; resume from Gate A before continuing downstream.'
         : gateANextReason(context.gates.intake)
     ),
-    command: (context) => gateANextCommand(
-      context.gates.intake,
-      commandProjectPath(context.targetRoot, context.gates.intakePath),
-    ),
+    command: (context) => context.gateAApproved
+      ? gateANextCommand(
+          context.gates.intake,
+          commandProjectPath(context.targetRoot, context.gates.intakePath),
+        )
+      : `Review ${commandProjectPath(context.targetRoot, context.gates.intakePath)}, then run p2a decide --quote "<user utterance>" --artifacts ${JSON.stringify(context.artifactArg)}.`,
   },
   {
     state: 'invalid_gate_b',
@@ -1394,17 +1494,17 @@ export const NEXT_DECISION_RULES = [
     kind: 'approval',
     when: (context) => (
       context.gateBValid
-      && context.gates.spec?.approval !== 'approved'
+      && !context.gateBApproved
     ),
-    reason: () => 'The Gate B specification is still a draft.',
-    command: (context) => `Review ${commandProjectPath(context.targetRoot, context.gates.specPath)}, approve it, and record approval_audit.`,
+    reason: () => 'The Gate ① specification decision is not approved or has been revoked.',
+    command: (context) => `Review ${commandProjectPath(context.targetRoot, context.gates.specPath)}, then run p2a decide --quote "<user utterance>" --artifacts ${JSON.stringify(context.artifactArg)}.`,
   },
   {
     state: 'gate_b_approved_needs_tasks',
     kind: 'skill',
     when: (context) => (
       context.gateBValid
-      && context.gates.spec?.approval === 'approved'
+      && context.gateBApproved
       && !context.gateCExists
     ),
     reason: () => 'The approved Gate B specification has no Gate C task graph yet.',

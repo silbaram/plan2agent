@@ -45,7 +45,7 @@ import {
   validateMaintenanceTaskGraphProject,
 } from './p2a_iteration_state.mjs';
 import { loadRunsForArtifactRoot } from './p2a_runs.mjs';
-import { resolveP2aPaths } from './p2a_paths.mjs';
+import { normalizePath, resolveP2aPaths } from './p2a_paths.mjs';
 import {
   atomicWriteJson,
   atomicWriteText,
@@ -79,6 +79,12 @@ import {
   taskGraphContextForGraph,
   taskGraphRefMatchesGraph,
 } from './p2a_run_paths.mjs';
+import {
+  appendDecisionEventsLocked,
+  decisionLedgerPath,
+  readDecisions,
+  scopeApprovalState,
+} from './p2a_decision_ledger.mjs';
 
 const P2A_PATHS = resolveP2aPaths(import.meta.url);
 const ROOT = P2A_PATHS.projectRoot;
@@ -3051,12 +3057,13 @@ function rebaseMovedTaskGraphSourceSpec(source) {
   return sourceText;
 }
 
-function applyPlan(paths, iterationId, plan) {
+function applyPlan(paths, iterationId, plan, options = {}) {
   const moved = [];
   const outputSnapshot = captureRollbackFiles([
     paths.currentSpec,
     paths.statusMd,
     paths.maintenanceReadme,
+    ...(options.rollbackFiles ?? []),
   ]);
   const directoryExisted = new Map([
     [paths.iterationsRoot, existsSync(paths.iterationsRoot)],
@@ -3080,6 +3087,7 @@ function applyPlan(paths, iterationId, plan) {
     atomicWriteJson(paths.currentSpec, currentSpec);
     writeIterationStatus(paths.artifactRoot, currentSpec);
     atomicWriteText(paths.maintenanceReadme, maintenanceReadme());
+    options.afterApply?.();
   } catch (error) {
     const rollbackFailures = restoreRollbackFiles(outputSnapshot);
     if (originalMovedTaskGraph !== null && existsSync(paths.movedTaskGraph)) {
@@ -3137,24 +3145,87 @@ function validateMoved(paths) {
   return { spec, taskGraph };
 }
 
+function decisionBindingsForInit(artifactRoot) {
+  if (!existsSync(decisionLedgerPath(artifactRoot))) return [];
+  const records = readDecisions(artifactRoot, { required: true });
+  const candidates = [
+    'gate-a-intake/intake.json',
+    'gate-b-spec/spec.json',
+  ];
+  return candidates.flatMap((scopeRef) => {
+    const artifactPath = path.join(artifactRoot, scopeRef);
+    if (!existsSync(artifactPath) || !lstatSync(artifactPath).isFile()) return [];
+    const approval = scopeApprovalState(
+      records,
+      scopeRef,
+      fileSha256(artifactPath),
+      false,
+    );
+    if (!approval.event) return [];
+    if (!approval.approved) {
+      throw new ValidationError(
+        `iteration init requires an active decision-ledger approval for ${scopeRef}`,
+      );
+    }
+    return [{ scopeRef, decision: approval.event }];
+  });
+}
+
+function appendMovedDecisionBindings(artifactRoot, iterationId, bindings) {
+  if (!bindings.length) return [];
+  return appendDecisionEventsLocked(
+    artifactRoot,
+    bindings.map(({ scopeRef, decision }) => {
+      const movedScopeRef = normalizePath(path.join('iterations', iterationId, scopeRef));
+      return {
+        type: 'gate.what.approved',
+        quote: decision.quote,
+        scope_ref: movedScopeRef,
+        sha256: fileSha256(path.join(artifactRoot, movedScopeRef)),
+        prev_seq: decision.seq,
+      };
+    }),
+  );
+}
+
 function init(args) {
   const artifactRoot = normalizeArtifactPath(args.artifacts);
-  const paths = pathsFor(artifactRoot, args.iterationId);
-  const facts = preflight(paths, args.iterationId);
-  const plan = buildPlan(paths, args.iterationId, facts);
-  printPlan(plan, args.dryRun);
-  if (args.dryRun) {
-    console.log('Dry-run only; no files written.');
-    return 0;
-  }
+  const execute = () => {
+    const paths = pathsFor(artifactRoot, args.iterationId);
+    const decisionBindings = decisionBindingsForInit(artifactRoot);
+    const facts = preflight(paths, args.iterationId);
+    const plan = buildPlan(paths, args.iterationId, facts);
+    printPlan(plan, args.dryRun);
+    if (decisionBindings.length) {
+      console.log(`- preserve ${decisionBindings.length} decision-ledger approval binding(s) after artifact relocation`);
+    }
+    if (args.dryRun) {
+      console.log('Dry-run only; no files written.');
+      return 0;
+    }
 
-  applyPlan(paths, args.iterationId, plan);
-  validateMoved(paths);
-  resolveIterationState(artifactRoot);
-  console.log(`Plan2Agent iteration init passed: ${toRelativeFromRoot(artifactRoot)} -> iterations/${args.iterationId}/`);
-  console.log('Moved artifacts revalidated: spec approved, task graph valid, Gate B approval audit present.');
-  console.log('Maintenance is lazy: no empty task-graph.json was created.');
-  return 0;
+    let rebound = [];
+    applyPlan(paths, args.iterationId, plan, {
+      rollbackFiles: decisionBindings.length ? [decisionLedgerPath(artifactRoot)] : [],
+      afterApply: () => {
+        validateMoved(paths);
+        resolveIterationState(artifactRoot);
+        rebound = appendMovedDecisionBindings(
+          artifactRoot,
+          args.iterationId,
+          decisionBindings,
+        );
+      },
+    });
+    console.log(`Plan2Agent iteration init passed: ${toRelativeFromRoot(artifactRoot)} -> iterations/${args.iterationId}/`);
+    console.log('Moved artifacts revalidated: spec approved, task graph valid, Gate B approval audit present.');
+    if (rebound.length) console.log(`Decision ledger rebound: ${rebound.length} moved Gate approval(s).`);
+    console.log('Maintenance is lazy: no empty task-graph.json was created.');
+    return 0;
+  };
+  return existsSync(decisionLedgerPath(artifactRoot))
+    ? withRunStoreLocks([artifactRoot], execute)
+    : execute();
 }
 
 function current(args) {

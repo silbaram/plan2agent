@@ -51,7 +51,7 @@ Before specification work, present a concise understanding summary containing:
 - evidence or baseline used;
 - a clear statement that approval authorizes specification work.
 
-Persist the approved scope in `gate-a-intake/intake.json` with `status: "ready_for_spec"` and an `approval_audit`. The audit must identify the approver, date, approved artifact path, and approval note. Without that record, keep `status: "blocked_on_user"` and stop before Gate ②.
+After explicit approval, run `p2a decide --quote "<exact user utterance>" --artifacts <artifact-root>`. The command appends `gate.what.approved` to `decisions.jsonl` and updates `gate-a-intake/intake.json` with `status: "ready_for_spec"` plus an `approval_audit` copy. Without that decision, keep `status: "blocked_on_user"` and stop before Gate ②.
 
 ### Project-shape approval (Gate ②)
 
@@ -78,7 +78,7 @@ Approval must preserve the user's verbatim utterance. After explicit approval, r
 p2a shape approve --quote "<exact user utterance>"
 ```
 
-Never fabricate, summarize, or omit the quote. `p2a shape approve` writes the user/date/artifact audit and rejects a missing quote. Confirm the approved result with `p2a validate --constitution .plan2agent/constitution.json --require-approved-constitution` before Gate B.
+Never fabricate, summarize, or omit the quote. `p2a shape approve` appends `gate.how.approved` to the decision ledger, writes the user/date/artifact audit copy, and rejects a missing quote. Confirm the approved result with `p2a validate --constitution .plan2agent/constitution.json --require-approved-constitution` and `p2a validate --decisions --artifacts <artifact-root>` before Gate B.
 
 An approved constitution is project-level state, not iteration state. Reuse it across later iterations. Reopen Gate ② only when the newly approved Gate A scope materially changes architecture, foundational stack, a project-wide prohibition, or coding-style policy. A normal feature or maintenance iteration must not re-ask for shape approval. To amend it, present a focused diff and trade-offs, replace it with a draft that omits the old `approval_audit`, and require a new quoted approval before Gate B.
 
@@ -88,7 +88,7 @@ Legacy projects may continue with `.plan2agent/style.md` and no constitution. Do
 
 Before task decomposition, present the complete product specification and implementation plan together. Highlight consequential choices, trade-offs, open decisions, selected or rejected external recommendations, and verification strategy.
 
-Persist approval in `gate-b-spec/spec.json`. An approved spec must have `approval: "approved"`, no open decisions, and a valid `approval_audit`. Visual work that is required for the current iteration must also have explicit selected-prototype approval before decomposition.
+After explicit approval, run `p2a decide --quote "<exact user utterance>" --artifacts <artifact-root>`. It appends the Gate ① specification decision and persists the `approval: "approved"` plus `approval_audit` copy in `gate-b-spec/spec.json`. An approved spec must have no open decisions. Visual work that is required for the current iteration must also have explicit selected-prototype approval before decomposition.
 
 Task decomposition has no separate human approval state. The authoring agent writes a complete draft, `p2a validate` checks its schema, source references, dependencies, acyclicity, acceptance criteria, and execution contracts, and only a valid graph becomes canonical.
 
@@ -101,7 +101,7 @@ Use this only when `p2a next` reports `gate_what` with a validated `--entry` doc
 3. Ask only for information or decisions that cannot be inferred safely and would materially change the scope. There is no fixed question count or conversation-turn limit. Stop asking as soon as the scope is confirmable, and do not introduce a replacement workflow state machine, mandatory identifier inventory, or progress counter.
 4. Present the revised scope and explicitly ask the user to confirm that interpretation. Corrections update the summary and repeat this confirmation step. Silence, document presence, or a broad request to develop is not approval.
 5. When Feature Radar supplied recommendations, list every promoted candidate with exactly one `selected`, `rejected`, or `deferred` disposition and a short rationale. Those candidates remain unapproved until the user confirms the scope containing their dispositions.
-6. After explicit confirmation, persist `intake.json` with the entry evidence, confirmed scope, `status: "ready_for_spec"`, and Gate A `approval_audit`. Then establish or reuse Gate ② before continuing through the normal Gate B contract.
+6. After explicit confirmation, persist `intake.json` as the draft intake evidence and run `p2a decide --quote "<exact user utterance>" --artifacts <artifact-root>` so the decision ledger and Gate A audit copy are written together. Then establish or reuse Gate ② before continuing through the normal Gate B contract.
 
 If the user rejects the source document, stop and request a different path. Canonical state begins with the approved intake artifact, not with chat history or the source file alone.
 
@@ -163,6 +163,7 @@ Minimum handoff information:
 
 - project and iteration identifiers;
 - approved constitution contents and `.plan2agent/constitution.json` reference, or explicit legacy-style fallback;
+- validated `decisions.jsonl` decision chain and the active Gate ①/② decision sequence ids when present;
 - artifact root and canonical relative paths;
 - entry evidence and approved intake;
 - active or baseline spec references and hashes;
@@ -269,6 +270,7 @@ Before handing off to execution, ensure:
 
 - Never initialize a fresh harness without a document.
 - Never infer user approval from silence or from an agent's recommendation.
+- Never write, edit, reorder, or delete existing `decisions.jsonl` lines directly; use `p2a decide` and `p2a shape approve|revoke` append operations.
 - Never advance past blocked scope or an unapproved specification.
 - Never create a first Gate B specification before a required Gate ② constitution is approved.
 - Reuse an approved constitution across iterations unless Gate A introduces an architecture-level change.

@@ -5,7 +5,19 @@ import { existsSync, lstatSync, readFileSync, realpathSync } from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { atomicWriteJson } from './p2a_run_store.mjs';
+import {
+  appendDecisionEventsLocked,
+  constitutionApprovalState,
+  constitutionContentSha256,
+  decisionLedgerPath,
+  fileSha256,
+  latestActiveConstitutionApproval,
+  latestConstitutionApproval,
+  readDecisions,
+  resolveDecisionArtifactRoot,
+  withDecisionLedgerLock,
+} from './p2a_decision_ledger.mjs';
+import { atomicWriteJson, atomicWriteText } from './p2a_run_store.mjs';
 import { resolveP2aPaths } from './p2a_paths.mjs';
 import { resolveProjectIdDefault } from './p2a_project_config.mjs';
 import { validateConstitution, ValidationError } from './validate_artifacts.mjs';
@@ -13,13 +25,14 @@ import { validateConstitution, ValidationError } from './validate_artifacts.mjs'
 const P2A_PATHS = resolveP2aPaths(import.meta.url);
 const CONSTITUTION_RELATIVE = path.join('.plan2agent', 'constitution.json');
 const LEGACY_STYLE_RELATIVE = path.join('.plan2agent', 'style.md');
-const COMMANDS = new Set(['status', 'approve', 'migrate-style']);
+const COMMANDS = new Set(['status', 'approve', 'revoke', 'migrate-style']);
 
 function usage() {
   return [
     'Usage:',
     '  p2a shape [--target <dir>] [--json]',
     '  p2a shape approve --quote <user-utterance> [--target <dir>]',
+    '  p2a shape revoke --quote <user-utterance> [--target <dir>]',
     '  p2a shape migrate-style [--project-id <id>] [--target <dir>]',
     '',
     'Notes:',
@@ -58,7 +71,7 @@ function parseArgs(argv) {
       throw new ValidationError(`unknown shape option: ${arg}`);
     }
   }
-  if (command !== 'approve' && args.quote !== null) throw new ValidationError('--quote is only supported by shape approve');
+  if (!['approve', 'revoke'].includes(command) && args.quote !== null) throw new ValidationError('--quote is only supported by shape approve or revoke');
   if (command !== 'migrate-style' && args.projectId !== null) throw new ValidationError('--project-id is only supported by shape migrate-style');
   return args;
 }
@@ -112,16 +125,36 @@ function inspect(targetInput) {
       next: `Repair ${CONSTITUTION_RELATIVE}, then run p2a validate --constitution ${CONSTITUTION_RELATIVE}.`,
     };
   }
+  let decisionArtifactRoot = null;
   try {
     const constitution = validateConstitution(constitutionPath);
-    const approved = Boolean(constitution.approval_audit);
+    let approval = {
+      approved: Boolean(constitution.approval_audit),
+      source: 'approval_audit',
+      event: null,
+    };
+    decisionArtifactRoot = resolveDecisionArtifactRoot(target, {
+      projectId: constitution.projectId,
+      optional: true,
+    });
+    if (decisionArtifactRoot) {
+      const ledgerExists = existsSync(decisionLedgerPath(decisionArtifactRoot));
+      approval = constitutionApprovalState(
+        readDecisions(decisionArtifactRoot),
+        fileSha256(constitutionPath),
+        approval.approved,
+        { allowLegacyFallback: !ledgerExists },
+      );
+    }
+    const approved = approval.approved;
     return {
       schema_version: 'p2a.shape.v1',
       target,
       projectId: constitution.projectId,
-      state: approved ? 'approved' : 'draft',
+      state: approved ? 'approved' : approval.event?.type === 'gate.how.revoked' ? 'revoked' : 'draft',
       constitution: CONSTITUTION_RELATIVE,
       approved,
+      approvalSource: approval.source,
       legacyStyle,
       counts: {
         architecture: constitution.architecture.length,
@@ -142,7 +175,9 @@ function inspect(targetInput) {
       legacyStyle,
       counts: { architecture: 0, stack: 0, prohibitions: 0 },
       error: error.message,
-      next: `Repair ${CONSTITUTION_RELATIVE}, then run p2a validate --constitution ${CONSTITUTION_RELATIVE}.`,
+      next: decisionArtifactRoot
+        ? `Repair ${decisionLedgerPath(decisionArtifactRoot)}, then run p2a validate --decisions --artifacts ${JSON.stringify(decisionArtifactRoot)}.`
+        : `Repair ${CONSTITUTION_RELATIVE}, then run p2a validate --constitution ${CONSTITUTION_RELATIVE}.`,
     };
   }
 }
@@ -170,21 +205,96 @@ function approve(args) {
     throw new ValidationError(`shape approve requires a Gate ② draft at ${constitutionPath}`);
   }
   const constitution = validateConstitution(constitutionPath);
-  const approved = {
-    ...constitution,
-    approval_audit: {
-      approved_by: 'user',
-      approved_at: new Date().toISOString().slice(0, 10),
-      approved_artifacts: ['.plan2agent/constitution.json'],
-      approval_note: `User quote: ${JSON.stringify(args.quote.trim())}`,
-    },
-  };
-  atomicWriteJson(constitutionPath, approved);
-  validateConstitution(constitutionPath, { requireApproved: true });
-  console.log(`Plan2Agent Gate ② approved: ${constitutionPath}`);
-  console.log(`- projectId: ${approved.projectId}`);
-  console.log('- approval quote: recorded');
-  return 0;
+  const artifactRoot = resolveDecisionArtifactRoot(target, {
+    projectId: constitution.projectId,
+    create: true,
+  });
+  return withDecisionLedgerLock(artifactRoot, () => {
+    const original = readFileSync(constitutionPath, 'utf8');
+    const records = readDecisions(artifactRoot);
+    const previous = latestConstitutionApproval(records);
+    const contentSha256 = constitutionContentSha256(constitution);
+    const approved = {
+      ...constitution,
+      approval_audit: {
+        approved_by: 'user',
+        approved_at: new Date().toISOString().slice(0, 10),
+        approved_artifacts: ['.plan2agent/constitution.json'],
+        approval_note: `User quote: ${JSON.stringify(args.quote)}`,
+      },
+    };
+    try {
+      atomicWriteJson(constitutionPath, approved);
+      validateConstitution(constitutionPath, { requireApproved: true });
+      const constitutionSha256 = fileSha256(constitutionPath);
+      const events = [];
+      if (
+        previous?.constitution_content_sha256
+        && previous.constitution_content_sha256 !== contentSha256
+      ) {
+        events.push({
+          type: 'constitution.changed',
+          quote: args.quote,
+          constitution_sha256: constitutionSha256,
+          constitution_content_sha256: contentSha256,
+          previous_constitution_sha256: previous.constitution_sha256,
+        });
+      }
+      events.push({
+        type: 'gate.how.approved',
+        quote: args.quote,
+        constitution_sha256: constitutionSha256,
+        constitution_content_sha256: contentSha256,
+      });
+      const appended = appendDecisionEventsLocked(artifactRoot, events);
+      console.log(`Plan2Agent Gate ② approved: ${constitutionPath}`);
+      console.log(`- projectId: ${approved.projectId}`);
+      console.log(`- decision: seq=${appended.at(-1).seq} type=gate.how.approved`);
+      console.log('- approval quote: recorded');
+      return 0;
+    } catch (error) {
+      atomicWriteText(constitutionPath, original);
+      throw error;
+    }
+  });
+}
+
+function revoke(args) {
+  if (!args.quote?.trim()) {
+    throw new ValidationError('shape revoke requires --quote with the verbatim user revocation utterance');
+  }
+  const target = path.resolve(args.target);
+  assertDirectory(target, '--target');
+  const constitutionPath = path.join(target, CONSTITUTION_RELATIVE);
+  if (!existsSync(constitutionPath) || !lstatSync(constitutionPath).isFile()) {
+    throw new ValidationError(`shape revoke requires ${constitutionPath}`);
+  }
+  const constitution = validateConstitution(constitutionPath);
+  const artifactRoot = resolveDecisionArtifactRoot(target, {
+    projectId: constitution.projectId,
+    create: true,
+  });
+  return withDecisionLedgerLock(artifactRoot, () => {
+    const ledgerExists = existsSync(decisionLedgerPath(artifactRoot));
+    const records = readDecisions(artifactRoot);
+    const previous = latestActiveConstitutionApproval(records);
+    if (!previous && ledgerExists) {
+      throw new ValidationError('no active Gate ② decision is available to revoke');
+    }
+    if (!previous && !constitution.approval_audit) {
+      throw new ValidationError('no approved Gate ② constitution is available to revoke');
+    }
+    const [event] = appendDecisionEventsLocked(artifactRoot, [{
+      type: 'gate.how.revoked',
+      quote: args.quote,
+      constitution_sha256: fileSha256(constitutionPath),
+      constitution_content_sha256: constitutionContentSha256(constitution),
+      ...(previous ? { prev_seq: previous.seq } : {}),
+    }]);
+    console.log(`Plan2Agent Gate ② approval revoked: ${constitutionPath}`);
+    console.log(`- decision: seq=${event.seq} type=${event.type}`);
+    return 0;
+  });
 }
 
 function migrateStyle(args) {
@@ -227,6 +337,7 @@ export function main(argv = process.argv.slice(2)) {
       return 0;
     }
     if (args.command === 'approve') return approve(args);
+    if (args.command === 'revoke') return revoke(args);
     if (args.command === 'migrate-style') return migrateStyle(args);
     const result = inspect(args.target);
     if (args.json) console.log(JSON.stringify(result, null, 2));

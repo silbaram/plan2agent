@@ -47,14 +47,17 @@ Gate A 승인 기록이 만들어집니다.
 ```text
 짧은 Markdown 또는 text 진입 문서
   -> Gate A: 문서 범위 확인과 사용자의 명시적 승인
+  -> Gate ②: 프로젝트 constitution 승인
   -> Gate B: 제품 명세와 구현 계획
   -> Gate C: 검증된 의존성 기반 task graph
   -> 감독형 구현과 검증
   -> 평가와 개선 proposal
 ```
 
-Gate A 이해 확인과 Gate B 승인은 서로 다른 결정입니다. 사용자가 Gate A 이해 요약을
-명시적으로 확인하면 하네스는 같은 agent 세션에서 Gate B로 이어갑니다.
+Gate A 이해 확인, Gate ② constitution, Gate B 명세 승인은 각각 명시적 결정입니다.
+Gate ① 범위·명세 승인은 `p2a decide --quote "<사용자 발화>"`, Gate ② 승인은
+`p2a shape approve --quote "<사용자 발화>"`로 기록합니다. 두 명령은 기존 JSON
+`approval_audit` 사본과 함께 append-only `decisions.jsonl` 원장을 갱신합니다.
 
 각 Gate는 검토 가능한 파일을 `.plan2agent/artifacts/<project_id>/` 아래에 기록합니다.
 활성 Gate의 결정을 승인하고 안내된 행동을 완료한 다음 다시 실행합니다.
@@ -90,7 +93,9 @@ system을 대체하지 않습니다.
 ```text
 .plan2agent/
   project.config.json
+  constitution.json
   artifacts/<project_id>/
+    decisions.jsonl
     gate-a-intake/
       intake.json
     gate-b-spec/
@@ -104,7 +109,8 @@ system을 대체하지 않습니다.
     proposals/
 ```
 
-JSON 파일은 정본이며 패키지에 포함된 schema로 검증됩니다. 생성된 Markdown은 사람이
+승인·철회 상태는 `decisions.jsonl`이 정본이고 기존 JSON `approval_audit`은 호환 사본으로
+유지됩니다. 모든 artifact는 패키지에 포함된 schema로 검증됩니다. 생성된 Markdown은 사람이
 읽기 위한 view입니다. 종료된 iteration과 완료된 run evidence는 이후 검토를 위한
 감사 가능한 이력으로 남습니다.
 

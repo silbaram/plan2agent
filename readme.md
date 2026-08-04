@@ -51,7 +51,9 @@ Concise Markdown or text entry document
 ```
 
 Gate A confirmation, Gate ② project-shape approval, and Gate B approval are separate decisions.
-`p2a shape approve --quote "<exact user utterance>"` records the Gate ② approval. Later iterations
+`p2a decide --quote "<exact user utterance>"` records Gate ① scope/spec approvals, while
+`p2a shape approve --quote "<exact user utterance>"` records the Gate ② approval. Both append to
+the chained `decisions.jsonl` ledger and keep existing artifact approval audits as readable copies. Later iterations
 reuse that constitution unless their approved scope materially changes the architecture.
 
 The harness writes canonical files under `.plan2agent/artifacts/<project_id>/`. Complete the
@@ -90,6 +92,7 @@ Planning and execution state stays local to the project:
   project.config.json
   constitution.json
   artifacts/<project_id>/
+    decisions.jsonl
     gate-a-intake/
       intake.json
     gate-b-spec/
@@ -105,7 +108,8 @@ Planning and execution state stays local to the project:
     proposals/
 ```
 
-JSON files are the source of truth and are validated against the schemas shipped with the package.
+`decisions.jsonl` is the source of truth for recorded approvals and revocations; the existing JSON
+approval audits remain compatible copies. All artifacts are validated against schemas shipped with the package.
 Generated Markdown is a human-readable view. Closed iterations and finished run evidence provide
 an auditable history for later reviews.
 

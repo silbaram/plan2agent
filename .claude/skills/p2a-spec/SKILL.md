@@ -167,8 +167,8 @@ Suggested Korean section labels for implementation plans: 아키텍처, 인터�
 - Do not start Gate B when Gate A lacks `status: ready_for_spec` or `intake_json.approval_audit`. Ignore legacy `interview` state when making that decision.
 - For a new project, do not start Gate B until `.plan2agent/constitution.json` has a valid quoted Gate ② `approval_audit`. Preserve the no-constitution fallback only for legacy projects.
 - Use `approval: draft` until the user explicitly approves the product and implementation spec.
-- Use `approval: approved` only when every intake `CQ-n` is disposed, promoted decisions are resolved, `open_decisions` is empty, and the user has approved the spec.
-- When `approval: approved`, include `spec_json.approval_audit` with `approved_by`, `approved_at`, `approved_artifacts`, and `approval_note`. Use `approved_artifacts: ["gate-b-spec/spec.json"]` for a greenfield Gate B bundle unless a more specific project-relative JSON path is known.
+- Keep the authored `spec_json` as `approval: draft` until every intake `CQ-n` is disposed, promoted decisions are resolved, `open_decisions` is empty, and the user explicitly approves the spec.
+- After explicit approval, the harness owner must run `p2a decide --quote "<exact user utterance>" --artifacts <artifact-root>`. That command appends the canonical Gate ① decision and writes `approval: approved` plus `approval_audit`; do not fabricate those fields inside the authoring pass.
 - For `visual_experience.design_scope: full` with `design_timing: current_iteration`, include the approved `experience-spec.json` in `approval_audit.approved_artifacts`; schema-valid prose alone is not sufficient for Gate B approval.
 - Do not advance to task breakdown while `approval` is `draft`.
 - Present the structured spec and any generated views for review, and request explicit user approval before advancing past Gate B.

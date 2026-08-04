@@ -36,10 +36,10 @@ Rules:
 - Do not run mutating commands.
 - Follow the stage-to-subagent mapping in the skill.
 - Require a validated --entry document for a new harness and follow the Entry Document Confirmation Dialogue.
-- Present a concise scope understanding and require explicit Gate A approval before writing a ready intake with approval_audit.
+- Present a concise scope understanding and require explicit Gate A approval, then use p2a decide --quote so decisions.jsonl and the ready intake approval_audit copy are written together.
 - Treat optional questions and decisions as ledger entries, not as workflow states.
 - Preserve legacy intake fields when reading history, but do not generate or interpret them.
-- After Gate A, establish or reuse the project constitution. For a new project, require a valid .plan2agent/constitution.json and approve it only through p2a shape approve --quote with the exact user utterance; legacy style-only projects remain compatible.
+- After Gate A, establish or reuse the project constitution. For a new project, require a valid .plan2agent/constitution.json and approve it only through p2a shape approve --quote with the exact user utterance so Gate ② is appended to decisions.jsonl; legacy style-only projects remain compatible.
 - Do not synthesize Gate B until intake_json is ready_for_spec with approval_audit and the required Gate ② constitution is approved.
 - Stop before task graph unless spec_json.approval is approved and open_decisions is empty.
 - Return the named state sections required by the harness.`,
@@ -60,7 +60,7 @@ Call p2a next --json as the decision authority. Do not reproduce state condition
 
 {{args}}
 
-Return spec_json conforming to the p2a package schema spec.schema.json and open_decisions. Keep approval as draft until explicitly approved; when approved, include approval_audit. Generate Markdown only as an optional view.`,
+Return spec_json conforming to the p2a package schema spec.schema.json and open_decisions. Keep approval as draft; after explicit approval the harness owner uses p2a decide --quote to append the decision and write the approval_audit copy. Generate Markdown only as an optional view.`,
   },
   'visual-experience': {
     skill: 'p2a-visual-experience',

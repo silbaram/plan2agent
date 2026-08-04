@@ -12,6 +12,8 @@ export const REPO_ONLY_SCRIPT_FILES = [
 
 export const PROJECT_RUNTIME_SCRIPT_FILES = [
   'p2a.mjs',
+  'p2a_decision_ledger.mjs',
+  'p2a_decisions.mjs',
   'p2a_shape.mjs',
   'p2a_paths.mjs',
   'p2a_constants.mjs',
@@ -38,6 +40,7 @@ export const PROJECT_RUNTIME_SCRIPT_FILES = [
 export const PROJECT_RUNTIME_SCHEMA_FILES = [
   'next.schema.json',
   'constitution.schema.json',
+  'decisions.schema.json',
   'intake.schema.json',
   'spec.schema.json',
   'task-graph.schema.json',

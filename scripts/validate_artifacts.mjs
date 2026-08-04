@@ -32,6 +32,7 @@ import { inspectEntryDocument } from './p2a_radar_preflight.mjs';
 const P2A_PATHS = resolveP2aPaths(import.meta.url);
 const SCHEMA_PATHS = {
   constitution: path.join(P2A_PATHS.schemasDir, 'constitution.schema.json'),
+  decisions: path.join(P2A_PATHS.schemasDir, 'decisions.schema.json'),
   intake: path.join(P2A_PATHS.schemasDir, 'intake.schema.json'),
   spec: path.join(P2A_PATHS.schemasDir, 'spec.schema.json'),
   task_graph: path.join(P2A_PATHS.schemasDir, 'task-graph.schema.json'),
@@ -54,6 +55,7 @@ const SCHEMA_PATHS = {
   eval_maintenance_apply_report: path.join(P2A_PATHS.schemasDir, 'eval-maintenance-apply-report.schema.json'),
 };
 const GATE_PATHS = {
+  decisions: 'decisions.jsonl',
   statusDoc: 'status.md',
   intakeJson: path.join('gate-a-intake', 'intake.json'),
   intakeMd: path.join('gate-a-intake', 'intake.md'),
@@ -1289,6 +1291,150 @@ export function validateConstitutionData(data, options = {}) {
 
 export function validateConstitution(filePath, options = {}) {
   return validateConstitutionData(loadJson(filePath), options);
+}
+
+export function decisionRecordSha256(record) {
+  return createHash('sha256').update(JSON.stringify(record)).digest('hex');
+}
+
+export function validateDecisionData(data) {
+  validateSchema(data, loadJson(SCHEMA_PATHS.decisions));
+  if (!Number.isInteger(data.seq) || data.seq < 1) {
+    throw new ValidationError('decision.seq must be a positive integer');
+  }
+  if (!Number.isFinite(Date.parse(data.at))) {
+    throw new ValidationError(`decision.at must be an ISO-compatible timestamp, got ${JSON.stringify(data.at)}`);
+  }
+  if (typeof data.quote !== 'string' || !data.quote.trim()) {
+    throw new ValidationError('decision.quote must preserve a non-empty user utterance');
+  }
+  if (data.scope_ref !== undefined) {
+    const normalized = normalizeReference(data.scope_ref);
+    const segments = normalized.split('/');
+    if (
+      path.isAbsolute(data.scope_ref)
+      || normalized.startsWith('/')
+      || /^[A-Za-z]:\//.test(normalized)
+      || segments.some((segment) => !segment || segment === '.' || segment === '..')
+    ) {
+      throw new ValidationError(
+        `decision.scope_ref must be a safe artifact-relative path, got ${JSON.stringify(data.scope_ref)}`,
+      );
+    }
+  }
+  return data;
+}
+
+function decisionScopeIdentity(reference) {
+  return normalizeReference(reference).replace(/^iterations\/[^/]+\//, '');
+}
+
+export function validateDecisionLedger(filePath) {
+  assertFile(filePath, 'decisions.jsonl');
+  const text = readFileSync(filePath, 'utf8');
+  if (!text.trim()) throw new ValidationError('decisions.jsonl must contain at least one decision');
+  const lines = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
+  if (lines.at(-1) === '') lines.pop();
+  const records = [];
+  let previousSha256 = null;
+  for (let index = 0; index < lines.length; index += 1) {
+    const lineNumber = index + 1;
+    if (!lines[index].trim()) {
+      throw new ValidationError(`decisions.jsonl line ${lineNumber} must not be blank`);
+    }
+    let record;
+    try {
+      record = JSON.parse(lines[index]);
+    } catch (error) {
+      throw new ValidationError(`decisions.jsonl line ${lineNumber} is invalid JSON: ${error.message}`);
+    }
+    validateDecisionData(record);
+    if (record.seq !== lineNumber) {
+      throw new ValidationError(
+        `decisions.jsonl seq must increase by one: line ${lineNumber} has seq ${JSON.stringify(record.seq)}`,
+      );
+    }
+    if (record.prev_sha256 !== previousSha256) {
+      throw new ValidationError(
+        `decisions.jsonl chain mismatch at seq ${record.seq}: expected prev_sha256 ${JSON.stringify(previousSha256)}, got ${JSON.stringify(record.prev_sha256)}`,
+      );
+    }
+    if (record.prev_seq !== undefined) {
+      if (!Number.isInteger(record.prev_seq) || record.prev_seq < 1 || record.prev_seq >= record.seq) {
+        throw new ValidationError(
+          `decisions.jsonl seq ${record.seq} prev_seq must reference an earlier decision`,
+        );
+      }
+      const referenced = records[record.prev_seq - 1];
+      if (!referenced || referenced.seq !== record.prev_seq) {
+        throw new ValidationError(
+          `decisions.jsonl seq ${record.seq} prev_seq ${record.prev_seq} cannot be resolved`,
+        );
+      }
+      if (
+        ['gate.what.revoked', 'scope.added', 'scope.removed'].includes(record.type)
+        && (
+          !['gate.what.approved', 'scope.added', 'scope.removed'].includes(referenced.type)
+          || normalizeReference(referenced.scope_ref) !== normalizeReference(record.scope_ref)
+        )
+      ) {
+        throw new ValidationError(
+          `decisions.jsonl seq ${record.seq} prev_seq must reference the active decision for the same scope_ref`,
+        );
+      }
+      if (['gate.what.revoked', 'scope.added', 'scope.removed'].includes(record.type)) {
+        const latestForScope = records.filter((candidate) => (
+          ['gate.what.approved', 'gate.what.revoked', 'scope.added', 'scope.removed'].includes(candidate.type)
+          && normalizeReference(candidate.scope_ref) === normalizeReference(record.scope_ref)
+        )).at(-1);
+        if (latestForScope?.seq !== referenced.seq) {
+          throw new ValidationError(
+            `decisions.jsonl seq ${record.seq} prev_seq must reference the latest active decision for the same scope_ref`,
+          );
+        }
+      }
+      if (
+        record.type === 'gate.what.approved'
+        && (
+          !['gate.what.approved', 'scope.added', 'scope.removed'].includes(referenced.type)
+          || decisionScopeIdentity(referenced.scope_ref) !== decisionScopeIdentity(record.scope_ref)
+        )
+      ) {
+        throw new ValidationError(
+          `decisions.jsonl seq ${record.seq} relocated approval must reference the same Gate artifact`,
+        );
+      }
+      if (record.type === 'gate.what.approved') {
+        const latestForArtifact = records.filter((candidate) => (
+          ['gate.what.approved', 'gate.what.revoked', 'scope.added', 'scope.removed'].includes(candidate.type)
+          && decisionScopeIdentity(candidate.scope_ref) === decisionScopeIdentity(record.scope_ref)
+        )).at(-1);
+        if (latestForArtifact?.seq !== referenced.seq) {
+          throw new ValidationError(
+            `decisions.jsonl seq ${record.seq} relocated approval must reference the latest active decision for the same Gate artifact`,
+          );
+        }
+      }
+      if (record.type === 'gate.how.revoked' && referenced.type !== 'gate.how.approved') {
+        throw new ValidationError(
+          `decisions.jsonl seq ${record.seq} prev_seq must reference a gate.how.approved decision`,
+        );
+      }
+      if (record.type === 'gate.how.revoked') {
+        const latestGateHow = records.filter((candidate) => (
+          ['gate.how.approved', 'gate.how.revoked'].includes(candidate.type)
+        )).at(-1);
+        if (latestGateHow?.seq !== referenced.seq) {
+          throw new ValidationError(
+            `decisions.jsonl seq ${record.seq} prev_seq must reference the latest active gate.how.approved decision`,
+          );
+        }
+      }
+    }
+    records.push(record);
+    previousSha256 = decisionRecordSha256(record);
+  }
+  return records;
 }
 
 function stringLeaves(value, valuePath = '$', leaves = []) {
@@ -4106,6 +4252,9 @@ export function validateArtifactRoot(artifactRoot, options = {}) {
   const constitution = constitutionPath
     ? validateConstitution(constitutionPath, { projectId: options.projectId })
     : null;
+  const decisions = existsSync(paths.decisions)
+    ? validateDecisionLedger(paths.decisions)
+    : null;
 
   requireGateFiles(paths, ['intakeJson'], 'Gate A');
   const intake = validateIntake(paths.intakeJson, { artifactRoot: root });
@@ -4121,6 +4270,7 @@ export function validateArtifactRoot(artifactRoot, options = {}) {
     spec: null,
     taskGraph: null,
     constitution,
+    decisions,
     readyForHandoff: false,
   };
 
@@ -4255,6 +4405,7 @@ function usage() {
     '  --entry <path>                     Validate a Markdown/text entry document.',
     '  --artifact-root <dir>               Validate a Gate A-C artifact root.',
     '  --constitution <path>                Validate a project constitution.',
+    '  --decisions [path]                   Validate a decision ledger; defaults to <artifact-root>/decisions.jsonl.',
     '  --require-approved-constitution      Require its Gate ② approval audit.',
     '  --project-id <id>                   Expected project id for --artifact-root.',
     '  --intake <path> [--intake-md <path>]',
@@ -4293,8 +4444,17 @@ function parseArgs(argv) {
     else if (arg === '--intake') args.intake = argv[++index];
     else if (arg === '--intake-md') args.intakeMd = argv[++index];
     else if (arg === '--status') args.status = argv[++index];
-    else if (arg === '--artifact-root') args.artifactRoot = argv[++index];
+    else if (arg === '--artifact-root' || arg === '--artifacts') args.artifactRoot = argv[++index];
     else if (arg === '--constitution') args.constitution = argv[++index];
+    else if (arg === '--decisions') {
+      const candidate = argv[index + 1];
+      if (candidate && !candidate.startsWith('-')) {
+        args.decisions = candidate;
+        index += 1;
+      } else {
+        args.decisions = true;
+      }
+    }
     else if (arg === '--project-id') args.projectId = argv[++index];
     else if (arg === '--spec') args.spec = argv[++index];
     else if (arg === '--task-graph') args.taskGraph = argv[++index];
@@ -4342,6 +4502,15 @@ export function main(argv = process.argv.slice(2)) {
       });
     } else if (args.requireApprovedConstitution) {
       throw new ValidationError('--require-approved-constitution requires --constitution');
+    }
+    if (args.decisions) {
+      const decisionsPath = args.decisions === true
+        ? args.artifactRoot && path.join(path.resolve(args.artifactRoot), 'decisions.jsonl')
+        : path.resolve(args.decisions);
+      if (!decisionsPath) {
+        throw new ValidationError('--decisions without a path requires --artifact-root or --artifacts');
+      }
+      validateDecisionLedger(decisionsPath);
     }
     if (args.status) validateStatusDoc(args.status);
     if (args.artifactRoot) {

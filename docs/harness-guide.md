@@ -78,13 +78,17 @@ Gate A/B/C의 상세 통과·차단 규칙은 `p2a-harness` skill이 유일한 �
 
 Feature Radar가 추천을 제공했다면 승격된 각 후보를 Gate A에서 `selected`, `rejected`, `deferred` 중 하나로 처분하고 이유를 요약한다. 사용자는 요약을 자유롭게 교정할 수 있고, 수정된 범위를 다시 확인한다. 원문 존재, 침묵, “개발해” 같은 포괄 지시는 승인이 아니다.
 
-사용자가 해석된 범위를 명시적으로 확인한 뒤에만 `intake_json`을 `status: ready_for_spec`로 기록하고 `approval_audit`을 추가한다. `gate-a-intake/intake.md`는 사용자가 명시적으로 요청할 때만 생성하며 첫 줄에 `<!-- plan2agent:intake-md-export=explicit -->` marker를 둔다. Gate A 확인 뒤 신규 프로젝트는 Gate ②로 이어진다.
+사용자가 해석된 범위를 명시적으로 확인한 뒤 `p2a decide --quote "<사용자 발화>" --artifacts <artifact-root>`를 실행한다. 명령은 `decisions.jsonl`에 Gate ① 결정을 append하고 `intake_json`의 `status: ready_for_spec`와 `approval_audit` 사본을 함께 기록한다. `gate-a-intake/intake.md`는 사용자가 명시적으로 요청할 때만 생성하며 첫 줄에 `<!-- plan2agent:intake-md-export=explicit -->` marker를 둔다. Gate A 확인 뒤 신규 프로젝트는 Gate ②로 이어진다.
 
 ### Gate ② — Project Shape
 
 `.plan2agent/constitution.json`은 architecture, stack, prohibitions, style을 프로젝트 수명 동안 유지한다. 하네스는 각 목록을 최대 10개로 간결하게 제안하고 중요한 대안과 trade-off를 설명한다. `enforcement` 기본값은 `advisory`다. `validator` 금지는 `targets`와 `forbidden_terms`를 가져야 하며 spec/task graph의 실제 선택·도입 계획에서 차단된다. `No ...`, `... 사용 금지`, 제거 작업처럼 금지를 선언하거나 준수하는 문장은 위반으로 보지 않는다.
 
-승인은 반드시 사용자의 실제 발화를 보존한다. Draft를 검토한 뒤 `p2a shape approve --quote "<사용자 발화>"`를 실행하며 quote가 없으면 실패한다. 승인 constitution은 반복 iteration에서 재사용하고, Gate A 변경이 아키텍처·기반 stack·프로젝트 금지 규칙·style 정책을 바꾸는 경우에만 focused Gate ② diff와 재승인을 진행한다. 기존 `.plan2agent/style.md` 프로젝트는 migration 없이 동작하며 `p2a shape migrate-style`은 선택적인 승인 전 draft만 만든다.
+승인은 반드시 사용자의 실제 발화를 보존한다. Draft를 검토한 뒤 `p2a shape approve --quote "<사용자 발화>"`를 실행하며 quote가 없으면 실패한다. 명령은 `gate.how.approved`를 결정 원장에 append하고 constitution `approval_audit`을 사본으로 유지한다. 승인 constitution은 반복 iteration에서 재사용하고, Gate A 변경이 아키텍처·기반 stack·프로젝트 금지 규칙·style 정책을 바꾸는 경우에만 focused Gate ② diff와 재승인을 진행한다. 기존 `.plan2agent/style.md` 프로젝트는 migration 없이 동작하며 `p2a shape migrate-style`은 선택적인 승인 전 draft만 만든다.
+
+### 결정 원장
+
+`.plan2agent/artifacts/<project_id>/decisions.jsonl`은 Gate ①② 승인, 헌법 변경, 범위 추가·제거, 승인 철회·재승인만 기록한다. 각 줄은 `seq`와 직전 줄의 canonical SHA-256인 `prev_sha256`으로 연결되며 기존 줄은 수정·삭제하지 않는다. 인터뷰 라운드, task 분해, run 시작·종료, validator 실행 상세는 기록하지 않는다. `p2a next`는 원장이 존재하면 원장만 승인 상태의 1차 근거로 사용하고, 원장이 전혀 없는 기존 프로젝트만 `approval_audit`으로 폴백한다. `p2a decisions --why <파일>`은 run `changedFiles`와 당시 scope/constitution 결정을 조인한다.
 
 ### Gate B
 

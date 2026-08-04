@@ -12,6 +12,7 @@ Plan2Agent CLI는 기획 산출물 검증, 승인된 task graph 실행, agent ru
 | --- | --- |
 | `p2a init` | 새 프로젝트의 상태와 provider asset을 초기화한다. |
 | `p2a next` | 현재 상태에 맞는 한 가지 다음 행동을 반환한다. |
+| `p2a decide`, `p2a decisions` | Gate ①·범위 변경을 append-only 원장에 기록하고 결정 계보를 조회한다. |
 | `p2a shape` | Gate ② constitution 상태, legacy style migration, 인용 승인 기록을 관리한다. |
 | `p2a iteration`, `p2a tasks`, `p2a runs`, `p2a execute` | 반복·task·run 실행 흐름을 관리한다. |
 | `p2a validate`, `p2a eval`, `p2a memory`, `p2a proposals` | 산출물 검증, 평가, Memory, 개선 제안을 관리한다. |
@@ -43,7 +44,28 @@ p2a info
 p2a next
 ```
 
-`p2a`의 하위 명령은 `shape`, `eval`, `memory`, `execute`, `tasks`, `runs`, `iteration`, `proposals`, `validate`, `doctor`, `enhance`, `update`, `upgrade`, `handoff`다. `--target`을 생략하면 현재 작업 디렉터리를 대상으로 삼는다.
+`p2a`의 하위 명령은 `decide`, `decisions`, `shape`, `eval`, `memory`, `execute`, `tasks`, `runs`, `iteration`, `proposals`, `validate`, `doctor`, `enhance`, `update`, `upgrade`, `handoff`다. `--target`을 생략하면 현재 작업 디렉터리를 대상으로 삼는다.
+
+### 결정 원장 — `p2a decide`, `p2a decisions`
+
+Gate 승인과 범위·헌법 변경은 `.plan2agent/artifacts/<project_id>/decisions.jsonl`에만 append한다. 각 줄은 단조 증가하는 `seq`와 직전 결정의 canonical SHA-256인 `prev_sha256`을 가지며, 기존 줄을 수정하거나 삭제하지 않는다. 기존 `approval_audit`는 호환·가독성을 위한 아티팩트 사본으로 계속 유지하지만, 원장이 존재하면 `p2a next`는 원장만 승인 상태의 1차 근거로 사용한다. 원장이 전혀 없는 기존 프로젝트만 audit 스캔으로 폴백한다.
+
+```bash
+p2a decide --artifacts .plan2agent/artifacts/<project_id> \
+  --quote "이 범위로 진행해"
+
+p2a decide revoke --artifacts .plan2agent/artifacts/<project_id> \
+  --quote "승인을 철회해"
+
+p2a decide add --artifacts .plan2agent/artifacts/<project_id> \
+  --scope "재시도 지원" --quote "재시도도 넣자"
+
+p2a decisions --artifacts .plan2agent/artifacts/<project_id>
+p2a decisions --artifacts .plan2agent/artifacts/<project_id> \
+  --why src/example.ts
+```
+
+`p2a decide`는 가장 이른 미승인 Gate ① intake/spec을 승인하고 실제 사용자 발화를 원장과 audit 사본에 함께 기록한다. `revoke`, `add`, `remove`도 이전 기록을 지우지 않고 새 이벤트를 append한다. `p2a shape approve|revoke`는 같은 원장에 Gate ② 이력을 남기며, 헌법 본문이 바뀐 재승인은 `constitution.changed`도 기록한다. `decisions --why`는 run의 `changedFiles`, `sourceSpecRef`, Gate ① 결정과 당시 활성 Gate ② 결정을 조인한다. 인터뷰 라운드, task 분해, run 시작·종료, validator 실행 상세는 원장 이벤트가 아니다.
 
 ## 3. 프로젝트 초기화 — `p2a init`
 
@@ -114,6 +136,10 @@ p2a shape
 p2a validate \
   --constitution .plan2agent/constitution.json \
   --require-approved-constitution
+
+p2a validate \
+  --decisions \
+  --artifacts .plan2agent/artifacts/<project_id>
 
 p2a validate \
   --status .plan2agent/artifacts/<project_id>/status.md
@@ -239,7 +265,7 @@ p2a iteration maintenance add \
   --yes
 ```
 
-`--status`는 generated `status.md` view의 최소 구조만 확인한다. `--artifact-root`는 `.plan2agent/artifacts/<project_id>/` 아래 Gate A-C JSON bundle을 한 번에 검증하며, 승인된 Gate B spec이 있으면 `spec.approval_audit`도 확인한다. `--spec`은 `--intake`가 있으면 그 intake를 사용하고, 없으면 `spec.source_intake`를 실제 파일로 자동 연결해 Gate B traceability를 검사한다. `spec.source_intake`가 명시됐지만 파일로 해석되지 않으면 실패한다. 레거시 `review.json`을 명시적으로 검사해야 할 때만 `--review`와 선택적인 `--require-review-pass`를 사용할 수 있으며, 이 파일은 readiness 조건이 아니다.
+`--status`는 generated `status.md` view의 최소 구조만 확인한다. `--decisions`는 명시 경로 또는 `--artifacts <root>/decisions.jsonl`의 줄별 schema, 단조 `seq`, `prev_sha256` 체인을 검증한다. `--artifact-root`/`--artifacts`는 `.plan2agent/artifacts/<project_id>/` 아래 Gate A-C JSON bundle과 존재하는 결정 원장을 한 번에 검증하며, 승인된 Gate B spec이 있으면 `spec.approval_audit`도 확인한다. `--spec`은 `--intake`가 있으면 그 intake를 사용하고, 없으면 `spec.source_intake`를 실제 파일로 자동 연결해 Gate B traceability를 검사한다. `spec.source_intake`가 명시됐지만 파일로 해석되지 않으면 실패한다. 레거시 `review.json`을 명시적으로 검사해야 할 때만 `--review`와 선택적인 `--require-review-pass`를 사용할 수 있으며, 이 파일은 readiness 조건이 아니다.
 
 `--visual-experience`, `--visual-prototype`, `--visual-review`는 Gate B의 screen composition, prototype 디렉터리의 모든 regular file이 manifest 해시 집합에 포함된 passive offline HTML/CSS bundle, 실제 PNG·접근성 JSON의 해시와 capture metadata를 포함한 iteration 최종 verdict를 개별 검증한다. Full mode는 최소 두 후보를 요구하고, 각 screen state는 진입점에서 구조적으로 활성인 local anchor로 도달 가능한 HTML/fragment에 매핑되어야 한다. Core artifact validator는 CSS cascade·specificity로 렌더링 visibility를 추정하지 않으며 실제 표시 상태는 브라우저 캡처 기반 최종 review가 판정한다. Prototype은 `script-src 'none'` CSP를 사용하며 executable JavaScript, inline event handler, 외부 navigation을 허용하지 않는다. Prototype manifest와 각 선언 파일은 해시·parse 전에 25MiB 상한을 적용하고, PNG chunk ordering·palette·scanline 검증은 별도 media validator가 담당한다. `--runs-dir`는 새 `p2a.run.v2` finished run을 원본 task graph와 승인 spec에 다시 결합해 run-start `taskContractSha256`을 확인한다. 일반 `visualImpact` 구현 run은 sidecar를 요구하지 않으며, 필요하면 `p2a runs record --visual-feedback note|concern ...`으로 비차단 중간 피드백을 남길 수 있다. `runKind: final_visual_review` run만 Gate B에서 파생한 전체 `visualReview` 계약, `iteration_id` 귀속 sidecar, workspace identity/revision, 봉인된 `visualReviewEvidenceSha256`, evidence-backed `confirm_ui`를 검증한다. Graph mode에서는 `--runs`가 원본 graph와 다른 디렉터리를 가리키거나 graph가 project-relative source spec을 참조해도 실제로 해석된 spec의 artifact root에서 provenance를 검증하며, 성공 finish 전에 같은 검사를 수행한다. `p2a runs validate --run-id`도 schema-only shortcut을 사용하지 않고 run store 전체의 index와 provenance를 함께 검증한다. 기존 `p2a.run.v1` non-visual 이력은 digest 없이도 계속 읽을 수 있으며 진행 중 v1 run은 finish 시 v2로 승격된다.
 

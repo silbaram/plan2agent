@@ -2151,7 +2151,7 @@ function inheritedCodexAgentContent(sourcePath) {
     .replace(/^model_reasoning_effort\s*=.*\n/m, '');
 }
 
-const P2A_SUBCOMMAND_PATTERN = /\bp2a (?=(?:doctor|enhance|eval|execute|handoff|info|init|iteration|memory|next|proposal|proposals|run|runs|scaffold|shape|task|tasks|update|upgrade|validate)\b)/g;
+const P2A_SUBCOMMAND_PATTERN = /\bp2a (?=(?:decide|decisions|doctor|enhance|eval|execute|handoff|info|init|iteration|memory|next|proposal|proposals|run|runs|scaffold|shape|task|tasks|update|upgrade|validate)\b)/g;
 
 function legacyRuntimeCommandContent(source) {
   return source.replace(

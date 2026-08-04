@@ -1079,7 +1079,7 @@ test('info keeps its JSON contract and points human output to next', () => {
 });
 
 test('next keeps the ordered decision rules required by the contract', () => {
-  assert.equal(NEXT_DECISION_RULES.length, 23);
+  assert.equal(NEXT_DECISION_RULES.length, 24);
   for (const rule of NEXT_DECISION_RULES) {
     assert.equal(typeof rule.when, 'function');
     assert.equal(typeof rule.reason, 'function');

@@ -45,13 +45,19 @@ test('checkout init preserves the legacy co-located runtime', () => {
     assert.equal(realpathSync(manifest.provenance.toolkitRoot), realpathSync(ROOT));
     assert.equal('runtime' in manifest, false);
     assert.ok(manifest.scriptFiles.includes('.plan2agent/scripts/p2a.mjs'));
+    assert.ok(manifest.scriptFiles.includes('.plan2agent/scripts/p2a_decision_ledger.mjs'));
+    assert.ok(manifest.scriptFiles.includes('.plan2agent/scripts/p2a_decisions.mjs'));
     assert.ok(manifest.scriptFiles.includes('.plan2agent/scripts/p2a_shape.mjs'));
     assert.ok(manifest.schemaFiles.includes('.plan2agent/schemas/next.schema.json'));
     assert.ok(manifest.schemaFiles.includes('.plan2agent/schemas/constitution.schema.json'));
+    assert.ok(manifest.schemaFiles.includes('.plan2agent/schemas/decisions.schema.json'));
     assert.equal(existsSync(path.join(targetRoot, '.plan2agent', 'scripts', 'p2a.mjs')), true);
+    assert.equal(existsSync(path.join(targetRoot, '.plan2agent', 'scripts', 'p2a_decision_ledger.mjs')), true);
+    assert.equal(existsSync(path.join(targetRoot, '.plan2agent', 'scripts', 'p2a_decisions.mjs')), true);
     assert.equal(existsSync(path.join(targetRoot, '.plan2agent', 'scripts', 'p2a_shape.mjs')), true);
     assert.equal(existsSync(path.join(targetRoot, '.plan2agent', 'schemas', 'next.schema.json')), true);
     assert.equal(existsSync(path.join(targetRoot, '.plan2agent', 'schemas', 'constitution.schema.json')), true);
+    assert.equal(existsSync(path.join(targetRoot, '.plan2agent', 'schemas', 'decisions.schema.json')), true);
     assert.equal(existsSync(path.join(targetRoot, '.plan2agent', 'style.md')), false);
     assert.match(
       readFileSync(path.join(targetRoot, 'PLAN2AGENT.md'), 'utf8'),
@@ -249,7 +255,17 @@ test('npm pack dry run includes the global CLI runtime', () => {
     });
     assert.equal(packed.status, 0, formatCommandResult(packed));
     const files = new Set(JSON.parse(packed.stdout)[0].files.map((file) => file.path));
-    for (const requiredPath of ['package.json', 'LICENSE', 'scripts/p2a.mjs', 'scripts/p2a_handoff.mjs', 'schemas/next.schema.json', '.agents/skills/p2a-next/SKILL.md']) {
+    for (const requiredPath of [
+      'package.json',
+      'LICENSE',
+      'scripts/p2a.mjs',
+      'scripts/p2a_decision_ledger.mjs',
+      'scripts/p2a_decisions.mjs',
+      'scripts/p2a_handoff.mjs',
+      'schemas/next.schema.json',
+      'schemas/decisions.schema.json',
+      '.agents/skills/p2a-next/SKILL.md',
+    ]) {
       assert.ok(files.has(requiredPath), `${requiredPath} must be present in npm pack output`);
     }
     assert.ok(files.has('readme.md'), 'npm must include the project readme automatically');
@@ -325,6 +341,13 @@ test('the packed p2a binary supports core commands without a local runtime copy'
     const nestedRunList = runPacked(nestedRoot, ['runs', 'list', '--json']);
     assert.equal(nestedRunList.status, 0, formatCommandResult(nestedRunList));
     assert.equal(JSON.parse(nestedRunList.stdout).schema_version, 'p2a.run_index.v1');
+
+    const decideHelp = runPacked(nestedRoot, ['decide', '--help']);
+    assert.equal(decideHelp.status, 0, formatCommandResult(decideHelp));
+    assert.match(decideHelp.stdout, /p2a decide \[approve\]/);
+    const decisionsHelp = runPacked(nestedRoot, ['decisions', '--help']);
+    assert.equal(decisionsHelp.status, 0, formatCommandResult(decisionsHelp));
+    assert.match(decisionsHelp.stdout, /p2a decisions --why/);
 
     const nestedEvalAnalyze = runPacked(nestedRoot, ['eval', 'analyze', '--json']);
     assert.equal(nestedEvalAnalyze.status, 0, formatCommandResult(nestedEvalAnalyze));
