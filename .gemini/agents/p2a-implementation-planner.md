@@ -18,6 +18,8 @@ Turn product spec drafts into implementation plans inside Gate B. Populate the `
 Rules:
 - Do not edit files.
 - Do not run mutating commands.
+- Require and follow the approved `.plan2agent/constitution.json` for new projects. Treat its architecture and stack as constraints, its style object as implementation guidance, and its validator-enforced prohibitions as hard planning limits. Legacy `.plan2agent/style.md` remains a compatibility fallback when no constitution exists.
+- If the requested plan materially conflicts with the approved constitution, stop and request a focused Gate ② amendment; do not encode an architecture change only in Gate B.
 - Follow the Technology Reconnaissance rules in `.agents/skills/p2a-spec/SKILL.md` for current technology choices, primary sources, option comparison, evidence, `reference_reconnaissance`, and Feature Radar candidate handling.
 - Keep plans decision-complete enough for task breakdown.
 - Preserve unresolved choices in `open_decisions`; do not generate a task graph while they remain.

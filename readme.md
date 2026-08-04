@@ -42,6 +42,7 @@ canonical product, implementation, and task artifacts instead of leaving decisio
 ```text
 Concise Markdown or text entry document
   -> Gate A: confirmed understanding and explicit user approval
+  -> Gate ②: approved persistent architecture, stack, prohibitions, and style
   -> Gate B: product spec and implementation plan
      -> conditional visual experience: structured screens + approved offline HTML prototype
   -> Gate C: validated dependency-aware task graph
@@ -49,8 +50,9 @@ Concise Markdown or text entry document
   -> evaluation and improvement proposals
 ```
 
-Gate A confirmation and Gate B approval are separate decisions. Once you explicitly confirm the
-Gate A understanding summary, the harness continues to Gate B in the same agent session.
+Gate A confirmation, Gate ② project-shape approval, and Gate B approval are separate decisions.
+`p2a shape approve --quote "<exact user utterance>"` records the Gate ② approval. Later iterations
+reuse that constitution unless their approved scope materially changes the architecture.
 
 The harness writes canonical files under `.plan2agent/artifacts/<project_id>/`. Complete the
 suggested action and run:
@@ -70,7 +72,7 @@ layer around those tools.
 
 | Need | Plan2Agent approach |
 | --- | --- |
-| Clear decisions before code | Gate A scope confirmation and Gate B approval preserve decisions, assumptions, open decisions, and approval state. |
+| Clear decisions before code | Gate A scope, Gate ② project shape, and Gate B spec approval preserve decisions, constraints, assumptions, and approval state. |
 | Traceable implementation work | Specs map to dependency-aware tasks with acceptance criteria and source references. |
 | Reviewable agent execution | Tasks run in foreground-supervised sessions with run logs, changed files, and verification evidence. |
 | Portable project state | Local JSON artifacts remain canonical across Codex, Claude Code, and Gemini CLI. |
@@ -86,6 +88,7 @@ Planning and execution state stays local to the project:
 ```text
 .plan2agent/
   project.config.json
+  constitution.json
   artifacts/<project_id>/
     gate-a-intake/
       intake.json
@@ -112,8 +115,8 @@ an auditable history for later reviews.
 
 The planning harness turns an idea into structured intake, product and implementation specs, and a
 validated task graph. Gate A presents a compact understanding summary and requires explicit
-confirmation. The same session then continues to Gate B. It records uncertainty as an assumption or
-user decision rather than inventing a requirement.
+confirmation. The same session establishes or reuses Gate ② before continuing to Gate B. It records
+uncertainty as an assumption or user decision rather than inventing a requirement.
 
 ### 2. Execute one ready task
 
@@ -159,6 +162,7 @@ Plan2Agent installs one `p2a` entrypoint:
 | --- | --- |
 | `p2a init` | Initialize project state and provider assets. |
 | `p2a next` | Return one state-based next action and its reason. |
+| `p2a shape` | Inspect, migrate, and explicitly approve the persistent project constitution. |
 | `p2a info` | Show project, artifact, task, and run status. |
 | `p2a doctor` | Diagnose configuration, assets, and local drift. |
 | `p2a update` | Preview or apply safe package-managed asset updates. |

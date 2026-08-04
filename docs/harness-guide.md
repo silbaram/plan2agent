@@ -32,6 +32,7 @@ Plan2Agent 하네스는 짧은 제품 문서를 바로 코드로 구현하지 �
 ```text
 짧은 Markdown 또는 text 진입 문서
   -> Entry document scope confirmation(Gate A)
+  -> Project constitution approval(Gate ②)
   -> Product spec + Implementation plan(Gate B)
   -> Validated task graph(Gate C)
   -> 별도 개발 세션에서 task 실행
@@ -40,9 +41,10 @@ Plan2Agent 하네스는 짧은 제품 문서를 바로 코드로 구현하지 �
 | 단계 | 담당 skill | 주요 역할 | 산출물 |
 | --- | --- | --- | --- |
 | 1. Scope + Intake | `p2a-harness` | 진입 문서를 해석하고 이해 요약을 Gate A에서 확인한다. | `intake_json` |
-| 2. Product spec | `p2a-spec` | 답변된 intake를 제품 목표, 범위, 사용자 흐름, 성공 기준으로 정리한다. | `spec_json.product` |
-| 3. Implementation plan | `p2a-spec` | 승인 가능한 제품 명세를 아키텍처, 인터페이스, 데이터 흐름, 검증 계획으로 바꾼다. | `spec_json.implementation` |
-| 4. Task graph | `p2a-task-breakdown` | 승인된 구현 명세를 의존성 있는 작은 task로 분해한다. | `task_graph_json` |
+| 2. Project shape | `p2a-harness` | 프로젝트 전역 architecture, stack, prohibitions, style을 Gate ②에서 승인한다. | `.plan2agent/constitution.json` |
+| 3. Product spec | `p2a-spec` | 답변된 intake를 제품 목표, 범위, 사용자 흐름, 성공 기준으로 정리한다. | `spec_json.product` |
+| 4. Implementation plan | `p2a-spec` | 승인 가능한 제품 명세를 아키텍처, 인터페이스, 데이터 흐름, 검증 계획으로 바꾼다. | `spec_json.implementation` |
+| 5. Task graph | `p2a-task-breakdown` | 승인된 구현 명세를 의존성 있는 작은 task로 분해한다. | `task_graph_json` |
 
 하네스는 각 단계의 정본 JSON 산출물을 `.plan2agent/artifacts/<project_id>/` 아래 gate별 폴더에 저장한다. Markdown은 필요할 때 JSON에서 생성하는 사람용 view/export다.
 
@@ -76,7 +78,13 @@ Gate A/B/C의 상세 통과·차단 규칙은 `p2a-harness` skill이 유일한 �
 
 Feature Radar가 추천을 제공했다면 승격된 각 후보를 Gate A에서 `selected`, `rejected`, `deferred` 중 하나로 처분하고 이유를 요약한다. 사용자는 요약을 자유롭게 교정할 수 있고, 수정된 범위를 다시 확인한다. 원문 존재, 침묵, “개발해” 같은 포괄 지시는 승인이 아니다.
 
-사용자가 해석된 범위를 명시적으로 확인한 뒤에만 `intake_json`을 `status: ready_for_spec`로 기록하고 `approval_audit`을 추가한다. `gate-a-intake/intake.md`는 사용자가 명시적으로 요청할 때만 생성하며 첫 줄에 `<!-- plan2agent:intake-md-export=explicit -->` marker를 둔다. Gate A 확인 뒤 Gate B는 같은 harness 대화에서 이어지지만 Gate B 승인은 별도 결정이다.
+사용자가 해석된 범위를 명시적으로 확인한 뒤에만 `intake_json`을 `status: ready_for_spec`로 기록하고 `approval_audit`을 추가한다. `gate-a-intake/intake.md`는 사용자가 명시적으로 요청할 때만 생성하며 첫 줄에 `<!-- plan2agent:intake-md-export=explicit -->` marker를 둔다. Gate A 확인 뒤 신규 프로젝트는 Gate ②로 이어진다.
+
+### Gate ② — Project Shape
+
+`.plan2agent/constitution.json`은 architecture, stack, prohibitions, style을 프로젝트 수명 동안 유지한다. 하네스는 각 목록을 최대 10개로 간결하게 제안하고 중요한 대안과 trade-off를 설명한다. `enforcement` 기본값은 `advisory`다. `validator` 금지는 `targets`와 `forbidden_terms`를 가져야 하며 spec/task graph의 실제 선택·도입 계획에서 차단된다. `No ...`, `... 사용 금지`, 제거 작업처럼 금지를 선언하거나 준수하는 문장은 위반으로 보지 않는다.
+
+승인은 반드시 사용자의 실제 발화를 보존한다. Draft를 검토한 뒤 `p2a shape approve --quote "<사용자 발화>"`를 실행하며 quote가 없으면 실패한다. 승인 constitution은 반복 iteration에서 재사용하고, Gate A 변경이 아키텍처·기반 stack·프로젝트 금지 규칙·style 정책을 바꾸는 경우에만 focused Gate ② diff와 재승인을 진행한다. 기존 `.plan2agent/style.md` 프로젝트는 migration 없이 동작하며 `p2a shape migrate-style`은 선택적인 승인 전 draft만 만든다.
 
 ### Gate B
 
@@ -92,7 +100,7 @@ Task graph의 dependency, cycle, acceptance criteria, source spec reference를 �
 
 ## 3. 산출물 파일과 데이터 계약
 
-하네스 오케스트레이터는 안정적인 `project_id`를 사용하고, 한 번의 run에 속한 정본 JSON 파일을 모두 `.plan2agent/artifacts/<project_id>/` 아래의 gate별 폴더에 둔다. Co-located scaffold 프로젝트에서는 사용자가 `project_id`를 매번 새로 정하지 않는다. `.plan2agent/project.config.json`의 `projectId`를 정본으로 쓰고, 없으면 `.plan2agent/manifest.json.projectId`, 기존 artifact/spec/task graph에 이미 있는 id, target/project root basename의 kebab-case 정규화값 순서로 fallback한다. 디렉터리 basename은 fresh scaffold의 기본값을 만들기 위한 seed일 뿐이며, 레거시 산출물이 있으면 그 id를 먼저 보존한다. Subagent는 read-only이며 파일을 직접 쓰지 않는다. 파일 기록은 하네스 오케스트레이터만 수행한다. `status.md` 같은 Markdown 파일은 필요할 때 JSON에서 생성하는 view다.
+하네스 오케스트레이터는 안정적인 `project_id`를 사용한다. Project-level `.plan2agent/constitution.json`은 iteration 밖에 두고, 한 번의 run에 속한 나머지 정본 JSON 파일은 `.plan2agent/artifacts/<project_id>/` 아래의 gate별 폴더에 둔다. Co-located scaffold 프로젝트에서는 사용자가 `project_id`를 매번 새로 정하지 않는다. `.plan2agent/project.config.json`의 `projectId`를 정본으로 쓰고, 없으면 `.plan2agent/manifest.json.projectId`, 기존 artifact/spec/task graph에 이미 있는 id, target/project root basename의 kebab-case 정규화값 순서로 fallback한다. 디렉터리 basename은 fresh scaffold의 기본값을 만들기 위한 seed일 뿐이며, 레거시 산출물이 있으면 그 id를 먼저 보존한다. Subagent는 read-only이며 파일을 직접 쓰지 않는다. 파일 기록은 하네스 오케스트레이터만 수행한다. `status.md` 같은 Markdown 파일은 필요할 때 JSON에서 생성하는 view다.
 
 ```text
 .plan2agent/artifacts/<project_id>/

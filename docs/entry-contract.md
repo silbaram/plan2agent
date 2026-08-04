@@ -10,7 +10,7 @@
 - Feature Radar 사용은 선택 사항이다. Radar 없이도 같은 검증과 확인 흐름을 거친다.
 - 원문은 미리 정해진 템플릿, JSON, 요약문, 완성된 요구사항 목록일 필요가 없다.
 - 부족하지만 추론 가능한 내용은 확인 대화에서 보완한다. 원문을 자동으로 다시 쓰거나 원문보다 합성 요약을 우선하지 않는다.
-- 진입 문서는 Gate A 입력이다. 명시적 범위 확인, Gate B 승인, 승인된 spec의 downstream 차단 규칙을 우회하지 않는다.
+- 진입 문서는 Gate A 입력이다. 명시적 범위 확인, 신규 프로젝트의 Gate ② constitution 승인, Gate B 승인, 승인된 spec의 downstream 차단 규칙을 우회하지 않는다.
 
 ## 2. 최소 문서 계약
 
@@ -78,10 +78,10 @@ manifest가 없거나 위 정보가 불완전하거나 `source_complete: false`�
 
 | Radar 모드 | p2a 진입 |
 | --- | --- |
-| idea research | 게이트 ① 범위 확인 → 게이트 ② 명세 승인 → 실행 |
-| existing project | 게이트 ① 범위 확인 → 기존 `constitution.json` 재사용 → 실행 |
+| idea research | Gate A 범위 확인 → Gate ② constitution 승인 → Gate B 명세 승인 → 실행 |
+| existing project | Gate A 범위 확인 → 기존 `constitution.json` 재사용(없으면 legacy `style.md` 호환) → Gate B 명세 승인 → 실행 |
 
-이 계약은 `constitution.json` 수명주기를 새로 만들거나 기존 반복 상태를 초기화하지 않는다. 반복 프로젝트에 해당 파일이 있으면 재사용한다.
+`constitution.json`은 `.plan2agent/constitution.json`에 한 번 승인해 반복해서 사용한다. 현재 Gate A 변경이 아키텍처·기반 스택·프로젝트 금지 규칙·스타일 정책을 실질적으로 바꾸는 경우에만 Gate ②를 다시 연다.
 
 ## 5. CLI 상태 계약
 
@@ -107,6 +107,14 @@ manifest가 없거나 위 정보가 불완전하거나 `source_complete: false`�
 
 기존 Gate 상태가 있으면 진입 문서 오류보다 canonical 재개 경로가 우선한다.
 
+Gate A가 승인되었지만 신규 프로젝트에 constitution이 없거나 draft이면 다음 상태를 반환한다.
+
+- `state: shape`
+- constitution이 없으면 `command.kind: skill`로 `p2a-harness` Gate ② 제안을 진행한다.
+- draft가 있으면 `command.kind: approval`로 검토 후 `p2a shape approve --quote "<사용자 발화>"`를 안내한다.
+
+승인된 constitution은 이후 반복 iteration에서 재사용한다. 기존 `style.md`만 가진 legacy 프로젝트는 migration 없이 기존 Gate B·실행 흐름을 계속할 수 있으며, 선택적으로 `p2a shape migrate-style`을 실행해 승인 전 draft를 만들 수 있다.
+
 ### `p2a info`와 `p2a doctor`
 
 자동 선택된 진입 문서가 하나이면 `p2a info --json`은 기존 JSON 필드를 유지하면서 조건부 `entry` 요약과 검증/확인 next action을 추가한다. 진입 문서가 없으면 기존 JSON shape을 바꾸지 않는다.
@@ -122,7 +130,7 @@ manifest가 없거나 위 정보가 불완전하거나 `source_complete: false`�
 3. 안전하게 추론할 수 없고 범위를 실질적으로 바꾸는 내용만 묻는다. 이 경로에는 고정 질문 수나 라운드 제한이 없으며, 확인 가능한 즉시 질문을 멈춘다.
 4. 수정된 범위를 다시 제시하고 사용자의 명시적 확인을 요청한다. 침묵, 원문 존재, “개발해” 같은 포괄 지시는 승인이 아니다.
 5. Radar 추천은 승격된 각 후보를 `selected`, `rejected`, `deferred` 중 하나로 처분하고 이유를 기록한다.
-6. 확인 후에만 같은 `p2a.intake.v1` schema와 Gate A `approval_audit`로 canonical intake를 만들고 정상 Gate B 흐름을 계속한다.
+6. 확인 후에만 같은 `p2a.intake.v1` schema와 Gate A `approval_audit`로 canonical intake를 만들고, 신규 프로젝트는 Gate ②를 승인하거나 기존 승인을 재사용한 뒤 Gate B 흐름을 계속한다.
 
 새 하네스는 `--entry`가 가리키는 문서에서 시작한다. 문서가 없으면 먼저 Markdown 또는 text entry를 작성해야 하며, 채팅 입력만으로 별도 기획 상태를 시작하지 않는다. Gate A 확인 전 Gate B를 만들 수 없고, Gate B 승인과 open decision 해소 전 Gate C로 진행할 수 없다.
 
@@ -131,11 +139,11 @@ manifest가 없거나 위 정보가 불완전하거나 `source_complete: false`�
 이 계약은 다음을 변경하지 않는다.
 
 - 기존 intake의 optional `interview` object와 재개 snapshot. 이 object는 opaque 호환 데이터로만 보존하고 새 상태 판단에 사용하지 않는다.
-- `intake.schema.json`, `spec.schema.json` 및 기존 artifact validator
+- `intake.schema.json`, `spec.schema.json` 계약 자체
 - Feature Radar의 evidence 모델과 원본 copy/변환 규칙
 - approved spec이 없을 때 downstream task 생성을 막는 규칙
 - Gate A/B 승인 및 Gate C validation 계약
-- 기존 `p2a validate`, `p2a info`, `p2a doctor` 호출의 의미와 정상 동작
+- 기존 `p2a validate`, `p2a info`, `p2a doctor` 호출의 의미와 정상 동작. 단, 승인 constitution이 있으면 validator enforcement 금지 규칙이 spec/task graph에 추가 적용된다.
 
 따라서 새 entry 프로젝트는 명시적 확인과 승인을 거쳐 Gate B 이후로 진행할 수 있고, 기존 프로젝트는 진입 문서가 추가되어도 현재 canonical 상태에서 결정론적으로 재개한다.
 

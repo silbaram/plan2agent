@@ -5,7 +5,7 @@ description: Use when turning a concise product document into a gated Plan2Agent
 
 # Plan2Agent Harness
 
-Turn an entry document into durable planning artifacts. The harness is a decision ledger: agents propose and validate artifacts, while humans approve only product scope and the product/implementation specification.
+Turn an entry document into durable planning artifacts. The harness is a decision ledger: agents propose and validate artifacts, while humans approve product scope, the persistent project constitution, and the product/implementation specification.
 
 ## Inputs
 
@@ -16,6 +16,7 @@ The entry document should identify the problem, intended users, desired outcome,
 On resume, inspect canonical artifacts first:
 
 - `status.md`
+- `.plan2agent/constitution.json`
 - `current-spec.json`
 - `iterations/<id>/iteration.json`
 - `iterations/<id>/gate-a-intake/intake.json`
@@ -29,6 +30,7 @@ Continue from the earliest incomplete or invalid artifact. Never rebuild later a
 | Stage | Skill or agent | Input | Canonical result |
 |---|---|---|---|
 | Entry confirmation and scope | `p2a-harness` | entry document, optional baseline | `intake.json` (`p2a.intake.v1`) |
+| Project shape (Gate ②) | `p2a-harness` | approved intake, repository evidence, legacy style | `.plan2agent/constitution.json` |
 | Product and implementation specification | `p2a-spec` with `p2a-spec-author` and `p2a-implementation-planner` | approved intake, evidence, optional baseline | `spec.json` plus readable spec documents |
 | Visual experience, when required | `p2a-visual-experience` | approved visual scope | experience spec, prototypes, visual approval evidence |
 | Task decomposition | `p2a-task-author` or `p2a-task-breakdown` with `p2a-task-graph` | approved spec and planning memory | `task-graph.json` after `p2a validate` |
@@ -37,7 +39,7 @@ Development execution begins only after the canonical task graph validates. Mile
 
 ## Human approval gates
 
-There are two human gates.
+There are three human gates.
 
 ### Scope approval
 
@@ -49,7 +51,38 @@ Before specification work, present a concise understanding summary containing:
 - evidence or baseline used;
 - a clear statement that approval authorizes specification work.
 
-Persist the approved scope in `gate-a-intake/intake.json` with `status: "ready_for_spec"` and an `approval_audit`. The audit must identify the approver, date, approved artifact path, and approval note. Without that record, keep `status: "blocked_on_user"` and stop before specification.
+Persist the approved scope in `gate-a-intake/intake.json` with `status: "ready_for_spec"` and an `approval_audit`. The audit must identify the approver, date, approved artifact path, and approval note. Without that record, keep `status: "blocked_on_user"` and stop before Gate ②.
+
+### Project-shape approval (Gate ②)
+
+After Gate A and before a first Gate B specification, establish the project-wide constitution at `.plan2agent/constitution.json`. Keep this discussion compact: architecture, stack, prohibitions, and style should each express durable project constraints, not restate feature requirements. Inspect the repository and current authoritative technical sources before proposing a material stack choice.
+
+Present one reviewable Gate ② proposal containing:
+
+- up to 10 architecture rules, each with a stable `ARCH-n` id, scope, rationale, and the practical trade-off it creates;
+- up to 10 stack choices, each with a stable `STACK-n` id, rationale, and evidence ids for any current external choice;
+- up to 10 prohibitions, each with a stable `NO-n` id, rationale, and enforcement level;
+- the project coding-style contract, importing a substantive legacy `.plan2agent/style.md` into `style.contract_markdown` when present.
+
+Use `advisory` when a prohibition omits `enforcement`. Use `review` for judgment-based constraints. Use `validator` only when the prohibition also declares `targets` (`spec` and/or `task_graph`) and concrete `forbidden_terms`; positive selections or introduction work containing those terms are mechanically rejected by `p2a validate`, while declarative negated constraints and removal work remain valid. Do not label an unenforceable natural-language preference as validator-enforced.
+
+Explain the important alternatives and trade-offs, then ask the user to approve the complete constitution. First write a schema-valid draft without `approval_audit` and run:
+
+```bash
+p2a validate --constitution .plan2agent/constitution.json
+```
+
+Approval must preserve the user's verbatim utterance. After explicit approval, run:
+
+```bash
+p2a shape approve --quote "<exact user utterance>"
+```
+
+Never fabricate, summarize, or omit the quote. `p2a shape approve` writes the user/date/artifact audit and rejects a missing quote. Confirm the approved result with `p2a validate --constitution .plan2agent/constitution.json --require-approved-constitution` before Gate B.
+
+An approved constitution is project-level state, not iteration state. Reuse it across later iterations. Reopen Gate ② only when the newly approved Gate A scope materially changes architecture, foundational stack, a project-wide prohibition, or coding-style policy. A normal feature or maintenance iteration must not re-ask for shape approval. To amend it, present a focused diff and trade-offs, replace it with a draft that omits the old `approval_audit`, and require a new quoted approval before Gate B.
+
+Legacy projects may continue with `.plan2agent/style.md` and no constitution. Do not block their existing Gate B or execution path. Offer `p2a shape migrate-style` as an explicit migration that creates an unapproved draft; migration is optional and never implies approval.
 
 ### Specification approval
 
@@ -68,7 +101,7 @@ Use this only when `p2a next` reports `gate_what` with a validated `--entry` doc
 3. Ask only for information or decisions that cannot be inferred safely and would materially change the scope. There is no fixed question count or conversation-turn limit. Stop asking as soon as the scope is confirmable, and do not introduce a replacement workflow state machine, mandatory identifier inventory, or progress counter.
 4. Present the revised scope and explicitly ask the user to confirm that interpretation. Corrections update the summary and repeat this confirmation step. Silence, document presence, or a broad request to develop is not approval.
 5. When Feature Radar supplied recommendations, list every promoted candidate with exactly one `selected`, `rejected`, or `deferred` disposition and a short rationale. Those candidates remain unapproved until the user confirms the scope containing their dispositions.
-6. After explicit confirmation, persist `intake.json` with the entry evidence, confirmed scope, `status: "ready_for_spec"`, and Gate A `approval_audit`. Then continue through the normal Gate B contract without adding or bypassing a gate.
+6. After explicit confirmation, persist `intake.json` with the entry evidence, confirmed scope, `status: "ready_for_spec"`, and Gate A `approval_audit`. Then establish or reuse Gate ② before continuing through the normal Gate B contract.
 
 If the user rejects the source document, stop and request a different path. Canonical state begins with the approved intake artifact, not with chat history or the source file alone.
 
@@ -91,7 +124,7 @@ Existing intake files may contain legacy fields. Preserve them when reading or c
 
 Gate A concerns product scope. Do not force architecture, framework, storage, provider, API shape, or package choices into scope approval unless the user explicitly supplied them as constraints.
 
-Gate B owns implementation choices. For a material technology choice:
+Gate ② owns durable architecture, foundational stack, prohibitions, and style. Gate B owns iteration-specific implementation choices within that approved constitution. For a material technology choice not already fixed by the constitution:
 
 1. inspect the repository and applicable official documentation;
 2. compare viable options and constraints;
@@ -129,6 +162,7 @@ Pass explicit JSON between stages. Do not rely on hidden conversational state.
 Minimum handoff information:
 
 - project and iteration identifiers;
+- approved constitution contents and `.plan2agent/constitution.json` reference, or explicit legacy-style fallback;
 - artifact root and canonical relative paths;
 - entry evidence and approved intake;
 - active or baseline spec references and hashes;
@@ -145,6 +179,7 @@ Persist canonical artifacts before claiming a stage is complete. Chat summaries 
 Use these locations:
 
 ```text
+.plan2agent/constitution.json
 <artifact-root>/
 ├── status.md
 ├── current-spec.json
@@ -176,7 +211,7 @@ It should show:
 
 - a literal `Progress:` line;
 - active iteration and current next action;
-- Scope and Specification approval states;
+- Scope, Project Shape, and Specification approval states;
 - Planning Validation state;
 - numbered sections for understanding, decisions, specification, tasks, and execution readiness.
 
@@ -213,13 +248,17 @@ Use repository commands as the source of truth:
 
 ```bash
 p2a next --entry <document>
-p2a validate --artifacts <artifact-root>
+p2a shape
+p2a validate --constitution .plan2agent/constitution.json --require-approved-constitution
+p2a validate --artifact-root <artifact-root>
 p2a iteration validate --artifacts <artifact-root>
 ```
 
 Before handing off to execution, ensure:
 
 - the entry document was confirmed and recorded;
+- Gate ② is approved for a new project, or a legacy style-only project is intentionally continuing under compatibility;
+- validator-enforced constitution prohibitions pass against the spec and task graph;
 - scope and specification approvals are present and match their artifacts;
 - required visual approval evidence is valid;
 - the canonical task graph references the approved spec;
@@ -231,6 +270,8 @@ Before handing off to execution, ensure:
 - Never initialize a fresh harness without a document.
 - Never infer user approval from silence or from an agent's recommendation.
 - Never advance past blocked scope or an unapproved specification.
+- Never create a first Gate B specification before a required Gate ② constitution is approved.
+- Reuse an approved constitution across iterations unless Gate A introduces an architecture-level change.
 - Keep implementation choices out of scope approval unless explicitly constrained by the user.
 - Do not create a replacement workflow state machine around questions, rounds, or agent reviews.
 - Treat validators as enforcement, not as authors of product decisions.

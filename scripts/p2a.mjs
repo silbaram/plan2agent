@@ -19,6 +19,7 @@ import {
   discoverFeatureRadarPreflightRuns,
 } from './p2a_radar_preflight.mjs';
 import {
+  validateConstitution,
   validateIntake,
   validateRunsDir,
   validateSpec,
@@ -28,6 +29,7 @@ import {
 const P2A_PATHS = resolveP2aPaths(import.meta.url);
 
 const RUNTIME_COMMANDS = new Map([
+  ['shape', { script: 'p2a_shape.mjs' }],
   ['iteration', { script: 'p2a_iteration.mjs' }],
   ['task', { script: 'p2a_tasks.mjs' }],
   ['tasks', { script: 'p2a_tasks.mjs' }],
@@ -56,6 +58,7 @@ function usage() {
     'Usage:',
     '  p2a init [--target <dir>] [--tools <list>] [--codex-profile quality|inherit]',
     '  p2a next [--target <dir>] [--project-id <id>] [--entry <path>] [--json]',
+    '  p2a shape [approve|migrate-style] [options]',
     '  p2a info [--target <dir>] [--json]',
     '  p2a doctor [--target <dir>] [--dev] [--json] [--strict]',
     '  p2a update [--target <dir>] [--dry-run|--apply]',
@@ -889,6 +892,70 @@ function gateANextCommand(intake, intakePath) {
     : `Review and approve ${intakePath}; then record the Gate A approval_audit.`;
 }
 
+function inspectConstitution(targetRoot) {
+  const constitutionPath = path.join(targetRoot, '.plan2agent', 'constitution.json');
+  const legacyStylePath = path.join(targetRoot, '.plan2agent', 'style.md');
+  const legacyStyleExists = isFile(legacyStylePath);
+  if (!existsSync(constitutionPath)) {
+    return {
+      path: constitutionPath,
+      exists: false,
+      readable: false,
+      valid: false,
+      approved: false,
+      error: null,
+      legacyStyleExists,
+    };
+  }
+  if (!isFile(constitutionPath)) {
+    return {
+      path: constitutionPath,
+      exists: true,
+      readable: false,
+      valid: false,
+      approved: false,
+      error: 'The project constitution is not a regular file.',
+      legacyStyleExists,
+    };
+  }
+  const data = readJsonObject(constitutionPath);
+  if (!data) {
+    return {
+      path: constitutionPath,
+      exists: true,
+      readable: false,
+      valid: false,
+      approved: false,
+      error: 'The project constitution is unreadable.',
+      legacyStyleExists,
+    };
+  }
+  try {
+    const constitution = validateConstitution(constitutionPath);
+    return {
+      path: constitutionPath,
+      exists: true,
+      readable: true,
+      valid: true,
+      approved: Boolean(constitution.approval_audit),
+      error: null,
+      legacyStyleExists,
+      data: constitution,
+    };
+  } catch (error) {
+    return {
+      path: constitutionPath,
+      exists: true,
+      readable: true,
+      valid: false,
+      approved: false,
+      error: error instanceof Error ? error.message : String(error),
+      legacyStyleExists,
+      data,
+    };
+  }
+}
+
 function gateAInvalidatesGateB(gates) {
   if (!gates.intake || !gates.specPath) return false;
   if (gates.intake.status !== 'ready_for_spec' || !gates.intake.approval_audit) return true;
@@ -1004,6 +1071,7 @@ function buildNextDecisionContext(
     entryArg: explicitEntry ? commandProjectPath(targetRoot, explicitEntry.path) : null,
     projectId: requestedProjectId,
     hasCanonicalPlanningState: false,
+    constitution: inspectConstitution(targetRoot),
   };
   if (!hasHarness || !info.artifacts.length) return context;
 
@@ -1094,8 +1162,19 @@ function buildNextDecisionContext(
         graphPath: gates.taskGraphPath,
       })
     : false;
+  const constitution = (
+    context.constitution.valid
+    && context.constitution.data?.projectId !== detail.projectId
+  )
+    ? {
+        ...context.constitution,
+        valid: false,
+        error: `constitution projectId ${JSON.stringify(context.constitution.data.projectId)} does not match selected project ${JSON.stringify(detail.projectId)}`,
+      }
+    : context.constitution;
   return {
     ...context,
+    constitution,
     artifactRoot,
     artifactArg: commandArtifact(targetRoot, artifactRoot),
     projectId: detail.projectId,
@@ -1232,6 +1311,40 @@ export const NEXT_DECISION_RULES = [
             'gate-a',
           ]
         : ['validate', '--artifact-root', context.artifactArg]
+    ),
+  },
+  {
+    state: 'invalid_constitution',
+    kind: 'cli',
+    when: (context) => context.constitution.exists && !context.constitution.valid,
+    reason: (context) => `The project constitution is invalid: ${context.constitution.error ?? 'validation failed'}`,
+    command: (context) => [
+      'validate',
+      '--constitution',
+      commandProjectPath(context.targetRoot, context.constitution.path),
+    ],
+  },
+  {
+    state: 'shape',
+    kind: (context) => context.constitution.exists ? 'approval' : 'skill',
+    when: (context) => (
+      context.gateAValid
+      && context.gates.intake?.status === 'ready_for_spec'
+      && !context.constitution.approved
+      && (
+        context.constitution.exists
+        || (!context.gateBExists && !context.constitution.legacyStyleExists)
+      )
+    ),
+    reason: (context) => (
+      context.constitution.exists
+        ? 'The Gate ② project constitution is valid but still needs an explicit quoted user approval.'
+        : 'Gate A scope is approved, but the project has no Gate ② constitution yet.'
+    ),
+    command: (context) => (
+      context.constitution.exists
+        ? `Review ${commandProjectPath(context.targetRoot, context.constitution.path)}, then run p2a shape approve --quote "<user utterance>".`
+        : '/p2a-harness (Gate ②: propose architecture, stack, prohibitions, and style)'
     ),
   },
   {

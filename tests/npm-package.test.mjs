@@ -45,9 +45,14 @@ test('checkout init preserves the legacy co-located runtime', () => {
     assert.equal(realpathSync(manifest.provenance.toolkitRoot), realpathSync(ROOT));
     assert.equal('runtime' in manifest, false);
     assert.ok(manifest.scriptFiles.includes('.plan2agent/scripts/p2a.mjs'));
+    assert.ok(manifest.scriptFiles.includes('.plan2agent/scripts/p2a_shape.mjs'));
     assert.ok(manifest.schemaFiles.includes('.plan2agent/schemas/next.schema.json'));
+    assert.ok(manifest.schemaFiles.includes('.plan2agent/schemas/constitution.schema.json'));
     assert.equal(existsSync(path.join(targetRoot, '.plan2agent', 'scripts', 'p2a.mjs')), true);
+    assert.equal(existsSync(path.join(targetRoot, '.plan2agent', 'scripts', 'p2a_shape.mjs')), true);
     assert.equal(existsSync(path.join(targetRoot, '.plan2agent', 'schemas', 'next.schema.json')), true);
+    assert.equal(existsSync(path.join(targetRoot, '.plan2agent', 'schemas', 'constitution.schema.json')), true);
+    assert.equal(existsSync(path.join(targetRoot, '.plan2agent', 'style.md')), false);
     assert.match(
       readFileSync(path.join(targetRoot, 'PLAN2AGENT.md'), 'utf8'),
       /`node \.plan2agent\/scripts\/p2a\.mjs next`/,
@@ -76,18 +81,18 @@ test('checkout init preserves the legacy co-located runtime', () => {
       .filter((item) => ['runtime_scripts', 'runtime_schemas'].includes(item.id));
     assert.deepEqual(runtimeChecks.map((item) => item.status), ['pass', 'pass']);
 
-    rmSync(path.join(targetRoot, '.plan2agent', 'style.md'));
+    const shape = runEmbedded(targetRoot, ['shape', '--json']);
+    assert.equal(shape.status, 0, formatCommandResult(shape));
+    assert.equal(JSON.parse(shape.stdout).state, 'missing');
+
     const updatePreview = runEmbedded(targetRoot, ['update', '--dry-run']);
     assert.equal(updatePreview.status, 0, formatCommandResult(updatePreview));
-    assert.match(updatePreview.stdout, /missing: generate \(generated\) -> \.plan2agent\/style\.md/);
-    assert.match(
-      updatePreview.stdout,
-      /Apply safe updates with: node \.plan2agent\/scripts\/p2a\.mjs update --target .+ --apply/,
-    );
+    assert.doesNotMatch(updatePreview.stdout, /\.plan2agent\/style\.md/);
+    assert.match(updatePreview.stdout, /changes: none/);
 
     const update = runEmbedded(targetRoot, ['update', '--apply']);
     assert.equal(update.status, 0, formatCommandResult(update));
-    assert.equal(existsSync(path.join(targetRoot, '.plan2agent', 'style.md')), true);
+    assert.equal(existsSync(path.join(targetRoot, '.plan2agent', 'style.md')), false);
     const updatedManifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
     assert.equal(updatedManifest.provenance.mode, 'init');
     assert.equal(realpathSync(updatedManifest.provenance.toolkitRoot), realpathSync(ROOT));

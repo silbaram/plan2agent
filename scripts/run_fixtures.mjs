@@ -382,7 +382,6 @@ function validateScaffoldFixtureCase() {
       path.join('.claude', 'settings.local.json'),
       path.join('.plan2agent', 'project.config.json'),
       path.join('.plan2agent', 'manifest.json'),
-      path.join('.plan2agent', 'style.md'),
       'PLAN2AGENT.md',
       '.gitignore',
     ];
@@ -405,9 +404,14 @@ function validateScaffoldFixtureCase() {
       || manifest.provenance?.toolkitRoot !== ROOT
       || 'runtime' in manifest
       || !manifest.scriptFiles?.includes('.plan2agent/scripts/p2a.mjs')
+      || !manifest.scriptFiles?.includes('.plan2agent/scripts/p2a_shape.mjs')
       || !manifest.schemaFiles?.includes('.plan2agent/schemas/next.schema.json')
+      || !manifest.schemaFiles?.includes('.plan2agent/schemas/constitution.schema.json')
       || !existsSync(path.join(targetRoot, '.plan2agent', 'scripts', 'p2a.mjs'))
+      || !existsSync(path.join(targetRoot, '.plan2agent', 'scripts', 'p2a_shape.mjs'))
       || !existsSync(path.join(targetRoot, '.plan2agent', 'schemas', 'next.schema.json'))
+      || !existsSync(path.join(targetRoot, '.plan2agent', 'schemas', 'constitution.schema.json'))
+      || existsSync(path.join(targetRoot, '.plan2agent', 'style.md'))
       || manifest.projectId !== 'target-project'
       || manifest.aiToolTargets.join(',') !== 'codex,claude,gemini'
       || manifest.codexAgentProfile?.name !== 'quality'

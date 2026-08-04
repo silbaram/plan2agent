@@ -25,22 +25,18 @@ test('checkout scaffold guide directs users through the co-located runtime', () 
   }
 });
 
-test('update restores a missing style contract without overwriting a project-defined contract', () => {
+test('new scaffolds defer Gate ② and update preserves a legacy project-defined style contract', () => {
   const targetRoot = makeTempDir('p2a-style-contract-update-');
   const stylePath = path.join(targetRoot, '.plan2agent', 'style.md');
   try {
     let result = runHandoff(['scaffold', '--target', targetRoot, '--tools', 'none']);
     assert.equal(result.status, 0, formatCommandResult(result));
-    assert.equal(existsSync(stylePath), true);
+    assert.equal(existsSync(stylePath), false);
+    assert.equal(existsSync(path.join(targetRoot, '.plan2agent', 'constitution.json')), false);
 
-    unlinkSync(stylePath);
     result = runHandoff(['update', '--target', targetRoot, '--dry-run']);
     assert.equal(result.status, 0, formatCommandResult(result));
-    assert.match(result.stdout, /missing: generate \(generated\) -> \.plan2agent\/style\.md/);
-
-    result = runHandoff(['update', '--target', targetRoot, '--apply']);
-    assert.equal(result.status, 0, formatCommandResult(result));
-    assert.match(readFileSync(stylePath, 'utf8'), /# Plan2Agent Style Contract/);
+    assert.doesNotMatch(result.stdout, /\.plan2agent\/(?:style\.md|constitution\.json)/);
 
     writeFileSync(stylePath, '# Project-specific style\n\nKeep this contract.\n', 'utf8');
     result = runHandoff(['update', '--target', targetRoot, '--dry-run']);

@@ -31,6 +31,25 @@ function artifact(root, projectId = 'sample') {
   return artifactRoot;
 }
 
+function writeConstitution(root, projectId = 'sample', approved = true) {
+  writeJson(join(root, '.plan2agent', 'constitution.json'), {
+    schema_version: 'p2a.constitution.v1',
+    projectId,
+    architecture: [],
+    stack: [],
+    prohibitions: [],
+    style: {},
+    ...(approved ? {
+      approval_audit: {
+        approved_by: 'user',
+        approved_at: '2026-08-04',
+        approved_artifacts: ['.plan2agent/constitution.json'],
+        approval_note: 'User quote: "approve this shape"',
+      },
+    } : {}),
+  });
+}
+
 function gateRoot(artifactRoot, iterationId = null) {
   return iterationId ? join(artifactRoot, 'iterations', iterationId) : artifactRoot;
 }
@@ -376,7 +395,7 @@ test('next chooses one read-only action for every primary state', () => {
         writeGateA(artifact(root), 'ready_for_spec');
         return root;
       },
-      expected: () => ['gate_a_ready_for_spec', 'skill'],
+      expected: () => ['shape', 'skill'],
     },
     {
       id: 'gate B approval',
@@ -532,6 +551,55 @@ test('next chooses one read-only action for every primary state', () => {
     } finally {
       remove(root);
     }
+  }
+});
+
+test('next routes Gate A approval through Gate ② and reuses approved or legacy style contracts', () => {
+  const missingRoot = project();
+  const draftRoot = project();
+  const approvedRoot = project();
+  const legacyRoot = project();
+  const invalidRoot = project();
+  const mismatchedRoot = project();
+  try {
+    writeGateA(artifact(missingRoot), 'ready_for_spec');
+    assertAction(next(missingRoot), 'shape', 'skill');
+
+    writeGateA(artifact(draftRoot), 'ready_for_spec');
+    writeConstitution(draftRoot, 'sample', false);
+    assertAction(next(draftRoot), 'shape', 'approval');
+
+    writeGateA(artifact(approvedRoot), 'ready_for_spec');
+    writeConstitution(approvedRoot);
+    assertAction(next(approvedRoot), 'gate_a_ready_for_spec', 'skill');
+
+    writeGateA(artifact(legacyRoot), 'ready_for_spec');
+    writeFileSync(join(legacyRoot, '.plan2agent', 'style.md'), '# Legacy style\n', 'utf8');
+    assertAction(next(legacyRoot), 'gate_a_ready_for_spec', 'skill');
+
+    writeGateA(artifact(invalidRoot), 'ready_for_spec');
+    writeJson(join(invalidRoot, '.plan2agent', 'constitution.json'), { schema_version: 'wrong' });
+    const invalid = next(invalidRoot);
+    assertAction(invalid, 'invalid_constitution', 'cli', [
+      'validate',
+      '--constitution',
+      join(invalidRoot, '.plan2agent', 'constitution.json'),
+    ]);
+
+    writeGateA(artifact(mismatchedRoot), 'ready_for_spec');
+    writeConstitution(mismatchedRoot, 'different-project');
+    const mismatched = next(mismatchedRoot);
+    assert.equal(mismatched.state, 'invalid_constitution');
+    assert.match(mismatched.reason, /does not match selected project/);
+  } finally {
+    for (const root of [
+      missingRoot,
+      draftRoot,
+      approvedRoot,
+      legacyRoot,
+      invalidRoot,
+      mismatchedRoot,
+    ]) remove(root);
   }
 });
 
@@ -821,7 +889,7 @@ test('next requires a project id only when multiple artifact roots are ambiguous
     assertAction(ambiguous, 'project_selection_required', 'cli', ['next', '--project-id', '<project-id>']);
 
     const selected = next(root, ['--project-id', 'second']);
-    assertAction(selected, 'gate_a_ready_for_spec', 'skill');
+    assertAction(selected, 'shape', 'skill');
     assert.equal(selected.projectId, 'second');
   } finally {
     remove(root);
@@ -1011,7 +1079,7 @@ test('info keeps its JSON contract and points human output to next', () => {
 });
 
 test('next keeps the ordered decision rules required by the contract', () => {
-  assert.equal(NEXT_DECISION_RULES.length, 21);
+  assert.equal(NEXT_DECISION_RULES.length, 23);
   for (const rule of NEXT_DECISION_RULES) {
     assert.equal(typeof rule.when, 'function');
     assert.equal(typeof rule.reason, 'function');

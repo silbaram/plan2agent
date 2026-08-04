@@ -31,6 +31,7 @@ import { inspectEntryDocument } from './p2a_radar_preflight.mjs';
 
 const P2A_PATHS = resolveP2aPaths(import.meta.url);
 const SCHEMA_PATHS = {
+  constitution: path.join(P2A_PATHS.schemasDir, 'constitution.schema.json'),
   intake: path.join(P2A_PATHS.schemasDir, 'intake.schema.json'),
   spec: path.join(P2A_PATHS.schemasDir, 'spec.schema.json'),
   task_graph: path.join(P2A_PATHS.schemasDir, 'task-graph.schema.json'),
@@ -1101,6 +1102,10 @@ function escapeRegExp(value) {
 
 export function validateSpec(filePath, intakePath = null, options = {}) {
   const data = validateAgainstSchema(filePath, 'spec');
+  const constitutionContract = resolveConstitutionForArtifact(filePath, {
+    ...options,
+    projectId: options.projectId ?? data.project_id,
+  });
   const referencedIntakePath = requireSpecSourceIntake(filePath, data);
   const providedIntakePath = intakePath ? path.resolve(intakePath) : null;
   if (providedIntakePath) {
@@ -1149,6 +1154,14 @@ export function validateSpec(filePath, intakePath = null, options = {}) {
   }
   validateSpecApprovalAudit(data);
   validateSpecVisualExperience(data, filePath, artifactRoot);
+  if (constitutionContract.constitution) {
+    validateConstitutionProhibitions(
+      constitutionContract.constitution,
+      data,
+      'spec',
+      'spec',
+    );
+  }
 
   if (intake) {
     const intakeDecisions = new Map(intake.needs_user_decision.map((decision) => [decision.id, decision.status]));
@@ -1206,6 +1219,189 @@ export function validateApprovalAuditData(audit, label = 'approval audit') {
   }
   validateNonBlankStrings(audit.approved_artifacts, `${label}.approved_artifacts`);
   return audit;
+}
+
+function approvalNoteContainsQuote(note) {
+  return (
+    /"[^"\r\n]+"/.test(note)
+    || /'[^'\r\n]+'/.test(note)
+    || /“[^”\r\n]+”/.test(note)
+    || /‘[^’\r\n]+’/.test(note)
+  );
+}
+
+function assertUniqueConstitutionIds(items, label) {
+  const ids = items.map((item) => item.id);
+  if (ids.length !== new Set(ids).size) {
+    throw new ValidationError(`constitution.${label} id values must be unique`);
+  }
+}
+
+function validateConstitutionApprovalAudit(constitution) {
+  const audit = constitution.approval_audit;
+  if (!audit) return null;
+  validateApprovalAuditData(audit, 'constitution.approval_audit');
+  if (audit.approved_by !== 'user') {
+    throw new ValidationError('constitution.approval_audit.approved_by must be user');
+  }
+  if (!audit.approved_artifacts.some((item) => normalizeReference(item) === '.plan2agent/constitution.json')) {
+    throw new ValidationError(
+      'constitution.approval_audit.approved_artifacts must include .plan2agent/constitution.json',
+    );
+  }
+  if (!approvalNoteContainsQuote(audit.approval_note)) {
+    throw new ValidationError(
+      'constitution.approval_audit.approval_note must contain the verbatim user approval in quotation marks',
+    );
+  }
+  return audit;
+}
+
+function validateValidatorProhibitionContract(prohibition) {
+  const enforcement = prohibition.enforcement ?? 'advisory';
+  if (enforcement !== 'validator') return;
+  validateNonBlankStrings(prohibition.targets ?? [], `${prohibition.id}.targets`);
+  validateNonBlankStrings(prohibition.forbidden_terms ?? [], `${prohibition.id}.forbidden_terms`);
+  for (const term of prohibition.forbidden_terms) {
+    if (!term.trim()) {
+      throw new ValidationError(`${prohibition.id}.forbidden_terms must not contain blank values`);
+    }
+  }
+}
+
+export function validateConstitutionData(data, options = {}) {
+  validateSchema(data, loadJson(SCHEMA_PATHS.constitution));
+  assertUniqueConstitutionIds(data.architecture, 'architecture');
+  assertUniqueConstitutionIds(data.stack, 'stack');
+  assertUniqueConstitutionIds(data.prohibitions, 'prohibitions');
+  for (const prohibition of data.prohibitions) validateValidatorProhibitionContract(prohibition);
+  const audit = validateConstitutionApprovalAudit(data);
+  if (options.requireApproved && !audit) {
+    throw new ValidationError('constitution requires explicit Gate ② approval_audit');
+  }
+  if (options.projectId && data.projectId !== options.projectId) {
+    throw new ValidationError(
+      `constitution.projectId must match ${JSON.stringify(options.projectId)}, got ${JSON.stringify(data.projectId)}`,
+    );
+  }
+  return data;
+}
+
+export function validateConstitution(filePath, options = {}) {
+  return validateConstitutionData(loadJson(filePath), options);
+}
+
+function stringLeaves(value, valuePath = '$', leaves = []) {
+  if (typeof value === 'string') {
+    leaves.push({ path: valuePath, value });
+    return leaves;
+  }
+  if (Array.isArray(value)) {
+    value.forEach((item, index) => stringLeaves(item, `${valuePath}[${index}]`, leaves));
+    return leaves;
+  }
+  if (value && typeof value === 'object') {
+    for (const [key, item] of Object.entries(value)) {
+      stringLeaves(item, `${valuePath}.${key}`, leaves);
+    }
+  }
+  return leaves;
+}
+
+const CONSTITUTION_PROHIBITION_PATHS = {
+  spec: [
+    /^\$\.product\.(?:goals|core_flows|screens_or_interfaces|data_model_draft|external_integrations|constraints)\[\d+\]$/,
+    /^\$\.implementation\.(?:architecture|interfaces|data_flow|dependencies)\[\d+\]$/,
+  ],
+  task_graph: [
+    /^\$\.tasks\[\d+\]\.(?:title|description|targetArea|suggestedAgentPrompt)$/,
+    /^\$\.tasks\[\d+\]\.acceptanceCriteria\[\d+\]$/,
+  ],
+};
+
+function prohibitionCandidateLeaves(artifact, target) {
+  const pathPatterns = CONSTITUTION_PROHIBITION_PATHS[target] ?? [];
+  return stringLeaves(artifact).filter((leaf) => (
+    pathPatterns.some((pattern) => pattern.test(leaf.path))
+  ));
+}
+
+function isNegatedProhibitionMention(value, start, length) {
+  const before = value.slice(Math.max(0, start - 96), start);
+  const after = value.slice(start + length, start + length + 96);
+  const englishBefore = (
+    /(?:^|\b)(?:no|without)\s+(?:[\w'-]+\s+){0,3}$/i.test(before)
+    || /(?:^|\b)(?:avoid(?:ing)?|never|do\s+not|don't|must\s+not|not)\s+(?:(?:use|using|introduce|introducing|add|adding|depend(?:ing)?\s+on)\s+)?(?:[\w'-]+\s+){0,2}$/i.test(before)
+    || /(?:^|\b)(?:remove|removing|eliminate|eliminating|exclude|excluding|forbid|forbidden|disallow|disallowed)\s+(?:[\w'-]+\s+){0,2}$/i.test(before)
+  );
+  const englishAfter = /^\s*(?:(?:must|should)\s+not\s+be\s+(?:used|introduced|added)|(?:(?:is|are|must\s+be|should\s+be|usage\s+is|use\s+is)\s+)?(?:not\s+allowed|not\s+used|not\s+introduced|not\s+added|forbidden|disallowed|excluded|removed|absent|unused))\b/i.test(after);
+  const koreanBefore = /(?:금지(?:된)?|제외(?:한|된)?|제거(?:할|하는)?|사용하지\s*않는|쓰지\s*않는|피하는)\s*$/u.test(before);
+  const koreanAfter = /^\s*(?:을|를|이|가|은|는)?\s*(?:사용|도입|추가|연동)?(?:을|를)?\s*(?:금지|제외|제거|하지\s*않|안\s*씀|없음|피함)/u.test(after);
+  return englishBefore || englishAfter || koreanBefore || koreanAfter;
+}
+
+function activeForbiddenTermMatch(value, term) {
+  const normalizedValue = value.toLocaleLowerCase('en-US');
+  const normalizedTerm = term.trim().toLocaleLowerCase('en-US');
+  let cursor = 0;
+  while (cursor <= normalizedValue.length - normalizedTerm.length) {
+    const index = normalizedValue.indexOf(normalizedTerm, cursor);
+    if (index === -1) return false;
+    if (!isNegatedProhibitionMention(value, index, normalizedTerm.length)) return true;
+    cursor = index + normalizedTerm.length;
+  }
+  return false;
+}
+
+export function validateConstitutionProhibitions(constitution, artifact, target, label = target) {
+  const leaves = prohibitionCandidateLeaves(artifact, target);
+  for (const prohibition of constitution.prohibitions) {
+    if ((prohibition.enforcement ?? 'advisory') !== 'validator') continue;
+    if (!prohibition.targets.includes(target)) continue;
+    for (const term of prohibition.forbidden_terms) {
+      const violation = leaves.find((leaf) => activeForbiddenTermMatch(leaf.value, term));
+      if (violation) {
+        throw new ValidationError(
+          `${label} violates constitution prohibition ${prohibition.id} at ${violation.path}: forbidden term ${JSON.stringify(term)}`,
+        );
+      }
+    }
+  }
+  return artifact;
+}
+
+function projectConstitutionPathFrom(filePath) {
+  let current = path.resolve(filePath);
+  try {
+    if (existsSync(current) && lstatSync(current).isFile()) current = path.dirname(current);
+  } catch {
+    current = path.dirname(current);
+  }
+  while (true) {
+    if (path.basename(current) === P2A_DIR) {
+      const candidate = path.join(current, 'constitution.json');
+      return existsSync(candidate) && lstatSync(candidate).isFile() ? candidate : null;
+    }
+    const nested = path.join(current, P2A_DIR, 'constitution.json');
+    if (existsSync(nested) && lstatSync(nested).isFile()) return nested;
+    const parent = path.dirname(current);
+    if (parent === current) return null;
+    current = parent;
+  }
+}
+
+function resolveConstitutionForArtifact(filePath, options = {}) {
+  const explicit = options.constitutionPath ?? null;
+  const constitutionPath = explicit ? path.resolve(explicit) : projectConstitutionPathFrom(filePath);
+  if (!constitutionPath) return { constitution: null, constitutionPath: null };
+  assertFile(constitutionPath, 'constitution');
+  return {
+    constitution: validateConstitution(constitutionPath, {
+      requireApproved: options.requireApprovedConstitution !== false,
+      projectId: options.projectId,
+    }),
+    constitutionPath,
+  };
 }
 
 export function validateSpecApprovalAudit(spec, label = 'spec.approval_audit') {
@@ -2704,7 +2900,7 @@ export function validateTaskContextData(data) {
   return data;
 }
 
-export function validateTaskGraphData(data, requireApprovedSpec = null) {
+export function validateTaskGraphData(data, requireApprovedSpec = null, options = {}) {
   const schema = loadJson(SCHEMA_PATHS.task_graph);
   validateSchema(data, schema);
   let approvedSpec = null;
@@ -2712,7 +2908,10 @@ export function validateTaskGraphData(data, requireApprovedSpec = null) {
   if (requireApprovedSpec) {
     const specReference = loadJson(requireApprovedSpec);
     const sourceIntakePath = requireSpecSourceIntake(requireApprovedSpec, specReference);
-    approvedSpec = validateSpec(requireApprovedSpec, sourceIntakePath);
+    approvedSpec = validateSpec(requireApprovedSpec, sourceIntakePath, {
+      ...options,
+      projectId: options.projectId ?? data.projectId,
+    });
     if (approvedSpec.approval !== 'approved') {
       throw new ValidationError('task graph generation is blocked until spec.approval is approved');
     }
@@ -2784,6 +2983,21 @@ export function validateTaskGraphData(data, requireApprovedSpec = null) {
   }
 
   detectCycles(graph);
+  const constitutionContract = resolveConstitutionForArtifact(
+    requireApprovedSpec ?? options.artifactPath ?? process.cwd(),
+    {
+      ...options,
+      projectId: options.projectId ?? data.projectId,
+    },
+  );
+  if (constitutionContract.constitution) {
+    validateConstitutionProhibitions(
+      constitutionContract.constitution,
+      data,
+      'task_graph',
+      'task graph',
+    );
+  }
   return data;
 }
 
@@ -2795,8 +3009,11 @@ function validateNonBlankStrings(values, label) {
   }
 }
 
-export function validateTaskGraph(filePath, requireApprovedSpec = null) {
-  return validateTaskGraphData(loadJson(filePath), requireApprovedSpec);
+export function validateTaskGraph(filePath, requireApprovedSpec = null, options = {}) {
+  return validateTaskGraphData(loadJson(filePath), requireApprovedSpec, {
+    ...options,
+    artifactPath: filePath,
+  });
 }
 
 export function validateReview(filePath, expectedSources = null, options = {}) {
@@ -3885,6 +4102,10 @@ export function validateArtifactRoot(artifactRoot, options = {}) {
   if (!lstatSync(root).isDirectory()) throw new ValidationError(`artifact root must be a directory: ${root}`);
 
   const paths = artifactPaths(root);
+  const constitutionPath = options.constitutionPath ?? projectConstitutionPathFrom(root);
+  const constitution = constitutionPath
+    ? validateConstitution(constitutionPath, { projectId: options.projectId })
+    : null;
 
   requireGateFiles(paths, ['intakeJson'], 'Gate A');
   const intake = validateIntake(paths.intakeJson, { artifactRoot: root });
@@ -3899,6 +4120,7 @@ export function validateArtifactRoot(artifactRoot, options = {}) {
     intake,
     spec: null,
     taskGraph: null,
+    constitution,
     readyForHandoff: false,
   };
 
@@ -3906,7 +4128,11 @@ export function validateArtifactRoot(artifactRoot, options = {}) {
   const gateBExisting = filesExist(paths, gateBKeys);
   if (gateBExisting.length) {
     requireGateFiles(paths, gateBKeys, 'Gate B');
-    const spec = validateSpec(paths.specJson, paths.intakeJson, { artifactRoot: root });
+    const spec = validateSpec(paths.specJson, paths.intakeJson, {
+      artifactRoot: root,
+      constitutionPath,
+      projectId: options.projectId,
+    });
     assertProjectId('spec.project_id', spec.project_id, options.projectId);
     result.spec = spec;
     result.gates.b = { present: true, valid: true, passed: spec.approval === 'approved' && spec.open_decisions.length === 0 };
@@ -3917,7 +4143,10 @@ export function validateArtifactRoot(artifactRoot, options = {}) {
   if (gateCExisting.length) {
     if (!result.spec) throw new ValidationError('Gate C cannot be validated before Gate B spec exists');
     requireGateFiles(paths, gateCKeys, 'Gate C');
-    const taskGraph = validateTaskGraph(paths.taskGraph, paths.specJson);
+    const taskGraph = validateTaskGraph(paths.taskGraph, paths.specJson, {
+      constitutionPath,
+      projectId: options.projectId,
+    });
     assertProjectId('taskGraph.projectId', taskGraph.projectId, options.projectId);
     result.taskGraph = taskGraph;
     result.gates.c = { present: true, valid: true, passed: true };
@@ -4025,6 +4254,8 @@ function usage() {
     'Options:',
     '  --entry <path>                     Validate a Markdown/text entry document.',
     '  --artifact-root <dir>               Validate a Gate A-C artifact root.',
+    '  --constitution <path>                Validate a project constitution.',
+    '  --require-approved-constitution      Require its Gate ② approval audit.',
     '  --project-id <id>                   Expected project id for --artifact-root.',
     '  --intake <path> [--intake-md <path>]',
     '  --status <path>',
@@ -4063,6 +4294,7 @@ function parseArgs(argv) {
     else if (arg === '--intake-md') args.intakeMd = argv[++index];
     else if (arg === '--status') args.status = argv[++index];
     else if (arg === '--artifact-root') args.artifactRoot = argv[++index];
+    else if (arg === '--constitution') args.constitution = argv[++index];
     else if (arg === '--project-id') args.projectId = argv[++index];
     else if (arg === '--spec') args.spec = argv[++index];
     else if (arg === '--task-graph') args.taskGraph = argv[++index];
@@ -4086,6 +4318,7 @@ function parseArgs(argv) {
     else if (arg === '--proposals-dir') args.proposalsDir = argv[++index];
     else if (arg === '--require-approved-spec') args.requireApprovedSpec = argv[++index];
     else if (arg === '--require-handoff-ready') args.requireHandoffReady = true;
+    else if (arg === '--require-approved-constitution') args.requireApprovedConstitution = true;
     else if (arg === '--require-review-pass') args.requireReviewPass = true;
     else if (arg === '--fixture-dir') args.fixtureDir.push(argv[++index]);
     else throw new ValidationError(`unrecognized argument: ${arg}`);
@@ -4102,12 +4335,21 @@ export function main(argv = process.argv.slice(2)) {
       return 0;
     }
     if (args.entry) validateEntryDocument(args.entry);
+    if (args.constitution) {
+      validateConstitution(args.constitution, {
+        requireApproved: args.requireApprovedConstitution,
+        projectId: args.projectId,
+      });
+    } else if (args.requireApprovedConstitution) {
+      throw new ValidationError('--require-approved-constitution requires --constitution');
+    }
     if (args.status) validateStatusDoc(args.status);
     if (args.artifactRoot) {
       validateArtifactRoot(args.artifactRoot, {
         projectId: args.projectId,
         requireHandoffReady: args.requireHandoffReady,
         requireReviewPass: args.requireReviewPass,
+        constitutionPath: args.constitution,
       });
     } else if (args.requireHandoffReady) {
       throw new ValidationError('--require-handoff-ready requires --artifact-root');
@@ -4135,10 +4377,15 @@ export function main(argv = process.argv.slice(2)) {
         {
           artifactRoot: provenanceRoot,
           requireBaselineContextArtifactRoot: true,
+          constitutionPath: args.constitution,
+          projectId: args.projectId,
         },
       );
     }
-    if (args.taskGraph) validateTaskGraph(args.taskGraph, args.requireApprovedSpec ?? null);
+    if (args.taskGraph) validateTaskGraph(args.taskGraph, args.requireApprovedSpec ?? null, {
+      constitutionPath: args.constitution,
+      projectId: args.projectId,
+    });
     if (args.requireReviewPass && !args.review) {
       throw new ValidationError('--require-review-pass requires --review');
     }

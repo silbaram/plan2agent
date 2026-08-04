@@ -12,6 +12,7 @@ Plan2Agent CLI는 기획 산출물 검증, 승인된 task graph 실행, agent ru
 | --- | --- |
 | `p2a init` | 새 프로젝트의 상태와 provider asset을 초기화한다. |
 | `p2a next` | 현재 상태에 맞는 한 가지 다음 행동을 반환한다. |
+| `p2a shape` | Gate ② constitution 상태, legacy style migration, 인용 승인 기록을 관리한다. |
 | `p2a iteration`, `p2a tasks`, `p2a runs`, `p2a execute` | 반복·task·run 실행 흐름을 관리한다. |
 | `p2a validate`, `p2a eval`, `p2a memory`, `p2a proposals` | 산출물 검증, 평가, Memory, 개선 제안을 관리한다. |
 | `p2a doctor`, `p2a enhance`, `p2a update` | 프로젝트 상태를 진단하고 provider/config 자산을 관리한다. |
@@ -21,7 +22,7 @@ Plan2Agent 본체 개발에서만 `scripts/sync_cli_assets.mjs`, `scripts/check_
 
 전체 흐름은 다음과 같다.
 
-1. 하네스가 짧은 Markdown 또는 text 진입 문서에서 **Gate A intake → Gate B spec → Gate C task graph** 산출물을 만든다.
+1. 하네스가 짧은 Markdown 또는 text 진입 문서에서 **Gate A intake → Gate ② constitution → Gate B spec → Gate C task graph** 산출물을 만든다.
 2. Plan2Agent 본체 저장소에서는 `scripts/validate_artifacts.mjs`, `scripts/run_fixtures.mjs`, `scripts/check_cli_parity.mjs`로 fixture와 CLI 구성을 검증한다. `init` 대상 프로젝트에서는 `p2a validate`와 `p2a iteration`로 산출물을 검증한다.
 3. 새 프로젝트는 먼저 `p2a init --target <project-dir> --tools all`로 하네스를 설치하고 같은 저장소 안에서 기획부터 반복까지 진행한다. 외부 산출물을 옮기는 경우에만 기존 handoff로 승인된 산출물을 개발 대상 저장소의 `.plan2agent/artifacts/`로 인계한다.
 4. 대상 저장소에서는 `p2a info`로 현재 상태를 확인하고, `p2a execute plan/start`로 ready task 1건의 run을 열어 감독형 agent prompt를 출력한다. 여러 독립 ready task를 실행할 때도 batch CLI를 만들지 않고 `p2a-dev-execution` owner가 같은 ready snapshot에서 task별 `execute start`를 직렬 호출한다. 세션이 끊기면 `p2a execute resume`으로 같은 run prompt를 다시 출력한다. 복수 agent 역할이나 monitor gate가 필요한 task는 `p2a execute start --require-monitor`로 task별 실행 계획을 만든다.
@@ -42,7 +43,7 @@ p2a info
 p2a next
 ```
 
-`p2a`의 하위 명령은 `eval`, `memory`, `execute`, `tasks`, `runs`, `iteration`, `proposals`, `validate`, `doctor`, `enhance`, `update`, `upgrade`, `handoff`다. `--target`을 생략하면 현재 작업 디렉터리를 대상으로 삼는다.
+`p2a`의 하위 명령은 `shape`, `eval`, `memory`, `execute`, `tasks`, `runs`, `iteration`, `proposals`, `validate`, `doctor`, `enhance`, `update`, `upgrade`, `handoff`다. `--target`을 생략하면 현재 작업 디렉터리를 대상으로 삼는다.
 
 ## 3. 프로젝트 초기화 — `p2a init`
 
@@ -52,7 +53,7 @@ p2a enhance <capability> [--target <project-dir>] [--tools all|none|codex,claude
 p2a update [--target <project-dir>] [--tools all|none|codex,claude,gemini] [--codex-profile quality|inherit] [--dry-run|--apply] [--prune]
 ```
 
-`init`은 fresh 프로젝트에 manifest, project config, style contract, `PLAN2AGENT.md`, `.gitignore`, 선택한 AI tool asset을 만든다. npm으로 설치된 package runtime에서 실행하면 `.plan2agent/scripts/`와 `.plan2agent/schemas/`를 만들지 않는다. Plan2Agent clone checkout에서 실행하면 기존 사용자를 위해 두 디렉터리와 `toolkitRoot`를 포함한 co-located runtime을 계속 설치한다. 터미널과 agent skill은 항상 `p2a …`를 실행한다. 기존 `scaffold`는 호환 별칭이지만 새 프로젝트 문서와 자동 안내에서는 사용하지 않는다.
+`init`은 fresh 프로젝트에 manifest, project config, `PLAN2AGENT.md`, `.gitignore`, 선택한 AI tool asset을 만든다. Constitution은 Gate A 승인 뒤 Gate ②에서 제안·승인하므로 init이 빈 계약을 미리 만들지 않는다. npm으로 설치된 package runtime에서 실행하면 `.plan2agent/scripts/`와 `.plan2agent/schemas/`를 만들지 않는다. Plan2Agent clone checkout에서 실행하면 기존 사용자를 위해 두 디렉터리와 `toolkitRoot`를 포함한 co-located runtime을 계속 설치한다. 터미널과 agent skill은 항상 `p2a …`를 실행한다. 기존 `scaffold`는 호환 별칭이지만 새 프로젝트 문서와 자동 안내에서는 사용하지 않는다.
 
 `update`는 현재 패키지 버전의 provider asset과 안전한 config 기본값을 비교한다. 이번 전환에서는 기존 co-located runtime 프로젝트를 자동 마이그레이션하거나 로컬 runtime 파일을 삭제하지 않는다. 새 설치는 `p2a init`으로 시작한다.
 
@@ -107,6 +108,12 @@ node scripts/run_fixtures.mjs
 ```bash
 p2a validate \
   --intake .plan2agent/artifacts/<project_id>/gate-a-intake/intake.json
+
+p2a shape
+
+p2a validate \
+  --constitution .plan2agent/constitution.json \
+  --require-approved-constitution
 
 p2a validate \
   --status .plan2agent/artifacts/<project_id>/status.md
@@ -249,7 +256,7 @@ p2a iteration maintenance add \
 | `--overwrite` | 대상 파일이 이미 있을 때 덮어쓰기를 허용한다. |
 | `--dry-run` | 파일을 쓰지 않고 gate 검증과 인계 계획 출력만 수행한다. |
 
-인계 전제는 Gate B/C가 validator를 통과한 상태다. 특히 `spec.approval`은 `approved`여야 하고, `spec.approval_audit`가 있어야 하며, 모든 intake `CQ-n`은 `spec.clarifying_question_disposition`에서 처분되어야 하고 `spec.open_decisions`는 비어 있어야 한다. Gate C 사람 승인 audit과 Gate D review 파일은 요구하지 않는다. 반복 구조 root를 넘기면 active 반복 산출물을 `.plan2agent/artifacts/`로 평탄화하고, `task-graph.sourceSpec`은 `spec.json`으로, `spec.source_intake`는 `intake.json`으로 rebase한다. 이때 `intake.json`은 항상 함께 복사되며, 루트 `current-spec.json`은 `.plan2agent/current-spec.json`으로 함께 복사한다. Markdown view 파일은 존재할 때만 함께 복사된다. 반복 history 보존을 위해 iterative root에서는 `--mode move`를 지원하지 않는다. 대상 프로젝트는 `p2a tasks`, `p2a runs`, `p2a execute`, `p2a proposals`, `p2a eval`, `p2a memory`, `p2a validate`를 전역 패키지에서 실행하며, run/monitor/proposal 관련 schema도 패키지가 제공한다. `.plan2agent/project.config.json.runTracking`에는 참고용 기본 runs directory와 branch/worktree naming hint가 기록된다. 현재 실행 경로는 이 설정을 자동 소비하지 않고 CLI 인자에서 계산한다.
+인계 전제는 Gate B/C가 validator를 통과한 상태다. 특히 `spec.approval`은 `approved`여야 하고, `spec.approval_audit`가 있어야 하며, 모든 intake `CQ-n`은 `spec.clarifying_question_disposition`에서 처분되어야 하고 `spec.open_decisions`는 비어 있어야 한다. Gate C 사람 승인 audit과 Gate D review 파일은 요구하지 않는다. 승인된 `.plan2agent/constitution.json`이 source 프로젝트에 있으면 대상 프로젝트에도 함께 복사되며, legacy no-constitution handoff도 계속 지원한다. 반복 구조 root를 넘기면 active 반복 산출물을 `.plan2agent/artifacts/`로 평탄화하고, `task-graph.sourceSpec`은 `spec.json`으로, `spec.source_intake`는 `intake.json`으로 rebase한다. 이때 `intake.json`은 항상 함께 복사되며, 루트 `current-spec.json`은 `.plan2agent/current-spec.json`으로 함께 복사한다. Markdown view 파일은 존재할 때만 함께 복사된다. 반복 history 보존을 위해 iterative root에서는 `--mode move`를 지원하지 않는다. 대상 프로젝트는 `p2a tasks`, `p2a runs`, `p2a execute`, `p2a proposals`, `p2a eval`, `p2a memory`, `p2a validate`를 전역 패키지에서 실행하며, run/monitor/proposal 관련 schema도 패키지가 제공한다. `.plan2agent/project.config.json.runTracking`에는 참고용 기본 runs directory와 branch/worktree naming hint가 기록된다. 현재 실행 경로는 이 설정을 자동 소비하지 않고 CLI 인자에서 계산한다.
 
 `--tools`를 지정하면 공통 P2A 원본인 `.agents/skills`, `.agents/agents`와 선택한 CLI별 mirror를 함께 복사한다. `codex`는 `.codex/agents`, `claude`는 `.claude/skills`와 `.claude/agents`, `gemini`는 `.gemini/agents`와 `.gemini/commands/p2a`를 추가한다. 복사된 파일과 선택한 CLI 범위는 `.plan2agent/manifest.json`의 `aiToolTargets`, `aiToolFiles`, `toolFiles`에 기록된다.
 

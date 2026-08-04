@@ -27,6 +27,7 @@ import {
   milestoneSnapshotSha256,
   validateArtifactRoot,
   validateApprovalAuditData,
+  validateConstitution,
   validateHandoffReadyArtifactRoot,
   validateIntake,
   validateMilestoneReview,
@@ -2150,7 +2151,7 @@ function inheritedCodexAgentContent(sourcePath) {
     .replace(/^model_reasoning_effort\s*=.*\n/m, '');
 }
 
-const P2A_SUBCOMMAND_PATTERN = /\bp2a (?=(?:doctor|enhance|eval|execute|handoff|info|init|iteration|memory|next|proposal|proposals|run|runs|scaffold|task|tasks|update|upgrade|validate)\b)/g;
+const P2A_SUBCOMMAND_PATTERN = /\bp2a (?=(?:doctor|enhance|eval|execute|handoff|info|init|iteration|memory|next|proposal|proposals|run|runs|scaffold|shape|task|tasks|update|upgrade|validate)\b)/g;
 
 function legacyRuntimeCommandContent(source) {
   return source.replace(
@@ -2864,38 +2865,6 @@ function buildClaudeLocalSettings() {
   return {};
 }
 
-function renderStyleContractTemplate() {
-  return `# Plan2Agent Style Contract
-
-This file is the project code style contract that implementation agents read at the start of every task.
-Update it only by direct user edits or through an approved Plan2Agent proposal.
-
-## Naming
-
-<!-- Example: Prefer descriptive camelCase names for local variables and functions. -->
-
-## Error handling
-
-<!-- Example: Return actionable error messages and avoid swallowing exceptions silently. -->
-
-## Abstraction & function size
-
-<!-- Example: Keep functions focused; extract helpers when a branch or loop obscures intent. -->
-
-## Comments & docs
-
-<!-- Example: Comment why a non-obvious decision exists, not what straightforward code does. -->
-
-## Testing style
-
-<!-- Example: Name tests after observable behavior and cover regressions with focused cases. -->
-
-## Framework/language specifics
-
-<!-- Example: Follow established framework conventions already present in this repository. -->
-`;
-}
-
 function renderPlan2AgentGuide(legacyRuntime = false) {
   const terminalNextCommand = legacyRuntime
     ? 'node .plan2agent/scripts/p2a.mjs next'
@@ -2913,7 +2882,7 @@ Use one state-based entry point whenever you begin or finish a Plan2Agent action
 
 The result provides exactly one next action and its reason. Continue a returned skill in the same agent session; review and approve a returned CLI or approval action before running it. After that action is complete, run \`next\` again.
 
-Planning Gates A-C, iteration artifacts, execution runs, and proposal records remain under \`.plan2agent/artifacts/<project>/\` and \`.plan2agent/proposals/\`. Treat individual P2A CLI commands as references: use them only when \`next\` returns them.
+The project constitution remains at \`.plan2agent/constitution.json\`. Planning Gates A-C, iteration artifacts, execution runs, and proposal records remain under \`.plan2agent/artifacts/<project>/\` and \`.plan2agent/proposals/\`. Treat individual P2A CLI commands as references: use them only when \`next\` returns them.
 
 ## Storage policy
 
@@ -2998,10 +2967,6 @@ function buildScaffoldPlan(
   pushGeneratedJson(plan, targetRoot, path.join('.plan2agent', 'manifest.json'), manifest);
   pushGeneratedJson(plan, targetRoot, path.join('.plan2agent', 'project.config.json'), buildProjectConfig(targetRoot, { enabled: false }, { projectId }));
   pushGeneratedText(plan, targetRoot, '.gitignore', scaffoldGitignoreContent(targetRoot), { allowExisting: true });
-  const styleContractRelative = path.join('.plan2agent', 'style.md');
-  if (!existsSync(path.join(targetRoot, styleContractRelative))) {
-    pushGeneratedText(plan, targetRoot, styleContractRelative, renderStyleContractTemplate());
-  }
   if (args.command !== 'scaffold' || !existsSync(path.join(targetRoot, 'PLAN2AGENT.md'))) {
     pushGeneratedText(plan, targetRoot, 'PLAN2AGENT.md', renderPlan2AgentGuide(legacyRuntime));
   }
@@ -3974,6 +3939,21 @@ function printEnhanceCapabilityPlan(plan, args, targetRoot) {
   if (args.dryRun) console.log('dry-run: no files written');
 }
 
+function findProjectConstitution(startPath) {
+  let current = path.resolve(startPath);
+  while (true) {
+    if (path.basename(current) === '.plan2agent') {
+      const candidate = path.join(current, 'constitution.json');
+      return existsSync(candidate) && lstatSync(candidate).isFile() ? candidate : null;
+    }
+    const candidate = path.join(current, '.plan2agent', 'constitution.json');
+    if (existsSync(candidate) && lstatSync(candidate).isFile()) return candidate;
+    const parent = path.dirname(current);
+    if (parent === current) return null;
+    current = parent;
+  }
+}
+
 function buildPlan(paths, args, artifactsRoot, targetRoot, sourceInfo, options = {}) {
   const {
     record = null,
@@ -3985,6 +3965,19 @@ function buildPlan(paths, args, artifactsRoot, targetRoot, sourceInfo, options =
   const targetIntakeRef = normalizePath(targetIntakeJsonPath(args.projectId));
   const targetSpecRef = normalizePath(targetSpecJsonPath(args.projectId));
   const targetTaskGraphRef = normalizePath(targetTaskGraphPath(args.projectId));
+  const sourceConstitutionPath = findProjectConstitution(artifactsRoot);
+  if (sourceConstitutionPath) {
+    validateConstitution(sourceConstitutionPath, {
+      requireApproved: true,
+      projectId: args.projectId,
+    });
+    pushArtifact(
+      plan,
+      sourceConstitutionPath,
+      targetRoot,
+      path.join('.plan2agent', 'constitution.json'),
+    );
+  }
   assertFile(paths.intakeJson, 'gate-a-intake/intake.json');
   const portableIntakeFiles = resolvePortableArtifactReferenceBundle([{
     label: 'gate-a-intake/intake.json',
@@ -4226,6 +4219,7 @@ function buildPlan(paths, args, artifactsRoot, targetRoot, sourceInfo, options =
     milestoneReviewFiles,
     milestoneEvidenceFiles,
     currentSpecFile: sourceInfo.currentSpecPath ? '.plan2agent/current-spec.json' : null,
+    constitutionFile: sourceConstitutionPath ? '.plan2agent/constitution.json' : null,
     maintenanceFiles,
     scriptFiles,
     toolFiles,
@@ -4240,6 +4234,7 @@ function buildPlan(paths, args, artifactsRoot, targetRoot, sourceInfo, options =
       `spec.source_intake rebased to ${targetIntakeRef}`,
       sourceInfo.kind === 'iteration' ? `iteration handoff source: ${sourceInfo.iterationId}` : 'greenfield handoff source',
       `run transfer mode: ${args.runTransfer}`,
+      sourceConstitutionPath ? 'approved Gate ② constitution copied' : 'legacy handoff without a constitution',
       preflightResearchFiles.length ? `Feature Radar preflight research copied: ${preflightResearchFiles.length} file(s)` : 'Feature Radar preflight research not present',
       milestoneReviewFiles.length ? `Milestone reviews copied: ${milestoneReviewFiles.length} file(s)` : 'Milestone reviews not present',
       milestoneEvidenceFiles.length ? `Milestone evidence bundle copied: ${milestoneEvidenceFiles.length} file(s)` : 'Milestone evidence bundle not present',

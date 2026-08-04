@@ -1,0 +1,253 @@
+#!/usr/bin/env node
+/** Inspect, migrate, and approve the persistent Plan2Agent project constitution. */
+
+import { existsSync, lstatSync, readFileSync, realpathSync } from 'node:fs';
+import path from 'node:path';
+import process from 'node:process';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { atomicWriteJson } from './p2a_run_store.mjs';
+import { resolveP2aPaths } from './p2a_paths.mjs';
+import { resolveProjectIdDefault } from './p2a_project_config.mjs';
+import { validateConstitution, ValidationError } from './validate_artifacts.mjs';
+
+const P2A_PATHS = resolveP2aPaths(import.meta.url);
+const CONSTITUTION_RELATIVE = path.join('.plan2agent', 'constitution.json');
+const LEGACY_STYLE_RELATIVE = path.join('.plan2agent', 'style.md');
+const COMMANDS = new Set(['status', 'approve', 'migrate-style']);
+
+function usage() {
+  return [
+    'Usage:',
+    '  p2a shape [--target <dir>] [--json]',
+    '  p2a shape approve --quote <user-utterance> [--target <dir>]',
+    '  p2a shape migrate-style [--project-id <id>] [--target <dir>]',
+    '',
+    'Notes:',
+    '  Gate ② approval always requires a verbatim user quote.',
+    '  migrate-style creates a draft constitution and leaves approval to the user.',
+  ].join('\n');
+}
+
+function parseArgs(argv) {
+  const first = argv[0];
+  const command = first && !first.startsWith('-') ? first : 'status';
+  if (!COMMANDS.has(command)) throw new ValidationError(`unknown shape command: ${command}`);
+  const args = {
+    command,
+    target: P2A_PATHS.projectRoot,
+    projectId: null,
+    quote: null,
+    json: false,
+    help: false,
+  };
+  const start = command === 'status' && command !== first ? 0 : 1;
+  for (let index = start; index < argv.length; index += 1) {
+    const arg = argv[index];
+    if (arg === '--help' || arg === '-h') args.help = true;
+    else if (arg === '--json') args.json = true;
+    else if (arg === '--target') {
+      args.target = argv[++index];
+      if (!args.target) throw new ValidationError('--target requires a project directory');
+    } else if (arg === '--project-id') {
+      args.projectId = argv[++index];
+      if (!args.projectId) throw new ValidationError('--project-id requires a project id');
+    } else if (arg === '--quote') {
+      args.quote = argv[++index];
+      if (!args.quote?.trim()) throw new ValidationError('--quote requires a non-empty verbatim user utterance');
+    } else {
+      throw new ValidationError(`unknown shape option: ${arg}`);
+    }
+  }
+  if (command !== 'approve' && args.quote !== null) throw new ValidationError('--quote is only supported by shape approve');
+  if (command !== 'migrate-style' && args.projectId !== null) throw new ValidationError('--project-id is only supported by shape migrate-style');
+  return args;
+}
+
+function assertDirectory(directory, label) {
+  if (!existsSync(directory) || !lstatSync(directory).isDirectory()) {
+    throw new ValidationError(`${label} must be an existing directory: ${directory}`);
+  }
+}
+
+function readJsonObject(filePath) {
+  try {
+    if (!existsSync(filePath) || !lstatSync(filePath).isFile()) return {};
+    const value = JSON.parse(readFileSync(filePath, 'utf8'));
+    return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+  } catch {
+    return {};
+  }
+}
+
+function inspect(targetInput) {
+  const target = path.resolve(targetInput);
+  assertDirectory(target, '--target');
+  const constitutionPath = path.join(target, CONSTITUTION_RELATIVE);
+  const legacyStylePath = path.join(target, LEGACY_STYLE_RELATIVE);
+  const legacyStyle = existsSync(legacyStylePath) && lstatSync(legacyStylePath).isFile();
+  if (!existsSync(constitutionPath)) {
+    return {
+      schema_version: 'p2a.shape.v1',
+      target,
+      state: legacyStyle ? 'legacy_style' : 'missing',
+      constitution: CONSTITUTION_RELATIVE,
+      approved: false,
+      legacyStyle,
+      counts: { architecture: 0, stack: 0, prohibitions: 0 },
+      next: legacyStyle
+        ? 'Legacy style.md remains supported. Run p2a shape migrate-style to create an optional Gate ② draft.'
+        : 'Run the p2a-harness Gate ② procedure to propose architecture, stack, prohibitions, and style.',
+    };
+  }
+  if (!lstatSync(constitutionPath).isFile()) {
+    return {
+      schema_version: 'p2a.shape.v1',
+      target,
+      state: 'invalid',
+      constitution: CONSTITUTION_RELATIVE,
+      approved: false,
+      legacyStyle,
+      counts: { architecture: 0, stack: 0, prohibitions: 0 },
+      error: 'constitution path is not a regular file',
+      next: `Repair ${CONSTITUTION_RELATIVE}, then run p2a validate --constitution ${CONSTITUTION_RELATIVE}.`,
+    };
+  }
+  try {
+    const constitution = validateConstitution(constitutionPath);
+    const approved = Boolean(constitution.approval_audit);
+    return {
+      schema_version: 'p2a.shape.v1',
+      target,
+      projectId: constitution.projectId,
+      state: approved ? 'approved' : 'draft',
+      constitution: CONSTITUTION_RELATIVE,
+      approved,
+      legacyStyle,
+      counts: {
+        architecture: constitution.architecture.length,
+        stack: constitution.stack.length,
+        prohibitions: constitution.prohibitions.length,
+      },
+      next: approved
+        ? 'Reuse this constitution for specification and implementation until an architecture-changing scope explicitly reopens Gate ②.'
+        : 'Review the Gate ② draft, then run p2a shape approve --quote "<user utterance>".',
+    };
+  } catch (error) {
+    return {
+      schema_version: 'p2a.shape.v1',
+      target,
+      state: 'invalid',
+      constitution: CONSTITUTION_RELATIVE,
+      approved: false,
+      legacyStyle,
+      counts: { architecture: 0, stack: 0, prohibitions: 0 },
+      error: error.message,
+      next: `Repair ${CONSTITUTION_RELATIVE}, then run p2a validate --constitution ${CONSTITUTION_RELATIVE}.`,
+    };
+  }
+}
+
+function printStatus(result) {
+  console.log('Plan2Agent shape');
+  console.log(`- target: ${result.target}`);
+  console.log(`- state: ${result.state}`);
+  console.log(`- constitution: ${result.constitution}`);
+  if (result.projectId) console.log(`- projectId: ${result.projectId}`);
+  console.log(`- rules: architecture=${result.counts.architecture} stack=${result.counts.stack} prohibitions=${result.counts.prohibitions}`);
+  console.log(`- legacy style.md: ${result.legacyStyle ? 'present' : 'absent'}`);
+  if (result.error) console.log(`- error: ${result.error}`);
+  console.log(`Next: ${result.next}`);
+}
+
+function approve(args) {
+  if (!args.quote?.trim()) {
+    throw new ValidationError('shape approve requires --quote with the verbatim user approval utterance');
+  }
+  const target = path.resolve(args.target);
+  assertDirectory(target, '--target');
+  const constitutionPath = path.join(target, CONSTITUTION_RELATIVE);
+  if (!existsSync(constitutionPath) || !lstatSync(constitutionPath).isFile()) {
+    throw new ValidationError(`shape approve requires a Gate ② draft at ${constitutionPath}`);
+  }
+  const constitution = validateConstitution(constitutionPath);
+  const approved = {
+    ...constitution,
+    approval_audit: {
+      approved_by: 'user',
+      approved_at: new Date().toISOString().slice(0, 10),
+      approved_artifacts: ['.plan2agent/constitution.json'],
+      approval_note: `User quote: ${JSON.stringify(args.quote.trim())}`,
+    },
+  };
+  atomicWriteJson(constitutionPath, approved);
+  validateConstitution(constitutionPath, { requireApproved: true });
+  console.log(`Plan2Agent Gate ② approved: ${constitutionPath}`);
+  console.log(`- projectId: ${approved.projectId}`);
+  console.log('- approval quote: recorded');
+  return 0;
+}
+
+function migrateStyle(args) {
+  const target = path.resolve(args.target);
+  assertDirectory(target, '--target');
+  const constitutionPath = path.join(target, CONSTITUTION_RELATIVE);
+  const legacyStylePath = path.join(target, LEGACY_STYLE_RELATIVE);
+  if (existsSync(constitutionPath)) {
+    throw new ValidationError(`constitution already exists: ${constitutionPath}`);
+  }
+  if (!existsSync(legacyStylePath) || !lstatSync(legacyStylePath).isFile()) {
+    throw new ValidationError(`legacy style contract is missing: ${legacyStylePath}`);
+  }
+  const projectConfig = readJsonObject(path.join(target, '.plan2agent', 'project.config.json'));
+  const manifest = readJsonObject(path.join(target, '.plan2agent', 'manifest.json'));
+  const projectId = args.projectId ?? resolveProjectIdDefault(target, projectConfig, manifest);
+  const draft = {
+    schema_version: 'p2a.constitution.v1',
+    projectId,
+    architecture: [],
+    stack: [],
+    prohibitions: [],
+    style: {
+      source: '.plan2agent/style.md',
+      contract_markdown: readFileSync(legacyStylePath, 'utf8'),
+    },
+  };
+  atomicWriteJson(constitutionPath, draft);
+  validateConstitution(constitutionPath);
+  console.log(`Plan2Agent legacy style migrated to Gate ② draft: ${constitutionPath}`);
+  console.log('- review architecture, stack, prohibitions, and imported style before approval');
+  return 0;
+}
+
+export function main(argv = process.argv.slice(2)) {
+  try {
+    const args = parseArgs(argv);
+    if (args.help) {
+      console.log(usage());
+      return 0;
+    }
+    if (args.command === 'approve') return approve(args);
+    if (args.command === 'migrate-style') return migrateStyle(args);
+    const result = inspect(args.target);
+    if (args.json) console.log(JSON.stringify(result, null, 2));
+    else printStatus(result);
+    return 0;
+  } catch (error) {
+    if (error instanceof ValidationError || error instanceof SyntaxError || error?.code) {
+      console.error(`p2a shape error: ${error.message}`);
+      return 1;
+    }
+    throw error;
+  }
+}
+
+function isDirectEntry() {
+  if (!process.argv[1]) return false;
+  try {
+    return realpathSync(fileURLToPath(import.meta.url)) === realpathSync(process.argv[1]);
+  } catch {
+    return import.meta.url === pathToFileURL(process.argv[1]).href;
+  }
+}
+
+if (isDirectEntry()) process.exitCode = main();

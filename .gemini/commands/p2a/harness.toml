@@ -12,7 +12,8 @@ Rules:
 - Present a concise scope understanding and require explicit Gate A approval before writing a ready intake with approval_audit.
 - Treat optional questions and decisions as ledger entries, not as workflow states.
 - Preserve legacy intake fields when reading history, but do not generate or interpret them.
-- Do not synthesize Gate B until intake_json is ready_for_spec with approval_audit.
+- After Gate A, establish or reuse the project constitution. For a new project, require a valid .plan2agent/constitution.json and approve it only through p2a shape approve --quote with the exact user utterance; legacy style-only projects remain compatible.
+- Do not synthesize Gate B until intake_json is ready_for_spec with approval_audit and the required Gate ② constitution is approved.
 - Stop before task graph unless spec_json.approval is approved and open_decisions is empty.
 - Return the named state sections required by the harness.
 

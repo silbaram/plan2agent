@@ -101,6 +101,7 @@ test('entry confirmation dialogue stays compact and preserves the existing gate 
 
 test('entry contract documentation records validation, dialogue, and compatibility boundaries', () => {
   const contract = readFileSync(path.join(ROOT, 'docs', 'entry-contract.md'), 'utf8');
+  const harnessGuide = readFileSync(path.join(ROOT, 'docs', 'harness-guide.md'), 'utf8');
   assert.match(contract, /## 2\. 최소 문서 계약/);
   assert.match(contract, /## 3\. 발견과 우선순위/);
   assert.match(contract, /`p2a next --entry <path>`/);
@@ -121,6 +122,10 @@ test('entry contract documentation records validation, dialogue, and compatibili
   assert.match(contract, /optional `interview` object/);
   assert.match(contract, /opaque 호환 데이터/);
   assert.match(contract, /approved spec이 없을 때 downstream task 생성을 막는 규칙/);
+  assert.match(
+    harnessGuide,
+    /Entry document scope confirmation\(Gate A\)[\s\S]*Project constitution approval\(Gate ②\)[\s\S]*Product spec \+ Implementation plan\(Gate B\)/,
+  );
 });
 
 test('Gate B authoring instructions never interpret opaque legacy interview data', () => {
@@ -437,6 +442,21 @@ test('a confirmed entry proceeds through Gate A-C execution and iteration close'
     fixtureIntake.evidence[0].url = 'idea.md';
     fixtureIntake.approval_audit.approval_note = 'Confirmed the scope interpretation derived from idea.md.';
     writeJson(path.join(artifactRoot, 'gate-a-intake', 'intake.json'), fixtureIntake);
+    assert.equal(runNext(root, ['--entry', 'idea.md']).state, 'shape');
+    writeJson(path.join(root, '.plan2agent', 'constitution.json'), {
+      schema_version: 'p2a.constitution.v1',
+      projectId: 'webhook-api-service',
+      architecture: [],
+      stack: [],
+      prohibitions: [],
+      style: {},
+      approval_audit: {
+        approved_by: 'user',
+        approved_at: '2026-08-04',
+        approved_artifacts: ['.plan2agent/constitution.json'],
+        approval_note: 'User quote: "이 구조로 진행해"',
+      },
+    });
     assert.equal(runNext(root, ['--entry', 'idea.md']).state, 'gate_a_ready_for_spec');
 
     const fixtureSpec = JSON.parse(readFileSync(

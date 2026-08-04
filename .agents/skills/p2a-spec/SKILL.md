@@ -10,6 +10,7 @@ Create a development-ready product and implementation specification from approve
 ## Inputs
 
 - `intake_json` with `status: ready_for_spec` and a valid Gate A `approval_audit`. Treat a legacy `interview` object as opaque compatibility data; do not use it to route or block Gate B.
+- Approved `.plan2agent/constitution.json` for new projects. Legacy projects without it may pass `.plan2agent/style.md` as compatibility guidance.
 - User answers for every high-impact `needs_user_decision`.
 - Explicit constraints and non-goals.
 - Optional `intake_json.baseline_context` with an immutable baseline `spec_ref`/`spec_sha256` and prior answers/question dispositions that may be reused when the current change does not affect them.
@@ -72,6 +73,8 @@ Treat this as an iteration-scoped decision. Function-first work may choose `mini
 - dependencies
 - edge_cases
 - verification
+
+The implementation plan must conform to the approved constitution. Treat `architecture` and `stack` as durable constraints, apply `style` as downstream implementation guidance, and do not introduce values forbidden by any `prohibitions` entry. A `validator` prohibition is a hard planning-validation failure; `review` and `advisory` prohibitions remain visible for human or agent judgment. When a current iteration would require changing the constitution, stop Gate B and return to the focused Gate ② amendment procedure instead of silently overriding it in `spec_json`.
 
 ## Technology Reconnaissance
 
@@ -162,6 +165,7 @@ Suggested Korean section labels for implementation plans: 아키텍처, 인터�
 ## Approval Contract
 
 - Do not start Gate B when Gate A lacks `status: ready_for_spec` or `intake_json.approval_audit`. Ignore legacy `interview` state when making that decision.
+- For a new project, do not start Gate B until `.plan2agent/constitution.json` has a valid quoted Gate ② `approval_audit`. Preserve the no-constitution fallback only for legacy projects.
 - Use `approval: draft` until the user explicitly approves the product and implementation spec.
 - Use `approval: approved` only when every intake `CQ-n` is disposed, promoted decisions are resolved, `open_decisions` is empty, and the user has approved the spec.
 - When `approval: approved`, include `spec_json.approval_audit` with `approved_by`, `approved_at`, `approved_artifacts`, and `approval_note`. Use `approved_artifacts: ["gate-b-spec/spec.json"]` for a greenfield Gate B bundle unless a more specific project-relative JSON path is known.
