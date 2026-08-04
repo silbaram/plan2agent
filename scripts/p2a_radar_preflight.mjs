@@ -338,14 +338,19 @@ function extractMarkdownRecommendations(text, sourcePath) {
 
 const ENTRY_TEXT_EXTENSIONS = new Set(['', '.md', '.markdown', '.txt', '.text']);
 const ENTRY_WHAT_PATTERN = new RegExp([
-  '\\b(?:build|create|develop|implement|introduce|add|improve|provide|support|design|ship|launch)\\b',
-  '\\b(?:app|application|service|tool|cli|api|system|feature|platform|dashboard|extension|plugin|library|adapter|website|workflow)\\b',
-  '(?:만들|개발|구현|구축|도입|추가|개선|제공|지원|설계|출시)',
-  '(?:앱|애플리케이션|서비스|도구|기능|시스템|플랫폼|대시보드|확장|플러그인|라이브러리|어댑터|웹사이트|워크플로)',
+  '\\b(?:build|create|develop|implement|introduce|add|improve|provide|support|design|ship|launch|show|track|manage|monitor|automate|visualize|analyse|analyze|notify|collect)\\b',
+  '\\b(?:app|application|service|tool|cli|api|system|feature|platform|dashboard|extension|plugin|library|adapter|website|workflow|page|screen|console|bot|sdk|module|portal|ui|client|worker|pipeline)\\b',
+  '(?:만들|개발|구현|구축|도입|추가|개선|제공|지원|설계|출시|보여주|추적|관리|모니터|자동화|시각화|분석|알림|수집)',
+  '(?:앱|애플리케이션|서비스|도구|기능|시스템|플랫폼|대시보드|확장|플러그인|라이브러리|어댑터|웹사이트|워크플로|화면|페이지|콘솔|봇|SDK|모듈|포털|UI|클라이언트|워커|파이프라인)',
 ].join('|'), 'i');
 
 function uniqueUrls(text) {
   return [...new Set(extractUrls(text))];
+}
+
+function isReferenceListItem(recommendation) {
+  const title = stripMarkdown(recommendation?.title).trim();
+  return /^(?:source|evidence|reference)\b|^(?:출처|근거|참고)(?:\s|[:：])/i.test(title);
 }
 
 function manifestHeaders(text) {
@@ -430,7 +435,9 @@ export function inspectEntryDocument(entryPath, options = {}) {
   errors.push(...radarProvenanceErrors(resolvedPath, radar));
 
   const webSourceCount = uniqueUrls(text).length;
-  const recommendationCount = extractMarkdownRecommendations(text, resolvedPath).length;
+  const recommendationCount = extractMarkdownRecommendations(text, resolvedPath)
+    .filter((recommendation) => !isReferenceListItem(recommendation))
+    .length;
   const warnings = [];
   if (webSourceCount > MAX_WEB_SOURCES) {
     warnings.push(

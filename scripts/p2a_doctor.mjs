@@ -391,12 +391,6 @@ function summarizeArtifact(targetRoot, artifactRoot, isScaffoldProject) {
     projectId,
     repeatedDevelopment: layout.kind === 'iteration',
   });
-  if (entry && !entry.valid) {
-    diagnostics.push({
-      severity: 'error',
-      message: `Entry document is invalid: ${entry.errors.join('; ')}`,
-    });
-  }
 
   const iterationRoot = activeIteration ? path.join(artifactRoot, 'iterations', activeIteration) : null;
   const searchRoots = iterationRoot && isDirectory(iterationRoot)
@@ -409,6 +403,20 @@ function summarizeArtifact(targetRoot, artifactRoot, isScaffoldProject) {
     path.join(searchRoot, 'task-graph.json'),
   ]));
   const reviewPath = firstExistingFile(searchRoots.map((searchRoot) => path.join(searchRoot, 'gate-d-review', 'review.json')));
+  const hasCanonicalPlanningState = Boolean(
+    layout.hasCurrentSpec
+    || layout.hasIterations
+    || intakePath
+    || specPath
+    || taskGraphPath
+    || reviewPath
+  );
+  if (entry && !entry.valid && !hasCanonicalPlanningState) {
+    diagnostics.push({
+      severity: 'error',
+      message: `Entry document is invalid: ${entry.errors.join('; ')}`,
+    });
+  }
 
   const specResult = specPath ? readJsonObject(specPath) : null;
   const taskGraphResult = taskGraphPath ? readJsonObject(taskGraphPath) : null;

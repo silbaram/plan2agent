@@ -76,6 +76,7 @@ test('entry confirmation dialogue stays compact and preserves the existing gate 
   assert.match(section, /Present one compact interpretation of what will be built/);
   assert.match(section, /Ask only for information or decisions that cannot be safely inferred/);
   assert.match(section, /no fixed question-count or round limit/);
+  assert.match(section, /Do not materialize discovery dimensions, CQ\/ND ids/);
   assert.match(section, /explicitly ask the user to confirm/);
   assert.match(section, /`selected`, `rejected`, or `deferred`/);
   assert.match(section, /unchanged `p2a\.intake\.v1` contract/);
@@ -97,6 +98,10 @@ test('entry contract documentation records discovery, validation, dialogue, and 
   assert.match(contract, /collection-report\.md/);
   assert.match(contract, /next-iteration-recommendations\.md/);
   assert.match(contract, /handoff-manifest\.md/);
+  assert.match(contract, /capability-gap-analysis\.md/);
+  assert.match(contract, /source-candidates\.md/);
+  assert.match(contract, /`constitution\.json` 재사용/);
+  assert.match(contract, /`CQ-n`\/`ND-n`/);
   assert.match(contract, /12개를 초과하거나 추천 항목이 8개를 초과하면.*warning/);
   assert.match(contract, /`state: entry_missing`/);
   assert.match(contract, /`state: gate_what`/);
@@ -127,6 +132,10 @@ test('a thin user-authored entry document validates and enters scope confirmatio
     assert.equal(next.state, 'gate_what');
     assert.equal(next.command.kind, 'skill');
     assert.match(next.command.display, /p2a-harness --entry ".*idea\.md"/);
+
+    writeFileSync(entryPath, '릴리즈 상태를 한눈에 보여주는 운영 화면.\n', 'utf8');
+    const thinNounPhrase = runP2a(['validate', '--entry', entryPath]);
+    assert.equal(thinNounPhrase.status, 0, `${thinNounPhrase.stdout}${thinNounPhrase.stderr}`);
 
     const missing = runP2a(['validate', '--entry', path.join(root, 'missing.md')]);
     assert.notEqual(missing.status, 0);
@@ -169,7 +178,8 @@ test('entry source and recommendation caps warn without rejecting the original d
     const result = runP2a(['validate', '--entry', entryPath]);
     assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
     assert.match(result.stderr, /13 web sources; only the first 12 are promoted/);
-    assert.match(result.stderr, /22 recommendations; only the first 8 are promoted/);
+    assert.match(result.stderr, /9 recommendations; only the first 8 are promoted/);
+    assert.doesNotMatch(result.stderr, /22 recommendations/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -235,6 +245,9 @@ test('the latest Radar sequence chooses collection report first and existing-pro
     ]);
     assert.notEqual(invalidRadar.status, 0);
     assert.match(`${invalidRadar.stdout}${invalidRadar.stderr}`, /requires sibling handoff-manifest\.md/);
+
+    const invalidDoctor = runP2a(['doctor', '--target', root, '--json']);
+    assert.equal(JSON.parse(invalidDoctor.stdout).projectState.state, 'broken_install');
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -248,7 +261,7 @@ test('canonical Gate artifacts take deterministic priority over a coexisting ent
     cpSync(path.join(FIXTURE_ROOT, '_e2e', 'webhook-api-service'), artifactRoot, {
       recursive: true,
     });
-    writeRadarSequence(artifactRoot, '001-entry', {
+    const sequenceRoot = writeRadarSequence(artifactRoot, '001-entry', {
       'collection-report.md': '# Collection Report\n\nBuild a delivery dashboard for webhook operators.\n',
     });
     const directEntry = path.join(root, 'direct-entry.md');
@@ -259,6 +272,60 @@ test('canonical Gate artifacts take deterministic priority over a coexisting ent
       assert.equal(next.state, 'gate_d_passed_needs_iteration_init');
       assert.equal(next.command.kind, 'cli');
     }
+
+    rmSync(path.join(sequenceRoot, 'handoff-manifest.md'));
+    const doctor = runP2a(['doctor', '--target', root, '--json']);
+    const doctorPayload = JSON.parse(doctor.stdout);
+    assert.notEqual(doctorPayload.projectState.state, 'broken_install');
+    assert.doesNotMatch(
+      JSON.stringify(doctorPayload.projectState.diagnostics),
+      /Entry document is invalid/,
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('an explicit entry wins over multiple automatically discovered preflight roots', () => {
+  const root = project();
+  try {
+    for (const projectId of ['one', 'two']) {
+      writeRadarSequence(
+        path.join(root, '.plan2agent', 'artifacts', projectId),
+        '001-entry',
+        {
+          'collection-report.md': `# Collection Report\n\nBuild a dashboard for ${projectId}.\n`,
+        },
+      );
+    }
+    writeFileSync(path.join(root, 'idea.md'), 'Build a separate release console.\n', 'utf8');
+
+    const next = runNext(root, ['--entry', 'idea.md']);
+    assert.equal(next.state, 'gate_what');
+    assert.match(next.command.display, /idea\.md/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('a confirmed entry can hand off to the existing approved Gate B flow', () => {
+  const root = project();
+  try {
+    const entryPath = path.join(root, 'idea.md');
+    writeFileSync(entryPath, 'Build a webhook delivery console.\n', 'utf8');
+    assert.equal(runNext(root, ['--entry', 'idea.md']).state, 'gate_what');
+
+    const artifactRoot = path.join(root, '.plan2agent', 'artifacts', 'webhook-api-service');
+    mkdirSync(artifactRoot, { recursive: true });
+    for (const gate of ['gate-a-intake', 'gate-b-spec']) {
+      cpSync(path.join(FIXTURE_ROOT, '_e2e', 'webhook-api-service', gate), path.join(artifactRoot, gate), {
+        recursive: true,
+      });
+    }
+
+    const next = runNext(root, ['--entry', 'idea.md']);
+    assert.equal(next.state, 'gate_b_approved_needs_tasks');
+    assert.equal(next.command.display, '/p2a-task-breakdown');
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

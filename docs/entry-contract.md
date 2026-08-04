@@ -29,6 +29,7 @@
 - Feature Radar 실행
 - URL 또는 추천 항목 포함
 - Gate A/B schema를 원문에 직접 표현하는 일
+- discovery dimension 처분, `CQ-n`/`ND-n`, `canonical_effect`, `affected_fields`, `spec_updates`, 라운드 또는 진행도 카운터
 
 웹 URL이 12개를 초과하거나 추천 항목이 8개를 초과하면 검증은 성공하고 warning만 출력한다. 이후 evidence 변환에서는 각각 앞의 12개와 8개만 승격하며, 원문 전체는 별도 참조로 보존한다.
 
@@ -52,6 +53,18 @@ Sequence 디렉터리는 숫자를 인식해 정렬한다. 최신 sequence에 `c
 
 ## 4. Feature Radar 출처 계약
 
+Radar 산출물은 다음 역할로 구분한다. 진입 시에는 주 입력 하나만 읽고, 나머지는 근거가 필요할 때만 연다.
+
+| Radar 산출물 | p2a 역할 |
+| --- | --- |
+| `collection-report.md` | 신규 개발 주 입력 |
+| `next-iteration-recommendations.md` | 반복 개발 주 입력 fallback |
+| `capability-gap-analysis.md` | 반복 개발 보조 근거 |
+| `signal-map.md`, `source-candidates.md` | 필요할 때만 여는 참조 |
+| `research-bundle.md`, `research-plan.md` | 참조 전용 |
+| `local-project-scan.md` | 참조 전용 |
+| `handoff-manifest.md` | 출처 기록 |
+
 Radar 진입 문서는 같은 디렉터리의 `handoff-manifest.md`가 다음을 증명해야 한다.
 
 - `handoff_mode: p2a-preflight` 또는 같은 의미의 `mode: p2a-preflight`
@@ -60,6 +73,15 @@ Radar 진입 문서는 같은 디렉터리의 `handoff-manifest.md`가 다음을
 - `Copied Files` 목록에 선택된 진입 문서 이름 포함
 
 `source_complete: false`는 출처가 불완전하다는 warning이며 진입 자체를 거부하지 않는다. Radar 파일은 기존 evidence 모델을 그대로 사용한다. 문서는 `LOCAL-n`, 발견 URL은 `WEB-n`, 추천은 `reference_reconnaissance.candidates`의 `origin: "feature_radar_preflight"`로 들어간다. 추천은 처음에는 context이며, 사용자의 범위 확인 전에는 승인된 scope가 아니다.
+
+두 Radar 모드는 다음 진입 흐름을 사용한다.
+
+| Radar 모드 | p2a 진입 |
+| --- | --- |
+| idea research | 게이트 ① 범위 확인 → 게이트 ② 명세 승인 → 실행 |
+| existing project | 게이트 ① 범위 확인 → 기존 `constitution.json` 재사용 → 실행 |
+
+이 계약은 `constitution.json` 수명주기를 새로 만들거나 기존 반복 상태를 초기화하지 않는다. 반복 프로젝트에 해당 파일이 있으면 재사용한다.
 
 ## 5. CLI 상태 계약
 

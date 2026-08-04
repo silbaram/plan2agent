@@ -1189,6 +1189,18 @@ function inspectionForArtifact(targetRoot, artifact, inspectedArtifacts) {
   return inspectedArtifacts.find((candidate) => candidate.artifactRoot === artifactRoot) ?? null;
 }
 
+function hasCanonicalPlanningState(inspection) {
+  const { gates, layout } = inspection;
+  return Boolean(
+    layout.hasCurrentSpec
+    || layout.hasIterations
+    || gates.intakePath
+    || gates.specPath
+    || gates.taskGraphPath
+    || gates.reviewPath
+  );
+}
+
 function selectNextArtifact(info, targetRoot, requestedProjectId, inspectedArtifacts) {
   const artifacts = info.artifacts;
   if (requestedProjectId) {
@@ -1237,7 +1249,29 @@ function buildNextDecisionContext(
   };
   if (!hasHarness || !info.artifacts.length) return context;
 
-  const selected = selectNextArtifact(info, targetRoot, requestedProjectId, inspectedArtifacts);
+  let selectionInfo = info;
+  let selectionInspections = inspectedArtifacts;
+  if (explicitEntry && !requestedProjectId) {
+    const canonicalInspections = inspectedArtifacts.filter(hasCanonicalPlanningState);
+    if (!canonicalInspections.length) return context;
+    const canonicalRoots = new Set(
+      canonicalInspections.map((inspection) => inspection.artifactRoot),
+    );
+    selectionInfo = {
+      ...info,
+      artifacts: info.artifacts.filter((artifact) => (
+        canonicalRoots.has(path.resolve(targetRoot, artifact.artifactRoot))
+      )),
+    };
+    selectionInspections = canonicalInspections;
+  }
+
+  const selected = selectNextArtifact(
+    selectionInfo,
+    targetRoot,
+    requestedProjectId,
+    selectionInspections,
+  );
   if (selected.selection) return { ...context, selection: selected.selection };
 
   const artifactRoot = path.resolve(targetRoot, selected.artifact.artifactRoot);
@@ -1245,14 +1279,7 @@ function buildNextDecisionContext(
   if (!detail) throw new Error(`artifact inspection is unavailable: ${artifactRoot}`);
   const { gates } = detail;
   const entry = explicitEntry ?? detail.entry;
-  const hasCanonicalPlanningState = Boolean(
-    detail.layout.hasCurrentSpec
-    || detail.layout.hasIterations
-    || gates.intakePath
-    || gates.specPath
-    || gates.taskGraphPath
-    || gates.reviewPath
-  );
+  const canonicalPlanningState = hasCanonicalPlanningState(detail);
   const iterationScopedRuns = runsForActiveIteration(detail.runs.records, detail.activeIteration);
   const activeRuns = detail.layout.kind === 'iteration'
     ? iterationScopedRuns.filter((run) => (
@@ -1316,7 +1343,7 @@ function buildNextDecisionContext(
     projectId: detail.projectId,
     entry,
     entryArg: entry ? commandProjectPath(targetRoot, entry.path) : null,
-    hasCanonicalPlanningState,
+    hasCanonicalPlanningState: canonicalPlanningState,
     detail,
     gates,
     gateAExists: Boolean(gates.intakePath),
