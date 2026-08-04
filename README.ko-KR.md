@@ -7,7 +7,7 @@
 
 [English](readme.md) | [한국어](README.ko-KR.md)
 
-한 문장의 제품 아이디어를 사용자가 확인한 제품 이해, 승인된 명세, 의존성 기반 task,
+짧은 제품 문서를 사용자가 확인한 제품 이해, 승인된 명세, 의존성 기반 task,
 검증된 AI 코딩 실행으로 바꿉니다.
 
 ## 30초 만에 설치하기
@@ -26,34 +26,29 @@ p2a next
 
 ## 5분 안에 첫 계획 만들기
 
-초기화한 뒤 프로젝트 디렉터리에서 Codex, Claude Code 또는 Gemini CLI를 열고 기획
-하네스에 제품 아이디어를 전달합니다. 완성된 요구사항 문서를 먼저 작성할 필요는
-없습니다.
+초기화한 뒤 한 문단 정도의 Markdown 또는 text 진입 문서를 작성합니다. 완성된
+요구사항 문서일 필요는 없지만, 새 하네스는 채팅 문장만으로 시작하지 않습니다.
+`p2a next --entry <path>` 또는 같은 경로를 받은 기획 하네스로 시작합니다.
 
 | Agent | 예시 |
 | --- | --- |
-| Codex | `Use the $p2a-harness skill to plan a service that receives webhooks, verifies signatures, and shows delivery history.` |
-| Claude Code | `/p2a-harness 웹훅을 수신하고 서명을 검증하며 전송 이력을 보여주는 서비스를 계획해 줘.` |
-| Gemini CLI | `/p2a:harness 웹훅을 수신하고 서명을 검증하며 전송 이력을 보여주는 서비스를 계획해 줘.` |
+| Codex | `Use the $p2a-harness skill with --entry docs/idea.md.` |
+| Claude Code | `/p2a-harness --entry docs/idea.md` |
+| Gemini CLI | `/p2a:harness --entry docs/idea.md` |
 
-하네스는 bounded discovery interview를 시작해 한 번에 1~3개의 중요한 질문을 합니다.
-질문 ID를 유지하고 구체적인 답변을 기록하며, 확인된 답변을 채팅에만 남기지 않고 제품·
-구현 명세의 canonical field로 반영합니다.
-
-3라운드에서는 soft-limit 요약을 제시하고 계속 인터뷰할지, 현재 이해를 확인할지,
-일시 중지할지 묻습니다. 5라운드 또는 무진전 2회에 도달하면 인터뷰를 중단합니다.
-해결되지 않은 high-impact blocker는 임의의 가정으로 숨기지 않고 계속 표시합니다.
+하네스는 문서 전체에서 대상 사용자, 기대 결과, 포함·제외 범위, 제약과 가정을 짧게
+정리합니다. 범위를 실질적으로 바꾸면서 안전하게 추론할 수 없는 내용만 물으며 고정
+질문 수나 대화 turn 제한은 없습니다. 사용자가 해석된 범위를 명시적으로 확인해야
+Gate A 승인 기록이 만들어집니다.
 
 전체 workflow는 불명확한 요구사항을 곧바로 코드로 바꾸지 않고 명시적인 검토 Gate마다
 멈춥니다.
 
 ```text
-한 문장 아이디어
-  -> Discovery interview: 라운드마다 1~3개의 핵심 질문
-  -> Gate A: 종합된 이해 확인과 사용자의 명시적 승인
+짧은 Markdown 또는 text 진입 문서
+  -> Gate A: 문서 범위 확인과 사용자의 명시적 승인
   -> Gate B: 제품 명세와 구현 계획
-  -> Gate C: 의존성 기반 task graph
-  -> Gate D: blocker와 실행 준비 상태 검토
+  -> Gate C: 검증된 의존성 기반 task graph
   -> 감독형 구현과 검증
   -> 평가와 개선 proposal
 ```
@@ -68,8 +63,8 @@ Gate A 이해 확인과 Gate B 승인은 서로 다른 결정입니다. 사용�
 p2a next
 ```
 
-Gate D의 blocker가 모두 해소되면 `next`가 감독형 task 실행과 다음 iteration으로의
-전환을 안내합니다.
+Gate A-C 검증이 통과하면 `next`가 감독형 task 실행과 다음 iteration으로의 전환을
+안내합니다.
 
 ## Plan2Agent를 사용하는 이유
 
@@ -79,7 +74,7 @@ AI 코딩 도구는 구현에 효과적이지만, 채팅 기록은 요구사항,
 
 | 필요 | Plan2Agent의 접근 방식 |
 | --- | --- |
-| 구현 전 명확한 결정 | bounded discovery interview와 네 개의 사용자 승인 Gate가 답변, 가정, 미결정 사항, 승인 상태를 보존합니다. |
+| 구현 전 명확한 결정 | Gate A 범위 확인과 Gate B 승인이 답변, 가정, 미결정 사항, 승인 상태를 보존합니다. |
 | 추적 가능한 구현 작업 | 명세를 acceptance criteria와 원본 참조를 가진 의존성 기반 task로 연결합니다. |
 | 검토 가능한 agent 실행 | task를 전경 감독 세션에서 실행하고 run log, 변경 파일, 검증 증거를 남깁니다. |
 | 이식 가능한 프로젝트 상태 | Codex, Claude Code, Gemini CLI에서 로컬 JSON artifact를 정본으로 유지합니다. |
@@ -102,8 +97,6 @@ system을 대체하지 않습니다.
       spec.json
     gate-c-task-graph/
       task-graph.json
-    gate-d-review/
-      review.json
     current-spec.json
     iterations/
     runs/
@@ -119,15 +112,14 @@ JSON 파일은 정본이며 패키지에 포함된 schema로 검증됩니다. �
 
 ### 1. 승인 Gate를 거쳐 계획하기
 
-기획 하네스는 아이디어를 구조화된 intake, 제품·구현 명세, task graph, 실행 준비 상태
-검토로 바꿉니다. Gate A에서 필수 discovery 영역을 인터뷰하고 간결한 이해 요약을
-제시한 뒤 사용자의 명시적인 확인을 요구합니다. 확인되면 같은 세션에서 Gate B로
-이어집니다. 불확실한 내용을 임의의 요구사항으로 만들지 않고 가정이나 사용자 결정으로
-기록합니다.
+기획 하네스는 진입 문서를 구조화된 intake, 제품·구현 명세, 검증된 task graph로
+바꿉니다. Gate A에서 문서의 범위를 간결하게 요약하고 사용자의 명시적인 확인을
+요구합니다. 확인되면 같은 세션에서 Gate B로 이어집니다. 불확실한 내용을 임의의
+요구사항으로 만들지 않고 가정이나 사용자 결정으로 기록합니다.
 
 ### 2. ready task 하나 실행하기
 
-Gate D 이후에는 `p2a next`로 다음 안전한 행동을 확인합니다. task 실행은 agent tool,
+Gate A-C validation 이후에는 `p2a next`로 다음 안전한 행동을 확인합니다. task 실행은 agent tool,
 workspace, 변경 파일, 검증 명령, 결과, 실패 분류를 기록합니다. 필요한 증거가 monitor
 gate를 통과하기 전에는 task가 완료되지 않습니다.
 

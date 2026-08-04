@@ -27,7 +27,7 @@ Plan2Agent 문서는 사용자 흐름, CLI 사용법, 산출물 계약, 구현 �
    실제 명령과 옵션 예시. `p2a iteration`, `p2a tasks`, `p2a runs`, `p2a handoff`, 검증 명령을 실행할 때 본다.
 
 3. [하네스 사용자 가이드](harness-guide.md)  
-   Gate A-D 산출물, schema, approval audit, evidence, troubleshooting을 자세히 확인할 때 본다.
+   Gate A-C 산출물, schema, approval audit, evidence, troubleshooting을 자세히 확인할 때 본다.
 
 4. [진입 계약](entry-contract.md)<br>
    사용자 또는 Feature Radar 아이디어 문서의 발견, 검증, 범위 확인 규칙을 확인할 때 본다.
@@ -47,7 +47,7 @@ Plan2Agent 문서는 사용자 흐름, CLI 사용법, 산출물 계약, 구현 �
 | --- | --- |
 | 제품을 처음 이해하고 바로 써보기 | [Quickstart](quickstart.md) |
 | 명령어를 찾아 실행하기 | [CLI 사용자 가이드](cli-reference.md) |
-| Gate A-D 산출물 구조 이해하기 | [하네스 사용자 가이드](harness-guide.md) |
+| Gate A-C 산출물 구조 이해하기 | [하네스 사용자 가이드](harness-guide.md) |
 | 짧은 아이디어 문서나 Radar handoff로 시작하기 | [진입 계약](entry-contract.md) |
 | 반복 구조와 변경분 task 흐름 이해하기 | [반복/고도화 개발 스펙](iteration-spec.md) |
 | 감독형 task 실행과 orchestration 흐름 이해하기 | [감독형 개발 실행 레퍼런스](supervised-execution.md) |
@@ -60,7 +60,7 @@ Plan2Agent 문서는 사용자 흐름, CLI 사용법, 산출물 계약, 구현 �
 | --- | --- | --- |
 | `quickstart.md` | 사용자용 퀵스타터 | 첫 성공까지의 최단 경로 |
 | `cli-reference.md` | 명령 실행 레퍼런스 | CLI usage와 대표 옵션 |
-| `harness-guide.md` | 산출물/게이트 사용자 가이드 | Gate A-D 요약, schema, evidence, 검증 (`p2a-harness` skill의 게이트 규칙 정본 링크 포함) |
+| `harness-guide.md` | 산출물/게이트 사용자 가이드 | Gate A-C 요약, schema, evidence, 검증 (`p2a-harness` skill의 게이트 규칙 정본 링크 포함) |
 | `entry-contract.md` | 아이디어 문서 진입 계약 | entry 발견 우선순위, 검증, Radar 출처, 범위 확인 대화 |
 | `iteration-spec.md` | 반복 개발 구현 계약 | iteration layout, close/open, semantic diff, run tracking |
 | `supervised-execution.md` | 감독형 개발 실행 레퍼런스 | ready task 실행, monitor gate, milestone review, retry recovery, proposal loop |
@@ -70,7 +70,7 @@ Plan2Agent 문서는 사용자 흐름, CLI 사용법, 산출물 계약, 구현 �
 
 - `quickstart.md`에는 첫 성공까지의 최소 경로만 둔다. 계약·옵션 설명은 넣지 않는다.
 - 명령 예시는 `cli-reference.md`에 둔다.
-- schema와 gate 산출물 설명은 `harness-guide.md`에 두고, Gate A-D 상세 규칙 정본은 `.agents/skills/p2a-harness/SKILL.md`에 둔다.
+- schema와 gate 산출물 설명은 `harness-guide.md`에 두고, Gate A-C 상세 규칙 정본은 `.agents/skills/p2a-harness/SKILL.md`에 둔다.
 - 진입 문서의 발견·검증·Radar 출처·확인 대화 계약은 `entry-contract.md`에 둔다.
 - 반복 구조의 정확한 동작 계약은 `iteration-spec.md`에 둔다.
 - ready task 실행, orchestration, proposal loop의 완료 기능 계약은 `supervised-execution.md`에 둔다.

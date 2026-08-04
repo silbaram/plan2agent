@@ -9,8 +9,6 @@ import {
   loadJson,
   resolveSpecSourceIntake,
   validateCurrentSpecGateBApprovalAudit,
-  validateCurrentSpecGateCApprovalAudit,
-  validateReviewPass,
   validateSpec,
   validateTaskGraph,
   ValidationError,
@@ -136,18 +134,11 @@ function validateCompositionSourceReadiness(
     'gate-c-task-graph',
     'task-graph.json',
   );
-  const reviewPath = path.join(iterationRoot, 'gate-d-review', 'review.json');
   assertFile(taskGraphPath, `current-spec.json source_specs ${source.iteration_id} task graph`);
-  assertFile(reviewPath, `current-spec.json source_specs ${source.iteration_id} review`);
   assertFileInsideArtifactRoot(
     taskGraphPath,
     artifactRoot,
     `current-spec.json source_specs ${source.iteration_id} task graph`,
-  );
-  assertFileInsideArtifactRoot(
-    reviewPath,
-    artifactRoot,
-    `current-spec.json source_specs ${source.iteration_id} review`,
   );
   const taskGraph = validateTaskGraph(taskGraphPath, specPath);
   if (taskGraph.projectId !== currentSpec.project_id) {
@@ -179,20 +170,6 @@ function validateCompositionSourceReadiness(
       `current-spec.json source_specs ${source.iteration_id} must be close-ready; incomplete tasks: ${incomplete.map((task) => `${task.id}:${task.status}`).join(', ')}`,
     );
   }
-  const review = validateReviewPass(reviewPath);
-  if (review.projectId !== currentSpec.project_id) {
-    throw new ValidationError(
-      `current-spec.json source_specs ${source.iteration_id} review project mismatch`,
-    );
-  }
-  validateReviewReferences({
-    review,
-    artifactRoot,
-    iterationRoot,
-    reviewPath,
-    specPath,
-    taskGraphPath,
-  });
   const expectedStatus = expectedCompositionSourceStatus(
     currentSpec,
     source,
@@ -416,45 +393,6 @@ function normalizeReference(reference) {
 
 function normalizedRelative(fromPath, toPath) {
   return path.relative(fromPath, toPath).split(path.sep).join('/');
-}
-
-function artifactReferenceMatches(reference, candidates) {
-  if (!reference || typeof reference !== 'string') return false;
-  if (path.isAbsolute(reference)) {
-    return candidates.some((candidate) => path.resolve(reference) === path.resolve(candidate.absolute));
-  }
-  const normalized = normalizeReference(reference);
-  return candidates.some((candidate) => candidate.refs.includes(normalized));
-}
-
-function expectedReferenceCandidates({ artifactRoot, iterationRoot, fromDir, expectedPath }) {
-  const artifactRelative = normalizedRelative(artifactRoot, expectedPath);
-  return [{
-    absolute: expectedPath,
-    refs: [
-      normalizedRelative(iterationRoot, expectedPath),
-      normalizedRelative(fromDir, expectedPath),
-      artifactRelative,
-      `${path.basename(artifactRoot)}/${artifactRelative}`,
-      `.plan2agent/artifacts/${path.basename(artifactRoot)}/${artifactRelative}`,
-    ],
-  }];
-}
-
-function validateReviewReferences({ review, artifactRoot, iterationRoot, reviewPath, specPath, taskGraphPath }) {
-  const fromDir = path.dirname(reviewPath);
-  const checks = [
-    ['sourceSpec', specPath],
-    ['sourceTaskGraph', taskGraphPath],
-  ];
-  for (const [field, expectedPath] of checks) {
-    const candidates = expectedReferenceCandidates({ artifactRoot, iterationRoot, fromDir, expectedPath });
-    if (!artifactReferenceMatches(review[field], candidates)) {
-      throw new ValidationError(
-        `review.${field} must reference ${normalizedRelative(iterationRoot, expectedPath)}, got ${JSON.stringify(review[field])}`,
-      );
-    }
-  }
 }
 
 function fileSha256(filePath) {
@@ -761,21 +699,6 @@ function validateReadyIterationArtifacts(state) {
       `ready iteration requires taskGraph.projectId ${JSON.stringify(taskGraph.projectId)} to match current-spec.json project_id ${JSON.stringify(state.projectId)}`,
     );
   }
-  validateCurrentSpecGateCApprovalAudit(state.currentSpec, state.activeIteration);
-  const review = validateReviewPass(state.reviewPath);
-  if (review.projectId !== state.projectId) {
-    throw new ValidationError(
-      `ready iteration requires review.projectId ${JSON.stringify(review.projectId)} to match current-spec.json project_id ${JSON.stringify(state.projectId)}`,
-    );
-  }
-  validateReviewReferences({
-    review,
-    artifactRoot: state.artifactRoot,
-    iterationRoot: state.iterationRoot,
-    reviewPath: state.reviewPath,
-    specPath: state.specPath,
-    taskGraphPath: state.taskGraphPath,
-  });
 }
 
 function parseStatusActiveIteration(statusPath) {
@@ -815,10 +738,8 @@ export function resolveIterationState(artifactPath, options = {}) {
   const iterationRoot = path.join(iterationsRoot, activeIteration);
   const gateBSpecRoot = path.join(iterationRoot, 'gate-b-spec');
   const gateCTaskGraphRoot = path.join(iterationRoot, 'gate-c-task-graph');
-  const gateDReviewRoot = path.join(iterationRoot, 'gate-d-review');
   const specPath = path.join(gateBSpecRoot, 'spec.json');
   const taskGraphPath = path.join(gateCTaskGraphRoot, 'task-graph.json');
-  const reviewPath = path.join(gateDReviewRoot, 'review.json');
   const effectiveSpecPath = resolveEffectiveSpecPath(currentSpec, artifactRoot, currentSpecPath);
 
   assertDirectory(iterationRoot, `iterations/${activeIteration}`);
@@ -831,8 +752,6 @@ export function resolveIterationState(artifactPath, options = {}) {
   if (requireReady) {
     assertFile(specPath, `iterations/${activeIteration}/gate-b-spec/spec.json`);
     assertFile(taskGraphPath, `iterations/${activeIteration}/gate-c-task-graph/task-graph.json`);
-    assertFile(reviewPath, `iterations/${activeIteration}/gate-d-review/review.json`);
-
     const taskGraph = loadJson(taskGraphPath);
     const taskGraphSourceSpecPath = resolveTaskGraphSourceSpec(taskGraph, taskGraphPath);
     assertFile(taskGraphSourceSpecPath, 'task-graph.sourceSpec');
@@ -851,7 +770,6 @@ export function resolveIterationState(artifactPath, options = {}) {
       specPath,
       taskGraphPath,
       taskGraphSourceSpecPath,
-      reviewPath,
     };
     validateReadyIterationArtifacts(state);
     return state;
@@ -870,7 +788,6 @@ export function resolveIterationState(artifactPath, options = {}) {
     specPath,
     taskGraphPath,
     taskGraphSourceSpecPath: null,
-    reviewPath,
   };
 }
 
@@ -897,7 +814,6 @@ export function serializeIterationState(state, root = ROOT) {
     specPath: state.specPath,
     taskGraphPath: state.taskGraphPath,
     taskGraphSourceSpecPath: state.taskGraphSourceSpecPath,
-    reviewPath: state.reviewPath,
     displayPaths: {
       artifactRoot: formatDisplayPath(state.artifactRoot, root),
       statusPath: formatDisplayPath(state.statusPath, root),
@@ -909,7 +825,6 @@ export function serializeIterationState(state, root = ROOT) {
       taskGraphSourceSpecPath: state.taskGraphSourceSpecPath
         ? formatDisplayPath(state.taskGraphSourceSpecPath, root)
         : null,
-      reviewPath: formatDisplayPath(state.reviewPath, root),
     },
   };
 }
@@ -926,6 +841,5 @@ export function formatIterationState(state) {
     `- effective spec: ${serialized.effectiveSpecPath}`,
     `- active spec: ${serialized.specPath}`,
     `- task graph: ${serialized.taskGraphPath}`,
-    `- review: ${serialized.reviewPath}`,
   ].join('\n');
 }

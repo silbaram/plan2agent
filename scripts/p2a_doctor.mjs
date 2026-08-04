@@ -402,14 +402,12 @@ function summarizeArtifact(targetRoot, artifactRoot, isScaffoldProject) {
     path.join(searchRoot, 'gate-c-task-graph', 'task-graph.json'),
     path.join(searchRoot, 'task-graph.json'),
   ]));
-  const reviewPath = firstExistingFile(searchRoots.map((searchRoot) => path.join(searchRoot, 'gate-d-review', 'review.json')));
   const hasCanonicalPlanningState = Boolean(
     layout.hasCurrentSpec
     || layout.hasIterations
     || intakePath
     || specPath
     || taskGraphPath
-    || reviewPath
   );
   if (entry && !entry.valid && !hasCanonicalPlanningState) {
     diagnostics.push({
@@ -420,15 +418,12 @@ function summarizeArtifact(targetRoot, artifactRoot, isScaffoldProject) {
 
   const specResult = specPath ? readJsonObject(specPath) : null;
   const taskGraphResult = taskGraphPath ? readJsonObject(taskGraphPath) : null;
-  const reviewResult = reviewPath ? readJsonObject(reviewPath) : null;
   if (specResult?.ok) projectId = stringValue(specResult.data.project_id) ?? projectId;
   if (taskGraphResult?.ok) projectId = stringValue(taskGraphResult.data.projectId) ?? projectId;
-  if (reviewResult?.ok) projectId = stringValue(reviewResult.data.projectId) ?? projectId;
 
   for (const [label, result] of [
     ['Gate B spec', specResult],
     ['Gate C task graph', taskGraphResult],
-    ['Gate D review', reviewResult],
   ]) {
     if (result && !result.ok) {
       diagnostics.push({ severity: 'error', message: `${label} is not readable: ${result.error}` });
@@ -441,7 +436,7 @@ function summarizeArtifact(targetRoot, artifactRoot, isScaffoldProject) {
   if (layout.requiresIterationInit) {
     diagnostics.push({
       severity: 'warn',
-      message: 'Greenfield Gate A-D artifacts must be converted with p2a iteration init before task execution.',
+      message: 'Greenfield Gate A-C artifacts must be converted with p2a iteration init before task execution.',
     });
   }
   if (layout.hasIncompleteIterationLayout) {
@@ -479,10 +474,6 @@ function summarizeArtifact(targetRoot, artifactRoot, isScaffoldProject) {
       version: taskGraphResult?.ok ? stringValue(taskGraphResult.data.version) : null,
       sourceSpec: taskGraphResult?.ok ? stringValue(taskGraphResult.data.sourceSpec) : null,
       taskCounts,
-    },
-    review: {
-      path: reviewPath ? relativeToTarget(targetRoot, reviewPath) : null,
-      blockingIssues: reviewResult?.ok && Array.isArray(reviewResult.data.blocking_issues) ? reviewResult.data.blocking_issues.length : null,
     },
     runs: runSummary,
     diagnostics,
@@ -551,7 +542,7 @@ function projectCommands(state, artifacts) {
   if (state === 'installed_empty') {
     commands.push({
       id: 'import_or_plan',
-      command: 'Start Gate A-D planning or import an existing artifact bundle.',
+      command: 'Start Gate A-C planning or import an existing artifact bundle.',
       description: 'No canonical artifact root was found yet.',
     });
   }

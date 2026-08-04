@@ -1,6 +1,6 @@
 # Plan2Agent 진입 계약
 
-이 문서는 한 문장 명령 대신 사용자가 작성했거나 Feature Radar가 전달한 짧은 아이디어 문서를 Plan2Agent 기획 흐름의 주 입력으로 연결하는 계약을 정의한다. 진입 문서는 “무엇을 만들 것인가”를 전달하는 원문이며, Gate A-D 산출물이나 승인 기록을 대신하지 않는다.
+이 문서는 한 문장 명령 대신 사용자가 작성했거나 Feature Radar가 전달한 짧은 아이디어 문서를 Plan2Agent 기획 흐름의 주 입력으로 연결하는 계약을 정의한다. 진입 문서는 “무엇을 만들 것인가”를 전달하는 원문이며, Gate A-C 산출물이나 승인 기록을 대신하지 않는다.
 
 문서 홈: [Plan2Agent Docs](README.md) · 게이트 규칙 정본: [`p2a-harness` skill](../.agents/skills/p2a-harness/SKILL.md)
 
@@ -29,7 +29,7 @@
 - Feature Radar 실행
 - URL 또는 추천 항목 포함
 - Gate A/B schema를 원문에 직접 표현하는 일
-- discovery dimension 처분, `CQ-n`/`ND-n`, `canonical_effect`, `affected_fields`, `spec_updates`, 라운드 또는 진행도 카운터
+- 별도 영역 행렬, 의무적인 질문·결정 id 목록, 답변별 정본 갱신 명령, 라운드 또는 진행도 카운터
 
 웹 URL이 12개를 초과하거나 추천 항목이 8개를 초과하면 검증은 성공하고 warning만 출력한다. 이후 evidence 변환에서는 각각 앞의 12개와 8개만 승격하며, 원문 전체는 별도 참조로 보존한다. 문서가 없거나 비어 있거나 지원하지 않는 형식일 때만 진입 검증을 차단한다.
 
@@ -39,7 +39,7 @@
 
 ### 3.1 기존 기획 상태 우선
 
-Gate A-D 파일, `current-spec.json`, 또는 iteration 상태가 이미 있으면 그것이 항상 우선한다. `--entry`나 자동 발견 문서가 함께 있어도 `p2a next`는 기존 canonical 기획 상태에서 가장 이른 변경 지점을 재개한다. 기존 인터뷰 snapshot도 유지하며 새 진입 대화로 초기화하지 않는다.
+Gate A-C 파일, `current-spec.json`, 또는 iteration 상태가 이미 있으면 그것이 항상 우선한다. `--entry`나 자동 발견 문서가 함께 있어도 `p2a next`는 기존 canonical 기획 상태에서 가장 이른 변경 지점을 재개한다. 기존 intake snapshot도 유지하며 새 진입 대화로 초기화하지 않는다.
 
 ### 3.2 새 진입 문서 선택
 
@@ -87,11 +87,11 @@ manifest가 없거나 위 정보가 불완전하거나 `source_complete: false`�
 
 ### `p2a next`
 
-하네스는 설치되었지만 artifact root가 없고 `--entry`도 전달되지 않으면 기존 한 문장 아이디어 인터뷰를 안내한다.
+하네스는 설치되었지만 artifact root가 없고 `--entry`도 전달되지 않으면 먼저 진입 문서를 만들거나 선택하도록 안내한다.
 
-- `state: initialized_without_artifacts`
-- `command.kind: skill`
-- 다음 행동: `/p2a-harness "<one-sentence idea>"` 실행. 준비된 문서가 있으면 `p2a next --entry <path>`를 사용할 수 있다.
+- `state: entry_missing`
+- `command.kind: approval`
+- 다음 행동: Markdown 또는 text 문서를 만들거나 선택한 뒤 `p2a next --entry <path>` 실행
 
 선택된 진입 문서가 없거나 비어 있거나 지원하지 않는 형식이라 검증에 실패하고 재개할 canonical 상태도 없으면 다음 상태를 반환한다.
 
@@ -115,7 +115,7 @@ manifest가 없거나 위 정보가 불완전하거나 `source_complete: false`�
 
 ## 6. 범위 확인 대화
 
-`gate_what`은 기존 bounded interview를 제거하는 상태가 아니라, 검증된 원문에서 시작하는 별도 Gate A 진입 방식이다.
+`gate_what`은 검증된 원문에서 범위를 확인하는 Gate A 진입 상태다.
 
 1. 하네스는 원문과 Radar manifest가 있으면 출처를 읽는다.
 2. 무엇을 만들지, 대상 사용자, 기대 결과, 포함/제외 범위, 하드 제약, 중요한 가정을 짧게 요약한다.
@@ -124,17 +124,17 @@ manifest가 없거나 위 정보가 불완전하거나 `source_complete: false`�
 5. Radar 추천은 승격된 각 후보를 `selected`, `rejected`, `deferred` 중 하나로 처분하고 이유를 기록한다.
 6. 확인 후에만 같은 `p2a.intake.v1` schema와 Gate A `approval_audit`로 canonical intake를 만들고 정상 Gate B 흐름을 계속한다.
 
-`--entry`가 없는 한 문장 아이디어는 기존 Discovery Interview Loop를 그대로 사용한다. 두 경로 모두 Gate A 확인 전 Gate B를 만들 수 없고, Gate B 승인과 open decision 해소 전 Gate C로 진행할 수 없다.
+새 하네스는 `--entry`가 가리키는 문서에서 시작한다. 문서가 없으면 먼저 Markdown 또는 text entry를 작성해야 하며, 채팅 입력만으로 별도 기획 상태를 시작하지 않는다. Gate A 확인 전 Gate B를 만들 수 없고, Gate B 승인과 open decision 해소 전 Gate C로 진행할 수 없다.
 
 ## 7. 호환성 경계
 
 이 계약은 다음을 변경하지 않는다.
 
-- 기존 intake/requirements 인터뷰와 재개 snapshot
+- 기존 intake의 optional `interview` object와 재개 snapshot. 이 object는 opaque 호환 데이터로만 보존하고 새 상태 판단에 사용하지 않는다.
 - `intake.schema.json`, `spec.schema.json` 및 기존 artifact validator
 - Feature Radar의 evidence 모델과 원본 copy/변환 규칙
 - approved spec이 없을 때 downstream task 생성을 막는 규칙
-- Gate A-D 승인 및 audit 계약
+- Gate A/B 승인 및 Gate C validation 계약
 - 기존 `p2a validate`, `p2a info`, `p2a doctor` 호출의 의미와 정상 동작
 
 따라서 새 entry 프로젝트는 명시적 확인과 승인을 거쳐 Gate B 이후로 진행할 수 있고, 기존 프로젝트는 진입 문서가 추가되어도 현재 canonical 상태에서 결정론적으로 재개한다.

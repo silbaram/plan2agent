@@ -13,7 +13,7 @@ Use this skill only when all of these conditions are true before starting:
 
 - Every selected task is exposed by the same `p2a tasks ready` snapshot.
 - The Gate B spec is approved and `open_decisions` is empty.
-- The Gate D review has no blockers.
+- The Gate C task graph passes validation.
 - Every selected task has acceptance criteria.
 - The user explicitly asks for implementation execution.
 

@@ -26,7 +26,7 @@ const GEMINI_TIER_CONFIG = {
 const GEMINI_COMMANDS = {
   harness: {
     skill: 'p2a-harness',
-    description: 'Run the gated Plan2Agent harness on an idea, answers, or approved spec.',
+    description: 'Run the gated Plan2Agent harness from a concise entry document.',
     prompt: `Use the Plan2Agent p2a-harness skill for the following input:
 
 {{args}}
@@ -35,34 +35,13 @@ Rules:
 - Only write Plan2Agent planning artifacts under .plan2agent/artifacts/<project_id>/; never edit source code.
 - Do not run mutating commands.
 - Follow the stage-to-subagent mapping in the skill.
-- When the input is a validated --entry document, follow the skill's Entry Document Confirmation Dialogue: summarize the inferred scope, ask only what cannot be inferred with no fixed question or round limit, require explicit scope confirmation, and disposition Radar recommendations as selected, rejected, or deferred.
-- Run the bounded discovery interview in batches of 1 to 3 questions and stop at Gate A while any blocker remains or explicit Gate A confirmation is pending.
-- Keep active Gate A rounds conversational: acknowledge or answer the user's latest message first, give recommendations with brief rationale, ask questions in natural prose, and invite free-form replies or follow-up questions. Do not lead with a planning document, questionnaire, comparison table, artifact inventory, or JSON dump.
-- Ask a new question batch only while interview.state is interview_active. A paused state requires a human continue/accept/pause choice; a blocked state accepts direct answers, recommendation acceptance, or deferral without automatic continuation. At hard_limit, every blocker must already be materialized as an open CQ, ND, or discovery dimension.
-- Silently persist gate-a-intake/intake.json after every round for resume safety. During an active, paused, or blocked interview, do not announce or inline the snapshot and do not generate gate-a-intake/intake.md unless the user explicitly requests a Markdown export. Prefix an explicit export with <!-- plan2agent:intake-md-export=explicit --> on its first line so legacy automatic views can be discarded safely. First present the organized understanding at the Gate A summary.
-- Keep CQ/ND blocks as potential impacts, record their actual changed affected_fields, and use an empty array for explicit baseline preservation.
-- Record exact discovery dimension affected_fields and cover all actual changes with materially changing canonical spec_updates that cite contributing question and dimension ids. In greenfield work, confirmed/assumed dimensions must update a field or be not_applicable.
-- Do not synthesize Gate B until the user confirms the Gate A understanding summary and intake_json records gate_a_confirmed with approval_audit.
+- Require a validated --entry document for a new harness and follow the Entry Document Confirmation Dialogue.
+- Present a concise scope understanding and require explicit Gate A approval before writing a ready intake with approval_audit.
+- Treat optional questions and decisions as ledger entries, not as workflow states.
+- Preserve legacy intake fields when reading history, but do not generate or interpret them.
+- Do not synthesize Gate B until intake_json is ready_for_spec with approval_audit.
 - Stop before task graph unless spec_json.approval is approved and open_decisions is empty.
-- Return the named state sections required by the harness, except that active, paused, and blocked Gate A keep intake_json out of the user-facing reply until summary readiness or an explicit inspection/export request.`,
-  },
-  intake: {
-    skill: 'p2a-intake',
-    description: 'Run Plan2Agent intake on a one-sentence idea or resume answered decisions.',
-    prompt: `Use the Plan2Agent p2a-intake skill for the following idea or resume context:
-
-{{args}}
-
-This standalone command has no parent harness. After the conversational response, return the complete canonical state in a named intake_json fenced block conforming to the p2a package schema intake.schema.json so it can be persisted or supplied on resume. During active rounds, reply as a natural planning conversation: acknowledge or answer first, offer a recommendation with brief rationale, ask 1 to 3 high-impact questions in prose, and invite free-form replies or follow-up questions. During a paused round, do not generate a new question batch or auto-resume; present current blockers and confirmation-needed recommendations and offer the continue, accept, answer, or remain-paused choices. During a blocked round, do not generate a new question batch or offer automatic continuation; present materialized blockers and let the user answer an existing item directly, accept a recommendation, or defer it. At hard_limit, every blocker must already be materialized as an open CQ, ND, or discovery dimension. Do not otherwise produce a planning document, comparison table, artifact inventory, or intake.md; intake.md is allowed only when the user explicitly requests a Markdown export, which must start with <!-- plan2agent:intake-md-export=explicit -->. Preserve stable CQ-n and ND-n ids across turns, keep blocks as potential impacts, record actual changed affected_fields (empty for explicit baseline preservation), require greenfield confirmed/assumed dimensions to update a field or be not_applicable, record materially changing canonical spec_updates with source_question_ids/source_dimension_ids, and stop for explicit Gate A confirmation before specification synthesis.`,
-  },
-  review: {
-    skill: 'p2a-review',
-    description: 'Review Plan2Agent planning artifacts before implementation.',
-    prompt: `Use the Plan2Agent p2a-review skill for the following planning artifacts:
-
-{{args}}
-
-Return review_json with blocking issues, non-blocking risks, missing acceptance criteria, oversized tasks, dependency issues, schema_or_gate_issues, and recommended changes. Generate Markdown only as an optional view.`,
+- Return the named state sections required by the harness.`,
   },
   next: {
     skill: 'p2a-next',
@@ -98,7 +77,7 @@ Classify the current iteration as none, minimal, reuse, or full. Run the full vi
 
 {{args}}
 
-Run or use the provided p2a.task_context.v1 context. When existing_tasks.active is empty, write only iterations/<active_iteration>/gate-c-task-graph/task-graph.draft.json. When it is non-empty, never write an incremental or partial draft: follow the skill's blocker flow and use the authoritative diff-tasks --force check, which permits a complete replacement only before task or run execution history exists. Never write canonical task-graph.json, and hand off validation, audit, and promote-tasks instructions for human approval.`,
+Run or use the provided p2a.task_context.v1 context. When existing_tasks.active is empty, write only iterations/<active_iteration>/gate-c-task-graph/task-graph.draft.json. When it is non-empty, never write an incremental or partial draft: follow the skill's blocker flow and use the authoritative diff-tasks --force check, which permits a complete replacement only before task or run execution history exists. Never write canonical task-graph.json; hand the draft to the skill owner, which validates it and runs promote-tasks only after validation succeeds.`,
   },
   'dev-execution': {
     skill: 'p2a-dev-execution',

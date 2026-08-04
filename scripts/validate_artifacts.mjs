@@ -22,7 +22,6 @@ import {
   taskGraphRefMatchesGraph,
 } from './p2a_run_paths.mjs';
 import {
-  buildInitialCanonicalSections,
   compositionReplayContractError,
   compositionSourceContractError,
   composeCanonicalSpecSources,
@@ -498,58 +497,6 @@ function validateReferenceReconnaissance(spec) {
   }
 }
 
-const DISCOVERY_DIMENSIONS = [
-  'target_users',
-  'core_problem',
-  'expected_outcome',
-  'mvp_scope',
-  'non_goals',
-  'success_criteria',
-  'constraints_and_risks',
-  'integrations_and_compatibility',
-];
-
-const DISCOVERY_SPEC_FIELD_REFS = {
-  target_users: ['spec.product.target_users'],
-  core_problem: ['spec.product.problem'],
-  expected_outcome: ['spec.product.success_criteria', 'spec.implementation.verification'],
-  mvp_scope: ['spec.product.goals', 'spec.product.core_flows'],
-  non_goals: ['spec.product.non_goals'],
-  success_criteria: ['spec.product.success_criteria', 'spec.implementation.verification'],
-  constraints_and_risks: ['spec.product.constraints', 'spec.implementation.edge_cases'],
-  integrations_and_compatibility: [
-    'spec.product.external_integrations',
-    'spec.implementation.interfaces',
-  ],
-};
-
-const CANONICAL_SPEC_FIELD_REFS = new Set([
-  'spec.product.problem',
-  'spec.product.target_users',
-  'spec.product.goals',
-  'spec.product.non_goals',
-  'spec.product.core_flows',
-  'spec.product.screens_or_interfaces',
-  'spec.product.data_model_draft',
-  'spec.product.external_integrations',
-  'spec.product.success_criteria',
-  'spec.product.constraints',
-  'spec.implementation.architecture',
-  'spec.implementation.interfaces',
-  'spec.implementation.data_flow',
-  'spec.implementation.dependencies',
-  'spec.implementation.edge_cases',
-  'spec.implementation.verification',
-]);
-
-const NON_EMPTY_CANONICAL_ARRAY_FIELD_REFS = new Set([
-  'spec.product.target_users',
-  'spec.product.goals',
-  'spec.product.core_flows',
-  'spec.product.success_criteria',
-  'spec.implementation.verification',
-]);
-
 function validateIntakeQuestion(question) {
   const hasAnswer = Object.hasOwn(question, 'answer');
   const hasNonBlankAnswer = (
@@ -573,303 +520,6 @@ function baselineDispositionResolution(disposition) {
     ?? disposition.non_goal
     ?? disposition.resolution
     ?? disposition.rationale;
-}
-
-function questionAffectedFields(question) {
-  return question.affected_fields ?? question.blocks ?? [];
-}
-
-function validateInterviewSpecUpdates(intake, questionsById) {
-  const updates = intake.interview.spec_updates ?? [];
-  const updateFields = updates.map((update) => update.field);
-  if (updateFields.length !== new Set(updateFields).size) {
-    throw new ValidationError('intake.interview.spec_updates must contain at most one update per canonical field');
-  }
-
-  const updatesBySourceAndField = new Set();
-  const dimensionsById = new Map(
-    intake.interview.discovery_dimensions.map((dimension) => [dimension.dimension, dimension]),
-  );
-  for (const update of updates) {
-    const sourceQuestionIds = update.source_question_ids ?? [];
-    const sourceDimensionIds = update.source_dimension_ids ?? [];
-    if (sourceQuestionIds.length + sourceDimensionIds.length === 0) {
-      throw new ValidationError(
-        `intake.interview.spec_updates ${update.field} must cite at least one source question or discovery dimension`,
-      );
-    }
-    if (sourceQuestionIds.length !== new Set(sourceQuestionIds).size) {
-      throw new ValidationError(
-        `intake.interview.spec_updates ${update.field} source_question_ids must be unique`,
-      );
-    }
-    if (sourceDimensionIds.length !== new Set(sourceDimensionIds).size) {
-      throw new ValidationError(
-        `intake.interview.spec_updates ${update.field} source_dimension_ids must be unique`,
-      );
-    }
-    if (
-      (update.operation === 'append' || update.operation === 'remove')
-      && update.values.length === 0
-    ) {
-      throw new ValidationError(
-        `intake.interview.spec_updates ${update.field} ${update.operation} requires at least one value`,
-      );
-    }
-    if (!intake.baseline_context && update.operation !== 'replace') {
-      throw new ValidationError(
-        `intake.interview.spec_updates ${update.field} must use replace without a baseline canonical field`,
-      );
-    }
-    if (
-      update.field === 'spec.product.problem'
-      && (
-        update.operation === 'remove'
-        || (update.operation === 'replace' && update.values.length === 0)
-      )
-    ) {
-      throw new ValidationError(
-        'intake.interview.spec_updates cannot remove or empty spec.product.problem',
-      );
-    }
-    for (const sourceId of sourceQuestionIds) {
-      const source = questionsById.get(sourceId);
-      if (!source) {
-        throw new ValidationError(
-          `intake.interview.spec_updates ${update.field} references unknown question ${sourceId}`,
-        );
-      }
-      const resolved = sourceId.startsWith('CQ-')
-        ? ['answered', 'assumed', 'not_applicable'].includes(source.status)
-        : source.status === 'answered';
-      if (!resolved) {
-        throw new ValidationError(
-          `intake.interview.spec_updates ${update.field} references unresolved question ${sourceId}`,
-        );
-      }
-      if (!questionAffectedFields(source).includes(update.field)) {
-        throw new ValidationError(
-          `intake.interview.spec_updates ${update.field} is not declared in ${sourceId}.affected_fields`,
-        );
-      }
-      if (source.status === 'not_applicable' && update.operation === 'append') {
-        throw new ValidationError(
-          `intake.interview.spec_updates for not_applicable ${sourceId} must replace or remove ${update.field}`,
-        );
-      }
-      updatesBySourceAndField.add(`${sourceId}\n${update.field}`);
-    }
-    for (const dimensionId of sourceDimensionIds) {
-      const dimension = dimensionsById.get(dimensionId);
-      if (!dimension) {
-        throw new ValidationError(
-          `intake.interview.spec_updates ${update.field} references unknown discovery dimension ${dimensionId}`,
-        );
-      }
-      if (dimension.status === 'open') {
-        throw new ValidationError(
-          `intake.interview.spec_updates ${update.field} references open discovery dimension ${dimensionId}`,
-        );
-      }
-      if (!dimension.affected_fields.includes(update.field)) {
-        throw new ValidationError(
-          `intake.interview.spec_updates ${update.field} is not declared in discovery dimension ${dimensionId}.affected_fields`,
-        );
-      }
-      updatesBySourceAndField.add(`DIM:${dimensionId}\n${update.field}`);
-    }
-  }
-
-  const missingUpdates = [];
-  for (const [sourceId, source] of questionsById) {
-    const resolved = sourceId.startsWith('CQ-')
-      ? ['answered', 'assumed', 'not_applicable'].includes(source.status)
-      : source.status === 'answered';
-    if (!resolved) continue;
-    for (const field of questionAffectedFields(source)) {
-      if (!updatesBySourceAndField.has(`${sourceId}\n${field}`)) {
-        missingUpdates.push(`${sourceId}:${field}`);
-      }
-    }
-  }
-  for (const dimension of intake.interview.discovery_dimensions) {
-    if (dimension.status === 'open') continue;
-    for (const field of dimension.affected_fields) {
-      if (!updatesBySourceAndField.has(`DIM:${dimension.dimension}\n${field}`)) {
-        missingUpdates.push(`DIM:${dimension.dimension}:${field}`);
-      }
-    }
-  }
-  if (missingUpdates.length) {
-    throw new ValidationError(
-      `intake.interview.spec_updates must cover every resolved question block and affected discovery dimension field: ${JSON.stringify(missingUpdates)}`,
-    );
-  }
-  if (
-    ['ready_for_gate_a_summary', 'awaiting_gate_a_confirmation', 'gate_a_confirmed'].includes(
-      intake.interview.state,
-    )
-    && updates.length === 0
-  ) {
-    throw new ValidationError(
-      `intake.interview state ${intake.interview.state} must record at least one canonical spec_update`,
-    );
-  }
-}
-
-function cloneJsonValue(value) {
-  return JSON.parse(JSON.stringify(value));
-}
-
-function canonicalSpecFieldParts(fieldRef) {
-  const match = /^spec\.(product|implementation)\.([a-z_]+)$/.exec(fieldRef);
-  if (!match) {
-    throw new ValidationError(`unsupported canonical spec field reference: ${JSON.stringify(fieldRef)}`);
-  }
-  return { section: match[1], field: match[2] };
-}
-
-function applyCanonicalSpecUpdate(specSections, update) {
-  const { section, field } = canonicalSpecFieldParts(update.field);
-  const current = specSections[section]?.[field];
-  if (Array.isArray(current)) {
-    if (update.operation === 'append') {
-      const next = [...current];
-      for (const value of update.values) {
-        if (!next.includes(value)) next.push(value);
-      }
-      specSections[section][field] = next;
-    } else if (update.operation === 'replace') {
-      specSections[section][field] = [...update.values];
-    } else {
-      const removed = new Set(update.values);
-      specSections[section][field] = current.filter((value) => !removed.has(value));
-    }
-    return;
-  }
-  if (section === 'product' && field === 'problem' && typeof current === 'string') {
-    if (update.operation === 'replace') {
-      specSections.product.problem = update.values.join('\n\n');
-    } else if (update.operation === 'append') {
-      const next = [current];
-      for (const value of update.values) {
-        if (!next.includes(value)) next.push(value);
-      }
-      specSections.product.problem = next.join('\n\n');
-    }
-    return;
-  }
-  throw new ValidationError(
-    `intake.interview.spec_updates ${update.field} cannot be applied to the baseline canonical field`,
-  );
-}
-
-function applyMateriallyChangingSpecUpdates(specSections, updates) {
-  for (const update of updates) {
-    const { section, field } = canonicalSpecFieldParts(update.field);
-    const before = cloneJsonValue(specSections[section]?.[field]);
-    applyCanonicalSpecUpdate(specSections, update);
-    const after = specSections[section]?.[field];
-    if (sameJson(before, after)) {
-      throw new ValidationError(
-        `intake.interview.spec_updates ${update.field} did not change the canonical Gate B field`,
-      );
-    }
-    if (
-      NON_EMPTY_CANONICAL_ARRAY_FIELD_REFS.has(update.field)
-      && Array.isArray(after)
-      && after.length === 0
-    ) {
-      throw new ValidationError(
-        `intake.interview.spec_updates ${update.field} must not leave the canonical Gate B field empty`,
-      );
-    }
-  }
-  return specSections;
-}
-
-function loadInterviewBaselineSections(intake, artifactRoot) {
-  const baselineRef = intake.baseline_context?.spec_ref;
-  if (!baselineRef) return null;
-  if (!artifactRoot) {
-    throw new ValidationError(
-      'validating Gate B application of intake.interview.spec_updates requires an artifact root',
-    );
-  }
-  const baselinePath = path.resolve(artifactRoot, baselineRef);
-  const baseline = loadJson(baselinePath);
-  if (baseline.schema_version === 'p2a.spec.v1') {
-    return {
-      product: cloneJsonValue(baseline.product),
-      implementation: cloneJsonValue(baseline.implementation),
-    };
-  }
-  return {
-    product: cloneJsonValue(baseline.effective_product),
-    implementation: cloneJsonValue(baseline.effective_implementation),
-  };
-}
-
-function validateInterviewSpecApplication(spec, intake, artifactRoot, intakePath) {
-  if (!intake.interview) return;
-  if (
-    intake.interview.state !== 'gate_a_confirmed'
-    || intake.status !== 'ready_for_spec'
-  ) {
-    throw new ValidationError(
-      'interview-aware specs require a gate_a_confirmed intake with status ready_for_spec',
-    );
-  }
-  const updates = intake.interview.spec_updates ?? [];
-  const expectedSections = loadInterviewBaselineSections(intake, artifactRoot)
-    ?? buildInitialCanonicalSections({
-      iterationId: seedIterationIdForIntake(intake, intakePath),
-      idea: intake.idea,
-      intake,
-    });
-
-  applyMateriallyChangingSpecUpdates(expectedSections, updates);
-  for (const fieldRef of CANONICAL_SPEC_FIELD_REFS) {
-    const { section, field } = canonicalSpecFieldParts(fieldRef);
-    if (!sameJson(spec[section]?.[field], expectedSections[section]?.[field])) {
-      throw new ValidationError(
-        `spec ${fieldRef} must equal the baseline value after applying Gate A spec_updates`,
-      );
-    }
-  }
-}
-
-function seedIterationIdForIntake(intake, intakePath) {
-  const normalized = normalizePath(path.resolve(intakePath));
-  const match = /(?:^|\/)iterations\/([^/]+)\/gate-a-intake\/intake\.json$/.exec(normalized);
-  const pathIterationId = match?.[1] ?? null;
-  const recordedIterationId = intake.interview?.seed_iteration_id ?? null;
-  if (
-    recordedIterationId
-    && pathIterationId
-    && recordedIterationId !== pathIterationId
-  ) {
-    throw new ValidationError(
-      `intake.interview.seed_iteration_id must match its iteration path ${JSON.stringify(pathIterationId)}, got ${JSON.stringify(recordedIterationId)}`,
-    );
-  }
-  return recordedIterationId ?? pathIterationId ?? 'v1-mvp';
-}
-
-function validateInterviewSpecUpdateMateriality(intake, artifactRoot, intakePath) {
-  if (!intake.interview) return;
-  if (intake.baseline_context && !artifactRoot) return;
-  const baselineSections = intake.baseline_context
-    ? loadInterviewBaselineSections(intake, artifactRoot)
-    : buildInitialCanonicalSections({
-        iterationId: seedIterationIdForIntake(intake, intakePath),
-        idea: intake.idea,
-        intake,
-      });
-  applyMateriallyChangingSpecUpdates(
-    baselineSections,
-    intake.interview.spec_updates ?? [],
-  );
 }
 
 function validateSafeCurrentSpecIterationId(iterationId, label) {
@@ -907,18 +557,8 @@ function validateComposedBaselineSourceReadiness(
     'gate-c-task-graph',
     'task-graph.json',
   );
-  const reviewPath = path.join(
-    iterationRoot,
-    'gate-d-review',
-    'review.json',
-  );
-  for (const [filePath, fileLabel] of [
-    [taskGraphPath, `${label} task graph`],
-    [reviewPath, `${label} review`],
-  ]) {
-    assertFile(filePath, fileLabel);
-    assertFileInsideArtifactRoot(filePath, artifactRoot, fileLabel);
-  }
+  assertFile(taskGraphPath, `${label} task graph`);
+  assertFileInsideArtifactRoot(taskGraphPath, artifactRoot, `${label} task graph`);
 
   const taskGraph = validateTaskGraph(taskGraphPath, sourceSpecPath);
   if (taskGraph.projectId !== baselineSpec.project_id) {
@@ -946,35 +586,6 @@ function validateComposedBaselineSourceReadiness(
     );
   }
 
-  const review = validateReviewPass(reviewPath);
-  if (review.projectId !== baselineSpec.project_id) {
-    throw new ValidationError(`${label} review project must match the composed current spec`);
-  }
-  const expectedReferences = [
-    ['sourceSpec', sourceSpecPath],
-    ['sourceTaskGraph', taskGraphPath],
-  ];
-  for (const [field, expectedPath] of expectedReferences) {
-    const normalizedReference = normalizeReference(review[field]);
-    const artifactRelative = normalizePath(path.relative(artifactRoot, expectedPath));
-    const acceptedReferences = new Set([
-      normalizePath(path.relative(iterationRoot, expectedPath)),
-      normalizePath(path.relative(path.dirname(reviewPath), expectedPath)),
-      artifactRelative,
-      `${path.basename(artifactRoot)}/${artifactRelative}`,
-      `.plan2agent/artifacts/${path.basename(artifactRoot)}/${artifactRelative}`,
-    ]);
-    const matches = path.isAbsolute(review[field])
-      ? (
-          existsSync(review[field])
-          && lstatSync(review[field]).isFile()
-          && realpathSync(review[field]) === realpathSync(expectedPath)
-        )
-      : acceptedReferences.has(normalizedReference);
-    if (!matches) {
-      throw new ValidationError(`${label} review.${field} must reference its canonical source`);
-    }
-  }
 
   const expectedStatus = (
     metadata?.status === 'archived'
@@ -1387,381 +998,6 @@ function validateBaselineContext(
   if (completedVisitKey) provenanceVisited.add(completedVisitKey);
 }
 
-function validateInterviewState(intake, unresolvedDecisions) {
-  const interview = intake.interview;
-  if (!interview) return null;
-
-  const dimensions = interview.discovery_dimensions.map((item) => item.dimension);
-  if (
-    dimensions.length !== DISCOVERY_DIMENSIONS.length
-    || dimensions.length !== new Set(dimensions).size
-    || DISCOVERY_DIMENSIONS.some((dimension) => !dimensions.includes(dimension))
-  ) {
-    throw new ValidationError(
-      `intake.interview.discovery_dimensions must contain each required dimension exactly once: ${JSON.stringify(DISCOVERY_DIMENSIONS)}`,
-    );
-  }
-
-  const evidenceIds = new Set(intake.evidence.map((item) => item.source_id));
-  for (const dimension of interview.discovery_dimensions) {
-    if (typeof dimension.summary !== 'string' || dimension.summary.trim().length === 0) {
-      throw new ValidationError(
-        `intake.interview ${dimension.dimension} must have a non-blank summary`,
-      );
-    }
-    for (const sourceId of dimension.source_ids ?? []) {
-      if (!evidenceIds.has(sourceId)) {
-        throw new ValidationError(`intake.interview ${dimension.dimension} references unknown evidence source_id ${sourceId}`);
-      }
-    }
-    if (dimension.affected_fields.length !== new Set(dimension.affected_fields).size) {
-      throw new ValidationError(
-        `intake.interview ${dimension.dimension}.affected_fields must not contain duplicates`,
-      );
-    }
-    if (dimension.status === 'open' && dimension.affected_fields.length) {
-      throw new ValidationError(
-        `intake.interview open dimension ${dimension.dimension} must keep affected_fields empty until its disposition is resolved`,
-      );
-    }
-    const allowedFields = new Set([
-      ...(DISCOVERY_SPEC_FIELD_REFS[dimension.dimension] ?? []),
-      ...(dimension.status === 'not_applicable' ? ['spec.product.non_goals'] : []),
-    ]);
-    const invalidFields = dimension.affected_fields.filter((field) => !allowedFields.has(field));
-    if (invalidFields.length) {
-      throw new ValidationError(
-        `intake.interview ${dimension.dimension}.affected_fields contains fields outside its canonical routing: ${JSON.stringify(invalidFields)}`,
-      );
-    }
-    if (
-      !intake.baseline_context
-      && ['confirmed', 'assumed'].includes(dimension.status)
-      && dimension.affected_fields.length === 0
-    ) {
-      throw new ValidationError(
-        `intake.interview greenfield ${dimension.dimension} must declare at least one affected_fields entry or be explicitly not_applicable`,
-      );
-    }
-  }
-
-  const questionIds = [
-    ...intake.clarifying_questions.map((item) => item.id),
-    ...intake.needs_user_decision.map((item) => item.id),
-  ];
-  if (questionIds.length !== new Set(questionIds).size) {
-    throw new ValidationError('intake question and decision ids must be unique');
-  }
-  for (const [index, question] of intake.clarifying_questions.entries()) {
-    if (typeof question.status !== 'string') {
-      throw new ValidationError(
-        `intake.clarifying_questions[${index}].status is required when intake.interview is present`,
-      );
-    }
-    if (!Array.isArray(question.blocks) || question.blocks.length === 0) {
-      throw new ValidationError(
-        `intake.clarifying_questions[${index}].blocks must contain at least one canonical spec field`,
-      );
-    }
-    const invalidBlocks = question.blocks.filter((field) => !CANONICAL_SPEC_FIELD_REFS.has(field));
-    if (invalidBlocks.length) {
-      throw new ValidationError(
-        `intake.clarifying_questions[${index}].blocks[0] must reference a canonical spec field; invalid values=${JSON.stringify(invalidBlocks)}`,
-      );
-    }
-    const affectedFields = question.affected_fields;
-    if (affectedFields !== undefined) {
-      const outsideBlocks = affectedFields.filter((field) => !question.blocks.includes(field));
-      if (outsideBlocks.length) {
-        throw new ValidationError(
-          `intake.clarifying_questions[${index}].affected_fields must be a subset of blocks; invalid values=${JSON.stringify(outsideBlocks)}`,
-        );
-      }
-      if (question.status === 'open' && affectedFields.length) {
-        throw new ValidationError(
-          `intake.clarifying_questions[${index}].affected_fields must be empty while the question is open`,
-        );
-      }
-    }
-    const resolved = ['answered', 'assumed', 'not_applicable'].includes(question.status);
-    if (!resolved && question.canonical_effect !== undefined) {
-      throw new ValidationError(
-        `intake.clarifying_questions[${index}].canonical_effect is only allowed after the question is resolved`,
-      );
-    }
-    if (resolved) {
-      if (!question.canonical_effect) {
-        throw new ValidationError(
-          `intake.clarifying_questions[${index}].canonical_effect is required after the question is resolved`,
-        );
-      }
-      if (question.canonical_effect === 'change' && affectedFields?.length === 0) {
-        throw new ValidationError(
-          `intake.clarifying_questions[${index}].canonical_effect change requires non-empty affected_fields`,
-        );
-      }
-      if (
-        question.canonical_effect === 'preserve_baseline'
-        && (
-          !intake.baseline_context
-          || affectedFields?.length !== 0
-        )
-      ) {
-        throw new ValidationError(
-          `intake.clarifying_questions[${index}].canonical_effect preserve_baseline requires baseline_context and empty affected_fields`,
-        );
-      }
-    }
-  }
-  for (const field of ['asked_question_ids', 'current_question_ids']) {
-    const ids = interview[field];
-    if (ids.length !== new Set(ids).size) {
-      throw new ValidationError(`intake.interview.${field} must not contain duplicate ids`);
-    }
-    const unknown = ids.filter((id) => !questionIds.includes(id));
-    if (unknown.length) {
-      throw new ValidationError(`intake.interview.${field} references unknown ids: ${JSON.stringify(unknown)}`);
-    }
-  }
-  if (interview.current_question_ids.length > 3) {
-    throw new ValidationError('intake.interview.current_question_ids must contain at most 3 questions');
-  }
-  const unrecordedCurrent = interview.current_question_ids
-    .filter((id) => !interview.asked_question_ids.includes(id));
-  if (unrecordedCurrent.length) {
-    throw new ValidationError(`intake.interview.current_question_ids must also appear in asked_question_ids: ${JSON.stringify(unrecordedCurrent)}`);
-  }
-  const answeredQuestionIds = [
-    ...intake.clarifying_questions
-      .filter((item) => item.status === 'answered')
-      .map((item) => item.id),
-    ...intake.needs_user_decision
-      .filter((item) => item.status === 'answered')
-      .map((item) => item.id),
-  ];
-  const unrecordedAnswered = answeredQuestionIds
-    .filter((id) => !interview.asked_question_ids.includes(id));
-  if (unrecordedAnswered.length) {
-    throw new ValidationError(
-      `intake.interview answered questions must appear in asked_question_ids: ${JSON.stringify(unrecordedAnswered)}`,
-    );
-  }
-  const decisionsWithoutBlocks = intake.needs_user_decision
-    .filter((item) => !Array.isArray(item.blocks) || item.blocks.length === 0)
-    .map((item) => item.id);
-  if (decisionsWithoutBlocks.length) {
-    throw new ValidationError(
-      `intake interview decisions must declare non-empty blocks: ${JSON.stringify(decisionsWithoutBlocks)}`,
-    );
-  }
-  for (const [index, decision] of intake.needs_user_decision.entries()) {
-    const affectedFields = decision.affected_fields;
-    if (affectedFields !== undefined) {
-      const outsideBlocks = affectedFields.filter((field) => !decision.blocks.includes(field));
-      if (outsideBlocks.length) {
-        throw new ValidationError(
-          `intake.needs_user_decision[${index}].affected_fields must be a subset of blocks; invalid values=${JSON.stringify(outsideBlocks)}`,
-        );
-      }
-      if (decision.status !== 'answered' && affectedFields.length) {
-        throw new ValidationError(
-          `intake.needs_user_decision[${index}].affected_fields must be empty until the decision is answered`,
-        );
-      }
-    }
-    const resolved = decision.status === 'answered';
-    if (!resolved && decision.canonical_effect !== undefined) {
-      throw new ValidationError(
-        `intake.needs_user_decision[${index}].canonical_effect is only allowed after the decision is answered`,
-      );
-    }
-    if (resolved) {
-      if (!decision.canonical_effect) {
-        throw new ValidationError(
-          `intake.needs_user_decision[${index}].canonical_effect is required after the decision is answered`,
-        );
-      }
-      if (decision.canonical_effect === 'change' && affectedFields?.length === 0) {
-        throw new ValidationError(
-          `intake.needs_user_decision[${index}].canonical_effect change requires non-empty affected_fields`,
-        );
-      }
-      if (
-        decision.canonical_effect === 'preserve_baseline'
-        && (
-          !intake.baseline_context
-          || affectedFields?.length !== 0
-        )
-      ) {
-        throw new ValidationError(
-          `intake.needs_user_decision[${index}].canonical_effect preserve_baseline requires baseline_context and empty affected_fields`,
-        );
-      }
-    }
-  }
-
-  const questionsById = new Map([
-    ...intake.clarifying_questions.map((item) => [item.id, item]),
-    ...intake.needs_user_decision.map((item) => [item.id, item]),
-  ]);
-  validateInterviewSpecUpdates(intake, questionsById);
-  const resolvedQuestionIds = interview.asked_question_ids.filter((id) => {
-    const item = questionsById.get(id);
-    return item?.status === 'answered'
-      || item?.status === 'assumed'
-      || item?.status === 'not_applicable';
-  });
-  const resolvedCurrentQuestionIds = interview.current_question_ids
-    .filter((id) => resolvedQuestionIds.includes(id));
-  if (resolvedCurrentQuestionIds.length) {
-    throw new ValidationError(
-      `intake.interview.current_question_ids must reference unresolved questions: ${JSON.stringify(resolvedCurrentQuestionIds)}`,
-    );
-  }
-  const unresolvedAskedQuestionIds = interview.asked_question_ids
-    .filter((id) => !resolvedQuestionIds.includes(id));
-  const unresolvedClarifyingQuestionIds = intake.clarifying_questions
-    .filter((item) => !['answered', 'assumed', 'not_applicable'].includes(item.status))
-    .map((item) => item.id);
-  const unresolvedQuestionIds = [
-    ...new Set([
-      ...unresolvedAskedQuestionIds,
-      ...unresolvedClarifyingQuestionIds,
-    ]),
-  ];
-  const openDimensions = interview.discovery_dimensions
-    .filter((item) => item.status === 'open')
-    .map((item) => item.dimension);
-  const readiness = (
-    openDimensions.length === 0
-    && unresolvedDecisions.length === 0
-    && unresolvedQuestionIds.length === 0
-    && !interview.has_unasked_high_impact_questions
-    && !interview.new_blocker
-  );
-
-  const stoppedStates = new Set([
-    'ready_for_gate_a_summary',
-    'awaiting_gate_a_confirmation',
-    'paused',
-    'blocked_on_user',
-    'gate_a_confirmed',
-  ]);
-  if (stoppedStates.has(interview.state) && interview.current_question_ids.length) {
-    throw new ValidationError(`intake.interview.current_question_ids must be empty when state is ${interview.state}`);
-  }
-  if (interview.state === 'interview_active') {
-    if (interview.round < 1 || interview.current_question_ids.length < 1) {
-      throw new ValidationError('active interview requires round >= 1 and a current batch of 1 to 3 questions');
-    }
-    if (
-      !readiness
-      && interview.round >= 3
-      && interview.round < 5
-      && !interview.soft_limit_acknowledged
-    ) {
-      throw new ValidationError(
-        'an interview with remaining blockers at or beyond round 3 must pause for the soft-limit summary and a human continue, accept, or pause decision',
-      );
-    }
-    if (interview.stop_reason !== null) {
-      throw new ValidationError('active interview must have stop_reason null');
-    }
-    if (interview.no_progress_rounds >= 2) {
-      throw new ValidationError('active interview cannot continue after 2 no-progress rounds');
-    }
-  }
-  if (interview.soft_limit_acknowledged && interview.round < 3) {
-    throw new ValidationError('soft_limit_acknowledged requires interview.round to be at least 3');
-  }
-  if (
-    interview.state === 'paused'
-    && interview.stop_reason === 'soft_limit'
-    && interview.soft_limit_acknowledged
-  ) {
-    throw new ValidationError(
-      'a soft-limit pause cannot be acknowledged until the interview resumes',
-    );
-  }
-  if (['ready_for_gate_a_summary', 'awaiting_gate_a_confirmation', 'gate_a_confirmed'].includes(interview.state) && !readiness) {
-    throw new ValidationError(
-      `intake.interview state ${interview.state} requires readiness; open dimensions=${JSON.stringify(openDimensions)}, unresolved questions=${JSON.stringify(unresolvedQuestionIds)}, unresolved decisions=${JSON.stringify(unresolvedDecisions)}`,
-    );
-  }
-  if (['paused', 'blocked_on_user'].includes(interview.state) && readiness) {
-    throw new ValidationError(`intake.interview state ${interview.state} cannot be used when readiness is already satisfied`);
-  }
-  if (interview.state === 'blocked_on_user' && ![
-    'user_requested',
-    'hard_limit',
-    'no_progress',
-  ].includes(interview.stop_reason)) {
-    throw new ValidationError('blocked interview must record user_requested, hard_limit, or no_progress as stop_reason');
-  }
-  if (interview.state === 'paused' && !['user_requested', 'soft_limit'].includes(interview.stop_reason)) {
-    throw new ValidationError('paused interview must record user_requested or soft_limit as stop_reason');
-  }
-  if (
-    interview.stop_reason === 'soft_limit'
-    && (interview.round < 3 || interview.round >= 5)
-  ) {
-    throw new ValidationError('soft_limit requires interview.round to be 3 or 4; use hard_limit at round 5');
-  }
-  if (
-    ['ready_for_gate_a_summary', 'awaiting_gate_a_confirmation', 'gate_a_confirmed'].includes(interview.state)
-    && !['readiness', 'user_requested', 'soft_limit'].includes(interview.stop_reason)
-  ) {
-    throw new ValidationError(`${interview.state} must record readiness, user_requested, or soft_limit as stop_reason`);
-  }
-  if (interview.stop_reason === 'hard_limit' && interview.round < 5) {
-    throw new ValidationError('hard_limit requires interview.round to be 5');
-  }
-  if (interview.stop_reason === 'no_progress' && interview.no_progress_rounds < 2) {
-    throw new ValidationError('no_progress stop requires no_progress_rounds to be 2');
-  }
-  if (
-    !readiness
-    && interview.round >= 5
-    && (interview.state !== 'blocked_on_user' || interview.stop_reason !== 'hard_limit')
-  ) {
-    throw new ValidationError(
-      'an interview with remaining blockers at round 5 must stop as blocked_on_user with hard_limit',
-    );
-  }
-  if (
-    interview.state === 'blocked_on_user'
-    && (interview.has_unasked_high_impact_questions || interview.new_blocker)
-  ) {
-    throw new ValidationError(
-      'blocked interview blockers must be materialized as an open CQ, ND, or discovery dimension before automatic questioning stops',
-    );
-  }
-  if (
-    !readiness
-    && interview.round < 5
-    && interview.no_progress_rounds >= 2
-    && (interview.state !== 'blocked_on_user' || interview.stop_reason !== 'no_progress')
-  ) {
-    throw new ValidationError(
-      'an interview with remaining blockers after 2 no-progress rounds must stop as blocked_on_user with no_progress',
-    );
-  }
-
-  if (interview.state === 'gate_a_confirmed') {
-    if (!intake.approval_audit) {
-      throw new ValidationError('intake.approval_audit is required when interview.state is gate_a_confirmed');
-    }
-    validateApprovalAuditData(intake.approval_audit, 'intake.approval_audit');
-    if (!intake.approval_audit.approved_artifacts.some((item) => item.endsWith('gate-a-intake/intake.json'))) {
-      throw new ValidationError('intake.approval_audit.approved_artifacts must include gate-a-intake/intake.json');
-    }
-  } else if (intake.approval_audit) {
-    throw new ValidationError('intake.approval_audit is only allowed when interview.state is gate_a_confirmed');
-  }
-
-  return interview.state === 'gate_a_confirmed' ? 'ready_for_spec' : 'blocked_on_user';
-}
-
 export function validateIntake(filePath, options = {}) {
   const data = validateAgainstSchema(filePath, 'intake');
   validateEvidence(data.evidence, 'intake');
@@ -1795,13 +1031,13 @@ export function validateIntake(filePath, options = {}) {
     );
     if (
       decision.status === 'answered'
-      && (data.interview ? !hasNonBlankAnswer : !decision.answer)
+      && !hasNonBlankAnswer
     ) {
       throw new ValidationError(`${decision.id} is answered but has no non-blank answer`);
     }
     if (
       (decision.status === 'open' || decision.status === 'deferred')
-      && (data.interview ? hasAnswer : Boolean(decision.answer))
+      && hasAnswer
     ) {
       throw new ValidationError(`${decision.id} is unresolved but has an answer`);
     }
@@ -1814,16 +1050,28 @@ export function validateIntake(filePath, options = {}) {
     options.provenanceVisited ?? new Set(),
     filePath,
   );
-  const interviewStatus = validateInterviewState(data, unresolvedDecisions);
-  validateInterviewSpecUpdateMateriality(data, options.artifactRoot, filePath);
-  if (!data.interview && data.approval_audit) {
+  const openQuestionIds = data.clarifying_questions
+    .filter((question) => question.status === 'open')
+    .map((question) => question.id);
+  if (data.approval_audit) {
     validateApprovalAuditData(data.approval_audit, 'intake.approval_audit');
   }
-  const expectedStatus = interviewStatus
-    ?? (unresolvedDecisions.length ? 'blocked_on_user' : 'ready_for_spec');
-  if (data.status !== expectedStatus) {
+  if (data.status === 'ready_for_spec') {
+    const unresolved = [...openQuestionIds, ...unresolvedDecisions];
+    if (unresolved.length) {
+      throw new ValidationError(
+        `ready_for_spec intake contains unresolved items: ${JSON.stringify(unresolved)}`,
+      );
+    }
+    if (!data.approval_audit) {
+      throw new ValidationError('ready_for_spec intake requires approval_audit');
+    }
+    if (!data.approval_audit.approved_artifacts.some((item) => item.endsWith('gate-a-intake/intake.json'))) {
+      throw new ValidationError('intake.approval_audit.approved_artifacts must include gate-a-intake/intake.json');
+    }
+  } else if (data.approval_audit) {
     throw new ValidationError(
-      `intake.status must be ${JSON.stringify(expectedStatus)} for its decision and interview state`,
+      'blocked_on_user intake must not include approval_audit',
     );
   }
   if (options.intakeMdPath) validateIntakeMarkdownDecisionSync(data, options.intakeMdPath);
@@ -1884,25 +1132,12 @@ export function validateSpec(filePath, intakePath = null, options = {}) {
   const intake = resolvedIntakePath
     ? validateIntake(resolvedIntakePath, intakeValidationOptions)
     : null;
-  if (intake?.interview && !data.source_intake_sha256) {
-    throw new ValidationError(
-      'interview-aware specs must include source_intake_sha256',
-    );
-  }
   if (
     data.source_intake_sha256
     && rawFileSha256(resolvedIntakePath) !== data.source_intake_sha256
   ) {
     throw new ValidationError(
       `spec.source_intake_sha256 does not match ${resolvedIntakePath}`,
-    );
-  }
-  if (intake) {
-    validateInterviewSpecApplication(
-      data,
-      intake,
-      artifactRoot,
-      resolvedIntakePath,
     );
   }
   validateEvidence(data.evidence, 'spec');
@@ -1988,14 +1223,6 @@ export function validateCurrentSpecGateBApprovalAudit(currentSpec, iterationId, 
     throw new ValidationError(`current-spec.json gate_b_approval_audits.${iterationId} is required for approved Gate B`);
   }
   return validateApprovalAuditData(audit, `current-spec.json gate_b_approval_audits.${iterationId}`);
-}
-
-export function validateCurrentSpecGateCApprovalAudit(currentSpec, iterationId) {
-  const audit = currentSpec?.gate_c_approval_audits?.[iterationId];
-  if (!audit) {
-    throw new ValidationError(`current-spec.json gate_c_approval_audits.${iterationId} is required for promoted Gate C task graph`);
-  }
-  return validateApprovalAuditData(audit, `current-spec.json gate_c_approval_audits.${iterationId}`);
 }
 
 function visualArtifactRoot(filePath, artifactRoot = null) {
@@ -3469,29 +2696,6 @@ function validateClarifyingQuestionDisposition(spec, intake = null) {
     if (missing.length) {
       throw new ValidationError(`spec.clarifying_question_disposition is missing intake clarifying questions: ${JSON.stringify(missing)}`);
     }
-    if (intake.interview) {
-      const dispositionsById = new Map(dispositions.map((item) => [item.id, item]));
-      const expectedByQuestionStatus = new Map([
-        ['answered', ['answered', 'resolved_by']],
-        ['assumed', ['assumed', 'assumption']],
-        ['not_applicable', ['deferred_non_goal', 'non_goal']],
-      ]);
-      for (const question of intake.clarifying_questions) {
-        const expected = expectedByQuestionStatus.get(question.status);
-        if (!expected) continue;
-        const [expectedStatus, detailField] = expected;
-        const disposition = dispositionsById.get(question.id);
-        if (
-          disposition.status !== expectedStatus
-          || disposition[detailField] !== question.answer
-          || !sameJson(disposition.affects, question.blocks)
-        ) {
-          throw new ValidationError(
-            `spec.clarifying_question_disposition ${question.id} must preserve its Gate A ${question.status} status, answer, and blocks`,
-          );
-        }
-      }
-    }
   }
 }
 
@@ -4634,7 +3838,6 @@ export function validateStatusDoc(filePath) {
     ['Gate A section', /Gate A/i],
     ['Gate B section', /Gate B/i],
     ['Gate C section', /Gate C/i],
-    ['Gate D section', /Gate D/i],
     ['section 1 heading', /^##\s+1\./m],
     ['section 2 heading', /^##\s+2\./m],
     ['section 3 heading', /^##\s+3\./m],
@@ -4670,37 +3873,6 @@ function normalizeReference(reference) {
   return String(reference).replace(/\\/g, '/').replace(/^\.\//, '');
 }
 
-function artifactRelativeRef(artifactRoot, filePath) {
-  return normalizePath(path.relative(artifactRoot, filePath));
-}
-
-function artifactReferenceMatches(reference, artifactRoot, filePath) {
-  if (path.isAbsolute(reference) && path.resolve(reference) === path.resolve(filePath)) return true;
-  const normalized = normalizeReference(reference);
-  const expectedRelative = artifactRelativeRef(artifactRoot, filePath);
-  const reviewRelative = normalizePath(path.relative(path.join(artifactRoot, 'gate-d-review'), filePath));
-  const projectRelative = `${path.basename(artifactRoot)}/${expectedRelative}`;
-  const p2aArtifactsRelative = `.plan2agent/artifacts/${projectRelative}`;
-  return normalized === expectedRelative
-    || normalized === reviewRelative
-    || normalized === projectRelative
-    || normalized === p2aArtifactsRelative;
-}
-
-function validateReviewReferencesForRoot(review, artifactRoot, paths) {
-  const checks = [
-    ['sourceSpec', paths.specJson],
-    ['sourceTaskGraph', paths.taskGraph],
-  ];
-  for (const [field, expectedPath] of checks) {
-    if (!artifactReferenceMatches(review[field], artifactRoot, expectedPath)) {
-      throw new ValidationError(
-        `review.json ${field} must reference ${artifactRelativeRef(artifactRoot, expectedPath)}, got ${JSON.stringify(review[field])}`,
-      );
-    }
-  }
-}
-
 function assertProjectId(label, actual, expected) {
   if (expected && actual !== expected) {
     throw new ValidationError(`${label} must match project id ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`);
@@ -4723,12 +3895,10 @@ export function validateArtifactRoot(artifactRoot, options = {}) {
       a: { present: true, valid: true, passed: intake.status === 'ready_for_spec' },
       b: { present: false, valid: false, passed: false },
       c: { present: false, valid: false, passed: false },
-      d: { present: false, valid: false, passed: false },
     },
     intake,
     spec: null,
     taskGraph: null,
-    review: null,
     readyForHandoff: false,
   };
 
@@ -4753,43 +3923,26 @@ export function validateArtifactRoot(artifactRoot, options = {}) {
     result.gates.c = { present: true, valid: true, passed: true };
   }
 
-  const gateDKeys = ['reviewJson'];
-  const gateDExisting = filesExist(paths, gateDKeys);
-  if (gateDExisting.length) {
-    if (!result.taskGraph) throw new ValidationError('Gate D cannot be validated before Gate C task graph exists');
-    requireGateFiles(paths, gateDKeys, 'Gate D');
-    const review = options.requireReviewPass || options.requireHandoffReady
-      ? validateReviewPass(paths.reviewJson)
-      : validateReview(paths.reviewJson);
-    assertProjectId('review.projectId', review.projectId, options.projectId);
-    validateReviewReferencesForRoot(review, root, paths);
-    result.review = review;
-    result.gates.d = { present: true, valid: true, passed: review.blocking_issues.length === 0 };
-  }
-
   result.readyForHandoff = (
     result.gates.a.passed
     && result.gates.b.passed
     && result.gates.c.passed
-    && result.gates.d.passed
   );
   if (options.requireHandoffReady && !result.readyForHandoff) {
     const missing = [];
     if (!result.gates.b.present) missing.push('Gate B');
     if (!result.gates.c.present) missing.push('Gate C');
-    if (!result.gates.d.present) missing.push('Gate D');
     const reasons = [];
     if (missing.length) reasons.push(`missing ${missing.join(', ')}`);
     if (!result.gates.a.passed) reasons.push('Gate A intake is not approved');
     if (result.spec && !result.gates.b.passed) reasons.push('spec is not approved or open_decisions is non-empty');
-    if (result.review && !result.gates.d.passed) reasons.push('review blocking_issues is non-empty');
     throw new ValidationError(`artifact root is not handoff-ready: ${reasons.join('; ') || 'unknown gate state'}`);
   }
   return result;
 }
 
 export function validateHandoffReadyArtifactRoot(artifactRoot, options = {}) {
-  return validateArtifactRoot(artifactRoot, { ...options, requireHandoffReady: true, requireReviewPass: true });
+  return validateArtifactRoot(artifactRoot, { ...options, requireHandoffReady: true });
 }
 
 export function detectCycles(graph) {
@@ -4826,7 +3979,6 @@ export function validateFixtureDir(fixturePath) {
     ['intake.answered.json', (artifactPath) => validateIntake(artifactPath, { intakeMdPath: optionalFixtureIntakeMd(fixturePath) })],
     ['spec.approved.json', (artifactPath) => validateSpec(artifactPath, path.join(fixturePath, 'intake.answered.json'))],
     ['task-graph.json', (artifactPath) => validateTaskGraph(artifactPath, path.join(fixturePath, 'spec.approved.json'))],
-    ['review.json', (artifactPath) => validateReviewPass(artifactPath, { sourceSpec: 'spec.approved.json', sourceTaskGraph: 'task-graph.json' })],
   ];
   for (const [filename, validator] of required) {
     const artifactPath = path.join(fixturePath, filename);
@@ -4836,6 +3988,10 @@ export function validateFixtureDir(fixturePath) {
       throw new ValidationError(`fixture ${fixturePath} is missing ${filename}`);
     }
     validator(artifactPath);
+  }
+  const legacyReviewPath = path.join(fixturePath, 'review.json');
+  if (existsSync(legacyReviewPath)) {
+    validateReview(legacyReviewPath, { sourceSpec: 'spec.approved.json', sourceTaskGraph: 'task-graph.json' });
   }
   const reportPath = path.join(fixturePath, 'review-report.md');
   if (existsSync(reportPath)) assertFile(reportPath, 'review-report.md');
@@ -4868,7 +4024,7 @@ function usage() {
     '',
     'Options:',
     '  --entry <path>                     Validate a Markdown/text entry document.',
-    '  --artifact-root <dir>               Validate a Gate A-D artifact root.',
+    '  --artifact-root <dir>               Validate a Gate A-C artifact root.',
     '  --project-id <id>                   Expected project id for --artifact-root.',
     '  --intake <path> [--intake-md <path>]',
     '  --status <path>',
@@ -4983,7 +4139,7 @@ export function main(argv = process.argv.slice(2)) {
       );
     }
     if (args.taskGraph) validateTaskGraph(args.taskGraph, args.requireApprovedSpec ?? null);
-    if (args.requireReviewPass && !args.review && !args.fixtureDir.length && !args.artifactRoot) {
+    if (args.requireReviewPass && !args.review) {
       throw new ValidationError('--require-review-pass requires --review');
     }
     if (args.review) validateReview(args.review, null, { requirePass: args.requireReviewPass });

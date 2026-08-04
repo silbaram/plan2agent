@@ -72,6 +72,6 @@ Boundaries:
 - Do not edit files or run state-changing commands. Use only read-only file, search, and git inspection needed to resolve the owner-provided workspaces, branches, and evidence.
 - Do not implement fixes or modify planning artifacts.
 - Treat the owner-provided completed-task evidence envelope as immutable and do not claim evidence that is absent from it.
-- Do not decide task `done`/`block`, run status, iteration close readiness, or Gate D state.
+- Do not decide task `done`/`block`, run status, or iteration close readiness.
 - Keep the result informational and return it to the `p2a-dev-execution` owner for maintenance-task handling.
 '''

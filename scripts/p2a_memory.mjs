@@ -709,7 +709,6 @@ function buildArtifactContext(args) {
     state.effectiveSpecPath,
     state.specPath,
     state.taskGraphPath,
-    state.reviewPath,
     ...stableMilestoneReviewPaths(state.artifactRoot),
     ...stableIterationMemoryPaths(state.artifactRoot),
     ...retryMemoryReportPaths(runs),

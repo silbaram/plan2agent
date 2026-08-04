@@ -1,4 +1,4 @@
-description = "Run the gated Plan2Agent harness on an idea, answers, or approved spec."
+description = "Run the gated Plan2Agent harness from a concise entry document."
 prompt = """
 Use the Plan2Agent p2a-harness skill for the following input:
 
@@ -8,16 +8,13 @@ Rules:
 - Only write Plan2Agent planning artifacts under .plan2agent/artifacts/<project_id>/; never edit source code.
 - Do not run mutating commands.
 - Follow the stage-to-subagent mapping in the skill.
-- When the input is a validated --entry document, follow the skill's Entry Document Confirmation Dialogue: summarize the inferred scope, ask only what cannot be inferred with no fixed question or round limit, require explicit scope confirmation, and disposition Radar recommendations as selected, rejected, or deferred.
-- Run the bounded discovery interview in batches of 1 to 3 questions and stop at Gate A while any blocker remains or explicit Gate A confirmation is pending.
-- Keep active Gate A rounds conversational: acknowledge or answer the user's latest message first, give recommendations with brief rationale, ask questions in natural prose, and invite free-form replies or follow-up questions. Do not lead with a planning document, questionnaire, comparison table, artifact inventory, or JSON dump.
-- Ask a new question batch only while interview.state is interview_active. A paused state requires a human continue/accept/pause choice; a blocked state accepts direct answers, recommendation acceptance, or deferral without automatic continuation. At hard_limit, every blocker must already be materialized as an open CQ, ND, or discovery dimension.
-- Silently persist gate-a-intake/intake.json after every round for resume safety. During an active, paused, or blocked interview, do not announce or inline the snapshot and do not generate gate-a-intake/intake.md unless the user explicitly requests a Markdown export. Prefix an explicit export with <!-- plan2agent:intake-md-export=explicit --> on its first line so legacy automatic views can be discarded safely. First present the organized understanding at the Gate A summary.
-- Keep CQ/ND blocks as potential impacts, record their actual changed affected_fields, and use an empty array for explicit baseline preservation.
-- Record exact discovery dimension affected_fields and cover all actual changes with materially changing canonical spec_updates that cite contributing question and dimension ids. In greenfield work, confirmed/assumed dimensions must update a field or be not_applicable.
-- Do not synthesize Gate B until the user confirms the Gate A understanding summary and intake_json records gate_a_confirmed with approval_audit.
+- Require a validated --entry document for a new harness and follow the Entry Document Confirmation Dialogue.
+- Present a concise scope understanding and require explicit Gate A approval before writing a ready intake with approval_audit.
+- Treat optional questions and decisions as ledger entries, not as workflow states.
+- Preserve legacy intake fields when reading history, but do not generate or interpret them.
+- Do not synthesize Gate B until intake_json is ready_for_spec with approval_audit.
 - Stop before task graph unless spec_json.approval is approved and open_decisions is empty.
-- Return the named state sections required by the harness, except that active, paused, and blocked Gate A keep intake_json out of the user-facing reply until summary readiness or an explicit inspection/export request.
+- Return the named state sections required by the harness.
 
 Conditional references for p2a-harness (resolve relative to its SKILL.md):
 - references/existing-documents.md

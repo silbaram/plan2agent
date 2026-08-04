@@ -6,7 +6,6 @@ export const GATE_FILES = [
   ['gate_a_intake', 'Gate A intake', path.join('gate-a-intake', 'intake.json')],
   ['gate_b_spec', 'Gate B spec', path.join('gate-b-spec', 'spec.json')],
   ['gate_c_task_graph', 'Gate C task graph', path.join('gate-c-task-graph', 'task-graph.json')],
-  ['gate_d_review', 'Gate D review', path.join('gate-d-review', 'review.json')],
 ];
 
 export const GREENFIELD_REQUIRED_FILES = [

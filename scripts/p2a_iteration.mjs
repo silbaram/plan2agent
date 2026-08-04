@@ -25,11 +25,8 @@ import {
   resolveSpecSourceIntake,
   validateIntake,
   validateMilestoneReview,
-  validateReview,
   validateHandoffReadyArtifactRoot,
-  validateReviewPass,
   validateSpec,
-  validateApprovalAuditData,
   validateEvalMaintenanceDraftData,
   validateRunIndexData,
   validateRunsDir,
@@ -85,7 +82,7 @@ import {
 
 const P2A_PATHS = resolveP2aPaths(import.meta.url);
 const ROOT = P2A_PATHS.projectRoot;
-const GATE_DIRS = ['gate-a-intake', 'gate-b-spec', 'gate-c-task-graph', 'gate-d-review'];
+const GATE_DIRS = ['gate-a-intake', 'gate-b-spec', 'gate-c-task-graph'];
 const STATUS_ORDER = ['todo', 'in_progress', 'done', 'blocked'];
 const DEFAULT_ITERATION_ID = 'v1-mvp';
 const INIT_REBASED_SOURCE_INTAKE = '../gate-a-intake/intake.json';
@@ -109,7 +106,7 @@ function usage() {
     '  p2a iteration draft --artifacts <iterative-project-dir> [--idea <text>] [--force]',
     '  p2a iteration context --artifacts <iterative-project-dir> [--scope feature|maintenance] [--idea <text>] [--code-root <dir>]',
     '  p2a iteration promote-spec --artifacts <iterative-project-dir>',
-    '  p2a iteration promote-tasks --artifacts <iterative-project-dir> [--approved-by <name>] [--approval-note <text>] [--replace-existing]',
+    '  p2a iteration promote-tasks --artifacts <iterative-project-dir> [--replace-existing]',
     '  p2a iteration promote-milestone --artifacts <iterative-project-dir> --draft <unique-draft-path>',
     '  p2a iteration diff-tasks --artifacts <iterative-project-dir> [--force]',
     '  p2a iteration compose --artifacts <iterative-project-dir> [--allow-conflicts]',
@@ -119,13 +116,13 @@ function usage() {
     'Commands:',
     '  init                  Convert a greenfield artifact root into iterations/<id>/gate-*.',
     '  current               Print the active iteration paths resolved from current-spec.json.',
-    '  validate              Validate active iteration structure and Gate B-D readiness.',
+    '  validate              Validate active iteration structure and Gate B/C readiness.',
     '  close                 Mark the active close-ready iteration as closed/archived metadata.',
     '  open                  Create a new active iteration skeleton from the current baseline.',
-    '  draft                 Generate Gate A interview state, then Gate B after explicit Gate A confirmation.',
+    '  draft                 Generate Gate A scope confirmation, then Gate B after explicit Gate A confirmation.',
     '  context               Print JSON context for agent-authored Gate C task drafting.',
     '  promote-spec          Record an approved active Gate B spec and initialize current-spec when needed.',
-    '  promote-tasks         Promote an approved Gate C draft task graph to the canonical graph.',
+    '  promote-tasks         Promote a validated Gate C draft task graph to the canonical graph.',
     '  promote-milestone     Atomically promote one validated unique milestone-review draft.',
     '  diff-tasks            Generate a task graph draft from active spec changes against the baseline.',
     '  compose               Rebuild current-spec.json as a composed effective spec view.',
@@ -144,7 +141,7 @@ function usage() {
     '',
     'validate options:',
     '  --require-close-ready  Require every active iteration task to be done.',
-    '  --allow-planning      Accept Gate A/B planning states instead of requiring Gate B-D readiness.',
+    '  --allow-planning      Accept Gate A/B planning states instead of requiring Gate B/C readiness.',
     '  --stage <stage>       Validate a specific stage: ready, gate-a, gate-b-draft, gate-b-approved, gate-c-draft.',
     '  --audit-archive       Verify hashes recorded when iterations were closed. This is now the default.',
     '  --skip-archive-audit  Skip closed-iteration hash verification for legacy/migration cases.',
@@ -158,7 +155,7 @@ function usage() {
     '',
     'draft options:',
     '  --idea <text>         Override the change idea stored by open.',
-    '  --force               Reset existing baseline-aware Gate A/B drafts and restart the Gate A interview.',
+    '  --force               Reset existing baseline-aware Gate A/B drafts and restart Gate A scope confirmation.',
     '',
     'context options:',
     '  --scope <scope>      Context scope: feature or maintenance. Default: feature.',
@@ -166,9 +163,7 @@ function usage() {
     '  --code-root <dir>     Code root to scan for L1 file-tree signals. Default: current working directory.',
     '',
     'promote-tasks options:',
-    '  --approved-by <name>   Record Gate C task graph approval in current-spec.json. Defaults to user when --approval-note is present.',
-    '  --approval-note <text> Approval rationale recorded with the Gate C audit.',
-    '  --replace-existing     Replace a reviewed complete graph only before any active-iteration task/run execution history exists.',
+    '  --replace-existing     Replace a validated complete graph only before any active-iteration task/run execution history exists.',
     '',
     'promote-milestone options:',
     '  --draft <path>         Unique <checkpoint>.<id>.draft.json inside the active iteration milestone-reviews directory.',
@@ -220,8 +215,6 @@ function parseArgs(argv) {
     areaProvided: false,
     codeRoot: process.cwd(),
     scope: 'feature',
-    approvedBy: null,
-    approvalNote: null,
     replaceExisting: false,
     milestoneDraft: null,
     yes: false,
@@ -291,14 +284,6 @@ function parseArgs(argv) {
     } else if (arg === '--allow-conflicts') {
       if (command !== 'compose') throw new Error('--allow-conflicts is only supported by compose');
       args.allowConflicts = true;
-    } else if (arg === '--approved-by') {
-      if (command !== 'promote-tasks') throw new Error('--approved-by is only supported by promote-tasks');
-      args.approvedBy = argv[++index];
-      if (!args.approvedBy) throw new Error('--approved-by requires a value');
-    } else if (arg === '--approval-note') {
-      if (command !== 'promote-tasks') throw new Error('--approval-note is only supported by promote-tasks');
-      args.approvalNote = argv[++index];
-      if (!args.approvalNote) throw new Error('--approval-note requires a value');
     } else if (arg === '--replace-existing') {
       if (command !== 'promote-tasks') throw new Error('--replace-existing is only supported by promote-tasks');
       args.replaceExisting = true;
@@ -442,10 +427,8 @@ function pathsFor(artifactRoot, iterationId) {
     currentSpec: path.join(artifactRoot, 'current-spec.json'),
     specJson: path.join(artifactRoot, 'gate-b-spec', 'spec.json'),
     taskGraph: path.join(artifactRoot, 'gate-c-task-graph', 'task-graph.json'),
-    reviewJson: path.join(artifactRoot, 'gate-d-review', 'review.json'),
     movedSpecJson: path.join(iterationRoot, 'gate-b-spec', 'spec.json'),
     movedTaskGraph: path.join(iterationRoot, 'gate-c-task-graph', 'task-graph.json'),
-    movedReviewJson: path.join(iterationRoot, 'gate-d-review', 'review.json'),
   };
 }
 
@@ -460,7 +443,6 @@ function preflight(paths, iterationId) {
   if (missingGates.length) throw new Error(`missing greenfield gate directories: ${missingGates.join(', ')}`);
   for (const gate of GATE_DIRS) assertDirectory(path.join(paths.artifactRoot, gate), gate);
   assertFile(paths.taskGraph, 'greenfield gate-c-task-graph/task-graph.json');
-  assertFile(paths.reviewJson, 'greenfield gate-d-review/review.json');
 
   const rootValidation = validateHandoffReadyArtifactRoot(paths.artifactRoot);
   const gateBApprovalAudit = gateBApprovalAuditForIteration(
@@ -468,18 +450,10 @@ function preflight(paths, iterationId) {
     iterationId,
     'Gate B approval preserved from greenfield status during iteration init.',
   );
-  const gateCApprovalAudit = gateCApprovalAuditForIteration(
-    parseGateCApprovalAudit(paths.statusMd),
-    iterationId,
-    'Gate C approval preserved from greenfield task graph during iteration init.',
-  );
-
   return {
     spec: rootValidation.spec,
     taskGraph: rootValidation.taskGraph,
-    review: rootValidation.review,
     gateBApprovalAudit,
-    gateCApprovalAudit,
   };
 }
 
@@ -493,13 +467,11 @@ function projectIdFrom(artifactRoot, spec, taskGraph) {
   return spec.project_id ?? taskGraph.projectId ?? path.basename(artifactRoot);
 }
 
-function gateSummary(spec, taskGraph, review) {
-  const blockingIssueCount = Array.isArray(review.blocking_issues) ? review.blocking_issues.length : 0;
+function gateSummary(spec, taskGraph) {
   const approval = spec.approval ?? 'unknown';
   const bBadge = approval === 'approved' ? `B✅(${approval})` : `B⚠️(${approval})`;
   const cBadge = Array.isArray(taskGraph.tasks) && taskGraph.tasks.length > 0 ? 'C✅' : 'C⚠️';
-  const dBadge = blockingIssueCount === 0 ? 'D✅(blocker 0)' : `D⚠️(blocker ${blockingIssueCount})`;
-  return `A✅ ${bBadge} ${cBadge} ${dBadge}`;
+  return `A✅ ${bBadge} ${cBadge}`;
 }
 
 function taskSummary(taskGraph) {
@@ -519,15 +491,12 @@ function taskSummaryIfPresent(filePath) {
 function gateSummaryIfPresent(artifactRoot, iterationId) {
   const specPath = path.join(artifactRoot, sourceSpecRef(iterationId));
   const taskGraphPath = path.join(artifactRoot, taskGraphRef(iterationId));
-  const reviewPath = path.join(artifactRoot, reviewRef(iterationId));
-  if (!existsSync(specPath)) return 'A/B/C/D 대기';
+  if (!existsSync(specPath)) return 'A/B/C 대기';
   try {
     const spec = validateSpec(specPath, null, { artifactRoot });
-    if (!existsSync(taskGraphPath)) return spec.approval === 'approved' ? 'B✅ C/D 대기' : `B⚠️(${spec.approval}) C/D 대기`;
+    if (!existsSync(taskGraphPath)) return spec.approval === 'approved' ? 'B✅ C 대기' : `B⚠️(${spec.approval}) C 대기`;
     const taskGraph = validateTaskGraph(taskGraphPath, specPath);
-    if (!existsSync(reviewPath)) return `${spec.approval === 'approved' ? 'B✅' : `B⚠️(${spec.approval})`} C✅ D 대기`;
-    const review = validateReview(reviewPath);
-    return gateSummary(spec, taskGraph, review);
+    return gateSummary(spec, taskGraph);
   } catch {
     return 'gate invalid';
   }
@@ -681,8 +650,6 @@ function closedIterationArtifactRefs(iterationId, artifactRoot) {
     experienceRef,
     sourceSpecRef(iterationId),
     taskGraphRef(iterationId),
-    `iterations/${iterationId}/gate-d-review/review-report.md`,
-    reviewRef(iterationId),
     ...visualRefs,
   ];
 }
@@ -838,63 +805,25 @@ function renderGateBApprovalAudit(currentSpec, iterationId) {
     `- Approval note: ${audit.approval_note ?? 'Gate B approved.'}\n\n`;
 }
 
-function gateCApprovalArtifactsForIteration(iterationId) {
-  return [
-    `iterations/${iterationId}/gate-c-task-graph/task-graph.draft.json`,
-  ];
-}
-
-function gateCApprovalAuditForIteration(audit, iterationId, fallbackNote, approvedAtOverride = null) {
-  const approvedAt = approvedAtOverride ?? audit?.approved_at ?? new Date().toISOString().slice(0, 10);
-  const approvedArtifacts = Array.isArray(audit?.approved_artifacts) && audit.approved_artifacts.length
-    ? audit.approved_artifacts
-    : audit?.approved_source
-      ? [audit.approved_source]
-      : gateCApprovalArtifactsForIteration(iterationId);
-  return {
-    approved_by: audit?.approved_by ?? 'user',
-    approved_at: approvedAt.slice(0, 10),
-    approved_artifacts: approvedArtifacts,
-    approval_note: audit?.approval_note ?? fallbackNote,
-    ...(audit?.draft_sha256 ? { draft_sha256: audit.draft_sha256 } : {}),
-    ...(audit?.approved_source ? { approved_source: audit.approved_source } : {}),
-    ...(audit?.authoring_agent ? { authoring_agent: audit.authoring_agent } : {}),
-  };
-}
-
-function currentSpecWithGateCApprovalAudit(currentSpec, iterationId, audit) {
-  return {
-    ...currentSpec,
-    gate_c_approval_audits: {
-      ...(currentSpec.gate_c_approval_audits ?? {}),
-      [iterationId]: audit,
-    },
-  };
-}
-
-function renderGateCApprovalAudit(currentSpec, iterationId) {
-  const audit = currentSpec.gate_c_approval_audits?.[iterationId];
-  if (!audit) return '';
-  const artifacts = Array.isArray(audit.approved_artifacts)
-    ? audit.approved_artifacts
-    : parseApprovedArtifacts(audit.approved_artifacts);
-  const artifactText = artifacts.map((item) => `\`${item}\``).join(', ');
-  return `#### Gate C approval audit\n\n` +
-    `- Approved by: ${audit.approved_by ?? 'user'}\n` +
-    `- Approved at: ${(audit.approved_at ?? new Date().toISOString()).slice(0, 10)}\n` +
-    `- Approved artifacts: ${artifactText || '`iterations/<iter-id>/gate-c-task-graph/task-graph.draft.json`'}\n` +
-    `- Approval note: ${audit.approval_note ?? 'Gate C task graph approved.'}\n\n`;
-}
-
-function progressForIteration(currentSpec, activeIteration) {
+function progressForIteration(artifactRoot, currentSpec, activeIteration) {
   const status = statusForIterationId(currentSpec, activeIteration);
-  if (status === 'active_planning') return '[A:pending] -> [B:pending] -> [C:pending] -> [D:pending]';
-  if (status === 'gate_a_interview') return '[A:interview] -> [B:pending] -> [C:pending] -> [D:pending]';
-  if (status === 'gate_a_ready') return '[A:complete] -> [B:current] -> [C:pending] -> [D:pending]';
-  if (status === 'gate_b_draft') return '[A:complete] -> [B:draft] -> [C:pending] -> [D:pending]';
-  if (status === 'gate_b_approved') return '[A:complete] -> [B:approved] -> [C:pending] -> [D:pending]';
-  if (status === 'archived') return '[A:complete] -> [B:approved] -> [C:valid] -> [D:passed]';
-  return '[A:complete] -> [B:approved] -> [C:valid] -> [D:passed]';
+  if (status === 'active_planning') return '[scope:pending] -> [spec:pending] -> [plan:pending]';
+  if (status === 'gate_a_ready') return '[scope:approved] -> [spec:current] -> [plan:pending]';
+  if (status === 'gate_b_draft') return '[scope:approved] -> [spec:draft] -> [plan:pending]';
+  if (status === 'gate_b_approved') {
+    const specPath = path.join(artifactRoot, sourceSpecRef(activeIteration));
+    const taskGraphPath = path.join(artifactRoot, taskGraphRef(activeIteration));
+    if (existsSync(specPath) && existsSync(taskGraphPath)) {
+      try {
+        validateTaskGraph(taskGraphPath, specPath);
+        return '[scope:approved] -> [spec:approved] -> [plan:valid]';
+      } catch {
+        // The detailed Gate C section reports invalid or incomplete graph state.
+      }
+    }
+    return '[scope:approved] -> [spec:approved] -> [plan:pending]';
+  }
+  return '[scope:approved] -> [spec:approved] -> [plan:valid]';
 }
 
 function renderActiveGateSections(artifactRoot, activeIteration, currentSpec) {
@@ -902,11 +831,8 @@ function renderActiveGateSections(artifactRoot, activeIteration, currentSpec) {
   const intakePath = path.join(iterationRoot, 'gate-a-intake', 'intake.json');
   const specPath = path.join(iterationRoot, 'gate-b-spec', 'spec.json');
   const taskGraphPath = path.join(iterationRoot, 'gate-c-task-graph', 'task-graph.json');
-  const reviewPath = path.join(iterationRoot, 'gate-d-review', 'review.json');
   const spec = existsSync(specPath) ? loadJson(specPath) : null;
   const taskGraph = existsSync(taskGraphPath) ? loadJson(taskGraphPath) : null;
-  const review = existsSync(reviewPath) ? loadJson(reviewPath) : null;
-  const blockerCount = Array.isArray(review?.blocking_issues) ? review.blocking_issues.length : null;
   return `### Gate A - Intake decisions\n\n` +
     `- 상태: ${existsSync(intakePath) ? 'present' : 'pending'}\n` +
     `- 정본 파일: \`iterations/${activeIteration}/gate-a-intake/intake.json\`\n\n` +
@@ -917,10 +843,7 @@ function renderActiveGateSections(artifactRoot, activeIteration, currentSpec) {
     `### Gate C - Task graph validation\n\n` +
     `- 상태: ${taskGraph ? `${taskGraph.tasks?.length ?? 0} task(s)` : 'pending'}\n` +
     `- 정본 파일: \`iterations/${activeIteration}/gate-c-task-graph/task-graph.json\`\n\n` +
-    renderGateCApprovalAudit(currentSpec, activeIteration) +
-    `### Gate D - Review blockers\n\n` +
-    `- 상태: ${review ? `blocking_issues=${blockerCount}` : 'pending'}\n` +
-    `- 정본 파일: \`iterations/${activeIteration}/gate-d-review/review.json\`\n`;
+    `- 검증: \`p2a iteration validate --artifacts <dir>\`\n`;
 }
 
 export function renderIterationIndexMarkdown(artifactRoot, currentSpec) {
@@ -942,7 +865,7 @@ export function renderIterationIndexMarkdown(artifactRoot, currentSpec) {
 
   return `# ${projectId} — 반복 인덱스 (Iteration Index)\n\n` +
     `<!-- p2a:active-iteration=${activeIteration} -->\n\n` +
-    `Progress: ${progressForIteration(currentSpec, activeIteration)}\n\n` +
+    `Progress: ${progressForIteration(artifactRoot, currentSpec, activeIteration)}\n\n` +
     `> 정본: iterations/<iter-id>/gate-*, current-spec.json\n` +
     `> 반복 history, close 기준점, handoff 기준점을 누적 렌더링합니다.\n\n` +
     `## 1. 진행 상태\n\n` +
@@ -1083,7 +1006,7 @@ function loadEffectiveBaselineSpec(filePath, artifactRoot = path.dirname(filePat
   };
 }
 
-function currentSpecPointer(projectId, iterationId, gateBApprovalAudit, gateCApprovalAudit) {
+function currentSpecPointer(projectId, iterationId, gateBApprovalAudit) {
   let currentSpec = {
     schema_version: 'p2a.current_spec.v1',
     project_id: projectId,
@@ -1093,7 +1016,6 @@ function currentSpecPointer(projectId, iterationId, gateBApprovalAudit, gateCApp
     note: '반복 1개라 이 반복 spec이 곧 현재 유효 spec. 다중 반복 조합 규칙은 docs/iteration-spec.md에서 정식화.',
   };
   if (gateBApprovalAudit) currentSpec = currentSpecWithGateBApprovalAudit(currentSpec, iterationId, gateBApprovalAudit);
-  if (gateCApprovalAudit) currentSpec = currentSpecWithGateCApprovalAudit(currentSpec, iterationId, gateCApprovalAudit);
   return currentSpec;
 }
 
@@ -1131,7 +1053,6 @@ function closeRecord(iterationId, closedAt, taskGraph, effectiveSpecRef, artifac
     effective_spec_ref: effectiveSpecRef,
     spec_ref: sourceSpecRef(iterationId),
     task_graph_ref: taskGraphRef(iterationId),
-    review_ref: reviewRef(iterationId),
     task_count: taskGraph.tasks?.length ?? 0,
     task_status_counts: countStatuses(taskGraph.tasks ?? []),
     artifact_hashes: artifactHashes(artifactRoot, closedIterationArtifactRefs(iterationId, artifactRoot)),
@@ -1221,13 +1142,11 @@ function iterationReadme(iterationId, idea, previousIterationId, effectiveSpecRe
     `Expected canonical artifacts:\n\n` +
     `- gate-a-intake/intake.json\n` +
     `- gate-b-spec/spec.json\n` +
-    `- gate-c-task-graph/task-graph.json\n` +
-    `- gate-d-review/review.json\n\n` +
+    `- gate-c-task-graph/task-graph.json\n\n` +
     `Optional generated views/exports:\n\n` +
     `- gate-a-intake/intake.md (explicit Markdown export only)\n` +
     `- gate-b-spec/product-spec.md\n` +
-    `- gate-b-spec/implementation-plan.md\n` +
-    `- gate-d-review/review-report.md\n`;
+    `- gate-b-spec/implementation-plan.md\n`;
 }
 
 function gateReadme(gateLabel, iterationId) {
@@ -1239,14 +1158,12 @@ const CANONICAL_ITERATION_ARTIFACTS = [
   'gate-a-intake/intake.json',
   'gate-b-spec/spec.json',
   'gate-c-task-graph/task-graph.json',
-  'gate-d-review/review.json',
 ];
 
 const OPTIONAL_ITERATION_ARTIFACTS = [
   'gate-a-intake/intake.md',
   'gate-b-spec/product-spec.md',
   'gate-b-spec/implementation-plan.md',
-  'gate-d-review/review-report.md',
 ];
 
 function withCurrentIterationArtifactManifest(metadata) {
@@ -1484,75 +1401,6 @@ function loadBaselineContext(baselineSpecPath, artifactRoot, baselineSpecRef) {
   };
 }
 
-function baselinePreview(values) {
-  const items = asStringArray(values);
-  if (!items.length) return 'none recorded';
-  const preview = items.slice(0, 3).join('; ');
-  return items.length > 3 ? `${preview}; and ${items.length - 3} more` : preview;
-}
-
-function initialDiscoveryDimensions(idea, baselineSpec) {
-  const product = baselineSpec?.product ?? {};
-  const implementation = baselineSpec?.implementation ?? {};
-  return [
-    {
-      dimension: 'target_users',
-      status: 'open',
-      summary: `Baseline target users remain in force unless this delta changes them: ${baselinePreview(product.target_users)}. Identify only affected or newly added users.`,
-      affected_fields: [],
-    },
-    {
-      dimension: 'core_problem',
-      status: 'confirmed',
-      summary: `The requested change is: ${idea}`,
-      source_ids: ['USER-1'],
-      affected_fields: [],
-    },
-    {
-      dimension: 'expected_outcome',
-      status: 'open',
-      summary: 'Define the observable result expected from the change.',
-      affected_fields: [],
-    },
-    {
-      dimension: 'mvp_scope',
-      status: 'open',
-      summary: 'Separate the smallest required change from follow-up scope.',
-      affected_fields: [],
-    },
-    {
-      dimension: 'non_goals',
-      status: 'open',
-      summary: `Baseline non-goals remain in force: ${baselinePreview(product.non_goals)}. Record only delta-specific additions or overrides.`,
-      affected_fields: [],
-    },
-    {
-      dimension: 'success_criteria',
-      status: 'open',
-      summary: 'Define verifiable completion criteria for the iteration.',
-      affected_fields: [],
-    },
-    {
-      dimension: 'constraints_and_risks',
-      status: 'open',
-      summary: `Baseline constraints and edge cases remain in force: ${baselinePreview([
-        ...asStringArray(product.constraints),
-        ...asStringArray(implementation.edge_cases),
-      ])}. Identify only delta-specific changes or new risks.`,
-      affected_fields: [],
-    },
-    {
-      dimension: 'integrations_and_compatibility',
-      status: 'open',
-      summary: `Baseline integrations and interfaces remain in force: ${baselinePreview([
-        ...asStringArray(product.external_integrations),
-        ...asStringArray(implementation.interfaces),
-      ])}. Confirm only what this delta changes and what must stay compatible.`,
-      affected_fields: [],
-    },
-  ];
-}
-
 function buildDeltaIntake({
   projectId,
   iterationId,
@@ -1582,7 +1430,7 @@ function buildDeltaIntake({
       },
       {
         id: 'A-2',
-        statement: '이번 단계는 Gate A/B 초안을 생성하며 Gate C task graph와 Gate D review는 별도 단계에서 확정한다.',
+        statement: '이번 단계는 승인할 변경 범위를 기록한 뒤 Gate B 초안을 생성한다.',
         risk: 'low',
         confirmation_needed: false,
       },
@@ -1593,7 +1441,6 @@ function buildDeltaIntake({
         question: 'What observable outcome and verification would make this delta successful?',
         why_it_matters: 'The answer defines the expected outcome and delta-specific success criteria without repeating the baseline.',
         blocks: ['spec.product.success_criteria', 'spec.implementation.verification'],
-        affected_fields: [],
         status: 'open',
       },
       {
@@ -1601,7 +1448,6 @@ function buildDeltaIntake({
         question: 'What is the smallest scope required now, and which adjacent changes are explicitly out of scope?',
         why_it_matters: 'The answer bounds the delta while preserving baseline goals and non-goals that are not being changed.',
         blocks: ['spec.product.goals', 'spec.product.non_goals', 'spec.product.core_flows'],
-        affected_fields: [],
         status: 'open',
       },
       {
@@ -1615,25 +1461,10 @@ function buildDeltaIntake({
           'spec.implementation.interfaces',
           'spec.implementation.edge_cases',
         ],
-        affected_fields: [],
         status: 'open',
       },
     ],
     needs_user_decision: [],
-    interview: {
-      seed_iteration_id: iterationId,
-      state: 'interview_active',
-      round: 1,
-      no_progress_rounds: 0,
-      soft_limit_acknowledged: false,
-      discovery_dimensions: initialDiscoveryDimensions(idea, baselineSpec),
-      spec_updates: [],
-      asked_question_ids: ['CQ-1', 'CQ-2', 'CQ-3'],
-      current_question_ids: ['CQ-1', 'CQ-2', 'CQ-3'],
-      has_unasked_high_impact_questions: true,
-      new_blocker: false,
-      stop_reason: null,
-    },
     baseline_context: baselineContext,
     status: 'blocked_on_user',
     evidence: [
@@ -1684,7 +1515,7 @@ function buildGreenfieldRestartIntake(intake, idea, iterationId) {
             source_id: 'USER-1',
             title: 'Replacement greenfield product idea',
             url: '',
-            used_for: `Restarted Gate A discovery from the replacement idea: ${idea}`,
+            used_for: `Restarted Gate A scope confirmation from the replacement idea: ${idea}`,
           },
         ],
       }
@@ -1699,7 +1530,6 @@ function buildGreenfieldRestartIntake(intake, idea, iterationId) {
         question: 'Who are the target users, and what core problem must the first iteration solve for them?',
         why_it_matters: 'The answer establishes the greenfield problem statement and target users before Gate B.',
         blocks: ['spec.product.problem', 'spec.product.target_users'],
-        affected_fields: [],
         status: 'open',
       },
       {
@@ -1713,7 +1543,6 @@ function buildGreenfieldRestartIntake(intake, idea, iterationId) {
           'spec.product.success_criteria',
           'spec.implementation.verification',
         ],
-        affected_fields: [],
         status: 'open',
       },
       {
@@ -1726,39 +1555,10 @@ function buildGreenfieldRestartIntake(intake, idea, iterationId) {
           'spec.implementation.interfaces',
           'spec.implementation.edge_cases',
         ],
-        affected_fields: [],
         status: 'open',
       },
     ],
     needs_user_decision: [],
-    interview: {
-      seed_iteration_id: iterationId,
-      state: 'interview_active',
-      round: 1,
-      no_progress_rounds: 0,
-      soft_limit_acknowledged: false,
-      discovery_dimensions: [
-        ['target_users', 'Identify and confirm the primary users for the first iteration.'],
-        ['core_problem', `Confirm the core problem represented by the idea: ${idea}`],
-        ['expected_outcome', 'Define the observable outcome expected from the first iteration.'],
-        ['mvp_scope', 'Separate the smallest required first-iteration scope from follow-up work.'],
-        ['non_goals', 'Identify adjacent work that is explicitly outside the first iteration.'],
-        ['success_criteria', 'Define measurable and verifiable completion criteria.'],
-        ['constraints_and_risks', 'Identify constraints, risks, and failure cases that shape the implementation.'],
-        ['integrations_and_compatibility', 'Identify required integrations and compatibility boundaries.'],
-      ].map(([dimension, summary]) => ({
-        dimension,
-        status: 'open',
-        summary,
-        affected_fields: [],
-      })),
-      spec_updates: [],
-      asked_question_ids: ['CQ-1', 'CQ-2', 'CQ-3'],
-      current_question_ids: ['CQ-1', 'CQ-2', 'CQ-3'],
-      has_unasked_high_impact_questions: true,
-      new_blocker: false,
-      stop_reason: null,
-    },
     status: 'blocked_on_user',
   };
   delete next.approval_audit;
@@ -1881,58 +1681,21 @@ function appendSpecContribution(spec, fieldRef, value) {
   }
 }
 
-function applyStructuredSpecUpdate(spec, update) {
-  const match = /^spec\.(product|implementation)\.([a-z_]+)$/.exec(update.field);
-  if (!match) return;
-  const [, section, field] = match;
-  const current = spec[section]?.[field];
-  if (Array.isArray(current)) {
-    if (update.operation === 'append') {
-      spec[section][field] = appendUnique(current, update.values);
-    } else if (update.operation === 'replace') {
-      spec[section][field] = [...update.values];
-    } else {
-      const removed = new Set(update.values);
-      spec[section][field] = current.filter((value) => !removed.has(value));
-    }
-    return !jsonEqual(current, spec[section][field]);
-  }
-  if (section === 'product' && field === 'problem' && typeof current === 'string') {
-    if (update.operation === 'replace') {
-      spec.product.problem = update.values.join('\n\n');
-    } else if (update.operation === 'append') {
-      spec.product.problem = appendUnique([current], update.values).join('\n\n');
-    }
-    return current !== spec.product.problem;
-  }
-  return false;
-}
-
 function applyConfirmedIntakeToSpec(spec, intake) {
   const next = cloneJson(spec);
-  const structuredUpdates = intake.interview?.spec_updates ?? [];
-  if (!intake.interview) {
-    for (const question of intake.clarifying_questions ?? []) {
-      if (!question.answer || !['answered', 'assumed', 'not_applicable'].includes(question.status)) continue;
-      const contribution = `Gate A ${question.id} (${question.status}): ${question.answer}`;
-      const refs = question.status === 'not_applicable'
-        ? ['spec.product.non_goals']
-        : question.blocks;
-      for (const fieldRef of refs) appendSpecContribution(next, fieldRef, contribution);
-    }
-    for (const decision of intake.needs_user_decision ?? []) {
-      if (decision.status !== 'answered' || !decision.answer) continue;
-      const contribution = `Gate A ${decision.id} decision: ${decision.question} — ${decision.answer}`;
-      for (const fieldRef of decision.blocks ?? []) {
-        appendSpecContribution(next, fieldRef, contribution);
-      }
-    }
+  for (const question of intake.clarifying_questions ?? []) {
+    if (!question.answer || !['answered', 'assumed', 'not_applicable'].includes(question.status)) continue;
+    const contribution = `Gate A ${question.id} (${question.status}): ${question.answer}`;
+    const refs = question.status === 'not_applicable'
+      ? ['spec.product.non_goals']
+      : question.blocks;
+    for (const fieldRef of refs) appendSpecContribution(next, fieldRef, contribution);
   }
-  for (const update of structuredUpdates) {
-    if (!applyStructuredSpecUpdate(next, update)) {
-      throw new ValidationError(
-        `intake.interview.spec_updates ${update.field} did not change the canonical Gate B field`,
-      );
+  for (const decision of intake.needs_user_decision ?? []) {
+    if (decision.status !== 'answered' || !decision.answer) continue;
+    const contribution = `Gate A ${decision.id} decision: ${decision.question} — ${decision.answer}`;
+    for (const fieldRef of decision.blocks ?? []) {
+      appendSpecContribution(next, fieldRef, contribution);
     }
   }
   return next;
@@ -2144,8 +1907,7 @@ function renderIntakeDecisionMarkdown(item) {
     `- impact: ${item.impact ?? 'Not recorded.'}\n` +
     `- options:\n${optionLines}\n` +
     `- recommended: ${recommendation}\n` +
-    `- potential blocks: ${(item.blocks ?? []).join(', ') || 'legacy/unspecified'}\n` +
-    `- affected fields: ${(item.affected_fields ?? item.blocks ?? []).join(', ') || 'none'}`;
+    `- potential blocks: ${(item.blocks ?? []).join(', ') || 'legacy/unspecified'}`;
 }
 
 function renderIntakeClarifyingQuestionMarkdown(item) {
@@ -2153,9 +1915,7 @@ function renderIntakeClarifyingQuestionMarkdown(item) {
     `- status: ${item.status ?? 'unspecified'}\n` +
     `${item.answer ? `- answer: ${item.answer}\n` : ''}` +
     `- why it matters: ${item.why_it_matters}\n` +
-    `${item.canonical_effect ? `- canonical effect: ${item.canonical_effect}\n` : ''}` +
-    `- potential blocks: ${(item.blocks ?? []).join(', ') || 'none'}\n` +
-    `- affected fields: ${(item.affected_fields ?? item.blocks ?? []).join(', ') || 'none'}`;
+    `- potential blocks: ${(item.blocks ?? []).join(', ') || 'none'}`;
 }
 
 export function renderIntakeMarkdown(intake, options = {}) {
@@ -2165,24 +1925,6 @@ export function renderIntakeMarkdown(intake, options = {}) {
   const questions = intake.clarifying_questions.length
     ? intake.clarifying_questions.map(renderIntakeClarifyingQuestionMarkdown).join('\n\n')
     : 'No clarifying questions in the current intake.';
-  const interview = intake.interview
-    ? `## Interview State\n\n` +
-      `- state: ${intake.interview.state}\n` +
-      `- round: ${intake.interview.round}\n` +
-      `- no-progress rounds: ${intake.interview.no_progress_rounds}\n` +
-      `- current questions: ${intake.interview.current_question_ids.join(', ') || 'none'}\n` +
-      `- stop reason: ${intake.interview.stop_reason ?? 'none'}\n\n` +
-      `## Discovery Readiness\n\n${markdownList(intake.interview.discovery_dimensions.map((item) => (
-        `${item.dimension}: ${item.status} — ${item.summary} (affected fields: ${item.affected_fields.join(', ') || 'none'})`
-      )))}\n\n` +
-      `## Canonical Spec Updates\n\n${intake.interview.spec_updates?.length
-        ? markdownList(intake.interview.spec_updates.map((item) => (
-            `${item.field}: ${item.operation} [${item.values.join('; ')}] ` +
-            `(from questions: ${item.source_question_ids.join(', ') || 'none'}; ` +
-            `dimensions: ${(item.source_dimension_ids ?? []).join(', ') || 'none'})`
-          )))
-        : 'No canonical field updates recorded yet.'}\n\n`
-    : '';
   const baseline = intake.baseline_context
     ? `## Reused Baseline Context\n\n` +
       `### Reused Answers\n\n` +
@@ -2209,7 +1951,6 @@ export function renderIntakeMarkdown(intake, options = {}) {
       `${item.id}: ${item.statement} ` +
       `(risk: ${item.risk}; confirmation_needed: ${item.confirmation_needed})`
     )))}\n\n` +
-    interview +
     baseline +
     `## Decisions\n\n${decisions}\n\n` +
     `## Clarifying Questions\n\n${questions}\n`;
@@ -2311,7 +2052,7 @@ function currentSpecForDraft(currentSpec, iterationId, idea, draftedAt, artifact
   };
 }
 
-function currentSpecForGateAInterview(currentSpec, iterationId, idea, draftedAt, artifacts, intake) {
+function currentSpecForGateAScope(currentSpec, iterationId, idea, draftedAt, artifacts) {
   const pendingIteration = {
     ...currentSpec.pending_iteration,
   };
@@ -2321,7 +2062,7 @@ function currentSpecForGateAInterview(currentSpec, iterationId, idea, draftedAt,
     pending_iteration: {
       ...pendingIteration,
       iteration_id: iterationId,
-      status: intake.interview ? 'gate_a_interview' : 'active_planning',
+      status: 'active_planning',
       idea,
       drafted_at: draftedAt,
       artifacts: {
@@ -2333,7 +2074,7 @@ function currentSpecForGateAInterview(currentSpec, iterationId, idea, draftedAt,
 
 function currentSpecWithoutIterationApprovalAudits(currentSpec, iterationId) {
   const next = cloneJson(currentSpec);
-  for (const field of ['gate_b_approval_audits', 'gate_c_approval_audits']) {
+  for (const field of ['gate_b_approval_audits']) {
     if (!next[field] || typeof next[field] !== 'object' || Array.isArray(next[field])) continue;
     delete next[field][iterationId];
     if (Object.keys(next[field]).length === 0) delete next[field];
@@ -2429,18 +2170,17 @@ function iterationMetadataAfterGateAForceReset(metadata) {
   return withCurrentIterationArtifactManifest(planningMetadata);
 }
 
-function iterationMetadataForGateAInterview(
+function iterationMetadataForGateAScope(
   metadata,
   idea,
   draftedAt,
   artifacts,
-  intake,
   planningMemory = metadata.planning_memory ?? null,
 ) {
   const planningMetadata = iterationMetadataAfterGateAForceReset(metadata);
   return {
     ...planningMetadata,
-    status: intake.interview ? 'gate_a_interview' : 'active_planning',
+    status: 'active_planning',
     idea,
     drafted_at: draftedAt,
     draft_artifacts: {
@@ -2489,10 +2229,6 @@ function sourceSpecRef(iterationId) {
 
 function taskGraphRef(iterationId) {
   return `iterations/${iterationId}/gate-c-task-graph/task-graph.json`;
-}
-
-function reviewRef(iterationId) {
-  return `iterations/${iterationId}/gate-d-review/review.json`;
 }
 
 const SEMANTIC_AREAS = [
@@ -3139,7 +2875,6 @@ function collectCompositionSources(artifactRoot, currentSpec) {
   for (const iterationId of orderedIterationIds) {
     const specPath = path.join(artifactRoot, sourceSpecRef(iterationId));
     const taskGraphPath = path.join(artifactRoot, taskGraphRef(iterationId));
-    const reviewPath = path.join(artifactRoot, reviewRef(iterationId));
     if (!existsSync(specPath)) {
       skipped.push({ iteration_id: iterationId, reason: 'missing spec.json' });
       continue;
@@ -3161,10 +2896,6 @@ function collectCompositionSources(artifactRoot, currentSpec) {
       skipped.push({ iteration_id: iterationId, reason: 'missing task-graph.json' });
       continue;
     }
-    if (!existsSync(reviewPath)) {
-      skipped.push({ iteration_id: iterationId, reason: 'missing review.json' });
-      continue;
-    }
     const taskGraph = validateTaskGraph(taskGraphPath, specPath);
     const incomplete = taskGraph.tasks.filter((task) => task.status !== 'done');
     if (incomplete.length) {
@@ -3174,7 +2905,6 @@ function collectCompositionSources(artifactRoot, currentSpec) {
       });
       continue;
     }
-    validateReviewPass(reviewPath);
     const metadata = loadOptionalIterationMetadata(artifactRoot, iterationId);
     const resolvedSourceIntakePath = resolveSpecSourceIntake(specPath, spec);
     const sourceIntake = resolvedSourceIntakePath
@@ -3184,7 +2914,6 @@ function collectCompositionSources(artifactRoot, currentSpec) {
       iteration_id: iterationId,
       spec_ref: sourceSpecRef(iterationId),
       task_graph_ref: taskGraphRef(iterationId),
-      review_ref: reviewRef(iterationId),
       status: inferSourceStatus({
         iterationId,
         activeIteration: currentSpec.active_iteration,
@@ -3245,10 +2974,6 @@ function buildComposedCurrentSpec(previousCurrentSpec, sources, skipped) {
   if (previousCurrentSpec.gate_b_approval_audits && typeof previousCurrentSpec.gate_b_approval_audits === 'object') {
     composedCurrentSpec.gate_b_approval_audits = cloneJson(previousCurrentSpec.gate_b_approval_audits);
   }
-  if (previousCurrentSpec.gate_c_approval_audits && typeof previousCurrentSpec.gate_c_approval_audits === 'object') {
-    composedCurrentSpec.gate_c_approval_audits = cloneJson(previousCurrentSpec.gate_c_approval_audits);
-  }
-
   const pending = previousCurrentSpec.pending_iteration;
   if (pending) composedCurrentSpec.pending_iteration = pending;
 
@@ -3260,7 +2985,6 @@ function buildPlan(paths, iterationId, facts) {
   return {
     projectId,
     gateBApprovalAudit: facts.gateBApprovalAudit,
-    gateCApprovalAudit: facts.gateCApprovalAudit,
     moves: GATE_DIRS.map((gate) => ({
       from: path.join(paths.artifactRoot, gate),
       to: path.join(paths.iterationRoot, gate),
@@ -3351,7 +3075,7 @@ function applyPlan(paths, iterationId, plan) {
     originalMovedTaskGraph = rebaseMovedTaskGraphSourceSpec(paths.movedTaskGraph);
     const movedFacts = validateMoved(paths);
     const projectId = projectIdFrom(paths.artifactRoot, movedFacts.spec, movedFacts.taskGraph);
-    const currentSpec = currentSpecPointer(projectId, iterationId, plan.gateBApprovalAudit, plan.gateCApprovalAudit);
+    const currentSpec = currentSpecPointer(projectId, iterationId, plan.gateBApprovalAudit);
     mkdirSync(paths.maintenanceRoot, { recursive: true });
     atomicWriteJson(paths.currentSpec, currentSpec);
     writeIterationStatus(paths.artifactRoot, currentSpec);
@@ -3410,8 +3134,7 @@ function validateMoved(paths) {
     throw new ValidationError(`moved spec.open_decisions must be empty, got ${JSON.stringify(spec.open_decisions)}`);
   }
   const taskGraph = validateTaskGraph(paths.movedTaskGraph, paths.movedSpecJson);
-  const review = validateReviewPass(paths.movedReviewJson);
-  return { spec, taskGraph, review };
+  return { spec, taskGraph };
 }
 
 function init(args) {
@@ -3429,7 +3152,7 @@ function init(args) {
   validateMoved(paths);
   resolveIterationState(artifactRoot);
   console.log(`Plan2Agent iteration init passed: ${toRelativeFromRoot(artifactRoot)} -> iterations/${args.iterationId}/`);
-  console.log('Moved artifacts revalidated: spec approved, task graph valid, review passed, Gate B/C approval audits present.');
+  console.log('Moved artifacts revalidated: spec approved, task graph valid, Gate B approval audit present.');
   console.log('Maintenance is lazy: no empty task-graph.json was created.');
   return 0;
 }
@@ -3506,8 +3229,7 @@ function loadReadyIterationFacts(artifactRoot) {
   const state = resolveIterationState(artifactRoot);
   const spec = validateActiveSpecWithOptionalIntake(state);
   const taskGraph = validateTaskGraph(state.taskGraphPath, state.specPath);
-  const review = validateReviewPass(state.reviewPath);
-  return { state, spec, taskGraph, review };
+  return { state, spec, taskGraph };
 }
 
 function activeIntakePath(state) {
@@ -3529,7 +3251,7 @@ function validateActiveSpecWithOptionalIntake(state) {
 }
 
 function inferPlanningStage(state) {
-  if (existsSync(state.taskGraphPath) && existsSync(state.reviewPath) && existsSync(state.specPath)) return 'ready';
+  if (existsSync(state.taskGraphPath) && existsSync(state.specPath)) return 'ready';
   if (existsSync(state.specPath)) {
     const spec = validateActiveSpecWithOptionalIntake(state);
     return spec.approval === 'approved' ? 'gate-b-approved' : 'gate-b-draft';
@@ -3554,7 +3276,6 @@ function validatePlanningIteration(args) {
   const pendingStatus = state.currentSpec.pending_iteration?.status;
   const allowedPendingStatuses = new Set([
     'active_planning',
-    'gate_a_interview',
     'gate_a_ready',
     'gate_b_draft',
     'gate_b_approved',
@@ -3587,7 +3308,7 @@ function validatePlanningIteration(args) {
     console.log(`- active iteration: ${state.activeIteration}`);
     console.log(`- stage: gate-a`);
     console.log(`- intake: status=${intake.status}`);
-    console.log('- Gate B-D artifacts are pending');
+    console.log('- Gate B/C artifacts are pending');
     return 0;
   }
 
@@ -3609,7 +3330,7 @@ function validatePlanningIteration(args) {
   console.log(`- active iteration: ${state.activeIteration}`);
   console.log(`- stage: ${stage}`);
   console.log(`- spec: approval=${spec.approval}`);
-  console.log('- Gate C/D artifacts are pending');
+  console.log('- task graph validation is pending');
   return 0;
 }
 
@@ -3625,37 +3346,13 @@ function gateCTaskGraphDraftMetaPath(state) {
   return path.join(path.dirname(state.taskGraphPath), 'task-graph.draft.meta.json');
 }
 
-function parseGateCApprovalAudit(statusPath) {
-  if (!statusPath || !existsSync(statusPath)) return null;
-  const text = readFileSync(statusPath, 'utf8');
-  const headingMatch = text.match(/^#{3,6}\s+Gate C approval audit\s*$/im);
-  if (!headingMatch) return null;
-  const tail = text.slice(headingMatch.index + headingMatch[0].length);
-  const nextHeading = tail.search(/^#{1,6}\s+/m);
-  const block = nextHeading === -1 ? tail : tail.slice(0, nextHeading);
-  const get = (label) => {
-    const match = block.match(new RegExp(`^\\s*-\\s*${label}:\\s*(.+?)\\s*$`, 'im'));
-    return match ? match[1].trim() : null;
-  };
-  const approvedSource = get('Approved source');
-  const approvedArtifacts = parseApprovedArtifacts(get('Approved artifacts'));
-  return {
-    approved_by: get('Approved by'),
-    approved_at: get('Approved at'),
-    approved_artifacts: approvedArtifacts.length ? approvedArtifacts : approvedSource ? [approvedSource] : [],
-    approved_source: approvedSource,
-    authoring_agent: get('Authoring agent'),
-    approval_note: get('Approval note'),
-  };
-}
-
 function activeBaselineEffectiveSpecRef(state) {
   return state.currentSpec.pending_iteration?.baseline_effective_spec_ref
     ?? state.currentSpec.effective_spec_ref
     ?? null;
 }
 
-function taskDraftProvenance(state, draftPath, promotedAt, gateCApprovalAudit) {
+function taskDraftProvenance(state, draftPath, promotedAt) {
   const existingMetaPath = gateCTaskGraphDraftMetaPath(state);
   const existingMeta = existsSync(existingMetaPath) ? loadJson(existingMetaPath) : null;
   return {
@@ -3671,7 +3368,6 @@ function taskDraftProvenance(state, draftPath, promotedAt, gateCApprovalAudit) {
     draft_sha256: fileSha256(draftPath),
     source_spec_sha256: existsSync(state.specPath) ? fileSha256(state.specPath) : null,
     promoted_at: promotedAt,
-    gate_c_approval_audit: gateCApprovalAudit,
   };
 }
 
@@ -4278,7 +3974,6 @@ function validateIteration(args) {
   if (existsSync(intakePath)) validatePlanningMemoryEvidence(planningMemory, loadJson(intakePath), intakePath, state.artifactRoot);
   validatePlanningMemoryEvidence(planningMemory, spec, state.specPath, state.artifactRoot);
   const taskGraph = validateTaskGraph(state.taskGraphPath, state.specPath);
-  validateReviewPass(state.reviewPath);
   if (args.requireCloseReady) {
     assertCloseReadyTasks(taskGraph);
     validateCloseReadyVisualEvidence({
@@ -4297,7 +3992,7 @@ function validateIteration(args) {
   console.log(`- active iteration: ${state.activeIteration}`);
   console.log(`- spec: approved=${spec.approval}`);
   console.log(`- task graph: ${taskGraph.tasks.length} task(s), todo ${statusCounts.todo}·in_progress ${statusCounts.in_progress}·done ${statusCounts.done}·blocked ${statusCounts.blocked}`);
-  console.log('- review: no blocking issues');
+  console.log('- planning validation: passed');
   if (args.requireCloseReady) console.log('- close-ready: all tasks done');
   if (maintenance) console.log(`- maintenance: ${maintenance.graph.tasks.length} task(s) valid`);
   if (archivedAuditCount !== null) console.log(`- archived audit: ${archivedAuditCount} closed iteration(s) verified`);
@@ -4545,35 +4240,6 @@ function promoteSpec(args) {
   );
 }
 
-function gateCApprovalAuditFromArgs(args, state, draftSha256) {
-  if (!args.approvedBy && !args.approvalNote) return null;
-  return gateCApprovalAuditForIteration(
-    {
-      approved_by: args.approvedBy ?? 'user',
-      approved_at: new Date().toISOString().slice(0, 10),
-      approved_artifacts: gateCApprovalArtifactsForIteration(state.activeIteration),
-      approval_note: args.approvalNote ?? 'Gate C task graph approved for promotion.',
-      draft_sha256: draftSha256,
-    },
-    state.activeIteration,
-    'Gate C task graph approved for promotion.',
-  );
-}
-
-function resolveGateCApprovalAuditForPromotion(state, args, draftSha256) {
-  const requestedAudit = gateCApprovalAuditFromArgs(args, state, draftSha256);
-  const currentSpecAudit = state.currentSpec.gate_c_approval_audits?.[state.activeIteration] ?? null;
-  const audit = requestedAudit ?? currentSpecAudit;
-  if (!audit) {
-    throw new ValidationError('Gate C approval audit required in current-spec.json gate_c_approval_audits or via promote-tasks --approved-by/--approval-note');
-  }
-  validateApprovalAuditData(audit, `current-spec.json gate_c_approval_audits.${state.activeIteration}`);
-  if (audit.draft_sha256 !== draftSha256) {
-    throw new ValidationError('Gate C approval audit does not match current task-graph.draft.json; rerun promote-tasks with --approved-by and --approval-note after reviewing the draft');
-  }
-  return audit;
-}
-
 function canonicalDraftVersion(version) {
   return typeof version === 'string' && version.endsWith('-draft')
     ? version.slice(0, -'-draft'.length)
@@ -4626,7 +4292,7 @@ function promoteTasksLocked(args) {
   if (existsSync(state.taskGraphPath) && !args.replaceExisting) {
     throw new ValidationError(
       'canonical task graph already exists; refusing to replace it with a potentially incremental-only draft. ' +
-      'Generate and review a complete replacement with diff-tasks --force, then rerun promote-tasks with --replace-existing',
+      'Generate and validate a complete replacement with diff-tasks --force, then rerun promote-tasks with --replace-existing',
     );
   }
   if (existsSync(state.taskGraphPath) && args.replaceExisting) {
@@ -4641,9 +4307,7 @@ function promoteTasksLocked(args) {
     assertNoTaskGraphExecutionHistory(state, 'promote-tasks --replace-existing');
   }
   const promotedAt = new Date().toISOString();
-  const draftSha256 = fileSha256(draftPath);
-  const gateCApprovalAudit = resolveGateCApprovalAuditForPromotion(state, args, draftSha256);
-  const nextCurrentSpec = currentSpecWithGateCApprovalAudit(state.currentSpec, state.activeIteration, gateCApprovalAudit);
+  const nextCurrentSpec = state.currentSpec;
   const metaPath = gateCTaskGraphDraftMetaPath(state);
   const promoted = {
     ...draft,
@@ -4651,12 +4315,7 @@ function promoteTasksLocked(args) {
   };
   const promotedDraftPath = `${draftPath}.promoted`;
   const statusPath = path.join(state.artifactRoot, 'status.md');
-  const nextStatus = renderIterationIndexMarkdown(
-    state.artifactRoot,
-    nextCurrentSpec,
-  );
   const stateSnapshot = captureRollbackFiles([
-    state.currentSpecPath,
     metaPath,
     state.taskGraphPath,
     draftPath,
@@ -4664,18 +4323,20 @@ function promoteTasksLocked(args) {
     statusPath,
   ]);
   try {
-    atomicWriteJson(state.currentSpecPath, nextCurrentSpec);
     atomicWriteJson(
       metaPath,
       taskDraftProvenance(
         { ...state, currentSpec: nextCurrentSpec },
         draftPath,
         promotedAt,
-        gateCApprovalAudit,
       ),
     );
     atomicWriteJson(state.taskGraphPath, promoted);
     renameSync(draftPath, promotedDraftPath);
+    const nextStatus = renderIterationIndexMarkdown(
+      state.artifactRoot,
+      nextCurrentSpec,
+    );
     atomicWriteText(statusPath, nextStatus);
   } catch (error) {
     const rollbackFailures = restoreRollbackFiles(stateSnapshot);
@@ -5857,7 +5518,7 @@ function openLocked(args, artifactRoot, idea) {
     console.log(`- active iteration: ${openedState.activeIteration}`);
     console.log(`- baseline iteration: ${facts.state.activeIteration}`);
     console.log(`- idea: ${idea}`);
-    console.log('Skeleton created; Gate B-D artifacts are not required until planning outputs are written.');
+    console.log('Skeleton created; Gate B/C artifacts are not required until planning outputs are written.');
     console.log(`- baseline Memory freshness: ${planningMemory.baseline_freshness.status} (${planningMemory.baseline_freshness.detail})`);
     if (planningMemory.layers.project.command) console.log(`- planning recall (project): ${planningMemory.layers.project.command}`);
     if (planningMemory.layers.cross_project.command) {
@@ -5921,8 +5582,6 @@ function gateAForceResetArtifactPaths(state, files) {
     `${taskGraphDraftPath}.promoted`,
     gateCTaskGraphDraftMetaPath(state),
     state.taskGraphPath,
-    state.reviewPath,
-    path.join(path.dirname(state.reviewPath), 'review-report.md'),
   ];
 }
 
@@ -5962,191 +5621,23 @@ function invalidateGateADownstreamArtifacts(state, files) {
   }
 }
 
-const MAX_GATE_A_GUIDANCE_ITEMS = 3;
-const MAX_GATE_A_GUIDANCE_TEXT_LENGTH = 240;
-
-function gateAInterviewGuidanceText(value) {
-  if (typeof value !== 'string') return '';
-  const normalized = value.trim().replace(/\s+/g, ' ');
-  if (normalized.length <= MAX_GATE_A_GUIDANCE_TEXT_LENGTH) return normalized;
-  return `${normalized.slice(0, MAX_GATE_A_GUIDANCE_TEXT_LENGTH - 1)}…`;
-}
-
-function gateAInterviewGuidanceSentence(value) {
-  const text = gateAInterviewGuidanceText(value);
-  if (!text || /[.!?…]$/.test(text)) return text;
-  return `${text}.`;
-}
-
-function gateAInterviewDecisionGuidance(item) {
-  const options = Array.isArray(item?.options) ? item.options : [];
-  const defaultOption = options.find((option) => option?.id === item?.default);
-  const selectedOptions = options.slice(0, MAX_GATE_A_GUIDANCE_ITEMS);
-  if (defaultOption && !selectedOptions.includes(defaultOption)) {
-    selectedOptions[selectedOptions.length - 1] = defaultOption;
-  }
-  const visibleOptions = selectedOptions
-    .map((option) => {
-      const id = gateAInterviewGuidanceText(option?.id);
-      const label = gateAInterviewGuidanceText(option?.label);
-      const description = gateAInterviewGuidanceText(option?.description);
-      return `${id}=${label}${description ? ` — ${description}` : ''}`;
-    });
-  if (options.length > visibleOptions.length) {
-    visibleOptions.push(`${options.length - visibleOptions.length} more option(s)`);
-  }
-  const defaultId = gateAInterviewGuidanceText(item?.default);
-  const defaultLabel = gateAInterviewGuidanceText(defaultOption?.label);
-  return {
-    options: visibleOptions.join(' | '),
-    recommendation: defaultId
-      ? `${defaultId}${defaultLabel ? `=${defaultLabel}` : ''}`
-      : '',
-  };
-}
-
-function gateAInterviewBlockerSummary(intake) {
-  const blockers = [];
-  let totalBlockers = 0;
-  const addBlocker = (render) => {
-    totalBlockers += 1;
-    if (blockers.length < MAX_GATE_A_GUIDANCE_ITEMS) blockers.push(render());
-  };
-  for (const item of Array.isArray(intake.clarifying_questions)
-    ? intake.clarifying_questions
-    : []) {
-    if (item?.status !== 'open') continue;
-    addBlocker(() => (
-      `${gateAInterviewGuidanceText(item.id)}: ${gateAInterviewGuidanceText(item.question)}`
-    ));
-  }
-  for (const item of Array.isArray(intake.needs_user_decision)
-    ? intake.needs_user_decision
-    : []) {
-    if (item?.status === 'answered') continue;
-    addBlocker(() => {
-      const guidance = gateAInterviewDecisionGuidance(item);
-      const details = [
-        guidance.options ? `options: ${guidance.options}` : '',
-        guidance.recommendation ? `recommended: ${guidance.recommendation}` : '',
-      ].filter(Boolean).join('; ');
-      return `${gateAInterviewGuidanceText(item?.id)}: ` +
-        `${gateAInterviewGuidanceText(item?.question)}` +
-        `${details ? ` (${details})` : ''}`;
-    });
-  }
-  for (const item of Array.isArray(intake.interview?.discovery_dimensions)
-    ? intake.interview.discovery_dimensions
-    : []) {
-    if (item?.status !== 'open') continue;
-    addBlocker(() => (
-      `dimension ${gateAInterviewGuidanceText(item.dimension)}: ` +
-      `${gateAInterviewGuidanceText(item.summary) || 'needs clarification'}`
-    ));
-  }
-  if (intake.interview?.has_unasked_high_impact_questions) {
-    addBlocker(() => (
-      'unsurfaced high-impact input remains and must be materialized by the interview before it can be answered'
-    ));
-  }
-  if (intake.interview?.new_blocker) {
-    addBlocker(() => (
-      'a newly introduced blocker must be materialized by the interview before it can be answered'
-    ));
-  }
-  if (totalBlockers > blockers.length) {
-    blockers.push(`${totalBlockers - blockers.length} more unresolved item(s)`);
-  }
-  return blockers.join('; ');
-}
-
-function gateAInterviewAssumptionSummary(intake) {
-  const assumptions = [];
-  let totalAssumptions = 0;
-  for (const item of Array.isArray(intake.assumptions) ? intake.assumptions : []) {
-    if (item?.confirmation_needed !== true) continue;
-    totalAssumptions += 1;
-    if (assumptions.length < MAX_GATE_A_GUIDANCE_ITEMS) {
-      const risk = gateAInterviewGuidanceText(item.risk);
-      assumptions.push(
-        `${gateAInterviewGuidanceText(item.id)}: ` +
-        `${gateAInterviewGuidanceText(item.statement)}` +
-        `${risk ? ` (risk: ${risk})` : ''}`,
-      );
-    }
-  }
-  if (totalAssumptions > assumptions.length) {
-    assumptions.push(
-      `${totalAssumptions - assumptions.length} more recommended assumption(s)`,
-    );
-  }
-  return assumptions.join('; ');
-}
-
-function gateAInterviewHasMaterializedBlockers(intake) {
-  return (Array.isArray(intake.clarifying_questions)
-    ? intake.clarifying_questions
-    : []).some((item) => item?.status === 'open')
-    || (Array.isArray(intake.needs_user_decision)
-      ? intake.needs_user_decision
-      : []).some((item) => item?.status !== 'answered')
-    || (Array.isArray(intake.interview?.discovery_dimensions)
-      ? intake.interview.discovery_dimensions
-      : []).some((item) => item?.status === 'open');
-}
-
-function gateAInterviewDraftMessages(intake) {
-  const blockers = gateAInterviewBlockerSummary(intake);
-  const recommendedAssumptions = gateAInterviewAssumptionSummary(intake);
-  const hasMaterializedBlockers = gateAInterviewHasMaterializedBlockers(intake);
-  const softLimitSummary = intake.interview?.state === 'paused' &&
-    intake.interview?.stop_reason === 'soft_limit'
-    ? gateAInterviewGuidanceSentence(intake.summary)
-    : '';
-  const summaryContext = softLimitSummary
-    ? ` Current understanding: ${softLimitSummary}`
-    : '';
-  const blockerContext = blockers ? ` Unresolved items: ${blockers}.` : '';
-  const assumptionContext = recommendedAssumptions
-    ? ` Recommended assumptions: ${recommendedAssumptions}.`
-    : '';
-  const pausedChoice = hasMaterializedBlockers
-    ? recommendedAssumptions
-      ? 'Choose whether to continue the interview, answer a listed unresolved item directly, explicitly accept a recommended assumption, or keep it paused.'
-      : 'Choose whether to continue the interview, answer a listed unresolved item directly, or keep it paused.'
-    : recommendedAssumptions
-      ? 'Choose whether to continue the interview, explicitly accept a recommended assumption, or keep it paused.'
-      : 'Choose whether to continue the interview or keep it paused.';
-  return {
-    interview_active: [
-      'Plan2Agent Gate A interview ready.',
-      '- Continue the planning conversation with /p2a-harness resume_from: interview.',
-    ],
-    ready_for_gate_a_summary: [
-      'Plan2Agent Gate A summary ready.',
-      '- Present the Gate A understanding with /p2a-harness resume_from: gate-a-summary.',
-    ],
-    awaiting_gate_a_confirmation: [
-      'Plan2Agent Gate A summary is awaiting confirmation.',
-      '- Review and explicitly confirm the Gate A understanding before recording approval.',
-    ],
-    paused: [
-      'Plan2Agent Gate A interview paused.',
-      `-${summaryContext}${blockerContext}${assumptionContext} ${pausedChoice}`,
-    ],
-    blocked_on_user: [
-      'Plan2Agent Gate A interview is blocked on user input.',
-      recommendedAssumptions
-        ? `-${blockerContext}${assumptionContext} Answer the listed unresolved items directly, explicitly accept a recommended assumption, or defer an item.`
-        : `-${blockerContext} Answer the listed unresolved items directly or explicitly defer an item.`,
-    ],
-  }[intake.interview?.state] ?? [
-    'Plan2Agent Gate A state updated.',
-    '- Run p2a next to inspect the required Gate A action.',
+function gateAScopeDraftMessages(intake) {
+  const openQuestions = (intake.clarifying_questions ?? [])
+    .filter((item) => item.status === 'open')
+    .map((item) => item.id);
+  const openDecisions = (intake.needs_user_decision ?? [])
+    .filter((item) => item.status !== 'answered')
+    .map((item) => item.id);
+  const blockers = [...openQuestions, ...openDecisions];
+  return [
+    'Plan2Agent Gate A scope confirmation required.',
+    blockers.length
+      ? `- Resolve ${blockers.join(', ')}, then review and explicitly approve the scope.`
+      : '- Review and explicitly approve the scope, then record approval_audit.',
   ];
 }
 
-function syncGateAInterviewMarkdown(files, intake, artifactRoot) {
+function syncGateAScopeMarkdown(files, intake, artifactRoot) {
   const intakeMarkdownStat = lstatIfPresent(files.intakeMd);
   if (!intakeMarkdownStat) return;
   if (!intakeMarkdownStat.isFile()) {
@@ -6482,7 +5973,7 @@ function draftWithState(args, state) {
     intake = validateIntake(files.intakeJson, { artifactRoot });
     if (intake.idea.trim() !== idea) {
       const recovery = baselineSpecRef
-        ? 'rerun with --force to restart the Gate A interview'
+        ? 'rerun with --force to restart Gate A scope confirmation'
         : 'regenerate or update the Gate A intake before drafting Gate B';
       throw new Error(
         `draft idea ${JSON.stringify(idea)} does not match existing Gate A intake idea ${JSON.stringify(intake.idea)}; ${recovery}`,
@@ -6520,31 +6011,29 @@ function draftWithState(args, state) {
     ? iterationMetadataAfterGateAForceReset(metadata)
     : metadata;
   if (intake.status !== 'ready_for_spec') {
-    syncGateAInterviewMarkdown(files, intake, artifactRoot);
+    syncGateAScopeMarkdown(files, intake, artifactRoot);
     validateIntake(files.intakeJson, { artifactRoot });
     writeIterationMetadataAndReadme(
       state,
-      iterationMetadataForGateAInterview(
+      iterationMetadataForGateAScope(
         planningMetadata,
         idea,
         draftedAt,
         artifacts,
-        intake,
         planningMemory,
       ),
     );
-    const nextCurrentSpec = currentSpecForGateAInterview(
+    const nextCurrentSpec = currentSpecForGateAScope(
       currentSpec,
       state.activeIteration,
       idea,
       draftedAt,
       artifacts,
-      intake,
     );
     writeJson(state.currentSpecPath, nextCurrentSpec);
     writeIterationStatus(state.artifactRoot, nextCurrentSpec);
 
-    const [headline, nextAction] = gateAInterviewDraftMessages(intake);
+    const [headline, nextAction] = gateAScopeDraftMessages(intake);
     console.log(headline);
     console.log(`- active iteration: ${state.activeIteration}`);
     console.log(nextAction);
@@ -6557,7 +6046,7 @@ function draftWithState(args, state) {
     return 0;
   }
 
-  syncGateAInterviewMarkdown(files, intake, artifactRoot);
+  syncGateAScopeMarkdown(files, intake, artifactRoot);
   let spec = baselineSpecRef
     ? buildDeltaSpec({
         projectId,
@@ -6612,7 +6101,7 @@ function draftWithState(args, state) {
   if (preflight.detected) {
     console.log(`- Feature Radar preflight: ${featureRadarSummary(preflight)}`);
   }
-  console.log('Gate A/B artifacts validated; Gate C/D are still pending.');
+  console.log('Gate A/B artifacts validated; Gate C task graph validation is still pending.');
   return 0;
 }
 

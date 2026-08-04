@@ -9,7 +9,7 @@ Create a development-ready product and implementation specification from approve
 
 ## Inputs
 
-- `intake_json` with `status: ready_for_spec`; when `interview` is present, it must also have `interview.state: gate_a_confirmed` and a valid Gate A `approval_audit`.
+- `intake_json` with `status: ready_for_spec` and a valid Gate A `approval_audit`. Treat a legacy `interview` object as opaque compatibility data; do not use it to route or block Gate B.
 - User answers for every high-impact `needs_user_decision`.
 - Explicit constraints and non-goals.
 - Optional `intake_json.baseline_context` with an immutable baseline `spec_ref`/`spec_sha256` and prior answers/question dispositions that may be reused when the current change does not affect them.
@@ -108,7 +108,7 @@ For iterative Gate B synthesis, inspect `intake_json.baseline_context` before ge
 - Reuse a prior answer or disposition when the current change does not affect its recorded scope.
 - Preserve `source_intake` or `source_spec` provenance in the explanation and evidence.
 - If the current interview explicitly overrides a prior answer, prefer the current answer and state the conflict and resolution. Do not mutate or silently replace the baseline record.
-- Apply `intake_json.interview.spec_updates` deterministically to the complete baseline-shaped spec: `append` adds unique values, `replace` replaces the canonical field, and `remove` deletes the named values. Reject an update that leaves the field unchanged; a `canonical_effect: preserve_baseline` answer has empty `affected_fields` and emits no update, while `canonical_effect: change` must have affected fields and updates. Treat both `source_question_ids` and `source_dimension_ids` as provenance only; do not infer merge semantics again from free-form answer or dimension summary text.
+- Treat the approved intake as scope evidence, not as a patch language. Build the complete baseline-shaped spec from the confirmed scope and validated baseline, preserve explicit exclusions and unresolved decisions, and record material changes in the spec's own canonical fields and evidence.
 - Generate a new question only for changed or newly ambiguous scope. Do not re-ask an already answered baseline question merely because a new iteration started.
 - Keep the canonical `p2a.spec.v1` full-shaped for compatibility. In iterative Markdown review views, show the delta and affected fields first and omit unchanged baseline values, while making clear that `spec.json` remains complete.
 
@@ -161,7 +161,7 @@ Suggested Korean section labels for implementation plans: 아키텍처, 인터�
 
 ## Approval Contract
 
-- Do not start Gate B when interview-aware Gate A lacks explicit confirmation or `intake_json.approval_audit`.
+- Do not start Gate B when Gate A lacks `status: ready_for_spec` or `intake_json.approval_audit`. Ignore legacy `interview` state when making that decision.
 - Use `approval: draft` until the user explicitly approves the product and implementation spec.
 - Use `approval: approved` only when every intake `CQ-n` is disposed, promoted decisions are resolved, `open_decisions` is empty, and the user has approved the spec.
 - When `approval: approved`, include `spec_json.approval_audit` with `approved_by`, `approved_at`, `approved_artifacts`, and `approval_note`. Use `approved_artifacts: ["gate-b-spec/spec.json"]` for a greenfield Gate B bundle unless a more specific project-relative JSON path is known.

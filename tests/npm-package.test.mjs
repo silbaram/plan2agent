@@ -68,7 +68,7 @@ test('checkout init preserves the legacy co-located runtime', () => {
 
     const next = runEmbedded(targetRoot, ['next', '--json']);
     assert.equal(next.status, 0, formatCommandResult(next));
-    assert.equal(JSON.parse(next.stdout).state, 'initialized_without_artifacts');
+    assert.equal(JSON.parse(next.stdout).state, 'entry_missing');
 
     const doctor = runEmbedded(targetRoot, ['doctor', '--json']);
     assert.equal(doctor.status, 0, formatCommandResult(doctor));
@@ -124,7 +124,7 @@ test('checkout init preserves the legacy co-located runtime', () => {
 
     const nestedNext = runEmbedded(nestedRoot, ['next', '--json']);
     assert.equal(nestedNext.status, 0, formatCommandResult(nestedNext));
-    assert.equal(JSON.parse(nestedNext.stdout).state, 'initialized_without_artifacts');
+    assert.equal(JSON.parse(nestedNext.stdout).state, 'entry_missing');
 
     const embeddedArtifactRoot = path.join(
       targetRoot,
@@ -140,7 +140,7 @@ test('checkout init preserves the legacy co-located runtime', () => {
     const embeddedNext = runEmbedded(targetRoot, ['next', '--json']);
     assert.equal(embeddedNext.status, 0, formatCommandResult(embeddedNext));
     const embeddedNextPayload = JSON.parse(embeddedNext.stdout);
-    assert.equal(embeddedNextPayload.state, 'gate_d_passed_needs_iteration_init');
+    assert.equal(embeddedNextPayload.state, 'gate_c_validated_needs_iteration_init');
     assert.match(
       embeddedNextPayload.command.display,
       /^node \.plan2agent\/scripts\/p2a\.mjs iteration init /,

@@ -224,82 +224,19 @@ const DISCOVERY_FIXTURE_ANSWERS = {
   'CQ-3': 'Add operations users while preserving existing webhook integrations and signature compatibility.',
 };
 
-const DISCOVERY_FIXTURE_SUMMARIES = {
-  target_users: 'Operations users monitor delivery status from the dashboard.',
-  core_problem: 'Operators cannot currently see delivery status without inspecting raw events.',
-  expected_outcome: 'Delivery status becomes visible within five seconds.',
-  mvp_scope: 'The MVP contains the operator delivery-status dashboard only.',
-  non_goals: 'CSV export and historical analytics remain out of scope.',
-  success_criteria: 'Contract tests verify status visibility within five seconds.',
-  constraints_and_risks: 'Existing webhook behavior and signature verification must not regress.',
-  integrations_and_compatibility: 'Existing webhook integrations and signature contracts remain compatible.',
-};
-
 const DISCOVERY_FIXTURE_DECISION_ANSWER = 'Operations leads are the approved dashboard audience.';
 
-const DISCOVERY_FIXTURE_AFFECTED_FIELDS = {
-  target_users: ['spec.product.target_users'],
-  core_problem: ['spec.product.problem'],
-  expected_outcome: ['spec.product.success_criteria', 'spec.implementation.verification'],
-  mvp_scope: ['spec.product.goals', 'spec.product.core_flows'],
-  non_goals: ['spec.product.non_goals'],
-  success_criteria: ['spec.product.success_criteria', 'spec.implementation.verification'],
-  constraints_and_risks: ['spec.product.constraints', 'spec.implementation.edge_cases'],
-  integrations_and_compatibility: [
-    'spec.product.external_integrations',
-    'spec.implementation.interfaces',
-  ],
-};
-
-function discoverySpecUpdates(intake) {
-  const updates = new Map();
-  function addSource(field, value, sourceField, sourceId) {
-    const existing = updates.get(field) ?? {
-      field,
-      operation: field === 'spec.product.target_users' ? 'replace' : 'append',
-      values: [],
-      source_question_ids: [],
-      source_dimension_ids: [],
-    };
-    existing.values = [...new Set([...existing.values, value])];
-    existing[sourceField] = [...new Set([...existing[sourceField], sourceId])];
-    updates.set(field, existing);
-  }
-  for (const dimension of intake.interview?.discovery_dimensions ?? []) {
-    if (dimension.status === 'open') continue;
-    for (const field of dimension.affected_fields ?? []) {
-      addSource(field, dimension.summary, 'source_dimension_ids', dimension.dimension);
-    }
-  }
-  const questions = [
-    ...(intake.clarifying_questions ?? []).filter((item) => (
-      ['answered', 'assumed', 'not_applicable'].includes(item.status)
-    )),
-    ...(intake.needs_user_decision ?? []).filter((item) => item.status === 'answered'),
-  ];
-  for (const source of questions) {
-    for (const field of source.affected_fields ?? source.blocks ?? []) {
-      addSource(field, source.answer, 'source_question_ids', source.id);
-    }
-  }
-  return [...updates.values()];
-}
-
-function confirmDiscoveryIntake(intakePath, approvedArtifactRef, contentSuffix = '') {
+function confirmScopeIntake(intakePath, approvedArtifactRef, contentSuffix = '') {
   const intake = JSON.parse(readFileSync(intakePath, 'utf8'));
   intake.clarifying_questions = (intake.clarifying_questions ?? []).map((question) => ({
     ...question,
     status: 'answered',
     answer: `${DISCOVERY_FIXTURE_ANSWERS[question.id] ?? `Fixture answer for ${question.id}`}${contentSuffix}`,
-    affected_fields: [...question.blocks],
-    canonical_effect: 'change',
   }));
   intake.needs_user_decision = (intake.needs_user_decision ?? []).map((decision) => ({
     ...decision,
     status: 'answered',
     answer: `${decision.answer ?? decision.default}${contentSuffix}`,
-    affected_fields: [...(decision.blocks ?? [])],
-    canonical_effect: 'change',
   }));
   intake.needs_user_decision.push({
     id: 'ND-1',
@@ -318,40 +255,16 @@ function confirmDiscoveryIntake(intakePath, approvedArtifactRef, contentSuffix =
     ],
     impact: 'Changes the canonical target user and success criteria.',
     blocks: ['spec.product.target_users', 'spec.product.success_criteria'],
-    affected_fields: ['spec.product.target_users', 'spec.product.success_criteria'],
-    canonical_effect: 'change',
     default: 'operations-leads',
     status: 'answered',
     answer: `${DISCOVERY_FIXTURE_DECISION_ANSWER}${contentSuffix}`,
   });
-  intake.interview = {
-    ...intake.interview,
-    state: 'gate_a_confirmed',
-    round: Math.max(2, intake.interview.round),
-    no_progress_rounds: 0,
-    discovery_dimensions: intake.interview.discovery_dimensions.map((dimension) => ({
-      ...dimension,
-      status: 'confirmed',
-      summary: `${DISCOVERY_FIXTURE_SUMMARIES[dimension.dimension] ?? `Fixture confirmed ${dimension.dimension}.`}${contentSuffix}`,
-      affected_fields: [...DISCOVERY_FIXTURE_AFFECTED_FIELDS[dimension.dimension]],
-    })),
-    asked_question_ids: [
-      ...new Set([
-        ...intake.interview.asked_question_ids,
-        ...intake.needs_user_decision.map((decision) => decision.id),
-      ]),
-    ],
-    current_question_ids: [],
-    has_unasked_high_impact_questions: false,
-    new_blocker: false,
-    stop_reason: 'readiness',
-  };
-  intake.interview.spec_updates = discoverySpecUpdates(intake);
+  delete intake.interview;
   intake.approval_audit = {
     approved_by: 'user',
     approved_at: '2026-07-29',
     approved_artifacts: [approvedArtifactRef],
-    approval_note: 'Fixture user explicitly confirmed the Gate A understanding summary.',
+    approval_note: 'Fixture user explicitly approved the Gate A scope.',
   };
   intake.status = 'ready_for_spec';
   writeFileSync(intakePath, `${JSON.stringify(intake, null, 2)}\n`, 'utf8');
@@ -481,7 +394,7 @@ function validateScaffoldFixtureCase() {
     const config = JSON.parse(readFileSync(path.join(targetRoot, '.plan2agent', 'project.config.json'), 'utf8'));
     const claudeSettings = JSON.parse(readFileSync(path.join(targetRoot, '.claude', 'settings.json'), 'utf8'));
     const claudeLocalSettings = JSON.parse(readFileSync(path.join(targetRoot, '.claude', 'settings.local.json'), 'utf8'));
-    const codexQualityReviewer = readFileSync(path.join(targetRoot, '.codex', 'agents', 'p2a-quality-reviewer.toml'), 'utf8');
+    const codexHeavyWebAgent = readFileSync(path.join(targetRoot, '.codex', 'agents', 'p2a-implementation-planner.toml'), 'utf8');
     const gitignore = readFileSync(path.join(targetRoot, '.gitignore'), 'utf8');
     const gitignoreLines = new Set(gitignore.split(/\r?\n/));
     const expectedSandboxEnabled = process.platform === 'darwin' || process.platform === 'linux';
@@ -499,9 +412,9 @@ function validateScaffoldFixtureCase() {
       || manifest.aiToolTargets.join(',') !== 'codex,claude,gemini'
       || manifest.codexAgentProfile?.name !== 'quality'
       || manifest.codexAgentProfile?.model !== 'gpt-5.6-sol'
-      || !/^model\s*=\s*"gpt-5\.6-sol"\s*$/m.test(codexQualityReviewer)
-      || !/^model_reasoning_effort\s*=\s*"max"\s*$/m.test(codexQualityReviewer)
-      || !/^web_search\s*=\s*"live"\s*$/m.test(codexQualityReviewer)
+      || !/^model\s*=\s*"gpt-5\.6-sol"\s*$/m.test(codexHeavyWebAgent)
+      || !/^model_reasoning_effort\s*=\s*"max"\s*$/m.test(codexHeavyWebAgent)
+      || !/^web_search\s*=\s*"live"\s*$/m.test(codexHeavyWebAgent)
       || config.projectId !== 'target-project'
       || config.testCommand !== null
       || config.verificationTimeoutMs !== 600000
@@ -535,18 +448,18 @@ function validateScaffoldFixtureCase() {
     const inheritManifest = result.status === 0
       ? JSON.parse(readFileSync(path.join(inheritProfileRoot, '.plan2agent', 'manifest.json'), 'utf8'))
       : null;
-    const inheritReviewerPath = path.join(inheritProfileRoot, '.codex', 'agents', 'p2a-quality-reviewer.toml');
-    const inheritReviewer = existsSync(inheritReviewerPath) ? readFileSync(inheritReviewerPath, 'utf8') : '';
+    const inheritAgentPath = path.join(inheritProfileRoot, '.codex', 'agents', 'p2a-implementation-planner.toml');
+    const inheritAgent = existsSync(inheritAgentPath) ? readFileSync(inheritAgentPath, 'utf8') : '';
     if (
       result.status !== 0
       || inheritManifest?.codexAgentProfile?.name !== 'inherit'
-      || /^model\s*=/m.test(inheritReviewer)
-      || /^model_reasoning_effort\s*=/m.test(inheritReviewer)
-      || !/^web_search\s*=\s*"live"\s*$/m.test(inheritReviewer)
+      || /^model\s*=/m.test(inheritAgent)
+      || /^model_reasoning_effort\s*=/m.test(inheritAgent)
+      || !/^web_search\s*=\s*"live"\s*$/m.test(inheritAgent)
     ) {
       console.error('Codex inherit profile scaffold fixture failed');
       writeResultOutput(result);
-      console.error(JSON.stringify({ codexAgentProfile: inheritManifest?.codexAgentProfile, inheritReviewer }, null, 2));
+      console.error(JSON.stringify({ codexAgentProfile: inheritManifest?.codexAgentProfile, inheritAgent }, null, 2));
       return { status: failureStatus(result), checks };
     }
 
@@ -568,21 +481,21 @@ function validateScaffoldFixtureCase() {
       return { status: failureStatus(result), checks };
     }
 
-    unlinkSync(inheritReviewerPath);
+    unlinkSync(inheritAgentPath);
     result = runHandoff(['update', '--target', inheritProfileRoot, '--apply']);
     checks += 1;
-    const restoredInheritReviewer = existsSync(inheritReviewerPath) ? readFileSync(inheritReviewerPath, 'utf8') : '';
+    const restoredInheritAgent = existsSync(inheritAgentPath) ? readFileSync(inheritAgentPath, 'utf8') : '';
     const restoredInheritManifest = JSON.parse(readFileSync(path.join(inheritProfileRoot, '.plan2agent', 'manifest.json'), 'utf8'));
     if (
       result.status !== 0
       || restoredInheritManifest.codexAgentProfile?.name !== 'inherit'
-      || /^model\s*=/m.test(restoredInheritReviewer)
-      || /^model_reasoning_effort\s*=/m.test(restoredInheritReviewer)
-      || !/^web_search\s*=\s*"live"\s*$/m.test(restoredInheritReviewer)
+      || /^model\s*=/m.test(restoredInheritAgent)
+      || /^model_reasoning_effort\s*=/m.test(restoredInheritAgent)
+      || !/^web_search\s*=\s*"live"\s*$/m.test(restoredInheritAgent)
     ) {
       console.error('Codex inherit profile update restore fixture failed');
       writeResultOutput(result);
-      console.error(JSON.stringify({ codexAgentProfile: restoredInheritManifest.codexAgentProfile, restoredInheritReviewer }, null, 2));
+      console.error(JSON.stringify({ codexAgentProfile: restoredInheritManifest.codexAgentProfile, restoredInheritAgent }, null, 2));
       return { status: failureStatus(result), checks };
     }
 
@@ -879,7 +792,6 @@ function validateScaffoldFixtureCase() {
       || initArtifact?.spec?.openDecisions !== 0
       || initArtifact?.taskGraph?.taskCounts?.total !== 4
       || initArtifact?.taskGraph?.taskCounts?.ready !== 1
-      || initArtifact?.review?.blockingIssues !== 0
       || !initDoctorReport.projectState?.commands?.find((command) => command.id === 'init_iteration')?.command?.includes('p2a iteration init')
     ) {
       console.error('p2a_doctor did not summarize greenfield scaffold artifacts');
@@ -942,7 +854,7 @@ function validateScaffoldFixtureCase() {
     const movedPartialIterationRoot = path.join(movedPartialArtifactRoot, 'iterations', 'v1-mvp');
     cpSync(path.join(E2E_FIXTURE_ROOT, 'webhook-api-service'), movedPartialArtifactRoot, { recursive: true });
     mkdirSync(movedPartialIterationRoot, { recursive: true });
-    for (const gate of ['gate-a-intake', 'gate-b-spec', 'gate-c-task-graph', 'gate-d-review']) {
+    for (const gate of ['gate-a-intake', 'gate-b-spec', 'gate-c-task-graph']) {
       renameSync(path.join(movedPartialArtifactRoot, gate), path.join(movedPartialIterationRoot, gate));
     }
     result = runTargetExecute(targetRoot, ['plan', '--task', 'task-001']);
@@ -2773,7 +2685,7 @@ function validateMemoryFixtureCases() {
 }
 
 function assertAbsoluteStatePaths(state) {
-  for (const key of ['artifactRoot', 'statusPath', 'iterationRoot', 'currentSpecPath', 'effectiveSpecPath', 'specPath', 'taskGraphPath', 'reviewPath']) {
+  for (const key of ['artifactRoot', 'statusPath', 'iterationRoot', 'currentSpecPath', 'effectiveSpecPath', 'specPath', 'taskGraphPath']) {
     if (!path.isAbsolute(state[key])) {
       throw new Error(`current --json ${key} must be absolute, got ${JSON.stringify(state[key])}`);
     }
@@ -2979,11 +2891,9 @@ function validateIterationCurrentFixtureCases() {
       const markdownOnlyRoot = path.join(tempRoot, 'markdown-only-gate-root');
       mkdirSync(path.join(markdownOnlyRoot, 'gate-a-intake'), { recursive: true });
       mkdirSync(path.join(markdownOnlyRoot, 'gate-b-spec'), { recursive: true });
-      mkdirSync(path.join(markdownOnlyRoot, 'gate-d-review'), { recursive: true });
       cpSync(path.join(artifactRoot, 'gate-a-intake', 'intake.json'), path.join(markdownOnlyRoot, 'gate-a-intake', 'intake.json'));
       writeFileSync(path.join(markdownOnlyRoot, 'gate-b-spec', 'product-spec.md'), '# generated product spec view\n', 'utf8');
       writeFileSync(path.join(markdownOnlyRoot, 'gate-b-spec', 'implementation-plan.md'), '# generated implementation plan view\n', 'utf8');
-      writeFileSync(path.join(markdownOnlyRoot, 'gate-d-review', 'review-report.md'), '# generated review view\n', 'utf8');
       result = runValidator(['--artifact-root', markdownOnlyRoot, '--project-id', caseData.project_id]);
       checks += 1;
       if (result.status !== 0 || !result.stdout.includes('artifact validation passed')) {
@@ -5678,8 +5588,6 @@ function validateIterationCurrentFixtureCases() {
       for (const task of updatedTaskGraph.tasks) task.status = 'done';
       writeFileSync(state.taskGraphPath, `${JSON.stringify(updatedTaskGraph, null, 2)}\n`, 'utf8');
       const closedBaselineTaskGraph = JSON.parse(JSON.stringify(updatedTaskGraph));
-      const closedBaselineReviewPath = state.reviewPath;
-      const closedBaselineReviewReportPath = path.join(path.dirname(state.reviewPath), 'review-report.md');
       result = runIteration(['validate', '--artifacts', artifactRoot, '--require-close-ready']);
       checks += 1;
       if (result.status !== 0 || !result.stdout.includes('close-ready: all tasks done')) {
@@ -5736,7 +5644,7 @@ function validateIterationCurrentFixtureCases() {
         return { status: failureStatus(result), checks };
       }
 
-      const lateArtifactRef = 'iterations/v1-mvp/gate-d-review/late-note.md';
+      const lateArtifactRef = 'iterations/v1-mvp/gate-c-task-graph/late-note.md';
       const lateArtifactPath = path.join(artifactRoot, lateArtifactRef);
       const auditCurrentSpec = JSON.parse(readFileSync(state.currentSpecPath, 'utf8'));
       auditCurrentSpec.closed_iterations[0].artifact_hashes[lateArtifactRef] = { present: false, sha256: null };
@@ -5793,7 +5701,7 @@ function validateIterationCurrentFixtureCases() {
       checks += 1;
       const openValidateOutput = `${result.stdout ?? ''}${result.stderr ?? ''}`;
       if (result.status === 0 || !openValidateOutput.includes('gate-b-spec/spec.json')) {
-        console.error(`iteration validate did not reject open skeleton without Gate B-D artifacts: ${caseData.id}`);
+        console.error(`iteration validate did not reject open skeleton without Gate B/C artifacts: ${caseData.id}`);
         writeResultOutput(result);
         return { status: 1, checks };
       }
@@ -5801,8 +5709,8 @@ function validateIterationCurrentFixtureCases() {
       writeFeatureRadarPreflightFixture(artifactRoot);
       result = runIteration(['draft', '--artifacts', artifactRoot]);
       checks += 1;
-      if (result.status !== 0 || !result.stdout.includes('Gate A interview ready') || !result.stdout.includes('Feature Radar preflight')) {
-        console.error(`iteration Gate A interview draft fixture check failed: ${caseData.id}`);
+      if (result.status !== 0 || !result.stdout.includes('Gate A scope confirmation required') || !result.stdout.includes('Feature Radar preflight')) {
+        console.error(`iteration Gate A scope draft fixture check failed: ${caseData.id}`);
         writeResultOutput(result);
         return { status: failureStatus(result), checks };
       }
@@ -5810,25 +5718,20 @@ function validateIterationCurrentFixtureCases() {
       const draftIntakePath = path.join(artifactRoot, 'iterations', 'iter-002', 'gate-a-intake', 'intake.json');
       const draftIntakeViewPath = path.join(artifactRoot, 'iterations', 'iter-002', 'gate-a-intake', 'intake.md');
       const draftSpecPath = path.join(artifactRoot, 'iterations', 'iter-002', 'gate-b-spec', 'spec.json');
-      const interviewDraft = JSON.parse(readFileSync(draftIntakePath, 'utf8'));
-      const targetUsersDimension = interviewDraft.interview?.discovery_dimensions
-        .find((item) => item.dimension === 'target_users');
-      const baselineDeltaQuestion = interviewDraft.clarifying_questions
+      const scopeDraft = JSON.parse(readFileSync(draftIntakePath, 'utf8'));
+      const baselineDeltaQuestion = scopeDraft.clarifying_questions
         .find((item) => item.id === 'CQ-3');
       if (
         existsSync(draftSpecPath)
-        || interviewDraft.interview?.state !== 'interview_active'
-        || interviewDraft.interview.current_question_ids.length < 1
-        || interviewDraft.interview.current_question_ids.length > 3
-        || !interviewDraft.baseline_context
-        || !interviewDraft.baseline_context.reused_answers.length
-        || !interviewDraft.baseline_context.reused_question_dispositions.length
-        || !targetUsersDimension?.summary.includes('Baseline target users')
+        || Object.hasOwn(scopeDraft, 'interview')
+        || !scopeDraft.baseline_context
+        || !scopeDraft.baseline_context.reused_answers.length
+        || !scopeDraft.baseline_context.reused_question_dispositions.length
         || !baselineDeltaQuestion?.question.includes('baseline')
         || existsSync(draftIntakeViewPath)
       ) {
-        console.error(`iteration Gate A interview draft did not enforce silent JSON-only persistence or baseline reuse context: ${caseData.id}`);
-        console.error(JSON.stringify(interviewDraft, null, 2));
+        console.error(`iteration Gate A scope draft did not enforce silent JSON-only persistence or baseline reuse context: ${caseData.id}`);
+        console.error(JSON.stringify(scopeDraft, null, 2));
         return { status: 1, checks };
       }
       result = runIteration([
@@ -5836,7 +5739,7 @@ function validateIterationCurrentFixtureCases() {
         '--artifacts',
         artifactRoot,
         '--idea',
-        'A different idea that was not interviewed',
+        'A different idea that was not approved',
       ]);
       checks += 1;
       if (
@@ -5850,18 +5753,18 @@ function validateIterationCurrentFixtureCases() {
       const intakeAfterRejectedIdea = JSON.parse(readFileSync(draftIntakePath, 'utf8'));
       const currentSpecAfterRejectedIdea = JSON.parse(readFileSync(path.join(artifactRoot, 'current-spec.json'), 'utf8'));
       if (
-        intakeAfterRejectedIdea.idea !== interviewDraft.idea
-        || currentSpecAfterRejectedIdea.pending_iteration?.idea !== interviewDraft.idea
+        intakeAfterRejectedIdea.idea !== scopeDraft.idea
+        || currentSpecAfterRejectedIdea.pending_iteration?.idea !== scopeDraft.idea
       ) {
         console.error(`rejected draft idea mutated Gate A/current-spec state: ${caseData.id}`);
         console.error(JSON.stringify({
           intakeIdea: intakeAfterRejectedIdea.idea,
           pendingIdea: currentSpecAfterRejectedIdea.pending_iteration?.idea,
-          expected: interviewDraft.idea,
+          expected: scopeDraft.idea,
         }, null, 2));
         return { status: 1, checks };
       }
-      confirmDiscoveryIntake(
+      confirmScopeIntake(
         draftIntakePath,
         'iterations/iter-002/gate-a-intake/intake.json',
       );
@@ -5892,16 +5795,15 @@ function validateIterationCurrentFixtureCases() {
         return { status: 1, checks };
       }
       if (
-        !draftSpec.product.target_users.some((item) => item.includes(DISCOVERY_FIXTURE_SUMMARIES.target_users))
-        || !draftSpec.product.target_users.some((item) => item.includes(DISCOVERY_FIXTURE_DECISION_ANSWER))
+        !draftSpec.product.target_users.some((item) => item.includes(DISCOVERY_FIXTURE_DECISION_ANSWER))
         || !draftSpec.product.success_criteria.some((item) => item.includes(DISCOVERY_FIXTURE_ANSWERS['CQ-1']))
         || !draftSpec.product.success_criteria.some((item) => item.includes(DISCOVERY_FIXTURE_DECISION_ANSWER))
         || !draftSpec.product.goals.some((item) => item.includes(DISCOVERY_FIXTURE_ANSWERS['CQ-2']))
         || !draftSpec.product.external_integrations.some((item) => item.includes(DISCOVERY_FIXTURE_ANSWERS['CQ-3']))
         || !draftSpec.implementation.verification.some((item) => item.includes(DISCOVERY_FIXTURE_ANSWERS['CQ-1']))
-        || !draftSpec.implementation.interfaces.some((item) => item.includes(DISCOVERY_FIXTURE_SUMMARIES.integrations_and_compatibility))
+        || !draftSpec.implementation.interfaces.some((item) => item.includes(DISCOVERY_FIXTURE_ANSWERS['CQ-3']))
       ) {
-        console.error(`iteration Gate B draft dropped confirmed Gate A interview content: ${caseData.id}`);
+        console.error(`iteration Gate B draft dropped approved Gate A scope content: ${caseData.id}`);
         console.error(JSON.stringify({ product: draftSpec.product, implementation: draftSpec.implementation }, null, 2));
         return { status: 1, checks };
       }
@@ -6001,8 +5903,6 @@ function validateIterationCurrentFixtureCases() {
       writeFileSync(draftSpecPath, `${JSON.stringify(approvedDraftSpec, null, 2)}\n`, 'utf8');
       const iter2TaskGraphPath = path.join(artifactRoot, 'iterations', 'iter-002', 'gate-c-task-graph', 'task-graph.json');
       const iter2DraftPath = path.join(artifactRoot, 'iterations', 'iter-002', 'gate-c-task-graph', 'task-graph.draft.json');
-      const iter2ReviewPath = path.join(artifactRoot, 'iterations', 'iter-002', 'gate-d-review', 'review.json');
-      const iter2ReviewReportPath = path.join(artifactRoot, 'iterations', 'iter-002', 'gate-d-review', 'review-report.md');
 
       result = runIteration(['promote-spec', '--artifacts', artifactRoot]);
       checks += 1;
@@ -6076,10 +5976,6 @@ function validateIterationCurrentFixtureCases() {
         'promote-tasks',
         '--artifacts',
         artifactRoot,
-        '--approved-by',
-        'user',
-        '--approval-note',
-        'Fixture reviewed the semantic diff Gate C draft task graph.',
       ]);
       checks += 1;
       if (
@@ -6138,10 +6034,6 @@ function validateIterationCurrentFixtureCases() {
         '--artifacts',
         artifactRoot,
         '--replace-existing',
-        '--approved-by',
-        'user',
-        '--approval-note',
-        'Fixture must reject replacement after execution starts.',
       ]);
       checks += 1;
       const nonTodoPromotionOutput = `${result.stdout ?? ''}${result.stderr ?? ''}`;
@@ -6213,23 +6105,10 @@ function validateIterationCurrentFixtureCases() {
       }
       writeFileSync(replacementHistoryIndexPath, replacementHistoryIndexBefore, 'utf8');
 
-	      result = runIteration(['promote-tasks', '--artifacts', artifactRoot, '--replace-existing']);
-	      checks += 1;
-	      const staleGateCAuditOutput = `${result.stdout ?? ''}${result.stderr ?? ''}`;
-	      if (result.status === 0 || !staleGateCAuditOutput.includes('does not match current task-graph.draft.json')) {
-	        console.error(`iteration promote-tasks reused stale Gate C audit for regenerated draft: ${caseData.id}`);
-	        writeResultOutput(result);
-	        return { status: 1, checks };
-	      }
-
-	      result = runIteration([
-	        'promote-tasks',
-	        '--artifacts',
+      result = runIteration([
+        'promote-tasks',
+        '--artifacts',
         artifactRoot,
-        '--approved-by',
-        'user',
-        '--approval-note',
-        'Fixture reviewed regenerated semantic diff task graph.',
       ]);
       checks += 1;
       const replaceExistingGuardOutput = `${result.stdout ?? ''}${result.stderr ?? ''}`;
@@ -6244,15 +6123,11 @@ function validateIterationCurrentFixtureCases() {
         return { status: 1, checks };
       }
 
-	      result = runIteration([
-	        'promote-tasks',
-	        '--artifacts',
+      result = runIteration([
+        'promote-tasks',
+        '--artifacts',
         artifactRoot,
         '--replace-existing',
-        '--approved-by',
-        'user',
-        '--approval-note',
-        'Fixture reviewed regenerated semantic diff task graph.',
       ]);
       checks += 1;
       if (
@@ -6268,17 +6143,10 @@ function validateIterationCurrentFixtureCases() {
       iter2TaskGraph = JSON.parse(readFileSync(iter2TaskGraphPath, 'utf8'));
       for (const task of iter2TaskGraph.tasks) task.status = 'done';
       writeFileSync(iter2TaskGraphPath, `${JSON.stringify(iter2TaskGraph, null, 2)}\n`, 'utf8');
-      cpSync(closedBaselineReviewPath, iter2ReviewPath);
-      cpSync(closedBaselineReviewReportPath, iter2ReviewReportPath);
-      const iter2Review = JSON.parse(readFileSync(iter2ReviewPath, 'utf8'));
-      iter2Review.sourceSpec = '../gate-b-spec/spec.json';
-      iter2Review.sourceTaskGraph = '../gate-c-task-graph/task-graph.json';
-      writeFileSync(iter2ReviewPath, `${JSON.stringify(iter2Review, null, 2)}\n`, 'utf8');
-
       result = runIteration(['validate', '--artifacts', artifactRoot, '--require-close-ready']);
       checks += 1;
       if (result.status !== 0 || !result.stdout.includes('close-ready: all tasks done')) {
-        console.error(`iteration validate did not accept approved Gate A-D iter-002 fixture: ${caseData.id}`);
+        console.error(`iteration validate did not accept validated Gate A-C iter-002 fixture: ${caseData.id}`);
         writeResultOutput(result);
         return { status: failureStatus(result), checks };
       }
@@ -8878,25 +8746,25 @@ function validateIterationCurrentFixtureCases() {
 
       result = runIteration(['draft', '--artifacts', artifactRoot]);
       checks += 1;
-      if (result.status !== 0 || !result.stdout.includes('Gate A interview ready')) {
-        console.error(`iteration Gate A interview draft from composed current-spec fixture check failed: ${caseData.id}`);
+      if (result.status !== 0 || !result.stdout.includes('Gate A scope confirmation required')) {
+        console.error(`iteration Gate A scope draft from composed current-spec fixture check failed: ${caseData.id}`);
         writeResultOutput(result);
         return { status: failureStatus(result), checks };
       }
 
       const iter3SpecPath = path.join(artifactRoot, 'iterations', 'iter-003', 'gate-b-spec', 'spec.json');
       const iter3IntakePath = path.join(artifactRoot, 'iterations', 'iter-003', 'gate-a-intake', 'intake.json');
-      const iter3Interview = JSON.parse(readFileSync(iter3IntakePath, 'utf8'));
+      const iter3Scope = JSON.parse(readFileSync(iter3IntakePath, 'utf8'));
       if (
         existsSync(iter3SpecPath)
-        || iter3Interview.interview?.state !== 'interview_active'
-        || !iter3Interview.baseline_context?.reused_answers.length
+        || Object.hasOwn(iter3Scope, 'interview')
+        || !iter3Scope.baseline_context?.reused_answers.length
       ) {
-        console.error(`composed baseline Gate A interview did not preserve reusable answer provenance: ${caseData.id}`);
-        console.error(JSON.stringify(iter3Interview, null, 2));
+        console.error(`composed baseline Gate A scope did not preserve reusable answer provenance: ${caseData.id}`);
+        console.error(JSON.stringify(iter3Scope, null, 2));
         return { status: 1, checks };
       }
-      confirmDiscoveryIntake(
+      confirmScopeIntake(
         iter3IntakePath,
         'iterations/iter-003/gate-a-intake/intake.json',
         ' Iteration 3 refines this for composed baseline reporting.',
@@ -9127,10 +8995,6 @@ function validateIterationCurrentFixtureCases() {
         'promote-tasks',
         '--artifacts',
         artifactRoot,
-        '--approved-by',
-        'user',
-        '--approval-note',
-        'Fixture must reject a draft that fabricates execution status.',
       ]);
       checks += 1;
       const preExecutedDraftOutput = `${result.stdout ?? ''}${result.stderr ?? ''}`;
@@ -9147,28 +9011,6 @@ function validateIterationCurrentFixtureCases() {
       writeFileSync(iter3DraftPath, `${JSON.stringify(iter3Draft, null, 2)}\n`, 'utf8');
 
       result = runIteration(['promote-tasks', '--artifacts', artifactRoot]);
-      checks += 1;
-      const promoteTasksNoAuditOutput = `${result.stdout ?? ''}${result.stderr ?? ''}`;
-      if (
-        result.status === 0
-        || !promoteTasksNoAuditOutput.includes('Gate C approval audit required in current-spec.json')
-        || existsSync(iter3TaskGraphPath)
-        || !existsSync(iter3DraftPath)
-      ) {
-        console.error(`iteration promote-tasks missing audit fixture check failed: ${caseData.id}`);
-        writeResultOutput(result);
-        return { status: 1, checks };
-      }
-
-      result = runIteration([
-        'promote-tasks',
-        '--artifacts',
-        artifactRoot,
-        '--approved-by',
-        'user',
-        '--approval-note',
-        'Fixture reviewed the Gate C draft task graph.',
-      ]);
       checks += 1;
       const promotedDraftPath = `${iter3DraftPath}.promoted`;
       if (
@@ -9196,14 +9038,21 @@ function validateIterationCurrentFixtureCases() {
         console.error(JSON.stringify(promotedTaskGraph, null, 2));
         return { status: 1, checks };
       }
+      const promotedStatus = readFileSync(path.join(artifactRoot, 'status.md'), 'utf8');
+      if (
+        !promotedStatus.includes('Progress: [scope:approved] -> [spec:approved] -> [plan:valid]')
+        || !promotedStatus.includes(`- 상태: ${promotedTaskGraph.tasks.length} task(s)`)
+      ) {
+        console.error(`iteration promote-tasks left status.md in a pending Gate C state: ${caseData.id}`);
+        console.error(promotedStatus);
+        return { status: 1, checks };
+      }
       const iter3DraftMeta = existsSync(iter3DraftMetaPath) ? JSON.parse(readFileSync(iter3DraftMetaPath, 'utf8')) : null;
       if (
         !iter3DraftMeta
         || iter3DraftMeta.schema_version !== 'p2a.task_graph_draft_meta.v1'
         || iter3DraftMeta.iteration_id !== 'iter-003'
         || typeof iter3DraftMeta.draft_sha256 !== 'string'
-        || iter3DraftMeta.gate_c_approval_audit?.approved_by !== 'user'
-        || iter3DraftMeta.gate_c_approval_audit?.approval_note !== 'Fixture reviewed the Gate C draft task graph.'
       ) {
         console.error(`iteration promote-tasks did not write provenance sidecar: ${caseData.id}`);
         console.error(JSON.stringify(iter3DraftMeta, null, 2));
@@ -9231,27 +9080,6 @@ function validateIterationCurrentFixtureCases() {
         `${JSON.stringify(closeReadyIter3TaskGraph, null, 2)}\n`,
         'utf8',
       );
-      const iter3ReviewPath = path.join(
-        artifactRoot,
-        'iterations',
-        'iter-003',
-        'gate-d-review',
-        'review.json',
-      );
-      const iter3ReviewReportPath = path.join(
-        artifactRoot,
-        'iterations',
-        'iter-003',
-        'gate-d-review',
-        'review-report.md',
-      );
-      cpSync(closedBaselineReviewPath, iter3ReviewPath);
-      cpSync(closedBaselineReviewReportPath, iter3ReviewReportPath);
-      const iter3Review = JSON.parse(readFileSync(iter3ReviewPath, 'utf8'));
-      iter3Review.sourceSpec = '../gate-b-spec/spec.json';
-      iter3Review.sourceTaskGraph = '../gate-c-task-graph/task-graph.json';
-      writeFileSync(iter3ReviewPath, `${JSON.stringify(iter3Review, null, 2)}\n`, 'utf8');
-
       result = runIteration(['close', '--artifacts', artifactRoot]);
       checks += 1;
       if (result.status !== 0 || !result.stdout.includes('iteration closed')) {
@@ -9347,7 +9175,7 @@ function validateIterationCurrentFixtureCases() {
 
       result = runIteration(['draft', '--artifacts', artifactRoot]);
       checks += 1;
-      if (result.status !== 0 || !result.stdout.includes('Gate A interview ready')) {
+      if (result.status !== 0 || !result.stdout.includes('Gate A scope confirmation required')) {
         console.error(`iteration draft from immutable composed baseline failed: ${caseData.id}`);
         writeResultOutput(result);
         return { status: failureStatus(result), checks };

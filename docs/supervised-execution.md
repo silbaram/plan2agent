@@ -6,7 +6,7 @@
 
 ## 1. 현재 결론
 
-Plan2Agent는 Gate A-D planning harness 이후, 승인된 ready task 1건 또는 한 ready snapshot의 bounded batch를 사람이 감독하는 foreground agent 세션으로 실행하고 결과를 task별 파일 기반 run log로 추적하는 흐름을 제공한다.
+Plan2Agent는 Gate A-C planning harness 이후, 승인된 ready task 1건 또는 한 ready snapshot의 bounded batch를 사람이 감독하는 foreground agent 세션으로 실행하고 결과를 task별 파일 기반 run log로 추적하는 흐름을 제공한다.
 
 완료된 범위:
 
@@ -183,7 +183,7 @@ p2a iteration promote-milestone \
   --draft <artifact-root>/iterations/<iteration-id>/milestone-reviews/<checkpoint>.<unique-id>.draft.json
 ```
 
-CLI는 hard link의 create-if-absent 의미로 stable `<checkpoint>.json`을 원자 생성하고 성공한 unique draft만 삭제한다. 다른 프로세스가 먼저 stable 이름을 얻었다면 기존 파일을 덮어쓰지 않는다. maintenance 후보에는 `milestone-review:<artifact-path>#<finding_id>`를 출처로 남긴다. 이 JSON은 안정적인 informational source일 뿐 task 완료, run 상태, Gate D, 반복 close를 직접 차단하지 않는다.
+CLI는 hard link의 create-if-absent 의미로 stable `<checkpoint>.json`을 원자 생성하고 성공한 unique draft만 삭제한다. 다른 프로세스가 먼저 stable 이름을 얻었다면 기존 파일을 덮어쓰지 않는다. maintenance 후보에는 `milestone-review:<artifact-path>#<finding_id>`를 출처로 남긴다. 이 JSON은 안정적인 informational source일 뿐 task 완료, run 상태, 반복 close를 직접 차단하지 않는다.
 
 ## 7. Proposal loop
 
@@ -202,7 +202,7 @@ p2a proposals approve-draft --draft .plan2agent/proposals/patch-drafts/<draft>.j
 ## 8. 안전 정책
 
 - Gate B spec이 approved이고 open decision이 없어야 한다.
-- Gate D review blocker가 없어야 한다.
+- Gate C task graph가 validator를 통과해야 한다.
 - ready task와 acceptance criteria가 있어야 한다.
 - 실패한 verification을 숨기고 task를 `done` 처리하지 않는다.
 - isolated worktree 결과가 승인된 canonical integration branch에 반영되기 전에 task를 `done` 처리하지 않는다.

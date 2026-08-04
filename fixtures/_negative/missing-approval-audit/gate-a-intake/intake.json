@@ -8,6 +8,14 @@
   "assumptions": [],
   "clarifying_questions": [],
   "needs_user_decision": [],
+  "approval_audit": {
+    "approved_by": "fixture-user",
+    "approved_at": "2026-08-04",
+    "approved_artifacts": [
+      "gate-a-intake/intake.json"
+    ],
+    "approval_note": "Gate A is approved so the fixture reaches the intentionally missing Gate B audit."
+  },
   "status": "ready_for_spec",
   "evidence": [
     {

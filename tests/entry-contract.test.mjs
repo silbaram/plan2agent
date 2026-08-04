@@ -82,25 +82,24 @@ test('entry confirmation dialogue stays compact and preserves the existing gate 
   assert.notEqual(end, -1);
   const section = skill.slice(start, end);
 
+  assert.ok(Buffer.byteLength(section, 'utf8') >= 1500);
   assert.ok(Buffer.byteLength(section, 'utf8') <= 2500);
-  assert.match(section, /Present one compact interpretation of what will be built/);
-  assert.match(section, /Ask only for information or decisions that cannot be safely inferred/);
-  assert.match(section, /no fixed question-count or round limit/);
-  assert.match(section, /Do not materialize discovery dimensions, CQ\/ND ids/);
-  assert.match(section, /explicitly ask the user to confirm/);
-  assert.match(section, /`selected`, `rejected`, or `deferred`/);
-  assert.match(section, /unchanged `p2a\.intake\.v1` contract/);
-  assert.match(skill, /## Discovery Interview Loop/);
+  assert.match(section, /Present one compact interpretation/);
+  assert.match(section, /There is no fixed question count or conversation-turn limit/);
+  assert.match(section, /explicitly ask the user to confirm that interpretation/);
+  assert.match(section, /every promoted candidate with exactly one `selected`, `rejected`, or `deferred` disposition/);
+  assert.match(section, /persist `intake\.json`/);
+  assert.match(section, /The entry file is evidence, not the control plane/);
 
   const geminiCommand = readFileSync(
     path.join(ROOT, '.gemini', 'commands', 'p2a', 'harness.toml'),
     'utf8',
   );
   assert.match(geminiCommand, /validated --entry document/);
-  assert.match(geminiCommand, /no fixed question or round limit/);
+  assert.match(geminiCommand, /explicit Gate A approval/);
 });
 
-test('entry contract documentation records discovery, validation, dialogue, and compatibility boundaries', () => {
+test('entry contract documentation records validation, dialogue, and compatibility boundaries', () => {
   const contract = readFileSync(path.join(ROOT, 'docs', 'entry-contract.md'), 'utf8');
   assert.match(contract, /## 2\. 최소 문서 계약/);
   assert.match(contract, /## 3\. 발견과 우선순위/);
@@ -111,14 +110,16 @@ test('entry contract documentation records discovery, validation, dialogue, and 
   assert.match(contract, /capability-gap-analysis\.md/);
   assert.match(contract, /source-candidates\.md/);
   assert.match(contract, /`constitution\.json` 재사용/);
-  assert.match(contract, /`CQ-n`\/`ND-n`/);
+  assert.match(contract, /의무적인 질문·결정 id 목록/);
   assert.match(contract, /12개를 초과하거나 추천 항목이 8개를 초과하면.*warning/);
   assert.match(contract, /`state: entry_invalid`/);
-  assert.match(contract, /`state: initialized_without_artifacts`/);
+  assert.match(contract, /`state: entry_missing`/);
+  assert.match(contract, /`command\.kind: approval`/);
   assert.match(contract, /`state: gate_what`/);
   assert.match(contract, /## 6\. 범위 확인 대화/);
   assert.match(contract, /`selected`, `rejected`, `deferred`/);
-  assert.match(contract, /기존 intake\/requirements 인터뷰/);
+  assert.match(contract, /optional `interview` object/);
+  assert.match(contract, /opaque 호환 데이터/);
   assert.match(contract, /approved spec이 없을 때 downstream task 생성을 막는 규칙/);
 });
 
@@ -186,13 +187,13 @@ test('a plain description without dictionary keywords still validates with a sco
   }
 });
 
-test('a fresh harness without an entry document still routes to the one-line idea interview', () => {
+test('a fresh harness without an entry document requires a document path', () => {
   const root = project();
   try {
     const next = runNext(root);
-    assert.equal(next.state, 'initialized_without_artifacts');
-    assert.equal(next.command.kind, 'skill');
-    assert.equal(next.command.display, '/p2a-harness "<one-sentence idea>"');
+    assert.equal(next.state, 'entry_missing');
+    assert.equal(next.command.kind, 'approval');
+    assert.match(next.command.display, /p2a next --entry <path>/);
 
     const invalid = runNext(root, ['--entry', 'missing.md']);
     assert.equal(invalid.state, 'entry_invalid');
@@ -354,7 +355,7 @@ test('canonical Gate artifacts take deterministic priority over a coexisting ent
       ['--entry', 'missing-entry.md'],
     ]) {
       const next = runNext(root, args);
-      assert.equal(next.state, 'gate_d_passed_needs_iteration_init');
+      assert.equal(next.state, 'gate_c_validated_needs_iteration_init');
       assert.equal(next.command.kind, 'cli');
     }
 

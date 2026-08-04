@@ -922,12 +922,6 @@ function prepareCloseReadySecondIteration(artifactRoot) {
       `iterations/${secondIterationId}/gate-b-spec/spec.json`,
     ],
   };
-  currentSpec.gate_c_approval_audits[secondIterationId] = {
-    ...currentSpec.gate_c_approval_audits[firstIterationId],
-    approved_artifacts: [
-      `iterations/${secondIterationId}/gate-c-task-graph/task-graph.draft.json`,
-    ],
-  };
   writeFileSync(currentSpecPath, `${JSON.stringify(currentSpec, null, 2)}\n`, 'utf8');
   return { currentSpecPath, secondIterationId };
 }
@@ -2119,7 +2113,7 @@ test('failed move restores staged source artifacts and rolls back the target', {
   const artifactRoot = tempRoot('handoff-move-rollback');
   const targetParent = tempRoot('handoff-move-rollback-target');
   const targetRoot = path.join(targetParent, 'target');
-  const protectedDir = path.join(artifactRoot, 'gate-d-review');
+  const protectedDir = path.join(artifactRoot, 'gate-c-task-graph');
   try {
     cpSync(
       path.join(E2E_FIXTURE_ROOT, 'webhook-api-service'),
@@ -2148,7 +2142,7 @@ test('failed move restores staged source artifacts and rolls back the target', {
       true,
     );
     assert.equal(
-      existsSync(path.join(artifactRoot, 'gate-d-review', 'review.json')),
+      existsSync(path.join(artifactRoot, 'gate-c-task-graph', 'task-graph.json')),
       true,
     );
     assert.equal(
@@ -2600,10 +2594,6 @@ test('task graph replacement participates in graph and artifact-state locking', 
           '--artifacts',
           artifactRoot,
           '--replace-existing',
-          '--approved-by',
-          'fixture-reviewer',
-          '--approval-note',
-          'The replacement graph was reviewed for the lock regression.',
         ]);
         Atomics.wait(WAIT_BUFFER, 0, 0, 500);
         assert.equal(readFileSync(graphPath, 'utf8'), canonicalBefore);
@@ -2622,7 +2612,7 @@ test('task graph replacement participates in graph and artifact-state locking', 
   }
 });
 
-test('failed Gate C promotion restores the graph, draft, audit, and provenance', () => {
+test('failed Gate C promotion restores the graph, draft, and provenance', () => {
   const artifactRoot = initializedArtifactRoot('promote-tasks-rollback');
   try {
     const currentSpecPath = path.join(artifactRoot, 'current-spec.json');
@@ -2660,10 +2650,6 @@ test('failed Gate C promotion restores the graph, draft, audit, and provenance',
       '--artifacts',
       artifactRoot,
       '--replace-existing',
-      '--approved-by',
-      'fixture-reviewer',
-      '--approval-note',
-      'The rollback fixture reviewed this replacement graph.',
     ], { cwd: ROOT, encoding: 'utf8' });
 
     assert.notEqual(result.status, 0);
@@ -2695,10 +2681,6 @@ test('task graph replacement waits for the run-store lock before checking histor
       '--artifacts',
       artifactRoot,
       '--replace-existing',
-      '--approved-by',
-      'fixture-reviewer',
-      '--approval-note',
-      'The replacement graph was reviewed for the run-store lock regression.',
     ]);
     Atomics.wait(WAIT_BUFFER, 0, 0, 500);
     assert.equal(readFileSync(graphPath, 'utf8'), canonicalBefore);
@@ -2831,8 +2813,6 @@ test('direct run start rejects a task graph replaced while isolation is preparin
       'promote-tasks',
       '--artifacts', artifactRoot,
       '--replace-existing',
-      '--approved-by', 'fixture-reviewer',
-      '--approval-note', 'Replace the graph while a direct run start is preparing isolation.',
     ], { cwd: ROOT, encoding: 'utf8' });
     assert.equal(promotionResult.status, 0, promotionResult.stderr);
   } finally {
