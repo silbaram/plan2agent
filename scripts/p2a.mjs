@@ -8,7 +8,7 @@ import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 import { DEFAULT_MEMORY_REQUEST_TIMEOUT_MS, DEFAULT_RUNS_DIR, GATE_FILES, GREENFIELD_REQUIRED_FILES } from './p2a_constants.mjs';
-import { resolveOrchestrationAgentTool } from './p2a_project_config.mjs';
+import { resolveOrchestrationAgentTool, resolveReviewPasses } from './p2a_project_config.mjs';
 import { normalizePath, resolveP2aPaths } from './p2a_paths.mjs';
 import { p2aCommandLine } from './p2a_run_commands.mjs';
 import { resolveIterationState } from './p2a_iteration_state.mjs';
@@ -1181,9 +1181,9 @@ function selectNextArtifact(info, targetRoot, requestedProjectId, inspectedArtif
   };
 }
 
-function buildNextDecisionContext(info, targetRoot, requestedProjectId, inspectedArtifacts) {
+function buildNextDecisionContext(info, targetRoot, requestedProjectId, inspectedArtifacts, reviewPasses) {
   const hasHarness = isDirectory(path.join(targetRoot, '.plan2agent'));
-  const context = { info, targetRoot, hasHarness };
+  const context = { info, targetRoot, hasHarness, reviewPasses };
   if (!hasHarness || !info.artifacts.length) return context;
 
   const selected = selectNextArtifact(info, targetRoot, requestedProjectId, inspectedArtifacts);
@@ -1203,8 +1203,10 @@ function buildNextDecisionContext(info, targetRoot, requestedProjectId, inspecte
     : iterationScopedRuns;
   const taskCounts = countTasks(gates.taskGraph);
   const allTasksDone = taskCounts.total > 0 && taskCounts.done === taskCounts.total;
+  const visualReviewEnabled = reviewPasses.visual !== 'off';
   const needsCloseReadyVisualAudit = (
-    allTasksDone
+    visualReviewEnabled
+    && allTasksDone
     && detail.layout.kind === 'iteration'
     && detail.tasks.some((task) => task.visualImpact)
   );
@@ -1237,7 +1239,8 @@ function buildNextDecisionContext(info, targetRoot, requestedProjectId, inspecte
     ? null
     : failedOrBlockedRunCandidate;
   const visualReviewNeeded = (
-    allTasksDone
+    visualReviewEnabled
+    && allTasksDone
     && detail.layout.kind === 'iteration'
   )
     ? iterationVisualReviewNeeded(detail.tasks, activeRuns, {
@@ -1531,7 +1534,8 @@ export const NEXT_DECISION_RULES = [
     state: 'final_visual_review_required',
     kind: 'cli',
     when: (context) => (
-      context.allTasksDone
+      context.reviewPasses?.visual !== 'off'
+      && context.allTasksDone
       && !context.closedIteration
       && context.detail.layout.kind === 'iteration'
       && context.visualReviewNeeded
@@ -1630,7 +1634,13 @@ function buildNext(targetRootInput, requestedProjectId) {
   const snapshot = buildInfoSnapshot(targetRootInput);
   const { info } = snapshot;
   const targetRoot = info.target;
-  const context = buildNextDecisionContext(info, targetRoot, requestedProjectId, snapshot.inspectedArtifacts);
+  const context = buildNextDecisionContext(
+    info,
+    targetRoot,
+    requestedProjectId,
+    snapshot.inspectedArtifacts,
+    snapshot.reviewPasses,
+  );
   const action = decideNextAction(context);
   return {
     schema_version: 'p2a.next.v1',
@@ -1648,6 +1658,7 @@ function buildInfoSnapshot(targetRootInput) {
   }
   const manifest = readManifest(targetRoot);
   const config = readJsonObject(path.join(targetRoot, '.plan2agent', 'project.config.json'));
+  const reviewPasses = resolveReviewPasses(config);
   const isScaffoldProject = ['init', 'scaffold'].includes(manifest?.provenance?.mode);
   const inspectedArtifacts = discoverArtifactRoots(targetRoot)
     .map((artifactRoot) => inspectArtifact(targetRoot, artifactRoot, isScaffoldProject));
@@ -1740,7 +1751,7 @@ function buildInfoSnapshot(targetRootInput) {
     artifacts,
     nextActions,
   };
-  return { info, inspectedArtifacts };
+  return { info, inspectedArtifacts, reviewPasses };
 }
 
 function buildInfo(targetRootInput) {

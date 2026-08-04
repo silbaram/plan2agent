@@ -1892,6 +1892,13 @@ describe('visual experience artifacts', () => {
       ]);
       assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
 
+      writeJson(path.join(workspaceRoot, '.plan2agent', 'project.config.json'), {
+        devExecution: {
+          reviewPasses: {
+            visual: 'on',
+          },
+        },
+      });
       const nextResult = runP2a([
         'next',
         '--target', workspaceRoot,
@@ -1923,7 +1930,30 @@ describe('visual experience artifacts', () => {
 
       finishedRun.runKind = 'final_visual_review';
       writeJson(finishedRunPath, finishedRun);
+      writeJson(path.join(workspaceRoot, '.plan2agent', 'project.config.json'), {
+        devExecution: {
+          reviewPasses: {
+            visual: 'off',
+          },
+        },
+      });
       writeFileSync(applicationPath, 'export const reviewed = "stale";\n', 'utf8');
+      staleNext = runP2a([
+        'next',
+        '--target', workspaceRoot,
+        '--project-id', 'webhook-api-service',
+        '--json',
+      ]);
+      assert.equal(staleNext.status, 0, `${staleNext.stdout}\n${staleNext.stderr}`);
+      assert.equal(JSON.parse(staleNext.stdout).state, 'iteration_ready_to_close');
+
+      writeJson(path.join(workspaceRoot, '.plan2agent', 'project.config.json'), {
+        devExecution: {
+          reviewPasses: {
+            visual: 'on',
+          },
+        },
+      });
       staleNext = runP2a([
         'next',
         '--target', workspaceRoot,

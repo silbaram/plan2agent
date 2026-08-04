@@ -1057,9 +1057,10 @@ test('next keeps the twenty-one ordered decision rules required by the contract'
   }
 });
 
-test('next routes a completed visual iteration through one canonical final review command before close', () => {
+test('next routes a completed visual iteration through review only when the pass is enabled', () => {
   const rule = NEXT_DECISION_RULES.find((candidate) => candidate.state === 'final_visual_review_required');
   const context = {
+    reviewPasses: { visual: 'on' },
     allTasksDone: true,
     closedIteration: false,
     detail: { layout: { kind: 'iteration' } },
@@ -1073,6 +1074,32 @@ test('next routes a completed visual iteration through one canonical final revie
     '--artifacts',
     '.plan2agent/artifacts/sample',
   ]);
+  assert.equal(rule.when({
+    ...context,
+    reviewPasses: { visual: 'off' },
+  }), false);
+});
+
+test('next rejects invalid review pass configuration', () => {
+  const root = project();
+  try {
+    writeJson(join(root, '.plan2agent', 'project.config.json'), {
+      devExecution: {
+        reviewPasses: {
+          milestone: 'sometimes',
+        },
+      },
+    });
+
+    const result = runP2a(['next', '--target', root, '--json']);
+    assert.notEqual(result.status, 0);
+    assert.match(
+      `${result.stdout}${result.stderr}`,
+      /devExecution\.reviewPasses\.milestone must be one of off, opt_in, on/,
+    );
+  } finally {
+    remove(root);
+  }
 });
 
 test('next returns exact commands for cache, webhook, and e2e fixture states', () => {
