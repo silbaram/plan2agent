@@ -11,6 +11,7 @@ import test from 'node:test';
 
 import {
   FIXTURE_ROOT,
+  ROOT,
   makeTempDir,
   runP2a,
 } from './helpers/fixtures.mjs';
@@ -61,6 +62,32 @@ function runNext(root, args = []) {
   assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
   return JSON.parse(result.stdout);
 }
+
+test('entry confirmation dialogue stays compact and preserves the existing gate contracts', () => {
+  const skill = readFileSync(path.join(ROOT, '.agents', 'skills', 'p2a-harness', 'SKILL.md'), 'utf8');
+  const heading = '## Entry Document Confirmation Dialogue';
+  const start = skill.indexOf(heading);
+  const end = skill.indexOf('\n## ', start + heading.length);
+  assert.notEqual(start, -1);
+  assert.notEqual(end, -1);
+  const section = skill.slice(start, end);
+
+  assert.ok(Buffer.byteLength(section, 'utf8') <= 2500);
+  assert.match(section, /Present one compact interpretation of what will be built/);
+  assert.match(section, /Ask only for information or decisions that cannot be safely inferred/);
+  assert.match(section, /no fixed question-count or round limit/);
+  assert.match(section, /explicitly ask the user to confirm/);
+  assert.match(section, /`selected`, `rejected`, or `deferred`/);
+  assert.match(section, /unchanged `p2a\.intake\.v1` contract/);
+  assert.match(skill, /## Discovery Interview Loop/);
+
+  const geminiCommand = readFileSync(
+    path.join(ROOT, '.gemini', 'commands', 'p2a', 'harness.toml'),
+    'utf8',
+  );
+  assert.match(geminiCommand, /validated --entry document/);
+  assert.match(geminiCommand, /no fixed question or round limit/);
+});
 
 test('a thin user-authored entry document validates and enters scope confirmation without Radar', () => {
   const root = project();

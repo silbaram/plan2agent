@@ -10,6 +10,7 @@ Use this workflow to convert an early product idea into development-ready planni
 ## Inputs
 
 - A one-sentence product or feature idea.
+- An optional validated primary idea document supplied with `--entry <path>`.
 - Optional clarification answers, constraints, audience, or existing artifacts.
 - Optional Feature Radar preflight research under `.plan2agent/artifacts/<project_id>/preflight-research/`.
 - Optional resume point such as `resume_from: interview`, `resume_from: gate-a-summary`, `resume_from: spec`, or answered question/decision ids like `CQ-1` or `ND-1`.
@@ -35,6 +36,17 @@ If the CLI cannot spawn subagents automatically, run the matching skill locally 
 - **Gate D — Review blockers:** The canonical Gate D artifact is `review_json` persisted as `gate-d-review/review.json`; `review_report` / `review-report.md` is an optional Markdown rendering of the same findings. Gate D passes only when `review.json.blocking_issues` is `[]`. Validate claimed Memory report/citation integrity and confirm that tasks address any material prior failure carried into Gate C. Memory being disabled, unavailable, or irrelevant is not itself a blocker; an invalid claim of use or an ignored material failure is. If review finds blocking issues, return the blockers and the artifact section that must be revised instead of claiming the plan is ready.
 
 Each gate is a review checkpoint, not a one-shot hand-off. At every gate: (1) persist the stage's canonical JSON artifact files, (2) present a readable summary with per-item rationale and recommendations when that gate reaches its review point, (3) explicitly invite both open-ended feedback and structured answers or approval, (4) revise the JSON artifacts when the user responds, and (5) advance only after the user explicitly approves. During active Gate A rounds, treat JSON persistence as silent recovery bookkeeping and delay the readable artifact summary until Gate A summary readiness. Never infer approval from silence.
+
+## Entry Document Confirmation Dialogue
+
+Use this path only when `p2a next` returns `gate_what` with a validated `--entry` document and no canonical Gate A-D planning state exists. If an entry document and canonical planning artifacts coexist, resume the earliest changed canonical stage; do not restart from the entry. A raw one-line idea without `--entry` continues through the Discovery Interview Loop below.
+
+1. Run `p2a validate --entry <path>`, then read the primary document. For a Feature Radar path, also read its sibling `handoff-manifest.md` for provenance.
+2. Present one compact interpretation of what will be built, who it serves, the intended outcome, included and excluded scope, hard constraints, and material assumptions. Correct obvious ambiguity without dumping or rewriting the source document.
+3. Ask only for information or decisions that cannot be safely inferred and would materially change that scope. There is no fixed question-count or round limit on this path; stop asking as soon as the scope is confirmable. Keep implementation-detail choices for Gate B.
+4. Present the revised scope and explicitly ask the user to confirm it. Corrections revise the interpretation and return to this dialogue. Silence, the source document, or a broad request to develop is not confirmation.
+5. When Feature Radar supplied recommendations, list every promoted candidate with exactly one disposition: `selected`, `rejected`, or `deferred`, plus a short rationale. Radar recommendations remain unapproved until the user confirms the scope containing those dispositions.
+6. After explicit confirmation, map the confirmed scope into the unchanged `p2a.intake.v1` contract, record Gate A `approval_audit`, and continue through the normal Gate B contract. Do not bypass a gate or alter existing schemas and validators.
 
 ## Discovery Interview Loop
 

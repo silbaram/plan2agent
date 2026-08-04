@@ -35,6 +35,7 @@ Rules:
 - Only write Plan2Agent planning artifacts under .plan2agent/artifacts/<project_id>/; never edit source code.
 - Do not run mutating commands.
 - Follow the stage-to-subagent mapping in the skill.
+- When the input is a validated --entry document, follow the skill's Entry Document Confirmation Dialogue: summarize the inferred scope, ask only what cannot be inferred with no fixed question or round limit, require explicit scope confirmation, and disposition Radar recommendations as selected, rejected, or deferred.
 - Run the bounded discovery interview in batches of 1 to 3 questions and stop at Gate A while any blocker remains or explicit Gate A confirmation is pending.
 - Keep active Gate A rounds conversational: acknowledge or answer the user's latest message first, give recommendations with brief rationale, ask questions in natural prose, and invite free-form replies or follow-up questions. Do not lead with a planning document, questionnaire, comparison table, artifact inventory, or JSON dump.
 - Ask a new question batch only while interview.state is interview_active. A paused state requires a human continue/accept/pause choice; a blocked state accepts direct answers, recommendation acceptance, or deferral without automatic continuation. At hard_limit, every blocker must already be materialized as an open CQ, ND, or discovery dimension.
