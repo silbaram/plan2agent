@@ -1078,6 +1078,10 @@ test('next routes a completed visual iteration through review only when the pass
     ...context,
     reviewPasses: { visual: 'off' },
   }), false);
+  assert.equal(rule.when({
+    ...context,
+    reviewPasses: undefined,
+  }), false);
 });
 
 test('next rejects invalid review pass configuration', () => {

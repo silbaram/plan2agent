@@ -1144,6 +1144,30 @@ function validateScaffoldFixtureCase() {
       return { status: failureStatus(result), checks };
     }
 
+    const invalidReviewPassConfig = structuredClone(enhancedCapabilityConfig);
+    invalidReviewPassConfig.devExecution.reviewPasses = {
+      milestone: 'on',
+      mile: 'on',
+    };
+    writeFileSync(enhanceConfigPath, `${JSON.stringify(invalidReviewPassConfig, null, 2)}\n`, 'utf8');
+    result = runDoctor(['--target', enhanceTargetRoot, '--dev', '--json']);
+    checks += 1;
+    const invalidReviewPassDoctor = result.status === 0 ? JSON.parse(result.stdout) : null;
+    writeFileSync(enhanceConfigPath, `${JSON.stringify(enhancedCapabilityConfig, null, 2)}\n`, 'utf8');
+    if (
+      result.status !== 0
+      || !invalidReviewPassDoctor?.checks?.some((item) => (
+        item.id === 'dev_execution_config'
+        && item.status === 'warn'
+        && item.detail.includes('devExecution.reviewPasses has unknown key(s): mile')
+      ))
+    ) {
+      console.error('invalid review pass doctor fixture failed');
+      writeResultOutput(result);
+      console.error(JSON.stringify({ invalidReviewPassDoctor }, null, 2));
+      return { status: failureStatus(result), checks };
+    }
+
     const capabilityDriftRoot = path.join(tempRoot, 'capability-drift-target');
     cpSync(enhanceTargetRoot, capabilityDriftRoot, { recursive: true });
     const capabilityDriftManifestPath = path.join(capabilityDriftRoot, '.plan2agent', 'manifest.json');

@@ -1534,7 +1534,7 @@ export const NEXT_DECISION_RULES = [
     state: 'final_visual_review_required',
     kind: 'cli',
     when: (context) => (
-      context.reviewPasses?.visual !== 'off'
+      (context.reviewPasses?.visual ?? 'off') !== 'off'
       && context.allTasksDone
       && !context.closedIteration
       && context.detail.layout.kind === 'iteration'

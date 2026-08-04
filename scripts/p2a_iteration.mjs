@@ -76,6 +76,7 @@ import {
   PRODUCT_FIELDS,
 } from './p2a_spec_model.mjs';
 import { assertFinalVisualReviewRunReady } from './p2a_visual_review_gate.mjs';
+import { resolveReviewPasses } from './p2a_project_config.mjs';
 import {
   compareRunEvidence,
   taskGraphContextForGraph,
@@ -3456,9 +3457,15 @@ export function validateCloseReadyVisualEvidence({
   activeIteration,
   taskGraphPath,
   taskGraph,
+  reviewPasses,
 }) {
+  const policy = reviewPasses ?? projectReviewPasses();
   const visualTasks = taskGraph.tasks.filter((task) => task.visualImpact);
   if (!visualTasks.length) return 0;
+  if (policy.visual === 'off') {
+    console.log(`- visual review: skipped (reviewPasses.visual=off, ${visualTasks.length} visualImpact task(s))`);
+    return 0;
+  }
   const runsDir = path.join(path.resolve(artifactRoot), 'runs');
   validateRunsDir(runsDir);
   const expectedSourceLayout = taskGraphContextForGraph(taskGraphPath).sourceLayout;
@@ -4279,6 +4286,7 @@ function validateIteration(args) {
       activeIteration: state.activeIteration,
       taskGraphPath: state.taskGraphPath,
       taskGraph,
+      reviewPasses: projectReviewPasses(),
     });
   }
   const maintenance = validateMaintenanceTaskGraphIfPresent(state);
@@ -4308,6 +4316,7 @@ function closeLocked(args, artifactRoot) {
     activeIteration: facts.state.activeIteration,
     taskGraphPath: facts.state.taskGraphPath,
     taskGraph: facts.taskGraph,
+    reviewPasses: projectReviewPasses(),
   });
   const activeMetadata = loadOptionalIterationMetadata(artifactRoot, facts.state.activeIteration);
   const planningMemory = activeMetadata?.planning_memory ?? null;
@@ -4963,6 +4972,16 @@ const MEMORY_FRESHNESS_STATUSES = new Set(['fresh', 'stale', 'unavailable', 'unc
 const PLANNING_MEMORY_SEARCH_MODES = new Set(['keyword', 'semantic', 'hybrid']);
 const PLANNING_MEMORY_SERVER_STATUSES = new Set(['up', 'unknown', 'unavailable', 'not_configured']);
 const CROSS_PROJECT_RECALL_PATTERN = /\b(?:architecture|protocol|migration|migrate|authentication|authorization|auth|security|integration|external api|database|storage|queue|performance|reliability|failure|incident)\b|(?:아키텍처|프로토콜|마이그레이션|인증|인가|보안|연동|통합|외부\s*API|데이터베이스|저장소|큐|성능|신뢰성|장애|실패)/i;
+
+function projectReviewPasses(projectRoot = ROOT) {
+  const configPath = path.join(projectRoot, '.plan2agent', 'project.config.json');
+  if (!existsSync(configPath)) return resolveReviewPasses({});
+  try {
+    return resolveReviewPasses(loadJson(configPath));
+  } catch (error) {
+    throw new ValidationError(`project config review pass policy is invalid: ${error.message}`);
+  }
+}
 
 function planningMemoryConfiguration(options) {
   const projectRoot = options.projectRoot ?? ROOT;

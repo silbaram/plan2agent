@@ -254,6 +254,12 @@ export function resolveReviewPasses(config) {
     throw new Error('project config devExecution.reviewPasses must be an object');
   }
   const reviewPasses = objectValue(configured);
+  const unknown = Object.keys(reviewPasses).filter((key) => !REVIEW_PASS_KEYS.includes(key));
+  if (unknown.length) {
+    throw new Error(
+      `project config devExecution.reviewPasses has unknown key(s): ${unknown.sort().join(', ')}`,
+    );
+  }
   return Object.fromEntries(REVIEW_PASS_KEYS.map((key) => {
     const value = Object.hasOwn(reviewPasses, key) ? reviewPasses[key] : defaults[key];
     if (!REVIEW_PASS_POLICIES.has(value)) {

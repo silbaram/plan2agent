@@ -29,7 +29,7 @@ import {
   workspaceRevisionExcludedPathsForRun,
   workspaceRevisionSha256,
 } from '../scripts/p2a_run_paths.mjs';
-import { runExecute, runHandoff, runIteration, runP2a, runRuns, runTasks, runValidator } from './helpers/fixtures.mjs';
+import { runExecute, runHandoff, runIteration, runP2a, runRuns, runTargetIteration, runTasks, runValidator } from './helpers/fixtures.mjs';
 
 function writeJson(filePath, data) {
   mkdirSync(path.dirname(filePath), { recursive: true });
@@ -1987,6 +1987,113 @@ describe('visual experience artifacts', () => {
     }
   });
 
+  test('iteration close-ready validation and close honor the configured visual review pass', () => {
+    const projectRoot = mkdtempSync(path.join(tmpdir(), 'p2a-visual-close-policy-'));
+    const artifactRoot = path.join(
+      projectRoot,
+      '.plan2agent',
+      'artifacts',
+      'webhook-api-service',
+    );
+    try {
+      mkdirSync(path.dirname(artifactRoot), { recursive: true });
+      cpSync(path.resolve('fixtures/_e2e/webhook-api-service'), artifactRoot, { recursive: true });
+      const visualBundle = buildApprovedVisualBundle(artifactRoot, 'webhook-api-service');
+      const sourceSpec = JSON.parse(readFileSync(visualBundle.specPath, 'utf8'));
+      sourceSpec.visual_experience = {
+        has_visual_interface: true,
+        design_scope: 'full',
+        design_timing: 'current_iteration',
+        rationale: 'This fixture implements the approved operator review screen.',
+        experience_spec_ref: 'experience-spec.json',
+        experience_spec_sha256: sha256(visualBundle.experiencePath),
+      };
+      sourceSpec.approval_audit.approved_artifacts.push('gate-b-spec/experience-spec.json');
+      writeJson(visualBundle.specPath, sourceSpec);
+      const sourceGraphPath = path.join(artifactRoot, 'gate-c-task-graph', 'task-graph.json');
+      const sourceGraph = JSON.parse(readFileSync(sourceGraphPath, 'utf8'));
+      for (const task of sourceGraph.tasks) task.workKind = 'non_ui';
+      sourceGraph.tasks[0].workKind = 'ui';
+      sourceGraph.tasks[0].visualImpact = {
+        screenStates: [{ screenId: 'SCREEN-1', states: ['ready'] }],
+      };
+      writeJson(sourceGraphPath, sourceGraph);
+
+      let result = runTargetIteration(projectRoot, [
+        'init',
+        '--artifacts', artifactRoot,
+        '--iteration-id', 'iter-001',
+      ]);
+      assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+
+      const graphPath = path.join(
+        artifactRoot,
+        'iterations',
+        'iter-001',
+        'gate-c-task-graph',
+        'task-graph.json',
+      );
+      const graph = JSON.parse(readFileSync(graphPath, 'utf8'));
+      for (const task of graph.tasks) task.status = 'done';
+      writeJson(graphPath, graph);
+      writeJson(path.join(artifactRoot, 'runs', 'run-index.json'), {
+        schema_version: 'p2a.run_index.v1',
+        projectId: 'webhook-api-service',
+        runs: [],
+        tasks: [],
+      });
+
+      const configPath = path.join(projectRoot, '.plan2agent', 'project.config.json');
+      writeJson(configPath, {
+        devExecution: {
+          reviewPasses: {
+            visual: 'on',
+          },
+        },
+      });
+      result = runTargetIteration(projectRoot, [
+        'validate',
+        '--artifacts', artifactRoot,
+        '--require-close-ready',
+      ]);
+      assert.notEqual(result.status, 0);
+      assert.match(
+        `${result.stdout}\n${result.stderr}`,
+        /close-ready visual validation failed: final visual review requires/,
+      );
+
+      result = runTargetIteration(projectRoot, ['close', '--artifacts', artifactRoot]);
+      assert.notEqual(result.status, 0);
+      assert.match(
+        `${result.stdout}\n${result.stderr}`,
+        /close-ready visual validation failed: final visual review requires/,
+      );
+
+      writeJson(configPath, {
+        devExecution: {
+          reviewPasses: {
+            visual: 'off',
+          },
+        },
+      });
+      result = runTargetIteration(projectRoot, [
+        'validate',
+        '--artifacts', artifactRoot,
+        '--require-close-ready',
+      ]);
+      assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+      assert.match(result.stdout, /visual review: skipped \(reviewPasses\.visual=off, 1 visualImpact task\(s\)\)/);
+      assert.match(result.stdout, /close-ready: all tasks done/);
+
+      result = runTargetIteration(projectRoot, ['close', '--artifacts', artifactRoot]);
+      assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+      assert.match(result.stdout, /visual review: skipped \(reviewPasses\.visual=off, 1 visualImpact task\(s\)\)/);
+      assert.match(result.stdout, /iteration closed/);
+    } finally {
+      rmSync(projectRoot, { recursive: true, force: true });
+    }
+  });
+
   test('implementation completion is independent from the single close-ready visual review', () => {
     const root = mkdtempSync(path.join(tmpdir(), 'p2a-visual-task-done-'));
     try {
@@ -2099,6 +2206,7 @@ describe('visual experience artifacts', () => {
           activeIteration: run.iterationId,
           taskGraphPath: graphPath,
           taskGraph: JSON.parse(readFileSync(graphPath, 'utf8')),
+          reviewPasses: { visual: 'on' },
         }),
         /latest run for the active iteration to be finished/,
       );
@@ -2218,6 +2326,7 @@ describe('visual experience artifacts', () => {
           activeIteration: run.iterationId,
           taskGraphPath: graphPath,
           taskGraph: JSON.parse(readFileSync(graphPath, 'utf8')),
+          reviewPasses: { visual: 'on' },
         }),
         /match the current canonical workspace revision/,
       );
@@ -2232,6 +2341,7 @@ describe('visual experience artifacts', () => {
           activeIteration: run.iterationId,
           taskGraphPath: graphPath,
           taskGraph: JSON.parse(readFileSync(graphPath, 'utf8')),
+          reviewPasses: { visual: 'on' },
         }),
         /review the canonical integration workspace/,
       );
@@ -2242,6 +2352,7 @@ describe('visual experience artifacts', () => {
         activeIteration: run.iterationId,
         taskGraphPath: graphPath,
         taskGraph: JSON.parse(readFileSync(graphPath, 'utf8')),
+        reviewPasses: { visual: 'on' },
       }), 1);
 
       const isolatedFinishedRun = structuredClone(laterRun);
@@ -2287,6 +2398,7 @@ describe('visual experience artifacts', () => {
         activeIteration: run.iterationId,
         taskGraphPath: graphPath,
         taskGraph: JSON.parse(readFileSync(graphPath, 'utf8')),
+        reviewPasses: { visual: 'on' },
       }), 1);
 
       const failedNonvisualRun = structuredClone(laterRun);
@@ -2340,6 +2452,7 @@ describe('visual experience artifacts', () => {
         activeIteration: run.iterationId,
         taskGraphPath: graphPath,
         taskGraph: JSON.parse(readFileSync(graphPath, 'utf8')),
+        reviewPasses: { visual: 'on' },
       }), 1);
 
       const tiedFailedRun = structuredClone(finalReviewRun);
@@ -2393,6 +2506,7 @@ describe('visual experience artifacts', () => {
           activeIteration: run.iterationId,
           taskGraphPath: graphPath,
           taskGraph: JSON.parse(readFileSync(graphPath, 'utf8')),
+          reviewPasses: { visual: 'on' },
         }),
         /latest run for the active iteration to be finished/,
       );

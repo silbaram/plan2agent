@@ -12,6 +12,7 @@ import {
   REPO_ONLY_SCRIPT_FILES,
 } from './p2a_tool_manifest.mjs';
 import { normalizePath } from './p2a_paths.mjs';
+import { resolveReviewPasses } from './p2a_project_config.mjs';
 
 const EMPTY_TASK_COUNTS = {
   total: 0,
@@ -741,6 +742,13 @@ function buildDevReport(targetRoot, manifest, configResult) {
   }
 
   const config = configResult.ok ? configResult.data : null;
+  let reviewPasses = null;
+  let reviewPassesError = null;
+  try {
+    reviewPasses = resolveReviewPasses(config);
+  } catch (error) {
+    reviewPassesError = error instanceof Error ? error.message : String(error);
+  }
   const capabilityTargets = targets.filter((target) => config?.providerNativeCapabilities?.[target]);
   checks.push(
     targets.length && capabilityTargets.length === targets.length
@@ -759,8 +767,16 @@ function buildDevReport(targetRoot, manifest, configResult) {
       && Array.isArray(config.devExecution.allowedProviders)
       && config.devExecution.scopePolicy === 'task_only'
       && config.devExecution.verificationPolicy === 'required_for_done'
-      ? check('dev_execution_config', 'Dev execution config', 'pass', `defaultProvider=${config.devExecution.defaultProvider}, scopePolicy=${config.devExecution.scopePolicy}`)
-      : check('dev_execution_config', 'Dev execution config', 'warn', 'devExecution defaultProvider/allowedProviders/scopePolicy/verificationPolicy is not fully configured'),
+      && !reviewPassesError
+      ? check('dev_execution_config', 'Dev execution config', 'pass', `defaultProvider=${config.devExecution.defaultProvider}, scopePolicy=${config.devExecution.scopePolicy}, reviewPasses=${Object.entries(reviewPasses).map(([key, value]) => `${key}:${value}`).join(',')}`)
+      : check(
+          'dev_execution_config',
+          'Dev execution config',
+          'warn',
+          reviewPassesError
+            ? `devExecution.reviewPasses is invalid: ${reviewPassesError}`
+            : 'devExecution defaultProvider/allowedProviders/scopePolicy/verificationPolicy is not fully configured',
+        ),
   );
 
   checks.push(

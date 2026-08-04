@@ -132,4 +132,15 @@ test('rejects invalid review pass configuration values', () => {
     () => resolveReviewPasses({ devExecution: { reviewPasses: [] } }),
     /devExecution\.reviewPasses must be an object/,
   );
+  assert.throws(
+    () => resolveReviewPasses({
+      devExecution: {
+        reviewPasses: {
+          mile: 'on',
+          visuals: 'on',
+        },
+      },
+    }),
+    /devExecution\.reviewPasses has unknown key\(s\): mile, visuals/,
+  );
 });
