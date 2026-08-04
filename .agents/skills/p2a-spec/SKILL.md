@@ -33,7 +33,7 @@ Return:
 - `evidence` inside `spec_json`, preserving intake sources and adding any new `WEB-n` or `LOCAL-n` sources
 - Optional `reference_reconnaissance` inside `spec_json` when Gate B compares reusable technologies, local patterns, prior artifacts, or external implementation approaches
 - Optional generated Markdown views may be returned when useful for export or review, but `spec_json` is the source of truth. The harness persists `gate-b-spec/spec.json` under `.plan2agent/artifacts/<project_id>/` for Gate B. Set `spec_json.source_intake` to the Gate A folder path, for example `.plan2agent/artifacts/<project_id>/gate-a-intake/intake.json`, when the source is a persisted artifact.
-- When `intake_json.interview` exists, compute the SHA-256 of the exact persisted `intake.json` bytes and record it as `spec_json.source_intake_sha256`. Recompute it only when regenerating Gate B from the changed intake; never update the hash merely to make a stale spec validate.
+- When `intake_json` comes from a persisted `intake.json`, compute the SHA-256 of those exact bytes and record it as `spec_json.source_intake_sha256`. Recompute it only when regenerating Gate B from the changed intake; never update the hash merely to make a stale spec validate.
 
 ## Required Spec Fields
 
@@ -107,7 +107,7 @@ For iterative Gate B synthesis, inspect `intake_json.baseline_context` before ge
 
 - Reuse a prior answer or disposition when the current change does not affect its recorded scope.
 - Preserve `source_intake` or `source_spec` provenance in the explanation and evidence.
-- If the current interview explicitly overrides a prior answer, prefer the current answer and state the conflict and resolution. Do not mutate or silently replace the baseline record.
+- If the current confirmed scope or `baseline_context` explicitly overrides a prior answer, prefer the current canonical answer and state the conflict and resolution. Do not mutate or silently replace the baseline record.
 - Treat the approved intake as scope evidence, not as a patch language. Build the complete baseline-shaped spec from the confirmed scope and validated baseline, preserve explicit exclusions and unresolved decisions, and record material changes in the spec's own canonical fields and evidence.
 - Generate a new question only for changed or newly ambiguous scope. Do not re-ask an already answered baseline question merely because a new iteration started.
 - Keep the canonical `p2a.spec.v1` full-shaped for compatibility. In iterative Markdown review views, show the delta and affected fields first and omit unchanged baseline values, while making clear that `spec.json` remains complete.
@@ -123,7 +123,7 @@ For iterative Gate B synthesis, inspect `intake_json.baseline_context` before ge
 
 Do not include detail fields from other statuses in the same disposition item. Only `ND-n` ids may appear in `open_decisions`; never put raw `CQ-n` ids there. If a clarifying question is still a blocker, promote it to a new `ND-n` decision, list that `ND-n` in `open_decisions`, and keep `approval: draft`. If the promoted decision is already resolved, include `resolution` in its disposition and omit it from `open_decisions`.
 
-When an interview-aware intake gives a `CQ-n` the status `answered`, `assumed`, or `not_applicable`, map its recorded answer directly to the corresponding Gate B disposition instead of replacing it with a generic assumption.
+When an intake `clarifying_questions` item has the status `answered`, `assumed`, or `not_applicable`, map its canonical answer directly to the corresponding Gate B disposition instead of replacing it with a generic assumption.
 
 ## Optional Markdown View
 
@@ -172,7 +172,7 @@ Suggested Korean section labels for implementation plans: 아키텍처, 인터�
 ## Rules
 
 - If a required field is unknown, add the related decision id to `open_decisions` and keep approval as `draft`.
-- Route every answered `needs_user_decision` into each canonical `spec.product.*` or `spec.implementation.*` field named by that decision's `affected_fields`; fall back to `blocks` only for a legacy interview item that omits `affected_fields`. Do not place every decision into generic constraints or architecture fields.
+- Route every answered `needs_user_decision` into each canonical `spec.product.*` or `spec.implementation.*` field named by that decision's `affected_fields`; use the current ledger item's `blocks` when `affected_fields` is absent. Never inspect a legacy `interview` object to derive routing. Do not place every decision into generic constraints or architecture fields.
 - Keep non-goals explicit.
 - Do not invent API providers, storage engines, or UI frameworks unless the user already selected them.
 - Do not rely on stale model memory for current technology recommendations; use Technology Reconnaissance when the choice materially affects the plan.

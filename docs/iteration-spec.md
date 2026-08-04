@@ -40,7 +40,7 @@
 | 범위 | 현재 구현 | 남은 구현 |
 | --- | --- | --- |
 | `status.md` 반복 인덱스 | 전체 반복 history, close audit, handoff audit, maintenance 요약을 누적 렌더링한다. | 더 풍부한 사용자용 diff/요약은 후속 UX 항목이다. |
-| baseline-aware Gate A/B | 구조화된 interview state, 1~3개 첫 질문 batch, Gate A 명시적 확인 차단, baseline 답변/disposition provenance, full-shaped spec의 delta-first view를 제공한다. | 질문 문구와 변경 영향의 고도화된 의미 판단은 harness agent가 수행하며 품질 평가는 지속 dogfooding한다. |
+| baseline-aware Gate A/B | entry document 기반 scope ledger, 필요한 만큼 이어지는 확인 대화, Gate A 명시적 확인 차단, baseline 답변/disposition provenance, full-shaped spec의 delta-first view를 제공한다. legacy `interview` 객체는 opaque 호환 데이터로만 보존한다. | 질문 문구와 변경 영향의 고도화된 의미 판단은 harness agent가 수행하며 품질 평가는 지속 dogfooding한다. |
 | 구조적 diff task | spec field 차이를 semantic group으로 병합/분할하고, 완료 task overlap은 rework로 표시한다. 기존 정본을 `--force`로 다시 만들 수 있는 범위는 모든 task가 `todo`이고 active iteration run history가 없는 실행 전뿐이며 이때 active task id를 재사용한다. | code-aware/LLM 기반 의미 판단은 후속 실행 레이어에서 다룬다. |
 | agent 저작 task gate | backbone(`context`, `gate-c-draft` 검증, `promote-tasks`), `p2a-task-author` 스킬, 정식 `task-context` schema, provenance sidecar가 구현됐다. 정본 교체는 모든 task가 `todo`이고 run history가 없는 실행 전 구간에서만 명시적 `--replace-existing`으로 허용하며, 실행 시작 뒤에는 task를 다시 `todo`로 열어도 새 feature iteration 또는 maintenance lane을 사용한다. 상세 계약은 §10이다. | richer code-aware task authoring은 후속 실행 레이어에서 다룬다. |
 | archived close | close artifact 존재 여부/hash 기록과 기본 validate-time archive audit을 제공한다. | 기존 pre-audit artifact migration은 필요할 때 `--skip-archive-audit`로 우회한다. |

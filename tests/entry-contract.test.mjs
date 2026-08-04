@@ -123,6 +123,30 @@ test('entry contract documentation records validation, dialogue, and compatibili
   assert.match(contract, /approved spec이 없을 때 downstream task 생성을 막는 규칙/);
 });
 
+test('Gate B authoring instructions never interpret opaque legacy interview data', () => {
+  const instructionPaths = [
+    path.join(ROOT, '.agents', 'skills', 'p2a-spec', 'SKILL.md'),
+    path.join(ROOT, '.agents', 'agents', 'p2a-spec-author.md'),
+    path.join(ROOT, '.agents', 'agents', 'p2a-implementation-planner.md'),
+    path.join(ROOT, '.claude', 'skills', 'p2a-spec', 'SKILL.md'),
+    path.join(ROOT, '.claude', 'agents', 'p2a-spec-author.md'),
+    path.join(ROOT, '.claude', 'agents', 'p2a-implementation-planner.md'),
+    path.join(ROOT, '.codex', 'agents', 'p2a-spec-author.toml'),
+    path.join(ROOT, '.codex', 'agents', 'p2a-implementation-planner.toml'),
+    path.join(ROOT, '.gemini', 'agents', 'p2a-spec-author.md'),
+    path.join(ROOT, '.gemini', 'agents', 'p2a-implementation-planner.md'),
+  ];
+
+  for (const instructionPath of instructionPaths) {
+    const content = readFileSync(instructionPath, 'utf8');
+    assert.doesNotMatch(content, /current interview|interview-aware|legacy interview item/i, instructionPath);
+  }
+
+  const specSkill = readFileSync(instructionPaths[0], 'utf8');
+  assert.match(specSkill, /Treat a legacy `interview` object as opaque compatibility data/);
+  assert.match(specSkill, /Never inspect a legacy `interview` object to derive routing/);
+});
+
 test('a thin user-authored entry document validates and enters scope confirmation without Radar', () => {
   const root = project();
   try {
@@ -394,24 +418,94 @@ test('an explicit entry wins over multiple automatically discovered preflight ro
   }
 });
 
-test('a confirmed entry can hand off to the existing approved Gate B flow', () => {
+test('a confirmed entry proceeds through Gate A-C execution and iteration close', () => {
   const root = project();
   try {
     const entryPath = path.join(root, 'idea.md');
-    writeFileSync(entryPath, 'Build a webhook delivery console.\n', 'utf8');
+    const fixtureArtifactRoot = path.join(FIXTURE_ROOT, '_e2e', 'webhook-api-service');
+    const fixtureIntake = JSON.parse(readFileSync(
+      path.join(fixtureArtifactRoot, 'gate-a-intake', 'intake.json'),
+      'utf8',
+    ));
+    writeFileSync(entryPath, `${fixtureIntake.idea}\n`, 'utf8');
+
+    const entryValidation = runP2a(['validate', '--entry', entryPath]);
+    assert.equal(entryValidation.status, 0, `${entryValidation.stdout}${entryValidation.stderr}`);
     assert.equal(runNext(root, ['--entry', 'idea.md']).state, 'gate_what');
 
     const artifactRoot = path.join(root, '.plan2agent', 'artifacts', 'webhook-api-service');
-    mkdirSync(artifactRoot, { recursive: true });
-    for (const gate of ['gate-a-intake', 'gate-b-spec']) {
-      cpSync(path.join(FIXTURE_ROOT, '_e2e', 'webhook-api-service', gate), path.join(artifactRoot, gate), {
-        recursive: true,
-      });
-    }
+    fixtureIntake.evidence[0].url = 'idea.md';
+    fixtureIntake.approval_audit.approval_note = 'Confirmed the scope interpretation derived from idea.md.';
+    writeJson(path.join(artifactRoot, 'gate-a-intake', 'intake.json'), fixtureIntake);
+    assert.equal(runNext(root, ['--entry', 'idea.md']).state, 'gate_a_ready_for_spec');
 
-    const next = runNext(root, ['--entry', 'idea.md']);
-    assert.equal(next.state, 'gate_b_approved_needs_tasks');
-    assert.equal(next.command.display, '/p2a-task-breakdown');
+    const fixtureSpec = JSON.parse(readFileSync(
+      path.join(fixtureArtifactRoot, 'gate-b-spec', 'spec.json'),
+      'utf8',
+    ));
+    writeJson(path.join(artifactRoot, 'gate-b-spec', 'spec.json'), fixtureSpec);
+    assert.equal(runNext(root, ['--entry', 'idea.md']).state, 'gate_b_approved_needs_tasks');
+
+    const fixtureGraph = JSON.parse(readFileSync(
+      path.join(fixtureArtifactRoot, 'gate-c-task-graph', 'task-graph.json'),
+      'utf8',
+    ));
+    fixtureGraph.tasks = [fixtureGraph.tasks[0]];
+    writeJson(path.join(artifactRoot, 'gate-c-task-graph', 'task-graph.json'), fixtureGraph);
+    writeFileSync(
+      path.join(artifactRoot, 'status.md'),
+      '# Webhook API Service\n\nGate A-C artifacts are validated and ready for iteration init.\n',
+      'utf8',
+    );
+
+    let next = runNext(root, ['--entry', 'idea.md']);
+    assert.equal(next.state, 'gate_c_validated_needs_iteration_init');
+    let result = runP2a(next.command.argv);
+    assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+
+    next = runNext(root, ['--entry', 'idea.md']);
+    assert.equal(next.state, 'ready_task_available');
+
+    const runId = 'run-entry-contract-e2e';
+    result = runP2a([
+      'execute', 'start',
+      '--artifacts', artifactRoot,
+      '--task', 'task-001',
+      '--run-id', runId,
+      '--agent-tool', 'codex',
+      '--workspace', root,
+      '--workspace-ref', 'entry-contract-e2e',
+    ]);
+    assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+
+    result = runP2a([
+      'execute', 'finish',
+      '--artifacts', artifactRoot,
+      '--run-id', runId,
+      '--status', 'finished',
+      '--test-command', `"${process.execPath}" -e "process.exit(0)"`,
+    ]);
+    assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+
+    result = runP2a([
+      'iteration', 'validate',
+      '--artifacts', artifactRoot,
+      '--require-close-ready',
+    ]);
+    assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+    assert.match(result.stdout, /close-ready: all tasks done/);
+
+    next = runNext(root, ['--entry', 'idea.md']);
+    assert.equal(next.state, 'iteration_ready_to_close');
+    result = runP2a(next.command.argv);
+    assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+    assert.match(result.stdout, /iteration closed/);
+
+    const iteration = JSON.parse(readFileSync(
+      path.join(artifactRoot, 'iterations', 'v1-mvp', 'iteration.json'),
+      'utf8',
+    ));
+    assert.equal(iteration.status, 'archived');
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
