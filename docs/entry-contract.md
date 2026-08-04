@@ -19,8 +19,8 @@
 1. 경로가 존재하는 일반 파일이어야 한다.
 2. 확장자는 Markdown 또는 텍스트여야 한다: 확장자 없음, `.md`, `.markdown`, `.txt`, `.text`.
 3. 공백을 제외한 본문이 있어야 한다.
-4. 만들거나 개선할 제품, 서비스, 도구, 기능 또는 시스템이 무엇인지 설명해야 한다.
-5. `.plan2agent/artifacts/<project_id>/preflight-research/<sequence>/` 아래 Radar 문서라면 같은 디렉터리의 `handoff-manifest.md`로 출처를 증명해야 한다.
+
+본문에서 무엇을 만들지 확실히 판정하지 못해도 진입을 차단하지 않는다. 이 판정은 키워드 기반 보조 신호일 뿐이며, 불명확하면 warning을 출력하고 범위 확인 대화에서 되묻는다. `.plan2agent/artifacts/<project_id>/preflight-research/<sequence>/` 아래 Radar 문서의 manifest 출처 정보가 없거나 불완전해도 같은 방식으로 warning을 출력한다.
 
 다음은 필수 조건이 아니다.
 
@@ -31,7 +31,7 @@
 - Gate A/B schema를 원문에 직접 표현하는 일
 - discovery dimension 처분, `CQ-n`/`ND-n`, `canonical_effect`, `affected_fields`, `spec_updates`, 라운드 또는 진행도 카운터
 
-웹 URL이 12개를 초과하거나 추천 항목이 8개를 초과하면 검증은 성공하고 warning만 출력한다. 이후 evidence 변환에서는 각각 앞의 12개와 8개만 승격하며, 원문 전체는 별도 참조로 보존한다.
+웹 URL이 12개를 초과하거나 추천 항목이 8개를 초과하면 검증은 성공하고 warning만 출력한다. 이후 evidence 변환에서는 각각 앞의 12개와 8개만 승격하며, 원문 전체는 별도 참조로 보존한다. 문서가 없거나 비어 있거나 지원하지 않는 형식일 때만 진입 검증을 차단한다.
 
 ## 3. 발견과 우선순위
 
@@ -65,14 +65,14 @@ Radar 산출물은 다음 역할로 구분한다. 진입 시에는 주 입력 �
 | `local-project-scan.md` | 참조 전용 |
 | `handoff-manifest.md` | 출처 기록 |
 
-Radar 진입 문서는 같은 디렉터리의 `handoff-manifest.md`가 다음을 증명해야 한다.
+Radar 진입 문서는 같은 디렉터리의 `handoff-manifest.md`에 다음 출처 정보를 기록하는 것이 권장된다.
 
 - `handoff_mode: p2a-preflight` 또는 같은 의미의 `mode: p2a-preflight`
 - 비어 있지 않은 `source_run`
 - sequence 디렉터리를 사용할 때 경로와 일치하는 `preflight_sequence`
 - `Copied Files` 목록에 선택된 진입 문서 이름 포함
 
-`source_complete: false`는 출처가 불완전하다는 warning이며 진입 자체를 거부하지 않는다. Radar 파일은 기존 evidence 모델을 그대로 사용한다. 문서는 `LOCAL-n`, 발견 URL은 `WEB-n`, 추천은 `reference_reconnaissance.candidates`의 `origin: "feature_radar_preflight"`로 들어간다. 추천은 처음에는 context이며, 사용자의 범위 확인 전에는 승인된 scope가 아니다.
+manifest가 없거나 위 정보가 불완전하거나 `source_complete: false`이면 출처 확인 warning을 남기되 진입 자체를 거부하지 않는다. 이는 Radar 산출물 형식을 진입 필드 schema로 고정하지 않기 위한 경계다. Radar 파일은 기존 evidence 모델을 그대로 사용한다. 문서는 `LOCAL-n`, 발견 URL은 `WEB-n`, 추천은 `reference_reconnaissance.candidates`의 `origin: "feature_radar_preflight"`로 들어간다. 추천은 처음에는 context이며, 사용자의 범위 확인 전에는 승인된 scope가 아니다.
 
 두 Radar 모드는 다음 진입 흐름을 사용한다.
 
@@ -87,11 +87,17 @@ Radar 진입 문서는 같은 디렉터리의 `handoff-manifest.md`가 다음을
 
 ### `p2a next`
 
-하네스는 설치되었지만 canonical 기획 상태와 선택 가능한 진입 문서가 없으면 다음 상태를 반환한다.
+하네스는 설치되었지만 artifact root가 없고 `--entry`도 전달되지 않으면 기존 한 문장 아이디어 인터뷰를 안내한다.
 
-- `state: entry_missing`
+- `state: initialized_without_artifacts`
+- `command.kind: skill`
+- 다음 행동: `/p2a-harness "<one-sentence idea>"` 실행. 준비된 문서가 있으면 `p2a next --entry <path>`를 사용할 수 있다.
+
+선택된 진입 문서가 없거나 비어 있거나 지원하지 않는 형식이라 검증에 실패하고 재개할 canonical 상태도 없으면 다음 상태를 반환한다.
+
+- `state: entry_invalid`
 - `command.kind: approval`
-- 다음 행동: 짧은 아이디어 문서를 제공하고 `p2a next --entry <path>` 실행
+- 다음 행동: 문서를 수정한 뒤 `p2a validate --entry <path>` 실행
 
 유효한 진입 문서가 선택되면 다음 상태를 반환한다.
 
@@ -99,13 +105,13 @@ Radar 진입 문서는 같은 디렉터리의 `handoff-manifest.md`가 다음을
 - `command.kind: skill`
 - 다음 행동: `/p2a-harness --entry "<path>"`로 범위 확인
 
-선택된 진입 문서가 유효하지 않고 재개할 canonical 상태도 없으면 `p2a next`는 오류로 중단한다. 기존 Gate 상태가 있으면 진입 문서 오류보다 canonical 재개 경로가 우선한다.
+기존 Gate 상태가 있으면 진입 문서 오류보다 canonical 재개 경로가 우선한다.
 
 ### `p2a info`와 `p2a doctor`
 
 자동 선택된 진입 문서가 하나이면 `p2a info --json`은 기존 JSON 필드를 유지하면서 조건부 `entry` 요약과 검증/확인 next action을 추가한다. 진입 문서가 없으면 기존 JSON shape을 바꾸지 않는다.
 
-`p2a doctor`는 Radar-only artifact root도 `planning_in_progress`로 인식한다. 유효한 entry-only 프로젝트에는 `p2a validate --entry <path>`를 안내하며, 출처나 최소 문서 계약 오류는 artifact diagnostic으로 보고한다. URL/추천 상한 초과 warning은 설치 실패로 승격하지 않는다.
+`p2a doctor`는 Radar-only artifact root도 `planning_in_progress`로 인식한다. 유효한 entry-only 프로젝트에는 `p2a validate --entry <path>`를 안내한다. 문서 누락·빈 문서·지원하지 않는 형식은 artifact diagnostic으로 보고하지만, Radar 출처 정보나 scope 보조 판정, URL/추천 상한 warning은 설치 실패로 승격하지 않는다.
 
 ## 6. 범위 확인 대화
 

@@ -376,7 +376,7 @@ function radarEntryMetadata(entryPath) {
   };
 }
 
-function radarProvenanceErrors(entryPath, metadata) {
+function radarProvenanceWarnings(entryPath, metadata) {
   if (!metadata) return [];
   if (!isFile(metadata.manifestPath)) {
     return [`Feature Radar entry requires sibling handoff-manifest.md: ${metadata.manifestPath}`];
@@ -419,6 +419,7 @@ export function inspectEntryDocument(entryPath, options = {}) {
   const extension = path.extname(resolvedPath).toLowerCase();
   const radar = radarEntryMetadata(resolvedPath);
   const errors = [];
+  const warnings = [];
   let text = '';
   if (!isFile(resolvedPath)) {
     errors.push(`entry document is missing or not a file: ${resolvedPath}`);
@@ -430,15 +431,17 @@ export function inspectEntryDocument(entryPath, options = {}) {
   }
   const whatDescribed = Boolean(text.trim()) && entryWhatIsDescribed(text);
   if (text.trim() && !whatDescribed) {
-    errors.push('entry document must describe what will be built');
+    warnings.push(
+      'entry document may not state what will be built; confirm the scope in the dialogue',
+    );
   }
-  errors.push(...radarProvenanceErrors(resolvedPath, radar));
+  const provenanceIssues = radarProvenanceWarnings(resolvedPath, radar);
+  warnings.push(...provenanceIssues);
 
   const webSourceCount = uniqueUrls(text).length;
   const recommendationCount = extractMarkdownRecommendations(text, resolvedPath)
     .filter((recommendation) => !isReferenceListItem(recommendation))
     .length;
-  const warnings = [];
   if (webSourceCount > MAX_WEB_SOURCES) {
     warnings.push(
       `entry document contains ${webSourceCount} web sources; only the first ${MAX_WEB_SOURCES} are promoted and the original remains a reference`,
@@ -473,7 +476,7 @@ export function inspectEntryDocument(entryPath, options = {}) {
       document: isFile(resolvedPath) && ENTRY_TEXT_EXTENSIONS.has(extension) && Boolean(text.trim()),
       scopeWhat: whatDescribed,
       limits: true,
-      provenance: !radar || radarProvenanceErrors(resolvedPath, radar).length === 0,
+      provenance: provenanceIssues.length === 0,
     },
     webSourceCount,
     recommendationCount,

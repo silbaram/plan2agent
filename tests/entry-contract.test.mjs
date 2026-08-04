@@ -15,6 +15,9 @@ import {
   makeTempDir,
   runP2a,
 } from './helpers/fixtures.mjs';
+import { inspectEntryDocument } from '../scripts/p2a_radar_preflight.mjs';
+
+const posix = (value) => String(value).replace(/\\/g, '/');
 
 function writeJson(filePath, value) {
   mkdirSync(path.dirname(filePath), { recursive: true });
@@ -103,7 +106,8 @@ test('entry contract documentation records discovery, validation, dialogue, and 
   assert.match(contract, /`constitution\.json` 재사용/);
   assert.match(contract, /`CQ-n`\/`ND-n`/);
   assert.match(contract, /12개를 초과하거나 추천 항목이 8개를 초과하면.*warning/);
-  assert.match(contract, /`state: entry_missing`/);
+  assert.match(contract, /`state: entry_invalid`/);
+  assert.match(contract, /`state: initialized_without_artifacts`/);
   assert.match(contract, /`state: gate_what`/);
   assert.match(contract, /## 6\. 범위 확인 대화/);
   assert.match(contract, /`selected`, `rejected`, `deferred`/);
@@ -143,8 +147,50 @@ test('a thin user-authored entry document validates and enters scope confirmatio
 
     writeFileSync(entryPath, '팀은 지금 많은 시간을 낭비하고 있다.\n', 'utf8');
     const missingWhat = runP2a(['validate', '--entry', entryPath]);
-    assert.notEqual(missingWhat.status, 0);
-    assert.match(`${missingWhat.stdout}${missingWhat.stderr}`, /describe what will be built/);
+    assert.equal(missingWhat.status, 0, `${missingWhat.stdout}${missingWhat.stderr}`);
+    assert.match(missingWhat.stdout, /scope: confirm what will be built in the dialogue/);
+    assert.match(missingWhat.stderr, /may not state what will be built/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('a plain description without dictionary keywords still validates with a scope warning', () => {
+  const root = project();
+  try {
+    const entryPath = path.join(root, 'idea.md');
+    writeFileSync(
+      entryPath,
+      'Webhook relay for Slack. Receives inbound events and forwards them.\n',
+      'utf8',
+    );
+
+    const entry = inspectEntryDocument(entryPath);
+    assert.equal(entry.valid, true);
+    assert.equal(entry.checks.scopeWhat, false);
+    assert.deepEqual(entry.errors, []);
+    assert.match(entry.warnings.join('\n'), /confirm the scope in the dialogue/);
+
+    const validation = runP2a(['validate', '--entry', entryPath]);
+    assert.equal(validation.status, 0, `${validation.stdout}${validation.stderr}`);
+    assert.match(validation.stderr, /may not state what will be built/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('a fresh harness without an entry document still routes to the one-line idea interview', () => {
+  const root = project();
+  try {
+    const next = runNext(root);
+    assert.equal(next.state, 'initialized_without_artifacts');
+    assert.equal(next.command.kind, 'skill');
+    assert.equal(next.command.display, '/p2a-harness "<one-sentence idea>"');
+
+    const invalid = runNext(root, ['--entry', 'missing.md']);
+    assert.equal(invalid.state, 'entry_invalid');
+    assert.equal(invalid.command.kind, 'approval');
+    assert.match(invalid.command.display, /validate --entry .*missing\.md/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -211,20 +257,20 @@ test('the latest Radar sequence chooses collection report first and existing-pro
 
     let next = runNext(root);
     assert.equal(next.state, 'gate_what');
-    assert.match(next.command.display, /002-followup\/collection-report\.md/);
+    assert.match(posix(next.command.display), /002-followup\/collection-report\.md/);
 
     const info = runP2a(['info', '--target', root, '--json']);
     assert.equal(info.status, 0, `${info.stdout}${info.stderr}`);
     const infoPayload = JSON.parse(info.stdout);
     assert.equal(infoPayload.entry.valid, true);
-    assert.match(infoPayload.entry.path, /002-followup\/collection-report\.md$/);
+    assert.match(posix(infoPayload.entry.path), /002-followup\/collection-report\.md$/);
 
     const doctor = runP2a(['doctor', '--target', root, '--json']);
     assert.notEqual(doctor.status, null, `${doctor.stdout}${doctor.stderr}`);
     const doctorPayload = JSON.parse(doctor.stdout);
     assert.equal(doctorPayload.projectState.state, 'planning_in_progress');
     assert.match(
-      doctorPayload.projectState.commands[0].command,
+      posix(doctorPayload.projectState.commands[0].command),
       /p2a validate --entry .*002-followup\/collection-report\.md/,
     );
 
@@ -235,19 +281,47 @@ test('the latest Radar sequence chooses collection report first and existing-pro
     writeFileSync(manifestPath, manifest, 'utf8');
     next = runNext(root);
     assert.equal(next.state, 'gate_what');
-    assert.match(next.command.display, /002-followup\/next-iteration-recommendations\.md/);
+    assert.match(posix(next.command.display), /002-followup\/next-iteration-recommendations\.md/);
 
     rmSync(manifestPath);
-    const invalidRadar = runP2a([
+    const incompleteRadar = runP2a([
       'validate',
       '--entry',
       path.join(latestRoot, 'next-iteration-recommendations.md'),
     ]);
-    assert.notEqual(invalidRadar.status, 0);
-    assert.match(`${invalidRadar.stdout}${invalidRadar.stderr}`, /requires sibling handoff-manifest\.md/);
+    assert.equal(incompleteRadar.status, 0, `${incompleteRadar.stdout}${incompleteRadar.stderr}`);
+    assert.match(incompleteRadar.stderr, /requires sibling handoff-manifest\.md/);
 
-    const invalidDoctor = runP2a(['doctor', '--target', root, '--json']);
-    assert.equal(JSON.parse(invalidDoctor.stdout).projectState.state, 'broken_install');
+    const incompleteDoctor = runP2a(['doctor', '--target', root, '--json']);
+    assert.equal(JSON.parse(incompleteDoctor.stdout).projectState.state, 'planning_in_progress');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('an incomplete Radar handoff manifest warns but does not block entry', () => {
+  const root = project();
+  try {
+    const artifactRoot = path.join(root, '.plan2agent', 'artifacts', 'sample');
+    const sequenceRoot = writeRadarSequence(artifactRoot, '001-entry', {
+      'collection-report.md': '# Collection Report\n\nBuild a delivery dashboard.\n',
+    });
+    const entryPath = path.join(sequenceRoot, 'collection-report.md');
+    writeFileSync(
+      path.join(sequenceRoot, 'handoff-manifest.md'),
+      '# Feature Radar Handoff Manifest\n\nhandoff_mode: p2a-preflight\n',
+      'utf8',
+    );
+
+    const entry = inspectEntryDocument(entryPath);
+    assert.equal(entry.valid, true);
+    assert.equal(entry.checks.provenance, false);
+    assert.deepEqual(entry.errors, []);
+    assert.ok(entry.warnings.length > 0);
+    assert.match(entry.warnings.join('\n'), /must record source_run/);
+
+    const next = runNext(root);
+    assert.equal(next.state, 'gate_what');
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -267,7 +341,11 @@ test('canonical Gate artifacts take deterministic priority over a coexisting ent
     const directEntry = path.join(root, 'direct-entry.md');
     writeFileSync(directEntry, 'Build a competing project dashboard.\n', 'utf8');
 
-    for (const args of [[], ['--entry', 'direct-entry.md']]) {
+    for (const args of [
+      [],
+      ['--entry', 'direct-entry.md'],
+      ['--entry', 'missing-entry.md'],
+    ]) {
       const next = runNext(root, args);
       assert.equal(next.state, 'gate_d_passed_needs_iteration_init');
       assert.equal(next.command.kind, 'cli');

@@ -1391,16 +1391,17 @@ export const NEXT_DECISION_RULES = [
     command: (context) => ['init', '--target', commandTarget(context.targetRoot)],
   },
   {
-    state: 'entry_missing',
+    state: 'entry_invalid',
     kind: 'approval',
     when: (context) => (
       context.hasHarness
       && !context.hasCanonicalPlanningState
-      && !context.entry
+      && context.entry
+      && context.entry.valid === false
     ),
-    reason: () => 'No primary Markdown or text entry document was found.',
-    command: () => (
-      'Provide a concise idea document, then run p2a next --entry <path>.'
+    reason: (context) => `The entry document did not validate: ${context.entryArg}`,
+    command: (context) => (
+      `Fix the document, then run ${p2aCommandLine(P2A_PATHS, ['validate', '--entry', context.entryArg])}.`
     ),
   },
   {
@@ -1415,6 +1416,13 @@ export const NEXT_DECISION_RULES = [
       `The entry document is ready for scope confirmation: ${context.entryArg}`
     ),
     command: (context) => `/p2a-harness --entry ${JSON.stringify(context.entryArg)}`,
+  },
+  {
+    state: 'initialized_without_artifacts',
+    kind: 'skill',
+    when: (context) => context.hasHarness && !context.info.artifacts.length,
+    reason: () => 'The harness is installed, but no planning artifact root exists yet. Start from a one-line idea, or pass a prepared idea document with p2a next --entry <path>.',
+    command: () => '/p2a-harness "<one-sentence idea>"',
   },
   {
     state: 'incomplete_iteration_layout',
@@ -1751,13 +1759,6 @@ function buildNext(targetRootInput, requestedProjectId, entryPath) {
     snapshot.reviewPasses,
     snapshot.explicitEntry,
   );
-  if (
-    context.entry
-    && context.entry.valid !== true
-    && !context.hasCanonicalPlanningState
-  ) {
-    throw new Error(`entry document is invalid: ${context.entry.errors.join('; ')}`);
-  }
   const action = decideNextAction(context);
   return {
     schema_version: 'p2a.next.v1',

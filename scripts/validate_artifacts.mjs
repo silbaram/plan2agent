@@ -4848,9 +4848,15 @@ export function validateEntryDocument(entryPath) {
   }
   console.log(`Plan2Agent entry validation passed: ${entry.path}`);
   console.log('- document: present and non-empty Markdown/text');
-  console.log('- scope: what will be built is described');
+  console.log(entry.checks.scopeWhat
+    ? '- scope: what will be built is described'
+    : '- scope: confirm what will be built in the dialogue');
   console.log(`- limits: ${entry.webSourceCount} web source(s), ${entry.recommendationCount} recommendation(s)`);
-  console.log(`- provenance: ${entry.sourceKind === 'feature_radar_preflight' ? 'Feature Radar handoff confirmed' : 'user document'}`);
+  console.log(`- provenance: ${entry.sourceKind === 'feature_radar_preflight'
+    ? entry.checks.provenance
+      ? 'Feature Radar handoff confirmed'
+      : 'Feature Radar handoff requires confirmation'
+    : 'user document'}`);
   for (const warning of entry.warnings) console.warn(`warning: ${warning}`);
   return entry;
 }
