@@ -17,7 +17,14 @@ import {
 } from './helpers/fixtures.mjs';
 import { inspectEntryDocument } from '../scripts/p2a_radar_preflight.mjs';
 
-const posix = (value) => String(value).replace(/\\/g, '/');
+const posix = (value) => String(value).replace(/\\+/g, '/');
+
+test('path assertions normalize Linux and Windows separators', () => {
+  const expected = 'C:/Users/dev/002-followup/collection-report.md';
+  assert.equal(posix('/tmp/p2a/002-followup/collection-report.md'), '/tmp/p2a/002-followup/collection-report.md');
+  assert.equal(posix(String.raw`C:\Users\dev\002-followup\collection-report.md`), expected);
+  assert.equal(posix(String.raw`C:\\Users\\dev\\002-followup\\collection-report.md`), expected);
+});
 
 function writeJson(filePath, value) {
   mkdirSync(path.dirname(filePath), { recursive: true });
