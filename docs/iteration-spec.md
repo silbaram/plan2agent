@@ -1,6 +1,6 @@
 # Plan2Agent 반복/고도화 개발 스펙
 
-참고 기준일: 2026-06-15
+참고 기준일: 2026-08-05
 
 이 문서는 Plan2Agent(P2A)가 MVP 이후 기존 프로젝트에 기능을 이어 추가하는 반복/고도화 개발 구조를 정의한다. `plans/01-product-roadmap.md`는 제품 방향과 상태 요약을 담고, 이 문서는 다회차 기획과 개발 운영에 필요한 구현 계약을 더 자세히 고정한다.
 
@@ -14,7 +14,8 @@
 
 | 범위 | 구현 | 검증 기준 |
 | --- | --- | --- |
-| greenfield -> iteration 변환 | `p2a iteration init` | 기존 Gate A-C 산출물을 `iterations/<iter-id>/gate-*`로 이동하고, 이동된 spec/task를 재검증한다. |
+| 결정 원장 | `p2a decide`, `p2a decisions`, `p2a shape` | Gate ①② 승인·철회와 범위·헌법 변경을 append-only `decisions.jsonl`에 기록하고 원장이 존재하면 승인 상태의 정본으로 사용한다. |
+| greenfield -> iteration 변환 | `p2a iteration init` | 기존 Gate A-C 산출물을 `iterations/<iter-id>/gate-*`로 이동하고, 이동된 spec/task를 재검증하며 원장 승인을 새 경로에 재결합한다. |
 | root index 생성 | `current-spec.json`, generated `status.md`, `iterations/maintenance/README.md` | thin current-spec pointer와 optional status view를 생성한다. |
 | active iteration 해석 | `p2a iteration current` | `current-spec.json.active_iteration`을 정본으로 active 경로를 출력한다. |
 | task CLI 반복 적응 | `p2a tasks --artifacts` | active 반복의 `task-graph.json`을 자동 선택해 ready/prompt/start/done 전이를 수행하고, `--maintenance`로 maintenance 레인도 선택할 수 있다. |
@@ -61,12 +62,12 @@
 
 Plan2Agent의 핵심 가치는 기획의 변경 사항이 agent가 실행 가능한 명세와 task로 이어지고, 그 과정과 결과가 시맨틱 문서로 남는 순환 시스템을 만드는 것이다.
 
-현재 권장 v1 greenfield 흐름은 `p2a init --target <project>`로 코드 프로젝트에 하네스를 설치한 뒤, 그 프로젝트가 다음 한 바퀴의 앞쪽과 뒤쪽을 모두 소유한다. 기존 handoff는 이미 다른 위치에 만들어진 planning bundle을 복사해야 하는 특수 상황에 남겨둔다.
+현재 권장 greenfield 흐름은 `p2a init --target <project>`로 코드 프로젝트에 하네스를 설치한 뒤, 그 프로젝트가 기획부터 반복 실행까지 같은 artifact root를 소유한다. 기존 handoff는 이미 다른 위치에 만들어진 planning bundle을 복사해야 하는 특수 상황에 남겨둔다.
 
-현재 v1 greenfield 흐름은 다음 한 바퀴의 앞쪽을 담당한다.
+현재 greenfield 흐름은 다음 한 바퀴를 담당한다.
 
 ```text
-진입 문서 -> 범위 확인 intake -> spec -> task graph -> validate -> handoff
+진입 문서 -> Gate ①/② 결정 -> spec 승인 -> task graph validation -> iteration init -> 감독형 실행
 ```
 
 MVP 이후에는 이미 만들어진 산출물과 대상 프로젝트 위에 작은 기능, 개선, 수정, 재작업을 계속 얹어야 한다. 반복/고도화 구조는 그 다음에 오는 흐름을 파일 기반으로 고정한다.
@@ -126,6 +127,7 @@ Memory가 활성화되고 연결된 iterative root에서는 next iteration을 �
 ```text
 .plan2agent/artifacts/<project>/
   status.md                         # generated 반복 인덱스 view
+  decisions.jsonl                  # append-only Gate/scope/constitution decision authority
   current-spec.json                 # 현재 유효 spec 조합본, baseline-aware 기획 컨텍스트
   iterations/
     <iter-id>/
@@ -277,6 +279,7 @@ p2a iteration init \
 3. 루트 `current-spec.json`은 `iterations/<iteration-id>/gate-b-spec/spec.json`을 가리키는 thin pointer로 생성한다.
 4. `iterations/maintenance/README.md`를 만든다. 빈 task graph는 `p2a` package schema `task-graph.schema.json`의 최소 task 수 제약을 위반하므로 만들지 않는다.
 5. 이동된 spec과 task graph를 다시 검증한다.
+6. `decisions.jsonl`이 있으면 기존 Gate ① 승인을 이동된 artifact 경로와 SHA-256에 다시 결합하는 append 항목을 기록한다. 이 append나 이동 후 검증이 실패하면 이동 파일, generated state와 원장 bytes를 모두 init 전 상태로 롤백한다.
 
 ```bash
 p2a iteration current --artifacts .plan2agent/artifacts/<project_id>
@@ -344,11 +347,11 @@ p2a iteration draft \
   --artifacts .plan2agent/artifacts/<project_id>
 ```
 
-`draft`는 `open`으로 저장된 `current-spec.json.pending_iteration.idea`, `baseline_effective_spec_ref`, `baseline_effective_spec_sha256`을 읽는다. composed baseline이면 immutable snapshot의 hash와 current-effective composition 일치를 먼저 검증한다. baseline이 있는 반복에 ready intake가 없으면 변경 아이디어와 baseline provenance를 담은 Gate A scope draft만 만들고, 결과·최소 범위·baseline override처럼 범위를 실질적으로 바꾸는 open question을 ledger에 기록한다. 별도 질문 상태 기계나 진행도 counter는 만들지 않으며 이 시점에는 Gate B `spec.json`도 만들지 않는다. 사용자가 scope 요약을 명시적으로 확인해 `status: "ready_for_spec"`와 `approval_audit`을 기록한 뒤 다시 호출하면 Gate B 초안을 생성한다.
+`draft`는 `open`으로 저장된 `current-spec.json.pending_iteration.idea`, `baseline_effective_spec_ref`, `baseline_effective_spec_sha256`을 읽는다. composed baseline이면 immutable snapshot의 hash와 current-effective composition 일치를 먼저 검증한다. baseline이 있는 반복에 ready intake가 없으면 변경 아이디어와 baseline provenance를 담은 Gate A scope draft만 만들고, 결과·최소 범위·baseline override처럼 범위를 실질적으로 바꾸는 open question을 intake decision 목록에 기록한다. 별도 질문 상태 기계나 진행도 counter는 만들지 않으며 이 시점에는 Gate B `spec.json`도 만들지 않는다. 사용자가 scope 요약을 명시적으로 확인한 뒤 `p2a decide --quote "<사용자 발화>" --artifacts <root>`를 실행하면 원장과 `approval_audit` 사본이 함께 기록되고, 다시 `draft`를 호출해 Gate B 초안을 생성할 수 있다.
 
 초기 Gate A-only 반복에서는 `baseline_effective_spec_ref`가 없어도 기존 `gate-a-intake/intake.json`을 사용해 Gate B 초안을 생성한다. 이 경우 기존 intake 파일은 유지하고 Gate B 산출물만 쓴다.
 
-baseline-aware Gate A는 기존 source intake/spec에서 답변된 `ND-n`과 `CQ-n` disposition을 `baseline_context`에 provenance와 함께 보존한다. harness는 관련 답변을 재사용하고 변경되거나 충돌하는 영역만 scope ledger에 기록한다. 사용자가 Gate A 이해 요약을 명시적으로 확인하면 `status: "ready_for_spec"`와 `approval_audit`을 기록한다. 같은 harness session에서 `draft`를 이어 호출하면 그때 Gate B 초안과 delta-first Markdown view를 생성한다.
+baseline-aware Gate A는 기존 source intake/spec에서 답변된 `ND-n`과 `CQ-n` disposition을 `baseline_context`에 provenance와 함께 보존한다. harness는 관련 답변을 재사용하고 변경되거나 충돌하는 영역만 intake decision 목록에 기록한다. 사용자가 Gate A 이해 요약을 명시적으로 확인하면 `p2a decide`가 `status: "ready_for_spec"`, `approval_audit` 사본과 원장 결정을 함께 기록한다. 같은 harness session에서 `draft`를 이어 호출하면 그때 Gate B 초안과 delta-first Markdown view를 생성한다.
 
 생성 산출물과 선택적 view:
 
@@ -358,14 +361,14 @@ baseline-aware Gate A는 기존 source intake/spec에서 답변된 `ND-n`과 `CQ
 - `iterations/<iter-id>/gate-b-spec/product-spec.md`
 - `iterations/<iter-id>/gate-b-spec/implementation-plan.md`
 
-기본 동작은 기존 Gate B 파일이 있으면 중단한다. 승인 전 Gate A intake가 있으면 이를 덮어쓰지 않고 현재 scope ledger를 유지한다. 변경 아이디어를 덮어 쓰려면 `--idea "<change idea>"`, Gate A/B 초안을 처음부터 재생성하려면 `--force`를 명시한다. `--force`로 baseline-aware 초안을 재생성하면 이전 Gate B draft를 제거하고 새 Gate A scope 확인부터 다시 시작한다. 생성된 `spec.json`은 `approval: "draft"`이므로 Gate C task graph 생성 전 사용자 검토와 승인 단계가 필요하다. `current-spec.json.effective_spec_ref`는 계속 baseline spec을 가리키고, 새 반복 spec은 `pending_iteration.artifacts.spec_ref`에 기록된다.
+기본 동작은 기존 Gate B 파일이 있으면 중단한다. 승인 전 Gate A intake가 있으면 이를 덮어쓰지 않고 현재 intake decision 목록을 유지한다. 변경 아이디어를 덮어 쓰려면 `--idea "<change idea>"`, Gate A/B 초안을 처음부터 재생성하려면 `--force`를 명시한다. `--force`로 baseline-aware 초안을 재생성하면 이전 Gate B draft를 제거하고 새 Gate A scope 확인부터 다시 시작한다. 생성된 `spec.json`은 `approval: "draft"`이므로 Gate C task graph 생성 전 사용자 검토 후 `p2a decide --quote "<사용자 발화>" --artifacts <root>`로 Gate B 승인을 기록해야 한다. `current-spec.json.effective_spec_ref`는 계속 baseline spec을 가리키고, 새 반복 spec은 `pending_iteration.artifacts.spec_ref`에 기록된다.
 
 ```bash
 p2a iteration promote-spec \
   --artifacts .plan2agent/artifacts/<project_id>
 ```
 
-`promote-spec`는 active 반복의 Gate B `spec.json`이 `approval: "approved"`이고 `open_decisions`가 비어 있는지 검증한 뒤 `iteration.json`과 `current-spec.json.pending_iteration`에 `gate_b_approved` 상태를 기록한다. 초기 Gate A-only 반복처럼 `current-spec.json.effective_spec_ref`가 없던 경우에는 active spec을 현재 유효 spec으로 설정한다. 이미 baseline이 있는 후속 반복에서는 baseline pointer와 `composed_from/source_specs` 조합본을 보존하고, 실제 current-effective 반영은 Gate C validation과 close/compose 이후 수행한다.
+`promote-spec`는 `p2a decide`로 승인된 active 반복의 Gate B `spec.json`이 `approval: "approved"`이고 `open_decisions`가 비어 있는지 검증한 뒤 `iteration.json`과 `current-spec.json.pending_iteration`에 `gate_b_approved` 상태를 기록한다. 초기 Gate A-only 반복처럼 `current-spec.json.effective_spec_ref`가 없던 경우에는 active spec을 현재 유효 spec으로 설정한다. 이미 baseline이 있는 후속 반복에서는 baseline pointer와 `composed_from/source_specs` 조합본을 보존하고, 실제 current-effective 반영은 Gate C validation과 close/compose 이후 수행한다.
 
 ```bash
 p2a iteration diff-tasks \
@@ -573,7 +576,7 @@ p2a handoff \
 - `.plan2agent/artifacts/status.md`
 - `.plan2agent/current-spec.json`
 
-handoff는 active 반복의 `task-graph.sourceSpec`을 `spec.json`으로, `spec.source_intake`를 `intake.json`으로 rebase하고, traceability 검증을 위해 active 반복의 `gate-a-intake/intake.json`을 항상 `.plan2agent/artifacts/<project_id>/gate-a-intake/intake.json`으로 함께 복사한다. `--include-intake`를 붙이면 기존 Markdown 파일을 복사하지 않고 대상에 기록할 canonical `intake.json`에서 explicit-export marker가 있는 최신 사람용 `.plan2agent/artifacts/<project_id>/gate-a-intake/intake.md`를 다시 생성한다. `--run-transfer completed`가 기본값이며 milestone review가 직접 참조한 canonical `p2a.run.v2` finished evidence와 동일 iteration/task graph의 최신 finished `final_visual_review` evidence를 복사한다. 후자는 pre-close milestone 뒤에 생성되는 close-ready 증거이므로 milestone snapshot에 아직 직접 참조되지 않아도 포함된다. 이 portable 경로는 run·provenance JSON의 자동 migration/rewrite를 수행하지 않는다. Run layout은 `p2a runs migrate-layout`, finished v1 schema는 `p2a runs migrate-schema`, non-canonical provenance reference는 명시적 import/migration workflow로 handoff 전에 정규화한다. 진행 중 non-visual run이나 구형 호환 이력까지 source closure와 함께 재개해야 할 때만 `--run-transfer resumable`을 명시한다. 진행 중 final visual review는 canonical workspace에 묶여 있으므로 resumable 인계도 거부하며 먼저 finish 또는 block해야 한다. Handoff는 쓰기 뒤 target Gate A-C bundle과 run store를 재검증하고 실패 시 target을 rollback한다. 반복 history 보존을 위해 iterative root에서는 `--mode move`를 지원하지 않고 `copy`만 허용한다. maintenance task graph가 있으면 active graph와 병합하지 않고 `.plan2agent/maintenance/task-graph.json`으로 별도 복사한다.
+handoff는 active 반복의 `task-graph.sourceSpec`을 `spec.json`으로, `spec.source_intake`를 `intake.json`으로 rebase하고, traceability 검증을 위해 active 반복의 `gate-a-intake/intake.json`을 항상 `.plan2agent/artifacts/<project_id>/gate-a-intake/intake.json`으로 함께 복사한다. `--include-intake`를 붙이면 기존 Markdown 파일을 복사하지 않고 대상에 기록할 canonical `intake.json`에서 explicit-export marker가 있는 최신 사람용 `.plan2agent/artifacts/<project_id>/gate-a-intake/intake.md`를 다시 생성한다. `decisions.jsonl`은 projection/rebuild 범위가 아니므로 평탄화 대상에 복사하거나 참조 경로를 다시 쓰지 않는다. 대상에 원장이 없으면 복사된 `approval_audit` 사본이 legacy fallback으로 작동하고 전체 결정 이력은 source artifact root에 보존된다. `--run-transfer completed`가 기본값이며 milestone review가 직접 참조한 canonical `p2a.run.v2` finished evidence와 동일 iteration/task graph의 최신 finished `final_visual_review` evidence를 복사한다. 후자는 pre-close milestone 뒤에 생성되는 close-ready 증거이므로 milestone snapshot에 아직 직접 참조되지 않아도 포함된다. 이 portable 경로는 run·provenance JSON의 자동 migration/rewrite를 수행하지 않는다. Run layout은 `p2a runs migrate-layout`, finished v1 schema는 `p2a runs migrate-schema`, non-canonical provenance reference는 명시적 import/migration workflow로 handoff 전에 정규화한다. 진행 중 non-visual run이나 구형 호환 이력까지 source closure와 함께 재개해야 할 때만 `--run-transfer resumable`을 명시한다. 진행 중 final visual review는 canonical workspace에 묶여 있으므로 resumable 인계도 거부하며 먼저 finish 또는 block해야 한다. Handoff는 쓰기 뒤 target Gate A-C bundle과 run store를 재검증하고 실패 시 target을 rollback한다. 반복 history 보존을 위해 iterative root에서는 `--mode move`를 지원하지 않고 `copy`만 허용한다. maintenance task graph가 있으면 active graph와 병합하지 않고 `.plan2agent/maintenance/task-graph.json`으로 별도 복사한다.
 
 `--tools codex,claude,gemini|all`은 반복 handoff에도 동일하게 적용된다. 산출물과 `current-spec.json`을 복사한 뒤 대상 프로젝트에 공통 `.agents/skills`, `.agents/agents`와 선택한 CLI별 `.codex`, `.claude`, `.gemini` P2A 자산을 설치하고, 설치 목록을 `.plan2agent/manifest.json`에 기록한다.
 

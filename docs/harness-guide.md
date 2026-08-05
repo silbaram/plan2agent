@@ -25,7 +25,7 @@
 
 ## 1. 개요
 
-Plan2Agent 하네스는 짧은 제품 문서를 바로 코드로 구현하지 않고, 승인 게이트를 거쳐 개발 가능한 계획으로 다듬는 planning workflow다. v1 하네스는 코드 변경, dependency 설치, 구현 목적의 shell 실행을 하지 않는다. 대신 Claude Code, Codex, Gemini CLI가 공통 skill과 subagent 역할을 사용해 같은 산출물 계약을 따르도록 한다.
+Plan2Agent planning 하네스는 짧은 제품 문서를 바로 코드로 구현하지 않고, 승인 게이트를 거쳐 개발 가능한 계획으로 다듬는 workflow다. Planning skill과 subagent는 코드 변경, dependency 설치, 구현 목적의 shell 실행을 하지 않는다. 실제 구현은 Gate C 이후 별도 `p2a-dev-execution` 계약에서 수행한다. Claude Code, Codex, Gemini CLI는 공통 skill과 subagent 역할을 사용해 같은 산출물 계약을 따른다.
 
 파이프라인은 다음 순서로 진행된다.
 
@@ -52,7 +52,7 @@ Plan2Agent 하네스는 짧은 제품 문서를 바로 코드로 구현하지 �
 
 - **명령 실행 위치를 구분한다.** Plan2Agent 본체 검증/개발 스크립트는 `/workspace/plan2agent` 같은 Plan2Agent 저장소 루트에서 실행한다. 실제 프로젝트의 런타임 명령은 `p2a init`으로 상태를 만든 프로젝트 루트에서 전역 `p2a`로 실행한다.
 - **Node.js가 필요하다.** 검증/동기화/fixture/task 관리 스크립트는 `#!/usr/bin/env node`로 실행되는 ESM(`.mjs`) 스크립트다. 별도 npm dependency를 설치하지 않고 Node.js 표준 라이브러리만 사용한다.
-- **v1 하네스는 read-only planning이다.** 하네스와 subagent는 제품 기획 산출물(`.md`, `.json`)을 만드는 데 집중한다. 코드 변경, dependency 설치, 구현 목적 shell 실행, git 조작은 v1 workflow에 포함하지 않는다. 단, 이 저장소의 검증 스크립트를 실행해 산출물 계약을 확인하는 것은 문서화된 검증 절차다.
+- **Planning 하네스는 read-only다.** 하네스와 planning subagent는 제품 기획 산출물(`.md`, `.json`)을 만드는 데 집중한다. 코드 변경, dependency 설치, 구현 목적 shell 실행, git 조작은 planning workflow에 포함하지 않는다. 단, 이 저장소의 검증 스크립트를 실행해 산출물 계약을 확인하는 것은 문서화된 검증 절차다.
 - **클론 직후 첫 검증은 fixture와 CLI parity를 확인한다.** 아래 두 명령이 통과하면 스키마/게이트 검증과 CLI mirror 상태가 기본적으로 맞아 있다.
 
 ```bash
@@ -100,7 +100,7 @@ Spec approval, 승인 감사 정보, open decision 해소, 모든 `CQ-n` disposi
 
 ### Gate C
 
-Task graph의 dependency, cycle, acceptance criteria, source spec reference를 검증한다. `task-graph.draft.json`이 validator를 통과하면 별도 사람 승인 audit 없이 `promote-tasks`로 정본에 승격할 수 있다. Gate D review 파일은 planning readiness, iteration init, handoff, close의 조건이 아니다.
+Task graph의 dependency, cycle, acceptance criteria, source spec reference를 검증한다. Greenfield flat bundle은 validator-clean canonical `gate-c-task-graph/task-graph.json`을 만든 뒤 `p2a iteration init`으로 반복 구조에 들어간다. 이미 active iteration이 있는 agent-authored 흐름에서는 `task-graph.draft.json`이 `p2a iteration validate --stage gate-c-draft`를 통과한 뒤 `promote-tasks`로 정본에 승격된다. 어느 경로에도 별도 사람 승인 audit은 없다. Gate D review 파일은 planning readiness, iteration init, handoff, close의 조건이 아니다.
 
 ## 3. 산출물 파일과 데이터 계약
 
@@ -109,6 +109,7 @@ Task graph의 dependency, cycle, acceptance criteria, source spec reference를 �
 ```text
 .plan2agent/artifacts/<project_id>/
 ├── status.md                         # optional generated view
+├── decisions.jsonl                   # append-only approval/change authority
 ├── gate-a-intake/
 │   ├── intake.json                    # canonical
 │   └── intake.md                      # explicit request-only generated view
@@ -126,6 +127,7 @@ Task graph의 dependency, cycle, acceptance criteria, source spec reference를 �
 | 파일 저장 위치 | 역할 |
 | --- | --- |
 | `status.md` | JSON에서 생성되는 standing 진행상태 view다. progress line, 게이트별 정본 파일 링크, 열린 결정, 단일 다음 액션, 변경 이력을 보여주지만 제어 흐름의 정본은 아니다. |
+| `decisions.jsonl` | Gate ①② 승인·철회, 헌법 변경, 범위 추가·제거를 append-only로 보존한다. 파일이 존재하면 승인 상태의 정본이며 `p2a validate --decisions`가 줄별 schema, sequence, hash chain과 lineage를 검증한다. |
 | `gate-a-intake/intake.json` | `intake_json` 구조화 산출물이다. 원문 아이디어, known facts, assumptions, clarifying questions, `needs_user_decision`, evidence, intake status를 담는다. 활성 인터뷰 중에도 재개를 위해 라운드마다 조용히 갱신한다. |
 | `gate-a-intake/intake.md` | 사용자의 명시적 export 요청에서만 만드는 generated view다. 첫 줄의 explicit-export marker로 이전 자동 생성 view와 구분하며 정본은 항상 `intake.json`이다. |
 | `gate-b-spec/product-spec.md` | 선택적 generated view다. 제품 명세를 Markdown으로 보여주지만 정본은 `spec.json.product`다. |
@@ -141,6 +143,7 @@ Task graph의 dependency, cycle, acceptance criteria, source spec reference를 �
 
 | 대화 상태 섹션 | 파일 저장 위치 | 스키마/계약 | Gate 통과 조건 |
 | --- | --- | --- | --- |
+| decision ledger | `.plan2agent/artifacts/<project_id>/decisions.jsonl` | 줄마다 `decisions.schema.json` | `seq`가 1씩 증가하고 `prev_sha256` 체인과 활성 `prev_seq` 계보가 유효해야 한다. 기존 줄은 수정·삭제하지 않는다. |
 | `intake_json` | `.plan2agent/artifacts/<project_id>/gate-a-intake/intake.json` | `p2a` package schema `intake.schema.json` (`schema_version: p2a.intake.v1`) | 모든 질문·결정이 해소되고 사용자가 Gate A 범위를 승인해 `approval_audit`, `status: ready_for_spec`가 모두 있어야 다음 단계로 간다. |
 | optional Markdown views | `.plan2agent/artifacts/<project_id>/**.md` | JSON에서 생성되는 view/export다. | Gate 판정의 정본으로 쓰지 않는다. |
 | `spec_json` | `.plan2agent/artifacts/<project_id>/gate-b-spec/spec.json` | `p2a` package schema `spec.schema.json` (`schema_version: p2a.spec.v1`) | 모든 `CQ-n`이 처분되고, `approval: approved`, `approval_audit` present, `open_decisions: []`일 때 task graph를 만들 수 있다. |
@@ -158,9 +161,9 @@ Task graph의 dependency, cycle, acceptance criteria, source spec reference를 �
 }
 ```
 
-`validate_artifacts.mjs --artifact-root`와 fixture 검증은 승인된 spec이 있을 때 이 JSON audit의 존재와 네 필드를 확인한다.
+`p2a decide --quote "<사용자 발화>"`가 이 사본과 결정 원장의 `gate.what.approved` 항목을 함께 기록한다. `validate_artifacts.mjs --artifact-root`와 fixture 검증은 승인된 spec이 있을 때 JSON audit의 존재와 네 필드를 확인한다.
 
-Gate A 확인도 같은 audit shape를 `intake_json.approval_audit`에 사용한다. `approved_artifacts`에는 `gate-a-intake/intake.json`이 포함되어야 한다.
+Gate A 확인도 같은 명령과 audit shape를 사용한다. `intake_json.approval_audit.approved_artifacts`에는 `gate-a-intake/intake.json`이 포함되어야 한다. audit 필드를 손으로 추가하는 대신 CLI에 실제 사용자 발화를 전달해야 원장과 사본이 일관되게 갱신된다.
 
 ### 3.2 주요 스키마 필드
 
@@ -241,7 +244,7 @@ Intake와 spec artifact는 `evidence` 배열을 가진다. 이 배열은 결정�
 
 canonical 산출물이 있으면 가장 이른 미완료 또는 invalid 단계부터 재개한다. 기존 intake의 optional `interview` object는 opaque 호환 데이터로 보존하지만 상태 판단, 질문 생성, 라우팅에는 사용하지 않는다. 사용자가 질문이나 결정을 답하면 같은 ledger item의 answer/status를 갱신하고 새 id로 중복 생성하지 않는다. explicit-export marker가 있는 `intake.md`는 JSON에서 다시 생성하고 marker가 없는 이전 자동 view는 제거한다.
 
-사용자가 Gate A 이해 요약을 확인하면 `status: ready_for_spec`와 `approval_audit`을 기록하고 같은 대화에서 Gate B synthesis로 이어간다. baseline-aware 반복에서는 `baseline_context`의 관련 답변을 재사용하고, 충돌이 있을 때만 현재 반복 decision으로 override를 기록한다.
+사용자가 Gate A 이해 요약을 확인하면 `p2a decide --quote "<사용자 발화>" --artifacts <root>`로 `status: ready_for_spec`, 결정 원장과 `approval_audit` 사본을 함께 기록하고 같은 대화에서 Gate ②를 확립하거나 재사용한 뒤 Gate B synthesis로 이어간다. baseline-aware 반복에서는 `baseline_context`의 관련 답변을 재사용하고, 충돌이 있을 때만 현재 반복 decision으로 override를 기록한다.
 
 재개는 입력이 바뀐 가장 이른 단계부터 다시 생성한다.
 
@@ -559,9 +562,10 @@ node scripts/sync_cli_assets.mjs
 | `spec.open_decisions must exactly match unresolved decisions` | spec의 open decision 목록과 미해결 decision 목록이 다르다. | intake에서 unresolved인 `ND-n`과 CQ에서 승격됐지만 해결되지 않은 `ND-n`만 spec `open_decisions`에 넣는다. 모든 decision이 답변됐으면 `open_decisions: []`로 둔다. |
 | `promoted decision ND-4 must be in open_decisions until it has a resolution` | CQ를 `promoted_to_decision`으로 표시했지만 아직 해결하지 않았고 `open_decisions`에도 없다. | 해당 `ND-n`을 `open_decisions`에 넣고 spec을 `draft`로 유지하거나, 사용자 답변을 받아 disposition에 `resolution`을 기록한다. |
 | `promoted_decision_id must not reuse intake decision ids` | CQ에서 승격한 decision id가 기존 intake `ND-n`과 충돌한다. | 새 `ND-n` id를 부여하고 `open_decisions` 참조도 함께 바꾼다. |
-| `spec.approval_audit is required when spec.approval is approved` | 승인된 spec인데 JSON 승인 감사 정보가 없다. | `spec.json`에 `approval_audit.approved_by`, `approved_at`, `approved_artifacts`, `approval_note`를 추가한다. |
+| `spec.approval_audit is required when spec.approval is approved` | 승인된 spec인데 JSON 승인 감사 사본이 없거나 승인 절차를 우회했다. | spec을 `draft`로 복구하고 사용자의 실제 승인 발화와 함께 `p2a decide --quote "<사용자 발화>" --artifacts <root>`를 실행해 원장과 사본을 함께 기록한다. |
+| `The decision ledger is invalid` 또는 `decisions.jsonl chain mismatch` | 원장의 줄별 schema, `seq`, `prev_sha256`, `prev_seq` 계보가 깨졌다. | audit 사본으로 우회하지 말고 원장을 복구한 뒤 `p2a validate --decisions --artifacts <root>`를 실행한다. |
 | `approved specs must not contain open_decisions` | `approval: approved`인데 spec에 미해결 decision이 남았다. | spec을 `draft`로 되돌리거나, 모든 decision을 해결한 뒤 `open_decisions: []`로 만든다. |
-| `task graph generation is blocked until spec.approval is approved` | 승인되지 않은 spec으로 task graph를 검증/생성하려 했다. | 사용자에게 product spec과 implementation plan을 파일로 검토받고 명시적 승인을 받은 뒤 `approval: approved`로 바꾼다. |
+| `task graph generation is blocked until spec.approval is approved` | 승인되지 않은 spec으로 task graph를 검증/생성하려 했다. | 사용자에게 product spec과 implementation plan을 검토받고 `p2a decide --quote "<사용자 발화>" --artifacts <root>`로 Gate B 결정을 기록한다. |
 | `task graph generation is blocked while spec.open_decisions is non-empty` | spec에 미해결 결정이 남아 있다. | Gate B로 돌아가 open decision을 해결한다. |
 | `task ids must be unique` | 같은 `task-001` 같은 id가 두 번 이상 있다. | task id를 안정적으로 다시 부여하고 dependency 참조도 함께 수정한다. |
 | `has unknown dependencies` | task가 존재하지 않는 dependency id를 참조한다. | dependency 오타를 고치거나 누락된 선행 task를 추가한다. |

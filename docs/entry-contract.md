@@ -115,6 +115,8 @@ Gate A가 승인되었지만 신규 프로젝트에 constitution이 없거나 dr
 
 승인된 constitution은 이후 반복 iteration에서 재사용한다. 기존 `style.md`만 가진 legacy 프로젝트는 migration 없이 기존 Gate B·실행 흐름을 계속할 수 있으며, 선택적으로 `p2a shape migrate-style`을 실행해 승인 전 draft를 만들 수 있다.
 
+artifact root에 `decisions.jsonl`이 있으면 `p2a next`는 Gate ①·② 승인 상태를 원장에서만 계산한다. 원장이 손상되면 audit 사본을 신뢰해 진행하지 않고 `state: invalid_decisions`와 `p2a validate --decisions --artifacts <root>` 복구 명령을 반환한다. 원장이 전혀 없는 기존 프로젝트만 `approval_audit`을 승인 상태의 폴백 근거로 사용한다.
+
 ### `p2a info`와 `p2a doctor`
 
 자동 선택된 진입 문서가 하나이면 `p2a info --json`은 기존 JSON 필드를 유지하면서 조건부 `entry` 요약과 검증/확인 next action을 추가한다. 진입 문서가 없으면 기존 JSON shape을 바꾸지 않는다.
@@ -130,7 +132,7 @@ Gate A가 승인되었지만 신규 프로젝트에 constitution이 없거나 dr
 3. 안전하게 추론할 수 없고 범위를 실질적으로 바꾸는 내용만 묻는다. 이 경로에는 고정 질문 수나 라운드 제한이 없으며, 확인 가능한 즉시 질문을 멈춘다.
 4. 수정된 범위를 다시 제시하고 사용자의 명시적 확인을 요청한다. 침묵, 원문 존재, “개발해” 같은 포괄 지시는 승인이 아니다.
 5. Radar 추천은 승격된 각 후보를 `selected`, `rejected`, `deferred` 중 하나로 처분하고 이유를 기록한다.
-6. 확인 후에만 같은 `p2a.intake.v1` schema와 Gate A `approval_audit`로 canonical intake를 만들고, 신규 프로젝트는 Gate ②를 승인하거나 기존 승인을 재사용한 뒤 Gate B 흐름을 계속한다.
+6. 확인 후에만 `p2a decide --quote "<사용자 발화>" --artifacts <artifact-root>`를 실행한다. 이 명령이 같은 `p2a.intake.v1` canonical intake를 `ready_for_spec`으로 바꾸고 Gate A 결정을 `decisions.jsonl`에 append하며 `approval_audit` 호환 사본도 함께 기록한다. 신규 프로젝트는 Gate ②를 승인하거나 기존 승인을 재사용한 뒤 Gate B 흐름을 계속한다.
 
 새 하네스는 `--entry`가 가리키는 문서에서 시작한다. 문서가 없으면 먼저 Markdown 또는 text entry를 작성해야 하며, 채팅 입력만으로 별도 기획 상태를 시작하지 않는다. Gate A 확인 전 Gate B를 만들 수 없고, Gate B 승인과 open decision 해소 전 Gate C로 진행할 수 없다.
 
@@ -155,6 +157,8 @@ Gate A가 승인되었지만 신규 프로젝트에 constitution이 없거나 dr
 p2a init --target . --tools all
 p2a validate --entry docs/idea.md
 p2a next --entry docs/idea.md
+p2a decide --quote "이 범위로 진행해" --artifacts .plan2agent/artifacts/<project_id>
+p2a validate --decisions --artifacts .plan2agent/artifacts/<project_id>
 ```
 
 Radar handoff를 자동 발견한다.

@@ -60,12 +60,28 @@ p2a decide revoke --artifacts .plan2agent/artifacts/<project_id> \
 p2a decide add --artifacts .plan2agent/artifacts/<project_id> \
   --scope "재시도 지원" --quote "재시도도 넣자"
 
+p2a decide remove --artifacts .plan2agent/artifacts/<project_id> \
+  --scope "익명 접근" --quote "익명 접근은 빼자"
+
 p2a decisions --artifacts .plan2agent/artifacts/<project_id>
+p2a decisions --artifacts .plan2agent/artifacts/<project_id> --json
 p2a decisions --artifacts .plan2agent/artifacts/<project_id> \
   --why src/example.ts
 ```
 
 `p2a decide`는 가장 이른 미승인 Gate ① intake/spec을 승인하고 실제 사용자 발화를 원장과 audit 사본에 함께 기록한다. `revoke`, `add`, `remove`도 이전 기록을 지우지 않고 새 이벤트를 append한다. `p2a shape approve|revoke`는 같은 원장에 Gate ② 이력을 남기며, 헌법 본문이 바뀐 재승인은 `constitution.changed`도 기록한다. `decisions --why`는 run의 `changedFiles`, `sourceSpecRef`, Gate ① 결정과 당시 활성 Gate ② 결정을 조인한다. 인터뷰 라운드, task 분해, run 시작·종료, validator 실행 상세는 원장 이벤트가 아니다.
+
+### 프로젝트 constitution — `p2a shape`
+
+```bash
+p2a shape
+p2a shape --json
+p2a shape approve --quote "이 구조로 진행해"
+p2a shape revoke --quote "이 구조 승인을 철회해"
+p2a shape migrate-style --project-id <project_id>
+```
+
+`shape`는 `.plan2agent/constitution.json`의 architecture, stack, prohibitions, style과 Gate ② 승인 상태를 확인한다. `approve`와 `revoke`는 비어 있지 않은 실제 사용자 발화를 요구하며 constitution audit 사본과 결정 원장을 함께 갱신한다. `migrate-style`은 legacy `.plan2agent/style.md`를 승인 전 constitution draft로 옮길 뿐 승인으로 간주하지 않는다. 원장이 손상된 상태에서는 constitution audit 사본으로 우회하지 않고 `p2a validate --decisions --artifacts <root>`를 안내한다.
 
 ## 3. 프로젝트 초기화 — `p2a init`
 
@@ -94,7 +110,7 @@ p2a doctor --target <project-dir> --strict
 
 출력에는 설치 파일 체크와 별개로 `projectState`가 포함된다. `projectState.state`는 `installed_empty`, `planning_in_progress`, `iteration_init_required`, `execution_ready`, `cycle_close_ready`, `broken_install`, `no_p2a` 중 하나이며, artifact root별 Gate A-C 존재 여부, Gate B approval/open decision 수, Gate C task count/ready 수, run-index 요약을 함께 보여준다. `init` 프로젝트에 greenfield Gate A-C bundle이 있으면 `project_state` 체크가 warning으로 표시되고 `p2a iteration init` 명령을 next action으로 출력한다.
 
-`--dev`는 development skill/config 진단을 추가한다. `manifest.aiToolTargets` 기준으로 Codex/Claude/Gemini provider asset, role profile, `manifest.aiToolFiles`, `project.config.json.providerNativeCapabilities`, `runTracking`, `devExecution`, `roleProfiles`, `promptTemplates`, Claude PreToolUse confinement hook 상태를 확인한다. `--strict`는 warning만 있어도 non-zero exit를 반환한다. 일반 실행은 failure가 있을 때만 non-zero exit를 반환한다.
+`--dev`는 development skill/config 진단을 추가한다. `manifest.aiToolTargets` 기준으로 Codex/Claude/Gemini provider asset, role profile, `manifest.aiToolFiles`, `project.config.json.providerNativeCapabilities`, `runTracking`, `devExecution`, `roleProfiles`, `promptTemplates`, Claude PreToolUse confinement hook 상태를 확인한다. 현재 리뷰 패스 설정은 `reviewPasses=monitor:opt_in,style:off,milestone:off,visual:off` 형태로 출력되며, 키·값·기본값과 진입 조건은 [리뷰 패스 정책](supervised-execution.md#리뷰-패스-정책)을 따른다. `--strict`는 warning만 있어도 non-zero exit를 반환한다. 일반 실행은 failure가 있을 때만 non-zero exit를 반환한다.
 
 ### `sync_cli_assets.mjs`
 
@@ -282,7 +298,7 @@ p2a iteration maintenance add \
 | `--overwrite` | 대상 파일이 이미 있을 때 덮어쓰기를 허용한다. |
 | `--dry-run` | 파일을 쓰지 않고 gate 검증과 인계 계획 출력만 수행한다. |
 
-인계 전제는 Gate B/C가 validator를 통과한 상태다. 특히 `spec.approval`은 `approved`여야 하고, `spec.approval_audit`가 있어야 하며, 모든 intake `CQ-n`은 `spec.clarifying_question_disposition`에서 처분되어야 하고 `spec.open_decisions`는 비어 있어야 한다. Gate C 사람 승인 audit과 Gate D review 파일은 요구하지 않는다. 승인된 `.plan2agent/constitution.json`이 source 프로젝트에 있으면 대상 프로젝트에도 함께 복사되며, legacy no-constitution handoff도 계속 지원한다. 반복 구조 root를 넘기면 active 반복 산출물을 `.plan2agent/artifacts/`로 평탄화하고, `task-graph.sourceSpec`은 `spec.json`으로, `spec.source_intake`는 `intake.json`으로 rebase한다. 이때 `intake.json`은 항상 함께 복사되며, 루트 `current-spec.json`은 `.plan2agent/current-spec.json`으로 함께 복사한다. Markdown view 파일은 존재할 때만 함께 복사된다. 반복 history 보존을 위해 iterative root에서는 `--mode move`를 지원하지 않는다. 대상 프로젝트는 `p2a tasks`, `p2a runs`, `p2a execute`, `p2a proposals`, `p2a eval`, `p2a memory`, `p2a validate`를 전역 패키지에서 실행하며, run/monitor/proposal 관련 schema도 패키지가 제공한다. `.plan2agent/project.config.json.runTracking`에는 참고용 기본 runs directory와 branch/worktree naming hint가 기록된다. 현재 실행 경로는 이 설정을 자동 소비하지 않고 CLI 인자에서 계산한다.
+인계 전제는 Gate B/C가 validator를 통과한 상태다. 특히 `spec.approval`은 `approved`여야 하고, `spec.approval_audit`가 있어야 하며, 모든 intake `CQ-n`은 `spec.clarifying_question_disposition`에서 처분되어야 하고 `spec.open_decisions`는 비어 있어야 한다. Gate C 사람 승인 audit과 Gate D review 파일은 요구하지 않는다. 승인된 `.plan2agent/constitution.json`이 source 프로젝트에 있으면 대상 프로젝트에도 함께 복사되며, legacy no-constitution handoff도 계속 지원한다. 반복 구조 root를 넘기면 active 반복 산출물을 `.plan2agent/artifacts/`로 평탄화하고, `task-graph.sourceSpec`은 `spec.json`으로, `spec.source_intake`는 `intake.json`으로 rebase한다. 이때 `intake.json`은 항상 함께 복사되며, 루트 `current-spec.json`은 `.plan2agent/current-spec.json`으로 함께 복사한다. Markdown view 파일은 존재할 때만 함께 복사된다. 결정 원장은 projection/rebuild 범위가 아니므로 flat target에 복사하거나 경로를 재작성하지 않는다. 대상에 원장이 없으면 기존 `approval_audit` 호환 사본이 legacy fallback으로 작동하며, source의 전체 결정 이력은 source artifact root에서 `p2a decisions`로 조회한다. 반복 history 보존을 위해 iterative root에서는 `--mode move`를 지원하지 않는다. 대상 프로젝트는 `p2a tasks`, `p2a runs`, `p2a execute`, `p2a proposals`, `p2a eval`, `p2a memory`, `p2a validate`를 전역 패키지에서 실행하며, run/monitor/proposal 관련 schema도 패키지가 제공한다. `.plan2agent/project.config.json.runTracking`에는 참고용 기본 runs directory와 branch/worktree naming hint가 기록된다. 현재 실행 경로는 이 설정을 자동 소비하지 않고 CLI 인자에서 계산한다.
 
 `--tools`를 지정하면 공통 P2A 원본인 `.agents/skills`, `.agents/agents`와 선택한 CLI별 mirror를 함께 복사한다. `codex`는 `.codex/agents`, `claude`는 `.claude/skills`와 `.claude/agents`, `gemini`는 `.gemini/agents`와 `.gemini/commands/p2a`를 추가한다. 복사된 파일과 선택한 CLI 범위는 `.plan2agent/manifest.json`의 `aiToolTargets`, `aiToolFiles`, `toolFiles`에 기록된다.
 

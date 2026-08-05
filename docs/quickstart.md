@@ -1,6 +1,6 @@
 # Plan2Agent Quickstart
 
-Plan2Agent는 짧은 제품 아이디어를 Gate A 범위 확인, Gate B 제품·구현 명세, Gate C 실행 task graph로 바꾸는 파일 기반 planning harness다.
+Plan2Agent는 짧은 제품 아이디어를 Gate A 범위 확인, Gate ② 프로젝트 constitution, Gate B 제품·구현 명세, Gate C 실행 task graph로 바꾸는 파일 기반 planning harness다.
 
 이 문서는 새 프로젝트에서 첫 실행 가능한 산출물을 만드는 최단 경로만 다룬다. 명령 옵션은 [CLI 사용자 가이드](cli-reference.md), 산출물 계약은 [하네스 사용자 가이드](harness-guide.md)를 기준으로 삼는다.
 
@@ -38,20 +38,43 @@ p2a next
 p2a next --entry docs/idea.md
 ```
 
-하네스는 필요한 범위를 짧게 확인한 뒤 Gate A 요약을 제시한다. 사용자가 요약을 명시적으로 확인하면 `intake.json`에 `status: ready_for_spec`와 `approval_audit`을 기록하고 Gate B 명세를 만든다. Gate B 승인에는 `spec.approval: approved`, `approval_audit`, 빈 `open_decisions`가 필요하다.
-
-승인된 Gate B를 기준으로 Gate C task graph draft를 만들고 validator를 실행한다.
+하네스는 필요한 범위를 짧게 확인한 뒤 Gate A 요약을 제시한다. 사용자가 요약을 명시적으로 확인하면 실제 발화를 그대로 전달해 Gate ① intake 결정을 기록한다.
 
 ```bash
-p2a iteration validate \
+p2a decide \
   --artifacts .plan2agent/artifacts/<project_id> \
-  --stage gate-c-draft
+  --quote "이 범위로 진행해"
+```
 
-p2a iteration promote-tasks \
+`p2a decide`는 가장 이른 미승인 Gate ① artifact를 승인하고 append-only `decisions.jsonl`과 JSON `approval_audit` 호환 사본을 함께 갱신한다. Gate A 확인 뒤 `p2a next`는 `state: shape`를 반환한다. 하네스가 제안한 `.plan2agent/constitution.json` 초안을 검토하고 Gate ②를 승인한다.
+
+```bash
+p2a shape approve --quote "이 구조로 진행해"
+```
+
+Gate ② 승인 없이는 Gate B로 진행하지 않는다. Constitution 변경·철회 등 상세 계약은 [하네스 사용자 가이드](harness-guide.md)를 따른다.
+
+승인된 Gate A와 Gate ②를 바탕으로 Gate B 명세를 만든다. 모든 `open_decisions`를 해결하고 명세를 검토한 뒤 `p2a decide --quote ... --artifacts ...`를 다시 실행하면 이번에는 Gate B spec 승인이 원장과 `spec.approval_audit` 사본에 기록된다.
+
+승인된 Gate B를 기준으로 greenfield Gate C task graph를 만들고 validator를 실행한다.
+
+```bash
+p2a validate \
+  --task-graph .plan2agent/artifacts/<project_id>/gate-c-task-graph/task-graph.json \
+  --require-approved-spec .plan2agent/artifacts/<project_id>/gate-b-spec/spec.json
+```
+
+Gate C에는 별도 사람 승인 audit이나 `--approved-by`/`--approval-note`가 없다. Greenfield에서는 validator-clean `task-graph.json`을 만든 뒤 아래의 `iteration init`으로 반복 구조를 시작한다. 이후 active iteration의 agent-authored `task-graph.draft.json`은 `p2a iteration validate --stage gate-c-draft`를 통과한 뒤 `p2a iteration promote-tasks`로 정본 승격한다.
+
+결정 원장 자체도 함께 검증할 수 있다.
+
+```bash
+p2a validate \
+  --decisions \
   --artifacts .plan2agent/artifacts/<project_id>
 ```
 
-Gate C에는 별도 사람 승인 audit이나 `--approved-by`/`--approval-note`가 없다. Draft가 validator를 통과하면 정본 `task-graph.json`으로 승격할 수 있다.
+원장이 존재하면 승인·철회 상태의 정본은 `decisions.jsonl`이다. 기존 프로젝트에 원장이 전혀 없을 때만 `p2a next`가 `approval_audit` 사본으로 폴백한다.
 
 ## 검증하고 개발 시작하기
 
@@ -89,6 +112,7 @@ Close는 Gate D 파일 대신 승인된 Gate B, 유효한 Gate C, 완료된 task
 
 | 파일 | 언제 보는가 |
 | --- | --- |
+| `decisions.jsonl` | Gate ①② 승인·철회와 범위·헌법 변경 이력을 확인할 때 |
 | `.plan2agent/artifacts/<project_id>/status.md` | 현재 상태와 다음 행동을 빠르게 확인할 때 |
 | `gate-a-intake/intake.json` | 확인된 범위와 Gate A 승인 기록을 확인할 때 |
 | `gate-b-spec/spec.json` | 승인된 제품·구현 요구사항을 확인할 때 |

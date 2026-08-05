@@ -166,7 +166,9 @@ Plan2Agent installs one `p2a` entrypoint:
 | --- | --- |
 | `p2a init` | Initialize project state and provider assets. |
 | `p2a next` | Return one state-based next action and its reason. |
-| `p2a shape` | Inspect, migrate, and explicitly approve the persistent project constitution. |
+| `p2a decide` | Record Gate ① approvals, revocations, and scope changes in the decision ledger. |
+| `p2a decisions` | List decision history and trace a file to governing decisions with `--why`. |
+| `p2a shape` | Inspect, migrate, approve, and revoke the persistent project constitution. |
 | `p2a info` | Show project, artifact, task, and run status. |
 | `p2a doctor` | Diagnose configuration, assets, and local drift. |
 | `p2a update` | Preview or apply safe package-managed asset updates. |
@@ -268,9 +270,9 @@ scripts/       toolkit, validation, runtime, eval, proposal, and Memory CLIs
 ## Project status
 
 Plan2Agent is under active development. Version `0.2.0` extends the public npm package with an
-iteration-level visual experience and final-review lifecycle, portable handoff evidence, and stricter
-execution validation alongside the local-first planning, supervised execution, evaluation, proposal,
-and optional Memory workflows. Autonomous provider execution and unapproved remote side effects
-remain outside the default safety model.
+append-only decision ledger, an iteration-level visual experience and final-review lifecycle,
+portable handoff evidence, and stricter execution validation alongside the local-first planning,
+supervised execution, evaluation, proposal, and optional Memory workflows. Autonomous provider
+execution and unapproved remote side effects remain outside the default safety model.
 
 Plan2Agent is available under the [MIT License](LICENSE).

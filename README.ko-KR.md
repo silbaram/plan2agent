@@ -120,8 +120,9 @@ system을 대체하지 않습니다.
 
 기획 하네스는 진입 문서를 구조화된 intake, 제품·구현 명세, 검증된 task graph로
 바꿉니다. Gate A에서 문서의 범위를 간결하게 요약하고 사용자의 명시적인 확인을
-요구합니다. 확인되면 같은 세션에서 Gate B로 이어집니다. 불확실한 내용을 임의의
-요구사항으로 만들지 않고 가정이나 사용자 결정으로 기록합니다.
+요구합니다. 확인되면 같은 세션에서 Gate ② constitution을 확립하거나 재사용한 뒤
+Gate B로 이어집니다. 불확실한 내용을 임의의 요구사항으로 만들지 않고 가정이나 사용자
+결정으로 기록합니다.
 
 ### 2. ready task 하나 실행하기
 
@@ -167,6 +168,9 @@ Plan2Agent는 하나의 `p2a` entrypoint를 설치합니다.
 | --- | --- |
 | `p2a init` | 프로젝트 상태와 provider asset을 초기화합니다. |
 | `p2a next` | 상태에 맞는 다음 행동 하나와 그 이유를 반환합니다. |
+| `p2a decide` | Gate ① 승인·철회와 범위 추가·제거를 결정 원장에 기록합니다. |
+| `p2a decisions` | 결정 이력을 조회하고 `--why`로 파일의 근거 결정을 추적합니다. |
+| `p2a shape` | Gate ② constitution 상태, migration, 승인·철회를 관리합니다. |
 | `p2a info` | 프로젝트, artifact, task, run 상태를 표시합니다. |
 | `p2a doctor` | 설정, asset, 로컬 drift를 진단합니다. |
 | `p2a update` | 패키지가 관리하는 안전한 asset update를 미리 보거나 적용합니다. |
@@ -230,7 +234,7 @@ session에서 실행되며 Plan2Agent는 provider API를 직접 호출하지 않
 
 - [Quickstart](docs/quickstart.md) — 설치부터 첫 Gate artifact까지의 최단 경로
 - [CLI 레퍼런스](docs/cli-reference.md) — 명령, option, 예시
-- [하네스 사용자 가이드](docs/harness-guide.md) — Gate A-D, schema, evidence, 문제 해결
+- [하네스 사용자 가이드](docs/harness-guide.md) — Gate A-C, 결정 원장, schema, evidence, 문제 해결
 - [Iteration Spec](docs/iteration-spec.md) — iteration layout, diff, close/open, run tracking
 - [감독형 개발 실행 레퍼런스](docs/supervised-execution.md) — task 실행, monitor gate, 재시도, 검토
 - [하네스 구현 기준](docs/harness-spec.md) — skill, subagent, mirror, 구현 규칙
@@ -242,11 +246,14 @@ session에서 실행되며 Plan2Agent는 provider API를 직접 호출하지 않
 
 ```bash
 npm test
+npm run test:full
 npm run test:package
 node scripts/sync_cli_assets.mjs
 node scripts/check_cli_parity.mjs
 node scripts/run_fixtures.mjs
 ```
+
+`npm run test:full`은 completed/resumable handoff portability 행렬을 포함한 장기 fixture gate다. 저장소 개발과 디버깅에서는 동일한 fixture runner를 직접 실행할 수 있다.
 
 runtime은 Node.js ESM이며 Node.js 표준 라이브러리를 사용합니다. 저장소 구조는 다음과
 같습니다.
@@ -265,8 +272,10 @@ scripts/       toolkit, validation, runtime, eval, proposal, Memory CLI
 
 ## 프로젝트 상태
 
-Plan2Agent는 활발히 개발 중입니다. 버전 `0.1.0`은 공개 npm 패키지와 local-first 기획,
-감독형 실행, 평가, proposal, 선택적 Memory workflow를 제공합니다. 자율적인 provider
-실행과 승인되지 않은 remote side effect는 기본 안전 모델의 범위 밖에 있습니다.
+Plan2Agent는 활발히 개발 중입니다. 버전 `0.2.0`은 공개 npm 패키지에 append-only 결정
+원장, 반복 단위 visual experience와 최종 review lifecycle, 이식 가능한 handoff evidence,
+강화된 실행 검증을 제공합니다. local-first 기획, 감독형 실행, 평가, proposal, 선택적
+Memory workflow도 함께 유지됩니다. 자율적인 provider 실행과 승인되지 않은 remote side
+effect는 기본 안전 모델의 범위 밖에 있습니다.
 
 Plan2Agent는 [MIT License](LICENSE)로 제공됩니다.
