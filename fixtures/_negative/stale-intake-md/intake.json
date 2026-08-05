@@ -118,5 +118,13 @@
       "used_for": "Grounded the distinction between conceptual Redis-like behavior and full API/server compatibility."
     }
   ],
+  "approval_audit": {
+    "approved_by": "fixture-user",
+    "approved_at": "2026-08-04",
+    "approved_artifacts": [
+      "gate-a-intake/intake.json"
+    ],
+    "approval_note": "Gate A is approved so the fixture reaches the stale Markdown assertion."
+  },
   "status": "ready_for_spec"
 }

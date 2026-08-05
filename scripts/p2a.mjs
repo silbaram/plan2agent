@@ -8,15 +8,25 @@ import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 import { DEFAULT_MEMORY_REQUEST_TIMEOUT_MS, DEFAULT_RUNS_DIR, GATE_FILES, GREENFIELD_REQUIRED_FILES } from './p2a_constants.mjs';
-import { resolveOrchestrationAgentTool } from './p2a_project_config.mjs';
+import { resolveOrchestrationAgentTool, resolveReviewPasses } from './p2a_project_config.mjs';
 import { normalizePath, resolveP2aPaths } from './p2a_paths.mjs';
 import { p2aCommandLine } from './p2a_run_commands.mjs';
 import { resolveIterationState } from './p2a_iteration_state.mjs';
+import {
+  constitutionApprovalState,
+  decisionLedgerPath,
+  readDecisions,
+  scopeApprovalState,
+} from './p2a_decision_ledger.mjs';
 import { compareRunEvidence, taskGraphRefMatchesGraph } from './p2a_run_paths.mjs';
 import { assertFinalVisualReviewRunReady } from './p2a_visual_review_gate.mjs';
 import {
+  discoverEntryDocument,
+  discoverFeatureRadarPreflightRuns,
+} from './p2a_radar_preflight.mjs';
+import {
+  validateConstitution,
   validateIntake,
-  validateReview,
   validateRunsDir,
   validateSpec,
   validateTaskGraph,
@@ -25,6 +35,9 @@ import {
 const P2A_PATHS = resolveP2aPaths(import.meta.url);
 
 const RUNTIME_COMMANDS = new Map([
+  ['decide', { script: 'p2a_decisions.mjs', forwardsCommand: true }],
+  ['decisions', { script: 'p2a_decisions.mjs', forwardsCommand: true }],
+  ['shape', { script: 'p2a_shape.mjs' }],
   ['iteration', { script: 'p2a_iteration.mjs' }],
   ['task', { script: 'p2a_tasks.mjs' }],
   ['tasks', { script: 'p2a_tasks.mjs' }],
@@ -52,7 +65,10 @@ function usage() {
   return [
     'Usage:',
     '  p2a init [--target <dir>] [--tools <list>] [--codex-profile quality|inherit]',
-    '  p2a next [--target <dir>] [--project-id <id>] [--json]',
+    '  p2a next [--target <dir>] [--project-id <id>] [--entry <path>] [--json]',
+    '  p2a decide --quote <user-utterance> [--target <dir>|--artifacts <dir>]',
+    '  p2a decisions [--why <file-path>] [--target <dir>|--artifacts <dir>] [--json]',
+    '  p2a shape [approve|revoke|migrate-style] [options]',
     '  p2a info [--target <dir>] [--json]',
     '  p2a doctor [--target <dir>] [--dev] [--json] [--strict]',
     '  p2a update [--target <dir>] [--dry-run|--apply]',
@@ -211,7 +227,7 @@ function dispatchRuntime(command, commandArgs) {
     console.error(`p2a error: runtime command "${command}" is unavailable because ${mapping.script} is missing`);
     return 1;
   }
-  return runScript(scriptPath, commandArgs);
+  return runScript(scriptPath, mapping.forwardsCommand ? [command, ...commandArgs] : commandArgs);
 }
 
 function dispatchToolkit(command, commandArgs) {
@@ -241,6 +257,8 @@ function looksLikeArtifactRoot(candidate) {
       isFile(path.join(candidate, 'current-spec.json'))
       || isDirectory(path.join(candidate, 'iterations'))
       || GATE_FILES.some(([, , relativePath]) => isFile(path.join(candidate, relativePath)))
+      || discoverFeatureRadarPreflightRuns(candidate, { includeNative: false })
+        .some((run) => run.source_kind === 'p2a-preflight')
     );
 }
 
@@ -449,6 +467,10 @@ function inspectArtifact(targetRoot, artifactRoot, isScaffoldProject) {
   }
   const activeIteration = iterationState?.activeIteration ?? null;
   const projectId = stringValue(currentSpec?.project_id) ?? path.basename(artifactRoot);
+  const entry = discoverEntryDocument(artifactRoot, {
+    projectId,
+    repeatedDevelopment: layout.kind === 'iteration',
+  });
   const searchRoots = artifactSearchRoots(artifactRoot, activeIteration);
   const intakePath = firstGateFile(searchRoots, 'gate-a-intake', 'intake.json');
   const specPath = firstGateFile(searchRoots, 'gate-b-spec', 'spec.json');
@@ -456,7 +478,6 @@ function inspectArtifact(targetRoot, artifactRoot, isScaffoldProject) {
     path.join(root, 'gate-c-task-graph', 'task-graph.json'),
     path.join(root, 'task-graph.json'),
   ]));
-  const reviewPath = firstGateFile(searchRoots, 'gate-d-review', 'review.json');
   const intake = intakePath ? readJsonObject(intakePath) : null;
   let intakeValid = false;
   let intakeValidationError = null;
@@ -508,48 +529,6 @@ function inspectArtifact(targetRoot, artifactRoot, isScaffoldProject) {
   } else if (taskGraphPath) {
     taskGraphValidationError = 'The canonical Gate C task graph is unreadable.';
   }
-  const review = reviewPath ? readJsonObject(reviewPath) : null;
-  let reviewValid = false;
-  let reviewValidationError = null;
-  if (reviewPath && review) {
-    try {
-      const validatedReview = validateReview(reviewPath);
-      const expectedProjectId = taskGraph?.projectId ?? spec?.project_id;
-      if (
-        expectedProjectId
-        && validatedReview.projectId !== expectedProjectId
-      ) {
-        throw new Error('Gate D review projectId must match the Gate C task graph');
-      }
-      if (
-        specPath
-        && !artifactReferenceMatchesPath(
-          validatedReview.sourceSpec,
-          artifactRoot,
-          reviewPath,
-          specPath,
-        )
-      ) {
-        throw new Error('Gate D review sourceSpec must reference the canonical Gate B specification');
-      }
-      if (
-        taskGraphPath
-        && !artifactReferenceMatchesPath(
-          validatedReview.sourceTaskGraph,
-          artifactRoot,
-          reviewPath,
-          taskGraphPath,
-        )
-      ) {
-        throw new Error('Gate D review sourceTaskGraph must reference the canonical Gate C task graph');
-      }
-      reviewValid = true;
-    } catch (error) {
-      reviewValidationError = error instanceof Error ? error.message : String(error);
-    }
-  } else if (reviewPath) {
-    reviewValidationError = 'The canonical Gate D review is unreadable.';
-  }
   let currentSpecValid = layout.kind !== 'iteration' || Boolean(iterationState);
   const shouldValidateReadyIteration = (
     layout.kind === 'iteration'
@@ -558,8 +537,6 @@ function inspectArtifact(targetRoot, artifactRoot, isScaffoldProject) {
     && specValid
     && spec?.approval === 'approved'
     && taskGraphValid
-    && reviewValid
-    && stringArrayValue(review?.blocking_issues).length === 0
   );
   if (shouldValidateReadyIteration) {
     try {
@@ -580,6 +557,7 @@ function inspectArtifact(targetRoot, artifactRoot, isScaffoldProject) {
     currentSpecReadable: Boolean(currentSpec),
     currentSpecValid,
     currentSpecValidationError,
+    entry,
     gates: {
       intakePath,
       intake,
@@ -593,10 +571,6 @@ function inspectArtifact(targetRoot, artifactRoot, isScaffoldProject) {
       taskGraph,
       taskGraphValid,
       taskGraphValidationError,
-      reviewPath,
-      review,
-      reviewValid,
-      reviewValidationError,
     },
     tasks,
     runs,
@@ -611,14 +585,30 @@ function summarizeArtifact(targetRoot, inspected) {
     artifactRoot: relativeToTarget(targetRoot, inspected.artifactRoot),
     layout: inspected.layout,
     activeIteration: inspected.activeIteration,
+    entry: summarizeEntry(targetRoot, inspected.entry),
     taskGraphPath: gates.taskGraphPath ? relativeToTarget(targetRoot, gates.taskGraphPath) : null,
     taskCounts: countTasks(gates.taskGraph),
     readyTaskIds: readyTasks,
-    review: {
-      path: gates.reviewPath ? relativeToTarget(targetRoot, gates.reviewPath) : null,
-      blockingIssues: stringArrayValue(gates.review?.blocking_issues).length,
-    },
     runs: inspected.runs.summary,
+  };
+}
+
+function summarizeEntry(targetRoot, entry) {
+  if (!entry) return null;
+  return {
+    path: relativeToTarget(targetRoot, entry.path),
+    sourceKind: entry.sourceKind,
+    selection: entry.selection,
+    sequence: entry.sequence,
+    manifestPath: entry.manifestPath
+      ? relativeToTarget(targetRoot, entry.manifestPath)
+      : null,
+    sourceComplete: entry.sourceComplete,
+    valid: entry.valid,
+    errors: entry.errors,
+    warnings: entry.warnings,
+    webSourceCount: entry.webSourceCount,
+    recommendationCount: entry.recommendationCount,
   };
 }
 
@@ -792,6 +782,7 @@ function parseNextArgs(argv) {
   const args = {
     target: P2A_PATHS.projectRoot,
     projectId: null,
+    entry: null,
     json: false,
     help: false,
   };
@@ -807,6 +798,9 @@ function parseNextArgs(argv) {
     } else if (arg === '--project-id') {
       args.projectId = argv[++index];
       if (!args.projectId) throw new Error('--project-id requires a project id');
+    } else if (arg === '--entry') {
+      args.entry = argv[++index];
+      if (!args.entry) throw new Error('--entry requires a document path');
     } else {
       throw new Error(`unknown next option: ${arg}`);
     }
@@ -887,221 +881,122 @@ function approvalNextAction(state, reason, display) {
 }
 
 function gateANextState(intake) {
-  const interviewState = intake?.interview?.state;
-  if (!interviewState) {
-    return intake?.status === 'ready_for_spec'
-      ? 'gate_a_ready_for_spec'
-      : 'gate_a_needs_approval';
-  }
-  return {
-    interview_active: 'gate_a_interview_active',
-    ready_for_gate_a_summary: 'gate_a_summary_ready',
-    awaiting_gate_a_confirmation: 'gate_a_needs_confirmation',
-    paused: 'gate_a_interview_paused',
-    blocked_on_user: 'gate_a_blocked_on_user',
-    gate_a_confirmed: 'gate_a_confirmed_ready_for_spec',
-  }[interviewState];
+  return intake?.status === 'ready_for_spec'
+    ? 'gate_a_ready_for_spec'
+    : 'gate_a_needs_approval';
 }
 
 function gateANextKind(intake) {
-  const interviewState = intake?.interview?.state;
-  if (!interviewState) return intake?.status === 'ready_for_spec' ? 'skill' : 'approval';
-  return ['awaiting_gate_a_confirmation', 'paused', 'blocked_on_user'].includes(interviewState)
-    ? 'approval'
-    : 'skill';
+  return intake?.status === 'ready_for_spec' ? 'skill' : 'approval';
 }
 
 function gateANextReason(intake) {
-  const interviewState = intake?.interview?.state;
-  if (!interviewState) {
-    return intake?.status === 'ready_for_spec'
-      ? 'Gate A intake has no remaining user decisions and is ready for specification.'
-      : 'Gate A intake still needs a human decision or approval before a specification can be written.';
-  }
-  return {
-    interview_active: `Gate A discovery interview round ${intake.interview.round} has an active question batch.`,
-    ready_for_gate_a_summary: 'Discovery readiness is satisfied; present the Gate A understanding summary next.',
-    awaiting_gate_a_confirmation: 'The Gate A understanding summary is waiting for explicit user confirmation.',
-    paused: `The Gate A interview is paused after ${intake.interview.stop_reason}.`,
-    blocked_on_user: `The Gate A interview stopped on ${intake.interview.stop_reason} with unresolved high-impact input.`,
-    gate_a_confirmed: 'Gate A was explicitly confirmed and the same planning session can continue to Gate B synthesis.',
-  }[interviewState];
-}
-
-const MAX_GATE_A_GUIDANCE_ITEMS = 3;
-const MAX_GATE_A_GUIDANCE_TEXT_LENGTH = 240;
-
-function gateAGuidanceText(value) {
-  const normalized = stringValue(value)?.replace(/\s+/g, ' ');
-  if (!normalized || normalized.length <= MAX_GATE_A_GUIDANCE_TEXT_LENGTH) {
-    return normalized;
-  }
-  return `${normalized.slice(0, MAX_GATE_A_GUIDANCE_TEXT_LENGTH - 1)}…`;
-}
-
-function boundedGateAGuidance(visibleItems, totalItems, remainderLabel) {
-  if (totalItems > visibleItems.length) {
-    visibleItems.push(`${totalItems - visibleItems.length} more ${remainderLabel}`);
-  }
-  return visibleItems.join('; ');
-}
-
-function gateAGuidanceSentence(value) {
-  const text = gateAGuidanceText(value);
-  if (!text || /[.!?…]$/.test(text)) return text;
-  return `${text}.`;
-}
-
-function gateADecisionGuidance(item) {
-  const options = jsonRecords(item?.options);
-  const defaultOption = options.find((option) => option.id === item?.default);
-  const selectedOptions = options.slice(0, MAX_GATE_A_GUIDANCE_ITEMS);
-  if (defaultOption && !selectedOptions.includes(defaultOption)) {
-    selectedOptions[selectedOptions.length - 1] = defaultOption;
-  }
-  const visibleOptions = selectedOptions
-    .map((option) => {
-      const id = gateAGuidanceText(option.id);
-      const label = gateAGuidanceText(option.label);
-      const description = gateAGuidanceText(option.description);
-      return `${id}=${label}${description ? ` — ${description}` : ''}`;
-    });
-  if (options.length > visibleOptions.length) {
-    visibleOptions.push(`${options.length - visibleOptions.length} more option(s)`);
-  }
-  const defaultId = gateAGuidanceText(item?.default);
-  const defaultLabel = gateAGuidanceText(defaultOption?.label);
-  return {
-    options: visibleOptions.join(' | '),
-    recommendation: defaultId
-      ? `${defaultId}${defaultLabel ? `=${defaultLabel}` : ''}`
-      : '',
-  };
-}
-
-function gateABlockerSummary(intake) {
-  const blockers = [];
-  let totalBlockers = 0;
-  const addBlocker = (render) => {
-    totalBlockers += 1;
-    if (blockers.length < MAX_GATE_A_GUIDANCE_ITEMS) blockers.push(render());
-  };
-  for (const item of jsonRecords(intake?.clarifying_questions)) {
-    if (item.status !== 'open') continue;
-    addBlocker(() => `${gateAGuidanceText(item.id)}: ${gateAGuidanceText(item.question)}`);
-  }
-  for (const item of jsonRecords(intake?.needs_user_decision)) {
-    if (item.status === 'answered') continue;
-    addBlocker(() => {
-      const guidance = gateADecisionGuidance(item);
-      const details = [
-        guidance.options ? `options: ${guidance.options}` : '',
-        guidance.recommendation ? `recommended: ${guidance.recommendation}` : '',
-      ].filter(Boolean).join('; ');
-      return `${gateAGuidanceText(item.id)}: ${gateAGuidanceText(item.question)}` +
-        `${details ? ` (${details})` : ''}`;
-    });
-  }
-  for (const item of jsonRecords(intake?.interview?.discovery_dimensions)) {
-    if (item.status !== 'open') continue;
-    addBlocker(() => (
-      `dimension ${gateAGuidanceText(item.dimension)}: ` +
-      `${gateAGuidanceText(item.summary) || 'needs clarification'}`
-    ));
-  }
-  if (intake?.interview?.has_unasked_high_impact_questions) {
-    addBlocker(() => (
-      'unsurfaced high-impact input remains and must be materialized by the interview before it can be answered'
-    ));
-  }
-  if (intake?.interview?.new_blocker) {
-    addBlocker(() => (
-      'a newly introduced blocker must be materialized by the interview before it can be answered'
-    ));
-  }
-  return boundedGateAGuidance(blockers, totalBlockers, 'unresolved item(s)');
-}
-
-function gateAAssumptionSummary(intake) {
-  const assumptions = [];
-  let totalAssumptions = 0;
-  for (const item of jsonRecords(intake?.assumptions)) {
-    if (item.confirmation_needed !== true) continue;
-    totalAssumptions += 1;
-    if (assumptions.length >= MAX_GATE_A_GUIDANCE_ITEMS) continue;
-    const risk = gateAGuidanceText(item.risk);
-    assumptions.push(
-      `${gateAGuidanceText(item.id)}: ${gateAGuidanceText(item.statement)}` +
-      `${risk ? ` (risk: ${risk})` : ''}`,
-    );
-  }
-  return boundedGateAGuidance(
-    assumptions,
-    totalAssumptions,
-    'recommended assumption(s)',
-  );
-}
-
-function gateAHasMaterializedBlockers(intake) {
-  return jsonRecords(intake?.clarifying_questions)
-    .some((item) => item.status === 'open')
-    || jsonRecords(intake?.needs_user_decision)
-      .some((item) => item.status !== 'answered')
-    || jsonRecords(intake?.interview?.discovery_dimensions)
-      .some((item) => item.status === 'open');
+  return intake?.status === 'ready_for_spec'
+    ? 'Gate A scope is approved and ready for specification.'
+    : 'Gate A scope still needs explicit user approval before a specification can be written.';
 }
 
 function gateANextCommand(intake, intakePath) {
-  const interviewState = intake?.interview?.state;
-  if (!interviewState) {
-    return intake?.status === 'ready_for_spec'
-      ? '/p2a-spec'
-      : `Review and approve ${intakePath}.`;
+  return intake?.status === 'ready_for_spec'
+    ? '/p2a-spec'
+    : `Review and approve ${intakePath}; then record the Gate A approval_audit.`;
+}
+
+function inspectConstitution(targetRoot) {
+  const constitutionPath = path.join(targetRoot, '.plan2agent', 'constitution.json');
+  const legacyStylePath = path.join(targetRoot, '.plan2agent', 'style.md');
+  const legacyStyleExists = isFile(legacyStylePath);
+  if (!existsSync(constitutionPath)) {
+    return {
+      path: constitutionPath,
+      exists: false,
+      readable: false,
+      valid: false,
+      approved: false,
+      error: null,
+      legacyStyleExists,
+    };
   }
-  const blockers = gateABlockerSummary(intake);
-  const assumptions = gateAAssumptionSummary(intake);
-  const hasMaterializedBlockers = gateAHasMaterializedBlockers(intake);
-  const softLimitSummary = interviewState === 'paused' &&
-    intake?.interview?.stop_reason === 'soft_limit'
-    ? gateAGuidanceSentence(intake?.summary)
-    : '';
-  const summaryContext = softLimitSummary
-    ? ` Current understanding: ${softLimitSummary}`
-    : '';
-  const unresolvedContext = blockers
-    ? ` Unresolved items: ${blockers} —`
-    : '';
-  const assumptionContext = assumptions
-    ? ` Recommended assumptions: ${assumptions}.`
-    : ' No recommended assumptions are currently recorded.';
-  const pausedChoice = hasMaterializedBlockers
-    ? assumptions
-      ? 'Choose whether to continue the interview, answer a listed unresolved item directly, explicitly accept a listed recommended assumption, or keep it paused.'
-      : 'Choose whether to continue the interview, answer a listed unresolved item directly, or keep it paused.'
-    : assumptions
-      ? 'Choose whether to continue the interview, explicitly accept a listed recommended assumption, or keep it paused.'
-      : 'Choose whether to continue the interview or keep it paused.';
-  const blockedChoice = assumptions
-    ? 'Answer the listed unresolved items directly, explicitly accept a listed recommended assumption, or defer an item.'
-    : 'Answer the listed unresolved items directly or explicitly defer an item.';
-  return {
-    interview_active: '/p2a-harness resume_from: interview',
-    ready_for_gate_a_summary: '/p2a-harness resume_from: gate-a-summary',
-    awaiting_gate_a_confirmation: `Review and confirm ${intakePath}; then record the Gate A approval_audit.`,
-    paused: `The Gate A interview is paused.${summaryContext}${unresolvedContext}${assumptionContext} ${pausedChoice}`,
-    blocked_on_user: blockers
-      ? `Resolve these Gate A blockers: ${blockers} —${assumptionContext} ${blockedChoice}`
-      : `Resolve the remaining Gate A blockers.${assumptionContext} Provide the missing high-impact input directly or explicitly defer it.`,
-    gate_a_confirmed: '/p2a-harness resume_from: spec',
-  }[interviewState];
+  if (!isFile(constitutionPath)) {
+    return {
+      path: constitutionPath,
+      exists: true,
+      readable: false,
+      valid: false,
+      approved: false,
+      error: 'The project constitution is not a regular file.',
+      legacyStyleExists,
+    };
+  }
+  const data = readJsonObject(constitutionPath);
+  if (!data) {
+    return {
+      path: constitutionPath,
+      exists: true,
+      readable: false,
+      valid: false,
+      approved: false,
+      error: 'The project constitution is unreadable.',
+      legacyStyleExists,
+    };
+  }
+  try {
+    const constitution = validateConstitution(constitutionPath);
+    return {
+      path: constitutionPath,
+      exists: true,
+      readable: true,
+      valid: true,
+      approved: Boolean(constitution.approval_audit),
+      error: null,
+      legacyStyleExists,
+      data: constitution,
+    };
+  } catch (error) {
+    return {
+      path: constitutionPath,
+      exists: true,
+      readable: true,
+      valid: false,
+      approved: false,
+      error: error instanceof Error ? error.message : String(error),
+      legacyStyleExists,
+      data,
+    };
+  }
+}
+
+function inspectDecisions(artifactRoot) {
+  const ledgerPath = decisionLedgerPath(artifactRoot);
+  if (!existsSync(ledgerPath)) {
+    return { path: ledgerPath, exists: false, valid: true, records: [], error: null };
+  }
+  try {
+    return {
+      path: ledgerPath,
+      exists: true,
+      valid: true,
+      records: readDecisions(artifactRoot, { required: true }),
+      error: null,
+    };
+  } catch (error) {
+    return {
+      path: ledgerPath,
+      exists: true,
+      valid: false,
+      records: [],
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
 }
 
 function gateAInvalidatesGateB(gates) {
-  if (!gates.intake?.interview || !gates.specPath) return false;
-  if (gates.intake.interview.state !== 'gate_a_confirmed') return true;
+  if (!gates.intake || !gates.specPath) return false;
+  if (gates.intake.status !== 'ready_for_spec' || !gates.intake.approval_audit) return true;
   const expectedIntakeSha256 = stringValue(gates.spec?.source_intake_sha256);
+  if (!expectedIntakeSha256) return false;
   const actualIntakeSha256 = rawFileSha256(gates.intakePath);
-  return !expectedIntakeSha256 || !actualIntakeSha256 || expectedIntakeSha256 !== actualIntakeSha256;
+  return !actualIntakeSha256 || expectedIntakeSha256 !== actualIntakeSha256;
 }
 
 function taskIdsWithStatus(tasks, status) {
@@ -1154,6 +1049,17 @@ function inspectionForArtifact(targetRoot, artifact, inspectedArtifacts) {
   return inspectedArtifacts.find((candidate) => candidate.artifactRoot === artifactRoot) ?? null;
 }
 
+function hasCanonicalPlanningState(inspection) {
+  const { gates, layout } = inspection;
+  return Boolean(
+    layout.hasCurrentSpec
+    || layout.hasIterations
+    || gates.intakePath
+    || gates.specPath
+    || gates.taskGraphPath
+  );
+}
+
 function selectNextArtifact(info, targetRoot, requestedProjectId, inspectedArtifacts) {
   const artifacts = info.artifacts;
   if (requestedProjectId) {
@@ -1181,18 +1087,60 @@ function selectNextArtifact(info, targetRoot, requestedProjectId, inspectedArtif
   };
 }
 
-function buildNextDecisionContext(info, targetRoot, requestedProjectId, inspectedArtifacts) {
+function buildNextDecisionContext(
+  info,
+  targetRoot,
+  requestedProjectId,
+  inspectedArtifacts,
+  reviewPasses,
+  explicitEntry,
+) {
   const hasHarness = isDirectory(path.join(targetRoot, '.plan2agent'));
-  const context = { info, targetRoot, hasHarness };
+  const context = {
+    info,
+    targetRoot,
+    hasHarness,
+    reviewPasses,
+    entry: explicitEntry,
+    entryArg: explicitEntry ? commandProjectPath(targetRoot, explicitEntry.path) : null,
+    projectId: requestedProjectId,
+    hasCanonicalPlanningState: false,
+    constitution: inspectConstitution(targetRoot),
+  };
   if (!hasHarness || !info.artifacts.length) return context;
 
-  const selected = selectNextArtifact(info, targetRoot, requestedProjectId, inspectedArtifacts);
+  let selectionInfo = info;
+  let selectionInspections = inspectedArtifacts;
+  if (explicitEntry && !requestedProjectId) {
+    const canonicalInspections = inspectedArtifacts.filter(hasCanonicalPlanningState);
+    if (!canonicalInspections.length) return context;
+    const canonicalRoots = new Set(
+      canonicalInspections.map((inspection) => inspection.artifactRoot),
+    );
+    selectionInfo = {
+      ...info,
+      artifacts: info.artifacts.filter((artifact) => (
+        canonicalRoots.has(path.resolve(targetRoot, artifact.artifactRoot))
+      )),
+    };
+    selectionInspections = canonicalInspections;
+  }
+
+  const selected = selectNextArtifact(
+    selectionInfo,
+    targetRoot,
+    requestedProjectId,
+    selectionInspections,
+  );
   if (selected.selection) return { ...context, selection: selected.selection };
 
   const artifactRoot = path.resolve(targetRoot, selected.artifact.artifactRoot);
   const detail = inspectionForArtifact(targetRoot, selected.artifact, inspectedArtifacts);
   if (!detail) throw new Error(`artifact inspection is unavailable: ${artifactRoot}`);
   const { gates } = detail;
+  const decisions = inspectDecisions(artifactRoot);
+  const entry = explicitEntry ?? detail.entry;
+  const canonicalPlanningState = hasCanonicalPlanningState(detail);
   const iterationScopedRuns = runsForActiveIteration(detail.runs.records, detail.activeIteration);
   const activeRuns = detail.layout.kind === 'iteration'
     ? iterationScopedRuns.filter((run) => (
@@ -1203,8 +1151,10 @@ function buildNextDecisionContext(info, targetRoot, requestedProjectId, inspecte
     : iterationScopedRuns;
   const taskCounts = countTasks(gates.taskGraph);
   const allTasksDone = taskCounts.total > 0 && taskCounts.done === taskCounts.total;
+  const visualReviewEnabled = reviewPasses.visual !== 'off';
   const needsCloseReadyVisualAudit = (
-    allTasksDone
+    visualReviewEnabled
+    && allTasksDone
     && detail.layout.kind === 'iteration'
     && detail.tasks.some((task) => task.visualImpact)
   );
@@ -1237,7 +1187,8 @@ function buildNextDecisionContext(info, targetRoot, requestedProjectId, inspecte
     ? null
     : failedOrBlockedRunCandidate;
   const visualReviewNeeded = (
-    allTasksDone
+    visualReviewEnabled
+    && allTasksDone
     && detail.layout.kind === 'iteration'
   )
     ? iterationVisualReviewNeeded(detail.tasks, activeRuns, {
@@ -1246,17 +1197,73 @@ function buildNextDecisionContext(info, targetRoot, requestedProjectId, inspecte
         graphPath: gates.taskGraphPath,
       })
     : false;
+  let constitution = (
+    context.constitution.valid
+    && context.constitution.data?.projectId !== detail.projectId
+  )
+    ? {
+        ...context.constitution,
+        valid: false,
+        error: `constitution projectId ${JSON.stringify(context.constitution.data.projectId)} does not match selected project ${JSON.stringify(detail.projectId)}`,
+    }
+    : context.constitution;
+  if (constitution.valid && decisions.valid && constitution.exists) {
+    const approval = constitutionApprovalState(
+      decisions.records,
+      rawFileSha256(constitution.path),
+      constitution.approved,
+      { allowLegacyFallback: !decisions.exists },
+    );
+    constitution = {
+      ...constitution,
+      approved: approval.approved,
+      approvalSource: approval.source,
+      approvalDecision: approval.event,
+    };
+  }
+  const intakeScopeRef = gates.intakePath
+    ? normalizePath(path.relative(artifactRoot, gates.intakePath))
+    : null;
+  const specScopeRef = gates.specPath
+    ? normalizePath(path.relative(artifactRoot, gates.specPath))
+    : null;
+  const gateAApproval = gates.intakePath && decisions.valid
+    ? scopeApprovalState(
+        decisions.records,
+        intakeScopeRef,
+        rawFileSha256(gates.intakePath),
+        gates.intake?.status === 'ready_for_spec' && Boolean(gates.intake?.approval_audit),
+        { allowLegacyFallback: !decisions.exists },
+      )
+    : { approved: false, source: 'approval_audit', event: null };
+  const gateBApproval = gates.specPath && decisions.valid
+    ? scopeApprovalState(
+        decisions.records,
+        specScopeRef,
+        rawFileSha256(gates.specPath),
+        gates.spec?.approval === 'approved' && Boolean(gates.spec?.approval_audit),
+        { allowLegacyFallback: !decisions.exists },
+      )
+    : { approved: false, source: 'approval_audit', event: null };
   return {
     ...context,
+    constitution,
+    decisions,
     artifactRoot,
     artifactArg: commandArtifact(targetRoot, artifactRoot),
     projectId: detail.projectId,
+    entry,
+    entryArg: entry ? commandProjectPath(targetRoot, entry.path) : null,
+    hasCanonicalPlanningState: canonicalPlanningState,
     detail,
     gates,
     gateAExists: Boolean(gates.intakePath),
     gateAReadable: Boolean(gates.intake),
     gateAValid: gates.intakeValid === true,
     gateAValidationError: gates.intakeValidationError,
+    gateAApproved: gateAApproval.approved,
+    gateAApprovalSource: gateAApproval.source,
+    gateAApprovalDecision: gateAApproval.event,
     currentSpecReadable: detail.currentSpecReadable,
     currentSpecValid: detail.currentSpecValid,
     currentSpecValidationError: detail.currentSpecValidationError,
@@ -1264,16 +1271,14 @@ function buildNextDecisionContext(info, targetRoot, requestedProjectId, inspecte
     gateBReadable: Boolean(gates.spec),
     gateBValid: gates.specValid === true,
     gateBValidationError: gates.specValidationError,
+    gateBApproved: gateBApproval.approved,
+    gateBApprovalSource: gateBApproval.source,
+    gateBApprovalDecision: gateBApproval.event,
     gateAInvalidatesGateB: gateAInvalidatesGateB(gates),
     gateCExists: Boolean(gates.taskGraphPath),
     gateCReadable: Boolean(gates.taskGraph),
     gateCValid: gates.taskGraphValid === true,
     gateCValidationError: gates.taskGraphValidationError,
-    gateDExists: Boolean(gates.reviewPath),
-    gateDReadable: Boolean(gates.review),
-    gateDValid: gates.reviewValid === true,
-    gateDValidationError: gates.reviewValidationError,
-    reviewBlockingIssues: stringArrayValue(gates.review?.blocking_issues).length,
     activeRuns,
     startedRun: activeRuns.find((run) => run.status === 'started' && stringValue(run.runId)),
     visualReviewNeeded,
@@ -1298,11 +1303,38 @@ export const NEXT_DECISION_RULES = [
     command: (context) => ['init', '--target', commandTarget(context.targetRoot)],
   },
   {
-    state: 'initialized_without_artifacts',
+    state: 'entry_invalid',
+    kind: 'approval',
+    when: (context) => (
+      context.hasHarness
+      && !context.hasCanonicalPlanningState
+      && context.entry
+      && context.entry.valid === false
+    ),
+    reason: (context) => `The entry document did not validate: ${context.entryArg}`,
+    command: (context) => (
+      `Fix the document, then run ${p2aCommandLine(P2A_PATHS, ['validate', '--entry', context.entryArg])}.`
+    ),
+  },
+  {
+    state: 'gate_what',
     kind: 'skill',
+    when: (context) => (
+      context.hasHarness
+      && !context.hasCanonicalPlanningState
+      && context.entry?.valid === true
+    ),
+    reason: (context) => (
+      `The entry document is ready for scope confirmation: ${context.entryArg}`
+    ),
+    command: (context) => `/p2a-harness --entry ${JSON.stringify(context.entryArg)}`,
+  },
+  {
+    state: 'entry_missing',
+    kind: 'approval',
     when: (context) => context.hasHarness && !context.info.artifacts.length,
-    reason: () => 'The harness is installed, but no planning artifact root exists yet.',
-    command: () => '/p2a-harness "<one-sentence idea>"',
+    reason: () => 'The harness is installed, but a concise entry document is required before planning can begin.',
+    command: () => 'Create or choose an entry document, then run p2a next --entry <path>.',
   },
   {
     state: 'incomplete_iteration_layout',
@@ -1326,6 +1358,18 @@ export const NEXT_DECISION_RULES = [
     command: (context) => ['iteration', 'validate', '--artifacts', context.artifactArg],
   },
   {
+    state: 'invalid_decisions',
+    kind: 'cli',
+    when: (context) => context.decisions?.exists && !context.decisions.valid,
+    reason: (context) => `The decision ledger is invalid: ${context.decisions.error ?? 'validation failed'}`,
+    command: (context) => [
+      'validate',
+      '--decisions',
+      '--artifacts',
+      context.artifactArg,
+    ],
+  },
+  {
     state: 'invalid_gate_a',
     kind: 'cli',
     when: (context) => (
@@ -1335,7 +1379,6 @@ export const NEXT_DECISION_RULES = [
         && (
           context.gateBExists
           || context.gateCExists
-          || context.gateDExists
         )
       )
     ),
@@ -1363,21 +1406,63 @@ export const NEXT_DECISION_RULES = [
     ),
   },
   {
-    state: (context) => gateANextState(context.gates.intake),
-    kind: (context) => gateANextKind(context.gates.intake),
+    state: 'invalid_constitution',
+    kind: 'cli',
+    when: (context) => context.constitution.exists && !context.constitution.valid,
+    reason: (context) => `The project constitution is invalid: ${context.constitution.error ?? 'validation failed'}`,
+    command: (context) => [
+      'validate',
+      '--constitution',
+      commandProjectPath(context.targetRoot, context.constitution.path),
+    ],
+  },
+  {
+    state: 'shape',
+    kind: (context) => context.constitution.exists ? 'approval' : 'skill',
     when: (context) => (
       context.gateAValid
-      && (!context.gateBExists || context.gateAInvalidatesGateB)
+      && context.gateAApproved
+      && !context.constitution.approved
+      && (
+        context.constitution.exists
+        || (!context.gateBExists && !context.constitution.legacyStyleExists)
+      )
     ),
     reason: (context) => (
-      context.gateAInvalidatesGateB
+      context.constitution.exists
+        ? 'The Gate ② project constitution is valid but still needs an explicit quoted user approval.'
+        : 'Gate A scope is approved, but the project has no Gate ② constitution yet.'
+    ),
+    command: (context) => (
+      context.constitution.exists
+        ? `Review ${commandProjectPath(context.targetRoot, context.constitution.path)}, then run p2a shape approve --quote "<user utterance>".`
+        : '/p2a-harness (Gate ②: propose architecture, stack, prohibitions, and style)'
+    ),
+  },
+  {
+    state: (context) => context.gateAApproved
+      ? gateANextState(context.gates.intake)
+      : 'gate_a_needs_approval',
+    kind: (context) => context.gateAApproved
+      ? gateANextKind(context.gates.intake)
+      : 'approval',
+    when: (context) => (
+      context.gateAValid
+      && (!context.gateAApproved || !context.gateBExists || context.gateAInvalidatesGateB)
+    ),
+    reason: (context) => (
+      !context.gateAApproved
+        ? 'Gate ① scope is not approved by the decision ledger or legacy approval audit.'
+        : context.gateAInvalidatesGateB
         ? 'Gate A is not confirmed for the existing Gate B specification, or its persisted bytes have changed; resume from Gate A before continuing downstream.'
         : gateANextReason(context.gates.intake)
     ),
-    command: (context) => gateANextCommand(
-      context.gates.intake,
-      commandProjectPath(context.targetRoot, context.gates.intakePath),
-    ),
+    command: (context) => context.gateAApproved
+      ? gateANextCommand(
+          context.gates.intake,
+          commandProjectPath(context.targetRoot, context.gates.intakePath),
+        )
+      : `Review ${commandProjectPath(context.targetRoot, context.gates.intakePath)}, then run p2a decide --quote "<user utterance>" --artifacts ${JSON.stringify(context.artifactArg)}.`,
   },
   {
     state: 'invalid_gate_b',
@@ -1409,17 +1494,17 @@ export const NEXT_DECISION_RULES = [
     kind: 'approval',
     when: (context) => (
       context.gateBValid
-      && context.gates.spec?.approval !== 'approved'
+      && !context.gateBApproved
     ),
-    reason: () => 'The Gate B specification is still a draft.',
-    command: (context) => `Review ${commandProjectPath(context.targetRoot, context.gates.specPath)}, approve it, and record approval_audit.`,
+    reason: () => 'The Gate ① specification decision is not approved or has been revoked.',
+    command: (context) => `Review ${commandProjectPath(context.targetRoot, context.gates.specPath)}, then run p2a decide --quote "<user utterance>" --artifacts ${JSON.stringify(context.artifactArg)}.`,
   },
   {
     state: 'gate_b_approved_needs_tasks',
     kind: 'skill',
     when: (context) => (
       context.gateBValid
-      && context.gates.spec?.approval === 'approved'
+      && context.gateBApproved
       && !context.gateCExists
     ),
     reason: () => 'The approved Gate B specification has no Gate C task graph yet.',
@@ -1443,36 +1528,10 @@ export const NEXT_DECISION_RULES = [
     ],
   },
   {
-    state: 'invalid_gate_d',
+    state: 'gate_c_validated_needs_iteration_init',
     kind: 'cli',
-    when: (context) => context.gateDExists && !context.gateDValid,
-    reason: (context) => (
-      context.gateDReadable
-        ? `The canonical Gate D review is invalid: ${context.gateDValidationError ?? 'validation failed'}`
-        : 'The canonical Gate D review is unreadable.'
-    ),
-    command: (context) => [
-      'validate',
-      '--review',
-      commandProjectPath(context.targetRoot, context.gates.reviewPath),
-    ],
-  },
-  {
-    state: (context) => (context.gateDExists ? 'gate_d_blocked' : 'gate_c_needs_review'),
-    kind: (context) => (context.gateDExists ? 'approval' : 'skill'),
-    when: (context) => context.gateCExists && (!context.gateDExists || context.reviewBlockingIssues > 0),
-    reason: (context) => (context.gateDExists
-      ? `Gate D review has ${context.reviewBlockingIssues} blocking issue(s).`
-      : 'The Gate C task graph exists but has not passed Gate D review.'),
-    command: (context) => (context.gateDExists
-      ? `Resolve the blockers in ${commandProjectPath(context.targetRoot, context.gates.reviewPath)}, then run ${p2aCommandLine(P2A_PATHS, ['next'])} again.`
-      : '/p2a-review'),
-  },
-  {
-    state: 'gate_d_passed_needs_iteration_init',
-    kind: 'cli',
-    when: (context) => context.gateDExists && context.detail.layout.requiresIterationInit,
-    reason: () => 'Gate D passed with no blocking issues, but the iteration layout has not been initialized.',
+    when: (context) => context.gateCValid && context.detail.layout.requiresIterationInit,
+    reason: () => 'The task graph passed planning validation, but the iteration layout has not been initialized.',
     command: (context) => ['iteration', 'init', '--artifacts', context.artifactArg],
   },
   {
@@ -1531,7 +1590,8 @@ export const NEXT_DECISION_RULES = [
     state: 'final_visual_review_required',
     kind: 'cli',
     when: (context) => (
-      context.allTasksDone
+      (context.reviewPasses?.visual ?? 'off') !== 'off'
+      && context.allTasksDone
       && !context.closedIteration
       && context.detail.layout.kind === 'iteration'
       && context.visualReviewNeeded
@@ -1626,11 +1686,18 @@ function decideNextAction(context) {
   );
 }
 
-function buildNext(targetRootInput, requestedProjectId) {
-  const snapshot = buildInfoSnapshot(targetRootInput);
+function buildNext(targetRootInput, requestedProjectId, entryPath) {
+  const snapshot = buildInfoSnapshot(targetRootInput, { entryPath });
   const { info } = snapshot;
   const targetRoot = info.target;
-  const context = buildNextDecisionContext(info, targetRoot, requestedProjectId, snapshot.inspectedArtifacts);
+  const context = buildNextDecisionContext(
+    info,
+    targetRoot,
+    requestedProjectId,
+    snapshot.inspectedArtifacts,
+    snapshot.reviewPasses,
+    snapshot.explicitEntry,
+  );
   const action = decideNextAction(context);
   return {
     schema_version: 'p2a.next.v1',
@@ -1641,16 +1708,27 @@ function buildNext(targetRootInput, requestedProjectId) {
   };
 }
 
-function buildInfoSnapshot(targetRootInput) {
+function buildInfoSnapshot(targetRootInput, options = {}) {
   const targetRoot = path.resolve(targetRootInput);
   if (!isDirectory(targetRoot)) {
     throw new Error(`--target must be an existing directory: ${targetRoot}`);
   }
   const manifest = readManifest(targetRoot);
   const config = readJsonObject(path.join(targetRoot, '.plan2agent', 'project.config.json'));
+  const reviewPasses = resolveReviewPasses(config);
   const isScaffoldProject = ['init', 'scaffold'].includes(manifest?.provenance?.mode);
   const inspectedArtifacts = discoverArtifactRoots(targetRoot)
     .map((artifactRoot) => inspectArtifact(targetRoot, artifactRoot, isScaffoldProject));
+  const explicitEntry = options.entryPath
+    ? discoverEntryDocument(targetRoot, {
+        entryPath: options.entryPath,
+        baseDir: targetRoot,
+      })
+    : null;
+  const autoEntries = inspectedArtifacts
+    .map((artifact) => artifact.entry)
+    .filter(Boolean);
+  const selectedEntry = explicitEntry ?? (autoEntries.length === 1 ? autoEntries[0] : null);
   const artifacts = inspectedArtifacts
     .map((inspected) => summarizeArtifact(targetRoot, inspected));
   const hasP2aDir = isDirectory(path.join(targetRoot, '.plan2agent'));
@@ -1661,6 +1739,17 @@ function buildInfoSnapshot(targetRootInput) {
   const nextActions = [];
   if (!hasP2aDir) {
     nextActions.push(`Install a project harness: ${p2aCommand(['init', '--target', '<project-dir>'])}`);
+  }
+  if (selectedEntry) {
+    const entryArg = relativeToTarget(targetRoot, selectedEntry.path);
+    if (selectedEntry.valid) {
+      nextActions.push(`Validate the entry document: ${p2aCommand(['validate', '--entry', entryArg])}`);
+      nextActions.push(`Confirm the entry scope: /p2a-harness --entry ${JSON.stringify(entryArg)}`);
+    } else {
+      nextActions.push(`Repair the entry document: ${selectedEntry.errors.join('; ')}`);
+    }
+  } else if (hasP2aDir && !artifacts.length) {
+    nextActions.push('Provide a Markdown or text idea document, then run p2a next --entry <path>.');
   }
   for (const artifact of artifacts) {
     if (artifact.layout.hasIncompleteIterationLayout) {
@@ -1735,12 +1824,13 @@ function buildInfoSnapshot(targetRootInput) {
       lintCommand: config.lintCommand ?? null,
       typecheckCommand: config.typecheckCommand ?? null,
     } : null,
+    ...(selectedEntry ? { entry: summarizeEntry(targetRoot, selectedEntry) } : {}),
     enhancements,
     artifactCount: artifacts.length,
     artifacts,
     nextActions,
   };
-  return { info, inspectedArtifacts };
+  return { info, inspectedArtifacts, reviewPasses, explicitEntry };
 }
 
 function buildInfo(targetRootInput) {
@@ -1758,6 +1848,9 @@ function printInfo(info) {
   console.log(`- surface: ${info.surface}`);
   console.log(`- mode: ${info.mode}`);
   console.log(`- artifacts: ${info.artifactCount}`);
+  if (info.entry) {
+    console.log(`- entry: ${info.entry.path} (${info.entry.valid ? 'valid' : 'invalid'}, ${info.entry.sourceKind})`);
+  }
   if (info.config) {
     console.log(`- verification: test=${info.config.testCommand ?? 'none'} lint=${info.config.lintCommand ?? 'none'} typecheck=${info.config.typecheckCommand ?? 'none'}`);
   }
@@ -1782,7 +1875,6 @@ function printInfo(info) {
     console.log(`    tasks: total=${artifact.taskCounts.total} ready=${artifact.taskCounts.ready} blocked=${artifact.taskCounts.blocked} done=${artifact.taskCounts.done}`);
     console.log(`    runs: total=${artifact.runs.runCount} latest=${artifact.runs.latestRunId ?? 'none'} statuses=${formatStatusCounts(artifact.runs.statusCounts)}`);
     if (artifact.readyTaskIds.length) console.log(`    ready: ${artifact.readyTaskIds.join(', ')}`);
-    if (artifact.review.blockingIssues) console.log(`    review blockers: ${artifact.review.blockingIssues}`);
   }
   console.log(`Next: ${p2aCommandLine(P2A_PATHS, ['next'])}`);
 }
@@ -1831,11 +1923,11 @@ function runNext(argv) {
     return 1;
   }
   if (args.help) {
-    console.log('Usage: p2a next [--target <dir>] [--project-id <id>] [--json]');
+    console.log('Usage: p2a next [--target <dir>] [--project-id <id>] [--entry <path>] [--json]');
     return 0;
   }
   try {
-    const next = buildNext(args.target, args.projectId);
+    const next = buildNext(args.target, args.projectId, args.entry);
     if (args.json) console.log(JSON.stringify(next, null, 2));
     else printNext(next);
     return 0;

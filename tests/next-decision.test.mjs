@@ -31,6 +31,25 @@ function artifact(root, projectId = 'sample') {
   return artifactRoot;
 }
 
+function writeConstitution(root, projectId = 'sample', approved = true) {
+  writeJson(join(root, '.plan2agent', 'constitution.json'), {
+    schema_version: 'p2a.constitution.v1',
+    projectId,
+    architecture: [],
+    stack: [],
+    prohibitions: [],
+    style: {},
+    ...(approved ? {
+      approval_audit: {
+        approved_by: 'user',
+        approved_at: '2026-08-04',
+        approved_artifacts: ['.plan2agent/constitution.json'],
+        approval_note: 'User quote: "approve this shape"',
+      },
+    } : {}),
+  });
+}
+
 function gateRoot(artifactRoot, iterationId = null) {
   return iterationId ? join(artifactRoot, 'iterations', iterationId) : artifactRoot;
 }
@@ -122,14 +141,6 @@ function writeIteration(artifactRoot, projectId = 'sample', options = {}) {
     effective_spec_ref: `iterations/${iterationId}/gate-b-spec/spec.json`,
     gate_b_approval_audits: {
       [iterationId]: approvalAudit,
-    },
-    gate_c_approval_audits: {
-      [iterationId]: {
-        ...approvalAudit,
-        approved_artifacts: [
-          `iterations/${iterationId}/gate-c-task-graph/task-graph.json`,
-        ],
-      },
     },
     ...(options.closed ? {
       last_closed_iteration: { iteration_id: iterationId, status: 'archived' },
@@ -356,7 +367,7 @@ test('next chooses one read-only action for every primary state', () => {
     {
       id: 'initialized without artifacts',
       setup: () => project(),
-      expected: () => ['initialized_without_artifacts', 'skill'],
+      expected: () => ['entry_missing', 'approval'],
     },
     {
       id: 'incomplete iteration',
@@ -384,7 +395,7 @@ test('next chooses one read-only action for every primary state', () => {
         writeGateA(artifact(root), 'ready_for_spec');
         return root;
       },
-      expected: () => ['gate_a_ready_for_spec', 'skill'],
+      expected: () => ['shape', 'skill'],
     },
     {
       id: 'gate B approval',
@@ -409,7 +420,7 @@ test('next chooses one read-only action for every primary state', () => {
       expected: () => ['gate_b_approved_needs_tasks', 'skill'],
     },
     {
-      id: 'gate C needs review',
+      id: 'validated Gate C needs iteration init',
       setup: () => {
         const root = project();
         const rootArtifact = artifact(root);
@@ -418,20 +429,7 @@ test('next chooses one read-only action for every primary state', () => {
         writeGateC(rootArtifact, [task('task-001', 'todo')]);
         return root;
       },
-      expected: () => ['gate_c_needs_review', 'skill'],
-    },
-    {
-      id: 'gate D needs iteration init',
-      setup: () => {
-        const root = project();
-        const rootArtifact = artifact(root);
-        writeGateA(rootArtifact, 'ready_for_spec');
-        writeGateB(rootArtifact);
-        writeGateC(rootArtifact, [task('task-001', 'todo')]);
-        writeGateD(rootArtifact);
-        return root;
-      },
-      expected: (root) => ['gate_d_passed_needs_iteration_init', 'cli', ['iteration', 'init', '--artifacts', artifactPath(root)]],
+      expected: (root) => ['gate_c_validated_needs_iteration_init', 'cli', ['iteration', 'init', '--artifacts', artifactPath(root)]],
     },
     {
       id: 'started run precedes ready task',
@@ -556,6 +554,55 @@ test('next chooses one read-only action for every primary state', () => {
   }
 });
 
+test('next routes Gate A approval through Gate ② and reuses approved or legacy style contracts', () => {
+  const missingRoot = project();
+  const draftRoot = project();
+  const approvedRoot = project();
+  const legacyRoot = project();
+  const invalidRoot = project();
+  const mismatchedRoot = project();
+  try {
+    writeGateA(artifact(missingRoot), 'ready_for_spec');
+    assertAction(next(missingRoot), 'shape', 'skill');
+
+    writeGateA(artifact(draftRoot), 'ready_for_spec');
+    writeConstitution(draftRoot, 'sample', false);
+    assertAction(next(draftRoot), 'shape', 'approval');
+
+    writeGateA(artifact(approvedRoot), 'ready_for_spec');
+    writeConstitution(approvedRoot);
+    assertAction(next(approvedRoot), 'gate_a_ready_for_spec', 'skill');
+
+    writeGateA(artifact(legacyRoot), 'ready_for_spec');
+    writeFileSync(join(legacyRoot, '.plan2agent', 'style.md'), '# Legacy style\n', 'utf8');
+    assertAction(next(legacyRoot), 'gate_a_ready_for_spec', 'skill');
+
+    writeGateA(artifact(invalidRoot), 'ready_for_spec');
+    writeJson(join(invalidRoot, '.plan2agent', 'constitution.json'), { schema_version: 'wrong' });
+    const invalid = next(invalidRoot);
+    assertAction(invalid, 'invalid_constitution', 'cli', [
+      'validate',
+      '--constitution',
+      join(invalidRoot, '.plan2agent', 'constitution.json'),
+    ]);
+
+    writeGateA(artifact(mismatchedRoot), 'ready_for_spec');
+    writeConstitution(mismatchedRoot, 'different-project');
+    const mismatched = next(mismatchedRoot);
+    assert.equal(mismatched.state, 'invalid_constitution');
+    assert.match(mismatched.reason, /does not match selected project/);
+  } finally {
+    for (const root of [
+      missingRoot,
+      draftRoot,
+      approvedRoot,
+      legacyRoot,
+      invalidRoot,
+      mismatchedRoot,
+    ]) remove(root);
+  }
+});
+
 test('next blocks downstream work when Gate A is missing, unreadable, or invalid', () => {
   for (const variant of ['missing', 'unreadable', 'invalid']) {
     const root = project();
@@ -569,7 +616,7 @@ test('next blocks downstream work when Gate A is missing, unreadable, or invalid
         writeGateA(rootArtifact, 'ready_for_spec');
         const intakePath = join(rootArtifact, 'gate-a-intake', 'intake.json');
         const intake = JSON.parse(readFileSync(intakePath, 'utf8'));
-        intake.interview = { state: 'gate_a_confirmed' };
+        delete intake.summary;
         writeJson(intakePath, intake);
       }
       writeGateB(rootArtifact);
@@ -600,7 +647,7 @@ test('next routes an unreadable or invalid Gate A to recovery without downstream
       } else {
         writeGateA(rootArtifact, 'ready_for_spec');
         const intake = JSON.parse(readFileSync(intakePath, 'utf8'));
-        intake.interview = { state: 'gate_a_confirmed' };
+        delete intake.summary;
         writeJson(intakePath, intake);
       }
 
@@ -627,7 +674,7 @@ test('next recommends and runs the iterative Gate A validator for an invalid act
       active_iteration: iterationId,
       pending_iteration: {
         iteration_id: iterationId,
-        status: 'gate_a_interview',
+        status: 'active_planning',
       },
     });
     writeGateA(rootArtifact, 'ready_for_spec', iterationId);
@@ -639,7 +686,7 @@ test('next recommends and runs the iterative Gate A validator for an invalid act
       'intake.json',
     );
     const intake = JSON.parse(readFileSync(intakePath, 'utf8'));
-    intake.interview = { state: 'gate_a_confirmed' };
+    delete intake.summary;
     writeJson(intakePath, intake);
 
     const payload = next(root);
@@ -658,7 +705,7 @@ test('next recommends and runs the iterative Gate A validator for an invalid act
     assert.notEqual(validation.status, 0);
     assert.match(
       `${validation.stdout}${validation.stderr}`,
-      /\$\.interview missing required keys/,
+      /\$ missing required keys: summary/,
     );
   } finally {
     remove(root);
@@ -777,7 +824,7 @@ test('next routes full iteration readiness failures before recommending task exe
   }
 });
 
-test('next rejects invalid Gate B, Gate C, and Gate D artifacts before downstream work', () => {
+test('next rejects invalid Gate B and Gate C artifacts before downstream work', () => {
   const cases = [
     {
       state: 'invalid_gate_b',
@@ -807,20 +854,6 @@ test('next rejects invalid Gate B, Gate C, and Gate D artifacts before downstrea
         writeJson(graphPath, graph);
       },
       error: /\$\.tasks\[0\] missing required keys: title/,
-    },
-    {
-      state: 'invalid_gate_d',
-      setup: (rootArtifact) => {
-        writeGateA(rootArtifact, 'ready_for_spec');
-        writeGateB(rootArtifact);
-        writeGateC(rootArtifact, [task('task-001', 'todo')]);
-        writeGateD(rootArtifact);
-        const reviewPath = join(rootArtifact, 'gate-d-review', 'review.json');
-        const review = JSON.parse(readFileSync(reviewPath, 'utf8'));
-        delete review.recommended_changes;
-        writeJson(reviewPath, review);
-      },
-      error: /\$ missing required keys: recommended_changes/,
     },
   ];
 
@@ -856,7 +889,7 @@ test('next requires a project id only when multiple artifact roots are ambiguous
     assertAction(ambiguous, 'project_selection_required', 'cli', ['next', '--project-id', '<project-id>']);
 
     const selected = next(root, ['--project-id', 'second']);
-    assertAction(selected, 'gate_a_ready_for_spec', 'skill');
+    assertAction(selected, 'shape', 'skill');
     assert.equal(selected.projectId, 'second');
   } finally {
     remove(root);
@@ -890,7 +923,7 @@ test('next ignores open runs outside the active iteration task-graph context', (
   }
 });
 
-test('next points iterative Gate B and Gate D approvals at active iteration artifacts', () => {
+test('next points Gate B approval at the active iteration and ignores legacy Gate D blockers', () => {
   const root = project();
   try {
     const rootArtifact = artifact(root);
@@ -909,10 +942,7 @@ test('next points iterative Gate B and Gate D approvals at active iteration arti
     writeGateD(rootArtifact, [{ id: 'BLOCK-1' }], iterationId);
 
     payload = next(root);
-    assertAction(payload, 'gate_d_blocked', 'approval');
-    assert.ok(payload.command.display.includes(
-      join(rootArtifact, 'iterations', iterationId, 'gate-d-review', 'review.json'),
-    ));
+    assertAction(payload, 'ready_task_available', 'cli');
   } finally {
     remove(root);
   }
@@ -1048,8 +1078,8 @@ test('info keeps its JSON contract and points human output to next', () => {
   }
 });
 
-test('next keeps the twenty-one ordered decision rules required by the contract', () => {
-  assert.equal(NEXT_DECISION_RULES.length, 21);
+test('next keeps the ordered decision rules required by the contract', () => {
+  assert.equal(NEXT_DECISION_RULES.length, 24);
   for (const rule of NEXT_DECISION_RULES) {
     assert.equal(typeof rule.when, 'function');
     assert.equal(typeof rule.reason, 'function');
@@ -1057,9 +1087,10 @@ test('next keeps the twenty-one ordered decision rules required by the contract'
   }
 });
 
-test('next routes a completed visual iteration through one canonical final review command before close', () => {
+test('next routes a completed visual iteration through review only when the pass is enabled', () => {
   const rule = NEXT_DECISION_RULES.find((candidate) => candidate.state === 'final_visual_review_required');
   const context = {
+    reviewPasses: { visual: 'on' },
     allTasksDone: true,
     closedIteration: false,
     detail: { layout: { kind: 'iteration' } },
@@ -1073,6 +1104,36 @@ test('next routes a completed visual iteration through one canonical final revie
     '--artifacts',
     '.plan2agent/artifacts/sample',
   ]);
+  assert.equal(rule.when({
+    ...context,
+    reviewPasses: { visual: 'off' },
+  }), false);
+  assert.equal(rule.when({
+    ...context,
+    reviewPasses: undefined,
+  }), false);
+});
+
+test('next rejects invalid review pass configuration', () => {
+  const root = project();
+  try {
+    writeJson(join(root, '.plan2agent', 'project.config.json'), {
+      devExecution: {
+        reviewPasses: {
+          milestone: 'sometimes',
+        },
+      },
+    });
+
+    const result = runP2a(['next', '--target', root, '--json']);
+    assert.notEqual(result.status, 0);
+    assert.match(
+      `${result.stdout}${result.stderr}`,
+      /devExecution\.reviewPasses\.milestone must be one of off, opt_in, on/,
+    );
+  } finally {
+    remove(root);
+  }
 });
 
 test('next returns exact commands for cache, webhook, and e2e fixture states', () => {
@@ -1089,7 +1150,7 @@ test('next returns exact commands for cache, webhook, and e2e fixture states', (
 
       const before = snapshotHarness(root);
       const payload = next(root);
-      assertAction(payload, 'gate_d_passed_needs_iteration_init', 'cli', [
+      assertAction(payload, 'gate_c_validated_needs_iteration_init', 'cli', [
         'iteration', 'init', '--artifacts', fixtureArtifact,
       ]);
       assert.deepEqual(snapshotHarness(root), before, `${caseData.projectId} fixture changed the project state`);

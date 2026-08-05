@@ -144,7 +144,6 @@ for (const caseData of manifest.cases ?? []) {
       const expectedToolFiles = [
         path.join('.agents', 'skills', 'p2a-harness', 'SKILL.md'),
         path.join('.agents', 'skills', 'p2a-next', 'SKILL.md'),
-        path.join('.agents', 'agents', 'p2a-requirements.md'),
         path.join('.codex', 'agents', 'p2a-task-graph.toml'),
         path.join('.gemini', 'agents', 'p2a-task-graph.md'),
         path.join('.gemini', 'commands', 'p2a', 'harness.toml'),

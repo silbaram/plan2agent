@@ -27,10 +27,10 @@ import {
   milestoneSnapshotSha256,
   validateArtifactRoot,
   validateApprovalAuditData,
+  validateConstitution,
   validateHandoffReadyArtifactRoot,
   validateIntake,
   validateMilestoneReview,
-  validateReviewPass,
   validateRunsDir,
   validateSpec,
   validateTaskGraph,
@@ -381,8 +381,6 @@ function iterationGatePaths(artifactsRoot, iterationId, currentSpecPath) {
     implementationPlan: path.join(iterationRoot, 'gate-b-spec', 'implementation-plan.md'),
     specJson: path.join(iterationRoot, 'gate-b-spec', 'spec.json'),
     taskGraph: path.join(iterationRoot, 'gate-c-task-graph', 'task-graph.json'),
-    reviewReport: path.join(iterationRoot, 'gate-d-review', 'review-report.md'),
-    reviewJson: path.join(iterationRoot, 'gate-d-review', 'review.json'),
   };
 }
 
@@ -423,7 +421,6 @@ function validateIterationHandoffSource(artifactsRoot, projectId, iterationIdArg
   });
   assertFile(paths.specJson, `iterations/${iterationId}/gate-b-spec/spec.json`);
   assertFile(paths.taskGraph, `iterations/${iterationId}/gate-c-task-graph/task-graph.json`);
-  assertFile(paths.reviewJson, `iterations/${iterationId}/gate-d-review/review.json`);
   assertFile(paths.intakeJson, `iterations/${iterationId}/gate-a-intake/intake.json`);
   validateIntake(paths.intakeJson, { artifactRoot: artifactsRoot });
 
@@ -438,8 +435,6 @@ function validateIterationHandoffSource(artifactsRoot, projectId, iterationIdArg
 
   const taskGraph = validateTaskGraph(paths.taskGraph, paths.specJson);
   assertProjectId('taskGraph.projectId', taskGraph.projectId, projectId);
-  const review = validateReviewPass(paths.reviewJson);
-  assertProjectId('review.projectId', review.projectId, projectId);
 
   return {
     kind: 'iteration',
@@ -793,28 +788,16 @@ function appendCurrentSpecSourceReferences(
       reference: sourceSpec.spec_ref,
       baseDir: sourceArtifactRoot,
     });
-    references.push(
-      {
-        label: `${label}.source_specs[${sourceIndex}] task graph`,
-        reference: normalizePath(path.join(
-          'iterations',
-          sourceSpec.iteration_id,
-          'gate-c-task-graph',
-          'task-graph.json',
-        )),
-        baseDir: sourceArtifactRoot,
-      },
-      {
-        label: `${label}.source_specs[${sourceIndex}] review`,
-        reference: normalizePath(path.join(
-          'iterations',
-          sourceSpec.iteration_id,
-          'gate-d-review',
-          'review.json',
-        )),
-        baseDir: sourceArtifactRoot,
-      },
-    );
+    references.push({
+      label: `${label}.source_specs[${sourceIndex}] task graph`,
+      reference: normalizePath(path.join(
+        'iterations',
+        sourceSpec.iteration_id,
+        'gate-c-task-graph',
+        'task-graph.json',
+      )),
+      baseDir: sourceArtifactRoot,
+    });
     const metadataRef = normalizePath(path.join(
       'iterations',
       sourceSpec.iteration_id,
@@ -2028,27 +2011,6 @@ function appendHandoffRecord(currentSpec, record) {
   };
 }
 
-function resolveOptionalApprovalEvidence(artifactsRoot, reference, label) {
-  if (typeof reference !== 'string' || !reference.trim() || path.isAbsolute(reference)) {
-    throw new ValidationError(`${label} must be a non-empty artifact-root-relative path`);
-  }
-  const sourcePath = path.resolve(artifactsRoot, reference);
-  const relativePath = path.relative(path.resolve(artifactsRoot), sourcePath);
-  if (!relativePath || relativePath.startsWith('..') || path.isAbsolute(relativePath)) {
-    throw new ValidationError(`${label} escapes the artifact root: ${JSON.stringify(reference)}`);
-  }
-  if (!existsSync(sourcePath)) return null;
-  assertFile(sourcePath, label);
-  const realRelativePath = path.relative(realpathSync(artifactsRoot), realpathSync(sourcePath));
-  if (!realRelativePath || realRelativePath.startsWith('..') || path.isAbsolute(realRelativePath)) {
-    throw new ValidationError(`${label} resolves outside the artifact root: ${JSON.stringify(reference)}`);
-  }
-  return {
-    sourcePath,
-    relativePath: normalizePath(relativePath),
-  };
-}
-
 function pushApprovalEvidence(plan, sourcePath, targetRoot, targetRelative, label) {
   const normalizedTarget = normalizePath(targetRelative);
   const existing = plan.find(
@@ -2066,50 +2028,6 @@ function pushApprovalEvidence(plan, sourcePath, targetRoot, targetRelative, labe
     return;
   }
   pushArtifact(plan, sourcePath, targetRoot, normalizedTarget);
-}
-
-function gateCApprovalEvidence(artifactsRoot, iterationId, audit) {
-  const canonicalRef = normalizePath(
-    path.join('iterations', iterationId, 'gate-c-task-graph', 'task-graph.json'),
-  );
-  if (!audit.draft_sha256) {
-    return resolveMilestoneBundleReference(
-      artifactsRoot,
-      canonicalRef,
-      `gate_c_approval_audits.${iterationId} canonical task graph`,
-    );
-  }
-
-  const auditRefs = [
-    ...(Array.isArray(audit.approved_artifacts) ? audit.approved_artifacts : []),
-    audit.approved_source,
-  ].filter((reference) => typeof reference === 'string' && reference.trim());
-  const candidateRefs = [];
-  for (const reference of auditRefs) {
-    candidateRefs.push(reference);
-    if (!reference.endsWith('.promoted')) candidateRefs.push(`${reference}.promoted`);
-  }
-  candidateRefs.push(
-    `iterations/${iterationId}/gate-c-task-graph/task-graph.draft.json.promoted`,
-    canonicalRef,
-  );
-
-  for (const reference of [...new Set(candidateRefs.map(normalizePath))]) {
-    const resolved = resolveOptionalApprovalEvidence(
-      artifactsRoot,
-      reference,
-      `gate_c_approval_audits.${iterationId} approval evidence`,
-    );
-    if (
-      resolved
-      && sha256Value(readFileSync(resolved.sourcePath)) === audit.draft_sha256
-    ) {
-      return resolved;
-    }
-  }
-  throw new ValidationError(
-    `gate_c_approval_audits.${iterationId}.draft_sha256 does not match any preserved approval evidence`,
-  );
 }
 
 function bundleCurrentSpecApprovalAudits(
@@ -2144,27 +2062,7 @@ function bundleCurrentSpecApprovalAudits(
     if (Object.hasOwn(audit, 'approved_source')) audit.approved_source = targetRef;
   }
 
-  for (const [iterationId, audit] of Object.entries(next.gate_c_approval_audits ?? {})) {
-    assertSafeIterationId(iterationId);
-    validateApprovalAuditData(audit, `gate_c_approval_audits.${iterationId}`);
-    const source = gateCApprovalEvidence(artifactsRoot, iterationId, audit);
-    const targetRef = iterationId === selectedIterationId
-      ? normalizePath(path.join(
-          targetArtifactDir(projectId),
-          'gate-c-task-graph',
-          path.basename(source.relativePath),
-        ))
-      : normalizePath(path.join(targetArtifactDir(projectId), source.relativePath));
-    pushApprovalEvidence(
-      plan,
-      source.sourcePath,
-      targetRoot,
-      targetRef,
-      `gate_c_approval_audits.${iterationId}`,
-    );
-    audit.approved_artifacts = [targetRef];
-    if (Object.hasOwn(audit, 'approved_source')) audit.approved_source = targetRef;
-  }
+  delete next.gate_c_approval_audits;
   return next;
 }
 
@@ -2253,7 +2151,7 @@ function inheritedCodexAgentContent(sourcePath) {
     .replace(/^model_reasoning_effort\s*=.*\n/m, '');
 }
 
-const P2A_SUBCOMMAND_PATTERN = /\bp2a (?=(?:doctor|enhance|eval|execute|handoff|info|init|iteration|memory|next|proposal|proposals|run|runs|scaffold|task|tasks|update|upgrade|validate)\b)/g;
+const P2A_SUBCOMMAND_PATTERN = /\bp2a (?=(?:decide|decisions|doctor|enhance|eval|execute|handoff|info|init|iteration|memory|next|proposal|proposals|run|runs|scaffold|shape|task|tasks|update|upgrade|validate)\b)/g;
 
 function legacyRuntimeCommandContent(source) {
   return source.replace(
@@ -2967,38 +2865,6 @@ function buildClaudeLocalSettings() {
   return {};
 }
 
-function renderStyleContractTemplate() {
-  return `# Plan2Agent Style Contract
-
-This file is the project code style contract that implementation agents read at the start of every task.
-Update it only by direct user edits or through an approved Plan2Agent proposal.
-
-## Naming
-
-<!-- Example: Prefer descriptive camelCase names for local variables and functions. -->
-
-## Error handling
-
-<!-- Example: Return actionable error messages and avoid swallowing exceptions silently. -->
-
-## Abstraction & function size
-
-<!-- Example: Keep functions focused; extract helpers when a branch or loop obscures intent. -->
-
-## Comments & docs
-
-<!-- Example: Comment why a non-obvious decision exists, not what straightforward code does. -->
-
-## Testing style
-
-<!-- Example: Name tests after observable behavior and cover regressions with focused cases. -->
-
-## Framework/language specifics
-
-<!-- Example: Follow established framework conventions already present in this repository. -->
-`;
-}
-
 function renderPlan2AgentGuide(legacyRuntime = false) {
   const terminalNextCommand = legacyRuntime
     ? 'node .plan2agent/scripts/p2a.mjs next'
@@ -3016,7 +2882,7 @@ Use one state-based entry point whenever you begin or finish a Plan2Agent action
 
 The result provides exactly one next action and its reason. Continue a returned skill in the same agent session; review and approve a returned CLI or approval action before running it. After that action is complete, run \`next\` again.
 
-Planning Gates A-D, iteration artifacts, execution runs, and proposal records remain under \`.plan2agent/artifacts/<project>/\` and \`.plan2agent/proposals/\`. Treat individual P2A CLI commands as references: use them only when \`next\` returns them.
+The project constitution remains at \`.plan2agent/constitution.json\`. Planning Gates A-C, iteration artifacts, execution runs, and proposal records remain under \`.plan2agent/artifacts/<project>/\` and \`.plan2agent/proposals/\`. Treat individual P2A CLI commands as references: use them only when \`next\` returns them.
 
 ## Storage policy
 
@@ -3101,10 +2967,6 @@ function buildScaffoldPlan(
   pushGeneratedJson(plan, targetRoot, path.join('.plan2agent', 'manifest.json'), manifest);
   pushGeneratedJson(plan, targetRoot, path.join('.plan2agent', 'project.config.json'), buildProjectConfig(targetRoot, { enabled: false }, { projectId }));
   pushGeneratedText(plan, targetRoot, '.gitignore', scaffoldGitignoreContent(targetRoot), { allowExisting: true });
-  const styleContractRelative = path.join('.plan2agent', 'style.md');
-  if (!existsSync(path.join(targetRoot, styleContractRelative))) {
-    pushGeneratedText(plan, targetRoot, styleContractRelative, renderStyleContractTemplate());
-  }
   if (args.command !== 'scaffold' || !existsSync(path.join(targetRoot, 'PLAN2AGENT.md'))) {
     pushGeneratedText(plan, targetRoot, 'PLAN2AGENT.md', renderPlan2AgentGuide(legacyRuntime));
   }
@@ -4077,6 +3939,21 @@ function printEnhanceCapabilityPlan(plan, args, targetRoot) {
   if (args.dryRun) console.log('dry-run: no files written');
 }
 
+function findProjectConstitution(startPath) {
+  let current = path.resolve(startPath);
+  while (true) {
+    if (path.basename(current) === '.plan2agent') {
+      const candidate = path.join(current, 'constitution.json');
+      return existsSync(candidate) && lstatSync(candidate).isFile() ? candidate : null;
+    }
+    const candidate = path.join(current, '.plan2agent', 'constitution.json');
+    if (existsSync(candidate) && lstatSync(candidate).isFile()) return candidate;
+    const parent = path.dirname(current);
+    if (parent === current) return null;
+    current = parent;
+  }
+}
+
 function buildPlan(paths, args, artifactsRoot, targetRoot, sourceInfo, options = {}) {
   const {
     record = null,
@@ -4088,6 +3965,19 @@ function buildPlan(paths, args, artifactsRoot, targetRoot, sourceInfo, options =
   const targetIntakeRef = normalizePath(targetIntakeJsonPath(args.projectId));
   const targetSpecRef = normalizePath(targetSpecJsonPath(args.projectId));
   const targetTaskGraphRef = normalizePath(targetTaskGraphPath(args.projectId));
+  const sourceConstitutionPath = findProjectConstitution(artifactsRoot);
+  if (sourceConstitutionPath) {
+    validateConstitution(sourceConstitutionPath, {
+      requireApproved: true,
+      projectId: args.projectId,
+    });
+    pushArtifact(
+      plan,
+      sourceConstitutionPath,
+      targetRoot,
+      path.join('.plan2agent', 'constitution.json'),
+    );
+  }
   assertFile(paths.intakeJson, 'gate-a-intake/intake.json');
   const portableIntakeFiles = resolvePortableArtifactReferenceBundle([{
     label: 'gate-a-intake/intake.json',
@@ -4102,7 +3992,6 @@ function buildPlan(paths, args, artifactsRoot, targetRoot, sourceInfo, options =
   const targetIntakeContent = rebaseIntakeApprovalAuditContent(
     portableIntakeContents.get(realpathSync(paths.intakeJson)),
     targetIntakeRef,
-    sourceInfo.iterationId,
   );
   const targetIntakeSha256 = sha256Value(targetIntakeContent);
   pushArtifactIfExists(plan, paths.productSpec, targetRoot, path.join(artifactTargetDir, 'gate-b-spec', 'product-spec.md'));
@@ -4124,8 +4013,6 @@ function buildPlan(paths, args, artifactsRoot, targetRoot, sourceInfo, options =
     args.projectId,
   );
   pushArtifact(plan, paths.taskGraph, targetRoot, targetTaskGraphPath(args.projectId), { type: 'rewrite-json', transform: (source) => rebaseTaskGraphSourceSpec(source, targetSpecRef) });
-  pushArtifactIfExists(plan, paths.reviewReport, targetRoot, path.join(artifactTargetDir, 'gate-d-review', 'review-report.md'));
-  pushArtifact(plan, paths.reviewJson, targetRoot, path.join(artifactTargetDir, 'gate-d-review', 'review.json'));
 
   pushArtifact(plan, paths.intakeJson, targetRoot, targetIntakeJsonPath(args.projectId), {
     type: 'rewrite-json',
@@ -4332,6 +4219,7 @@ function buildPlan(paths, args, artifactsRoot, targetRoot, sourceInfo, options =
     milestoneReviewFiles,
     milestoneEvidenceFiles,
     currentSpecFile: sourceInfo.currentSpecPath ? '.plan2agent/current-spec.json' : null,
+    constitutionFile: sourceConstitutionPath ? '.plan2agent/constitution.json' : null,
     maintenanceFiles,
     scriptFiles,
     toolFiles,
@@ -4346,6 +4234,7 @@ function buildPlan(paths, args, artifactsRoot, targetRoot, sourceInfo, options =
       `spec.source_intake rebased to ${targetIntakeRef}`,
       sourceInfo.kind === 'iteration' ? `iteration handoff source: ${sourceInfo.iterationId}` : 'greenfield handoff source',
       `run transfer mode: ${args.runTransfer}`,
+      sourceConstitutionPath ? 'approved Gate ② constitution copied' : 'legacy handoff without a constitution',
       preflightResearchFiles.length ? `Feature Radar preflight research copied: ${preflightResearchFiles.length} file(s)` : 'Feature Radar preflight research not present',
       milestoneReviewFiles.length ? `Milestone reviews copied: ${milestoneReviewFiles.length} file(s)` : 'Milestone reviews not present',
       milestoneEvidenceFiles.length ? `Milestone evidence bundle copied: ${milestoneEvidenceFiles.length} file(s)` : 'Milestone evidence bundle not present',
@@ -4398,19 +4287,10 @@ function rebaseSpecSourceIntake(
   return `${JSON.stringify(spec, null, 2)}\n`;
 }
 
-function rebaseIntakeApprovalAuditContent(sourceContent, targetIntakeRef, sourceIterationId = null) {
+function rebaseIntakeApprovalAuditContent(sourceContent, targetIntakeRef) {
   const intake = JSON.parse(Buffer.isBuffer(sourceContent)
     ? sourceContent.toString('utf8')
     : String(sourceContent));
-  if (intake.interview && sourceIterationId) {
-    const recordedIterationId = intake.interview.seed_iteration_id;
-    if (recordedIterationId && recordedIterationId !== sourceIterationId) {
-      throw new ValidationError(
-        `intake.interview.seed_iteration_id must match handoff iteration ${JSON.stringify(sourceIterationId)}, got ${JSON.stringify(recordedIterationId)}`,
-      );
-    }
-    intake.interview.seed_iteration_id = sourceIterationId;
-  }
   if (intake.approval_audit) {
     intake.approval_audit.approved_artifacts = [targetIntakeRef];
   }
@@ -4675,7 +4555,7 @@ function cleanupMovedSources(plan, artifactsRoot) {
       `WARNING: move completed, but staged source cleanup failed at ${stagingRoot}: ${error.message}`,
     );
   }
-  for (const directory of ['gate-a-intake', 'gate-b-spec', 'gate-c-task-graph', 'gate-d-review']) {
+  for (const directory of ['gate-a-intake', 'gate-b-spec', 'gate-c-task-graph']) {
     const directoryPath = path.join(artifactRootResolved, directory);
     try {
       if (existsSync(directoryPath) && readdirSync(directoryPath).length === 0) {
@@ -4782,23 +4662,19 @@ function probeGateStatus(projectDir) {
   try {
     const validation = validateArtifactRoot(projectDir);
     const spec = validation.spec;
-    const review = validation.review;
     const approved = spec ? spec.approval === 'approved' : false;
     const openDecisions = Array.isArray(spec?.open_decisions) ? spec.open_decisions.length : null;
-    const blocking = Array.isArray(review?.blocking_issues) ? review.blocking_issues.length : null;
     return {
       statusDoc: true,
       a: validation.gates.a.present,
       b: validation.gates.b.present,
       c: validation.gates.c.present,
-      d: validation.gates.d.present,
       approved,
       openDecisions,
-      blocking,
       ready: validation.readyForHandoff,
     };
   } catch {
-    return { statusDoc: false, a: false, b: false, c: false, d: false, approved: false, openDecisions: null, blocking: null, ready: false };
+    return { statusDoc: false, a: false, b: false, c: false, approved: false, openDecisions: null, ready: false };
   }
 }
 
@@ -4809,9 +4685,9 @@ function formatGateStatus(status, key) {
 function formatProjectItem(item, number) {
   if (item.manual) return `${number}) 직접 입력`;
   const status = item.status;
-  const gates = ['a', 'b', 'c', 'd'].map((key) => formatGateStatus(status, key)).join(' ');
+  const gates = ['a', 'b', 'c'].map((key) => formatGateStatus(status, key)).join(' ');
   const detail = status.ready
-    ? `blocker ${status.blocking} · 인계가능`
+    ? '검증 통과 · 인계가능'
     : '미완';
   return `${number}) ${item.projectId.padEnd(20)} ${gates} · ${detail}`;
 }
@@ -4840,13 +4716,10 @@ function readinessProblems(status) {
   if (!status.a) missing.push('A');
   if (!status.b) missing.push('B');
   if (!status.c) missing.push('C');
-  if (!status.d) missing.push('D');
   if (missing.length) problems.push(`게이트 누락: ${missing.join(', ')}`);
   if (!status.approved) problems.push('미승인(spec.approval != approved)');
   if (status.openDecisions === null) problems.push('열린 결정 수 확인 불가');
   if (status.openDecisions > 0) problems.push(`open_decisions ${status.openDecisions}개`);
-  if (status.blocking === null) problems.push('리뷰없음/검토 상태 확인 불가');
-  if (status.blocking > 0) problems.push(`blocking_issues ${status.blocking}개`);
   return problems;
 }
 

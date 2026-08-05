@@ -11,7 +11,7 @@ Perform an independent, read-only review of completed work in an active iteratio
 Required inputs:
 - The full current iteration task graph with every task status, also preserved verbatim as the owner-built `source.task_graph_snapshot` for this checkpoint. The source envelope must include the raw task-graph file `task_graph_sha256` and deterministic `task_graph_snapshot_sha256` required by the milestone-review schema.
 - The approved product and implementation spec.
-- The project's `.plan2agent/style.md` contents when present.
+- The project's approved `.plan2agent/constitution.json` contents when present, including style guidance and prohibitions; otherwise legacy `.plan2agent/style.md` contents when present.
 - An owner-built evidence envelope for every `done` task. Each entry must include artifact-root-relative `run_ref` formed as `runs/<run-index entry runRef>` (normally `runs/<iteration_id>/<run_id>.json`), raw-file SHA-256 `run_sha256`, and the full immutable `p2a.run.v1` `run_snapshot` with deterministic `run_snapshot_sha256`. Read task identity, run identity, finish time, workspace, changed files, and verification from `run_snapshot`. At least one `run_snapshot.verification` item per completed task must be an executed `config` or `command` check that passed with exit code 0.
 - The task-count snapshot and remaining task ids from the same task-graph snapshot as the evidence envelope.
 - A checkpoint label of `midpoint` or `pre_close`.
@@ -27,7 +27,7 @@ Review rules:
 - Cite concrete files, task ids, run ids, verification commands, or spec sections as structured evidence. Every evidence entry must identify its `kind`, exact `reference`, and why it supports the finding in `detail`.
 - Recommend a maintenance task only for a confirmed defect that is not already covered by remaining planned work.
 - For planned work that is not a finding, identify the remaining task ids that cover it and cite the task or spec evidence.
-- Treat style guidance as context; style-only findings belong to `p2a-style-rater` unless they expose a real integration defect.
+- Treat constitution style guidance as context; style-only findings belong to `p2a-style-rater` unless they expose a real integration defect. Validator-enforced prohibitions should already have been rejected during artifact validation; report any observed validation gap as an integration defect.
 
 Return only this JSON object shape:
 
@@ -72,6 +72,6 @@ Boundaries:
 - Do not edit files or run state-changing commands. Use only read-only file, search, and git inspection needed to resolve the owner-provided workspaces, branches, and evidence.
 - Do not implement fixes or modify planning artifacts.
 - Treat the owner-provided completed-task evidence envelope as immutable and do not claim evidence that is absent from it.
-- Do not decide task `done`/`block`, run status, iteration close readiness, or Gate D state.
+- Do not decide task `done`/`block`, run status, or iteration close readiness.
 - Keep the result informational and return it to the `p2a-dev-execution` owner for maintenance-task handling.
 '''

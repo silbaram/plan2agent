@@ -12,8 +12,10 @@ const ORCHESTRATION_AGENT_TOOLS = new Set(['codex', 'claude', 'manual']);
 const AI_TOOL_TARGETS = new Set(['codex', 'claude', 'gemini']);
 export const DEFAULT_VERIFICATION_TIMEOUT_MS = 600000;
 export const RUN_ID_STRATEGIES = new Set(['timestamp', 'task-sequence']);
+export const REVIEW_PASS_POLICIES = new Set(['off', 'opt_in', 'on']);
 const DEFAULT_RUN_ID_PATTERN = 'run-<taskId>-<sequence:3>';
 export const RUN_ID_RESERVATION_DIR = '.run-id-reservations';
+const REVIEW_PASS_KEYS = ['monitor', 'style', 'milestone', 'visual'];
 
 export function defaultRunTracking() {
   return {
@@ -232,11 +234,41 @@ export function defaultDevExecution() {
     defaultIsolation: 'none',
     scopePolicy: 'task_only',
     verificationPolicy: 'required_for_done',
+    reviewPasses: {
+      monitor: 'opt_in',
+      style: 'off',
+      milestone: 'off',
+      visual: 'off',
+    },
   };
 }
 
 function objectValue(value) {
   return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+}
+
+export function resolveReviewPasses(config) {
+  const defaults = defaultDevExecution().reviewPasses;
+  const configured = config?.devExecution?.reviewPasses;
+  if (configured !== undefined && (configured === null || typeof configured !== 'object' || Array.isArray(configured))) {
+    throw new Error('project config devExecution.reviewPasses must be an object');
+  }
+  const reviewPasses = objectValue(configured);
+  const unknown = Object.keys(reviewPasses).filter((key) => !REVIEW_PASS_KEYS.includes(key));
+  if (unknown.length) {
+    throw new Error(
+      `project config devExecution.reviewPasses has unknown key(s): ${unknown.sort().join(', ')}`,
+    );
+  }
+  return Object.fromEntries(REVIEW_PASS_KEYS.map((key) => {
+    const value = Object.hasOwn(reviewPasses, key) ? reviewPasses[key] : defaults[key];
+    if (!REVIEW_PASS_POLICIES.has(value)) {
+      throw new Error(
+        `project config devExecution.reviewPasses.${key} must be one of ${[...REVIEW_PASS_POLICIES].join(', ')}, got ${JSON.stringify(value)}`,
+      );
+    }
+    return [key, value];
+  }));
 }
 
 function normalizedProviderValue(value) {

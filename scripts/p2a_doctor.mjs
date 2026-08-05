@@ -12,6 +12,11 @@ import {
   REPO_ONLY_SCRIPT_FILES,
 } from './p2a_tool_manifest.mjs';
 import { normalizePath } from './p2a_paths.mjs';
+import { resolveReviewPasses } from './p2a_project_config.mjs';
+import {
+  discoverEntryDocument,
+  discoverFeatureRadarPreflightRuns,
+} from './p2a_radar_preflight.mjs';
 
 const EMPTY_TASK_COUNTS = {
   total: 0,
@@ -230,7 +235,9 @@ function looksLikeArtifactRoot(candidate) {
   if (!isDirectory(candidate)) return false;
   if (isFile(path.join(candidate, 'current-spec.json'))) return true;
   if (isDirectory(path.join(candidate, 'iterations'))) return true;
-  return GATE_FILES.some(([, , relativePath]) => isFile(path.join(candidate, relativePath)));
+  if (GATE_FILES.some(([, , relativePath]) => isFile(path.join(candidate, relativePath)))) return true;
+  return discoverFeatureRadarPreflightRuns(candidate, { includeNative: false })
+    .some((run) => run.source_kind === 'p2a-preflight');
 }
 
 function discoverArtifactRoots(targetRoot) {
@@ -380,6 +387,11 @@ function summarizeArtifact(targetRoot, artifactRoot, isScaffoldProject) {
     });
   }
 
+  const entry = discoverEntryDocument(artifactRoot, {
+    projectId,
+    repeatedDevelopment: layout.kind === 'iteration',
+  });
+
   const iterationRoot = activeIteration ? path.join(artifactRoot, 'iterations', activeIteration) : null;
   const searchRoots = iterationRoot && isDirectory(iterationRoot)
     ? [iterationRoot, artifactRoot]
@@ -390,19 +402,28 @@ function summarizeArtifact(targetRoot, artifactRoot, isScaffoldProject) {
     path.join(searchRoot, 'gate-c-task-graph', 'task-graph.json'),
     path.join(searchRoot, 'task-graph.json'),
   ]));
-  const reviewPath = firstExistingFile(searchRoots.map((searchRoot) => path.join(searchRoot, 'gate-d-review', 'review.json')));
+  const hasCanonicalPlanningState = Boolean(
+    layout.hasCurrentSpec
+    || layout.hasIterations
+    || intakePath
+    || specPath
+    || taskGraphPath
+  );
+  if (entry && !entry.valid && !hasCanonicalPlanningState) {
+    diagnostics.push({
+      severity: 'error',
+      message: `Entry document is invalid: ${entry.errors.join('; ')}`,
+    });
+  }
 
   const specResult = specPath ? readJsonObject(specPath) : null;
   const taskGraphResult = taskGraphPath ? readJsonObject(taskGraphPath) : null;
-  const reviewResult = reviewPath ? readJsonObject(reviewPath) : null;
   if (specResult?.ok) projectId = stringValue(specResult.data.project_id) ?? projectId;
   if (taskGraphResult?.ok) projectId = stringValue(taskGraphResult.data.projectId) ?? projectId;
-  if (reviewResult?.ok) projectId = stringValue(reviewResult.data.projectId) ?? projectId;
 
   for (const [label, result] of [
     ['Gate B spec', specResult],
     ['Gate C task graph', taskGraphResult],
-    ['Gate D review', reviewResult],
   ]) {
     if (result && !result.ok) {
       diagnostics.push({ severity: 'error', message: `${label} is not readable: ${result.error}` });
@@ -415,7 +436,7 @@ function summarizeArtifact(targetRoot, artifactRoot, isScaffoldProject) {
   if (layout.requiresIterationInit) {
     diagnostics.push({
       severity: 'warn',
-      message: 'Greenfield Gate A-D artifacts must be converted with p2a iteration init before task execution.',
+      message: 'Greenfield Gate A-C artifacts must be converted with p2a iteration init before task execution.',
     });
   }
   if (layout.hasIncompleteIterationLayout) {
@@ -436,6 +457,12 @@ function summarizeArtifact(targetRoot, artifactRoot, isScaffoldProject) {
     artifactRoot: relativeToTarget(targetRoot, artifactRoot),
     activeIteration,
     layout,
+    entry: entry ? {
+      path: relativeToTarget(targetRoot, entry.path),
+      sourceKind: entry.sourceKind,
+      valid: entry.valid,
+      warnings: entry.warnings,
+    } : null,
     gates: GATE_FILES.map(([id, label, relativePath]) => gateFileSummary(targetRoot, searchRoots, id, label, relativePath)),
     spec: {
       path: specPath ? relativeToTarget(targetRoot, specPath) : null,
@@ -447,10 +474,6 @@ function summarizeArtifact(targetRoot, artifactRoot, isScaffoldProject) {
       version: taskGraphResult?.ok ? stringValue(taskGraphResult.data.version) : null,
       sourceSpec: taskGraphResult?.ok ? stringValue(taskGraphResult.data.sourceSpec) : null,
       taskCounts,
-    },
-    review: {
-      path: reviewPath ? relativeToTarget(targetRoot, reviewPath) : null,
-      blockingIssues: reviewResult?.ok && Array.isArray(reviewResult.data.blocking_issues) ? reviewResult.data.blocking_issues.length : null,
     },
     runs: runSummary,
     diagnostics,
@@ -508,16 +531,18 @@ function projectCommands(state, artifacts) {
   if (primaryArtifact) {
     commands.push({
       id: 'validate',
-      command: primaryArtifact.activeIteration
-        ? `p2a iteration validate --artifacts ${primaryArtifact.artifactRoot}`
-        : `p2a validate --artifact-root ${primaryArtifact.artifactRoot}`,
+      command: primaryArtifact.entry && primaryArtifact.layout.kind === 'unknown'
+        ? `p2a validate --entry ${primaryArtifact.entry.path}`
+        : primaryArtifact.activeIteration
+          ? `p2a iteration validate --artifacts ${primaryArtifact.artifactRoot}`
+          : `p2a validate --artifact-root ${primaryArtifact.artifactRoot}`,
       description: 'Validate the detected planning artifacts.',
     });
   }
   if (state === 'installed_empty') {
     commands.push({
       id: 'import_or_plan',
-      command: 'Start Gate A-D planning or import an existing artifact bundle.',
+      command: 'Start Gate A-C planning or import an existing artifact bundle.',
       description: 'No canonical artifact root was found yet.',
     });
   }
@@ -741,6 +766,13 @@ function buildDevReport(targetRoot, manifest, configResult) {
   }
 
   const config = configResult.ok ? configResult.data : null;
+  let reviewPasses = null;
+  let reviewPassesError = null;
+  try {
+    reviewPasses = resolveReviewPasses(config);
+  } catch (error) {
+    reviewPassesError = error instanceof Error ? error.message : String(error);
+  }
   const capabilityTargets = targets.filter((target) => config?.providerNativeCapabilities?.[target]);
   checks.push(
     targets.length && capabilityTargets.length === targets.length
@@ -759,8 +791,16 @@ function buildDevReport(targetRoot, manifest, configResult) {
       && Array.isArray(config.devExecution.allowedProviders)
       && config.devExecution.scopePolicy === 'task_only'
       && config.devExecution.verificationPolicy === 'required_for_done'
-      ? check('dev_execution_config', 'Dev execution config', 'pass', `defaultProvider=${config.devExecution.defaultProvider}, scopePolicy=${config.devExecution.scopePolicy}`)
-      : check('dev_execution_config', 'Dev execution config', 'warn', 'devExecution defaultProvider/allowedProviders/scopePolicy/verificationPolicy is not fully configured'),
+      && !reviewPassesError
+      ? check('dev_execution_config', 'Dev execution config', 'pass', `defaultProvider=${config.devExecution.defaultProvider}, scopePolicy=${config.devExecution.scopePolicy}, reviewPasses=${Object.entries(reviewPasses).map(([key, value]) => `${key}:${value}`).join(',')}`)
+      : check(
+          'dev_execution_config',
+          'Dev execution config',
+          'warn',
+          reviewPassesError
+            ? `devExecution.reviewPasses is invalid: ${reviewPassesError}`
+            : 'devExecution defaultProvider/allowedProviders/scopePolicy/verificationPolicy is not fully configured',
+        ),
   );
 
   checks.push(
@@ -983,6 +1023,7 @@ function printHuman(report) {
     const counts = artifact.taskGraph.taskCounts;
     console.log(`- ${artifact.projectId}: ${artifact.artifactRoot} (${artifact.layout.kind})`);
     if (artifact.activeIteration) console.log(`  activeIteration: ${artifact.activeIteration}`);
+    if (artifact.entry) console.log(`  entry: ${artifact.entry.path} (${artifact.entry.valid ? 'valid' : 'invalid'})`);
     console.log(`  tasks: ${counts.total} total, ${counts.ready} ready, ${counts.done} done, ${counts.blocked} blocked`);
     console.log(`  runs: ${artifact.runs.runCount}${artifact.runs.latestRunId ? `, latest ${artifact.runs.latestRunId}` : ''}`);
     console.log(`  gates: ${artifact.gates.map((gate) => `${gate.id}=${gate.state}`).join(', ')}`);

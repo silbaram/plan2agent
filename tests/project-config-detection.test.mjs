@@ -4,7 +4,12 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 
-import { detectProjectCommands } from '../scripts/p2a_project_config.mjs';
+import {
+  defaultDevExecution,
+  detectProjectCommands,
+  mergeDevSkillConfig,
+  resolveReviewPasses,
+} from '../scripts/p2a_project_config.mjs';
 
 function tempProject() {
   return mkdtempSync(path.join(tmpdir(), 'p2a-project-config-'));
@@ -75,4 +80,67 @@ test('keeps existing JavaScript package script command detection', () => {
   assert.equal(detected.testCommand, 'npm test');
   assert.equal(detected.lintCommand, 'npm run lint');
   assert.equal(detected.typecheckCommand, 'npm run typecheck');
+});
+
+test('defaults heavyweight review passes off while keeping monitor opt-in', () => {
+  assert.deepEqual(defaultDevExecution().reviewPasses, {
+    monitor: 'opt_in',
+    style: 'off',
+    milestone: 'off',
+    visual: 'off',
+  });
+  assert.deepEqual(resolveReviewPasses({}), {
+    monitor: 'opt_in',
+    style: 'off',
+    milestone: 'off',
+    visual: 'off',
+  });
+});
+
+test('merges review pass defaults without replacing project overrides', () => {
+  const merged = mergeDevSkillConfig({
+    devExecution: {
+      reviewPasses: {
+        milestone: 'on',
+        visual: 'opt_in',
+      },
+    },
+  }).config;
+
+  assert.deepEqual(merged.devExecution.reviewPasses, {
+    milestone: 'on',
+    visual: 'opt_in',
+    monitor: 'opt_in',
+    style: 'off',
+  });
+  assert.deepEqual(resolveReviewPasses(merged), {
+    monitor: 'opt_in',
+    style: 'off',
+    milestone: 'on',
+    visual: 'opt_in',
+  });
+});
+
+test('rejects invalid review pass configuration values', () => {
+  for (const value of ['enabled', true, '', 1, null]) {
+    assert.throws(
+      () => resolveReviewPasses({ devExecution: { reviewPasses: { style: value } } }),
+      /devExecution\.reviewPasses\.style must be one of off, opt_in, on/,
+    );
+  }
+  assert.throws(
+    () => resolveReviewPasses({ devExecution: { reviewPasses: [] } }),
+    /devExecution\.reviewPasses must be an object/,
+  );
+  assert.throws(
+    () => resolveReviewPasses({
+      devExecution: {
+        reviewPasses: {
+          mile: 'on',
+          visuals: 'on',
+        },
+      },
+    }),
+    /devExecution\.reviewPasses has unknown key\(s\): mile, visuals/,
+  );
 });

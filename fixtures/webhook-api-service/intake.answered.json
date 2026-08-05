@@ -113,5 +113,13 @@
       "used_for": "Confirmed TypeScript runtime, provider-neutral queue integration, and bounded retry behavior."
     }
   ],
+  "approval_audit": {
+    "approved_by": "fixture-user",
+    "approved_at": "2026-08-04",
+    "approved_artifacts": [
+      "gate-a-intake/intake.json"
+    ],
+    "approval_note": "Fixture scope approved for Gate B compatibility validation."
+  },
   "status": "ready_for_spec"
 }

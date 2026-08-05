@@ -7,7 +7,7 @@
 
 [English](readme.md) | [한국어](README.ko-KR.md)
 
-Turn a one-sentence product idea into a confirmed product understanding, approved specs,
+Turn a concise product document into a confirmed product understanding, approved specs,
 dependency-aware tasks, and verified AI coding runs.
 
 ## Install in 30 seconds
@@ -26,50 +26,45 @@ you finish a planning, approval, or development step.
 
 ## Your first plan in 5 minutes
 
-After initialization, open Codex, Claude Code, or Gemini CLI in the project directory and give the
-planning harness a product idea. You do not need to write a complete requirements document first.
+After initialization, write a concise Markdown or text entry document. It can be one paragraph and
+does not need to be a complete requirements document. Then run `p2a next --entry <path>` or give that
+path to the planning harness.
 
 | Agent | Example |
 | --- | --- |
-| Codex | `Use the $p2a-harness skill to plan a service that receives webhooks, verifies signatures, and shows delivery history.` |
-| Claude Code | `/p2a-harness Plan a service that receives webhooks, verifies signatures, and shows delivery history.` |
-| Gemini CLI | `/p2a:harness Plan a service that receives webhooks, verifies signatures, and shows delivery history.` |
+| Codex | `Use the $p2a-harness skill with --entry docs/idea.md.` |
+| Claude Code | `/p2a-harness --entry docs/idea.md` |
+| Gemini CLI | `/p2a:harness --entry docs/idea.md` |
 
-The harness starts a bounded discovery interview, asking one to three high-impact questions at a
-time. It keeps question ids stable, records concrete answers, and turns confirmed answers into
-canonical product and implementation fields instead of leaving the decisions only in chat.
-
-At round three, the harness presents a soft-limit summary and asks whether to continue, accept the
-current understanding, or pause. It stops at five rounds or after two no-progress rounds. Unresolved
-high-impact blockers remain visible and cannot be silently assumed away.
-
-The resulting workflow pauses at explicit review gates instead of silently turning unclear
-requirements into code:
+The harness confirms the intended scope, records the confirmed decisions, and turns them into
+canonical product, implementation, and task artifacts instead of leaving decisions only in chat.
 
 ```text
-One-sentence idea
-  -> Discovery interview: 1-3 focused questions per round
+Concise Markdown or text entry document
   -> Gate A: confirmed understanding and explicit user approval
+  -> Gate ②: approved persistent architecture, stack, prohibitions, and style
   -> Gate B: product spec and implementation plan
      -> conditional visual experience: structured screens + approved offline HTML prototype
-  -> Gate C: dependency-aware task graph
-  -> Gate D: blocker and readiness review
+  -> Gate C: validated dependency-aware task graph
   -> supervised implementation and verification
   -> evaluation and improvement proposals
 ```
 
-Gate A confirmation and Gate B approval are separate decisions. Once you explicitly confirm the
-Gate A understanding summary, the harness continues to Gate B in the same agent session.
+Gate A confirmation, Gate ② project-shape approval, and Gate B approval are separate decisions.
+`p2a decide --quote "<exact user utterance>"` records Gate ① scope/spec approvals, while
+`p2a shape approve --quote "<exact user utterance>"` records the Gate ② approval. Both append to
+the chained `decisions.jsonl` ledger and keep existing artifact approval audits as readable copies. Later iterations
+reuse that constitution unless their approved scope materially changes the architecture.
 
-Each gate writes reviewable files under `.plan2agent/artifacts/<project_id>/`. Approve the decisions
-in the active gate, complete the suggested action, and run:
+The harness writes canonical files under `.plan2agent/artifacts/<project_id>/`. Complete the
+suggested action and run:
 
 ```bash
 p2a next
 ```
 
-When Gate D is clear, `next` guides the transition into supervised task execution and subsequent
-iterations.
+When Gate A-C validation passes, `next` guides the transition into supervised task execution and
+subsequent iterations.
 
 ## Why Plan2Agent
 
@@ -79,7 +74,7 @@ layer around those tools.
 
 | Need | Plan2Agent approach |
 | --- | --- |
-| Clear decisions before code | A bounded discovery interview and four human approval gates preserve answers, assumptions, open decisions, and approval state. |
+| Clear decisions before code | Gate A scope, Gate ② project shape, and Gate B spec approval preserve decisions, constraints, assumptions, and approval state. |
 | Traceable implementation work | Specs map to dependency-aware tasks with acceptance criteria and source references. |
 | Reviewable agent execution | Tasks run in foreground-supervised sessions with run logs, changed files, and verification evidence. |
 | Portable project state | Local JSON artifacts remain canonical across Codex, Claude Code, and Gemini CLI. |
@@ -95,7 +90,9 @@ Planning and execution state stays local to the project:
 ```text
 .plan2agent/
   project.config.json
+  constitution.json
   artifacts/<project_id>/
+    decisions.jsonl
     gate-a-intake/
       intake.json
     gate-b-spec/
@@ -104,8 +101,6 @@ Planning and execution state stays local to the project:
       visual-design/              # conditional offline HTML prototypes
     gate-c-task-graph/
       task-graph.json
-    gate-d-review/
-      review.json
     current-spec.json
     iterations/
     runs/
@@ -113,7 +108,8 @@ Planning and execution state stays local to the project:
     proposals/
 ```
 
-JSON files are the source of truth and are validated against the schemas shipped with the package.
+`decisions.jsonl` is the source of truth for recorded approvals and revocations; the existing JSON
+approval audits remain compatible copies. All artifacts are validated against schemas shipped with the package.
 Generated Markdown is a human-readable view. Closed iterations and finished run evidence provide
 an auditable history for later reviews.
 
@@ -121,15 +117,14 @@ an auditable history for later reviews.
 
 ### 1. Plan with approval gates
 
-The planning harness turns an idea into structured intake, product and implementation specs, a task
-graph, and a readiness review. Gate A interviews the user across the required discovery areas,
-presents a compact understanding summary, and requires explicit confirmation. The same session then
-continues to Gate B. It records uncertainty as an assumption or user decision rather than inventing
-a requirement.
+The planning harness turns an idea into structured intake, product and implementation specs, and a
+validated task graph. Gate A presents a compact understanding summary and requires explicit
+confirmation. The same session establishes or reuses Gate ② before continuing to Gate B. It records
+uncertainty as an assumption or user decision rather than inventing a requirement.
 
 ### 2. Execute one ready task
 
-After Gate D, use `p2a next` to identify the next safe action. A task execution records its agent
+After Gate A-C validation, use `p2a next` to identify the next safe action. A task execution records its agent
 tool, workspace, changed files, verification commands, result, and failure classification. A task is
 not done until required evidence passes the monitor gate.
 
@@ -171,6 +166,9 @@ Plan2Agent installs one `p2a` entrypoint:
 | --- | --- |
 | `p2a init` | Initialize project state and provider assets. |
 | `p2a next` | Return one state-based next action and its reason. |
+| `p2a decide` | Record Gate ① approvals, revocations, and scope changes in the decision ledger. |
+| `p2a decisions` | List decision history and trace a file to governing decisions with `--why`. |
+| `p2a shape` | Inspect, migrate, approve, and revoke the persistent project constitution. |
 | `p2a info` | Show project, artifact, task, and run status. |
 | `p2a doctor` | Diagnose configuration, assets, and local drift. |
 | `p2a update` | Preview or apply safe package-managed asset updates. |
@@ -234,7 +232,7 @@ services.
 
 - [Quickstart](docs/quickstart.md) — shortest path from installation to the first Gate artifacts
 - [CLI Reference](docs/cli-reference.md) — commands, options, and examples
-- [Harness Guide](docs/harness-guide.md) — Gate A-D, schemas, evidence, and troubleshooting
+- [Harness Guide](docs/harness-guide.md) — Gate A-C, schemas, evidence, and troubleshooting
 - [Iteration Spec](docs/iteration-spec.md) — iteration layout, diffs, close/open, and run tracking
 - [Supervised Execution Reference](docs/supervised-execution.md) — task execution, monitor gates, retries, and reviews
 - [Harness Implementation Spec](docs/harness-spec.md) — skills, subagents, mirrors, and implementation rules
@@ -272,9 +270,9 @@ scripts/       toolkit, validation, runtime, eval, proposal, and Memory CLIs
 ## Project status
 
 Plan2Agent is under active development. Version `0.2.0` extends the public npm package with an
-iteration-level visual experience and final-review lifecycle, portable handoff evidence, and stricter
-execution validation alongside the local-first planning, supervised execution, evaluation, proposal,
-and optional Memory workflows. Autonomous provider execution and unapproved remote side effects
-remain outside the default safety model.
+append-only decision ledger, an iteration-level visual experience and final-review lifecycle,
+portable handoff evidence, and stricter execution validation alongside the local-first planning,
+supervised execution, evaluation, proposal, and optional Memory workflows. Autonomous provider
+execution and unapproved remote side effects remain outside the default safety model.
 
 Plan2Agent is available under the [MIT License](LICENSE).

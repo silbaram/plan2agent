@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://plan2agent.local/schemas/decisions.schema.json",
+  "title": "Plan2Agent Decision Ledger Entry",
+  "type": "object",
+  "required": ["seq", "at", "type", "quote", "prev_sha256"],
+  "additionalProperties": false,
+  "properties": {
+    "seq": { "type": "integer", "minimum": 1 },
+    "at": { "type": "string", "minLength": 1 },
+    "type": {
+      "enum": [
+        "gate.what.approved",
+        "gate.what.revoked",
+        "gate.how.approved",
+        "gate.how.revoked",
+        "constitution.changed",
+        "scope.added",
+        "scope.removed"
+      ]
+    },
+    "quote": { "type": "string", "minLength": 1 },
+    "prev_sha256": {
+      "type": ["string", "null"],
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "scope_ref": { "type": "string", "minLength": 1 },
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "constitution_sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "constitution_content_sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "previous_constitution_sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "prev_seq": { "type": "integer", "minimum": 1 },
+    "scope_change": { "type": "string", "minLength": 1 }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "type": { "enum": ["gate.what.approved", "gate.what.revoked"] } } },
+      "then": { "required": ["scope_ref", "sha256"] }
+    },
+    {
+      "if": { "properties": { "type": { "enum": ["gate.how.approved", "gate.how.revoked"] } } },
+      "then": { "required": ["constitution_sha256"] }
+    },
+    {
+      "if": { "properties": { "type": { "const": "constitution.changed" } } },
+      "then": {
+        "required": [
+          "constitution_sha256",
+          "constitution_content_sha256",
+          "previous_constitution_sha256"
+        ]
+      }
+    },
+    {
+      "if": { "properties": { "type": { "enum": ["scope.added", "scope.removed"] } } },
+      "then": { "required": ["scope_ref", "sha256", "scope_change", "prev_seq"] }
+    }
+  ]
+}

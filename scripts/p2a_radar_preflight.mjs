@@ -22,8 +22,8 @@ export const FEATURE_RADAR_COPY_FILES = [
   'handoff-manifest.md',
 ];
 
-const MAX_WEB_SOURCES = 12;
-const MAX_RECOMMENDATIONS = 8;
+export const MAX_WEB_SOURCES = 12;
+export const MAX_RECOMMENDATIONS = 8;
 const RECOMMENDATION_FILES = new Set([
   'next-iteration-recommendations.md',
   'collection-report.md',
@@ -105,13 +105,29 @@ function addCandidateRun(runs, seen, artifactRoot, runDir, sourceKind, slug = nu
 export function discoverFeatureRadarPreflightRuns(artifactRoot, options = {}) {
   const runs = [];
   const seen = new Set();
+  const preflightRoot = path.join(artifactRoot, FEATURE_RADAR_PREFLIGHT_DIR);
   addCandidateRun(
     runs,
     seen,
     artifactRoot,
-    path.join(artifactRoot, FEATURE_RADAR_PREFLIGHT_DIR),
+    preflightRoot,
     'p2a-preflight',
   );
+  if (isDirectory(preflightRoot)) {
+    const sequences = readdirSync(preflightRoot, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .sort((left, right) => left.name.localeCompare(right.name, undefined, { numeric: true }));
+    for (const sequence of sequences) {
+      addCandidateRun(
+        runs,
+        seen,
+        artifactRoot,
+        path.join(preflightRoot, sequence.name),
+        'p2a-preflight',
+        sequence.name,
+      );
+    }
+  }
 
   const projectRoot = projectRootForArtifactRoot(artifactRoot);
   if (projectRoot) {
@@ -318,6 +334,193 @@ function extractMarkdownRecommendations(text, sourcePath) {
   const tableRecommendations = extractMarkdownTableRecommendations(text, sourcePath);
   if (tableRecommendations.length) return tableRecommendations;
   return extractBulletRecommendations(text, sourcePath);
+}
+
+const ENTRY_TEXT_EXTENSIONS = new Set(['', '.md', '.markdown', '.txt', '.text']);
+const ENTRY_WHAT_PATTERN = new RegExp([
+  '\\b(?:build|create|develop|implement|introduce|add|improve|provide|support|design|ship|launch|show|track|manage|monitor|automate|visualize|analyse|analyze|notify|collect)\\b',
+  '\\b(?:app|application|service|tool|cli|api|system|feature|platform|dashboard|extension|plugin|library|adapter|website|workflow|page|screen|console|bot|sdk|module|portal|ui|client|worker|pipeline)\\b',
+  '(?:만들|개발|구현|구축|도입|추가|개선|제공|지원|설계|출시|보여주|추적|관리|모니터|자동화|시각화|분석|알림|수집)',
+  '(?:앱|애플리케이션|서비스|도구|기능|시스템|플랫폼|대시보드|확장|플러그인|라이브러리|어댑터|웹사이트|워크플로|화면|페이지|콘솔|봇|SDK|모듈|포털|UI|클라이언트|워커|파이프라인)',
+].join('|'), 'i');
+
+function uniqueUrls(text) {
+  return [...new Set(extractUrls(text))];
+}
+
+function isReferenceListItem(recommendation) {
+  const title = stripMarkdown(recommendation?.title).trim();
+  return /^(?:source|evidence|reference)\b|^(?:출처|근거|참고)(?:\s|[:：])/i.test(title);
+}
+
+function manifestHeaders(text) {
+  const headers = new Map();
+  for (const line of String(text ?? '').split(/\r?\n/)) {
+    const match = line.match(/^([a-z][a-z0-9_-]*):\s*(.*?)\s*$/i);
+    if (match && !headers.has(match[1])) headers.set(match[1], match[2]);
+  }
+  return headers;
+}
+
+function radarEntryMetadata(entryPath) {
+  const resolved = path.resolve(entryPath);
+  const segments = resolved.split(path.sep);
+  const preflightIndex = segments.lastIndexOf(FEATURE_RADAR_PREFLIGHT_DIR);
+  if (preflightIndex === -1 || preflightIndex >= segments.length - 1) return null;
+  const sequence = preflightIndex < segments.length - 2
+    ? segments[preflightIndex + 1]
+    : null;
+  return {
+    sequence,
+    manifestPath: path.join(path.dirname(resolved), 'handoff-manifest.md'),
+  };
+}
+
+function radarProvenanceWarnings(entryPath, metadata) {
+  if (!metadata) return [];
+  if (!isFile(metadata.manifestPath)) {
+    return [`Feature Radar entry requires sibling handoff-manifest.md: ${metadata.manifestPath}`];
+  }
+  const manifest = readText(metadata.manifestPath);
+  if (!manifest.trim()) {
+    return [`Feature Radar handoff manifest is empty: ${metadata.manifestPath}`];
+  }
+  const headers = manifestHeaders(manifest);
+  const errors = [];
+  const handoffMode = headers.get('handoff_mode') ?? headers.get('mode');
+  if (handoffMode !== 'p2a-preflight') {
+    errors.push('Feature Radar handoff manifest must declare handoff_mode: p2a-preflight');
+  }
+  if (!headers.get('source_run')) {
+    errors.push('Feature Radar handoff manifest must record source_run');
+  }
+  if (
+    metadata.sequence
+    && headers.get('preflight_sequence') !== metadata.sequence
+  ) {
+    errors.push(
+      `Feature Radar handoff manifest preflight_sequence must match ${metadata.sequence}`,
+    );
+  }
+  const entryName = path.basename(entryPath);
+  if (!new RegExp(`^\\s*-\\s+${entryName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*$`, 'm').test(manifest)) {
+    errors.push(`Feature Radar handoff manifest Copied Files must include ${entryName}`);
+  }
+  return errors;
+}
+
+function entryWhatIsDescribed(text) {
+  const normalized = stripMarkdown(text);
+  return normalized.length >= 12 && ENTRY_WHAT_PATTERN.test(normalized);
+}
+
+export function inspectEntryDocument(entryPath, options = {}) {
+  const resolvedPath = path.resolve(options.baseDir ?? process.cwd(), entryPath);
+  const extension = path.extname(resolvedPath).toLowerCase();
+  const radar = radarEntryMetadata(resolvedPath);
+  const errors = [];
+  const warnings = [];
+  let text = '';
+  if (!isFile(resolvedPath)) {
+    errors.push(`entry document is missing or not a file: ${resolvedPath}`);
+  } else if (!ENTRY_TEXT_EXTENSIONS.has(extension)) {
+    errors.push(`entry document must be Markdown or text: ${resolvedPath}`);
+  } else {
+    text = readText(resolvedPath);
+    if (!text.trim()) errors.push(`entry document is empty: ${resolvedPath}`);
+  }
+  const whatDescribed = Boolean(text.trim()) && entryWhatIsDescribed(text);
+  if (text.trim() && !whatDescribed) {
+    warnings.push(
+      'entry document may not state what will be built; confirm the scope in the dialogue',
+    );
+  }
+  const provenanceIssues = radarProvenanceWarnings(resolvedPath, radar);
+  warnings.push(...provenanceIssues);
+
+  const webSourceCount = uniqueUrls(text).length;
+  const recommendationCount = extractMarkdownRecommendations(text, resolvedPath)
+    .filter((recommendation) => !isReferenceListItem(recommendation))
+    .length;
+  if (webSourceCount > MAX_WEB_SOURCES) {
+    warnings.push(
+      `entry document contains ${webSourceCount} web sources; only the first ${MAX_WEB_SOURCES} are promoted and the original remains a reference`,
+    );
+  }
+  if (recommendationCount > MAX_RECOMMENDATIONS) {
+    warnings.push(
+      `entry document contains ${recommendationCount} recommendations; only the first ${MAX_RECOMMENDATIONS} are promoted and the original remains a reference`,
+    );
+  }
+  const manifestText = radar && isFile(radar.manifestPath)
+    ? readText(radar.manifestPath)
+    : '';
+  const sourceComplete = radar
+    ? manifestHeaders(manifestText).get('source_complete') !== 'false'
+    : null;
+  if (radar && sourceComplete === false) {
+    warnings.push('Feature Radar handoff manifest reports source_complete=false');
+  }
+
+  return {
+    path: resolvedPath,
+    sourceKind: radar ? 'feature_radar_preflight' : 'user_document',
+    selection: options.selection ?? 'explicit',
+    sequence: radar?.sequence ?? null,
+    manifestPath: radar?.manifestPath ?? null,
+    sourceComplete,
+    valid: errors.length === 0,
+    errors,
+    warnings,
+    checks: {
+      document: isFile(resolvedPath) && ENTRY_TEXT_EXTENSIONS.has(extension) && Boolean(text.trim()),
+      scopeWhat: whatDescribed,
+      limits: true,
+      provenance: provenanceIssues.length === 0,
+    },
+    webSourceCount,
+    recommendationCount,
+  };
+}
+
+function isExistingProjectRecommendation(filePath, run) {
+  const text = readText(filePath);
+  if (/^(?:run_)?mode:\s*existing-project\s*$/im.test(text)) return true;
+  const manifestPath = path.join(run.path, 'handoff-manifest.md');
+  const headers = manifestHeaders(readText(manifestPath));
+  return headers.get('run_mode') === 'existing-project';
+}
+
+export function discoverEntryDocument(artifactRoot, options = {}) {
+  if (options.entryPath) {
+    return inspectEntryDocument(options.entryPath, {
+      baseDir: options.baseDir,
+      selection: 'explicit',
+    });
+  }
+  const runs = discoverFeatureRadarPreflightRuns(artifactRoot, {
+    projectId: options.projectId,
+    includeNative: false,
+  }).filter((run) => run.source_kind === 'p2a-preflight');
+  const latest = runs.at(-1);
+  if (!latest) return null;
+  const collection = latest.files.find((file) => file.name === 'collection-report.md');
+  if (collection) {
+    return inspectEntryDocument(collection.path, { selection: 'auto' });
+  }
+  const recommendations = latest.files.find(
+    (file) => file.name === 'next-iteration-recommendations.md',
+  );
+  if (
+    recommendations
+    && (
+      options.repeatedDevelopment === true
+      || isExistingProjectRecommendation(recommendations.path, latest)
+    )
+  ) {
+    return inspectEntryDocument(recommendations.path, { selection: 'auto' });
+  }
+  return null;
 }
 
 function addUniqueBy(items, seen, keyFn, item) {
