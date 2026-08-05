@@ -60,6 +60,34 @@ export function closeReadyVisualReviewRunIds(
   return new Set([latestReview.runId]);
 }
 
+export function closeReadyAcceptanceReviewRunIds(
+  runRecords,
+  { iterationId, taskGraphRef } = {},
+) {
+  const expectedTaskGraphRef = normalizedArtifactReference(taskGraphRef);
+  const latestReview = runRecords
+    .map((run, runOrder) => ({ run, runOrder }))
+    .filter(({ run }) => (
+      run?.runKind === 'final_acceptance_review'
+      && run.iterationId === iterationId
+      && run.sourceLayout === 'iteration'
+      && (!expectedTaskGraphRef
+        || normalizedArtifactReference(run.taskGraphRef) === expectedTaskGraphRef)
+    ))
+    .sort((left, right) => (
+      runEvidenceTime(right.run) - runEvidenceTime(left.run)
+      || right.runOrder - left.runOrder
+    ))[0]?.run;
+  if (
+    latestReview?.status !== 'finished'
+    || latestReview.schema_version !== 'p2a.run.v2'
+    || !latestReview.acceptanceReview?.required
+  ) {
+    return new Set();
+  }
+  return new Set([latestReview.runId]);
+}
+
 export function selectHandoffRunEntries(
   runIndexData,
   requiredRunIds,

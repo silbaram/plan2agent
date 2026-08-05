@@ -120,6 +120,10 @@ async function waitForPath(filePath, timeoutMs = 5000) {
 function initializedArtifactRoot(label) {
   const artifactRoot = tempRoot(label);
   cpSync(path.join(E2E_FIXTURE_ROOT, 'webhook-api-service'), artifactRoot, { recursive: true });
+  mkdirSync(path.join(artifactRoot, '.plan2agent'), { recursive: true });
+  writeFileSync(path.join(artifactRoot, '.plan2agent', 'project.config.json'), `${JSON.stringify({
+    devExecution: { reviewPasses: { acceptance: 'off' } },
+  }, null, 2)}\n`, 'utf8');
   const result = spawnSync(process.execPath, [
     ITERATION_CLI,
     'init',

@@ -27,6 +27,7 @@ export const RUN_SIDECAR_SUFFIXES = [
   '.monitor-verdict.json',
   '.style-verdict.json',
   '.visual-review.json',
+  '.acceptance-review.json',
   '.memory-recall.json',
 ];
 const RUN_SIDECAR_ID_SUFFIXES = RUN_SIDECAR_SUFFIXES

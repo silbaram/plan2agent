@@ -55,6 +55,7 @@ import {
 import { artifactRunRef, legacyRunRef, runSidecarRef } from './p2a_run_paths.mjs';
 import {
   assertCanonicalPortableRun,
+  closeReadyAcceptanceReviewRunIds,
   closeReadyVisualReviewRunIds,
   completedEvidenceRunIds,
   portableProvenanceMigrationHint,
@@ -1707,9 +1708,10 @@ function pushMilestoneReviewBundleIfExists(
     try {
       if (runTransfer === 'completed') assertCanonicalPortableRun(runData);
       const sourceBundle = resolveRunSourceBundle(runData, checkpoint, indexedRun);
-      if (runData.status === 'started' && runData.visualReview?.required) {
+      if (runData.status === 'started' && (runData.visualReview?.required || runData.acceptanceReview?.required)) {
+        const reviewLabel = runData.acceptanceReview?.required ? 'acceptance' : 'visual';
         throw new ValidationError(
-          `handoff cannot port started visual run ${indexedRun.runId}; finish or block the run before handoff so visual evidence cannot remain bound to ${runData.workspacePath}`,
+          `handoff cannot port started ${reviewLabel} run ${indexedRun.runId}; finish or block the run before handoff`,
         );
       }
       return {
@@ -1808,6 +1810,10 @@ function pushMilestoneReviewBundleIfExists(
       iterationId,
       taskGraphRef: milestoneReview.source.task_graph_ref,
     });
+    for (const runId of closeReadyAcceptanceReviewRunIds(indexedRunRecords, {
+      iterationId,
+      taskGraphRef: milestoneReview.source.task_graph_ref,
+    })) closeReadyRunIds.add(runId);
     const transferRunEntries = selectHandoffRunEntries(
       runIndexData,
       requiredCompletedRunIds,
@@ -1919,6 +1925,15 @@ function pushMilestoneReviewBundleIfExists(
             evidenceFiles,
           );
         }
+      }
+      if (runData.status === 'finished' && runData.acceptanceReview?.required) {
+        const sidecar = resolveMilestoneBundleReference(
+          artifactsRoot,
+          runSidecarRef(indexedRun.runRef, '.acceptance-review.json'),
+          `${checkpoint} run-index ${indexedRun.runId} acceptance review`,
+          path.dirname(runIndex.sourcePath),
+        );
+        pushBundleFile(sidecar.sourcePath, sidecar.relativePath, evidenceFiles);
       }
     }
     const portableRunBundlesById = new Map(

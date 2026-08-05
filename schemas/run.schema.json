@@ -75,7 +75,8 @@
     "runKind": {
       "type": "string",
       "enum": [
-        "final_visual_review"
+        "final_visual_review",
+        "final_acceptance_review"
       ]
     },
     "taskContractSha256": {
@@ -99,6 +100,10 @@
       "pattern": "^[a-f0-9]{64}$"
     },
     "visualReviewEvidenceSha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "acceptanceReviewEvidenceSha256": {
       "type": "string",
       "pattern": "^[a-f0-9]{64}$"
     },
@@ -414,6 +419,41 @@
         }
       }
     },
+    "acceptanceReview": {
+      "type": "object",
+      "required": [
+        "required",
+        "criteria"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "required": {
+          "const": true
+        },
+        "criteria": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": [
+              "ref",
+              "text"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "ref": {
+                "type": "string",
+                "pattern": "^product\\.(core_flows|success_criteria)\\[[0-9]+\\]$"
+              },
+              "text": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
+        }
+      }
+    },
     "visualFeedback": {
       "type": "array",
       "items": {
@@ -604,6 +644,52 @@
     }
   },
   "allOf": [
+    {
+      "if": {
+        "required": [
+          "acceptanceReview"
+        ]
+      },
+      "then": {
+        "required": [
+          "runKind"
+        ],
+        "properties": {
+          "runKind": {
+            "const": "final_acceptance_review"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "runKind": {
+            "const": "final_acceptance_review"
+          }
+        },
+        "required": [
+          "runKind"
+        ]
+      },
+      "then": {
+        "required": [
+          "acceptanceReview"
+        ],
+        "properties": {
+          "changedFiles": {
+            "maxItems": 0
+          },
+          "isolation": {
+            "properties": {
+              "mode": {
+                "const": "none"
+              }
+            }
+          }
+        }
+      }
+    },
     {
       "if": {
         "required": [

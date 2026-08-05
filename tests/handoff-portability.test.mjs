@@ -6,6 +6,7 @@ import test from 'node:test';
 
 import {
   assertCanonicalPortableRun,
+  closeReadyAcceptanceReviewRunIds,
   closeReadyVisualReviewRunIds,
   completedEvidenceRunIds,
   selectHandoffRunEntries,
@@ -110,6 +111,29 @@ test('completed handoff retains the latest finished iteration visual review afte
   runs[1].status = 'blocked';
   assert.deepEqual(
     [...closeReadyVisualReviewRunIds(runs, { iterationId: 'iter-002', taskGraphRef })],
+    [],
+  );
+});
+
+test('completed handoff retains the latest finished acceptance review after pre-close', () => {
+  const taskGraphRef = 'iterations/iter-002/gate-c-task-graph/task-graph.json';
+  const runs = [{
+    ...entry('run-iteration-acceptance'),
+    schema_version: 'p2a.run.v2',
+    iterationId: 'iter-002',
+    sourceLayout: 'iteration',
+    taskGraphRef,
+    runKind: 'final_acceptance_review',
+    acceptanceReview: { required: true },
+    finishedAt: '2026-08-03T00:03:00.000Z',
+  }];
+  assert.deepEqual(
+    [...closeReadyAcceptanceReviewRunIds(runs, { iterationId: 'iter-002', taskGraphRef })],
+    ['run-iteration-acceptance'],
+  );
+  runs[0].status = 'blocked';
+  assert.deepEqual(
+    [...closeReadyAcceptanceReviewRunIds(runs, { iterationId: 'iter-002', taskGraphRef })],
     [],
   );
 });

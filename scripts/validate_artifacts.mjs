@@ -43,6 +43,7 @@ const SCHEMA_PATHS = {
   visual_experience: path.join(P2A_PATHS.schemasDir, 'visual-experience.schema.json'),
   visual_prototype: path.join(P2A_PATHS.schemasDir, 'visual-prototype.schema.json'),
   visual_review: path.join(P2A_PATHS.schemasDir, 'visual-review.schema.json'),
+  acceptance_review: path.join(P2A_PATHS.schemasDir, 'acceptance-review.schema.json'),
   milestone_review: path.join(P2A_PATHS.schemasDir, 'milestone-review.schema.json'),
   skill_proposal: path.join(P2A_PATHS.schemasDir, 'skill-proposal.schema.json'),
   proposal_review: path.join(P2A_PATHS.schemasDir, 'proposal-review.schema.json'),
@@ -2883,6 +2884,84 @@ export function validateVisualReview(filePath, expectedContract = null, options 
   return data;
 }
 
+export function acceptanceReviewContract(specPath, artifactRoot = null) {
+  const specReference = loadJson(specPath);
+  const sourceIntakePath = resolveSpecSourceIntake(specPath, specReference);
+  const spec = validateSpec(specPath, sourceIntakePath, { artifactRoot });
+  const criteria = [];
+  for (const [field, values] of [
+    ['core_flows', spec.product.core_flows],
+    ['success_criteria', spec.product.success_criteria],
+  ]) {
+    for (const [index, text] of values.entries()) {
+      if (typeof text === 'string' && text.trim()) {
+        criteria.push({ ref: `product.${field}[${index}]`, text });
+      }
+    }
+  }
+  if (!criteria.length) {
+    throw new ValidationError('functional acceptance requires at least one product core flow or success criterion');
+  }
+  return { required: true, criteria };
+}
+
+export function validateAcceptanceReviewData(data, expectedContract = null) {
+  validateSchema(data, loadJson(SCHEMA_PATHS.acceptance_review));
+  const criterionRefs = data.cases.map((item) => item.criterion_ref);
+  if (criterionRefs.length !== new Set(criterionRefs).size) {
+    throw new ValidationError('acceptance review criterion_ref values must be unique');
+  }
+  if (expectedContract) {
+    for (const field of ['iteration_id', 'source_spec_ref']) {
+      if (expectedContract[field] !== undefined && data[field] !== expectedContract[field]) {
+        throw new ValidationError(`acceptance review ${field} must be ${JSON.stringify(expectedContract[field])}, got ${JSON.stringify(data[field])}`);
+      }
+    }
+    const expectedRefs = (expectedContract.criteria ?? []).map((criterion) => criterion.ref);
+    requireSameSet(criterionRefs, expectedRefs, 'acceptance review criterion_ref values');
+    const verification = expectedContract.verification ?? [];
+    for (const [index, item] of data.cases.entries()) {
+      const matchingEvidence = verification.find((entry) => (
+        entry.command === item.command
+        && entry.source === item.source
+        && entry.exitCode === item.exitCode
+        && (entry.stdoutTail ?? '') === item.stdoutTail
+        && entry.startedAt !== null
+        && entry.finishedAt !== null
+      ));
+      if (!matchingEvidence) {
+        throw new ValidationError(
+          `acceptance review cases[${index}] must match an actually executed run verification command, source, exitCode, and stdoutTail`,
+        );
+      }
+      if (item.verdict === 'pass' && matchingEvidence.status !== 'passed') {
+        throw new ValidationError(
+          `acceptance review cases[${index}] cannot pass verification with status ${matchingEvidence.status}`,
+        );
+      }
+    }
+  }
+  if (data.verdict === 'confirm_behavior') {
+    if (data.unmet.length || data.cases.some((item) => item.verdict !== 'pass' || item.exitCode !== 0)) {
+      throw new ValidationError('confirm_behavior acceptance review requires every case to pass with exitCode 0 and no unmet criteria');
+    }
+  } else if (!data.unmet.length && data.cases.every((item) => item.verdict === 'pass')) {
+    throw new ValidationError('blocked acceptance review must identify an unmet criterion or failed case');
+  }
+  return data;
+}
+
+export function validateAcceptanceReview(filePath, expectedContract = null) {
+  const data = validateAcceptanceReviewData(loadJson(filePath), expectedContract);
+  if (expectedContract?.run_id) {
+    const expectedName = `${expectedContract.run_id}.acceptance-review.json`;
+    if (path.basename(filePath) !== expectedName) {
+      throw new ValidationError(`acceptance review filename must be ${expectedName}`);
+    }
+  }
+  return data;
+}
+
 function validateSpecVisualExperience(spec, specPath, artifactRoot = null) {
   const visual = spec.visual_experience;
   if (!visual) return null;
@@ -3554,6 +3633,8 @@ const MILESTONE_IMMUTABLE_RUN_FIELDS = [
   'workspaceRevisionSha256',
   'visualReviewEvidenceSha256',
   'visualReview',
+  'acceptanceReviewEvidenceSha256',
+  'acceptanceReview',
   'isolation',
   'status',
   'startedAt',
@@ -3964,6 +4045,7 @@ export function validateRunTaskContract(runData, artifactRoot) {
     : path.resolve(artifactRoot);
   const graphData = loadJson(taskGraphPath);
   const rawVisualContract = Boolean(runData.visualReview?.required);
+  const rawAcceptanceContract = Boolean(runData.acceptanceReview?.required);
   let sourceSpecPath = null;
   let maintenanceSource = false;
   try {
@@ -3991,7 +4073,7 @@ export function validateRunTaskContract(runData, artifactRoot) {
       maintenanceSource = true;
     }
   } catch (error) {
-    if (rawVisualContract || runData.schema_version === 'p2a.run.v2') throw error;
+    if (rawVisualContract || rawAcceptanceContract || runData.schema_version === 'p2a.run.v2') throw error;
   }
   const graph = validateTaskGraphData(graphData, maintenanceSource ? null : sourceSpecPath);
   const task = graph.tasks.find((candidate) => candidate.id === runData.taskId);
@@ -4004,6 +4086,7 @@ export function validateRunTaskContract(runData, artifactRoot) {
   const requiresTaskContract = (
     runData.schema_version === 'p2a.run.v2'
     || runData.visualReview?.required
+    || runData.acceptanceReview?.required
   );
   if (requiresTaskContract && runData.taskContractSha256 === undefined) {
     throw new ValidationError(
@@ -4056,6 +4139,25 @@ export function validateRunTaskContract(runData, artifactRoot) {
     if (!expectedVisualReview || !sameJson(actualVisualReview, expectedVisualReview)) {
       throw new ValidationError(
         `finished run ${runData.runId} visualReview must match the complete approved iteration visual contract`,
+      );
+    }
+  }
+  const actualAcceptanceReview = runData.acceptanceReview ?? null;
+  if (actualAcceptanceReview) {
+    if (runData.runKind !== 'final_acceptance_review') {
+      throw new ValidationError(
+        `finished run ${runData.runId} acceptanceReview is only allowed for runKind final_acceptance_review`,
+      );
+    }
+    if (runData.sourceLayout !== 'iteration') {
+      throw new ValidationError(
+        `finished acceptance review run ${runData.runId} must use the iteration source layout`,
+      );
+    }
+    const expectedAcceptanceReview = acceptanceReviewContract(sourceSpecPath, sourceArtifactRoot);
+    if (!sameJson(actualAcceptanceReview, expectedAcceptanceReview)) {
+      throw new ValidationError(
+        `finished run ${runData.runId} acceptanceReview must match the complete approved iteration behavior contract`,
       );
     }
   }
@@ -4155,6 +4257,44 @@ export function validateRunsDir(runsDir) {
       }
       if (visualReview.verdict !== 'confirm_ui') {
         throw new ValidationError(`finished run ${runData.runId} requires visual review verdict confirm_ui`);
+      }
+    }
+    if (runData.status === 'finished' && runData.acceptanceReview?.required) {
+      if (!/^[a-f0-9]{64}$/.test(runData.workspaceRevisionSha256 ?? '')) {
+        throw new ValidationError(
+          `finished run ${runData.runId} workspaceRevisionSha256 is required for acceptance evidence`,
+        );
+      }
+      const acceptanceReviewPath = runSidecarPath(
+        runsDir,
+        runData.runId,
+        '.acceptance-review.json',
+        index,
+      );
+      assertFile(acceptanceReviewPath, `${runData.runId} acceptance review`);
+      const acceptanceReviewSha256 = rawFileSha256(acceptanceReviewPath);
+      const acceptanceReview = validateAcceptanceReview(acceptanceReviewPath, {
+        run_id: runData.runId,
+        iteration_id: runData.iterationId,
+        source_spec_ref: runData.sourceSpecRef,
+        criteria: runData.acceptanceReview.criteria,
+        verification: runData.verification,
+      });
+      if (rawFileSha256(acceptanceReviewPath) !== acceptanceReviewSha256) {
+        throw new ValidationError(`finished run ${runData.runId} acceptance review changed during validation`);
+      }
+      if (!/^[a-f0-9]{64}$/.test(runData.acceptanceReviewEvidenceSha256 ?? '')) {
+        throw new ValidationError(
+          `finished run ${runData.runId} acceptanceReviewEvidenceSha256 is required for acceptance evidence`,
+        );
+      }
+      if (runData.acceptanceReviewEvidenceSha256 !== acceptanceReviewSha256) {
+        throw new ValidationError(
+          `finished run ${runData.runId} acceptanceReviewEvidenceSha256 does not match its acceptance review sidecar`,
+        );
+      }
+      if (acceptanceReview.verdict !== 'confirm_behavior') {
+        throw new ValidationError(`finished run ${runData.runId} requires acceptance review verdict confirm_behavior`);
       }
     }
   }
@@ -4414,6 +4554,7 @@ function usage() {
     '  --task-graph <path> [--require-approved-spec <path>]',
     '  --review <path> [--require-review-pass]',
     '  --visual-experience <path> | --visual-prototype <path> | --visual-review <path>',
+    '  --acceptance-review <path>',
     '  --run <path> | --run-index <path> | --runs-dir <dir>',
     '  --milestone-review <path>',
     '  --skill-proposal <path>',
@@ -4462,6 +4603,7 @@ function parseArgs(argv) {
     else if (arg === '--visual-experience') args.visualExperience = argv[++index];
     else if (arg === '--visual-prototype') args.visualPrototype = argv[++index];
     else if (arg === '--visual-review') args.visualReview = argv[++index];
+    else if (arg === '--acceptance-review') args.acceptanceReview = argv[++index];
     else if (arg === '--run') args.run = argv[++index];
     else if (arg === '--run-index') args.runIndex = argv[++index];
     else if (arg === '--runs-dir') args.runsDir = argv[++index];
@@ -4562,6 +4704,7 @@ export function main(argv = process.argv.slice(2)) {
     if (args.visualExperience) validateVisualExperience(args.visualExperience);
     if (args.visualPrototype) validateVisualPrototype(args.visualPrototype);
     if (args.visualReview) validateVisualReview(args.visualReview);
+    if (args.acceptanceReview) validateAcceptanceReview(args.acceptanceReview);
     if (args.run) validateRun(args.run);
     if (args.runIndex) validateRunIndex(args.runIndex);
     if (args.runsDir) validateRunsDir(args.runsDir);

@@ -18,6 +18,7 @@ import process from 'node:process';
 import { pathToFileURL } from 'node:url';
 import { FAILURE_CLASSES, FAILURE_RETRYABLE, ISOLATION_MODES } from './p2a_constants.mjs';
 import {
+  acceptanceReviewContract,
   approvedVisualReviewContract,
   loadJson,
   resolveRunTaskGraphPath,
@@ -30,6 +31,7 @@ import {
 } from './validate_artifacts.mjs';
 import { normalizeMonitorGateSidecar, normalizeMonitorVerdictData, readMonitorGateSidecar } from './p2a_monitor_gate.mjs';
 import { readRequiredVisualReviewEvidence } from './p2a_visual_review_gate.mjs';
+import { readRequiredAcceptanceReviewEvidence } from './p2a_acceptance_review_gate.mjs';
 import {
   resolveIterationState,
   validateMaintenanceTaskGraphProject,
@@ -98,7 +100,7 @@ const ROOT = P2A_PATHS.projectRoot;
 const PROJECT_RUNS_DIR = path.join(ROOT, DEFAULT_RUNS_DIR);
 const COMMANDS = new Set(['start', 'record', 'verify', 'finish', 'list', 'show', 'revision', 'validate', 'migrate-layout', 'migrate-schema']);
 const RUN_STATUSES = new Set(['started', 'finished', 'failed', 'blocked']);
-const RUN_KINDS = new Set(['final_visual_review']);
+const RUN_KINDS = new Set(['final_visual_review', 'final_acceptance_review']);
 const VISUAL_FEEDBACK_VERDICTS = new Set(['note', 'concern']);
 const FAILURE_SOURCES = new Set(['owner', 'monitor', 'implementer']);
 const FAILURE_DEFAULTS = {
@@ -137,7 +139,7 @@ function usage() {
     '  --run-id <run-id>       Stable run id. Must start with run-. Generated for start when omitted.',
     '  --run-reservation-token <token>  Reservation owner token emitted by a failed sequential start retry.',
     '  --agent-tool <tool>     Agent/CLI tool that performed the run, such as codex, claude, gemini.',
-    '  --run-kind <kind>       Structured run purpose. Supported value: final_visual_review.',
+    '  --run-kind <kind>       Structured run purpose: final_visual_review or final_acceptance_review.',
     '  --workspace <dir>       Workspace path for verification commands. Defaults to cwd or --worktree.',
     '  --workspace-ref <ref>   Human-readable workspace reference. Defaults to --workspace display path.',
     '  --isolation <mode>      none, branch, or worktree. Default: none.',
@@ -248,7 +250,7 @@ function parseArgs(argv) {
     else if (arg === '--agent-tool') args.agentTool = requiredValue(argv, ++index, '--agent-tool');
     else if (arg === '--run-kind') {
       args.runKind = requiredValue(argv, ++index, '--run-kind');
-      if (!RUN_KINDS.has(args.runKind)) throw new Error('--run-kind must be final_visual_review');
+      if (!RUN_KINDS.has(args.runKind)) throw new Error('--run-kind must be final_visual_review or final_acceptance_review');
     }
     else if (arg === '--workspace') args.workspace = requiredValue(argv, ++index, '--workspace');
     else if (arg === '--workspace-ref') args.workspaceRef = requiredValue(argv, ++index, '--workspace-ref');
@@ -1557,6 +1559,35 @@ function startRun(args) {
       }
     }
   }
+  if (args.runKind === 'final_acceptance_review') {
+    const unfinishedTasks = source.graph.tasks.filter((candidate) => candidate.status !== 'done');
+    if (unfinishedTasks.length) {
+      throw new Error(
+        `final acceptance review requires every iteration task to be done; unfinished task(s): ${unfinishedTasks.map((candidate) => `${candidate.id}:${candidate.status}`).join(', ')}`,
+      );
+    }
+    if (source.sourceLayout !== 'iteration') {
+      throw new Error('final acceptance review is only supported for an active iteration');
+    }
+    if (source.graph.tasks.some((candidate) => candidate.visualImpact)) {
+      throw new Error('final acceptance review is the non-UI close gate; iterations with visualImpact use final visual review');
+    }
+    if (task.status !== 'done') {
+      throw new Error(`final acceptance review run requires ${task.id} to be done; current status is ${task.status}`);
+    }
+    if (args.changedFiles.length) {
+      throw new Error('final acceptance review run does not allow --changed-file');
+    }
+    if (args.isolation !== 'none' || args.createIsolation || args.branch || args.worktree) {
+      throw new Error('final acceptance review run requires --isolation none without branch/worktree creation');
+    }
+    const canonicalWorkspacePath = canonicalWorkspacePathForArtifactRoot(source.artifactRoot);
+    if (realpathSync(workspacePath) !== realpathSync(canonicalWorkspacePath)) {
+      throw new Error(
+        `final acceptance review workspace must be the canonical integration workspace ${canonicalWorkspacePath}`,
+      );
+    }
+  }
   const visualReview = args.runKind === 'final_visual_review'
     ? approvedVisualReviewContract(
         taskSourceSpecPath(source),
@@ -1566,6 +1597,9 @@ function startRun(args) {
   if (args.runKind === 'final_visual_review' && !visualReview) {
     throw new Error('final visual review run requires an approved full current-iteration visual contract');
   }
+  const acceptanceReview = args.runKind === 'final_acceptance_review'
+    ? acceptanceReviewContract(taskSourceSpecPath(source), source.artifactRoot)
+    : null;
   // A fresh worktree is the future workspace: validate its existing Git base
   // before creation, then validate the worktree itself after prepareIsolation.
   assertDirectory(createsWorktree ? isolationBasePath : workspacePath, '--workspace');
@@ -1616,6 +1650,7 @@ function startRun(args) {
     verification: args.manualVerification,
     notes: uniqueStrings(args.notes),
     ...(visualReview ? { visualReview } : {}),
+    ...(acceptanceReview ? { acceptanceReview } : {}),
   };
   withRunStoreLocks([runsDir], () => {
     assertNoPendingRunMigration(runsDir);
@@ -1752,10 +1787,10 @@ function finishRun(args) {
   const visualReviewCutoff = new Date().toISOString();
   if (finalStatus === 'finished') {
     let workspaceRevision = null;
-    if (run.visualReview?.required) {
+    if (run.visualReview?.required || run.acceptanceReview?.required) {
       if (realpathSync(workspacePath) !== realpathSync(path.resolve(run.workspacePath))) {
         throw new Error(
-          `run ${run.runId} visual evidence must be finalized in its recorded workspacePath`,
+          `run ${run.runId} final review evidence must be finalized in its recorded workspacePath`,
         );
       }
       workspaceRevision = workspaceRevisionSha256(
@@ -1791,6 +1826,10 @@ function finishRun(args) {
     if (workspaceRevision) run.workspaceRevisionSha256 = workspaceRevision;
     if (visualReviewEvidence) {
       run.visualReviewEvidenceSha256 = visualReviewEvidence.reviewSha256;
+    }
+    const acceptanceReviewEvidence = readRequiredAcceptanceReviewEvidence(runsDir, run);
+    if (acceptanceReviewEvidence) {
+      run.acceptanceReviewEvidenceSha256 = acceptanceReviewEvidence.reviewSha256;
     }
   }
   run.status = finalStatus;

@@ -73,8 +73,10 @@ import {
   PRODUCT_FIELDS,
 } from './p2a_spec_model.mjs';
 import { assertFinalVisualReviewRunReady } from './p2a_visual_review_gate.mjs';
+import { assertFinalAcceptanceReviewRunReady } from './p2a_acceptance_review_gate.mjs';
 import { resolveReviewPasses } from './p2a_project_config.mjs';
 import {
+  canonicalWorkspacePathForArtifactRoot,
   compareRunEvidence,
   taskGraphContextForGraph,
   taskGraphRefMatchesGraph,
@@ -3296,6 +3298,53 @@ export function validateCloseReadyVisualEvidence({
   return 1;
 }
 
+export function validateCloseReadyAcceptanceEvidence({
+  artifactRoot,
+  activeIteration,
+  taskGraphPath,
+  taskGraph,
+  reviewPasses,
+}) {
+  const policy = reviewPasses ?? projectReviewPasses();
+  if (taskGraph.tasks.some((task) => task.visualImpact)) return 0;
+  if (policy.acceptance === 'off') {
+    console.log('- acceptance review: skipped (reviewPasses.acceptance=off)');
+    return 0;
+  }
+  const runsDir = path.join(path.resolve(artifactRoot), 'runs');
+  validateRunsDir(runsDir);
+  const expectedSourceLayout = taskGraphContextForGraph(taskGraphPath).sourceLayout;
+  const currentRuns = loadRunsForArtifactRoot(artifactRoot)
+    .filter((run) => (
+      run.iterationId === activeIteration
+      && run.sourceLayout === expectedSourceLayout
+      && taskGraphRefMatchesGraph(run.taskGraphRef, taskGraphPath, artifactRoot)
+    ));
+  const activeRuns = currentRuns.filter((run) => run.status === 'started');
+  if (activeRuns.length) {
+    throw new ValidationError(
+      `close-ready acceptance validation requires no active run(s): ${activeRuns.map((run) => run.runId).join(', ')}`,
+    );
+  }
+  const latestRun = currentRuns
+    .map((run, runOrder) => ({ run, runOrder }))
+    .filter(({ run }) => run.runKind === 'final_acceptance_review')
+    .sort(compareRunEvidence)[0]?.run;
+  try {
+    assertFinalAcceptanceReviewRunReady({
+      runsDir,
+      run: latestRun,
+      artifactRoot,
+      graphPath: taskGraphPath,
+    });
+  } catch (error) {
+    throw new ValidationError(
+      `close-ready acceptance validation failed: ${error.message}. Run p2a execute accept --artifacts ${artifactRoot}.`,
+    );
+  }
+  return 1;
+}
+
 function loadReadyIterationFacts(artifactRoot) {
   const state = resolveIterationState(artifactRoot);
   const spec = validateActiveSpecWithOptionalIntake(state);
@@ -4047,12 +4096,20 @@ function validateIteration(args) {
   const taskGraph = validateTaskGraph(state.taskGraphPath, state.specPath);
   if (args.requireCloseReady) {
     assertCloseReadyTasks(taskGraph);
+    const reviewPasses = projectReviewPasses(canonicalWorkspacePathForArtifactRoot(state.artifactRoot));
     validateCloseReadyVisualEvidence({
       artifactRoot: state.artifactRoot,
       activeIteration: state.activeIteration,
       taskGraphPath: state.taskGraphPath,
       taskGraph,
-      reviewPasses: projectReviewPasses(),
+      reviewPasses,
+    });
+    validateCloseReadyAcceptanceEvidence({
+      artifactRoot: state.artifactRoot,
+      activeIteration: state.activeIteration,
+      taskGraphPath: state.taskGraphPath,
+      taskGraph,
+      reviewPasses,
     });
   }
   const maintenance = validateMaintenanceTaskGraphIfPresent(state);
@@ -4077,12 +4134,20 @@ function closeLocked(args, artifactRoot) {
 
   const facts = loadReadyIterationFacts(artifactRoot);
   assertCloseReadyTasks(facts.taskGraph);
+  const reviewPasses = projectReviewPasses(canonicalWorkspacePathForArtifactRoot(artifactRoot));
   validateCloseReadyVisualEvidence({
     artifactRoot,
     activeIteration: facts.state.activeIteration,
     taskGraphPath: facts.state.taskGraphPath,
     taskGraph: facts.taskGraph,
-    reviewPasses: projectReviewPasses(),
+    reviewPasses,
+  });
+  validateCloseReadyAcceptanceEvidence({
+    artifactRoot,
+    activeIteration: facts.state.activeIteration,
+    taskGraphPath: facts.state.taskGraphPath,
+    taskGraph: facts.taskGraph,
+    reviewPasses,
   });
   const activeMetadata = loadOptionalIterationMetadata(artifactRoot, facts.state.activeIteration);
   const planningMemory = activeMetadata?.planning_memory ?? null;
