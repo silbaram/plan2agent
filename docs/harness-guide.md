@@ -597,7 +597,7 @@ node scripts/sync_cli_assets.mjs
 
 ## 11. 추가 포인터와 v1/v2 범위
 
-- 제품 방향과 남은 로드맵은 `plans/01-product-roadmap.md`를 먼저 본다. Gate A-C 상세 계약은 이 문서, 반복 개발은 `docs/iteration-spec.md`, 감독형 실행은 `docs/supervised-execution.md`를 정본으로 본다.
+- Gate A-C 상세 계약은 이 문서, 반복 개발은 `docs/iteration-spec.md`, 감독형 실행은 `docs/supervised-execution.md`를 정본으로 본다.
 - 하네스 구현 기준은 `docs/harness-spec.md`를 본다. 이 문서는 단계, 역할, 승인 게이트, resume, state passing, evidence, 저장 구조, 검증 스크립트 기준을 정의한다.
 - 다회차 기획과 반복/고도화 개발 구조는 `docs/iteration-spec.md`를 본다. 이 문서는 iteration layout, `current-spec.json`, active iteration, maintenance, open/close 후보 명령을 정의한다.
 - 사용자 시작점과 문서 탐색은 `docs/README.md`와 `docs/quickstart.md`를 먼저 본다. CLI별 세부 명령은 `docs/cli-reference.md`를 본다.
@@ -614,4 +614,4 @@ node scripts/sync_cli_assets.mjs
 - `fixtures/cache-library/`의 실제 JSON 발췌를 추가했다.
 - validation 실패 메시지별 원인/해결과 CLI reload/parity 관련 FAQ를 추가했다.
 - gate, skill, subagent, artifact, resume, mirror/canonical 등 핵심 용어집을 추가했다.
-- `plans/01-product-roadmap.md`, `docs/README.md`, `docs/quickstart.md`, `docs/harness-spec.md`, `docs/iteration-spec.md` 포인터와 v1/v2 범위를 명확히 했다.
+- `docs/README.md`, `docs/quickstart.md`, `docs/harness-spec.md`, `docs/iteration-spec.md` 포인터와 v1/v2 범위를 명확히 했다.

@@ -238,7 +238,6 @@ session에서 실행되며 Plan2Agent는 provider API를 직접 호출하지 않
 - [Iteration Spec](docs/iteration-spec.md) — iteration layout, diff, close/open, run tracking
 - [감독형 개발 실행 레퍼런스](docs/supervised-execution.md) — task 실행, monitor gate, 재시도, 검토
 - [하네스 구현 기준](docs/harness-spec.md) — skill, subagent, mirror, 구현 규칙
-- [제품 로드맵](plans/01-product-roadmap.md) — 현재 제품 방향과 남은 작업
 
 ## Plan2Agent 개발하기
 
@@ -265,7 +264,6 @@ runtime은 Node.js ESM이며 Node.js 표준 라이브러리를 사용합니다. 
 .gemini/       생성된 Gemini CLI command와 agent
 docs/          사용자 가이드와 구현 레퍼런스
 fixtures/      golden fixture와 negative fixture
-plans/         로드맵과 완료된 기획 기록
 schemas/       Plan2Agent artifact용 JSON schema
 scripts/       toolkit, validation, runtime, eval, proposal, Memory CLI
 ```

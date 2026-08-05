@@ -2,7 +2,7 @@
 
 참고 기준일: 2026-08-05
 
-이 문서는 Plan2Agent(P2A)가 MVP 이후 기존 프로젝트에 기능을 이어 추가하는 반복/고도화 개발 구조를 정의한다. `plans/01-product-roadmap.md`는 제품 방향과 상태 요약을 담고, 이 문서는 다회차 기획과 개발 운영에 필요한 구현 계약을 더 자세히 고정한다.
+이 문서는 Plan2Agent(P2A)가 MVP 이후 기존 프로젝트에 기능을 이어 추가하는 반복/고도화 개발 구조와 현재 구현 상태를 정의한다.
 
 문서 홈: [Plan2Agent Docs](README.md) · 사용자 시작점: [Quickstart](quickstart.md)
 
@@ -78,7 +78,7 @@ MVP 이후에는 이미 만들어진 산출물과 대상 프로젝트 위에 작
 
 연결 기준:
 
-- `plans/01-product-roadmap.md`는 제품 방향과 현재 로드맵 인덱스만 담는다.
+- 현재 구현 상태와 후속 고도화 후보는 이 문서의 §0 표를 기준으로 삼는다.
 - 변경 추적, 반복별 spec/task graph, diff 기반 재작업 task 생성의 상세 계약은 이 문서가 정본이다.
 - Gate A-C 산출물 인계와 scaffold 이후 반복 구조는 이 문서와 `docs/cli-reference.md`의 handoff 명령 계약을 따른다.
 
@@ -608,7 +608,7 @@ feature task graph 기준의 핵심 backbone은 끝에서 끝까지 동작한다
 - 문제: deterministic `diff-tasks`는 spec field 차이를 semantic group으로 병합/분할하고 rework/reuse를 표시하지만, code-aware 판단이나 복잡한 task 재구성까지 맡기지는 않는다.
 - 해법: 기획층(Gate C)에 **agent 저작 + validator 기반 승격**을 추가한다. agent는 현재 기준 맥락을 읽어 richer task 초안을 쓰고, validator 통과 후 CLI가 정본으로 승격한다.
 - 불변: 실행층(`p2a tasks`)과 `p2a` package schema `task-graph.schema.json`은 바꾸지 않는다. agent 출력도 기존 `p2a.task_graph.v1`을 따른다.
-- 로드맵 연결: `plans/01-product-roadmap.md`의 diff 기반 고도화 방향을 Gate C validation/promotion 계약으로 구체화한다.
+- 범위 연결: diff 기반 고도화 방향을 Gate C validation/promotion 계약으로 구체화한다.
 
 ### 10-2. 핵심 원칙
 

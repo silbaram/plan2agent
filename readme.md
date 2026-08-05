@@ -236,7 +236,6 @@ services.
 - [Iteration Spec](docs/iteration-spec.md) — iteration layout, diffs, close/open, and run tracking
 - [Supervised Execution Reference](docs/supervised-execution.md) — task execution, monitor gates, retries, and reviews
 - [Harness Implementation Spec](docs/harness-spec.md) — skills, subagents, mirrors, and implementation rules
-- [Product Roadmap](plans/01-product-roadmap.md) — current product direction and remaining work
 
 ## Developing Plan2Agent
 
@@ -262,7 +261,6 @@ The runtime is Node.js ESM and uses the Node.js standard library. Repository str
 .gemini/       generated Gemini CLI commands and agents
 docs/          user guides and implementation references
 fixtures/      golden and negative fixtures
-plans/         roadmap and completed planning notes
 schemas/       JSON schemas for Plan2Agent artifacts
 scripts/       toolkit, validation, runtime, eval, proposal, and Memory CLIs
 ```

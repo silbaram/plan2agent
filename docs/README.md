@@ -55,7 +55,6 @@ Plan2Agent 문서는 사용자 흐름, CLI 사용법, 산출물 계약, 구현 �
 | 반복 구조와 변경분 task 흐름 이해하기 | [반복/고도화 개발 스펙](iteration-spec.md) |
 | 감독형 task 실행과 orchestration 흐름 이해하기 | [감독형 개발 실행 레퍼런스](supervised-execution.md) |
 | skill/subagent 구조를 수정하기 | [하네스 구현 기준](harness-spec.md) |
-| 최신 제품 상태와 남은 로드맵 보기 | [제품 로드맵](../plans/01-product-roadmap.md) |
 
 ## 문서별 역할
 
@@ -78,4 +77,3 @@ Plan2Agent 문서는 사용자 흐름, CLI 사용법, 산출물 계약, 구현 �
 - 반복 구조의 정확한 동작 계약은 `iteration-spec.md`에 둔다.
 - ready task 실행, orchestration, proposal loop와 `devExecution.reviewPasses` 정책의 완료 기능 계약은 `supervised-execution.md`에 둔다.
 - skill/subagent 경로와 mirror 규칙은 `harness-spec.md`에 둔다.
-- 현재 구현 상태와 다음 개발 후보는 `plans/01-product-roadmap.md`에 둔다.

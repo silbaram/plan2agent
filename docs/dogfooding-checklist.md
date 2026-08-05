@@ -9,7 +9,7 @@
 ## 사용 방법
 
 - 실제 프로젝트 2~3개를 처음부터 끝까지(아이디어 → Gate C validation → task 실행 완료) 통과시킨다.
-- 프로젝트마다 이 문서의 "프로젝트 기록 양식" 사본을 하나 만들어 채운다. 권장 위치: `plans/dogfooding/<project_id>.md` (하네스 상태인 `.plan2agent/` 내부에는 두지 않는다).
+- 프로젝트마다 이 문서의 "프로젝트 기록 양식" 사본을 하나 만들어 채운다. 권장 위치: `docs/dogfooding/<project_id>.md` (하네스 상태인 `.plan2agent/` 내부에는 두지 않는다).
 - 기록은 세션이 끝날 때마다 바로 채운다. 나중에 몰아서 복기하면 생략/우회 항목이 사라진다.
 - 측정값은 기억이 아니라 산출물에서 가져온다: `p2a info`, `status.md` change log, `runs/run-index.json`, `p2a tasks list`.
 
