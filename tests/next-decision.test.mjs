@@ -475,7 +475,7 @@ test('next chooses one read-only action for every primary state', () => {
       expected: (root) => ['tasks_blocked', 'cli', ['tasks', 'show', '--artifacts', artifactPath(root), 'task-001']],
     },
     {
-      id: 'all tasks done closes iteration',
+      id: 'all non-UI tasks done require functional acceptance',
       setup: () => {
         const root = project();
         const rootArtifact = artifact(root);
@@ -486,7 +486,7 @@ test('next chooses one read-only action for every primary state', () => {
         writeGateD(rootArtifact, [], iterationId);
         return root;
       },
-      expected: (root) => ['iteration_ready_to_close', 'cli', ['iteration', 'close', '--artifacts', artifactPath(root)]],
+      expected: (root) => ['final_acceptance_review_required', 'cli', ['execute', 'accept', '--artifacts', artifactPath(root)]],
     },
     {
       id: 'closed iteration mines proposals before opening',
@@ -1079,7 +1079,7 @@ test('info keeps its JSON contract and points human output to next', () => {
 });
 
 test('next keeps the ordered decision rules required by the contract', () => {
-  assert.equal(NEXT_DECISION_RULES.length, 24);
+  assert.equal(NEXT_DECISION_RULES.length, 25);
   for (const rule of NEXT_DECISION_RULES) {
     assert.equal(typeof rule.when, 'function');
     assert.equal(typeof rule.reason, 'function');
@@ -1111,6 +1111,29 @@ test('next routes a completed visual iteration through review only when the pass
   assert.equal(rule.when({
     ...context,
     reviewPasses: undefined,
+  }), false);
+});
+
+test('next routes a completed non-UI iteration through acceptance unless disabled', () => {
+  const rule = NEXT_DECISION_RULES.find((candidate) => candidate.state === 'final_acceptance_review_required');
+  const context = {
+    reviewPasses: { acceptance: 'on' },
+    allTasksDone: true,
+    closedIteration: false,
+    detail: { layout: { kind: 'iteration' } },
+    acceptanceReviewNeeded: true,
+    artifactArg: '.plan2agent/artifacts/sample',
+  };
+  assert.equal(rule.when(context), true);
+  assert.deepEqual(rule.command(context), [
+    'execute',
+    'accept',
+    '--artifacts',
+    '.plan2agent/artifacts/sample',
+  ]);
+  assert.equal(rule.when({
+    ...context,
+    reviewPasses: { acceptance: 'off' },
   }), false);
 });
 

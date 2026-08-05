@@ -426,6 +426,9 @@ test('an explicit entry wins over multiple automatically discovered preflight ro
 test('a confirmed entry proceeds through Gate A-C execution and iteration close', () => {
   const root = project();
   try {
+    writeJson(path.join(root, '.plan2agent', 'project.config.json'), {
+      devExecution: { reviewPasses: { acceptance: 'off' } },
+    });
     const entryPath = path.join(root, 'idea.md');
     const fixtureArtifactRoot = path.join(FIXTURE_ROOT, '_e2e', 'webhook-api-service');
     const fixtureIntake = JSON.parse(readFileSync(

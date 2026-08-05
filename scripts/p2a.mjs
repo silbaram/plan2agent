@@ -20,6 +20,7 @@ import {
 } from './p2a_decision_ledger.mjs';
 import { compareRunEvidence, taskGraphRefMatchesGraph } from './p2a_run_paths.mjs';
 import { assertFinalVisualReviewRunReady } from './p2a_visual_review_gate.mjs';
+import { assertFinalAcceptanceReviewRunReady } from './p2a_acceptance_review_gate.mjs';
 import {
   discoverEntryDocument,
   discoverFeatureRadarPreflightRuns,
@@ -76,7 +77,7 @@ function usage() {
     '  p2a enhance <capability> [--target <dir>] [--dry-run] [--overwrite]',
     '  p2a eval <grade|compare|analyze|generate|digest> [options]',
     '  p2a memory <status|push|pull|search|history|digest|trace|impact|precedent> [options]',
-    '  p2a execute <plan|start|review|resume|status|finish> [options]',
+    '  p2a execute <plan|start|review|accept|resume|status|finish> [options]',
     '  p2a tasks|runs|iteration|proposals|validate ...',
     '',
     'Examples:',
@@ -1044,6 +1045,25 @@ function iterationVisualReviewNeeded(tasks, activeRuns, options) {
   }
 }
 
+function iterationAcceptanceReviewNeeded(tasks, activeRuns, options) {
+  if (tasks.some((task) => task.visualImpact)) return false;
+  const latestRun = activeRuns
+    .map((run, runOrder) => ({ run, runOrder }))
+    .filter(({ run }) => run.runKind === 'final_acceptance_review')
+    .sort(compareRunEvidence)[0]?.run;
+  try {
+    assertFinalAcceptanceReviewRunReady({
+      runsDir: options.runsDir,
+      run: latestRun,
+      artifactRoot: options.artifactRoot,
+      graphPath: options.graphPath,
+    });
+    return false;
+  } catch {
+    return true;
+  }
+}
+
 function inspectionForArtifact(targetRoot, artifact, inspectedArtifacts) {
   const artifactRoot = path.resolve(targetRoot, artifact.artifactRoot);
   return inspectedArtifacts.find((candidate) => candidate.artifactRoot === artifactRoot) ?? null;
@@ -1152,11 +1172,18 @@ function buildNextDecisionContext(
   const taskCounts = countTasks(gates.taskGraph);
   const allTasksDone = taskCounts.total > 0 && taskCounts.done === taskCounts.total;
   const visualReviewEnabled = reviewPasses.visual !== 'off';
+  const acceptanceReviewEnabled = reviewPasses.acceptance !== 'off';
   const needsCloseReadyVisualAudit = (
     visualReviewEnabled
     && allTasksDone
     && detail.layout.kind === 'iteration'
     && detail.tasks.some((task) => task.visualImpact)
+  );
+  const needsCloseReadyAcceptanceAudit = (
+    acceptanceReviewEnabled
+    && allTasksDone
+    && detail.layout.kind === 'iteration'
+    && !detail.tasks.some((task) => task.visualImpact)
   );
   const proposals = info.enhancements.proposals;
   const minedRunIds = proposals.enabled
@@ -1173,7 +1200,7 @@ function buildNextDecisionContext(
   let runEvidenceValidationError = null;
   if (
     detail.runs.runsDir
-    && (failedOrBlockedRunCandidate || needsCloseReadyVisualAudit)
+    && (failedOrBlockedRunCandidate || needsCloseReadyVisualAudit || needsCloseReadyAcceptanceAudit)
   ) {
     try {
       validateRunsDir(detail.runs.runsDir);
@@ -1192,6 +1219,17 @@ function buildNextDecisionContext(
     && detail.layout.kind === 'iteration'
   )
     ? iterationVisualReviewNeeded(detail.tasks, activeRuns, {
+        runsDir: detail.runs.runsDir,
+        artifactRoot,
+        graphPath: gates.taskGraphPath,
+      })
+    : false;
+  const acceptanceReviewNeeded = (
+    acceptanceReviewEnabled
+    && allTasksDone
+    && detail.layout.kind === 'iteration'
+  )
+    ? iterationAcceptanceReviewNeeded(detail.tasks, activeRuns, {
         runsDir: detail.runs.runsDir,
         artifactRoot,
         graphPath: gates.taskGraphPath,
@@ -1282,6 +1320,7 @@ function buildNextDecisionContext(
     activeRuns,
     startedRun: activeRuns.find((run) => run.status === 'started' && stringValue(run.runId)),
     visualReviewNeeded,
+    acceptanceReviewNeeded,
     readyIds: readyTaskIds(gates.taskGraph),
     blockedTaskIds: taskIdsWithStatus(detail.tasks, 'blocked'),
     allTasksDone,
@@ -1602,6 +1641,26 @@ export const NEXT_DECISION_RULES = [
     command: (context) => [
       'execute',
       'review',
+      '--artifacts',
+      context.artifactArg,
+    ],
+  },
+  {
+    state: 'final_acceptance_review_required',
+    kind: 'cli',
+    when: (context) => (
+      (context.reviewPasses?.acceptance ?? 'on') !== 'off'
+      && context.allTasksDone
+      && !context.closedIteration
+      && context.detail.layout.kind === 'iteration'
+      && context.acceptanceReviewNeeded
+    ),
+    reason: () => (
+      'The completed non-UI iteration still needs one functional acceptance review backed by executed commands.'
+    ),
+    command: (context) => [
+      'execute',
+      'accept',
       '--artifacts',
       context.artifactArg,
     ],

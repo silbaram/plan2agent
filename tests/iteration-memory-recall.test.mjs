@@ -560,6 +560,9 @@ test('configured iteration close archives successfully and warns when Memory is 
       serverUrl: 'http://127.0.0.1:1',
       requestTimeoutMs: 100,
     };
+    config.devExecution ??= {};
+    config.devExecution.reviewPasses ??= {};
+    config.devExecution.reviewPasses.acceptance = 'off';
     writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`, 'utf8');
 
     const graphPath = path.join(

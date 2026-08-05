@@ -15,7 +15,7 @@ export const RUN_ID_STRATEGIES = new Set(['timestamp', 'task-sequence']);
 export const REVIEW_PASS_POLICIES = new Set(['off', 'opt_in', 'on']);
 const DEFAULT_RUN_ID_PATTERN = 'run-<taskId>-<sequence:3>';
 export const RUN_ID_RESERVATION_DIR = '.run-id-reservations';
-const REVIEW_PASS_KEYS = ['monitor', 'style', 'milestone', 'visual'];
+const REVIEW_PASS_KEYS = ['monitor', 'style', 'milestone', 'visual', 'acceptance'];
 
 export function defaultRunTracking() {
   return {
@@ -239,6 +239,7 @@ export function defaultDevExecution() {
       style: 'off',
       milestone: 'off',
       visual: 'off',
+      acceptance: 'on',
     },
   };
 }

@@ -88,12 +88,14 @@ test('defaults heavyweight review passes off while keeping monitor opt-in', () =
     style: 'off',
     milestone: 'off',
     visual: 'off',
+    acceptance: 'on',
   });
   assert.deepEqual(resolveReviewPasses({}), {
     monitor: 'opt_in',
     style: 'off',
     milestone: 'off',
     visual: 'off',
+    acceptance: 'on',
   });
 });
 
@@ -112,12 +114,14 @@ test('merges review pass defaults without replacing project overrides', () => {
     visual: 'opt_in',
     monitor: 'opt_in',
     style: 'off',
+    acceptance: 'on',
   });
   assert.deepEqual(resolveReviewPasses(merged), {
     monitor: 'opt_in',
     style: 'off',
     milestone: 'on',
     visual: 'opt_in',
+    acceptance: 'on',
   });
 });
 
