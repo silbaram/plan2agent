@@ -7,11 +7,20 @@ import test from 'node:test';
 
 import { ROOT, formatCommandResult, makeTempDir, runP2aFrom } from './helpers/fixtures.mjs';
 
-const PACKAGE_VERSION = JSON.parse(readFileSync(path.join(ROOT, 'package.json'), 'utf8')).version;
+const PACKAGE_JSON = JSON.parse(readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
+const PACKAGE_NAME = PACKAGE_JSON.name;
+const PACKAGE_VERSION = PACKAGE_JSON.version;
 
 function spawnPortable(command, args, options) {
   if (process.platform !== 'win32') return spawnSync(command, args, options);
   return spawnSync(command, args, { ...options, shell: true });
+}
+
+function parseNpmPackResult(stdout) {
+  const payload = JSON.parse(stdout);
+  const result = Array.isArray(payload) ? payload[0] : payload[PACKAGE_NAME];
+  assert.ok(result, `npm pack output must include ${PACKAGE_NAME}`);
+  return result;
 }
 
 test('package metadata exposes the p2a global CLI and required runtime assets', () => {
@@ -254,7 +263,7 @@ test('npm pack dry run includes the global CLI runtime', () => {
       env: { ...process.env, npm_config_cache: cacheRoot },
     });
     assert.equal(packed.status, 0, formatCommandResult(packed));
-    const files = new Set(JSON.parse(packed.stdout)[0].files.map((file) => file.path));
+    const files = new Set(parseNpmPackResult(packed.stdout).files.map((file) => file.path));
     for (const requiredPath of [
       'package.json',
       'LICENSE',
@@ -291,7 +300,7 @@ test('the packed p2a binary supports core commands without a local runtime copy'
       env: npmEnv,
     });
     assert.equal(packed.status, 0, formatCommandResult(packed));
-    const tarballPath = path.join(packRoot, JSON.parse(packed.stdout)[0].filename);
+    const tarballPath = path.join(packRoot, parseNpmPackResult(packed.stdout).filename);
 
     const installed = spawnPortable('npm', ['install', '--ignore-scripts', '--no-audit', '--no-fund', '--prefix', installRoot, tarballPath], {
       cwd: ROOT,
