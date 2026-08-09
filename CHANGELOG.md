@@ -14,6 +14,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 ### Changed
 
 - Raise the minimum supported Node.js version from 20 to 22 after Node.js 20 reached end of life.
+- Run repository CI only after a pull request is merged into `main`, rather than on pull request updates or ordinary branch pushes.
 
 ## [0.2.1] - 2026-08-09
 
