@@ -2,7 +2,8 @@
 
 [![npm version](https://img.shields.io/npm/v/plan2agent.svg)](https://www.npmjs.com/package/plan2agent)
 [![npm downloads](https://img.shields.io/npm/dm/plan2agent.svg)](https://www.npmjs.com/package/plan2agent)
-[![Node.js 20+](https://img.shields.io/badge/Node.js-20%2B-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
+[![CI](https://github.com/silbaram/plan2agent/actions/workflows/ci.yml/badge.svg)](https://github.com/silbaram/plan2agent/actions/workflows/ci.yml)
+[![Node.js 22+](https://img.shields.io/badge/Node.js-22%2B-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 [English](readme.md) | [한국어](README.ko-KR.md)
@@ -12,7 +13,7 @@ dependency-aware tasks, and verified AI coding runs.
 
 ## Install in 30 seconds
 
-Plan2Agent requires Node.js 20 or newer.
+Plan2Agent requires Node.js 22 or newer.
 
 ```bash
 npm install -g plan2agent
@@ -236,10 +237,12 @@ services.
 - [Iteration Spec](docs/iteration-spec.md) — iteration layout, diffs, close/open, and run tracking
 - [Supervised Execution Reference](docs/supervised-execution.md) — task execution, monitor gates, retries, and reviews
 - [Harness Implementation Spec](docs/harness-spec.md) — skills, subagents, mirrors, and implementation rules
+- [Changelog](CHANGELOG.md) — versioned user-facing changes
+- [Release Procedure](docs/releasing.md) — npm, Git tag, GitHub Release, and verification checklist
 
 ## Developing Plan2Agent
 
-Clone the repository, use Node.js 20 or newer, and run:
+Clone the repository, use Node.js 22 or newer, and run:
 
 ```bash
 npm test

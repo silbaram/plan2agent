@@ -2,7 +2,8 @@
 
 [![npm version](https://img.shields.io/npm/v/plan2agent.svg)](https://www.npmjs.com/package/plan2agent)
 [![npm downloads](https://img.shields.io/npm/dm/plan2agent.svg)](https://www.npmjs.com/package/plan2agent)
-[![Node.js 20+](https://img.shields.io/badge/Node.js-20%2B-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
+[![CI](https://github.com/silbaram/plan2agent/actions/workflows/ci.yml/badge.svg)](https://github.com/silbaram/plan2agent/actions/workflows/ci.yml)
+[![Node.js 22+](https://img.shields.io/badge/Node.js-22%2B-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 [English](readme.md) | [한국어](README.ko-KR.md)
@@ -12,7 +13,7 @@
 
 ## 30초 만에 설치하기
 
-Plan2Agent를 사용하려면 Node.js 20 이상이 필요합니다.
+Plan2Agent를 사용하려면 Node.js 22 이상이 필요합니다.
 
 ```bash
 npm install -g plan2agent
@@ -238,10 +239,12 @@ session에서 실행되며 Plan2Agent는 provider API를 직접 호출하지 않
 - [Iteration Spec](docs/iteration-spec.md) — iteration layout, diff, close/open, run tracking
 - [감독형 개발 실행 레퍼런스](docs/supervised-execution.md) — task 실행, monitor gate, 재시도, 검토
 - [하네스 구현 기준](docs/harness-spec.md) — skill, subagent, mirror, 구현 규칙
+- [변경 이력](CHANGELOG.md) — version별 사용자 영향 변경
+- [릴리스 절차](docs/releasing.md) — npm, Git tag, GitHub Release, 검증 checklist
 
 ## Plan2Agent 개발하기
 
-저장소를 clone하고 Node.js 20 이상에서 다음 명령을 실행합니다.
+저장소를 clone하고 Node.js 22 이상에서 다음 명령을 실행합니다.
 
 ```bash
 npm test

@@ -21,7 +21,7 @@
     "p2a": "scripts/p2a.mjs"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   },
   "files": [
     "scripts",

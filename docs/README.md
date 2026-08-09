@@ -44,6 +44,9 @@ Plan2Agent 문서는 사용자 흐름, CLI 사용법, 산출물 계약, 구현 �
 7. [하네스 구현 기준](harness-spec.md)<br>
    skill/subagent mirror, CLI-neutral agent contract, 구현 원칙을 수정할 때 본다.
 
+8. [릴리스 절차](releasing.md)<br>
+   npm package, Git tag, GitHub Release를 같은 version과 source commit으로 게시할 때 본다.
+
 ## 목적별 바로가기
 
 | 목적 | 문서 |
@@ -67,6 +70,7 @@ Plan2Agent 문서는 사용자 흐름, CLI 사용법, 산출물 계약, 구현 �
 | `iteration-spec.md` | 반복 개발 구현 계약 | iteration layout, close/open, semantic diff, run tracking |
 | `supervised-execution.md` | 감독형 개발 실행 레퍼런스 | ready task 실행, 리뷰 패스 정책, monitor gate, milestone review, retry recovery, proposal loop |
 | `harness-spec.md` | 하네스 구현 기준 | skills, subagents, mirror, 안전 정책 (`p2a-harness` skill을 게이트 규칙 정본으로 지정) |
+| `releasing.md` | 릴리스 운영 checklist | Node 지원 정책, CHANGELOG, npm publish, Git tag, GitHub Release, smoke test |
 
 ## 유지보수 원칙
 
@@ -77,3 +81,4 @@ Plan2Agent 문서는 사용자 흐름, CLI 사용법, 산출물 계약, 구현 �
 - 반복 구조의 정확한 동작 계약은 `iteration-spec.md`에 둔다.
 - ready task 실행, orchestration, proposal loop와 `devExecution.reviewPasses` 정책의 완료 기능 계약은 `supervised-execution.md`에 둔다.
 - skill/subagent 경로와 mirror 규칙은 `harness-spec.md`에 둔다.
+- version 변경과 package 게시 절차는 `releasing.md`와 루트 `CHANGELOG.md`에 둔다.

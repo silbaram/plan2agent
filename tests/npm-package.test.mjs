@@ -26,7 +26,7 @@ function parseNpmPackResult(stdout) {
 test('package metadata exposes the p2a global CLI and required runtime assets', () => {
   const packageJson = JSON.parse(readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
   assert.equal(packageJson.bin.p2a, 'scripts/p2a.mjs');
-  assert.equal(packageJson.engines.node, '>=20');
+  assert.equal(packageJson.engines.node, '>=22');
   assert.equal(packageJson.license, 'MIT');
   assert.ok(packageJson.keywords.includes('spec-driven-development'));
   assert.equal(packageJson.repository.url, 'git+https://github.com/silbaram/plan2agent.git');
@@ -37,6 +37,32 @@ test('package metadata exposes the p2a global CLI and required runtime assets', 
   }
   assert.equal(packageJson.files.includes('docs'), false);
   assert.equal(packageJson.files.includes('readme.md'), false);
+});
+
+test('repository release surfaces match the package support contract', () => {
+  const workflow = readFileSync(path.join(ROOT, '.github', 'workflows', 'ci.yml'), 'utf8');
+  assert.match(workflow, /actions\/checkout@v6/);
+  assert.match(workflow, /actions\/setup-node@v6/);
+  for (const nodeVersion of ['22', '24', '26']) {
+    assert.match(workflow, new RegExp(`\\n\\s+- ${nodeVersion}\\n`));
+  }
+  assert.match(workflow, /run: npm test/);
+  assert.match(workflow, /run: npm run test:full/);
+
+  for (const readmePath of ['readme.md', 'README.ko-KR.md']) {
+    const readme = readFileSync(path.join(ROOT, readmePath), 'utf8');
+    assert.match(readme, /actions\/workflows\/ci\.yml\/badge\.svg/);
+    assert.match(readme, /Node\.js 22/);
+  }
+
+  const changelog = readFileSync(path.join(ROOT, 'CHANGELOG.md'), 'utf8');
+  assert.match(changelog, /## \[Unreleased\]/);
+  assert.match(changelog, new RegExp(`## \\[${PACKAGE_VERSION.replaceAll('.', '\\.')}\\] - \\d{4}-\\d{2}-\\d{2}`));
+
+  const releaseGuide = readFileSync(path.join(ROOT, 'docs', 'releasing.md'), 'utf8');
+  assert.match(releaseGuide, /npm publish --access public/);
+  assert.match(releaseGuide, /git tag -a v<version>/);
+  assert.match(releaseGuide, /GitHub Release/);
 });
 
 test('checkout init preserves the legacy co-located runtime', () => {
