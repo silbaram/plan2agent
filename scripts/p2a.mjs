@@ -58,7 +58,7 @@ const TOOLKIT_COMMANDS = new Map([
   ['scaffold', { script: 'p2a_handoff.mjs', forwardsCommand: true, defaultTargetWhenEmbedded: true }],
   ['enhance', { script: 'p2a_handoff.mjs', forwardsCommand: true, defaultTargetWhenEmbedded: true }],
   ['update', { script: 'p2a_handoff.mjs', forwardsCommand: true, defaultTargetWhenEmbedded: true }],
-  ['upgrade', { script: 'p2a_handoff.mjs', forwardsCommand: true, defaultTargetWhenEmbedded: true }],
+  ['upgrade', { script: 'p2a_upgrade.mjs', forwardsCommand: true, defaultTargetWhenEmbedded: true }],
   ['handoff', { script: 'p2a_handoff.mjs', forwardsCommand: false, defaultTargetWhenEmbedded: false }],
 ]);
 
@@ -87,6 +87,7 @@ function usage() {
     '',
     'Notes:',
     '  Install Plan2Agent globally before using p2a. New projects keep only project state and provider assets in .plan2agent/.',
+    '  upgrade --apply updates only an npm-global installation; npx, local package, and clone runtimes are preview-only.',
     '  --help, -h  Show this help.',
   ].join('\n');
 }

@@ -26,7 +26,7 @@ import {
   runEval,
   runExecute,
   runHandoff,
-  runIteration,
+  runIteration as runIterationHelper,
   runMemory,
   runP2a,
   runProposals,
@@ -1129,7 +1129,7 @@ function validateScaffoldFixtureCase() {
 	      || !result.stdout.includes('Plan2Agent upgrade dry run')
 	      || !result.stdout.includes('status: pass')
 	      || !result.stdout.includes('changes: none')
-	      || !result.stdout.includes('report: .plan2agent/update-reports/upgrade-')
+	      || result.stdout.includes('report: .plan2agent/update-reports/upgrade-')
 	      || !result.stdout.includes('dry-run: no harness files written')
 	    ) {
       console.error('upgrade dry-run fixture failed');
@@ -1229,6 +1229,7 @@ function validateScaffoldFixtureCase() {
       || readFileSync(legacyRuntimePath, 'utf8') !== 'legacy project-local runtime\n'
       || packageUpdatedManifest.runtime?.mode !== 'package'
       || packageUpdatedManifest.runtime?.command !== 'p2a'
+      || 'toolkitRoot' in packageUpdatedManifest.provenance
     ) {
       console.error('package runtime update changed a legacy project-local runtime file');
       writeResultOutput(result);
@@ -2174,7 +2175,7 @@ function validateEvalFixtureCases() {
 
     const evalArtifactRoot = path.join(tempRoot, 'eval-artifact-root');
     cpSync(path.join(E2E_FIXTURE_ROOT, 'webhook-api-service'), evalArtifactRoot, { recursive: true });
-    result = runIteration(['init', '--artifacts', evalArtifactRoot, '--iteration-id', 'v1-mvp']);
+    result = runIterationHelper(['init', '--artifacts', evalArtifactRoot, '--iteration-id', 'v1-mvp']);
     checks += 1;
     if (result.status !== 0) {
       console.error('eval maintenance fixture iteration init failed');
@@ -2868,10 +2869,19 @@ function validateIterationCurrentFixtureCases() {
   for (const caseData of cases) {
     assertE2eCaseShape(caseData);
     const tempRoot = mkdtempSync(path.join(tmpdir(), 'p2a-iteration-fixture-'));
+    const runIteration = (args) => runIterationHelper(args, { cwd: tempRoot });
     try {
       const sourceRoot = path.resolve(ROOT, caseData.artifact_root);
       const artifactRoot = path.join(tempRoot, path.basename(caseData.artifact_root));
       cpSync(sourceRoot, artifactRoot, { recursive: true });
+      // This lifecycle fixture intentionally leaves rejected run transitions active.
+      // Acceptance-on close behavior is covered by dedicated tests, so isolate this fixture from that gate.
+      mkdirSync(path.join(artifactRoot, '.plan2agent'), { recursive: true });
+      writeFileSync(
+        path.join(artifactRoot, '.plan2agent', 'project.config.json'),
+        `${JSON.stringify({ devExecution: { reviewPasses: { acceptance: 'off' } } }, null, 2)}\n`,
+        'utf8',
+      );
 
       const greenfieldStatusText = readFileSync(path.join(artifactRoot, 'status.md'), 'utf8');
       writeFileSync(path.join(artifactRoot, 'status.md'), '# broken generated status\n', 'utf8');

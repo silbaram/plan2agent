@@ -4,6 +4,7 @@ export const REPO_ONLY_SCRIPT_FILES = [
   'p2a_doctor.mjs',
   'p2a_handoff.mjs',
   'p2a_handoff_portability.mjs',
+  'p2a_upgrade.mjs',
   'sync_cli_assets.mjs',
   'check_cli_parity.mjs',
   'run_fixtures.mjs',

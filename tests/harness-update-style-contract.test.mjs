@@ -1,13 +1,16 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { test } from 'node:test';
 import {
   formatCommandResult,
   makeTempDir,
+  ROOT,
   runHandoff,
 } from './helpers/fixtures.mjs';
+
+const PACKAGE_VERSION = JSON.parse(readFileSync(path.join(ROOT, 'package.json'), 'utf8')).version;
 
 test('checkout scaffold guide directs users through the co-located runtime', () => {
   const targetRoot = makeTempDir('p2a-next-guide-');
@@ -160,6 +163,75 @@ test('update prunes deselected provider assets and their manifest ownership with
     assert.deepEqual(updatedManifest.aiToolGroups, []);
     assert.equal(updatedManifest.includedTools.some((tool) => /^p2a_(codex|claude|gemini)_assets$/.test(tool)), false);
     assert.equal(updatedManifest.managedFiles.some((record) => record.owner.startsWith('ai-tool:')), false);
+  } finally {
+    rmSync(targetRoot, { recursive: true, force: true });
+  }
+});
+
+test('upgrade dry-run is project-read-only and upgrade prune remains explicit', () => {
+  const targetRoot = makeTempDir('p2a-upgrade-read-only-');
+  const manifestPath = path.join(targetRoot, '.plan2agent', 'manifest.json');
+  const retiredRelative = '.plan2agent/scripts/p2a_retired_upgrade.mjs';
+  const retiredPath = path.join(targetRoot, retiredRelative);
+  try {
+    let result = runHandoff(['scaffold', '--target', targetRoot, '--tools', 'none']);
+    assert.equal(result.status, 0, formatCommandResult(result));
+    const retiredContent = '// retired upgrade helper\n';
+    writeFileSync(retiredPath, retiredContent, 'utf8');
+    const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+    manifest.provenance.packageVersion = '0.0.0-test';
+    manifest.scriptFiles.push(retiredRelative);
+    manifest.toolFiles.push(retiredRelative);
+    manifest.managedFiles.push({
+      path: retiredRelative,
+      owner: 'runtime-script',
+      sha256: createHash('sha256').update(retiredContent).digest('hex'),
+    });
+    writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
+    const beforeDryRun = readFileSync(manifestPath, 'utf8');
+
+    result = runHandoff(['upgrade', '--target', targetRoot, '--dry-run']);
+    assert.equal(result.status, 0, formatCommandResult(result));
+    assert.match(result.stdout, /package_version_manifest: would_update/);
+    assert.match(result.stdout, /prunable: remove/);
+    assert.doesNotMatch(result.stdout, /report: \.plan2agent\/update-reports/);
+    assert.equal(readFileSync(manifestPath, 'utf8'), beforeDryRun);
+    assert.equal(existsSync(path.join(targetRoot, '.plan2agent', 'update-reports')), false);
+
+    result = runHandoff(['upgrade', '--target', targetRoot, '--apply']);
+    assert.equal(result.status, 0, formatCommandResult(result));
+    assert.equal(existsSync(retiredPath), true);
+    const upgradedManifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+    assert.equal(upgradedManifest.provenance.packageVersion, PACKAGE_VERSION);
+    assert.equal(realpathSync(upgradedManifest.provenance.toolkitRoot), realpathSync(ROOT));
+
+    result = runHandoff(['upgrade', '--target', targetRoot, '--apply', '--prune']);
+    assert.equal(result.status, 0, formatCommandResult(result));
+    assert.equal(existsSync(retiredPath), false);
+  } finally {
+    rmSync(targetRoot, { recursive: true, force: true });
+  }
+});
+
+test('upgrade apply preflight reports manual-review blockers without writing project files', () => {
+  const targetRoot = makeTempDir('p2a-upgrade-apply-preflight-');
+  const guidePath = path.join(targetRoot, 'PLAN2AGENT.md');
+  try {
+    let result = runHandoff(['scaffold', '--target', targetRoot, '--tools', 'none']);
+    assert.equal(result.status, 0, formatCommandResult(result));
+    writeFileSync(guidePath, '# Locally customized guide\n', 'utf8');
+    const beforePreflight = readFileSync(guidePath, 'utf8');
+
+    result = runHandoff(
+      ['upgrade', '--target', targetRoot, '--dry-run'],
+      { env: { ...process.env, P2A_UPGRADE_APPLY_PREFLIGHT: '1' } },
+    );
+    assert.notEqual(result.status, 0, formatCommandResult(result));
+    assert.match(result.stdout, /manual_review: generate \(generated\) -> PLAN2AGENT\.md/);
+    assert.match(result.stdout, /apply-preflight: blocked/);
+    assert.doesNotMatch(result.stdout, /report: \.plan2agent\/update-reports/);
+    assert.equal(readFileSync(guidePath, 'utf8'), beforePreflight);
+    assert.equal(existsSync(path.join(targetRoot, '.plan2agent', 'update-reports')), false);
   } finally {
     rmSync(targetRoot, { recursive: true, force: true });
   }

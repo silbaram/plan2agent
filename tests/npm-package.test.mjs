@@ -271,6 +271,7 @@ test('npm pack dry run includes the global CLI runtime', () => {
       'scripts/p2a_decision_ledger.mjs',
       'scripts/p2a_decisions.mjs',
       'scripts/p2a_handoff.mjs',
+      'scripts/p2a_upgrade.mjs',
       'schemas/next.schema.json',
       'schemas/decisions.schema.json',
       '.agents/skills/p2a-next/SKILL.md',
@@ -329,9 +330,39 @@ test('the packed p2a binary supports core commands without a local runtime copy'
     );
     assert.match(packageSkill, /(^|[\s`])p2a tasks ready/m);
     assert.doesNotMatch(packageSkill, /node \.plan2agent\/scripts\/p2a\.mjs tasks ready/);
-    const manifest = JSON.parse(readFileSync(path.join(targetRoot, '.plan2agent', 'manifest.json'), 'utf8'));
+    const manifestPath = path.join(targetRoot, '.plan2agent', 'manifest.json');
+    const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
     assert.equal(manifest.provenance.packageName, 'plan2agent');
     assert.equal(manifest.provenance.packageVersion, PACKAGE_VERSION);
+    assert.equal('toolkitRoot' in manifest.provenance, false);
+
+    const packageAgentPath = path.join(targetRoot, '.agents', 'skills', 'p2a-next', 'SKILL.md');
+    rmSync(packageAgentPath);
+    const packageUpdate = runPacked(targetRoot, ['update', '--apply']);
+    assert.equal(packageUpdate.status, 0, formatCommandResult(packageUpdate));
+    assert.equal(existsSync(packageAgentPath), true);
+    const updatedPackageManifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+    assert.equal(updatedPackageManifest.provenance.packageVersion, PACKAGE_VERSION);
+    assert.equal('toolkitRoot' in updatedPackageManifest.provenance, false);
+
+    updatedPackageManifest.provenance.packageVersion = '0.0.0-test';
+    writeFileSync(manifestPath, `${JSON.stringify(updatedPackageManifest, null, 2)}\n`, 'utf8');
+    const mismatchedUpdate = runPacked(targetRoot, ['update', '--dry-run']);
+    assert.notEqual(mismatchedUpdate.status, 0);
+    assert.match(formatCommandResult(mismatchedUpdate), /update is pinned to manifest package/);
+
+    const packedHandoff = spawnSync(
+      process.execPath,
+      [
+        path.join(installRoot, 'node_modules', PACKAGE_NAME, 'scripts', 'p2a_handoff.mjs'),
+        'upgrade', '--target', targetRoot, '--apply',
+      ],
+      { cwd: targetRoot, encoding: 'utf8' },
+    );
+    assert.equal(packedHandoff.status, 0, formatCommandResult(packedHandoff));
+    const upgradedPackageManifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+    assert.equal(upgradedPackageManifest.provenance.packageVersion, PACKAGE_VERSION);
+    assert.equal('toolkitRoot' in upgradedPackageManifest.provenance, false);
 
     const nestedRoot = path.join(targetRoot, 'src', 'nested');
     mkdirSync(nestedRoot, { recursive: true });

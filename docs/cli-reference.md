@@ -89,11 +89,14 @@ p2a shape migrate-style --project-id <project_id>
 p2a init [--target <project-dir>] [--tools all|none|codex,claude,gemini] [--codex-profile quality|inherit] [--overwrite] [--dry-run]
 p2a enhance <capability> [--target <project-dir>] [--tools all|none|codex,claude,gemini] [--codex-profile quality|inherit] [--overwrite] [--dry-run]
 p2a update [--target <project-dir>] [--tools all|none|codex,claude,gemini] [--codex-profile quality|inherit] [--dry-run|--apply] [--prune]
+p2a upgrade [--target <project-dir>] (--dry-run|--apply) [--tools all|none|codex,claude,gemini] [--codex-profile quality|inherit] [--prune]
 ```
 
 `init`은 fresh 프로젝트에 manifest, project config, `PLAN2AGENT.md`, `.gitignore`, 선택한 AI tool asset을 만든다. Constitution은 Gate A 승인 뒤 Gate ②에서 제안·승인하므로 init이 빈 계약을 미리 만들지 않는다. npm으로 설치된 package runtime에서 실행하면 `.plan2agent/scripts/`와 `.plan2agent/schemas/`를 만들지 않는다. Plan2Agent clone checkout에서 실행하면 기존 사용자를 위해 두 디렉터리와 `toolkitRoot`를 포함한 co-located runtime을 계속 설치한다. 터미널과 agent skill은 항상 `p2a …`를 실행한다. 기존 `scaffold`는 호환 별칭이지만 새 프로젝트 문서와 자동 안내에서는 사용하지 않는다.
 
-`update`는 현재 패키지 버전의 provider asset과 안전한 config 기본값을 비교한다. 이번 전환에서는 기존 co-located runtime 프로젝트를 자동 마이그레이션하거나 로컬 runtime 파일을 삭제하지 않는다. 새 설치는 `p2a init`으로 시작한다.
+`update`는 manifest의 `provenance.packageVersion`과 현재 실행 중인 package version이 일치할 때만 provider asset과 안전한 config 기본값을 비교·적용한다. 버전이 다르면 사용자가 모르게 최신 파일을 적용하지 않고 `p2a upgrade --dry-run`을 안내한다. Clone/co-located 개발 runtime은 현재 checkout의 관리 파일을 프로젝트에 반영하는 기존 update 동작을 유지한다.
+
+`upgrade --dry-run`은 현재 실행 버전, 프로젝트 manifest 버전, npm `latest` 버전을 표시하고, 최신 package의 정확한 버전을 임시 디렉터리에 staging해 그 버전이 실제 적용할 프로젝트 계획을 보여준다. 임시 staging은 종료 시 제거되며 전역 package, 프로젝트 파일, preview report를 변경하지 않는다. `upgrade --apply`는 같은 정확한 버전으로 프로젝트 적용 가능 여부를 먼저 검사하고, 현재 `p2a`가 npm 전역 prefix의 `plan2agent` package에서 실행 중인 경우에만 검토한 버전을 전역 설치한 뒤 새 package의 `scripts/p2a.mjs`를 Node로 다시 실행한다. 대상 프로젝트나 적용 계획에 blocker가 있으면 전역 설치 전에 중단한다. npx/local package, clone, co-located runtime에서는 자동 전역 설치를 거부한다. `--prune`은 기본 비활성이며 명시했을 때만 설치 당시 hash가 유지된 retired managed file을 제거한다.
 
 ## 4. 동기화·검증
 

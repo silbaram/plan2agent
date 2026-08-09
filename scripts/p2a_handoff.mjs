@@ -107,6 +107,7 @@ const TEAM_BIGFIVE_ADAPTATION_NOTES = path.join(TEAM_BIGFIVE_HARNESS_DIR, 'adapt
 const DEFAULT_ITERATION_ID = 'active';
 const MANAGED_FILE_HASH_PATTERN = /^[a-f0-9]{64}$/;
 const INITIALIZE_COMMANDS = new Set(['init', 'scaffold']);
+const UPGRADE_APPLY_PREFLIGHT_ENV = 'P2A_UPGRADE_APPLY_PREFLIGHT';
 const SCAFFOLD_SCRIPT_FILES = PROJECT_RUNTIME_SCRIPT_FILES;
 const SCAFFOLD_SCHEMA_FILES = PROJECT_RUNTIME_SCHEMA_FILES;
 
@@ -173,7 +174,7 @@ function usage() {
     '  --team-bigfive-targets <list>',
     '                       Adapter targets for codex,claude,gemini. Defaults to --tools or all.',
     '  --overwrite          Allow replacing existing target files.',
-    '  --dry-run            Validate and print the plan. update/upgrade also write a local preview report.',
+    '  --dry-run            Validate and print the plan without writing project files or reports.',
     '  --apply              Apply safe update/upgrade changes after reviewing the preview.',
     '  --prune              With update/upgrade, remove retired managed files only when their installation SHA-256 still matches.',
     '  --help, -h           Show this help.',
@@ -3024,6 +3025,23 @@ function readUpgradeJsonFile(filePath, label, operation = 'upgrade') {
   }
 }
 
+function assertPackageUpdateVersion(args, manifest) {
+  if (
+    args.command !== 'update'
+    || P2A_PATHS.toolkitCheckout
+    || manifest?.runtime?.mode !== 'package'
+  ) return;
+  const coordinates = readPackageCoordinates();
+  const manifestName = manifest?.provenance?.packageName;
+  const manifestVersion = manifest?.provenance?.packageVersion;
+  if (manifestName !== coordinates.packageName || manifestVersion !== coordinates.packageVersion) {
+    throw new Error(
+      `update is pinned to manifest package ${manifestName ?? 'unknown'}@${manifestVersion ?? 'unknown'}, `
+      + `but the running package is ${coordinates.packageName}@${coordinates.packageVersion}; run p2a upgrade --dry-run`,
+    );
+  }
+}
+
 function upgradeToolTargets(args, manifest) {
   if (Array.isArray(args.tools)) return args.tools;
   const manifestTargets = Array.isArray(manifest.aiToolTargets)
@@ -3240,6 +3258,7 @@ function buildUpgradeNextActions(args, targetRoot, summary, failures, safeChange
 
 function buildUpgradeDryRunReport(args, targetRoot) {
   const manifest = readUpgradeJsonFile(path.join(targetRoot, '.plan2agent', 'manifest.json'), '.plan2agent/manifest.json', args.command);
+  assertPackageUpdateVersion(args, manifest);
   const config = readUpgradeJsonFile(path.join(targetRoot, '.plan2agent', 'project.config.json'), '.plan2agent/project.config.json', args.command);
   const tools = upgradeToolTargets(args, manifest);
   const codexProfile = resolveExistingCodexAgentProfile(args, manifest);
@@ -3278,6 +3297,28 @@ function buildUpgradeDryRunReport(args, targetRoot) {
       updatedKeys: ['codexAgentProfile'],
     });
   }
+  const packageCoordinates = readPackageCoordinates();
+  if (
+    args.command === 'upgrade'
+    && (
+      manifest?.provenance?.packageName !== packageCoordinates.packageName
+      || manifest?.provenance?.packageVersion !== packageCoordinates.packageVersion
+    )
+  ) {
+    configMigrations.manifest = {
+      ...configMigrations.manifest,
+      provenance: {
+        ...(configMigrations.manifest?.provenance ?? {}),
+        ...packageCoordinates,
+      },
+    };
+    configMigrations.migrations.push({
+      id: 'package_version_manifest',
+      target: 'manifest',
+      status: 'would_update',
+      updatedKeys: ['provenance.packageName', 'provenance.packageVersion'],
+    });
+  }
   const migrationUpdateCount = configMigrations.migrations.reduce((sum, migration) => sum + migration.updatedKeys.length, 0);
   const changes = summary.missing + summary.wouldUpdate + summary.manualReview + summary.prunable + summary.retired + migrationUpdateCount;
   const status = failures.length ? 'fail' : changes ? 'changes' : 'pass';
@@ -3291,6 +3332,7 @@ function buildUpgradeDryRunReport(args, targetRoot) {
     aiToolTargets: tools,
     codexAgentProfile: plannedCodexProfile,
     toolsProvided: args.toolsProvided,
+    runtimeMode: legacyRuntime ? 'co-located' : 'package',
     summary,
     items,
     migrations: configMigrations.migrations,
@@ -3537,10 +3579,23 @@ function mergeUpgradeManifest(existingManifest, report, appliedAt, appliedFiles,
   updates.push({
     command: report.command,
     appliedAt,
-    toolkitRoot: ROOT,
+    ...(report.runtimeMode === 'co-located' ? { toolkitRoot: ROOT } : {}),
     files: appliedFiles.length,
     migrations: migrationIds,
   });
+  const provenance = {
+    ...(existingManifest.provenance && typeof existingManifest.provenance === 'object' && !Array.isArray(existingManifest.provenance) ? existingManifest.provenance : {}),
+    ...(report.command === 'upgrade' && report._nextManifest?.provenance
+      ? {
+        packageName: report._nextManifest.provenance.packageName,
+        packageVersion: report._nextManifest.provenance.packageVersion,
+      }
+      : {}),
+    lastUpdatedAt: appliedAt,
+    lastUpdateCommand: report.command,
+  };
+  if (report.runtimeMode === 'co-located') provenance.toolkitRoot = ROOT;
+  else delete provenance.toolkitRoot;
   return {
     ...existingManifest,
     schema_version: existingManifest.schema_version ?? 'p2a.handoff.v1',
@@ -3564,12 +3619,7 @@ function mergeUpgradeManifest(existingManifest, report, appliedAt, appliedFiles,
       pruneResolvedManagedFileRecords(existingManifest.managedFiles, resolvedRetiredPaths),
       plannedManifest.managedFiles,
     ),
-    provenance: {
-      ...(existingManifest.provenance && typeof existingManifest.provenance === 'object' && !Array.isArray(existingManifest.provenance) ? existingManifest.provenance : {}),
-      toolkitRoot: ROOT,
-      lastUpdatedAt: appliedAt,
-      lastUpdateCommand: report.command,
-    },
+    provenance,
     updates: updates.slice(-20),
     notes: [...new Set(notes)],
   };
@@ -5016,7 +5066,20 @@ export function main(argv = process.argv.slice(2)) {
         printUpgradeApplyReport(writtenReport);
         return ['blocked', 'failed'].includes(writtenReport.status) ? 1 : 0;
       }
-      const writtenReport = writeUpgradePreviewReport(targetRoot, publicUpgradeReport(report));
+      const publicReport = publicUpgradeReport(report);
+      if (args.dryRun) {
+        printUpgradeDryRunReport(publicReport);
+        const applyPreflightRequested = args.command === 'upgrade'
+          && process.env[UPGRADE_APPLY_PREFLIGHT_ENV] === '1';
+        const applyPreflightBlockers = applyPreflightRequested
+          ? upgradeApplyBlockers(report)
+          : [];
+        if (applyPreflightRequested) {
+          console.log(`apply-preflight: ${applyPreflightBlockers.length ? 'blocked' : 'ready'}`);
+        }
+        return publicReport.status === 'fail' || applyPreflightBlockers.length ? 1 : 0;
+      }
+      const writtenReport = writeUpgradePreviewReport(targetRoot, publicReport);
       printUpgradeDryRunReport(writtenReport);
       return writtenReport.status === 'fail' ? 1 : 0;
     }
