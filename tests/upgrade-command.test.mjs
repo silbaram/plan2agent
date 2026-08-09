@@ -66,6 +66,11 @@ function isStagingInstall(args) {
   return args[0] === 'install' && !args.includes('--global');
 }
 
+function pathEndsWith(filePath, suffix) {
+  if (typeof filePath !== 'string') return false;
+  return filePath.replaceAll('\\', '/').endsWith(suffix.replaceAll('\\', '/'));
+}
+
 test('upgrade dry-run stages npm latest and delegates the project plan to that exact version', () => {
   const layout = createGlobalLayout();
   const calls = [];
@@ -181,7 +186,7 @@ test('upgrade apply preflights and installs the exact reviewed version before re
     assert.ok(preflight.args.includes('--dry-run'));
     assert.equal(preflight.args.includes('--apply'), false);
     assert.equal(preflight.options.env.P2A_UPGRADE_APPLY_PREFLIGHT, '1');
-    const reentry = calls.find((call) => call.args[0]?.endsWith('scripts/p2a.mjs'));
+    const reentry = calls.find((call) => pathEndsWith(call.args[0], 'scripts/p2a.mjs'));
     assert.ok(reentry);
     assert.ok(reentry.args.includes('--prune'));
     assert.equal(reentry.options.env.P2A_UPGRADE_REENTRY, '1');
@@ -317,6 +322,10 @@ test('Windows npm commands use a shell while the new p2a runs through Node direc
   assert.equal(
     globalPackageRoot('C:\\Users\\tester\\AppData\\Roaming\\npm', 'plan2agent', 'win32'),
     'C:\\Users\\tester\\AppData\\Roaming\\npm\\node_modules\\plan2agent',
+  );
+  assert.equal(
+    pathEndsWith('C:\\npm\\node_modules\\plan2agent\\scripts\\p2a.mjs', 'scripts/p2a.mjs'),
+    true,
   );
   const layout = createGlobalLayout();
   const calls = [];
