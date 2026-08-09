@@ -26,8 +26,11 @@ export function runValidator(args) {
   return spawnSync(process.execPath, [VALIDATOR, ...args], { cwd: ROOT, encoding: 'utf8' });
 }
 
-export function runIteration(args) {
-  return spawnSync(process.execPath, [ITERATION_CLI, ...args], { cwd: ROOT, encoding: 'utf8' });
+export function runIteration(args, options = {}) {
+  return spawnSync(process.execPath, [ITERATION_CLI, ...args], {
+    cwd: options.cwd ?? ROOT,
+    encoding: 'utf8',
+  });
 }
 
 export function runTasks(args, options = {}) {
@@ -78,8 +81,12 @@ export function fixtureFailureDetailArgs(label) {
   ];
 }
 
-export function runHandoff(args) {
-  return spawnSync(process.execPath, [HANDOFF_CLI, ...args], { cwd: ROOT, encoding: 'utf8' });
+export function runHandoff(args, options = {}) {
+  return spawnSync(process.execPath, [HANDOFF_CLI, ...args], {
+    cwd: ROOT,
+    encoding: 'utf8',
+    env: options.env ?? process.env,
+  });
 }
 
 export function runHandoffFrom(cwd, args) {

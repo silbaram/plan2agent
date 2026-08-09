@@ -25,3 +25,4 @@ import './next-decision.test.mjs';
 import './entry-contract.test.mjs';
 import './discovery-interview.test.mjs';
 import './npm-package.test.mjs';
+import './upgrade-command.test.mjs';

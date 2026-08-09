@@ -173,8 +173,8 @@ Plan2Agent는 하나의 `p2a` entrypoint를 설치합니다.
 | `p2a shape` | Gate ② constitution 상태, migration, 승인·철회를 관리합니다. |
 | `p2a info` | 프로젝트, artifact, task, run 상태를 표시합니다. |
 | `p2a doctor` | 설정, asset, 로컬 drift를 진단합니다. |
-| `p2a update` | 패키지가 관리하는 안전한 asset update를 미리 보거나 적용합니다. |
-| `p2a upgrade` | 더 넓은 범위의 toolkit migration을 미리 보거나 적용합니다. |
+| `p2a update` | manifest package version에 고정된 프로젝트 관리 asset을 갱신합니다. |
+| `p2a upgrade` | npm 전역 package 갱신을 미리 보거나 적용한 뒤 현재 프로젝트를 갱신합니다. |
 | `p2a enhance` | Memory와 proposal 같은 선택적 기능을 활성화합니다. |
 | `p2a validate` | 기획, task, run, eval, proposal, Memory artifact를 검증합니다. |
 | `p2a iteration` | iteration 초기화, close/open, diff, maintenance를 관리합니다. |
@@ -270,10 +270,10 @@ scripts/       toolkit, validation, runtime, eval, proposal, Memory CLI
 
 ## 프로젝트 상태
 
-Plan2Agent는 활발히 개발 중입니다. 버전 `0.2.0`은 공개 npm 패키지에 append-only 결정
-원장, 반복 단위 visual experience와 최종 review lifecycle, 이식 가능한 handoff evidence,
-강화된 실행 검증을 제공합니다. local-first 기획, 감독형 실행, 평가, proposal, 선택적
-Memory workflow도 함께 유지됩니다. 자율적인 provider 실행과 승인되지 않은 remote side
-effect는 기본 안전 모델의 범위 밖에 있습니다.
+Plan2Agent는 활발히 개발 중입니다. 버전 `0.2.1`은 공개 npm 패키지에 안전한 self-upgrade
+workflow를 추가하며, append-only 결정 원장, 반복 단위 visual experience와 최종 review
+lifecycle, 이식 가능한 handoff evidence, 강화된 실행 검증을 제공합니다. local-first 기획,
+감독형 실행, 평가, proposal, 선택적 Memory workflow도 함께 유지됩니다. 자율적인 provider
+실행과 승인되지 않은 remote side effect는 기본 안전 모델의 범위 밖에 있습니다.
 
 Plan2Agent는 [MIT License](LICENSE)로 제공됩니다.
