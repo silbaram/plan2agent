@@ -6,6 +6,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+### Changed
+
+- Run repository CI on pull requests targeting `main` so supported Node.js, fixture, and portability checks complete before merge.
+
 ## [0.2.2] - 2026-08-10
 
 ### Added

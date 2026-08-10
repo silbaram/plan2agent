@@ -43,15 +43,11 @@ test('repository release surfaces match the package support contract', () => {
   const workflow = readFileSync(path.join(ROOT, '.github', 'workflows', 'ci.yml'), 'utf8');
   assert.match(workflow, /actions\/checkout@v6/);
   assert.match(workflow, /actions\/setup-node@v6/);
-  assert.match(workflow, /\non:\n  pull_request_target:\n/);
-  assert.match(workflow, /\n    types:\n      - closed\n/);
+  assert.match(workflow, /\non:\n  pull_request:\n/);
   assert.match(workflow, /\n    branches:\n      - main\n/);
-  assert.doesNotMatch(workflow, /^  pull_request:/m);
+  assert.doesNotMatch(workflow, /^  pull_request_target:/m);
   assert.doesNotMatch(workflow, /^  push:/m);
-  assert.equal(
-    workflow.match(/^    if: github\.event\.pull_request\.merged == true$/gm)?.length,
-    3,
-  );
+  assert.doesNotMatch(workflow, /github\.event\.pull_request\.merged/);
   for (const nodeVersion of ['22', '24', '26']) {
     assert.match(workflow, new RegExp(`\\n\\s+- ${nodeVersion}\\n`));
   }
