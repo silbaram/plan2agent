@@ -201,18 +201,7 @@ function check(id, label, status, detail, fields = {}) {
   return { id, label, status, detail, ...fields };
 }
 
-function listedInManifest(manifest, relativePath, keys) {
-  if (!manifest) return null;
-  const normalized = normalizePath(relativePath);
-  const availableKeys = keys.filter((key) => Array.isArray(manifest[key]));
-  if (!availableKeys.length) return null;
-  return availableKeys.some((key) => manifest[key]
-    .filter((value) => typeof value === 'string')
-    .map(normalizePath)
-    .includes(normalized));
-}
-
-function manifestListingCheck(id, label, manifest, relativePaths, keys) {
+function manifestListingCheck(id, label, manifest, relativePaths, keys, managedPathPrefix, excludedPaths = []) {
   if (!manifest) {
     return check(id, label, 'warn', 'manifest is unavailable; listing consistency was not checked');
   }
@@ -220,11 +209,31 @@ function manifestListingCheck(id, label, manifest, relativePaths, keys) {
   if (!availableKeys.length) {
     return check(id, label, 'warn', `manifest does not expose ${keys.join(' or ')}`);
   }
-  const missing = relativePaths.filter((relativePath) => !listedInManifest(manifest, relativePath, availableKeys));
-  if (missing.length) {
-    return check(id, label, 'warn', `manifest listing is missing ${missing.length} expected file(s)`, { missing });
+  const expected = [...new Set(relativePaths.map(normalizePath))];
+  const expectedSet = new Set(expected);
+  const excluded = new Set(stringArrayValue(excludedPaths).map(normalizePath));
+  const listed = [...new Set(availableKeys.flatMap((key) => manifest[key])
+    .filter((value) => typeof value === 'string')
+    .map(normalizePath)
+    .filter((relativePath) => relativePath.startsWith(managedPathPrefix))
+    .filter((relativePath) => !excluded.has(relativePath)))]
+    .sort((left, right) => left.localeCompare(right));
+  const listedSet = new Set(listed);
+  const missing = expected.filter((relativePath) => !listedSet.has(relativePath));
+  const extra = listed.filter((relativePath) => !expectedSet.has(relativePath));
+  if (missing.length || extra.length) {
+    const fields = {};
+    if (missing.length) fields.missing = missing;
+    if (extra.length) fields.extra = extra;
+    return check(
+      id,
+      label,
+      'warn',
+      `manifest listing has ${missing.length} missing and ${extra.length} extra managed file(s)`,
+      fields,
+    );
   }
-  return check(id, label, 'pass', `manifest lists ${relativePaths.length} expected file(s)`);
+  return check(id, label, 'pass', `manifest lists ${expected.length} expected file(s)`);
 }
 
 function firstExistingFile(candidates) {
@@ -909,8 +918,24 @@ function diagnose(targetRootInput, options = {}) {
       : check('repo_only_scripts_absent', 'Repo-only scripts', 'pass', 'repo-only scripts are not installed in .plan2agent/scripts'),
   );
 
-  checks.push(manifestListingCheck('manifest_runtime_scripts', 'Manifest runtime scripts', manifest, runtimeScriptPaths, ['scriptFiles', 'toolFiles']));
-  checks.push(manifestListingCheck('manifest_runtime_schemas', 'Manifest runtime schemas', manifest, runtimeSchemaPaths, ['schemaFiles']));
+  checks.push(manifestListingCheck(
+    'manifest_runtime_scripts',
+    'Manifest runtime scripts',
+    manifest,
+    runtimeScriptPaths,
+    ['scriptFiles', 'toolFiles'],
+    '.plan2agent/scripts/',
+    manifest?.externalHarnessFiles,
+  ));
+  checks.push(manifestListingCheck(
+    'manifest_runtime_schemas',
+    'Manifest runtime schemas',
+    manifest,
+    runtimeSchemaPaths,
+    ['schemaFiles'],
+    '.plan2agent/schemas/',
+    manifest?.externalHarnessFiles,
+  ));
 
   const config = configResult.ok ? configResult.data : null;
   const verificationKeys = ['testCommand', 'lintCommand', 'typecheckCommand'];
@@ -951,6 +976,13 @@ function nextActions(status, checks) {
   }
   if (checks.some((item) => item.id === 'repo_only_scripts_absent' && item.status === 'warn')) {
     actions.push('Remove repo-only scripts from .plan2agent/scripts or regenerate the project harness.');
+  }
+  if (checks.some((item) => (
+    ['manifest_runtime_scripts', 'manifest_runtime_schemas'].includes(item.id)
+    && Array.isArray(item.extra)
+    && item.extra.length > 0
+  ))) {
+    actions.push('Run p2a update --dry-run to review extra managed inventory entries; use --apply --prune only after confirming unchanged files are retired.');
   }
   if (checks.some((item) => item.id === 'verification_commands' && item.status === 'warn')) {
     actions.push('Review .plan2agent/project.config.json and add test/lint/typecheck commands when available.');
@@ -1014,6 +1046,9 @@ function printHuman(report) {
     }
     if (Array.isArray(item.unexpected) && item.unexpected.length) {
       for (const unexpected of item.unexpected) console.log(`  unexpected: ${unexpected}`);
+    }
+    if (Array.isArray(item.extra) && item.extra.length) {
+      for (const extra of item.extra) console.log(`  extra: ${extra}`);
     }
   }
   console.log(`project state: ${report.projectState.state}`);

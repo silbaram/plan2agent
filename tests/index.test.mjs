@@ -4,6 +4,7 @@ import './e2e-artifact-root.test.mjs';
 import './project-config-detection.test.mjs';
 import './constitution.test.mjs';
 import './decisions.test.mjs';
+import './doctor.test.mjs';
 import './harness-update-style-contract.test.mjs';
 import './handoff-portability.test.mjs';
 import './iteration-memory-recall.test.mjs';

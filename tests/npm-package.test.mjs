@@ -371,6 +371,15 @@ test('the packed p2a binary supports core commands without a local runtime copy'
     assert.equal(manifest.provenance.packageVersion, PACKAGE_VERSION);
     assert.equal('toolkitRoot' in manifest.provenance, false);
 
+    const packageDoctor = runPacked(targetRoot, ['doctor', '--json']);
+    assert.equal(packageDoctor.status, 0, formatCommandResult(packageDoctor));
+    const packageDoctorReport = JSON.parse(packageDoctor.stdout);
+    for (const checkId of ['manifest_runtime_scripts', 'manifest_runtime_schemas']) {
+      const manifestCheck = packageDoctorReport.checks.find((check) => check.id === checkId);
+      assert.equal(manifestCheck.status, 'pass');
+      assert.equal('extra' in manifestCheck, false);
+    }
+
     const packageAgentPath = path.join(targetRoot, '.agents', 'skills', 'p2a-next', 'SKILL.md');
     rmSync(packageAgentPath);
     const packageUpdate = runPacked(targetRoot, ['update', '--apply']);

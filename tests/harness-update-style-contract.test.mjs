@@ -6,6 +6,7 @@ import { test } from 'node:test';
 import {
   formatCommandResult,
   makeTempDir,
+  runDoctor,
   ROOT,
   runHandoff,
 } from './helpers/fixtures.mjs';
@@ -73,6 +74,15 @@ test('update discovers retired managed files from the manifest and prunes only u
       sha256: createHash('sha256').update(retiredContent).digest('hex'),
     });
     writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
+
+    result = runDoctor(['--target', targetRoot, '--json']);
+    assert.equal(result.status, 0, formatCommandResult(result));
+    const doctorReport = JSON.parse(result.stdout);
+    const manifestScriptsCheck = doctorReport.checks.find((check) => check.id === 'manifest_runtime_scripts');
+    assert.equal(doctorReport.status, 'warn');
+    assert.equal(manifestScriptsCheck.status, 'warn');
+    assert.deepEqual(manifestScriptsCheck.extra, [retiredRelative]);
+    assert.ok(doctorReport.nextActions.some((action) => action.includes('p2a update --dry-run')));
 
     result = runHandoff(['update', '--target', targetRoot, '--dry-run']);
     assert.equal(result.status, 0, formatCommandResult(result));

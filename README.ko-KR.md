@@ -273,10 +273,11 @@ scripts/       toolkit, validation, runtime, eval, proposal, Memory CLI
 
 ## 프로젝트 상태
 
-Plan2Agent는 활발히 개발 중입니다. 버전 `0.2.1`은 공개 npm 패키지에 안전한 self-upgrade
-workflow를 추가하며, append-only 결정 원장, 반복 단위 visual experience와 최종 review
-lifecycle, 이식 가능한 handoff evidence, 강화된 실행 검증을 제공합니다. local-first 기획,
-감독형 실행, 평가, proposal, 선택적 Memory workflow도 함께 유지됩니다. 자율적인 provider
-실행과 승인되지 않은 remote side effect는 기본 안전 모델의 범위 밖에 있습니다.
+Plan2Agent는 활발히 개발 중입니다. 버전 `0.2.2`는 공개 npm 패키지의 안전한 self-upgrade
+workflow에 공개 CI 검증과 managed runtime drift 진단을 추가하며, append-only 결정 원장,
+반복 단위 visual experience와 최종 review lifecycle, 이식 가능한 handoff evidence, 강화된
+실행 검증을 제공합니다. local-first 기획, 감독형 실행, 평가, proposal, 선택적 Memory
+workflow도 함께 유지됩니다. 자율적인 provider 실행과 승인되지 않은 remote side effect는
+기본 안전 모델의 범위 밖에 있습니다.
 
 Plan2Agent는 [MIT License](LICENSE)로 제공됩니다.
