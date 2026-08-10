@@ -4,7 +4,7 @@
 import { existsSync, lstatSync, readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { GATE_FILES, GREENFIELD_REQUIRED_FILES } from './p2a_constants.mjs';
 import {
   PROJECT_RUNTIME_SCHEMA_FILES,
@@ -17,6 +17,8 @@ import {
   discoverEntryDocument,
   discoverFeatureRadarPreflightRuns,
 } from './p2a_radar_preflight.mjs';
+
+const RUNTIME_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 const EMPTY_TASK_COUNTS = {
   total: 0,
@@ -201,18 +203,84 @@ function check(id, label, status, detail, fields = {}) {
   return { id, label, status, detail, ...fields };
 }
 
-function listedInManifest(manifest, relativePath, keys) {
-  if (!manifest) return null;
-  const normalized = normalizePath(relativePath);
-  const availableKeys = keys.filter((key) => Array.isArray(manifest[key]));
-  if (!availableKeys.length) return null;
-  return availableKeys.some((key) => manifest[key]
-    .filter((value) => typeof value === 'string')
-    .map(normalizePath)
-    .includes(normalized));
+function packageIdentity(name, version) {
+  return `${name ?? 'unknown'}@${version ?? 'unknown'}`;
 }
 
-function manifestListingCheck(id, label, manifest, relativePaths, keys) {
+function runtimePackageVersionCheck(manifest, runtimeRoot, packageRuntime) {
+  const runtimeMode = manifest ? (packageRuntime ? 'package' : 'co-located') : 'unknown';
+  const packageResult = readJsonObject(path.join(runtimeRoot, 'package.json'));
+  if (!packageResult.ok) {
+    return check(
+      'runtime_package_version',
+      'Runtime package version',
+      'fail',
+      `running package metadata is unavailable: ${packageResult.error}`,
+      { runtimeMode },
+    );
+  }
+
+  const runningPackageName = stringValue(packageResult.data.name);
+  const runningPackageVersion = stringValue(packageResult.data.version);
+  if (!runningPackageName || !runningPackageVersion) {
+    return check(
+      'runtime_package_version',
+      'Runtime package version',
+      'fail',
+      'running package metadata does not expose a valid name and version',
+      { runtimeMode, runningPackageName, runningPackageVersion },
+    );
+  }
+
+  const manifestPackageName = stringValue(manifest?.provenance?.packageName);
+  const manifestPackageVersion = stringValue(manifest?.provenance?.packageVersion);
+  const fields = {
+    runtimeMode,
+    manifestPackageName,
+    manifestPackageVersion,
+    runningPackageName,
+    runningPackageVersion,
+  };
+  if (!manifest) {
+    return check(
+      'runtime_package_version',
+      'Runtime package version',
+      'warn',
+      'manifest is unavailable; package version consistency was not checked',
+      fields,
+    );
+  }
+  if (!manifestPackageName || !manifestPackageVersion) {
+    return check(
+      'runtime_package_version',
+      'Runtime package version',
+      'warn',
+      `manifest package identity is incomplete; running package is ${packageIdentity(runningPackageName, runningPackageVersion)}`,
+      fields,
+    );
+  }
+
+  const manifestIdentity = packageIdentity(manifestPackageName, manifestPackageVersion);
+  const runningIdentity = packageIdentity(runningPackageName, runningPackageVersion);
+  if (manifestPackageName !== runningPackageName || manifestPackageVersion !== runningPackageVersion) {
+    return check(
+      'runtime_package_version',
+      'Runtime package version',
+      'warn',
+      `manifest has ${manifestIdentity}; running package is ${runningIdentity}`,
+      fields,
+    );
+  }
+  return check(
+    'runtime_package_version',
+    'Runtime package version',
+    'pass',
+    `manifest and running package both use ${runningIdentity}`,
+    fields,
+  );
+}
+
+function manifestListingCheck(id, label, manifest, relativePaths, keys, managedPathPrefix, excludedPaths = []) {
   if (!manifest) {
     return check(id, label, 'warn', 'manifest is unavailable; listing consistency was not checked');
   }
@@ -220,11 +288,31 @@ function manifestListingCheck(id, label, manifest, relativePaths, keys) {
   if (!availableKeys.length) {
     return check(id, label, 'warn', `manifest does not expose ${keys.join(' or ')}`);
   }
-  const missing = relativePaths.filter((relativePath) => !listedInManifest(manifest, relativePath, availableKeys));
-  if (missing.length) {
-    return check(id, label, 'warn', `manifest listing is missing ${missing.length} expected file(s)`, { missing });
+  const expected = [...new Set(relativePaths.map(normalizePath))];
+  const expectedSet = new Set(expected);
+  const excluded = new Set(stringArrayValue(excludedPaths).map(normalizePath));
+  const listed = [...new Set(availableKeys.flatMap((key) => manifest[key])
+    .filter((value) => typeof value === 'string')
+    .map(normalizePath)
+    .filter((relativePath) => relativePath.startsWith(managedPathPrefix))
+    .filter((relativePath) => !excluded.has(relativePath)))]
+    .sort((left, right) => left.localeCompare(right));
+  const listedSet = new Set(listed);
+  const missing = expected.filter((relativePath) => !listedSet.has(relativePath));
+  const extra = listed.filter((relativePath) => !expectedSet.has(relativePath));
+  if (missing.length || extra.length) {
+    const fields = {};
+    if (missing.length) fields.missing = missing;
+    if (extra.length) fields.extra = extra;
+    return check(
+      id,
+      label,
+      'warn',
+      `manifest listing has ${missing.length} missing and ${extra.length} extra managed file(s)`,
+      fields,
+    );
   }
-  return check(id, label, 'pass', `manifest lists ${relativePaths.length} expected file(s)`);
+  return check(id, label, 'pass', `manifest lists ${expected.length} expected file(s)`);
 }
 
 function firstExistingFile(candidates) {
@@ -871,6 +959,9 @@ function diagnose(targetRootInput, options = {}) {
       : check('manifest', 'Install manifest', 'fail', `manifest.json is not readable: ${manifestResult.error}`, { path: '.plan2agent/manifest.json' }),
   );
 
+  const packageRuntime = usesPackageRuntime(manifest);
+  checks.push(runtimePackageVersionCheck(manifest, options.runtimeRoot ?? RUNTIME_ROOT, packageRuntime));
+
   const configPath = path.join(p2aDir, 'project.config.json');
   const configResult = readJsonObject(configPath);
   checks.push(
@@ -879,7 +970,6 @@ function diagnose(targetRootInput, options = {}) {
       : check('project_config', 'Project config', 'fail', `project.config.json is not readable: ${configResult.error}`, { path: '.plan2agent/project.config.json' }),
   );
 
-  const packageRuntime = usesPackageRuntime(manifest);
   const runtimeScriptPaths = packageRuntime ? [] : PROJECT_RUNTIME_SCRIPT_FILES.map((file) => `.plan2agent/scripts/${file}`);
   const missingRuntimeScripts = runtimeScriptPaths.filter((relativePath) => !isFile(path.join(targetRoot, relativePath)));
   checks.push(
@@ -909,8 +999,24 @@ function diagnose(targetRootInput, options = {}) {
       : check('repo_only_scripts_absent', 'Repo-only scripts', 'pass', 'repo-only scripts are not installed in .plan2agent/scripts'),
   );
 
-  checks.push(manifestListingCheck('manifest_runtime_scripts', 'Manifest runtime scripts', manifest, runtimeScriptPaths, ['scriptFiles', 'toolFiles']));
-  checks.push(manifestListingCheck('manifest_runtime_schemas', 'Manifest runtime schemas', manifest, runtimeSchemaPaths, ['schemaFiles']));
+  checks.push(manifestListingCheck(
+    'manifest_runtime_scripts',
+    'Manifest runtime scripts',
+    manifest,
+    runtimeScriptPaths,
+    ['scriptFiles', 'toolFiles'],
+    '.plan2agent/scripts/',
+    manifest?.externalHarnessFiles,
+  ));
+  checks.push(manifestListingCheck(
+    'manifest_runtime_schemas',
+    'Manifest runtime schemas',
+    manifest,
+    runtimeSchemaPaths,
+    ['schemaFiles'],
+    '.plan2agent/schemas/',
+    manifest?.externalHarnessFiles,
+  ));
 
   const config = configResult.ok ? configResult.data : null;
   const verificationKeys = ['testCommand', 'lintCommand', 'typecheckCommand'];
@@ -951,6 +1057,19 @@ function nextActions(status, checks) {
   }
   if (checks.some((item) => item.id === 'repo_only_scripts_absent' && item.status === 'warn')) {
     actions.push('Remove repo-only scripts from .plan2agent/scripts or regenerate the project harness.');
+  }
+  if (checks.some((item) => (
+    ['manifest_runtime_scripts', 'manifest_runtime_schemas'].includes(item.id)
+    && Array.isArray(item.extra)
+    && item.extra.length > 0
+  ))) {
+    actions.push('Run p2a update --dry-run to review extra managed inventory entries; use --apply --prune only after confirming unchanged files are retired.');
+  }
+  const packageVersionDrift = checks.find((item) => item.id === 'runtime_package_version' && item.status === 'warn');
+  if (packageVersionDrift?.runtimeMode === 'package') {
+    actions.push('Run p2a upgrade --dry-run to review the package and project version update plan.');
+  } else if (packageVersionDrift?.runtimeMode === 'co-located') {
+    actions.push('Run p2a update --dry-run from the toolkit checkout to review the co-located runtime update.');
   }
   if (checks.some((item) => item.id === 'verification_commands' && item.status === 'warn')) {
     actions.push('Review .plan2agent/project.config.json and add test/lint/typecheck commands when available.');
@@ -1014,6 +1133,13 @@ function printHuman(report) {
     }
     if (Array.isArray(item.unexpected) && item.unexpected.length) {
       for (const unexpected of item.unexpected) console.log(`  unexpected: ${unexpected}`);
+    }
+    if (Array.isArray(item.extra) && item.extra.length) {
+      for (const extra of item.extra) console.log(`  extra: ${extra}`);
+    }
+    if (item.id === 'runtime_package_version') {
+      console.log(`  manifest: ${packageIdentity(item.manifestPackageName, item.manifestPackageVersion)}`);
+      console.log(`  running: ${packageIdentity(item.runningPackageName, item.runningPackageVersion)}`);
     }
   }
   console.log(`project state: ${report.projectState.state}`);

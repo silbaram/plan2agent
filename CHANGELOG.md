@@ -6,10 +6,18 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+### Changed
+
+- Run repository CI on pull requests targeting `main` so supported Node.js, fixture, and portability checks complete before merge.
+
+## [0.2.2] - 2026-08-10
+
 ### Added
 
 - Add public GitHub Actions coverage for the supported Node.js versions, the full fixture gate, and macOS/Windows package portability smoke tests.
 - Document the repeatable npm, Git tag, GitHub Release, and post-release verification procedure.
+- Warn from `p2a doctor` when extra runtime script or schema entries remain in the manifest-managed inventory, without classifying external harness files as runtime drift.
+- Warn from `p2a doctor` when the manifest package identity or version differs from the running runtime, using offline checks and runtime-specific update guidance.
 
 ### Changed
 
@@ -57,7 +65,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Add package-runtime project initialization, managed provider assets, artifact validation, handoff, supervised execution, evaluation, proposal, and optional Memory workflows.
 - Ship canonical and generated integrations for Codex, Claude Code, and Gemini CLI.
 
-[Unreleased]: https://github.com/silbaram/plan2agent/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/silbaram/plan2agent/compare/v0.2.2...HEAD
+[0.2.2]: https://github.com/silbaram/plan2agent/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/silbaram/plan2agent/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/silbaram/plan2agent/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/silbaram/plan2agent/releases/tag/v0.1.0

@@ -102,7 +102,7 @@ p2a upgrade [--target <project-dir>] (--dry-run|--apply) [--tools all|none|codex
 
 ### `p2a doctor`
 
-프로젝트 진단 명령이다. 패키지가 제공하는 runtime script/schema 목록, `manifest.json`, `project.config.json`, 선택한 provider asset의 상태를 확인한다. package runtime으로 만든 새 `init` 프로젝트에는 로컬 `.plan2agent/scripts/`·`.plan2agent/schemas/`가 없어도 정상이며, 그 경로에 남아 있는 repo-only script는 경고한다. Clone checkout에서 만든 co-located runtime은 manifest에 기록된 script/schema 목록을 기준으로 진단한다.
+프로젝트 진단 명령이다. 패키지가 제공하는 runtime script/schema 목록, `manifest.json`, `project.config.json`, 선택한 provider asset의 상태를 확인한다. 실행 중인 runtime의 package name/version과 `manifest.provenance`가 다르면 npm 조회 없이 로컬 비교만으로 warning을 표시한다. package runtime에는 `p2a upgrade --dry-run`, clone/co-located runtime에는 `p2a update --dry-run` 검토를 안내한다. package runtime으로 만든 새 `init` 프로젝트에는 로컬 `.plan2agent/scripts/`·`.plan2agent/schemas/`가 없어도 정상이며, 그 경로에 남아 있는 repo-only script는 경고한다. Clone checkout에서 만든 co-located runtime은 manifest에 기록된 script/schema 목록을 기준으로 진단한다. 현재 runtime 목록에는 없지만 manifest의 관리 목록에 남은 script/schema entry도 `extra` warning으로 표시한다. `externalHarnessFiles`와 provider asset은 이 비교에서 제외하며, 파일을 자동 삭제하지 않고 `p2a update --dry-run` 검토를 안내한다.
 
 ```bash
 p2a doctor --target <project-dir>

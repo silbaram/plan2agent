@@ -1,9 +1,7 @@
 name: CI
 
 on:
-  pull_request_target:
-    types:
-      - closed
+  pull_request:
     branches:
       - main
 
@@ -16,7 +14,6 @@ concurrency:
 
 jobs:
   node-matrix:
-    if: github.event.pull_request.merged == true
     name: Node.js ${{ matrix.node }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -39,7 +36,6 @@ jobs:
         run: npm test
 
   full-fixtures:
-    if: github.event.pull_request.merged == true
     name: Full fixture gate
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -55,7 +51,6 @@ jobs:
         run: npm run test:full
 
   portability-smoke:
-    if: github.event.pull_request.merged == true
     name: ${{ matrix.os }} package and upgrade smoke
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15

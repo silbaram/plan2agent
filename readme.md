@@ -270,11 +270,11 @@ scripts/       toolkit, validation, runtime, eval, proposal, and Memory CLIs
 
 ## Project status
 
-Plan2Agent is under active development. Version `0.2.1` adds a safe self-upgrade workflow to the
-public npm package, alongside an append-only decision ledger, an iteration-level visual experience
-and final-review lifecycle, portable handoff evidence, and stricter execution validation. The
-local-first planning, supervised execution, evaluation, proposal, and optional Memory workflows
-remain available. Autonomous provider execution and unapproved remote side effects remain outside
-the default safety model.
+Plan2Agent is under active development. Version `0.2.2` adds public CI coverage and managed runtime
+drift diagnostics to the safe self-upgrade workflow in the npm package, alongside an append-only
+decision ledger, an iteration-level visual experience and final-review lifecycle, portable handoff
+evidence, and stricter execution validation. The local-first planning, supervised execution,
+evaluation, proposal, and optional Memory workflows remain available. Autonomous provider execution
+and unapproved remote side effects remain outside the default safety model.
 
 Plan2Agent is available under the [MIT License](LICENSE).
