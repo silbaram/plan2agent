@@ -5,9 +5,12 @@ import { test } from 'node:test';
 import {
   formatCommandResult,
   makeTempDir,
+  ROOT,
   runDoctor,
   runHandoff,
 } from './helpers/fixtures.mjs';
+
+const PACKAGE_JSON = JSON.parse(readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
 
 function scaffoldDoctorTarget(prefix, tools = 'codex') {
   const targetRoot = makeTempDir(prefix);
@@ -68,6 +71,44 @@ test('doctor reports extra managed scripts and schemas across JSON, human, and s
     assert.match(result.stdout, /extra: \.plan2agent\/scripts\/p2a_retired_doctor_example\.mjs/);
     assert.match(result.stdout, /extra: \.plan2agent\/schemas\/retired-doctor-example\.schema\.json/);
     assert.match(result.stdout, /p2a update --dry-run/);
+  } finally {
+    rmSync(targetRoot, { recursive: true, force: true });
+  }
+});
+
+test('doctor reports co-located package version drift with update guidance', () => {
+  const targetRoot = scaffoldDoctorTarget('p2a-doctor-package-version-');
+  try {
+    let result = runDoctor(['--target', targetRoot, '--json', '--strict']);
+    assert.equal(result.status, 0, formatCommandResult(result));
+    let report = JSON.parse(result.stdout);
+    let versionCheck = report.checks.find((check) => check.id === 'runtime_package_version');
+    assert.equal(versionCheck.status, 'pass');
+    assert.equal(versionCheck.runtimeMode, 'co-located');
+    assert.equal(versionCheck.manifestPackageName, PACKAGE_JSON.name);
+    assert.equal(versionCheck.manifestPackageVersion, PACKAGE_JSON.version);
+    assert.equal(versionCheck.runningPackageName, PACKAGE_JSON.name);
+    assert.equal(versionCheck.runningPackageVersion, PACKAGE_JSON.version);
+
+    const manifest = readManifest(targetRoot);
+    manifest.provenance.packageVersion = '0.0.0-test';
+    writeManifest(targetRoot, manifest);
+
+    result = runDoctor(['--target', targetRoot, '--json', '--strict']);
+    assert.equal(result.status, 1, formatCommandResult(result));
+    report = JSON.parse(result.stdout);
+    versionCheck = report.checks.find((check) => check.id === 'runtime_package_version');
+    assert.equal(versionCheck.status, 'warn');
+    assert.equal(versionCheck.runtimeMode, 'co-located');
+    assert.equal(versionCheck.manifestPackageVersion, '0.0.0-test');
+    assert.equal(versionCheck.runningPackageVersion, PACKAGE_JSON.version);
+    assert.ok(report.nextActions.some((action) => action.includes('p2a update --dry-run')));
+    assert.equal(report.nextActions.some((action) => action.includes('p2a upgrade --dry-run')), false);
+
+    result = runDoctor(['--target', targetRoot]);
+    assert.equal(result.status, 0, formatCommandResult(result));
+    assert.match(result.stdout, /manifest: plan2agent@0\.0\.0-test/);
+    assert.match(result.stdout, new RegExp(`running: ${PACKAGE_JSON.name}@${PACKAGE_JSON.version.replaceAll('.', '\\.')}`));
   } finally {
     rmSync(targetRoot, { recursive: true, force: true });
   }

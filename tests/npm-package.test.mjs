@@ -374,11 +374,15 @@ test('the packed p2a binary supports core commands without a local runtime copy'
     const packageDoctor = runPacked(targetRoot, ['doctor', '--json']);
     assert.equal(packageDoctor.status, 0, formatCommandResult(packageDoctor));
     const packageDoctorReport = JSON.parse(packageDoctor.stdout);
-    for (const checkId of ['manifest_runtime_scripts', 'manifest_runtime_schemas']) {
+    for (const checkId of ['manifest_runtime_scripts', 'manifest_runtime_schemas', 'runtime_package_version']) {
       const manifestCheck = packageDoctorReport.checks.find((check) => check.id === checkId);
       assert.equal(manifestCheck.status, 'pass');
       assert.equal('extra' in manifestCheck, false);
     }
+    const packageVersionCheck = packageDoctorReport.checks.find((check) => check.id === 'runtime_package_version');
+    assert.equal(packageVersionCheck.runtimeMode, 'package');
+    assert.equal(packageVersionCheck.manifestPackageVersion, PACKAGE_VERSION);
+    assert.equal(packageVersionCheck.runningPackageVersion, PACKAGE_VERSION);
 
     const packageAgentPath = path.join(targetRoot, '.agents', 'skills', 'p2a-next', 'SKILL.md');
     rmSync(packageAgentPath);
@@ -391,6 +395,15 @@ test('the packed p2a binary supports core commands without a local runtime copy'
 
     updatedPackageManifest.provenance.packageVersion = '0.0.0-test';
     writeFileSync(manifestPath, `${JSON.stringify(updatedPackageManifest, null, 2)}\n`, 'utf8');
+    const mismatchedDoctor = runPacked(targetRoot, ['doctor', '--json', '--strict']);
+    assert.equal(mismatchedDoctor.status, 1, formatCommandResult(mismatchedDoctor));
+    const mismatchedDoctorReport = JSON.parse(mismatchedDoctor.stdout);
+    const mismatchedVersionCheck = mismatchedDoctorReport.checks.find((check) => check.id === 'runtime_package_version');
+    assert.equal(mismatchedVersionCheck.status, 'warn');
+    assert.equal(mismatchedVersionCheck.runtimeMode, 'package');
+    assert.equal(mismatchedVersionCheck.manifestPackageVersion, '0.0.0-test');
+    assert.equal(mismatchedVersionCheck.runningPackageVersion, PACKAGE_VERSION);
+    assert.ok(mismatchedDoctorReport.nextActions.some((action) => action.includes('p2a upgrade --dry-run')));
     const mismatchedUpdate = runPacked(targetRoot, ['update', '--dry-run']);
     assert.notEqual(mismatchedUpdate.status, 0);
     assert.match(formatCommandResult(mismatchedUpdate), /update is pinned to manifest package/);
