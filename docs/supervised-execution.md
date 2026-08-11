@@ -60,6 +60,20 @@ Plan2Agent는 Gate A-C planning harness 이후, 승인된 ready task 1건 또는
 p2a doctor --dev
 ```
 
+#### 개발 중 사용자 시각 검수
+
+`reviewPasses.visual`의 iteration 최종 게이트와 별개로, UI task는 일반 구현 run을 열어 둔 채 사용자 시각 검수를 반복한다.
+
+```text
+p2a execute start <task>     # 일반 구현 run, task in_progress
+  → 구현
+  → 사용자 시각 검수 → drift 수정 → 재검수 (필요한 만큼 반복)
+  → 만족
+p2a execute finish           # task-level 시각 검수 통과 지점
+```
+
+일반 구현 run은 `changedFiles`를 전제하므로 이 반복 중 같은 할당 workspace에서 계속 수정해도 된다. Workspace 불변과 빈 `changedFiles` 제약은 `final_visual_review`와 `final_acceptance_review` run에만 적용된다. 이 task-level 루프는 비게이팅·무기록이며 추가 review run, sidecar, screenshot hash, verdict를 만들지 않고 iteration 최종 `confirm_ui`를 대체하지도 않는다. `finish` 후에 시각 문제를 발견한 경우에만 `p2a tasks todo <id> --reopen --note <reason>`으로 task를 다시 연 뒤 수정한다.
+
 ## 2. 감독형 자동화 경계
 
 허용:
@@ -125,7 +139,7 @@ p2a execute start \
 
 5. 독립 monitor 결과를 run 파일 옆의 `.monitor-verdict.json` sidecar에 기록한다. 예를 들어 run ref가 `runs/<iteration-id>/<run-id>.json`이면 verdict 경로는 `runs/<iteration-id>/<run-id>.monitor-verdict.json`이다. 이 파일은 CLI 명령으로 임의 생성하는 대신, foreground 실행 owner가 §6의 표준 JSON shape으로 작성한다.
 
-   `reviewPasses.visual`이 `off`가 아닐 때 `full + current_iteration` task는 `workKind`와 `visualImpact.screenStates`로 UI 영향 범위만 명시한다. 일반 구현 run은 기능 검증으로 끝나며 visual sidecar를 요구하지 않는다. 필요하면 `p2a runs record --visual-feedback note|concern ...`으로 비차단 early feedback을 `visualFeedback`에 남긴다. 모든 task를 통합한 뒤 `p2a execute review --artifacts <root>`로 iteration당 하나의 `runKind: final_visual_review` run을 연다. 이 run은 Gate B에서 전체 승인 screen/state/viewport/접근성 계약을 직접 가져오고 canonical workspace, isolation 없음, 변경 파일 없음을 강제한다. `p2a runs revision`으로 application workspace snapshot SHA-256을 계산한 뒤 실제 앱의 정확한 크기 PNG와 `p2a.visual_accessibility_report.v1` 보고서를 만들고, 파일 SHA-256·capture metadata·`iteration_id`·workspace identity/revision과 승인된 experience/prototype 비교 결과를 `.visual-review.json`에 기록한다. Sidecar에는 task ownership을 기록하지 않으며 run의 task id는 실패 시 remediation pointer로만 사용한다. Workspace snapshot은 symlink file target의 실제 bytes를 포함하되 제외 디렉터리를 symlink alias로 다시 포함하지 않으며, workspace 밖의 directory symlink는 거부한다. Review finish는 sidecar revision을 현재 workspace와 비교하고 정확한 sidecar 바이트를 `visualReviewEvidenceSha256`으로 봉인한다. Run-directory/close-ready/`p2a next`는 이 단일 최종 run의 revision과 digest를 재검증한다. Review가 failed/blocked면 remediation owner task를 `todo`로 reopen한 뒤 구현과 최종 review를 반복한다.
+   `full + current_iteration` task는 `workKind`와 `visualImpact.screenStates`로 UI 영향 범위만 명시한다. 일반 구현 run은 기능 검증과 §1의 사용자 시각 검수 반복을 모두 통과한 뒤 끝내며 visual sidecar를 요구하지 않는다. 필수 검수 반복 자체는 `visualFeedback`이나 별도 review evidence로 기록하지 않는다. `reviewPasses.visual`이 `off`가 아니면 모든 task를 통합한 뒤 `p2a execute review --artifacts <root>`로 iteration당 하나의 `runKind: final_visual_review` run을 연다. 이 run은 Gate B에서 전체 승인 screen/state/viewport/접근성 계약을 직접 가져오고 canonical workspace, isolation 없음, 변경 파일 없음을 강제한다. `p2a runs revision`으로 application workspace snapshot SHA-256을 계산한 뒤 실제 앱의 정확한 크기 PNG와 `p2a.visual_accessibility_report.v1` 보고서를 만들고, 파일 SHA-256·capture metadata·`iteration_id`·workspace identity/revision과 승인된 experience/prototype 비교 결과를 `.visual-review.json`에 기록한다. Sidecar에는 task ownership을 기록하지 않으며 run의 task id는 실패 시 remediation pointer로만 사용한다. Workspace snapshot은 symlink file target의 실제 bytes를 포함하되 제외 디렉터리를 symlink alias로 다시 포함하지 않으며, workspace 밖의 directory symlink는 거부한다. Review finish는 sidecar revision을 현재 workspace와 비교하고 정확한 sidecar 바이트를 `visualReviewEvidenceSha256`으로 봉인한다. Run-directory/close-ready/`p2a next`는 이 단일 최종 run의 revision과 digest를 재검증한다. Review가 failed/blocked면 remediation owner task를 `todo`로 reopen한 뒤 구현과 최종 review를 반복한다.
 
    비UI iteration은 기본 `reviewPasses.acceptance: on`에서 모든 task 통합 뒤 `p2a execute accept --artifacts <root> --agent-tool <reviewer>`를 실행한다. 이 명령은 Gate B `product.core_flows`와 `product.success_criteria`를 계약으로 고정한 `final_acceptance_review` run을 canonical workspace, isolation 없음, 변경 파일 없음으로 연다. Owner가 각 동작을 `p2a runs verify --verify-command 'custom:<command>'`로 실제 실행하고, read-only `p2a-acceptance-reviewer`가 run verification과 일치하는 `command`·`source: command|config`·정수 `exitCode`·`stdoutTail`을 `.acceptance-review.json`에 기록한다. exit 0이어도 출력이 비어 있거나 의미 없는 결과면 `block`이다. 모든 기준이 실제 동작으로 확인된 `confirm_behavior`만 finish할 수 있고 exact sidecar hash와 canonical workspace revision이 run에 봉인된다. 이후 workspace 변경은 새 acceptance review를 요구한다.
 
