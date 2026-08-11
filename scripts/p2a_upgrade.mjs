@@ -110,7 +110,8 @@ function parseNpmScalar(output, label) {
   if (!output) throw new Error(`${label} returned no value`);
   try {
     const parsed = JSON.parse(output);
-    if (typeof parsed === 'string' && parsed.trim()) return parsed.trim();
+    const value = Array.isArray(parsed) && parsed.length === 1 ? parsed[0] : parsed;
+    if (typeof value === 'string' && value.trim()) return value.trim();
   } catch {
     if (output.trim()) return output.trim();
   }

@@ -71,7 +71,7 @@ function pathEndsWith(filePath, suffix) {
   return filePath.replaceAll('\\', '/').endsWith(suffix.replaceAll('\\', '/'));
 }
 
-test('upgrade dry-run stages npm latest and delegates the project plan to that exact version', () => {
+test('upgrade dry-run accepts singleton-array npm latest and delegates the project plan to that exact version', () => {
   const layout = createGlobalLayout();
   const calls = [];
   const output = createIo();
@@ -79,7 +79,7 @@ test('upgrade dry-run stages npm latest and delegates the project plan to that e
     const runner = (command, args, options) => {
       calls.push({ command, args, options });
       if (command === 'npm' && args[0] === 'prefix') return { status: 0, stdout: `${layout.prefix}\n`, stderr: '' };
-      if (command === 'npm' && args[0] === 'view') return { status: 0, stdout: '"2.0.0"\n', stderr: '' };
+      if (command === 'npm' && args[0] === 'view') return { status: 0, stdout: '["2.0.0"]\n', stderr: '' };
       if (command === 'npm' && isStagingInstall(args)) {
         stagePackage(options);
         return { status: 0, stdout: '', stderr: '' };
