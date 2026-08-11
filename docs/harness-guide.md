@@ -96,7 +96,16 @@ Spec approval, 승인 감사 정보, open decision 해소, 모든 `CQ-n` disposi
 
 새 spec은 화면 유무와 함께 이번 반복의 시각 설계 범위를 `none|minimal|reuse|full`, 시점을 `not_applicable|current_iteration|deferred_iteration`으로 분류한다. 화면이 있다는 사실만으로 full design을 강제하지 않는다. 기능 우선 반복은 `minimal` 또는 `full + deferred_iteration`으로 진행하고, 다음 기능 반복에서 `full + current_iteration`으로 올릴 수 있다.
 
-`full + current_iteration`이면 별도 Gate를 추가하지 않고 Gate B 안에서 Visual Experience Track을 실행한다. 화면별 사용자 목표, 진입점, primary action, 정보 영역, 상태, responsive/accessibility 규칙을 `experience-spec.json`으로 구조화하고, 최소 2개의 서로 다른 passive offline HTML/CSS 후보를 만든다. 각 `screen_states` 상태는 `state_artifacts`로 실제 HTML 문서나 fragment에 매핑되고 진입점의 local anchor navigation으로 도달할 수 있어야 한다. Executable JavaScript와 inline event handler는 허용하지 않는다. 사용자가 실제 HTML을 열어 한 후보를 선택·승인해야 Gate B가 통과한다. 이미지 mockup은 보조 자료일 수 있지만 reachable state가 있는 HTML을 대체하지 않는다.
+`full + current_iteration`이면 별도 Gate를 추가하지 않고 Gate B 안에서 Visual Experience Track을 실행한다. 화면별 사용자 목표, 진입점, primary action, 정보 영역, 상태, responsive/accessibility 규칙을 `experience-spec.json`으로 구조화하고, 최소 2개의 서로 다른 passive offline HTML/CSS 후보를 만든다. 텍스트를 담는 모든 화면은 `content-stress-<case>` 상태를 최소 하나 선언하고, 화면에 해당하는 현실적으로 가장 긴 문자열, 빈 값 또는 1글자, 최대 개수 리스트, 다국어 프로젝트의 가장 긴 로케일 문자열 케이스를 그 상태들에서 모두 다룬다. 같은 상태 이름을 `experience-spec.json`과 각 `prototype.json`에 기록하고, 별도 HTML 파일 대신 후보의 `index.html`에 `id="state-content-stress-<case>"` anchor section을 넣어 `state_artifacts`의 `index.html#state-content-stress-<case>` fragment로 매핑하며 entrypoint에서 도달 가능하게 만든다. 후보마다 말줄임과 다중 줄 래핑처럼 긴 텍스트 처리 방식을 다르게 보여 주고, 사용자가 Gate B에서 그 처리 방식을 명시적으로 선택한다. Executable JavaScript와 inline event handler는 허용하지 않는다. 사용자가 실제 HTML을 열어 한 후보를 선택·승인해야 Gate B가 통과한다. 이미지 mockup은 보조 자료일 수 있지만 reachable state가 있는 HTML을 대체하지 않는다.
+
+구현 중 사용자의 시각 수정 지시는 "Gate B에서 승인한 내용과 다른가?"로 분류한다.
+
+| 종류 | 정의 | 처리 |
+| --- | --- | --- |
+| **drift** | 구현이 승인된 `experience-spec.json`과 선택 prototype을 따르지 못했다. | 열려 있는 일반 구현 run에서 앱을 수정한다. 재승인은 필요 없다. |
+| **contract** | 사용자가 승인된 시각 계약 자체와 다른 방향을 결정했다. | 구현 closeout을 멈추고 harness owner가 영향받은 시각 산출물을 draft/candidate로 되돌린 뒤 `experience-spec.json`과 선택 후보 `index.html`의 해당 상태를 수정한다. `prototype.json`의 파일 hash, prototype manifest와 experience spec의 SHA-256 참조를 다시 계산하고 Gate B 명시적 재승인을 받은 뒤 구현을 계속한다. |
+
+Contract 변경을 drift로 처리하면 승인 산출물과 앱이 영구히 불일치하므로 최종 시각 리뷰가 정당하게 block한다.
 
 ### Gate C
 
@@ -428,9 +437,9 @@ p2a iteration init \
 2. 실행할 task를 정한 뒤 `p2a execute start --artifacts .plan2agent/artifacts/<project_id> --task <task-id>`로 run을 만들고 상태를 `in_progress`로 바꾼다. dependency가 완료되지 않은 task는 시작할 수 없다.
 3. `p2a execute start`가 출력한 launcher prompt를 agent CLI에 붙여넣는다. 별도 확인이 필요하면 `p2a tasks prompt --artifacts .plan2agent/artifacts/<project_id> <task-id>`로 같은 task context를 다시 볼 수 있다.
 4. Claude Code 또는 Codex 같은 write-capable agent 세션에서 prompt를 실행하고, 코드 변경과 검증은 해당 작업 브랜치에서 수행한다. Gemini CLI는 현재 review/monitor 같은 read-only 보조로만 사용한다.
-5. UI task의 `visualImpact`는 구현 중 확인할 screen/state 범위만 알려 준다. 일반 구현 run에는 visual sidecar를 만들지 않으며, 승인 prototype은 구현 방향으로 사용하되 구현 증거로 재사용하지 않는다.
-6. acceptance criteria와 필요한 테스트가 통과하면 `p2a execute finish --artifacts .plan2agent/artifacts/<project_id> --run-id <run-id> --test --lint --typecheck --collect-git`로 검증, run closeout, task done/block 전이를 한 번에 기록한다. `done`은 최신 run이 현재 iteration/task graph에 속하고 실행된 verification(`source: config|command`, `exitCode: 0`)이 있는 경우만 허용한다. 막히면 failed/blocked finish에 `--failure-class`, `--repro-step`, `--localization`, `--guard`를 함께 기록한다. 이후 다시 `ready`를 확인해 다음 task를 진행한다.
-7. 모든 task를 완료하고 canonical workspace에 통합한 뒤 최종 review-only run을 연다. Visual iteration은 `p2a execute review`로 실제 앱 matrix와 접근성의 `confirm_ui`를 봉인한다. 비UI iteration은 기본 `reviewPasses.acceptance: on`에서 `p2a execute accept --artifacts .plan2agent/artifacts/<project_id> --agent-tool <reviewer>`를 실행하고, owner가 실제 동작 명령을 `p2a runs verify`로 기록한 뒤 read-only reviewer의 `confirm_behavior` sidecar를 봉인한다. 두 run 모두 `isolation: none`과 빈 `changedFiles`를 강제하며, 실패하면 remediation owner task가 다시 열린다.
+5. UI task의 `visualImpact`는 구현 중 확인할 screen/state 범위만 알려 준다. 일반 구현 run에는 visual sidecar를 만들지 않으며, 승인 prototype은 구현 방향으로 사용하되 구현 증거로 재사용하지 않는다. 구현 뒤에는 run을 열어 둔 채 사용자 시각 검수와 drift 수정을 만족할 때까지 반복한다. 이 비게이팅·무기록 루프는 추가 run, sidecar, hash, verdict를 만들지 않는다.
+6. 사용자 시각 검수와 acceptance criteria 및 필요한 테스트가 통과하면 `p2a execute finish --artifacts .plan2agent/artifacts/<project_id> --run-id <run-id> --test --lint --typecheck --collect-git`로 검증, run closeout, task done/block 전이를 한 번에 기록한다. `finish`가 task-level 시각 검수 통과 지점이다. `done`은 최신 run이 현재 iteration/task graph에 속하고 실행된 verification(`source: config|command`, `exitCode: 0`)이 있는 경우만 허용한다. 막히면 failed/blocked finish에 `--failure-class`, `--repro-step`, `--localization`, `--guard`를 함께 기록한다. `finish` 이후 시각 문제를 발견한 경우에만 `p2a tasks todo <id> --reopen --note <reason>`으로 task를 다시 연다. 이후 다시 `ready`를 확인해 다음 task를 진행한다.
+7. 모든 task를 완료하고 canonical workspace에 통합한 뒤 활성화된 최종 review-only run을 연다. Visual iteration은 `reviewPasses.visual`이 `off`가 아닐 때 iteration당 한 번 `p2a execute review`로 실제 앱 matrix와 접근성의 `confirm_ui`를 봉인한다. 비UI iteration은 기본 `reviewPasses.acceptance: on`에서 `p2a execute accept --artifacts .plan2agent/artifacts/<project_id> --agent-tool <reviewer>`를 실행하고, owner가 실제 동작 명령을 `p2a runs verify`로 기록한 뒤 read-only reviewer의 `confirm_behavior` sidecar를 봉인한다. 두 run 모두 `isolation: none`과 빈 `changedFiles`를 강제하며, 실패하면 remediation owner task가 다시 열린다.
 
 이미 승인 산출물을 별도 대상 프로젝트로 복사한 legacy handoff 프로젝트에서는 `.plan2agent/project.config.json.taskGraph`가 가리키는 flat graph를 `--graph`로 명시할 수 있다.
 

@@ -6,9 +6,13 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+## [0.2.3] - 2026-08-11
+
 ### Changed
 
 - Run repository CI on pull requests targeting `main` so supported Node.js, fixture, and portability checks complete before merge.
+- Require full current-iteration visual prototype candidates to expose screen-level content-stress states as reachable `index.html` fragments and make long-content treatment an explicit Gate B choice.
+- Perform repeated, unrecorded user visual inspection before implementation finish, while routing implementation drift directly to correction and visual contract changes through artifact revision and Gate B reapproval.
 
 ## [0.2.2] - 2026-08-10
 
@@ -65,7 +69,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Add package-runtime project initialization, managed provider assets, artifact validation, handoff, supervised execution, evaluation, proposal, and optional Memory workflows.
 - Ship canonical and generated integrations for Codex, Claude Code, and Gemini CLI.
 
-[Unreleased]: https://github.com/silbaram/plan2agent/compare/v0.2.2...HEAD
+[Unreleased]: https://github.com/silbaram/plan2agent/compare/v0.2.3...HEAD
+[0.2.3]: https://github.com/silbaram/plan2agent/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/silbaram/plan2agent/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/silbaram/plan2agent/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/silbaram/plan2agent/compare/v0.1.0...v0.2.0
