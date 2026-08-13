@@ -282,6 +282,7 @@ Prompt는 다음 계층을 한 번씩만 조립한다.
 ## 12. 호환 마이그레이션
 
 ### Phase 0 — baseline 보존과 계측 구축
+
 - `10~50` graph를 A로 동결해 baseline을 수집하고 분할은 유지한다.
 - Phase 0에 monitor 헌법 검사를 A/B에 적용한다.
 - `run.schema.json`에 usage/token과 interruption 필드를 추가하고 Gate 복귀 이벤트 기록 경로를 정의한다. 현재 schema에는 이 데이터가 없어 단순히 “측정”할 수 없다(`schemas/run.schema.json:6-28,182-268`).
@@ -352,10 +353,12 @@ Adaptive를 기본값으로 전환하려면 추가 구현 지시 없이 완료�
 
 ## 14. 우선순위와 실행 순서
 
+우선순위는 중요도, Phase는 실행 순서다.
+
 | 우선순위 | Phase | 개선 | 이유 |
 | --- | --- | --- | --- |
 | P0 | 0 | monitor에 constitution architecture/stack/prohibitions/style 검사 추가 | monitor 확장이라 기구는 그대로다. A/B 적용으로 rule violation을 비교한다. informational style 중복은 finish·baseline에 영향이 없다. |
-| P0 | 1 | style·milestone review pass와 사이드카 규칙 제거 | p2a-style-rater/p2a-milestone-reviewer, SKILL 규칙·config 설정을 지운다(SKILL.md:139-182,220-224, p2a_project_config.mjs:228-244). 정본은 8,570 bytes, reviewer는 3 → 1로 준다. |
+| P0 | 1 | style·milestone review pass와 사이드카 규칙 제거 | style·milestone reviewer와 SKILL/config 삭제(SKILL.md:139-166, 182, 220-224, p2a_project_config.mjs:228-244). 8,570 bytes, 3 → 1. |
 | P0 | 0 | `.claude/agents/*.md`의 `model:` pin 12개 제거 | 세션 모델을 상속해야 생산자보다 약한 심사자 고정을 없애고 §13 model profile A/B가 가능하다. |
 | P0 | 1 | `schemas/spec.schema.json`의 `product`에 `must_preserve` 추가 | §8 파생 전용 envelope의 전제이며, 없으면 회귀 방지 계약이 실행 시점 저작으로 되돌아간다. |
 | P0 | 1 | 자율 차단 조항 세 개 해제 | Provider Confinement는 동일 workspace 안전 경계 안의 무인 실행을 허용하도록 재작성하고, `p2a next` 개발 loop의 매 단계 승인을 없애며, implementer에 WebSearch/WebFetch를 부여한다. |
