@@ -89,7 +89,7 @@ Task는 없애지 않는다. 다중 owner·실제 선후 관계·장기 재개�
 
 ## 4. 현재 구조의 문제
 
-Gate B 계약을 task description·acceptance·prompt로 반복하면 drift·중복이 생기고 조사 전에 파일·순서를 고정한다. `10~50` 목표는 작은 slice도 선형 run으로 쪼개지만 task 수는 품질 지표가 아니다(§3 `분할 뒤처리 기구`·`실제 graph 형태`·`prompt 중복`). 별도 owner, 실제 dependency, 독립 검증·rollback 또는 장기 재개 때만 분할한다. UI도 task별 `visualImpact`가 아니라 승인된 전체 screen/state/viewport와 통합 render로 판정한다.
+Gate B 계약을 task description·acceptance·prompt로 반복하면 drift·중복이 생기고 조사 전에 파일·순서를 고정한다. `10~50` 목표는 작은 slice도 선형 run으로 쪼개지만 task 수는 품질 지표가 아니다(§3 `분할 뒤처리 기구`·`fixture 분할`·`task 계약과 중복`). 별도 owner, 실제 dependency, 독립 검증·rollback 또는 장기 재개 때만 분할한다. UI도 task별 `visualImpact`가 아니라 승인된 전체 screen/state/viewport와 통합 render로 판정한다.
 
 ## 5. 설계 원칙
 
@@ -282,8 +282,8 @@ Prompt는 다음 계층을 한 번씩만 조립한다.
 ## 12. 호환 마이그레이션
 
 ### Phase 0 — baseline 보존과 계측 구축
-
-- 현재 `10~50` 지향 task graph workflow를 비교군 A로 동결하고 먼저 baseline을 수집한다. 이 단계에서는 task 분할 workflow를 변경하지 않는다.
+- `10~50` graph를 A로 동결해 baseline을 수집하고 분할은 유지한다.
+- Phase 0에 monitor 헌법 검사를 A/B에 적용한다.
 - `run.schema.json`에 usage/token과 interruption 필드를 추가하고 Gate 복귀 이벤트 기록 경로를 정의한다. 현재 schema에는 이 데이터가 없어 단순히 “측정”할 수 없다(`schemas/run.schema.json:6-28,182-268`).
 - eval fixture에서는 milestone/visual pass를 강제로 `on`으로 실행해 선택적 기본값으로 인한 누락을 막는다.
 - `user correction count`와 `implementation-decision interruption count`는 자동 관측할 수 없으므로 수동 주석 protocol을 정의한다. 신뢰도 있는 protocol을 만들지 못하면 두 지표를 비교 판정에서 제외한다.
@@ -352,11 +352,10 @@ Adaptive를 기본값으로 전환하려면 추가 구현 지시 없이 완료�
 
 ## 14. 우선순위와 실행 순서
 
-우선순위는 중요도, Phase는 실행 순서다. 심사·계측 변경은 비교군 양쪽에 같게 적용하고 task 분할 변경은 baseline 봉인 뒤 적용한다.
-
 | 우선순위 | Phase | 개선 | 이유 |
 | --- | --- | --- | --- |
-| P0 | 1 | monitor에 constitution architecture/stack/prohibitions/style 검사를 추가하고 동시에 `style`·`milestone` review pass와 사이드카 규칙 제거 | informational인 style-rater와 milestone-reviewer 판정을 유일한 finish 차단 monitor가 흡수해 reviewer 총량을 3 → 1로 줄인다. |
+| P0 | 0 | monitor에 constitution architecture/stack/prohibitions/style 검사 추가 | monitor 확장이라 기구는 그대로다. A/B 적용으로 rule violation을 비교한다. informational style 중복은 finish·baseline에 영향이 없다. |
+| P0 | 1 | style·milestone review pass와 사이드카 규칙 제거 | p2a-style-rater/p2a-milestone-reviewer, SKILL 규칙·config 설정을 지운다(SKILL.md:139-182,220-224, p2a_project_config.mjs:228-244). 정본은 8,570 bytes, reviewer는 3 → 1로 준다. |
 | P0 | 0 | `.claude/agents/*.md`의 `model:` pin 12개 제거 | 세션 모델을 상속해야 생산자보다 약한 심사자 고정을 없애고 §13 model profile A/B가 가능하다. |
 | P0 | 1 | `schemas/spec.schema.json`의 `product`에 `must_preserve` 추가 | §8 파생 전용 envelope의 전제이며, 없으면 회귀 방지 계약이 실행 시점 저작으로 되돌아간다. |
 | P0 | 1 | 자율 차단 조항 세 개 해제 | Provider Confinement는 동일 workspace 안전 경계 안의 무인 실행을 허용하도록 재작성하고, `p2a next` 개발 loop의 매 단계 승인을 없애며, implementer에 WebSearch/WebFetch를 부여한다. |
@@ -365,7 +364,7 @@ Adaptive를 기본값으로 전환하려면 추가 구현 지시 없이 완료�
 | P0 | 1 | 현재 시각 계약과 owner render evidence를 공통 close 조건에 연결 | reviewer 옵션과 제품 acceptance를 분리하되 새 review pass를 만들지 않는다. |
 | P1 | 2 | direct/planned를 기존 run/verify 기록 위에 opt-in | task 대신 verify checkpoint를 쓰고 orchestrated graph는 필요한 경우만 유지한다. |
 | P1 | 2 | task/model/UI eval과 통합 acceptance 실행 | 기본값 전환 근거를 만들며 반복 사용자 시각 검수 제거 여부도 여기서 결정한다. |
-| P2 | 3 | legacy graph와 중복 milestone/batch 기구 정리 | 사용량과 회귀 결과를 확인해 compatibility surface를 순감소시킨다. |
+| P2 | 3 | legacy graph와 중복 milestone/batch 기구 정리 | 남은 §3 reference/schema 22,580 bytes와 legacy graph 표면은 Phase 3에서 지운다. |
 
 ## 15. 완료 조건
 
