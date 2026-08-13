@@ -89,7 +89,7 @@ Task는 없애지 않는다. 다중 owner·실제 선후 관계·장기 재개�
 
 ## 4. 현재 구조의 문제
 
-Gate B 계약을 task의 description·acceptance·prompt로 다시 쓰면 의미 drift와 context 중복이 생기고 repository 조사 전에 파일·순서를 고정한다. `10~50` 개수 목표는 작은 vertical slice도 선형 run으로 쪼개지만 task 수 자체는 품질 지표가 아니다. 별도 owner, 실제 dependency, 독립 검증·rollback 또는 장기 재개가 있을 때만 분할한다. UI도 task별 `visualImpact`가 아니라 승인된 전체 screen/state/viewport와 통합 application render로 판정해야 한다.
+Gate B 계약을 task description·acceptance·prompt로 반복하면 drift·중복이 생기고 조사 전에 파일·순서를 고정한다. `10~50` 목표는 작은 slice도 선형 run으로 쪼개지만 task 수는 품질 지표가 아니다(§3 `분할 뒤처리 기구`·`실제 graph 형태`·`prompt 중복`). 별도 owner, 실제 dependency, 독립 검증·rollback 또는 장기 재개 때만 분할한다. UI도 task별 `visualImpact`가 아니라 승인된 전체 screen/state/viewport와 통합 render로 판정한다.
 
 ## 5. 설계 원칙
 
@@ -128,7 +128,7 @@ Gate B 승인 뒤 사용자 개입이 없는 것이 목표지만, 다음 두 결
 
 `Gate A → Gate ② → Gate B 승인 → repository 조사와 mode 선택 → 자율 구현 → 통합 검증 → evidence 봉인`이 정상 흐름이다. 구현 실패는 같은 loop에서 수정하고 계약 변경만 최소 근거와 함께 Gate B로 돌아간다.
 
-Gate B 승인 뒤 `p2a next`의 정상 행동은 task authoring이나 구현 선택 질문이 아니라 자율 개발 session 시작이다. 실행 AI가 repository 조사 후 모드를 선택하고 필요하면 같은 승인 scope 안에서 바꾼다. 모드 선택은 새로운 사람 승인 Gate가 아니다. 사용자는 비용·권한·병렬성 같은 운영 정책으로 허용 범위를 제한할 수 있으며, 판정이 애매하면 AI는 더 보수적인 모드를 선택한다.
+Gate B 승인 뒤 `p2a next`는 자율 개발 session을 시작한다. AI가 조사 후 모드를 선택·변경하며 이는 새 승인 Gate가 아니다. 사용자는 운영 정책으로 범위를 제한할 수 있고, 판정이 애매하면 실행 단위를 넓히지 말고 verify checkpoint를 더 촘촘히 둔다.
 
 ## 7. 세 가지 실행 모드
 
@@ -283,7 +283,7 @@ Prompt는 다음 계층을 한 번씩만 조립한다.
 
 ### Phase 0 — baseline 보존과 계측 구축
 
-- 현재 `10~50` 지향 task graph workflow를 비교군 A로 동결하고 먼저 baseline을 수집한다. 이 단계에서는 workflow를 변경하지 않는다.
+- 현재 `10~50` 지향 task graph workflow를 비교군 A로 동결하고 먼저 baseline을 수집한다. 이 단계에서는 task 분할 workflow를 변경하지 않는다.
 - `run.schema.json`에 usage/token과 interruption 필드를 추가하고 Gate 복귀 이벤트 기록 경로를 정의한다. 현재 schema에는 이 데이터가 없어 단순히 “측정”할 수 없다(`schemas/run.schema.json:6-28,182-268`).
 - eval fixture에서는 milestone/visual pass를 강제로 `on`으로 실행해 선택적 기본값으로 인한 누락을 막는다.
 - `user correction count`와 `implementation-decision interruption count`는 자동 관측할 수 없으므로 수동 주석 protocol을 정의한다. 신뢰도 있는 protocol을 만들지 못하면 두 지표를 비교 판정에서 제외한다.
@@ -292,12 +292,8 @@ Prompt는 다음 계층을 한 번씩만 조립한다.
 ### Phase 1 — `task-lite` 호환 경로
 
 - Phase 0 baseline을 봉인한 뒤 `10~50 task` 저작 지침을 제거하고 outcome/dependency 기반 분할로 바꾼다.
-- implementer의 `exactly one task` 역할을 승인 objective를 끝까지 소유하는 executor 계약으로 확장한다.
-- 작은 iteration에는 CLI가 Gate B를 참조하는 단일 얇은 work item을 만들 수 있게 한다.
-- 기존 `p2a tasks`, `p2a runs`, handoff와 history schema는 유지한다.
-- AI가 자율 결정할 범위와 Gate return 조건을 runtime envelope에 명시한다.
-- UI 계약을 implementer runtime envelope에 직접 전달한다.
-- 현재 시각 계약이 있으면 owner render evidence를 close 조건으로 강제한다.
+- implementer를 objective owner로 확장하고, 작은 iteration에는 Gate B를 참조하는 얇은 work item을 만든다.
+- 기존 task/run/handoff/history schema를 유지하며 자율 범위·Gate return·UI 계약을 envelope에 전달하고 필요한 render evidence를 close 조건으로 강제한다.
 
 ### Phase 2 — 적응형 실행 opt-in
 
@@ -320,7 +316,7 @@ Prompt는 다음 계층을 한 번씩만 조립한다.
 ### 비교군
 
 - A: 현재 Gate B → 10~50 지향 task graph → task별 실행
-- B: Gate B → 승인 계약 기반 자율 개발 → AI가 adaptive mode 선택
+- B: Gate B → 승인 계약 기반 자율 개발 → AI가 adaptive mode 선택. model pin 제거와 monitor 헌법 검사는 task 분할 방식이 아닌 심사·계측 조건이므로 A와 B 양쪽에 동일하게 적용한 뒤 baseline을 수집한다.
 
 ### fixture 구성
 
@@ -356,12 +352,13 @@ Adaptive를 기본값으로 전환하려면 추가 구현 지시 없이 완료�
 
 ## 14. 우선순위와 실행 순서
 
-우선순위는 중요도, Phase는 실행 순서다. P0라도 baseline을 없애는 변경은 Phase 0 계측·수집 뒤 적용한다.
+우선순위는 중요도, Phase는 실행 순서다. 심사·계측 변경은 비교군 양쪽에 같게 적용하고 task 분할 변경은 baseline 봉인 뒤 적용한다.
 
 | 우선순위 | Phase | 개선 | 이유 |
 | --- | --- | --- | --- |
-| P0 | 0→1 | 게이팅 monitor에 constitution architecture/stack/prohibitions/style 검사 추가 | `.plan2agent/constitution.json`과 `changedFiles` 실제 내용을 입력하고 기존 verdict를 유지한다. 위반은 `scope_concerns`에 기록해 기존 finish 차단 경로를 재사용한다. 새 reviewer/schema가 없다. |
+| P0 | 1 | monitor에 constitution architecture/stack/prohibitions/style 검사를 추가하고 동시에 `style`·`milestone` review pass와 사이드카 규칙 제거 | informational인 style-rater와 milestone-reviewer 판정을 유일한 finish 차단 monitor가 흡수해 reviewer 총량을 3 → 1로 줄인다. |
 | P0 | 0 | `.claude/agents/*.md`의 `model:` pin 12개 제거 | 세션 모델을 상속해야 생산자보다 약한 심사자 고정을 없애고 §13 model profile A/B가 가능하다. |
+| P0 | 1 | `schemas/spec.schema.json`의 `product`에 `must_preserve` 추가 | §8 파생 전용 envelope의 전제이며, 없으면 회귀 방지 계약이 실행 시점 저작으로 되돌아간다. |
 | P0 | 1 | 자율 차단 조항 세 개 해제 | Provider Confinement는 동일 workspace 안전 경계 안의 무인 실행을 허용하도록 재작성하고, `p2a next` 개발 loop의 매 단계 승인을 없애며, implementer에 WebSearch/WebFetch를 부여한다. |
 | P0 | 1 | `10~50 task` 고정 지침 제거 | Phase 0에서 비교군 A baseline을 봉인한 뒤 과분해를 제거한다. |
 | P0 | 1 | implementer를 objective owner로 확장하고 Gate-derived envelope 전달 | 기존 spec 해석·검증 경로를 통합해 구현·수정 반복을 AI가 소유한다. |
@@ -378,7 +375,7 @@ Adaptive를 기본값으로 전환하려면 추가 구현 지시 없이 완료�
 - 계약 변경 때만 충돌 field와 최소 결정 요청으로 Gate에 복귀하며 모든 mode가 spec hash, acceptance와 실제 verification evidence를 보존한다.
 - Direct는 사람 저작 graph 없이 동작하고, Planned는 checkpoint 재개를, Orchestrated는 기존 dependency·batch·history 호환을 유지한다.
 - UI는 승인 contract와 capture matrix의 실제 render evidence 없이는 close-ready가 되지 않는다.
-- constitution 검출과 §13 계측이 재현 가능하며, 중복 task/reviewer/compatibility 기구의 총량이 도입 전보다 감소한다.
+- Phase 1부터 reviewer 총량 감소를 검증하고, 완료 시 중복 task/reviewer/compatibility 기구의 총량이 도입 전보다 감소한다.
 
 ## 16. 비목표
 
