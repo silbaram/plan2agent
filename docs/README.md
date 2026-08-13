@@ -47,6 +47,9 @@ Plan2Agent 문서는 사용자 흐름, CLI 사용법, 산출물 계약, 구현 �
 8. [릴리스 절차](releasing.md)<br>
    npm package, Git tag, GitHub Release를 같은 version과 source commit으로 게시할 때 본다.
 
+9. [Gate 중심 적응형 개발 실행 개선안](gate-driven-adaptive-execution-proposal.md)<br>
+   Gate를 개발 계약의 정본으로 두고 task graph를 Direct, Planned, Orchestrated 실행 중 필요한 경우에만 사용하는 전환 제안이다.
+
 ## 목적별 바로가기
 
 | 목적 | 문서 |
@@ -58,6 +61,7 @@ Plan2Agent 문서는 사용자 흐름, CLI 사용법, 산출물 계약, 구현 �
 | 반복 구조와 변경분 task 흐름 이해하기 | [반복/고도화 개발 스펙](iteration-spec.md) |
 | 감독형 task 실행과 orchestration 흐름 이해하기 | [감독형 개발 실행 레퍼런스](supervised-execution.md) |
 | skill/subagent 구조를 수정하기 | [하네스 구현 기준](harness-spec.md) |
+| Gate 중심 실행과 task graph 단순화 제안 검토하기 | [Gate 중심 적응형 개발 실행 개선안](gate-driven-adaptive-execution-proposal.md) |
 
 ## 문서별 역할
 
@@ -71,6 +75,7 @@ Plan2Agent 문서는 사용자 흐름, CLI 사용법, 산출물 계약, 구현 �
 | `supervised-execution.md` | 감독형 개발 실행 레퍼런스 | ready task 실행, 리뷰 패스 정책, monitor gate, milestone review, retry recovery, proposal loop |
 | `harness-spec.md` | 하네스 구현 기준 | skills, subagents, mirror, 안전 정책 (`p2a-harness` skill을 게이트 규칙 정본으로 지정) |
 | `releasing.md` | 릴리스 운영 checklist | Node 지원 정책, CHANGELOG, npm publish, Git tag, GitHub Release, smoke test |
+| `gate-driven-adaptive-execution-proposal.md` | 설계 제안 | Gate 중심 Direct/Planned/Orchestrated 실행, task 축소, UI 검증 강화와 단계적 migration |
 
 ## 유지보수 원칙
 
