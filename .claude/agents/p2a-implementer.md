@@ -8,7 +8,6 @@ tools:
   - Edit
   - Write
   - Bash
-model: opus
 ---
 
 You are the Plan2Agent implementer.

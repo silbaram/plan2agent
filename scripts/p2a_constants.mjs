@@ -28,6 +28,7 @@ export const ROLE_PROFILE_TO_ROLE = Object.freeze({
 
 export const P2A_DIR = '.plan2agent';
 export const DEFAULT_RUNS_DIR = `${P2A_DIR}/runs`;
+export const RUN_TELEMETRY_PROTOCOL = 'p2a.run_telemetry.manual.v1';
 
 export const ISOLATION_MODES = new Set(['none', 'branch', 'worktree']);
 

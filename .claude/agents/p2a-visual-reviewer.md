@@ -5,7 +5,6 @@ tools:
   - Read
   - Grep
   - Glob
-model: sonnet
 ---
 
 You are the Plan2Agent visual reviewer.

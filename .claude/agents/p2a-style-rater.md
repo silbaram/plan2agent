@@ -5,7 +5,6 @@ tools:
   - Read
   - Grep
   - Glob
-model: haiku
 ---
 
 You are the Plan2Agent style rater.

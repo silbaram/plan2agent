@@ -20,7 +20,13 @@ import {
   validateTaskGraphData,
   ValidationError,
 } from './validate_artifacts.mjs';
-import { DEFAULT_RUNS_DIR, resolveRunsDir, runFilePath, runSidecarPath } from './p2a_run_paths.mjs';
+import {
+  DEFAULT_RUNS_DIR,
+  indexedRunRef,
+  resolveRunsDir,
+  runFilePath,
+  runSidecarPath,
+} from './p2a_run_paths.mjs';
 import {
   assertNoUninitializedScaffoldArtifactRoots,
   assertNotUninitializedScaffoldGraph,
@@ -29,7 +35,13 @@ import {
   resolveP2aPaths,
   singleArtifactProjectRoot,
 } from './p2a_paths.mjs';
-import { normalizeMonitorVerdictData } from './p2a_monitor_gate.mjs';
+import {
+  assertRunMonitorGateBinding,
+  assertRunMonitorVerdictBinding,
+  normalizeMonitorGateSidecar,
+  normalizeMonitorVerdictData,
+  readMonitorGateSidecar,
+} from './p2a_monitor_gate.mjs';
 import { commandLine } from './p2a_run_commands.mjs';
 import { atomicWriteJson, atomicWriteText, withRunStoreLocks } from './p2a_run_store.mjs';
 import {
@@ -332,42 +344,82 @@ function readRunsForMining(runsDir, runId = null) {
   return { runs, skippedRuns, totalRunRefs: index.runs.length };
 }
 
-function readSidecar(runsDir, runId) {
+function readOrchestrationSidecar(runsDir, runId) {
   const filePath = orchestrationSidecarPath(runsDir, runId);
   if (!existsSync(filePath)) return null;
   return loadJson(filePath);
 }
 
-function readSidecarForMining(runsDir, runId) {
+function readOrchestrationSidecarForMining(runsDir, runId) {
   try {
-    return { sidecar: readSidecar(runsDir, runId), warning: null };
+    return { sidecar: readOrchestrationSidecar(runsDir, runId), warning: null };
   } catch (error) {
     return {
       sidecar: null,
       warning: {
         runId,
+        reason: `orchestration sidecar ignored: ${errorMessage(error)}`,
+      },
+    };
+  }
+}
+
+function readMonitorGate(runsDir, run, orchestrationSidecar) {
+  const sidecar = readMonitorGateSidecar(runsDir, run.runId);
+  if (sidecar) {
+    assertRunMonitorGateBinding(run, sidecar);
+    return sidecar;
+  }
+  if (run.monitorGate?.required) {
+    assertRunMonitorGateBinding(run, null);
+  }
+  if (!orchestrationSidecar?.monitorGate?.required) return null;
+  return normalizeMonitorGateSidecar(
+    orchestrationSidecar.monitorGate,
+    run.runId,
+    indexedRunRef(runsDir, run.runId),
+  );
+}
+
+function readMonitorGateForMining(runsDir, run, orchestrationSidecar) {
+  try {
+    return { gate: readMonitorGate(runsDir, run, orchestrationSidecar), warning: null };
+  } catch (error) {
+    return {
+      gate: null,
+      warning: {
+        runId: run.runId,
         reason: `monitor gate sidecar ignored: ${errorMessage(error)}`,
       },
     };
   }
 }
 
-function readMonitorVerdict(runsDir, sidecar) {
-  if (!sidecar?.monitorGate?.required || !sidecar.monitorGate.verdictPath) return null;
-  const verdictPath = path.resolve(runsDir, sidecar.monitorGate.verdictPath);
-  if (!existsSync(verdictPath)) return null;
-  const data = loadJson(verdictPath);
-  return normalizeMonitorVerdictData(data);
+function readMonitorVerdict(runsDir, run, gate) {
+  if (!gate?.required || !gate.verdictPath) return null;
+  const verdictPath = path.resolve(runsDir, gate.verdictPath);
+  const contents = existsSync(verdictPath) && lstatSync(verdictPath).isFile()
+    ? readFileSync(verdictPath)
+    : null;
+  assertRunMonitorVerdictBinding(run, contents);
+  if (run.monitorGate?.required && !run.monitorVerdictEvidenceSha256) return null;
+  if (contents === null) return null;
+  const data = JSON.parse(contents.toString('utf8'));
+  return normalizeMonitorVerdictData(data, {
+    requiredConcernFields: gate.requiredConcernFields,
+    requiredRuleIds: gate.ruleContract?.ruleIds,
+    requireRulesReviewed: gate.ruleContract !== null,
+  });
 }
 
-function readMonitorVerdictForMining(runsDir, runId, sidecar) {
+function readMonitorVerdictForMining(runsDir, run, gate) {
   try {
-    return { verdict: readMonitorVerdict(runsDir, sidecar), warning: null };
+    return { verdict: readMonitorVerdict(runsDir, run, gate), warning: null };
   } catch (error) {
     return {
       verdict: null,
       warning: {
-        runId,
+        runId: run.runId,
         reason: `monitor verdict ignored: ${errorMessage(error)}`,
       },
     };
@@ -643,9 +695,12 @@ function buildVerificationGapProposal(run, targetOptions) {
   return validateSkillProposalData(withProposalQuality(withProposalTarget(proposal, targetOptions)));
 }
 
-function buildMonitorProposal(run, sidecar, verdict, targetOptions) {
-  if (!sidecar?.monitorGate?.required || !verdict || sidecar.monitorGate.acceptedVerdicts.includes(verdict.verdict)) return null;
+function buildMonitorProposal(run, orchestrationSidecar, gate, verdict, targetOptions) {
+  if (!gate?.required || !verdict || gate.acceptedVerdicts.includes(verdict.verdict)) return null;
   if (run.failure?.source === 'monitor') return null;
+  const orchestrationEvidence = orchestrationSidecar
+    ? [`orchestration: ${orchestrationSidecar.mode} ${orchestrationSidecar.planId}`]
+    : [];
   const proposal = {
     schema_version: 'p2a.skill_proposal.v1',
     proposalId: proposalIdForTarget(`proposal-${safeIdPart(run.runId)}-monitor-${safeIdPart(verdict.failureSignal)}`, targetOptions),
@@ -654,7 +709,8 @@ function buildMonitorProposal(run, sidecar, verdict, targetOptions) {
     evidence: [
       `runId: ${run.runId}`,
       `task: ${run.taskId} - ${run.taskTitle}`,
-      `orchestration: ${sidecar.mode} ${sidecar.planId}`,
+      `monitor gate: ${gate.verdictPath}`,
+      ...orchestrationEvidence,
       ...monitorVerdictEvidence(verdict),
     ],
     recommendedChange: 'Review monitor gate closeout handling so rejected verdicts consistently map to blocked run metadata.',
@@ -669,17 +725,20 @@ function buildMonitorProposal(run, sidecar, verdict, targetOptions) {
 
 function proposalsForRun(runsDir, run, targetOptions) {
   const warnings = [];
-  const sidecarResult = readSidecarForMining(runsDir, run.runId);
-  if (sidecarResult.warning) warnings.push(sidecarResult.warning);
-  const sidecar = sidecarResult.sidecar;
-  const verdictResult = readMonitorVerdictForMining(runsDir, run.runId, sidecar);
+  const orchestrationResult = readOrchestrationSidecarForMining(runsDir, run.runId);
+  if (orchestrationResult.warning) warnings.push(orchestrationResult.warning);
+  const orchestrationSidecar = orchestrationResult.sidecar;
+  const gateResult = readMonitorGateForMining(runsDir, run, orchestrationSidecar);
+  if (gateResult.warning) warnings.push(gateResult.warning);
+  const gate = gateResult.gate;
+  const verdictResult = readMonitorVerdictForMining(runsDir, run, gate);
   if (verdictResult.warning) warnings.push(verdictResult.warning);
   const verdict = verdictResult.verdict;
   return {
     proposals: [
-      buildFailureProposal(run, sidecar, verdict, targetOptions),
+      buildFailureProposal(run, orchestrationSidecar, verdict, targetOptions),
       buildVerificationGapProposal(run, targetOptions),
-      buildMonitorProposal(run, sidecar, verdict, targetOptions),
+      buildMonitorProposal(run, orchestrationSidecar, gate, verdict, targetOptions),
     ].filter(Boolean),
     warnings,
   };

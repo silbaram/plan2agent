@@ -119,13 +119,15 @@ Batch mode must use one write-capable provider within one foreground supervised 
 
    The owner must execute behavior commands with `p2a runs verify --run-id <id> --artifacts <root> --verify-command 'custom:<command>'`. Then invoke `p2a-acceptance-reviewer` as a separate read-only pass and save its `p2a.acceptance_review.v1` object beside the run as `<runId>.acceptance-review.json`. Every case must copy an executed command, `source: command|config`, integer `exitCode`, and `stdoutTail` from the run; manual or unexecuted evidence is invalid. Exit zero alone is not proof—block empty, irrelevant, or useless output. Finish requires complete coverage and `confirm_behavior`, then seals the sidecar and canonical workspace hashes. Later workspace changes require a new review. A blocked review reopens its remediation owner.
 
-7. Read `devExecution.reviewPasses.monitor` from `.plan2agent/project.config.json` first, using the default `opt_in` when the field is absent. `opt_in` keeps `--require-monitor` as the activation signal, and `off` prevents new runs from opting in. If the current run was already started with `--require-monitor`, run the independent monitor gate before finish because the recorded lifecycle requirement still applies. Invoke `p2a-performance-monitor` as a separate subagent when the CLI supports spawning subagents, or perform a separated read-only review pass when spawning is unavailable. Pass the target task id, acceptance criteria, and the latest run log for that task, including `verification`, `changedFiles`, `status`, and `workspaceRef`.
+7. Read `devExecution.reviewPasses.monitor` from `.plan2agent/project.config.json` first, using the default `opt_in` when the field is absent. `opt_in` keeps `--require-monitor` as the activation signal, and `off` prevents new runs from opting in. If the current run was already started with `--require-monitor`, run the independent monitor gate before finish because the recorded lifecycle requirement still applies. Invoke `p2a-performance-monitor` as a separate subagent when the CLI supports spawning subagents, or perform a separated read-only review pass when spawning is unavailable. Pass the target task id, acceptance criteria, latest run log, and the complete `.monitor-gate.json` sidecar. Also pass the complete approved rule source bound by `ruleContract.ref` and `ruleContract.sha256`: normally `.plan2agent/constitution.json` with architecture, stack, prohibitions, and style, or the complete legacy `.plan2agent/style.md`. The monitor must read the actual contents of every path recorded in `changedFiles` and compare them with those rules; do not summarize away the enforceable wording.
 
    Write the monitor result beside the run file, normally `runs/<iterationId>/<runId>.monitor-verdict.json` (legacy flat runs remain readable), using this shape:
 
    ```json
    {
      "verdict": "confirm_done",
+     "rules_reviewed": [],
+     "rule_concerns": [],
      "unmet_acceptance": [],
      "verification_concerns": [],
      "scope_concerns": [],
@@ -134,7 +136,7 @@ Batch mode must use one write-capable provider within one foreground supervised 
    }
    ```
 
-   Use `verdict: "block"` and fill the relevant concern array when the task should not be accepted. When multiple concern arrays are populated, failure-class mapping priority is `scope_concerns` → `verification_concerns` → `unmet_acceptance` → `needs_user_decision`. `p2a execute finish` and `p2a runs finish` both enforce this verdict when the run requires a monitor gate.
+   Fill `rules_reviewed` with every id from `ruleContract.ruleIds`; the CLI rejects incomplete rule coverage. Use `verdict: "block"` and fill the relevant concern array when the task should not be accepted. Record constitution architecture/stack/prohibition/style conflicts in `rule_concerns` with rule IDs and changed file locations. Advisory-only prohibitions may be disclosed in `note` but do not block by themselves. When multiple concern arrays are populated, failure-class mapping priority is `rule_concerns` → `scope_concerns` → `verification_concerns` → `unmet_acceptance` → `needs_user_decision`. `p2a execute finish` and `p2a runs finish` both enforce this verdict when the run requires a monitor gate, then seal the exact verdict bytes in `monitorVerdictEvidenceSha256`. Do not edit that verdict after finish; `p2a runs validate`, task completion, eval, proposal mining, and handoff reject or ignore changed evidence.
 
 8. Read `devExecution.reviewPasses.style` from `.plan2agent/project.config.json` first, using the default `off` when the field is absent. When it is `off`, do not invoke `p2a-style-rater`; append `STYLE_REVIEW: skipped; reason=reviewPasses.style=off` to the run and continue. When it is not `off`, prefer the `style` object from `.plan2agent/constitution.json`; run the style-rating pass before finish when that object contains substantive guidance. If no constitution exists, use a substantive `.plan2agent/style.md` as the legacy fallback. Invoke `p2a-style-rater` as a separate read-only subagent when the CLI supports spawning subagents, or perform a separated read-only review pass when spawning is unavailable. Pass the target task id, the run's `changedFiles` list, the complete style guidance, and its source reference.
 
@@ -177,7 +179,7 @@ Batch mode must use one write-capable provider within one foreground supervised 
 
    Only classify a failure as `test_flake` when there is concrete evidence such as a failing verification command passing on rerun without code or environment changes. Without that evidence, use `verification_failed` for verification failures.
 
-   If the monitor verdict blocks the run, do not call `p2a tasks done`. Finish through `p2a execute finish` with monitor-sourced failure metadata and structured detail. The CLI maps `unmet_acceptance` to `implementation_incomplete`, `verification_concerns` to `verification_failed`, `scope_concerns` to `scope_violation`, and `needs_user_decision` to `missing_dependency`.
+   If the monitor verdict blocks the run, do not call `p2a tasks done`. Finish through `p2a execute finish` with monitor-sourced failure metadata and structured detail. The CLI maps `unmet_acceptance` to `implementation_incomplete`, `verification_concerns` to `verification_failed`, `rule_concerns` and `scope_concerns` to `scope_violation`, and `needs_user_decision` to `missing_dependency`.
 
 10. After finish has updated the task graph, evaluate and, when eligible, run the milestone review checkpoint described below. This checkpoint is informational and does not change the just-finished run or task status.
 

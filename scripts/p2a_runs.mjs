@@ -16,12 +16,18 @@ import { createHash } from 'node:crypto';
 import path from 'node:path';
 import process from 'node:process';
 import { pathToFileURL } from 'node:url';
-import { FAILURE_CLASSES, FAILURE_RETRYABLE, ISOLATION_MODES } from './p2a_constants.mjs';
+import {
+  FAILURE_CLASSES,
+  FAILURE_RETRYABLE,
+  ISOLATION_MODES,
+  RUN_TELEMETRY_PROTOCOL,
+} from './p2a_constants.mjs';
 import {
   acceptanceReviewContract,
   approvedVisualReviewContract,
   loadJson,
   resolveRunTaskGraphPath,
+  validateConstitution,
   validateRunTaskContract,
   validateRunData,
   validateRunIndexData,
@@ -29,7 +35,16 @@ import {
   validateTaskGraphData,
   ValidationError,
 } from './validate_artifacts.mjs';
-import { normalizeMonitorGateSidecar, normalizeMonitorVerdictData, readMonitorGateSidecar } from './p2a_monitor_gate.mjs';
+import {
+  MONITOR_CONCERN_FIELDS,
+  MONITOR_GATE_POLICY,
+  assertRunMonitorGateBinding,
+  monitorGateContractSha256,
+  monitorVerdictEvidenceSha256,
+  normalizeMonitorGateSidecar,
+  normalizeMonitorVerdictData,
+  readMonitorGateSidecar,
+} from './p2a_monitor_gate.mjs';
 import { readRequiredVisualReviewEvidence } from './p2a_visual_review_gate.mjs';
 import { readRequiredAcceptanceReviewEvidence } from './p2a_acceptance_review_gate.mjs';
 import {
@@ -102,6 +117,8 @@ const COMMANDS = new Set(['start', 'record', 'verify', 'finish', 'list', 'show',
 const RUN_STATUSES = new Set(['started', 'finished', 'failed', 'blocked']);
 const RUN_KINDS = new Set(['final_visual_review', 'final_acceptance_review']);
 const VISUAL_FEEDBACK_VERDICTS = new Set(['note', 'concern']);
+const USAGE_SOURCES = new Set(['provider', 'manual']);
+const GATE_RETURN_ASSESSMENTS = new Set(['valid', 'invalid']);
 const FAILURE_SOURCES = new Set(['owner', 'monitor', 'implementer']);
 const FAILURE_DEFAULTS = {
   verification_failed: { retryable: 'after_fix', needsUserDecision: false, source: 'owner' },
@@ -120,9 +137,9 @@ function usage() {
     'Usage:',
     '  p2a runs start --artifacts <iterative-project-dir> --task <task-id> --agent-tool <tool> [options]',
     '  p2a runs start --graph <task-graph.json> --task <task-id> --agent-tool <tool> [--runs <dir>] [options]',
-    '  p2a runs record --run-id <run-id> (--artifacts <dir>|--runs <dir>|--graph <path>) [--changed-file <path> ...] [--verification <type:status:command>] [--note <text>] [--visual-feedback note|concern] [structured detail options]',
+    '  p2a runs record --run-id <run-id> (--artifacts <dir>|--runs <dir>|--graph <path>) [--changed-file <path> ...] [--verification <type:status:command>] [--note <text>] [--visual-feedback note|concern] [usage/interruption options] [structured detail options]',
     '  p2a runs verify --run-id <run-id> (--artifacts <dir>|--runs <dir>|--graph <path>) [--test] [--lint] [--typecheck] [--test-command <cmd>] [--lint-command <cmd>] [--typecheck-command <cmd>] [--verify-command <type:cmd>]',
-    '  p2a runs finish --run-id <run-id> (--artifacts <dir>|--runs <dir>|--graph <path>) [--status finished|failed|blocked] [--failure-class <class>] [--retryable yes|no|after_fix] [--needs-user-decision true|false] [--failure-source owner|monitor|implementer] [--changed-file <path> ...] [--verification <type:status:command>] [--collect-git] [--note <text>] [structured detail options]',
+    '  p2a runs finish --run-id <run-id> (--artifacts <dir>|--runs <dir>|--graph <path>) [--status finished|failed|blocked] [--failure-class <class>] [--retryable yes|no|after_fix] [--needs-user-decision true|false] [--failure-source owner|monitor|implementer] [--changed-file <path> ...] [--verification <type:status:command>] [--collect-git] [--note <text>] [usage/interruption options] [structured detail options]',
     '  p2a runs list (--artifacts <dir>|--runs <dir>|--graph <path>) [--json]',
     '  p2a runs show --run-id <run-id> (--artifacts <dir>|--runs <dir>|--graph <path>)',
     '  p2a runs revision --run-id <run-id> (--artifacts <dir>|--runs <dir>|--graph <path>)',
@@ -151,6 +168,15 @@ function usage() {
     '  --changed-file <path>   Changed file to attach to the run. Repeatable.',
     '  --collect-git           Add changed files from git status in the workspace.',
     '  --note <text>           Append a run note. Repeatable.',
+    '  --usage-model <profile> Model/profile label for one usage sample.',
+    '  --usage-input-tokens <n>, --usage-output-tokens <n>',
+    '                          Record non-negative token counts; both and --usage-model are required together.',
+    '  --usage-source <source> Token source: provider or manual. Default: manual.',
+    '  --implementation-interruption <text>',
+    '                          Record a user interruption caused by asking for an implementation decision. Repeatable.',
+    '  --user-correction <text> Record a user requirement or UI correction. Repeatable.',
+    '  --gate-return <assessment:text>',
+    '                          Record a contract Gate return assessed as valid or invalid. Repeatable.',
     '  --visual-feedback <verdict>  Append optional, non-gating implementation feedback: note or concern.',
     '  --visual-feedback-note <text>  Explanation for the visual feedback.',
     '  --visual-feedback-concern <text>  Concern found during early visual review. Repeatable.',
@@ -208,6 +234,13 @@ function parseArgs(argv) {
     createIsolation: false,
     changedFiles: [],
     notes: [],
+    usageModel: null,
+    usageInputTokens: null,
+    usageOutputTokens: null,
+    usageSource: null,
+    implementationInterruptions: [],
+    userCorrections: [],
+    gateReturns: [],
     visualFeedbackVerdict: null,
     visualFeedbackNote: null,
     visualFeedbackConcerns: [],
@@ -265,6 +298,16 @@ function parseArgs(argv) {
     else if (arg === '--changed-file') args.changedFiles.push(requiredValue(argv, ++index, '--changed-file'));
     else if (arg === '--collect-git') args.collectGit = true;
     else if (arg === '--note') args.notes.push(requiredValue(argv, ++index, '--note', { allowLeadingDash: true }));
+    else if (arg === '--usage-model') args.usageModel = requiredNonBlankText(argv, ++index, '--usage-model');
+    else if (arg === '--usage-input-tokens') args.usageInputTokens = parseNonNegativeInteger(requiredValue(argv, ++index, '--usage-input-tokens'), '--usage-input-tokens');
+    else if (arg === '--usage-output-tokens') args.usageOutputTokens = parseNonNegativeInteger(requiredValue(argv, ++index, '--usage-output-tokens'), '--usage-output-tokens');
+    else if (arg === '--usage-source') {
+      args.usageSource = requiredValue(argv, ++index, '--usage-source');
+      if (!USAGE_SOURCES.has(args.usageSource)) throw new Error('--usage-source must be provider or manual');
+    }
+    else if (arg === '--implementation-interruption') args.implementationInterruptions.push(requiredNonBlankText(argv, ++index, '--implementation-interruption'));
+    else if (arg === '--user-correction') args.userCorrections.push(requiredNonBlankText(argv, ++index, '--user-correction'));
+    else if (arg === '--gate-return') args.gateReturns.push(parseGateReturn(requiredValue(argv, ++index, '--gate-return', { allowLeadingDash: true })));
     else if (arg === '--visual-feedback') {
       args.visualFeedbackVerdict = requiredValue(argv, ++index, '--visual-feedback');
       if (!VISUAL_FEEDBACK_VERDICTS.has(args.visualFeedbackVerdict)) {
@@ -361,6 +404,18 @@ function parseArgs(argv) {
   if (!['record', 'finish'].includes(args.command) && hasStructuredDetailOptions(args)) {
     throw new Error('structured detail options are only supported with record or finish');
   }
+  const hasUsage = [args.usageModel, args.usageInputTokens, args.usageOutputTokens, args.usageSource]
+    .some((value) => value !== null);
+  if (hasUsage && (args.usageModel === null || args.usageInputTokens === null || args.usageOutputTokens === null)) {
+    throw new Error('--usage-model, --usage-input-tokens, and --usage-output-tokens are required together');
+  }
+  if (hasUsage && !Number.isSafeInteger(args.usageInputTokens + args.usageOutputTokens)) {
+    throw new Error('usage input and output token total exceeds the safe integer range');
+  }
+  if (hasUsage) args.usageSource ??= 'manual';
+  if (!['record', 'finish'].includes(args.command) && (hasUsage || hasInterruptionOptions(args))) {
+    throw new Error('usage and interruption options are only supported with record or finish');
+  }
   if (args.saveConfig && args.command !== 'verify') {
     throw new Error('--save-config is only supported with verify');
   }
@@ -404,10 +459,42 @@ function hasStructuredDetailOptions(args) {
   ].some((values) => values.length > 0);
 }
 
+function hasInterruptionOptions(args) {
+  return args.implementationInterruptions.length > 0
+    || args.userCorrections.length > 0
+    || args.gateReturns.length > 0;
+}
+
 function requiredValue(argv, index, optionName, options = {}) {
   const value = argv[index];
   if (!value || (!options.allowLeadingDash && value.startsWith('--'))) throw new Error(`missing value for ${optionName}`);
   return value;
+}
+
+function requiredNonBlankText(argv, index, optionName) {
+  const value = requiredValue(argv, index, optionName, { allowLeadingDash: true }).trim();
+  if (!value) throw new Error(`${optionName} must not be blank`);
+  return value;
+}
+
+function parseNonNegativeInteger(value, optionName) {
+  if (!/^(0|[1-9][0-9]*)$/.test(value)) throw new Error(`${optionName} must be a non-negative integer`);
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed)) throw new Error(`${optionName} exceeds the safe integer range`);
+  return parsed;
+}
+
+function parseGateReturn(value) {
+  const separator = value.indexOf(':');
+  if (separator <= 0 || separator === value.length - 1) {
+    throw new Error('--gate-return must use valid|invalid:<summary>');
+  }
+  const assessment = value.slice(0, separator);
+  const summary = value.slice(separator + 1).trim();
+  if (!GATE_RETURN_ASSESSMENTS.has(assessment) || !summary) {
+    throw new Error('--gate-return must use valid|invalid:<summary>');
+  }
+  return { assessment, summary };
 }
 
 function parseManualVerification(value) {
@@ -514,10 +601,30 @@ function readMonitorVerdict(runsDir, sidecar) {
   const verdictPath = path.resolve(runsDir, sidecar.verdictPath);
   assertFile(verdictPath, 'monitor verdict');
   try {
-    return normalizeMonitorVerdictData(loadJson(verdictPath));
+    const contents = readFileSync(verdictPath);
+    const verdict = normalizeMonitorVerdictData(JSON.parse(contents.toString('utf8')), {
+      requiredConcernFields: sidecar.requiredConcernFields,
+      requiredRuleIds: sidecar.ruleContract?.ruleIds,
+      requireRulesReviewed: sidecar.ruleContract !== null,
+    });
+    return { verdict, evidenceSha256: monitorVerdictEvidenceSha256(contents) };
   } catch (error) {
     throw new Error(`${error.message}: ${displayPath(verdictPath)}`);
   }
+}
+
+function assertMonitorRuleContractCurrent(sidecar, taskSource, workspacePath, run) {
+  const contract = sidecar?.ruleContract;
+  if (!contract) return null;
+  const current = monitorRuleContract(taskSource, workspacePath);
+  if (JSON.stringify(current) !== JSON.stringify(contract)) {
+    throw new Error([
+      `monitor rule contract source changed or is unavailable for run ${run.runId}`,
+      `expected=${JSON.stringify(contract)}`,
+      `current=${JSON.stringify(current)}`,
+    ].join('; '));
+  }
+  return current;
 }
 
 function monitorConcernSummary(verdict) {
@@ -530,26 +637,34 @@ function monitorConcernSummary(verdict) {
   return parts.join('; ') || 'no concern details provided';
 }
 
-function applyMonitorGate(args, runsDir, run) {
-  const sidecar = readOrchestrationSidecar(runsDir, run.runId);
+function applyMonitorGate(args, runsDir, run, taskSource, workspacePath, sidecar = readOrchestrationSidecar(runsDir, run.runId)) {
+  assertRunMonitorGateBinding(run, sidecar);
   if (!sidecar?.required) return null;
-  const verdict = readMonitorVerdict(runsDir, sidecar);
+  assertMonitorRuleContractCurrent(sidecar, taskSource, workspacePath, run);
+  const monitorEvidence = readMonitorVerdict(runsDir, sidecar);
+  const { verdict, evidenceSha256 } = monitorEvidence;
   if (sidecar.acceptedVerdicts.includes(verdict.verdict) && !verdict.hasConcerns) {
-    return { accepted: true, verdict: verdict.verdict, concerns: monitorConcernSummary(verdict) };
+    return {
+      accepted: true,
+      verdict: verdict.verdict,
+      concerns: monitorConcernSummary(verdict),
+      evidenceSha256,
+    };
   }
   const mappedFailureClass = sidecar.failureClassMap[verdict.failureSignal]
     ?? sidecar.failureClassMap[verdict.verdict]
     ?? 'other';
   args.status = 'blocked';
-  if (!args.failureClass) args.failureClass = mappedFailureClass;
-  if (!args.failureSource) args.failureSource = 'monitor';
-  if (args.needsUserDecision === null && verdict.needsUserDecision) args.needsUserDecision = true;
+  args.failureClass = mappedFailureClass;
+  args.failureSource = 'monitor';
+  args.needsUserDecision = verdict.needsUserDecision;
   return {
     accepted: false,
     verdict: verdict.failureSignal,
     rawVerdict: verdict.verdict,
     failureClass: args.failureClass,
     concerns: monitorConcernSummary(verdict),
+    evidenceSha256,
   };
 }
 
@@ -658,12 +773,74 @@ function runOnlyTaskSource(runsDir, run) {
     );
   }
   return {
+    projectId: run.projectId,
     artifactRoot: run.sourceLayout === 'graph'
       ? defaultArtifactRootForGraph(graphPath)
       : artifactRoot,
     graphPath,
     graph,
   };
+}
+
+function monitorRuleRef(projectRoot, filePath) {
+  const relative = path.relative(projectRoot, filePath);
+  if (relative && !relative.startsWith('..') && !path.isAbsolute(relative)) return normalizePath(relative);
+  return displayPath(filePath);
+}
+
+function monitorRuleFileSha256(filePath) {
+  return createHash('sha256').update(readFileSync(filePath)).digest('hex');
+}
+
+function hasSubstantiveRuleValue(value) {
+  if (typeof value === 'string') return value.trim().length > 0;
+  if (Array.isArray(value)) return value.some((item) => hasSubstantiveRuleValue(item));
+  if (value && typeof value === 'object') return Object.values(value).some((item) => hasSubstantiveRuleValue(item));
+  return value !== null && value !== undefined;
+}
+
+function constitutionMonitorRuleIds(constitution) {
+  return uniqueStrings([
+    ...constitution.architecture.map((rule) => rule.id),
+    ...constitution.stack.map((rule) => rule.id),
+    ...constitution.prohibitions
+      .filter((rule) => ['validator', 'review'].includes(rule.enforcement))
+      .map((rule) => rule.id),
+    ...(hasSubstantiveRuleValue(constitution.style) ? ['STYLE'] : []),
+  ]);
+}
+
+function monitorRuleContract(source, workspacePath) {
+  const roots = uniqueStrings([
+    canonicalWorkspacePathForArtifactRoot(source.artifactRoot),
+    path.resolve(workspacePath),
+    process.cwd(),
+  ].map((candidate) => path.resolve(candidate)));
+  for (const projectRoot of roots) {
+    const constitutionPath = path.join(projectRoot, '.plan2agent', 'constitution.json');
+    if (!existsSync(constitutionPath)) continue;
+    assertFile(constitutionPath, 'monitor constitution');
+    const constitution = validateConstitution(constitutionPath, { requireApproved: true, projectId: source.projectId });
+    return {
+      source: 'constitution',
+      ref: monitorRuleRef(projectRoot, constitutionPath),
+      sha256: monitorRuleFileSha256(constitutionPath),
+      ruleIds: constitutionMonitorRuleIds(constitution),
+    };
+  }
+  for (const projectRoot of roots) {
+    const legacyStylePath = path.join(projectRoot, '.plan2agent', 'style.md');
+    if (!existsSync(legacyStylePath)) continue;
+    assertFile(legacyStylePath, 'legacy monitor style');
+    if (!readFileSync(legacyStylePath, 'utf8').trim()) continue;
+    return {
+      source: 'legacy_style',
+      ref: monitorRuleRef(projectRoot, legacyStylePath),
+      sha256: monitorRuleFileSha256(legacyStylePath),
+      ruleIds: ['STYLE'],
+    };
+  }
+  return { source: 'none', ref: null, sha256: null, ruleIds: [] };
 }
 
 function sourceRunArgs(args) {
@@ -788,19 +965,21 @@ function completeRunWriteTransaction(runsDir, transaction) {
   if (![legacyRunRef(transaction.run.runId), canonicalRunRef(transaction.run)].includes(expectedRef)) {
     throw new Error(`pending run write transaction has unsupported runRef ${JSON.stringify(expectedRef)}`);
   }
+  let monitorGate = null;
   if (transaction.monitorGate !== undefined) {
     assertNoIndexedRunSidecarCollision(runsDir, transaction.index, transaction.run.runId, transaction.runRef, '.monitor-gate.json');
-  }
-  atomicWriteJson(path.join(runsDir, expectedRef), transaction.run);
-  atomicWriteJson(indexPath(runsDir), transaction.index);
-  if (transaction.monitorGate !== undefined) {
-    const monitorGate = normalizeMonitorGateSidecar(transaction.monitorGate, transaction.run.runId, transaction.runRef);
+    monitorGate = normalizeMonitorGateSidecar(transaction.monitorGate, transaction.run.runId, transaction.runRef);
+    assertRunMonitorGateBinding(transaction.run, monitorGate);
     const expectedVerdictRef = runSidecarRef(transaction.runRef, '.monitor-verdict.json');
     if (monitorGate.runId !== transaction.run.runId
       || monitorGate.required !== true
       || monitorGate.verdictPath !== expectedVerdictRef) {
       throw new Error(`pending run write transaction has an invalid monitor gate for ${transaction.run.runId}`);
     }
+  }
+  atomicWriteJson(path.join(runsDir, expectedRef), transaction.run);
+  atomicWriteJson(indexPath(runsDir), transaction.index);
+  if (monitorGate) {
     atomicWriteJson(path.join(runsDir, runSidecarRef(transaction.runRef, '.monitor-gate.json')), monitorGate);
   }
   if (transaction.reservation !== undefined) {
@@ -845,15 +1024,27 @@ function commitRunWrite(runsDir, runRef, run, index, options = {}) {
       throw new Error(`monitor gate sidecar path already exists and cannot be overwritten: ${sidecarRef}`);
     }
   }
+  let monitorGate = null;
+  if (options.monitorGateRequired) {
+    monitorGate = normalizeMonitorGateSidecar({
+      required: true,
+      requiredConcernFields: MONITOR_CONCERN_FIELDS,
+      ruleContract: options.monitorRuleContract ?? { source: 'none', ref: null, sha256: null },
+    }, run.runId, runRef);
+    run.monitorGate = {
+      required: true,
+      policy: MONITOR_GATE_POLICY,
+      contractSha256: monitorGateContractSha256(monitorGate),
+    };
+    validateRunData(run);
+  }
   const transaction = {
     schema_version: 'p2a.run_write_transaction.v1',
     runRef,
     run,
     index,
+    ...(monitorGate ? { monitorGate } : {}),
   };
-  if (options.monitorGateRequired) {
-    transaction.monitorGate = normalizeMonitorGateSidecar({ required: true }, run.runId, runRef);
-  }
   if (options.reservationToken) {
     transaction.reservation = { runId: run.runId, token: options.reservationToken };
   }
@@ -940,6 +1131,45 @@ function uniqueStrings(values) {
     output.push(trimmed);
   }
   return output;
+}
+
+function appendRunTelemetry(run, args, recordedAt = new Date().toISOString()) {
+  run.usage ??= [];
+  run.interruptions ??= [];
+  if (args.usageModel !== null) {
+    run.usage.push({
+      recordedAt,
+      source: args.usageSource,
+      modelProfile: args.usageModel,
+      inputTokens: args.usageInputTokens,
+      outputTokens: args.usageOutputTokens,
+      totalTokens: args.usageInputTokens + args.usageOutputTokens,
+    });
+  }
+  for (const summary of args.implementationInterruptions) {
+    run.interruptions.push({
+      recordedAt,
+      type: 'implementation_decision',
+      summary,
+      assessment: 'not_applicable',
+    });
+  }
+  for (const summary of args.userCorrections) {
+    run.interruptions.push({
+      recordedAt,
+      type: 'user_correction',
+      summary,
+      assessment: 'not_applicable',
+    });
+  }
+  for (const gateReturn of args.gateReturns) {
+    run.interruptions.push({
+      recordedAt,
+      type: 'gate_return',
+      summary: gateReturn.summary,
+      assessment: gateReturn.assessment,
+    });
+  }
 }
 
 function mergeDetailArray(existing, additions) {
@@ -1600,6 +1830,7 @@ function startRun(args) {
   const acceptanceReview = args.runKind === 'final_acceptance_review'
     ? acceptanceReviewContract(taskSourceSpecPath(source), source.artifactRoot)
     : null;
+  const ruleContract = args.requireMonitor ? monitorRuleContract(source, configWorkspacePath) : null;
   // A fresh worktree is the future workspace: validate its existing Git base
   // before creation, then validate the worktree itself after prepareIsolation.
   assertDirectory(createsWorktree ? isolationBasePath : workspacePath, '--workspace');
@@ -1649,6 +1880,9 @@ function startRun(args) {
     changedFiles: uniqueStrings(args.changedFiles),
     verification: args.manualVerification,
     notes: uniqueStrings(args.notes),
+    usage: [],
+    interruptions: [],
+    telemetryProtocol: RUN_TELEMETRY_PROTOCOL,
     ...(visualReview ? { visualReview } : {}),
     ...(acceptanceReview ? { acceptanceReview } : {}),
   };
@@ -1672,6 +1906,7 @@ function startRun(args) {
     writeRun(runsDir, run, {
       createOnly: true,
       monitorGateRequired: args.requireMonitor,
+      monitorRuleContract: ruleContract,
       reservationToken: allocation.reservationToken,
     });
   });
@@ -1679,6 +1914,12 @@ function startRun(args) {
   console.log(`- task: ${run.taskId}`);
   console.log(`- agentTool: ${run.agentTool}`);
   console.log(`- workspaceRef: ${run.workspaceRef}`);
+  if (ruleContract) {
+    const ruleLabel = ruleContract.source === 'none'
+      ? 'none (no constitution or legacy style found)'
+      : `${ruleContract.source}:${ruleContract.ref} sha256=${ruleContract.sha256}`;
+    console.log(`- monitorRules: ${ruleLabel}`);
+  }
   console.log(`- runFile: ${displayPath(runFilePath(runsDir, run.runId))}`);
   printRunCommandFooter(P2A_PATHS, {
     sourceArgs: sourceRunArgs(args),
@@ -1696,6 +1937,7 @@ function recordRun(args) {
   run.changedFiles = uniqueStrings([...run.changedFiles, ...args.changedFiles]);
   run.verification.push(...args.manualVerification);
   run.notes = uniqueStrings([...run.notes, ...args.notes]);
+  appendRunTelemetry(run, args);
   if (args.visualFeedbackVerdict) {
     run.visualFeedback ??= [];
     run.visualFeedback.push({
@@ -1712,6 +1954,8 @@ function recordRun(args) {
   console.log(`Plan2Agent run recorded: ${run.runId}`);
   console.log(`- changedFiles: ${run.changedFiles.length}`);
   console.log(`- verification: ${run.verification.length}`);
+  console.log(`- usageSamples: ${run.usage?.length ?? 0}`);
+  console.log(`- interruptions: ${run.interruptions?.length ?? 0}`);
   if (run.failure) console.log(`- failure: ${run.failure.class} retryable=${run.failure.retryable} needsUserDecision=${run.failure.needsUserDecision} source=${run.failure.source}`);
   return 0;
 }
@@ -1773,9 +2017,15 @@ function finishRun(args) {
   run.changedFiles = uniqueStrings([...run.changedFiles, ...changedFiles]);
   run.verification.push(...args.manualVerification);
   run.notes = uniqueStrings([...run.notes, ...args.notes]);
+  appendRunTelemetry(run, args);
   mergeStructuredRunDetails(run, args);
   const requestedStatus = deriveFinishStatus(run, args.status);
-  const monitorResult = requestedStatus === 'finished' ? applyMonitorGate(args, runsDir, run) : null;
+  const monitorSidecar = readOrchestrationSidecar(runsDir, run.runId);
+  assertRunMonitorGateBinding(run, monitorSidecar);
+  const monitorResult = requestedStatus === 'finished'
+    ? applyMonitorGate(args, runsDir, run, taskSource, workspacePath, monitorSidecar)
+    : null;
+  if (monitorResult) run.monitorVerdictEvidenceSha256 = monitorResult.evidenceSha256;
   if (monitorResult && !monitorResult.accepted) {
     console.error(`monitor gate blocked finish: verdict=${monitorResult.rawVerdict ?? monitorResult.verdict}; signal=${monitorResult.verdict}; failureClass=${monitorResult.failureClass}; concerns=${monitorResult.concerns}`);
     console.error('blocked monitor finish requires structured detail: add --repro-*/--localization*/--guard* before finishing.');
@@ -1846,6 +2096,8 @@ function finishRun(args) {
   console.log(`- status: ${run.status}`);
   console.log(`- changedFiles: ${run.changedFiles.length}`);
   console.log(`- verification: ${run.verification.length}`);
+  console.log(`- usageSamples: ${run.usage?.length ?? 0}`);
+  console.log(`- interruptions: ${run.interruptions?.length ?? 0}`);
   if (run.failure) console.log(`- failure: ${run.failure.class} retryable=${run.failure.retryable} needsUserDecision=${run.failure.needsUserDecision} source=${run.failure.source}`);
   printRunCommandFooter(P2A_PATHS, {
     sourceArgs: sourceRunArgs(args),
@@ -1926,6 +2178,22 @@ function migrationSidecarReplacement(filePath, suffix, targetRunRef) {
   }
   if (!changed) return null;
   return `${JSON.stringify(data, null, 2)}\n`;
+}
+
+function migrationRunReplacement(migration) {
+  const runFile = migration.files.find((file) => file.suffix === '.json');
+  const gateFile = migration.files.find((file) => file.suffix === '.monitor-gate.json');
+  if (!runFile || !gateFile) return null;
+  const run = JSON.parse(readFileSync(runFile.source, 'utf8'));
+  if (!run.monitorGate?.required) return null;
+  const gateData = JSON.parse(readFileSync(gateFile.source, 'utf8'));
+  gateData.verdictPath = runSidecarRef(migration.targetRef, '.monitor-verdict.json');
+  const migratedGate = normalizeMonitorGateSidecar(gateData, run.runId, migration.targetRef);
+  const migratedContractSha256 = monitorGateContractSha256(migratedGate);
+  if (run.monitorGate.contractSha256 === migratedContractSha256) return null;
+  run.monitorGate.contractSha256 = migratedContractSha256;
+  validateRunData(run);
+  return `${JSON.stringify(run, null, 2)}\n`;
 }
 
 function hasRunIndex(runsDir) {
@@ -2293,7 +2561,9 @@ function planAndMigrateRunLayout(args, targetRunsDir, legacyRunsDirs) {
       ...migrations.flatMap((migration) => migration.files.map((file) => ({
         source: path.resolve(file.source),
         target: path.resolve(file.target),
-        replacement: migrationSidecarReplacement(file.source, file.suffix, migration.targetRef),
+        replacement: file.suffix === '.json'
+          ? migrationRunReplacement(migration)
+          : migrationSidecarReplacement(file.source, file.suffix, migration.targetRef),
       }))),
       ...reservationMoves.map((reservation) => ({
         source: path.resolve(reservation.source),

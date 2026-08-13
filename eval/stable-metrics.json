@@ -14,6 +14,60 @@
       "direction": "higher_is_better"
     },
     {
+      "id": "post_gate_autonomous_completion_rate",
+      "description": "Share of interruption-instrumented implementation runs that finish with passing verification and no recorded interruption.",
+      "calculation": "selfImprovement.runs.autonomy.completionRate",
+      "direction": "higher_is_better"
+    },
+    {
+      "id": "autonomy_telemetry_coverage_rate",
+      "description": "Share of implementation runs carrying the interruption telemetry protocol marker.",
+      "calculation": "selfImprovement.runs.autonomy.telemetryCoverageRate",
+      "direction": "higher_is_better"
+    },
+    {
+      "id": "implementation_decision_interruptions",
+      "description": "Count of user interruptions caused by asking the user to choose an implementation detail.",
+      "calculation": "selfImprovement.runs.autonomy.implementationDecisionInterruptions",
+      "direction": "lower_is_better"
+    },
+    {
+      "id": "user_corrections",
+      "description": "Count of recorded requirement or UI corrections supplied during execution.",
+      "calculation": "selfImprovement.runs.autonomy.userCorrections",
+      "direction": "lower_is_better"
+    },
+    {
+      "id": "valid_gate_return_precision",
+      "description": "Share of assessed Gate returns that were confirmed to require a contract change.",
+      "calculation": "selfImprovement.runs.autonomy.gateReturns.validPrecision",
+      "direction": "higher_is_better"
+    },
+    {
+      "id": "recorded_input_tokens",
+      "description": "Total recorded input tokens in the digest run scope.",
+      "calculation": "selfImprovement.runs.usage.inputTokens",
+      "direction": "lower_is_better"
+    },
+    {
+      "id": "usage_telemetry_coverage_rate",
+      "description": "Share of scoped runs with at least one recorded usage sample.",
+      "calculation": "selfImprovement.runs.usage.coverageRate",
+      "direction": "higher_is_better"
+    },
+    {
+      "id": "rule_violations",
+      "description": "Count of constitution or legacy-style violations reported in monitor rule_concerns.",
+      "calculation": "selfImprovement.runs.monitor.ruleViolations",
+      "direction": "lower_is_better"
+    },
+    {
+      "id": "rule_review_coverage_rate",
+      "description": "Share of implementation runs with a monitor verdict bound to an approved constitution or legacy-style contract and reviewed rule IDs.",
+      "calculation": "selfImprovement.runs.monitor.ruleReviewCoverageRate",
+      "direction": "higher_is_better"
+    },
+    {
       "id": "pending_proposal_reviews",
       "description": "Count of proposal candidates still pending review after curation and approval artifacts are applied.",
       "calculation": "selfImprovement.proposals.pendingReview",

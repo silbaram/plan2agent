@@ -16,6 +16,12 @@ import { compareSync } from './p2a_memory.mjs';
 import { shellQuote } from './p2a_run_commands.mjs';
 import { runFilePath, runSidecarPath, runSidecarRef, taskContractSha256 } from './p2a_run_paths.mjs';
 import {
+  MONITOR_CONCERN_FIELDS,
+  MONITOR_GATE_POLICY,
+  monitorGateContractSha256,
+  normalizeMonitorGateSidecar,
+} from './p2a_monitor_gate.mjs';
+import {
   E2E_FIXTURE_ROOT,
   FIXTURE_ROOT,
   loadE2eFixtureManifest,
@@ -3426,7 +3432,36 @@ function validateIterationCurrentFixtureCases() {
       }
 
       const executeMonitorRunsDir = path.join(tempRoot, 'p2a-execute-monitor', 'runs');
-      writeFileSync(runSidecarPath(executeMonitorRunsDir, 'run-execute-monitor-fixture', '.monitor-verdict.json'), JSON.stringify({ verdict: 'block', unmet_acceptance: ['Fixture unmet acceptance'] }, null, 2) + '\n', 'utf8');
+      writeFileSync(runSidecarPath(executeMonitorRunsDir, 'run-execute-monitor-fixture', '.monitor-verdict.json'), JSON.stringify({
+        verdict: 'block',
+        rules_reviewed: [],
+        rule_concerns: [],
+        scope_concerns: [],
+        verification_concerns: [],
+        unmet_acceptance: ['Fixture unmet acceptance'],
+        needs_user_decision: [],
+        note: 'Fixture monitor verdict.',
+      }, null, 2) + '\n', 'utf8');
+      result = runExecute([
+        'finish',
+        '--graph',
+        executeMonitorGraphPath,
+        '--run-id',
+        'run-execute-monitor-fixture',
+        '--repro-step',
+        'Review the monitor verdict and reproduce the unmet acceptance case.',
+        '--localization',
+        'The monitor localized the failure to an unmet acceptance criterion.',
+        '--guard',
+        'Keep the task blocked until the acceptance criterion passes.',
+      ]);
+      checks += 1;
+      const blockedMonitorOutput = `${result.stdout ?? ''}${result.stderr ?? ''}`;
+      if (result.status !== 0 || !blockedMonitorOutput.includes('Monitor gate blocked finish')) {
+        console.error(`p2a_execute monitor fixture did not seal a blocked verdict: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: failureStatus(result), checks };
+      }
       const executeMonitorProposalsDir = path.join(tempRoot, 'p2a-execute-monitor', 'proposals');
       const executeMonitorUpstreamProposalsDir = path.join(tempRoot, 'p2a-execute-monitor', 'upstream-proposals');
       const proposalRunsDir = path.join(tempRoot, 'p2a-execute-monitor-proposal-runs');
@@ -3439,16 +3474,18 @@ function validateIterationCurrentFixtureCases() {
       cpSync(runSidecarPath(executeMonitorRunsDir, 'run-execute-monitor-fixture', '.monitor-gate.json'), path.join(proposalRunsDir, runSidecarRef(baseRunIndexEntry.runRef, '.monitor-gate.json')));
       cpSync(runSidecarPath(executeMonitorRunsDir, 'run-execute-monitor-fixture', '.monitor-verdict.json'), path.join(proposalRunsDir, runSidecarRef(baseRunIndexEntry.runRef, '.monitor-verdict.json')));
       const proposalRun = JSON.parse(readFileSync(proposalRunPath, 'utf8'));
-      proposalRun.status = 'blocked';
-      proposalRun.finishedAt = new Date().toISOString();
-      proposalRun.updatedAt = proposalRun.finishedAt;
-      proposalRun.failure = { class: 'implementation_incomplete', retryable: 'after_fix', needsUserDecision: false, source: 'monitor' };
-      proposalRun.reproduction = { steps: ['fixture'], commands: [], notes: [] };
-      proposalRun.localization = { findings: ['fixture'], files: [] };
-      proposalRun.guard = { checks: ['fixture'], notes: [] };
-      writeFileSync(proposalRunPath, `${JSON.stringify(proposalRun, null, 2)}\n`, 'utf8');
-      baseRunIndexEntry.status = 'blocked';
-      baseRunIndexEntry.finishedAt = proposalRun.finishedAt;
+      if (
+        proposalRun.status !== 'blocked'
+        || proposalRun.failure?.source !== 'monitor'
+        || proposalRun.failure?.class !== 'implementation_incomplete'
+        || proposalRun.monitorVerdictEvidenceSha256 !== hashText(
+          readFileSync(path.join(proposalRunsDir, runSidecarRef(baseRunIndexEntry.runRef, '.monitor-verdict.json'))),
+        )
+      ) {
+        console.error(`p2a_execute monitor fixture wrote unexpected sealed evidence: ${caseData.id}`);
+        console.error(JSON.stringify({ proposalRun }, null, 2));
+        return { status: 1, checks };
+      }
       writeFileSync(path.join(proposalRunsDir, 'run-index.json'), `${JSON.stringify({
         schema_version: 'p2a.run_index.v1',
         projectId: executeMonitorRunIndex.projectId,
@@ -7045,6 +7082,9 @@ function validateIterationCurrentFixtureCases() {
       const milestoneRunIndexTasks = [];
       const milestoneCompletedTaskEvidence = [];
       const milestoneVisualRunId = `run-milestone-${milestoneTaskGraph.tasks[0].id}`;
+      const milestoneMonitorRunId = `run-milestone-${milestoneTaskGraph.tasks[1].id}`;
+      const milestoneMonitorGateRef = `runs/${milestoneMonitorRunId}.monitor-gate.json`;
+      const milestoneMonitorVerdictRef = `runs/${milestoneMonitorRunId}.monitor-verdict.json`;
       const milestoneVisualEvidenceBase = `visual-evidence/iter-002/${milestoneVisualRunId}`;
       const milestoneVisualCanonicalBase = `${milestoneVisualEvidenceBase}/canonical`;
       const milestoneVisualAliasBase = `${milestoneVisualEvidenceBase}/capture-alias`;
@@ -7204,6 +7244,38 @@ function validateIterationCurrentFixtureCases() {
           writeFileSync(
             path.join(milestoneRunsDir, `${runId}.visual-review.json`),
             visualReviewText,
+            'utf8',
+          );
+        } else if (taskIndex === 1) {
+          const monitorGate = normalizeMonitorGateSidecar({
+            required: true,
+            requiredConcernFields: MONITOR_CONCERN_FIELDS,
+            ruleContract: { source: 'none', ref: null, sha256: null, ruleIds: [] },
+          }, runId, `${runId}.json`);
+          run.monitorGate = {
+            required: true,
+            policy: MONITOR_GATE_POLICY,
+            contractSha256: monitorGateContractSha256(monitorGate),
+          };
+          writeFileSync(
+            path.join(milestoneRunsDir, `${runId}.monitor-gate.json`),
+            `${JSON.stringify(monitorGate, null, 2)}\n`,
+            'utf8',
+          );
+          const monitorVerdictText = `${JSON.stringify({
+            verdict: 'confirm_done',
+            rules_reviewed: [],
+            rule_concerns: [],
+            scope_concerns: [],
+            verification_concerns: [],
+            unmet_acceptance: [],
+            needs_user_decision: [],
+            note: 'Synthetic handoff monitor evidence without a project rule source.',
+          }, null, 2)}\n`;
+          run.monitorVerdictEvidenceSha256 = hashText(monitorVerdictText);
+          writeFileSync(
+            path.join(milestoneRunsDir, `${runId}.monitor-verdict.json`),
+            monitorVerdictText,
             'utf8',
           );
         }
@@ -8284,6 +8356,8 @@ function validateIterationCurrentFixtureCases() {
         'iterations/iter-002/gate-b-spec/visual-design/VD-1/index.html',
         'iterations/iter-002/gate-b-spec/visual-design/VD-2/prototype.json',
         'iterations/iter-002/gate-b-spec/visual-design/VD-2/index.html',
+        milestoneMonitorGateRef,
+        milestoneMonitorVerdictRef,
         milestoneVisualSidecarRef,
         milestoneVisualScreenshotRef,
         milestoneVisualAccessibilityRef,

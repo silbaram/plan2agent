@@ -15,7 +15,6 @@ const ACCESS_VALUES = new Set(['read-only', 'workspace-write']);
 const TIER_VALUES = new Set(['light', 'standard', 'heavy']);
 const CLAUDE_TOOL_MAP = { read: ['Read'], search: ['Grep', 'Glob'], web: ['WebSearch', 'WebFetch'], edit: ['Edit', 'Write'], shell: ['Bash'] };
 const GEMINI_TOOL_MAP = { read: ['read_file'], search: ['grep_search'], web: ['google_web_search', 'web_fetch'], edit: [], shell: [] };
-const CLAUDE_TIER_MODEL = { light: 'haiku', standard: 'sonnet', heavy: 'opus' };
 const CODEX_TIER_MODEL = { light: 'gpt-5.6-sol', standard: 'gpt-5.6-sol', heavy: 'gpt-5.6-sol' };
 const CODEX_TIER_EFFORT = { light: 'medium', standard: 'high', heavy: 'max' };
 const GEMINI_TIER_CONFIG = {
@@ -215,7 +214,6 @@ function renderMarkdownAgent(meta, body, { target }) {
   if (target === 'claude') {
     lines.push('tools:');
     lines.push(...expandCapabilities(meta.capabilities, CLAUDE_TOOL_MAP).map((tool) => `  - ${tool}`));
-    lines.push(`model: ${CLAUDE_TIER_MODEL[meta.tier]}`);
   } else if (target === 'gemini') {
     lines.push('kind: local');
     lines.push('tools:');

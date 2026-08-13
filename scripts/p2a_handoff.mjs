@@ -1898,6 +1898,41 @@ function pushMilestoneReviewBundleIfExists(
           : {},
       );
       pushRunSourceBundle(sourceBundle, portableSourceSpecRef);
+      const monitorGateRef = runSidecarRef(indexedRun.runRef, '.monitor-gate.json');
+      const monitorGateSourcePath = path.resolve(path.dirname(runIndex.sourcePath), monitorGateRef);
+      if (existsSync(monitorGateSourcePath)) {
+        const monitorGate = resolveMilestoneBundleReference(
+          artifactsRoot,
+          monitorGateRef,
+          `${checkpoint} run-index ${indexedRun.runId} monitor gate`,
+          path.dirname(runIndex.sourcePath),
+        );
+        pushBundleFile(monitorGate.sourcePath, monitorGate.relativePath, evidenceFiles);
+        const monitorGateData = loadJson(monitorGate.sourcePath);
+        const verdictRef = typeof monitorGateData.verdictPath === 'string'
+          ? monitorGateData.verdictPath.trim()
+          : '';
+        const verdictSourcePath = verdictRef
+          ? path.resolve(path.dirname(runIndex.sourcePath), verdictRef)
+          : null;
+        if (verdictSourcePath && existsSync(verdictSourcePath)) {
+          const verdict = resolveMilestoneBundleReference(
+            artifactsRoot,
+            verdictRef,
+            `${checkpoint} run-index ${indexedRun.runId} monitor verdict`,
+            path.dirname(runIndex.sourcePath),
+          );
+          pushBundleFile(verdict.sourcePath, verdict.relativePath, evidenceFiles);
+        } else if (runData.status === 'finished' && runData.monitorGate?.required) {
+          throw new ValidationError(
+            `${checkpoint} finished monitor-gated run ${indexedRun.runId} is missing its monitor verdict`,
+          );
+        }
+      } else if (runData.monitorGate?.required) {
+        throw new ValidationError(
+          `${checkpoint} run ${indexedRun.runId} is missing its bound monitor gate sidecar`,
+        );
+      }
       if (runData.status === 'finished' && runData.visualReview?.required) {
         const sidecar = resolveMilestoneBundleReference(
           artifactsRoot,
@@ -2515,7 +2550,6 @@ tools:
   - Edit
   - MultiEdit
   - Write
-model: sonnet
 ---
 
 ${teamBigFiveCoordinatorInstructions('claude')}

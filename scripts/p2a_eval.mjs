@@ -18,6 +18,13 @@ import {
 } from './validate_artifacts.mjs';
 import { resolveRunsDir, runFilePath as indexedRunFilePath } from './p2a_run_paths.mjs';
 import {
+  assertRunMonitorGateBinding,
+  assertRunMonitorVerdictBinding,
+  normalizeMonitorVerdictData,
+  readMonitorGateSidecar,
+} from './p2a_monitor_gate.mjs';
+import { RUN_TELEMETRY_PROTOCOL } from './p2a_constants.mjs';
+import {
   assertNoUninitializedScaffoldArtifactRoots,
   assertNotUninitializedScaffoldGraph,
   configuredTaskGraphPath,
@@ -46,6 +53,60 @@ const BUILTIN_STABLE_METRIC_DEFINITIONS = [
     id: 'failure_evidence_complete_rate',
     description: 'Share of failed or blocked runs that include complete reproduction, localization, and guard evidence.',
     calculation: 'selfImprovement.runs.failureEvidence.completeRate',
+    direction: 'higher_is_better',
+  },
+  {
+    id: 'post_gate_autonomous_completion_rate',
+    description: 'Share of interruption-instrumented implementation runs that finish with passing verification and no recorded interruption.',
+    calculation: 'selfImprovement.runs.autonomy.completionRate',
+    direction: 'higher_is_better',
+  },
+  {
+    id: 'autonomy_telemetry_coverage_rate',
+    description: 'Share of implementation runs carrying the interruption telemetry protocol marker.',
+    calculation: 'selfImprovement.runs.autonomy.telemetryCoverageRate',
+    direction: 'higher_is_better',
+  },
+  {
+    id: 'implementation_decision_interruptions',
+    description: 'Count of user interruptions caused by asking the user to choose an implementation detail.',
+    calculation: 'selfImprovement.runs.autonomy.implementationDecisionInterruptions',
+    direction: 'lower_is_better',
+  },
+  {
+    id: 'user_corrections',
+    description: 'Count of recorded requirement or UI corrections supplied during execution.',
+    calculation: 'selfImprovement.runs.autonomy.userCorrections',
+    direction: 'lower_is_better',
+  },
+  {
+    id: 'valid_gate_return_precision',
+    description: 'Share of assessed Gate returns that were confirmed to require a contract change.',
+    calculation: 'selfImprovement.runs.autonomy.gateReturns.validPrecision',
+    direction: 'higher_is_better',
+  },
+  {
+    id: 'recorded_input_tokens',
+    description: 'Total recorded input tokens in the digest run scope.',
+    calculation: 'selfImprovement.runs.usage.inputTokens',
+    direction: 'lower_is_better',
+  },
+  {
+    id: 'usage_telemetry_coverage_rate',
+    description: 'Share of scoped runs with at least one recorded usage sample.',
+    calculation: 'selfImprovement.runs.usage.coverageRate',
+    direction: 'higher_is_better',
+  },
+  {
+    id: 'rule_violations',
+    description: 'Count of constitution or legacy-style violations reported in monitor rule_concerns.',
+    calculation: 'selfImprovement.runs.monitor.ruleViolations',
+    direction: 'lower_is_better',
+  },
+  {
+    id: 'rule_review_coverage_rate',
+    description: 'Share of implementation runs with a monitor verdict bound to an approved constitution or legacy-style contract and reviewed rule IDs.',
+    calculation: 'selfImprovement.runs.monitor.ruleReviewCoverageRate',
     direction: 'higher_is_better',
   },
   {
@@ -440,6 +501,33 @@ function readRuns(runsDir, options = {}) {
     }
   }
   return { runs: mostRecentRuns(runs, options.limit ?? null), skippedRuns, totalRuns: runs.length };
+}
+
+function readMonitorEvidence(runsDir, runs) {
+  const byRunId = new Map();
+  const skipped = [];
+  if (!runsDir) return { byRunId, skipped };
+  for (const run of runs) {
+    try {
+      const gate = readMonitorGateSidecar(runsDir, run.runId);
+      assertRunMonitorGateBinding(run, gate);
+      if (!gate?.required) continue;
+      const verdictPath = path.resolve(runsDir, gate.verdictPath);
+      const verdictContents = fileExists(verdictPath) ? readFileSync(verdictPath) : null;
+      assertRunMonitorVerdictBinding(run, verdictContents);
+      if (run.monitorGate?.required && !run.monitorVerdictEvidenceSha256) continue;
+      if (verdictContents === null) continue;
+      const verdict = normalizeMonitorVerdictData(JSON.parse(verdictContents.toString('utf8')), {
+        requiredConcernFields: gate.requiredConcernFields,
+        requiredRuleIds: gate.ruleContract?.ruleIds,
+        requireRulesReviewed: gate.ruleContract !== null,
+      });
+      byRunId.set(run.runId, { gate, verdict });
+    } catch (error) {
+      skipped.push({ runId: run.runId, reason: errorMessage(error) });
+    }
+  }
+  return { byRunId, skipped };
 }
 
 function taskForRun(graph, run) {
@@ -1545,6 +1633,14 @@ function ratio(numerator, denominator) {
   return Number((numerator / denominator).toFixed(3));
 }
 
+function safeMetricSum(current, addition, label) {
+  const next = current + addition;
+  if (!Number.isSafeInteger(next)) {
+    throw new Error(`${label} exceeds the safe integer range`);
+  }
+  return next;
+}
+
 function percentLabel(value) {
   if (value === null || value === undefined) return 'n/a';
   return `${Math.round(value * 100)}%`;
@@ -1903,7 +1999,7 @@ function evidenceSummaryForRun(run) {
   return run.structuredEvidence ?? structuredRunSummary(run);
 }
 
-function buildRunSelfImprovementSummary(runs, artifacts) {
+function buildRunSelfImprovementSummary(runs, artifacts, monitorEvidenceByRunId = new Map()) {
   const runLikeItems = runs.length
     ? runs
     : artifacts.grades.map((item) => runLikeFromGrade(item.payload));
@@ -1914,9 +2010,79 @@ function buildRunSelfImprovementSummary(runs, artifacts) {
   let blocked = 0;
   const incompleteRuns = [];
   const missing = { reproduction: 0, localization: 0, guard: 0 };
+  const usageByModelProfile = Object.create(null);
+  const usageBySource = Object.create(null);
+  let usageSamples = 0;
+  let inputTokens = 0;
+  let outputTokens = 0;
+  let totalTokens = 0;
+  let implementationDecisionInterruptions = 0;
+  let userCorrections = 0;
+  let gateReturns = 0;
+  let validGateReturns = 0;
+  let invalidGateReturns = 0;
+  let autonomousCompletions = 0;
+  let autonomyTelemetryRuns = 0;
+  let runsWithUsageSamples = 0;
+  let ruleViolations = 0;
+  let scopeViolations = 0;
+  let monitorRuns = 0;
+  let ruleReviewRuns = 0;
+  let implementationRuns = 0;
   for (const run of runLikeItems) {
     incrementCounter(byStatus, run.status ?? 'unknown');
-    if (run.status === 'finished' && verificationOutcome(run) === 'passed') successful += 1;
+    const runSuccessful = run.status === 'finished' && verificationOutcome(run) === 'passed';
+    const implementationRun = !run.runKind;
+    if (runSuccessful) successful += 1;
+    const hasInterruptionTelemetry = run.telemetryProtocol === RUN_TELEMETRY_PROTOCOL
+      && Array.isArray(run.interruptions);
+    const interruptions = hasInterruptionTelemetry ? run.interruptions : [];
+    if (implementationRun) {
+      implementationRuns += 1;
+      if (hasInterruptionTelemetry) autonomyTelemetryRuns += 1;
+      if (runSuccessful && hasInterruptionTelemetry && interruptions.length === 0) autonomousCompletions += 1;
+    }
+    const usageSamplesForRun = Array.isArray(run.usage) ? run.usage : [];
+    if (usageSamplesForRun.length > 0) runsWithUsageSamples += 1;
+    for (const sample of usageSamplesForRun) {
+      usageSamples += 1;
+      inputTokens = safeMetricSum(inputTokens, sample.inputTokens ?? 0, 'recorded input token total');
+      outputTokens = safeMetricSum(outputTokens, sample.outputTokens ?? 0, 'recorded output token total');
+      totalTokens = safeMetricSum(totalTokens, sample.totalTokens ?? 0, 'recorded token total');
+      const profile = sample.modelProfile ?? 'unknown';
+      usageByModelProfile[profile] ??= { samples: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0 };
+      usageByModelProfile[profile].samples += 1;
+      usageByModelProfile[profile].inputTokens = safeMetricSum(usageByModelProfile[profile].inputTokens, sample.inputTokens ?? 0, `${profile} input token total`);
+      usageByModelProfile[profile].outputTokens = safeMetricSum(usageByModelProfile[profile].outputTokens, sample.outputTokens ?? 0, `${profile} output token total`);
+      usageByModelProfile[profile].totalTokens = safeMetricSum(usageByModelProfile[profile].totalTokens, sample.totalTokens ?? 0, `${profile} token total`);
+      const usageSource = sample.source ?? 'unknown';
+      usageBySource[usageSource] ??= { samples: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0 };
+      usageBySource[usageSource].samples += 1;
+      usageBySource[usageSource].inputTokens = safeMetricSum(usageBySource[usageSource].inputTokens, sample.inputTokens ?? 0, `${usageSource} input token total`);
+      usageBySource[usageSource].outputTokens = safeMetricSum(usageBySource[usageSource].outputTokens, sample.outputTokens ?? 0, `${usageSource} output token total`);
+      usageBySource[usageSource].totalTokens = safeMetricSum(usageBySource[usageSource].totalTokens, sample.totalTokens ?? 0, `${usageSource} token total`);
+    }
+    if (implementationRun && hasInterruptionTelemetry) {
+      for (const interruption of interruptions) {
+        if (interruption.type === 'implementation_decision') implementationDecisionInterruptions += 1;
+        else if (interruption.type === 'user_correction') userCorrections += 1;
+        else if (interruption.type === 'gate_return') {
+          gateReturns += 1;
+          if (interruption.assessment === 'valid') validGateReturns += 1;
+          else if (interruption.assessment === 'invalid') invalidGateReturns += 1;
+        }
+      }
+    }
+    const monitorEvidence = monitorEvidenceByRunId.get(run.runId);
+    if (implementationRun && monitorEvidence) {
+      monitorRuns += 1;
+      scopeViolations += monitorEvidence.verdict?.concerns?.scope_concerns?.length ?? 0;
+      if (monitorEvidence.gate?.ruleContract?.source !== undefined
+        && monitorEvidence.gate.ruleContract.source !== 'none') {
+        ruleReviewRuns += 1;
+        ruleViolations += monitorEvidence.verdict?.concerns?.rule_concerns?.length ?? 0;
+      }
+    }
     if (run.status === 'failed') failed += 1;
     if (run.status === 'blocked') blocked += 1;
     if (run.status === 'failed' || run.status === 'blocked') {
@@ -1953,6 +2119,43 @@ function buildRunSelfImprovementSummary(runs, artifacts) {
       completeRate: ratio(complete, failedOrBlocked),
       missing,
       incompleteRuns: incompleteRuns.slice(0, 20),
+    },
+    autonomy: {
+      implementationRuns,
+      excludedReviewRuns: runLikeItems.length - implementationRuns,
+      autonomousCompletions,
+      eligibleRuns: autonomyTelemetryRuns,
+      uninstrumentedRuns: implementationRuns - autonomyTelemetryRuns,
+      telemetryCoverageRate: ratio(autonomyTelemetryRuns, implementationRuns),
+      completionRate: ratio(autonomousCompletions, autonomyTelemetryRuns),
+      implementationDecisionInterruptions,
+      userCorrections,
+      gateReturns: {
+        total: gateReturns,
+        valid: validGateReturns,
+        invalid: invalidGateReturns,
+        validPrecision: ratio(validGateReturns, validGateReturns + invalidGateReturns),
+      },
+    },
+    usage: {
+      samples: usageSamples,
+      runsWithSamples: runsWithUsageSamples,
+      runsWithoutSamples: runLikeItems.length - runsWithUsageSamples,
+      coverageRate: ratio(runsWithUsageSamples, runLikeItems.length),
+      inputTokens,
+      outputTokens,
+      totalTokens,
+      byModelProfile: usageByModelProfile,
+      bySource: usageBySource,
+    },
+    monitor: {
+      eligibleRuns: implementationRuns,
+      monitoredRuns: monitorRuns,
+      ruleReviewRuns,
+      runsWithoutRuleReview: implementationRuns - ruleReviewRuns,
+      ruleReviewCoverageRate: ratio(ruleReviewRuns, implementationRuns),
+      ruleViolations,
+      scopeViolations,
     },
   };
 }
@@ -2140,6 +2343,7 @@ function buildSelfImprovementDigest(args, evalDir, artifacts, clusters) {
   const sourceContext = buildDigestSourceContext(args, evalDir, artifacts);
   const runLimit = args.recentRuns ?? DEFAULT_DIGEST_RECENT_RUNS;
   const runsRead = sourceContext.runsDir ? readRuns(sourceContext.runsDir, { limit: runLimit }) : { runs: [], skippedRuns: [], totalRuns: 0 };
+  const monitorEvidence = readMonitorEvidence(sourceContext.runsDir, runsRead.runs);
   const proposalRead = sourceContext.proposalsDir ? readProposals(sourceContext.proposalsDir) : { proposals: [], skippedProposals: [] };
   const approvalsRead = readProposalDraftApprovals(sourceContext.scanRoots);
   const flowArtifacts = readProposalPatchDraftsAndCurations(sourceContext.scanRoots);
@@ -2154,7 +2358,7 @@ function buildSelfImprovementDigest(args, evalDir, artifacts, clusters) {
     .filter((proposal) => proposal.status === 'approved' || scopedApprovedSignalIndex.proposalIds.has(proposal.proposalId))
     .map((proposal) => proposal.proposalId));
   const maintenanceGraphs = readMaintenanceGraphs(sourceContext, scopedApprovals);
-  const runSummary = buildRunSelfImprovementSummary(runsRead.runs, artifacts);
+  const runSummary = buildRunSelfImprovementSummary(runsRead.runs, artifacts, monitorEvidence.byRunId);
   const proposalSummary = buildProposalSelfImprovementSummary(scopedProposals, proposalRead.skippedProposals, scopedApprovedSignalIndex, {
     excludedByRunScope: proposalRead.proposals.length - scopedProposals.length,
   });
@@ -2191,6 +2395,7 @@ function buildSelfImprovementDigest(args, evalDir, artifacts, clusters) {
       curationFiles: flowArtifacts.curations.map((item) => displayPath(item.filePath)),
       maintenanceGraphs: maintenanceGraphs.graphs.map((item) => displayPath(item.filePath)),
       skippedRuns: runsRead.skippedRuns,
+      skippedMonitorEvidence: monitorEvidence.skipped,
       skippedProposals: proposalRead.skippedProposals,
       skippedApprovals: approvalsRead.skippedApprovals,
       skippedPatchDrafts: flowArtifacts.skippedPatchDrafts,
@@ -2455,6 +2660,9 @@ function printEvalDigest(payload, writeResult) {
   console.log(`- compare: total=${payload.compares.total} byVerdict=${JSON.stringify(payload.compares.byVerdict)} failingSignals=${payload.compares.failingSignals.length}`);
   console.log(`- analysis: total=${payload.analyses.total} clusters=${payload.analyses.clusters} byClassification=${JSON.stringify(payload.analyses.byClassification)}`);
   console.log(`- self-improvement: runs=${payload.selfImprovement.runs.total} failedOrBlocked=${payload.selfImprovement.runs.failedOrBlocked} proposals=${payload.selfImprovement.proposals.total} approved=${payload.selfImprovement.proposals.approved} recurringFailures=${payload.selfImprovement.recurringFailures.clusters}`);
+  console.log(`- autonomy: completion=${payload.selfImprovement.runs.autonomy.autonomousCompletions}/${payload.selfImprovement.runs.autonomy.eligibleRuns} rate=${percentLabel(payload.selfImprovement.runs.autonomy.completionRate)} telemetryCoverage=${percentLabel(payload.selfImprovement.runs.autonomy.telemetryCoverageRate)} implementationInterruptions=${payload.selfImprovement.runs.autonomy.implementationDecisionInterruptions} userCorrections=${payload.selfImprovement.runs.autonomy.userCorrections} gateReturns=${payload.selfImprovement.runs.autonomy.gateReturns.total}`);
+  console.log(`- usage: samples=${payload.selfImprovement.runs.usage.samples} coverage=${percentLabel(payload.selfImprovement.runs.usage.coverageRate)} inputTokens=${payload.selfImprovement.runs.usage.inputTokens} outputTokens=${payload.selfImprovement.runs.usage.outputTokens}`);
+  console.log(`- monitor concerns: rules=${payload.selfImprovement.runs.monitor.ruleViolations} scope=${payload.selfImprovement.runs.monitor.scopeViolations} ruleReviewCoverage=${percentLabel(payload.selfImprovement.runs.monitor.ruleReviewCoverageRate)}`);
   console.log(`- failure evidence: complete=${payload.selfImprovement.runs.failureEvidence.complete}/${payload.selfImprovement.runs.failureEvidence.required} rate=${percentLabel(payload.selfImprovement.runs.failureEvidence.completeRate)}`);
   console.log(`- maintenance conversion: converted=${payload.selfImprovement.maintenance.convertedApprovals}/${payload.selfImprovement.maintenance.approvedProposalSignals} rate=${percentLabel(payload.selfImprovement.maintenance.conversionRate)}`);
   console.log(`- post-maintenance verification: passed=${payload.selfImprovement.maintenance.postMaintenanceVerification.passed}/${payload.selfImprovement.maintenance.postMaintenanceVerification.total} rate=${percentLabel(payload.selfImprovement.maintenance.postMaintenanceVerification.successRate)}`);

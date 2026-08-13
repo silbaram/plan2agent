@@ -8,7 +8,12 @@ import process from 'node:process';
 import { pathToFileURL } from 'node:url';
 import { FAILURE_CLASSES, FAILURE_RETRYABLE, ISOLATION_MODES } from './p2a_constants.mjs';
 import { loadJson, validateProposalDraftApprovalData, validateRunData, validateRunIndexData, validateTaskGraphData, ValidationError } from './validate_artifacts.mjs';
-import { monitorGateSidecarPath, normalizeMonitorVerdictData, readMonitorGateSidecar } from './p2a_monitor_gate.mjs';
+import {
+  assertRunMonitorGateBinding,
+  monitorGateSidecarPath,
+  normalizeMonitorVerdictData,
+  readMonitorGateSidecar,
+} from './p2a_monitor_gate.mjs';
 import {
   resolveIterationState,
   validateMaintenanceTaskGraphProject,
@@ -42,6 +47,8 @@ const ROOT = P2A_PATHS.projectRoot;
 const COMMANDS = new Set(['plan', 'start', 'review', 'accept', 'resume', 'status', 'finish']);
 const FINISH_STATUSES = new Set(['finished', 'failed', 'blocked']);
 const FAILURE_SOURCES = new Set(['owner', 'monitor', 'implementer']);
+const USAGE_SOURCES = new Set(['provider', 'manual']);
+const GATE_RETURN_ASSESSMENTS = new Set(['valid', 'invalid']);
 const IMPLEMENTER_AGENT_TOOLS = new Set(['codex', 'claude', 'manual']);
 const REVIEWER_AGENT_TOOLS = new Set(['codex', 'claude', 'gemini', 'manual']);
 const DEFAULT_PROJECT_CONFIG = path.join('.plan2agent', 'project.config.json');
@@ -111,6 +118,12 @@ function usage() {
     '  --collect-git',
     '  --changed-file <path>   Repeatable.',
     '  --note <text>           Repeatable.',
+    '  --usage-model <profile>',
+    '  --usage-input-tokens <n>, --usage-output-tokens <n>',
+    '  --usage-source provider|manual',
+    '  --implementation-interruption <text>  Repeatable.',
+    '  --user-correction <text> Repeatable.',
+    '  --gate-return valid|invalid:<text>  Repeatable.',
     '  --repro-step <text>     Required with localization and guard when finishing failed/blocked. Repeatable.',
     '  --repro-command <cmd>   Append a command that reproduces the observed issue. Repeatable.',
     '  --repro-note <text>     Append reproduction context. Repeatable.',
@@ -152,6 +165,13 @@ function parseArgs(argv) {
     requireMonitor: false,
     changedFiles: [],
     notes: [],
+    usageModel: null,
+    usageInputTokens: null,
+    usageOutputTokens: null,
+    usageSource: null,
+    implementationInterruptions: [],
+    userCorrections: [],
+    gateReturns: [],
     reproductionSteps: [],
     reproductionCommands: [],
     reproductionNotes: [],
@@ -197,6 +217,16 @@ function parseArgs(argv) {
     else if (arg === '--require-monitor') args.requireMonitor = true;
     else if (arg === '--changed-file') args.changedFiles.push(requiredValue(argv, ++index, '--changed-file'));
     else if (arg === '--note') args.notes.push(requiredValue(argv, ++index, '--note', { allowLeadingDash: true }));
+    else if (arg === '--usage-model') args.usageModel = requiredNonBlankText(argv, ++index, '--usage-model');
+    else if (arg === '--usage-input-tokens') args.usageInputTokens = parseNonNegativeInteger(requiredValue(argv, ++index, '--usage-input-tokens'), '--usage-input-tokens');
+    else if (arg === '--usage-output-tokens') args.usageOutputTokens = parseNonNegativeInteger(requiredValue(argv, ++index, '--usage-output-tokens'), '--usage-output-tokens');
+    else if (arg === '--usage-source') {
+      args.usageSource = requiredValue(argv, ++index, '--usage-source');
+      if (!USAGE_SOURCES.has(args.usageSource)) throw new Error('--usage-source must be provider or manual');
+    }
+    else if (arg === '--implementation-interruption') args.implementationInterruptions.push(requiredNonBlankText(argv, ++index, '--implementation-interruption'));
+    else if (arg === '--user-correction') args.userCorrections.push(requiredNonBlankText(argv, ++index, '--user-correction'));
+    else if (arg === '--gate-return') args.gateReturns.push(parseGateReturn(requiredValue(argv, ++index, '--gate-return', { allowLeadingDash: true })));
     else if (arg === '--repro-step') args.reproductionSteps.push(requiredValue(argv, ++index, '--repro-step', { allowLeadingDash: true }));
     else if (arg === '--repro-command') args.reproductionCommands.push(requiredValue(argv, ++index, '--repro-command', { allowLeadingDash: true }));
     else if (arg === '--repro-note') args.reproductionNotes.push(requiredValue(argv, ++index, '--repro-note', { allowLeadingDash: true }));
@@ -278,7 +308,16 @@ function parseArgs(argv) {
   if (args.requireMonitor && args.command !== 'start') {
     throw new Error('--require-monitor is only supported with start');
   }
-  if (args.command !== 'finish' && (args.status || args.failureClass || args.retryable || args.needsUserDecision !== null || args.failureSource || args.collectGit || args.saveConfig || hasStructuredDetailOptions(args))) {
+  const hasUsage = [args.usageModel, args.usageInputTokens, args.usageOutputTokens, args.usageSource]
+    .some((value) => value !== null);
+  if (hasUsage && (args.usageModel === null || args.usageInputTokens === null || args.usageOutputTokens === null)) {
+    throw new Error('--usage-model, --usage-input-tokens, and --usage-output-tokens are required together');
+  }
+  if (hasUsage && !Number.isSafeInteger(args.usageInputTokens + args.usageOutputTokens)) {
+    throw new Error('usage input and output token total exceeds the safe integer range');
+  }
+  if (hasUsage) args.usageSource ??= 'manual';
+  if (args.command !== 'finish' && (args.status || args.failureClass || args.retryable || args.needsUserDecision !== null || args.failureSource || args.collectGit || args.saveConfig || hasStructuredDetailOptions(args) || hasUsage || hasInterruptionOptions(args))) {
     throw new Error('finish options are only supported with finish');
   }
   return args;
@@ -298,10 +337,42 @@ function hasStructuredDetailOptions(args) {
   ].some((values) => values.length > 0);
 }
 
+function hasInterruptionOptions(args) {
+  return args.implementationInterruptions.length > 0
+    || args.userCorrections.length > 0
+    || args.gateReturns.length > 0;
+}
+
 function requiredValue(argv, index, optionName, options = {}) {
   const value = argv[index];
   if (!value || (!options.allowLeadingDash && value.startsWith('--'))) throw new Error(`missing value for ${optionName}`);
   return value;
+}
+
+function requiredNonBlankText(argv, index, optionName) {
+  const value = requiredValue(argv, index, optionName, { allowLeadingDash: true }).trim();
+  if (!value) throw new Error(`${optionName} must not be blank`);
+  return value;
+}
+
+function parseNonNegativeInteger(value, optionName) {
+  if (!/^(0|[1-9][0-9]*)$/.test(value)) throw new Error(`${optionName} must be a non-negative integer`);
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed)) throw new Error(`${optionName} exceeds the safe integer range`);
+  return parsed;
+}
+
+function parseGateReturn(value) {
+  const separator = value.indexOf(':');
+  if (separator <= 0 || separator === value.length - 1) {
+    throw new Error('--gate-return must use valid|invalid:<summary>');
+  }
+  const assessment = value.slice(0, separator);
+  const summary = value.slice(separator + 1).trim();
+  if (!GATE_RETURN_ASSESSMENTS.has(assessment) || !summary) {
+    throw new Error('--gate-return must use valid|invalid:<summary>');
+  }
+  return { assessment, summary };
 }
 
 function assertFile(filePath, label) {
@@ -809,6 +880,15 @@ function finishRunArgs(args, finalStatus, approval = null) {
   if (args.workspace) runArgs.push('--workspace', args.workspace);
   for (const changedFile of args.changedFiles) runArgs.push('--changed-file', changedFile);
   for (const note of uniqueStrings([...approvalRunNotes(approval), ...args.notes])) runArgs.push('--note', note);
+  if (args.usageModel !== null) {
+    runArgs.push('--usage-model', args.usageModel);
+    runArgs.push('--usage-input-tokens', String(args.usageInputTokens));
+    runArgs.push('--usage-output-tokens', String(args.usageOutputTokens));
+    runArgs.push('--usage-source', args.usageSource);
+  }
+  for (const summary of args.implementationInterruptions) runArgs.push('--implementation-interruption', summary);
+  for (const summary of args.userCorrections) runArgs.push('--user-correction', summary);
+  for (const gateReturn of args.gateReturns) runArgs.push('--gate-return', `${gateReturn.assessment}:${gateReturn.summary}`);
   for (const step of args.reproductionSteps) runArgs.push('--repro-step', step);
   for (const command of args.reproductionCommands) runArgs.push('--repro-command', command);
   for (const note of args.reproductionNotes) runArgs.push('--repro-note', note);
@@ -846,14 +926,19 @@ function readMonitorVerdict(source, sidecar) {
   assertFile(verdictPath, 'monitor verdict');
   const data = loadJson(verdictPath);
   try {
-    return normalizeMonitorVerdictData(data);
+    return normalizeMonitorVerdictData(data, {
+      requiredConcernFields: sidecar.requiredConcernFields,
+      requiredRuleIds: sidecar.ruleContract?.ruleIds,
+      requireRulesReviewed: sidecar.ruleContract !== null,
+    });
   } catch (error) {
     throw new Error(`${error.message}: ${displayPath(verdictPath)}`);
   }
 }
 
-function applyMonitorGate(args, source) {
+function applyMonitorGate(args, source, run) {
   const sidecar = readOrchestrationSidecar(source.runsDir, args.runId);
+  assertRunMonitorGateBinding(run, sidecar);
   if (!sidecar?.required) return null;
   const verdict = readMonitorVerdict(source, sidecar);
   if (sidecar.acceptedVerdicts.includes(verdict.verdict) && !verdict.hasConcerns) {
@@ -862,11 +947,13 @@ function applyMonitorGate(args, source) {
   const mappedFailureClass = sidecar.failureClassMap[verdict.failureSignal]
     ?? sidecar.failureClassMap[verdict.verdict]
     ?? 'other';
-  if (!args.status || args.status === 'finished') args.status = 'blocked';
-  if (!args.failureClass) args.failureClass = mappedFailureClass;
-  if (!args.failureSource) args.failureSource = 'monitor';
-  if (args.needsUserDecision === null && verdict.needsUserDecision) args.needsUserDecision = 'true';
-  return { sidecar, verdict: verdict.failureSignal, accepted: false, failureClass: args.failureClass };
+  return {
+    sidecar,
+    verdict: verdict.failureSignal,
+    accepted: false,
+    failureClass: mappedFailureClass,
+    needsUserDecision: verdict.needsUserDecision,
+  };
 }
 
 function updateOrchestrationRuntimeAfterFinish() {
@@ -1393,6 +1480,10 @@ function runFinish(args) {
   const approvalLink = resolveApprovalSelection(args, source);
   const existingRun = readRun(source.runsDir, args.runId);
   assertRunMatchesSourceContext(existingRun, source);
+  assertRunMonitorGateBinding(
+    existingRun,
+    readOrchestrationSidecar(source.runsDir, existingRun.runId),
+  );
   if (approvalLink.taskId) {
     if (existingRun.taskId !== approvalLink.taskId) {
       console.error(`finish refused: run ${existingRun.runId} belongs to ${existingRun.taskId}, not approval task ${approvalLink.taskId}`);
@@ -1421,7 +1512,7 @@ function runFinish(args) {
 
   const requestedBeforeMonitor = args.status ?? (verificationFailed ? 'failed' : null);
   if (!verificationFailed && (!requestedBeforeMonitor || requestedBeforeMonitor === 'finished')) {
-    const monitorResult = applyMonitorGate(args, source);
+    const monitorResult = applyMonitorGate(args, source, existingRun);
     if (monitorResult) {
       if (monitorResult.accepted) {
         console.log(`Monitor gate accepted: ${monitorResult.verdict}`);

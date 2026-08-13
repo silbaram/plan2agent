@@ -13,7 +13,12 @@ import {
   validateTaskGraphData,
   ValidationError,
 } from './validate_artifacts.mjs';
-import { normalizeMonitorVerdictData, readMonitorGateSidecar } from './p2a_monitor_gate.mjs';
+import {
+  assertRunMonitorGateBinding,
+  assertRunMonitorVerdictBinding,
+  normalizeMonitorVerdictData,
+  readMonitorGateSidecar,
+} from './p2a_monitor_gate.mjs';
 import { readRequiredVisualReview } from './p2a_visual_review_gate.mjs';
 import {
   resolveIterationState,
@@ -560,13 +565,19 @@ function readOrchestrationSidecar(runsDir, runId) {
   return readMonitorGateSidecar(runsDir, runId);
 }
 
-function readMonitorVerdict(runsDir, sidecar) {
+function readMonitorVerdict(runsDir, run, sidecar) {
   if (!sidecar?.required) return null;
   const verdictPath = path.resolve(runsDir, sidecar.verdictPath);
   if (!existsSync(verdictPath) || !lstatSync(verdictPath).isFile()) {
     throw new Error(`monitor verdict is missing: ${formatDisplayPath(verdictPath)}`);
   }
-  return normalizeMonitorVerdictData(JSON.parse(readFileSync(verdictPath, 'utf8')));
+  const contents = readFileSync(verdictPath);
+  assertRunMonitorVerdictBinding(run, contents);
+  return normalizeMonitorVerdictData(JSON.parse(contents.toString('utf8')), {
+    requiredConcernFields: sidecar.requiredConcernFields,
+    requiredRuleIds: sidecar.ruleContract?.ruleIds,
+    requireRulesReviewed: sidecar.ruleContract !== null,
+  });
 }
 
 function monitorRequiredRunIdsForTask(args, taskId, graph) {
@@ -574,25 +585,46 @@ function monitorRequiredRunIdsForTask(args, taskId, graph) {
   if (!context) return [];
   const runIds = [];
   for (const candidateRef of context.candidateRefs) {
+    let candidateRun;
     try {
-      const sidecar = readOrchestrationSidecar(context.runsDir, candidateRef.runId);
-      if (sidecar?.required) runIds.push(candidateRef.runId);
+      const candidatePath = runFilePath(context.runsDir, candidateRef.runId, context.index);
+      if (!existsSync(candidatePath) || !lstatSync(candidatePath).isFile()) {
+        throw new Error(`run file is missing: ${formatDisplayPath(candidatePath)}`);
+      }
+      candidateRun = validateRunData(JSON.parse(readFileSync(candidatePath, 'utf8')));
     } catch (error) {
-      warnLatestRunProblem(`could not read monitor gate sidecar for ${candidateRef.runId}: ${error.message}`);
+      warnLatestRunProblem(`could not read monitor-gate run ${candidateRef.runId}: ${error.message}`);
+      continue;
     }
+    let sidecar;
+    try {
+      sidecar = readOrchestrationSidecar(context.runsDir, candidateRef.runId);
+      assertRunMonitorGateBinding(candidateRun, sidecar);
+      if (candidateRun.monitorVerdictEvidenceSha256) {
+        readMonitorVerdict(context.runsDir, candidateRun, sidecar);
+      }
+    } catch (error) {
+      if (candidateRun.monitorGate?.required) {
+        throw new Error(`${taskId} cannot be marked done because monitor gate evidence for ${candidateRef.runId} is invalid: ${error.message}`);
+      }
+      warnLatestRunProblem(`could not read monitor gate sidecar for ${candidateRef.runId}: ${error.message}`);
+      continue;
+    }
+    if (candidateRun.monitorGate?.required || sidecar?.required) runIds.push(candidateRef.runId);
   }
   return runIds;
 }
 
 function assertMonitorGateDoneEvidence(args, task, graph, run) {
-  const monitorRequiredRunIds = monitorRequiredRunIdsForTask(args, task.id, graph);
-  if (!monitorRequiredRunIds.length) return;
   const runsDir = runsDirForTaskArgs(args);
   const sidecar = readOrchestrationSidecar(runsDir, run.runId);
+  assertRunMonitorGateBinding(run, sidecar);
+  const monitorRequiredRunIds = monitorRequiredRunIdsForTask(args, task.id, graph);
+  if (!monitorRequiredRunIds.length) return;
   if (!sidecar?.required) {
     throw new Error(`${task.id} cannot be marked done because this task requires monitor gate evidence from prior run(s): ${monitorRequiredRunIds.join(', ')}. Start the retry with p2a execute start --require-monitor and finish with an accepted monitor verdict.`);
   }
-  const verdict = readMonitorVerdict(runsDir, sidecar);
+  const verdict = readMonitorVerdict(runsDir, run, sidecar);
   if (!sidecar.acceptedVerdicts.includes(verdict.verdict) || verdict.hasConcerns) {
     throw new Error(`${task.id} cannot be marked done because latest run ${run.runId} has no accepted monitor verdict. Start the retry with p2a execute start --require-monitor and finish with concern-free verdict ${sidecar.acceptedVerdicts.join('|')}.`);
   }

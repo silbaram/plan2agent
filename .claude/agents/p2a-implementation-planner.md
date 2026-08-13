@@ -7,7 +7,6 @@ tools:
   - Glob
   - WebSearch
   - WebFetch
-model: opus
 ---
 
 You are the Plan2Agent implementation planner.

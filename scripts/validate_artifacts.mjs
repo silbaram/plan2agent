@@ -28,6 +28,12 @@ import {
   isComposedBaselineReference,
 } from './p2a_spec_model.mjs';
 import { inspectEntryDocument } from './p2a_radar_preflight.mjs';
+import {
+  assertRunMonitorGateBinding,
+  assertRunMonitorVerdictBinding,
+  normalizeMonitorGateSidecar,
+  normalizeMonitorVerdictData,
+} from './p2a_monitor_gate.mjs';
 
 const P2A_PATHS = resolveP2aPaths(import.meta.url);
 const SCHEMA_PATHS = {
@@ -3290,6 +3296,43 @@ export function validateRunData(data) {
       throw new ValidationError(`verification[${index}] unavailable status must include failureReason and failureHint`);
     }
   }
+  for (const [index, sample] of (data.usage ?? []).entries()) {
+    if (![sample.inputTokens, sample.outputTokens, sample.totalTokens].every(Number.isSafeInteger)) {
+      throw new ValidationError(`usage[${index}] token counts must be safe integers`);
+    }
+    if (!sample.modelProfile.trim()) {
+      throw new ValidationError(`usage[${index}].modelProfile must not be blank`);
+    }
+    if (sample.totalTokens !== sample.inputTokens + sample.outputTokens) {
+      throw new ValidationError(
+        `usage[${index}].totalTokens must equal inputTokens + outputTokens`,
+      );
+    }
+  }
+  for (const [index, interruption] of (data.interruptions ?? []).entries()) {
+    if (!interruption.summary.trim()) {
+      throw new ValidationError(`interruptions[${index}].summary must not be blank`);
+    }
+  }
+  if (data.monitorVerdictEvidenceSha256 && !data.monitorGate?.required) {
+    throw new ValidationError('monitorVerdictEvidenceSha256 requires monitorGate.required');
+  }
+  if (data.status === 'started' && data.monitorVerdictEvidenceSha256) {
+    throw new ValidationError('started run must not seal monitor verdict evidence');
+  }
+  if (data.monitorGate?.required && data.status === 'finished' && !data.monitorVerdictEvidenceSha256) {
+    throw new ValidationError(`finished run ${data.runId} must include monitorVerdictEvidenceSha256`);
+  }
+  if (data.monitorGate?.required
+    && data.failure?.source === 'monitor'
+    && !data.monitorVerdictEvidenceSha256) {
+    throw new ValidationError(`${data.status} run ${data.runId} with monitor failure must include monitorVerdictEvidenceSha256`);
+  }
+  if (data.monitorVerdictEvidenceSha256
+    && data.status !== 'finished'
+    && data.failure?.source !== 'monitor') {
+    throw new ValidationError('monitorVerdictEvidenceSha256 is only valid for a finished run or a monitor-sourced failure');
+  }
   if (data.status === 'started' && data.finishedAt !== null) {
     throw new ValidationError('started run must have finishedAt null');
   }
@@ -3635,6 +3678,8 @@ const MILESTONE_IMMUTABLE_RUN_FIELDS = [
   'visualReview',
   'acceptanceReviewEvidenceSha256',
   'acceptanceReview',
+  'monitorGate',
+  'monitorVerdictEvidenceSha256',
   'isolation',
   'status',
   'startedAt',
@@ -4191,6 +4236,73 @@ export function validateRunsDir(runsDir) {
     const source = runData.status === 'finished'
       ? validateRunTaskContract(runData, path.dirname(path.resolve(runsDir)))
       : null;
+    if (runData.monitorGate?.required) {
+      const monitorGatePath = runSidecarPath(
+        runsDir,
+        runData.runId,
+        '.monitor-gate.json',
+        index,
+      );
+      assertFile(monitorGatePath, `${runData.runId} monitor gate`);
+      let monitorGate;
+      try {
+        monitorGate = normalizeMonitorGateSidecar(
+          loadJson(monitorGatePath),
+          runData.runId,
+          normalizedRunRef,
+        );
+        assertRunMonitorGateBinding(runData, monitorGate);
+        const verdictRequired = Boolean(
+          runData.monitorVerdictEvidenceSha256
+          || runData.status === 'finished'
+          || runData.failure?.source === 'monitor',
+        );
+        if (verdictRequired) {
+          const verdictPath = path.resolve(runsDir, monitorGate.verdictPath);
+          assertFile(verdictPath, `${runData.runId} monitor verdict`);
+          const verdictContents = readFileSync(verdictPath);
+          assertRunMonitorVerdictBinding(runData, verdictContents);
+          const verdict = normalizeMonitorVerdictData(
+            JSON.parse(verdictContents.toString('utf8')),
+            {
+              requiredConcernFields: monitorGate.requiredConcernFields,
+              requiredRuleIds: monitorGate.ruleContract?.ruleIds,
+              requireRulesReviewed: monitorGate.ruleContract !== null,
+            },
+          );
+          const accepted = monitorGate.acceptedVerdicts.includes(verdict.verdict)
+            && !verdict.hasConcerns;
+          if (runData.status === 'finished' && !accepted) {
+            throw new Error(`finished run ${runData.runId} does not have an accepted monitor verdict`);
+          }
+          if (runData.failure?.source === 'monitor') {
+            if (runData.status !== 'blocked') {
+              throw new Error(`monitor-sourced run ${runData.runId} must have blocked status`);
+            }
+            if (accepted) {
+              throw new Error(`monitor-sourced blocked run ${runData.runId} cannot have an accepted monitor verdict`);
+            }
+            const expectedFailureClass = monitorGate.failureClassMap[verdict.failureSignal]
+              ?? monitorGate.failureClassMap[verdict.verdict]
+              ?? 'other';
+            if (runData.failure.class !== expectedFailureClass) {
+              throw new Error(
+                `monitor-sourced run ${runData.runId} failure class must be ${expectedFailureClass}`,
+              );
+            }
+            if (runData.failure.needsUserDecision !== verdict.needsUserDecision) {
+              throw new Error(
+                `monitor-sourced run ${runData.runId} needsUserDecision must match its monitor verdict`,
+              );
+            }
+          }
+        } else {
+          assertRunMonitorVerdictBinding(runData, null);
+        }
+      } catch (error) {
+        throw new ValidationError(error instanceof Error ? error.message : String(error));
+      }
+    }
     if (runData.status === 'finished' && runData.visualReview?.required) {
       const visualContract = runData.visualReview;
       if (!/^[a-f0-9]{64}$/.test(runData.workspaceRevisionSha256 ?? '')) {

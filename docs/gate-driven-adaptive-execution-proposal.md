@@ -1,9 +1,11 @@
 # 승인된 계약 기반 자율 개발 개선안
 
 작성일: 2026-08-13<br>
-상태: 설계 제안 — 현재 동작이 아님
+상태: 승인된 설계 · Phase 0 기반 계측 구현 중
 
 문서 홈: [Plan2Agent Docs](README.md) · 현재 구현 계약: [하네스 구현 기준](harness-spec.md) · [반복 개발 스펙](iteration-spec.md) · [감독형 실행 레퍼런스](supervised-execution.md)
+
+구현 진행 상태(2026-08-13): Phase 0의 monitor constitution/style 결합, run-side monitor 계약 hash와 exact verdict evidence hash, 새 verdict `rule_concerns`, protocol-marked run usage/interruption/Gate-return 기록, eval 집계, Claude session-model 상속을 적용했다. 기존 task graph와 10~50 저작 지침은 비교군 A baseline을 보존하기 위해 아직 변경하지 않았다. Eval fixture의 강제 monitor/milestone/visual 실행과 baseline 봉인은 다음 Phase 0 작업이며, Phase 1의 task-lite·자율 실행 변경은 그 뒤에 진행한다.
 
 ## 1. 최상위 개선 목표
 
@@ -65,17 +67,17 @@ Task는 없애지 않는다. 다중 owner·실제 선후 관계·장기 재개�
 | 구현 agent 단위 | implementer 역할은 정확히 한 ready task를 구현하도록 고정되어 있다. | [`p2a-implementer`](../.agents/agents/p2a-implementer.md) |
 | UI 최종 review 기본값 | `devExecution.reviewPasses.visual` 기본값은 `off`다. | [감독형 실행 리뷰 패스 정책](supervised-execution.md#리뷰-패스-정책) |
 | 개발 중 시각 검수 | task-level 사용자 시각 검수는 비게이팅·무기록 절차다. | [개발 중 사용자 시각 검수](supervised-execution.md#개발-중-사용자-시각-검수) |
-| 현재 eval 범위 | stable metrics에는 모델별 성공률, task 크기, prompt 길이, first-pass acceptance, UI drift가 없다. | [`eval/stable-metrics.json`](../eval/stable-metrics.json) |
+| 현재 eval 범위 | stable metrics는 usage/input token, 자율 완료, 사용자 개입, Gate 복귀 precision, monitor rule violation과 각 telemetry coverage를 집계한다. 모델별 성공률, task 크기, prompt 길이, first-pass acceptance, UI drift는 아직 없다. | [`eval/stable-metrics.json`](../eval/stable-metrics.json) |
 | 헌법의 실제 강제 범위 | validator prohibition의 target은 `spec`/`task_graph`뿐이고 해당 JSON의 문자열 leaf에서 금지어를 찾는다. architecture/stack/style 및 제품 코드는 검사하지 않는다. | `schemas/constitution.schema.json:52-91`, `scripts/validate_artifacts.mjs:1503-1517` |
-| 완료 후 review | style과 milestone은 informational이고 monitor만 기존 finish를 차단할 수 있다. monitor의 세 검사는 acceptance, 실제 verification, changedFiles scope이며 헌법 준수 검사는 없다. | `.agents/skills/p2a-dev-execution/SKILL.md:166,180-182`, `.claude/agents/p2a-performance-monitor.md:19-42`, `scripts/p2a_monitor_gate.mjs:8-15` |
+| 완료 후 review | style과 milestone은 informational이고 monitor만 기존 finish를 차단할 수 있다. 새 monitor gate는 승인 constitution 또는 legacy style의 ref/hash, sidecar 전체 hash와 판정 verdict 원문 hash를 고정하고 acceptance, 실제 verification, 기록된 changedFiles scope·내용과 architecture/stack/prohibition/style 위반을 `rule_concerns`로 검사한다. | `.agents/skills/p2a-dev-execution/SKILL.md`, `.agents/agents/p2a-performance-monitor.md`, `scripts/p2a_monitor_gate.mjs` |
 | review 기본값 | monitor는 `opt_in`, style/milestone/visual은 `off`, acceptance는 `on`이다. | `scripts/p2a_project_config.mjs:228-244` |
 | fixture 분할 | webhook fixture의 task 4개는 `task-001 → 002 → 003 → 004` 선형 체인이라 task 간 병렬성이 0이다. | `fixtures/_e2e/webhook-api-service/gate-c-task-graph/task-graph.json:6-86` |
 | task 계약과 중복 | task는 9개 필드를 요구하지만 일반 task의 추가 의미 검사는 `acceptanceCriteria`와 `sourceSpecRefs`의 non-blank 검사다. webhook fixture에서 단순 영숫자 token 기준 description 어휘의 prompt 재등장률은 31~63%다. | `schemas/task-graph.schema.json:26-37`, `scripts/validate_artifacts.mjs:3161-3165`, `fixtures/_e2e/webhook-api-service/gate-c-task-graph/task-graph.json:8-85` |
 | 기존 prompt 해석 | `p2a_tasks.mjs`는 `sourceSpecRefs`의 dot path를 spec 값으로 해석하고 full spec 경로도 출력한다. 얇은 task 전환에 새 해석 계층은 필요 없다. | `scripts/p2a_tasks.mjs:338-363,384-403` |
 | 분할 뒤처리 기구 | milestone/batch reference, milestone reviewer, schema 네 파일이 합계 27,891 bytes다. | `.agents/skills/p2a-dev-execution/references/milestone-review.md`, `.agents/skills/p2a-dev-execution/references/batch-execution.md`, `.agents/agents/p2a-milestone-reviewer.md`, `schemas/milestone-review.schema.json` |
 | 자율 실행 차단 | Claude write는 전경 human-supervised 경로로 고정되고 `p2a next`의 CLI는 매번 승인 대기하며 implementer에는 WebSearch/WebFetch가 없다. | `.agents/skills/p2a-dev-execution/SKILL.md:36-40`, `.agents/skills/p2a-next/SKILL.md:16-22`, `.claude/agents/p2a-implementer.md:4-11` |
-| 모델 pin | `.claude/agents/*.md` 12개 모두 `model:`을 고정한다. implementer는 opus, monitor/acceptance/visual reviewer는 sonnet, style rater는 haiku다. 이는 §16의 모델 하드코딩 금지와 충돌한다. | `.claude/agents/p2a-implementer.md:1-11`, `.claude/agents/p2a-performance-monitor.md:1-8`, `.claude/agents/p2a-style-rater.md:1-8` |
-| 계측과 보존 계약 | spec에는 `product.constraints`와 `implementation.verification`이 있지만 `must_preserve`가 없고, run에는 verification 시간은 있지만 token/usage/사용자 개입 필드가 없다. | `schemas/spec.schema.json:34-107,110-158`, `schemas/run.schema.json:6-28,203-268` |
+| 모델 pin | Claude agent mirror는 `model:`을 생성하지 않고 현재 parent/session 모델을 상속한다. Codex/Gemini tier mapping은 현재 구현 계약대로 유지한다. | `scripts/sync_cli_assets.mjs`, `.claude/agents/*.md`, `docs/harness-spec.md` |
+| 계측과 보존 계약 | run에는 증분 `usage` sample과 implementation-decision/user-correction/Gate-return `interruptions`가 있다. Spec의 `product.must_preserve`는 아직 없어 Phase 1 envelope 전제가 남아 있다. | `schemas/run.schema.json`, `scripts/p2a_runs.mjs`, `schemas/spec.schema.json` |
 | 최근 시각 검수 결정 | v0.2.3은 task 구현 중 반복 사용자 시각 검수 loop를 추가했다. | commit `52626e6` (2026-08-11), `.agents/skills/p2a-dev-execution/SKILL.md:106-110` |
 
 따라서 다음 주장은 아직 실험으로 입증된 사실이 아니라 검증할 설계 가설이다.
@@ -284,10 +286,10 @@ Prompt는 다음 계층을 한 번씩만 조립한다.
 ### Phase 0 — baseline 보존과 계측 구축
 
 - `10~50` graph를 A로 동결해 baseline을 수집하고 분할은 유지한다.
-- Phase 0에 monitor 헌법 검사를 A/B에 적용한다.
-- `run.schema.json`에 usage/token과 interruption 필드를 추가하고 Gate 복귀 이벤트 기록 경로를 정의한다. 현재 schema에는 이 데이터가 없어 단순히 “측정”할 수 없다(`schemas/run.schema.json:6-28,182-268`).
+- Phase 0에 monitor 헌법 검사를 A/B에 적용한다. **기구 구현 완료:** 새 monitor gate는 rule source ref/hash, 필수 `rule_concerns`, sidecar 전체의 run-side contract hash와 완료 판정 verdict의 exact-byte evidence hash를 고정한다. A/B fixture 강제 적용은 baseline 봉인 단계에 남아 있다.
+- `run.schema.json`에 usage/token과 interruption 필드를 추가하고 Gate 복귀 이벤트 기록 경로를 정의한다. **구현 완료:** `p2a runs record|finish`와 `p2a execute finish`가 증분 usage와 수동 개입 주석을 기록한다.
 - eval fixture에서는 milestone/visual pass를 강제로 `on`으로 실행해 선택적 기본값으로 인한 누락을 막는다.
-- `user correction count`와 `implementation-decision interruption count`는 자동 관측할 수 없으므로 수동 주석 protocol을 정의한다. 신뢰도 있는 protocol을 만들지 못하면 두 지표를 비교 판정에서 제외한다.
+- `user correction count`와 `implementation-decision interruption count`는 자동 관측할 수 없으므로 수동 주석 protocol을 정의한다. **구현 완료:** `--user-correction`, `--implementation-interruption`, `--gate-return`을 동일 run에 즉시 기록한다. 동일 protocol을 지키지 않은 run은 비교 판정에서 제외한다.
 - task 수, first-pass, rework, 통합 결함, UI drift와 Gate return을 기록하고 동일 fixture에서 model profile만 구분한다.
 
 ### Phase 1 — `task-lite` 호환 경로
@@ -334,20 +336,20 @@ Prompt는 다음 계층을 한 번씩만 조립한다.
 | 지표 | 목적 | 현재 데이터 소스/계측 상태 |
 | --- | --- | --- |
 | post-Gate autonomous completion rate | 추가 구현 지시 없이 close-ready에 도달한 비율 | iteration/run status + Phase 0 interruption 주석¹ |
-| implementation-decision interruption count | 구현 선택을 사용자에게 되물은 횟수 | 없음; Phase 0 수동 주석¹ |
-| valid Gate return precision | 실제 계약 변경이 필요했던 Gate 복귀 비율 | 없음; Phase 0 Gate-return event + 판정 주석¹ |
+| implementation-decision interruption count | 구현 선택을 사용자에게 되물은 횟수 | Phase 0 run interruption 수동 주석 구현 완료¹ |
+| valid Gate return precision | 실제 계약 변경이 필요했던 Gate 복귀 비율 | Phase 0 Gate-return event + valid/invalid 판정 주석 구현 완료¹ |
 | first-pass acceptance rate | 첫 구현의 Gate acceptance 만족률 | run index/monitor·acceptance verdict² |
-| user correction count | 요구사항 또는 UI를 다시 설명한 횟수 | 없음; Phase 0 수동 주석¹ |
+| user correction count | 요구사항 또는 UI를 다시 설명한 횟수 | Phase 0 run interruption 수동 주석 구현 완료¹ |
 | rework run count | 완료 뒤 다시 열린 실행 단위 수 | task 상태와 run index² |
 | integration defect count | 단위 통과 뒤 통합에서 발견된 결함 수 | milestone/acceptance verdict²; eval에서 pass 강제 |
 | visual drift count | 승인 matrix와 다른 결과 수 | visual review sidecar²; eval에서 visual 강제 |
 | scope violation count | non-goal 또는 승인 밖 변경 수 | monitor `scope_concerns`² |
-| rule violation count | constitution·권한·안전 위반 수 | **현재 검출기 없음**; §14 P0 monitor 적용 전에는 항상 0으로 관측됨³ |
+| rule violation count | constitution·권한·안전 위반 수 | Phase 0 monitor `rule_concerns` 구현 완료; 명시적 rule contract가 있는 verdict만 집계³ |
 | elapsed time | Gate B 승인부터 close-ready까지 시간 | Gate approval timestamp + run/iteration timestamp² |
-| prompt/input tokens | 반복 설명과 context 비용 | 없음; Phase 0 `run.usage`¹ |
+| prompt/input tokens | 반복 설명과 context 비용 | Phase 0 증분 `run.usage` sample 구현 완료¹ |
 | verification evidence completeness | 실제 실행 증거의 완전성 | run `verification` + acceptance/monitor verdict² |
 
-¹ Phase 0에서 schema/event 또는 수동 protocol을 만든 뒤에만 사용한다. ² 기존 run/review 산출물에서 파생한다. ³ 검출기 없는 0을 “위반 없음”으로 해석하거나 A/B 안전성 결론에 사용하지 않는다.
+¹ 같은 수동 주석 protocol을 적용한 run만 비교하며, 미계측 과거 run은 자율 완료 분모에서 제외한다. 토큰 합계는 usage coverage와 함께 해석한다. ² 기존 run/review 산출물에서 파생한다. ³ `rule_review_coverage_rate`와 함께 해석하며, approved constitution/legacy style이 없거나 명시적 rule contract가 없는 verdict의 0을 “위반 없음”으로 사용하지 않는다.
 
 Adaptive를 기본값으로 전환하려면 추가 구현 지시 없이 완료하는 비율이 증가하고 불필요한 구현 선택 질문이 감소해야 한다. 동시에 실패율, scope violation과 rule violation은 악화되지 않아야 한다. UI fixture에서는 visual drift와 사용자 수정 횟수가 감소해야 하며, 시간/token 개선만으로 품질 저하를 정당화하지 않는다.
 
@@ -357,9 +359,9 @@ Adaptive를 기본값으로 전환하려면 추가 구현 지시 없이 완료�
 
 | 우선순위 | Phase | 개선 | 이유 |
 | --- | --- | --- | --- |
-| P0 | 0 | monitor에 constitution architecture/stack/prohibitions/style 검사 추가 | monitor 확장이라 기구는 그대로다. A/B 적용으로 rule violation을 비교한다. informational style 중복은 finish·baseline에 영향이 없다. |
+| P0 | 0 | monitor에 constitution architecture/stack/prohibitions/style 검사 추가 **(완료)** | monitor 확장이라 기구는 그대로다. A/B 적용으로 rule violation을 비교한다. informational style 중복은 finish·baseline에 영향이 없다. |
 | P0 | 1 | style·milestone review pass와 사이드카 규칙 제거 | style·milestone reviewer와 SKILL/config 삭제(SKILL.md:139-166, 182, 220-224, p2a_project_config.mjs:228-244). 8,570 bytes, 3 → 1. |
-| P0 | 0 | `.claude/agents/*.md`의 `model:` pin 12개 제거 | 세션 모델을 상속해야 생산자보다 약한 심사자 고정을 없애고 §13 model profile A/B가 가능하다. |
+| P0 | 0 | Claude agent generator의 `model:` pin 제거 **(완료)** | 세션 모델을 상속해야 생산자보다 약한 심사자 고정을 없애고 §13 model profile A/B가 가능하다. |
 | P0 | 1 | `schemas/spec.schema.json`의 `product`에 `must_preserve` 추가 | §8 파생 전용 envelope의 전제이며, 없으면 회귀 방지 계약이 실행 시점 저작으로 되돌아간다. |
 | P0 | 1 | 자율 차단 조항 세 개 해제 | Provider Confinement는 동일 workspace 안전 경계 안의 무인 실행을 허용하도록 재작성하고, `p2a next` 개발 loop의 매 단계 승인을 없애며, implementer에 WebSearch/WebFetch를 부여한다. |
 | P0 | 1 | `10~50 task` 고정 지침 제거 | Phase 0에서 비교군 A baseline을 봉인한 뒤 과분해를 제거한다. |

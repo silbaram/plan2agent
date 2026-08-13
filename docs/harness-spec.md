@@ -200,11 +200,11 @@ scripts/p2a_iteration_state.mjs             # active iteration resolution helper
 | `capabilities: search` | `Grep`, `Glob` | `grep_search` | per-tool list 없음 |
 | `capabilities: web` | `WebSearch`, `WebFetch` | `google_web_search`, `web_fetch` | `web_search = "live"` |
 | `access: read-only` | tool set으로 암시 | `kind: local` | `sandbox_mode = "read-only"` |
-| `tier: light` | `model: haiku` | `temperature: 0.1`, `max_turns: 6` | `model = "gpt-5.6-sol"`, `model_reasoning_effort = "medium"` |
-| `tier: standard` | `model: sonnet` | `temperature: 0.2`, `max_turns: 10` | `model = "gpt-5.6-sol"`, `model_reasoning_effort = "high"` |
-| `tier: heavy` | `model: opus` | `temperature: 0.2`, `max_turns: 20` | `model = "gpt-5.6-sol"`, `model_reasoning_effort = "max"` |
+| `tier: light` | parent/session model 상속 | `temperature: 0.1`, `max_turns: 6` | `model = "gpt-5.6-sol"`, `model_reasoning_effort = "medium"` |
+| `tier: standard` | parent/session model 상속 | `temperature: 0.2`, `max_turns: 10` | `model = "gpt-5.6-sol"`, `model_reasoning_effort = "high"` |
+| `tier: heavy` | parent/session model 상속 | `temperature: 0.2`, `max_turns: 20` | `model = "gpt-5.6-sol"`, `model_reasoning_effort = "max"` |
 
-Gemini target fields use the documented subagent keys `kind`, `tools`, `temperature`, and `max_turns`; Gemini web capability maps to documented `google_web_search` and `web_fetch`. Codex custom agents use required `name`/`description`/`developer_instructions` plus normal session overrides such as `model`, `model_reasoning_effort`, `web_search`, and `sandbox_mode`. Neutral `web` roles alone receive `web_search = "live"`; other roles inherit the parent web-search mode.
+Claude mirror는 생성된 agent frontmatter에 `model`을 쓰지 않아 사용자가 고른 현재 세션 모델을 상속한다. Neutral `tier`는 Claude 모델 선택 신호가 아니다. Gemini target fields use the documented subagent keys `kind`, `tools`, `temperature`, and `max_turns`; Gemini web capability maps to documented `google_web_search` and `web_fetch`. Codex custom agents use required `name`/`description`/`developer_instructions` plus normal session overrides such as `model`, `model_reasoning_effort`, `web_search`, and `sandbox_mode`. Neutral `web` roles alone receive `web_search = "live"`; other roles inherit the parent web-search mode.
 
 ## 11. CLI별 차이와 하네스 정책
 
