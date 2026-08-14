@@ -15,7 +15,8 @@ export const RUN_ID_STRATEGIES = new Set(['timestamp', 'task-sequence']);
 export const REVIEW_PASS_POLICIES = new Set(['off', 'opt_in', 'on']);
 const DEFAULT_RUN_ID_PATTERN = 'run-<taskId>-<sequence:3>';
 export const RUN_ID_RESERVATION_DIR = '.run-id-reservations';
-const REVIEW_PASS_KEYS = ['monitor', 'style', 'milestone', 'visual', 'acceptance'];
+const REVIEW_PASS_KEYS = ['monitor', 'visual', 'acceptance'];
+const LEGACY_REVIEW_PASS_KEYS = ['style', 'milestone'];
 
 export function defaultRunTracking() {
   return {
@@ -234,14 +235,26 @@ export function defaultDevExecution() {
     defaultIsolation: 'none',
     scopePolicy: 'task_only',
     verificationPolicy: 'required_for_done',
+    executionMode: 'adaptive',
     reviewPasses: {
       monitor: 'opt_in',
-      style: 'off',
-      milestone: 'off',
       visual: 'off',
       acceptance: 'on',
     },
   };
+}
+
+const EXECUTION_MODE_POLICIES = new Set(['adaptive', 'direct', 'planned', 'orchestrated']);
+const LEGACY_EXECUTION_MODE = 'orchestrated';
+
+export function resolveExecutionModePolicy(config) {
+  const value = config?.devExecution?.executionMode ?? LEGACY_EXECUTION_MODE;
+  if (!EXECUTION_MODE_POLICIES.has(value)) {
+    throw new Error(
+      `project config devExecution.executionMode must be one of ${[...EXECUTION_MODE_POLICIES].join(', ')}, got ${JSON.stringify(value)}`,
+    );
+  }
+  return value;
 }
 
 function objectValue(value) {
@@ -255,13 +268,14 @@ export function resolveReviewPasses(config) {
     throw new Error('project config devExecution.reviewPasses must be an object');
   }
   const reviewPasses = objectValue(configured);
-  const unknown = Object.keys(reviewPasses).filter((key) => !REVIEW_PASS_KEYS.includes(key));
+  const allowedKeys = [...REVIEW_PASS_KEYS, ...LEGACY_REVIEW_PASS_KEYS];
+  const unknown = Object.keys(reviewPasses).filter((key) => !allowedKeys.includes(key));
   if (unknown.length) {
     throw new Error(
       `project config devExecution.reviewPasses has unknown key(s): ${unknown.sort().join(', ')}`,
     );
   }
-  return Object.fromEntries(REVIEW_PASS_KEYS.map((key) => {
+  const resolved = Object.fromEntries(REVIEW_PASS_KEYS.map((key) => {
     const value = Object.hasOwn(reviewPasses, key) ? reviewPasses[key] : defaults[key];
     if (!REVIEW_PASS_POLICIES.has(value)) {
       throw new Error(
@@ -270,6 +284,17 @@ export function resolveReviewPasses(config) {
     }
     return [key, value];
   }));
+  for (const key of LEGACY_REVIEW_PASS_KEYS) {
+    if (!Object.hasOwn(reviewPasses, key)) continue;
+    const value = reviewPasses[key];
+    if (!REVIEW_PASS_POLICIES.has(value)) {
+      throw new Error(
+        `project config devExecution.reviewPasses.${key} must be one of ${[...REVIEW_PASS_POLICIES].join(', ')}, got ${JSON.stringify(value)}`,
+      );
+    }
+    resolved[key] = value;
+  }
+  return resolved;
 }
 
 function normalizedProviderValue(value) {
@@ -616,8 +641,12 @@ function mergeObjectDefaults(target, defaults) {
 export function mergeDevSkillConfig(config) {
   const next = { ...config };
   const updatedKeys = [];
+  const legacyDevExecutionDefaults = {
+    ...defaultDevExecution(),
+    executionMode: LEGACY_EXECUTION_MODE,
+  };
   const merges = [
-    ['devExecution', defaultDevExecution()],
+    ['devExecution', legacyDevExecutionDefaults],
     ['roleProfiles', defaultRoleProfiles()],
     ['promptTemplates', defaultPromptTemplates()],
   ];

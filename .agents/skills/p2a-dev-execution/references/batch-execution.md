@@ -1,6 +1,6 @@
 ## Supervised Batch Owner Procedure
 
-Batch mode wraps the single-task lifecycle; it does not create a batch run, change schemas, or delegate lifecycle ownership. Each task keeps its own run id, worktree, verification evidence, monitor verdict, style result, finish, milestone eligibility check, and retrospective.
+Batch mode wraps the single-work-item lifecycle; it does not create a batch run, change schemas, or delegate lifecycle ownership. Each work item keeps its own run id, worktree, Gate-derived execution envelope, verification evidence, monitor verdict, finish, and retrospective.
 
 ### 1. Freeze one ready snapshot and select a bounded batch
 
@@ -31,7 +31,7 @@ Only the main owner may call `p2a execute start`, `p2a runs record|verify|finish
 
 ### 3. Spawn implementations in parallel
 
-After the selected runs have started, spawn one `p2a-implementer` per task inside its assigned worktree, up to the approved concurrency limit. Pass each implementer only its task prompt, acceptance criteria, constraints, style contract, run identity, and worktree boundary.
+After the selected runs have started, spawn one `p2a-implementer` per task inside its assigned worktree, up to the available confined concurrency limit. Pass each implementer its Gate-derived execution envelope, current work-item boundary, constitution, run identity, and worktree boundary.
 
 Each implementer performs scoped file edits and optional local self-checks only. It must return changed files, checks, results, and blockers to the main owner. It must not edit planning artifacts, harness files, another worktree, the canonical integration worktree, or lifecycle state. Agent completion order does not control harvest order.
 
@@ -45,7 +45,7 @@ The main owner harvests one completed result at a time:
 4. Apply it to an integration candidate based on the latest canonical integration head. Do not auto-resolve conflicts and do not advance the canonical integration branch yet.
 5. Run configured or explicit verification against the integrated candidate. Task-worktree self-checks do not replace integrated-state verification.
 6. Record the exact task changed files and an `INTEGRATION:` run note containing the candidate base, integrated commit or patch identity, and verification workspace. When verification runs outside the original task worktree, pass `--workspace <integration-candidate>` explicitly.
-7. Run the existing monitor gate and style-rating passes against the task evidence and integrated candidate when they apply.
+7. Run the single monitor gate against the work-item evidence and integrated candidate when it applies; it owns constitution architecture, stack, prohibition, and style review.
 8. Advance the canonical integration branch only after the candidate is conflict-free, required verification passed, and required monitor evidence accepts it.
 9. Only after the canonical integration branch contains the accepted task result, call `p2a execute finish` and allow the task to transition to `done`.
 
@@ -57,11 +57,10 @@ If spawn, scope review, integration, verification, or a required monitor gate fa
 
 After every selected task has been harvested or given a truthful non-done disposition, run `p2a tasks ready` again. Start the next batch from the latest canonical integration head. A dependent task must not start from its predecessor's isolated task branch or from the old batch base.
 
-Evaluate milestone review eligibility after each successful serial finish, using the task-graph state at that point. Do not run milestone passes concurrently and do not use their informational findings as a substitute for integrated-state verification.
+Do not produce new style or milestone sidecars. Historical sidecars remain readable, while integrated verification and the final acceptance/visual contract provide the active completion evidence.
 
 ### 6. Preserve recoverability and clean up safely
 
 Never force-remove a dirty, unmerged, failed, or blocked task or integration-candidate worktree. An accepted task or integration-candidate worktree becomes a cleanup candidate only after its task result is durably present on the canonical integration branch and its run evidence contains the recovery references. A failed or blocked integration candidate remains recoverable until the user explicitly chooses a cleanup path. Cleanup still requires explicit user confirmation or an already approved project cleanup policy.
 
 Do not use destructive reset, forced branch movement, automatic conflict resolution, remote push, PR creation, or remote merge as part of this batch procedure.
-

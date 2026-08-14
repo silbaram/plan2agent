@@ -3,7 +3,6 @@
 
 import {
   existsSync,
-  linkSync,
   lstatSync,
   mkdirSync,
   readFileSync,
@@ -24,7 +23,6 @@ import {
   loadJson,
   resolveSpecSourceIntake,
   validateIntake,
-  validateMilestoneReview,
   validateHandoffReadyArtifactRoot,
   validateSpec,
   validateEvalMaintenanceDraftData,
@@ -37,7 +35,14 @@ import {
   ValidationError,
 } from './validate_artifacts.mjs';
 import {
+  activeIntakePath,
+  assertIntakeBaselineMatchesPending,
+  assertPendingBaselineIntegrity,
   formatIterationState,
+  initialMaintenanceTaskGraph,
+  maintenanceTaskGraphPath,
+  nextMaintenanceTaskId,
+  normalizeDisplayPath,
   resolveIterationState,
   serializeIterationState,
   validateActiveIterationBaselineContract as assertActivePlanningBaselineContract,
@@ -62,14 +67,16 @@ import {
   loadFeatureRadarPreflight,
 } from './p2a_radar_preflight.mjs';
 import {
+  appendUnique,
+  asStringArray,
   buildInitialCanonicalSections,
   canonicalComposedBaselineSnapshotRef,
+  cloneJson,
   compositionOpenDecisions,
-  compositionReplayContractError,
-  compositionSourceContractError,
   composeCanonicalSpecSources,
   IMPLEMENTATION_FIELDS,
   isComposedBaselineReference,
+  jsonEqual,
   PRODUCT_FIELDS,
 } from './p2a_spec_model.mjs';
 import { assertFinalVisualReviewRunReady } from './p2a_visual_review_gate.mjs';
@@ -95,11 +102,10 @@ const STATUS_ORDER = ['todo', 'in_progress', 'done', 'blocked'];
 const DEFAULT_ITERATION_ID = 'v1-mvp';
 const INIT_REBASED_SOURCE_INTAKE = '../gate-a-intake/intake.json';
 const INIT_REBASED_SOURCE_SPEC = '../gate-b-spec/spec.json';
-const COMMANDS = new Set(['init', 'current', 'validate', 'close', 'open', 'draft', 'context', 'promote-spec', 'promote-tasks', 'promote-milestone', 'diff-tasks', 'compose', 'maintenance']);
+const COMMANDS = new Set(['init', 'current', 'validate', 'close', 'open', 'draft', 'context', 'promote-spec', 'promote-tasks', 'diff-tasks', 'compose', 'maintenance']);
 const MAINTENANCE_ACTIONS = new Set(['add']);
 const CONTEXT_SCOPES = new Set(['feature', 'maintenance']);
 const VALIDATE_STAGES = new Set(['ready', 'gate-a', 'gate-b-draft', 'gate-b-approved', 'gate-c-draft']);
-const PRODUCT_ARRAY_FIELDS = PRODUCT_FIELDS.filter((field) => field !== 'problem');
 
 export { validateCurrentSpecCompositionData };
 
@@ -115,7 +121,6 @@ function usage() {
     '  p2a iteration context --artifacts <iterative-project-dir> [--scope feature|maintenance] [--idea <text>] [--code-root <dir>]',
     '  p2a iteration promote-spec --artifacts <iterative-project-dir>',
     '  p2a iteration promote-tasks --artifacts <iterative-project-dir> [--replace-existing]',
-    '  p2a iteration promote-milestone --artifacts <iterative-project-dir> --draft <unique-draft-path>',
     '  p2a iteration diff-tasks --artifacts <iterative-project-dir> [--force]',
     '  p2a iteration compose --artifacts <iterative-project-dir> [--allow-conflicts]',
     '  p2a iteration maintenance add --artifacts <iterative-project-dir> --title <text> --accept <text> [--accept <text> ...] [--description <text>] [--area <text>] [--prompt <text>] [--ref <value> ...] [--depends <task-id> ...] [--dry-run]',
@@ -131,7 +136,6 @@ function usage() {
     '  context               Print JSON context for agent-authored Gate C task drafting.',
     '  promote-spec          Record an approved active Gate B spec and initialize current-spec when needed.',
     '  promote-tasks         Promote a validated Gate C draft task graph to the canonical graph.',
-    '  promote-milestone     Atomically promote one validated unique milestone-review draft.',
     '  diff-tasks            Generate a task graph draft from active spec changes against the baseline.',
     '  compose               Rebuild current-spec.json as a composed effective spec view.',
     '  maintenance           Manage the always-on maintenance task graph (currently: add).',
@@ -172,9 +176,6 @@ function usage() {
     '',
     'promote-tasks options:',
     '  --replace-existing     Replace a validated complete graph only before any active-iteration task/run execution history exists.',
-    '',
-    'promote-milestone options:',
-    '  --draft <path>         Unique <checkpoint>.<id>.draft.json inside the active iteration milestone-reviews directory.',
     '',
     'diff-tasks options:',
     '  --force               Overwrite existing Gate C task graph draft.',
@@ -224,7 +225,6 @@ function parseArgs(argv) {
     codeRoot: process.cwd(),
     scope: 'feature',
     replaceExisting: false,
-    milestoneDraft: null,
     yes: false,
   };
   const command = argv[0];
@@ -295,10 +295,6 @@ function parseArgs(argv) {
     } else if (arg === '--replace-existing') {
       if (command !== 'promote-tasks') throw new Error('--replace-existing is only supported by promote-tasks');
       args.replaceExisting = true;
-    } else if (arg === '--draft') {
-      if (command !== 'promote-milestone') throw new Error('--draft is only supported by promote-milestone');
-      args.milestoneDraft = argv[++index];
-      if (!args.milestoneDraft) throw new Error('--draft requires a path');
     } else if (arg === '--title') {
       if (command !== 'maintenance' || args.action !== 'add') throw new Error('--title is only supported by maintenance add');
       args.title = argv[++index];
@@ -348,7 +344,6 @@ function parseArgs(argv) {
   if (!args.help && !args.artifacts) throw new Error(`--artifacts is required\n\n${usage()}`);
   if (command === 'open' && !args.iterationIdProvided) throw new Error('--iteration-id is required for open');
   if (command === 'open' && (!args.idea || args.idea.trim().length === 0)) throw new Error('--idea is required for open');
-  if (command === 'promote-milestone' && !args.milestoneDraft) throw new Error('--draft is required for promote-milestone');
   if (command === 'maintenance' && args.action === 'add') {
     if (args.fromDraft) {
       if (args.title || args.description || args.prompt || args.acceptanceCriteria.length || args.sourceSpecRefs.length || args.dependencies.length || args.areaProvided) {
@@ -391,20 +386,6 @@ function assertSafeIterationId(iterationId) {
   if (iterationId.trim().length === 0) throw new Error('--iteration-id must not be blank');
   if (!/^[A-Za-z0-9._-]+$/.test(iterationId)) {
     throw new Error(`--iteration-id may only contain letters, numbers, dots, underscores, and hyphens, got ${JSON.stringify(iterationId)}`);
-  }
-}
-
-function assertSafeCompositionIterationId(iterationId, label) {
-  if (
-    iterationId.includes('/')
-    || iterationId.includes('\\')
-    || iterationId === '.'
-    || iterationId === '..'
-    || !/^[A-Za-z0-9._-]+$/.test(iterationId)
-  ) {
-    throw new ValidationError(
-      `${label} must be a safe single path segment, got ${JSON.stringify(iterationId)}`,
-    );
   }
 }
 
@@ -508,10 +489,6 @@ function gateSummaryIfPresent(artifactRoot, iterationId) {
   } catch {
     return 'gate invalid';
   }
-}
-
-function normalizeDisplayPath(reference) {
-  return String(reference).split(path.sep).join('/');
 }
 
 function artifactRelativePath(artifactRoot, filePath) {
@@ -903,67 +880,10 @@ function writeIterationStatus(artifactRoot, currentSpec) {
   );
 }
 
-function cloneJson(value) {
-  return JSON.parse(JSON.stringify(value));
-}
-
-function jsonEqual(left, right) {
-  return JSON.stringify(left) === JSON.stringify(right);
-}
-
-function asStringArray(value) {
-  return Array.isArray(value) ? value.filter((item) => typeof item === 'string') : [];
-}
-
-function appendUnique(values, additions) {
-  const next = [...asStringArray(values)];
-  for (const addition of additions) {
-    if (addition && !next.includes(addition)) next.push(addition);
-  }
-  return next;
-}
-
 function markdownList(values) {
   const items = asStringArray(values);
   if (!items.length) return '- None';
   return items.map((item) => `- ${item}`).join('\n');
-}
-
-function assertString(value, label) {
-  if (typeof value !== 'string' || value.trim().length === 0) {
-    throw new ValidationError(`${label} must be a non-empty string`);
-  }
-}
-
-function assertStringArray(value, label) {
-  if (!Array.isArray(value)) throw new ValidationError(`${label} must be an array`);
-  for (const [index, item] of value.entries()) {
-    if (typeof item !== 'string') throw new ValidationError(`${label}[${index}] must be a string`);
-  }
-}
-
-function validateProductShape(product, label = 'effective_product') {
-  if (!product || typeof product !== 'object' || Array.isArray(product)) {
-    throw new ValidationError(`${label} must be an object`);
-  }
-  assertString(product.problem, `${label}.problem`);
-  for (const field of PRODUCT_ARRAY_FIELDS) {
-    assertStringArray(product[field], `${label}.${field}`);
-  }
-}
-
-function validateImplementationShape(implementation, label = 'effective_implementation') {
-  if (!implementation || typeof implementation !== 'object' || Array.isArray(implementation)) {
-    throw new ValidationError(`${label} must be an object`);
-  }
-  for (const field of IMPLEMENTATION_FIELDS) {
-    assertStringArray(implementation[field], `${label}.${field}`);
-  }
-}
-
-function validateEffectiveSections(product, implementation, label = 'current-spec.json') {
-  validateProductShape(product, `${label}.effective_product`);
-  validateImplementationShape(implementation, `${label}.effective_implementation`);
 }
 
 function currentSpecWebEvidence(currentSpec, artifactRoot) {
@@ -3248,20 +3168,32 @@ function assertCloseReadyTasks(taskGraph) {
   }
 }
 
+function approvedTaskGraphVisualContract(artifactRoot, taskGraphPath, taskGraph) {
+  const candidates = path.isAbsolute(taskGraph.sourceSpec)
+    ? [taskGraph.sourceSpec]
+    : [
+        path.resolve(path.dirname(taskGraphPath), taskGraph.sourceSpec),
+        path.resolve(artifactRoot, taskGraph.sourceSpec),
+      ];
+  const sourceSpecPath = candidates.find((candidate) => (
+    existsSync(candidate) && lstatSync(candidate).isFile()
+  ));
+  if (!sourceSpecPath) {
+    throw new ValidationError(
+      `close-ready validation cannot resolve task graph sourceSpec: ${JSON.stringify(taskGraph.sourceSpec)}`,
+    );
+  }
+  return approvedVisualReviewContract(sourceSpecPath, artifactRoot);
+}
+
 export function validateCloseReadyVisualEvidence({
   artifactRoot,
   activeIteration,
   taskGraphPath,
   taskGraph,
-  reviewPasses,
 }) {
-  const policy = reviewPasses ?? projectReviewPasses();
-  const visualTasks = taskGraph.tasks.filter((task) => task.visualImpact);
-  if (!visualTasks.length) return 0;
-  if (policy.visual === 'off') {
-    console.log(`- visual review: skipped (reviewPasses.visual=off, ${visualTasks.length} visualImpact task(s))`);
-    return 0;
-  }
+  const visualContract = approvedTaskGraphVisualContract(artifactRoot, taskGraphPath, taskGraph);
+  if (!visualContract) return 0;
   const runsDir = path.join(path.resolve(artifactRoot), 'runs');
   validateRunsDir(runsDir);
   const expectedSourceLayout = taskGraphContextForGraph(taskGraphPath).sourceLayout;
@@ -3306,7 +3238,7 @@ export function validateCloseReadyAcceptanceEvidence({
   reviewPasses,
 }) {
   const policy = reviewPasses ?? projectReviewPasses();
-  if (taskGraph.tasks.some((task) => task.visualImpact)) return 0;
+  if (approvedTaskGraphVisualContract(artifactRoot, taskGraphPath, taskGraph)) return 0;
   if (policy.acceptance === 'off') {
     console.log('- acceptance review: skipped (reviewPasses.acceptance=off)');
     return 0;
@@ -3350,10 +3282,6 @@ function loadReadyIterationFacts(artifactRoot) {
   const spec = validateActiveSpecWithOptionalIntake(state);
   const taskGraph = validateTaskGraph(state.taskGraphPath, state.specPath);
   return { state, spec, taskGraph };
-}
-
-function activeIntakePath(state) {
-  return path.join(state.iterationRoot, 'gate-a-intake', 'intake.json');
 }
 
 function validateActiveSpecWithOptionalIntake(state) {
@@ -3452,10 +3380,6 @@ function validatePlanningIteration(args) {
   console.log(`- spec: approval=${spec.approval}`);
   console.log('- task graph validation is pending');
   return 0;
-}
-
-function maintenanceTaskGraphPath(artifactRoot) {
-  return path.join(artifactRoot, 'iterations', 'maintenance', 'gate-c-task-graph', 'task-graph.json');
 }
 
 function gateCTaskGraphDraftPath(state) {
@@ -3691,16 +3615,6 @@ function validateMaintenanceTaskGraphIfPresent(state) {
   return { graphPath, graph };
 }
 
-function initialMaintenanceTaskGraph(projectId) {
-  return {
-    schema_version: 'p2a.task_graph.v1',
-    projectId,
-    version: 'maintenance',
-    sourceSpec: '../../../current-spec.json',
-    tasks: [],
-  };
-}
-
 function writeMaintenanceGraphAndStatus(state, graphPath, graph) {
   const statusPath = path.join(state.artifactRoot, 'status.md');
   const snapshot = captureRollbackFiles([graphPath, statusPath]);
@@ -3718,14 +3632,6 @@ function writeMaintenanceGraphAndStatus(state, graphPath, graph) {
     }
     throw error;
   }
-}
-
-function nextMaintenanceTaskId(tasks) {
-  const max = tasks.reduce((highest, task) => {
-    const match = typeof task.id === 'string' ? task.id.match(/^task-([0-9]+)$/) : null;
-    return match ? Math.max(highest, Number.parseInt(match[1], 10)) : highest;
-  }, 0);
-  return `task-${String(max + 1).padStart(3, '0')}`;
 }
 
 function suggestedMaintenancePrompt(title, projectId) {
@@ -4511,104 +4417,6 @@ function promoteTasks(args) {
     }
     return promoteTasksLocked(args);
   });
-}
-
-const MILESTONE_DRAFT_TOKEN_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
-
-export function assertUniqueMilestoneDraftPath(draftPath, reviewDir, checkpoint) {
-  if (path.dirname(draftPath) !== reviewDir) {
-    throw new ValidationError(`milestone draft must be a direct child of ${reviewDir}`);
-  }
-  const filename = path.basename(draftPath);
-  const prefix = `${checkpoint}.`;
-  const suffix = '.draft.json';
-  const token = filename.startsWith(prefix) && filename.endsWith(suffix)
-    ? filename.slice(prefix.length, -suffix.length)
-    : '';
-  if (!MILESTONE_DRAFT_TOKEN_PATTERN.test(token)) {
-    throw new ValidationError(
-      `milestone draft must use unique filename ${checkpoint}.<id>.draft.json; got ${filename}`,
-    );
-  }
-}
-
-export function promoteMilestoneDraftAtomically(draftPath, stablePath, operations = { linkSync, unlinkSync }) {
-  const link = operations.linkSync ?? linkSync;
-  const unlink = operations.unlinkSync ?? unlinkSync;
-  try {
-    link(draftPath, stablePath);
-  } catch (error) {
-    if (error?.code === 'EEXIST') {
-      throw new ValidationError(`milestone checkpoint already exists and will not be overwritten: ${stablePath}`);
-    }
-    throw error;
-  }
-
-  try {
-    unlink(draftPath);
-    return { draftRemoved: true, cleanupError: null };
-  } catch (cleanupError) {
-    try {
-      unlink(stablePath);
-    } catch (rollbackError) {
-      throw new ValidationError(
-        `milestone promotion cleanup failed and rollback could not remove the stable checkpoint: cleanup=${cleanupError?.message ?? cleanupError}; rollback=${rollbackError?.message ?? rollbackError}`,
-      );
-    }
-    throw new ValidationError(
-      `milestone promotion rolled back because unique draft cleanup failed: ${cleanupError?.message ?? cleanupError}`,
-    );
-  }
-}
-
-function promoteMilestone(args) {
-  const initialState = resolveIterationState(args.artifacts, { requireReady: false });
-  const initialReviewDir = path.resolve(initialState.iterationRoot, 'milestone-reviews');
-  return withRunStoreLocks(
-    [
-      artifactStateLockDir(initialState.artifactRoot),
-      initialReviewDir,
-    ],
-    () => {
-      const state = resolveIterationState(args.artifacts, { requireReady: false });
-      const reviewDir = path.resolve(state.iterationRoot, 'milestone-reviews');
-      if (
-        state.activeIteration !== initialState.activeIteration
-        || reviewDir !== initialReviewDir
-      ) {
-        throw new ValidationError(
-          'active iteration changed while milestone promotion was waiting for state locks; retry the command',
-        );
-      }
-      assertActivePlanningBaselineContract(state);
-      const draftPath = path.resolve(process.cwd(), args.milestoneDraft);
-      if (path.dirname(draftPath) !== reviewDir) {
-        throw new ValidationError(`milestone draft must be a direct child of ${reviewDir}`);
-      }
-      if (!existsSync(draftPath)) throw new ValidationError(`milestone draft not found: ${draftPath}`);
-      if (!lstatSync(draftPath).isFile()) throw new ValidationError(`milestone draft must be a regular file: ${draftPath}`);
-
-      const review = validateMilestoneReview(draftPath, {
-        artifactRoot: state.artifactRoot,
-        expectedProjectId: state.projectId,
-        expectedIterationId: state.activeIteration,
-      });
-      if (review.project_id !== state.projectId) {
-        throw new ValidationError(`milestone review project_id must be ${state.projectId}, got ${review.project_id}`);
-      }
-      if (review.iteration_id !== state.activeIteration) {
-        throw new ValidationError(`milestone review iteration_id must be ${state.activeIteration}, got ${review.iteration_id}`);
-      }
-      assertUniqueMilestoneDraftPath(draftPath, reviewDir, review.checkpoint);
-
-      const stablePath = path.join(reviewDir, `${review.checkpoint}.json`);
-      promoteMilestoneDraftAtomically(draftPath, stablePath);
-      console.log(`Plan2Agent milestone review promoted: ${toRelativeFromRoot(stablePath)}`);
-      console.log(`- checkpoint: ${review.checkpoint}`);
-      console.log(`- promoted from: ${toRelativeFromRoot(draftPath)}`);
-      return 0;
-    },
-  );
 }
 
 function loadDiffBaseline(state) {
@@ -5863,156 +5671,6 @@ function withDraftRollback(state, fn, options = {}) {
   }
 }
 
-function assertIntakeBaselineMatchesPending(
-  intake,
-  baselineSpecRef,
-  baselineSpecPath,
-  artifactRoot,
-  baselineSpecSha256 = null,
-) {
-  if (!baselineSpecRef) {
-    if (intake.baseline_context) {
-      throw new ValidationError(
-        'greenfield Gate A intake must not define baseline_context when the pending iteration has no baseline',
-      );
-    }
-    return;
-  }
-  if (!intake.baseline_context?.spec_ref) {
-    throw new ValidationError(
-      'baseline-aware Gate A intake must preserve baseline_context.spec_ref',
-    );
-  }
-  if (
-    normalizeDisplayPath(intake.baseline_context.spec_ref)
-    !== normalizeDisplayPath(baselineSpecRef)
-  ) {
-    throw new ValidationError(
-      `intake baseline_context.spec_ref ${JSON.stringify(intake.baseline_context.spec_ref)} must match pending baseline ${JSON.stringify(baselineSpecRef)}`,
-    );
-  }
-  const intakeBaselineSpecPath = resolveArtifactFileReference(
-    intake.baseline_context.spec_ref,
-    artifactRoot,
-  );
-  assertFile(intakeBaselineSpecPath, 'intake baseline_context.spec_ref');
-  assertFileInsideArtifactRoot(
-    intakeBaselineSpecPath,
-    artifactRoot,
-    'intake baseline_context.spec_ref',
-  );
-  if (realpathSync(intakeBaselineSpecPath) !== realpathSync(baselineSpecPath)) {
-    throw new ValidationError(
-      `intake baseline_context.spec_ref ${JSON.stringify(intake.baseline_context.spec_ref)} must match pending baseline ${JSON.stringify(baselineSpecRef)}`,
-    );
-  }
-  if (
-    baselineSpecSha256
-    && intake.baseline_context.spec_sha256 !== baselineSpecSha256
-  ) {
-    throw new ValidationError(
-      'intake baseline_context.spec_sha256 must match the pending baseline hash',
-    );
-  }
-}
-
-function assertPendingBaselineIntegrity(
-  state,
-  pending,
-  metadata,
-  baselineSpecRef,
-  baselineSpecPath,
-) {
-  const metadataBaselineRef = metadata.baseline?.effective_spec_ref;
-  if (normalizeDisplayPath(metadataBaselineRef) !== normalizeDisplayPath(baselineSpecRef)) {
-    throw new ValidationError(
-      `iteration metadata baseline ${JSON.stringify(metadataBaselineRef)} must match pending baseline ${JSON.stringify(baselineSpecRef)}`,
-    );
-  }
-
-  const pendingHash = pending.baseline_effective_spec_sha256;
-  const metadataHash = metadata.baseline?.effective_spec_sha256;
-  const pendingHasHash = Object.hasOwn(
-    pending,
-    'baseline_effective_spec_sha256',
-  );
-  const metadataHasHash = Object.hasOwn(
-    metadata.baseline ?? {},
-    'effective_spec_sha256',
-  );
-  if (pendingHasHash !== metadataHasHash) {
-    throw new ValidationError(
-      'pending and iteration metadata must both record the baseline effective spec hash',
-    );
-  }
-  if (
-    pendingHasHash
-    && (
-      typeof pendingHash !== 'string'
-      || !/^[a-f0-9]{64}$/.test(pendingHash)
-      || typeof metadataHash !== 'string'
-      || !/^[a-f0-9]{64}$/.test(metadataHash)
-    )
-  ) {
-    throw new ValidationError(
-      'pending and iteration metadata baseline effective spec hashes must be lowercase SHA-256 values',
-    );
-  }
-  if (pendingHasHash && pendingHash !== metadataHash) {
-    throw new ValidationError(
-      'pending and iteration metadata baseline effective spec hashes must match',
-    );
-  }
-  const expectedHash = pendingHasHash ? pendingHash : null;
-  if (expectedHash !== null && fileSha256(baselineSpecPath) !== expectedHash) {
-    throw new ValidationError(
-      `pending baseline hash does not match ${baselineSpecRef}`,
-    );
-  }
-
-  if (
-    isComposedBaselineReference(baselineSpecRef)
-    && baselineSpecRef !== 'current-spec.json'
-  ) {
-    const expectedSnapshotRef = canonicalComposedBaselineSnapshotRef(
-      state.activeIteration,
-    );
-    if (normalizeDisplayPath(baselineSpecRef) !== expectedSnapshotRef) {
-      throw new ValidationError(
-        `pending composed baseline snapshot must be ${expectedSnapshotRef}`,
-      );
-    }
-    if (!expectedHash) {
-      throw new ValidationError(
-        'pending composed baseline snapshot must record baseline_effective_spec_sha256',
-      );
-    }
-    const snapshot = loadJson(baselineSpecPath);
-    validateCurrentSpecCompositionData(snapshot, state.artifactRoot, {
-      requireNoOpenDecisions: true,
-    });
-    for (const field of [
-      'project_id',
-      'composed_from',
-      'source_specs',
-      'effective_product',
-      'effective_implementation',
-      'superseded_refs',
-      'composition_conflicts',
-      'open_decisions',
-    ]) {
-      if (!jsonEqual(snapshot[field] ?? null, state.currentSpec[field] ?? null)) {
-        throw new ValidationError(
-          `pending composed baseline snapshot ${field} must match the current effective composition`,
-        );
-      }
-    }
-    return expectedHash;
-  }
-
-  return expectedHash;
-}
-
 function draftWithState(args, state) {
   const artifactRoot = state.artifactRoot;
   const pending = activePendingIteration(state);
@@ -6346,7 +6004,6 @@ export function main(argv = process.argv.slice(2)) {
     if (args.command === 'context') return context(args);
     if (args.command === 'promote-spec') return promoteSpec(args);
     if (args.command === 'promote-tasks') return promoteTasks(args);
-    if (args.command === 'promote-milestone') return promoteMilestone(args);
     if (args.command === 'diff-tasks') return diffTasks(args);
     if (args.command === 'compose') return compose(args);
     if (args.command === 'maintenance') return maintenance(args);

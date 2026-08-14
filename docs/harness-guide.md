@@ -92,7 +92,7 @@ Feature Radar가 추천을 제공했다면 승격된 각 후보를 Gate A에서 
 
 ### Gate B
 
-Spec approval, 승인 감사 정보, open decision 해소, 모든 `CQ-n` disposition, 필요한 기술 조사 근거가 갖춰져야 task graph로 넘어간다. 구체적인 disposition 값은 schema와 validator 계약을 따르고 기술 조사 기준은 정본 skill의 Technology boundary를 따른다.
+Spec approval, 승인 감사 정보, open decision 해소, 모든 `CQ-n` disposition, 필요한 기술 조사 근거가 갖춰져야 실행 준비로 넘어간다. 구체적인 disposition 값은 schema와 validator 계약을 따르고 기술 조사 기준은 정본 skill의 Technology boundary를 따른다.
 
 새 spec은 화면 유무와 함께 이번 반복의 시각 설계 범위를 `none|minimal|reuse|full`, 시점을 `not_applicable|current_iteration|deferred_iteration`으로 분류한다. 화면이 있다는 사실만으로 full design을 강제하지 않는다. 기능 우선 반복은 `minimal` 또는 `full + deferred_iteration`으로 진행하고, 다음 기능 반복에서 `full + current_iteration`으로 올릴 수 있다.
 
@@ -109,7 +109,9 @@ Contract 변경을 drift로 처리하면 승인 산출물과 앱이 영구히 �
 
 ### Gate C
 
-Task graph의 dependency, cycle, acceptance criteria, source spec reference를 검증한다. Greenfield flat bundle은 validator-clean canonical `gate-c-task-graph/task-graph.json`을 만든 뒤 `p2a iteration init`으로 반복 구조에 들어간다. 이미 active iteration이 있는 agent-authored 흐름에서는 `task-graph.draft.json`이 `p2a iteration validate --stage gate-c-draft`를 통과한 뒤 `promote-tasks`로 정본에 승격된다. 어느 경로에도 별도 사람 승인 audit은 없다. Gate D review 파일은 planning readiness, iteration init, handoff, close의 조건이 아니다.
+Gate C는 호환 이름을 유지하지만 execution readiness를 검증한다. 모든 모드는 Gate A/②/B 승인, open decision 해소, artifact hash, acceptance·verification, 필요한 visual contract를 확인한다. Direct/Planned는 한 synthetic compatibility work item으로 기존 lifecycle을 재사용하고, Planned는 2~5개의 ordered milestone과 각 검증 조건을 추가로 검사한다. Orchestrated는 task dependency, cycle, ownership, acceptance criteria와 source spec reference를 추가 검증한다.
+
+Greenfield Orchestrated flat bundle은 validator-clean canonical `gate-c-task-graph/task-graph.json`을 만든 뒤 `p2a iteration init`으로 반복 구조에 들어간다. 이미 active iteration이 있는 agent-authored Orchestrated 흐름에서는 `task-graph.draft.json`이 `p2a iteration validate --stage gate-c-draft`를 통과한 뒤 `promote-tasks`로 정본에 승격된다. Direct/Planned는 `p2a execute prepare`가 승인 Gate B에서 호환 레코드를 원자적으로 준비한다. 모드 선택, checkpoint, validator 통과에는 별도 사람 승인 audit이 없다. Gate D review 파일은 planning readiness, iteration init, handoff, close의 조건이 아니다.
 
 ## 3. 산출물 파일과 데이터 계약
 
@@ -130,7 +132,7 @@ Task graph의 dependency, cycle, acceptance criteria, source spec reference를 �
 │   ├── product-spec.md                # optional generated view
 │   └── implementation-plan.md         # optional generated view
 └── gate-c-task-graph/
-    └── task-graph.json                # canonical
+    └── task-graph.json                # canonical execution readiness/compatibility record
 ```
 
 | 파일 저장 위치 | 역할 |
@@ -144,7 +146,7 @@ Task graph의 dependency, cycle, acceptance criteria, source spec reference를 �
 | `gate-b-spec/spec.json` | 제품/구현 명세의 구조화 원본이다. `p2a` package schema `spec.schema.json` 계약을 따르며 approval 상태, approval audit, open decisions, clarifying question disposition을 포함한다. |
 | `gate-b-spec/experience-spec.json` | `full + current_iteration`일 때 화면 구성, design-system 규칙, 후보 선택, viewport/state/accessibility 검수 범위를 담는 `p2a.visual_experience.v1` 정본이다. |
 | `gate-b-spec/visual-design/VD-n/` | 사용자가 브라우저로 검토하는 passive offline HTML 후보다. `prototype.json`이 모든 파일의 SHA-256과 승인 상태를 묶으며 executable script, 외부 navigation, network 호출은 금지된다. |
-| `gate-c-task-graph/task-graph.json` | 승인된 spec에서 생성된 task graph다. task id, dependency, acceptance criteria, target area, suggested agent prompt, source spec reference를 담는다. |
+| `gate-c-task-graph/task-graph.json` | 승인된 spec에서 생성된 execution readiness/compatibility record다. mode, rationale, Direct/Planned synthetic work item과 milestone 또는 Orchestrated task/dependency, acceptance, source spec reference를 담는다. |
 
 `.plan2agent/` 아래 산출물은 application source git에 커밋하지 않는 로컬 하네스 상태다. 기획 이력, task/run 진행, 검증 결과의 장기 보존은 Plan2Agent Memory 같은 artifact store에 동기화하는 방향을 기준으로 한다. 로컬 파일은 게이트 검증, 재개, UI 표시를 위한 working cache이며, git commit은 제품 소스코드 변경 이력에 집중한다.
 
@@ -155,9 +157,9 @@ Task graph의 dependency, cycle, acceptance criteria, source spec reference를 �
 | decision ledger | `.plan2agent/artifacts/<project_id>/decisions.jsonl` | 줄마다 `decisions.schema.json` | `seq`가 1씩 증가하고 `prev_sha256` 체인과 활성 `prev_seq` 계보가 유효해야 한다. 기존 줄은 수정·삭제하지 않는다. |
 | `intake_json` | `.plan2agent/artifacts/<project_id>/gate-a-intake/intake.json` | `p2a` package schema `intake.schema.json` (`schema_version: p2a.intake.v1`) | 모든 질문·결정이 해소되고 사용자가 Gate A 범위를 승인해 `approval_audit`, `status: ready_for_spec`가 모두 있어야 다음 단계로 간다. |
 | optional Markdown views | `.plan2agent/artifacts/<project_id>/**.md` | JSON에서 생성되는 view/export다. | Gate 판정의 정본으로 쓰지 않는다. |
-| `spec_json` | `.plan2agent/artifacts/<project_id>/gate-b-spec/spec.json` | `p2a` package schema `spec.schema.json` (`schema_version: p2a.spec.v1`) | 모든 `CQ-n`이 처분되고, `approval: approved`, `approval_audit` present, `open_decisions: []`일 때 task graph를 만들 수 있다. |
+| `spec_json` | `.plan2agent/artifacts/<project_id>/gate-b-spec/spec.json` | `p2a` package schema `spec.schema.json` (`schema_version: p2a.spec.v1`) | 모든 `CQ-n`이 처분되고, `approval: approved`, `approval_audit` present, `open_decisions: []`일 때 실행 준비를 만들 수 있다. |
 | conditional visual experience | `.plan2agent/artifacts/<project_id>/gate-b-spec/experience-spec.json` | `visual-experience.schema.json` + 선택 후보의 `visual-prototype.schema.json` | `full + current_iteration`이면 experience와 선택 prototype이 모두 approved이고 Gate B audit에 포함되어야 한다. |
-| `task_graph_json` | `.plan2agent/artifacts/<project_id>/gate-c-task-graph/task-graph.json` | `p2a` package schema `task-graph.schema.json` (`schema_version: p2a.task_graph.v1`) | dependency id가 모두 존재하고, task id가 중복되지 않으며, graph가 DAG여야 한다. |
+| `task_graph_json` | `.plan2agent/artifacts/<project_id>/gate-c-task-graph/task-graph.json` | `p2a` package schema `task-graph.schema.json` (`schema_version: p2a.task_graph.v1`) | mode/rationale와 synthetic work item 또는 Orchestrated graph가 유효해야 한다. Planned는 2~5개 ordered milestone, Orchestrated는 유효한 dependency id·고유 task id·DAG를 요구한다. |
 
 승인된 Gate B가 있으면 `spec_json.approval_audit`에 아래 구조를 포함한다.
 
@@ -201,7 +203,7 @@ Gate A 확인도 같은 명령과 audit shape를 사용한다. `intake_json.appr
 | `project_id` | 한 run의 안정적인 프로젝트 id다. artifact 경로의 `<project_id>`와 맞춰 추적한다. |
 | `source_intake` | 이 spec이 근거로 삼은 intake 파일 또는 artifact 참조다. persisted artifact를 가리킬 때는 `.plan2agent/artifacts/<project_id>/gate-a-intake/intake.json` 형식을 사용한다. |
 | `source_intake_sha256` | 생성된 Gate B가 persisted `intake.json` 원본 bytes의 SHA-256을 기록한다. 이후 Gate A가 변경되면 기존 Gate B 검증이 실패하므로 spec을 다시 생성해야 한다. |
-| `product` | 문제, 대상 사용자, 목표, non-goals, core flows, interfaces, data model draft, external integrations, success criteria, constraints를 담는다. |
+| `product` | 문제, 대상 사용자, 목표, `must_preserve`, non-goals, core flows, interfaces, data model draft, external integrations, success criteria, constraints를 담는다. 새 spec은 회귀하면 안 되는 기존 동작을 `must_preserve`에 명시하고 historical spec은 빈 목록으로 호환한다. |
 | `implementation` | architecture, interfaces, data flow, dependencies, edge cases, verification을 담는다. |
 | `clarifying_question_disposition` | Gate B에서 각 intake `CQ-n`을 어떻게 처리했는지 기록한다. 상태는 `answered`, `assumed`, `deferred_non_goal`, `promoted_to_decision` 중 하나다. |
 | `open_decisions` | spec 단계에서 아직 닫히지 않은 `ND-n` decision id 목록이다. intake의 unresolved decision과 CQ에서 승격된 unresolved decision을 합친 목록과 정확히 일치해야 한다. raw `CQ-n` id는 넣지 않는다. |
@@ -423,7 +425,7 @@ Gemini CLI에서는 `.gemini/commands/p2a/harness.toml` shim이 `/p2a:harness` �
 
 ## 7. Gate C 이후 개발 진행
 
-Co-located scaffold 프로젝트에서는 Gate A-C artifact root가 `p2a validate --require-handoff-ready`를 통과한 직후 root `gate-*` 산출물을 반복 구조로 변환한다. Gate C 사람 승인 audit이나 Gate D review 파일은 필요하지 않다. 개발 진행의 정본 task graph는 변환 후 `iterations/<iter-id>/gate-c-task-graph/task-graph.json`이며, 사용자는 root graph를 직접 실행하지 않는다.
+Co-located scaffold 프로젝트에서는 Gate A-C artifact root가 validation을 통과한 직후 root `gate-*` 산출물을 반복 구조로 변환한다. Gate C 사람 승인 audit이나 Gate D review 파일은 필요하지 않다. 새 프로젝트의 기본 `adaptive`는 Gate B와 repository evidence로 실행 mode를 고른다. 기존 config에 `executionMode`가 없으면 호환을 위해 `orchestrated`로 해석하고 기존 task graph를 사용한다. `devExecution.executionMode`가 `adaptive|direct|planned`이고 Gate B만 승인된 상태라면 `p2a-dev-execution`이 `p2a execute prepare`로 한 synthetic compatibility work item을 먼저 만들고, 같은 `iteration init` 경로로 이어간다. 사용자는 mode나 이 호환 work item을 별도로 승인하지 않는다.
 
 ```bash
 p2a iteration init \
@@ -433,13 +435,14 @@ p2a iteration init \
 
 사용자 관점의 루프는 다음과 같다.
 
-1. `p2a tasks ready --artifacts .plan2agent/artifacts/<project_id>`로 지금 시작할 수 있는 task를 확인한다.
-2. 실행할 task를 정한 뒤 `p2a execute start --artifacts .plan2agent/artifacts/<project_id> --task <task-id>`로 run을 만들고 상태를 `in_progress`로 바꾼다. dependency가 완료되지 않은 task는 시작할 수 없다.
-3. `p2a execute start`가 출력한 launcher prompt를 agent CLI에 붙여넣는다. 별도 확인이 필요하면 `p2a tasks prompt --artifacts .plan2agent/artifacts/<project_id> <task-id>`로 같은 task context를 다시 볼 수 있다.
-4. Claude Code 또는 Codex 같은 write-capable agent 세션에서 prompt를 실행하고, 코드 변경과 검증은 해당 작업 브랜치에서 수행한다. Gemini CLI는 현재 review/monitor 같은 read-only 보조로만 사용한다.
-5. UI task의 `visualImpact`는 구현 중 확인할 screen/state 범위만 알려 준다. 일반 구현 run에는 visual sidecar를 만들지 않으며, 승인 prototype은 구현 방향으로 사용하되 구현 증거로 재사용하지 않는다. 구현 뒤에는 run을 열어 둔 채 사용자 시각 검수와 drift 수정을 만족할 때까지 반복한다. 이 비게이팅·무기록 루프는 추가 run, sidecar, hash, verdict를 만들지 않는다.
-6. 사용자 시각 검수와 acceptance criteria 및 필요한 테스트가 통과하면 `p2a execute finish --artifacts .plan2agent/artifacts/<project_id> --run-id <run-id> --test --lint --typecheck --collect-git`로 검증, run closeout, task done/block 전이를 한 번에 기록한다. `finish`가 task-level 시각 검수 통과 지점이다. `done`은 최신 run이 현재 iteration/task graph에 속하고 실행된 verification(`source: config|command`, `exitCode: 0`)이 있는 경우만 허용한다. 막히면 failed/blocked finish에 `--failure-class`, `--repro-step`, `--localization`, `--guard`를 함께 기록한다. `finish` 이후 시각 문제를 발견한 경우에만 `p2a tasks todo <id> --reopen --note <reason>`으로 task를 다시 연다. 이후 다시 `ready`를 확인해 다음 task를 진행한다.
-7. 모든 task를 완료하고 canonical workspace에 통합한 뒤 활성화된 최종 review-only run을 연다. Visual iteration은 `reviewPasses.visual`이 `off`가 아닐 때 iteration당 한 번 `p2a execute review`로 실제 앱 matrix와 접근성의 `confirm_ui`를 봉인한다. 비UI iteration은 기본 `reviewPasses.acceptance: on`에서 `p2a execute accept --artifacts .plan2agent/artifacts/<project_id> --agent-tool <reviewer>`를 실행하고, owner가 실제 동작 명령을 `p2a runs verify`로 기록한 뒤 read-only reviewer의 `confirm_behavior` sidecar를 봉인한다. 두 run 모두 `isolation: none`과 빈 `changedFiles`를 강제하며, 실패하면 remediation owner task가 다시 열린다.
+1. `p2a next --json`으로 상태 기반 다음 행동을 확인한다. Gate 승인 전 행동은 `requiresApproval: true`, 승인된 개발 loop는 `false`다.
+2. Gate C가 없고 execution mode가 `adaptive|direct|planned`이면 실행 AI가 repository를 조사해 Direct/Planned/Orchestrated를 고른다. Direct/Planned는 `p2a execute prepare --mode ... --selection-rationale ...`로 준비하며 Planned만 2–5개 milestone을 선언한다. 이는 추가 승인 Gate가 아니다.
+3. `p2a execute start`는 ready work item의 run을 만들고 Gate B에서 파생한 `executionEnvelope`를 source hash와 함께 고정하며 mode와 선택 근거도 기록한다. dependency가 완료되지 않은 work item은 시작할 수 없다.
+4. Launcher prompt는 envelope를 먼저 보여 주고 task는 실행/재개 경계로만 제시한다. 별도 확인이 필요하면 `p2a tasks prompt --artifacts .plan2agent/artifacts/<project_id> <task-id>`로 같은 계약을 다시 볼 수 있다.
+5. Claude Code 또는 Codex 같은 write-capable agent 세션에서 prompt를 실행하고, 코드 변경과 검증은 해당 작업 브랜치에서 수행한다. Planned는 각 outcome 뒤 `p2a runs checkpoint --milestone <id>`로 선언된 명령을 순서대로 실행하며 `resume`은 다음 pending checkpoint를 보여 준다. Gemini CLI는 현재 review/monitor 같은 read-only 보조로만 사용한다.
+6. UI task의 `visualImpact`는 구현 중 확인할 screen/state 범위만 알려 준다. 일반 구현 run에는 visual sidecar를 만들지 않으며, 승인 prototype은 구현 방향으로 사용하되 구현 증거로 재사용하지 않는다. 구현 뒤에는 run을 열어 둔 채 실행 owner가 영향 route/state/viewport를 렌더링하고 drift를 수정해 통과할 때까지 반복한다. 사용자에게 task별 UI 승인을 요청하지 않는다. 이 비게이팅·무기록 루프는 추가 run, sidecar, hash, verdict를 만들지 않는다.
+7. Owner 시각 확인과 acceptance criteria 및 필요한 테스트가 통과하면 `p2a execute finish --artifacts .plan2agent/artifacts/<project_id> --run-id <run-id> --test --lint --typecheck --collect-git`로 검증, run closeout, task done/block 전이를 한 번에 기록한다. Planned는 모든 checkpoint가 verified여야 한다. `finish`는 task 구현·검증 완료 지점이며 별도 사용자 UI 승인이 아니다. `done`은 최신 run이 현재 iteration/task graph에 속하고 실행된 verification(`source: config|command`, `exitCode: 0`)이 있는 경우만 허용한다. 막히면 failed/blocked finish에 `--failure-class`, `--repro-step`, `--localization`, `--guard`를 함께 기록한다. `finish` 이후 시각 문제를 발견한 경우에만 `p2a tasks todo <id> --reopen --note <reason>`으로 task를 다시 연다. 이후 다시 `ready`를 확인해 다음 task를 진행한다.
+8. 모든 task를 완료하고 canonical workspace에 통합한 뒤 필요한 최종 review-only run을 연다. 승인 experience가 visual review를 요구하면 `reviewPasses.visual` 값과 무관하게 `p2a execute review`로 실제 앱 matrix와 접근성 evidence를 봉인한다. 필수 visual contract가 없는 iteration은 기본 `reviewPasses.acceptance: on`에서 `p2a execute accept`로 실제 동작 evidence를 봉인한다.
 
 이미 승인 산출물을 별도 대상 프로젝트로 복사한 legacy handoff 프로젝트에서는 `.plan2agent/project.config.json.taskGraph`가 가리키는 flat graph를 `--graph`로 명시할 수 있다.
 

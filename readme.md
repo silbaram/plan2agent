@@ -46,7 +46,7 @@ Concise Markdown or text entry document
   -> Gate ②: approved persistent architecture, stack, prohibitions, and style
   -> Gate B: product spec and implementation plan
      -> conditional visual experience: structured screens + approved offline HTML prototype
-  -> Gate C: validated dependency-aware task graph
+  -> Gate C: execution readiness (Direct, Planned, or dependency-aware Orchestrated)
   -> supervised implementation and verification
   -> evaluation and improvement proposals
 ```
@@ -64,7 +64,7 @@ suggested action and run:
 p2a next
 ```
 
-When Gate A-C validation passes, `next` guides the transition into supervised task execution and
+When Gate A-C readiness passes, `next` guides the transition into supervised execution and
 subsequent iterations.
 
 ## Why Plan2Agent
@@ -76,8 +76,8 @@ layer around those tools.
 | Need | Plan2Agent approach |
 | --- | --- |
 | Clear decisions before code | Gate A scope, Gate ② project shape, and Gate B spec approval preserve decisions, constraints, assumptions, and approval state. |
-| Traceable implementation work | Specs map to dependency-aware tasks with acceptance criteria and source references. |
-| Reviewable agent execution | Tasks run in foreground-supervised sessions with run logs, changed files, and verification evidence. |
+| Traceable implementation work | Specs map to a Direct run, Planned checkpoints, or dependency-aware Orchestrated tasks. |
+| Reviewable agent execution | Foreground-supervised runs preserve mode, rationale, changed files, and verification evidence. |
 | Portable project state | Local JSON artifacts remain canonical across Codex, Claude Code, and Gemini CLI. |
 | Controlled improvement | Evaluation and proposal flows recommend maintenance without silently applying self-modifying patches. |
 
@@ -123,22 +123,19 @@ validated task graph. Gate A presents a compact understanding summary and requir
 confirmation. The same session establishes or reuses Gate ② before continuing to Gate B. It records
 uncertainty as an assumption or user decision rather than inventing a requirement.
 
-### 2. Execute one ready task
+### 2. Execute the approved objective
 
-After Gate A-C validation, use `p2a next` to identify the next safe action. A task execution records its agent
-tool, workspace, changed files, verification commands, result, and failure classification. A task is
-not done until required evidence passes the monitor gate.
+After Gate B approval, use `p2a next` to start the next action authorized by the approved contract. New projects default to `adaptive`, while existing configs without an execution mode continue to resolve as `orchestrated`; explicit `adaptive`, `direct`, `planned`, and `orchestrated` policies remain supported without another mode approval. Planned mode records 2–5 ordered, command-verified resume checkpoints. New runs bind a Gate-derived execution envelope containing objective, source hash, scope, preservation conditions, non-goals, acceptance, verification, and authority boundaries.
 
 For direct control of a ready task:
 
 ```bash
-p2a execute plan \
+p2a execute start \
   --artifacts .plan2agent/artifacts/<project_id> \
   --task <task-id>
 ```
 
-See the [Supervised Execution Reference](docs/supervised-execution.md) for start, resume, finish,
-retry, batch, and milestone-review procedures.
+See the [Execution Reference](docs/supervised-execution.md) for start, resume, finish, retry, and bounded batch procedures.
 
 ### 3. Iterate without losing the baseline
 
@@ -180,7 +177,7 @@ Plan2Agent installs one `p2a` entrypoint:
 | `p2a tasks` | Inspect and transition task state. |
 | `p2a runs` | Record, verify, finish, and inspect run evidence. |
 | `p2a execute` | Supervise implementation and canonical final visual-review runs through verified finish. |
-| `p2a eval` | Grade, compare, analyze, generate, and summarize evaluations. |
+| `p2a eval` | Grade, compare, analyze, generate, and summarize execution evidence. |
 | `p2a proposals` | Mine, review, curate, approve, and summarize improvement proposals. |
 | `p2a memory` | Check, synchronize, search, and inspect optional Memory data. |
 
@@ -189,13 +186,13 @@ Run `p2a --help` for the top-level command surface and use the
 
 ## Safety model
 
-Plan2Agent is intentionally human-supervised and local-first.
+Plan2Agent is contract-gated, confined, and local-first. Product meaning requires explicit approval; implementation choices and verification retries inside that approved envelope do not.
 
 It is a good fit when you want:
 
 - explicit product decisions before implementation;
 - reviewable specs and agent-ready task graphs;
-- foreground Codex, Claude Code, or Gemini CLI execution;
+- confined Codex or Claude execution, with Gemini kept read-only;
 - verification evidence and regression history;
 - human-approved maintenance and improvement loops.
 

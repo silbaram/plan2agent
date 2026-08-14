@@ -1,0 +1,78 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://plan2agent.dev/eval/adaptive-ab/report.schema.json",
+  "title": "Plan2Agent adaptive execution A/B report",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "status",
+    "generated_at",
+    "model_profile",
+    "manifest_ref",
+    "manifest_sha256",
+    "fixture_count",
+    "fixtures",
+    "aggregate",
+    "decisions",
+    "evidence_inventory",
+    "evidence_inventory_sha256"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {"const": "p2a.adaptive_ab_report.v1"},
+    "status": {"enum": ["sealed", "failed", "incomplete"]},
+    "generated_at": {"type": "string", "minLength": 1},
+    "model_profile": {"type": "string", "minLength": 1},
+    "manifest_ref": {"type": "string", "minLength": 1},
+    "manifest_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "fixture_count": {
+      "type": "object",
+      "required": ["required", "completed"],
+      "additionalProperties": false,
+      "properties": {
+        "required": {"type": "integer", "minimum": 1},
+        "completed": {"type": "integer", "minimum": 0}
+      }
+    },
+    "fixtures": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["fixture_id", "kind", "comparison", "a_ref", "b_ref"],
+        "additionalProperties": false,
+        "properties": {
+          "fixture_id": {"type": "string", "minLength": 1},
+          "kind": {"enum": ["ui", "non-ui"]},
+          "comparison": {"type": "object"},
+          "a_ref": {"type": "string", "minLength": 1},
+          "b_ref": {"type": "string", "minLength": 1}
+        }
+      }
+    },
+    "aggregate": {"type": "object"},
+    "decisions": {
+      "type": "object",
+      "required": ["visual_loop", "historical_readers", "rationale"],
+      "additionalProperties": false,
+      "properties": {
+        "visual_loop": {"enum": ["remove_task_level_user_visual_approval", "retain_task_level_user_visual_approval"]},
+        "historical_readers": {"const": "retain_for_declared_compatibility_period"},
+        "rationale": {"type": "string", "minLength": 1}
+      }
+    },
+    "evidence_inventory": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["path", "sha256", "bytes"],
+        "additionalProperties": false,
+        "properties": {
+          "path": {"type": "string", "minLength": 1},
+          "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+          "bytes": {"type": "integer", "minimum": 0}
+        }
+      }
+    },
+    "evidence_inventory_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"}
+  }
+}

@@ -31,7 +31,6 @@ import {
   assertNoUninitializedScaffoldArtifactRoots,
   assertNotUninitializedScaffoldGraph,
   configuredTaskGraphPath,
-  normalizePath,
   resolveP2aPaths,
   singleArtifactProjectRoot,
 } from './p2a_paths.mjs';
@@ -42,9 +41,13 @@ import {
   normalizeMonitorVerdictData,
   readMonitorGateSidecar,
 } from './p2a_monitor_gate.mjs';
+import { assertDirectory, assertFile, displayPath } from './p2a_cli_helpers.mjs';
 import { commandLine } from './p2a_run_commands.mjs';
 import { atomicWriteJson, atomicWriteText, withRunStoreLocks } from './p2a_run_store.mjs';
 import {
+  initialMaintenanceTaskGraph,
+  maintenanceTaskGraphPath as maintenanceTaskGraphPathForArtifactRoot,
+  nextMaintenanceTaskId,
   resolveIterationState,
   validateMaintenanceTaskGraphProject,
 } from './p2a_iteration_state.mjs';
@@ -251,22 +254,6 @@ function assertSafeRunId(runId) {
   }
 }
 
-function assertFile(filePath, label) {
-  if (!existsSync(filePath)) throw new Error(`${label} is missing: ${filePath}`);
-  if (!lstatSync(filePath).isFile()) throw new Error(`${label} must be a file: ${filePath}`);
-}
-
-function assertDirectory(dirPath, label) {
-  if (!existsSync(dirPath)) throw new Error(`${label} is missing: ${dirPath}`);
-  if (!lstatSync(dirPath).isDirectory()) throw new Error(`${label} must be a directory: ${dirPath}`);
-}
-
-function displayPath(filePath, root = process.cwd()) {
-  const relative = path.relative(root, filePath);
-  if (relative && !relative.startsWith('..') && !path.isAbsolute(relative)) return normalizePath(relative);
-  return normalizePath(filePath);
-}
-
 function resolveRunsDirForProposals(args) {
   return resolveRunsDir(args);
 }
@@ -299,15 +286,6 @@ function readRun(runsDir, runId) {
   const filePath = runPath(runsDir, runId);
   assertFile(filePath, runId);
   return validateRunData(loadJson(filePath));
-}
-
-function readRuns(runsDir, runId = null) {
-  if (runId) return [readRun(runsDir, runId)];
-  const indexFile = runIndexPath(runsDir);
-  if (!existsSync(indexFile)) return [];
-  const index = validateRunIndexData(loadJson(indexFile));
-  return index.runs
-    .map((entry) => readRun(runsDir, entry.runId));
 }
 
 function errorMessage(error) {
@@ -1352,28 +1330,6 @@ function resolveProposalDirForApproval(args, draftFilePath) {
   const draftDir = path.dirname(draftFilePath);
   if (path.basename(draftDir) === 'patch-drafts') return path.dirname(draftDir);
   return resolveProposalDir(args);
-}
-
-function maintenanceTaskGraphPathForArtifactRoot(artifactRoot) {
-  return path.join(artifactRoot, 'iterations', 'maintenance', 'gate-c-task-graph', 'task-graph.json');
-}
-
-function initialMaintenanceTaskGraph(projectId) {
-  return {
-    schema_version: 'p2a.task_graph.v1',
-    projectId,
-    version: 'maintenance',
-    sourceSpec: '../../../current-spec.json',
-    tasks: [],
-  };
-}
-
-function nextMaintenanceTaskId(tasks) {
-  const max = tasks.reduce((highest, task) => {
-    const match = typeof task.id === 'string' ? task.id.match(/^task-([0-9]+)$/) : null;
-    return match ? Math.max(highest, Number.parseInt(match[1], 10)) : highest;
-  }, 0);
-  return `task-${String(max + 1).padStart(3, '0')}`;
 }
 
 function buildProposalDraftApprovalId(draft, approvedBy, approvalNote) {

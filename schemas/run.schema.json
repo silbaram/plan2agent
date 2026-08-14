@@ -83,6 +83,215 @@
       "type": "string",
       "pattern": "^[a-f0-9]{64}$"
     },
+    "executionEnvelope": {
+      "type": "object",
+      "required": [
+        "objective",
+        "sourceGateRefs",
+        "scope",
+        "mustPreserve",
+        "nonGoals",
+        "acceptance",
+        "verification",
+        "executionAuthority"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "objective": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sourceGateRefs": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": ["path", "sha256"],
+            "additionalProperties": false,
+            "properties": {
+              "path": { "type": "string", "minLength": 1 },
+              "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+            }
+          }
+        },
+        "scope": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "mustPreserve": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "nonGoals": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "acceptance": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "verification": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "executionAuthority": {
+          "type": "object",
+          "required": ["mayChoose", "mustReturnToGate"],
+          "additionalProperties": false,
+          "properties": {
+            "mayChoose": {
+              "type": "array",
+              "minItems": 1,
+              "items": { "type": "string", "minLength": 1 }
+            },
+            "mustReturnToGate": {
+              "type": "array",
+              "minItems": 1,
+              "items": { "type": "string", "minLength": 1 }
+            }
+          }
+        },
+        "visualContract": {
+          "type": "object",
+          "required": [
+            "experienceSpecRef",
+            "experienceSpecSha256"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "experienceSpecRef": { "type": "string", "minLength": 1 },
+            "experienceSpecSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+            "prototypeManifestRef": { "type": "string", "minLength": 1 },
+            "prototypeManifestSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+            "screens": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "object",
+                "required": [
+                  "screenId",
+                  "route",
+                  "entryPoints",
+                  "states",
+                  "responsiveRules",
+                  "accessibilityRequirements"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "screenId": { "type": "string", "pattern": "^SCREEN-[0-9]+$" },
+                  "route": { "type": ["string", "null"] },
+                  "entryPoints": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": { "type": "string", "minLength": 1 }
+                  },
+                  "states": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": { "type": "string", "minLength": 1 }
+                  },
+                  "responsiveRules": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": { "type": "string", "minLength": 1 }
+                  },
+                  "accessibilityRequirements": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": { "type": "string", "minLength": 1 }
+                  }
+                }
+              }
+            },
+            "viewports": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "object",
+                "required": ["name", "width", "height"],
+                "additionalProperties": false,
+                "properties": {
+                  "name": { "type": "string", "minLength": 1 },
+                  "width": { "type": "integer", "minimum": 1 },
+                  "height": { "type": "integer", "minimum": 1 }
+                }
+              }
+            },
+            "accessibilityStandard": { "type": "string", "minLength": 1 },
+            "visualInvariants": {
+              "type": "array",
+              "minItems": 1,
+              "items": { "type": "string", "minLength": 1 }
+            }
+          }
+        }
+      }
+    },
+    "executionEnvelopeSha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "mode": {
+      "type": "string",
+      "enum": [
+        "direct",
+        "planned",
+        "orchestrated"
+      ]
+    },
+    "selectionRationale": {
+      "type": "string",
+      "minLength": 1
+    },
+    "milestones": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 5,
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "outcome",
+          "verification",
+          "status",
+          "verifiedAt"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^milestone-[A-Za-z0-9._-]+$"
+          },
+          "outcome": {
+            "type": "string",
+            "minLength": 1
+          },
+          "verification": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "verified"
+            ]
+          },
+          "verifiedAt": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      }
+    },
     "agentTool": {
       "type": "string",
       "minLength": 1
@@ -310,6 +519,10 @@
               "command",
               "manual"
             ]
+          },
+          "milestoneId": {
+            "type": "string",
+            "pattern": "^milestone-[A-Za-z0-9._-]+$"
           },
           "failureReason": {
             "type": [

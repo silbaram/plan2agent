@@ -18,6 +18,7 @@ import {
   withDecisionLedgerLock,
 } from './p2a_decision_ledger.mjs';
 import { resolveIterationState } from './p2a_iteration_state.mjs';
+import { artifactRelativePath as artifactRelative } from './p2a_cli_helpers.mjs';
 import { normalizePath, resolveP2aPaths } from './p2a_paths.mjs';
 import { atomicWriteJson, atomicWriteText } from './p2a_run_store.mjs';
 import {
@@ -124,10 +125,6 @@ function isFile(filePath) {
 
 function readJson(filePath) {
   return JSON.parse(readFileSync(filePath, 'utf8'));
-}
-
-function artifactRelative(artifactRoot, filePath) {
-  return normalizePath(path.relative(artifactRoot, filePath));
 }
 
 function gateFiles(artifactRoot) {

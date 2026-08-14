@@ -215,7 +215,6 @@ test('batch execution contract is present in canonical and generated provider su
   assert.match(gemini, /candidate-first batch procedure/);
   for (const reference of [
     'references/batch-execution.md',
-    'references/milestone-review.md',
   ]) {
     assert.match(gemini, new RegExp(reference.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
   }

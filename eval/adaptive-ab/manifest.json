@@ -1,0 +1,163 @@
+{
+  "schema_version": "p2a.adaptive_ab_manifest.v1",
+  "model_profile": "gpt-5.6-luna/medium",
+  "fixtures": [
+    {
+      "id": "backend-request-context",
+      "kind": "non-ui",
+      "path": "fixtures/backend-request-context",
+      "objective": "Implement request-id normalization and resolution. Accept trimmed ASCII letters, digits, dot, underscore, and hyphen up to 64 characters; match the header case-insensitively; otherwise return the supplied fallback. Preserve the public exports and do not modify tests.",
+      "allowed_paths": ["src/request-context.mjs"],
+      "verification": ["node --test test/request-context.test.mjs"],
+      "a_tasks": [
+        {
+          "id": "normalize",
+          "objective": "Implement normalizeRequestId exactly as required while preserving exports.",
+          "verification": "node --test --test-name-pattern='normalizes' test/request-context.test.mjs"
+        },
+        {
+          "id": "resolve",
+          "objective": "Implement case-insensitive resolveRequestId fallback behavior and run the complete fixture tests.",
+          "verification": "node --test test/request-context.test.mjs"
+        }
+      ]
+    },
+    {
+      "id": "vertical-cart-slice",
+      "kind": "non-ui",
+      "path": "fixtures/vertical-cart-slice",
+      "objective": "Complete the cart vertical slice. addItem must validate input, merge identical SKUs without mutating the original cart, and keep integer quantities. renderCartSummary must escape item names, show quantities and a cents-accurate total, and expose an empty state. Preserve exports and do not modify tests.",
+      "allowed_paths": ["src/cart.mjs"],
+      "verification": ["node --test test/cart.test.mjs"],
+      "a_tasks": [
+        {
+          "id": "model",
+          "objective": "Implement immutable addItem validation and SKU merging.",
+          "verification": "node --test --test-name-pattern='addItem' test/cart.test.mjs"
+        },
+        {
+          "id": "view",
+          "objective": "Implement escaped cart summary rendering, totals, and empty state.",
+          "verification": "node --test test/cart.test.mjs"
+        }
+      ]
+    },
+    {
+      "id": "multi-state-status-ui",
+      "kind": "ui",
+      "path": "fixtures/multi-state-status-ui",
+      "objective": "Complete the accessible status panel for empty, loading, error, and ready query-string states. The page must have a labelled main region, state-appropriate live semantics, actionable retry only for error, readable responsive layout at 390px and 1280px, and no horizontal overflow. Preserve the four fixed copy strings and do not modify tests.",
+      "allowed_paths": ["index.html", "app.js", "styles.css"],
+      "verification": ["node --test test/status-ui.test.mjs"],
+      "screenshots": [
+        {"state": "empty", "width": 390, "height": 844},
+        {"state": "loading", "width": 390, "height": 844},
+        {"state": "error", "width": 390, "height": 844},
+        {"state": "ready", "width": 390, "height": 844},
+        {"state": "ready", "width": 1280, "height": 800}
+      ],
+      "a_tasks": [
+        {
+          "id": "states",
+          "objective": "Implement the four query-string states, fixed copy, landmarks, live semantics, and error retry behavior.",
+          "verification": "node --test --test-name-pattern='state|semantics' test/status-ui.test.mjs"
+        },
+        {
+          "id": "responsive",
+          "objective": "Implement the responsive visual system with no horizontal overflow, visible focus, and readable 390px/1280px layouts.",
+          "verification": "node --test test/status-ui.test.mjs"
+        }
+      ]
+    },
+    {
+      "id": "design-system-profile-card",
+      "kind": "ui",
+      "path": "fixtures/design-system-profile-card",
+      "objective": "Build the profile card using only the supplied design-system tokens for color, spacing, radius, and shadow. Preserve tokens.css. The card needs semantic heading and metadata, a visible keyboard focus state, graceful long-name wrapping, and a one-column mobile layout without overflow. Do not modify tests or tokens.css.",
+      "allowed_paths": ["index.html", "styles.css"],
+      "verification": ["node --test test/profile-card.test.mjs"],
+      "screenshots": [
+        {"state": "default", "width": 390, "height": 844},
+        {"state": "default", "width": 1280, "height": 800}
+      ],
+      "a_tasks": [
+        {
+          "id": "structure",
+          "objective": "Implement the semantic profile card structure and long-content-safe markup.",
+          "verification": "node --test --test-name-pattern='markup' test/profile-card.test.mjs"
+        },
+        {
+          "id": "tokens",
+          "objective": "Implement responsive card styling using the supplied tokens only, including focus and overflow behavior.",
+          "verification": "node --test test/profile-card.test.mjs"
+        }
+      ]
+    },
+    {
+      "id": "schema-migration",
+      "kind": "non-ui",
+      "path": "fixtures/schema-migration",
+      "objective": "Implement migrateRecord for v1 and v2 records. Preserve id and unknown metadata, normalize displayName, create preferences.emailNotifications with a safe default, return a new object, reject unsupported versions, and make repeated migration idempotent. Preserve exports and do not modify tests.",
+      "allowed_paths": ["src/migrate.mjs"],
+      "verification": ["node --test test/migrate.test.mjs"],
+      "a_tasks": [
+        {
+          "id": "upgrade",
+          "objective": "Implement the v1-to-v2 transformation with preserved identity and metadata.",
+          "verification": "node --test --test-name-pattern='v1' test/migrate.test.mjs"
+        },
+        {
+          "id": "safety",
+          "objective": "Add v2 idempotency, immutability, defaults, and unsupported-version rejection.",
+          "verification": "node --test test/migrate.test.mjs"
+        }
+      ]
+    },
+    {
+      "id": "multi-area-release-report",
+      "kind": "non-ui",
+      "path": "fixtures/multi-area-release-report",
+      "objective": "Complete the release-report pipeline. Parse conventional commit lines into typed entries, summarize counts and breaking changes deterministically, and render stable Markdown with escaped user text. Invalid lines are ignored. Preserve module boundaries and exports; do not modify tests.",
+      "allowed_paths": ["src/parser.mjs", "src/reporter.mjs", "src/index.mjs"],
+      "verification": ["node --test test/release-report.test.mjs"],
+      "a_tasks": [
+        {
+          "id": "parser",
+          "objective": "Implement conventional commit parsing and invalid-line handling in src/parser.mjs.",
+          "verification": "node --test --test-name-pattern='parse' test/release-report.test.mjs"
+        },
+        {
+          "id": "reporter",
+          "objective": "Implement deterministic summary and escaped Markdown rendering in src/reporter.mjs.",
+          "verification": "node --test --test-name-pattern='summary|Markdown' test/release-report.test.mjs"
+        },
+        {
+          "id": "integration",
+          "objective": "Complete the public pipeline in src/index.mjs and correct any integration drift.",
+          "verification": "node --test test/release-report.test.mjs"
+        }
+      ]
+    },
+    {
+      "id": "resume-policy-remediation",
+      "kind": "non-ui",
+      "path": "fixtures/resume-policy-remediation",
+      "objective": "Repair authorizeTransition. Only owner may move draft to review, only reviewer may approve review, rejected may return to draft for owner, terminal approved is immutable, unknown states or roles throw, and the input record must never be mutated. Preserve exports and do not modify tests. Anticipate boundary cases beyond public tests.",
+      "allowed_paths": ["src/policy.mjs", "diagnosis.md"],
+      "verification": ["node --test test/policy.test.mjs"],
+      "held_out_test": ".acceptance/policy.acceptance.test.mjs",
+      "a_tasks": [
+        {
+          "id": "diagnose",
+          "objective": "Inspect the failing transition policy, record the defect analysis in diagnosis.md, and implement the obvious public-test repair.",
+          "verification": "node --test test/policy.test.mjs"
+        },
+        {
+          "id": "resume",
+          "objective": "Resume from the first repair, enforce the full transition/role/immutability contract, and correct boundary cases.",
+          "verification": "node --test test/policy.test.mjs"
+        }
+      ]
+    }
+  ]
+}

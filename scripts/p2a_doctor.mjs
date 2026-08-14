@@ -12,7 +12,7 @@ import {
   REPO_ONLY_SCRIPT_FILES,
 } from './p2a_tool_manifest.mjs';
 import { normalizePath } from './p2a_paths.mjs';
-import { resolveReviewPasses } from './p2a_project_config.mjs';
+import { resolveExecutionModePolicy, resolveReviewPasses } from './p2a_project_config.mjs';
 import {
   discoverEntryDocument,
   discoverFeatureRadarPreflightRuns,
@@ -855,9 +855,11 @@ function buildDevReport(targetRoot, manifest, configResult) {
 
   const config = configResult.ok ? configResult.data : null;
   let reviewPasses = null;
+  let executionMode = null;
   let reviewPassesError = null;
   try {
     reviewPasses = resolveReviewPasses(config);
+    executionMode = resolveExecutionModePolicy(config);
   } catch (error) {
     reviewPassesError = error instanceof Error ? error.message : String(error);
   }
@@ -880,7 +882,7 @@ function buildDevReport(targetRoot, manifest, configResult) {
       && config.devExecution.scopePolicy === 'task_only'
       && config.devExecution.verificationPolicy === 'required_for_done'
       && !reviewPassesError
-      ? check('dev_execution_config', 'Dev execution config', 'pass', `defaultProvider=${config.devExecution.defaultProvider}, scopePolicy=${config.devExecution.scopePolicy}, reviewPasses=${Object.entries(reviewPasses).map(([key, value]) => `${key}:${value}`).join(',')}`)
+      ? check('dev_execution_config', 'Dev execution config', 'pass', `defaultProvider=${config.devExecution.defaultProvider}, scopePolicy=${config.devExecution.scopePolicy}, executionMode=${executionMode}, reviewPasses=${Object.entries(reviewPasses).map(([key, value]) => `${key}:${value}`).join(',')}`)
       : check(
           'dev_execution_config',
           'Dev execution config',

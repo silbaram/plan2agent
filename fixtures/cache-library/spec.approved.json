@@ -14,6 +14,10 @@
       "Support capacity-limited LRU eviction",
       "Provide deterministic tests for TTL and eviction behavior"
     ],
+    "must_preserve": [
+      "Preserve deterministic behavior under an injected clock",
+      "Preserve the public TypeScript API and provider-free in-process runtime"
+    ],
     "non_goals": [
       "No Redis protocol compatibility",
       "No network server",

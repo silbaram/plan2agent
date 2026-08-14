@@ -56,12 +56,14 @@ import { artifactRunRef, legacyRunRef, runSidecarRef } from './p2a_run_paths.mjs
 import {
   assertCanonicalPortableRun,
   closeReadyAcceptanceReviewRunIds,
+  completedImplementationRunIds,
   closeReadyVisualReviewRunIds,
   completedEvidenceRunIds,
   portableProvenanceMigrationHint,
   selectHandoffRunEntries,
   validatePortableHandoffTarget,
 } from './p2a_handoff_portability.mjs';
+import { assertFile } from './p2a_cli_helpers.mjs';
 import { shellQuote } from './p2a_run_commands.mjs';
 import {
   buildProjectConfig,
@@ -164,7 +166,7 @@ function usage() {
     'Handoff options:',
     '  --mode copy|move     Copy artifacts by default; move removes source files after successful write.',
     '  --iteration-id <id>  Use iterative artifacts. The id must match current-spec.json active_iteration; default: active.',
-    '  --run-transfer <m>   completed byte-copies milestone-referenced finished v2 evidence only (default); resumable performs compatibility transfer and also ports active non-visual runs.',
+    '  --run-transfer <m>   completed byte-copies current-graph latest finished v2 evidence plus legacy milestone-bound evidence (default); resumable also ports active non-visual runs.',
     '  --include-intake     Generate an explicit gate-a-intake/intake.md export from canonical intake.json.',
     '  --tools <list>       Copy portable P2A AI tool assets for codex,claude,gemini. Use comma list or all.',
     '  --include-team-bigfive',
@@ -332,11 +334,6 @@ function parseArgs(argv) {
     }
   }
   return args;
-}
-
-function assertFile(filePath, label) {
-  if (!existsSync(filePath)) throw new Error(`${label} is missing: ${filePath}`);
-  if (!lstatSync(filePath).isFile()) throw new Error(`${label} must be a file: ${filePath}`);
 }
 
 function requireUnderTarget(targetRoot, filePath) {
@@ -1543,6 +1540,22 @@ function pushMilestoneReviewBundleIfExists(
   const requiredCompletedRunIds = completedEvidenceRunIds(
     availableReviews.map(({ milestoneReview }) => milestoneReview),
   );
+  const runIndexCandidate = path.join(artifactsRoot, 'runs', 'run-index.json');
+  if (!availableReviews.length && !existsSync(runIndexCandidate)) {
+    return { reviewFiles: [], evidenceFiles: [] };
+  }
+  const bundleContexts = availableReviews.length
+    ? availableReviews
+    : [{
+        checkpoint: 'current',
+        sourcePath: null,
+        milestoneReview: {
+          source: {
+            task_graph_ref: `iterations/${iterationId}/gate-c-task-graph/task-graph.json`,
+            spec_ref: `iterations/${iterationId}/gate-b-spec/spec.json`,
+          },
+        },
+      }];
   const copiedTargets = new Set(plan.map((item) => normalizePath(item.targetRelative)));
   function pushBundleFile(sourcePath, artifactRelativePath, destinationList, options = {}) {
     const targetRelative = normalizePath(path.join(targetArtifactDir(projectId), artifactRelativePath));
@@ -1764,9 +1777,12 @@ function pushMilestoneReviewBundleIfExists(
     return `${JSON.stringify(portableRunIndex, null, 2)}\n`;
   }
 
-  for (const { checkpoint, sourcePath, milestoneReview } of availableReviews) {
-    const reviewRelativePath = normalizePath(path.relative(artifactsRoot, sourcePath));
-    pushBundleFile(sourcePath, reviewRelativePath, reviewFiles);
+  for (const { checkpoint, sourcePath, milestoneReview } of bundleContexts) {
+    let reviewRelativePath = null;
+    if (sourcePath) {
+      reviewRelativePath = normalizePath(path.relative(artifactsRoot, sourcePath));
+      pushBundleFile(sourcePath, reviewRelativePath, reviewFiles);
+    }
 
     const taskGraph = resolveMilestoneBundleReference(
       artifactsRoot,
@@ -1812,6 +1828,10 @@ function pushMilestoneReviewBundleIfExists(
       taskGraphRef: milestoneReview.source.task_graph_ref,
     });
     for (const runId of closeReadyAcceptanceReviewRunIds(indexedRunRecords, {
+      iterationId,
+      taskGraphRef: milestoneReview.source.task_graph_ref,
+    })) closeReadyRunIds.add(runId);
+    for (const runId of completedImplementationRunIds(indexedRunRecords, {
       iterationId,
       taskGraphRef: milestoneReview.source.task_graph_ref,
     })) closeReadyRunIds.add(runId);
@@ -1972,6 +1992,7 @@ function pushMilestoneReviewBundleIfExists(
         pushBundleFile(sidecar.sourcePath, sidecar.relativePath, evidenceFiles);
       }
     }
+    if (!sourcePath) continue;
     const portableRunBundlesById = new Map(
       portableRunBundles.map((bundle) => [bundle.indexedRun.runId, bundle]),
     );
@@ -4336,7 +4357,7 @@ function buildPlan(paths, args, artifactsRoot, targetRoot, sourceInfo, options =
       sourceConstitutionPath ? 'approved Gate ② constitution copied' : 'legacy handoff without a constitution',
       preflightResearchFiles.length ? `Feature Radar preflight research copied: ${preflightResearchFiles.length} file(s)` : 'Feature Radar preflight research not present',
       milestoneReviewFiles.length ? `Milestone reviews copied: ${milestoneReviewFiles.length} file(s)` : 'Milestone reviews not present',
-      milestoneEvidenceFiles.length ? `Milestone evidence bundle copied: ${milestoneEvidenceFiles.length} file(s)` : 'Milestone evidence bundle not present',
+      milestoneEvidenceFiles.length ? `Run/review evidence bundle copied: ${milestoneEvidenceFiles.length} file(s)` : 'Run/review evidence bundle not present',
       args.tools.length ? `AI tool assets copied for: ${args.tools.join(', ')}` : 'AI tool assets not requested',
       args.tools.includes('codex') ? `Codex agent profile: ${codexProfile}` : 'Codex agent profile not applicable',
       teamBigFivePlan.enabled ? `Team Big Five adapter installed for: ${teamBigFivePlan.targets.join(', ')}` : 'Team Big Five adapter not requested',

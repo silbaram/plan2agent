@@ -10,7 +10,7 @@ import { fileURLToPath } from 'node:url';
 const __filename = fileURLToPath(import.meta.url);
 const ROOT = path.resolve(path.dirname(__filename), '..');
 const SKILLS = ['p2a-harness', 'p2a-next', 'p2a-spec', 'p2a-task-author', 'p2a-dev-execution', 'p2a-task-breakdown'];
-const AGENTS = ['p2a-spec-author', 'p2a-implementation-planner', 'p2a-task-graph', 'p2a-task-author', 'p2a-milestone-reviewer', 'p2a-skill-curator', 'p2a-performance-monitor', 'p2a-style-rater', 'p2a-implementer'];
+const AGENTS = ['p2a-spec-author', 'p2a-implementation-planner', 'p2a-task-graph', 'p2a-task-author', 'p2a-skill-curator', 'p2a-performance-monitor', 'p2a-implementer'];
 const GEMINI_COMMANDS = {
   harness: 'p2a-harness',
   next: 'p2a-next',

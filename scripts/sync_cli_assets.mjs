@@ -50,7 +50,7 @@ Rules:
 
 {{args}}
 
-Call p2a next --json as the decision authority. Do not reproduce state conditions or execute a CLI command without the user approving it.`,
+Call p2a next --json as the decision authority. Do not reproduce state conditions. Execute a CLI command immediately only when the returned command has requiresApproval=false; otherwise wait for user approval.`,
   },
   spec: {
     skill: 'p2a-spec',

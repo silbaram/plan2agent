@@ -21,6 +21,7 @@ import {
   compositionSourceContractError,
   IMPLEMENTATION_FIELDS,
   isComposedBaselineReference,
+  jsonEqual,
   PRODUCT_FIELDS,
 } from './p2a_spec_model.mjs';
 
@@ -64,10 +65,6 @@ function assertSafeIterationId(
   if (!/^[A-Za-z0-9._-]+$/.test(iterationId)) {
     throw new ValidationError(`${label} may only contain letters, numbers, dots, underscores, and hyphens, got ${JSON.stringify(iterationId)}`);
   }
-}
-
-function jsonEqual(left, right) {
-  return JSON.stringify(left) === JSON.stringify(right);
 }
 
 function assertString(value, label) {
@@ -387,27 +384,47 @@ function assertSameFile(actualPath, expectedPath, label) {
   }
 }
 
-function normalizeReference(reference) {
-  return String(reference).replace(/\\/g, '/').replace(/^\.\//, '');
-}
-
-function normalizedRelative(fromPath, toPath) {
-  return path.relative(fromPath, toPath).split(path.sep).join('/');
-}
-
 function fileSha256(filePath) {
   return createHash('sha256').update(readFileSync(filePath)).digest('hex');
 }
 
-function normalizeDisplayPath(reference) {
+export function normalizeDisplayPath(reference) {
   return String(reference).split(path.sep).join('/');
 }
 
-function activeIntakePath(state) {
+export function activeIntakePath(state) {
   return path.join(state.iterationRoot, 'gate-a-intake', 'intake.json');
 }
 
-function assertIntakeBaselineMatchesPending(
+export function maintenanceTaskGraphPath(artifactRoot) {
+  return path.join(
+    artifactRoot,
+    'iterations',
+    'maintenance',
+    'gate-c-task-graph',
+    'task-graph.json',
+  );
+}
+
+export function initialMaintenanceTaskGraph(projectId) {
+  return {
+    schema_version: 'p2a.task_graph.v1',
+    projectId,
+    version: 'maintenance',
+    sourceSpec: '../../../current-spec.json',
+    tasks: [],
+  };
+}
+
+export function nextMaintenanceTaskId(tasks) {
+  const max = tasks.reduce((highest, task) => {
+    const match = typeof task.id === 'string' ? task.id.match(/^task-([0-9]+)$/) : null;
+    return match ? Math.max(highest, Number.parseInt(match[1], 10)) : highest;
+  }, 0);
+  return `task-${String(max + 1).padStart(3, '0')}`;
+}
+
+export function assertIntakeBaselineMatchesPending(
   intake,
   baselineSpecRef,
   baselineSpecPath,
@@ -460,7 +477,7 @@ function assertIntakeBaselineMatchesPending(
   }
 }
 
-function assertPendingBaselineIntegrity(
+export function assertPendingBaselineIntegrity(
   state,
   pending,
   metadata,

@@ -8,7 +8,7 @@ import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 import { DEFAULT_MEMORY_REQUEST_TIMEOUT_MS, DEFAULT_RUNS_DIR, GATE_FILES, GREENFIELD_REQUIRED_FILES } from './p2a_constants.mjs';
-import { resolveOrchestrationAgentTool, resolveReviewPasses } from './p2a_project_config.mjs';
+import { resolveExecutionModePolicy, resolveOrchestrationAgentTool, resolveReviewPasses } from './p2a_project_config.mjs';
 import { normalizePath, resolveP2aPaths } from './p2a_paths.mjs';
 import { p2aCommandLine } from './p2a_run_commands.mjs';
 import { resolveIterationState } from './p2a_iteration_state.mjs';
@@ -26,9 +26,11 @@ import {
   discoverFeatureRadarPreflightRuns,
 } from './p2a_radar_preflight.mjs';
 import {
+  approvedVisualReviewContract,
   validateConstitution,
   validateIntake,
   validateRunsDir,
+  validateRunTaskContract,
   validateSpec,
   validateTaskGraph,
 } from './validate_artifacts.mjs';
@@ -77,7 +79,7 @@ function usage() {
     '  p2a enhance <capability> [--target <dir>] [--dry-run] [--overwrite]',
     '  p2a eval <grade|compare|analyze|generate|digest> [options]',
     '  p2a memory <status|push|pull|search|history|digest|trace|impact|precedent> [options]',
-    '  p2a execute <plan|start|review|accept|resume|status|finish> [options]',
+    '  p2a execute <prepare|plan|start|review|accept|resume|status|finish> [options]',
     '  p2a tasks|runs|iteration|proposals|validate ...',
     '',
     'Examples:',
@@ -387,10 +389,6 @@ function inspectRuns(targetRoot, artifactRoot) {
       statusCounts,
     },
   };
-}
-
-function summarizeRuns(targetRoot, artifactRoot) {
-  return inspectRuns(targetRoot, artifactRoot).summary;
 }
 
 function artifactLayout(artifactRoot, isScaffoldProject) {
@@ -848,7 +846,7 @@ function minedProposalRunIds(targetRoot, proposals) {
   return runIds;
 }
 
-function cliNextAction(state, reason, argv) {
+function cliNextAction(state, reason, argv, requiresApproval = true) {
   return {
     state,
     reason,
@@ -856,6 +854,7 @@ function cliNextAction(state, reason, argv) {
       kind: 'cli',
       argv,
       display: p2aCommandLine(P2A_PATHS, argv),
+      requiresApproval,
     },
   };
 }
@@ -1026,17 +1025,15 @@ function runsForActiveIteration(records, activeIteration) {
   });
 }
 
-function iterationVisualReviewNeeded(tasks, activeRuns, options) {
-  if (!tasks.some((task) => task.status === 'done' && task.visualImpact)) return false;
+function iterationReviewNeeded(activeRuns, options, runKind, assertReady) {
   const latestRun = activeRuns
     .map((run, runOrder) => ({ run, runOrder }))
-    .filter(({ run }) => run.runKind === 'final_visual_review')
+    .filter(({ run }) => run.runKind === runKind)
     .sort(compareRunEvidence)[0]?.run;
   try {
-    assertFinalVisualReviewRunReady({
+    assertReady({
       runsDir: options.runsDir,
       run: latestRun,
-      taskId: 'the active iteration',
       artifactRoot: options.artifactRoot,
       graphPath: options.graphPath,
     });
@@ -1046,23 +1043,25 @@ function iterationVisualReviewNeeded(tasks, activeRuns, options) {
   }
 }
 
-function iterationAcceptanceReviewNeeded(tasks, activeRuns, options) {
-  if (tasks.some((task) => task.visualImpact)) return false;
-  const latestRun = activeRuns
-    .map((run, runOrder) => ({ run, runOrder }))
-    .filter(({ run }) => run.runKind === 'final_acceptance_review')
-    .sort(compareRunEvidence)[0]?.run;
-  try {
-    assertFinalAcceptanceReviewRunReady({
-      runsDir: options.runsDir,
-      run: latestRun,
-      artifactRoot: options.artifactRoot,
-      graphPath: options.graphPath,
-    });
-    return false;
-  } catch {
-    return true;
-  }
+function iterationVisualReviewNeeded(activeRuns, options) {
+  return iterationReviewNeeded(
+    activeRuns,
+    options,
+    'final_visual_review',
+    (reviewOptions) => assertFinalVisualReviewRunReady({
+      ...reviewOptions,
+      taskId: 'the active iteration',
+    }),
+  );
+}
+
+function iterationAcceptanceReviewNeeded(activeRuns, options) {
+  return iterationReviewNeeded(
+    activeRuns,
+    options,
+    'final_acceptance_review',
+    assertFinalAcceptanceReviewRunReady,
+  );
 }
 
 function inspectionForArtifact(targetRoot, artifact, inspectedArtifacts) {
@@ -1114,6 +1113,7 @@ function buildNextDecisionContext(
   requestedProjectId,
   inspectedArtifacts,
   reviewPasses,
+  executionModePolicy,
   explicitEntry,
 ) {
   const hasHarness = isDirectory(path.join(targetRoot, '.plan2agent'));
@@ -1122,6 +1122,7 @@ function buildNextDecisionContext(
     targetRoot,
     hasHarness,
     reviewPasses,
+    executionModePolicy,
     entry: explicitEntry,
     entryArg: explicitEntry ? commandProjectPath(targetRoot, explicitEntry.path) : null,
     projectId: requestedProjectId,
@@ -1170,21 +1171,40 @@ function buildNextDecisionContext(
         && taskGraphRefMatchesGraph(run.taskGraphRef, gates.taskGraphPath, artifactRoot)
       ))
     : iterationScopedRuns;
+  const startedRun = iterationScopedRuns.find((run) => (
+    run.status === 'started'
+    && stringValue(run.runId)
+    && (detail.layout.kind !== 'iteration' || run.sourceLayout === 'iteration')
+  ));
+  let startedRunContractError = null;
+  if (startedRun && detail.runs.runsDir) {
+    try {
+      validateRunTaskContract(
+        startedRun,
+        path.dirname(path.resolve(detail.runs.runsDir)),
+      );
+    } catch (error) {
+      startedRunContractError = error instanceof Error ? error.message : String(error);
+    }
+  }
   const taskCounts = countTasks(gates.taskGraph);
   const allTasksDone = taskCounts.total > 0 && taskCounts.done === taskCounts.total;
-  const visualReviewEnabled = reviewPasses.visual !== 'off';
+  const hasRequiredVisualContract = Boolean(
+    gates.specValid
+    && gates.specPath
+    && approvedVisualReviewContract(gates.specPath, artifactRoot),
+  );
   const acceptanceReviewEnabled = reviewPasses.acceptance !== 'off';
   const needsCloseReadyVisualAudit = (
-    visualReviewEnabled
+    hasRequiredVisualContract
     && allTasksDone
     && detail.layout.kind === 'iteration'
-    && detail.tasks.some((task) => task.visualImpact)
   );
   const needsCloseReadyAcceptanceAudit = (
     acceptanceReviewEnabled
     && allTasksDone
     && detail.layout.kind === 'iteration'
-    && !detail.tasks.some((task) => task.visualImpact)
+    && !hasRequiredVisualContract
   );
   const proposals = info.enhancements.proposals;
   const minedRunIds = proposals.enabled
@@ -1215,11 +1235,11 @@ function buildNextDecisionContext(
     ? null
     : failedOrBlockedRunCandidate;
   const visualReviewNeeded = (
-    visualReviewEnabled
+    hasRequiredVisualContract
     && allTasksDone
     && detail.layout.kind === 'iteration'
   )
-    ? iterationVisualReviewNeeded(detail.tasks, activeRuns, {
+    ? iterationVisualReviewNeeded(activeRuns, {
         runsDir: detail.runs.runsDir,
         artifactRoot,
         graphPath: gates.taskGraphPath,
@@ -1227,10 +1247,11 @@ function buildNextDecisionContext(
     : false;
   const acceptanceReviewNeeded = (
     acceptanceReviewEnabled
+    && !hasRequiredVisualContract
     && allTasksDone
     && detail.layout.kind === 'iteration'
   )
-    ? iterationAcceptanceReviewNeeded(detail.tasks, activeRuns, {
+    ? iterationAcceptanceReviewNeeded(activeRuns, {
         runsDir: detail.runs.runsDir,
         artifactRoot,
         graphPath: gates.taskGraphPath,
@@ -1319,8 +1340,10 @@ function buildNextDecisionContext(
     gateCValid: gates.taskGraphValid === true,
     gateCValidationError: gates.taskGraphValidationError,
     activeRuns,
-    startedRun: activeRuns.find((run) => run.status === 'started' && stringValue(run.runId)),
+    startedRun,
+    startedRunContractError,
     visualReviewNeeded,
+    hasRequiredVisualContract,
     acceptanceReviewNeeded,
     readyIds: readyTaskIds(gates.taskGraph),
     blockedTaskIds: taskIdsWithStatus(detail.tasks, 'blocked'),
@@ -1530,6 +1553,21 @@ export const NEXT_DECISION_RULES = [
     ),
   },
   {
+    state: 'started_run_contract_drift',
+    kind: 'approval',
+    when: (context) => Boolean(
+      context.startedRun
+      && context.startedRunContractError
+      && (!context.gateCExists || context.gateCValid),
+    ),
+    reason: (context) => (
+      `Run ${context.startedRun.runId} cannot resume because its recorded execution contract no longer matches the current Gate B/Gate C source: ${context.startedRunContractError}`
+    ),
+    command: (context) => (
+      `Restore the recorded Gate B/Gate C source for run ${context.startedRun.runId}, or close that run as failed/blocked with structured evidence before approving and starting replacement work.`
+    ),
+  },
+  {
     state: 'gate_b_needs_approval',
     kind: 'approval',
     when: (context) => (
@@ -1540,12 +1578,29 @@ export const NEXT_DECISION_RULES = [
     command: (context) => `Review ${commandProjectPath(context.targetRoot, context.gates.specPath)}, then run p2a decide --quote "<user utterance>" --artifacts ${JSON.stringify(context.artifactArg)}.`,
   },
   {
+    state: 'gate_b_approved_needs_execution_prepare',
+    kind: 'skill',
+    when: (context) => (
+      context.gateBValid
+      && context.gateBApproved
+      && !context.gateCExists
+      && context.executionModePolicy !== 'orchestrated'
+    ),
+    reason: (context) => (
+      `The approved Gate B specification is ready for ${context.executionModePolicy} execution-mode preparation without another product approval.`
+    ),
+    command: (context) => (
+      `/p2a-dev-execution --artifacts ${JSON.stringify(context.artifactArg)} --prepare-mode ${context.executionModePolicy}`
+    ),
+  },
+  {
     state: 'gate_b_approved_needs_tasks',
     kind: 'skill',
     when: (context) => (
       context.gateBValid
       && context.gateBApproved
       && !context.gateCExists
+      && context.executionModePolicy === 'orchestrated'
     ),
     reason: () => 'The approved Gate B specification has no Gate C task graph yet.',
     command: () => '/p2a-task-breakdown',
@@ -1570,6 +1625,7 @@ export const NEXT_DECISION_RULES = [
   {
     state: 'gate_c_validated_needs_iteration_init',
     kind: 'cli',
+    requiresApproval: false,
     when: (context) => context.gateCValid && context.detail.layout.requiresIterationInit,
     reason: () => 'The task graph passed planning validation, but the iteration layout has not been initialized.',
     command: (context) => ['iteration', 'init', '--artifacts', context.artifactArg],
@@ -1591,6 +1647,7 @@ export const NEXT_DECISION_RULES = [
   {
     state: 'run_started',
     kind: 'cli',
+    requiresApproval: false,
     when: (context) => Boolean(context.startedRun),
     reason: (context) => `Run ${context.startedRun.runId} is still open and should be resumed before starting new work.`,
     command: (context) => [
@@ -1604,11 +1661,12 @@ export const NEXT_DECISION_RULES = [
   {
     state: 'ready_task_available',
     kind: 'cli',
+    requiresApproval: false,
     when: (context) => context.readyIds.length > 0,
-    reason: (context) => `Task ${context.readyIds[0]} is ready to plan for supervised execution.`,
+    reason: (context) => `Work item ${context.readyIds[0]} is ready to start inside the approved Gate B execution envelope.`,
     command: (context) => [
       'execute',
-      'plan',
+      'start',
       ...taskSourceArgs(context),
       '--task',
       context.readyIds[0],
@@ -1617,6 +1675,7 @@ export const NEXT_DECISION_RULES = [
   {
     state: 'tasks_blocked',
     kind: 'cli',
+    requiresApproval: false,
     when: (context) => context.blockedTaskIds.length > 0 && !context.readyIds.length,
     reason: (context) => `No task is ready and task ${context.blockedTaskIds[0]} is blocked.`,
     command: (context) => [
@@ -1629,8 +1688,9 @@ export const NEXT_DECISION_RULES = [
   {
     state: 'final_visual_review_required',
     kind: 'cli',
+    requiresApproval: false,
     when: (context) => (
-      (context.reviewPasses?.visual ?? 'off') !== 'off'
+      context.hasRequiredVisualContract
       && context.allTasksDone
       && !context.closedIteration
       && context.detail.layout.kind === 'iteration'
@@ -1649,6 +1709,7 @@ export const NEXT_DECISION_RULES = [
   {
     state: 'final_acceptance_review_required',
     kind: 'cli',
+    requiresApproval: false,
     when: (context) => (
       (context.reviewPasses?.acceptance ?? 'on') !== 'off'
       && context.allTasksDone
@@ -1677,6 +1738,7 @@ export const NEXT_DECISION_RULES = [
         ? 'cli'
         : 'approval'
     ),
+    requiresApproval: (context) => context.detail.layout.kind !== 'iteration',
     when: (context) => (
       context.allTasksDone
       && !context.closedIteration
@@ -1699,6 +1761,7 @@ export const NEXT_DECISION_RULES = [
   {
     state: 'run_evidence_needs_proposal_mining',
     kind: 'cli',
+    requiresApproval: false,
     when: (context) => Boolean(context.unminedFailedOrBlockedRun),
     reason: (context) => `Run ${context.unminedFailedOrBlockedRun.runId} has not been mined for proposals yet.`,
     command: (context) => [
@@ -1730,7 +1793,14 @@ function actionForNextRule(rule, context) {
   const kind = resolveNextRuleValue(rule.kind, context);
   const reason = rule.reason(context);
   const command = rule.command(context);
-  if (kind === 'cli') return cliNextAction(state, reason, command);
+  if (kind === 'cli') {
+    return cliNextAction(
+      state,
+      reason,
+      command,
+      resolveNextRuleValue(rule.requiresApproval ?? true, context),
+    );
+  }
   if (kind === 'skill') return skillNextAction(state, reason, command);
   return approvalNextAction(state, reason, command);
 }
@@ -1756,6 +1826,7 @@ function buildNext(targetRootInput, requestedProjectId, entryPath) {
     requestedProjectId,
     snapshot.inspectedArtifacts,
     snapshot.reviewPasses,
+    snapshot.executionModePolicy,
     snapshot.explicitEntry,
   );
   const action = decideNextAction(context);
@@ -1776,6 +1847,7 @@ function buildInfoSnapshot(targetRootInput, options = {}) {
   const manifest = readManifest(targetRoot);
   const config = readJsonObject(path.join(targetRoot, '.plan2agent', 'project.config.json'));
   const reviewPasses = resolveReviewPasses(config);
+  const executionModePolicy = resolveExecutionModePolicy(config);
   const isScaffoldProject = ['init', 'scaffold'].includes(manifest?.provenance?.mode);
   const inspectedArtifacts = discoverArtifactRoots(targetRoot)
     .map((artifactRoot) => inspectArtifact(targetRoot, artifactRoot, isScaffoldProject));
@@ -1890,7 +1962,7 @@ function buildInfoSnapshot(targetRootInput, options = {}) {
     artifacts,
     nextActions,
   };
-  return { info, inspectedArtifacts, reviewPasses, explicitEntry };
+  return { info, inspectedArtifacts, reviewPasses, executionModePolicy, explicitEntry };
 }
 
 function buildInfo(targetRootInput) {

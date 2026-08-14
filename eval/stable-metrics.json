@@ -68,6 +68,54 @@
       "direction": "higher_is_better"
     },
     {
+      "id": "task_count",
+      "description": "Count of execution units in the source task graph.",
+      "calculation": "selfImprovement.runs.delivery.taskCount",
+      "direction": "lower_is_better"
+    },
+    {
+      "id": "first_pass_acceptance_rate",
+      "description": "Share of graph tasks whose first implementation run passed verification and its monitor acceptance gate.",
+      "calculation": "selfImprovement.runs.delivery.firstPassAcceptance.rate",
+      "direction": "higher_is_better"
+    },
+    {
+      "id": "rework_run_count",
+      "description": "Count of implementation runs opened after an earlier successful run for the same task.",
+      "calculation": "selfImprovement.runs.delivery.reworkRuns",
+      "direction": "lower_is_better"
+    },
+    {
+      "id": "integration_defect_count",
+      "description": "Count of integration findings from milestone reviews and failed final acceptance cases.",
+      "calculation": "selfImprovement.reviews.integrationDefects.total",
+      "direction": "lower_is_better"
+    },
+    {
+      "id": "visual_drift_count",
+      "description": "Count of failed screen/state/viewport results in bound visual review evidence.",
+      "calculation": "selfImprovement.reviews.visualDrifts",
+      "direction": "lower_is_better"
+    },
+    {
+      "id": "scope_violation_count",
+      "description": "Count of approved-scope violations reported by bound monitor verdicts.",
+      "calculation": "selfImprovement.runs.monitor.scopeViolations",
+      "direction": "lower_is_better"
+    },
+    {
+      "id": "gate_b_to_close_ready_elapsed_ms",
+      "description": "Elapsed milliseconds from Gate B approval to the latest terminal run evidence.",
+      "calculation": "selfImprovement.runs.delivery.elapsedTimeMs",
+      "direction": "lower_is_better"
+    },
+    {
+      "id": "verification_evidence_completeness_rate",
+      "description": "Share of implementation runs with conclusive executed verification and required monitor verdict evidence.",
+      "calculation": "selfImprovement.runs.delivery.verificationEvidence.completeRate",
+      "direction": "higher_is_better"
+    },
+    {
       "id": "pending_proposal_reviews",
       "description": "Count of proposal candidates still pending review after curation and approval artifacts are applied.",
       "calculation": "selfImprovement.proposals.pendingReview",

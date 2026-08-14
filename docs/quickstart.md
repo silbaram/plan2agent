@@ -124,5 +124,5 @@ Close는 Gate D 파일 대신 승인된 Gate B, 유효한 Gate C, 완료된 task
 - [CLI 사용자 가이드](cli-reference.md) — 명령별 사용법, handoff와 proposal 흐름
 - [하네스 사용자 가이드](harness-guide.md) — Gate A-C, 산출물 schema, 검증과 문제 해결
 - [반복/고도화 개발 스펙](iteration-spec.md) — 반복 구조, close/open, 변경분 task 계약
-- [감독형 개발 실행 레퍼런스](supervised-execution.md) — ready task 실행, monitor gate, milestone review, retry recovery
+- [감독형 개발 실행 레퍼런스](supervised-execution.md) — ready task 실행, monitor gate, planned checkpoint, retry recovery
 - [하네스 구현 기준](harness-spec.md) — P2A skill/subagent와 mirror를 수정할 때의 원칙

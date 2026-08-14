@@ -24,10 +24,11 @@
       "oneOf": [
         {
           "type": "object",
-          "required": ["kind", "argv", "display"],
+          "required": ["kind", "argv", "display", "requiresApproval"],
           "additionalProperties": false,
           "properties": {
             "kind": { "const": "cli" },
+            "requiresApproval": { "type": "boolean" },
             "argv": {
               "type": "array",
               "minItems": 1,

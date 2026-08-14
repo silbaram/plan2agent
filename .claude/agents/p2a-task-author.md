@@ -29,7 +29,8 @@ Draft requirements:
 - Use `version: "<active_iteration>-draft"` and `sourceSpec: "../gate-b-spec/spec.json"`.
 - Include a non-empty `tasks` array. Every task must contain the schema fields `id`, `title`, `description`, `status`, `dependencies`, `acceptanceCriteria`, `targetArea`, `suggestedAgentPrompt`, and `sourceSpecRefs` (plus schema-permitted block fields, `workKind` when a full current visual experience is approved, and `visualImpact` only when applicable).
 - Create sequential `task-NNN` ids with `status: "todo"` and a `dependencies` array.
-- Give every task a non-empty title and description, concrete self-satisfiable acceptance criteria, a target area, a paste-ready bounded agent prompt, and at least one valid `sourceSpecRefs` entry.
+- Give every task a non-empty title and description, concrete self-satisfiable acceptance criteria, a target area, a short outcome prompt, and at least one valid `sourceSpecRefs` entry. The prompt must point to approved source fields instead of copying their contents or prescribing files and implementation order.
+- Prefer one cohesive vertical work item. Split only for a real dependency, separate write owner, independently useful verification/rollback boundary, or cross-session resume requirement; task count is not a quality target.
 - Inspect `planning_memory` before decomposition. When prior history changes task boundaries, dependencies, acceptance criteria, or failure mitigation, add `memory:<report or result reference>` and any applicable `decision:ND-n` refs alongside at least one real effective-spec field. Turn material prior failed/blocked history into a concrete mitigation or regression criterion; ignore irrelevant results and do not block on unavailable Memory alone.
 - Keep dependencies acyclic and limited to task ids in the same draft.
 - Use `code_signals` to propose incremental work and do not turn maintenance pilot work into feature scope.

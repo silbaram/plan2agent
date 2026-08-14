@@ -443,10 +443,6 @@ export function runFilePath(runsDir, runId, index = null) {
   return path.join(runsDir, indexedRunRef(runsDir, runId, index));
 }
 
-export function canonicalRunFilePath(runsDir, runOrEntry) {
-  return path.join(runsDir, canonicalRunRef(runOrEntry));
-}
-
 export function runSidecarRef(runRef, suffix) {
   if (typeof suffix !== 'string' || !suffix.startsWith('.') || !suffix.endsWith('.json')) {
     throw new Error(`run sidecar suffix must look like .<name>.json, got ${JSON.stringify(suffix)}`);
@@ -542,6 +538,21 @@ export function taskGraphRefMatchesGraph(actualRef, graphPath, artifactRoot = nu
     if (canonicalTaskGraphRef(resolvedRef) === expectedCanonicalRef) return true;
   }
   return false;
+}
+
+export function runMatchesSourceContext(run, source) {
+  return run.projectId === source.projectId
+    && run.iterationId === source.iterationId
+    && run.sourceLayout === source.sourceLayout
+    && taskGraphRefMatchesGraph(run.taskGraphRef, source.graphPath, source.artifactRoot);
+}
+
+export function runsMatchingTaskGraph(runs, graphPath, artifactRoot = null) {
+  return runs.filter((run) => taskGraphRefMatchesGraph(
+    run.taskGraphRef,
+    graphPath,
+    artifactRoot,
+  ));
 }
 
 export function defaultRunsDirForGraph(graphPath) {

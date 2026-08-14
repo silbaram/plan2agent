@@ -6,13 +6,13 @@ import path from 'node:path';
 import { describe, test } from 'node:test';
 import { deflateSync } from 'node:zlib';
 import {
+  approvedExecutionEnvelope,
   validateVisualExperience,
   validateVisualPrototype,
   validateVisualReviewData,
   validateRunsDir,
   validateSpec,
   validateTaskGraphData,
-  ValidationError,
 } from '../scripts/validate_artifacts.mjs';
 import { readRequiredVisualReview } from '../scripts/p2a_visual_review_gate.mjs';
 import {
@@ -968,6 +968,28 @@ describe('visual experience artifacts', () => {
       assert.doesNotThrow(() => validateTaskGraphData(graph, specPath));
       assert.doesNotThrow(() => validateTaskGraphData(graph));
       writeJson(graphPath, graph);
+      const executionEnvelope = approvedExecutionEnvelope(
+        specPath,
+        '../gate-b-spec/spec.json',
+        root,
+      );
+      assert.equal(executionEnvelope.visualContract.prototypeManifestRef, 'visual-design/VD-1/prototype.json');
+      assert.deepEqual(executionEnvelope.visualContract.screens, [{
+        screenId: 'SCREEN-1',
+        route: '/reviews/:id',
+        entryPoints: ['Review queue'],
+        states: ['ready'],
+        responsiveRules: ['Collapse details below content under 720px'],
+        accessibilityRequirements: ['Keyboard access for every review action'],
+      }]);
+      assert.deepEqual(executionEnvelope.visualContract.viewports, [{
+        name: 'desktop', width: 1440, height: 900,
+      }]);
+      assert.ok(executionEnvelope.visualContract.visualInvariants.includes('dashboard clutter'));
+      const prompt = runTasks(['prompt', '--graph', graphPath, '--spec', specPath, 'task-001']);
+      assert.equal(prompt.status, 0, `${prompt.stdout}\n${prompt.stderr}`);
+      assert.match(prompt.stdout, /"route": "\/reviews\/:id"/);
+      assert.match(prompt.stdout, /Visual impact routing:/);
       const target = path.join(root, 'handoff-target');
       const handoff = runHandoff([
         '--project-id',
@@ -1892,13 +1914,6 @@ describe('visual experience artifacts', () => {
       ]);
       assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
 
-      writeJson(path.join(workspaceRoot, '.plan2agent', 'project.config.json'), {
-        devExecution: {
-          reviewPasses: {
-            visual: 'on',
-          },
-        },
-      });
       const nextResult = runP2a([
         'next',
         '--target', workspaceRoot,
@@ -1945,7 +1960,7 @@ describe('visual experience artifacts', () => {
         '--json',
       ]);
       assert.equal(staleNext.status, 0, `${staleNext.stdout}\n${staleNext.stderr}`);
-      assert.equal(JSON.parse(staleNext.stdout).state, 'iteration_ready_to_close');
+      assert.equal(JSON.parse(staleNext.stdout).state, 'final_visual_review_required');
 
       writeJson(path.join(workspaceRoot, '.plan2agent', 'project.config.json'), {
         devExecution: {
@@ -1987,7 +2002,7 @@ describe('visual experience artifacts', () => {
     }
   });
 
-  test('iteration close-ready validation and close honor the configured visual review pass', () => {
+  test('iteration close-ready validation requires an approved visual contract regardless of reviewer policy', () => {
     const projectRoot = mkdtempSync(path.join(tmpdir(), 'p2a-visual-close-policy-'));
     const artifactRoot = path.join(
       projectRoot,
@@ -2081,14 +2096,18 @@ describe('visual experience artifacts', () => {
         '--artifacts', artifactRoot,
         '--require-close-ready',
       ]);
-      assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
-      assert.match(result.stdout, /visual review: skipped \(reviewPasses\.visual=off, 1 visualImpact task\(s\)\)/);
-      assert.match(result.stdout, /close-ready: all tasks done/);
+      assert.notEqual(result.status, 0);
+      assert.match(
+        `${result.stdout}\n${result.stderr}`,
+        /close-ready visual validation failed: final visual review requires/,
+      );
 
       result = runTargetIteration(projectRoot, ['close', '--artifacts', artifactRoot]);
-      assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
-      assert.match(result.stdout, /visual review: skipped \(reviewPasses\.visual=off, 1 visualImpact task\(s\)\)/);
-      assert.match(result.stdout, /iteration closed/);
+      assert.notEqual(result.status, 0);
+      assert.match(
+        `${result.stdout}\n${result.stderr}`,
+        /close-ready visual validation failed: final visual review requires/,
+      );
     } finally {
       rmSync(projectRoot, { recursive: true, force: true });
     }

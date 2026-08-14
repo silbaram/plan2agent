@@ -7,6 +7,7 @@ import test from 'node:test';
 import {
   assertCanonicalPortableRun,
   closeReadyAcceptanceReviewRunIds,
+  completedImplementationRunIds,
   closeReadyVisualReviewRunIds,
   completedEvidenceRunIds,
   selectHandoffRunEntries,
@@ -36,7 +37,7 @@ function missingRunIndex(projectId) {
   };
 }
 
-test('completed handoff selects only milestone-referenced finished evidence', () => {
+test('completed handoff preserves explicitly required legacy milestone evidence', () => {
   const required = completedEvidenceRunIds([{
     source: {
       completed_task_evidence: [
@@ -68,6 +69,21 @@ test('completed handoff rejects missing or non-finished milestone evidence', () 
   assert.throws(
     () => selectHandoffRunEntries({ runs: [] }, new Set(['run-missing']), 'completed'),
     /missing required finished run evidence run-missing/,
+  );
+});
+
+test('completed handoff selects the latest finished implementation run per task without milestone reviews', () => {
+  const taskGraphRef = 'iterations/iter-002/gate-c-task-graph/task-graph.json';
+  const runs = [
+    { ...entry('run-task-1-old'), taskId: 'task-001', iterationId: 'iter-002', sourceLayout: 'iteration', taskGraphRef, finishedAt: '2026-08-03T00:01:00.000Z' },
+    { ...entry('run-task-1-new'), taskId: 'task-001', iterationId: 'iter-002', sourceLayout: 'iteration', taskGraphRef, finishedAt: '2026-08-03T00:02:00.000Z' },
+    { ...entry('run-task-2'), taskId: 'task-002', iterationId: 'iter-002', sourceLayout: 'iteration', taskGraphRef, finishedAt: '2026-08-03T00:03:00.000Z' },
+    { ...entry('run-final-review'), taskId: 'task-001', iterationId: 'iter-002', sourceLayout: 'iteration', taskGraphRef, runKind: 'final_acceptance_review', finishedAt: '2026-08-03T00:04:00.000Z' },
+    { ...entry('run-other-iteration'), taskId: 'task-003', iterationId: 'iter-001', sourceLayout: 'iteration', taskGraphRef, finishedAt: '2026-08-03T00:05:00.000Z' },
+  ];
+  assert.deepEqual(
+    [...completedImplementationRunIds(runs, { iterationId: 'iter-002', taskGraphRef })],
+    ['run-task-1-new', 'run-task-2'],
   );
 });
 

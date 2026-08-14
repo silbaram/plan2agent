@@ -1,0 +1,13 @@
+:root {
+  --color-canvas: #f3f5f8;
+  --color-surface: #ffffff;
+  --color-text: #182033;
+  --color-muted: #5f6b7c;
+  --color-accent: #5b4ee8;
+  --space-1: 0.5rem;
+  --space-2: 0.75rem;
+  --space-3: 1rem;
+  --space-4: 1.5rem;
+  --radius-card: 1rem;
+  --shadow-card: 0 1rem 2.5rem rgb(24 32 51 / 0.12);
+}

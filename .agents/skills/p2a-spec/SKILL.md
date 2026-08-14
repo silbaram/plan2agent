@@ -43,6 +43,7 @@ Return:
 - problem
 - target_users
 - goals
+- must_preserve
 - non_goals
 - core_flows
 - screens_or_interfaces
@@ -141,15 +142,16 @@ For a baseline-aware iteration, a delta-first Markdown view may replace the repe
 1. problem
 2. target_users
 3. goals
-4. non_goals
-5. core_flows
-6. screens_or_interfaces
-7. data_model_draft
-8. external_integrations
-9. success_criteria
-10. constraints
+4. must_preserve
+5. non_goals
+6. core_flows
+7. screens_or_interfaces
+8. data_model_draft
+9. external_integrations
+10. success_criteria
+11. constraints
 
-Suggested Korean section labels for product specs: 문제 정의, 대상 사용자, 목표, 비목표, 핵심 흐름, 인터페이스, 데이터 모델, 외부 연동, 성공 기준, 제약.
+Suggested Korean section labels for product specs: 문제 정의, 대상 사용자, 목표, 보존 조건, 비목표, 핵심 흐름, 인터페이스, 데이터 모델, 외부 연동, 성공 기준, 제약.
 
 `implementation-plan.md` mirrors `spec_json.implementation` in field order, one section per field:
 

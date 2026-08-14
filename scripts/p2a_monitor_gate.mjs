@@ -4,7 +4,6 @@ import path from 'node:path';
 import { existsSync, lstatSync, readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { indexedRunRef, runSidecarPath, runSidecarRef } from './p2a_run_paths.mjs';
-import { atomicWriteJson } from './p2a_run_store.mjs';
 
 export const LEGACY_MONITOR_CONCERN_FIELDS = ['scope_concerns', 'verification_concerns', 'unmet_acceptance', 'needs_user_decision'];
 export const MONITOR_CONCERN_FIELDS = ['rule_concerns', ...LEGACY_MONITOR_CONCERN_FIELDS];
@@ -26,11 +25,6 @@ function assertSafeRunId(runId) {
 export function monitorGateSidecarPath(runsDir, runId) {
   assertSafeRunId(runId);
   return runSidecarPath(runsDir, runId, '.monitor-gate.json');
-}
-
-export function monitorVerdictPath(runsDir, runId) {
-  assertSafeRunId(runId);
-  return runSidecarPath(runsDir, runId, '.monitor-verdict.json');
 }
 
 function monitorConcernValues(data, field) {
@@ -244,18 +238,6 @@ export function assertRunMonitorVerdictBinding(run, contents = null) {
       `run ${run.runId} monitor verdict evidence changed; expected ${sealedSha256}, got ${currentSha256}`,
     );
   }
-}
-
-export function writeMonitorGateSidecar(runsDir, runId, ruleContract = { source: 'none', ref: null, sha256: null }) {
-  const runRef = indexedRunRef(runsDir, runId);
-  const sidecar = normalizeMonitorGateSidecar({
-    required: true,
-    requiredConcernFields: MONITOR_CONCERN_FIELDS,
-    ruleContract,
-  }, runId, runRef);
-  const filePath = monitorGateSidecarPath(runsDir, runId);
-  atomicWriteJson(filePath, sidecar);
-  return { filePath, sidecar };
 }
 
 export function readMonitorGateSidecar(runsDir, runId) {

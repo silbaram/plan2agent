@@ -13,7 +13,7 @@ import {
   normalizeMonitorGateSidecar,
   normalizeMonitorVerdictData,
 } from '../scripts/p2a_monitor_gate.mjs';
-import { runFilePath, runSidecarPath } from '../scripts/p2a_run_paths.mjs';
+import { runFilePath, runsMatchingTaskGraph, runSidecarPath } from '../scripts/p2a_run_paths.mjs';
 import { validateRunData } from '../scripts/validate_artifacts.mjs';
 import {
   EVAL_CLI,
@@ -32,6 +32,20 @@ function writeJson(filePath, value) {
 function runCli(cli, args) {
   return spawnSync(process.execPath, [cli, ...args], { cwd: ROOT, encoding: 'utf8' });
 }
+
+test('graph-scoped eval excludes runs from other iterations in the shared run store', () => {
+  const artifactRoot = path.join(E2E_FIXTURE_ROOT, 'webhook-api-service');
+  const graphPath = path.join(artifactRoot, 'gate-c-task-graph', 'task-graph.json');
+  const runs = [
+    { runId: 'run-current', taskGraphRef: graphPath },
+    {
+      runId: 'run-other-iteration',
+      taskGraphRef: path.join(artifactRoot, 'iterations', 'iteration-999', 'gate-c-task-graph', 'task-graph.json'),
+    },
+  ];
+  const scoped = runsMatchingTaskGraph(runs, graphPath, artifactRoot);
+  assert.deepEqual(scoped.map((run) => run.runId), ['run-current']);
+});
 
 test('generated Claude agents inherit the parent session model', () => {
   const agentDir = path.join(ROOT, '.claude', 'agents');
@@ -110,6 +124,66 @@ test('new monitor gates require an explicit rule review while legacy gates remai
   }, { requiredConcernFields: current.requiredConcernFields });
   assert.equal(blocked.failureSignal, 'rule_concerns');
   assert.equal(blocked.hasConcerns, true);
+});
+
+test('failed monitored runs bind independent monitor verdict evidence without replacing owner failure metadata', (t) => {
+  const projectRoot = mkdtempSync(path.join(tmpdir(), 'p2a-failed-monitor-evidence-'));
+  t.after(() => rmSync(projectRoot, { recursive: true, force: true }));
+  const artifactRoot = path.join(projectRoot, '.plan2agent', 'artifacts', 'webhook-api-service');
+  cpSync(path.join(E2E_FIXTURE_ROOT, 'webhook-api-service'), artifactRoot, { recursive: true });
+  const graphPath = path.join(artifactRoot, 'gate-c-task-graph', 'task-graph.json');
+  const runsDir = path.join(artifactRoot, 'runs');
+  const runId = 'run-failed-monitor-evidence';
+
+  let result = runCli(RUNS_CLI, [
+    'start', '--graph', graphPath, '--runs', runsDir,
+    '--task', 'task-001', '--run-id', runId,
+    '--agent-tool', 'codex', '--workspace', projectRoot,
+    '--require-monitor',
+  ]);
+  assert.equal(result.status, 0, result.stderr);
+
+  result = runCli(RUNS_CLI, [
+    'verify', '--runs', runsDir, '--run-id', runId,
+    '--workspace', projectRoot, '--test-command', 'false',
+  ]);
+  assert.equal(result.status, 1);
+
+  const verdictPath = runSidecarPath(runsDir, runId, '.monitor-verdict.json');
+  writeJson(verdictPath, {
+    verdict: 'block',
+    rules_reviewed: [],
+    rule_concerns: [],
+    scope_concerns: [],
+    verification_concerns: ['The owner verification command failed.'],
+    unmet_acceptance: [],
+    needs_user_decision: [],
+    note: 'Independent monitor confirmed that the failed run must not be accepted.',
+  });
+  const verdictRaw = readFileSync(verdictPath, 'utf8');
+
+  result = runCli(RUNS_CLI, [
+    'finish', '--graph', graphPath, '--runs', runsDir,
+    '--run-id', runId, '--status', 'failed',
+    '--failure-class', 'verification_failed', '--failure-source', 'owner',
+    '--repro-command', 'false',
+    '--localization', 'The owner verification command returned a non-zero exit code.',
+    '--localized-file', 'package.json',
+    '--guard', 'Require a passing owner verification command before retry completion.',
+  ]);
+  assert.equal(result.status, 1, result.stderr);
+  assert.match(result.stdout, /Plan2Agent run finished/, result.stderr);
+
+  const run = validateRunData(JSON.parse(readFileSync(runFilePath(runsDir, runId), 'utf8')));
+  assert.equal(run.status, 'failed');
+  assert.equal(run.failure.class, 'verification_failed');
+  assert.equal(run.failure.source, 'owner');
+  assert.equal(
+    run.monitorVerdictEvidenceSha256,
+    monitorVerdictEvidenceSha256(verdictRaw),
+  );
+  result = runCli(RUNS_CLI, ['validate', '--runs', runsDir, '--run-id', runId]);
+  assert.equal(result.status, 0, result.stderr);
 });
 
 test('run lifecycle binds approved rules and records autonomy telemetry for eval', (t) => {
@@ -338,6 +412,39 @@ test('run lifecycle binds approved rules and records autonomy telemetry for eval
   result = runCli(RUNS_CLI, ['validate', '--runs', runsDir, '--run-id', runId]);
   assert.equal(result.status, 0, result.stderr);
 
+  const scopedIndexPath = path.join(runsDir, 'run-index.json');
+  const scopedIndexRaw = readFileSync(scopedIndexPath, 'utf8');
+  const scopedIndex = JSON.parse(scopedIndexRaw);
+  const scopedEntry = scopedIndex.runs.find((entry) => entry.runId === runId);
+  const unrelatedRunId = 'run-unrelated-iteration';
+  const unrelatedRun = {
+    ...structuredClone(run),
+    runId: unrelatedRunId,
+    iterationId: 'iteration-999',
+    taskGraphRef: 'iterations/iteration-999/gate-c-task-graph/task-graph.json',
+  };
+  const unrelatedEntry = {
+    ...scopedEntry,
+    runId: unrelatedRunId,
+    iterationId: unrelatedRun.iterationId,
+    taskGraphRef: unrelatedRun.taskGraphRef,
+    runRef: `${unrelatedRun.iterationId}/${unrelatedRunId}.json`,
+  };
+  scopedIndex.runs.push(unrelatedEntry);
+  const unrelatedTaskEntry = scopedIndex.tasks.find((entry) => entry.taskId === run.taskId);
+  unrelatedTaskEntry.runIds.push(unrelatedRunId);
+  unrelatedTaskEntry.latestRunId = unrelatedRunId;
+  writeJson(path.join(runsDir, unrelatedEntry.runRef), unrelatedRun);
+  writeJson(scopedIndexPath, scopedIndex);
+  mkdirSync(path.join(artifactRoot, 'eval'), { recursive: true });
+  result = runCli(EVAL_CLI, ['digest', '--graph', graphPath, '--json']);
+  assert.equal(result.status, 0, result.stderr);
+  const graphScopedDigest = JSON.parse(result.stdout);
+  assert.equal(graphScopedDigest.selfImprovement.runs.total, 1);
+  assert.equal(graphScopedDigest.selfImprovement.runs.delivery.reworkRuns, 0);
+  rmSync(path.join(runsDir, unrelatedEntry.runRef));
+  writeFileSync(scopedIndexPath, scopedIndexRaw, 'utf8');
+
   const legacyRunId = 'run-pre-telemetry';
   const legacyRun = structuredClone(run);
   legacyRun.runId = legacyRunId;
@@ -421,6 +528,22 @@ test('run lifecycle binds approved rules and records autonomy telemetry for eval
   assert.equal(digest.selfImprovement.runs.monitor.monitoredRuns, 2);
   assert.equal(digest.selfImprovement.runs.monitor.ruleReviewRuns, 1);
   assert.equal(digest.selfImprovement.runs.monitor.ruleReviewCoverageRate, 0.5);
+  assert.equal(digest.selfImprovement.runs.delivery.taskCount, 1);
+  assert.equal(digest.selfImprovement.runs.delivery.executedTaskCount, 1);
+  assert.equal(digest.selfImprovement.runs.delivery.firstPassAcceptance.acceptedTasks, 1);
+  assert.equal(digest.selfImprovement.runs.delivery.firstPassAcceptance.rate, 1);
+  assert.equal(digest.selfImprovement.runs.delivery.reworkRuns, 1);
+  assert.equal(digest.selfImprovement.runs.delivery.telemetry.coverageRate, 0.5);
+  assert.equal(digest.selfImprovement.runs.delivery.implementationUsage.coverageRate, 0.5);
+  assert.equal(digest.selfImprovement.runs.delivery.verificationEvidence.completeRate, 1);
+  assert.equal(digest.selfImprovement.reviews.integrationDefects.total, 0);
+  assert.equal(digest.selfImprovement.reviews.visualDrifts, 0);
+  const stableMetrics = Object.fromEntries(digest.stableMetrics.results.map((metric) => [metric.id, metric.value]));
+  assert.equal(stableMetrics.task_count, 1);
+  assert.equal(stableMetrics.first_pass_acceptance_rate, 1);
+  assert.equal(stableMetrics.rework_run_count, 1);
+  assert.equal(stableMetrics.verification_evidence_completeness_rate, 1);
+
 });
 
 test('a later non-monitor retry cannot erase an earlier bound monitor requirement', (t) => {

@@ -32,15 +32,15 @@ function runEvidenceTime(run) {
   return 0;
 }
 
-export function closeReadyVisualReviewRunIds(
+function closeReadyReviewRunIds(
   runRecords,
-  { iterationId, taskGraphRef } = {},
+  { iterationId, taskGraphRef, runKind, reviewField },
 ) {
   const expectedTaskGraphRef = normalizedArtifactReference(taskGraphRef);
   const latestReview = runRecords
     .map((run, runOrder) => ({ run, runOrder }))
     .filter(({ run }) => (
-      run?.runKind === 'final_visual_review'
+      run?.runKind === runKind
       && run.iterationId === iterationId
       && run.sourceLayout === 'iteration'
       && (!expectedTaskGraphRef
@@ -53,39 +53,62 @@ export function closeReadyVisualReviewRunIds(
   if (
     latestReview?.status !== 'finished'
     || latestReview.schema_version !== 'p2a.run.v2'
-    || !latestReview.visualReview?.required
+    || !latestReview[reviewField]?.required
   ) {
     return new Set();
   }
   return new Set([latestReview.runId]);
 }
 
-export function closeReadyAcceptanceReviewRunIds(
+export function closeReadyVisualReviewRunIds(runRecords, options = {}) {
+  return closeReadyReviewRunIds(runRecords, {
+    ...options,
+    runKind: 'final_visual_review',
+    reviewField: 'visualReview',
+  });
+}
+
+export function closeReadyAcceptanceReviewRunIds(runRecords, options = {}) {
+  return closeReadyReviewRunIds(runRecords, {
+    ...options,
+    runKind: 'final_acceptance_review',
+    reviewField: 'acceptanceReview',
+  });
+}
+
+export function completedImplementationRunIds(
   runRecords,
   { iterationId, taskGraphRef } = {},
 ) {
   const expectedTaskGraphRef = normalizedArtifactReference(taskGraphRef);
-  const latestReview = runRecords
-    .map((run, runOrder) => ({ run, runOrder }))
-    .filter(({ run }) => (
-      run?.runKind === 'final_acceptance_review'
-      && run.iterationId === iterationId
-      && run.sourceLayout === 'iteration'
-      && (!expectedTaskGraphRef
-        || normalizedArtifactReference(run.taskGraphRef) === expectedTaskGraphRef)
-    ))
-    .sort((left, right) => (
-      runEvidenceTime(right.run) - runEvidenceTime(left.run)
-      || right.runOrder - left.runOrder
-    ))[0]?.run;
-  if (
-    latestReview?.status !== 'finished'
-    || latestReview.schema_version !== 'p2a.run.v2'
-    || !latestReview.acceptanceReview?.required
-  ) {
-    return new Set();
-  }
-  return new Set([latestReview.runId]);
+  const latestByTask = new Map();
+  runRecords.forEach((run, runOrder) => {
+    if (
+      run?.runKind
+      || run?.status !== 'finished'
+      || run.iterationId !== iterationId
+      || run.sourceLayout !== 'iteration'
+      || (expectedTaskGraphRef
+        && normalizedArtifactReference(run.taskGraphRef) !== expectedTaskGraphRef)
+    ) {
+      return;
+    }
+    const candidate = { run, runOrder };
+    const current = latestByTask.get(run.taskId);
+    if (
+      !current
+      || runEvidenceTime(candidate.run) > runEvidenceTime(current.run)
+      || (
+        runEvidenceTime(candidate.run) === runEvidenceTime(current.run)
+        && candidate.runOrder > current.runOrder
+      )
+    ) {
+      latestByTask.set(run.taskId, candidate);
+    }
+  });
+  return new Set([...latestByTask.values()]
+    .sort((left, right) => left.runOrder - right.runOrder)
+    .map(({ run }) => run.runId));
 }
 
 export function selectHandoffRunEntries(

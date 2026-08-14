@@ -20,6 +20,7 @@ export const PROJECT_RUNTIME_SCRIPT_FILES = [
   'p2a_constants.mjs',
   'p2a_project_config.mjs',
   'p2a_run_commands.mjs',
+  'p2a_cli_helpers.mjs',
   'p2a_iteration.mjs',
   'p2a_tasks.mjs',
   'p2a_runs.mjs',

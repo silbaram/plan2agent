@@ -153,6 +153,10 @@ function writeApprovedRunSource(root, projectId = 'run-layout-fixture') {
   writeJson(path.join(root, 'gate-b-spec', 'spec.json'), spec);
 }
 
+function writeApprovedRunSourceForGraph(graphPath, projectId = 'run-layout-fixture') {
+  writeApprovedRunSource(path.dirname(path.dirname(graphPath)), projectId);
+}
+
 describe('iteration-partitioned run layout', () => {
   test('atomic JSON replacement preserves an existing file mode', { skip: process.platform === 'win32' }, () => {
     const tempRoot = mkdtempSync(path.join(tmpdir(), 'p2a-run-layout-mode-'));
@@ -194,6 +198,7 @@ describe('iteration-partitioned run layout', () => {
     try {
       const runsDir = path.join(tempRoot, 'runs');
       const graphPath = path.join(tempRoot, 'gate-c-task-graph', 'task-graph.json');
+      writeApprovedRunSourceForGraph(graphPath);
       writeJson(graphPath, taskGraph());
       const result = runRuns([
         'start',
@@ -230,6 +235,7 @@ describe('iteration-partitioned run layout', () => {
     try {
       const runsDir = path.join(tempRoot, 'runs');
       const graphPath = path.join(tempRoot, 'gate-c-task-graph', 'task-graph.json');
+      writeApprovedRunSourceForGraph(graphPath);
       writeJson(graphPath, taskGraph());
 
       const result = runRuns([
@@ -258,6 +264,7 @@ describe('iteration-partitioned run layout', () => {
       const graphPath = path.join(tempRoot, 'gate-c-task-graph', 'task-graph.json');
       const legacyRun = startedRun('run-task-001.monitor-gate');
       const legacyRef = canonicalRunRef(legacyRun);
+      writeApprovedRunSourceForGraph(graphPath);
       writeJson(graphPath, taskGraph());
       writeJson(path.join(runsDir, legacyRef), legacyRun);
       writeJson(path.join(runsDir, 'run-index.json'), runIndex(legacyRun, legacyRef));
@@ -630,6 +637,7 @@ describe('iteration-partitioned run layout', () => {
       const graphPath = path.join(tempRoot, 'gate-c-task-graph', 'task-graph.json');
       const graph = taskGraph();
       const runId = 'run-missing-source-spec';
+      writeApprovedRunSourceForGraph(graphPath);
       writeJson(graphPath, graph);
 
       let result = runRuns([
@@ -642,6 +650,8 @@ describe('iteration-partitioned run layout', () => {
         '--workspace', tempRoot, '--test-command', 'true',
       ]);
       assert.equal(result.status, 0, result.stderr);
+
+      rmSync(path.join(tempRoot, 'gate-b-spec', 'spec.json'));
 
       const rejected = runRuns([
         'finish', '--runs', runsDir, '--run-id', runId, '--status', 'finished',
@@ -904,6 +914,7 @@ describe('iteration-partitioned run layout', () => {
       assert.match(status.stdout, new RegExp(`runId: ${legacyRun.runId}`));
 
       const legacyGraphPath = path.join(tempRoot, 'legacy-cli', 'gate-c-task-graph', 'task-graph.json');
+      writeApprovedRunSourceForGraph(legacyGraphPath);
       writeJson(legacyGraphPath, taskGraph());
       const staleStart = runRuns([
         'start',
@@ -1054,6 +1065,7 @@ describe('iteration-partitioned run layout', () => {
         taskGraphRef: 'iterations/iter-001/gate-c-task-graph/task-graph.json',
       };
       const priorRef = canonicalRunRef(priorRun);
+      writeApprovedRunSourceForGraph(graphPath);
       writeJson(graphPath, taskGraph());
       writeJson(path.join(runsDir, 'run-index.json'), runIndex(priorRun, priorRef));
 
@@ -1085,6 +1097,7 @@ describe('iteration-partitioned run layout', () => {
         iterationId: 'iter-001',
         taskGraphRef: 'iterations/iter-001/gate-c-task-graph/task-graph.json',
       };
+      writeApprovedRunSourceForGraph(graphPath);
       writeJson(graphPath, taskGraph());
       writeJson(path.join(runsDir, canonicalRunRef(priorRun)), priorRun);
 
@@ -1114,6 +1127,7 @@ describe('iteration-partitioned run layout', () => {
       const graphPath = path.join(tempRoot, 'gate-c-task-graph', 'task-graph.json');
       const priorRun = startedRun('run-task-001-001.monitor-gate');
       const priorRef = canonicalRunRef(priorRun);
+      writeApprovedRunSourceForGraph(graphPath);
       writeJson(graphPath, taskGraph());
       writeJson(path.join(runsDir, priorRef), priorRun);
 
@@ -1181,6 +1195,7 @@ describe('iteration-partitioned run layout', () => {
     try {
       const runsDir = path.join(tempRoot, 'runs');
       const graphPath = path.join(tempRoot, 'gate-c-task-graph', 'task-graph.json');
+      writeApprovedRunSourceForGraph(graphPath);
       writeJson(graphPath, taskGraph());
       const starts = Array.from({ length: 8 }, (_, index) => runRunsAsync([
         'start',
@@ -1207,6 +1222,7 @@ describe('iteration-partitioned run layout', () => {
     try {
       const runsDir = path.join(tempRoot, 'runs');
       const graphPath = path.join(tempRoot, 'gate-c-task-graph', 'task-graph.json');
+      writeApprovedRunSourceForGraph(graphPath);
       writeJson(graphPath, taskGraph());
       writeJson(path.join(runsDir, RUN_STORE_LOCK_FILE), {
         pid: 2147483647,
@@ -1240,6 +1256,7 @@ describe('iteration-partitioned run layout', () => {
     try {
       const runsDir = path.join(tempRoot, 'runs');
       const graphPath = path.join(tempRoot, 'gate-c-task-graph', 'task-graph.json');
+      writeApprovedRunSourceForGraph(graphPath);
       writeJson(graphPath, taskGraph());
       writeJson(path.join(runsDir, RUN_STORE_LOCK_FILE), {
         pid: 2147483647,

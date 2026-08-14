@@ -367,13 +367,9 @@ function validateScaffoldFixtureCase() {
 
     const expectedNewAgentFiles = [
       path.join('.agents', 'agents', 'p2a-task-author.md'),
-      path.join('.agents', 'agents', 'p2a-milestone-reviewer.md'),
       path.join('.claude', 'agents', 'p2a-task-author.md'),
-      path.join('.claude', 'agents', 'p2a-milestone-reviewer.md'),
       path.join('.codex', 'agents', 'p2a-task-author.toml'),
-      path.join('.codex', 'agents', 'p2a-milestone-reviewer.toml'),
       path.join('.gemini', 'agents', 'p2a-task-author.md'),
-      path.join('.gemini', 'agents', 'p2a-milestone-reviewer.md'),
     ];
     const expectedToolFiles = [
       path.join('.agents', 'skills', 'p2a-harness', 'SKILL.md'),
@@ -431,9 +427,10 @@ function validateScaffoldFixtureCase() {
       || config.runTracking?.runsDir !== '.plan2agent/runs'
       || config.devExecution?.scopePolicy !== 'task_only'
       || config.devExecution?.verificationPolicy !== 'required_for_done'
+      || config.devExecution?.executionMode !== 'adaptive'
       || config.devExecution?.reviewPasses?.monitor !== 'opt_in'
-      || config.devExecution?.reviewPasses?.style !== 'off'
-      || config.devExecution?.reviewPasses?.milestone !== 'off'
+      || Object.hasOwn(config.devExecution?.reviewPasses ?? {}, 'style')
+      || Object.hasOwn(config.devExecution?.reviewPasses ?? {}, 'milestone')
       || config.devExecution?.reviewPasses?.visual !== 'off'
       || config.devExecution?.reviewPasses?.acceptance !== 'on'
       || config.roleProfiles?.implementer?.defaultProfile !== 'fullstack'
@@ -639,6 +636,16 @@ function validateScaffoldFixtureCase() {
 
     const lazyConfigGraphPath = path.join(tempRoot, 'lazy-config-task-graph.json');
     cpSync(path.join(E2E_FIXTURE_ROOT, 'webhook-api-service', 'gate-c-task-graph', 'task-graph.json'), lazyConfigGraphPath);
+    cpSync(
+      path.join(E2E_FIXTURE_ROOT, 'webhook-api-service', 'gate-a-intake'),
+      path.join(tempRoot, 'gate-a-intake'),
+      { recursive: true },
+    );
+    cpSync(
+      path.join(E2E_FIXTURE_ROOT, 'webhook-api-service', 'gate-b-spec'),
+      path.join(tempRoot, 'gate-b-spec'),
+      { recursive: true },
+    );
     writeFileSync(path.join(targetRoot, 'package.json'), `${JSON.stringify({
       scripts: {
         test: 'node -p 1',
@@ -928,9 +935,10 @@ function validateScaffoldFixtureCase() {
     if (
       result.status !== 0
       || enhancedConfig.devExecution?.scopePolicy !== 'task_only'
+      || enhancedConfig.devExecution?.executionMode !== 'orchestrated'
       || enhancedConfig.devExecution?.reviewPasses?.monitor !== 'opt_in'
-      || enhancedConfig.devExecution?.reviewPasses?.style !== 'off'
-      || enhancedConfig.devExecution?.reviewPasses?.milestone !== 'off'
+      || Object.hasOwn(enhancedConfig.devExecution?.reviewPasses ?? {}, 'style')
+      || Object.hasOwn(enhancedConfig.devExecution?.reviewPasses ?? {}, 'milestone')
       || enhancedConfig.devExecution?.reviewPasses?.visual !== 'off'
       || enhancedConfig.devExecution?.reviewPasses?.acceptance !== 'on'
       || enhancedConfig.projectId !== 'enhance-target'
@@ -1878,7 +1886,7 @@ function validateEvalFixtureCases() {
 	      || !result.stdout.includes('Plan2Agent eval digest')
 	      || !result.stdout.includes('"pass":1')
 	      || !result.stdout.includes('"fail":2')
-	      || !result.stdout.includes('self-improvement: runs=4 failedOrBlocked=2 proposals=4 approved=1 recurringFailures=1')
+	      || !result.stdout.includes('self-improvement: runs=3 failedOrBlocked=2 proposals=4 approved=1 recurringFailures=1')
 	    ) {
 	      console.error('eval digest fixture failed');
 	      writeResultOutput(result);
@@ -1913,7 +1921,7 @@ function validateEvalFixtureCases() {
       || evalDigest?.grades?.byVerdict?.pass !== 1
       || evalDigest?.grades?.byVerdict?.fail !== 2
       || evalDigest?.analyses?.clusters !== 1
-      || evalDigest?.selfImprovement?.runs?.total !== 4
+      || evalDigest?.selfImprovement?.runs?.total !== 3
       || evalDigest?.selfImprovement?.runs?.failedOrBlocked !== 2
       || evalDigest?.selfImprovement?.runs?.failureEvidence?.complete !== 2
       || evalDigest?.selfImprovement?.proposals?.byStatus?.approved !== 1
@@ -2188,7 +2196,14 @@ function validateEvalFixtureCases() {
       writeResultOutput(result);
       return { status: failureStatus(result), checks };
     }
-    writeEvalRuns(path.join(evalArtifactRoot, 'runs'), [passRun, structuredRun]);
+    const iterativeEvalRuns = [passRun, structuredRun].map((run) => ({
+      ...run,
+      iterationId: 'v1-mvp',
+      sourceLayout: 'iteration',
+      taskGraphRef: 'iterations/v1-mvp/gate-c-task-graph/task-graph.json',
+      sourceSpecRef: 'iterations/v1-mvp/gate-b-spec/spec.json',
+    }));
+    writeEvalRuns(path.join(evalArtifactRoot, 'runs'), iterativeEvalRuns);
     const maintenanceDraftPath = path.join(tempRoot, 'eval-maintenance-draft.json');
     result = runEval(['analyze', '--artifacts', evalArtifactRoot, '--maintenance-draft', maintenanceDraftPath]);
     checks += 1;
@@ -8930,6 +8945,9 @@ function validateIterationCurrentFixtureCases() {
 
       const contextRunsDir = path.join(artifactRoot, 'runs');
       mkdirSync(contextRunsDir, { recursive: true });
+      const contextRunIndexPath = path.join(contextRunsDir, 'run-index.json');
+      const contextRunIndexBefore = readFileSync(contextRunIndexPath, 'utf8');
+      const contextRunPath = path.join(contextRunsDir, 'run-context-fixture.json');
       const contextRun = {
         schema_version: 'p2a.run.v1',
         runId: 'run-context-fixture',
@@ -8961,8 +8979,8 @@ function validateIterationCurrentFixtureCases() {
         verification: [],
         notes: ['fixture run'],
       };
-      writeFileSync(path.join(contextRunsDir, 'run-context-fixture.json'), `${JSON.stringify(contextRun, null, 2)}\n`, 'utf8');
-      writeFileSync(path.join(contextRunsDir, 'run-index.json'), `${JSON.stringify({
+      writeFileSync(contextRunPath, `${JSON.stringify(contextRun, null, 2)}\n`, 'utf8');
+      writeFileSync(contextRunIndexPath, `${JSON.stringify({
         schema_version: 'p2a.run_index.v1',
         projectId: caseData.project_id,
         runs: [{
@@ -9023,6 +9041,8 @@ function validateIterationCurrentFixtureCases() {
         writeResultOutput(result);
         return { status: 1, checks };
       }
+      writeFileSync(contextRunIndexPath, contextRunIndexBefore, 'utf8');
+      unlinkSync(contextRunPath);
 
       const taskAuthorContract = readFileSync(path.join(ROOT, '.agents', 'agents', 'p2a-task-author.md'), 'utf8');
       const requiredTaskAuthorContractFragments = [
@@ -9390,10 +9410,6 @@ export function main() {
   writeResultOutput(milestoneReviewResult);
   if (milestoneReviewResult.status !== 0) return failureStatus(milestoneReviewResult);
 
-  const milestonePromotionResult = runNodeTestFile('tests/milestone-promotion.test.mjs');
-  writeResultOutput(milestonePromotionResult);
-  if (milestonePromotionResult.status !== 0) return failureStatus(milestonePromotionResult);
-
   const segments = [`${countNodeTestCases(schemaResult.stdout)} Plan2Agent fixture set test(s)`];
   if (scaffoldResult.checks) segments.push(`${scaffoldResult.checks} scaffold fixture check(s)`);
   if (evalResult.checks) segments.push(`${evalResult.checks} eval fixture check(s)`);
@@ -9401,7 +9417,6 @@ export function main() {
   segments.push(`${countNodeTestCases(e2eResult.stdout)} e2e fixture test(s)`);
   segments.push(`${countNodeTestCases(verificationRunnerUtilsResult.stdout)} verification runner utility test(s)`);
   segments.push(`${countNodeTestCases(milestoneReviewResult.stdout)} milestone review test(s)`);
-  segments.push(`${countNodeTestCases(milestonePromotionResult.stdout)} milestone promotion test(s)`);
   if (iterationResult.checks) segments.push(`${iterationResult.checks} iteration fixture check(s)`);
   segments.push(`${countNodeTestCases(negativeResult.stdout)} negative fixture test(s)`);
   segments.push(`${countNodeTestCases(projectConfigDetectionResult.stdout)} project config detection test(s)`);

@@ -7,6 +7,7 @@ import path from 'node:path';
 import process from 'node:process';
 import { Readable } from 'node:stream';
 import {
+  approvedExecutionEnvelope,
   validateRunData,
   validateRunIndexData,
   validateRunTaskContract,
@@ -72,7 +73,7 @@ function usage() {
     '  list                 Show all tasks with readiness.',
     '  ready                Show ready todo tasks.',
     '  show <task-id>       Show the full task JSON.',
-    '  prompt <task-id>     Print suggestedAgentPrompt, acceptance criteria, task description, referenced spec context, and full spec path.',
+    '  prompt <task-id>     Print the Gate-derived envelope, current work item, supplemental spec context, and full spec path.',
     '  start <task-id>      Mark a ready todo task in_progress.',
     '  done <task-id>       Mark an in_progress task done.',
     '  block <task-id>      Mark a todo or in_progress task blocked.',
@@ -340,9 +341,27 @@ function formatScalar(value) {
   return JSON.stringify(value);
 }
 
-function printSpecContext(task, spec) {
+const EXECUTION_ENVELOPE_SOURCE_REFS = [
+  'product.problem',
+  'product.goals',
+  'product.must_preserve',
+  'product.non_goals',
+  'product.core_flows',
+  'product.success_criteria',
+  'implementation.verification',
+];
+
+function executionEnvelopeCoversRef(sourceSpecRef) {
+  return EXECUTION_ENVELOPE_SOURCE_REFS.some((covered) => (
+    sourceSpecRef === covered
+    || sourceSpecRef.startsWith(`${covered}.`)
+    || sourceSpecRef.startsWith(`${covered}[`)
+  ));
+}
+
+function printSpecContext(sourceSpecRefs, spec) {
   console.log('Referenced spec context:');
-  for (const sourceSpecRef of task.sourceSpecRefs) {
+  for (const sourceSpecRef of sourceSpecRefs) {
     if (!spec) {
       console.log(`- ${sourceSpecRef}`);
       continue;
@@ -391,19 +410,56 @@ function printPrompt(task, graph, graphPath, specPath = null, options = {}) {
   const displaySourceSpecPath = formatDisplayPath(sourceSpecPath);
   const spec = readSpecForPrompt(sourceSpecPath, displaySourceSpecPath);
 
-  console.log(task.suggestedAgentPrompt.trimEnd());
-  console.log('');
-  console.log('Acceptance criteria:');
-  for (const criterion of task.acceptanceCriteria) console.log(`- ${criterion}`);
-
-  if (task.description) {
+  const syntheticWorkItem = !options.maintenance && graph.execution?.syntheticWorkItem === true;
+  if (!options.maintenance) {
+    const artifactRoot = options.args?.artifactsPath
+      ? path.resolve(options.args.artifactsPath)
+      : null;
+    const envelope = approvedExecutionEnvelope(
+      sourceSpecPath,
+      graph.sourceSpec,
+      artifactRoot,
+    );
+    console.log('Approved execution envelope:');
+    console.log(JSON.stringify(envelope, null, 2));
     console.log('');
-    console.log('Task description:');
-    console.log(task.description);
+    console.log('Execution strategy:');
+    console.log(`- mode: ${graph.execution?.mode ?? 'orchestrated'}`);
+    console.log(`- rationale: ${graph.execution?.selectionRationale ?? 'Approved Gate C task graph execution.'}`);
+    if (graph.execution?.milestones) {
+      for (const milestone of graph.execution.milestones) {
+        console.log(`- ${milestone.id}: ${milestone.outcome}`);
+        for (const command of milestone.verification) console.log(`  - verify: ${command}`);
+      }
+    }
+    console.log('');
+    console.log('Current work item:');
+  }
+  console.log(task.suggestedAgentPrompt.trimEnd());
+  if (!syntheticWorkItem) {
+    console.log('');
+    console.log('Acceptance criteria:');
+    for (const criterion of task.acceptanceCriteria) console.log(`- ${criterion}`);
+
+    if (task.description) {
+      console.log('');
+      console.log('Task description:');
+      console.log(task.description);
+    }
+  }
+  if (task.visualImpact) {
+    console.log('');
+    console.log('Visual impact routing:');
+    console.log(JSON.stringify(task.visualImpact, null, 2));
   }
 
-  console.log('');
-  printSpecContext(task, spec);
+  const supplementalSpecRefs = options.maintenance
+    ? task.sourceSpecRefs
+    : task.sourceSpecRefs.filter((sourceSpecRef) => !executionEnvelopeCoversRef(sourceSpecRef));
+  if (supplementalSpecRefs.length) {
+    console.log('');
+    printSpecContext(supplementalSpecRefs, spec);
+  }
   console.log('');
   console.log(`Full spec: ${displaySourceSpecPath}`);
   if (options.maintenance) {

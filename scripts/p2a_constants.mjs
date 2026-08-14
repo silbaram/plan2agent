@@ -13,19 +13,6 @@ export const GREENFIELD_REQUIRED_FILES = [
   ...GATE_FILES.map(([, , relativePath]) => relativePath),
 ];
 
-export const ROLE_PROFILE_TO_ROLE = Object.freeze({
-  owner_supervisor: 'lead',
-  frontend_implementer: 'contributor',
-  backend_implementer: 'contributor',
-  fullstack_implementer: 'contributor',
-  test_implementer: 'contributor',
-  docs_implementer: 'contributor',
-  qa_reviewer: 'reviewer',
-  architecture_reviewer: 'reviewer',
-  security_reviewer: 'reviewer',
-  manual_monitor: 'monitor',
-});
-
 export const P2A_DIR = '.plan2agent';
 export const DEFAULT_RUNS_DIR = `${P2A_DIR}/runs`;
 export const RUN_TELEMETRY_PROTOCOL = 'p2a.run_telemetry.manual.v1';
