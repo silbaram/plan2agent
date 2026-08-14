@@ -34,7 +34,7 @@
 
 ## 2026-08-14 current-harness 재실행 결과
 
-로컬 `eval/fixtures/todo-list-ui-a` workspace로 비교군 A의 기존 graph 방식을 유지한 새 iteration을 실행했다. 7개 task를 모두 완료하고 pre-close review, 14개 상태 × 3개 viewport의 final visual review, iteration close까지 통과했으며 `p2a eval generate`와 `p2a eval digest` 산출물도 생성했다. 이 raw workspace는 실패 후보이자 대용량 임시 실행 자료이므로 `.gitignore`에서 제외하고, 재현에 필요한 판정은 이 문서와 최종 `eval/adaptive-ab/` evidence에 남긴다.
+로컬 `eval/fixtures/todo-list-ui-a` workspace로 비교군 A의 기존 graph 방식을 유지한 새 iteration을 실행했다. 7개 task를 모두 완료하고 pre-close review, 14개 상태 × 3개 viewport의 final visual review, iteration close까지 통과했으며 `p2a eval generate`와 `p2a eval digest` 산출물도 생성했다. 이 raw workspace는 실패 후보이자 대용량 임시 실행 자료이므로 `.gitignore`에서 제외하고, 내구성 있는 판정은 이 문서와 [개선 제안서의 역사적 평가 기록](../../docs/gate-driven-adaptive-execution-proposal.md#13-평가-기록과-운영-계측)에 남긴다.
 
 Baseline seal dry-run은 다음 증거 부족을 차단했다.
 
@@ -43,4 +43,4 @@ Baseline seal dry-run은 다음 증거 부족을 차단했다.
 - verification completeness: scoped run 9개 중 8개
 - latest task grade: task-001, task-003, task-004의 최신 implementation run이 `pass`가 아님
 
-과거 run의 provider token이나 monitor 판정을 추정해 소급 입력하면 baseline 비교 계약을 훼손한다. 따라서 이 실행은 sealed A baseline으로 사용하지 않았고, 최종 평가는 별도 `eval/adaptive-ab/` fixture matrix와 sealed report로 완료했다. 일회성 baseline seal CLI와 schema는 이후 제품 runtime에서 제거했다.
+과거 run의 provider token이나 monitor 판정을 추정해 소급 입력하면 baseline 비교 계약을 훼손한다. 따라서 이 실행은 sealed A baseline으로 사용하지 않았고, 최종 방향 판단은 별도 7-fixture 일회성 비교 결과를 사용했다. 평가 완료 뒤 전용 runner·fixture·schema·테스트와 baseline seal CLI를 저장소 및 제품 runtime에서 제거했다.

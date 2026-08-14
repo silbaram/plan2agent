@@ -232,14 +232,13 @@ export function defaultDevExecution() {
     allowedProviders: ['codex', 'claude', 'gemini', 'manual'],
     writeProviders: ['codex', 'claude'],
     readOnlyProviders: ['gemini'],
-    defaultIsolation: 'none',
     scopePolicy: 'task_only',
     verificationPolicy: 'required_for_done',
     executionMode: 'adaptive',
     reviewPasses: {
       monitor: 'opt_in',
       visual: 'off',
-      acceptance: 'on',
+      acceptance: 'opt_in',
     },
   };
 }

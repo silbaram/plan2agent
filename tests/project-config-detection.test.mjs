@@ -86,18 +86,21 @@ test('keeps existing JavaScript package script command detection', () => {
 
 test('defaults new projects to adaptive while preserving legacy omitted-mode behavior', () => {
   assert.equal(defaultDevExecution().executionMode, 'adaptive');
+  assert.equal(Object.hasOwn(defaultDevExecution(), 'defaultIsolation'), false);
   assert.equal(resolveExecutionModePolicy({}), 'orchestrated');
-  assert.equal(buildProjectConfig(tempProject()).devExecution.executionMode, 'adaptive');
+  const projectConfig = buildProjectConfig(tempProject());
+  assert.equal(projectConfig.devExecution.executionMode, 'adaptive');
+  assert.equal(projectConfig.runTracking.defaultIsolation, 'none');
   assert.equal(mergeDevSkillConfig({ devExecution: {} }).config.devExecution.executionMode, 'orchestrated');
   assert.deepEqual(defaultDevExecution().reviewPasses, {
     monitor: 'opt_in',
     visual: 'off',
-    acceptance: 'on',
+    acceptance: 'opt_in',
   });
   assert.deepEqual(resolveReviewPasses({}), {
     monitor: 'opt_in',
     visual: 'off',
-    acceptance: 'on',
+    acceptance: 'opt_in',
   });
 });
 
@@ -125,13 +128,13 @@ test('merges review pass defaults without replacing project overrides', () => {
     milestone: 'on',
     visual: 'opt_in',
     monitor: 'opt_in',
-    acceptance: 'on',
+    acceptance: 'opt_in',
   });
   assert.deepEqual(resolveReviewPasses(merged), {
     monitor: 'opt_in',
     milestone: 'on',
     visual: 'opt_in',
-    acceptance: 'on',
+    acceptance: 'opt_in',
   });
 });
 

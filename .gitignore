@@ -25,15 +25,7 @@ node_modules/
 
 artifacts/lightweight-embedded-redis
 
-# Local execution workspaces and superseded evaluation candidates
+# Local execution workspaces and historical evaluation evidence
 .p2a-worktrees/
 eval/fixtures/todo-list-ui-a/
-eval/adaptive-ab/results/
-
-# Test-only example implementations; keep manifests and assertions versioned
-eval/adaptive-ab/fixtures/*/src/
-eval/adaptive-ab/fixtures/design-system-profile-card/index.html
-eval/adaptive-ab/fixtures/design-system-profile-card/styles.css
-eval/adaptive-ab/fixtures/multi-state-status-ui/app.js
-eval/adaptive-ab/fixtures/multi-state-status-ui/index.html
-eval/adaptive-ab/fixtures/multi-state-status-ui/styles.css
+eval/adaptive-ab/

@@ -1,6 +1,6 @@
 ## Supervised Batch Owner Procedure
 
-Batch mode wraps the single-work-item lifecycle; it does not create a batch run, change schemas, or delegate lifecycle ownership. Each work item keeps its own run id, worktree, Gate-derived execution envelope, verification evidence, monitor verdict, finish, and retrospective.
+Batch mode wraps the single-work-item lifecycle; it does not create a batch run, change schemas, or delegate lifecycle ownership. Each work item keeps its own run id, worktree, Gate-derived execution envelope, verification evidence, and finish. Monitor evidence and retrospective handling remain conditional on their normal activation rules.
 
 ### 1. Freeze one ready snapshot and select a bounded batch
 
@@ -57,7 +57,7 @@ If spawn, scope review, integration, verification, or a required monitor gate fa
 
 After every selected task has been harvested or given a truthful non-done disposition, run `p2a tasks ready` again. Start the next batch from the latest canonical integration head. A dependent task must not start from its predecessor's isolated task branch or from the old batch base.
 
-Do not produce new style or milestone sidecars. Historical sidecars remain readable, while integrated verification and the final acceptance/visual contract provide the active completion evidence.
+Do not produce new style or milestone sidecars. Historical sidecars remain readable, while integrated verification plus any activated acceptance or required visual contract provide the active completion evidence.
 
 ### 6. Preserve recoverability and clean up safely
 

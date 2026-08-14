@@ -26,6 +26,8 @@ Plan2Agent는 승인된 Gate B에서 `executionEnvelope`를 파생해 실행 AI�
 
 이 실행 계층은 범용 background scheduler가 아니다. 다만 승인된 envelope 안의 start/resume/검증/review/close는 task별 추가 승인을 요구하지 않는다. Codex workspace-write 또는 Claude scaffold/OS confinement 안에서 실행 AI가 같은 session의 구현 loop를 계속 소유하며, 외부 write·비용·credential·배포·불가역 동작만 별도 사용자 authorization을 요구한다.
 
+Direct와 일반 단일-owner Planned 실행은 현재 foreground owner가 현재 workspace에서 직접 수행하고 `runTracking.defaultIsolation`을 따른다. 기본 격리는 `none`이며, 별도 implementer·worktree·병렬 owner는 Orchestrated/batch, 명시 정책, 동시 write owner 또는 구체적인 격리·rollback 위험이 있을 때만 사용한다.
+
 ### 리뷰 패스 정책
 
 `.plan2agent/project.config.json`의 `devExecution.reviewPasses`가 비용이 큰 독립 리뷰 패스의 진입을 제어한다. 허용 값은 모든 키에서 `off`, `opt_in`, `on`뿐이며, 설정하지 않은 키는 아래 기본값을 사용한다.
@@ -34,9 +36,9 @@ Plan2Agent는 승인된 Gate B에서 `executionEnvelope`를 파생해 실행 AI�
 | --- | --- | --- |
 | `monitor` | `opt_in` | `opt_in`에서는 `p2a execute start --require-monitor`로 시작한 run만 진입한다. `off`이면 신규 run을 opt-in할 수 없다. |
 | `visual` | `off` | 추가 독립 visual reviewer 강도를 조정한다. 승인 visual contract가 요구하는 owner render evidence와 close gate는 이 값으로 끌 수 없다. |
-| `acceptance` | `on` | 필수 visual contract가 없는 iteration의 모든 task가 완료되면 실제 명령 증거를 요구하는 `p2a execute accept` run을 연다. |
+| `acceptance` | `opt_in` | 일반 비UI iteration은 task verification으로 닫는다. 사용자가 독립 기능 검수를 요청해 `p2a execute accept`를 시작했거나 값을 `on`으로 설정한 경우에만 실제 명령 증거를 요구한다. 시작된 acceptance run은 완료 전까지 close gate로 유지된다. |
 
-예를 들어 monitor opt-in과 제품 acceptance를 유지하려면 다음처럼 설정한다.
+기본 비용을 유지하면서 monitor와 acceptance를 모두 opt-in으로 두려면 다음처럼 설정한다.
 
 ```json
 {
@@ -45,7 +47,7 @@ Plan2Agent는 승인된 Gate B에서 `executionEnvelope`를 파생해 실행 AI�
     "reviewPasses": {
       "monitor": "opt_in",
       "visual": "off",
-      "acceptance": "on"
+      "acceptance": "opt_in"
     }
   }
 }
@@ -55,7 +57,7 @@ Plan2Agent는 승인된 Gate B에서 `executionEnvelope`를 파생해 실행 AI�
 
 미지 키나 허용 목록 밖의 값은 설정 오류로 거부된다. Phase 0 project에 이미 기록된 `style`/`milestone` 설정과 sidecar는 읽기 호환되지만 새 실행은 별도 reviewer를 만들지 않는다. Style은 단일 monitor rule contract가 검사하고 통합 acceptance는 기능/시각 close evidence가 담당한다.
 
-현재 적용값은 다음 명령의 `reviewPasses=monitor:opt_in,visual:off,acceptance:on` 형태 출력으로 확인한다.
+현재 적용값은 다음 명령의 `reviewPasses=monitor:opt_in,visual:off,acceptance:opt_in` 형태 출력으로 확인한다.
 
 ```bash
 p2a doctor --dev
@@ -141,15 +143,16 @@ p2a execute plan \
   --task <task-id>
 ```
 
-3. monitor gate가 필요한 run 시작:
+3. 일반 run 시작:
 
 ```bash
 p2a execute start \
   --artifacts .plan2agent/artifacts/<project> \
   --task <task-id> \
-  --agent-tool codex \
-  --require-monitor
+  --agent-tool codex
 ```
+
+승인 constitution의 판단형 규칙을 독립적으로 검사해야 하거나 프로젝트 정책이 요구할 때만 `--require-monitor`를 추가한다. 이 플래그 없이 시작한 일반 run에는 monitor agent나 sidecar를 만들지 않는다.
 
 4. 사람이 foreground agent 세션에서 prompt를 실행하고 결과를 확인한다.
 
@@ -163,11 +166,11 @@ p2a runs checkpoint --artifacts .plan2agent/artifacts/<project> \
   --milestone milestone-1
 ```
 
-5. 독립 monitor 결과를 run 파일 옆의 `.monitor-verdict.json` sidecar에 기록한다. 예를 들어 run ref가 `runs/<iteration-id>/<run-id>.json`이면 verdict 경로는 `runs/<iteration-id>/<run-id>.monitor-verdict.json`이다. 이 파일은 CLI 명령으로 임의 생성하는 대신, foreground 실행 owner가 §6의 표준 JSON shape으로 작성한다. 새 `.monitor-gate.json`은 `ruleContract`에 승인 constitution 또는 legacy style의 ref와 SHA-256을 고정하고 `requiredConcernFields`에 `rule_concerns`를 포함한다. Monitor에는 이 sidecar와 규칙 원문 전체를 함께 전달한다.
+5. `--require-monitor`로 시작한 run에만 독립 monitor 결과를 run 파일 옆의 `.monitor-verdict.json` sidecar에 기록한다. 예를 들어 run ref가 `runs/<iteration-id>/<run-id>.json`이면 verdict 경로는 `runs/<iteration-id>/<run-id>.monitor-verdict.json`이다. 이 파일은 CLI 명령으로 임의 생성하는 대신, foreground 실행 owner가 §6의 표준 JSON shape으로 작성한다. 새 `.monitor-gate.json`은 `ruleContract`에 승인 constitution 또는 legacy style의 ref와 SHA-256을 고정하고 `requiredConcernFields`에 `rule_concerns`를 포함한다. Monitor에는 이 sidecar와 규칙 원문 전체를 함께 전달한다. 일반 run은 이 단계를 건너뛴다.
 
    `full + current_iteration` task는 `workKind`와 `visualImpact.screenStates`로 UI 영향 범위만 명시한다. 모든 task를 통합한 뒤 승인 experience가 `visual_review_required`이면 `reviewPasses.visual`과 무관하게 `p2a execute review --artifacts <root>`로 iteration당 하나의 `runKind: final_visual_review` run을 연다. 이 run은 Gate B에서 전체 screen/state/viewport/접근성 계약을 직접 가져오고 canonical workspace, isolation 없음, 변경 파일 없음을 강제한다. 실제 앱 PNG, 접근성 보고서, capture metadata, workspace revision과 승인 prototype 비교 결과를 `.visual-review.json`에 기록하며 close-ready와 `p2a next`가 revision과 digest를 재검증한다.
 
-   비UI iteration은 기본 `reviewPasses.acceptance: on`에서 모든 task 통합 뒤 `p2a execute accept --artifacts <root> --agent-tool <reviewer>`를 실행한다. 이 명령은 Gate B `product.core_flows`와 `product.success_criteria`를 계약으로 고정한 `final_acceptance_review` run을 canonical workspace, isolation 없음, 변경 파일 없음으로 연다. Owner가 각 동작을 `p2a runs verify --verify-command 'custom:<command>'`로 실제 실행하고, read-only `p2a-acceptance-reviewer`가 run verification과 일치하는 `command`·`source: command|config`·정수 `exitCode`·`stdoutTail`을 `.acceptance-review.json`에 기록한다. exit 0이어도 출력이 비어 있거나 의미 없는 결과면 `block`이다. 모든 기준이 실제 동작으로 확인된 `confirm_behavior`만 finish할 수 있고 exact sidecar hash와 canonical workspace revision이 run에 봉인된다. 이후 workspace 변경은 새 acceptance review를 요구한다.
+   비UI iteration은 기본 `reviewPasses.acceptance: opt_in`에서 독립 acceptance run을 자동으로 만들지 않는다. 사용자가 요청해 `p2a execute accept --artifacts <root> --agent-tool <reviewer>`를 시작했거나 정책이 `on`이면 Gate B `product.core_flows`와 `product.success_criteria`를 계약으로 고정한 `final_acceptance_review` run을 canonical workspace, isolation 없음, 변경 파일 없음으로 연다. Owner가 각 동작을 `p2a runs verify --verify-command 'custom:<command>'`로 실제 실행하고, read-only `p2a-acceptance-reviewer`가 run verification과 일치하는 `command`·`source: command|config`·정수 `exitCode`·`stdoutTail`을 `.acceptance-review.json`에 기록한다. exit 0이어도 출력이 비어 있거나 의미 없는 결과면 `block`이다. 일단 시작한 review는 모든 기준이 실제 동작으로 확인된 `confirm_behavior`로 끝나야 하며 exact sidecar hash와 canonical workspace revision을 봉인한다. 이후 workspace 변경은 새 acceptance review를 요구한다.
 
 6. 검증과 finish:
 
@@ -266,11 +269,11 @@ p2a runs record --run-id <id> --artifacts <root> \
 
 `p2a eval digest`는 model profile·source별 token 합계, 구현 결정 개입, 사용자 수정, Gate 복귀 precision, 무개입 성공 run 비율, task 수, first-pass acceptance, rework, integration defect, visual drift, scope/rule violation, Gate B→close-ready 시간과 verification evidence completeness를 집계한다. `runKind`가 있는 최종 visual/acceptance review run은 구현 자율성·rule-review 분모와 개입 수에서 제외한다. Usage는 review 비용도 비용이므로 digest 범위의 모든 run을 합산한다. 새 protocol marker가 없는 과거 구현 run은 `interruptions` 배열이 나중에 추가돼도 자율성 지표에서 제외한다. Digest는 autonomy telemetry, usage sample, strict rule review의 coverage도 함께 내보내므로 token 또는 violation의 낮은 합계를 coverage 저하와 혼동하면 안 된다. 동일한 annotation protocol을 적용한 A/B run만 비교한다.
 
-Phase 0의 일회성 A/B 평가는 repository 전용 `eval/adaptive-ab/` 실행기와 report validator로 완료했다. 그 과정에서 사용한 baseline seal CLI는 현재 제품 runtime과 대상 프로젝트 배포 표면에서 제거했다. 과거 run을 소급 주석하거나 선택 review가 빠진 digest를 baseline으로 승격하지 않는 원칙은 평가 기록에만 남긴다.
+Phase 0의 일회성 task-decomposition A/B 평가는 고정 seed·prompt·verification·UI capture matrix로 수행했고, 그 결과와 한계는 [개선 제안서 §13](gate-driven-adaptive-execution-proposal.md#13-평가-기록과-운영-계측)에 보존한다. 평가는 production `p2a execute` lifecycle 전체를 재현하지 않았으며, 의사결정 완료 뒤 전용 runner·fixture·schema·회귀 테스트를 저장소에서 제거했다. 이후 운영 비교는 실제 run의 `p2a eval digest` telemetry를 사용하고 과거 A/B를 기본 테스트나 phase별 절차로 반복하지 않는다. 당시 사용한 baseline seal CLI와 schema도 제품 runtime과 대상 프로젝트 배포 표면에 남기지 않는다.
 
 같은 task의 latest run이 `failed` 또는 `blocked`인 retry에서만 실행 owner는 task title, failure class, localization으로 같은 프로젝트 Memory를 한 번 조회할 수 있다. 보고서는 `<failed-run-id>.memory-recall.json`으로 보존하고, 재시도 run에는 `MEMORY_RETRY: sourceRun=<id>; report=<path>; applied=<mitigation or none>; status=<succeeded|fallback|failed|skipped>` note를 남긴다. 첫 시도에는 이 조회를 하지 않으며, 유사성이 없는 결과는 적용하지 않는다.
 
-`p2a execute start/status/finish`와 직접 `p2a runs start/finish` 출력 footer에는 copy-paste 가능한 `resume`, `status`, `finish`, `review` 명령이 남는다. `resume`은 `p2a execute resume --run-id <run-id>`로 같은 run의 launcher prompt를 다시 출력하고, `review`는 `p2a proposals mine --run-id <run-id>`로 실행 회고 후보를 생성한다.
+`p2a execute start/status/finish`와 직접 `p2a runs start/finish` 출력 footer에는 copy-paste 가능한 `resume`, `status`, `finish`, `review` 명령이 남는다. `resume`은 `p2a execute resume --run-id <run-id>`로 같은 run의 launcher prompt를 다시 출력한다. `review`의 `p2a proposals mine --run-id <run-id>`는 회고 후보를 쓰는 별도 승인 필요 작업이며, `p2a next`가 자동 실행하지 않는다.
 
 ### 6.2 Historical milestone evidence
 

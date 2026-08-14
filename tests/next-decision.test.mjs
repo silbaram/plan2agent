@@ -275,7 +275,7 @@ function next(root, args = []) {
   return JSON.parse(result.stdout);
 }
 
-function assertAction(payload, state, kind, argv = null) {
+function assertAction(payload, state, kind, argv = null, requiresApproval = null) {
   assert.doesNotThrow(() => validateSchema(payload, NEXT_SCHEMA));
   assert.equal(payload.schema_version, 'p2a.next.v1');
   assert.equal(payload.state, state);
@@ -286,6 +286,7 @@ function assertAction(payload, state, kind, argv = null) {
     assert.ok(Array.isArray(payload.command.argv) && payload.command.argv.length > 0);
     assert.equal(typeof payload.command.requiresApproval, 'boolean');
     if (argv) assert.deepEqual(payload.command.argv, argv);
+    if (requiresApproval !== null) assert.equal(payload.command.requiresApproval, requiresApproval);
   } else {
     assert.equal('argv' in payload.command, false);
   }
@@ -479,6 +480,9 @@ test('next chooses one read-only action for every primary state', () => {
       id: 'all non-UI tasks done require functional acceptance',
       setup: () => {
         const root = project();
+        writeJson(join(root, '.plan2agent', 'project.config.json'), {
+          devExecution: { reviewPasses: { acceptance: 'on' } },
+        });
         const rootArtifact = artifact(root);
         const iterationId = writeIteration(rootArtifact);
         writeGateA(rootArtifact, 'ready_for_spec', iterationId);
@@ -963,7 +967,7 @@ test('next mines a failed run only once before opening a closed iteration', () =
     assertAction(next(root), 'run_evidence_needs_proposal_mining', 'cli', [
       'proposals', 'mine', '--artifacts', artifactPath(root), '--run-id', 'run-001',
       '--proposals', join(root, '.plan2agent', 'proposals'),
-    ]);
+    ], true);
 
     writeJson(join(root, '.plan2agent', 'proposals', 'proposal-run-001.json'), {
       sourceRunId: 'run-001',
@@ -990,7 +994,7 @@ test('next mines flat handoff run evidence before reporting execution complete',
     assertAction(next(root), 'run_evidence_needs_proposal_mining', 'cli', [
       'proposals', 'mine', '--artifacts', artifactPath(root), '--run-id', 'run-001',
       '--proposals', join(root, '.plan2agent', 'proposals'),
-    ]);
+    ], true);
 
     writeJson(join(root, '.plan2agent', 'proposals', 'proposal-run-001.json'), {
       sourceRunId: 'run-001',
@@ -1181,6 +1185,15 @@ test('next routes a completed non-UI iteration through acceptance unless disable
     '--artifacts',
     '.plan2agent/artifacts/sample',
   ]);
+  assert.equal(rule.when({
+    ...context,
+    reviewPasses: { acceptance: 'opt_in' },
+  }), false);
+  assert.equal(rule.when({
+    ...context,
+    reviewPasses: { acceptance: 'opt_in' },
+    acceptanceReviewActivated: true,
+  }), true);
   assert.equal(rule.when({
     ...context,
     reviewPasses: { acceptance: 'off' },

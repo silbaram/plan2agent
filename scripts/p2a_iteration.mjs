@@ -3238,12 +3238,17 @@ export function validateCloseReadyAcceptanceEvidence({
   reviewPasses,
 }) {
   const policy = reviewPasses ?? projectReviewPasses();
+  const acceptancePolicy = policy.acceptance ?? 'opt_in';
   if (approvedTaskGraphVisualContract(artifactRoot, taskGraphPath, taskGraph)) return 0;
-  if (policy.acceptance === 'off') {
+  if (acceptancePolicy === 'off') {
     console.log('- acceptance review: skipped (reviewPasses.acceptance=off)');
     return 0;
   }
   const runsDir = path.join(path.resolve(artifactRoot), 'runs');
+  if (acceptancePolicy === 'opt_in' && !existsSync(runsDir)) {
+    console.log('- acceptance review: skipped (reviewPasses.acceptance=opt_in; no review was started)');
+    return 0;
+  }
   validateRunsDir(runsDir);
   const expectedSourceLayout = taskGraphContextForGraph(taskGraphPath).sourceLayout;
   const currentRuns = loadRunsForArtifactRoot(artifactRoot)
@@ -3252,15 +3257,19 @@ export function validateCloseReadyAcceptanceEvidence({
       && run.sourceLayout === expectedSourceLayout
       && taskGraphRefMatchesGraph(run.taskGraphRef, taskGraphPath, artifactRoot)
     ));
+  const acceptanceRuns = currentRuns.filter((run) => run.runKind === 'final_acceptance_review');
+  if (acceptancePolicy === 'opt_in' && acceptanceRuns.length === 0) {
+    console.log('- acceptance review: skipped (reviewPasses.acceptance=opt_in; no review was started)');
+    return 0;
+  }
   const activeRuns = currentRuns.filter((run) => run.status === 'started');
   if (activeRuns.length) {
     throw new ValidationError(
       `close-ready acceptance validation requires no active run(s): ${activeRuns.map((run) => run.runId).join(', ')}`,
     );
   }
-  const latestRun = currentRuns
+  const latestRun = acceptanceRuns
     .map((run, runOrder) => ({ run, runOrder }))
-    .filter(({ run }) => run.runKind === 'final_acceptance_review')
     .sort(compareRunEvidence)[0]?.run;
   try {
     assertFinalAcceptanceReviewRunReady({

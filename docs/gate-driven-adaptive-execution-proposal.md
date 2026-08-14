@@ -1,11 +1,13 @@
 # 승인된 계약 기반 자율 개발 개선안
 
 작성일: 2026-08-13<br>
-상태: **전체 목표 완료** · Phase 0–3 구현 완료 · 7-fixture 동일-model A/B 품질 평가 봉인 · task-level 사용자 시각 승인 제거 · historical reader 호환 유지 결정 완료
+상태: **개선 개발 완료** · Phase 0–3 및 기본 실행 경로 경량화 완료 · 일회성 7-fixture 평가 기록 보존 · production lifecycle 비용은 실사용 telemetry 검증 범위
 
 문서 홈: [Plan2Agent Docs](README.md) · 현재 구현 계약: [하네스 구현 기준](harness-spec.md) · [반복 개발 스펙](iteration-spec.md) · [감독형 실행 레퍼런스](supervised-execution.md)
 
-구현 완료 상태(2026-08-14): Phase 0에서 monitor rule/hash 계약, run telemetry와 eval 집계를 구현하고 일회성 seal gate로 누락된 provider usage/evidence를 차단했다. 최종 A/B 평가가 끝난 뒤 그 seal CLI/schema는 제품 runtime에서 제거하고 평가 전용 runner·validator를 `eval/adaptive-ab/`로 분리했다. Phase 1은 `product.must_preserve`, Gate-derived run `executionEnvelope`/hash, outcome/dependency 기반 task 저작, objective-owner implementer, post-Gate `p2a next` 자율 명령, 단일 monitor로 style 통합, style/milestone reviewer 제거, 필수 visual contract와 close evidence 결합을 반영했다. Phase 2는 `adaptive|direct|planned|orchestrated` 정책, Direct/Planned synthetic work item 준비, Planned 2–5개 ordered checkpoint 실행·재개·finish 차단, mode/rationale/run/handoff 보존을 구현했다. Phase 3은 새 project config 기본값을 `adaptive`로 전환하고 mode가 없는 기존 config를 `orchestrated`로 해석하며, 새 milestone review를 생성하던 active promotion writer를 제거했다. 마지막으로 `gpt-5.6-luna/medium` 동일 profile의 7-fixture A/B를 실제 실행해 양쪽 7/7 acceptance, B의 task·호출·token·시간 감소와 동일 품질을 봉인했다. 이 결과에 따라 task-level 사용자 시각 승인 반복은 owner 자동 render/review loop로 대체하고, historical reader는 writer 없는 호환 계층으로 유지한다. 향후 reader 제거는 이 개선안의 미완료 항목이 아니라 별도 migration audit 범위다.
+구현 완료 상태(2026-08-14): Phase 0은 monitor rule/hash 계약과 run telemetry·eval 집계를 구현했고, 일회성 평가에 사용한 seal CLI/schema와 repository evaluator는 의사결정 뒤 제거했다. Phase 1은 `product.must_preserve`, Gate-derived `executionEnvelope`/hash, outcome/dependency 기반 task 저작, objective-owner 실행, post-Gate `p2a next`, style/milestone reviewer 제거와 필수 visual close evidence를 반영했다. Phase 2는 `adaptive|direct|planned|orchestrated`, Direct/Planned synthetic work item, Planned checkpoint 실행·재개·finish 차단과 mode/rationale 보존을 구현했다. Phase 3은 새 project의 `adaptive` 기본값, mode 없는 기존 config의 `orchestrated` 호환 해석과 active milestone writer 제거를 완료했다.
+
+과도 적용 재검토에서는 일반 Direct/단일-owner Planned를 현재 owner와 기본 isolation `none`으로 되돌리고, 별도 implementer·worktree·monitor·acceptance reviewer·retrospective protocol은 실제 조건이 있을 때만 로드하도록 줄였다. Acceptance 기본값은 `opt_in`이며, `p2a proposals mine`은 쓰기 작업이므로 항상 승인을 요구한다. `gpt-5.6-luna/medium` 7-fixture 결과는 task decomposition과 prompt/call 비용을 비교한 repository 평가다. 양쪽 7/7 acceptance와 B의 task·호출·token·시간 감소를 기록했지만 production `p2a execute` lifecycle 전체의 worktree·monitor·acceptance 비용을 측정한 결과로 일반화하지 않는다. Task-level 사용자 시각 승인 반복은 owner 자동 render/review loop로 대체하고, historical reader는 writer 없는 호환 계층으로 유지한다.
 
 ## 1. 최상위 개선 목표
 
@@ -61,25 +63,25 @@ Task는 없애지 않는다. 다중 owner·실제 선후 관계·장기 재개�
 
 | 확인 사항 | 현재 상태 | 근거 |
 | --- | --- | --- |
-| 개발 실행 전 task graph | canonical task graph 검증을 실행 진입의 필수 조건으로 둔다. | [`p2a-harness` 역할/검증 계약](../.agents/skills/p2a-harness/SKILL.md), [감독형 실행 안전 정책](supervised-execution.md#8-안전-정책) |
+| 개발 실행 전 준비 | Direct/Planned는 CLI가 synthetic compatibility work item을 만들고, Orchestrated는 canonical task graph를 사용한다. 어느 mode든 실행 전 같은 Gate/hash/readiness 검증을 통과한다. | [`p2a-harness` 역할/검증 계약](../.agents/skills/p2a-harness/SKILL.md), [감독형 실행 안전 정책](supervised-execution.md#8-안전-정책) |
 | task 분할 기준 | 고정 개수 지침을 제거했다. 실제 dependency, 별도 write owner, 독립 verification/rollback, cross-session resume 경계가 있을 때만 분할한다. | [`p2a-task-author`](../.agents/skills/p2a-task-author/SKILL.md), [`p2a-task-breakdown`](../.agents/skills/p2a-task-breakdown/SKILL.md) |
 | task 중복 서술 | 각 task에 `description`, `acceptanceCriteria`, `suggestedAgentPrompt`, `sourceSpecRefs`를 모두 요구한다. | [`task-graph.schema.json`](../schemas/task-graph.schema.json) |
-| 구현 agent 단위 | implementer 역할은 정확히 한 ready task를 구현하도록 고정되어 있다. | [`p2a-implementer`](../.agents/agents/p2a-implementer.md) |
+| 구현 agent 단위 | Direct와 단일-owner Planned는 현재 실행 owner가 맡는다. 별도로 spawn한 implementer는 정확히 한 ready work item만 구현한다. | [`p2a-implementer`](../.agents/agents/p2a-implementer.md) |
 | UI 최종 review 기본값 | `reviewPasses.visual` 기본값은 추가 reviewer용 `off`지만 승인 contract의 owner render evidence와 close gate는 필수다. | [실행 리뷰 패스 정책](supervised-execution.md#리뷰-패스-정책) |
 | 개발 중 시각 검수 | task-level 사용자 승인은 제거했다. 실행 owner가 영향 화면을 render/review하고 drift를 자율 수정하는 비게이팅·무기록 절차다. | [개발 중 자동 시각 검수](supervised-execution.md#개발-중-자동-시각-검수) |
 | 현재 eval 범위 | stable metrics는 usage/input token, 자율 완료, 사용자 개입, Gate 복귀 precision, task 수, first-pass acceptance, rework, 통합 결함, visual drift, scope/rule violation, Gate B→close-ready 시간과 verification evidence completeness를 집계한다. 모델별 성공률과 prompt 길이는 봉인 manifest의 동일 model-profile 실행을 모은 뒤 비교에서 계산할 후속 항목이다. | [`eval/stable-metrics.json`](../eval/stable-metrics.json), `scripts/p2a_eval.mjs` |
 | 헌법의 실제 강제 범위 | validator prohibition의 target은 `spec`/`task_graph`뿐이고 해당 JSON의 문자열 leaf에서 금지어를 찾는다. architecture/stack/style 및 제품 코드는 검사하지 않는다. | `schemas/constitution.schema.json:52-91`, `scripts/validate_artifacts.mjs:1503-1517` |
-| 완료 후 review | style은 단일 monitor rule contract에 통합되었고 새 style/milestone reviewer는 생성하지 않는다. Historical evidence reader만 유지한다. | `.agents/skills/p2a-dev-execution/SKILL.md`, `.agents/agents/p2a-performance-monitor.md` |
-| review 기본값 | monitor는 `opt_in`, visual은 독립 reviewer 강도용 `off`, acceptance는 `on`이다. 필수 visual contract evidence는 visual 옵션으로 끌 수 없다. | `scripts/p2a_project_config.mjs`, `scripts/p2a_iteration.mjs` |
+| 완료 후 review | Monitor를 활성화한 run에서는 style을 같은 rule contract로 검사하며, 새 style/milestone reviewer는 생성하지 않는다. Historical evidence reader만 유지한다. | `.agents/skills/p2a-dev-execution/SKILL.md`, `.agents/agents/p2a-performance-monitor.md` |
+| review 기본값 | monitor와 acceptance는 `opt_in`, visual은 독립 reviewer 강도용 `off`다. 명시적으로 시작한 opt-in review는 완료 전까지 gate가 되며, 필수 visual contract evidence는 visual 옵션으로 끌 수 없다. | `scripts/p2a_project_config.mjs`, `scripts/p2a_iteration.mjs` |
 | fixture 분할 | webhook fixture의 task 4개는 `task-001 → 002 → 003 → 004` 선형 체인이라 task 간 병렬성이 0이다. | `fixtures/_e2e/webhook-api-service/gate-c-task-graph/task-graph.json:6-86` |
 | task 계약과 중복 | task는 9개 필드를 요구하지만 일반 task의 추가 의미 검사는 `acceptanceCriteria`와 `sourceSpecRefs`의 non-blank 검사다. webhook fixture에서 단순 영숫자 token 기준 description 어휘의 prompt 재등장률은 31~63%다. | `schemas/task-graph.schema.json:26-37`, `scripts/validate_artifacts.mjs:3161-3165`, `fixtures/_e2e/webhook-api-service/gate-c-task-graph/task-graph.json:8-85` |
 | 기존 prompt 해석 | `p2a_tasks.mjs`는 `sourceSpecRefs`의 dot path를 spec 값으로 해석하고 full spec 경로도 출력한다. 얇은 task 전환에 새 해석 계층은 필요 없다. | `scripts/p2a_tasks.mjs:338-363,384-403` |
 | 분할 뒤처리 기구 | 새 style/milestone reviewer와 skill 경로를 제거했다. Batch reference와 historical milestone schema/reader는 orchestrated 실행과 기존 evidence 호환을 위해 남겼다. | `.agents/skills/p2a-dev-execution/references/batch-execution.md`, `schemas/milestone-review.schema.json` |
-| 자율 실행 | Claude는 scaffold/OS confinement 안의 post-Gate loop를 진행할 수 있고, `p2a next`는 `requiresApproval` 없는 개발 action을 즉시 실행하며 implementer는 web 조사 capability를 가진다. | `.agents/skills/p2a-dev-execution/SKILL.md`, `.agents/skills/p2a-next/SKILL.md`, `.agents/agents/p2a-implementer.md` |
+| 자율 실행 | Claude는 scaffold/OS confinement 안의 post-Gate loop를 진행할 수 있고, `p2a next`는 승인된 개발 action만 즉시 실행한다. 일반 Direct/단일-owner Planned는 현재 owner가 수행하고, 별도 implementer는 격리 owner가 실질적으로 필요할 때만 사용한다. Live web은 current owner가 version-sensitive 외부 근거를 꼭 확인해야 할 때만 사용한다. | `.agents/skills/p2a-dev-execution/SKILL.md`, `.agents/skills/p2a-next/SKILL.md`, `.agents/agents/p2a-implementer.md` |
 | 모델 pin | Claude agent mirror는 `model:`을 생성하지 않고 현재 parent/session 모델을 상속한다. Codex/Gemini tier mapping은 현재 구현 계약대로 유지한다. | `scripts/sync_cli_assets.mjs`, `.claude/agents/*.md`, `docs/harness-spec.md` |
 | 계측과 보존 계약 | run telemetry와 `product.must_preserve`를 추가했고, 새 run은 승인 spec hash와 보존/비목표/acceptance/verification/권한을 `executionEnvelope`/hash로 고정한다. UI run은 승인 prototype, route/state/viewport, 접근성 기준과 시각 불변 조건도 같은 envelope에 고정한다. | `schemas/run.schema.json`, `scripts/p2a_runs.mjs`, `schemas/spec.schema.json` |
 | 적응형 실행 정책 | 새 project는 `adaptive`를 기본으로 사용하고, mode가 없는 기존 config는 `orchestrated`로 해석한다. `adaptive|direct|planned|orchestrated` 명시값을 지원하며 Direct/Planned는 한 synthetic work item으로 기존 lifecycle과 호환한다. | `scripts/p2a_project_config.mjs`, `scripts/p2a_execute.mjs`, `scripts/p2a_runs.mjs`, `schemas/task-graph.schema.json`, `schemas/run.schema.json` |
-| 최근 시각 검수 결정 | v0.2.3의 task별 사용자 시각 검수 loop는 §13 평가 뒤 owner 자동 render/review로 대체됐다. | `eval/adaptive-ab/results/2026-08-14-luna-medium/report.json`, `.agents/skills/p2a-dev-execution/SKILL.md` |
+| 최근 시각 검수 결정 | v0.2.3의 task별 사용자 시각 검수 loop는 §13의 일회성 UI fixture 결과 뒤 owner 자동 render/review로 대체됐다. 평가 수치와 한계만 역사적 기록으로 남기고 전용 runner는 유지하지 않는다. | [§13 평가 기록](#13-평가-기록과-운영-계측), `.agents/skills/p2a-dev-execution/SKILL.md` |
 
 다음 항목은 설계 승인 당시 검증 대상으로 둔 가설이었다.
 
@@ -88,7 +90,7 @@ Task는 없애지 않는다. 다중 owner·실제 선후 관계·장기 재개�
 - Gate 중심 Direct 실행이 현재 graph 실행보다 비용과 시간이 적게 든다.
 - 통합된 render/review loop가 UI 품질을 개선한다.
 
-§13의 controlled A/B는 해당 model profile과 fixture matrix에서 task·token·시간·통합 결함 감소와 동일한 최종 품질을 확인했다. 이 결과는 기본값과 시각 검수 정리의 근거로 사용하되 다른 모델·실제 장기 프로젝트까지 일반화하지 않는다.
+§13의 controlled A/B는 해당 model profile과 fixture matrix에서 task decomposition에 따른 task·provider call·token·시간 감소와 동일한 최종 품질을 확인했다. Production lifecycle 전체나 다른 모델·실제 장기 프로젝트의 비용·성공률까지 측정한 결과는 아니다.
 
 ## 4. 현재 구조의 문제
 
@@ -147,7 +149,7 @@ Gate B 승인 뒤 `p2a next`는 자율 개발 session을 시작한다. AI가 조
 
 한 agent가 context 안에서 끝낼 작은 vertical slice나 통합 UI 변경은 Direct 후보다.
 
-Direct에서도 승인 Gate, run log, verification evidence, visual review와 close 조건은 생략하지 않는다. 생략하는 것은 사람이 저작한 세부 task graph뿐이다.
+Direct에서도 승인 Gate, run log와 실제 verification evidence는 생략하지 않는다. 승인된 visual contract가 있으면 owner render와 최종 visual close evidence를 유지한다. 별도 monitor와 독립 acceptance review는 정책이 `on`이거나 명시적으로 opt-in한 경우에만 추가하며, 생략하는 기본 기구는 사람이 저작한 세부 task graph와 불필요한 독립 review pass다.
 
 한 run 안에서 `p2a runs verify`를 여러 번 호출해 checkpoint evidence를 남긴다. 즉 rollback·재개 기록 경계를 task라는 프로세스 경계에서 verify checkpoint로 낮추며, 모든 변경을 하나의 무검증 거대 run으로 합치지 않는다.
 
@@ -287,18 +289,18 @@ Prompt는 다음 계층을 한 번씩만 조립한다.
 ### Phase 0 — baseline 보존과 계측 구축
 
 - `10~50` graph를 A로 동결해 baseline을 수집하고 분할은 유지한다.
-- Phase 0에 monitor 헌법 검사를 A/B에 적용한다. **구현·평가 완료:** 새 monitor gate는 rule source ref/hash, 필수 `rule_concerns`, sidecar 전체의 run-side contract hash와 완료 판정 verdict의 exact-byte evidence hash를 고정했고 repository 전용 A/B runner가 동일 조건으로 비교했다.
+- Phase 0에 production monitor 헌법 검사를 구현한다. **구현 완료:** 새 monitor gate는 rule source ref/hash, 필수 `rule_concerns`, sidecar 전체의 run-side contract hash와 완료 판정 verdict의 exact-byte evidence hash를 고정한다. 일회성 A/B는 이 lifecycle을 재현하지 않고 fixture `allowed_paths`만 별도 scope guard로 검사했다.
 - `run.schema.json`에 usage/token과 interruption 필드를 추가하고 Gate 복귀 이벤트 기록 경로를 정의한다. **구현 완료:** `p2a runs record|finish`와 `p2a execute finish`가 증분 usage와 수동 개입 주석을 기록한다.
-- eval fixture는 제품 runtime의 선택적 기본값과 분리된 repository 전용 runner에서 동일 verification·monitor·visual evidence 계약으로 실행한다. 평가가 완료된 뒤 일회성 baseline seal CLI와 schema는 제품 표면에서 제거했다.
+- Eval fixture는 제품 runtime의 선택적 review 기본값과 분리된 고정 seed·verification·allowed-path scope·UI capture 계약으로 일회성 실행했다. Production monitor/worktree/acceptance lifecycle은 별도 제품 회귀 테스트와 실사용 telemetry 범위다. 평가가 완료된 뒤 전용 runner·fixture·schema·테스트와 baseline seal CLI를 제품 및 유지보수 표면에서 제거했다.
 - `user correction count`와 `implementation-decision interruption count`는 자동 관측할 수 없으므로 수동 주석 protocol을 정의한다. **구현 완료:** `--user-correction`, `--implementation-interruption`, `--gate-return`을 동일 run에 즉시 기록한다. 동일 protocol을 지키지 않은 run은 비교 판정에서 제외한다.
-- task 수, first-pass, rework, 통합 결함, UI drift와 Gate return을 기록하고 동일 fixture에서 model profile만 구분한다. **집계·평가 완료:** task/run index와 monitor·acceptance·visual evidence에서 지표를 파생하고 repository 전용 report가 실제 provider usage와 evidence inventory를 고정한다.
+- Task 수, first-pass, rework, 통합 결함, UI drift와 Gate return을 기록하고 동일 fixture에서 model profile만 구분한다. **집계 구현 완료:** production `p2a eval digest`는 task/run/monitor/acceptance/visual evidence에서 지표를 파생한다. 일회성 A/B report는 provider usage, verification, allowed-path scope와 UI evidence inventory를 기록했으며 결과 요약만 §13에 보존한다.
 - 첫 UI 후보 `todo-lis`의 기존 7개 run은 7/7 실제 command verification을 보존해 fixture seed로 재사용할 수 있지만 current telemetry 0/7, provider usage 0/7, monitor 0/7, pre-close/visual review 0건, Gate B approval timestamp·visual contract 누락, eval grade 3건 partial이므로 봉인되지 않았다. 상세 판정은 [todo-lis UI baseline 후보](../eval/baseline-candidates/todo-list-ui.md)에 기록한다.
 - `todo-list-ui-a` current-harness 실행은 fixture·Gate·review 계약을 복원해 7/7 task, 8개 implementation run, pre-close와 final visual review를 완료했다. 당시의 일회성 seal dry-run은 usage 4/9, strict monitor/rule review 7/8, verification 8/9와 task별 latest non-pass grade 3건을 정확히 차단했다. 이 실패 후보의 raw local workspace는 재사용하지 않고 durable 판정 요약만 보존한다.
 
 ### Phase 1 — `task-lite` 호환 경로
 
 - **구현 완료:** `10~50 task` 저작 지침을 제거하고 outcome/dependency/owner/rollback/resume 기반 분할로 바꾼다.
-- **구현 완료:** implementer를 objective owner로 확장하고, task prompt를 Gate B source ref를 가리키는 짧은 work item으로 축소했다.
+- **구현 완료:** 실행 owner가 objective를 소유하도록 확장하고, task prompt를 Gate B source ref를 가리키는 짧은 work item으로 축소했다.
 - **구현 완료:** 기존 task/run/handoff/history reader를 유지하며 새 run에 Gate-derived envelope/hash를 전달하고 필수 visual contract render evidence를 close 조건으로 강제했다.
 - **구현 완료:** style/milestone reviewer 생성 경로를 제거하고, `p2a next` CLI action에 `requiresApproval`을 추가해 post-Gate 개발 loop의 반복 승인을 제거했다.
 
@@ -308,7 +310,7 @@ Prompt는 다음 계층을 한 번씩만 조립한다.
 - **구현 완료:** Direct와 Planned를 `devExecution.executionMode` 정책으로 제공하고 `adaptive`에서는 실행 AI가 repository evidence로 선택한다.
 - **구현 완료:** Planned는 2–5개의 ordered checkpoint, 실제 command verification, resume의 다음 checkpoint 안내, pending checkpoint finish 차단을 제공한다.
 - **구현 완료:** Orchestrated는 기존 task graph를 그대로 사용하며 mode별 start/resume/close/schema/handoff 회귀 테스트를 추가했다.
-- **평가 완료:** §13의 동일 fixture/model-profile 7쌍을 실제 실행하고 report/evidence inventory를 봉인했다. 모든 pair에서 B의 품질·자율성이 A보다 나쁘지 않았다.
+- **Task-decomposition 평가 완료:** §13의 동일 fixture/model-profile 7쌍을 실행했고 모든 pair에서 B의 fixture 품질·자율성 지표가 A보다 나쁘지 않았다. Production lifecycle 비용과 장기 success rate는 이 결과의 범위가 아니다.
 
 ### Phase 3 — 기본값 전환과 호환 정리
 
@@ -316,16 +318,16 @@ Prompt는 다음 계층을 한 번씩만 조립한다.
 - **구현 완료:** 기존 config에 mode가 없으면 `orchestrated`로 해석하고, 기존 project와 historical iteration은 기록된 mode 또는 legacy graph를 계속 사용한다.
 - **구현 완료:** 새 historical milestone sidecar를 만들던 `p2a iteration promote-milestone` writer를 제거했다.
 - **호환 유지:** `p2a.task_graph.v1`, milestone sidecar, historical run의 reader·validator·eval·handoff 경로는 적어도 하나의 명시된 호환 기간 동안 유지한다.
-- **정리 완료:** §13 A/B 근거로 task-level 사용자 시각 승인 반복을 제거하고 owner 자동 render/review loop로 대체했다. Historical reader는 active writer가 없는 호환 계층으로 명시 유지하며, 추가 제거는 이 제안서의 완료 조건이 아니라 별도 release-period migration audit에서 판단한다.
+- **정리 완료:** §13 UI fixture 기록과 현재 visual contract를 근거로 task-level 사용자 시각 승인 반복을 제거하고 owner 자동 render/review loop로 대체했다. Historical reader는 active writer가 없는 호환 계층으로 명시 유지하며, 추가 제거는 별도 release-period migration audit에서 판단한다.
 
-## 13. 평가 계획
+## 13. 평가 기록과 운영 계측
 
-현재 방식과 개선 방식을 동일한 요구사항, repository snapshot, 모델 profile에서 비교한다.
+개선 결정 당시 현재 방식과 개선 방식을 동일한 요구사항, repository snapshot, 모델 profile에서 일회성으로 비교했다. 완료 뒤에는 같은 fixture 평가를 반복하지 않고 production run telemetry로 실제 운영 품질과 비용을 관찰한다.
 
 ### 비교군
 
-- A: 현재 Gate B → 10~50 지향 task graph → task별 실행
-- B: Gate B → 승인 계약 기반 자율 개발 → AI가 adaptive mode 선택. model pin 제거와 monitor 헌법 검사는 task 분할 방식이 아닌 심사·계측 조건이므로 A와 B 양쪽에 동일하게 적용한 뒤 baseline을 수집한다.
+- A: Gate B 목표를 사전 저작된 2–3개 task로 분해해 task별 실행
+- B: 같은 Gate B 목표 전체를 한 objective로 전달해 AI가 adaptive mode 선택
 
 ### fixture 구성
 
@@ -357,11 +359,13 @@ Prompt는 다음 계층을 한 번씩만 조립한다.
 
 ¹ 같은 수동 주석 protocol을 적용한 run만 비교하며, 미계측 과거 run은 자율 완료 분모에서 제외한다. 토큰 합계는 usage coverage와 함께 해석한다. ² 기존 run/review 산출물에서 파생한다. ³ `rule_review_coverage_rate`와 함께 해석하며, approved constitution/legacy style이 없거나 명시적 rule contract가 없는 verdict의 0을 “위반 없음”으로 사용하지 않는다.
 
-Adaptive를 기본값으로 전환하려면 추가 구현 지시 없이 완료하는 비율이 증가하고 불필요한 구현 선택 질문이 감소해야 한다. 동시에 실패율, scope violation과 rule violation은 악화되지 않아야 한다. UI fixture에서는 visual drift와 사용자 수정 횟수가 감소해야 하며, 시간/token 개선만으로 품질 저하를 정당화하지 않는다.
+Adaptive 기본값 전환 판단에서는 추가 구현 지시 없이 완료하는 비율과 불필요한 구현 선택 질문을 비교했고, 실패율·scope violation·UI drift가 악화되지 않는 조건을 함께 적용했다. 전환 뒤의 production 품질은 같은 원칙을 `p2a eval digest` coverage와 함께 관찰하며 시간/token 개선만으로 품질 저하를 정당화하지 않는다.
 
-### 평가 결과 — 완료 및 봉인
+### Task-decomposition 평가 결과 — 로컬 실행 기록
 
-2026-08-14에 [`eval/adaptive-ab/manifest.json`](../eval/adaptive-ab/manifest.json)의 7개 category를 동일 repository seed와 `gpt-5.6-luna/medium` profile로 실제 실행했다. A는 사전 저작된 15개 task를 순차 실행했고 B는 승인 objective를 7개 adaptive owner run에 맡겼다. B는 모든 fixture에서 `direct`를 선택했다. 원시 provider JSONL, exact usage, verification, changed-file monitor, final snapshot과 UI screenshot/image-review를 [`sealed report`](../eval/adaptive-ab/results/2026-08-14-luna-medium/report.json)의 SHA-256 inventory로 묶었다. 이 평가 전용 산출물은 `node eval/adaptive-ab/validate_report.mjs <report.json>`으로 manifest·variant ref·모든 evidence byte를 다시 검증하며 제품 CLI나 npm runtime에 포함하지 않는다.
+2026-08-14에 7개 category를 `gpt-5.6-luna/medium` profile로 실행했다. A는 사전 저작된 15개 task prompt를 순차 실행했고 B는 7개 objective prompt를 실행해 모두 `direct`를 선택했다. 아래 수치는 당시 로컬 report의 역사적 기록이다. Raw provider JSONL·snapshot·screenshot·report는 version control에서 제외했으므로 이 표를 재현 가능한 정본 evidence나 통계적 benchmark로 해석하지 않는다.
+
+이 평가는 개선 방향 선택이라는 목적을 달성했으므로 전용 manifest·runner·fixture·schema·회귀 테스트를 저장소에서 제거했다. 향후 모델이나 실행 정책이 크게 바뀌어 새 비교가 필요하면 당시 코드를 상시 유지하지 않고, 새 질문과 현재 production 계약에 맞는 별도 평가를 설계한다.
 
 | 지표 | A | B | B 변화 |
 | --- | ---: | ---: | ---: |
@@ -375,11 +379,11 @@ Adaptive를 기본값으로 전환하려면 추가 구현 지시 없이 완료�
 | quality rework | 1 | 0 | -1 |
 | integration defect | 1 | 0 | -1 |
 | implementation-decision interruption / user correction | 0 / 0 | 0 / 0 | 동일 |
-| final visual drift / scope violation / rule violation | 0 / 0 / 0 | 0 / 0 / 0 | 동일 |
+| final visual drift / allowed-path scope violation | 0 / 0 | 0 / 0 | 동일 |
 
 초기 UI 캡처에서 macOS headless Chrome가 요청한 390px 대신 `innerWidth=500`으로 layout한 뒤 이미지를 390px로 잘라 false overflow를 만들었다. CDP `Emulation.setDeviceMetricsOverride`와 runtime dimension assertion으로 이를 수정하고, 실패 호출과 screenshot은 지우지 않고 보존했다. 이 환경 재시도는 A/B 각각 2건으로 별도 `infrastructure_retry_runs`에 분류해 quality rework에서는 제외했지만 provider call/token/time 합계에는 보수적으로 포함했다.
 
-모든 pair에서 B의 `quality_no_worse`와 `autonomy_no_worse`가 참이므로 adaptive 기본값 근거를 충족한다. UI 두 pair의 exact-viewport 최종 drift와 user correction이 모두 0이므로 task-level 사용자 시각 승인 반복을 제거하고 owner 자동 render/review loop와 iteration-level 최종 visual gate만 유지한다. Historical reader는 active writer가 없고 기존 evidence·handoff 호환에 필요하므로 유지한다. 한 model profile에서 fixture당 한 쌍을 실행한 controlled evaluation이므로 모델 일반화나 통계적 유의성을 주장하지 않으며, 후속 모델별 성공률은 별도 장기 telemetry 범위다.
+당시 모든 pair에서 B의 fixture-level `quality_no_worse`와 `autonomy_no_worse`가 참이었고 UI 두 pair의 exact-viewport 최종 drift와 user correction도 0이었다. 이 결과는 task-level 사용자 시각 승인 반복을 owner 자동 render/review loop로 바꾸고, task decomposition을 필요할 때만 사용하는 방향을 지지한다. 다만 runner는 production `p2a execute` lifecycle, worktree, 독립 monitor 또는 acceptance reviewer를 실행하지 않았으므로 전체 하네스 시간/token 절감이나 constitution rule review 품질의 증거로 사용하지 않는다. 한 model profile의 fixture당 한 쌍이라 모델 일반화나 통계적 유의성도 주장하지 않으며, production success rate와 비용은 별도 장기 telemetry 범위다.
 
 ## 14. 우선순위와 실행 순서
 
@@ -387,16 +391,16 @@ Adaptive를 기본값으로 전환하려면 추가 구현 지시 없이 완료�
 
 | 우선순위 | Phase | 개선 | 이유 |
 | --- | --- | --- | --- |
-| P0 | 0 | monitor에 constitution architecture/stack/prohibitions/style 검사 추가 **(완료)** | monitor 확장이라 기구는 그대로다. A/B 적용으로 rule violation을 비교한다. informational style 중복은 finish·baseline에 영향이 없다. |
-| P0 | 1 | style·milestone review pass와 사이드카 규칙 제거 **(완료)** | 새 실행은 단일 monitor만 사용하고 historical reader만 유지한다. |
+| P0 | 0 | monitor에 constitution architecture/stack/prohibitions/style 검사 추가 **(완료)** | 명시적으로 monitor를 요구한 production run에서만 rule contract를 검사한다. 일회성 A/B는 이 lifecycle을 평가하지 않았다. |
+| P0 | 1 | style·milestone review pass와 사이드카 규칙 제거 **(완료)** | Monitor가 활성화된 run만 하나의 rule contract를 사용하고 historical reader는 유지한다. |
 | P0 | 0 | Claude agent generator의 `model:` pin 제거 **(완료)** | 세션 모델을 상속해야 생산자보다 약한 심사자 고정을 없애고 §13 model profile A/B가 가능하다. |
 | P0 | 1 | `schemas/spec.schema.json`의 `product`에 `must_preserve` 추가 **(완료)** | Historical v1 spec은 빈 목록으로 호환하고 새 spec은 필수 저작한다. |
-| P0 | 1 | 자율 차단 조항 세 개 해제 **(완료)** | Confined post-Gate loop, `requiresApproval`, implementer web capability를 반영했다. |
+| P0 | 1 | 자율 차단 조항 정리 **(완료)** | Confined post-Gate loop와 승인된 개발 action의 자동 진행을 허용하되 proposal write는 승인 대상으로 유지하고 web 조사는 필요한 외부 근거가 있을 때만 사용한다. |
 | P0 | 1 | `10~50 task` 고정 지침 제거 **(완료)** | 개수가 아닌 실제 운영 경계로 분할한다. |
-| P0 | 1 | implementer를 objective owner로 확장하고 Gate-derived envelope 전달 **(완료)** | 새 run에 envelope/hash를 고정하고 source drift를 검증한다. |
+| P0 | 1 | 실행 owner를 objective owner로 확장하고 Gate-derived envelope 전달 **(완료)** | 새 run에 envelope/hash를 고정하고 source drift를 검증한다. |
 | P0 | 1 | 현재 시각 계약과 owner render evidence를 공통 close 조건에 연결 **(완료)** | reviewer 옵션과 제품 acceptance를 분리했다. |
 | P1 | 2 | direct/planned를 기존 run/verify 기록 위에 제공 **(완료)** | synthetic 호환 work item과 ordered verify checkpoint를 쓰고 orchestrated graph는 필요한 경우만 유지한다. |
-| P1 | 2 | task/model/UI eval과 통합 acceptance 실행 **(완료)** | 7-fixture 동일-profile A/B를 봉인했고 반복 사용자 시각 승인 제거 근거를 확정했다. |
+| P1 | 2 | task/model/UI eval과 acceptance 정책 정리 **(완료)** | 7-fixture 동일-profile task-decomposition 비교를 기록하고 반복 사용자 시각 승인을 제거했다. 독립 acceptance는 기본 `opt_in`으로 낮췄다. |
 | P2 | 3 | legacy graph와 중복 milestone/batch 기구 정리 **(완료)** | 새 milestone promotion writer는 제거했다. Orchestrated batch와 historical graph/schema reader는 writer 없는 명시적 호환 계층으로 유지하며, 향후 제거는 별도 migration audit 범위다. |
 
 ## 15. 완료 조건
@@ -407,7 +411,7 @@ Adaptive를 기본값으로 전환하려면 추가 구현 지시 없이 완료�
 - 계약 변경 때만 충돌 field와 최소 결정 요청으로 Gate에 복귀하며 모든 mode가 spec hash, acceptance와 실제 verification evidence를 보존한다.
 - Direct는 사람 저작 graph 없이 동작하고, Planned는 checkpoint 재개를, Orchestrated는 기존 dependency·batch·history 호환을 유지한다.
 - UI는 승인 contract와 capture matrix의 실제 render evidence 없이는 close-ready가 되지 않는다.
-- Phase 1부터 reviewer 총량 감소를 검증하고, 완료 시 중복 task/reviewer/compatibility 기구의 총량이 도입 전보다 감소한다.
+- 일반 경로는 current owner·isolation `none`·task verification을 기본으로 하며, 별도 implementer/worktree/monitor/acceptance/retrospective는 명시 조건이 있을 때만 활성화한다.
 
 ## 16. 비목표
 
@@ -424,5 +428,5 @@ Adaptive를 기본값으로 전환하려면 추가 구현 지시 없이 완료�
 
 > 기획은 사용자가 승인하고 하네스가 검증한다.<br>
 > 개발은 AI가 승인된 계약과 규칙 안에서 자율적으로 완수한다.<br>
-> Gate가 계약을 소유하고, AI가 구현을 소유하며, 하나의 게이팅 reviewer가 규칙을 지킨다.<br>
-> **이 개선은 새 계약·review pass를 쌓지 않고 기존 기구를 정리·통합해 하네스를 줄인다.**
+> Gate가 계약을 소유하고, AI가 구현을 소유하며, 필요한 경우에만 하나의 독립 reviewer가 규칙을 검사한다.<br>
+> **기본 경로에는 실제로 필요한 검증만 남기고, 고비용 격리·review·회고 기구는 조건이 성립할 때만 활성화한다.**

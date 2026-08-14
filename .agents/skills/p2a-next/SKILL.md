@@ -17,6 +17,7 @@ Use the CLI result as the only decision authority. Do not infer, list, or encode
 
 - For `kind: cli` with `requiresApproval: true`, show the command and wait for the user's approval before running it.
 - For `kind: cli` with `requiresApproval: false`, run it immediately. This flag is emitted only for read-only repair inspection or the post-Gate B development/verification/close loop already authorized by the approved contract.
+- Proposal mining writes retrospective candidates and therefore always requires approval; never treat it as part of the autonomous close loop.
 - After an autonomous `ready_task_available` start or `run_started` resume, continue in this session with `p2a-dev-execution` and the run's Gate-derived execution envelope. Do not ask for task-by-task approval or implementation choices.
 - After an autonomous final visual or acceptance review start, complete the corresponding evidence loop from `p2a-dev-execution`. After autonomous iteration close or layout initialization, run `p2a next --json` again.
 - For `kind: skill`, continue in this agent session with the named P2A skill. Carry over only the context needed by that skill; do not re-decide the next action.

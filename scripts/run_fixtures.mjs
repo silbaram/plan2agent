@@ -432,7 +432,7 @@ function validateScaffoldFixtureCase() {
       || Object.hasOwn(config.devExecution?.reviewPasses ?? {}, 'style')
       || Object.hasOwn(config.devExecution?.reviewPasses ?? {}, 'milestone')
       || config.devExecution?.reviewPasses?.visual !== 'off'
-      || config.devExecution?.reviewPasses?.acceptance !== 'on'
+      || config.devExecution?.reviewPasses?.acceptance !== 'opt_in'
       || config.roleProfiles?.implementer?.defaultProfile !== 'fullstack'
       || config.promptTemplates?.devExecution !== 'p2a.dev_prompt.v1'
       || !claudeSettings.permissions?.deny?.includes('Edit(~/**)')
@@ -940,7 +940,7 @@ function validateScaffoldFixtureCase() {
       || Object.hasOwn(enhancedConfig.devExecution?.reviewPasses ?? {}, 'style')
       || Object.hasOwn(enhancedConfig.devExecution?.reviewPasses ?? {}, 'milestone')
       || enhancedConfig.devExecution?.reviewPasses?.visual !== 'off'
-      || enhancedConfig.devExecution?.reviewPasses?.acceptance !== 'on'
+      || enhancedConfig.devExecution?.reviewPasses?.acceptance !== 'opt_in'
       || enhancedConfig.projectId !== 'enhance-target'
       || enhancedManifest.projectId !== 'enhance-target'
       || enhancedConfig.roleProfiles?.monitor?.defaultProfile !== 'manual_monitor'

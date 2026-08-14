@@ -298,7 +298,7 @@ p2a iteration validate \
   --require-close-ready
 ```
 
-`--require-close-ready`는 모든 active iteration task가 `done`인지 추가로 확인한다. `visualImpact` task가 있으면 `p2a execute review`가 연 iteration당 하나의 canonical, 변경 없는 review-only run을 요구한다. 비UI iteration은 기본 정책에서 `p2a execute accept`가 연 `final_acceptance_review` run과 실제 실행 verification에 결합된 `confirm_behavior` sidecar를 요구한다. `reviewPasses.acceptance: off`일 때만 이 추가 게이트를 생략한다. 두 review 모두 canonical workspace revision과 exact sidecar digest를 봉인하며, acceptance는 각 command/source/exitCode/stdoutTail의 run evidence 일치도 재검증한다.
+`--require-close-ready`는 모든 active iteration task가 `done`인지 추가로 확인한다. `visualImpact` task가 있으면 `p2a execute review`가 연 iteration당 하나의 canonical, 변경 없는 review-only run을 요구한다. 비UI iteration의 acceptance 기본값은 `opt_in`이다. 아무 acceptance run도 시작하지 않았으면 task verification만으로 close-ready를 검사하고, 사용자가 `p2a execute accept`를 시작했거나 정책이 `on`이면 `final_acceptance_review` run과 실제 실행 verification에 결합된 `confirm_behavior` sidecar를 요구한다. 시작된 opt-in review는 완료될 때까지 gate로 유지된다. `off`는 이 추가 gate를 비활성화하며, 명시적 검수를 허용하려면 `opt_in`을 사용한다. 두 review 모두 canonical workspace revision과 exact sidecar digest를 봉인하며, acceptance는 각 command/source/exitCode/stdoutTail의 run evidence 일치도 재검증한다.
 
 ```bash
 p2a iteration validate \

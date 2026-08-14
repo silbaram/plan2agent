@@ -1194,7 +1194,11 @@ function buildNextDecisionContext(
     && gates.specPath
     && approvedVisualReviewContract(gates.specPath, artifactRoot),
   );
-  const acceptanceReviewEnabled = reviewPasses.acceptance !== 'off';
+  const acceptanceReviewActivated = (
+    reviewPasses.acceptance === 'opt_in'
+    && activeRuns.some((run) => run.runKind === 'final_acceptance_review')
+  );
+  const acceptanceReviewEnabled = reviewPasses.acceptance === 'on' || acceptanceReviewActivated;
   const needsCloseReadyVisualAudit = (
     hasRequiredVisualContract
     && allTasksDone
@@ -1345,6 +1349,7 @@ function buildNextDecisionContext(
     visualReviewNeeded,
     hasRequiredVisualContract,
     acceptanceReviewNeeded,
+    acceptanceReviewActivated,
     readyIds: readyTaskIds(gates.taskGraph),
     blockedTaskIds: taskIdsWithStatus(detail.tasks, 'blocked'),
     allTasksDone,
@@ -1711,7 +1716,10 @@ export const NEXT_DECISION_RULES = [
     kind: 'cli',
     requiresApproval: false,
     when: (context) => (
-      (context.reviewPasses?.acceptance ?? 'on') !== 'off'
+      (
+        (context.reviewPasses?.acceptance ?? 'opt_in') === 'on'
+        || Boolean(context.acceptanceReviewActivated)
+      )
       && context.allTasksDone
       && !context.closedIteration
       && context.detail.layout.kind === 'iteration'
@@ -1761,7 +1769,6 @@ export const NEXT_DECISION_RULES = [
   {
     state: 'run_evidence_needs_proposal_mining',
     kind: 'cli',
-    requiresApproval: false,
     when: (context) => Boolean(context.unminedFailedOrBlockedRun),
     reason: (context) => `Run ${context.unminedFailedOrBlockedRun.runId} has not been mined for proposals yet.`,
     command: (context) => [
