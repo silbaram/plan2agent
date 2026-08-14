@@ -267,12 +267,11 @@ scripts/       toolkit, validation, runtime, eval, proposal, and Memory CLIs
 
 ## Project status
 
-Plan2Agent is under active development. Version `0.2.3` adds content-stress approval states to full
-visual prototypes and makes repeated user visual inspection part of implementation closeout, while
-preserving the iteration-level final-review lifecycle. The npm package also includes public CI,
-managed runtime drift diagnostics, an append-only decision ledger, portable handoff evidence, and
-stricter execution validation. The local-first planning, supervised execution, evaluation, proposal,
-and optional Memory workflows remain available. Autonomous provider execution and unapproved remote
-side effects remain outside the default safety model.
+Plan2Agent is under active development. Version `0.3.0` adds adaptive Direct, Planned, and
+Orchestrated execution, with Gate-derived execution envelopes and compatibility-preserving legacy
+orchestration. Detailed task graphs are now created only for Orchestrated work that benefits from
+dependency or ownership boundaries. The local-first planning, supervised execution, evaluation,
+proposal, and optional Memory workflows remain available. Autonomous provider execution and
+unapproved remote side effects remain outside the default safety model.
 
 Plan2Agent is available under the [MIT License](LICENSE).

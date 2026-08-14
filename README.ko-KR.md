@@ -275,10 +275,9 @@ scripts/       toolkit, validation, runtime, eval, proposal, Memory CLI
 
 ## 프로젝트 상태
 
-Plan2Agent는 활발히 개발 중입니다. 버전 `0.2.3`은 full visual prototype에 콘텐츠 스트레스
-승인 상태를 추가하고, 반복적인 사용자 시각 검수를 구현 closeout 절차에 포함하면서 반복
-단위 최종 review lifecycle을 유지합니다. npm 패키지는 공개 CI 검증, managed runtime drift
-진단, append-only 결정 원장, 이식 가능한 handoff evidence, 강화된 실행 검증도 제공합니다.
+Plan2Agent는 활발히 개발 중입니다. 버전 `0.3.0`은 Gate에서 파생한 실행 envelope와 기존
+orchestration 호환성을 유지하면서 Direct, Planned, Orchestrated 적응형 실행을 추가합니다.
+상세 task graph는 dependency 또는 ownership 경계가 유용한 Orchestrated 작업에만 생성됩니다.
 local-first 기획, 감독형 실행, 평가, proposal, 선택적 Memory workflow도 함께 유지됩니다.
 자율적인 provider 실행과 승인되지 않은 remote side effect는 기본 안전 모델의 범위 밖에
 있습니다.

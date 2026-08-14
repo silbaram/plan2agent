@@ -6,6 +6,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-08-15
+
 ### Added
 
 - Add adaptive execution readiness with Direct, Planned, and Orchestrated modes, including one synthetic compatibility work item for Direct/Planned and ordered command-verified checkpoints for Planned runs.
@@ -20,7 +22,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Removed
 
-- Stop creating new standalone style/milestone review passes and remove the milestone-promotion writer; historical schemas and readers remain available for archived evidence compatibility.
+- **Breaking:** Remove the `p2a iteration promote-milestone` writer and stop creating new standalone style/milestone review passes. Automation must stop invoking that command; historical schemas and readers remain available for archived evidence compatibility.
 
 ## [0.2.3] - 2026-08-11
 
@@ -85,7 +87,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Add package-runtime project initialization, managed provider assets, artifact validation, handoff, supervised execution, evaluation, proposal, and optional Memory workflows.
 - Ship canonical and generated integrations for Codex, Claude Code, and Gemini CLI.
 
-[Unreleased]: https://github.com/silbaram/plan2agent/compare/v0.2.3...HEAD
+[Unreleased]: https://github.com/silbaram/plan2agent/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/silbaram/plan2agent/compare/v0.2.3...v0.3.0
 [0.2.3]: https://github.com/silbaram/plan2agent/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/silbaram/plan2agent/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/silbaram/plan2agent/compare/v0.2.0...v0.2.1
