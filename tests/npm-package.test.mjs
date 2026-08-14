@@ -311,11 +311,6 @@ test('npm pack dry run includes the global CLI runtime', () => {
     }
     assert.ok(files.has('readme.md'), 'npm must include the project readme automatically');
     assert.equal([...files].some((file) => file.startsWith('docs/')), false);
-    assert.equal([...files].some((file) => file.startsWith('eval/adaptive-ab/')), false);
-    assert.equal(files.has('scripts/run_adaptive_ab.mjs'), false);
-    assert.equal(files.has('scripts/capture_chrome_screenshot.mjs'), false);
-    assert.equal(files.has('schemas/adaptive-ab-report.schema.json'), false);
-    assert.equal(files.has('schemas/eval-baseline.schema.json'), false);
   } finally {
     rmSync(cacheRoot, { recursive: true, force: true });
   }

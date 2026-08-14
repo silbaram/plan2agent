@@ -25,7 +25,5 @@ node_modules/
 
 artifacts/lightweight-embedded-redis
 
-# Local execution workspaces and historical evaluation evidence
+# Local execution workspaces
 .p2a-worktrees/
-eval/fixtures/todo-list-ui-a/
-eval/adaptive-ab/
