@@ -45,6 +45,35 @@ test('harness keeps the complete entry confirmation contract', () => {
   ) <= 8 * 1024);
 });
 
+test('approved Gate B routes through adaptive execution readiness instead of unconditional task decomposition', () => {
+  const skillPaths = [
+    path.join(ROOT, '.agents', 'skills', 'p2a-harness', 'SKILL.md'),
+    path.join(ROOT, '.claude', 'skills', 'p2a-harness', 'SKILL.md'),
+  ];
+
+  for (const skillPath of skillPaths) {
+    const skill = readFileSync(skillPath, 'utf8');
+    assert.match(skill, /Approved Gate B without Gate C is a valid preparation state/);
+    assert.match(skill, /run `p2a next --json` and follow its one action/);
+    assert.match(skill, /only Orchestrated execution routes to task decomposition/);
+    assert.doesNotMatch(skill, /Development execution begins only after the canonical task graph validates/);
+  }
+
+  const geminiHarness = readFileSync(
+    path.join(ROOT, '.gemini', 'commands', 'p2a', 'harness.toml'),
+    'utf8',
+  );
+  assert.match(geminiHarness, /do not create a task graph unconditionally/);
+  assert.doesNotMatch(geminiHarness, /Stop before task graph unless/);
+
+  const englishReadme = readFileSync(path.join(ROOT, 'readme.md'), 'utf8');
+  const koreanReadme = readFileSync(path.join(ROOT, 'README.ko-KR.md'), 'utf8');
+  const quickstart = readFileSync(path.join(ROOT, 'docs', 'quickstart.md'), 'utf8');
+  assert.match(englishReadme, /Direct run, Planned checkpoints, or dependency-aware Orchestrated tasks/);
+  assert.match(koreanReadme, /Direct run, Planned checkpoint.*Orchestrated task/);
+  assert.match(quickstart, /Direct\/Planned.*Orchestrated/s);
+});
+
 test('legacy interview data is accepted as opaque compatibility content', (t) => {
   const root = makeTempDir('p2a-legacy-intake-');
   t.after(() => rmSync(root, { recursive: true, force: true }));

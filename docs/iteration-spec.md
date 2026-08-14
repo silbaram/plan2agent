@@ -359,7 +359,7 @@ baseline-aware Gate A는 기존 source intake/spec에서 답변된 `ND-n`과 `CQ
 - `iterations/<iter-id>/gate-b-spec/product-spec.md`
 - `iterations/<iter-id>/gate-b-spec/implementation-plan.md`
 
-기본 동작은 기존 Gate B 파일이 있으면 중단한다. 승인 전 Gate A intake가 있으면 이를 덮어쓰지 않고 현재 intake decision 목록을 유지한다. 변경 아이디어를 덮어 쓰려면 `--idea "<change idea>"`, Gate A/B 초안을 처음부터 재생성하려면 `--force`를 명시한다. `--force`로 baseline-aware 초안을 재생성하면 이전 Gate B draft를 제거하고 새 Gate A scope 확인부터 다시 시작한다. 생성된 `spec.json`은 `approval: "draft"`이므로 Gate C task graph 생성 전 사용자 검토 후 `p2a decide --quote "<사용자 발화>" --artifacts <root>`로 Gate B 승인을 기록해야 한다. `current-spec.json.effective_spec_ref`는 계속 baseline spec을 가리키고, 새 반복 spec은 `pending_iteration.artifacts.spec_ref`에 기록된다.
+기본 동작은 기존 Gate B 파일이 있으면 중단한다. 승인 전 Gate A intake가 있으면 이를 덮어쓰지 않고 현재 intake decision 목록을 유지한다. 변경 아이디어를 덮어 쓰려면 `--idea "<change idea>"`, Gate A/B 초안을 처음부터 재생성하려면 `--force`를 명시한다. `--force`로 baseline-aware 초안을 재생성하면 이전 Gate B draft를 제거하고 새 Gate A scope 확인부터 다시 시작한다. 생성된 `spec.json`은 `approval: "draft"`이므로 Gate C 실행 준비 전 사용자 검토 후 `p2a decide --quote "<사용자 발화>" --artifacts <root>`로 Gate B 승인을 기록해야 한다. `current-spec.json.effective_spec_ref`는 계속 baseline spec을 가리키고, 새 반복 spec은 `pending_iteration.artifacts.spec_ref`에 기록된다.
 
 ```bash
 p2a iteration promote-spec \

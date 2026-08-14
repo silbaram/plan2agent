@@ -50,7 +50,7 @@ Gate A 승인 기록이 만들어집니다.
   -> Gate A: 문서 범위 확인과 사용자의 명시적 승인
   -> Gate ②: 프로젝트 constitution 승인
   -> Gate B: 제품 명세와 구현 계획
-  -> Gate C: 검증된 의존성 기반 task graph
+  -> Gate C: 실행 준비 검증(Direct, Planned 또는 의존성 기반 Orchestrated)
   -> 감독형 구현과 검증
   -> 평가와 개선 proposal
 ```
@@ -67,7 +67,7 @@ Gate ① 범위·명세 승인은 `p2a decide --quote "<사용자 발화>"`, Gat
 p2a next
 ```
 
-Gate A-C 검증이 통과하면 `next`가 감독형 task 실행과 다음 iteration으로의 전환을
+Gate A-C 준비 검증이 통과하면 `next`가 감독형 실행과 다음 iteration으로의 전환을
 안내합니다.
 
 ## Plan2Agent를 사용하는 이유
@@ -79,8 +79,8 @@ AI 코딩 도구는 구현에 효과적이지만, 채팅 기록은 요구사항,
 | 필요 | Plan2Agent의 접근 방식 |
 | --- | --- |
 | 구현 전 명확한 결정 | Gate A 범위 확인과 Gate B 승인이 답변, 가정, 미결정 사항, 승인 상태를 보존합니다. |
-| 추적 가능한 구현 작업 | 명세를 acceptance criteria와 원본 참조를 가진 의존성 기반 task로 연결합니다. |
-| 검토 가능한 agent 실행 | task를 전경 감독 세션에서 실행하고 run log, 변경 파일, 검증 증거를 남깁니다. |
+| 추적 가능한 구현 작업 | 명세를 Direct run, Planned checkpoint 또는 의존성 기반 Orchestrated task로 연결합니다. |
+| 검토 가능한 agent 실행 | 전경 감독 run이 mode, 선택 근거, 변경 파일, 검증 증거를 보존합니다. |
 | 이식 가능한 프로젝트 상태 | Codex, Claude Code, Gemini CLI에서 로컬 JSON artifact를 정본으로 유지합니다. |
 | 통제된 개선 | 평가와 proposal 흐름이 유지보수 작업을 제안하지만 self-modifying patch를 임의로 적용하지 않습니다. |
 
@@ -119,28 +119,29 @@ system을 대체하지 않습니다.
 
 ### 1. 승인 Gate를 거쳐 계획하기
 
-기획 하네스는 진입 문서를 구조화된 intake, 제품·구현 명세, 검증된 task graph로
+기획 하네스는 진입 문서를 구조화된 intake, 제품·구현 명세, 검증된 실행 준비 상태로
 바꿉니다. Gate A에서 문서의 범위를 간결하게 요약하고 사용자의 명시적인 확인을
 요구합니다. 확인되면 같은 세션에서 Gate ② constitution을 확립하거나 재사용한 뒤
 Gate B로 이어집니다. 불확실한 내용을 임의의 요구사항으로 만들지 않고 가정이나 사용자
 결정으로 기록합니다.
 
-### 2. ready task 하나 실행하기
+### 2. 승인된 목표 실행하기
 
-Gate A-C validation 이후에는 `p2a next`로 다음 안전한 행동을 확인합니다. task 실행은 agent tool,
-workspace, 변경 파일, 검증 명령, 결과, 실패 분류를 기록합니다. 필요한 증거가 monitor
-gate를 통과하기 전에는 task가 완료되지 않습니다.
+Gate B 승인 후 `p2a next`로 승인된 계약이 허용한 다음 행동을 시작합니다. 새 프로젝트는
+`adaptive`가 기본이며, execution mode가 없는 기존 config는 호환을 위해 `orchestrated`로 해석합니다.
+`adaptive`, `direct`, `planned`, `orchestrated` 정책은 mode 재승인 없이 사용할 수 있습니다. Planned는 2~5개의
+순서·명령 검증된 재개 checkpoint를 기록하고, 새 run은 Gate B에서 파생한 목표·source hash·범위·
+보존 조건·비목표·acceptance·verification·권한 경계를 execution envelope로 고정합니다.
 
-ready task를 직접 제어하려면 다음 명령을 사용합니다.
+준비된 work item을 직접 제어하려면 다음 명령을 사용합니다.
 
 ```bash
-p2a execute plan \
+p2a execute start \
   --artifacts .plan2agent/artifacts/<project_id> \
   --task <task-id>
 ```
 
-시작, 재개, 완료, 재시도, batch, milestone review 절차는
-[감독형 개발 실행 레퍼런스](docs/supervised-execution.md)를 참고하세요.
+시작, 재개, 완료, 재시도, 제한된 batch 절차는 [개발 실행 레퍼런스](docs/supervised-execution.md)를 참고하세요.
 
 ### 3. 기준선을 잃지 않고 반복하기
 
@@ -181,8 +182,8 @@ Plan2Agent는 하나의 `p2a` entrypoint를 설치합니다.
 | `p2a iteration` | iteration 초기화, close/open, diff, maintenance를 관리합니다. |
 | `p2a tasks` | task 상태를 확인하고 전환합니다. |
 | `p2a runs` | run evidence를 기록, 검증, 완료, 조회합니다. |
-| `p2a execute` | task 계획부터 검증된 완료까지 감독합니다. |
-| `p2a eval` | 평가를 grade, compare, analyze, generate, summarize합니다. |
+| `p2a execute` | 구현과 canonical 최종 visual review run을 검증된 완료까지 감독합니다. |
+| `p2a eval` | 실행 증거를 grade, compare, analyze, generate, summarize합니다. |
 | `p2a proposals` | 개선 proposal을 mine, review, curate, approve, summarize합니다. |
 | `p2a memory` | 선택적 Memory data를 확인, 동기화, 검색, 조회합니다. |
 
@@ -191,13 +192,14 @@ Plan2Agent는 하나의 `p2a` entrypoint를 설치합니다.
 
 ## 안전 모델
 
-Plan2Agent는 의도적으로 사용자 감독과 local-first 원칙을 따릅니다.
+Plan2Agent는 승인 계약 기반·confined·local-first 원칙을 따릅니다. 제품 의미는 명시적 승인이 필요하지만,
+승인된 envelope 안의 구현 선택과 검증 재시도는 추가 승인이 필요하지 않습니다.
 
 다음과 같은 경우에 적합합니다.
 
 - 구현 전 명시적인 제품 결정이 필요할 때
-- 검토 가능한 spec과 agent-ready task graph가 필요할 때
-- Codex, Claude Code 또는 Gemini CLI를 전경에서 감독하며 실행할 때
+- 검토 가능한 spec과, orchestration에 필요할 때만 agent-ready task graph가 필요할 때
+- confined Codex 또는 Claude로 실행하고 Gemini는 read-only로 유지할 때
 - 검증 증거와 regression 이력이 필요할 때
 - 사람이 승인하는 유지보수와 개선 흐름이 필요할 때
 
@@ -237,7 +239,7 @@ session에서 실행되며 Plan2Agent는 provider API를 직접 호출하지 않
 - [CLI 레퍼런스](docs/cli-reference.md) — 명령, option, 예시
 - [하네스 사용자 가이드](docs/harness-guide.md) — Gate A-C, 결정 원장, schema, evidence, 문제 해결
 - [Iteration Spec](docs/iteration-spec.md) — iteration layout, diff, close/open, run tracking
-- [감독형 개발 실행 레퍼런스](docs/supervised-execution.md) — task 실행, monitor gate, 재시도, 검토
+- [개발 실행 레퍼런스](docs/supervised-execution.md) — adaptive mode, checkpoint, monitor gate, 재시도, 검토
 - [하네스 구현 기준](docs/harness-spec.md) — skill, subagent, mirror, 구현 규칙
 - [변경 이력](CHANGELOG.md) — version별 사용자 영향 변경
 - [릴리스 절차](docs/releasing.md) — npm, Git tag, GitHub Release, 검증 checklist

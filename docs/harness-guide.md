@@ -25,7 +25,7 @@
 
 ## 1. 개요
 
-Plan2Agent planning 하네스는 짧은 제품 문서를 바로 코드로 구현하지 않고, 승인 게이트를 거쳐 개발 가능한 계획으로 다듬는 workflow다. Planning skill과 subagent는 코드 변경, dependency 설치, 구현 목적의 shell 실행을 하지 않는다. 실제 구현은 Gate C 이후 별도 `p2a-dev-execution` 계약에서 수행한다. Claude Code, Codex, Gemini CLI는 공통 skill과 subagent 역할을 사용해 같은 산출물 계약을 따른다.
+Plan2Agent planning 하네스는 짧은 제품 문서를 바로 코드로 구현하지 않고, 승인 게이트를 거쳐 개발 가능한 계약으로 다듬는 workflow다. Planning skill과 subagent는 코드 변경, dependency 설치, 구현 목적의 shell 실행을 하지 않는다. 실제 구현은 Gate B 승인 후 `p2a next`가 선택한 Gate C 실행 준비 경로와 `p2a-dev-execution` 계약에서 수행한다. Claude Code, Codex, Gemini CLI는 공통 skill과 subagent 역할을 사용해 같은 산출물 계약을 따른다.
 
 파이프라인은 다음 순서로 진행된다.
 
@@ -34,8 +34,8 @@ Plan2Agent planning 하네스는 짧은 제품 문서를 바로 코드로 구현
   -> Entry document scope confirmation(Gate A)
   -> Project constitution approval(Gate ②)
   -> Product spec + Implementation plan(Gate B)
-  -> Validated task graph(Gate C)
-  -> 별도 개발 세션에서 task 실행
+  -> Execution readiness(Gate C: Direct, Planned, Orchestrated)
+  -> 별도 개발 세션에서 승인된 목표 실행
 ```
 
 | 단계 | 담당 skill | 주요 역할 | 산출물 |
@@ -44,7 +44,7 @@ Plan2Agent planning 하네스는 짧은 제품 문서를 바로 코드로 구현
 | 2. Project shape | `p2a-harness` | 프로젝트 전역 architecture, stack, prohibitions, style을 Gate ②에서 승인한다. | `.plan2agent/constitution.json` |
 | 3. Product spec | `p2a-spec` | 답변된 intake를 제품 목표, 범위, 사용자 흐름, 성공 기준으로 정리한다. | `spec_json.product` |
 | 4. Implementation plan | `p2a-spec` | 승인 가능한 제품 명세를 아키텍처, 인터페이스, 데이터 흐름, 검증 계획으로 바꾼다. | `spec_json.implementation` |
-| 5. Task graph | `p2a-task-breakdown` | 승인된 구현 명세를 의존성 있는 작은 task로 분해한다. | `task_graph_json` |
+| 5. Execution readiness | `p2a-next` → `p2a-dev-execution` 또는 `p2a-task-breakdown` | Direct/Planned를 준비하거나 필요할 때만 Orchestrated task로 분해한다. | synthetic work item 또는 `task_graph_json` |
 
 하네스는 각 단계의 정본 JSON 산출물을 `.plan2agent/artifacts/<project_id>/` 아래 gate별 폴더에 저장한다. Markdown은 필요할 때 JSON에서 생성하는 사람용 view/export다.
 
@@ -247,7 +247,7 @@ Intake와 spec artifact는 `evidence` 배열을 가진다. 이 배열은 결정�
 - Gate B에서 구체적인 외부 기술, 로컬 코드 패턴, prior artifact를 비교했다면 `reference_reconnaissance`에 후보 `REF-n`과 선택/기각 이유를 기록한다. 후보의 `source_id`는 반드시 `evidence`에 존재해야 하며, `decision`은 `selected`, `rejected`, `deferred`, `context`, `open` 중 하나다. Adapter가 후보를 만들었다면 `origin`으로 출처를 기록하고, `selected_patterns`와 `rejected_patterns`는 존재하는 `candidate_id`를 참조해야 한다.
 - baseline이 있는 `p2a iteration draft` 첫 호출은 Gate A scope draft만 만들고 Gate B를 만들지 않는다. 명시적 Gate A 확인이 `intake.json`에 기록된 뒤 같은 harness session에서 다시 호출할 때 Gate B 초안을 만든다. Gate B 초안은 Gate A intake와 iteration idea를 `reference_reconnaissance.candidates`의 context 후보로 남기고 baseline의 WEB 기반 reference 후보를 carry-forward한다.
 - `.plan2agent/artifacts/<project_id>/preflight-research/`에 Feature Radar 산출물이 있으면 `p2a iteration draft`는 Markdown/JSON 파일을 `LOCAL-n` evidence로, 발견한 URL을 `WEB-n` evidence로 가져온다. `next-iteration-recommendations.md`, `capability-gap-analysis.md`, `p2a-context.json`의 추천은 `reference_reconnaissance.candidates`에 `decision: "context"`와 `origin: "feature_radar_preflight"`로 들어간다.
-- Feature Radar 추천은 처음에는 승인된 scope가 아니다. Gate A 범위 확인에서 승격 후보를 `selected`/`deferred`/`rejected`로 처분하고, Gate B는 승인된 범위를 지키면서 구현 선택의 근거와 refinement를 spec rationale에 남긴다. Gate C task는 승인된 항목에서만 생성한다.
+- Feature Radar 추천은 처음에는 승인된 scope가 아니다. Gate A 범위 확인에서 승격 후보를 `selected`/`deferred`/`rejected`로 처분하고, Gate B는 승인된 범위를 지키면서 구현 선택의 근거와 refinement를 spec rationale에 남긴다. Gate C work item은 승인된 항목에서만 생성한다.
 - read-only web lookup은 prior art 또는 domain grounding 용도다. 구현 실행, dependency 설치, 코드 변경을 위해 사용하지 않는다.
 - `p2a validate`는 evidence `source_id` 중복, `WEB-n` URL 형식, 승인된 spec의 material technology choice에 대한 최소 `WEB-n` 존재, `reference_reconnaissance`의 evidence/candidate 참조 무결성을 검사한다. 레거시 review artifact를 명시적으로 검사해야 할 때만 `--review`와 선택적인 `--require-review-pass`를 사용하며, 그 결과는 Gate A-C readiness를 차단하지 않는다.
 
@@ -259,10 +259,10 @@ canonical 산출물이 있으면 가장 이른 미완료 또는 invalid 단계�
 
 재개는 입력이 바뀐 가장 이른 단계부터 다시 생성한다.
 
-- Intake 답변이 바뀌면 spec, implementation plan, task graph가 모두 무효화되므로 downstream 산출물을 다시 만든다.
-- Product spec이 바뀌면 implementation plan과 task graph를 다시 만든다.
-- Implementation plan이 바뀌면 task graph를 다시 만든다.
-- Task graph가 바뀌면 validator를 다시 통과해야 한다.
+- Intake 답변이 바뀌면 spec, implementation plan, Gate C 실행 record가 모두 무효화되므로 downstream 산출물을 다시 만든다.
+- Product spec이 바뀌면 implementation plan과 Gate C 실행 record를 다시 만든다.
+- Implementation plan이 바뀌면 mode를 다시 선택하고 synthetic work item 또는 Orchestrated task graph를 다시 만든다.
+- Gate C record가 바뀌면 validator를 다시 통과해야 한다.
 
 재개 중에도 `project_id`, `source_intake`, `sourceSpec`처럼 출처 추적에 필요한 안정적인 artifact id는 이어서 사용한다. 저장된 artifact를 참조할 때 `source_intake`는 `.plan2agent/artifacts/<project_id>/gate-a-intake/intake.json`, `sourceSpec`은 `.plan2agent/artifacts/<project_id>/gate-b-spec/spec.json` 형식을 유지한다. Markdown artifact만 붙여 넣어진 경우에는 다음 게이트로 넘어가기 전에 대응하는 JSON 계약을 먼저 재구성해야 한다.
 

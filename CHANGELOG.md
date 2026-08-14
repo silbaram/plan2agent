@@ -6,6 +6,22 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+### Added
+
+- Add adaptive execution readiness with Direct, Planned, and Orchestrated modes, including one synthetic compatibility work item for Direct/Planned and ordered command-verified checkpoints for Planned runs.
+- Bind new runs to a Gate-derived execution envelope that preserves source hashes, objective, scope, `must_preserve`, non-goals, acceptance, verification, authority boundaries, and required visual contracts.
+- Record run usage, interruption, Gate-return, monitor-rule, and stable evaluation metrics for production evidence analysis.
+
+### Changed
+
+- Default new projects to adaptive execution while treating existing configurations without an execution mode as Orchestrated for compatibility.
+- Route approved Gate B work through `p2a next` so detailed task graphs are created only when Orchestrated execution benefits from dependency or ownership boundaries.
+- Use the current confined owner and no extra isolation for ordinary Direct/Planned work, with monitor and independent acceptance review remaining opt-in unless policy or the approved contract requires them.
+
+### Removed
+
+- Stop creating new standalone style/milestone review passes and remove the milestone-promotion writer; historical schemas and readers remain available for archived evidence compatibility.
+
 ## [0.2.3] - 2026-08-11
 
 ### Changed

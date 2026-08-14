@@ -298,8 +298,8 @@ p2a proposals approve-draft --draft .plan2agent/proposals/patch-drafts/<draft>.j
 ## 8. 안전 정책
 
 - Gate B spec이 approved이고 open decision이 없어야 한다.
-- Gate C task graph가 validator를 통과해야 한다.
-- ready task와 acceptance criteria가 있어야 한다.
+- 선택된 Gate C execution record—Direct/Planned synthetic work item 또는 Orchestrated task graph—가 validator를 통과해야 한다.
+- ready work item과 acceptance criteria가 있어야 한다.
 - 실패한 verification을 숨기고 task를 `done` 처리하지 않는다.
 - isolated worktree 결과가 승인된 canonical integration branch에 반영되기 전에 task를 `done` 처리하지 않는다.
 - task scope 밖 변경 파일은 run note 또는 blocker로 남긴다.

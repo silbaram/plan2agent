@@ -1,6 +1,6 @@
 ---
 name: p2a-harness
-description: Use when turning a concise product document into a gated Plan2Agent scope, specification, validated task graph, and execution-ready iteration.
+description: Use when turning a concise product document into a gated Plan2Agent scope, specification, and execution-ready iteration.
 ---
 
 # Plan2Agent Harness
@@ -21,9 +21,9 @@ On resume, inspect canonical artifacts first:
 - `iterations/<id>/iteration.json`
 - `iterations/<id>/gate-a-intake/intake.json`
 - `iterations/<id>/gate-b-spec/spec.json`
-- `iterations/<id>/gate-c-task-graph/task-graph.json`
+- `iterations/<id>/gate-c-task-graph/task-graph.json`, when execution preparation has created it
 
-Continue from the earliest incomplete or invalid artifact. Never rebuild later artifacts over an unapproved earlier decision.
+Continue from the earliest incomplete or invalid artifact. Approved Gate B without Gate C is a valid preparation state. Never rebuild later artifacts over an unapproved decision.
 
 ## Roles and stages
 
@@ -33,9 +33,9 @@ Continue from the earliest incomplete or invalid artifact. Never rebuild later a
 | Project shape (Gate ②) | `p2a-harness` | approved intake, repository evidence, legacy style | `.plan2agent/constitution.json` |
 | Product and implementation specification | `p2a-spec` with `p2a-spec-author` and `p2a-implementation-planner` | approved intake, evidence, optional baseline | `spec.json` plus readable spec documents |
 | Visual experience, when required | `p2a-visual-experience` | approved visual scope | experience spec, prototypes, visual approval evidence |
-| Task decomposition | `p2a-task-author` or `p2a-task-breakdown` with `p2a-task-graph` | approved spec and planning memory | `task-graph.json` after `p2a validate` |
+| Execution readiness | `p2a-next`, then `p2a-dev-execution` or `p2a-task-breakdown` | approved spec, project policy, repository evidence | Direct/Planned synthetic work item or Orchestrated `task-graph.json` |
 
-Development execution begins only after the canonical task graph validates. Milestone and final execution reviews remain execution evidence; they are not planning approval gates.
+After Gate B approval, run `p2a next`. It routes Direct/Planned preparation or Orchestrated decomposition; never create a detailed graph unconditionally. Development begins after the selected Gate C record validates.
 
 ## Human approval gates
 
@@ -86,11 +86,11 @@ Legacy projects may continue with `.plan2agent/style.md` and no constitution. Do
 
 ### Specification approval
 
-Before task decomposition, present the complete product specification and implementation plan together. Highlight consequential choices, trade-offs, open decisions, selected or rejected external recommendations, and verification strategy.
+Before execution-readiness routing, present the complete product specification and implementation plan together. Highlight consequential choices, trade-offs, open decisions, selected or rejected external recommendations, and verification strategy.
 
-After explicit approval, run `p2a decide --quote "<exact user utterance>" --artifacts <artifact-root>`. It appends the Gate ① specification decision and persists the `approval: "approved"` plus `approval_audit` copy in `gate-b-spec/spec.json`. An approved spec must have no open decisions. Visual work that is required for the current iteration must also have explicit selected-prototype approval before decomposition.
+After explicit approval, run `p2a decide --quote "<exact user utterance>" --artifacts <artifact-root>`. It appends the Gate ① specification decision and persists the `approval: "approved"` plus `approval_audit` copy in `gate-b-spec/spec.json`. An approved spec must have no open decisions. Visual work that is required for the current iteration must also have explicit selected-prototype approval before execution preparation.
 
-Task decomposition has no separate human approval state. The authoring agent writes a complete draft, `p2a validate` checks its schema, source references, dependencies, acyclicity, acceptance criteria, and execution contracts, and only a valid graph becomes canonical.
+After validating approval, run `p2a next --json` and follow its one action. Adaptive/Direct/Planned route to `p2a-dev-execution --prepare-mode`; only Orchestrated execution routes to task decomposition. Neither path adds a human approval state.
 
 ## Entry Document Confirmation Dialogue
 
@@ -136,7 +136,7 @@ Gate ② owns durable architecture, foundational stack, prohibitions, and style.
 
 Planning memory is advisory context, never an approval substitute.
 
-- Read the active iteration's `planning_memory` before specification and task decomposition.
+- Read the active iteration's `planning_memory` before specification and, when selected, Orchestrated task decomposition.
 - Reuse only reports whose project, scope, and evidence remain relevant.
 - Record the actual query, requested/effective mode, fallback, and report reference when memory affects an artifact.
 - Cite consumed local reports as `LOCAL-n` evidence.
@@ -202,7 +202,7 @@ Use these locations:
 
 Write atomically where supported. Validate JSON immediately after writing. Do not promote a draft by merely renaming an unvalidated file. Preserve run lineage and task history when replacing a graph; if execution has started, open a new iteration or use the maintenance lane.
 
-For a greenfield co-located project, generate the approved scope, approved spec, and validated task graph, then run `p2a iteration init` to create the iterative layout. Do not point project configuration at a transient root-level task graph.
+For a greenfield co-located project, approve scope and spec, then run `p2a next --json`. Direct/Planned preparation creates one synthetic work item; Orchestrated creates a dependency-aware graph. Run `p2a iteration init` after the selected Gate C record validates. Do not configure a transient root-level graph.
 
 ## Generated status view
 
@@ -259,11 +259,11 @@ Before handing off to execution, ensure:
 
 - the entry document was confirmed and recorded;
 - Gate ② is approved for a new project, or a legacy style-only project is intentionally continuing under compatibility;
-- validator-enforced constitution prohibitions pass against the spec and task graph;
+- validator-enforced constitution prohibitions pass against the spec and any selected task graph;
 - scope and specification approvals are present and match their artifacts;
 - required visual approval evidence is valid;
-- the canonical task graph references the approved spec;
-- every task has valid dependencies, source refs, acceptance criteria, and verification commands;
+- `p2a next --json` routes the approved Gate B to execution preparation or a validated ready work item;
+- any canonical task graph references the approved spec and has valid work-item contracts;
 - no planning artifact depends on a removed approval stage.
 
 ## Rules
@@ -277,5 +277,6 @@ Before handing off to execution, ensure:
 - Keep implementation choices out of scope approval unless explicitly constrained by the user.
 - Do not create a replacement workflow state machine around questions, rounds, or agent reviews.
 - Treat validators as enforcement, not as authors of product decisions.
+- Never create an Orchestrated task graph merely because Gate B was approved; follow the action returned by `p2a next`.
 - Preserve canonical paths, hashes, approval quotes, and run evidence.
 - Prefer one state-based next action over a menu of possible actions.

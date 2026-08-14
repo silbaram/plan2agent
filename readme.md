@@ -118,8 +118,8 @@ an auditable history for later reviews.
 
 ### 1. Plan with approval gates
 
-The planning harness turns an idea into structured intake, product and implementation specs, and a
-validated task graph. Gate A presents a compact understanding summary and requires explicit
+The planning harness turns an idea into structured intake, product and implementation specs, and
+validated execution readiness. Gate A presents a compact understanding summary and requires explicit
 confirmation. The same session establishes or reuses Gate ② before continuing to Gate B. It records
 uncertainty as an assumption or user decision rather than inventing a requirement.
 
@@ -127,7 +127,7 @@ uncertainty as an assumption or user decision rather than inventing a requiremen
 
 After Gate B approval, use `p2a next` to start the next action authorized by the approved contract. New projects default to `adaptive`, while existing configs without an execution mode continue to resolve as `orchestrated`; explicit `adaptive`, `direct`, `planned`, and `orchestrated` policies remain supported without another mode approval. Planned mode records 2–5 ordered, command-verified resume checkpoints. New runs bind a Gate-derived execution envelope containing objective, source hash, scope, preservation conditions, non-goals, acceptance, verification, and authority boundaries.
 
-For direct control of a ready task:
+For direct control of a prepared work item:
 
 ```bash
 p2a execute start \
@@ -191,7 +191,7 @@ Plan2Agent is contract-gated, confined, and local-first. Product meaning require
 It is a good fit when you want:
 
 - explicit product decisions before implementation;
-- reviewable specs and agent-ready task graphs;
+- reviewable specs and task graphs only when orchestration benefits from them;
 - confined Codex or Claude execution, with Gemini kept read-only;
 - verification evidence and regression history;
 - human-approved maintenance and improvement loops.

@@ -23,7 +23,7 @@ Plan2Agent 본체 개발에서만 `scripts/sync_cli_assets.mjs`, `scripts/check_
 
 전체 흐름은 다음과 같다.
 
-1. 하네스가 짧은 Markdown 또는 text 진입 문서에서 **Gate A intake → Gate ② constitution → Gate B spec → Gate C task graph** 산출물을 만든다.
+1. 하네스가 짧은 Markdown 또는 text 진입 문서에서 **Gate A intake → Gate ② constitution → Gate B spec → Gate C execution readiness**를 만든다. Direct/Planned는 synthetic work item을, Orchestrated는 dependency-aware task graph를 사용한다.
 2. Plan2Agent 본체 저장소에서는 `scripts/validate_artifacts.mjs`, `scripts/run_fixtures.mjs`, `scripts/check_cli_parity.mjs`로 fixture와 CLI 구성을 검증한다. `init` 대상 프로젝트에서는 `p2a validate`와 `p2a iteration`로 산출물을 검증한다.
 3. 새 프로젝트는 먼저 `p2a init --target <project-dir> --tools all`로 하네스를 설치하고 같은 저장소 안에서 기획부터 반복까지 진행한다. 외부 산출물을 옮기는 경우에만 기존 handoff로 승인된 산출물을 개발 대상 저장소의 `.plan2agent/artifacts/`로 인계한다.
 4. 대상 저장소에서는 `p2a next`가 Gate 승인 전 명령에는 `requiresApproval: true`, 승인된 개발 loop의 start/resume/review/close에는 `requiresApproval: false`를 반환한다. `p2a execute start`는 Gate B에서 파생한 `executionEnvelope`와 hash를 run에 고정하고 agent prompt를 출력한다. 여러 독립 ready work item은 같은 envelope와 ready snapshot에서 bounded하게 실행하며, 세션이 끊기면 `p2a execute resume`으로 같은 run을 이어간다.
@@ -580,7 +580,7 @@ p2a iteration validate \
 p2a iteration promote-tasks \
   --artifacts .plan2agent/artifacts/<project_id>
 
-# Gate C task graph의 모든 task를 완료하고 close-ready validation을 통과한 뒤:
+# Gate C의 모든 work item을 완료하고 close-ready validation을 통과한 뒤:
 p2a iteration validate \
   --artifacts .plan2agent/artifacts/<project_id> \
   --require-close-ready

@@ -1,6 +1,6 @@
 # Plan2Agent Quickstart
 
-Plan2Agent는 짧은 제품 아이디어를 Gate A 범위 확인, Gate ② 프로젝트 constitution, Gate B 제품·구현 명세, Gate C 실행 task graph로 바꾸는 파일 기반 planning harness다.
+Plan2Agent는 짧은 제품 아이디어를 Gate A 범위 확인, Gate ② 프로젝트 constitution, Gate B 제품·구현 명세, Gate C 실행 준비 검증으로 바꾸는 파일 기반 planning harness다.
 
 이 문서는 새 프로젝트에서 첫 실행 가능한 산출물을 만드는 최단 경로만 다룬다. 명령 옵션은 [CLI 사용자 가이드](cli-reference.md), 산출물 계약은 [하네스 사용자 가이드](harness-guide.md)를 기준으로 삼는다.
 
@@ -56,15 +56,13 @@ Gate ② 승인 없이는 Gate B로 진행하지 않는다. Constitution 변경�
 
 승인된 Gate A와 Gate ②를 바탕으로 Gate B 명세를 만든다. 모든 `open_decisions`를 해결하고 명세를 검토한 뒤 `p2a decide --quote ... --artifacts ...`를 다시 실행하면 이번에는 Gate B spec 승인이 원장과 `spec.approval_audit` 사본에 기록된다.
 
-승인된 Gate B를 기준으로 greenfield Gate C task graph를 만들고 validator를 실행한다.
+승인된 Gate B 다음에는 `p2a next`로 프로젝트 정책과 repository evidence에 맞는 실행 준비 경로를 받는다.
 
 ```bash
-p2a validate \
-  --task-graph .plan2agent/artifacts/<project_id>/gate-c-task-graph/task-graph.json \
-  --require-approved-spec .plan2agent/artifacts/<project_id>/gate-b-spec/spec.json
+p2a next
 ```
 
-Gate C에는 별도 사람 승인 audit이나 `--approved-by`/`--approval-note`가 없다. Greenfield에서는 validator-clean `task-graph.json`을 만든 뒤 아래의 `iteration init`으로 반복 구조를 시작한다. 이후 active iteration의 agent-authored `task-graph.draft.json`은 `p2a iteration validate --stage gate-c-draft`를 통과한 뒤 `p2a iteration promote-tasks`로 정본 승격한다.
+새 프로젝트의 기본 `adaptive`는 Direct, Planned, Orchestrated 중 하나를 실행 AI가 선택한다. Direct/Planned는 `p2a-dev-execution`이 하나의 synthetic compatibility work item을 준비하고, Orchestrated일 때만 의존성 기반 task graph를 저작·검증한다. Gate C mode 선택과 준비에는 별도 사람 승인 audit이나 `--approved-by`/`--approval-note`가 없다. 선택된 Gate C record가 validator를 통과한 뒤 `iteration init`으로 반복 구조를 시작한다.
 
 결정 원장 자체도 함께 검증할 수 있다.
 
@@ -93,7 +91,7 @@ p2a iteration init \
 
 `gate-d-review/review.json`은 필요하지 않다. 레거시 review 파일이 있더라도 promotion, iteration init, handoff, close의 조건으로 사용되지 않는다.
 
-각 행동 뒤에는 다시 `p2a next`를 실행해 ready task 실행, run 종료, 다음 반복 close/open 행동을 확인한다.
+각 행동 뒤에는 다시 `p2a next`를 실행해 ready work item 실행, run 종료, 다음 반복 close/open 행동을 확인한다.
 
 반복을 닫기 전에는 같은 조건을 validator로 먼저 확인할 수 있다.
 

@@ -14,7 +14,7 @@ Rules:
 - Preserve legacy intake fields when reading history, but do not generate or interpret them.
 - After Gate A, establish or reuse the project constitution. For a new project, require a valid .plan2agent/constitution.json and approve it only through p2a shape approve --quote with the exact user utterance so Gate ② is appended to decisions.jsonl; legacy style-only projects remain compatible.
 - Do not synthesize Gate B until intake_json is ready_for_spec with approval_audit and the required Gate ② constitution is approved.
-- Stop before task graph unless spec_json.approval is approved and open_decisions is empty.
+- After Gate B approval is recorded, return to p2a next; do not create a task graph unconditionally. Let p2a next route Direct/Planned preparation or Orchestrated task breakdown.
 - Return the named state sections required by the harness.
 
 Conditional references for p2a-harness (resolve relative to its SKILL.md):
