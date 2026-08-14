@@ -54,7 +54,6 @@ const PROJECT_RUNS_DIR = path.join(P2A_PATHS.projectRoot, '.plan2agent', 'runs')
 const PROJECT_EVAL_DIR = path.join(P2A_PATHS.projectRoot, '.plan2agent', 'eval');
 const DEFAULT_PROPOSALS_DIR = path.join(P2A_PATHS.projectRoot, '.plan2agent', 'proposals');
 const DEFAULT_DIGEST_RECENT_RUNS = 30;
-const DEFAULT_STABLE_METRICS_PATH = path.join(P2A_PATHS.projectRoot, 'eval', 'stable-metrics.json');
 const BUILTIN_STABLE_METRIC_DEFINITIONS = [
   {
     id: 'failed_or_blocked_runs',
@@ -3026,12 +3025,8 @@ function artifactRootForRunsDir(runsDir) {
 }
 
 function loadStableMetricDefinitions(evalDir) {
-  const candidates = [
-    path.join(evalDir, 'stable-metrics.json'),
-    DEFAULT_STABLE_METRICS_PATH,
-  ];
-  for (const filePath of candidates) {
-    if (!fileExists(filePath)) continue;
+  const filePath = path.join(evalDir, 'stable-metrics.json');
+  if (fileExists(filePath)) {
     const payload = loadJson(filePath);
     const metrics = Array.isArray(payload?.metrics) ? payload.metrics : [];
     return {
