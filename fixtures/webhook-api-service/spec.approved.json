@@ -14,6 +14,10 @@
       "Normalize accepted payloads into a stable internal event envelope",
       "Deliver events to a provider-neutral queue adapter with bounded retry and dead-letter handling"
     ],
+    "must_preserve": [
+      "Preserve raw-body signature verification before payload parsing",
+      "Preserve the provider-neutral queue and dead-letter adapter boundaries"
+    ],
     "non_goals": [
       "No provider-specific queue SDK in v1",
       "No multi-tenant admin UI",

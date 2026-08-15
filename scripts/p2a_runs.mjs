@@ -16,12 +16,20 @@ import { createHash } from 'node:crypto';
 import path from 'node:path';
 import process from 'node:process';
 import { pathToFileURL } from 'node:url';
-import { FAILURE_CLASSES, FAILURE_RETRYABLE, ISOLATION_MODES } from './p2a_constants.mjs';
+import {
+  FAILURE_CLASSES,
+  FAILURE_RETRYABLE,
+  ISOLATION_MODES,
+  RUN_TELEMETRY_PROTOCOL,
+} from './p2a_constants.mjs';
 import {
   acceptanceReviewContract,
+  approvedExecutionEnvelope,
   approvedVisualReviewContract,
+  executionEnvelopeSha256,
   loadJson,
   resolveRunTaskGraphPath,
+  validateConstitution,
   validateRunTaskContract,
   validateRunData,
   validateRunIndexData,
@@ -29,7 +37,16 @@ import {
   validateTaskGraphData,
   ValidationError,
 } from './validate_artifacts.mjs';
-import { normalizeMonitorGateSidecar, normalizeMonitorVerdictData, readMonitorGateSidecar } from './p2a_monitor_gate.mjs';
+import {
+  MONITOR_CONCERN_FIELDS,
+  MONITOR_GATE_POLICY,
+  assertRunMonitorGateBinding,
+  monitorGateContractSha256,
+  monitorVerdictEvidenceSha256,
+  normalizeMonitorGateSidecar,
+  normalizeMonitorVerdictData,
+  readMonitorGateSidecar,
+} from './p2a_monitor_gate.mjs';
 import { readRequiredVisualReviewEvidence } from './p2a_visual_review_gate.mjs';
 import { readRequiredAcceptanceReviewEvidence } from './p2a_acceptance_review_gate.mjs';
 import {
@@ -52,10 +69,10 @@ import {
   resolveRunsDir,
   RUN_SIDECAR_SUFFIXES,
   runFilePath,
+  runMatchesSourceContext,
   runSidecarPath,
   runSidecarRef,
   taskContractSha256,
-  taskGraphRefMatchesGraph,
   unindexedRunRecordRefs,
   workspaceRevisionExcludedPathsForRun,
   workspaceRevisionSha256,
@@ -94,14 +111,28 @@ import {
   writeProjectConfig,
 } from './p2a_project_config.mjs';
 import { commandLine as sharedCommandLine, printRunCommandFooter } from './p2a_run_commands.mjs';
+import {
+  artifactRelativePath,
+  assertDirectory,
+  assertFile,
+  displayPath,
+  hasInterruptionOptions,
+  hasStructuredDetailOptions,
+  parseGateReturn,
+  parseNonNegativeInteger,
+  requiredNonBlankText,
+  requiredValue,
+  uniqueStrings,
+} from './p2a_cli_helpers.mjs';
 
 const P2A_PATHS = resolveP2aPaths(import.meta.url);
 const ROOT = P2A_PATHS.projectRoot;
 const PROJECT_RUNS_DIR = path.join(ROOT, DEFAULT_RUNS_DIR);
-const COMMANDS = new Set(['start', 'record', 'verify', 'finish', 'list', 'show', 'revision', 'validate', 'migrate-layout', 'migrate-schema']);
+const COMMANDS = new Set(['start', 'record', 'verify', 'checkpoint', 'finish', 'list', 'show', 'revision', 'validate', 'migrate-layout', 'migrate-schema']);
 const RUN_STATUSES = new Set(['started', 'finished', 'failed', 'blocked']);
 const RUN_KINDS = new Set(['final_visual_review', 'final_acceptance_review']);
 const VISUAL_FEEDBACK_VERDICTS = new Set(['note', 'concern']);
+const USAGE_SOURCES = new Set(['provider', 'manual']);
 const FAILURE_SOURCES = new Set(['owner', 'monitor', 'implementer']);
 const FAILURE_DEFAULTS = {
   verification_failed: { retryable: 'after_fix', needsUserDecision: false, source: 'owner' },
@@ -120,9 +151,10 @@ function usage() {
     'Usage:',
     '  p2a runs start --artifacts <iterative-project-dir> --task <task-id> --agent-tool <tool> [options]',
     '  p2a runs start --graph <task-graph.json> --task <task-id> --agent-tool <tool> [--runs <dir>] [options]',
-    '  p2a runs record --run-id <run-id> (--artifacts <dir>|--runs <dir>|--graph <path>) [--changed-file <path> ...] [--verification <type:status:command>] [--note <text>] [--visual-feedback note|concern] [structured detail options]',
+    '  p2a runs record --run-id <run-id> (--artifacts <dir>|--runs <dir>|--graph <path>) [--changed-file <path> ...] [--verification <type:status:command>] [--note <text>] [--visual-feedback note|concern] [usage/interruption options] [structured detail options]',
     '  p2a runs verify --run-id <run-id> (--artifacts <dir>|--runs <dir>|--graph <path>) [--test] [--lint] [--typecheck] [--test-command <cmd>] [--lint-command <cmd>] [--typecheck-command <cmd>] [--verify-command <type:cmd>]',
-    '  p2a runs finish --run-id <run-id> (--artifacts <dir>|--runs <dir>|--graph <path>) [--status finished|failed|blocked] [--failure-class <class>] [--retryable yes|no|after_fix] [--needs-user-decision true|false] [--failure-source owner|monitor|implementer] [--changed-file <path> ...] [--verification <type:status:command>] [--collect-git] [--note <text>] [structured detail options]',
+    '  p2a runs checkpoint --run-id <run-id> --milestone <milestone-id> (--artifacts <dir>|--runs <dir>|--graph <path>)',
+    '  p2a runs finish --run-id <run-id> (--artifacts <dir>|--runs <dir>|--graph <path>) [--status finished|failed|blocked] [--failure-class <class>] [--retryable yes|no|after_fix] [--needs-user-decision true|false] [--failure-source owner|monitor|implementer] [--changed-file <path> ...] [--verification <type:status:command>] [--collect-git] [--note <text>] [usage/interruption options] [structured detail options]',
     '  p2a runs list (--artifacts <dir>|--runs <dir>|--graph <path>) [--json]',
     '  p2a runs show --run-id <run-id> (--artifacts <dir>|--runs <dir>|--graph <path>)',
     '  p2a runs revision --run-id <run-id> (--artifacts <dir>|--runs <dir>|--graph <path>)',
@@ -137,6 +169,7 @@ function usage() {
     '  --maintenance           With --artifacts, use the maintenance task graph as source context.',
     '  --task <task-id>        Task id for start.',
     '  --run-id <run-id>       Stable run id. Must start with run-. Generated for start when omitted.',
+    '  --milestone <id>         Planned execution checkpoint to verify in declared order.',
     '  --run-reservation-token <token>  Reservation owner token emitted by a failed sequential start retry.',
     '  --agent-tool <tool>     Agent/CLI tool that performed the run, such as codex, claude, gemini.',
     '  --run-kind <kind>       Structured run purpose: final_visual_review or final_acceptance_review.',
@@ -151,6 +184,15 @@ function usage() {
     '  --changed-file <path>   Changed file to attach to the run. Repeatable.',
     '  --collect-git           Add changed files from git status in the workspace.',
     '  --note <text>           Append a run note. Repeatable.',
+    '  --usage-model <profile> Model/profile label for one usage sample.',
+    '  --usage-input-tokens <n>, --usage-output-tokens <n>',
+    '                          Record non-negative token counts; both and --usage-model are required together.',
+    '  --usage-source <source> Token source: provider or manual. Default: manual.',
+    '  --implementation-interruption <text>',
+    '                          Record a user interruption caused by asking for an implementation decision. Repeatable.',
+    '  --user-correction <text> Record a user requirement or UI correction. Repeatable.',
+    '  --gate-return <assessment:text>',
+    '                          Record a contract Gate return assessed as valid or invalid. Repeatable.',
     '  --visual-feedback <verdict>  Append optional, non-gating implementation feedback: note or concern.',
     '  --visual-feedback-note <text>  Explanation for the visual feedback.',
     '  --visual-feedback-concern <text>  Concern found during early visual review. Repeatable.',
@@ -196,6 +238,7 @@ function parseArgs(argv) {
     maintenance: false,
     taskId: null,
     runId: null,
+    milestoneId: null,
     runReservationToken: null,
     agentTool: null,
     runKind: null,
@@ -208,6 +251,13 @@ function parseArgs(argv) {
     createIsolation: false,
     changedFiles: [],
     notes: [],
+    usageModel: null,
+    usageInputTokens: null,
+    usageOutputTokens: null,
+    usageSource: null,
+    implementationInterruptions: [],
+    userCorrections: [],
+    gateReturns: [],
     visualFeedbackVerdict: null,
     visualFeedbackNote: null,
     visualFeedbackConcerns: [],
@@ -246,6 +296,7 @@ function parseArgs(argv) {
     else if (arg === '--maintenance') args.maintenance = true;
     else if (arg === '--task') args.taskId = requiredValue(argv, ++index, '--task');
     else if (arg === '--run-id') args.runId = requiredValue(argv, ++index, '--run-id');
+    else if (arg === '--milestone') args.milestoneId = requiredValue(argv, ++index, '--milestone');
     else if (arg === '--run-reservation-token') args.runReservationToken = requiredValue(argv, ++index, '--run-reservation-token');
     else if (arg === '--agent-tool') args.agentTool = requiredValue(argv, ++index, '--agent-tool');
     else if (arg === '--run-kind') {
@@ -265,6 +316,16 @@ function parseArgs(argv) {
     else if (arg === '--changed-file') args.changedFiles.push(requiredValue(argv, ++index, '--changed-file'));
     else if (arg === '--collect-git') args.collectGit = true;
     else if (arg === '--note') args.notes.push(requiredValue(argv, ++index, '--note', { allowLeadingDash: true }));
+    else if (arg === '--usage-model') args.usageModel = requiredNonBlankText(argv, ++index, '--usage-model');
+    else if (arg === '--usage-input-tokens') args.usageInputTokens = parseNonNegativeInteger(requiredValue(argv, ++index, '--usage-input-tokens'), '--usage-input-tokens');
+    else if (arg === '--usage-output-tokens') args.usageOutputTokens = parseNonNegativeInteger(requiredValue(argv, ++index, '--usage-output-tokens'), '--usage-output-tokens');
+    else if (arg === '--usage-source') {
+      args.usageSource = requiredValue(argv, ++index, '--usage-source');
+      if (!USAGE_SOURCES.has(args.usageSource)) throw new Error('--usage-source must be provider or manual');
+    }
+    else if (arg === '--implementation-interruption') args.implementationInterruptions.push(requiredNonBlankText(argv, ++index, '--implementation-interruption'));
+    else if (arg === '--user-correction') args.userCorrections.push(requiredNonBlankText(argv, ++index, '--user-correction'));
+    else if (arg === '--gate-return') args.gateReturns.push(parseGateReturn(requiredValue(argv, ++index, '--gate-return', { allowLeadingDash: true })));
     else if (arg === '--visual-feedback') {
       args.visualFeedbackVerdict = requiredValue(argv, ++index, '--visual-feedback');
       if (!VISUAL_FEEDBACK_VERDICTS.has(args.visualFeedbackVerdict)) {
@@ -331,13 +392,22 @@ function parseArgs(argv) {
   if (args.artifacts && args.graph) throw new Error('--artifacts and --graph cannot be used together');
   if (args.maintenance && !args.artifacts) throw new Error('--maintenance is only supported with --artifacts');
   if (args.graph) assertNotUninitializedScaffoldGraph(args.graph);
-  if (args.graph && ['start', 'record', 'verify', 'finish'].includes(args.command)) {
+  if (args.graph && ['start', 'record', 'verify', 'checkpoint', 'finish'].includes(args.command)) {
     assertUnmanagedGraphMutation(args.graph, `p2a runs ${args.command}`);
   }
   if (args.command === 'start') {
     if (!args.taskId) throw new Error('--task is required for start');
     if (!args.agentTool) throw new Error('--agent-tool is required for start');
     if (args.runs && !args.graph && !args.artifacts) throw new Error('start requires --artifacts or --graph so the task can be resolved');
+  }
+  if (args.command === 'checkpoint' && !args.milestoneId) {
+    throw new Error('--milestone is required for checkpoint');
+  }
+  if (args.command !== 'checkpoint' && args.milestoneId) {
+    throw new Error('--milestone is only supported with checkpoint');
+  }
+  if (args.command === 'checkpoint' && (args.verifyRequests.length || args.manualVerification.length || args.saveConfig)) {
+    throw new Error('checkpoint runs the milestone verification commands declared in Gate C');
   }
   if (args.runKind && args.command !== 'start') {
     throw new Error('--run-kind is only supported with start');
@@ -361,6 +431,18 @@ function parseArgs(argv) {
   if (!['record', 'finish'].includes(args.command) && hasStructuredDetailOptions(args)) {
     throw new Error('structured detail options are only supported with record or finish');
   }
+  const hasUsage = [args.usageModel, args.usageInputTokens, args.usageOutputTokens, args.usageSource]
+    .some((value) => value !== null);
+  if (hasUsage && (args.usageModel === null || args.usageInputTokens === null || args.usageOutputTokens === null)) {
+    throw new Error('--usage-model, --usage-input-tokens, and --usage-output-tokens are required together');
+  }
+  if (hasUsage && !Number.isSafeInteger(args.usageInputTokens + args.usageOutputTokens)) {
+    throw new Error('usage input and output token total exceeds the safe integer range');
+  }
+  if (hasUsage) args.usageSource ??= 'manual';
+  if (!['record', 'finish'].includes(args.command) && (hasUsage || hasInterruptionOptions(args))) {
+    throw new Error('usage and interruption options are only supported with record or finish');
+  }
   if (args.saveConfig && args.command !== 'verify') {
     throw new Error('--save-config is only supported with verify');
   }
@@ -374,7 +456,7 @@ function parseArgs(argv) {
       throw new Error('--failure-class other requires at least one --note explaining why the failure could not be classified');
     }
   }
-  if (['record', 'verify', 'finish', 'show', 'revision'].includes(args.command) && !args.runId) {
+  if (['record', 'verify', 'checkpoint', 'finish', 'show', 'revision'].includes(args.command) && !args.runId) {
     throw new Error(`--run-id is required for ${args.command}`);
   }
   if (args.runReservationToken && (args.command !== 'start' || !args.runId)) {
@@ -388,26 +470,6 @@ function parseArgs(argv) {
     throw new Error(`${args.command} requires --yes, or use --dry-run to preview`);
   }
   return args;
-}
-
-function hasStructuredDetailOptions(args) {
-  return [
-    args.reproductionSteps,
-    args.reproductionCommands,
-    args.reproductionNotes,
-    args.localizationFindings,
-    args.localizedFiles,
-    args.fixSummaries,
-    args.fixFiles,
-    args.guardChecks,
-    args.guardNotes,
-  ].some((values) => values.length > 0);
-}
-
-function requiredValue(argv, index, optionName, options = {}) {
-  const value = argv[index];
-  if (!value || (!options.allowLeadingDash && value.startsWith('--'))) throw new Error(`missing value for ${optionName}`);
-  return value;
 }
 
 function parseManualVerification(value) {
@@ -440,26 +502,6 @@ function parseVerifyCommand(value) {
   return { type: maybeType, command, source: 'command' };
 }
 
-function assertFile(filePath, label) {
-  if (!existsSync(filePath)) throw new Error(`${label} is missing: ${filePath}`);
-  if (!lstatSync(filePath).isFile()) throw new Error(`${label} must be a file: ${filePath}`);
-}
-
-function assertDirectory(dirPath, label) {
-  if (!existsSync(dirPath)) throw new Error(`${label} is missing: ${dirPath}`);
-  if (!lstatSync(dirPath).isDirectory()) throw new Error(`${label} must be a directory: ${dirPath}`);
-}
-
-function displayPath(filePath, root = process.cwd()) {
-  const relative = path.relative(root, filePath);
-  if (relative && !relative.startsWith('..') && !path.isAbsolute(relative)) return normalizePath(relative);
-  return normalizePath(filePath);
-}
-
-function artifactRelativePath(artifactRoot, filePath) {
-  return normalizePath(path.relative(artifactRoot, filePath));
-}
-
 function loadTaskGraph(graphPath) {
   assertFile(graphPath, 'task graph');
   const graph = loadJson(graphPath);
@@ -471,7 +513,7 @@ function taskGraphFingerprint(graph) {
   return createHash('sha256').update(JSON.stringify(graph)).digest('hex');
 }
 
-export function assertStartTaskSourceUnchanged(source, expectedFingerprint, runId) {
+export function assertStartTaskSourceUnchanged(source, expectedFingerprint, runId, expectedExecutionEnvelope = undefined) {
   let currentGraph;
   try {
     currentGraph = loadTaskGraph(source.graphPath);
@@ -484,6 +526,25 @@ export function assertStartTaskSourceUnchanged(source, expectedFingerprint, runI
     throw new Error(
       `task graph changed while run ${runId} was preparing isolation; no run was written. Re-read the task graph and start the task again.`,
     );
+  }
+  if (expectedExecutionEnvelope !== undefined) {
+    let currentExecutionEnvelope;
+    try {
+      currentExecutionEnvelope = approvedExecutionEnvelope(
+        taskSourceSpecPath(source),
+        source.sourceSpecRef,
+        source.sourceLayout === 'graph' ? null : source.artifactRoot,
+      );
+    } catch (error) {
+      throw new Error(
+        `Gate B execution contract changed or became unavailable while run ${runId} was preparing isolation; no run was written: ${error.message}`,
+      );
+    }
+    if (JSON.stringify(currentExecutionEnvelope) !== JSON.stringify(expectedExecutionEnvelope)) {
+      throw new Error(
+        `Gate B execution contract changed while run ${runId} was preparing isolation; no run was written. Re-read the approved spec and start the task again.`,
+      );
+    }
   }
   if (source.sourceLayout === 'maintenance') {
     let currentState;
@@ -514,10 +575,30 @@ function readMonitorVerdict(runsDir, sidecar) {
   const verdictPath = path.resolve(runsDir, sidecar.verdictPath);
   assertFile(verdictPath, 'monitor verdict');
   try {
-    return normalizeMonitorVerdictData(loadJson(verdictPath));
+    const contents = readFileSync(verdictPath);
+    const verdict = normalizeMonitorVerdictData(JSON.parse(contents.toString('utf8')), {
+      requiredConcernFields: sidecar.requiredConcernFields,
+      requiredRuleIds: sidecar.ruleContract?.ruleIds,
+      requireRulesReviewed: sidecar.ruleContract !== null,
+    });
+    return { verdict, evidenceSha256: monitorVerdictEvidenceSha256(contents) };
   } catch (error) {
     throw new Error(`${error.message}: ${displayPath(verdictPath)}`);
   }
+}
+
+function assertMonitorRuleContractCurrent(sidecar, taskSource, workspacePath, run) {
+  const contract = sidecar?.ruleContract;
+  if (!contract) return null;
+  const current = monitorRuleContract(taskSource, workspacePath);
+  if (JSON.stringify(current) !== JSON.stringify(contract)) {
+    throw new Error([
+      `monitor rule contract source changed or is unavailable for run ${run.runId}`,
+      `expected=${JSON.stringify(contract)}`,
+      `current=${JSON.stringify(current)}`,
+    ].join('; '));
+  }
+  return current;
 }
 
 function monitorConcernSummary(verdict) {
@@ -530,26 +611,44 @@ function monitorConcernSummary(verdict) {
   return parts.join('; ') || 'no concern details provided';
 }
 
-function applyMonitorGate(args, runsDir, run) {
-  const sidecar = readOrchestrationSidecar(runsDir, run.runId);
+function applyMonitorGate(
+  args,
+  runsDir,
+  run,
+  taskSource,
+  workspacePath,
+  sidecar = readOrchestrationSidecar(runsDir, run.runId),
+  { enforceAcceptance = true } = {},
+) {
+  assertRunMonitorGateBinding(run, sidecar);
   if (!sidecar?.required) return null;
-  const verdict = readMonitorVerdict(runsDir, sidecar);
+  assertMonitorRuleContractCurrent(sidecar, taskSource, workspacePath, run);
+  const monitorEvidence = readMonitorVerdict(runsDir, sidecar);
+  const { verdict, evidenceSha256 } = monitorEvidence;
   if (sidecar.acceptedVerdicts.includes(verdict.verdict) && !verdict.hasConcerns) {
-    return { accepted: true, verdict: verdict.verdict, concerns: monitorConcernSummary(verdict) };
+    return {
+      accepted: true,
+      verdict: verdict.verdict,
+      concerns: monitorConcernSummary(verdict),
+      evidenceSha256,
+    };
   }
   const mappedFailureClass = sidecar.failureClassMap[verdict.failureSignal]
     ?? sidecar.failureClassMap[verdict.verdict]
     ?? 'other';
-  args.status = 'blocked';
-  if (!args.failureClass) args.failureClass = mappedFailureClass;
-  if (!args.failureSource) args.failureSource = 'monitor';
-  if (args.needsUserDecision === null && verdict.needsUserDecision) args.needsUserDecision = true;
+  if (enforceAcceptance) {
+    args.status = 'blocked';
+    args.failureClass = mappedFailureClass;
+    args.failureSource = 'monitor';
+    args.needsUserDecision = verdict.needsUserDecision;
+  }
   return {
     accepted: false,
     verdict: verdict.failureSignal,
     rawVerdict: verdict.verdict,
     failureClass: args.failureClass,
     concerns: monitorConcernSummary(verdict),
+    evidenceSha256,
   };
 }
 
@@ -570,6 +669,8 @@ function taskSourceSpecPath(source) {
     : [
         path.resolve(path.dirname(source.graphPath), reference),
         path.resolve(source.artifactRoot, reference),
+        path.resolve(ROOT, reference),
+        path.resolve(P2A_PATHS.toolRoot, reference),
       ];
   const resolved = candidates.find((candidate) => (
     existsSync(candidate) && lstatSync(candidate).isFile()
@@ -629,13 +730,6 @@ function resolveTaskSource(args) {
   };
 }
 
-function runMatchesSourceContext(run, source) {
-  return run.projectId === source.projectId
-    && run.iterationId === source.iterationId
-    && run.sourceLayout === source.sourceLayout
-    && taskGraphRefMatchesGraph(run.taskGraphRef, source.graphPath, source.artifactRoot);
-}
-
 function assertRunMatchesSourceContext(run, source) {
   if (runMatchesSourceContext(run, source)) return;
   throw new Error(
@@ -658,12 +752,74 @@ function runOnlyTaskSource(runsDir, run) {
     );
   }
   return {
+    projectId: run.projectId,
     artifactRoot: run.sourceLayout === 'graph'
       ? defaultArtifactRootForGraph(graphPath)
       : artifactRoot,
     graphPath,
     graph,
   };
+}
+
+function monitorRuleRef(projectRoot, filePath) {
+  const relative = path.relative(projectRoot, filePath);
+  if (relative && !relative.startsWith('..') && !path.isAbsolute(relative)) return normalizePath(relative);
+  return displayPath(filePath);
+}
+
+function monitorRuleFileSha256(filePath) {
+  return createHash('sha256').update(readFileSync(filePath)).digest('hex');
+}
+
+function hasSubstantiveRuleValue(value) {
+  if (typeof value === 'string') return value.trim().length > 0;
+  if (Array.isArray(value)) return value.some((item) => hasSubstantiveRuleValue(item));
+  if (value && typeof value === 'object') return Object.values(value).some((item) => hasSubstantiveRuleValue(item));
+  return value !== null && value !== undefined;
+}
+
+function constitutionMonitorRuleIds(constitution) {
+  return uniqueStrings([
+    ...constitution.architecture.map((rule) => rule.id),
+    ...constitution.stack.map((rule) => rule.id),
+    ...constitution.prohibitions
+      .filter((rule) => ['validator', 'review'].includes(rule.enforcement))
+      .map((rule) => rule.id),
+    ...(hasSubstantiveRuleValue(constitution.style) ? ['STYLE'] : []),
+  ]);
+}
+
+function monitorRuleContract(source, workspacePath) {
+  const roots = uniqueStrings([
+    canonicalWorkspacePathForArtifactRoot(source.artifactRoot),
+    path.resolve(workspacePath),
+    process.cwd(),
+  ].map((candidate) => path.resolve(candidate)));
+  for (const projectRoot of roots) {
+    const constitutionPath = path.join(projectRoot, '.plan2agent', 'constitution.json');
+    if (!existsSync(constitutionPath)) continue;
+    assertFile(constitutionPath, 'monitor constitution');
+    const constitution = validateConstitution(constitutionPath, { requireApproved: true, projectId: source.projectId });
+    return {
+      source: 'constitution',
+      ref: monitorRuleRef(projectRoot, constitutionPath),
+      sha256: monitorRuleFileSha256(constitutionPath),
+      ruleIds: constitutionMonitorRuleIds(constitution),
+    };
+  }
+  for (const projectRoot of roots) {
+    const legacyStylePath = path.join(projectRoot, '.plan2agent', 'style.md');
+    if (!existsSync(legacyStylePath)) continue;
+    assertFile(legacyStylePath, 'legacy monitor style');
+    if (!readFileSync(legacyStylePath, 'utf8').trim()) continue;
+    return {
+      source: 'legacy_style',
+      ref: monitorRuleRef(projectRoot, legacyStylePath),
+      sha256: monitorRuleFileSha256(legacyStylePath),
+      ruleIds: ['STYLE'],
+    };
+  }
+  return { source: 'none', ref: null, sha256: null, ruleIds: [] };
 }
 
 function sourceRunArgs(args) {
@@ -674,11 +830,6 @@ function sourceRunArgs(args) {
 
 function runLifecycleSourceArgs(args) {
   return sourceRunArgs(args) ?? (args.runs ? ['--runs', args.runs] : null);
-}
-
-function orchestrationSidecarPath(runsDir, runId) {
-  assertSafeRunId(runId);
-  return runSidecarPath(runsDir, runId, '.orchestration.json');
 }
 
 function indexPath(runsDir) {
@@ -753,10 +904,6 @@ function upsertIndexRun(runsDir, index, run, preferredRunRef = null) {
   else index.runs[existingIndex] = nextEntry;
 }
 
-function writeJson(filePath, data) {
-  atomicWriteJson(filePath, data);
-}
-
 export function readRun(runsDir, runId) {
   const filePath = runFilePath(runsDir, runId);
   assertFile(filePath, runId);
@@ -788,19 +935,21 @@ function completeRunWriteTransaction(runsDir, transaction) {
   if (![legacyRunRef(transaction.run.runId), canonicalRunRef(transaction.run)].includes(expectedRef)) {
     throw new Error(`pending run write transaction has unsupported runRef ${JSON.stringify(expectedRef)}`);
   }
+  let monitorGate = null;
   if (transaction.monitorGate !== undefined) {
     assertNoIndexedRunSidecarCollision(runsDir, transaction.index, transaction.run.runId, transaction.runRef, '.monitor-gate.json');
-  }
-  atomicWriteJson(path.join(runsDir, expectedRef), transaction.run);
-  atomicWriteJson(indexPath(runsDir), transaction.index);
-  if (transaction.monitorGate !== undefined) {
-    const monitorGate = normalizeMonitorGateSidecar(transaction.monitorGate, transaction.run.runId, transaction.runRef);
+    monitorGate = normalizeMonitorGateSidecar(transaction.monitorGate, transaction.run.runId, transaction.runRef);
+    assertRunMonitorGateBinding(transaction.run, monitorGate);
     const expectedVerdictRef = runSidecarRef(transaction.runRef, '.monitor-verdict.json');
     if (monitorGate.runId !== transaction.run.runId
       || monitorGate.required !== true
       || monitorGate.verdictPath !== expectedVerdictRef) {
       throw new Error(`pending run write transaction has an invalid monitor gate for ${transaction.run.runId}`);
     }
+  }
+  atomicWriteJson(path.join(runsDir, expectedRef), transaction.run);
+  atomicWriteJson(indexPath(runsDir), transaction.index);
+  if (monitorGate) {
     atomicWriteJson(path.join(runsDir, runSidecarRef(transaction.runRef, '.monitor-gate.json')), monitorGate);
   }
   if (transaction.reservation !== undefined) {
@@ -845,15 +994,27 @@ function commitRunWrite(runsDir, runRef, run, index, options = {}) {
       throw new Error(`monitor gate sidecar path already exists and cannot be overwritten: ${sidecarRef}`);
     }
   }
+  let monitorGate = null;
+  if (options.monitorGateRequired) {
+    monitorGate = normalizeMonitorGateSidecar({
+      required: true,
+      requiredConcernFields: MONITOR_CONCERN_FIELDS,
+      ruleContract: options.monitorRuleContract ?? { source: 'none', ref: null, sha256: null },
+    }, run.runId, runRef);
+    run.monitorGate = {
+      required: true,
+      policy: MONITOR_GATE_POLICY,
+      contractSha256: monitorGateContractSha256(monitorGate),
+    };
+    validateRunData(run);
+  }
   const transaction = {
     schema_version: 'p2a.run_write_transaction.v1',
     runRef,
     run,
     index,
+    ...(monitorGate ? { monitorGate } : {}),
   };
-  if (options.monitorGateRequired) {
-    transaction.monitorGate = normalizeMonitorGateSidecar({ required: true }, run.runId, runRef);
-  }
   if (options.reservationToken) {
     transaction.reservation = { runId: run.runId, token: options.reservationToken };
   }
@@ -929,17 +1090,43 @@ export function loadRunsForArtifactRoot(artifactRoot) {
     .filter(Boolean);
 }
 
-function uniqueStrings(values) {
-  const seen = new Set();
-  const output = [];
-  for (const value of values) {
-    if (typeof value !== 'string') continue;
-    const trimmed = value.trim();
-    if (!trimmed || seen.has(trimmed)) continue;
-    seen.add(trimmed);
-    output.push(trimmed);
+function appendRunTelemetry(run, args, recordedAt = new Date().toISOString()) {
+  run.usage ??= [];
+  run.interruptions ??= [];
+  if (args.usageModel !== null) {
+    run.usage.push({
+      recordedAt,
+      source: args.usageSource,
+      modelProfile: args.usageModel,
+      inputTokens: args.usageInputTokens,
+      outputTokens: args.usageOutputTokens,
+      totalTokens: args.usageInputTokens + args.usageOutputTokens,
+    });
   }
-  return output;
+  for (const summary of args.implementationInterruptions) {
+    run.interruptions.push({
+      recordedAt,
+      type: 'implementation_decision',
+      summary,
+      assessment: 'not_applicable',
+    });
+  }
+  for (const summary of args.userCorrections) {
+    run.interruptions.push({
+      recordedAt,
+      type: 'user_correction',
+      summary,
+      assessment: 'not_applicable',
+    });
+  }
+  for (const gateReturn of args.gateReturns) {
+    run.interruptions.push({
+      recordedAt,
+      type: 'gate_return',
+      summary: gateReturn.summary,
+      assessment: gateReturn.assessment,
+    });
+  }
 }
 
 function mergeDetailArray(existing, additions) {
@@ -1100,10 +1287,6 @@ function projectConfigCandidates(runsDir, run, workspacePath) {
     path.join(process.cwd(), '.plan2agent', 'project.config.json'),
     path.join(path.dirname(run.taskGraphRef), '..', 'project.config.json'),
   ]);
-}
-
-function loadProjectConfig(runsDir, run, workspacePath) {
-  return loadProjectConfigWithPath(runsDir, run, workspacePath).config;
 }
 
 function loadProjectConfigWithPath(runsDir, run, workspacePath) {
@@ -1518,6 +1701,23 @@ function assertFinishedRunGuard(run) {
   }
 }
 
+function executionStrategy(source, runKind = null) {
+  const execution = source.graph.execution;
+  const mode = execution?.mode ?? 'orchestrated';
+  const selectionRationale = execution?.selectionRationale
+    ?? (source.sourceLayout === 'maintenance'
+      ? 'Maintenance task graph execution.'
+      : 'Approved Gate C task graph execution.');
+  const milestones = mode === 'planned' && !runKind
+    ? execution.milestones.map((milestone) => ({
+        ...structuredClone(milestone),
+        status: 'pending',
+        verifiedAt: null,
+      }))
+    : null;
+  return { mode, selectionRationale, milestones };
+}
+
 function startRun(args) {
   const source = resolveTaskSource(args);
   const task = requireTask(source.graph, args.taskId);
@@ -1569,8 +1769,8 @@ function startRun(args) {
     if (source.sourceLayout !== 'iteration') {
       throw new Error('final acceptance review is only supported for an active iteration');
     }
-    if (source.graph.tasks.some((candidate) => candidate.visualImpact)) {
-      throw new Error('final acceptance review is the non-UI close gate; iterations with visualImpact use final visual review');
+    if (approvedVisualReviewContract(taskSourceSpecPath(source), source.artifactRoot)) {
+      throw new Error('final acceptance review is not used when Gate B requires a final visual review');
     }
     if (task.status !== 'done') {
       throw new Error(`final acceptance review run requires ${task.id} to be done; current status is ${task.status}`);
@@ -1600,6 +1800,15 @@ function startRun(args) {
   const acceptanceReview = args.runKind === 'final_acceptance_review'
     ? acceptanceReviewContract(taskSourceSpecPath(source), source.artifactRoot)
     : null;
+  const executionEnvelope = source.sourceLayout === 'maintenance'
+    ? null
+    : approvedExecutionEnvelope(
+        taskSourceSpecPath(source),
+        source.sourceSpecRef,
+        source.sourceLayout === 'graph' ? null : source.artifactRoot,
+      );
+  const ruleContract = args.requireMonitor ? monitorRuleContract(source, configWorkspacePath) : null;
+  const strategy = executionStrategy(source, args.runKind);
   // A fresh worktree is the future workspace: validate its existing Git base
   // before creation, then validate the worktree itself after prepareIsolation.
   assertDirectory(createsWorktree ? isolationBasePath : workspacePath, '--workspace');
@@ -1638,6 +1847,13 @@ function startRun(args) {
     sourceSpecRef: source.sourceSpecRef,
     ...(args.runKind ? { runKind: args.runKind } : {}),
     taskContractSha256: taskContractSha256(task),
+    mode: strategy.mode,
+    selectionRationale: strategy.selectionRationale,
+    ...(strategy.milestones ? { milestones: strategy.milestones } : {}),
+    ...(executionEnvelope ? {
+      executionEnvelope,
+      executionEnvelopeSha256: executionEnvelopeSha256(executionEnvelope),
+    } : {}),
     agentTool: args.agentTool,
     workspaceRef,
     workspacePath,
@@ -1649,6 +1865,9 @@ function startRun(args) {
     changedFiles: uniqueStrings(args.changedFiles),
     verification: args.manualVerification,
     notes: uniqueStrings(args.notes),
+    usage: [],
+    interruptions: [],
+    telemetryProtocol: RUN_TELEMETRY_PROTOCOL,
     ...(visualReview ? { visualReview } : {}),
     ...(acceptanceReview ? { acceptanceReview } : {}),
   };
@@ -1662,7 +1881,12 @@ function startRun(args) {
       // Task-graph replacement also holds the run-store lock. Rechecking the
       // graph here makes replacement and run commit mutually exclusive without
       // taking the graph lock, which may be owned by the supervising parent.
-      assertStartTaskSourceUnchanged(source, initialTaskGraphFingerprint, run.runId);
+      assertStartTaskSourceUnchanged(
+        source,
+        initialTaskGraphFingerprint,
+        run.runId,
+        executionEnvelope ?? undefined,
+      );
     } catch (error) {
       if (allocation.reservationToken) {
         releaseRunIdReservation(runsDir, run.runId, allocation.reservationToken);
@@ -1672,13 +1896,24 @@ function startRun(args) {
     writeRun(runsDir, run, {
       createOnly: true,
       monitorGateRequired: args.requireMonitor,
+      monitorRuleContract: ruleContract,
       reservationToken: allocation.reservationToken,
     });
   });
   console.log(`Plan2Agent run started: ${run.runId}`);
   console.log(`- task: ${run.taskId}`);
+  console.log(`- executionMode: ${run.mode}`);
   console.log(`- agentTool: ${run.agentTool}`);
   console.log(`- workspaceRef: ${run.workspaceRef}`);
+  if (executionEnvelope) {
+    console.log(`- executionEnvelope: ${run.executionEnvelopeSha256}`);
+  }
+  if (ruleContract) {
+    const ruleLabel = ruleContract.source === 'none'
+      ? 'none (no constitution or legacy style found)'
+      : `${ruleContract.source}:${ruleContract.ref} sha256=${ruleContract.sha256}`;
+    console.log(`- monitorRules: ${ruleLabel}`);
+  }
   console.log(`- runFile: ${displayPath(runFilePath(runsDir, run.runId))}`);
   printRunCommandFooter(P2A_PATHS, {
     sourceArgs: sourceRunArgs(args),
@@ -1696,6 +1931,7 @@ function recordRun(args) {
   run.changedFiles = uniqueStrings([...run.changedFiles, ...args.changedFiles]);
   run.verification.push(...args.manualVerification);
   run.notes = uniqueStrings([...run.notes, ...args.notes]);
+  appendRunTelemetry(run, args);
   if (args.visualFeedbackVerdict) {
     run.visualFeedback ??= [];
     run.visualFeedback.push({
@@ -1712,6 +1948,8 @@ function recordRun(args) {
   console.log(`Plan2Agent run recorded: ${run.runId}`);
   console.log(`- changedFiles: ${run.changedFiles.length}`);
   console.log(`- verification: ${run.verification.length}`);
+  console.log(`- usageSamples: ${run.usage?.length ?? 0}`);
+  console.log(`- interruptions: ${run.interruptions?.length ?? 0}`);
   if (run.failure) console.log(`- failure: ${run.failure.class} retryable=${run.failure.retryable} needsUserDecision=${run.failure.needsUserDecision} source=${run.failure.source}`);
   return 0;
 }
@@ -1721,6 +1959,12 @@ function verifyRun(args) {
   const runsDir = source?.runsDir ?? resolveRunsDir(args);
   const { run, expectedRun } = readRunForUpdate(runsDir, args.runId);
   if (source) assertRunMatchesSourceContext(run, source);
+  if (run.status !== 'started') {
+    throw new Error(`run ${run.runId} is already ${run.status}; verification commands only run while a run is started`);
+  }
+  if (run.schema_version === 'p2a.run.v2' || run.mode !== undefined) {
+    validateRunTaskContract(run, path.dirname(path.resolve(runsDir)));
+  }
   const workspacePath = args.workspace ? path.resolve(args.workspace) : path.resolve(run.workspacePath);
   assertDirectory(workspacePath, 'run workspace');
   const configUpdate = prepareProjectConfigForVerification(args, runsDir, run, workspacePath);
@@ -1748,6 +1992,67 @@ function verifyRun(args) {
   return results.some((result) => result.status === 'failed' || result.status === 'unavailable') ? 1 : 0;
 }
 
+function checkpointRun(args) {
+  const source = mutationSource(args);
+  const runsDir = source?.runsDir ?? resolveRunsDir(args);
+  const { run, expectedRun } = readRunForUpdate(runsDir, args.runId);
+  if (source) assertRunMatchesSourceContext(run, source);
+  if (run.status !== 'started') throw new Error(`run ${run.runId} is already ${run.status}`);
+  validateRunTaskContract(run, path.dirname(path.resolve(runsDir)));
+  if (run.mode !== 'planned' || !run.milestones) {
+    throw new Error(`run ${run.runId} does not use planned execution checkpoints`);
+  }
+  const milestoneIndex = run.milestones.findIndex((milestone) => milestone.id === args.milestoneId);
+  if (milestoneIndex < 0) throw new Error(`unknown milestone id: ${args.milestoneId}`);
+  const milestone = run.milestones[milestoneIndex];
+  if (milestone.status === 'verified') {
+    console.log(`Plan2Agent checkpoint already verified: ${milestone.id}`);
+    return 0;
+  }
+  const previousFailure = run.verification.find((item) => (
+    item.milestoneId === milestone.id
+    && (item.status === 'failed' || item.status === 'unavailable')
+  ));
+  if (previousFailure) {
+    throw new Error(
+      `checkpoint ${milestone.id} already recorded immutable ${previousFailure.status} evidence; `
+      + 'finish this run as failed or blocked, then start a new retry run',
+    );
+  }
+  const previousPending = run.milestones.slice(0, milestoneIndex).find((candidate) => candidate.status !== 'verified');
+  if (previousPending) {
+    throw new Error(`checkpoint ${milestone.id} is out of order; verify ${previousPending.id} first`);
+  }
+
+  const workspacePath = args.workspace ? path.resolve(args.workspace) : path.resolve(run.workspacePath);
+  assertDirectory(workspacePath, 'run workspace');
+  const config = loadProjectConfigWithPath(runsDir, run, workspacePath).config;
+  const timeoutMs = verificationTimeoutMs(config);
+  const results = milestone.verification.map((command) => ({
+    ...runVerificationCommand({ type: 'custom', command, source: 'command' }, workspacePath, timeoutMs),
+    milestoneId: milestone.id,
+  }));
+  run.verification.push(...results);
+  const passed = results.every((result) => result.status === 'passed');
+  if (passed) {
+    const verifiedAt = new Date().toISOString();
+    milestone.status = 'verified';
+    milestone.verifiedAt = verifiedAt;
+    run.updatedAt = verifiedAt;
+  } else {
+    run.updatedAt = new Date().toISOString();
+  }
+  writeRun(runsDir, run, { expectedRun });
+  console.log(`Plan2Agent checkpoint ${passed ? 'verified' : 'failed'}: ${milestone.id}`);
+  console.log(`- outcome: ${milestone.outcome}`);
+  for (const result of results) console.log(`- ${result.status}: ${result.command}`);
+  const next = run.milestones.find((candidate) => candidate.status === 'pending');
+  if (passed && next) {
+    console.log(`- next: ${sharedCommandLine(P2A_PATHS, 'p2a_runs.mjs', ['checkpoint', ...(runLifecycleSourceArgs(args) ?? ['--runs', runsDir]), '--run-id', run.runId, '--milestone', next.id])}`);
+  }
+  return passed ? 0 : 1;
+}
+
 function finishRun(args) {
   const source = mutationSource(args);
   const runsDir = source?.runsDir ?? resolveRunsDir(args);
@@ -1773,14 +2078,32 @@ function finishRun(args) {
   run.changedFiles = uniqueStrings([...run.changedFiles, ...changedFiles]);
   run.verification.push(...args.manualVerification);
   run.notes = uniqueStrings([...run.notes, ...args.notes]);
+  appendRunTelemetry(run, args);
   mergeStructuredRunDetails(run, args);
   const requestedStatus = deriveFinishStatus(run, args.status);
-  const monitorResult = requestedStatus === 'finished' ? applyMonitorGate(args, runsDir, run) : null;
-  if (monitorResult && !monitorResult.accepted) {
+  const monitorSidecar = readOrchestrationSidecar(runsDir, run.runId);
+  assertRunMonitorGateBinding(run, monitorSidecar);
+  const monitorResult = applyMonitorGate(
+    args,
+    runsDir,
+    run,
+    taskSource,
+    workspacePath,
+    monitorSidecar,
+    { enforceAcceptance: requestedStatus === 'finished' },
+  );
+  if (monitorResult) run.monitorVerdictEvidenceSha256 = monitorResult.evidenceSha256;
+  if (requestedStatus === 'finished' && monitorResult && !monitorResult.accepted) {
     console.error(`monitor gate blocked finish: verdict=${monitorResult.rawVerdict ?? monitorResult.verdict}; signal=${monitorResult.verdict}; failureClass=${monitorResult.failureClass}; concerns=${monitorResult.concerns}`);
     console.error('blocked monitor finish requires structured detail: add --repro-*/--localization*/--guard* before finishing.');
   }
   const finalStatus = deriveFinishStatus(run, args.status);
+  if (finalStatus === 'finished' && run.mode === 'planned' && run.milestones) {
+    const pending = run.milestones.find((milestone) => milestone.status !== 'verified');
+    if (pending) {
+      throw new Error(`planned run ${run.runId} cannot finish before checkpoint ${pending.id}; run p2a runs checkpoint --run-id ${run.runId} --milestone ${pending.id}`);
+    }
+  }
   const validatedSource = finalStatus === 'finished'
     ? validateRunTaskContract(run, path.dirname(path.resolve(runsDir)))
     : null;
@@ -1846,6 +2169,8 @@ function finishRun(args) {
   console.log(`- status: ${run.status}`);
   console.log(`- changedFiles: ${run.changedFiles.length}`);
   console.log(`- verification: ${run.verification.length}`);
+  console.log(`- usageSamples: ${run.usage?.length ?? 0}`);
+  console.log(`- interruptions: ${run.interruptions?.length ?? 0}`);
   if (run.failure) console.log(`- failure: ${run.failure.class} retryable=${run.failure.retryable} needsUserDecision=${run.failure.needsUserDecision} source=${run.failure.source}`);
   printRunCommandFooter(P2A_PATHS, {
     sourceArgs: sourceRunArgs(args),
@@ -1926,6 +2251,22 @@ function migrationSidecarReplacement(filePath, suffix, targetRunRef) {
   }
   if (!changed) return null;
   return `${JSON.stringify(data, null, 2)}\n`;
+}
+
+function migrationRunReplacement(migration) {
+  const runFile = migration.files.find((file) => file.suffix === '.json');
+  const gateFile = migration.files.find((file) => file.suffix === '.monitor-gate.json');
+  if (!runFile || !gateFile) return null;
+  const run = JSON.parse(readFileSync(runFile.source, 'utf8'));
+  if (!run.monitorGate?.required) return null;
+  const gateData = JSON.parse(readFileSync(gateFile.source, 'utf8'));
+  gateData.verdictPath = runSidecarRef(migration.targetRef, '.monitor-verdict.json');
+  const migratedGate = normalizeMonitorGateSidecar(gateData, run.runId, migration.targetRef);
+  const migratedContractSha256 = monitorGateContractSha256(migratedGate);
+  if (run.monitorGate.contractSha256 === migratedContractSha256) return null;
+  run.monitorGate.contractSha256 = migratedContractSha256;
+  validateRunData(run);
+  return `${JSON.stringify(run, null, 2)}\n`;
 }
 
 function hasRunIndex(runsDir) {
@@ -2293,7 +2634,9 @@ function planAndMigrateRunLayout(args, targetRunsDir, legacyRunsDirs) {
       ...migrations.flatMap((migration) => migration.files.map((file) => ({
         source: path.resolve(file.source),
         target: path.resolve(file.target),
-        replacement: migrationSidecarReplacement(file.source, file.suffix, migration.targetRef),
+        replacement: file.suffix === '.json'
+          ? migrationRunReplacement(migration)
+          : migrationSidecarReplacement(file.source, file.suffix, migration.targetRef),
       }))),
       ...reservationMoves.map((reservation) => ({
         source: path.resolve(reservation.source),
@@ -2438,6 +2781,7 @@ export function main(argv = process.argv.slice(2)) {
     if (args.command === 'start') return startRun(args);
     if (args.command === 'record') return recordRun(args);
     if (args.command === 'verify') return verifyRun(args);
+    if (args.command === 'checkpoint') return checkpointRun(args);
     if (args.command === 'finish') return finishRun(args);
     if (args.command === 'list') return listRuns(args);
     if (args.command === 'show') return showRun(args);

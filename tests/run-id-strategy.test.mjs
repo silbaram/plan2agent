@@ -15,6 +15,7 @@ import { allocateRunId, previewRunId } from '../scripts/p2a_project_config.mjs';
 import { canonicalRunRef, canonicalTaskGraphRef, runFilePath } from '../scripts/p2a_run_paths.mjs';
 import { runWriteTransactionPath, withRunStoreLocks } from '../scripts/p2a_run_store.mjs';
 import { assertStartTaskSourceUnchanged } from '../scripts/p2a_runs.mjs';
+import { validateRunData } from '../scripts/validate_artifacts.mjs';
 import {
   E2E_FIXTURE_ROOT,
   EXECUTE_CLI,
@@ -344,7 +345,7 @@ test('iterative handoff next recommendation executes against the flattened targe
     assert.equal(next.state, 'ready_task_available');
     assert.deepEqual(next.command.argv.slice(0, 3), [
       'execute',
-      'plan',
+      'start',
       '--graph',
     ]);
 
@@ -1193,6 +1194,23 @@ test('creates a fresh worktree before validating the same path passed as workspa
     );
     assert.equal(run.workspacePath, path.resolve(worktree));
     assert.equal(run.isolation.created, true);
+    assert.equal(run.executionEnvelope.objective.includes('webhook ingestion service'), true);
+    assert.deepEqual(run.executionEnvelope.mustPreserve, [
+      'Preserve raw-body signature verification before payload parsing',
+      'Preserve the provider-neutral queue and dead-letter adapter boundaries',
+    ]);
+    assert.equal(run.executionEnvelope.sourceGateRefs[0].path, 'fixtures/webhook-api-service/spec.approved.json');
+    assert.equal(
+      run.executionEnvelopeSha256,
+      createHash('sha256').update(JSON.stringify(run.executionEnvelope)).digest('hex'),
+    );
+    const envelopeMissing = structuredClone(run);
+    delete envelopeMissing.executionEnvelope;
+    delete envelopeMissing.executionEnvelopeSha256;
+    assert.throws(
+      () => validateRunData(envelopeMissing),
+      /non-maintenance run mode requires a Gate B executionEnvelope/,
+    );
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -2829,6 +2847,54 @@ test('direct run start rejects a task graph replaced while isolation is preparin
   assert.equal(existsSync(runFilePath(runsDir, runId)), false);
   assert.equal(existsSync(path.join(runsDir, 'run-index.json')), false);
   assert.equal(JSON.parse(readFileSync(graphPath, 'utf8')).tasks[0].title, draft.tasks[0].title);
+});
+
+test('direct run start rejects Gate B drift while isolation is preparing', async () => {
+  const artifactRoot = initializedArtifactRoot('run-start-gate-b-drift');
+  const specPath = path.join(artifactRoot, 'iterations', 'v1-mvp', 'gate-b-spec', 'spec.json');
+  const runsDir = path.join(artifactRoot, 'runs');
+  const workspaceRoot = tempRoot('run-start-gate-b-drift-workspace');
+  const workspace = path.join(workspaceRoot, 'workspace');
+  const hookControlDir = tempRoot('run-start-gate-b-drift-hook');
+  const readyPath = path.join(hookControlDir, 'isolation-ready');
+  const releasePath = path.join(hookControlDir, 'isolation-release');
+  const runId = 'run-gate-b-drift-race';
+  const gitEnv = gitHooksEnv(path.join(workspace, '.git', 'hooks'));
+  initGitWorkspace(workspace, { env: gitEnv });
+  installBlockingPostCheckoutHook(workspace, readyPath, releasePath);
+
+  const startPromise = runCliAsync([
+    'start',
+    '--artifacts', artifactRoot,
+    '--task', 'task-001',
+    '--run-id', runId,
+    '--agent-tool', 'codex',
+    '--workspace', workspace,
+    '--isolation', 'branch',
+    '--branch', 'p2a/gate-b-drift-race',
+    '--create-isolation',
+  ], ROOT, { env: gitEnv });
+
+  try {
+    await waitForPath(readyPath);
+    const spec = JSON.parse(readFileSync(specPath, 'utf8'));
+    spec.product.problem = `${spec.product.problem} Changed during isolation preparation.`;
+    writeFileSync(specPath, `${JSON.stringify(spec, null, 2)}\n`, 'utf8');
+  } finally {
+    writeFileSync(releasePath, 'release\n', 'utf8');
+  }
+
+  try {
+    const startResult = await startPromise;
+    assert.equal(startResult.status, 1, startResult.stderr);
+    assert.match(startResult.stderr, /Gate B execution contract changed while run .* was preparing isolation/i);
+    assert.equal(existsSync(runFilePath(runsDir, runId)), false);
+    assert.equal(existsSync(path.join(runsDir, 'run-index.json')), false);
+  } finally {
+    rmSync(artifactRoot, { recursive: true, force: true });
+    rmSync(workspaceRoot, { recursive: true, force: true });
+    rmSync(hookControlDir, { recursive: true, force: true });
+  }
 });
 
 test('p2a_execute keeps a task claimed when pending run recovery blocks start', () => {

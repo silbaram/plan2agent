@@ -7,8 +7,25 @@ import path from 'node:path';
 import process from 'node:process';
 import { pathToFileURL } from 'node:url';
 import { FAILURE_CLASSES, FAILURE_RETRYABLE, ISOLATION_MODES } from './p2a_constants.mjs';
-import { loadJson, validateProposalDraftApprovalData, validateRunData, validateRunIndexData, validateTaskGraphData, ValidationError } from './validate_artifacts.mjs';
-import { monitorGateSidecarPath, normalizeMonitorVerdictData, readMonitorGateSidecar } from './p2a_monitor_gate.mjs';
+import {
+  approvedVisualReviewContract,
+  loadJson,
+  resolveSpecSourceIntake,
+  validateCurrentSpecGateBApprovalAudit,
+  validateProposalDraftApprovalData,
+  validateRunData,
+  validateRunIndexData,
+  validateRunTaskContract,
+  validateSpec,
+  validateTaskGraphData,
+  ValidationError,
+} from './validate_artifacts.mjs';
+import {
+  assertRunMonitorGateBinding,
+  monitorGateSidecarPath,
+  normalizeMonitorVerdictData,
+  readMonitorGateSidecar,
+} from './p2a_monitor_gate.mjs';
 import {
   resolveIterationState,
   validateMaintenanceTaskGraphProject,
@@ -23,25 +40,40 @@ import {
   compareRunIndexEvidence,
   resolveRunsDir,
   runFilePath,
+  runMatchesSourceContext,
   taskGraphRefMatchesGraph,
 } from './p2a_run_paths.mjs';
 import {
   assertNoUninitializedScaffoldArtifactRoots,
   assertNotUninitializedScaffoldGraph,
   configuredTaskGraphPath,
-  normalizePath,
   resolveP2aPaths,
   singleArtifactProjectRoot,
 } from './p2a_paths.mjs';
 import { atomicWriteJson, runWriteTransactionPath, withRunStoreLocks } from './p2a_run_store.mjs';
 import { commandLine as sharedCommandLine, printRunCommandFooter } from './p2a_run_commands.mjs';
 import { allocateRunId, previewRunId, releaseRunIdReservation } from './p2a_project_config.mjs';
+import {
+  artifactRelativePath,
+  assertDirectory,
+  assertFile,
+  displayPath,
+  hasInterruptionOptions,
+  hasStructuredDetailOptions,
+  parseGateReturn,
+  parseNonNegativeInteger,
+  requiredNonBlankText,
+  requiredValue,
+  uniqueStrings,
+} from './p2a_cli_helpers.mjs';
 
 const P2A_PATHS = resolveP2aPaths(import.meta.url);
 const ROOT = P2A_PATHS.projectRoot;
-const COMMANDS = new Set(['plan', 'start', 'review', 'accept', 'resume', 'status', 'finish']);
+const COMMANDS = new Set(['prepare', 'plan', 'start', 'review', 'accept', 'resume', 'status', 'finish']);
+const PREPARE_MODES = new Set(['direct', 'planned']);
 const FINISH_STATUSES = new Set(['finished', 'failed', 'blocked']);
 const FAILURE_SOURCES = new Set(['owner', 'monitor', 'implementer']);
+const USAGE_SOURCES = new Set(['provider', 'manual']);
 const IMPLEMENTER_AGENT_TOOLS = new Set(['codex', 'claude', 'manual']);
 const REVIEWER_AGENT_TOOLS = new Set(['codex', 'claude', 'gemini', 'manual']);
 const DEFAULT_PROJECT_CONFIG = path.join('.plan2agent', 'project.config.json');
@@ -60,6 +92,7 @@ const RUN_INDEX_EVIDENCE_FIELDS = [
 function usage() {
   return [
     'Usage:',
+    '  p2a execute prepare --artifacts <dir> --mode direct|planned --selection-rationale <text> [options]',
     '  p2a execute plan (--artifacts <dir>|--graph <path>) [--task <task-id>] [options]',
     '  p2a execute start (--artifacts <dir>|--graph <path>) [--task <task-id>] [options]',
     '  p2a execute review (--artifacts <dir>|--graph <path>) [--task <task-id>] [options]',
@@ -69,6 +102,7 @@ function usage() {
     '  p2a execute finish (--artifacts <dir>|--graph <path>) --run-id <run-id> [options]',
     '',
     'Commands:',
+    '  prepare              Create one synthetic Gate C work item for opt-in direct or planned execution.',
     '  plan                 Resolve one ready task and print the supervised execution plan. No files are changed.',
     '  start                Create a run, mark the task in_progress, and print the manual launcher prompt.',
     '  review               Start the single no-change pre-close visual review run for the iteration.',
@@ -82,6 +116,11 @@ function usage() {
     '  --graph <path>       Legacy task graph path. Managed iteration start/finish require --artifacts.',
     '  --spec <path>        Spec JSON path for prompt context. Only supported with --graph.',
     '  --maintenance        With --artifacts, use the maintenance task graph.',
+    '',
+    'Prepare options:',
+    '  --mode direct|planned',
+    '  --selection-rationale <text>',
+    '  --milestone <id|outcome|command>  Planned only; repeat 2-5 times in execution order.',
     '',
     'Start/plan/review/accept options:',
     '  --task <task-id>     Task to execute; for review/accept, optional remediation owner. Start/plan require one ready task when omitted.',
@@ -111,6 +150,12 @@ function usage() {
     '  --collect-git',
     '  --changed-file <path>   Repeatable.',
     '  --note <text>           Repeatable.',
+    '  --usage-model <profile>',
+    '  --usage-input-tokens <n>, --usage-output-tokens <n>',
+    '  --usage-source provider|manual',
+    '  --implementation-interruption <text>  Repeatable.',
+    '  --user-correction <text> Repeatable.',
+    '  --gate-return valid|invalid:<text>  Repeatable.',
     '  --repro-step <text>     Required with localization and guard when finishing failed/blocked. Repeatable.',
     '  --repro-command <cmd>   Append a command that reproduces the observed issue. Repeatable.',
     '  --repro-note <text>     Append reproduction context. Repeatable.',
@@ -130,6 +175,7 @@ function parseArgs(argv) {
   const command = argv[0];
   if (!command || command === '--help' || command === '-h') return { help: true };
   if (!COMMANDS.has(command)) throw new Error(`unknown command: ${command}\n\n${usage()}`);
+  const providedOptions = new Set();
 
   const args = {
     command,
@@ -152,6 +198,13 @@ function parseArgs(argv) {
     requireMonitor: false,
     changedFiles: [],
     notes: [],
+    usageModel: null,
+    usageInputTokens: null,
+    usageOutputTokens: null,
+    usageSource: null,
+    implementationInterruptions: [],
+    userCorrections: [],
+    gateReturns: [],
     reproductionSteps: [],
     reproductionCommands: [],
     reproductionNotes: [],
@@ -170,16 +223,23 @@ function parseArgs(argv) {
     collectGit: false,
     saveConfig: false,
     noTaskTransition: false,
+    mode: null,
+    selectionRationale: null,
+    milestones: [],
     help: false,
   };
 
   for (let index = 1; index < argv.length; index += 1) {
     const arg = argv[index];
+    if (arg.startsWith('--') && arg !== '--help') providedOptions.add(arg);
     if (arg === '--help' || arg === '-h') args.help = true;
     else if (arg === '--artifacts') args.artifacts = requiredValue(argv, ++index, '--artifacts');
     else if (arg === '--graph') args.graph = requiredValue(argv, ++index, '--graph');
     else if (arg === '--spec') args.spec = requiredValue(argv, ++index, '--spec');
     else if (arg === '--maintenance') args.maintenance = true;
+    else if (arg === '--mode') args.mode = requiredValue(argv, ++index, '--mode');
+    else if (arg === '--selection-rationale') args.selectionRationale = requiredNonBlankText(argv, ++index, '--selection-rationale');
+    else if (arg === '--milestone') args.milestones.push(parseExecutionMilestone(requiredValue(argv, ++index, '--milestone', { allowLeadingDash: true })));
     else if (arg === '--task') args.taskId = requiredValue(argv, ++index, '--task');
     else if (arg === '--approval') args.approval = requiredValue(argv, ++index, '--approval');
     else if (arg === '--agent-tool') args.agentTool = requiredValue(argv, ++index, '--agent-tool');
@@ -197,6 +257,16 @@ function parseArgs(argv) {
     else if (arg === '--require-monitor') args.requireMonitor = true;
     else if (arg === '--changed-file') args.changedFiles.push(requiredValue(argv, ++index, '--changed-file'));
     else if (arg === '--note') args.notes.push(requiredValue(argv, ++index, '--note', { allowLeadingDash: true }));
+    else if (arg === '--usage-model') args.usageModel = requiredNonBlankText(argv, ++index, '--usage-model');
+    else if (arg === '--usage-input-tokens') args.usageInputTokens = parseNonNegativeInteger(requiredValue(argv, ++index, '--usage-input-tokens'), '--usage-input-tokens');
+    else if (arg === '--usage-output-tokens') args.usageOutputTokens = parseNonNegativeInteger(requiredValue(argv, ++index, '--usage-output-tokens'), '--usage-output-tokens');
+    else if (arg === '--usage-source') {
+      args.usageSource = requiredValue(argv, ++index, '--usage-source');
+      if (!USAGE_SOURCES.has(args.usageSource)) throw new Error('--usage-source must be provider or manual');
+    }
+    else if (arg === '--implementation-interruption') args.implementationInterruptions.push(requiredNonBlankText(argv, ++index, '--implementation-interruption'));
+    else if (arg === '--user-correction') args.userCorrections.push(requiredNonBlankText(argv, ++index, '--user-correction'));
+    else if (arg === '--gate-return') args.gateReturns.push(parseGateReturn(requiredValue(argv, ++index, '--gate-return', { allowLeadingDash: true })));
     else if (arg === '--repro-step') args.reproductionSteps.push(requiredValue(argv, ++index, '--repro-step', { allowLeadingDash: true }));
     else if (arg === '--repro-command') args.reproductionCommands.push(requiredValue(argv, ++index, '--repro-command', { allowLeadingDash: true }));
     else if (arg === '--repro-note') args.reproductionNotes.push(requiredValue(argv, ++index, '--repro-note', { allowLeadingDash: true }));
@@ -256,6 +326,25 @@ function parseArgs(argv) {
     args.maintenance = true;
   }
   if (args.spec && args.artifacts) throw new Error('--spec is only supported with --graph; --artifacts uses the active iteration spec');
+  if (args.command === 'prepare') {
+    if (!args.artifacts || args.graph) throw new Error('prepare requires --artifacts');
+    if (args.maintenance || args.taskId || args.approval) throw new Error('prepare does not support --maintenance, --task, or --approval');
+    if (!PREPARE_MODES.has(args.mode)) throw new Error('prepare --mode must be direct or planned');
+    if (!args.selectionRationale) throw new Error('--selection-rationale is required for prepare');
+    if (args.mode === 'direct' && args.milestones.length) throw new Error('direct execution does not accept --milestone');
+    if (args.mode === 'planned' && (args.milestones.length < 2 || args.milestones.length > 5)) {
+      throw new Error('planned execution requires 2-5 --milestone values');
+    }
+    const allowedPrepareOptions = new Set(['--artifacts', '--mode', '--selection-rationale', '--milestone']);
+    const unsupportedPrepareOptions = [...providedOptions]
+      .filter((option) => !allowedPrepareOptions.has(option))
+      .sort();
+    if (unsupportedPrepareOptions.length) {
+      throw new Error(`prepare does not support option(s): ${unsupportedPrepareOptions.join(', ')}`);
+    }
+  } else if (args.mode || args.selectionRationale || args.milestones.length) {
+    throw new Error('--mode, --selection-rationale, and --milestone are only supported with prepare');
+  }
   if (args.maintenance && !args.artifacts) throw new Error('--maintenance is only supported with --artifacts');
   if (args.graph) assertNotUninitializedScaffoldGraph(args.graph);
   if (args.graph && ['start', 'review', 'accept', 'finish'].includes(args.command)) {
@@ -278,54 +367,31 @@ function parseArgs(argv) {
   if (args.requireMonitor && args.command !== 'start') {
     throw new Error('--require-monitor is only supported with start');
   }
-  if (args.command !== 'finish' && (args.status || args.failureClass || args.retryable || args.needsUserDecision !== null || args.failureSource || args.collectGit || args.saveConfig || hasStructuredDetailOptions(args))) {
+  const hasUsage = [args.usageModel, args.usageInputTokens, args.usageOutputTokens, args.usageSource]
+    .some((value) => value !== null);
+  if (hasUsage && (args.usageModel === null || args.usageInputTokens === null || args.usageOutputTokens === null)) {
+    throw new Error('--usage-model, --usage-input-tokens, and --usage-output-tokens are required together');
+  }
+  if (hasUsage && !Number.isSafeInteger(args.usageInputTokens + args.usageOutputTokens)) {
+    throw new Error('usage input and output token total exceeds the safe integer range');
+  }
+  if (hasUsage) args.usageSource ??= 'manual';
+  if (args.command !== 'finish' && (args.status || args.failureClass || args.retryable || args.needsUserDecision !== null || args.failureSource || args.collectGit || args.saveConfig || hasStructuredDetailOptions(args) || hasUsage || hasInterruptionOptions(args))) {
     throw new Error('finish options are only supported with finish');
   }
   return args;
 }
 
-function hasStructuredDetailOptions(args) {
-  return [
-    args.reproductionSteps,
-    args.reproductionCommands,
-    args.reproductionNotes,
-    args.localizationFindings,
-    args.localizedFiles,
-    args.fixSummaries,
-    args.fixFiles,
-    args.guardChecks,
-    args.guardNotes,
-  ].some((values) => values.length > 0);
-}
-
-function requiredValue(argv, index, optionName, options = {}) {
-  const value = argv[index];
-  if (!value || (!options.allowLeadingDash && value.startsWith('--'))) throw new Error(`missing value for ${optionName}`);
-  return value;
-}
-
-function assertFile(filePath, label) {
-  if (!existsSync(filePath)) throw new Error(`${label} is missing: ${filePath}`);
-  if (!lstatSync(filePath).isFile()) throw new Error(`${label} must be a file: ${filePath}`);
-}
-
-function assertDirectory(dirPath, label) {
-  if (!existsSync(dirPath)) throw new Error(`${label} is missing: ${dirPath}`);
-  if (!lstatSync(dirPath).isDirectory()) throw new Error(`${label} must be a directory: ${dirPath}`);
-}
-
-function displayPath(filePath, root = process.cwd()) {
-  const relative = path.relative(root, filePath);
-  if (relative && !relative.startsWith('..') && !path.isAbsolute(relative)) return normalizePath(relative);
-  return normalizePath(filePath);
+function parseExecutionMilestone(value) {
+  const parts = value.split('|').map((part) => part.trim());
+  if (parts.length !== 3 || parts.some((part) => !part)) {
+    throw new Error('--milestone must use id|outcome|command');
+  }
+  return { id: parts[0], outcome: parts[1], verification: [parts[2]] };
 }
 
 function warnGraphMode() {
   console.error('warning: --graph mode does not check Gate B/D prerequisites; use --artifacts for approved iterative execution.');
-}
-
-function artifactRelativePath(artifactRoot, filePath) {
-  return normalizePath(path.relative(artifactRoot, filePath));
 }
 
 function loadProjectConfig(source, workspacePath) {
@@ -455,9 +521,23 @@ function selectCompletedVisualTask(source, taskId = null) {
   return candidates[0];
 }
 
+function sourceSpecPath(source) {
+  if (source.specPath) return source.specPath;
+  if (path.isAbsolute(source.graph.sourceSpec)) return source.graph.sourceSpec;
+  return path.resolve(path.dirname(source.graphPath), source.graph.sourceSpec);
+}
+
+function sourceHasRequiredVisualContract(source) {
+  if (source.sourceLayout === 'maintenance') return false;
+  return Boolean(approvedVisualReviewContract(
+    sourceSpecPath(source),
+    source.sourceLayout === 'graph' ? null : source.artifactRoot,
+  ));
+}
+
 function selectCompletedAcceptanceTask(source, taskId = null) {
-  if (source.graph.tasks.some((task) => task.visualImpact)) {
-    throw new Error('functional acceptance review is the non-UI close gate; iterations with visualImpact use final visual review');
+  if (sourceHasRequiredVisualContract(source)) {
+    throw new Error('functional acceptance review is not used when Gate B requires a final visual review');
   }
   if (taskId) {
     const task = requireTask(source, taskId);
@@ -596,19 +676,6 @@ function approvalRunNotes(approval) {
     `proposalPatchDraft=${approval.draftId}`,
     `proposalCandidate=${approval.candidateId}`,
   ];
-}
-
-function uniqueStrings(values) {
-  const seen = new Set();
-  const output = [];
-  for (const value of values) {
-    if (typeof value !== 'string') continue;
-    const trimmed = value.trim();
-    if (!trimmed || seen.has(trimmed)) continue;
-    seen.add(trimmed);
-    output.push(trimmed);
-  }
-  return output;
 }
 
 function fillPattern(pattern, values) {
@@ -809,6 +876,15 @@ function finishRunArgs(args, finalStatus, approval = null) {
   if (args.workspace) runArgs.push('--workspace', args.workspace);
   for (const changedFile of args.changedFiles) runArgs.push('--changed-file', changedFile);
   for (const note of uniqueStrings([...approvalRunNotes(approval), ...args.notes])) runArgs.push('--note', note);
+  if (args.usageModel !== null) {
+    runArgs.push('--usage-model', args.usageModel);
+    runArgs.push('--usage-input-tokens', String(args.usageInputTokens));
+    runArgs.push('--usage-output-tokens', String(args.usageOutputTokens));
+    runArgs.push('--usage-source', args.usageSource);
+  }
+  for (const summary of args.implementationInterruptions) runArgs.push('--implementation-interruption', summary);
+  for (const summary of args.userCorrections) runArgs.push('--user-correction', summary);
+  for (const gateReturn of args.gateReturns) runArgs.push('--gate-return', `${gateReturn.assessment}:${gateReturn.summary}`);
   for (const step of args.reproductionSteps) runArgs.push('--repro-step', step);
   for (const command of args.reproductionCommands) runArgs.push('--repro-command', command);
   for (const note of args.reproductionNotes) runArgs.push('--repro-note', note);
@@ -846,14 +922,19 @@ function readMonitorVerdict(source, sidecar) {
   assertFile(verdictPath, 'monitor verdict');
   const data = loadJson(verdictPath);
   try {
-    return normalizeMonitorVerdictData(data);
+    return normalizeMonitorVerdictData(data, {
+      requiredConcernFields: sidecar.requiredConcernFields,
+      requiredRuleIds: sidecar.ruleContract?.ruleIds,
+      requireRulesReviewed: sidecar.ruleContract !== null,
+    });
   } catch (error) {
     throw new Error(`${error.message}: ${displayPath(verdictPath)}`);
   }
 }
 
-function applyMonitorGate(args, source) {
+function applyMonitorGate(args, source, run) {
   const sidecar = readOrchestrationSidecar(source.runsDir, args.runId);
+  assertRunMonitorGateBinding(run, sidecar);
   if (!sidecar?.required) return null;
   const verdict = readMonitorVerdict(source, sidecar);
   if (sidecar.acceptedVerdicts.includes(verdict.verdict) && !verdict.hasConcerns) {
@@ -862,11 +943,13 @@ function applyMonitorGate(args, source) {
   const mappedFailureClass = sidecar.failureClassMap[verdict.failureSignal]
     ?? sidecar.failureClassMap[verdict.verdict]
     ?? 'other';
-  if (!args.status || args.status === 'finished') args.status = 'blocked';
-  if (!args.failureClass) args.failureClass = mappedFailureClass;
-  if (!args.failureSource) args.failureSource = 'monitor';
-  if (args.needsUserDecision === null && verdict.needsUserDecision) args.needsUserDecision = 'true';
-  return { sidecar, verdict: verdict.failureSignal, accepted: false, failureClass: args.failureClass };
+  return {
+    sidecar,
+    verdict: verdict.failureSignal,
+    accepted: false,
+    failureClass: mappedFailureClass,
+    needsUserDecision: verdict.needsUserDecision,
+  };
 }
 
 function updateOrchestrationRuntimeAfterFinish() {
@@ -904,19 +987,23 @@ function assertRunMatchesIndexEntry(run, indexEntry, indexProjectId) {
   }
 }
 
-function runMatchesSourceContext(run, source) {
-  return run.projectId === source.projectId
-    && run.iterationId === source.iterationId
-    && run.sourceLayout === source.sourceLayout
-    && taskGraphRefMatchesGraph(run.taskGraphRef, source.graphPath, source.artifactRoot);
-}
-
 function assertRunMatchesSourceContext(run, source) {
   if (runMatchesSourceContext(run, source)) return;
   throw new Error(
     `run ${run.runId} is outside the current execution context: expected ${source.sourceLayout} `
     + `iteration ${source.iterationId ?? 'null'} for ${source.taskGraphRef}`,
   );
+}
+
+function assertRunExecutionContractCurrent(run, source, operation) {
+  try {
+    validateRunTaskContract(run, path.dirname(path.resolve(source.runsDir)));
+  } catch (error) {
+    throw new Error(
+      `${operation} blocked because run ${run.runId} no longer matches its recorded execution contract: ${error.message}`,
+      { cause: error },
+    );
+  }
 }
 
 function latestRunIdForTask(runsDir, taskId, source) {
@@ -959,6 +1046,11 @@ function printExecutionPlan(args, source, task, runId = null, defaults = null, a
   console.log(`- project: ${source.projectId}`);
   console.log(`- source: ${source.sourceLayout}`);
   console.log(`- task: ${task.id} - ${task.title}`);
+  console.log(`- executionMode: ${source.graph.execution?.mode ?? 'orchestrated'}`);
+  if (source.graph.execution?.selectionRationale) console.log(`- selectionRationale: ${source.graph.execution.selectionRationale}`);
+  if (source.graph.execution?.milestones) {
+    console.log(`- milestones: ${source.graph.execution.milestones.map((milestone) => milestone.id).join(', ')}`);
+  }
   console.log(`- graph: ${displayPath(source.graphPath)}`);
   if (approvalLink?.approval) {
     console.log(`- proposalApproval: ${approvalLink.approval.approvalId}`);
@@ -1132,6 +1224,154 @@ function finishResultAllowsTaskTransition(result, requestedStatus, run) {
   return false;
 }
 
+function runPrepare(args) {
+  const requestedArtifactRoot = path.resolve(args.artifacts);
+  assertDirectory(requestedArtifactRoot, '--artifacts');
+  const hasCurrentSpec = existsSync(path.join(requestedArtifactRoot, 'current-spec.json'));
+  const hasIterations = existsSync(path.join(requestedArtifactRoot, 'iterations'));
+  if (hasCurrentSpec !== hasIterations) {
+    throw new Error('prepare requires either a complete iterative layout or a flat Gate B artifact root');
+  }
+  const iterative = hasCurrentSpec && hasIterations;
+  const state = iterative
+    ? resolveIterationState(requestedArtifactRoot, { requireReady: false })
+    : {
+        projectId: null,
+        artifactRoot: requestedArtifactRoot,
+        currentSpec: null,
+        activeIteration: 'v1-mvp',
+        iterationRoot: requestedArtifactRoot,
+        specPath: path.join(requestedArtifactRoot, 'gate-b-spec', 'spec.json'),
+        taskGraphPath: path.join(requestedArtifactRoot, 'gate-c-task-graph', 'task-graph.json'),
+      };
+  const runsDir = path.join(state.artifactRoot, 'runs');
+  const lockDirs = iterative
+    ? [path.join(state.artifactRoot, 'iterations'), path.dirname(state.taskGraphPath)]
+    : [state.iterationRoot];
+  if (existsSync(runsDir)) lockDirs.push(runsDir);
+  return withRunStoreLocks(lockDirs, () => {
+    const lockedState = iterative
+      ? resolveIterationState(requestedArtifactRoot, { requireReady: false })
+      : state;
+    if (
+      iterative
+      && (
+        lockedState.activeIteration !== state.activeIteration
+        || path.resolve(lockedState.taskGraphPath) !== path.resolve(state.taskGraphPath)
+      )
+    ) {
+      throw new Error('active iteration changed while prepare was waiting for state locks; retry the command');
+    }
+    if (existsSync(lockedState.taskGraphPath)) {
+      throw new Error(`Gate C task graph already exists: ${displayPath(lockedState.taskGraphPath)}`);
+    }
+    assertFile(lockedState.specPath, iterative
+      ? `iterations/${lockedState.activeIteration}/gate-b-spec/spec.json`
+      : 'gate-b-spec/spec.json');
+    const specReference = loadJson(lockedState.specPath);
+    const sourceIntakePath = resolveSpecSourceIntake(lockedState.specPath, specReference);
+    const spec = validateSpec(lockedState.specPath, sourceIntakePath, {
+      artifactRoot: lockedState.artifactRoot,
+      ...(lockedState.projectId ? { projectId: lockedState.projectId } : {}),
+    });
+    const projectId = lockedState.projectId ?? spec.project_id;
+    if (spec.approval !== 'approved') throw new Error('prepare requires an approved Gate B spec');
+    if (spec.open_decisions.length) throw new Error('prepare is blocked while spec.open_decisions is non-empty');
+    if ((lockedState.currentSpec?.open_decisions ?? []).length) {
+      throw new Error('prepare is blocked while current-spec.json open_decisions is non-empty');
+    }
+    if (spec.project_id !== projectId) {
+      throw new Error(`spec.project_id ${JSON.stringify(spec.project_id)} does not match ${JSON.stringify(projectId)}`);
+    }
+    const runIndexPath = path.join(runsDir, 'run-index.json');
+    if (existsSync(runIndexPath)) {
+      const runIndex = validateRunIndexData(loadJson(runIndexPath));
+      if (runIndex.projectId !== projectId) {
+        throw new Error(`run-index projectId ${JSON.stringify(runIndex.projectId)} does not match ${JSON.stringify(projectId)}`);
+      }
+      const executionHistory = runIndex.runs.filter((entry) => (
+        entry.iterationId === lockedState.activeIteration
+        && taskGraphRefMatchesGraph(entry.taskGraphRef, lockedState.taskGraphPath, lockedState.artifactRoot)
+      ));
+      if (executionHistory.length) {
+        const examples = executionHistory.slice(0, 5)
+          .map((entry) => `${entry.runId}:${entry.status}`)
+          .join(', ');
+        throw new Error(
+          `prepare cannot recreate a missing Gate C graph after execution history exists; run(s): ${examples}. `
+          + 'Restore the original graph or open a new iteration to preserve run lineage.',
+        );
+      }
+    }
+    if (iterative) {
+      validateCurrentSpecGateBApprovalAudit(
+        lockedState.currentSpec,
+        lockedState.activeIteration,
+        spec,
+      );
+    }
+
+    const visualReview = approvedVisualReviewContract(lockedState.specPath, lockedState.artifactRoot);
+    const acceptanceCriteria = uniqueStrings([
+      ...spec.product.core_flows,
+      ...spec.product.success_criteria,
+    ]);
+    const task = {
+      id: 'task-001',
+      title: `Deliver approved ${lockedState.activeIteration} objective`,
+      description: spec.product.problem,
+      status: 'todo',
+      dependencies: [],
+      acceptanceCriteria,
+      targetArea: 'approved iteration objective',
+      workKind: visualReview ? 'mixed' : 'non_ui',
+      suggestedAgentPrompt: 'Deliver the approved Gate B objective inside the bound execution envelope and verify it to close-ready.',
+      sourceSpecRefs: [
+        'product.goals',
+        'product.must_preserve',
+        'product.non_goals',
+        'product.core_flows',
+        'product.success_criteria',
+        'implementation.verification',
+      ],
+      ...(visualReview ? {
+        visualImpact: {
+          screenStates: structuredClone(visualReview.screenStates),
+        },
+      } : {}),
+    };
+    const graph = {
+      schema_version: 'p2a.task_graph.v1',
+      projectId,
+      version: lockedState.activeIteration,
+      sourceSpec: '../gate-b-spec/spec.json',
+      execution: {
+        mode: args.mode,
+        selectionRationale: args.selectionRationale,
+        syntheticWorkItem: true,
+        ...(args.mode === 'planned' ? { milestones: structuredClone(args.milestones) } : {}),
+      },
+      tasks: [task],
+    };
+    validateTaskGraphData(graph, lockedState.specPath, {
+      artifactPath: lockedState.taskGraphPath,
+      artifactRoot: lockedState.artifactRoot,
+      projectId,
+    });
+    atomicWriteJson(lockedState.taskGraphPath, graph);
+    console.log('Prepared adaptive execution');
+    console.log(`- mode: ${args.mode}`);
+    console.log(`- rationale: ${args.selectionRationale}`);
+    console.log(`- graph: ${displayPath(lockedState.taskGraphPath)}`);
+    if (args.mode === 'planned') console.log(`- milestones: ${args.milestones.map((milestone) => milestone.id).join(', ')}`);
+    const next = iterative
+      ? commandLine('p2a_execute.mjs', ['start', '--artifacts', args.artifacts])
+      : commandLine('p2a_iteration.mjs', ['init', '--artifacts', args.artifacts]);
+    console.log(`- next: ${next}`);
+    return 0;
+  });
+}
+
 function runPlan(args) {
   const source = resolveSource(args);
   const approvalLink = resolveApprovalSelection(args, source);
@@ -1179,6 +1419,7 @@ function runStart(args) {
       console.log(`Attached monitor gate sidecar: ${displayPath(monitorGateSidecarPath(source.runsDir, runId))}`);
     }
 
+    assertRunExecutionContractCurrent(readRun(source.runsDir, runId), source, 'launcher prompt');
     printLauncherPrompt(source, task, runId, approvalLink);
     printRunCommandFooter(P2A_PATHS, {
       sourceArgs: source.sourceArgs,
@@ -1235,6 +1476,7 @@ function runReview(args) {
       ]));
       return runResult.status ?? 1;
     }
+    assertRunExecutionContractCurrent(readRun(source.runsDir, runId), source, 'final visual review');
     printFinalVisualReviewInstructions(args, source, task, runId, workspacePath);
     printRunCommandFooter(P2A_PATHS, {
       sourceArgs: source.sourceArgs,
@@ -1291,6 +1533,7 @@ function runAccept(args) {
       ]));
       return runResult.status ?? 1;
     }
+    assertRunExecutionContractCurrent(readRun(source.runsDir, runId), source, 'final acceptance review');
     printFinalAcceptanceReviewInstructions(source, task, runId, workspacePath);
     printRunCommandFooter(P2A_PATHS, {
       sourceArgs: source.sourceArgs,
@@ -1311,23 +1554,41 @@ function runResume(args) {
     return 1;
   }
   const task = requireTask(source, run.taskId);
+  if (run.status === 'started') assertRunExecutionContractCurrent(run, source, 'resume');
   console.log('Plan2Agent execution resume');
   console.log(`- project: ${source.projectId}`);
   console.log(`- task: ${task.id} - ${task.title}`);
   console.log(`- taskStatus: ${task.status}`);
   console.log(`- runId: ${run.runId}`);
   console.log(`- runStatus: ${run.status}`);
+  console.log(`- executionMode: ${run.mode ?? 'orchestrated'}`);
   console.log(`- agentTool: ${run.agentTool}`);
   console.log(`- workspaceRef: ${run.workspaceRef}`);
+  const failedCheckpoint = run.verification.find((item) => (
+    item.milestoneId
+    && (item.status === 'failed' || item.status === 'unavailable')
+  ));
+  const nextMilestone = failedCheckpoint
+    ? null
+    : run.milestones?.find((milestone) => milestone.status === 'pending');
+  if (failedCheckpoint) {
+    console.log(`- checkpointFailure: ${failedCheckpoint.milestoneId}:${failedCheckpoint.status}`);
+    console.log('- resumeNote: checkpoint failure evidence is immutable; finish this run as failed or blocked, then start a new retry run.');
+  } else if (nextMilestone) {
+    console.log(`- nextMilestone: ${nextMilestone.id} - ${nextMilestone.outcome}`);
+    console.log(`- checkpoint: ${commandLine('p2a_runs.mjs', ['checkpoint', ...source.sourceArgs, '--run-id', run.runId, '--milestone', nextMilestone.id])}`);
+  }
   if (run.status !== 'started') {
     console.log('- resumeNote: run is already closed; use status/review commands for follow-up evidence.');
   }
-  if (run.runKind === 'final_visual_review') {
-    printFinalVisualReviewInstructions(args, source, task, run.runId, run.workspacePath);
-  } else if (run.runKind === 'final_acceptance_review') {
-    printFinalAcceptanceReviewInstructions(source, task, run.runId, run.workspacePath);
-  } else {
-    printLauncherPrompt(source, task, run.runId, approvalLink);
+  if (run.status === 'started' && !failedCheckpoint) {
+    if (run.runKind === 'final_visual_review') {
+      printFinalVisualReviewInstructions(args, source, task, run.runId, run.workspacePath);
+    } else if (run.runKind === 'final_acceptance_review') {
+      printFinalAcceptanceReviewInstructions(source, task, run.runId, run.workspacePath);
+    } else {
+      printLauncherPrompt(source, task, run.runId, approvalLink);
+    }
   }
   printRunCommandFooter(P2A_PATHS, {
     sourceArgs: source.sourceArgs,
@@ -1369,10 +1630,14 @@ function runStatus(args) {
   }
   console.log(`- runId: ${run.runId}`);
   console.log(`- runStatus: ${run.status}`);
+  console.log(`- executionMode: ${run.mode ?? 'orchestrated'}`);
   console.log(`- agentTool: ${run.agentTool}`);
   console.log(`- workspaceRef: ${run.workspaceRef}`);
   console.log(`- changedFiles: ${run.changedFiles.length}`);
   console.log(`- verification: ${run.verification.map((item) => `${item.type}:${item.status}`).join(', ') || '-'}`);
+  if (run.milestones) {
+    console.log(`- milestones: ${run.milestones.map((milestone) => `${milestone.id}:${milestone.status}`).join(', ')}`);
+  }
   const sidecar = readOrchestrationSidecar(source.runsDir, run.runId);
   if (sidecar) {
     console.log(`- monitorGate: ${sidecar.verdictPath}`);
@@ -1393,6 +1658,10 @@ function runFinish(args) {
   const approvalLink = resolveApprovalSelection(args, source);
   const existingRun = readRun(source.runsDir, args.runId);
   assertRunMatchesSourceContext(existingRun, source);
+  assertRunMonitorGateBinding(
+    existingRun,
+    readOrchestrationSidecar(source.runsDir, existingRun.runId),
+  );
   if (approvalLink.taskId) {
     if (existingRun.taskId !== approvalLink.taskId) {
       console.error(`finish refused: run ${existingRun.runId} belongs to ${existingRun.taskId}, not approval task ${approvalLink.taskId}`);
@@ -1421,7 +1690,7 @@ function runFinish(args) {
 
   const requestedBeforeMonitor = args.status ?? (verificationFailed ? 'failed' : null);
   if (!verificationFailed && (!requestedBeforeMonitor || requestedBeforeMonitor === 'finished')) {
-    const monitorResult = applyMonitorGate(args, source);
+    const monitorResult = applyMonitorGate(args, source, existingRun);
     if (monitorResult) {
       if (monitorResult.accepted) {
         console.log(`Monitor gate accepted: ${monitorResult.verdict}`);
@@ -1467,6 +1736,7 @@ export function main(argv = process.argv.slice(2)) {
       console.log(usage());
       return 0;
     }
+    if (args.command === 'prepare') return runPrepare(args);
     if (args.command === 'plan') return runPlan(args);
     if (args.command === 'start') return runStart(args);
     if (args.command === 'review') return runReview(args);

@@ -65,7 +65,7 @@ Each task must include:
 - `dependencies`: only task ids from the same draft graph.
 - `acceptanceCriteria`: at least one concrete criterion.
 - `targetArea`
-- `suggestedAgentPrompt`: a paste-ready, scope-bounded prompt for the implementing agent.
+- `suggestedAgentPrompt`: a short outcome statement for the implementing agent. Point to `sourceSpecRefs`; do not restate Gate B acceptance, constraints, or an implementation recipe.
 - `sourceSpecRefs`: at least one reference to a real `effective_spec` field, such as `implementation.architecture`; add Memory and decision lineage refs only in addition to this field.
 - `workKind: ui | non_ui | mixed` on every task when the effective spec selects `full + current_iteration`; include lightweight `visualImpact.screenStates` only for `ui` or `mixed`. Overlap is allowed because impact routes remediation and does not own final-review cases.
 
@@ -73,12 +73,13 @@ Never write `task-graph.json` directly. The canonical graph is created only by `
 
 ## Authoring rules
 
-- Split work into small dependent tasks, typically 10-50 tasks for a meaningful iteration.
-- Split large features by screen, API, data, and test boundaries.
+- Prefer one cohesive vertical work item when one owner can implement and verify the approved outcome in one resumable run.
+- Split only for a real dependency, separate write owner, independently useful verification/rollback boundary, or work that must resume across sessions. Task count is not a quality target.
+- Split large features by independently verifiable outcomes, not automatically by file, screen, API, data, and test layers.
 - Avoid duplicate work: do not create a new task that duplicates `existing_tasks.active`.
 - If `existing_tasks.active` is non-empty, do not author or persist an incremental-only draft. The context contains task summaries rather than the complete canonical task bodies. When every canonical task is still `todo`, invoke `diff-tasks --force` as the authoritative check: it generates a complete graph only when the active iteration has no run history. Review that result and promote it with explicit `--replace-existing`. Do not infer safety from the bounded `code_signals.recent_changes` summary. If any canonical task is `in_progress`, `done`, or `blocked`, or the CLI reports run history after a task was reopened to `todo`, do not replace the graph: open a new feature iteration or use the maintenance lane so task state and run lineage remain intact.
 - Use `existing_tasks.maintenance` as context, but do not turn maintenance pilot work into this draft.
-- Merge trivially connected work; split work that spans multiple target areas.
+- Merge tightly coupled work even when it spans multiple target areas; split only when the resulting items remain independently verifiable and the boundary has operational value.
 - Draft each task so its acceptance criteria are self-satisfiable from that task's explicit scope; do not attach AC that require earlier or later draft tasks to complete.
 - When a draft task adds a framework dependency that triggers auto-configuration, include the minimal required configuration (for example, a datasource URL) in that same task, or explicitly place build-green AC on the later task that owns that configuration.
 - Every task must be traceable: `sourceSpecRefs` must point to actual `effective_spec` product or implementation fields so `validateTaskGraphData` can pass.

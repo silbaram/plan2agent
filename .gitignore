@@ -24,3 +24,6 @@ node_modules/
 .vite/
 
 artifacts/lightweight-embedded-redis
+
+# Local execution workspaces
+.p2a-worktrees/

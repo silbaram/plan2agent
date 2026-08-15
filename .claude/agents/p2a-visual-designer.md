@@ -5,7 +5,6 @@ tools:
   - Read
   - Grep
   - Glob
-model: opus
 ---
 
 You are the Plan2Agent visual experience designer.

@@ -5,9 +5,11 @@ import path from 'node:path';
 import test from 'node:test';
 
 import {
+  buildProjectConfig,
   defaultDevExecution,
   detectProjectCommands,
   mergeDevSkillConfig,
+  resolveExecutionModePolicy,
   resolveReviewPasses,
 } from '../scripts/p2a_project_config.mjs';
 
@@ -82,21 +84,34 @@ test('keeps existing JavaScript package script command detection', () => {
   assert.equal(detected.typecheckCommand, 'npm run typecheck');
 });
 
-test('defaults heavyweight review passes off while keeping monitor opt-in', () => {
+test('defaults new projects to adaptive while preserving legacy omitted-mode behavior', () => {
+  assert.equal(defaultDevExecution().executionMode, 'adaptive');
+  assert.equal(Object.hasOwn(defaultDevExecution(), 'defaultIsolation'), false);
+  assert.equal(resolveExecutionModePolicy({}), 'orchestrated');
+  const projectConfig = buildProjectConfig(tempProject());
+  assert.equal(projectConfig.devExecution.executionMode, 'adaptive');
+  assert.equal(projectConfig.runTracking.defaultIsolation, 'none');
+  assert.equal(mergeDevSkillConfig({ devExecution: {} }).config.devExecution.executionMode, 'orchestrated');
   assert.deepEqual(defaultDevExecution().reviewPasses, {
     monitor: 'opt_in',
-    style: 'off',
-    milestone: 'off',
     visual: 'off',
-    acceptance: 'on',
+    acceptance: 'opt_in',
   });
   assert.deepEqual(resolveReviewPasses({}), {
     monitor: 'opt_in',
-    style: 'off',
-    milestone: 'off',
     visual: 'off',
-    acceptance: 'on',
+    acceptance: 'opt_in',
   });
+});
+
+test('supports explicit execution mode policies', () => {
+  for (const mode of ['adaptive', 'direct', 'planned', 'orchestrated']) {
+    assert.equal(resolveExecutionModePolicy({ devExecution: { executionMode: mode } }), mode);
+  }
+  assert.throws(
+    () => resolveExecutionModePolicy({ devExecution: { executionMode: 'automatic' } }),
+    /devExecution\.executionMode must be one of adaptive, direct, planned, orchestrated/,
+  );
 });
 
 test('merges review pass defaults without replacing project overrides', () => {
@@ -113,15 +128,13 @@ test('merges review pass defaults without replacing project overrides', () => {
     milestone: 'on',
     visual: 'opt_in',
     monitor: 'opt_in',
-    style: 'off',
-    acceptance: 'on',
+    acceptance: 'opt_in',
   });
   assert.deepEqual(resolveReviewPasses(merged), {
     monitor: 'opt_in',
-    style: 'off',
     milestone: 'on',
     visual: 'opt_in',
-    acceptance: 'on',
+    acceptance: 'opt_in',
   });
 });
 

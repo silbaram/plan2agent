@@ -15,8 +15,22 @@ import {
   validateRunIndexData,
   validateSkillProposal,
   validateTaskGraph,
+  validateAcceptanceReview,
+  validateMilestoneReview,
+  validateVisualReview,
 } from './validate_artifacts.mjs';
-import { resolveRunsDir, runFilePath as indexedRunFilePath } from './p2a_run_paths.mjs';
+import {
+  resolveRunsDir,
+  runFilePath as indexedRunFilePath,
+  runsMatchingTaskGraph,
+} from './p2a_run_paths.mjs';
+import {
+  assertRunMonitorGateBinding,
+  assertRunMonitorVerdictBinding,
+  normalizeMonitorVerdictData,
+  readMonitorGateSidecar,
+} from './p2a_monitor_gate.mjs';
+import { RUN_TELEMETRY_PROTOCOL } from './p2a_constants.mjs';
 import {
   assertNoUninitializedScaffoldArtifactRoots,
   assertNotUninitializedScaffoldGraph,
@@ -27,6 +41,12 @@ import {
 } from './p2a_paths.mjs';
 import { resolveIterationState } from './p2a_iteration_state.mjs';
 import { commandLine, shellQuote } from './p2a_run_commands.mjs';
+import {
+  expectedAcceptanceReviewContract,
+} from './p2a_acceptance_review_gate.mjs';
+import {
+  expectedVisualReviewContract,
+} from './p2a_visual_review_gate.mjs';
 
 const P2A_PATHS = resolveP2aPaths(import.meta.url);
 const COMMANDS = new Set(['grade', 'compare', 'analyze', 'generate', 'digest']);
@@ -34,7 +54,6 @@ const PROJECT_RUNS_DIR = path.join(P2A_PATHS.projectRoot, '.plan2agent', 'runs')
 const PROJECT_EVAL_DIR = path.join(P2A_PATHS.projectRoot, '.plan2agent', 'eval');
 const DEFAULT_PROPOSALS_DIR = path.join(P2A_PATHS.projectRoot, '.plan2agent', 'proposals');
 const DEFAULT_DIGEST_RECENT_RUNS = 30;
-const DEFAULT_STABLE_METRICS_PATH = path.join(P2A_PATHS.projectRoot, 'eval', 'stable-metrics.json');
 const BUILTIN_STABLE_METRIC_DEFINITIONS = [
   {
     id: 'failed_or_blocked_runs',
@@ -46,6 +65,108 @@ const BUILTIN_STABLE_METRIC_DEFINITIONS = [
     id: 'failure_evidence_complete_rate',
     description: 'Share of failed or blocked runs that include complete reproduction, localization, and guard evidence.',
     calculation: 'selfImprovement.runs.failureEvidence.completeRate',
+    direction: 'higher_is_better',
+  },
+  {
+    id: 'post_gate_autonomous_completion_rate',
+    description: 'Share of interruption-instrumented implementation runs that finish with passing verification and no recorded interruption.',
+    calculation: 'selfImprovement.runs.autonomy.completionRate',
+    direction: 'higher_is_better',
+  },
+  {
+    id: 'autonomy_telemetry_coverage_rate',
+    description: 'Share of implementation runs carrying the interruption telemetry protocol marker.',
+    calculation: 'selfImprovement.runs.autonomy.telemetryCoverageRate',
+    direction: 'higher_is_better',
+  },
+  {
+    id: 'implementation_decision_interruptions',
+    description: 'Count of user interruptions caused by asking the user to choose an implementation detail.',
+    calculation: 'selfImprovement.runs.autonomy.implementationDecisionInterruptions',
+    direction: 'lower_is_better',
+  },
+  {
+    id: 'user_corrections',
+    description: 'Count of recorded requirement or UI corrections supplied during execution.',
+    calculation: 'selfImprovement.runs.autonomy.userCorrections',
+    direction: 'lower_is_better',
+  },
+  {
+    id: 'valid_gate_return_precision',
+    description: 'Share of assessed Gate returns that were confirmed to require a contract change.',
+    calculation: 'selfImprovement.runs.autonomy.gateReturns.validPrecision',
+    direction: 'higher_is_better',
+  },
+  {
+    id: 'recorded_input_tokens',
+    description: 'Total recorded input tokens in the digest run scope.',
+    calculation: 'selfImprovement.runs.usage.inputTokens',
+    direction: 'lower_is_better',
+  },
+  {
+    id: 'usage_telemetry_coverage_rate',
+    description: 'Share of scoped runs with at least one recorded usage sample.',
+    calculation: 'selfImprovement.runs.usage.coverageRate',
+    direction: 'higher_is_better',
+  },
+  {
+    id: 'rule_violations',
+    description: 'Count of constitution or legacy-style violations reported in monitor rule_concerns.',
+    calculation: 'selfImprovement.runs.monitor.ruleViolations',
+    direction: 'lower_is_better',
+  },
+  {
+    id: 'rule_review_coverage_rate',
+    description: 'Share of implementation runs with a monitor verdict bound to an approved constitution or legacy-style contract and reviewed rule IDs.',
+    calculation: 'selfImprovement.runs.monitor.ruleReviewCoverageRate',
+    direction: 'higher_is_better',
+  },
+  {
+    id: 'task_count',
+    description: 'Count of execution units in the source task graph.',
+    calculation: 'selfImprovement.runs.delivery.taskCount',
+    direction: 'lower_is_better',
+  },
+  {
+    id: 'first_pass_acceptance_rate',
+    description: 'Share of graph tasks whose first implementation run passed verification and its monitor acceptance gate.',
+    calculation: 'selfImprovement.runs.delivery.firstPassAcceptance.rate',
+    direction: 'higher_is_better',
+  },
+  {
+    id: 'rework_run_count',
+    description: 'Count of implementation runs opened after an earlier successful run for the same task.',
+    calculation: 'selfImprovement.runs.delivery.reworkRuns',
+    direction: 'lower_is_better',
+  },
+  {
+    id: 'integration_defect_count',
+    description: 'Count of integration findings from milestone reviews and failed final acceptance cases.',
+    calculation: 'selfImprovement.reviews.integrationDefects.total',
+    direction: 'lower_is_better',
+  },
+  {
+    id: 'visual_drift_count',
+    description: 'Count of failed screen/state/viewport results in bound visual review evidence.',
+    calculation: 'selfImprovement.reviews.visualDrifts',
+    direction: 'lower_is_better',
+  },
+  {
+    id: 'scope_violation_count',
+    description: 'Count of approved-scope violations reported by bound monitor verdicts.',
+    calculation: 'selfImprovement.runs.monitor.scopeViolations',
+    direction: 'lower_is_better',
+  },
+  {
+    id: 'gate_b_to_close_ready_elapsed_ms',
+    description: 'Elapsed milliseconds from Gate B approval to the latest terminal run evidence.',
+    calculation: 'selfImprovement.runs.delivery.elapsedTimeMs',
+    direction: 'lower_is_better',
+  },
+  {
+    id: 'verification_evidence_completeness_rate',
+    description: 'Share of implementation runs with conclusive executed verification and required monitor verdict evidence.',
+    calculation: 'selfImprovement.runs.delivery.verificationEvidence.completeRate',
     direction: 'higher_is_better',
   },
   {
@@ -277,6 +398,7 @@ function validateArgs(args) {
       throw new Error('digest requires exactly one of --eval, --artifacts, --graph, or --runs');
     }
     if (args.graph) assertNotUninitializedScaffoldGraph(args.graph);
+    return;
   }
 }
 
@@ -320,17 +442,42 @@ function errorMessage(error) {
   return error instanceof Error && error.message ? error.message : String(error);
 }
 
+function resolveExistingReference(reference, basePaths = []) {
+  if (typeof reference !== 'string' || !reference.trim()) return null;
+  if (path.isAbsolute(reference)) return fileExists(reference) ? path.resolve(reference) : null;
+  for (const basePath of basePaths) {
+    const candidate = path.resolve(basePath, reference);
+    if (fileExists(candidate)) return candidate;
+  }
+  return null;
+}
+
+function graphSourceSpecPath(graphPath, graph, preferredPath = null) {
+  if (preferredPath && fileExists(preferredPath)) return path.resolve(preferredPath);
+  const basePaths = [path.dirname(graphPath), P2A_PATHS.projectRoot];
+  let ancestor = path.dirname(graphPath);
+  for (let depth = 0; depth < 8; depth += 1) {
+    basePaths.push(ancestor);
+    const parent = path.dirname(ancestor);
+    if (parent === ancestor) break;
+    ancestor = parent;
+  }
+  return resolveExistingReference(graph.sourceSpec, uniquePaths(basePaths));
+}
+
 function loadGraphSource(args) {
   if (args.artifacts) {
     const state = resolveIterationState(args.artifacts, { requireReady: false });
     if (!fileExists(state.taskGraphPath)) throw new Error(`task graph is missing: ${state.taskGraphPath}`);
+    const graph = validateTaskGraph(state.taskGraphPath);
     return {
       sourceKind: 'artifacts',
       sourcePath: state.artifactRoot,
       projectId: state.projectId,
       iterationId: state.activeIteration,
       graphPath: state.taskGraphPath,
-      graph: validateTaskGraph(state.taskGraphPath),
+      specPath: graphSourceSpecPath(state.taskGraphPath, graph, state.specPath),
+      graph,
       runsDir: resolveRunsDir({ artifacts: state.artifactRoot }),
       proposalsDir: path.join(state.artifactRoot, 'proposals'),
     };
@@ -343,6 +490,7 @@ function loadGraphSource(args) {
     projectId: graph.projectId,
     iterationId: graph.version,
     graphPath,
+    specPath: graphSourceSpecPath(graphPath, graph),
     graph,
     runsDir: resolveRunsDir({ graph: graphPath }),
     proposalsDir: path.join(path.dirname(resolveRunsDir({ graph: graphPath })), 'proposals'),
@@ -359,6 +507,7 @@ function loadAnalyzeSource(args) {
     projectId: runs.runs[0]?.projectId ?? path.basename(P2A_PATHS.projectRoot),
     iterationId: runs.runs[0]?.iterationId ?? 'runs',
     graphPath: null,
+    specPath: null,
     graph: null,
     runsDir,
     proposalsDir: path.join(path.dirname(runsDir), 'proposals'),
@@ -440,6 +589,309 @@ function readRuns(runsDir, options = {}) {
     }
   }
   return { runs: mostRecentRuns(runs, options.limit ?? null), skippedRuns, totalRuns: runs.length };
+}
+
+function filterRunsForSourceContext(sourceContext, runs) {
+  if (!sourceContext?.graphPath) return [...runs];
+  const artifactRoot = sourceContext.runsDir
+    ? artifactRootForRunsDir(sourceContext.runsDir)
+    : null;
+  const matchingGraphRuns = runsMatchingTaskGraph(
+    runs,
+    sourceContext.graphPath,
+    artifactRoot,
+  );
+  return matchingGraphRuns.filter((run) => (
+    (!sourceContext.projectId || run.projectId === sourceContext.projectId)
+    && (!sourceContext.iterationId || run.iterationId === sourceContext.iterationId)
+    && (sourceContext.sourceKind !== 'artifacts' || run.sourceLayout === 'iteration')
+  ));
+}
+
+function readSourceRuns(sourceContext, options = {}) {
+  const allRuns = sourceContext?.runsDir
+    ? readRuns(sourceContext.runsDir)
+    : { runs: [], skippedRuns: [], totalRuns: 0 };
+  const sourceRuns = filterRunsForSourceContext(sourceContext, allRuns.runs);
+  return {
+    runs: mostRecentRuns(sourceRuns, options.limit ?? null),
+    skippedRuns: allRuns.skippedRuns,
+    totalRuns: sourceRuns.length,
+    totalRunsInStore: allRuns.totalRuns,
+  };
+}
+
+function readMonitorEvidence(runsDir, runs) {
+  const byRunId = new Map();
+  const skipped = [];
+  if (!runsDir) return { byRunId, skipped };
+  for (const run of runs) {
+    try {
+      const gate = readMonitorGateSidecar(runsDir, run.runId);
+      assertRunMonitorGateBinding(run, gate);
+      if (!gate?.required) continue;
+      const verdictPath = path.resolve(runsDir, gate.verdictPath);
+      const verdictContents = fileExists(verdictPath) ? readFileSync(verdictPath) : null;
+      assertRunMonitorVerdictBinding(run, verdictContents);
+      if (run.monitorGate?.required && !run.monitorVerdictEvidenceSha256) continue;
+      if (verdictContents === null) continue;
+      const verdict = normalizeMonitorVerdictData(JSON.parse(verdictContents.toString('utf8')), {
+        requiredConcernFields: gate.requiredConcernFields,
+        requiredRuleIds: gate.ruleContract?.ruleIds,
+        requireRulesReviewed: gate.ruleContract !== null,
+      });
+      byRunId.set(run.runId, { gate, verdict });
+    } catch (error) {
+      skipped.push({ runId: run.runId, reason: errorMessage(error) });
+    }
+  }
+  return { byRunId, skipped };
+}
+
+function sha256Contents(contents) {
+  return createHash('sha256').update(contents).digest('hex');
+}
+
+function reviewRunIdFromPath(filePath, suffix) {
+  const name = path.basename(filePath);
+  return name.endsWith(suffix) ? name.slice(0, -suffix.length) : null;
+}
+
+function readReviewEvidence(scanRoots, runs, options = {}) {
+  const runById = new Map(runs.map((run) => [run.runId, run]));
+  const iterationIds = new Set(runs.map((run) => run.iterationId).filter(Boolean));
+  const acceptance = [];
+  const milestone = [];
+  const visual = [];
+  const skipped = [];
+  const seenFiles = new Set();
+  for (const root of scanRoots) {
+    for (const filePath of safeJsonFilesRecursive(root)) {
+      const resolved = path.resolve(filePath);
+      if (seenFiles.has(resolved)) continue;
+      seenFiles.add(resolved);
+      let raw;
+      let payload;
+      try {
+        raw = readFileSync(resolved);
+        payload = JSON.parse(raw.toString('utf8'));
+      } catch {
+        continue;
+      }
+      const schemaVersion = payload?.schema_version;
+      try {
+        if (schemaVersion === 'p2a.acceptance_review.v1') {
+          const runId = reviewRunIdFromPath(resolved, '.acceptance-review.json');
+          if (!runById.has(runId)) continue;
+          const run = runById.get(runId);
+          validateAcceptanceReview(resolved, expectedAcceptanceReviewContract(run));
+          const sha256 = sha256Contents(raw);
+          acceptance.push({
+            filePath: resolved,
+            payload,
+            runId,
+            sha256,
+            bound: Boolean(run?.runKind === 'final_acceptance_review'
+              && run.acceptanceReviewEvidenceSha256 === sha256),
+            successful: Boolean(run?.status === 'finished'
+              && run?.runKind === 'final_acceptance_review'
+              && run.acceptanceReviewEvidenceSha256 === sha256
+              && payload.verdict === 'confirm_behavior'),
+          });
+        } else if (schemaVersion === 'p2a.milestone_review.v1') {
+          if (!['midpoint.json', 'pre_close.json'].includes(path.basename(resolved))) continue;
+          if (iterationIds.size && !iterationIds.has(payload.iteration_id)) continue;
+          validateMilestoneReview(resolved);
+          milestone.push({ filePath: resolved, payload, sha256: sha256Contents(raw) });
+        } else if (schemaVersion === 'p2a.visual_review.v1' || schemaVersion === 'p2a.visual_review.v2') {
+          if (!runById.has(payload.run_id)) continue;
+          const run = runById.get(payload.run_id);
+          validateVisualReview(resolved, expectedVisualReviewContract(run, { finishedAt: run.finishedAt }), {
+            ...(options.artifactRoot ? { artifactRoot: options.artifactRoot } : {}),
+          });
+          const sha256 = sha256Contents(raw);
+          visual.push({
+            filePath: resolved,
+            payload,
+            runId: payload.run_id,
+            sha256,
+            bound: Boolean(run?.runKind === 'final_visual_review'
+              && run.visualReviewEvidenceSha256 === sha256),
+            successful: Boolean(run?.status === 'finished'
+              && run?.runKind === 'final_visual_review'
+              && run.visualReviewEvidenceSha256 === sha256
+              && payload.verdict === 'confirm_ui'),
+          });
+        }
+      } catch (error) {
+        skipped.push({ filePath: displayPath(resolved), schemaVersion, reason: errorMessage(error) });
+      }
+    }
+  }
+  return { acceptance, milestone, visual, skipped };
+}
+
+function buildReviewSelfImprovementSummary(reviewEvidence) {
+  const boundAcceptance = reviewEvidence.acceptance.filter((item) => item.bound);
+  const boundVisual = reviewEvidence.visual.filter((item) => item.bound);
+  const milestoneIntegrationFindings = reviewEvidence.milestone.reduce((total, item) => (
+    total + item.payload.confirmed_findings.filter((finding) => finding.category === 'integration').length
+  ), 0);
+  const failedAcceptanceCases = boundAcceptance.reduce((total, item) => (
+    total + item.payload.cases.filter((reviewCase) => reviewCase.verdict === 'fail').length
+  ), 0);
+  const visualDrifts = boundVisual.reduce((total, item) => (
+    total + item.payload.results.filter((result) => result.status === 'failed').length
+  ), 0);
+  return {
+    acceptance: {
+      total: reviewEvidence.acceptance.length,
+      bound: boundAcceptance.length,
+      successful: boundAcceptance.filter((item) => item.successful).length,
+      failedCases: failedAcceptanceCases,
+    },
+    milestone: {
+      total: reviewEvidence.milestone.length,
+      midpoint: reviewEvidence.milestone.filter((item) => item.payload.checkpoint === 'midpoint').length,
+      preClose: reviewEvidence.milestone.filter((item) => item.payload.checkpoint === 'pre_close').length,
+      integrationFindings: milestoneIntegrationFindings,
+    },
+    visual: {
+      total: reviewEvidence.visual.length,
+      bound: boundVisual.length,
+      successful: boundVisual.filter((item) => item.successful).length,
+    },
+    integrationDefects: {
+      milestoneFindings: milestoneIntegrationFindings,
+      failedAcceptanceCases,
+      total: milestoneIntegrationFindings + failedAcceptanceCases,
+    },
+    visualDrifts,
+    skipped: reviewEvidence.skipped,
+  };
+}
+
+function parsedTime(value) {
+  const timestamp = typeof value === 'string' ? Date.parse(value) : Number.NaN;
+  return Number.isNaN(timestamp) ? null : timestamp;
+}
+
+function implementationRunSuccessful(run) {
+  return run.status === 'finished' && verificationOutcome(run) === 'passed';
+}
+
+function monitorAccepted(monitorEvidence) {
+  return Boolean(monitorEvidence?.verdict?.verdict === 'confirm_done'
+    && monitorEvidence.verdict.hasConcerns === false);
+}
+
+function conclusiveVerification(run) {
+  return (run.verification ?? []).filter((item) => (
+    ['command', 'config'].includes(item.source)
+    && ['passed', 'failed'].includes(item.status)
+    && Number.isInteger(item.exitCode)
+    && parsedTime(item.startedAt) !== null
+    && parsedTime(item.finishedAt) !== null
+  ));
+}
+
+function buildDeliveryMetricSummary(runs, graph, spec, monitorEvidenceByRunId) {
+  const implementationRuns = runs.filter((run) => !run.runKind);
+  const graphTaskIds = graph?.tasks?.map((task) => task.id) ?? sortedUnique(implementationRuns.map((run) => run.taskId));
+  const runsByTask = new Map(graphTaskIds.map((taskId) => [taskId, []]));
+  for (const run of implementationRuns) {
+    if (!runsByTask.has(run.taskId)) runsByTask.set(run.taskId, []);
+    runsByTask.get(run.taskId).push(run);
+  }
+  for (const taskRuns of runsByTask.values()) {
+    taskRuns.sort((left, right) => (
+      runSortTimestamp(left).localeCompare(runSortTimestamp(right))
+      || left.runId.localeCompare(right.runId)
+    ));
+  }
+
+  let firstPassAcceptedTasks = 0;
+  let reworkRuns = 0;
+  const taskDetails = [];
+  for (const taskId of graphTaskIds) {
+    const taskRuns = runsByTask.get(taskId) ?? [];
+    const first = taskRuns[0] ?? null;
+    const firstAccepted = Boolean(first
+      && implementationRunSuccessful(first)
+      && monitorAccepted(monitorEvidenceByRunId.get(first.runId)));
+    if (firstAccepted) firstPassAcceptedTasks += 1;
+    let priorSuccessful = false;
+    let taskReworkRuns = 0;
+    for (const run of taskRuns) {
+      if (priorSuccessful) {
+        reworkRuns += 1;
+        taskReworkRuns += 1;
+      }
+      if (implementationRunSuccessful(run)) priorSuccessful = true;
+    }
+    taskDetails.push({
+      taskId,
+      runs: taskRuns.length,
+      firstRunId: first?.runId ?? null,
+      firstPassAccepted: firstAccepted,
+      reworkRuns: taskReworkRuns,
+      latestRunId: taskRuns.at(-1)?.runId ?? null,
+      latestSuccessful: taskRuns.length ? implementationRunSuccessful(taskRuns.at(-1)) : false,
+    });
+  }
+
+  const incompleteVerificationRuns = [];
+  for (const run of implementationRuns) {
+    const actualVerification = conclusiveVerification(run);
+    const monitorVerdictRequired = run.monitorGate?.required === true;
+    const missing = [];
+    if (!actualVerification.length) missing.push('executed_verification');
+    if (monitorVerdictRequired && !monitorEvidenceByRunId.has(run.runId)) missing.push('monitor_verdict');
+    if (missing.length) incompleteVerificationRuns.push({ runId: run.runId, taskId: run.taskId, missing });
+  }
+  const gateBApprovedAt = spec?.approval_audit?.approved_at ?? null;
+  const gateBApprovedTimestamp = parsedTime(gateBApprovedAt);
+  const closeReadyTimestamp = runs
+    .map((run) => parsedTime(run.finishedAt))
+    .filter((timestamp) => timestamp !== null)
+    .reduce((latest, timestamp) => Math.max(latest, timestamp), 0) || null;
+  const implementationRunsWithUsage = implementationRuns.filter((run) => Array.isArray(run.usage) && run.usage.length > 0);
+  const telemetryRuns = implementationRuns.filter((run) => (
+    run.telemetryProtocol === RUN_TELEMETRY_PROTOCOL && Array.isArray(run.interruptions)
+  ));
+  const completeVerificationRuns = implementationRuns.length - incompleteVerificationRuns.length;
+  return {
+    taskCount: graphTaskIds.length,
+    executedTaskCount: taskDetails.filter((task) => task.runs > 0).length,
+    taskDetails: taskDetails.slice(0, 50),
+    firstPassAcceptance: {
+      acceptedTasks: firstPassAcceptedTasks,
+      requiredTasks: graphTaskIds.length,
+      rate: ratio(firstPassAcceptedTasks, graphTaskIds.length),
+    },
+    reworkRuns,
+    telemetry: {
+      completeRuns: telemetryRuns.length,
+      requiredRuns: implementationRuns.length,
+      coverageRate: ratio(telemetryRuns.length, implementationRuns.length),
+    },
+    implementationUsage: {
+      completeRuns: implementationRunsWithUsage.length,
+      requiredRuns: implementationRuns.length,
+      coverageRate: ratio(implementationRunsWithUsage.length, implementationRuns.length),
+    },
+    verificationEvidence: {
+      completeRuns: completeVerificationRuns,
+      requiredRuns: implementationRuns.length,
+      completeRate: ratio(completeVerificationRuns, implementationRuns.length),
+      incompleteRuns: incompleteVerificationRuns.slice(0, 20),
+    },
+    gateBApprovedAt,
+    closeReadyAt: closeReadyTimestamp === null ? null : new Date(closeReadyTimestamp).toISOString(),
+    elapsedTimeMs: gateBApprovedTimestamp !== null && closeReadyTimestamp !== null && closeReadyTimestamp >= gateBApprovedTimestamp
+      ? closeReadyTimestamp - gateBApprovedTimestamp
+      : null,
+  };
 }
 
 function taskForRun(graph, run) {
@@ -840,7 +1292,7 @@ function clusterRecommendation(key) {
 
 function buildAnalyzeForSource(source, proposalsArg = null) {
   const proposalsDir = proposalsArg ? path.resolve(proposalsArg) : source.proposalsDir ?? DEFAULT_PROPOSALS_DIR;
-  const runs = readRuns(source.runsDir);
+  const runs = readSourceRuns(source);
   const { proposals, skippedProposals } = readProposals(proposalsDir);
   const clustersByKey = new Map();
   for (const run of runs.runs) {
@@ -893,6 +1345,8 @@ function buildAnalyzeForSource(source, proposalsArg = null) {
       sourcePath: displayPath(source.sourcePath),
       projectId: source.projectId,
       iterationId: source.iterationId,
+      graphPath: source.graphPath ? displayPath(source.graphPath) : null,
+      specPath: source.specPath ? displayPath(source.specPath) : null,
       runsDir: displayPath(source.runsDir),
       proposalsDir: displayPath(proposalsDir),
     },
@@ -1325,6 +1779,7 @@ function sourceDescriptor(source) {
     projectId: source.projectId,
     iterationId: source.iterationId,
     graphPath: source.graphPath ? displayPath(source.graphPath) : null,
+    specPath: source.specPath ? displayPath(source.specPath) : null,
     runsDir: displayPath(source.runsDir),
     proposalsDir: source.proposalsDir ? displayPath(source.proposalsDir) : null,
   };
@@ -1333,7 +1788,7 @@ function sourceDescriptor(source) {
 function buildGenerate(args) {
   const source = loadGenerateSource(args);
   const outputDir = resolveGenerateOutputDir(args, source);
-  const runs = source ? readRuns(source.runsDir) : { runs: [], skippedRuns: [] };
+  const runs = source ? readSourceRuns(source) : { runs: [], skippedRuns: [] };
   const { grades, skippedGrades } = source
     ? buildGeneratedGrades(source, runs)
     : { grades: [], skippedGrades: [] };
@@ -1545,6 +2000,14 @@ function ratio(numerator, denominator) {
   return Number((numerator / denominator).toFixed(3));
 }
 
+function safeMetricSum(current, addition, label) {
+  const next = current + addition;
+  if (!Number.isSafeInteger(next)) {
+    throw new Error(`${label} exceeds the safe integer range`);
+  }
+  return next;
+}
+
 function percentLabel(value) {
   if (value === null || value === undefined) return 'n/a';
   return `${Math.round(value * 100)}%`;
@@ -1590,6 +2053,21 @@ function buildDigestSourceContext(args, evalDir, artifacts) {
     ?? resolveArtifactPath(artifactSource?.sourcePath)
     ?? null;
   const sourceKind = directSource?.sourceKind ?? artifactSource?.sourceKind ?? null;
+  let graphPath = directSource?.graphPath
+    ?? resolveArtifactPath(artifactSource?.graphPath)
+    ?? null;
+  if (!graphPath && sourceKind === 'graph' && fileExists(sourcePath)) graphPath = sourcePath;
+  let specPath = directSource?.specPath
+    ?? resolveArtifactPath(artifactSource?.specPath)
+    ?? null;
+  if (!specPath && graphPath) {
+    try {
+      const graph = validateTaskGraph(graphPath);
+      specPath = graphSourceSpecPath(graphPath, graph);
+    } catch {
+      // Source validation is reported in the digest evidence summary.
+    }
+  }
   const maintenanceGraphPaths = [];
   if (sourceKind === 'artifacts' && sourcePath) {
     maintenanceGraphPaths.push(maintenanceGraphPathForSource({ sourcePath }));
@@ -1603,10 +2081,43 @@ function buildDigestSourceContext(args, evalDir, artifacts) {
   return {
     sourceKind,
     sourcePath,
+    projectId: directSource?.projectId ?? artifactSource?.projectId ?? null,
+    iterationId: directSource?.iterationId ?? artifactSource?.iterationId ?? null,
+    graphPath,
+    specPath,
     runsDir,
     proposalsDir,
     maintenanceGraphPaths: uniquePaths(maintenanceGraphPaths),
     scanRoots: uniquePaths(scanRoots).filter((dirPath) => directoryExists(dirPath)),
+  };
+}
+
+function evalArtifactSourceMatchesContext(source, sourceContext) {
+  if (!sourceContext.graphPath) return true;
+  const artifactGraphPath = resolveArtifactPath(source?.graphPath);
+  if (artifactGraphPath) {
+    return path.resolve(artifactGraphPath) === path.resolve(sourceContext.graphPath);
+  }
+  return Boolean(
+    sourceContext.projectId
+    && sourceContext.iterationId
+    && source?.projectId === sourceContext.projectId
+    && source?.iterationId === sourceContext.iterationId
+  );
+}
+
+function filterEvalArtifactsForSource(artifacts, sourceContext, runs) {
+  if (!sourceContext.graphPath) return artifacts;
+  const runIds = new Set(runs.map((run) => run.runId));
+  return {
+    ...artifacts,
+    indexes: artifacts.indexes.filter((item) => (
+      evalArtifactSourceMatchesContext(item.payload?.source, sourceContext)
+    )),
+    grades: artifacts.grades.filter((item) => runIds.has(item.payload?.run?.runId)),
+    analyses: artifacts.analyses.filter((item) => (
+      evalArtifactSourceMatchesContext(item.payload?.source, sourceContext)
+    )),
   };
 }
 
@@ -1903,7 +2414,7 @@ function evidenceSummaryForRun(run) {
   return run.structuredEvidence ?? structuredRunSummary(run);
 }
 
-function buildRunSelfImprovementSummary(runs, artifacts) {
+function buildRunSelfImprovementSummary(runs, artifacts, monitorEvidenceByRunId = new Map()) {
   const runLikeItems = runs.length
     ? runs
     : artifacts.grades.map((item) => runLikeFromGrade(item.payload));
@@ -1914,9 +2425,79 @@ function buildRunSelfImprovementSummary(runs, artifacts) {
   let blocked = 0;
   const incompleteRuns = [];
   const missing = { reproduction: 0, localization: 0, guard: 0 };
+  const usageByModelProfile = Object.create(null);
+  const usageBySource = Object.create(null);
+  let usageSamples = 0;
+  let inputTokens = 0;
+  let outputTokens = 0;
+  let totalTokens = 0;
+  let implementationDecisionInterruptions = 0;
+  let userCorrections = 0;
+  let gateReturns = 0;
+  let validGateReturns = 0;
+  let invalidGateReturns = 0;
+  let autonomousCompletions = 0;
+  let autonomyTelemetryRuns = 0;
+  let runsWithUsageSamples = 0;
+  let ruleViolations = 0;
+  let scopeViolations = 0;
+  let monitorRuns = 0;
+  let ruleReviewRuns = 0;
+  let implementationRuns = 0;
   for (const run of runLikeItems) {
     incrementCounter(byStatus, run.status ?? 'unknown');
-    if (run.status === 'finished' && verificationOutcome(run) === 'passed') successful += 1;
+    const runSuccessful = run.status === 'finished' && verificationOutcome(run) === 'passed';
+    const implementationRun = !run.runKind;
+    if (runSuccessful) successful += 1;
+    const hasInterruptionTelemetry = run.telemetryProtocol === RUN_TELEMETRY_PROTOCOL
+      && Array.isArray(run.interruptions);
+    const interruptions = hasInterruptionTelemetry ? run.interruptions : [];
+    if (implementationRun) {
+      implementationRuns += 1;
+      if (hasInterruptionTelemetry) autonomyTelemetryRuns += 1;
+      if (runSuccessful && hasInterruptionTelemetry && interruptions.length === 0) autonomousCompletions += 1;
+    }
+    const usageSamplesForRun = Array.isArray(run.usage) ? run.usage : [];
+    if (usageSamplesForRun.length > 0) runsWithUsageSamples += 1;
+    for (const sample of usageSamplesForRun) {
+      usageSamples += 1;
+      inputTokens = safeMetricSum(inputTokens, sample.inputTokens ?? 0, 'recorded input token total');
+      outputTokens = safeMetricSum(outputTokens, sample.outputTokens ?? 0, 'recorded output token total');
+      totalTokens = safeMetricSum(totalTokens, sample.totalTokens ?? 0, 'recorded token total');
+      const profile = sample.modelProfile ?? 'unknown';
+      usageByModelProfile[profile] ??= { samples: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0 };
+      usageByModelProfile[profile].samples += 1;
+      usageByModelProfile[profile].inputTokens = safeMetricSum(usageByModelProfile[profile].inputTokens, sample.inputTokens ?? 0, `${profile} input token total`);
+      usageByModelProfile[profile].outputTokens = safeMetricSum(usageByModelProfile[profile].outputTokens, sample.outputTokens ?? 0, `${profile} output token total`);
+      usageByModelProfile[profile].totalTokens = safeMetricSum(usageByModelProfile[profile].totalTokens, sample.totalTokens ?? 0, `${profile} token total`);
+      const usageSource = sample.source ?? 'unknown';
+      usageBySource[usageSource] ??= { samples: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0 };
+      usageBySource[usageSource].samples += 1;
+      usageBySource[usageSource].inputTokens = safeMetricSum(usageBySource[usageSource].inputTokens, sample.inputTokens ?? 0, `${usageSource} input token total`);
+      usageBySource[usageSource].outputTokens = safeMetricSum(usageBySource[usageSource].outputTokens, sample.outputTokens ?? 0, `${usageSource} output token total`);
+      usageBySource[usageSource].totalTokens = safeMetricSum(usageBySource[usageSource].totalTokens, sample.totalTokens ?? 0, `${usageSource} token total`);
+    }
+    if (implementationRun && hasInterruptionTelemetry) {
+      for (const interruption of interruptions) {
+        if (interruption.type === 'implementation_decision') implementationDecisionInterruptions += 1;
+        else if (interruption.type === 'user_correction') userCorrections += 1;
+        else if (interruption.type === 'gate_return') {
+          gateReturns += 1;
+          if (interruption.assessment === 'valid') validGateReturns += 1;
+          else if (interruption.assessment === 'invalid') invalidGateReturns += 1;
+        }
+      }
+    }
+    const monitorEvidence = monitorEvidenceByRunId.get(run.runId);
+    if (implementationRun && monitorEvidence) {
+      monitorRuns += 1;
+      scopeViolations += monitorEvidence.verdict?.concerns?.scope_concerns?.length ?? 0;
+      if (monitorEvidence.gate?.ruleContract?.source !== undefined
+        && monitorEvidence.gate.ruleContract.source !== 'none') {
+        ruleReviewRuns += 1;
+        ruleViolations += monitorEvidence.verdict?.concerns?.rule_concerns?.length ?? 0;
+      }
+    }
     if (run.status === 'failed') failed += 1;
     if (run.status === 'blocked') blocked += 1;
     if (run.status === 'failed' || run.status === 'blocked') {
@@ -1953,6 +2534,43 @@ function buildRunSelfImprovementSummary(runs, artifacts) {
       completeRate: ratio(complete, failedOrBlocked),
       missing,
       incompleteRuns: incompleteRuns.slice(0, 20),
+    },
+    autonomy: {
+      implementationRuns,
+      excludedReviewRuns: runLikeItems.length - implementationRuns,
+      autonomousCompletions,
+      eligibleRuns: autonomyTelemetryRuns,
+      uninstrumentedRuns: implementationRuns - autonomyTelemetryRuns,
+      telemetryCoverageRate: ratio(autonomyTelemetryRuns, implementationRuns),
+      completionRate: ratio(autonomousCompletions, autonomyTelemetryRuns),
+      implementationDecisionInterruptions,
+      userCorrections,
+      gateReturns: {
+        total: gateReturns,
+        valid: validGateReturns,
+        invalid: invalidGateReturns,
+        validPrecision: ratio(validGateReturns, validGateReturns + invalidGateReturns),
+      },
+    },
+    usage: {
+      samples: usageSamples,
+      runsWithSamples: runsWithUsageSamples,
+      runsWithoutSamples: runLikeItems.length - runsWithUsageSamples,
+      coverageRate: ratio(runsWithUsageSamples, runLikeItems.length),
+      inputTokens,
+      outputTokens,
+      totalTokens,
+      byModelProfile: usageByModelProfile,
+      bySource: usageBySource,
+    },
+    monitor: {
+      eligibleRuns: implementationRuns,
+      monitoredRuns: monitorRuns,
+      ruleReviewRuns,
+      runsWithoutRuleReview: implementationRuns - ruleReviewRuns,
+      ruleReviewCoverageRate: ratio(ruleReviewRuns, implementationRuns),
+      ruleViolations,
+      scopeViolations,
     },
   };
 }
@@ -2139,7 +2757,34 @@ function buildMaintenanceSelfImprovementSummary({
 function buildSelfImprovementDigest(args, evalDir, artifacts, clusters) {
   const sourceContext = buildDigestSourceContext(args, evalDir, artifacts);
   const runLimit = args.recentRuns ?? DEFAULT_DIGEST_RECENT_RUNS;
-  const runsRead = sourceContext.runsDir ? readRuns(sourceContext.runsDir, { limit: runLimit }) : { runs: [], skippedRuns: [], totalRuns: 0 };
+  const runsRead = readSourceRuns(sourceContext, { limit: runLimit });
+  const maintenanceRuns = sourceContext.graphPath && sourceContext.runsDir
+    ? readRuns(sourceContext.runsDir).runs.filter((run) => (
+        run.sourceLayout === 'maintenance'
+        && (!sourceContext.projectId || run.projectId === sourceContext.projectId)
+      ))
+    : runsRead.runs;
+  const monitorEvidence = readMonitorEvidence(sourceContext.runsDir, runsRead.runs);
+  const reviewEvidence = readReviewEvidence(sourceContext.scanRoots, runsRead.runs, {
+    artifactRoot: artifactRootForRunsDir(sourceContext.runsDir),
+  });
+  let sourceGraph = null;
+  let sourceSpec = null;
+  const skippedSourceEvidence = [];
+  if (sourceContext.graphPath) {
+    try {
+      sourceGraph = validateTaskGraph(sourceContext.graphPath);
+    } catch (error) {
+      skippedSourceEvidence.push({ filePath: displayPath(sourceContext.graphPath), reason: errorMessage(error) });
+    }
+  }
+  if (sourceContext.specPath) {
+    try {
+      sourceSpec = loadJson(sourceContext.specPath);
+    } catch (error) {
+      skippedSourceEvidence.push({ filePath: displayPath(sourceContext.specPath), reason: errorMessage(error) });
+    }
+  }
   const proposalRead = sourceContext.proposalsDir ? readProposals(sourceContext.proposalsDir) : { proposals: [], skippedProposals: [] };
   const approvalsRead = readProposalDraftApprovals(sourceContext.scanRoots);
   const flowArtifacts = readProposalPatchDraftsAndCurations(sourceContext.scanRoots);
@@ -2154,7 +2799,22 @@ function buildSelfImprovementDigest(args, evalDir, artifacts, clusters) {
     .filter((proposal) => proposal.status === 'approved' || scopedApprovedSignalIndex.proposalIds.has(proposal.proposalId))
     .map((proposal) => proposal.proposalId));
   const maintenanceGraphs = readMaintenanceGraphs(sourceContext, scopedApprovals);
-  const runSummary = buildRunSelfImprovementSummary(runsRead.runs, artifacts);
+  const runSummary = buildRunSelfImprovementSummary(runsRead.runs, artifacts, monitorEvidence.byRunId);
+  runSummary.delivery = buildDeliveryMetricSummary(runsRead.runs, sourceGraph, sourceSpec, monitorEvidence.byRunId);
+  const reviewSummary = buildReviewSelfImprovementSummary(reviewEvidence);
+  if (sourceSpec) {
+    const finalReviewType = sourceSpec.visual_experience?.has_visual_interface === true ? 'visual' : 'acceptance';
+    const finalReviewComplete = reviewSummary[finalReviewType].successful > 0;
+    const runEvidence = runSummary.delivery.verificationEvidence;
+    runEvidence.runComplete = runEvidence.completeRuns;
+    runEvidence.runRequired = runEvidence.requiredRuns;
+    runEvidence.finalReviewType = finalReviewType;
+    runEvidence.finalReviewComplete = finalReviewComplete;
+    runEvidence.requiredRuns += 1;
+    if (finalReviewComplete) runEvidence.completeRuns += 1;
+    else runEvidence.incompleteRuns.push({ runId: null, taskId: null, missing: [`final_${finalReviewType}_review`] });
+    runEvidence.completeRate = ratio(runEvidence.completeRuns, runEvidence.requiredRuns);
+  }
   const proposalSummary = buildProposalSelfImprovementSummary(scopedProposals, proposalRead.skippedProposals, scopedApprovedSignalIndex, {
     excludedByRunScope: proposalRead.proposals.length - scopedProposals.length,
   });
@@ -2165,7 +2825,7 @@ function buildSelfImprovementDigest(args, evalDir, artifacts, clusters) {
       ...maintenanceGraphs,
       skippedApprovals: approvalsRead.skippedApprovals.length,
     },
-    runs: runsRead.runs,
+    runs: maintenanceRuns,
     artifacts,
     proposalSummary,
     scopeActive: runScope.active,
@@ -2174,6 +2834,8 @@ function buildSelfImprovementDigest(args, evalDir, artifacts, clusters) {
   return {
     sources: {
       runsDir: sourceContext.runsDir ? displayPath(sourceContext.runsDir) : null,
+      graphPath: sourceContext.graphPath ? displayPath(sourceContext.graphPath) : null,
+      specPath: sourceContext.specPath ? displayPath(sourceContext.specPath) : null,
       proposalsDir: sourceContext.proposalsDir ? displayPath(sourceContext.proposalsDir) : null,
       runLimit,
       totalRunsAvailable: runsRead.totalRuns ?? runsRead.runs.length,
@@ -2191,13 +2853,16 @@ function buildSelfImprovementDigest(args, evalDir, artifacts, clusters) {
       curationFiles: flowArtifacts.curations.map((item) => displayPath(item.filePath)),
       maintenanceGraphs: maintenanceGraphs.graphs.map((item) => displayPath(item.filePath)),
       skippedRuns: runsRead.skippedRuns,
+      skippedMonitorEvidence: monitorEvidence.skipped,
       skippedProposals: proposalRead.skippedProposals,
       skippedApprovals: approvalsRead.skippedApprovals,
       skippedPatchDrafts: flowArtifacts.skippedPatchDrafts,
       skippedCurations: flowArtifacts.skippedCurations,
       skippedMaintenanceGraphs: maintenanceGraphs.skippedGraphs,
+      skippedSourceEvidence,
     },
     runs: runSummary,
+    reviews: reviewSummary,
     proposals: proposalSummary,
     recurringFailures: buildRecurringFailureSummary(runsRead.runs.length ? [] : clusters, runsRead.runs),
     maintenance: maintenanceSummary,
@@ -2206,7 +2871,10 @@ function buildSelfImprovementDigest(args, evalDir, artifacts, clusters) {
 
 function buildEvalDigest(args) {
   const evalDir = resolveDigestEvalDir(args);
-  const artifacts = readEvalArtifacts(evalDir);
+  const allArtifacts = readEvalArtifacts(evalDir);
+  const sourceContext = buildDigestSourceContext(args, evalDir, allArtifacts);
+  const sourceRuns = readSourceRuns(sourceContext).runs;
+  const artifacts = filterEvalArtifactsForSource(allArtifacts, sourceContext, sourceRuns);
   const byVerdict = {};
   let scoreTotal = 0;
   let scoredGrades = 0;
@@ -2335,14 +3003,30 @@ function buildEvalDigest(args) {
   return payload;
 }
 
+function ancestorDirectories(fileOrDirectory, limit = 10) {
+  if (!fileOrDirectory) return [];
+  let current = directoryExists(fileOrDirectory) ? path.resolve(fileOrDirectory) : path.dirname(path.resolve(fileOrDirectory));
+  const result = [];
+  for (let depth = 0; depth < limit; depth += 1) {
+    result.push(current);
+    const parent = path.dirname(current);
+    if (parent === current) break;
+    current = parent;
+  }
+  return result;
+}
+
+function artifactRootForRunsDir(runsDir) {
+  if (!runsDir) return null;
+  for (const directory of ancestorDirectories(runsDir)) {
+    if (path.basename(directory) === 'runs') return path.dirname(directory);
+  }
+  return path.dirname(path.resolve(runsDir));
+}
 
 function loadStableMetricDefinitions(evalDir) {
-  const candidates = [
-    path.join(evalDir, 'stable-metrics.json'),
-    DEFAULT_STABLE_METRICS_PATH,
-  ];
-  for (const filePath of candidates) {
-    if (!fileExists(filePath)) continue;
+  const filePath = path.join(evalDir, 'stable-metrics.json');
+  if (fileExists(filePath)) {
     const payload = loadJson(filePath);
     const metrics = Array.isArray(payload?.metrics) ? payload.metrics : [];
     return {
@@ -2455,6 +3139,9 @@ function printEvalDigest(payload, writeResult) {
   console.log(`- compare: total=${payload.compares.total} byVerdict=${JSON.stringify(payload.compares.byVerdict)} failingSignals=${payload.compares.failingSignals.length}`);
   console.log(`- analysis: total=${payload.analyses.total} clusters=${payload.analyses.clusters} byClassification=${JSON.stringify(payload.analyses.byClassification)}`);
   console.log(`- self-improvement: runs=${payload.selfImprovement.runs.total} failedOrBlocked=${payload.selfImprovement.runs.failedOrBlocked} proposals=${payload.selfImprovement.proposals.total} approved=${payload.selfImprovement.proposals.approved} recurringFailures=${payload.selfImprovement.recurringFailures.clusters}`);
+  console.log(`- autonomy: completion=${payload.selfImprovement.runs.autonomy.autonomousCompletions}/${payload.selfImprovement.runs.autonomy.eligibleRuns} rate=${percentLabel(payload.selfImprovement.runs.autonomy.completionRate)} telemetryCoverage=${percentLabel(payload.selfImprovement.runs.autonomy.telemetryCoverageRate)} implementationInterruptions=${payload.selfImprovement.runs.autonomy.implementationDecisionInterruptions} userCorrections=${payload.selfImprovement.runs.autonomy.userCorrections} gateReturns=${payload.selfImprovement.runs.autonomy.gateReturns.total}`);
+  console.log(`- usage: samples=${payload.selfImprovement.runs.usage.samples} coverage=${percentLabel(payload.selfImprovement.runs.usage.coverageRate)} inputTokens=${payload.selfImprovement.runs.usage.inputTokens} outputTokens=${payload.selfImprovement.runs.usage.outputTokens}`);
+  console.log(`- monitor concerns: rules=${payload.selfImprovement.runs.monitor.ruleViolations} scope=${payload.selfImprovement.runs.monitor.scopeViolations} ruleReviewCoverage=${percentLabel(payload.selfImprovement.runs.monitor.ruleReviewCoverageRate)}`);
   console.log(`- failure evidence: complete=${payload.selfImprovement.runs.failureEvidence.complete}/${payload.selfImprovement.runs.failureEvidence.required} rate=${percentLabel(payload.selfImprovement.runs.failureEvidence.completeRate)}`);
   console.log(`- maintenance conversion: converted=${payload.selfImprovement.maintenance.convertedApprovals}/${payload.selfImprovement.maintenance.approvedProposalSignals} rate=${percentLabel(payload.selfImprovement.maintenance.conversionRate)}`);
   console.log(`- post-maintenance verification: passed=${payload.selfImprovement.maintenance.postMaintenanceVerification.passed}/${payload.selfImprovement.maintenance.postMaintenanceVerification.total} rate=${percentLabel(payload.selfImprovement.maintenance.postMaintenanceVerification.successRate)}`);

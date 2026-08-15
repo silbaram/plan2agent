@@ -4,6 +4,7 @@ export const PRODUCT_FIELDS = [
   'problem',
   'target_users',
   'goals',
+  'must_preserve',
   'non_goals',
   'core_flows',
   'screens_or_interfaces',
@@ -22,19 +23,19 @@ export const IMPLEMENTATION_FIELDS = [
   'verification',
 ];
 
-function cloneJson(value) {
+export function cloneJson(value) {
   return JSON.parse(JSON.stringify(value));
 }
 
-function jsonEqual(left, right) {
+export function jsonEqual(left, right) {
   return JSON.stringify(left) === JSON.stringify(right);
 }
 
-function asStringArray(value) {
+export function asStringArray(value) {
   return Array.isArray(value) ? value.filter((item) => typeof item === 'string') : [];
 }
 
-function appendUnique(values, additions) {
+export function appendUnique(values, additions) {
   const next = [...asStringArray(values)];
   for (const addition of additions) {
     if (addition && !next.includes(addition)) next.push(addition);
@@ -58,6 +59,10 @@ export function buildInitialCanonicalSections({ iterationId = 'v1-mvp', idea, in
       goals: appendUnique(facts.slice(0, 6), [
         `Deliver the first iteration scope for ${iterationId}: ${idea}`,
       ]),
+      must_preserve: [
+        'Preserve existing behavior outside the approved first-iteration scope.',
+        'Preserve existing data and public interfaces unless Gate B explicitly approves a change.',
+      ],
       non_goals: [
         'Do not expand beyond the approved first-iteration scope without opening a follow-up decision.',
         'Do not treat unresolved clarification questions as final requirements until they are explicitly approved or converted into assumptions.',
@@ -311,7 +316,8 @@ function applySectionComposition({
   staleBaseline,
 }) {
   for (const field of fields) {
-    const nextValue = nextSource.spec[section][field];
+    const nextValue = nextSource.spec[section][field]
+      ?? (section === 'product' && field === 'must_preserve' ? [] : undefined);
     if (jsonEqual(effectiveSection[field], nextValue)) continue;
     const previousSource = fieldSources[field];
     if (staleBaseline) {
@@ -345,6 +351,7 @@ export function composeCanonicalSpecSources(sources) {
   }
   const firstSource = sources[0];
   const effectiveProduct = cloneJson(firstSource.spec.product);
+  effectiveProduct.must_preserve ??= [];
   const effectiveImplementation = cloneJson(firstSource.spec.implementation);
   const productSources = Object.fromEntries(
     PRODUCT_FIELDS.map((field) => [field, firstSource]),

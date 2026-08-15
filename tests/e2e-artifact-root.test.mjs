@@ -115,8 +115,9 @@ for (const caseData of manifest.cases ?? []) {
       assert.equal(targetNext.schema_version, 'p2a.next.v1');
       assert.equal(targetNext.state, 'ready_task_available');
       assert.equal(targetNext.command.kind, 'cli');
+      assert.equal(targetNext.command.requiresApproval, false);
       assert.deepEqual(targetNext.command.argv, [
-        'execute', 'plan',
+        'execute', 'start',
         '--graph',
         path.join(
           '.plan2agent',
@@ -135,11 +136,8 @@ for (const caseData of manifest.cases ?? []) {
       assertOk(result, `greenfield handoff --tools fixture check failed: ${caseData.id}`);
       const expectedNewAgentFiles = [
         path.join('.agents', 'agents', 'p2a-task-author.md'),
-        path.join('.agents', 'agents', 'p2a-milestone-reviewer.md'),
         path.join('.codex', 'agents', 'p2a-task-author.toml'),
-        path.join('.codex', 'agents', 'p2a-milestone-reviewer.toml'),
         path.join('.gemini', 'agents', 'p2a-task-author.md'),
-        path.join('.gemini', 'agents', 'p2a-milestone-reviewer.md'),
       ];
       const expectedToolFiles = [
         path.join('.agents', 'skills', 'p2a-harness', 'SKILL.md'),

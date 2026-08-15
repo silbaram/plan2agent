@@ -6,7 +6,7 @@
 
 문서 홈: [Plan2Agent Docs](README.md) · 사용자 시작점: [Quickstart](quickstart.md)
 
-Plan2Agent의 핵심 가치는 기획 변경이 개발 가능한 명세와 task로 연결되고, 그 과정이 시맨틱 문서로 남는 순환 시스템을 만드는 것이다. 이 하네스는 그 순환 중 "아이디어를 명세와 task graph로 바꾸는 단계"를 먼저 고정한다.
+Plan2Agent의 핵심 가치는 기획 변경이 개발 가능한 명세와 실행 준비 상태로 연결되고, 그 과정이 시맨틱 문서로 남는 순환 시스템을 만드는 것이다. 이 하네스는 그 순환 중 "아이디어를 승인 명세와 검증 가능한 실행 경계로 바꾸는 단계"를 먼저 고정한다.
 
 ## 1. 하네스 목표
 
@@ -19,9 +19,9 @@ Plan2Agent의 핵심 가치는 기획 변경이 개발 가능한 명세와 task�
 - compact Gate A 이해 요약을 명시적으로 확인받은 뒤 Gate B를 이어간다.
 - Gate ①·② 승인, 철회, 범위·헌법 변경을 append-only `decisions.jsonl`에 기록하고 기존 `approval_audit`은 호환 사본으로 유지한다.
 - 승인 게이트를 지켜 제품 명세와 구현 명세를 생성한다.
-- 구현 가능한 task graph로 분해한다.
+- 작업 특성에 따라 Direct, Planned 또는 dependency-aware Orchestrated 실행 경계를 만든다.
 - task별 agent 실행 prompt 초안을 만든다.
-- task graph validator로 누락, 과대 task, 의존성 오류, gate 위반을 찾는다.
+- Gate C validator로 mode metadata, milestone, task dependency와 gate 위반을 찾는다.
 - 반복 구조에서 semantic diff task 초안과 파일 기반 실행 로그를 관리한다.
 - CLI별 mirror drift를 검사한다.
 
@@ -88,8 +88,8 @@ Gate A/②/B/C의 상세 통과·차단 규칙은 `p2a-harness` skill이 유일�
 
 - **Gate A:** entry document에서 범위, 사용자, 결과, 제약, 제외 항목을 정리해 compact 이해 요약을 제시한다. 사용자의 실제 발화를 받은 `p2a decide --quote ...`가 Gate ① 결정을 원장에 append하고 `intake.approval_audit` 사본을 기록하기 전에는 Gate B로 넘어가지 않는다.
 - **Gate ②:** 신규 project constitution은 `p2a shape approve --quote ...`로 승인한다. 승인·철회와 내용 변경 재승인은 같은 결정 원장에 append하며 정상 feature/maintenance 반복에서는 기존 승인을 재사용한다.
-- **Gate B:** 모든 open decision 해소, `CQ-n` disposition, 필요한 기술 조사 근거를 갖춘 spec을 사용자에게 검토받고 `p2a decide --quote ...`로 승인해야 task graph로 넘어간다. `full + current_iteration`이면 사용자가 선택·승인한 hash-bound offline HTML prototype과 experience contract도 필요하다.
-- **Gate C:** Task graph의 dependency, cycle, acceptance criteria, source spec reference를 검증한다. Validator를 통과한 draft는 별도 사람 승인 audit 없이 정본으로 승격할 수 있다.
+- **Gate B:** 모든 open decision 해소, `CQ-n` disposition, 필요한 기술 조사 근거를 갖춘 spec을 사용자에게 검토받고 `p2a decide --quote ...`로 승인해야 실행 준비로 넘어간다. `full + current_iteration`이면 사용자가 선택·승인한 hash-bound offline HTML prototype과 experience contract도 필요하다. 이후 mode 선택과 synthetic compatibility work item에는 별도 사용자 승인을 요구하지 않는다.
+- **Gate C:** 공통 Gate·hash·acceptance·verification·visual readiness와 mode metadata를 검증한다. Planned는 2~5개 ordered milestone을, Orchestrated는 task dependency, cycle, ownership과 source spec reference를 추가 검사한다. Direct/Planned compatibility record 준비와 validator-clean Orchestrated draft 승격에는 별도 사람 승인 audit이 없다.
 
 `.plan2agent/artifacts/<project_id>/decisions.jsonl`이 존재하면 승인·철회 상태의 정본은 원장이다. `approval_audit`은 schema 호환과 사람이 읽기 쉬운 사본으로 남기되 상태 판단의 폴백으로 사용하지 않는다. 원장이 전혀 없는 기존 프로젝트만 audit 사본으로 폴백한다. Task 분해, run 시작·종료, validator 실행 상세, agent 내부 판단은 원장 이벤트가 아니다.
 
@@ -161,9 +161,10 @@ scripts/p2a_paths.mjs                       # relocatable runtime path helpers
 scripts/p2a_iteration.mjs                   # iteration init/open/close/maintenance CLI
 scripts/p2a_tasks.mjs                       # task status and dependency management CLI
 scripts/p2a_project_config.mjs              # project command detection and config merge helper
+scripts/p2a_cli_helpers.mjs                 # shared CLI path, collection, and lifecycle option helpers
 scripts/p2a_runs.mjs                        # task run log and verification tracking CLI
-scripts/p2a_execute.mjs                     # supervised single-task lifecycle primitive
-scripts/p2a_monitor_gate.mjs                 # supervised orchestration CLI
+scripts/p2a_execute.mjs                     # adaptive execution prepare/review/start/resume/finish coordinator
+scripts/p2a_monitor_gate.mjs                 # monitor sidecar and verdict binding helpers
 scripts/p2a_proposals.mjs                   # proposal mining/review/curation CLI
 scripts/p2a_radar_preflight.mjs             # Feature Radar preflight discovery/adapter helper
 scripts/p2a_run_paths.mjs                   # run directory resolution helper
@@ -200,11 +201,11 @@ scripts/p2a_iteration_state.mjs             # active iteration resolution helper
 | `capabilities: search` | `Grep`, `Glob` | `grep_search` | per-tool list 없음 |
 | `capabilities: web` | `WebSearch`, `WebFetch` | `google_web_search`, `web_fetch` | `web_search = "live"` |
 | `access: read-only` | tool set으로 암시 | `kind: local` | `sandbox_mode = "read-only"` |
-| `tier: light` | `model: haiku` | `temperature: 0.1`, `max_turns: 6` | `model = "gpt-5.6-sol"`, `model_reasoning_effort = "medium"` |
-| `tier: standard` | `model: sonnet` | `temperature: 0.2`, `max_turns: 10` | `model = "gpt-5.6-sol"`, `model_reasoning_effort = "high"` |
-| `tier: heavy` | `model: opus` | `temperature: 0.2`, `max_turns: 20` | `model = "gpt-5.6-sol"`, `model_reasoning_effort = "max"` |
+| `tier: light` | parent/session model 상속 | `temperature: 0.1`, `max_turns: 6` | `model = "gpt-5.6-sol"`, `model_reasoning_effort = "medium"` |
+| `tier: standard` | parent/session model 상속 | `temperature: 0.2`, `max_turns: 10` | `model = "gpt-5.6-sol"`, `model_reasoning_effort = "high"` |
+| `tier: heavy` | parent/session model 상속 | `temperature: 0.2`, `max_turns: 20` | `model = "gpt-5.6-sol"`, `model_reasoning_effort = "max"` |
 
-Gemini target fields use the documented subagent keys `kind`, `tools`, `temperature`, and `max_turns`; Gemini web capability maps to documented `google_web_search` and `web_fetch`. Codex custom agents use required `name`/`description`/`developer_instructions` plus normal session overrides such as `model`, `model_reasoning_effort`, `web_search`, and `sandbox_mode`. Neutral `web` roles alone receive `web_search = "live"`; other roles inherit the parent web-search mode.
+Claude mirror는 생성된 agent frontmatter에 `model`을 쓰지 않아 사용자가 고른 현재 세션 모델을 상속한다. Neutral `tier`는 Claude 모델 선택 신호가 아니다. Gemini target fields use the documented subagent keys `kind`, `tools`, `temperature`, and `max_turns`; Gemini web capability maps to documented `google_web_search` and `web_fetch`. Codex custom agents use required `name`/`description`/`developer_instructions` plus normal session overrides such as `model`, `model_reasoning_effort`, `web_search`, and `sandbox_mode`. Neutral `web` roles alone receive `web_search = "live"`; other roles inherit the parent web-search mode.
 
 ## 11. CLI별 차이와 하네스 정책
 
@@ -252,6 +253,7 @@ Gemini target fields use the documented subagent keys `kind`, `tools`, `temperat
 - Gate ①② 승인 명령은 사용자의 비어 있지 않은 실제 발화를 요구하고 원장과 `approval_audit` 사본을 하나의 실패 원복 경계에서 갱신한다.
 - 원장이 존재하면 `p2a next`와 shape 상태 계산은 원장을 독점적인 승인 정본으로 사용하며, 원장이 없는 legacy 프로젝트만 audit 사본으로 폴백한다.
 - task graph는 최소 필드 `id`, `title`, `description`, `dependencies`, `acceptanceCriteria`, `targetArea`, `suggestedAgentPrompt`, `sourceSpecRefs`를 가진다.
+- 새 Gate B spec은 `product.must_preserve`를 저작하고 새 run은 objective, source hash, scope, preservation, non-goal, acceptance, verification과 권한 경계를 Gate-derived `executionEnvelope`로 고정한다.
 - validation script가 schema subset, dependency id, duplicate id, cycle, unresolved decision gate, `CQ-n` disposition coverage, spec/intake decision traceability, visual experience/prototype hash와 UI review coverage를 검사한다.
 - fixture/golden output이 intake blocked, intake answered, approved spec, task graph를 포함한다.
 - CLI mirror 생성 스크립트가 CLI-중립 canonical `.agents/agents` source에서 Claude/Codex/Gemini target을 재생성한다.

@@ -51,10 +51,12 @@ Each task must include:
 ## Rules
 
 - Use `todo` as the default status.
-- Split oversized tasks before returning.
+- Prefer one cohesive vertical task when one owner can implement and verify the outcome in one resumable run. Split only for a real dependency, separate write owner, independently useful verification/rollback boundary, or cross-session resume requirement; task count is not a quality target.
+- Split oversized tasks only at independently verifiable outcome boundaries, not automatically by file or technical layer.
 - Each task's acceptance criteria must be self-satisfiable from that task's explicit scope; do not require prior or later task work to satisfy an AC.
 - A task that adds a framework dependency which triggers auto-configuration must either include the minimal configuration that auto-configuration requires (for example, a datasource URL) in the same task, or explicitly defer build-green acceptance criteria to the later task that handles that configuration.
 - Inspect `planning_memory` before decomposition. If history materially changes a task boundary, dependency, acceptance criterion, or mitigation, include a `memory:<report path or result reference>` entry and any applicable `decision:ND-n` entry in `sourceSpecRefs`, alongside at least one real product or implementation spec field.
 - Convert a relevant prior failed/blocked run into a concrete mitigation or regression acceptance criterion. Do not create work from irrelevant results, and do not block merely because Memory is unavailable or unconfigured.
+- Keep `suggestedAgentPrompt` short and point it to `sourceSpecRefs`; do not copy Gate B acceptance, constraints, file lists, or implementation order into it.
 - Do not include implementation code.
 - Do not edit files or run commands.

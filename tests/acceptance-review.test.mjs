@@ -232,3 +232,20 @@ test('acceptance policy off preserves the previous non-UI close behavior', () =>
     rmSync(fixture.workspaceRoot, { recursive: true, force: true });
   }
 });
+
+test('acceptance opt-in does not add a review until one is explicitly started', () => {
+  const fixture = managedNonUiIteration();
+  try {
+    for (const reviewPasses of [{ acceptance: 'opt_in' }, {}]) {
+      assert.equal(validateCloseReadyAcceptanceEvidence({
+        artifactRoot: fixture.artifactRoot,
+        activeIteration: 'iter-001',
+        taskGraphPath: fixture.graphPath,
+        taskGraph: fixture.graph,
+        reviewPasses,
+      }), 0);
+    }
+  } finally {
+    rmSync(fixture.workspaceRoot, { recursive: true, force: true });
+  }
+});

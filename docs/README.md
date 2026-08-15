@@ -16,7 +16,7 @@ Plan2Agent 문서는 사용자 흐름, CLI 사용법, 산출물 계약, 구현 �
 | 변경분 task 만들기 | `diff-tasks`, `context`, `promote-tasks` | semantic 또는 agent-authored draft task graph |
 | 대상 프로젝트로 넘기기 | `p2a handoff`, 이후 `p2a` | `.plan2agent/`와 실행 CLI 설치 |
 | 현재 상태 보기 | `p2a info` | active artifact, task/run 요약 |
-| 감독형 단일 task 실행 | `p2a execute` | task/run lifecycle 반자동 진행 |
+| 적응형 실행 준비·run lifecycle 진행 | `p2a execute` | Direct/Planned compatibility work item 또는 Orchestrated task 실행·검증 |
 | 개발 task 실행 관리 | `p2a tasks` | ready/prompt/start/done 상태 전이 |
 | agent 실행 결과 기록 | `p2a runs` | `runs/run-index.json`, `runs/<iterationId>/<runId>.json` |
 | 실행 회고 개선 후보 만들기 | `p2a proposals` | `proposals/<proposalId>.json`와 review/curation/approval artifact |
@@ -39,13 +39,19 @@ Plan2Agent 문서는 사용자 흐름, CLI 사용법, 산출물 계약, 구현 �
    `current-spec.json`, `iterations/`, close/open, semantic diff, maintenance, run log의 정식 동작 계약을 확인할 때 본다.
 
 6. [감독형 개발 실행 레퍼런스](supervised-execution.md)<br>
-   ready task 실행, 리뷰 패스 정책, monitor gate, milestone review, retry recovery, proposal loop의 완료 기능 계약을 확인할 때 본다.
+   ready task 실행, 리뷰 패스 정책, monitor gate, planned checkpoint, retry recovery, proposal loop의 완료 기능 계약을 확인할 때 본다.
 
 7. [하네스 구현 기준](harness-spec.md)<br>
    skill/subagent mirror, CLI-neutral agent contract, 구현 원칙을 수정할 때 본다.
 
 8. [릴리스 절차](releasing.md)<br>
    npm package, Git tag, GitHub Release를 같은 version과 source commit으로 게시할 때 본다.
+
+9. [실사용 검증 체크리스트](dogfooding-checklist.md)<br>
+   adaptive 실행 모드, 절차 비용, 승인 후 자율 완료율과 게이트 가치를 실제 프로젝트에서 측정할 때 본다.
+
+10. [승인된 계약 기반 자율 개발 개선안](gate-driven-adaptive-execution-proposal.md)<br>
+   사용자가 기획을 승인하고 하네스가 검증한 뒤, AI가 규칙 안에서 구현·검증을 자율 완수하도록 전환하는 제안이다.
 
 ## 목적별 바로가기
 
@@ -56,8 +62,10 @@ Plan2Agent 문서는 사용자 흐름, CLI 사용법, 산출물 계약, 구현 �
 | Gate A-C 산출물 구조 이해하기 | [하네스 사용자 가이드](harness-guide.md) |
 | 짧은 아이디어 문서나 Radar handoff로 시작하기 | [진입 계약](entry-contract.md) |
 | 반복 구조와 변경분 task 흐름 이해하기 | [반복/고도화 개발 스펙](iteration-spec.md) |
-| 감독형 task 실행과 orchestration 흐름 이해하기 | [감독형 개발 실행 레퍼런스](supervised-execution.md) |
+| adaptive 실행과 run lifecycle 이해하기 | [감독형 개발 실행 레퍼런스](supervised-execution.md) |
 | skill/subagent 구조를 수정하기 | [하네스 구현 기준](harness-spec.md) |
+| 실제 프로젝트에서 절차 비용과 실행 자율성 측정하기 | [실사용 검증 체크리스트](dogfooding-checklist.md) |
+| 기획 승인과 AI 자율 개발의 권한 경계 검토하기 | [승인된 계약 기반 자율 개발 개선안](gate-driven-adaptive-execution-proposal.md) |
 
 ## 문서별 역할
 
@@ -68,9 +76,11 @@ Plan2Agent 문서는 사용자 흐름, CLI 사용법, 산출물 계약, 구현 �
 | `harness-guide.md` | 산출물/게이트 사용자 가이드 | Gate A-C 요약, 결정 원장, schema, evidence, 검증 (`p2a-harness` skill의 게이트 규칙 정본 링크 포함) |
 | `entry-contract.md` | 아이디어 문서 진입 계약 | entry 발견 우선순위, 검증, Radar 출처, 범위 확인 대화 |
 | `iteration-spec.md` | 반복 개발 구현 계약 | iteration layout, close/open, semantic diff, run tracking |
-| `supervised-execution.md` | 감독형 개발 실행 레퍼런스 | ready task 실행, 리뷰 패스 정책, monitor gate, milestone review, retry recovery, proposal loop |
+| `supervised-execution.md` | 감독형 개발 실행 레퍼런스 | ready task 실행, 리뷰 패스 정책, monitor gate, planned checkpoint, retry recovery, proposal loop |
 | `harness-spec.md` | 하네스 구현 기준 | skills, subagents, mirror, 안전 정책 (`p2a-harness` skill을 게이트 규칙 정본으로 지정) |
 | `releasing.md` | 릴리스 운영 checklist | Node 지원 정책, CHANGELOG, npm publish, Git tag, GitHub Release, smoke test |
+| `dogfooding-checklist.md` | 실사용 검증 체크리스트 | adaptive 모드 선택, 절차 비용, 사용자 개입, 게이트·검증 evidence의 실효성 측정 |
+| `gate-driven-adaptive-execution-proposal.md` | 설계 제안 | 사용자 승인·하네스 검증·AI 자율 개발의 권한 경계, 선택형 task, UI 검증과 단계적 migration |
 
 ## 유지보수 원칙
 
@@ -82,3 +92,4 @@ Plan2Agent 문서는 사용자 흐름, CLI 사용법, 산출물 계약, 구현 �
 - ready task 실행, orchestration, proposal loop와 `devExecution.reviewPasses` 정책의 완료 기능 계약은 `supervised-execution.md`에 둔다.
 - skill/subagent 경로와 mirror 규칙은 `harness-spec.md`에 둔다.
 - version 변경과 package 게시 절차는 `releasing.md`와 루트 `CHANGELOG.md`에 둔다.
+- 실제 프로젝트의 adaptive 실행 계측 기준은 `dogfooding-checklist.md`에 둔다.

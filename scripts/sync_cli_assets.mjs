@@ -15,7 +15,6 @@ const ACCESS_VALUES = new Set(['read-only', 'workspace-write']);
 const TIER_VALUES = new Set(['light', 'standard', 'heavy']);
 const CLAUDE_TOOL_MAP = { read: ['Read'], search: ['Grep', 'Glob'], web: ['WebSearch', 'WebFetch'], edit: ['Edit', 'Write'], shell: ['Bash'] };
 const GEMINI_TOOL_MAP = { read: ['read_file'], search: ['grep_search'], web: ['google_web_search', 'web_fetch'], edit: [], shell: [] };
-const CLAUDE_TIER_MODEL = { light: 'haiku', standard: 'sonnet', heavy: 'opus' };
 const CODEX_TIER_MODEL = { light: 'gpt-5.6-sol', standard: 'gpt-5.6-sol', heavy: 'gpt-5.6-sol' };
 const CODEX_TIER_EFFORT = { light: 'medium', standard: 'high', heavy: 'max' };
 const GEMINI_TIER_CONFIG = {
@@ -41,7 +40,7 @@ Rules:
 - Preserve legacy intake fields when reading history, but do not generate or interpret them.
 - After Gate A, establish or reuse the project constitution. For a new project, require a valid .plan2agent/constitution.json and approve it only through p2a shape approve --quote with the exact user utterance so Gate ② is appended to decisions.jsonl; legacy style-only projects remain compatible.
 - Do not synthesize Gate B until intake_json is ready_for_spec with approval_audit and the required Gate ② constitution is approved.
-- Stop before task graph unless spec_json.approval is approved and open_decisions is empty.
+- After Gate B approval is recorded, return to p2a next; do not create a task graph unconditionally. Let p2a next route Direct/Planned preparation or Orchestrated task breakdown.
 - Return the named state sections required by the harness.`,
   },
   next: {
@@ -51,7 +50,7 @@ Rules:
 
 {{args}}
 
-Call p2a next --json as the decision authority. Do not reproduce state conditions or execute a CLI command without the user approving it.`,
+Call p2a next --json as the decision authority. Do not reproduce state conditions. Execute a CLI command immediately only when the returned command has requiresApproval=false; otherwise wait for user approval.`,
   },
   spec: {
     skill: 'p2a-spec',
@@ -215,7 +214,6 @@ function renderMarkdownAgent(meta, body, { target }) {
   if (target === 'claude') {
     lines.push('tools:');
     lines.push(...expandCapabilities(meta.capabilities, CLAUDE_TOOL_MAP).map((tool) => `  - ${tool}`));
-    lines.push(`model: ${CLAUDE_TIER_MODEL[meta.tier]}`);
   } else if (target === 'gemini') {
     lines.push('kind: local');
     lines.push('tools:');

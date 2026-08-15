@@ -32,5 +32,5 @@ Rules:
 - Use `verdict: "confirm_ui"` only when every required result is `passed`, every result concern list is empty, top-level concerns are empty, and accessibility passed with zero critical violations.
 - Use `verdict: "block"` for missing evidence or material visual, state, responsive, or accessibility drift, and identify concrete concerns.
 - Do not block on harmless pixel differences that preserve the approved composition and visual intent.
-- Do not judge functional acceptance, test execution, or code style; those belong to the performance monitor and style rater.
+- Do not judge functional acceptance, test execution, or code style; those belong to the owner verification and the single performance monitor gate.
 '''

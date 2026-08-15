@@ -63,6 +63,14 @@
             "type": "string"
           }
         },
+        "must_preserve": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "Approved existing behaviors and invariants that implementation must not regress. Optional only for historical p2a.spec.v1 compatibility."
+        },
         "non_goals": {
           "type": "array",
           "items": {

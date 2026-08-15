@@ -28,6 +28,12 @@ import {
   isComposedBaselineReference,
 } from './p2a_spec_model.mjs';
 import { inspectEntryDocument } from './p2a_radar_preflight.mjs';
+import {
+  assertRunMonitorGateBinding,
+  assertRunMonitorVerdictBinding,
+  normalizeMonitorGateSidecar,
+  normalizeMonitorVerdictData,
+} from './p2a_monitor_gate.mjs';
 
 const P2A_PATHS = resolveP2aPaths(import.meta.url);
 const SCHEMA_PATHS = {
@@ -201,6 +207,7 @@ function resolveExistingFileReference(reference, baseDir) {
     : [
         path.resolve(process.cwd(), reference),
         path.resolve(baseDir, reference),
+        path.resolve(P2A_PATHS.toolRoot, reference),
         resolveProjectRelativeReference(reference, baseDir),
       ];
   return candidates.filter(Boolean).find((candidate) => existsSync(candidate) && lstatSync(candidate).isFile()) ?? null;
@@ -1675,15 +1682,6 @@ const OFFLINE_PROTOTYPE_CSP = new Map([
   ['base-uri', ["'none'"]],
 ]);
 
-function htmlAttributeValue(tag, name) {
-  const escapedName = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const match = tag.match(new RegExp(
-    `\\b${escapedName}\\s*=\\s*(?:"([^"]*)"|'([^']*)'|([^\\s"'=<>\u0060]+))`,
-    'i',
-  ));
-  return match ? (match[1] ?? match[2] ?? match[3]) : null;
-}
-
 const HTML_VOID_ELEMENTS = new Set([
   'area',
   'base',
@@ -2478,6 +2476,7 @@ function resolveVisualReviewSourceSpec(expectedContract, artifactRoot, options =
   }
   candidates.push(path.resolve(artifactRoot, sourceSpecRef));
   candidates.push(path.resolve(process.cwd(), sourceSpecRef));
+  candidates.push(path.resolve(P2A_PATHS.toolRoot, sourceSpecRef));
   const sourceSpecPath = candidates.find(
     (candidate) => existsSync(candidate) && lstatSync(candidate).isFile(),
   );
@@ -3054,6 +3053,92 @@ export function approvedVisualReviewContract(specPath, artifactRoot = null) {
   };
 }
 
+function nonBlankUniqueStrings(values) {
+  return [...new Set((Array.isArray(values) ? values : [])
+    .filter((value) => typeof value === 'string')
+    .map((value) => value.trim())
+    .filter(Boolean))];
+}
+
+export function executionEnvelopeSha256(envelope) {
+  return createHash('sha256').update(JSON.stringify(envelope)).digest('hex');
+}
+
+export function approvedExecutionEnvelope(specPath, sourceSpecRef, artifactRoot = null) {
+  const specReference = loadJson(specPath);
+  const sourceIntakePath = resolveSpecSourceIntake(specPath, specReference);
+  const spec = validateSpec(specPath, sourceIntakePath, { artifactRoot });
+  if (spec.approval !== 'approved') {
+    throw new ValidationError('execution envelope requires an approved Gate B specification');
+  }
+  const approvedVisual = validateSpecVisualExperience(spec, specPath, artifactRoot);
+  const acceptance = nonBlankUniqueStrings([
+    ...spec.product.core_flows,
+    ...spec.product.success_criteria,
+  ]);
+  const verification = nonBlankUniqueStrings(spec.implementation.verification);
+  if (!acceptance.length || !verification.length) {
+    throw new ValidationError('execution envelope requires non-empty Gate B acceptance and verification');
+  }
+  return {
+    objective: spec.product.problem.trim(),
+    sourceGateRefs: [{
+      path: sourceSpecRef,
+      sha256: rawFileSha256(specPath),
+    }],
+    scope: nonBlankUniqueStrings(spec.product.goals),
+    mustPreserve: nonBlankUniqueStrings(spec.product.must_preserve),
+    nonGoals: nonBlankUniqueStrings(spec.product.non_goals),
+    acceptance,
+    verification,
+    executionAuthority: {
+      mayChoose: [
+        'internal work breakdown and order',
+        'files and code structure within the approved scope',
+        'implementation corrections required to pass approved verification',
+      ],
+      mustReturnToGate: [
+        'product meaning or acceptance change',
+        'approved scope expansion',
+        'project constitution change',
+        'new external write, cost, credential, or irreversible action',
+      ],
+    },
+    ...(approvedVisual?.experience.validation.visual_review_required ? {
+      visualContract: (() => {
+        const { experience } = approvedVisual;
+        const selected = experience.visual_direction.candidates.find(
+          (candidate) => candidate.id === experience.visual_direction.selected_candidate,
+        );
+        if (!selected) {
+          throw new ValidationError('execution envelope visual contract requires a selected prototype');
+        }
+        return {
+          experienceSpecRef: spec.visual_experience.experience_spec_ref,
+          experienceSpecSha256: spec.visual_experience.experience_spec_sha256,
+          prototypeManifestRef: selected.prototype_manifest_ref,
+          prototypeManifestSha256: selected.prototype_manifest_sha256,
+          screens: experience.screens.map((screen) => ({
+            screenId: screen.id,
+            route: screen.route,
+            entryPoints: structuredClone(screen.entry_points),
+            states: structuredClone(screen.states),
+            responsiveRules: structuredClone(screen.responsive_rules),
+            accessibilityRequirements: structuredClone(screen.accessibility_requirements),
+          })),
+          viewports: structuredClone(experience.validation.viewports),
+          accessibilityStandard: experience.validation.accessibility_standard,
+          visualInvariants: nonBlankUniqueStrings([
+            ...experience.visual_direction.avoid,
+            ...experience.design_system.token_rules,
+            ...experience.design_system.component_rules,
+          ]),
+        };
+      })(),
+    } : {}),
+  };
+}
+
 function validateClarifyingQuestionDisposition(spec, intake = null) {
   const dispositions = spec.clarifying_question_disposition;
   const dispositionIds = dispositions.map((item) => item.id);
@@ -3151,6 +3236,35 @@ export function validateTaskGraphData(data, requireApprovedSpec = null, options 
   }
 
   const tasks = data.tasks;
+  if (data.execution) {
+    const { mode, syntheticWorkItem, milestones } = data.execution;
+    if ((mode === 'direct' || mode === 'planned') && syntheticWorkItem !== true) {
+      throw new ValidationError(`task graph execution mode ${mode} requires syntheticWorkItem true`);
+    }
+    if (mode === 'orchestrated' && syntheticWorkItem !== false) {
+      throw new ValidationError('task graph execution mode orchestrated requires syntheticWorkItem false');
+    }
+    if ((mode === 'direct' || mode === 'planned') && tasks.length !== 1) {
+      throw new ValidationError(`task graph execution mode ${mode} requires exactly one synthetic work item`);
+    }
+    if (mode === 'planned') {
+      if (!Array.isArray(milestones)) {
+        throw new ValidationError('task graph execution mode planned requires 2 to 5 milestones');
+      }
+      const milestoneIds = milestones.map((milestone) => milestone.id);
+      if (milestoneIds.length !== new Set(milestoneIds).size) {
+        throw new ValidationError('planned execution milestone ids must be unique');
+      }
+      for (const milestone of milestones) {
+        if (!milestone.outcome.trim()) {
+          throw new ValidationError(`${milestone.id}.outcome must not be blank`);
+        }
+        validateNonBlankStrings(milestone.verification, `${milestone.id}.verification`);
+      }
+    } else if (milestones !== undefined) {
+      throw new ValidationError(`task graph execution mode ${mode} must not define milestones`);
+    }
+  }
   const taskIds = tasks.map((task) => task.id);
   if (taskIds.length !== new Set(taskIds).size) {
     throw new ValidationError('task ids must be unique');
@@ -3254,10 +3368,6 @@ export function validateReview(filePath, expectedSources = null, options = {}) {
   return data;
 }
 
-export function validateReviewPass(filePath, expectedSources = null) {
-  return validateReview(filePath, expectedSources, { requirePass: true });
-}
-
 function hasStructuredDetailValue(section, keys) {
   if (!section || typeof section !== 'object') return false;
   return keys.some((key) => Array.isArray(section[key])
@@ -3288,6 +3398,119 @@ export function validateRunData(data) {
   for (const [index, item] of (data.verification ?? []).entries()) {
     if (item.status === 'unavailable' && (!item.failureReason || !item.failureHint)) {
       throw new ValidationError(`verification[${index}] unavailable status must include failureReason and failureHint`);
+    }
+  }
+  for (const [index, sample] of (data.usage ?? []).entries()) {
+    if (![sample.inputTokens, sample.outputTokens, sample.totalTokens].every(Number.isSafeInteger)) {
+      throw new ValidationError(`usage[${index}] token counts must be safe integers`);
+    }
+    if (!sample.modelProfile.trim()) {
+      throw new ValidationError(`usage[${index}].modelProfile must not be blank`);
+    }
+    if (sample.totalTokens !== sample.inputTokens + sample.outputTokens) {
+      throw new ValidationError(
+        `usage[${index}].totalTokens must equal inputTokens + outputTokens`,
+      );
+    }
+  }
+  for (const [index, interruption] of (data.interruptions ?? []).entries()) {
+    if (!interruption.summary.trim()) {
+      throw new ValidationError(`interruptions[${index}].summary must not be blank`);
+    }
+  }
+  const hasMode = data.mode !== undefined;
+  const hasSelectionRationale = data.selectionRationale !== undefined;
+  if (hasMode !== hasSelectionRationale) {
+    throw new ValidationError('run mode and selectionRationale must be recorded together');
+  }
+  if (hasSelectionRationale && !data.selectionRationale.trim()) {
+    throw new ValidationError('run selectionRationale must not be blank');
+  }
+  if (data.mode === 'planned' && !data.runKind && !data.milestones) {
+    throw new ValidationError('planned implementation run requires milestones');
+  }
+  if (data.mode !== 'planned' && data.milestones !== undefined) {
+    throw new ValidationError('run milestones are only allowed for planned execution');
+  }
+  if (data.milestones) {
+    const milestoneIds = data.milestones.map((milestone) => milestone.id);
+    if (milestoneIds.length !== new Set(milestoneIds).size) {
+      throw new ValidationError('run milestone ids must be unique');
+    }
+    let pendingSeen = false;
+    for (const milestone of data.milestones) {
+      validateNonBlankStrings(milestone.verification, `${milestone.id}.verification`);
+      if (!milestone.outcome.trim()) {
+        throw new ValidationError(`${milestone.id}.outcome must not be blank`);
+      }
+      if (milestone.status === 'pending') {
+        pendingSeen = true;
+        if (milestone.verifiedAt !== null) {
+          throw new ValidationError(`${milestone.id}.verifiedAt must be null while pending`);
+        }
+      } else {
+        if (pendingSeen) {
+          throw new ValidationError('planned run milestones must be verified in declared order');
+        }
+        if (typeof milestone.verifiedAt !== 'string' || !milestone.verifiedAt.trim()) {
+          throw new ValidationError(`${milestone.id}.verifiedAt is required when verified`);
+        }
+      }
+    }
+    const knownMilestones = new Set(milestoneIds);
+    for (const [index, verification] of data.verification.entries()) {
+      if (verification.milestoneId && !knownMilestones.has(verification.milestoneId)) {
+        throw new ValidationError(`verification[${index}].milestoneId references an unknown run milestone`);
+      }
+    }
+    if (data.status === 'finished' && data.milestones.some((milestone) => milestone.status !== 'verified')) {
+      throw new ValidationError('finished planned run requires every milestone to be verified');
+    }
+  } else if (data.verification.some((verification) => verification.milestoneId !== undefined)) {
+    throw new ValidationError('verification milestoneId requires planned run milestones');
+  }
+  if (data.monitorVerdictEvidenceSha256 && !data.monitorGate?.required) {
+    throw new ValidationError('monitorVerdictEvidenceSha256 requires monitorGate.required');
+  }
+  if (data.status === 'started' && data.monitorVerdictEvidenceSha256) {
+    throw new ValidationError('started run must not seal monitor verdict evidence');
+  }
+  if (data.monitorGate?.required && data.status === 'finished' && !data.monitorVerdictEvidenceSha256) {
+    throw new ValidationError(`finished run ${data.runId} must include monitorVerdictEvidenceSha256`);
+  }
+  if (data.monitorGate?.required
+    && data.failure?.source === 'monitor'
+    && !data.monitorVerdictEvidenceSha256) {
+    throw new ValidationError(`${data.status} run ${data.runId} with monitor failure must include monitorVerdictEvidenceSha256`);
+  }
+  if ((data.executionEnvelope !== undefined) !== (data.executionEnvelopeSha256 !== undefined)) {
+    throw new ValidationError('executionEnvelope and executionEnvelopeSha256 must be recorded together');
+  }
+  if (hasMode && data.sourceLayout !== 'maintenance' && data.executionEnvelope === undefined) {
+    throw new ValidationError('non-maintenance run mode requires a Gate B executionEnvelope and executionEnvelopeSha256');
+  }
+  if (data.sourceLayout === 'maintenance' && data.executionEnvelope !== undefined) {
+    throw new ValidationError('maintenance run must not record a Gate B executionEnvelope');
+  }
+  if (data.executionEnvelope !== undefined
+    && data.executionEnvelopeSha256 !== executionEnvelopeSha256(data.executionEnvelope)) {
+    throw new ValidationError('executionEnvelopeSha256 does not match executionEnvelope');
+  }
+  const visualContract = data.executionEnvelope?.visualContract;
+  if (visualContract) {
+    const extendedFields = [
+      'prototypeManifestRef',
+      'prototypeManifestSha256',
+      'screens',
+      'viewports',
+      'accessibilityStandard',
+      'visualInvariants',
+    ];
+    const presentExtendedFields = extendedFields.filter((field) => visualContract[field] !== undefined);
+    if (presentExtendedFields.length > 0 && presentExtendedFields.length !== extendedFields.length) {
+      throw new ValidationError(
+        `executionEnvelope.visualContract extended fields must be recorded together: ${extendedFields.join(', ')}`,
+      );
     }
   }
   if (data.status === 'started' && data.finishedAt !== null) {
@@ -3635,6 +3858,8 @@ const MILESTONE_IMMUTABLE_RUN_FIELDS = [
   'visualReview',
   'acceptanceReviewEvidenceSha256',
   'acceptanceReview',
+  'monitorGate',
+  'monitorVerdictEvidenceSha256',
   'isolation',
   'status',
   'startedAt',
@@ -4082,6 +4307,31 @@ export function validateRunTaskContract(runData, artifactRoot) {
       `finished run ${runData.runId} taskId ${runData.taskId} is missing from its source task graph`,
     );
   }
+  if (runData.mode !== undefined) {
+    const expectedMode = graph.execution?.mode ?? 'orchestrated';
+    const expectedRationale = graph.execution?.selectionRationale
+      ?? (runData.sourceLayout === 'maintenance'
+        ? 'Maintenance task graph execution.'
+        : 'Approved Gate C task graph execution.');
+    if (runData.mode !== expectedMode) {
+      throw new ValidationError(
+        `finished run ${runData.runId} mode does not match its execution task graph`,
+      );
+    }
+    if (runData.selectionRationale !== expectedRationale) {
+      throw new ValidationError(
+        `finished run ${runData.runId} selectionRationale does not match its execution task graph`,
+      );
+    }
+    if (!runData.runKind && expectedMode === 'planned') {
+      const runMilestones = runData.milestones.map(({ id, outcome, verification }) => ({ id, outcome, verification }));
+      if (!sameJson(runMilestones, graph.execution.milestones)) {
+        throw new ValidationError(
+          `finished run ${runData.runId} milestones do not match its execution task graph`,
+        );
+      }
+    }
+  }
   const currentTaskContractSha256 = taskContractSha256(task);
   const requiresTaskContract = (
     runData.schema_version === 'p2a.run.v2'
@@ -4122,6 +4372,48 @@ export function validateRunTaskContract(runData, artifactRoot) {
     if (realpathSync(graphSourceSpecPath) !== realpathSync(sourceSpecPath)) {
       throw new ValidationError(
         `finished run ${runData.runId} sourceSpecRef does not match its source task graph`,
+      );
+    }
+  }
+  const hasExecutionEnvelope = runData.executionEnvelope !== undefined;
+  const hasExecutionEnvelopeHash = runData.executionEnvelopeSha256 !== undefined;
+  if (hasExecutionEnvelope !== hasExecutionEnvelopeHash) {
+    throw new ValidationError(
+      `finished run ${runData.runId} executionEnvelope and executionEnvelopeSha256 must be recorded together`,
+    );
+  }
+  if (hasExecutionEnvelope) {
+    if (maintenanceSource) {
+      throw new ValidationError(
+        `finished maintenance run ${runData.runId} must not record a Gate B execution envelope`,
+      );
+    }
+    const expectedEnvelope = approvedExecutionEnvelope(
+      sourceSpecPath,
+      runData.sourceSpecRef,
+      runData.sourceLayout === 'graph' ? null : sourceArtifactRoot,
+    );
+    const legacyExpectedEnvelope = expectedEnvelope.visualContract
+      ? {
+          ...expectedEnvelope,
+          visualContract: {
+            experienceSpecRef: expectedEnvelope.visualContract.experienceSpecRef,
+            experienceSpecSha256: expectedEnvelope.visualContract.experienceSpecSha256,
+          },
+        }
+      : null;
+    if (
+      !sameJson(runData.executionEnvelope, expectedEnvelope)
+      && (!legacyExpectedEnvelope || !sameJson(runData.executionEnvelope, legacyExpectedEnvelope))
+    ) {
+      throw new ValidationError(
+        `finished run ${runData.runId} executionEnvelope does not match its approved Gate B specification`,
+      );
+    }
+    const expectedEnvelopeSha256 = executionEnvelopeSha256(runData.executionEnvelope);
+    if (runData.executionEnvelopeSha256 !== expectedEnvelopeSha256) {
+      throw new ValidationError(
+        `finished run ${runData.runId} executionEnvelopeSha256 does not match executionEnvelope`,
       );
     }
   }
@@ -4191,6 +4483,73 @@ export function validateRunsDir(runsDir) {
     const source = runData.status === 'finished'
       ? validateRunTaskContract(runData, path.dirname(path.resolve(runsDir)))
       : null;
+    if (runData.monitorGate?.required) {
+      const monitorGatePath = runSidecarPath(
+        runsDir,
+        runData.runId,
+        '.monitor-gate.json',
+        index,
+      );
+      assertFile(monitorGatePath, `${runData.runId} monitor gate`);
+      let monitorGate;
+      try {
+        monitorGate = normalizeMonitorGateSidecar(
+          loadJson(monitorGatePath),
+          runData.runId,
+          normalizedRunRef,
+        );
+        assertRunMonitorGateBinding(runData, monitorGate);
+        const verdictRequired = Boolean(
+          runData.monitorVerdictEvidenceSha256
+          || runData.status === 'finished'
+          || runData.failure?.source === 'monitor',
+        );
+        if (verdictRequired) {
+          const verdictPath = path.resolve(runsDir, monitorGate.verdictPath);
+          assertFile(verdictPath, `${runData.runId} monitor verdict`);
+          const verdictContents = readFileSync(verdictPath);
+          assertRunMonitorVerdictBinding(runData, verdictContents);
+          const verdict = normalizeMonitorVerdictData(
+            JSON.parse(verdictContents.toString('utf8')),
+            {
+              requiredConcernFields: monitorGate.requiredConcernFields,
+              requiredRuleIds: monitorGate.ruleContract?.ruleIds,
+              requireRulesReviewed: monitorGate.ruleContract !== null,
+            },
+          );
+          const accepted = monitorGate.acceptedVerdicts.includes(verdict.verdict)
+            && !verdict.hasConcerns;
+          if (runData.status === 'finished' && !accepted) {
+            throw new Error(`finished run ${runData.runId} does not have an accepted monitor verdict`);
+          }
+          if (runData.failure?.source === 'monitor') {
+            if (runData.status !== 'blocked') {
+              throw new Error(`monitor-sourced run ${runData.runId} must have blocked status`);
+            }
+            if (accepted) {
+              throw new Error(`monitor-sourced blocked run ${runData.runId} cannot have an accepted monitor verdict`);
+            }
+            const expectedFailureClass = monitorGate.failureClassMap[verdict.failureSignal]
+              ?? monitorGate.failureClassMap[verdict.verdict]
+              ?? 'other';
+            if (runData.failure.class !== expectedFailureClass) {
+              throw new Error(
+                `monitor-sourced run ${runData.runId} failure class must be ${expectedFailureClass}`,
+              );
+            }
+            if (runData.failure.needsUserDecision !== verdict.needsUserDecision) {
+              throw new Error(
+                `monitor-sourced run ${runData.runId} needsUserDecision must match its monitor verdict`,
+              );
+            }
+          }
+        } else {
+          assertRunMonitorVerdictBinding(runData, null);
+        }
+      } catch (error) {
+        throw new ValidationError(error instanceof Error ? error.message : String(error));
+      }
+    }
     if (runData.status === 'finished' && runData.visualReview?.required) {
       const visualContract = runData.visualReview;
       if (!/^[a-f0-9]{64}$/.test(runData.workspaceRevisionSha256 ?? '')) {

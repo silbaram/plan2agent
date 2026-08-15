@@ -275,7 +275,7 @@ function next(root, args = []) {
   return JSON.parse(result.stdout);
 }
 
-function assertAction(payload, state, kind, argv = null) {
+function assertAction(payload, state, kind, argv = null, requiresApproval = null) {
   assert.doesNotThrow(() => validateSchema(payload, NEXT_SCHEMA));
   assert.equal(payload.schema_version, 'p2a.next.v1');
   assert.equal(payload.state, state);
@@ -284,7 +284,9 @@ function assertAction(payload, state, kind, argv = null) {
   assert.ok(payload.command.display.length > 0);
   if (kind === 'cli') {
     assert.ok(Array.isArray(payload.command.argv) && payload.command.argv.length > 0);
+    assert.equal(typeof payload.command.requiresApproval, 'boolean');
     if (argv) assert.deepEqual(payload.command.argv, argv);
+    if (requiresApproval !== null) assert.equal(payload.command.requiresApproval, requiresApproval);
   } else {
     assert.equal('argv' in payload.command, false);
   }
@@ -458,7 +460,7 @@ test('next chooses one read-only action for every primary state', () => {
         writeGateD(rootArtifact, [], iterationId);
         return root;
       },
-      expected: (root) => ['ready_task_available', 'cli', ['execute', 'plan', '--artifacts', artifactPath(root), '--task', 'task-001']],
+      expected: (root) => ['ready_task_available', 'cli', ['execute', 'start', '--artifacts', artifactPath(root), '--task', 'task-001']],
     },
     {
       id: 'blocked task',
@@ -478,6 +480,9 @@ test('next chooses one read-only action for every primary state', () => {
       id: 'all non-UI tasks done require functional acceptance',
       setup: () => {
         const root = project();
+        writeJson(join(root, '.plan2agent', 'project.config.json'), {
+          devExecution: { reviewPasses: { acceptance: 'on' } },
+        });
         const rootArtifact = artifact(root);
         const iterationId = writeIteration(rootArtifact);
         writeGateA(rootArtifact, 'ready_for_spec', iterationId);
@@ -917,7 +922,7 @@ test('next ignores open runs outside the active iteration task-graph context', (
     ]);
 
     const payload = next(root);
-    assertAction(payload, 'ready_task_available', 'cli', ['execute', 'plan', '--artifacts', artifactPath(root), '--task', 'task-001']);
+    assertAction(payload, 'ready_task_available', 'cli', ['execute', 'start', '--artifacts', artifactPath(root), '--task', 'task-001']);
   } finally {
     remove(root);
   }
@@ -962,7 +967,7 @@ test('next mines a failed run only once before opening a closed iteration', () =
     assertAction(next(root), 'run_evidence_needs_proposal_mining', 'cli', [
       'proposals', 'mine', '--artifacts', artifactPath(root), '--run-id', 'run-001',
       '--proposals', join(root, '.plan2agent', 'proposals'),
-    ]);
+    ], true);
 
     writeJson(join(root, '.plan2agent', 'proposals', 'proposal-run-001.json'), {
       sourceRunId: 'run-001',
@@ -989,7 +994,7 @@ test('next mines flat handoff run evidence before reporting execution complete',
     assertAction(next(root), 'run_evidence_needs_proposal_mining', 'cli', [
       'proposals', 'mine', '--artifacts', artifactPath(root), '--run-id', 'run-001',
       '--proposals', join(root, '.plan2agent', 'proposals'),
-    ]);
+    ], true);
 
     writeJson(join(root, '.plan2agent', 'proposals', 'proposal-run-001.json'), {
       sourceRunId: 'run-001',
@@ -1079,7 +1084,7 @@ test('info keeps its JSON contract and points human output to next', () => {
 });
 
 test('next keeps the ordered decision rules required by the contract', () => {
-  assert.equal(NEXT_DECISION_RULES.length, 25);
+  assert.equal(NEXT_DECISION_RULES.length, 27);
   for (const rule of NEXT_DECISION_RULES) {
     assert.equal(typeof rule.when, 'function');
     assert.equal(typeof rule.reason, 'function');
@@ -1087,10 +1092,55 @@ test('next keeps the ordered decision rules required by the contract', () => {
   }
 });
 
-test('next routes a completed visual iteration through review only when the pass is enabled', () => {
+test('next routes approved Gate B to adaptive execution preparation without approval', () => {
+  const rule = NEXT_DECISION_RULES.find((candidate) => candidate.state === 'gate_b_approved_needs_execution_prepare');
+  const context = {
+    gateBValid: true,
+    gateBApproved: true,
+    gateCExists: false,
+    executionModePolicy: 'adaptive',
+    artifactArg: '.plan2agent/artifacts/sample',
+  };
+  assert.equal(rule.when(context), true);
+  assert.equal(rule.kind, 'skill');
+  assert.equal(
+    rule.command(context),
+    '/p2a-dev-execution --artifacts ".plan2agent/artifacts/sample" --prepare-mode adaptive',
+  );
+  assert.equal(rule.when({ ...context, executionModePolicy: 'orchestrated' }), false);
+});
+
+test('next applies the adaptive project policy to a flat approved Gate B artifact root', () => {
+  const root = project();
+  try {
+    const artifactRoot = installFixtureArtifact(
+      root,
+      join(FIXTURE_ROOT, '_e2e', 'webhook-api-service'),
+      'webhook-api-service',
+      'canonical',
+    );
+    rmSync(join(artifactRoot, 'gate-c-task-graph', 'task-graph.json'));
+    writeJson(join(root, '.plan2agent', 'project.config.json'), {
+      devExecution: { executionMode: 'adaptive' },
+    });
+    const before = snapshotHarness(root);
+    const payload = next(root);
+    assertAction(payload, 'gate_b_approved_needs_execution_prepare', 'skill');
+    assert.equal(
+      payload.command.display,
+      `/p2a-dev-execution --artifacts ${JSON.stringify(artifactRoot)} --prepare-mode adaptive`,
+    );
+    assert.deepEqual(snapshotHarness(root), before);
+  } finally {
+    remove(root);
+  }
+});
+
+test('next routes a completed visual iteration through review when Gate B requires it', () => {
   const rule = NEXT_DECISION_RULES.find((candidate) => candidate.state === 'final_visual_review_required');
   const context = {
     reviewPasses: { visual: 'on' },
+    hasRequiredVisualContract: true,
     allTasksDone: true,
     closedIteration: false,
     detail: { layout: { kind: 'iteration' } },
@@ -1107,10 +1157,14 @@ test('next routes a completed visual iteration through review only when the pass
   assert.equal(rule.when({
     ...context,
     reviewPasses: { visual: 'off' },
-  }), false);
+  }), true);
   assert.equal(rule.when({
     ...context,
     reviewPasses: undefined,
+  }), true);
+  assert.equal(rule.when({
+    ...context,
+    hasRequiredVisualContract: false,
   }), false);
 });
 
@@ -1131,6 +1185,15 @@ test('next routes a completed non-UI iteration through acceptance unless disable
     '--artifacts',
     '.plan2agent/artifacts/sample',
   ]);
+  assert.equal(rule.when({
+    ...context,
+    reviewPasses: { acceptance: 'opt_in' },
+  }), false);
+  assert.equal(rule.when({
+    ...context,
+    reviewPasses: { acceptance: 'opt_in' },
+    acceptanceReviewActivated: true,
+  }), true);
   assert.equal(rule.when({
     ...context,
     reviewPasses: { acceptance: 'off' },

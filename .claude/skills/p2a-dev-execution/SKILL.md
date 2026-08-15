@@ -1,25 +1,24 @@
 ---
 name: p2a-dev-execution
-description: Use when implementing one ready Plan2Agent task or a bounded batch of independent ready tasks into real code changes and recording each run, without touching planning artifacts.
+description: Use when preparing or owning an approved Plan2Agent execution objective through implementation, verification, correction, and recorded closeout.
 ---
 
 # Plan2Agent Dev Execution
 
-Implement one approved ready Plan2Agent task, or a bounded batch from one ready snapshot, as real code changes in its target project. Record every task as its own run and hand back verification and integration results. This skill is for execution only: it does not author planning artifacts, change gates, or broaden any approved task scope.
+Own the approved Gate B execution objective through repository investigation, implementation, verification, correction, and closeout. The Gate-derived execution envelope is the implementation contract; task prose is only routing metadata. With `--prepare-mode`, this skill may invoke the canonical CLI to create the single synthetic compatibility work item for direct or planned execution. It does not hand-author planning artifacts, change gates, or broaden approved scope.
 
 ## When to use
 
-Use this skill only when all of these conditions are true before starting:
+Use this skill only when all of these conditions are true before implementation starts:
 
-- Every selected task is exposed by the same `p2a tasks ready` snapshot.
 - The Gate B spec is approved and `open_decisions` is empty.
-- The Gate C task graph passes validation.
-- Every selected task has acceptance criteria.
-- The user explicitly asks for implementation execution.
+- The user has asked to develop or resume the approved iteration. Do not request separate approval for each ready task in that iteration.
+
+For an existing Gate C graph, every selected task must be exposed by the same `p2a tasks ready` snapshot, the graph must pass validation, and every selected task must have acceptance criteria. For `--prepare-mode adaptive|direct|planned`, the graph may be absent; follow Adaptive execution preparation below before applying those task conditions.
 
 If any condition is missing, stop and report the missing prerequisite instead of implementing.
 
-Use single-task mode unless the user asks to execute multiple ready tasks, or explicitly accepts a proposed bounded batch. Batch mode is supervised orchestration inside one foreground session, not permission to start a headless scheduler.
+Use single-task mode unless several ready items have separate owners and a bounded batch has clear parallel value. Mode selection is an implementation decision inside the approved contract, not another product approval gate.
 
 ## Inputs
 
@@ -29,17 +28,42 @@ Use these inputs:
 - One ready task id, or an exact list selected from one ready snapshot.
 - `agent-tool`, usually `codex`.
 - Optional existing run id per task.
+- Optional `--prepare-mode adaptive|direct|planned` from `p2a next` when approved Gate B has no Gate C graph.
 - Optional maximum batch concurrency, capped by the foreground provider's available write-capable subagent slots.
 - For batch mode, a user-approved canonical integration branch/worktree, an owner-only per-task integration-candidate worktree/branch strategy, and its committed base ref.
 
 
 ## Provider Confinement Policy
 
-Codex write-capable runs use native `workspace-write` sandbox confinement inside the assigned run workspace or isolated worktree. Claude write-capable runs require scaffold confinement with deny rules, a PreToolUse hook, and the macOS/Linux OS sandbox, and they must stay on the foreground, human-supervised approval path for now. Do not switch Claude to unattended `permissionMode` auto/background until the cross-OS spike is complete and a human explicitly approves that mode. Gemini remains read-only; do not pursue write-capable Gemini implementers. For Gemini, main-session fallback means stopping write execution and handing the ready task or frozen batch to a foreground write-capable Codex or approved Claude owner; it is not a single-task write fallback inside Gemini. For every provider, writes remain limited to the assigned workspace/worktree, and harness files or paths outside that workspace are forbidden.
+Codex write-capable runs use native `workspace-write` sandbox confinement inside the assigned run workspace or isolated worktree. Claude write-capable runs may continue autonomously inside scaffold confinement only when deny rules, the PreToolUse hook, and the supported macOS/Linux OS sandbox are active. The approved Gate B envelope authorizes in-scope implementation and verification retries; external writes, new credentials, costs, deployment, or irreversible actions still require user authorization. Gemini remains read-only; hand write execution to a confined Codex or Claude owner. For every provider, writes remain limited to the assigned workspace/worktree, and harness files or paths outside that workspace are forbidden. Prefer repository and approved-source evidence; use live web research only when version-sensitive external facts are necessary and the current authority permits network reads.
 
-Batch mode must use one write-capable provider within one foreground supervised session. Do not mix providers in one write batch. When the provider cannot create independently confined write-capable subagents, or available capacity is one, fall back to the single-task procedure.
+Batch mode must use one write-capable provider and independently confined workspaces. Do not mix providers in one write batch. When independent confinement is unavailable, fall back to the single-task procedure.
 
 ## Procedure
+
+### Adaptive execution preparation
+
+When invoked with `--prepare-mode` and Gate C is absent, inspect the approved Gate B envelope, repository topology, existing verification commands, external boundaries, and likely recovery surface. Select the mode yourself; this selection is an implementation decision and must not be presented as a new user approval menu.
+
+- `direct`: one owner, localized change, low implementation uncertainty, no risky external side effect, and one bounded verification cycle.
+- `planned`: one owner but multiple ordered outcomes benefit from 2–5 resume-safe checkpoints, each with at least one executable verification command.
+- `orchestrated`: independent owners, meaningful parallelism, high coordination or isolation needs, or a dependency graph materially improves recovery.
+
+`--prepare-mode direct|planned` fixes the permitted mode. `--prepare-mode adaptive` allows all three. Record a concise evidence-based rationale. For direct execution run:
+
+```bash
+p2a execute prepare --artifacts <dir> --mode direct --selection-rationale '<why one bounded work item is sufficient>'
+```
+
+For planned execution, declare 2–5 ordered checkpoints:
+
+```bash
+p2a execute prepare --artifacts <dir> --mode planned --selection-rationale '<why ordered checkpoints improve recovery>' \
+  --milestone 'milestone-1|<observable outcome>|<executable verification command>' \
+  --milestone 'milestone-2|<observable outcome>|<executable verification command>'
+```
+
+Use stable milestone ids, observable outcomes, and commands that can actually run in the target workspace. The CLI writes one synthetic compatibility work item and validates Gate C readiness; do not request separate Gate C UI approval. If adaptive inspection selects `orchestrated`, invoke `p2a-task-breakdown` and continue from its validated graph. After preparation, immediately continue with step 1.
 
 1. Confirm the target task is ready and inspect its implementation context:
 
@@ -47,35 +71,33 @@ Batch mode must use one write-capable provider within one foreground supervised 
    p2a tasks ready --artifacts <dir>
    ```
 
-   Use the task `prompt` to understand the scoped work, acceptance criteria, target area, and relevant constraints.
+   Read the printed Gate-derived execution envelope first. Treat its source hash, objective, scope, `mustPreserve`, non-goals, acceptance, verification, authority, and visual contract as canonical. Use the current task only as a compatible work-item boundary and remediation pointer.
 
    If this is a retry after the same task's latest run ended `failed` or `blocked`, inspect that run's failure class and localization before starting the new run. When Memory is configured, run one same-project hybrid search using the task title, failure class, and localization, filter to relevant run history when useful, and save the report beside the failed run as `<failed-run-id>.memory-recall.json`. Do not query Memory for a normal first attempt.
 
    Use a retrieved failure only when it is materially similar. After starting the retry, add one run note in the form `MEMORY_RETRY: sourceRun=<id>; report=<path>; applied=<mitigation or none>; status=<succeeded|fallback|failed|skipped>`. If retrieval falls back or fails, preserve that status and continue unless the user explicitly requires Memory history; never claim that no similar failure exists.
 
-2. Start a run unless the user provided an existing run id. When using Codex, create an isolated worktree so the write-capable implementer is confined by Codex's `workspace-write` sandbox:
+2. Start a run unless the user provided an existing run id. Let `p2a execute` honor `runTracking.defaultIsolation`; the default `none` keeps a Direct owner in the already assigned, sandbox-confined workspace:
 
    ```bash
-   p2a execute start --artifacts <dir> --task <id> --agent-tool codex --isolation worktree --worktree <fresh-worktree-path> --create-isolation
+   p2a execute start --artifacts <dir> --task <id> --agent-tool codex
    ```
 
    Preserve one run identity across start retries. An explicit `--run-id` always wins. When `project.config.json.runTracking.runIdStrategy` is `task-sequence`, omit `--run-id` on the first start so the CLI atomically reserves the next id from `runIdPattern`; if isolation setup fails, correct the cause and use the printed retry command with that same explicit id. Do not invoke a fresh implicit start after failure because it intentionally allocates the next attempt id. Projects that keep the default `timestamp` strategy retain timestamp-based ids.
 
    Use `p2a execute start`, not raw `p2a runs start`, because it creates the run and marks the task `in_progress` in one lifecycle step. Read `devExecution.reviewPasses.monitor` from `.plan2agent/project.config.json` first. Its default is `opt_in`: pass `--require-monitor` only when the task explicitly requires independent monitor evidence. When it is `off`, do not opt the run into monitor evidence.
 
-   The worktree path must be a fresh empty path, following the `project.config.json` `runTracking.worktreePattern` convention (for example, `../.worktrees/<taskId>-<runId>`).
-   Run this command from an existing git workspace; the fresh worktree path does not need to exist before `--create-isolation`.
-   Let `--create-isolation` create the worktree; do not pre-create it as a manual workaround. For a direct CLI call that passes the same fresh path to both `--workspace` and `--worktree`, invoke the command from the existing git workspace so the CLI can use that current directory as the creation base and validate the new workspace after creation.
+   Require an isolated worktree only for concurrent write owners, batch execution, an explicit project policy, or a concrete rollback/isolation risk. In that case use `--isolation worktree --worktree <fresh-worktree-path> --create-isolation`; the path must be fresh and follow `runTracking.worktreePattern`. Let the CLI create it from an existing git workspace rather than pre-creating it manually.
 
    Follow the Provider Confinement Policy in this skill for Codex, Claude, and Gemini execution modes.
 
-3. Before implementing, ensure the target project has a committed source-code git baseline, excluding local `.plan2agent/` state. If there is pre-existing untracked application source, commit or intentionally ignore it first; otherwise `p2a runs finish --collect-git` records the entire untracked source tree as this task's `changedFiles` instead of only the files this task changed.
+3. Before implementing, inspect the source baseline and preserve unrelated user changes. Do not force a commit merely to start Direct execution. If pre-existing untracked application files make `--collect-git` ambiguous, record the pre-run inventory and pass the exact task-owned `--changed-file` values at finish instead of attributing the whole untracked tree to the task.
 
-4. Before implementing, check whether the target project contains `.plan2agent/constitution.json`. When present, validate and read the complete approved constitution, then pass its architecture, stack, prohibitions, and style to the implementer, including any spawned `p2a-implementer` subagent. Validator-enforced prohibitions are hard constraints; review and advisory prohibitions remain explicit implementation guidance. If no constitution exists, fall back to `.plan2agent/style.md` for legacy projects without requiring migration. When possible, spawn the `p2a-implementer` subagent to perform the implementation inside the isolated worktree.
+4. Before implementing, check whether the target project contains `.plan2agent/constitution.json`. When present, validate and read the complete approved constitution. Validator-enforced prohibitions are hard constraints; review and advisory prohibitions remain explicit implementation guidance. If no constitution exists, fall back to `.plan2agent/style.md` for legacy projects without requiring migration. The current owner implements Direct and ordinary single-owner Planned work itself. Spawn `p2a-implementer` only when an independently confined owner materially helps an Orchestrated/batch task or an explicit context-isolation need; pass the constitution and envelope only in that case.
 
-5. Implement the task while obeying the writing boundaries below, the approved project constitution or legacy style fallback when present, and the Provider Confinement Policy in this skill.
+5. Own the envelope objective while obeying the writing boundaries below, the approved project constitution or legacy style fallback when present, and the Provider Confinement Policy in this skill. Investigate the repository, choose files and internal structure, implement, run local checks, and correct ordinary implementation/test/UI drift without asking the user to choose implementation details. Return to Gate B only when satisfying the objective requires changing product meaning, acceptance, approved scope, constitution, or an external authorization boundary.
 
-   The spawned `p2a-implementer` subagent performs scoped file edits only. It may optionally run local checks for self-review, but it must not call `p2a runs verify`, `p2a runs finish`, or `p2a tasks done|block`. Unless lifecycle delegation is explicitly requested, those lifecycle steps belong to the main dev-execution owner running this skill.
+   A spawned `p2a-implementer` performs scoped file edits only. It may run local checks for self-review, but it must not call `p2a runs verify`, `p2a runs finish`, or `p2a tasks done|block`; lifecycle steps remain with this skill's owner.
 
 6. Verify the run with the required checks by actually executing configured or explicitly requested commands. You may verify before finish:
 
@@ -95,6 +117,16 @@ Batch mode must use one write-capable provider within one foreground supervised 
 
    Do not invent labels such as `format:`, `repeatability:`, or `dependency-policy:` as metadata. An unrecognized prefix remains part of the executable command, so `format:npm run format:check` attempts to execute that full string as a custom command. A failed or unavailable verification record is immutable evidence; correct the syntax and start a new retry run instead of rewriting the original record.
 
+   For planned execution, verify each declared checkpoint in order after its outcome is implemented:
+
+   ```bash
+   p2a runs checkpoint --run-id <id> --artifacts <dir> --milestone <milestone-id>
+   ```
+
+   `p2a execute resume` prints the next pending checkpoint. Finish is blocked until every checkpoint is verified. A failed or unavailable checkpoint is immutable evidence: do not rerun that milestone in the same run. Finish the run as failed or blocked, then start a new retry run. Resume reports this recovery requirement instead of advertising the failed milestone as the next checkpoint. These are recovery markers inside the already approved execution objective, not user approval gates.
+
+   Resume, verification, and checkpoint commands revalidate the run's recorded task contract and Gate B execution envelope before producing new evidence. If the Gate B/Gate C source changed or disappeared, do not continue that run. Restore an accidentally changed source, or close the stale run with structured failed/blocked evidence before approving the changed contract and starting replacement work. `p2a next` reports this state as `started_run_contract_drift` instead of returning a resume command that cannot succeed.
+
    Verification shell composition must preserve failures from every command that provides evidence. Do not use `test -z "$(command)"` directly: if `command` cannot execute, the substitution can become an empty string and the outer `test` can still exit zero. Capture the output only after propagating the producer's status:
 
    ```bash
@@ -103,69 +135,13 @@ Batch mode must use one write-capable provider within one foreground supervised 
 
    Preflight an absolute executable path with `test -x <path>` before using it. Avoid pipelines that can hide an earlier command failure behind the last process's exit code; use an explicit status-preserving wrapper or a project script with strict pipeline handling. Before finish, audit executed verification entries for non-empty `stderrTail` or evidence that a required executable did not run, even when an outer shell command returned zero. The runtime classifies POSIX shell executable-resolution errors as `unavailable`, including errors hidden inside compound commands.
 
-6a. Read `devExecution.reviewPasses.visual` from `.plan2agent/project.config.json` first, using the default `off` when the field is absent. A task with `visualImpact` records only the screens and states that implementation can affect. The task-level inspection loop below applies to every `ui` or `mixed` task regardless of the review-pass setting; the setting controls only the iteration-level final review.
+6a. If the task is `ui`/`mixed` or the envelope contains `visualContract`, read `references/visual-evidence.md` and follow it. Do not load that reference for non-visual work.
 
-   Keep the normal implementation run open while the user visually inspects the affected application screens. Before editing from visual feedback, apply the `p2a-visual-experience` Implementation Feedback Classification: correct implementation `drift` in this run, but pause closeout and return a `contract` change to the harness owner for artifact revision, hash recomputation, and Gate B reapproval. Implement, ask for user visual inspection, correct visual drift, and repeat as often as needed before `p2a execute finish`. A normal implementation run expects `changedFiles`, so these repeated edits are allowed in its assigned workspace. Treat `p2a execute finish` as the point at which the user has accepted the task-level visual result as well as the required functional verification. Only when a visual problem is discovered after finish, reopen the task with `p2a tasks todo <id> --reopen --note <reason>` before correcting it.
+6b. Read `devExecution.reviewPasses.acceptance`, defaulting to `opt_in`. For `on`, read `references/acceptance-review.md` after all non-visual iteration work is integrated. For `opt_in`, read it only when the user or approved contract explicitly requested an independent acceptance pass, or when resuming an already-started acceptance run. For `off`, or when a required visual contract exists, do not load it. Starting `p2a execute accept` is the opt-in signal; once started, its evidence must finish validly before close.
 
-   This development loop is non-gating and unrecorded: it creates no additional review run, sidecar, screenshot hash, or verdict and does not satisfy or block the iteration-level `confirm_ui` gate. The unchanged-workspace and empty-`changedFiles` constraints apply only to `final_visual_review` and `final_acceptance_review` runs, not to an open normal implementation run.
+7. Read `devExecution.reviewPasses.monitor`, defaulting to `opt_in`. Load `references/monitor-gate.md` only when the current run was started with `--require-monitor`. Do not invoke a monitor or load its protocol for an ordinary run.
 
-   When `reviewPasses.visual` is `off`, stop this step after the normal implementation finish and do not open or suggest a final visual review. Otherwise, after every task in the active iteration is done and the changes are integrated, open the one iteration-level visual gate with `p2a execute review --artifacts <artifact-root> --agent-tool <reviewer>`. The command chooses a visual task only as the remediation owner, records `runKind: final_visual_review`, fixes the workspace to the canonical integration workspace, uses `isolation.mode: none`, keeps `changedFiles` empty, and derives the complete approved visual contract from Gate B. Do not attach a visual-review sidecar to a normal implementation run.
-
-   Render the actual application for every screen/state/viewport case in the review run's full `visualReview` contract. Use available browser tooling to capture deterministic PNG screenshots at the exact declared viewport dimensions, save them and an accessibility report under `visual-evidence/<iterationId>/<runId>/`, and invoke `p2a-visual-reviewer` as a separated read-only pass with the approved experience spec and selected prototype. The prototype itself is the comparison target and must never be reused as implementation evidence.
-
-   Immediately before capture, run `p2a runs revision --run-id <runId> --artifacts <artifact-root>` in the reviewed workspace. Persist the returned `p2a.visual_review.v2` object beside the run file as `<runId>.visual-review.json`. It must carry the run's `iteration_id`, not task ownership; its workspace identity/revision and source refs must match the run contract. Every screenshot records its SHA-256, media type, dimensions, capture URL, and timestamp. The accessibility JSON uses `p2a.visual_accessibility_report.v1` and is hash-bound from the sidecar. Finish rejects the review unless evidence validates, the workspace remains unchanged, every case passes, accessibility passes, and the verdict is `confirm_ui`; it then seals the exact sidecar-byte hash in `visualReviewEvidenceSha256`. If interrupted, `p2a execute resume` reprints the review instructions. A confirming review leaves tasks done; a failed or blocked review reopens the remediation owner to `todo`. A stale workspace requires a new review, while damaged sealed evidence requires run-store repair through `p2a runs validate`.
-
-6b. Read `devExecution.reviewPasses.acceptance`, defaulting to `on`. Skip this step when it is `off` or the iteration has `visualImpact`. After all non-UI iteration tasks are done and integrated, run `p2a execute accept --artifacts <artifact-root> --agent-tool <reviewer>`. This starts one `final_acceptance_review` run in the canonical workspace with `isolation.mode: none` and no changed files; its criteria are derived from Gate B `product.core_flows` and `product.success_criteria`.
-
-   The owner must execute behavior commands with `p2a runs verify --run-id <id> --artifacts <root> --verify-command 'custom:<command>'`. Then invoke `p2a-acceptance-reviewer` as a separate read-only pass and save its `p2a.acceptance_review.v1` object beside the run as `<runId>.acceptance-review.json`. Every case must copy an executed command, `source: command|config`, integer `exitCode`, and `stdoutTail` from the run; manual or unexecuted evidence is invalid. Exit zero alone is not proof—block empty, irrelevant, or useless output. Finish requires complete coverage and `confirm_behavior`, then seals the sidecar and canonical workspace hashes. Later workspace changes require a new review. A blocked review reopens its remediation owner.
-
-7. Read `devExecution.reviewPasses.monitor` from `.plan2agent/project.config.json` first, using the default `opt_in` when the field is absent. `opt_in` keeps `--require-monitor` as the activation signal, and `off` prevents new runs from opting in. If the current run was already started with `--require-monitor`, run the independent monitor gate before finish because the recorded lifecycle requirement still applies. Invoke `p2a-performance-monitor` as a separate subagent when the CLI supports spawning subagents, or perform a separated read-only review pass when spawning is unavailable. Pass the target task id, acceptance criteria, and the latest run log for that task, including `verification`, `changedFiles`, `status`, and `workspaceRef`.
-
-   Write the monitor result beside the run file, normally `runs/<iterationId>/<runId>.monitor-verdict.json` (legacy flat runs remain readable), using this shape:
-
-   ```json
-   {
-     "verdict": "confirm_done",
-     "unmet_acceptance": [],
-     "verification_concerns": [],
-     "scope_concerns": [],
-     "needs_user_decision": [],
-     "note": ""
-   }
-   ```
-
-   Use `verdict: "block"` and fill the relevant concern array when the task should not be accepted. When multiple concern arrays are populated, failure-class mapping priority is `scope_concerns` → `verification_concerns` → `unmet_acceptance` → `needs_user_decision`. `p2a execute finish` and `p2a runs finish` both enforce this verdict when the run requires a monitor gate.
-
-8. Read `devExecution.reviewPasses.style` from `.plan2agent/project.config.json` first, using the default `off` when the field is absent. When it is `off`, do not invoke `p2a-style-rater`; append `STYLE_REVIEW: skipped; reason=reviewPasses.style=off` to the run and continue. When it is not `off`, prefer the `style` object from `.plan2agent/constitution.json`; run the style-rating pass before finish when that object contains substantive guidance. If no constitution exists, use a substantive `.plan2agent/style.md` as the legacy fallback. Invoke `p2a-style-rater` as a separate read-only subagent when the CLI supports spawning subagents, or perform a separated read-only review pass when spawning is unavailable. Pass the target task id, the run's `changedFiles` list, the complete style guidance, and its source reference.
-
-   Persist a style-verdict sidecar only when the result contains a concrete violation (`violationCount > 0`). Write that result beside the run file, normally `runs/<iterationId>/<runId>.style-verdict.json` (legacy flat runs remain readable), using this shape:
-
-   ```json
-   {
-     "sections": [
-       {
-         "section": "...",
-         "verdict": "followed|violated|not_applicable",
-         "violations": [
-           { "file": "...", "line": 0, "note": "..." }
-         ]
-       }
-     ],
-     "violationCount": 1,
-     "note": ""
-   }
-   ```
-
-   Do not create a style-verdict file for a clean or non-applicable result. Instead, append exactly one of these durable run-note forms so absence of a sidecar never ambiguously means that the review was omitted:
-
-   - `STYLE_REVIEW: pass; violationCount=0`
-   - `STYLE_REVIEW: not_applicable; reason=<reason>`
-   - `STYLE_REVIEW: skipped; reason=<reason>`
-   - `STYLE_REVIEW: violations; violationCount=<count>; ref=<artifact-root-relative-style-verdict-path>`
-
-   Silent omission is forbidden. This style review is informational only and must never affect `p2a execute finish`, `p2a runs finish`, `p2a tasks done`, `p2a tasks block`, monitor verdicts, failure classes, or any done/block decision. Once a positive style-verdict is recorded, its `sections`, `violations`, and `violationCount` are historical record and must never be edited. Existing zero-violation verdict files are also historical records: do not delete or rewrite them when adopting this prospective policy. If a violation is resolved later, append a dated `RESOLUTION:` line to the verdict `note` field or leave a fresh verdict from a later run's re-rating; do not rewrite the original finding fields. Retroactive rating is allowed when a run session omitted the pass: persist a sidecar only if the retroactive result has violations, and state that the rating is retroactive in the sidecar note or clean-result run note. If `violationCount > 0`, carry the violations forward as candidate evidence for the step 10 retrospective style proposal with `target: "project"` and `targetFiles: [".plan2agent/constitution.json"]`, or use `[".plan2agent/style.md"]` only for an unmigrated legacy project. When the user decides to fix recorded violations, the default path is to register the work as a maintenance task with `p2a iteration maintenance add` and execute it with run history. If an exception requires an immediate ad-hoc fix, include the rationale and the source style-verdict path in the commit message.
-
-9. Finish the run through `p2a execute`, collecting git state and letting the CLI mark the task done or blocked:
+8. Finish the run through `p2a execute`, collecting git state and letting the CLI mark the task done or blocked:
 
    ```bash
    p2a execute finish --run-id <id> --artifacts <dir> --status finished|failed|blocked --collect-git
@@ -177,11 +153,9 @@ Batch mode must use one write-capable provider within one foreground supervised 
 
    Only classify a failure as `test_flake` when there is concrete evidence such as a failing verification command passing on rerun without code or environment changes. Without that evidence, use `verification_failed` for verification failures.
 
-   If the monitor verdict blocks the run, do not call `p2a tasks done`. Finish through `p2a execute finish` with monitor-sourced failure metadata and structured detail. The CLI maps `unmet_acceptance` to `implementation_incomplete`, `verification_concerns` to `verification_failed`, `scope_concerns` to `scope_violation`, and `needs_user_decision` to `missing_dependency`.
+   If the monitor verdict blocks the run, do not call `p2a tasks done`. Finish through `p2a execute finish` with monitor-sourced failure metadata and structured detail. The CLI maps `unmet_acceptance` to `implementation_incomplete`, `verification_concerns` to `verification_failed`, `rule_concerns` and `scope_concerns` to `scope_violation`, and `needs_user_decision` to `missing_dependency`.
 
-10. After finish has updated the task graph, evaluate and, when eligible, run the milestone review checkpoint described below. This checkpoint is informational and does not change the just-finished run or task status.
-
-11. Complete the retrospective gate described below.
+9. Apply the conditional retrospective described below. Style is already part of the optional monitor rule contract; do not invoke a separate style or milestone reviewer for new runs. Historical sidecars remain readable but are not produced by this workflow.
 
 ## Supervised Batch Owner Procedure
 
@@ -192,8 +166,8 @@ When parallel execution is confirmed, read `references/batch-execution.md`.
 
 ## Writing boundaries and prohibitions
 
-- Implement only inside the separate target project. Do not write to the Plan2Agent repository itself, including `.agents/`, `.claude/`, `.codex/`, `.gemini/`, `.plan2agent/scripts/`, `.plan2agent/schemas/`, `plans/`, or `docs/`.
-- Limit implementation writes to the run `workspaceRef` or worktree. In supervised batch mode, the main dev-execution owner may also create task-scoped local commits or patches and write to the approved canonical integration worktree plus the owner-only integration-candidate worktree created from its latest head. The main owner may write the lifecycle artifacts explicitly defined by this skill: retry Memory reports and notes, run verdicts, visual screenshots/reports/reviews, milestone-review JSON, and retrospective proposals. Spawned implementation and review subagents remain unable to write integration or lifecycle artifacts.
+- Implement only inside the approved target product workspace. In an application target, do not modify installed Plan2Agent harness/integration files. When the approved product target is the Plan2Agent repository itself, canonical `.agents/`, scripts, schemas, tests, and docs are in-scope product files; generated provider mirrors must still be produced from their canonical source.
+- Limit implementation writes to the run `workspaceRef` or worktree. In supervised batch mode, the main dev-execution owner may also create task-scoped local commits or patches and write to the approved canonical integration worktree plus the owner-only integration-candidate worktree created from its latest head. The main owner may write only lifecycle artifacts activated by the current run contract: retry Memory reports and notes, required monitor verdicts, visual evidence, or acceptance reviews. Retrospective proposal writes require separate user approval. Spawned implementation and review subagents remain unable to write integration or lifecycle artifacts.
 - Do not add or rewrite requirements by bypassing planning artifacts.
 - Do not install dependencies without grounded evidence from the approved task, existing project conventions, or explicit user approval.
 - In a co-located project where harness files live alongside app code, do not run interactive scaffolders that may overwrite or prompt in a non-empty directory, such as `npm create vite .`. Write config files manually and install only dependencies.
@@ -213,20 +187,12 @@ Return these items to the user:
 - Verification summary with commands and outcomes.
 - For batch mode, the ready snapshot, task/run/worktree mapping, harvest disposition, and canonical integration ref for every selected task.
 - Recommended task status: `done`, `blocked`, or keep active.
-- Optional skill-proposal schema object file path if the retrospective identifies a reusable process improvement.
-
-## Milestone Review Pass
-
-Read `devExecution.reviewPasses.milestone` from `.plan2agent/project.config.json` first, using the default `off` when the field is absent. Read this procedure only when that value is not `off` and after `p2a execute finish` makes a task done and `done >= ceil(total / 2)` (midpoint) or `done == total` (pre_close).
-When the value is `off`, or during any task execution that does not meet the checkpoint condition, do not read it.
-For maintenance tasks or explicit standalone graphs, do not read it.
-
-When a checkpoint condition is met, read `references/milestone-review.md`.
+- Optional skill-proposal schema object file path only when a separately approved retrospective write produced one.
 
 ## Retrospective
 
-After execution, perform a Hermes-style retrospective gate. Look for repeated mistakes, missing verification, reusable procedures, or unclear boundaries discovered during the run. Explicitly ask: did the user correct code style during this run?
+Run a Hermes-style retrospective only after a failed/blocked run, a retry, an explicit user correction, or a repeated process defect. A normal first-pass success requires no retrospective question or proposal. When the trigger exists, look for repeated mistakes, missing verification, reusable procedures, or unclear boundaries and determine from the conversation whether the user corrected code style; do not ask again when the answer is already evident. Report the candidate in closeout and request separate approval before writing any proposal artifact.
 
-If an improvement is warranted, write it as a skill-proposal schema object rather than freeform markdown and save it inside the project at `.plan2agent/proposals/<proposalId>.json`. If the user corrected code style, write a proposal with `target: "project"` and `targetFiles: [".plan2agent/constitution.json"]`; use `[".plan2agent/style.md"]` only for an unmigrated legacy project. Record concrete evidence describing what the user asked to change and how they wanted the style adjusted. The object must conform to `p2a` package schema `skill-proposal.schema.json` with `schema_version: "p2a.skill_proposal.v1"`, a stable non-empty `proposalId`, the source run id when available, concrete evidence, target canonical files, risk, and `status: "proposed"`.
+After explicit approval, prefer the canonical `p2a proposals mine --artifacts <artifact-root> --run-id <run-id>` path. If an approved style-correction candidate must be authored directly, save one `p2a.skill_proposal.v1` object under `.plan2agent/proposals/<proposalId>.json`, with a stable id, source run, concrete evidence, risk, `status: "proposed"`, `target: "project"`, and `targetFiles: [".plan2agent/constitution.json"]`; use `[".plan2agent/style.md"]` only for an unmigrated legacy project.
 
 Do not edit any skill, agent, planning artifact, CLI mirror, or other canonical file automatically as part of the retrospective. Leave only the proposal object for later review. A human or the read-only skill curator must review the proposal, and any approved patch must happen in a separate turn after human approval.

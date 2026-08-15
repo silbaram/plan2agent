@@ -89,10 +89,6 @@ export function runHandoff(args, options = {}) {
   });
 }
 
-export function runHandoffFrom(cwd, args) {
-  return spawnSync(process.execPath, [HANDOFF_CLI, ...args], { cwd, encoding: 'utf8' });
-}
-
 export function runDoctor(args) {
   return spawnSync(process.execPath, [DOCTOR_CLI, ...args], { cwd: ROOT, encoding: 'utf8' });
 }

@@ -37,6 +37,12 @@ import {
   RUN_STORE_REDIRECT_FILE,
   withRunStoreLocks,
 } from '../scripts/p2a_run_store.mjs';
+import {
+  MONITOR_CONCERN_FIELDS,
+  MONITOR_GATE_POLICY,
+  monitorGateContractSha256,
+  normalizeMonitorGateSidecar,
+} from '../scripts/p2a_monitor_gate.mjs';
 import { validateRunIndexData, validateRunsDir } from '../scripts/validate_artifacts.mjs';
 import { RUNS_CLI, runExecute, runRuns, runTasks } from './helpers/fixtures.mjs';
 
@@ -147,6 +153,10 @@ function writeApprovedRunSource(root, projectId = 'run-layout-fixture') {
   writeJson(path.join(root, 'gate-b-spec', 'spec.json'), spec);
 }
 
+function writeApprovedRunSourceForGraph(graphPath, projectId = 'run-layout-fixture') {
+  writeApprovedRunSource(path.dirname(path.dirname(graphPath)), projectId);
+}
+
 describe('iteration-partitioned run layout', () => {
   test('atomic JSON replacement preserves an existing file mode', { skip: process.platform === 'win32' }, () => {
     const tempRoot = mkdtempSync(path.join(tmpdir(), 'p2a-run-layout-mode-'));
@@ -188,6 +198,7 @@ describe('iteration-partitioned run layout', () => {
     try {
       const runsDir = path.join(tempRoot, 'runs');
       const graphPath = path.join(tempRoot, 'gate-c-task-graph', 'task-graph.json');
+      writeApprovedRunSourceForGraph(graphPath);
       writeJson(graphPath, taskGraph());
       const result = runRuns([
         'start',
@@ -224,6 +235,7 @@ describe('iteration-partitioned run layout', () => {
     try {
       const runsDir = path.join(tempRoot, 'runs');
       const graphPath = path.join(tempRoot, 'gate-c-task-graph', 'task-graph.json');
+      writeApprovedRunSourceForGraph(graphPath);
       writeJson(graphPath, taskGraph());
 
       const result = runRuns([
@@ -252,6 +264,7 @@ describe('iteration-partitioned run layout', () => {
       const graphPath = path.join(tempRoot, 'gate-c-task-graph', 'task-graph.json');
       const legacyRun = startedRun('run-task-001.monitor-gate');
       const legacyRef = canonicalRunRef(legacyRun);
+      writeApprovedRunSourceForGraph(graphPath);
       writeJson(graphPath, taskGraph());
       writeJson(path.join(runsDir, legacyRef), legacyRun);
       writeJson(path.join(runsDir, 'run-index.json'), runIndex(legacyRun, legacyRef));
@@ -624,6 +637,7 @@ describe('iteration-partitioned run layout', () => {
       const graphPath = path.join(tempRoot, 'gate-c-task-graph', 'task-graph.json');
       const graph = taskGraph();
       const runId = 'run-missing-source-spec';
+      writeApprovedRunSourceForGraph(graphPath);
       writeJson(graphPath, graph);
 
       let result = runRuns([
@@ -636,6 +650,8 @@ describe('iteration-partitioned run layout', () => {
         '--workspace', tempRoot, '--test-command', 'true',
       ]);
       assert.equal(result.status, 0, result.stderr);
+
+      rmSync(path.join(tempRoot, 'gate-b-spec', 'spec.json'));
 
       const rejected = runRuns([
         'finish', '--runs', runsDir, '--run-id', runId, '--status', 'finished',
@@ -742,16 +758,20 @@ describe('iteration-partitioned run layout', () => {
     try {
       const runsDir = path.join(tempRoot, 'runs');
       const run = startedRun();
+      const sourceGate = normalizeMonitorGateSidecar({
+        required: true,
+        requiredConcernFields: MONITOR_CONCERN_FIELDS,
+        ruleContract: { source: 'none', ref: null, sha256: null, ruleIds: [] },
+      }, run.runId, `${run.runId}.json`);
+      run.schema_version = 'p2a.run.v2';
+      run.monitorGate = {
+        required: true,
+        policy: MONITOR_GATE_POLICY,
+        contractSha256: monitorGateContractSha256(sourceGate),
+      };
       writeJson(path.join(runsDir, `${run.runId}.json`), run);
       writeJson(path.join(runsDir, 'run-index.json'), runIndex(run));
-      writeJson(path.join(runsDir, `${run.runId}.monitor-gate.json`), {
-        schema_version: 'p2a.monitor_gate.v1',
-        runId: run.runId,
-        required: true,
-        verdictPath: `${run.runId}.monitor-verdict.json`,
-        acceptedVerdicts: ['confirm_done'],
-        failureClassMap: {},
-      });
+      writeJson(path.join(runsDir, `${run.runId}.monitor-gate.json`), sourceGate);
       writeJson(path.join(runsDir, `${run.runId}.style-verdict.json`), { violationCount: 0 });
       writeJson(path.join(runsDir, `${run.runId}.memory-recall.json`), {
         schema_version: 'p2a.memory_search.v1',
@@ -776,6 +796,10 @@ describe('iteration-partitioned run layout', () => {
       assert.equal(existsSync(runSidecarPath(runsDir, run.runId, '.memory-recall.json')), true);
       const gate = JSON.parse(readFileSync(runSidecarPath(runsDir, run.runId, '.monitor-gate.json'), 'utf8'));
       assert.equal(gate.verdictPath, `${ITERATION_ID}/${run.runId}.monitor-verdict.json`);
+      const migratedRun = JSON.parse(readFileSync(path.join(runsDir, expectedRef), 'utf8'));
+      assert.equal(migratedRun.monitorGate.contractSha256, monitorGateContractSha256(
+        normalizeMonitorGateSidecar(gate, run.runId, expectedRef),
+      ));
       validateRunsDir(runsDir);
     } finally {
       rmSync(tempRoot, { recursive: true, force: true });
@@ -890,6 +914,7 @@ describe('iteration-partitioned run layout', () => {
       assert.match(status.stdout, new RegExp(`runId: ${legacyRun.runId}`));
 
       const legacyGraphPath = path.join(tempRoot, 'legacy-cli', 'gate-c-task-graph', 'task-graph.json');
+      writeApprovedRunSourceForGraph(legacyGraphPath);
       writeJson(legacyGraphPath, taskGraph());
       const staleStart = runRuns([
         'start',
@@ -1040,6 +1065,7 @@ describe('iteration-partitioned run layout', () => {
         taskGraphRef: 'iterations/iter-001/gate-c-task-graph/task-graph.json',
       };
       const priorRef = canonicalRunRef(priorRun);
+      writeApprovedRunSourceForGraph(graphPath);
       writeJson(graphPath, taskGraph());
       writeJson(path.join(runsDir, 'run-index.json'), runIndex(priorRun, priorRef));
 
@@ -1071,6 +1097,7 @@ describe('iteration-partitioned run layout', () => {
         iterationId: 'iter-001',
         taskGraphRef: 'iterations/iter-001/gate-c-task-graph/task-graph.json',
       };
+      writeApprovedRunSourceForGraph(graphPath);
       writeJson(graphPath, taskGraph());
       writeJson(path.join(runsDir, canonicalRunRef(priorRun)), priorRun);
 
@@ -1100,6 +1127,7 @@ describe('iteration-partitioned run layout', () => {
       const graphPath = path.join(tempRoot, 'gate-c-task-graph', 'task-graph.json');
       const priorRun = startedRun('run-task-001-001.monitor-gate');
       const priorRef = canonicalRunRef(priorRun);
+      writeApprovedRunSourceForGraph(graphPath);
       writeJson(graphPath, taskGraph());
       writeJson(path.join(runsDir, priorRef), priorRun);
 
@@ -1167,6 +1195,7 @@ describe('iteration-partitioned run layout', () => {
     try {
       const runsDir = path.join(tempRoot, 'runs');
       const graphPath = path.join(tempRoot, 'gate-c-task-graph', 'task-graph.json');
+      writeApprovedRunSourceForGraph(graphPath);
       writeJson(graphPath, taskGraph());
       const starts = Array.from({ length: 8 }, (_, index) => runRunsAsync([
         'start',
@@ -1193,6 +1222,7 @@ describe('iteration-partitioned run layout', () => {
     try {
       const runsDir = path.join(tempRoot, 'runs');
       const graphPath = path.join(tempRoot, 'gate-c-task-graph', 'task-graph.json');
+      writeApprovedRunSourceForGraph(graphPath);
       writeJson(graphPath, taskGraph());
       writeJson(path.join(runsDir, RUN_STORE_LOCK_FILE), {
         pid: 2147483647,
@@ -1226,6 +1256,7 @@ describe('iteration-partitioned run layout', () => {
     try {
       const runsDir = path.join(tempRoot, 'runs');
       const graphPath = path.join(tempRoot, 'gate-c-task-graph', 'task-graph.json');
+      writeApprovedRunSourceForGraph(graphPath);
       writeJson(graphPath, taskGraph());
       writeJson(path.join(runsDir, RUN_STORE_LOCK_FILE), {
         pid: 2147483647,
@@ -1372,6 +1403,39 @@ describe('iteration-partitioned run layout', () => {
       const index = validateRunsDir(runsDir);
       assert.equal(index.runs[0].status, 'finished');
       assert.equal(JSON.parse(readFileSync(path.join(runsDir, runRef), 'utf8')).notes.includes('recovered'), true);
+    } finally {
+      rmSync(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  test('a malformed monitor transaction is rejected before writing its run or index', () => {
+    const tempRoot = mkdtempSync(path.join(tmpdir(), 'p2a-run-monitor-invalid-transaction-'));
+    try {
+      const runsDir = path.join(tempRoot, 'runs');
+      const run = startedRun('run-monitor-invalid-transaction');
+      const runRef = canonicalRunRef(run);
+      writeJson(path.join(runsDir, '.run-write-transaction'), {
+        schema_version: 'p2a.run_write_transaction.v1',
+        runRef,
+        run,
+        index: runIndex(run, runRef),
+        monitorGate: {
+          schema_version: 'p2a.monitor_gate.v1',
+          runId: run.runId,
+          required: true,
+          verdictPath: 'wrong.monitor-verdict.json',
+          acceptedVerdicts: ['confirm_done'],
+          failureClassMap: {},
+        },
+      });
+
+      const recovered = runRuns(['record', '--runs', runsDir, '--run-id', run.runId, '--note', 'must not write']);
+      assert.equal(recovered.status, 1);
+      assert.match(recovered.stderr, /monitor gate verdictPath must be/);
+      assert.equal(existsSync(path.join(runsDir, runRef)), false);
+      assert.equal(existsSync(path.join(runsDir, 'run-index.json')), false);
+      assert.equal(existsSync(runSidecarPath(runsDir, run.runId, '.monitor-gate.json')), false);
+      assert.equal(existsSync(path.join(runsDir, '.run-write-transaction')), true);
     } finally {
       rmSync(tempRoot, { recursive: true, force: true });
     }

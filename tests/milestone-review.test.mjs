@@ -727,3 +727,21 @@ describe('milestone review artifact contract', () => {
     assert.throws(() => validateMilestoneReviewData(findingData), /must reference completed task evidence/);
   });
 });
+
+test('iteration CLI keeps historical milestone reviews read-only', () => {
+  const help = spawnSync(process.execPath, [
+    path.join(ROOT, 'scripts', 'p2a_iteration.mjs'),
+    '--help',
+  ], { encoding: 'utf8' });
+  assert.equal(help.status, 0, help.stderr);
+  assert.doesNotMatch(help.stdout, /promote-milestone/);
+
+  const removedCommand = spawnSync(process.execPath, [
+    path.join(ROOT, 'scripts', 'p2a_iteration.mjs'),
+    'promote-milestone',
+    '--artifacts',
+    path.join(tmpdir(), 'unused-artifacts'),
+  ], { encoding: 'utf8' });
+  assert.notEqual(removedCommand.status, 0);
+  assert.match(`${removedCommand.stdout}${removedCommand.stderr}`, /unknown command: promote-milestone/);
+});

@@ -1,4 +1,4 @@
-# 감독형 개발 실행 레퍼런스
+# 승인 계약 기반 개발 실행 레퍼런스
 
 작성일: 2026-08-05 · 상태: 완료 기능 레퍼런스
 
@@ -6,23 +6,27 @@
 
 ## 1. 현재 결론
 
-Plan2Agent는 Gate A-C planning harness 이후, 승인된 ready task 1건 또는 한 ready snapshot의 bounded batch를 사람이 감독하는 foreground agent 세션으로 실행하고 결과를 task별 파일 기반 run log로 추적하는 흐름을 제공한다.
+Plan2Agent는 승인된 Gate B에서 `executionEnvelope`를 파생해 실행 AI가 구현·검증·수정을 자율적으로 소유하고 결과를 run log로 추적한다. 새 프로젝트는 `adaptive`를 기본으로 사용하며 `direct`, `planned`, `orchestrated` 모드를 지원한다. 과도기 Direct/Planned도 기존 lifecycle 호환을 위해 한 synthetic work item을 사용하지만 제품 의미의 정본은 Gate B다.
 
 완료된 범위:
 
 | 영역 | 구현 |
 | --- | --- |
 | task/run tracking | `p2a tasks`, `p2a runs`, run/run-index schema |
+| Gate-derived envelope | 새 run에 objective, source Gate hash, scope, `mustPreserve`, non-goal, acceptance, verification, 권한 경계를 고정 |
+| adaptive execution | project policy `adaptive|direct|planned|orchestrated`, mode/rationale 기록, Direct/Planned synthetic compatibility work item |
+| planned checkpoint | 2–5개 ordered outcome과 실제 command verification, resume 안내, pending checkpoint finish 차단 |
 | 감독형 단일 task 실행 | `p2a execute plan/start/resume/status/finish` |
 | 감독형 ready batch | `p2a-dev-execution` owner가 직렬 start, 격리 worktree 병렬 구현, 직렬 로컬 통합·검증·finish를 조율 |
 | 감독형 orchestration | `p2a execute start --require-monitor/show/validate/handoff/next-role/role-prompt/mark-role/failure-policy` |
-| runtime sidecar | `runs/<iterationId>/<runId>.orchestration.json`, `runs/<iterationId>/<runId>.monitor-gate.json`, 위반이 있을 때만 생성하는 `.style-verdict.json` |
+| runtime sidecar | `runs/<iterationId>/<runId>.orchestration.json`, `runs/<iterationId>/<runId>.monitor-gate.json` |
 | monitor gate | 기본 `opt_in`. `--require-monitor`로 시작한 run만 `p2a-performance-monitor`와 monitor verdict 기반 finish 차단 |
-| milestone review | 기본 `off`. 활성화한 경우에만 `p2a-milestone-reviewer`가 완료된 task 범위의 통합 결함을 중간·종료 직전에 비차단 검토 |
 | Hermes proposal loop | `p2a proposals mine/review/curate/draft-patch/approve-draft/digest` |
 | provider-native guide | Codex, Claude, Gemini용 role prompt와 capability evidence |
 
-이 실행 계층은 여러 agent를 무인으로 돌리는 scheduler가 아니다. P2A는 ready task, role, prompt, runtime 상태, monitor gate, proposal artifact를 조율하고, 실제 agent CLI/앱 세션은 사용자가 foreground에서 열어 감독한다. Batch mode도 같은 foreground 세션 안에서 provider-native write subagent를 bounded하게 병렬 실행할 뿐, start·통합·검증·finish 소유권은 main owner에게 남는다.
+이 실행 계층은 범용 background scheduler가 아니다. 다만 승인된 envelope 안의 start/resume/검증/review/close는 task별 추가 승인을 요구하지 않는다. Codex workspace-write 또는 Claude scaffold/OS confinement 안에서 실행 AI가 같은 session의 구현 loop를 계속 소유하며, 외부 write·비용·credential·배포·불가역 동작만 별도 사용자 authorization을 요구한다.
+
+Direct와 일반 단일-owner Planned 실행은 현재 foreground owner가 현재 workspace에서 직접 수행하고 `runTracking.defaultIsolation`을 따른다. 기본 격리는 `none`이며, 별도 implementer·worktree·병렬 owner는 Orchestrated/batch, 명시 정책, 동시 write owner 또는 구체적인 격리·rollback 위험이 있을 때만 사용한다.
 
 ### 리뷰 패스 정책
 
@@ -31,48 +35,47 @@ Plan2Agent는 Gate A-C planning harness 이후, 승인된 ready task 1건 또는
 | 키 | 기본값 | 진입 조건 |
 | --- | --- | --- |
 | `monitor` | `opt_in` | `opt_in`에서는 `p2a execute start --require-monitor`로 시작한 run만 진입한다. `off`이면 신규 run을 opt-in할 수 없다. |
-| `style` | `off` | `off`이면 `p2a-style-rater`를 호출하지 않고 run에 `STYLE_REVIEW: skipped; reason=reviewPasses.style=off`를 기록한다. |
-| `milestone` | `off` | `off`가 아니면서 `done >= ceil(total / 2)`인 midpoint 또는 `done == total`인 pre-close 시점에만 진입한다. |
-| `visual` | `off` | `off`이면 최종 시각 리뷰 절차 전체를 건너뛰고 `p2a execute review` run을 열지 않는다. |
-| `acceptance` | `on` | 비UI iteration의 모든 task가 완료되면 실제 명령 증거를 요구하는 `p2a execute accept` run을 연다. `off`이면 기존처럼 이 게이트를 생략한다. |
+| `visual` | `off` | 추가 독립 visual reviewer 강도를 조정한다. 승인 visual contract가 요구하는 owner render evidence와 close gate는 이 값으로 끌 수 없다. |
+| `acceptance` | `opt_in` | 일반 비UI iteration은 task verification으로 닫는다. 사용자가 독립 기능 검수를 요청해 `p2a execute accept`를 시작했거나 값을 `on`으로 설정한 경우에만 실제 명령 증거를 요구한다. 시작된 acceptance run은 완료 전까지 close gate로 유지된다. |
 
-예를 들어 프로젝트별로 monitor opt-in을 유지하면서 style과 milestone 리뷰를 활성화하려면 다음처럼 설정한다.
+기본 비용을 유지하면서 monitor와 acceptance를 모두 opt-in으로 두려면 다음처럼 설정한다.
 
 ```json
 {
   "devExecution": {
+    "executionMode": "adaptive",
     "reviewPasses": {
       "monitor": "opt_in",
-      "style": "on",
-      "milestone": "on",
       "visual": "off",
-      "acceptance": "on"
+      "acceptance": "opt_in"
     }
   }
 }
 ```
 
-미지 키나 허용 목록 밖의 값은 설정 오류로 거부된다. 리뷰 패스를 `off`로 두는 것은 해당 리뷰 아티팩트의 **생성을 생략할 수 있게 하는 것**이지 검증 코드를 제거하는 것이 아니다. 관련 아티팩트가 존재하면 `validate_artifacts.mjs`가 계속 schema와 참조 무결성을 검증하며, 아티팩트가 없을 때만 비활성 정책에 따라 통과한다.
+새로 생성하는 project config의 `executionMode` 기본값은 `adaptive`다. 기존 config에 이 필드가 없으면 historical 동작을 보존하기 위해 `orchestrated`로 해석하며, 기록된 `direct`, `planned`, `orchestrated`, `adaptive` 값은 그대로 유지한다. `adaptive`는 실행 AI가 Gate B와 repository를 조사해 mode를 선택한다. Mode 선택과 checkpoint는 추가 사용자 승인 Gate가 아니다.
 
-현재 적용값은 다음 명령의 `reviewPasses=monitor:opt_in,style:off,milestone:off,visual:off,acceptance:on` 형태 출력으로 확인한다.
+미지 키나 허용 목록 밖의 값은 설정 오류로 거부된다. Phase 0 project에 이미 기록된 `style`/`milestone` 설정과 sidecar는 읽기 호환되지만 새 실행은 별도 reviewer를 만들지 않는다. Style은 단일 monitor rule contract가 검사하고 통합 acceptance는 기능/시각 close evidence가 담당한다.
+
+현재 적용값은 다음 명령의 `reviewPasses=monitor:opt_in,visual:off,acceptance:opt_in` 형태 출력으로 확인한다.
 
 ```bash
 p2a doctor --dev
 ```
 
-#### 개발 중 사용자 시각 검수
+#### 개발 중 자동 시각 검수
 
-`reviewPasses.visual`의 iteration 최종 게이트와 별개로, UI task는 일반 구현 run을 열어 둔 채 사용자 시각 검수를 반복한다.
+UI task는 일반 구현 run을 열어 둔 채 실행 owner가 영향 route/state/viewport를 실제 렌더링하고 시각 drift를 자율적으로 수정한다. 사용자에게 task별 시각 승인을 요청하지 않는다. 승인된 필수 visual contract가 있으면 이 반복과 별개로 iteration 최종 render evidence가 항상 필요하다.
 
 ```text
 p2a execute start <task>     # 일반 구현 run, task in_progress
   → 구현
-  → 사용자 시각 검수 → drift 수정 → 재검수 (필요한 만큼 반복)
-  → 만족
-p2a execute finish           # task-level 시각 검수 통과 지점
+  → owner render/review → drift 수정 → 재검증 (필요한 만큼 반복)
+  → 영향 화면 통과
+p2a execute finish           # task 구현·검증 완료
 ```
 
-일반 구현 run은 `changedFiles`를 전제하므로 이 반복 중 같은 할당 workspace에서 계속 수정해도 된다. Workspace 불변과 빈 `changedFiles` 제약은 `final_visual_review`와 `final_acceptance_review` run에만 적용된다. 이 task-level 루프는 비게이팅·무기록이며 추가 review run, sidecar, screenshot hash, verdict를 만들지 않고 iteration 최종 `confirm_ui`를 대체하지도 않는다. `finish` 후에 시각 문제를 발견한 경우에만 `p2a tasks todo <id> --reopen --note <reason>`으로 task를 다시 연 뒤 수정한다.
+일반 구현 run은 `changedFiles`를 전제하므로 이 반복 중 같은 할당 workspace에서 계속 수정해도 된다. Workspace 불변과 빈 `changedFiles` 제약은 `final_visual_review`와 `final_acceptance_review` run에만 적용된다. 이 task-level 루프는 비게이팅·무기록이며 추가 review run, sidecar, screenshot hash, verdict를 만들지 않고 iteration 최종 `confirm_ui`를 대체하지도 않는다. Contract 변경이 필요할 때만 Gate B로 돌아가며, `finish` 후 시각 문제를 발견한 경우에는 `p2a tasks todo <id> --reopen --note <reason>`으로 task를 다시 연 뒤 수정한다.
 
 ## 2. 감독형 자동화 경계
 
@@ -111,6 +114,21 @@ Batch write는 Codex 또는 foreground 승인·confinement가 충족된 Claude�
 
 ## 4. 표준 실행 흐름
 
+Gate B가 승인됐지만 Gate C가 아직 없고 execution mode가 `adaptive|direct|planned`이면 `p2a next`가 `p2a-dev-execution --prepare-mode <policy>`를 반환한다. 실행 AI는 별도 승인 질문 없이 mode를 선택하고 Direct 또는 Planned 호환 레코드를 준비한다.
+
+```bash
+p2a execute prepare --artifacts .plan2agent/artifacts/<project> \
+  --mode direct \
+  --selection-rationale '<근거>'
+
+# Planned는 2-5개 선언
+p2a execute prepare --artifacts .plan2agent/artifacts/<project> \
+  --mode planned \
+  --selection-rationale '<근거>' \
+  --milestone 'milestone-1|<결과>|<검증 명령>' \
+  --milestone 'milestone-2|<결과>|<검증 명령>'
+```
+
 1. ready task 확인:
 
 ```bash
@@ -125,23 +143,34 @@ p2a execute plan \
   --task <task-id>
 ```
 
-3. monitor gate가 필요한 run 시작:
+3. 일반 run 시작:
 
 ```bash
 p2a execute start \
   --artifacts .plan2agent/artifacts/<project> \
   --task <task-id> \
-  --agent-tool codex \
-  --require-monitor
+  --agent-tool codex
 ```
+
+승인 constitution의 판단형 규칙을 독립적으로 검사해야 하거나 프로젝트 정책이 요구할 때만 `--require-monitor`를 추가한다. 이 플래그 없이 시작한 일반 run에는 monitor agent나 sidecar를 만들지 않는다.
 
 4. 사람이 foreground agent 세션에서 prompt를 실행하고 결과를 확인한다.
 
-5. 독립 monitor 결과를 run 파일 옆의 `.monitor-verdict.json` sidecar에 기록한다. 예를 들어 run ref가 `runs/<iteration-id>/<run-id>.json`이면 verdict 경로는 `runs/<iteration-id>/<run-id>.monitor-verdict.json`이다. 이 파일은 CLI 명령으로 임의 생성하는 대신, foreground 실행 owner가 §6의 표준 JSON shape으로 작성한다.
+   Planned run은 각 결과 뒤 선언된 checkpoint를 순서대로 실행한다. `p2a execute resume`은 다음 pending checkpoint를 출력한다. 단, checkpoint가 `failed` 또는 `unavailable` evidence를 남기면 같은 run에서 해당 milestone을 다시 실행하지 않는다. 그 run을 failed/blocked로 닫고 새 retry run을 시작하며, resume도 다음 checkpoint 대신 이 복구 요구사항을 출력한다.
 
-   `full + current_iteration` task는 `workKind`와 `visualImpact.screenStates`로 UI 영향 범위만 명시한다. 일반 구현 run은 기능 검증과 §1의 사용자 시각 검수 반복을 모두 통과한 뒤 끝내며 visual sidecar를 요구하지 않는다. 필수 검수 반복 자체는 `visualFeedback`이나 별도 review evidence로 기록하지 않는다. `reviewPasses.visual`이 `off`가 아니면 모든 task를 통합한 뒤 `p2a execute review --artifacts <root>`로 iteration당 하나의 `runKind: final_visual_review` run을 연다. 이 run은 Gate B에서 전체 승인 screen/state/viewport/접근성 계약을 직접 가져오고 canonical workspace, isolation 없음, 변경 파일 없음을 강제한다. `p2a runs revision`으로 application workspace snapshot SHA-256을 계산한 뒤 실제 앱의 정확한 크기 PNG와 `p2a.visual_accessibility_report.v1` 보고서를 만들고, 파일 SHA-256·capture metadata·`iteration_id`·workspace identity/revision과 승인된 experience/prototype 비교 결과를 `.visual-review.json`에 기록한다. Sidecar에는 task ownership을 기록하지 않으며 run의 task id는 실패 시 remediation pointer로만 사용한다. Workspace snapshot은 symlink file target의 실제 bytes를 포함하되 제외 디렉터리를 symlink alias로 다시 포함하지 않으며, workspace 밖의 directory symlink는 거부한다. Review finish는 sidecar revision을 현재 workspace와 비교하고 정확한 sidecar 바이트를 `visualReviewEvidenceSha256`으로 봉인한다. Run-directory/close-ready/`p2a next`는 이 단일 최종 run의 revision과 digest를 재검증한다. Review가 failed/blocked면 remediation owner task를 `todo`로 reopen한 뒤 구현과 최종 review를 반복한다.
+   Start가 기록한 task contract와 Gate B execution envelope는 run이 열린 동안에도 고정된다. `resume`, `verify`, `checkpoint`는 새 실행 증거를 만들기 전에 현재 Gate B/Gate C 원본을 다시 검증하며, command verification은 열린 run에서만 실행한다. 원본이 바뀌거나 사라졌다면 실행을 계속하지 않으며, `p2a next`는 실패할 resume 대신 `started_run_contract_drift`를 반환한다. 변경이 실수라면 기록된 원본을 복원하고, 의도된 계약 변경이라면 기존 run을 structured failed/blocked evidence로 닫은 뒤 변경 계약을 승인하고 새 run을 시작한다.
 
-   비UI iteration은 기본 `reviewPasses.acceptance: on`에서 모든 task 통합 뒤 `p2a execute accept --artifacts <root> --agent-tool <reviewer>`를 실행한다. 이 명령은 Gate B `product.core_flows`와 `product.success_criteria`를 계약으로 고정한 `final_acceptance_review` run을 canonical workspace, isolation 없음, 변경 파일 없음으로 연다. Owner가 각 동작을 `p2a runs verify --verify-command 'custom:<command>'`로 실제 실행하고, read-only `p2a-acceptance-reviewer`가 run verification과 일치하는 `command`·`source: command|config`·정수 `exitCode`·`stdoutTail`을 `.acceptance-review.json`에 기록한다. exit 0이어도 출력이 비어 있거나 의미 없는 결과면 `block`이다. 모든 기준이 실제 동작으로 확인된 `confirm_behavior`만 finish할 수 있고 exact sidecar hash와 canonical workspace revision이 run에 봉인된다. 이후 workspace 변경은 새 acceptance review를 요구한다.
+```bash
+p2a runs checkpoint --artifacts .plan2agent/artifacts/<project> \
+  --run-id <run-id> \
+  --milestone milestone-1
+```
+
+5. `--require-monitor`로 시작한 run에만 독립 monitor 결과를 run 파일 옆의 `.monitor-verdict.json` sidecar에 기록한다. 예를 들어 run ref가 `runs/<iteration-id>/<run-id>.json`이면 verdict 경로는 `runs/<iteration-id>/<run-id>.monitor-verdict.json`이다. 이 파일은 CLI 명령으로 임의 생성하는 대신, foreground 실행 owner가 §6의 표준 JSON shape으로 작성한다. 새 `.monitor-gate.json`은 `ruleContract`에 승인 constitution 또는 legacy style의 ref와 SHA-256을 고정하고 `requiredConcernFields`에 `rule_concerns`를 포함한다. Monitor에는 이 sidecar와 규칙 원문 전체를 함께 전달한다. 일반 run은 이 단계를 건너뛴다.
+
+   `full + current_iteration` task는 `workKind`와 `visualImpact.screenStates`로 UI 영향 범위만 명시한다. 모든 task를 통합한 뒤 승인 experience가 `visual_review_required`이면 `reviewPasses.visual`과 무관하게 `p2a execute review --artifacts <root>`로 iteration당 하나의 `runKind: final_visual_review` run을 연다. 이 run은 Gate B에서 전체 screen/state/viewport/접근성 계약을 직접 가져오고 canonical workspace, isolation 없음, 변경 파일 없음을 강제한다. 실제 앱 PNG, 접근성 보고서, capture metadata, workspace revision과 승인 prototype 비교 결과를 `.visual-review.json`에 기록하며 close-ready와 `p2a next`가 revision과 digest를 재검증한다.
+
+   비UI iteration은 기본 `reviewPasses.acceptance: opt_in`에서 독립 acceptance run을 자동으로 만들지 않는다. 사용자가 요청해 `p2a execute accept --artifacts <root> --agent-tool <reviewer>`를 시작했거나 정책이 `on`이면 Gate B `product.core_flows`와 `product.success_criteria`를 계약으로 고정한 `final_acceptance_review` run을 canonical workspace, isolation 없음, 변경 파일 없음으로 연다. Owner가 각 동작을 `p2a runs verify --verify-command 'custom:<command>'`로 실제 실행하고, read-only `p2a-acceptance-reviewer`가 run verification과 일치하는 `command`·`source: command|config`·정수 `exitCode`·`stdoutTail`을 `.acceptance-review.json`에 기록한다. exit 0이어도 출력이 비어 있거나 의미 없는 결과면 `block`이다. 일단 시작한 review는 모든 기준이 실제 동작으로 확인된 `confirm_behavior`로 끝나야 하며 exact sidecar hash와 canonical workspace revision을 봉인한다. 이후 workspace 변경은 새 acceptance review를 요구한다.
 
 6. 검증과 finish:
 
@@ -167,7 +196,7 @@ p2a execute finish \
 4. main이 완료 결과를 하나씩 scope 검토하고 task별 changed-file 목록을 동결한 뒤 reproducible commit 또는 patch로 만든다.
 5. 최신 canonical integration head에서 integration candidate를 만들고 결과를 적용한다. 충돌을 자동 해결하지 않으며, task worktree 검증과 별개로 candidate에서 필수 verification을 실행한다.
 6. integration base/ref/workspace를 `INTEGRATION:` run note로 남기고 task별 changed files를 명시 기록한다. 누적 integration worktree의 전체 git status를 한 task에 귀속하지 않는다.
-7. 충돌이 없고 필수 verification이 통과했으며 필요한 monitor gate가 acceptance를 확인한 candidate만 canonical integration branch에 반영한다. style-rating은 적용 대상이면 실행하고 기록하되, 기존 계약처럼 정보성 근거로만 남기고 canonical 반영이나 `done`/`blocked` 판단을 직접 차단하지 않는다. 그 뒤에만 `p2a execute finish`로 run을 `finished`, task를 `done`으로 전이한다.
+7. 충돌이 없고 필수 verification이 통과했으며 필요한 단일 monitor gate가 acceptance와 constitution 규칙을 확인한 candidate만 canonical integration branch에 반영한다. 그 뒤에만 `p2a execute finish`로 run을 `finished`, task를 `done`으로 전이한다.
 8. batch harvest 후 `ready`를 다시 계산하고 다음 batch worktree는 최신 canonical integration head에서 시작한다.
 
 spawn, scope, integration, verification 또는 monitor가 실패한 task는 canonical integration branch를 전진시키거나 `done` 처리하지 않는다. 기존 structured failure contract로 `blocked`/`failed` 처리하거나 사용자 결정이 필요하면 active로 유지한다. 다른 독립 task의 직렬 harvest는 계속할 수 있다.
@@ -181,13 +210,11 @@ dirty, unmerged, failed, blocked task 또는 integration-candidate worktree는 �
 | 파일 | 역할 |
 | --- | --- |
 | `.plan2agent/artifacts/<project>/runs/run-index.json` | run 목록과 최신 상태 index |
-| `.plan2agent/artifacts/<project>/runs/<iterationId>/<runId>.json` | task 실행 기록, changedFiles, verification, failureClass |
-| `.plan2agent/artifacts/<project>/runs/<iterationId>/<runId>.orchestration.json` | 실행 당시 monitor gate snapshot |
-| `.plan2agent/artifacts/<project>/runs/<iterationId>/<runId>.monitor-gate.json` | shared mental model, role assignment, communication log, runtime phase |
-| `.plan2agent/artifacts/<project>/runs/<iterationId>/<runId>.style-verdict.json` | `violationCount > 0`인 style review 근거. 0건·미적용·생략은 run note에 기록하고 파일은 만들지 않음 |
+| `.plan2agent/artifacts/<project>/runs/<iterationId>/<runId>.json` | Gate-derived `executionEnvelope`, task 실행 기록, changedFiles, verification, failureClass |
+| `.plan2agent/artifacts/<project>/runs/<iterationId>/<runId>.orchestration.json` | shared mental model, role assignment, communication log, runtime phase |
+| `.plan2agent/artifacts/<project>/runs/<iterationId>/<runId>.monitor-gate.json` | 실행 당시 monitor 정책, verdict 경로와 규칙 계약 snapshot |
 | `.plan2agent/artifacts/<project>/runs/<iterationId>/<runId>.visual-review.json` | iteration 최종 review run의 실제 렌더링·접근성 증거와 `confirm_ui|block` verdict. 해당 review run의 성공 finish를 차단함 |
 | `.plan2agent/artifacts/<project>/visual-evidence/<iterationId>/<runId>/` | visual review가 참조하는 실제 앱 screenshot과 접근성 보고서. run store 밖에 두어 run-index/migration 계약과 분리함 |
-| `.plan2agent/artifacts/<project>/iterations/<iteration-id>/milestone-reviews/{midpoint,pre_close}.json` | 완료 task의 run evidence를 포함하는 checkpoint별 비차단 통합 리뷰 |
 | `.plan2agent/proposals/*.json` | 실행 회고 기반 개선 후보 |
 | `.plan2agent/proposals/reviews/*.json` | proposal deterministic review |
 | `.plan2agent/proposals/curations/*.json` | proposal grouping/prioritization |
@@ -205,6 +232,8 @@ monitor gate가 필요한 run은 monitor verdict 없이 `done`으로 닫지 않�
 ```json
 {
   "verdict": "confirm_done",
+  "rules_reviewed": [],
+  "rule_concerns": [],
   "unmet_acceptance": [],
   "verification_concerns": [],
   "scope_concerns": [],
@@ -213,29 +242,44 @@ monitor gate가 필요한 run은 monitor verdict 없이 `done`으로 닫지 않�
 }
 ```
 
-허용되지 않은 verdict, verification 실패, scope drift가 있으면 run은 blocked 또는 failed 상태로 닫고, `p2a proposals mine` 또는 `p2a proposals mine`으로 후속 조치를 만든다. 여러 concern 배열이 동시에 채워지면 failure class 매핑 우선순위는 `scope_concerns` → `verification_concerns` → `unmet_acceptance` → `needs_user_decision`이다.
+새 monitor gate는 시작 시점의 승인 `.plan2agent/constitution.json`을 `ruleContract.ref`와 `ruleContract.sha256`으로 고정하고 실제 검사해야 할 architecture/stack/enforceable prohibition/style ID를 `ruleContract.ruleIds`로 기록한다. Constitution이 없는 미이관 project는 substantive `.plan2agent/style.md`를 사용하며 둘 다 없으면 `source: none`과 빈 ID 목록을 명시한다. Run 본문도 정규화된 sidecar 전체의 SHA-256을 `monitorGate.contractSha256`에 보존하므로 sidecar 삭제·완화·경로 변경은 finish와 `p2a runs validate`에서 거부된다. Monitor는 실제 changed file을 각 규칙과 대조한 뒤 `rules_reviewed`에 모든 ID를 반환한다. Advisory prohibition은 `note`에 한계를 공개할 수 있지만 그것만으로 block하지 않는다. Finish는 규칙 원문을 다시 hash해 start 이후 drift를 차단하고, 완료 판정에 사용한 verdict 원문 바이트의 SHA-256을 `monitorVerdictEvidenceSha256`으로 run에 봉인한다. 이후 verdict 누락·변조는 runs validation, task 완료, eval, proposal mining과 handoff에서 거부되거나 무효 evidence로 제외된다. 필수 배열의 non-string/blank 값 또는 rule ID coverage가 누락된 verdict도 거부하며, run-side binding이 없는 이전 sidecar의 느슨한 verdict 형식은 과거 이력 호환을 위해 계속 읽는다.
+
+허용되지 않은 verdict, rule violation, verification 실패, scope drift가 있으면 run은 blocked 또는 failed 상태로 닫고 `p2a proposals mine`으로 후속 조치를 만든다. 여러 concern 배열이 동시에 채워지면 failure class 매핑 우선순위는 `rule_concerns` → `scope_concerns` → `verification_concerns` → `unmet_acceptance` → `needs_user_decision`이다. `rule_concerns`와 `scope_concerns`는 모두 `scope_violation`으로 매핑된다.
+
+### 6.1 자율성·usage 계측
+
+새 run은 `telemetryProtocol: p2a.run_telemetry.manual.v1` marker와 `usage`, `interruptions` 배열을 가진다. 기존 v1/v2 run에는 marker와 두 필드가 없어도 유효하다. Provider가 usage를 제공하면 한 번의 증분 sample을 다음처럼 기록한다. `totalTokens`는 CLI가 `inputTokens + outputTokens`로 계산하며 schema validator도 일치를 확인한다.
+
+```bash
+p2a runs record --run-id <id> --artifacts <root> \
+  --usage-model gpt-5.6-sol/high \
+  --usage-input-tokens 1200 \
+  --usage-output-tokens 350 \
+  --usage-source provider
+```
+
+자동으로 관측할 수 없는 사용자 개입은 발생한 run에 즉시 수동 주석한다. 구현 방법을 사용자에게 선택시킨 경우 `--implementation-interruption`, 요구사항·UI를 사용자가 다시 설명한 경우 `--user-correction`을 쓴다. 계약 Gate 복귀는 사용자가 계약 변경 필요 여부를 판정한 뒤 `--gate-return valid|invalid:<요약>`으로 기록한다. 일반 테스트 실패나 UI drift 수정은 Gate 복귀가 아니다.
+
+```bash
+p2a runs record --run-id <id> --artifacts <root> \
+  --implementation-interruption "Asked the user to choose an internal module layout" \
+  --user-correction "User restated the approved empty state" \
+  --gate-return "valid:Approved scope lacked an external permission"
+```
+
+`p2a eval digest`는 model profile·source별 token 합계, 구현 결정 개입, 사용자 수정, Gate 복귀 precision, 무개입 성공 run 비율, task 수, first-pass acceptance, rework, integration defect, visual drift, scope/rule violation, Gate B→close-ready 시간과 verification evidence completeness를 집계한다. `runKind`가 있는 최종 visual/acceptance review run은 구현 자율성·rule-review 분모와 개입 수에서 제외한다. Usage는 review 비용도 비용이므로 digest 범위의 모든 run을 합산한다. 새 protocol marker가 없는 과거 구현 run은 `interruptions` 배열이 나중에 추가돼도 자율성 지표에서 제외한다. Digest는 autonomy telemetry, usage sample, strict rule review의 coverage도 함께 내보내므로 token 또는 violation의 낮은 합계를 coverage 저하와 혼동하면 안 된다. 동일한 annotation protocol을 적용한 A/B run만 비교한다.
+
+Phase 0의 일회성 task-decomposition A/B 평가는 고정 seed·prompt·verification·UI capture matrix로 수행했고, 그 결과와 한계는 [개선 제안서 §13](gate-driven-adaptive-execution-proposal.md#13-평가-기록과-운영-계측)에 보존한다. 평가는 production `p2a execute` lifecycle 전체를 재현하지 않았으며, 의사결정 완료 뒤 전용 runner·fixture·schema·회귀 테스트를 저장소에서 제거했다. 이후 운영 비교는 실제 run의 `p2a eval digest` telemetry를 사용하고 과거 A/B를 기본 테스트나 phase별 절차로 반복하지 않는다. 당시 사용한 baseline seal CLI와 schema도 제품 runtime과 대상 프로젝트 배포 표면에 남기지 않는다.
 
 같은 task의 latest run이 `failed` 또는 `blocked`인 retry에서만 실행 owner는 task title, failure class, localization으로 같은 프로젝트 Memory를 한 번 조회할 수 있다. 보고서는 `<failed-run-id>.memory-recall.json`으로 보존하고, 재시도 run에는 `MEMORY_RETRY: sourceRun=<id>; report=<path>; applied=<mitigation or none>; status=<succeeded|fallback|failed|skipped>` note를 남긴다. 첫 시도에는 이 조회를 하지 않으며, 유사성이 없는 결과는 적용하지 않는다.
 
-`p2a execute start/status/finish`와 직접 `p2a runs start/finish` 출력 footer에는 copy-paste 가능한 `resume`, `status`, `finish`, `review` 명령이 남는다. `resume`은 `p2a execute resume --run-id <run-id>`로 같은 run의 launcher prompt를 다시 출력하고, `review`는 `p2a proposals mine --run-id <run-id>`로 실행 회고 후보를 생성한다.
+`p2a execute start/status/finish`와 직접 `p2a runs start/finish` 출력 footer에는 copy-paste 가능한 `resume`, `status`, `finish`, `review` 명령이 남는다. `resume`은 `p2a execute resume --run-id <run-id>`로 같은 run의 launcher prompt를 다시 출력한다. `review`의 `p2a proposals mine --run-id <run-id>`는 회고 후보를 쓰는 별도 승인 필요 작업이며, `p2a next`가 자동 실행하지 않는다.
 
-### 6.1 Milestone review
+### 6.2 Historical milestone evidence
 
-`reviewPasses.milestone !== 'off'`이고 midpoint 또는 pre-close 조건을 만족할 때만 이 절차에 진입한다. 각 task의 `p2a execute finish`가 task graph를 갱신한 뒤 checkpoint를 계산한다. `midpoint`는 `done >= ceil(total / 2)`이면서 아직 미완료 task가 있을 때 한 번, `pre_close`는 모든 task가 done인 뒤 close-ready 검증 직전에 한 번만 대상이 된다. 경로는 `iterations/<iteration-id>/milestone-reviews/midpoint.json`과 `pre_close.json`으로 고정하며 파일이 이미 있으면 검증만 하고 재실행하거나 덮어쓰지 않는다. midpoint 시점을 놓치고 이미 전부 done이면 midpoint를 소급 생성하지 않고 pre-close만 실행한다.
-
-reviewer에는 전체 task 상태와 full `task_graph_snapshot`, raw/snapshot hash, 승인 spec, 프로젝트 style contract와 함께 **모든 완료 task**의 최신 성공 run을 전달한다. 각 evidence에는 `task_id`, run id, artifact-root-relative `runs/<run-index entry runRef>` ref(일반적으로 `runs/<iterationId>/<runId>.json`), raw run hash, full immutable `run_snapshot`과 deterministic snapshot hash, finished timestamp, 전체 `changedFiles`, 전체 verification 요약이 필요하고, task마다 적어도 하나의 실제 실행된 `config|command` 검증이 exit code 0으로 통과해야 한다. milestone 완료 근거는 Gate B/D를 검증하는 `--artifacts` 실행의 `sourceLayout: iteration` run만 인정한다. legacy flat graph의 `--graph` 실행은 `sourceLayout: graph`이며 milestone 근거로 승격되지 않는다. 관리형 iteration/maintenance graph를 `--graph`로 지정한 start/finish/task 전이는 Gate 우회를 막기 위해 거부된다. draft 검증 시 snapshot은 현재 run과 exact match해야 하며, 승격 뒤 finished run에 합법적인 `record`/`verify` 증거가 추가돼도 canonical checkpoint는 당시 snapshot으로 계속 검증된다. 하나라도 빠지면 부분 리뷰를 만들지 않고 skip 이유만 보고하며, 근거가 복구되면 아직 eligible한 checkpoint를 다시 시도한다.
+Phase 1부터 새 실행은 style/milestone reviewer와 sidecar를 생성하지 않는다. 이전 `p2a.milestone_review.v1` 및 style verdict는 archived run, handoff, eval 재현을 위해 validator와 reader가 계속 읽지만 현재 close 조건이나 새 prompt 조립에는 참여하지 않는다.
 
 새 run은 artifact root의 전역 `runs/run-index.json`과 iteration별 `runs/<iterationId>/<runId>.json`에 저장한다. run 파일과 index 갱신은 project run-store lock, atomic rename, 복구 journal을 사용하므로 동시 start의 lost update를 막고 중단된 commit은 다음 mutation에서 전진 복구한다. stale lock 회수도 별도 reaper lock으로 직렬화해 새 소유자의 lock을 이전 stale 판단으로 삭제하지 않는다. 기존 평면 `runs/<runId>.json` 이력은 계속 읽을 수 있으며, 이전 `--graph` 기본 위치였던 `iterations/<iterationId>/runs/`도 migration 입력으로 발견한다. `p2a runs migrate-layout --artifacts <artifact-root> --dry-run`으로 이동·병합 계획을 확인한 뒤 `--yes`로 정리할 수 있다. 마이그레이션은 source/target run store를 고정 순서로 잠그고 run, 알려진 sidecar, 소유 프로세스가 끝난 run ID 예약을 전역 runs로 이동한다. 살아 있는 start가 소유한 예약이 있으면 migration을 중단한다. migration journal을 확정한 즉시 legacy store에 `.run-store-redirect.json`을 남겨 이전 `--runs` 경로가 새 index를 재생성하지 못하게 한다. 프로세스가 중단되면 `.run-layout-migration` journal이 남으며 같은 `migrate-layout ... --yes` 명령으로 재개한 뒤 충돌 없는 단일 `run-index.json`을 확정하고 legacy index를 제거한다. Layout 정리와 별개로 `p2a runs migrate-schema --artifacts <artifact-root> --dry-run`은 source graph/spec provenance를 검증한 뒤 finished `p2a.run.v1` evidence에 immutable `taskContractSha256`을 계산해 v2 승격 계획을 보여준다. `--yes` 적용은 같은 run-store lock과 write journal을 사용하며 started/failed/blocked v1 이력은 자동 승격하지 않는다.
-
-reviewer는 남은 `todo`/`in_progress`/`blocked` 작업과 대조한 뒤 완료 범위에서 확인된 실제 통합 결함만 stable finding id와 구조화 evidence를 가진 `confirmed_findings`로 반환하고, 계획된 미구현 항목은 담당 task id를 포함한 `planned_todo_not_findings`로 분리한다. main owner는 source envelope와 결과를 합쳐 `<checkpoint>.<unique-id>.draft.json`을 만들고 다음 단일 명령으로 검증과 원자 승격을 수행한다.
-
-```bash
-p2a iteration promote-milestone \
-  --artifacts <artifact-root> \
-  --draft <artifact-root>/iterations/<iteration-id>/milestone-reviews/<checkpoint>.<unique-id>.draft.json
-```
-
-CLI는 hard link의 create-if-absent 의미로 stable `<checkpoint>.json`을 원자 생성하고 성공한 unique draft만 삭제한다. 다른 프로세스가 먼저 stable 이름을 얻었다면 기존 파일을 덮어쓰지 않는다. maintenance 후보에는 `milestone-review:<artifact-path>#<finding_id>`를 출처로 남긴다. 이 JSON은 안정적인 informational source일 뿐 task 완료, run 상태, 반복 close를 직접 차단하지 않는다.
 
 ## 7. Proposal loop
 
@@ -254,8 +298,8 @@ p2a proposals approve-draft --draft .plan2agent/proposals/patch-drafts/<draft>.j
 ## 8. 안전 정책
 
 - Gate B spec이 approved이고 open decision이 없어야 한다.
-- Gate C task graph가 validator를 통과해야 한다.
-- ready task와 acceptance criteria가 있어야 한다.
+- 선택된 Gate C execution record—Direct/Planned synthetic work item 또는 Orchestrated task graph—가 validator를 통과해야 한다.
+- ready work item과 acceptance criteria가 있어야 한다.
 - 실패한 verification을 숨기고 task를 `done` 처리하지 않는다.
 - isolated worktree 결과가 승인된 canonical integration branch에 반영되기 전에 task를 `done` 처리하지 않는다.
 - task scope 밖 변경 파일은 run note 또는 blocker로 남긴다.
