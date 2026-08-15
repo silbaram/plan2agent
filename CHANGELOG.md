@@ -13,6 +13,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Add adaptive execution readiness with Direct, Planned, and Orchestrated modes, including one synthetic compatibility work item for Direct/Planned and ordered command-verified checkpoints for Planned runs.
 - Bind new runs to a Gate-derived execution envelope that preserves source hashes, objective, scope, `must_preserve`, non-goals, acceptance, verification, authority boundaries, and required visual contracts.
 - Record run usage, interruption, Gate-return, monitor-rule, and stable evaluation metrics for production evidence analysis.
+- Add machine-readable `p2a.next.v2` continuation and execution-result contracts so Direct/Planned work can bind follow-up context without parsing display text.
+- Add phase-aware context routing and `p2a context show`, which validates the current action or started run before returning confined canonical reference bodies with stable route, hash, and byte boundaries.
 
 ### Changed
 

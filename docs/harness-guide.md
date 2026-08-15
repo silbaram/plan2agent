@@ -78,7 +78,7 @@ Gate A/B/C의 상세 통과·차단 규칙은 `p2a-harness` skill이 유일한 �
 
 Feature Radar가 추천을 제공했다면 승격된 각 후보를 Gate A에서 `selected`, `rejected`, `deferred` 중 하나로 처분하고 이유를 요약한다. 사용자는 요약을 자유롭게 교정할 수 있고, 수정된 범위를 다시 확인한다. 원문 존재, 침묵, “개발해” 같은 포괄 지시는 승인이 아니다.
 
-사용자가 해석된 범위를 명시적으로 확인한 뒤 `p2a decide --quote "<사용자 발화>" --artifacts <artifact-root>`를 실행한다. 명령은 `decisions.jsonl`에 Gate ① 결정을 append하고 `intake_json`의 `status: ready_for_spec`와 `approval_audit` 사본을 함께 기록한다. `gate-a-intake/intake.md`는 사용자가 명시적으로 요청할 때만 생성하며 첫 줄에 `<!-- plan2agent:intake-md-export=explicit -->` marker를 둔다. Gate A 확인 뒤 신규 프로젝트는 Gate ②로 이어진다.
+사용자가 해석된 범위를 명시적으로 확인한 뒤 `p2a decide --quote "<사용자 발화>" --entry <원본-entry> --artifacts <artifact-root>`를 실행한다. 명령은 entry와 reference snapshot binding을 다시 검증하고 `decisions.jsonl`에 Gate ① 결정을 append하며 `intake_json`의 `status: ready_for_spec`와 `approval_audit` 사본을 함께 기록한다. `gate-a-intake/intake.md`는 사용자가 명시적으로 요청할 때만 생성하며 첫 줄에 `<!-- plan2agent:intake-md-export=explicit -->` marker를 둔다. Gate A 확인 뒤 신규 프로젝트는 Gate ②로 이어진다.
 
 ### Gate ② — Project Shape
 
@@ -255,7 +255,7 @@ Intake와 spec artifact는 `evidence` 배열을 가진다. 이 배열은 결정�
 
 canonical 산출물이 있으면 가장 이른 미완료 또는 invalid 단계부터 재개한다. 기존 intake의 optional `interview` object는 opaque 호환 데이터로 보존하지만 상태 판단, 질문 생성, 라우팅에는 사용하지 않는다. 사용자가 질문이나 결정을 답하면 같은 ledger item의 answer/status를 갱신하고 새 id로 중복 생성하지 않는다. explicit-export marker가 있는 `intake.md`는 JSON에서 다시 생성하고 marker가 없는 이전 자동 view는 제거한다.
 
-사용자가 Gate A 이해 요약을 확인하면 `p2a decide --quote "<사용자 발화>" --artifacts <root>`로 `status: ready_for_spec`, 결정 원장과 `approval_audit` 사본을 함께 기록하고 같은 대화에서 Gate ②를 확립하거나 재사용한 뒤 Gate B synthesis로 이어간다. baseline-aware 반복에서는 `baseline_context`의 관련 답변을 재사용하고, 충돌이 있을 때만 현재 반복 decision으로 override를 기록한다.
+사용자가 Gate A 이해 요약을 확인하면 신규 문서 기반 intake는 `p2a decide --quote "<사용자 발화>" --entry <원본-entry> --artifacts <root>`로 entry provenance, `status: ready_for_spec`, 결정 원장과 `approval_audit` 사본을 함께 기록하고 같은 대화에서 Gate ②를 확립하거나 재사용한 뒤 Gate B synthesis로 이어간다. baseline-aware 반복에서는 entry 없는 호환 승인 경로로 `baseline_context`의 관련 답변을 재사용하고, 충돌이 있을 때만 현재 반복 decision으로 override를 기록한다.
 
 재개는 입력이 바뀐 가장 이른 단계부터 다시 생성한다.
 

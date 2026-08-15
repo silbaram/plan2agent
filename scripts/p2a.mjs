@@ -47,10 +47,12 @@ const RUNTIME_COMMANDS = new Map([
   ['run', { script: 'p2a_runs.mjs' }],
   ['runs', { script: 'p2a_runs.mjs' }],
   ['execute', { script: 'p2a_execute.mjs' }],
+  ['context', { script: 'p2a_context.mjs' }],
   ['proposal', { script: 'p2a_proposals.mjs' }],
   ['proposals', { script: 'p2a_proposals.mjs' }],
   ['eval', { script: 'p2a_eval.mjs' }],
   ['memory', { script: 'p2a_memory.mjs' }],
+  ['reference', { script: 'p2a_reference.mjs' }],
   ['validate', { script: 'validate_artifacts.mjs' }],
 ]);
 
@@ -68,23 +70,26 @@ function usage() {
   return [
     'Usage:',
     '  p2a init [--target <dir>] [--tools <list>] [--codex-profile quality|inherit]',
-    '  p2a next [--target <dir>] [--project-id <id>] [--entry <path>] [--json]',
-    '  p2a decide --quote <user-utterance> [--target <dir>|--artifacts <dir>]',
+    '  p2a next [--target <dir>] [--project-id <id>] [--entry <path>] [--contract v1|v2] [--json]',
+    '  p2a decide --quote <user-utterance> [--entry <path>] [--target <dir>|--artifacts <dir>]',
     '  p2a decisions [--why <file-path>] [--target <dir>|--artifacts <dir>] [--json]',
     '  p2a shape [approve|revoke|migrate-style] [options]',
-    '  p2a info [--target <dir>] [--json]',
-    '  p2a doctor [--target <dir>] [--dev] [--json] [--strict]',
+    '  p2a info [--target <dir>] [--entry <path>] [--json]',
+    '  p2a doctor [--target <dir>] [--dev|--context] [--json] [--strict]',
     '  p2a update [--target <dir>] [--dry-run|--apply]',
     '  p2a upgrade [--target <dir>] (--dry-run|--apply)',
     '  p2a enhance <capability> [--target <dir>] [--dry-run] [--overwrite]',
     '  p2a eval <grade|compare|analyze|generate|digest> [options]',
     '  p2a memory <status|push|pull|search|history|digest|trace|impact|precedent> [options]',
+    '  p2a reference snapshot --entry <path> --artifacts <dir> [--target <dir>] [--json]',
     '  p2a execute <prepare|plan|start|review|accept|resume|status|finish> [options]',
+    '  p2a context show --artifacts <dir> (--continuation <id>|--phase <phase>) --provider <provider> [options]',
     '  p2a tasks|runs|iteration|proposals|validate ...',
     '',
     'Examples:',
     '  p2a init --target <project-dir>',
     '  p2a doctor --target <project-dir> --dev',
+    '  p2a doctor --context --target <project-dir>',
     '  p2a eval generate --artifacts .plan2agent/artifacts/<project>',
     '',
     'Notes:',
@@ -468,6 +473,7 @@ function inspectArtifact(targetRoot, artifactRoot, isScaffoldProject) {
   const activeIteration = iterationState?.activeIteration ?? null;
   const projectId = stringValue(currentSpec?.project_id) ?? path.basename(artifactRoot);
   const entry = discoverEntryDocument(artifactRoot, {
+    baseDir: targetRoot,
     projectId,
     repeatedDevelopment: layout.kind === 'iteration',
   });
@@ -609,6 +615,13 @@ function summarizeEntry(targetRoot, entry) {
     warnings: entry.warnings,
     webSourceCount: entry.webSourceCount,
     recommendationCount: entry.recommendationCount,
+    referenceBundle: entry.referenceBundle ? {
+      path: relativeToTarget(targetRoot, entry.referenceBundle.path),
+      sha256: entry.referenceBundle.sha256,
+      valid: entry.referenceBundle.valid,
+      referenceCount: entry.referenceBundle.referenceCount,
+      references: entry.referenceBundle.references.map((reference) => ({ ...reference })),
+    } : null,
   };
 }
 
@@ -759,6 +772,7 @@ function summarizeEnhancements(targetRoot, manifest, config) {
 function parseInfoArgs(argv) {
   const args = {
     target: P2A_PATHS.projectRoot,
+    entry: null,
     json: false,
     help: false,
   };
@@ -771,6 +785,9 @@ function parseInfoArgs(argv) {
     } else if (arg === '--target') {
       args.target = argv[++index];
       if (!args.target) throw new Error('--target requires a project directory');
+    } else if (arg === '--entry') {
+      args.entry = argv[++index];
+      if (!args.entry) throw new Error('--entry requires a Markdown or text document path');
     } else {
       throw new Error(`unknown info option: ${arg}`);
     }
@@ -783,6 +800,7 @@ function parseNextArgs(argv) {
     target: P2A_PATHS.projectRoot,
     projectId: null,
     entry: null,
+    contract: 'v1',
     json: false,
     help: false,
   };
@@ -801,6 +819,9 @@ function parseNextArgs(argv) {
     } else if (arg === '--entry') {
       args.entry = argv[++index];
       if (!args.entry) throw new Error('--entry requires a document path');
+    } else if (arg === '--contract') {
+      args.contract = argv[++index];
+      if (!['v1', 'v2'].includes(args.contract)) throw new Error('--contract requires v1 or v2');
     } else {
       throw new Error(`unknown next option: ${arg}`);
     }
@@ -846,10 +867,11 @@ function minedProposalRunIds(targetRoot, proposals) {
   return runIds;
 }
 
-function cliNextAction(state, reason, argv, requiresApproval = true) {
+function cliNextAction(state, reason, argv, requiresApproval = true, continuation = null) {
   return {
     state,
     reason,
+    continuation,
     command: {
       kind: 'cli',
       argv,
@@ -859,12 +881,15 @@ function cliNextAction(state, reason, argv, requiresApproval = true) {
   };
 }
 
-function skillNextAction(state, reason, display) {
+function skillNextAction(state, reason, display, skill, args = [], continuation = null) {
   return {
     state,
     reason,
+    continuation,
     command: {
       kind: 'skill',
+      skill,
+      args,
       display,
     },
   };
@@ -874,6 +899,7 @@ function approvalNextAction(state, reason, display) {
   return {
     state,
     reason,
+    continuation: null,
     command: {
       kind: 'approval',
       display,
@@ -901,6 +927,22 @@ function gateANextCommand(intake, intakePath) {
   return intake?.status === 'ready_for_spec'
     ? '/p2a-spec'
     : `Review and approve ${intakePath}; then record the Gate A approval_audit.`;
+}
+
+function gateAApprovalCommand(context) {
+  const intakePath = commandProjectPath(context.targetRoot, context.gates.intakePath);
+  const hasLegacyApprovalCopy = Boolean(
+    context.gates.intake?.status === 'ready_for_spec'
+    && context.gates.intake?.approval_audit,
+  );
+  const needsDocumentEntry = !context.gates.intake?.baseline_context && !hasLegacyApprovalCopy;
+  if (needsDocumentEntry && !context.entryArg) {
+    return `Review ${intakePath}, then rerun p2a next --entry <original-entry-path> so Gate A approval can bind entry and reference provenance.`;
+  }
+  const entryOption = context.entryArg
+    ? ` --entry ${JSON.stringify(context.entryArg)}`
+    : '';
+  return `Review ${intakePath}, then run p2a decide --quote "<user utterance>"${entryOption} --artifacts ${JSON.stringify(context.artifactArg)}.`;
 }
 
 function inspectConstitution(targetRoot) {
@@ -1387,6 +1429,8 @@ export const NEXT_DECISION_RULES = [
   {
     state: 'gate_what',
     kind: 'skill',
+    skill: 'p2a-harness',
+    args: (context) => ['--entry', context.entryArg],
     when: (context) => (
       context.hasHarness
       && !context.hasCanonicalPlanningState
@@ -1487,6 +1531,8 @@ export const NEXT_DECISION_RULES = [
   {
     state: 'shape',
     kind: (context) => context.constitution.exists ? 'approval' : 'skill',
+    skill: 'p2a-harness',
+    args: ['--stage', 'gate-shape'],
     when: (context) => (
       context.gateAValid
       && context.gateAApproved
@@ -1514,6 +1560,8 @@ export const NEXT_DECISION_RULES = [
     kind: (context) => context.gateAApproved
       ? gateANextKind(context.gates.intake)
       : 'approval',
+    skill: 'p2a-spec',
+    args: [],
     when: (context) => (
       context.gateAValid
       && (!context.gateAApproved || !context.gateBExists || context.gateAInvalidatesGateB)
@@ -1530,7 +1578,7 @@ export const NEXT_DECISION_RULES = [
           context.gates.intake,
           commandProjectPath(context.targetRoot, context.gates.intakePath),
         )
-      : `Review ${commandProjectPath(context.targetRoot, context.gates.intakePath)}, then run p2a decide --quote "<user utterance>" --artifacts ${JSON.stringify(context.artifactArg)}.`,
+      : gateAApprovalCommand(context),
   },
   {
     state: 'invalid_gate_b',
@@ -1585,6 +1633,20 @@ export const NEXT_DECISION_RULES = [
   {
     state: 'gate_b_approved_needs_execution_prepare',
     kind: 'skill',
+    skill: 'p2a-dev-execution',
+    args: (context) => [
+      '--artifacts',
+      context.artifactArg,
+      '--prepare-mode',
+      context.executionModePolicy,
+    ],
+    continuation: {
+      id: 'execution.prepare',
+      activation: 'immediate',
+      skill: 'p2a-dev-execution',
+      phase: 'prepare',
+      mode: null,
+    },
     when: (context) => (
       context.gateBValid
       && context.gateBApproved
@@ -1601,6 +1663,8 @@ export const NEXT_DECISION_RULES = [
   {
     state: 'gate_b_approved_needs_tasks',
     kind: 'skill',
+    skill: 'p2a-task-breakdown',
+    args: [],
     when: (context) => (
       context.gateBValid
       && context.gateBApproved
@@ -1653,6 +1717,37 @@ export const NEXT_DECISION_RULES = [
     state: 'run_started',
     kind: 'cli',
     requiresApproval: false,
+    continuation: (context) => {
+      const runKind = context.startedRun?.runKind;
+      if (runKind === 'final_visual_review') {
+        return {
+          id: 'execution.visual-review',
+          activation: 'after_command_success',
+          skill: 'p2a-dev-execution',
+          phase: 'visual-review',
+          mode: null,
+          binding: { kind: 'command_result', schema_version: 'p2a.execution_result.v1', field: 'runId' },
+        };
+      }
+      if (runKind === 'final_acceptance_review') {
+        return {
+          id: 'execution.acceptance-review',
+          activation: 'after_command_success',
+          skill: 'p2a-dev-execution',
+          phase: 'acceptance-review',
+          mode: null,
+          binding: { kind: 'command_result', schema_version: 'p2a.execution_result.v1', field: 'runId' },
+        };
+      }
+      return {
+        id: 'execution.owner-start',
+        activation: 'after_command_success',
+        skill: 'p2a-dev-execution',
+        phase: 'owner-start',
+        mode: null,
+        binding: { kind: 'command_result', schema_version: 'p2a.execution_result.v1', field: 'runId' },
+      };
+    },
     when: (context) => Boolean(context.startedRun),
     reason: (context) => `Run ${context.startedRun.runId} is still open and should be resumed before starting new work.`,
     command: (context) => [
@@ -1667,6 +1762,14 @@ export const NEXT_DECISION_RULES = [
     state: 'ready_task_available',
     kind: 'cli',
     requiresApproval: false,
+    continuation: {
+      id: 'execution.owner-start',
+      activation: 'after_command_success',
+      skill: 'p2a-dev-execution',
+      phase: 'owner-start',
+      mode: null,
+      binding: { kind: 'command_result', schema_version: 'p2a.execution_result.v1', field: 'runId' },
+    },
     when: (context) => context.readyIds.length > 0,
     reason: (context) => `Work item ${context.readyIds[0]} is ready to start inside the approved Gate B execution envelope.`,
     command: (context) => [
@@ -1694,6 +1797,14 @@ export const NEXT_DECISION_RULES = [
     state: 'final_visual_review_required',
     kind: 'cli',
     requiresApproval: false,
+    continuation: {
+      id: 'execution.visual-review',
+      activation: 'after_command_success',
+      skill: 'p2a-dev-execution',
+      phase: 'visual-review',
+      mode: null,
+      binding: { kind: 'command_result', schema_version: 'p2a.execution_result.v1', field: 'runId' },
+    },
     when: (context) => (
       context.hasRequiredVisualContract
       && context.allTasksDone
@@ -1715,6 +1826,14 @@ export const NEXT_DECISION_RULES = [
     state: 'final_acceptance_review_required',
     kind: 'cli',
     requiresApproval: false,
+    continuation: {
+      id: 'execution.acceptance-review',
+      activation: 'after_command_success',
+      skill: 'p2a-dev-execution',
+      phase: 'acceptance-review',
+      mode: null,
+      binding: { kind: 'command_result', schema_version: 'p2a.execution_result.v1', field: 'runId' },
+    },
     when: (context) => (
       (
         (context.reviewPasses?.acceptance ?? 'opt_in') === 'on'
@@ -1800,15 +1919,29 @@ function actionForNextRule(rule, context) {
   const kind = resolveNextRuleValue(rule.kind, context);
   const reason = rule.reason(context);
   const command = rule.command(context);
+  const continuationValue = resolveNextRuleValue(rule.continuation ?? null, context);
+  const continuation = continuationValue
+    ? { ...continuationValue, sourceState: state }
+    : null;
   if (kind === 'cli') {
     return cliNextAction(
       state,
       reason,
       command,
       resolveNextRuleValue(rule.requiresApproval ?? true, context),
+      continuation,
     );
   }
-  if (kind === 'skill') return skillNextAction(state, reason, command);
+  if (kind === 'skill') {
+    return skillNextAction(
+      state,
+      reason,
+      command,
+      resolveNextRuleValue(rule.skill, context),
+      resolveNextRuleValue(rule.args ?? [], context),
+      continuation,
+    );
+  }
   return approvalNextAction(state, reason, command);
 }
 
@@ -1823,7 +1956,7 @@ function decideNextAction(context) {
   );
 }
 
-function buildNext(targetRootInput, requestedProjectId, entryPath) {
+export function buildNext(targetRootInput, requestedProjectId, entryPath, contract = 'v1') {
   const snapshot = buildInfoSnapshot(targetRootInput, { entryPath });
   const { info } = snapshot;
   const targetRoot = info.target;
@@ -1837,13 +1970,38 @@ function buildNext(targetRootInput, requestedProjectId, entryPath) {
     snapshot.explicitEntry,
   );
   const action = decideNextAction(context);
-  return {
-    schema_version: 'p2a.next.v1',
+  const command = contract === 'v1'
+    ? action.command.kind === 'skill'
+      ? { kind: 'skill', display: action.command.display }
+      : action.command
+    : action.command.kind === 'cli' && action.continuation?.activation === 'after_command_success'
+      ? {
+          ...action.command,
+          argv: action.command.argv.includes('--json')
+            ? action.command.argv
+            : [...action.command.argv, '--json'],
+          display: p2aCommandLine(
+            P2A_PATHS,
+            action.command.argv.includes('--json')
+              ? action.command.argv
+              : [...action.command.argv, '--json'],
+          ),
+        }
+      : action.command;
+  const payload = {
+    schema_version: contract === 'v2' ? 'p2a.next.v2' : 'p2a.next.v1',
     generatedAt: new Date().toISOString(),
     target: targetRoot,
     projectId: context.projectId ?? null,
-    ...action,
+    state: action.state,
+    reason: action.reason,
+    command,
   };
+  if (contract === 'v2') {
+    payload.reasonCode = action.state;
+    payload.continuation = action.continuation ?? null;
+  }
+  return payload;
 }
 
 function buildInfoSnapshot(targetRootInput, options = {}) {
@@ -1972,8 +2130,8 @@ function buildInfoSnapshot(targetRootInput, options = {}) {
   return { info, inspectedArtifacts, reviewPasses, executionModePolicy, explicitEntry };
 }
 
-function buildInfo(targetRootInput) {
-  return buildInfoSnapshot(targetRootInput).info;
+function buildInfo(targetRootInput, options = {}) {
+  return buildInfoSnapshot(targetRootInput, options).info;
 }
 
 function formatStatusCounts(statusCounts) {
@@ -2028,11 +2186,11 @@ function runInfo(argv) {
     return 1;
   }
   if (args.help) {
-    console.log('Usage: p2a info [--target <dir>] [--json]');
+    console.log('Usage: p2a info [--target <dir>] [--entry <path>] [--json]');
     return 0;
   }
   try {
-    const info = buildInfo(args.target);
+    const info = buildInfo(args.target, { entryPath: args.entry });
     if (args.json) console.log(JSON.stringify(info, null, 2));
     else printInfo(info);
     return 0;
@@ -2062,11 +2220,11 @@ function runNext(argv) {
     return 1;
   }
   if (args.help) {
-    console.log('Usage: p2a next [--target <dir>] [--project-id <id>] [--entry <path>] [--json]');
+    console.log('Usage: p2a next [--target <dir>] [--project-id <id>] [--entry <path>] [--contract v1|v2] [--json]');
     return 0;
   }
   try {
-    const next = buildNext(args.target, args.projectId, args.entry);
+    const next = buildNext(args.target, args.projectId, args.entry, args.contract);
     if (args.json) console.log(JSON.stringify(next, null, 2));
     else printNext(next);
     return 0;

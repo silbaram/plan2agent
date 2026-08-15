@@ -41,10 +41,16 @@ npm install -g plan2agent
 cd <project-dir>
 p2a init --tools all --codex-profile quality
 p2a info
+p2a info --entry docs/idea.md --json
 p2a next
+p2a next --json --contract v2
 ```
 
 `p2a`의 하위 명령은 `decide`, `decisions`, `shape`, `eval`, `memory`, `execute`, `tasks`, `runs`, `iteration`, `proposals`, `validate`, `doctor`, `enhance`, `update`, `upgrade`, `handoff`다. `--target`을 생략하면 현재 작업 디렉터리를 대상으로 삼는다.
+
+옵션 없는 `p2a next --json`은 기존 consumer를 위한 엄격한 `p2a.next.v1` 계약을 유지한다. 타입이 지정된 상태 enum과 안정적인 `reasonCode`가 필요한 agent consumer는 `--contract v2`를 명시하며, 출력은 `next-v2.schema.json`의 `p2a.next.v2`를 따른다.
+
+`p2a.next.v2`의 skill action은 표시 문자열과 별도로 `skill`/`args`를 제공하고, 모든 응답은 `continuation`을 object 또는 `null`로 명시한다. `after_command_success` continuation이 붙은 start/resume/review/accept action은 argv에 `--json`을 포함한다. 성공 stdout은 `execution-result.schema.json`의 단일 `p2a.execution_result.v1` 문서이며, 호출자는 exit code가 0이고 `outcome=succeeded`, `runStatus=started`일 때만 그 `runId`를 후속 처리에 사용한다. 기본 v1 action argv와 field set은 바뀌지 않는다.
 
 ### 결정 원장 — `p2a decide`, `p2a decisions`
 
@@ -52,6 +58,7 @@ Gate 승인과 범위·헌법 변경은 `.plan2agent/artifacts/<project_id>/deci
 
 ```bash
 p2a decide --artifacts .plan2agent/artifacts/<project_id> \
+  --entry docs/idea.md \
   --quote "이 범위로 진행해"
 
 p2a decide revoke --artifacts .plan2agent/artifacts/<project_id> \
@@ -69,7 +76,7 @@ p2a decisions --artifacts .plan2agent/artifacts/<project_id> \
   --why src/example.ts
 ```
 
-`p2a decide`는 가장 이른 미승인 Gate ① intake/spec을 승인하고 실제 사용자 발화를 원장과 audit 사본에 함께 기록한다. `revoke`, `add`, `remove`도 이전 기록을 지우지 않고 새 이벤트를 append한다. `p2a shape approve|revoke`는 같은 원장에 Gate ② 이력을 남기며, 헌법 본문이 바뀐 재승인은 `constitution.changed`도 기록한다. `decisions --why`는 run의 `changedFiles`, `sourceSpecRef`, Gate ① 결정과 당시 활성 Gate ② 결정을 조인한다. 인터뷰 라운드, task 분해, run 시작·종료, validator 실행 상세는 원장 이벤트가 아니다.
+`p2a decide`는 가장 이른 미승인 Gate ① intake/spec을 승인하고 실제 사용자 발화를 원장과 audit 사본에 함께 기록한다. 신규 문서 기반 Gate A intake는 `--entry`가 필수이며, entry에 sibling reference bundle이 있으면 해당 entry·bundle hash와 일치하는 `reference-bundle-snapshot.json` 없이는 승인하지 않는다. `baseline_context` 기반 반복 intake와 이미 승인 사본이 있는 legacy 재바인딩은 entry 없는 호환 경로를 유지하고, Gate B spec 승인에는 `--entry`를 사용하지 않는다. `revoke`, `add`, `remove`도 이전 기록을 지우지 않고 새 이벤트를 append한다. `p2a shape approve|revoke`는 같은 원장에 Gate ② 이력을 남기며, 헌법 본문이 바뀐 재승인은 `constitution.changed`도 기록한다. `decisions --why`는 run의 `changedFiles`, `sourceSpecRef`, Gate ① 결정과 당시 활성 Gate ② 결정을 조인한다. 인터뷰 라운드, task 분해, run 시작·종료, validator 실행 상세는 원장 이벤트가 아니다.
 
 ### 프로젝트 constitution — `p2a shape`
 
@@ -108,16 +115,51 @@ p2a upgrade [--target <project-dir>] (--dry-run|--apply) [--tools all|none|codex
 p2a doctor --target <project-dir>
 p2a doctor --target <project-dir> --json
 p2a doctor --target <project-dir> --dev --json
+p2a doctor --context --target <project-dir> --json
+p2a doctor --context --target <project-dir> \
+  --skill p2a-dev-execution --stage execution --mode orchestrated \
+  --condition reference:p2a-dev-execution:references/batch-execution.md --json
+p2a doctor --context --target <project-dir> --baseline previous-context-audit.json --json
 p2a doctor --target <project-dir> --strict
 ```
+
+Runtime context routing uses stable reference IDs and the phases `prepare`, `owner-start`, `retry`, `verify-closeout`, `batch`, `visual-review`, `acceptance-review`, and `monitor`. The initial model-facing rollout is limited to Direct/Planned `p2a-dev-execution`; Orchestrated batch routing remains on its existing reference path.
+
+```bash
+p2a context show \
+  --artifacts .plan2agent/artifacts/<project_id> \
+  --continuation execution.prepare \
+  --provider codex
+
+p2a execute start --artifacts .plan2agent/artifacts/<project_id> --json
+p2a context show \
+  --artifacts .plan2agent/artifacts/<project_id> \
+  --continuation execution.owner-start \
+  --run-id <execution-result.runId> \
+  --provider codex
+
+p2a context show \
+  --artifacts .plan2agent/artifacts/<project_id> \
+  --phase verify-closeout \
+  --run-id <started-run-id> \
+  --provider codex
+```
+
+기본 출력은 선택된 canonical reference 본문을 route ID/path/SHA-256/byte boundary와 함께 한 번에 반환한다. `--json --metadata-only`는 `p2a.context_packet.v1` metadata만 반환한다. Immediate action은 현재 `p2a next` 상태와 다시 대조하고, command continuation과 명시 phase는 실제 `started` run 및 task/Gate contract를 다시 검증한다. Closed/unknown run, stale action, mode 불일치, review eligibility 불일치, source-root 밖 경로와 symlink source는 실패한다. Packet은 reference 전달 수단이며 provider의 쓰기 권한이나 승인 범위를 확장하지 않는다.
 
 출력에는 설치 파일 체크와 별개로 `projectState`가 포함된다. `projectState.state`는 `installed_empty`, `planning_in_progress`, `iteration_init_required`, `execution_ready`, `cycle_close_ready`, `broken_install`, `no_p2a` 중 하나이며, artifact root별 Gate A-C 존재 여부, Gate B approval/open decision 수, Gate C task count/ready 수, run-index 요약을 함께 보여준다. `init` 프로젝트에 greenfield Gate A-C bundle이 있으면 `project_state` 체크가 warning으로 표시되고 `p2a iteration init` 명령을 next action으로 출력한다.
 
 `--dev`는 development skill/config 진단을 추가한다. `manifest.aiToolTargets` 기준으로 Codex/Claude/Gemini provider asset, role profile, `manifest.aiToolFiles`, `project.config.json.providerNativeCapabilities`, `runTracking`, `devExecution`, `roleProfiles`, `promptTemplates`, Claude PreToolUse confinement hook 상태를 확인한다. 새 scaffold의 실행 정책은 `executionMode=adaptive`, 리뷰 패스는 `reviewPasses=monitor:opt_in,visual:off,acceptance:opt_in` 형태로 출력된다. 기존 config에 mode가 없으면 doctor는 호환 해석값 `orchestrated`를 출력한다. Historical `style`/`milestone` 키는 기존 evidence 재현용으로 읽지만 새 실행 pass를 만들지 않는다. `--strict`는 warning만 있어도 non-zero exit를 반환한다.
 
+`--context`는 `.plan2agent/` 상태와 무관한 컨텍스트 진단 모드다. 시나리오 옵션이 없으면 [canonical route manifest](../.agents/context-routes.json)의 provider·skill·stage별 선언 inventory를 출력한다. `--skill`과 `--stage`를 함께 주면 실제 조립 시나리오를 계산하고, `--mode`가 실행 모드를 거르며 반복 가능한 `--condition`이 해당 `conditionId`의 conditional/on-demand source를 선택한다. Reference route는 `required`로 조건 충족 시 필수 자료와 판단형 보조 자료를 구분하고, 선택적인 `providers`로 적용 대상을 제한하며 `provider_paths`로 같은 의미의 공급자별 대체 파일을 선언할 수 있다. Canonical skill과 audit가 이 metadata를 소비하고 parity check가 의미 일치를 검증한다. Gemini 생성기는 route의 command identity만 확인하며 reference metadata를 wrapper에 복제하지 않는다.
+
+보고서는 선언 바이트와 resolved corpus를 구분하고 schema·CLI·hook·skill·agent·provider wrapper owner를 함께 보여 준다. `summary.promptBytes`는 선택된 모든 provider에서 경로가 같은 source를 한 번만 세는 **보고서 전체의 unique resolved corpus**이며 단일 모델 호출의 prompt 크기가 아니다. 공급자별 모델링 값은 `providers[].promptBytes`, 한 provider·skill·stage 조합은 `contexts[].totals.promptBytes`를 사용한다. Inventory에서는 always-loaded source만 resolved corpus에 포함하고, assembled 측정에서는 선택한 조건부 source까지 포함한다.
+
+누락되거나 라우팅되지 않은 reference, canonical/Claude skill drift, Gemini wrapper의 canonical route 재복제, exact/near duplicate와 반대 극성 충돌 후보도 진단한다. 중복·충돌 후보의 본문은 보고서에 복사하지 않고 SHA-256 증거와 source path·owner만 기록한다. Inventory 후보는 canonical corpus를 기준으로 하며, assembled 후보는 provider별 실제 조립 context 안에서만 계산해 서로 함께 로드되지 않는 provider mirror 간의 가짜 중복·충돌을 만들지 않는다. `--baseline`은 이전의 전체 `p2a.context_audit.v1` JSON을 읽는다. 측정 방식, 정규화한 시나리오(skill·stage·mode·정렬된 condition), provider 집합이 모두 같을 때만 byte 변화와 conditional→always 승격을 계산한다. 하나라도 다르면 warning과 `null` delta를 반환하므로 서로 다른 실행을 절감 수치처럼 비교할 수 없다. 설치 프로젝트에서는 `manifest.aiToolTargets`에 선택된 provider만 검사한다. `--context`와 `--dev`는 서로 다른 진단이므로 따로 실행한다.
+
 ### `sync_cli_assets.mjs`
 
-Plan2Agent 본체 개발자용 스크립트다. Plan2Agent 저장소 루트에서 `.agents/skills/`와 `.agents/agents/`를 기준으로 Claude, Codex, Gemini용 mirror 파일을 생성한다. 일반 실행은 파일을 갱신하고, `--check`는 쓰기 없이 drift만 검사한다. `init` 대상 프로젝트에는 설치되지 않는다.
+Plan2Agent 본체 개발자용 스크립트다. Plan2Agent 저장소 루트에서 `.agents/skills/`, `.agents/agents/`, `.agents/context-routes.json`을 기준으로 Claude·Codex용 mirror와 호출법·read-only 공급자 제약만 담은 얇은 Gemini command wrapper를 생성한다. Canonical reference 조건은 `SKILL.md`와 route manifest가 소유한다. 일반 실행은 파일을 갱신하고, `--check`는 쓰기 없이 drift만 검사한다. `init` 대상 프로젝트에는 설치되지 않는다.
 
 ```bash
 node scripts/sync_cli_assets.mjs
@@ -126,7 +168,7 @@ node scripts/sync_cli_assets.mjs --check
 
 ### `check_cli_parity.mjs`
 
-Plan2Agent 본체 개발자용 스크립트다. Plan2Agent 저장소 루트에서 `sync_cli_assets.mjs --check`를 포함해 skill mirror byte 비교, agent mirror 존재 여부, Gemini command shim 필수 내용 등을 검사한다. `init` 대상 프로젝트에는 설치되지 않는다.
+Plan2Agent 본체 개발자용 스크립트다. Plan2Agent 저장소 루트에서 `sync_cli_assets.mjs --check`를 포함해 skill mirror byte 비교, agent mirror 존재 여부, canonical skill의 route 의미, Gemini command shim의 호출·read-only 경계와 reference route 비복제를 검사한다. `init` 대상 프로젝트에는 설치되지 않는다.
 
 ```bash
 node scripts/check_cli_parity.mjs
@@ -141,6 +183,20 @@ node scripts/run_fixtures.mjs
 ```
 
 동일한 장기 회귀 gate는 저장소 표준 script인 `npm run test:full`로 실행할 수 있다. Completed/resumable handoff portability 행렬도 이 gate에 포함된다.
+
+### `p2a reference snapshot`
+
+선택적 entry reference bundle을 Gate A가 승인할 수 있는 portable provenance로 고정한다.
+
+```bash
+p2a reference snapshot \
+  --target <project-dir> \
+  --entry <entry-path> \
+  --artifacts .plan2agent/artifacts/<project_id> \
+  [--json]
+```
+
+명령은 먼저 entry와 sibling `p2a-reference-bundle.json`을 프로젝트 reference root에서 검증한다. 성공하면 entry, bundle, 모든 선언 reference를 `gate-a-intake/reference-sources/files/`에 프로젝트 상대 구조로 capture하고 `reference-bundle-snapshot.json`을 같은 생성 트랜잭션으로 설치한 뒤 intake validator를 다시 실행한다. 명령 실패 시 이번 호출이 만든 파일을 되돌리며, Gate A intake가 이미 승인됐거나 기존 capture/snapshot이 있으면 덮어쓰지 않는다. 생성된 source capture는 iteration init과 handoff dependency closure에 포함되며 이후 validator가 실제 바이트, bundle metadata, snapshot hash를 매번 다시 대조한다.
 
 ### `validate_artifacts.mjs`
 

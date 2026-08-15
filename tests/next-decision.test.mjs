@@ -7,7 +7,8 @@ import { FIXTURE_ROOT, makeTempDir, runP2a } from './helpers/fixtures.mjs';
 import { validateSchema } from '../scripts/validate_artifacts.mjs';
 import { NEXT_DECISION_RULES } from '../scripts/p2a.mjs';
 
-const NEXT_SCHEMA = JSON.parse(readFileSync(new URL('../schemas/next.schema.json', import.meta.url), 'utf8'));
+const NEXT_V1_SCHEMA = JSON.parse(readFileSync(new URL('../schemas/next.schema.json', import.meta.url), 'utf8'));
+const NEXT_SCHEMA = JSON.parse(readFileSync(new URL('../schemas/next-v2.schema.json', import.meta.url), 'utf8'));
 
 function writeJson(filePath, value) {
   mkdirSync(dirname(filePath), { recursive: true });
@@ -270,25 +271,36 @@ function writeRuns(artifactRoot, runs) {
 }
 
 function next(root, args = []) {
-  const result = runP2a(['next', '--target', root, '--json', ...args]);
+  const result = runP2a(['next', '--target', root, '--json', '--contract', 'v2', ...args]);
   assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
   return JSON.parse(result.stdout);
 }
 
 function assertAction(payload, state, kind, argv = null, requiresApproval = null) {
   assert.doesNotThrow(() => validateSchema(payload, NEXT_SCHEMA));
-  assert.equal(payload.schema_version, 'p2a.next.v1');
+  assert.equal(payload.schema_version, 'p2a.next.v2');
   assert.equal(payload.state, state);
+  assert.equal(payload.reasonCode, state);
   assert.equal(payload.command.kind, kind);
   assert.equal(typeof payload.command.display, 'string');
   assert.ok(payload.command.display.length > 0);
+  assert.ok('continuation' in payload);
   if (kind === 'cli') {
     assert.ok(Array.isArray(payload.command.argv) && payload.command.argv.length > 0);
     assert.equal(typeof payload.command.requiresApproval, 'boolean');
-    if (argv) assert.deepEqual(payload.command.argv, argv);
+    if (argv) {
+      const expectedArgv = payload.continuation?.activation === 'after_command_success'
+        ? [...argv, '--json']
+        : argv;
+      assert.deepEqual(payload.command.argv, expectedArgv);
+    }
     if (requiresApproval !== null) assert.equal(payload.command.requiresApproval, requiresApproval);
   } else {
     assert.equal('argv' in payload.command, false);
+    if (kind === 'skill') {
+      assert.match(payload.command.skill, /^p2a-/);
+      assert.ok(Array.isArray(payload.command.args));
+    }
   }
 }
 
@@ -556,6 +568,25 @@ test('next chooses one read-only action for every primary state', () => {
     } finally {
       remove(root);
     }
+  }
+});
+
+test('next carries the original entry into a new Gate A approval command', () => {
+  const root = project();
+  try {
+    writeGateA(artifact(root));
+    const entryPath = join(root, 'idea.md');
+    writeFileSync(entryPath, 'Build the approved sample workflow from this entry document.\n', 'utf8');
+
+    const withoutEntry = next(root);
+    assertAction(withoutEntry, 'gate_a_needs_approval', 'approval');
+    assert.match(withoutEntry.command.display, /p2a next --entry <original-entry-path>/);
+
+    const withEntry = next(root, ['--entry', 'idea.md']);
+    assertAction(withEntry, 'gate_a_needs_approval', 'approval');
+    assert.ok(withEntry.command.display.includes(`--entry ${JSON.stringify(entryPath)}`));
+  } finally {
+    remove(root);
   }
 });
 
@@ -1247,25 +1278,102 @@ test('next returns exact commands for cache, webhook, and e2e fixture states', (
 });
 
 test('next schema declares the CLI, skill, and approval command shapes', () => {
-  assert.equal(NEXT_SCHEMA.properties.schema_version.const, 'p2a.next.v1');
-  assert.deepEqual(NEXT_SCHEMA.properties.command.oneOf.map((variant) => variant.properties.kind.const ?? variant.properties.kind.enum), [
+  assert.equal(NEXT_SCHEMA.properties.schema_version.const, 'p2a.next.v2');
+  assert.deepEqual(NEXT_SCHEMA.properties.command.oneOf.map((variant) => variant.properties.kind.const), [
     'cli',
-    ['skill', 'approval'],
+    'skill',
+    'approval',
   ]);
   assert.throws(() => validateSchema({
-    schema_version: 'p2a.next.v1',
+    schema_version: 'p2a.next.v2',
     generatedAt: '2026-07-27T00:00:00.000Z',
     target: '.',
     projectId: null,
-    state: 'invalid_cli',
+    state: 'state_needs_inspection',
+    reasonCode: 'state_needs_inspection',
     reason: 'CLI actions require argv.',
     command: { kind: 'cli', display: 'p2a info' },
+    continuation: null,
   }, NEXT_SCHEMA), /oneOf/);
+  assert.throws(() => validateSchema({
+    schema_version: 'p2a.next.v2',
+    generatedAt: '2026-07-27T00:00:00.000Z',
+    target: '.',
+    projectId: null,
+    state: 'invented_state',
+    reasonCode: 'invented_state',
+    reason: 'Unknown states must not satisfy the typed contract.',
+    command: { kind: 'approval', display: 'Inspect the state.' },
+    continuation: null,
+  }, NEXT_SCHEMA), /must be one of/);
+  assert.throws(() => validateSchema({
+    schema_version: 'p2a.next.v2',
+    generatedAt: '2026-07-27T00:00:00.000Z',
+    target: '.',
+    projectId: null,
+    state: 'ready_task_available',
+    reasonCode: 'ready_task_available',
+    reason: 'A run can start.',
+    command: { kind: 'cli', argv: ['execute', 'start', '--json'], display: 'p2a execute start --json', requiresApproval: false },
+    continuation: {
+      id: 'execution.owner-start',
+      activation: 'after_command_success',
+      sourceState: 'ready_task_available',
+      skill: 'p2a-dev-execution',
+      phase: 'owner-start',
+      mode: null,
+    },
+  }, NEXT_SCHEMA), /oneOf|binding/);
+});
+
+test('next v2 exposes structured skill and command-bound continuation without display parsing', () => {
+  const prepareRule = NEXT_DECISION_RULES.find((rule) => rule.state === 'gate_b_approved_needs_execution_prepare');
+  const context = {
+    executionModePolicy: 'adaptive',
+    artifactArg: '.plan2agent/artifacts/sample',
+  };
+  assert.equal(prepareRule.skill, 'p2a-dev-execution');
+  assert.deepEqual(prepareRule.args(context).slice(-2), ['--prepare-mode', 'adaptive']);
+  assert.deepEqual(prepareRule.continuation, {
+    id: 'execution.prepare',
+    activation: 'immediate',
+    skill: 'p2a-dev-execution',
+    phase: 'prepare',
+    mode: null,
+  });
+
+  const readyRule = NEXT_DECISION_RULES.find((rule) => rule.state === 'ready_task_available');
+  assert.equal(readyRule.continuation.activation, 'after_command_success');
+  assert.deepEqual(readyRule.continuation.binding, {
+    kind: 'command_result',
+    schema_version: 'p2a.execution_result.v1',
+    field: 'runId',
+  });
+});
+
+test('next keeps the strict v1 JSON contract by default and exposes reasonCode only in v2', () => {
+  const root = project();
+  try {
+    const legacyResult = runP2a(['next', '--target', root, '--json']);
+    assert.equal(legacyResult.status, 0, `${legacyResult.stdout}${legacyResult.stderr}`);
+    const legacy = JSON.parse(legacyResult.stdout);
+    assert.doesNotThrow(() => validateSchema(legacy, NEXT_V1_SCHEMA));
+    assert.equal(legacy.schema_version, 'p2a.next.v1');
+    assert.equal('reasonCode' in legacy, false);
+    assert.equal('continuation' in legacy, false);
+
+    const typed = next(root);
+    assert.doesNotThrow(() => validateSchema(typed, NEXT_SCHEMA));
+    assert.equal(typed.reasonCode, typed.state);
+    assert.equal(typed.continuation, null);
+  } finally {
+    remove(root);
+  }
 });
 
 test('p2a-next skill delegates to the CLI without duplicating decision rules', () => {
   const skill = readFileSync(new URL('../.agents/skills/p2a-next/SKILL.md', import.meta.url), 'utf8');
-  assert.match(skill, /p2a next --json/);
+  assert.match(skill, /p2a next --json --contract v2/);
   assert.match(skill, /kind: cli/);
   assert.match(skill, /kind: skill/);
   assert.match(skill, /kind: approval/);

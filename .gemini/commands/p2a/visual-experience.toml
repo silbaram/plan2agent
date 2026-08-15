@@ -4,5 +4,5 @@ Use the Plan2Agent p2a-visual-experience skill for the following Gate B visual c
 
 {{args}}
 
-Classify the current iteration as none, minimal, reuse, or full. Run the full visual procedure only for full + current_iteration. Keep candidates offline and hash-bound, persist them only under gate-b-spec/visual-design through the harness owner, and require explicit human selection and approval before Gate B can pass.
+Gemini is read-only. Return proposed visual artifacts and comparison evidence to the foreground harness owner; do not persist candidates or record selection or approval.
 """

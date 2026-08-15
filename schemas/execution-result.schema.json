@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://plan2agent.local/schemas/execution-result.schema.json",
+  "title": "Plan2Agent Execution Result",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "command",
+    "outcome",
+    "taskId",
+    "runId",
+    "runStatus"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "const": "p2a.execution_result.v1" },
+    "command": { "enum": ["start", "resume", "review", "accept"] },
+    "outcome": { "const": "succeeded" },
+    "taskId": { "type": "string", "minLength": 1 },
+    "runId": { "type": "string", "pattern": "^run-[A-Za-z0-9._-]+$" },
+    "runStatus": { "enum": ["started", "finished", "failed", "blocked"] },
+    "mode": { "enum": ["direct", "planned", "orchestrated"] },
+    "runKind": {
+      "type": ["string", "null"],
+      "enum": ["final_visual_review", "final_acceptance_review", null]
+    }
+  }
+}

@@ -58,6 +58,7 @@ import {
 } from './p2a_run_store.mjs';
 import { shellQuote } from './p2a_run_commands.mjs';
 import {
+  APPROVAL_SIDECAR_SHA256_PREFIX,
   DEFAULT_MEMORY_CLOSE_TIMEOUT_MS,
   DEFAULT_MEMORY_REQUEST_TIMEOUT_MS,
 } from './p2a_constants.mjs';
@@ -415,6 +416,7 @@ function pathsFor(artifactRoot, iterationId) {
     statusMd: path.join(artifactRoot, 'status.md'),
     currentSpec: path.join(artifactRoot, 'current-spec.json'),
     specJson: path.join(artifactRoot, 'gate-b-spec', 'spec.json'),
+    movedIntakeJson: path.join(iterationRoot, 'gate-a-intake', 'intake.json'),
     taskGraph: path.join(artifactRoot, 'gate-c-task-graph', 'task-graph.json'),
     movedSpecJson: path.join(iterationRoot, 'gate-b-spec', 'spec.json'),
     movedTaskGraph: path.join(iterationRoot, 'gate-c-task-graph', 'task-graph.json'),
@@ -2939,29 +2941,63 @@ function printPlan(plan, dryRun) {
   }
 }
 
-function rebaseMovedGateBApprovalReference(reference, iterationId) {
+function rebaseMovedGateApprovalReference(reference, iterationId) {
   if (typeof reference !== 'string') return reference;
   const normalized = reference.replaceAll('\\', '/');
-  const marker = 'gate-b-spec/';
-  const markerIndex = normalized.lastIndexOf(marker);
-  if (markerIndex === -1) return reference;
-  const prefix = normalized.slice(0, markerIndex);
-  if (/(?:^|\/)iterations\/[^/]+\/$/.test(prefix)) return reference;
-  return prefix + 'iterations/' + iterationId + '/' + normalized.slice(markerIndex);
+  for (const marker of ['gate-a-intake/', 'gate-b-spec/']) {
+    const markerIndex = normalized.lastIndexOf(marker);
+    if (markerIndex === -1) continue;
+    const prefix = normalized.slice(0, markerIndex);
+    if (/(?:^|\/)iterations\/[^/]+\/$/.test(prefix)) return reference;
+    return prefix + 'iterations/' + iterationId + '/' + normalized.slice(markerIndex);
+  }
+  return reference;
 }
 
-function rebaseMovedSpecReferences(source, iterationId) {
+function rebaseMovedApprovalAudit(artifact, iterationId) {
+  if (!Array.isArray(artifact.approval_audit?.approved_artifacts)) return;
+  const replacements = new Map();
+  artifact.approval_audit.approved_artifacts = artifact.approval_audit.approved_artifacts.map(
+    (reference) => {
+      const rebased = rebaseMovedGateApprovalReference(reference, iterationId);
+      if (rebased !== reference) {
+        replacements.set(normalizePath(reference), normalizePath(rebased));
+      }
+      return rebased;
+    },
+  );
+  if (!replacements.size || typeof artifact.approval_audit.approval_note !== 'string') return;
+  artifact.approval_audit.approval_note = artifact.approval_audit.approval_note
+    .split(/\r?\n/)
+    .map((line) => {
+      for (const [before, after] of replacements) {
+        const prefix = `${APPROVAL_SIDECAR_SHA256_PREFIX} ${before} `;
+        if (line.startsWith(prefix)) return `${APPROVAL_SIDECAR_SHA256_PREFIX} ${after} ${line.slice(prefix.length)}`;
+      }
+      return line;
+    })
+    .join('\n');
+}
+
+function rebaseMovedIntakeApprovalReferences(source, iterationId) {
+  const sourceText = readFileSync(source, 'utf8');
+  const intake = JSON.parse(sourceText);
+  rebaseMovedApprovalAudit(intake, iterationId);
+  const rewritten = JSON.stringify(intake, null, 2) + '\n';
+  if (rewritten === sourceText) return sourceText;
+  atomicWriteText(source, rewritten);
+  return sourceText;
+}
+
+function rebaseMovedSpecReferences(source, iterationId, movedIntakePath) {
   const sourceText = readFileSync(source, 'utf8');
   const spec = JSON.parse(sourceText);
   if (typeof spec.source_intake !== 'string') {
     throw new Error('could not find source_intake in ' + source);
   }
   spec.source_intake = INIT_REBASED_SOURCE_INTAKE;
-  if (Array.isArray(spec.approval_audit?.approved_artifacts)) {
-    spec.approval_audit.approved_artifacts = spec.approval_audit.approved_artifacts.map(
-      (reference) => rebaseMovedGateBApprovalReference(reference, iterationId),
-    );
-  }
+  if (spec.source_intake_sha256) spec.source_intake_sha256 = fileSha256(movedIntakePath);
+  rebaseMovedApprovalAudit(spec, iterationId);
   const rewritten = JSON.stringify(spec, null, 2) + '\n';
   if (rewritten === sourceText) return sourceText;
   atomicWriteText(source, rewritten);
@@ -2992,6 +3028,7 @@ function applyPlan(paths, iterationId, plan, options = {}) {
     [paths.iterationRoot, existsSync(paths.iterationRoot)],
     [paths.maintenanceRoot, existsSync(paths.maintenanceRoot)],
   ]);
+  let originalMovedIntake = null;
   let originalMovedSpec = null;
   let originalMovedTaskGraph = null;
   try {
@@ -3000,7 +3037,12 @@ function applyPlan(paths, iterationId, plan, options = {}) {
       renameSync(move.from, move.to);
       moved.push(move);
     }
-    originalMovedSpec = rebaseMovedSpecReferences(paths.movedSpecJson, iterationId);
+    originalMovedIntake = rebaseMovedIntakeApprovalReferences(paths.movedIntakeJson, iterationId);
+    originalMovedSpec = rebaseMovedSpecReferences(
+      paths.movedSpecJson,
+      iterationId,
+      paths.movedIntakeJson,
+    );
     originalMovedTaskGraph = rebaseMovedTaskGraphSourceSpec(paths.movedTaskGraph);
     const movedFacts = validateMoved(paths);
     const projectId = projectIdFrom(paths.artifactRoot, movedFacts.spec, movedFacts.taskGraph);
@@ -3024,6 +3066,13 @@ function applyPlan(paths, iterationId, plan, options = {}) {
         atomicWriteText(paths.movedSpecJson, originalMovedSpec);
       } catch (rollbackError) {
         rollbackFailures.push(`${paths.movedSpecJson}: ${rollbackError.message}`);
+      }
+    }
+    if (originalMovedIntake !== null && existsSync(paths.movedIntakeJson)) {
+      try {
+        atomicWriteText(paths.movedIntakeJson, originalMovedIntake);
+      } catch (rollbackError) {
+        rollbackFailures.push(`${paths.movedIntakeJson}: ${rollbackError.message}`);
       }
     }
     for (const move of moved.reverse()) {

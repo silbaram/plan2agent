@@ -1,6 +1,14 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { dirname, join } from 'node:path';
 import process from 'node:process';
 import test from 'node:test';
@@ -12,11 +20,19 @@ import {
   scopeApprovalState,
 } from '../scripts/p2a_decision_ledger.mjs';
 import {
+  validateArtifactRoot,
   validateDecisionData,
   validateDecisionLedger,
+  validateHandoffReadyArtifactRoot,
   ValidationError,
 } from '../scripts/validate_artifacts.mjs';
-import { FIXTURE_ROOT, makeTempDir, P2A_CLI, runP2a } from './helpers/fixtures.mjs';
+import {
+  FIXTURE_ROOT,
+  makeTempDir,
+  P2A_CLI,
+  runHandoff,
+  runP2a,
+} from './helpers/fixtures.mjs';
 
 function writeJson(filePath, value) {
   mkdirSync(dirname(filePath), { recursive: true });
@@ -30,6 +46,8 @@ function fixtureJson(relativePath) {
 function createFlatProject(options = {}) {
   const root = makeTempDir('p2a-decisions-');
   const artifactRoot = join(root, '.plan2agent', 'artifacts', 'cache-library');
+  const entryPath = join(root, 'idea.md');
+  writeFileSync(entryPath, 'Build and validate the requested cache-library scope.\n', 'utf8');
   const intake = fixtureJson('intake.answered.json');
   intake.approval_audit.approved_artifacts = ['gate-a-intake/intake.json'];
   if (options.intakeDraft) {
@@ -48,7 +66,7 @@ function createFlatProject(options = {}) {
   writeJson(join(artifactRoot, 'gate-a-intake', 'intake.json'), intake);
   writeJson(join(artifactRoot, 'gate-b-spec', 'spec.json'), spec);
   if (options.graph) writeJson(join(artifactRoot, 'gate-c-task-graph', 'task-graph.json'), graph);
-  return { root, artifactRoot };
+  return { root, artifactRoot, entryPath };
 }
 
 function spawnP2a(args) {
@@ -163,7 +181,7 @@ test('a stale prev_seq is rejected and the failed append restores the exact ledg
 });
 
 test('p2a decide records Gate ① approvals, revocation, and reapproval without deleting history', (t) => {
-  const { root, artifactRoot } = createFlatProject({ intakeDraft: true });
+  const { root, artifactRoot, entryPath } = createFlatProject({ intakeDraft: true });
   t.after(() => rmSync(root, { recursive: true, force: true }));
 
   const missingQuote = runP2a(['decide', '--artifacts', artifactRoot]);
@@ -176,7 +194,13 @@ test('p2a decide records Gate ① approvals, revocation, and reapproval without 
   assert.notEqual(ignoredOption.status, 0);
   assert.match(ignoredOption.stderr, /--why is only supported by p2a decisions/);
 
-  let result = runP2a(['decide', '--artifacts', artifactRoot, '--quote', '이 범위로 가자']);
+  const missingEntry = runP2a(['decide', '--artifacts', artifactRoot, '--quote', '이 범위로 가자']);
+  assert.notEqual(missingEntry.status, 0);
+  assert.match(missingEntry.stderr, /requires --entry/);
+
+  let result = runP2a([
+    'decide', '--artifacts', artifactRoot, '--entry', entryPath, '--quote', '이 범위로 가자',
+  ]);
   assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
   let intake = JSON.parse(readFileSync(join(artifactRoot, 'gate-a-intake', 'intake.json'), 'utf8'));
   assert.equal(intake.status, 'ready_for_spec');
@@ -227,16 +251,267 @@ test('p2a decide records Gate ① approvals, revocation, and reapproval without 
 });
 
 test('decision records and approval audit copies preserve the exact quoted utterance', (t) => {
-  const { root, artifactRoot } = createFlatProject({ intakeDraft: true });
+  const { root, artifactRoot, entryPath } = createFlatProject({ intakeDraft: true });
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const quote = '  이 공백까지 그대로 기록해  ';
 
-  const result = runP2a(['decide', '--artifacts', artifactRoot, '--quote', quote]);
+  const result = runP2a([
+    'decide', '--artifacts', artifactRoot, '--entry', entryPath, '--quote', quote,
+  ]);
   assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
   const [record] = validateDecisionLedger(decisionLedgerPath(artifactRoot));
   assert.equal(record.quote, quote);
   const intake = JSON.parse(readFileSync(join(artifactRoot, 'gate-a-intake', 'intake.json'), 'utf8'));
   assert.equal(intake.approval_audit.approval_note, `User quote: ${JSON.stringify(quote)}`);
+});
+
+test('Gate A approval rejects an entry reference bundle until its snapshot is captured', (t) => {
+  const { root, artifactRoot, entryPath } = createFlatProject({ intakeDraft: true });
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const prototypePath = join(root, 'prototype.html');
+  writeFileSync(prototypePath, '<!doctype html><title>Unsnapshotted evidence</title>\n', 'utf8');
+  writeJson(join(root, 'p2a-reference-bundle.json'), {
+    schema_version: 'p2a.reference_bundle.v1',
+    entry: 'idea.md',
+    references: [{
+      id: 'REF-1',
+      path: 'prototype.html',
+      kind: 'html',
+      sha256: fileSha256(prototypePath),
+      load_when: 'Gate B needs the approved screen evidence.',
+      description: 'Screen evidence that must be captured before approval.',
+    }],
+  });
+
+  const result = runP2a([
+    'decide', '--artifacts', artifactRoot, '--entry', entryPath,
+    '--quote', '참조 자료도 포함해서 승인해',
+  ]);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /reference-bundle-snapshot\.json is required/);
+  const intake = JSON.parse(readFileSync(join(artifactRoot, 'gate-a-intake', 'intake.json'), 'utf8'));
+  assert.equal(intake.status, 'blocked_on_user');
+  assert.equal(existsSync(decisionLedgerPath(artifactRoot)), false);
+});
+
+test('Gate A approval rejects a sibling reference bundle represented by a symbolic link', (t) => {
+  const { root, artifactRoot, entryPath } = createFlatProject({ intakeDraft: true });
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const prototypePath = join(root, 'prototype.html');
+  writeFileSync(prototypePath, '<!doctype html><title>Linked bundle evidence</title>\n', 'utf8');
+  writeJson(join(root, 'bundle-source.json'), {
+    schema_version: 'p2a.reference_bundle.v1',
+    entry: 'idea.md',
+    references: [{
+      id: 'REF-1',
+      path: 'prototype.html',
+      kind: 'html',
+      sha256: fileSha256(prototypePath),
+      load_when: 'Gate B needs linked screen evidence.',
+      description: 'Evidence whose bundle path must not bypass snapshot binding.',
+    }],
+  });
+  try {
+    symlinkSync('bundle-source.json', join(root, 'p2a-reference-bundle.json'));
+  } catch (error) {
+    if (['EPERM', 'EACCES', 'ENOTSUP'].includes(error?.code)) {
+      t.skip(`symbolic links are unavailable: ${error.code}`);
+      return;
+    }
+    throw error;
+  }
+
+  const validation = runP2a(['validate', '--entry', entryPath]);
+  assert.notEqual(validation.status, 0);
+  assert.match(validation.stderr, /reference bundle must be a regular file/);
+
+  const result = runP2a([
+    'decide', '--artifacts', artifactRoot, '--entry', entryPath,
+    '--quote', 'symlink bundle을 포함해서 승인해',
+  ]);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /reference bundle must be a regular file/);
+  const intake = JSON.parse(readFileSync(join(artifactRoot, 'gate-a-intake', 'intake.json'), 'utf8'));
+  assert.equal(intake.status, 'blocked_on_user');
+  assert.equal(existsSync(decisionLedgerPath(artifactRoot)), false);
+});
+
+test('Gate approvals bind reference provenance sidecars by artifact path and SHA-256', (t) => {
+  const { root, artifactRoot, entryPath } = createFlatProject({ intakeDraft: true, graph: true });
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const snapshotPath = join(
+    artifactRoot,
+    'gate-a-intake',
+    'reference-bundle-snapshot.json',
+  );
+  const entry = 'Build a service from conditionally loaded reference evidence.\n';
+  const prototype = '<!doctype html><title>Decision reference</title>\n';
+  writeFileSync(join(root, 'idea.md'), entry, 'utf8');
+  writeFileSync(join(root, 'prototype.html'), prototype, 'utf8');
+  writeJson(join(root, 'p2a-reference-bundle.json'), {
+    schema_version: 'p2a.reference_bundle.v1',
+    entry: 'idea.md',
+    references: [{
+      id: 'REF-1',
+      path: 'prototype.html',
+      kind: 'html',
+      sha256: fileSha256(join(root, 'prototype.html')),
+      load_when: 'Gate B needs the screen composition.',
+      description: 'Approved screen prototype.',
+    }],
+  });
+  let result = runP2a([
+    'reference', 'snapshot',
+    '--target', root,
+    '--entry', 'idea.md',
+    '--artifacts', artifactRoot,
+  ]);
+  assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+  const snapshot = JSON.parse(readFileSync(snapshotPath, 'utf8'));
+
+  result = runP2a([
+    'decide', '--artifacts', artifactRoot, '--entry', entryPath,
+    '--quote', '참고 자료를 포함한 범위를 승인해',
+  ]);
+  assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+  const intake = JSON.parse(readFileSync(join(artifactRoot, 'gate-a-intake', 'intake.json'), 'utf8'));
+  assert.ok(intake.approval_audit.approved_artifacts.includes(
+    'gate-a-intake/reference-bundle-snapshot.json',
+  ));
+  assert.match(
+    intake.approval_audit.approval_note,
+    new RegExp(`Sidecar SHA-256: gate-a-intake/reference-bundle-snapshot\\.json ${fileSha256(snapshotPath)}`),
+  );
+
+  const usagePath = join(artifactRoot, 'gate-b-spec', 'reference-bundle-usage.json');
+  writeJson(usagePath, {
+    schema_version: 'p2a.reference_bundle_usage.v1',
+    source_snapshot_ref: '../gate-a-intake/reference-bundle-snapshot.json',
+    source_snapshot_sha256: fileSha256(snapshotPath),
+    source_bundle_ref: snapshot.source_bundle_ref,
+    source_bundle_sha256: snapshot.source_bundle_sha256,
+    inspected_references: [],
+  });
+  result = runP2a(['decide', '--artifacts', artifactRoot, '--quote', '참고 자료 사용 내역을 포함한 명세를 승인해']);
+  assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+  const spec = JSON.parse(readFileSync(join(artifactRoot, 'gate-b-spec', 'spec.json'), 'utf8'));
+  assert.ok(spec.approval_audit.approved_artifacts.includes(
+    'gate-b-spec/reference-bundle-usage.json',
+  ));
+  assert.match(
+    spec.approval_audit.approval_note,
+    new RegExp(`Sidecar SHA-256: gate-b-spec/reference-bundle-usage\\.json ${fileSha256(usagePath)}`),
+  );
+
+  result = runP2a([
+    'iteration', 'init', '--artifacts', artifactRoot, '--iteration-id', 'iter-reference-sidecars',
+  ]);
+  assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+  const movedIntake = JSON.parse(readFileSync(join(
+    artifactRoot,
+    'iterations',
+    'iter-reference-sidecars',
+    'gate-a-intake',
+    'intake.json',
+  ), 'utf8'));
+  const movedSpec = JSON.parse(readFileSync(join(
+    artifactRoot,
+    'iterations',
+    'iter-reference-sidecars',
+    'gate-b-spec',
+    'spec.json',
+  ), 'utf8'));
+  assert.ok(movedIntake.approval_audit.approved_artifacts.includes(
+    'iterations/iter-reference-sidecars/gate-a-intake/reference-bundle-snapshot.json',
+  ));
+  assert.ok(movedSpec.approval_audit.approved_artifacts.includes(
+    'iterations/iter-reference-sidecars/gate-b-spec/reference-bundle-usage.json',
+  ));
+  assert.equal(existsSync(join(
+    artifactRoot,
+    'iterations',
+    'iter-reference-sidecars',
+    'gate-a-intake',
+    snapshot.references[0].path,
+  )), true);
+});
+
+test('handoff readiness rejects provenance stripped from decision-bound Gate artifacts', (t) => {
+  const { root, artifactRoot, entryPath } = createFlatProject({ intakeDraft: true, graph: true });
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const intakePath = join(artifactRoot, 'gate-a-intake', 'intake.json');
+  const specPath = join(artifactRoot, 'gate-b-spec', 'spec.json');
+  const snapshotPath = join(artifactRoot, 'gate-a-intake', 'reference-bundle-snapshot.json');
+  const usagePath = join(artifactRoot, 'gate-b-spec', 'reference-bundle-usage.json');
+  writeFileSync(join(root, 'idea.md'), 'Build a service from approved evidence.\n', 'utf8');
+  writeFileSync(join(root, 'prototype.html'), '<!doctype html><title>Bound evidence</title>\n', 'utf8');
+  writeJson(join(root, 'p2a-reference-bundle.json'), {
+    schema_version: 'p2a.reference_bundle.v1',
+    entry: 'idea.md',
+    references: [{
+      id: 'REF-1',
+      path: 'prototype.html',
+      kind: 'html',
+      sha256: fileSha256(join(root, 'prototype.html')),
+      load_when: 'Gate B needs the approved prototype.',
+      description: 'Decision-bound prototype.',
+    }],
+  });
+  let result = runP2a([
+    'reference', 'snapshot',
+    '--target', root,
+    '--entry', 'idea.md',
+    '--artifacts', artifactRoot,
+  ]);
+  assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+  result = runP2a([
+    'decide', '--artifacts', artifactRoot, '--entry', entryPath,
+    '--quote', '참조 범위를 승인해',
+  ]);
+  assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+  const snapshot = JSON.parse(readFileSync(snapshotPath, 'utf8'));
+  writeJson(usagePath, {
+    schema_version: 'p2a.reference_bundle_usage.v1',
+    source_snapshot_ref: '../gate-a-intake/reference-bundle-snapshot.json',
+    source_snapshot_sha256: fileSha256(snapshotPath),
+    source_bundle_ref: snapshot.source_bundle_ref,
+    source_bundle_sha256: snapshot.source_bundle_sha256,
+    inspected_references: [],
+  });
+  result = runP2a(['decide', '--artifacts', artifactRoot, '--quote', '참조 사용 내역을 포함한 명세를 승인해']);
+  assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+  assert.doesNotThrow(() => validateHandoffReadyArtifactRoot(artifactRoot));
+
+  const intake = JSON.parse(readFileSync(intakePath, 'utf8'));
+  intake.approval_audit.approved_artifacts = intake.approval_audit.approved_artifacts
+    .filter((reference) => !reference.endsWith('reference-bundle-snapshot.json'));
+  intake.approval_audit.approval_note = intake.approval_audit.approval_note
+    .split(/\r?\n/)
+    .filter((line) => !line.startsWith('Sidecar SHA-256:'))
+    .join('\n');
+  writeJson(intakePath, intake);
+  const spec = JSON.parse(readFileSync(specPath, 'utf8'));
+  spec.approval_audit.approved_artifacts = spec.approval_audit.approved_artifacts
+    .filter((reference) => !reference.endsWith('reference-bundle-usage.json'));
+  spec.approval_audit.approval_note = spec.approval_audit.approval_note
+    .split(/\r?\n/)
+    .filter((line) => !line.startsWith('Sidecar SHA-256:'))
+    .join('\n');
+  if (Object.hasOwn(spec, 'source_intake_sha256')) {
+    spec.source_intake_sha256 = fileSha256(intakePath);
+  }
+  writeJson(specPath, spec);
+  rmSync(snapshotPath);
+  rmSync(usagePath);
+  rmSync(join(artifactRoot, 'gate-a-intake', 'reference-sources'), { recursive: true });
+
+  const validation = validateArtifactRoot(artifactRoot);
+  assert.equal(validation.gates.a.passed, false);
+  assert.equal(validation.gates.b.passed, false);
+  assert.throws(
+    () => validateHandoffReadyArtifactRoot(artifactRoot),
+    /Gate A approval decision binding failed: approved_hash_mismatch/,
+  );
 });
 
 test('p2a next rejects a malformed decision chain before using artifact approval copies', (t) => {
@@ -498,11 +773,13 @@ test('iteration init preserves decision-ledger authority and why lineage after m
 
   let result = runP2a(['decide', '--artifacts', artifactRoot, '--quote', '이 명세로 구현해']);
   assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+  result = runP2a(['decide', '--artifacts', artifactRoot, '--quote', '기존 Gate A 범위도 원장에 재승인해']);
+  assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
   result = runP2a([
     'iteration', 'init', '--artifacts', artifactRoot, '--iteration-id', 'iter-decisions',
   ]);
   assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
-  assert.match(result.stdout, /Decision ledger rebound: 1 moved Gate approval/);
+  assert.match(result.stdout, /Decision ledger rebound: 2 moved Gate approval\(s\)/);
 
   const movedScopeRef = 'iterations/iter-decisions/gate-b-spec/spec.json';
   const movedSpecPath = join(artifactRoot, movedScopeRef);
@@ -510,13 +787,15 @@ test('iteration init preserves decision-ledger authority and why lineage after m
   assert.deepEqual(records.map((record) => record.type), [
     'gate.what.approved',
     'gate.what.approved',
+    'gate.what.approved',
+    'gate.what.approved',
   ]);
-  assert.equal(records[1].scope_ref, movedScopeRef);
-  assert.equal(records[1].sha256, fileSha256(movedSpecPath));
-  assert.equal(records[1].prev_seq, records[0].seq);
+  assert.equal(records[3].scope_ref, movedScopeRef);
+  assert.equal(records[3].sha256, fileSha256(movedSpecPath));
+  assert.equal(records[3].prev_seq, records[0].seq);
   assert.deepEqual(
     scopeApprovalState(records, movedScopeRef, fileSha256(movedSpecPath), false),
-    { approved: true, source: 'decisions', event: records[1] },
+    { approved: true, source: 'decisions', event: records[3] },
   );
 
   result = runP2a([
@@ -537,8 +816,26 @@ test('iteration init preserves decision-ledger authority and why lineage after m
   assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
   const why = JSON.parse(result.stdout);
   assert.deepEqual(why.runs.map((run) => run.runId), ['run-iteration-why']);
-  assert.deepEqual(why.decisions.map((decision) => decision.seq), [1, 2]);
+  assert.deepEqual(why.decisions.map((decision) => decision.seq), [1, 4]);
   assert.equal(why.decisions.at(-1).scope_ref, movedScopeRef);
+
+  const targetRoot = makeTempDir('p2a-decisions-handoff-target-');
+  t.after(() => rmSync(targetRoot, { recursive: true, force: true }));
+  const movedSpec = JSON.parse(readFileSync(movedSpecPath, 'utf8'));
+  movedSpec.approval_audit.approval_note += '\nUnapproved post-decision mutation.';
+  writeJson(movedSpecPath, movedSpec);
+  result = runHandoff([
+    '--project-id', 'cache-library',
+    '--artifacts', artifactRoot,
+    '--target', targetRoot,
+    '--tools', 'none',
+    '--dry-run',
+  ]);
+  assert.notEqual(result.status, 0);
+  assert.match(
+    result.stderr,
+    /active Gate B approval decision for the current spec bytes: approved_hash_mismatch/,
+  );
 });
 
 test('iteration init rolls back artifact relocation when decision-ledger rebinding fails', {
@@ -548,6 +845,8 @@ test('iteration init rolls back artifact relocation when decision-ledger rebindi
   t.after(() => rmSync(root, { recursive: true, force: true }));
 
   let result = runP2a(['decide', '--artifacts', artifactRoot, '--quote', '이 명세로 구현해']);
+  assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+  result = runP2a(['decide', '--artifacts', artifactRoot, '--quote', '기존 Gate A 범위도 원장에 재승인해']);
   assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
   const ledgerPath = decisionLedgerPath(artifactRoot);
   const originalLedger = readFileSync(ledgerPath, 'utf8');

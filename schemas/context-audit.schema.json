@@ -1,0 +1,316 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://plan2agent.local/schemas/context-audit.schema.json",
+  "title": "Plan2Agent Context Audit",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "measurement",
+    "scenario",
+    "generatedAt",
+    "target",
+    "manifestPath",
+    "status",
+    "summary",
+    "providers",
+    "contexts",
+    "instructionOwners",
+    "duplicateClusters",
+    "conflictCandidates",
+    "baselineComparison",
+    "diagnostics"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "const": "p2a.context_audit.v1" },
+    "measurement": { "enum": ["inventory", "assembled"] },
+    "scenario": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "required": ["skill", "stage", "phase", "executionMode", "conditions"],
+          "additionalProperties": false,
+          "properties": {
+            "skill": { "type": "string", "minLength": 1 },
+            "stage": { "type": "string", "minLength": 1 },
+            "phase": {
+              "type": ["string", "null"],
+              "enum": ["prepare", "owner-start", "retry", "verify-closeout", "batch", "visual-review", "acceptance-review", "monitor", null]
+            },
+            "executionMode": { "type": ["string", "null"], "enum": ["direct", "planned", "orchestrated", null] },
+            "conditions": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": { "type": "string", "minLength": 1 }
+            }
+          }
+        }
+      ]
+    },
+    "generatedAt": { "type": "string", "minLength": 1 },
+    "target": { "type": "string", "minLength": 1 },
+    "manifestPath": { "type": "string", "minLength": 1 },
+    "status": { "enum": ["pass", "warn", "fail"] },
+    "summary": {
+      "type": "object",
+      "required": [
+        "providerCount",
+        "skillCount",
+        "contextCount",
+        "sourceCount",
+        "ownerCount",
+        "alwaysLoadedBytes",
+        "conditionalBytes",
+        "estimatedTokens",
+        "promptBytes",
+        "promptEstimatedTokens",
+        "duplicateClusters",
+        "conflictCandidates",
+        "warnings",
+        "failures"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "providerCount": { "type": "integer", "minimum": 0 },
+        "skillCount": { "type": "integer", "minimum": 0 },
+        "contextCount": { "type": "integer", "minimum": 0 },
+        "sourceCount": { "type": "integer", "minimum": 0 },
+        "ownerCount": { "type": "integer", "minimum": 0 },
+        "alwaysLoadedBytes": { "type": "integer", "minimum": 0 },
+        "conditionalBytes": { "type": "integer", "minimum": 0 },
+        "estimatedTokens": { "type": "integer", "minimum": 0 },
+        "promptBytes": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Bytes in the report-wide unique resolved source corpus. This is not a single-provider prompt; use providers[].promptBytes for provider-specific totals."
+        },
+        "promptEstimatedTokens": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Approximate tokens in the report-wide unique resolved source corpus."
+        },
+        "duplicateClusters": { "type": "integer", "minimum": 0 },
+        "conflictCandidates": { "type": "integer", "minimum": 0 },
+        "warnings": { "type": "integer", "minimum": 0 },
+        "failures": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "providers": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["provider", "contexts", "sources", "alwaysLoadedBytes", "conditionalBytes", "estimatedTokens", "promptBytes", "promptEstimatedTokens"],
+        "additionalProperties": false,
+        "properties": {
+          "provider": { "enum": ["codex", "claude", "gemini"] },
+          "contexts": { "type": "integer", "minimum": 0 },
+          "sources": { "type": "integer", "minimum": 0 },
+          "alwaysLoadedBytes": { "type": "integer", "minimum": 0 },
+          "conditionalBytes": { "type": "integer", "minimum": 0 },
+          "estimatedTokens": { "type": "integer", "minimum": 0 },
+          "promptBytes": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Bytes resolved for this provider after de-duplicating sources reused by its contexts."
+          },
+          "promptEstimatedTokens": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Approximate tokens resolved for this provider after de-duplicating reused sources."
+          }
+        }
+      }
+    },
+    "contexts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["provider", "skill", "stage", "sources", "owners", "totals"],
+        "additionalProperties": false,
+        "properties": {
+          "provider": { "enum": ["codex", "claude", "gemini"] },
+          "skill": { "type": "string", "minLength": 1 },
+          "stage": { "type": "string", "minLength": 1 },
+          "sources": { "type": "array", "items": { "$ref": "#/$defs/source" } },
+          "owners": { "type": "array", "items": { "$ref": "#/$defs/instructionOwner" } },
+          "totals": {
+            "type": "object",
+            "required": ["alwaysLoadedBytes", "conditionalBytes", "estimatedTokens", "promptBytes", "promptEstimatedTokens"],
+            "additionalProperties": false,
+            "properties": {
+              "alwaysLoadedBytes": { "type": "integer", "minimum": 0 },
+              "conditionalBytes": { "type": "integer", "minimum": 0 },
+              "estimatedTokens": { "type": "integer", "minimum": 0 },
+              "promptBytes": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Bytes resolved for this single provider, skill, and stage context."
+              },
+              "promptEstimatedTokens": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Approximate tokens resolved for this single provider, skill, and stage context."
+              }
+            }
+          }
+        }
+      }
+    },
+    "instructionOwners": { "type": "array", "items": { "$ref": "#/$defs/instructionOwner" } },
+    "duplicateClusters": { "type": "array", "items": { "$ref": "#/$defs/duplicateCluster" } },
+    "conflictCandidates": { "type": "array", "items": { "$ref": "#/$defs/conflictCandidate" } },
+    "baselineComparison": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "required": ["baselineGeneratedAt", "measurementMatches", "alwaysLoadedBytesDelta", "promptBytesDelta", "conditionalPromotedToAlways"],
+          "additionalProperties": false,
+          "properties": {
+            "baselineGeneratedAt": { "type": ["string", "null"] },
+            "measurementMatches": { "type": "boolean" },
+            "scenarioMatches": { "type": "boolean" },
+            "providerSetMatches": { "type": "boolean" },
+            "comparable": { "type": "boolean" },
+            "alwaysLoadedBytesDelta": { "type": ["integer", "null"] },
+            "promptBytesDelta": { "type": ["integer", "null"] },
+            "conditionalPromotedToAlways": {
+              "type": "array",
+              "items": { "type": "string", "minLength": 1 }
+            },
+            "addedSources": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": { "type": "string", "minLength": 1 }
+            },
+            "removedSources": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": { "type": "string", "minLength": 1 }
+            },
+            "contentChangedSources": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": { "type": "string", "minLength": 1 }
+            },
+            "routeChangedSources": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": { "type": "string", "minLength": 1 }
+            }
+          }
+        }
+      ]
+    },
+    "diagnostics": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["severity", "code", "message"],
+        "additionalProperties": false,
+        "properties": {
+          "severity": { "enum": ["info", "warn", "error"] },
+          "code": { "type": "string", "minLength": 1 },
+          "message": { "type": "string", "minLength": 1 },
+          "owners": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": { "enum": ["schema", "cli", "hook", "skill", "agent", "provider-wrapper"] }
+          },
+          "paths": { "type": "array", "items": { "type": "string", "minLength": 1 } }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "source": {
+      "type": "object",
+      "required": ["path", "role", "owner", "load", "condition", "conditionId", "bytes", "estimatedTokens", "sha256", "imperativeCount"],
+      "additionalProperties": false,
+      "properties": {
+        "path": { "type": "string", "minLength": 1 },
+        "role": { "enum": ["skill", "reference", "provider-adapter", "agent"] },
+        "owner": { "enum": ["skill", "agent", "provider-wrapper"] },
+        "load": { "enum": ["always", "conditional", "on-demand"] },
+        "required": { "type": "boolean" },
+        "condition": { "type": "string", "minLength": 1 },
+        "conditionId": { "type": "string", "minLength": 1 },
+        "bytes": { "type": "integer", "minimum": 0 },
+        "estimatedTokens": { "type": "integer", "minimum": 0 },
+        "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "imperativeCount": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "instructionOwner": {
+      "type": "object",
+      "required": ["id", "owner", "path", "condition", "bytes", "sha256"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "owner": { "enum": ["schema", "cli", "hook"] },
+        "path": { "type": "string", "minLength": 1 },
+        "condition": { "type": "string", "minLength": 1 },
+        "bytes": { "type": "integer", "minimum": 0 },
+        "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+      }
+    },
+    "occurrence": {
+      "type": "object",
+      "required": ["path", "count"],
+      "additionalProperties": false,
+      "properties": {
+        "path": { "type": "string", "minLength": 1 },
+        "count": { "type": "integer", "minimum": 1 },
+        "owner": { "enum": ["schema", "cli", "hook", "skill", "agent", "provider-wrapper"] }
+      }
+    },
+    "duplicateCluster": {
+      "type": "object",
+      "required": ["hash", "preview", "occurrences"],
+      "additionalProperties": false,
+      "properties": {
+        "hash": { "type": "string", "minLength": 1 },
+        "preview": { "type": "string", "minLength": 1 },
+        "occurrences": {
+          "type": "array",
+          "minItems": 2,
+          "items": { "$ref": "#/$defs/occurrence" }
+        }
+      }
+    },
+    "conflictOccurrence": {
+      "type": "object",
+      "required": ["path", "text"],
+      "additionalProperties": false,
+      "properties": {
+        "path": { "type": "string", "minLength": 1 },
+        "text": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Current producers emit a non-content SHA-256 digest under the historical v1 field name; readers continue to accept archived v1 text values."
+        },
+        "owner": { "enum": ["schema", "cli", "hook", "skill", "agent", "provider-wrapper"] }
+      }
+    },
+    "conflictCandidate": {
+      "type": "object",
+      "required": ["hash", "preview", "positiveOccurrences", "negativeOccurrences"],
+      "additionalProperties": false,
+      "properties": {
+        "hash": { "type": "string", "minLength": 1 },
+        "preview": { "type": "string", "minLength": 1 },
+        "positiveOccurrences": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/conflictOccurrence" }
+        },
+        "negativeOccurrences": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/conflictOccurrence" }
+        }
+      }
+    }
+  }
+}

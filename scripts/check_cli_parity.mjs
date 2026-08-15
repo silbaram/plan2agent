@@ -6,10 +6,12 @@ import path from 'node:path';
 import process from 'node:process';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { auditContext } from './p2a_context_audit.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const ROOT = path.resolve(path.dirname(__filename), '..');
-const SKILLS = ['p2a-harness', 'p2a-next', 'p2a-spec', 'p2a-task-author', 'p2a-dev-execution', 'p2a-task-breakdown'];
+const CONTEXT_ROUTES_PATH = path.join(ROOT, '.agents', 'context-routes.json');
+const SKILLS = ['p2a-harness', 'p2a-next', 'p2a-spec', 'p2a-task-author', 'p2a-dev-execution', 'p2a-task-breakdown', 'p2a-visual-experience'];
 const AGENTS = ['p2a-spec-author', 'p2a-implementation-planner', 'p2a-task-graph', 'p2a-task-author', 'p2a-skill-curator', 'p2a-performance-monitor', 'p2a-implementer'];
 const GEMINI_COMMANDS = {
   harness: 'p2a-harness',
@@ -18,7 +20,16 @@ const GEMINI_COMMANDS = {
   'task-author': 'p2a-task-author',
   'dev-execution': 'p2a-dev-execution',
   'task-breakdown': 'p2a-task-breakdown',
+  'visual-experience': 'p2a-visual-experience',
 };
+
+function readContextRoutes() {
+  const routes = JSON.parse(readFileSync(CONTEXT_ROUTES_PATH, 'utf8'));
+  if (routes?.schema_version !== 'p2a.context_routes.v1' || !Array.isArray(routes.skills)) {
+    throw new Error(`${path.relative(ROOT, CONTEXT_ROUTES_PATH)} must contain p2a.context_routes.v1 skills`);
+  }
+  return routes;
+}
 
 function fail(message) {
   console.error(`parity failed: ${message}`);
@@ -56,7 +67,7 @@ function parseSimpleToml(text) {
   return data;
 }
 
-function checkGeminiCommand(command, skill) {
+function checkGeminiCommand(command, skill, routes) {
   const commandPath = path.join(ROOT, '.gemini', 'commands', 'p2a', `${command}.toml`);
   const label = path.relative(ROOT, commandPath);
   if (!existsSync(commandPath)) return `missing Gemini command shim ${label}`;
@@ -72,14 +83,29 @@ function checkGeminiCommand(command, skill) {
   if (typeof prompt !== 'string' || !prompt.trim()) return `Gemini command shim ${label} has missing or empty prompt`;
   if (!prompt.includes(skill)) return `Gemini command shim ${label} prompt must include skill name ${skill}`;
   if (!prompt.includes('{{args}}')) return `Gemini command shim ${label} prompt must include {{args}}`;
-  const skillRoot = path.join(ROOT, '.agents', 'skills', skill);
-  const references = relativeFileList(skillRoot).filter((relativeFile) => relativeFile.split(path.sep)[0] === 'references');
-  for (const relativeFile of references) {
-    const normalizedPath = relativeFile.split(path.sep).join('/');
-    if (!prompt.includes(normalizedPath)) return `Gemini command shim ${label} must include reference path ${normalizedPath}`;
+  const route = routes.skills.find((item) => item?.id === skill);
+  if (!route) return `context route is missing for ${skill}`;
+  if (route.gemini_command !== command) return `context route for ${skill} must declare gemini_command=${command}`;
+  const references = Array.isArray(route.references) ? route.references : [];
+  for (const reference of references) {
+    if (typeof reference.required !== 'boolean') {
+      return `context route reference required must be boolean for ${skill}:${reference.path}`;
+    }
+    const declaredPaths = [
+      reference.path,
+      ...(Array.isArray(reference.provider_paths)
+        ? reference.provider_paths.map((item) => item?.path)
+        : []),
+    ].filter((item) => typeof item === 'string' && item.trim());
+    if (declaredPaths.some((referencePath) => prompt.includes(referencePath))) {
+      return `Gemini command shim ${label} must not duplicate canonical reference paths from ${skill}/SKILL.md`;
+    }
+    if (typeof reference.condition === 'string' && prompt.includes(reference.condition)) {
+      return `Gemini command shim ${label} must not duplicate canonical reference conditions from ${skill}/SKILL.md`;
+    }
   }
-  if (references.length && !prompt.includes('otherwise do not read it')) {
-    return `Gemini command shim ${label} must include conditional reference guidance`;
+  if (prompt.includes('Conditional references for') || prompt.includes('otherwise do not read it')) {
+    return `Gemini command shim ${label} must stay a thin invocation and provider-constraint wrapper`;
   }
   return null;
 }
@@ -99,6 +125,12 @@ function relativeFileList(sourceRoot) {
 }
 
 export function main() {
+  let contextRoutes;
+  try {
+    contextRoutes = readContextRoutes();
+  } catch (error) {
+    return fail(error.message);
+  }
   const syncCheck = spawnSync(process.execPath, [path.join(ROOT, 'scripts', 'sync_cli_assets.mjs'), '--check'], {
     cwd: ROOT,
     encoding: 'utf8',
@@ -106,6 +138,12 @@ export function main() {
   if (syncCheck.status !== 0) {
     if (syncCheck.stderr) process.stderr.write(syncCheck.stderr);
     return syncCheck.status ?? 1;
+  }
+
+  const contextAudit = auditContext(ROOT);
+  const contextFailure = contextAudit.diagnostics.find((item) => item.severity === 'error');
+  if (contextFailure) {
+    return fail(`context route audit ${contextFailure.code}: ${contextFailure.message}`);
   }
 
   for (const skill of SKILLS) {
@@ -144,7 +182,7 @@ export function main() {
   }
 
   for (const [command, skill] of Object.entries(GEMINI_COMMANDS)) {
-    const error = checkGeminiCommand(command, skill);
+    const error = checkGeminiCommand(command, skill, contextRoutes);
     if (error) return fail(error);
   }
   console.log('Plan2Agent CLI parity passed');

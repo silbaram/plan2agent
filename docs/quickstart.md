@@ -43,10 +43,11 @@ p2a next --entry docs/idea.md
 ```bash
 p2a decide \
   --artifacts .plan2agent/artifacts/<project_id> \
+  --entry docs/idea.md \
   --quote "이 범위로 진행해"
 ```
 
-`p2a decide`는 가장 이른 미승인 Gate ① artifact를 승인하고 append-only `decisions.jsonl`과 JSON `approval_audit` 호환 사본을 함께 갱신한다. Gate A 확인 뒤 `p2a next`는 `state: shape`를 반환한다. 하네스가 제안한 `.plan2agent/constitution.json` 초안을 검토하고 Gate ②를 승인한다.
+신규 문서 기반 Gate A에서 `p2a decide`는 `--entry`를 다시 검증하고 sibling reference bundle이 있으면 일치하는 snapshot을 요구한다. 그 뒤 가장 이른 미승인 Gate ① artifact를 승인하고 append-only `decisions.jsonl`과 JSON `approval_audit` 호환 사본을 함께 갱신한다. Gate A 확인 뒤 `p2a next`는 `state: shape`를 반환한다. 하네스가 제안한 `.plan2agent/constitution.json` 초안을 검토하고 Gate ②를 승인한다.
 
 ```bash
 p2a shape approve --quote "이 구조로 진행해"

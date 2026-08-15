@@ -20,6 +20,12 @@ import {
 import { resolveIterationState } from './p2a_iteration_state.mjs';
 import { artifactRelativePath as artifactRelative } from './p2a_cli_helpers.mjs';
 import { normalizePath, resolveP2aPaths } from './p2a_paths.mjs';
+import { inspectEntryDocument } from './p2a_radar_preflight.mjs';
+import {
+  APPROVAL_SIDECAR_SHA256_PREFIX,
+  REFERENCE_BUNDLE_SNAPSHOT_FILENAME,
+  REFERENCE_BUNDLE_USAGE_FILENAME,
+} from './p2a_constants.mjs';
 import { atomicWriteJson, atomicWriteText } from './p2a_run_store.mjs';
 import {
   validateIntake,
@@ -34,7 +40,7 @@ const DECIDE_ACTIONS = new Set(['approve', 'revoke', 'add', 'remove']);
 function usage() {
   return [
     'Usage:',
-    '  p2a decide [approve] --quote <user-utterance> [--target <dir>|--artifacts <dir>]',
+    '  p2a decide [approve] --quote <user-utterance> [--entry <path>] [--target <dir>|--artifacts <dir>]',
     '  p2a decide revoke --quote <user-utterance> [--target <dir>|--artifacts <dir>]',
     '  p2a decide add|remove --scope <description> --quote <user-utterance> [options]',
     '  p2a decisions [--target <dir>|--artifacts <dir>] [--json]',
@@ -42,6 +48,7 @@ function usage() {
     '',
     'Notes:',
     '  decide approves the earliest pending Gate ① scope/spec artifact and keeps approval_audit as a copy.',
+    '  New document-backed Gate A approvals require --entry so reference provenance cannot be skipped.',
     '  revoke, add, and remove append new entries; they never delete prior decisions.',
   ].join('\n');
 }
@@ -73,6 +80,7 @@ function parseArgs(argv) {
     target: P2A_PATHS.projectRoot,
     artifacts: null,
     projectId: null,
+    entry: null,
     quote: null,
     scope: null,
     why: null,
@@ -86,6 +94,7 @@ function parseArgs(argv) {
     else if (arg === '--target') args.target = requiredValue(argv, ++index, '--target');
     else if (arg === '--artifacts' || arg === '--artifact-root') args.artifacts = requiredValue(argv, ++index, arg);
     else if (arg === '--project-id') args.projectId = requiredValue(argv, ++index, '--project-id');
+    else if (arg === '--entry') args.entry = requiredValue(argv, ++index, '--entry');
     else if (arg === '--quote') args.quote = requiredValue(argv, ++index, '--quote');
     else if (arg === '--scope') args.scope = requiredValue(argv, ++index, '--scope');
     else if (arg === '--why') args.why = requiredValue(argv, ++index, '--why');
@@ -103,6 +112,9 @@ function parseArgs(argv) {
   if (mode === 'decisions' && args.scope !== null) {
     throw new ValidationError('--scope is only supported by p2a decide add or remove');
   }
+  if (mode === 'decisions' && args.entry !== null) {
+    throw new ValidationError('--entry is only supported by p2a decide approve');
+  }
   if (mode === 'decide' && args.why !== null) {
     throw new ValidationError('--why is only supported by p2a decisions');
   }
@@ -111,6 +123,9 @@ function parseArgs(argv) {
   }
   if (mode === 'decide' && !['add', 'remove'].includes(action) && args.scope !== null) {
     throw new ValidationError('--scope is only supported by p2a decide add or remove');
+  }
+  if (mode === 'decide' && action !== 'approve' && args.entry !== null) {
+    throw new ValidationError('--entry is only supported by p2a decide approve');
   }
   return args;
 }
@@ -143,12 +158,18 @@ function gateFiles(artifactRoot) {
   };
 }
 
-function approvalAudit(quote, approvedArtifacts) {
+function approvalAudit(quote, approvedArtifacts, sidecars = []) {
+  const sidecarBindings = sidecars.map((sidecar) => (
+    `${APPROVAL_SIDECAR_SHA256_PREFIX} ${sidecar.ref} ${sidecar.sha256}`
+  ));
   return {
     approved_by: 'user',
     approved_at: new Date().toISOString().slice(0, 10),
     approved_artifacts: approvedArtifacts,
-    approval_note: `User quote: ${JSON.stringify(quote)}`,
+    approval_note: [
+      `User quote: ${JSON.stringify(quote)}`,
+      ...sidecarBindings,
+    ].join('\n'),
   };
 }
 
@@ -198,12 +219,98 @@ function selectApprovalCandidate(artifactRoot, records) {
   throw new ValidationError('no pending Gate ① scope or specification approval was found');
 }
 
-function approvedArtifactsFor(candidate) {
+function approvalSidecarsFor(candidate) {
+  const filename = candidate.kind === 'intake'
+    ? REFERENCE_BUNDLE_SNAPSHOT_FILENAME
+    : REFERENCE_BUNDLE_USAGE_FILENAME;
+  const filePath = path.join(path.dirname(candidate.filePath), filename);
+  if (!isFile(filePath)) return [];
+  return [{
+    filePath,
+    ref: normalizePath(path.join(path.dirname(candidate.scopeRef), filename)),
+    sha256: fileSha256(filePath),
+  }];
+}
+
+function projectRootForArtifactRoot(artifactRoot) {
+  let current = path.resolve(artifactRoot);
+  while (true) {
+    if (path.basename(current) === '.plan2agent') return path.dirname(current);
+    const parent = path.dirname(current);
+    if (parent === current) return null;
+    current = parent;
+  }
+}
+
+function gateAEntryTargetRoot(args, artifactRoot) {
+  return projectRootForArtifactRoot(artifactRoot) ?? path.resolve(args.target);
+}
+
+function gateARequiresDocumentEntry(candidate) {
+  if (candidate.kind !== 'intake') return false;
+  if (candidate.data.baseline_context) return false;
+  return !(
+    candidate.data.status === 'ready_for_spec'
+    && candidate.data.approval_audit
+  );
+}
+
+function validateGateAEntryBinding(args, candidate, artifactRoot) {
+  if (candidate.kind !== 'intake') {
+    if (args.entry) throw new ValidationError('--entry is only valid while approving Gate A intake');
+    return;
+  }
+  if (!args.entry) {
+    if (!gateARequiresDocumentEntry(candidate)) return;
+    throw new ValidationError(
+      'new Gate A intake approval requires --entry <original-entry-path> so reference provenance can be verified',
+    );
+  }
+
+  const targetRoot = gateAEntryTargetRoot(args, artifactRoot);
+  const inspected = inspectEntryDocument(args.entry, {
+    baseDir: targetRoot,
+    referenceRoot: targetRoot,
+    selection: 'explicit',
+  });
+  if (!inspected.valid) {
+    throw new ValidationError(`Gate A entry validation failed: ${inspected.errors.join('; ')}`);
+  }
+
+  const snapshotPath = path.join(
+    path.dirname(candidate.filePath),
+    REFERENCE_BUNDLE_SNAPSHOT_FILENAME,
+  );
+  if (!inspected.referenceBundle?.valid) {
+    if (isFile(snapshotPath)) {
+      throw new ValidationError(
+        'Gate A reference snapshot exists, but the supplied entry has no valid sibling p2a-reference-bundle.json',
+      );
+    }
+    return;
+  }
+  if (!isFile(snapshotPath)) {
+    throw new ValidationError(
+      'Gate A reference-bundle-snapshot.json is required before approving an entry with p2a-reference-bundle.json; run p2a reference snapshot first',
+    );
+  }
+
+  const snapshot = readJson(snapshotPath);
+  if (snapshot.entry_sha256 !== fileSha256(inspected.path)) {
+    throw new ValidationError('Gate A reference snapshot does not match the supplied entry bytes');
+  }
+  if (snapshot.source_bundle_sha256 !== inspected.referenceBundle.sha256) {
+    throw new ValidationError('Gate A reference snapshot does not match the supplied reference bundle bytes');
+  }
+}
+
+function approvedArtifactsFor(candidate, sidecars = approvalSidecarsFor(candidate)) {
   const refs = [candidate.scopeRef];
   if (candidate.kind === 'spec') {
     const visualRef = candidate.data.visual_experience?.experience_spec_ref;
     if (typeof visualRef === 'string' && visualRef.trim()) refs.push(visualRef);
   }
+  refs.push(...sidecars.map((sidecar) => sidecar.ref));
   return [...new Set(refs)];
 }
 
@@ -216,11 +323,17 @@ function approveGateWhat(args, artifactRoot) {
   return withDecisionLedgerLock(artifactRoot, () => {
     const records = readDecisions(artifactRoot);
     const candidate = selectApprovalCandidate(artifactRoot, records);
+    validateGateAEntryBinding(args, candidate, artifactRoot);
     const original = readFileSync(candidate.filePath, 'utf8');
+    const approvalSidecars = approvalSidecarsFor(candidate);
     const next = {
       ...candidate.data,
       ...(candidate.kind === 'intake' ? { status: 'ready_for_spec' } : { approval: 'approved' }),
-      approval_audit: approvalAudit(args.quote, approvedArtifactsFor(candidate)),
+      approval_audit: approvalAudit(
+        args.quote,
+        approvedArtifactsFor(candidate, approvalSidecars),
+        approvalSidecars,
+      ),
     };
     try {
       atomicWriteJson(candidate.filePath, next);
