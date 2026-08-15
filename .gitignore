@@ -27,3 +27,5 @@ artifacts/lightweight-embedded-redis
 
 # Local execution workspaces
 .p2a-worktrees/
+
+plans/
