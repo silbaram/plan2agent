@@ -9,6 +9,7 @@ import './context-audit.test.mjs';
 import './context-routes.test.mjs';
 import './context-packet.test.mjs';
 import './tool-trace.test.mjs';
+import './runtime-routing-performance.test.mjs';
 import './harness-update-style-contract.test.mjs';
 import './handoff-portability.test.mjs';
 import './iteration-memory-recall.test.mjs';

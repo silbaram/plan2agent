@@ -25,11 +25,13 @@ test('sanitized tool trace separates multi-source reads from repeated operations
   ], [
     { id: 'skill:p2a-next', paths: ['.agents/skills/p2a-next/SKILL.md'] },
     { id: 'execution.lifecycle', paths: ['.agents/skills/p2a-dev-execution/references/execution-lifecycle.md'] },
-  ]);
+  ], { workspaceRoot: '/workspace/project' });
 
   assert.equal(trace.status, 'available');
   assert.deepEqual(trace.metrics, {
     toolOperations: 3,
+    contentReadOperations: 2,
+    metadataInspectOperations: 0,
     uniqueSourcesRead: 2,
     sourceReadOccurrences: 3,
     repeatedSourceReads: 1,
@@ -38,7 +40,9 @@ test('sanitized tool trace separates multi-source reads from repeated operations
     unknownOperations: 0,
   });
   assert.deepEqual(trace.operations[0].sourceIds, ['execution.lifecycle', 'skill:p2a-next']);
-  assert.equal(trace.operations[0].operationFingerprint, 'read:execution.lifecycle,skill:p2a-next');
+  assert.equal(trace.operations[0].operationFingerprint, 'content_read:sed:allowlisted_source:execution.lifecycle,skill:p2a-next');
+  assert.equal(trace.operations[0].readTool, 'sed');
+  assert.equal(trace.operations[0].targetClass, 'allowlisted_source');
   assert.equal(trace.operations[2].commandClass, 'verify');
   const serialized = JSON.stringify(trace);
   assert.doesNotMatch(serialized, /PRIVATE-QUERY|sed -n|npm test|SKILL\.md/);
@@ -58,7 +62,7 @@ test('unattributed reads make a trace partial and do not use path suffix matches
         '/workspace/project/.agents/skills/p2a-next/SKILL.md',
       ],
     },
-  ]);
+  ], { workspaceRoot: '/workspace/project' });
 
   assert.equal(trace.status, 'partial');
   assert.deepEqual(trace.operations.map((operation) => operation.sourceIds), [
@@ -70,6 +74,43 @@ test('unattributed reads make a trace partial and do not use path suffix matches
   assert.equal(trace.metrics.repeatedSourceReads, 0);
   assert.equal(trace.metrics.unattributedReadOperations, 2);
   assert.equal(trace.metrics.unknownOperations, 2);
+  assert.deepEqual(trace.operations.map((operation) => operation.targetClass), [
+    'allowlisted_source',
+    'outside_workspace',
+    'workspace_other',
+  ]);
+});
+
+test('metadata inspection is not treated as an unattributed content read', () => {
+  const trace = collectSanitizedToolTrace([
+    commandEvent('ls -la .agents/skills/p2a-next'),
+    commandEvent('find .agents -maxdepth 2 -type f'),
+    commandEvent('stat .agents/context-routes.json'),
+    commandEvent('readlink .agents/skills/p2a-next'),
+    commandEvent('rg --files .agents/skills'),
+  ], [], { workspaceRoot: '/workspace/project' });
+
+  assert.equal(trace.status, 'available');
+  assert.equal(trace.metrics.toolOperations, 5);
+  assert.equal(trace.metrics.contentReadOperations, 0);
+  assert.equal(trace.metrics.metadataInspectOperations, 5);
+  assert.equal(trace.metrics.unattributedReadOperations, 0);
+  assert.equal(trace.metrics.unknownOperations, 0);
+  assert.deepEqual(trace.operations.map((operation) => operation.commandClass), [
+    'metadata_inspect',
+    'metadata_inspect',
+    'metadata_inspect',
+    'metadata_inspect',
+    'metadata_inspect',
+  ]);
+  assert.deepEqual(trace.operations.map((operation) => operation.readTool), [
+    'ls',
+    'find',
+    'stat',
+    'readlink',
+    'rg_files',
+  ]);
+  assert.ok(trace.operations.every((operation) => operation.targetClass === 'workspace_other'));
 });
 
 test('unsupported command event shapes preserve only safe field types', () => {
