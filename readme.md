@@ -156,6 +156,10 @@ merely because a proposal exists.
 backend for artifacts, history, and lineage. Local `.plan2agent/` files remain canonical when Memory
 is unavailable or not configured.
 
+Use `p2a memory push --artifacts <artifact-root> --profile planning-docs --dry-run` to preview a
+focused sync of approved Gate A/B planning Markdown. The preview reports every included and excluded
+source file with its reason; actual remote writes still require `--yes`.
+
 ## CLI at a glance
 
 Plan2Agent installs one `p2a` entrypoint:

@@ -32,6 +32,8 @@ Plan2Agent 본체 개발에서만 `scripts/sync_cli_assets.mjs`, `scripts/check_
 7. `p2a eval grade/compare/analyze/generate/digest`로 run acceptance 증거, iteration regression, 실패 클러스터를 평가하고 proposal/maintenance/delta draft 경로로 연결한다.
 8. 장기 보존이나 회고 검색이 필요하면 `p2a memory status/push/pull/search/history/trace/impact/precedent/digest`로 로컬 산출물과 Memory 서버 snapshot의 차이, 검색 결과, 계보, timeline, 유지보수 후보를 확인하고, 명시 승인 후 push한다. `memory search`는 하위호환 기본값인 `keyword`와 명시적 `semantic`/`hybrid` 모드를 지원한다. `--project <sourceProjectId>`는 해당 프로젝트의 모든 반복을 검색하고, 조건부 cross-project recall은 `--global --exclude-project <sourceProjectId>`로 현재 프로젝트를 제외한다.
 
+승인된 기획 문서만 동기화하려면 `p2a memory push --artifacts <artifact-root> --profile planning-docs --dry-run`으로 먼저 선택 결과를 확인한다. 이 프로필은 현재 및 archived 기능 iteration의 승인된 `product-spec.md`, `implementation-plan.md`와 Gate A가 완료된 경우의 `intake.md`만 선택한다. dry-run은 모든 source file의 포함 여부와 제외 사유, 예상 document snapshot 수를 출력한다. maintenance, task, run, review/evidence, generated index, Memory recall, chunk 및 handoff/baseline 복사본은 제외된다. 실제 외부 쓰기는 기존과 동일하게 `--yes`가 필요하다.
+
 ## 2. 전역 공통 진입점 — `p2a`
 
 Plan2Agent는 npm 전역 패키지의 `p2a` 명령으로 실행한다. 프로젝트에는 `.plan2agent/` 상태, 설정, 선택한 provider asset만 저장하며 runtime script와 schema는 패키지에 남는다.

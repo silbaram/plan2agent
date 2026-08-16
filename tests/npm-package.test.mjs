@@ -89,6 +89,7 @@ test('checkout init preserves the legacy co-located runtime', () => {
     assert.ok(manifest.scriptFiles.includes('.plan2agent/scripts/p2a_decision_ledger.mjs'));
     assert.ok(manifest.scriptFiles.includes('.plan2agent/scripts/p2a_decisions.mjs'));
     assert.ok(manifest.scriptFiles.includes('.plan2agent/scripts/p2a_shape.mjs'));
+    assert.ok(manifest.scriptFiles.includes('.plan2agent/scripts/p2a_memory_planning_docs.mjs'));
     assert.ok(manifest.scriptFiles.includes('.plan2agent/scripts/p2a_context.mjs'));
     assert.ok(manifest.scriptFiles.includes('.plan2agent/scripts/p2a_context_packet.mjs'));
     assert.ok(manifest.scriptFiles.includes('.plan2agent/scripts/p2a_continuations.mjs'));
