@@ -1,5 +1,14 @@
 import assert from 'node:assert/strict';
-import { cpSync, existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import {
+  cpSync,
+  existsSync,
+  mkdtempSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -16,6 +25,15 @@ import {
 import { E2E_FIXTURE_ROOT, runHandoff } from './helpers/fixtures.mjs';
 
 const entry = (runId, status = 'finished') => ({ runId, status });
+
+function writeJson(filePath, value) {
+  mkdirSync(path.dirname(filePath), { recursive: true });
+  writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
+}
+
+function fileSha256(filePath) {
+  return createHash('sha256').update(readFileSync(filePath)).digest('hex');
+}
 
 function missingRunIndex(projectId) {
   return {
@@ -194,6 +212,117 @@ test('portable target validation checks the emitted gate bundle and run store', 
       /run-missing\.json is missing/,
     );
   } finally {
+    rmSync(targetRoot, { recursive: true, force: true });
+  }
+});
+
+test('portable handoff preserves and revalidates reference provenance sidecars', () => {
+  const sourceRoot = mkdtempSync(path.join(tmpdir(), 'p2a-portable-reference-source-'));
+  const targetRoot = mkdtempSync(path.join(tmpdir(), 'p2a-portable-reference-target-'));
+  const projectId = 'webhook-api-service';
+  const sourceArtifacts = path.join(sourceRoot, projectId);
+  try {
+    cpSync(path.join(E2E_FIXTURE_ROOT, projectId), sourceArtifacts, { recursive: true });
+    const intakePath = path.join(sourceArtifacts, 'gate-a-intake', 'intake.json');
+    const specPath = path.join(sourceArtifacts, 'gate-b-spec', 'spec.json');
+    const snapshotPath = path.join(
+      sourceArtifacts,
+      'gate-a-intake',
+      'reference-bundle-snapshot.json',
+    );
+    const usagePath = path.join(
+      sourceArtifacts,
+      'gate-b-spec',
+      'reference-bundle-usage.json',
+    );
+    const captureRoot = path.join(
+      sourceArtifacts,
+      'gate-a-intake',
+      'reference-sources',
+      'files',
+    );
+    const capturedBundlePath = path.join(captureRoot, 'p2a-reference-bundle.json');
+    const capturedEntryPath = path.join(captureRoot, 'idea.md');
+    const capturedReferencePath = path.join(captureRoot, 'prototype.html');
+    mkdirSync(captureRoot, { recursive: true });
+    writeFileSync(capturedEntryPath, 'Build a portable webhook service from approved references.\n', 'utf8');
+    writeFileSync(capturedReferencePath, '<!doctype html><title>Portable reference</title>\n', 'utf8');
+    writeJson(capturedBundlePath, {
+      schema_version: 'p2a.reference_bundle.v1',
+      entry: 'idea.md',
+      references: [{
+        id: 'REF-1',
+        path: 'prototype.html',
+        kind: 'html',
+        sha256: fileSha256(capturedReferencePath),
+        load_when: 'Gate B needs the approved prototype.',
+        description: 'Approved prototype metadata.',
+      }],
+    });
+    const snapshot = {
+      schema_version: 'p2a.reference_bundle_snapshot.v1',
+      source_bundle_ref: 'reference-sources/files/p2a-reference-bundle.json',
+      source_bundle_sha256: fileSha256(capturedBundlePath),
+      entry_ref: 'reference-sources/files/idea.md',
+      entry_sha256: fileSha256(capturedEntryPath),
+      references: [{
+        id: 'REF-1',
+        path: 'reference-sources/files/prototype.html',
+        kind: 'html',
+        sha256: fileSha256(capturedReferencePath),
+        load_when: 'Gate B needs the approved prototype.',
+        description: 'Approved prototype metadata.',
+      }],
+    };
+    writeJson(snapshotPath, snapshot);
+    const intake = JSON.parse(readFileSync(intakePath, 'utf8'));
+    intake.approval_audit.approved_artifacts.push(
+      'gate-a-intake/reference-bundle-snapshot.json',
+    );
+    intake.approval_audit.approval_note += `\nSidecar SHA-256: gate-a-intake/reference-bundle-snapshot.json ${fileSha256(snapshotPath)}`;
+    writeJson(intakePath, intake);
+
+    writeJson(usagePath, {
+      schema_version: 'p2a.reference_bundle_usage.v1',
+      source_snapshot_ref: '../gate-a-intake/reference-bundle-snapshot.json',
+      source_snapshot_sha256: fileSha256(snapshotPath),
+      source_bundle_ref: snapshot.source_bundle_ref,
+      source_bundle_sha256: snapshot.source_bundle_sha256,
+      inspected_references: [],
+    });
+    const spec = JSON.parse(readFileSync(specPath, 'utf8'));
+    spec.approval_audit.approved_artifacts.push(
+      'gate-b-spec/reference-bundle-usage.json',
+    );
+    spec.approval_audit.approval_note += `\nSidecar SHA-256: gate-b-spec/reference-bundle-usage.json ${fileSha256(usagePath)}`;
+    writeJson(specPath, spec);
+
+    const result = runHandoff([
+      '--project-id', projectId,
+      '--artifacts', sourceArtifacts,
+      '--target', targetRoot,
+      '--overwrite',
+    ]);
+    assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+    const targetArtifacts = path.join(targetRoot, '.plan2agent', 'artifacts', projectId);
+    assert.equal(existsSync(path.join(
+      targetArtifacts,
+      'gate-a-intake',
+      'reference-bundle-snapshot.json',
+    )), true);
+    assert.equal(existsSync(path.join(
+      targetArtifacts,
+      'gate-b-spec',
+      'reference-bundle-usage.json',
+    )), true);
+    assert.equal(existsSync(path.join(
+      targetArtifacts,
+      'gate-a-intake',
+      snapshot.references[0].path,
+    )), true);
+    assert.doesNotThrow(() => validatePortableHandoffTarget(targetRoot, projectId));
+  } finally {
+    rmSync(sourceRoot, { recursive: true, force: true });
     rmSync(targetRoot, { recursive: true, force: true });
   }
 });

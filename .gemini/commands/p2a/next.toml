@@ -4,5 +4,5 @@ Use the Plan2Agent p2a-next skill for the following context:
 
 {{args}}
 
-Call p2a next --json as the decision authority. Do not reproduce state conditions. Execute a CLI command immediately only when the returned command has requiresApproval=false; otherwise wait for user approval.
+Treat p2a next --json --contract v2 as the decision authority. Gemini may report the returned action but must not perform writes or approvals.
 """

@@ -33,6 +33,49 @@
 
 웹 URL이 12개를 초과하거나 추천 항목이 8개를 초과하면 검증은 성공하고 warning만 출력한다. 이후 evidence 변환에서는 각각 앞의 12개와 8개만 승격하며, 원문 전체는 별도 참조로 보존한다. 문서가 없거나 비어 있거나 지원하지 않는 형식일 때만 진입 검증을 차단한다.
 
+### 2.1 선택적 reference bundle
+
+간결한 진입 문서와 함께 HTML, 테스트, 코드, schema, 데이터, 이미지, 디자인 자료, rubric 같은 로컬 근거를 제공하려면 진입 문서와 같은 디렉터리에 `p2a-reference-bundle.json`을 둘 수 있다. 이 파일은 선택 사항이며 [`reference-bundle.schema.json`](../schemas/reference-bundle.schema.json)을 따른다.
+
+```json
+{
+  "schema_version": "p2a.reference_bundle.v1",
+  "entry": "idea.md",
+  "references": [
+    {
+      "id": "REF-1",
+      "path": "prototype.html",
+      "kind": "html",
+      "sha256": "<lowercase-sha256>",
+      "load_when": "Gate B needs screen-composition evidence.",
+      "description": "Current offline prototype."
+    }
+  ]
+}
+```
+
+`entry`와 각 `path`는 bundle 기준 상대 경로다. 참조는 symbolic-link 해석 후에도 프로젝트 reference root 안의 일반 파일이어야 하고, `REF-n` id와 경로는 중복될 수 없으며, 선언한 SHA-256이 현재 파일과 일치해야 한다. 잘못된 JSON, stale hash, 누락 파일, 지원하지 않는 kind, 프로젝트 밖 경로는 entry validation을 차단한다.
+
+검증기는 본문을 프롬프트에 합치지 않고 참조의 경로, 종류, 해시, 크기, 설명, `load_when`만 노출한다. Gate A/B는 현재 판단에 조건이 맞는 파일만 열고, 실제로 검사한 자료만 `LOCAL-n` evidence로 승격한다. 열지 않은 참조는 승인이나 사실의 근거가 아니다. `p2a info --entry <path> --json`에서 이 메타데이터를 확인할 수 있다.
+
+Gate A 승인 전에는 검증 결과를 손으로 옮겨 적지 않고 다음 명령으로 portable source capture와 snapshot을 함께 만든다.
+
+```bash
+p2a reference snapshot \
+  --target <project-dir> \
+  --entry <entry-path> \
+  --artifacts <artifact-root>
+```
+
+이 명령은 entry, 원본 `p2a-reference-bundle.json`, 선언된 모든 reference의 실제 바이트를 `gate-a-intake/reference-sources/files/` 아래에 프로젝트 상대 구조로 복사한 후 snapshot을 생성한다. 복사본이 하나라도 누락되거나 bundle metadata·entry 연결·실제 SHA-256과 다르면 intake validation이 실패하고 생성물을 되돌린다. 이미 승인된 Gate A에는 추가하거나 덮어쓸 수 없으며, 원본을 변경해 새 capture가 필요하면 승인 전 capture를 명시적으로 제거하거나 승인된 Gate A를 다시 열어야 한다.
+
+Gate artifact에는 기존 `p2a.intake.v1`과 `p2a.spec.v1`을 변경하지 않고 다음 provenance sidecar를 둔다.
+
+- `gate-a-intake/reference-bundle-snapshot.json` (`p2a.reference_bundle_snapshot.v1`): capture된 entry와 bundle의 snapshot 상대 경로·SHA-256 및 모든 `REF-n` 메타데이터를 보존한다. 모든 source 경로는 `reference-sources/files/` 아래를 가리킨다.
+- `gate-b-spec/reference-bundle-usage.json` (`p2a.reference_bundle_usage.v1`): Gate A snapshot의 경로·SHA-256, capture된 bundle의 경로·SHA-256, 실제로 연 참조와 이를 뒷받침하는 `LOCAL-n` evidence 및 명세 결정을 기록한다. 아무 참조도 열지 않았으면 빈 `inspected_references`를 기록한다.
+
+`p2a decide`는 해당 sidecar가 있을 때 그 경로와 정확한 SHA-256을 `approval_audit`에 함께 묶는다. 승인 audit에 기록된 sidecar는 파일이 사라져도 선택 사항으로 되돌아가지 않는다. 승인된 spec에 Gate A snapshot이 있으면 Gate B usage sidecar가 필수다. Validator는 capture된 bundle·entry·모든 reference 바이트를 다시 해시하고 bundle metadata와 snapshot을 대조한 뒤 snapshot/usage hash 연결을 검사한다. 각 inspected `REF-n`은 정확히 하나의 대응 `LOCAL-n` evidence와 연결되어야 하며, 반대로 capture된 선언 reference를 가리키는 모든 `LOCAL-n`도 usage에 정확히 한 번 기록돼야 한다. `supported_decision`은 설명 문자열이 아니라 현재 spec에 실제로 존재하는 `spec.product.*`, `spec.implementation.*`, `spec.visual_experience.*`, `spec.reference_reconnaissance.*` 필드 경로여야 한다. `reference-sources/`, 그 아래 `files/`, 개별 source는 symbolic-link 해석 뒤에도 Gate A snapshot 디렉터리 안의 실제 디렉터리·파일이어야 한다. 원장이 존재하는 artifact root와 handoff source는 Gate A/B의 마지막 활성 결정이 현재 artifact 경로와 정확한 파일 SHA-256에 결합되어 있는지도 검사하므로, 승인 audit에서 provenance 줄만 제거해 과거 결정 이력을 우회할 수 없다. Gate B는 원본 작업 파일이 아니라 승인된 capture 경로를 읽고 evidence로 기록한다. iteration 전환과 handoff도 source capture, 두 sidecar, 승인 binding을 함께 보존하므로 승인 후 어느 하나를 제자리에서 수정하거나 삭제할 수 없고, 변경하려면 해당 Gate를 다시 열어야 한다.
+
 ## 3. 발견과 우선순위
 
 진입 문서 선택과 기존 기획 상태 재개는 서로 다른 우선순위 층을 사용한다.
@@ -132,7 +175,7 @@ artifact root에 `decisions.jsonl`이 있으면 `p2a next`는 Gate ①·② 승�
 3. 안전하게 추론할 수 없고 범위를 실질적으로 바꾸는 내용만 묻는다. 이 경로에는 고정 질문 수나 라운드 제한이 없으며, 확인 가능한 즉시 질문을 멈춘다.
 4. 수정된 범위를 다시 제시하고 사용자의 명시적 확인을 요청한다. 침묵, 원문 존재, “개발해” 같은 포괄 지시는 승인이 아니다.
 5. Radar 추천은 승격된 각 후보를 `selected`, `rejected`, `deferred` 중 하나로 처분하고 이유를 기록한다.
-6. 확인 후에만 `p2a decide --quote "<사용자 발화>" --artifacts <artifact-root>`를 실행한다. 이 명령이 같은 `p2a.intake.v1` canonical intake를 `ready_for_spec`으로 바꾸고 Gate A 결정을 `decisions.jsonl`에 append하며 `approval_audit` 호환 사본도 함께 기록한다. 신규 프로젝트는 Gate ②를 승인하거나 기존 승인을 재사용한 뒤 Gate B 흐름을 계속한다.
+6. 확인 후에만 `p2a decide --quote "<사용자 발화>" --entry <원본-entry> --artifacts <artifact-root>`를 실행한다. 이 명령은 원본 entry를 다시 검증하고 sibling reference bundle이 있으면 일치하는 snapshot을 요구한 뒤, 같은 `p2a.intake.v1` canonical intake를 `ready_for_spec`으로 바꾸고 Gate A 결정을 `decisions.jsonl`에 append하며 `approval_audit` 호환 사본도 함께 기록한다. 신규 프로젝트는 Gate ②를 승인하거나 기존 승인을 재사용한 뒤 Gate B 흐름을 계속한다.
 
 새 하네스는 `--entry`가 가리키는 문서에서 시작한다. 문서가 없으면 먼저 Markdown 또는 text entry를 작성해야 하며, 채팅 입력만으로 별도 기획 상태를 시작하지 않는다. Gate A 확인 전 Gate B를 만들 수 없고, Gate B 승인과 open decision 해소 전 Gate C로 진행할 수 없다.
 
@@ -145,7 +188,7 @@ artifact root에 `decisions.jsonl`이 있으면 `p2a next`는 Gate ①·② 승�
 - Feature Radar의 evidence 모델과 원본 copy/변환 규칙
 - approved spec이 없을 때 downstream task 생성을 막는 규칙
 - Gate A/B 승인 및 Gate C validation 계약
-- 기존 `p2a validate`, `p2a info`, `p2a doctor` 호출의 의미와 정상 동작. 단, 승인 constitution이 있으면 validator enforcement 금지 규칙이 spec/task graph에 추가 적용된다.
+- 기존 `p2a validate`, `p2a info`, `p2a doctor` 호출의 의미와 정상 동작. 신규 문서 기반 Gate A 승인에는 provenance 검증용 `p2a decide --entry`가 필요하지만, `baseline_context` 기반 반복 intake와 이미 승인 사본이 있는 legacy 재바인딩은 entry 없는 호환 경로를 유지한다. 단, 승인 constitution이 있으면 validator enforcement 금지 규칙이 spec/task graph에 추가 적용된다.
 
 따라서 새 entry 프로젝트는 명시적 확인과 승인을 거쳐 Gate B 이후로 진행할 수 있고, 기존 프로젝트는 진입 문서가 추가되어도 현재 canonical 상태에서 결정론적으로 재개한다.
 
@@ -157,7 +200,7 @@ artifact root에 `decisions.jsonl`이 있으면 `p2a next`는 Gate ①·② 승�
 p2a init --target . --tools all
 p2a validate --entry docs/idea.md
 p2a next --entry docs/idea.md
-p2a decide --quote "이 범위로 진행해" --artifacts .plan2agent/artifacts/<project_id>
+p2a decide --quote "이 범위로 진행해" --entry docs/idea.md --artifacts .plan2agent/artifacts/<project_id>
 p2a validate --decisions --artifacts .plan2agent/artifacts/<project_id>
 ```
 

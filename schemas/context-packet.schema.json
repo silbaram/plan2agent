@@ -1,0 +1,160 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://plan2agent.local/schemas/context-packet.schema.json",
+  "title": "Plan2Agent Context Packet",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "provider",
+    "skill",
+    "phase",
+    "activation",
+    "mode",
+    "continuation",
+    "binding",
+    "sources",
+    "totalBytes",
+    "generatedAt"
+  ],
+  "oneOf": [
+    {
+      "properties": {
+        "activation": { "const": "immediate" },
+        "phase": { "const": "prepare" },
+        "continuation": {
+          "type": "object",
+          "properties": { "id": { "const": "execution.prepare" } }
+        },
+        "binding": {
+          "type": "object",
+          "properties": { "kind": { "const": "action" } }
+        }
+      }
+    },
+    {
+      "properties": {
+        "activation": { "const": "after_command_success" },
+        "phase": { "const": "owner-start" },
+        "continuation": {
+          "type": "object",
+          "properties": { "id": { "const": "execution.owner-start" } }
+        },
+        "binding": {
+          "type": "object",
+          "properties": { "kind": { "const": "run" } }
+        }
+      }
+    },
+    {
+      "properties": {
+        "activation": { "const": "after_command_success" },
+        "phase": { "const": "visual-review" },
+        "continuation": {
+          "type": "object",
+          "properties": { "id": { "const": "execution.visual-review" } }
+        },
+        "binding": {
+          "type": "object",
+          "properties": { "kind": { "const": "run" } }
+        }
+      }
+    },
+    {
+      "properties": {
+        "activation": { "const": "after_command_success" },
+        "phase": { "const": "acceptance-review" },
+        "continuation": {
+          "type": "object",
+          "properties": { "id": { "const": "execution.acceptance-review" } }
+        },
+        "binding": {
+          "type": "object",
+          "properties": { "kind": { "const": "run" } }
+        }
+      }
+    },
+    {
+      "properties": {
+        "activation": { "const": "run_declared" },
+        "phase": {
+          "enum": ["retry", "verify-closeout", "visual-review", "acceptance-review", "monitor"]
+        },
+        "continuation": { "type": "null" },
+        "binding": {
+          "type": "object",
+          "properties": { "kind": { "const": "run" } }
+        }
+      }
+    }
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "const": "p2a.context_packet.v1" },
+    "provider": { "enum": ["codex", "claude", "gemini"] },
+    "skill": { "const": "p2a-dev-execution" },
+    "phase": {
+      "enum": ["prepare", "owner-start", "retry", "verify-closeout", "visual-review", "acceptance-review", "monitor"]
+    },
+    "activation": { "enum": ["immediate", "after_command_success", "run_declared"] },
+    "mode": { "type": ["string", "null"], "enum": ["direct", "planned", null] },
+    "continuation": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "required": ["id", "sourceState"],
+          "additionalProperties": false,
+          "properties": {
+            "id": { "pattern": "^execution\\.[a-z0-9-]+$" },
+            "sourceState": { "type": "string", "minLength": 1 }
+          }
+        }
+      ]
+    },
+    "binding": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["kind", "sourceState", "artifactContractSha256"],
+          "additionalProperties": false,
+          "properties": {
+            "kind": { "const": "action" },
+            "sourceState": { "type": "string", "minLength": 1 },
+            "artifactContractSha256": { "pattern": "^[a-f0-9]{64}$" }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["kind", "runId", "taskId", "taskContractSha256"],
+          "additionalProperties": false,
+          "properties": {
+            "kind": { "const": "run" },
+            "runId": { "pattern": "^run-[A-Za-z0-9._-]+$" },
+            "taskId": { "type": "string", "minLength": 1 },
+            "taskContractSha256": { "pattern": "^[a-f0-9]{64}$" }
+          }
+        }
+      ]
+    },
+    "sources": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["routeId", "path", "sha256", "bytes"],
+        "additionalProperties": false,
+        "properties": {
+          "routeId": { "pattern": "^[a-z0-9][a-z0-9.-]+$" },
+          "path": { "type": "string", "minLength": 1, "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$)).+$" },
+          "sha256": { "pattern": "^[a-f0-9]{64}$" },
+          "bytes": { "type": "integer", "minimum": 0 }
+        }
+      }
+    },
+    "totalBytes": { "type": "integer", "minimum": 0 },
+    "generatedAt": {
+      "type": "string",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+    }
+  }
+}

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /** Supervise one Plan2Agent task lifecycle with the existing task/run CLIs. */
 
-import { existsSync, lstatSync, realpathSync } from 'node:fs';
+import { existsSync, lstatSync, readFileSync, realpathSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import process from 'node:process';
@@ -16,6 +16,7 @@ import {
   validateRunData,
   validateRunIndexData,
   validateRunTaskContract,
+  validateSchema,
   validateSpec,
   validateTaskGraphData,
   ValidationError,
@@ -77,6 +78,10 @@ const USAGE_SOURCES = new Set(['provider', 'manual']);
 const IMPLEMENTER_AGENT_TOOLS = new Set(['codex', 'claude', 'manual']);
 const REVIEWER_AGENT_TOOLS = new Set(['codex', 'claude', 'gemini', 'manual']);
 const DEFAULT_PROJECT_CONFIG = path.join('.plan2agent', 'project.config.json');
+const EXECUTION_RESULT_SCHEMA = JSON.parse(readFileSync(
+  new URL('../schemas/execution-result.schema.json', import.meta.url),
+  'utf8',
+));
 const RUN_INDEX_EVIDENCE_FIELDS = [
   'runId',
   'taskId',
@@ -166,6 +171,7 @@ function usage() {
     '  --guard <text>          Required with reproduction and localization when finishing failed/blocked. Repeatable.',
     '  --guard-note <text>     Append guard context. Repeatable.',
     '  --no-task-transition    Finish the run without marking the task done/blocked.',
+    '  --json                  start/resume/review/accept: emit one machine-readable result document.',
     '',
     '  --help, -h          Show this help.',
   ].join('\n');
@@ -226,6 +232,7 @@ function parseArgs(argv) {
     mode: null,
     selectionRationale: null,
     milestones: [],
+    json: false,
     help: false,
   };
 
@@ -233,6 +240,7 @@ function parseArgs(argv) {
     const arg = argv[index];
     if (arg.startsWith('--') && arg !== '--help') providedOptions.add(arg);
     if (arg === '--help' || arg === '-h') args.help = true;
+    else if (arg === '--json') args.json = true;
     else if (arg === '--artifacts') args.artifacts = requiredValue(argv, ++index, '--artifacts');
     else if (arg === '--graph') args.graph = requiredValue(argv, ++index, '--graph');
     else if (arg === '--spec') args.spec = requiredValue(argv, ++index, '--spec');
@@ -307,6 +315,9 @@ function parseArgs(argv) {
   }
 
   if (args.help) return args;
+  if (args.json && !['start', 'resume', 'review', 'accept'].includes(args.command)) {
+    throw new Error('--json is only supported with start, resume, review, or accept');
+  }
   const sourceCount = [args.artifacts, args.graph].filter(Boolean).length;
   if (sourceCount > 1) throw new Error('--artifacts and --graph cannot be used together');
   if (sourceCount === 0) {
@@ -768,9 +779,22 @@ function runScript(scriptName, scriptArgs, options = {}) {
   });
 }
 
-function printChildResult(result) {
-  if (result.stdout) process.stdout.write(result.stdout);
+function printChildResult(result, options = {}) {
+  if (result.stdout && !options.suppressStdout) process.stdout.write(result.stdout);
   if (result.stderr) process.stderr.write(result.stderr);
+}
+
+function recordExecutionResult(args, command, run) {
+  args.executionResult = {
+    schema_version: 'p2a.execution_result.v1',
+    command,
+    outcome: 'succeeded',
+    taskId: run.taskId,
+    runId: run.runId,
+    runStatus: run.status,
+    mode: run.mode ?? 'orchestrated',
+    runKind: run.runKind ?? null,
+  };
 }
 
 function commandLine(scriptName, args) {
@@ -1080,7 +1104,7 @@ function printExecutionPlan(args, source, task, runId = null, defaults = null, a
   }
 }
 
-function printLauncherPrompt(source, task, runId, approvalLink = null) {
+function printLauncherPrompt(source, task, runId, approvalLink = null, options = {}) {
   console.log('');
   console.log('Manual launcher prompt');
   console.log('---');
@@ -1097,7 +1121,7 @@ function printLauncherPrompt(source, task, runId, approvalLink = null) {
   console.log('- Report changed files, verification commands, results, and blockers.');
   console.log('');
   const promptResult = runScript('p2a_tasks.mjs', promptArgs(source, task.id));
-  printChildResult(promptResult);
+  printChildResult(promptResult, { suppressStdout: options.suppressPrompt === true });
   console.log('---');
 }
 
@@ -1404,7 +1428,7 @@ function runStart(args) {
     console.log('');
     console.log('Task marked in_progress. Starting run...');
     const runResult = runScript('p2a_runs.mjs', startRunArgs(args, task, runId, defaults, approvalLink.approval));
-    printChildResult(runResult);
+    printChildResult(runResult, { suppressStdout: args.json });
     if (runResult.status !== 0) {
       if (rollbackTaskRunStartClaim(source, task.id)) {
         console.error(`Task transition rolled back: ${task.id} returned to todo because run ${runId} did not start.`);
@@ -1419,13 +1443,15 @@ function runStart(args) {
       console.log(`Attached monitor gate sidecar: ${displayPath(monitorGateSidecarPath(source.runsDir, runId))}`);
     }
 
-    assertRunExecutionContractCurrent(readRun(source.runsDir, runId), source, 'launcher prompt');
-    printLauncherPrompt(source, task, runId, approvalLink);
+    const startedRun = readRun(source.runsDir, runId);
+    assertRunExecutionContractCurrent(startedRun, source, 'launcher prompt');
+    printLauncherPrompt(source, task, runId, approvalLink, { suppressPrompt: args.json });
     printRunCommandFooter(P2A_PATHS, {
       sourceArgs: source.sourceArgs,
       runId,
       heading: 'Run commands:',
     });
+    recordExecutionResult(args, 'start', startedRun);
     return 0;
   });
 }
@@ -1463,7 +1489,7 @@ function runReview(args) {
       'p2a_runs.mjs',
       startRunArgs(args, task, runId, defaults),
     );
-    printChildResult(runResult);
+    printChildResult(runResult, { suppressStdout: args.json });
     if (runResult.status !== 0) {
       console.error('Final visual review run did not start. Correct the cause, then retry with the same reserved run id:');
       console.error(commandLine('p2a_execute.mjs', [
@@ -1476,13 +1502,15 @@ function runReview(args) {
       ]));
       return runResult.status ?? 1;
     }
-    assertRunExecutionContractCurrent(readRun(source.runsDir, runId), source, 'final visual review');
+    const startedRun = readRun(source.runsDir, runId);
+    assertRunExecutionContractCurrent(startedRun, source, 'final visual review');
     printFinalVisualReviewInstructions(args, source, task, runId, workspacePath);
     printRunCommandFooter(P2A_PATHS, {
       sourceArgs: source.sourceArgs,
       runId,
       heading: 'Run commands:',
     });
+    recordExecutionResult(args, 'review', startedRun);
     return 0;
   });
 }
@@ -1520,7 +1548,7 @@ function runAccept(args) {
       'p2a_runs.mjs',
       startRunArgs(args, task, runId, defaults),
     );
-    printChildResult(runResult);
+    printChildResult(runResult, { suppressStdout: args.json });
     if (runResult.status !== 0) {
       console.error('Final acceptance review run did not start. Correct the cause, then retry with the same reserved run id:');
       console.error(commandLine('p2a_execute.mjs', [
@@ -1533,13 +1561,15 @@ function runAccept(args) {
       ]));
       return runResult.status ?? 1;
     }
-    assertRunExecutionContractCurrent(readRun(source.runsDir, runId), source, 'final acceptance review');
+    const startedRun = readRun(source.runsDir, runId);
+    assertRunExecutionContractCurrent(startedRun, source, 'final acceptance review');
     printFinalAcceptanceReviewInstructions(source, task, runId, workspacePath);
     printRunCommandFooter(P2A_PATHS, {
       sourceArgs: source.sourceArgs,
       runId,
       heading: 'Run commands:',
     });
+    recordExecutionResult(args, 'accept', startedRun);
     return 0;
   });
 }
@@ -1587,7 +1617,7 @@ function runResume(args) {
     } else if (run.runKind === 'final_acceptance_review') {
       printFinalAcceptanceReviewInstructions(source, task, run.runId, run.workspacePath);
     } else {
-      printLauncherPrompt(source, task, run.runId, approvalLink);
+      printLauncherPrompt(source, task, run.runId, approvalLink, { suppressPrompt: args.json });
     }
   }
   printRunCommandFooter(P2A_PATHS, {
@@ -1597,6 +1627,7 @@ function runResume(args) {
     includeFinish: run.status === 'started',
     heading: 'Run commands:',
   });
+  recordExecutionResult(args, 'resume', run);
   return 0;
 }
 
@@ -1730,22 +1761,40 @@ function runFinish(args) {
 }
 
 export function main(argv = process.argv.slice(2)) {
+  let restoreConsoleLog = null;
   try {
     const args = parseArgs(argv);
     if (args.help) {
       console.log(usage());
       return 0;
     }
-    if (args.command === 'prepare') return runPrepare(args);
-    if (args.command === 'plan') return runPlan(args);
-    if (args.command === 'start') return runStart(args);
-    if (args.command === 'review') return runReview(args);
-    if (args.command === 'accept') return runAccept(args);
-    if (args.command === 'resume') return runResume(args);
-    if (args.command === 'status') return runStatus(args);
-    if (args.command === 'finish') return runFinish(args);
-    throw new Error(`unknown command: ${args.command}`);
+    if (args.json) {
+      const original = console.log;
+      console.log = () => {};
+      restoreConsoleLog = () => {
+        console.log = original;
+        restoreConsoleLog = null;
+      };
+    }
+    let status;
+    if (args.command === 'prepare') status = runPrepare(args);
+    else if (args.command === 'plan') status = runPlan(args);
+    else if (args.command === 'start') status = runStart(args);
+    else if (args.command === 'review') status = runReview(args);
+    else if (args.command === 'accept') status = runAccept(args);
+    else if (args.command === 'resume') status = runResume(args);
+    else if (args.command === 'status') status = runStatus(args);
+    else if (args.command === 'finish') status = runFinish(args);
+    else throw new Error(`unknown command: ${args.command}`);
+    restoreConsoleLog?.();
+    if (args.json && status === 0) {
+      if (!args.executionResult) throw new Error(`${args.command} did not produce a machine-readable execution result`);
+      validateSchema(args.executionResult, EXECUTION_RESULT_SCHEMA);
+      console.log(JSON.stringify(args.executionResult, null, 2));
+    }
+    return status;
   } catch (error) {
+    restoreConsoleLog?.();
     const prefix = error instanceof ValidationError ? 'p2a execute validation failed' : 'p2a execute command failed';
     console.error(`${prefix}: ${error.message}`);
     return 1;

@@ -58,6 +58,14 @@ Plan2Agent는 CLI별 구현 차이를 감추기 위해 공통 역할 이름과 C
 
 MVP에서는 `p2a-harness`가 상위 skill이고, 나머지 skill은 단계별 재사용 단위다. subagent는 독립 검토와 전문 역할 분리를 위해 사용한다.
 
+### Context routing과 메모리 책임
+
+`.agents/context-routes.json`이 skill, 단계, 조건별 reference 경로의 정본이다. 상위 `SKILL.md`는 목적, 입력·출력, 판단 기준, 권한 경계와 reference 선택 조건만 유지하고, 세부 절차는 조건이 맞을 때만 연다. Claude/Codex/Gemini 자산은 이 정본에서 생성하거나 parity 검사를 거치며, `p2a doctor --context`가 provider별 source, 크기, 해시와 drift를 진단한다.
+
+공급자 자동 메모리는 세션 연속성을 위한 비공식 힌트다. 승인된 Gate artifact, 검사한 repository evidence 또는 이식 가능한 P2A Memory를 대체하지 않는다. 서로 충돌하면 canonical artifact와 repository evidence가 우선하며, P2A Memory의 외부 push는 계속 명시적 권한을 요구한다.
+
+진입 문서에 선택적 `p2a-reference-bundle.json`이 있으면 먼저 경로, kind, hash, 설명, `load_when`만 검증한다. 현재 Gate 판단에 필요한 참조만 열고 실제로 검사한 파일만 `LOCAL-n` evidence로 승격한다. Gate A는 `p2a reference snapshot`으로 entry·bundle·모든 선언 reference 바이트를 `gate-a-intake/reference-sources/`에 capture하고 여기서 파생한 `reference-bundle-snapshot.json`을 보존한다. Gate B는 원본 작업 파일이 아니라 승인된 capture를 사용하고 실제 사용 내역을 `gate-b-spec/reference-bundle-usage.json`에 기록한다. 두 sidecar는 기존 intake/spec v1 본문을 확장하지 않으며 `p2a decide`, validator, iteration init, handoff가 capture 바이트, 승인 경로와 SHA-256 연결을 유지한다.
+
 ### Codex GPT-5.6 품질 프로필
 
 Codex에서는 메인 오케스트레이터를 사용자 또는 세션 설정의 `gpt-5.6-sol` + `ultra`로 실행하고, 생성된 역할별 leaf agent는 자동 재위임이 중첩되지 않도록 `ultra`를 사용하지 않는다. CLI-neutral `tier`는 Codex mirror에서 다음과 같이 변환한다.
@@ -86,7 +94,7 @@ If a CLI cannot spawn subagents automatically, the active model executes the sam
 
 Gate A/②/B/C의 상세 통과·차단 규칙은 `p2a-harness` skill이 유일한 정본이다. 정본: [`.agents/skills/p2a-harness/SKILL.md`](../.agents/skills/p2a-harness/SKILL.md#approval-gates).
 
-- **Gate A:** entry document에서 범위, 사용자, 결과, 제약, 제외 항목을 정리해 compact 이해 요약을 제시한다. 사용자의 실제 발화를 받은 `p2a decide --quote ...`가 Gate ① 결정을 원장에 append하고 `intake.approval_audit` 사본을 기록하기 전에는 Gate B로 넘어가지 않는다.
+- **Gate A:** entry document에서 범위, 사용자, 결과, 제약, 제외 항목을 정리해 compact 이해 요약을 제시한다. 신규 문서 기반 intake는 사용자의 실제 발화와 원본 `--entry`를 받은 `p2a decide --quote ... --entry ...`가 entry·reference snapshot을 검증하고 Gate ① 결정을 원장에 append하며 `intake.approval_audit` 사본을 기록하기 전에는 Gate B로 넘어가지 않는다.
 - **Gate ②:** 신규 project constitution은 `p2a shape approve --quote ...`로 승인한다. 승인·철회와 내용 변경 재승인은 같은 결정 원장에 append하며 정상 feature/maintenance 반복에서는 기존 승인을 재사용한다.
 - **Gate B:** 모든 open decision 해소, `CQ-n` disposition, 필요한 기술 조사 근거를 갖춘 spec을 사용자에게 검토받고 `p2a decide --quote ...`로 승인해야 실행 준비로 넘어간다. `full + current_iteration`이면 사용자가 선택·승인한 hash-bound offline HTML prototype과 experience contract도 필요하다. 이후 mode 선택과 synthetic compatibility work item에는 별도 사용자 승인을 요구하지 않는다.
 - **Gate C:** 공통 Gate·hash·acceptance·verification·visual readiness와 mode metadata를 검증한다. Planned는 2~5개 ordered milestone을, Orchestrated는 task dependency, cycle, ownership과 source spec reference를 추가 검사한다. Direct/Planned compatibility record 준비와 validator-clean Orchestrated draft 승격에는 별도 사람 승인 audit이 없다.
@@ -98,7 +106,7 @@ Gate A/②/B/C의 상세 통과·차단 규칙은 `p2a-harness` skill이 유일�
 ## 5. Resume Contract
 
 - Resume from canonical JSON and continue at the earliest incomplete or invalid stage.
-- Keep `status: blocked_on_user` while a material `CQ-n` or `ND-n` remains unresolved or scope approval is absent. After explicit approval, use `p2a decide --quote ...` to append the decision, record the `approval_audit` copy, and set `status: ready_for_spec`.
+- Keep `status: blocked_on_user` while a material `CQ-n` or `ND-n` remains unresolved or scope approval is absent. After explicit approval, a new document-backed Gate A uses `p2a decide --quote ... --entry ...`; baseline-backed iteration and legacy rebinding keep their entry-less compatibility path. The command appends the decision, records the `approval_audit` copy, and sets `status: ready_for_spec`.
 - If `decisions.jsonl` exists but fails schema, sequence, hash-chain, or `prev_seq` validation, stop before using audit copies and recover with `p2a validate --decisions --artifacts <root>`.
 - Treat questions and decisions as ledger entries rather than conversational workflow states. Preserve any legacy `interview` object as opaque compatibility data without interpreting or generating it.
 - Do not generate `gate-a-intake/intake.md` during normal resume. Create it only for an explicit Markdown export request, prefix it with `<!-- plan2agent:intake-md-export=explicit -->`, and regenerate a marked export from canonical JSON.
@@ -119,7 +127,7 @@ The harness passes intermediate artifacts with these exact names:
 | `task_graph_json` | `p2a` package schema `task-graph.schema.json` | dependency ids valid and DAG acyclic |
 | Optional Markdown views | Generated from JSON | human review/export only; `intake.md` requires an explicit export request and marker; not gate decision sources |
 
-Schema validation is intentionally complemented by `scripts/validate_artifacts.mjs` and scaffold-installed `p2a validate`, which perform gate checks that are easier to express procedurally: decision sequence/hash-chain/lineage validation, Gate A approval audit enforcement, open/deferred decision blocking, `CQ-n` disposition coverage, spec/intake `open_decisions` traceability including promoted clarifying-question decisions, approved-spec requirement, missing dependency ids, duplicate task ids, and cycle detection.
+Schema validation is intentionally complemented by `scripts/validate_artifacts.mjs` and scaffold-installed `p2a validate`, which perform gate checks that are easier to express procedurally: decision sequence/hash-chain/lineage validation, active Gate A/B decision binding to the current artifact path and exact bytes when a ledger exists, Gate A approval audit enforcement, reference-capture real-path confinement, open/deferred decision blocking, `CQ-n` disposition coverage, spec/intake `open_decisions` traceability including promoted clarifying-question decisions, approved-spec requirement, missing dependency ids, duplicate task ids, and cycle detection.
 
 The harness orchestrator persists canonical JSON artifacts under `.plan2agent/artifacts/<project_id>/` using gate-specific folders (`gate-a-intake/intake.json`, `gate-b-spec/spec.json`, `gate-c-task-graph/task-graph.json`) and keeps the append-only approval history in sibling `decisions.jsonl`. Markdown files such as `status.md`, `product-spec.md`, and `implementation-plan.md` are optional generated views for human review/export, not sources of truth. `intake.md` is stricter: the orchestrator creates it only after an explicit Markdown export request and marks its first line so legacy automatic views can be discarded. Optional Feature Radar exports live under `preflight-research/`; they are read-only input evidence, not gate state. In a project initialized by `p2a init`, Gate A-C validation is followed by `p2a iteration init`, which moves root `gate-*` folders into `iterations/<iter-id>/gate-*` before task execution starts and atomically appends approval bindings for the relocated Gate artifacts. If that append fails, the artifact move, generated current state, and ledger bytes are rolled back together. Subagents remain read-only; only the orchestrator writes planning files, and neither the harness nor subagents perform git operations. `.plan2agent/` is local harness state in application projects; runtime commands and schemas are supplied by the installed package, while planning history, run logs, and proposal artifacts are expected to be persisted through Plan2Agent Memory or explicit export rather than application source git.
 

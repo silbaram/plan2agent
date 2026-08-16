@@ -3,7 +3,9 @@ import {
   lstatSync,
   readFileSync,
   readdirSync,
+  realpathSync,
 } from 'node:fs';
+import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { normalizePath } from './p2a_paths.mjs';
 
@@ -28,6 +30,19 @@ const RECOMMENDATION_FILES = new Set([
   'next-iteration-recommendations.md',
   'collection-report.md',
   'p2a-context.json',
+]);
+const REFERENCE_BUNDLE_FILENAME = 'p2a-reference-bundle.json';
+const REFERENCE_BUNDLE_KINDS = new Set([
+  'html',
+  'test',
+  'code',
+  'schema',
+  'data',
+  'image',
+  'design',
+  'rubric',
+  'document',
+  'other',
 ]);
 
 const LOCAL_USED_FOR = {
@@ -192,6 +207,167 @@ function readJson(filePath) {
   } catch {
     return null;
   }
+}
+
+function fileSha256(filePath) {
+  return createHash('sha256').update(readFileSync(filePath)).digest('hex');
+}
+
+function isWithin(rootPath, candidatePath) {
+  const relative = path.relative(path.resolve(rootPath), path.resolve(candidatePath));
+  return relative !== '' && !relative.startsWith('..') && !path.isAbsolute(relative);
+}
+
+function inspectReferenceBundle(entryPath, options = {}) {
+  const bundlePath = options.referenceBundlePath
+    ? path.resolve(options.baseDir ?? process.cwd(), options.referenceBundlePath)
+    : path.join(path.dirname(entryPath), REFERENCE_BUNDLE_FILENAME);
+  let bundleStat;
+  try {
+    bundleStat = lstatSync(bundlePath);
+  } catch (error) {
+    if (error?.code === 'ENOENT') return null;
+    return {
+      path: bundlePath,
+      sha256: null,
+      valid: false,
+      errors: [`reference bundle metadata is unreadable: ${bundlePath}`],
+      references: [],
+    };
+  }
+  if (!bundleStat.isFile()) {
+    return {
+      path: bundlePath,
+      sha256: null,
+      valid: false,
+      errors: [`reference bundle must be a regular file and must not be a symbolic link: ${bundlePath}`],
+      references: [],
+    };
+  }
+
+  const errors = [];
+  const data = readJson(bundlePath);
+  if (!data || typeof data !== 'object' || Array.isArray(data)) {
+    return {
+      path: bundlePath,
+      sha256: fileSha256(bundlePath),
+      valid: false,
+      errors: [`reference bundle is not readable JSON: ${bundlePath}`],
+      references: [],
+    };
+  }
+  if (data.schema_version !== 'p2a.reference_bundle.v1') {
+    errors.push('reference bundle must use schema_version p2a.reference_bundle.v1');
+  }
+  const unknownBundleKeys = Object.keys(data).filter((key) => !['schema_version', 'entry', 'references'].includes(key));
+  if (unknownBundleKeys.length) errors.push(`reference bundle has unknown field(s): ${unknownBundleKeys.join(', ')}`);
+  if (typeof data.entry !== 'string' || !data.entry.trim()) {
+    errors.push('reference bundle entry must be a non-empty relative path');
+  } else if (path.isAbsolute(data.entry)) {
+    errors.push('reference bundle entry must be relative to the bundle');
+  } else {
+    const declaredEntry = path.resolve(path.dirname(bundlePath), data.entry);
+    if (declaredEntry !== path.resolve(entryPath)) {
+      errors.push(`reference bundle entry must resolve to ${path.basename(entryPath)}`);
+    }
+  }
+
+  const rawReferences = Array.isArray(data.references) ? data.references : [];
+  if (!rawReferences.length || rawReferences.length > 64) {
+    errors.push('reference bundle references must contain between 1 and 64 items');
+  }
+  const defaultReferenceRoot = isWithin(process.cwd(), entryPath)
+    ? process.cwd()
+    : path.dirname(entryPath);
+  const referenceRoot = path.resolve(options.referenceRoot ?? options.baseDir ?? defaultReferenceRoot);
+  let canonicalReferenceRoot = null;
+  try {
+    canonicalReferenceRoot = realpathSync(referenceRoot);
+  } catch {
+    errors.push(`project reference root is missing or unreadable: ${referenceRoot}`);
+  }
+  const seenIds = new Set();
+  const seenPaths = new Set();
+  const references = [];
+  for (const item of rawReferences) {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) {
+      errors.push('reference bundle items must be objects');
+      continue;
+    }
+    const id = typeof item.id === 'string' ? item.id : '';
+    const referencePath = typeof item.path === 'string' ? item.path : '';
+    const kind = typeof item.kind === 'string' ? item.kind : '';
+    const sha256 = typeof item.sha256 === 'string' ? item.sha256 : '';
+    const loadWhen = typeof item.load_when === 'string' ? item.load_when.trim() : '';
+    const description = typeof item.description === 'string' ? item.description.trim() : '';
+    const unknownItemKeys = Object.keys(item).filter((key) => ![
+      'id',
+      'path',
+      'kind',
+      'sha256',
+      'load_when',
+      'description',
+    ].includes(key));
+    if (unknownItemKeys.length) errors.push(`reference ${id || '<missing>'} has unknown field(s): ${unknownItemKeys.join(', ')}`);
+    if (!/^REF-[1-9][0-9]*$/.test(id) || seenIds.has(id)) {
+      errors.push(`reference id must be a unique REF-n value: ${id || '<missing>'}`);
+      continue;
+    }
+    seenIds.add(id);
+    if (!referencePath || path.isAbsolute(referencePath)) {
+      errors.push(`reference ${id} path must be relative to the bundle`);
+      continue;
+    }
+    const resolvedPath = path.resolve(path.dirname(bundlePath), referencePath);
+    if (!isWithin(referenceRoot, resolvedPath)) {
+      errors.push(`reference ${id} escapes the project reference root: ${referencePath}`);
+      continue;
+    }
+    const normalizedPath = normalizePath(path.relative(referenceRoot, resolvedPath));
+    if (seenPaths.has(normalizedPath)) {
+      errors.push(`reference path is declared more than once: ${referencePath}`);
+      continue;
+    }
+    seenPaths.add(normalizedPath);
+    if (!REFERENCE_BUNDLE_KINDS.has(kind)) errors.push(`reference ${id} has unsupported kind: ${kind}`);
+    if (!/^[a-f0-9]{64}$/.test(sha256)) errors.push(`reference ${id} sha256 must be lowercase hexadecimal`);
+    if (!loadWhen) errors.push(`reference ${id} load_when must be non-empty`);
+    if (!description) errors.push(`reference ${id} description must be non-empty`);
+    if (!isFile(resolvedPath)) {
+      errors.push(`reference ${id} is missing or not a regular file: ${referencePath}`);
+      continue;
+    }
+    if (!canonicalReferenceRoot) continue;
+    let canonicalResolvedPath;
+    try {
+      canonicalResolvedPath = realpathSync(resolvedPath);
+    } catch {
+      errors.push(`reference ${id} is missing or unreadable: ${referencePath}`);
+      continue;
+    }
+    if (!isWithin(canonicalReferenceRoot, canonicalResolvedPath)) {
+      errors.push(`reference ${id} escapes the project reference root through a symbolic link: ${referencePath}`);
+      continue;
+    }
+    const actualSha256 = fileSha256(resolvedPath);
+    if (actualSha256 !== sha256) errors.push(`reference ${id} sha256 does not match ${referencePath}`);
+    references.push({
+      id,
+      path: normalizedPath,
+      kind,
+      sha256,
+      loadWhen,
+      description,
+      bytes: lstatSync(resolvedPath).size,
+    });
+  }
+  return {
+    path: bundlePath,
+    sha256: fileSha256(bundlePath),
+    valid: errors.length === 0,
+    errors,
+    references,
+  };
 }
 
 function extractUrls(text) {
@@ -437,6 +613,8 @@ export function inspectEntryDocument(entryPath, options = {}) {
   }
   const provenanceIssues = radarProvenanceWarnings(resolvedPath, radar);
   warnings.push(...provenanceIssues);
+  const referenceBundle = inspectReferenceBundle(resolvedPath, options);
+  if (referenceBundle && !referenceBundle.valid) errors.push(...referenceBundle.errors);
 
   const webSourceCount = uniqueUrls(text).length;
   const recommendationCount = extractMarkdownRecommendations(text, resolvedPath)
@@ -477,9 +655,17 @@ export function inspectEntryDocument(entryPath, options = {}) {
       scopeWhat: whatDescribed,
       limits: true,
       provenance: provenanceIssues.length === 0,
+      references: referenceBundle ? referenceBundle.valid : true,
     },
     webSourceCount,
     recommendationCount,
+    referenceBundle: referenceBundle ? {
+      path: referenceBundle.path,
+      sha256: referenceBundle.sha256,
+      valid: referenceBundle.valid,
+      referenceCount: referenceBundle.references.length,
+      references: referenceBundle.references,
+    } : null,
   };
 }
 
@@ -506,7 +692,11 @@ export function discoverEntryDocument(artifactRoot, options = {}) {
   if (!latest) return null;
   const collection = latest.files.find((file) => file.name === 'collection-report.md');
   if (collection) {
-    return inspectEntryDocument(collection.path, { selection: 'auto' });
+    return inspectEntryDocument(collection.path, {
+      baseDir: options.baseDir,
+      referenceRoot: options.referenceRoot,
+      selection: 'auto',
+    });
   }
   const recommendations = latest.files.find(
     (file) => file.name === 'next-iteration-recommendations.md',
@@ -518,7 +708,11 @@ export function discoverEntryDocument(artifactRoot, options = {}) {
       || isExistingProjectRecommendation(recommendations.path, latest)
     )
   ) {
-    return inspectEntryDocument(recommendations.path, { selection: 'auto' });
+    return inspectEntryDocument(recommendations.path, {
+      baseDir: options.baseDir,
+      referenceRoot: options.referenceRoot,
+      selection: 'auto',
+    });
   }
   return null;
 }

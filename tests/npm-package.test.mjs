@@ -11,9 +11,9 @@ const PACKAGE_JSON = JSON.parse(readFileSync(path.join(ROOT, 'package.json'), 'u
 const PACKAGE_NAME = PACKAGE_JSON.name;
 const PACKAGE_VERSION = PACKAGE_JSON.version;
 
-function spawnPortable(command, args, options) {
-  if (process.platform !== 'win32') return spawnSync(command, args, options);
-  return spawnSync(command, args, { ...options, shell: true });
+function spawnNpm(args, options) {
+  if (process.platform !== 'win32') return spawnSync('npm', args, options);
+  return spawnSync('npm', args, { ...options, shell: true });
 }
 
 function parseNpmPackResult(stdout) {
@@ -85,13 +85,20 @@ test('checkout init preserves the legacy co-located runtime', () => {
     assert.equal(realpathSync(manifest.provenance.toolkitRoot), realpathSync(ROOT));
     assert.equal('runtime' in manifest, false);
     assert.ok(manifest.scriptFiles.includes('.plan2agent/scripts/p2a.mjs'));
+    assert.ok(manifest.scriptFiles.includes('.plan2agent/scripts/p2a_next_service.mjs'));
     assert.ok(manifest.scriptFiles.includes('.plan2agent/scripts/p2a_decision_ledger.mjs'));
     assert.ok(manifest.scriptFiles.includes('.plan2agent/scripts/p2a_decisions.mjs'));
     assert.ok(manifest.scriptFiles.includes('.plan2agent/scripts/p2a_shape.mjs'));
+    assert.ok(manifest.scriptFiles.includes('.plan2agent/scripts/p2a_context.mjs'));
+    assert.ok(manifest.scriptFiles.includes('.plan2agent/scripts/p2a_context_packet.mjs'));
+    assert.ok(manifest.scriptFiles.includes('.plan2agent/scripts/p2a_continuations.mjs'));
+    assert.ok(manifest.scriptFiles.includes('.plan2agent/scripts/p2a_schema.mjs'));
     assert.ok(manifest.schemaFiles.includes('.plan2agent/schemas/next.schema.json'));
     assert.ok(manifest.schemaFiles.includes('.plan2agent/schemas/constitution.schema.json'));
     assert.ok(manifest.schemaFiles.includes('.plan2agent/schemas/decisions.schema.json'));
+    assert.ok(manifest.schemaFiles.includes('.plan2agent/schemas/context-packet.schema.json'));
     assert.equal(existsSync(path.join(targetRoot, '.plan2agent', 'scripts', 'p2a.mjs')), true);
+    assert.equal(existsSync(path.join(targetRoot, '.plan2agent', 'scripts', 'p2a_next_service.mjs')), true);
     assert.equal(existsSync(path.join(targetRoot, '.plan2agent', 'scripts', 'p2a_decision_ledger.mjs')), true);
     assert.equal(existsSync(path.join(targetRoot, '.plan2agent', 'scripts', 'p2a_decisions.mjs')), true);
     assert.equal(existsSync(path.join(targetRoot, '.plan2agent', 'scripts', 'p2a_shape.mjs')), true);
@@ -245,8 +252,8 @@ test('checkout handoff preserves the legacy co-located runtime and commands', ()
       path.join(targetRoot, '.agents', 'skills', 'p2a-dev-execution', 'SKILL.md'),
       'utf8',
     );
-    assert.match(legacySkill, /node \.plan2agent\/scripts\/p2a\.mjs execute start/);
-    assert.doesNotMatch(legacySkill, /(^|[\s`])p2a execute start/m);
+    assert.match(legacySkill, /node \.plan2agent\/scripts\/p2a\.mjs context show/);
+    assert.doesNotMatch(legacySkill, /(^|[\s`])p2a context show/m);
 
     const nestedRoot = path.join(targetRoot, 'src', 'nested');
     mkdirSync(nestedRoot, { recursive: true });
@@ -288,7 +295,7 @@ test('package CLI help keeps scaffold hidden and uses installed command names', 
 test('npm pack dry run includes the global CLI runtime', () => {
   const cacheRoot = makeTempDir('p2a-npm-cache-');
   try {
-    const packed = spawnPortable('npm', ['pack', '--dry-run', '--json'], {
+    const packed = spawnNpm(['pack', '--dry-run', '--json'], {
       cwd: ROOT,
       encoding: 'utf8',
       env: { ...process.env, npm_config_cache: cacheRoot },
@@ -303,8 +310,13 @@ test('npm pack dry run includes the global CLI runtime', () => {
       'scripts/p2a_decisions.mjs',
       'scripts/p2a_handoff.mjs',
       'scripts/p2a_upgrade.mjs',
+      'scripts/p2a_context.mjs',
+      'scripts/p2a_continuations.mjs',
+      'scripts/p2a_schema.mjs',
+      'scripts/p2a_context_routes.mjs',
       'schemas/next.schema.json',
       'schemas/decisions.schema.json',
+      'schemas/context-packet.schema.json',
       '.agents/skills/p2a-next/SKILL.md',
     ]) {
       assert.ok(files.has(requiredPath), `${requiredPath} must be present in npm pack output`);
@@ -316,7 +328,7 @@ test('npm pack dry run includes the global CLI runtime', () => {
   }
 });
 
-test('the packed p2a binary supports core commands without a local runtime copy', () => {
+test('the packed p2a runtime exposes its bin shim and supports core commands without a local runtime copy', () => {
   const tempRoot = makeTempDir('p2a-packed-bin-');
   const cacheRoot = path.join(tempRoot, 'npm-cache');
   const packRoot = path.join(tempRoot, 'pack');
@@ -326,7 +338,7 @@ test('the packed p2a binary supports core commands without a local runtime copy'
     mkdirSync(packRoot, { recursive: true });
     mkdirSync(targetRoot, { recursive: true });
     const npmEnv = { ...process.env, npm_config_cache: cacheRoot };
-    const packed = spawnPortable('npm', ['pack', '--json', '--pack-destination', packRoot], {
+    const packed = spawnNpm(['pack', '--json', '--pack-destination', packRoot], {
       cwd: ROOT,
       encoding: 'utf8',
       env: npmEnv,
@@ -334,7 +346,7 @@ test('the packed p2a binary supports core commands without a local runtime copy'
     assert.equal(packed.status, 0, formatCommandResult(packed));
     const tarballPath = path.join(packRoot, parseNpmPackResult(packed.stdout).filename);
 
-    const installed = spawnPortable('npm', ['install', '--ignore-scripts', '--no-audit', '--no-fund', '--prefix', installRoot, tarballPath], {
+    const installed = spawnNpm(['install', '--ignore-scripts', '--no-audit', '--no-fund', '--prefix', installRoot, tarballPath], {
       cwd: ROOT,
       encoding: 'utf8',
       env: npmEnv,
@@ -342,13 +354,16 @@ test('the packed p2a binary supports core commands without a local runtime copy'
     assert.equal(installed.status, 0, formatCommandResult(installed));
 
     const binary = path.join(installRoot, 'node_modules', '.bin', process.platform === 'win32' ? 'p2a.cmd' : 'p2a');
+    const packageEntry = path.join(installRoot, 'node_modules', PACKAGE_NAME, PACKAGE_JSON.bin.p2a);
+    assert.equal(existsSync(binary), true, 'npm install must create the p2a bin shim');
+    assert.equal(existsSync(packageEntry), true, 'the packed package must include the p2a entry point');
     const runPacked = (cwd, args) => {
       const options = {
         cwd,
         encoding: 'utf8',
         env: { ...process.env, P2A_MEMORY_URL: '', P2A_MEMORY_TOKEN: '' },
       };
-      return spawnPortable(binary, args, options);
+      return spawnSync(process.execPath, [packageEntry, ...args], options);
     };
     const initialized = runPacked(targetRoot, ['init', '--tools', 'codex']);
     assert.equal(initialized.status, 0, formatCommandResult(initialized));
@@ -361,6 +376,8 @@ test('the packed p2a binary supports core commands without a local runtime copy'
     );
     assert.match(packageSkill, /(^|[\s`])p2a tasks ready/m);
     assert.doesNotMatch(packageSkill, /node \.plan2agent\/scripts\/p2a\.mjs tasks ready/);
+    assert.match(packageSkill, /(^|[\s`])p2a context show/m);
+    assert.doesNotMatch(packageSkill, /node \.plan2agent\/scripts\/p2a\.mjs context show/);
     const manifestPath = path.join(targetRoot, '.plan2agent', 'manifest.json');
     const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
     assert.equal(manifest.provenance.packageName, 'plan2agent');
@@ -469,6 +486,7 @@ test('the packed p2a binary supports core commands without a local runtime copy'
       '--artifacts', path.join(ROOT, 'fixtures', '_e2e', 'webhook-api-service'),
       '--target', handoffTargetRoot,
       '--include-intake',
+      '--tools', 'codex',
     ]);
     assert.equal(handoff.status, 0, formatCommandResult(handoff));
     assert.equal(existsSync(path.join(handoffTargetRoot, '.plan2agent', 'scripts')), false);
@@ -501,6 +519,62 @@ test('the packed p2a binary supports core commands without a local runtime copy'
     assert.doesNotMatch(executePlan.stdout, /node \.plan2agent\/scripts\/p2a\.mjs/);
     assert.match(executePlan.stdout, /- isolation: branch/);
     assert.match(executePlan.stdout, /- branch: review\/task-001-run-packed-command-review/);
+
+    const packedArtifactRoot = path.join(
+      handoffTargetRoot,
+      '.plan2agent',
+      'artifacts',
+      'webhook-api-service',
+    );
+    rmSync(path.join(packedArtifactRoot, 'gate-c-task-graph', 'task-graph.json'));
+    const preparedDirect = runPacked(handoffNestedRoot, [
+      'execute', 'prepare',
+      '--artifacts', packedArtifactRoot,
+      '--mode', 'direct',
+      '--selection-rationale', 'One bounded package context packet fixture is sufficient.',
+    ]);
+    assert.equal(preparedDirect.status, 0, formatCommandResult(preparedDirect));
+    const initializedIteration = runPacked(handoffNestedRoot, [
+      'iteration', 'init',
+      '--artifacts', packedArtifactRoot,
+      '--iteration-id', 'iter-packed-context',
+    ]);
+    assert.equal(initializedIteration.status, 0, formatCommandResult(initializedIteration));
+    const packedContextRunId = 'run-packed-context';
+    const startedContextRun = runPacked(handoffNestedRoot, [
+      'execute', 'start',
+      '--artifacts', packedArtifactRoot,
+      '--task', 'task-001',
+      '--run-id', packedContextRunId,
+      '--workspace', handoffTargetRoot,
+      '--json',
+    ]);
+    assert.equal(startedContextRun.status, 0, formatCommandResult(startedContextRun));
+    assert.equal(JSON.parse(startedContextRun.stdout).runStatus, 'started');
+    const packedContext = runPacked(handoffNestedRoot, [
+      'context', 'show',
+      '--artifacts', packedArtifactRoot,
+      '--continuation', 'execution.owner-start',
+      '--run-id', packedContextRunId,
+      '--provider', 'codex',
+      '--json', '--metadata-only',
+    ]);
+    assert.equal(packedContext.status, 0, formatCommandResult(packedContext));
+    const packedContextPayload = JSON.parse(packedContext.stdout);
+    assert.equal(packedContextPayload.schema_version, 'p2a.context_packet.v1');
+    assert.deepEqual(packedContextPayload.sources.map((source) => source.routeId), [
+      'execution.lifecycle',
+      'execution.provider-confinement',
+    ]);
+    const unknownPackedContext = runPacked(handoffNestedRoot, [
+      'context', 'show',
+      '--artifacts', packedArtifactRoot,
+      '--phase', 'verify-closeout',
+      '--run-id', 'run-does-not-exist',
+      '--provider', 'codex',
+    ]);
+    assert.notEqual(unknownPackedContext.status, 0);
+    assert.match(unknownPackedContext.stderr, /unknown run/);
 
     const memoryDigest = runPacked(handoffNestedRoot, ['memory', 'digest', '--json']);
     assert.equal(memoryDigest.status, 0, formatCommandResult(memoryDigest));

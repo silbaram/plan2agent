@@ -7,6 +7,13 @@ import path from 'node:path';
 import process from 'node:process';
 import { pathToFileURL } from 'node:url';
 import { normalizePath, P2A_DIR, resolveP2aPaths } from './p2a_paths.mjs';
+import {
+  APPROVAL_SIDECAR_SHA256_PREFIX,
+  REFERENCE_BUNDLE_SOURCE_DIRNAME,
+  REFERENCE_BUNDLE_SOURCE_FILES_DIRNAME,
+  REFERENCE_BUNDLE_SNAPSHOT_FILENAME,
+  REFERENCE_BUNDLE_USAGE_FILENAME,
+} from './p2a_constants.mjs';
 import { validatedPngDimensions } from './p2a_visual_media.mjs';
 import {
   artifactRunRef,
@@ -34,6 +41,9 @@ import {
   normalizeMonitorGateSidecar,
   normalizeMonitorVerdictData,
 } from './p2a_monitor_gate.mjs';
+import { ValidationError, validateSchema } from './p2a_schema.mjs';
+
+export { ValidationError, validateSchema } from './p2a_schema.mjs';
 
 const P2A_PATHS = resolveP2aPaths(import.meta.url);
 const SCHEMA_PATHS = {
@@ -41,6 +51,8 @@ const SCHEMA_PATHS = {
   decisions: path.join(P2A_PATHS.schemasDir, 'decisions.schema.json'),
   intake: path.join(P2A_PATHS.schemasDir, 'intake.schema.json'),
   spec: path.join(P2A_PATHS.schemasDir, 'spec.schema.json'),
+  reference_bundle_snapshot: path.join(P2A_PATHS.schemasDir, 'reference-bundle-snapshot.schema.json'),
+  reference_bundle_usage: path.join(P2A_PATHS.schemasDir, 'reference-bundle-usage.schema.json'),
   task_graph: path.join(P2A_PATHS.schemasDir, 'task-graph.schema.json'),
   task_context: path.join(P2A_PATHS.schemasDir, 'task-context.schema.json'),
   review: path.join(P2A_PATHS.schemasDir, 'review.schema.json'),
@@ -156,13 +168,6 @@ export function normalizeOrchestrationRuntimeData(data) {
   return normalized;
 }
 
-export class ValidationError extends Error {
-  constructor(message) {
-    super(message);
-    this.name = 'ValidationError';
-  }
-}
-
 export function loadJson(filePath) {
   return JSON.parse(readFileSync(filePath, 'utf8'));
 }
@@ -249,165 +254,6 @@ function inferArtifactRootFromIntakePath(intakePath) {
   return null;
 }
 
-function schemaTypeMatches(instance, expectedType) {
-  if (expectedType === 'object') return instance !== null && typeof instance === 'object' && !Array.isArray(instance);
-  if (expectedType === 'array') return Array.isArray(instance);
-  if (expectedType === 'string') return typeof instance === 'string';
-  if (expectedType === 'boolean') return typeof instance === 'boolean';
-  if (expectedType === 'null') return instance === null;
-  if (expectedType === 'number') return typeof instance === 'number' && Number.isFinite(instance);
-  if (expectedType === 'integer') return Number.isInteger(instance);
-  throw new ValidationError(`unsupported schema type ${JSON.stringify(expectedType)} at $`);
-}
-
-export function validateSchema(instance, schema, instancePath = '$') {
-  if (schema.allOf) {
-    for (const [index, subschema] of schema.allOf.entries()) {
-      validateSchemaComposition(instance, subschema, `${instancePath}.allOf[${index}]`, instancePath);
-    }
-  }
-  if (schema.oneOf) {
-    const matchCount = schema.oneOf.filter((subschema) => schemaMatches(instance, subschema)).length;
-    if (matchCount !== 1) {
-      throw new ValidationError(`${instancePath} must match exactly one oneOf schema (matched ${matchCount})`);
-    }
-  }
-
-  if (Object.hasOwn(schema, 'const') && instance !== schema.const) {
-    throw new ValidationError(`${instancePath} must equal ${JSON.stringify(schema.const)}`);
-  }
-
-  if (Object.hasOwn(schema, 'enum') && !schema.enum.includes(instance)) {
-    throw new ValidationError(`${instancePath} must be one of ${JSON.stringify(schema.enum)}`);
-  }
-
-  const expectedType = schema.type;
-  if (expectedType) {
-    const supported = new Set(['object', 'array', 'string', 'boolean', 'null', 'number', 'integer']);
-    const expectedTypes = Array.isArray(expectedType) ? expectedType : [expectedType];
-    const unsupported = expectedTypes.filter((type) => !supported.has(type));
-    if (unsupported.length) {
-      throw new ValidationError(`unsupported schema type ${JSON.stringify(expectedType)} at ${instancePath}`);
-    }
-    if (!expectedTypes.some((type) => schemaTypeMatches(instance, type))) {
-      throw new ValidationError(`${instancePath} must be ${expectedTypes.join(' or ')}`);
-    }
-  }
-
-  if (typeof instance === 'string') {
-    if (Object.hasOwn(schema, 'minLength') && instance.length < schema.minLength) {
-      throw new ValidationError(`${instancePath} must have length >= ${schema.minLength}`);
-    }
-    if (Object.hasOwn(schema, 'pattern') && !new RegExp(schema.pattern).test(instance)) {
-      throw new ValidationError(`${instancePath} must match pattern ${JSON.stringify(schema.pattern)}`);
-    }
-  }
-
-  if (typeof instance === 'number') {
-    if (Object.hasOwn(schema, 'minimum') && instance < schema.minimum) {
-      throw new ValidationError(`${instancePath} must be >= ${schema.minimum}`);
-    }
-    if (Object.hasOwn(schema, 'maximum') && instance > schema.maximum) {
-      throw new ValidationError(`${instancePath} must be <= ${schema.maximum}`);
-    }
-  }
-
-  if (Array.isArray(instance)) {
-    if (Object.hasOwn(schema, 'minItems') && instance.length < schema.minItems) {
-      throw new ValidationError(`${instancePath} must contain at least ${schema.minItems} item(s)`);
-    }
-    if (Object.hasOwn(schema, 'maxItems') && instance.length > schema.maxItems) {
-      throw new ValidationError(`${instancePath} must contain at most ${schema.maxItems} item(s)`);
-    }
-    if (
-      schema.uniqueItems === true
-      && instance.some((item, index) => (
-        instance.slice(0, index).some((previous) => sameSchemaValue(previous, item))
-      ))
-    ) {
-      throw new ValidationError(`${instancePath} must contain unique items`);
-    }
-    if (schema.items) {
-      instance.forEach((item, index) => validateSchema(item, schema.items, `${instancePath}[${index}]`));
-    }
-  }
-
-  if (schema.not && schemaMatches(instance, schema.not)) {
-    throw new ValidationError(`${instancePath} must not match forbidden schema`);
-  }
-
-  if (instance !== null && typeof instance === 'object' && !Array.isArray(instance)) {
-    const required = schema.required ?? [];
-    const missing = required.filter((key) => !Object.hasOwn(instance, key));
-    if (missing.length) {
-      throw new ValidationError(`${instancePath} missing required keys: ${missing.join(', ')}`);
-    }
-
-    const properties = schema.properties ?? {};
-    if (schema.additionalProperties === false) {
-      const extras = Object.keys(instance).filter((key) => !Object.hasOwn(properties, key));
-      if (extras.length) {
-        throw new ValidationError(`${instancePath} contains unsupported keys: ${extras.join(', ')}`);
-      }
-    }
-
-    for (const [key, value] of Object.entries(instance)) {
-      if (Object.hasOwn(properties, key)) {
-        validateSchema(value, properties[key], `${instancePath}.${key}`);
-      }
-    }
-  }
-}
-
-function schemaMatches(instance, schema) {
-  try {
-    validateSchema(instance, schema);
-    return true;
-  } catch (error) {
-    if (error instanceof ValidationError) return false;
-    throw error;
-  }
-}
-
-function sameSchemaValue(left, right) {
-  if (left === right) return true;
-  if (Array.isArray(left) || Array.isArray(right)) {
-    return (
-      Array.isArray(left)
-      && Array.isArray(right)
-      && left.length === right.length
-      && left.every((item, index) => sameSchemaValue(item, right[index]))
-    );
-  }
-  if (
-    left !== null
-    && right !== null
-    && typeof left === 'object'
-    && typeof right === 'object'
-  ) {
-    const leftKeys = Object.keys(left).sort();
-    const rightKeys = Object.keys(right).sort();
-    return (
-      leftKeys.length === rightKeys.length
-      && leftKeys.every((key, index) => (
-        key === rightKeys[index]
-        && sameSchemaValue(left[key], right[key])
-      ))
-    );
-  }
-  return false;
-}
-
-function validateSchemaComposition(instance, schema, schemaPath, instancePath) {
-  if (schema.if) {
-    const matched = schemaMatches(instance, schema.if);
-    if (matched && schema.then) validateSchema(instance, schema.then, instancePath);
-    if (!matched && schema.else) validateSchema(instance, schema.else, instancePath);
-    return;
-  }
-  validateSchema(instance, schema, schemaPath);
-}
-
 export function validateAgainstSchema(filePath, schemaName) {
   const data = loadJson(filePath);
   const schema = loadJson(SCHEMA_PATHS[schemaName]);
@@ -425,6 +271,445 @@ export function validateEvidence(evidence, label) {
       throw new ValidationError(`${label}.evidence ${item.source_id} must include an http(s) url`);
     }
   }
+}
+
+function assertPortableSnapshotPath(value, label) {
+  if (
+    typeof value !== 'string'
+    || !value.trim()
+    || path.isAbsolute(value)
+    || path.win32.isAbsolute(value)
+  ) {
+    throw new ValidationError(`${label} must be a non-empty snapshot-relative path`);
+  }
+  const normalized = normalizeReference(value);
+  if (normalized === '..' || normalized.startsWith('../') || normalized.includes('/../')) {
+    throw new ValidationError(`${label} must not escape the Gate A snapshot directory`);
+  }
+  return normalized;
+}
+
+const REFERENCE_BUNDLE_CAPTURE_PREFIX = `${REFERENCE_BUNDLE_SOURCE_DIRNAME}/${REFERENCE_BUNDLE_SOURCE_FILES_DIRNAME}/`;
+
+function approvalAuditRequiresSidecar(approvalAudit, filename) {
+  if (!approvalAudit || typeof approvalAudit !== 'object') return false;
+  if ((approvalAudit.approved_artifacts ?? []).some((reference) => (
+    typeof reference === 'string'
+    && path.posix.basename(normalizeReference(reference)) === filename
+  ))) {
+    return true;
+  }
+  const bindingPrefix = `${APPROVAL_SIDECAR_SHA256_PREFIX} `;
+  return String(approvalAudit.approval_note ?? '')
+    .split(/\r?\n/)
+    .some((line) => {
+      const trimmed = line.trim();
+      if (!trimmed.startsWith(bindingPrefix)) return false;
+      const [reference] = trimmed.slice(bindingPrefix.length).split(/\s+/);
+      return path.posix.basename(normalizeReference(reference ?? '')) === filename;
+    });
+}
+
+function resolveSnapshotCapturedFile(snapshotPath, reference, label) {
+  const normalized = assertPortableSnapshotPath(reference, label);
+  if (!normalized.startsWith(REFERENCE_BUNDLE_CAPTURE_PREFIX)) {
+    throw new ValidationError(
+      `${label} must reference a captured file under ${REFERENCE_BUNDLE_CAPTURE_PREFIX}`,
+    );
+  }
+  const snapshotDirectory = path.dirname(path.resolve(snapshotPath));
+  const sourceRoot = path.join(
+    snapshotDirectory,
+    REFERENCE_BUNDLE_SOURCE_DIRNAME,
+  );
+  const captureRoot = path.join(
+    sourceRoot,
+    REFERENCE_BUNDLE_SOURCE_FILES_DIRNAME,
+  );
+  if (!existsSync(sourceRoot)) {
+    throw new ValidationError(
+      `Gate A reference source capture is missing: ${sourceRoot}`,
+    );
+  }
+  if (!lstatSync(sourceRoot).isDirectory()) {
+    throw new ValidationError(
+      `Gate A reference source capture root must be a real directory: ${sourceRoot}`,
+    );
+  }
+  if (!existsSync(captureRoot) || !lstatSync(captureRoot).isDirectory()) {
+    throw new ValidationError(
+      `Gate A reference source capture is missing: ${captureRoot}`,
+    );
+  }
+  const realSnapshotDirectory = realpathSync(snapshotDirectory);
+  const realCaptureRoot = realpathSync(captureRoot);
+  if (!pathIsAtOrUnder(realSnapshotDirectory, realCaptureRoot)) {
+    throw new ValidationError(
+      'Gate A reference source capture must stay inside the Gate A snapshot directory',
+    );
+  }
+  const filePath = path.resolve(snapshotDirectory, normalized);
+  assertFile(filePath, label);
+  if (!pathIsAtOrUnder(realCaptureRoot, realpathSync(filePath))) {
+    throw new ValidationError(`${label} resolves outside the Gate A reference source capture`);
+  }
+  return {
+    path: filePath,
+    captureRoot,
+    relativePath: normalizePath(path.relative(captureRoot, filePath)),
+  };
+}
+
+function validateReferenceBundleSnapshotSources(snapshotPath, snapshot) {
+  const bundle = resolveSnapshotCapturedFile(
+    snapshotPath,
+    snapshot.source_bundle_ref,
+    'reference bundle snapshot.source_bundle_ref',
+  );
+  const entry = resolveSnapshotCapturedFile(
+    snapshotPath,
+    snapshot.entry_ref,
+    'reference bundle snapshot.entry_ref',
+  );
+  if (snapshot.source_bundle_sha256 !== rawFileSha256(bundle.path)) {
+    throw new ValidationError(
+      'reference bundle snapshot.source_bundle_sha256 does not match the captured source bundle',
+    );
+  }
+  if (snapshot.entry_sha256 !== rawFileSha256(entry.path)) {
+    throw new ValidationError(
+      'reference bundle snapshot.entry_sha256 does not match the captured entry document',
+    );
+  }
+
+  const inspected = inspectEntryDocument(entry.path, {
+    baseDir: bundle.captureRoot,
+    referenceRoot: bundle.captureRoot,
+    referenceBundlePath: bundle.path,
+    selection: 'gate-a-snapshot',
+  });
+  if (!inspected.valid || !inspected.referenceBundle?.valid) {
+    const errors = [...new Set([
+      ...(inspected.errors ?? []),
+      ...(inspected.referenceBundle?.errors ?? []),
+    ])];
+    throw new ValidationError(
+      `Gate A reference source capture fails entry validation: ${errors.join('; ')}`,
+    );
+  }
+  if (inspected.referenceBundle.sha256 !== snapshot.source_bundle_sha256) {
+    throw new ValidationError(
+      'reference bundle snapshot source bundle hash differs from the validated capture',
+    );
+  }
+
+  const inspectedById = new Map(
+    inspected.referenceBundle.references.map((reference) => [reference.id, reference]),
+  );
+  if (inspectedById.size !== snapshot.references.length) {
+    throw new ValidationError(
+      'reference bundle snapshot references must exactly match the captured source bundle',
+    );
+  }
+  for (const reference of snapshot.references) {
+    const captured = resolveSnapshotCapturedFile(
+      snapshotPath,
+      reference.path,
+      `reference bundle snapshot ${reference.id}.path`,
+    );
+    if (reference.sha256 !== rawFileSha256(captured.path)) {
+      throw new ValidationError(
+        `reference bundle snapshot ${reference.id}.sha256 does not match the captured reference file`,
+      );
+    }
+    const declared = inspectedById.get(reference.id);
+    if (
+      !declared
+      || declared.path !== captured.relativePath
+      || declared.kind !== reference.kind
+      || declared.sha256 !== reference.sha256
+      || declared.loadWhen !== reference.load_when
+      || declared.description !== reference.description
+    ) {
+      throw new ValidationError(
+        `reference bundle snapshot ${reference.id} metadata does not match the captured source bundle`,
+      );
+    }
+  }
+}
+
+function optionalSidecarPath(primaryPath, filename, label) {
+  const sidecarPath = path.join(path.dirname(path.resolve(primaryPath)), filename);
+  if (!existsSync(sidecarPath)) return null;
+  assertFile(sidecarPath, label);
+  return sidecarPath;
+}
+
+function pathIsAtOrUnder(rootPath, candidatePath) {
+  const relative = path.relative(path.resolve(rootPath), path.resolve(candidatePath));
+  return relative === '' || (
+    relative !== '..'
+    && !relative.startsWith(`..${path.sep}`)
+    && !path.isAbsolute(relative)
+  );
+}
+
+function approvalSidecarRef(sidecarPath, artifactRoot, label) {
+  if (!artifactRoot) return normalizePath(path.basename(sidecarPath));
+  if (!pathIsAtOrUnder(artifactRoot, sidecarPath)) {
+    throw new ValidationError(`${label} must stay inside the artifact root`);
+  }
+  return normalizePath(path.relative(path.resolve(artifactRoot), path.resolve(sidecarPath)));
+}
+
+function validateApprovalSidecarBinding(approvalAudit, sidecarPath, artifactRoot, label) {
+  const sidecarRef = approvalSidecarRef(sidecarPath, artifactRoot, label);
+  const approvedRefs = new Set(
+    approvalAudit.approved_artifacts.map((item) => normalizeReference(item)),
+  );
+  const approvedSidecarRef = [...approvedRefs].find((reference) => (
+    reference === sidecarRef || reference.endsWith(`/${sidecarRef}`)
+  ));
+  if (!approvedSidecarRef) {
+    throw new ValidationError(
+      `${label} must be listed in approval_audit.approved_artifacts as ${sidecarRef}`,
+    );
+  }
+  const binding = `${APPROVAL_SIDECAR_SHA256_PREFIX} ${approvedSidecarRef} ${rawFileSha256(sidecarPath)}`;
+  const approvalLines = approvalAudit.approval_note.split(/\r?\n/).map((line) => line.trim());
+  if (!approvalLines.includes(binding)) {
+    throw new ValidationError(
+      `${label} approval_audit.approval_note must bind the exact sidecar hash with ${JSON.stringify(binding)}`,
+    );
+  }
+}
+
+function validateReferenceBundleSnapshot(intakePath, intake, options = {}) {
+  const snapshotPath = optionalSidecarPath(
+    intakePath,
+    REFERENCE_BUNDLE_SNAPSHOT_FILENAME,
+    'Gate A reference bundle snapshot',
+  );
+  if (!snapshotPath) {
+    if (
+      intake.status === 'ready_for_spec'
+      && approvalAuditRequiresSidecar(
+        intake.approval_audit,
+        REFERENCE_BUNDLE_SNAPSHOT_FILENAME,
+      )
+    ) {
+      throw new ValidationError(
+        'Gate A reference-bundle-snapshot.json is required by intake.approval_audit',
+      );
+    }
+    return null;
+  }
+  const snapshot = validateAgainstSchema(snapshotPath, 'reference_bundle_snapshot');
+  assertPortableSnapshotPath(
+    snapshot.source_bundle_ref,
+    'reference bundle snapshot.source_bundle_ref',
+  );
+  assertPortableSnapshotPath(snapshot.entry_ref, 'reference bundle snapshot.entry_ref');
+  const ids = new Set();
+  const paths = new Set();
+  for (const reference of snapshot.references) {
+    if (ids.has(reference.id)) {
+      throw new ValidationError(`reference bundle snapshot contains duplicate id ${reference.id}`);
+    }
+    ids.add(reference.id);
+    const referencePath = assertPortableSnapshotPath(
+      reference.path,
+      `reference bundle snapshot ${reference.id}.path`,
+    );
+    if (paths.has(referencePath)) {
+      throw new ValidationError(`reference bundle snapshot contains duplicate path ${referencePath}`);
+    }
+    paths.add(referencePath);
+  }
+  validateReferenceBundleSnapshotSources(snapshotPath, snapshot);
+  if (intake.status === 'ready_for_spec') {
+    const artifactRoot = options.artifactRoot ?? inferArtifactRootFromIntakePath(intakePath);
+    validateApprovalSidecarBinding(
+      intake.approval_audit,
+      snapshotPath,
+      artifactRoot,
+      'Gate A reference bundle snapshot',
+    );
+  }
+  return {
+    data: snapshot,
+    path: snapshotPath,
+    sha256: rawFileSha256(snapshotPath),
+  };
+}
+
+const REFERENCE_SUPPORTED_DECISION_ROOTS = new Set([
+  'product',
+  'implementation',
+  'visual_experience',
+  'reference_reconnaissance',
+]);
+
+function referenceSupportedDecisionExists(spec, reference) {
+  const segments = String(reference).split('.');
+  if (
+    segments.shift() !== 'spec'
+    || !segments.length
+    || !REFERENCE_SUPPORTED_DECISION_ROOTS.has(segments[0])
+  ) {
+    return false;
+  }
+  let current = spec;
+  for (const segment of segments) {
+    if (
+      current === null
+      || typeof current !== 'object'
+      || !Object.hasOwn(current, segment)
+    ) {
+      return false;
+    }
+    current = current[segment];
+  }
+  return true;
+}
+
+function validateReferenceBundleUsage(specPath, spec, intakePath, intake, artifactRoot) {
+  const snapshot = intakePath
+    ? validateReferenceBundleSnapshot(intakePath, intake, { artifactRoot })
+    : null;
+  const usagePath = optionalSidecarPath(
+    specPath,
+    REFERENCE_BUNDLE_USAGE_FILENAME,
+    'Gate B reference bundle usage',
+  );
+  if (
+    !usagePath
+    && spec.approval === 'approved'
+    && approvalAuditRequiresSidecar(
+      spec.approval_audit,
+      REFERENCE_BUNDLE_USAGE_FILENAME,
+    )
+  ) {
+    throw new ValidationError(
+      'Gate B reference-bundle-usage.json is required by spec.approval_audit',
+    );
+  }
+  if (snapshot && spec.approval === 'approved' && !usagePath) {
+    throw new ValidationError(
+      'Gate B reference-bundle-usage.json is required when an approved spec derives from a Gate A reference bundle snapshot',
+    );
+  }
+  if (usagePath && !snapshot) {
+    throw new ValidationError(
+      'Gate B reference-bundle-usage.json requires a matching Gate A reference-bundle-snapshot.json',
+    );
+  }
+  if (!usagePath) return null;
+  const usage = validateAgainstSchema(usagePath, 'reference_bundle_usage');
+  const snapshotReference = usage.source_snapshot_ref;
+  if (
+    typeof snapshotReference !== 'string'
+    || !snapshotReference.trim()
+    || path.isAbsolute(snapshotReference)
+    || path.win32.isAbsolute(snapshotReference)
+  ) {
+    throw new ValidationError(
+      'reference bundle usage.source_snapshot_ref must be a non-empty relative path',
+    );
+  }
+  const resolvedSnapshotPath = path.resolve(path.dirname(usagePath), snapshotReference);
+  if (
+    !existsSync(resolvedSnapshotPath)
+    || !lstatSync(resolvedSnapshotPath).isFile()
+    || realpathSync(resolvedSnapshotPath) !== realpathSync(snapshot.path)
+  ) {
+    throw new ValidationError(
+      'reference bundle usage.source_snapshot_ref must resolve to the source intake snapshot',
+    );
+  }
+  if (usage.source_snapshot_sha256 !== snapshot.sha256) {
+    throw new ValidationError(
+      'reference bundle usage.source_snapshot_sha256 does not match the Gate A snapshot',
+    );
+  }
+  if (
+    normalizeReference(usage.source_bundle_ref) !== normalizeReference(snapshot.data.source_bundle_ref)
+    || usage.source_bundle_sha256 !== snapshot.data.source_bundle_sha256
+  ) {
+    throw new ValidationError(
+      'reference bundle usage source bundle ref and hash must match the Gate A snapshot',
+    );
+  }
+  const snapshotById = new Map(
+    snapshot.data.references.map((reference) => [reference.id, reference]),
+  );
+  const evidenceById = new Map((spec.evidence ?? []).map((item) => [item.source_id, item]));
+  const usedReferenceIds = new Set();
+  const usedEvidenceIds = new Set();
+  const usageByEvidenceId = new Map();
+  for (const referenceUsage of usage.inspected_references) {
+    if (usedReferenceIds.has(referenceUsage.id)) {
+      throw new ValidationError(`reference bundle usage contains duplicate id ${referenceUsage.id}`);
+    }
+    if (usedEvidenceIds.has(referenceUsage.evidence_source_id)) {
+      throw new ValidationError(
+        `reference bundle usage evidence_source_id must identify one inspected file: ${referenceUsage.evidence_source_id}`,
+      );
+    }
+    usedReferenceIds.add(referenceUsage.id);
+    usedEvidenceIds.add(referenceUsage.evidence_source_id);
+    const declared = snapshotById.get(referenceUsage.id);
+    if (!declared || declared.sha256 !== referenceUsage.sha256) {
+      throw new ValidationError(
+        `reference bundle usage ${referenceUsage.id} does not match the approved Gate A reference hash`,
+      );
+    }
+    const evidence = evidenceById.get(referenceUsage.evidence_source_id);
+    if (!evidence || !referenceUsage.evidence_source_id.startsWith('LOCAL-')) {
+      throw new ValidationError(
+        `reference bundle usage ${referenceUsage.id} requires matching LOCAL-n evidence`,
+      );
+    }
+    if (normalizeReference(evidence.url) !== normalizeReference(declared.path)) {
+      throw new ValidationError(
+        `reference bundle usage ${referenceUsage.id} evidence url must match ${declared.path}`,
+      );
+    }
+    if (!referenceSupportedDecisionExists(spec, referenceUsage.supported_decision)) {
+      throw new ValidationError(
+        `reference bundle usage ${referenceUsage.id}.supported_decision must resolve to an existing spec product, implementation, visual_experience, or reference_reconnaissance field`,
+      );
+    }
+    usageByEvidenceId.set(referenceUsage.evidence_source_id, referenceUsage);
+  }
+  const snapshotIdByPath = new Map(snapshot.data.references.map((reference) => [
+    normalizeReference(reference.path),
+    reference.id,
+  ]));
+  for (const evidence of spec.evidence ?? []) {
+    if (!evidence.source_id.startsWith('LOCAL-')) continue;
+    const referenceId = snapshotIdByPath.get(normalizeReference(evidence.url));
+    if (!referenceId) continue;
+    const referenceUsage = usageByEvidenceId.get(evidence.source_id);
+    if (!referenceUsage || referenceUsage.id !== referenceId) {
+      throw new ValidationError(
+        `spec evidence ${evidence.source_id} cites captured reference ${referenceId} but is not mapped exactly once in reference bundle usage`,
+      );
+    }
+  }
+  if (spec.approval === 'approved') {
+    validateApprovalSidecarBinding(
+      spec.approval_audit,
+      usagePath,
+      artifactRoot,
+      'Gate B reference bundle usage',
+    );
+  }
+  return {
+    data: usage,
+    path: usagePath,
+    sha256: rawFileSha256(usagePath),
+  };
 }
 
 const TECHNOLOGY_RECON_PATTERN = /\b(?:cloud|cloud service|database|db|external api|external service|framework|library|npm|package|protocol|runtime|sdk|typescript|node\.?js|python|react|redis|postgres|postgresql|mysql|sqlite|queue|kafka|rabbitmq|aws|gcp|azure)\b/gi;
@@ -1012,6 +1297,7 @@ function validateBaselineContext(
 export function validateIntake(filePath, options = {}) {
   const data = validateAgainstSchema(filePath, 'intake');
   validateEvidence(data.evidence, 'intake');
+  validateReferenceBundleSnapshot(filePath, data, options);
 
   const clarifyingQuestionIds = data.clarifying_questions.map((question) => question.id);
   if (clarifyingQuestionIds.length !== new Set(clarifyingQuestionIds).size) {
@@ -1156,6 +1442,13 @@ export function validateSpec(filePath, intakePath = null, options = {}) {
     );
   }
   validateEvidence(data.evidence, 'spec');
+  validateReferenceBundleUsage(
+    filePath,
+    data,
+    resolvedIntakePath,
+    intake,
+    artifactRoot,
+  );
   validateTechnologyReconnaissanceEvidence(data);
   validateReferenceReconnaissance(data);
   validateClarifyingQuestionDisposition(data, intake);
@@ -4741,6 +5034,66 @@ function assertProjectId(label, actual, expected) {
   }
 }
 
+const GATE_SCOPE_DECISION_TYPES = new Set([
+  'gate.what.approved',
+  'gate.what.revoked',
+  'scope.added',
+  'scope.removed',
+]);
+const ACTIVE_GATE_SCOPE_DECISION_TYPES = new Set([
+  'gate.what.approved',
+  'scope.added',
+  'scope.removed',
+]);
+
+export function gateArtifactApprovalState(decisions, artifactRoot, artifactPath) {
+  const root = path.resolve(artifactRoot);
+  const resolvedArtifactPath = path.resolve(artifactPath);
+  if (!pathIsAtOrUnder(root, resolvedArtifactPath) || root === resolvedArtifactPath) {
+    throw new ValidationError('Gate approval artifact must stay inside the artifact root');
+  }
+  const scopeRef = normalizeReference(path.relative(root, resolvedArtifactPath));
+  if (!Array.isArray(decisions)) {
+    return {
+      approved: true,
+      source: 'approval_audit',
+      event: null,
+      scopeRef,
+      reason: 'legacy_without_decision_ledger',
+    };
+  }
+  const event = decisions.filter((record) => (
+    GATE_SCOPE_DECISION_TYPES.has(record.type)
+    && normalizeReference(record.scope_ref) === scopeRef
+  )).at(-1) ?? null;
+  if (!event) {
+    return {
+      approved: false,
+      source: 'decisions',
+      event: null,
+      scopeRef,
+      reason: 'missing_approval_decision',
+    };
+  }
+  if (!ACTIVE_GATE_SCOPE_DECISION_TYPES.has(event.type)) {
+    return {
+      approved: false,
+      source: 'decisions',
+      event,
+      scopeRef,
+      reason: 'approval_revoked',
+    };
+  }
+  const approved = event.sha256 === rawFileSha256(resolvedArtifactPath);
+  return {
+    approved,
+    source: 'decisions',
+    event,
+    scopeRef,
+    reason: approved ? 'approved_hash_match' : 'approved_hash_mismatch',
+  };
+}
+
 export function validateArtifactRoot(artifactRoot, options = {}) {
   const root = path.resolve(artifactRoot);
   if (!existsSync(root)) throw new ValidationError(`artifact root is missing: ${root}`);
@@ -4757,11 +5110,18 @@ export function validateArtifactRoot(artifactRoot, options = {}) {
 
   requireGateFiles(paths, ['intakeJson'], 'Gate A');
   const intake = validateIntake(paths.intakeJson, { artifactRoot: root });
+  const gateAApproval = intake.status === 'ready_for_spec'
+    ? gateArtifactApprovalState(decisions, root, paths.intakeJson)
+    : null;
   const result = {
     artifactRoot: root,
     paths,
     gates: {
-      a: { present: true, valid: true, passed: intake.status === 'ready_for_spec' },
+      a: {
+        present: true,
+        valid: true,
+        passed: intake.status === 'ready_for_spec' && gateAApproval.approved,
+      },
       b: { present: false, valid: false, passed: false },
       c: { present: false, valid: false, passed: false },
     },
@@ -4783,8 +5143,19 @@ export function validateArtifactRoot(artifactRoot, options = {}) {
       projectId: options.projectId,
     });
     assertProjectId('spec.project_id', spec.project_id, options.projectId);
+    const gateBApproval = spec.approval === 'approved'
+      ? gateArtifactApprovalState(decisions, root, paths.specJson)
+      : null;
     result.spec = spec;
-    result.gates.b = { present: true, valid: true, passed: spec.approval === 'approved' && spec.open_decisions.length === 0 };
+    result.gates.b = {
+      present: true,
+      valid: true,
+      passed: (
+        spec.approval === 'approved'
+        && spec.open_decisions.length === 0
+        && gateBApproval.approved
+      ),
+    };
   }
 
   const gateCKeys = ['taskGraph'];
@@ -4812,8 +5183,23 @@ export function validateArtifactRoot(artifactRoot, options = {}) {
     if (!result.gates.c.present) missing.push('Gate C');
     const reasons = [];
     if (missing.length) reasons.push(`missing ${missing.join(', ')}`);
-    if (!result.gates.a.passed) reasons.push('Gate A intake is not approved');
-    if (result.spec && !result.gates.b.passed) reasons.push('spec is not approved or open_decisions is non-empty');
+    if (!result.gates.a.passed) {
+      reasons.push(
+        gateAApproval?.source === 'decisions'
+          ? `Gate A approval decision binding failed: ${gateAApproval.reason}`
+          : 'Gate A intake is not approved',
+      );
+    }
+    if (result.spec && !result.gates.b.passed) {
+      const gateBApproval = result.spec.approval === 'approved'
+        ? gateArtifactApprovalState(decisions, root, paths.specJson)
+        : null;
+      reasons.push(
+        gateBApproval?.source === 'decisions' && !gateBApproval.approved
+          ? `Gate B approval decision binding failed: ${gateBApproval.reason}`
+          : 'spec is not approved or open_decisions is non-empty',
+      );
+    }
     throw new ValidationError(`artifact root is not handoff-ready: ${reasons.join('; ') || 'unknown gate state'}`);
   }
   return result;
@@ -4886,6 +5272,9 @@ export function validateEntryDocument(entryPath) {
     ? '- scope: what will be built is described'
     : '- scope: confirm what will be built in the dialogue');
   console.log(`- limits: ${entry.webSourceCount} web source(s), ${entry.recommendationCount} recommendation(s)`);
+  console.log(entry.referenceBundle
+    ? `- references: ${entry.referenceBundle.referenceCount} hash-verified item(s) from ${entry.referenceBundle.path}`
+    : '- references: no optional p2a-reference-bundle.json');
   console.log(`- provenance: ${entry.sourceKind === 'feature_radar_preflight'
     ? entry.checks.provenance
       ? 'Feature Radar handoff confirmed'

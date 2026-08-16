@@ -63,7 +63,9 @@ test('approved Gate B routes through adaptive execution readiness instead of unc
     path.join(ROOT, '.gemini', 'commands', 'p2a', 'harness.toml'),
     'utf8',
   );
-  assert.match(geminiHarness, /do not create a task graph unconditionally/);
+  assert.match(geminiHarness, /Gemini is read-only/);
+  assert.match(geminiHarness, /do not persist Gate artifacts/);
+  assert.doesNotMatch(geminiHarness, /do not create a task graph unconditionally/);
   assert.doesNotMatch(geminiHarness, /Stop before task graph unless/);
 
   const englishReadme = readFileSync(path.join(ROOT, 'readme.md'), 'utf8');

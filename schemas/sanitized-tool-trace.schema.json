@@ -1,0 +1,80 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://plan2agent.dev/schemas/sanitized-tool-trace.schema.json",
+  "title": "Plan2Agent Sanitized Tool Trace",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "status", "eventShape", "operations", "metrics"],
+  "properties": {
+    "schema_version": { "const": "p2a.sanitized_tool_trace.v3" },
+    "status": { "enum": ["available", "partial", "unsupported", "unavailable"] },
+    "eventShape": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["supported", "unsupportedCount", "unsupportedFields"],
+      "properties": {
+        "supported": { "type": "boolean" },
+        "unsupportedCount": { "type": "integer", "minimum": 0 },
+        "unsupportedFields": { "type": "array", "items": { "type": "object" } }
+      }
+    },
+    "operations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "sequence", "commandClass", "readTool", "targetClass", "attributionLevel",
+          "exitClass", "sourceIds", "packetManagedSourceIds", "workspaceSourceIds",
+          "packetManagedUnattributed", "globallyUnattributed", "operationFingerprint"
+        ],
+        "properties": {
+          "sequence": { "type": "integer", "minimum": 1 },
+          "commandClass": { "enum": ["content_read", "metadata_inspect", "verify", "inspect", "other", "unknown"] },
+          "readTool": { "type": ["string", "null"] },
+          "targetClass": { "type": ["string", "null"] },
+          "attributionLevel": { "enum": ["canonical", "file", "scope", "unresolved", "none"] },
+          "exitClass": { "enum": ["success", "failure", "unknown"] },
+          "sourceIds": { "type": "array", "uniqueItems": true, "items": { "type": "string", "minLength": 1 } },
+          "packetManagedSourceIds": { "type": "array", "uniqueItems": true, "items": { "type": "string", "minLength": 1 } },
+          "workspaceSourceIds": { "type": "array", "uniqueItems": true, "items": { "type": "string", "minLength": 1 } },
+          "packetManagedUnattributed": { "type": "boolean" },
+          "globallyUnattributed": { "type": "boolean" },
+          "operationFingerprint": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "metrics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "toolOperations", "contentReadOperations", "metadataInspectOperations",
+        "canonicalUniqueSourcesRead", "canonicalSourceReadOccurrences",
+        "packetManagedAttributionComplete", "packetManagedRepeatedSourceReads",
+        "packetManagedUnattributedReadOperations", "packetManagedUnknownOperations",
+        "workspaceOtherReadOperations", "scopeAttributedReadOperations",
+        "uniqueSourcesRead", "sourceReadOccurrences", "repeatedSourceReads",
+        "unattributedReadOperations", "sourcesPerReadOperation", "unknownOperations"
+      ],
+      "properties": {
+        "toolOperations": { "type": "integer", "minimum": 0 },
+        "contentReadOperations": { "type": "integer", "minimum": 0 },
+        "metadataInspectOperations": { "type": "integer", "minimum": 0 },
+        "canonicalUniqueSourcesRead": { "type": "integer", "minimum": 0 },
+        "canonicalSourceReadOccurrences": { "type": "integer", "minimum": 0 },
+        "packetManagedAttributionComplete": { "type": "boolean" },
+        "packetManagedRepeatedSourceReads": { "type": "integer", "minimum": 0 },
+        "packetManagedUnattributedReadOperations": { "type": "integer", "minimum": 0 },
+        "packetManagedUnknownOperations": { "type": "integer", "minimum": 0 },
+        "workspaceOtherReadOperations": { "type": "integer", "minimum": 0 },
+        "scopeAttributedReadOperations": { "type": "integer", "minimum": 0 },
+        "uniqueSourcesRead": { "type": "integer", "minimum": 0 },
+        "sourceReadOccurrences": { "type": "integer", "minimum": 0 },
+        "repeatedSourceReads": { "type": "integer", "minimum": 0 },
+        "unattributedReadOperations": { "type": "integer", "minimum": 0 },
+        "sourcesPerReadOperation": { "type": "number", "minimum": 0 },
+        "unknownOperations": { "type": "integer", "minimum": 0 }
+      }
+    }
+  }
+}

@@ -2,6 +2,7 @@
 
 export const REPO_ONLY_SCRIPT_FILES = [
   'p2a_doctor.mjs',
+  'p2a_context_audit.mjs',
   'p2a_handoff.mjs',
   'p2a_handoff_portability.mjs',
   'p2a_upgrade.mjs',
@@ -13,6 +14,7 @@ export const REPO_ONLY_SCRIPT_FILES = [
 
 export const PROJECT_RUNTIME_SCRIPT_FILES = [
   'p2a.mjs',
+  'p2a_next_service.mjs',
   'p2a_decision_ledger.mjs',
   'p2a_decisions.mjs',
   'p2a_shape.mjs',
@@ -25,6 +27,11 @@ export const PROJECT_RUNTIME_SCRIPT_FILES = [
   'p2a_tasks.mjs',
   'p2a_runs.mjs',
   'p2a_execute.mjs',
+  'p2a_continuations.mjs',
+  'p2a_schema.mjs',
+  'p2a_context.mjs',
+  'p2a_context_packet.mjs',
+  'p2a_context_routes.mjs',
   'p2a_monitor_gate.mjs',
   'p2a_visual_review_gate.mjs',
   'p2a_acceptance_review_gate.mjs',
@@ -32,6 +39,7 @@ export const PROJECT_RUNTIME_SCRIPT_FILES = [
   'p2a_proposals.mjs',
   'p2a_eval.mjs',
   'p2a_memory.mjs',
+  'p2a_reference.mjs',
   'p2a_radar_preflight.mjs',
   'p2a_run_paths.mjs',
   'p2a_run_store.mjs',
@@ -42,6 +50,14 @@ export const PROJECT_RUNTIME_SCRIPT_FILES = [
 
 export const PROJECT_RUNTIME_SCHEMA_FILES = [
   'next.schema.json',
+  'next-v2.schema.json',
+  'execution-result.schema.json',
+  'context-packet.schema.json',
+  'context-routes.schema.json',
+  'context-audit.schema.json',
+  'reference-bundle.schema.json',
+  'reference-bundle-snapshot.schema.json',
+  'reference-bundle-usage.schema.json',
   'constitution.schema.json',
   'decisions.schema.json',
   'intake.schema.json',

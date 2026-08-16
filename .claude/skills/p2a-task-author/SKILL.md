@@ -5,118 +5,36 @@ description: Use when authoring and validating a Gate C task graph draft from a 
 
 # Plan2Agent Task Author
 
-Author a reviewable Gate C task graph draft from an approved active Plan2Agent iteration context. This is a sibling to `p2a-task-breakdown`: it writes a draft, validates it, and promotes only validator-clean content to the canonical graph.
+Author a reviewable Gate C draft from an approved active iteration. This skill proposes and validates a complete draft; only `promote-tasks` creates canonical `task-graph.json`.
 
-## Ownership
+## Preconditions and ownership
 
-- Draft authorship belongs to the read-only `p2a-task-author` subagent.
-- The skill owner obtains the context bundle, passes it to the subagent, reviews the returned draft JSON, and is the only agent that persists `task-graph.draft.json`.
-- If subagents are unavailable, the active skill owner may author the draft locally, but it must preserve the same authorship-versus-persistence boundary.
+Use only when Gate B is approved, open decisions are empty, and Orchestrated execution actually benefits from a dependency/ownership graph.
 
-## When to use
+Draft authorship belongs to the read-only `p2a-task-author` agent. The skill owner obtains context, reviews returned JSON, persists the draft, and runs validation/promotion. When subagents are unavailable, preserve the same author-versus-persistence boundary locally.
 
-Use this skill when the active iteration has an approved Gate B spec and needs a Gate C task graph authored as a reviewable draft. The draft is agent-proposed work, not the canonical Gate C artifact; it becomes canonical only after the Gate C validator passes.
+## Progressive reference routing
 
-## Inputs
+The canonical conditions live in `.agents/context-routes.json`.
 
-The skill owner runs the context command to get the `p2a.task_context.v1` JSON bundle before invoking the task-author subagent:
+1. Required, on-demand; stages: gate-c — `references/draft-contract.md` — A new Gate C task graph draft is about to be authored from validated task context.
+2. Required, conditional; stages: gate-c — `references/replacement-and-promotion.md` — A canonical graph already exists, or a draft is ready for validation and promotion.
 
-```bash
-p2a iteration context --artifacts <root>
-```
+## Procedure
 
-Use these context fields:
-
-- `project_id`
-- `effective_spec.product`
-- `effective_spec.implementation`
-- `existing_tasks.active`
-- `existing_tasks.maintenance`
-- `spec_field_changes`
-- `planning_memory`
-- `idea`
-- `active_iteration`
-- `code_signals`
-
-Use `context.code_signals` (the real file tree and recent changed files) to author tasks incrementally on top of existing code; do not duplicate code or work that already exists.
-
-## Output
-
-The task-author subagent returns the complete draft JSON to the skill owner without writing files. After reviewing that response, the skill owner writes only this draft artifact:
-
-```text
-iterations/<active_iteration>/gate-c-task-graph/task-graph.draft.json
-```
-
-The draft must conform to `p2a` package schema `task-graph.schema.json` (`p2a.task_graph.v1`) and include:
-
-- `schema_version`: `p2a.task_graph.v1`
-- `projectId`: copied exactly from `context.project_id`.
-- `version`: `<active_iteration>-draft`
-- `sourceSpec`: `../gate-b-spec/spec.json`
-- `tasks[]`
-
-Each task must include:
-
-- `id`: sequential `task-NNN` values within the draft.
-- `title`
-- `description`
-- `status`: `todo`
-- `dependencies`: only task ids from the same draft graph.
-- `acceptanceCriteria`: at least one concrete criterion.
-- `targetArea`
-- `suggestedAgentPrompt`: a short outcome statement for the implementing agent. Point to `sourceSpecRefs`; do not restate Gate B acceptance, constraints, or an implementation recipe.
-- `sourceSpecRefs`: at least one reference to a real `effective_spec` field, such as `implementation.architecture`; add Memory and decision lineage refs only in addition to this field.
-- `workKind: ui | non_ui | mixed` on every task when the effective spec selects `full + current_iteration`; include lightweight `visualImpact.screenStates` only for `ui` or `mixed`. Overlap is allowed because impact routes remediation and does not own final-review cases.
-
-Never write `task-graph.json` directly. The canonical graph is created only by `promote-tasks` after validation.
-
-## Authoring rules
-
-- Prefer one cohesive vertical work item when one owner can implement and verify the approved outcome in one resumable run.
-- Split only for a real dependency, separate write owner, independently useful verification/rollback boundary, or work that must resume across sessions. Task count is not a quality target.
-- Split large features by independently verifiable outcomes, not automatically by file, screen, API, data, and test layers.
-- Avoid duplicate work: do not create a new task that duplicates `existing_tasks.active`.
-- If `existing_tasks.active` is non-empty, do not author or persist an incremental-only draft. The context contains task summaries rather than the complete canonical task bodies. When every canonical task is still `todo`, invoke `diff-tasks --force` as the authoritative check: it generates a complete graph only when the active iteration has no run history. Review that result and promote it with explicit `--replace-existing`. Do not infer safety from the bounded `code_signals.recent_changes` summary. If any canonical task is `in_progress`, `done`, or `blocked`, or the CLI reports run history after a task was reopened to `todo`, do not replace the graph: open a new feature iteration or use the maintenance lane so task state and run lineage remain intact.
-- Use `existing_tasks.maintenance` as context, but do not turn maintenance pilot work into this draft.
-- Merge tightly coupled work even when it spans multiple target areas; split only when the resulting items remain independently verifiable and the boundary has operational value.
-- Draft each task so its acceptance criteria are self-satisfiable from that task's explicit scope; do not attach AC that require earlier or later draft tasks to complete.
-- When a draft task adds a framework dependency that triggers auto-configuration, include the minimal required configuration (for example, a datasource URL) in that same task, or explicitly place build-green AC on the later task that owns that configuration.
-- Every task must be traceable: `sourceSpecRefs` must point to actual `effective_spec` product or implementation fields so `validateTaskGraphData` can pass.
-- Inspect `planning_memory.layers`, `relevant_results`, and `relevant_failures` before authoring. When a result materially changes decomposition, dependencies, acceptance criteria, or failure mitigation, add `memory:<report_ref or source_reference>` and any applicable `decision:ND-n` to the affected task's `sourceSpecRefs`. Turn relevant failed/blocked history into an explicit mitigation or regression AC. Do not cite irrelevant history or treat unavailable/unconfigured Memory as a blocker.
-- Do not create tasks for scope that is absent from the approved effective spec.
-- If `spec_field_changes` is non-empty, focus the draft around changed fields rather than re-authoring unchanged baseline scope.
-- Do not put cross-iteration dependencies in `dependencies`; record prerequisites from prior iterations in `description` and `sourceSpecRefs` instead.
-- Keep dependency graphs acyclic and reference only ids in the same draft graph.
+1. Run `p2a iteration context --artifacts <root>` and validate the returned `p2a.task_context.v1` bundle.
+2. Inspect the effective spec, changed fields, code signals, active/maintenance task summaries, and relevant planning memory.
+3. Choose cohesive, independently verifiable work boundaries. Task count is not a quality target.
+4. Have the read-only author return one complete `p2a.task_graph.v1` draft.
+5. Persist only `iterations/<active_iteration>/gate-c-task-graph/task-graph.draft.json`.
+6. Validate `gate-c-draft`; promote only validator-clean content.
 
 ## Boundaries
 
-Only author tasks backed by the approved spec. If the requested work changes product meaning by adding a new user flow, API, data model, success criterion, or similar product decision, do not author it as a task. Tell the user that it requires a separate feature iteration through Gates A-C.
+- Every task is backed by actual effective-spec fields and has concrete acceptance criteria.
+- Do not create product scope, cross-iteration dependencies, or duplicate existing work.
+- Do not replace an active graph after task or run history exists.
+- Do not change application code, dependencies, approval artifacts, or canonical graph bytes directly.
+- If the requested work changes product meaning, return it to a new feature iteration rather than encoding it as a task.
 
-## After authoring
-
-After the skill owner writes the draft, validate and promote it with these steps:
-
-1. Validate the draft:
-
-   ```bash
-   p2a iteration validate --artifacts <root> --stage gate-c-draft
-   ```
-
-2. After validation succeeds, promote the draft:
-
-   ```bash
-   p2a iteration promote-tasks \
-     --artifacts <root>
-   ```
-
-   `promote-tasks` writes provenance to `task-graph.draft.meta.json` and promotes the validated draft to canonical `task-graph.json`.
-
-   When a canonical task graph already exists, the default promotion is rejected to prevent an incremental-only draft from deleting existing task state. Before execution starts, a complete replacement draft produced and reviewed through `diff-tasks --force` may be promoted only with explicit `--replace-existing`. After any task leaves `todo` or any run is recorded for the active iteration, replacement is rejected even if the task is later reopened to `todo`; the change must use a new feature iteration or maintenance task.
-
-## Constraints
-
-- The task-author subagent is strictly read-only and returns draft content without writing files or running commands.
-- The skill owner may write only the draft artifact and run the scoped validation command described above.
-- Do not change application code, dependencies, or non-draft artifacts.
-- Do not write canonical `task-graph.json`; promotion is the job of `promote-tasks` after the validator passes.
+Return the draft path, validation outcome, promotion outcome when applicable, and any exact blocker.

@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 
-import { validateRunsDir, validateTaskGraph } from '../scripts/validate_artifacts.mjs';
+import { validateRunsDir, validateSchema, validateTaskGraph } from '../scripts/validate_artifacts.mjs';
 import { runFilePath } from '../scripts/p2a_run_paths.mjs';
 import { withRunStoreLocks } from '../scripts/p2a_run_store.mjs';
 import {
@@ -20,6 +20,10 @@ import {
 } from './helpers/fixtures.mjs';
 
 const WAIT_BUFFER = new Int32Array(new SharedArrayBuffer(4));
+const EXECUTION_RESULT_SCHEMA = JSON.parse(readFileSync(
+  new URL('../schemas/execution-result.schema.json', import.meta.url),
+  'utf8',
+));
 
 function runExecuteAsync(args) {
   return new Promise((resolve, reject) => {
@@ -59,6 +63,67 @@ function initialize(fixture) {
     'task-graph.json',
   );
 }
+
+test('execution JSON returns one validated result document for start and resume', () => {
+  const fixture = adaptiveArtifact();
+  try {
+    let result = runExecute([
+      'prepare',
+      '--artifacts', fixture.artifactRoot,
+      '--mode', 'direct',
+      '--selection-rationale', 'One bounded change exercises the machine-readable continuation contract.',
+    ]);
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+    initialize(fixture);
+
+    const runId = 'run-json-execution-result';
+    result = runExecute([
+      'start',
+      '--artifacts', fixture.artifactRoot,
+      '--run-id', runId,
+      '--agent-tool', 'codex',
+      '--workspace', fixture.workspaceRoot,
+      '--json',
+    ]);
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+    const started = JSON.parse(result.stdout);
+    validateSchema(started, EXECUTION_RESULT_SCHEMA);
+    assert.deepEqual(started, {
+      schema_version: 'p2a.execution_result.v1',
+      command: 'start',
+      outcome: 'succeeded',
+      taskId: 'task-001',
+      runId,
+      runStatus: 'started',
+      mode: 'direct',
+      runKind: null,
+    });
+
+    result = runExecute([
+      'resume',
+      '--artifacts', fixture.artifactRoot,
+      '--run-id', runId,
+      '--json',
+    ]);
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+    const resumed = JSON.parse(result.stdout);
+    validateSchema(resumed, EXECUTION_RESULT_SCHEMA);
+    assert.equal(resumed.command, 'resume');
+    assert.equal(resumed.runStatus, 'started');
+
+    result = runExecute([
+      'prepare',
+      '--artifacts', fixture.artifactRoot,
+      '--mode', 'direct',
+      '--selection-rationale', 'Prepare intentionally has no continuation result.',
+      '--json',
+    ]);
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /--json is only supported/);
+  } finally {
+    rmSync(fixture.workspaceRoot, { recursive: true, force: true });
+  }
+});
 
 test('direct execution prepares one synthetic work item and records its strategy', () => {
   const fixture = adaptiveArtifact();

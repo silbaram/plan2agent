@@ -1,9 +1,12 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import {
   cpSync,
+  existsSync,
   mkdirSync,
   readFileSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs';
 import path from 'node:path';
@@ -16,8 +19,21 @@ import {
   runP2a,
 } from './helpers/fixtures.mjs';
 import { inspectEntryDocument } from '../scripts/p2a_radar_preflight.mjs';
+import {
+  validateIntake,
+  validateSchema,
+  validateSpec,
+} from '../scripts/validate_artifacts.mjs';
 
 const posix = (value) => String(value).replace(/\\+/g, '/');
+const REFERENCE_BUNDLE_SCHEMA = JSON.parse(readFileSync(
+  path.join(ROOT, 'schemas', 'reference-bundle.schema.json'),
+  'utf8',
+));
+
+function sha256(value) {
+  return createHash('sha256').update(value).digest('hex');
+}
 
 test('path assertions normalize Linux and Windows separators', () => {
   const expected = 'C:/Users/dev/002-followup/collection-report.md';
@@ -95,8 +111,9 @@ test('entry confirmation dialogue stays compact and preserves the existing gate 
     path.join(ROOT, '.gemini', 'commands', 'p2a', 'harness.toml'),
     'utf8',
   );
-  assert.match(geminiCommand, /validated --entry document/);
-  assert.match(geminiCommand, /explicit Gate A approval/);
+  assert.match(geminiCommand, /Gemini is read-only/);
+  assert.doesNotMatch(geminiCommand, /validated --entry document/);
+  assert.doesNotMatch(geminiCommand, /explicit Gate A approval/);
 });
 
 test('entry contract documentation records validation, dialogue, and compatibility boundaries', () => {
@@ -187,6 +204,455 @@ test('a thin user-authored entry document validates and enters scope confirmatio
     assert.equal(missingWhat.status, 0, `${missingWhat.stdout}${missingWhat.stderr}`);
     assert.match(missingWhat.stdout, /scope: confirm what will be built in the dialogue/);
     assert.match(missingWhat.stderr, /may not state what will be built/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('entry reference bundle verifies rich local evidence without loading it into the entry text', () => {
+  const root = makeTempDir('p2a-entry-reference-bundle-');
+  try {
+    const entryPath = path.join(root, 'idea.md');
+    const htmlPath = path.join(root, 'prototype.html');
+    const testPath = path.join(root, 'acceptance.test.mjs');
+    const html = '<!doctype html><title>Reference prototype</title>\n';
+    const acceptance = 'export const rubric = "entry stays concise";\n';
+    writeFileSync(entryPath, '검증 가능한 참고 자료를 조건부로 제공하는 진입 계약을 구현한다.\n', 'utf8');
+    writeFileSync(htmlPath, html, 'utf8');
+    writeFileSync(testPath, acceptance, 'utf8');
+    const bundle = {
+      schema_version: 'p2a.reference_bundle.v1',
+      entry: 'idea.md',
+      references: [
+        {
+          id: 'REF-1',
+          path: 'prototype.html',
+          kind: 'html',
+          sha256: sha256(html),
+          load_when: 'Gate B needs screen composition evidence.',
+          description: 'Passive reference prototype.',
+        },
+        {
+          id: 'REF-2',
+          path: 'acceptance.test.mjs',
+          kind: 'test',
+          sha256: sha256(acceptance),
+          load_when: 'Gate B defines executable acceptance.',
+          description: 'Reference acceptance rubric expressed as code.',
+        },
+      ],
+    };
+    assert.doesNotThrow(() => validateSchema(bundle, REFERENCE_BUNDLE_SCHEMA));
+    writeJson(path.join(root, 'p2a-reference-bundle.json'), bundle);
+
+    const inspected = inspectEntryDocument(entryPath);
+    assert.equal(inspected.valid, true);
+    assert.equal(inspected.referenceBundle.referenceCount, 2);
+    assert.equal(inspected.referenceBundle.sha256, sha256(`${JSON.stringify(bundle, null, 2)}\n`));
+    assert.deepEqual(inspected.referenceBundle.references.map((item) => item.kind), ['html', 'test']);
+    assert.ok(inspected.referenceBundle.references.every((item) => item.bytes > 0));
+
+    const validation = runP2a(['validate', '--entry', entryPath]);
+    assert.equal(validation.status, 0, `${validation.stdout}${validation.stderr}`);
+    assert.match(validation.stdout, /references: 2 hash-verified item\(s\)/);
+
+    const info = runP2a(['info', '--target', root, '--entry', 'idea.md', '--json']);
+    assert.equal(info.status, 0, `${info.stdout}${info.stderr}`);
+    const infoPayload = JSON.parse(info.stdout);
+    assert.equal(infoPayload.entry.referenceBundle.referenceCount, 2);
+    assert.equal(infoPayload.entry.referenceBundle.sha256, inspected.referenceBundle.sha256);
+    assert.deepEqual(
+      infoPayload.entry.referenceBundle.references.map((item) => item.id),
+      ['REF-1', 'REF-2'],
+    );
+    assert.ok(infoPayload.entry.referenceBundle.references.every((item) => !('content' in item)));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('Gate B reference usage is bound to the approved Gate A bundle snapshot and LOCAL evidence', () => {
+  const root = makeTempDir('p2a-reference-provenance-');
+  try {
+    const intakePath = path.join(root, 'gate-a-intake', 'intake.json');
+    const specPath = path.join(root, 'gate-b-spec', 'spec.json');
+    const snapshotPath = path.join(root, 'gate-a-intake', 'reference-bundle-snapshot.json');
+    const usagePath = path.join(root, 'gate-b-spec', 'reference-bundle-usage.json');
+    const intake = JSON.parse(readFileSync(path.join(FIXTURE_ROOT, 'cache-library', 'intake.answered.json'), 'utf8'));
+    const spec = JSON.parse(readFileSync(path.join(FIXTURE_ROOT, 'cache-library', 'spec.approved.json'), 'utf8'));
+    const approvalAudit = structuredClone(intake.approval_audit);
+    intake.status = 'blocked_on_user';
+    delete intake.approval_audit;
+    writeJson(intakePath, intake);
+    const entry = 'Build a workflow from approved references.\n';
+    const prototype = '<!doctype html><title>Approved reference</title>\n';
+    const sourceBundle = {
+      schema_version: 'p2a.reference_bundle.v1',
+      entry: 'idea.md',
+      references: [
+        {
+          id: 'REF-1',
+          path: 'prototype.html',
+          kind: 'html',
+          sha256: sha256(prototype),
+          load_when: 'Gate B needs the approved screen composition.',
+          description: 'Approved reference prototype.',
+        },
+      ],
+    };
+    writeFileSync(path.join(root, 'idea.md'), entry, 'utf8');
+    writeFileSync(path.join(root, 'prototype.html'), prototype, 'utf8');
+    writeJson(path.join(root, 'p2a-reference-bundle.json'), sourceBundle);
+    const capture = runP2a([
+      'reference',
+      'snapshot',
+      '--target', root,
+      '--entry', 'idea.md',
+      '--artifacts', root,
+      '--json',
+    ]);
+    assert.equal(capture.status, 0, `${capture.stdout}${capture.stderr}`);
+    const captureResult = JSON.parse(capture.stdout);
+    assert.equal(captureResult.capturedFiles, 3);
+    const snapshot = JSON.parse(readFileSync(snapshotPath, 'utf8'));
+    const referenceSha = snapshot.references[0].sha256;
+    const bundleSha = snapshot.source_bundle_sha256;
+    const capturedReferencePath = path.join(
+      path.dirname(snapshotPath),
+      snapshot.references[0].path,
+    );
+
+    intake.status = 'ready_for_spec';
+    intake.approval_audit = approvalAudit;
+    intake.approval_audit.approved_artifacts.push('gate-a-intake/reference-bundle-snapshot.json');
+    intake.approval_audit.approval_note += `\nSidecar SHA-256: gate-a-intake/reference-bundle-snapshot.json ${sha256(readFileSync(snapshotPath))}`;
+    spec.source_intake = '../gate-a-intake/intake.json';
+    spec.evidence.push({
+      source_id: 'LOCAL-1',
+      title: 'Approved reference prototype',
+      url: snapshot.references[0].path,
+      used_for: 'Supported the Gate B screen-composition decision.',
+    });
+    const usage = {
+      schema_version: 'p2a.reference_bundle_usage.v1',
+      source_snapshot_ref: '../gate-a-intake/reference-bundle-snapshot.json',
+      source_snapshot_sha256: sha256(readFileSync(snapshotPath)),
+      source_bundle_ref: snapshot.source_bundle_ref,
+      source_bundle_sha256: bundleSha,
+      inspected_references: [
+        {
+          id: 'REF-1',
+          sha256: referenceSha,
+          evidence_source_id: 'LOCAL-1',
+          supported_decision: 'spec.product.screens_or_interfaces',
+        },
+      ],
+    };
+    writeJson(usagePath, usage);
+    spec.approval_audit.approved_artifacts.push('gate-b-spec/reference-bundle-usage.json');
+    spec.approval_audit.approval_note += `\nSidecar SHA-256: gate-b-spec/reference-bundle-usage.json ${sha256(readFileSync(usagePath))}`;
+    writeJson(intakePath, intake);
+    writeJson(specPath, spec);
+
+    assert.doesNotThrow(() => validateIntake(intakePath, { artifactRoot: root }));
+    assert.doesNotThrow(() => validateSpec(specPath, intakePath, { artifactRoot: root }));
+
+    usage.inspected_references = [];
+    writeJson(usagePath, usage);
+    assert.throws(
+      () => validateSpec(specPath, intakePath, { artifactRoot: root }),
+      /cites captured reference REF-1 but is not mapped exactly once/,
+    );
+
+    usage.inspected_references = [{
+      id: 'REF-1',
+      sha256: referenceSha,
+      evidence_source_id: 'LOCAL-1',
+      supported_decision: 'spec.product.missing_decision_field',
+    }];
+    writeJson(usagePath, usage);
+    assert.throws(
+      () => validateSpec(specPath, intakePath, { artifactRoot: root }),
+      /supported_decision must resolve to an existing spec/,
+    );
+
+    usage.inspected_references[0].supported_decision = 'spec.product.screens_or_interfaces';
+    writeJson(usagePath, usage);
+    assert.doesNotThrow(() => validateSpec(specPath, intakePath, { artifactRoot: root }));
+
+    rmSync(usagePath);
+    assert.throws(
+      () => validateSpec(specPath, intakePath, { artifactRoot: root }),
+      /reference-bundle-usage\.json is required/,
+    );
+
+    usage.inspected_references[0].sha256 = '0'.repeat(64);
+    writeJson(usagePath, usage);
+    assert.throws(
+      () => validateSpec(specPath, intakePath, { artifactRoot: root }),
+      /does not match the approved Gate A reference hash/,
+    );
+
+    usage.inspected_references[0].sha256 = referenceSha;
+    writeJson(usagePath, usage);
+    writeFileSync(capturedReferencePath, '<!doctype html><title>Changed reference</title>\n', 'utf8');
+    assert.throws(
+      () => validateSpec(specPath, intakePath, { artifactRoot: root }),
+      /sha256 does not match the captured reference file|sha256 does not match/,
+    );
+    writeFileSync(capturedReferencePath, prototype, 'utf8');
+    assert.doesNotThrow(() => validateSpec(specPath, intakePath, { artifactRoot: root }));
+
+    rmSync(snapshotPath);
+    rmSync(usagePath);
+    assert.throws(
+      () => validateSpec(specPath, intakePath, { artifactRoot: root }),
+      /reference-bundle-snapshot\.json is required by intake\.approval_audit/,
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('Gate A reference snapshot rejects fabricated hashes without captured source bytes', () => {
+  const root = makeTempDir('p2a-reference-fabricated-snapshot-');
+  try {
+    const intakePath = path.join(root, 'gate-a-intake', 'intake.json');
+    const snapshotPath = path.join(root, 'gate-a-intake', 'reference-bundle-snapshot.json');
+    const intake = JSON.parse(readFileSync(
+      path.join(FIXTURE_ROOT, 'cache-library', 'intake.answered.json'),
+      'utf8',
+    ));
+    intake.status = 'blocked_on_user';
+    delete intake.approval_audit;
+    writeJson(intakePath, intake);
+    writeJson(snapshotPath, {
+      schema_version: 'p2a.reference_bundle_snapshot.v1',
+      source_bundle_ref: 'reference-sources/files/p2a-reference-bundle.json',
+      source_bundle_sha256: 'a'.repeat(64),
+      entry_ref: 'reference-sources/files/idea.md',
+      entry_sha256: 'b'.repeat(64),
+      references: [{
+        id: 'REF-1',
+        path: 'reference-sources/files/prototype.html',
+        kind: 'html',
+        sha256: 'c'.repeat(64),
+        load_when: 'Gate B needs the screen composition.',
+        description: 'Fabricated prototype metadata.',
+      }],
+    });
+    assert.throws(
+      () => validateIntake(intakePath, { artifactRoot: root }),
+      /reference source capture is missing/,
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('Gate A reference snapshot rejects a capture root symlinked outside the artifact', () => {
+  const root = makeTempDir('p2a-reference-symlink-capture-');
+  const externalRoot = makeTempDir('p2a-reference-external-capture-');
+  try {
+    const intakePath = path.join(root, 'gate-a-intake', 'intake.json');
+    const snapshotPath = path.join(root, 'gate-a-intake', 'reference-bundle-snapshot.json');
+    const externalFiles = path.join(externalRoot, 'files');
+    const entryPath = path.join(externalFiles, 'idea.md');
+    const referencePath = path.join(externalFiles, 'prototype.html');
+    const bundlePath = path.join(externalFiles, 'p2a-reference-bundle.json');
+    const intake = JSON.parse(readFileSync(
+      path.join(FIXTURE_ROOT, 'cache-library', 'intake.answered.json'),
+      'utf8',
+    ));
+    intake.status = 'blocked_on_user';
+    delete intake.approval_audit;
+    writeJson(intakePath, intake);
+    mkdirSync(externalFiles, { recursive: true });
+    writeFileSync(entryPath, 'Build a portable workflow from captured references.\n', 'utf8');
+    writeFileSync(referencePath, '<!doctype html><title>External capture</title>\n', 'utf8');
+    writeJson(bundlePath, {
+      schema_version: 'p2a.reference_bundle.v1',
+      entry: 'idea.md',
+      references: [{
+        id: 'REF-1',
+        path: 'prototype.html',
+        kind: 'html',
+        sha256: sha256(readFileSync(referencePath)),
+        load_when: 'Gate B needs the approved prototype.',
+        description: 'Prototype outside the artifact root.',
+      }],
+    });
+    symlinkSync(externalRoot, path.join(root, 'gate-a-intake', 'reference-sources'));
+    writeJson(snapshotPath, {
+      schema_version: 'p2a.reference_bundle_snapshot.v1',
+      source_bundle_ref: 'reference-sources/files/p2a-reference-bundle.json',
+      source_bundle_sha256: sha256(readFileSync(bundlePath)),
+      entry_ref: 'reference-sources/files/idea.md',
+      entry_sha256: sha256(readFileSync(entryPath)),
+      references: [{
+        id: 'REF-1',
+        path: 'reference-sources/files/prototype.html',
+        kind: 'html',
+        sha256: sha256(readFileSync(referencePath)),
+        load_when: 'Gate B needs the approved prototype.',
+        description: 'Prototype outside the artifact root.',
+      }],
+    });
+
+    assert.throws(
+      () => validateIntake(intakePath, { artifactRoot: root }),
+      /capture root must be a real directory|must stay inside/,
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+    rmSync(externalRoot, { recursive: true, force: true });
+  }
+});
+
+test('entry reference bundle rejects stale hashes and paths outside its project root', () => {
+  const root = makeTempDir('p2a-entry-reference-invalid-');
+  const outsideRoot = makeTempDir('p2a-entry-reference-outside-');
+  try {
+    const entryPath = path.join(root, 'idea.md');
+    const evidencePath = path.join(root, 'evidence.json');
+    const outsidePath = path.join(outsideRoot, 'private.txt');
+    writeFileSync(entryPath, '해시가 바뀐 참고 자료를 진입 검증에서 차단하는 기능을 구현한다.\n', 'utf8');
+    writeFileSync(evidencePath, '{}\n', 'utf8');
+    writeFileSync(outsidePath, 'outside\n', 'utf8');
+    writeJson(path.join(root, 'p2a-reference-bundle.json'), {
+      schema_version: 'p2a.reference_bundle.v1',
+      entry: 'idea.md',
+      references: [
+        {
+          id: 'REF-1',
+          path: 'evidence.json',
+          kind: 'data',
+          sha256: '0'.repeat(64),
+          load_when: 'Gate B needs sample data.',
+          description: 'Stale sample data.',
+        },
+        {
+          id: 'REF-2',
+          path: path.relative(root, outsidePath),
+          kind: 'document',
+          sha256: sha256('outside\n'),
+          load_when: 'Never, because this escapes the project root.',
+          description: 'Out-of-root reference.',
+        },
+      ],
+    });
+
+    const inspected = inspectEntryDocument(entryPath);
+    assert.equal(inspected.valid, false);
+    assert.ok(inspected.errors.some((error) => error.includes('sha256 does not match')));
+    assert.ok(inspected.errors.some((error) => error.includes('escapes the project reference root')));
+
+    const validation = runP2a(['validate', '--entry', entryPath]);
+    assert.notEqual(validation.status, 0);
+    assert.match(`${validation.stdout}${validation.stderr}`, /sha256 does not match/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+    rmSync(outsideRoot, { recursive: true, force: true });
+  }
+});
+
+test('entry reference bundle rejects a directory symlink that resolves outside the project root', () => {
+  const root = makeTempDir('p2a-entry-reference-symlink-');
+  const outsideRoot = makeTempDir('p2a-entry-reference-symlink-outside-');
+  try {
+    const entryPath = path.join(root, 'idea.md');
+    const outsidePath = path.join(outsideRoot, 'evidence.txt');
+    writeFileSync(entryPath, '프로젝트 밖 symlink 참고 자료를 차단하는 진입 계약을 구현한다.\n', 'utf8');
+    writeFileSync(outsidePath, 'outside through directory link\n', 'utf8');
+    symlinkSync(outsideRoot, path.join(root, 'linked-evidence'), process.platform === 'win32' ? 'junction' : 'dir');
+    writeJson(path.join(root, 'p2a-reference-bundle.json'), {
+      schema_version: 'p2a.reference_bundle.v1',
+      entry: 'idea.md',
+      references: [
+        {
+          id: 'REF-1',
+          path: 'linked-evidence/evidence.txt',
+          kind: 'document',
+          sha256: sha256('outside through directory link\n'),
+          load_when: 'Gate B needs external evidence.',
+          description: 'Reference reached through an escaping directory symlink.',
+        },
+      ],
+    });
+
+    const inspected = inspectEntryDocument(entryPath);
+    assert.equal(inspected.valid, false);
+    assert.ok(inspected.errors.some((error) => error.includes('through a symbolic link')));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+    rmSync(outsideRoot, { recursive: true, force: true });
+  }
+});
+
+test('Gate A snapshot preserves a reference path through an internal directory symlink', () => {
+  const root = makeTempDir('p2a-entry-reference-internal-symlink-');
+  try {
+    const artifactRoot = path.join(root, '.plan2agent', 'artifacts', 'cache-library');
+    const intakePath = path.join(artifactRoot, 'gate-a-intake', 'intake.json');
+    const entryPath = path.join(root, 'idea.md');
+    const assetsRoot = path.join(root, 'assets');
+    const prototypePath = path.join(assetsRoot, 'prototype.html');
+    const prototype = '<!doctype html><title>Internal linked evidence</title>\n';
+    const intake = JSON.parse(readFileSync(
+      path.join(FIXTURE_ROOT, 'cache-library', 'intake.answered.json'),
+      'utf8',
+    ));
+    intake.status = 'blocked_on_user';
+    delete intake.approval_audit;
+    writeJson(intakePath, intake);
+    writeFileSync(entryPath, '프로젝트 내부 링크의 참고 자료를 승인 증거로 보존한다.\n', 'utf8');
+    mkdirSync(assetsRoot, { recursive: true });
+    writeFileSync(prototypePath, prototype, 'utf8');
+    symlinkSync(assetsRoot, path.join(root, 'linked-assets'), process.platform === 'win32' ? 'junction' : 'dir');
+    writeJson(path.join(root, 'p2a-reference-bundle.json'), {
+      schema_version: 'p2a.reference_bundle.v1',
+      entry: 'idea.md',
+      references: [{
+        id: 'REF-1',
+        path: 'linked-assets/prototype.html',
+        kind: 'html',
+        sha256: sha256(prototype),
+        load_when: 'Gate B needs the internal prototype.',
+        description: 'Project-confined prototype reached through a directory symlink.',
+      }],
+    });
+
+    const capture = runP2a([
+      'reference', 'snapshot',
+      '--target', root,
+      '--entry', 'idea.md',
+      '--artifacts', artifactRoot,
+      '--json',
+    ]);
+    assert.equal(capture.status, 0, `${capture.stdout}${capture.stderr}`);
+    const snapshotPath = path.join(
+      artifactRoot,
+      'gate-a-intake',
+      'reference-bundle-snapshot.json',
+    );
+    const snapshot = JSON.parse(readFileSync(snapshotPath, 'utf8'));
+    assert.equal(
+      snapshot.references[0].path,
+      'reference-sources/files/linked-assets/prototype.html',
+    );
+    assert.equal(existsSync(path.join(
+      artifactRoot,
+      'gate-a-intake',
+      snapshot.references[0].path,
+    )), true);
+    assert.doesNotThrow(() => validateIntake(intakePath, { artifactRoot }));
+
+    const approval = runP2a([
+      'decide', '--target', root, '--artifacts', artifactRoot,
+      '--entry', 'idea.md', '--quote', '내부 링크 참고 자료를 포함해 승인해',
+    ]);
+    assert.equal(approval.status, 0, `${approval.stdout}${approval.stderr}`);
+    assert.doesNotThrow(() => validateIntake(intakePath, { artifactRoot }));
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -291,6 +757,23 @@ test('the latest Radar sequence chooses collection report first and existing-pro
       },
       { runMode: 'existing-project' },
     );
+    const sharedEvidencePath = path.join(root, 'shared-evidence.json');
+    const sharedEvidence = '{"source":"project-root"}\n';
+    writeFileSync(sharedEvidencePath, sharedEvidence, 'utf8');
+    writeJson(path.join(latestRoot, 'p2a-reference-bundle.json'), {
+      schema_version: 'p2a.reference_bundle.v1',
+      entry: 'collection-report.md',
+      references: [
+        {
+          id: 'REF-1',
+          path: path.relative(latestRoot, sharedEvidencePath),
+          kind: 'data',
+          sha256: sha256(sharedEvidence),
+          load_when: 'Gate B needs project-root sample data.',
+          description: 'Shared project evidence outside the Radar sequence directory.',
+        },
+      ],
+    });
 
     let next = runNext(root);
     assert.equal(next.state, 'gate_what');
@@ -301,6 +784,7 @@ test('the latest Radar sequence chooses collection report first and existing-pro
     const infoPayload = JSON.parse(info.stdout);
     assert.equal(infoPayload.entry.valid, true);
     assert.match(posix(infoPayload.entry.path), /002-followup\/collection-report\.md$/);
+    assert.equal(infoPayload.entry.referenceBundle.referenceCount, 1);
 
     const doctor = runP2a(['doctor', '--target', root, '--json']);
     assert.notEqual(doctor.status, null, `${doctor.stdout}${doctor.stderr}`);
@@ -311,6 +795,7 @@ test('the latest Radar sequence chooses collection report first and existing-pro
       /p2a validate --entry .*002-followup\/collection-report\.md/,
     );
 
+    rmSync(path.join(latestRoot, 'p2a-reference-bundle.json'));
     rmSync(path.join(latestRoot, 'collection-report.md'));
     const manifestPath = path.join(latestRoot, 'handoff-manifest.md');
     const manifest = readFileSync(manifestPath, 'utf8')

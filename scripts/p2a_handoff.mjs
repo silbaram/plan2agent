@@ -22,12 +22,14 @@ import path from 'node:path';
 import process from 'node:process';
 import { Readable } from 'node:stream';
 import {
+  gateArtifactApprovalState,
   loadJson,
   milestoneRunSnapshotSha256,
   milestoneSnapshotSha256,
   validateArtifactRoot,
   validateApprovalAuditData,
   validateConstitution,
+  validateDecisionLedger,
   validateHandoffReadyArtifactRoot,
   validateIntake,
   validateMilestoneReview,
@@ -89,6 +91,11 @@ import {
   atomicWriteText,
   withRunStoreLocks,
 } from './p2a_run_store.mjs';
+import {
+  APPROVAL_SIDECAR_SHA256_PREFIX,
+  REFERENCE_BUNDLE_SNAPSHOT_FILENAME,
+  REFERENCE_BUNDLE_USAGE_FILENAME,
+} from './p2a_constants.mjs';
 
 const P2A_PATHS = resolveP2aPaths(import.meta.url);
 const ROOT = P2A_PATHS.toolRoot;
@@ -412,6 +419,10 @@ function validateIterationHandoffSource(artifactsRoot, projectId, iterationIdArg
   }
   const state = resolveIterationState(artifactsRoot);
   const paths = iterationGatePaths(artifactsRoot, iterationId, state.currentSpecPath);
+  const decisionsPath = path.join(artifactsRoot, 'decisions.jsonl');
+  const decisions = existsSync(decisionsPath)
+    ? validateDecisionLedger(decisionsPath)
+    : null;
 
   assertFile(paths.currentSpec, 'current-spec.json');
   assertNoCurrentSpecOpenDecisions(state.currentSpec);
@@ -422,6 +433,16 @@ function validateIterationHandoffSource(artifactsRoot, projectId, iterationIdArg
   assertFile(paths.taskGraph, `iterations/${iterationId}/gate-c-task-graph/task-graph.json`);
   assertFile(paths.intakeJson, `iterations/${iterationId}/gate-a-intake/intake.json`);
   validateIntake(paths.intakeJson, { artifactRoot: artifactsRoot });
+  const gateAApproval = gateArtifactApprovalState(
+    decisions,
+    artifactsRoot,
+    paths.intakeJson,
+  );
+  if (!gateAApproval.approved) {
+    throw new ValidationError(
+      `handoff requires an active Gate A approval decision for the current intake bytes: ${gateAApproval.reason}`,
+    );
+  }
 
   const spec = validateSpec(
     paths.specJson,
@@ -430,6 +451,16 @@ function validateIterationHandoffSource(artifactsRoot, projectId, iterationIdArg
   );
   if (spec.approval !== 'approved') throw new ValidationError('handoff requires spec.approval to be approved');
   if (spec.open_decisions.length) throw new ValidationError('handoff requires spec.open_decisions to be empty');
+  const gateBApproval = gateArtifactApprovalState(
+    decisions,
+    artifactsRoot,
+    paths.specJson,
+  );
+  if (!gateBApproval.approved) {
+    throw new ValidationError(
+      `handoff requires an active Gate B approval decision for the current spec bytes: ${gateBApproval.reason}`,
+    );
+  }
   assertProjectId('spec.project_id', spec.project_id, projectId);
 
   const taskGraph = validateTaskGraph(paths.taskGraph, paths.specJson);
@@ -896,6 +927,29 @@ function resolvePortableArtifactReferenceBundle(references, artifactsRoot) {
     if (!inspectJson || inspectedJsonSources.has(sourceRealPath)) continue;
     inspectedJsonSources.add(sourceRealPath);
     const sourceData = loadJson(resolved.sourcePath);
+    const provenanceSidecarFilename = sourceData.schema_version === 'p2a.intake.v1'
+      ? REFERENCE_BUNDLE_SNAPSHOT_FILENAME
+      : sourceData.schema_version === 'p2a.spec.v1'
+        ? REFERENCE_BUNDLE_USAGE_FILENAME
+        : null;
+    if (provenanceSidecarFilename) {
+      const provenanceSidecarPath = path.join(
+        path.dirname(resolved.sourcePath),
+        provenanceSidecarFilename,
+      );
+      if (existsSync(provenanceSidecarPath)) {
+        pendingReferences.push({
+          label: `${label}.${provenanceSidecarFilename}`,
+          reference: provenanceSidecarPath,
+          baseDir: sourceArtifactRoot,
+          sourceArtifactRoot,
+          targetRelativePath: normalizePath(path.join(
+            path.dirname(resolvedFile.relativePath),
+            provenanceSidecarFilename,
+          )),
+        });
+      }
+    }
     if (
       sourceData.schema_version === 'p2a.spec.v1'
       && typeof sourceData.source_intake === 'string'
@@ -972,6 +1026,42 @@ function resolvePortableArtifactReferenceBundle(references, artifactsRoot) {
           ),
         })),
       );
+    }
+    if (
+      sourceData.schema_version === 'p2a.reference_bundle_usage.v1'
+      && typeof sourceData.source_snapshot_ref === 'string'
+      && sourceData.source_snapshot_ref.trim()
+    ) {
+      pendingReferences.push({
+        label: `${label}.source_snapshot_ref`,
+        reference: sourceData.source_snapshot_ref,
+        baseDir: path.dirname(resolved.sourcePath),
+        sourceArtifactRoot,
+      });
+    }
+    if (sourceData.schema_version === 'p2a.reference_bundle_snapshot.v1') {
+      const capturedReferences = [
+        ['source_bundle_ref', sourceData.source_bundle_ref],
+        ['entry_ref', sourceData.entry_ref],
+        ...(sourceData.references ?? []).map((item, referenceIndex) => [
+          `references[${referenceIndex}].path`,
+          item.path,
+        ]),
+      ];
+      for (const [field, reference] of capturedReferences) {
+        pendingReferences.push({
+          label: `${label}.${field}`,
+          reference,
+          baseDir: path.dirname(resolved.sourcePath),
+          sourceArtifactRoot,
+          inspectJson: false,
+          targetRelativePath: portableVisualChildPath(
+            resolvedFile.relativePath,
+            reference,
+            `${label}.${field}`,
+          ),
+        });
+      }
     }
     if (
       sourceData.schema_version === 'p2a.current_spec.v1'
@@ -1129,6 +1219,7 @@ function portableArtifactBundleContents(
     referenceStyle = 'artifact-root',
   ) {
     if (!Array.isArray(data.approval_audit?.approved_artifacts)) return;
+    const sidecarBindingReplacements = [];
     data.approval_audit.approved_artifacts = data.approval_audit.approved_artifacts.map(
       (reference) => {
         const targetRecord = resolveKnownApprovalArtifact(
@@ -1137,11 +1228,43 @@ function portableArtifactBundleContents(
           sourceRoot,
         );
         if (!targetRecord) return reference;
-        return data.schema_version === 'p2a.spec.v1' || referenceStyle === 'relative'
+        const isReferenceProvenanceSidecar = [
+          REFERENCE_BUNDLE_SNAPSHOT_FILENAME,
+          REFERENCE_BUNDLE_USAGE_FILENAME,
+        ].includes(path.basename(targetRecord.sourcePath));
+        const portableReference = (
+          (data.schema_version === 'p2a.spec.v1' || referenceStyle === 'relative')
+          && !isReferenceProvenanceSidecar
+        )
           ? portableBundleRelativeReference(sourceRecord.relativePath, targetRecord.relativePath)
           : artifactRootReference(sourceRoot, targetRecord);
+        if (isReferenceProvenanceSidecar) {
+          sidecarBindingReplacements.push({
+            before: normalizePath(reference),
+            after: normalizePath(portableReference),
+            sha256: sha256Value(portableContent(targetRecord)),
+          });
+        }
+        return portableReference;
       },
     );
+    if (
+      sidecarBindingReplacements.length
+      && typeof data.approval_audit.approval_note === 'string'
+    ) {
+      data.approval_audit.approval_note = data.approval_audit.approval_note
+        .split(/\r?\n/)
+        .map((line) => {
+          for (const replacement of sidecarBindingReplacements) {
+            const prefix = `${APPROVAL_SIDECAR_SHA256_PREFIX} ${replacement.before} `;
+            if (line.startsWith(prefix)) {
+              return `${APPROVAL_SIDECAR_SHA256_PREFIX} ${replacement.after} ${replacement.sha256}`;
+            }
+          }
+          return line;
+        })
+        .join('\n');
+    }
   }
 
   function portableContent(record) {
@@ -1288,6 +1411,26 @@ function portableArtifactBundleContents(
         }
         rebaseKnownApprovalArtifacts(portableData, record, artifactsRoot, 'relative');
       }
+      if (
+        portableData.schema_version === 'p2a.reference_bundle_usage.v1'
+        && typeof portableData.source_snapshot_ref === 'string'
+        && portableData.source_snapshot_ref.trim()
+      ) {
+        const snapshotRecord = recordForResolvedReference(
+          resolveMilestoneBundleReference(
+            artifactsRoot,
+            portableData.source_snapshot_ref,
+            `${record.label}.source_snapshot_ref`,
+            path.dirname(record.sourcePath),
+          ),
+          `${record.label}.source_snapshot_ref`,
+        );
+        portableData.source_snapshot_ref = portableBundleRelativeReference(
+          record.relativePath,
+          snapshotRecord.relativePath,
+        );
+        portableData.source_snapshot_sha256 = sha256Value(portableContent(snapshotRecord));
+      }
       if (portableData.schema_version === 'p2a.intake.v1') {
         const sourceRoot = artifactRootForIntake(record);
         const baselineContext = portableData.baseline_context;
@@ -1408,6 +1551,59 @@ function pushPortableArtifactReferenceBundle(
       plannedByTarget.set(targetRelative, plan.at(-1));
     }
   }
+}
+
+function pushReferenceSnapshotSources(
+  plan,
+  snapshotPath,
+  targetSnapshotRef,
+  artifactsRoot,
+  targetRoot,
+  projectId,
+) {
+  if (!snapshotPath || !targetSnapshotRef) return;
+  const snapshot = loadJson(snapshotPath);
+  if (snapshot.schema_version !== 'p2a.reference_bundle_snapshot.v1') {
+    throw new ValidationError('Gate A reference bundle snapshot has an unsupported schema_version');
+  }
+  const artifactTargetPrefix = normalizePath(targetArtifactDir(projectId));
+  const targetSnapshotArtifactPath = path.posix.relative(
+    artifactTargetPrefix,
+    normalizePath(targetSnapshotRef),
+  );
+  if (
+    !targetSnapshotArtifactPath
+    || targetSnapshotArtifactPath === '..'
+    || targetSnapshotArtifactPath.startsWith('../')
+    || path.posix.isAbsolute(targetSnapshotArtifactPath)
+  ) {
+    throw new ValidationError('target reference snapshot must stay inside the target artifact root');
+  }
+  const sourceReferences = [
+    ['source_bundle_ref', snapshot.source_bundle_ref],
+    ['entry_ref', snapshot.entry_ref],
+    ...(snapshot.references ?? []).map((item, index) => [
+      `references[${index}].path`,
+      item.path,
+    ]),
+  ];
+  pushPortableArtifactReferenceBundle(
+    plan,
+    sourceReferences.map(([field, reference]) => ({
+      label: `reference-bundle-snapshot.${field}`,
+      reference,
+      baseDir: path.dirname(snapshotPath),
+      inspectJson: false,
+      targetRelativePath: portableVisualChildPath(
+        targetSnapshotArtifactPath,
+        reference,
+        `reference-bundle-snapshot.${field}`,
+      ),
+    })),
+    artifactsRoot,
+    targetRoot,
+    projectId,
+  );
 }
 
 function pushIntakeBaselineContextBundleIfPresent(
@@ -2223,7 +2419,7 @@ function inheritedCodexAgentContent(sourcePath) {
     .replace(/^model_reasoning_effort\s*=.*\n/m, '');
 }
 
-const P2A_SUBCOMMAND_PATTERN = /\bp2a (?=(?:decide|decisions|doctor|enhance|eval|execute|handoff|info|init|iteration|memory|next|proposal|proposals|run|runs|scaffold|shape|task|tasks|update|upgrade|validate)\b)/g;
+const P2A_SUBCOMMAND_PATTERN = /\bp2a (?=(?:context|decide|decisions|doctor|enhance|eval|execute|handoff|info|init|iteration|memory|next|proposal|proposals|run|runs|scaffold|shape|task|tasks|update|upgrade|validate)\b)/g;
 
 function legacyRuntimeCommandContent(source) {
   return source.replace(
@@ -2269,6 +2465,12 @@ function pushToolAssetDirectory(plan, targetRoot, sourceRelativeDir, targetRelat
 function selectedToolAssetSpecs(toolTargets, { codexProfile = DEFAULT_CODEX_AGENT_PROFILE } = {}) {
   if (!toolTargets.length) return [];
   const specs = [
+    {
+      key: 'common-context-routes',
+      source: '.agents',
+      target: '.agents',
+      filter: (relativePath) => normalizePath(relativePath) === 'context-routes.json',
+    },
     {
       key: 'common-skills',
       source: path.join('.agents', 'skills'),
@@ -4085,6 +4287,20 @@ function buildPlan(paths, args, artifactsRoot, targetRoot, sourceInfo, options =
   const targetIntakeRef = normalizePath(targetIntakeJsonPath(args.projectId));
   const targetSpecRef = normalizePath(targetSpecJsonPath(args.projectId));
   const targetTaskGraphRef = normalizePath(targetTaskGraphPath(args.projectId));
+  const sourceReferenceSnapshotPath = path.join(
+    path.dirname(paths.intakeJson),
+    REFERENCE_BUNDLE_SNAPSHOT_FILENAME,
+  );
+  const targetReferenceSnapshotRef = existsSync(sourceReferenceSnapshotPath)
+    ? normalizePath(path.join(path.dirname(targetIntakeRef), REFERENCE_BUNDLE_SNAPSHOT_FILENAME))
+    : null;
+  const sourceReferenceUsagePath = path.join(
+    path.dirname(paths.specJson),
+    REFERENCE_BUNDLE_USAGE_FILENAME,
+  );
+  const targetReferenceUsageRef = existsSync(sourceReferenceUsagePath)
+    ? normalizePath(path.join(path.dirname(targetSpecRef), REFERENCE_BUNDLE_USAGE_FILENAME))
+    : null;
   const sourceConstitutionPath = findProjectConstitution(artifactsRoot);
   if (sourceConstitutionPath) {
     validateConstitution(sourceConstitutionPath, {
@@ -4112,6 +4328,8 @@ function buildPlan(paths, args, artifactsRoot, targetRoot, sourceInfo, options =
   const targetIntakeContent = rebaseIntakeApprovalAuditContent(
     portableIntakeContents.get(realpathSync(paths.intakeJson)),
     targetIntakeRef,
+    targetReferenceSnapshotRef,
+    targetReferenceSnapshotRef ? sha256Value(readFileSync(sourceReferenceSnapshotPath)) : null,
   );
   const targetIntakeSha256 = sha256Value(targetIntakeContent);
   pushArtifactIfExists(plan, paths.productSpec, targetRoot, path.join(artifactTargetDir, 'gate-b-spec', 'product-spec.md'));
@@ -4123,8 +4341,34 @@ function buildPlan(paths, args, artifactsRoot, targetRoot, sourceInfo, options =
       targetIntakeRef,
       targetSpecRef,
       targetIntakeSha256,
+      targetReferenceUsageRef,
+      targetReferenceUsageRef ? sha256Value(readFileSync(sourceReferenceUsagePath)) : null,
     ),
   });
+  if (targetReferenceSnapshotRef) {
+    pushArtifact(
+      plan,
+      sourceReferenceSnapshotPath,
+      targetRoot,
+      targetReferenceSnapshotRef,
+    );
+    pushReferenceSnapshotSources(
+      plan,
+      sourceReferenceSnapshotPath,
+      targetReferenceSnapshotRef,
+      artifactsRoot,
+      targetRoot,
+      args.projectId,
+    );
+  }
+  if (targetReferenceUsageRef) {
+    pushArtifact(
+      plan,
+      sourceReferenceUsagePath,
+      targetRoot,
+      targetReferenceUsageRef,
+    );
+  }
   pushVisualExperienceBundleIfExists(
     plan,
     paths.specJson,
@@ -4388,6 +4632,8 @@ function rebaseSpecSourceIntake(
   sourceIntakeRef,
   sourceSpecRef,
   sourceIntakeSha256,
+  referenceUsageRef = null,
+  referenceUsageSha256 = null,
 ) {
   const spec = loadJson(source);
   spec.source_intake = sourceIntakeRef;
@@ -4402,17 +4648,54 @@ function rebaseSpecSourceIntake(
     spec.approval_audit.approved_artifacts = [
       sourceSpecRef,
       ...(targetExperienceRef ? [targetExperienceRef] : []),
+      ...(referenceUsageRef ? [referenceUsageRef] : []),
     ];
+    rebaseReferenceSidecarApprovalNote(
+      spec.approval_audit,
+      referenceUsageRef,
+      referenceUsageSha256,
+    );
   }
   return `${JSON.stringify(spec, null, 2)}\n`;
 }
 
-function rebaseIntakeApprovalAuditContent(sourceContent, targetIntakeRef) {
+function rebaseReferenceSidecarApprovalNote(approvalAudit, sidecarRef, sidecarSha256) {
+  const knownSidecarNames = new Set([
+    REFERENCE_BUNDLE_SNAPSHOT_FILENAME,
+    REFERENCE_BUNDLE_USAGE_FILENAME,
+  ]);
+  const lines = String(approvalAudit.approval_note ?? '')
+    .split(/\r?\n/)
+    .filter((line) => {
+      if (!line.startsWith(`${APPROVAL_SIDECAR_SHA256_PREFIX} `)) return true;
+      const referencedPath = line.slice(APPROVAL_SIDECAR_SHA256_PREFIX.length + 1).split(' ')[0];
+      return !knownSidecarNames.has(path.posix.basename(normalizePath(referencedPath)));
+    });
+  if (sidecarRef && sidecarSha256) {
+    lines.push(`${APPROVAL_SIDECAR_SHA256_PREFIX} ${sidecarRef} ${sidecarSha256}`);
+  }
+  approvalAudit.approval_note = lines.join('\n');
+}
+
+function rebaseIntakeApprovalAuditContent(
+  sourceContent,
+  targetIntakeRef,
+  referenceSnapshotRef = null,
+  referenceSnapshotSha256 = null,
+) {
   const intake = JSON.parse(Buffer.isBuffer(sourceContent)
     ? sourceContent.toString('utf8')
     : String(sourceContent));
   if (intake.approval_audit) {
-    intake.approval_audit.approved_artifacts = [targetIntakeRef];
+    intake.approval_audit.approved_artifacts = [
+      targetIntakeRef,
+      ...(referenceSnapshotRef ? [referenceSnapshotRef] : []),
+    ];
+    rebaseReferenceSidecarApprovalNote(
+      intake.approval_audit,
+      referenceSnapshotRef,
+      referenceSnapshotSha256,
+    );
   }
   return `${JSON.stringify(intake, null, 2)}\n`;
 }

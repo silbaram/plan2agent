@@ -12,6 +12,7 @@ import {
   REPO_ONLY_SCRIPT_FILES,
 } from './p2a_tool_manifest.mjs';
 import { normalizePath } from './p2a_paths.mjs';
+import { auditContext, printContextAudit } from './p2a_context_audit.mjs';
 import { resolveExecutionModePolicy, resolveReviewPasses } from './p2a_project_config.mjs';
 import {
   discoverEntryDocument,
@@ -32,6 +33,7 @@ const EMPTY_TASK_COUNTS = {
 
 const DEV_PROVIDER_FILES = {
   codex: [
+    path.join('.agents', 'context-routes.json'),
     path.join('.agents', 'skills', 'p2a-harness', 'SKILL.md'),
     path.join('.agents', 'skills', 'p2a-dev-execution', 'SKILL.md'),
     path.join('.agents', 'agents', 'p2a-implementer.md'),
@@ -40,6 +42,7 @@ const DEV_PROVIDER_FILES = {
     path.join('.codex', 'agents', 'p2a-performance-monitor.toml'),
   ],
   claude: [
+    path.join('.agents', 'context-routes.json'),
     path.join('.claude', 'skills', 'p2a-harness', 'SKILL.md'),
     path.join('.claude', 'skills', 'p2a-dev-execution', 'SKILL.md'),
     path.join('.claude', 'agents', 'p2a-implementer.md'),
@@ -48,6 +51,7 @@ const DEV_PROVIDER_FILES = {
     path.join('.claude', 'settings.json'),
   ],
   gemini: [
+    path.join('.agents', 'context-routes.json'),
     path.join('.agents', 'skills', 'p2a-harness', 'SKILL.md'),
     path.join('.agents', 'skills', 'p2a-dev-execution', 'SKILL.md'),
     path.join('.agents', 'agents', 'p2a-implementer.md'),
@@ -71,12 +75,19 @@ function usage() {
   return [
     'Usage:',
     '  p2a doctor [--target <project-dir>] [--json] [--strict] [--dev]',
+    '  p2a doctor --context [--target <project-dir>] [--skill <id> --stage <id>] [--mode direct|planned|orchestrated] [--condition <id> ...] [--baseline <audit.json>] [--json] [--strict]',
     '',
     'Options:',
     '  --target <dir>  Project directory to inspect. Default: current working directory.',
     '  --json          Print machine-readable JSON.',
     '  --strict        Exit non-zero when warnings are present.',
     '  --dev           Include development skill/config/provider asset checks.',
+    '  --context       Audit canonical provider/stage context routes without requiring a project harness.',
+    '  --skill <id>    Resolve one assembled context scenario for this skill; requires --stage.',
+    '  --stage <id>    Resolve one assembled context scenario for this stage; requires --skill.',
+    '  --mode <mode>   Filter the scenario by direct, planned, or orchestrated execution mode.',
+    '  --condition <id> Include one conditional/on-demand source by its audit conditionId. Repeatable.',
+    '  --baseline <p>  Compare with a prior p2a.context_audit.v1 JSON report.',
     '  --help, -h      Show this help.',
   ].join('\n');
 }
@@ -87,6 +98,12 @@ function parseArgs(argv) {
     json: false,
     strict: false,
     dev: false,
+    context: false,
+    skill: null,
+    stage: null,
+    mode: null,
+    conditions: [],
+    baseline: null,
     help: false,
   };
   for (let index = 0; index < argv.length; index += 1) {
@@ -102,6 +119,26 @@ function parseArgs(argv) {
       args.strict = true;
     } else if (arg === '--dev') {
       args.dev = true;
+    } else if (arg === '--context') {
+      args.context = true;
+    } else if (arg === '--skill') {
+      args.skill = argv[++index];
+      if (!args.skill) throw new Error('--skill requires a skill id');
+    } else if (arg === '--stage') {
+      args.stage = argv[++index];
+      if (!args.stage) throw new Error('--stage requires a stage id');
+    } else if (arg === '--mode') {
+      args.mode = argv[++index];
+      if (!['direct', 'planned', 'orchestrated'].includes(args.mode)) {
+        throw new Error('--mode requires direct, planned, or orchestrated');
+      }
+    } else if (arg === '--condition') {
+      const condition = argv[++index];
+      if (!condition) throw new Error('--condition requires a conditionId');
+      args.conditions.push(condition);
+    } else if (arg === '--baseline') {
+      args.baseline = argv[++index];
+      if (!args.baseline) throw new Error('--baseline requires an audit JSON path');
     } else if (arg.startsWith('--')) {
       throw new Error(`unknown option: ${arg}`);
     } else {
@@ -476,6 +513,7 @@ function summarizeArtifact(targetRoot, artifactRoot, isScaffoldProject) {
   }
 
   const entry = discoverEntryDocument(artifactRoot, {
+    baseDir: targetRoot,
     projectId,
     repeatedDevelopment: layout.kind === 'iteration',
   });
@@ -550,6 +588,12 @@ function summarizeArtifact(targetRoot, artifactRoot, isScaffoldProject) {
       sourceKind: entry.sourceKind,
       valid: entry.valid,
       warnings: entry.warnings,
+      referenceBundle: entry.referenceBundle ? {
+        path: relativeToTarget(targetRoot, entry.referenceBundle.path),
+        sha256: entry.referenceBundle.sha256,
+        valid: entry.referenceBundle.valid,
+        referenceCount: entry.referenceBundle.referenceCount,
+      } : null,
     } : null,
     gates: GATE_FILES.map(([id, label, relativePath]) => gateFileSummary(targetRoot, searchRoots, id, label, relativePath)),
     spec: {
@@ -1174,6 +1218,44 @@ export function main(argv = process.argv.slice(2)) {
     const args = parseArgs(argv);
     if (args.help) {
       console.log(usage());
+      return 0;
+    }
+    if (args.context && args.dev) {
+      throw new Error('--context and --dev are separate diagnostic modes; run them independently');
+    }
+    const contextDetailRequested = Boolean(
+      args.skill || args.stage || args.mode || args.conditions.length || args.baseline,
+    );
+    if (!args.context && contextDetailRequested) {
+      throw new Error('--skill, --stage, --mode, --condition, and --baseline require --context');
+    }
+    if (args.context) {
+      const scenarioRequested = Boolean(args.skill || args.stage || args.mode || args.conditions.length);
+      if (scenarioRequested && (!args.skill || !args.stage)) {
+        throw new Error('assembled context scenarios require both --skill and --stage');
+      }
+      let baseline = null;
+      if (args.baseline) {
+        const baselineResult = readJsonObject(path.resolve(args.baseline));
+        if (!baselineResult.ok) throw new Error(`context baseline is unavailable: ${baselineResult.error}`);
+        if (baselineResult.data.schema_version !== 'p2a.context_audit.v1') {
+          throw new Error('context baseline must use schema_version p2a.context_audit.v1');
+        }
+        baseline = baselineResult.data;
+      }
+      const report = auditContext(args.target, {
+        scenario: scenarioRequested ? {
+          skill: args.skill,
+          stage: args.stage,
+          executionMode: args.mode,
+          conditions: args.conditions,
+        } : null,
+        baseline,
+      });
+      if (args.json) process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
+      else printContextAudit(report);
+      if (report.summary.failures > 0) return 1;
+      if (args.strict && report.summary.warnings > 0) return 1;
       return 0;
     }
     const report = diagnose(args.target, { dev: args.dev });

@@ -208,17 +208,13 @@ test('batch execution contract is present in canonical and generated provider su
     assert.match(canonicalSurface, new RegExp(required.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
   }
   assert.match(gemini, /Gemini is read-only/);
-  assert.match(gemini, /Do not start a run, edit a worktree, create an integration candidate/);
-  assert.match(gemini, /hand it off to a foreground Codex or approved Claude owner/);
-  assert.match(gemini, /For one ready task, that write-capable owner must use the skill's single-task procedure/);
-  assert.match(gemini, /For a frozen batch of independent ready tasks, that owner must use the candidate-first batch procedure/);
-  assert.match(gemini, /candidate-first batch procedure/);
-  for (const reference of [
-    'references/batch-execution.md',
-  ]) {
-    assert.match(gemini, new RegExp(reference.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
-  }
-  assert.match(gemini, /otherwise do not read it/);
+  assert.match(gemini, /confined foreground Codex or approved Claude owner/);
+  assert.match(gemini, /do not mutate runs, worktrees, evidence, tasks, or branches/);
+  assert.doesNotMatch(gemini, /single-task procedure/);
+  assert.doesNotMatch(gemini, /candidate-first batch procedure/);
+  assert.doesNotMatch(gemini, /references\/batch-execution\.md/);
+  assert.doesNotMatch(gemini, /Conditional references for/);
+  assert.doesNotMatch(gemini, /otherwise do not read it/);
 });
 
 test('two ready tasks can overlap in isolated worktrees and finish only after serial integration', async () => {

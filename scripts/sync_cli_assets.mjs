@@ -10,6 +10,7 @@ const __filename = fileURLToPath(import.meta.url);
 const ROOT = path.resolve(path.dirname(__filename), '..');
 const SKILL_SOURCE = path.join(ROOT, '.agents', 'skills');
 const AGENT_SOURCE = path.join(ROOT, '.agents', 'agents');
+const CONTEXT_ROUTES_PATH = path.join(ROOT, '.agents', 'context-routes.json');
 const CAPABILITY_VALUES = new Set(['read', 'search', 'web', 'edit', 'shell']);
 const ACCESS_VALUES = new Set(['read-only', 'workspace-write']);
 const TIER_VALUES = new Set(['light', 'standard', 'heavy']);
@@ -30,18 +31,7 @@ const GEMINI_COMMANDS = {
 
 {{args}}
 
-Rules:
-- Only write Plan2Agent planning artifacts under .plan2agent/artifacts/<project_id>/; never edit source code.
-- Do not run mutating commands.
-- Follow the stage-to-subagent mapping in the skill.
-- Require a validated --entry document for a new harness and follow the Entry Document Confirmation Dialogue.
-- Present a concise scope understanding and require explicit Gate A approval, then use p2a decide --quote so decisions.jsonl and the ready intake approval_audit copy are written together.
-- Treat optional questions and decisions as ledger entries, not as workflow states.
-- Preserve legacy intake fields when reading history, but do not generate or interpret them.
-- After Gate A, establish or reuse the project constitution. For a new project, require a valid .plan2agent/constitution.json and approve it only through p2a shape approve --quote with the exact user utterance so Gate ② is appended to decisions.jsonl; legacy style-only projects remain compatible.
-- Do not synthesize Gate B until intake_json is ready_for_spec with approval_audit and the required Gate ② constitution is approved.
-- After Gate B approval is recorded, return to p2a next; do not create a task graph unconditionally. Let p2a next route Direct/Planned preparation or Orchestrated task breakdown.
-- Return the named state sections required by the harness.`,
+Gemini is read-only. Return proposed planning content and the next state to the foreground Plan2Agent owner; do not persist Gate artifacts, record approvals, or perform other mutations.`,
   },
   next: {
     skill: 'p2a-next',
@@ -50,7 +40,7 @@ Rules:
 
 {{args}}
 
-Call p2a next --json as the decision authority. Do not reproduce state conditions. Execute a CLI command immediately only when the returned command has requiresApproval=false; otherwise wait for user approval.`,
+Treat p2a next --json --contract v2 as the decision authority. Gemini may report the returned action but must not perform writes or approvals.`,
   },
   spec: {
     skill: 'p2a-spec',
@@ -59,7 +49,7 @@ Call p2a next --json as the decision authority. Do not reproduce state condition
 
 {{args}}
 
-Return spec_json conforming to the p2a package schema spec.schema.json and open_decisions. Keep approval as draft; after explicit approval the harness owner uses p2a decide --quote to append the decision and write the approval_audit copy. Generate Markdown only as an optional view.`,
+Gemini is read-only. Return the proposed Gate B content to the foreground harness owner; do not persist canonical artifacts or record approval.`,
   },
   'visual-experience': {
     skill: 'p2a-visual-experience',
@@ -68,7 +58,7 @@ Return spec_json conforming to the p2a package schema spec.schema.json and open_
 
 {{args}}
 
-Classify the current iteration as none, minimal, reuse, or full. Run the full visual procedure only for full + current_iteration. Keep candidates offline and hash-bound, persist them only under gate-b-spec/visual-design through the harness owner, and require explicit human selection and approval before Gate B can pass.`,
+Gemini is read-only. Return proposed visual artifacts and comparison evidence to the foreground harness owner; do not persist candidates or record selection or approval.`,
   },
   'task-author': {
     skill: 'p2a-task-author',
@@ -77,7 +67,7 @@ Classify the current iteration as none, minimal, reuse, or full. Run the full vi
 
 {{args}}
 
-Run or use the provided p2a.task_context.v1 context. When existing_tasks.active is empty, write only iterations/<active_iteration>/gate-c-task-graph/task-graph.draft.json. When it is non-empty, never write an incremental or partial draft: follow the skill's blocker flow and use the authoritative diff-tasks --force check, which permits a complete replacement only before task or run execution history exists. Never write canonical task-graph.json; hand the draft to the skill owner, which validates it and runs promote-tasks only after validation succeeds.`,
+Gemini is read-only. Return one complete proposed task graph to the foreground skill owner; do not write draft or canonical task artifacts.`,
   },
   'dev-execution': {
     skill: 'p2a-dev-execution',
@@ -86,7 +76,7 @@ Run or use the provided p2a.task_context.v1 context. When existing_tasks.active 
 
 {{args}}
 
-Gemini is read-only. Do not start a run, edit a worktree, create an integration candidate, record lifecycle evidence, advance a canonical branch, or finish a task. For any write request, return the exact ready task or frozen batch context and hand it off to a foreground Codex or approved Claude owner. For one ready task, that write-capable owner must use the skill's single-task procedure. For a frozen batch of independent ready tasks, that owner must use the candidate-first batch procedure. Gemini may provide read-only planning, review, or monitor assistance only.`,
+Gemini is read-only. For write-required work, return the exact ready task or frozen batch context to a confined foreground Codex or approved Claude owner; do not mutate runs, worktrees, evidence, tasks, or branches.`,
   },
   'task-breakdown': {
     skill: 'p2a-task-breakdown',
@@ -95,7 +85,7 @@ Gemini is read-only. Do not start a run, edit a worktree, create an integration 
 
 {{args}}
 
-Return task_graph_json conforming to the p2a package schema task-graph.schema.json only. Do not implement tasks. Reject the request if the spec is not approved or open decisions remain.`,
+Gemini is read-only. Return the proposed task graph to the foreground owner; do not persist task artifacts or implement work.`,
   },
 };
 
@@ -242,15 +232,28 @@ function renderCodexAgent(meta, body) {
   );
 }
 
+function readContextRoutes() {
+  const routes = JSON.parse(readFileSync(CONTEXT_ROUTES_PATH, 'utf8'));
+  if (routes?.schema_version !== 'p2a.context_routes.v1' || !Array.isArray(routes.skills)) {
+    throw new Error(`${path.relative(ROOT, CONTEXT_ROUTES_PATH)} must contain p2a.context_routes.v1 skills`);
+  }
+  return routes;
+}
+
+function contextRouteForSkill(routes, skillId) {
+  const route = routes.skills.find((item) => item?.id === skillId);
+  if (!route) throw new Error(`context route is missing for ${skillId}`);
+  if (!Array.isArray(route.references)) throw new Error(`context route references must be an array for ${skillId}`);
+  for (const reference of route.references) {
+    if (typeof reference?.required !== 'boolean') {
+      throw new Error(`context route reference required must be boolean for ${skillId}:${reference?.path ?? '<missing>'}`);
+    }
+  }
+  return route;
+}
+
 function renderGeminiCommand(command) {
-  const skillRoot = path.join(SKILL_SOURCE, command.skill);
-  const references = relativeFileList(skillRoot).filter((relativeFile) => relativeFile.split(path.sep)[0] === 'references');
-  const referenceGuidance = references.length
-    ? `\n\nConditional references for ${command.skill} (resolve relative to its SKILL.md):\n${references
-        .map((relativeFile) => `- ${relativeFile.split(path.sep).join('/')}`)
-        .join('\n')}\nRead a reference only when its entry condition in SKILL.md is satisfied; otherwise do not read it.`
-    : '';
-  const escapedPrompt = `${command.prompt}${referenceGuidance}`.replaceAll('"""', '\\"\\"\\"');
+  const escapedPrompt = command.prompt.replaceAll('"""', '\\"\\"\\"');
   return `description = ${tomlBasicString(command.description)}\nprompt = \"\"\"\n${escapedPrompt}\n\"\"\"\n`;
 }
 
@@ -270,6 +273,7 @@ function relativeFileList(sourceRoot) {
 
 function desiredFiles() {
   const files = [];
+  const contextRoutes = readContextRoutes();
   for (const dirent of readdirSync(SKILL_SOURCE, { withFileTypes: true }).filter((entry) => entry.isDirectory()).sort((a, b) => a.name.localeCompare(b.name))) {
     const skillRoot = path.join(SKILL_SOURCE, dirent.name);
     const skillFile = path.join(skillRoot, 'SKILL.md');
@@ -292,6 +296,10 @@ function desiredFiles() {
   }
   for (const [commandName, command] of Object.entries(GEMINI_COMMANDS).sort(([a], [b]) => a.localeCompare(b))) {
     if (!existsSync(path.join(SKILL_SOURCE, command.skill, 'SKILL.md'))) continue;
+    const route = contextRouteForSkill(contextRoutes, command.skill);
+    if (route.gemini_command !== commandName) {
+      throw new Error(`context route for ${command.skill} must declare gemini_command=${commandName}`);
+    }
     files.push({ path: path.join(ROOT, '.gemini', 'commands', 'p2a', `${commandName}.toml`), content: renderGeminiCommand(command) });
   }
   return files;
@@ -299,11 +307,14 @@ function desiredFiles() {
 
 function writeOrCheck(rendered, check) {
   const expectedBytes = Buffer.isBuffer(rendered.content) ? rendered.content : Buffer.from(String(rendered.content), 'utf8');
+  const currentMatches = existsSync(rendered.path)
+    && readFileSync(rendered.path).equals(expectedBytes);
   if (check) {
     if (!existsSync(rendered.path)) return [`missing generated file ${path.relative(ROOT, rendered.path)}`];
-    if (!readFileSync(rendered.path).equals(expectedBytes)) return [`generated file drift ${path.relative(ROOT, rendered.path)}`];
+    if (!currentMatches) return [`generated file drift ${path.relative(ROOT, rendered.path)}`];
     return [];
   }
+  if (currentMatches) return [];
   mkdirSync(path.dirname(rendered.path), { recursive: true });
   writeFileSync(rendered.path, expectedBytes);
   return [];

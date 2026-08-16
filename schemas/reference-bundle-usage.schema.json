@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://plan2agent.local/schemas/reference-bundle-usage.schema.json",
+  "title": "Plan2Agent Gate B Reference Bundle Usage",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "source_snapshot_ref",
+    "source_snapshot_sha256",
+    "source_bundle_ref",
+    "source_bundle_sha256",
+    "inspected_references"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "const": "p2a.reference_bundle_usage.v1" },
+    "source_snapshot_ref": { "type": "string", "minLength": 1 },
+    "source_snapshot_sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "source_bundle_ref": {
+      "type": "string",
+      "pattern": "^reference-sources/files/.+"
+    },
+    "source_bundle_sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "inspected_references": {
+      "type": "array",
+      "maxItems": 64,
+      "items": {
+        "type": "object",
+        "required": ["id", "sha256", "evidence_source_id", "supported_decision"],
+        "additionalProperties": false,
+        "properties": {
+          "id": { "type": "string", "pattern": "^REF-[1-9][0-9]*$" },
+          "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+          "evidence_source_id": { "type": "string", "pattern": "^LOCAL-[0-9]+$" },
+          "supported_decision": {
+            "type": "string",
+            "pattern": "^spec\\.(product|implementation|visual_experience|reference_reconnaissance)(\\.[A-Za-z0-9_-]+)+$"
+          }
+        }
+      }
+    }
+  }
+}
