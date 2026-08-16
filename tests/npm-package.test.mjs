@@ -11,9 +11,9 @@ const PACKAGE_JSON = JSON.parse(readFileSync(path.join(ROOT, 'package.json'), 'u
 const PACKAGE_NAME = PACKAGE_JSON.name;
 const PACKAGE_VERSION = PACKAGE_JSON.version;
 
-function spawnPortable(command, args, options) {
-  if (process.platform !== 'win32') return spawnSync(command, args, options);
-  return spawnSync(command, args, { ...options, shell: true });
+function spawnNpm(args, options) {
+  if (process.platform !== 'win32') return spawnSync('npm', args, options);
+  return spawnSync('npm', args, { ...options, shell: true });
 }
 
 function parseNpmPackResult(stdout) {
@@ -295,7 +295,7 @@ test('package CLI help keeps scaffold hidden and uses installed command names', 
 test('npm pack dry run includes the global CLI runtime', () => {
   const cacheRoot = makeTempDir('p2a-npm-cache-');
   try {
-    const packed = spawnPortable('npm', ['pack', '--dry-run', '--json'], {
+    const packed = spawnNpm(['pack', '--dry-run', '--json'], {
       cwd: ROOT,
       encoding: 'utf8',
       env: { ...process.env, npm_config_cache: cacheRoot },
@@ -328,7 +328,7 @@ test('npm pack dry run includes the global CLI runtime', () => {
   }
 });
 
-test('the packed p2a binary supports core commands without a local runtime copy', () => {
+test('the packed p2a runtime exposes its bin shim and supports core commands without a local runtime copy', () => {
   const tempRoot = makeTempDir('p2a-packed-bin-');
   const cacheRoot = path.join(tempRoot, 'npm-cache');
   const packRoot = path.join(tempRoot, 'pack');
@@ -338,7 +338,7 @@ test('the packed p2a binary supports core commands without a local runtime copy'
     mkdirSync(packRoot, { recursive: true });
     mkdirSync(targetRoot, { recursive: true });
     const npmEnv = { ...process.env, npm_config_cache: cacheRoot };
-    const packed = spawnPortable('npm', ['pack', '--json', '--pack-destination', packRoot], {
+    const packed = spawnNpm(['pack', '--json', '--pack-destination', packRoot], {
       cwd: ROOT,
       encoding: 'utf8',
       env: npmEnv,
@@ -346,7 +346,7 @@ test('the packed p2a binary supports core commands without a local runtime copy'
     assert.equal(packed.status, 0, formatCommandResult(packed));
     const tarballPath = path.join(packRoot, parseNpmPackResult(packed.stdout).filename);
 
-    const installed = spawnPortable('npm', ['install', '--ignore-scripts', '--no-audit', '--no-fund', '--prefix', installRoot, tarballPath], {
+    const installed = spawnNpm(['install', '--ignore-scripts', '--no-audit', '--no-fund', '--prefix', installRoot, tarballPath], {
       cwd: ROOT,
       encoding: 'utf8',
       env: npmEnv,
@@ -354,13 +354,16 @@ test('the packed p2a binary supports core commands without a local runtime copy'
     assert.equal(installed.status, 0, formatCommandResult(installed));
 
     const binary = path.join(installRoot, 'node_modules', '.bin', process.platform === 'win32' ? 'p2a.cmd' : 'p2a');
+    const packageEntry = path.join(installRoot, 'node_modules', PACKAGE_NAME, PACKAGE_JSON.bin.p2a);
+    assert.equal(existsSync(binary), true, 'npm install must create the p2a bin shim');
+    assert.equal(existsSync(packageEntry), true, 'the packed package must include the p2a entry point');
     const runPacked = (cwd, args) => {
       const options = {
         cwd,
         encoding: 'utf8',
         env: { ...process.env, P2A_MEMORY_URL: '', P2A_MEMORY_TOKEN: '' },
       };
-      return spawnPortable(binary, args, options);
+      return spawnSync(process.execPath, [packageEntry, ...args], options);
     };
     const initialized = runPacked(targetRoot, ['init', '--tools', 'codex']);
     assert.equal(initialized.status, 0, formatCommandResult(initialized));
