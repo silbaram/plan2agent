@@ -12,6 +12,7 @@ import path from 'node:path';
 import test from 'node:test';
 
 import { validateSchema } from '../scripts/validate_artifacts.mjs';
+import { validateContextPacket } from '../scripts/p2a_context.mjs';
 import {
   E2E_FIXTURE_ROOT,
   ROOT,
@@ -56,6 +57,88 @@ function jsonPacket(result) {
   validateSchema(packet, PACKET_SCHEMA);
   return packet;
 }
+
+function validPacket(overrides = {}) {
+  return {
+    schema_version: 'p2a.context_packet.v1',
+    provider: 'codex',
+    skill: 'p2a-dev-execution',
+    phase: 'prepare',
+    activation: 'immediate',
+    mode: 'direct',
+    continuation: {
+      id: 'execution.prepare',
+      sourceState: 'gate_b_approved_needs_execution_prepare',
+    },
+    binding: {
+      kind: 'action',
+      sourceState: 'gate_b_approved_needs_execution_prepare',
+      artifactContractSha256: 'a'.repeat(64),
+    },
+    sources: [{
+      routeId: 'execution.lifecycle',
+      path: '.agents/skills/p2a-dev-execution/references/execution-lifecycle.md',
+      sha256: 'b'.repeat(64),
+      bytes: 42,
+    }],
+    totalBytes: 42,
+    generatedAt: '2026-08-16T00:00:00.000Z',
+    ...overrides,
+  };
+}
+
+test('context packet schema rejects inconsistent activation, phase, continuation, and binding combinations', () => {
+  validateSchema(validPacket(), PACKET_SCHEMA);
+  assert.throws(
+    () => validateSchema(validPacket({ activation: 'run_declared' }), PACKET_SCHEMA),
+    /oneOf/,
+  );
+  assert.throws(
+    () => validateSchema(validPacket({ phase: 'monitor' }), PACKET_SCHEMA),
+    /oneOf/,
+  );
+  assert.throws(
+    () => validateSchema(validPacket({ continuation: null }), PACKET_SCHEMA),
+    /oneOf/,
+  );
+  assert.throws(
+    () => validateSchema(validPacket({
+      binding: {
+        kind: 'run',
+        runId: 'run-invalid-combination',
+        taskId: 'task-1',
+        taskContractSha256: 'c'.repeat(64),
+      },
+    }), PACKET_SCHEMA),
+    /oneOf/,
+  );
+});
+
+test('context packet semantic validation rejects drifted metadata', () => {
+  assert.throws(
+    () => validateContextPacket(validPacket({ totalBytes: 41 })),
+    /source byte sum 42/,
+  );
+  assert.throws(
+    () => validateContextPacket(validPacket({
+      continuation: { id: 'execution.prepare', sourceState: 'different-state' },
+    })),
+    /must equal.*binding\.sourceState/,
+  );
+  assert.throws(
+    () => validateContextPacket(validPacket({ generatedAt: '2026-99-99T00:00:00.000Z' })),
+    /valid canonical UTC timestamp/,
+  );
+  assert.throws(
+    () => validateContextPacket(validPacket({
+      sources: [
+        validPacket().sources[0],
+        { ...validPacket().sources[0], path: '.agents/duplicate.md', bytes: 0 },
+      ],
+    })),
+    /routeId values must be unique/,
+  );
+});
 
 test('immediate context packet binds the current action without exposing artifact bodies', () => {
   const fixture = contextProject('immediate');

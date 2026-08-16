@@ -16,6 +16,77 @@
     "totalBytes",
     "generatedAt"
   ],
+  "oneOf": [
+    {
+      "properties": {
+        "activation": { "const": "immediate" },
+        "phase": { "const": "prepare" },
+        "continuation": {
+          "type": "object",
+          "properties": { "id": { "const": "execution.prepare" } }
+        },
+        "binding": {
+          "type": "object",
+          "properties": { "kind": { "const": "action" } }
+        }
+      }
+    },
+    {
+      "properties": {
+        "activation": { "const": "after_command_success" },
+        "phase": { "const": "owner-start" },
+        "continuation": {
+          "type": "object",
+          "properties": { "id": { "const": "execution.owner-start" } }
+        },
+        "binding": {
+          "type": "object",
+          "properties": { "kind": { "const": "run" } }
+        }
+      }
+    },
+    {
+      "properties": {
+        "activation": { "const": "after_command_success" },
+        "phase": { "const": "visual-review" },
+        "continuation": {
+          "type": "object",
+          "properties": { "id": { "const": "execution.visual-review" } }
+        },
+        "binding": {
+          "type": "object",
+          "properties": { "kind": { "const": "run" } }
+        }
+      }
+    },
+    {
+      "properties": {
+        "activation": { "const": "after_command_success" },
+        "phase": { "const": "acceptance-review" },
+        "continuation": {
+          "type": "object",
+          "properties": { "id": { "const": "execution.acceptance-review" } }
+        },
+        "binding": {
+          "type": "object",
+          "properties": { "kind": { "const": "run" } }
+        }
+      }
+    },
+    {
+      "properties": {
+        "activation": { "const": "run_declared" },
+        "phase": {
+          "enum": ["retry", "verify-closeout", "visual-review", "acceptance-review", "monitor"]
+        },
+        "continuation": { "type": "null" },
+        "binding": {
+          "type": "object",
+          "properties": { "kind": { "const": "run" } }
+        }
+      }
+    }
+  ],
   "additionalProperties": false,
   "properties": {
     "schema_version": { "const": "p2a.context_packet.v1" },
@@ -81,6 +152,9 @@
       }
     },
     "totalBytes": { "type": "integer", "minimum": 0 },
-    "generatedAt": { "type": "string", "minLength": 1 }
+    "generatedAt": {
+      "type": "string",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+    }
   }
 }

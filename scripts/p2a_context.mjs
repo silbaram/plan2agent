@@ -18,6 +18,7 @@ import { resolveP2aPaths } from './p2a_paths.mjs';
 import { resolveRunsDir, runFilePath } from './p2a_run_paths.mjs';
 import {
   loadJson,
+  ValidationError,
   validateRunData,
   validateRunTaskContract,
   validateSchema,
@@ -311,7 +312,34 @@ function packetMetadata(args, resolvedBinding, resolvedContext) {
     totalBytes: sources.reduce((total, source) => total + source.bytes, 0),
     generatedAt: new Date().toISOString(),
   };
+  validateContextPacket(packet);
+  return packet;
+}
+
+export function validateContextPacket(packet) {
   validateSchema(packet, PACKET_SCHEMA);
+  if (
+    packet.binding.kind === 'action'
+    && packet.continuation.sourceState !== packet.binding.sourceState
+  ) {
+    throw new ValidationError('$.continuation.sourceState must equal $.binding.sourceState');
+  }
+  const expectedTotalBytes = packet.sources.reduce((total, source) => total + source.bytes, 0);
+  if (packet.totalBytes !== expectedTotalBytes) {
+    throw new ValidationError(`$.totalBytes must equal the source byte sum ${expectedTotalBytes}`);
+  }
+  const generatedAt = new Date(packet.generatedAt);
+  if (Number.isNaN(generatedAt.getTime()) || generatedAt.toISOString() !== packet.generatedAt) {
+    throw new ValidationError('$.generatedAt must be a valid canonical UTC timestamp');
+  }
+  const routeIds = packet.sources.map((source) => source.routeId);
+  if (routeIds.length !== new Set(routeIds).size) {
+    throw new ValidationError('$.sources routeId values must be unique');
+  }
+  const sourcePaths = packet.sources.map((source) => source.path);
+  if (sourcePaths.length !== new Set(sourcePaths).size) {
+    throw new ValidationError('$.sources path values must be unique');
+  }
   return packet;
 }
 

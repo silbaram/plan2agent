@@ -27,11 +27,30 @@ function exitClass(exitCode) {
   return exitCode === 0 ? 'success' : 'failure';
 }
 
+function matcherOccursAsPath(command, matcher) {
+  const variants = path.posix.isAbsolute(matcher) || matcher.startsWith('./')
+    ? [matcher]
+    : [matcher, `./${matcher}`];
+  return variants.some((variant) => {
+    let offset = command.indexOf(variant);
+    while (offset !== -1) {
+      const before = offset === 0 ? '' : command[offset - 1];
+      const afterOffset = offset + variant.length;
+      const after = afterOffset === command.length ? '' : command[afterOffset];
+      const startsAtBoundary = !before || /[\s'"=([{,;|&<>]/.test(before);
+      const endsAtBoundary = !after || /[\s'"\])},;|&<>]/.test(after);
+      if (startsAtBoundary && endsAtBoundary) return true;
+      offset = command.indexOf(variant, offset + 1);
+    }
+    return false;
+  });
+}
+
 function operationSourceIds(command, sourceAllowlist) {
   if (!command) return [];
   const normalized = normalizePath(command);
   return [...new Set(sourceAllowlist
-    .filter((source) => source.matchers.some((matcher) => normalized.includes(matcher)))
+    .filter((source) => source.matchers.some((matcher) => matcherOccursAsPath(normalized, matcher)))
     .map((source) => source.id))]
     .sort((left, right) => left.localeCompare(right));
 }
@@ -100,6 +119,9 @@ export class SanitizedToolTrace {
 
   summary() {
     const readOperations = this.operations.filter((operation) => operation.commandClass === 'read');
+    const unattributedReadOperations = readOperations.filter(
+      (operation) => operation.sourceIds.length === 0,
+    ).length;
     const occurrenceCounts = new Map();
     for (const operation of readOperations) {
       for (const sourceId of operation.sourceIds) {
@@ -111,9 +133,10 @@ export class SanitizedToolTrace {
     const repeatedSourceReads = [...occurrenceCounts.values()]
       .reduce((total, count) => total + Math.max(0, count - 1), 0);
     const supported = this.unsupportedShapes.length === 0;
+    const complete = supported && unattributedReadOperations === 0;
     return {
       schema_version: 'p2a.sanitized_tool_trace.v1',
-      status: supported ? 'available' : 'unsupported',
+      status: !supported ? 'unsupported' : complete ? 'available' : 'partial',
       eventShape: {
         supported,
         unsupportedCount: this.unsupportedShapes.length,
@@ -125,11 +148,13 @@ export class SanitizedToolTrace {
         uniqueSourcesRead: occurrenceCounts.size,
         sourceReadOccurrences,
         repeatedSourceReads,
+        unattributedReadOperations,
         sourcesPerReadOperation: readOperations.length
           ? Number((sourceReadOccurrences / readOperations.length).toFixed(4))
           : 0,
         unknownOperations: this.operations.filter((operation) => operation.commandClass === 'unknown').length
-          + this.unsupportedShapes.length,
+          + this.unsupportedShapes.length
+          + unattributedReadOperations,
       },
     };
   }

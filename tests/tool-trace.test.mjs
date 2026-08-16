@@ -33,6 +33,7 @@ test('sanitized tool trace separates multi-source reads from repeated operations
     uniqueSourcesRead: 2,
     sourceReadOccurrences: 3,
     repeatedSourceReads: 1,
+    unattributedReadOperations: 0,
     sourcesPerReadOperation: 1.5,
     unknownOperations: 0,
   });
@@ -42,6 +43,33 @@ test('sanitized tool trace separates multi-source reads from repeated operations
   const serialized = JSON.stringify(trace);
   assert.doesNotMatch(serialized, /PRIVATE-QUERY|sed -n|npm test|SKILL\.md/);
   assert.doesNotMatch(serialized, /[a-f0-9]{64}/);
+});
+
+test('unattributed reads make a trace partial and do not use path suffix matches', () => {
+  const trace = collectSanitizedToolTrace([
+    commandEvent('cat /workspace/project/.agents/skills/p2a-next/SKILL.md'),
+    commandEvent('cat /tmp/foreign/.agents/skills/p2a-next/SKILL.md'),
+    commandEvent('rg TODO .'),
+  ], [
+    {
+      id: 'skill:p2a-next',
+      paths: [
+        '.agents/skills/p2a-next/SKILL.md',
+        '/workspace/project/.agents/skills/p2a-next/SKILL.md',
+      ],
+    },
+  ]);
+
+  assert.equal(trace.status, 'partial');
+  assert.deepEqual(trace.operations.map((operation) => operation.sourceIds), [
+    ['skill:p2a-next'],
+    [],
+    [],
+  ]);
+  assert.equal(trace.metrics.sourceReadOccurrences, 1);
+  assert.equal(trace.metrics.repeatedSourceReads, 0);
+  assert.equal(trace.metrics.unattributedReadOperations, 2);
+  assert.equal(trace.metrics.unknownOperations, 2);
 });
 
 test('unsupported command event shapes preserve only safe field types', () => {
@@ -59,5 +87,6 @@ test('unsupported command event shapes preserve only safe field types', () => {
   assert.equal(trace.status, 'unsupported');
   assert.equal(trace.metrics.toolOperations, 1);
   assert.equal(trace.metrics.unknownOperations, 1);
+  assert.equal(trace.metrics.unattributedReadOperations, 0);
   assert.doesNotMatch(JSON.stringify(trace), /SECRET-COMMAND/);
 });
