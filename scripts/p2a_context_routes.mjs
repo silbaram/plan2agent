@@ -9,7 +9,7 @@ import {
 } from 'node:fs';
 import path from 'node:path';
 
-import { validateSchema } from './validate_artifacts.mjs';
+import { validateSchema } from './p2a_schema.mjs';
 
 export const CONTEXT_PROVIDERS = Object.freeze(['codex', 'claude', 'gemini']);
 export const CONTEXT_PHASES = Object.freeze([
@@ -43,18 +43,18 @@ function stringArray(value) {
     : [];
 }
 
-function routeModeApplies(route, mode) {
+export function routeModeApplies(route, mode) {
   if (!mode) return true;
   const modes = stringArray(route?.modes);
   return !modes.length || modes.includes(mode);
 }
 
-function referenceAppliesToProvider(reference, provider) {
+export function referenceAppliesToProvider(reference, provider) {
   const providers = stringArray(reference?.providers);
   return !providers.length || providers.includes(provider);
 }
 
-function referencePathForProvider(reference, provider) {
+export function referencePathForProvider(reference, provider) {
   const override = (reference.provider_paths ?? []).find((item) => item?.provider === provider);
   return override?.path ?? reference.path;
 }

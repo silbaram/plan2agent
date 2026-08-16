@@ -236,6 +236,7 @@ session에서 실행되며 Plan2Agent는 provider API를 직접 호출하지 않
 ## 문서
 
 - [Quickstart](docs/quickstart.md) — 설치부터 첫 Gate artifact까지의 최단 경로
+- [Adaptive Harness 사용자 흐름](docs/adaptive-harness-user-flow.md) — Gate 승인부터 adaptive 실행, context routing, 검증·종료까지의 전체 여정
 - [CLI 레퍼런스](docs/cli-reference.md) — 명령, option, 예시
 - [하네스 사용자 가이드](docs/harness-guide.md) — Gate A-C, 결정 원장, schema, evidence, 문제 해결
 - [Iteration Spec](docs/iteration-spec.md) — iteration layout, diff, close/open, run tracking

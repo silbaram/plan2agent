@@ -12,6 +12,11 @@ function run({
   repeatedSourceReads = 0,
   unattributedReadOperations = 0,
   unknownOperations = 0,
+  packetManagedAttributionComplete = true,
+  packetManagedRepeatedSourceReads = 0,
+  packetManagedUnattributedReadOperations = 0,
+  packetManagedUnknownOperations = 0,
+  usage = { input_tokens: 100, cached_input_tokens: 25, output_tokens: 10 },
 }) {
   return {
     variant: 'candidate',
@@ -19,7 +24,7 @@ function run({
     grade: { verdict: 'pass' },
     metadata: {
       execution: {
-        usage: { input_tokens: 100, cached_input_tokens: 25, output_tokens: 10 },
+        usage,
         durationMs: 50,
         toolCalls: toolOperations,
         toolFailures: 0,
@@ -35,6 +40,10 @@ function run({
             repeatedSourceReads,
             unattributedReadOperations,
             unknownOperations,
+            packetManagedAttributionComplete,
+            packetManagedRepeatedSourceReads,
+            packetManagedUnattributedReadOperations,
+            packetManagedUnknownOperations,
           },
         },
       },
@@ -75,6 +84,21 @@ test('A/B aggregation blocks tool-operation claims for unsupported event shapes'
   assert.equal(metrics.medians.toolOperations, null);
 });
 
+test('A/B aggregation preserves missing and invalid usage as unavailable', () => {
+  const missing = run({ scenarioId: 'direct-execution', usage: null });
+  const invalidUncached = run({
+    scenarioId: 'direct-execution',
+    usage: { input_tokens: 10, cached_input_tokens: 20, output_tokens: 1 },
+  });
+  const metrics = aggregateAbRuns([missing, invalidUncached], 'candidate', 'direct-execution');
+
+  assert.equal(metrics.inputTokens, null);
+  assert.equal(metrics.uncachedInputTokens, null);
+  assert.equal(metrics.medians.inputTokens, null);
+  assert.equal(metrics.measurementCoverage.inputTokens.complete, false);
+  assert.equal(metrics.measurementCoverage.uncachedInputTokens.complete, false);
+});
+
 function referenceSummary() {
   const scenario = (scenarioId, inputTokens, toolOperations) => ({
     scenarioId,
@@ -104,6 +128,10 @@ function passingCandidateMetrics() {
     repeatedSourceReads: 0,
     unattributedReadOperations: 0,
     unknownOperations: 0,
+    packetManagedAttributionComplete: true,
+    packetManagedRepeatedSourceReads: 0,
+    packetManagedUnattributedReadOperations: 0,
+    packetManagedUnknownOperations: 0,
     traceCoverage: { attributionComplete: true },
     medians: { inputTokens, toolOperations },
   });
@@ -125,9 +153,10 @@ test('runtime gate ignores Gate B attribution for packet-managed source checks',
   const candidate = passingCandidateMetrics();
   candidate.scenarioMetrics.set('gate-b-spec', {
     ...candidate.scenarioMetrics.get('gate-b-spec'),
-    repeatedSourceReads: 4,
-    unattributedReadOperations: 2,
-    unknownOperations: 2,
+    packetManagedRepeatedSourceReads: 4,
+    packetManagedUnattributedReadOperations: 2,
+    packetManagedUnknownOperations: 2,
+    packetManagedAttributionComplete: false,
     traceCoverage: { attributionComplete: false },
   });
 
@@ -143,8 +172,9 @@ test('runtime gate fails a packet-managed attribution gap with numeric evidence'
   const candidate = passingCandidateMetrics();
   candidate.scenarioMetrics.set('direct-execution', {
     ...candidate.scenarioMetrics.get('direct-execution'),
-    unattributedReadOperations: 1,
-    unknownOperations: 1,
+    packetManagedUnattributedReadOperations: 1,
+    packetManagedUnknownOperations: 1,
+    packetManagedAttributionComplete: false,
     traceCoverage: { attributionComplete: false },
   });
 
@@ -161,4 +191,41 @@ test('runtime gate fails a packet-managed attribution gap with numeric evidence'
       ['packet_managed_unknown_operations', false, 1],
     ],
   );
+});
+
+test('runtime gate fails when aggregate performance measurements are unavailable', () => {
+  const candidate = passingCandidateMetrics();
+  candidate.metrics.inputTokens = null;
+  candidate.metrics.durationMs = null;
+  candidate.metrics.uncachedInputTokens = null;
+
+  const gate = evaluateRuntimeRoutingPerformance(referenceSummary(), candidate);
+  assert.equal(gate.verdict, 'fail');
+  assert.deepEqual(
+    gate.checks
+      .filter((check) => check.id.startsWith('aggregate_'))
+      .map((check) => [check.id, check.pass, check.actual]),
+    [
+      ['aggregate_input_tokens', false, null],
+      ['aggregate_elapsed_ms', false, null],
+      ['aggregate_uncached_input_tokens', false, null],
+    ],
+  );
+});
+
+test('runtime gate records provider-specific measurement exclusions without duplicating gate logic', () => {
+  const candidate = passingCandidateMetrics();
+  candidate.metrics.uncachedInputTokens = null;
+  const reason = 'Provider does not expose a reliable uncached input metric.';
+
+  const gate = evaluateRuntimeRoutingPerformance(referenceSummary(), candidate, {
+    excludedChecks: { aggregate_uncached_input_tokens: reason },
+  });
+
+  assert.equal(gate.verdict, 'pass');
+  assert.equal(
+    gate.checks.some((check) => check.id === 'aggregate_uncached_input_tokens'),
+    false,
+  );
+  assert.deepEqual(gate.excludedChecks, [{ id: 'aggregate_uncached_input_tokens', reason }]);
 });

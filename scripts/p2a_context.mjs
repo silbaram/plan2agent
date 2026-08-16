@@ -12,29 +12,24 @@ import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-import { buildNext } from './p2a.mjs';
+import { buildNextActionContract } from './p2a_next_service.mjs';
+import { CONTINUATION_DEFINITIONS } from './p2a_continuations.mjs';
+import {
+  renderModelContextPacket,
+  validateContextPacket,
+} from './p2a_context_packet.mjs';
 import { resolveRuntimeContext } from './p2a_context_routes.mjs';
 import { resolveP2aPaths } from './p2a_paths.mjs';
 import { resolveRunsDir, runFilePath } from './p2a_run_paths.mjs';
 import {
   loadJson,
-  ValidationError,
   validateRunData,
   validateRunTaskContract,
-  validateSchema,
 } from './validate_artifacts.mjs';
 
-const PACKET_SCHEMA = JSON.parse(readFileSync(
-  new URL('../schemas/context-packet.schema.json', import.meta.url),
-  'utf8',
-));
+export { renderModelContextPacket, validateContextPacket } from './p2a_context_packet.mjs';
 const P2A_PATHS = resolveP2aPaths(import.meta.url);
-const CONTINUATIONS = Object.freeze({
-  'execution.prepare': { activation: 'immediate', phase: 'prepare' },
-  'execution.owner-start': { activation: 'after_command_success', phase: 'owner-start' },
-  'execution.visual-review': { activation: 'after_command_success', phase: 'visual-review' },
-  'execution.acceptance-review': { activation: 'after_command_success', phase: 'acceptance-review' },
-});
+const CONTINUATIONS = CONTINUATION_DEFINITIONS;
 const RUN_DECLARED_PHASES = new Set([
   'retry',
   'verify-closeout',
@@ -161,43 +156,14 @@ function artifactIdentity(artifactRoot) {
   return { projectId, activeIteration, specPath };
 }
 
-function artifactContractSources(artifactRoot, identity) {
-  const candidates = [
-    path.join(artifactRoot, 'current-spec.json'),
-    path.join(artifactRoot, 'gate-a-intake', 'intake.json'),
-    path.join(artifactRoot, 'gate-b-spec', 'spec.json'),
-    path.join(artifactRoot, 'gate-c-task-graph', 'task-graph.json'),
-  ];
-  if (identity.activeIteration) {
-    const iterationRoot = path.join(artifactRoot, 'iterations', identity.activeIteration);
-    candidates.push(
-      path.join(iterationRoot, 'gate-a-intake', 'intake.json'),
-      path.join(iterationRoot, 'gate-b-spec', 'spec.json'),
-      path.join(iterationRoot, 'gate-c-task-graph', 'task-graph.json'),
-    );
-  }
-  return [...new Set(candidates)]
-    .filter((filePath) => {
-      try {
-        return lstatSync(filePath).isFile() && !lstatSync(filePath).isSymbolicLink();
-      } catch {
-        return false;
-      }
-    })
-    .map((filePath) => ({
-      ref: filePath.slice(artifactRoot.length + 1).replaceAll(path.sep, '/'),
-      sha256: sha256(readFileSync(filePath)),
-    }))
-    .sort((left, right) => left.ref.localeCompare(right.ref));
-}
-
 function actionBinding(targetRoot, artifactRoot, continuationId) {
   const definition = CONTINUATIONS[continuationId];
   if (!definition || definition.activation !== 'immediate') {
     throw new Error(`unknown immediate continuation: ${continuationId}`);
   }
   const identity = artifactIdentity(artifactRoot);
-  const next = buildNext(targetRoot, identity.projectId, null, 'v2');
+  const nextContract = buildNextActionContract(targetRoot, identity.projectId, null, 'v2');
+  const next = nextContract.next;
   if (
     next.continuation?.id !== continuationId
     || next.continuation?.activation !== 'immediate'
@@ -216,7 +182,15 @@ function actionBinding(targetRoot, artifactRoot, continuationId) {
       phase: next.continuation.phase,
       mode: next.continuation.mode,
     },
-    sources: artifactContractSources(artifactRoot, identity),
+    nextDecision: {
+      schema_version: next.schema_version,
+      projectId: next.projectId,
+      state: next.state,
+      reasonCode: next.reasonCode,
+      command: next.command,
+      continuation: next.continuation,
+    },
+    sources: nextContract.sources,
   };
   return {
     activation: definition.activation,
@@ -229,6 +203,12 @@ function actionBinding(targetRoot, artifactRoot, continuationId) {
       artifactContractSha256: sha256(`${stableJson(contract)}\n`),
     },
   };
+}
+
+function commandArgument(argv, flag) {
+  if (!Array.isArray(argv)) return null;
+  const index = argv.indexOf(flag);
+  return index >= 0 && typeof argv[index + 1] === 'string' ? argv[index + 1] : null;
 }
 
 function loadStartedRun(artifactRoot, runId) {
@@ -261,11 +241,13 @@ function runBinding(targetRoot, artifactRoot, args) {
     if (!definition || definition.activation !== 'after_command_success') {
       throw new Error(`unknown after-command continuation: ${args.continuation}`);
     }
-    const next = buildNext(targetRoot, run.projectId, null, 'v2');
+    const next = buildNextActionContract(targetRoot, run.projectId, null, 'v2').next;
     if (
       next.state !== 'run_started'
       || next.continuation?.id !== args.continuation
       || next.continuation?.activation !== 'after_command_success'
+      || next.continuation?.mode !== run.mode
+      || commandArgument(next.command?.argv, '--run-id') !== run.runId
     ) {
       throw new Error(`stale command binding: current next state does not activate ${args.continuation}`);
     }
@@ -314,49 +296,6 @@ function packetMetadata(args, resolvedBinding, resolvedContext) {
   };
   validateContextPacket(packet);
   return packet;
-}
-
-export function validateContextPacket(packet) {
-  validateSchema(packet, PACKET_SCHEMA);
-  if (
-    packet.binding.kind === 'action'
-    && packet.continuation.sourceState !== packet.binding.sourceState
-  ) {
-    throw new ValidationError('$.continuation.sourceState must equal $.binding.sourceState');
-  }
-  const expectedTotalBytes = packet.sources.reduce((total, source) => total + source.bytes, 0);
-  if (packet.totalBytes !== expectedTotalBytes) {
-    throw new ValidationError(`$.totalBytes must equal the source byte sum ${expectedTotalBytes}`);
-  }
-  const generatedAt = new Date(packet.generatedAt);
-  if (Number.isNaN(generatedAt.getTime()) || generatedAt.toISOString() !== packet.generatedAt) {
-    throw new ValidationError('$.generatedAt must be a valid canonical UTC timestamp');
-  }
-  const routeIds = packet.sources.map((source) => source.routeId);
-  if (routeIds.length !== new Set(routeIds).size) {
-    throw new ValidationError('$.sources routeId values must be unique');
-  }
-  const sourcePaths = packet.sources.map((source) => source.path);
-  if (sourcePaths.length !== new Set(sourcePaths).size) {
-    throw new ValidationError('$.sources path values must be unique');
-  }
-  return packet;
-}
-
-export function renderModelContextPacket(packet, resolvedSources) {
-  const immutable = { ...packet };
-  delete immutable.generatedAt;
-  const lines = [
-    'BEGIN PLAN2AGENT CONTEXT PACKET',
-    stableJson(immutable),
-  ];
-  for (const source of resolvedSources) {
-    lines.push(`BEGIN PLAN2AGENT SOURCE routeId=${source.routeId} path=${source.path} sha256=${source.sha256} bytes=${source.bytes}`);
-    lines.push(source.body.endsWith('\n') ? source.body.slice(0, -1) : source.body);
-    lines.push(`END PLAN2AGENT SOURCE routeId=${source.routeId}`);
-  }
-  lines.push('END PLAN2AGENT CONTEXT PACKET');
-  return `${lines.join('\n')}\n`;
 }
 
 export function buildContextPacket(argsInput) {

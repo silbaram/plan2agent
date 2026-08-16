@@ -18,11 +18,32 @@ function sumComplete(values) {
     : null;
 }
 
+function finiteMetric(value) {
+  return Number.isFinite(value) ? value : null;
+}
+
+function uncachedInputTokens(run) {
+  const usage = run.metadata?.execution?.usage;
+  if (!Number.isFinite(usage?.input_tokens) || !Number.isFinite(usage?.cached_input_tokens)) {
+    return null;
+  }
+  const value = usage.input_tokens - usage.cached_input_tokens;
+  return value >= 0 ? value : null;
+}
+
+function metricCoverage(values) {
+  const availableRuns = values.filter(Number.isFinite).length;
+  return {
+    availableRuns,
+    expectedRuns: values.length,
+    complete: values.length > 0 && availableRuns === values.length,
+  };
+}
+
 export function aggregateAbRuns(runs, variant, scenarioId = null) {
   const selected = runs.filter((run) => (
     run.variant === variant && (!scenarioId || run.scenarioId === scenarioId)
   ));
-  const sum = (selector) => selected.reduce((total, run) => total + (selector(run) ?? 0), 0);
   const traces = selected.map((run) => run.metadata?.execution?.toolTrace ?? null);
   const availableRuns = traces.filter((trace) => trace?.status === 'available').length;
   const partialRuns = traces.filter((trace) => trace?.status === 'partial').length;
@@ -34,21 +55,37 @@ export function aggregateAbRuns(runs, variant, scenarioId = null) {
   const attributionComplete = selected.length > 0 && availableRuns === selected.length;
   const metricValues = (field) => selected.map((run) => traceMetric(run, field));
   const runMetric = (selector) => selected.map(selector);
+  const measurements = {
+    inputTokens: runMetric((run) => finiteMetric(run.metadata?.execution?.usage?.input_tokens)),
+    cachedInputTokens: runMetric((run) => finiteMetric(run.metadata?.execution?.usage?.cached_input_tokens)),
+    uncachedInputTokens: runMetric(uncachedInputTokens),
+    outputTokens: runMetric((run) => finiteMetric(run.metadata?.execution?.usage?.output_tokens)),
+    durationMs: runMetric((run) => finiteMetric(run.metadata?.execution?.durationMs)),
+    toolCalls: runMetric((run) => finiteMetric(run.metadata?.execution?.toolCalls)),
+    toolFailures: runMetric((run) => finiteMetric(run.metadata?.execution?.toolFailures)),
+  };
+  const measurementCoverage = Object.fromEntries(
+    Object.entries(measurements).map(([field, values]) => [field, metricCoverage(values)]),
+  );
+  measurementCoverage.complete = Object.values(measurementCoverage).every(
+    (coverage) => coverage.complete === true,
+  );
+  const packetManagedAttributionComplete = selected.length > 0 && traces.every(
+    (trace) => trace?.metrics?.packetManagedAttributionComplete === true,
+  );
 
   return {
     runs: selected.length,
     passed: selected.filter((run) => run.grade?.verdict === 'pass').length,
     failed: selected.filter((run) => run.grade?.verdict !== 'pass').length,
-    inputTokens: sum((run) => run.metadata?.execution?.usage?.input_tokens),
-    cachedInputTokens: sum((run) => run.metadata?.execution?.usage?.cached_input_tokens),
-    uncachedInputTokens: sum((run) => {
-      const usage = run.metadata?.execution?.usage;
-      return (usage?.input_tokens ?? 0) - (usage?.cached_input_tokens ?? 0);
-    }),
-    outputTokens: sum((run) => run.metadata?.execution?.usage?.output_tokens),
-    durationMs: sum((run) => run.metadata?.execution?.durationMs),
-    toolCalls: sum((run) => run.metadata?.execution?.toolCalls),
-    toolFailures: sum((run) => run.metadata?.execution?.toolFailures),
+    inputTokens: sumComplete(measurements.inputTokens),
+    cachedInputTokens: sumComplete(measurements.cachedInputTokens),
+    uncachedInputTokens: sumComplete(measurements.uncachedInputTokens),
+    outputTokens: sumComplete(measurements.outputTokens),
+    durationMs: sumComplete(measurements.durationMs),
+    toolCalls: sumComplete(measurements.toolCalls),
+    toolFailures: sumComplete(measurements.toolFailures),
+    measurementCoverage,
     traceCoverage: {
       availableRuns,
       partialRuns,
@@ -57,6 +94,7 @@ export function aggregateAbRuns(runs, variant, scenarioId = null) {
       unavailableRuns: selected.length - availableRuns,
       eventShapeComplete,
       attributionComplete,
+      packetManagedAttributionComplete,
       complete: attributionComplete,
     },
     toolOperations: eventShapeComplete ? sumComplete(metricValues('toolOperations')) : null,
@@ -67,16 +105,19 @@ export function aggregateAbRuns(runs, variant, scenarioId = null) {
     repeatedSourceReads: sumComplete(metricValues('repeatedSourceReads')),
     unattributedReadOperations: sumComplete(metricValues('unattributedReadOperations')),
     unknownOperations: sumComplete(metricValues('unknownOperations')),
+    packetManagedAttributionComplete,
+    packetManagedRepeatedSourceReads: sumComplete(metricValues('packetManagedRepeatedSourceReads')),
+    packetManagedUnattributedReadOperations: sumComplete(
+      metricValues('packetManagedUnattributedReadOperations'),
+    ),
+    packetManagedUnknownOperations: sumComplete(metricValues('packetManagedUnknownOperations')),
     medians: {
-      inputTokens: median(runMetric((run) => run.metadata?.execution?.usage?.input_tokens)),
-      uncachedInputTokens: median(runMetric((run) => {
-        const usage = run.metadata?.execution?.usage;
-        return Number.isFinite(usage?.input_tokens) && Number.isFinite(usage?.cached_input_tokens)
-          ? usage.input_tokens - usage.cached_input_tokens
-          : null;
-      })),
-      outputTokens: median(runMetric((run) => run.metadata?.execution?.usage?.output_tokens)),
-      durationMs: median(runMetric((run) => run.metadata?.execution?.durationMs)),
+      inputTokens: measurementCoverage.inputTokens.complete ? median(measurements.inputTokens) : null,
+      uncachedInputTokens: measurementCoverage.uncachedInputTokens.complete
+        ? median(measurements.uncachedInputTokens)
+        : null,
+      outputTokens: measurementCoverage.outputTokens.complete ? median(measurements.outputTokens) : null,
+      durationMs: measurementCoverage.durationMs.complete ? median(measurements.durationMs) : null,
       toolOperations: eventShapeComplete ? median(metricValues('toolOperations')) : null,
     },
   };

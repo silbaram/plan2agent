@@ -1,0 +1,119 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://plan2agent.local/schemas/context-engineering-codex-ab-result.schema.json",
+  "title": "Plan2Agent context engineering Codex A/B result",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "scenarioId",
+    "decision",
+    "executionMode",
+    "questions",
+    "preservedRequirements",
+    "checkpoints",
+    "requiredEvidence",
+    "forbiddenActions",
+    "ownerCount",
+    "requiresIsolation",
+    "serialIntegration",
+    "closeReady",
+    "returnToGateB",
+    "rationale"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "type": "string",
+      "const": "p2a.context_engineering_codex_ab_result.v1"
+    },
+    "scenarioId": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Copy the supplied scenario id exactly."
+    },
+    "decision": {
+      "type": "string",
+      "enum": [
+        "ask",
+        "draft_spec",
+        "execute",
+        "collect_evidence",
+        "return_gate_b",
+        "block"
+      ],
+      "description": "ask only for unresolved product questions; draft_spec when Gate A answers are complete; execute for implementation; collect_evidence for missing closeout evidence; return_gate_b only when product meaning or the approved contract must change; block for an authority or infrastructure stop that cannot be corrected inside the current contract."
+    },
+    "executionMode": {
+      "type": "string",
+      "enum": [
+        "not_applicable",
+        "direct",
+        "planned",
+        "orchestrated"
+      ],
+      "description": "Use not_applicable outside mode selection. Direct is one bounded owner/change, Planned is one owner with two to five ordered recovery checkpoints, and Orchestrated is for multiple ownership or dependency boundaries."
+    },
+    "questions": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Select only unresolved identifiers from question_catalog; do not include already answered facts."
+    },
+    "preservedRequirements": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Select applicable identifiers from requirement_catalog that the next artifact or action must preserve."
+    },
+    "checkpoints": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Ordered checkpoint identifiers selected from checkpoint_catalog. Empty unless Planned recovery checkpoints are required."
+    },
+    "requiredEvidence": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Select every applicable identifier from evidence_catalog."
+    },
+    "forbiddenActions": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Select every applicable action identifier from forbidden_action_catalog that would violate this case."
+    },
+    "ownerCount": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 10,
+      "description": "Number of work-item owners: 0 outside execution, 1 for Direct/Planned or owner closeout, and the number of owned work items for Orchestrated. Do not add a separate count for the foreground integration coordinator."
+    },
+    "requiresIsolation": {
+      "type": "boolean",
+      "description": "True only when separate workspaces/worktrees are required for independently write-capable owners; false for an ordinary single-owner run."
+    },
+    "serialIntegration": {
+      "type": "boolean",
+      "description": "True only for multi-owner Orchestrated work whose accepted changes must be integrated into the canonical branch one at a time by the foreground owner. It is false for Direct and Planned work."
+    },
+    "closeReady": {
+      "type": "boolean",
+      "description": "True only when every required implementation, verification, visual, and accessibility item is already evidenced."
+    },
+    "returnToGateB": {
+      "type": "boolean",
+      "description": "True only when completing the work requires changing product meaning, acceptance, approved scope, non-goals, must-preserve items, or an external authority boundary. Missing implementation or closeout evidence alone is false."
+    },
+    "rationale": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 800
+    }
+  }
+}

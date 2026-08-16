@@ -1,4 +1,12 @@
+import { createHash } from 'node:crypto';
 import path from 'node:path';
+
+import {
+  normalizeSourceAllowlist,
+  summarizeSanitizedTrace,
+} from './p2a_trace_model.mjs';
+
+export { normalizeSourceAllowlist } from './p2a_trace_model.mjs';
 
 function normalizePath(value) {
   return String(value).replaceAll(path.sep, '/');
@@ -12,54 +20,176 @@ function commandText(item) {
   return null;
 }
 
-const CONTENT_READ_TOOLS = ['cat', 'sed', 'head', 'tail', 'grep', 'rg', 'wc'];
-const METADATA_INSPECT_TOOLS = ['find', 'ls', 'stat', 'readlink'];
-const EXECUTABLE_PATHS = new Set([
-  '/bin/bash',
-  '/bin/cat',
-  '/bin/sh',
-  '/bin/zsh',
-  '/usr/bin/env',
-  ...CONTENT_READ_TOOLS.map((tool) => `/usr/bin/${tool}`),
-  ...METADATA_INSPECT_TOOLS.map((tool) => `/usr/bin/${tool}`),
-]);
+const CONTENT_READ_TOOLS = new Set(['cat', 'sed', 'head', 'tail', 'grep', 'rg', 'wc']);
+const METADATA_INSPECT_TOOLS = new Set(['find', 'ls', 'stat', 'readlink']);
+const SHELL_SEPARATORS = new Set([';', '&&', '||', '|', '>', '>>', '<', '<<']);
+const OPTIONS_WITH_VALUE = Object.freeze({
+  rg: new Set([
+    '-A', '-B', '-C', '-e', '-f', '-g', '-j', '-m', '-t', '-T',
+    '--after-context', '--before-context', '--context', '--encoding', '--engine',
+    '--file', '--glob', '--iglob', '--ignore-file', '--max-count', '--max-depth',
+    '--pre', '--pre-glob', '--regexp', '--replace', '--sort', '--sortr', '--threads',
+    '--type', '--type-add', '--type-not',
+  ]),
+  grep: new Set([
+    '-A', '-B', '-C', '-e', '-f', '-m',
+    '--after-context', '--before-context', '--context', '--exclude', '--exclude-dir',
+    '--file', '--include', '--max-count', '--regexp',
+  ]),
+  sed: new Set(['-e', '-f', '--expression', '--file']),
+  head: new Set(['-c', '-n', '--bytes', '--lines']),
+  tail: new Set(['-c', '-n', '--bytes', '--lines', '--pid', '--sleep-interval']),
+  wc: new Set(['--files0-from']),
+  cat: new Set([]),
+});
 
-function commandContainsTool(command, tool) {
-  const escaped = tool.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  return new RegExp(`(?:^|[\\s;&|('"])(?:[^\\s;&|('"]*/)?${escaped}(?=$|[\\s;&|)'"])`, 'i')
-    .test(command);
+function shellTokens(command) {
+  const tokens = [];
+  let current = '';
+  let quote = null;
+  let escaped = false;
+  const push = () => {
+    if (current) tokens.push(current);
+    current = '';
+  };
+  for (let index = 0; index < command.length; index += 1) {
+    const character = command[index];
+    if (escaped) {
+      current += character;
+      escaped = false;
+      continue;
+    }
+    if (character === '\\' && quote !== "'") {
+      escaped = true;
+      continue;
+    }
+    if (quote) {
+      if (character === quote) quote = null;
+      else current += character;
+      continue;
+    }
+    if (character === "'" || character === '"') {
+      quote = character;
+      continue;
+    }
+    if (/\s/.test(character)) {
+      push();
+      continue;
+    }
+    if (';|&<>'.includes(character)) {
+      push();
+      const doubled = command[index + 1] === character;
+      tokens.push(doubled ? `${character}${character}` : character);
+      if (doubled) index += 1;
+      continue;
+    }
+    current += character;
+  }
+  push();
+  return { tokens, complete: quote === null && !escaped };
+}
+
+function executableName(token) {
+  return path.posix.basename(normalizePath(token));
+}
+
+function toolInvocations(tokens, tools) {
+  const invocations = [];
+  for (let index = 0; index < tokens.length; index += 1) {
+    const tool = executableName(tokens[index]);
+    if (!tools.has(tool)) continue;
+    const args = [];
+    for (let cursor = index + 1; cursor < tokens.length && !SHELL_SEPARATORS.has(tokens[cursor]); cursor += 1) {
+      args.push(tokens[cursor]);
+    }
+    invocations.push({ tool, args });
+  }
+  return invocations;
+}
+
+function positionalArguments(invocation) {
+  const values = [];
+  const valueOptions = OPTIONS_WITH_VALUE[invocation.tool] ?? new Set();
+  let expressionProvided = false;
+  for (let index = 0; index < invocation.args.length; index += 1) {
+    const argument = invocation.args[index];
+    if (argument === '--') {
+      values.push(...invocation.args.slice(index + 1));
+      break;
+    }
+    const optionName = argument.includes('=') ? argument.slice(0, argument.indexOf('=')) : argument;
+    if (['-e', '-f', '--regexp', '--file', '--expression'].includes(optionName)) {
+      expressionProvided = true;
+    }
+    if (argument.startsWith('-') && argument !== '-') {
+      if (!argument.includes('=') && valueOptions.has(optionName)) index += 1;
+      continue;
+    }
+    values.push(argument);
+  }
+  return { values, expressionProvided };
+}
+
+function readTargets(invocations) {
+  const targets = [];
+  for (const invocation of invocations) {
+    const { values, expressionProvided } = positionalArguments(invocation);
+    if (invocation.tool === 'rg' || invocation.tool === 'grep') {
+      const pathValues = expressionProvided ? values : values.slice(1);
+      if (!pathValues.length && invocation.tool === 'rg') {
+        targets.push({ kind: 'scope', value: '.' });
+      } else {
+        targets.push(...pathValues.map((value) => ({ kind: 'search', value })));
+      }
+      continue;
+    }
+    if (invocation.tool === 'sed') {
+      const fileValues = expressionProvided ? values : values.slice(1);
+      targets.push(...fileValues.map((value) => ({ kind: 'file', value })));
+      continue;
+    }
+    targets.push(...values.filter((value) => value !== '-').map((value) => ({ kind: 'file', value })));
+  }
+  return targets;
 }
 
 function classifyCommand(command) {
-  if (!command) return { commandClass: 'unknown', readTool: null };
-  const normalized = command.toLowerCase();
-  const rgFiles = commandContainsTool(normalized, 'rg')
-    && /(?:^|\s)--files(?:\s|=|$)/.test(normalized);
-  const contentTools = CONTENT_READ_TOOLS.filter((tool) => (
-    tool === 'rg' ? !rgFiles && commandContainsTool(normalized, tool) : commandContainsTool(normalized, tool)
-  ));
-  if (contentTools.length) {
+  if (!command) return { commandClass: 'unknown', readTool: null, targets: [], parseComplete: false };
+  const parsed = shellTokens(command);
+  const contentInvocations = toolInvocations(parsed.tokens, CONTENT_READ_TOOLS)
+    .filter((invocation) => !(invocation.tool === 'rg' && invocation.args.includes('--files')));
+  if (contentInvocations.length) {
+    const tools = [...new Set(contentInvocations.map((invocation) => invocation.tool))];
     return {
       commandClass: 'content_read',
-      readTool: contentTools.length === 1 ? contentTools[0] : 'multiple',
+      readTool: tools.length === 1 ? tools[0] : 'multiple',
+      targets: readTargets(contentInvocations),
+      parseComplete: parsed.complete,
     };
   }
-  const metadataTools = METADATA_INSPECT_TOOLS.filter((tool) => commandContainsTool(normalized, tool));
-  if (rgFiles) metadataTools.push('rg_files');
-  if (metadataTools.length) {
+  const metadataInvocations = toolInvocations(parsed.tokens, METADATA_INSPECT_TOOLS);
+  const rgFiles = toolInvocations(parsed.tokens, new Set(['rg']))
+    .some((invocation) => invocation.args.includes('--files'));
+  if (metadataInvocations.length || rgFiles) {
+    const tools = metadataInvocations.map((invocation) => invocation.tool);
+    if (rgFiles) tools.push('rg_files');
+    const uniqueTools = [...new Set(tools)];
     return {
       commandClass: 'metadata_inspect',
-      readTool: metadataTools.length === 1 ? metadataTools[0] : 'multiple',
+      readTool: uniqueTools.length === 1 ? uniqueTools[0] : 'multiple',
+      targets: [],
+      parseComplete: parsed.complete,
     };
   }
+  const normalized = command.toLowerCase();
   if (/\b(?:npm|node|npx|pnpm|yarn|cargo|go|pytest|vitest|jest|make)\b/.test(normalized)
     && /\b(?:test|check|lint|typecheck|verify)\b/.test(normalized)) {
-    return { commandClass: 'verify', readTool: null };
+    return { commandClass: 'verify', readTool: null, targets: [], parseComplete: parsed.complete };
   }
   if (/\b(?:git status|git diff|git show|git log|pwd)\b/.test(normalized)) {
-    return { commandClass: 'inspect', readTool: null };
+    return { commandClass: 'inspect', readTool: null, targets: [], parseComplete: parsed.complete };
   }
-  return { commandClass: 'other', readTool: null };
+  return { commandClass: 'other', readTool: null, targets: [], parseComplete: parsed.complete };
 }
 
 function exitClass(exitCode) {
@@ -67,78 +197,99 @@ function exitClass(exitCode) {
   return exitCode === 0 ? 'success' : 'failure';
 }
 
-function matcherOccursAsPath(command, matcher) {
-  const variants = path.posix.isAbsolute(matcher) || matcher.startsWith('./')
-    ? [matcher]
-    : [matcher, `./${matcher}`];
-  return variants.some((variant) => {
-    let offset = command.indexOf(variant);
-    while (offset !== -1) {
-      const before = offset === 0 ? '' : command[offset - 1];
-      const afterOffset = offset + variant.length;
-      const after = afterOffset === command.length ? '' : command[afterOffset];
-      const startsAtBoundary = !before || /[\s'"=([{,;|&<>]/.test(before);
-      const endsAtBoundary = !after || /[\s'"\])},;|&<>]/.test(after);
-      if (startsAtBoundary && endsAtBoundary) return true;
-      offset = command.indexOf(variant, offset + 1);
-    }
-    return false;
-  });
-}
-
-function operationSourceIds(command, sourceAllowlist) {
-  if (!command) return [];
-  const normalized = normalizePath(command);
-  return [...new Set(sourceAllowlist
-    .filter((source) => source.matchers.some((matcher) => matcherOccursAsPath(normalized, matcher)))
-    .map((source) => source.id))]
-    .sort((left, right) => left.localeCompare(right));
-}
-
-function absolutePathCandidates(command) {
-  const candidates = [];
-  const matcher = /(?:^|[\s'"=([{,;|&<>])(\/[^\s'"\])},;|&<>]*)/g;
-  let match = matcher.exec(normalizePath(command));
-  while (match) {
-    const candidate = match[1].replace(/[.:]+$/, '');
-    if (candidate && !EXECUTABLE_PATHS.has(candidate)) candidates.push(candidate);
-    match = matcher.exec(normalizePath(command));
-  }
-  return candidates;
-}
-
 function isInsideWorkspace(candidate, workspaceRoot) {
   const relative = path.relative(workspaceRoot, candidate);
   return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
 }
 
-function operationTargetClass(command, sourceIds, workspaceRoot) {
-  const absolutePaths = absolutePathCandidates(command);
-  if (workspaceRoot && absolutePaths.some((candidate) => !isInsideWorkspace(candidate, workspaceRoot))) {
-    return 'outside_workspace';
-  }
-  if (/\$\{|\$\(|[`*?]|(?:^|\s)xargs(?:\s|$)|(?:^|\s)-exec(?:\s|$)/.test(command)) {
-    return 'dynamic_or_unresolved';
-  }
-  if (sourceIds.length) return 'allowlisted_source';
-  if (workspaceRoot) return 'workspace_other';
-  return 'dynamic_or_unresolved';
+function opaqueId(prefix, value) {
+  return `${prefix}:${createHash('sha256').update(value).digest('hex')}`;
 }
 
-export function normalizeSourceAllowlist(entries) {
-  const seen = new Set();
-  const normalized = [];
-  for (const entry of entries ?? []) {
-    if (!entry || typeof entry.id !== 'string' || !entry.id.trim()) continue;
-    const matchers = [...new Set((entry.paths ?? [])
-      .filter((value) => typeof value === 'string' && value.trim())
-      .map(normalizePath))]
-      .sort((left, right) => left.localeCompare(right));
-    if (!matchers.length || seen.has(entry.id)) continue;
-    seen.add(entry.id);
-    normalized.push({ id: entry.id, matchers });
+function matcherAbsolutePath(matcher, workspaceRoot) {
+  if (!workspaceRoot) return null;
+  return path.resolve(workspaceRoot, matcher);
+}
+
+function exactCanonicalSources(candidate, sourceAllowlist, workspaceRoot) {
+  return sourceAllowlist.filter((source) => source.matchers.some((matcher) => {
+    if (workspaceRoot) return matcherAbsolutePath(matcher, workspaceRoot) === candidate.absolutePath;
+    return normalizePath(matcher) === normalizePath(candidate.rawValue);
+  }));
+}
+
+function scopeOverlapsCanonical(scopePath, sourceAllowlist, workspaceRoot) {
+  if (!workspaceRoot) return false;
+  return sourceAllowlist.some((source) => source.packetManaged && source.matchers.some((matcher) => (
+    isInsideWorkspace(matcherAbsolutePath(matcher, workspaceRoot), scopePath)
+  )));
+}
+
+function analyzeReadTargets(targets, sourceAllowlist, workspaceRoot, parseComplete) {
+  const canonicalIds = new Set();
+  const packetManagedIds = new Set();
+  const workspaceIds = new Set();
+  let outsideWorkspace = false;
+  let dynamicOrUnresolved = !parseComplete || targets.length === 0;
+  let scopeAttributed = false;
+  let packetUnattributed = dynamicOrUnresolved;
+
+  for (const target of targets) {
+    const rawValue = normalizePath(target.value);
+    if (!rawValue || /\$\{|\$\(|[`*?]/.test(rawValue)) {
+      dynamicOrUnresolved = true;
+      packetUnattributed = true;
+      continue;
+    }
+    const absolutePath = workspaceRoot
+      ? path.resolve(workspaceRoot, rawValue)
+      : path.posix.isAbsolute(rawValue) ? path.resolve(rawValue) : null;
+    if (workspaceRoot && absolutePath && !isInsideWorkspace(absolutePath, workspaceRoot)) {
+      outsideWorkspace = true;
+      continue;
+    }
+    const candidate = { rawValue, absolutePath };
+    const exactSources = exactCanonicalSources(candidate, sourceAllowlist, workspaceRoot);
+    if (exactSources.length) {
+      for (const source of exactSources) {
+        canonicalIds.add(source.id);
+        if (source.packetManaged) packetManagedIds.add(source.id);
+      }
+      continue;
+    }
+    if (!workspaceRoot || !absolutePath) {
+      dynamicOrUnresolved = true;
+      packetUnattributed = true;
+      continue;
+    }
+    const relativePath = normalizePath(path.relative(workspaceRoot, absolutePath)) || '.';
+    if (target.kind === 'search' || target.kind === 'scope') {
+      scopeAttributed = true;
+      workspaceIds.add(opaqueId('search_scope', relativePath));
+      if (scopeOverlapsCanonical(absolutePath, sourceAllowlist, workspaceRoot)) {
+        packetUnattributed = true;
+      }
+    } else {
+      workspaceIds.add(opaqueId('workspace', relativePath));
+    }
   }
-  return normalized.sort((left, right) => left.id.localeCompare(right.id));
+
+  let targetClass = 'workspace_other';
+  if (outsideWorkspace) targetClass = 'outside_workspace';
+  else if (dynamicOrUnresolved) targetClass = 'dynamic_or_unresolved';
+  else if (canonicalIds.size && !workspaceIds.size) targetClass = 'allowlisted_source';
+  else if (packetUnattributed) targetClass = 'canonical_scope';
+  else if (canonicalIds.size) targetClass = 'mixed_workspace';
+
+  return {
+    sourceIds: [...canonicalIds].sort((left, right) => left.localeCompare(right)),
+    packetManagedSourceIds: [...packetManagedIds].sort((left, right) => left.localeCompare(right)),
+    workspaceSourceIds: [...workspaceIds].sort((left, right) => left.localeCompare(right)),
+    targetClass,
+    attributionLevel: scopeAttributed ? 'scope' : dynamicOrUnresolved ? 'unresolved' : 'file',
+    packetUnattributed,
+    globallyUnattributed: outsideWorkspace || dynamicOrUnresolved,
+  };
 }
 
 export function inspectCommandEventShape(event) {
@@ -177,76 +328,50 @@ export class SanitizedToolTrace {
     }
     const command = commandText(event.item);
     const classification = classifyCommand(command);
-    const sourceIds = classification.commandClass === 'content_read'
-      ? operationSourceIds(command, this.sourceAllowlist)
-      : [];
-    const targetClass = ['content_read', 'metadata_inspect'].includes(classification.commandClass)
-      ? operationTargetClass(command, sourceIds, this.workspaceRoot)
-      : null;
+    const attribution = classification.commandClass === 'content_read'
+      ? analyzeReadTargets(
+          classification.targets,
+          this.sourceAllowlist,
+          this.workspaceRoot,
+          classification.parseComplete,
+        )
+      : {
+          sourceIds: [],
+          packetManagedSourceIds: [],
+          workspaceSourceIds: [],
+          targetClass: classification.commandClass === 'metadata_inspect' ? 'workspace_other' : null,
+          attributionLevel: classification.commandClass === 'metadata_inspect' ? 'scope' : 'none',
+          packetUnattributed: false,
+          globallyUnattributed: false,
+        };
     this.operations.push({
       sequence,
       commandClass: classification.commandClass,
       readTool: classification.readTool,
-      targetClass,
+      targetClass: attribution.targetClass,
+      attributionLevel: attribution.attributionLevel,
       exitClass: exitClass(event.item.exit_code),
-      sourceIds,
+      sourceIds: attribution.sourceIds,
+      packetManagedSourceIds: attribution.packetManagedSourceIds,
+      workspaceSourceIds: attribution.workspaceSourceIds,
+      packetManagedUnattributed: attribution.packetUnattributed,
+      globallyUnattributed: attribution.globallyUnattributed,
       operationFingerprint: [
         classification.commandClass,
         classification.readTool ?? 'none',
-        targetClass ?? 'none',
-        sourceIds.join(',') || 'none',
+        attribution.targetClass ?? 'none',
+        attribution.sourceIds.join(',') || 'none',
+        attribution.workspaceSourceIds.join(',') || 'none',
       ].join(':'),
     });
     return true;
   }
 
   summary() {
-    const contentReadOperations = this.operations.filter(
-      (operation) => operation.commandClass === 'content_read',
-    );
-    const metadataInspectOperations = this.operations.filter(
-      (operation) => operation.commandClass === 'metadata_inspect',
-    );
-    const unattributedReadOperations = contentReadOperations.filter(
-      (operation) => operation.sourceIds.length === 0,
-    ).length;
-    const occurrenceCounts = new Map();
-    for (const operation of contentReadOperations) {
-      for (const sourceId of operation.sourceIds) {
-        occurrenceCounts.set(sourceId, (occurrenceCounts.get(sourceId) ?? 0) + 1);
-      }
-    }
-    const sourceReadOccurrences = [...occurrenceCounts.values()]
-      .reduce((total, count) => total + count, 0);
-    const repeatedSourceReads = [...occurrenceCounts.values()]
-      .reduce((total, count) => total + Math.max(0, count - 1), 0);
-    const supported = this.unsupportedShapes.length === 0;
-    const complete = supported && unattributedReadOperations === 0;
-    return {
-      schema_version: 'p2a.sanitized_tool_trace.v2',
-      status: !supported ? 'unsupported' : complete ? 'available' : 'partial',
-      eventShape: {
-        supported,
-        unsupportedCount: this.unsupportedShapes.length,
-        unsupportedFields: this.unsupportedShapes,
-      },
+    return summarizeSanitizedTrace({
       operations: this.operations,
-      metrics: {
-        toolOperations: this.operations.length + this.unsupportedShapes.length,
-        contentReadOperations: contentReadOperations.length,
-        metadataInspectOperations: metadataInspectOperations.length,
-        uniqueSourcesRead: occurrenceCounts.size,
-        sourceReadOccurrences,
-        repeatedSourceReads,
-        unattributedReadOperations,
-        sourcesPerReadOperation: contentReadOperations.length
-          ? Number((sourceReadOccurrences / contentReadOperations.length).toFixed(4))
-          : 0,
-        unknownOperations: this.operations.filter((operation) => operation.commandClass === 'unknown').length
-          + this.unsupportedShapes.length
-          + unattributedReadOperations,
-      },
-    };
+      unsupportedShapes: this.unsupportedShapes,
+    });
   }
 }
 

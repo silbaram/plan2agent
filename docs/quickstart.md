@@ -120,6 +120,7 @@ Close는 Gate D 파일 대신 승인된 Gate B, 유효한 Gate C, 완료된 task
 
 ## 다음에 볼 문서
 
+- [Adaptive Harness 사용자 흐름](adaptive-harness-user-flow.md) — Gate 승인부터 실행 방식 선택, context routing, 검증·종료까지의 전체 여정
 - [CLI 사용자 가이드](cli-reference.md) — 명령별 사용법, handoff와 proposal 흐름
 - [하네스 사용자 가이드](harness-guide.md) — Gate A-C, 산출물 schema, 검증과 문제 해결
 - [반복/고도화 개발 스펙](iteration-spec.md) — 반복 구조, close/open, 변경분 task 계약

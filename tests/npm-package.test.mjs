@@ -85,15 +85,20 @@ test('checkout init preserves the legacy co-located runtime', () => {
     assert.equal(realpathSync(manifest.provenance.toolkitRoot), realpathSync(ROOT));
     assert.equal('runtime' in manifest, false);
     assert.ok(manifest.scriptFiles.includes('.plan2agent/scripts/p2a.mjs'));
+    assert.ok(manifest.scriptFiles.includes('.plan2agent/scripts/p2a_next_service.mjs'));
     assert.ok(manifest.scriptFiles.includes('.plan2agent/scripts/p2a_decision_ledger.mjs'));
     assert.ok(manifest.scriptFiles.includes('.plan2agent/scripts/p2a_decisions.mjs'));
     assert.ok(manifest.scriptFiles.includes('.plan2agent/scripts/p2a_shape.mjs'));
     assert.ok(manifest.scriptFiles.includes('.plan2agent/scripts/p2a_context.mjs'));
+    assert.ok(manifest.scriptFiles.includes('.plan2agent/scripts/p2a_context_packet.mjs'));
+    assert.ok(manifest.scriptFiles.includes('.plan2agent/scripts/p2a_continuations.mjs'));
+    assert.ok(manifest.scriptFiles.includes('.plan2agent/scripts/p2a_schema.mjs'));
     assert.ok(manifest.schemaFiles.includes('.plan2agent/schemas/next.schema.json'));
     assert.ok(manifest.schemaFiles.includes('.plan2agent/schemas/constitution.schema.json'));
     assert.ok(manifest.schemaFiles.includes('.plan2agent/schemas/decisions.schema.json'));
     assert.ok(manifest.schemaFiles.includes('.plan2agent/schemas/context-packet.schema.json'));
     assert.equal(existsSync(path.join(targetRoot, '.plan2agent', 'scripts', 'p2a.mjs')), true);
+    assert.equal(existsSync(path.join(targetRoot, '.plan2agent', 'scripts', 'p2a_next_service.mjs')), true);
     assert.equal(existsSync(path.join(targetRoot, '.plan2agent', 'scripts', 'p2a_decision_ledger.mjs')), true);
     assert.equal(existsSync(path.join(targetRoot, '.plan2agent', 'scripts', 'p2a_decisions.mjs')), true);
     assert.equal(existsSync(path.join(targetRoot, '.plan2agent', 'scripts', 'p2a_shape.mjs')), true);
@@ -306,6 +311,8 @@ test('npm pack dry run includes the global CLI runtime', () => {
       'scripts/p2a_handoff.mjs',
       'scripts/p2a_upgrade.mjs',
       'scripts/p2a_context.mjs',
+      'scripts/p2a_continuations.mjs',
+      'scripts/p2a_schema.mjs',
       'scripts/p2a_context_routes.mjs',
       'schemas/next.schema.json',
       'schemas/decisions.schema.json',

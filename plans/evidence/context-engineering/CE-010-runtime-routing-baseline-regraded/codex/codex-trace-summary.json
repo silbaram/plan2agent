@@ -1,0 +1,316 @@
+{
+  "schema_version": "p2a.context_engineering_codex_trace_summary.v1",
+  "evaluationId": "ce-010-context-runtime-routing-baseline-regraded-2026-08-15",
+  "generatedAt": "2026-08-15T14:54:13.372Z",
+  "scope": {
+    "provider": "codex",
+    "model": "gpt-5.6-luna",
+    "reasoning": "medium",
+    "repetitions": 5,
+    "scenarios": [
+      "gate-b-spec",
+      "direct-execution",
+      "planned-retry"
+    ],
+    "changeUnit": "instrumented current-candidate baseline before runtime routing product changes",
+    "limitations": [
+      "Historical CE-009 runs have no trajectory and are not backfilled or compared as zero.",
+      "Claude and Gemini provider coverage is absent."
+    ]
+  },
+  "source": {
+    "snapshotRef": "temporary-candidate-snapshot",
+    "commitSha": null,
+    "baseCommitSha": null,
+    "dirtyPatchSha256": null,
+    "untrackedManifestSha256": null,
+    "dirty": true,
+    "files": 437,
+    "sha256": "37962e508b6dffab7b4fb1d7a885b278d97208fcf47b560d0570b504cebb9cf1"
+  },
+  "contractSha256": "05b8fd0226eb1f53f5b480f49c5de49554513700612b61ee344bf647c1b9bba7",
+  "outputSchemaSha256": "b41855783906c4c651027abc8f05aa7ef009625e72ec4cbacaaedf989c091c43",
+  "metrics": {
+    "runs": 15,
+    "passed": 15,
+    "failed": 0,
+    "inputTokens": 783721,
+    "cachedInputTokens": 494592,
+    "uncachedInputTokens": 289129,
+    "outputTokens": 14633,
+    "durationMs": 396332,
+    "toolCalls": 38,
+    "toolFailures": 0,
+    "traceCoverage": {
+      "availableRuns": 15,
+      "unavailableRuns": 0,
+      "complete": true
+    },
+    "toolOperations": 38,
+    "uniqueSourcesRead": 38,
+    "sourceReadOccurrences": 38,
+    "repeatedSourceReads": 0,
+    "unknownOperations": 0,
+    "medians": {
+      "inputTokens": 43282,
+      "uncachedInputTokens": 17966,
+      "outputTokens": 925,
+      "durationMs": 27479,
+      "toolOperations": 2
+    }
+  },
+  "scenarios": [
+    {
+      "scenarioId": "gate-b-spec",
+      "metrics": {
+        "runs": 5,
+        "passed": 5,
+        "failed": 0,
+        "inputTokens": 213765,
+        "cachedInputTokens": 129536,
+        "uncachedInputTokens": 84229,
+        "outputTokens": 3799,
+        "durationMs": 118051,
+        "toolCalls": 10,
+        "toolFailures": 0,
+        "traceCoverage": {
+          "availableRuns": 5,
+          "unavailableRuns": 0,
+          "complete": true
+        },
+        "toolOperations": 10,
+        "uniqueSourcesRead": 10,
+        "sourceReadOccurrences": 10,
+        "repeatedSourceReads": 0,
+        "unknownOperations": 0,
+        "medians": {
+          "inputTokens": 42428,
+          "uncachedInputTokens": 16340,
+          "outputTokens": 774,
+          "durationMs": 21655,
+          "toolOperations": 2
+        }
+      }
+    },
+    {
+      "scenarioId": "direct-execution",
+      "metrics": {
+        "runs": 5,
+        "passed": 5,
+        "failed": 0,
+        "inputTokens": 302078,
+        "cachedInputTokens": 202240,
+        "uncachedInputTokens": 99838,
+        "outputTokens": 5163,
+        "durationMs": 137500,
+        "toolCalls": 14,
+        "toolFailures": 0,
+        "traceCoverage": {
+          "availableRuns": 5,
+          "unavailableRuns": 0,
+          "complete": true
+        },
+        "toolOperations": 14,
+        "uniqueSourcesRead": 10,
+        "sourceReadOccurrences": 10,
+        "repeatedSourceReads": 0,
+        "unknownOperations": 0,
+        "medians": {
+          "inputTokens": 43282,
+          "uncachedInputTokens": 19463,
+          "outputTokens": 994,
+          "durationMs": 27701,
+          "toolOperations": 2
+        }
+      }
+    },
+    {
+      "scenarioId": "planned-retry",
+      "metrics": {
+        "runs": 5,
+        "passed": 5,
+        "failed": 0,
+        "inputTokens": 267878,
+        "cachedInputTokens": 162816,
+        "uncachedInputTokens": 105062,
+        "outputTokens": 5671,
+        "durationMs": 140781,
+        "toolCalls": 14,
+        "toolFailures": 0,
+        "traceCoverage": {
+          "availableRuns": 5,
+          "unavailableRuns": 0,
+          "complete": true
+        },
+        "toolOperations": 14,
+        "uniqueSourcesRead": 18,
+        "sourceReadOccurrences": 18,
+        "repeatedSourceReads": 0,
+        "unknownOperations": 0,
+        "medians": {
+          "inputTokens": 44816,
+          "uncachedInputTokens": 19728,
+          "outputTokens": 1111,
+          "durationMs": 27496,
+          "toolOperations": 3
+        }
+      }
+    }
+  ],
+  "coverageComplete": true,
+  "candidateAllPass": true,
+  "traceComplete": true,
+  "providerVerdict": "provider_limited",
+  "runEvidence": [
+    {
+      "scenarioId": "gate-b-spec",
+      "repetition": 1,
+      "metadata": "plans/evidence/context-engineering/CE-010-runtime-routing-baseline-regraded/instrumented-current/gate-b-spec/codex/gpt-5.6-luna-medium/run-01/metadata.json",
+      "metadataSha256": "20297ad4a9f6fa013875b88bce9c6d78dad422d685850eb00b5310a468b233b4",
+      "grade": "plans/evidence/context-engineering/CE-010-runtime-routing-baseline-regraded/instrumented-current/gate-b-spec/codex/gpt-5.6-luna-medium/run-01/grade.json",
+      "gradeSha256": "c312f796c71faa0608e9ffdb163a554f51efe34eef32e34609838cff6b64a936",
+      "result": "plans/evidence/context-engineering/CE-010-runtime-routing-baseline-regraded/instrumented-current/gate-b-spec/codex/gpt-5.6-luna-medium/run-01/result.json",
+      "resultSha256": "75062b1eee0abcb679d072f210fbf266569deb48a88b56cead519efaf7c01b7e"
+    },
+    {
+      "scenarioId": "gate-b-spec",
+      "repetition": 2,
+      "metadata": "plans/evidence/context-engineering/CE-010-runtime-routing-baseline-regraded/instrumented-current/gate-b-spec/codex/gpt-5.6-luna-medium/run-02/metadata.json",
+      "metadataSha256": "cd057410af6b76d640565115c028be184732eaf35a1e17b73428199bad32e0cd",
+      "grade": "plans/evidence/context-engineering/CE-010-runtime-routing-baseline-regraded/instrumented-current/gate-b-spec/codex/gpt-5.6-luna-medium/run-02/grade.json",
+      "gradeSha256": "c312f796c71faa0608e9ffdb163a554f51efe34eef32e34609838cff6b64a936",
+      "result": "plans/evidence/context-engineering/CE-010-runtime-routing-baseline-regraded/instrumented-current/gate-b-spec/codex/gpt-5.6-luna-medium/run-02/result.json",
+      "resultSha256": "955512392e0fe9a054fb664599fd5ada17dd47e74aac9ca8e2ac3c47a9a32f46"
+    },
+    {
+      "scenarioId": "gate-b-spec",
+      "repetition": 3,
+      "metadata": "plans/evidence/context-engineering/CE-010-runtime-routing-baseline-regraded/instrumented-current/gate-b-spec/codex/gpt-5.6-luna-medium/run-03/metadata.json",
+      "metadataSha256": "3b0fc98aeb3b1d8463f4d2599991d5da0b6c7ae4be8767665446d62faa7ac697",
+      "grade": "plans/evidence/context-engineering/CE-010-runtime-routing-baseline-regraded/instrumented-current/gate-b-spec/codex/gpt-5.6-luna-medium/run-03/grade.json",
+      "gradeSha256": "c312f796c71faa0608e9ffdb163a554f51efe34eef32e34609838cff6b64a936",
+      "result": "plans/evidence/context-engineering/CE-010-runtime-routing-baseline-regraded/instrumented-current/gate-b-spec/codex/gpt-5.6-luna-medium/run-03/result.json",
+      "resultSha256": "198a25198131180acb57d1031c582677bb318a73f586c2e1f2d9fd64ff39072c"
+    },
+    {
+      "scenarioId": "gate-b-spec",
+      "repetition": 4,
+      "metadata": "plans/evidence/context-engineering/CE-010-runtime-routing-baseline-regraded/instrumented-current/gate-b-spec/codex/gpt-5.6-luna-medium/run-04/metadata.json",
+      "metadataSha256": "f2c1a3526fe76385db42641e234b01643f78f5cce04590759af5807a2d4e3eae",
+      "grade": "plans/evidence/context-engineering/CE-010-runtime-routing-baseline-regraded/instrumented-current/gate-b-spec/codex/gpt-5.6-luna-medium/run-04/grade.json",
+      "gradeSha256": "c312f796c71faa0608e9ffdb163a554f51efe34eef32e34609838cff6b64a936",
+      "result": "plans/evidence/context-engineering/CE-010-runtime-routing-baseline-regraded/instrumented-current/gate-b-spec/codex/gpt-5.6-luna-medium/run-04/result.json",
+      "resultSha256": "5e5450260483423dc36715da73511f4191de00bb6d09d26625aa2be3515db0d6"
+    },
+    {
+      "scenarioId": "gate-b-spec",
+      "repetition": 5,
+      "metadata": "plans/evidence/context-engineering/CE-010-runtime-routing-baseline-regraded/instrumented-current/gate-b-spec/codex/gpt-5.6-luna-medium/run-05/metadata.json",
+      "metadataSha256": "3b2dac1836f36478457da9a9d430ee1e6a6ca473b8676151240b972b76c3b3ef",
+      "grade": "plans/evidence/context-engineering/CE-010-runtime-routing-baseline-regraded/instrumented-current/gate-b-spec/codex/gpt-5.6-luna-medium/run-05/grade.json",
+      "gradeSha256": "c312f796c71faa0608e9ffdb163a554f51efe34eef32e34609838cff6b64a936",
+      "result": "plans/evidence/context-engineering/CE-010-runtime-routing-baseline-regraded/instrumented-current/gate-b-spec/codex/gpt-5.6-luna-medium/run-05/result.json",
+      "resultSha256": "3ee8b9deee7d47c5ce8be282f8ab1b1072c152259b6348e861ea5f7dd1cda1d6"
+    },
+    {
+      "scenarioId": "direct-execution",
+      "repetition": 1,
+      "metadata": "plans/evidence/context-engineering/CE-010-runtime-routing-baseline-regraded/instrumented-current/direct-execution/codex/gpt-5.6-luna-medium/run-01/metadata.json",
+      "metadataSha256": "68cecabe4c8cd7186044b97f1057c97a3596982fc299efdc2c4b966b4ae65c15",
+      "grade": "plans/evidence/context-engineering/CE-010-runtime-routing-baseline-regraded/instrumented-current/direct-execution/codex/gpt-5.6-luna-medium/run-01/grade.json",
+      "gradeSha256": "d70af276542cdafcb60fdb8d69f417528226940222a6c9d0397dbaa2e8710e0b",
+      "result": "plans/evidence/context-engineering/CE-010-runtime-routing-baseline-regraded/instrumented-current/direct-execution/codex/gpt-5.6-luna-medium/run-01/result.json",
+      "resultSha256": "cfc7fc37e9d47f51aac765dda71d4a01578230172de7ab6f33304fddade60a20"
+    },
+    {
+      "scenarioId": "direct-execution",
+      "repetition": 2,
+      "metadata": "plans/evidence/context-engineering/CE-010-runtime-routing-baseline-regraded/instrumented-current/direct-execution/codex/gpt-5.6-luna-medium/run-02/metadata.json",
+      "metadataSha256": "546abeedfe1fd08d461b593a2cb17fcddc68d3e8ff877547d2d8ec22ddf2012f",
+      "grade": "plans/evidence/context-engineering/CE-010-runtime-routing-baseline-regraded/instrumented-current/direct-execution/codex/gpt-5.6-luna-medium/run-02/grade.json",
+      "gradeSha256": "d70af276542cdafcb60fdb8d69f417528226940222a6c9d0397dbaa2e8710e0b",
+      "result": "plans/evidence/context-engineering/CE-010-runtime-routing-baseline-regraded/instrumented-current/direct-execution/codex/gpt-5.6-luna-medium/run-02/result.json",
+      "resultSha256": "3a90268e1f1a6f27c3fa981dc9a8f0eceb52c206a068b69e3c3dc5ab2767c45a"
+    },
+    {
+      "scenarioId": "direct-execution",
+      "repetition": 3,
+      "metadata": "plans/evidence/context-engineering/CE-010-runtime-routing-baseline-regraded/instrumented-current/direct-execution/codex/gpt-5.6-luna-medium/run-03/metadata.json",
+      "metadataSha256": "04187abe4c594b2b72dabbffe513a6fe4d2909f7689d5c34e6a51427fd17318a",
+      "grade": "plans/evidence/context-engineering/CE-010-runtime-routing-baseline-regraded/instrumented-current/direct-execution/codex/gpt-5.6-luna-medium/run-03/grade.json",
+      "gradeSha256": "d70af276542cdafcb60fdb8d69f417528226940222a6c9d0397dbaa2e8710e0b",
+      "result": "plans/evidence/context-engineering/CE-010-runtime-routing-baseline-regraded/instrumented-current/direct-execution/codex/gpt-5.6-luna-medium/run-03/result.json",
+      "resultSha256": "4892b2e6fa6bbc6ddbf5fff780f15467e39a55c9e4419b37b35115bc0685f1d7"
+    },
+    {
+      "scenarioId": "direct-execution",
+      "repetition": 4,
+      "metadata": "plans/evidence/context-engineering/CE-010-runtime-routing-baseline-regraded/instrumented-current/direct-execution/codex/gpt-5.6-luna-medium/run-04/metadata.json",
+      "metadataSha256": "78ef33299b79a382ee5eb31673608df0649be3bbf8d56d58bd52c4b32cf60ab6",
+      "grade": "plans/evidence/context-engineering/CE-010-runtime-routing-baseline-regraded/instrumented-current/direct-execution/codex/gpt-5.6-luna-medium/run-04/grade.json",
+      "gradeSha256": "d70af276542cdafcb60fdb8d69f417528226940222a6c9d0397dbaa2e8710e0b",
+      "result": "plans/evidence/context-engineering/CE-010-runtime-routing-baseline-regraded/instrumented-current/direct-execution/codex/gpt-5.6-luna-medium/run-04/result.json",
+      "resultSha256": "97ed4cecd7c7774bf5fcdf7f7669f9095d75ebb646ef3430db9e44192ec32112"
+    },
+    {
+      "scenarioId": "direct-execution",
+      "repetition": 5,
+      "metadata": "plans/evidence/context-engineering/CE-010-runtime-routing-baseline-regraded/instrumented-current/direct-execution/codex/gpt-5.6-luna-medium/run-05/metadata.json",
+      "metadataSha256": "d5056ffe71ae9c978c9cd0af542a047879bc9b87927e17c30c29602e3d08cfc7",
+      "grade": "plans/evidence/context-engineering/CE-010-runtime-routing-baseline-regraded/instrumented-current/direct-execution/codex/gpt-5.6-luna-medium/run-05/grade.json",
+      "gradeSha256": "d70af276542cdafcb60fdb8d69f417528226940222a6c9d0397dbaa2e8710e0b",
+      "result": "plans/evidence/context-engineering/CE-010-runtime-routing-baseline-regraded/instrumented-current/direct-execution/codex/gpt-5.6-luna-medium/run-05/result.json",
+      "resultSha256": "2a141dad9ce731860d1ce5a7fe4d73c7cfa8ab8e00e473ac3b0f542ef68fc2bf"
+    },
+    {
+      "scenarioId": "planned-retry",
+      "repetition": 1,
+      "metadata": "plans/evidence/context-engineering/CE-010-runtime-routing-baseline-regraded/instrumented-current/planned-retry/codex/gpt-5.6-luna-medium/run-01/metadata.json",
+      "metadataSha256": "cc963f8ab2e6ec96e07f8ac1822156e46621f46942f86e7852b1943865e580bb",
+      "grade": "plans/evidence/context-engineering/CE-010-runtime-routing-baseline-regraded/instrumented-current/planned-retry/codex/gpt-5.6-luna-medium/run-01/grade.json",
+      "gradeSha256": "8023d78962120ff24c79e8c07da286c21f3d7c26829cf2e455563a4782673c59",
+      "result": "plans/evidence/context-engineering/CE-010-runtime-routing-baseline-regraded/instrumented-current/planned-retry/codex/gpt-5.6-luna-medium/run-01/result.json",
+      "resultSha256": "785a3634419d75cf0d9c7ee796875f1b3d9ef63b90a801390504dd32dfb05a38"
+    },
+    {
+      "scenarioId": "planned-retry",
+      "repetition": 2,
+      "metadata": "plans/evidence/context-engineering/CE-010-runtime-routing-baseline-regraded/instrumented-current/planned-retry/codex/gpt-5.6-luna-medium/run-02/metadata.json",
+      "metadataSha256": "0dea28ce918393651279d29779a3677898c8d03e18f4ff5e98d13e7f4393df69",
+      "grade": "plans/evidence/context-engineering/CE-010-runtime-routing-baseline-regraded/instrumented-current/planned-retry/codex/gpt-5.6-luna-medium/run-02/grade.json",
+      "gradeSha256": "8023d78962120ff24c79e8c07da286c21f3d7c26829cf2e455563a4782673c59",
+      "result": "plans/evidence/context-engineering/CE-010-runtime-routing-baseline-regraded/instrumented-current/planned-retry/codex/gpt-5.6-luna-medium/run-02/result.json",
+      "resultSha256": "46020dbf5a14a6cb9df450dee964d66acdc81206336832f913b04eb92b18793b"
+    },
+    {
+      "scenarioId": "planned-retry",
+      "repetition": 3,
+      "metadata": "plans/evidence/context-engineering/CE-010-runtime-routing-baseline-regraded/instrumented-current/planned-retry/codex/gpt-5.6-luna-medium/run-03/metadata.json",
+      "metadataSha256": "2767ab169f1ec1fe19d5c24775be78e5490b36e59be803cfc83df631a5b090e3",
+      "grade": "plans/evidence/context-engineering/CE-010-runtime-routing-baseline-regraded/instrumented-current/planned-retry/codex/gpt-5.6-luna-medium/run-03/grade.json",
+      "gradeSha256": "8023d78962120ff24c79e8c07da286c21f3d7c26829cf2e455563a4782673c59",
+      "result": "plans/evidence/context-engineering/CE-010-runtime-routing-baseline-regraded/instrumented-current/planned-retry/codex/gpt-5.6-luna-medium/run-03/result.json",
+      "resultSha256": "0625ad1e92063c7d75593fb0852ee1a4df8c97716c8f499222d585c07ac962bc"
+    },
+    {
+      "scenarioId": "planned-retry",
+      "repetition": 4,
+      "metadata": "plans/evidence/context-engineering/CE-010-runtime-routing-baseline-regraded/instrumented-current/planned-retry/codex/gpt-5.6-luna-medium/run-04/metadata.json",
+      "metadataSha256": "56b9fbc6e32429088abba001cec397ee1a67aa944909f86236f62b8c464c4726",
+      "grade": "plans/evidence/context-engineering/CE-010-runtime-routing-baseline-regraded/instrumented-current/planned-retry/codex/gpt-5.6-luna-medium/run-04/grade.json",
+      "gradeSha256": "8023d78962120ff24c79e8c07da286c21f3d7c26829cf2e455563a4782673c59",
+      "result": "plans/evidence/context-engineering/CE-010-runtime-routing-baseline-regraded/instrumented-current/planned-retry/codex/gpt-5.6-luna-medium/run-04/result.json",
+      "resultSha256": "85b0687477d434642c26df99973b65e2204c71b7ab69e104bccc731463a2c77c"
+    },
+    {
+      "scenarioId": "planned-retry",
+      "repetition": 5,
+      "metadata": "plans/evidence/context-engineering/CE-010-runtime-routing-baseline-regraded/instrumented-current/planned-retry/codex/gpt-5.6-luna-medium/run-05/metadata.json",
+      "metadataSha256": "050b0554c791cbb712a057926460189d8e0582fe296ca6b15b8a1f4938c7f7d2",
+      "grade": "plans/evidence/context-engineering/CE-010-runtime-routing-baseline-regraded/instrumented-current/planned-retry/codex/gpt-5.6-luna-medium/run-05/grade.json",
+      "gradeSha256": "9e863aa64972815b9d8ba5877d4d5d0ce741425aad6de572824811baf2572fb6",
+      "result": "plans/evidence/context-engineering/CE-010-runtime-routing-baseline-regraded/instrumented-current/planned-retry/codex/gpt-5.6-luna-medium/run-05/result.json",
+      "resultSha256": "3da05327d117f686344ea41576b9b523400ff0b2d46066b78522c98728c6ff51"
+    }
+  ]
+}

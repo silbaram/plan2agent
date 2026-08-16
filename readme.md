@@ -229,6 +229,7 @@ services.
 ## Documentation
 
 - [Quickstart](docs/quickstart.md) — shortest path from installation to the first Gate artifacts
+- [Adaptive Harness User Flow](docs/adaptive-harness-user-flow.md) — end-to-end Gate approval, adaptive execution, context routing, and closeout
 - [CLI Reference](docs/cli-reference.md) — commands, options, and examples
 - [Harness Guide](docs/harness-guide.md) — Gate A-C, schemas, evidence, and troubleshooting
 - [Iteration Spec](docs/iteration-spec.md) — iteration layout, diffs, close/open, and run tracking

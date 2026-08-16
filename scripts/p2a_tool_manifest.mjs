@@ -14,6 +14,7 @@ export const REPO_ONLY_SCRIPT_FILES = [
 
 export const PROJECT_RUNTIME_SCRIPT_FILES = [
   'p2a.mjs',
+  'p2a_next_service.mjs',
   'p2a_decision_ledger.mjs',
   'p2a_decisions.mjs',
   'p2a_shape.mjs',
@@ -26,7 +27,10 @@ export const PROJECT_RUNTIME_SCRIPT_FILES = [
   'p2a_tasks.mjs',
   'p2a_runs.mjs',
   'p2a_execute.mjs',
+  'p2a_continuations.mjs',
+  'p2a_schema.mjs',
   'p2a_context.mjs',
+  'p2a_context_packet.mjs',
   'p2a_context_routes.mjs',
   'p2a_monitor_gate.mjs',
   'p2a_visual_review_gate.mjs',

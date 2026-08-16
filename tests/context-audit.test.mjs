@@ -10,7 +10,7 @@ import path from 'node:path';
 import test from 'node:test';
 
 import { auditContext } from '../scripts/p2a_context_audit.mjs';
-import { validateSchema } from '../scripts/validate_artifacts.mjs';
+import { validateSchema } from '../scripts/p2a_schema.mjs';
 import {
   formatCommandResult,
   makeTempDir,

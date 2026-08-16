@@ -28,4 +28,24 @@ artifacts/lightweight-embedded-redis
 # Local execution workspaces
 .p2a-worktrees/
 
-plans/
+# Local planning/evaluation output. Keep only the reviewed plans and reproducible
+# runtime-routing evaluation definitions; raw model runs remain ignored.
+plans/*
+!plans/context-engineering-improvement-plan.md
+!plans/context-engineering-orchestrated-batch-baseline.json
+!plans/context-runtime-routing-improvement-plan.md
+!plans/evidence/
+plans/evidence/**
+!plans/evidence/**/
+
+# Reproducible evaluation definitions and reviewed baselines are source artifacts.
+# Raw runs, preflight outputs, and provider transcripts remain ignored by default.
+!plans/evidence/**/README.md
+!plans/evidence/**/contract*.json
+!plans/evidence/**/result.schema.json
+!plans/evidence/**/run-*-ab.mjs
+!plans/evidence/**/runtime-context-fixture.mjs
+!plans/evidence/**/runtime-performance-gate.mjs
+!plans/evidence/**/test-*.mjs
+!plans/evidence/context-engineering/CE-009/codex/codex-ab-summary.json
+!plans/evidence/context-engineering/CE-010-runtime-routing-baseline-regraded/codex/codex-trace-summary.json

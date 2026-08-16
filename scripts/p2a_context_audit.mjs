@@ -9,18 +9,23 @@ import {
 } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { validateSchema } from './validate_artifacts.mjs';
+import { validateSchema } from './p2a_schema.mjs';
 import {
+  CONTEXT_MODES,
   CONTEXT_PHASES,
+  CONTEXT_PROVIDERS,
   readContextRouteSource,
+  referenceAppliesToProvider,
   referenceConditionId as sharedReferenceConditionId,
+  referencePathForProvider,
+  routeModeApplies,
   selectContextReferenceRoutes,
 } from './p2a_context_routes.mjs';
 
 const ROUTE_SCHEMA_VERSION = 'p2a.context_routes.v1';
 const AUDIT_SCHEMA_VERSION = 'p2a.context_audit.v1';
-const PROVIDERS = ['codex', 'claude', 'gemini'];
-const EXECUTION_MODES = ['direct', 'planned', 'orchestrated'];
+const PROVIDERS = CONTEXT_PROVIDERS;
+const EXECUTION_MODES = CONTEXT_MODES;
 const LOAD_PRIORITY = { 'on-demand': 0, conditional: 1, always: 2 };
 const RUNTIME_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const ROUTE_SCHEMA = JSON.parse(readFileSync(
@@ -100,25 +105,8 @@ function instructionOwnerForPath(value) {
   return null;
 }
 
-function routeModeApplies(route, executionMode) {
-  if (!executionMode) return true;
-  const modes = stringArray(route?.modes);
-  return !modes.length || modes.includes(executionMode);
-}
-
 function referenceConditionId(skillId, referencePath) {
   return sharedReferenceConditionId(skillId, referencePath);
-}
-
-function referenceAppliesToProvider(reference, provider) {
-  const providers = stringArray(reference?.providers);
-  return !providers.length || providers.includes(provider);
-}
-
-function referencePathForProvider(reference, provider) {
-  const override = recordArray(reference?.provider_paths)
-    .find((item) => item.provider === provider);
-  return override?.path ?? reference?.path;
 }
 
 function declaredReferencePaths(reference) {

@@ -11,8 +11,9 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 
-import { validateSchema } from '../scripts/validate_artifacts.mjs';
+import { validateSchema } from '../scripts/p2a_schema.mjs';
 import { validateContextPacket } from '../scripts/p2a_context.mjs';
+import { CONTINUATION_DEFINITIONS } from '../scripts/p2a_continuations.mjs';
 import {
   E2E_FIXTURE_ROOT,
   ROOT,
@@ -114,6 +115,27 @@ test('context packet schema rejects inconsistent activation, phase, continuation
   );
 });
 
+test('context packet combinations stay aligned with the canonical continuation registry', () => {
+  const declaredCases = PACKET_SCHEMA.oneOf
+    .filter((candidate) => candidate.properties?.continuation?.type === 'object')
+    .map((candidate) => ({
+      id: candidate.properties.continuation.properties.id.const,
+      activation: candidate.properties.activation.const,
+      phase: candidate.properties.phase.const,
+      bindingKind: candidate.properties.binding.properties.kind.const,
+    }));
+  const expectedCases = Object.entries(CONTINUATION_DEFINITIONS).map(([id, definition]) => ({
+    id,
+    activation: definition.activation,
+    phase: definition.phase,
+    bindingKind: definition.activation === 'immediate' ? 'action' : 'run',
+  }));
+  assert.deepEqual(
+    declaredCases.sort((left, right) => left.id.localeCompare(right.id)),
+    expectedCases.sort((left, right) => left.id.localeCompare(right.id)),
+  );
+});
+
 test('context packet semantic validation rejects drifted metadata', () => {
   assert.throws(
     () => validateContextPacket(validPacket({ totalBytes: 41 })),
@@ -173,6 +195,30 @@ test('immediate context packet binds the current action without exposing artifac
     const stale = runContext(fixture, ['--continuation', 'execution.prepare']);
     assert.notEqual(stale.status, 0);
     assert.match(stale.stderr, /stale action/);
+  } finally {
+    rmSync(fixture.targetRoot, { recursive: true, force: true });
+  }
+});
+
+test('immediate action binding changes when the next-decision contract changes', () => {
+  const fixture = contextProject('action-binding');
+  try {
+    const before = jsonPacket(runContext(fixture, [
+      '--continuation', 'execution.prepare',
+      '--json', '--metadata-only',
+    ]));
+    writeFileSync(path.join(fixture.targetRoot, '.plan2agent', 'project.config.json'), `${JSON.stringify({
+      devExecution: { executionMode: 'direct' },
+    }, null, 2)}\n`, 'utf8');
+    const after = jsonPacket(runContext(fixture, [
+      '--continuation', 'execution.prepare',
+      '--json', '--metadata-only',
+    ]));
+
+    assert.notEqual(
+      before.binding.artifactContractSha256,
+      after.binding.artifactContractSha256,
+    );
   } finally {
     rmSync(fixture.targetRoot, { recursive: true, force: true });
   }

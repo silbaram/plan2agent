@@ -13,10 +13,8 @@ function sumScenarioMetric(scenarios, field) {
     : null;
 }
 
-function attributionComplete(metrics) {
-  return metrics?.traceCoverage?.attributionComplete
-    ?? metrics?.traceCoverage?.complete
-    ?? false;
+function packetAttributionComplete(metrics) {
+  return metrics?.packetManagedAttributionComplete === true;
 }
 
 export function validatePerformanceReference(summary, expected) {
@@ -36,21 +34,37 @@ export function validatePerformanceReference(summary, expected) {
   if (!summary.coverageComplete || !summary.traceComplete || !summary.candidateAllPass) {
     throw new Error('performance reference must have complete passing run and trace coverage');
   }
+  for (const field of ['inputTokens', 'durationMs', 'uncachedInputTokens']) {
+    if (!Number.isFinite(summary.metrics?.[field])) {
+      throw new Error(`performance reference metric ${field} must be finite`);
+    }
+  }
   return summary;
 }
 
-export function evaluateRuntimeRoutingPerformance(reference, candidate) {
+export function evaluateRuntimeRoutingPerformance(reference, candidate, options = {}) {
   const checks = [];
-  const add = (id, pass, expected, actual) => checks.push({ id, pass, expected, actual });
+  const excludedChecks = [];
+  const exclusions = options.excludedChecks ?? {};
+  const add = (id, pass, expected, actual) => {
+    if (Object.hasOwn(exclusions, id)) {
+      excludedChecks.push({ id, reason: exclusions[id] });
+      return;
+    }
+    checks.push({ id, pass, expected, actual });
+  };
   const directReference = scenarioMetrics(reference, 'direct-execution');
   const directCandidate = candidate.scenarioMetrics.get('direct-execution');
   const packetScenarios = PACKET_MANAGED_SCENARIOS.map(
     (scenarioId) => candidate.scenarioMetrics.get(scenarioId),
   );
-  const packetAttributionComplete = packetScenarios.every(attributionComplete);
-  const packetRepeatedSourceReads = sumScenarioMetric(packetScenarios, 'repeatedSourceReads');
-  const packetUnattributedReads = sumScenarioMetric(packetScenarios, 'unattributedReadOperations');
-  const packetUnknownOperations = sumScenarioMetric(packetScenarios, 'unknownOperations');
+  const packetAttributionIsComplete = packetScenarios.every(packetAttributionComplete);
+  const packetRepeatedSourceReads = sumScenarioMetric(packetScenarios, 'packetManagedRepeatedSourceReads');
+  const packetUnattributedReads = sumScenarioMetric(
+    packetScenarios,
+    'packetManagedUnattributedReadOperations',
+  );
+  const packetUnknownOperations = sumScenarioMetric(packetScenarios, 'packetManagedUnknownOperations');
 
   add(
     'direct_median_tool_operations',
@@ -70,19 +84,25 @@ export function evaluateRuntimeRoutingPerformance(reference, candidate) {
   );
   add(
     'aggregate_input_tokens',
-    candidate.metrics.inputTokens <= reference.metrics.inputTokens,
+    Number.isFinite(candidate.metrics.inputTokens)
+      && Number.isFinite(reference.metrics.inputTokens)
+      && candidate.metrics.inputTokens <= reference.metrics.inputTokens,
     `<= ${reference.metrics.inputTokens}`,
     candidate.metrics.inputTokens,
   );
   add(
     'aggregate_elapsed_ms',
-    candidate.metrics.durationMs <= reference.metrics.durationMs,
+    Number.isFinite(candidate.metrics.durationMs)
+      && Number.isFinite(reference.metrics.durationMs)
+      && candidate.metrics.durationMs <= reference.metrics.durationMs,
     `<= ${reference.metrics.durationMs}`,
     candidate.metrics.durationMs,
   );
   add(
     'aggregate_uncached_input_tokens',
-    candidate.metrics.uncachedInputTokens <= reference.metrics.uncachedInputTokens * 1.05,
+    Number.isFinite(candidate.metrics.uncachedInputTokens)
+      && Number.isFinite(reference.metrics.uncachedInputTokens)
+      && candidate.metrics.uncachedInputTokens <= reference.metrics.uncachedInputTokens * 1.05,
     `<= ${Math.floor(reference.metrics.uncachedInputTokens * 1.05)}`,
     candidate.metrics.uncachedInputTokens,
   );
@@ -98,25 +118,27 @@ export function evaluateRuntimeRoutingPerformance(reference, candidate) {
   }
   add(
     'packet_managed_source_attribution_complete',
-    packetAttributionComplete,
+    packetAttributionIsComplete,
     true,
-    packetAttributionComplete,
+    packetAttributionIsComplete,
   );
   add(
     'packet_managed_repeated_source_reads',
-    packetAttributionComplete && packetRepeatedSourceReads === 0,
+    packetAttributionIsComplete
+      && Number.isFinite(packetRepeatedSourceReads)
+      && packetRepeatedSourceReads === 0,
     0,
     packetRepeatedSourceReads,
   );
   add(
     'packet_managed_unattributed_content_reads',
-    packetUnattributedReads === 0,
+    Number.isFinite(packetUnattributedReads) && packetUnattributedReads === 0,
     0,
     packetUnattributedReads,
   );
   add(
     'packet_managed_unknown_operations',
-    packetUnknownOperations === 0,
+    Number.isFinite(packetUnknownOperations) && packetUnknownOperations === 0,
     0,
     packetUnknownOperations,
   );
@@ -124,5 +146,6 @@ export function evaluateRuntimeRoutingPerformance(reference, candidate) {
     schema_version: 'p2a.context_engineering_runtime_performance_gate.v2',
     verdict: checks.every((check) => check.pass) ? 'pass' : 'fail',
     checks,
+    ...(excludedChecks.length ? { excludedChecks } : {}),
   };
 }

@@ -123,14 +123,21 @@
           "required": ["id", "activation", "sourceState", "skill", "phase", "mode"],
           "additionalProperties": false,
           "properties": {
-            "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9.-]+$" },
+            "id": {
+              "enum": [
+                "execution.prepare",
+                "execution.owner-start",
+                "execution.visual-review",
+                "execution.acceptance-review"
+              ]
+            },
             "activation": { "enum": ["immediate", "after_command_success", "run_declared"] },
             "sourceState": { "$ref": "#/$defs/state" },
-            "skill": { "type": "string", "pattern": "^p2a-[a-z0-9-]+$" },
+            "skill": { "const": "p2a-dev-execution" },
             "phase": { "$ref": "#/$defs/phase" },
             "mode": {
               "type": ["string", "null"],
-              "enum": ["direct", "planned", "orchestrated", null]
+              "enum": ["direct", "planned", null]
             },
             "binding": {
               "type": "object",
@@ -157,6 +164,42 @@
                 "properties": { "activation": { "enum": ["immediate", "run_declared"] } }
               },
               "then": { "not": { "required": ["binding"] } }
+            },
+            {
+              "oneOf": [
+                {
+                  "properties": {
+                    "id": { "const": "execution.prepare" },
+                    "activation": { "const": "immediate" },
+                    "phase": { "const": "prepare" },
+                    "mode": { "type": "null" }
+                  }
+                },
+                {
+                  "properties": {
+                    "id": { "const": "execution.owner-start" },
+                    "activation": { "const": "after_command_success" },
+                    "phase": { "const": "owner-start" },
+                    "mode": { "enum": ["direct", "planned"] }
+                  }
+                },
+                {
+                  "properties": {
+                    "id": { "const": "execution.visual-review" },
+                    "activation": { "const": "after_command_success" },
+                    "phase": { "const": "visual-review" },
+                    "mode": { "enum": ["direct", "planned"] }
+                  }
+                },
+                {
+                  "properties": {
+                    "id": { "const": "execution.acceptance-review" },
+                    "activation": { "const": "after_command_success" },
+                    "phase": { "const": "acceptance-review" },
+                    "mode": { "enum": ["direct", "planned"] }
+                  }
+                }
+              ]
             }
           ]
         }

@@ -1,0 +1,319 @@
+{
+  "schema_version": "p2a.context_audit.v1",
+  "measurement": "assembled",
+  "scenario": {
+    "skill": "p2a-dev-execution",
+    "stage": "execution",
+    "executionMode": "orchestrated",
+    "conditions": [
+      "reference:p2a-dev-execution:references/batch-execution.md"
+    ]
+  },
+  "generatedAt": "2026-08-15T00:00:00.000Z",
+  "target": ".",
+  "manifestPath": ".agents/context-routes.json",
+  "status": "pass",
+  "summary": {
+    "providerCount": 3,
+    "skillCount": 1,
+    "contextCount": 3,
+    "sourceCount": 5,
+    "ownerCount": 4,
+    "alwaysLoadedBytes": 10870,
+    "conditionalBytes": 13370,
+    "estimatedTokens": 6062,
+    "promptBytes": 24240,
+    "promptEstimatedTokens": 6062,
+    "duplicateClusters": 0,
+    "conflictCandidates": 0,
+    "warnings": 0,
+    "failures": 0
+  },
+  "providers": [
+    {
+      "provider": "codex",
+      "contexts": 1,
+      "sources": 2,
+      "alwaysLoadedBytes": 5223,
+      "conditionalBytes": 6685,
+      "estimatedTokens": 2978,
+      "promptBytes": 11908,
+      "promptEstimatedTokens": 2978
+    },
+    {
+      "provider": "claude",
+      "contexts": 1,
+      "sources": 2,
+      "alwaysLoadedBytes": 5223,
+      "conditionalBytes": 6685,
+      "estimatedTokens": 2978,
+      "promptBytes": 11908,
+      "promptEstimatedTokens": 2978
+    },
+    {
+      "provider": "gemini",
+      "contexts": 1,
+      "sources": 3,
+      "alwaysLoadedBytes": 5647,
+      "conditionalBytes": 6685,
+      "estimatedTokens": 3084,
+      "promptBytes": 12332,
+      "promptEstimatedTokens": 3084
+    }
+  ],
+  "contexts": [
+    {
+      "provider": "claude",
+      "skill": "p2a-dev-execution",
+      "stage": "execution",
+      "sources": [
+        {
+          "path": ".claude/skills/p2a-dev-execution/references/batch-execution.md",
+          "role": "reference",
+          "owner": "skill",
+          "load": "conditional",
+          "required": true,
+          "condition": "Two or more independent ready tasks will run concurrently in isolated worktrees.",
+          "conditionId": "reference:p2a-dev-execution:references/batch-execution.md",
+          "bytes": 6685,
+          "estimatedTokens": 1672,
+          "sha256": "98bd0204b1bbbe7eddd444b021a64721250efda93886942acda78c61cb325a72",
+          "imperativeCount": 32
+        },
+        {
+          "path": ".claude/skills/p2a-dev-execution/SKILL.md",
+          "role": "skill",
+          "owner": "skill",
+          "load": "always",
+          "condition": "The p2a-dev-execution skill is selected for the execution stage.",
+          "conditionId": "skill:p2a-dev-execution",
+          "bytes": 5223,
+          "estimatedTokens": 1306,
+          "sha256": "be56334903245a5108001fd6c715783960163913de004013fdc5a72cda93d87a",
+          "imperativeCount": 23
+        }
+      ],
+      "owners": [
+        {
+          "id": "cli.artifact-validator",
+          "owner": "cli",
+          "path": "runtime:scripts/validate_artifacts.mjs",
+          "condition": "A canonical planning, execution, visual, or review artifact is validated.",
+          "bytes": 241865,
+          "sha256": "7ab3396a1caf9b407a4eb7a13d0b32569e0b0b927c9b764206e81b5ef9fa2332"
+        },
+        {
+          "id": "cli.state-router",
+          "owner": "cli",
+          "path": "runtime:scripts/p2a.mjs",
+          "condition": "The current canonical state is inspected or routed to one next action.",
+          "bytes": 77433,
+          "sha256": "7b895174c9b29d37a22fcfa8c6b40314470f3b6a3a5454a154c084f9043c1dfa"
+        },
+        {
+          "id": "hook.claude-workspace-confinement",
+          "owner": "hook",
+          "path": ".claude/hooks/p2a-confine-workspace.mjs",
+          "condition": "Claude owns a write-capable execution inside scaffold confinement.",
+          "bytes": 7280,
+          "sha256": "e93f45effe85d82215f2e1aa1e7e4de83a0d9c8bfff791f6bb1e6e8300034747"
+        },
+        {
+          "id": "schema.next-contract",
+          "owner": "schema",
+          "path": "runtime:schemas/next-v2.schema.json",
+          "condition": "An agent requests the typed p2a next v2 contract.",
+          "bytes": 2669,
+          "sha256": "c55bf5b4a4a76890e995a9fe4c5cd43411d8972bf687670591ac8faf989822a1"
+        }
+      ],
+      "totals": {
+        "alwaysLoadedBytes": 5223,
+        "conditionalBytes": 6685,
+        "estimatedTokens": 2978,
+        "promptBytes": 11908,
+        "promptEstimatedTokens": 2978
+      }
+    },
+    {
+      "provider": "codex",
+      "skill": "p2a-dev-execution",
+      "stage": "execution",
+      "sources": [
+        {
+          "path": ".agents/skills/p2a-dev-execution/references/batch-execution.md",
+          "role": "reference",
+          "owner": "skill",
+          "load": "conditional",
+          "required": true,
+          "condition": "Two or more independent ready tasks will run concurrently in isolated worktrees.",
+          "conditionId": "reference:p2a-dev-execution:references/batch-execution.md",
+          "bytes": 6685,
+          "estimatedTokens": 1672,
+          "sha256": "98bd0204b1bbbe7eddd444b021a64721250efda93886942acda78c61cb325a72",
+          "imperativeCount": 32
+        },
+        {
+          "path": ".agents/skills/p2a-dev-execution/SKILL.md",
+          "role": "skill",
+          "owner": "skill",
+          "load": "always",
+          "condition": "The p2a-dev-execution skill is selected for the execution stage.",
+          "conditionId": "skill:p2a-dev-execution",
+          "bytes": 5223,
+          "estimatedTokens": 1306,
+          "sha256": "be56334903245a5108001fd6c715783960163913de004013fdc5a72cda93d87a",
+          "imperativeCount": 23
+        }
+      ],
+      "owners": [
+        {
+          "id": "cli.artifact-validator",
+          "owner": "cli",
+          "path": "runtime:scripts/validate_artifacts.mjs",
+          "condition": "A canonical planning, execution, visual, or review artifact is validated.",
+          "bytes": 241865,
+          "sha256": "7ab3396a1caf9b407a4eb7a13d0b32569e0b0b927c9b764206e81b5ef9fa2332"
+        },
+        {
+          "id": "cli.state-router",
+          "owner": "cli",
+          "path": "runtime:scripts/p2a.mjs",
+          "condition": "The current canonical state is inspected or routed to one next action.",
+          "bytes": 77433,
+          "sha256": "7b895174c9b29d37a22fcfa8c6b40314470f3b6a3a5454a154c084f9043c1dfa"
+        },
+        {
+          "id": "schema.next-contract",
+          "owner": "schema",
+          "path": "runtime:schemas/next-v2.schema.json",
+          "condition": "An agent requests the typed p2a next v2 contract.",
+          "bytes": 2669,
+          "sha256": "c55bf5b4a4a76890e995a9fe4c5cd43411d8972bf687670591ac8faf989822a1"
+        }
+      ],
+      "totals": {
+        "alwaysLoadedBytes": 5223,
+        "conditionalBytes": 6685,
+        "estimatedTokens": 2978,
+        "promptBytes": 11908,
+        "promptEstimatedTokens": 2978
+      }
+    },
+    {
+      "provider": "gemini",
+      "skill": "p2a-dev-execution",
+      "stage": "execution",
+      "sources": [
+        {
+          "path": ".agents/skills/p2a-dev-execution/references/batch-execution.md",
+          "role": "reference",
+          "owner": "skill",
+          "load": "conditional",
+          "required": true,
+          "condition": "Two or more independent ready tasks will run concurrently in isolated worktrees.",
+          "conditionId": "reference:p2a-dev-execution:references/batch-execution.md",
+          "bytes": 6685,
+          "estimatedTokens": 1672,
+          "sha256": "98bd0204b1bbbe7eddd444b021a64721250efda93886942acda78c61cb325a72",
+          "imperativeCount": 32
+        },
+        {
+          "path": ".agents/skills/p2a-dev-execution/SKILL.md",
+          "role": "skill",
+          "owner": "skill",
+          "load": "always",
+          "condition": "The p2a-dev-execution skill is selected for the execution stage.",
+          "conditionId": "skill:p2a-dev-execution",
+          "bytes": 5223,
+          "estimatedTokens": 1306,
+          "sha256": "be56334903245a5108001fd6c715783960163913de004013fdc5a72cda93d87a",
+          "imperativeCount": 23
+        },
+        {
+          "path": ".gemini/commands/p2a/dev-execution.toml",
+          "role": "provider-adapter",
+          "owner": "provider-wrapper",
+          "load": "always",
+          "condition": "Gemini invokes p2a-dev-execution through its generated command adapter.",
+          "conditionId": "provider-adapter:p2a-dev-execution",
+          "bytes": 424,
+          "estimatedTokens": 106,
+          "sha256": "dad770617032137ef37ea4e182b91110253458b3f19ddbb06d08899a25d8b742",
+          "imperativeCount": 3
+        }
+      ],
+      "owners": [
+        {
+          "id": "cli.artifact-validator",
+          "owner": "cli",
+          "path": "runtime:scripts/validate_artifacts.mjs",
+          "condition": "A canonical planning, execution, visual, or review artifact is validated.",
+          "bytes": 241865,
+          "sha256": "7ab3396a1caf9b407a4eb7a13d0b32569e0b0b927c9b764206e81b5ef9fa2332"
+        },
+        {
+          "id": "cli.state-router",
+          "owner": "cli",
+          "path": "runtime:scripts/p2a.mjs",
+          "condition": "The current canonical state is inspected or routed to one next action.",
+          "bytes": 77433,
+          "sha256": "7b895174c9b29d37a22fcfa8c6b40314470f3b6a3a5454a154c084f9043c1dfa"
+        },
+        {
+          "id": "schema.next-contract",
+          "owner": "schema",
+          "path": "runtime:schemas/next-v2.schema.json",
+          "condition": "An agent requests the typed p2a next v2 contract.",
+          "bytes": 2669,
+          "sha256": "c55bf5b4a4a76890e995a9fe4c5cd43411d8972bf687670591ac8faf989822a1"
+        }
+      ],
+      "totals": {
+        "alwaysLoadedBytes": 5647,
+        "conditionalBytes": 6685,
+        "estimatedTokens": 3084,
+        "promptBytes": 12332,
+        "promptEstimatedTokens": 3084
+      }
+    }
+  ],
+  "instructionOwners": [
+    {
+      "id": "cli.artifact-validator",
+      "owner": "cli",
+      "path": "runtime:scripts/validate_artifacts.mjs",
+      "condition": "A canonical planning, execution, visual, or review artifact is validated.",
+      "bytes": 241865,
+      "sha256": "7ab3396a1caf9b407a4eb7a13d0b32569e0b0b927c9b764206e81b5ef9fa2332"
+    },
+    {
+      "id": "cli.state-router",
+      "owner": "cli",
+      "path": "runtime:scripts/p2a.mjs",
+      "condition": "The current canonical state is inspected or routed to one next action.",
+      "bytes": 77433,
+      "sha256": "7b895174c9b29d37a22fcfa8c6b40314470f3b6a3a5454a154c084f9043c1dfa"
+    },
+    {
+      "id": "hook.claude-workspace-confinement",
+      "owner": "hook",
+      "path": ".claude/hooks/p2a-confine-workspace.mjs",
+      "condition": "Claude owns a write-capable execution inside scaffold confinement.",
+      "bytes": 7280,
+      "sha256": "e93f45effe85d82215f2e1aa1e7e4de83a0d9c8bfff791f6bb1e6e8300034747"
+    },
+    {
+      "id": "schema.next-contract",
+      "owner": "schema",
+      "path": "runtime:schemas/next-v2.schema.json",
+      "condition": "An agent requests the typed p2a next v2 contract.",
+      "bytes": 2669,
+      "sha256": "c55bf5b4a4a76890e995a9fe4c5cd43411d8972bf687670591ac8faf989822a1"
+    }
+  ],
+  "duplicateClusters": [],
+  "conflictCandidates": [],
+  "baselineComparison": null,
+  "diagnostics": []
+}

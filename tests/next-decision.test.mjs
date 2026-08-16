@@ -4,8 +4,12 @@ import { dirname, join } from 'node:path';
 import test from 'node:test';
 
 import { FIXTURE_ROOT, makeTempDir, runP2a } from './helpers/fixtures.mjs';
-import { validateSchema } from '../scripts/validate_artifacts.mjs';
+import { validateSchema } from '../scripts/p2a_schema.mjs';
 import { NEXT_DECISION_RULES } from '../scripts/p2a.mjs';
+import {
+  CONTINUATION_DEFINITIONS,
+  continuationDescriptor,
+} from '../scripts/p2a_continuations.mjs';
 
 const NEXT_V1_SCHEMA = JSON.parse(readFileSync(new URL('../schemas/next.schema.json', import.meta.url), 'utf8'));
 const NEXT_SCHEMA = JSON.parse(readFileSync(new URL('../schemas/next-v2.schema.json', import.meta.url), 'utf8'));
@@ -1326,6 +1330,59 @@ test('next schema declares the CLI, skill, and approval command shapes', () => {
   }, NEXT_SCHEMA), /oneOf|binding/);
 });
 
+test('next continuation schema stays aligned with the canonical continuation registry', () => {
+  for (const [id, definition] of Object.entries(CONTINUATION_DEFINITIONS)) {
+    const mode = definition.activation === 'immediate' ? null : 'direct';
+    const continuation = {
+      ...continuationDescriptor(id, mode),
+      sourceState: id === 'execution.prepare'
+        ? 'gate_b_approved_needs_execution_prepare'
+        : 'run_started',
+    };
+    const payload = {
+      schema_version: 'p2a.next.v2',
+      generatedAt: '2026-08-16T00:00:00.000Z',
+      target: '.',
+      projectId: 'sample',
+      state: continuation.sourceState,
+      reasonCode: continuation.sourceState,
+      reason: 'Registry alignment fixture.',
+      command: definition.activation === 'immediate'
+        ? { kind: 'skill', skill: 'p2a-dev-execution', args: [], display: '/p2a-dev-execution' }
+        : {
+            kind: 'cli',
+            argv: ['execute', 'resume', '--run-id', 'run-sample', '--json'],
+            display: 'p2a execute resume --run-id run-sample --json',
+            requiresApproval: false,
+          },
+      continuation,
+    };
+    assert.doesNotThrow(() => validateSchema(payload, NEXT_SCHEMA), id);
+  }
+
+  const orchestrated = {
+    ...continuationDescriptor('execution.owner-start', 'direct'),
+    mode: 'orchestrated',
+    sourceState: 'run_started',
+  };
+  assert.throws(() => validateSchema({
+    schema_version: 'p2a.next.v2',
+    generatedAt: '2026-08-16T00:00:00.000Z',
+    target: '.',
+    projectId: 'sample',
+    state: 'run_started',
+    reasonCode: 'run_started',
+    reason: 'Orchestrated packet continuations are not supported.',
+    command: {
+      kind: 'cli',
+      argv: ['execute', 'resume', '--run-id', 'run-sample', '--json'],
+      display: 'p2a execute resume --run-id run-sample --json',
+      requiresApproval: false,
+    },
+    continuation: orchestrated,
+  }, NEXT_SCHEMA), /oneOf|must be one of/);
+});
+
 test('next v2 exposes structured skill and command-bound continuation without display parsing', () => {
   const prepareRule = NEXT_DECISION_RULES.find((rule) => rule.state === 'gate_b_approved_needs_execution_prepare');
   const context = {
@@ -1343,12 +1400,23 @@ test('next v2 exposes structured skill and command-bound continuation without di
   });
 
   const readyRule = NEXT_DECISION_RULES.find((rule) => rule.state === 'ready_task_available');
-  assert.equal(readyRule.continuation.activation, 'after_command_success');
-  assert.deepEqual(readyRule.continuation.binding, {
+  const directContinuation = readyRule.continuation({
+    gates: { taskGraph: { execution: { mode: 'direct' } } },
+  });
+  assert.equal(directContinuation.activation, 'after_command_success');
+  assert.equal(directContinuation.mode, 'direct');
+  assert.deepEqual(directContinuation.binding, {
     kind: 'command_result',
     schema_version: 'p2a.execution_result.v1',
     field: 'runId',
   });
+  assert.equal(readyRule.continuation({
+    gates: { taskGraph: { execution: { mode: 'orchestrated' } } },
+  }), null);
+
+  const startedRule = NEXT_DECISION_RULES.find((rule) => rule.state === 'run_started');
+  assert.equal(startedRule.continuation({ startedRun: { mode: 'orchestrated' } }), null);
+  assert.equal(startedRule.continuation({ startedRun: { mode: 'planned' } }).mode, 'planned');
 });
 
 test('next keeps the strict v1 JSON contract by default and exposes reasonCode only in v2', () => {

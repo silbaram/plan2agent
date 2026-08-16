@@ -6,6 +6,37 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-08-16
+
+### Added
+
+- Add phase-aware runtime context routing with a canonical route manifest and `p2a context show`, which returns action- or run-bound context packets containing confined reference bodies, stable route IDs, hashes, and byte boundaries.
+- Add `p2a.next.v2` structured skill actions, stable continuation metadata, and machine-readable execution results while keeping the default `p2a.next.v1` response unchanged.
+- Add `p2a doctor --context` inventory, assembled-context, provider parity, baseline-drift, duplicate, conflict, source-owner, size, and hash diagnostics.
+- Add optional entry reference bundles and `p2a reference snapshot` so Gate A captures entry, bundle, and declared reference bytes, while Gate B records the exact inspected-reference-to-evidence-to-spec-decision lineage.
+- Add schema-validated provider-neutral trace summaries and reproducible Codex/Gemini runtime-routing evaluation runners with isolated source manifests and conservative performance gates.
+
+### Changed
+
+- Split the largest canonical skills into compact decision and authority guidance plus conditionally loaded references, reducing always-loaded instruction content without moving enforceable Gate or safety rules out of schemas and validators.
+- Make the canonical context route manifest the shared source for runtime selection, context audit, provider asset parity, and generated Gemini command identity.
+- Require new document-backed Gate A approvals to pass the original `--entry`; when a sibling reference bundle exists, its validated snapshot must be captured before approval. Baseline-backed iterations and legacy approval rebinding retain their entry-less compatibility path.
+- Separate CLI dispatch, next-state decisions, context packet rendering, schema validation, trace normalization, and evaluation helpers into stable modules with package and dependency-boundary regression coverage.
+
+### Fixed
+
+- Treat unattributed or unknown content reads as partial trace coverage instead of reporting zero repeated reads as proven success.
+- Validate context packet activation, continuation, phase, mode, and binding combinations together, including source-byte totals, unique routes and paths, and canonical timestamps.
+- Reject reference, route, and trace path attribution that escapes the workspace through traversal, ambiguous suffix matching, or symbolic links.
+- Compare context audit baselines only when measurement, normalized scenario, and provider sets match, and detect source additions, removals, same-size content changes, and route-metadata drift.
+- Keep provider-specific unavailable metrics explicitly excluded from performance gates instead of converting missing or ambiguous usage into misleading values.
+
+### Compatibility
+
+- Node.js 22 or newer remains required.
+- `p2a next --json` continues to emit the strict v1 contract; consumers opt into the new typed contract with `--contract v2`.
+- Existing projects without `executionMode` continue to resolve as Orchestrated, and context packets do not grant new write, approval, deployment, or spending authority.
+
 ## [0.3.0] - 2026-08-15
 
 ### Added
@@ -13,8 +44,6 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Add adaptive execution readiness with Direct, Planned, and Orchestrated modes, including one synthetic compatibility work item for Direct/Planned and ordered command-verified checkpoints for Planned runs.
 - Bind new runs to a Gate-derived execution envelope that preserves source hashes, objective, scope, `must_preserve`, non-goals, acceptance, verification, authority boundaries, and required visual contracts.
 - Record run usage, interruption, Gate-return, monitor-rule, and stable evaluation metrics for production evidence analysis.
-- Add machine-readable `p2a.next.v2` continuation and execution-result contracts so Direct/Planned work can bind follow-up context without parsing display text.
-- Add phase-aware context routing and `p2a context show`, which validates the current action or started run before returning confined canonical reference bodies with stable route, hash, and byte boundaries.
 
 ### Changed
 
@@ -89,7 +118,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Add package-runtime project initialization, managed provider assets, artifact validation, handoff, supervised execution, evaluation, proposal, and optional Memory workflows.
 - Ship canonical and generated integrations for Codex, Claude Code, and Gemini CLI.
 
-[Unreleased]: https://github.com/silbaram/plan2agent/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/silbaram/plan2agent/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/silbaram/plan2agent/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/silbaram/plan2agent/compare/v0.2.3...v0.3.0
 [0.2.3]: https://github.com/silbaram/plan2agent/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/silbaram/plan2agent/compare/v0.2.1...v0.2.2

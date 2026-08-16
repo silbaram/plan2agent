@@ -32,6 +32,14 @@ test('sanitized tool trace separates multi-source reads from repeated operations
     toolOperations: 3,
     contentReadOperations: 2,
     metadataInspectOperations: 0,
+    canonicalUniqueSourcesRead: 2,
+    canonicalSourceReadOccurrences: 3,
+    packetManagedAttributionComplete: true,
+    packetManagedRepeatedSourceReads: 1,
+    packetManagedUnattributedReadOperations: 0,
+    packetManagedUnknownOperations: 0,
+    workspaceOtherReadOperations: 0,
+    scopeAttributedReadOperations: 0,
     uniqueSourcesRead: 2,
     sourceReadOccurrences: 3,
     repeatedSourceReads: 1,
@@ -40,7 +48,10 @@ test('sanitized tool trace separates multi-source reads from repeated operations
     unknownOperations: 0,
   });
   assert.deepEqual(trace.operations[0].sourceIds, ['execution.lifecycle', 'skill:p2a-next']);
-  assert.equal(trace.operations[0].operationFingerprint, 'content_read:sed:allowlisted_source:execution.lifecycle,skill:p2a-next');
+  assert.equal(
+    trace.operations[0].operationFingerprint,
+    'content_read:sed:allowlisted_source:execution.lifecycle,skill:p2a-next:none',
+  );
   assert.equal(trace.operations[0].readTool, 'sed');
   assert.equal(trace.operations[0].targetClass, 'allowlisted_source');
   assert.equal(trace.operations[2].commandClass, 'verify');
@@ -70,15 +81,67 @@ test('unattributed reads make a trace partial and do not use path suffix matches
     [],
     [],
   ]);
-  assert.equal(trace.metrics.sourceReadOccurrences, 1);
+  assert.equal(trace.metrics.sourceReadOccurrences, 2);
   assert.equal(trace.metrics.repeatedSourceReads, 0);
-  assert.equal(trace.metrics.unattributedReadOperations, 2);
-  assert.equal(trace.metrics.unknownOperations, 2);
+  assert.equal(trace.metrics.unattributedReadOperations, 1);
+  assert.equal(trace.metrics.packetManagedUnattributedReadOperations, 1);
+  assert.equal(trace.metrics.unknownOperations, 1);
   assert.deepEqual(trace.operations.map((operation) => operation.targetClass), [
     'allowlisted_source',
     'outside_workspace',
-    'workspace_other',
+    'canonical_scope',
   ]);
+});
+
+test('search patterns that mention canonical paths are not recorded as canonical reads', () => {
+  const trace = collectSanitizedToolTrace([
+    commandEvent('rg .agents/skills/p2a-next/SKILL.md .'),
+  ], [
+    { id: 'skill:p2a-next', paths: ['.agents/skills/p2a-next/SKILL.md'] },
+  ], { workspaceRoot: '/workspace/project' });
+
+  assert.deepEqual(trace.operations[0].sourceIds, []);
+  assert.equal(trace.operations[0].targetClass, 'canonical_scope');
+  assert.equal(trace.metrics.canonicalSourceReadOccurrences, 0);
+  assert.equal(trace.metrics.packetManagedAttributionComplete, false);
+  assert.equal(trace.metrics.packetManagedUnattributedReadOperations, 1);
+});
+
+test('known workspace file reads remain attributed without becoming packet-managed reads', () => {
+  const trace = collectSanitizedToolTrace([
+    commandEvent('sed -n 1,20p scripts/p2a.mjs'),
+    commandEvent('rg TODO src'),
+  ], [
+    { id: 'skill:p2a-next', paths: ['.agents/skills/p2a-next/SKILL.md'] },
+  ], { workspaceRoot: '/workspace/project' });
+
+  assert.equal(trace.status, 'available');
+  assert.equal(trace.metrics.unattributedReadOperations, 0);
+  assert.equal(trace.metrics.packetManagedUnattributedReadOperations, 0);
+  assert.equal(trace.metrics.workspaceOtherReadOperations, 2);
+  assert.equal(trace.metrics.scopeAttributedReadOperations, 1);
+  assert.ok(trace.operations.every((operation) => operation.sourceIds.length === 0));
+  assert.doesNotMatch(JSON.stringify(trace), /scripts\/p2a\.mjs|rg TODO|\bsrc\b/);
+});
+
+test('non-packet canonical reads do not affect packet-managed repetition or attribution', () => {
+  const trace = collectSanitizedToolTrace([
+    commandEvent('cat .agents/skills/p2a-next/SKILL.md'),
+    commandEvent('cat .agents/skills/p2a-next/SKILL.md'),
+    commandEvent('rg TODO .'),
+  ], [
+    {
+      id: 'skill:p2a-next',
+      paths: ['.agents/skills/p2a-next/SKILL.md'],
+      packetManaged: false,
+    },
+  ], { workspaceRoot: '/workspace/project' });
+
+  assert.equal(trace.metrics.canonicalSourceReadOccurrences, 2);
+  assert.equal(trace.metrics.repeatedSourceReads, 1);
+  assert.equal(trace.metrics.packetManagedRepeatedSourceReads, 0);
+  assert.equal(trace.metrics.packetManagedAttributionComplete, true);
+  assert.equal(trace.metrics.packetManagedUnattributedReadOperations, 0);
 });
 
 test('metadata inspection is not treated as an unattributed content read', () => {
