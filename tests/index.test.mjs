@@ -26,6 +26,7 @@ import './memory-run-attribution.test.mjs';
 import './memory-graph-index.test.mjs';
 import './memory-pagination.test.mjs';
 import './memory-search-modes.test.mjs';
+import './memory-planning-docs.test.mjs';
 import './milestone-review.test.mjs';
 import './validate-artifacts-compatibility.test.mjs';
 import './visual-experience.test.mjs';

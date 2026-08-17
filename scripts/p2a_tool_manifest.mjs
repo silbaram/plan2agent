@@ -39,6 +39,7 @@ export const PROJECT_RUNTIME_SCRIPT_FILES = [
   'p2a_proposals.mjs',
   'p2a_eval.mjs',
   'p2a_memory.mjs',
+  'p2a_memory_planning_docs.mjs',
   'p2a_reference.mjs',
   'p2a_radar_preflight.mjs',
   'p2a_run_paths.mjs',

@@ -162,6 +162,24 @@ proposal 흐름은 근거가 있는 결과를 사람이 검토하는 maintenance
 lineage를 위한 선택적 저장·검색 backend입니다. Memory가 없거나 설정되지 않아도 로컬
 `.plan2agent/` 파일이 정본으로 유지됩니다.
 
+승인된 Gate A/B 기획 Markdown만 동기화하려면
+`p2a memory push --artifacts <artifact-root> --profile planning-docs --dry-run`으로 선택 결과를
+먼저 확인합니다. 이 프로필은 현재 기능 iteration과 `current-spec.json.closed_iterations`에
+기록된 archived iteration에서 canonical `product-spec.md`, `implementation-plan.md`, 그리고
+Gate A가 완료된 경우의 `intake.md`만 선택합니다. pending·미등록 iteration, maintenance,
+task/run/review evidence, generated index, Memory recall, 로컬 chunk, 복사본과 symlink는 안정적인
+사유와 함께 제외됩니다. preview는 canonical JSON과 원문·계보 hash, 예상 snapshot 수,
+서버 전략 `paragraph-2000`, client `DOCUMENT_CHUNK` 쓰기 0건을 검증·표시하며 Memory 서버에
+연결하지 않습니다. 이때 로컬 chunk content, hash, ID를 생성하지 않습니다.
+실제 외부 쓰기는 계속 `--yes`를 요구합니다.
+
+로컬 chunk 파일은 planning source artifact가 아닙니다. 승인된 planning-docs push는 각 snapshot
+request에 `chunking: { "strategy": "paragraph-2000" }`을 포함하고, chunk 생성·저장과 embedding
+job enqueue를 Memory 서버에 맡깁니다. CLI는 응답 strategy와 양의 정수 `chunkCount`를 검증하고,
+acknowledgment가 없거나 잘못되면 fail closed하며 `/document-chunks/bulk`로 fallback하지 않습니다.
+결과의 client 전송 수는 `chunks=0`, 서버 생성 합계는 `serverGeneratedChunks`로 표시됩니다.
+`--profile planning-docs`가 없는 push의 기존 client chunk·bulk 전송 동작은 그대로 유지됩니다.
+
 ## CLI 한눈에 보기
 
 Plan2Agent는 하나의 `p2a` entrypoint를 설치합니다.

@@ -156,6 +156,25 @@ merely because a proposal exists.
 backend for artifacts, history, and lineage. Local `.plan2agent/` files remain canonical when Memory
 is unavailable or not configured.
 
+Use `p2a memory push --artifacts <artifact-root> --profile planning-docs --dry-run` to preview a
+focused sync of approved Gate A/B planning Markdown. The profile selects canonical `product-spec.md`
+and `implementation-plan.md`, plus `intake.md` when Gate A is complete, from the current functional
+iteration and only the archived iterations recorded in `current-spec.json.closed_iterations`.
+Pending or unrecorded iterations, maintenance, task/run/review evidence, generated indexes, Memory
+recall files, local chunk files, copies, and symlinks are excluded with stable reasons. The preview
+validates canonical JSON, reports exact content/provenance hashes, the estimated snapshot count,
+server strategy `paragraph-2000`, and zero client `DOCUMENT_CHUNK` writes, and never contacts
+Memory. It does not generate local chunk content, hashes, or IDs.
+Actual remote writes still require `--yes`.
+
+Local chunk files are never planning source artifacts. On an approved planning-docs push, each
+snapshot request opts in with `chunking: { "strategy": "paragraph-2000" }`; the Memory server owns
+chunk generation, persistence, and embedding-job enqueue. The CLI validates the response strategy
+and positive integer `chunkCount`, fails closed when acknowledgment is missing or invalid, reports
+`chunks=0` plus the `serverGeneratedChunks` total, and never falls back to
+`/document-chunks/bulk`. Pushes without `--profile planning-docs` keep their existing client chunk
+and bulk transport behavior.
+
 ## CLI at a glance
 
 Plan2Agent installs one `p2a` entrypoint:

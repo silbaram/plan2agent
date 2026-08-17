@@ -32,6 +32,12 @@ Plan2Agent 본체 개발에서만 `scripts/sync_cli_assets.mjs`, `scripts/check_
 7. `p2a eval grade/compare/analyze/generate/digest`로 run acceptance 증거, iteration regression, 실패 클러스터를 평가하고 proposal/maintenance/delta draft 경로로 연결한다.
 8. 장기 보존이나 회고 검색이 필요하면 `p2a memory status/push/pull/search/history/trace/impact/precedent/digest`로 로컬 산출물과 Memory 서버 snapshot의 차이, 검색 결과, 계보, timeline, 유지보수 후보를 확인하고, 명시 승인 후 push한다. `memory search`는 하위호환 기본값인 `keyword`와 명시적 `semantic`/`hybrid` 모드를 지원한다. `--project <sourceProjectId>`는 해당 프로젝트의 모든 반복을 검색하고, 조건부 cross-project recall은 `--global --exclude-project <sourceProjectId>`로 현재 프로젝트를 제외한다.
 
+승인된 기획 문서만 동기화하려면 `p2a memory push --artifacts <artifact-root> --profile planning-docs --dry-run`으로 먼저 선택 결과를 확인한다. `planning-docs`는 `memory push`의 명시적 `--artifacts` source에서만 사용할 수 있다. 이 프로필은 현재 기능 iteration과 `current-spec.json.closed_iterations`에 기록된 archived iteration의 canonical `product-spec.md`, `implementation-plan.md`, 그리고 Gate A가 완료된 경우의 `intake.md`만 선택한다. pending·미등록 iteration, maintenance, task, run, proposal, review/evidence, generated index, Memory recall, 로컬 chunk, handoff/baseline 복사본과 symlink는 안정적인 사유와 함께 제외된다.
+
+dry-run은 서버 설정이 없어도 canonical JSON의 approval, source hash, project/root 경계와 open decision을 검증하고 모든 스캔 항목의 disposition, 원문·canonical JSON hash, 예상 document snapshot 수와 write order를 결정적으로 출력한다. 서버 전략은 `paragraph-2000`, 대상 snapshot 수는 선택 문서 수, client `DOCUMENT_CHUNK` write count는 0으로 표시하며 로컬 chunk content/hash/ID를 계산하지 않는다. 이 과정은 Memory 서버에 연결하지 않는다.
+
+실제 외부 쓰기는 기존과 동일하게 명시적 `--yes`가 필요하다. planning-docs의 각 `POST /api/documents/snapshots` payload는 exact `chunking: { "strategy": "paragraph-2000" }` opt-in을 포함한다. CLI는 응답의 동일 strategy와 양의 정수 `chunkCount`를 즉시 검증하고 누락·불일치·잘못된 count에서는 후속 snapshot write와 bulk fallback 없이 fail closed한다. planning-docs에서는 `/document-chunks/bulk`를 호출하지 않고 결과에 `chunks=0`과 acknowledgment의 합인 `serverGeneratedChunks`를 표시한다. 로컬 chunk 파일은 planning source artifact로 다시 수집하지 않으며, profile 없는 기존 push는 client chunk payload와 `/document-chunks/bulk` 계약을 그대로 사용한다.
+
 ## 2. 전역 공통 진입점 — `p2a`
 
 Plan2Agent는 npm 전역 패키지의 `p2a` 명령으로 실행한다. 프로젝트에는 `.plan2agent/` 상태, 설정, 선택한 provider asset만 저장하며 runtime script와 schema는 패키지에 남는다.
