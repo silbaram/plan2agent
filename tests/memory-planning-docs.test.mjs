@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { once } from 'node:events';
 import {
   mkdirSync,
   readFileSync,
@@ -7,6 +8,7 @@ import {
   unlinkSync,
   writeFileSync,
 } from 'node:fs';
+import { createServer } from 'node:http';
 import path from 'node:path';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -16,7 +18,11 @@ import {
   makeTempDir,
   runMemory,
 } from './helpers/fixtures.mjs';
-import { buildMemoryPlan, pushPlan } from '../scripts/p2a_memory.mjs';
+import {
+  buildMemoryPlan,
+  main as runMemoryMain,
+  pushPlan,
+} from '../scripts/p2a_memory.mjs';
 
 const BASE_FIXTURE = path.join(E2E_FIXTURE_ROOT, 'webhook-api-service');
 const BASE_INTAKE = JSON.parse(readFileSync(path.join(BASE_FIXTURE, 'gate-a-intake', 'intake.json'), 'utf8'));
@@ -105,6 +111,8 @@ function makeArtifactRoot() {
   writeJson(path.join(artifactRoot, 'runs', 'run-001.json'), { status: 'finished' });
   writeText(path.join(artifactRoot, 'chunks', 'product-spec.chunk.md'), '# Generated chunk\n');
   writeText(path.join(artifactRoot, 'handoff', 'iterations', 'iter-001', 'gate-b-spec', 'product-spec.md'), '# Product iter-001\n');
+  writeText(path.join(artifactRoot, 'baseline', 'iterations', 'iter-001', 'gate-b-spec', 'product-spec.md'), '# Product iter-001\n');
+  writeText(path.join(artifactRoot, 'misc', 'operator-notes.txt'), 'not a planning source artifact\n');
   return { tempRoot, artifactRoot };
 }
 
@@ -171,6 +179,11 @@ test('planning-docs dry-run selects approved current and archived Markdown only'
       excluded.get('handoff/iterations/iter-001/gate-b-spec/product-spec.md'),
       'duplicate_copy',
     );
+    assert.equal(
+      excluded.get('baseline/iterations/iter-001/gate-b-spec/product-spec.md'),
+      'duplicate_copy',
+    );
+    assert.equal(excluded.get('misc/operator-notes.txt'), 'unsupported_artifact');
   } finally {
     rmSync(tempRoot, { recursive: true, force: true });
   }
@@ -463,6 +476,69 @@ test('planning-docs push plan omits task, run, proposal, and graph writes', asyn
     assert.equal(calls.some((endpoint) => endpoint === '/runs'), false);
     assert.equal(calls.some((endpoint) => endpoint === '/graph/snapshots'), false);
   } finally {
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test('planning-docs CLI --yes writes only project, iterations, documents, and derived chunks', async () => {
+  const { tempRoot, artifactRoot } = makeArtifactRoot();
+  const calls = [];
+  const server = createServer((request, response) => {
+    void (async () => {
+      assert.equal(request.method, 'POST');
+      const apiPath = new URL(request.url, 'http://127.0.0.1').pathname;
+      assert.match(apiPath, /^\/api\//);
+      const pathName = apiPath.slice('/api'.length);
+      const chunks = [];
+      for await (const chunk of request) chunks.push(chunk);
+      const body = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+      calls.push({ pathName, body });
+
+      let result;
+      if (pathName === '/projects') result = { projectId: body.projectId };
+      else if (pathName.endsWith('/iterations')) result = { iterationId: body.iterationId };
+      else if (pathName === '/documents/snapshots') result = { documentId: body.documentId };
+      else if (pathName === '/document-chunks/bulk') result = body.chunks.map((item) => item.chunk);
+      else throw new Error(`unexpected planning-docs endpoint: ${pathName}`);
+
+      response.writeHead(201, { 'Content-Type': 'application/json' });
+      response.end(JSON.stringify(result));
+    })().catch((error) => {
+      response.writeHead(500, { 'Content-Type': 'application/json' });
+      response.end(JSON.stringify({ error: error.message }));
+    });
+  });
+
+  try {
+    server.listen(0, '127.0.0.1');
+    await once(server, 'listening');
+    const address = server.address();
+    const status = await runMemoryMain([
+      'push',
+      '--artifacts', artifactRoot,
+      '--profile', 'planning-docs',
+      '--server', `http://127.0.0.1:${address.port}`,
+      '--yes',
+      '--json',
+    ]);
+    assert.equal(status, 0);
+
+    const paths = calls.map((call) => call.pathName);
+    assert.equal(paths[0], '/projects');
+    assert.equal(paths.filter((item) => item.endsWith('/iterations')).length, 2);
+    assert.equal(paths.filter((item) => item === '/documents/snapshots').length, 5);
+    assert.equal(paths.filter((item) => item === '/document-chunks/bulk').length, 5);
+    assert.equal(paths.some((item) => [
+      '/task-graphs',
+      '/tasks/bulk',
+      '/runs',
+      '/graph/snapshots',
+    ].includes(item)), false);
+    assert.ok(calls
+      .filter((call) => call.pathName === '/document-chunks/bulk')
+      .every((call) => call.body.chunks.length > 0));
+  } finally {
+    server.close();
     rmSync(tempRoot, { recursive: true, force: true });
   }
 });

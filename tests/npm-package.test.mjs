@@ -85,6 +85,26 @@ test('repository release surfaces match the package support contract', () => {
   assert.match(releaseGuide, /GitHub Release/);
 });
 
+test('planning-docs runtime manifest and user documentation preserve the safety contract', () => {
+  const runtimeManifest = readFileSync(path.join(ROOT, 'scripts', 'p2a_tool_manifest.mjs'), 'utf8');
+  assert.match(runtimeManifest, /['"]p2a_memory_planning_docs\.mjs['"]/);
+
+  const englishReadme = readFileSync(path.join(ROOT, 'readme.md'), 'utf8');
+  assert.match(englishReadme, /--profile planning-docs --dry-run/);
+  assert.match(englishReadme, /Actual remote writes still require `--yes`/);
+  assert.match(englishReadme, /Local chunk files are never planning source artifacts/);
+
+  const koreanReadme = readFileSync(path.join(ROOT, 'README.ko-KR.md'), 'utf8');
+  assert.match(koreanReadme, /--profile planning-docs --dry-run/);
+  assert.match(koreanReadme, /실제 외부 쓰기는 계속 `--yes`를 요구/);
+  assert.match(koreanReadme, /로컬 chunk 파일은 planning source artifact가 아닙니다/);
+
+  const cliReference = readFileSync(path.join(ROOT, 'docs', 'cli-reference.md'), 'utf8');
+  assert.match(cliReference, /`planning-docs`는 `memory push`의 명시적 `--artifacts` source/);
+  assert.match(cliReference, /pending·미등록 iteration/);
+  assert.match(cliReference, /로컬 chunk 파일을 source artifact로 다시 수집하는 것이 아니다/);
+});
+
 test('checkout init preserves the legacy co-located runtime', () => {
   const targetRoot = makeTempDir('p2a-global-init-');
   try {
