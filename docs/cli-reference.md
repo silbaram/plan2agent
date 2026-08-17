@@ -34,7 +34,9 @@ Plan2Agent 본체 개발에서만 `scripts/sync_cli_assets.mjs`, `scripts/check_
 
 승인된 기획 문서만 동기화하려면 `p2a memory push --artifacts <artifact-root> --profile planning-docs --dry-run`으로 먼저 선택 결과를 확인한다. `planning-docs`는 `memory push`의 명시적 `--artifacts` source에서만 사용할 수 있다. 이 프로필은 현재 기능 iteration과 `current-spec.json.closed_iterations`에 기록된 archived iteration의 canonical `product-spec.md`, `implementation-plan.md`, 그리고 Gate A가 완료된 경우의 `intake.md`만 선택한다. pending·미등록 iteration, maintenance, task, run, proposal, review/evidence, generated index, Memory recall, 로컬 chunk, handoff/baseline 복사본과 symlink는 안정적인 사유와 함께 제외된다.
 
-dry-run은 서버 설정이 없어도 canonical JSON의 approval, source hash, project/root 경계와 open decision을 검증하고 모든 스캔 항목의 disposition, 원문·canonical JSON hash, 예상 document snapshot 수와 write order를 결정적으로 출력한다. 이 과정은 Memory 서버에 연결하지 않는다. 실제 외부 쓰기는 기존과 동일하게 `--yes`가 필요하며 project, 선택된 iteration, document snapshot과 `/document-chunks/bulk`만 사용한다. 여기서 chunk payload는 선택된 Markdown 원문에서 메모리상 파생하는 기존 검색 transport이고, 로컬 chunk 파일을 source artifact로 다시 수집하는 것이 아니다.
+dry-run은 서버 설정이 없어도 canonical JSON의 approval, source hash, project/root 경계와 open decision을 검증하고 모든 스캔 항목의 disposition, 원문·canonical JSON hash, 예상 document snapshot 수와 write order를 결정적으로 출력한다. 서버 전략은 `paragraph-2000`, 대상 snapshot 수는 선택 문서 수, client `DOCUMENT_CHUNK` write count는 0으로 표시하며 로컬 chunk content/hash/ID를 계산하지 않는다. 이 과정은 Memory 서버에 연결하지 않는다.
+
+실제 외부 쓰기는 기존과 동일하게 명시적 `--yes`가 필요하다. planning-docs의 각 `POST /api/documents/snapshots` payload는 exact `chunking: { "strategy": "paragraph-2000" }` opt-in을 포함한다. CLI는 응답의 동일 strategy와 양의 정수 `chunkCount`를 즉시 검증하고 누락·불일치·잘못된 count에서는 후속 snapshot write와 bulk fallback 없이 fail closed한다. planning-docs에서는 `/document-chunks/bulk`를 호출하지 않고 결과에 `chunks=0`과 acknowledgment의 합인 `serverGeneratedChunks`를 표시한다. 로컬 chunk 파일은 planning source artifact로 다시 수집하지 않으며, profile 없는 기존 push는 client chunk payload와 `/document-chunks/bulk` 계약을 그대로 사용한다.
 
 ## 2. 전역 공통 진입점 — `p2a`
 

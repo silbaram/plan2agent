@@ -48,6 +48,7 @@ const DEFAULT_HYBRID_CANDIDATE_LIMIT = 80;
 const MAX_GRAPH_TRACE_DEPTH = 30;
 const MAX_PAGED_REQUESTS = 10000;
 const MAX_CHUNK_CHARS = 2000;
+const PLANNING_DOCS_CHUNKING_STRATEGY = 'paragraph-2000';
 const RUN_MEMORY_RECALL_SUFFIX = '.memory-recall.json';
 const MILESTONE_REVIEW_FILENAMES = ['midpoint.json', 'pre_close.json'];
 const ITERATION_MEMORY_FILENAMES = [
@@ -1008,16 +1009,17 @@ function buildPlanningDocsMemoryPlan(args) {
           path: selected.sourcePath,
         },
         metadata: documentMetadata,
+        chunking: {
+          strategy: PLANNING_DOCS_CHUNKING_STRATEGY,
+        },
       },
-      chunks: [],
     };
-    document.chunks = buildDocumentChunks(document, projectCanonicalId, iterationCanonicalId);
     return document;
   });
   const sourceIterationIds = new Set(documents.map((document) => document.request.metadata.sourceIterationId));
   const iterations = buildIterationSnapshots(context, projectCanonicalId, sourceIterationIds);
   const iteration = iterations.find((item) => item.sourceKey === state.activeIteration) ?? iterations[0] ?? null;
-  const chunks = documents.flatMap((document) => document.chunks);
+  const chunks = [];
   const syncItems = [
     localItem(project.artifactType, project.id, project.sourceKey, null, project.request.metadata),
     ...iterations.map((item) => localItem(item.artifactType, item.id, item.sourceKey, null, item.request.metadata, item.sourcePath)),
@@ -1071,6 +1073,10 @@ function buildPlanningDocsMemoryPlan(args) {
       included: selection.included,
       excluded: selection.excluded,
       summary: selection.summary,
+    },
+    serverChunking: {
+      strategy: PLANNING_DOCS_CHUNKING_STRATEGY,
+      targetSnapshots: documents.length,
     },
   };
 }
@@ -3445,6 +3451,7 @@ async function runPush(args) {
       },
       local: plan.summary,
       selection: plan.selection ?? null,
+      ...(plan.serverChunking ? { serverChunking: plan.serverChunking } : {}),
       graph: { snapshots: plan.graphs.length, nodes: graphNodes.length, edges: graphEdges.length, sampleNodes: graphNodes.slice(0, 5), sampleEdges: graphEdges.slice(0, 5) },
       skippedRuns: plan.skippedRuns,
       skippedProposals: plan.skippedProposals,
@@ -3468,6 +3475,7 @@ async function runPush(args) {
     },
     local: plan.summary,
     selection: plan.selection ?? null,
+    ...(plan.serverChunking ? { serverChunking: plan.serverChunking } : {}),
     skippedRuns: plan.skippedRuns,
     skippedProposals: plan.skippedProposals,
     result,
@@ -3520,6 +3528,9 @@ function printPushPreview(payload) {
       console.log('excluded files:');
       payload.selection.excluded.forEach((item) => console.log(`  - ${item.sourcePath}: ${item.reason}${item.detail ? ` (${item.detail})` : ''}`));
     }
+  }
+  if (payload.serverChunking) {
+    console.log(`- server chunking: strategy=${payload.serverChunking.strategy} targetSnapshots=${payload.serverChunking.targetSnapshots}`);
   }
   if (payload.graph) console.log(`- graph: snapshots=${payload.graph.snapshots} nodes=${payload.graph.nodes} edges=${payload.graph.edges} samples=${payload.graph.sampleNodes.map((node) => node.naturalKey).join(', ') || 'none'}`);
   console.log('- write order:');
@@ -3584,6 +3595,35 @@ function validateMemoryWritePlan(plan) {
   if (!plan || typeof plan !== 'object') throw new Error('Memory write plan must be an object');
   if (!Array.isArray(plan.graphs)) throw new Error('Memory write plan graphs must be an array');
   plan.graphs.forEach(validateGraphSnapshotPayload);
+  if (plan.serverChunking) {
+    if (plan.context?.profile !== PLANNING_DOCS_PROFILE) {
+      throw new Error('Server chunking is only supported by the planning-docs profile');
+    }
+    if (plan.serverChunking.strategy !== PLANNING_DOCS_CHUNKING_STRATEGY) {
+      throw new Error(`planning-docs server chunking strategy must be ${PLANNING_DOCS_CHUNKING_STRATEGY}`);
+    }
+    if (plan.serverChunking.targetSnapshots !== plan.documents.length) {
+      throw new Error('planning-docs server chunking target count must match document snapshots');
+    }
+    if (plan.proposals.length || plan.chunks.length || plan.syncItems.some((item) => item.artifactType === 'DOCUMENT_CHUNK')) {
+      throw new Error('planning-docs server chunking plan must not include client chunk writes');
+    }
+    for (const document of plan.documents) {
+      if ('chunks' in document) {
+        throw new Error(`planning-docs document must not include client chunks: ${document.sourceKey}`);
+      }
+      const chunking = document.request?.chunking;
+      if (
+        !chunking
+        || typeof chunking !== 'object'
+        || Array.isArray(chunking)
+        || Object.keys(chunking).length !== 1
+        || chunking.strategy !== PLANNING_DOCS_CHUNKING_STRATEGY
+      ) {
+        throw new Error(`planning-docs document must request exact server chunking opt-in: ${document.sourceKey}`);
+      }
+    }
+  }
   return plan;
 }
 
@@ -3615,8 +3655,25 @@ function canonicalTaskGraphId(graph, response) {
   return taskGraphId;
 }
 
+function serverGeneratedChunkCount(document, response, expectedStrategy) {
+  const acknowledgment = response?.chunking;
+  if (!acknowledgment || typeof acknowledgment !== 'object' || Array.isArray(acknowledgment)) {
+    throw new Error(`Memory document snapshot did not acknowledge server chunking for ${document.sourceKey}`);
+  }
+  if (acknowledgment.strategy !== expectedStrategy) {
+    throw new Error(
+      `Memory document snapshot acknowledged an unexpected chunking strategy for ${document.sourceKey}: expected ${JSON.stringify(expectedStrategy)}, got ${JSON.stringify(acknowledgment.strategy)}`,
+    );
+  }
+  if (!Number.isInteger(acknowledgment.chunkCount) || acknowledgment.chunkCount <= 0) {
+    throw new Error(`Memory document snapshot returned an invalid chunkCount for ${document.sourceKey}`);
+  }
+  return acknowledgment.chunkCount;
+}
+
 async function pushPlan(connection, plan, post = memoryPost) {
   validateMemoryWritePlan(plan);
+  const serverChunking = plan.serverChunking ?? null;
   const result = {
     project: null,
     iteration: null,
@@ -3628,6 +3685,7 @@ async function pushPlan(connection, plan, post = memoryPost) {
     chunks: [],
     graph: null,
     graphs: [],
+    serverGeneratedChunks: 0,
   };
   result.project = await post(connection, '/projects', plan.project.request);
   for (const iteration of plan.iterations) {
@@ -3638,6 +3696,14 @@ async function pushPlan(connection, plan, post = memoryPost) {
   for (const document of [...plan.documents, ...plan.proposals]) {
     const response = await post(connection, '/documents/snapshots', document.request);
     result.documents.push(response);
+    if (serverChunking && plan.documents.includes(document)) {
+      result.serverGeneratedChunks += serverGeneratedChunkCount(
+        document,
+        response,
+        serverChunking.strategy,
+      );
+      continue;
+    }
     if (document.chunks.length) {
       const chunkResponse = await post(connection, '/document-chunks/bulk', {
         documentId: response.documentId,
@@ -3689,6 +3755,7 @@ async function pushPlan(connection, plan, post = memoryPost) {
     tasks: result.tasks.length,
     runs: result.runs.length,
     chunks: result.chunks.length,
+    ...(serverChunking ? { serverGeneratedChunks: result.serverGeneratedChunks } : {}),
     iterations: result.iterations.length,
     graphSnapshots: plan.graphs.length,
     graphNodes: plan.graphs.reduce((sum, graph) => sum + graph.nodes.length, 0),
@@ -3705,7 +3772,9 @@ function printPushResult(payload) {
   console.log(`- iteration: ${payload.context.iterationId}`);
   console.log(`- server: ${payload.server.url}`);
   if (payload.selection) console.log(`- profile: ${payload.selection.profile} snapshots=${payload.selection.summary.estimatedSnapshots}`);
-  console.log(`- wrote: iterations=${payload.result.iterations} documents=${payload.result.documents} proposals=${payload.result.proposals} chunks=${payload.result.chunks} taskGraph=${payload.result.taskGraphs ?? (payload.result.taskGraphId ? 1 : 0)} tasks=${payload.result.tasks} runs=${payload.result.runs} graphSnapshots=${payload.result.graphSnapshots} graphNodes=${payload.result.graphNodes} graphEdges=${payload.result.graphEdges}`);
+  if (payload.serverChunking) console.log(`- server chunking: strategy=${payload.serverChunking.strategy} targetSnapshots=${payload.serverChunking.targetSnapshots}`);
+  const serverChunks = payload.serverChunking ? ` serverGeneratedChunks=${payload.result.serverGeneratedChunks}` : '';
+  console.log(`- wrote: iterations=${payload.result.iterations} documents=${payload.result.documents} proposals=${payload.result.proposals} chunks=${payload.result.chunks}${serverChunks} taskGraph=${payload.result.taskGraphs ?? (payload.result.taskGraphId ? 1 : 0)} tasks=${payload.result.tasks} runs=${payload.result.runs} graphSnapshots=${payload.result.graphSnapshots} graphNodes=${payload.result.graphNodes} graphEdges=${payload.result.graphEdges}`);
   if (payload.result.graphWarning) console.log(`- graph warning: ${payload.result.graphWarning}`);
   if (payload.skippedRuns.length) console.log(`- skipped runs: ${payload.skippedRuns.length}`);
   if (payload.skippedProposals.length) console.log(`- skipped proposals: ${payload.skippedProposals.length}`);

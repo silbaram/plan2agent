@@ -145,7 +145,12 @@ test('planning-docs dry-run selects approved current and archived Markdown only'
     assert.equal(payload.local.tasks, 0);
     assert.equal(payload.local.runs, 0);
     assert.equal(payload.local.proposals, 0);
+    assert.equal(payload.local.chunks, 0);
     assert.equal(payload.local.graphNodes, 0);
+    assert.deepEqual(payload.serverChunking, {
+      strategy: 'paragraph-2000',
+      targetSnapshots: 5,
+    });
     assert.equal(payload.selection.summary.estimatedSnapshots, 5);
     assert.equal(
       payload.selection.summary.scannedFiles,
@@ -216,6 +221,8 @@ test('planning-docs metadata uses stable identity and canonical JSON hashes', ()
     );
     assert.match(firstProduct.request.metadata.contentHash, /^sha256:[a-f0-9]{64}$/);
     assert.match(firstProduct.request.metadata.canonicalJsonHash, /^sha256:[a-f0-9]{64}$/);
+    assert.deepEqual(firstProduct.request.chunking, { strategy: 'paragraph-2000' });
+    assert.equal('chunks' in firstProduct, false);
     assert.equal(
       firstProduct.request.metadata.contentHash,
       `sha256:${sha256(readFileSync(path.join(artifactRoot, firstProduct.sourcePath)))}`,
@@ -406,7 +413,7 @@ test('planning-docs does not follow iteration, Markdown, or canonical JSON symli
   }
 });
 
-test('planning-docs preview is deterministic, network-free, and keeps derived chunks out of source selection', () => {
+test('planning-docs preview is deterministic, network-free, and delegates chunks to the server', () => {
   const { tempRoot, artifactRoot } = makeArtifactRoot();
   try {
     const args = [
@@ -422,6 +429,7 @@ test('planning-docs preview is deterministic, network-free, and keeps derived ch
     assert.deepEqual(first.selection, second.selection);
     assert.deepEqual(first.writeOrder, second.writeOrder);
     assert.deepEqual(first.local, second.local);
+    assert.deepEqual(first.serverChunking, second.serverChunking);
 
     const withoutApproval = runMemory([
       'push', '--artifacts', artifactRoot, '--profile', 'planning-docs',
@@ -433,10 +441,13 @@ test('planning-docs preview is deterministic, network-free, and keeps derived ch
     assert.equal(approvalPreview.approvalRequired, true);
 
     const plan = buildMemoryPlan(planningArgs(artifactRoot));
-    const includedSources = new Set(plan.selection.included.map((item) => item.sourcePath));
-    assert.ok(plan.chunks.length > 0);
-    assert.ok(plan.chunks.every((chunk) => includedSources.has(chunk.sourcePath)));
-    assert.equal(plan.chunks.some((chunk) => chunk.sourcePath.startsWith('chunks/')), false);
+    assert.deepEqual(plan.chunks, []);
+    assert.ok(plan.documents.every((document) => !('chunks' in document)));
+    assert.ok(plan.documents.every((document) => (
+      Object.keys(document.request.chunking).length === 1
+      && document.request.chunking.strategy === 'paragraph-2000'
+    )));
+    assert.equal(plan.syncItems.some((item) => item.artifactType === 'DOCUMENT_CHUNK'), false);
     assert.equal(
       plan.selection.excluded.find((item) => item.sourcePath === 'chunks/product-spec.chunk.md')?.reason,
       'generated_chunk',
@@ -445,13 +456,17 @@ test('planning-docs preview is deterministic, network-free, and keeps derived ch
     for (const artifactType of ['PROPOSAL', 'TASK_GRAPH', 'TASK', 'RUN_RECORD', 'GRAPH_NODE', 'GRAPH_EDGE']) {
       assert.equal(writeCounts.get(artifactType), 0);
     }
-    assert.equal(writeCounts.get('DOCUMENT_CHUNK'), plan.chunks.length);
+    assert.equal(writeCounts.get('DOCUMENT_CHUNK'), 0);
+    assert.deepEqual(first.serverChunking, {
+      strategy: 'paragraph-2000',
+      targetSnapshots: 5,
+    });
   } finally {
     rmSync(tempRoot, { recursive: true, force: true });
   }
 });
 
-test('planning-docs push plan omits task, run, proposal, and graph writes', async () => {
+test('planning-docs push plan validates server acknowledgments and omits client chunk writes', async () => {
   const { tempRoot, artifactRoot } = makeArtifactRoot();
   try {
     const plan = buildMemoryPlan(planningArgs(artifactRoot));
@@ -460,8 +475,14 @@ test('planning-docs push plan omits task, run, proposal, and graph writes', asyn
       calls.push(endpoint);
       if (endpoint === '/projects') return { projectId: body.projectId };
       if (endpoint.includes('/iterations')) return { iterationId: body.iterationId };
-      if (endpoint === '/documents/snapshots') return { documentId: body.documentId };
-      if (endpoint === '/document-chunks/bulk') return body.chunks.map((item) => item.chunk);
+      if (endpoint === '/documents/snapshots') {
+        assert.deepEqual(body.chunking, { strategy: 'paragraph-2000' });
+        assert.equal('chunks' in body, false);
+        return {
+          documentId: body.documentId,
+          chunking: { strategy: 'paragraph-2000', chunkCount: 2 },
+        };
+      }
       throw new Error(`unexpected planning-docs endpoint: ${endpoint}`);
     };
     const result = await pushPlan({}, plan, post);
@@ -470,7 +491,10 @@ test('planning-docs push plan omits task, run, proposal, and graph writes', asyn
     assert.equal(result.taskGraphs, 0);
     assert.equal(result.tasks, 0);
     assert.equal(result.runs, 0);
+    assert.equal(result.chunks, 0);
+    assert.equal(result.serverGeneratedChunks, 10);
     assert.equal(result.graphSnapshots, 0);
+    assert.equal(calls.some((endpoint) => endpoint === '/document-chunks/bulk'), false);
     assert.equal(calls.some((endpoint) => endpoint === '/task-graphs'), false);
     assert.equal(calls.some((endpoint) => endpoint === '/tasks/bulk'), false);
     assert.equal(calls.some((endpoint) => endpoint === '/runs'), false);
@@ -480,7 +504,7 @@ test('planning-docs push plan omits task, run, proposal, and graph writes', asyn
   }
 });
 
-test('planning-docs CLI --yes writes only project, iterations, documents, and derived chunks', async () => {
+test('planning-docs CLI --yes writes only project, iterations, and server-chunked documents', async () => {
   const { tempRoot, artifactRoot } = makeArtifactRoot();
   const calls = [];
   const server = createServer((request, response) => {
@@ -497,8 +521,10 @@ test('planning-docs CLI --yes writes only project, iterations, documents, and de
       let result;
       if (pathName === '/projects') result = { projectId: body.projectId };
       else if (pathName.endsWith('/iterations')) result = { iterationId: body.iterationId };
-      else if (pathName === '/documents/snapshots') result = { documentId: body.documentId };
-      else if (pathName === '/document-chunks/bulk') result = body.chunks.map((item) => item.chunk);
+      else if (pathName === '/documents/snapshots') result = {
+        documentId: body.documentId,
+        chunking: { strategy: 'paragraph-2000', chunkCount: 3 },
+      };
       else throw new Error(`unexpected planning-docs endpoint: ${pathName}`);
 
       response.writeHead(201, { 'Content-Type': 'application/json' });
@@ -509,10 +535,13 @@ test('planning-docs CLI --yes writes only project, iterations, documents, and de
     });
   });
 
+  const output = [];
+  const originalLog = console.log;
   try {
     server.listen(0, '127.0.0.1');
     await once(server, 'listening');
     const address = server.address();
+    console.log = (...args) => output.push(args.join(' '));
     const status = await runMemoryMain([
       'push',
       '--artifacts', artifactRoot,
@@ -522,12 +551,19 @@ test('planning-docs CLI --yes writes only project, iterations, documents, and de
       '--json',
     ]);
     assert.equal(status, 0);
+    const payload = JSON.parse(output.join('\n'));
+    assert.equal(payload.result.chunks, 0);
+    assert.equal(payload.result.serverGeneratedChunks, 15);
+    assert.deepEqual(payload.serverChunking, {
+      strategy: 'paragraph-2000',
+      targetSnapshots: 5,
+    });
 
     const paths = calls.map((call) => call.pathName);
     assert.equal(paths[0], '/projects');
     assert.equal(paths.filter((item) => item.endsWith('/iterations')).length, 2);
     assert.equal(paths.filter((item) => item === '/documents/snapshots').length, 5);
-    assert.equal(paths.filter((item) => item === '/document-chunks/bulk').length, 5);
+    assert.equal(paths.filter((item) => item === '/document-chunks/bulk').length, 0);
     assert.equal(paths.some((item) => [
       '/task-graphs',
       '/tasks/bulk',
@@ -535,10 +571,79 @@ test('planning-docs CLI --yes writes only project, iterations, documents, and de
       '/graph/snapshots',
     ].includes(item)), false);
     assert.ok(calls
-      .filter((call) => call.pathName === '/document-chunks/bulk')
-      .every((call) => call.body.chunks.length > 0));
+      .filter((call) => call.pathName === '/documents/snapshots')
+      .every((call) => (
+        !('chunks' in call.body)
+        && JSON.stringify(call.body.chunking) === JSON.stringify({ strategy: 'paragraph-2000' })
+      )));
   } finally {
+    console.log = originalLog;
     server.close();
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test('planning-docs fails closed on missing or invalid server chunking acknowledgment', async () => {
+  const { tempRoot, artifactRoot } = makeArtifactRoot();
+  try {
+    const cases = [
+      ['missing acknowledgment', { documentId: 'snapshot-1' }, /did not acknowledge server chunking/],
+      [
+        'wrong strategy',
+        { documentId: 'snapshot-1', chunking: { strategy: 'different', chunkCount: 1 } },
+        /unexpected chunking strategy/,
+      ],
+      [
+        'missing nested strategy',
+        { documentId: 'snapshot-1', chunking: { chunkCount: 1 } },
+        /unexpected chunking strategy/,
+      ],
+      [
+        'missing chunkCount',
+        { documentId: 'snapshot-1', chunking: { strategy: 'paragraph-2000' } },
+        /invalid chunkCount/,
+      ],
+      [
+        'zero chunkCount',
+        { documentId: 'snapshot-1', chunking: { strategy: 'paragraph-2000', chunkCount: 0 } },
+        /invalid chunkCount/,
+      ],
+      [
+        'negative chunkCount',
+        { documentId: 'snapshot-1', chunking: { strategy: 'paragraph-2000', chunkCount: -1 } },
+        /invalid chunkCount/,
+      ],
+      [
+        'non-integer chunkCount',
+        { documentId: 'snapshot-1', chunking: { strategy: 'paragraph-2000', chunkCount: 1.5 } },
+        /invalid chunkCount/,
+      ],
+    ];
+
+    for (const [name, acknowledgment, errorPattern] of cases) {
+      const plan = buildMemoryPlan(planningArgs(artifactRoot));
+      const calls = [];
+      const post = async (_connection, endpoint, body) => {
+        calls.push(endpoint);
+        if (endpoint === '/projects') return { projectId: body.projectId };
+        if (endpoint.includes('/iterations')) return { iterationId: body.iterationId };
+        if (endpoint === '/documents/snapshots') return acknowledgment;
+        throw new Error(`unexpected endpoint after invalid acknowledgment: ${endpoint}`);
+      };
+
+      await assert.rejects(pushPlan({}, plan, post), errorPattern, name);
+      assert.equal(
+        calls.filter((endpoint) => endpoint === '/documents/snapshots').length,
+        1,
+        `${name} must stop before the next snapshot`,
+      );
+      assert.equal(
+        calls.some((endpoint) => endpoint === '/document-chunks/bulk'),
+        false,
+        `${name} must not fall back to client chunks`,
+      );
+    }
+  } finally {
     rmSync(tempRoot, { recursive: true, force: true });
   }
 });

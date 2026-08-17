@@ -93,16 +93,22 @@ test('planning-docs runtime manifest and user documentation preserve the safety 
   assert.match(englishReadme, /--profile planning-docs --dry-run/);
   assert.match(englishReadme, /Actual remote writes still require `--yes`/);
   assert.match(englishReadme, /Local chunk files are never planning source artifacts/);
+  assert.match(englishReadme, /serverGeneratedChunks/);
+  assert.match(englishReadme, /never falls back to\s+`\/document-chunks\/bulk`/);
 
   const koreanReadme = readFileSync(path.join(ROOT, 'README.ko-KR.md'), 'utf8');
   assert.match(koreanReadme, /--profile planning-docs --dry-run/);
   assert.match(koreanReadme, /실제 외부 쓰기는 계속 `--yes`를 요구/);
   assert.match(koreanReadme, /로컬 chunk 파일은 planning source artifact가 아닙니다/);
+  assert.match(koreanReadme, /serverGeneratedChunks/);
+  assert.match(koreanReadme, /`\/document-chunks\/bulk`로 fallback하지 않습니다/);
 
   const cliReference = readFileSync(path.join(ROOT, 'docs', 'cli-reference.md'), 'utf8');
   assert.match(cliReference, /`planning-docs`는 `memory push`의 명시적 `--artifacts` source/);
   assert.match(cliReference, /pending·미등록 iteration/);
-  assert.match(cliReference, /로컬 chunk 파일을 source artifact로 다시 수집하는 것이 아니다/);
+  assert.match(cliReference, /로컬 chunk 파일은 planning source artifact로 다시 수집하지 않으며/);
+  assert.match(cliReference, /exact `chunking: \{ "strategy": "paragraph-2000" \}` opt-in/);
+  assert.match(cliReference, /`chunks=0`.*`serverGeneratedChunks`/);
 });
 
 test('checkout init preserves the legacy co-located runtime', () => {
@@ -171,7 +177,13 @@ test('checkout init preserves the legacy co-located runtime', () => {
       '--profile', 'planning-docs', '--dry-run', '--json',
     ]);
     assert.equal(planningPreview.status, 0, formatCommandResult(planningPreview));
-    assert.equal(JSON.parse(planningPreview.stdout).selection.summary.includedFiles, 3);
+    const planningPreviewPayload = JSON.parse(planningPreview.stdout);
+    assert.equal(planningPreviewPayload.selection.summary.includedFiles, 3);
+    assert.equal(planningPreviewPayload.local.chunks, 0);
+    assert.deepEqual(planningPreviewPayload.serverChunking, {
+      strategy: 'paragraph-2000',
+      targetSnapshots: 3,
+    });
 
     const doctor = runEmbedded(targetRoot, ['doctor', '--json']);
     assert.equal(doctor.status, 0, formatCommandResult(doctor));
@@ -449,7 +461,13 @@ test('the packed p2a runtime exposes its bin shim and supports core commands wit
       '--profile', 'planning-docs', '--dry-run', '--json',
     ]);
     assert.equal(packedPlanningPreview.status, 0, formatCommandResult(packedPlanningPreview));
-    assert.equal(JSON.parse(packedPlanningPreview.stdout).selection.summary.includedFiles, 3);
+    const packedPlanningPreviewPayload = JSON.parse(packedPlanningPreview.stdout);
+    assert.equal(packedPlanningPreviewPayload.selection.summary.includedFiles, 3);
+    assert.equal(packedPlanningPreviewPayload.local.chunks, 0);
+    assert.deepEqual(packedPlanningPreviewPayload.serverChunking, {
+      strategy: 'paragraph-2000',
+      targetSnapshots: 3,
+    });
 
     const packageAgentPath = path.join(targetRoot, '.agents', 'skills', 'p2a-next', 'SKILL.md');
     rmSync(packageAgentPath);
