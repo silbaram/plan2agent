@@ -157,8 +157,17 @@ backend for artifacts, history, and lineage. Local `.plan2agent/` files remain c
 is unavailable or not configured.
 
 Use `p2a memory push --artifacts <artifact-root> --profile planning-docs --dry-run` to preview a
-focused sync of approved Gate A/B planning Markdown. The preview reports every included and excluded
-source file with its reason; actual remote writes still require `--yes`.
+focused sync of approved Gate A/B planning Markdown. The profile selects canonical `product-spec.md`
+and `implementation-plan.md`, plus `intake.md` when Gate A is complete, from the current functional
+iteration and only the archived iterations recorded in `current-spec.json.closed_iterations`.
+Pending or unrecorded iterations, maintenance, task/run/review evidence, generated indexes, Memory
+recall files, local chunk files, copies, and symlinks are excluded with stable reasons. The preview
+validates canonical JSON, reports exact content/provenance hashes and the estimated snapshot count,
+and never contacts Memory. Actual remote writes still require `--yes`.
+
+Local chunk files are never planning source artifacts. On an approved push, the CLI still derives
+the existing chunk transport from each selected Markdown document and sends those derived chunks
+after its document snapshot for Memory search compatibility.
 
 ## CLI at a glance
 

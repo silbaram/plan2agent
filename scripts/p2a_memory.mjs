@@ -211,6 +211,12 @@ function parseArgs(argv) {
   if (args.profile && args.profile !== PLANNING_DOCS_PROFILE) {
     throw new Error(`unsupported Memory push profile: ${args.profile}; expected ${PLANNING_DOCS_PROFILE}`);
   }
+  if (args.profile === PLANNING_DOCS_PROFILE && (!args.artifacts || args.graph || args.runs)) {
+    throw new Error(`${PLANNING_DOCS_PROFILE} profile requires an explicit --artifacts source`);
+  }
+  if (args.profile === PLANNING_DOCS_PROFILE && args.proposals) {
+    throw new Error(`${PLANNING_DOCS_PROFILE} profile does not support --proposals`);
+  }
   if (args.apply && args.command !== 'pull') throw new Error('--apply is only supported by pull');
   if (args.command === 'pull' && args.apply) {
     throw new Error('memory pull --apply is not available because the current Memory API exposes metadata/hash lookup but not artifact content. Use pull --dry-run --output <path> to write a restore report.');
@@ -300,9 +306,6 @@ function parseArgs(argv) {
   }
   if (args.command === 'push' && !args.artifacts && !args.graph) {
     throw new Error('push requires --artifacts or --graph');
-  }
-  if (args.profile === PLANNING_DOCS_PROFILE && !args.artifacts) {
-    throw new Error(`${PLANNING_DOCS_PROFILE} profile requires --artifacts`);
   }
   if (args.graph) assertNotUninitializedScaffoldGraph(args.graph);
   return args;
@@ -909,10 +912,25 @@ function buildMemoryPlan(args) {
 
 function buildPlanningDocsMemoryPlan(args) {
   const state = resolveIterationState(args.artifacts, { requireReady: false });
+  const closedIterations = state.currentSpec.closed_iterations ?? [];
+  if (!Array.isArray(closedIterations)) {
+    throw new Error('planning-docs requires current-spec.json closed_iterations to be an array when present');
+  }
+  const archivedIterations = closedIterations
+    .filter((item) => item?.status === undefined || item?.status === 'archived')
+    .map((item) => item?.iteration_id);
+  const pendingIterations = state.currentSpec.pending_iteration?.iteration_id
+    ? [state.currentSpec.pending_iteration.iteration_id]
+    : [];
+  const selectedActiveIteration = pendingIterations.includes(state.activeIteration)
+    ? null
+    : state.activeIteration;
   const selection = selectPlanningDocuments({
     artifactRoot: state.artifactRoot,
     projectId: state.projectId,
-    activeIteration: state.activeIteration,
+    activeIteration: selectedActiveIteration,
+    archivedIterations,
+    pendingIterations,
   });
   const projectId = state.projectId;
   const projectCanonicalId = stableId('p2a-project', [projectId]);
@@ -972,7 +990,7 @@ function buildPlanningDocsMemoryPlan(args) {
     const document = {
       id: documentId,
       sourceKey: selected.identity,
-      sourcePath: displayPath(selected.absolutePath),
+      sourcePath: selected.sourcePath,
       contentHash: selected.contentHash,
       content: selected.content,
       request: {
@@ -980,12 +998,15 @@ function buildPlanningDocsMemoryPlan(args) {
         projectId: projectCanonicalId,
         iterationId: iterationCanonicalId,
         sourceDocumentId: selected.identity,
-        sourcePath: displayPath(selected.absolutePath),
+        sourcePath: selected.sourcePath,
         artifactType: 'DOCUMENT_SNAPSHOT',
         title: path.basename(selected.absolutePath),
         content: selected.content,
         contentHash: selected.contentHash,
-        sourceReference: sourceReference(documentId, selected.absolutePath),
+        sourceReference: {
+          ...sourceReference(documentId, selected.absolutePath),
+          path: selected.sourcePath,
+        },
         metadata: documentMetadata,
       },
       chunks: [],

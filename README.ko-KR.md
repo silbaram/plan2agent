@@ -164,8 +164,16 @@ lineage를 위한 선택적 저장·검색 backend입니다. Memory가 없거나
 
 승인된 Gate A/B 기획 Markdown만 동기화하려면
 `p2a memory push --artifacts <artifact-root> --profile planning-docs --dry-run`으로 선택 결과를
-먼저 확인합니다. preview는 모든 source file의 포함·제외 여부와 사유를 보여주며 실제 외부
-쓰기는 계속 `--yes`를 요구합니다.
+먼저 확인합니다. 이 프로필은 현재 기능 iteration과 `current-spec.json.closed_iterations`에
+기록된 archived iteration에서 canonical `product-spec.md`, `implementation-plan.md`, 그리고
+Gate A가 완료된 경우의 `intake.md`만 선택합니다. pending·미등록 iteration, maintenance,
+task/run/review evidence, generated index, Memory recall, 로컬 chunk, 복사본과 symlink는 안정적인
+사유와 함께 제외됩니다. preview는 canonical JSON과 원문·계보 hash, 예상 snapshot 수를
+검증·표시하며 Memory 서버에 연결하지 않습니다. 실제 외부 쓰기는 계속 `--yes`를 요구합니다.
+
+로컬 chunk 파일은 planning source artifact가 아닙니다. 승인된 push에서는 검색 호환성을 위해
+선택된 각 Markdown 원문에서 기존 chunk payload를 메모리상 파생해 document snapshot 뒤에
+전송합니다.
 
 ## CLI 한눈에 보기
 

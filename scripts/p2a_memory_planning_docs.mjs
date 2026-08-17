@@ -2,7 +2,6 @@
 
 import { createHash } from 'node:crypto';
 import {
-  existsSync,
   lstatSync,
   readdirSync,
   readFileSync,
@@ -34,20 +33,49 @@ const DOCUMENT_RULES = [
   },
 ];
 
-function isFile(filePath) {
-  try {
-    return existsSync(filePath) && lstatSync(filePath).isFile();
-  } catch {
-    return false;
-  }
+function compareStable(left, right) {
+  if (left < right) return -1;
+  if (left > right) return 1;
+  return 0;
 }
 
-function isDirectory(dirPath) {
-  try {
-    return existsSync(dirPath) && lstatSync(dirPath).isDirectory();
-  } catch {
-    return false;
+function artifactPathState(artifactRoot, filePath) {
+  const root = path.resolve(artifactRoot);
+  const resolvedPath = path.resolve(filePath);
+  const relativePath = path.relative(root, resolvedPath);
+  if (
+    !relativePath
+    || relativePath === '..'
+    || relativePath.startsWith(`..${path.sep}`)
+    || path.isAbsolute(relativePath)
+  ) {
+    return { kind: 'outside_root', path: resolvedPath };
   }
+
+  let currentPath = root;
+  try {
+    const rootStat = lstatSync(root);
+    if (rootStat.isSymbolicLink()) return { kind: 'symlink', path: root };
+    if (!rootStat.isDirectory()) return { kind: 'not_directory', path: root };
+    const parts = relativePath.split(path.sep);
+    for (const [index, part] of parts.entries()) {
+      currentPath = path.join(currentPath, part);
+      const stat = lstatSync(currentPath);
+      if (stat.isSymbolicLink()) return { kind: 'symlink', path: currentPath };
+      if (index < parts.length - 1 && !stat.isDirectory()) {
+        return { kind: 'not_directory', path: currentPath };
+      }
+      if (index === parts.length - 1) {
+        if (stat.isFile()) return { kind: 'file', path: currentPath };
+        if (stat.isDirectory()) return { kind: 'directory', path: currentPath };
+        return { kind: 'unsupported_entry', path: currentPath };
+      }
+    }
+  } catch (error) {
+    if (error?.code === 'ENOENT') return { kind: 'missing', path: currentPath };
+    throw error;
+  }
+  return { kind: 'missing', path: currentPath };
 }
 
 function sha256(value) {
@@ -62,50 +90,76 @@ function artifactRelativePath(artifactRoot, filePath) {
   return normalizePath(path.relative(artifactRoot, filePath));
 }
 
-function listArtifactFiles(artifactRoot) {
-  const files = [];
+function listArtifactEntries(artifactRoot) {
+  const entriesFound = [];
   function visit(dirPath) {
     const entries = readdirSync(dirPath, { withFileTypes: true })
-      .sort((left, right) => left.name.localeCompare(right.name));
+      .sort((left, right) => compareStable(left.name, right.name));
     for (const entry of entries) {
       const entryPath = path.join(dirPath, entry.name);
       if (entry.isDirectory()) visit(entryPath);
-      else if (entry.isFile()) files.push(entryPath);
+      else {
+        entriesFound.push({
+          filePath: entryPath,
+          kind: entry.isSymbolicLink() ? 'symlink' : entry.isFile() ? 'file' : 'unsupported_entry',
+        });
+      }
     }
   }
   visit(artifactRoot);
-  return files;
+  return entriesFound;
 }
 
-function iterationDirectories(artifactRoot, activeIteration) {
-  const iterationsRoot = path.join(artifactRoot, 'iterations');
-  if (!isDirectory(iterationsRoot)) return [];
-  return readdirSync(iterationsRoot, { withFileTypes: true })
-    .filter((entry) => entry.isDirectory())
-    .map((entry) => entry.name)
-    .sort((left, right) => {
-      if (left === activeIteration) return -1;
-      if (right === activeIteration) return 1;
-      return left.localeCompare(right);
-    });
+function assertSafeIterationId(iterationId, label) {
+  if (
+    typeof iterationId !== 'string'
+    || !iterationId
+    || iterationId === '.'
+    || iterationId === '..'
+    || !/^[A-Za-z0-9._-]+$/.test(iterationId)
+  ) {
+    throw new Error(`${label} must be a safe iteration ID, got ${JSON.stringify(iterationId)}`);
+  }
+  return iterationId;
+}
+
+function normalizedIterationIds(values, label) {
+  if (!Array.isArray(values)) throw new Error(`${label} must be an array`);
+  const ids = values.map((value, index) => assertSafeIterationId(
+    typeof value === 'string' ? value : value?.iteration_id,
+    `${label}[${index}]`,
+  ));
+  return [...new Set(ids)].sort(compareStable);
+}
+
+function selectedIterationIds(activeIteration, archivedIterations) {
+  const archived = normalizedIterationIds(archivedIterations, 'archivedIterations');
+  if (activeIteration === null || activeIteration === undefined) return archived;
+  const active = assertSafeIterationId(activeIteration, 'activeIteration');
+  return [active, ...archived.filter((iterationId) => iterationId !== active)];
 }
 
 function errorMessage(error) {
   return error instanceof Error && error.message ? error.message : String(error);
 }
 
-function exclusionReason(sourcePath) {
+function exclusionReason(sourcePath, context) {
   const normalized = normalizePath(sourcePath);
   const basename = path.posix.basename(normalized);
   if (normalized.startsWith('iterations/maintenance/')) return 'maintenance';
+  const iterationMatch = /^iterations\/([^/]+)(?:\/|$)/.exec(normalized);
+  if (iterationMatch && context.pendingIterations.has(iterationMatch[1])) return 'pending_iteration';
+  if (iterationMatch && !context.selectedIterations.has(iterationMatch[1])) return 'unrecorded_iteration';
   if (/memory-(?:recall|status)|\.memory-recall\.json$/i.test(normalized)) return 'memory_recall';
   if (/(?:^|\/)runs?\//.test(normalized) || /run-(?:index|record)/i.test(basename)) return 'run_record';
   if (/gate-c-task-graph\/task-graph\.json$/.test(normalized)) return 'task_graph';
+  if (/(?:^|\/)tasks?(?:\/|$)/i.test(normalized) || /^task(?:-|_).+\.json$/i.test(basename)) return 'task_record';
+  if (/(?:^|\/)proposals?(?:\/|$)/i.test(normalized)) return 'proposal_record';
   if (/(?:^|\/)(?:gate-d-review|verification|acceptance|visual-review|visual-experience|milestone-reviews|evidence|tool-traces?|preflight)(?:\/|$)/i.test(normalized)) {
     return 'evidence_or_review';
   }
   if (/(?:^|\/)(?:handoff|baseline|snapshots?)(?:\/|$)/i.test(normalized)) return 'duplicate_copy';
-  if (/(?:^|[._-])chunks?(?:[._-]|$)/i.test(basename)) return 'generated_chunk';
+  if (/(?:^|\/)(?:document-)?chunks?(?:\/|$)/i.test(normalized) || /(?:^|[._-])chunks?(?:[._-]|$)/i.test(basename)) return 'generated_chunk';
   if (normalized === 'status.md' || basename === 'status.md') return 'generated_index';
   if (['current-spec.json', 'iteration.json', 'spec.json', 'intake.json'].includes(basename)) {
     return 'canonical_validation_source';
@@ -139,30 +193,50 @@ function excludedFile(sourcePath, reason, detail = null) {
   };
 }
 
+function portableDetail(artifactRoot, value) {
+  const root = path.resolve(artifactRoot);
+  return String(value)
+    .replaceAll(root, '<artifact-root>')
+    .replaceAll(normalizePath(root), '<artifact-root>');
+}
+
 function validateIterationGateB(specPath, artifactRoot) {
-  if (!isFile(specPath)) return { spec: null, error: 'canonical spec.json is missing' };
+  const state = artifactPathState(artifactRoot, specPath);
+  if (state.kind !== 'file') {
+    const detail = state.kind === 'missing'
+      ? 'canonical spec.json is missing'
+      : `canonical spec.json is not a safe regular file (${state.kind})`;
+    return { spec: null, error: detail };
+  }
   try {
     return {
       spec: validateSpec(specPath, null, { artifactRoot }),
       error: null,
     };
   } catch (error) {
-    return { spec: null, error: errorMessage(error) };
+    return { spec: null, error: portableDetail(artifactRoot, errorMessage(error)) };
   }
 }
 
 function validateIterationGateA(intakePath, intakeMarkdownPath, artifactRoot) {
-  if (!isFile(intakePath)) return { intake: null, error: 'canonical intake.json is missing' };
+  const intakeState = artifactPathState(artifactRoot, intakePath);
+  if (intakeState.kind !== 'file') {
+    const detail = intakeState.kind === 'missing'
+      ? 'canonical intake.json is missing'
+      : `canonical intake.json is not a safe regular file (${intakeState.kind})`;
+    return { intake: null, error: detail };
+  }
+  const markdownState = artifactPathState(artifactRoot, intakeMarkdownPath);
   try {
     return {
       intake: validateIntake(intakePath, {
         artifactRoot,
-        intakeMdPath: isFile(intakeMarkdownPath) ? intakeMarkdownPath : undefined,
+        intakeMdPath: markdownState.kind === 'file' ? intakeMarkdownPath : undefined,
       }),
       error: null,
     };
   } catch (error) {
-    return { intake: null, error: errorMessage(error) };
+    return { intake: null, error: portableDetail(artifactRoot, errorMessage(error)) };
   }
 }
 
@@ -174,7 +248,8 @@ function planningDocument({
   markdownPath,
   canonicalJsonPath,
 }) {
-  const content = readFileSync(markdownPath, 'utf8');
+  const rawContent = readFileSync(markdownPath);
+  const content = rawContent.toString('utf8');
   const sourcePath = artifactRelativePath(artifactRoot, markdownPath);
   const canonicalSourcePath = artifactRelativePath(artifactRoot, canonicalJsonPath);
   return {
@@ -187,7 +262,7 @@ function planningDocument({
     absolutePath: markdownPath,
     sourcePath,
     content,
-    contentHash: sha256(content),
+    contentHash: sha256(rawContent),
     canonicalJsonAbsolutePath: canonicalJsonPath,
     canonicalJsonPath: canonicalSourcePath,
     canonicalJsonHash: rawFileSha256(canonicalJsonPath),
@@ -198,13 +273,39 @@ function planningDocument({
  * Returns both upload candidates and a complete dry-run audit of every source file.
  * Only canonical files directly below iterations/<iteration-id> can be selected.
  */
-export function selectPlanningDocuments({ artifactRoot, projectId, activeIteration }) {
+export function selectPlanningDocuments({
+  artifactRoot,
+  projectId,
+  activeIteration,
+  archivedIterations = [],
+  pendingIterations = [],
+}) {
   const resolvedRoot = path.resolve(artifactRoot);
-  if (!isDirectory(resolvedRoot)) throw new Error(`planning-docs artifact root is not a directory: ${resolvedRoot}`);
-  const allFiles = listArtifactFiles(resolvedRoot);
+  let rootStat;
+  try {
+    rootStat = lstatSync(resolvedRoot);
+  } catch {
+    throw new Error(`planning-docs artifact root is not a directory: ${resolvedRoot}`);
+  }
+  if (rootStat.isSymbolicLink() || !rootStat.isDirectory()) {
+    throw new Error(`planning-docs artifact root must be a non-symlink directory: ${resolvedRoot}`);
+  }
+  if (typeof projectId !== 'string' || !projectId.trim()) {
+    throw new Error('planning-docs projectId must be a non-empty string');
+  }
+  const iterationIds = selectedIterationIds(activeIteration, archivedIterations);
+  const selectedIterations = new Set(iterationIds);
+  const pendingIterationIds = new Set(normalizedIterationIds(pendingIterations, 'pendingIterations'));
+  const allEntries = listArtifactEntries(resolvedRoot);
   const decisions = new Map();
   const documents = [];
   const identities = new Map();
+
+  for (const entry of allEntries) {
+    if (entry.kind !== 'symlink') continue;
+    const sourcePath = artifactRelativePath(resolvedRoot, entry.filePath);
+    decisions.set(sourcePath, excludedFile(sourcePath, 'symlink_not_allowed'));
+  }
 
   function exclude(filePath, reason, detail = null) {
     decisions.set(
@@ -227,9 +328,10 @@ export function selectPlanningDocuments({ artifactRoot, projectId, activeIterati
     decisions.set(document.sourcePath, null);
   }
 
-  for (const iterationId of iterationDirectories(resolvedRoot, activeIteration)) {
+  for (const iterationId of iterationIds) {
     const iterationRoot = path.join(resolvedRoot, 'iterations', iterationId);
-    if (iterationId === 'maintenance') continue;
+    const iterationState = artifactPathState(resolvedRoot, iterationRoot);
+    if (iterationState.kind !== 'directory') continue;
     const specPath = path.join(iterationRoot, 'gate-b-spec', 'spec.json');
     const intakePath = path.join(iterationRoot, 'gate-a-intake', 'intake.json');
     const intakeMarkdownPath = path.join(iterationRoot, 'gate-a-intake', 'intake.md');
@@ -238,11 +340,20 @@ export function selectPlanningDocuments({ artifactRoot, projectId, activeIterati
 
     for (const rule of DOCUMENT_RULES) {
       const markdownPath = path.join(iterationRoot, rule.markdownPath);
-      if (!isFile(markdownPath)) continue;
+      const markdownState = artifactPathState(resolvedRoot, markdownPath);
+      if (markdownState.kind !== 'file') continue;
       const canonicalJsonPath = path.join(iterationRoot, rule.canonicalJsonPath);
       if (rule.gate === 'gate-b') {
         if (gateB.error) {
           exclude(markdownPath, 'canonical_validation_failed', gateB.error);
+          continue;
+        }
+        if (gateB.spec.project_id !== projectId) {
+          exclude(
+            markdownPath,
+            'project_mismatch',
+            `spec.project_id=${JSON.stringify(gateB.spec.project_id)} expected ${JSON.stringify(projectId)}`,
+          );
           continue;
         }
         if (gateB.spec.approval !== 'approved') {
@@ -259,27 +370,35 @@ export function selectPlanningDocuments({ artifactRoot, projectId, activeIterati
           continue;
         }
       }
-      include(planningDocument({
+      const document = planningDocument({
         artifactRoot: resolvedRoot,
         projectId,
         iterationId,
         rule,
         markdownPath,
         canonicalJsonPath,
-      }));
+      });
+      if (!document.content.trim()) {
+        exclude(markdownPath, 'empty_document');
+        continue;
+      }
+      include(document);
     }
   }
 
   const included = documents.map(reportDocument)
-    .sort((left, right) => left.sourcePath.localeCompare(right.sourcePath));
-  const excluded = allFiles
-    .map((filePath) => {
+    .sort((left, right) => compareStable(left.sourcePath, right.sourcePath));
+  const excluded = allEntries
+    .map(({ filePath }) => {
       const sourcePath = artifactRelativePath(resolvedRoot, filePath);
       if (decisions.has(sourcePath)) return decisions.get(sourcePath);
-      return excludedFile(sourcePath, exclusionReason(sourcePath));
+      return excludedFile(sourcePath, exclusionReason(sourcePath, {
+        pendingIterations: pendingIterationIds,
+        selectedIterations,
+      }));
     })
     .filter(Boolean)
-    .sort((left, right) => left.sourcePath.localeCompare(right.sourcePath));
+    .sort((left, right) => compareStable(left.sourcePath, right.sourcePath));
 
   return {
     profile: PLANNING_DOCS_PROFILE,
@@ -287,7 +406,7 @@ export function selectPlanningDocuments({ artifactRoot, projectId, activeIterati
     included,
     excluded,
     summary: {
-      scannedFiles: allFiles.length,
+      scannedFiles: allEntries.length,
       includedFiles: included.length,
       excludedFiles: excluded.length,
       estimatedSnapshots: included.length,

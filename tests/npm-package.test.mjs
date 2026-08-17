@@ -10,6 +10,21 @@ import { ROOT, formatCommandResult, makeTempDir, runP2aFrom } from './helpers/fi
 const PACKAGE_JSON = JSON.parse(readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
 const PACKAGE_NAME = PACKAGE_JSON.name;
 const PACKAGE_VERSION = PACKAGE_JSON.version;
+const PLANNING_DOCS_FIXTURE = path.join(ROOT, 'fixtures', '_e2e', 'webhook-api-service');
+
+function makePlanningDocsArtifactRoot(parentRoot, directoryName) {
+  const artifactRoot = path.join(parentRoot, directoryName);
+  const iterationRoot = path.join(artifactRoot, 'iterations', 'v1-planning-docs');
+  cpSync(PLANNING_DOCS_FIXTURE, iterationRoot, { recursive: true });
+  writeFileSync(path.join(artifactRoot, 'current-spec.json'), `${JSON.stringify({
+    schema_version: 'p2a.current_spec.v1',
+    project_id: 'webhook-api-service',
+    active_iteration: 'v1-planning-docs',
+    effective_spec_ref: 'iterations/v1-planning-docs/gate-b-spec/spec.json',
+    closed_iterations: [],
+  }, null, 2)}\n`, 'utf8');
+  return artifactRoot;
+}
 
 function spawnNpm(args, options) {
   if (process.platform !== 'win32') return spawnSync('npm', args, options);
@@ -103,6 +118,7 @@ test('checkout init preserves the legacy co-located runtime', () => {
     assert.equal(existsSync(path.join(targetRoot, '.plan2agent', 'scripts', 'p2a_decision_ledger.mjs')), true);
     assert.equal(existsSync(path.join(targetRoot, '.plan2agent', 'scripts', 'p2a_decisions.mjs')), true);
     assert.equal(existsSync(path.join(targetRoot, '.plan2agent', 'scripts', 'p2a_shape.mjs')), true);
+    assert.equal(existsSync(path.join(targetRoot, '.plan2agent', 'scripts', 'p2a_memory_planning_docs.mjs')), true);
     assert.equal(existsSync(path.join(targetRoot, '.plan2agent', 'schemas', 'next.schema.json')), true);
     assert.equal(existsSync(path.join(targetRoot, '.plan2agent', 'schemas', 'constitution.schema.json')), true);
     assert.equal(existsSync(path.join(targetRoot, '.plan2agent', 'schemas', 'decisions.schema.json')), true);
@@ -128,6 +144,14 @@ test('checkout init preserves the legacy co-located runtime', () => {
     const next = runEmbedded(targetRoot, ['next', '--json']);
     assert.equal(next.status, 0, formatCommandResult(next));
     assert.equal(JSON.parse(next.stdout).state, 'entry_missing');
+
+    const planningArtifactRoot = makePlanningDocsArtifactRoot(targetRoot, 'co-located-planning-artifacts');
+    const planningPreview = runEmbedded(targetRoot, [
+      'memory', 'push', '--artifacts', planningArtifactRoot,
+      '--profile', 'planning-docs', '--dry-run', '--json',
+    ]);
+    assert.equal(planningPreview.status, 0, formatCommandResult(planningPreview));
+    assert.equal(JSON.parse(planningPreview.stdout).selection.summary.includedFiles, 3);
 
     const doctor = runEmbedded(targetRoot, ['doctor', '--json']);
     assert.equal(doctor.status, 0, formatCommandResult(doctor));
@@ -311,6 +335,7 @@ test('npm pack dry run includes the global CLI runtime', () => {
       'scripts/p2a_decisions.mjs',
       'scripts/p2a_handoff.mjs',
       'scripts/p2a_upgrade.mjs',
+      'scripts/p2a_memory_planning_docs.mjs',
       'scripts/p2a_context.mjs',
       'scripts/p2a_continuations.mjs',
       'scripts/p2a_schema.mjs',
@@ -397,6 +422,14 @@ test('the packed p2a runtime exposes its bin shim and supports core commands wit
     assert.equal(packageVersionCheck.runtimeMode, 'package');
     assert.equal(packageVersionCheck.manifestPackageVersion, PACKAGE_VERSION);
     assert.equal(packageVersionCheck.runningPackageVersion, PACKAGE_VERSION);
+
+    const planningArtifactRoot = makePlanningDocsArtifactRoot(targetRoot, 'packed-planning-artifacts');
+    const packedPlanningPreview = runPacked(targetRoot, [
+      'memory', 'push', '--artifacts', planningArtifactRoot,
+      '--profile', 'planning-docs', '--dry-run', '--json',
+    ]);
+    assert.equal(packedPlanningPreview.status, 0, formatCommandResult(packedPlanningPreview));
+    assert.equal(JSON.parse(packedPlanningPreview.stdout).selection.summary.includedFiles, 3);
 
     const packageAgentPath = path.join(targetRoot, '.agents', 'skills', 'p2a-next', 'SKILL.md');
     rmSync(packageAgentPath);
