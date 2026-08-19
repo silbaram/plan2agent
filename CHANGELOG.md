@@ -6,6 +6,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-08-19
+
 ### Fixed
 
 - Route newly opened baseline-backed iterations into Gate A when a valid entry is supplied, return deterministic missing or invalid entry actions otherwise, and preserve documented `gate_a_interview` resume compatibility.
@@ -137,7 +139,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Add package-runtime project initialization, managed provider assets, artifact validation, handoff, supervised execution, evaluation, proposal, and optional Memory workflows.
 - Ship canonical and generated integrations for Codex, Claude Code, and Gemini CLI.
 
-[Unreleased]: https://github.com/silbaram/plan2agent/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/silbaram/plan2agent/compare/v0.5.1...HEAD
+[0.5.1]: https://github.com/silbaram/plan2agent/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/silbaram/plan2agent/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/silbaram/plan2agent/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/silbaram/plan2agent/compare/v0.2.3...v0.3.0
