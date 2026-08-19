@@ -196,6 +196,54 @@ test('validator rejects an include/exclude contradiction for the same capability
   );
 });
 
+test('capability contradiction detection preserves narrower scope and mode exclusions', () => {
+  const spec = webhookFixture('gate-b-spec/spec.json');
+  spec.product.goals = [
+    'Expose a project-scoped adapter with compile, search, query, and eval capabilities.',
+    'Document compile, search, query, and eval in the public SDK capability matrix.',
+  ];
+  spec.product.non_goals = [
+    'Cross-project compile/search/query/context remains out of scope.',
+    'Query save mode and eval history record mode are unsupported; query uses save=false and eval uses record=false.',
+    'CLI stdout parsing fallback and a new end-user compiler CLI are excluded.',
+    'Do not fork, patch, or deep-import llm-wiki-compiler.',
+    'Follow-up retrieval orchestration is deferred.',
+  ];
+  spec.product.constraints = [
+    'Compile roots must not escape the selected project.',
+    'Search and query operations are read-only.',
+  ];
+  spec.implementation.architecture = [];
+  spec.implementation.interfaces = [
+    'Lint returns bounded findings through a read-only SDK operation.',
+  ];
+
+  assert.deepEqual(findSpecCapabilityContradictions(spec), []);
+});
+
+test('capability contradiction detection still rejects the same qualified variant', () => {
+  const spec = webhookFixture('gate-b-spec/spec.json');
+  spec.product.goals = [
+    'Expose cross-project compile and search operations.',
+    'Support query save mode.',
+    'Add retrieval orchestration.',
+  ];
+  spec.product.non_goals = [
+    'Cross-project compile and search operations are out of scope.',
+    'Query save mode is unsupported.',
+    'Retrieval orchestration is deferred.',
+  ];
+  spec.product.constraints = [];
+  spec.implementation.architecture = [];
+  spec.implementation.interfaces = [];
+
+  assert.deepEqual(
+    [...new Set(findSpecCapabilityContradictions(spec)
+      .map((contradiction) => contradiction.capability))],
+    ['compile', 'search', 'query', 'retrieval'],
+  );
+});
+
 test('validator binds supersession to the immutable baseline and accepts the corrected draft', (t) => {
   const root = makeTempDir('p2a-baseline-supersession-');
   t.after(() => rmSync(root, { recursive: true, force: true }));

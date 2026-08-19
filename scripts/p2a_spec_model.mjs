@@ -51,16 +51,11 @@ const RESTRICTIVE_SPEC_FIELD_REFS = [
   'spec.implementation.architecture',
   'spec.implementation.interfaces',
 ];
-const POSITIVE_SPEC_FIELD_REFS = [
+const CONTRADICTION_RESTRICTIVE_FIELD_REFS = [
+  'spec.product.non_goals',
+];
+const CONTRADICTION_POSITIVE_FIELD_REFS = [
   'spec.product.goals',
-  'spec.product.core_flows',
-  'spec.product.screens_or_interfaces',
-  'spec.product.external_integrations',
-  'spec.product.success_criteria',
-  'spec.implementation.architecture',
-  'spec.implementation.interfaces',
-  'spec.implementation.data_flow',
-  'spec.implementation.verification',
 ];
 const CAPABILITY_STOP_WORDS = new Set([
   'actual',
@@ -127,6 +122,56 @@ const CONTRADICTION_CAPABILITY_TOKENS = new Set([
   'search',
 ]);
 const RESTRICTIVE_TEXT_PATTERN = /(?:\b(?:defer(?:red|s|ring)?|disallow(?:ed|s)?|exclude(?:d|s)?|forbid(?:den|s)?|must\s+not|never|no|not|only|out\s+of\s+scope|unsupported|without)\b|범위\s*밖|비목표|미지원|지원하지|제외|금지|후속\s*(?:반복|iteration))/i;
+const CAPABILITY_QUALIFIER_RULES = [
+  {
+    dimension: 'scope',
+    value: 'cross-project',
+    pattern: /\bcross[- ]project\b|(?:\bproject|프로젝트)\s*간/i,
+  },
+  {
+    dimension: 'scope',
+    value: 'project-scoped',
+    pattern: /\b(?:per[- ]project|project[- ]scoped|projectid[- ]only|single[- ]project)\b|(?:\bproject|프로젝트)\s*별/i,
+  },
+  {
+    dimension: 'provider',
+    value: 'specific',
+    pattern: /\bprovider[- ]specific\b|provider\s*별/i,
+  },
+  {
+    dimension: 'provider',
+    value: 'neutral',
+    pattern: /\bprovider[- ]neutral\b/i,
+  },
+  {
+    dimension: 'surface',
+    value: 'cli',
+    pattern: /\b(?:cli|command[- ]line)\b/i,
+  },
+  {
+    dimension: 'surface',
+    value: 'sdk',
+    pattern: /\bsdk\b/i,
+  },
+  {
+    capabilities: new Set(['query']),
+    dimension: 'query-mode',
+    value: 'saved',
+    pattern: /\bquery\b.{0,48}\b(?:save\s+mode|save\s*[:=]\s*true|saved\s+mode)\b/i,
+  },
+  {
+    capabilities: new Set(['eval']),
+    dimension: 'eval-mode',
+    value: 'recorded',
+    pattern: /\beval(?:uation)?\b.{0,48}\b(?:history\s+record(?:ing)?|record(?:ing)?\s+mode|record\s*[:=]\s*true)\b/i,
+  },
+  {
+    capabilities: new Set(['retrieval']),
+    dimension: 'retrieval-mode',
+    value: 'orchestration',
+    pattern: /\bretrieval\b.{0,48}\borchestration\b/i,
+  },
+];
 
 function normalizedCapabilityToken(token) {
   const normalized = token.toLowerCase().replace(/^-+|-+$/g, '');
@@ -151,6 +196,35 @@ export function capabilityTokens(text) {
     .flatMap((token) => token.split('-'))
     .map(normalizedCapabilityToken)
     .filter((token) => token.length >= 4 && !CAPABILITY_STOP_WORDS.has(token)))];
+}
+
+function normalizedContradictionCapabilityToken(token) {
+  const normalized = token.toLowerCase().replace(/^-+|-+$/g, '');
+  if (/^(?:compile|compiled|compiles|compiling|compilation|compilations)$/.test(normalized)) {
+    return 'compile';
+  }
+  if (/^(?:retrieve|retrieval|retriever|retrievers|retrieving)$/.test(normalized)) {
+    return 'retrieval';
+  }
+  if (/^(?:search|searches|searching|searched)$/.test(normalized)) return 'search';
+  if (/^(?:query|queries|querying|queried)$/.test(normalized)) return 'query';
+  if (/^(?:eval|evaluate|evaluates|evaluated|evaluating|evaluation|evaluations)$/.test(normalized)) {
+    return 'eval';
+  }
+  if (/^(?:lint|linted|linting|linter|linters)$/.test(normalized)) return 'lint';
+  return normalized;
+}
+
+function contradictionCapabilityTokens(text) {
+  if (typeof text !== 'string') return [];
+  const normalizedText = text
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .toLowerCase();
+  const tokens = normalizedText.match(/[a-z][a-z0-9-]{2,}/g) ?? [];
+  return [...new Set(tokens
+    .flatMap((token) => token.split('-'))
+    .map(normalizedContradictionCapabilityToken)
+    .filter((token) => CONTRADICTION_CAPABILITY_TOKENS.has(token)))];
 }
 
 export function isSupersedingDecision(decision) {
@@ -221,11 +295,36 @@ function sharedCapabilities(left, right) {
   return capabilityTokens(left).filter((token) => rightTokens.has(token));
 }
 
-function isQualifiedNonConflict(restrictiveText, positiveText) {
-  return (
-    /\bprovider[- ]specific\b/i.test(restrictiveText)
-    && /\bprovider[- ]neutral\b/i.test(positiveText)
-  ) || /\b(?:except|excluding|other\s+than|beyond)\b/i.test(restrictiveText);
+function sharedContradictionCapabilities(left, right) {
+  const rightTokens = new Set(contradictionCapabilityTokens(right));
+  return contradictionCapabilityTokens(left).filter((token) => rightTokens.has(token));
+}
+
+function capabilityQualifierDimensions(text, capability) {
+  const dimensions = new Map();
+  for (const rule of CAPABILITY_QUALIFIER_RULES) {
+    if (rule.capabilities && !rule.capabilities.has(capability)) continue;
+    if (!rule.pattern.test(text)) continue;
+    const values = dimensions.get(rule.dimension) ?? new Set();
+    values.add(rule.value);
+    dimensions.set(rule.dimension, values);
+  }
+  return dimensions;
+}
+
+function isQualifiedNonConflict(restrictiveText, positiveText, capability) {
+  if (/\b(?:except|excluding|other\s+than|beyond)\b/i.test(restrictiveText)) {
+    return true;
+  }
+  const restrictiveDimensions = capabilityQualifierDimensions(restrictiveText, capability);
+  if (!restrictiveDimensions.size) return false;
+  const positiveDimensions = capabilityQualifierDimensions(positiveText, capability);
+  for (const [dimension, restrictiveValues] of restrictiveDimensions) {
+    const positiveValues = positiveDimensions.get(dimension);
+    if (!positiveValues) return true;
+    if (![...restrictiveValues].some((value) => positiveValues.has(value))) return true;
+  }
+  return false;
 }
 
 function inferredSupersessionCandidates(baselineSpec, decision) {
@@ -366,20 +465,19 @@ export function baselineSupersessionViolations(baselineSpec, intake, currentSpec
 }
 
 export function findSpecCapabilityContradictions(spec) {
-  const restrictiveEntries = RESTRICTIVE_SPEC_FIELD_REFS
+  const restrictiveEntries = CONTRADICTION_RESTRICTIVE_FIELD_REFS
     .flatMap((fieldRef) => stringEntriesForField(spec, fieldRef))
     .filter(isRestrictiveEntry);
-  const positiveEntries = POSITIVE_SPEC_FIELD_REFS
+  const positiveEntries = CONTRADICTION_POSITIVE_FIELD_REFS
     .flatMap((fieldRef) => stringEntriesForField(spec, fieldRef))
     .filter((entry) => !isRestrictiveEntry(entry));
   const contradictions = [];
   const seen = new Set();
   for (const restrictive of restrictiveEntries) {
     for (const positive of positiveEntries) {
-      if (isQualifiedNonConflict(restrictive.text, positive.text)) continue;
-      const shared = sharedCapabilities(restrictive.text, positive.text)
-        .filter((capability) => CONTRADICTION_CAPABILITY_TOKENS.has(capability));
+      const shared = sharedContradictionCapabilities(restrictive.text, positive.text);
       for (const capability of shared) {
+        if (isQualifiedNonConflict(restrictive.text, positive.text, capability)) continue;
         const key = `${capability}\n${restrictive.fieldRef}\n${restrictive.index}\n${positive.fieldRef}\n${positive.index}`;
         if (seen.has(key)) continue;
         seen.add(key);

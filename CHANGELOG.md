@@ -6,6 +6,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+### Fixed
+
+- Avoid false capability contradictions when a spec includes a capability while excluding only a qualified scope, surface, or mode such as cross-project use, CLI fallback, query save mode, eval history recording, or retrieval orchestration.
+
 ## [0.5.2] - 2026-08-19
 
 ### Fixed
