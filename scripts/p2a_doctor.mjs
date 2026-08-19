@@ -1,7 +1,14 @@
 #!/usr/bin/env node
 /** Diagnose a Plan2Agent project through the p2a package CLI. */
 
-import { existsSync, lstatSync, readFileSync, readdirSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import {
+  existsSync,
+  lstatSync,
+  readFileSync,
+  readdirSync,
+  realpathSync,
+} from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -71,6 +78,7 @@ const PROPOSAL_SCHEMA_FILES = [
 ];
 const ORCHESTRATION_SCHEMA_FILES = [
 ];
+const MANAGED_FILE_SHA256_PATTERN = /^[a-f0-9]{64}$/;
 function usage() {
   return [
     'Usage:',
@@ -81,7 +89,7 @@ function usage() {
     '  --target <dir>  Project directory to inspect. Default: current working directory.',
     '  --json          Print machine-readable JSON.',
     '  --strict        Exit non-zero when warnings are present.',
-    '  --dev           Include development skill/config/provider asset checks.',
+    '  --dev           Include development/provider and managed-file integrity checks.',
     '  --context       Audit canonical provider/stage context routes without requiring a project harness.',
     '  --skill <id>    Resolve one assembled context scenario for this skill; requires --stage.',
     '  --stage <id>    Resolve one assembled context scenario for this stage; requires --skill.',
@@ -238,6 +246,222 @@ function readOptionalJsonObject(filePath) {
 
 function check(id, label, status, detail, fields = {}) {
   return { id, label, status, detail, ...fields };
+}
+
+function pathIsAtOrUnder(rootPath, candidatePath) {
+  const relativePath = path.relative(rootPath, candidatePath);
+  return relativePath === '' || Boolean(
+    relativePath
+    && relativePath !== '..'
+    && !relativePath.startsWith(`..${path.sep}`)
+    && !path.isAbsolute(relativePath)
+  );
+}
+
+function normalizeManagedPath(value) {
+  if (typeof value !== 'string' || !value.trim() || value.includes('\0')) {
+    return { ok: false, path: value ?? null, reason: 'path must be a non-empty string without null bytes' };
+  }
+  const portablePath = value.replaceAll('\\', '/');
+  const windowsRoot = path.win32.parse(value).root;
+  if (path.posix.isAbsolute(portablePath) || windowsRoot) {
+    return { ok: false, path: portablePath, reason: 'absolute paths are not allowed' };
+  }
+  const normalizedPath = path.posix.normalize(portablePath);
+  if (
+    normalizedPath === '.'
+    || normalizedPath === '..'
+    || normalizedPath.startsWith('../')
+  ) {
+    return { ok: false, path: normalizedPath, reason: 'path must stay inside the target root' };
+  }
+  return { ok: true, path: normalizedPath, segments: normalizedPath.split('/') };
+}
+
+function managedFileIssue(index, managedPath, kind, detail, fields = {}) {
+  return {
+    index,
+    path: typeof managedPath === 'string' && managedPath ? managedPath : `<record ${index}>`,
+    kind,
+    detail,
+    ...fields,
+  };
+}
+
+function managedFilesIntegrityCheck(targetRoot, manifest) {
+  const records = manifest?.managedFiles;
+  if (!Array.isArray(records)) {
+    return check(
+      'dev_manifest_managed_files_integrity',
+      'Manifest managed file integrity',
+      'fail',
+      'manifest.managedFiles must be an array before managed assets can be trusted',
+      { total: 0, checked: 0, issues: [] },
+    );
+  }
+
+  const targetPath = path.resolve(targetRoot);
+  let targetRealPath;
+  try {
+    targetRealPath = realpathSync(targetPath);
+  } catch (error) {
+    return check(
+      'dev_manifest_managed_files_integrity',
+      'Manifest managed file integrity',
+      'fail',
+      `target root cannot be resolved for managed file validation: ${error.message}`,
+      { total: records.length, checked: 0, issues: [] },
+    );
+  }
+
+  const issues = [];
+  const recordedPaths = new Set();
+  let checked = 0;
+  for (const [index, record] of records.entries()) {
+    if (!record || typeof record !== 'object' || Array.isArray(record)) {
+      issues.push(managedFileIssue(
+        index,
+        null,
+        'invalid_record',
+        'managed file record must be an object',
+      ));
+      continue;
+    }
+
+    const managedPath = normalizeManagedPath(record.path);
+    if (!managedPath.ok) {
+      issues.push(managedFileIssue(
+        index,
+        managedPath.path,
+        'unsafe_path',
+        managedPath.reason,
+      ));
+      continue;
+    }
+    if (recordedPaths.has(managedPath.path)) {
+      issues.push(managedFileIssue(
+        index,
+        managedPath.path,
+        'duplicate_path',
+        'managed file path is recorded more than once',
+      ));
+      continue;
+    }
+    recordedPaths.add(managedPath.path);
+
+    const expectedSha256 = typeof record.sha256 === 'string' ? record.sha256 : null;
+    if (!expectedSha256 || !MANAGED_FILE_SHA256_PATTERN.test(expectedSha256)) {
+      issues.push(managedFileIssue(
+        index,
+        managedPath.path,
+        'invalid_digest',
+        'recorded sha256 must be a lowercase SHA-256 value',
+        { expectedSha256 },
+      ));
+      continue;
+    }
+
+    const filePath = path.resolve(targetPath, ...managedPath.segments);
+    if (!pathIsAtOrUnder(targetPath, filePath)) {
+      issues.push(managedFileIssue(
+        index,
+        managedPath.path,
+        'unsafe_path',
+        'resolved path escapes the target root',
+      ));
+      continue;
+    }
+
+    let fileStat;
+    try {
+      fileStat = lstatSync(filePath);
+    } catch {
+      issues.push(managedFileIssue(
+        index,
+        managedPath.path,
+        'missing',
+        'managed file is missing',
+        { expectedSha256 },
+      ));
+      continue;
+    }
+    if (fileStat.isSymbolicLink()) {
+      issues.push(managedFileIssue(
+        index,
+        managedPath.path,
+        'symbolic_link',
+        'managed file must not be a symbolic link',
+        { expectedSha256 },
+      ));
+      continue;
+    }
+    if (!fileStat.isFile()) {
+      issues.push(managedFileIssue(
+        index,
+        managedPath.path,
+        'file_type',
+        'managed path must be a regular file',
+        { expectedSha256 },
+      ));
+      continue;
+    }
+
+    try {
+      const actualRealPath = realpathSync(filePath);
+      const expectedRealPath = path.resolve(targetRealPath, ...managedPath.segments);
+      if (
+        !pathIsAtOrUnder(targetRealPath, actualRealPath)
+        || actualRealPath !== expectedRealPath
+      ) {
+        issues.push(managedFileIssue(
+          index,
+          managedPath.path,
+          'symbolic_link',
+          'managed file path must not traverse a symbolic link',
+          { expectedSha256 },
+        ));
+        continue;
+      }
+      const actualSha256 = createHash('sha256')
+        .update(readFileSync(filePath))
+        .digest('hex');
+      checked += 1;
+      if (actualSha256 !== expectedSha256) {
+        issues.push(managedFileIssue(
+          index,
+          managedPath.path,
+          'hash_mismatch',
+          'managed file SHA-256 does not match the manifest',
+          { expectedSha256, actualSha256 },
+        ));
+      }
+    } catch (error) {
+      issues.push(managedFileIssue(
+        index,
+        managedPath.path,
+        'unreadable',
+        `managed file could not be inspected: ${error.message}`,
+        { expectedSha256 },
+      ));
+    }
+  }
+
+  if (issues.length) {
+    return check(
+      'dev_manifest_managed_files_integrity',
+      'Manifest managed file integrity',
+      'fail',
+      `${issues.length} managed file integrity issue(s) found across ${records.length} record(s)`,
+      { total: records.length, checked, issues },
+    );
+  }
+  return check(
+    'dev_manifest_managed_files_integrity',
+    'Manifest managed file integrity',
+    'pass',
+    `${checked} managed file(s) match their recorded SHA-256 digests`,
+    { total: records.length, checked, issues: [] },
+  );
 }
 
 function packageIdentity(name, version) {
@@ -884,6 +1108,7 @@ function buildDevReport(targetRoot, manifest, configResult) {
   const checks = [];
   checks.push(...devProviderAssetChecks(targetRoot, targets));
   checks.push(...capabilityReport.checks);
+  checks.push(managedFilesIntegrityCheck(targetRoot, manifest));
 
   const manifestAiToolFiles = stringArrayValue(manifest?.aiToolFiles).map(normalizePath);
   if (manifestAiToolFiles.length) {
@@ -1182,6 +1407,13 @@ function printHuman(report) {
     }
     if (Array.isArray(item.extra) && item.extra.length) {
       for (const extra of item.extra) console.log(`  extra: ${extra}`);
+    }
+    if (Array.isArray(item.issues) && item.issues.length) {
+      for (const issue of item.issues) {
+        console.log(`  ${issue.kind}: ${issue.path} (${issue.detail})`);
+        if (issue.expectedSha256) console.log(`    expected: ${issue.expectedSha256}`);
+        if (issue.actualSha256) console.log(`    actual: ${issue.actualSha256}`);
+      }
     }
     if (item.id === 'runtime_package_version') {
       console.log(`  manifest: ${packageIdentity(item.manifestPackageName, item.manifestPackageVersion)}`);

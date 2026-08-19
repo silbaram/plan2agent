@@ -9,6 +9,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 ### Fixed
 
 - Route newly opened baseline-backed iterations into Gate A when a valid entry is supplied, return deterministic missing or invalid entry actions otherwise, and preserve documented `gate_a_interview` resume compatibility.
+- Make `p2a doctor --dev` verify every manifest-managed file's confined regular-file path and exact SHA-256 digest, including explicit failures for missing files, symlink substitution, and path traversal.
 
 ## [0.5.0] - 2026-08-17
 

@@ -763,6 +763,7 @@ function validateScaffoldFixtureCase() {
       || devDoctorReport.summary.failures !== 0
       || devDoctorReport.dev?.aiToolTargets?.join(',') !== 'codex,claude,gemini'
       || devDoctorReport.dev?.checks?.some((check) => check.status !== 'pass')
+      || devDoctorReport.checks.find((check) => check.id === 'dev_manifest_managed_files_integrity')?.status !== 'pass'
       || devDoctorReport.checks.find((check) => check.id === 'dev_manifest_ai_tool_files')?.status !== 'pass'
       || devDoctorReport.checks.find((check) => check.id === 'dev_claude_confinement')?.status !== 'pass'
     ) {
@@ -961,6 +962,24 @@ function validateScaffoldFixtureCase() {
       console.error('enhance dev-skills conflict fixture did not require --overwrite');
       writeResultOutput(result);
       return { status: 1, checks };
+    }
+    result = runHandoff([
+      'enhance',
+      'dev-skills',
+      '--target',
+      enhanceTargetRoot,
+      '--tools',
+      'codex',
+      '--overwrite',
+    ]);
+    checks += 1;
+    if (
+      result.status !== 0
+      || !result.stdout.includes('enhance dev-skills complete')
+    ) {
+      console.error('enhance dev-skills conflict fixture did not recover with --overwrite');
+      writeResultOutput(result);
+      return { status: failureStatus(result), checks };
     }
 
     result = runHandoff(['enhance', 'memory', '--target', enhanceTargetRoot, '--dry-run']);
