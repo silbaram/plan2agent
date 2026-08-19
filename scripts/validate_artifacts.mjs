@@ -29,10 +29,15 @@ import {
   taskGraphRefMatchesGraph,
 } from './p2a_run_paths.mjs';
 import {
+  baselineSupersessionViolations,
   compositionReplayContractError,
   compositionSourceContractError,
   composeCanonicalSpecSources,
+  decisionAffectedSpecRefs,
+  findSpecCapabilityContradictions,
   isComposedBaselineReference,
+  isSupersedingDecision,
+  supersedingDecisionResolution,
 } from './p2a_spec_model.mjs';
 import { inspectEntryDocument } from './p2a_radar_preflight.mjs';
 import {
@@ -1250,11 +1255,30 @@ function validateBaselineContext(
     }
     const sourceDecision = sourceIntake.needs_user_decision
       .find((decision) => decision.id === item.id);
+    const sourceResolution = isSupersedingDecision(sourceDecision)
+      ? supersedingDecisionResolution(sourceDecision)
+      : sourceDecision?.answer;
     if (
       !sourceDecision
       || sourceDecision.status !== 'answered'
       || sourceDecision.question !== item.question
-      || sourceDecision.answer !== item.answer
+      || sourceResolution !== item.answer
+      || (
+        item.disposition !== undefined
+        && item.disposition !== sourceDecision.disposition
+      )
+      || (
+        item.current_resolution !== undefined
+        && item.current_resolution !== sourceDecision.current_resolution
+      )
+      || (
+        item.affected_fields !== undefined
+        && !sameJson(item.affected_fields, decisionAffectedSpecRefs(sourceDecision))
+      )
+      || (
+        item.supersedes !== undefined
+        && !sameJson(item.supersedes, sourceDecision.supersedes)
+      )
     ) {
       throw new ValidationError(
         `${label} does not contain matching answered decision ${item.id}`,
@@ -1310,6 +1334,7 @@ export function validateIntake(filePath, options = {}) {
     throw new ValidationError('intake.needs_user_decision id values must be unique');
   }
   const unresolvedDecisions = [];
+  const supersedingDecisionIds = [];
   for (const decision of data.needs_user_decision) {
     const optionIds = decision.options.map((option) => option.id);
     if (optionIds.length !== new Set(optionIds).size) {
@@ -1326,18 +1351,81 @@ export function validateIntake(filePath, options = {}) {
       typeof decision.answer === 'string'
       && decision.answer.trim().length > 0
     );
+    const hasSupersessionPrefix = (
+      typeof decision.disposition === 'string'
+      && decision.disposition.startsWith('superseded_by_')
+    );
+    if (hasSupersessionPrefix && !isSupersedingDecision(decision)) {
+      throw new ValidationError(
+        `${decision.id}.disposition must match superseded_by_<scope-id>`,
+      );
+    }
+    if (Array.isArray(decision.supersedes) && !isSupersedingDecision(decision)) {
+      throw new ValidationError(
+        `${decision.id}.supersedes is only allowed with a superseded_by_<scope-id> disposition`,
+      );
+    }
+    if (isSupersedingDecision(decision)) {
+      supersedingDecisionIds.push(decision.id);
+      if (decision.status !== 'answered') {
+        throw new ValidationError(
+          `${decision.id} baseline supersession must have status answered`,
+        );
+      }
+      if (
+        typeof decision.current_resolution !== 'string'
+        || !decision.current_resolution.trim()
+      ) {
+        throw new ValidationError(
+          `${decision.id} baseline supersession requires a non-blank current_resolution`,
+        );
+      }
+      const declaredRefs = Array.isArray(decision.affected_fields) && decision.affected_fields.length
+        ? decision.affected_fields
+        : decision.blocks;
+      const validRefs = decisionAffectedSpecRefs(decision);
+      if (
+        Array.isArray(declaredRefs)
+        && declaredRefs.some((reference) => !validRefs.includes(reference))
+      ) {
+        throw new ValidationError(
+          `${decision.id} baseline supersession affected_fields/blocks must contain only spec.product.* or spec.implementation.* references`,
+        );
+      }
+      const targetKeys = (decision.supersedes ?? [])
+        .map((target) => `${target.field_ref}\n${target.baseline_value}`);
+      if (targetKeys.length !== new Set(targetKeys).size) {
+        throw new ValidationError(
+          `${decision.id}.supersedes field_ref/baseline_value targets must be unique`,
+        );
+      }
+      const targetOutsideAffectedFields = (decision.supersedes ?? [])
+        .filter((target) => validRefs.length > 0 && !validRefs.includes(target.field_ref));
+      if (targetOutsideAffectedFields.length) {
+        throw new ValidationError(
+          `${decision.id}.supersedes targets must belong to affected_fields/blocks: ${JSON.stringify(targetOutsideAffectedFields.map((target) => target.field_ref))}`,
+        );
+      }
+    }
     if (
       decision.status === 'answered'
       && !hasNonBlankAnswer
+      && !supersedingDecisionResolution(decision)
     ) {
       throw new ValidationError(`${decision.id} is answered but has no non-blank answer`);
     }
     if (
       (decision.status === 'open' || decision.status === 'deferred')
-      && hasAnswer
+      && (hasAnswer || Object.hasOwn(decision, 'current_resolution'))
     ) {
-      throw new ValidationError(`${decision.id} is unresolved but has an answer`);
+      throw new ValidationError(`${decision.id} is unresolved but has an answer or current_resolution`);
     }
+  }
+
+  if (supersedingDecisionIds.length && !data.baseline_context) {
+    throw new ValidationError(
+      `baseline supersession decisions require intake.baseline_context: ${JSON.stringify(supersedingDecisionIds)}`,
+    );
   }
 
   validateBaselineContext(
@@ -1452,6 +1540,42 @@ export function validateSpec(filePath, intakePath = null, options = {}) {
   validateTechnologyReconnaissanceEvidence(data);
   validateReferenceReconnaissance(data);
   validateClarifyingQuestionDisposition(data, intake);
+  if (intake?.baseline_context && artifactRoot) {
+    const supersedingDecisions = intake.needs_user_decision.filter(isSupersedingDecision);
+    if (supersedingDecisions.length) {
+      const baselineSpecPath = path.resolve(artifactRoot, intake.baseline_context.spec_ref);
+      const violations = baselineSupersessionViolations(
+        loadJson(baselineSpecPath),
+        intake,
+        data,
+      );
+      if (violations.length) {
+        const violation = violations[0];
+        if (violation.kind === 'unresolved') {
+          const detail = violation.invalidTargets?.length
+            ? `invalid exact targets ${JSON.stringify(violation.invalidTargets)}`
+            : `no restrictive baseline item matched capabilities ${JSON.stringify(violation.capabilities)}`;
+          throw new ValidationError(
+            `spec baseline supersession ${violation.decisionId} (${violation.disposition}) cannot be applied to ${intake.baseline_context.spec_ref}: `
+            + detail,
+          );
+        }
+        throw new ValidationError(
+          `spec baseline supersession ${violation.decisionId} is not applied: ${violation.fieldRef} still retains `
+          + `${JSON.stringify(violation.baselineText)} from ${intake.baseline_context.spec_ref}`,
+        );
+      }
+    }
+  }
+  const semanticContradictions = findSpecCapabilityContradictions(data);
+  if (semanticContradictions.length) {
+    const contradiction = semanticContradictions[0];
+    throw new ValidationError(
+      `spec semantic contradiction for capability ${JSON.stringify(contradiction.capability)}: `
+      + `${contradiction.positive.fieldRef}[${contradiction.positive.index}] includes it while `
+      + `${contradiction.restrictive.fieldRef}[${contradiction.restrictive.index}] restricts it`,
+    );
+  }
   if (data.approval === 'approved' && data.open_decisions.length) {
     throw new ValidationError('approved specs must not contain open_decisions');
   }

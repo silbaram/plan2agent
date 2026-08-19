@@ -349,7 +349,7 @@ p2a iteration draft \
 
 초기 Gate A-only 반복에서는 `baseline_effective_spec_ref`가 없어도 기존 `gate-a-intake/intake.json`을 사용해 Gate B 초안을 생성한다. 이 경우 기존 intake 파일은 유지하고 Gate B 산출물만 쓴다.
 
-baseline-aware Gate A는 기존 source intake/spec에서 답변된 `ND-n`과 `CQ-n` disposition을 `baseline_context`에 provenance와 함께 보존한다. harness는 관련 답변을 재사용하고 변경되거나 충돌하는 영역만 intake decision 목록에 기록한다. 사용자가 Gate A 이해 요약을 명시적으로 확인하면 `p2a decide`가 `status: "ready_for_spec"`, `approval_audit` 사본과 원장 결정을 함께 기록한다. 같은 harness session에서 `draft`를 이어 호출하면 그때 Gate B 초안과 delta-first Markdown view를 생성한다.
+baseline-aware Gate A는 기존 source intake/spec에서 답변된 `ND-n`과 `CQ-n` disposition을 `baseline_context`에 provenance와 함께 보존한다. harness는 관련 답변을 재사용하고 변경되거나 충돌하는 영역만 intake decision 목록에 기록한다. 기존 범위를 대체하는 answered `ND-n`은 `disposition: "superseded_by_<scope-id>"`, non-blank `current_resolution`, optional `affected_fields`를 기록한다. 자동 합성을 허용하려면 `supersedes[]`에 exact `field_ref`/`baseline_value` target도 기록한다. `draft`는 exact target인 baseline non-goal/constraint/interface 항목을 먼저 제거한 뒤 현재 scope를 반영한다. target이 없거나 baseline과 일치하지 않으면 baseline ref, affected field, 충돌 후보를 표시하고 Gate B 생성을 차단한다. 사용자가 Gate A 이해 요약을 명시적으로 확인하면 `p2a decide`가 `status: "ready_for_spec"`, `approval_audit` 사본과 원장 결정을 함께 기록한다. 같은 harness session에서 `draft`를 이어 호출하면 그때 Gate B 초안과 delta-first Markdown view를 생성한다.
 
 생성 산출물과 선택적 view:
 

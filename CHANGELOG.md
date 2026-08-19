@@ -6,6 +6,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+### Fixed
+
+- Apply answered baseline `superseded_by_*` decisions before Gate B delta synthesis, block ambiguous supersession merges with baseline/field context, and reject same-capability include/exclude contradictions during spec validation.
+
 ## [0.5.1] - 2026-08-19
 
 ### Fixed

@@ -69,6 +69,7 @@ import {
 } from './p2a_radar_preflight.mjs';
 import {
   appendUnique,
+  applyBaselineSupersessions,
   asStringArray,
   buildInitialCanonicalSections,
   canonicalComposedBaselineSnapshotRef,
@@ -77,8 +78,11 @@ import {
   composeCanonicalSpecSources,
   IMPLEMENTATION_FIELDS,
   isComposedBaselineReference,
+  isSupersedingDecision,
   jsonEqual,
   PRODUCT_FIELDS,
+  decisionAffectedSpecRefs,
+  supersedingDecisionResolution,
 } from './p2a_spec_model.mjs';
 import { assertFinalVisualReviewRunReady } from './p2a_visual_review_gate.mjs';
 import { assertFinalAcceptanceReviewRunReady } from './p2a_acceptance_review_gate.mjs';
@@ -1304,12 +1308,23 @@ function loadBaselineContext(baselineSpecPath, artifactRoot, baselineSpecRef) {
       const intake = validateIntake(intakePath, { artifactRoot });
       const intakeRef = artifactRelativePath(artifactRoot, intakePath);
       for (const decision of intake.needs_user_decision ?? []) {
-        if (decision.status !== 'answered' || !decision.answer) continue;
+        const resolution = isSupersedingDecision(decision)
+          ? supersedingDecisionResolution(decision)
+          : decision.answer;
+        if (decision.status !== 'answered' || !resolution) continue;
         reusedAnswers.push({
           id: decision.id,
           question: decision.question,
-          answer: decision.answer,
+          answer: resolution,
           source_intake: intakeRef,
+          ...(isSupersedingDecision(decision) ? {
+            disposition: decision.disposition,
+            current_resolution: decision.current_resolution,
+            affected_fields: decisionAffectedSpecRefs(decision),
+            ...(Array.isArray(decision.supersedes) ? {
+              supersedes: cloneJson(decision.supersedes),
+            } : {}),
+          } : {}),
         });
       }
     }
@@ -1622,9 +1637,16 @@ function applyConfirmedIntakeToSpec(spec, intake) {
     for (const fieldRef of refs) appendSpecContribution(next, fieldRef, contribution);
   }
   for (const decision of intake.needs_user_decision ?? []) {
-    if (decision.status !== 'answered' || !decision.answer) continue;
-    const contribution = `Gate A ${decision.id} decision: ${decision.question} — ${decision.answer}`;
-    for (const fieldRef of decision.blocks ?? []) {
+    if (decision.status !== 'answered') continue;
+    const resolution = isSupersedingDecision(decision)
+      ? supersedingDecisionResolution(decision)
+      : decision.answer;
+    if (!resolution) continue;
+    const contribution = isSupersedingDecision(decision)
+      ? `Gate A ${decision.id} supersession (${decision.disposition}): ${resolution}`
+      : `Gate A ${decision.id} decision: ${decision.question} — ${resolution}`;
+    for (const fieldRef of decisionAffectedSpecRefs(decision)) {
+      if (isSupersedingDecision(decision) && fieldRef === 'spec.product.non_goals') continue;
       appendSpecContribution(next, fieldRef, contribution);
     }
   }
@@ -1657,9 +1679,23 @@ function inferredVisualExperience(idea, intake) {
       };
 }
 
-function buildDeltaSpec({ projectId, iterationId, idea, baselineSpec, baselineSpecRef, intake }) {
-  const product = baselineSpec.product;
-  const implementation = baselineSpec.implementation;
+export function buildDeltaSpec({ projectId, iterationId, idea, baselineSpec, baselineSpecRef, intake }) {
+  const baselineMerge = applyBaselineSupersessions(baselineSpec, intake);
+  if (baselineMerge.unresolved.length) {
+    const conflicts = baselineMerge.unresolved.map((plan) => {
+      const fields = plan.affectedFields.length ? plan.affectedFields.join(', ') : 'unspecified fields';
+      const candidates = plan.candidates.length
+        ? plan.candidates.map((candidate) => `${candidate.fieldRef}[${candidate.index}]`).join(', ')
+        : 'no matching restrictive baseline items';
+      return `${plan.decision.id} ${plan.decision.disposition} (${fields}; candidates: ${candidates})`;
+    });
+    throw new ValidationError(
+      `baseline supersession merge is unresolved against ${baselineSpecRef}: ${conflicts.join('; ')}. `
+      + 'Keep Gate B blocked and record exact supersedes[].field_ref/baseline_value targets before automatic synthesis.',
+    );
+  }
+  const product = baselineMerge.product;
+  const implementation = baselineMerge.implementation;
   const baselineWebEvidence = Array.isArray(baselineSpec.evidence)
     ? baselineSpec.evidence
         .filter((item) => typeof item?.source_id === 'string' && item.source_id.startsWith('WEB-'))

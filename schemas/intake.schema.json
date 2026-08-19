@@ -87,9 +87,37 @@
             "type": "array",
             "items": { "type": "string" }
           },
+          "affected_fields": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^spec\\.(product|implementation)\\.[a-z_]+$"
+            }
+          },
           "default": { "type": "string", "minLength": 1 },
           "status": { "type": "string", "enum": ["open", "answered", "deferred"] },
-          "answer": { "type": "string" }
+          "answer": { "type": "string" },
+          "disposition": {
+            "type": "string",
+            "minLength": 1
+          },
+          "current_resolution": { "type": "string", "minLength": 1 },
+          "supersedes": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "required": ["field_ref", "baseline_value"],
+              "additionalProperties": false,
+              "properties": {
+                "field_ref": {
+                  "type": "string",
+                  "pattern": "^spec\\.(product|implementation)\\.[a-z_]+$"
+                },
+                "baseline_value": { "type": "string", "minLength": 1 }
+              }
+            }
+          }
         }
       }
     },

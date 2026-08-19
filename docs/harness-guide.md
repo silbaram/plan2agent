@@ -188,7 +188,7 @@ Gate A 확인도 같은 명령과 audit shape를 사용한다. `intake_json.appr
 | `known_facts` | 사용자가 직접 말했거나 입력에서 확정된 사실 목록이다. |
 | `assumptions` | `A-1` 형식 id, 진술, 위험도(`low`/`medium`/`high`), 확인 필요 여부를 담는다. |
 | `clarifying_questions` | `CQ-1` 형식 id, 질문, 중요한 이유, 잠재 downstream 영향(`blocks`), optional status와 answer를 담는다. `open` 항목은 Gate A 승인을 차단하고 resolved status는 non-blank answer를 요구한다. |
-| `needs_user_decision` | `ND-1` 형식 id, 질문, 최소 2개 option, impact, 잠재 canonical 영향의 `blocks`, default, status(`open`/`answered`/`deferred`), optional answer를 담는다. `open`과 `deferred`는 Gate A 승인을 차단한다. |
+| `needs_user_decision` | `ND-1` 형식 id, 질문, 최소 2개 option, impact, 잠재 canonical 영향의 `blocks` 또는 `affected_fields`, default, status(`open`/`answered`/`deferred`), optional answer를 담는다. Baseline 범위를 대체하는 answered decision은 `disposition: superseded_by_<scope-id>`와 non-blank `current_resolution`을 함께 기록하고, 자동 합성이 필요하면 exact `supersedes[].field_ref`/`baseline_value` target을 추가한다. `open`과 `deferred`는 Gate A 승인을 차단한다. |
 | `interview` | 이전 버전 intake를 읽기 위한 optional opaque compatibility object다. 새 하네스는 이 필드를 생성하거나 workflow 상태로 해석하지 않는다. |
 | `approval_audit` | `status: ready_for_spec`에 필요한 명시적 Gate A 범위 승인 기록이다. |
 | `baseline_context` | 반복 개발에서 immutable baseline `spec_ref`/`spec_sha256`과 이전 answered `ND-n`, `CQ-n` disposition을 source intake/spec provenance와 함께 보존한다. |
@@ -549,7 +549,9 @@ node scripts/sync_cli_assets.mjs
 | handoff readiness | `--require-handoff-ready`는 artifact root가 Gate A confirmed, Gate B approved, Gate C valid인지 확인한다. | `artifact root is not handoff-ready: ...` |
 | 미해결 결정 차단 | `needs_user_decision.status`가 `open` 또는 `deferred`이면 intake status는 `blocked_on_user`여야 한다. 모두 닫히면 `ready_for_spec`이어야 한다. | `intake.status must be ... when unresolved decisions are ...` |
 | Gate A scope readiness | `ready_for_spec`은 open CQ, open/deferred ND가 없어야 하며 `approval_audit`가 `gate-a-intake/intake.json`을 포함해야 한다. 레거시 `interview` object는 opaque compatibility content로만 허용한다. | `ready_for_spec intake contains unresolved items`, `ready_for_spec intake requires approval_audit` |
-| decision answer/status 일관성 | `answered` decision은 `answer`가 있어야 하고, `open`/`deferred` decision은 `answer`를 가지면 안 된다. `--intake-md`를 명시하면 generated `intake.md`의 명백한 answered-vs-open 불일치도 실패한다. | `ND-1 is answered but has no answer`, `ND-1 is unresolved but has an answer` |
+| decision answer/status 일관성 | `answered` decision은 `answer`가 있어야 한다. 단, baseline supersession은 answered 상태와 non-blank `current_resolution`이 필요하다. `open`/`deferred` decision은 `answer`나 `current_resolution`을 가지면 안 된다. `--intake-md`를 명시하면 generated `intake.md`의 명백한 answered-vs-open 불일치도 실패한다. | `ND-1 is answered but has no answer`, `ND-1 baseline supersession requires a non-blank current_resolution`, `ND-1 is unresolved but has an answer or current_resolution` |
+| baseline supersession 적용 | `superseded_by_*` decision은 immutable baseline에서 current resolution과 같은 capability를 제한하던 항목을 제거해야 한다. 안전한 match가 없거나 current spec이 원래 항목을 유지하면 Gate B 검증에 실패한다. | `baseline supersession merge is unresolved`, `spec baseline supersession ND-5 is not applied` |
+| spec capability 모순 | goals/flows/public interfaces/verification에 포함된 명시적 실행 capability(`compile`, `retrieval`, `search`, `query`, `lint`, `eval`)가 non-goals 또는 제한 문구에서 동시에 제외되면 실패한다. | `spec semantic contradiction for capability "compile"` |
 | CQ disposition 추적성 | `--spec`과 `--intake`를 함께 주면 모든 intake `CQ-n`이 `clarifying_question_disposition`에 정확히 한 번 있어야 한다. | `spec.clarifying_question_disposition is missing intake clarifying questions: ...` |
 | CQ disposition 상태별 필수값 | `answered`는 `resolved_by`, `assumed`는 `assumption`, `deferred_non_goal`은 `non_goal`, `promoted_to_decision`은 `promoted_decision_id`가 필요하며, 다른 status용 detail field를 섞으면 안 된다. | `CQ-1 disposition status answered requires resolved_by`, `CQ-1 disposition status answered does not allow fields: ...` |
 | spec/intake `open_decisions` 일치 | `--spec`과 `--intake`를 함께 주면 spec의 `open_decisions`가 intake의 unresolved `ND-n`과 CQ에서 승격된 unresolved `ND-n` 목록을 합친 값과 정확히 같아야 한다. | `spec.open_decisions must exactly match unresolved decisions: expected ..., got ...` |
@@ -568,6 +570,9 @@ node scripts/sync_cli_assets.mjs
 | `intake.status must be ...` | decision status와 top-level `status`가 맞지 않는다. | `open`/`deferred`가 하나라도 있으면 `blocked_on_user`, 모두 `answered`면 `ready_for_spec`로 맞춘다. |
 | `ND-1 is answered but has no answer` | decision을 `answered`로 표시했지만 실제 답변 문자열이 없다. | 사용자의 선택 또는 명시적 override를 `answer`에 적는다. |
 | `ND-1 is unresolved but has an answer` | `open`/`deferred` 상태인데 `answer`가 들어 있다. | 답변을 인정하려면 status를 `answered`로 바꾸고, 아직 미결이면 `answer`를 제거한다. |
+| `baseline supersession merge is unresolved` | `superseded_by_*` decision에 exact baseline target이 없거나 target이 immutable baseline과 일치하지 않는다. | `supersedes[]`에 제거할 `field_ref`와 exact `baseline_value`를 기록하고 Gate A 승인을 다시 확인한다. |
+| `spec baseline supersession ... is not applied` | superseded decision이 가리키는 기존 제한 항목이 Gate B spec에 그대로 남아 있다. | 해당 baseline 제한을 제거·교체해 full spec을 재합성하고 다시 검증한다. |
+| `spec semantic contradiction for capability ...` | 같은 capability가 목표·검증에는 포함되고 non-goal·제한에는 제외돼 있다. | 현재 승인 scope에 맞춰 include 또는 exclude 중 하나만 남기고 Gate B를 재검토한다. |
 | `spec.clarifying_question_disposition is missing intake clarifying questions` | intake의 `CQ-n`이 Gate B spec에서 처분되지 않았다. | 각 `CQ-n`을 `answered`, `assumed`, `deferred_non_goal`, `promoted_to_decision` 중 하나로 기록한다. |
 | `CQ-1 disposition status ... requires ...` | disposition status와 필요한 근거 필드가 맞지 않는다. | status별 필수 필드(`resolved_by`, `assumption`, `non_goal`, `promoted_decision_id`)를 채운다. |
 | `CQ-1 disposition status ... does not allow fields` | 한 disposition item에 다른 status용 detail field가 섞여 있다. | 현재 status에 맞는 detail field만 남긴다. `promoted_to_decision`만 `resolution`을 함께 가질 수 있다. |

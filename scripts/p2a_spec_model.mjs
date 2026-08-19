@@ -43,6 +43,353 @@ export function appendUnique(values, additions) {
   return next;
 }
 
+const SPEC_FIELD_REF_PATTERN = /^spec\.(product|implementation)\.([a-z_]+)$/;
+const SUPERSESSION_DISPOSITION_PATTERN = /^superseded_by_[a-z0-9][a-z0-9._-]*$/;
+const RESTRICTIVE_SPEC_FIELD_REFS = [
+  'spec.product.non_goals',
+  'spec.product.constraints',
+  'spec.implementation.architecture',
+  'spec.implementation.interfaces',
+];
+const POSITIVE_SPEC_FIELD_REFS = [
+  'spec.product.goals',
+  'spec.product.core_flows',
+  'spec.product.screens_or_interfaces',
+  'spec.product.external_integrations',
+  'spec.product.success_criteria',
+  'spec.implementation.architecture',
+  'spec.implementation.interfaces',
+  'spec.implementation.data_flow',
+  'spec.implementation.verification',
+];
+const CAPABILITY_STOP_WORDS = new Set([
+  'actual',
+  'adapter',
+  'adapters',
+  'approved',
+  'baseline',
+  'behavior',
+  'behaviour',
+  'capabilities',
+  'capability',
+  'context',
+  'contexts',
+  'current',
+  'feature',
+  'features',
+  'from',
+  'full',
+  'gate',
+  'implementation',
+  'implementations',
+  'implemented',
+  'implements',
+  'interface',
+  'interfaces',
+  'into',
+  'iteration',
+  'only',
+  'product',
+  'provider',
+  'providers',
+  'queue',
+  'queues',
+  'provide',
+  'provided',
+  'provides',
+  'providing',
+  'public',
+  'scope',
+  'scoped',
+  'service',
+  'services',
+  'support',
+  'supported',
+  'supporting',
+  'supports',
+  'system',
+  'systems',
+  'that',
+  'these',
+  'this',
+  'those',
+  'through',
+  'with',
+  'workflow',
+  'workflows',
+]);
+const CONTRADICTION_CAPABILITY_TOKENS = new Set([
+  'compile',
+  'eval',
+  'lint',
+  'query',
+  'retrieval',
+  'search',
+]);
+const RESTRICTIVE_TEXT_PATTERN = /(?:\b(?:defer(?:red|s|ring)?|disallow(?:ed|s)?|exclude(?:d|s)?|forbid(?:den|s)?|must\s+not|never|no|not|only|out\s+of\s+scope|unsupported|without)\b|범위\s*밖|비목표|미지원|지원하지|제외|금지|후속\s*(?:반복|iteration))/i;
+
+function normalizedCapabilityToken(token) {
+  const normalized = token.toLowerCase().replace(/^-+|-+$/g, '');
+  if (/^(?:compiler|compilers|compilation|compilations)$/.test(normalized)) return 'compile';
+  if (/^(?:retrieve|retriever|retrievers|retrieving)$/.test(normalized)) return 'retrieval';
+  if (/^(?:searches|searching|searched)$/.test(normalized)) return 'search';
+  if (/^(?:queries|querying|queried)$/.test(normalized)) return 'query';
+  if (/^(?:evaluate|evaluates|evaluated|evaluating|evaluation|evaluations)$/.test(normalized)) return 'eval';
+  if (/^(?:linted|linting|linter|linters)$/.test(normalized)) return 'lint';
+  if (normalized === 'statuses') return 'status';
+  if (normalized === 'contexts') return 'context';
+  return normalized;
+}
+
+export function capabilityTokens(text) {
+  if (typeof text !== 'string') return [];
+  const normalizedText = text
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .toLowerCase();
+  const tokens = normalizedText.match(/[a-z][a-z0-9-]{2,}/g) ?? [];
+  return [...new Set(tokens
+    .flatMap((token) => token.split('-'))
+    .map(normalizedCapabilityToken)
+    .filter((token) => token.length >= 4 && !CAPABILITY_STOP_WORDS.has(token)))];
+}
+
+export function isSupersedingDecision(decision) {
+  return (
+    typeof decision?.disposition === 'string'
+    && SUPERSESSION_DISPOSITION_PATTERN.test(decision.disposition)
+  );
+}
+
+export function supersedingDecisionResolution(decision) {
+  if (!isSupersedingDecision(decision)) return null;
+  if (typeof decision.current_resolution === 'string' && decision.current_resolution.trim()) {
+    return decision.current_resolution.trim();
+  }
+  return null;
+}
+
+export function decisionAffectedSpecRefs(decision) {
+  const preferred = Array.isArray(decision?.affected_fields) && decision.affected_fields.length
+    ? decision.affected_fields
+    : decision?.blocks;
+  return [...new Set((Array.isArray(preferred) ? preferred : [])
+    .filter((reference) => typeof reference === 'string' && SPEC_FIELD_REF_PATTERN.test(reference)))];
+}
+
+function canonicalSpecSections(spec) {
+  if (spec?.product && spec?.implementation) {
+    return { product: spec.product, implementation: spec.implementation };
+  }
+  if (spec?.effective_product && spec?.effective_implementation) {
+    return {
+      product: spec.effective_product,
+      implementation: spec.effective_implementation,
+    };
+  }
+  return null;
+}
+
+function specFieldValue(spec, fieldRef) {
+  const match = SPEC_FIELD_REF_PATTERN.exec(fieldRef);
+  const sections = canonicalSpecSections(spec);
+  if (!match || !sections) return undefined;
+  return sections[match[1]]?.[match[2]];
+}
+
+function stringEntriesForField(spec, fieldRef) {
+  const value = specFieldValue(spec, fieldRef);
+  if (Array.isArray(value)) {
+    return value
+      .map((text, index) => ({ fieldRef, index, text }))
+      .filter((entry) => typeof entry.text === 'string' && entry.text.trim());
+  }
+  if (typeof value === 'string' && value.trim()) {
+    return [{ fieldRef, index: null, text: value }];
+  }
+  return [];
+}
+
+function isRestrictiveEntry(entry) {
+  return (
+    entry.fieldRef === 'spec.product.non_goals'
+    || RESTRICTIVE_TEXT_PATTERN.test(entry.text)
+  );
+}
+
+function sharedCapabilities(left, right) {
+  const rightTokens = new Set(capabilityTokens(right));
+  return capabilityTokens(left).filter((token) => rightTokens.has(token));
+}
+
+function isQualifiedNonConflict(restrictiveText, positiveText) {
+  return (
+    /\bprovider[- ]specific\b/i.test(restrictiveText)
+    && /\bprovider[- ]neutral\b/i.test(positiveText)
+  ) || /\b(?:except|excluding|other\s+than|beyond)\b/i.test(restrictiveText);
+}
+
+function inferredSupersessionCandidates(baselineSpec, decision) {
+  const resolution = supersedingDecisionResolution(decision);
+  if (!resolution) return [];
+  const resolutionCapabilities = new Set(capabilityTokens(resolution));
+  if (!resolutionCapabilities.size) return [];
+  return RESTRICTIVE_SPEC_FIELD_REFS
+    .flatMap((fieldRef) => stringEntriesForField(baselineSpec, fieldRef))
+    .filter(isRestrictiveEntry)
+    .map((entry) => ({
+      ...entry,
+      capabilities: capabilityTokens(entry.text)
+        .filter((token) => resolutionCapabilities.has(token)),
+    }))
+    .filter((entry) => entry.capabilities.length > 0);
+}
+
+function declaredSupersessionTargets(decision) {
+  return (Array.isArray(decision?.supersedes) ? decision.supersedes : [])
+    .filter((target) => (
+      typeof target?.field_ref === 'string'
+      && SPEC_FIELD_REF_PATTERN.test(target.field_ref)
+      && typeof target?.baseline_value === 'string'
+      && target.baseline_value.trim()
+    ));
+}
+
+function explicitSupersessionCandidates(baselineSpec, decision) {
+  const targets = declaredSupersessionTargets(decision);
+  const candidates = [];
+  const invalidTargets = [];
+  for (const target of targets) {
+    const match = stringEntriesForField(baselineSpec, target.field_ref)
+      .find((entry) => entry.text === target.baseline_value && isRestrictiveEntry(entry));
+    if (!match) {
+      invalidTargets.push(target);
+      continue;
+    }
+    candidates.push({
+      ...match,
+      capabilities: sharedCapabilities(match.text, supersedingDecisionResolution(decision) ?? ''),
+    });
+  }
+  return { targets, candidates, invalidTargets };
+}
+
+export function planBaselineSupersessions(baselineSpec, intake) {
+  const decisions = (intake?.needs_user_decision ?? []).filter(isSupersedingDecision);
+  const plans = decisions.map((decision) => {
+    const explicit = explicitSupersessionCandidates(baselineSpec, decision);
+    const hasExplicitTargets = explicit.targets.length > 0;
+    return {
+      decision,
+      resolution: supersedingDecisionResolution(decision),
+      affectedFields: decisionAffectedSpecRefs(decision),
+      candidates: hasExplicitTargets
+        ? explicit.candidates
+        : inferredSupersessionCandidates(baselineSpec, decision),
+      hasExplicitTargets,
+      invalidTargets: explicit.invalidTargets,
+      requiresExplicitTargets: !hasExplicitTargets,
+    };
+  });
+  return {
+    plans,
+    unresolved: plans.filter((plan) => (
+      !plan.resolution
+      || plan.candidates.length === 0
+      || plan.invalidTargets.length > 0
+      || plan.requiresExplicitTargets
+    )),
+  };
+}
+
+export function applyBaselineSupersessions(baselineSpec, intake) {
+  const sections = canonicalSpecSections(baselineSpec);
+  if (!sections) {
+    return { product: null, implementation: null, plans: [], unresolved: [] };
+  }
+  const { plans, unresolved } = planBaselineSupersessions(baselineSpec, intake);
+  const product = cloneJson(sections.product);
+  const implementation = cloneJson(sections.implementation);
+  const removals = new Map();
+  const applicablePlans = plans.filter((plan) => (
+    plan.resolution
+    && plan.hasExplicitTargets
+    && plan.invalidTargets.length === 0
+    && plan.candidates.length > 0
+  ));
+  for (const plan of applicablePlans) {
+    for (const candidate of plan.candidates) {
+      const indexes = removals.get(candidate.fieldRef) ?? new Set();
+      indexes.add(candidate.index);
+      removals.set(candidate.fieldRef, indexes);
+    }
+  }
+  const next = { product, implementation };
+  for (const [fieldRef, indexes] of removals) {
+    const match = SPEC_FIELD_REF_PATTERN.exec(fieldRef);
+    const values = next[match[1]][match[2]];
+    next[match[1]][match[2]] = values.filter((_, index) => !indexes.has(index));
+  }
+  return { ...next, plans, unresolved };
+}
+
+export function baselineSupersessionViolations(baselineSpec, intake, currentSpec) {
+  const { plans } = planBaselineSupersessions(baselineSpec, intake);
+  const validationUnresolved = plans.filter((plan) => (
+    !plan.resolution
+    || plan.candidates.length === 0
+    || plan.invalidTargets.length > 0
+  ));
+  const violations = validationUnresolved.map((plan) => ({
+    kind: 'unresolved',
+    decisionId: plan.decision.id,
+    disposition: plan.decision.disposition,
+    affectedFields: plan.affectedFields,
+    capabilities: capabilityTokens(plan.resolution ?? ''),
+    invalidTargets: plan.invalidTargets,
+  }));
+  for (const plan of plans) {
+    for (const candidate of plan.candidates) {
+      const currentValue = specFieldValue(currentSpec, candidate.fieldRef);
+      if (Array.isArray(currentValue) && currentValue.includes(candidate.text)) {
+        violations.push({
+          kind: 'retained_baseline_item',
+          decisionId: plan.decision.id,
+          disposition: plan.decision.disposition,
+          fieldRef: candidate.fieldRef,
+          baselineText: candidate.text,
+          capabilities: candidate.capabilities,
+        });
+      }
+    }
+  }
+  return violations;
+}
+
+export function findSpecCapabilityContradictions(spec) {
+  const restrictiveEntries = RESTRICTIVE_SPEC_FIELD_REFS
+    .flatMap((fieldRef) => stringEntriesForField(spec, fieldRef))
+    .filter(isRestrictiveEntry);
+  const positiveEntries = POSITIVE_SPEC_FIELD_REFS
+    .flatMap((fieldRef) => stringEntriesForField(spec, fieldRef))
+    .filter((entry) => !isRestrictiveEntry(entry));
+  const contradictions = [];
+  const seen = new Set();
+  for (const restrictive of restrictiveEntries) {
+    for (const positive of positiveEntries) {
+      if (isQualifiedNonConflict(restrictive.text, positive.text)) continue;
+      const shared = sharedCapabilities(restrictive.text, positive.text)
+        .filter((capability) => CONTRADICTION_CAPABILITY_TOKENS.has(capability));
+      for (const capability of shared) {
+        const key = `${capability}\n${restrictive.fieldRef}\n${restrictive.index}\n${positive.fieldRef}\n${positive.index}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        contradictions.push({ capability, restrictive, positive });
+      }
+    }
+  }
+  return contradictions;
+}
+
 export function buildInitialCanonicalSections({ iterationId = 'v1-mvp', idea, intake }) {
   const facts = asStringArray(intake.known_facts);
   const assumptions = Array.isArray(intake.assumptions)

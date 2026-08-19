@@ -16,6 +16,7 @@ import './runtime-routing-performance.test.mjs';
 import './harness-update-style-contract.test.mjs';
 import './handoff-portability.test.mjs';
 import './iteration-memory-recall.test.mjs';
+import './spec-supersession.test.mjs';
 import './run-id-strategy.test.mjs';
 import './run-layout.test.mjs';
 import './monitor-telemetry.test.mjs';
