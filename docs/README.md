@@ -27,7 +27,7 @@ Plan2Agent 문서는 사용자 흐름, CLI 사용법, 산출물 계약, 구현 �
    전역 `p2a init`부터 첫 Gate 산출물 확인까지의 최단 경로.
 
 2. [Adaptive Harness 사용자 흐름](adaptive-harness-user-flow.md)
-   Gate 승인부터 Direct/Planned/Orchestrated 실행, 단계별 context routing과 종료까지 전체 사용자 여정을 한눈에 볼 때 본다.
+   Gate 승인부터 Direct/Planned/Orchestrated 실행, 단계별 context routing과 종료까지 전체 사용자 여정을 Mermaid 또는 터미널용 텍스트 흐름으로 볼 때 본다.
 
 3. [CLI 사용자 가이드](cli-reference.md)
    실제 명령과 옵션 예시. `p2a iteration`, `p2a tasks`, `p2a runs`, `p2a handoff`, 검증 명령을 실행할 때 본다.
@@ -76,7 +76,7 @@ Plan2Agent 문서는 사용자 흐름, CLI 사용법, 산출물 계약, 구현 �
 | 파일 | 역할 | 정본으로 삼는 범위 |
 | --- | --- | --- |
 | `quickstart.md` | 사용자용 퀵스타터 | 첫 성공까지의 최단 경로 |
-| `adaptive-harness-user-flow.md` | 사용자 여정 개요 | Gate 승인, adaptive mode 선택, 실행·검증·종료의 전체 흐름 |
+| `adaptive-harness-user-flow.md` | 사용자 여정 개요 | Gate 승인, adaptive mode 선택, 실행·검증·종료의 Mermaid와 터미널용 텍스트 흐름 |
 | `cli-reference.md` | 명령 실행 레퍼런스 | CLI usage와 대표 옵션 |
 | `harness-guide.md` | 산출물/게이트 사용자 가이드 | Gate A-C 요약, 결정 원장, schema, evidence, 검증 (`p2a-harness` skill의 게이트 규칙 정본 링크 포함) |
 | `entry-contract.md` | 아이디어 문서 진입 계약 | entry 발견 우선순위, 검증, Radar 출처, 범위 확인 대화 |
@@ -91,6 +91,7 @@ Plan2Agent 문서는 사용자 흐름, CLI 사용법, 산출물 계약, 구현 �
 
 - `quickstart.md`에는 첫 성공까지의 최소 경로만 둔다. 계약·옵션 설명은 넣지 않는다.
 - 사용자 관점의 전체 여정과 역할 구분은 `adaptive-harness-user-flow.md`에 두고, 정확한 명령·계약은 각 정본 문서로 연결한다.
+- 같은 사용자 흐름의 터미널 전용 변형을 별도 문서로 복제하지 않고 `adaptive-harness-user-flow.md`의 텍스트 대체 흐름으로 함께 유지한다.
 - 명령 예시는 `cli-reference.md`에 둔다.
 - schema, 결정 원장, gate 산출물 설명은 `harness-guide.md`에 두고, Gate A-C 상세 규칙 정본은 `.agents/skills/p2a-harness/SKILL.md`에 둔다.
 - 진입 문서의 발견·검증·Radar 출처·확인 대화 계약은 `entry-contract.md`에 둔다.

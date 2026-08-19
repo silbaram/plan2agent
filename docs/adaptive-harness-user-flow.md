@@ -71,6 +71,30 @@ flowchart TD
 - 보라색: 사용자의 명시적 승인이 필요한 Gate
 - 파란색·초록색: P2A와 실행 AI가 자동 처리하는 일
 
+### 터미널용 텍스트 흐름
+
+Mermaid를 렌더링하지 않는 터미널에서는 같은 흐름을 다음처럼 읽는다.
+정확한 승인 명령과 옵션은 아래 단계별 설명과
+[CLI 사용자 가이드](cli-reference.md)를 따른다.
+
+```text
+아이디어 문서
+  -> p2a next --entry docs/idea.md
+  -> 필요한 질문과 답변
+  -> Gate A 범위 승인       (p2a decide)
+  -> Gate ② 프로젝트 원칙 승인 (p2a shape approve)
+  -> Gate B 명세 승인       (p2a decide)
+  -> p2a next
+  -> 실행 AI가 Direct | Planned | Orchestrated 선택
+  -> Gate C 자동 준비·검증
+  -> 구현과 검증
+       |-- 일반 구현 문제: 수정 또는 retry 후 재검증
+       |-- 계약 변경 필요: Gate B로 돌아가 재승인
+       `-- 통과: 실행 증거 기록
+  -> 남은 작업 있음: p2a next
+  `-- 모두 완료: Iteration 검증·종료
+```
+
 ## 실행 방식 선택
 
 새 프로젝트의 기본 실행 정책은 `adaptive`다. Gate B가 승인되면 실행 AI가 승인된 명세와 저장소 상태를 확인하고 다음 세 방식 중 하나를 선택한다. 사용자는 이 선택이나 Gate C 준비를 별도로 승인하지 않는다.
