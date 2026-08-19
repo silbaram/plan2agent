@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import test from 'node:test';
@@ -6,6 +7,7 @@ import test from 'node:test';
 import { FIXTURE_ROOT, makeTempDir, runP2a } from './helpers/fixtures.mjs';
 import { validateSchema } from '../scripts/p2a_schema.mjs';
 import { NEXT_DECISION_RULES } from '../scripts/p2a.mjs';
+import { buildNext } from '../scripts/p2a_next_service.mjs';
 import {
   CONTINUATION_DEFINITIONS,
   continuationDescriptor,
@@ -154,6 +156,57 @@ function writeIteration(artifactRoot, projectId = 'sample', options = {}) {
   };
   writeJson(join(artifactRoot, 'current-spec.json'), currentSpec);
   return iterationId;
+}
+
+function writeBaselineBackedPlanningIteration(artifactRoot) {
+  const baselineIteration = 'v1-mvp';
+  const activeIteration = 'v2-baseline-backed';
+  const baselineSpecRef = `iterations/${baselineIteration}/gate-b-spec/spec.json`;
+  const baselineSpecPath = join(artifactRoot, baselineSpecRef);
+  const openedAt = '2026-08-19T00:00:00.000Z';
+  const idea = 'Build the next baseline-backed project capability.';
+  const baselineSpec = JSON.parse(readFileSync(
+    join(FIXTURE_ROOT, 'cache-library', 'spec.approved.json'),
+    'utf8',
+  ));
+  baselineSpec.project_id = 'sample';
+  writeJson(baselineSpecPath, baselineSpec);
+  const baselineSpecSha256 = createHash('sha256')
+    .update(readFileSync(baselineSpecPath))
+    .digest('hex');
+  const activeIterationRoot = join(artifactRoot, 'iterations', activeIteration);
+  mkdirSync(activeIterationRoot, { recursive: true });
+  writeJson(join(activeIterationRoot, 'iteration.json'), {
+    schema_version: 'p2a.iteration_metadata.v1',
+    project_id: 'sample',
+    iteration_id: activeIteration,
+    status: 'active_planning',
+    opened_at: openedAt,
+    idea,
+    baseline: {
+      iteration_id: baselineIteration,
+      current_spec_ref: 'current-spec.json',
+      effective_spec_ref: baselineSpecRef,
+      effective_spec_sha256: baselineSpecSha256,
+    },
+    planning_memory: null,
+  });
+  writeJson(join(artifactRoot, 'current-spec.json'), {
+    schema_version: 'p2a.current_spec.v1',
+    project_id: 'sample',
+    active_iteration: activeIteration,
+    effective_spec_ref: baselineSpecRef,
+    pending_iteration: {
+      iteration_id: activeIteration,
+      status: 'active_planning',
+      opened_at: openedAt,
+      idea,
+      baseline_iteration: baselineIteration,
+      baseline_effective_spec_ref: baselineSpecRef,
+      baseline_effective_spec_sha256: baselineSpecSha256,
+    },
+  });
+  return activeIteration;
 }
 
 function task(id, status, dependencies = []) {
@@ -575,6 +628,213 @@ test('next chooses one read-only action for every primary state', () => {
   }
 });
 
+test('next enters Gate A for baseline-backed Gate A entry states', () => {
+  const root = project();
+  try {
+    const rootArtifact = artifact(root);
+    const activeIteration = writeBaselineBackedPlanningIteration(rootArtifact);
+    const entryPath = join(root, 'idea.md');
+    writeFileSync(entryPath, 'Build the next baseline-backed project capability.\n', 'utf8');
+
+    const withEntry = buildNext(root, null, 'idea.md', 'v2');
+    assertAction(withEntry, 'gate_what', 'skill');
+    assert.equal(withEntry.command.skill, 'p2a-harness');
+    assert.deepEqual(withEntry.command.args, ['--entry', entryPath]);
+
+    const withoutEntry = buildNext(root, null, null, 'v2');
+    assertAction(withoutEntry, 'entry_missing', 'approval');
+    assert.match(withoutEntry.reason, new RegExp(activeIteration));
+    assert.match(withoutEntry.command.display, /p2a next --entry <path>/);
+
+    const invalidEntry = buildNext(root, null, 'missing.md', 'v2');
+    assertAction(invalidEntry, 'entry_invalid', 'approval');
+    assert.match(invalidEntry.command.display, /validate --entry .*missing\.md/);
+
+    const currentSpecPath = join(rootArtifact, 'current-spec.json');
+    const currentSpec = JSON.parse(readFileSync(currentSpecPath, 'utf8'));
+    currentSpec.pending_iteration.status = 'gate_a_interview';
+    writeJson(currentSpecPath, currentSpec);
+    const metadataPath = join(
+      rootArtifact,
+      'iterations',
+      activeIteration,
+      'iteration.json',
+    );
+    const metadata = JSON.parse(readFileSync(metadataPath, 'utf8'));
+    metadata.status = 'gate_a_interview';
+    writeJson(metadataPath, metadata);
+
+    const resumedInterview = buildNext(root, null, 'idea.md', 'v2');
+    assertAction(resumedInterview, 'gate_what', 'skill');
+    assert.equal(resumedInterview.command.skill, 'p2a-harness');
+
+    const interviewWithoutEntry = buildNext(root, null, null, 'v2');
+    assertAction(interviewWithoutEntry, 'entry_missing', 'approval');
+
+    writeJson(
+      join(rootArtifact, 'iterations', activeIteration, 'gate-b-spec', 'spec.json'),
+      { schema_version: 'p2a.spec.v1' },
+    );
+    const downstreamState = buildNext(root, null, 'idea.md', 'v2');
+    assertAction(downstreamState, 'invalid_gate_a', 'cli');
+  } finally {
+    remove(root);
+  }
+});
+
+test('next validates a planning baseline before entering Gate A', () => {
+  const root = project();
+  try {
+    const rootArtifact = artifact(root);
+    writeBaselineBackedPlanningIteration(rootArtifact);
+    const entryPath = join(root, 'idea.md');
+    writeFileSync(entryPath, 'Build the next baseline-backed project capability.\n', 'utf8');
+    writeJson(
+      join(rootArtifact, 'iterations', 'v1-mvp', 'gate-b-spec', 'spec.json'),
+      { schema_version: 'p2a.spec.v1', tampered: true },
+    );
+
+    const payload = buildNext(root, null, 'idea.md', 'v2');
+    assertAction(payload, 'invalid_iteration_state', 'cli', [
+      'iteration',
+      'validate',
+      '--artifacts',
+      rootArtifact,
+      '--allow-planning',
+    ]);
+    assert.match(payload.reason, /pending baseline hash does not match/);
+
+    const validation = runP2a(payload.command.argv);
+    assert.notEqual(validation.status, 0);
+    assert.match(
+      `${validation.stdout}${validation.stderr}`,
+      /pending baseline hash does not match/,
+    );
+  } finally {
+    remove(root);
+  }
+});
+
+test('next rejects invalid pending iteration identity before entering Gate A', () => {
+  const cases = [
+    {
+      mutate: (pending) => { pending.status = 'unexpected'; },
+      error: /pending_iteration\.status is not a planning status/,
+    },
+    {
+      mutate: (pending) => { pending.iteration_id = 'v9-other'; },
+      error: /pending_iteration\.iteration_id must match active_iteration/,
+    },
+  ];
+
+  for (const caseData of cases) {
+    const root = project();
+    try {
+      const rootArtifact = artifact(root);
+      writeBaselineBackedPlanningIteration(rootArtifact);
+      writeFileSync(
+        join(root, 'idea.md'),
+        'Build the next baseline-backed project capability.\n',
+        'utf8',
+      );
+      const currentSpecPath = join(rootArtifact, 'current-spec.json');
+      const currentSpec = JSON.parse(readFileSync(currentSpecPath, 'utf8'));
+      caseData.mutate(currentSpec.pending_iteration);
+      writeJson(currentSpecPath, currentSpec);
+
+      const payload = buildNext(root, null, 'idea.md', 'v2');
+      assertAction(payload, 'invalid_iteration_state', 'cli', [
+        'iteration',
+        'validate',
+        '--artifacts',
+        rootArtifact,
+        '--allow-planning',
+      ]);
+      assert.match(payload.reason, caseData.error);
+    } finally {
+      remove(root);
+    }
+  }
+});
+
+test('next preserves decision and run safety states before entering iteration Gate A', () => {
+  const invalidDecisionRoot = project();
+  const startedRunRoot = project();
+  try {
+    const invalidDecisionArtifact = artifact(invalidDecisionRoot);
+    writeBaselineBackedPlanningIteration(invalidDecisionArtifact);
+    writeFileSync(
+      join(invalidDecisionRoot, 'idea.md'),
+      'Build the next baseline-backed project capability.\n',
+      'utf8',
+    );
+    writeFileSync(
+      join(invalidDecisionArtifact, 'decisions.jsonl'),
+      '{ invalid decision ledger\n',
+      'utf8',
+    );
+    const invalidDecision = buildNext(
+      invalidDecisionRoot,
+      null,
+      'idea.md',
+      'v2',
+    );
+    assertAction(invalidDecision, 'invalid_decisions', 'cli', [
+      'validate',
+      '--decisions',
+      '--artifacts',
+      invalidDecisionArtifact,
+    ]);
+
+    const startedRunArtifact = artifact(startedRunRoot);
+    const activeIteration = writeBaselineBackedPlanningIteration(startedRunArtifact);
+    writeFileSync(
+      join(startedRunRoot, 'idea.md'),
+      'Build the next baseline-backed project capability.\n',
+      'utf8',
+    );
+    writeRuns(startedRunArtifact, [{
+      runId: 'run-before-gate-a',
+      iterationId: activeIteration,
+      status: 'started',
+    }]);
+    const startedRun = buildNext(startedRunRoot, null, 'idea.md', 'v2');
+    assertAction(startedRun, 'started_run_contract_drift', 'approval');
+  } finally {
+    remove(invalidDecisionRoot);
+    remove(startedRunRoot);
+  }
+});
+
+test('next preserves canonical root gate fallback before entering iteration Gate A', () => {
+  const root = project();
+  try {
+    const rootArtifact = artifact(root);
+    writeBaselineBackedPlanningIteration(rootArtifact);
+    writeFileSync(
+      join(root, 'idea.md'),
+      'Build the next baseline-backed project capability.\n',
+      'utf8',
+    );
+    writeJson(join(rootArtifact, 'gate-a-intake', 'intake.json'), {
+      schema_version: 'p2a.intake.v1',
+    });
+
+    const payload = buildNext(root, null, 'idea.md', 'v2');
+    assertAction(payload, 'invalid_gate_a', 'cli', [
+      'iteration',
+      'validate',
+      '--artifacts',
+      rootArtifact,
+      '--allow-planning',
+      '--stage',
+      'gate-a',
+    ]);
+  } finally {
+    remove(root);
+  }
+});
+
 test('next carries the original entry into a new Gate A approval command', () => {
   const root = project();
   try {
@@ -816,6 +1076,7 @@ test('next routes full iteration readiness failures before recommending task exe
     },
     {
       id: 'stale pending baseline',
+      allowPlanning: true,
       mutate: (currentSpec, iterationId) => {
         currentSpec.pending_iteration = {
           iteration_id: iterationId,
@@ -849,6 +1110,7 @@ test('next routes full iteration readiness failures before recommending task exe
         'validate',
         '--artifacts',
         rootArtifact,
+        ...(caseData.allowPlanning ? ['--allow-planning'] : []),
       ]);
       assert.match(payload.reason, caseData.error);
 

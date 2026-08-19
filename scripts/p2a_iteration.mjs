@@ -45,7 +45,7 @@ import {
   normalizeDisplayPath,
   resolveIterationState,
   serializeIterationState,
-  validateActiveIterationBaselineContract as assertActivePlanningBaselineContract,
+  validateActiveIterationPlanningContract as assertActivePlanningContract,
   validateCurrentSpecCompositionData,
   validateMaintenanceTaskGraphProject,
 } from './p2a_iteration_state.mjs';
@@ -3343,7 +3343,7 @@ function loadReadyIterationFacts(artifactRoot) {
 }
 
 function validateActiveSpecWithOptionalIntake(state) {
-  assertActivePlanningBaselineContract(state);
+  assertActivePlanningContract(state);
   const intakePath = activeIntakePath(state);
   if (!existsSync(intakePath)) {
     return validateSpec(
@@ -3371,26 +3371,12 @@ function validatePlanningIteration(args) {
   const stage = args.stage ?? inferPlanningStage(state);
   if (stage === 'ready') return validateIteration({ ...args, stage: null, allowPlanning: false });
   const iterationMetadata = loadOptionalIterationMetadata(state.artifactRoot, state.activeIteration);
-  assertActivePlanningBaselineContract(state, iterationMetadata);
+  assertActivePlanningContract(state, iterationMetadata);
   const planningMemory = iterationMetadata?.planning_memory ?? null;
   const planningMemoryErrors = planningMemoryValidationErrors(planningMemory, state.artifactRoot, state.projectId, iterationMetadata?.idea ?? state.currentSpec.pending_iteration?.idea);
   if (planningMemory?.status === 'pending') planningMemoryErrors.push('planning_memory.status must be resolved before validating a gate');
   if (planningMemoryErrors.length) {
     throw new ValidationError(`planning Memory validation failed: ${planningMemoryErrors.join('; ')}`);
-  }
-
-  const pendingStatus = state.currentSpec.pending_iteration?.status;
-  const allowedPendingStatuses = new Set([
-    'active_planning',
-    'gate_a_ready',
-    'gate_b_draft',
-    'gate_b_approved',
-  ]);
-  if (pendingStatus && !allowedPendingStatuses.has(pendingStatus)) {
-    throw new ValidationError(`current-spec.json pending_iteration.status is not a planning status: ${JSON.stringify(pendingStatus)}`);
-  }
-  if (state.currentSpec.pending_iteration && state.currentSpec.pending_iteration.iteration_id !== state.activeIteration) {
-    throw new ValidationError(`current-spec.json pending_iteration.iteration_id must match active_iteration ${JSON.stringify(state.activeIteration)}`);
   }
 
   const intakePath = activeIntakePath(state);
@@ -3641,7 +3627,7 @@ function planningMemoryTaskContext(state) {
 
 function context(args) {
   const state = resolveIterationState(args.artifacts, { requireReady: false });
-  assertActivePlanningBaselineContract(state);
+  assertActivePlanningContract(state);
   const effectiveSpec = loadContextEffectiveSpec(state);
   const scope = args.scope ?? 'feature';
   const contextData = {
@@ -4369,7 +4355,7 @@ function assertNoTaskGraphExecutionHistory(state, operation) {
 function promoteTasksLocked(args) {
   const state = resolveIterationState(args.artifacts, { requireReady: false });
   const metadata = loadOptionalIterationMetadata(state.artifactRoot, state.activeIteration);
-  assertActivePlanningBaselineContract(state, metadata);
+  assertActivePlanningContract(state, metadata);
   const planningMemory = metadata?.planning_memory ?? null;
   const planningMemoryErrors = planningMemoryValidationErrors(planningMemory, state.artifactRoot, state.projectId, metadata?.idea);
   if (planningMemory?.status === 'pending') planningMemoryErrors.push('planning_memory.status must be resolved before Gate C promotion');

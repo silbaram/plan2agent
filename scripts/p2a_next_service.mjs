@@ -9,7 +9,10 @@ import { DEFAULT_MEMORY_REQUEST_TIMEOUT_MS, DEFAULT_RUNS_DIR, GATE_FILES, GREENF
 import { resolveExecutionModePolicy, resolveOrchestrationAgentTool, resolveReviewPasses } from './p2a_project_config.mjs';
 import { normalizePath, resolveP2aPaths } from './p2a_paths.mjs';
 import { p2aCommandLine } from './p2a_run_commands.mjs';
-import { resolveIterationState } from './p2a_iteration_state.mjs';
+import {
+  resolveIterationState,
+  validateActiveIterationPlanningContract,
+} from './p2a_iteration_state.mjs';
 import {
   constitutionApprovalState,
   decisionLedgerPath,
@@ -320,7 +323,12 @@ function inspectArtifact(targetRoot, artifactRoot, isScaffoldProject) {
       currentSpecValidationError = 'The canonical current-spec.json is unreadable.';
     } else {
       try {
-        iterationState = resolveIterationState(artifactRoot, { requireReady: false });
+        const resolvedIterationState = resolveIterationState(
+          artifactRoot,
+          { requireReady: false },
+        );
+        validateActiveIterationPlanningContract(resolvedIterationState);
+        iterationState = resolvedIterationState;
       } catch (error) {
         currentSpecValidationError = error instanceof Error ? error.message : String(error);
       }
@@ -918,6 +926,41 @@ function hasCanonicalPlanningState(inspection) {
   );
 }
 
+function activeIterationAwaitsGateA(context) {
+  const activeIteration = stringValue(context.detail?.activeIteration);
+  const pendingIteration = context.detail?.currentSpec?.pending_iteration;
+  const gateAEntryStatus = ['active_planning', 'gate_a_interview'].includes(
+    pendingIteration?.status,
+  );
+  if (
+    context.detail?.layout?.kind !== 'iteration'
+    || context.currentSpecValid !== true
+    || !activeIteration
+    || pendingIteration?.iteration_id !== activeIteration
+    || !gateAEntryStatus
+    || context.gateAExists
+    || context.gateBExists
+    || context.gateCExists
+    || context.decisions?.valid === false
+    || context.startedRun
+  ) {
+    return false;
+  }
+
+  const iterationRoot = path.join(
+    context.artifactRoot,
+    'iterations',
+    activeIteration,
+  );
+  return ![
+    path.join(iterationRoot, 'gate-a-intake', 'intake.json'),
+    path.join(iterationRoot, 'gate-b-spec', 'spec.json'),
+    path.join(iterationRoot, 'gate-c-task-graph', 'task-graph.json'),
+    path.join(iterationRoot, 'gate-c-task-graph', 'task-graph.draft.json'),
+    path.join(iterationRoot, 'task-graph.json'),
+  ].some(isFile);
+}
+
 function selectNextArtifact(info, targetRoot, requestedProjectId, inspectedArtifacts) {
   const artifacts = info.artifacts;
   if (requestedProjectId) {
@@ -943,6 +986,16 @@ function selectNextArtifact(info, targetRoot, requestedProjectId, inspectedArtif
       ['next', '--project-id', '<project-id>'],
     ),
   };
+}
+
+function iterationStateValidationCommand(context) {
+  return [
+    'iteration',
+    'validate',
+    '--artifacts',
+    context.artifactArg,
+    ...(context.detail.currentSpec?.pending_iteration ? ['--allow-planning'] : []),
+  ];
 }
 
 function buildNextDecisionContext(
@@ -1213,7 +1266,10 @@ export const NEXT_DECISION_RULES = [
     kind: 'approval',
     when: (context) => (
       context.hasHarness
-      && !context.hasCanonicalPlanningState
+      && (
+        !context.hasCanonicalPlanningState
+        || activeIterationAwaitsGateA(context)
+      )
       && context.entry
       && context.entry.valid === false
     ),
@@ -1229,7 +1285,10 @@ export const NEXT_DECISION_RULES = [
     args: (context) => ['--entry', context.entryArg],
     when: (context) => (
       context.hasHarness
-      && !context.hasCanonicalPlanningState
+      && (
+        !context.hasCanonicalPlanningState
+        || activeIterationAwaitsGateA(context)
+      )
       && context.entry?.valid === true
     ),
     reason: (context) => (
@@ -1240,8 +1299,18 @@ export const NEXT_DECISION_RULES = [
   {
     state: 'entry_missing',
     kind: 'approval',
-    when: (context) => context.hasHarness && !context.info.artifacts.length,
-    reason: () => 'The harness is installed, but a concise entry document is required before planning can begin.',
+    when: (context) => (
+      context.hasHarness
+      && (
+        !context.info.artifacts.length
+        || activeIterationAwaitsGateA(context)
+      )
+    ),
+    reason: (context) => (
+      activeIterationAwaitsGateA(context)
+        ? `Active iteration ${context.detail.activeIteration} is ready for Gate A, but a concise entry document is required before planning can begin.`
+        : 'The harness is installed, but a concise entry document is required before planning can begin.'
+    ),
     command: () => 'Create or choose an entry document, then run p2a next --entry <path>.',
   },
   {
@@ -1263,7 +1332,7 @@ export const NEXT_DECISION_RULES = [
         ? 'The canonical current-spec.json is unreadable.'
         : `The canonical iteration state is invalid: ${context.currentSpecValidationError ?? 'validation failed'}`
     ),
-    command: (context) => ['iteration', 'validate', '--artifacts', context.artifactArg],
+    command: iterationStateValidationCommand,
   },
   {
     state: 'invalid_decisions',

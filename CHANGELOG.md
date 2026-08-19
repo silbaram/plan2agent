@@ -6,6 +6,24 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+### Fixed
+
+- Route newly opened baseline-backed iterations into Gate A when a valid entry is supplied, return deterministic missing or invalid entry actions otherwise, and preserve documented `gate_a_interview` resume compatibility.
+
+## [0.5.0] - 2026-08-17
+
+### Added
+
+- Add the explicit `p2a memory push --profile planning-docs` workflow for previewing and synchronizing approved Gate A/B planning Markdown from the current iteration and recorded archived iterations.
+
+### Changed
+
+- Delegate `planning-docs` snapshot chunk generation to the Memory server with the `paragraph-2000` strategy while preserving the existing client-chunk transport for pushes without the profile.
+
+### Fixed
+
+- Harden planning-document selection, provenance, project and artifact-root confinement, symlink handling, deterministic dry-run reporting, and server acknowledgment validation.
+
 ## [0.4.0] - 2026-08-16
 
 ### Added
@@ -118,7 +136,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Add package-runtime project initialization, managed provider assets, artifact validation, handoff, supervised execution, evaluation, proposal, and optional Memory workflows.
 - Ship canonical and generated integrations for Codex, Claude Code, and Gemini CLI.
 
-[Unreleased]: https://github.com/silbaram/plan2agent/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/silbaram/plan2agent/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/silbaram/plan2agent/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/silbaram/plan2agent/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/silbaram/plan2agent/compare/v0.2.3...v0.3.0
 [0.2.3]: https://github.com/silbaram/plan2agent/compare/v0.2.2...v0.2.3

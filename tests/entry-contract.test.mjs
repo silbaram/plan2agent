@@ -908,7 +908,7 @@ test('an explicit entry wins over multiple automatically discovered preflight ro
   }
 });
 
-test('a confirmed entry proceeds through Gate A-C execution and iteration close', () => {
+test('a confirmed entry proceeds through Gate A-C execution and opens a baseline-backed next iteration', () => {
   const root = project();
   try {
     writeJson(path.join(root, '.plan2agent', 'project.config.json'), {
@@ -1014,6 +1014,39 @@ test('a confirmed entry proceeds through Gate A-C execution and iteration close'
       'utf8',
     ));
     assert.equal(iteration.status, 'archived');
+
+    result = runP2a([
+      'iteration', 'open',
+      '--artifacts', artifactRoot,
+      '--iteration-id', 'v2-entry-contract',
+      '--idea', 'Add the next baseline-backed capability from the entry document',
+    ]);
+    assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+
+    const currentSpec = JSON.parse(readFileSync(
+      path.join(artifactRoot, 'current-spec.json'),
+      'utf8',
+    ));
+    assert.equal(currentSpec.active_iteration, 'v2-entry-contract');
+    assert.equal(currentSpec.pending_iteration?.iteration_id, 'v2-entry-contract');
+    assert.equal(currentSpec.pending_iteration?.status, 'active_planning');
+    assert.equal(currentSpec.pending_iteration?.baseline_iteration, 'v1-mvp');
+
+    next = runNext(root, ['--contract', 'v2', '--entry', 'idea.md']);
+    assert.equal(next.state, 'gate_what');
+    assert.equal(next.command.kind, 'skill');
+    assert.equal(next.command.skill, 'p2a-harness');
+    assert.deepEqual(next.command.args, ['--entry', entryPath]);
+
+    next = runNext(root, ['--contract', 'v2']);
+    assert.equal(next.state, 'entry_missing');
+    assert.equal(next.command.kind, 'approval');
+    assert.match(next.command.display, /p2a next --entry <path>/);
+
+    next = runNext(root, ['--contract', 'v2', '--entry', 'missing.md']);
+    assert.equal(next.state, 'entry_invalid');
+    assert.equal(next.command.kind, 'approval');
+    assert.match(next.command.display, /validate --entry .*missing\.md/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
