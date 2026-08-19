@@ -82,7 +82,9 @@ Gate artifact에는 기존 `p2a.intake.v1`과 `p2a.spec.v1`을 변경하지 않�
 
 ### 3.1 기존 기획 상태 우선
 
-Gate A-C 파일, `current-spec.json`, 또는 iteration 상태가 이미 있으면 그것이 항상 우선한다. `--entry`나 자동 발견 문서가 함께 있어도 `p2a next`는 기존 canonical 기획 상태에서 가장 이른 변경 지점을 재개한다. 기존 intake snapshot도 유지하며 새 진입 대화로 초기화하지 않는다.
+Gate A-C 파일 또는 진행 중인 active iteration 기획 상태가 이미 있으면 그것이 진입 문서보다 우선한다. `--entry`나 자동 발견 문서가 함께 있어도 `p2a next`는 기존 canonical 기획 상태에서 가장 이른 변경 지점을 재개한다. 기존 intake snapshot도 유지하며 새 진입 대화로 초기화하지 않는다.
+
+단, `p2a iteration open` 직후의 baseline-backed skeleton은 예외다. 유효한 iteration layout에서 `current-spec.json.active_iteration`과 `pending_iteration.iteration_id`가 일치하고 pending status가 `active_planning`이며 active iteration에 Gate A/B/C artifact가 하나도 없으면, 기존 `current-spec.json`은 프로젝트 baseline이지 active iteration의 기획 진행 상태가 아니다. 이때 유효한 entry는 `gate_what`, entry가 없으면 `entry_missing`, 유효하지 않으면 `entry_invalid`로 라우팅한다. baseline pointer와 이전 iteration artifact는 그대로 보존한다.
 
 ### 3.2 새 진입 문서 선택
 

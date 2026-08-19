@@ -679,13 +679,41 @@ export function validateActiveIterationBaselineContract(
   }
 }
 
+const ACTIVE_PLANNING_PENDING_STATUSES = new Set([
+  'active_planning',
+  'gate_a_interview',
+  'gate_a_ready',
+  'gate_b_draft',
+  'gate_b_approved',
+]);
+
+export function validateActiveIterationPlanningContract(
+  state,
+  metadata = optionalIterationMetadata(state.artifactRoot, state.activeIteration),
+) {
+  validateActiveIterationBaselineContract(state, metadata);
+  const pending = state.currentSpec.pending_iteration;
+  if (pending) {
+    if (!ACTIVE_PLANNING_PENDING_STATUSES.has(pending.status)) {
+      throw new ValidationError(
+        `current-spec.json pending_iteration.status is not a planning status: ${JSON.stringify(pending.status)}`,
+      );
+    }
+    if (pending.iteration_id !== state.activeIteration) {
+      throw new ValidationError(
+        `current-spec.json pending_iteration.iteration_id must match active_iteration ${JSON.stringify(state.activeIteration)}`,
+      );
+    }
+  }
+}
+
 function validateReadyIterationArtifacts(state) {
   validateCurrentSpecCompositionData(
     state.currentSpec,
     state.artifactRoot,
     { requireNoOpenDecisions: true },
   );
-  validateActiveIterationBaselineContract(state);
+  validateActiveIterationPlanningContract(state);
   const currentSpecOpenDecisions = state.currentSpec.open_decisions ?? [];
   if (!Array.isArray(currentSpecOpenDecisions)) {
     throw new ValidationError('ready iteration requires current-spec.json open_decisions to be an array when present');
