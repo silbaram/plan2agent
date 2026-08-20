@@ -345,6 +345,38 @@ export function validateCurrentSpecCompositionData(
   return currentSpec;
 }
 
+export function iterationCompositionRequirement(currentSpec) {
+  const closedIterations = Array.isArray(currentSpec?.closed_iterations)
+    ? currentSpec.closed_iterations
+    : [];
+  const closedIterationIds = closedIterations
+    .map((closed) => closed?.iteration_id)
+    .filter((iterationId) => typeof iterationId === 'string' && iterationId);
+  const hasComposedEffectiveSpec = currentSpec?.effective_spec_ref === 'current-spec.json';
+  const composedIterationIds = new Set(
+    Array.isArray(currentSpec?.composed_from)
+      ? currentSpec.composed_from.filter(
+        (iterationId) => typeof iterationId === 'string' && iterationId,
+      )
+      : [],
+  );
+  const missingClosedIterations = closedIterationIds.filter(
+    (iterationId) => !composedIterationIds.has(iterationId),
+  );
+  const requiresComposedEffectiveSpec = (
+    closedIterations.length > 1
+    && !hasComposedEffectiveSpec
+  );
+  return {
+    required: (
+      requiresComposedEffectiveSpec
+      || (hasComposedEffectiveSpec && missingClosedIterations.length > 0)
+    ),
+    requiresComposedEffectiveSpec,
+    missingClosedIterations,
+  };
+}
+
 export function normalizeArtifactRoot(artifactPath, cwd = process.cwd()) {
   return path.resolve(cwd, artifactPath);
 }

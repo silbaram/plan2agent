@@ -6,6 +6,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+## [0.5.4] - 2026-08-20
+
+### Fixed
+
+- Route `p2a next` to `iteration compose` when a closed iteration is missing from the effective baseline composition instead of returning an `iteration open` command that must fail.
+
 ## [0.5.3] - 2026-08-19
 
 ### Fixed
@@ -151,7 +157,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Add package-runtime project initialization, managed provider assets, artifact validation, handoff, supervised execution, evaluation, proposal, and optional Memory workflows.
 - Ship canonical and generated integrations for Codex, Claude Code, and Gemini CLI.
 
-[Unreleased]: https://github.com/silbaram/plan2agent/compare/v0.5.3...HEAD
+[Unreleased]: https://github.com/silbaram/plan2agent/compare/v0.5.4...HEAD
+[0.5.4]: https://github.com/silbaram/plan2agent/compare/v0.5.3...v0.5.4
 [0.5.3]: https://github.com/silbaram/plan2agent/compare/v0.5.2...v0.5.3
 [0.5.2]: https://github.com/silbaram/plan2agent/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/silbaram/plan2agent/compare/v0.5.0...v0.5.1

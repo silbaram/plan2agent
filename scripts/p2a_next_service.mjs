@@ -10,6 +10,7 @@ import { resolveExecutionModePolicy, resolveOrchestrationAgentTool, resolveRevie
 import { normalizePath, resolveP2aPaths } from './p2a_paths.mjs';
 import { p2aCommandLine } from './p2a_run_commands.mjs';
 import {
+  iterationCompositionRequirement,
   resolveIterationState,
   validateActiveIterationPlanningContract,
 } from './p2a_iteration_state.mjs';
@@ -1080,6 +1081,7 @@ function buildNextDecisionContext(
   }
   const taskCounts = countTasks(gates.taskGraph);
   const allTasksDone = taskCounts.total > 0 && taskCounts.done === taskCounts.total;
+  const compositionRequirement = iterationCompositionRequirement(detail.currentSpec);
   const hasRequiredVisualContract = Boolean(
     gates.specValid
     && gates.specPath
@@ -1245,6 +1247,8 @@ function buildNextDecisionContext(
     blockedTaskIds: taskIdsWithStatus(detail.tasks, 'blocked'),
     allTasksDone,
     closedIteration: isClosedIteration(detail.currentSpec, detail.activeIteration),
+    iterationCompositionRequired: compositionRequirement.required,
+    missingClosedCompositionIterations: compositionRequirement.missingClosedIterations,
     proposalQueueArg: proposals.enabled
       ? commandProjectPath(targetRoot, resolveProjectRelativePath(targetRoot, proposals.queueDir))
       : null,
@@ -1730,9 +1734,28 @@ export const NEXT_DECISION_RULES = [
     ],
   },
   {
+    state: 'iteration_composition_required',
+    kind: 'cli',
+    when: (context) => (
+      context.allTasksDone
+      && context.closedIteration
+      && context.iterationCompositionRequired
+    ),
+    reason: (context) => (
+      context.missingClosedCompositionIterations.length
+        ? `The closed iteration baseline is incomplete; compose missing iterations ${JSON.stringify(context.missingClosedCompositionIterations)} before opening the next iteration.`
+        : 'Multiple iterations are closed, but current-spec.json has not been composed into the effective baseline.'
+    ),
+    command: (context) => ['iteration', 'compose', '--artifacts', context.artifactArg],
+  },
+  {
     state: 'iteration_complete',
     kind: 'cli',
-    when: (context) => context.allTasksDone && context.closedIteration,
+    when: (context) => (
+      context.allTasksDone
+      && context.closedIteration
+      && !context.iterationCompositionRequired
+    ),
     reason: () => 'The active iteration is closed; start the next iteration when a new change idea is ready.',
     command: (context) => ['iteration', 'open', '--artifacts', context.artifactArg, '--iteration-id', '<id>', '--idea', '<change idea>'],
   },

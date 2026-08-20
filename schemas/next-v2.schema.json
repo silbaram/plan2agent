@@ -98,6 +98,7 @@
         "iteration_ready_to_close",
         "flat_execution_complete",
         "run_evidence_needs_proposal_mining",
+        "iteration_composition_required",
         "iteration_complete",
         "project_selection_required",
         "state_needs_inspection"

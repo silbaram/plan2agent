@@ -40,6 +40,7 @@ import {
   assertPendingBaselineIntegrity,
   formatIterationState,
   initialMaintenanceTaskGraph,
+  iterationCompositionRequirement,
   maintenanceTaskGraphPath,
   nextMaintenanceTaskId,
   normalizeDisplayPath,
@@ -1039,24 +1040,18 @@ function assertArchivedBaselineForOpen(currentSpec, artifactRoot, iterationId) {
     throw new ValidationError(`open requires active iteration ${JSON.stringify(iterationId)} to be current-spec.json.last_closed_iteration`);
   }
 
-  if (closedIterations.length > 1 && currentSpec.effective_spec_ref !== 'current-spec.json') {
+  const compositionRequirement = iterationCompositionRequirement(currentSpec);
+  if (compositionRequirement.requiresComposedEffectiveSpec) {
     throw new ValidationError('open requires current-spec.json composition after multiple closed iterations; run `p2a iteration compose` first');
   }
   validateCurrentSpecCompositionData(currentSpec, artifactRoot, { requireNoOpenDecisions: true });
-  if (currentSpec.effective_spec_ref === 'current-spec.json') {
-    const composedIterationIds = new Set(currentSpec.composed_from ?? []);
-    const missingClosedIterations = closedIterations
-      .map((closed) => closed?.iteration_id)
-      .filter((closedIterationId) => (
-        typeof closedIterationId === 'string'
-        && closedIterationId
-        && !composedIterationIds.has(closedIterationId)
-      ));
-    if (missingClosedIterations.length) {
-      throw new ValidationError(
-        `open requires every closed iteration in the current composition; missing ${JSON.stringify(missingClosedIterations)}. Run \`p2a iteration compose\` first`,
-      );
-    }
+  if (
+    compositionRequirement.required
+    && compositionRequirement.missingClosedIterations.length
+  ) {
+    throw new ValidationError(
+      `open requires every closed iteration in the current composition; missing ${JSON.stringify(compositionRequirement.missingClosedIterations)}. Run \`p2a iteration compose\` first`,
+    );
   }
 }
 

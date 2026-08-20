@@ -8,6 +8,7 @@ import { FIXTURE_ROOT, makeTempDir, runP2a } from './helpers/fixtures.mjs';
 import { validateSchema } from '../scripts/p2a_schema.mjs';
 import { NEXT_DECISION_RULES } from '../scripts/p2a.mjs';
 import { buildNext } from '../scripts/p2a_next_service.mjs';
+import { iterationCompositionRequirement } from '../scripts/p2a_iteration_state.mjs';
 import {
   CONTINUATION_DEFINITIONS,
   continuationDescriptor,
@@ -155,7 +156,69 @@ function writeIteration(artifactRoot, projectId = 'sample', options = {}) {
     } : {}),
   };
   writeJson(join(artifactRoot, 'current-spec.json'), currentSpec);
+  if (options.closed) {
+    writeJson(join(artifactRoot, 'iterations', iterationId, 'iteration.json'), {
+      schema_version: 'p2a.iteration.v1',
+      project_id: projectId,
+      iteration_id: iterationId,
+      status: 'archived',
+      opened_at: options.openedAt ?? '2026-01-01T00:00:00.000Z',
+    });
+  }
   return iterationId;
+}
+
+function writeClosedIterationWithCompositionGap(artifactRoot, projectId = 'sample') {
+  const sourceIteration = 'v1';
+  const activeIteration = 'v2';
+  writeIteration(artifactRoot, projectId, {
+    closed: true,
+    iterationId: activeIteration,
+    openedAt: '2026-01-02T00:00:00.000Z',
+  });
+  for (const iterationId of [sourceIteration, activeIteration]) {
+    mkdirSync(join(artifactRoot, 'iterations', iterationId), { recursive: true });
+    writeGateA(artifactRoot, 'ready_for_spec', iterationId);
+    writeGateB(artifactRoot, 'approved', iterationId);
+    writeGateC(artifactRoot, [task('task-001', 'done')], iterationId);
+    writeGateD(artifactRoot, [], iterationId);
+  }
+  writeJson(join(artifactRoot, 'iterations', sourceIteration, 'iteration.json'), {
+    schema_version: 'p2a.iteration.v1',
+    project_id: projectId,
+    iteration_id: sourceIteration,
+    status: 'archived',
+    opened_at: '2026-01-01T00:00:00.000Z',
+  });
+
+  const currentSpecPath = join(artifactRoot, 'current-spec.json');
+  const currentSpec = JSON.parse(readFileSync(currentSpecPath, 'utf8'));
+  const sourceSpec = JSON.parse(readFileSync(
+    join(artifactRoot, 'iterations', sourceIteration, 'gate-b-spec', 'spec.json'),
+    'utf8',
+  ));
+  currentSpec.effective_spec_ref = 'current-spec.json';
+  currentSpec.composed_from = [sourceIteration];
+  currentSpec.source_specs = [{
+    iteration_id: sourceIteration,
+    spec_ref: `iterations/${sourceIteration}/gate-b-spec/spec.json`,
+    status: 'archived',
+    approval: 'approved',
+  }];
+  currentSpec.effective_product = sourceSpec.product;
+  currentSpec.effective_implementation = sourceSpec.implementation;
+  currentSpec.superseded_refs = [];
+  currentSpec.composition_conflicts = [];
+  currentSpec.open_decisions = [];
+  currentSpec.last_closed_iteration = {
+    iteration_id: activeIteration,
+    status: 'archived',
+  };
+  currentSpec.closed_iterations = [sourceIteration, activeIteration].map(
+    (iterationId) => ({ iteration_id: iterationId, status: 'archived' }),
+  );
+  writeJson(currentSpecPath, currentSpec);
+  return activeIteration;
 }
 
 function writeBaselineBackedPlanningIteration(artifactRoot) {
@@ -596,6 +659,18 @@ test('next chooses one read-only action for every primary state', () => {
       expected: (root) => ['run_evidence_needs_proposal_mining', 'cli', [
         'proposals', 'mine', '--artifacts', artifactPath(root), '--run-id', 'run-001',
         '--proposals', join(root, '.plan2agent', 'proposals'),
+      ]],
+    },
+    {
+      id: 'closed iteration composes a missing latest baseline source',
+      setup: () => {
+        const root = project();
+        const rootArtifact = artifact(root);
+        writeClosedIterationWithCompositionGap(rootArtifact);
+        return root;
+      },
+      expected: (root) => ['iteration_composition_required', 'cli', [
+        'iteration', 'compose', '--artifacts', artifactPath(root),
       ]],
     },
     {
@@ -1381,11 +1456,104 @@ test('info keeps its JSON contract and points human output to next', () => {
 });
 
 test('next keeps the ordered decision rules required by the contract', () => {
-  assert.equal(NEXT_DECISION_RULES.length, 27);
+  assert.equal(NEXT_DECISION_RULES.length, 28);
   for (const rule of NEXT_DECISION_RULES) {
     assert.equal(typeof rule.when, 'function');
     assert.equal(typeof rule.reason, 'function');
     assert.equal(typeof rule.command, 'function');
+  }
+});
+
+test('next and iteration open share the closed composition requirement', () => {
+  assert.deepEqual(
+    iterationCompositionRequirement({
+      effective_spec_ref: 'current-spec.json',
+      composed_from: ['v1'],
+      closed_iterations: [
+        { iteration_id: 'v1' },
+        { iteration_id: 'v2' },
+      ],
+    }),
+    {
+      required: true,
+      requiresComposedEffectiveSpec: false,
+      missingClosedIterations: ['v2'],
+    },
+  );
+  assert.equal(
+    iterationCompositionRequirement({
+      effective_spec_ref: 'current-spec.json',
+      composed_from: ['v1', 'v2'],
+      closed_iterations: [
+        { iteration_id: 'v1' },
+        { iteration_id: 'v2' },
+      ],
+    }).required,
+    false,
+  );
+  assert.equal(
+    iterationCompositionRequirement({
+      effective_spec_ref: 'iterations/v1/gate-b-spec/spec.json',
+      closed_iterations: [{ iteration_id: 'v1' }],
+    }).required,
+    false,
+  );
+});
+
+test('next returns executable compose and open commands across a composition gap', () => {
+  const root = project();
+  try {
+    const rootArtifact = artifact(root);
+    writeClosedIterationWithCompositionGap(rootArtifact);
+
+    const legacyResult = runP2a(['next', '--target', root, '--json']);
+    assert.equal(legacyResult.status, 0, `${legacyResult.stdout}${legacyResult.stderr}`);
+    const legacyBeforeCompose = JSON.parse(legacyResult.stdout);
+    assert.doesNotThrow(() => validateSchema(legacyBeforeCompose, NEXT_V1_SCHEMA));
+    assert.equal(legacyBeforeCompose.state, 'iteration_composition_required');
+    assert.deepEqual(legacyBeforeCompose.command.argv, [
+      'iteration', 'compose', '--artifacts', artifactPath(root),
+    ]);
+
+    const beforeCompose = next(root);
+    assertAction(beforeCompose, 'iteration_composition_required', 'cli', [
+      'iteration', 'compose', '--artifacts', artifactPath(root),
+    ]);
+    const composeResult = runP2a(beforeCompose.command.argv);
+    assert.equal(composeResult.status, 0, `${composeResult.stdout}${composeResult.stderr}`);
+    const composedSpec = JSON.parse(readFileSync(
+      join(rootArtifact, 'current-spec.json'),
+      'utf8',
+    ));
+    assert.deepEqual(composedSpec.composed_from, ['v1', 'v2']);
+    assert.deepEqual(
+      composedSpec.source_specs?.map((source) => source.iteration_id),
+      ['v1', 'v2'],
+    );
+
+    const afterCompose = next(root);
+    assertAction(afterCompose, 'iteration_complete', 'cli', [
+      'iteration', 'open', '--artifacts', artifactPath(root), '--iteration-id', '<id>', '--idea', '<change idea>',
+    ]);
+    const openResult = runP2a(afterCompose.command.argv.map((argument) => {
+      if (argument === '<id>') return 'v3';
+      if (argument === '<change idea>') return 'Verify the next composed baseline';
+      return argument;
+    }));
+    assert.equal(openResult.status, 0, `${openResult.stdout}${openResult.stderr}`);
+
+    const currentSpec = JSON.parse(readFileSync(
+      join(rootArtifact, 'current-spec.json'),
+      'utf8',
+    ));
+    assert.equal(currentSpec.active_iteration, 'v3');
+    assert.equal(currentSpec.pending_iteration?.baseline_iteration, 'v2');
+    assert.match(
+      currentSpec.pending_iteration?.baseline_effective_spec_ref ?? '',
+      /^iterations\/v3\/baseline\/current-spec\.json$/,
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
   }
 });
 

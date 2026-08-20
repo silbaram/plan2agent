@@ -5754,6 +5754,20 @@ function validateIterationCurrentFixtureCases() {
       }
       unlinkSync(lateArtifactPath);
 
+      const legacyThinArtifactRoot = path.join(tempRoot, 'legacy-thin-open-artifacts');
+      cpSync(artifactRoot, legacyThinArtifactRoot, { recursive: true });
+      const legacyThinCurrentSpecPath = path.join(legacyThinArtifactRoot, 'current-spec.json');
+      const legacyThinCurrentSpec = JSON.parse(readFileSync(legacyThinCurrentSpecPath, 'utf8'));
+      delete legacyThinCurrentSpec.composed_from;
+      writeFileSync(legacyThinCurrentSpecPath, `${JSON.stringify(legacyThinCurrentSpec, null, 2)}\n`, 'utf8');
+      result = runIteration(['open', '--artifacts', legacyThinArtifactRoot, '--iteration-id', 'iter-legacy-thin', '--idea', 'Verify backward-compatible thin pointer opening']);
+      checks += 1;
+      if (result.status !== 0 || !result.stdout.includes('iteration opened')) {
+        console.error(`iteration open did not accept a legacy single-iteration thin pointer without composed_from: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: failureStatus(result), checks };
+      }
+
       result = runIteration(['open', '--artifacts', artifactRoot, '--iteration-id', 'iter-002', '--idea', 'Add follow-up webhook delivery dashboard']);
       checks += 1;
       if (result.status !== 0 || !result.stdout.includes('iteration opened')) {
