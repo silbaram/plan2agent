@@ -834,7 +834,7 @@ test('iteration init preserves decision-ledger authority and why lineage after m
   assert.notEqual(result.status, 0);
   assert.match(
     result.stderr,
-    /active Gate B approval decision for the current spec bytes: approved_hash_mismatch/,
+    /gate_b_promotion_bindings\.iter-decisions\.source_spec_sha256 does not match/,
   );
 });
 

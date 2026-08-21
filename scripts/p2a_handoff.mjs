@@ -1669,14 +1669,14 @@ function pushCurrentSpecCompositionBundleIfPresent(
 }
 
 function currentSpecWithPortableClosedArtifactHashes(currentSpec, plan, projectId) {
-  if (!currentSpec || !Array.isArray(currentSpec.closed_iterations)) return currentSpec;
+  if (!currentSpec) return currentSpec;
   const next = structuredClone(currentSpec);
   const artifactTargetRoot = normalizePath(targetArtifactDir(projectId));
   const plannedByTarget = new Map(
     plan.map((item) => [normalizePath(item.targetRelative), item]),
   );
 
-  for (const closed of next.closed_iterations) {
+  for (const closed of next.closed_iterations ?? []) {
     for (const [reference, audit] of Object.entries(closed?.artifact_hashes ?? {})) {
       if (typeof audit !== 'string' && audit?.present !== true) continue;
       const targetRelative = normalizePath(path.posix.join(
@@ -1696,8 +1696,24 @@ function currentSpecWithPortableClosedArtifactHashes(currentSpec, plan, projectI
     }
   }
 
+  for (const [iterationId, binding] of Object.entries(next.gate_b_promotion_bindings ?? {})) {
+    assertSafeIterationId(iterationId);
+    const sourceSpecRef = normalizePath(binding?.source_spec_ref ?? '');
+    const targetRelative = normalizePath(path.posix.join(
+      artifactTargetRoot,
+      sourceSpecRef,
+    ));
+    const planned = plannedByTarget.get(targetRelative);
+    if (!planned) {
+      throw new ValidationError(
+        `Gate B promotion binding ${iterationId} spec is missing from the portable handoff plan: ${sourceSpecRef}`,
+      );
+    }
+    binding.source_spec_sha256 = sha256Value(plannedItemContent(planned));
+  }
+
   if (next.last_closed_iteration?.iteration_id) {
-    const matchingClosed = next.closed_iterations.find(
+    const matchingClosed = (next.closed_iterations ?? []).find(
       (closed) => closed.iteration_id === next.last_closed_iteration.iteration_id,
     );
     if (matchingClosed) {
@@ -2301,11 +2317,9 @@ function pushApprovalEvidence(plan, sourcePath, targetRoot, targetRelative, labe
 function bundleCurrentSpecApprovalAudits(
   plan,
   currentSpec,
-  selectedIterationId,
   artifactsRoot,
   targetRoot,
   projectId,
-  targetSpecRef,
 ) {
   const next = JSON.parse(JSON.stringify(currentSpec));
   for (const [iterationId, audit] of Object.entries(next.gate_b_approval_audits ?? {})) {
@@ -2316,9 +2330,8 @@ function bundleCurrentSpecApprovalAudits(
       `iterations/${iterationId}/gate-b-spec/spec.json`,
       `gate_b_approval_audits.${iterationId} approved spec`,
     );
-    const targetRef = iterationId === selectedIterationId
-      ? targetSpecRef
-      : normalizePath(path.join(targetArtifactDir(projectId), source.relativePath));
+    const targetRef = normalizePath(path.join(targetArtifactDir(projectId), source.relativePath));
+    const portableAuditRef = normalizePath(source.relativePath);
     pushApprovalEvidence(
       plan,
       source.sourcePath,
@@ -2326,8 +2339,8 @@ function bundleCurrentSpecApprovalAudits(
       targetRef,
       `gate_b_approval_audits.${iterationId}`,
     );
-    audit.approved_artifacts = [targetRef];
-    if (Object.hasOwn(audit, 'approved_source')) audit.approved_source = targetRef;
+    audit.approved_artifacts = [portableAuditRef];
+    if (Object.hasOwn(audit, 'approved_source')) audit.approved_source = portableAuditRef;
   }
 
   delete next.gate_c_approval_audits;
@@ -4443,11 +4456,9 @@ function buildPlan(paths, args, artifactsRoot, targetRoot, sourceInfo, options =
     ? bundleCurrentSpecApprovalAudits(
         plan,
         sourceInfo.currentSpec,
-        sourceInfo.iterationId,
         artifactsRoot,
         targetRoot,
         args.projectId,
-        targetSpecRef,
       )
     : null;
   const currentSpecForHandoff = currentSpecWithPortableApprovals

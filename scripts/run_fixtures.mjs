@@ -6970,7 +6970,9 @@ function validateIterationCurrentFixtureCases() {
       if (!milestoneSpec.approval_audit.approved_artifacts.includes(milestoneExperienceApprovalRef)) {
         milestoneSpec.approval_audit.approved_artifacts.push(milestoneExperienceApprovalRef);
       }
-      writeFileSync(milestoneSpecPath, `${JSON.stringify(milestoneSpec, null, 2)}\n`, 'utf8');
+      const milestoneSpecText = `${JSON.stringify(milestoneSpec, null, 2)}\n`;
+      const milestoneSpecSha256 = hashText(milestoneSpecText);
+      writeFileSync(milestoneSpecPath, milestoneSpecText, 'utf8');
       const milestoneTaskGraphPath = path.join(milestoneHandoffArtifactRoot, milestoneTaskGraphRef);
       const milestoneTaskGraph = JSON.parse(readFileSync(milestoneTaskGraphPath, 'utf8'));
       milestoneTaskGraph.sourceSpec = '../gate-b-spec/spec.json';
@@ -6988,6 +6990,12 @@ function validateIterationCurrentFixtureCases() {
       const milestoneClosedIteration = composedCurrentSpecForHandoff.closed_iterations.find(
         (closed) => closed.iteration_id === 'iter-002',
       );
+      composedCurrentSpecForHandoff.gate_b_promotion_bindings['iter-002'].source_spec_sha256 =
+        milestoneSpecSha256;
+      milestoneClosedIteration.artifact_hashes[milestoneSpecRef] = {
+        present: true,
+        sha256: milestoneSpecSha256,
+      };
       for (const reference of milestoneVisualArtifactRefs) {
         milestoneClosedIteration.artifact_hashes[reference] = {
           present: true,
@@ -8592,6 +8600,7 @@ function validateIterationCurrentFixtureCases() {
         || !targetManifest.toolFiles.includes('.plan2agent/scripts/p2a_runs.mjs')
         || !targetManifest.toolFiles.includes('.plan2agent/scripts/p2a.mjs')
         || !targetManifest.toolFiles.includes('.plan2agent/scripts/p2a_constants.mjs')
+        || !targetManifest.toolFiles.includes('.plan2agent/scripts/p2a_verification.mjs')
         || !targetManifest.toolFiles.includes('.plan2agent/scripts/p2a_radar_preflight.mjs')
         || !targetManifest.toolFiles.includes('.plan2agent/scripts/p2a_execute.mjs')
         || !targetManifest.toolFiles.includes('.plan2agent/scripts/p2a_monitor_gate.mjs')

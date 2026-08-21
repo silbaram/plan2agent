@@ -366,7 +366,9 @@ p2a iteration promote-spec \
   --artifacts .plan2agent/artifacts/<project_id>
 ```
 
-`promote-spec`는 `p2a decide`로 승인된 active 반복의 Gate B `spec.json`이 `approval: "approved"`이고 `open_decisions`가 비어 있는지 검증한 뒤 `iteration.json`과 `current-spec.json.pending_iteration`에 `gate_b_approved` 상태를 기록한다. 초기 Gate A-only 반복처럼 `current-spec.json.effective_spec_ref`가 없던 경우에는 active spec을 현재 유효 spec으로 설정한다. 이미 baseline이 있는 후속 반복에서는 baseline pointer와 `composed_from/source_specs` 조합본을 보존하고, 실제 current-effective 반영은 Gate C validation과 close/compose 이후 수행한다.
+`promote-spec`는 `p2a decide`로 승인된 active 반복의 Gate B `spec.json`이 `approval: "approved"`이고 `open_decisions`가 비어 있는지 검증한 뒤 `iteration.json`과 `current-spec.json.pending_iteration`에 `gate_b_approved` 상태를 기록한다. 이때 `current-spec.json.gate_b_promotion_bindings[<iteration-id>]`에 canonical spec ref, 원본 파일 SHA-256, promotion 시각을 함께 기록하고 Gate B approval audit identity를 canonical spec ref와 함께 보존한다. 동일한 ref/SHA binding을 다시 promotion하면 기존 promotion 시각을 재사용해 `current-spec.json`, `iteration.json`, `status.md`를 결정적으로 복원한다. 초기 Gate A-only 반복처럼 `current-spec.json.effective_spec_ref`가 없던 경우에는 active spec을 현재 유효 spec으로 설정한다. 이미 baseline이 있는 후속 반복에서는 baseline pointer와 `composed_from/source_specs` 조합본을 보존하고, 실제 current-effective 반영은 Gate C validation과 close/compose 이후 수행한다.
+
+Gate B 승인 직후 이 binding이 아직 없거나 ref/hash/audit 또는 active `iteration.json` promotion metadata가 active spec과 다르면 `p2a next`는 `gate_b_approved_needs_spec_promotion` 상태와 위 `promote-spec` 명령을 반환한다. `context --scope feature`, `diff-tasks`, `validate --stage gate-c-draft`, `promote-tasks`, Direct/Planned `execute prepare`는 같은 binding guard를 공유하며 promotion 완료 전에는 Gate C 산출물을 만들거나 승격하지 않는다. 이미 사용자가 승인한 Gate B의 canonical 반영이므로 이 promotion에는 추가 사용자 승인이 필요하지 않다.
 
 ```bash
 p2a iteration diff-tasks \
@@ -415,6 +417,22 @@ p2a iteration compose \
   "composed_from": ["v1-mvp"],
   "active_iteration": "v1-mvp",
   "effective_spec_ref": "iterations/v1-mvp/gate-b-spec/spec.json",
+  "gate_b_promoted_at": "2026-08-21T00:00:00.000Z",
+  "gate_b_promotion_bindings": {
+    "v1-mvp": {
+      "source_spec_ref": "iterations/v1-mvp/gate-b-spec/spec.json",
+      "source_spec_sha256": "<sha256>",
+      "promoted_at": "2026-08-21T00:00:00.000Z"
+    }
+  },
+  "gate_b_approval_audits": {
+    "v1-mvp": {
+      "approved_by": "user",
+      "approved_at": "2026-08-21",
+      "approved_artifacts": ["iterations/v1-mvp/gate-b-spec/spec.json"],
+      "approval_note": "Gate B approved."
+    }
+  },
   "note": "반복 1개라 이 반복 spec이 곧 현재 유효 spec."
 }
 ```

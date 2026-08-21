@@ -6,6 +6,13 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+## [0.5.5] - 2026-08-21
+
+### Fixed
+
+- Route an approved active Gate B through `iteration promote-spec` before Gate C preparation, persist its canonical spec ref/SHA promotion binding, reject Gate C entry points when that binding is missing or stale, and make same-spec retries deterministically repair partial metadata and portable handoff state.
+- Reject malformed or unsupported `--verify-command` types before `runs verify` or `execute finish` executes any command or changes run, index, revision, verification, project-config, or task evidence, with canonical allowed-type and `custom:` guidance.
+
 ## [0.5.4] - 2026-08-20
 
 ### Fixed
@@ -157,7 +164,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Add package-runtime project initialization, managed provider assets, artifact validation, handoff, supervised execution, evaluation, proposal, and optional Memory workflows.
 - Ship canonical and generated integrations for Codex, Claude Code, and Gemini CLI.
 
-[Unreleased]: https://github.com/silbaram/plan2agent/compare/v0.5.4...HEAD
+[Unreleased]: https://github.com/silbaram/plan2agent/compare/v0.5.5...HEAD
+[0.5.5]: https://github.com/silbaram/plan2agent/compare/v0.5.4...v0.5.5
 [0.5.4]: https://github.com/silbaram/plan2agent/compare/v0.5.3...v0.5.4
 [0.5.3]: https://github.com/silbaram/plan2agent/compare/v0.5.2...v0.5.3
 [0.5.2]: https://github.com/silbaram/plan2agent/compare/v0.5.1...v0.5.2

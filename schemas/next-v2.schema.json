@@ -85,6 +85,7 @@
         "invalid_gate_b",
         "started_run_contract_drift",
         "gate_b_needs_approval",
+        "gate_b_approved_needs_spec_promotion",
         "gate_b_approved_needs_execution_prepare",
         "gate_b_approved_needs_tasks",
         "invalid_gate_c",

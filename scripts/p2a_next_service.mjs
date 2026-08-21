@@ -12,6 +12,7 @@ import { p2aCommandLine } from './p2a_run_commands.mjs';
 import {
   iterationCompositionRequirement,
   resolveIterationState,
+  validateActiveGateBPromotionBinding,
   validateActiveIterationPlanningContract,
 } from './p2a_iteration_state.mjs';
 import {
@@ -373,6 +374,21 @@ function inspectArtifact(targetRoot, artifactRoot, isScaffoldProject) {
   } else if (specPath) {
     specValidationError = 'The canonical Gate B specification is unreadable.';
   }
+  let gateBPromotionValid = layout.kind !== 'iteration';
+  let gateBPromotionValidationError = null;
+  if (
+    layout.kind === 'iteration'
+    && iterationState
+    && specValid
+    && spec?.approval === 'approved'
+  ) {
+    try {
+      validateActiveGateBPromotionBinding(iterationState, spec);
+      gateBPromotionValid = true;
+    } catch (error) {
+      gateBPromotionValidationError = error instanceof Error ? error.message : String(error);
+    }
+  }
   const taskGraph = taskGraphPath ? readJsonObject(taskGraphPath) : null;
   let taskGraphValid = false;
   let taskGraphValidationError = null;
@@ -407,6 +423,7 @@ function inspectArtifact(targetRoot, artifactRoot, isScaffoldProject) {
     && intakeValid
     && specValid
     && spec?.approval === 'approved'
+    && gateBPromotionValid
     && taskGraphValid
   );
   if (shouldValidateReadyIteration) {
@@ -428,6 +445,8 @@ function inspectArtifact(targetRoot, artifactRoot, isScaffoldProject) {
     currentSpecReadable: Boolean(currentSpec),
     currentSpecValid,
     currentSpecValidationError,
+    gateBPromotionValid,
+    gateBPromotionValidationError,
     entry,
     gates: {
       intakePath,
@@ -1231,6 +1250,8 @@ function buildNextDecisionContext(
     gateBApproved: gateBApproval.approved,
     gateBApprovalSource: gateBApproval.source,
     gateBApprovalDecision: gateBApproval.event,
+    gateBPromoted: detail.layout.kind !== 'iteration' || detail.gateBPromotionValid,
+    gateBPromotionValidationError: detail.gateBPromotionValidationError,
     gateAInvalidatesGateB: gateAInvalidatesGateB(gates),
     gateCExists: Boolean(gates.taskGraphPath),
     gateCReadable: Boolean(gates.taskGraph),
@@ -1500,6 +1521,27 @@ export const NEXT_DECISION_RULES = [
     command: (context) => `Review ${commandProjectPath(context.targetRoot, context.gates.specPath)}, then run p2a decide --quote "<user utterance>" --artifacts ${JSON.stringify(context.artifactArg)}.`,
   },
   {
+    state: 'gate_b_approved_needs_spec_promotion',
+    kind: 'cli',
+    requiresApproval: false,
+    when: (context) => (
+      context.detail.layout.kind === 'iteration'
+      && context.gateBValid
+      && context.gateBApproved
+      && !context.gateBPromoted
+    ),
+    reason: (context) => (
+      'The approved Gate B artifact is intact, but its canonical current-spec.json promotion is still pending'
+      + `${context.gateBPromotionValidationError ? `: ${context.gateBPromotionValidationError}` : '.'}`
+    ),
+    command: (context) => [
+      'iteration',
+      'promote-spec',
+      '--artifacts',
+      context.artifactArg,
+    ],
+  },
+  {
     state: 'gate_b_approved_needs_execution_prepare',
     kind: 'skill',
     skill: 'p2a-dev-execution',
@@ -1513,6 +1555,7 @@ export const NEXT_DECISION_RULES = [
     when: (context) => (
       context.gateBValid
       && context.gateBApproved
+      && context.gateBPromoted
       && !context.gateCExists
       && context.executionModePolicy !== 'orchestrated'
     ),
@@ -1531,6 +1574,7 @@ export const NEXT_DECISION_RULES = [
     when: (context) => (
       context.gateBValid
       && context.gateBApproved
+      && context.gateBPromoted
       && !context.gateCExists
       && context.executionModePolicy === 'orchestrated'
     ),
