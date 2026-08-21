@@ -46,6 +46,7 @@ import {
   normalizeDisplayPath,
   resolveIterationState,
   serializeIterationState,
+  validateActiveGateBPromotionBinding,
   validateActiveIterationPlanningContract as assertActivePlanningContract,
   validateCurrentSpecCompositionData,
   validateMaintenanceTaskGraphProject,
@@ -441,15 +442,9 @@ function preflight(paths, iterationId) {
   assertFile(paths.taskGraph, 'greenfield gate-c-task-graph/task-graph.json');
 
   const rootValidation = validateHandoffReadyArtifactRoot(paths.artifactRoot);
-  const gateBApprovalAudit = gateBApprovalAuditForIteration(
-    rootValidation.spec.approval_audit ?? parseGateBApprovalAudit(paths.statusMd),
-    iterationId,
-    'Gate B approval preserved from greenfield status during iteration init.',
-  );
   return {
     spec: rootValidation.spec,
     taskGraph: rootValidation.taskGraph,
-    gateBApprovalAudit,
   };
 }
 
@@ -725,36 +720,12 @@ function renderHandoffAudit(currentSpec) {
   return `${rows.join('\n')}\n`;
 }
 
-function parseApprovalAudit(statusPath, heading) {
-  if (!existsSync(statusPath)) return null;
-  const text = readFileSync(statusPath, 'utf8');
-  const headingMatch = text.match(new RegExp(`^#{3,6}\\s+${heading}\\s*$`, 'im'));
-  if (!headingMatch) return null;
-  const tail = text.slice(headingMatch.index + headingMatch[0].length);
-  const nextHeading = tail.search(/^#{1,6}\s+/m);
-  const block = nextHeading === -1 ? tail : tail.slice(0, nextHeading);
-  const get = (label) => {
-    const match = block.match(new RegExp(`^\\s*-\\s*${label}:\\s*(.+?)\\s*$`, 'im'));
-    return match ? match[1].trim() : null;
-  };
-  return {
-    approved_by: get('Approved by'),
-    approved_at: get('Approved at'),
-    approved_artifacts: parseApprovedArtifacts(get('Approved artifacts')),
-    approval_note: get('Approval note'),
-  };
-}
-
 function parseApprovedArtifacts(value) {
   if (!value) return [];
   return value
     .split(',')
     .map((item) => item.trim().replace(/^`|`$/g, ''))
     .filter(Boolean);
-}
-
-function parseGateBApprovalAudit(statusPath) {
-  return parseApprovalAudit(statusPath, 'Gate B approval audit');
 }
 
 function gateBApprovalArtifactsForIteration(iterationId) {
@@ -771,6 +742,33 @@ function gateBApprovalAuditForIteration(audit, iterationId, fallbackNote, approv
     approved_artifacts: gateBApprovalArtifactsForIteration(iterationId),
     approval_note: audit?.approval_note ?? fallbackNote,
   };
+}
+
+function gateBPromotionBindingForIteration(artifactRoot, iterationId, promotedAt) {
+  const specRef = sourceSpecRef(iterationId);
+  return {
+    source_spec_ref: specRef,
+    source_spec_sha256: fileSha256(path.join(artifactRoot, specRef)),
+    promoted_at: promotedAt,
+  };
+}
+
+function reusableGateBPromotionTimestamp(currentSpec, artifactRoot, iterationId) {
+  const binding = currentSpec.gate_b_promotion_bindings?.[iterationId];
+  if (!binding || typeof binding !== 'object' || Array.isArray(binding)) return null;
+  const expectedSpecRef = sourceSpecRef(iterationId);
+  if (typeof binding.source_spec_ref !== 'string') return null;
+  if (normalizePath(binding.source_spec_ref).replace(/^\.\//, '') !== expectedSpecRef) return null;
+  if (
+    typeof binding.source_spec_sha256 !== 'string'
+    || binding.source_spec_sha256 !== fileSha256(path.join(artifactRoot, expectedSpecRef))
+  ) {
+    return null;
+  }
+  if (typeof binding.promoted_at !== 'string' || Number.isNaN(Date.parse(binding.promoted_at))) {
+    return null;
+  }
+  return binding.promoted_at;
 }
 
 function currentSpecWithGateBApprovalAudit(currentSpec, iterationId, audit) {
@@ -941,13 +939,17 @@ function loadEffectiveBaselineSpec(filePath, artifactRoot = path.dirname(filePat
   };
 }
 
-function currentSpecPointer(projectId, iterationId, gateBApprovalAudit) {
+function currentSpecPointer(projectId, iterationId, gateBApprovalAudit, gateBPromotionBinding) {
   let currentSpec = {
     schema_version: 'p2a.current_spec.v1',
     project_id: projectId,
     composed_from: [iterationId],
     active_iteration: iterationId,
     effective_spec_ref: `iterations/${iterationId}/gate-b-spec/spec.json`,
+    gate_b_promoted_at: gateBPromotionBinding.promoted_at,
+    gate_b_promotion_bindings: {
+      [iterationId]: gateBPromotionBinding,
+    },
     note: '반복 1개라 이 반복 spec이 곧 현재 유효 spec. 다중 반복 조합 규칙은 docs/iteration-spec.md에서 정식화.',
   };
   if (gateBApprovalAudit) currentSpec = currentSpecWithGateBApprovalAudit(currentSpec, iterationId, gateBApprovalAudit);
@@ -2035,7 +2037,7 @@ function currentSpecForGateAScope(currentSpec, iterationId, idea, draftedAt, art
 
 function currentSpecWithoutIterationApprovalAudits(currentSpec, iterationId) {
   const next = cloneJson(currentSpec);
-  for (const field of ['gate_b_approval_audits']) {
+  for (const field of ['gate_b_approval_audits', 'gate_b_promotion_bindings']) {
     if (!next[field] || typeof next[field] !== 'object' || Array.isArray(next[field])) continue;
     delete next[field][iterationId];
     if (Object.keys(next[field]).length === 0) delete next[field];
@@ -2078,11 +2080,22 @@ function currentSpecAfterGateAForceReset(
   return next;
 }
 
-function currentSpecForPromotedSpec(currentSpec, iterationId, promotedAt, artifacts, gateBApprovalAudit) {
+function currentSpecForPromotedSpec(
+  currentSpec,
+  iterationId,
+  promotedAt,
+  artifacts,
+  gateBApprovalAudit,
+  gateBPromotionBinding,
+) {
   let next = {
     ...currentSpec,
     active_iteration: iterationId,
     gate_b_promoted_at: promotedAt,
+    gate_b_promotion_bindings: {
+      ...(currentSpec.gate_b_promotion_bindings ?? {}),
+      [iterationId]: gateBPromotionBinding,
+    },
   };
   const activeSpecRef = sourceSpecRef(iterationId);
   const hasNoEffectiveSpec = !currentSpec.effective_spec_ref;
@@ -2159,8 +2172,8 @@ function iterationMetadataForPromotedSpec(metadata, projectId, iterationId, prom
   });
   return {
     ...planningMetadata,
-    project_id: metadata?.project_id ?? projectId,
-    iteration_id: metadata?.iteration_id ?? iterationId,
+    project_id: projectId,
+    iteration_id: iterationId,
     status: 'gate_b_approved',
     promoted_at: promotedAt,
     approved_spec_artifacts: artifacts,
@@ -2932,8 +2945,13 @@ function buildComposedCurrentSpec(previousCurrentSpec, sources, skipped) {
   if (Array.isArray(previousCurrentSpec.closed_iterations)) {
     composedCurrentSpec.closed_iterations = previousCurrentSpec.closed_iterations;
   }
-  if (previousCurrentSpec.gate_b_approval_audits && typeof previousCurrentSpec.gate_b_approval_audits === 'object') {
-    composedCurrentSpec.gate_b_approval_audits = cloneJson(previousCurrentSpec.gate_b_approval_audits);
+  for (const field of ['gate_b_approval_audits', 'gate_b_promotion_bindings']) {
+    if (previousCurrentSpec[field] && typeof previousCurrentSpec[field] === 'object') {
+      composedCurrentSpec[field] = cloneJson(previousCurrentSpec[field]);
+    }
+  }
+  if (previousCurrentSpec.gate_b_promoted_at) {
+    composedCurrentSpec.gate_b_promoted_at = previousCurrentSpec.gate_b_promoted_at;
   }
   const pending = previousCurrentSpec.pending_iteration;
   if (pending) composedCurrentSpec.pending_iteration = pending;
@@ -2945,7 +2963,6 @@ function buildPlan(paths, iterationId, facts) {
   const projectId = projectIdFrom(paths.artifactRoot, facts.spec, facts.taskGraph);
   return {
     projectId,
-    gateBApprovalAudit: facts.gateBApprovalAudit,
     moves: GATE_DIRS.map((gate) => ({
       from: path.join(paths.artifactRoot, gate),
       to: path.join(paths.iterationRoot, gate),
@@ -3077,7 +3094,23 @@ function applyPlan(paths, iterationId, plan, options = {}) {
     originalMovedTaskGraph = rebaseMovedTaskGraphSourceSpec(paths.movedTaskGraph);
     const movedFacts = validateMoved(paths);
     const projectId = projectIdFrom(paths.artifactRoot, movedFacts.spec, movedFacts.taskGraph);
-    const currentSpec = currentSpecPointer(projectId, iterationId, plan.gateBApprovalAudit);
+    const promotedAt = new Date().toISOString();
+    const movedGateBApprovalAudit = gateBApprovalAuditForIteration(
+      movedFacts.spec.approval_audit,
+      iterationId,
+      'Gate B approval preserved from greenfield status during iteration init.',
+    );
+    const gateBPromotionBinding = gateBPromotionBindingForIteration(
+      paths.artifactRoot,
+      iterationId,
+      promotedAt,
+    );
+    const currentSpec = currentSpecPointer(
+      projectId,
+      iterationId,
+      movedGateBApprovalAudit,
+      gateBPromotionBinding,
+    );
     mkdirSync(paths.maintenanceRoot, { recursive: true });
     atomicWriteJson(paths.currentSpec, currentSpec);
     writeIterationStatus(paths.artifactRoot, currentSpec);
@@ -3412,6 +3445,9 @@ function validatePlanningIteration(args) {
 
   const intakePath = activeIntakePath(state);
   if (stage === 'gate-c-draft') {
+    assertFile(state.specPath, `iterations/${state.activeIteration}/gate-b-spec/spec.json`);
+    const spec = validateActiveSpecWithOptionalIntake(state);
+    validateActiveGateBPromotionBinding(state, spec);
     const draftPath = gateCTaskGraphDraftPath(state);
     if (!existsSync(draftPath)) throw new ValidationError(`gate-c draft not found: ${draftPath}`);
     const draft = loadJson(draftPath);
@@ -3659,8 +3695,13 @@ function planningMemoryTaskContext(state) {
 function context(args) {
   const state = resolveIterationState(args.artifacts, { requireReady: false });
   assertActivePlanningContract(state);
-  const effectiveSpec = loadContextEffectiveSpec(state);
   const scope = args.scope ?? 'feature';
+  if (scope === 'feature') {
+    assertFile(state.specPath, `iterations/${state.activeIteration}/gate-b-spec/spec.json`);
+    const spec = validateActiveSpecWithOptionalIntake(state);
+    validateActiveGateBPromotionBinding(state, spec);
+  }
+  const effectiveSpec = loadContextEffectiveSpec(state);
   const contextData = {
     schema_version: 'p2a.task_context.v1',
     project_id: state.projectId,
@@ -4289,12 +4330,21 @@ function promoteSpecLocked(args, artifactRoot) {
     throw new ValidationError('promote-spec requires spec.open_decisions to be empty');
   }
 
-  const promotedAt = new Date().toISOString();
+  const promotedAt = reusableGateBPromotionTimestamp(
+    state.currentSpec,
+    state.artifactRoot,
+    state.activeIteration,
+  ) ?? new Date().toISOString();
   const artifacts = activeSpecArtifacts(state.artifactRoot, state.activeIteration);
   const gateBApprovalAudit = gateBApprovalAuditForIteration(
     spec.approval_audit,
     state.activeIteration,
     'Gate B approval recorded by p2a iteration promote-spec after approved spec with no open decisions.',
+  );
+  const gateBPromotionBinding = gateBPromotionBindingForIteration(
+    state.artifactRoot,
+    state.activeIteration,
+    promotedAt,
   );
   const nextCurrentSpec = currentSpecForPromotedSpec(
     state.currentSpec,
@@ -4302,6 +4352,7 @@ function promoteSpecLocked(args, artifactRoot) {
     promotedAt,
     artifacts,
     gateBApprovalAudit,
+    gateBPromotionBinding,
   );
   const metadataPath = iterationMetadataPath(
     state.artifactRoot,
@@ -4387,6 +4438,9 @@ function promoteTasksLocked(args) {
   const state = resolveIterationState(args.artifacts, { requireReady: false });
   const metadata = loadOptionalIterationMetadata(state.artifactRoot, state.activeIteration);
   assertActivePlanningContract(state, metadata);
+  assertFile(state.specPath, `iterations/${state.activeIteration}/gate-b-spec/spec.json`);
+  const spec = validateActiveSpecWithOptionalIntake(state);
+  validateActiveGateBPromotionBinding(state, spec);
   const planningMemory = metadata?.planning_memory ?? null;
   const planningMemoryErrors = planningMemoryValidationErrors(planningMemory, state.artifactRoot, state.projectId, metadata?.idea);
   if (planningMemory?.status === 'pending') planningMemoryErrors.push('planning_memory.status must be resolved before Gate C promotion');
@@ -4568,6 +4622,7 @@ function diffTasksLocked(args) {
   if (activeSpec.open_decisions.length) {
     throw new ValidationError('diff-tasks requires active spec.open_decisions to be empty');
   }
+  validateActiveGateBPromotionBinding(state, activeSpec);
 
   const draftPath = gateCTaskGraphDraftPath(state);
   if (existsSync(draftPath) && !args.force) {

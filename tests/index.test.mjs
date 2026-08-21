@@ -23,6 +23,7 @@ import './monitor-telemetry.test.mjs';
 import './supervised-batch-execution.test.mjs';
 import './eval-stable-metrics.test.mjs';
 import './verification-runner-utils.test.mjs';
+import './verification-preflight.test.mjs';
 import './memory-run-attribution.test.mjs';
 import './memory-graph-index.test.mjs';
 import './memory-pagination.test.mjs';

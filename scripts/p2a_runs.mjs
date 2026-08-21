@@ -124,6 +124,11 @@ import {
   requiredValue,
   uniqueStrings,
 } from './p2a_cli_helpers.mjs';
+import {
+  isVerificationType,
+  parseVerifyCommand,
+  verificationTypeList,
+} from './p2a_verification.mjs';
 
 const P2A_PATHS = resolveP2aPaths(import.meta.url);
 const ROOT = P2A_PATHS.projectRoot;
@@ -143,7 +148,6 @@ const FAILURE_DEFAULTS = {
   implementation_incomplete: { retryable: 'after_fix', needsUserDecision: false, source: 'owner' },
   other: { retryable: 'no', needsUserDecision: true, source: 'owner' },
 };
-const VERIFICATION_TYPES = new Set(['test', 'lint', 'typecheck', 'custom']);
 const VERIFICATION_STATUSES = new Set(['passed', 'failed', 'skipped', 'not_run', 'unavailable']);
 const OUTPUT_TAIL_LIMIT = 4000;
 function usage() {
@@ -217,7 +221,7 @@ function usage() {
     '  --test-command <cmd>, --lint-command <cmd>, --typecheck-command <cmd>',
     '                          Run an explicit verification command.',
     '  --verify-command <type:cmd>',
-    '                          Run a custom command; type is optional and defaults to custom.',
+    '                          Run an explicit supplemental command. type is required: test, lint, typecheck, or custom.',
     '  --save-config           Persist detected or explicit test/lint/typecheck commands to project.config.json.',
     '  --json                  Machine-readable output for list.',
     '  --dry-run               Preview the selected layout or schema migration without writing files.',
@@ -475,7 +479,7 @@ function parseArgs(argv) {
 function parseManualVerification(value) {
   const [type, status, ...commandParts] = value.split(':');
   const command = commandParts.join(':');
-  if (!VERIFICATION_TYPES.has(type)) throw new Error(`manual verification type must be one of ${[...VERIFICATION_TYPES].join(', ')}`);
+  if (!isVerificationType(type)) throw new Error(`manual verification type must be one of ${verificationTypeList()}`);
   if (!VERIFICATION_STATUSES.has(status)) throw new Error(`manual verification status must be one of ${[...VERIFICATION_STATUSES].join(', ')}`);
   if (!command) throw new Error('--verification must use type:status:command');
   return {
@@ -490,16 +494,6 @@ function parseManualVerification(value) {
     stderrTail: null,
     source: 'manual',
   };
-}
-
-function parseVerifyCommand(value) {
-  const separator = value.indexOf(':');
-  if (separator === -1) return { type: 'custom', command: value, source: 'command' };
-  const maybeType = value.slice(0, separator);
-  if (!VERIFICATION_TYPES.has(maybeType)) return { type: 'custom', command: value, source: 'command' };
-  const command = value.slice(separator + 1);
-  if (!command) throw new Error('--verify-command command must not be blank');
-  return { type: maybeType, command, source: 'command' };
 }
 
 function loadTaskGraph(graphPath) {

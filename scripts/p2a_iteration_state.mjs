@@ -739,6 +739,164 @@ export function validateActiveIterationPlanningContract(
   }
 }
 
+export function validateActiveGateBPromotionBinding(state, spec = null) {
+  const activeSpec = spec ?? validateSpec(
+    state.specPath,
+    null,
+    { artifactRoot: state.artifactRoot },
+  );
+  if (activeSpec.approval !== 'approved') {
+    throw new ValidationError(
+      `active Gate B promotion requires spec.approval approved, got ${JSON.stringify(activeSpec.approval)}`,
+    );
+  }
+  const iterationId = state.activeIteration;
+  const expectedSpecRef = normalizeDisplayPath(
+    path.relative(state.artifactRoot, state.specPath),
+  );
+  const approvalAudit = validateCurrentSpecGateBApprovalAudit(
+    state.currentSpec,
+    iterationId,
+    activeSpec,
+  );
+  const normalizedApprovedArtifacts = approvalAudit.approved_artifacts
+    .map((reference) => normalizeDisplayPath(reference).replace(/^\.\//, ''));
+  if (
+    normalizedApprovedArtifacts.length !== 1
+    || normalizedApprovedArtifacts[0] !== expectedSpecRef
+  ) {
+    throw new ValidationError(
+      `current-spec.json gate_b_approval_audits.${iterationId}.approved_artifacts must equal [${expectedSpecRef}]`,
+    );
+  }
+  if (
+    Object.hasOwn(approvalAudit, 'approved_source')
+    && normalizeDisplayPath(approvalAudit.approved_source).replace(/^\.\//, '') !== expectedSpecRef
+  ) {
+    throw new ValidationError(
+      `current-spec.json gate_b_approval_audits.${iterationId}.approved_source must be ${expectedSpecRef}`,
+    );
+  }
+  const binding = state.currentSpec.gate_b_promotion_bindings?.[iterationId];
+  if (!binding || typeof binding !== 'object' || Array.isArray(binding)) {
+    throw new ValidationError(
+      `current-spec.json gate_b_promotion_bindings.${iterationId} is required for approved Gate B`,
+    );
+  }
+  if (normalizeDisplayPath(binding.source_spec_ref).replace(/^\.\//, '') !== expectedSpecRef) {
+    throw new ValidationError(
+      `current-spec.json gate_b_promotion_bindings.${iterationId}.source_spec_ref must be ${expectedSpecRef}`,
+    );
+  }
+  if (
+    typeof binding.source_spec_sha256 !== 'string'
+    || !/^[a-f0-9]{64}$/.test(binding.source_spec_sha256)
+  ) {
+    throw new ValidationError(
+      `current-spec.json gate_b_promotion_bindings.${iterationId}.source_spec_sha256 must be a lowercase SHA-256 value`,
+    );
+  }
+  const actualSpecSha256 = fileSha256(state.specPath);
+  if (binding.source_spec_sha256 !== actualSpecSha256) {
+    throw new ValidationError(
+      `current-spec.json gate_b_promotion_bindings.${iterationId}.source_spec_sha256 does not match ${expectedSpecRef}`,
+    );
+  }
+  if (typeof binding.promoted_at !== 'string' || Number.isNaN(Date.parse(binding.promoted_at))) {
+    throw new ValidationError(
+      `current-spec.json gate_b_promotion_bindings.${iterationId}.promoted_at must be a timestamp`,
+    );
+  }
+  if (state.currentSpec.gate_b_promoted_at !== binding.promoted_at) {
+    throw new ValidationError(
+      `current-spec.json gate_b_promoted_at must match gate_b_promotion_bindings.${iterationId}.promoted_at`,
+    );
+  }
+
+  const pending = state.currentSpec.pending_iteration;
+  if (pending?.iteration_id === iterationId) {
+    if (pending.status !== 'gate_b_approved') {
+      throw new ValidationError(
+        `current-spec.json pending_iteration.status must be gate_b_approved after Gate B promotion, got ${JSON.stringify(pending.status)}`,
+      );
+    }
+    if (pending.promoted_at !== binding.promoted_at) {
+      throw new ValidationError(
+        'current-spec.json pending_iteration.promoted_at must match the active Gate B promotion binding',
+      );
+    }
+    const pendingSpecRef = normalizeDisplayPath(
+      pending.artifacts?.spec_ref ?? '',
+    ).replace(/^\.\//, '');
+    if (pendingSpecRef !== expectedSpecRef) {
+      throw new ValidationError(
+        `current-spec.json pending_iteration.artifacts.spec_ref must be ${expectedSpecRef}`,
+      );
+    }
+  }
+  for (const field of ['approved_by', 'approval_note']) {
+    if (approvalAudit[field] !== activeSpec.approval_audit?.[field]) {
+      throw new ValidationError(
+        `current-spec.json gate_b_approval_audits.${iterationId}.${field} must match spec.approval_audit.${field}`,
+      );
+    }
+  }
+  const expectedApprovedAt = activeSpec.approval_audit?.approved_at?.slice(0, 10);
+  if (approvalAudit.approved_at !== expectedApprovedAt) {
+    throw new ValidationError(
+      `current-spec.json gate_b_approval_audits.${iterationId}.approved_at must match spec.approval_audit.approved_at`,
+    );
+  }
+
+  const metadata = optionalIterationMetadata(state.artifactRoot, iterationId);
+  if (metadata) {
+    if (metadata.project_id !== state.projectId) {
+      throw new ValidationError(
+        `iterations/${iterationId}/iteration.json project_id must match current-spec.json project_id ${JSON.stringify(state.projectId)}`,
+      );
+    }
+    if (metadata.iteration_id !== iterationId) {
+      throw new ValidationError(
+        `iterations/${iterationId}/iteration.json iteration_id must match active iteration ${JSON.stringify(iterationId)}`,
+      );
+    }
+    if (!['gate_b_approved', 'archived'].includes(metadata.status)) {
+      throw new ValidationError(
+        `iterations/${iterationId}/iteration.json status must record Gate B promotion, got ${JSON.stringify(metadata.status)}`,
+      );
+    }
+    const archived = Array.isArray(state.currentSpec.closed_iterations)
+      && state.currentSpec.closed_iterations.some(
+        (closed) => closed?.iteration_id === iterationId && closed?.status === 'archived',
+      );
+    if (metadata.status === 'archived' && !archived) {
+      throw new ValidationError(
+        `iterations/${iterationId}/iteration.json status archived requires a matching current-spec.json closed_iterations record`,
+      );
+    }
+    if (
+      (metadata.status === 'gate_b_approved' || Object.hasOwn(metadata, 'promoted_at'))
+      && metadata.promoted_at !== binding.promoted_at
+    ) {
+      throw new ValidationError(
+        `iterations/${iterationId}/iteration.json promoted_at must match the active Gate B promotion binding`,
+      );
+    }
+    const metadataSpecRef = normalizeDisplayPath(
+      metadata.approved_spec_artifacts?.spec_ref ?? '',
+    ).replace(/^\.\//, '');
+    if (
+      (metadata.status === 'gate_b_approved' || Object.hasOwn(metadata, 'approved_spec_artifacts'))
+      && metadataSpecRef !== expectedSpecRef
+    ) {
+      throw new ValidationError(
+        `iterations/${iterationId}/iteration.json approved_spec_artifacts.spec_ref must be ${expectedSpecRef}`,
+      );
+    }
+  }
+  return binding;
+}
+
 function validateReadyIterationArtifacts(state) {
   validateCurrentSpecCompositionData(
     state.currentSpec,
@@ -769,7 +927,7 @@ function validateReadyIterationArtifacts(state) {
       `ready iteration requires spec.project_id ${JSON.stringify(spec.project_id)} to match current-spec.json project_id ${JSON.stringify(state.projectId)}`,
     );
   }
-  validateCurrentSpecGateBApprovalAudit(state.currentSpec, state.activeIteration, spec);
+  validateActiveGateBPromotionBinding(state, spec);
   const taskGraph = validateTaskGraph(state.taskGraphPath, state.specPath);
   if (taskGraph.projectId !== state.projectId) {
     throw new ValidationError(

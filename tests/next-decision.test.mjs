@@ -86,7 +86,12 @@ function writeGateA(artifactRoot, status = 'blocked_on_user', iterationId = null
   );
 }
 
-function writeGateB(artifactRoot, approval = 'approved', iterationId = null) {
+function writeGateB(
+  artifactRoot,
+  approval = 'approved',
+  iterationId = null,
+  options = {},
+) {
   const spec = JSON.parse(readFileSync(
     join(FIXTURE_ROOT, 'cache-library', 'spec.approved.json'),
     'utf8',
@@ -95,10 +100,47 @@ function writeGateB(artifactRoot, approval = 'approved', iterationId = null) {
   spec.project_id = currentProjectId(artifactRoot) ?? spec.project_id;
   spec.approval = approval;
   if (approval !== 'approved') delete spec.approval_audit;
-  writeJson(
-    join(gateRoot(artifactRoot, iterationId), 'gate-b-spec', 'spec.json'),
-    spec,
-  );
+  const specPath = join(gateRoot(artifactRoot, iterationId), 'gate-b-spec', 'spec.json');
+  writeJson(specPath, spec);
+
+  if (!iterationId || !existsSync(join(artifactRoot, 'current-spec.json'))) return;
+  const currentSpecPath = join(artifactRoot, 'current-spec.json');
+  const currentSpec = JSON.parse(readFileSync(currentSpecPath, 'utf8'));
+  if (approval === 'approved' && options.promoted !== false) {
+    const promotedAt = '2026-07-31T00:00:00.000Z';
+    const specRef = `iterations/${iterationId}/gate-b-spec/spec.json`;
+    currentSpec.gate_b_promoted_at = promotedAt;
+    currentSpec.gate_b_approval_audits = {
+      ...(currentSpec.gate_b_approval_audits ?? {}),
+      [iterationId]: {
+        ...spec.approval_audit,
+        approved_artifacts: [specRef],
+      },
+    };
+    currentSpec.gate_b_promotion_bindings = {
+      ...(currentSpec.gate_b_promotion_bindings ?? {}),
+      [iterationId]: {
+        source_spec_ref: specRef,
+        source_spec_sha256: createHash('sha256')
+          .update(readFileSync(specPath))
+          .digest('hex'),
+        promoted_at: promotedAt,
+      },
+    };
+    if (currentSpec.pending_iteration?.iteration_id === iterationId) {
+      currentSpec.pending_iteration.status = 'gate_b_approved';
+      currentSpec.pending_iteration.promoted_at = promotedAt;
+      currentSpec.pending_iteration.artifacts = {
+        ...(currentSpec.pending_iteration.artifacts ?? {}),
+        spec_ref: specRef,
+      };
+    }
+  } else {
+    delete currentSpec.gate_b_approval_audits?.[iterationId];
+    delete currentSpec.gate_b_promotion_bindings?.[iterationId];
+    delete currentSpec.gate_b_promoted_at;
+  }
+  writeJson(currentSpecPath, currentSpec);
 }
 
 function writeGateC(artifactRoot, tasks, iterationId = null) {
@@ -134,22 +176,11 @@ function writeGateD(artifactRoot, blockingIssues = [], iterationId = null) {
 function writeIteration(artifactRoot, projectId = 'sample', options = {}) {
   const iterationId = options.iterationId ?? 'v1';
   mkdirSync(join(artifactRoot, 'iterations', iterationId), { recursive: true });
-  const approvalAudit = {
-    approved_by: 'user',
-    approved_at: '2026-07-31',
-    approved_artifacts: [
-      `iterations/${iterationId}/gate-b-spec/spec.json`,
-    ],
-    approval_note: 'Fixture approval for next-action readiness.',
-  };
   const currentSpec = {
     schema_version: 'p2a.current_spec.v1',
     project_id: projectId,
     active_iteration: iterationId,
     effective_spec_ref: `iterations/${iterationId}/gate-b-spec/spec.json`,
-    gate_b_approval_audits: {
-      [iterationId]: approvalAudit,
-    },
     ...(options.closed ? {
       last_closed_iteration: { iteration_id: iterationId, status: 'archived' },
       closed_iterations: [{ iteration_id: iterationId, status: 'archived' }],
@@ -1456,7 +1487,7 @@ test('info keeps its JSON contract and points human output to next', () => {
 });
 
 test('next keeps the ordered decision rules required by the contract', () => {
-  assert.equal(NEXT_DECISION_RULES.length, 28);
+  assert.equal(NEXT_DECISION_RULES.length, 29);
   for (const rule of NEXT_DECISION_RULES) {
     assert.equal(typeof rule.when, 'function');
     assert.equal(typeof rule.reason, 'function');
@@ -1562,6 +1593,7 @@ test('next routes approved Gate B to adaptive execution preparation without appr
   const context = {
     gateBValid: true,
     gateBApproved: true,
+    gateBPromoted: true,
     gateCExists: false,
     executionModePolicy: 'adaptive',
     artifactArg: '.plan2agent/artifacts/sample',
@@ -1573,6 +1605,284 @@ test('next routes approved Gate B to adaptive execution preparation without appr
     '/p2a-dev-execution --artifacts ".plan2agent/artifacts/sample" --prepare-mode adaptive',
   );
   assert.equal(rule.when({ ...context, executionModePolicy: 'orchestrated' }), false);
+});
+
+test('next routes iterative approved Gate B through canonical promotion before every execution mode', () => {
+  const cases = [
+    { mode: 'direct', baselineBacked: false, downstream: 'gate_b_approved_needs_execution_prepare' },
+    { mode: 'planned', baselineBacked: true, downstream: 'gate_b_approved_needs_execution_prepare' },
+    { mode: 'orchestrated', baselineBacked: true, downstream: 'gate_b_approved_needs_tasks' },
+  ];
+
+  for (const caseData of cases) {
+    const root = project();
+    try {
+      const rootArtifact = artifact(root);
+      const iterationId = writeIteration(rootArtifact, 'sample', {
+        iterationId: caseData.baselineBacked ? 'v2' : 'v1',
+      });
+      writeGateA(rootArtifact, 'ready_for_spec', iterationId);
+      writeGateB(rootArtifact, 'approved', iterationId, { promoted: false });
+      if (caseData.baselineBacked) {
+        const activeRoot = gateRoot(rootArtifact, iterationId);
+        const baselineRoot = gateRoot(rootArtifact, 'v1');
+        const activeIntakePath = join(activeRoot, 'gate-a-intake', 'intake.json');
+        const activeSpecPath = join(activeRoot, 'gate-b-spec', 'spec.json');
+        const baselineIntakePath = join(baselineRoot, 'gate-a-intake', 'intake.json');
+        const baselineSpecPath = join(baselineRoot, 'gate-b-spec', 'spec.json');
+        writeJson(
+          baselineIntakePath,
+          JSON.parse(readFileSync(activeIntakePath, 'utf8')),
+        );
+        writeJson(
+          baselineSpecPath,
+          JSON.parse(readFileSync(activeSpecPath, 'utf8')),
+        );
+        const baselineSpecSha256 = createHash('sha256')
+          .update(readFileSync(baselineSpecPath))
+          .digest('hex');
+        const activeIntake = JSON.parse(readFileSync(activeIntakePath, 'utf8'));
+        activeIntake.baseline_context = {
+          spec_ref: 'iterations/v1/gate-b-spec/spec.json',
+          spec_sha256: baselineSpecSha256,
+          reused_answers: [],
+          reused_question_dispositions: [],
+        };
+        writeJson(activeIntakePath, activeIntake);
+        const activeSpec = JSON.parse(readFileSync(activeSpecPath, 'utf8'));
+        activeSpec.source_intake_sha256 = createHash('sha256')
+          .update(readFileSync(activeIntakePath))
+          .digest('hex');
+        writeJson(activeSpecPath, activeSpec);
+        const currentSpecPath = join(rootArtifact, 'current-spec.json');
+        const currentSpec = JSON.parse(readFileSync(currentSpecPath, 'utf8'));
+        currentSpec.composed_from = ['v1'];
+        currentSpec.effective_spec_ref = 'iterations/v1/gate-b-spec/spec.json';
+        currentSpec.pending_iteration = {
+          iteration_id: iterationId,
+          status: 'gate_b_draft',
+          opened_at: '2026-07-31T00:00:00.000Z',
+          idea: 'Extend the approved baseline',
+          baseline_iteration: 'v1',
+          baseline_effective_spec_ref: 'iterations/v1/gate-b-spec/spec.json',
+          baseline_effective_spec_sha256: baselineSpecSha256,
+          artifacts: {
+            intake_ref: `iterations/${iterationId}/gate-a-intake/intake.json`,
+            spec_ref: `iterations/${iterationId}/gate-b-spec/spec.json`,
+          },
+        };
+        writeJson(currentSpecPath, currentSpec);
+        writeJson(join(rootArtifact, 'iterations', iterationId, 'iteration.json'), {
+          schema_version: 'p2a.iteration_metadata.v1',
+          project_id: 'sample',
+          iteration_id: iterationId,
+          status: 'gate_b_draft',
+          opened_at: '2026-07-31T00:00:00.000Z',
+          idea: 'Extend the approved baseline',
+          baseline: {
+            iteration_id: 'v1',
+            current_spec_ref: 'current-spec.json',
+            effective_spec_ref: 'iterations/v1/gate-b-spec/spec.json',
+            effective_spec_sha256: baselineSpecSha256,
+          },
+          planning_memory: null,
+        });
+      } else {
+        const currentSpecPath = join(rootArtifact, 'current-spec.json');
+        const currentSpec = JSON.parse(readFileSync(currentSpecPath, 'utf8'));
+        currentSpec.composed_from = [];
+        currentSpec.effective_spec_ref = null;
+        currentSpec.pending_iteration = {
+          iteration_id: iterationId,
+          status: 'gate_b_draft',
+          opened_at: '2026-07-31T00:00:00.000Z',
+          idea: 'Deliver the first greenfield iteration',
+          baseline_iteration: null,
+          baseline_effective_spec_ref: null,
+          artifacts: {
+            intake_ref: `iterations/${iterationId}/gate-a-intake/intake.json`,
+            spec_ref: `iterations/${iterationId}/gate-b-spec/spec.json`,
+          },
+        };
+        writeJson(currentSpecPath, currentSpec);
+        writeJson(join(rootArtifact, 'iterations', iterationId, 'iteration.json'), {
+          schema_version: 'p2a.iteration_metadata.v1',
+          project_id: 'sample',
+          iteration_id: iterationId,
+          status: 'gate_b_draft',
+          opened_at: '2026-07-31T00:00:00.000Z',
+          idea: 'Deliver the first greenfield iteration',
+          baseline: {
+            iteration_id: null,
+            current_spec_ref: 'current-spec.json',
+            effective_spec_ref: null,
+          },
+          planning_memory: null,
+        });
+      }
+      writeJson(join(root, '.plan2agent', 'project.config.json'), {
+        devExecution: { executionMode: caseData.mode },
+      });
+
+      const beforePromotion = next(root);
+      assertAction(beforePromotion, 'gate_b_approved_needs_spec_promotion', 'cli', [
+        'iteration', 'promote-spec', '--artifacts', rootArtifact,
+      ], false);
+      assert.match(beforePromotion.reason, /artifact is intact.*promotion is still pending/i);
+
+      const promotion = runP2a(beforePromotion.command.argv);
+      assert.equal(promotion.status, 0, `${promotion.stdout}${promotion.stderr}`);
+      const promotedCurrentSpec = JSON.parse(readFileSync(
+        join(rootArtifact, 'current-spec.json'),
+        'utf8',
+      ));
+      assert.equal(
+        promotedCurrentSpec.effective_spec_ref,
+        caseData.baselineBacked
+          ? 'iterations/v1/gate-b-spec/spec.json'
+          : `iterations/${iterationId}/gate-b-spec/spec.json`,
+      );
+      assert.deepEqual(
+        promotedCurrentSpec.composed_from,
+        caseData.baselineBacked ? ['v1'] : [iterationId],
+      );
+      assert.equal(promotedCurrentSpec.pending_iteration?.status, 'gate_b_approved');
+      assertAction(next(root), caseData.downstream, 'skill');
+    } finally {
+      remove(root);
+    }
+  }
+});
+
+test('next fail-closes mismatched Gate B promotion audit, source binding, and timestamp', () => {
+  const cases = [
+    {
+      id: 'approval audit',
+      mutate: (currentSpec, iterationId) => {
+        currentSpec.gate_b_approval_audits[iterationId].approval_note = 'stale approval copy';
+      },
+      error: /approval_note must match/,
+    },
+    {
+      id: 'approval artifact set',
+      mutate: (currentSpec, iterationId) => {
+        currentSpec.gate_b_approval_audits[iterationId].approved_artifacts.push(
+          'iterations/stale/gate-b-spec/spec.json',
+        );
+      },
+      error: /approved_artifacts must equal/,
+    },
+    {
+      id: 'approval timestamp canonical form',
+      mutate: (currentSpec, iterationId) => {
+        currentSpec.gate_b_approval_audits[iterationId].approved_at += 'T23:59:59.000Z';
+      },
+      error: /approved_at must match/,
+    },
+    {
+      id: 'source ref',
+      mutate: (currentSpec, iterationId) => {
+        currentSpec.gate_b_promotion_bindings[iterationId].source_spec_ref = 'iterations/stale/gate-b-spec/spec.json';
+      },
+      error: /source_spec_ref must be/,
+    },
+    {
+      id: 'source hash',
+      mutate: (currentSpec, iterationId) => {
+        currentSpec.gate_b_promotion_bindings[iterationId].source_spec_sha256 = '0'.repeat(64);
+      },
+      error: /source_spec_sha256 does not match/,
+    },
+    {
+      id: 'promotion timestamp',
+      mutate: (currentSpec) => {
+        currentSpec.gate_b_promoted_at = '2000-01-01T00:00:00.000Z';
+      },
+      error: /gate_b_promoted_at must match/,
+    },
+  ];
+
+  for (const caseData of cases) {
+    const root = project();
+    try {
+      const rootArtifact = artifact(root);
+      const iterationId = writeIteration(rootArtifact);
+      writeGateA(rootArtifact, 'ready_for_spec', iterationId);
+      writeGateB(rootArtifact, 'approved', iterationId);
+      const currentSpecPath = join(rootArtifact, 'current-spec.json');
+      const currentSpec = JSON.parse(readFileSync(currentSpecPath, 'utf8'));
+      caseData.mutate(currentSpec, iterationId);
+      writeJson(currentSpecPath, currentSpec);
+
+      const payload = next(root);
+      assertAction(payload, 'gate_b_approved_needs_spec_promotion', 'cli', [
+        'iteration', 'promote-spec', '--artifacts', rootArtifact,
+      ], false);
+      assert.match(payload.reason, caseData.error, caseData.id);
+    } finally {
+      remove(root);
+    }
+  }
+});
+
+test('next rejects a current-spec active iteration that does not resolve to its canonical artifacts', () => {
+  const root = project();
+  try {
+    const rootArtifact = artifact(root);
+    const iterationId = writeIteration(rootArtifact);
+    writeGateA(rootArtifact, 'ready_for_spec', iterationId);
+    writeGateB(rootArtifact, 'approved', iterationId);
+    const currentSpecPath = join(rootArtifact, 'current-spec.json');
+    const currentSpec = JSON.parse(readFileSync(currentSpecPath, 'utf8'));
+    currentSpec.active_iteration = 'missing-iteration';
+    writeJson(currentSpecPath, currentSpec);
+
+    const payload = next(root);
+    assertAction(payload, 'invalid_iteration_state', 'cli', [
+      'iteration', 'validate', '--artifacts', rootArtifact,
+    ]);
+    assert.match(payload.reason, /missing-iteration/);
+  } finally {
+    remove(root);
+  }
+});
+
+test('next routes partial iteration promotion metadata back through deterministic promotion repair', () => {
+  const root = project();
+  try {
+    const rootArtifact = artifact(root);
+    const iterationId = writeIteration(rootArtifact);
+    writeGateA(rootArtifact, 'ready_for_spec', iterationId);
+    writeGateB(rootArtifact, 'approved', iterationId);
+    const currentSpec = JSON.parse(readFileSync(join(rootArtifact, 'current-spec.json'), 'utf8'));
+    const binding = currentSpec.gate_b_promotion_bindings[iterationId];
+    const metadataPath = join(rootArtifact, 'iterations', iterationId, 'iteration.json');
+    writeJson(metadataPath, {
+      schema_version: 'p2a.iteration_metadata.v1',
+      project_id: 'sample',
+      iteration_id: iterationId,
+      status: 'gate_b_approved',
+      promoted_at: '2000-01-01T00:00:00.000Z',
+      approved_spec_artifacts: {
+        spec_ref: binding.source_spec_ref,
+      },
+      planning_memory: null,
+    });
+
+    const beforeRepair = next(root);
+    assertAction(beforeRepair, 'gate_b_approved_needs_spec_promotion', 'cli', [
+      'iteration', 'promote-spec', '--artifacts', rootArtifact,
+    ], false);
+    assert.match(beforeRepair.reason, /iteration\.json promoted_at must match/);
+
+    const repair = runP2a(beforeRepair.command.argv);
+    assert.equal(repair.status, 0, `${repair.stdout}${repair.stderr}`);
+    const repairedMetadata = JSON.parse(readFileSync(metadataPath, 'utf8'));
+    assert.equal(repairedMetadata.promoted_at, binding.promoted_at);
+    assertAction(next(root), 'gate_b_approved_needs_tasks', 'skill');
+  } finally {
+    remove(root);
+  }
 });
 
 test('next applies the adaptive project policy to a flat approved Gate B artifact root', () => {

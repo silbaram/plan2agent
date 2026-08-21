@@ -1085,6 +1085,8 @@ describe('visual experience artifacts', () => {
         'iterations/iter-001/gate-b-spec/experience-spec.json',
       );
       writeJson(specPath, spec);
+      const promotion = runIteration(['promote-spec', '--artifacts', root]);
+      assert.equal(promotion.status, 0, `${promotion.stdout}\n${promotion.stderr}`);
       const graphPath = path.join(iterationRoot, 'gate-c-task-graph', 'task-graph.json');
       rmSync(graphPath);
 

@@ -896,6 +896,10 @@ function prepareCloseReadySecondIteration(artifactRoot) {
       project_id: secondSpec.project_id,
       iteration_id: secondIterationId,
       status: 'gate_b_approved',
+      promoted_at: '2026-07-30T00:00:00.000Z',
+      approved_spec_artifacts: {
+        spec_ref: `iterations/${secondIterationId}/gate-b-spec/spec.json`,
+      },
       opened_at: '2026-07-30T00:00:00.000Z',
       idea: 'Add a second close-ready iteration',
       baseline: {
@@ -915,17 +919,29 @@ function prepareCloseReadySecondIteration(artifactRoot) {
   currentSpec.pending_iteration = {
     iteration_id: secondIterationId,
     status: 'gate_b_approved',
+    promoted_at: '2026-07-30T00:00:00.000Z',
     opened_at: '2026-07-30T00:00:00.000Z',
     idea: 'Add a second close-ready iteration',
     baseline_iteration: firstIterationId,
     baseline_effective_spec_ref:
       `iterations/${firstIterationId}/gate-b-spec/spec.json`,
+    artifacts: {
+      spec_ref: `iterations/${secondIterationId}/gate-b-spec/spec.json`,
+    },
   };
   currentSpec.gate_b_approval_audits[secondIterationId] = {
     ...currentSpec.gate_b_approval_audits[firstIterationId],
     approved_artifacts: [
       `iterations/${secondIterationId}/gate-b-spec/spec.json`,
     ],
+  };
+  currentSpec.gate_b_promoted_at = '2026-07-30T00:00:00.000Z';
+  currentSpec.gate_b_promotion_bindings[secondIterationId] = {
+    source_spec_ref: `iterations/${secondIterationId}/gate-b-spec/spec.json`,
+    source_spec_sha256: createHash('sha256')
+      .update(readFileSync(secondSpecPath))
+      .digest('hex'),
+    promoted_at: '2026-07-30T00:00:00.000Z',
   };
   writeFileSync(currentSpecPath, `${JSON.stringify(currentSpec, null, 2)}\n`, 'utf8');
   return { currentSpecPath, secondIterationId };
@@ -1591,6 +1607,197 @@ test('Gate B promotion participates in the artifact-state lock', async () => {
   }
 });
 
+test('Gate C entry points reject an unpromoted Gate B and recover after deterministic promotion', () => {
+  const artifactRoot = initializedArtifactRoot('gate-b-promotion-guard');
+  try {
+    const iterationId = 'v1-mvp';
+    const currentSpecPath = path.join(artifactRoot, 'current-spec.json');
+    const specPath = path.join(
+      artifactRoot,
+      'iterations',
+      iterationId,
+      'gate-b-spec',
+      'spec.json',
+    );
+    const graphPath = path.join(
+      artifactRoot,
+      'iterations',
+      iterationId,
+      'gate-c-task-graph',
+      'task-graph.json',
+    );
+    const draftPath = path.join(path.dirname(graphPath), 'task-graph.draft.json');
+    const graph = JSON.parse(readFileSync(graphPath, 'utf8'));
+    writeFileSync(draftPath, `${JSON.stringify({
+      ...graph,
+      version: `${graph.version}-draft`,
+    }, null, 2)}\n`, 'utf8');
+
+    const currentSpec = JSON.parse(readFileSync(currentSpecPath, 'utf8'));
+    delete currentSpec.gate_b_approval_audits?.[iterationId];
+    delete currentSpec.gate_b_promotion_bindings?.[iterationId];
+    delete currentSpec.gate_b_promoted_at;
+    writeFileSync(currentSpecPath, `${JSON.stringify(currentSpec, null, 2)}\n`, 'utf8');
+
+    const graphBeforeBlockedStart = readFileSync(graphPath, 'utf8');
+    const draftBeforeBlockedStart = readFileSync(draftPath, 'utf8');
+    const runsDir = path.join(artifactRoot, 'runs');
+    const runsDirExistedBeforeStart = existsSync(runsDir);
+    const blockedRunId = 'run-unpromoted-gate-b';
+    const blockedStart = executeCli([
+      'start',
+      '--artifacts', artifactRoot,
+      '--task', graph.tasks[0].id,
+      '--run-id', blockedRunId,
+      '--workspace', artifactRoot,
+    ], artifactRoot);
+    assert.notEqual(blockedStart.status, 0);
+    assert.match(
+      `${blockedStart.stdout}${blockedStart.stderr}`,
+      /gate_b_approval_audits|gate_b_promotion_bindings/,
+    );
+    assert.equal(readFileSync(graphPath, 'utf8'), graphBeforeBlockedStart);
+    assert.equal(readFileSync(draftPath, 'utf8'), draftBeforeBlockedStart);
+    assert.equal(existsSync(runsDir), runsDirExistedBeforeStart);
+    assert.equal(existsSync(runFilePath(runsDir, blockedRunId)), false);
+
+    rmSync(graphPath);
+
+    const blockedCommands = [
+      [ITERATION_CLI, ['context', '--artifacts', artifactRoot]],
+      [ITERATION_CLI, ['diff-tasks', '--artifacts', artifactRoot]],
+      [ITERATION_CLI, ['validate', '--artifacts', artifactRoot, '--allow-planning', '--stage', 'gate-c-draft']],
+      [ITERATION_CLI, ['promote-tasks', '--artifacts', artifactRoot]],
+      [EXECUTE_CLI, [
+        'prepare', '--artifacts', artifactRoot, '--mode', 'direct',
+        '--selection-rationale', 'Exercise the Gate B promotion guard.',
+      ]],
+    ];
+    for (const [cli, args] of blockedCommands) {
+      const blocked = spawnSync(process.execPath, [cli, ...args], {
+        cwd: ROOT,
+        encoding: 'utf8',
+      });
+      assert.notEqual(blocked.status, 0, `${cli} ${args.join(' ')}`);
+      assert.match(
+        `${blocked.stdout}${blocked.stderr}`,
+        /gate_b_approval_audits|gate_b_promotion_bindings/,
+      );
+    }
+    assert.equal(existsSync(graphPath), false);
+    assert.equal(existsSync(draftPath), true);
+
+    const promote = () => spawnSync(process.execPath, [
+      ITERATION_CLI,
+      'promote-spec',
+      '--artifacts',
+      artifactRoot,
+    ], { cwd: ROOT, encoding: 'utf8' });
+    const firstPromotion = promote();
+    assert.equal(firstPromotion.status, 0, `${firstPromotion.stdout}${firstPromotion.stderr}`);
+    const metadataPath = path.join(artifactRoot, 'iterations', iterationId, 'iteration.json');
+    const statusPath = path.join(artifactRoot, 'status.md');
+    const firstPromotedSpecText = readFileSync(currentSpecPath, 'utf8');
+    const firstMetadataText = readFileSync(metadataPath, 'utf8');
+    const firstStatusText = readFileSync(statusPath, 'utf8');
+    const firstPromotedSpec = JSON.parse(firstPromotedSpecText);
+    const firstBinding = firstPromotedSpec.gate_b_promotion_bindings[iterationId];
+    assert.equal(
+      firstBinding.source_spec_ref,
+      `iterations/${iterationId}/gate-b-spec/spec.json`,
+    );
+    assert.equal(
+      firstBinding.source_spec_sha256,
+      createHash('sha256').update(readFileSync(specPath)).digest('hex'),
+    );
+
+    const retryPromotion = promote();
+    assert.equal(retryPromotion.status, 0, `${retryPromotion.stdout}${retryPromotion.stderr}`);
+    const retriedSpec = JSON.parse(readFileSync(currentSpecPath, 'utf8'));
+    assert.equal(
+      retriedSpec.gate_b_promotion_bindings[iterationId].source_spec_sha256,
+      firstBinding.source_spec_sha256,
+    );
+    assert.equal(readFileSync(currentSpecPath, 'utf8'), firstPromotedSpecText);
+    assert.equal(readFileSync(metadataPath, 'utf8'), firstMetadataText);
+    assert.equal(readFileSync(statusPath, 'utf8'), firstStatusText);
+
+    const partialMetadata = JSON.parse(firstMetadataText);
+    partialMetadata.promoted_at = '2000-01-01T00:00:00.000Z';
+    writeFileSync(metadataPath, `${JSON.stringify(partialMetadata, null, 2)}\n`, 'utf8');
+    const partialContext = spawnSync(process.execPath, [
+      ITERATION_CLI,
+      'context',
+      '--artifacts',
+      artifactRoot,
+    ], { cwd: ROOT, encoding: 'utf8' });
+    assert.notEqual(partialContext.status, 0);
+    assert.match(
+      `${partialContext.stdout}${partialContext.stderr}`,
+      /iteration\.json promoted_at must match the active Gate B promotion binding/,
+    );
+
+    const repairedPromotion = promote();
+    assert.equal(repairedPromotion.status, 0, `${repairedPromotion.stdout}${repairedPromotion.stderr}`);
+    const repairedCurrentSpec = JSON.parse(readFileSync(currentSpecPath, 'utf8'));
+    const repairedMetadata = JSON.parse(readFileSync(metadataPath, 'utf8'));
+    assert.equal(
+      repairedCurrentSpec.gate_b_promotion_bindings[iterationId].promoted_at,
+      firstBinding.promoted_at,
+    );
+    assert.equal(repairedMetadata.promoted_at, firstBinding.promoted_at);
+
+    const mismatchedMetadata = {
+      ...repairedMetadata,
+      project_id: 'stale-project',
+      iteration_id: 'stale-iteration',
+      status: 'gate_b_draft',
+      approved_spec_artifacts: {
+        ...repairedMetadata.approved_spec_artifacts,
+        spec_ref: 'iterations/stale-iteration/gate-b-spec/spec.json',
+      },
+    };
+    writeFileSync(metadataPath, `${JSON.stringify(mismatchedMetadata, null, 2)}\n`, 'utf8');
+    const mismatchedContext = spawnSync(process.execPath, [
+      ITERATION_CLI,
+      'context',
+      '--artifacts',
+      artifactRoot,
+    ], { cwd: ROOT, encoding: 'utf8' });
+    assert.notEqual(mismatchedContext.status, 0);
+    assert.match(
+      `${mismatchedContext.stdout}${mismatchedContext.stderr}`,
+      /iteration\.json project_id must match current-spec\.json project_id/,
+    );
+    const identityRepair = promote();
+    assert.equal(identityRepair.status, 0, `${identityRepair.stdout}${identityRepair.stderr}`);
+    const identityRepairedMetadata = JSON.parse(readFileSync(metadataPath, 'utf8'));
+    assert.equal(identityRepairedMetadata.project_id, repairedCurrentSpec.project_id);
+    assert.equal(identityRepairedMetadata.iteration_id, iterationId);
+    assert.equal(identityRepairedMetadata.status, 'gate_b_approved');
+    assert.equal(identityRepairedMetadata.promoted_at, firstBinding.promoted_at);
+    assert.equal(
+      identityRepairedMetadata.approved_spec_artifacts.spec_ref,
+      firstBinding.source_spec_ref,
+    );
+
+    for (const args of [
+      ['context', '--artifacts', artifactRoot],
+      ['validate', '--artifacts', artifactRoot, '--allow-planning', '--stage', 'gate-c-draft'],
+      ['promote-tasks', '--artifacts', artifactRoot],
+      ['validate', '--artifacts', artifactRoot],
+    ]) {
+      const result = spawnSync(process.execPath, [ITERATION_CLI, ...args], {
+        cwd: ROOT,
+        encoding: 'utf8',
+      });
+      assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+    }
+  } finally {
+    rmSync(artifactRoot, { recursive: true, force: true });
+  }
+});
+
 test('failed Gate B promotion restores current spec and iteration metadata', () => {
   const artifactRoot = initializedArtifactRoot('promote-spec-rollback');
   try {
@@ -2194,6 +2401,8 @@ test('failed close restores current spec and iteration metadata', () => {
     writeFileSync(graphPath, `${JSON.stringify(graph, null, 2)}\n`, 'utf8');
 
     const currentSpecPath = path.join(artifactRoot, 'current-spec.json');
+    const currentSpec = JSON.parse(readFileSync(currentSpecPath, 'utf8'));
+    const promotionBinding = currentSpec.gate_b_promotion_bindings['v1-mvp'];
     const metadataPath = path.join(
       artifactRoot,
       'iterations',
@@ -2205,6 +2414,10 @@ test('failed close restores current spec and iteration metadata', () => {
       project_id: 'webhook-api-service',
       iteration_id: 'v1-mvp',
       status: 'gate_b_approved',
+      promoted_at: promotionBinding.promoted_at,
+      approved_spec_artifacts: {
+        spec_ref: promotionBinding.source_spec_ref,
+      },
       planning_memory: null,
     }, null, 2)}\n`, 'utf8');
     const currentSpecBefore = readFileSync(currentSpecPath);

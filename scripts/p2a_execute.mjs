@@ -11,7 +11,6 @@ import {
   approvedVisualReviewContract,
   loadJson,
   resolveSpecSourceIntake,
-  validateCurrentSpecGateBApprovalAudit,
   validateProposalDraftApprovalData,
   validateRunData,
   validateRunIndexData,
@@ -29,6 +28,7 @@ import {
 } from './p2a_monitor_gate.mjs';
 import {
   resolveIterationState,
+  validateActiveGateBPromotionBinding,
   validateMaintenanceTaskGraphProject,
 } from './p2a_iteration_state.mjs';
 import {
@@ -67,6 +67,7 @@ import {
   requiredValue,
   uniqueStrings,
 } from './p2a_cli_helpers.mjs';
+import { parseVerifyCommand } from './p2a_verification.mjs';
 
 const P2A_PATHS = resolveP2aPaths(import.meta.url);
 const ROOT = P2A_PATHS.projectRoot;
@@ -146,6 +147,7 @@ function usage() {
     '  --test, --lint, --typecheck',
     '  --test-command <cmd>, --lint-command <cmd>, --typecheck-command <cmd>',
     '  --verify-command <type:cmd>',
+    '                          type is required: test, lint, typecheck, or custom.',
     '  --save-config',
     '  --status finished|failed|blocked',
     '  --failure-class <class>',
@@ -290,7 +292,11 @@ function parseArgs(argv) {
     else if (arg === '--test-command') args.verifyOptions.push('--test-command', requiredValue(argv, ++index, '--test-command', { allowLeadingDash: true }));
     else if (arg === '--lint-command') args.verifyOptions.push('--lint-command', requiredValue(argv, ++index, '--lint-command', { allowLeadingDash: true }));
     else if (arg === '--typecheck-command') args.verifyOptions.push('--typecheck-command', requiredValue(argv, ++index, '--typecheck-command', { allowLeadingDash: true }));
-    else if (arg === '--verify-command') args.verifyOptions.push('--verify-command', requiredValue(argv, ++index, '--verify-command', { allowLeadingDash: true }));
+    else if (arg === '--verify-command') {
+      const value = requiredValue(argv, ++index, '--verify-command', { allowLeadingDash: true });
+      parseVerifyCommand(value);
+      args.verifyOptions.push('--verify-command', value);
+    }
     else if (arg === '--save-config') args.saveConfig = true;
     else if (arg === '--status') {
       args.status = requiredValue(argv, ++index, '--status');
@@ -1328,11 +1334,7 @@ function runPrepare(args) {
       }
     }
     if (iterative) {
-      validateCurrentSpecGateBApprovalAudit(
-        lockedState.currentSpec,
-        lockedState.activeIteration,
-        spec,
-      );
+      validateActiveGateBPromotionBinding(lockedState, spec);
     }
 
     const visualReview = approvedVisualReviewContract(lockedState.specPath, lockedState.artifactRoot);
