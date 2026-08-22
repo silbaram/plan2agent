@@ -115,6 +115,7 @@ Memory가 활성화되고 연결된 iterative root에서는 next iteration을 �
 - 작은 fix, 문서 수정, 패치성 변경은 상시 `maintenance` 반복에 append한다.
 - 반복 전환은 암묵적으로 일어나지 않는다. 모든 task done과 사용자 close가 모두 만족될 때만 마감한다.
 - 마감 시 해당 반복을 `archived`로 동결하고, 루트 `status.md` 반복 인덱스에 표시한다.
+- 마감 상태는 단조롭다. active 반복의 `iteration.json.status`/`closed_at`/`close`와 `current-spec.json.closed_iterations`/`last_closed_iteration`은 함께 archived 상태를 나타내고 `current-spec.json.pending_iteration`은 없어야 하며, `close` 뒤 같은 반복을 planning 상태로 되돌리지 않는다.
 - 마감 시 필요하면 개발 대상 프로젝트로 재인계하고, P2A 산출물 기준점은 Plan2Agent Memory 또는 명시 export에 남긴다. git commit은 제품 소스코드 기준점에만 사용한다.
 - 한 active iteration 안에서 ready task의 foreground bounded batch는 허용한다. 동시에 여러 iteration을 여는 병렬 반복, branch별 반복, worktree별 planning lane은 후속 고도화로 둔다.
 
@@ -329,7 +330,7 @@ p2a iteration close \
   --artifacts .plan2agent/artifacts/<project_id>
 ```
 
-`close`는 active 반복의 Gate B/C validation과 모든 task `done`을 재확인한 뒤 `iterations/<iter-id>/iteration.json`을 `status: "archived"`로 갱신한다. Gate D review 파일은 요구하지 않는다. 루트 `current-spec.json`에는 `last_closed_iteration`과 `closed_iterations`가 기록되고, `status.md` 반복 인덱스에는 close 시점이 남는다. active pointer는 닫힌 반복에 그대로 유지된다. `--iteration-id active`가 기본값이며, 현재 구현은 active 반복 close만 지원한다.
+`close`는 active 반복의 Gate B/C validation과 모든 task `done`을 재확인한 뒤 `iterations/<iter-id>/iteration.json`을 `status: "archived"`로 갱신한다. Gate D review 파일은 요구하지 않는다. 루트 `current-spec.json`에는 `last_closed_iteration`과 `closed_iterations`가 기록되고, `status.md` 반복 인덱스에는 close 시점이 남는다. active pointer는 닫힌 반복에 그대로 유지된다. 이 세 archive 표면이 모순되면 `validate`가 실패하고 `p2a next`는 `invalid_iteration_state`와 검증 명령을 반환한다. `--iteration-id active`가 기본값이며, 현재 구현은 active 반복 close만 지원한다.
 
 ```bash
 p2a iteration open \
@@ -366,7 +367,7 @@ p2a iteration promote-spec \
   --artifacts .plan2agent/artifacts/<project_id>
 ```
 
-`promote-spec`는 `p2a decide`로 승인된 active 반복의 Gate B `spec.json`이 `approval: "approved"`이고 `open_decisions`가 비어 있는지 검증한 뒤 `iteration.json`과 `current-spec.json.pending_iteration`에 `gate_b_approved` 상태를 기록한다. 이때 `current-spec.json.gate_b_promotion_bindings[<iteration-id>]`에 canonical spec ref, 원본 파일 SHA-256, promotion 시각을 함께 기록하고 Gate B approval audit identity를 canonical spec ref와 함께 보존한다. 동일한 ref/SHA binding을 다시 promotion하면 기존 promotion 시각을 재사용해 `current-spec.json`, `iteration.json`, `status.md`를 결정적으로 복원한다. 초기 Gate A-only 반복처럼 `current-spec.json.effective_spec_ref`가 없던 경우에는 active spec을 현재 유효 spec으로 설정한다. 이미 baseline이 있는 후속 반복에서는 baseline pointer와 `composed_from/source_specs` 조합본을 보존하고, 실제 current-effective 반영은 Gate C validation과 close/compose 이후 수행한다.
+`promote-spec`는 `p2a decide`로 승인된 active 반복의 Gate B `spec.json`이 `approval: "approved"`이고 `open_decisions`가 비어 있는지 검증한 뒤 `iteration.json`과 `current-spec.json.pending_iteration`에 `gate_b_approved` 상태를 기록한다. 이때 `current-spec.json.gate_b_promotion_bindings[<iteration-id>]`에 canonical spec ref, 원본 파일 SHA-256, promotion 시각을 함께 기록하고 Gate B approval audit identity를 canonical spec ref와 함께 보존한다. 동일한 ref/SHA binding을 다시 promotion하면 기존 promotion 시각을 재사용해 `current-spec.json`, `iteration.json`, `status.md`를 결정적으로 복원한다. 단, `close`로 archived 된 active 반복은 다시 promotion할 수 없으며 새 반복을 `open`해야 한다. 초기 Gate A-only 반복처럼 `current-spec.json.effective_spec_ref`가 없던 경우에는 active spec을 현재 유효 spec으로 설정한다. 이미 baseline이 있는 후속 반복에서는 baseline pointer와 `composed_from/source_specs` 조합본을 보존하고, 실제 current-effective 반영은 Gate C validation과 close/compose 이후 수행한다.
 
 Gate B 승인 직후 이 binding이 아직 없거나 ref/hash/audit 또는 active `iteration.json` promotion metadata가 active spec과 다르면 `p2a next`는 `gate_b_approved_needs_spec_promotion` 상태와 위 `promote-spec` 명령을 반환한다. `context --scope feature`, `diff-tasks`, `validate --stage gate-c-draft`, `promote-tasks`, Direct/Planned `execute prepare`는 같은 binding guard를 공유하며 promotion 완료 전에는 Gate C 산출물을 만들거나 승격하지 않는다. 이미 사용자가 승인한 Gate B의 canonical 반영이므로 이 promotion에는 추가 사용자 승인이 필요하지 않다.
 

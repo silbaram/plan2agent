@@ -600,6 +600,8 @@ p2a validate \
 
 기존 active 반복의 모든 task가 `done`이면 반복을 close하고, 닫힌 반복이 2개 이상일 때는 compose로 current-effective 기준을 갱신한 뒤 다음 반복을 연다. 첫 `draft`는 Gate A 범위 확인 intake를 만들고, 사용자의 명시적 Gate A 확인을 `intake.json`에 기록한 뒤 같은 session에서 `draft`를 다시 호출하면 Gate B 초안이 생성된다.
 
+`close` 뒤 같은 active 반복에 `promote-spec`를 다시 실행할 수 없다. `iteration.json`의 archive marker와 `current-spec.json.closed_iterations`/`last_closed_iteration`이 어긋나면 `next`, `compose`, `open`은 쓰기 전에 실패하고, `next`는 `invalid_iteration_state`와 `p2a iteration validate --artifacts <root>` 복구 진단 명령을 반환한다.
+
 ```bash
 p2a iteration validate \
   --artifacts .plan2agent/artifacts/<project_id> \
