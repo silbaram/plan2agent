@@ -971,7 +971,7 @@ test('a confirmed entry proceeds through Gate A-C execution and opens a baseline
     let result = runP2a(next.command.argv);
     assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
 
-    next = runNext(root, ['--entry', 'idea.md']);
+    next = runNext(root, ['--entry', 'idea.md', '--contract', 'v2']);
     assert.equal(next.state, 'ready_task_available');
 
     const runId = 'run-entry-contract-e2e';
@@ -1003,9 +1003,53 @@ test('a confirmed entry proceeds through Gate A-C execution and opens a baseline
     assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
     assert.match(result.stdout, /close-ready: all tasks done/);
 
-    next = runNext(root, ['--entry', 'idea.md']);
-    assert.equal(next.state, 'iteration_ready_to_close');
-    result = runP2a(next.command.argv);
+    next = runNext(root, ['--entry', 'idea.md', '--contract', 'v2']);
+    assert.equal(next.state, 'iteration_review_or_close_required');
+    assert.equal(next.command.kind, 'approval');
+    assert.deepEqual(next.command.options.map((option) => option.id), ['review', 'close']);
+    const reviewOption = next.command.options[0];
+    assert.equal(reviewOption.action.kind, 'review');
+
+    const cleanReviewDecision = runNext(root, ['--entry', 'idea.md', '--contract', 'v2']);
+    assert.equal(cleanReviewDecision.state, 'iteration_review_or_close_required');
+    assert.equal(cleanReviewDecision.command.kind, 'approval');
+
+    const remediationArgv = reviewOption.action.remediation.argv.map((arg) => {
+      if (arg === '<task-id>') return 'task-001';
+      if (arg === '<review finding>') return 'Code review found a scoped remediation for task-001.';
+      return arg;
+    });
+    result = runP2a(remediationArgv);
+    assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+
+    next = runNext(root, ['--entry', 'idea.md', '--contract', 'v2']);
+    assert.equal(next.state, 'ready_task_available');
+    const remediationRunId = 'run-entry-contract-review-remediation';
+    result = runP2a([
+      'execute', 'start',
+      '--artifacts', artifactRoot,
+      '--task', 'task-001',
+      '--run-id', remediationRunId,
+      '--agent-tool', 'codex',
+      '--workspace', root,
+      '--workspace-ref', 'entry-contract-review-remediation',
+    ]);
+    assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+
+    result = runP2a([
+      'execute', 'finish',
+      '--artifacts', artifactRoot,
+      '--run-id', remediationRunId,
+      '--status', 'finished',
+      '--test-command', `"${process.execPath}" -e "process.exit(0)"`,
+    ]);
+    assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+
+    next = runNext(root, ['--entry', 'idea.md', '--contract', 'v2']);
+    assert.equal(next.state, 'iteration_review_or_close_required');
+    const closeOption = next.command.options.find((option) => option.id === 'close');
+    assert.equal(closeOption.action.requiresApproval, true);
+    result = runP2a(closeOption.action.argv);
     assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
     assert.match(result.stdout, /iteration closed/);
 

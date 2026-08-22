@@ -1920,17 +1920,21 @@ describe('visual experience artifacts', () => {
         'next',
         '--target', workspaceRoot,
         '--project-id', 'webhook-api-service',
-        '--json',
+        '--json', '--contract', 'v2',
       ]);
       assert.equal(nextResult.status, 0, `${nextResult.stdout}\n${nextResult.stderr}`);
       const nextPayload = JSON.parse(nextResult.stdout);
-      assert.equal(nextPayload.state, 'iteration_ready_to_close');
-      assert.deepEqual(nextPayload.command.argv, [
+      assert.equal(nextPayload.state, 'iteration_review_or_close_required');
+      assert.equal(nextPayload.command.kind, 'approval');
+      assert.deepEqual(nextPayload.command.options.map((option) => option.id), ['review', 'close']);
+      const closeOption = nextPayload.command.options.find((option) => option.id === 'close');
+      assert.deepEqual(closeOption.action.argv, [
         'iteration',
         'close',
         '--artifacts',
         artifactRoot,
       ]);
+      assert.equal(closeOption.action.requiresApproval, true);
 
       const finishedRunPath = runFilePath(runsDir, runId);
       const finishedRun = JSON.parse(readFileSync(finishedRunPath, 'utf8'));

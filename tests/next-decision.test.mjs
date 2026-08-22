@@ -363,7 +363,7 @@ function writeRuns(artifactRoot, runs) {
       updatedAt: finishedAt ?? startedAt,
       finishedAt,
       changedFiles: [],
-      verification: [],
+      verification: run.verification ?? [],
       notes: [],
       ...(['failed', 'blocked'].includes(run.status) ? {
         failure: {
@@ -453,6 +453,23 @@ function assertAction(payload, state, kind, argv = null, requiresApproval = null
       assert.ok(Array.isArray(payload.command.args));
     }
   }
+}
+
+function assertReviewOrCloseDecision(payload, artifactRoot) {
+  assertAction(payload, 'iteration_review_or_close_required', 'approval');
+  assert.match(payload.reason, /explicitly choose review and remediation or close/i);
+  assert.deepEqual(payload.command.options.map((option) => option.id), ['review', 'close']);
+  const [review, close] = payload.command.options;
+  assert.equal(review.action.kind, 'review');
+  assert.deepEqual(review.action.remediation.argv, [
+    'tasks', 'todo', '--artifacts', artifactRoot, '<task-id>',
+    '--reopen', '--note', '<review finding>',
+  ]);
+  assert.equal(review.action.remediation.requiresApproval, false);
+  assert.equal(close.action.kind, 'cli');
+  assert.deepEqual(close.action.argv, ['iteration', 'close', '--artifacts', artifactRoot]);
+  assert.equal(close.action.requiresApproval, true);
+  return { review, close };
 }
 
 function artifactPath(root, projectId = 'sample') {
@@ -640,6 +657,20 @@ test('next chooses one read-only action for every primary state', () => {
       expected: (root) => ['tasks_blocked', 'cli', ['tasks', 'show', '--artifacts', artifactPath(root), 'task-001']],
     },
     {
+      id: 'all tasks done require explicit close or review choice',
+      setup: () => {
+        const root = project();
+        const rootArtifact = artifact(root);
+        const iterationId = writeIteration(rootArtifact);
+        writeGateA(rootArtifact, 'ready_for_spec', iterationId);
+        writeGateB(rootArtifact, 'approved', iterationId);
+        writeGateC(rootArtifact, [task('task-001', 'done')], iterationId);
+        writeGateD(rootArtifact, [], iterationId);
+        return root;
+      },
+      expected: () => ['iteration_review_or_close_required', 'approval'],
+    },
+    {
       id: 'all non-UI tasks done require functional acceptance',
       setup: () => {
         const root = project();
@@ -731,6 +762,99 @@ test('next chooses one read-only action for every primary state', () => {
     } finally {
       remove(root);
     }
+  }
+});
+
+test('completed iterations expose structured review and close options without mutating state', () => {
+  const root = project();
+  try {
+    const rootArtifact = artifact(root);
+    const iterationId = writeIteration(rootArtifact);
+    writeGateA(rootArtifact, 'ready_for_spec', iterationId);
+    writeGateB(rootArtifact, 'approved', iterationId);
+    writeGateC(rootArtifact, [task('task-001', 'done')], iterationId);
+    writeGateD(rootArtifact, [], iterationId);
+    const before = snapshotHarness(root);
+    assertReviewOrCloseDecision(next(root), artifactPath(root));
+    assertReviewOrCloseDecision(next(root), artifactPath(root));
+    assert.deepEqual(snapshotHarness(root), before);
+    const currentSpec = JSON.parse(readFileSync(join(rootArtifact, 'current-spec.json'), 'utf8'));
+    assert.equal(currentSpec.active_iteration, iterationId);
+    assert.equal(currentSpec.closed_iterations, undefined);
+  } finally {
+    remove(root);
+  }
+});
+
+test('human next output defaults to actionable v2 options while unqualified JSON stays v1', () => {
+  const root = project();
+  try {
+    const rootArtifact = artifact(root);
+    const iterationId = writeIteration(rootArtifact);
+    writeGateA(rootArtifact, 'ready_for_spec', iterationId);
+    writeGateB(rootArtifact, 'approved', iterationId);
+    writeGateC(rootArtifact, [task('task-001', 'done')], iterationId);
+    writeGateD(rootArtifact, [], iterationId);
+
+    const human = runP2a(['next', '--target', root]);
+    assert.equal(human.status, 0, `${human.stdout}${human.stderr}`);
+    assert.match(human.stdout, /state: iteration_review_or_close_required/);
+    assert.match(human.stdout, /Options:/);
+    assert.match(human.stdout, /Review and remediate \(review\)/);
+    assert.match(human.stdout, /Remediation: .*tasks todo .*--reopen.*--note/);
+    assert.match(human.stdout, /Remediation approval required: no/);
+    assert.match(human.stdout, /Close iteration \(close\)/);
+    assert.match(human.stdout, /Action: .*iteration close/);
+    assert.match(human.stdout, /Approval required: yes/);
+
+    const legacyResult = runP2a(['next', '--target', root, '--json']);
+    assert.equal(legacyResult.status, 0, `${legacyResult.stdout}${legacyResult.stderr}`);
+    const legacy = JSON.parse(legacyResult.stdout);
+    assert.equal(legacy.schema_version, 'p2a.next.v1');
+    assert.equal(legacy.command.kind, 'approval');
+    assert.equal('options' in legacy.command, false);
+  } finally {
+    remove(root);
+  }
+});
+
+test('the explicit close option archives a completed iteration without an optional review', () => {
+  const root = project();
+  try {
+    const rootArtifact = artifact(root);
+    const iterationId = writeIteration(rootArtifact);
+    writeGateA(rootArtifact, 'ready_for_spec', iterationId);
+    writeGateB(rootArtifact, 'approved', iterationId);
+    writeGateC(rootArtifact, [task('task-001', 'done')], iterationId);
+    writeGateD(rootArtifact, [], iterationId);
+    writeRuns(rootArtifact, [{
+      runId: 'run-no-review-close',
+      iterationId,
+      status: 'finished',
+      verification: [{
+        type: 'test',
+        command: 'node --test',
+        status: 'passed',
+        exitCode: 0,
+        durationMs: 1,
+        startedAt: '2026-07-31T00:00:30.000Z',
+        finishedAt: '2026-07-31T00:00:31.000Z',
+        stdoutTail: null,
+        stderrTail: null,
+        source: 'command',
+      }],
+    }]);
+
+    const { close } = assertReviewOrCloseDecision(next(root), artifactPath(root));
+    const result = runP2a(close.action.argv);
+    assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+    const metadata = JSON.parse(readFileSync(
+      join(rootArtifact, 'iterations', iterationId, 'iteration.json'),
+      'utf8',
+    ));
+    assert.equal(metadata.status, 'archived');
+  } finally {
+    remove(root);
   }
 });
 
@@ -2132,6 +2256,101 @@ test('next schema declares the CLI, skill, and approval command shapes', () => {
     'skill',
     'approval',
   ]);
+  assert.ok(NEXT_SCHEMA.properties.command.oneOf[2].properties.options);
+  const reviewOrClosePayload = {
+    schema_version: 'p2a.next.v2',
+    generatedAt: '2026-08-22T00:00:00.000Z',
+    target: '.',
+    projectId: 'sample',
+    state: 'iteration_review_or_close_required',
+    reasonCode: 'iteration_review_or_close_required',
+    reason: 'Review or close the completed iteration.',
+    command: {
+      kind: 'approval',
+      display: 'Choose review or close.',
+      options: [
+        {
+          id: 'review',
+          label: 'Review and remediate',
+          description: 'Review before close.',
+          action: {
+            kind: 'review',
+            display: 'Review the implementation.',
+            remediation: {
+              kind: 'cli',
+              argv: [
+                'tasks', 'todo', '--artifacts', '.plan2agent/artifacts/sample', '<task-id>',
+                '--reopen', '--note', '<review finding>',
+              ],
+              display: "p2a tasks todo --artifacts .plan2agent/artifacts/sample '<task-id>' --reopen --note '<review finding>'",
+              requiresApproval: false,
+            },
+          },
+        },
+        {
+          id: 'close',
+          label: 'Close iteration',
+          description: 'Close after an explicit choice.',
+          action: {
+            kind: 'cli',
+            argv: ['iteration', 'close', '--artifacts', '.plan2agent/artifacts/sample'],
+            display: 'p2a iteration close --artifacts .plan2agent/artifacts/sample',
+            requiresApproval: true,
+          },
+        },
+      ],
+    },
+    continuation: null,
+  };
+  assert.doesNotThrow(() => validateSchema(reviewOrClosePayload, NEXT_SCHEMA));
+
+  const missingOptions = structuredClone(reviewOrClosePayload);
+  delete missingOptions.command.options;
+  assert.throws(
+    () => validateSchema(missingOptions, NEXT_SCHEMA),
+    /missing required keys: options/,
+  );
+
+  const malformedOptions = structuredClone(reviewOrClosePayload);
+  malformedOptions.command.options = [{ bad: true }, { bad: true }];
+  assert.throws(
+    () => validateSchema(malformedOptions, NEXT_SCHEMA),
+    /oneOf/,
+  );
+
+  const wrongRemediationCommand = structuredClone(reviewOrClosePayload);
+  wrongRemediationCommand.command.options[0].action.remediation.argv[1] = 'show';
+  assert.throws(
+    () => validateSchema(wrongRemediationCommand, NEXT_SCHEMA),
+    /oneOf/,
+  );
+
+  const optionsOnAnotherState = structuredClone(reviewOrClosePayload);
+  optionsOnAnotherState.state = 'gate_a_needs_approval';
+  optionsOnAnotherState.reasonCode = 'gate_a_needs_approval';
+  assert.throws(
+    () => validateSchema(optionsOnAnotherState, NEXT_SCHEMA),
+    /must not match forbidden schema/,
+  );
+
+  assert.doesNotThrow(() => validateSchema(
+    ['review', 'close'],
+    { type: 'array', prefixItems: [{ const: 'review' }, { const: 'close' }], items: false },
+  ));
+  assert.throws(
+    () => validateSchema(
+      ['close', 'review'],
+      { type: 'array', prefixItems: [{ const: 'review' }, { const: 'close' }], items: false },
+    ),
+    /must equal "review"/,
+  );
+  assert.throws(
+    () => validateSchema(
+      ['review', 'close', 'extra'],
+      { type: 'array', prefixItems: [{ const: 'review' }, { const: 'close' }], items: false },
+    ),
+    /disallowed by the schema/,
+  );
   assert.throws(() => validateSchema({
     schema_version: 'p2a.next.v2',
     generatedAt: '2026-07-27T00:00:00.000Z',
@@ -2289,5 +2508,7 @@ test('p2a-next skill delegates to the CLI without duplicating decision rules', (
   assert.match(skill, /kind: cli/);
   assert.match(skill, /kind: skill/);
   assert.match(skill, /kind: approval/);
+  assert.match(skill, /structured option/);
+  assert.match(skill, /action\.remediation/);
   assert.doesNotMatch(skill, /gate-a|ready task|iteration init/i);
 });
