@@ -734,6 +734,110 @@ test('next chooses one read-only action for every primary state', () => {
   }
 });
 
+test('next, compose, and open agree when archived iteration metadata is reopened', () => {
+  const root = project();
+  try {
+    const rootArtifact = artifact(root);
+    const iterationId = writeIteration(rootArtifact, 'sample', { closed: true });
+    writeGateA(rootArtifact, 'ready_for_spec', iterationId);
+    writeGateB(rootArtifact, 'approved', iterationId);
+    writeGateC(rootArtifact, [task('task-001', 'done')], iterationId);
+    writeGateD(rootArtifact, [], iterationId);
+
+    const metadataPath = join(rootArtifact, 'iterations', iterationId, 'iteration.json');
+    const metadata = JSON.parse(readFileSync(metadataPath, 'utf8'));
+    metadata.status = 'gate_b_approved';
+    writeJson(metadataPath, metadata);
+    const currentSpecPath = join(rootArtifact, 'current-spec.json');
+    const statusPath = join(rootArtifact, 'status.md');
+    const before = {
+      currentSpec: readFileSync(currentSpecPath),
+      metadata: readFileSync(metadataPath),
+      status: readFileSync(statusPath),
+    };
+
+    const payload = next(root);
+    assertAction(payload, 'invalid_iteration_state', 'cli', [
+      'iteration', 'validate', '--artifacts', artifactPath(root),
+    ]);
+    assert.match(payload.reason, /archive consistency requires .* status archived/);
+
+    for (const command of [
+      payload.command.argv,
+      ['iteration', 'compose', '--artifacts', artifactPath(root)],
+      [
+        'iteration', 'open', '--artifacts', artifactPath(root),
+        '--iteration-id', 'v2', '--idea', 'Continue after the archived baseline',
+      ],
+    ]) {
+      const result = runP2a(command);
+      assert.notEqual(result.status, 0, command.join(' '));
+      assert.match(`${result.stdout}${result.stderr}`, /archive consistency requires .* status archived/);
+    }
+
+    assert.deepEqual(readFileSync(currentSpecPath), before.currentSpec);
+    assert.deepEqual(readFileSync(metadataPath), before.metadata);
+    assert.deepEqual(readFileSync(statusPath), before.status);
+  } finally {
+    remove(root);
+  }
+});
+
+test('next, compose, and open reject pending planning state on an archived active iteration', () => {
+  const root = project();
+  try {
+    const rootArtifact = artifact(root);
+    const iterationId = writeIteration(rootArtifact, 'sample', { closed: true });
+    writeGateA(rootArtifact, 'ready_for_spec', iterationId);
+    writeGateB(rootArtifact, 'approved', iterationId);
+    writeGateC(rootArtifact, [task('task-001', 'done')], iterationId);
+    writeGateD(rootArtifact, [], iterationId);
+
+    const currentSpecPath = join(rootArtifact, 'current-spec.json');
+    const currentSpec = JSON.parse(readFileSync(currentSpecPath, 'utf8'));
+    currentSpec.pending_iteration = {
+      iteration_id: iterationId,
+      status: 'gate_b_approved',
+    };
+    writeJson(currentSpecPath, currentSpec);
+    const metadataPath = join(rootArtifact, 'iterations', iterationId, 'iteration.json');
+    const statusPath = join(rootArtifact, 'status.md');
+    const before = {
+      currentSpec: readFileSync(currentSpecPath),
+      metadata: readFileSync(metadataPath),
+      status: readFileSync(statusPath),
+    };
+
+    const payload = next(root);
+    assertAction(payload, 'invalid_iteration_state', 'cli', [
+      'iteration', 'validate', '--artifacts', artifactPath(root), '--allow-planning',
+    ]);
+    assert.match(payload.reason, /pending_iteration to be absent for archived active iteration/);
+
+    for (const command of [
+      payload.command.argv,
+      ['iteration', 'compose', '--artifacts', artifactPath(root)],
+      [
+        'iteration', 'open', '--artifacts', artifactPath(root),
+        '--iteration-id', 'v2', '--idea', 'Continue after the archived baseline',
+      ],
+    ]) {
+      const result = runP2a(command);
+      assert.notEqual(result.status, 0, command.join(' '));
+      assert.match(
+        `${result.stdout}${result.stderr}`,
+        /pending_iteration to be absent for archived active iteration/,
+      );
+    }
+
+    assert.deepEqual(readFileSync(currentSpecPath), before.currentSpec);
+    assert.deepEqual(readFileSync(metadataPath), before.metadata);
+    assert.deepEqual(readFileSync(statusPath), before.status);
+  } finally {
+    remove(root);
+  }
+});
+
 test('next enters Gate A for baseline-backed Gate A entry states', () => {
   const root = project();
   try {

@@ -6,6 +6,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+## [0.5.6] - 2026-08-22
+
+### Fixed
+
+- Preserve closed-iteration monotonicity by rejecting Gate B re-promotion after `iteration close` and making `next`, `compose`, and `open` fail closed when `current-spec.json` and active iteration metadata disagree about archive state.
+
 ## [0.5.5] - 2026-08-21
 
 ### Fixed

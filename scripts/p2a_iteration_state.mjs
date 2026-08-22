@@ -111,6 +111,148 @@ function optionalIterationMetadata(artifactRoot, iterationId) {
   return existsSync(metadataPath) ? loadJson(metadataPath) : null;
 }
 
+function matchingActiveCloseRecords(currentSpec, iterationId) {
+  const closedIterations = currentSpec.closed_iterations;
+  if (closedIterations !== undefined && !Array.isArray(closedIterations)) {
+    throw new ValidationError(
+      'current-spec.json closed_iterations must be an array when present',
+    );
+  }
+  const matches = (closedIterations ?? []).filter(
+    (record) => record?.iteration_id === iterationId,
+  );
+  if (matches.length > 1) {
+    throw new ValidationError(
+      `active iteration archive consistency requires exactly one current-spec.json closed_iterations record for ${JSON.stringify(iterationId)}, got ${matches.length}`,
+    );
+  }
+  const closedRecord = matches[0] ?? null;
+  const lastClosedRecord = currentSpec.last_closed_iteration?.iteration_id === iterationId
+    ? currentSpec.last_closed_iteration
+    : null;
+  return { closedRecord, lastClosedRecord };
+}
+
+function assertArchivedCloseRecord(record, label, iterationId) {
+  if (!record) return;
+  if (record.status !== 'archived') {
+    throw new ValidationError(
+      `active iteration archive consistency requires ${label}.status archived for ${JSON.stringify(iterationId)}, got ${JSON.stringify(record.status)}`,
+    );
+  }
+}
+
+function assertMatchingClosedAt(left, leftLabel, right, rightLabel, iterationId) {
+  if (left === undefined || right === undefined) return;
+  if (left !== right) {
+    throw new ValidationError(
+      `active iteration archive consistency requires ${leftLabel} to match ${rightLabel} for ${JSON.stringify(iterationId)}`,
+    );
+  }
+}
+
+export function validateActiveIterationArchiveConsistency(
+  state,
+  metadata = optionalIterationMetadata(state.artifactRoot, state.activeIteration),
+) {
+  const iterationId = state.activeIteration;
+  const { closedRecord, lastClosedRecord } = matchingActiveCloseRecords(
+    state.currentSpec,
+    iterationId,
+  );
+  assertArchivedCloseRecord(
+    closedRecord,
+    'current-spec.json closed_iterations record',
+    iterationId,
+  );
+  assertArchivedCloseRecord(
+    lastClosedRecord,
+    'current-spec.json last_closed_iteration',
+    iterationId,
+  );
+  if (Boolean(closedRecord) !== Boolean(lastClosedRecord)) {
+    throw new ValidationError(
+      `active iteration archive consistency requires matching current-spec.json last_closed_iteration and closed_iterations records for ${JSON.stringify(iterationId)}`,
+    );
+  }
+
+  const archived = Boolean(closedRecord && lastClosedRecord);
+  const hasClosedAt = Boolean(metadata && Object.hasOwn(metadata, 'closed_at'));
+  const hasClose = Boolean(metadata && Object.hasOwn(metadata, 'close'));
+  const metadataHasArchiveMarker = Boolean(
+    metadata?.status === 'archived' || hasClosedAt || hasClose,
+  );
+  if (archived) {
+    if (!metadata) {
+      throw new ValidationError(
+        `active iteration archive consistency requires iterations/${iterationId}/iteration.json for the archived close records`,
+      );
+    }
+    if (metadata.status !== 'archived') {
+      throw new ValidationError(
+        `active iteration archive consistency requires iterations/${iterationId}/iteration.json status archived because current-spec.json records the iteration as archived, got ${JSON.stringify(metadata.status)}`,
+      );
+    }
+    if (state.currentSpec.pending_iteration !== undefined) {
+      throw new ValidationError(
+        `active iteration archive consistency requires current-spec.json pending_iteration to be absent for archived active iteration ${JSON.stringify(iterationId)}`,
+      );
+    }
+  } else if (metadataHasArchiveMarker) {
+    throw new ValidationError(
+      `active iteration archive consistency rejects iterations/${iterationId}/iteration.json archive markers without matching current-spec.json close records`,
+    );
+  }
+
+  if (metadata) {
+    assertMatchingClosedAt(
+      closedRecord?.closed_at,
+      'current-spec.json closed_iterations record closed_at',
+      lastClosedRecord?.closed_at,
+      'current-spec.json last_closed_iteration.closed_at',
+      iterationId,
+    );
+    assertMatchingClosedAt(
+      metadata.closed_at,
+      `iterations/${iterationId}/iteration.json closed_at`,
+      closedRecord?.closed_at,
+      'current-spec.json closed_iterations record closed_at',
+      iterationId,
+    );
+    if (hasClose) {
+      if (!metadata.close || typeof metadata.close !== 'object' || Array.isArray(metadata.close)) {
+        throw new ValidationError(
+          `active iteration archive consistency requires iterations/${iterationId}/iteration.json close to be an object`,
+        );
+      }
+      if (metadata.close.iteration_id !== undefined && metadata.close.iteration_id !== iterationId) {
+        throw new ValidationError(
+          `active iteration archive consistency requires iterations/${iterationId}/iteration.json close.iteration_id to match the active iteration`,
+        );
+      }
+      if (metadata.close.status !== undefined && metadata.close.status !== 'archived') {
+        throw new ValidationError(
+          `active iteration archive consistency requires iterations/${iterationId}/iteration.json close.status archived`,
+        );
+      }
+      assertMatchingClosedAt(
+        metadata.close.closed_at,
+        `iterations/${iterationId}/iteration.json close.closed_at`,
+        metadata.closed_at,
+        `iterations/${iterationId}/iteration.json closed_at`,
+        iterationId,
+      );
+    }
+  }
+
+  return {
+    archived,
+    metadata,
+    closedRecord,
+    lastClosedRecord,
+  };
+}
+
 function expectedCompositionSourceStatus(currentSpec, source, metadata) {
   if (metadata?.status === 'archived' || source.iteration_id !== currentSpec.active_iteration) {
     return 'archived';
@@ -723,6 +865,7 @@ export function validateActiveIterationPlanningContract(
   state,
   metadata = optionalIterationMetadata(state.artifactRoot, state.activeIteration),
 ) {
+  validateActiveIterationArchiveConsistency(state, metadata);
   validateActiveIterationBaselineContract(state, metadata);
   const pending = state.currentSpec.pending_iteration;
   if (pending) {
@@ -849,6 +992,7 @@ export function validateActiveGateBPromotionBinding(state, spec = null) {
   }
 
   const metadata = optionalIterationMetadata(state.artifactRoot, iterationId);
+  validateActiveIterationArchiveConsistency(state, metadata);
   if (metadata) {
     if (metadata.project_id !== state.projectId) {
       throw new ValidationError(
@@ -863,15 +1007,6 @@ export function validateActiveGateBPromotionBinding(state, spec = null) {
     if (!['gate_b_approved', 'archived'].includes(metadata.status)) {
       throw new ValidationError(
         `iterations/${iterationId}/iteration.json status must record Gate B promotion, got ${JSON.stringify(metadata.status)}`,
-      );
-    }
-    const archived = Array.isArray(state.currentSpec.closed_iterations)
-      && state.currentSpec.closed_iterations.some(
-        (closed) => closed?.iteration_id === iterationId && closed?.status === 'archived',
-      );
-    if (metadata.status === 'archived' && !archived) {
-      throw new ValidationError(
-        `iterations/${iterationId}/iteration.json status archived requires a matching current-spec.json closed_iterations record`,
       );
     }
     if (

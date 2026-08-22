@@ -47,6 +47,7 @@ import {
   resolveIterationState,
   serializeIterationState,
   validateActiveGateBPromotionBinding,
+  validateActiveIterationArchiveConsistency,
   validateActiveIterationPlanningContract as assertActivePlanningContract,
   validateCurrentSpecCompositionData,
   validateMaintenanceTaskGraphProject,
@@ -1017,13 +1018,14 @@ function currentSpecForClose(currentSpec, iterationId, record) {
   return nextCurrentSpec;
 }
 
-function assertArchivedBaselineForOpen(currentSpec, artifactRoot, iterationId) {
+function assertArchivedBaselineForOpen(state) {
+  const { currentSpec, artifactRoot, activeIteration: iterationId } = state;
+  const archiveState = validateActiveIterationArchiveConsistency(state);
   if (currentSpec.pending_iteration) {
     throw new ValidationError('open requires no pending_iteration; finish or discard the active planning iteration first');
   }
 
-  const metadata = loadOptionalIterationMetadata(artifactRoot, iterationId);
-  if (metadata?.status !== 'archived') {
+  if (!archiveState.archived) {
     throw new ValidationError(`open requires active iteration ${JSON.stringify(iterationId)} to be archived by \`p2a iteration close\``);
   }
 
@@ -4311,9 +4313,15 @@ function activeSpecArtifacts(artifactRoot, iterationId) {
 
 function promoteSpecLocked(args, artifactRoot) {
   const state = resolveIterationState(artifactRoot, { requireReady: false });
+  const metadata = loadOptionalIterationMetadata(state.artifactRoot, state.activeIteration);
+  const archiveState = validateActiveIterationArchiveConsistency(state, metadata);
+  if (archiveState.archived) {
+    throw new ValidationError(
+      `promote-spec cannot target archived active iteration ${JSON.stringify(state.activeIteration)}; open a new iteration instead`,
+    );
+  }
   assertFile(state.specPath, `iterations/${state.activeIteration}/gate-b-spec/spec.json`);
   const spec = validateActiveSpecWithOptionalIntake(state);
-  const metadata = loadOptionalIterationMetadata(state.artifactRoot, state.activeIteration);
   const planningMemory = metadata?.planning_memory ?? null;
   const planningMemoryErrors = planningMemoryValidationErrors(planningMemory, state.artifactRoot, state.projectId, metadata?.idea);
   if (planningMemory?.status === 'pending') planningMemoryErrors.push('planning_memory.status must be resolved before Gate B promotion');
@@ -5503,6 +5511,7 @@ function createOpenBaselineSnapshot(currentSpec, artifactRoot, iterationId) {
 
 function openLocked(args, artifactRoot, idea) {
   const openingState = resolveIterationState(artifactRoot, { requireReady: false });
+  validateActiveIterationArchiveConsistency(openingState);
   if (openingState.currentSpec.pending_iteration) {
     throw new ValidationError(
       'open requires no pending_iteration; finish or discard the active planning iteration first',
@@ -5510,11 +5519,7 @@ function openLocked(args, artifactRoot, idea) {
   }
   const facts = loadReadyIterationFacts(artifactRoot);
   assertCloseReadyTasks(facts.taskGraph);
-  assertArchivedBaselineForOpen(
-    facts.state.currentSpec,
-    artifactRoot,
-    facts.state.activeIteration,
-  );
+  assertArchivedBaselineForOpen(facts.state);
 
   if (facts.state.activeIteration === args.iterationId) {
     throw new Error(`--iteration-id must differ from current active iteration ${JSON.stringify(facts.state.activeIteration)}`);
@@ -6068,6 +6073,7 @@ function draft(args) {
 
 function composeLocked(args, artifactRoot) {
   const state = resolveIterationState(artifactRoot, { requireReady: false });
+  validateActiveIterationArchiveConsistency(state);
   const { sources, skipped } = collectCompositionSources(artifactRoot, state.currentSpec);
   const composedCurrentSpec = buildComposedCurrentSpec(state.currentSpec, sources, skipped);
   validateCurrentSpecCompositionData(composedCurrentSpec, artifactRoot);

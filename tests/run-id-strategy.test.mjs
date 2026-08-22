@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { chmodSync, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
@@ -33,6 +33,23 @@ const WAIT_BUFFER = new Int32Array(new SharedArrayBuffer(4));
 
 function tempRoot(label) {
   return mkdtempSync(path.join(tmpdir(), `p2a-${label}-`));
+}
+
+function artifactByteSnapshot(root, relative = '') {
+  const snapshot = new Map();
+  const directory = path.join(root, relative);
+  for (const entry of readdirSync(directory, { withFileTypes: true })
+    .sort((left, right) => left.name.localeCompare(right.name))) {
+    const entryRelative = path.join(relative, entry.name);
+    if (entry.isDirectory()) {
+      for (const [file, bytes] of artifactByteSnapshot(root, entryRelative)) {
+        snapshot.set(file, bytes);
+      }
+    } else if (entry.isFile()) {
+      snapshot.set(entryRelative, readFileSync(path.join(root, entryRelative)));
+    }
+  }
+  return snapshot;
 }
 
 function runCli(args, cwd = ROOT) {
@@ -1795,6 +1812,109 @@ test('Gate C entry points reject an unpromoted Gate B and recover after determin
     }
   } finally {
     rmSync(artifactRoot, { recursive: true, force: true });
+  }
+});
+
+test('Gate B promotion rejects archived or orphaned close markers without changing artifact bytes', () => {
+  const closedAt = '2026-08-22T00:00:00.000Z';
+  const variants = [
+    {
+      id: 'canonical-archived',
+      close: true,
+      error: /promote-spec cannot target archived active iteration/,
+    },
+    {
+      id: 'reopened-with-close-records',
+      mutate(currentSpec, metadata, iterationId) {
+        const close = { iteration_id: iterationId, status: 'archived', closed_at: closedAt };
+        currentSpec.last_closed_iteration = close;
+        currentSpec.closed_iterations = [close];
+        metadata.status = 'gate_b_approved';
+        metadata.closed_at = closedAt;
+        metadata.close = close;
+      },
+      error: /archive consistency requires .* status archived/,
+    },
+    {
+      id: 'orphaned-archived-status',
+      mutate(_currentSpec, metadata) {
+        metadata.status = 'archived';
+      },
+      error: /archive markers without matching current-spec\.json close records/,
+    },
+    {
+      id: 'orphaned-closed-at',
+      mutate(_currentSpec, metadata) {
+        metadata.closed_at = closedAt;
+      },
+      error: /archive markers without matching current-spec\.json close records/,
+    },
+    {
+      id: 'orphaned-close',
+      mutate(_currentSpec, metadata, iterationId) {
+        metadata.close = { iteration_id: iterationId, status: 'archived', closed_at: closedAt };
+      },
+      error: /archive markers without matching current-spec\.json close records/,
+    },
+  ];
+
+  for (const variant of variants) {
+    const artifactRoot = initializedArtifactRoot(`gate-b-archive-${variant.id}`);
+    try {
+      const iterationId = 'v1-mvp';
+      const currentSpecPath = path.join(artifactRoot, 'current-spec.json');
+      const metadataPath = path.join(artifactRoot, 'iterations', iterationId, 'iteration.json');
+      const promote = () => spawnSync(process.execPath, [
+        ITERATION_CLI,
+        'promote-spec',
+        '--artifacts',
+        artifactRoot,
+      ], { cwd: ROOT, encoding: 'utf8' });
+
+      const initialPromotion = promote();
+      assert.equal(
+        initialPromotion.status,
+        0,
+        `${variant.id}: ${initialPromotion.stdout}${initialPromotion.stderr}`,
+      );
+      if (variant.close) {
+        const graphPath = path.join(
+          artifactRoot,
+          'iterations',
+          iterationId,
+          'gate-c-task-graph',
+          'task-graph.json',
+        );
+        const graph = JSON.parse(readFileSync(graphPath, 'utf8'));
+        graph.tasks = graph.tasks.map((task) => ({ ...task, status: 'done' }));
+        writeFileSync(graphPath, `${JSON.stringify(graph, null, 2)}\n`, 'utf8');
+        const closeResult = spawnSync(process.execPath, [
+          ITERATION_CLI,
+          'close',
+          '--artifacts',
+          artifactRoot,
+        ], { cwd: ROOT, encoding: 'utf8' });
+        assert.equal(
+          closeResult.status,
+          0,
+          `${variant.id}: ${closeResult.stdout}${closeResult.stderr}`,
+        );
+      } else {
+        const currentSpec = JSON.parse(readFileSync(currentSpecPath, 'utf8'));
+        const metadata = JSON.parse(readFileSync(metadataPath, 'utf8'));
+        variant.mutate(currentSpec, metadata, iterationId);
+        writeFileSync(currentSpecPath, `${JSON.stringify(currentSpec, null, 2)}\n`, 'utf8');
+        writeFileSync(metadataPath, `${JSON.stringify(metadata, null, 2)}\n`, 'utf8');
+      }
+
+      const before = artifactByteSnapshot(artifactRoot);
+      const blocked = promote();
+      assert.notEqual(blocked.status, 0, variant.id);
+      assert.match(`${blocked.stdout}${blocked.stderr}`, variant.error, variant.id);
+      assert.deepEqual(artifactByteSnapshot(artifactRoot), before, variant.id);
+    } finally {
+      rmSync(artifactRoot, { recursive: true, force: true });
+    }
   }
 });
 
