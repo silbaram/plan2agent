@@ -6,6 +6,13 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+## [0.5.7] - 2026-08-22
+
+### Fixed
+
+- Replace automatic iteration-close guidance with a structured `review` or explicit `close` decision, including a normal task reopen and remediation run path for review findings.
+- Render structured choices in human `p2a next` output, bind the v2 review-or-close state to exact option and command shapes, validate tuple schemas correctly, and route agent consumers through the v2 contract.
+
 ## [0.5.6] - 2026-08-22
 
 ### Fixed
@@ -170,7 +177,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Add package-runtime project initialization, managed provider assets, artifact validation, handoff, supervised execution, evaluation, proposal, and optional Memory workflows.
 - Ship canonical and generated integrations for Codex, Claude Code, and Gemini CLI.
 
-[Unreleased]: https://github.com/silbaram/plan2agent/compare/v0.5.5...HEAD
+[Unreleased]: https://github.com/silbaram/plan2agent/compare/v0.5.7...HEAD
+[0.5.7]: https://github.com/silbaram/plan2agent/compare/v0.5.6...v0.5.7
+[0.5.6]: https://github.com/silbaram/plan2agent/compare/v0.5.5...v0.5.6
 [0.5.5]: https://github.com/silbaram/plan2agent/compare/v0.5.4...v0.5.5
 [0.5.4]: https://github.com/silbaram/plan2agent/compare/v0.5.3...v0.5.4
 [0.5.3]: https://github.com/silbaram/plan2agent/compare/v0.5.2...v0.5.3

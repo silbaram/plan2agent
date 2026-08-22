@@ -719,16 +719,60 @@ function skillNextAction(state, reason, display, skill, args = [], continuation 
   };
 }
 
-function approvalNextAction(state, reason, display) {
+function approvalNextAction(state, reason, display, options = null) {
+  const command = {
+    kind: 'approval',
+    display,
+  };
+  if (Array.isArray(options) && options.length) command.options = options;
   return {
     state,
     reason,
     continuation: null,
-    command: {
-      kind: 'approval',
-      display,
-    },
+    command,
   };
+}
+
+function reviewOrCloseOptions(context) {
+  const remediationArgv = [
+    'tasks',
+    'todo',
+    '--artifacts',
+    context.artifactArg,
+    '<task-id>',
+    '--reopen',
+    '--note',
+    '<review finding>',
+  ];
+  const closeArgv = ['iteration', 'close', '--artifacts', context.artifactArg];
+  return [
+    {
+      id: 'review',
+      label: 'Review and remediate',
+      description: 'Keep the active iteration open, review the completed implementation, and reopen the owning completed task when a finding requires code changes.',
+      action: {
+        kind: 'review',
+        display: 'Review the completed implementation while keeping the active iteration open. A clean review returns to this same decision without closing the iteration.',
+        remediation: {
+          kind: 'cli',
+          argv: remediationArgv,
+          display: p2aCommandLine(P2A_PATHS, remediationArgv),
+          requiresApproval: false,
+        },
+      },
+    },
+    {
+      id: 'close',
+      label: 'Close iteration',
+      description: 'Archive the completed active iteration without running another optional review, or after explicitly ending the review loop.',
+      action: {
+        kind: 'cli',
+        argv: closeArgv,
+        display: p2aCommandLine(P2A_PATHS, closeArgv),
+        requiresApproval: true,
+      },
+    },
+  ];
 }
 
 function gateANextState(intake) {
@@ -1733,15 +1777,10 @@ export const NEXT_DECISION_RULES = [
   {
     state: (context) => (
       context.detail.layout.kind === 'iteration'
-        ? 'iteration_ready_to_close'
+        ? 'iteration_review_or_close_required'
         : 'flat_execution_complete'
     ),
-    kind: (context) => (
-      context.detail.layout.kind === 'iteration'
-        ? 'cli'
-        : 'approval'
-    ),
-    requiresApproval: (context) => context.detail.layout.kind !== 'iteration',
+    kind: 'approval',
     when: (context) => (
       context.allTasksDone
       && !context.closedIteration
@@ -1752,13 +1791,18 @@ export const NEXT_DECISION_RULES = [
     ),
     reason: (context) => (
       context.detail.layout.kind === 'iteration'
-        ? 'Every task in the active iteration is done and the iteration is still open.'
+        ? 'Every task in the active iteration is done and the iteration is still open. The user must explicitly choose review and remediation or close. A clean review keeps the iteration open and returns to this decision; only the close choice authorizes iteration close.'
         : 'Every task in the handed-off flat artifact bundle is done; this layout has no iteration state to close.'
     ),
     command: (context) => (
       context.detail.layout.kind === 'iteration'
-        ? ['iteration', 'close', '--artifacts', context.artifactArg]
+        ? 'Choose review and remediation to keep the active iteration open, or choose close to archive it.'
         : `Review the completed task and run evidence under ${context.artifactArg}; no iteration close is required for this flat handoff.`
+    ),
+    options: (context) => (
+      context.detail.layout.kind === 'iteration'
+        ? reviewOrCloseOptions(context)
+        : null
     ),
   },
   {
@@ -1837,7 +1881,12 @@ function actionForNextRule(rule, context) {
       continuation,
     );
   }
-  return approvalNextAction(state, reason, command);
+  return approvalNextAction(
+    state,
+    reason,
+    command,
+    resolveNextRuleValue(rule.options ?? null, context),
+  );
 }
 
 function decideNextAction(context) {
@@ -1868,7 +1917,9 @@ function resolveNextDecision(targetRootInput, requestedProjectId, entryPath, con
   const command = contract === 'v1'
     ? action.command.kind === 'skill'
       ? { kind: 'skill', display: action.command.display }
-      : action.command
+      : action.command.kind === 'approval'
+        ? { kind: 'approval', display: action.command.display }
+        : action.command
     : action.command.kind === 'cli' && action.continuation?.activation === 'after_command_success'
       ? {
           ...action.command,

@@ -213,7 +213,7 @@ function parseNextArgs(argv) {
     target: P2A_PATHS.projectRoot,
     projectId: null,
     entry: null,
-    contract: 'v1',
+    contract: null,
     json: false,
     help: false,
   };
@@ -235,6 +235,7 @@ function parseNextArgs(argv) {
       if (!['v1', 'v2'].includes(args.contract)) throw new Error('--contract requires v1 or v2');
     } else throw new Error(`unknown next option: ${arg}`);
   }
+  args.contract ??= args.json ? 'v1' : 'v2';
   return args;
 }
 
@@ -304,6 +305,21 @@ function runInfo(argv) {
   }
 }
 
+function printNextOption(option) {
+  console.log(`  - ${option.label} (${option.id})`);
+  console.log(`    ${option.description}`);
+  if (option.action?.display) console.log(`    Action: ${option.action.display}`);
+  if (typeof option.action?.requiresApproval === 'boolean') {
+    console.log(`    Approval required: ${option.action.requiresApproval ? 'yes' : 'no'}`);
+  }
+  if (option.action?.remediation?.display) {
+    console.log(`    Remediation: ${option.action.remediation.display}`);
+    if (typeof option.action.remediation.requiresApproval === 'boolean') {
+      console.log(`    Remediation approval required: ${option.action.remediation.requiresApproval ? 'yes' : 'no'}`);
+    }
+  }
+}
+
 function printNext(next) {
   console.log('Plan2Agent next');
   console.log(`- target: ${next.target}`);
@@ -311,6 +327,10 @@ function printNext(next) {
   console.log(`- state: ${next.state}`);
   console.log('Next action:');
   console.log(`  ${next.command.display}`);
+  if (Array.isArray(next.command.options) && next.command.options.length) {
+    console.log('Options:');
+    next.command.options.forEach(printNextOption);
+  }
   console.log(`Reason: ${next.reason}`);
 }
 

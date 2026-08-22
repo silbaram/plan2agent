@@ -24,7 +24,7 @@ Plan2Agent는 승인된 Gate B에서 `executionEnvelope`를 파생해 실행 AI�
 | Hermes proposal loop | `p2a proposals mine/review/curate/draft-patch/approve-draft/digest` |
 | provider-native guide | Codex, Claude, Gemini용 role prompt와 capability evidence |
 
-이 실행 계층은 범용 background scheduler가 아니다. 다만 승인된 envelope 안의 start/resume/검증/review/close는 task별 추가 승인을 요구하지 않는다. Codex workspace-write 또는 Claude scaffold/OS confinement 안에서 실행 AI가 같은 session의 구현 loop를 계속 소유하며, 외부 write·비용·credential·배포·불가역 동작만 별도 사용자 authorization을 요구한다.
+이 실행 계층은 범용 background scheduler가 아니다. 승인된 envelope 안의 start/resume/검증/필수 review는 task별 추가 승인을 요구하지 않지만 iteration close는 별도 사용자 선택을 요구한다. 모든 task와 필수 review가 끝나면 `iteration_review_or_close_required`가 구조화된 review/close 옵션을 반환한다. Review finding은 반환된 remediation template으로 owning done task를 reopen하고 정상 run lifecycle로 수정하며, 깨끗한 리뷰도 같은 선택 상태로 돌아온다. Close는 사용자가 close 옵션을 명시적으로 선택한 경우에만 실행한다. Codex workspace-write 또는 Claude scaffold/OS confinement 안에서 실행 AI가 같은 session의 구현 loop를 계속 소유하며, 외부 write·비용·credential·배포·불가역 동작만 별도 사용자 authorization을 요구한다.
 
 Direct와 일반 단일-owner Planned 실행은 현재 foreground owner가 현재 workspace에서 직접 수행하고 `runTracking.defaultIsolation`을 따른다. 기본 격리는 `none`이며, 별도 implementer·worktree·병렬 owner는 Orchestrated/batch, 명시 정책, 동시 write owner 또는 구체적인 격리·rollback 위험이 있을 때만 사용한다.
 

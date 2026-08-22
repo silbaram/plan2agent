@@ -26,7 +26,7 @@ Plan2Agent 본체 개발에서만 `scripts/sync_cli_assets.mjs`, `scripts/check_
 1. 하네스가 짧은 Markdown 또는 text 진입 문서에서 **Gate A intake → Gate ② constitution → Gate B spec → Gate C execution readiness**를 만든다. Direct/Planned는 synthetic work item을, Orchestrated는 dependency-aware task graph를 사용한다.
 2. Plan2Agent 본체 저장소에서는 `scripts/validate_artifacts.mjs`, `scripts/run_fixtures.mjs`, `scripts/check_cli_parity.mjs`로 fixture와 CLI 구성을 검증한다. `init` 대상 프로젝트에서는 `p2a validate`와 `p2a iteration`로 산출물을 검증한다.
 3. 새 프로젝트는 먼저 `p2a init --target <project-dir> --tools all`로 하네스를 설치하고 같은 저장소 안에서 기획부터 반복까지 진행한다. 외부 산출물을 옮기는 경우에만 기존 handoff로 승인된 산출물을 개발 대상 저장소의 `.plan2agent/artifacts/`로 인계한다.
-4. 대상 저장소에서는 `p2a next`가 Gate 승인 전 명령에는 `requiresApproval: true`, 승인된 개발 loop의 start/resume/review/close에는 `requiresApproval: false`를 반환한다. `p2a execute start`는 Gate B에서 파생한 `executionEnvelope`와 hash를 run에 고정하고 agent prompt를 출력한다. 여러 독립 ready work item은 같은 envelope와 ready snapshot에서 bounded하게 실행하며, 세션이 끊기면 `p2a execute resume`으로 같은 run을 이어간다.
+4. 대상 저장소에서는 `p2a next`가 Gate 승인 전 명령에는 승인을 요구하고, 승인된 개발 loop의 start/resume/required-review는 즉시 실행 가능하게 반환한다. 모든 task가 끝나면 v2의 `iteration_review_or_close_required` approval action이 구조화된 `review`/`close` 옵션을 반환한다. `review`는 iteration을 연 채 두고, finding이 있으면 함께 반환된 remediation command로 owning task를 reopen한 뒤 정상 run lifecycle로 수정한다. 깨끗한 리뷰는 같은 결정으로 돌아온다. `close` 옵션의 중첩 명령은 사용자가 그 옵션을 명시적으로 선택한 경우에만 실행한다. `p2a execute start`는 Gate B에서 파생한 `executionEnvelope`와 hash를 run에 고정하고 agent prompt를 출력한다. 여러 독립 ready work item은 같은 envelope와 ready snapshot에서 bounded하게 실행하며, 세션이 끊기면 `p2a execute resume`으로 같은 run을 이어간다.
 5. `p2a execute status/finish`로 run 상태 확인, verification, run finish, task done/block 전이를 묶어 기록한다. Full visual iteration은 `p2a execute review`, 비UI iteration은 기본적으로 `p2a execute accept`로 iteration당 하나의 canonical no-change pre-close 검토 run을 연다. 세부 제어가 필요하면 `p2a tasks`와 `p2a runs`를 직접 사용한다.
 6. 실패, blocked monitor verdict, verification gap이 쌓이면 `p2a proposals mine/review/curate/draft-patch/approve-draft/digest`로 개선 proposal queue, curator review artifact, approval-ready curation artifact, non-applying patch draft, 승인 artifact를 만든다. proposal 적용은 승인된 maintenance task를 별도 실행해서 진행한다.
 7. `p2a eval grade/compare/analyze/generate/digest`로 run acceptance 증거, iteration regression, 실패 클러스터를 평가하고 proposal/maintenance/delta draft 경로로 연결한다.
@@ -54,7 +54,7 @@ p2a next --json --contract v2
 
 `p2a`의 하위 명령은 `decide`, `decisions`, `shape`, `eval`, `memory`, `execute`, `tasks`, `runs`, `iteration`, `proposals`, `validate`, `doctor`, `enhance`, `update`, `upgrade`, `handoff`다. `--target`을 생략하면 현재 작업 디렉터리를 대상으로 삼는다.
 
-옵션 없는 `p2a next --json`은 기존 consumer를 위한 엄격한 `p2a.next.v1` 계약을 유지한다. 타입이 지정된 상태 enum과 안정적인 `reasonCode`가 필요한 agent consumer는 `--contract v2`를 명시하며, 출력은 `next-v2.schema.json`의 `p2a.next.v2`를 따른다.
+옵션 없는 `p2a next --json`은 기존 consumer를 위한 엄격한 `p2a.next.v1` 계약을 유지한다. 사람이 읽는 `p2a next` 출력은 v2를 기본으로 사용해 구조화된 선택지, 중첩 명령, 승인 여부를 빠뜨리지 않는다. 타입이 지정된 상태 enum과 안정적인 `reasonCode`가 필요한 agent consumer는 `--contract v2`를 명시하며, 출력은 `next-v2.schema.json`의 `p2a.next.v2`를 따른다.
 
 `p2a.next.v2`의 skill action은 표시 문자열과 별도로 `skill`/`args`를 제공하고, 모든 응답은 `continuation`을 object 또는 `null`로 명시한다. `after_command_success` continuation이 붙은 start/resume/review/accept action은 argv에 `--json`을 포함한다. 성공 stdout은 `execution-result.schema.json`의 단일 `p2a.execution_result.v1` 문서이며, 호출자는 exit code가 0이고 `outcome=succeeded`, `runStatus=started`일 때만 그 `runId`를 후속 처리에 사용한다. 기본 v1 action argv와 field set은 바뀌지 않는다.
 
@@ -456,7 +456,7 @@ p2a handoff \
 
 새 프로젝트 기본값은 `adaptive`다. 기존 `.plan2agent/project.config.json`에 `devExecution.executionMode`가 없으면 `orchestrated`로 해석해 historical 동작을 보존한다. 명시값은 `adaptive`, `direct`, `planned`, `orchestrated` 중 하나이며, `adaptive`는 사용자에게 mode menu를 띄우지 않고 실행 AI가 Gate B와 repository evidence로 선택한다.
 
-Gate C graph가 아직 없더라도 active Gate B의 current-spec promotion binding이 먼저 확인된다. binding이 없거나 stale이면 `p2a next --json`은 승인 불요 `p2a iteration promote-spec --artifacts <root>`를 반환하고, promotion이 완료된 뒤에만 `p2a-dev-execution --prepare-mode <policy>`를 반환한다. Direct는 한 synthetic compatibility work item을, Planned는 2–5개 ordered checkpoint를 준비한다.
+Gate C graph가 아직 없더라도 active Gate B의 current-spec promotion binding이 먼저 확인된다. binding이 없거나 stale이면 `p2a next --json --contract v2`는 승인 불요 `p2a iteration promote-spec --artifacts <root>`를 반환하고, promotion이 완료된 뒤에만 `p2a-dev-execution --prepare-mode <policy>`를 반환한다. Direct는 한 synthetic compatibility work item을, Planned는 2–5개 ordered checkpoint를 준비한다.
 
 ```bash
 p2a execute prepare \
@@ -478,7 +478,7 @@ p2a execute resume --artifacts .plan2agent/artifacts/<project_id> --run-id run-.
 
 Checkpoint는 새 사용자 승인 Gate가 아니라 중단 후 재개할 수 있는 실제 command verification 경계다. 선언 순서가 아니면 거부되고, Planned run은 모든 checkpoint가 `verified`가 되기 전 `finished`로 닫히지 않는다. 실패하거나 실행 불가한 checkpoint evidence는 immutable이므로 같은 run에서 milestone을 재실행하지 않고, 해당 run을 failed/blocked로 닫은 뒤 새 retry run을 시작한다. `resume`은 이 경우 다음 milestone 대신 recovery 안내를 출력한다. Mode, 선택 근거, milestone 상태와 verification 연결은 run에 보존되고 handoff에도 유지된다.
 
-열린 run의 `resume`, `runs verify`, `runs checkpoint`는 새 evidence를 쓰기 전에 기록된 task contract와 Gate B execution envelope를 현재 Gate B/Gate C 원본에 다시 대조한다. `runs verify`와 checkpoint 명령은 닫힌 run에 새 command evidence를 덧붙이지 않는다. 원본이 변경되거나 삭제되면 명령은 실행을 차단한다. 이 상태에서 `p2a next --json`은 `started_run_contract_drift` 승인 결정을 반환하므로, 기록 원본을 복원하거나 기존 run을 structured failed/blocked로 닫고 변경 계약을 다시 승인한 뒤 replacement run을 시작한다.
+열린 run의 `resume`, `runs verify`, `runs checkpoint`는 새 evidence를 쓰기 전에 기록된 task contract와 Gate B execution envelope를 현재 Gate B/Gate C 원본에 다시 대조한다. `runs verify`와 checkpoint 명령은 닫힌 run에 새 command evidence를 덧붙이지 않는다. 원본이 변경되거나 삭제되면 명령은 실행을 차단한다. 이 상태에서 `p2a next --json --contract v2`는 `started_run_contract_drift` 승인 결정을 반환하므로, 기록 원본을 복원하거나 기존 run을 structured failed/blocked로 닫고 변경 계약을 다시 승인한 뒤 replacement run을 시작한다.
 
 Supplemental verification은 `--verify-command '<type>:<command>'` 형식을 사용하며 type은 `test`, `lint`, `typecheck`, `custom` 중 하나여야 한다. Build처럼 별도 type이 없는 명령은 `--verify-command 'custom:npm run build'`로 기록한다. `runs verify`와 `execute finish`는 반복된 spec 전체를 run, run index, project config, revision, task 상태 또는 verification evidence를 변경하기 전에 검증한다. colon 누락, 빈 type/command, unknown type이 하나라도 있으면 앞선 command도 실행하지 않고 허용 type과 `custom:` 예시를 안내한다. 실제로 실행된 command의 failed/unavailable evidence에는 기존 immutable recovery 계약이 계속 적용된다.
 

@@ -22,6 +22,9 @@ test('checkout scaffold guide directs users through the co-located runtime', () 
     const guide = readFileSync(path.join(targetRoot, 'PLAN2AGENT.md'), 'utf8');
     assert.match(guide, /`node \.plan2agent\/scripts\/p2a\.mjs next`/);
     assert.match(guide, /\/p2a-next/);
+    assert.match(guide, /iteration_review_or_close_required/i);
+    assert.match(guide, /remediation command to reopen the owning completed task/i);
+    assert.match(guide, /only an explicit close choice authorizes the nested close command/i);
     assert.doesNotMatch(guide, /p2a\.mjs info/);
     assert.doesNotMatch(guide, /p2a\.mjs execute plan/);
   } finally {

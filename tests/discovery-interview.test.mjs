@@ -54,7 +54,7 @@ test('approved Gate B routes through adaptive execution readiness instead of unc
   for (const skillPath of skillPaths) {
     const skill = readFileSync(skillPath, 'utf8');
     assert.match(skill, /Approved Gate B without Gate C is a valid preparation state/);
-    assert.match(skill, /run `p2a next --json` and follow its one action/);
+    assert.match(skill, /run `p2a next --json --contract v2` and follow its one action/);
     assert.match(skill, /only Orchestrated execution routes to task decomposition/);
     assert.doesNotMatch(skill, /Development execution begins only after the canonical task graph validates/);
   }

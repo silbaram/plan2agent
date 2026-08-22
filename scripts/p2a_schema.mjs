@@ -88,6 +88,13 @@ function validateSchemaComposition(instance, schema, schemaPath, instancePath, r
 }
 
 export function validateSchema(instance, schema, instancePath = '$', rootSchema = schema) {
+  if (schema === true) return;
+  if (schema === false) {
+    throw new ValidationError(`${instancePath} is disallowed by the schema`);
+  }
+  if (schema === null || typeof schema !== 'object' || Array.isArray(schema)) {
+    throw new ValidationError(`${instancePath} uses an invalid schema`);
+  }
   if (schema.$ref) {
     validateSchema(
       instance,
@@ -170,13 +177,24 @@ export function validateSchema(instance, schema, instancePath = '$', rootSchema 
     ) {
       throw new ValidationError(`${instancePath} must contain unique items`);
     }
-    if (schema.items) {
-      instance.forEach((item, index) => validateSchema(
-        item,
-        schema.items,
+    const prefixItems = Array.isArray(schema.prefixItems) ? schema.prefixItems : [];
+    for (let index = 0; index < Math.min(instance.length, prefixItems.length); index += 1) {
+      validateSchema(
+        instance[index],
+        prefixItems[index],
         `${instancePath}[${index}]`,
         rootSchema,
-      ));
+      );
+    }
+    if (Object.hasOwn(schema, 'items')) {
+      for (let index = prefixItems.length; index < instance.length; index += 1) {
+        validateSchema(
+          instance[index],
+          schema.items,
+          `${instancePath}[${index}]`,
+          rootSchema,
+        );
+      }
     }
   }
 
