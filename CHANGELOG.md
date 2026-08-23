@@ -6,6 +6,17 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+## [0.5.9] - 2026-08-23
+
+### Changed
+
+- Validate run-index task relationships through a single run-to-task grouping pass, keeping semantic validation linear in the number of runs and tasks.
+
+### Fixed
+
+- Preserve request-scoped validation reuse throughout composed-baseline fallback routing so active failed, blocked, started, and review-sensitive paths do not replay the same historical Gate artifacts.
+- Reject closed-routing composition drift by replaying only archive-audited source specs and intakes, including extra source iterations and mismatched effective product or implementation sections, without restoring deep provenance validation to the happy path.
+
 ## [0.5.8] - 2026-08-23
 
 ### Changed

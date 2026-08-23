@@ -318,8 +318,9 @@ function auditedFileSha256(filePath) {
 /**
  * Verify immutable close-time artifacts without replaying Gate A/B/C provenance.
  * This intentionally stays linear in the archived bytes and is suitable for
- * read-only routing. Semantic replay remains the responsibility of mutation
- * preflights and explicit iteration validation.
+ * read-only routing. Closed routing may separately replay only these audited
+ * composition inputs; full schema and provenance validation remains the
+ * responsibility of mutation preflights and explicit iteration validation.
  */
 export function auditArchivedIterationArtifacts(currentSpec, artifactRoot) {
   const closedIterations = currentSpec.closed_iterations ?? [];
@@ -459,6 +460,95 @@ export function auditArchivedIterationArtifacts(currentSpec, artifactRoot) {
     }
   }
   return closedIterations.length;
+}
+
+/**
+ * Replay only the already-audited composition inputs needed by closed routing.
+ * Source schema and provenance validation remain in explicit validation and
+ * mutation preflights; this check detects canonical composition drift without
+ * recursively validating historical Gate artifacts.
+ */
+export function validateClosedIterationComposition(currentSpec, artifactRoot) {
+  if (currentSpec.effective_spec_ref !== 'current-spec.json') return currentSpec;
+
+  const closedIds = new Set(
+    currentSpec.closed_iterations.map((closed) => closed.iteration_id),
+  );
+  const sourceIds = currentSpec.source_specs.map((source) => source.iteration_id);
+  const extraSourceIds = sourceIds.filter((iterationId) => !closedIds.has(iterationId));
+  if (extraSourceIds.length) {
+    throw new ValidationError(
+      `current-spec.json source_specs contains iteration(s) that are not closed: ${extraSourceIds.join(', ')}`,
+    );
+  }
+
+  const resolvedArtifactRoot = path.resolve(artifactRoot);
+  const sources = currentSpec.source_specs.map((source) => {
+    const iterationRoot = path.join(
+      resolvedArtifactRoot,
+      'iterations',
+      source.iteration_id,
+    );
+    const specPath = path.join(iterationRoot, 'gate-b-spec', 'spec.json');
+    const intakePath = path.join(iterationRoot, 'gate-a-intake', 'intake.json');
+    assertFile(specPath, `closed composition source ${source.iteration_id} spec`);
+    assertFileInsideArtifactRoot(
+      specPath,
+      resolvedArtifactRoot,
+      `closed composition source ${source.iteration_id} spec`,
+    );
+    assertFile(intakePath, `closed composition source ${source.iteration_id} intake`);
+    assertFileInsideArtifactRoot(
+      intakePath,
+      resolvedArtifactRoot,
+      `closed composition source ${source.iteration_id} intake`,
+    );
+    const spec = loadJson(specPath);
+    if (spec.project_id !== currentSpec.project_id) {
+      throw new ValidationError(
+        `closed composition source ${source.iteration_id} project_id mismatch`,
+      );
+    }
+    if (spec.approval !== 'approved' || source.approval !== spec.approval) {
+      throw new ValidationError(
+        `closed composition source ${source.iteration_id} must remain approved`,
+      );
+    }
+    return {
+      ...source,
+      spec,
+      metadata: optionalIterationMetadata(
+        resolvedArtifactRoot,
+        source.iteration_id,
+      ),
+      source_intake: loadJson(intakePath),
+    };
+  });
+
+  const sourceContractError = compositionSourceContractError(sources);
+  if (sourceContractError) {
+    throw new ValidationError(`current-spec.json ${sourceContractError}`);
+  }
+  const replayedComposition = composeCanonicalSpecSources(sources);
+  if (
+    !jsonEqual(currentSpec.effective_product, replayedComposition.effectiveProduct)
+    || !jsonEqual(
+      currentSpec.effective_implementation,
+      replayedComposition.effectiveImplementation,
+    )
+  ) {
+    throw new ValidationError(
+      'current-spec.json effective sections must exactly match ordered source composition',
+    );
+  }
+  const replayContractError = compositionReplayContractError(
+    currentSpec,
+    replayedComposition,
+  );
+  if (replayContractError) {
+    throw new ValidationError(`current-spec.json ${replayContractError}`);
+  }
+  return currentSpec;
 }
 
 /** Validate only the current-spec fields needed to route a closed iteration. */

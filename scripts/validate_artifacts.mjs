@@ -252,6 +252,10 @@ function validationSessionKey(kind, filePath, options = {}, suffix = '') {
   const constitutionPath = options.constitutionPath
     ? path.resolve(options.constitutionPath)
     : '';
+  const requiresMissingBaselineRoot = (
+    options.requireBaselineContextArtifactRoot === true
+    && !options.artifactRoot
+  );
   return [
     kind,
     snapshot.resolvedPath,
@@ -259,7 +263,7 @@ function validationSessionKey(kind, filePath, options = {}, suffix = '') {
     artifactRoot,
     constitutionPath,
     kind === 'intake' ? '' : options.projectId ?? '',
-    options.requireBaselineContextArtifactRoot === true ? 'baseline-required' : '',
+    requiresMissingBaselineRoot ? 'baseline-required' : '',
     options.requireApprovedConstitution === false ? 'constitution-optional' : '',
     suffix,
   ].join('\n');
@@ -949,6 +953,7 @@ function validateComposedBaselineSourceReadiness(
   metadata,
   artifactRoot,
   label,
+  options = {},
 ) {
   const iterationRoot = path.join(
     artifactRoot,
@@ -963,7 +968,10 @@ function validateComposedBaselineSourceReadiness(
   assertFile(taskGraphPath, `${label} task graph`);
   assertFileInsideArtifactRoot(taskGraphPath, artifactRoot, `${label} task graph`);
 
-  const taskGraph = validateTaskGraph(taskGraphPath, sourceSpecPath);
+  const taskGraph = validateTaskGraph(taskGraphPath, sourceSpecPath, {
+    ...options,
+    artifactRoot,
+  });
   if (taskGraph.projectId !== baselineSpec.project_id) {
     throw new ValidationError(`${label} task graph project must match the composed current spec`);
   }
@@ -1298,6 +1306,7 @@ function validateBaselineContext(
         metadata,
         root,
         `baseline_context.spec_ref source_specs[${index}]`,
+        nestedOptions,
       );
       const sourceIntakePath = requireSpecSourceIntake(sourcePath, sourceSpec);
       const sourceIntake = sourceIntakePath ? loadJson(sourceIntakePath) : null;
@@ -4090,12 +4099,16 @@ export function validateRunIndexData(data) {
     throw new ValidationError('run-index tasks[].taskId values must be unique');
   }
   const runIdSet = new Set(runIds);
+  const runIdsByTask = new Map();
   for (const run of data.runs) {
     if (!isSupportedRunRef(run)) {
       throw new ValidationError(
         `run-index ${run.runId}.runRef must be ${legacyRunRef(run.runId)} or ${canonicalRunRef(run)}`,
       );
     }
+    const taskRunIds = runIdsByTask.get(run.taskId) ?? [];
+    taskRunIds.push(run.runId);
+    runIdsByTask.set(run.taskId, taskRunIds);
   }
   for (const task of data.tasks) {
     const missing = task.runIds.filter((runId) => !runIdSet.has(runId));
@@ -4103,7 +4116,7 @@ export function validateRunIndexData(data) {
     if (task.latestRunId !== null && !runIdSet.has(task.latestRunId)) {
       throw new ValidationError(`${task.taskId} latestRunId is unknown: ${task.latestRunId}`);
     }
-    const indexedRuns = data.runs.filter((run) => run.taskId === task.taskId).map((run) => run.runId);
+    const indexedRuns = runIdsByTask.get(task.taskId) ?? [];
     if (JSON.stringify(indexedRuns) !== JSON.stringify(task.runIds)) {
       throw new ValidationError(`${task.taskId} runIds must match runs[] order`);
     }
@@ -4113,7 +4126,7 @@ export function validateRunIndexData(data) {
     }
   }
   const taskIdSet = new Set(indexedTaskIds);
-  const missingTasks = data.runs.map((run) => run.taskId).filter((taskId) => !taskIdSet.has(taskId));
+  const missingTasks = [...runIdsByTask.keys()].filter((taskId) => !taskIdSet.has(taskId));
   if (missingTasks.length) {
     throw new ValidationError(`run-index tasks[] is missing task ids: ${JSON.stringify([...new Set(missingTasks)])}`);
   }
