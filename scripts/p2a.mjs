@@ -52,7 +52,7 @@ function usage() {
   return [
     'Usage:',
     '  p2a init [--target <dir>] [--tools <list>] [--codex-profile quality|inherit]',
-    '  p2a next [--target <dir>] [--project-id <id>] [--entry <path>] [--contract v1|v2] [--json]',
+    '  p2a next [--target <dir>] [--project-id <id>] [--entry <path>] [--contract v1|v2] [--json] [--trace]',
     '  p2a decide --quote <user-utterance> [--entry <path>] [--target <dir>|--artifacts <dir>]',
     '  p2a decisions [--why <file-path>] [--target <dir>|--artifacts <dir>] [--json]',
     '  p2a shape [approve|revoke|migrate-style] [options]',
@@ -215,12 +215,14 @@ function parseNextArgs(argv) {
     entry: null,
     contract: null,
     json: false,
+    trace: false,
     help: false,
   };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === '--help' || arg === '-h') args.help = true;
     else if (arg === '--json') args.json = true;
+    else if (arg === '--trace') args.trace = true;
     else if (arg === '--target') {
       args.target = argv[++index];
       if (!args.target) throw new Error('--target requires a project directory');
@@ -344,11 +346,19 @@ function runNext(argv) {
     return 1;
   }
   if (args.help) {
-    console.log('Usage: p2a next [--target <dir>] [--project-id <id>] [--entry <path>] [--contract v1|v2] [--json]');
+    console.log('Usage: p2a next [--target <dir>] [--project-id <id>] [--entry <path>] [--contract v1|v2] [--json] [--trace]');
     return 0;
   }
   try {
-    const next = buildNext(args.target, args.projectId, args.entry, args.contract);
+    const next = buildNext(
+      args.target,
+      args.projectId,
+      args.entry,
+      args.contract,
+      args.trace
+        ? { trace: (message) => console.error(`[p2a next] ${message}`) }
+        : {},
+    );
     if (args.json) console.log(JSON.stringify(next, null, 2));
     else printNext(next);
     return 0;

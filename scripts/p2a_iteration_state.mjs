@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /** Resolve the active Plan2Agent iteration from an iterative artifact root. */
 
-import { existsSync, lstatSync, readFileSync, realpathSync } from 'node:fs';
+import { existsSync, lstatSync, readFileSync, readdirSync, realpathSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import path from 'node:path';
 import process from 'node:process';
@@ -253,6 +253,332 @@ export function validateActiveIterationArchiveConsistency(
   };
 }
 
+function archivedVisualArtifactRef(reference, iterationId) {
+  const gateBPrefix = `iterations/${iterationId}/gate-b-spec/`;
+  return reference === `${gateBPrefix}experience-spec.json`
+    || reference.startsWith(`${gateBPrefix}visual-design/`);
+}
+
+export function closedIterationRequiredArtifactRefs(iterationId) {
+  assertSafeIterationId(iterationId, 'closed iteration id');
+  return [
+    `iterations/${iterationId}/baseline/current-spec.json`,
+    `iterations/${iterationId}/gate-a-intake/intake.json`,
+    `iterations/${iterationId}/gate-a-intake/intake.md`,
+    `iterations/${iterationId}/gate-b-spec/product-spec.md`,
+    `iterations/${iterationId}/gate-b-spec/implementation-plan.md`,
+    `iterations/${iterationId}/gate-b-spec/experience-spec.json`,
+    `iterations/${iterationId}/gate-b-spec/spec.json`,
+    `iterations/${iterationId}/gate-c-task-graph/task-graph.json`,
+  ];
+}
+
+export function closedIterationVisualArtifactRefs(iterationId, artifactRoot) {
+  assertSafeIterationId(iterationId, 'closed iteration id');
+  const gateBRoot = path.join(
+    artifactRoot,
+    'iterations',
+    iterationId,
+    'gate-b-spec',
+  );
+  const refs = [];
+  const experiencePath = path.join(gateBRoot, 'experience-spec.json');
+  if (existsSync(experiencePath) && lstatSync(experiencePath).isFile()) {
+    refs.push(normalizeDisplayPath(path.relative(artifactRoot, experiencePath)));
+  }
+  const visualDesignRoot = path.join(gateBRoot, 'visual-design');
+  if (!existsSync(visualDesignRoot)) return refs;
+  if (!lstatSync(visualDesignRoot).isDirectory()) {
+    throw new ValidationError(
+      `closed iteration visual-design path must be a directory: ${visualDesignRoot}`,
+    );
+  }
+  const directories = [visualDesignRoot];
+  while (directories.length) {
+    const directory = directories.shift();
+    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+      const entryPath = path.join(directory, entry.name);
+      if (entry.isDirectory()) directories.push(entryPath);
+      else if (entry.isFile()) {
+        refs.push(normalizeDisplayPath(path.relative(artifactRoot, entryPath)));
+      } else {
+        throw new ValidationError(
+          `closed iteration visual-design contains unsupported entry: ${entryPath}`,
+        );
+      }
+    }
+  }
+  return refs.sort();
+}
+
+function auditedFileSha256(filePath) {
+  return createHash('sha256').update(readFileSync(filePath)).digest('hex');
+}
+
+/**
+ * Verify immutable close-time artifacts without replaying Gate A/B/C provenance.
+ * This intentionally stays linear in the archived bytes and is suitable for
+ * read-only routing. Semantic replay remains the responsibility of mutation
+ * preflights and explicit iteration validation.
+ */
+export function auditArchivedIterationArtifacts(currentSpec, artifactRoot) {
+  const closedIterations = currentSpec.closed_iterations ?? [];
+  if (!Array.isArray(closedIterations)) {
+    throw new ValidationError(
+      'current-spec.json closed_iterations must be an array when present',
+    );
+  }
+  const resolvedArtifactRoot = path.resolve(artifactRoot);
+  const iterationIds = closedIterations.map((closed) => closed?.iteration_id);
+  if (iterationIds.length !== new Set(iterationIds).size) {
+    throw new ValidationError(
+      'current-spec.json closed_iterations iteration_id values must be unique',
+    );
+  }
+  for (const closed of closedIterations) {
+    if (!closed?.iteration_id) {
+      throw new ValidationError(
+        'current-spec.json closed_iterations entries must include iteration_id',
+      );
+    }
+    assertSafeIterationId(
+      closed.iteration_id,
+      'current-spec.json closed_iterations[].iteration_id',
+    );
+    if (
+      !closed.artifact_hashes
+      || typeof closed.artifact_hashes !== 'object'
+      || Array.isArray(closed.artifact_hashes)
+    ) {
+      throw new ValidationError(
+        `closed iteration ${closed.iteration_id} is missing artifact_hashes; re-close or migrate audit metadata`,
+      );
+    }
+    const normalizedAuditRefs = new Set(
+      Object.keys(closed.artifact_hashes).map((reference) => reference.replaceAll('\\', '/')),
+    );
+    const missingAuditRefs = closedIterationRequiredArtifactRefs(closed.iteration_id)
+      .filter((reference) => !normalizedAuditRefs.has(reference));
+    if (missingAuditRefs.length) {
+      throw new ValidationError(
+        `closed iteration ${closed.iteration_id} artifact_hashes is missing required reference(s): ${missingAuditRefs.join(', ')}`,
+      );
+    }
+    const expectedVisualRefs = new Set(
+      Object.entries(closed.artifact_hashes)
+        .filter(([reference, audit]) => (
+          archivedVisualArtifactRef(reference.replaceAll('\\', '/'), closed.iteration_id)
+          && (typeof audit === 'string' || audit?.present === true)
+        ))
+        .map(([reference]) => reference.replaceAll('\\', '/')),
+    );
+    const currentVisualRefs = new Set(
+      closedIterationVisualArtifactRefs(closed.iteration_id, resolvedArtifactRoot),
+    );
+    const addedVisualRefs = [...currentVisualRefs]
+      .filter((reference) => !expectedVisualRefs.has(reference));
+    const removedVisualRefs = [...expectedVisualRefs]
+      .filter((reference) => !currentVisualRefs.has(reference));
+    if (addedVisualRefs.length || removedVisualRefs.length) {
+      const details = [
+        ...(addedVisualRefs.length ? [`added ${addedVisualRefs.join(', ')}`] : []),
+        ...(removedVisualRefs.length ? [`removed ${removedVisualRefs.join(', ')}`] : []),
+      ].join('; ');
+      throw new ValidationError(
+        `closed iteration ${closed.iteration_id} visual artifact set changed after close: ${details}`,
+      );
+    }
+    for (const [reference, expectedAudit] of Object.entries(closed.artifact_hashes)) {
+      const normalizedReference = typeof reference === 'string'
+        ? reference.replaceAll('\\', '/')
+        : '';
+      if (
+        !normalizedReference
+        || path.isAbsolute(reference)
+        || path.win32.isAbsolute(reference)
+        || normalizedReference.split('/').includes('..')
+      ) {
+        throw new ValidationError(
+          `closed iteration ${closed.iteration_id} artifact reference must be artifact-root-relative: ${JSON.stringify(reference)}`,
+        );
+      }
+      const filePath = path.resolve(resolvedArtifactRoot, reference);
+      const relativePath = path.relative(resolvedArtifactRoot, filePath);
+      if (
+        !relativePath
+        || relativePath.startsWith('..')
+        || path.isAbsolute(relativePath)
+      ) {
+        throw new ValidationError(
+          `closed iteration ${closed.iteration_id} artifact reference escapes the artifact root: ${JSON.stringify(reference)}`,
+        );
+      }
+      if (typeof expectedAudit === 'string') {
+        assertFile(filePath, `closed iteration artifact ${reference}`);
+        assertFileInsideArtifactRoot(
+          filePath,
+          resolvedArtifactRoot,
+          `closed iteration artifact ${reference}`,
+        );
+        if (auditedFileSha256(filePath) !== expectedAudit) {
+          throw new ValidationError(
+            `closed iteration ${closed.iteration_id} artifact changed after close: ${reference}`,
+          );
+        }
+        continue;
+      }
+      if (!expectedAudit || typeof expectedAudit !== 'object' || Array.isArray(expectedAudit)) {
+        throw new ValidationError(
+          `closed iteration ${closed.iteration_id} artifact audit entry is invalid: ${reference}`,
+        );
+      }
+      if (expectedAudit.present === false) {
+        if (existsSync(filePath)) {
+          throw new ValidationError(
+            `closed iteration ${closed.iteration_id} artifact appeared after close: ${reference}`,
+          );
+        }
+        continue;
+      }
+      if (expectedAudit.present !== true || typeof expectedAudit.sha256 !== 'string') {
+        throw new ValidationError(
+          `closed iteration ${closed.iteration_id} artifact audit entry is invalid: ${reference}`,
+        );
+      }
+      assertFile(filePath, `closed iteration artifact ${reference}`);
+      assertFileInsideArtifactRoot(
+        filePath,
+        resolvedArtifactRoot,
+        `closed iteration artifact ${reference}`,
+      );
+      if (auditedFileSha256(filePath) !== expectedAudit.sha256) {
+        throw new ValidationError(
+          `closed iteration ${closed.iteration_id} artifact changed after close: ${reference}`,
+        );
+      }
+    }
+  }
+  return closedIterations.length;
+}
+
+/** Validate only the current-spec fields needed to route a closed iteration. */
+export function validateClosedIterationRoutingData(currentSpec) {
+  const closedIterations = currentSpec.closed_iterations;
+  if (!Array.isArray(closedIterations) || !closedIterations.length) {
+    throw new ValidationError(
+      'closed iteration routing requires current-spec.json closed_iterations',
+    );
+  }
+  if (currentSpec.pending_iteration !== undefined) {
+    throw new ValidationError(
+      'closed iteration routing requires current-spec.json pending_iteration to be absent',
+    );
+  }
+  const closedIds = closedIterations.map((closed) => closed?.iteration_id);
+  if (
+    closedIds.some((iterationId) => typeof iterationId !== 'string' || !iterationId)
+    || closedIds.length !== new Set(closedIds).size
+  ) {
+    throw new ValidationError(
+      'closed iteration routing requires unique closed iteration ids',
+    );
+  }
+  if (!closedIds.includes(currentSpec.active_iteration)) {
+    throw new ValidationError(
+      'closed iteration routing requires active_iteration in closed_iterations',
+    );
+  }
+  const activeClosedRecord = closedIterations.find(
+    (closed) => closed.iteration_id === currentSpec.active_iteration,
+  );
+  if (
+    !currentSpec.last_closed_iteration
+    || currentSpec.last_closed_iteration.iteration_id !== currentSpec.active_iteration
+  ) {
+    throw new ValidationError(
+      'closed iteration routing requires last_closed_iteration to match active_iteration',
+    );
+  }
+  if (
+    !jsonEqual(
+      currentSpec.last_closed_iteration.artifact_hashes,
+      activeClosedRecord.artifact_hashes,
+    )
+  ) {
+    throw new ValidationError(
+      'closed iteration routing requires last_closed_iteration artifact_hashes to match closed_iterations',
+    );
+  }
+  const openDecisions = currentSpec.open_decisions ?? [];
+  if (!Array.isArray(openDecisions) || openDecisions.length) {
+    throw new ValidationError(
+      'closed iteration routing requires current-spec.json open_decisions to be empty',
+    );
+  }
+
+  const hasCompositionFields = Object.hasOwn(currentSpec, 'source_specs')
+    || Object.hasOwn(currentSpec, 'effective_product')
+    || Object.hasOwn(currentSpec, 'effective_implementation')
+    || currentSpec.effective_spec_ref === 'current-spec.json';
+  if (!hasCompositionFields) {
+    const expectedRef = `iterations/${currentSpec.active_iteration}/gate-b-spec/spec.json`;
+    if (normalizeDisplayPath(currentSpec.effective_spec_ref) !== expectedRef) {
+      throw new ValidationError(
+        `closed iteration routing requires effective_spec_ref ${expectedRef}`,
+      );
+    }
+    return currentSpec;
+  }
+  if (currentSpec.effective_spec_ref !== 'current-spec.json') {
+    throw new ValidationError(
+      'current-spec.json effective_spec_ref must be "current-spec.json" for composition',
+    );
+  }
+  if (!Array.isArray(currentSpec.source_specs) || !currentSpec.source_specs.length) {
+    throw new ValidationError(
+      'current-spec.json source_specs must be a non-empty array for composition',
+    );
+  }
+  if (!Array.isArray(currentSpec.composed_from) || !currentSpec.composed_from.length) {
+    throw new ValidationError(
+      'current-spec.json composed_from must be a non-empty array for composition',
+    );
+  }
+  const sourceIds = currentSpec.source_specs.map((source) => source?.iteration_id);
+  if (!jsonEqual(sourceIds, currentSpec.composed_from)) {
+    throw new ValidationError(
+      'current-spec.json composed_from must match source_specs iteration order',
+    );
+  }
+  if (sourceIds.length !== new Set(sourceIds).size) {
+    throw new ValidationError(
+      'current-spec.json source_specs iteration ids must be unique',
+    );
+  }
+  for (const source of currentSpec.source_specs) {
+    assertSafeIterationId(
+      source.iteration_id,
+      'current-spec.json source_specs[].iteration_id',
+    );
+    const expectedRef = `iterations/${source.iteration_id}/gate-b-spec/spec.json`;
+    if (normalizeDisplayPath(source.spec_ref) !== expectedRef) {
+      throw new ValidationError(
+        `current-spec.json source ${source.iteration_id} spec_ref must be ${expectedRef}`,
+      );
+    }
+    if (source.status !== 'archived' || source.approval !== 'approved') {
+      throw new ValidationError(
+        `current-spec.json source ${source.iteration_id} must be archived and approved`,
+      );
+    }
+  }
+  validateEffectiveSections(
+    currentSpec.effective_product,
+    currentSpec.effective_implementation,
+  );
+  return currentSpec;
+}
+
 function expectedCompositionSourceStatus(currentSpec, source, metadata) {
   if (metadata?.status === 'archived' || source.iteration_id !== currentSpec.active_iteration) {
     return 'archived';
@@ -266,6 +592,7 @@ function validateCompositionSourceReadiness(
   specPath,
   artifactRoot,
   metadata,
+  options = {},
 ) {
   const iterationRoot = path.join(artifactRoot, 'iterations', source.iteration_id);
   const taskGraphPath = path.join(
@@ -279,7 +606,10 @@ function validateCompositionSourceReadiness(
     artifactRoot,
     `current-spec.json source_specs ${source.iteration_id} task graph`,
   );
-  const taskGraph = validateTaskGraph(taskGraphPath, specPath);
+  const taskGraph = validateTaskGraph(taskGraphPath, specPath, {
+    artifactRoot,
+    validationSession: options.validationSession,
+  });
   if (taskGraph.projectId !== currentSpec.project_id) {
     throw new ValidationError(
       `current-spec.json source_specs ${source.iteration_id} task graph project mismatch`,
@@ -408,7 +738,10 @@ export function validateCurrentSpecCompositionData(
       );
     }
     sourceRealPaths.add(specRealPath);
-    const spec = validateSpec(specPath, null, { artifactRoot });
+    const spec = validateSpec(specPath, null, {
+      artifactRoot,
+      validationSession: options.validationSession,
+    });
     if (spec.project_id !== currentSpec.project_id) {
       throw new ValidationError(
         `current-spec.json source_specs ${source.iteration_id} project_id mismatch`,
@@ -442,6 +775,7 @@ export function validateCurrentSpecCompositionData(
       specPath,
       artifactRoot,
       metadata,
+      options,
     );
     const sourceIntakePath = resolveSpecSourceIntake(specPath, spec);
     const sourceIntake = sourceIntakePath ? loadJson(sourceIntakePath) : null;
@@ -1032,11 +1366,14 @@ export function validateActiveGateBPromotionBinding(state, spec = null) {
   return binding;
 }
 
-function validateReadyIterationArtifacts(state) {
+function validateReadyIterationArtifacts(state, options = {}) {
   validateCurrentSpecCompositionData(
     state.currentSpec,
     state.artifactRoot,
-    { requireNoOpenDecisions: true },
+    {
+      requireNoOpenDecisions: true,
+      validationSession: options.validationSession,
+    },
   );
   validateActiveIterationPlanningContract(state);
   const currentSpecOpenDecisions = state.currentSpec.open_decisions ?? [];
@@ -1049,7 +1386,10 @@ function validateReadyIterationArtifacts(state) {
   const spec = validateSpec(
     state.specPath,
     null,
-    { artifactRoot: state.artifactRoot },
+    {
+      artifactRoot: state.artifactRoot,
+      validationSession: options.validationSession,
+    },
   );
   if (spec.approval !== 'approved') {
     throw new ValidationError(`ready iteration requires spec.approval approved, got ${JSON.stringify(spec.approval)}`);
@@ -1063,7 +1403,10 @@ function validateReadyIterationArtifacts(state) {
     );
   }
   validateActiveGateBPromotionBinding(state, spec);
-  const taskGraph = validateTaskGraph(state.taskGraphPath, state.specPath);
+  const taskGraph = validateTaskGraph(state.taskGraphPath, state.specPath, {
+    artifactRoot: state.artifactRoot,
+    validationSession: options.validationSession,
+  });
   if (taskGraph.projectId !== state.projectId) {
     throw new ValidationError(
       `ready iteration requires taskGraph.projectId ${JSON.stringify(taskGraph.projectId)} to match current-spec.json project_id ${JSON.stringify(state.projectId)}`,
@@ -1141,7 +1484,7 @@ export function resolveIterationState(artifactPath, options = {}) {
       taskGraphPath,
       taskGraphSourceSpecPath,
     };
-    validateReadyIterationArtifacts(state);
+    validateReadyIterationArtifacts(state, options);
     return state;
   }
 

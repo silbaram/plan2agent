@@ -6,6 +6,16 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+## [0.5.8] - 2026-08-23
+
+### Changed
+
+- Route audited closed iterations from the minimal canonical archive, composition, active-run, and review state instead of replaying the full Gate A/B/C provenance graph, while retaining request-scoped validation reuse and optional `p2a next --trace` diagnostics for fallback paths.
+
+### Fixed
+
+- Preserve fail-closed review routing by checking active run files against a declared run-index `runKind`, rejecting mismatches without hydrating historical run evidence.
+
 ## [0.5.7] - 2026-08-22
 
 ### Fixed
@@ -177,7 +187,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Add package-runtime project initialization, managed provider assets, artifact validation, handoff, supervised execution, evaluation, proposal, and optional Memory workflows.
 - Ship canonical and generated integrations for Codex, Claude Code, and Gemini CLI.
 
-[Unreleased]: https://github.com/silbaram/plan2agent/compare/v0.5.7...HEAD
+[Unreleased]: https://github.com/silbaram/plan2agent/compare/v0.5.8...HEAD
+[0.5.8]: https://github.com/silbaram/plan2agent/compare/v0.5.7...v0.5.8
 [0.5.7]: https://github.com/silbaram/plan2agent/compare/v0.5.6...v0.5.7
 [0.5.6]: https://github.com/silbaram/plan2agent/compare/v0.5.5...v0.5.6
 [0.5.5]: https://github.com/silbaram/plan2agent/compare/v0.5.4...v0.5.5

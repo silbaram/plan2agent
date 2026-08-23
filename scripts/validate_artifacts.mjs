@@ -1,7 +1,14 @@
 #!/usr/bin/env node
 /** Validate Plan2Agent JSON artifacts and golden fixtures with Node.js stdlib only. */
 
-import { existsSync, lstatSync, readFileSync, readdirSync, realpathSync } from 'node:fs';
+import {
+  existsSync,
+  lstatSync,
+  readFileSync,
+  readdirSync,
+  realpathSync,
+  statSync,
+} from 'node:fs';
 import { createHash } from 'node:crypto';
 import path from 'node:path';
 import process from 'node:process';
@@ -78,6 +85,7 @@ const SCHEMA_PATHS = {
   eval_maintenance_draft: path.join(P2A_PATHS.schemasDir, 'eval-maintenance-draft.schema.json'),
   eval_maintenance_apply_report: path.join(P2A_PATHS.schemasDir, 'eval-maintenance-apply-report.schema.json'),
 };
+const SCHEMA_CACHE = new Map();
 const GATE_PATHS = {
   decisions: 'decisions.jsonl',
   statusDoc: 'status.md',
@@ -177,6 +185,97 @@ export function loadJson(filePath) {
   return JSON.parse(readFileSync(filePath, 'utf8'));
 }
 
+function loadSchema(schemaName) {
+  if (!SCHEMA_CACHE.has(schemaName)) {
+    SCHEMA_CACHE.set(schemaName, loadJson(SCHEMA_PATHS[schemaName]));
+  }
+  return SCHEMA_CACHE.get(schemaName);
+}
+
+export function createValidationSession() {
+  return {
+    artifactValidations: new Map(),
+    fileSnapshots: new Map(),
+    stats: {
+      fileReads: 0,
+      jsonParses: 0,
+      validatorRuns: {},
+    },
+  };
+}
+
+function validationFileSnapshot(filePath, options = {}) {
+  const session = options.validationSession;
+  if (!(session?.fileSnapshots instanceof Map)) return null;
+  const resolvedPath = existsSync(filePath) ? realpathSync(filePath) : path.resolve(filePath);
+  const stat = statSync(resolvedPath);
+  const signature = [stat.dev, stat.ino, stat.size, stat.mtimeMs, stat.ctimeMs].join(':');
+  const cached = session.fileSnapshots.get(resolvedPath);
+  if (cached?.signature === signature) return cached;
+  const source = readFileSync(resolvedPath, 'utf8');
+  session.stats.fileReads += 1;
+  const data = JSON.parse(source);
+  session.stats.jsonParses += 1;
+  const snapshot = {
+    resolvedPath,
+    signature,
+    sha256: createHash('sha256').update(source).digest('hex'),
+    data,
+  };
+  session.fileSnapshots.set(resolvedPath, snapshot);
+  return snapshot;
+}
+
+function loadValidationJson(filePath, options = {}) {
+  return validationFileSnapshot(filePath, options)?.data ?? loadJson(filePath);
+}
+
+function validationFileIdentity(filePath, options = {}) {
+  const snapshot = validationFileSnapshot(filePath, options);
+  if (!snapshot) return path.resolve(filePath);
+  return `${snapshot.resolvedPath}\n${snapshot.sha256}`;
+}
+
+function recordValidationRun(options, kind) {
+  const stats = options.validationSession?.stats;
+  if (!stats) return;
+  stats.validatorRuns[kind] = (stats.validatorRuns[kind] ?? 0) + 1;
+}
+
+function validationSessionKey(kind, filePath, options = {}, suffix = '') {
+  const session = options.validationSession;
+  if (!(session?.artifactValidations instanceof Map)) return null;
+  const snapshot = validationFileSnapshot(filePath, options);
+  const artifactRoot = options.artifactRoot
+    ? path.resolve(options.artifactRoot)
+    : '';
+  const constitutionPath = options.constitutionPath
+    ? path.resolve(options.constitutionPath)
+    : '';
+  return [
+    kind,
+    snapshot.resolvedPath,
+    snapshot.sha256,
+    artifactRoot,
+    constitutionPath,
+    kind === 'intake' ? '' : options.projectId ?? '',
+    options.requireBaselineContextArtifactRoot === true ? 'baseline-required' : '',
+    options.requireApprovedConstitution === false ? 'constitution-optional' : '',
+    suffix,
+  ].join('\n');
+}
+
+function cachedValidation(options, key) {
+  if (!key) return null;
+  const cache = options.validationSession.artifactValidations;
+  return cache.has(key) ? { hit: true, value: cache.get(key) } : null;
+}
+
+function cacheValidation(options, key, value) {
+  if (key) options.validationSession.artifactValidations.set(key, value);
+  return value;
+}
+
 function assertFile(filePath, label) {
   if (!existsSync(filePath)) throw new ValidationError(`${label} is missing: ${filePath}`);
   if (!lstatSync(filePath).isFile()) throw new ValidationError(`${label} must be a file: ${filePath}`);
@@ -259,11 +358,14 @@ function inferArtifactRootFromIntakePath(intakePath) {
   return null;
 }
 
-export function validateAgainstSchema(filePath, schemaName) {
-  const data = loadJson(filePath);
-  const schema = loadJson(SCHEMA_PATHS[schemaName]);
+export function validateAgainstSchema(filePath, schemaName, options = {}) {
+  const cacheKey = validationSessionKey(`schema:${schemaName}`, filePath, options);
+  const cached = cachedValidation(options, cacheKey);
+  if (cached) return cached.value;
+  const data = loadValidationJson(filePath, options);
+  const schema = loadSchema(schemaName);
   validateSchema(data, schema);
-  return data;
+  return cacheValidation(options, cacheKey, data);
 }
 
 export function validateEvidence(evidence, label) {
@@ -907,6 +1009,7 @@ function validateBaselineContext(
   requireArtifactRoot = false,
   provenanceVisited = new Set(),
   intakePath = null,
+  validationSession = null,
 ) {
   const context = intake.baseline_context;
   if (!context) return;
@@ -1002,6 +1105,7 @@ function validateBaselineContext(
     artifactRoot: root,
     requireBaselineContextArtifactRoot: true,
     provenanceVisited,
+    validationSession,
   };
   const rootRealPath = realpathSync(root);
   const allowedBaselineSpecPaths = new Set();
@@ -1319,7 +1423,11 @@ function validateBaselineContext(
 }
 
 export function validateIntake(filePath, options = {}) {
-  const data = validateAgainstSchema(filePath, 'intake');
+  const cacheKey = validationSessionKey('intake', filePath, options);
+  const cached = cachedValidation(options, cacheKey);
+  if (cached) return cached.value;
+  recordValidationRun(options, 'intake');
+  const data = validateAgainstSchema(filePath, 'intake', options);
   validateEvidence(data.evidence, 'intake');
   validateReferenceBundleSnapshot(filePath, data, options);
 
@@ -1434,6 +1542,7 @@ export function validateIntake(filePath, options = {}) {
     options.requireBaselineContextArtifactRoot === true,
     options.provenanceVisited ?? new Set(),
     filePath,
+    options.validationSession ?? null,
   );
   const openQuestionIds = data.clarifying_questions
     .filter((question) => question.status === 'open')
@@ -1460,7 +1569,7 @@ export function validateIntake(filePath, options = {}) {
     );
   }
   if (options.intakeMdPath) validateIntakeMarkdownDecisionSync(data, options.intakeMdPath);
-  return data;
+  return cacheValidation(options, cacheKey, data);
 }
 
 export function validateIntakeMarkdownDecisionSync(intake, intakeMdPath) {
@@ -1485,29 +1594,41 @@ function escapeRegExp(value) {
 }
 
 export function validateSpec(filePath, intakePath = null, options = {}) {
-  const data = validateAgainstSchema(filePath, 'spec');
-  const constitutionContract = resolveConstitutionForArtifact(filePath, {
-    ...options,
-    projectId: options.projectId ?? data.project_id,
-  });
-  const referencedIntakePath = requireSpecSourceIntake(filePath, data);
+  const referenceData = validateAgainstSchema(filePath, 'spec', options);
+  const referencedIntakePath = requireSpecSourceIntake(filePath, referenceData);
   const providedIntakePath = intakePath ? path.resolve(intakePath) : null;
   if (providedIntakePath) {
     assertFile(providedIntakePath, 'provided intake');
     if (!referencedIntakePath) {
       throw new ValidationError(
-        `spec.source_intake cannot be resolved to the provided intake: ${JSON.stringify(data.source_intake)}`,
+        `spec.source_intake cannot be resolved to the provided intake: ${JSON.stringify(referenceData.source_intake)}`,
       );
     }
     if (realpathSync(referencedIntakePath) !== realpathSync(providedIntakePath)) {
       throw new ValidationError(
-        `provided intake does not match spec.source_intake ${JSON.stringify(data.source_intake)}`,
+        `provided intake does not match spec.source_intake ${JSON.stringify(referenceData.source_intake)}`,
       );
     }
   }
   const resolvedIntakePath = providedIntakePath ?? referencedIntakePath;
   const artifactRoot = options.artifactRoot
     ?? (resolvedIntakePath ? inferArtifactRootFromIntakePath(resolvedIntakePath) : null);
+  const cacheOptions = {
+    ...options,
+    ...(artifactRoot ? { artifactRoot } : {}),
+    projectId: options.projectId ?? referenceData.project_id,
+  };
+  const intakeCacheRef = resolvedIntakePath
+    ? validationFileIdentity(resolvedIntakePath, cacheOptions)
+    : '';
+  const cacheKey = validationSessionKey('spec', filePath, cacheOptions, intakeCacheRef);
+  const cached = cachedValidation(cacheOptions, cacheKey);
+  if (cached) return cached.value;
+  recordValidationRun(cacheOptions, 'spec');
+  const data = referenceData;
+  const constitutionContract = resolveConstitutionForArtifact(filePath, {
+    ...cacheOptions,
+  });
   if (resolvedIntakePath && artifactRoot) {
     assertFileInsideArtifactRoot(
       resolvedIntakePath,
@@ -1515,9 +1636,7 @@ export function validateSpec(filePath, intakePath = null, options = {}) {
       'spec.source_intake',
     );
   }
-  const intakeValidationOptions = artifactRoot
-    ? { ...options, artifactRoot }
-    : options;
+  const intakeValidationOptions = cacheOptions;
   const intake = resolvedIntakePath
     ? validateIntake(resolvedIntakePath, intakeValidationOptions)
     : null;
@@ -1625,7 +1744,7 @@ export function validateSpec(filePath, intakePath = null, options = {}) {
       );
     }
   }
-  return data;
+  return cacheValidation(cacheOptions, cacheKey, data);
 }
 
 export function validateApprovalAuditData(audit, label = 'approval audit') {
@@ -3628,12 +3747,12 @@ export function validateTaskContextData(data) {
 }
 
 export function validateTaskGraphData(data, requireApprovedSpec = null, options = {}) {
-  const schema = loadJson(SCHEMA_PATHS.task_graph);
+  const schema = loadSchema('task_graph');
   validateSchema(data, schema);
   let approvedSpec = null;
   let approvedVisual = null;
   if (requireApprovedSpec) {
-    const specReference = loadJson(requireApprovedSpec);
+    const specReference = loadValidationJson(requireApprovedSpec, options);
     const sourceIntakePath = requireSpecSourceIntake(requireApprovedSpec, specReference);
     approvedSpec = validateSpec(requireApprovedSpec, sourceIntakePath, {
       ...options,
@@ -3766,10 +3885,18 @@ function validateNonBlankStrings(values, label) {
 }
 
 export function validateTaskGraph(filePath, requireApprovedSpec = null, options = {}) {
-  return validateTaskGraphData(loadJson(filePath), requireApprovedSpec, {
+  const specCacheRef = requireApprovedSpec
+    ? validationFileIdentity(requireApprovedSpec, options)
+    : '';
+  const cacheKey = validationSessionKey('task-graph', filePath, options, specCacheRef);
+  const cached = cachedValidation(options, cacheKey);
+  if (cached) return cached.value;
+  recordValidationRun(options, 'task-graph');
+  const data = validateTaskGraphData(loadValidationJson(filePath, options), requireApprovedSpec, {
     ...options,
     artifactPath: filePath,
   });
+  return cacheValidation(options, cacheKey, data);
 }
 
 export function validateReview(filePath, expectedSources = null, options = {}) {
@@ -4893,6 +5020,12 @@ export function validateRunsDir(runsDir) {
       if (JSON.stringify(run[field]) !== JSON.stringify(runData[field])) {
         throw new ValidationError(`run-index ${run.runId}.${field} does not match run file`);
       }
+    }
+    if (
+      Object.hasOwn(run, 'runKind')
+      && (run.runKind ?? null) !== (runData.runKind ?? null)
+    ) {
+      throw new ValidationError(`run-index ${run.runId}.runKind does not match run file`);
     }
     if (runData.projectId !== index.projectId) {
       throw new ValidationError(`run ${run.runId} projectId does not match run-index projectId`);
