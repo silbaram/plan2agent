@@ -18,6 +18,7 @@ import './handoff-portability.test.mjs';
 import './iteration-memory-recall.test.mjs';
 import './spec-supersession.test.mjs';
 import './run-id-strategy.test.mjs';
+import './run-retention.test.mjs';
 import './run-layout.test.mjs';
 import './monitor-telemetry.test.mjs';
 import './supervised-batch-execution.test.mjs';

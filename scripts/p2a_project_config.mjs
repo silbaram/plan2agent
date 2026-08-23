@@ -12,6 +12,7 @@ const ORCHESTRATION_AGENT_TOOLS = new Set(['codex', 'claude', 'manual']);
 const AI_TOOL_TARGETS = new Set(['codex', 'claude', 'gemini']);
 export const DEFAULT_VERIFICATION_TIMEOUT_MS = 600000;
 export const RUN_ID_STRATEGIES = new Set(['timestamp', 'task-sequence']);
+export const RUN_PERSISTENCE_MODES = new Set(['persistent', 'active_only']);
 export const REVIEW_PASS_POLICIES = new Set(['off', 'opt_in', 'on']);
 const DEFAULT_RUN_ID_PATTERN = 'run-<taskId>-<sequence:3>';
 export const RUN_ID_RESERVATION_DIR = '.run-id-reservations';
@@ -21,12 +22,31 @@ const LEGACY_REVIEW_PASS_KEYS = ['style', 'milestone'];
 export function defaultRunTracking() {
   return {
     runsDir: DEFAULT_RUNS_DIR,
+    persistence: 'active_only',
     defaultIsolation: 'none',
     runIdStrategy: 'timestamp',
     runIdPattern: DEFAULT_RUN_ID_PATTERN,
     branchPattern: 'p2a/<taskId>-<runId>',
     worktreePattern: '../.worktrees/<taskId>-<runId>',
   };
+}
+
+export function resolveRunPersistence(config = {}) {
+  const runTracking = config?.runTracking;
+  if (runTracking !== undefined && (
+    !runTracking
+    || typeof runTracking !== 'object'
+    || Array.isArray(runTracking)
+  )) {
+    throw new Error('project config runTracking must be an object');
+  }
+  const persistence = runTracking?.persistence ?? 'persistent';
+  if (!RUN_PERSISTENCE_MODES.has(persistence)) {
+    throw new Error(
+      `project config runTracking.persistence must be one of ${[...RUN_PERSISTENCE_MODES].join(', ')}, got ${JSON.stringify(persistence)}`,
+    );
+  }
+  return persistence;
 }
 
 function timestampRunId(taskId, now = new Date()) {
@@ -645,6 +665,7 @@ export function mergeDevSkillConfig(config) {
     executionMode: LEGACY_EXECUTION_MODE,
   };
   const merges = [
+    ['runTracking', defaultRunTracking()],
     ['devExecution', legacyDevExecutionDefaults],
     ['roleProfiles', defaultRoleProfiles()],
     ['promptTemplates', defaultPromptTemplates()],

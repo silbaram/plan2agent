@@ -44,6 +44,7 @@ import {
   runMatchesSourceContext,
   taskGraphRefMatchesGraph,
 } from './p2a_run_paths.mjs';
+import { pruneIndexedRunEvidence } from './p2a_runs.mjs';
 import {
   assertNoUninitializedScaffoldArtifactRoots,
   assertNotUninitializedScaffoldGraph,
@@ -53,7 +54,12 @@ import {
 } from './p2a_paths.mjs';
 import { atomicWriteJson, runWriteTransactionPath, withRunStoreLocks } from './p2a_run_store.mjs';
 import { commandLine as sharedCommandLine, printRunCommandFooter } from './p2a_run_commands.mjs';
-import { allocateRunId, previewRunId, releaseRunIdReservation } from './p2a_project_config.mjs';
+import {
+  allocateRunId,
+  previewRunId,
+  releaseRunIdReservation,
+  resolveRunPersistence,
+} from './p2a_project_config.mjs';
 import {
   artifactRelativePath,
   assertDirectory,
@@ -429,6 +435,55 @@ function loadProjectConfig(source, workspacePath) {
   return {};
 }
 
+function warnRunCleanupFailures(cleanup) {
+  if (!cleanup?.cleanupFailures?.length) return;
+  console.error(`warning: ${cleanup.cleanupFailures.length} unindexed run evidence file(s) could not be removed`);
+  for (const failure of cleanup.cleanupFailures) console.error(`- ${failure}`);
+}
+
+function pruneCompletedMaintenanceRunHistory(source, currentTask, config, { quiet = false } = {}) {
+  if (
+    source.sourceLayout !== 'maintenance'
+    || resolveRunPersistence(config) !== 'active_only'
+  ) return null;
+  const completedTaskIds = source.graph.tasks
+    .filter((task) => task.id !== currentTask.id && task.status === 'done')
+    .map((task) => task.id);
+  if (!completedTaskIds.length) return null;
+  const cleanup = pruneIndexedRunEvidence(source.runsDir, {
+    iterationIds: ['maintenance'],
+    taskIds: completedTaskIds,
+  });
+  warnRunCleanupFailures(cleanup);
+  if (!quiet && cleanup.prunedRunIds.length) {
+    console.log(`Transient run cleanup: removed ${cleanup.prunedRunIds.length} completed maintenance run(s)`);
+  }
+  return cleanup;
+}
+
+function pruneSupersededRunHistory(source, run, { quiet = false } = {}) {
+  if (run.status !== 'finished' || !source.artifactRoot) return null;
+  try {
+    const config = loadProjectConfig(source, run.workspacePath ?? process.cwd());
+    if (resolveRunPersistence(config) !== 'active_only') return null;
+    const cleanup = pruneIndexedRunEvidence(source.runsDir, {
+      iterationIds: [run.iterationId],
+      taskIds: [run.taskId],
+      runKinds: [run.runKind ?? null],
+      keepRunIds: [run.runId],
+      requireNoStarted: false,
+    });
+    warnRunCleanupFailures(cleanup);
+    if (!quiet && cleanup.prunedRunIds.length) {
+      console.log(`Transient run cleanup: removed ${cleanup.prunedRunIds.length} superseded run(s)`);
+    }
+    return cleanup;
+  } catch (error) {
+    console.error(`warning: superseded run cleanup was skipped: ${error.message}`);
+    return null;
+  }
+}
+
 function resolveSource(args) {
   if (args.artifacts) {
     const state = resolveIterationState(args.artifacts, { requireReady: !args.maintenance });
@@ -707,6 +762,7 @@ function resolveStartDefaults(args, source, task, runId, options = {}) {
   const workspacePath = options.workspacePath ?? path.resolve(args.workspace ?? process.cwd());
   assertDirectory(workspacePath, '--workspace');
   const config = options.config ?? loadProjectConfig(source, workspacePath);
+  resolveRunPersistence(config);
   const runTracking = config.runTracking ?? {};
   const isolation = args.isolation ?? runTracking.defaultIsolation ?? 'none';
   if (!ISOLATION_MODES.has(isolation)) throw new Error(`project config runTracking.defaultIsolation must be one of none, branch, worktree, got ${JSON.stringify(isolation)}`);
@@ -1243,6 +1299,9 @@ function recoverAfterClosedRun(args, source, run) {
     console.error(`warning: orchestration runtime was not updated: ${error.message}`);
   }
   const status = transitionTaskAfterFinishedRun(args, source, run, 0);
+  if (status === 0 && !args.noTaskTransition) {
+    pruneSupersededRunHistory(source, run, { quiet: args.json });
+  }
   printClosedRunFooter(source, run);
   return status;
 }
@@ -1443,6 +1502,12 @@ function runStart(args) {
     }
     if (args.requireMonitor) {
       console.log(`Attached monitor gate sidecar: ${displayPath(monitorGateSidecarPath(source.runsDir, runId))}`);
+    }
+
+    try {
+      pruneCompletedMaintenanceRunHistory(source, task, defaults.config, { quiet: args.json });
+    } catch (error) {
+      console.error(`warning: completed maintenance run cleanup was skipped: ${error.message}`);
     }
 
     const startedRun = readRun(source.runsDir, runId);
@@ -1758,6 +1823,9 @@ function runFinish(args) {
     console.error(`warning: orchestration runtime was not updated: ${error.message}`);
   }
   const status = transitionTaskAfterFinishedRun(args, source, run, finishResult.status ?? 0);
+  if (status === 0 && !args.noTaskTransition) {
+    pruneSupersededRunHistory(source, run, { quiet: args.json });
+  }
   printClosedRunFooter(source, run);
   return status;
 }

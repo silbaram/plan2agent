@@ -6,6 +6,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+### Changed
+
+- Default new and upgraded projects to `runTracking.persistence: active_only`: keep current execution evidence for gates and handoff, prune superseded successful retries, remove archived iteration runs when the next iteration opens, and remove completed maintenance history when the next maintenance task starts. Unmigrated legacy configs without the field resolve as `persistent`, and explicit `persistent` mode preserves prior behavior.
+
 ## [0.5.9] - 2026-08-23
 
 ### Changed

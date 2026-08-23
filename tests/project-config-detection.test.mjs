@@ -11,6 +11,7 @@ import {
   mergeDevSkillConfig,
   resolveExecutionModePolicy,
   resolveReviewPasses,
+  resolveRunPersistence,
 } from '../scripts/p2a_project_config.mjs';
 
 function tempProject() {
@@ -91,7 +92,15 @@ test('defaults new projects to adaptive while preserving legacy omitted-mode beh
   const projectConfig = buildProjectConfig(tempProject());
   assert.equal(projectConfig.devExecution.executionMode, 'adaptive');
   assert.equal(projectConfig.runTracking.defaultIsolation, 'none');
+  assert.equal(projectConfig.runTracking.persistence, 'active_only');
+  assert.equal(resolveRunPersistence(projectConfig), 'active_only');
+  assert.equal(resolveRunPersistence({}), 'persistent');
   assert.equal(mergeDevSkillConfig({ devExecution: {} }).config.devExecution.executionMode, 'orchestrated');
+  assert.equal(mergeDevSkillConfig({ devExecution: {} }).config.runTracking.persistence, 'active_only');
+  assert.equal(mergeDevSkillConfig({
+    runTracking: { persistence: 'persistent' },
+    devExecution: {},
+  }).config.runTracking.persistence, 'persistent');
   assert.deepEqual(defaultDevExecution().reviewPasses, {
     monitor: 'opt_in',
     visual: 'off',
@@ -102,6 +111,20 @@ test('defaults new projects to adaptive while preserving legacy omitted-mode beh
     visual: 'off',
     acceptance: 'opt_in',
   });
+});
+
+test('validates explicit run persistence policies', () => {
+  for (const persistence of ['persistent', 'active_only']) {
+    assert.equal(resolveRunPersistence({ runTracking: { persistence } }), persistence);
+  }
+  assert.throws(
+    () => resolveRunPersistence({ runTracking: { persistence: 'archive' } }),
+    /runTracking\.persistence must be one of persistent, active_only/,
+  );
+  assert.throws(
+    () => resolveRunPersistence({ runTracking: [] }),
+    /runTracking must be an object/,
+  );
 });
 
 test('supports explicit execution mode policies', () => {

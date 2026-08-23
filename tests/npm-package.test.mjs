@@ -51,7 +51,7 @@ test('package metadata exposes the p2a global CLI and required runtime assets', 
     assert.ok(packageJson.files.includes(requiredPath), `${requiredPath} must be packaged`);
   }
   assert.equal(packageJson.files.includes('docs'), false);
-  assert.equal(packageJson.files.includes('readme.md'), false);
+  assert.equal(packageJson.files.includes('README.md'), false);
 });
 
 test('repository release surfaces match the package support contract', () => {
@@ -69,7 +69,7 @@ test('repository release surfaces match the package support contract', () => {
   assert.match(workflow, /run: npm test/);
   assert.match(workflow, /run: npm run test:full/);
 
-  for (const readmePath of ['readme.md', 'README.ko-KR.md']) {
+  for (const readmePath of ['README.md', 'README.ko-KR.md']) {
     const readme = readFileSync(path.join(ROOT, readmePath), 'utf8');
     assert.match(readme, /actions\/workflows\/ci\.yml\/badge\.svg/);
     assert.match(readme, /Node\.js 22/);
@@ -89,7 +89,7 @@ test('planning-docs runtime manifest and user documentation preserve the safety 
   const runtimeManifest = readFileSync(path.join(ROOT, 'scripts', 'p2a_tool_manifest.mjs'), 'utf8');
   assert.match(runtimeManifest, /['"]p2a_memory_planning_docs\.mjs['"]/);
 
-  const englishReadme = readFileSync(path.join(ROOT, 'readme.md'), 'utf8');
+  const englishReadme = readFileSync(path.join(ROOT, 'README.md'), 'utf8');
   assert.match(englishReadme, /--profile planning-docs --dry-run/);
   assert.match(englishReadme, /Actual remote writes still require `--yes`/);
   assert.match(englishReadme, /Local chunk files are never planning source artifacts/);
@@ -379,7 +379,7 @@ test('npm pack dry run includes the global CLI runtime', () => {
     ]) {
       assert.ok(files.has(requiredPath), `${requiredPath} must be present in npm pack output`);
     }
-    assert.ok(files.has('readme.md'), 'npm must include the project readme automatically');
+    assert.ok(files.has('README.md'), 'npm must include the project readme automatically');
     assert.equal([...files].some((file) => file.startsWith('docs/')), false);
   } finally {
     rmSync(cacheRoot, { recursive: true, force: true });
