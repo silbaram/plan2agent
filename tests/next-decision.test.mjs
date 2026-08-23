@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { performance } from 'node:perf_hooks';
 import test from 'node:test';
 
 import { FIXTURE_ROOT, makeTempDir, runP2a } from './helpers/fixtures.mjs';
@@ -9,6 +10,12 @@ import { validateSchema } from '../scripts/p2a_schema.mjs';
 import { NEXT_DECISION_RULES } from '../scripts/p2a.mjs';
 import { buildNext } from '../scripts/p2a_next_service.mjs';
 import { iterationCompositionRequirement } from '../scripts/p2a_iteration_state.mjs';
+import {
+  createValidationSession,
+  validateIntake,
+  validateSpec,
+  validateTaskGraph,
+} from '../scripts/validate_artifacts.mjs';
 import {
   CONTINUATION_DEFINITIONS,
   continuationDescriptor,
@@ -199,6 +206,47 @@ function writeIteration(artifactRoot, projectId = 'sample', options = {}) {
   return iterationId;
 }
 
+function addArchivedArtifactAudits(artifactRoot) {
+  const currentSpecPath = join(artifactRoot, 'current-spec.json');
+  const currentSpec = JSON.parse(readFileSync(currentSpecPath, 'utf8'));
+  const auditedRecords = currentSpec.closed_iterations.map((closed) => {
+    const iterationId = closed.iteration_id;
+    const refs = [
+      `iterations/${iterationId}/baseline/current-spec.json`,
+      `iterations/${iterationId}/gate-a-intake/intake.json`,
+      `iterations/${iterationId}/gate-a-intake/intake.md`,
+      `iterations/${iterationId}/gate-b-spec/product-spec.md`,
+      `iterations/${iterationId}/gate-b-spec/implementation-plan.md`,
+      `iterations/${iterationId}/gate-b-spec/experience-spec.json`,
+      `iterations/${iterationId}/gate-b-spec/spec.json`,
+      `iterations/${iterationId}/gate-c-task-graph/task-graph.json`,
+    ];
+    return {
+      ...closed,
+      artifact_hashes: Object.fromEntries(refs.map((ref) => {
+        const filePath = join(artifactRoot, ref);
+        return [
+          ref,
+          existsSync(filePath)
+            ? {
+                present: true,
+                sha256: createHash('sha256')
+                  .update(readFileSync(filePath))
+                  .digest('hex'),
+              }
+            : { present: false, sha256: null },
+        ];
+      })),
+    };
+  });
+  currentSpec.closed_iterations = auditedRecords;
+  const activeRecord = auditedRecords.find(
+    (record) => record.iteration_id === currentSpec.active_iteration,
+  );
+  currentSpec.last_closed_iteration = { ...activeRecord };
+  writeJson(currentSpecPath, currentSpec);
+}
+
 function writeClosedIterationWithCompositionGap(artifactRoot, projectId = 'sample') {
   const sourceIteration = 'v1';
   const activeIteration = 'v2';
@@ -250,6 +298,61 @@ function writeClosedIterationWithCompositionGap(artifactRoot, projectId = 'sampl
   );
   writeJson(currentSpecPath, currentSpec);
   return activeIteration;
+}
+
+function writeBuildLoreShapedClosedHistory(artifactRoot, projectId = 'sample') {
+  const iterationIds = Array.from({ length: 11 }, (_, index) => `v${index + 1}`);
+  const activeIteration = iterationIds.at(-1);
+  writeIteration(artifactRoot, projectId, {
+    closed: true,
+    iterationId: activeIteration,
+    openedAt: '2026-01-11T00:00:00.000Z',
+  });
+  for (const [index, iterationId] of iterationIds.entries()) {
+    mkdirSync(join(artifactRoot, 'iterations', iterationId), { recursive: true });
+    writeGateA(artifactRoot, 'ready_for_spec', iterationId);
+    writeGateB(artifactRoot, 'approved', iterationId);
+    writeGateC(artifactRoot, [task('task-001', 'done')], iterationId);
+    writeGateD(artifactRoot, [], iterationId);
+    writeJson(join(artifactRoot, 'iterations', iterationId, 'iteration.json'), {
+      schema_version: 'p2a.iteration.v1',
+      project_id: projectId,
+      iteration_id: iterationId,
+      status: 'archived',
+      opened_at: `2026-01-${String(index + 1).padStart(2, '0')}T00:00:00.000Z`,
+    });
+  }
+
+  const currentSpecPath = join(artifactRoot, 'current-spec.json');
+  const currentSpec = JSON.parse(readFileSync(currentSpecPath, 'utf8'));
+  const effectiveSpec = JSON.parse(readFileSync(
+    join(artifactRoot, 'iterations', activeIteration, 'gate-b-spec', 'spec.json'),
+    'utf8',
+  ));
+  currentSpec.effective_spec_ref = 'current-spec.json';
+  currentSpec.composed_from = iterationIds;
+  currentSpec.source_specs = iterationIds.map((iterationId) => ({
+    iteration_id: iterationId,
+    spec_ref: `iterations/${iterationId}/gate-b-spec/spec.json`,
+    status: 'archived',
+    approval: 'approved',
+  }));
+  currentSpec.effective_product = effectiveSpec.product;
+  currentSpec.effective_implementation = effectiveSpec.implementation;
+  currentSpec.superseded_refs = [];
+  currentSpec.composition_conflicts = [];
+  currentSpec.open_decisions = [];
+  currentSpec.closed_iterations = iterationIds.map((iterationId) => ({
+    iteration_id: iterationId,
+    status: 'archived',
+  }));
+  currentSpec.last_closed_iteration = {
+    iteration_id: activeIteration,
+    status: 'archived',
+  };
+  writeJson(currentSpecPath, currentSpec);
+  addArchivedArtifactAudits(artifactRoot);
+  return { activeIteration, iterationIds };
 }
 
 function writeBaselineBackedPlanningIteration(artifactRoot) {
@@ -365,6 +468,7 @@ function writeRuns(artifactRoot, runs) {
       changedFiles: [],
       verification: run.verification ?? [],
       notes: [],
+      ...(run.runKind ? { runKind: run.runKind } : {}),
       ...(['failed', 'blocked'].includes(run.status) ? {
         failure: {
           class: 'implementation_incomplete',
@@ -400,6 +504,7 @@ function writeRuns(artifactRoot, runs) {
     workspaceRef: run.workspaceRef,
     taskGraphRef: run.taskGraphRef,
     runRef: `${run.runId}.json`,
+    runKind: run.runKind ?? null,
     startedAt: run.startedAt,
     finishedAt: run.finishedAt,
   }));
@@ -853,6 +958,414 @@ test('the explicit close option archives a completed iteration without an option
       'utf8',
     ));
     assert.equal(metadata.status, 'archived');
+  } finally {
+    remove(root);
+  }
+});
+
+test('audited closed history uses bounded routing without deep provenance or run hydration', () => {
+  const root = project();
+  try {
+    const rootArtifact = artifact(root);
+    const iterationId = writeIteration(rootArtifact, 'sample', { closed: true });
+    writeGateA(rootArtifact, 'ready_for_spec', iterationId);
+    writeGateB(rootArtifact, 'approved', iterationId);
+    writeGateC(rootArtifact, [task('task-001', 'done')], iterationId);
+    writeGateD(rootArtifact, [], iterationId);
+    writeRuns(rootArtifact, Array.from({ length: 42 }, (_, index) => ({
+      runId: `run-history-${String(index + 1).padStart(3, '0')}`,
+      iterationId,
+      status: 'finished',
+    })));
+    addArchivedArtifactAudits(rootArtifact);
+
+    const result = runP2a([
+      'next',
+      '--target', root,
+      '--json',
+      '--contract', 'v2',
+      '--trace',
+    ]);
+    assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+    const payload = JSON.parse(result.stdout);
+    assertAction(
+      payload,
+      'iteration_complete',
+      'cli',
+      [
+        'iteration', 'open',
+        '--artifacts', artifactPath(root),
+        '--iteration-id', '<id>',
+        '--idea', '<change idea>',
+      ],
+    );
+    assert.match(result.stderr, /closed-route:archive-audit/);
+    assert.match(result.stderr, /closed-route:ready: iteration complete/);
+    assert.doesNotMatch(result.stderr, /artifact:deep-validation/);
+    assert.doesNotMatch(result.stderr, /runs:hydrate/);
+  } finally {
+    remove(root);
+  }
+});
+
+test('audited closed routing rejects archive tampering before deep provenance replay', () => {
+  const root = project();
+  try {
+    const rootArtifact = artifact(root);
+    const iterationId = writeIteration(rootArtifact, 'sample', { closed: true });
+    writeGateA(rootArtifact, 'ready_for_spec', iterationId);
+    writeGateB(rootArtifact, 'approved', iterationId);
+    writeGateC(rootArtifact, [task('task-001', 'done')], iterationId);
+    addArchivedArtifactAudits(rootArtifact);
+    const specPath = join(
+      rootArtifact,
+      'iterations',
+      iterationId,
+      'gate-b-spec',
+      'spec.json',
+    );
+    writeFileSync(specPath, `${readFileSync(specPath, 'utf8')}\n`);
+
+    const result = runP2a([
+      'next', '--target', root, '--json', '--contract', 'v2', '--trace',
+    ]);
+    assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+    const payload = JSON.parse(result.stdout);
+    assertAction(
+      payload,
+      'invalid_iteration_state',
+      'cli',
+      ['iteration', 'validate', '--artifacts', artifactPath(root)],
+    );
+    assert.match(payload.reason, /artifact changed after close/);
+    assert.match(result.stderr, /closed-route:invalid/);
+    assert.doesNotMatch(result.stderr, /artifact:deep-validation/);
+  } finally {
+    remove(root);
+  }
+});
+
+test('audited closed routing rejects incomplete artifact hash coverage', () => {
+  const root = project();
+  try {
+    const rootArtifact = artifact(root);
+    const iterationId = writeIteration(rootArtifact, 'sample', { closed: true });
+    writeGateA(rootArtifact, 'ready_for_spec', iterationId);
+    writeGateB(rootArtifact, 'approved', iterationId);
+    writeGateC(rootArtifact, [task('task-001', 'done')], iterationId);
+    addArchivedArtifactAudits(rootArtifact);
+    const currentSpecPath = join(rootArtifact, 'current-spec.json');
+    const currentSpec = JSON.parse(readFileSync(currentSpecPath, 'utf8'));
+    currentSpec.closed_iterations[0].artifact_hashes = {};
+    currentSpec.last_closed_iteration.artifact_hashes = {};
+    writeJson(currentSpecPath, currentSpec);
+
+    const result = runP2a([
+      'next', '--target', root, '--json', '--contract', 'v2', '--trace',
+    ]);
+    assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+    const payload = JSON.parse(result.stdout);
+    assertAction(
+      payload,
+      'invalid_iteration_state',
+      'cli',
+      ['iteration', 'validate', '--artifacts', artifactPath(root)],
+    );
+    assert.match(payload.reason, /artifact_hashes is missing required reference/);
+    assert.match(result.stderr, /closed-route:invalid/);
+  } finally {
+    remove(root);
+  }
+});
+
+test('audited closed routing preserves acceptance review evidence validation', () => {
+  const root = project();
+  try {
+    const rootArtifact = artifact(root);
+    const iterationId = writeIteration(rootArtifact, 'sample', { closed: true });
+    writeGateA(rootArtifact, 'ready_for_spec', iterationId);
+    writeGateB(rootArtifact, 'approved', iterationId);
+    writeGateC(rootArtifact, [task('task-001', 'done')], iterationId);
+    writeRuns(rootArtifact, [{
+      runId: 'run-acceptance-review',
+      iterationId,
+      status: 'finished',
+      runKind: 'final_acceptance_review',
+    }]);
+    addArchivedArtifactAudits(rootArtifact);
+
+    const result = runP2a([
+      'next', '--target', root, '--json', '--contract', 'v2', '--trace',
+    ]);
+    assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+    const payload = JSON.parse(result.stdout);
+    assertAction(
+      payload,
+      'invalid_run_evidence',
+      'cli',
+      ['runs', 'validate', '--artifacts', artifactPath(root)],
+    );
+    assert.match(result.stderr, /closed-route:fallback: active review run/);
+    assert.match(result.stderr, /artifact:deep-validation/);
+    assert.match(result.stderr, /runs:hydrate/);
+  } finally {
+    remove(root);
+  }
+});
+
+test('audited closed routing rejects declared runKind drift for an active review run', () => {
+  const root = project();
+  try {
+    const rootArtifact = artifact(root);
+    const iterationId = writeIteration(rootArtifact, 'sample', { closed: true });
+    writeGateA(rootArtifact, 'ready_for_spec', iterationId);
+    writeGateB(rootArtifact, 'approved', iterationId);
+    writeGateC(rootArtifact, [task('task-001', 'done')], iterationId);
+    writeRuns(rootArtifact, [{
+      runId: 'run-acceptance-review',
+      iterationId,
+      status: 'finished',
+      runKind: 'final_acceptance_review',
+    }]);
+    addArchivedArtifactAudits(rootArtifact);
+
+    const runIndexPath = join(rootArtifact, 'runs', 'run-index.json');
+    const runIndex = JSON.parse(readFileSync(runIndexPath, 'utf8'));
+    runIndex.runs[0].runKind = null;
+    writeJson(runIndexPath, runIndex);
+
+    const result = runP2a([
+      'next', '--target', root, '--json', '--contract', 'v2', '--trace',
+    ]);
+    assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+    const payload = JSON.parse(result.stdout);
+    assertAction(
+      payload,
+      'invalid_iteration_state',
+      'cli',
+      ['validate', '--runs-dir', join(rootArtifact, 'runs')],
+    );
+    assert.match(payload.reason, /runKind does not match its run file/);
+    assert.match(result.stderr, /closed-route:invalid/);
+    assert.doesNotMatch(result.stderr, /artifact:deep-validation/);
+
+    writeRuns(rootArtifact, [{
+      runId: 'run-regular',
+      iterationId,
+      status: 'finished',
+    }]);
+    const validatorIndex = JSON.parse(readFileSync(runIndexPath, 'utf8'));
+    validatorIndex.runs[0].runKind = 'final_acceptance_review';
+    writeJson(runIndexPath, validatorIndex);
+    const validation = runP2a([
+      'validate', '--runs-dir', join(rootArtifact, 'runs'),
+    ]);
+    assert.notEqual(validation.status, 0);
+    assert.match(`${validation.stdout}${validation.stderr}`, /runKind does not match run file/);
+  } finally {
+    remove(root);
+  }
+});
+
+test('BuildLore-shaped 11-iteration history stays within a generous routing bound', () => {
+  const root = project();
+  try {
+    const rootArtifact = artifact(root);
+    const { activeIteration } = writeBuildLoreShapedClosedHistory(rootArtifact);
+    writeRuns(rootArtifact, Array.from({ length: 42 }, (_, index) => ({
+      runId: `run-history-${String(index + 1).padStart(3, '0')}`,
+      iterationId: 'v1',
+      status: 'finished',
+    })));
+
+    const startedAt = performance.now();
+    const result = runP2a([
+      'next', '--target', root, '--json', '--contract', 'v2', '--trace',
+    ]);
+    const durationMs = performance.now() - startedAt;
+    assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+    assertAction(
+      JSON.parse(result.stdout),
+      'iteration_complete',
+      'cli',
+      [
+        'iteration', 'open', '--artifacts', artifactPath(root),
+        '--iteration-id', '<id>', '--idea', '<change idea>',
+      ],
+    );
+    assert.ok(durationMs < 5_000, `closed routing took ${durationMs.toFixed(1)}ms`);
+    assert.match(result.stderr, /closed-route:archive-audit: 11 iteration\(s\)/);
+    assert.doesNotMatch(result.stderr, /artifact:deep-validation/);
+    assert.doesNotMatch(result.stderr, /runs:hydrate/);
+    assert.equal(activeIteration, 'v11');
+  } finally {
+    remove(root);
+  }
+});
+
+test('ValidationSession caches each unique validator and JSON read by content SHA', () => {
+  const root = project();
+  try {
+    const rootArtifact = artifact(root);
+    const iterationId = writeIteration(rootArtifact);
+    writeGateA(rootArtifact, 'ready_for_spec', iterationId);
+    writeGateB(rootArtifact, 'approved', iterationId);
+    writeGateC(rootArtifact, [task('task-001', 'done')], iterationId);
+    const intakePath = join(
+      rootArtifact,
+      'iterations',
+      iterationId,
+      'gate-a-intake',
+      'intake.json',
+    );
+    const specPath = join(
+      rootArtifact,
+      'iterations',
+      iterationId,
+      'gate-b-spec',
+      'spec.json',
+    );
+    const taskGraphPath = join(
+      rootArtifact,
+      'iterations',
+      iterationId,
+      'gate-c-task-graph',
+      'task-graph.json',
+    );
+    const validationSession = createValidationSession();
+    const options = { artifactRoot: rootArtifact, validationSession };
+
+    validateTaskGraph(taskGraphPath, specPath, options);
+    validateTaskGraph(taskGraphPath, specPath, options);
+    validateSpec(specPath, intakePath, options);
+    validateIntake(intakePath, options);
+
+    assert.equal(validationSession.stats.validatorRuns['task-graph'], 1);
+    assert.equal(validationSession.stats.validatorRuns.spec, 1);
+    assert.equal(validationSession.stats.validatorRuns.intake, 1);
+    assert.equal(validationSession.stats.fileReads, 3);
+    assert.equal(validationSession.stats.jsonParses, 3);
+    for (const key of validationSession.artifactValidations.keys()) {
+      assert.match(key.split('\n')[2], /^[a-f0-9]{64}$/);
+    }
+
+    writeFileSync(specPath, `${readFileSync(specPath, 'utf8')}\n`, 'utf8');
+    validateSpec(specPath, intakePath, options);
+    assert.equal(validationSession.stats.validatorRuns.spec, 2);
+    assert.equal(validationSession.stats.fileReads, 4);
+    assert.equal(validationSession.stats.jsonParses, 4);
+  } finally {
+    remove(root);
+  }
+});
+
+test('iteration open rechecks audited archive hashes before mutation', () => {
+  const root = project();
+  try {
+    const rootArtifact = artifact(root);
+    const iterationId = writeIteration(rootArtifact, 'sample', { closed: true });
+    writeGateA(rootArtifact, 'ready_for_spec', iterationId);
+    writeGateB(rootArtifact, 'approved', iterationId);
+    writeGateC(rootArtifact, [task('task-001', 'done')], iterationId);
+    addArchivedArtifactAudits(rootArtifact);
+    writeFileSync(
+      join(rootArtifact, 'iterations', iterationId, 'gate-b-spec', 'product-spec.md'),
+      '# appeared after close\n',
+      'utf8',
+    );
+
+    const result = runP2a([
+      'iteration', 'open', '--artifacts', rootArtifact,
+      '--iteration-id', 'v2', '--idea', 'Open only from an immutable archive',
+    ]);
+    assert.notEqual(result.status, 0);
+    assert.match(`${result.stdout}${result.stderr}`, /artifact appeared after close/);
+    assert.equal(existsSync(join(rootArtifact, 'iterations', 'v2')), false);
+  } finally {
+    remove(root);
+  }
+});
+
+test('audited closed routing falls back when an active failed run needs proposal evidence', () => {
+  const root = project({ proposals: true });
+  try {
+    const rootArtifact = artifact(root);
+    const iterationId = writeIteration(rootArtifact, 'sample', { closed: true });
+    writeGateA(rootArtifact, 'ready_for_spec', iterationId);
+    writeGateB(rootArtifact, 'approved', iterationId);
+    writeGateC(rootArtifact, [task('task-001', 'done')], iterationId);
+    writeRuns(rootArtifact, [{
+      runId: 'run-audited-failure',
+      iterationId,
+      status: 'failed',
+    }]);
+    addArchivedArtifactAudits(rootArtifact);
+
+    const result = runP2a([
+      'next', '--target', root, '--json', '--contract', 'v2', '--trace',
+    ]);
+    assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+    const payload = JSON.parse(result.stdout);
+    assertAction(
+      payload,
+      'run_evidence_needs_proposal_mining',
+      'cli',
+      [
+        'proposals', 'mine',
+        '--artifacts', artifactPath(root),
+        '--run-id', 'run-audited-failure',
+        '--proposals', join(root, '.plan2agent', 'proposals'),
+      ],
+    );
+    assert.match(result.stderr, /closed-route:fallback: active run/);
+    assert.match(result.stderr, /artifact:deep-validation/);
+    assert.match(result.stderr, /runs:hydrate/);
+  } finally {
+    remove(root);
+  }
+});
+
+test('audited closed routing detects composition gaps and rejects malformed composition metadata', () => {
+  const root = project();
+  try {
+    const rootArtifact = artifact(root);
+    writeClosedIterationWithCompositionGap(rootArtifact);
+    addArchivedArtifactAudits(rootArtifact);
+
+    const gapResult = runP2a([
+      'next', '--target', root, '--json', '--contract', 'v2', '--trace',
+    ]);
+    assert.equal(gapResult.status, 0, `${gapResult.stdout}${gapResult.stderr}`);
+    assertAction(
+      JSON.parse(gapResult.stdout),
+      'iteration_composition_required',
+      'cli',
+      ['iteration', 'compose', '--artifacts', artifactPath(root)],
+    );
+    assert.match(gapResult.stderr, /closed-route:ready: composition required/);
+    assert.doesNotMatch(gapResult.stderr, /artifact:deep-validation/);
+
+    const currentSpecPath = join(rootArtifact, 'current-spec.json');
+    const currentSpec = JSON.parse(readFileSync(currentSpecPath, 'utf8'));
+    currentSpec.source_specs[0].spec_ref = 'iterations/wrong/gate-b-spec/spec.json';
+    writeJson(currentSpecPath, currentSpec);
+
+    const invalidResult = runP2a([
+      'next', '--target', root, '--json', '--contract', 'v2', '--trace',
+    ]);
+    assert.equal(
+      invalidResult.status,
+      0,
+      `${invalidResult.stdout}${invalidResult.stderr}`,
+    );
+    const invalidPayload = JSON.parse(invalidResult.stdout);
+    assertAction(
+      invalidPayload,
+      'invalid_iteration_state',
+      'cli',
+      ['iteration', 'validate', '--artifacts', artifactPath(root)],
+    );
+    assert.match(invalidPayload.reason, /spec_ref must be/);
   } finally {
     remove(root);
   }

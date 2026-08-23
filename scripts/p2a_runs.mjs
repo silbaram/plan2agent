@@ -857,6 +857,7 @@ function runIndexEntry(run, runRef = canonicalRunRef(run)) {
     workspaceRef: run.workspaceRef,
     taskGraphRef: run.taskGraphRef,
     runRef,
+    runKind: run.runKind ?? null,
     startedAt: run.startedAt,
     finishedAt: run.finishedAt,
   };

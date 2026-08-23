@@ -10,10 +10,13 @@ import { resolveExecutionModePolicy, resolveOrchestrationAgentTool, resolveRevie
 import { normalizePath, resolveP2aPaths } from './p2a_paths.mjs';
 import { p2aCommandLine } from './p2a_run_commands.mjs';
 import {
+  auditArchivedIterationArtifacts,
   iterationCompositionRequirement,
   resolveIterationState,
   validateActiveGateBPromotionBinding,
+  validateActiveIterationArchiveConsistency,
   validateActiveIterationPlanningContract,
+  validateClosedIterationRoutingData,
 } from './p2a_iteration_state.mjs';
 import {
   constitutionApprovalState,
@@ -34,8 +37,10 @@ import {
 } from './p2a_radar_preflight.mjs';
 import {
   approvedVisualReviewContract,
+  createValidationSession,
   validateConstitution,
   validateIntake,
+  validateRunIndexData,
   validateRunsDir,
   validateRunTaskContract,
   validateSpec,
@@ -68,6 +73,11 @@ function readJsonObject(filePath) {
   } catch {
     return null;
   }
+}
+
+function tracePhase(trace, phase, detail = null) {
+  if (typeof trace !== 'function') return;
+  trace(detail ? `${phase}: ${detail}` : phase);
 }
 
 function rawFileSha256(filePath) {
@@ -198,27 +208,166 @@ function readyTaskIds(taskGraph) {
     .filter(Boolean);
 }
 
-function inspectRuns(targetRoot, artifactRoot) {
-  const runsDir = [
+function discoverRunsDir(targetRoot, artifactRoot) {
+  return [
     path.join(artifactRoot, 'runs'),
     path.join(path.dirname(artifactRoot), 'runs'),
     path.join(targetRoot, '.plan2agent', 'runs'),
   ].find((candidate) => isDirectory(candidate) && isFile(path.join(candidate, 'run-index.json')));
+}
+
+function summarizeRunRecords(targetRoot, runIndexPath, records) {
+  const statusCounts = records.reduce((counts, run) => {
+    const status = stringValue(run.status) ?? 'unknown';
+    counts[status] = (counts[status] ?? 0) + 1;
+    return counts;
+  }, {});
+  return {
+    runIndexPath: runIndexPath ? relativeToTarget(targetRoot, runIndexPath) : null,
+    runCount: records.length,
+    latestRunId: stringValue(records.at(-1)?.runId),
+    statusCounts,
+  };
+}
+
+function inspectRunIndex(targetRoot, artifactRoot) {
+  const runsDir = discoverRunsDir(targetRoot, artifactRoot);
   if (!runsDir) {
     return {
       runsDir: null,
       records: [],
-      summary: {
-        runIndexPath: null,
-        runCount: 0,
-        latestRunId: null,
-        statusCounts: {},
-      },
+      projectId: null,
+      valid: true,
+      error: null,
+      summary: summarizeRunRecords(targetRoot, null, []),
     };
   }
   const runIndexPath = path.join(runsDir, 'run-index.json');
   const runIndex = readJsonObject(runIndexPath);
+  if (!runIndex) {
+    return {
+      runsDir,
+      records: [],
+      projectId: null,
+      valid: false,
+      error: 'The canonical run-index.json is unreadable.',
+      summary: summarizeRunRecords(targetRoot, runIndexPath, []),
+    };
+  }
+  try {
+    validateRunIndexData(runIndex);
+  } catch (error) {
+    return {
+      runsDir,
+      records: [],
+      projectId: stringValue(runIndex.projectId),
+      valid: false,
+      error: error instanceof Error ? error.message : String(error),
+      summary: summarizeRunRecords(targetRoot, runIndexPath, []),
+    };
+  }
+  const records = jsonRecords(runIndex.runs);
+  return {
+    runsDir,
+    records,
+    projectId: stringValue(runIndex.projectId),
+    valid: true,
+    error: null,
+    summary: summarizeRunRecords(targetRoot, runIndexPath, records),
+  };
+}
+
+function hydrateActiveRunRoutingRecords(runs, activeIteration) {
+  if (!runs.runsDir) return [];
+  return runs.records
+    .filter((run) => run.iterationId === activeIteration)
+    .map((indexedRun) => {
+      const runId = stringValue(indexedRun.runId) ?? '<unknown>';
+      const runRef = stringValue(indexedRun.runRef);
+      if (!runRef) {
+        throw new Error(`run-index validation failed: active run ${runId} is missing runRef`);
+      }
+      const runPath = path.resolve(runs.runsDir, runRef);
+      try {
+        const relative = path.relative(realpathSync(runs.runsDir), realpathSync(runPath));
+        if (
+          !relative
+          || relative === '..'
+          || relative.startsWith(`..${path.sep}`)
+          || path.isAbsolute(relative)
+        ) {
+          throw new Error('outside run store');
+        }
+      } catch {
+        throw new Error(
+          `run-index validation failed: active run ${runId} cannot be resolved inside the run store`,
+        );
+      }
+      const run = readJsonObject(runPath);
+      if (!run) {
+        throw new Error(`run-index validation failed: active run ${runId} is unreadable`);
+      }
+      for (const field of ['runId', 'taskId', 'iterationId', 'status', 'startedAt', 'finishedAt']) {
+        if (JSON.stringify(run[field]) !== JSON.stringify(indexedRun[field])) {
+          throw new Error(
+            `run-index validation failed: active run ${runId}.${field} does not match its run file`,
+          );
+        }
+      }
+      if (
+        Object.hasOwn(indexedRun, 'runKind')
+        && (indexedRun.runKind ?? null) !== (run.runKind ?? null)
+      ) {
+        throw new Error(
+          `run-index validation failed: active run ${runId}.runKind does not match its run file`,
+        );
+      }
+      return run;
+    });
+}
+
+function closedIterationReviewRoutingRequired(
+  artifactRoot,
+  iterationState,
+  runs,
+  reviewPasses,
+) {
+  const activeIteration = iterationState.activeIteration;
+  const spec = readJsonObject(iterationState.specPath);
+  const experience = readJsonObject(path.join(
+    artifactRoot,
+    'iterations',
+    activeIteration,
+    'gate-b-spec',
+    'experience-spec.json',
+  ));
+  if (
+    spec?.approval === 'approved'
+    && spec?.visual_experience?.experience_spec_ref
+    && experience?.validation?.visual_review_required === true
+  ) {
+    return 'active visual contract requires evidence-aware routing';
+  }
+  if (reviewPasses?.acceptance === 'on') {
+    return 'acceptance review policy requires evidence-aware routing';
+  }
+  const activeRuns = hydrateActiveRunRoutingRecords(runs, activeIteration);
+  if (activeRuns.some((run) => (
+    run.runKind === 'final_visual_review'
+    || run.runKind === 'final_acceptance_review'
+  ))) {
+    return 'active review run requires evidence-aware routing';
+  }
+  return null;
+}
+
+function inspectRuns(targetRoot, artifactRoot, trace = null) {
+  const runsDir = discoverRunsDir(targetRoot, artifactRoot);
+  if (!runsDir) return inspectRunIndex(targetRoot, artifactRoot);
+  const runIndexPath = path.join(runsDir, 'run-index.json');
+  const runIndex = readJsonObject(runIndexPath);
   const indexedRuns = jsonRecords(runIndex?.runs);
+  tracePhase(trace, 'runs:hydrate', `${indexedRuns.length} indexed run(s)`);
   const runs = indexedRuns.map((indexedRun) => {
     const runRef = stringValue(indexedRun.runRef);
     if (!runRef) return indexedRun;
@@ -240,20 +389,13 @@ function inspectRuns(targetRoot, artifactRoot) {
     }
     return run;
   });
-  const statusCounts = runs.reduce((counts, run) => {
-    const status = stringValue(run.status) ?? 'unknown';
-    counts[status] = (counts[status] ?? 0) + 1;
-    return counts;
-  }, {});
   return {
     runsDir,
     records: runs,
-    summary: {
-      runIndexPath: relativeToTarget(targetRoot, runIndexPath),
-      runCount: runs.length,
-      latestRunId: stringValue(indexedRuns.at(-1)?.runId),
-      statusCounts,
-    },
+    projectId: stringValue(runIndex?.projectId),
+    valid: Boolean(runIndex),
+    error: runIndex ? null : 'The canonical run-index.json is unreadable.',
+    summary: summarizeRunRecords(targetRoot, runIndexPath, runs),
   };
 }
 
@@ -314,7 +456,103 @@ function artifactReferenceMatchesPath(
   ]).has(normalizedReference);
 }
 
-function inspectArtifact(targetRoot, artifactRoot, isScaffoldProject) {
+function inspectClosedIterationRouting(
+  targetRoot,
+  artifactRoot,
+  iterationState,
+  reviewPasses,
+  trace = null,
+) {
+  const archive = validateActiveIterationArchiveConsistency(iterationState);
+  if (!archive.archived) return null;
+  const closedIterations = iterationState.currentSpec.closed_iterations ?? [];
+  if (
+    !closedIterations.length
+    || closedIterations.some((closed) => (
+      !closed?.artifact_hashes
+      || typeof closed.artifact_hashes !== 'object'
+      || Array.isArray(closed.artifact_hashes)
+    ))
+  ) {
+    tracePhase(trace, 'closed-route:fallback', 'legacy close records have no artifact hashes');
+    return null;
+  }
+
+  try {
+    tracePhase(trace, 'closed-route:structure');
+    validateClosedIterationRoutingData(iterationState.currentSpec);
+    tracePhase(trace, 'closed-route:archive-audit', `${closedIterations.length} iteration(s)`);
+    auditArchivedIterationArtifacts(iterationState.currentSpec, artifactRoot);
+
+    tracePhase(trace, 'closed-route:run-index');
+    const runs = inspectRunIndex(targetRoot, artifactRoot);
+    if (!runs.valid) {
+      throw new Error(`run-index validation failed: ${runs.error}`);
+    }
+    if (
+      runs.runsDir
+      && runs.projectId !== iterationState.projectId
+    ) {
+      throw new Error('run-index projectId must match current-spec.json project_id');
+    }
+    const activeRuns = runs.records.filter(
+      (run) => run.iterationId === iterationState.activeIteration,
+    );
+    if (activeRuns.some((run) => ['started', 'failed', 'blocked'].includes(run.status))) {
+      tracePhase(
+        trace,
+        'closed-route:fallback',
+        'active run requires evidence-aware routing',
+      );
+      return null;
+    }
+    const reviewRoutingReason = closedIterationReviewRoutingRequired(
+      artifactRoot,
+      iterationState,
+      runs,
+      reviewPasses,
+    );
+    if (reviewRoutingReason) {
+      tracePhase(trace, 'closed-route:fallback', reviewRoutingReason);
+      return null;
+    }
+
+    const taskGraphPath = iterationState.taskGraphPath;
+    const taskGraph = readJsonObject(taskGraphPath);
+    const tasks = jsonRecords(taskGraph?.tasks);
+    if (!taskGraph || !tasks.length || tasks.some((task) => task.status !== 'done')) {
+      throw new Error(
+        'archived active iteration must retain a readable, close-ready task graph',
+      );
+    }
+    const composition = iterationCompositionRequirement(iterationState.currentSpec);
+    tracePhase(
+      trace,
+      'closed-route:ready',
+      composition.required ? 'composition required' : 'iteration complete',
+    );
+    return {
+      eligible: true,
+      error: null,
+      composition,
+      taskGraphPath,
+      taskGraph,
+      tasks,
+      runs,
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    tracePhase(trace, 'closed-route:invalid', message);
+    return {
+      eligible: false,
+      error: message,
+    };
+  }
+}
+
+function inspectArtifact(targetRoot, artifactRoot, isScaffoldProject, options = {}) {
+  const { trace = null, validationSession = null, reviewPasses = null } = options;
+  tracePhase(trace, 'artifact:inspect', relativeToTarget(targetRoot, artifactRoot));
   const layout = artifactLayout(artifactRoot, isScaffoldProject);
   const currentSpecPath = path.join(artifactRoot, 'current-spec.json');
   const currentSpec = readJsonObject(currentSpecPath);
@@ -327,7 +565,7 @@ function inspectArtifact(targetRoot, artifactRoot, isScaffoldProject) {
       try {
         const resolvedIterationState = resolveIterationState(
           artifactRoot,
-          { requireReady: false },
+          { requireReady: false, validationSession },
         );
         validateActiveIterationPlanningContract(resolvedIterationState);
         iterationState = resolvedIterationState;
@@ -343,6 +581,51 @@ function inspectArtifact(targetRoot, artifactRoot, isScaffoldProject) {
     projectId,
     repeatedDevelopment: layout.kind === 'iteration',
   });
+  const closedRouting = iterationState
+    ? inspectClosedIterationRouting(
+        targetRoot,
+        artifactRoot,
+        iterationState,
+        reviewPasses,
+        trace,
+      )
+    : null;
+  if (closedRouting) {
+    const taskGraphPath = closedRouting.taskGraphPath ?? iterationState.taskGraphPath;
+    const taskGraph = closedRouting.taskGraph ?? readJsonObject(taskGraphPath);
+    const runs = closedRouting.runs ?? inspectRunIndex(targetRoot, artifactRoot);
+    return {
+      projectId,
+      artifactRoot,
+      layout,
+      activeIteration,
+      currentSpec,
+      currentSpecReadable: Boolean(currentSpec),
+      currentSpecValid: closedRouting.eligible,
+      currentSpecValidationError: closedRouting.error,
+      gateBPromotionValid: true,
+      gateBPromotionValidationError: null,
+      entry,
+      closedRouting,
+      gates: {
+        intakePath: null,
+        intake: null,
+        intakeValid: null,
+        intakeValidationError: null,
+        specPath: iterationState.specPath,
+        spec: null,
+        specValid: null,
+        specValidationError: null,
+        taskGraphPath,
+        taskGraph,
+        taskGraphValid: null,
+        taskGraphValidationError: null,
+      },
+      tasks: jsonRecords(taskGraph?.tasks),
+      runs,
+    };
+  }
+  tracePhase(trace, 'artifact:deep-validation', relativeToTarget(targetRoot, artifactRoot));
   const searchRoots = artifactSearchRoots(artifactRoot, activeIteration);
   const intakePath = firstGateFile(searchRoots, 'gate-a-intake', 'intake.json');
   const specPath = firstGateFile(searchRoots, 'gate-b-spec', 'spec.json');
@@ -355,7 +638,7 @@ function inspectArtifact(targetRoot, artifactRoot, isScaffoldProject) {
   let intakeValidationError = null;
   if (intakePath && intake) {
     try {
-      validateIntake(intakePath, { artifactRoot });
+      validateIntake(intakePath, { artifactRoot, projectId, validationSession });
       intakeValid = true;
     } catch (error) {
       intakeValidationError = error instanceof Error ? error.message : String(error);
@@ -366,7 +649,7 @@ function inspectArtifact(targetRoot, artifactRoot, isScaffoldProject) {
   let specValidationError = null;
   if (specPath && spec) {
     try {
-      validateSpec(specPath, intakePath, { artifactRoot });
+      validateSpec(specPath, intakePath, { artifactRoot, validationSession });
       specValid = true;
     } catch (error) {
       specValidationError = error instanceof Error ? error.message : String(error);
@@ -394,7 +677,10 @@ function inspectArtifact(targetRoot, artifactRoot, isScaffoldProject) {
   let taskGraphValidationError = null;
   if (taskGraphPath && taskGraph) {
     try {
-      const validatedTaskGraph = validateTaskGraph(taskGraphPath, specPath);
+      const validatedTaskGraph = validateTaskGraph(taskGraphPath, specPath, {
+        artifactRoot,
+        validationSession,
+      });
       if (spec?.project_id && validatedTaskGraph.projectId !== spec.project_id) {
         throw new Error('Gate C task graph projectId must match Gate B spec.project_id');
       }
@@ -428,13 +714,13 @@ function inspectArtifact(targetRoot, artifactRoot, isScaffoldProject) {
   );
   if (shouldValidateReadyIteration) {
     try {
-      iterationState = resolveIterationState(artifactRoot);
+      iterationState = resolveIterationState(artifactRoot, { validationSession });
     } catch (error) {
       currentSpecValid = false;
       currentSpecValidationError = error instanceof Error ? error.message : String(error);
     }
   }
-  const runs = inspectRuns(targetRoot, artifactRoot);
+  const runs = inspectRuns(targetRoot, artifactRoot, trace);
   const tasks = jsonRecords(taskGraph?.tasks);
   return {
     projectId,
@@ -1117,6 +1403,76 @@ function buildNextDecisionContext(
   const { gates } = detail;
   const decisions = inspectDecisions(artifactRoot);
   const entry = explicitEntry ?? detail.entry;
+  const artifactArg = commandArtifact(targetRoot, artifactRoot);
+  if (detail.closedRouting) {
+    const closedContext = {
+      ...context,
+      decisions,
+      artifactRoot,
+      artifactArg,
+      projectId: detail.projectId,
+      entry,
+      entryArg: entry ? commandProjectPath(targetRoot, entry.path) : null,
+      hasCanonicalPlanningState: true,
+      detail,
+      gates,
+    };
+    if (decisions.exists && !decisions.valid) {
+      return {
+        ...closedContext,
+        selection: cliNextAction(
+          'invalid_decisions',
+          `The decision ledger is invalid: ${decisions.error ?? 'validation failed'}`,
+          ['validate', '--decisions', '--artifacts', artifactArg],
+        ),
+      };
+    }
+    if (!detail.closedRouting.eligible) {
+      const runIndexFailure = detail.closedRouting.error?.startsWith(
+        'run-index validation failed:',
+      );
+      return {
+        ...closedContext,
+        selection: cliNextAction(
+          'invalid_iteration_state',
+          `The archived iteration routing state is invalid: ${detail.closedRouting.error}`,
+          runIndexFailure && detail.runs.runsDir
+            ? ['validate', '--runs-dir', commandProjectPath(targetRoot, detail.runs.runsDir)]
+            : ['iteration', 'validate', '--artifacts', artifactArg],
+        ),
+      };
+    }
+    const composition = detail.closedRouting.composition;
+    if (composition.required) {
+      return {
+        ...closedContext,
+        selection: cliNextAction(
+          'iteration_composition_required',
+          composition.missingClosedIterations.length
+            ? `The closed iteration baseline is incomplete; compose missing iterations ${JSON.stringify(composition.missingClosedIterations)} before opening the next iteration.`
+            : 'Multiple iterations are closed, but current-spec.json has not been composed into the effective baseline.',
+          ['iteration', 'compose', '--artifacts', artifactArg],
+        ),
+      };
+    }
+    return {
+      ...closedContext,
+      selection: cliNextAction(
+        'iteration_complete',
+        'The active iteration is closed; start the next iteration when a new change idea is ready.',
+        [
+          'iteration',
+          'open',
+          '--artifacts',
+          artifactArg,
+          '--iteration-id',
+          '<id>',
+          '--idea',
+          '<change idea>',
+        ],
+      ),
+    };
+  }
   const canonicalPlanningState = hasCanonicalPlanningState(detail);
   const iterationScopedRuns = runsForActiveIteration(detail.runs.records, detail.activeIteration);
   const activeRuns = detail.layout.kind === 'iteration'
@@ -1270,7 +1626,7 @@ function buildNextDecisionContext(
     constitution,
     decisions,
     artifactRoot,
-    artifactArg: commandArtifact(targetRoot, artifactRoot),
+    artifactArg,
     projectId: detail.projectId,
     entry,
     entryArg: entry ? commandProjectPath(targetRoot, entry.path) : null,
@@ -1900,8 +2256,14 @@ function decideNextAction(context) {
   );
 }
 
-function resolveNextDecision(targetRootInput, requestedProjectId, entryPath, contract) {
-  const snapshot = buildInfoSnapshot(targetRootInput, { entryPath });
+function resolveNextDecision(
+  targetRootInput,
+  requestedProjectId,
+  entryPath,
+  contract,
+  options = {},
+) {
+  const snapshot = buildInfoSnapshot(targetRootInput, { entryPath, ...options });
   const { info } = snapshot;
   const targetRoot = info.target;
   const context = buildNextDecisionContext(
@@ -1950,8 +2312,20 @@ function resolveNextDecision(targetRootInput, requestedProjectId, entryPath, con
   return { context, payload };
 }
 
-export function buildNext(targetRootInput, requestedProjectId, entryPath, contract = 'v1') {
-  return resolveNextDecision(targetRootInput, requestedProjectId, entryPath, contract).payload;
+export function buildNext(
+  targetRootInput,
+  requestedProjectId,
+  entryPath,
+  contract = 'v1',
+  options = {},
+) {
+  return resolveNextDecision(
+    targetRootInput,
+    requestedProjectId,
+    entryPath,
+    contract,
+    options,
+  ).payload;
 }
 
 function nextActionContractSources(context) {
@@ -1998,8 +2372,14 @@ function buildInfoSnapshot(targetRootInput, options = {}) {
   const reviewPasses = resolveReviewPasses(config);
   const executionModePolicy = resolveExecutionModePolicy(config);
   const isScaffoldProject = ['init', 'scaffold'].includes(manifest?.provenance?.mode);
+  const validationSession = createValidationSession();
   const inspectedArtifacts = discoverArtifactRoots(targetRoot)
-    .map((artifactRoot) => inspectArtifact(targetRoot, artifactRoot, isScaffoldProject));
+    .map((artifactRoot) => inspectArtifact(
+      targetRoot,
+      artifactRoot,
+      isScaffoldProject,
+      { trace: options.trace, validationSession, reviewPasses },
+    ));
   const explicitEntry = options.entryPath
     ? discoverEntryDocument(targetRoot, {
         entryPath: options.entryPath,

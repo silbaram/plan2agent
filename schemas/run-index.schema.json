@@ -34,6 +34,10 @@
           "workspaceRef": {"type": "string", "minLength": 1},
           "taskGraphRef": {"type": "string", "minLength": 1},
           "runRef": {"type": "string", "minLength": 1},
+          "runKind": {
+            "type": ["string", "null"],
+            "enum": ["final_visual_review", "final_acceptance_review", null]
+          },
           "startedAt": {"type": "string", "minLength": 1},
           "finishedAt": {"type": ["string", "null"]}
         }

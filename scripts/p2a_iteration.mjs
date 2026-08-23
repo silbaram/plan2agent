@@ -36,8 +36,11 @@ import {
 } from './validate_artifacts.mjs';
 import {
   activeIntakePath,
+  auditArchivedIterationArtifacts,
   assertIntakeBaselineMatchesPending,
   assertPendingBaselineIntegrity,
+  closedIterationRequiredArtifactRefs,
+  closedIterationVisualArtifactRefs,
   formatIterationState,
   initialMaintenanceTaskGraph,
   iterationCompositionRequirement,
@@ -596,56 +599,14 @@ function artifactAuditEntry(artifactRoot, reference) {
     : { present: false, sha256: null };
 }
 
-function closedIterationVisualArtifactRefs(iterationId, artifactRoot) {
-  const gateBRoot = path.join(artifactRoot, 'iterations', iterationId, 'gate-b-spec');
-  const refs = [];
-  const experiencePath = path.join(gateBRoot, 'experience-spec.json');
-  if (existsSync(experiencePath) && lstatSync(experiencePath).isFile()) {
-    refs.push(normalizeDisplayPath(path.relative(artifactRoot, experiencePath)));
-  }
-  const visualDesignRoot = path.join(gateBRoot, 'visual-design');
-  if (!existsSync(visualDesignRoot)) return refs;
-  if (!lstatSync(visualDesignRoot).isDirectory()) {
-    throw new ValidationError(`closed iteration visual-design path must be a directory: ${visualDesignRoot}`);
-  }
-  const directories = [visualDesignRoot];
-  while (directories.length) {
-    const directory = directories.shift();
-    for (const entry of readdirSync(directory, { withFileTypes: true })) {
-      const entryPath = path.join(directory, entry.name);
-      if (entry.isDirectory()) directories.push(entryPath);
-      else if (entry.isFile()) refs.push(normalizeDisplayPath(path.relative(artifactRoot, entryPath)));
-      else {
-        throw new ValidationError(
-          `closed iteration visual-design contains unsupported entry: ${entryPath}`,
-        );
-      }
-    }
-  }
-  return refs.sort();
-}
-
 function closedIterationArtifactRefs(iterationId, artifactRoot) {
   const experienceRef = `iterations/${iterationId}/gate-b-spec/experience-spec.json`;
   const visualRefs = closedIterationVisualArtifactRefs(iterationId, artifactRoot)
     .filter((reference) => reference !== experienceRef);
   return [
-    canonicalComposedBaselineSnapshotRef(iterationId),
-    `iterations/${iterationId}/gate-a-intake/intake.json`,
-    `iterations/${iterationId}/gate-a-intake/intake.md`,
-    `iterations/${iterationId}/gate-b-spec/product-spec.md`,
-    `iterations/${iterationId}/gate-b-spec/implementation-plan.md`,
-    experienceRef,
-    sourceSpecRef(iterationId),
-    taskGraphRef(iterationId),
+    ...closedIterationRequiredArtifactRefs(iterationId),
     ...visualRefs,
   ];
-}
-
-function isClosedIterationVisualArtifactRef(reference, iterationId) {
-  const gateBPrefix = `iterations/${iterationId}/gate-b-spec/`;
-  return reference === `${gateBPrefix}experience-spec.json`
-    || reference.startsWith(`${gateBPrefix}visual-design/`);
 }
 
 function artifactHashes(artifactRoot, references) {
@@ -4006,102 +3967,6 @@ function maintenance(args) {
   throw new Error(`unsupported maintenance action: ${args.action}`);
 }
 
-function auditArchivedIterations(currentSpec, artifactRoot) {
-  const closedIterations = currentSpec.closed_iterations ?? [];
-  if (!Array.isArray(closedIterations)) {
-    throw new ValidationError('current-spec.json closed_iterations must be an array when present');
-  }
-  const resolvedArtifactRoot = path.resolve(artifactRoot);
-  for (const closed of closedIterations) {
-    if (!closed?.iteration_id) throw new ValidationError('current-spec.json closed_iterations entries must include iteration_id');
-    if (!closed.artifact_hashes || typeof closed.artifact_hashes !== 'object' || Array.isArray(closed.artifact_hashes)) {
-      throw new ValidationError(`closed iteration ${closed.iteration_id} is missing artifact_hashes; re-close or migrate audit metadata`);
-    }
-    const expectedVisualRefs = new Set(Object.entries(closed.artifact_hashes)
-      .filter(([reference, audit]) => (
-        isClosedIterationVisualArtifactRef(reference.replaceAll('\\', '/'), closed.iteration_id)
-        && (typeof audit === 'string' || audit?.present === true)
-      ))
-      .map(([reference]) => reference.replaceAll('\\', '/')));
-    const currentVisualRefs = new Set(
-      closedIterationVisualArtifactRefs(closed.iteration_id, resolvedArtifactRoot),
-    );
-    const addedVisualRefs = [...currentVisualRefs].filter((reference) => !expectedVisualRefs.has(reference));
-    const removedVisualRefs = [...expectedVisualRefs].filter((reference) => !currentVisualRefs.has(reference));
-    if (addedVisualRefs.length || removedVisualRefs.length) {
-      const details = [
-        ...(addedVisualRefs.length ? [`added ${addedVisualRefs.join(', ')}`] : []),
-        ...(removedVisualRefs.length ? [`removed ${removedVisualRefs.join(', ')}`] : []),
-      ].join('; ');
-      throw new ValidationError(
-        `closed iteration ${closed.iteration_id} visual artifact set changed after close: ${details}`,
-      );
-    }
-    for (const [reference, expectedAudit] of Object.entries(closed.artifact_hashes)) {
-      const normalizedReference = typeof reference === 'string'
-        ? reference.replaceAll('\\', '/')
-        : '';
-      if (
-        !normalizedReference
-        || path.isAbsolute(reference)
-        || path.win32.isAbsolute(reference)
-        || normalizedReference.split('/').includes('..')
-      ) {
-        throw new ValidationError(
-          `closed iteration ${closed.iteration_id} artifact reference must be artifact-root-relative: ${JSON.stringify(reference)}`,
-        );
-      }
-      const filePath = path.resolve(resolvedArtifactRoot, reference);
-      const relativePath = path.relative(resolvedArtifactRoot, filePath);
-      if (
-        !relativePath
-        || relativePath.startsWith('..')
-        || path.isAbsolute(relativePath)
-      ) {
-        throw new ValidationError(
-          `closed iteration ${closed.iteration_id} artifact reference escapes the artifact root: ${JSON.stringify(reference)}`,
-        );
-      }
-      if (typeof expectedAudit === 'string') {
-        assertFile(filePath, `closed iteration artifact ${reference}`);
-        assertFileInsideArtifactRoot(
-          filePath,
-          resolvedArtifactRoot,
-          `closed iteration artifact ${reference}`,
-        );
-        const actualHash = fileSha256(filePath);
-        if (actualHash !== expectedAudit) {
-          throw new ValidationError(`closed iteration ${closed.iteration_id} artifact changed after close: ${reference}`);
-        }
-        continue;
-      }
-      if (!expectedAudit || typeof expectedAudit !== 'object' || Array.isArray(expectedAudit)) {
-        throw new ValidationError(`closed iteration ${closed.iteration_id} artifact audit entry is invalid: ${reference}`);
-      }
-      if (expectedAudit.present === false) {
-        if (existsSync(filePath)) {
-          throw new ValidationError(`closed iteration ${closed.iteration_id} artifact appeared after close: ${reference}`);
-        }
-        continue;
-      }
-      if (expectedAudit.present !== true || typeof expectedAudit.sha256 !== 'string') {
-        throw new ValidationError(`closed iteration ${closed.iteration_id} artifact audit entry is invalid: ${reference}`);
-      }
-      assertFile(filePath, `closed iteration artifact ${reference}`);
-      assertFileInsideArtifactRoot(
-        filePath,
-        resolvedArtifactRoot,
-        `closed iteration artifact ${reference}`,
-      );
-      const actualHash = fileSha256(filePath);
-      if (actualHash !== expectedAudit.sha256) {
-        throw new ValidationError(`closed iteration ${closed.iteration_id} artifact changed after close: ${reference}`);
-      }
-    }
-  }
-  return closedIterations.length;
-}
-
 function validateIteration(args) {
   if (args.allowPlanning || args.stage) return validatePlanningIteration(args);
   const state = resolveIterationState(args.artifacts);
@@ -4137,7 +4002,9 @@ function validateIteration(args) {
     });
   }
   const maintenance = validateMaintenanceTaskGraphIfPresent(state);
-  const archivedAuditCount = args.skipArchiveAudit ? null : auditArchivedIterations(state.currentSpec, state.artifactRoot);
+  const archivedAuditCount = args.skipArchiveAudit
+    ? null
+    : auditArchivedIterationArtifacts(state.currentSpec, state.artifactRoot);
 
   const statusCounts = countStatuses(taskGraph.tasks);
   console.log(`Plan2Agent iteration validation passed: ${toRelativeFromRoot(state.artifactRoot)}`);
@@ -5520,6 +5387,16 @@ function openLocked(args, artifactRoot, idea) {
   const facts = loadReadyIterationFacts(artifactRoot);
   assertCloseReadyTasks(facts.taskGraph);
   assertArchivedBaselineForOpen(facts.state);
+  const closedIterations = facts.state.currentSpec.closed_iterations ?? [];
+  const hasArchivedArtifactAudits = closedIterations.length > 0
+    && closedIterations.every((closed) => (
+      closed?.artifact_hashes
+      && typeof closed.artifact_hashes === 'object'
+      && !Array.isArray(closed.artifact_hashes)
+    ));
+  if (hasArchivedArtifactAudits) {
+    auditArchivedIterationArtifacts(facts.state.currentSpec, facts.state.artifactRoot);
+  }
 
   if (facts.state.activeIteration === args.iterationId) {
     throw new Error(`--iteration-id must differ from current active iteration ${JSON.stringify(facts.state.activeIteration)}`);
