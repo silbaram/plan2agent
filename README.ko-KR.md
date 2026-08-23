@@ -6,7 +6,7 @@
 [![Node.js 22+](https://img.shields.io/badge/Node.js-22%2B-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-[English](readme.md) | [한국어](README.ko-KR.md)
+[English](README.md) | [한국어](README.ko-KR.md)
 
 짧은 제품 문서를 사용자가 확인한 제품 이해, 승인된 명세, 의존성 기반 task,
 검증된 AI 코딩 실행으로 바꿉니다.
@@ -112,8 +112,10 @@ system을 대체하지 않습니다.
 
 승인·철회 상태는 `decisions.jsonl`이 정본이고 기존 JSON `approval_audit`은 호환 사본으로
 유지됩니다. 모든 artifact는 패키지에 포함된 schema로 검증됩니다. 생성된 Markdown은 사람이
-읽기 위한 view입니다. 종료된 iteration과 완료된 run evidence는 이후 검토를 위한
-감사 가능한 이력으로 남습니다.
+읽기 위한 view입니다. run evidence는 기본적으로 현재 개발 상태를 위한 임시 자료입니다.
+현재 개발 묶음은 검토·인계할 수 있게 유지하고, 다음 iteration을 열면 종료된 iteration의
+run을 정리합니다. 장기 이력은 승인 spec, close metadata, Git에 남습니다. 로컬 run evidence를
+장기 보존해야 할 때만 `runTracking.persistence`를 `persistent`로 설정합니다.
 
 ## 핵심 workflow
 
@@ -154,7 +156,9 @@ iteration은 승인된 spec을 보존하고 변경분 task와 유지보수 작�
 
 eval 흐름은 run evidence를 평가하고 결과를 비교하며 반복되는 실패를 묶습니다.
 proposal 흐름은 근거가 있는 결과를 사람이 검토하는 maintenance task로 바꿀 수
-있습니다. proposal이 존재한다는 이유만으로 patch를 적용하지 않습니다.
+있습니다. proposal이 존재한다는 이유만으로 patch를 적용하지 않습니다. 기본
+`active_only`에서는 다음 iteration을 열거나 다음 maintenance task를 시작하기 전에 eval을
+실행하고, 장기간 로컬 비교가 필요하면 `persistent`를 사용합니다.
 
 ### 5. 선택적으로 장기 context 불러오기
 

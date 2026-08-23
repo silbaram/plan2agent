@@ -55,7 +55,7 @@ import {
   validateCurrentSpecCompositionData,
   validateMaintenanceTaskGraphProject,
 } from './p2a_iteration_state.mjs';
-import { loadRunsForArtifactRoot } from './p2a_runs.mjs';
+import { loadRunsForArtifactRoot, pruneIndexedRunEvidence } from './p2a_runs.mjs';
 import { normalizePath, resolveP2aPaths } from './p2a_paths.mjs';
 import {
   atomicWriteJson,
@@ -92,7 +92,7 @@ import {
 } from './p2a_spec_model.mjs';
 import { assertFinalVisualReviewRunReady } from './p2a_visual_review_gate.mjs';
 import { assertFinalAcceptanceReviewRunReady } from './p2a_acceptance_review_gate.mjs';
-import { resolveReviewPasses } from './p2a_project_config.mjs';
+import { resolveReviewPasses, resolveRunPersistence } from './p2a_project_config.mjs';
 import {
   canonicalWorkspacePathForArtifactRoot,
   compareRunEvidence,
@@ -4593,6 +4593,16 @@ function projectReviewPasses(projectRoot = ROOT) {
   }
 }
 
+function projectRunPersistence(projectRoot = ROOT) {
+  const configPath = path.join(projectRoot, '.plan2agent', 'project.config.json');
+  if (!existsSync(configPath)) return resolveRunPersistence({});
+  try {
+    return resolveRunPersistence(loadJson(configPath));
+  } catch (error) {
+    throw new ValidationError(`project config run persistence policy is invalid: ${error.message}`);
+  }
+}
+
 function planningMemoryConfiguration(options) {
   const projectRoot = options.projectRoot ?? ROOT;
   const configPath = path.join(projectRoot, '.plan2agent', 'project.config.json');
@@ -5376,7 +5386,18 @@ function createOpenBaselineSnapshot(currentSpec, artifactRoot, iterationId) {
   };
 }
 
-function openLocked(args, artifactRoot, idea) {
+function pruneArchivedRunEvidenceAfterOpen(facts) {
+  const iterationIds = (facts.state.currentSpec.closed_iterations ?? [])
+    .map((closed) => closed?.iteration_id)
+    .filter((iterationId) => typeof iterationId === 'string' && iterationId);
+  if (!iterationIds.length) return null;
+  return pruneIndexedRunEvidence(
+    path.join(facts.state.artifactRoot, 'runs'),
+    { iterationIds, alreadyLocked: true },
+  );
+}
+
+function openLocked(args, artifactRoot, idea, options = {}) {
   const openingState = resolveIterationState(artifactRoot, { requireReady: false });
   validateActiveIterationArchiveConsistency(openingState);
   if (openingState.currentSpec.pending_iteration) {
@@ -5469,6 +5490,9 @@ function openLocked(args, artifactRoot, idea) {
     atomicWriteJson(facts.state.currentSpecPath, nextCurrentSpec);
     writeIterationStatus(artifactRoot, nextCurrentSpec);
 
+    const cleanup = options.pruneArchivedRuns
+      ? pruneArchivedRunEvidenceAfterOpen(facts)
+      : null;
     const openedState = resolveIterationState(artifactRoot, { requireReady: false });
     console.log(`Plan2Agent iteration opened: ${toRelativeFromRoot(openedState.iterationRoot)}`);
     console.log(`- active iteration: ${openedState.activeIteration}`);
@@ -5482,6 +5506,13 @@ function openLocked(args, artifactRoot, idea) {
       console.log(`  reason: ${planningMemory.layers.cross_project.reason}`);
     }
     if (!planningMemory.configured) console.log(`- planning recall: not configured (${planningMemory.configuration_reason})`);
+    if (cleanup?.prunedRunIds.length) {
+      console.log(`- transient run cleanup: removed ${cleanup.prunedRunIds.length} archived run(s)`);
+    }
+    if (cleanup?.cleanupFailures?.length) {
+      console.warn(`WARNING: ${cleanup.cleanupFailures.length} unindexed run evidence file(s) could not be removed.`);
+      for (const failure of cleanup.cleanupFailures) console.warn(`- ${failure}`);
+    }
     return 0;
   } catch (error) {
     const rollbackFailures = [];
@@ -5522,9 +5553,13 @@ function open(args) {
   assertDirectory(artifactRoot, 'artifact root');
   const iterationsRoot = artifactStateLockDir(artifactRoot);
   assertDirectory(iterationsRoot, 'iterations directory');
+  const runsDir = path.join(artifactRoot, 'runs');
+  const activeOnly = projectRunPersistence(
+    canonicalWorkspacePathForArtifactRoot(artifactRoot),
+  ) === 'active_only';
   return withRunStoreLocks(
-    [iterationsRoot],
-    () => openLocked(args, artifactRoot, idea),
+    [iterationsRoot, ...(activeOnly ? [runsDir] : [])],
+    () => openLocked(args, artifactRoot, idea, { pruneArchivedRuns: activeOnly }),
   );
 }
 

@@ -6,7 +6,7 @@
 [![Node.js 22+](https://img.shields.io/badge/Node.js-22%2B-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-[English](readme.md) | [한국어](README.ko-KR.md)
+[English](README.md) | [한국어](README.ko-KR.md)
 
 Turn a concise product document into a confirmed product understanding, approved specs,
 dependency-aware tasks, and verified AI coding runs.
@@ -111,8 +111,10 @@ Planning and execution state stays local to the project:
 
 `decisions.jsonl` is the source of truth for recorded approvals and revocations; the existing JSON
 approval audits remain compatible copies. All artifacts are validated against schemas shipped with the package.
-Generated Markdown is a human-readable view. Closed iterations and finished run evidence provide
-an auditable history for later reviews.
+Generated Markdown is a human-readable view. Run evidence is temporary execution state by default:
+the current development bundle remains reviewable and portable, while opening the next iteration
+removes archived iteration runs. Approved specs, close metadata, and Git remain the durable history.
+Set `runTracking.persistence` to `persistent` only when long-lived local run evidence is required.
 
 ## Core workflow
 
@@ -148,7 +150,9 @@ only where the new idea changes or conflicts with them. `p2a next` guides close/
 
 The eval flow grades run evidence, compares results, and groups recurring failures. The proposal
 flow can turn supported findings into human-reviewed maintenance tasks. It never applies a patch
-merely because a proposal exists.
+merely because a proposal exists. With the default `active_only` retention, run eval before opening
+the next iteration or starting the next maintenance task; use `persistent` for deliberate long-term
+local comparisons.
 
 ### 5. Recall optional long-term context
 

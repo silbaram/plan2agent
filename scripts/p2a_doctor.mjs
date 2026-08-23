@@ -20,7 +20,11 @@ import {
 } from './p2a_tool_manifest.mjs';
 import { normalizePath } from './p2a_paths.mjs';
 import { auditContext, printContextAudit } from './p2a_context_audit.mjs';
-import { resolveExecutionModePolicy, resolveReviewPasses } from './p2a_project_config.mjs';
+import {
+  resolveExecutionModePolicy,
+  resolveReviewPasses,
+  resolveRunPersistence,
+} from './p2a_project_config.mjs';
 import {
   discoverEntryDocument,
   discoverFeatureRadarPreflightRuns,
@@ -1126,11 +1130,18 @@ function buildDevReport(targetRoot, manifest, configResult) {
   let reviewPasses = null;
   let executionMode = null;
   let reviewPassesError = null;
+  let runPersistence = null;
+  let runPersistenceError = null;
   try {
     reviewPasses = resolveReviewPasses(config);
     executionMode = resolveExecutionModePolicy(config);
   } catch (error) {
     reviewPassesError = error instanceof Error ? error.message : String(error);
+  }
+  try {
+    runPersistence = resolveRunPersistence(config);
+  } catch (error) {
+    runPersistenceError = error instanceof Error ? error.message : String(error);
   }
   const capabilityTargets = targets.filter((target) => config?.providerNativeCapabilities?.[target]);
   checks.push(
@@ -1140,9 +1151,14 @@ function buildDevReport(targetRoot, manifest, configResult) {
   );
 
   checks.push(
-    config?.runTracking?.runsDir && config?.runTracking?.defaultIsolation
-      ? check('dev_run_tracking', 'Run tracking config', 'pass', `runsDir=${config.runTracking.runsDir}, defaultIsolation=${config.runTracking.defaultIsolation}`)
-      : check('dev_run_tracking', 'Run tracking config', 'warn', 'runTracking.runsDir/defaultIsolation is not configured'),
+    config?.runTracking?.runsDir && config?.runTracking?.defaultIsolation && !runPersistenceError
+      ? check('dev_run_tracking', 'Run tracking config', 'pass', `runsDir=${config.runTracking.runsDir}, defaultIsolation=${config.runTracking.defaultIsolation}, persistence=${runPersistence}`)
+      : check(
+          'dev_run_tracking',
+          'Run tracking config',
+          'warn',
+          runPersistenceError ?? 'runTracking.runsDir/defaultIsolation is not configured',
+        ),
   );
 
   checks.push(

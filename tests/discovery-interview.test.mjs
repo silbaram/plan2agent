@@ -68,7 +68,7 @@ test('approved Gate B routes through adaptive execution readiness instead of unc
   assert.doesNotMatch(geminiHarness, /do not create a task graph unconditionally/);
   assert.doesNotMatch(geminiHarness, /Stop before task graph unless/);
 
-  const englishReadme = readFileSync(path.join(ROOT, 'readme.md'), 'utf8');
+  const englishReadme = readFileSync(path.join(ROOT, 'README.md'), 'utf8');
   const koreanReadme = readFileSync(path.join(ROOT, 'README.ko-KR.md'), 'utf8');
   const quickstart = readFileSync(path.join(ROOT, 'docs', 'quickstart.md'), 'utf8');
   assert.match(englishReadme, /Direct run, Planned checkpoints, or dependency-aware Orchestrated tasks/);

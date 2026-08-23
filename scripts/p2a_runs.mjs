@@ -885,6 +885,115 @@ function writeIndex(runsDir, index) {
   atomicWriteJson(indexPath(runsDir), index);
 }
 
+function normalizedSelectorSet(values, label, { allowNull = false } = {}) {
+  if (values === undefined) return null;
+  if (!Array.isArray(values)) throw new Error(`${label} must be an array`);
+  const normalized = new Set();
+  for (const value of values) {
+    if (allowNull && value === null) {
+      normalized.add(null);
+      continue;
+    }
+    if (typeof value !== 'string' || !value.trim()) {
+      throw new Error(`${label} values must be non-empty strings${allowNull ? ' or null' : ''}`);
+    }
+    normalized.add(value.trim());
+  }
+  return normalized;
+}
+
+function pruneScopeMatches(entry, selectors) {
+  if (selectors.iterationIds && !selectors.iterationIds.has(entry.iterationId)) return false;
+  if (selectors.taskIds && !selectors.taskIds.has(entry.taskId)) return false;
+  if (selectors.runKinds && !selectors.runKinds.has(entry.runKind ?? null)) return false;
+  return true;
+}
+
+function pruneIndexedRunEvidenceLocked(runsDir, options = {}) {
+  assertNoPendingRunMigration(runsDir);
+  recoverPendingRunWrite(runsDir);
+  if (!existsSync(indexPath(runsDir))) {
+    return { prunedRunIds: [], cleanupFailures: [] };
+  }
+  const selectors = {
+    iterationIds: normalizedSelectorSet(options.iterationIds, 'iterationIds'),
+    taskIds: normalizedSelectorSet(options.taskIds, 'taskIds'),
+    runKinds: normalizedSelectorSet(options.runKinds, 'runKinds', { allowNull: true }),
+  };
+  if (!Object.values(selectors).some(Boolean)) {
+    throw new Error('run evidence pruning requires at least one scope selector');
+  }
+  const keepRunIds = normalizedSelectorSet(options.keepRunIds ?? [], 'keepRunIds');
+  const index = loadIndex(runsDir);
+  const scoped = index.runs.filter((entry) => pruneScopeMatches(entry, selectors));
+  const started = scoped.filter((entry) => entry.status === 'started');
+  if (started.length && options.requireNoStarted !== false) {
+    throw new Error(
+      `cannot prune active run evidence; finish or block started run(s): ${started.map((entry) => entry.runId).join(', ')}`,
+    );
+  }
+  const selected = scoped.filter((entry) => (
+    entry.status !== 'started'
+    && !keepRunIds.has(entry.runId)
+  ));
+  if (!selected.length) return { prunedRunIds: [], cleanupFailures: [] };
+
+  const selectedIds = new Set(selected.map((entry) => entry.runId));
+  const evidencePaths = [];
+  for (const entry of selected) {
+    const runRef = indexedRunRef(runsDir, entry.runId, index);
+    const references = [
+      runRef,
+      ...RUN_SIDECAR_SUFFIXES.map((suffix) => runSidecarRef(runRef, suffix)),
+    ];
+    for (const reference of references) {
+      const evidencePath = path.resolve(runsDir, reference);
+      const relative = path.relative(path.resolve(runsDir), evidencePath);
+      if (
+        !relative
+        || relative === '..'
+        || relative.startsWith(`..${path.sep}`)
+        || path.isAbsolute(relative)
+      ) {
+        throw new Error(`run evidence path escapes runs directory: ${JSON.stringify(reference)}`);
+      }
+      if (existsSync(evidencePath)) evidencePaths.push(evidencePath);
+    }
+  }
+
+  // Commit the authoritative index first so cleanup never leaves indexed
+  // entries pointing at files that were already removed.
+  const nextIndex = {
+    ...index,
+    runs: index.runs.filter((entry) => !selectedIds.has(entry.runId)),
+  };
+  writeIndex(runsDir, nextIndex);
+  const cleanupFailures = [];
+  for (const evidencePath of evidencePaths) {
+    try {
+      unlinkSync(evidencePath);
+    } catch (error) {
+      if (error?.code !== 'ENOENT') cleanupFailures.push(`${displayPath(evidencePath)}: ${error.message}`);
+    }
+  }
+
+  return {
+    prunedRunIds: selected.map((entry) => entry.runId),
+    cleanupFailures,
+  };
+}
+
+export function pruneIndexedRunEvidence(runsDir, options = {}) {
+  const resolvedRunsDir = path.resolve(runsDir);
+  if (!existsSync(resolvedRunsDir)) {
+    return { prunedRunIds: [], cleanupFailures: [] };
+  }
+  const prune = () => pruneIndexedRunEvidenceLocked(resolvedRunsDir, options);
+  return options.alreadyLocked === true
+    ? prune()
+    : withRunStoreLocks([resolvedRunsDir], prune);
+}
+
 function upsertIndexRun(runsDir, index, run, preferredRunRef = null) {
   if (index.projectId === 'unknown') index.projectId = run.projectId;
   if (index.projectId !== run.projectId) {

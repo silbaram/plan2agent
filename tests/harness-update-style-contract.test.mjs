@@ -184,11 +184,15 @@ test('update prunes deselected provider assets and their manifest ownership with
 test('upgrade dry-run is project-read-only and upgrade prune remains explicit', () => {
   const targetRoot = makeTempDir('p2a-upgrade-read-only-');
   const manifestPath = path.join(targetRoot, '.plan2agent', 'manifest.json');
+  const configPath = path.join(targetRoot, '.plan2agent', 'project.config.json');
   const retiredRelative = '.plan2agent/scripts/p2a_retired_upgrade.mjs';
   const retiredPath = path.join(targetRoot, retiredRelative);
   try {
     let result = runHandoff(['scaffold', '--target', targetRoot, '--tools', 'none']);
     assert.equal(result.status, 0, formatCommandResult(result));
+    const config = JSON.parse(readFileSync(configPath, 'utf8'));
+    delete config.runTracking.persistence;
+    writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`, 'utf8');
     const retiredContent = '// retired upgrade helper\n';
     writeFileSync(retiredPath, retiredContent, 'utf8');
     const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
@@ -202,21 +206,26 @@ test('upgrade dry-run is project-read-only and upgrade prune remains explicit', 
     });
     writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
     const beforeDryRun = readFileSync(manifestPath, 'utf8');
+    const configBeforeDryRun = readFileSync(configPath, 'utf8');
 
     result = runHandoff(['upgrade', '--target', targetRoot, '--dry-run']);
     assert.equal(result.status, 0, formatCommandResult(result));
     assert.match(result.stdout, /package_version_manifest: would_update/);
+    assert.match(result.stdout, /dev_skills_config: would_update \(runTracking\)/);
     assert.match(result.stdout, /prunable: remove/);
     assert.doesNotMatch(result.stdout, /report: \.plan2agent\/update-reports/);
     assert.equal(readFileSync(manifestPath, 'utf8'), beforeDryRun);
+    assert.equal(readFileSync(configPath, 'utf8'), configBeforeDryRun);
     assert.equal(existsSync(path.join(targetRoot, '.plan2agent', 'update-reports')), false);
 
     result = runHandoff(['upgrade', '--target', targetRoot, '--apply']);
     assert.equal(result.status, 0, formatCommandResult(result));
     assert.equal(existsSync(retiredPath), true);
     const upgradedManifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+    const upgradedConfig = JSON.parse(readFileSync(configPath, 'utf8'));
     assert.equal(upgradedManifest.provenance.packageVersion, PACKAGE_VERSION);
     assert.equal(realpathSync(upgradedManifest.provenance.toolkitRoot), realpathSync(ROOT));
+    assert.equal(upgradedConfig.runTracking.persistence, 'active_only');
 
     result = runHandoff(['upgrade', '--target', targetRoot, '--apply', '--prune']);
     assert.equal(result.status, 0, formatCommandResult(result));
