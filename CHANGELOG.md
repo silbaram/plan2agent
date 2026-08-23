@@ -6,6 +6,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+## [0.5.10] - 2026-08-23
+
 ### Changed
 
 - Default new and upgraded projects to `runTracking.persistence: active_only`: keep current execution evidence for gates and handoff, prune superseded successful retries, remove archived iteration runs when the next iteration opens, and remove completed maintenance history when the next maintenance task starts. Unmigrated legacy configs without the field resolve as `persistent`, and explicit `persistent` mode preserves prior behavior.
@@ -202,7 +204,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Add package-runtime project initialization, managed provider assets, artifact validation, handoff, supervised execution, evaluation, proposal, and optional Memory workflows.
 - Ship canonical and generated integrations for Codex, Claude Code, and Gemini CLI.
 
-[Unreleased]: https://github.com/silbaram/plan2agent/compare/v0.5.8...HEAD
+[Unreleased]: https://github.com/silbaram/plan2agent/compare/v0.5.10...HEAD
+[0.5.10]: https://github.com/silbaram/plan2agent/compare/v0.5.9...v0.5.10
+[0.5.9]: https://github.com/silbaram/plan2agent/compare/v0.5.8...v0.5.9
 [0.5.8]: https://github.com/silbaram/plan2agent/compare/v0.5.7...v0.5.8
 [0.5.7]: https://github.com/silbaram/plan2agent/compare/v0.5.6...v0.5.7
 [0.5.6]: https://github.com/silbaram/plan2agent/compare/v0.5.5...v0.5.6
