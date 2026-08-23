@@ -16,6 +16,7 @@ import {
   validateActiveGateBPromotionBinding,
   validateActiveIterationArchiveConsistency,
   validateActiveIterationPlanningContract,
+  validateClosedIterationComposition,
   validateClosedIterationRoutingData,
 } from './p2a_iteration_state.mjs';
 import {
@@ -483,6 +484,8 @@ function inspectClosedIterationRouting(
     validateClosedIterationRoutingData(iterationState.currentSpec);
     tracePhase(trace, 'closed-route:archive-audit', `${closedIterations.length} iteration(s)`);
     auditArchivedIterationArtifacts(iterationState.currentSpec, artifactRoot);
+    tracePhase(trace, 'closed-route:composition');
+    validateClosedIterationComposition(iterationState.currentSpec, artifactRoot);
 
     tracePhase(trace, 'closed-route:run-index');
     const runs = inspectRunIndex(targetRoot, artifactRoot);

@@ -9,10 +9,14 @@ import { FIXTURE_ROOT, makeTempDir, runP2a } from './helpers/fixtures.mjs';
 import { validateSchema } from '../scripts/p2a_schema.mjs';
 import { NEXT_DECISION_RULES } from '../scripts/p2a.mjs';
 import { buildNext } from '../scripts/p2a_next_service.mjs';
-import { iterationCompositionRequirement } from '../scripts/p2a_iteration_state.mjs';
+import {
+  iterationCompositionRequirement,
+  validateCurrentSpecCompositionData,
+} from '../scripts/p2a_iteration_state.mjs';
 import {
   createValidationSession,
   validateIntake,
+  validateRunIndexData,
   validateSpec,
   validateTaskGraph,
 } from '../scripts/validate_artifacts.mjs';
@@ -353,6 +357,88 @@ function writeBuildLoreShapedClosedHistory(artifactRoot, projectId = 'sample') {
   writeJson(currentSpecPath, currentSpec);
   addArchivedArtifactAudits(artifactRoot);
   return { activeIteration, iterationIds };
+}
+
+function addComposedBaselineHistory(artifactRoot, iterationIds) {
+  const currentSpecPath = join(artifactRoot, 'current-spec.json');
+  const currentSpec = JSON.parse(readFileSync(currentSpecPath, 'utf8'));
+  for (let index = 1; index < iterationIds.length; index += 1) {
+    const iterationId = iterationIds[index];
+    const baselineIds = iterationIds.slice(0, index);
+    const activeBaselineIteration = baselineIds.at(-1);
+    const effectiveSpec = JSON.parse(readFileSync(
+      join(
+        artifactRoot,
+        'iterations',
+        activeBaselineIteration,
+        'gate-b-spec',
+        'spec.json',
+      ),
+      'utf8',
+    ));
+    const baselineRef = `iterations/${iterationId}/baseline/current-spec.json`;
+    const baselinePath = join(artifactRoot, baselineRef);
+    writeJson(baselinePath, {
+      schema_version: 'p2a.current_spec.v1',
+      project_id: currentSpec.project_id,
+      active_iteration: activeBaselineIteration,
+      effective_spec_ref: 'current-spec.json',
+      composed_from: baselineIds,
+      source_specs: baselineIds.map((sourceIterationId) => ({
+        iteration_id: sourceIterationId,
+        spec_ref: `iterations/${sourceIterationId}/gate-b-spec/spec.json`,
+        status: 'archived',
+        approval: 'approved',
+      })),
+      effective_product: effectiveSpec.product,
+      effective_implementation: effectiveSpec.implementation,
+      superseded_refs: [],
+      open_decisions: [],
+      composition_conflicts: [],
+      closed_iterations: baselineIds.map((sourceIterationId) => ({
+        iteration_id: sourceIterationId,
+        status: 'archived',
+      })),
+      last_closed_iteration: {
+        iteration_id: activeBaselineIteration,
+        status: 'archived',
+      },
+    });
+    const baselineSha256 = createHash('sha256')
+      .update(readFileSync(baselinePath))
+      .digest('hex');
+    const intakePath = join(
+      artifactRoot,
+      'iterations',
+      iterationId,
+      'gate-a-intake',
+      'intake.json',
+    );
+    const intake = JSON.parse(readFileSync(intakePath, 'utf8'));
+    intake.baseline_context = {
+      spec_ref: baselineRef,
+      spec_sha256: baselineSha256,
+      reused_answers: [],
+      reused_question_dispositions: [],
+    };
+    writeJson(intakePath, intake);
+
+    const metadataPath = join(
+      artifactRoot,
+      'iterations',
+      iterationId,
+      'iteration.json',
+    );
+    const metadata = JSON.parse(readFileSync(metadataPath, 'utf8'));
+    metadata.baseline = {
+      iteration_id: activeBaselineIteration,
+      current_spec_ref: 'current-spec.json',
+      effective_spec_ref: baselineRef,
+      effective_spec_sha256: baselineSha256,
+    };
+    writeJson(metadataPath, metadata);
+  }
+  addArchivedArtifactAudits(artifactRoot);
 }
 
 function writeBaselineBackedPlanningIteration(artifactRoot) {
@@ -1201,6 +1287,152 @@ test('BuildLore-shaped 11-iteration history stays within a generous routing boun
   } finally {
     remove(root);
   }
+});
+
+test('audited closed routing rejects semantic composition drift and extra sources', () => {
+  const root = project();
+  try {
+    const rootArtifact = artifact(root);
+    writeBuildLoreShapedClosedHistory(rootArtifact);
+    const currentSpecPath = join(rootArtifact, 'current-spec.json');
+    const currentSpec = JSON.parse(readFileSync(currentSpecPath, 'utf8'));
+    currentSpec.effective_product.problem = 'Drifted effective product problem.';
+    writeJson(currentSpecPath, currentSpec);
+
+    const semanticResult = runP2a([
+      'next', '--target', root, '--json', '--contract', 'v2', '--trace',
+    ]);
+    assert.equal(semanticResult.status, 0, `${semanticResult.stdout}${semanticResult.stderr}`);
+    const semanticPayload = JSON.parse(semanticResult.stdout);
+    assertAction(
+      semanticPayload,
+      'invalid_iteration_state',
+      'cli',
+      ['iteration', 'validate', '--artifacts', artifactPath(root)],
+    );
+    assert.match(semanticPayload.reason, /effective sections must exactly match/);
+    assert.match(semanticResult.stderr, /closed-route:composition/);
+    assert.match(semanticResult.stderr, /closed-route:invalid/);
+    assert.doesNotMatch(semanticResult.stderr, /artifact:deep-validation/);
+
+    const extraSourceSpec = JSON.parse(readFileSync(currentSpecPath, 'utf8'));
+    extraSourceSpec.effective_product = JSON.parse(readFileSync(
+      join(rootArtifact, 'iterations', 'v11', 'gate-b-spec', 'spec.json'),
+      'utf8',
+    )).product;
+    extraSourceSpec.source_specs.push({
+      iteration_id: 'v12-extra',
+      spec_ref: 'iterations/v12-extra/gate-b-spec/spec.json',
+      status: 'archived',
+      approval: 'approved',
+    });
+    extraSourceSpec.composed_from.push('v12-extra');
+    writeJson(currentSpecPath, extraSourceSpec);
+
+    const extraResult = runP2a([
+      'next', '--target', root, '--json', '--contract', 'v2', '--trace',
+    ]);
+    assert.equal(extraResult.status, 0, `${extraResult.stdout}${extraResult.stderr}`);
+    const extraPayload = JSON.parse(extraResult.stdout);
+    assertAction(
+      extraPayload,
+      'invalid_iteration_state',
+      'cli',
+      ['iteration', 'validate', '--artifacts', artifactPath(root)],
+    );
+    assert.match(extraPayload.reason, /not closed: v12-extra/);
+  } finally {
+    remove(root);
+  }
+});
+
+test('BuildLore-shaped composed fallback reuses validation within a bounded request', () => {
+  const root = project();
+  try {
+    const rootArtifact = artifact(root);
+    const { activeIteration, iterationIds } = writeBuildLoreShapedClosedHistory(rootArtifact);
+    addComposedBaselineHistory(rootArtifact, iterationIds);
+    writeRuns(rootArtifact, [{
+      runId: 'run-active-failed',
+      iterationId: activeIteration,
+      status: 'failed',
+    }]);
+
+    const startedAt = performance.now();
+    const result = runP2a([
+      'next', '--target', root, '--json', '--contract', 'v2', '--trace',
+    ]);
+    const durationMs = performance.now() - startedAt;
+    assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+    assert.ok(durationMs < 5_000, `composed fallback took ${durationMs.toFixed(1)}ms`);
+    assert.match(result.stderr, /closed-route:fallback: active run/);
+    assert.match(result.stderr, /artifact:deep-validation/);
+
+    const activeIntakePath = join(
+      rootArtifact,
+      'iterations',
+      activeIteration,
+      'gate-a-intake',
+      'intake.json',
+    );
+    const deepSession = createValidationSession();
+    validateIntake(activeIntakePath, {
+      artifactRoot: rootArtifact,
+      requireBaselineContextArtifactRoot: true,
+      validationSession: deepSession,
+    });
+    assert.equal(deepSession.stats.validatorRuns.intake, 11);
+    assert.equal(deepSession.stats.validatorRuns.spec, 10);
+    assert.equal(deepSession.stats.validatorRuns['task-graph'], 10);
+  } finally {
+    remove(root);
+  }
+});
+
+test('run-index relation validation does not rescan every run for each task', () => {
+  const recordCount = 4_000;
+  const runs = Array.from({ length: recordCount }, (_, index) => {
+    const taskId = `task-${index + 1}`;
+    const runId = `run-linear-${index + 1}`;
+    return {
+      runId,
+      taskId,
+      iterationId: 'v1',
+      status: 'finished',
+      agentTool: 'codex',
+      workspaceRef: 'fixture-workspace',
+      taskGraphRef: 'iterations/v1/gate-c-task-graph/task-graph.json',
+      runRef: `v1/${runId}.json`,
+      startedAt: '2026-07-31T00:00:00.000Z',
+      finishedAt: '2026-07-31T00:01:00.000Z',
+    };
+  });
+  let runFilterCalls = 0;
+  const observedRuns = new Proxy(runs, {
+    get(target, property, receiver) {
+      if (property === 'filter') {
+        return (...args) => {
+          runFilterCalls += 1;
+          return Array.prototype.filter.apply(target, args);
+        };
+      }
+      return Reflect.get(target, property, receiver);
+    },
+  });
+  const startedAt = performance.now();
+  validateRunIndexData({
+    schema_version: 'p2a.run_index.v1',
+    projectId: 'sample',
+    runs: observedRuns,
+    tasks: runs.map((run) => ({
+      taskId: run.taskId,
+      runIds: [run.runId],
+      latestRunId: run.runId,
+    })),
+  });
+  const durationMs = performance.now() - startedAt;
+  assert.equal(runFilterCalls, 0);
+  assert.ok(durationMs < 2_000, `run-index validation took ${durationMs.toFixed(1)}ms`);
 });
 
 test('ValidationSession caches each unique validator and JSON read by content SHA', () => {
