@@ -34,6 +34,7 @@
           "properties": {
             "id": {"type": "string", "pattern": "^task-[0-9]+$"},
             "title": {"type": "string", "minLength": 1},
+            "intent": {"type": "string", "minLength": 1},
             "status": {"type": "string", "enum": ["todo", "blocked", "in_progress", "done"]},
             "targetArea": {"type": "string", "minLength": 1},
             "workKind": {"type": "string", "enum": ["ui", "non_ui", "mixed"]},
@@ -48,6 +49,7 @@
           "properties": {
             "id": {"type": "string", "pattern": "^task-[0-9]+$"},
             "title": {"type": "string", "minLength": 1},
+            "intent": {"type": "string", "minLength": 1},
             "status": {"type": "string", "enum": ["todo", "blocked", "in_progress", "done"]},
             "targetArea": {"type": "string", "minLength": 1},
             "workKind": {"type": "string", "enum": ["ui", "non_ui", "mixed"]},

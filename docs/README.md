@@ -48,13 +48,16 @@ Plan2Agent 문서는 사용자 흐름, CLI 사용법, 산출물 계약, 구현 �
 8. [하네스 구현 기준](harness-spec.md)<br>
    skill/subagent mirror, CLI-neutral agent contract, 구현 원칙을 수정할 때 본다.
 
-9. [릴리스 절차](releasing.md)<br>
+9. [사람에게 보이는 표현 작성 가이드](human-facing-writing-guide.md)<br>
+   승인 화면, 생성 Markdown, task intent를 전체 그림부터 평이하게 작성할 때 본다.
+
+10. [릴리스 절차](releasing.md)<br>
    npm package, Git tag, GitHub Release를 같은 version과 source commit으로 게시할 때 본다.
 
-10. [실사용 검증 체크리스트](dogfooding-checklist.md)<br>
+11. [실사용 검증 체크리스트](dogfooding-checklist.md)<br>
    adaptive 실행 모드, 절차 비용, 승인 후 자율 완료율과 게이트 가치를 실제 프로젝트에서 측정할 때 본다.
 
-11. [승인된 계약 기반 자율 개발 개선안](gate-driven-adaptive-execution-proposal.md)<br>
+12. [승인된 계약 기반 자율 개발 개선안](gate-driven-adaptive-execution-proposal.md)<br>
    사용자가 기획을 승인하고 하네스가 검증한 뒤, AI가 규칙 안에서 구현·검증을 자율 완수하도록 전환하는 제안이다.
 
 ## 목적별 바로가기
@@ -69,6 +72,7 @@ Plan2Agent 문서는 사용자 흐름, CLI 사용법, 산출물 계약, 구현 �
 | 반복 구조와 변경분 task 흐름 이해하기 | [반복/고도화 개발 스펙](iteration-spec.md) |
 | adaptive 실행과 run lifecycle 이해하기 | [감독형 개발 실행 레퍼런스](supervised-execution.md) |
 | skill/subagent 구조를 수정하기 | [하네스 구현 기준](harness-spec.md) |
+| 승인·진행 문장을 평이하게 작성하기 | [사람에게 보이는 표현 작성 가이드](human-facing-writing-guide.md) |
 | 실제 프로젝트에서 절차 비용과 실행 자율성 측정하기 | [실사용 검증 체크리스트](dogfooding-checklist.md) |
 | 기획 승인과 AI 자율 개발의 권한 경계 검토하기 | [승인된 계약 기반 자율 개발 개선안](gate-driven-adaptive-execution-proposal.md) |
 
@@ -84,6 +88,7 @@ Plan2Agent 문서는 사용자 흐름, CLI 사용법, 산출물 계약, 구현 �
 | `iteration-spec.md` | 반복 개발 구현 계약 | iteration layout, close/open, semantic diff, run tracking |
 | `supervised-execution.md` | 감독형 개발 실행 레퍼런스 | ready task 실행, 리뷰 패스 정책, monitor gate, planned checkpoint, retry recovery, proposal loop |
 | `harness-spec.md` | 하네스 구현 기준 | skills, subagents, mirror, 안전 정책 (`p2a-harness` skill을 게이트 규칙 정본으로 지정) |
+| `human-facing-writing-guide.md` | 사람용 표현 가이드 | 승인 화면의 3층 구조, Gate Markdown 요약, 비계약 task intent |
 | `releasing.md` | 릴리스 운영 checklist | Node 지원 정책, CHANGELOG, npm publish, Git tag, GitHub Release, smoke test |
 | `dogfooding-checklist.md` | 실사용 검증 체크리스트 | adaptive 모드 선택, 절차 비용, 사용자 개입, 게이트·검증 evidence의 실효성 측정 |
 | `gate-driven-adaptive-execution-proposal.md` | 설계 제안 | 사용자 승인·하네스 검증·AI 자율 개발의 권한 경계, 선택형 task, UI 검증과 단계적 migration |
@@ -99,5 +104,6 @@ Plan2Agent 문서는 사용자 흐름, CLI 사용법, 산출물 계약, 구현 �
 - 반복 구조의 정확한 동작 계약은 `iteration-spec.md`에 둔다.
 - ready task 실행, orchestration, proposal loop와 `devExecution.reviewPasses` 정책의 완료 기능 계약은 `supervised-execution.md`에 둔다.
 - skill/subagent 경로와 mirror 규칙은 `harness-spec.md`에 둔다.
+- 승인 화면, 생성 Markdown과 task intent의 표현 규칙은 `human-facing-writing-guide.md`에 둔다.
 - version 변경과 package 게시 절차는 `releasing.md`와 루트 `CHANGELOG.md`에 둔다.
 - 실제 프로젝트의 adaptive 실행 계측 기준은 `dogfooding-checklist.md`에 둔다.

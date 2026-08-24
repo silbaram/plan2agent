@@ -6,6 +6,18 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+## [0.5.12] - 2026-08-25
+
+### Added
+
+- Add an optional, non-contractual task `intent` sentence for human-first task lists, progress output, and supervised launcher prompts while keeping legacy task graphs valid.
+- Add a human-facing writing guide for layered decisions, at-a-glance Gate Markdown, and deterministic presentation tests.
+
+### Changed
+
+- Render human `p2a next` and `p2a shape` decisions as `[한눈에]`, `[실행 명령]`, and `[세부 계약]` without changing the v1/v2 machine JSON contracts.
+- Start generated intake, product-spec, and implementation-plan Markdown with a deterministic `[한눈에]` summary and small flow diagram.
+
 ## [0.5.11] - 2026-08-24
 
 ### Added
@@ -203,7 +215,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Add package-runtime project initialization, managed provider assets, artifact validation, handoff, supervised execution, evaluation, and proposal workflows.
 - Ship canonical and generated integrations for Codex, Claude Code, and Gemini CLI.
 
-[Unreleased]: https://github.com/silbaram/plan2agent/compare/v0.5.11...HEAD
+[Unreleased]: https://github.com/silbaram/plan2agent/compare/v0.5.12...HEAD
+[0.5.12]: https://github.com/silbaram/plan2agent/compare/v0.5.11...v0.5.12
 [0.5.11]: https://github.com/silbaram/plan2agent/compare/v0.5.10...v0.5.11
 [0.5.10]: https://github.com/silbaram/plan2agent/compare/v0.5.9...v0.5.10
 [0.5.9]: https://github.com/silbaram/plan2agent/compare/v0.5.8...v0.5.9

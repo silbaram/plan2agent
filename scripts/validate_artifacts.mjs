@@ -3819,6 +3819,9 @@ export function validateTaskGraphData(data, requireApprovedSpec = null, options 
 
   const graph = new Map();
   for (const task of tasks) {
+    if (typeof task.intent === 'string' && task.intent.trim().length === 0) {
+      throw new ValidationError(`${task.id}.intent must not be blank`);
+    }
     validateNonBlankStrings(task.acceptanceCriteria, `${task.id}.acceptanceCriteria`);
     validateNonBlankStrings(task.sourceSpecRefs, `${task.id}.sourceSpecRefs`);
     if (typeof task.blockNote === 'string' && task.blockNote.trim().length === 0) {

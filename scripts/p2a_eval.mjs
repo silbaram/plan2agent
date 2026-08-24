@@ -1419,6 +1419,7 @@ function analyzeNextActions(source, clusters) {
 
 function maintenanceDraftTask(source, analysis, cluster) {
   const title = `Improve ${cluster.classification} handling`;
+  const intent = `Maintainers can prevent or clearly diagnose recurring ${cluster.classification} failures.`;
   const runList = cluster.runIds.join(', ');
   const taskList = cluster.taskIds.join(', ');
   const sourceSpecRefs = sortedUnique([
@@ -1454,6 +1455,7 @@ function maintenanceDraftTask(source, analysis, cluster) {
     runIds: cluster.runIds,
     taskIds: cluster.taskIds,
     title,
+    intent,
     description,
     acceptanceCriteria,
     targetArea: 'maintenance',
@@ -1461,6 +1463,7 @@ function maintenanceDraftTask(source, analysis, cluster) {
     sourceSpecRefs,
     applyCommand: maintenanceAddCommandForTask(source, {
       title,
+      intent,
       description,
       acceptanceCriteria,
       targetArea: 'maintenance',
@@ -1478,6 +1481,8 @@ function maintenanceAddCommandForTask(source, task) {
     displayPath(source.sourcePath),
     '--title',
     task.title,
+    '--intent',
+    task.intent,
     '--description',
     task.description,
     '--area',

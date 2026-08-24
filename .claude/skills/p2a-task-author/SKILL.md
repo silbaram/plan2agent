@@ -32,6 +32,7 @@ The canonical conditions live in `.agents/context-routes.json`.
 ## Boundaries
 
 - Every task is backed by actual effective-spec fields and has concrete acceptance criteria.
+- Every newly authored task adds a one-sentence human `intent` in the approved product spec's primary language after its contract is complete; intent never replaces acceptance criteria or validation evidence.
 - Do not create product scope, cross-iteration dependencies, or duplicate existing work.
 - Do not replace an active graph after task or run history exists.
 - Do not change application code, dependencies, approval artifacts, or canonical graph bytes directly.

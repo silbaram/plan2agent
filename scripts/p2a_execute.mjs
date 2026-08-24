@@ -554,6 +554,23 @@ function readyTasks(graph) {
   return graph.tasks.filter((task) => isReady(task, tasksById));
 }
 
+function humanTaskOutcome(task) {
+  return typeof task.intent === 'string' && task.intent.trim()
+    ? task.intent.trim()
+    : task.title;
+}
+
+export function approvedSpecTaskIntent(spec, fallback) {
+  const goal = Array.isArray(spec?.product?.goals)
+    ? spec.product.goals.find((candidate) => typeof candidate === 'string' && candidate.trim())?.trim()
+    : null;
+  if (!goal) return fallback;
+  const outcome = goal.replace(/[.!?]+$/u, '');
+  return /[가-힣]/u.test(JSON.stringify(spec.product))
+    ? `사용자는 이 작업이 끝나면 다음 결과를 사용할 수 있습니다: ${outcome}.`
+    : `Users can rely on this approved outcome: ${outcome}.`;
+}
+
 function selectReadyTask(source, taskId = null) {
   const tasksById = taskMap(source.graph);
   if (taskId) {
@@ -569,7 +586,7 @@ function selectReadyTask(source, taskId = null) {
   const ready = readyTasks(source.graph);
   if (ready.length === 0) throw new Error('no ready task found');
   if (ready.length > 1) {
-    const summary = ready.map((task) => `${task.id} (${task.title})`).join(', ');
+    const summary = ready.map((task) => `${task.id} (${humanTaskOutcome(task)})`).join(', ');
     throw new Error(`multiple ready tasks found; pass --task. Ready tasks: ${summary}`);
   }
   return ready[0];
@@ -1129,9 +1146,23 @@ function latestRunIdForTask(runsDir, taskId, source) {
 
 function printExecutionPlan(args, source, task, runId = null, defaults = null, approvalLink = null) {
   console.log('Plan2Agent supervised task execution');
+  console.log('');
+  console.log('[한눈에]');
+  console.log(`이번 작업이 끝나면: ${humanTaskOutcome(task)}`);
+  console.log('진행하면 → 구현한 결과를 확인 절차까지 거쳐 완료합니다.');
+  console.log('문제가 생기면 → 완료로 처리하지 않고 원인과 필요한 도움을 보고합니다.');
+  console.log('');
+  console.log('[실행 명령]');
+  const startArgs = executeStartArgs(args, task, runId, defaults);
+  console.log(`- ${commandLine('p2a_execute.mjs', startArgs)}`);
+  if (runId) {
+    console.log(`- ${commandLine('p2a_execute.mjs', ['finish', ...sourceRunArgs(args), ...(args.approval ? ['--approval', args.approval] : []), '--run-id', runId, '--test', '--lint', '--typecheck'])}`);
+  }
+  console.log('');
+  console.log('[세부 계약]');
   console.log(`- project: ${source.projectId}`);
   console.log(`- source: ${source.sourceLayout}`);
-  console.log(`- task: ${task.id} - ${task.title}`);
+  console.log(`- task: ${task.id} - ${humanTaskOutcome(task)}`);
   console.log(`- executionMode: ${source.graph.execution?.mode ?? 'orchestrated'}`);
   if (source.graph.execution?.selectionRationale) console.log(`- selectionRationale: ${source.graph.execution.selectionRationale}`);
   if (source.graph.execution?.milestones) {
@@ -1157,18 +1188,17 @@ function printExecutionPlan(args, source, task, runId = null, defaults = null, a
   console.log('1. start: create run and mark the task in_progress');
   console.log('2. implement: paste the launcher prompt into the supervised agent session');
   console.log('3. finish: run verification, finish the run, then mark the task done or blocked');
-  console.log('');
-  console.log('Useful commands:');
-  const startArgs = executeStartArgs(args, task, runId, defaults);
-  console.log(`- ${commandLine('p2a_execute.mjs', startArgs)}`);
-  if (runId) {
-    console.log(`- ${commandLine('p2a_execute.mjs', ['finish', ...sourceRunArgs(args), ...(args.approval ? ['--approval', args.approval] : []), '--run-id', runId, '--test', '--lint', '--typecheck'])}`);
-  }
 }
 
 function printLauncherPrompt(source, task, runId, approvalLink = null, options = {}) {
   console.log('');
   console.log('Manual launcher prompt');
+  console.log('');
+  console.log('[한눈에]');
+  console.log(`이번 작업이 끝나면: ${humanTaskOutcome(task)}`);
+  console.log('문제가 생기면: 완료로 처리하지 말고 확인한 원인과 필요한 도움을 보고합니다.');
+  console.log('');
+  console.log('[세부 계약]');
   console.log('---');
   console.log(`Implement Plan2Agent task ${task.id} for run ${runId}.`);
   if (approvalLink?.approval) {
@@ -1191,7 +1221,7 @@ function printFinalVisualReviewInstructions(args, source, task, runId, workspace
   console.log('');
   console.log('Plan2Agent final visual review');
   console.log(`- iteration: ${source.iterationId}`);
-  console.log(`- remediation owner: ${task.id} - ${task.title}`);
+  console.log(`- remediation owner: ${task.id} - ${humanTaskOutcome(task)}`);
   console.log(`- runId: ${runId}`);
   console.log(`- workspace: ${displayPath(workspacePath)}`);
   console.log('- isolation: none');
@@ -1207,7 +1237,7 @@ function printFinalAcceptanceReviewInstructions(source, task, runId, workspacePa
   console.log('');
   console.log('Plan2Agent final functional acceptance review');
   console.log(`- iteration: ${source.iterationId}`);
-  console.log(`- remediation owner: ${task.id} - ${task.title}`);
+  console.log(`- remediation owner: ${task.id} - ${humanTaskOutcome(task)}`);
   console.log(`- runId: ${runId}`);
   console.log(`- workspace: ${displayPath(workspacePath)}`);
   console.log('- isolation: none');
@@ -1401,9 +1431,11 @@ function runPrepare(args) {
       ...spec.product.core_flows,
       ...spec.product.success_criteria,
     ]);
+    const taskTitle = `Deliver approved ${lockedState.activeIteration} objective`;
     const task = {
       id: 'task-001',
-      title: `Deliver approved ${lockedState.activeIteration} objective`,
+      title: taskTitle,
+      intent: approvedSpecTaskIntent(spec, taskTitle),
       description: spec.product.problem,
       status: 'todo',
       dependencies: [],
@@ -1654,7 +1686,7 @@ function runResume(args) {
   if (run.status === 'started') assertRunExecutionContractCurrent(run, source, 'resume');
   console.log('Plan2Agent execution resume');
   console.log(`- project: ${source.projectId}`);
-  console.log(`- task: ${task.id} - ${task.title}`);
+  console.log(`- task: ${task.id} - ${humanTaskOutcome(task)}`);
   console.log(`- taskStatus: ${task.status}`);
   console.log(`- runId: ${run.runId}`);
   console.log(`- runStatus: ${run.status}`);
@@ -1718,7 +1750,7 @@ function runStatus(args) {
     console.log(`- patchDraft: ${approvalLink.approval.draftId}`);
   }
   if (task) {
-    console.log(`- task: ${task.id} - ${task.title}`);
+    console.log(`- task: ${task.id} - ${humanTaskOutcome(task)}`);
     console.log(`- taskStatus: ${task.status}`);
     if (task.blockReason) console.log(`- blockReason: ${task.blockReason}`);
   }

@@ -325,33 +325,186 @@ function runInfo(argv) {
   }
 }
 
-function printNextOption(option) {
-  console.log(`  - ${option.label} (${option.id})`);
-  console.log(`    ${option.description}`);
-  if (option.action?.display) console.log(`    Action: ${option.action.display}`);
+function renderNextOptionLines(option) {
+  const lines = [
+    `  - ${option.label} (${option.id})`,
+    `    ${option.description}`,
+  ];
+  if (option.action?.display) lines.push(`    Action: ${option.action.display}`);
   if (typeof option.action?.requiresApproval === 'boolean') {
-    console.log(`    Approval required: ${option.action.requiresApproval ? 'yes' : 'no'}`);
+    lines.push(`    Approval required: ${option.action.requiresApproval ? 'yes' : 'no'}`);
   }
   if (option.action?.remediation?.display) {
-    console.log(`    Remediation: ${option.action.remediation.display}`);
+    lines.push(`    Remediation: ${option.action.remediation.display}`);
     if (typeof option.action.remediation.requiresApproval === 'boolean') {
-      console.log(`    Remediation approval required: ${option.action.remediation.requiresApproval ? 'yes' : 'no'}`);
+      lines.push(`    Remediation approval required: ${option.action.remediation.requiresApproval ? 'yes' : 'no'}`);
     }
+  }
+  return lines;
+}
+
+function nextCommandArg(next, option) {
+  const argv = Array.isArray(next.command?.argv) ? next.command.argv : [];
+  const index = argv.indexOf(option);
+  return index >= 0 ? argv[index + 1] ?? null : null;
+}
+
+function humanNextArtifactContext(next) {
+  if (!next.projectId) return {};
+  const artifactRoot = path.join(
+    next.target,
+    '.plan2agent',
+    'artifacts',
+    next.projectId,
+  );
+  const currentSpec = readJsonObject(path.join(artifactRoot, 'current-spec.json'));
+  const activeIteration = stringValue(currentSpec?.active_iteration);
+  const gateRoot = activeIteration
+    ? path.join(artifactRoot, 'iterations', activeIteration)
+    : artifactRoot;
+  const intake = readJsonObject(path.join(gateRoot, 'gate-a-intake', 'intake.json'));
+  const spec = readJsonObject(path.join(gateRoot, 'gate-b-spec', 'spec.json'));
+  const runId = nextCommandArg(next, '--run-id');
+  const runIndex = readJsonObject(path.join(artifactRoot, 'runs', 'run-index.json'));
+  const runEntry = Array.isArray(runIndex?.runs)
+    ? runIndex.runs.find((entry) => entry?.runId === runId)
+    : null;
+  const maintenance = Array.isArray(next.command?.argv)
+    && (
+      next.command.argv.includes('--maintenance')
+      || runEntry?.sourceLayout === 'maintenance'
+      || runEntry?.iterationId === 'maintenance'
+    );
+  const taskGraphPath = maintenance
+    ? path.join(artifactRoot, 'iterations', 'maintenance', 'gate-c-task-graph', 'task-graph.json')
+    : path.join(gateRoot, 'gate-c-task-graph', 'task-graph.json');
+  const taskGraph = readJsonObject(taskGraphPath);
+  const positionalTaskId = Array.isArray(next.command?.argv)
+    ? next.command.argv.findLast((value) => /^task-[0-9]+$/u.test(value))
+    : null;
+  const taskId = nextCommandArg(next, '--task') ?? positionalTaskId ?? runEntry?.taskId ?? null;
+  const task = Array.isArray(taskGraph?.tasks)
+    ? taskGraph.tasks.find((candidate) => candidate?.id === taskId)
+    : null;
+  return {
+    artifactRoot,
+    intake,
+    spec,
+    task,
+  };
+}
+
+function normalizedSentence(value) {
+  return stringValue(value)?.replace(/\s+/gu, ' ').trim() ?? null;
+}
+
+function humanNextSummary(next, context) {
+  const intakeSummary = normalizedSentence(context.intake?.summary)
+    ?? normalizedSentence(context.intake?.idea);
+  const problem = normalizedSentence(context.spec?.product?.problem);
+  const goal = Array.isArray(context.spec?.product?.goals)
+    ? normalizedSentence(context.spec.product.goals[0])
+    : null;
+  const taskIntent = normalizedSentence(context.task?.intent)
+    ?? normalizedSentence(context.task?.title);
+  switch (next.state) {
+    case 'gate_what':
+      return [
+        '지금 결정하는 것: 요청한 결과와 포함·제외 범위를 이렇게 이해한 것이 맞는지 확인합니다.',
+        '맞으면 → 확인한 범위를 기록합니다.',
+        '다르면 → 잘못 이해한 부분을 고친 뒤 다시 확인합니다.',
+      ];
+    case 'gate_a_needs_approval':
+      return [
+        `지금 결정하는 것: ${intakeSummary ?? '무엇을 만들고 어디까지 포함할지 정한 범위입니다.'}`,
+        '승인하면 → 이 범위로 개발 계획을 작성합니다.',
+        '거부하면 → 범위를 수정한 뒤 다시 확인합니다.',
+      ];
+    case 'shape':
+      return [
+        `지금 결정하는 것: ${next.projectId ?? '이 프로젝트'}에서 개발하는 동안 계속 지킬 공통 원칙입니다.`,
+        '승인하면 → 이 원칙을 기준으로 개발 계획을 구체화합니다.',
+        '거부하면 → 원칙을 수정한 뒤 다시 확인합니다.',
+      ];
+    case 'gate_b_needs_approval':
+      return [
+        `지금 결정하는 것: ${[problem, goal].filter(Boolean).join(' ') || '무엇을 만들고 완료 여부를 어떻게 확인할지 정한 개발 계획입니다.'}`,
+        '승인하면 → 이 계획 안에서 구현과 검증을 시작합니다.',
+        '거부하면 → 계획을 수정한 뒤 다시 확인합니다.',
+      ];
+    case 'iteration_review_or_close_required':
+      return [
+        '개발이 끝났습니다. 결과를 한 번 더 살펴볼지, 현재 작업 묶음을 완료 처리할지 선택합니다.',
+        '검토를 선택하면 → 문제가 있으면 수정하고, 없으면 다시 완료 여부를 묻습니다.',
+        '완료를 선택하면 → 현재 작업 묶음을 닫습니다.',
+      ];
+    case 'ready_task_available':
+      return [
+        `다음에 할 일: ${taskIntent ?? '승인된 계획에서 다음 작업을 시작합니다.'}`,
+        '실행하면 → 이 결과를 만들고 확인 절차까지 이어갑니다.',
+      ];
+    case 'run_started':
+      return [
+        `진행 중인 일: ${taskIntent ?? '이미 시작한 작업을 이어서 완료합니다.'}`,
+        '이어가면 → 남은 구현과 확인 절차를 계속합니다.',
+      ];
+    case 'tasks_blocked':
+      return [
+        `멈춘 일: ${taskIntent ?? '진행을 막는 원인을 확인해야 합니다.'}`,
+        '원인을 해결하면 → 같은 작업을 다시 시작할 수 있습니다.',
+      ];
+    case 'final_visual_review_required':
+      return [
+        '화면이 약속한 모습과 동작을 갖췄는지 마지막으로 확인합니다.',
+        '문제가 없으면 → 완료 여부를 선택하는 단계로 이동합니다.',
+        '문제가 있으면 → 관련 작업을 다시 열어 수정합니다.',
+      ];
+    case 'final_acceptance_review_required':
+      return [
+        '사용자가 기대한 동작이 실제로 작동하는지 마지막으로 확인합니다.',
+        '문제가 없으면 → 완료 여부를 선택하는 단계로 이동합니다.',
+        '문제가 있으면 → 관련 작업을 다시 열어 수정합니다.',
+      ];
+    default:
+      return ['다음 단계로 진행하려면 아래 안내를 따르세요.'];
   }
 }
 
-function printNext(next) {
-  console.log('Plan2Agent next');
-  console.log(`- target: ${next.target}`);
-  if (next.projectId) console.log(`- projectId: ${next.projectId}`);
-  console.log(`- state: ${next.state}`);
-  console.log('Next action:');
-  console.log(`  ${next.command.display}`);
+function humanCommandDisplay(next) {
+  const display = next.command?.display ?? '';
+  if (next.command?.kind !== 'approval') return display;
+  const commandStart = display.indexOf('p2a ');
+  const command = commandStart >= 0
+    ? display.slice(commandStart).replace(/\.$/u, '')
+    : display;
+  return command.replace(
+    /<user utterance>|<user-utterance>/gu,
+    '<사용자가 실제로 승인한 문장>',
+  );
+}
+
+export function renderNextHuman(next, context = humanNextArtifactContext(next)) {
+  const lines = [
+    'Plan2Agent next',
+    '',
+    '[한눈에]',
+    ...humanNextSummary(next, context),
+    '',
+    '[실행 명령]',
+    `  ${humanCommandDisplay(next)}`,
+  ];
   if (Array.isArray(next.command.options) && next.command.options.length) {
-    console.log('Options:');
-    next.command.options.forEach(printNextOption);
+    lines.push('Options:');
+    for (const option of next.command.options) lines.push(...renderNextOptionLines(option));
   }
-  console.log(`Reason: ${next.reason}`);
+  lines.push('', '[세부 계약]', `- target: ${next.target}`);
+  if (next.projectId) lines.push(`- projectId: ${next.projectId}`);
+  lines.push(`- state: ${next.state}`, `- reason: ${next.reason}`);
+  return `${lines.join('\n')}\n`;
+}
+
+function printNext(next) {
+  process.stdout.write(renderNextHuman(next));
 }
 
 function runNext(argv) {

@@ -144,10 +144,15 @@ test('direct execution prepares one synthetic work item and records its strategy
     assert.equal(graph.execution.mode, 'direct');
     assert.equal(graph.execution.syntheticWorkItem, true);
     assert.equal(graph.tasks.length, 1);
+    assert.equal(
+      graph.tasks[0].intent,
+      'Users can rely on this approved outcome: Expose one HTTP endpoint for partner webhook ingestion.',
+    );
 
     const prompt = runTasks(['prompt', '--graph', fixture.graphPath, 'task-001']);
     assert.equal(prompt.status, 0, `${prompt.stdout}\n${prompt.stderr}`);
     assert.match(prompt.stdout, /Approved execution envelope:/);
+    assert.match(prompt.stdout, /Intent: Users can rely on this approved outcome: Expose one HTTP endpoint/u);
     assert.doesNotMatch(prompt.stdout, /Acceptance criteria:/);
     assert.doesNotMatch(prompt.stdout, /Task description:/);
     assert.doesNotMatch(prompt.stdout, /Referenced spec context:/);
@@ -163,6 +168,10 @@ test('direct execution prepares one synthetic work item and records its strategy
     ]);
     assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
     assert.match(result.stdout, /executionMode: direct/);
+    assert.match(result.stdout, /\[한눈에\]/u);
+    assert.match(result.stdout, /이번 작업이 끝나면: Users can rely on this approved outcome: Expose one HTTP endpoint/u);
+    assert.ok(result.stdout.indexOf('[한눈에]') < result.stdout.indexOf('- project:'));
+    assert.ok(result.stdout.indexOf('[실행 명령]') < result.stdout.indexOf('[세부 계약]'));
 
     result = runRuns([
       'verify',

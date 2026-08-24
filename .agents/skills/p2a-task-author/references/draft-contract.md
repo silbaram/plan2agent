@@ -18,7 +18,7 @@ iterations/<active_iteration>/gate-c-task-graph/task-graph.draft.json
 
 The draft conforms to `p2a.task_graph.v1` and contains the exact project id, `<active_iteration>-draft` version, `../gate-b-spec/spec.json` source, and `tasks[]`.
 
-Each task includes sequential `task-NNN` id, title, description, `todo` status, same-graph dependencies, concrete acceptance criteria, target area, a short outcome-focused agent prompt, and at least one real `sourceSpecRefs` field. Do not restate the full implementation recipe in the agent prompt.
+Each newly authored task includes sequential `task-NNN` id, title, a one-sentence `intent`, description, `todo` status, same-graph dependencies, concrete acceptance criteria, target area, a short outcome-focused agent prompt, and at least one real `sourceSpecRefs` field. Write `intent` last, after the precise contract is complete, in the approved product spec's primary language as “who can do what when this task is done.” It is explanatory only: acceptance and completion always use `acceptanceCriteria`. Do not restate the full implementation recipe in the agent prompt.
 
 For `full + current_iteration`, every task declares `workKind`. UI/mixed tasks include only lightweight `visualImpact.screenStates`; non-UI tasks omit it. Impact routes remediation and does not own final review cases.
 

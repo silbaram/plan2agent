@@ -182,16 +182,52 @@ function inspect(targetInput) {
   }
 }
 
+export function renderShapeHuman(result) {
+  const lines = ['Plan2Agent shape', '', '[한눈에]'];
+  if (result.state === 'draft' || result.state === 'revoked') {
+    lines.push(
+      `지금 결정하는 것: ${result.projectId ?? '이 프로젝트'}에서 개발하는 동안 계속 지킬 공통 원칙입니다.`,
+      '승인하면 → 이 원칙을 기준으로 개발 계획을 구체화합니다.',
+      '거부하면 → 원칙을 수정한 뒤 다시 확인합니다.',
+      '',
+      '[실행 명령]',
+      '  p2a shape approve --quote "<사용자가 실제로 승인한 문장>"',
+    );
+  } else if (result.state === 'approved') {
+    lines.push(
+      '프로젝트의 공통 개발 원칙이 승인되어 있습니다.',
+      '현재 범위가 이 원칙을 바꾸지 않는다면 다시 승인할 필요가 없습니다.',
+      '',
+      '[실행 명령]',
+      `  ${result.next}`,
+    );
+  } else {
+    lines.push(
+      '프로젝트의 공통 개발 원칙을 준비하거나 복구해야 합니다.',
+      '',
+      '[실행 명령]',
+      `  ${result.next}`,
+    );
+  }
+  lines.push(
+    '',
+    '[세부 계약]',
+    `- target: ${result.target}`,
+    `- state: ${result.state}`,
+    `- constitution: ${result.constitution}`,
+  );
+  if (result.projectId) lines.push(`- projectId: ${result.projectId}`);
+  lines.push(
+    `- rules: architecture=${result.counts.architecture} stack=${result.counts.stack} prohibitions=${result.counts.prohibitions}`,
+    `- legacy style.md: ${result.legacyStyle ? 'present' : 'absent'}`,
+  );
+  if (result.error) lines.push(`- error: ${result.error}`);
+  lines.push(`- next: ${result.next}`);
+  return `${lines.join('\n')}\n`;
+}
+
 function printStatus(result) {
-  console.log('Plan2Agent shape');
-  console.log(`- target: ${result.target}`);
-  console.log(`- state: ${result.state}`);
-  console.log(`- constitution: ${result.constitution}`);
-  if (result.projectId) console.log(`- projectId: ${result.projectId}`);
-  console.log(`- rules: architecture=${result.counts.architecture} stack=${result.counts.stack} prohibitions=${result.counts.prohibitions}`);
-  console.log(`- legacy style.md: ${result.legacyStyle ? 'present' : 'absent'}`);
-  if (result.error) console.log(`- error: ${result.error}`);
-  console.log(`Next: ${result.next}`);
+  process.stdout.write(renderShapeHuman(result));
 }
 
 function approve(args) {
