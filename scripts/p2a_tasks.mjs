@@ -185,6 +185,12 @@ function isReady(task, tasksById) {
   return task.status === 'todo' && task.dependencies.every((dependency) => tasksById.get(dependency)?.status === 'done');
 }
 
+function humanTaskSummary(task) {
+  return typeof task.intent === 'string' && task.intent.trim()
+    ? task.intent.trim()
+    : task.title;
+}
+
 function requireTask(graph, taskId) {
   if (!taskId) throw new Error('task-id is required for this command');
   const task = taskMap(graph).get(taskId);
@@ -193,9 +199,9 @@ function requireTask(graph, taskId) {
 }
 
 function printTaskTable(tasks, tasksById) {
-  console.log('id\ttitle\tstatus\tdependencies\tready');
+  console.log('id\tintent\tstatus\tdependencies\tready');
   for (const task of tasks) {
-    console.log(`${task.id}\t${task.title}\t${task.status}\t${task.dependencies.join(',') || '-'}\t${isReady(task, tasksById) ? 'yes' : 'no'}`);
+    console.log(`${task.id}\t${humanTaskSummary(task)}\t${task.status}\t${task.dependencies.join(',') || '-'}\t${isReady(task, tasksById) ? 'yes' : 'no'}`);
   }
 }
 
@@ -238,7 +244,7 @@ function maintenanceSourceLabel(task) {
 }
 
 function printMaintenanceTaskTable(tasks, tasksById) {
-  console.log('id\tstatus\tready\ttarget\tsource\ttitle');
+  console.log('id\tstatus\tready\ttarget\tsource\tintent');
   for (const task of tasks) {
     console.log([
       task.id,
@@ -246,7 +252,7 @@ function printMaintenanceTaskTable(tasks, tasksById) {
       isReady(task, tasksById) ? 'yes' : 'no',
       maintenanceTargetLabel(task),
       maintenanceSourceLabel(task),
-      task.title,
+      humanTaskSummary(task),
     ].join('\t'));
   }
 }
@@ -435,6 +441,7 @@ function printPrompt(task, graph, graphPath, specPath = null, options = {}) {
     console.log('');
     console.log('Current work item:');
   }
+  console.log(`Intent: ${humanTaskSummary(task)}`);
   console.log(task.suggestedAgentPrompt.trimEnd());
   if (!syntheticWorkItem) {
     console.log('');
@@ -1062,7 +1069,9 @@ export function main(argv = process.argv.slice(2)) {
       if (args.maintenance) printMaintenanceTaskTable(readyTasks, tasksById);
       else printTaskTable(readyTasks, tasksById);
     } else if (args.command === 'show') {
-      console.log(JSON.stringify(requireTask(graph, args.taskId), null, 2));
+      const task = requireTask(graph, args.taskId);
+      const output = task.intent ? { intent: task.intent, ...task } : task;
+      console.log(JSON.stringify(output, null, 2));
     } else if (args.command === 'prompt') {
       printPrompt(requireTask(graph, args.taskId), graph, args.graphPath, args.specPath, { maintenance: args.maintenance, args });
     } else {

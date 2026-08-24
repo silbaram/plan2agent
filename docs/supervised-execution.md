@@ -273,7 +273,7 @@ Phase 0의 일회성 task-decomposition A/B 평가는 고정 seed·prompt·verif
 
 같은 task의 latest run이 `failed` 또는 `blocked`이면 먼저 해당 로컬 run의 failure class, localization, verification evidence를 직접 확인한다. 이미 commit된 BuildLore 지식이 실제로 도움이 될 때만 같은 프로젝트를 한 번 명시적으로 검색하고, 명확히 유사한 mitigation만 적용해 조회한 source를 run note에 남긴다. 재시도를 이유로 BuildLore sync·compile·commit·push를 암묵적으로 수행하지 않으며 첫 시도에는 검색하지 않는다.
 
-`p2a execute start/status/finish`와 직접 `p2a runs start/finish` 출력 footer에는 copy-paste 가능한 `resume`, `status`, `finish`, `review` 명령이 남는다. `resume`은 `p2a execute resume --run-id <run-id>`로 같은 run의 launcher prompt를 다시 출력한다. `review`의 `p2a proposals mine --run-id <run-id>`는 회고 후보를 쓰는 별도 승인 필요 작업이며, `p2a next`가 자동 실행하지 않는다.
+`p2a execute start/status/finish`와 직접 `p2a runs start/finish` 출력 footer에는 copy-paste 가능한 `resume`, `status`, `finish`, `review` 명령이 남는다. `resume`은 `p2a execute resume --run-id <run-id>`로 같은 run의 launcher prompt를 다시 출력한다. 실행 계획과 Launcher는 사람에게 task `intent`와 실패 시 행동을 `[한눈에]`로 먼저 보여주고, 실행 명령 뒤에 정확한 envelope·acceptance·경계를 `[세부 계약]`으로 유지한다. `intent`는 task contract hash와 완료 판정에서 제외된다. `review`의 `p2a proposals mine --run-id <run-id>`는 회고 후보를 쓰는 별도 승인 필요 작업이며, `p2a next`가 자동 실행하지 않는다.
 
 ### 6.2 Historical milestone evidence
 

@@ -115,6 +115,11 @@
             "type": "string",
             "minLength": 1
           },
+          "intent": {
+            "type": "string",
+            "description": "Human-facing one-sentence outcome. It is explanatory only and never replaces acceptanceCriteria or other execution contracts.",
+            "minLength": 1
+          },
           "status": {
             "type": "string",
             "enum": [

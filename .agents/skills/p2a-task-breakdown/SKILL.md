@@ -30,6 +30,7 @@ Each task must include:
 
 - `id`
 - `title`
+- `intent` for new tasks: one plain sentence in the approved product spec's primary language stating who can do what when the task is complete
 - `description`
 - `status`
 - `dependencies`
@@ -58,5 +59,6 @@ Each task must include:
 - Inspect BuildLore-derived spec evidence before decomposition. If history materially changes a task boundary, dependency, acceptance criterion, or mitigation, cite the selected evidence and any applicable `decision:ND-n` entry in `sourceSpecRefs`, alongside at least one real product or implementation spec field.
 - Convert a relevant prior failed/blocked run into a concrete mitigation or regression acceptance criterion. Do not create work from irrelevant results, and do not block merely because BuildLore is unavailable or unconfigured.
 - Keep `suggestedAgentPrompt` short and point it to `sourceSpecRefs`; do not copy Gate B acceptance, constraints, file lists, or implementation order into it.
+- Write `intent` only after the precise task contract is complete. It is a human explanation, never acceptance evidence; `acceptanceCriteria` remains authoritative.
 - Do not include implementation code.
 - Do not edit files or run commands.

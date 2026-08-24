@@ -5983,7 +5983,7 @@ function validateIterationCurrentFixtureCases() {
       checks += 1;
       if (
         result.status !== 0
-        || !result.stdout.includes('id\tstatus\tready\ttarget\tsource\ttitle')
+        || !result.stdout.includes('id\tstatus\tready\ttarget\tsource\tintent')
         || !result.stdout.includes('task-001')
         || !result.stdout.includes('task-002')
         || !result.stdout.includes('effective_product.problem')
@@ -5997,7 +5997,7 @@ function validateIterationCurrentFixtureCases() {
       checks += 1;
       if (
         result.status !== 0
-        || !result.stdout.includes('id\tstatus\tready\ttarget\tsource\ttitle')
+        || !result.stdout.includes('id\tstatus\tready\ttarget\tsource\tintent')
         || !result.stdout.includes('task-001')
       ) {
         console.error(`p2a_tasks ready --artifacts --maintenance fixture check failed: ${caseData.id}`);
@@ -8636,7 +8636,7 @@ function validateIterationCurrentFixtureCases() {
         '`schema_version: "p2a.task_graph.v1"`',
         'map `projectId` exactly from `context.project_id`',
         '`tasks` array',
-        ...['id', 'title', 'description', 'status', 'dependencies', 'acceptanceCriteria', 'targetArea', 'suggestedAgentPrompt', 'sourceSpecRefs']
+        ...['id', 'title', 'intent', 'description', 'status', 'dependencies', 'acceptanceCriteria', 'targetArea', 'suggestedAgentPrompt', 'sourceSpecRefs']
           .map((field) => `\`${field}\``),
         '`diff-tasks --force`',
         '`promote-tasks --replace-existing`',

@@ -22,17 +22,17 @@ test('runtime context depends on the next-state service instead of the CLI entry
   assert.doesNotMatch(fixture, /from '\.\/p2a_context\.mjs'/);
 });
 
-test('provider runners consume stable evaluation modules instead of other evidence implementations', () => {
-  const codexRunner = source('plans/evidence/context-engineering/CE-009/codex/run-codex-ab.mjs');
-  const geminiRunner = source('plans/evidence/context-engineering/CE-011-gemini-runtime-routing-ab/agy/run-agy-ab.mjs');
-  const legacyFixture = source('plans/evidence/context-engineering/CE-009/codex/runtime-context-fixture.mjs');
-
-  for (const runner of [codexRunner, geminiRunner]) {
-    assert.match(runner, /scripts\/p2a_runtime_context_fixture\.mjs/);
+test('runtime modules do not depend on retired planning evidence implementations', () => {
+  const scriptsDir = path.join(ROOT, 'scripts');
+  const modules = readdirSync(scriptsDir).filter((name) => name.endsWith('.mjs'));
+  for (const name of modules) {
+    const contents = readFileSync(path.join(scriptsDir, name), 'utf8');
+    assert.doesNotMatch(
+      contents,
+      /(?:from\s+|import\s*)['"][^'"]*plans\/evidence\//,
+      `${name} must use stable runtime modules instead of retired plan evidence`,
+    );
   }
-  assert.doesNotMatch(geminiRunner, /from '\.\.\/\.\.\/CE-009\//);
-  assert.match(legacyFixture, /scripts\/p2a_runtime_context_fixture\.mjs/);
-  assert.ok(legacyFixture.split('\n').length <= 5, 'historical fixture must remain a thin compatibility module');
 });
 
 test('script module dependencies remain acyclic', () => {

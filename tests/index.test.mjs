@@ -30,6 +30,7 @@ import './validate-artifacts-compatibility.test.mjs';
 import './visual-experience.test.mjs';
 import './acceptance-review.test.mjs';
 import './adaptive-execution.test.mjs';
+import './human-presentation.test.mjs';
 import './next-decision.test.mjs';
 import './entry-contract.test.mjs';
 import './discovery-interview.test.mjs';

@@ -190,6 +190,7 @@ function usage() {
     '',
     'maintenance add options:',
     '  --title <text>        Task title. Required.',
+    '  --intent <text>       One-sentence human outcome. Defaults to the task title.',
     '  --accept <text>       Acceptance criterion. Required; repeat for multiple criteria.',
     '  --description <text>  Task description. Defaults to --title.',
     '  --area <text>         Task targetArea. Defaults to maintenance.',
@@ -219,6 +220,7 @@ function parseArgs(argv) {
     allowConflicts: false,
     action: null,
     title: null,
+    intent: null,
     description: null,
     area: 'maintenance',
     prompt: null,
@@ -304,6 +306,10 @@ function parseArgs(argv) {
       if (command !== 'maintenance' || args.action !== 'add') throw new Error('--title is only supported by maintenance add');
       args.title = argv[++index];
       if (!args.title) throw new Error('--title requires a value');
+    } else if (arg === '--intent') {
+      if (command !== 'maintenance' || args.action !== 'add') throw new Error('--intent is only supported by maintenance add');
+      args.intent = argv[++index];
+      if (!args.intent) throw new Error('--intent requires a value');
     } else if (arg === '--accept') {
       if (command !== 'maintenance' || args.action !== 'add') throw new Error('--accept is only supported by maintenance add');
       const value = argv[++index];
@@ -351,8 +357,8 @@ function parseArgs(argv) {
   if (command === 'open' && (!args.idea || args.idea.trim().length === 0)) throw new Error('--idea is required for open');
   if (command === 'maintenance' && args.action === 'add') {
     if (args.fromDraft) {
-      if (args.title || args.description || args.prompt || args.acceptanceCriteria.length || args.sourceSpecRefs.length || args.dependencies.length || args.areaProvided) {
-        throw new Error('--from-draft cannot be combined with --title, --description, --area, --prompt, --accept, --ref, or --depends');
+      if (args.title || args.intent || args.description || args.prompt || args.acceptanceCriteria.length || args.sourceSpecRefs.length || args.dependencies.length || args.areaProvided) {
+        throw new Error('--from-draft cannot be combined with --title, --intent, --description, --area, --prompt, --accept, --ref, or --depends');
       }
       if (args.yes && args.dryRun) throw new Error('--yes and --dry-run cannot be combined');
       if (!args.dryRun && !args.yes) throw new Error('maintenance add --from-draft requires --yes unless --dry-run is used');
@@ -1807,6 +1813,11 @@ function mergeFeatureRadarIntoSpec(spec, preflight) {
 
 export const EXPLICIT_INTAKE_MARKDOWN_MARKER = '<!-- plan2agent:intake-md-export=explicit -->';
 
+function renderAtAGlanceMarkdown(summary, flow) {
+  return `## [한눈에]\n\n${summary}\n\n` +
+    `\`\`\`text\n${flow}\n\`\`\``;
+}
+
 function renderIntakeDecisionMarkdown(item) {
   const options = Array.isArray(item.options) ? item.options : [];
   const recommendedOption = options.find((option) => option?.id === item.default);
@@ -1861,6 +1872,10 @@ export function renderIntakeMarkdown(intake, options = {}) {
     ? `${EXPLICIT_INTAKE_MARKDOWN_MARKER}\n\n`
     : '';
   return provenance + `# Intake\n\n` +
+    `${renderAtAGlanceMarkdown(
+      intake.summary,
+      '요청 → 범위 확인 → 개발 계획 작성',
+    )}\n\n` +
     `## Idea\n\n${intake.idea}\n\n` +
     `## Summary\n\n${intake.summary}\n\n` +
     `## Known Facts\n\n${markdownList(intake.known_facts)}\n\n` +
@@ -1893,9 +1908,16 @@ function visualExperienceMarkdown(spec) {
   ].join('\n');
 }
 
-function renderProductSpecMarkdown(spec, { iterationId, idea, baselineSpecRef, baselineSpec = null }) {
+export function renderProductSpecMarkdown(spec, { iterationId, idea, baselineSpecRef, baselineSpec = null }) {
+  const atAGlance = renderAtAGlanceMarkdown(
+    baselineSpec
+      ? `이번 변경: ${idea}`
+      : `${spec.product.problem}\n\n${spec.product.goals[0]}`,
+    '사용자 문제 → 이번에 만들 결과 → 성공 기준 확인',
+  );
   if (baselineSpec) {
     return `# Product Spec\n\n` +
+      `${atAGlance}\n\n` +
       `Project: ${spec.project_id}\n\n` +
       `Iteration: ${iterationId}\n\n` +
       `Baseline: ${baselineSpecRef}\n\n` +
@@ -1908,6 +1930,7 @@ function renderProductSpecMarkdown(spec, { iterationId, idea, baselineSpecRef, b
       `The complete backward-compatible specification remains in \`spec.json\`.\n`;
   }
   return `# Product Spec\n\n` +
+    `${atAGlance}\n\n` +
     `Project: ${spec.project_id}\n\n` +
     `Iteration: ${iterationId}\n\n` +
     `Baseline: ${baselineSpecRef}\n\n` +
@@ -1923,14 +1946,19 @@ function renderProductSpecMarkdown(spec, { iterationId, idea, baselineSpecRef, b
     `## Success Criteria\n\n${markdownList(spec.product.success_criteria)}\n`;
 }
 
-function renderImplementationPlanMarkdown(spec, {
+export function renderImplementationPlanMarkdown(spec, {
   iterationId,
   idea,
   baselineSpecRef,
   baselineSpec = null,
 }) {
+  const atAGlance = renderAtAGlanceMarkdown(
+    `이번 개발이 만드는 결과: ${idea}`,
+    '승인한 목표 → 구현 → 자동 확인 → 완료',
+  );
   if (baselineSpec) {
     return `# Implementation Plan\n\n` +
+      `${atAGlance}\n\n` +
       `Project: ${spec.project_id}\n\n` +
       `Iteration: ${iterationId}\n\n` +
       `Baseline: ${baselineSpecRef}\n\n` +
@@ -1942,6 +1970,7 @@ function renderImplementationPlanMarkdown(spec, {
       `The complete backward-compatible specification remains in \`spec.json\`.\n`;
   }
   return `# Implementation Plan\n\n` +
+    `${atAGlance}\n\n` +
     `Project: ${spec.project_id}\n\n` +
     `Iteration: ${iterationId}\n\n` +
     `Baseline: ${baselineSpecRef}\n\n` +
@@ -2543,6 +2572,36 @@ function semanticTaskTitle(group, reworkTasks) {
   return `${verb} ${group.label}`;
 }
 
+const KOREAN_SEMANTIC_AREA_LABELS = {
+  requirements: '요구사항과 사용자 결정',
+  security: '보안과 권한 처리',
+  integration: '외부 연동',
+  api: '인터페이스와 API 동작',
+  ui: '사용자 화면과 흐름',
+  data: '데이터 구조와 흐름',
+  delivery: '전달 과정과 안정성',
+  architecture: '구조와 의존성',
+  verification: '검증과 회귀 방지',
+  misc: '보조 구현',
+};
+
+function primarySpecLanguage(spec) {
+  return /[가-힣]/u.test(JSON.stringify(spec?.product ?? {})) ? 'ko' : 'en';
+}
+
+export function semanticTaskIntent(group, reworkTasks, language = 'en') {
+  if (language === 'ko') {
+    const baseLabel = KOREAN_SEMANTIC_AREA_LABELS[group.areaId] ?? KOREAN_SEMANTIC_AREA_LABELS.misc;
+    const suffix = typeof group.label === 'string' ? group.label.match(/\([^)]+\)$/u)?.[0] : null;
+    const label = suffix ? `${baseLabel} ${suffix}` : baseLabel;
+    return reworkTasks.length
+      ? `사용자는 승인된 ${label} 결과가 안전하게 갱신되었다고 믿고 사용할 수 있습니다.`
+      : `사용자는 승인된 ${label} 결과를 사용할 수 있습니다.`;
+  }
+  const verb = reworkTasks.length ? 'updated safely' : 'available';
+  return `Users can rely on the approved ${group.label.toLowerCase()} outcome being ${verb}.`;
+}
+
 function semanticTaskDescription(group, baselineRef, reworkTasks, reusableTask) {
   const baselineLabel = baselineRef ? `baseline ${baselineRef}` : 'no prior baseline';
   const lines = [
@@ -2596,11 +2655,12 @@ function semanticTaskPrompt({ projectId, iterationId, group, reworkTasks }) {
   ].join('\n');
 }
 
-function buildSemanticTask({ projectId, iterationId, group, taskId, status, dependencies, baselineRef, historicalTasks, reusableTask }) {
+function buildSemanticTask({ projectId, iterationId, group, taskId, status, dependencies, baselineRef, historicalTasks, reusableTask, intentLanguage }) {
   const reworkTasks = matchingCompletedTasks(group, historicalTasks);
   return {
     id: taskId,
     title: semanticTaskTitle(group, reworkTasks),
+    intent: semanticTaskIntent(group, reworkTasks, intentLanguage),
     description: semanticTaskDescription(group, baselineRef, reworkTasks, reusableTask),
     status,
     dependencies,
@@ -2633,7 +2693,7 @@ function addSyntheticVerificationGroup(groups) {
   ];
 }
 
-function semanticTasksFromGroups({ projectId, iterationId, groups, baselineRef, existingTaskGraph, historicalTasks }) {
+function semanticTasksFromGroups({ projectId, iterationId, groups, baselineRef, existingTaskGraph, historicalTasks, intentLanguage }) {
   const existingTasks = existingTaskGraph?.tasks ?? [];
   const nextTaskId = nextTaskIdAllocator(existingTasks);
   const usedTaskIds = new Set();
@@ -2675,6 +2735,7 @@ function semanticTasksFromGroups({ projectId, iterationId, groups, baselineRef, 
       baselineRef,
       historicalTasks,
       reusableTask: slot.reusableTask,
+      intentLanguage,
     });
   });
 }
@@ -2738,6 +2799,7 @@ export function taskGraphFromSpecChanges({ projectId, iterationId, activeSpec, b
     baselineRef,
     existingTaskGraph,
     historicalTasks,
+    intentLanguage: primarySpecLanguage(activeSpec),
   }), visualContract);
   return {
     schema_version: 'p2a.task_graph.v1',
@@ -3468,6 +3530,7 @@ function summarizeTask(task) {
   return {
     id: task.id,
     title: task.title,
+    ...(task.intent ? { intent: task.intent } : {}),
     status: task.status,
     targetArea: task.targetArea,
     ...(task.workKind ? { workKind: task.workKind } : {}),
@@ -3707,6 +3770,7 @@ function normalizeMaintenanceDraftTask(task, index, state) {
     throw new Error(`draft task ${index + 1} must be an object`);
   }
   const title = nonBlankString(task.title, `draft task ${index + 1}.title`);
+  const intent = optionalNonBlankString(task.intent, `draft task ${index + 1}.intent`) ?? title;
   const targetArea = optionalNonBlankString(task.targetArea ?? task.area, `draft task ${index + 1}.targetArea`) ?? 'maintenance';
   const description = optionalNonBlankString(task.description, `draft task ${index + 1}.description`) ?? title;
   const suggestedAgentPrompt = optionalNonBlankString(
@@ -3716,6 +3780,7 @@ function normalizeMaintenanceDraftTask(task, index, state) {
   return {
     aliases: maintenanceDraftTaskAliases(task, index),
     title,
+    intent,
     description,
     status: 'todo',
     dependencies: nonBlankStringArray(task.dependencies ?? task.depends, `draft task ${index + 1}.dependencies`),
@@ -3791,6 +3856,7 @@ function applyMaintenanceTasksFromDraft(args, state, draftPath, draft, graphPath
     const plannedTask = {
       id: taskId,
       title: task.title,
+      intent: task.intent,
       description: task.description,
       status: task.status,
       dependencies: task.dependencies,
@@ -3869,6 +3935,7 @@ function addMaintenanceTask(args) {
     const task = {
       id: nextMaintenanceTaskId(graph.tasks ?? []),
       title: args.title,
+      intent: args.intent ?? args.title,
       description: args.description ?? args.title,
       status: 'todo',
       dependencies: args.dependencies,

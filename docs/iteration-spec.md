@@ -205,7 +205,7 @@ Historical artifact는 계속 `p2a.milestone_review.v1` schema로 검증되며 �
 | Gate A-C | 반복마다 기존 intake/spec/task 게이트 한 벌을 재사용한다. |
 | task graph schema | `p2a` package schema `task-graph.schema.json`을 그대로 사용한다. |
 | artifact validator | `p2a validate`를 반복 내부 gate 검증에 재사용한다. |
-| task graph/task 필드 | top-level `version`과 task별 `status`, `targetArea`, `sourceSpecRefs`를 반복 개발의 versioning, 상태, 영역 태그, spec trace에 사용한다. |
+| task graph/task 필드 | top-level `version`과 task별 `status`, `targetArea`, `sourceSpecRefs`를 반복 개발의 versioning, 상태, 영역 태그, spec trace에 사용한다. 새 task는 사람용 한 문장 `intent`를 추가하지만 기존 graph에서는 선택 필드이며 완료 판정에 사용하지 않는다. |
 | source git | 제품 소스코드 기준점을 남긴다. 선별된 P2A 반복·실행 지식은 BuildLore의 별도 knowledge Git 저장소에 보존한다. |
 | `p2a handoff` | 활성 반복 산출물과 `current-spec.json`을 대상 프로젝트로 다시 동기화하는 흐름에 재사용한다. |
 
@@ -384,10 +384,11 @@ p2a iteration diff-tasks \
 p2a iteration maintenance add \
   --artifacts .plan2agent/artifacts/<project_id> \
   --title "Fix typo" \
+  --intent "Readers can understand the corrected documentation." \
   --accept "Typo is fixed"
 ```
 
-`maintenance add`는 `resolveIterationState(..., requireReady: false)` 기준으로 iterative root와 project id만 확인한다. 생성되는 graph는 기존 `p2a.task_graph.v1` 스키마를 그대로 사용하며 `version: "maintenance"`, `sourceSpec: "../../../current-spec.json"`를 기록한다. `--ref`가 없으면 `sourceSpecRefs`는 `["maintenance"]`이고, `--ref effective_product.problem`처럼 현재 baseline의 추적 위치를 free string으로 지정할 수 있다. `--depends`는 같은 maintenance graph 안의 기존 task id만 허용되며, 쓰기 전 `validateTaskGraphData`로 schema, 중복 id, dependency, cycle을 재검증한다.
+`maintenance add`는 `resolveIterationState(..., requireReady: false)` 기준으로 iterative root와 project id만 확인한다. 생성되는 graph는 기존 `p2a.task_graph.v1` 스키마를 그대로 사용하며 `version: "maintenance"`, `sourceSpec: "../../../current-spec.json"`를 기록한다. `--intent`는 사람에게 먼저 보여줄 한 문장 결과이며 생략하면 title을 사용한다. `--ref`가 없으면 `sourceSpecRefs`는 `["maintenance"]`이고, `--ref effective_product.problem`처럼 현재 baseline의 추적 위치를 free string으로 지정할 수 있다. `--depends`는 같은 maintenance graph 안의 기존 task id만 허용되며, 쓰기 전 `validateTaskGraphData`로 schema, 중복 id, dependency, cycle을 재검증한다.
 
 ```bash
 p2a iteration compose \

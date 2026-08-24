@@ -73,7 +73,7 @@ function canonicalJson(value) {
 }
 
 export function immutableTaskContract(task) {
-  const { status, blockReason, blockNote, ...contract } = task;
+  const { status, blockReason, blockNote, intent, ...contract } = task;
   return contract;
 }
 
