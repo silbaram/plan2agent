@@ -154,30 +154,31 @@ merely because a proposal exists. With the default `active_only` retention, run 
 the next iteration or starting the next maintenance task; use `persistent` for deliberate long-term
 local comparisons.
 
-### 5. Recall optional long-term context
+### 5. Keep optional long-term knowledge with BuildLore
 
-[Plan2Agent Memory](https://github.com/silbaram/plan2agent-memory) is an optional store and search
-backend for artifacts, history, and lineage. Local `.plan2agent/` files remain canonical when Memory
-is unavailable or not configured.
+[BuildLore](https://github.com/silbaram/buildlore) is a local-first, Git-backed knowledge tool.
+Plan2Agent artifacts remain the local execution source of truth.
 
-Use `p2a memory push --artifacts <artifact-root> --profile planning-docs --dry-run` to preview a
-focused sync of approved Gate A/B planning Markdown. The profile selects canonical `product-spec.md`
-and `implementation-plan.md`, plus `intake.md` when Gate A is complete, from the current functional
-iteration and only the archived iterations recorded in `current-spec.json.closed_iterations`.
-Pending or unrecorded iterations, maintenance, task/run/review evidence, generated indexes, Memory
-recall files, local chunk files, copies, and symlinks are excluded with stable reasons. The preview
-validates canonical JSON, reports exact content/provenance hashes, the estimated snapshot count,
-server strategy `paragraph-2000`, and zero client `DOCUMENT_CHUNK` writes, and never contacts
-Memory. It does not generate local chunk content, hashes, or IDs.
-Actual remote writes still require `--yes`.
+After attaching a BuildLore `knowledge/` repository and registering the same project ID, enable the
+adapter and preview projection from `.plan2agent/artifacts/<project-id>/`:
 
-Local chunk files are never planning source artifacts. On an approved planning-docs push, each
-snapshot request opts in with `chunking: { "strategy": "paragraph-2000" }`; the Memory server owns
-chunk generation, persistence, and embedding-job enqueue. The CLI validates the response strategy
-and positive integer `chunkCount`, fails closed when acknowledgment is missing or invalid, reports
-`chunks=0` plus the `serverGeneratedChunks` total, and never falls back to
-`/document-chunks/bulk`. Pushes without `--profile planning-docs` keep their existing client chunk
-and bulk transport behavior.
+```bash
+p2a enhance buildlore
+p2a buildlore status
+p2a buildlore sync --dry-run
+p2a buildlore sync
+```
+
+BuildLore selects supported approved planning and execution evidence, sanitizes it, and writes
+reviewable knowledge sources. Retrieval is explicit and project-scoped:
+
+```bash
+p2a buildlore search --query "authentication decision" --mode lexical
+p2a buildlore context --prompt "Prepare the next implementation plan"
+```
+
+Synchronization does not commit or push knowledge. BuildLore publication remains a separate,
+reviewable Git workflow.
 
 ## CLI at a glance
 
@@ -194,15 +195,15 @@ Plan2Agent installs one `p2a` entrypoint:
 | `p2a doctor` | Diagnose configuration, assets, and local drift. |
 | `p2a update` | Apply project-managed assets pinned to the manifest package version. |
 | `p2a upgrade` | Preview or apply an npm-global package upgrade, then update the current project. |
-| `p2a enhance` | Enable optional capabilities such as Memory and proposals. |
-| `p2a validate` | Validate planning, task, run, eval, proposal, and Memory artifacts. |
+| `p2a enhance` | Enable optional capabilities such as BuildLore and proposals. |
+| `p2a validate` | Validate planning, task, run, eval, and proposal artifacts. |
 | `p2a iteration` | Manage iteration initialization, close/open cycles, diffs, and maintenance. |
 | `p2a tasks` | Inspect and transition task state. |
 | `p2a runs` | Record, verify, finish, and inspect run evidence. |
 | `p2a execute` | Supervise implementation and canonical final visual-review runs through verified finish. |
 | `p2a eval` | Grade, compare, analyze, generate, and summarize execution evidence. |
 | `p2a proposals` | Mine, review, curate, approve, and summarize improvement proposals. |
-| `p2a memory` | Check, synchronize, search, and inspect optional Memory data. |
+| `p2a buildlore` | Project, check, search, and retrieve optional BuildLore knowledge. |
 
 Run `p2a --help` for the top-level command surface and use the
 [CLI Reference](docs/cli-reference.md) for detailed options and examples.
@@ -246,7 +247,7 @@ services.
 
 | Project | Purpose |
 | --- | --- |
-| [plan2agent-memory](https://github.com/silbaram/plan2agent-memory) | Optional artifact history, search, hash comparison, and lineage service. |
+| [BuildLore](https://github.com/silbaram/buildlore) | Optional local-first, Git-backed projection and retrieval of Plan2Agent knowledge. |
 | [plan2agent-feature-radar](https://github.com/silbaram/plan2agent-feature-radar) | Optional research workflow that exports evidence for planning without selecting requirements automatically. |
 
 ## Documentation
@@ -286,7 +287,7 @@ The runtime is Node.js ESM and uses the Node.js standard library. Repository str
 docs/          user guides and implementation references
 fixtures/      golden and negative fixtures
 schemas/       JSON schemas for Plan2Agent artifacts
-scripts/       toolkit, validation, runtime, eval, proposal, and Memory CLIs
+scripts/       toolkit, validation, runtime, eval, proposal, and BuildLore adapter CLIs
 ```
 
 ## Project status
@@ -295,7 +296,7 @@ Plan2Agent is under active development. Version `0.3.0` adds adaptive Direct, Pl
 Orchestrated execution, with Gate-derived execution envelopes and compatibility-preserving legacy
 orchestration. Detailed task graphs are now created only for Orchestrated work that benefits from
 dependency or ownership boundaries. The local-first planning, supervised execution, evaluation,
-proposal, and optional Memory workflows remain available. Autonomous provider execution and
+proposal, and optional BuildLore workflows remain available. Autonomous provider execution and
 unapproved remote side effects remain outside the default safety model.
 
 Plan2Agent is available under the [MIT License](LICENSE).

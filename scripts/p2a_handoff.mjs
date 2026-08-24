@@ -106,7 +106,7 @@ const VALID_TOOL_TARGETS = new Set(TOOL_TARGET_ORDER);
 const CODEX_AGENT_PROFILE_ORDER = ['quality', 'inherit'];
 const VALID_CODEX_AGENT_PROFILES = new Set(CODEX_AGENT_PROFILE_ORDER);
 const DEFAULT_CODEX_AGENT_PROFILE = 'quality';
-const ENHANCEMENT_ORDER = ['dev-skills', 'memory', 'orchestration', 'proposals'];
+const ENHANCEMENT_ORDER = ['dev-skills', 'buildlore', 'orchestration', 'proposals'];
 const VALID_ENHANCEMENTS = new Set(ENHANCEMENT_ORDER);
 const MILESTONE_REVIEW_CHECKPOINTS = ['midpoint', 'pre_close'];
 const ARTIFACT_TARGET_BASE = P2A_ARTIFACTS_DIR;
@@ -163,7 +163,7 @@ function usage() {
     'Options:',
     'Initialization:',
     '  init                 Initialize project state and selected AI tool assets. Runtime scripts and schemas stay in the installed package.',
-    '  enhance <capability> Install or refresh one capability: dev-skills, memory, orchestration, proposals.',
+    '  enhance <capability> Install or refresh one capability: dev-skills, buildlore, orchestration, proposals.',
     '  update               Preview or apply scaffolded harness updates.',
     '  upgrade              Preview or apply scaffolded harness file updates.',
     '  --target <path>      Project directory to initialize or update. Defaults to the current directory through p2a.',
@@ -2432,7 +2432,7 @@ function inheritedCodexAgentContent(sourcePath) {
     .replace(/^model_reasoning_effort\s*=.*\n/m, '');
 }
 
-const P2A_SUBCOMMAND_PATTERN = /\bp2a (?=(?:context|decide|decisions|doctor|enhance|eval|execute|handoff|info|init|iteration|memory|next|proposal|proposals|run|runs|scaffold|shape|task|tasks|update|upgrade|validate)\b)/g;
+const P2A_SUBCOMMAND_PATTERN = /\bp2a (?=(?:buildlore|context|decide|decisions|doctor|enhance|eval|execute|handoff|info|init|iteration|next|proposal|proposals|run|runs|scaffold|shape|task|tasks|update|upgrade|validate)\b)/g;
 
 function legacyRuntimeCommandContent(source) {
   return source.replace(
@@ -3007,7 +3007,7 @@ function targetTaskGraphPath(projectId) {
 function renderProjectGitignore() {
   return `# Plan2Agent local harness state and artifacts
 # Planning artifacts, run logs, proposals, and generated harness files are local state.
-# Persist them through Plan2Agent Memory instead of committing them with application source.
+# Project selected knowledge through BuildLore instead of committing harness state with application source.
 .plan2agent/
 
 # Dependencies / build outputs
@@ -3037,7 +3037,7 @@ function renderPlan2AgentGitignoreBlock(missingLines, claudeLocalMissing) {
   const lines = [
     '# Plan2Agent local harness state and artifacts',
     '# Planning artifacts, run logs, proposals, and generated harness files are local state.',
-    '# Persist them through Plan2Agent Memory instead of committing them with application source.',
+    '# Project selected knowledge through BuildLore instead of committing harness state with application source.',
     ...missingLines,
   ];
   if (claudeLocalMissing) {
@@ -3174,7 +3174,7 @@ The project constitution remains at \`.plan2agent/constitution.json\`. Planning 
 
 The generated \`.plan2agent/\` directory is local harness state and is ignored by git.
 Keep application/source commits focused on product code, and persist P2A planning and run
-history through Plan2Agent Memory or an explicit export when needed.
+knowledge through BuildLore's separate Git-backed knowledge repository when needed.
 `;
 }
 
@@ -3820,6 +3820,7 @@ function pruneResolvedAiToolGroups(groups, resolvedRetiredPaths) {
 
 function mergeUpgradeManifest(existingManifest, report, appliedAt, appliedFiles, migrationIds) {
   const plannedManifest = plannedManifestData(report) ?? {};
+  const migratedManifest = report._nextManifest ?? existingManifest;
   const retiredTargets = retiredPlanTargets(report);
   const resolvedRetiredPaths = new Set(
     appliedFiles.map((appliedFile) => normalizePath(appliedFile)).filter((appliedFile) => retiredTargets.has(appliedFile)),
@@ -3833,18 +3834,18 @@ function mergeUpgradeManifest(existingManifest, report, appliedAt, appliedFiles,
   }
   const plannedIncludedTools = new Set(uniqueNormalizedList(plannedManifest.includedTools));
   const projectId = [
-    existingManifest.projectId,
+    migratedManifest.projectId,
     report._nextManifest?.projectId,
     report._nextConfig?.projectId,
     plannedManifest.projectId,
   ].find((value) => typeof value === 'string' && value.trim())
     ?? resolveProjectIdDefault(report.targetProject, report._nextConfig, plannedManifest);
   const notes = [
-    ...(Array.isArray(existingManifest.notes) ? existingManifest.notes.filter((item) => typeof item === 'string') : []),
+    ...(Array.isArray(migratedManifest.notes) ? migratedManifest.notes.filter((item) => typeof item === 'string') : []),
     `Harness ${report.command} applied at ${appliedAt}`,
   ];
-  const updates = Array.isArray(existingManifest.updates)
-    ? existingManifest.updates.filter((item) => item && typeof item === 'object' && !Array.isArray(item))
+  const updates = Array.isArray(migratedManifest.updates)
+    ? migratedManifest.updates.filter((item) => item && typeof item === 'object' && !Array.isArray(item))
     : [];
   updates.push({
     command: report.command,
@@ -3854,7 +3855,7 @@ function mergeUpgradeManifest(existingManifest, report, appliedAt, appliedFiles,
     migrations: migrationIds,
   });
   const provenance = {
-    ...(existingManifest.provenance && typeof existingManifest.provenance === 'object' && !Array.isArray(existingManifest.provenance) ? existingManifest.provenance : {}),
+    ...(migratedManifest.provenance && typeof migratedManifest.provenance === 'object' && !Array.isArray(migratedManifest.provenance) ? migratedManifest.provenance : {}),
     ...(report.command === 'upgrade' && report._nextManifest?.provenance
       ? {
         packageName: report._nextManifest.provenance.packageName,
@@ -3867,26 +3868,26 @@ function mergeUpgradeManifest(existingManifest, report, appliedAt, appliedFiles,
   if (report.runtimeMode === 'co-located') provenance.toolkitRoot = ROOT;
   else delete provenance.toolkitRoot;
   return {
-    ...existingManifest,
-    schema_version: existingManifest.schema_version ?? 'p2a.handoff.v1',
+    ...migratedManifest,
+    schema_version: migratedManifest.schema_version ?? 'p2a.handoff.v1',
     projectId,
-    targetProject: existingManifest.targetProject ?? report.targetProject,
-    includedTools: uniqueNormalizedList(existingManifest.includedTools, plannedManifest.includedTools)
+    targetProject: migratedManifest.targetProject ?? report.targetProject,
+    includedTools: uniqueNormalizedList(migratedManifest.includedTools, plannedManifest.includedTools)
       .filter((item) => plannedIncludedTools.has(item) || !retiredToolLabels.has(item)),
     aiToolTargets: report.toolsProvided
       ? uniqueNormalizedList(report.aiToolTargets)
-      : uniqueNormalizedList(existingManifest.aiToolTargets, report.aiToolTargets),
-    codexAgentProfile: plannedManifest.codexAgentProfile ?? existingManifest.codexAgentProfile ?? null,
-    scriptFiles: reconcileManagedInventory(existingManifest.scriptFiles, plannedManifest.scriptFiles, resolvedRetiredPaths),
-    schemaFiles: reconcileManagedInventory(existingManifest.schemaFiles, plannedManifest.schemaFiles, resolvedRetiredPaths),
-    toolFiles: reconcileManagedInventory(existingManifest.toolFiles, plannedManifest.toolFiles, resolvedRetiredPaths),
-    aiToolFiles: reconcileManagedInventory(existingManifest.aiToolFiles, plannedManifest.aiToolFiles, resolvedRetiredPaths),
+      : uniqueNormalizedList(migratedManifest.aiToolTargets, report.aiToolTargets),
+    codexAgentProfile: plannedManifest.codexAgentProfile ?? migratedManifest.codexAgentProfile ?? null,
+    scriptFiles: reconcileManagedInventory(migratedManifest.scriptFiles, plannedManifest.scriptFiles, resolvedRetiredPaths),
+    schemaFiles: reconcileManagedInventory(migratedManifest.schemaFiles, plannedManifest.schemaFiles, resolvedRetiredPaths),
+    toolFiles: reconcileManagedInventory(migratedManifest.toolFiles, plannedManifest.toolFiles, resolvedRetiredPaths),
+    aiToolFiles: reconcileManagedInventory(migratedManifest.aiToolFiles, plannedManifest.aiToolFiles, resolvedRetiredPaths),
     aiToolGroups: pruneResolvedAiToolGroups(
-      mergeAiToolGroups(existingManifest.aiToolGroups, plannedManifest.aiToolGroups ?? []),
+      mergeAiToolGroups(migratedManifest.aiToolGroups, plannedManifest.aiToolGroups ?? []),
       resolvedRetiredPaths,
     ),
     managedFiles: mergeManagedFileRecords(
-      pruneResolvedManagedFileRecords(existingManifest.managedFiles, resolvedRetiredPaths),
+      pruneResolvedManagedFileRecords(migratedManifest.managedFiles, resolvedRetiredPaths),
       plannedManifest.managedFiles,
     ),
     provenance,
@@ -4156,19 +4157,18 @@ function buildEnhanceCapabilityPlan(args, targetRoot) {
 function enhanceCapabilityNextActions(capability, targetRoot, config, manifest) {
   const source = preferredEnhanceArtifactArg(targetRoot);
   const command = (args) => projectP2aCommandLine(targetRoot, manifest, args);
-  if (capability === 'memory') {
+  if (capability === 'buildlore') {
     const projectId = typeof config?.projectId === 'string' && config.projectId.trim()
       ? config.projectId.trim()
       : source.hasArtifact
         ? path.basename(source.artifactRef)
-        : '<project_id>';
+        : '<project-id>';
     return [
-      `${source.hasArtifact ? 'Check local/Memory sync' : 'After creating an artifact root, check local/Memory sync'}: ${command(['memory', 'status', '--artifacts', source.artifactRef])}`,
-      `${source.hasArtifact ? 'Preview Memory restore diff' : 'After Memory is configured, preview restore diff'}: ${command(['memory', 'pull', '--artifacts', source.artifactRef, '--dry-run'])}`,
-      `${source.hasArtifact ? 'Preview explicit Memory push' : 'After review, preview explicit Memory push'}: ${command(['memory', 'push', '--artifacts', source.artifactRef, '--dry-run'])}`,
-      `${source.hasArtifact ? 'Search project Memory history' : 'After Memory contains snapshots, search project history'}: ${command(['memory', 'search', '--project', projectId, '--mode', 'hybrid', '--query', '<term>'])}`,
-      `${source.hasArtifact ? 'Show Memory timeline' : 'After Memory contains snapshots, show timeline'}: ${command(['memory', 'history', '--artifacts', source.artifactRef])}`,
-      `${source.hasArtifact ? 'Summarize run/proposal gaps' : 'After runs exist, summarize run/proposal gaps'}: ${command(['memory', 'digest', '--artifacts', source.artifactRef])}`,
+      `Check the local BuildLore workspace: ${command(['buildlore', 'status', '--project', projectId])}`,
+      `${source.hasArtifact ? 'Preview P2A artifact projection' : 'After creating an artifact root, preview P2A artifact projection'}: ${command(['buildlore', 'sync', '--project', projectId, '--dry-run'])}`,
+      `${source.hasArtifact ? 'Synchronize approved local evidence' : 'After BuildLore is initialized, synchronize approved local evidence'}: ${command(['buildlore', 'sync', '--project', projectId])}`,
+      `Search committed project knowledge: ${command(['buildlore', 'search', '--project', projectId, '--mode', 'hybrid', '--query', '<term>'])}`,
+      `Build implementation context: ${command(['buildlore', 'context', '--project', projectId, '--prompt', '<task>'])}`,
     ];
   }
   if (capability === 'proposals') {

@@ -20,5 +20,5 @@ Rules:
 - Every dependency must reference a task id in the same graph.
 - The graph must be acyclic.
 - Split oversized tasks before returning.
-- Inspect supplied planning Memory context. When it materially changes a task or exposes a relevant prior failure, encode the mitigation in acceptance criteria and add `memory:`/`decision:` lineage refs alongside a real spec-field ref.
+- Inspect BuildLore-derived evidence selected by the approved spec. When prior knowledge materially changes a task or exposes a relevant failure, encode the mitigation in acceptance criteria and add its evidence/decision lineage alongside a real spec-field ref.
 - When the approved spec uses `full + current_iteration`, classify every task as `workKind: ui | non_ui | mixed`; attach lightweight `visualImpact.screenStates` to every `ui` or `mixed` task. Impact scopes may overlap and must not duplicate the iteration-level review contract.

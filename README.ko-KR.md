@@ -160,29 +160,31 @@ proposal 흐름은 근거가 있는 결과를 사람이 검토하는 maintenance
 `active_only`에서는 다음 iteration을 열거나 다음 maintenance task를 시작하기 전에 eval을
 실행하고, 장기간 로컬 비교가 필요하면 `persistent`를 사용합니다.
 
-### 5. 선택적으로 장기 context 불러오기
+### 5. BuildLore로 선택적 장기 지식 유지하기
 
-[Plan2Agent Memory](https://github.com/silbaram/plan2agent-memory)는 artifact, 이력,
-lineage를 위한 선택적 저장·검색 backend입니다. Memory가 없거나 설정되지 않아도 로컬
-`.plan2agent/` 파일이 정본으로 유지됩니다.
+[BuildLore](https://github.com/silbaram/buildlore)는 local-first·Git 기반 지식 도구입니다.
+Plan2Agent artifact는 계속 로컬 실행 상태의 정본입니다.
 
-승인된 Gate A/B 기획 Markdown만 동기화하려면
-`p2a memory push --artifacts <artifact-root> --profile planning-docs --dry-run`으로 선택 결과를
-먼저 확인합니다. 이 프로필은 현재 기능 iteration과 `current-spec.json.closed_iterations`에
-기록된 archived iteration에서 canonical `product-spec.md`, `implementation-plan.md`, 그리고
-Gate A가 완료된 경우의 `intake.md`만 선택합니다. pending·미등록 iteration, maintenance,
-task/run/review evidence, generated index, Memory recall, 로컬 chunk, 복사본과 symlink는 안정적인
-사유와 함께 제외됩니다. preview는 canonical JSON과 원문·계보 hash, 예상 snapshot 수,
-서버 전략 `paragraph-2000`, client `DOCUMENT_CHUNK` 쓰기 0건을 검증·표시하며 Memory 서버에
-연결하지 않습니다. 이때 로컬 chunk content, hash, ID를 생성하지 않습니다.
-실제 외부 쓰기는 계속 `--yes`를 요구합니다.
+BuildLore의 `knowledge/` 저장소를 연결하고 같은 project ID를 등록한 다음 adapter를
+활성화하고 `.plan2agent/artifacts/<project-id>/` projection을 미리 확인합니다.
 
-로컬 chunk 파일은 planning source artifact가 아닙니다. 승인된 planning-docs push는 각 snapshot
-request에 `chunking: { "strategy": "paragraph-2000" }`을 포함하고, chunk 생성·저장과 embedding
-job enqueue를 Memory 서버에 맡깁니다. CLI는 응답 strategy와 양의 정수 `chunkCount`를 검증하고,
-acknowledgment가 없거나 잘못되면 fail closed하며 `/document-chunks/bulk`로 fallback하지 않습니다.
-결과의 client 전송 수는 `chunks=0`, 서버 생성 합계는 `serverGeneratedChunks`로 표시됩니다.
-`--profile planning-docs`가 없는 push의 기존 client chunk·bulk 전송 동작은 그대로 유지됩니다.
+```bash
+p2a enhance buildlore
+p2a buildlore status
+p2a buildlore sync --dry-run
+p2a buildlore sync
+```
+
+BuildLore는 지원되는 승인 기획·실행 evidence를 선택하고 sanitizer를 거쳐 검토 가능한 지식
+source로 기록합니다. 검색은 명시적이며 project 단위로 격리됩니다.
+
+```bash
+p2a buildlore search --query "인증 결정" --mode lexical
+p2a buildlore context --prompt "다음 구현 계획을 준비해"
+```
+
+sync는 지식 저장소를 commit하거나 push하지 않습니다. BuildLore publish는 별도의 검토 가능한
+Git workflow입니다.
 
 ## CLI 한눈에 보기
 
@@ -199,15 +201,15 @@ Plan2Agent는 하나의 `p2a` entrypoint를 설치합니다.
 | `p2a doctor` | 설정, asset, 로컬 drift를 진단합니다. |
 | `p2a update` | manifest package version에 고정된 프로젝트 관리 asset을 갱신합니다. |
 | `p2a upgrade` | npm 전역 package 갱신을 미리 보거나 적용한 뒤 현재 프로젝트를 갱신합니다. |
-| `p2a enhance` | Memory와 proposal 같은 선택적 기능을 활성화합니다. |
-| `p2a validate` | 기획, task, run, eval, proposal, Memory artifact를 검증합니다. |
+| `p2a enhance` | BuildLore와 proposal 같은 선택적 기능을 활성화합니다. |
+| `p2a validate` | 기획, task, run, eval, proposal artifact를 검증합니다. |
 | `p2a iteration` | iteration 초기화, close/open, diff, maintenance를 관리합니다. |
 | `p2a tasks` | task 상태를 확인하고 전환합니다. |
 | `p2a runs` | run evidence를 기록, 검증, 완료, 조회합니다. |
 | `p2a execute` | 구현과 canonical 최종 visual review run을 검증된 완료까지 감독합니다. |
 | `p2a eval` | 실행 증거를 grade, compare, analyze, generate, summarize합니다. |
 | `p2a proposals` | 개선 proposal을 mine, review, curate, approve, summarize합니다. |
-| `p2a memory` | 선택적 Memory data를 확인, 동기화, 검색, 조회합니다. |
+| `p2a buildlore` | 선택적 BuildLore 지식을 projection, 검사, 검색, 조회합니다. |
 
 최상위 명령은 `p2a --help`로 확인할 수 있습니다. 자세한 option과 예시는
 [CLI 레퍼런스](docs/cli-reference.md)를 참고하세요.
@@ -252,7 +254,7 @@ session에서 실행되며 Plan2Agent는 provider API를 직접 호출하지 않
 
 | 프로젝트 | 용도 |
 | --- | --- |
-| [plan2agent-memory](https://github.com/silbaram/plan2agent-memory) | 선택적 artifact 이력, 검색, hash 비교, lineage 서비스 |
+| [BuildLore](https://github.com/silbaram/buildlore) | Plan2Agent 지식을 선택적으로 projection·검색하는 local-first·Git 기반 도구 |
 | [plan2agent-feature-radar](https://github.com/silbaram/plan2agent-feature-radar) | 요구사항을 자동 선택하지 않고 기획용 근거를 내보내는 선택적 조사 workflow |
 
 ## 문서
@@ -293,7 +295,7 @@ runtime은 Node.js ESM이며 Node.js 표준 라이브러리를 사용합니다. 
 docs/          사용자 가이드와 구현 레퍼런스
 fixtures/      golden fixture와 negative fixture
 schemas/       Plan2Agent artifact용 JSON schema
-scripts/       toolkit, validation, runtime, eval, proposal, Memory CLI
+scripts/       toolkit, validation, runtime, eval, proposal, BuildLore adapter CLI
 ```
 
 ## 프로젝트 상태
@@ -301,7 +303,7 @@ scripts/       toolkit, validation, runtime, eval, proposal, Memory CLI
 Plan2Agent는 활발히 개발 중입니다. 버전 `0.3.0`은 Gate에서 파생한 실행 envelope와 기존
 orchestration 호환성을 유지하면서 Direct, Planned, Orchestrated 적응형 실행을 추가합니다.
 상세 task graph는 dependency 또는 ownership 경계가 유용한 Orchestrated 작업에만 생성됩니다.
-local-first 기획, 감독형 실행, 평가, proposal, 선택적 Memory workflow도 함께 유지됩니다.
+local-first 기획, 감독형 실행, 평가, proposal, 선택적 BuildLore workflow도 함께 유지됩니다.
 자율적인 provider 실행과 승인되지 않은 remote side effect는 기본 안전 모델의 범위 밖에
 있습니다.
 

@@ -6,6 +6,19 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+## [0.5.11] - 2026-08-24
+
+### Added
+
+- Add the local `p2a buildlore` adapter for project-scoped status, artifact projection, quality checks, retrieval, context, compilation, and query commands.
+- Add `p2a --version` and `p2a -v` for reporting the installed package version.
+
+### Changed
+
+- Make BuildLore the only long-term knowledge integration, with explicit local sync and separate Git publication.
+- Remove the superseded remote knowledge runtime, configuration, automatic recall, artifact fields, sidecars, fixtures, tests, and compatibility commands.
+- Publish the reduced post-removal task context as `p2a.task_context.v2` with no legacy compatibility runtime.
+
 ## [0.5.10] - 2026-08-23
 
 ### Changed
@@ -77,20 +90,6 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 - Route newly opened baseline-backed iterations into Gate A when a valid entry is supplied, return deterministic missing or invalid entry actions otherwise, and preserve documented `gate_a_interview` resume compatibility.
 - Make `p2a doctor --dev` verify every manifest-managed file's confined regular-file path and exact SHA-256 digest, including explicit failures for missing files, symlink substitution, and path traversal.
-
-## [0.5.0] - 2026-08-17
-
-### Added
-
-- Add the explicit `p2a memory push --profile planning-docs` workflow for previewing and synchronizing approved Gate A/B planning Markdown from the current iteration and recorded archived iterations.
-
-### Changed
-
-- Delegate `planning-docs` snapshot chunk generation to the Memory server with the `paragraph-2000` strategy while preserving the existing client-chunk transport for pushes without the profile.
-
-### Fixed
-
-- Harden planning-document selection, provenance, project and artifact-root confinement, symlink handling, deterministic dry-run reporting, and server acknowledgment validation.
 
 ## [0.4.0] - 2026-08-16
 
@@ -201,10 +200,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 ### Added
 
 - Publish the first public `plan2agent` npm package with the global `p2a` CLI.
-- Add package-runtime project initialization, managed provider assets, artifact validation, handoff, supervised execution, evaluation, proposal, and optional Memory workflows.
+- Add package-runtime project initialization, managed provider assets, artifact validation, handoff, supervised execution, evaluation, and proposal workflows.
 - Ship canonical and generated integrations for Codex, Claude Code, and Gemini CLI.
 
-[Unreleased]: https://github.com/silbaram/plan2agent/compare/v0.5.10...HEAD
+[Unreleased]: https://github.com/silbaram/plan2agent/compare/v0.5.11...HEAD
+[0.5.11]: https://github.com/silbaram/plan2agent/compare/v0.5.10...v0.5.11
 [0.5.10]: https://github.com/silbaram/plan2agent/compare/v0.5.9...v0.5.10
 [0.5.9]: https://github.com/silbaram/plan2agent/compare/v0.5.8...v0.5.9
 [0.5.8]: https://github.com/silbaram/plan2agent/compare/v0.5.7...v0.5.8

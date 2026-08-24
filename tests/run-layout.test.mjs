@@ -215,16 +215,7 @@ describe('iteration-partitioned run layout', () => {
       const index = JSON.parse(readFileSync(path.join(runsDir, 'run-index.json'), 'utf8'));
       assert.equal(index.runs[0].runRef, `${ITERATION_ID}/run-task-001-001.json`);
       assert.equal(runFilePath(runsDir, 'run-task-001-001'), path.join(runsDir, ITERATION_ID, 'run-task-001-001.json'));
-      writeJson(path.join(runsDir, ITERATION_ID, 'run-task-001-001.memory-recall.json'), {
-        schema_version: 'p2a.memory_search.v1',
-        query: { text: 'retry failure', scope: 'project' },
-        results: [],
-      });
       validateRunsDir(runsDir);
-      assert.throws(
-        () => assertStartableRunId('run-task-001-001.memory-recall'),
-        /reserved sidecar suffix \.memory-recall/,
-      );
     } finally {
       rmSync(tempRoot, { recursive: true, force: true });
     }
@@ -773,11 +764,6 @@ describe('iteration-partitioned run layout', () => {
       writeJson(path.join(runsDir, 'run-index.json'), runIndex(run));
       writeJson(path.join(runsDir, `${run.runId}.monitor-gate.json`), sourceGate);
       writeJson(path.join(runsDir, `${run.runId}.style-verdict.json`), { violationCount: 0 });
-      writeJson(path.join(runsDir, `${run.runId}.memory-recall.json`), {
-        schema_version: 'p2a.memory_search.v1',
-        query: { text: 'retry failure', scope: 'project' },
-        results: [],
-      });
       validateRunsDir(runsDir);
 
       const dryRun = runRuns(['migrate-layout', '--runs', runsDir, '--dry-run']);
@@ -793,7 +779,6 @@ describe('iteration-partitioned run layout', () => {
       assert.equal(existsSync(path.join(runsDir, expectedRef)), true);
       assert.equal(existsSync(path.join(runsDir, `${run.runId}.json`)), false);
       assert.equal(existsSync(runSidecarPath(runsDir, run.runId, '.style-verdict.json')), true);
-      assert.equal(existsSync(runSidecarPath(runsDir, run.runId, '.memory-recall.json')), true);
       const gate = JSON.parse(readFileSync(runSidecarPath(runsDir, run.runId, '.monitor-gate.json'), 'utf8'));
       assert.equal(gate.verdictPath, `${ITERATION_ID}/${run.runId}.monitor-verdict.json`);
       const migratedRun = JSON.parse(readFileSync(path.join(runsDir, expectedRef), 'utf8'));

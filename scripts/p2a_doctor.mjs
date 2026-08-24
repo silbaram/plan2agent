@@ -959,7 +959,7 @@ function devProviderAssetChecks(targetRoot, targets) {
 }
 
 function enabledCapabilityEnhancements(manifest, config) {
-  return ['memory', 'orchestration', 'proposals']
+  return ['buildlore', 'orchestration', 'proposals']
     .filter((capability) => capabilityState(manifest, config, capability).enabled);
 }
 
@@ -973,42 +973,36 @@ function usesPackageRuntime(manifest) {
   return manifest?.runtime?.mode === 'package' && manifest.runtime.command === 'p2a';
 }
 
-function memoryCapabilityChecks(targetRoot, state, packageRuntime) {
-  const memoryConfig = state.configRecord;
+function buildLoreCapabilityChecks(targetRoot, state, packageRuntime) {
+  const buildLoreConfig = state.configRecord;
   const checks = [];
-  checks.push(capabilityManifestCheck('memory', 'Memory', state));
+  checks.push(capabilityManifestCheck('buildlore', 'BuildLore', state));
   checks.push(
-    memoryConfig.enabled === true
-      ? check('capability_memory_config', 'Memory capability config', 'pass', `mode=${memoryConfig.mode ?? 'manual_sync'}, serverUrlEnv=${memoryConfig.serverUrlEnv ?? 'P2A_MEMORY_URL'}`)
-      : check('capability_memory_config', 'Memory capability config', 'fail', 'manifest enables Memory but project.config.json memory.enabled is not true'),
+    buildLoreConfig.enabled === true
+      ? check('capability_buildlore_config', 'BuildLore capability config', 'pass', `mode=${buildLoreConfig.mode ?? 'local_cli'}, command=${buildLoreConfig.command ?? 'buildlore'}`)
+      : check('capability_buildlore_config', 'BuildLore capability config', 'fail', 'manifest enables BuildLore but project.config.json buildlore.enabled is not true'),
   );
   checks.push(
     packageRuntime
-      ? check('capability_memory_runtime', 'Memory runtime', 'pass', 'Memory runtime is supplied by the p2a package')
-      : isFile(path.join(targetRoot, '.plan2agent', 'scripts', 'p2a_memory.mjs'))
-      ? check('capability_memory_runtime', 'Memory runtime script', 'pass', '.plan2agent/scripts/p2a_memory.mjs is installed')
-      : check('capability_memory_runtime', 'Memory runtime script', 'fail', 'p2a_memory.mjs is missing from the project runtime'),
+      ? check('capability_buildlore_runtime', 'BuildLore adapter runtime', 'pass', 'BuildLore adapter is supplied by the p2a package')
+      : isFile(path.join(targetRoot, '.plan2agent', 'scripts', 'p2a_buildlore.mjs'))
+      ? check('capability_buildlore_runtime', 'BuildLore adapter runtime', 'pass', '.plan2agent/scripts/p2a_buildlore.mjs is installed')
+      : check('capability_buildlore_runtime', 'BuildLore adapter runtime', 'fail', 'p2a_buildlore.mjs is missing from the project runtime'),
   );
   checks.push(
-    typeof memoryConfig.serverUrlEnv === 'string' && memoryConfig.serverUrlEnv.trim()
-      ? check('capability_memory_server_env', 'Memory server env config', 'pass', `server URL env is ${memoryConfig.serverUrlEnv}`)
-      : check('capability_memory_server_env', 'Memory server env config', 'warn', 'memory.serverUrlEnv is not configured; --server will be required for status/push'),
+    typeof buildLoreConfig.command === 'string' && buildLoreConfig.command.trim()
+      ? check('capability_buildlore_command', 'BuildLore executable', 'pass', `command=${buildLoreConfig.command}`)
+      : check('capability_buildlore_command', 'BuildLore executable', 'fail', 'buildlore.command must be a non-empty executable path'),
   );
   checks.push(
-    Number.isInteger(memoryConfig.requestTimeoutMs) && memoryConfig.requestTimeoutMs > 0
-      ? check('capability_memory_timeout', 'Memory request timeout', 'pass', `request timeout is ${memoryConfig.requestTimeoutMs}ms`)
-      : check('capability_memory_timeout', 'Memory request timeout', 'warn', 'memory.requestTimeoutMs is missing or invalid; runtime default will be used'),
+    buildLoreConfig.syncPolicy === 'explicit'
+      ? check('capability_buildlore_sync_policy', 'BuildLore sync policy', 'pass', 'artifact projection is explicit')
+      : check('capability_buildlore_sync_policy', 'BuildLore sync policy', 'fail', 'buildlore.syncPolicy must remain explicit'),
   );
   checks.push(
-    memoryConfig.pushPolicy === 'explicit_approval'
-      ? check('capability_memory_push_policy', 'Memory push policy', 'pass', 'push requires explicit approval')
-      : check('capability_memory_push_policy', 'Memory push policy', 'fail', 'memory.pushPolicy must remain explicit_approval'),
-  );
-  const tiers = stringArrayValue(memoryConfig.syncTiers);
-  checks.push(
-    tiers.includes('trace') && tiers.includes('content')
-      ? check('capability_memory_sync_tiers', 'Memory sync tiers', 'pass', `syncTiers=${tiers.join(',')}`)
-      : check('capability_memory_sync_tiers', 'Memory sync tiers', 'warn', 'memory.syncTiers should include trace and content for useful status/push coverage'),
+    buildLoreConfig.publicationPolicy === 'explicit_git'
+      ? check('capability_buildlore_publication_policy', 'BuildLore publication policy', 'pass', 'Git publication remains explicit')
+      : check('capability_buildlore_publication_policy', 'BuildLore publication policy', 'fail', 'buildlore.publicationPolicy must remain explicit_git'),
   );
   return checks;
 }
@@ -1100,7 +1094,7 @@ function buildCapabilityReport(targetRoot, manifest, configResult) {
   const packageRuntime = usesPackageRuntime(manifest);
   const enabled = enabledCapabilityEnhancements(manifest, config);
   const checks = [];
-  if (enabled.includes('memory')) checks.push(...memoryCapabilityChecks(targetRoot, capabilityState(manifest, config, 'memory'), packageRuntime));
+  if (enabled.includes('buildlore')) checks.push(...buildLoreCapabilityChecks(targetRoot, capabilityState(manifest, config, 'buildlore'), packageRuntime));
   if (enabled.includes('orchestration')) checks.push(...orchestrationCapabilityChecks(targetRoot, capabilityState(manifest, config, 'orchestration'), packageRuntime));
   if (enabled.includes('proposals')) checks.push(...proposalsCapabilityChecks(targetRoot, capabilityState(manifest, config, 'proposals'), packageRuntime));
   return { enabled, checks };
@@ -1369,16 +1363,6 @@ function nextActions(status, checks) {
   }
   if (checks.some((item) => item.id === 'dev_provider_capabilities' && item.status === 'warn')) {
     actions.push('Review .plan2agent/project.config.json providerNativeCapabilities for the selected AI tool targets.');
-  }
-  if (checks.some((item) => item.id === 'capability_memory_manifest' && item.status === 'fail')
-    || checks.some((item) => item.id === 'capability_memory_config' && item.status === 'fail')) {
-    actions.push('Run p2a enhance memory or upgrade --dry-run to restore Memory capability config.');
-  }
-  if (checks.some((item) => item.id === 'capability_memory_runtime' && item.status === 'fail')) {
-    actions.push('Run p2a upgrade --dry-run from the scaffolded project, then apply the reviewed runtime update.');
-  }
-  if (checks.some((item) => item.id === 'capability_memory_push_policy' && item.status === 'fail')) {
-    actions.push('Restore memory.pushPolicy to explicit_approval before enabling Memory push.');
   }
   if (checks.some((item) => item.id === 'capability_orchestration_manifest' && item.status === 'fail')
     || checks.some((item) => item.id === 'capability_orchestration_config' && item.status === 'fail')) {

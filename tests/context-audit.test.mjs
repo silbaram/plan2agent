@@ -59,13 +59,13 @@ test('canonical context routes produce a schema-valid provider and stage audit',
   ));
   assert.ok(harnessGateA);
   assert.ok(harnessGateA.sources.some((source) => source.path.endsWith('references/existing-documents.md')));
-  assert.ok(harnessGateA.sources.some((source) => source.path.endsWith('references/memory-recall.md')));
+  assert.ok(harnessGateA.sources.some((source) => source.path.endsWith('references/buildlore-knowledge.md')));
   assert.equal(
     harnessGateA.sources.find((source) => source.path.endsWith('references/existing-documents.md')).required,
     true,
   );
   assert.equal(
-    harnessGateA.sources.find((source) => source.path.endsWith('references/memory-recall.md')).required,
+    harnessGateA.sources.find((source) => source.path.endsWith('references/buildlore-knowledge.md')).required,
     false,
   );
   assert.ok(harnessGateA.sources.some((source) => source.role === 'provider-adapter'));

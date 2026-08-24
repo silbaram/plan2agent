@@ -14,7 +14,6 @@ import {
   unlinkSync,
   writeFileSync,
 } from 'node:fs';
-import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import path from 'node:path';
 import process from 'node:process';
@@ -62,12 +61,7 @@ import {
   atomicWriteText,
   withRunStoreLocks,
 } from './p2a_run_store.mjs';
-import { shellQuote } from './p2a_run_commands.mjs';
-import {
-  APPROVAL_SIDECAR_SHA256_PREFIX,
-  DEFAULT_MEMORY_CLOSE_TIMEOUT_MS,
-  DEFAULT_MEMORY_REQUEST_TIMEOUT_MS,
-} from './p2a_constants.mjs';
+import { APPROVAL_SIDECAR_SHA256_PREFIX } from './p2a_constants.mjs';
 import {
   buildFeatureRadarEvidence,
   buildFeatureRadarReferenceCandidates,
@@ -567,7 +561,6 @@ export function withIterationCloseRollback(paths, callback) {
     paths.metadataPath,
     paths.currentSpecPath,
     paths.statusPath,
-    paths.memoryStatusPath,
   ]);
   try {
     return callback();
@@ -1090,7 +1083,6 @@ function iterationMetadata(
   openedAt,
   effectiveSpecRef,
   effectiveSpecSha256,
-  planningMemory = null,
 ) {
   return withCurrentIterationArtifactManifest({
     schema_version: 'p2a.iteration_metadata.v1',
@@ -1107,7 +1099,6 @@ function iterationMetadata(
         ? { effective_spec_sha256: effectiveSpecSha256 }
         : {}),
     },
-    planning_memory: planningMemory,
   });
 }
 
@@ -1474,7 +1465,7 @@ function buildGreenfieldRestartIntake(intake, idea, iterationId) {
 function initialReferenceReconnaissance(iterationId, idea) {
   return {
     triggers: [
-      `Gate B ${iterationId} draft should record reusable local patterns, prior artifacts, Memory results, or primary-source technology references before approval when they affect implementation choices.`,
+      `Gate B ${iterationId} draft should record reusable local patterns, prior artifacts, BuildLore results, or primary-source technology references before approval when they affect implementation choices.`,
     ],
     candidates: [
       {
@@ -1519,7 +1510,7 @@ function carriedReferenceReconnaissance(baselineSpec, iterationId) {
   return {
     triggers: [
       ...asStringArray(reconnaissance.triggers).map((trigger) => `Carried forward baseline Gate B reference for ${iterationId}: ${trigger}`),
-      `Review whether iteration ${iterationId} needs new local or Memory reference candidates before approval.`,
+      `Review whether iteration ${iterationId} needs new local or BuildLore reference candidates before approval.`,
     ],
     candidates,
     selected_patterns: Array.isArray(reconnaissance.selected_patterns)
@@ -2086,7 +2077,7 @@ function currentSpecForPromotedSpec(
   return next;
 }
 
-function iterationMetadataForDraft(metadata, idea, draftedAt, artifacts, planningMemory = metadata.planning_memory ?? null) {
+function iterationMetadataForDraft(metadata, idea, draftedAt, artifacts) {
   const planningMetadata = withCurrentIterationArtifactManifest(metadata);
   return {
     ...planningMetadata,
@@ -2094,7 +2085,6 @@ function iterationMetadataForDraft(metadata, idea, draftedAt, artifacts, plannin
     idea,
     drafted_at: draftedAt,
     draft_artifacts: artifacts,
-    planning_memory: planningMemory,
   };
 }
 
@@ -2112,7 +2102,6 @@ function iterationMetadataForGateAScope(
   idea,
   draftedAt,
   artifacts,
-  planningMemory = metadata.planning_memory ?? null,
 ) {
   const planningMetadata = iterationMetadataAfterGateAForceReset(metadata);
   return {
@@ -2123,7 +2112,6 @@ function iterationMetadataForGateAScope(
     draft_artifacts: {
       intake_ref: artifacts.intake_ref,
     },
-    planning_memory: planningMemory,
   };
 }
 
@@ -2143,7 +2131,7 @@ function iterationMetadataForPromotedSpec(metadata, projectId, iterationId, prom
   };
 }
 
-function iterationMetadataForClose(metadata, projectId, iterationId, closedAt, record, memoryFreshness = null) {
+function iterationMetadataForClose(metadata, projectId, iterationId, closedAt, record) {
   const planningMetadata = withCurrentIterationArtifactManifest(metadata ?? {
     schema_version: 'p2a.iteration_metadata.v1',
     project_id: projectId,
@@ -2156,7 +2144,6 @@ function iterationMetadataForClose(metadata, projectId, iterationId, closedAt, r
     status: 'archived',
     closed_at: closedAt,
     close: record,
-    memory_freshness: memoryFreshness,
   };
 }
 
@@ -3399,12 +3386,6 @@ function validatePlanningIteration(args) {
   if (stage === 'ready') return validateIteration({ ...args, stage: null, allowPlanning: false });
   const iterationMetadata = loadOptionalIterationMetadata(state.artifactRoot, state.activeIteration);
   assertActivePlanningContract(state, iterationMetadata);
-  const planningMemory = iterationMetadata?.planning_memory ?? null;
-  const planningMemoryErrors = planningMemoryValidationErrors(planningMemory, state.artifactRoot, state.projectId, iterationMetadata?.idea ?? state.currentSpec.pending_iteration?.idea);
-  if (planningMemory?.status === 'pending') planningMemoryErrors.push('planning_memory.status must be resolved before validating a gate');
-  if (planningMemoryErrors.length) {
-    throw new ValidationError(`planning Memory validation failed: ${planningMemoryErrors.join('; ')}`);
-  }
 
   const intakePath = activeIntakePath(state);
   if (stage === 'gate-c-draft') {
@@ -3415,9 +3396,6 @@ function validatePlanningIteration(args) {
     if (!existsSync(draftPath)) throw new ValidationError(`gate-c draft not found: ${draftPath}`);
     const draft = loadJson(draftPath);
     validateTaskGraphData(draft);
-    const intakePath = activeIntakePath(state);
-    if (existsSync(intakePath)) validatePlanningMemoryEvidence(planningMemory, loadJson(intakePath), intakePath, state.artifactRoot);
-    if (existsSync(state.specPath)) validatePlanningMemoryEvidence(planningMemory, loadJson(state.specPath), state.specPath, state.artifactRoot);
     console.log(`Plan2Agent gate-c draft valid: ${draft.tasks.length} task(s)`);
     return 0;
   }
@@ -3425,7 +3403,6 @@ function validatePlanningIteration(args) {
   if (stage === 'gate-a') {
     assertFile(intakePath, `iterations/${state.activeIteration}/gate-a-intake/intake.json`);
     const intake = validateIntake(intakePath, { artifactRoot: state.artifactRoot });
-    validatePlanningMemoryEvidence(planningMemory, intake, intakePath, state.artifactRoot);
     console.log(`Plan2Agent planning iteration validation passed: ${toRelativeFromRoot(state.artifactRoot)}`);
     console.log(`- active iteration: ${state.activeIteration}`);
     console.log(`- stage: gate-a`);
@@ -3439,8 +3416,6 @@ function validatePlanningIteration(args) {
   }
   assertFile(state.specPath, `iterations/${state.activeIteration}/gate-b-spec/spec.json`);
   const spec = validateActiveSpecWithOptionalIntake(state);
-  if (existsSync(intakePath)) validatePlanningMemoryEvidence(planningMemory, loadJson(intakePath), intakePath, state.artifactRoot);
-  validatePlanningMemoryEvidence(planningMemory, spec, state.specPath, state.artifactRoot);
   if (stage === 'gate-b-approved' && spec.approval !== 'approved') {
     throw new ValidationError(`--stage gate-b-approved requires spec.approval approved, got ${JSON.stringify(spec.approval)}`);
   }
@@ -3621,40 +3596,6 @@ function collectCodeSignals(args, state) {
   };
 }
 
-function planningMemoryTaskContext(state) {
-  const memory = loadOptionalIterationMetadata(state.artifactRoot, state.activeIteration)?.planning_memory ?? null;
-  if (!memory) {
-    return {
-      status: 'not_configured',
-      baseline_freshness: { status: 'unchecked', report_ref: null, detail: 'No planning Memory metadata is present.' },
-      layers: [],
-      relevant_results: [],
-      relevant_failures: [],
-    };
-  }
-  const layers = Object.values(memory.layers ?? {}).map((layer) => ({
-    scope: layer.scope,
-    status: layer.status,
-    report_ref: layer.report_ref ?? null,
-    query: layer.query ?? null,
-    requested_mode: layer.requested_mode ?? null,
-    effective_mode: layer.effective_mode ?? null,
-    fallback: layer.fallback ?? null,
-    result_count: Number(layer.result_count ?? 0),
-  }));
-  const relevantResults = Object.values(memory.layers ?? {})
-    .flatMap((layer) => (layer.relevant_results ?? []).map((result) => ({ scope: layer.scope, ...result })));
-  const relevantFailures = Object.values(memory.layers ?? {})
-    .flatMap((layer) => (layer.relevant_failures ?? []).map((result) => ({ scope: layer.scope, ...result })));
-  return {
-    status: memory.status,
-    baseline_freshness: memory.baseline_freshness ?? { status: 'unchecked', report_ref: null, detail: null },
-    layers,
-    relevant_results: relevantResults,
-    relevant_failures: relevantFailures,
-  };
-}
-
 function context(args) {
   const state = resolveIterationState(args.artifacts, { requireReady: false });
   assertActivePlanningContract(state);
@@ -3666,7 +3607,7 @@ function context(args) {
   }
   const effectiveSpec = loadContextEffectiveSpec(state);
   const contextData = {
-    schema_version: 'p2a.task_context.v1',
+    schema_version: 'p2a.task_context.v2',
     project_id: state.projectId,
     active_iteration: scope === 'maintenance' ? 'maintenance' : state.activeIteration,
     scope,
@@ -3678,7 +3619,6 @@ function context(args) {
       maintenance: summarizeTaskGraphIfPresent(maintenanceTaskGraphPath(state.artifactRoot)),
     },
     spec_field_changes: scope === 'maintenance' ? [] : contextSpecFieldChanges(state),
-    planning_memory: planningMemoryTaskContext(state),
     code_signals: collectCodeSignals(args, state),
   };
   validateTaskContextData(contextData);
@@ -3971,17 +3911,7 @@ function validateIteration(args) {
   if (args.allowPlanning || args.stage) return validatePlanningIteration(args);
   const state = resolveIterationState(args.artifacts);
   validateCurrentSpecCompositionData(state.currentSpec, state.artifactRoot, { requireNoOpenDecisions: true });
-  const iterationMetadata = loadOptionalIterationMetadata(state.artifactRoot, state.activeIteration);
-  const planningMemory = iterationMetadata?.planning_memory ?? null;
-  const planningMemoryErrors = planningMemoryValidationErrors(planningMemory, state.artifactRoot, state.projectId, iterationMetadata?.idea);
-  if (planningMemory?.status === 'pending') planningMemoryErrors.push('planning_memory.status must be resolved before readiness validation');
-  if (planningMemoryErrors.length) {
-    throw new ValidationError(`planning Memory validation failed: ${planningMemoryErrors.join('; ')}`);
-  }
   const spec = validateActiveSpecWithOptionalIntake(state);
-  const intakePath = activeIntakePath(state);
-  if (existsSync(intakePath)) validatePlanningMemoryEvidence(planningMemory, loadJson(intakePath), intakePath, state.artifactRoot);
-  validatePlanningMemoryEvidence(planningMemory, spec, state.specPath, state.artifactRoot);
   const taskGraph = validateTaskGraph(state.taskGraphPath, state.specPath);
   if (args.requireCloseReady) {
     assertCloseReadyTasks(taskGraph);
@@ -4041,15 +3971,6 @@ function closeLocked(args, artifactRoot) {
     reviewPasses,
   });
   const activeMetadata = loadOptionalIterationMetadata(artifactRoot, facts.state.activeIteration);
-  const planningMemory = activeMetadata?.planning_memory ?? null;
-  const planningMemoryErrors = planningMemoryValidationErrors(planningMemory, artifactRoot, facts.state.projectId, activeMetadata?.idea);
-  if (planningMemory?.status === 'pending') planningMemoryErrors.push('planning_memory.status must be resolved before close');
-  if (planningMemoryErrors.length) {
-    throw new ValidationError(`planning Memory validation failed: ${planningMemoryErrors.join('; ')}`);
-  }
-  const intakePath = activeIntakePath(facts.state);
-  if (existsSync(intakePath)) validatePlanningMemoryEvidence(planningMemory, loadJson(intakePath), intakePath, artifactRoot);
-  validatePlanningMemoryEvidence(planningMemory, facts.spec, facts.state.specPath, artifactRoot);
 
   if (requestedIteration !== 'active' && requestedIteration !== facts.state.activeIteration) {
     throw new Error(`close currently supports only active iteration ${JSON.stringify(facts.state.activeIteration)}, got ${JSON.stringify(requestedIteration)}`);
@@ -4063,83 +3984,35 @@ function closeLocked(args, artifactRoot) {
     facts.state.currentSpec.effective_spec_ref,
     artifactRoot,
   );
-  const memoryConfiguration = planningMemoryConfiguration({ projectRoot: ROOT });
-  const initialMemoryFreshness = {
-    status: memoryConfiguration.configured ? 'unchecked' : 'not_configured',
-    report_ref: memoryConfiguration.configured
-      ? artifactRelativePath(artifactRoot, path.join(facts.state.iterationRoot, 'memory-status.json'))
-      : null,
-    detail: memoryConfiguration.configured
-      ? 'Automatic close-time Memory check has not completed.'
-      : memoryConfiguration.reason,
-  };
-  const initialMetadata = iterationMetadataForClose(
+  const archivedMetadata = iterationMetadataForClose(
     activeMetadata,
     facts.state.projectId,
     facts.state.activeIteration,
     closedAt,
     record,
-    initialMemoryFreshness,
   );
 
   const metadataPath = iterationMetadataPath(
     artifactRoot,
     facts.state.activeIteration,
   );
-  const memoryStatusPath = path.join(facts.state.iterationRoot, 'memory-status.json');
   const nextCurrentSpec = currentSpecForClose(facts.state.currentSpec, facts.state.activeIteration, record);
   const statusPath = path.join(artifactRoot, 'status.md');
   const nextStatus = renderIterationIndexMarkdown(artifactRoot, nextCurrentSpec);
-  let memoryFreshness;
   withIterationCloseRollback({
     metadataPath,
     currentSpecPath: facts.state.currentSpecPath,
     statusPath,
-    memoryStatusPath,
   }, () => {
-    atomicWriteJson(metadataPath, initialMetadata);
+    atomicWriteJson(metadataPath, archivedMetadata);
     atomicWriteJson(facts.state.currentSpecPath, nextCurrentSpec);
     atomicWriteText(statusPath, nextStatus);
-
-    memoryFreshness = checkMemoryAtClose({
-      artifactRoot,
-      iterationRoot: facts.state.iterationRoot,
-      configuration: memoryConfiguration,
-    });
-    atomicWriteJson(
-      metadataPath,
-      iterationMetadataForClose(
-        activeMetadata,
-        facts.state.projectId,
-        facts.state.activeIteration,
-        closedAt,
-        record,
-        memoryFreshness,
-      ),
-    );
   });
 
   console.log(`Plan2Agent iteration closed: ${toRelativeFromRoot(facts.state.iterationRoot)}`);
   console.log(`- active iteration: ${facts.state.activeIteration}`);
   console.log(`- status: archived`);
   console.log(`- closed_at: ${closedAt}`);
-  if (memoryFreshness.status_command) {
-    console.log(`- Memory push preview: ${memoryFreshness.push_preview_command}`);
-    console.log(`- Memory freshness: ${memoryFreshness.status} (${memoryFreshness.detail})`);
-    console.log(`- Memory freshness report: ${memoryFreshness.report_ref}`);
-    console.log(`- Memory freshness recheck (run after any approved push): ${memoryFreshness.status_command}`);
-    console.log('- Memory push remains an explicit external write; use memory push --yes only with user approval, then rerun the freshness check.');
-    if (memoryFreshness.status === 'unavailable') {
-      console.warn('WARNING: Memory server connection failed at iteration close. This iteration was archived, but its Memory sync could not be verified.');
-    } else if (memoryFreshness.status === 'stale') {
-      console.warn('WARNING: Memory is reachable, but this iteration is not fully synchronized. Review the push preview before an approved push.');
-    }
-  } else {
-    console.log(`- Memory freshness: not configured (${memoryFreshness.detail})`);
-  }
-  if (['failed', 'skipped'].includes(planningMemory?.status)) {
-    console.warn(`WARNING: Planning Memory recall ended as ${planningMemory.status}; historical Memory evidence was not fully consulted.`);
-  }
   console.log('Active pointer remains on the closed baseline so `p2a iteration open` can create the next iteration.');
   return 0;
 }
@@ -4189,15 +4062,6 @@ function promoteSpecLocked(args, artifactRoot) {
   }
   assertFile(state.specPath, `iterations/${state.activeIteration}/gate-b-spec/spec.json`);
   const spec = validateActiveSpecWithOptionalIntake(state);
-  const planningMemory = metadata?.planning_memory ?? null;
-  const planningMemoryErrors = planningMemoryValidationErrors(planningMemory, state.artifactRoot, state.projectId, metadata?.idea);
-  if (planningMemory?.status === 'pending') planningMemoryErrors.push('planning_memory.status must be resolved before Gate B promotion');
-  if (planningMemoryErrors.length) {
-    throw new ValidationError(`planning Memory validation failed: ${planningMemoryErrors.join('; ')}`);
-  }
-  const intakePath = activeIntakePath(state);
-  if (existsSync(intakePath)) validatePlanningMemoryEvidence(planningMemory, loadJson(intakePath), intakePath, state.artifactRoot);
-  validatePlanningMemoryEvidence(planningMemory, spec, state.specPath, state.artifactRoot);
   if (spec.approval !== 'approved') {
     throw new ValidationError(`promote-spec requires spec.approval approved, got ${JSON.stringify(spec.approval)}`);
   }
@@ -4316,15 +4180,6 @@ function promoteTasksLocked(args) {
   assertFile(state.specPath, `iterations/${state.activeIteration}/gate-b-spec/spec.json`);
   const spec = validateActiveSpecWithOptionalIntake(state);
   validateActiveGateBPromotionBinding(state, spec);
-  const planningMemory = metadata?.planning_memory ?? null;
-  const planningMemoryErrors = planningMemoryValidationErrors(planningMemory, state.artifactRoot, state.projectId, metadata?.idea);
-  if (planningMemory?.status === 'pending') planningMemoryErrors.push('planning_memory.status must be resolved before Gate C promotion');
-  if (planningMemoryErrors.length) {
-    throw new ValidationError(`planning Memory validation failed: ${planningMemoryErrors.join('; ')}`);
-  }
-  const intakePath = activeIntakePath(state);
-  if (existsSync(intakePath)) validatePlanningMemoryEvidence(planningMemory, loadJson(intakePath), intakePath, state.artifactRoot);
-  if (existsSync(state.specPath)) validatePlanningMemoryEvidence(planningMemory, loadJson(state.specPath), state.specPath, state.artifactRoot);
   const draftPath = gateCTaskGraphDraftPath(state);
   if (!existsSync(draftPath)) throw new ValidationError(`gate-c draft not found; author one at ${draftPath} first`);
   const draft = loadJson(draftPath);
@@ -4570,19 +4425,6 @@ function diffTasks(args) {
   });
 }
 
-const PLANNING_MEMORY_STATUSES = new Set([
-  'not_configured',
-  'pending',
-  'succeeded',
-  'fallback',
-  'failed',
-  'skipped',
-]);
-const MEMORY_FRESHNESS_STATUSES = new Set(['fresh', 'stale', 'unavailable', 'unchecked']);
-const PLANNING_MEMORY_SEARCH_MODES = new Set(['keyword', 'semantic', 'hybrid']);
-const PLANNING_MEMORY_SERVER_STATUSES = new Set(['up', 'unknown', 'unavailable', 'not_configured']);
-const CROSS_PROJECT_RECALL_PATTERN = /\b(?:architecture|protocol|migration|migrate|authentication|authorization|auth|security|integration|external api|database|storage|queue|performance|reliability|failure|incident)\b|(?:아키텍처|프로토콜|마이그레이션|인증|인가|보안|연동|통합|외부\s*API|데이터베이스|저장소|큐|성능|신뢰성|장애|실패)/i;
-
 function projectReviewPasses(projectRoot = ROOT) {
   const configPath = path.join(projectRoot, '.plan2agent', 'project.config.json');
   if (!existsSync(configPath)) return resolveReviewPasses({});
@@ -4600,760 +4442,6 @@ function projectRunPersistence(projectRoot = ROOT) {
     return resolveRunPersistence(loadJson(configPath));
   } catch (error) {
     throw new ValidationError(`project config run persistence policy is invalid: ${error.message}`);
-  }
-}
-
-function planningMemoryConfiguration(options) {
-  const projectRoot = options.projectRoot ?? ROOT;
-  const configPath = path.join(projectRoot, '.plan2agent', 'project.config.json');
-  if (!existsSync(configPath)) return { enabled: false, configured: false, reason: 'project_config_missing' };
-  let config;
-  try {
-    config = loadJson(configPath);
-  } catch {
-    return { enabled: false, configured: false, reason: 'project_config_invalid' };
-  }
-  const memory = config?.memory;
-  if (!memory || typeof memory !== 'object' || Array.isArray(memory) || memory.enabled !== true) {
-    return { enabled: false, configured: false, reason: 'memory_disabled' };
-  }
-  const serverUrlEnv = typeof memory.serverUrlEnv === 'string' && memory.serverUrlEnv.trim()
-    ? memory.serverUrlEnv.trim()
-    : 'P2A_MEMORY_URL';
-  const configuredServer = typeof memory.serverUrl === 'string' && memory.serverUrl.trim()
-    ? memory.serverUrl.trim()
-    : null;
-  const environment = options.environment ?? process.env;
-  const environmentServer = typeof environment[serverUrlEnv] === 'string' && environment[serverUrlEnv].trim()
-    ? environment[serverUrlEnv].trim()
-    : null;
-  const configuredTimeoutMs = Number(memory.requestTimeoutMs);
-  const requestTimeoutMs = Number.isInteger(configuredTimeoutMs) && configuredTimeoutMs > 0
-    ? configuredTimeoutMs
-    : DEFAULT_MEMORY_REQUEST_TIMEOUT_MS;
-  if (!configuredServer && !environmentServer) {
-    return {
-      enabled: true,
-      configured: false,
-      reason: `server_missing:${serverUrlEnv}`,
-      serverUrlEnv,
-      requestTimeoutMs,
-    };
-  }
-  return {
-    enabled: true,
-    configured: true,
-    reason: null,
-    serverUrlEnv,
-    server: configuredServer ?? environmentServer,
-    requestTimeoutMs,
-  };
-}
-
-function planningMemoryDisplayPath(projectRoot, filePath) {
-  const relative = path.relative(projectRoot, filePath);
-  return normalizeDisplayPath(relative || '.');
-}
-
-function planningMemorySearchCommand({
-  projectRoot,
-  projectId,
-  idea,
-  outputPath,
-  global = false,
-}) {
-  const command = [
-    'p2a',
-    'memory',
-    'search',
-    ...(global
-      ? ['--global', '--exclude-project', projectId]
-      : ['--project', projectId]),
-    '--mode',
-    'hybrid',
-    '--query',
-    idea,
-    '--output',
-    planningMemoryDisplayPath(projectRoot, outputPath),
-  ];
-  return command.map((value) => shellQuote(String(value))).join(' ');
-}
-
-export function planningMemoryCrossProjectReason(idea) {
-  const match = String(idea ?? '').match(CROSS_PROJECT_RECALL_PATTERN);
-  return match
-    ? `Reusable concern detected in the iteration idea: ${match[0]}`
-    : null;
-}
-
-export function memoryFreshnessFromStatusReport(report, expectedContext = {}) {
-  if (!report || typeof report !== 'object') return { status: 'unchecked', detail: 'No Memory status report was found.' };
-  if (report.schema_version !== 'p2a.memory_status.v1') {
-    return { status: 'unavailable', detail: `Unsupported Memory status report schema: ${report.schema_version ?? 'missing'}` };
-  }
-  if (report.server?.status !== 'up') {
-    return { status: 'unavailable', detail: `Memory server status was ${report.server?.status ?? 'unknown'}.` };
-  }
-  const context = report.context && typeof report.context === 'object' && !Array.isArray(report.context)
-    ? report.context
-    : null;
-  if (expectedContext.projectId) {
-    const actualProjectId = context?.sourceProjectId ?? context?.projectId ?? null;
-    if (actualProjectId !== expectedContext.projectId) {
-      return {
-        status: 'unavailable',
-        detail: `Memory status report project context mismatch: expected ${expectedContext.projectId}, got ${actualProjectId ?? 'missing'}.`,
-      };
-    }
-  }
-  if (expectedContext.iterationId && context?.iterationId !== expectedContext.iterationId) {
-    return {
-      status: 'unavailable',
-      detail: `Memory status report iteration context mismatch: expected ${expectedContext.iterationId}, got ${context?.iterationId ?? 'missing'}.`,
-    };
-  }
-  const summary = report.sync?.summary;
-  if (!summary || typeof summary !== 'object' || Array.isArray(summary)) {
-    return { status: 'unavailable', detail: 'Memory status report sync.summary is missing or invalid.' };
-  }
-  for (const field of ['synced', 'missingRemote', 'remoteDiffers', 'extraRemote']) {
-    if (!Number.isInteger(summary[field]) || summary[field] < 0) {
-      return {
-        status: 'unavailable',
-        detail: `Memory status report sync.summary.${field} must be a non-negative integer.`,
-      };
-    }
-  }
-  if (!Array.isArray(report.skippedRuns) || !Array.isArray(report.skippedProposals)) {
-    return { status: 'unavailable', detail: 'Memory status report skippedRuns and skippedProposals must be arrays.' };
-  }
-  const skippedRuns = report.skippedRuns.length;
-  const skippedProposals = report.skippedProposals.length;
-  const missingRemote = summary.missingRemote;
-  const remoteDiffers = summary.remoteDiffers;
-  if (missingRemote > 0 || remoteDiffers > 0 || skippedRuns > 0 || skippedProposals > 0) {
-    return {
-      status: 'stale',
-      detail: `missingRemote=${missingRemote} remoteDiffers=${remoteDiffers} skippedRuns=${skippedRuns} skippedProposals=${skippedProposals}`,
-    };
-  }
-  return { status: 'fresh', detail: 'Local planning artifacts matched Memory at the recorded status check.' };
-}
-
-function closeMemoryCommands(artifactRoot, memoryStatusPath, requestTimeoutMs) {
-  const statusCommand = [
-    'p2a',
-    'memory',
-    'status',
-    '--artifacts',
-    planningMemoryDisplayPath(ROOT, artifactRoot),
-    '--timeout-ms',
-    String(requestTimeoutMs),
-    '--output',
-    planningMemoryDisplayPath(ROOT, memoryStatusPath),
-  ].map((value) => shellQuote(String(value))).join(' ');
-  const pushPreviewCommand = [
-    'p2a',
-    'memory',
-    'push',
-    '--artifacts',
-    planningMemoryDisplayPath(ROOT, artifactRoot),
-    '--dry-run',
-  ].map((value) => shellQuote(String(value))).join(' ');
-  return { statusCommand, pushPreviewCommand };
-}
-
-function failedCloseMemoryStatusReport(projectId, iterationId, server, timeoutMs, operationTimeoutMs, detail) {
-  return {
-    schema_version: 'p2a.memory_status.v1',
-    generatedAt: new Date().toISOString(),
-    context: {
-      projectId,
-      sourceProjectId: projectId,
-      canonicalProjectId: null,
-      iterationId,
-      sourceKind: 'artifacts',
-      sourcePath: null,
-    },
-    server: {
-      url: server,
-      source: 'iteration_close',
-      timeoutMs,
-      operationTimeoutMs,
-      status: 'unavailable',
-      detail,
-    },
-    local: null,
-    sync: {
-      summary: { synced: 0, missingRemote: 0, remoteDiffers: 0, extraRemote: 0 },
-      items: [],
-      extraRemote: [],
-    },
-    skippedRuns: [],
-    skippedProposals: [],
-    nextActions: ['Restore Memory connectivity, then rerun the recorded freshness check.'],
-  };
-}
-
-export function checkMemoryAtClose(options) {
-  const artifactRoot = path.resolve(options.artifactRoot);
-  const iterationRoot = path.resolve(options.iterationRoot);
-  const configuration = options.configuration ?? planningMemoryConfiguration({
-    projectRoot: options.projectRoot ?? ROOT,
-    environment: options.environment,
-  });
-  const memoryStatusPath = path.join(iterationRoot, 'memory-status.json');
-  if (!configuration.configured) {
-    return {
-      status: 'not_configured',
-      report_ref: null,
-      checked_at: null,
-      status_command: null,
-      push_preview_command: null,
-      detail: configuration.reason,
-    };
-  }
-
-  const requestTimeoutMs = configuration.requestTimeoutMs ?? DEFAULT_MEMORY_REQUEST_TIMEOUT_MS;
-  const operationTimeoutMs = options.operationTimeoutMs
-    ?? Math.max(DEFAULT_MEMORY_CLOSE_TIMEOUT_MS, requestTimeoutMs + 1000);
-  const { statusCommand, pushPreviewCommand } = closeMemoryCommands(artifactRoot, memoryStatusPath, requestTimeoutMs);
-  const memoryScriptPath = options.memoryScriptPath ?? path.join(P2A_PATHS.scriptsDir, 'p2a_memory.mjs');
-  const temporaryStatusPath = path.join(
-    iterationRoot,
-    `.memory-status.${process.pid}.${Date.now()}.tmp.json`,
-  );
-  const runner = options.runner ?? spawnSync;
-  let result;
-  try {
-    result = runner(process.execPath, [
-      memoryScriptPath,
-      'status',
-      '--artifacts',
-      artifactRoot,
-      '--server',
-      configuration.server,
-      '--timeout-ms',
-      String(requestTimeoutMs),
-      '--output',
-      temporaryStatusPath,
-    ], {
-      cwd: options.projectRoot ?? ROOT,
-      encoding: 'utf8',
-      env: options.environment ?? process.env,
-      timeout: operationTimeoutMs,
-      killSignal: 'SIGTERM',
-    });
-  } catch (error) {
-    result = { status: 1, error, stdout: '', stderr: '' };
-  }
-
-  const runnerCompleted = !result?.error
-    && !result?.signal
-    && Number.isInteger(result?.status)
-    && [0, 1].includes(result.status);
-  let report = runnerCompleted ? loadJsonIfPresent(temporaryStatusPath) : null;
-  if (!report) {
-    const stderr = String(result?.stderr ?? '').trim();
-    const detail = result?.error?.code === 'ETIMEDOUT'
-      ? `Memory status check exceeded its ${operationTimeoutMs}ms close-time limit.`
-      : (result?.error?.message
-        || stderr
-        || (result?.signal
-          ? `Memory status check was terminated by ${result.signal}.`
-          : `Memory status check exited with ${result?.status ?? 'unknown'}.`));
-    report = failedCloseMemoryStatusReport(
-      path.basename(artifactRoot),
-      path.basename(iterationRoot),
-      configuration.server,
-      requestTimeoutMs,
-      operationTimeoutMs,
-      detail,
-    );
-  }
-  try {
-    atomicWriteJson(memoryStatusPath, report);
-  } finally {
-    if (existsSync(temporaryStatusPath)) unlinkSync(temporaryStatusPath);
-  }
-
-  const freshness = memoryFreshnessFromStatusReport(report, {
-    projectId: options.projectId ?? path.basename(artifactRoot),
-    iterationId: options.iterationId ?? path.basename(iterationRoot),
-  });
-  const detail = freshness.status === 'unavailable' && report.server?.detail
-    ? String(report.server.detail)
-    : freshness.detail;
-  return {
-    status: freshness.status,
-    report_ref: artifactRelativePath(artifactRoot, memoryStatusPath),
-    checked_at: report.generatedAt ?? new Date().toISOString(),
-    status_command: statusCommand,
-    push_preview_command: pushPreviewCommand,
-    check_exit_code: Number.isInteger(result?.status) ? result.status : 1,
-    operation_timeout_ms: operationTimeoutMs,
-    detail,
-  };
-}
-
-function loadJsonIfPresent(filePath) {
-  if (!existsSync(filePath)) return null;
-  try {
-    return loadJson(filePath);
-  } catch {
-    return null;
-  }
-}
-
-export function planningMemoryRecallPlan(options) {
-  const projectRoot = options.projectRoot ?? ROOT;
-  const artifactRoot = options.artifactRoot ?? path.resolve(options.iterationRoot, '..', '..');
-  const configuration = planningMemoryConfiguration({ ...options, projectRoot });
-  const projectReportPath = path.join(options.iterationRoot, 'gate-a-intake', 'memory-recall.json');
-  const crossProjectReportPath = path.join(options.iterationRoot, 'gate-a-intake', 'memory-recall-cross-project.json');
-  const crossProjectReason = planningMemoryCrossProjectReason(options.idea);
-  const previousStatusPath = options.previousIterationId
-    ? path.join(artifactRoot, 'iterations', options.previousIterationId, 'memory-status.json')
-    : null;
-  const previousStatusReport = previousStatusPath ? loadJsonIfPresent(previousStatusPath) : null;
-  const baselineFreshness = {
-    ...memoryFreshnessFromStatusReport(previousStatusReport, {
-      projectId: options.projectId,
-      iterationId: options.previousIterationId,
-    }),
-    report_ref: previousStatusPath && existsSync(previousStatusPath)
-      ? artifactRelativePath(artifactRoot, previousStatusPath)
-      : null,
-  };
-  const configured = configuration.enabled && configuration.configured;
-  const projectLayer = {
-    scope: 'project',
-    status: configured ? 'pending' : 'not_configured',
-    query: options.idea,
-    requested_mode: 'hybrid',
-    report_ref: artifactRelativePath(artifactRoot, projectReportPath),
-    command: configured
-      ? planningMemorySearchCommand({
-          projectRoot,
-          projectId: options.projectId,
-          idea: options.idea,
-          outputPath: projectReportPath,
-        })
-      : null,
-    detail: configuration.reason,
-  };
-  const crossProjectLayer = {
-    scope: 'cross_project',
-    required: Boolean(crossProjectReason),
-    reason: crossProjectReason,
-    status: configured && crossProjectReason
-      ? 'pending'
-      : configured
-        ? 'skipped'
-        : 'not_configured',
-    query: options.idea,
-    requested_mode: 'hybrid',
-    exclude_project: options.projectId,
-    report_ref: artifactRelativePath(artifactRoot, crossProjectReportPath),
-    command: configured && crossProjectReason
-      ? planningMemorySearchCommand({
-          projectRoot,
-          projectId: options.projectId,
-          idea: options.idea,
-          outputPath: crossProjectReportPath,
-          global: true,
-        })
-      : null,
-    detail: configured ? (crossProjectReason ? null : 'No reusable cross-project concern was detected.') : configuration.reason,
-  };
-  return {
-    status: configured ? 'pending' : 'not_configured',
-    configured,
-    configuration_reason: configuration.reason,
-    baseline_freshness: baselineFreshness,
-    layers: {
-      project: projectLayer,
-      cross_project: crossProjectLayer,
-    },
-  };
-}
-
-export function planningMemoryRecallCommand(options) {
-  return planningMemoryRecallPlan(options).layers.project.command;
-}
-
-function planningMemorySourceReference(result) {
-  const reference = result?.sourceReference ?? result?.citation?.sourceReference ?? null;
-  if (typeof reference === 'string') return reference.trim() || null;
-  if (reference && typeof reference === 'object' && !Array.isArray(reference)) {
-    const base = [reference.path, reference.uri, reference.canonicalServerId]
-      .find((value) => typeof value === 'string' && value.trim())?.trim() ?? null;
-    const fragment = typeof reference.fragment === 'string' && reference.fragment.trim()
-      ? reference.fragment.trim()
-      : null;
-    if (base) return fragment ? `${base}#${fragment}` : base;
-  }
-  const fallback = [
-    result?.sourcePath,
-    result?.lineage?.sourcePath,
-    result?.citation?.lineage?.sourcePath,
-  ].find((value) => typeof value === 'string' && value.trim());
-  return fallback?.trim() ?? null;
-}
-
-function planningMemoryResultRef(result) {
-  return {
-    artifact_type: result?.artifactType ?? null,
-    source_path: result?.sourcePath ?? result?.lineage?.sourcePath ?? null,
-    source_reference: planningMemorySourceReference(result),
-    natural_key: result?.naturalKey ?? result?.metadata?.naturalKey ?? null,
-    source_project_id: result?.sourceIds?.sourceProjectId ?? result?.metadata?.sourceProjectId ?? null,
-    status: result?.metadata?.status ?? null,
-    failure_class: result?.metadata?.failureClass ?? null,
-  };
-}
-
-function planningMemoryReportErrors(report, layer, projectId) {
-  const errors = [];
-  if (!report || typeof report !== 'object' || Array.isArray(report)) return ['report is missing or invalid JSON'];
-  if (report.schema_version !== 'p2a.memory_search.v1') errors.push(`schema_version must be p2a.memory_search.v1, got ${report.schema_version ?? 'missing'}`);
-  if (!report.server || typeof report.server !== 'object' || Array.isArray(report.server)) {
-    errors.push('server must be an object');
-  } else if (!PLANNING_MEMORY_SERVER_STATUSES.has(report.server.status)) {
-    errors.push(`server.status is invalid: ${report.server.status ?? 'missing'}`);
-  }
-  if (report.query?.text !== layer.query) errors.push('query.text does not match the iteration idea');
-  if (report.query?.mode !== layer.requested_mode) errors.push(`query.mode must be ${layer.requested_mode}`);
-  if (!Array.isArray(report.results)) errors.push('results must be an array');
-  else if (report.results.some((result) => !result || typeof result !== 'object' || Array.isArray(result))) {
-    errors.push('results entries must be objects');
-  }
-  if (!Number.isInteger(report.summary?.total) || report.summary.total < 0) {
-    errors.push('summary.total must be a non-negative integer');
-  } else if (Array.isArray(report.results) && report.summary.total !== report.results.length) {
-    errors.push('summary.total must match results.length');
-  }
-  const effectiveMode = report.query?.effectiveMode ?? null;
-  if (effectiveMode !== null && !PLANNING_MEMORY_SEARCH_MODES.has(effectiveMode)) {
-    errors.push(`query.effectiveMode is invalid: ${effectiveMode}`);
-  }
-  if (report.server?.status === 'not_configured' && effectiveMode !== null) {
-    errors.push('query.effectiveMode must be null when the Memory server is not configured');
-  }
-  if (
-    ['up', 'unknown'].includes(report.server?.status)
-    && effectiveMode === null
-  ) {
-    errors.push('query.effectiveMode is required when the Memory search completed');
-  }
-  const fallback = report.query?.fallback;
-  if (
-    fallback !== null
-    && fallback !== undefined
-    && (
-      typeof fallback !== 'object'
-      || Array.isArray(fallback)
-      || typeof fallback.from !== 'string'
-      || typeof fallback.to !== 'string'
-    )
-  ) {
-    errors.push('query.fallback must be null or an object with string from/to fields');
-  } else if (fallback && typeof fallback === 'object') {
-    if (fallback.from !== layer.requested_mode || fallback.to !== 'keyword') {
-      errors.push(`query.fallback must describe ${layer.requested_mode}->keyword`);
-    }
-    if (fallback.supplemental !== undefined && typeof fallback.supplemental !== 'boolean') {
-      errors.push('query.fallback.supplemental must be a boolean when present');
-    }
-    if (effectiveMode !== null) {
-      const expectedEffectiveMode = fallback.supplemental === true ? fallback.from : fallback.to;
-      if (effectiveMode !== expectedEffectiveMode) {
-        errors.push(`query.effectiveMode must be ${expectedEffectiveMode} for the recorded fallback`);
-      }
-    }
-  } else if (effectiveMode !== null && effectiveMode !== layer.requested_mode) {
-    errors.push('query.effectiveMode differs from the requested mode without a fallback');
-  }
-  if (layer.scope === 'project') {
-    if (report.query?.scope !== 'project') errors.push('project recall query.scope must be project');
-    const sourceProjectId = report.context?.sourceProjectId ?? report.context?.projectId;
-    if (sourceProjectId !== projectId) errors.push(`project recall context must identify ${projectId}`);
-  } else {
-    if (report.query?.scope !== 'global') errors.push('cross-project recall query.scope must be global');
-    if (report.query?.excludeProject !== projectId) errors.push(`cross-project recall must exclude ${projectId}`);
-  }
-  return errors;
-}
-
-function planningMemoryReportPath(artifactRoot, reportRef) {
-  if (typeof reportRef !== 'string' || !reportRef.trim()) return null;
-  const root = path.resolve(artifactRoot);
-  const resolved = path.resolve(root, reportRef);
-  const relative = path.relative(root, resolved);
-  if (relative === '' || relative.startsWith('..') || path.isAbsolute(relative)) return null;
-  return resolved;
-}
-
-function planningMemoryReportStatus(report, errors, requestedMode) {
-  if (
-    errors.length
-    || ['unavailable', 'not_configured'].includes(report?.server?.status)
-    || !report?.query?.effectiveMode
-  ) return 'failed';
-  if (report.query.fallback || report.query.effectiveMode !== requestedMode) return 'fallback';
-  return 'succeeded';
-}
-
-export function consumePlanningMemoryLayer(layer, artifactRoot, projectId) {
-  if (!layer || layer.status === 'not_configured' || layer.status === 'skipped') return layer;
-  const reportPath = planningMemoryReportPath(artifactRoot, layer.report_ref);
-  if (!reportPath) {
-    return { ...layer, status: 'failed', detail: 'Recall report_ref must stay inside the artifact root.', result_count: 0, relevant_results: [], relevant_failures: [] };
-  }
-  if (!existsSync(reportPath)) {
-    return { ...layer, status: 'skipped', detail: 'Recall report was not created before draft.', result_count: 0, relevant_results: [], relevant_failures: [] };
-  }
-  const report = loadJsonIfPresent(reportPath);
-  const errors = planningMemoryReportErrors(report, layer, projectId);
-  const effectiveMode = report?.query?.effectiveMode ?? null;
-  const fallback = report?.query?.fallback ?? null;
-  const status = planningMemoryReportStatus(report, errors, layer.requested_mode);
-  const reportResults = Array.isArray(report?.results) ? report.results : [];
-  const normalizedResults = reportResults.map(planningMemoryResultRef);
-  const relevantResults = normalizedResults.slice(0, 8);
-  const relevantFailures = normalizedResults
-    .filter((result) => result.failure_class || ['failed', 'blocked'].includes(result.status))
-    .slice(0, 8);
-  const resultCount = Number.isInteger(report?.summary?.total) && report.summary.total >= 0
-    ? report.summary.total
-    : relevantResults.length;
-  return {
-    ...layer,
-    status,
-    effective_mode: effectiveMode,
-    fallback,
-    detail: errors.length ? errors.join('; ') : (report?.server?.detail ?? null),
-    result_count: resultCount,
-    relevant_results: relevantResults,
-    relevant_failures: relevantFailures,
-  };
-}
-
-function planningMemoryOverallStatus(layers) {
-  const statuses = [layers.project?.status, layers.cross_project?.required ? layers.cross_project?.status : null].filter(Boolean);
-  if (statuses.includes('failed')) return 'failed';
-  if (statuses.includes('fallback')) return 'fallback';
-  if (statuses.includes('pending')) return 'pending';
-  if (statuses.includes('skipped')) return 'skipped';
-  if (statuses.includes('succeeded')) return 'succeeded';
-  return 'not_configured';
-}
-
-export function planningMemoryIncompleteWarningLines(memory) {
-  const incompleteLayers = [
-    ['project', memory?.layers?.project],
-    ['cross-project', memory?.layers?.cross_project],
-  ].filter(([label, layer]) => (
-    ['failed', 'skipped'].includes(layer?.status)
-    && (label === 'project' || layer.required)
-  ));
-  if (!incompleteLayers.length) return [];
-  const lines = [
-    `WARNING: Planning Memory recall is incomplete (overall=${memory?.status ?? 'unknown'}); planning continued without complete historical Memory evidence.`,
-    'WARNING: This does not mean that no prior decisions or failures exist.',
-  ];
-  incompleteLayers.forEach(([label, layer]) => {
-    lines.push(`- planning Memory recall (${label}): status=${layer.status}; report=${layer.report_ref ?? 'not recorded'}; detail=${layer.detail ?? 'not available'}`);
-  });
-  return lines;
-}
-
-function consumePlanningMemory(metadata, state, idea) {
-  const storedMemory = metadata.planning_memory;
-  const storedQueriesMatchIdea = (
-    storedMemory?.layers?.project?.query === idea
-    && storedMemory?.layers?.cross_project?.query === idea
-  );
-  const regenerated = Boolean(storedMemory) && !storedQueriesMatchIdea;
-  const initial = storedQueriesMatchIdea
-    ? storedMemory
-    : planningMemoryRecallPlan({
-        projectId: state.projectId,
-        artifactRoot: state.artifactRoot,
-        iterationRoot: state.iterationRoot,
-        previousIterationId: metadata.baseline?.iteration_id,
-        idea,
-      });
-  const consumeLayer = (layer) => {
-    if (regenerated) return layer;
-    return consumePlanningMemoryLayer(layer, state.artifactRoot, state.projectId);
-  };
-  const layers = {
-    project: consumeLayer(initial.layers?.project),
-    cross_project: consumeLayer(initial.layers?.cross_project),
-  };
-  return {
-    ...initial,
-    status: planningMemoryOverallStatus(layers),
-    consumed_at: new Date().toISOString(),
-    layers,
-  };
-}
-
-function nextNumberedId(items, field, prefix) {
-  let highest = 0;
-  const pattern = new RegExp(`^${prefix}-([0-9]+)$`);
-  for (const item of items ?? []) {
-    const match = typeof item?.[field] === 'string' ? item[field].match(pattern) : null;
-    if (match) highest = Math.max(highest, Number.parseInt(match[1], 10));
-  }
-  return highest + 1;
-}
-
-function planningMemoryEvidence(memory, existingEvidence = []) {
-  const evidence = [];
-  let localIndex = nextNumberedId(existingEvidence, 'source_id', 'LOCAL');
-  const layers = [memory?.layers?.project, memory?.layers?.cross_project];
-  layers.forEach((layer) => {
-    if (!['succeeded', 'fallback', 'failed'].includes(layer?.status)) return;
-    const sources = (layer.relevant_results ?? [])
-      .map((result) => result.source_reference ?? result.natural_key ?? result.source_path)
-      .filter(Boolean)
-      .slice(0, 5);
-    evidence.push({
-      source_id: `LOCAL-${localIndex}`,
-      title: layer.scope === 'project' ? 'Project Memory recall report' : 'Cross-project Memory recall report',
-      url: layer.scope === 'project' ? 'memory-recall.json' : 'memory-recall-cross-project.json',
-      used_for: `Memory recall context only; query=${JSON.stringify(layer.query)}; requested=${layer.requested_mode}; effective=${layer.effective_mode ?? 'none'}; fallback=${layer.fallback ? `${layer.fallback.from}->${layer.fallback.to}` : 'none'}; sources=${sources.join(',') || 'none'}; status=${layer.status}.`,
-    });
-    localIndex += 1;
-  });
-  return evidence;
-}
-
-export function mergePlanningMemoryIntoIntake(intake, memory) {
-  const evidence = planningMemoryEvidence(memory, intake.evidence);
-  if (!evidence.length && memory?.status === 'not_configured') return intake;
-  return {
-    ...intake,
-    known_facts: appendUnique(intake.known_facts, [
-      `Planning Memory recall status: ${memory.status}; project=${memory.layers?.project?.status ?? 'not_configured'}; cross-project=${memory.layers?.cross_project?.status ?? 'not_configured'}. Reports are context, not automatically approved requirements.`,
-    ]),
-    evidence: [...intake.evidence, ...evidence],
-  };
-}
-
-export function mergePlanningMemoryIntoSpec(spec, memory) {
-  const intakeEvidence = planningMemoryEvidence(memory, spec.evidence);
-  const evidence = intakeEvidence.map((item) => ({
-    ...item,
-    url: `../gate-a-intake/${item.url}`,
-  }));
-  if (!evidence.length && memory?.status === 'not_configured') return spec;
-  const reconnaissance = spec.reference_reconnaissance ?? initialReferenceReconnaissance('current', 'current iteration');
-  const candidateIndex = nextNumberedId(reconnaissance.candidates, 'candidate_id', 'REF');
-  const candidates = evidence.map((item, index) => ({
-    candidate_id: `REF-${candidateIndex + index}`,
-    title: item.title,
-    source_id: item.source_id,
-    source_type: 'local_artifact',
-    summary: item.used_for,
-    used_for: 'Reviewed as prior-project context before approving implementation choices.',
-    decision: 'context',
-    rationale: 'Memory results are not adopted automatically; task boundaries and acceptance criteria must cite a result only when it materially changes the plan.',
-  }));
-  return {
-    ...spec,
-    evidence: [...spec.evidence, ...evidence],
-    reference_reconnaissance: {
-      ...reconnaissance,
-      triggers: appendUnique(reconnaissance.triggers, [
-        `Planning Memory recall was consumed with status ${memory.status}; verify any material reuse or failure mitigation before Gate B approval.`,
-      ]),
-      candidates: [...reconnaissance.candidates, ...candidates],
-    },
-  };
-}
-
-export function planningMemoryValidationErrors(memory, artifactRoot, projectId, expectedIdea = null) {
-  const errors = [];
-  if (!memory || typeof memory !== 'object') return errors;
-  if (!PLANNING_MEMORY_STATUSES.has(memory.status)) errors.push(`planning_memory.status is invalid: ${memory.status}`);
-  if (!MEMORY_FRESHNESS_STATUSES.has(memory.baseline_freshness?.status ?? 'unchecked')) {
-    errors.push(`planning_memory.baseline_freshness.status is invalid: ${memory.baseline_freshness?.status}`);
-  }
-  const layers = memory.layers;
-  if (!layers || typeof layers !== 'object' || Array.isArray(layers)) {
-    errors.push('planning_memory.layers must be an object');
-    return errors;
-  }
-  for (const requiredLayer of ['project', 'cross_project']) {
-    if (!layers[requiredLayer] || typeof layers[requiredLayer] !== 'object' || Array.isArray(layers[requiredLayer])) {
-      errors.push(`planning_memory.layers.${requiredLayer} is required`);
-    }
-  }
-  for (const name of Object.keys(layers)) {
-    if (!['project', 'cross_project'].includes(name)) {
-      errors.push(`planning_memory.layers.${name} is not supported`);
-    }
-  }
-  for (const [name, layer] of Object.entries(layers)) {
-    const expectedScope = name === 'project' ? 'project' : name === 'cross_project' ? 'cross_project' : null;
-    if (expectedScope && layer?.scope !== expectedScope) {
-      errors.push(`planning_memory.layers.${name}.scope must be ${expectedScope}`);
-    }
-    if (name === 'cross_project' && typeof layer?.required !== 'boolean') {
-      errors.push('planning_memory.layers.cross_project.required must be a boolean');
-    }
-    if (!PLANNING_MEMORY_STATUSES.has(layer?.status)) {
-      errors.push(`planning_memory.layers.${name}.status is invalid: ${layer?.status}`);
-      continue;
-    }
-    if (layer.requested_mode !== 'hybrid') {
-      errors.push(`planning_memory.layers.${name}.requested_mode must be hybrid`);
-    }
-    if (expectedIdea && layer.query !== expectedIdea) {
-      errors.push(`planning_memory.layers.${name}.query must match iteration idea`);
-    }
-    if (['succeeded', 'fallback', 'failed'].includes(layer.status)) {
-      const reportPath = planningMemoryReportPath(artifactRoot, layer.report_ref);
-      if (!reportPath) {
-        errors.push(`planning_memory.layers.${name}.report_ref must stay inside the artifact root`);
-        continue;
-      }
-      const report = loadJsonIfPresent(reportPath);
-      const reportErrors = planningMemoryReportErrors(report, layer, projectId);
-      if (reportErrors.length) errors.push(`planning_memory.layers.${name}: ${reportErrors.join('; ')}`);
-      const reportStatus = planningMemoryReportStatus(report, reportErrors, layer.requested_mode);
-      if (layer.status !== reportStatus) {
-        errors.push(`planning_memory.layers.${name} claims ${layer.status} but report state is ${reportStatus}`);
-      }
-    }
-  }
-  if (layers.project && layers.cross_project && PLANNING_MEMORY_STATUSES.has(memory.status)) {
-    const expectedStatus = planningMemoryOverallStatus(layers);
-    if (memory.status !== expectedStatus) {
-      errors.push(`planning_memory.status claims ${memory.status} but layer state is ${expectedStatus}`);
-    }
-  }
-  return errors;
-}
-
-export function validatePlanningMemoryEvidence(memory, document, documentPath, artifactRoot) {
-  if (!memory || !document) return;
-  for (const layer of Object.values(memory.layers ?? {})) {
-    if (!['succeeded', 'fallback', 'failed'].includes(layer?.status)) continue;
-    const expectedReportPath = planningMemoryReportPath(artifactRoot, layer.report_ref);
-    if (!expectedReportPath) throw new ValidationError(`${documentPath} Memory report_ref must stay inside the artifact root`);
-    const reportName = path.basename(expectedReportPath);
-    const evidence = (document.evidence ?? []).find((item) => path.basename(item.url ?? '') === reportName);
-    if (!evidence) throw new ValidationError(`${documentPath} must cite ${reportName} because planning Memory status is ${layer.status}`);
-    const resolved = path.resolve(path.dirname(documentPath), evidence.url);
-    if (!existsSync(resolved)) throw new ValidationError(`${documentPath} Memory evidence file not found: ${evidence.url}`);
-    if (resolved !== expectedReportPath) throw new ValidationError(`${documentPath} Memory evidence ${evidence.source_id} must resolve to ${layer.report_ref}`);
-    for (const token of ['query=', 'requested=', 'effective=', 'fallback=', 'sources=']) {
-      if (!evidence.used_for.includes(token)) throw new ValidationError(`${documentPath} Memory evidence ${evidence.source_id} used_for must include ${token}`);
-    }
   }
 }
 
@@ -5446,15 +4534,6 @@ function openLocked(args, artifactRoot, idea, options = {}) {
       artifactRoot,
       args.iterationId,
     );
-    const planningMemory = planningMemoryRecallPlan({
-      projectRoot: ROOT,
-      projectId,
-      artifactRoot,
-      iterationRoot,
-      previousIterationId: facts.state.activeIteration,
-      idea,
-    });
-
     writeFileSync(
       path.join(iterationRoot, 'iteration.json'),
       `${JSON.stringify(iterationMetadata(
@@ -5465,7 +4544,6 @@ function openLocked(args, artifactRoot, idea, options = {}) {
         openedAt,
         baseline.ref,
         baseline.sha256,
-        planningMemory,
       ), null, 2)}\n`,
       'utf8',
     );
@@ -5499,13 +4577,6 @@ function openLocked(args, artifactRoot, idea, options = {}) {
     console.log(`- baseline iteration: ${facts.state.activeIteration}`);
     console.log(`- idea: ${idea}`);
     console.log('Skeleton created; Gate B/C artifacts are not required until planning outputs are written.');
-    console.log(`- baseline Memory freshness: ${planningMemory.baseline_freshness.status} (${planningMemory.baseline_freshness.detail})`);
-    if (planningMemory.layers.project.command) console.log(`- planning recall (project): ${planningMemory.layers.project.command}`);
-    if (planningMemory.layers.cross_project.command) {
-      console.log(`- planning recall (cross-project): ${planningMemory.layers.cross_project.command}`);
-      console.log(`  reason: ${planningMemory.layers.cross_project.reason}`);
-    }
-    if (!planningMemory.configured) console.log(`- planning recall: not configured (${planningMemory.configuration_reason})`);
     if (cleanup?.prunedRunIds.length) {
       console.log(`- transient run cleanup: removed ${cleanup.prunedRunIds.length} archived run(s)`);
     }
@@ -5724,7 +4795,6 @@ function draftWithState(args, state) {
   const metadata = loadIterationMetadata(state.iterationRoot);
   const idea = draftIdea(args, pending, metadata);
   if (args.force) assertGateAForceResetSafe(state);
-  const planningMemory = consumePlanningMemory(metadata, state, idea);
   const baselineSpecRef = pending.baseline_effective_spec_ref;
   let baselineIteration = pending.baseline_iteration ?? metadata.baseline?.iteration_id ?? 'none';
   let baselineSpec = null;
@@ -5787,14 +4857,10 @@ function draftWithState(args, state) {
       baselineSpec,
       baselineContext,
     });
-    intake = mergePlanningMemoryIntoIntake(intake, planningMemory);
     if (preflight.detected) intake = mergeFeatureRadarIntoIntake(intake, preflight);
     writeGeneratedIntake = true;
   } else if (resetGreenfieldIntake) {
     intake = buildGreenfieldRestartIntake(null, idea, state.activeIteration);
-    if (!intake.known_facts.some((fact) => fact.startsWith('Planning Memory recall status:'))) {
-      intake = mergePlanningMemoryIntoIntake(intake, planningMemory);
-    }
     if (
       preflight.detected
       && !intake.known_facts.some((fact) => fact.startsWith('Feature Radar preflight research detected'))
@@ -5861,7 +4927,6 @@ function draftWithState(args, state) {
         idea,
         draftedAt,
         artifacts,
-        planningMemory,
       ),
     );
     const nextCurrentSpec = currentSpecForGateAScope(
@@ -5879,8 +4944,6 @@ function draftWithState(args, state) {
     console.log(`- active iteration: ${state.activeIteration}`);
     console.log(nextAction);
     console.log('- Gate B synthesis is blocked until Gate A is explicitly confirmed.');
-    console.log(`- planning Memory: ${planningMemory.status} (project=${planningMemory.layers.project.status}, cross-project=${planningMemory.layers.cross_project.status})`);
-    planningMemoryIncompleteWarningLines(planningMemory).forEach((line) => console.warn(line));
     if (preflight.detected) {
       console.log(`- Feature Radar preflight: ${featureRadarSummary(preflight)}`);
     }
@@ -5904,7 +4967,6 @@ function draftWithState(args, state) {
         intake,
       });
   spec.source_intake_sha256 = fileSha256(files.intakeJson);
-  spec = mergePlanningMemoryIntoSpec(spec, planningMemory);
   if (preflight.detected) {
     spec = mergeFeatureRadarIntoSpec(spec, preflight);
   }
@@ -5926,7 +4988,7 @@ function draftWithState(args, state) {
   validateSpec(files.specJson, files.intakeJson, { artifactRoot });
   writeIterationMetadataAndReadme(
     state,
-    iterationMetadataForDraft(planningMetadata, idea, draftedAt, artifacts, planningMemory),
+    iterationMetadataForDraft(planningMetadata, idea, draftedAt, artifacts),
   );
   const nextCurrentSpec = currentSpecForDraft(currentSpec, state.activeIteration, idea, draftedAt, artifacts);
   writeJson(state.currentSpecPath, nextCurrentSpec);
@@ -5937,8 +4999,6 @@ function draftWithState(args, state) {
   console.log(`- baseline spec: ${baselineSpecRef ?? 'none'}`);
   console.log(`- intake: ${artifacts.intake_ref}`);
   console.log(`- spec: ${artifacts.spec_ref} (approval=draft)`);
-  console.log(`- planning Memory: ${planningMemory.status} (project=${planningMemory.layers.project.status}, cross-project=${planningMemory.layers.cross_project.status})`);
-  planningMemoryIncompleteWarningLines(planningMemory).forEach((line) => console.warn(line));
   if (preflight.detected) {
     console.log(`- Feature Radar preflight: ${featureRadarSummary(preflight)}`);
   }

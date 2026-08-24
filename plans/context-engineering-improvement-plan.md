@@ -33,7 +33,7 @@ P2A v0.3.0은 이미 다음 영역에서 새 원칙과 잘 맞는다.
 | CE-004 | 완료 | 주요 skill 5개를 판단·경계·조건부 라우팅 중심의 얇은 상위 문서와 세부 reference로 분리했다. |
 | CE-005 | 완료 | 기존 schema·validator·CLI가 강제하는 불변 조건은 그대로 유지하고, 상위 skill에서는 권위 source와 복구 경로를 가리키도록 세부 절차를 옮겼다. validator는 local JSON Pointer `$ref`도 재귀 검증한다. |
 | CE-006 | 완료 | 기본 `p2a.next.v1` 응답과 strict schema는 변경하지 않고, enum `state`·`reasonCode`가 필요한 consumer용 `p2a.next.v2`를 `--contract v2`로 분리했다. |
-| CE-007 | 완료 | provider 자동 메모리, P2A Memory, Gate artifact의 책임과 충돌 우선순위를 skill 및 하네스 문서에 명시했다. |
+| CE-007 | 완료 | provider 자동 메모리, BuildLore, Gate artifact의 책임과 충돌 우선순위를 skill 및 하네스 문서에 명시했다. |
 | CE-008 | 완료 | 선택적 entry bundle과 Gate A snapshot·Gate B usage sidecar를 추가했다. 신규 문서 기반 Gate A 승인은 `p2a decide --entry`가 entry와 bundle을 재검증해 snapshot 누락·불일치를 차단하고, sibling bundle 자체가 symlink나 비정규 파일이면 “bundle 없음”으로 취급하지 않고 거부한다. `p2a reference snapshot`은 프로젝트 내부 reference symlink의 논리 경로를 보존하면서 실경로 confinement를 검사하고, validator·iteration init·handoff가 실제 hash, 승인 binding, REF↔LOCAL 양방향 연결과 실제 spec 결정 경로를 보존·재검증한다. |
 | CE-009 | 부분 완료 | repository test, package test, fixture gate와 provider asset parity를 통과했고 §5.4에 비교·증거·rollout 프로토콜을 고정했다. Codex `gpt-5.6-luna/medium` aggregate behavioral A/B는 6개 시나리오를 baseline/candidate 각각 3회 실행해 양쪽 모두 18/18 hard gate를 통과했다. 다만 합산 변경·synthetic 판단 평가이며 Claude/Gemini와 production lifecycle coverage가 없으므로 판정은 `provider_limited`다. |
 
@@ -68,7 +68,7 @@ P2A v0.3.0은 이미 다음 영역에서 새 원칙과 잘 맞는다.
 13. reference route에 `providers`와 `provider_paths`를 추가하고 canonical skill·audit·parity checker가 같은 해석을 사용하게 했다. Gemini 생성기는 route의 command identity만 검증하며 command wrapper에서 canonical 실행 규칙의 중복을 제거하고 read-only 전달 경계만 남겼다.
 14. Gate B usage가 `REF-n → LOCAL-n`만 검사하던 구조를 양방향 일대일 검증으로 강화했다. `supported_decision`도 허용된 prefix 문자열이 아니라 현재 spec에 실제로 존재하는 필드인지 확인한다.
 15. audit의 report-wide `summary.promptBytes`를 단일 provider의 “실제 prompt”처럼 표현하던 오류를 고쳤다. CLI·schema·문서는 이를 unique resolved corpus로 명명하고 provider별 값은 `providers[]`에서 분리한다.
-16. route manifest에 빠져 있던 필수/선택 의미를 `required` boolean으로 추가했다. Audit source와 Gemini generator·parity checker가 같은 값을 소비하고, Planning Memory recall과 선택적 Markdown view는 모델 판단형 보조 자료로 구분한다.
+16. route manifest에 빠져 있던 필수/선택 의미를 `required` boolean으로 추가했다. Audit source와 Gemini generator·parity checker가 같은 값을 소비하고, BuildLore retrieval과 선택적 Markdown view는 모델 판단형 보조 자료로 구분한다.
 17. 유효한 sibling reference bundle이 있어도 snapshot 없이 `p2a decide`가 Gate A를 승인하던 우회를 막았다. 신규 문서 기반 intake는 원본 `--entry`가 필수이고, snapshot의 entry·bundle hash가 현재 입력과 일치해야 한다. `p2a next --entry`도 승인 명령에 같은 경로를 전달하며 baseline 반복과 legacy 승인 사본 재바인딩은 호환 경로를 유지한다.
 18. 프로젝트 내부 디렉터리 symlink를 통한 유효한 reference가 snapshot 재검증에서 사라지던 문제를 수정했다. 실경로는 confinement와 원본 바이트 읽기에 사용하고 bundle의 논리 경로는 portable capture 위치에 보존하며, 외부로 탈출하는 symlink는 계속 차단한다.
 19. sibling `p2a-reference-bundle.json` 자체가 symlink나 디렉터리이면 regular file 검사를 통과하지 못하도록 했다. 이를 “선택 bundle 없음”으로 낮춰 snapshot binding 없이 Gate A를 승인하던 경로를 `validate --entry`와 `p2a decide --entry` 양쪽에서 차단한다.
@@ -88,9 +88,9 @@ P2A v0.3.0은 이미 다음 영역에서 새 원칙과 잘 맞는다.
 | --- | --- | --- | --- |
 | 규칙보다 판단 | 적응형 실행이 작업 크기와 위험에 따라 실행 모드를 선택한다. | 여러 skill·agent 프롬프트가 세부 금지 규칙과 절차를 반복한다. | 부분 충족 |
 | 예시보다 인터페이스 | CLI, JSON Schema, `p2a next`의 명령 객체가 모델에 명확한 조작면을 제공한다. | `next.state`는 아직 임의 문자열이고 일부 복구 조건은 프롬프트 설명에 의존한다. | 대체로 충족 |
-| 점진적 공개 | 개발 실행 skill은 visual, acceptance, monitor, batch 참고 문서를 조건부로 읽는다. | canonical harness에는 `existing-documents`와 `memory-recall`의 명시적 라우팅이 없지만 Gemini wrapper에는 있다. | 부분 충족 |
+| 점진적 공개 | 개발 실행 skill은 visual, acceptance, monitor, batch 참고 문서를 조건부로 읽는다. | canonical harness에는 `existing-documents`와 `buildlore-knowledge`의 명시적 라우팅이 없지만 Gemini wrapper에는 있다. | 부분 충족 |
 | 반복 금지 | 일부 공통 규칙은 스키마와 코드로 이미 강제된다. | 동일한 승인·금지·검증 문구가 skill, agent, provider wrapper에 중복된다. | 개선 필요 |
-| 자동 메모리 활용 | P2A Memory는 재현 가능하고 이식 가능한 장기 메모리 계약을 제공한다. | 공급자 자동 메모리와 P2A의 공식 메모리 사이의 책임 경계를 더 명확히 해야 한다. | 의도적으로 별도 유지 |
+| 자동 메모리 활용 | BuildLore는 재현 가능하고 이식 가능한 장기 지식 계약을 제공한다. | 공급자 자동 메모리와 공식 지식 저장소 사이의 책임 경계를 더 명확히 해야 한다. | 의도적으로 별도 유지 |
 | 더 깊은 자료 제공 | 테스트, 스키마, HTML 프로토타입, 시각·접근성 증거, 해시 기반 lineage를 사용한다. | 최초 입력 계약은 읽을 수 있는 Markdown/text 문서에 치우쳐 있다. | 대체로 충족 |
 
 ### 2.2 정적 기준선
@@ -112,7 +112,7 @@ P2A v0.3.0은 이미 다음 영역에서 새 원칙과 잘 맞는다.
 ### 2.3 확인된 구조적 간극
 
 1. **실제 컨텍스트를 볼 수 없다.** 파일 크기는 알 수 있지만 공급자·단계·실행 모드별로 어떤 문서가 실제 로드되는지 한 번에 확인할 수 없다.
-2. **canonical 라우팅과 provider wrapper가 다르다.** [canonical harness skill](../.agents/skills/p2a-harness/SKILL.md)에는 두 참고 문서의 명시적 조건부 경로가 없지만 [Gemini harness wrapper](../.gemini/commands/p2a/harness.toml)에는 `existing-documents.md`와 `memory-recall.md`가 나열돼 있다.
+2. **canonical 라우팅과 provider wrapper가 다르다.** [canonical harness skill](../.agents/skills/p2a-harness/SKILL.md)에는 두 참고 문서의 명시적 조건부 경로가 없지만 [Gemini harness wrapper](../.gemini/commands/p2a/harness.toml)에는 `existing-documents.md`와 `buildlore-knowledge.md`가 나열돼 있다.
 3. **기계적 불변 조건이 자연어에도 반복된다.** approval, open decision, task graph, visual contract 규칙의 상당 부분은 [artifact validator](../scripts/validate_artifacts.mjs)와 CLI에서 이미 검증한다.
 4. **다음 행동 인터페이스의 타입이 덜 엄격하다.** [next schema](../schemas/next.schema.json)는 command kind와 `requiresApproval`을 타입으로 보장하지만 `state`는 비어 있지 않은 문자열이면 된다.
 5. **doctor가 컨텍스트 건강도를 진단하지 않는다.** [p2a doctor](../scripts/p2a_doctor.mjs)는 개발 환경을 확인하지만 중복, 충돌, wrapper drift, 항상 로드되는 문서 크기를 보고하지 않는다.
@@ -128,7 +128,7 @@ P2A v0.3.0은 이미 다음 영역에서 새 원칙과 잘 맞는다.
 - canonical JSON, source hash, decision ledger, lineage
 - 실행 가능한 검증 명령과 시각·접근성 증거
 - 실패 증거의 보존과 재시도 이력
-- 이식 가능한 P2A Memory의 명시적 push/recall 계약
+- 이식 가능한 BuildLore의 명시적 sync/retrieval 계약
 
 원칙은 다음과 같다.
 
@@ -183,7 +183,7 @@ doctor는 자동 삭제 도구가 아니라 advisory 도구로 둔다. 제안마
 - 필수/선택 여부
 - 공급자 제한 또는 대체 경로
 
-먼저 `p2a-harness`의 `existing-documents.md`와 `memory-recall.md` 불일치를 수정한다. 이후 Claude/Codex/Gemini wrapper는 canonical metadata에서 생성하거나 parity test로 동등성을 강제한다. wrapper에는 호출 방법과 실제 공급자 제약만 남긴다.
+먼저 `p2a-harness`의 `existing-documents.md`와 `buildlore-knowledge.md` 불일치를 수정한다. 이후 Claude/Codex/Gemini wrapper는 canonical metadata에서 생성하거나 parity test로 동등성을 강제한다. wrapper에는 호출 방법과 실제 공급자 제약만 남긴다.
 
 완료 조건:
 
@@ -248,10 +248,10 @@ v1 schema나 응답에 새 필드를 추가하지 않는다. consumer migration�
 공급자 자동 메모리는 세션 편의 기능으로 활용하되 canonical 사실의 유일한 저장소로 사용하지 않는다.
 
 - 자동 메모리: 일시적 선호, 반복 작업의 편의, 비공식 힌트
-- P2A Memory: 검토된 프로젝트 지식, 출처와 상태가 있는 이식 가능한 기록
+- BuildLore: 검토된 프로젝트 지식, 출처와 상태가 있는 이식 가능한 기록
 - Gate artifact: 승인된 objective, scope, acceptance, authority의 최종 기준
 
-자동 메모리의 내용이 Gate artifact나 repository evidence와 충돌하면 후자를 우선한다. 외부 memory push는 계속 명시적 권한을 요구한다.
+자동 메모리의 내용이 Gate artifact나 repository evidence와 충돌하면 후자를 우선한다. BuildLore sync와 Git publish는 계속 명시적 권한을 요구한다.
 
 ### CE-008 — 풍부한 입력 reference bundle과 Gate provenance (P2)
 
@@ -361,7 +361,7 @@ node scripts/validate_artifacts.mjs --artifact-root <candidate-artifact-root>
 | 3 | CE-003 routing 통합 | CE-001 | canonical manifest와 parity test |
 | 4 | CE-004/005 skill 슬림화 | CE-002, CE-003 | skill별 작은 변경과 A/B 결과 |
 | 5 | CE-006 typed interface | CE-005 | strict v1 유지와 opt-in `p2a.next.v2` 계약 |
-| 6 | CE-007/008 memory·reference | CE-003 | 책임 경계와 Gate A/B sidecar provenance 계약 |
+| 6 | CE-007/008 knowledge·reference | CE-003 | 책임 경계와 Gate A/B source provenance 계약 |
 | 7 | CE-009 release gate | 각 변경마다 반복 | 비교 보고서와 rollout 결정 |
 
 출시용 변경 이력은 이 표의 논리 단위로 분리할 수 있어야 한다. 한 skill에서 회귀가 생기면 전체 개선을 되돌리지 않고 해당 단계만 rollback할 수 있어야 한다.
@@ -397,7 +397,7 @@ git diff --check
 | schema `$ref` 강제 | local JSON Pointer `$ref`를 재귀 해석하고 잘못된 v2 state와 중첩 context mode를 validator 음성 test에서 거부 |
 | reference bundle lineage | 신규 Gate A `--entry` preflight와 snapshot 누락 차단, sibling bundle symlink/비정규 파일 거부, entry·bundle hash, Gate B usage와 REF↔LOCAL 양방향 일대일 연결, 실제 spec 결정 경로, 결정 원장의 현재 Gate 파일 hash binding, 내부 reference symlink 논리 경로 보존·외부 실경로 confinement, iteration init과 portable handoff 후 재검증 |
 | prompt 축소 전후 scenario | repository 401개 회귀와 package/fixture gate 통과; Codex aggregate A/B는 양쪽 18/18, uncached input -4.45%, 총 input +8.54%, elapsed +11.59%이며 전체 CE-009는 `provider_limited` |
-| P2A Memory와 provider memory 우선순위 | canonical precedence를 skill·하네스 문서에 고정; Codex synthetic 판단은 통과했지만 provider 자동 메모리를 재현하는 production live 평가는 대기 |
+| BuildLore와 provider memory 우선순위 | canonical precedence를 skill·하네스 문서에 고정; Codex synthetic 판단은 통과했지만 provider 자동 메모리를 재현하는 production live 평가는 대기 |
 
 ## 8. 비목표
 

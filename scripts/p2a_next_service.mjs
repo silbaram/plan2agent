@@ -5,7 +5,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, lstatSync, readFileSync, readdirSync, realpathSync } from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
-import { DEFAULT_MEMORY_REQUEST_TIMEOUT_MS, DEFAULT_RUNS_DIR, GATE_FILES, GREENFIELD_REQUIRED_FILES } from './p2a_constants.mjs';
+import { DEFAULT_RUNS_DIR, GATE_FILES, GREENFIELD_REQUIRED_FILES } from './p2a_constants.mjs';
 import { resolveExecutionModePolicy, resolveOrchestrationAgentTool, resolveReviewPasses } from './p2a_project_config.mjs';
 import { normalizePath, resolveP2aPaths } from './p2a_paths.mjs';
 import { p2aCommandLine } from './p2a_run_commands.mjs';
@@ -819,10 +819,10 @@ function capabilityState(manifest, config, key) {
   };
 }
 
-function summarizeMemoryEnhancement(manifest, config) {
-  const state = capabilityState(manifest, config, 'memory');
-  const configMemory = state.configRecord;
-  const manifestMemory = state.manifestRecord;
+function summarizeBuildLoreEnhancement(manifest, config) {
+  const state = capabilityState(manifest, config, 'buildlore');
+  const configBuildLore = state.configRecord;
+  const manifestBuildLore = state.manifestRecord;
   if (!state.enabled) {
     return {
       enabled: false,
@@ -833,25 +833,21 @@ function summarizeMemoryEnhancement(manifest, config) {
       inSync: state.inSync,
     };
   }
-  const serverUrlEnv = stringValue(configMemory.serverUrlEnv) ?? 'P2A_MEMORY_URL';
-  const tokenEnv = stringValue(configMemory.tokenEnv) ?? 'P2A_MEMORY_TOKEN';
+  const commandEnv = stringValue(configBuildLore.commandEnv) ?? 'BUILDLORE_BIN';
   return {
     enabled: true,
-    mode: stringValue(manifestMemory.mode) ?? stringValue(configMemory.mode) ?? 'manual_sync',
+    mode: stringValue(manifestBuildLore.mode) ?? stringValue(configBuildLore.mode) ?? 'local_cli',
     manifestPresent: state.manifestPresent,
     configPresent: state.configPresent,
     manifestEnabled: state.manifestEnabled,
     configEnabled: state.configEnabled,
     inSync: state.inSync,
-    serverUrlEnv,
-    serverConfigured: Boolean(process.env[serverUrlEnv] || stringValue(configMemory.serverUrl)),
-    tokenEnv,
-    tokenConfigured: Boolean(process.env[tokenEnv] || stringValue(configMemory.token)),
-    requestTimeoutMs: Number.isInteger(configMemory.requestTimeoutMs) && configMemory.requestTimeoutMs > 0
-      ? configMemory.requestTimeoutMs
-      : DEFAULT_MEMORY_REQUEST_TIMEOUT_MS,
-    statusPolicy: stringValue(configMemory.statusPolicy) ?? 'local_first',
-    pushPolicy: stringValue(configMemory.pushPolicy) ?? 'explicit_approval',
+    command: stringValue(configBuildLore.command) ?? 'buildlore',
+    commandEnv,
+    commandConfigured: Boolean(process.env[commandEnv] || stringValue(configBuildLore.command)),
+    syncPolicy: stringValue(configBuildLore.syncPolicy) ?? 'explicit',
+    retrievalMode: stringValue(configBuildLore.retrievalMode) ?? 'hybrid',
+    publicationPolicy: stringValue(configBuildLore.publicationPolicy) ?? 'explicit_git',
   };
 }
 
@@ -932,11 +928,11 @@ function summarizeOrchestrationEnhancement(manifest, config) {
 }
 
 function summarizeEnhancements(targetRoot, manifest, config) {
-  const keys = ['devSkills', 'memory', 'orchestration', 'proposals'];
+  const keys = ['devSkills', 'buildlore', 'orchestration', 'proposals'];
   const enabled = keys.filter((key) => capabilityState(manifest, config, key).enabled);
   return {
     enabled,
-    memory: summarizeMemoryEnhancement(manifest, config),
+    buildlore: summarizeBuildLoreEnhancement(manifest, config),
     orchestration: summarizeOrchestrationEnhancement(manifest, config),
     proposals: summarizeProposalsEnhancement(targetRoot, manifest, config),
   };
@@ -2430,15 +2426,12 @@ function buildInfoSnapshot(targetRootInput, options = {}) {
       }
     }
   }
-  if (enhancements.memory.enabled) {
-    if (!enhancements.memory.inSync) {
-      nextActions.push(`Repair Memory capability manifest/config drift: ${p2aCommand(['enhance', 'memory'])}`);
+  if (enhancements.buildlore.enabled) {
+    if (!enhancements.buildlore.inSync) {
+      nextActions.push(`Repair BuildLore capability manifest/config drift: ${p2aCommand(['enhance', 'buildlore'])}`);
     } else if (artifacts.length) {
-      nextActions.push(`Check Memory sync: ${p2aCommand(['memory', 'status', '--artifacts', artifacts[0].artifactRoot])}`);
-      nextActions.push(`Preview Memory pull: ${p2aCommand(['memory', 'pull', '--artifacts', artifacts[0].artifactRoot, '--dry-run'])}`);
-      nextActions.push(`Search project Memory history: ${p2aCommand(['memory', 'search', '--project', artifacts[0].projectId, '--mode', 'hybrid', '--query', '<term>'])}`);
-      nextActions.push(`Show Memory timeline: ${p2aCommand(['memory', 'history', '--artifacts', artifacts[0].artifactRoot])}`);
-      nextActions.push(`Digest Memory maintenance candidates: ${p2aCommand(['memory', 'digest', '--artifacts', artifacts[0].artifactRoot])}`);
+      nextActions.push(`Preview BuildLore projection: ${p2aCommand(['buildlore', 'sync', '--project', artifacts[0].projectId, '--dry-run'])}`);
+      nextActions.push(`Search committed BuildLore knowledge: ${p2aCommand(['buildlore', 'search', '--project', artifacts[0].projectId, '--mode', enhancements.buildlore.retrievalMode, '--query', '<term>'])}`);
     }
   }
   if (enhancements.proposals.enabled) {

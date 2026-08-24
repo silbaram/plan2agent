@@ -15,7 +15,7 @@ Plan2Agent CLI는 기획 산출물 검증, 승인된 task graph 실행, agent ru
 | `p2a decide`, `p2a decisions` | Gate ①·범위 변경을 append-only 원장에 기록하고 결정 계보를 조회한다. |
 | `p2a shape` | Gate ② constitution 상태, legacy style migration, 인용 승인 기록을 관리한다. |
 | `p2a iteration`, `p2a tasks`, `p2a runs`, `p2a execute` | 반복·task·run 실행 흐름을 관리한다. |
-| `p2a validate`, `p2a eval`, `p2a memory`, `p2a proposals` | 산출물 검증, 평가, Memory, 개선 제안을 관리한다. |
+| `p2a validate`, `p2a eval`, `p2a buildlore`, `p2a proposals` | 산출물 검증, 평가, 장기 지식, 개선 제안을 관리한다. |
 | `p2a doctor`, `p2a enhance`, `p2a update` | 프로젝트 상태를 진단하고 provider/config 자산을 관리한다. |
 | `p2a handoff` | 승인된 산출물을 별도 대상 프로젝트로 인계한다. |
 
@@ -30,13 +30,9 @@ Plan2Agent 본체 개발에서만 `scripts/sync_cli_assets.mjs`, `scripts/check_
 5. `p2a execute status/finish`로 run 상태 확인, verification, run finish, task done/block 전이를 묶어 기록한다. Full visual iteration은 `p2a execute review`, 비UI iteration은 기본적으로 `p2a execute accept`로 iteration당 하나의 canonical no-change pre-close 검토 run을 연다. 세부 제어가 필요하면 `p2a tasks`와 `p2a runs`를 직접 사용한다.
 6. 실패, blocked monitor verdict, verification gap이 쌓이면 `p2a proposals mine/review/curate/draft-patch/approve-draft/digest`로 개선 proposal queue, curator review artifact, approval-ready curation artifact, non-applying patch draft, 승인 artifact를 만든다. proposal 적용은 승인된 maintenance task를 별도 실행해서 진행한다.
 7. `p2a eval grade/compare/analyze/generate/digest`로 run acceptance 증거, iteration regression, 실패 클러스터를 평가하고 proposal/maintenance/delta draft 경로로 연결한다.
-8. 장기 보존이나 회고 검색이 필요하면 `p2a memory status/push/pull/search/history/trace/impact/precedent/digest`로 로컬 산출물과 Memory 서버 snapshot의 차이, 검색 결과, 계보, timeline, 유지보수 후보를 확인하고, 명시 승인 후 push한다. `memory search`는 하위호환 기본값인 `keyword`와 명시적 `semantic`/`hybrid` 모드를 지원한다. `--project <sourceProjectId>`는 해당 프로젝트의 모든 반복을 검색하고, 조건부 cross-project recall은 `--global --exclude-project <sourceProjectId>`로 현재 프로젝트를 제외한다.
+8. 장기 보존이나 회고 검색이 필요하면 BuildLore의 별도 `knowledge/` Git 저장소를 연결한다. `p2a buildlore sync --dry-run`으로 `.plan2agent/artifacts/<project-id>/` projection을 먼저 검토하고, `p2a buildlore sync`로 sanitizer를 통과한 source를 기록한다. 검색과 context는 project-scoped이며 `lexical`, `semantic`, `hybrid` mode를 사용할 수 있다. sync는 Git commit이나 push를 자동 수행하지 않는다.
 
-승인된 기획 문서만 동기화하려면 `p2a memory push --artifacts <artifact-root> --profile planning-docs --dry-run`으로 먼저 선택 결과를 확인한다. `planning-docs`는 `memory push`의 명시적 `--artifacts` source에서만 사용할 수 있다. 이 프로필은 현재 기능 iteration과 `current-spec.json.closed_iterations`에 기록된 archived iteration의 canonical `product-spec.md`, `implementation-plan.md`, 그리고 Gate A가 완료된 경우의 `intake.md`만 선택한다. pending·미등록 iteration, maintenance, task, run, proposal, review/evidence, generated index, Memory recall, 로컬 chunk, handoff/baseline 복사본과 symlink는 안정적인 사유와 함께 제외된다.
-
-dry-run은 서버 설정이 없어도 canonical JSON의 approval, source hash, project/root 경계와 open decision을 검증하고 모든 스캔 항목의 disposition, 원문·canonical JSON hash, 예상 document snapshot 수와 write order를 결정적으로 출력한다. 서버 전략은 `paragraph-2000`, 대상 snapshot 수는 선택 문서 수, client `DOCUMENT_CHUNK` write count는 0으로 표시하며 로컬 chunk content/hash/ID를 계산하지 않는다. 이 과정은 Memory 서버에 연결하지 않는다.
-
-실제 외부 쓰기는 기존과 동일하게 명시적 `--yes`가 필요하다. planning-docs의 각 `POST /api/documents/snapshots` payload는 exact `chunking: { "strategy": "paragraph-2000" }` opt-in을 포함한다. CLI는 응답의 동일 strategy와 양의 정수 `chunkCount`를 즉시 검증하고 누락·불일치·잘못된 count에서는 후속 snapshot write와 bulk fallback 없이 fail closed한다. planning-docs에서는 `/document-chunks/bulk`를 호출하지 않고 결과에 `chunks=0`과 acknowledgment의 합인 `serverGeneratedChunks`를 표시한다. 로컬 chunk 파일은 planning source artifact로 다시 수집하지 않으며, profile 없는 기존 push는 client chunk payload와 `/document-chunks/bulk` 계약을 그대로 사용한다.
+BuildLore는 local-first·Git-backed 장기 지식 도구다. P2A adapter는 BuildLore CLI를 shell 없이 실행하고 projection·검색·context 진입점만 제공한다.
 
 ## 2. 전역 공통 진입점 — `p2a`
 
@@ -52,7 +48,23 @@ p2a next
 p2a next --json --contract v2
 ```
 
-`p2a`의 하위 명령은 `decide`, `decisions`, `shape`, `eval`, `memory`, `execute`, `tasks`, `runs`, `iteration`, `proposals`, `validate`, `doctor`, `enhance`, `update`, `upgrade`, `handoff`다. `--target`을 생략하면 현재 작업 디렉터리를 대상으로 삼는다.
+`p2a`의 하위 명령은 `decide`, `decisions`, `shape`, `eval`, `buildlore`, `execute`, `tasks`, `runs`, `iteration`, `proposals`, `validate`, `doctor`, `enhance`, `update`, `upgrade`, `handoff`다. `--target`을 생략하면 현재 작업 디렉터리를 대상으로 삼는다.
+
+### BuildLore 연동 — `p2a buildlore`
+
+BuildLore 자체에서 `knowledge/` repository attach와 project 등록을 마친 뒤 P2A capability를 활성화한다. `project.config.json.projectId`가 등록한 BuildLore project ID와 같아야 한다.
+
+```bash
+p2a enhance buildlore
+p2a buildlore status
+p2a buildlore sync --dry-run --json
+p2a buildlore sync
+p2a buildlore check
+p2a buildlore search --query "실패 원인" --mode lexical
+p2a buildlore context --prompt "다음 구현 계획을 준비해"
+```
+
+`--project`를 생략하면 `project.config.json`, 그다음 `manifest.json`의 `projectId`를 사용한다. 실행 파일은 기본 `buildlore`이며 `BUILDLORE_BIN` 또는 `project.config.json.buildlore.command`로 단일 executable path를 지정할 수 있다. 고정 인자가 필요한 개발 checkout은 `buildlore.commandArgs`를 사용한다. adapter는 `status`, `sync`, `check`, `search`, `context`, `compile`, `query`만 제공한다. knowledge commit/push와 parent submodule pin은 BuildLore에서 계획·검토·실행한다.
 
 옵션 없는 `p2a next --json`은 기존 consumer를 위한 엄격한 `p2a.next.v1` 계약을 유지한다. 사람이 읽는 `p2a next` 출력은 v2를 기본으로 사용해 구조화된 선택지, 중첩 명령, 승인 여부를 빠뜨리지 않는다. 타입이 지정된 상태 enum과 안정적인 `reasonCode`가 필요한 agent consumer는 `--contract v2`를 명시하며, 출력은 `next-v2.schema.json`의 `p2a.next.v2`를 따른다.
 
@@ -348,7 +360,7 @@ p2a iteration maintenance add \
 
 `--acceptance-review`는 `p2a.acceptance_review.v1` sidecar를 검증한다. `--runs-dir`와 함께 검증하면 각 case가 run에서 실제 실행된 command/source/exitCode/stdoutTail과 일치하는지, 모든 Gate B 기준이 포함됐는지, exact sidecar digest와 `confirm_behavior`가 봉인됐는지까지 확인한다. `--run`, `--run-index`, `--runs-dir`는 `p2a runs`가 만든 run log와 index의 schema 및 상호 참조를 검증한다. 이 중 `--runs-dir`는 run 본문에 결합된 monitor gate sidecar의 존재와 contract hash, 완료 판정에 사용한 monitor verdict 원문 바이트의 `monitorVerdictEvidenceSha256`도 함께 검사한다. `--skill-proposal`, `--proposal-review`, `--proposal-curation`, `--proposal-patch-draft`, `--proposal-draft-approval`, `--proposals-dir`는 Hermes식 proposal queue/review/curation/patch draft/approval artifact를 검증한다.
 
-`p2a iteration validate`는 반복 구조의 active iteration 포인터, active Gate B/C 산출물, task dependency, current-spec composition과 planning Memory 상태/보고서/`LOCAL-n` 인용 정합성을 검증한다. `--allow-planning`/`--stage`는 Gate A-ready, Gate B draft/approved, 또는 `gate-c-task-graph/task-graph.draft.json`을 검증하는 Gate C draft 상태를 planning state로 검증한다. `--require-close-ready`를 붙이면 모든 active task가 `done`인지 확인한다. Visual iteration은 `final_visual_review`의 canonical workspace snapshot과 evidence를, 비UI iteration은 기본적으로 `final_acceptance_review`의 실제 명령 증거와 `confirm_behavior` digest를 요구한다. 개별 flat task graph가 승인된 spec을 기준으로 생성됐는지 확인할 때는 `validate_artifacts.mjs --task-graph ... --require-approved-spec ...`를 사용한다.
+`p2a iteration validate`는 반복 구조의 active iteration 포인터, active Gate B/C 산출물, task dependency, current-spec composition과 `LOCAL-n` 인용 정합성을 검증한다. `--allow-planning`/`--stage`는 Gate A-ready, Gate B draft/approved, 또는 `gate-c-task-graph/task-graph.draft.json`을 검증하는 Gate C draft 상태를 planning state로 검증한다. `--require-close-ready`를 붙이면 모든 active task가 `done`인지 확인한다. Visual iteration은 `final_visual_review`의 canonical workspace snapshot과 evidence를, 비UI iteration은 기본적으로 `final_acceptance_review`의 실제 명령 증거와 `confirm_behavior` digest를 요구한다. 개별 flat task graph가 승인된 spec을 기준으로 생성됐는지 확인할 때는 `validate_artifacts.mjs --task-graph ... --require-approved-spec ...`를 사용한다.
 
 `p2a iteration close/open/draft/promote-spec/context/diff-tasks/promote-tasks/compose`는 반복 planning과 task graph 초안·승격을 다룬다. `promote-spec`는 active Gate B의 approval audit과 canonical spec ref/SHA를 `current-spec.json`에 binding하며, `p2a next`는 이 binding이 없거나 stale이면 `gate_b_approved_needs_spec_promotion`과 실행 가능한 promotion 명령을 반환한다. `context --scope feature`는 기본값이며 promotion이 완료된 active 기능 반복의 task 저작 context를 출력한다. `context --scope maintenance`는 active feature diff를 섞지 않고 `active_iteration: "maintenance"`와 maintenance task 요약을 포함한 유지보수용 context를 출력한다. `draft`는 `.plan2agent/artifacts/<project_id>/preflight-research/`의 Feature Radar 산출물을 발견하면 Gate A/B 초안의 `evidence`와 `reference_reconnaissance`에 후보 근거로 반영한다. `diff-tasks`는 `task-graph.draft.json`만 만들고, `promote-tasks`는 validator를 통과한 draft를 별도 사람 승인 audit 없이 정본 `task-graph.json`으로 승격한다. 새 milestone review writer는 제거되었고 historical milestone sidecar는 validator·eval·handoff reader에서만 유지한다. `p2a iteration maintenance add`는 Gate A/B 없이 `iterations/maintenance/gate-c-task-graph/task-graph.json`을 lazy 생성하거나 append한다. 단일 task 필수 옵션은 `--title`과 하나 이상의 `--accept`이며, 선택 옵션은 `--description`, `--area`, `--prompt`, 반복 가능한 `--ref`, 반복 가능한 `--depends`, `--dry-run`이다. `--from-draft <file>`은 검토된 maintenance draft의 task들을 한 번에 검증해 append하며, 쓰기 전 `--dry-run`으로 preview하고 실제 append에는 `--yes`가 필요하다. 이미 같은 `eval-cluster:*`/proposal ref가 maintenance graph에 있으면 중복 task는 skip한다.
 
@@ -359,7 +371,7 @@ p2a iteration maintenance add \
 | `--overwrite` | 대상 파일이 이미 있을 때 덮어쓰기를 허용한다. |
 | `--dry-run` | 파일을 쓰지 않고 gate 검증과 인계 계획 출력만 수행한다. |
 
-인계 전제는 Gate B/C가 validator를 통과한 상태다. 특히 `spec.approval`은 `approved`여야 하고, `spec.approval_audit`가 있어야 하며, 모든 intake `CQ-n`은 `spec.clarifying_question_disposition`에서 처분되어야 하고 `spec.open_decisions`는 비어 있어야 한다. Gate C 사람 승인 audit과 Gate D review 파일은 요구하지 않는다. 승인된 `.plan2agent/constitution.json`이 source 프로젝트에 있으면 대상 프로젝트에도 함께 복사되며, legacy no-constitution handoff도 계속 지원한다. 반복 구조 root를 넘기면 active 반복 산출물을 `.plan2agent/artifacts/`로 평탄화하고, `task-graph.sourceSpec`은 `spec.json`으로, `spec.source_intake`는 `intake.json`으로 rebase한다. 이때 `intake.json`은 항상 함께 복사되며, 루트 `current-spec.json`은 `.plan2agent/current-spec.json`으로 함께 복사한다. Markdown view 파일은 존재할 때만 함께 복사된다. 결정 원장은 projection/rebuild 범위가 아니므로 flat target에 복사하거나 경로를 재작성하지 않는다. 대상에 원장이 없으면 기존 `approval_audit` 호환 사본이 legacy fallback으로 작동하며, source의 전체 결정 이력은 source artifact root에서 `p2a decisions`로 조회한다. 반복 history 보존을 위해 iterative root에서는 `--mode move`를 지원하지 않는다. 대상 프로젝트는 `p2a tasks`, `p2a runs`, `p2a execute`, `p2a proposals`, `p2a eval`, `p2a memory`, `p2a validate`를 전역 패키지에서 실행하며, run/monitor/proposal 관련 schema도 패키지가 제공한다. `.plan2agent/project.config.json.runTracking`의 runs directory, run id, branch/worktree pattern, `defaultIsolation`, `persistence`는 `p2a execute start`와 iteration 전환이 사용한다. 새 config와 `p2a update|upgrade`로 마이그레이션한 config의 `persistence` 기본값은 `active_only`다. 아직 마이그레이션하지 않아 필드가 없는 legacy config만 안전한 호환을 위해 `persistent`로 해석한다. `active_only`는 성공한 현재 task의 최신 구현·리뷰 run만 남기고, 다음 iteration을 열 때 종료된 iteration run을, 다음 maintenance task를 시작할 때 완료된 과거 maintenance run을 sidecar와 함께 정리한다. 정리는 index에서 먼저 논리적으로 제거한 뒤 파일을 삭제하므로 도중에 중단돼도 index가 사라진 파일을 가리키지 않는다. `started` run이 있는 범위는 정리하지 않는다. 명시적 CLI 인자가 우선한다.
+인계 전제는 Gate B/C가 validator를 통과한 상태다. 특히 `spec.approval`은 `approved`여야 하고, `spec.approval_audit`가 있어야 하며, 모든 intake `CQ-n`은 `spec.clarifying_question_disposition`에서 처분되어야 하고 `spec.open_decisions`는 비어 있어야 한다. Gate C 사람 승인 audit과 Gate D review 파일은 요구하지 않는다. 승인된 `.plan2agent/constitution.json`이 source 프로젝트에 있으면 대상 프로젝트에도 함께 복사되며, legacy no-constitution handoff도 계속 지원한다. 반복 구조 root를 넘기면 active 반복 산출물을 `.plan2agent/artifacts/`로 평탄화하고, `task-graph.sourceSpec`은 `spec.json`으로, `spec.source_intake`는 `intake.json`으로 rebase한다. 이때 `intake.json`은 항상 함께 복사되며, 루트 `current-spec.json`은 `.plan2agent/current-spec.json`으로 함께 복사한다. Markdown view 파일은 존재할 때만 함께 복사된다. 결정 원장은 projection/rebuild 범위가 아니므로 flat target에 복사하거나 경로를 재작성하지 않는다. 대상에 원장이 없으면 기존 `approval_audit` 호환 사본이 legacy fallback으로 작동하며, source의 전체 결정 이력은 source artifact root에서 `p2a decisions`로 조회한다. 반복 history 보존을 위해 iterative root에서는 `--mode move`를 지원하지 않는다. 대상 프로젝트는 `p2a tasks`, `p2a runs`, `p2a execute`, `p2a proposals`, `p2a eval`, `p2a buildlore`, `p2a validate`를 전역 패키지에서 실행하며, run/monitor/proposal 관련 schema도 패키지가 제공한다. `.plan2agent/project.config.json.runTracking`의 runs directory, run id, branch/worktree pattern, `defaultIsolation`, `persistence`는 `p2a execute start`와 iteration 전환이 사용한다. 새 config와 `p2a update|upgrade`로 마이그레이션한 config의 `persistence` 기본값은 `active_only`다. 아직 마이그레이션하지 않아 필드가 없는 legacy config만 안전한 호환을 위해 `persistent`로 해석한다. `active_only`는 성공한 현재 task의 최신 구현·리뷰 run만 남기고, 다음 iteration을 열 때 종료된 iteration run을, 다음 maintenance task를 시작할 때 완료된 과거 maintenance run을 sidecar와 함께 정리한다. 정리는 index에서 먼저 논리적으로 제거한 뒤 파일을 삭제하므로 도중에 중단돼도 index가 사라진 파일을 가리키지 않는다. `started` run이 있는 범위는 정리하지 않는다. 명시적 CLI 인자가 우선한다.
 
 `--tools`를 지정하면 공통 P2A 원본인 `.agents/skills`, `.agents/agents`와 선택한 CLI별 mirror를 함께 복사한다. `codex`는 `.codex/agents`, `claude`는 `.claude/skills`와 `.claude/agents`, `gemini`는 `.gemini/agents`와 `.gemini/commands/p2a`를 추가한다. 복사된 파일과 선택한 CLI 범위는 `.plan2agent/manifest.json`의 `aiToolTargets`, `aiToolFiles`, `toolFiles`에 기록된다.
 

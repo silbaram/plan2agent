@@ -3,10 +3,10 @@
   "$id": "https://plan2agent.local/schemas/task-context.schema.json",
   "title": "Plan2Agent Task Context",
   "type": "object",
-  "required": ["schema_version", "project_id", "active_iteration", "scope", "idea", "baseline_effective_spec_ref", "effective_spec", "existing_tasks", "spec_field_changes", "planning_memory", "code_signals"],
+  "required": ["schema_version", "project_id", "active_iteration", "scope", "idea", "baseline_effective_spec_ref", "effective_spec", "existing_tasks", "spec_field_changes", "code_signals"],
   "additionalProperties": false,
   "properties": {
-    "schema_version": {"const": "p2a.task_context.v1"},
+    "schema_version": {"const": "p2a.task_context.v2"},
     "project_id": {"type": "string", "minLength": 1},
     "active_iteration": {"type": "string", "minLength": 1},
     "scope": {"type": "string", "enum": ["feature", "maintenance"]},
@@ -67,81 +67,6 @@
           "section": {"type": "string", "enum": ["product", "implementation"]},
           "field": {"type": "string", "minLength": 1},
           "specRef": {"type": "string", "minLength": 1}
-        }
-      }
-    },
-    "planning_memory": {
-      "type": "object",
-      "required": ["status", "baseline_freshness", "layers", "relevant_results", "relevant_failures"],
-      "additionalProperties": false,
-      "properties": {
-        "status": {
-          "type": "string",
-          "enum": ["not_configured", "pending", "succeeded", "fallback", "failed", "skipped"]
-        },
-        "baseline_freshness": {
-          "type": "object",
-          "required": ["status", "report_ref", "detail"],
-          "additionalProperties": false,
-          "properties": {
-            "status": {"type": "string", "enum": ["fresh", "stale", "unavailable", "unchecked"]},
-            "report_ref": {"type": ["string", "null"]},
-            "detail": {"type": ["string", "null"]}
-          }
-        },
-        "layers": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "required": ["scope", "status", "report_ref", "query", "requested_mode", "effective_mode", "fallback", "result_count"],
-            "additionalProperties": false,
-            "properties": {
-              "scope": {"type": "string", "enum": ["project", "cross_project"]},
-              "status": {"type": "string", "enum": ["not_configured", "pending", "succeeded", "fallback", "failed", "skipped"]},
-              "report_ref": {"type": ["string", "null"]},
-              "query": {"type": ["string", "null"]},
-              "requested_mode": {"type": ["string", "null"]},
-              "effective_mode": {"type": ["string", "null"]},
-              "fallback": {"type": ["object", "null"]},
-              "result_count": {"type": "integer", "minimum": 0}
-            }
-          }
-        },
-        "relevant_results": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "required": ["scope", "artifact_type", "source_path", "source_reference", "natural_key", "source_project_id", "status", "failure_class"],
-            "additionalProperties": false,
-            "properties": {
-              "scope": {"type": "string", "enum": ["project", "cross_project"]},
-              "artifact_type": {"type": ["string", "null"]},
-              "source_path": {"type": ["string", "null"]},
-              "source_reference": {"type": ["string", "null"]},
-              "natural_key": {"type": ["string", "null"]},
-              "source_project_id": {"type": ["string", "null"]},
-              "status": {"type": ["string", "null"]},
-              "failure_class": {"type": ["string", "null"]}
-            }
-          }
-        },
-        "relevant_failures": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "required": ["scope", "artifact_type", "source_path", "source_reference", "natural_key", "source_project_id", "status", "failure_class"],
-            "additionalProperties": false,
-            "properties": {
-              "scope": {"type": "string", "enum": ["project", "cross_project"]},
-              "artifact_type": {"type": ["string", "null"]},
-              "source_path": {"type": ["string", "null"]},
-              "source_reference": {"type": ["string", "null"]},
-              "natural_key": {"type": ["string", "null"]},
-              "source_project_id": {"type": ["string", "null"]},
-              "status": {"type": ["string", "null"]},
-              "failure_class": {"type": ["string", "null"]}
-            }
-          }
         }
       }
     },

@@ -33,7 +33,7 @@ const RUNTIME_COMMANDS = new Map([
   ['proposal', { script: 'p2a_proposals.mjs' }],
   ['proposals', { script: 'p2a_proposals.mjs' }],
   ['eval', { script: 'p2a_eval.mjs' }],
-  ['memory', { script: 'p2a_memory.mjs' }],
+  ['buildlore', { script: 'p2a_buildlore.mjs' }],
   ['reference', { script: 'p2a_reference.mjs' }],
   ['validate', { script: 'validate_artifacts.mjs' }],
 ]);
@@ -62,7 +62,7 @@ function usage() {
     '  p2a upgrade [--target <dir>] (--dry-run|--apply)',
     '  p2a enhance <capability> [--target <dir>] [--dry-run] [--overwrite]',
     '  p2a eval <grade|compare|analyze|generate|digest> [options]',
-    '  p2a memory <status|push|pull|search|history|digest|trace|impact|precedent> [options]',
+    '  p2a buildlore <status|sync|check|search|context|compile|query> [options]',
     '  p2a reference snapshot --entry <path> --artifacts <dir> [--target <dir>] [--json]',
     '  p2a execute <prepare|plan|start|review|accept|resume|status|finish> [options]',
     '  p2a context show --artifacts <dir> (--continuation <id>|--phase <phase>) --provider <provider> [options]',
@@ -78,6 +78,7 @@ function usage() {
     '  Install Plan2Agent globally before using p2a. New projects keep only project state and provider assets in .plan2agent/.',
     '  upgrade --apply updates only an npm-global installation; npx, local package, and clone runtimes are preview-only.',
     '  --help, -h  Show this help.',
+    '  --version, -v  Show the installed Plan2Agent version.',
   ].join('\n');
 }
 
@@ -101,6 +102,23 @@ function readJsonObject(filePath) {
 
 function stringValue(value) {
   return typeof value === 'string' && value.trim() ? value : null;
+}
+
+function runVersion(argv) {
+  if (argv.length) {
+    console.error(`p2a version error: unexpected argument ${JSON.stringify(argv[0])}`);
+    return 1;
+  }
+  const packageJson = readJsonObject(path.join(P2A_PATHS.toolRoot, 'package.json'));
+  const embeddedManifest = P2A_PATHS.embedded ? readManifest(P2A_PATHS.projectRoot) : null;
+  const version = stringValue(packageJson?.version)
+    ?? stringValue(embeddedManifest?.provenance?.packageVersion);
+  if (!version) {
+    console.error('p2a version error: runtime package metadata does not expose a version');
+    return 1;
+  }
+  console.log(version);
+  return 0;
 }
 
 function readManifest(targetRoot) {
@@ -261,9 +279,9 @@ function printInfo(info) {
   if (info.enhancements?.enabled?.length) {
     console.log(`- enhancements: ${info.enhancements.enabled.join(', ')}`);
   }
-  if (info.enhancements?.memory?.enabled) {
-    const memory = info.enhancements.memory;
-    console.log(`- memory: mode=${memory.mode} sync=${memory.inSync ? 'ok' : 'drift'} serverEnv=${memory.serverUrlEnv} serverConfigured=${memory.serverConfigured ? 'yes' : 'no'} timeoutMs=${memory.requestTimeoutMs} pushPolicy=${memory.pushPolicy}`);
+  if (info.enhancements?.buildlore?.enabled) {
+    const buildlore = info.enhancements.buildlore;
+    console.log(`- buildlore: mode=${buildlore.mode} sync=${buildlore.inSync ? 'ok' : 'drift'} command=${buildlore.command} commandEnv=${buildlore.commandEnv} syncPolicy=${buildlore.syncPolicy} publicationPolicy=${buildlore.publicationPolicy}`);
   }
   if (info.enhancements?.proposals?.enabled) {
     const proposals = info.enhancements.proposals;
@@ -374,6 +392,7 @@ function main(argv = process.argv.slice(2)) {
     console.log(usage());
     return 0;
   }
+  if (command === '--version' || command === '-v') return runVersion(commandArgs);
   if (command === 'next') return runNext(commandArgs);
   if (command === 'info' || command === 'status') return runInfo(commandArgs);
   if (RUNTIME_COMMANDS.has(command)) return dispatchRuntime(command, commandArgs);

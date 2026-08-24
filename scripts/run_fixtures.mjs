@@ -12,7 +12,6 @@ import {
   validateTaskContextData,
   validateTaskGraphData,
 } from './validate_artifacts.mjs';
-import { compareSync } from './p2a_memory.mjs';
 import { shellQuote } from './p2a_run_commands.mjs';
 import { runFilePath, runSidecarPath, runSidecarRef, taskContractSha256 } from './p2a_run_paths.mjs';
 import {
@@ -33,7 +32,6 @@ import {
   runExecute,
   runHandoff,
   runIteration as runIterationHelper,
-  runMemory,
   runP2a,
   runProposals,
   runRuns,
@@ -41,7 +39,6 @@ import {
   runTargetEval,
   runTargetExecute,
   runTargetIteration,
-  runTargetMemory,
   runTargetP2a,
   runTargetProposals,
   runTargetRuns,
@@ -441,7 +438,7 @@ function validateScaffoldFixtureCase() {
       || (expectedSandboxEnabled && claudeLocalSettings.sandbox?.filesystem?.allowWrite?.[0] !== '.')
       || (!expectedSandboxEnabled && Object.keys(claudeLocalSettings).length !== 0)
       || !gitignoreLines.has('.plan2agent/')
-      || !gitignore.includes('Plan2Agent Memory')
+      || !gitignore.includes('BuildLore')
       || !gitignore.includes('.claude/settings.local.json')
       || !gitignore.includes('node_modules/')
     ) {
@@ -523,10 +520,10 @@ function validateScaffoldFixtureCase() {
       return { status: failureStatus(result), checks };
     }
 
-    result = runTargetMemory(targetRoot, ['--help']);
+    result = runTargetP2a(targetRoot, ['buildlore', '--help']);
     checks += 1;
-    if (result.status !== 0 || !result.stdout.includes('p2a memory status')) {
-      console.error('init target p2a memory --help failed');
+    if (result.status !== 0 || !result.stdout.includes('p2a buildlore status')) {
+      console.error('init target p2a buildlore --help failed');
       writeResultOutput(result);
       return { status: failureStatus(result), checks };
     }
@@ -982,27 +979,7 @@ function validateScaffoldFixtureCase() {
       return { status: failureStatus(result), checks };
     }
 
-    result = runHandoff(['enhance', 'memory', '--target', enhanceTargetRoot, '--dry-run']);
-    checks += 1;
-    const dryRunCapabilityConfig = JSON.parse(readFileSync(enhanceConfigPath, 'utf8'));
-    if (
-      result.status !== 0
-      || !result.stdout.includes('Plan2Agent enhance memory dry run')
-      || !result.stdout.includes('configUpdatedKeys: memory')
-      || !result.stdout.includes(`After creating an artifact root, check local/Memory sync: ${enhanceCommand(['memory', 'status', '--artifacts', '.plan2agent/artifacts/<project_id>'])}`)
-      || !result.stdout.includes(`After Memory is configured, preview restore diff: ${enhanceCommand(['memory', 'pull', '--artifacts', '.plan2agent/artifacts/<project_id>', '--dry-run'])}`)
-      || !result.stdout.includes(`After Memory contains snapshots, search project history: ${enhanceCommand(['memory', 'search', '--project', 'enhance-target', '--mode', 'hybrid', '--query', '<term>'])}`)
-      || !result.stdout.includes(`After Memory contains snapshots, show timeline: ${enhanceCommand(['memory', 'history', '--artifacts', '.plan2agent/artifacts/<project_id>'])}`)
-      || !result.stdout.includes('dry-run: no files written')
-      || dryRunCapabilityConfig.memory
-    ) {
-      console.error('enhance memory dry-run fixture failed');
-      writeResultOutput(result);
-      console.error(JSON.stringify({ dryRunCapabilityConfig }, null, 2));
-      return { status: failureStatus(result), checks };
-    }
-
-    for (const capability of ['memory', 'orchestration', 'proposals']) {
+    for (const capability of ['buildlore', 'orchestration', 'proposals']) {
       result = runHandoff(['enhance', capability, '--target', enhanceTargetRoot]);
       checks += 1;
       if (result.status !== 0 || !result.stdout.includes(`enhance ${capability} complete`)) {
@@ -1033,11 +1010,12 @@ function validateScaffoldFixtureCase() {
     const enhancedCapabilityConfig = JSON.parse(readFileSync(enhanceConfigPath, 'utf8'));
     const enhancedCapabilityManifest = JSON.parse(readFileSync(path.join(enhanceTargetRoot, '.plan2agent', 'manifest.json'), 'utf8'));
     if (
-      enhancedCapabilityConfig.memory?.serverUrlEnv !== 'P2A_MEMORY_URL'
-      || enhancedCapabilityConfig.memory?.requestTimeoutMs !== 5000
+      enhancedCapabilityConfig.buildlore?.command !== 'buildlore'
+      || enhancedCapabilityConfig.buildlore?.syncPolicy !== 'explicit'
+      || enhancedCapabilityConfig.buildlore?.publicationPolicy !== 'explicit_git'
       || enhancedCapabilityConfig.orchestration?.monitorGatePolicy !== 'explicit_require_monitor'
       || enhancedCapabilityConfig.proposals?.patchPolicy !== 'draft_only'
-      || enhancedCapabilityManifest.enhancements?.memory?.configVersion !== 'p2a.memory_config.v1'
+      || enhancedCapabilityManifest.enhancements?.buildlore?.configVersion !== 'p2a.buildlore_config.v1'
       || enhancedCapabilityManifest.enhancements?.proposals?.mode !== 'manual_curate'
     ) {
       console.error('enhance capability config/manifest fixture failed');
@@ -1050,12 +1028,12 @@ function validateScaffoldFixtureCase() {
     const enhancedCapabilityInfo = result.status === 0 ? JSON.parse(result.stdout) : null;
     if (
       result.status !== 0
-      || !enhancedCapabilityInfo.enhancements?.enabled?.includes('memory')
+      || !enhancedCapabilityInfo.enhancements?.enabled?.includes('buildlore')
       || !enhancedCapabilityInfo.enhancements?.enabled?.includes('orchestration')
       || !enhancedCapabilityInfo.enhancements?.enabled?.includes('proposals')
-      || enhancedCapabilityInfo.enhancements?.memory?.enabled !== true
-      || enhancedCapabilityInfo.enhancements?.memory?.pushPolicy !== 'explicit_approval'
-      || enhancedCapabilityInfo.enhancements?.memory?.requestTimeoutMs !== 5000
+      || enhancedCapabilityInfo.enhancements?.buildlore?.enabled !== true
+      || enhancedCapabilityInfo.enhancements?.buildlore?.syncPolicy !== 'explicit'
+      || enhancedCapabilityInfo.enhancements?.buildlore?.publicationPolicy !== 'explicit_git'
       || enhancedCapabilityInfo.enhancements?.orchestration?.enabled !== true
       || enhancedCapabilityInfo.enhancements?.orchestration?.monitorGatePolicy !== 'explicit_require_monitor'
       || enhancedCapabilityInfo.enhancements?.proposals?.enabled !== true
@@ -1074,13 +1052,13 @@ function validateScaffoldFixtureCase() {
     const enhancedCapabilityDoctor = result.status === 0 ? JSON.parse(result.stdout) : null;
     if (
       result.status !== 0
-      || !enhancedCapabilityDoctor.dev?.capabilities?.includes('memory')
+      || !enhancedCapabilityDoctor.dev?.capabilities?.includes('buildlore')
       || !enhancedCapabilityDoctor.dev?.capabilities?.includes('orchestration')
       || !enhancedCapabilityDoctor.dev?.capabilities?.includes('proposals')
-      || !enhancedCapabilityDoctor.checks?.some((item) => item.id === 'capability_memory_manifest' && item.status === 'pass')
-      || !enhancedCapabilityDoctor.checks?.some((item) => item.id === 'capability_memory_config' && item.status === 'pass')
-      || !enhancedCapabilityDoctor.checks?.some((item) => item.id === 'capability_memory_timeout' && item.status === 'pass')
-      || !enhancedCapabilityDoctor.checks?.some((item) => item.id === 'capability_memory_push_policy' && item.status === 'pass')
+      || !enhancedCapabilityDoctor.checks?.some((item) => item.id === 'capability_buildlore_manifest' && item.status === 'pass')
+      || !enhancedCapabilityDoctor.checks?.some((item) => item.id === 'capability_buildlore_config' && item.status === 'pass')
+      || !enhancedCapabilityDoctor.checks?.some((item) => item.id === 'capability_buildlore_sync_policy' && item.status === 'pass')
+      || !enhancedCapabilityDoctor.checks?.some((item) => item.id === 'capability_buildlore_publication_policy' && item.status === 'pass')
       || !enhancedCapabilityDoctor.checks?.some((item) => item.id === 'capability_orchestration_manifest' && item.status === 'pass')
       || !enhancedCapabilityDoctor.checks?.some((item) => item.id === 'capability_orchestration_config' && item.status === 'pass')
       || !enhancedCapabilityDoctor.checks?.some((item) => item.id === 'capability_orchestration_monitor_gate' && item.status === 'pass')
@@ -1351,14 +1329,14 @@ function validateScaffoldFixtureCase() {
     cpSync(enhanceTargetRoot, capabilityUpgradeRoot, { recursive: true });
     const capabilityUpgradeConfigPath = path.join(capabilityUpgradeRoot, '.plan2agent', 'project.config.json');
     const capabilityUpgradeConfig = JSON.parse(readFileSync(capabilityUpgradeConfigPath, 'utf8'));
-    delete capabilityUpgradeConfig.memory;
+    delete capabilityUpgradeConfig.buildlore;
     writeFileSync(capabilityUpgradeConfigPath, `${JSON.stringify(capabilityUpgradeConfig, null, 2)}\n`);
     result = runHandoff(['upgrade', '--target', capabilityUpgradeRoot, '--dry-run']);
     checks += 1;
     if (
       result.status !== 0
-      || !result.stdout.includes('memory_config: would_update')
-      || !result.stdout.includes('(memory)')
+      || !result.stdout.includes('buildlore_config: would_update')
+      || !result.stdout.includes('(buildlore)')
     ) {
       console.error('upgrade dry-run did not preview enabled capability config migration');
       writeResultOutput(result);
@@ -2296,438 +2274,6 @@ function validateEvalFixtureCases() {
   } finally {
     rmSync(tempRoot, { recursive: true, force: true });
   }
-  return { status: 0, checks };
-}
-
-function validateMemoryFixtureCases() {
-  let checks = 0;
-
-  let attributionResult = spawnSync(process.execPath, ['--test', path.join(ROOT, 'tests', 'memory-run-attribution.test.mjs')], { cwd: ROOT, encoding: 'utf8' });
-  checks += 1;
-  if (attributionResult.status !== 0) {
-    console.error('memory run attribution node:test fixture failed');
-    writeResultOutput(attributionResult);
-    return { status: failureStatus(attributionResult), checks };
-  }
-
-  const graphPath = path.join(FIXTURE_ROOT, 'webhook-api-service', 'task-graph.json');
-  const canonicalMemoryProjectId = '2810dbd3-2cd5-5f09-8cfc-a9c2095404fe';
-
-  let result = runMemory(['status', '--graph', graphPath]);
-  checks += 1;
-  if (
-    result.status !== 0
-    || !result.stdout.includes('Plan2Agent memory status')
-    || !result.stdout.includes(`canonical project ID: ${canonicalMemoryProjectId}`)
-    || !result.stdout.includes('documents=2')
-    || !result.stdout.includes('taskGraphs=1')
-  ) {
-    console.error('memory status fixture failed');
-    writeResultOutput(result);
-    return { status: failureStatus(result), checks };
-  }
-
-  result = runMemory(['status', '--graph', graphPath, '--json']);
-  checks += 1;
-  const memoryStatusJson = result.status === 0 ? JSON.parse(result.stdout) : null;
-  const memoryProjectItem = memoryStatusJson?.sync?.items?.find((item) => item.artifactType === 'PROJECT');
-  const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-  if (
-    result.status !== 0
-    || memoryStatusJson?.schema_version !== 'p2a.memory_status.v1'
-    || memoryStatusJson?.context?.projectId !== 'webhook-api-service'
-    || memoryStatusJson?.context?.sourceProjectId !== 'webhook-api-service'
-    || memoryStatusJson?.context?.canonicalProjectId !== canonicalMemoryProjectId
-    || !uuidPattern.test(memoryProjectItem?.artifactId ?? '')
-    || memoryProjectItem?.artifactId?.startsWith('p2a-project-')
-  ) {
-    console.error('memory status canonical UUID fixture failed');
-    writeResultOutput(result);
-    return { status: failureStatus(result), checks };
-  }
-
-  const memoryProposalsDir = mkdtempSync(path.join(tmpdir(), 'p2a-memory-proposals-'));
-  try {
-    writeEvalProposal(memoryProposalsDir, {
-      proposalId: 'proposal-memory-upstream-toolkit',
-      sourceRunId: 'run-memory-upstream-toolkit',
-      target: 'p2a_toolkit',
-      targetRepo: 'https://github.com/silbaram/plan2agent',
-      targetArea: 'p2a-memory',
-      upstreamReason: 'Fixture proposal should be searchable by the Plan2Agent toolkit.',
-      problem: 'Memory should preserve upstream toolkit proposals.',
-      note: 'Exercises proposal snapshot sync into Memory.',
-    });
-
-    result = runMemory(['status', '--graph', graphPath, '--proposals', memoryProposalsDir, '--json']);
-    checks += 1;
-    const memoryProposalStatus = result.status === 0 ? JSON.parse(result.stdout) : null;
-    const memoryProposalItem = memoryProposalStatus?.sync?.items?.find((item) => item.artifactType === 'PROPOSAL');
-    if (
-      result.status !== 0
-      || memoryProposalStatus?.local?.proposals !== 1
-      || memoryProposalItem?.metadata?.proposalTarget !== 'p2a_toolkit'
-      || memoryProposalItem?.metadata?.targetRepo !== 'https://github.com/silbaram/plan2agent'
-    ) {
-      console.error('memory proposal snapshot status fixture failed');
-      writeResultOutput(result);
-      console.error(JSON.stringify({ memoryProposalStatus }, null, 2));
-      return { status: failureStatus(result), checks };
-    }
-
-    result = runMemory(['push', '--graph', graphPath, '--proposals', memoryProposalsDir, '--dry-run']);
-    checks += 1;
-    if (
-      result.status !== 0
-      || !result.stdout.includes('proposals=1')
-      || !result.stdout.includes('PROPOSAL: 1')
-    ) {
-      console.error('memory proposal snapshot push dry-run fixture failed');
-      writeResultOutput(result);
-      return { status: failureStatus(result), checks };
-    }
-  } finally {
-    rmSync(memoryProposalsDir, { recursive: true, force: true });
-  }
-
-  result = runMemory(['push', '--graph', graphPath, '--dry-run']);
-  checks += 1;
-  if (
-    result.status !== 0
-    || !result.stdout.includes('Plan2Agent memory push dry run')
-    || !result.stdout.includes(`canonical project ID: ${canonicalMemoryProjectId}`)
-    || !result.stdout.includes('dry-run: no server writes')
-    || !result.stdout.includes('DOCUMENT_CHUNK:')
-  ) {
-    console.error('memory push dry-run fixture failed');
-    writeResultOutput(result);
-    return { status: failureStatus(result), checks };
-  }
-
-  result = runMemory(['pull', '--graph', graphPath, '--dry-run']);
-  checks += 1;
-  if (result.status === 0 || !result.stdout.includes('Plan2Agent memory pull dry run') || !result.stdout.includes('server: not_configured') || !result.stdout.includes('dry-run: no artifact files written') || !result.stdout.includes('restore: canApply=no')) {
-    console.error('memory pull dry-run not-configured fixture failed');
-    writeResultOutput(result);
-    return { status: result.status === 0 ? 1 : failureStatus(result), checks };
-  }
-
-  const pullReportDir = mkdtempSync(path.join(tmpdir(), 'p2a-memory-pull-report-'));
-  const pullReportPath = path.join(pullReportDir, 'memory-pull-report.json');
-  result = runMemory(['pull', '--graph', graphPath, '--dry-run', '--output', pullReportPath]);
-  checks += 1;
-  const pullReport = existsSync(pullReportPath) ? JSON.parse(readFileSync(pullReportPath, 'utf8')) : null;
-  if (
-    result.status === 0
-    || !pullReport
-    || pullReport.schema_version !== 'p2a.memory_pull_preview.v1'
-    || pullReport.restorePlan?.canApply !== false
-    || pullReport.reportWrites !== 1
-  ) {
-    console.error('memory pull restore report fixture failed');
-    writeResultOutput(result);
-    console.error(JSON.stringify({ pullReport }, null, 2));
-    return { status: result.status === 0 ? 1 : failureStatus(result), checks };
-  }
-  rmSync(pullReportDir, { recursive: true, force: true });
-
-  result = runMemory(['pull', '--graph', graphPath]);
-  checks += 1;
-  if (result.status === 0 || !result.stderr.includes('pull is preview-only for now and requires --dry-run')) {
-    console.error('memory pull dry-run guard fixture failed');
-    writeResultOutput(result);
-    return { status: result.status === 0 ? 1 : failureStatus(result), checks };
-  }
-
-  result = runMemory(['pull', '--graph', graphPath, '--apply', '--yes']);
-  checks += 1;
-  if (result.status === 0 || !result.stderr.includes('memory pull --apply is not available')) {
-    console.error('memory pull apply guard fixture failed');
-    writeResultOutput(result);
-    return { status: result.status === 0 ? 1 : failureStatus(result), checks };
-  }
-
-  result = runMemory(['search', '--graph', graphPath, '--query', 'webhook', '--type', 'document']);
-  checks += 1;
-  if (
-    result.status === 0
-    || !result.stdout.includes('Plan2Agent memory search')
-    || !result.stdout.includes(`canonical project ID: ${canonicalMemoryProjectId}`)
-    || !result.stdout.includes('mode: requested=keyword effective=not_executed')
-    || !result.stdout.includes('server: not_configured')
-    || !result.stdout.includes('Set P2A_MEMORY_URL or pass --server to search Memory.')
-  ) {
-    console.error('memory search not-configured fixture failed');
-    writeResultOutput(result);
-    return { status: result.status === 0 ? 1 : failureStatus(result), checks };
-  }
-
-  result = runMemory(['search', '--project', 'webhook-api-service', '--mode', 'hybrid', '--query', 'webhook', '--json']);
-  checks += 1;
-  const projectHybridSearchPayload = result.stdout ? JSON.parse(result.stdout) : null;
-  if (
-    result.status === 0
-    || projectHybridSearchPayload?.query?.mode !== 'hybrid'
-    || projectHybridSearchPayload?.query?.scope !== 'project'
-    || projectHybridSearchPayload?.context?.projectId !== 'webhook-api-service'
-    || projectHybridSearchPayload?.context?.canonicalProjectId !== canonicalMemoryProjectId
-    || projectHybridSearchPayload?.context?.iterationId !== null
-  ) {
-    console.error('memory project-wide hybrid search fixture failed');
-    writeResultOutput(result);
-    console.error(JSON.stringify({ projectHybridSearchPayload }, null, 2));
-    return { status: result.status === 0 ? 1 : failureStatus(result), checks };
-  }
-
-  result = runMemory(['search', '--project', 'webhook-api-service', '--mode', 'invalid', '--query', 'webhook']);
-  checks += 1;
-  if (result.status === 0 || !result.stderr.includes('unsupported Memory search mode')) {
-    console.error('memory search mode validation fixture failed');
-    writeResultOutput(result);
-    return { status: result.status === 0 ? 1 : failureStatus(result), checks };
-  }
-
-  result = runMemory(['search', '--graph', graphPath, '--query', 'webhook', '--type', 'proposal']);
-  checks += 1;
-  if (
-    result.status === 0
-    || !result.stdout.includes('Plan2Agent memory search')
-    || !result.stdout.includes('type=PROPOSAL')
-    || !result.stdout.includes('server: not_configured')
-    || !result.stdout.includes('Set P2A_MEMORY_URL or pass --server to search Memory.')
-  ) {
-    console.error('memory search proposal type not-configured fixture failed');
-    writeResultOutput(result);
-    return { status: result.status === 0 ? 1 : failureStatus(result), checks };
-  }
-
-  result = runMemory(['search', '--query', 'webhook', '--global', '--source-path', './fixtures/webhook-api-service/task-graph.json', '--json']);
-  checks += 1;
-  const searchSourcePathPayload = result.stdout ? JSON.parse(result.stdout) : null;
-  if (
-    result.status === 0
-    || searchSourcePathPayload?.query?.sourcePath !== 'fixtures/webhook-api-service/task-graph.json'
-  ) {
-    console.error('memory search source-path normalization fixture failed');
-    writeResultOutput(result);
-    return { status: result.status === 0 ? 1 : failureStatus(result), checks };
-  }
-
-  result = runMemory(['history', '--graph', graphPath]);
-  checks += 1;
-  if (
-    result.status !== 0
-    || !result.stdout.includes('Plan2Agent memory history')
-    || !result.stdout.includes(`canonical project ID: ${canonicalMemoryProjectId}`)
-    || !result.stdout.includes('server: not_configured')
-    || !result.stdout.includes('TASK_GRAPH=')
-    || !result.stdout.includes('Set P2A_MEMORY_URL or pass --server to include remote Memory history.')
-  ) {
-    console.error('memory history local fixture failed');
-    writeResultOutput(result);
-    return { status: failureStatus(result), checks };
-  }
-
-  const historyRunsDir = mkdtempSync(path.join(tmpdir(), 'p2a-memory-history-runs-'));
-  try {
-    writeEvalRuns(historyRunsDir, [evalRunFixture('run-memory-history-failed', 'failed')]);
-    result = runMemory(['history', '--runs', historyRunsDir]);
-    checks += 1;
-    if (
-      result.status !== 0
-      || !result.stdout.includes('failedOrBlockedRuns=1')
-      || !result.stdout.includes('Summarize maintenance candidates: p2a memory digest --runs')
-      || !result.stdout.includes('Analyze failure clusters: p2a eval analyze --runs')
-    ) {
-      console.error('memory history failed run next actions fixture failed');
-      writeResultOutput(result);
-      return { status: failureStatus(result), checks };
-    }
-  } finally {
-    rmSync(historyRunsDir, { recursive: true, force: true });
-  }
-
-  result = runMemory(['history', '--global', '--project', 'webhook-api-service', '--json']);
-  checks += 1;
-  const historyGlobalPayload = result.stdout ? JSON.parse(result.stdout) : null;
-  if (
-    result.status === 0
-    || historyGlobalPayload?.schema_version !== 'p2a.memory_history.v1'
-    || historyGlobalPayload?.scope?.mode !== 'global'
-    || historyGlobalPayload?.scope?.projectId !== 'webhook-api-service'
-    || historyGlobalPayload?.server?.status !== 'not_configured'
-  ) {
-    console.error('memory history global not-configured fixture failed');
-    writeResultOutput(result);
-    return { status: result.status === 0 ? 1 : failureStatus(result), checks };
-  }
-
-  const graph = JSON.parse(readFileSync(graphPath, 'utf8'));
-  const graphSourcePath = normalizeFixturePath(graphPath);
-  const graphDocumentSourceId = sourceDocumentId(graph.projectId, graph.version, graphSourcePath);
-  const duplicateRemoteSync = compareSync({
-    syncItems: [
-      {
-        artifactType: 'DOCUMENT_SNAPSHOT',
-        sourceKey: graphDocumentSourceId,
-        sourcePath: graphSourcePath,
-        contentHash: hashText(readFileSync(graphPath, 'utf8')),
-        sourceIds: {
-          sourceDocumentId: graphDocumentSourceId,
-        },
-      },
-    ],
-  }, [
-    {
-      artifactType: 'DOCUMENT_SNAPSHOT',
-      artifactId: 'remote-task-graph-latest',
-      projectId: 'remote-project-id',
-      iterationId: 'remote-iteration-id',
-      sourcePath: graphSourcePath,
-      title: path.basename(graphPath),
-      contentHash: hashText(readFileSync(graphPath, 'utf8')),
-      snapshotVersion: 2,
-      createdAt: '2026-07-02T00:00:00.000Z',
-      updatedAt: '2026-07-02T00:00:00.000Z',
-      sourceIds: {
-        sourceProjectId: graph.projectId,
-        sourceIterationId: graph.version,
-        sourceDocumentId: graphDocumentSourceId,
-      },
-      metadata: {
-        sourceDocumentId: graphDocumentSourceId,
-      },
-    },
-    {
-      artifactType: 'DOCUMENT_SNAPSHOT',
-      artifactId: 'remote-task-graph-old',
-      projectId: 'remote-project-id',
-      iterationId: 'remote-iteration-id',
-      sourcePath: graphSourcePath,
-      title: path.basename(graphPath),
-      contentHash: 'older-task-graph-hash',
-      snapshotVersion: 1,
-      createdAt: '2026-07-01T00:00:00.000Z',
-      updatedAt: '2026-07-01T00:00:00.000Z',
-      sourceIds: {
-        sourceProjectId: graph.projectId,
-        sourceIterationId: graph.version,
-        sourceDocumentId: graphDocumentSourceId,
-      },
-      metadata: {
-        sourceDocumentId: graphDocumentSourceId,
-      },
-    },
-  ]);
-  checks += 1;
-  const duplicateRemoteItem = duplicateRemoteSync.items[0];
-  if (
-    duplicateRemoteSync.summary.synced !== 1
-    || duplicateRemoteSync.summary.remoteDiffers !== 0
-    || duplicateRemoteSync.summary.extraRemote !== 0
-    || duplicateRemoteItem.remoteArtifactId !== 'remote-task-graph-latest'
-    || duplicateRemoteItem.remoteSnapshotVersion !== 2
-  ) {
-    console.error('memory duplicate remote snapshot comparison fixture failed');
-    console.error(JSON.stringify({ duplicateRemoteSync }, null, 2));
-    return { status: 1, checks };
-  }
-
-  result = runMemory(['digest', '--graph', graphPath]);
-  checks += 1;
-  if (result.status !== 0 || !result.stdout.includes('Plan2Agent memory digest') || !result.stdout.includes('runs: total=0')) {
-    console.error('memory digest fixture failed');
-    writeResultOutput(result);
-    return { status: failureStatus(result), checks };
-  }
-
-  const digestRoot = mkdtempSync(path.join(tmpdir(), 'p2a-memory-digest-'));
-  const digestRunsDir = path.join(digestRoot, 'runs');
-  try {
-    const memoryDigestRun = evalRunFixture('run-memory-digest-failed', 'failed');
-    memoryDigestRun.notes.push('Memory search reference used: run-memory-prior');
-    writeEvalRuns(digestRunsDir, [memoryDigestRun]);
-    mkdirSync(path.join(digestRoot, 'eval'), { recursive: true });
-    writeFileSync(path.join(digestRoot, 'eval', 'memory-search.json'), `${JSON.stringify({
-      schema_version: 'p2a.memory_search.v1',
-      generatedAt: '2026-07-02T00:00:00.000Z',
-      query: { text: 'stale search result' },
-      context: {
-        sourceKind: 'runs',
-        sourcePath: path.join(digestRoot, 'other-runs'),
-        projectId: 'webhook-api-service',
-        iterationId: '1',
-      },
-      summary: {
-        total: 1,
-        byType: { RUN_RECORD: 1 },
-      },
-      results: [{
-        artifactType: 'RUN_RECORD',
-        score: 0.99,
-        sourceIds: {
-          sourceRunId: 'stale-run',
-        },
-      }],
-    }, null, 2)}\n`, 'utf8');
-    writeFileSync(path.join(digestRoot, 'eval', 'prior-memory-result.json'), `${JSON.stringify({
-      schema_version: 'p2a.memory_search.v1',
-      generatedAt: '2026-07-02T00:00:00.000Z',
-      query: { text: 'prior failed run memory' },
-      context: {
-        sourceKind: 'runs',
-        sourcePath: digestRunsDir,
-        projectId: 'webhook-api-service',
-        iterationId: '1',
-      },
-      summary: {
-        total: 1,
-        byType: { RUN_RECORD: 1 },
-      },
-      results: [{
-        artifactType: 'RUN_RECORD',
-        score: 0.91,
-        sourceIds: {
-          sourceRunId: 'run-memory-prior',
-        },
-      }],
-    }, null, 2)}\n`, 'utf8');
-    const digestOutputPath = path.join(digestRoot, 'memory-digest.json');
-    result = runMemory(['digest', '--runs', digestRunsDir, '--output', digestOutputPath]);
-    checks += 1;
-    if (
-      result.status !== 0
-      || !result.stdout.includes('structured: reproduction=1/1 localization=1/1 guard=1/1')
-      || !result.stdout.includes('memory usefulness: searchReports=1 used=1/1 rate=1')
-      || !result.stdout.includes('Mine missing proposal candidates')
-    ) {
-      console.error('memory digest structured detail fixture failed');
-      writeResultOutput(result);
-      return { status: failureStatus(result), checks };
-    }
-    const memoryDigest = JSON.parse(readFileSync(digestOutputPath, 'utf8'));
-    if (
-      memoryDigest.memoryUsefulness?.searchReports !== 1
-      || memoryDigest.memoryUsefulness?.totalResults !== 1
-      || memoryDigest.memoryUsefulness?.usedResults !== 1
-      || memoryDigest.memoryUsefulness?.usedBy?.run !== 1
-    ) {
-      console.error('memory digest usefulness fixture failed');
-      console.error(JSON.stringify({ memoryDigest }, null, 2));
-      return { status: 1, checks };
-    }
-  } finally {
-    rmSync(digestRoot, { recursive: true, force: true });
-  }
-
-  result = runMemory(['push', '--graph', graphPath]);
-  checks += 1;
-  if (result.status === 0 || !result.stdout.includes('Actual Memory writes require --yes')) {
-    console.error('memory push approval guard fixture failed');
-    writeResultOutput(result);
-    return { status: result.status === 0 ? 1 : failureStatus(result), checks };
-  }
-
   return { status: 0, checks };
 }
 
@@ -9046,11 +8592,10 @@ function validateIterationCurrentFixtureCases() {
         const taskContext = JSON.parse(result.stdout);
         if (
           result.status !== 0
-          || taskContext.schema_version !== 'p2a.task_context.v1'
+          || taskContext.schema_version !== 'p2a.task_context.v2'
           || taskContext.active_iteration !== 'iter-003'
           || !taskContext.effective_spec
           || !taskContext.existing_tasks
-          || !taskContext.planning_memory
           || !taskContext.code_signals
         ) {
           throw new Error('context JSON contract mismatch');
@@ -9091,7 +8636,6 @@ function validateIterationCurrentFixtureCases() {
         '`schema_version: "p2a.task_graph.v1"`',
         'map `projectId` exactly from `context.project_id`',
         '`tasks` array',
-        '`planning_memory`',
         ...['id', 'title', 'description', 'status', 'dependencies', 'acceptanceCriteria', 'targetArea', 'suggestedAgentPrompt', 'sourceSpecRefs']
           .map((field) => `\`${field}\``),
         '`diff-tasks --force`',
@@ -9398,15 +8942,6 @@ export function main() {
   }
   if (evalResult.status !== 0) return evalResult.status;
 
-  let memoryResult;
-  try {
-    memoryResult = validateMemoryFixtureCases();
-  } catch (error) {
-    console.error(`fixture validation failed: ${error.message}`);
-    return 1;
-  }
-  if (memoryResult.status !== 0) return memoryResult.status;
-
   const e2eResult = runNodeTestFile('tests/e2e-artifact-root.test.mjs');
   writeResultOutput(e2eResult);
   if (e2eResult.status !== 0) return failureStatus(e2eResult);
@@ -9455,7 +8990,6 @@ export function main() {
   const segments = [`${countNodeTestCases(schemaResult.stdout)} Plan2Agent fixture set test(s)`];
   if (scaffoldResult.checks) segments.push(`${scaffoldResult.checks} scaffold fixture check(s)`);
   if (evalResult.checks) segments.push(`${evalResult.checks} eval fixture check(s)`);
-  if (memoryResult.checks) segments.push(`${memoryResult.checks} memory fixture check(s)`);
   segments.push(`${countNodeTestCases(e2eResult.stdout)} e2e fixture test(s)`);
   segments.push(`${countNodeTestCases(verificationRunnerUtilsResult.stdout)} verification runner utility test(s)`);
   segments.push(`${countNodeTestCases(milestoneReviewResult.stdout)} milestone review test(s)`);

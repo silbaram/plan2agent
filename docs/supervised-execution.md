@@ -271,7 +271,7 @@ p2a runs record --run-id <id> --artifacts <root> \
 
 Phase 0의 일회성 task-decomposition A/B 평가는 고정 seed·prompt·verification·UI capture matrix로 수행했고, 그 결과와 한계는 [개선 제안서 §13](gate-driven-adaptive-execution-proposal.md#13-평가-기록과-운영-계측)에 보존한다. 평가는 production `p2a execute` lifecycle 전체를 재현하지 않았으며, 의사결정 완료 뒤 전용 runner·fixture·schema·회귀 테스트를 저장소에서 제거했다. 이후 운영 비교는 실제 run의 `p2a eval digest` telemetry를 사용하고 과거 A/B를 기본 테스트나 phase별 절차로 반복하지 않는다. 당시 사용한 baseline seal CLI와 schema도 제품 runtime과 대상 프로젝트 배포 표면에 남기지 않는다.
 
-같은 task의 latest run이 `failed` 또는 `blocked`인 retry에서만 실행 owner는 task title, failure class, localization으로 같은 프로젝트 Memory를 한 번 조회할 수 있다. 보고서는 `<failed-run-id>.memory-recall.json`으로 보존하고, 재시도 run에는 `MEMORY_RETRY: sourceRun=<id>; report=<path>; applied=<mitigation or none>; status=<succeeded|fallback|failed|skipped>` note를 남긴다. 첫 시도에는 이 조회를 하지 않으며, 유사성이 없는 결과는 적용하지 않는다.
+같은 task의 latest run이 `failed` 또는 `blocked`이면 먼저 해당 로컬 run의 failure class, localization, verification evidence를 직접 확인한다. 이미 commit된 BuildLore 지식이 실제로 도움이 될 때만 같은 프로젝트를 한 번 명시적으로 검색하고, 명확히 유사한 mitigation만 적용해 조회한 source를 run note에 남긴다. 재시도를 이유로 BuildLore sync·compile·commit·push를 암묵적으로 수행하지 않으며 첫 시도에는 검색하지 않는다.
 
 `p2a execute start/status/finish`와 직접 `p2a runs start/finish` 출력 footer에는 copy-paste 가능한 `resume`, `status`, `finish`, `review` 명령이 남는다. `resume`은 `p2a execute resume --run-id <run-id>`로 같은 run의 launcher prompt를 다시 출력한다. `review`의 `p2a proposals mine --run-id <run-id>`는 회고 후보를 쓰는 별도 승인 필요 작업이며, `p2a next`가 자동 실행하지 않는다.
 
@@ -316,7 +316,7 @@ p2a proposals approve-draft --draft .plan2agent/proposals/patch-drafts/<draft>.j
 - conflict-aware batch planning과 target-path overlap hint.
 - PR 생성과 리뷰 상태 연동.
 - code-aware spec 역생성과 결과 diff 병합.
-- Memory 서버 기반 cross-session recall, run/proposal 검색, failure trend 분석.
+- BuildLore 기반 cross-session knowledge retrieval, run/proposal 검색, failure trend 분석.
 - `p2a doctor/info/update/upgrade` 같은 상위 명령면 정리.
 
 일반 multi-provider 무인 scheduler와 API 기반 완전 자동 개발은 기본 로드맵의 우선순위에서 제외한다.

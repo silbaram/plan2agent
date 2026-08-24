@@ -56,7 +56,7 @@ Gate C는 항상 사람이 세부 task graph를 저작하는 단계가 아니다
 | --- | --- | --- | --- |
 | 예: run verification | `p2a execute finish --verify-command ...` | 셸 명령만 실행하고 evidence를 남기지 않음 | 기록 방법을 몰랐음 |
 
-판정 신호: 모든 프로젝트에서 반복적으로 생략되는 단계는 삭제·단순화·자동화 후보 1순위다. 특히 `p2a execute`, `p2a runs`, `p2a eval digest`, `p2a proposals`, `p2a memory` 흐름 중 계약상 필요하지만 자발적으로 쓰이지 않은 것이 있다면 그대로 기록한다.
+판정 신호: 모든 프로젝트에서 반복적으로 생략되는 단계는 삭제·단순화·자동화 후보 1순위다. 특히 `p2a execute`, `p2a runs`, `p2a eval digest`, `p2a proposals`, `p2a buildlore` 흐름 중 계약상 필요하지만 자발적으로 쓰이지 않은 것이 있다면 그대로 기록한다.
 
 ### 기준 4 — 승인 후 자율 완료율
 
@@ -128,7 +128,7 @@ Direct는 승인 objective를 추가 구현 선택 없이 완료했는지, Plann
 
 1. **절차 비용**: 명령 횟수가 가장 많았던 구간은 어디이고, 그 구간의 명령·기록을 단순화할 수 있는가.
 2. **게이트 구조**: Gate A, Gate ②, Gate B, 실행 준비, 최종 evidence 중 실제로 가치를 낸 경계는 무엇인가. 못 낸 경계는 강등·병합하는가.
-3. **레이어 존폐**: `proposals` / `eval` / `memory` / `execute` 중 실사용에서 자발적으로 쓰인 것은 무엇인가. 쓰이지 않은 레이어는 계약상 필수인지부터 다시 확인한다.
+3. **레이어 존폐**: `proposals` / `eval` / `buildlore` / `execute` 중 실사용에서 자발적으로 쓰인 것은 무엇인가. 쓰이지 않은 레이어는 계약상 필수인지부터 다시 확인한다.
 4. **모드·자율성**: Direct/Planned/Orchestrated 선택이 실제 변경 규모와 위험에 맞았는가. interruption, correction, retry를 줄이려면 상류 spec, 모드 선택, checkpoint/task 중 어디를 고쳐야 하는가.
 5. **스타일 학습**: 실행 단위당 스타일 교정 횟수가 프로젝트 후반으로 갈수록 줄었는가. 줄지 않았다면 constitution style 소비 지점과 계약 표현 중 어디가 문제인가.
 

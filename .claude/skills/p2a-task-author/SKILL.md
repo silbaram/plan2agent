@@ -22,8 +22,8 @@ The canonical conditions live in `.agents/context-routes.json`.
 
 ## Procedure
 
-1. Run `p2a iteration context --artifacts <root>` and validate the returned `p2a.task_context.v1` bundle.
-2. Inspect the effective spec, changed fields, code signals, active/maintenance task summaries, and relevant planning memory.
+1. Run `p2a iteration context --artifacts <root>` and validate the returned `p2a.task_context.v2` bundle.
+2. Inspect the effective spec, changed fields, code signals, active/maintenance task summaries, and relevant BuildLore-derived evidence selected by the spec.
 3. Choose cohesive, independently verifiable work boundaries. Task count is not a quality target.
 4. Have the read-only author return one complete `p2a.task_graph.v1` draft.
 5. Persist only `iterations/<active_iteration>/gate-c-task-graph/task-graph.draft.json`.

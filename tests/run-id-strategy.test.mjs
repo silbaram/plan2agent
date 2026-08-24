@@ -925,7 +925,6 @@ function prepareCloseReadySecondIteration(artifactRoot) {
         effective_spec_ref:
           `iterations/${firstIterationId}/gate-b-spec/spec.json`,
       },
-      planning_memory: null,
     }, null, 2)}\n`,
     'utf8',
   );
@@ -1001,7 +1000,6 @@ function initialGateAForceResetArtifactRoot(label) {
       current_spec_ref: 'current-spec.json',
       effective_spec_ref: null,
     },
-    planning_memory: null,
   }, null, 2)}\n`, 'utf8');
   return artifactRoot;
 }
@@ -2538,7 +2536,6 @@ test('failed close restores current spec and iteration metadata', () => {
       approved_spec_artifacts: {
         spec_ref: promotionBinding.source_spec_ref,
       },
-      planning_memory: null,
     }, null, 2)}\n`, 'utf8');
     const currentSpecBefore = readFileSync(currentSpecPath);
     const metadataBefore = readFileSync(metadataPath);
@@ -2561,14 +2558,13 @@ test('failed close restores current spec and iteration metadata', () => {
   }
 });
 
-test('close rollback restores a pre-existing Memory freshness report', () => {
-  const root = tempRoot('iteration-close-memory-rollback');
+test('close rollback restores every tracked state file', () => {
+  const root = tempRoot('iteration-close-rollback');
   try {
     const paths = {
       metadataPath: path.join(root, 'iteration.json'),
       currentSpecPath: path.join(root, 'current-spec.json'),
       statusPath: path.join(root, 'status.md'),
-      memoryStatusPath: path.join(root, 'memory-status.json'),
     };
     for (const [name, filePath] of Object.entries(paths)) {
       writeFileSync(filePath, `${name}:before\n`, 'utf8');

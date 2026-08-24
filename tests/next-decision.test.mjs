@@ -472,7 +472,6 @@ function writeBaselineBackedPlanningIteration(artifactRoot) {
       effective_spec_ref: baselineSpecRef,
       effective_spec_sha256: baselineSpecSha256,
     },
-    planning_memory: null,
   });
   writeJson(join(artifactRoot, 'current-spec.json'), {
     schema_version: 'p2a.current_spec.v1',
@@ -2658,7 +2657,6 @@ test('next routes iterative approved Gate B through canonical promotion before e
             effective_spec_ref: 'iterations/v1/gate-b-spec/spec.json',
             effective_spec_sha256: baselineSpecSha256,
           },
-          planning_memory: null,
         });
       } else {
         const currentSpecPath = join(rootArtifact, 'current-spec.json');
@@ -2690,7 +2688,6 @@ test('next routes iterative approved Gate B through canonical promotion before e
             current_spec_ref: 'current-spec.json',
             effective_spec_ref: null,
           },
-          planning_memory: null,
         });
       }
       writeJson(join(root, '.plan2agent', 'project.config.json'), {
@@ -2839,7 +2836,6 @@ test('next routes partial iteration promotion metadata back through deterministi
       approved_spec_artifacts: {
         spec_ref: binding.source_spec_ref,
       },
-      planning_memory: null,
     });
 
     const beforeRepair = next(root);

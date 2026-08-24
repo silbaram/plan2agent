@@ -8,7 +8,7 @@ Run:
 p2a iteration context --artifacts <root>
 ```
 
-Use the `p2a.task_context.v1` fields: `project_id`, `effective_spec`, `existing_tasks`, `spec_field_changes`, `planning_memory`, `idea`, `active_iteration`, and `code_signals`. Real code signals prevent duplicate or already-completed work.
+Use the `p2a.task_context.v2` fields: `project_id`, `effective_spec`, `existing_tasks`, `spec_field_changes`, `idea`, `active_iteration`, and `code_signals`. Real code signals prevent duplicate or already-completed work.
 
 The author returns complete JSON without writing. The owner may persist only:
 
@@ -33,6 +33,6 @@ For `full + current_iteration`, every task declares `workKind`. UI/mixed tasks i
 - Do not create tasks absent from the approved effective spec.
 - When `spec_field_changes` exists, focus on changed fields without losing necessary baseline context.
 
-Use Planning Memory only when materially relevant. Add `memory:<ref>` and applicable `decision:ND-n` in addition to a real spec field. Convert relevant failure evidence into mitigation or regression acceptance. Unavailable or irrelevant Memory is not a blocker.
+Use BuildLore-derived spec evidence only when materially relevant. Cite the selected evidence and applicable `decision:ND-n` in addition to a real spec field. Convert relevant failure evidence into mitigation or regression acceptance. Unavailable or irrelevant knowledge is not a blocker.
 
 Product meaning changes return to a new feature iteration through Gates A-C; they are not smuggled into a task draft.

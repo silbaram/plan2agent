@@ -10,22 +10,6 @@ import { ROOT, formatCommandResult, makeTempDir, runP2aFrom } from './helpers/fi
 const PACKAGE_JSON = JSON.parse(readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
 const PACKAGE_NAME = PACKAGE_JSON.name;
 const PACKAGE_VERSION = PACKAGE_JSON.version;
-const PLANNING_DOCS_FIXTURE = path.join(ROOT, 'fixtures', '_e2e', 'webhook-api-service');
-
-function makePlanningDocsArtifactRoot(parentRoot, directoryName) {
-  const artifactRoot = path.join(parentRoot, directoryName);
-  const iterationRoot = path.join(artifactRoot, 'iterations', 'v1-planning-docs');
-  cpSync(PLANNING_DOCS_FIXTURE, iterationRoot, { recursive: true });
-  writeFileSync(path.join(artifactRoot, 'current-spec.json'), `${JSON.stringify({
-    schema_version: 'p2a.current_spec.v1',
-    project_id: 'webhook-api-service',
-    active_iteration: 'v1-planning-docs',
-    effective_spec_ref: 'iterations/v1-planning-docs/gate-b-spec/spec.json',
-    closed_iterations: [],
-  }, null, 2)}\n`, 'utf8');
-  return artifactRoot;
-}
-
 function spawnNpm(args, options) {
   if (process.platform !== 'win32') return spawnSync('npm', args, options);
   return spawnSync('npm', args, { ...options, shell: true });
@@ -85,30 +69,26 @@ test('repository release surfaces match the package support contract', () => {
   assert.match(releaseGuide, /GitHub Release/);
 });
 
-test('planning-docs runtime manifest and user documentation preserve the safety contract', () => {
+test('BuildLore adapter runtime and user documentation preserve the local explicit-write contract', () => {
   const runtimeManifest = readFileSync(path.join(ROOT, 'scripts', 'p2a_tool_manifest.mjs'), 'utf8');
-  assert.match(runtimeManifest, /['"]p2a_memory_planning_docs\.mjs['"]/);
+  assert.match(runtimeManifest, /['"]p2a_buildlore\.mjs['"]/);
 
   const englishReadme = readFileSync(path.join(ROOT, 'README.md'), 'utf8');
-  assert.match(englishReadme, /--profile planning-docs --dry-run/);
-  assert.match(englishReadme, /Actual remote writes still require `--yes`/);
-  assert.match(englishReadme, /Local chunk files are never planning source artifacts/);
-  assert.match(englishReadme, /serverGeneratedChunks/);
-  assert.match(englishReadme, /never falls back to\s+`\/document-chunks\/bulk`/);
+  assert.match(englishReadme, /p2a buildlore sync --dry-run/);
+  assert.match(englishReadme, /local-first, Git-backed knowledge tool/);
+  assert.match(englishReadme, /Synchronization does not commit or push knowledge/);
+  assert.match(englishReadme, /publication remains a separate,\s+reviewable Git workflow/);
 
   const koreanReadme = readFileSync(path.join(ROOT, 'README.ko-KR.md'), 'utf8');
-  assert.match(koreanReadme, /--profile planning-docs --dry-run/);
-  assert.match(koreanReadme, /실제 외부 쓰기는 계속 `--yes`를 요구/);
-  assert.match(koreanReadme, /로컬 chunk 파일은 planning source artifact가 아닙니다/);
-  assert.match(koreanReadme, /serverGeneratedChunks/);
-  assert.match(koreanReadme, /`\/document-chunks\/bulk`로 fallback하지 않습니다/);
+  assert.match(koreanReadme, /p2a buildlore sync --dry-run/);
+  assert.match(koreanReadme, /local-first·Git 기반 지식 도구/);
+  assert.match(koreanReadme, /sync는 지식 저장소를 commit하거나 push하지 않습니다/);
+  assert.match(koreanReadme, /publish는 별도의 검토 가능한\s+Git workflow/);
 
   const cliReference = readFileSync(path.join(ROOT, 'docs', 'cli-reference.md'), 'utf8');
-  assert.match(cliReference, /`planning-docs`는 `memory push`의 명시적 `--artifacts` source/);
-  assert.match(cliReference, /pending·미등록 iteration/);
-  assert.match(cliReference, /로컬 chunk 파일은 planning source artifact로 다시 수집하지 않으며/);
-  assert.match(cliReference, /exact `chunking: \{ "strategy": "paragraph-2000" \}` opt-in/);
-  assert.match(cliReference, /`chunks=0`.*`serverGeneratedChunks`/);
+  assert.match(cliReference, /BuildLore는 local-first·Git-backed 장기 지식 도구/);
+  assert.match(cliReference, /sync는 Git commit이나 push를 자동 수행하지 않는다/);
+  assert.match(cliReference, /knowledge commit\/push와 parent submodule pin은 BuildLore에서 계획·검토·실행/);
 });
 
 test('checkout init preserves the legacy co-located runtime', () => {
@@ -130,7 +110,6 @@ test('checkout init preserves the legacy co-located runtime', () => {
     assert.ok(manifest.scriptFiles.includes('.plan2agent/scripts/p2a_decision_ledger.mjs'));
     assert.ok(manifest.scriptFiles.includes('.plan2agent/scripts/p2a_decisions.mjs'));
     assert.ok(manifest.scriptFiles.includes('.plan2agent/scripts/p2a_shape.mjs'));
-    assert.ok(manifest.scriptFiles.includes('.plan2agent/scripts/p2a_memory_planning_docs.mjs'));
     assert.ok(manifest.scriptFiles.includes('.plan2agent/scripts/p2a_context.mjs'));
     assert.ok(manifest.scriptFiles.includes('.plan2agent/scripts/p2a_context_packet.mjs'));
     assert.ok(manifest.scriptFiles.includes('.plan2agent/scripts/p2a_continuations.mjs'));
@@ -144,7 +123,6 @@ test('checkout init preserves the legacy co-located runtime', () => {
     assert.equal(existsSync(path.join(targetRoot, '.plan2agent', 'scripts', 'p2a_decision_ledger.mjs')), true);
     assert.equal(existsSync(path.join(targetRoot, '.plan2agent', 'scripts', 'p2a_decisions.mjs')), true);
     assert.equal(existsSync(path.join(targetRoot, '.plan2agent', 'scripts', 'p2a_shape.mjs')), true);
-    assert.equal(existsSync(path.join(targetRoot, '.plan2agent', 'scripts', 'p2a_memory_planning_docs.mjs')), true);
     assert.equal(existsSync(path.join(targetRoot, '.plan2agent', 'schemas', 'next.schema.json')), true);
     assert.equal(existsSync(path.join(targetRoot, '.plan2agent', 'schemas', 'constitution.schema.json')), true);
     assert.equal(existsSync(path.join(targetRoot, '.plan2agent', 'schemas', 'decisions.schema.json')), true);
@@ -167,23 +145,14 @@ test('checkout init preserves the legacy co-located runtime', () => {
       { cwd, encoding: 'utf8' },
     );
 
+    const embeddedVersion = runEmbedded(targetRoot, ['--version']);
+    assert.equal(embeddedVersion.status, 0, formatCommandResult(embeddedVersion));
+    assert.equal(embeddedVersion.stdout, `${PACKAGE_VERSION}\n`);
+    assert.equal(embeddedVersion.stderr, '');
+
     const next = runEmbedded(targetRoot, ['next', '--json']);
     assert.equal(next.status, 0, formatCommandResult(next));
     assert.equal(JSON.parse(next.stdout).state, 'entry_missing');
-
-    const planningArtifactRoot = makePlanningDocsArtifactRoot(targetRoot, 'co-located-planning-artifacts');
-    const planningPreview = runEmbedded(targetRoot, [
-      'memory', 'push', '--artifacts', planningArtifactRoot,
-      '--profile', 'planning-docs', '--dry-run', '--json',
-    ]);
-    assert.equal(planningPreview.status, 0, formatCommandResult(planningPreview));
-    const planningPreviewPayload = JSON.parse(planningPreview.stdout);
-    assert.equal(planningPreviewPayload.selection.summary.includedFiles, 3);
-    assert.equal(planningPreviewPayload.local.chunks, 0);
-    assert.deepEqual(planningPreviewPayload.serverChunking, {
-      strategy: 'paragraph-2000',
-      targetSnapshots: 3,
-    });
 
     const doctor = runEmbedded(targetRoot, ['doctor', '--json']);
     assert.equal(doctor.status, 0, formatCommandResult(doctor));
@@ -347,6 +316,13 @@ test('package CLI help keeps scaffold hidden and uses installed command names', 
   assert.equal(doctorHelp.status, 0, formatCommandResult(doctorHelp));
   assert.match(doctorHelp.stdout, /p2a doctor/);
   assert.doesNotMatch(doctorHelp.stdout, /node scripts\/p2a_doctor\.mjs/);
+
+  for (const flag of ['--version', '-v']) {
+    const version = runP2aFrom(ROOT, [flag]);
+    assert.equal(version.status, 0, formatCommandResult(version));
+    assert.equal(version.stdout, `${PACKAGE_VERSION}\n`);
+    assert.equal(version.stderr, '');
+  }
 });
 
 test('npm pack dry run includes the global CLI runtime', () => {
@@ -367,7 +343,7 @@ test('npm pack dry run includes the global CLI runtime', () => {
       'scripts/p2a_decisions.mjs',
       'scripts/p2a_handoff.mjs',
       'scripts/p2a_upgrade.mjs',
-      'scripts/p2a_memory_planning_docs.mjs',
+      'scripts/p2a_buildlore.mjs',
       'scripts/p2a_context.mjs',
       'scripts/p2a_continuations.mjs',
       'scripts/p2a_schema.mjs',
@@ -419,10 +395,15 @@ test('the packed p2a runtime exposes its bin shim and supports core commands wit
       const options = {
         cwd,
         encoding: 'utf8',
-        env: { ...process.env, P2A_MEMORY_URL: '', P2A_MEMORY_TOKEN: '' },
+        env: process.env,
       };
       return spawnSync(process.execPath, [packageEntry, ...args], options);
     };
+    const packedVersion = runPacked(targetRoot, ['--version']);
+    assert.equal(packedVersion.status, 0, formatCommandResult(packedVersion));
+    assert.equal(packedVersion.stdout, `${PACKAGE_VERSION}\n`);
+    assert.equal(packedVersion.stderr, '');
+
     const initialized = runPacked(targetRoot, ['init', '--tools', 'codex']);
     assert.equal(initialized.status, 0, formatCommandResult(initialized));
     assert.equal(existsSync(path.join(targetRoot, '.plan2agent', 'scripts')), false);
@@ -454,20 +435,6 @@ test('the packed p2a runtime exposes its bin shim and supports core commands wit
     assert.equal(packageVersionCheck.runtimeMode, 'package');
     assert.equal(packageVersionCheck.manifestPackageVersion, PACKAGE_VERSION);
     assert.equal(packageVersionCheck.runningPackageVersion, PACKAGE_VERSION);
-
-    const planningArtifactRoot = makePlanningDocsArtifactRoot(targetRoot, 'packed-planning-artifacts');
-    const packedPlanningPreview = runPacked(targetRoot, [
-      'memory', 'push', '--artifacts', planningArtifactRoot,
-      '--profile', 'planning-docs', '--dry-run', '--json',
-    ]);
-    assert.equal(packedPlanningPreview.status, 0, formatCommandResult(packedPlanningPreview));
-    const packedPlanningPreviewPayload = JSON.parse(packedPlanningPreview.stdout);
-    assert.equal(packedPlanningPreviewPayload.selection.summary.includedFiles, 3);
-    assert.equal(packedPlanningPreviewPayload.local.chunks, 0);
-    assert.deepEqual(packedPlanningPreviewPayload.serverChunking, {
-      strategy: 'paragraph-2000',
-      targetSnapshots: 3,
-    });
 
     const packageAgentPath = path.join(targetRoot, '.agents', 'skills', 'p2a-next', 'SKILL.md');
     rmSync(packageAgentPath);
@@ -516,10 +483,6 @@ test('the packed p2a runtime exposes its bin shim and supports core commands wit
     assert.equal(nestedInfoPayload.mode, 'init');
 
     mkdirSync(path.join(targetRoot, '.plan2agent', 'runs'), { recursive: true });
-    const nestedMemoryDigest = runPacked(nestedRoot, ['memory', 'digest', '--json']);
-    assert.equal(nestedMemoryDigest.status, 0, formatCommandResult(nestedMemoryDigest));
-    assert.equal(JSON.parse(nestedMemoryDigest.stdout).schema_version, 'p2a.memory_digest.v1');
-
     const nestedRunList = runPacked(nestedRoot, ['runs', 'list', '--json']);
     assert.equal(nestedRunList.status, 0, formatCommandResult(nestedRunList));
     assert.equal(JSON.parse(nestedRunList.stdout).schema_version, 'p2a.run_index.v1');
@@ -648,9 +611,6 @@ test('the packed p2a runtime exposes its bin shim and supports core commands wit
     assert.notEqual(unknownPackedContext.status, 0);
     assert.match(unknownPackedContext.stderr, /unknown run/);
 
-    const memoryDigest = runPacked(handoffNestedRoot, ['memory', 'digest', '--json']);
-    assert.equal(memoryDigest.status, 0, formatCommandResult(memoryDigest));
-    assert.equal(JSON.parse(memoryDigest.stdout).schema_version, 'p2a.memory_digest.v1');
   } finally {
     rmSync(tempRoot, { recursive: true, force: true });
   }

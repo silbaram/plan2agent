@@ -17,7 +17,6 @@ export const RUNS_CLI = path.join(ROOT, 'scripts', 'p2a_runs.mjs');
 export const EXECUTE_CLI = path.join(ROOT, 'scripts', 'p2a_execute.mjs');
 export const PROPOSALS_CLI = path.join(ROOT, 'scripts', 'p2a_proposals.mjs');
 export const EVAL_CLI = path.join(ROOT, 'scripts', 'p2a_eval.mjs');
-export const MEMORY_CLI = path.join(ROOT, 'scripts', 'p2a_memory.mjs');
 export const HANDOFF_CLI = path.join(ROOT, 'scripts', 'p2a_handoff.mjs');
 export const DOCTOR_CLI = path.join(ROOT, 'scripts', 'p2a_doctor.mjs');
 export const P2A_CLI = path.join(ROOT, 'scripts', 'p2a.mjs');
@@ -60,15 +59,6 @@ export function runProposals(args) {
 export function runEval(args) {
   return spawnSync(process.execPath, [EVAL_CLI, ...args], { cwd: ROOT, encoding: 'utf8' });
 }
-
-export function runMemory(args) {
-  return spawnSync(process.execPath, [MEMORY_CLI, ...args], {
-    cwd: ROOT,
-    encoding: 'utf8',
-    env: { ...process.env, P2A_MEMORY_URL: '', P2A_MEMORY_TOKEN: '' },
-  });
-}
-
 
 export function fixtureFailureDetailArgs(label) {
   return [
@@ -132,10 +122,6 @@ export function runTargetProposals(targetRoot, args) {
 
 export function runTargetEval(targetRoot, args) {
   return runTargetP2a(targetRoot, ['eval', ...args]);
-}
-
-export function runTargetMemory(targetRoot, args) {
-  return runTargetP2a(targetRoot, ['memory', ...args]);
 }
 
 export function runTargetIteration(targetRoot, args) {

@@ -148,7 +148,7 @@ Greenfield Orchestrated flat bundle은 validator-clean canonical `gate-c-task-gr
 | `gate-b-spec/visual-design/VD-n/` | 사용자가 브라우저로 검토하는 passive offline HTML 후보다. `prototype.json`이 모든 파일의 SHA-256과 승인 상태를 묶으며 executable script, 외부 navigation, network 호출은 금지된다. |
 | `gate-c-task-graph/task-graph.json` | 승인된 spec에서 생성된 execution readiness/compatibility record다. mode, rationale, Direct/Planned synthetic work item과 milestone 또는 Orchestrated task/dependency, acceptance, source spec reference를 담는다. |
 
-`.plan2agent/` 아래 산출물은 application source git에 커밋하지 않는 로컬 하네스 상태다. 기획 이력, task/run 진행, 검증 결과의 장기 보존은 Plan2Agent Memory 같은 artifact store에 동기화하는 방향을 기준으로 한다. 로컬 파일은 게이트 검증, 재개, UI 표시를 위한 working cache이며, git commit은 제품 소스코드 변경 이력에 집중한다.
+`.plan2agent/` 아래 산출물은 application source git에 커밋하지 않는 로컬 하네스 상태다. 기획 이력과 선별된 실행 evidence의 장기 보존은 BuildLore가 `.plan2agent/artifacts/<project_id>/`를 projection한 별도 `knowledge/` Git 저장소에서 담당한다. 로컬 파일은 게이트 검증, 재개, UI 표시를 위한 working state이며, application git commit은 제품 소스코드 변경 이력에 집중한다.
 
 ### 3.1 산출물과 스키마 매핑
 
