@@ -6,6 +6,19 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+## [0.5.13] - 2026-08-25
+
+### Changed
+
+- Scope new functional acceptance review runs to current-iteration Gate B behavior while continuing to validate legacy cumulative contracts, and require exact run-contract evidence preflight before reviewer invocation.
+- Preserve bounded, text-free retrospective counters when active-only cleanup removes superseded or completed-maintenance runs, then discard the iteration counters when the next iteration opens.
+- Reuse request-scoped artifact validation throughout deep `p2a next` routing, including active baseline, visual, run-contract, and run-store validation paths.
+
+### Fixed
+
+- Record shell spawn failures such as `EPERM` as unavailable verification with no exit code instead of allowing a false successful result.
+- Derive current-iteration acceptance criteria correctly when an iteration references a prior approved spec directly as its baseline.
+
 ## [0.5.12] - 2026-08-25
 
 ### Added
@@ -215,7 +228,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Add package-runtime project initialization, managed provider assets, artifact validation, handoff, supervised execution, evaluation, and proposal workflows.
 - Ship canonical and generated integrations for Codex, Claude Code, and Gemini CLI.
 
-[Unreleased]: https://github.com/silbaram/plan2agent/compare/v0.5.12...HEAD
+[Unreleased]: https://github.com/silbaram/plan2agent/compare/v0.5.13...HEAD
+[0.5.13]: https://github.com/silbaram/plan2agent/compare/v0.5.12...v0.5.13
 [0.5.12]: https://github.com/silbaram/plan2agent/compare/v0.5.11...v0.5.12
 [0.5.11]: https://github.com/silbaram/plan2agent/compare/v0.5.10...v0.5.11
 [0.5.10]: https://github.com/silbaram/plan2agent/compare/v0.5.9...v0.5.10

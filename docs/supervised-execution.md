@@ -170,7 +170,7 @@ p2a runs checkpoint --artifacts .plan2agent/artifacts/<project> \
 
    `full + current_iteration` task는 `workKind`와 `visualImpact.screenStates`로 UI 영향 범위만 명시한다. 모든 task를 통합한 뒤 승인 experience가 `visual_review_required`이면 `reviewPasses.visual`과 무관하게 `p2a execute review --artifacts <root>`로 iteration당 하나의 `runKind: final_visual_review` run을 연다. 이 run은 Gate B에서 전체 screen/state/viewport/접근성 계약을 직접 가져오고 canonical workspace, isolation 없음, 변경 파일 없음을 강제한다. 실제 앱 PNG, 접근성 보고서, capture metadata, workspace revision과 승인 prototype 비교 결과를 `.visual-review.json`에 기록하며 close-ready와 `p2a next`가 revision과 digest를 재검증한다.
 
-   비UI iteration은 기본 `reviewPasses.acceptance: opt_in`에서 독립 acceptance run을 자동으로 만들지 않는다. 사용자가 요청해 `p2a execute accept --artifacts <root> --agent-tool <reviewer>`를 시작했거나 정책이 `on`이면 Gate B `product.core_flows`와 `product.success_criteria`를 계약으로 고정한 `final_acceptance_review` run을 canonical workspace, isolation 없음, 변경 파일 없음으로 연다. Owner가 각 동작을 `p2a runs verify --verify-command 'custom:<command>'`로 실제 실행하고, read-only `p2a-acceptance-reviewer`가 run verification과 일치하는 `command`·`source: command|config`·정수 `exitCode`·`stdoutTail`을 `.acceptance-review.json`에 기록한다. exit 0이어도 출력이 비어 있거나 의미 없는 결과면 `block`이다. 일단 시작한 review는 모든 기준이 실제 동작으로 확인된 `confirm_behavior`로 끝나야 하며 exact sidecar hash와 canonical workspace revision을 봉인한다. 이후 workspace 변경은 새 acceptance review를 요구한다.
+   비UI iteration은 기본 `reviewPasses.acceptance: opt_in`에서 독립 acceptance run을 자동으로 만들지 않는다. 사용자가 요청해 `p2a execute accept --artifacts <root> --agent-tool <reviewer>`를 시작했거나 정책이 `on`이면 baseline에 이미 있던 동작을 제외한 현재 반복의 Gate B `product.core_flows`와 `product.success_criteria`를 계약으로 고정한 `final_acceptance_review` run을 canonical workspace, isolation 없음, 변경 파일 없음으로 연다. Owner가 각 동작을 `p2a runs verify --verify-command 'custom:<command>'`로 실제 실행하고, read-only `p2a-acceptance-reviewer`가 run verification과 일치하는 `command`·`source: command|config`·정수 `exitCode`·`stdoutTail`을 `.acceptance-review.json`에 기록한다. exit 0이어도 출력이 비어 있거나 의미 없는 결과면 `block`이다. 일단 시작한 review는 모든 기준이 실제 동작으로 확인된 `confirm_behavior`로 끝나야 하며 exact sidecar hash와 canonical workspace revision을 봉인한다. 이후 workspace 변경은 새 acceptance review를 요구한다.
 
 6. 검증과 finish:
 
@@ -209,7 +209,7 @@ dirty, unmerged, failed, blocked task 또는 integration-candidate worktree는 �
 
 | 파일 | 역할 |
 | --- | --- |
-| `.plan2agent/artifacts/<project>/runs/run-index.json` | run 목록과 최신 상태 index |
+| `.plan2agent/artifacts/<project>/runs/run-index.json` | run 목록과 최신 상태 index. `active_only`가 상세 재시도를 지울 때 텍스트 없는 제한 회고 집계도 임시 보존 |
 | `.plan2agent/artifacts/<project>/runs/<iterationId>/<runId>.json` | Gate-derived `executionEnvelope`, task 실행 기록, changedFiles, verification, failureClass |
 | `.plan2agent/artifacts/<project>/runs/<iterationId>/<runId>.orchestration.json` | shared mental model, role assignment, communication log, runtime phase |
 | `.plan2agent/artifacts/<project>/runs/<iterationId>/<runId>.monitor-gate.json` | 실행 당시 monitor 정책, verdict 경로와 규칙 계약 snapshot |

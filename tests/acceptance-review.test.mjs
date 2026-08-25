@@ -1,16 +1,19 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 
 import {
+  acceptanceReviewContract,
+  iterationAcceptanceCriteria,
   validateAcceptanceReviewData,
   validateRunsDir,
 } from '../scripts/validate_artifacts.mjs';
 import { validateCloseReadyAcceptanceEvidence } from '../scripts/p2a_iteration.mjs';
 import { runFilePath, runSidecarPath } from '../scripts/p2a_run_paths.mjs';
-import { runExecute, runIteration, runRuns } from './helpers/fixtures.mjs';
+import { FIXTURE_ROOT, runExecute, runIteration, runRuns } from './helpers/fixtures.mjs';
 
 function writeJson(filePath, data) {
   mkdirSync(path.dirname(filePath), { recursive: true });
@@ -62,6 +65,82 @@ function managedNonUiIteration() {
   writeJson(graphPath, graph);
   return { workspaceRoot, artifactRoot, graphPath, graph };
 }
+
+test('iteration acceptance criteria keep current refs while excluding baseline behavior', () => {
+  const baselineProduct = {
+    core_flows: ['existing flow', 'duplicate flow'],
+    success_criteria: ['existing result'],
+  };
+  const product = {
+    core_flows: ['existing flow', 'new flow', 'duplicate flow', 'duplicate flow'],
+    success_criteria: ['existing result', 'new result'],
+  };
+
+  assert.deepEqual(iterationAcceptanceCriteria(product, baselineProduct), [
+    { ref: 'product.core_flows[1]', text: 'new flow' },
+    { ref: 'product.core_flows[3]', text: 'duplicate flow' },
+    { ref: 'product.success_criteria[1]', text: 'new result' },
+  ]);
+  assert.equal(iterationAcceptanceCriteria(product).length, 6);
+});
+
+test('acceptance contract scopes a direct prior-spec baseline to the current iteration', () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'p2a-acceptance-direct-baseline-'));
+  const artifactRoot = path.join(root, 'artifacts', 'cache-library');
+  const baselineRoot = path.join(artifactRoot, 'iterations', 'v1');
+  const activeRoot = path.join(artifactRoot, 'iterations', 'v2');
+  try {
+    const baselineIntake = JSON.parse(readFileSync(
+      path.join(FIXTURE_ROOT, 'cache-library', 'intake.answered.json'),
+      'utf8',
+    ));
+    const baselineSpec = JSON.parse(readFileSync(
+      path.join(FIXTURE_ROOT, 'cache-library', 'spec.approved.json'),
+      'utf8',
+    ));
+    baselineSpec.source_intake = '../gate-a-intake/intake.json';
+    const baselineIntakePath = path.join(baselineRoot, 'gate-a-intake', 'intake.json');
+    const baselineSpecPath = path.join(baselineRoot, 'gate-b-spec', 'spec.json');
+    writeJson(baselineIntakePath, baselineIntake);
+    writeJson(baselineSpecPath, baselineSpec);
+
+    const activeIntake = structuredClone(baselineIntake);
+    activeIntake.baseline_context = {
+      spec_ref: 'iterations/v1/gate-b-spec/spec.json',
+      spec_sha256: createHash('sha256').update(readFileSync(baselineSpecPath)).digest('hex'),
+      reused_answers: [],
+      reused_question_dispositions: [],
+    };
+    const activeIntakePath = path.join(activeRoot, 'gate-a-intake', 'intake.json');
+    writeJson(activeIntakePath, activeIntake);
+
+    const activeSpec = structuredClone(baselineSpec);
+    activeSpec.product.core_flows.push('The user executes the new v2 behavior.');
+    activeSpec.product.success_criteria.push('The new v2 behavior is observable.');
+    const activeSpecPath = path.join(activeRoot, 'gate-b-spec', 'spec.json');
+    writeJson(activeSpecPath, activeSpec);
+
+    assert.deepEqual(acceptanceReviewContract(activeSpecPath, artifactRoot), {
+      required: true,
+      criteria: [
+        {
+          ref: `product.core_flows[${baselineSpec.product.core_flows.length}]`,
+          text: 'The user executes the new v2 behavior.',
+        },
+        {
+          ref: `product.success_criteria[${baselineSpec.product.success_criteria.length}]`,
+          text: 'The new v2 behavior is observable.',
+        },
+      ],
+    });
+    assert.equal(
+      acceptanceReviewContract(activeSpecPath, artifactRoot, { scope: 'full' }).criteria.length,
+      baselineSpec.product.core_flows.length + baselineSpec.product.success_criteria.length + 2,
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
 test('acceptance review schema rejects manual or unexecuted evidence', () => {
   const base = {
@@ -116,6 +195,9 @@ test('execute accept seals real command evidence and gates close-ready validatio
     assert.equal(run.isolation.mode, 'none');
     assert.deepEqual(run.changedFiles, []);
     assert.ok(run.acceptanceReview.criteria.length > 0);
+    assert.match(result.stdout, new RegExp(`criteria: ${run.acceptanceReview.criteria.length}`));
+    assert.match(result.stdout, /candidateEvidence: 0/);
+    assert.match(result.stdout, /Do not substitute the cumulative product spec or a summarized subset/);
 
     result = runRuns([
       'verify',
@@ -128,6 +210,14 @@ test('execute accept seals real command evidence and gates close-ready validatio
     const verification = run.verification.at(-1);
     assert.equal(verification.exitCode, 0);
     assert.equal(verification.source, 'command');
+
+    result = runExecute([
+      'resume',
+      '--artifacts', fixture.artifactRoot,
+      '--run-id', runId,
+    ]);
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+    assert.match(result.stdout, /candidateEvidence: 1/);
 
     const sidecarPath = runSidecarPath(runsDir, runId, '.acceptance-review.json');
     writeJson(sidecarPath, acceptanceSidecar(run, verification, { block: true }));

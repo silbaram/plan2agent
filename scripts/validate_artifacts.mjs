@@ -3428,25 +3428,106 @@ export function validateVisualReview(filePath, expectedContract = null, options 
   return data;
 }
 
-export function acceptanceReviewContract(specPath, artifactRoot = null) {
-  const specReference = loadJson(specPath);
-  const sourceIntakePath = resolveSpecSourceIntake(specPath, specReference);
-  const spec = validateSpec(specPath, sourceIntakePath, { artifactRoot });
+function consumeBaselineValue(counts, value) {
+  const remaining = counts.get(value) ?? 0;
+  if (remaining <= 0) return false;
+  if (remaining === 1) counts.delete(value);
+  else counts.set(value, remaining - 1);
+  return true;
+}
+
+export function iterationAcceptanceCriteria(product, baselineProduct = null) {
   const criteria = [];
   for (const [field, values] of [
-    ['core_flows', spec.product.core_flows],
-    ['success_criteria', spec.product.success_criteria],
+    ['core_flows', product.core_flows],
+    ['success_criteria', product.success_criteria],
   ]) {
+    const baselineCounts = new Map();
+    for (const value of baselineProduct?.[field] ?? []) {
+      baselineCounts.set(value, (baselineCounts.get(value) ?? 0) + 1);
+    }
     for (const [index, text] of values.entries()) {
-      if (typeof text === 'string' && text.trim()) {
+      if (
+        typeof text === 'string'
+        && text.trim()
+        && (!baselineProduct || !consumeBaselineValue(baselineCounts, text))
+      ) {
         criteria.push({ ref: `product.${field}[${index}]`, text });
       }
     }
   }
-  if (!criteria.length) {
+  return criteria;
+}
+
+function iterationBaselineProduct(sourceIntakePath, artifactRoot) {
+  if (!artifactRoot || !sourceIntakePath) return null;
+  const artifactPath = path.resolve(artifactRoot);
+  assertFileInsideArtifactRoot(
+    sourceIntakePath,
+    artifactPath,
+    'functional acceptance source intake',
+  );
+  const intake = loadJson(sourceIntakePath);
+  const baselineRef = intake.baseline_context?.spec_ref;
+  if (typeof baselineRef !== 'string' || !baselineRef.trim()) return null;
+  if (path.isAbsolute(baselineRef)) {
+    throw new ValidationError('functional acceptance baseline reference must be artifact-root-relative');
+  }
+  const baselinePath = path.resolve(artifactPath, baselineRef);
+  assertFile(baselinePath, 'functional acceptance baseline');
+  assertFileInsideArtifactRoot(
+    baselinePath,
+    artifactPath,
+    'functional acceptance baseline',
+  );
+  const baseline = loadJson(baselinePath);
+  const baselineProduct = baseline.schema_version === 'p2a.spec.v1'
+    ? baseline.product
+    : baseline.schema_version === 'p2a.current_spec.v1'
+      ? baseline.effective_product
+      : null;
+  if (!baselineProduct || typeof baselineProduct !== 'object' || Array.isArray(baselineProduct)) {
+    throw new ValidationError(
+      'functional acceptance baseline must provide product or effective_product',
+    );
+  }
+  for (const field of ['core_flows', 'success_criteria']) {
+    if (!Array.isArray(baselineProduct[field])) {
+      throw new ValidationError(`functional acceptance baseline product.${field} must be an array`);
+    }
+  }
+  return baselineProduct;
+}
+
+function acceptanceReviewContracts(specPath, artifactRoot = null, options = {}) {
+  const specReference = loadJson(specPath);
+  const sourceIntakePath = resolveSpecSourceIntake(specPath, specReference);
+  const spec = validateSpec(specPath, sourceIntakePath, {
+    artifactRoot,
+    validationSession: options.validationSession,
+  });
+  const full = { required: true, criteria: iterationAcceptanceCriteria(spec.product) };
+  if (!full.criteria.length) {
     throw new ValidationError('functional acceptance requires at least one product core flow or success criterion');
   }
-  return { required: true, criteria };
+  const baselineProduct = iterationBaselineProduct(sourceIntakePath, artifactRoot);
+  if (!baselineProduct) return { current: full, full };
+  const current = {
+    required: true,
+    criteria: iterationAcceptanceCriteria(spec.product, baselineProduct),
+  };
+  return { current, full };
+}
+
+export function acceptanceReviewContract(specPath, artifactRoot = null, options = {}) {
+  const contracts = acceptanceReviewContracts(specPath, artifactRoot, options);
+  const contract = options.scope === 'full' ? contracts.full : contracts.current;
+  if (!contract.criteria.length) {
+    throw new ValidationError(
+      'functional acceptance requires at least one current-iteration core flow or success criterion not already present in the baseline',
+    );
+  }
+  return contract;
 }
 
 export function validateAcceptanceReviewData(data, expectedContract = null) {
@@ -3570,10 +3651,13 @@ function validateSpecVisualExperience(spec, specPath, artifactRoot = null) {
   return { experience, experiencePath };
 }
 
-export function approvedVisualReviewContract(specPath, artifactRoot = null) {
+export function approvedVisualReviewContract(specPath, artifactRoot = null, options = {}) {
   const specReference = loadJson(specPath);
   const sourceIntakePath = resolveSpecSourceIntake(specPath, specReference);
-  const spec = validateSpec(specPath, sourceIntakePath, { artifactRoot });
+  const spec = validateSpec(specPath, sourceIntakePath, {
+    artifactRoot,
+    validationSession: options.validationSession,
+  });
   const approvedVisual = validateSpecVisualExperience(spec, specPath, artifactRoot);
   if (!approvedVisual?.experience.validation.visual_review_required) return null;
   const { experience } = approvedVisual;
@@ -3609,10 +3693,13 @@ export function executionEnvelopeSha256(envelope) {
   return createHash('sha256').update(JSON.stringify(envelope)).digest('hex');
 }
 
-export function approvedExecutionEnvelope(specPath, sourceSpecRef, artifactRoot = null) {
+export function approvedExecutionEnvelope(specPath, sourceSpecRef, artifactRoot = null, options = {}) {
   const specReference = loadJson(specPath);
   const sourceIntakePath = resolveSpecSourceIntake(specPath, specReference);
-  const spec = validateSpec(specPath, sourceIntakePath, { artifactRoot });
+  const spec = validateSpec(specPath, sourceIntakePath, {
+    artifactRoot,
+    validationSession: options.validationSession,
+  });
   if (spec.approval !== 'approved') {
     throw new ValidationError('execution envelope requires an approved Gate B specification');
   }
@@ -4823,7 +4910,7 @@ export function resolveRunTaskGraphPath(runData, artifactRoot) {
   return graphPath;
 }
 
-export function validateRunTaskContract(runData, artifactRoot) {
+export function validateRunTaskContract(runData, artifactRoot, options = {}) {
   const taskGraphPath = resolveRunTaskGraphPath(runData, artifactRoot);
   let sourceArtifactRoot = runData.sourceLayout === 'graph'
     ? defaultArtifactRootForGraph(realpathSync(taskGraphPath))
@@ -4952,6 +5039,7 @@ export function validateRunTaskContract(runData, artifactRoot) {
       sourceSpecPath,
       runData.sourceSpecRef,
       runData.sourceLayout === 'graph' ? null : sourceArtifactRoot,
+      options,
     );
     const legacyExpectedEnvelope = expectedEnvelope.visualContract
       ? {
@@ -4987,7 +5075,11 @@ export function validateRunTaskContract(runData, artifactRoot) {
         `finished run ${runData.runId} visualReview is only allowed for runKind final_visual_review`,
       );
     }
-    const expectedVisualReview = approvedVisualReviewContract(sourceSpecPath, sourceArtifactRoot);
+    const expectedVisualReview = approvedVisualReviewContract(
+      sourceSpecPath,
+      sourceArtifactRoot,
+      options,
+    );
     if (!expectedVisualReview || !sameJson(actualVisualReview, expectedVisualReview)) {
       throw new ValidationError(
         `finished run ${runData.runId} visualReview must match the complete approved iteration visual contract`,
@@ -5006,10 +5098,21 @@ export function validateRunTaskContract(runData, artifactRoot) {
         `finished acceptance review run ${runData.runId} must use the iteration source layout`,
       );
     }
-    const expectedAcceptanceReview = acceptanceReviewContract(sourceSpecPath, sourceArtifactRoot);
-    if (!sameJson(actualAcceptanceReview, expectedAcceptanceReview)) {
+    const acceptanceContracts = acceptanceReviewContracts(
+      sourceSpecPath,
+      sourceArtifactRoot,
+      options,
+    );
+    const legacyFullAcceptanceReview = acceptanceContracts.full;
+    const expectedAcceptanceReview = acceptanceContracts.current.criteria.length
+      ? acceptanceContracts.current
+      : legacyFullAcceptanceReview;
+    if (
+      !sameJson(actualAcceptanceReview, expectedAcceptanceReview)
+      && !sameJson(actualAcceptanceReview, legacyFullAcceptanceReview)
+    ) {
       throw new ValidationError(
-        `finished run ${runData.runId} acceptanceReview must match the complete approved iteration behavior contract`,
+        `finished run ${runData.runId} acceptanceReview must match the approved current-iteration behavior contract`,
       );
     }
   }
@@ -5021,12 +5124,13 @@ export function validateRunTaskContract(runData, artifactRoot) {
   };
 }
 
-export function validateRunsDir(runsDir) {
+export function validateRunsDir(runsDir, options = {}) {
   if (!existsSync(runsDir)) throw new ValidationError(`runs directory is missing: ${runsDir}`);
   if (!lstatSync(runsDir).isDirectory()) throw new ValidationError(`runs path must be a directory: ${runsDir}`);
   const indexPath = path.join(runsDir, 'run-index.json');
   assertFile(indexPath, 'run-index.json');
   const index = validateRunIndex(indexPath);
+  const validationSession = options.validationSession ?? createValidationSession();
   for (const run of index.runs) {
     const normalizedRunRef = normalizeIndexedRunRef(run.runRef, run.runId);
     const runPath = path.join(runsDir, normalizedRunRef);
@@ -5047,7 +5151,11 @@ export function validateRunsDir(runsDir) {
       throw new ValidationError(`run ${run.runId} projectId does not match run-index projectId`);
     }
     const source = runData.status === 'finished'
-      ? validateRunTaskContract(runData, path.dirname(path.resolve(runsDir)))
+      ? validateRunTaskContract(
+          runData,
+          path.dirname(path.resolve(runsDir)),
+          { validationSession },
+        )
       : null;
     if (runData.monitorGate?.required) {
       const monitorGatePath = runSidecarPath(

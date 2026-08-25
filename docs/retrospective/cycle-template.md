@@ -6,7 +6,7 @@
 - 작성 시점: iteration close 직전
 
 > **에이전트 작성 규칙**: 각 항목 옆 `[출처]` 표기된 아티팩트에서 사실만 수집해 채운다.
-> 판정이 필요한 항목(C1·E1)은 근거를 제시하고 `사용자 확정 필요`로 남긴다.
+> 판정이 필요한 항목은 근거를 제시하고 `사용자 확정 필요`로 남긴다.
 > 증거가 없으면 빈 칸으로 둔다. 추측으로 채우지 않는다. 이 파일 외부를 수정하지 않는다.
 
 ## A. 동작 정합성 — 의도대로 되었나
@@ -29,7 +29,7 @@ prune·삭제로 나중에 필요한 증거가 사라져 후회한 순간이 있
 
 ## B. 성능 — 느렸던 것
 
-### B1. 체감상 느렸던 명령 `[출처: run 파일 verification[].durationMs 상위 집계]`
+### B1. 체감상 느렸던 명령 `[출처: 현재 run verification[]; 삭제 run은 run-index.retrospective의 시간 집계만 사용]`
 명령명과 대략 소요 시간. "없음"도 답이다.
 
 -
@@ -41,12 +41,12 @@ prune·삭제로 나중에 필요한 증거가 사라져 후회한 순간이 있
 
 ## C. 게이트 가치 — 승인 경계가 일했나
 
-### C1. 실제로 잡은 문제 `[출처: run.interruptions[] gate_return + assessment, 사용자 판정 필요]`
+### C1. 실제로 잡은 문제 `[출처: 현재 run.interruptions[] 및 run-index.retrospective interruptionCounts, 사용자 판정 필요]`
 Gate A/②/B 또는 완료 조건에서, 그 경계가 없었다면 잘못된 상태로 넘어갔을 명확한 순간.
 
 -
 
-### C2. 도장만 찍은 승인 `[출처: gate_return 목록 중 assessment=valid가 아닌 것 / 승인 직후 수정 없음]`
+### C2. 도장만 찍은 승인 `[출처: 현재 gate_return 목록 및 제한 집계의 valid/invalid 횟수 / 승인 직후 수정 없음]`
 기여 없이 형식으로만 통과한 승인. 어느 게이트였는지.
 
 -
@@ -62,26 +62,55 @@ Gate A/②/B 또는 완료 조건에서, 그 경계가 없었다면 잘못된 �
 - 가장 아팠던 마찰 1가지:
 - 예상 밖으로 좋았던 것 1가지:
 
+## E. skill·subagent 효율 — 실제로 도움이 되었나
+
+> 설치 목록이나 route 등록은 사용 증거가 아니다. provider 세션 기록 또는 tool trace로
+> 실제 사용이 확인된 항목만 적는다. 기록이 없으면 `확인 불가`로 남긴다.
+
+### E1. 실제 사용과 기여 `[출처: provider 세션 기록/tool trace, 필요시 관련 run id]`
+
+| 종류 | 이름 | 실제로 맡긴 일 | 결과에 준 도움 | 비용·중복·재작업 | 다음 판단 |
+| --- | --- | --- | --- | --- | --- |
+| skill / subagent | | | | | 유지 / 조건부 / 제외 후보 / 사용자 확정 필요 |
+
+### E2. 가장 효율적이었던 사용
+구체적인 산출물, 발견한 문제 또는 줄인 재작업을 하나만 적는다. 없으면 "없음".
+
+-
+
+### E3. 과했거나 불필요했던 사용
+호출하지 않아도 결과가 같았거나, context 전달·중복 검토·재설명 비용이 더 컸던 사례를
+하나만 적는다. 없으면 "없음".
+
+-
+
+### E4. 다음 사이클 변경
+유지할 것 또는 호출 조건을 바꿀 것 중 근거가 가장 강한 한 가지만 적는다.
+
+-
+
 ## 수집 요약 (에이전트 기록란)
 
-> 아래 숫자는 작성 시점 아티팩트에서 계산한 값이다.
+> 아래 숫자는 작성 시점의 현재 run과 같은 iteration의 `run-index.retrospective` 제한 집계를
+> 합산한 값이다. 제한 집계에는 원문·명령·run ID가 없으므로 정성 판단은 현재 증거 범위만 쓴다.
 
 | 지표 | 값 | 출처 |
 | --- | --- | --- |
-| 총 run 수 / 상태 분포 | | runs/run-index.json |
-| gate_return 횟수 (valid/invalid) | | run.interruptions[] |
-| user_correction 횟수 | | run.interruptions[] |
-| implementation_interruption 횟수 | | run.interruptions[] |
-| 검증 실행 횟수 / 평균·최대 durationMs | | run.verification[] |
-| 실패·재시도 run 수 | | run-index status 집계 |
+| 총 run 수 / 상태 분포 | | run-index runs[] + retrospective statusCounts |
+| gate_return 횟수 (valid/invalid) | | run.interruptions[] + retrospective interruptionCounts |
+| user_correction 횟수 | | run.interruptions[] + retrospective interruptionCounts |
+| implementation_decision 횟수 | | run.interruptions[] + retrospective interruptionCounts |
+| 검증 실행 횟수 / 평균·최대 durationMs | | run.verification[] + retrospective verification* |
+| 실패·재시도 run 수 | | run-index status + retrospective reasonCounts.superseded |
+| 확인된 skill / subagent 사용 수 | | provider 세션 기록/tool trace (없으면 확인 불가) |
 
-## E. 다음 사이클 결정
+## F. 다음 사이클 결정
 
-### E1. 하네스 동결 여부
+### F1. 하네스 동결 여부
 다음 사이클은 하네스 수정 없이 제품에 집중하는가? (Y/N)
 
-### E2. 동결 해제 시 최우선 수정 1개
-E1이 N일 때만. 딱 하나만.
+### F2. 동결 해제 시 최우선 수정 1개
+F1이 N일 때만. 딱 하나만.
 
 -
 

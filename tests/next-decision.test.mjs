@@ -1367,6 +1367,15 @@ test('BuildLore-shaped composed fallback reuses validation within a bounded requ
     assert.match(result.stderr, /closed-route:fallback: active run/);
     assert.match(result.stderr, /artifact:deep-validation/);
 
+    const routingSession = createValidationSession();
+    const routed = buildNext(root, null, null, 'v2', {
+      validationSession: routingSession,
+    });
+    assert.equal(routed.state, 'iteration_complete');
+    assert.equal(routingSession.stats.validatorRuns.intake, 11);
+    assert.equal(routingSession.stats.validatorRuns.spec, 11);
+    assert.equal(routingSession.stats.validatorRuns['task-graph'], 11);
+
     const activeIntakePath = join(
       rootArtifact,
       'iterations',

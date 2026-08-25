@@ -20,6 +20,39 @@ test('classifies spawn ENOENT as unavailable', () => {
   });
 });
 
+test('classifies a spawn error as unavailable even when status is zero', () => {
+  assert.deepEqual(classifyVerificationSpawnResult({
+    error: { code: 'EPERM', message: 'spawnSync /bin/sh EPERM' },
+    status: 0,
+    stderr: '',
+  }), {
+    status: 'unavailable',
+    reason: 'spawn_error',
+    hint: 'verification command could not be started reliably (EPERM)',
+  });
+});
+
+test('runtime verification never records a spawn error as passed or exit zero', () => {
+  const result = runVerificationCommand({
+    type: 'custom',
+    command: 'npm test',
+    source: 'command',
+  }, process.cwd(), 10000, {
+    spawnSync: () => ({
+      error: { code: 'EPERM', message: 'spawnSync /bin/sh EPERM' },
+      status: 0,
+      signal: null,
+      stdout: '',
+      stderr: '',
+    }),
+  });
+
+  assert.equal(result.status, 'unavailable');
+  assert.equal(result.exitCode, null);
+  assert.equal(result.failureReason, 'spawn_error');
+  assert.match(result.stderrTail, /spawnSync \/bin\/sh EPERM/);
+});
+
 test('classifies Windows cmd not-found exit code and English stderr as unavailable', () => {
   assert.equal(classifyVerificationSpawnResult({ status: 9009, stderr: '' }).status, 'unavailable');
   assert.equal(classifyVerificationSpawnResult({ status: 1, stderr: "'gradlew' is not recognized as an internal or external command,\r\noperable program or batch file." }).status, 'unavailable');

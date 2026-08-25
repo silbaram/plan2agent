@@ -453,6 +453,7 @@ function pruneCompletedMaintenanceRunHistory(source, currentTask, config, { quie
   const cleanup = pruneIndexedRunEvidence(source.runsDir, {
     iterationIds: ['maintenance'],
     taskIds: completedTaskIds,
+    summaryReason: 'completed_maintenance',
   });
   warnRunCleanupFailures(cleanup);
   if (!quiet && cleanup.prunedRunIds.length) {
@@ -472,6 +473,7 @@ function pruneSupersededRunHistory(source, run, { quiet = false } = {}) {
       runKinds: [run.runKind ?? null],
       keepRunIds: [run.runId],
       requireNoStarted: false,
+      summaryReason: 'superseded',
     });
     warnRunCleanupFailures(cleanup);
     if (!quiet && cleanup.prunedRunIds.length) {
@@ -1233,7 +1235,19 @@ function printFinalVisualReviewInstructions(args, source, task, runId, workspace
   console.log(`3. Finish without changing task state: ${commandLine('p2a_execute.mjs', ['finish', ...source.sourceArgs, '--run-id', runId, '--test', '--lint', '--typecheck'])}`);
 }
 
-function printFinalAcceptanceReviewInstructions(source, task, runId, workspacePath) {
+function acceptanceCandidateEvidenceCount(run) {
+  return (run.verification ?? []).filter((item) => (
+    (item.source === 'command' || item.source === 'config')
+    && item.status === 'passed'
+    && item.exitCode === 0
+    && typeof item.stdoutTail === 'string'
+    && item.stdoutTail.trim().length > 0
+  )).length;
+}
+
+function printFinalAcceptanceReviewInstructions(source, task, run, workspacePath) {
+  const runId = run.runId;
+  const criteriaCount = run.acceptanceReview?.criteria?.length ?? 0;
   console.log('');
   console.log('Plan2Agent final functional acceptance review');
   console.log(`- iteration: ${source.iterationId}`);
@@ -1242,11 +1256,15 @@ function printFinalAcceptanceReviewInstructions(source, task, runId, workspacePa
   console.log(`- workspace: ${displayPath(workspacePath)}`);
   console.log('- isolation: none');
   console.log('- changedFiles: 0');
+  console.log(`- criteria: ${criteriaCount}`);
+  console.log(`- candidateEvidence: ${acceptanceCandidateEvidenceCount(run)}`);
   console.log('');
   console.log('Next:');
   console.log(`1. Run each Gate B behavior case as owner-recorded evidence: ${commandLine('p2a_runs.mjs', ['verify', ...source.sourceArgs, '--run-id', runId, '--verify-command', 'custom:<behavior-command>'])}`);
-  console.log('2. Give the run contract and recorded verification output to the read-only acceptance reviewer; write <runId>.acceptance-review.json beside the run.');
-  console.log(`3. Finish the review; confirmation keeps the task done, while blocked/failed status reopens the remediation owner: ${commandLine('p2a_execute.mjs', ['finish', ...source.sourceArgs, '--run-id', runId])}`);
+  console.log(`2. Preflight the exact ${criteriaCount}-criterion current-iteration run contract. Do not substitute the cumulative product spec or a summarized subset; map every criterion ref to relevant verbatim command evidence.`);
+  console.log('3. If any criterion lacks relevant evidence, record more behavior evidence or block the run without invoking the acceptance reviewer.');
+  console.log('4. Only after the preflight passes, give the exact run contract and recorded verification output to the read-only acceptance reviewer; write <runId>.acceptance-review.json beside the run.');
+  console.log(`5. Finish the review; confirmation keeps the task done, while blocked/failed status reopens the remediation owner: ${commandLine('p2a_execute.mjs', ['finish', ...source.sourceArgs, '--run-id', runId])}`);
 }
 
 function verifyRequested(args) {
@@ -1662,7 +1680,7 @@ function runAccept(args) {
     }
     const startedRun = readRun(source.runsDir, runId);
     assertRunExecutionContractCurrent(startedRun, source, 'final acceptance review');
-    printFinalAcceptanceReviewInstructions(source, task, runId, workspacePath);
+    printFinalAcceptanceReviewInstructions(source, task, startedRun, workspacePath);
     printRunCommandFooter(P2A_PATHS, {
       sourceArgs: source.sourceArgs,
       runId,
@@ -1714,7 +1732,7 @@ function runResume(args) {
     if (run.runKind === 'final_visual_review') {
       printFinalVisualReviewInstructions(args, source, task, run.runId, run.workspacePath);
     } else if (run.runKind === 'final_acceptance_review') {
-      printFinalAcceptanceReviewInstructions(source, task, run.runId, run.workspacePath);
+      printFinalAcceptanceReviewInstructions(source, task, run, run.workspacePath);
     } else {
       printLauncherPrompt(source, task, run.runId, approvalLink, { suppressPrompt: args.json });
     }

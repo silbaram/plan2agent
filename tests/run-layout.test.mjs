@@ -865,14 +865,50 @@ describe('iteration-partitioned run layout', () => {
       };
       writeJson(graphPath, taskGraph());
       writeJson(path.join(legacyRunsDir, `${legacyRun.runId}.json`), legacyRun);
-      writeJson(path.join(legacyRunsDir, 'run-index.json'), runIndex(legacyRun));
+      const legacyIndex = runIndex(legacyRun);
+      legacyIndex.retrospective = {
+        iterations: [{
+          iterationId: 'iter-archived',
+          runCount: 2,
+          reasonCounts: { superseded: 0, completed_maintenance: 2 },
+          statusCounts: { finished: 0, failed: 2, blocked: 0 },
+          verificationCount: 2,
+          verificationDuration: { sampleCount: 1, totalMs: 34, maxMs: 34 },
+          verificationStatusCounts: { passed: 0, failed: 1, skipped: 0, not_run: 0, unavailable: 1 },
+          interruptionCounts: {
+            implementation_decision: 0,
+            user_correction: 1,
+            gate_return_valid: 0,
+            gate_return_invalid: 0,
+          },
+        }],
+      };
+      writeJson(path.join(legacyRunsDir, 'run-index.json'), legacyIndex);
       writeJson(path.join(legacyRunsDir, `${legacyRun.runId}.style-verdict.json`), { violationCount: 0 });
       writeJson(path.join(legacyRunsDir, '.run-id-reservations', 'run-reserved.json'), {
         reservationToken: 'fixture-token',
         ownerPid: 2147483647,
       });
       writeJson(path.join(runsDir, canonicalRunRef(globalRun)), globalRun);
-      writeJson(path.join(runsDir, 'run-index.json'), runIndex(globalRun, canonicalRunRef(globalRun)));
+      const globalIndex = runIndex(globalRun, canonicalRunRef(globalRun));
+      globalIndex.retrospective = {
+        iterations: [{
+          iterationId: 'iter-archived',
+          runCount: 1,
+          reasonCounts: { superseded: 1, completed_maintenance: 0 },
+          statusCounts: { finished: 1, failed: 0, blocked: 0 },
+          verificationCount: 1,
+          verificationDuration: { sampleCount: 1, totalMs: 21, maxMs: 21 },
+          verificationStatusCounts: { passed: 1, failed: 0, skipped: 0, not_run: 0, unavailable: 0 },
+          interruptionCounts: {
+            implementation_decision: 0,
+            user_correction: 0,
+            gate_return_valid: 0,
+            gate_return_invalid: 0,
+          },
+        }],
+      };
+      writeJson(path.join(runsDir, 'run-index.json'), globalIndex);
 
       const dryRun = runRuns(['migrate-layout', '--graph', graphPath, '--dry-run']);
       assert.equal(dryRun.status, 0, dryRun.stderr);
@@ -889,6 +925,23 @@ describe('iteration-partitioned run layout', () => {
       assert.equal(redirect.targetRunsDir, runsDir);
       const index = validateRunsDir(runsDir);
       assert.deepEqual(index.runs.map((entry) => entry.runId), [globalRun.runId, legacyRun.runId]);
+      assert.deepEqual(index.retrospective, {
+        iterations: [{
+          iterationId: 'iter-archived',
+          runCount: 3,
+          reasonCounts: { superseded: 1, completed_maintenance: 2 },
+          statusCounts: { finished: 1, failed: 2, blocked: 0 },
+          verificationCount: 3,
+          verificationDuration: { sampleCount: 2, totalMs: 55, maxMs: 34 },
+          verificationStatusCounts: { passed: 1, failed: 1, skipped: 0, not_run: 0, unavailable: 1 },
+          interruptionCounts: {
+            implementation_decision: 0,
+            user_correction: 1,
+            gate_return_valid: 0,
+            gate_return_invalid: 0,
+          },
+        }],
+      });
       assert.equal(indexedRunRef(runsDir, legacyRun.runId), `${ITERATION_ID}/${legacyRun.runId}.json`);
       const migratedRun = JSON.parse(readFileSync(runFilePath(runsDir, legacyRun.runId), 'utf8'));
       assert.equal(migratedRun.sourceLayout, 'graph');

@@ -18,7 +18,7 @@ Plan2Agent 문서는 사용자 흐름, CLI 사용법, 산출물 계약, 구현 �
 | 현재 상태 보기 | `p2a info` | active artifact, task/run 요약 |
 | 적응형 실행 준비·run lifecycle 진행 | `p2a execute` | Direct/Planned compatibility work item 또는 Orchestrated task 실행·검증 |
 | 개발 task 실행 관리 | `p2a tasks` | ready/prompt/start/done 상태 전이 |
-| agent 실행 결과 기록 | `p2a runs` | `runs/run-index.json`, `runs/<iterationId>/<runId>.json` |
+| agent 실행 결과 기록 | `p2a runs` | 현재 run 상세와 `runs/run-index.json`의 제한 회고 집계 |
 | 실행 회고 개선 후보 만들기 | `p2a proposals` | `proposals/<proposalId>.json`와 review/curation/approval artifact |
 | 장기 지식 projection·검색 | `p2a buildlore` | 별도 `knowledge/` Git 저장소의 project-scoped source/wiki |
 

@@ -909,6 +909,155 @@ function pruneScopeMatches(entry, selectors) {
   return true;
 }
 
+const RETROSPECTIVE_SUMMARY_LIMIT = 8;
+const RETROSPECTIVE_SUMMARY_REASONS = new Set(['superseded', 'completed_maintenance']);
+
+function emptyRetrospectiveSummary(iterationId) {
+  return {
+    iterationId,
+    runCount: 0,
+    reasonCounts: { superseded: 0, completed_maintenance: 0 },
+    statusCounts: { finished: 0, failed: 0, blocked: 0 },
+    verificationCount: 0,
+    verificationDuration: { sampleCount: 0, totalMs: 0, maxMs: 0 },
+    verificationStatusCounts: {
+      passed: 0,
+      failed: 0,
+      skipped: 0,
+      not_run: 0,
+      unavailable: 0,
+    },
+    interruptionCounts: {
+      implementation_decision: 0,
+      user_correction: 0,
+      gate_return_valid: 0,
+      gate_return_invalid: 0,
+    },
+  };
+}
+
+function safeCountAdd(current, increment = 1) {
+  if (!Number.isSafeInteger(increment) || increment < 0) return current;
+  return Math.min(Number.MAX_SAFE_INTEGER, current + increment);
+}
+
+function addPrunedRunToSummary(summary, entry, run, reason) {
+  summary.runCount = safeCountAdd(summary.runCount);
+  summary.reasonCounts[reason] = safeCountAdd(summary.reasonCounts[reason]);
+  if (Object.hasOwn(summary.statusCounts, entry.status)) {
+    summary.statusCounts[entry.status] = safeCountAdd(summary.statusCounts[entry.status]);
+  }
+  for (const verification of Array.isArray(run?.verification) ? run.verification : []) {
+    summary.verificationCount = safeCountAdd(summary.verificationCount);
+    if (Object.hasOwn(summary.verificationStatusCounts, verification?.status)) {
+      summary.verificationStatusCounts[verification.status] = safeCountAdd(
+        summary.verificationStatusCounts[verification.status],
+      );
+    }
+    if (Number.isSafeInteger(verification?.durationMs) && verification.durationMs >= 0) {
+      summary.verificationDuration.sampleCount = safeCountAdd(summary.verificationDuration.sampleCount);
+      summary.verificationDuration.totalMs = safeCountAdd(
+        summary.verificationDuration.totalMs,
+        verification.durationMs,
+      );
+      summary.verificationDuration.maxMs = Math.max(
+        summary.verificationDuration.maxMs,
+        verification.durationMs,
+      );
+    }
+  }
+  for (const interruption of Array.isArray(run?.interruptions) ? run.interruptions : []) {
+    let field = interruption?.type;
+    if (field === 'gate_return') field = `gate_return_${interruption.assessment}`;
+    if (Object.hasOwn(summary.interruptionCounts, field)) {
+      summary.interruptionCounts[field] = safeCountAdd(summary.interruptionCounts[field]);
+    }
+  }
+}
+
+function summarizePrunedRuns(index, runsDir, selected, reason) {
+  const iterations = structuredClone(index.retrospective?.iterations ?? []);
+  const byIteration = new Map(iterations.map((summary) => [summary.iterationId, summary]));
+  for (const entry of selected) {
+    let summary = byIteration.get(entry.iterationId);
+    if (!summary) {
+      summary = emptyRetrospectiveSummary(entry.iterationId);
+      iterations.push(summary);
+      byIteration.set(entry.iterationId, summary);
+    }
+    let run = null;
+    try {
+      const runRef = indexedRunRef(runsDir, entry.runId, index);
+      const runPath = path.resolve(runsDir, runRef);
+      if (existsSync(runPath)) run = loadJson(runPath);
+    } catch {
+      // The index status still contributes to the bounded summary. Detailed
+      // counters are best effort so cleanup does not preserve corrupt history.
+    }
+    addPrunedRunToSummary(summary, entry, run, reason);
+  }
+  return {
+    iterations: iterations.slice(-RETROSPECTIVE_SUMMARY_LIMIT),
+  };
+}
+
+function dropRetrospectiveIterations(index, iterationIds) {
+  if (!index.retrospective) return null;
+  const iterations = index.retrospective.iterations
+    .filter((summary) => !iterationIds.has(summary.iterationId));
+  return iterations.length ? { iterations } : null;
+}
+
+function mergeRunIndexRetrospectives(indexes) {
+  const iterations = [];
+  const byIteration = new Map();
+  for (const index of indexes) {
+    for (const source of index.retrospective?.iterations ?? []) {
+      let target = byIteration.get(source.iterationId);
+      if (!target) {
+        target = emptyRetrospectiveSummary(source.iterationId);
+        iterations.push(target);
+        byIteration.set(source.iterationId, target);
+      }
+      target.runCount = safeCountAdd(target.runCount, source.runCount);
+      target.verificationCount = safeCountAdd(target.verificationCount, source.verificationCount);
+      for (const field of Object.keys(target.reasonCounts)) {
+        target.reasonCounts[field] = safeCountAdd(target.reasonCounts[field], source.reasonCounts[field]);
+      }
+      for (const field of Object.keys(target.statusCounts)) {
+        target.statusCounts[field] = safeCountAdd(target.statusCounts[field], source.statusCounts[field]);
+      }
+      target.verificationDuration.sampleCount = safeCountAdd(
+        target.verificationDuration.sampleCount,
+        source.verificationDuration.sampleCount,
+      );
+      target.verificationDuration.totalMs = safeCountAdd(
+        target.verificationDuration.totalMs,
+        source.verificationDuration.totalMs,
+      );
+      target.verificationDuration.maxMs = Math.max(
+        target.verificationDuration.maxMs,
+        source.verificationDuration.maxMs,
+      );
+      for (const field of Object.keys(target.verificationStatusCounts)) {
+        target.verificationStatusCounts[field] = safeCountAdd(
+          target.verificationStatusCounts[field],
+          source.verificationStatusCounts[field],
+        );
+      }
+      for (const field of Object.keys(target.interruptionCounts)) {
+        target.interruptionCounts[field] = safeCountAdd(
+          target.interruptionCounts[field],
+          source.interruptionCounts[field],
+        );
+      }
+    }
+  }
+  return iterations.length
+    ? { iterations: iterations.slice(-RETROSPECTIVE_SUMMARY_LIMIT) }
+    : null;
+}
+
 function pruneIndexedRunEvidenceLocked(runsDir, options = {}) {
   assertNoPendingRunMigration(runsDir);
   recoverPendingRunWrite(runsDir);
@@ -923,6 +1072,15 @@ function pruneIndexedRunEvidenceLocked(runsDir, options = {}) {
   if (!Object.values(selectors).some(Boolean)) {
     throw new Error('run evidence pruning requires at least one scope selector');
   }
+  if (options.summaryReason && !RETROSPECTIVE_SUMMARY_REASONS.has(options.summaryReason)) {
+    throw new Error(`unsupported retrospective summary reason: ${JSON.stringify(options.summaryReason)}`);
+  }
+  if (options.dropRetrospective === true && !selectors.iterationIds) {
+    throw new Error('dropRetrospective requires iterationIds');
+  }
+  if (options.dropRetrospective === true && options.summaryReason) {
+    throw new Error('dropRetrospective cannot be combined with summaryReason');
+  }
   const keepRunIds = normalizedSelectorSet(options.keepRunIds ?? [], 'keepRunIds');
   const index = loadIndex(runsDir);
   const scoped = index.runs.filter((entry) => pruneScopeMatches(entry, selectors));
@@ -936,7 +1094,19 @@ function pruneIndexedRunEvidenceLocked(runsDir, options = {}) {
     entry.status !== 'started'
     && !keepRunIds.has(entry.runId)
   ));
-  if (!selected.length) return { prunedRunIds: [], cleanupFailures: [] };
+  const droppedRetrospective = options.dropRetrospective === true
+    ? dropRetrospectiveIterations(index, selectors.iterationIds)
+    : index.retrospective;
+  const retrospectiveChanged = JSON.stringify(droppedRetrospective) !== JSON.stringify(index.retrospective);
+  if (!selected.length) {
+    if (retrospectiveChanged) {
+      const nextIndex = { ...index };
+      if (droppedRetrospective) nextIndex.retrospective = droppedRetrospective;
+      else delete nextIndex.retrospective;
+      writeIndex(runsDir, nextIndex);
+    }
+    return { prunedRunIds: [], cleanupFailures: [] };
+  }
 
   const selectedIds = new Set(selected.map((entry) => entry.runId));
   const evidencePaths = [];
@@ -967,6 +1137,13 @@ function pruneIndexedRunEvidenceLocked(runsDir, options = {}) {
     ...index,
     runs: index.runs.filter((entry) => !selectedIds.has(entry.runId)),
   };
+  if (options.summaryReason) {
+    nextIndex.retrospective = summarizePrunedRuns(index, runsDir, selected, options.summaryReason);
+  } else if (droppedRetrospective) {
+    nextIndex.retrospective = droppedRetrospective;
+  } else {
+    delete nextIndex.retrospective;
+  }
   writeIndex(runsDir, nextIndex);
   const cleanupFailures = [];
   for (const evidencePath of evidencePaths) {
@@ -1565,6 +1742,16 @@ export function classifyVerificationSpawnResult(result, options = {}) {
   if (result?.error?.code === 'ENOENT') {
     return { status: 'unavailable', reason: 'spawn_enoent', hint: 'verification command could not be started (ENOENT)' };
   }
+  if (result?.error && result.error.code !== 'ETIMEDOUT') {
+    const errorCode = typeof result.error.code === 'string' && result.error.code.trim()
+      ? result.error.code.trim().toUpperCase()
+      : 'UNKNOWN';
+    return {
+      status: 'unavailable',
+      reason: 'spawn_error',
+      hint: `verification command could not be started reliably (${errorCode})`,
+    };
+  }
   const stderr = typeof result?.stderr === 'string' ? result.stderr : decodeVerificationOutput(result?.stderr, options);
   const stdout = typeof result?.stdout === 'string' ? result.stdout : decodeVerificationOutput(result?.stdout, options);
   const windowsNotFound = /is not recognized as an internal or external command/i.test(stderr)
@@ -1661,12 +1848,13 @@ function prepareProjectConfigForVerification(args, runsDir, run, workspacePath) 
   return { config, saved };
 }
 
-export function runVerificationCommand(spec, workspacePath, timeoutMs) {
+export function runVerificationCommand(spec, workspacePath, timeoutMs, options = {}) {
   if (spec.status === 'skipped') return spec;
   const normalized = normalizeProjectLocalLauncherCommand(spec.command, workspacePath);
   const command = normalized.command;
   const startedAt = new Date();
-  const result = spawnSync(command, {
+  const spawn = options.spawnSync ?? spawnSync;
+  const result = spawn(command, {
     cwd: workspacePath,
     shell: true,
     maxBuffer: 1024 * 1024 * 10,
@@ -1675,7 +1863,7 @@ export function runVerificationCommand(spec, workspacePath, timeoutMs) {
   const finishedAt = new Date();
   result.stdout = decodeVerificationOutput(result.stdout);
   result.stderr = decodeVerificationOutput(result.stderr);
-  const exitCode = typeof result.status === 'number' ? result.status : 1;
+  const exitCode = result.error ? null : (typeof result.status === 'number' ? result.status : 1);
   const unavailable = classifyVerificationSpawnResult(result, { command, workspacePath });
   const timedOut = result.error?.code === 'ETIMEDOUT' || result.signal === 'SIGTERM';
   const stderrTail = timedOut
@@ -2666,6 +2854,10 @@ function planAndMigrateRunLayout(args, targetRunsDir, legacyRunsDirs) {
     runs: mergedEntries.map(({ entry }) => entry),
     tasks: rebuildTaskRunIndex(mergedEntries.map(({ entry }) => entry)),
   };
+  const mergedRetrospective = mergeRunIndexRetrospectives(
+    sourceStates.map((state) => state.index),
+  );
+  if (mergedRetrospective) mergedIndex.retrospective = mergedRetrospective;
   validateRunIndexData(mergedIndex);
   const migrations = [];
   const plannedTargets = new Set();
