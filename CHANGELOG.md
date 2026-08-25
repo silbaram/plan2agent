@@ -6,6 +6,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+## [0.5.14] - 2026-08-26
+
+### Fixed
+
+- Allow read-only acceptance reviewers to inspect the approved spec, exact target run, and recorded evidence through provider-native read/search operations or read-only shell inspection, while continuing to forbid product, verification, lifecycle, and network execution.
+
 ## [0.5.13] - 2026-08-25
 
 ### Changed
@@ -228,7 +234,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Add package-runtime project initialization, managed provider assets, artifact validation, handoff, supervised execution, evaluation, and proposal workflows.
 - Ship canonical and generated integrations for Codex, Claude Code, and Gemini CLI.
 
-[Unreleased]: https://github.com/silbaram/plan2agent/compare/v0.5.13...HEAD
+[Unreleased]: https://github.com/silbaram/plan2agent/compare/v0.5.14...HEAD
+[0.5.14]: https://github.com/silbaram/plan2agent/compare/v0.5.13...v0.5.14
 [0.5.13]: https://github.com/silbaram/plan2agent/compare/v0.5.12...v0.5.13
 [0.5.12]: https://github.com/silbaram/plan2agent/compare/v0.5.11...v0.5.12
 [0.5.11]: https://github.com/silbaram/plan2agent/compare/v0.5.10...v0.5.11
