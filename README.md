@@ -113,7 +113,9 @@ Planning and execution state stays local to the project:
 approval audits remain compatible copies. All artifacts are validated against schemas shipped with the package.
 Generated Markdown is a human-readable view. Run evidence is temporary execution state by default:
 the current development bundle remains reviewable and portable, while opening the next iteration
-removes archived iteration runs. Approved specs, close metadata, and Git remain the durable history.
+removes archived iteration runs. When a retry replaces a run, `run-index.json` keeps only bounded
+retrospective counters—never commands, output tails, notes, or run IDs—and drops those counters when
+the next iteration opens. Approved specs, close metadata, and Git remain the durable history.
 Set `runTracking.persistence` to `persistent` only when long-lived local run evidence is required.
 
 ## Core workflow

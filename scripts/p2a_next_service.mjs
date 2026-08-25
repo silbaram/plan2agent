@@ -570,7 +570,11 @@ function inspectArtifact(targetRoot, artifactRoot, isScaffoldProject, options = 
           artifactRoot,
           { requireReady: false, validationSession },
         );
-        validateActiveIterationPlanningContract(resolvedIterationState);
+        validateActiveIterationPlanningContract(
+          resolvedIterationState,
+          undefined,
+          { validationSession },
+        );
         iterationState = resolvedIterationState;
       } catch (error) {
         currentSpecValidationError = error instanceof Error ? error.message : String(error);
@@ -1355,6 +1359,7 @@ function buildNextDecisionContext(
   reviewPasses,
   executionModePolicy,
   explicitEntry,
+  validationSession,
 ) {
   const hasHarness = isDirectory(path.join(targetRoot, '.plan2agent'));
   const context = {
@@ -1492,6 +1497,7 @@ function buildNextDecisionContext(
       validateRunTaskContract(
         startedRun,
         path.dirname(path.resolve(detail.runs.runsDir)),
+        { validationSession },
       );
     } catch (error) {
       startedRunContractError = error instanceof Error ? error.message : String(error);
@@ -1503,7 +1509,11 @@ function buildNextDecisionContext(
   const hasRequiredVisualContract = Boolean(
     gates.specValid
     && gates.specPath
-    && approvedVisualReviewContract(gates.specPath, artifactRoot),
+    && approvedVisualReviewContract(
+      gates.specPath,
+      artifactRoot,
+      { validationSession },
+    ),
   );
   const acceptanceReviewActivated = (
     reviewPasses.acceptance === 'opt_in'
@@ -1539,7 +1549,7 @@ function buildNextDecisionContext(
     && (failedOrBlockedRunCandidate || needsCloseReadyVisualAudit || needsCloseReadyAcceptanceAudit)
   ) {
     try {
-      validateRunsDir(detail.runs.runsDir);
+      validateRunsDir(detail.runs.runsDir, { validationSession });
     } catch (error) {
       runEvidenceValidationError = error instanceof Error
         ? error.message
@@ -2273,6 +2283,7 @@ function resolveNextDecision(
     snapshot.reviewPasses,
     snapshot.executionModePolicy,
     snapshot.explicitEntry,
+    snapshot.validationSession,
   );
   const action = decideNextAction(context);
   const command = contract === 'v1'
@@ -2371,7 +2382,7 @@ function buildInfoSnapshot(targetRootInput, options = {}) {
   const reviewPasses = resolveReviewPasses(config);
   const executionModePolicy = resolveExecutionModePolicy(config);
   const isScaffoldProject = ['init', 'scaffold'].includes(manifest?.provenance?.mode);
-  const validationSession = createValidationSession();
+  const validationSession = options.validationSession ?? createValidationSession();
   const inspectedArtifacts = discoverArtifactRoots(targetRoot)
     .map((artifactRoot) => inspectArtifact(
       targetRoot,
@@ -2487,7 +2498,14 @@ function buildInfoSnapshot(targetRootInput, options = {}) {
     artifacts,
     nextActions,
   };
-  return { info, inspectedArtifacts, reviewPasses, executionModePolicy, explicitEntry };
+  return {
+    info,
+    inspectedArtifacts,
+    reviewPasses,
+    executionModePolicy,
+    explicitEntry,
+    validationSession,
+  };
 }
 
 export function buildInfo(targetRootInput, options = {}) {

@@ -4548,7 +4548,7 @@ function pruneArchivedRunEvidenceAfterOpen(facts) {
   if (!iterationIds.length) return null;
   return pruneIndexedRunEvidence(
     path.join(facts.state.artifactRoot, 'runs'),
-    { iterationIds, alreadyLocked: true },
+    { iterationIds, alreadyLocked: true, dropRetrospective: true },
   );
 }
 

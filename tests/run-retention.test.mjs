@@ -37,7 +37,7 @@ function runEntry(runId, taskId, iterationId, status, runRef) {
   };
 }
 
-function writeIndex(runsDir, entries, projectId = 'sample') {
+function writeIndex(runsDir, entries, projectId = 'sample', retrospective = null) {
   const taskEntries = new Map();
   for (const entry of entries) {
     const task = taskEntries.get(entry.taskId) ?? {
@@ -49,12 +49,34 @@ function writeIndex(runsDir, entries, projectId = 'sample') {
     task.latestRunId = entry.runId;
     taskEntries.set(entry.taskId, task);
   }
-  writeFileSync(path.join(runsDir, 'run-index.json'), `${JSON.stringify({
+  const index = {
     schema_version: 'p2a.run_index.v1',
     projectId,
     runs: entries,
     tasks: [...taskEntries.values()],
-  }, null, 2)}\n`, 'utf8');
+  };
+  if (retrospective) index.retrospective = retrospective;
+  writeFileSync(path.join(runsDir, 'run-index.json'), `${JSON.stringify(index, null, 2)}\n`, 'utf8');
+}
+
+function retrospective(iterationId, runCount = 1) {
+  return {
+    iterations: [{
+      iterationId,
+      runCount,
+      reasonCounts: { superseded: runCount, completed_maintenance: 0 },
+      statusCounts: { finished: runCount, failed: 0, blocked: 0 },
+      verificationCount: 0,
+      verificationDuration: { sampleCount: 0, totalMs: 0, maxMs: 0 },
+      verificationStatusCounts: { passed: 0, failed: 0, skipped: 0, not_run: 0, unavailable: 0 },
+      interruptionCounts: {
+        implementation_decision: 0,
+        user_correction: 0,
+        gate_return_valid: 0,
+        gate_return_invalid: 0,
+      },
+    }],
+  };
 }
 
 function writeEvidence(runsDir, entry, sidecars = []) {
@@ -160,6 +182,26 @@ test('active-only pruning refuses a scope with a started run without deleting cl
   }
 });
 
+test('iteration cleanup drops a bounded retrospective even when no run files remain', () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'p2a-run-retention-'));
+  const runsDir = path.join(root, 'runs');
+  mkdirSync(runsDir);
+  try {
+    writeIndex(runsDir, [], 'sample', retrospective('v1'));
+
+    const result = pruneIndexedRunEvidence(runsDir, {
+      iterationIds: ['v1'],
+      dropRetrospective: true,
+    });
+
+    assert.deepEqual(result.prunedRunIds, []);
+    const index = JSON.parse(readFileSync(path.join(runsDir, 'run-index.json'), 'utf8'));
+    assert.equal(Object.hasOwn(index, 'retrospective'), false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('review retry pruning retains the implementation run required by handoff', () => {
   const root = mkdtempSync(path.join(tmpdir(), 'p2a-run-retention-'));
   const runsDir = path.join(root, 'runs');
@@ -208,7 +250,7 @@ for (const [persistence, shouldPrune] of [['active_only', true], ['persistent', 
         'finished',
         'v1-mvp/run-archived.json',
       );
-      writeIndex(runsDir, [archivedRun]);
+      writeIndex(runsDir, [archivedRun], 'sample', retrospective('v1-mvp'));
       writeEvidence(runsDir, archivedRun, ['.acceptance-review.json']);
 
       const opened = runCli(ITERATION_CLI, [
@@ -221,6 +263,7 @@ for (const [persistence, shouldPrune] of [['active_only', true], ['persistent', 
       assert.equal(existsSync(path.join(runsDir, archivedRun.runRef)), !shouldPrune);
       const index = JSON.parse(readFileSync(path.join(runsDir, 'run-index.json'), 'utf8'));
       assert.equal(index.runs.length, shouldPrune ? 0 : 1);
+      assert.equal(index.retrospective?.iterations.length ?? 0, shouldPrune ? 0 : 1);
       if (shouldPrune) assert.match(opened.stdout, /transient run cleanup: removed 1 archived run/);
       else assert.doesNotMatch(opened.stdout, /transient run cleanup/);
     } finally {
@@ -365,6 +408,32 @@ test('successful task finish keeps the latest run and removes superseded same-ki
     oldRun.startedAt = '2026-08-22T00:00:00.000Z';
     oldRun.updatedAt = '2026-08-22T00:01:00.000Z';
     oldRun.finishedAt = '2026-08-22T00:01:00.000Z';
+    oldRun.verification.push({
+      type: 'custom',
+      command: 'node -e "console.log(\'behavior ok\')"',
+      status: 'passed',
+      exitCode: 0,
+      durationMs: 42,
+      startedAt: '2026-08-22T00:00:00.000Z',
+      finishedAt: '2026-08-22T00:00:00.042Z',
+      stdoutTail: 'behavior ok',
+      stderrTail: '',
+      source: 'command',
+    });
+    oldRun.interruptions.push(
+      {
+        recordedAt: '2026-08-22T00:00:10.000Z',
+        type: 'user_correction',
+        summary: 'Adjusted the requested behavior.',
+        assessment: 'not_applicable',
+      },
+      {
+        recordedAt: '2026-08-22T00:00:20.000Z',
+        type: 'gate_return',
+        summary: 'Gate caught an omitted behavior.',
+        assessment: 'valid',
+      },
+    );
     const oldEntry = {
       ...currentEntry,
       runId: oldRun.runId,
@@ -401,6 +470,24 @@ test('successful task finish keeps the latest run and removes superseded same-ki
       finalIndex.runs.filter((entry) => entry.taskId === currentEntry.taskId).map((entry) => entry.runId),
       [currentEntry.runId],
     );
+    assert.deepEqual(finalIndex.retrospective, {
+      iterations: [{
+        iterationId: currentEntry.iterationId,
+        runCount: 1,
+        reasonCounts: { superseded: 1, completed_maintenance: 0 },
+        statusCounts: { finished: 1, failed: 0, blocked: 0 },
+        verificationCount: 1,
+        verificationDuration: { sampleCount: 1, totalMs: 42, maxMs: 42 },
+        verificationStatusCounts: { passed: 1, failed: 0, skipped: 0, not_run: 0, unavailable: 0 },
+        interruptionCounts: {
+          implementation_decision: 0,
+          user_correction: 1,
+          gate_return_valid: 1,
+          gate_return_invalid: 0,
+        },
+      }],
+    });
+    assert.doesNotMatch(JSON.stringify(finalIndex.retrospective), /behavior ok|Adjusted|Gate caught|run-superseded/);
   } finally {
     rmSync(artifactRoot, { recursive: true, force: true });
     rmSync(workspace, { recursive: true, force: true });

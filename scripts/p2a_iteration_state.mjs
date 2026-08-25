@@ -1081,6 +1081,7 @@ export function assertPendingBaselineIntegrity(
   metadata,
   baselineSpecRef,
   baselineSpecPath,
+  options = {},
 ) {
   const metadataBaselineRef = metadata.baseline?.effective_spec_ref;
   if (normalizeDisplayPath(metadataBaselineRef) !== normalizeDisplayPath(baselineSpecRef)) {
@@ -1149,6 +1150,7 @@ export function assertPendingBaselineIntegrity(
     const snapshot = loadJson(baselineSpecPath);
     validateCurrentSpecCompositionData(snapshot, state.artifactRoot, {
       requireNoOpenDecisions: true,
+      validationSession: options.validationSession,
     });
     for (const field of [
       'project_id',
@@ -1174,6 +1176,7 @@ export function assertPendingBaselineIntegrity(
 export function validateActiveIterationBaselineContract(
   state,
   metadata = optionalIterationMetadata(state.artifactRoot, state.activeIteration),
+  options = {},
 ) {
   const pending = state.currentSpec.pending_iteration;
   if (!pending) return;
@@ -1265,6 +1268,7 @@ export function validateActiveIterationBaselineContract(
     metadata,
     baselineSpecRef,
     baselineSpecPath,
+    options,
   );
   if (existsSync(intakePath)) {
     assertIntakeBaselineMatchesPending(
@@ -1288,9 +1292,10 @@ const ACTIVE_PLANNING_PENDING_STATUSES = new Set([
 export function validateActiveIterationPlanningContract(
   state,
   metadata = optionalIterationMetadata(state.artifactRoot, state.activeIteration),
+  options = {},
 ) {
   validateActiveIterationArchiveConsistency(state, metadata);
-  validateActiveIterationBaselineContract(state, metadata);
+  validateActiveIterationBaselineContract(state, metadata, options);
   const pending = state.currentSpec.pending_iteration;
   if (pending) {
     if (!ACTIVE_PLANNING_PENDING_STATUSES.has(pending.status)) {
@@ -1465,7 +1470,7 @@ function validateReadyIterationArtifacts(state, options = {}) {
       validationSession: options.validationSession,
     },
   );
-  validateActiveIterationPlanningContract(state);
+  validateActiveIterationPlanningContract(state, undefined, options);
   const currentSpecOpenDecisions = state.currentSpec.open_decisions ?? [];
   if (!Array.isArray(currentSpecOpenDecisions)) {
     throw new ValidationError('ready iteration requires current-spec.json open_decisions to be an array when present');
