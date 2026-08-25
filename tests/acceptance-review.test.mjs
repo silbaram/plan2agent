@@ -66,6 +66,38 @@ function managedNonUiIteration() {
   return { workspaceRoot, artifactRoot, graphPath, graph };
 }
 
+test('acceptance reviewer may inspect sealed evidence without gaining execution authority', () => {
+  const canonical = readFileSync(
+    path.join('.agents', 'agents', 'p2a-acceptance-reviewer.md'),
+    'utf8',
+  );
+  assert.match(canonical, /capabilities:\n  - read\n  - search/);
+  assert.match(canonical, /access: read-only/);
+  assert.match(canonical, /read-only file inspection and search/);
+  assert.match(canonical, /read-only shell commands are permitted for those inputs only/);
+  assert.match(canonical, /Do not run product behavior, tests, builds, lint, typechecking, lifecycle, network/);
+  assert.doesNotMatch(canonical, /Do not edit files, execute commands/);
+
+  const codex = readFileSync(
+    path.join('.codex', 'agents', 'p2a-acceptance-reviewer.toml'),
+    'utf8',
+  );
+  assert.match(codex, /sandbox_mode = "read-only"/);
+  assert.match(codex, /read-only shell commands are permitted for those inputs only/);
+
+  const claude = readFileSync(
+    path.join('.claude', 'agents', 'p2a-acceptance-reviewer.md'),
+    'utf8',
+  );
+  assert.match(claude, /tools:\n  - Read\n  - Grep\n  - Glob/);
+
+  const gemini = readFileSync(
+    path.join('.gemini', 'agents', 'p2a-acceptance-reviewer.md'),
+    'utf8',
+  );
+  assert.match(gemini, /tools:\n  - read_file\n  - grep_search/);
+});
+
 test('iteration acceptance criteria keep current refs while excluding baseline behavior', () => {
   const baselineProduct = {
     core_flows: ['existing flow', 'duplicate flow'],
