@@ -350,6 +350,15 @@ test('runs gc dry-run lists indexed and orphan evidence before removing it while
     writeIndex(runsDir, [oldRun, finalRun]);
     writeEvidence(runsDir, oldRun);
     writeEvidence(runsDir, finalRun);
+    const indexedEnvelopeSha = '1'.repeat(64);
+    const indexedEnvelopeRef = `v1-mvp/envelopes/${indexedEnvelopeSha}.json`;
+    writeFileSync(path.join(runsDir, oldRun.runRef), `${JSON.stringify({
+      runId: oldRun.runId,
+      iterationId: oldRun.iterationId,
+      executionEnvelopeRef: { sha256: indexedEnvelopeSha },
+    }, null, 2)}\n`, 'utf8');
+    mkdirSync(path.dirname(path.join(runsDir, indexedEnvelopeRef)), { recursive: true });
+    writeFileSync(path.join(runsDir, indexedEnvelopeRef), '{}\n', 'utf8');
     const orphanRef = 'v1-mvp/run-gc-orphan.acceptance-review.json';
     writeFileSync(path.join(runsDir, orphanRef), '{}\n', 'utf8');
     const orphanEnvelopeRef = `v1-mvp/envelopes/${'0'.repeat(64)}.json`;
@@ -368,11 +377,13 @@ test('runs gc dry-run lists indexed and orphan evidence before removing it while
     assert.match(preview.stdout, /run-gc-old/);
     assert.match(preview.stdout, /run-gc-orphan\.acceptance-review\.json/);
     assert.match(preview.stdout, /envelopes\/0{64}\.json/);
+    assert.match(preview.stdout, /envelopes\/1{64}\.json/);
     assert.match(preview.stdout, /final runs kept: 1/);
     assert.equal(existsSync(path.join(runsDir, oldRun.runRef)), true);
     assert.equal(existsSync(path.join(runsDir, finalRun.runRef)), true);
     assert.equal(existsSync(path.join(runsDir, orphanRef)), true);
     assert.equal(existsSync(path.join(runsDir, orphanEnvelopeRef)), true);
+    assert.equal(existsSync(path.join(runsDir, indexedEnvelopeRef)), true);
 
     const collected = runCli(RUNS_CLI, [
       'gc',
@@ -385,6 +396,7 @@ test('runs gc dry-run lists indexed and orphan evidence before removing it while
     assert.equal(existsSync(path.join(runsDir, finalRun.runRef)), true);
     assert.equal(existsSync(path.join(runsDir, orphanRef)), false);
     assert.equal(existsSync(path.join(runsDir, orphanEnvelopeRef)), false);
+    assert.equal(existsSync(path.join(runsDir, indexedEnvelopeRef)), false);
     const index = JSON.parse(readFileSync(path.join(runsDir, 'run-index.json'), 'utf8'));
     assert.deepEqual(index.runs.map((entry) => entry.runId), ['run-gc-final']);
   } finally {
@@ -461,6 +473,13 @@ test('runs gc refuses an unindexed started run left by an interrupted index comm
     const index = JSON.parse(readFileSync(path.join(runsDir, 'run-index.json'), 'utf8'));
     const startedEntry = index.runs.at(-1);
     const runPath = path.join(runsDir, startedEntry.runRef);
+    const run = JSON.parse(readFileSync(runPath, 'utf8'));
+    const envelopePath = path.join(
+      runsDir,
+      run.iterationId,
+      'envelopes',
+      `${run.executionEnvelopeRef.sha256}.json`,
+    );
     writeIndex(runsDir, [], index.projectId);
 
     const refused = runCli(RUNS_CLI, ['gc', '--artifacts', artifactRoot]);
@@ -470,6 +489,7 @@ test('runs gc refuses an unindexed started run left by an interrupted index comm
       /cannot gc active run evidence.*restore the index.*started run\(s\)/,
     );
     assert.equal(existsSync(runPath), true);
+    assert.equal(existsSync(envelopePath), true);
     const unchangedIndex = JSON.parse(readFileSync(path.join(runsDir, 'run-index.json'), 'utf8'));
     assert.deepEqual(unchangedIndex.runs, []);
   } finally {

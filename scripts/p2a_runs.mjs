@@ -1255,6 +1255,25 @@ function gcOrphanRefs(runsDir, index, iterationId = null) {
   return refs.filter((ref) => ref.startsWith(`${iterationId}/`));
 }
 
+function gcProjectedOrphanRefs(runsDir, index, selectedRunIds, iterationId = null) {
+  const selectedIds = new Set(selectedRunIds);
+  const selectedEvidenceRefs = new Set();
+  for (const entry of index.runs) {
+    if (!selectedIds.has(entry.runId)) continue;
+    const runRef = indexedRunRef(runsDir, entry.runId, index);
+    selectedEvidenceRefs.add(runRef);
+    for (const suffix of RUN_SIDECAR_SUFFIXES) {
+      selectedEvidenceRefs.add(runSidecarRef(runRef, suffix));
+    }
+  }
+  const projectedIndex = {
+    ...index,
+    runs: index.runs.filter((entry) => !selectedIds.has(entry.runId)),
+  };
+  return gcOrphanRefs(runsDir, projectedIndex, iterationId)
+    .filter((ref) => !selectedEvidenceRefs.has(ref));
+}
+
 function orphanStartedRunIds(runsDir, refs) {
   const runIds = [];
   for (const ref of refs) {
@@ -1343,11 +1362,17 @@ function gcRunEvidence(args) {
       .filter((entry) => !keepSet.has(entry.runId))
       .map((entry) => entry.runId);
     if (args.dryRun) {
+      const projectedOrphans = gcProjectedOrphanRefs(
+        runsDir,
+        index,
+        selectedRunIds,
+        args.iterationId,
+      );
       printGcPlan({
         dryRun: true,
         persistence,
         prunedRunIds: selectedRunIds,
-        orphanRefs: initialOrphans,
+        orphanRefs: projectedOrphans,
         keepRunIds,
       });
       return 0;
