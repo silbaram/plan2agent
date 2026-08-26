@@ -145,6 +145,13 @@ p2a execute start \
   --task <task-id>
 ```
 
+During implementation, projects may opt into fast changed-file checks with structured
+`relatedVerification` commands and `p2a runs verify --related`. These checks are feedback only and
+never authorize iteration close. After every task is done, `p2a next` guides any required final review
+and then starts `p2a execute verify-final` only when no final run already holds valid full evidence.
+Full test, lint, or typecheck evidence is bound to the exact workspace revision; a later source change
+makes it stale and requires one new final verification.
+
 See the [Execution Reference](docs/supervised-execution.md) for start, resume, finish, retry, and bounded batch procedures.
 
 ### 3. Iterate without losing the baseline
@@ -208,7 +215,7 @@ Plan2Agent installs one `p2a` entrypoint:
 | `p2a iteration` | Manage iteration initialization, close/open cycles, diffs, and maintenance. |
 | `p2a tasks` | Inspect and transition task state. |
 | `p2a runs` | Record, verify, finish, and inspect run evidence. |
-| `p2a execute` | Supervise implementation and canonical final visual-review runs through verified finish. |
+| `p2a execute` | Supervise implementation and canonical final verification, visual, and acceptance runs through verified finish. |
 | `p2a eval` | Grade, compare, analyze, generate, and summarize execution evidence. |
 | `p2a proposals` | Mine, review, curate, approve, and summarize improvement proposals. |
 | `p2a buildlore` | Project, check, search, and retrieve optional BuildLore knowledge. |

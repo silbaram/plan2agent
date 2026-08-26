@@ -789,6 +789,8 @@ test('p2a execute start rejects a stale active intake baseline before claiming w
       task.id === 'task-001' ? { ...task, status: 'todo' } : task
     ));
     writeFileSync(graphPath, `${JSON.stringify(graph, null, 2)}\n`, 'utf8');
+    const runIndexPath = path.join(artifactRoot, 'runs', 'run-index.json');
+    const runIndexBefore = readFileSync(runIndexPath, 'utf8');
 
     const result = executeCli([
       'start',
@@ -811,7 +813,7 @@ test('p2a execute start rejects a stale active intake baseline before claiming w
       unchangedGraph.tasks.find((task) => task.id === 'task-001')?.status,
       'todo',
     );
-    assert.equal(existsSync(path.join(artifactRoot, 'runs', 'run-index.json')), false);
+    assert.equal(readFileSync(runIndexPath, 'utf8'), runIndexBefore);
   } finally {
     rmSync(artifactRoot, { recursive: true, force: true });
     rmSync(workspace, { recursive: true, force: true });
@@ -854,17 +856,45 @@ test('failed iteration init restores the flat layout without orphan state', () =
   }
 });
 
-function closeInitializedIteration(artifactRoot) {
+function prepareCloseReadyIteration(artifactRoot, iterationId = null) {
+  const currentSpec = JSON.parse(readFileSync(path.join(artifactRoot, 'current-spec.json'), 'utf8'));
+  const targetIterationId = iterationId ?? currentSpec.active_iteration;
   const graphPath = path.join(
     artifactRoot,
     'iterations',
-    'v1-mvp',
+    targetIterationId,
     'gate-c-task-graph',
     'task-graph.json',
   );
   const graph = JSON.parse(readFileSync(graphPath, 'utf8'));
   graph.tasks = graph.tasks.map((task) => ({ ...task, status: 'done' }));
   writeFileSync(graphPath, `${JSON.stringify(graph, null, 2)}\n`, 'utf8');
+  const runId = `run-final-verification-${targetIterationId.replaceAll(/[^A-Za-z0-9._-]/g, '-')}`;
+  const startResult = executeCli([
+    'verify-final',
+    '--artifacts', artifactRoot,
+    '--task', graph.tasks[0].id,
+    '--agent-tool', 'manual',
+    '--run-id', runId,
+  ]);
+  assert.equal(startResult.status, 0, `${startResult.stdout}${startResult.stderr}`);
+  const verifyResult = runCli([
+    'verify',
+    '--artifacts', artifactRoot,
+    '--run-id', runId,
+    '--test-command', 'node -e "console.log(\'full verification passed\')"',
+  ]);
+  assert.equal(verifyResult.status, 0, `${verifyResult.stdout}${verifyResult.stderr}`);
+  const finishResult = executeCli([
+    'finish',
+    '--artifacts', artifactRoot,
+    '--run-id', runId,
+  ]);
+  assert.equal(finishResult.status, 0, `${finishResult.stdout}${finishResult.stderr}`);
+}
+
+function closeInitializedIteration(artifactRoot) {
+  prepareCloseReadyIteration(artifactRoot);
   const result = spawnSync(process.execPath, [
     ITERATION_CLI,
     'close',
@@ -964,6 +994,7 @@ function prepareCloseReadySecondIteration(artifactRoot) {
     promoted_at: '2026-07-30T00:00:00.000Z',
   };
   writeFileSync(currentSpecPath, `${JSON.stringify(currentSpec, null, 2)}\n`, 'utf8');
+  prepareCloseReadyIteration(artifactRoot, secondIterationId);
   return { currentSpecPath, secondIterationId };
 }
 
@@ -1587,6 +1618,7 @@ test('iteration close participates in the active task-graph lock', async () => {
     const graph = JSON.parse(readFileSync(graphPath, 'utf8'));
     graph.tasks = graph.tasks.map((task) => ({ ...task, status: 'done' }));
     writeFileSync(graphPath, `${JSON.stringify(graph, null, 2)}\n`, 'utf8');
+    prepareCloseReadyIteration(artifactRoot, 'v1-mvp');
     const currentSpecPath = path.join(artifactRoot, 'current-spec.json');
     const beforeClose = readFileSync(currentSpecPath, 'utf8');
     let closePromise;
@@ -1894,16 +1926,7 @@ test('Gate B promotion rejects archived or orphaned close markers without changi
         `${variant.id}: ${initialPromotion.stdout}${initialPromotion.stderr}`,
       );
       if (variant.close) {
-        const graphPath = path.join(
-          artifactRoot,
-          'iterations',
-          iterationId,
-          'gate-c-task-graph',
-          'task-graph.json',
-        );
-        const graph = JSON.parse(readFileSync(graphPath, 'utf8'));
-        graph.tasks = graph.tasks.map((task) => ({ ...task, status: 'done' }));
-        writeFileSync(graphPath, `${JSON.stringify(graph, null, 2)}\n`, 'utf8');
+        prepareCloseReadyIteration(artifactRoot, iterationId);
         const closeResult = spawnSync(process.execPath, [
           ITERATION_CLI,
           'close',
@@ -2535,6 +2558,7 @@ test('failed close restores current spec and iteration metadata', () => {
     const graph = JSON.parse(readFileSync(graphPath, 'utf8'));
     graph.tasks = graph.tasks.map((task) => ({ ...task, status: 'done' }));
     writeFileSync(graphPath, `${JSON.stringify(graph, null, 2)}\n`, 'utf8');
+    prepareCloseReadyIteration(artifactRoot, 'v1-mvp');
 
     const currentSpecPath = path.join(artifactRoot, 'current-spec.json');
     const currentSpec = JSON.parse(readFileSync(currentSpecPath, 'utf8'));
@@ -2696,6 +2720,7 @@ test('archived artifact audits reject references outside the artifact root', () 
     const graph = JSON.parse(readFileSync(graphPath, 'utf8'));
     graph.tasks = graph.tasks.map((task) => ({ ...task, status: 'done' }));
     writeFileSync(graphPath, `${JSON.stringify(graph, null, 2)}\n`, 'utf8');
+    prepareCloseReadyIteration(artifactRoot, 'v1-mvp');
     let result = spawnSync(process.execPath, [
       ITERATION_CLI,
       'close',
@@ -2750,6 +2775,7 @@ test('archived artifact audits reject visual files added after close', () => {
     const graph = JSON.parse(readFileSync(graphPath, 'utf8'));
     graph.tasks = graph.tasks.map((task) => ({ ...task, status: 'done' }));
     writeFileSync(graphPath, `${JSON.stringify(graph, null, 2)}\n`, 'utf8');
+    prepareCloseReadyIteration(artifactRoot, 'v1-mvp');
     let result = spawnSync(process.execPath, [
       ITERATION_CLI,
       'close',

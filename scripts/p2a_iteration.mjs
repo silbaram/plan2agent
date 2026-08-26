@@ -86,6 +86,7 @@ import {
 } from './p2a_spec_model.mjs';
 import { assertFinalVisualReviewRunReady } from './p2a_visual_review_gate.mjs';
 import { assertFinalAcceptanceReviewRunReady } from './p2a_acceptance_review_gate.mjs';
+import { assertFinalFullVerificationReady } from './p2a_final_verification_gate.mjs';
 import { resolveReviewPasses, resolveRunPersistence } from './p2a_project_config.mjs';
 import {
   canonicalWorkspacePathForArtifactRoot,
@@ -3411,6 +3412,48 @@ export function validateCloseReadyAcceptanceEvidence({
   return 1;
 }
 
+export function validateCloseReadyFullVerificationEvidence({
+  artifactRoot,
+  activeIteration,
+  taskGraphPath,
+  taskGraph,
+}) {
+  const runsDir = path.join(path.resolve(artifactRoot), 'runs');
+  if (!existsSync(runsDir)) {
+    throw new ValidationError(
+      `close-ready full verification failed: runs directory is missing. Run p2a execute verify-final --artifacts ${artifactRoot}.`,
+    );
+  }
+  validateRunsDir(runsDir);
+  const expectedSourceLayout = taskGraphContextForGraph(taskGraphPath).sourceLayout;
+  const currentRuns = loadRunsForArtifactRoot(artifactRoot)
+    .filter((run) => (
+      run.iterationId === activeIteration
+      && run.sourceLayout === expectedSourceLayout
+      && taskGraphRefMatchesGraph(run.taskGraphRef, taskGraphPath, artifactRoot)
+    ));
+  const activeRuns = currentRuns.filter((run) => run.status === 'started');
+  if (activeRuns.length) {
+    throw new ValidationError(
+      `close-ready full verification requires no active run(s): ${activeRuns.map((run) => run.runId).join(', ')}`,
+    );
+  }
+  try {
+    assertFinalFullVerificationReady({
+      runsDir,
+      runs: currentRuns,
+      artifactRoot,
+      graphPath: taskGraphPath,
+      activeIteration,
+    });
+  } catch (error) {
+    throw new ValidationError(
+      `close-ready full verification failed: ${error.message}. Run p2a execute verify-final --artifacts ${artifactRoot}.`,
+    );
+  }
+  return 1;
+}
+
 function loadReadyIterationFacts(artifactRoot) {
   const state = resolveIterationState(artifactRoot);
   const spec = validateActiveSpecWithOptionalIntake(state);
@@ -3997,6 +4040,12 @@ function validateIteration(args) {
       taskGraph,
       reviewPasses,
     });
+    validateCloseReadyFullVerificationEvidence({
+      artifactRoot: state.artifactRoot,
+      activeIteration: state.activeIteration,
+      taskGraphPath: state.taskGraphPath,
+      taskGraph,
+    });
   }
   const maintenance = validateMaintenanceTaskGraphIfPresent(state);
   const archivedAuditCount = args.skipArchiveAudit
@@ -4036,6 +4085,12 @@ function closeLocked(args, artifactRoot) {
     taskGraphPath: facts.state.taskGraphPath,
     taskGraph: facts.taskGraph,
     reviewPasses,
+  });
+  validateCloseReadyFullVerificationEvidence({
+    artifactRoot,
+    activeIteration: facts.state.activeIteration,
+    taskGraphPath: facts.state.taskGraphPath,
+    taskGraph: facts.taskGraph,
   });
   const activeMetadata = loadOptionalIterationMetadata(artifactRoot, facts.state.activeIteration);
 

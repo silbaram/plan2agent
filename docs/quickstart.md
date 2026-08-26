@@ -94,6 +94,21 @@ p2a iteration init \
 
 각 행동 뒤에는 다시 `p2a next`를 실행해 ready work item 실행, run 종료, 다음 반복 close/open 행동을 확인한다.
 
+모든 task가 끝난 뒤 `p2a next`가 `final_verification_required`를 반환하면 canonical workspace에서
+한 번만 전체 검증을 기록한다. 구현 중 `--related`로 실행한 변경 파일 검증은 빠른 피드백용이며
+이 단계를 대신하지 않는다.
+
+```bash
+p2a execute verify-final \
+  --artifacts .plan2agent/artifacts/<project_id>
+p2a runs verify \
+  --artifacts .plan2agent/artifacts/<project_id> \
+  --run-id <run-id>
+p2a execute finish \
+  --artifacts .plan2agent/artifacts/<project_id> \
+  --run-id <run-id>
+```
+
 반복을 닫기 전에는 같은 조건을 validator로 먼저 확인할 수 있다.
 
 ```bash

@@ -25,6 +25,7 @@ import './supervised-batch-execution.test.mjs';
 import './eval-stable-metrics.test.mjs';
 import './verification-runner-utils.test.mjs';
 import './verification-preflight.test.mjs';
+import './layered-verification.test.mjs';
 import './milestone-review.test.mjs';
 import './validate-artifacts-compatibility.test.mjs';
 import './visual-experience.test.mjs';

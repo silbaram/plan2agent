@@ -162,7 +162,7 @@ test('p2a_runs verify returns failure and records unavailable for a command-subs
     const run = JSON.parse(readFileSync(runPath, 'utf8'));
 
     assert.equal(result.status, 1);
-    assert.match(result.stdout, /custom: unavailable/);
+    assert.match(result.stdout, /custom:full: unavailable/);
     assert.equal(run.verification.length, 1);
     assert.equal(run.verification[0].status, 'unavailable');
     assert.equal(run.verification[0].exitCode, 0);

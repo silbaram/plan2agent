@@ -33,6 +33,7 @@ import { compareRunEvidence, taskGraphRefMatchesGraph } from './p2a_run_paths.mj
 import { assertFinalVisualReviewRunReady } from './p2a_visual_review_gate.mjs';
 import { assertFinalAcceptanceReviewRunReady } from './p2a_acceptance_review_gate.mjs';
 import { minedProposalRunIds } from './p2a_proposal_mining.mjs';
+import { iterationFullVerificationNeeded } from './p2a_final_verification_gate.mjs';
 import {
   discoverEntryDocument,
   discoverFeatureRadarPreflightRuns,
@@ -1520,6 +1521,10 @@ function buildNextDecisionContext(
     && detail.layout.kind === 'iteration'
     && !hasRequiredVisualContract
   );
+  const needsCloseReadyFullVerificationAudit = (
+    allTasksDone
+    && detail.layout.kind === 'iteration'
+  );
   const proposals = info.enhancements.proposals;
   const minedRunIds = proposals.enabled
     ? minedProposalRunIds(targetRoot, proposals)
@@ -1535,7 +1540,12 @@ function buildNextDecisionContext(
   let runEvidenceValidationError = null;
   if (
     detail.runs.runsDir
-    && (failedOrBlockedRunCandidate || needsCloseReadyVisualAudit || needsCloseReadyAcceptanceAudit)
+    && (
+      failedOrBlockedRunCandidate
+      || needsCloseReadyVisualAudit
+      || needsCloseReadyAcceptanceAudit
+      || needsCloseReadyFullVerificationAudit
+    )
   ) {
     try {
       validateRunsDir(detail.runs.runsDir, { validationSession });
@@ -1548,6 +1558,16 @@ function buildNextDecisionContext(
   const unminedFailedOrBlockedRun = runEvidenceValidationError
     ? null
     : failedOrBlockedRunCandidate;
+  const fullVerificationNeeded = (
+    needsCloseReadyFullVerificationAudit
+    && !runEvidenceValidationError
+  ) ? iterationFullVerificationNeeded({
+      runsDir: detail.runs.runsDir ?? path.join(artifactRoot, 'runs'),
+      runs: activeRuns,
+      artifactRoot,
+      graphPath: gates.taskGraphPath,
+      activeIteration: detail.activeIteration,
+    }) : false;
   const visualReviewNeeded = (
     hasRequiredVisualContract
     && allTasksDone
@@ -1662,6 +1682,7 @@ function buildNextDecisionContext(
     hasRequiredVisualContract,
     acceptanceReviewNeeded,
     acceptanceReviewActivated,
+    fullVerificationNeeded,
     readyIds: readyTaskIds(gates.taskGraph),
     blockedTaskIds: taskIdsWithStatus(detail.tasks, 'blocked'),
     allTasksDone,
@@ -2026,6 +2047,7 @@ export const NEXT_DECISION_RULES = [
       const mode = runtimePacketModeForContext(context);
       if (!mode) return null;
       const runKind = context.startedRun?.runKind;
+      if (runKind === 'final_verification') return null;
       if (runKind === 'final_visual_review') {
         return continuationDescriptor('execution.visual-review', mode);
       }
@@ -2124,6 +2146,26 @@ export const NEXT_DECISION_RULES = [
     command: (context) => [
       'execute',
       'accept',
+      '--artifacts',
+      context.artifactArg,
+    ],
+  },
+  {
+    state: 'final_verification_required',
+    kind: 'cli',
+    requiresApproval: false,
+    when: (context) => (
+      context.allTasksDone
+      && !context.closedIteration
+      && context.detail.layout.kind === 'iteration'
+      && context.fullVerificationNeeded
+    ),
+    reason: () => (
+      'The completed iteration needs one full verification pass bound to the current canonical workspace revision before close.'
+    ),
+    command: (context) => [
+      'execute',
+      'verify-final',
       '--artifacts',
       context.artifactArg,
     ],

@@ -158,6 +158,28 @@ function closeCurrentIteration(artifactRoot) {
   const graph = JSON.parse(readFileSync(graphPath, 'utf8'));
   for (const task of graph.tasks) task.status = 'done';
   writeFileSync(graphPath, `${JSON.stringify(graph, null, 2)}\n`, 'utf8');
+  const runId = 'run-retention-final-verification';
+  const started = runCli(EXECUTE_CLI, [
+    'verify-final',
+    '--artifacts', artifactRoot,
+    '--task', graph.tasks[0].id,
+    '--run-id', runId,
+    '--agent-tool', 'manual',
+  ]);
+  assert.equal(started.status, 0, `${started.stdout}${started.stderr}`);
+  const verified = runCli(RUNS_CLI, [
+    'verify',
+    '--artifacts', artifactRoot,
+    '--run-id', runId,
+    '--test-command', 'node -e "console.log(\'full verification passed\')"',
+  ]);
+  assert.equal(verified.status, 0, `${verified.stdout}${verified.stderr}`);
+  const finished = runCli(EXECUTE_CLI, [
+    'finish',
+    '--artifacts', artifactRoot,
+    '--run-id', runId,
+  ]);
+  assert.equal(finished.status, 0, `${finished.stdout}${finished.stderr}`);
   const closed = runCli(ITERATION_CLI, ['close', '--artifacts', artifactRoot]);
   assert.equal(closed.status, 0, `${closed.stdout}${closed.stderr}`);
   return graph;
