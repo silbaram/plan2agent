@@ -19,6 +19,7 @@ import {
   REPO_ONLY_SCRIPT_FILES,
 } from './p2a_tool_manifest.mjs';
 import { normalizePath } from './p2a_paths.mjs';
+import { orphanRunEvidenceRefs } from './p2a_run_paths.mjs';
 import { auditContext, printContextAudit } from './p2a_context_audit.mjs';
 import {
   resolveExecutionModePolicy,
@@ -691,6 +692,7 @@ function summarizeRuns(targetRoot, artifactRoot) {
       latestRunId: null,
       statusCounts: {},
       taskRunCount: 0,
+      orphanRefs: [],
       error: null,
     };
   }
@@ -703,6 +705,7 @@ function summarizeRuns(targetRoot, artifactRoot) {
       latestRunId: null,
       statusCounts: {},
       taskRunCount: 0,
+      orphanRefs: [],
       error: result.error,
     };
   }
@@ -718,6 +721,7 @@ function summarizeRuns(targetRoot, artifactRoot) {
     latestRunId: stringValue(runs.at(-1)?.runId),
     statusCounts,
     taskRunCount: jsonRecords(result.data.tasks).length,
+    orphanRefs: orphanRunEvidenceRefs(runsDir, result.data),
     error: null,
   };
 }
@@ -804,6 +808,11 @@ function summarizeArtifact(targetRoot, artifactRoot, isScaffoldProject) {
   const runSummary = summarizeRuns(targetRoot, artifactRoot);
   if (runSummary.error) {
     diagnostics.push({ severity: 'error', message: `run-index.json is not readable: ${runSummary.error}` });
+  } else if (runSummary.orphanRefs.length) {
+    diagnostics.push({
+      severity: 'warn',
+      message: `${runSummary.orphanRefs.length} orphan run evidence file(s) can be reviewed with p2a runs gc --dry-run.`,
+    });
   }
 
   return {
@@ -935,6 +944,19 @@ function projectStateCheck(projectState) {
     return check('project_state', 'Project state', 'warn', 'no P2A project state was detected', { state: projectState.state });
   }
   return check('project_state', 'Project state', 'pass', `state=${projectState.state}`, { state: projectState.state });
+}
+
+function runEvidenceOrphanCheck(projectState) {
+  const orphanRefs = projectState.artifacts.flatMap((artifact) => artifact.runs.orphanRefs ?? []);
+  return orphanRefs.length
+    ? check(
+        'run_evidence_orphans',
+        'Run evidence orphans',
+        'warn',
+        `${orphanRefs.length} unindexed run evidence file(s) found; review p2a runs gc --dry-run`,
+        { orphanRefs },
+      )
+    : check('run_evidence_orphans', 'Run evidence orphans', 'pass', 'no unindexed run evidence files found');
 }
 
 function selectedToolTargets(manifest) {
@@ -1310,6 +1332,7 @@ function diagnose(targetRootInput, options = {}) {
 
   const projectState = summarizeProjectState(targetRoot, manifest);
   checks.push(projectStateCheck(projectState));
+  checks.push(runEvidenceOrphanCheck(projectState));
   const dev = options.dev ? buildDevReport(targetRoot, manifest, configResult) : null;
   if (dev) checks.push(...dev.checks);
 
@@ -1357,6 +1380,9 @@ function nextActions(status, checks) {
   }
   if (checks.some((item) => item.id === 'project_state' && item.state === 'iteration_init_required')) {
     actions.push('Run p2a iteration init for the detected greenfield artifact root before starting task execution.');
+  }
+  if (checks.some((item) => item.id === 'run_evidence_orphans' && item.status === 'warn')) {
+    actions.push('Run p2a runs gc --dry-run to review orphan run evidence, then run p2a runs gc to remove it. Persistent mode also requires --force.');
   }
   if (checks.some((item) => item.id.startsWith('dev_') && item.status === 'fail')) {
     actions.push('Regenerate or upgrade AI tool assets for the selected provider targets, then rerun p2a_doctor --dev.');
@@ -1430,6 +1456,7 @@ function printHuman(report) {
     if (artifact.entry) console.log(`  entry: ${artifact.entry.path} (${artifact.entry.valid ? 'valid' : 'invalid'})`);
     console.log(`  tasks: ${counts.total} total, ${counts.ready} ready, ${counts.done} done, ${counts.blocked} blocked`);
     console.log(`  runs: ${artifact.runs.runCount}${artifact.runs.latestRunId ? `, latest ${artifact.runs.latestRunId}` : ''}`);
+    if (artifact.runs.orphanRefs?.length) console.log(`  orphan run evidence: ${artifact.runs.orphanRefs.length}`);
     console.log(`  gates: ${artifact.gates.map((gate) => `${gate.id}=${gate.state}`).join(', ')}`);
     if (artifact.layout.requiresIterationInit && artifact.layout.initCommand) {
       console.log(`  init: ${artifact.layout.initCommand}`);

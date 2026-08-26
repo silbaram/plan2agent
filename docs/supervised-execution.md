@@ -218,6 +218,12 @@ dirty, unmerged, failed, blocked task 또는 integration-candidate worktree는 �
 | `.plan2agent/proposals/*.json` | 실행 회고 기반 개선 후보 |
 | `.plan2agent/proposals/reviews/*.json` | proposal deterministic review |
 | `.plan2agent/proposals/curations/*.json` | proposal grouping/prioritization |
+
+Git workspace의 run은 시작과 finish 시점에 `headSha`, branch, dirty 상태를 갱신해 상세 diff를
+Git에서 찾을 수 있게 한다. `active_only` cleanup은 proposal queue가 아직 소비하지 않은
+failed/blocked run을 보존한다. 수동 정리가 필요하면 먼저 `p2a runs gc --dry-run`으로
+indexed/orphan 대상을 확인하며, `started` run과 `persistent` 모드는 각각 종료 처리와
+명시적인 `--force` 없이는 삭제하지 않는다.
 | `.plan2agent/proposals/patch-drafts/*.json` | 적용하지 않는 patch draft |
 | `.plan2agent/proposals/approvals/*.json` | 사람이 승인한 proposal draft와 maintenance task 연결 |
 

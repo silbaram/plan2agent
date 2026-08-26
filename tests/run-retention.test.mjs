@@ -19,6 +19,7 @@ import { pruneIndexedRunEvidence } from '../scripts/p2a_runs.mjs';
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const ITERATION_CLI = path.join(ROOT, 'scripts', 'p2a_iteration.mjs');
 const EXECUTE_CLI = path.join(ROOT, 'scripts', 'p2a_execute.mjs');
+const RUNS_CLI = path.join(ROOT, 'scripts', 'p2a_runs.mjs');
 const E2E_FIXTURE = path.join(ROOT, 'fixtures', '_e2e', 'webhook-api-service');
 
 function runEntry(runId, taskId, iterationId, status, runRef) {
@@ -93,6 +94,12 @@ function runCli(cli, args) {
     cwd: ROOT,
     encoding: 'utf8',
   });
+}
+
+function git(cwd, args) {
+  const result = spawnSync('git', args, { cwd, encoding: 'utf8' });
+  assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+  return result.stdout.trim();
 }
 
 function initializedIterationProject(persistence) {
@@ -305,6 +312,80 @@ test('active-only iteration open rolls back instead of abandoning a started arch
   }
 });
 
+test('runs gc dry-run lists indexed and orphan evidence before removing it while keeping final runs', () => {
+  const artifactRoot = initializedIterationProject('active_only');
+  try {
+    const runsDir = path.join(artifactRoot, 'runs');
+    mkdirSync(path.join(runsDir, 'v1-mvp'), { recursive: true });
+    const oldRun = runEntry('run-gc-old', 'task-001', 'v1-mvp', 'failed', 'v1-mvp/run-gc-old.json');
+    const finalRun = runEntry('run-gc-final', 'task-001', 'v1-mvp', 'finished', 'v1-mvp/run-gc-final.json');
+    writeIndex(runsDir, [oldRun, finalRun]);
+    writeEvidence(runsDir, oldRun);
+    writeEvidence(runsDir, finalRun);
+    const orphanRef = 'v1-mvp/run-gc-orphan.acceptance-review.json';
+    writeFileSync(path.join(runsDir, orphanRef), '{}\n', 'utf8');
+
+    const preview = runCli(RUNS_CLI, [
+      'gc',
+      '--artifacts', artifactRoot,
+      '--iteration', 'v1-mvp',
+      '--keep-final',
+      '--dry-run',
+    ]);
+    assert.equal(preview.status, 0, `${preview.stdout}${preview.stderr}`);
+    assert.match(preview.stdout, /Run evidence gc preview/);
+    assert.match(preview.stdout, /run-gc-old/);
+    assert.match(preview.stdout, /run-gc-orphan\.acceptance-review\.json/);
+    assert.match(preview.stdout, /final runs kept: 1/);
+    assert.equal(existsSync(path.join(runsDir, oldRun.runRef)), true);
+    assert.equal(existsSync(path.join(runsDir, finalRun.runRef)), true);
+    assert.equal(existsSync(path.join(runsDir, orphanRef)), true);
+
+    const collected = runCli(RUNS_CLI, [
+      'gc',
+      '--artifacts', artifactRoot,
+      '--iteration', 'v1-mvp',
+      '--keep-final',
+    ]);
+    assert.equal(collected.status, 0, `${collected.stdout}${collected.stderr}`);
+    assert.equal(existsSync(path.join(runsDir, oldRun.runRef)), false);
+    assert.equal(existsSync(path.join(runsDir, finalRun.runRef)), true);
+    assert.equal(existsSync(path.join(runsDir, orphanRef)), false);
+    const index = JSON.parse(readFileSync(path.join(runsDir, 'run-index.json'), 'utf8'));
+    assert.deepEqual(index.runs.map((entry) => entry.runId), ['run-gc-final']);
+  } finally {
+    rmSync(artifactRoot, { recursive: true, force: true });
+  }
+});
+
+test('runs gc requires force in persistent mode and never removes started evidence', () => {
+  const artifactRoot = initializedIterationProject('persistent');
+  try {
+    const runsDir = path.join(artifactRoot, 'runs');
+    mkdirSync(runsDir, { recursive: true });
+    const finished = runEntry('run-persistent', 'task-001', 'v1-mvp', 'finished', 'v1-mvp/run-persistent.json');
+    writeIndex(runsDir, [finished]);
+    writeEvidence(runsDir, finished);
+
+    const refused = runCli(RUNS_CLI, ['gc', '--artifacts', artifactRoot]);
+    assert.equal(refused.status, 1, `${refused.stdout}${refused.stderr}`);
+    assert.match(`${refused.stdout}${refused.stderr}`, /persistence is persistent.*--force/);
+    assert.equal(existsSync(path.join(runsDir, finished.runRef)), true);
+
+    const index = JSON.parse(readFileSync(path.join(runsDir, 'run-index.json'), 'utf8'));
+    const started = runEntry('run-started-gc', 'task-002', 'v1-mvp', 'started', 'v1-mvp/run-started-gc.json');
+    writeIndex(runsDir, [...index.runs, started]);
+    writeEvidence(runsDir, started);
+    const activeRefused = runCli(RUNS_CLI, ['gc', '--artifacts', artifactRoot, '--force']);
+    assert.equal(activeRefused.status, 1, `${activeRefused.stdout}${activeRefused.stderr}`);
+    assert.match(`${activeRefused.stdout}${activeRefused.stderr}`, /cannot gc active run evidence.*run-started-gc/);
+    assert.equal(existsSync(path.join(runsDir, finished.runRef)), true);
+    assert.equal(existsSync(path.join(runsDir, started.runRef)), true);
+  } finally {
+    rmSync(artifactRoot, { recursive: true, force: true });
+  }
+});
+
 test('starting the next maintenance task removes completed maintenance run history in active-only mode', () => {
   const artifactRoot = initializedIterationProject('active_only');
   const workspace = mkdtempSync(path.join(tmpdir(), 'p2a-run-retention-workspace-'));
@@ -488,6 +569,144 @@ test('successful task finish keeps the latest run and removes superseded same-ki
       }],
     });
     assert.doesNotMatch(JSON.stringify(finalIndex.retrospective), /behavior ok|Adjusted|Gate caught|run-superseded/);
+  } finally {
+    rmSync(artifactRoot, { recursive: true, force: true });
+    rmSync(workspace, { recursive: true, force: true });
+  }
+});
+
+test('successful direct retry retains an unmined failed run until proposal mining records it', () => {
+  const artifactRoot = initializedIterationProject('active_only');
+  const workspace = mkdtempSync(path.join(tmpdir(), 'p2a-run-retention-workspace-'));
+  try {
+    mkdirSync(path.join(workspace, '.plan2agent'), { recursive: true });
+    writeFileSync(path.join(workspace, '.plan2agent', 'project.config.json'), `${JSON.stringify({
+      runTracking: { persistence: 'active_only' },
+      proposals: { enabled: true, queueDir: '.plan2agent/proposals' },
+    }, null, 2)}\n`, 'utf8');
+    const started = runCli(EXECUTE_CLI, [
+      'start',
+      '--artifacts', artifactRoot,
+      '--task', 'task-001',
+      '--agent-tool', 'manual',
+      '--workspace', workspace,
+    ]);
+    assert.equal(started.status, 0, `${started.stdout}${started.stderr}`);
+
+    const runsDir = path.join(artifactRoot, 'runs');
+    const indexPath = path.join(runsDir, 'run-index.json');
+    const index = JSON.parse(readFileSync(indexPath, 'utf8'));
+    const currentEntry = index.runs.at(-1);
+    const currentRunPath = path.join(runsDir, currentEntry.runRef);
+    const failedRun = JSON.parse(readFileSync(currentRunPath, 'utf8'));
+    failedRun.runId = 'run-unmined-failure';
+    failedRun.status = 'failed';
+    failedRun.startedAt = '2026-08-22T00:00:00.000Z';
+    failedRun.updatedAt = '2026-08-22T00:01:00.000Z';
+    failedRun.finishedAt = '2026-08-22T00:01:00.000Z';
+    failedRun.failure = {
+      class: 'verification_failed',
+      retryable: 'after_fix',
+      needsUserDecision: false,
+      source: 'owner',
+    };
+    failedRun.reproduction = { steps: ['retry directly'], commands: [], notes: [] };
+    failedRun.localization = { findings: ['previous attempt failed'], files: [] };
+    failedRun.guard = { checks: ['retain until mined'], notes: [] };
+    const failedEntry = {
+      ...currentEntry,
+      runId: failedRun.runId,
+      runRef: `${failedRun.iterationId}/${failedRun.runId}.json`,
+      status: failedRun.status,
+      startedAt: failedRun.startedAt,
+      finishedAt: failedRun.finishedAt,
+    };
+    writeFileSync(path.join(runsDir, failedEntry.runRef), `${JSON.stringify(failedRun, null, 2)}\n`, 'utf8');
+    writeIndex(runsDir, [failedEntry, currentEntry], index.projectId);
+
+    const finished = runCli(EXECUTE_CLI, [
+      'finish',
+      '--artifacts', artifactRoot,
+      '--run-id', currentEntry.runId,
+      '--verify-command', 'custom:true',
+      '--no-task-transition',
+    ]);
+    assert.equal(finished.status, 0, `${finished.stdout}${finished.stderr}`);
+    const recovered = runCli(EXECUTE_CLI, [
+      'finish',
+      '--artifacts', artifactRoot,
+      '--run-id', currentEntry.runId,
+    ]);
+    assert.equal(recovered.status, 0, `${recovered.stdout}${recovered.stderr}`);
+    assert.match(recovered.stdout, /retained 1 unmined failed\/blocked run/);
+    assert.equal(existsSync(path.join(runsDir, failedEntry.runRef)), true);
+
+    const proposalsDir = path.join(workspace, '.plan2agent', 'proposals');
+    mkdirSync(proposalsDir, { recursive: true });
+    writeFileSync(path.join(proposalsDir, 'mined.json'), `${JSON.stringify({
+      sourceRunId: failedRun.runId,
+    }, null, 2)}\n`, 'utf8');
+    const minedRecovery = runCli(EXECUTE_CLI, [
+      'finish',
+      '--artifacts', artifactRoot,
+      '--run-id', currentEntry.runId,
+    ]);
+    assert.equal(minedRecovery.status, 0, `${minedRecovery.stdout}${minedRecovery.stderr}`);
+    assert.match(minedRecovery.stdout, /removed 1 superseded run/);
+    assert.equal(existsSync(path.join(runsDir, failedEntry.runRef)), false);
+  } finally {
+    rmSync(artifactRoot, { recursive: true, force: true });
+    rmSync(workspace, { recursive: true, force: true });
+  }
+});
+
+test('run start and finish bind the current Git head, branch, and dirty state', () => {
+  const artifactRoot = initializedIterationProject('persistent');
+  const workspace = mkdtempSync(path.join(tmpdir(), 'p2a-run-git-workspace-'));
+  try {
+    git(workspace, ['init', '-b', 'main']);
+    git(workspace, ['config', 'user.name', 'Plan2Agent Test']);
+    git(workspace, ['config', 'user.email', 'p2a-test@example.invalid']);
+    writeFileSync(path.join(workspace, 'tracked.txt'), 'initial\n', 'utf8');
+    git(workspace, ['add', 'tracked.txt']);
+    git(workspace, ['commit', '-m', 'initial']);
+    const initialHead = git(workspace, ['rev-parse', 'HEAD']);
+
+    const started = runCli(EXECUTE_CLI, [
+      'start',
+      '--artifacts', artifactRoot,
+      '--task', 'task-001',
+      '--agent-tool', 'manual',
+      '--workspace', workspace,
+    ]);
+    assert.equal(started.status, 0, `${started.stdout}${started.stderr}`);
+    const runsDir = path.join(artifactRoot, 'runs');
+    const index = JSON.parse(readFileSync(path.join(runsDir, 'run-index.json'), 'utf8'));
+    const entry = index.runs.at(-1);
+    const startedRun = JSON.parse(readFileSync(path.join(runsDir, entry.runRef), 'utf8'));
+    assert.deepEqual(startedRun.git, { headSha: initialHead, branch: 'main', dirty: false });
+
+    writeFileSync(path.join(workspace, 'tracked.txt'), 'updated\n', 'utf8');
+    git(workspace, ['add', 'tracked.txt']);
+    git(workspace, ['commit', '-m', 'update']);
+    const finalHead = git(workspace, ['rev-parse', 'HEAD']);
+    writeFileSync(path.join(workspace, 'untracked.txt'), 'dirty\n', 'utf8');
+
+    const finished = runCli(EXECUTE_CLI, [
+      'finish',
+      '--artifacts', artifactRoot,
+      '--run-id', entry.runId,
+      '--verify-command', 'custom:true',
+      '--no-task-transition',
+    ]);
+    assert.equal(finished.status, 0, `${finished.stdout}${finished.stderr}`);
+    const finishedRun = JSON.parse(readFileSync(path.join(runsDir, entry.runRef), 'utf8'));
+    assert.deepEqual(finishedRun.git, { headSha: finalHead, branch: 'main', dirty: true });
+    assert.notEqual(finishedRun.git.headSha, initialHead);
+
+    const shown = runCli(RUNS_CLI, ['show', '--artifacts', artifactRoot, '--run-id', entry.runId]);
+    assert.equal(shown.status, 0, `${shown.stdout}${shown.stderr}`);
+    assert.deepEqual(JSON.parse(shown.stdout).git, finishedRun.git);
   } finally {
     rmSync(artifactRoot, { recursive: true, force: true });
     rmSync(workspace, { recursive: true, force: true });

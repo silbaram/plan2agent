@@ -451,6 +451,56 @@ export function runSidecarRef(runRef, suffix) {
   return `${normalized.slice(0, -'.json'.length)}${suffix}`;
 }
 
+function isRunEvidenceFile(filePath) {
+  if (isRunRecordFile(filePath)) return true;
+  const filename = path.basename(filePath);
+  for (const suffix of RUN_SIDECAR_SUFFIXES) {
+    if (!filename.endsWith(suffix)) continue;
+    const runId = filename.slice(0, -suffix.length);
+    try {
+      assertSafeRunId(runId);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+  return false;
+}
+
+/** Return run records and sidecars that are not referenced by run-index.json. */
+export function orphanRunEvidenceRefs(runsDir, index) {
+  const resolvedRunsDir = path.resolve(runsDir);
+  if (!existsSync(resolvedRunsDir) || !lstatSync(resolvedRunsDir).isDirectory()) return [];
+  const expected = new Set();
+  for (const entry of Array.isArray(index?.runs) ? index.runs : []) {
+    let runRef;
+    try {
+      runRef = indexedRunRef(resolvedRunsDir, entry.runId, index);
+    } catch {
+      continue;
+    }
+    expected.add(runRef);
+    for (const suffix of RUN_SIDECAR_SUFFIXES) {
+      expected.add(runSidecarRef(runRef, suffix));
+    }
+  }
+  const refs = [];
+  const inspectDirectory = (dirPath, prefix = '') => {
+    for (const entry of readdirSync(dirPath, { withFileTypes: true })) {
+      if (!entry.isFile()) continue;
+      const filePath = path.join(dirPath, entry.name);
+      const ref = prefix ? `${prefix}/${entry.name}` : entry.name;
+      if (isRunEvidenceFile(filePath) && !expected.has(ref)) refs.push(ref);
+    }
+  };
+  inspectDirectory(resolvedRunsDir);
+  for (const entry of readdirSync(resolvedRunsDir, { withFileTypes: true })) {
+    if (!entry.isDirectory() || entry.name.startsWith('.') || !RUN_PARTITION_PATTERN.test(entry.name)) continue;
+    inspectDirectory(path.join(resolvedRunsDir, entry.name), entry.name);
+  }
+  return refs.sort();
+}
+
 export function runSidecarPath(runsDir, runId, suffix, index = null) {
   return path.join(runsDir, runSidecarRef(indexedRunRef(runsDir, runId, index), suffix));
 }

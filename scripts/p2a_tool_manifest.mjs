@@ -15,6 +15,7 @@ export const REPO_ONLY_SCRIPT_FILES = [
 export const PROJECT_RUNTIME_SCRIPT_FILES = [
   'p2a.mjs',
   'p2a_next_service.mjs',
+  'p2a_proposal_mining.mjs',
   'p2a_decision_ledger.mjs',
   'p2a_decisions.mjs',
   'p2a_shape.mjs',

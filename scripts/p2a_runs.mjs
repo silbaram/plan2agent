@@ -66,6 +66,7 @@ import {
   indexedRunRef,
   legacyRunRef,
   legacyRunsDirForGraph,
+  orphanRunEvidenceRefs,
   resolveRunsDir,
   RUN_SIDECAR_SUFFIXES,
   runFilePath,
@@ -107,6 +108,7 @@ import {
   mergeDetectedProjectConfig,
   mergeExplicitVerificationCommands,
   releaseRunIdReservation,
+  resolveRunPersistence,
   runIdReservationIsActive,
   writeProjectConfig,
 } from './p2a_project_config.mjs';
@@ -133,7 +135,7 @@ import {
 const P2A_PATHS = resolveP2aPaths(import.meta.url);
 const ROOT = P2A_PATHS.projectRoot;
 const PROJECT_RUNS_DIR = path.join(ROOT, DEFAULT_RUNS_DIR);
-const COMMANDS = new Set(['start', 'record', 'verify', 'checkpoint', 'finish', 'list', 'show', 'revision', 'validate', 'migrate-layout', 'migrate-schema']);
+const COMMANDS = new Set(['start', 'record', 'verify', 'checkpoint', 'finish', 'list', 'show', 'revision', 'validate', 'gc', 'migrate-layout', 'migrate-schema']);
 const RUN_STATUSES = new Set(['started', 'finished', 'failed', 'blocked']);
 const RUN_KINDS = new Set(['final_visual_review', 'final_acceptance_review']);
 const VISUAL_FEEDBACK_VERDICTS = new Set(['note', 'concern']);
@@ -163,6 +165,7 @@ function usage() {
     '  p2a runs show --run-id <run-id> (--artifacts <dir>|--runs <dir>|--graph <path>)',
     '  p2a runs revision --run-id <run-id> (--artifacts <dir>|--runs <dir>|--graph <path>)',
     '  p2a runs validate (--artifacts <dir>|--runs <dir>|--graph <path>) [--run-id <run-id>]',
+    '  p2a runs gc (--artifacts <dir>|--runs <dir>|--graph <path>) [--dry-run] [--iteration <id>] [--keep-final] [--force]',
     '  p2a runs migrate-layout (--artifacts <dir>|--runs <dir>|--graph <path>) [--dry-run] --yes',
     '  p2a runs migrate-schema (--artifacts <dir>|--runs <dir>|--graph <path>) [--run-id <run-id>] [--dry-run] --yes',
     '',
@@ -224,7 +227,10 @@ function usage() {
     '                          Run an explicit supplemental command. type is required: test, lint, typecheck, or custom.',
     '  --save-config           Persist detected or explicit test/lint/typecheck commands to project.config.json.',
     '  --json                  Machine-readable output for list.',
-    '  --dry-run               Preview the selected layout or schema migration without writing files.',
+    '  --iteration <id>        Limit gc to one iteration.',
+    '  --keep-final            Keep the latest closed run for each task and run kind during gc.',
+    '  --force                 Allow gc when runTracking.persistence is persistent.',
+    '  --dry-run               Preview gc, layout migration, or schema migration without writing files.',
     '  --yes                   Confirm the selected layout or schema migration.',
     '  --help, -h              Show this help.',
   ].join('\n');
@@ -240,6 +246,7 @@ function parseArgs(argv) {
     graph: null,
     runs: null,
     maintenance: false,
+    iterationId: null,
     taskId: null,
     runId: null,
     milestoneId: null,
@@ -285,6 +292,8 @@ function parseArgs(argv) {
     saveConfig: false,
     requireMonitor: false,
     json: false,
+    keepFinal: false,
+    force: false,
     dryRun: false,
     yes: false,
     help: false,
@@ -298,6 +307,7 @@ function parseArgs(argv) {
     else if (arg === '--graph') args.graph = requiredValue(argv, ++index, '--graph');
     else if (arg === '--runs') args.runs = requiredValue(argv, ++index, '--runs');
     else if (arg === '--maintenance') args.maintenance = true;
+    else if (arg === '--iteration') args.iterationId = requiredValue(argv, ++index, '--iteration');
     else if (arg === '--task') args.taskId = requiredValue(argv, ++index, '--task');
     else if (arg === '--run-id') args.runId = requiredValue(argv, ++index, '--run-id');
     else if (arg === '--milestone') args.milestoneId = requiredValue(argv, ++index, '--milestone');
@@ -373,6 +383,8 @@ function parseArgs(argv) {
       args.status = requiredValue(argv, ++index, '--status');
       if (!RUN_STATUSES.has(args.status) || args.status === 'started') throw new Error('--status must be finished, failed, or blocked');
     } else if (arg === '--json') args.json = true;
+    else if (arg === '--keep-final') args.keepFinal = true;
+    else if (arg === '--force') args.force = true;
     else if (arg === '--dry-run') args.dryRun = true;
     else if (arg === '--yes') args.yes = true;
     else if (arg.startsWith('--')) throw new Error(`unknown option: ${arg}`);
@@ -395,6 +407,9 @@ function parseArgs(argv) {
   }
   if (args.artifacts && args.graph) throw new Error('--artifacts and --graph cannot be used together');
   if (args.maintenance && !args.artifacts) throw new Error('--maintenance is only supported with --artifacts');
+  if (args.iterationId && args.command !== 'gc') throw new Error('--iteration is only supported with gc');
+  if (args.keepFinal && args.command !== 'gc') throw new Error('--keep-final is only supported with gc');
+  if (args.force && args.command !== 'gc') throw new Error('--force is only supported with gc');
   if (args.graph) assertNotUninitializedScaffoldGraph(args.graph);
   if (args.graph && ['start', 'record', 'verify', 'checkpoint', 'finish'].includes(args.command)) {
     assertUnmanagedGraphMutation(args.graph, `p2a runs ${args.command}`);
@@ -467,8 +482,11 @@ function parseArgs(argv) {
     throw new Error('--run-reservation-token requires start with --run-id');
   }
   const migrationCommands = new Set(['migrate-layout', 'migrate-schema']);
-  if ((args.dryRun || args.yes) && !migrationCommands.has(args.command)) {
-    throw new Error('--dry-run and --yes are only supported with migrate-layout or migrate-schema');
+  if (args.dryRun && !migrationCommands.has(args.command) && args.command !== 'gc') {
+    throw new Error('--dry-run is only supported with gc, migrate-layout, or migrate-schema');
+  }
+  if (args.yes && !migrationCommands.has(args.command)) {
+    throw new Error('--yes is only supported with migrate-layout or migrate-schema');
   }
   if (migrationCommands.has(args.command) && !args.dryRun && !args.yes) {
     throw new Error(`${args.command} requires --yes, or use --dry-run to preview`);
@@ -1171,6 +1189,152 @@ export function pruneIndexedRunEvidence(runsDir, options = {}) {
     : withRunStoreLocks([resolvedRunsDir], prune);
 }
 
+function gcProjectConfig(args, runsDir) {
+  const candidates = uniqueStrings([
+    args.artifacts ? path.join(path.resolve(args.artifacts), P2A_PROJECT_CONFIG) : null,
+    path.join(path.dirname(runsDir), P2A_PROJECT_CONFIG),
+    path.join(process.cwd(), P2A_PROJECT_CONFIG),
+    path.join(path.dirname(runsDir), 'project.config.json'),
+  ].filter(Boolean));
+  for (const candidate of candidates) {
+    if (!existsSync(candidate)) continue;
+    try {
+      if (!lstatSync(candidate).isFile()) continue;
+      return loadJson(candidate);
+    } catch (error) {
+      throw new Error(`project config is malformed: ${displayPath(candidate)} (${error.message})`);
+    }
+  }
+  return {};
+}
+
+function gcKeepFinalRunIds(entries) {
+  const latestByTaskKind = new Map();
+  for (const entry of entries) {
+    if (entry.status === 'started') continue;
+    const key = JSON.stringify([entry.iterationId, entry.taskId, entry.runKind ?? null]);
+    latestByTaskKind.set(key, entry.runId);
+  }
+  return [...latestByTaskKind.values()];
+}
+
+function gcOrphanRefs(runsDir, index, iterationId = null) {
+  const refs = orphanRunEvidenceRefs(runsDir, index);
+  if (!iterationId) return refs;
+  return refs.filter((ref) => ref.startsWith(`${iterationId}/`));
+}
+
+function removeOrphanRunEvidence(runsDir, refs) {
+  const cleanupFailures = [];
+  const removedRefs = [];
+  for (const ref of refs) {
+    const evidencePath = path.resolve(runsDir, ref);
+    const relative = path.relative(path.resolve(runsDir), evidencePath);
+    if (!relative || relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+      cleanupFailures.push(`${ref}: path escapes runs directory`);
+      continue;
+    }
+    try {
+      if (!lstatSync(evidencePath).isFile()) {
+        cleanupFailures.push(`${ref}: orphan evidence is not a regular file`);
+        continue;
+      }
+      unlinkSync(evidencePath);
+      removedRefs.push(ref);
+    } catch (error) {
+      if (error?.code !== 'ENOENT') cleanupFailures.push(`${ref}: ${error.message}`);
+    }
+  }
+  return { removedRefs, cleanupFailures };
+}
+
+function printGcPlan({ dryRun, persistence, prunedRunIds, orphanRefs, keepRunIds }) {
+  console.log(dryRun ? 'Run evidence gc preview:' : 'Run evidence gc complete:');
+  console.log(`- persistence: ${persistence}`);
+  console.log(`- indexed runs ${dryRun ? 'selected' : 'removed'}: ${prunedRunIds.length}`);
+  for (const runId of prunedRunIds) console.log(`  - ${runId}`);
+  console.log(`- orphan files ${dryRun ? 'selected' : 'removed'}: ${orphanRefs.length}`);
+  for (const ref of orphanRefs) console.log(`  - ${ref}`);
+  if (keepRunIds.length) console.log(`- final runs kept: ${keepRunIds.length}`);
+  if (dryRun) console.log('- no files removed (dry-run)');
+}
+
+function gcRunEvidence(args) {
+  const runsDir = resolveRunsDir(args);
+  if (!existsSync(runsDir)) {
+    console.log(`Run evidence gc: nothing to clean (${displayPath(runsDir)} does not exist)`);
+    return 0;
+  }
+  assertDirectory(runsDir, 'runs directory');
+  const persistence = resolveRunPersistence(gcProjectConfig(args, runsDir));
+  if (persistence === 'persistent' && !args.force) {
+    throw new Error('runTracking.persistence is persistent; rerun p2a runs gc with --force after reviewing --dry-run output');
+  }
+  return withRunStoreLocks([runsDir], () => {
+    assertNoPendingRunMigration(runsDir);
+    recoverPendingRunWrite(runsDir);
+    const index = loadIndex(runsDir, path.basename(path.dirname(runsDir)));
+    const scoped = args.iterationId
+      ? index.runs.filter((entry) => entry.iterationId === args.iterationId)
+      : [...index.runs];
+    const started = scoped.filter((entry) => entry.status === 'started');
+    if (started.length) {
+      throw new Error(
+        `cannot gc active run evidence; finish or block started run(s): ${started.map((entry) => entry.runId).join(', ')}`,
+      );
+    }
+    const keepRunIds = args.keepFinal ? gcKeepFinalRunIds(scoped) : [];
+    const keepSet = new Set(keepRunIds);
+    const selectedRunIds = scoped
+      .filter((entry) => !keepSet.has(entry.runId))
+      .map((entry) => entry.runId);
+    const initialOrphans = gcOrphanRefs(runsDir, index, args.iterationId);
+    if (args.dryRun) {
+      printGcPlan({
+        dryRun: true,
+        persistence,
+        prunedRunIds: selectedRunIds,
+        orphanRefs: initialOrphans,
+        keepRunIds,
+      });
+      return 0;
+    }
+
+    let indexedCleanup = { prunedRunIds: [], cleanupFailures: [] };
+    if (scoped.length) {
+      const pruneOptions = args.iterationId
+        ? { iterationIds: [args.iterationId] }
+        : { taskIds: [...new Set(scoped.map((entry) => entry.taskId))] };
+      indexedCleanup = pruneIndexedRunEvidence(runsDir, {
+        ...pruneOptions,
+        keepRunIds,
+        alreadyLocked: true,
+      });
+    }
+    const nextIndex = loadIndex(runsDir, index.projectId);
+    const remainingOrphans = gcOrphanRefs(runsDir, nextIndex, args.iterationId);
+    const orphanCleanup = removeOrphanRunEvidence(runsDir, remainingOrphans);
+    const cleanupFailures = [...new Set([
+      ...indexedCleanup.cleanupFailures,
+      ...orphanCleanup.cleanupFailures,
+    ])];
+    printGcPlan({
+      dryRun: false,
+      persistence,
+      prunedRunIds: indexedCleanup.prunedRunIds,
+      orphanRefs: orphanCleanup.removedRefs,
+      keepRunIds,
+    });
+    if (cleanupFailures.length) {
+      console.error(`warning: ${cleanupFailures.length} run evidence file(s) could not be removed`);
+      for (const failure of cleanupFailures) console.error(`- ${failure}`);
+      console.error('Rerun p2a runs gc after correcting filesystem permissions.');
+      return 1;
+    }
+    return 0;
+  });
+}
+
 function upsertIndexRun(runsDir, index, run, preferredRunRef = null) {
   if (index.projectId === 'unknown') index.projectId = run.projectId;
   if (index.projectId !== run.projectId) {
@@ -1497,6 +1661,18 @@ function gitCommandResult(args, cwd) {
 function gitBranchName(cwd) {
   const result = gitCommandResult(['symbolic-ref', '--quiet', '--short', 'HEAD'], cwd);
   return result.status === 0 ? result.stdout.trim() : null;
+}
+
+function captureGitState(cwd) {
+  const head = gitCommandResult(['rev-parse', '--verify', 'HEAD'], cwd);
+  if (head.status !== 0 || !head.stdout.trim()) return null;
+  const status = gitCommandResult(['status', '--porcelain=v1', '--untracked-files=all'], cwd);
+  if (status.status !== 0) return null;
+  return {
+    headSha: head.stdout.trim(),
+    branch: gitBranchName(cwd),
+    dirty: status.stdout.length > 0,
+  };
 }
 
 function gitLocalBranchExists(cwd, branch) {
@@ -2127,6 +2303,7 @@ function startRun(args) {
   } catch (error) {
     throw new Error(`${error.message}\nRetry with the same run id after correcting the isolation failure: ${startRetryCommand(args, runId, allocation.reservationToken)}`);
   }
+  const git = captureGitState(workspacePath);
   const run = {
     schema_version: 'p2a.run.v2',
     runId,
@@ -2149,6 +2326,7 @@ function startRun(args) {
     agentTool: args.agentTool,
     workspaceRef,
     workspacePath,
+    ...(git ? { git } : {}),
     isolation,
     status: 'started',
     startedAt: now.toISOString(),
@@ -2365,6 +2543,9 @@ function finishRun(args) {
     throw new Error(`run ${run.runId} is already ${run.status}; use record to append evidence instead of finishing it again`);
   }
   const workspacePath = args.workspace ? path.resolve(args.workspace) : path.resolve(run.workspacePath);
+  const git = captureGitState(workspacePath);
+  if (git) run.git = git;
+  else delete run.git;
   const changedFiles = [...args.changedFiles];
   if (args.collectGit) changedFiles.push(...collectGitChangedFiles(workspacePath));
   run.changedFiles = uniqueStrings([...run.changedFiles, ...changedFiles]);
@@ -3083,6 +3264,7 @@ export function main(argv = process.argv.slice(2)) {
     if (args.command === 'show') return showRun(args);
     if (args.command === 'revision') return showWorkspaceRevision(args);
     if (args.command === 'validate') return validateRuns(args);
+    if (args.command === 'gc') return gcRunEvidence(args);
     if (args.command === 'migrate-layout') return migrateRunLayout(args);
     if (args.command === 'migrate-schema') return migrateRunSchema(args);
     throw new Error(`unknown command: ${args.command}`);

@@ -32,6 +32,7 @@ import {
 import { compareRunEvidence, taskGraphRefMatchesGraph } from './p2a_run_paths.mjs';
 import { assertFinalVisualReviewRunReady } from './p2a_visual_review_gate.mjs';
 import { assertFinalAcceptanceReviewRunReady } from './p2a_acceptance_review_gate.mjs';
+import { minedProposalRunIds } from './p2a_proposal_mining.mjs';
 import {
   discoverEntryDocument,
   discoverFeatureRadarPreflightRuns,
@@ -966,18 +967,6 @@ function taskSourceArgs(context) {
     '--graph',
     commandProjectPath(context.targetRoot, context.gates.taskGraphPath),
   ];
-}
-
-function minedProposalRunIds(targetRoot, proposals) {
-  const queuePath = resolveProjectRelativePath(targetRoot, proposals.queueDir);
-  if (!isDirectory(queuePath)) return new Set();
-  const runIds = new Set();
-  for (const entry of readdirSync(queuePath, { withFileTypes: true })) {
-    if (!entry.isFile() || !entry.name.endsWith('.json')) continue;
-    const sourceRunId = stringValue(readJsonObject(path.join(queuePath, entry.name))?.sourceRunId);
-    if (sourceRunId) runIds.add(sourceRunId);
-  }
-  return runIds;
 }
 
 function cliNextAction(state, reason, argv, requiresApproval = true, continuation = null) {

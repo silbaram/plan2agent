@@ -6,6 +6,15 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+### Added
+
+- Add `p2a runs gc` with dry-run previews, iteration scoping, final-run retention, persistent-mode protection, and orphan evidence cleanup; surface orphan cleanup guidance through `p2a doctor`.
+- Record optional Git HEAD, branch, and dirty state metadata when a run starts and refresh it when the run finishes.
+
+### Changed
+
+- Preserve failed or blocked active-only runs until proposal mining records their `sourceRunId`, preventing direct retries from silently discarding self-improvement input.
+
 ## [0.5.14] - 2026-08-26
 
 ### Fixed
