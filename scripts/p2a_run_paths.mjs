@@ -347,6 +347,34 @@ export function executionEnvelopeStoreRef(runOrEntry, sha256) {
   return `${runPartitionId(runOrEntry?.iterationId)}/envelopes/${sha256}.json`;
 }
 
+export function safeRunStoreFilePath(runsDir, fileRef, label = 'run-store file') {
+  const resolvedRunsDir = path.resolve(runsDir);
+  const filePath = path.resolve(resolvedRunsDir, fileRef);
+  const relative = path.relative(resolvedRunsDir, filePath);
+  if (!relative || relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+    throw new Error(`${label} escapes the runs directory: ${JSON.stringify(fileRef)}`);
+  }
+  const segments = relative.split(path.sep);
+  let current = resolvedRunsDir;
+  for (const [index, segment] of segments.entries()) {
+    current = path.join(current, segment);
+    let stat;
+    try {
+      stat = lstatSync(current);
+    } catch (error) {
+      if (error?.code === 'ENOENT') break;
+      throw error;
+    }
+    if (stat.isSymbolicLink()) {
+      throw new Error(`${label} path must not traverse a symbolic link: ${JSON.stringify(fileRef)}`);
+    }
+    if (index < segments.length - 1 && !stat.isDirectory()) {
+      throw new Error(`${label} parent must be a directory: ${JSON.stringify(fileRef)}`);
+    }
+  }
+  return filePath;
+}
+
 export function artifactRunRef(runRef) {
   return `runs/${normalizeIndexedRunRef(runRef)}`;
 }

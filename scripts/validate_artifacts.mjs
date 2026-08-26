@@ -32,6 +32,7 @@ import {
   legacyRunRef,
   normalizeIndexedRunRef,
   RUN_SIDECAR_SUFFIXES,
+  safeRunStoreFilePath,
   runSidecarPath,
   taskContractSha256,
   taskGraphRefMatchesGraph,
@@ -3716,6 +3717,11 @@ function validateExecutionEnvelopeData(envelope) {
 }
 
 export function resolveRunExecutionEnvelope(runData, runsDir) {
+  if (runData.executionEnvelope !== undefined && runData.executionEnvelopeRef !== undefined) {
+    throw new ValidationError(
+      `run ${runData.runId} must record either executionEnvelope or executionEnvelopeRef, not both`,
+    );
+  }
   if (runData.executionEnvelope !== undefined) {
     if (executionEnvelopeSha256(runData.executionEnvelope) !== runData.executionEnvelopeSha256) {
       throw new ValidationError(`run ${runData.runId} executionEnvelopeSha256 does not match executionEnvelope`);
@@ -3729,11 +3735,15 @@ export function resolveRunExecutionEnvelope(runData, runsDir) {
   } catch (error) {
     throw new ValidationError(error instanceof Error ? error.message : String(error));
   }
-  const resolvedRunsDir = path.resolve(runsDir);
-  const envelopePath = path.resolve(resolvedRunsDir, envelopeRef);
-  const relative = path.relative(resolvedRunsDir, envelopePath);
-  if (!relative || relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
-    throw new ValidationError(`run ${runData.runId} executionEnvelopeRef escapes the runs directory`);
+  let envelopePath;
+  try {
+    envelopePath = safeRunStoreFilePath(
+      runsDir,
+      envelopeRef,
+      `run ${runData.runId} executionEnvelopeRef`,
+    );
+  } catch (error) {
+    throw new ValidationError(error instanceof Error ? error.message : String(error));
   }
   if (!existsSync(envelopePath)) {
     throw new ValidationError(`run ${runData.runId} execution envelope is missing: ${envelopeRef}`);
@@ -5081,6 +5091,17 @@ export function validateRunTaskContract(runData, artifactRoot, options = {}) {
     options.runsDir ?? path.join(path.resolve(artifactRoot), 'runs'),
   );
   const hasExecutionEnvelope = executionEnvelope !== null;
+  const hasExecutionEnvelopeHash = runData.executionEnvelopeSha256 !== undefined;
+  if (hasExecutionEnvelope !== hasExecutionEnvelopeHash) {
+    throw new ValidationError(
+      `run ${runData.runId} execution envelope and executionEnvelopeSha256 must be recorded together`,
+    );
+  }
+  if (runData.mode !== undefined && !maintenanceSource && !hasExecutionEnvelope) {
+    throw new ValidationError(
+      `run ${runData.runId} requires its Gate B execution envelope for contract validation`,
+    );
+  }
   if (hasExecutionEnvelope) {
     if (maintenanceSource) {
       throw new ValidationError(

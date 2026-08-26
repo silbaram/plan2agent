@@ -265,6 +265,48 @@ describe('iteration-partitioned run layout', () => {
     }
   });
 
+  test('execution envelope storage rejects an intermediate directory symbolic link', (context) => {
+    const tempRoot = mkdtempSync(path.join(tmpdir(), 'p2a-run-envelope-symlink-'));
+    const outsideRoot = mkdtempSync(path.join(tmpdir(), 'p2a-run-envelope-outside-'));
+    try {
+      const runsDir = path.join(tempRoot, 'runs');
+      const graphPath = path.join(tempRoot, 'gate-c-task-graph', 'task-graph.json');
+      writeApprovedRunSourceForGraph(graphPath);
+      writeJson(graphPath, taskGraph());
+      mkdirSync(path.join(runsDir, ITERATION_ID), { recursive: true });
+      try {
+        symlinkSync(
+          outsideRoot,
+          path.join(runsDir, ITERATION_ID, 'envelopes'),
+          process.platform === 'win32' ? 'junction' : 'dir',
+        );
+      } catch (error) {
+        if (['EPERM', 'EACCES', 'ENOTSUP'].includes(error?.code)) {
+          context.skip(`symbolic links unavailable: ${error.code}`);
+          return;
+        }
+        throw error;
+      }
+
+      const result = runRuns([
+        'start',
+        '--graph', graphPath,
+        '--runs', runsDir,
+        '--task', 'task-001',
+        '--run-id', 'run-envelope-symlink',
+        '--agent-tool', 'codex',
+        '--workspace', tempRoot,
+      ]);
+      assert.equal(result.status, 1);
+      assert.match(result.stderr, /execution envelope path must not traverse a symbolic link/);
+      assert.deepEqual(readdirSync(outsideRoot), []);
+      assert.equal(existsSync(path.join(runsDir, 'run-index.json')), false);
+    } finally {
+      rmSync(tempRoot, { recursive: true, force: true });
+      rmSync(outsideRoot, { recursive: true, force: true });
+    }
+  });
+
   test('start rejects run ids that collide with known sidecar filenames', () => {
     const tempRoot = mkdtempSync(path.join(tmpdir(), 'p2a-run-layout-sidecar-id-'));
     try {

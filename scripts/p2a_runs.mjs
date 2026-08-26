@@ -72,6 +72,7 @@ import {
   orphanRunEvidenceRefs,
   resolveRunsDir,
   RUN_SIDECAR_SUFFIXES,
+  safeRunStoreFilePath,
   runFilePath,
   runMatchesSourceContext,
   runSidecarPath,
@@ -1201,7 +1202,7 @@ function ensureExecutionEnvelopeStored(runsDir, run, envelope) {
     throw new Error(`run ${run.runId} execution envelope hash does not match its content-addressed reference`);
   }
   const envelopeRef = executionEnvelopeStoreRef(run, sha256);
-  const envelopePath = path.join(runsDir, envelopeRef);
+  const envelopePath = safeRunStoreFilePath(runsDir, envelopeRef, 'execution envelope');
   if (existsSync(envelopePath)) {
     const existing = loadJson(envelopePath);
     if (

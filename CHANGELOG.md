@@ -16,7 +16,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 ### Changed
 
 - Preserve failed or blocked active-only runs until proposal mining records their `sourceRunId`, preventing direct retries from silently discarding self-improvement input.
-- Store new Gate-derived execution envelopes once per content hash under the iteration run partition and keep only `executionEnvelopeRef` plus the verified SHA-256 in each run; retain inline run compatibility and migrate it with `p2a runs migrate-schema`.
+- Store new Gate-derived execution envelopes once per content hash under the iteration run partition and keep only `executionEnvelopeRef` plus the verified SHA-256 in each run; retain inline run compatibility, reject intermediate symbolic-link storage paths, and migrate inline evidence with `p2a runs migrate-schema`.
 
 ## [0.5.14] - 2026-08-26
 

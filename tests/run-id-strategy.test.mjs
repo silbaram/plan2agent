@@ -15,7 +15,11 @@ import { allocateRunId, previewRunId } from '../scripts/p2a_project_config.mjs';
 import { canonicalRunRef, canonicalTaskGraphRef, runFilePath } from '../scripts/p2a_run_paths.mjs';
 import { runWriteTransactionPath, withRunStoreLocks } from '../scripts/p2a_run_store.mjs';
 import { assertStartTaskSourceUnchanged } from '../scripts/p2a_runs.mjs';
-import { resolveRunExecutionEnvelope, validateRunData } from '../scripts/validate_artifacts.mjs';
+import {
+  resolveRunExecutionEnvelope,
+  validateRunData,
+  validateRunTaskContract,
+} from '../scripts/validate_artifacts.mjs';
 import {
   E2E_FIXTURE_ROOT,
   EXECUTE_CLI,
@@ -1245,6 +1249,16 @@ test('creates a fresh worktree before validating the same path passed as workspa
     assert.throws(
       () => validateRunData(envelopeMissing),
       /non-maintenance run mode requires a Gate B executionEnvelope reference/,
+    );
+    assert.throws(
+      () => validateRunTaskContract(envelopeMissing, root, { runsDir }),
+      /requires its Gate B execution envelope for contract validation/,
+    );
+    const conflictingEnvelope = structuredClone(run);
+    conflictingEnvelope.executionEnvelope = executionEnvelope;
+    assert.throws(
+      () => validateRunTaskContract(conflictingEnvelope, root, { runsDir }),
+      /either executionEnvelope or executionEnvelopeRef, not both/,
     );
   } finally {
     rmSync(root, { recursive: true, force: true });
