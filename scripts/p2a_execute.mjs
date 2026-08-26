@@ -77,7 +77,7 @@ import { parseVerifyCommand } from './p2a_verification.mjs';
 
 const P2A_PATHS = resolveP2aPaths(import.meta.url);
 const ROOT = P2A_PATHS.projectRoot;
-const COMMANDS = new Set(['prepare', 'plan', 'start', 'review', 'accept', 'resume', 'status', 'finish']);
+const COMMANDS = new Set(['prepare', 'plan', 'start', 'verify-final', 'review', 'accept', 'resume', 'status', 'finish']);
 const PREPARE_MODES = new Set(['direct', 'planned']);
 const FINISH_STATUSES = new Set(['finished', 'failed', 'blocked']);
 const FAILURE_SOURCES = new Set(['owner', 'monitor', 'implementer']);
@@ -134,7 +134,7 @@ function usage() {
     '  --selection-rationale <text>',
     '  --milestone <id|outcome|command>  Planned only; repeat 2-5 times in execution order.',
     '',
-    'Start/plan/review/accept options:',
+    'Start/plan/verify-final/review/accept options:',
     '  --task <task-id>     Task to execute; for review/accept, optional remediation owner. Start/plan require one ready task when omitted.',
     '  --approval <path>    Proposal draft approval JSON; selects its maintenance task and implies --maintenance.',
     '  --agent-tool <tool>  Write implementer label: codex, claude, or manual. Default: codex.',
@@ -151,6 +151,7 @@ function usage() {
     '',
     'Finish/verification options:',
     '  --test, --lint, --typecheck',
+    '  --related             Run project-owned relatedVerification commands against changed files.',
     '  --test-command <cmd>, --lint-command <cmd>, --typecheck-command <cmd>',
     '  --verify-command <type:cmd>',
     '                          type is required: test, lint, typecheck, or custom.',
@@ -295,6 +296,7 @@ function parseArgs(argv) {
     else if (arg === '--test') args.verifyOptions.push('--test');
     else if (arg === '--lint') args.verifyOptions.push('--lint');
     else if (arg === '--typecheck') args.verifyOptions.push('--typecheck');
+    else if (arg === '--related') args.verifyOptions.push('--related');
     else if (arg === '--test-command') args.verifyOptions.push('--test-command', requiredValue(argv, ++index, '--test-command', { allowLeadingDash: true }));
     else if (arg === '--lint-command') args.verifyOptions.push('--lint-command', requiredValue(argv, ++index, '--lint-command', { allowLeadingDash: true }));
     else if (arg === '--typecheck-command') args.verifyOptions.push('--typecheck-command', requiredValue(argv, ++index, '--typecheck-command', { allowLeadingDash: true }));
@@ -327,8 +329,8 @@ function parseArgs(argv) {
   }
 
   if (args.help) return args;
-  if (args.json && !['start', 'resume', 'review', 'accept'].includes(args.command)) {
-    throw new Error('--json is only supported with start, resume, review, or accept');
+  if (args.json && !['start', 'resume', 'verify-final', 'review', 'accept'].includes(args.command)) {
+    throw new Error('--json is only supported with start, resume, verify-final, review, or accept');
   }
   const sourceCount = [args.artifacts, args.graph].filter(Boolean).length;
   if (sourceCount > 1) throw new Error('--artifacts and --graph cannot be used together');
@@ -374,17 +376,17 @@ function parseArgs(argv) {
     assertUnmanagedGraphMutation(args.graph, `p2a execute ${args.command}`);
   }
   if (['finish', 'resume'].includes(args.command) && !args.runId) throw new Error(`--run-id is required for ${args.command}`);
-  if (args.runReservationToken && (!['start', 'review', 'accept'].includes(args.command) || !args.runId)) {
-    throw new Error('--run-reservation-token requires start, review, or accept with --run-id');
+  if (args.runReservationToken && (!['start', 'verify-final', 'review', 'accept'].includes(args.command) || !args.runId)) {
+    throw new Error('--run-reservation-token requires start, verify-final, review, or accept with --run-id');
   }
   if (args.command === 'status' && !args.taskId && !args.runId && !args.approval) throw new Error('--task, --approval, or --run-id is required for status');
   if (['plan', 'start'].includes(args.command) && !IMPLEMENTER_AGENT_TOOLS.has(args.agentTool)) {
     throw new Error('--agent-tool for implementation must be one of codex, claude, or manual; Gemini is read-only and may only be used as a reviewer/monitor');
   }
-  if (['review', 'accept'].includes(args.command) && !REVIEWER_AGENT_TOOLS.has(args.agentTool)) {
-    throw new Error('--agent-tool for review must be one of codex, claude, gemini, or manual');
+  if (['verify-final', 'review', 'accept'].includes(args.command) && !REVIEWER_AGENT_TOOLS.has(args.agentTool)) {
+    throw new Error('--agent-tool for final verification/review must be one of codex, claude, gemini, or manual');
   }
-  if (['plan', 'resume', 'status'].includes(args.command) && args.verifyOptions.length) {
+  if (args.command !== 'finish' && args.verifyOptions.length) {
     throw new Error('verification options are only supported with finish');
   }
   if (args.requireMonitor && args.command !== 'start') {
@@ -642,6 +644,19 @@ function selectCompletedAcceptanceTask(source, taskId = null) {
   return task;
 }
 
+function selectCompletedFinalVerificationTask(source, taskId = null) {
+  if (taskId) {
+    const task = requireTask(source, taskId);
+    if (task.status !== 'done') {
+      throw new Error(`${task.id} must be done before final verification; current status is ${task.status}`);
+    }
+    return task;
+  }
+  const task = [...source.graph.tasks].reverse().find((candidate) => candidate.status === 'done');
+  if (!task) throw new Error('no completed task is available to own final verification evidence');
+  return task;
+}
+
 function currentSourceGraph(source) {
   const graph = loadJson(source.graphPath);
   validateTaskGraphData(graph);
@@ -896,14 +911,16 @@ function finishTaskArgs(source, taskId, status) {
 
 function reopenTaskAfterFinalReviewArgs(source, run) {
   const failureClass = run.failure?.class ?? run.status;
-  const reviewLabel = run.runKind === 'final_acceptance_review' ? 'acceptance' : 'visual';
+  const reviewLabel = run.runKind === 'final_acceptance_review'
+    ? 'acceptance'
+    : (run.runKind === 'final_visual_review' ? 'visual' : 'verification');
   return [
     'todo',
     ...source.sourceArgs,
     run.taskId,
     '--reopen',
     '--note',
-    `Final ${reviewLabel} review ${run.runId} ended ${run.status} (${failureClass}); implementation remediation is required before another final review.`,
+    `Final ${reviewLabel} run ${run.runId} ended ${run.status} (${failureClass}); implementation remediation is required before another final pass.`,
   ];
 }
 
@@ -972,14 +989,17 @@ function startRunArgs(args, task, runId, defaults, approval = null) {
 
 function finishRunArgs(args, finalStatus, approval = null) {
   const runArgs = ['finish', ...sourceRunArgs(args), '--run-id', args.runId];
+  const relatedFilesAlreadyRecorded = args.verifyOptions.includes('--related');
   if (finalStatus) runArgs.push('--status', finalStatus);
   if (args.failureClass) runArgs.push('--failure-class', args.failureClass);
   if (args.retryable) runArgs.push('--retryable', args.retryable);
   if (args.needsUserDecision !== null) runArgs.push('--needs-user-decision', args.needsUserDecision);
   if (args.failureSource) runArgs.push('--failure-source', args.failureSource);
-  if (args.collectGit) runArgs.push('--collect-git');
+  if (args.collectGit && !relatedFilesAlreadyRecorded) runArgs.push('--collect-git');
   if (args.workspace) runArgs.push('--workspace', args.workspace);
-  for (const changedFile of args.changedFiles) runArgs.push('--changed-file', changedFile);
+  if (!relatedFilesAlreadyRecorded) {
+    for (const changedFile of args.changedFiles) runArgs.push('--changed-file', changedFile);
+  }
   for (const note of uniqueStrings([...approvalRunNotes(approval), ...args.notes])) runArgs.push('--note', note);
   if (args.usageModel !== null) {
     runArgs.push('--usage-model', args.usageModel);
@@ -1004,6 +1024,8 @@ function finishRunArgs(args, finalStatus, approval = null) {
 
 function verifyRunArgs(args) {
   const runArgs = ['verify', ...sourceRunArgs(args), '--run-id', args.runId, ...args.verifyOptions];
+  if (args.collectGit) runArgs.push('--collect-git');
+  for (const changedFile of args.changedFiles) runArgs.push('--changed-file', changedFile);
   if (args.saveConfig) runArgs.push('--save-config');
   return runArgs;
 }
@@ -1232,7 +1254,22 @@ function printFinalVisualReviewInstructions(args, source, task, runId, workspace
   console.log('Next:');
   console.log(`1. Snapshot the canonical workspace: ${commandLine('p2a_runs.mjs', ['revision', ...source.sourceArgs, '--run-id', runId])}`);
   console.log('2. Capture the complete approved screen/state/viewport matrix and write the accessibility report plus .visual-review.json sidecar.');
-  console.log(`3. Finish without changing task state: ${commandLine('p2a_execute.mjs', ['finish', ...source.sourceArgs, '--run-id', runId, '--test', '--lint', '--typecheck'])}`);
+  console.log(`3. Finish without changing task state: ${commandLine('p2a_execute.mjs', ['finish', ...source.sourceArgs, '--run-id', runId])}`);
+}
+
+function printFinalVerificationInstructions(source, task, run, workspacePath) {
+  console.log('');
+  console.log('Plan2Agent final full verification');
+  console.log(`- iteration: ${source.iterationId}`);
+  console.log(`- remediation owner: ${task.id} - ${humanTaskOutcome(task)}`);
+  console.log(`- runId: ${run.runId}`);
+  console.log(`- workspace: ${displayPath(workspacePath)}`);
+  console.log('- isolation: none');
+  console.log('- changedFiles: 0');
+  console.log('');
+  console.log('Next:');
+  console.log(`1. Run every configured full verification command once: ${commandLine('p2a_runs.mjs', ['verify', ...source.sourceArgs, '--run-id', run.runId])}`);
+  console.log(`2. Finish the evidence run; failure reopens the remediation owner: ${commandLine('p2a_execute.mjs', ['finish', ...source.sourceArgs, '--run-id', run.runId])}`);
 }
 
 function acceptanceCandidateEvidenceCount(run) {
@@ -1260,11 +1297,12 @@ function printFinalAcceptanceReviewInstructions(source, task, run, workspacePath
   console.log(`- candidateEvidence: ${acceptanceCandidateEvidenceCount(run)}`);
   console.log('');
   console.log('Next:');
-  console.log(`1. Run each Gate B behavior case as owner-recorded evidence: ${commandLine('p2a_runs.mjs', ['verify', ...source.sourceArgs, '--run-id', runId, '--verify-command', 'custom:<behavior-command>'])}`);
-  console.log(`2. Preflight the exact ${criteriaCount}-criterion current-iteration run contract. Do not substitute the cumulative product spec or a summarized subset; map every criterion ref to relevant verbatim command evidence.`);
-  console.log('3. If any criterion lacks relevant evidence, record more behavior evidence or block the run without invoking the acceptance reviewer.');
-  console.log('4. Only after the preflight passes, give the exact run contract and recorded verification output to the read-only acceptance reviewer; write <runId>.acceptance-review.json beside the run.');
-  console.log(`5. Finish the review; confirmation keeps the task done, while blocked/failed status reopens the remediation owner: ${commandLine('p2a_execute.mjs', ['finish', ...source.sourceArgs, '--run-id', runId])}`);
+  console.log(`1. Record configured full verification for this canonical revision: ${commandLine('p2a_runs.mjs', ['verify', ...source.sourceArgs, '--run-id', runId])}`);
+  console.log(`2. Run each Gate B behavior case as owner-recorded evidence: ${commandLine('p2a_runs.mjs', ['verify', ...source.sourceArgs, '--run-id', runId, '--verify-command', 'custom:<behavior-command>'])}`);
+  console.log(`3. Preflight the exact ${criteriaCount}-criterion current-iteration run contract. Do not substitute the cumulative product spec or a summarized subset; map every criterion ref to relevant verbatim command evidence.`);
+  console.log('4. If any criterion lacks relevant evidence, record more behavior evidence or block the run without invoking the acceptance reviewer.');
+  console.log('5. Only after the preflight passes, give the exact run contract and recorded verification output to the read-only acceptance reviewer; write <runId>.acceptance-review.json beside the run.');
+  console.log(`6. Finish the review; confirmation keeps the task done, while blocked/failed status reopens the remediation owner: ${commandLine('p2a_execute.mjs', ['finish', ...source.sourceArgs, '--run-id', runId])}`);
 }
 
 function verifyRequested(args) {
@@ -1282,8 +1320,14 @@ function transitionTaskAfterFinishedRun(args, source, run, successStatus = 0) {
     console.log('Task transition skipped by --no-task-transition');
     return successStatus;
   }
-  if (run.runKind === 'final_visual_review' || run.runKind === 'final_acceptance_review') {
-    const reviewLabel = run.runKind === 'final_acceptance_review' ? 'acceptance' : 'visual';
+  if (
+    run.runKind === 'final_verification'
+    || run.runKind === 'final_visual_review'
+    || run.runKind === 'final_acceptance_review'
+  ) {
+    const reviewLabel = run.runKind === 'final_acceptance_review'
+      ? 'acceptance'
+      : (run.runKind === 'final_visual_review' ? 'visual' : 'verification');
     if (run.status === 'finished') {
       if (task.status !== 'done') {
         console.error(`final ${reviewLabel} review transition skipped: ${task.id} must remain done after a confirming review; current status is ${task.status}`);
@@ -1573,6 +1617,65 @@ function runStart(args) {
   });
 }
 
+function runVerifyFinal(args) {
+  const initialSource = resolveSource(args);
+  return withRunStoreLocks([path.dirname(initialSource.graphPath)], () => {
+    const source = currentSourceGraph(initialSource);
+    if (!args.artifacts || args.approval || args.maintenance || source.sourceLayout !== 'iteration') {
+      throw new Error('final verification requires --artifacts for a feature iteration');
+    }
+    const unfinishedTasks = source.graph.tasks.filter((candidate) => candidate.status !== 'done');
+    if (unfinishedTasks.length) {
+      throw new Error(
+        `final verification requires every iteration task to be done; unfinished task(s): ${unfinishedTasks.map((candidate) => `${candidate.id}:${candidate.status}`).join(', ')}`,
+      );
+    }
+    const task = selectCompletedFinalVerificationTask(source, args.taskId);
+    const activeTask = source.graph.tasks.find((candidate) => hasStartedRunForTask(source, candidate.id));
+    if (activeTask) {
+      throw new Error(`${activeTask.id} already has a started run; finish or block it before final verification`);
+    }
+    const workspacePath = finalReviewWorkspace(args, source, 'verification');
+    args.workspace = workspacePath;
+    args.isolation = 'none';
+    args.runKind = 'final_verification';
+    args.notes = uniqueStrings([
+      ...args.notes,
+      `FINAL_VERIFICATION: iteration=${source.iterationId}; canonical workspace=${workspacePath}`,
+    ]);
+    const identity = resolveStartIdentity(args, source, task, { reserve: true });
+    const { runId, defaults } = identity;
+    args.runReservationToken = identity.reservationToken;
+    const runResult = runScript(
+      'p2a_runs.mjs',
+      startRunArgs(args, task, runId, defaults),
+    );
+    printChildResult(runResult, { suppressStdout: args.json });
+    if (runResult.status !== 0) {
+      console.error('Final verification run did not start. Correct the cause, then retry with the same reserved run id:');
+      console.error(commandLine('p2a_execute.mjs', [
+        'verify-final',
+        ...source.sourceArgs,
+        '--agent-tool', args.agentTool,
+        '--run-id', runId,
+        '--workspace', workspacePath,
+        ...(identity.reservationToken ? ['--run-reservation-token', identity.reservationToken] : []),
+      ]));
+      return runResult.status ?? 1;
+    }
+    const startedRun = readRun(source.runsDir, runId);
+    assertRunExecutionContractCurrent(startedRun, source, 'final verification');
+    printFinalVerificationInstructions(source, task, startedRun, workspacePath);
+    printRunCommandFooter(P2A_PATHS, {
+      sourceArgs: source.sourceArgs,
+      runId,
+      heading: 'Run commands:',
+    });
+    recordExecutionResult(args, 'verify-final', startedRun);
+    return 0;
+  });
+}
+
 function runReview(args) {
   const initialSource = resolveSource(args);
   return withRunStoreLocks([path.dirname(initialSource.graphPath)], () => {
@@ -1729,7 +1832,9 @@ function runResume(args) {
     console.log('- resumeNote: run is already closed; use status/review commands for follow-up evidence.');
   }
   if (run.status === 'started' && !failedCheckpoint) {
-    if (run.runKind === 'final_visual_review') {
+    if (run.runKind === 'final_verification') {
+      printFinalVerificationInstructions(source, task, run, run.workspacePath);
+    } else if (run.runKind === 'final_visual_review') {
       printFinalVisualReviewInstructions(args, source, task, run.runId, run.workspacePath);
     } else if (run.runKind === 'final_acceptance_review') {
       printFinalAcceptanceReviewInstructions(source, task, run, run.workspacePath);
@@ -1900,6 +2005,7 @@ export function main(argv = process.argv.slice(2)) {
     if (args.command === 'prepare') status = runPrepare(args);
     else if (args.command === 'plan') status = runPlan(args);
     else if (args.command === 'start') status = runStart(args);
+    else if (args.command === 'verify-final') status = runVerifyFinal(args);
     else if (args.command === 'review') status = runReview(args);
     else if (args.command === 'accept') status = runAccept(args);
     else if (args.command === 'resume') status = runResume(args);

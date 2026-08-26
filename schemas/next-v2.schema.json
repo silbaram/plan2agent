@@ -209,6 +209,7 @@
         "tasks_blocked",
         "final_visual_review_required",
         "final_acceptance_review_required",
+        "final_verification_required",
         "iteration_review_or_close_required",
         "flat_execution_complete",
         "run_evidence_needs_proposal_mining",

@@ -6,6 +6,19 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+## [0.5.15] - 2026-08-26
+
+### Added
+
+- Add structured changed-file verification through `relatedVerification` and `p2a runs verify --related`, passing workspace-relative file arguments without shell interpolation.
+- Add `p2a execute verify-final` and revision-bound full verification evidence for iteration close readiness.
+
+### Changed
+
+- Record verification scope, canonical workspace revision, and related-file count in run evidence; legacy string verification commands remain full-scope commands.
+- Route completed iterations through one canonical no-change final verification run, reuse same-revision full evidence from final visual or acceptance review, and reject related-only or stale evidence at close.
+- Add an empty `relatedVerification` list when initializing, updating, upgrading, or enhancing project configuration.
+
 ## [0.5.14] - 2026-08-26
 
 ### Fixed

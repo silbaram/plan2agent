@@ -4042,6 +4042,41 @@ export function validateRunData(data) {
     if (item.status === 'unavailable' && (!item.failureReason || !item.failureHint)) {
       throw new ValidationError(`verification[${index}] unavailable status must include failureReason and failureHint`);
     }
+    if (item.scope !== undefined) {
+      if (item.source !== 'config' && item.source !== 'command') {
+        throw new ValidationError(
+          `verification[${index}] scoped evidence must use source config or command`,
+        );
+      }
+      if (!/^[a-f0-9]{64}$/.test(item.workspaceRevisionSha256 ?? '')) {
+        throw new ValidationError(
+          `verification[${index}] executed evidence with scope must include workspaceRevisionSha256`,
+        );
+      }
+    }
+    if (item.scope === 'related') {
+      if (!Number.isSafeInteger(item.selectedFileCount) || item.selectedFileCount < 1) {
+        throw new ValidationError(`verification[${index}] related evidence must include selectedFileCount`);
+      }
+      if (!Array.isArray(item.argv) || item.argv.length < item.selectedFileCount + 1) {
+        throw new ValidationError(
+          `verification[${index}] related evidence argv must include the executable and selected files`,
+        );
+      }
+      const selectedFiles = item.argv.slice(-item.selectedFileCount);
+      if (
+        new Set(selectedFiles).size !== selectedFiles.length
+        || selectedFiles.some((file) => !data.changedFiles.includes(file))
+      ) {
+        throw new ValidationError(
+          `verification[${index}] selected files must be unique members of run.changedFiles`,
+        );
+      }
+    } else if (item.selectedFileCount !== undefined) {
+      throw new ValidationError(
+        `verification[${index}] selectedFileCount is only allowed for scope related`,
+      );
+    }
   }
   for (const [index, sample] of (data.usage ?? []).entries()) {
     if (![sample.inputTokens, sample.outputTokens, sample.totalTokens].every(Number.isSafeInteger)) {

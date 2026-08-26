@@ -143,6 +143,13 @@ p2a execute start \
   --task <task-id>
 ```
 
+구현 중에는 프로젝트가 구조화된 `relatedVerification` 명령과
+`p2a runs verify --related`를 설정해 변경 파일만 빠르게 검사할 수 있습니다. 이 결과는
+피드백용이며 iteration close 권한이 되지 않습니다. 모든 task가 끝나면 `p2a next`가 필요한
+최종 review를 먼저 안내하고, 유효한 full 증거가 아직 없을 때만 canonical workspace에서
+`p2a execute verify-final`을 안내합니다. 전체 test, lint, typecheck 증거는 정확한 workspace
+revision에 묶이므로 이후 source가 바뀌면 새 최종 검증이 필요합니다.
+
 시작, 재개, 완료, 재시도, 제한된 batch 절차는 [개발 실행 레퍼런스](docs/supervised-execution.md)를 참고하세요.
 
 ### 3. 기준선을 잃지 않고 반복하기
@@ -206,7 +213,7 @@ Plan2Agent는 하나의 `p2a` entrypoint를 설치합니다.
 | `p2a iteration` | iteration 초기화, close/open, diff, maintenance를 관리합니다. |
 | `p2a tasks` | task 상태를 확인하고 전환합니다. |
 | `p2a runs` | run evidence를 기록, 검증, 완료, 조회합니다. |
-| `p2a execute` | 구현과 canonical 최종 visual review run을 검증된 완료까지 감독합니다. |
+| `p2a execute` | 구현과 canonical 최종 verification·visual·acceptance run을 검증된 완료까지 감독합니다. |
 | `p2a eval` | 실행 증거를 grade, compare, analyze, generate, summarize합니다. |
 | `p2a proposals` | 개선 proposal을 mine, review, curate, approve, summarize합니다. |
 | `p2a buildlore` | 선택적 BuildLore 지식을 projection, 검사, 검색, 조회합니다. |

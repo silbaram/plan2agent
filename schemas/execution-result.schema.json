@@ -14,7 +14,7 @@
   "additionalProperties": false,
   "properties": {
     "schema_version": { "const": "p2a.execution_result.v1" },
-    "command": { "enum": ["start", "resume", "review", "accept"] },
+    "command": { "enum": ["start", "resume", "review", "accept", "verify-final"] },
     "outcome": { "const": "succeeded" },
     "taskId": { "type": "string", "minLength": 1 },
     "runId": { "type": "string", "pattern": "^run-[A-Za-z0-9._-]+$" },
@@ -22,7 +22,7 @@
     "mode": { "enum": ["direct", "planned", "orchestrated"] },
     "runKind": {
       "type": ["string", "null"],
-      "enum": ["final_visual_review", "final_acceptance_review", null]
+      "enum": ["final_verification", "final_visual_review", "final_acceptance_review", null]
     }
   }
 }

@@ -995,6 +995,31 @@ test('a confirmed entry proceeds through Gate A-C execution and opens a baseline
     ]);
     assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
 
+    next = runNext(root, ['--entry', 'idea.md', '--contract', 'v2']);
+    assert.equal(next.state, 'final_verification_required');
+    const finalRunId = 'run-entry-contract-final-verification';
+    result = runP2a([
+      'execute', 'verify-final',
+      '--artifacts', artifactRoot,
+      '--task', 'task-001',
+      '--run-id', finalRunId,
+      '--agent-tool', 'manual',
+    ]);
+    assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+    result = runP2a([
+      'runs', 'verify',
+      '--artifacts', artifactRoot,
+      '--run-id', finalRunId,
+      '--test-command', `"${process.execPath}" -e "process.exit(0)"`,
+    ]);
+    assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+    result = runP2a([
+      'execute', 'finish',
+      '--artifacts', artifactRoot,
+      '--run-id', finalRunId,
+    ]);
+    assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+
     result = runP2a([
       'iteration', 'validate',
       '--artifacts', artifactRoot,

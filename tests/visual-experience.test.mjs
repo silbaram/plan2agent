@@ -1677,6 +1677,7 @@ describe('visual experience artifacts', () => {
       assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
       assert.match(result.stdout, /Plan2Agent final visual review/);
       assert.match(result.stdout, /changedFiles: 0/);
+      assert.doesNotMatch(result.stdout, /runs verify|Record configured full verification/);
       assert.equal(JSON.parse(readFileSync(graphPath, 'utf8')).tasks[0].status, 'done');
 
       const runsDir = path.join(root, 'runs');
@@ -1695,6 +1696,7 @@ describe('visual experience artifacts', () => {
       ]);
       assert.equal(resumedReview.status, 0, `${resumedReview.stdout}\n${resumedReview.stderr}`);
       assert.match(resumedReview.stdout, /Plan2Agent final visual review/);
+      assert.doesNotMatch(resumedReview.stdout, /runs verify|Record configured full verification/);
       assert.doesNotMatch(resumedReview.stdout, /Manual launcher prompt|Implement Plan2Agent task/);
 
       result = runRuns(['revision', '--runs', runsDir, '--run-id', runId]);

@@ -4201,7 +4201,7 @@ function validateIterationCurrentFixtureCases() {
         `"${process.execPath}" -e "process.exit(0)"`,
       ]);
       checks += 1;
-      if (result.status !== 0 || !result.stdout.includes('test: passed') || !result.stdout.includes('typecheck: passed')) {
+      if (result.status !== 0 || !result.stdout.includes('test:full: passed') || !result.stdout.includes('typecheck:full: passed')) {
         console.error(`p2a_runs verify fixture check failed: ${caseData.id}`);
         writeResultOutput(result);
         return { status: failureStatus(result), checks };
@@ -4287,7 +4287,7 @@ function validateIterationCurrentFixtureCases() {
         `"${process.execPath}" -e "process.exit(0)"`,
       ]);
       checks += 1;
-      if (result.status !== 0 || !result.stdout.includes('test: passed')) {
+      if (result.status !== 0 || !result.stdout.includes('test:full: passed')) {
         console.error(`p2a_runs collect-git fixture verify failed: ${caseData.id}`);
         writeResultOutput(result);
         return { status: failureStatus(result), checks };
@@ -4933,7 +4933,7 @@ function validateIterationCurrentFixtureCases() {
       const timeoutVerification = timeoutRun.verification.at(-1);
       if (
         result.status === 0
-        || !result.stdout.includes('- test: failed')
+        || !result.stdout.includes('- test:full: failed')
         || timeoutVerification?.status !== 'failed'
         || !timeoutVerification?.stderrTail?.includes('verification command timed out after 50ms')
       ) {
@@ -5132,7 +5132,7 @@ function validateIterationCurrentFixtureCases() {
         `"${process.execPath}" -e "process.exit(0)"`,
       ]);
       checks += 1;
-      if (result.status !== 0 || !result.stdout.includes('test: passed')) {
+      if (result.status !== 0 || !result.stdout.includes('test:full: passed')) {
         console.error(`p2a_runs finished failure flag fixture verify failed: ${caseData.id}`);
         writeResultOutput(result);
         return { status: failureStatus(result), checks };
@@ -5218,9 +5218,70 @@ function validateIterationCurrentFixtureCases() {
         return { status: 1, checks };
       }
 
+      for (const openRunId of [
+        isolationRunId,
+        finishedWithFailedVerificationRunId,
+        finishedWithoutVerificationRunId,
+        finishedWithManualVerificationRunId,
+        finishedWithIncompleteVerificationRunId,
+        finishedFailureFlagRunId,
+      ]) {
+        result = runRuns([
+          'finish',
+          '--artifacts', artifactRoot,
+          '--run-id', openRunId,
+          '--status', 'blocked',
+          '--failure-class', 'implementation_incomplete',
+          ...fixtureFailureDetailArgs(`close-ready cleanup ${openRunId}`),
+        ]);
+        checks += 1;
+        if (result.status !== 0) {
+          console.error(`p2a_runs close-ready cleanup failed for ${openRunId}: ${caseData.id}`);
+          writeResultOutput(result);
+          return { status: failureStatus(result), checks };
+        }
+      }
+
       for (const task of updatedTaskGraph.tasks) task.status = 'done';
       writeFileSync(state.taskGraphPath, `${JSON.stringify(updatedTaskGraph, null, 2)}\n`, 'utf8');
       const closedBaselineTaskGraph = JSON.parse(JSON.stringify(updatedTaskGraph));
+      const finalVerificationRunId = 'run-fixture-final-verification';
+      result = runExecute([
+        'verify-final',
+        '--artifacts', artifactRoot,
+        '--task', updatedTaskGraph.tasks[0].id,
+        '--run-id', finalVerificationRunId,
+        '--agent-tool', 'manual',
+      ]);
+      checks += 1;
+      if (result.status !== 0) {
+        console.error(`p2a execute final verification fixture start failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: failureStatus(result), checks };
+      }
+      result = runRuns([
+        'verify',
+        '--artifacts', artifactRoot,
+        '--run-id', finalVerificationRunId,
+        '--test-command', `"${process.execPath}" -e "process.exit(0)"`,
+      ]);
+      checks += 1;
+      if (result.status !== 0 || !result.stdout.includes('test:full: passed')) {
+        console.error(`p2a final verification fixture command failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: failureStatus(result), checks };
+      }
+      result = runExecute([
+        'finish',
+        '--artifacts', artifactRoot,
+        '--run-id', finalVerificationRunId,
+      ]);
+      checks += 1;
+      if (result.status !== 0) {
+        console.error(`p2a execute final verification fixture finish failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: failureStatus(result), checks };
+      }
       result = runIteration(['validate', '--artifacts', artifactRoot, '--require-close-ready']);
       checks += 1;
       if (result.status !== 0 || !result.stdout.includes('close-ready: all tasks done')) {
@@ -5790,6 +5851,43 @@ function validateIterationCurrentFixtureCases() {
       iter2TaskGraph = JSON.parse(readFileSync(iter2TaskGraphPath, 'utf8'));
       for (const task of iter2TaskGraph.tasks) task.status = 'done';
       writeFileSync(iter2TaskGraphPath, `${JSON.stringify(iter2TaskGraph, null, 2)}\n`, 'utf8');
+      const iter2FinalVerificationRunId = 'run-fixture-iter-002-final-verification';
+      result = runExecute([
+        'verify-final',
+        '--artifacts', artifactRoot,
+        '--task', iter2TaskGraph.tasks[0].id,
+        '--run-id', iter2FinalVerificationRunId,
+        '--agent-tool', 'manual',
+      ]);
+      checks += 1;
+      if (result.status !== 0) {
+        console.error(`p2a execute iter-002 final verification start failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: failureStatus(result), checks };
+      }
+      result = runRuns([
+        'verify',
+        '--artifacts', artifactRoot,
+        '--run-id', iter2FinalVerificationRunId,
+        '--test-command', `"${process.execPath}" -e "process.exit(0)"`,
+      ]);
+      checks += 1;
+      if (result.status !== 0 || !result.stdout.includes('test:full: passed')) {
+        console.error(`p2a iter-002 final verification command failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: failureStatus(result), checks };
+      }
+      result = runExecute([
+        'finish',
+        '--artifacts', artifactRoot,
+        '--run-id', iter2FinalVerificationRunId,
+      ]);
+      checks += 1;
+      if (result.status !== 0) {
+        console.error(`p2a execute iter-002 final verification finish failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: failureStatus(result), checks };
+      }
       result = runIteration(['validate', '--artifacts', artifactRoot, '--require-close-ready']);
       checks += 1;
       if (result.status !== 0 || !result.stdout.includes('close-ready: all tasks done')) {
@@ -8776,6 +8874,43 @@ function validateIterationCurrentFixtureCases() {
         `${JSON.stringify(closeReadyIter3TaskGraph, null, 2)}\n`,
         'utf8',
       );
+      const iter3FinalVerificationRunId = 'run-fixture-iter-003-final-verification';
+      result = runExecute([
+        'verify-final',
+        '--artifacts', artifactRoot,
+        '--task', closeReadyIter3TaskGraph.tasks[0].id,
+        '--run-id', iter3FinalVerificationRunId,
+        '--agent-tool', 'manual',
+      ]);
+      checks += 1;
+      if (result.status !== 0) {
+        console.error(`p2a execute iter-003 final verification start failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: failureStatus(result), checks };
+      }
+      result = runRuns([
+        'verify',
+        '--artifacts', artifactRoot,
+        '--run-id', iter3FinalVerificationRunId,
+        '--test-command', `"${process.execPath}" -e "process.exit(0)"`,
+      ]);
+      checks += 1;
+      if (result.status !== 0 || !result.stdout.includes('test:full: passed')) {
+        console.error(`p2a iter-003 final verification command failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: failureStatus(result), checks };
+      }
+      result = runExecute([
+        'finish',
+        '--artifacts', artifactRoot,
+        '--run-id', iter3FinalVerificationRunId,
+      ]);
+      checks += 1;
+      if (result.status !== 0) {
+        console.error(`p2a execute iter-003 final verification finish failed: ${caseData.id}`);
+        writeResultOutput(result);
+        return { status: failureStatus(result), checks };
+      }
       result = runIteration(['close', '--artifacts', artifactRoot]);
       checks += 1;
       if (result.status !== 0 || !result.stdout.includes('iteration closed')) {

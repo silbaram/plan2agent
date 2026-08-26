@@ -18,6 +18,54 @@ const DEFAULT_RUN_ID_PATTERN = 'run-<taskId>-<sequence:3>';
 export const RUN_ID_RESERVATION_DIR = '.run-id-reservations';
 const REVIEW_PASS_KEYS = ['monitor', 'visual', 'acceptance'];
 const LEGACY_REVIEW_PASS_KEYS = ['style', 'milestone'];
+const RELATED_VERIFICATION_TYPES = new Set(['test', 'lint', 'typecheck', 'custom']);
+
+export function relatedVerificationCommands(config = {}) {
+  const commands = config?.relatedVerification;
+  if (commands === undefined) return [];
+  if (!Array.isArray(commands)) {
+    throw new Error('project config relatedVerification must be an array');
+  }
+  return commands.map((command, index) => {
+    if (!command || typeof command !== 'object' || Array.isArray(command)) {
+      throw new Error(`project config relatedVerification[${index}] must be an object`);
+    }
+    const unexpected = Object.keys(command)
+      .filter((key) => !['type', 'argv', 'appendChangedFiles'].includes(key));
+    if (unexpected.length) {
+      throw new Error(
+        `project config relatedVerification[${index}] has unsupported field(s): ${unexpected.join(', ')}`,
+      );
+    }
+    if (!RELATED_VERIFICATION_TYPES.has(command.type)) {
+      throw new Error(
+        `project config relatedVerification[${index}].type must be one of ${[...RELATED_VERIFICATION_TYPES].join(', ')}`,
+      );
+    }
+    if (!Array.isArray(command.argv) || command.argv.length === 0) {
+      throw new Error(`project config relatedVerification[${index}].argv must be a non-empty array`);
+    }
+    const argv = command.argv.map((value, argumentIndex) => {
+      if (typeof value !== 'string' || !value.trim()) {
+        throw new Error(
+          `project config relatedVerification[${index}].argv[${argumentIndex}] must be a non-blank string`,
+        );
+      }
+      if (value.includes('\0')) {
+        throw new Error(
+          `project config relatedVerification[${index}].argv[${argumentIndex}] must not contain NUL`,
+        );
+      }
+      return value;
+    });
+    if (command.appendChangedFiles !== true) {
+      throw new Error(
+        `project config relatedVerification[${index}].appendChangedFiles must be true`,
+      );
+    }
+    return { type: command.type, argv, appendChangedFiles: true };
+  });
+}
 
 export function defaultRunTracking() {
   return {
@@ -587,6 +635,7 @@ export function buildProjectConfig(targetRoot, teamBigFiveConfig = { enabled: fa
     testCommand: detected.testCommand,
     lintCommand: detected.lintCommand,
     typecheckCommand: detected.typecheckCommand,
+    relatedVerification: [],
     verificationTimeoutMs: DEFAULT_VERIFICATION_TIMEOUT_MS,
     taskGraph,
     runTracking: defaultRunTracking(),
@@ -678,6 +727,10 @@ export function mergeDevSkillConfig(config) {
       updatedKeys.push(key);
     }
   }
+  if (next.relatedVerification === undefined) {
+    next.relatedVerification = [];
+    updatedKeys.push('relatedVerification');
+  }
   if (updatedKeys.length) {
     if (!next.schema_version) next.schema_version = 'p2a.project_config.v1';
     if (!next.runTracking) next.runTracking = defaultRunTracking();
@@ -717,6 +770,10 @@ export function mergeDetectedProjectConfig(config, detected, options = {}) {
       updatedKeys.push(key);
     }
   }
+  if (next.relatedVerification === undefined) {
+    next.relatedVerification = [];
+    updatedKeys.push('relatedVerification');
+  }
   if (isEmptyValue(next.verificationTimeoutMs)) {
     next.verificationTimeoutMs = DEFAULT_VERIFICATION_TIMEOUT_MS;
     updatedKeys.push('verificationTimeoutMs');
@@ -742,6 +799,10 @@ export function mergeExplicitVerificationCommands(config, verifyRequests, option
       next[key] = request.command;
       updatedKeys.push(key);
     }
+  }
+  if (next.relatedVerification === undefined) {
+    next.relatedVerification = [];
+    updatedKeys.push('relatedVerification');
   }
   if (isEmptyValue(next.verificationTimeoutMs)) {
     next.verificationTimeoutMs = DEFAULT_VERIFICATION_TIMEOUT_MS;
