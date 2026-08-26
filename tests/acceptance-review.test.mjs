@@ -262,6 +262,14 @@ test('execute accept seals real command evidence and gates close-ready validatio
       'verify',
       '--artifacts', fixture.artifactRoot,
       '--run-id', runId,
+      '--test-command', "node -e \"console.log('full suite passed')\"",
+    ]);
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+
+    result = runRuns([
+      'verify',
+      '--artifacts', fixture.artifactRoot,
+      '--run-id', runId,
       '--verify-command', "custom:node -e \"console.log('behavior confirmed for configured identity')\"",
     ]);
     assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);

@@ -24,6 +24,10 @@ import {
   CONTINUATION_DEFINITIONS,
   continuationDescriptor,
 } from '../scripts/p2a_continuations.mjs';
+import {
+  workspaceRevisionExcludedPathsForRun,
+  workspaceRevisionSha256,
+} from '../scripts/p2a_run_paths.mjs';
 
 const NEXT_V1_SCHEMA = JSON.parse(readFileSync(new URL('../schemas/next.schema.json', import.meta.url), 'utf8'));
 const NEXT_SCHEMA = JSON.parse(readFileSync(new URL('../schemas/next-v2.schema.json', import.meta.url), 'utf8'));
@@ -524,7 +528,7 @@ function writeRuns(artifactRoot, runs) {
         : 'gate-b-spec/spec.json'
     );
     return {
-      schema_version: 'p2a.run.v1',
+      schema_version: run.schema_version ?? 'p2a.run.v1',
       runId: run.runId,
       projectId,
       taskId,
@@ -534,9 +538,9 @@ function writeRuns(artifactRoot, runs) {
       taskGraphRef,
       sourceSpecRef,
       agentTool: 'codex',
-      workspaceRef: 'fixture-workspace',
-      workspacePath: '.',
-      isolation: {
+      workspaceRef: run.workspaceRef ?? 'fixture-workspace',
+      workspacePath: run.workspacePath ?? '.',
+      isolation: run.isolation ?? {
         mode: 'none',
         branch: null,
         worktree: null,
@@ -554,6 +558,7 @@ function writeRuns(artifactRoot, runs) {
       verification: run.verification ?? [],
       notes: [],
       ...(run.runKind ? { runKind: run.runKind } : {}),
+      ...(run.workspaceRevisionSha256 ? { workspaceRevisionSha256: run.workspaceRevisionSha256 } : {}),
       ...(['failed', 'blocked'].includes(run.status) ? {
         failure: {
           class: 'implementation_incomplete',
@@ -609,6 +614,53 @@ function writeRuns(artifactRoot, runs) {
       };
     }),
   });
+}
+
+function writeFinalVerification(root, artifactRoot, iterationId) {
+  const workspacePath = root;
+  const graphPath = join(
+    artifactRoot,
+    'iterations',
+    iterationId,
+    'gate-c-task-graph',
+    'task-graph.json',
+  );
+  const runsDir = join(artifactRoot, 'runs');
+  const revisionRun = {
+    sourceLayout: 'iteration',
+    workspacePath,
+  };
+  const revision = workspaceRevisionSha256(
+    workspacePath,
+    workspaceRevisionExcludedPathsForRun(runsDir, revisionRun, {
+      artifactRoot,
+      graphPath,
+      workspacePath,
+    }),
+  );
+  writeRuns(artifactRoot, [{
+    runId: 'run-final-verification',
+    iterationId,
+    status: 'finished',
+    runKind: 'final_verification',
+    workspaceRef: '.',
+    workspacePath,
+    workspaceRevisionSha256: revision,
+    verification: [{
+      type: 'test',
+      command: 'npm test',
+      status: 'passed',
+      exitCode: 0,
+      durationMs: 1,
+      startedAt: '2026-07-31T00:00:00.000Z',
+      finishedAt: '2026-07-31T00:00:00.001Z',
+      stdoutTail: 'ok',
+      stderrTail: '',
+      source: 'config',
+      scope: 'full',
+      workspaceRevisionSha256: revision,
+    }],
+  }]);
 }
 
 function next(root, args = []) {
@@ -847,7 +899,7 @@ test('next chooses one read-only action for every primary state', () => {
       expected: (root) => ['tasks_blocked', 'cli', ['tasks', 'show', '--artifacts', artifactPath(root), 'task-001']],
     },
     {
-      id: 'all tasks done require explicit close or review choice',
+      id: 'all tasks done require final full verification',
       setup: () => {
         const root = project();
         const rootArtifact = artifact(root);
@@ -858,7 +910,9 @@ test('next chooses one read-only action for every primary state', () => {
         writeGateD(rootArtifact, [], iterationId);
         return root;
       },
-      expected: () => ['iteration_review_or_close_required', 'approval'],
+      expected: (root) => ['final_verification_required', 'cli', [
+        'execute', 'verify-final', '--artifacts', artifactPath(root),
+      ]],
     },
     {
       id: 'all non-UI tasks done require functional acceptance',
@@ -964,6 +1018,7 @@ test('completed iterations expose structured review and close options without mu
     writeGateB(rootArtifact, 'approved', iterationId);
     writeGateC(rootArtifact, [task('task-001', 'done')], iterationId);
     writeGateD(rootArtifact, [], iterationId);
+    writeFinalVerification(root, rootArtifact, iterationId);
     const before = snapshotHarness(root);
     assertReviewOrCloseDecision(next(root), artifactPath(root));
     assertReviewOrCloseDecision(next(root), artifactPath(root));
@@ -985,6 +1040,7 @@ test('human next output defaults to actionable v2 options while unqualified JSON
     writeGateB(rootArtifact, 'approved', iterationId);
     writeGateC(rootArtifact, [task('task-001', 'done')], iterationId);
     writeGateD(rootArtifact, [], iterationId);
+    writeFinalVerification(root, rootArtifact, iterationId);
 
     const human = runP2a(['next', '--target', root]);
     assert.equal(human.status, 0, `${human.stdout}${human.stderr}`);
@@ -1017,23 +1073,7 @@ test('the explicit close option archives a completed iteration without an option
     writeGateB(rootArtifact, 'approved', iterationId);
     writeGateC(rootArtifact, [task('task-001', 'done')], iterationId);
     writeGateD(rootArtifact, [], iterationId);
-    writeRuns(rootArtifact, [{
-      runId: 'run-no-review-close',
-      iterationId,
-      status: 'finished',
-      verification: [{
-        type: 'test',
-        command: 'node --test',
-        status: 'passed',
-        exitCode: 0,
-        durationMs: 1,
-        startedAt: '2026-07-31T00:00:30.000Z',
-        finishedAt: '2026-07-31T00:00:31.000Z',
-        stdoutTail: null,
-        stderrTail: null,
-        source: 'command',
-      }],
-    }]);
+    writeFinalVerification(root, rootArtifact, iterationId);
 
     const { close } = assertReviewOrCloseDecision(next(root), artifactPath(root));
     const result = runP2a(close.action.argv);
@@ -1048,7 +1088,7 @@ test('the explicit close option archives a completed iteration without an option
   }
 });
 
-test('audited closed history uses bounded routing without deep provenance or run hydration', () => {
+test('audited closed history including final verification uses bounded routing without run hydration', () => {
   const root = project();
   try {
     const rootArtifact = artifact(root);
@@ -1061,6 +1101,7 @@ test('audited closed history uses bounded routing without deep provenance or run
       runId: `run-history-${String(index + 1).padStart(3, '0')}`,
       iterationId,
       status: 'finished',
+      ...(index === 41 ? { runKind: 'final_verification' } : {}),
     })));
     addArchivedArtifactAudits(rootArtifact);
 
@@ -2468,7 +2509,7 @@ test('info keeps its JSON contract and points human output to next', () => {
 });
 
 test('next keeps the ordered decision rules required by the contract', () => {
-  assert.equal(NEXT_DECISION_RULES.length, 29);
+  assert.equal(NEXT_DECISION_RULES.length, 30);
   for (const rule of NEXT_DECISION_RULES) {
     assert.equal(typeof rule.when, 'function');
     assert.equal(typeof rule.reason, 'function');

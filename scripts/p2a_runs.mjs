@@ -106,11 +106,12 @@ import {
   detectProjectCommands,
   mergeDetectedProjectConfig,
   mergeExplicitVerificationCommands,
+  relatedVerificationCommands,
   releaseRunIdReservation,
   runIdReservationIsActive,
   writeProjectConfig,
 } from './p2a_project_config.mjs';
-import { commandLine as sharedCommandLine, printRunCommandFooter } from './p2a_run_commands.mjs';
+import { commandLine as sharedCommandLine, printRunCommandFooter, shellQuote } from './p2a_run_commands.mjs';
 import {
   artifactRelativePath,
   assertDirectory,
@@ -135,7 +136,7 @@ const ROOT = P2A_PATHS.projectRoot;
 const PROJECT_RUNS_DIR = path.join(ROOT, DEFAULT_RUNS_DIR);
 const COMMANDS = new Set(['start', 'record', 'verify', 'checkpoint', 'finish', 'list', 'show', 'revision', 'validate', 'migrate-layout', 'migrate-schema']);
 const RUN_STATUSES = new Set(['started', 'finished', 'failed', 'blocked']);
-const RUN_KINDS = new Set(['final_visual_review', 'final_acceptance_review']);
+const RUN_KINDS = new Set(['final_verification', 'final_visual_review', 'final_acceptance_review']);
 const VISUAL_FEEDBACK_VERDICTS = new Set(['note', 'concern']);
 const USAGE_SOURCES = new Set(['provider', 'manual']);
 const FAILURE_SOURCES = new Set(['owner', 'monitor', 'implementer']);
@@ -156,7 +157,7 @@ function usage() {
     '  p2a runs start --artifacts <iterative-project-dir> --task <task-id> --agent-tool <tool> [options]',
     '  p2a runs start --graph <task-graph.json> --task <task-id> --agent-tool <tool> [--runs <dir>] [options]',
     '  p2a runs record --run-id <run-id> (--artifacts <dir>|--runs <dir>|--graph <path>) [--changed-file <path> ...] [--verification <type:status:command>] [--note <text>] [--visual-feedback note|concern] [usage/interruption options] [structured detail options]',
-    '  p2a runs verify --run-id <run-id> (--artifacts <dir>|--runs <dir>|--graph <path>) [--test] [--lint] [--typecheck] [--test-command <cmd>] [--lint-command <cmd>] [--typecheck-command <cmd>] [--verify-command <type:cmd>]',
+    '  p2a runs verify --run-id <run-id> (--artifacts <dir>|--runs <dir>|--graph <path>) [--related --changed-file <path> ... --collect-git] [--test] [--lint] [--typecheck] [--test-command <cmd>] [--lint-command <cmd>] [--typecheck-command <cmd>] [--verify-command <type:cmd>]',
     '  p2a runs checkpoint --run-id <run-id> --milestone <milestone-id> (--artifacts <dir>|--runs <dir>|--graph <path>)',
     '  p2a runs finish --run-id <run-id> (--artifacts <dir>|--runs <dir>|--graph <path>) [--status finished|failed|blocked] [--failure-class <class>] [--retryable yes|no|after_fix] [--needs-user-decision true|false] [--failure-source owner|monitor|implementer] [--changed-file <path> ...] [--verification <type:status:command>] [--collect-git] [--note <text>] [usage/interruption options] [structured detail options]',
     '  p2a runs list (--artifacts <dir>|--runs <dir>|--graph <path>) [--json]',
@@ -176,7 +177,7 @@ function usage() {
     '  --milestone <id>         Planned execution checkpoint to verify in declared order.',
     '  --run-reservation-token <token>  Reservation owner token emitted by a failed sequential start retry.',
     '  --agent-tool <tool>     Agent/CLI tool that performed the run, such as codex, claude, gemini.',
-    '  --run-kind <kind>       Structured run purpose: final_visual_review or final_acceptance_review.',
+    '  --run-kind <kind>       Structured run purpose: final_verification, final_visual_review, or final_acceptance_review.',
     '  --workspace <dir>       Workspace path for verification commands. Defaults to cwd or --worktree.',
     '  --workspace-ref <ref>   Human-readable workspace reference. Defaults to --workspace display path.',
     '  --isolation <mode>      none, branch, or worktree. Default: none.',
@@ -218,6 +219,7 @@ function usage() {
     '                          Manually record supplemental verification. Manual passed records do not satisfy finished/done guards.',
     '  --test, --lint, --typecheck',
     '                          Run configured command from .plan2agent/project.config.json.',
+    '  --related              Run project-owned relatedVerification argv commands with changed files appended.',
     '  --test-command <cmd>, --lint-command <cmd>, --typecheck-command <cmd>',
     '                          Run an explicit verification command.',
     '  --verify-command <type:cmd>',
@@ -282,6 +284,7 @@ function parseArgs(argv) {
     needsUserDecision: null,
     failureSource: null,
     collectGit: false,
+    related: false,
     saveConfig: false,
     requireMonitor: false,
     json: false,
@@ -305,7 +308,7 @@ function parseArgs(argv) {
     else if (arg === '--agent-tool') args.agentTool = requiredValue(argv, ++index, '--agent-tool');
     else if (arg === '--run-kind') {
       args.runKind = requiredValue(argv, ++index, '--run-kind');
-      if (!RUN_KINDS.has(args.runKind)) throw new Error('--run-kind must be final_visual_review or final_acceptance_review');
+      if (!RUN_KINDS.has(args.runKind)) throw new Error('--run-kind must be final_verification, final_visual_review, or final_acceptance_review');
     }
     else if (arg === '--workspace') args.workspace = requiredValue(argv, ++index, '--workspace');
     else if (arg === '--workspace-ref') args.workspaceRef = requiredValue(argv, ++index, '--workspace-ref');
@@ -319,6 +322,7 @@ function parseArgs(argv) {
     else if (arg === '--require-monitor') args.requireMonitor = true;
     else if (arg === '--changed-file') args.changedFiles.push(requiredValue(argv, ++index, '--changed-file'));
     else if (arg === '--collect-git') args.collectGit = true;
+    else if (arg === '--related') args.related = true;
     else if (arg === '--note') args.notes.push(requiredValue(argv, ++index, '--note', { allowLeadingDash: true }));
     else if (arg === '--usage-model') args.usageModel = requiredNonBlankText(argv, ++index, '--usage-model');
     else if (arg === '--usage-input-tokens') args.usageInputTokens = parseNonNegativeInteger(requiredValue(argv, ++index, '--usage-input-tokens'), '--usage-input-tokens');
@@ -412,6 +416,12 @@ function parseArgs(argv) {
   }
   if (args.command === 'checkpoint' && (args.verifyRequests.length || args.manualVerification.length || args.saveConfig)) {
     throw new Error('checkpoint runs the milestone verification commands declared in Gate C');
+  }
+  if (args.related && args.command !== 'verify') {
+    throw new Error('--related is only supported with verify');
+  }
+  if (args.related && args.verifyRequests.length) {
+    throw new Error('--related uses project config relatedVerification and cannot be combined with --test, --lint, --typecheck, or explicit verification commands');
   }
   if (args.runKind && args.command !== 'start') {
     throw new Error('--run-kind is only supported with start');
@@ -1610,6 +1620,75 @@ function configuredCommand(config, type) {
   return null;
 }
 
+function commandDisplayFromArgv(argv) {
+  return argv.map((value) => shellQuote(value)).join(' ');
+}
+
+function normalizedWorkspaceRelativePath(workspacePath, candidate) {
+  if (typeof candidate !== 'string' || !candidate.trim()) {
+    throw new Error('related verification changed files must be non-blank workspace-relative paths');
+  }
+  if (candidate.includes('\0')) {
+    throw new Error('related verification changed files must not contain NUL');
+  }
+  if (path.isAbsolute(candidate) || path.win32.isAbsolute(candidate)) {
+    throw new Error(`related verification changed file must be workspace-relative: ${JSON.stringify(candidate)}`);
+  }
+  const workspaceRoot = path.resolve(workspacePath);
+  const resolved = path.resolve(workspaceRoot, candidate);
+  const relative = path.relative(workspaceRoot, resolved);
+  if (
+    !relative
+    || relative === '..'
+    || relative.startsWith(`..${path.sep}`)
+    || path.isAbsolute(relative)
+  ) {
+    throw new Error(`related verification changed file escapes the workspace: ${JSON.stringify(candidate)}`);
+  }
+  return normalizePath(relative);
+}
+
+export function normalizeRelatedChangedFiles(workspacePath, changedFiles) {
+  const normalized = uniquePathStrings(
+    changedFiles.map((candidate) => normalizedWorkspaceRelativePath(workspacePath, candidate)),
+  );
+  if (!normalized.length) {
+    throw new Error(
+      'related verification requires at least one changed file from --changed-file, the existing run, or --collect-git; run full verification instead',
+    );
+  }
+  return normalized;
+}
+
+function uniquePathStrings(values) {
+  const seen = new Set();
+  const output = [];
+  for (const value of values) {
+    if (typeof value !== 'string' || !value.trim() || seen.has(value)) continue;
+    seen.add(value);
+    output.push(value);
+  }
+  return output;
+}
+
+function verificationWorkspaceRevision(runsDir, run, source, workspacePath) {
+  return workspaceRevisionSha256(
+    workspacePath,
+    workspaceRevisionExcludedPathsForRun(runsDir, run, {
+      artifactRoot: source?.artifactRoot,
+      graphPath: source?.graphPath,
+      workspacePath,
+    }),
+  );
+}
+
+function attachVerificationRevision(results, revision) {
+  return results.map((result) => ({
+    ...result,
+    workspaceRevisionSha256: revision,
+  }));
+}
+
 function hasShellMetacharactersAfterFirstToken(command, tokenEnd) {
   const rest = command.slice(tokenEnd);
   return /[&|;<>()`$*?{}\[\]]/.test(rest) || /\n|\r/.test(rest);
@@ -1778,7 +1857,29 @@ export function classifyVerificationSpawnResult(result, options = {}) {
   return { status: null, reason: null, hint: null };
 }
 
-function verificationSpecs(args, config) {
+export function verificationSpecs(args, config, changedFiles = []) {
+  if (args.related) {
+    const configured = relatedVerificationCommands(config);
+    if (!configured.length) {
+      throw new Error(
+        'related verification is not configured; add structured relatedVerification argv commands to .plan2agent/project.config.json or run full verification',
+      );
+    }
+    return configured.map((request) => {
+      const argv = [
+        ...request.argv,
+        ...(request.appendChangedFiles ? changedFiles : []),
+      ];
+      return {
+        type: request.type,
+        argv,
+        command: commandDisplayFromArgv(argv),
+        source: 'config',
+        scope: 'related',
+        selectedFileCount: changedFiles.length,
+      };
+    });
+  }
   const requests = [...args.verifyRequests];
   if (!requests.length) {
     for (const type of ['test', 'lint', 'typecheck']) {
@@ -1802,9 +1903,10 @@ function verificationSpecs(args, config) {
         stdoutTail: null,
         stderrTail: `${request.type} command is not configured`,
         source: 'config',
+        scope: 'full',
       };
     }
-    return { ...request, command };
+    return { ...request, command, scope: 'full' };
   });
 }
 
@@ -1850,16 +1952,22 @@ function prepareProjectConfigForVerification(args, runsDir, run, workspacePath) 
 
 export function runVerificationCommand(spec, workspacePath, timeoutMs, options = {}) {
   if (spec.status === 'skipped') return spec;
-  const normalized = normalizeProjectLocalLauncherCommand(spec.command, workspacePath);
+  const structuredArgv = Array.isArray(spec.argv) ? [...spec.argv] : null;
+  const normalized = structuredArgv
+    ? { command: spec.command, normalized: false }
+    : normalizeProjectLocalLauncherCommand(spec.command, workspacePath);
   const command = normalized.command;
   const startedAt = new Date();
   const spawn = options.spawnSync ?? spawnSync;
-  const result = spawn(command, {
+  const spawnOptions = {
     cwd: workspacePath,
-    shell: true,
+    shell: false,
     maxBuffer: 1024 * 1024 * 10,
     timeout: timeoutMs,
-  });
+  };
+  const result = structuredArgv
+    ? spawn(structuredArgv[0], structuredArgv.slice(1), spawnOptions)
+    : spawn(command, { ...spawnOptions, shell: true });
   const finishedAt = new Date();
   result.stdout = decodeVerificationOutput(result.stdout);
   result.stderr = decodeVerificationOutput(result.stderr);
@@ -1880,6 +1988,9 @@ export function runVerificationCommand(spec, workspacePath, timeoutMs, options =
     stdoutTail: tail(result.stdout),
     stderrTail,
     source: spec.source,
+    scope: spec.scope ?? 'full',
+    ...(structuredArgv ? { argv: structuredArgv } : {}),
+    ...(spec.selectedFileCount !== undefined ? { selectedFileCount: spec.selectedFileCount } : {}),
     ...(unavailable.status ? { failureReason: unavailable.reason, failureHint: unavailable.hint } : {}),
     ...(normalized.normalized ? { originalCommand: spec.command, normalizedCommand: command } : {}),
   };
@@ -1945,6 +2056,14 @@ function executedPassedVerificationItems(run) {
   return run.verification.filter((item) => item.status === 'passed'
     && (item.source === 'config' || item.source === 'command')
     && item.exitCode === 0);
+}
+
+function executedFullVerificationItems(run, revision = null) {
+  return executedPassedVerificationItems(run).filter((item) => (
+    item.type !== 'custom'
+    && item.scope === 'full'
+    && (!revision || item.workspaceRevisionSha256 === revision)
+  ));
 }
 
 function structuredDetailHasValue(detail, fields) {
@@ -2020,6 +2139,32 @@ function startRun(args) {
   const workspacePath = resolveWorkspacePath(args);
   const isolationBasePath = resolveIsolationBasePath(args, workspacePath);
   const createsWorktree = args.createIsolation && args.isolation === 'worktree';
+  if (args.runKind === 'final_verification') {
+    const unfinishedTasks = source.graph.tasks.filter((candidate) => candidate.status !== 'done');
+    if (unfinishedTasks.length) {
+      throw new Error(
+        `final verification requires every iteration task to be done; unfinished task(s): ${unfinishedTasks.map((candidate) => `${candidate.id}:${candidate.status}`).join(', ')}`,
+      );
+    }
+    if (source.sourceLayout !== 'iteration') {
+      throw new Error('final verification is only supported for an active iteration');
+    }
+    if (task.status !== 'done') {
+      throw new Error(`final verification run requires ${task.id} to be done; current status is ${task.status}`);
+    }
+    if (args.changedFiles.length) {
+      throw new Error('final verification run does not allow --changed-file');
+    }
+    if (args.isolation !== 'none' || args.createIsolation || args.branch || args.worktree) {
+      throw new Error('final verification run requires --isolation none without branch/worktree creation');
+    }
+    const canonicalWorkspacePath = canonicalWorkspacePathForArtifactRoot(source.artifactRoot);
+    if (realpathSync(workspacePath) !== realpathSync(canonicalWorkspacePath)) {
+      throw new Error(
+        `final verification workspace must be the canonical integration workspace ${canonicalWorkspacePath}`,
+      );
+    }
+  }
   if (args.runKind === 'final_visual_review') {
     const unfinishedTasks = source.graph.tasks.filter((candidate) => candidate.status !== 'done');
     if (unfinishedTasks.length) {
@@ -2154,7 +2299,7 @@ function startRun(args) {
     startedAt: now.toISOString(),
     updatedAt: now.toISOString(),
     finishedAt: null,
-    changedFiles: uniqueStrings(args.changedFiles),
+    changedFiles: uniquePathStrings(args.changedFiles),
     verification: args.manualVerification,
     notes: uniqueStrings(args.notes),
     usage: [],
@@ -2220,7 +2365,7 @@ function recordRun(args) {
   const runsDir = source?.runsDir ?? resolveRunsDir(args);
   const { run, expectedRun } = readRunForUpdate(runsDir, args.runId);
   if (source) assertRunMatchesSourceContext(run, source);
-  run.changedFiles = uniqueStrings([...run.changedFiles, ...args.changedFiles]);
+  run.changedFiles = uniquePathStrings([...run.changedFiles, ...args.changedFiles]);
   run.verification.push(...args.manualVerification);
   run.notes = uniqueStrings([...run.notes, ...args.notes]);
   appendRunTelemetry(run, args);
@@ -2259,11 +2404,23 @@ function verifyRun(args) {
   }
   const workspacePath = args.workspace ? path.resolve(args.workspace) : path.resolve(run.workspacePath);
   assertDirectory(workspacePath, 'run workspace');
+  let relatedChangedFiles = [];
+  if (args.related) {
+    const requestedChangedFiles = [
+      ...run.changedFiles,
+      ...args.changedFiles,
+      ...(args.collectGit ? collectGitChangedFiles(workspacePath) : []),
+    ];
+    relatedChangedFiles = normalizeRelatedChangedFiles(workspacePath, requestedChangedFiles);
+    run.changedFiles = relatedChangedFiles;
+  }
   const configUpdate = prepareProjectConfigForVerification(args, runsDir, run, workspacePath);
   const config = configUpdate.config;
-  const specs = verificationSpecs(args, config);
+  const specs = verificationSpecs(args, config, relatedChangedFiles);
   const timeoutMs = verificationTimeoutMs(config);
-  const results = specs.map((spec) => runVerificationCommand(spec, workspacePath, timeoutMs));
+  const revision = verificationWorkspaceRevision(runsDir, run, source, workspacePath);
+  const executedResults = specs.map((spec) => runVerificationCommand(spec, workspacePath, timeoutMs));
+  const results = attachVerificationRevision(executedResults, revision);
   run.verification.push(...results);
   run.updatedAt = new Date().toISOString();
   writeRun(runsDir, run, { expectedRun });
@@ -2272,7 +2429,7 @@ function verifyRun(args) {
     console.log(`- projectConfig: saved ${saved.source} ${saved.keys.join(',')} to ${displayPath(saved.path)}`);
   }
   for (const result of results) {
-    console.log(`- ${result.type}: ${result.status} (${result.command})`);
+    console.log(`- ${result.type}:${result.scope}: ${result.status} (${result.command})`);
     if (result.normalizedCommand) console.log(`  normalized: ${result.originalCommand} -> ${result.normalizedCommand}`);
     if (result.status === 'skipped' && result.source === 'config') {
       console.log(`  hint: pass --${result.type}-command <cmd> --save-config to store a project-specific command`);
@@ -2320,10 +2477,12 @@ function checkpointRun(args) {
   assertDirectory(workspacePath, 'run workspace');
   const config = loadProjectConfigWithPath(runsDir, run, workspacePath).config;
   const timeoutMs = verificationTimeoutMs(config);
-  const results = milestone.verification.map((command) => ({
-    ...runVerificationCommand({ type: 'custom', command, source: 'command' }, workspacePath, timeoutMs),
+  const revision = verificationWorkspaceRevision(runsDir, run, source, workspacePath);
+  const executedResults = milestone.verification.map((command) => ({
+    ...runVerificationCommand({ type: 'custom', command, source: 'command', scope: 'full' }, workspacePath, timeoutMs),
     milestoneId: milestone.id,
   }));
+  const results = attachVerificationRevision(executedResults, revision);
   run.verification.push(...results);
   const passed = results.every((result) => result.status === 'passed');
   if (passed) {
@@ -2367,7 +2526,7 @@ function finishRun(args) {
   const workspacePath = args.workspace ? path.resolve(args.workspace) : path.resolve(run.workspacePath);
   const changedFiles = [...args.changedFiles];
   if (args.collectGit) changedFiles.push(...collectGitChangedFiles(workspacePath));
-  run.changedFiles = uniqueStrings([...run.changedFiles, ...changedFiles]);
+  run.changedFiles = uniquePathStrings([...run.changedFiles, ...changedFiles]);
   run.verification.push(...args.manualVerification);
   run.notes = uniqueStrings([...run.notes, ...args.notes]);
   appendRunTelemetry(run, args);
@@ -2402,7 +2561,11 @@ function finishRun(args) {
   const visualReviewCutoff = new Date().toISOString();
   if (finalStatus === 'finished') {
     let workspaceRevision = null;
-    if (run.visualReview?.required || run.acceptanceReview?.required) {
+    if (
+      run.runKind === 'final_verification'
+      || run.visualReview?.required
+      || run.acceptanceReview?.required
+    ) {
       if (realpathSync(workspacePath) !== realpathSync(path.resolve(run.workspacePath))) {
         throw new Error(
           `run ${run.runId} final review evidence must be finalized in its recorded workspacePath`,
@@ -2419,6 +2582,14 @@ function finishRun(args) {
             workspacePath,
           },
         ),
+      );
+    }
+    if (
+      run.runKind === 'final_verification'
+      && executedFullVerificationItems(run, workspaceRevision).length === 0
+    ) {
+      throw new Error(
+        `final verification run ${run.runId} requires at least one passed full test/lint/typecheck command bound to the current workspace revision`,
       );
     }
     const visualReviewEvidence = readRequiredVisualReviewEvidence(
@@ -2476,11 +2647,14 @@ function finishRun(args) {
 
 function verificationSummary(run) {
   if (!run.verification.length) return '-';
-  const counts = { passed: 0, failed: 0, skipped: 0, not_run: 0, unavailable: 0 };
-  for (const item of run.verification) counts[item.status] = (counts[item.status] ?? 0) + 1;
-  return Object.entries(counts)
+  const counts = new Map();
+  for (const item of run.verification) {
+    const key = `${item.scope ?? 'legacy'}:${item.status}`;
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  return [...counts.entries()]
     .filter(([, count]) => count > 0)
-    .map(([status, count]) => `${status}:${count}`)
+    .map(([key, count]) => `${key}:${count}`)
     .join(',');
 }
 

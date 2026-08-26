@@ -34,6 +34,7 @@ export const PROJECT_RUNTIME_SCRIPT_FILES = [
   'p2a_context_packet.mjs',
   'p2a_context_routes.mjs',
   'p2a_monitor_gate.mjs',
+  'p2a_final_verification_gate.mjs',
   'p2a_visual_review_gate.mjs',
   'p2a_acceptance_review_gate.mjs',
   'p2a_visual_media.mjs',

@@ -172,6 +172,8 @@ p2a runs checkpoint --artifacts .plan2agent/artifacts/<project> \
 
    비UI iteration은 기본 `reviewPasses.acceptance: opt_in`에서 독립 acceptance run을 자동으로 만들지 않는다. 사용자가 요청해 `p2a execute accept --artifacts <root> --agent-tool <reviewer>`를 시작했거나 정책이 `on`이면 baseline에 이미 있던 동작을 제외한 현재 반복의 Gate B `product.core_flows`와 `product.success_criteria`를 계약으로 고정한 `final_acceptance_review` run을 canonical workspace, isolation 없음, 변경 파일 없음으로 연다. Owner가 각 동작을 `p2a runs verify --verify-command 'custom:<command>'`로 실제 실행하고, read-only `p2a-acceptance-reviewer`가 run verification과 일치하는 `command`·`source: command|config`·정수 `exitCode`·`stdoutTail`을 `.acceptance-review.json`에 기록한다. exit 0이어도 출력이 비어 있거나 의미 없는 결과면 `block`이다. 일단 시작한 review는 모든 기준이 실제 동작으로 확인된 `confirm_behavior`로 끝나야 하며 exact sidecar hash와 canonical workspace revision을 봉인한다. 이후 workspace 변경은 새 acceptance review를 요구한다.
 
+   모든 task가 done이지만 visual/acceptance final run이 필요하지 않거나 그 run에 full 검증이 없으면 `p2a next`는 `p2a execute verify-final --artifacts <root>`을 안내한다. 이 canonical no-change run에서 configured full test/lint/typecheck를 한 번 실행하고 finish한다. `related` 검증은 구현 중 빠른 피드백에만 쓰며 close-ready를 충족하지 않는다. Full evidence는 run과 각 verification item에 기록된 같은 `workspaceRevisionSha256`에서만 재사용되고 이후 source 변경 시 stale 처리된다.
+
 6. 검증과 finish:
 
 ```bash
@@ -267,7 +269,7 @@ p2a runs record --run-id <id> --artifacts <root> \
   --gate-return "valid:Approved scope lacked an external permission"
 ```
 
-`p2a eval digest`는 model profile·source별 token 합계, 구현 결정 개입, 사용자 수정, Gate 복귀 precision, 무개입 성공 run 비율, task 수, first-pass acceptance, rework, integration defect, visual drift, scope/rule violation, Gate B→close-ready 시간과 verification evidence completeness를 집계한다. `runKind`가 있는 최종 visual/acceptance review run은 구현 자율성·rule-review 분모와 개입 수에서 제외한다. Usage는 review 비용도 비용이므로 digest 범위의 모든 run을 합산한다. 새 protocol marker가 없는 과거 구현 run은 `interruptions` 배열이 나중에 추가돼도 자율성 지표에서 제외한다. Digest는 autonomy telemetry, usage sample, strict rule review의 coverage도 함께 내보내므로 token 또는 violation의 낮은 합계를 coverage 저하와 혼동하면 안 된다. 동일한 annotation protocol을 적용한 A/B run만 비교한다.
+`p2a eval digest`는 model profile·source별 token 합계, 구현 결정 개입, 사용자 수정, Gate 복귀 precision, 무개입 성공 run 비율, task 수, first-pass acceptance, rework, integration defect, visual drift, scope/rule violation, Gate B→close-ready 시간과 verification evidence completeness를 집계한다. `runKind`가 있는 최종 verification/visual/acceptance run은 구현 자율성·rule-review 분모와 개입 수에서 제외한다. Usage는 review 비용도 비용이므로 digest 범위의 모든 run을 합산한다. 새 protocol marker가 없는 과거 구현 run은 `interruptions` 배열이 나중에 추가돼도 자율성 지표에서 제외한다. Digest는 autonomy telemetry, usage sample, strict rule review의 coverage도 함께 내보내므로 token 또는 violation의 낮은 합계를 coverage 저하와 혼동하면 안 된다. 동일한 annotation protocol을 적용한 A/B run만 비교한다.
 
 Phase 0의 일회성 task-decomposition A/B 평가는 고정 seed·prompt·verification·UI capture matrix로 수행했고, 그 결과와 한계는 [개선 제안서 §13](gate-driven-adaptive-execution-proposal.md#13-평가-기록과-운영-계측)에 보존한다. 평가는 production `p2a execute` lifecycle 전체를 재현하지 않았으며, 의사결정 완료 뒤 전용 runner·fixture·schema·회귀 테스트를 저장소에서 제거했다. 이후 운영 비교는 실제 run의 `p2a eval digest` telemetry를 사용하고 과거 A/B를 기본 테스트나 phase별 절차로 반복하지 않는다. 당시 사용한 baseline seal CLI와 schema도 제품 runtime과 대상 프로젝트 배포 표면에 남기지 않는다.
 
