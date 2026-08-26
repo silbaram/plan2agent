@@ -19,6 +19,7 @@ export { DEFAULT_RUNS_DIR };
 
 const RUN_ID_PATTERN = /^run-[A-Za-z0-9._-]+$/;
 const RUN_PARTITION_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+const SHA256_PATTERN = /^[a-f0-9]{64}$/;
 const UNSCOPED_RUN_PARTITION = 'unscoped';
 export const RUN_SIDECAR_SUFFIXES = [
   '.orchestration.json',
@@ -339,6 +340,41 @@ export function canonicalRunRef(runOrEntry) {
   return `${runPartitionId(runOrEntry?.iterationId)}/${runOrEntry.runId}.json`;
 }
 
+export function executionEnvelopeStoreRef(runOrEntry, sha256) {
+  if (!SHA256_PATTERN.test(sha256 ?? '')) {
+    throw new Error(`execution envelope sha256 must be 64 lowercase hexadecimal characters, got ${JSON.stringify(sha256)}`);
+  }
+  return `${runPartitionId(runOrEntry?.iterationId)}/envelopes/${sha256}.json`;
+}
+
+export function safeRunStoreFilePath(runsDir, fileRef, label = 'run-store file') {
+  const resolvedRunsDir = path.resolve(runsDir);
+  const filePath = path.resolve(resolvedRunsDir, fileRef);
+  const relative = path.relative(resolvedRunsDir, filePath);
+  if (!relative || relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+    throw new Error(`${label} escapes the runs directory: ${JSON.stringify(fileRef)}`);
+  }
+  const segments = relative.split(path.sep);
+  let current = resolvedRunsDir;
+  for (const [index, segment] of segments.entries()) {
+    current = path.join(current, segment);
+    let stat;
+    try {
+      stat = lstatSync(current);
+    } catch (error) {
+      if (error?.code === 'ENOENT') break;
+      throw error;
+    }
+    if (stat.isSymbolicLink()) {
+      throw new Error(`${label} path must not traverse a symbolic link: ${JSON.stringify(fileRef)}`);
+    }
+    if (index < segments.length - 1 && !stat.isDirectory()) {
+      throw new Error(`${label} parent must be a directory: ${JSON.stringify(fileRef)}`);
+    }
+  }
+  return filePath;
+}
+
 export function artifactRunRef(runRef) {
   return `runs/${normalizeIndexedRunRef(runRef)}`;
 }
@@ -449,6 +485,72 @@ export function runSidecarRef(runRef, suffix) {
   const normalized = normalizeIndexedRunRef(runRef);
   if (!normalized.endsWith('.json')) throw new Error(`runRef must end with .json: ${JSON.stringify(runRef)}`);
   return `${normalized.slice(0, -'.json'.length)}${suffix}`;
+}
+
+function isRunEvidenceFile(filePath) {
+  if (isRunRecordFile(filePath)) return true;
+  const filename = path.basename(filePath);
+  for (const suffix of RUN_SIDECAR_SUFFIXES) {
+    if (!filename.endsWith(suffix)) continue;
+    const runId = filename.slice(0, -suffix.length);
+    try {
+      assertSafeRunId(runId);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+  return false;
+}
+
+/** Return run records and sidecars that are not referenced by run-index.json. */
+export function orphanRunEvidenceRefs(runsDir, index) {
+  const resolvedRunsDir = path.resolve(runsDir);
+  if (!existsSync(resolvedRunsDir) || !lstatSync(resolvedRunsDir).isDirectory()) return [];
+  const expected = new Set();
+  for (const entry of Array.isArray(index?.runs) ? index.runs : []) {
+    let runRef;
+    try {
+      runRef = indexedRunRef(resolvedRunsDir, entry.runId, index);
+    } catch {
+      continue;
+    }
+    expected.add(runRef);
+    for (const suffix of RUN_SIDECAR_SUFFIXES) {
+      expected.add(runSidecarRef(runRef, suffix));
+    }
+    try {
+      const runData = JSON.parse(readFileSync(path.join(resolvedRunsDir, runRef), 'utf8'));
+      if (runData.executionEnvelopeRef?.sha256) {
+        expected.add(executionEnvelopeStoreRef(runData, runData.executionEnvelopeRef.sha256));
+      }
+    } catch {
+      // Missing or malformed indexed runs are reported by run-store validation.
+    }
+  }
+  const refs = [];
+  const inspectDirectory = (dirPath, prefix = '') => {
+    for (const entry of readdirSync(dirPath, { withFileTypes: true })) {
+      if (!entry.isFile()) continue;
+      const filePath = path.join(dirPath, entry.name);
+      const ref = prefix ? `${prefix}/${entry.name}` : entry.name;
+      if (isRunEvidenceFile(filePath) && !expected.has(ref)) refs.push(ref);
+    }
+  };
+  inspectDirectory(resolvedRunsDir);
+  for (const entry of readdirSync(resolvedRunsDir, { withFileTypes: true })) {
+    if (!entry.isDirectory() || entry.name.startsWith('.') || !RUN_PARTITION_PATTERN.test(entry.name)) continue;
+    const partitionPath = path.join(resolvedRunsDir, entry.name);
+    inspectDirectory(partitionPath, entry.name);
+    const envelopesPath = path.join(partitionPath, 'envelopes');
+    if (!existsSync(envelopesPath) || !lstatSync(envelopesPath).isDirectory()) continue;
+    for (const envelope of readdirSync(envelopesPath, { withFileTypes: true })) {
+      if (!envelope.isFile() || !SHA256_PATTERN.test(envelope.name.slice(0, -'.json'.length)) || !envelope.name.endsWith('.json')) continue;
+      const ref = `${entry.name}/envelopes/${envelope.name}`;
+      if (!expected.has(ref)) refs.push(ref);
+    }
+  }
+  return refs.sort();
 }
 
 export function runSidecarPath(runsDir, runId, suffix, index = null) {

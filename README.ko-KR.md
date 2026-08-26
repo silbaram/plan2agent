@@ -114,8 +114,15 @@ system을 대체하지 않습니다.
 유지됩니다. 모든 artifact는 패키지에 포함된 schema로 검증됩니다. 생성된 Markdown은 사람이
 읽기 위한 view입니다. run evidence는 기본적으로 현재 개발 상태를 위한 임시 자료입니다.
 현재 개발 묶음은 검토·인계할 수 있게 유지하고, 다음 iteration을 열면 종료된 iteration의
-run을 정리합니다. 장기 이력은 승인 spec, close metadata, Git에 남습니다. 로컬 run evidence를
-장기 보존해야 할 때만 `runTracking.persistence`를 `persistent`로 설정합니다.
+run을 정리합니다. proposal로 아직 mining하지 않은 실패·차단 run은 그 전까지 보존합니다.
+`p2a runs gc --dry-run`으로 index에 있는 run과 orphan 증거를 먼저 확인한 뒤 정리할 수 있고,
+`persistent` 프로젝트는 실제 정리에 `--force`가 필요합니다. Git 저장소의 run은 시작·종료
+시점 HEAD, branch, dirty 상태도 기록합니다. 장기 이력은 승인 spec, close metadata, Git에
+남습니다. 로컬 run evidence를 장기 보존해야 할 때만 `runTracking.persistence`를
+`persistent`로 설정합니다.
+새 run은 Gate B에서 파생한 execution envelope를 content hash별로 한 번만 저장하고 각 run은
+그 참조와 검증용 SHA-256만 가집니다. 기존 인라인 run도 계속 읽을 수 있으며
+`p2a runs migrate-schema`로 참조형으로 전환할 수 있습니다.
 
 ## 핵심 workflow
 

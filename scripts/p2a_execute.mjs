@@ -45,6 +45,7 @@ import {
   taskGraphRefMatchesGraph,
 } from './p2a_run_paths.mjs';
 import { pruneIndexedRunEvidence } from './p2a_runs.mjs';
+import { minedProposalRunIds } from './p2a_proposal_mining.mjs';
 import {
   assertNoUninitializedScaffoldArtifactRoots,
   assertNotUninitializedScaffoldGraph,
@@ -469,15 +470,38 @@ function pruneSupersededRunHistory(source, run, { quiet = false } = {}) {
   try {
     const config = loadProjectConfig(source, run.workspacePath ?? process.cwd());
     if (resolveRunPersistence(config) !== 'active_only') return null;
+    const keepRunIds = [run.runId];
+    const proposals = config?.proposals;
+    let retainedUnminedRunIds = [];
+    if (proposals?.enabled === true) {
+      const minedRunIds = minedProposalRunIds(run.workspacePath ?? process.cwd(), proposals);
+      const runIndex = loadJson(path.join(source.runsDir, 'run-index.json'));
+      validateRunIndexData(runIndex);
+      retainedUnminedRunIds = runIndex.runs
+        .filter((candidate) => (
+          candidate.iterationId === run.iterationId
+          && candidate.taskId === run.taskId
+          && (candidate.runKind ?? null) === (run.runKind ?? null)
+          && ['failed', 'blocked'].includes(candidate.status)
+          && !minedRunIds.has(candidate.runId)
+        ))
+        .map((candidate) => candidate.runId);
+      keepRunIds.push(...retainedUnminedRunIds);
+    }
     const cleanup = pruneIndexedRunEvidence(source.runsDir, {
       iterationIds: [run.iterationId],
       taskIds: [run.taskId],
       runKinds: [run.runKind ?? null],
-      keepRunIds: [run.runId],
+      keepRunIds,
       requireNoStarted: false,
       summaryReason: 'superseded',
     });
     warnRunCleanupFailures(cleanup);
+    if (!quiet && retainedUnminedRunIds.length) {
+      console.log(
+        `Transient run cleanup: retained ${retainedUnminedRunIds.length} unmined failed/blocked run(s) for proposal mining`,
+      );
+    }
     if (!quiet && cleanup.prunedRunIds.length) {
       console.log(`Transient run cleanup: removed ${cleanup.prunedRunIds.length} superseded run(s)`);
     }
@@ -1124,7 +1148,9 @@ function assertRunMatchesSourceContext(run, source) {
 
 function assertRunExecutionContractCurrent(run, source, operation) {
   try {
-    validateRunTaskContract(run, path.dirname(path.resolve(source.runsDir)));
+    validateRunTaskContract(run, path.dirname(path.resolve(source.runsDir)), {
+      runsDir: source.runsDir,
+    });
   } catch (error) {
     throw new Error(
       `${operation} blocked because run ${run.runId} no longer matches its recorded execution contract: ${error.message}`,

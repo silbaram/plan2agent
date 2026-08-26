@@ -234,6 +234,19 @@
       "type": "string",
       "pattern": "^[a-f0-9]{64}$"
     },
+    "executionEnvelopeRef": {
+      "type": "object",
+      "required": [
+        "sha256"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        }
+      }
+    },
     "mode": {
       "type": "string",
       "enum": [
@@ -304,6 +317,31 @@
     "workspacePath": {
       "type": "string",
       "minLength": 1
+    },
+    "git": {
+      "type": "object",
+      "required": [
+        "headSha",
+        "branch",
+        "dirty"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "headSha": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{40,64}$"
+        },
+        "branch": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
+        },
+        "dirty": {
+          "type": "boolean"
+        }
+      }
     },
     "workspaceRevisionSha256": {
       "type": "string",

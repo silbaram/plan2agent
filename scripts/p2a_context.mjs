@@ -23,6 +23,7 @@ import { resolveP2aPaths } from './p2a_paths.mjs';
 import { resolveRunsDir, runFilePath } from './p2a_run_paths.mjs';
 import {
   loadJson,
+  resolveRunExecutionEnvelope,
   validateRunData,
   validateRunTaskContract,
 } from './validate_artifacts.mjs';
@@ -217,7 +218,9 @@ function loadStartedRun(artifactRoot, runId) {
   if (!existsSync(runPath)) throw new Error(`unknown run: ${runId}`);
   const run = validateRunData(loadJson(runPath));
   if (run.status !== 'started') throw new Error(`run ${runId} must be started, got ${run.status}`);
-  validateRunTaskContract(run, artifactRoot);
+  validateRunTaskContract(run, artifactRoot, { runsDir });
+  const executionEnvelope = resolveRunExecutionEnvelope(run, runsDir);
+  if (executionEnvelope) run.executionEnvelope = executionEnvelope;
   if (!run.taskContractSha256) throw new Error(`run ${runId} has no taskContractSha256 binding`);
   return run;
 }

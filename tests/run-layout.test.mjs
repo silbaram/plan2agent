@@ -23,6 +23,7 @@ import {
   canonicalRunRef,
   canonicalTaskGraphRef,
   defaultRunsDirForGraph,
+  executionEnvelopeStoreRef,
   indexedRunRef,
   runFilePath,
   runSidecarPath,
@@ -144,6 +145,22 @@ function taskGraph() {
   };
 }
 
+function executionEnvelopeFixture() {
+  return {
+    objective: 'Preserve a content-addressed execution contract.',
+    sourceGateRefs: [{ path: 'gate-b-spec/spec.json', sha256: 'a'.repeat(64) }],
+    scope: ['run layout'],
+    mustPreserve: ['hash verification'],
+    nonGoals: [],
+    acceptance: ['The envelope remains resolvable.'],
+    verification: ['validateRunsDir'],
+    executionAuthority: {
+      mayChoose: ['file movement details'],
+      mustReturnToGate: ['product meaning changes'],
+    },
+  };
+}
+
 function writeApprovedRunSource(root, projectId = 'run-layout-fixture') {
   const fixtureRoot = path.resolve('fixtures/_e2e/webhook-api-service');
   const intake = JSON.parse(readFileSync(path.join(fixtureRoot, 'gate-a-intake', 'intake.json'), 'utf8'));
@@ -210,14 +227,83 @@ describe('iteration-partitioned run layout', () => {
         '--workspace', tempRoot,
       ]);
       assert.equal(result.status, 0, result.stderr);
+      const second = runRuns([
+        'start',
+        '--graph', graphPath,
+        '--runs', runsDir,
+        '--task', 'task-001',
+        '--run-id', 'run-task-001-002',
+        '--agent-tool', 'codex',
+        '--workspace', tempRoot,
+      ]);
+      assert.equal(second.status, 0, second.stderr);
       assert.equal(existsSync(path.join(runsDir, ITERATION_ID, 'run-task-001-001.json')), true);
       assert.equal(existsSync(path.join(runsDir, 'run-task-001-001.json')), false);
       const index = JSON.parse(readFileSync(path.join(runsDir, 'run-index.json'), 'utf8'));
       assert.equal(index.runs[0].runRef, `${ITERATION_ID}/run-task-001-001.json`);
+      assert.equal(index.runs.length, 2);
       assert.equal(runFilePath(runsDir, 'run-task-001-001'), path.join(runsDir, ITERATION_ID, 'run-task-001-001.json'));
+      const firstRun = JSON.parse(readFileSync(runFilePath(runsDir, 'run-task-001-001'), 'utf8'));
+      assert.equal(Object.hasOwn(firstRun, 'executionEnvelope'), false);
+      assert.deepEqual(firstRun.executionEnvelopeRef, { sha256: firstRun.executionEnvelopeSha256 });
+      const envelopesDir = path.join(runsDir, ITERATION_ID, 'envelopes');
+      assert.deepEqual(readdirSync(envelopesDir), [`${firstRun.executionEnvelopeSha256}.json`]);
       validateRunsDir(runsDir);
+      const envelopePath = path.join(
+        runsDir,
+        executionEnvelopeStoreRef(firstRun, firstRun.executionEnvelopeRef.sha256),
+      );
+      const tamperedEnvelope = JSON.parse(readFileSync(envelopePath, 'utf8'));
+      tamperedEnvelope.objective = `${tamperedEnvelope.objective} tampered`;
+      writeJson(envelopePath, tamperedEnvelope);
+      assert.throws(
+        () => validateRunsDir(runsDir),
+        /execution envelope content hash does not match executionEnvelopeRef/,
+      );
     } finally {
       rmSync(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  test('execution envelope storage rejects an intermediate directory symbolic link', (context) => {
+    const tempRoot = mkdtempSync(path.join(tmpdir(), 'p2a-run-envelope-symlink-'));
+    const outsideRoot = mkdtempSync(path.join(tmpdir(), 'p2a-run-envelope-outside-'));
+    try {
+      const runsDir = path.join(tempRoot, 'runs');
+      const graphPath = path.join(tempRoot, 'gate-c-task-graph', 'task-graph.json');
+      writeApprovedRunSourceForGraph(graphPath);
+      writeJson(graphPath, taskGraph());
+      mkdirSync(path.join(runsDir, ITERATION_ID), { recursive: true });
+      try {
+        symlinkSync(
+          outsideRoot,
+          path.join(runsDir, ITERATION_ID, 'envelopes'),
+          process.platform === 'win32' ? 'junction' : 'dir',
+        );
+      } catch (error) {
+        if (['EPERM', 'EACCES', 'ENOTSUP'].includes(error?.code)) {
+          context.skip(`symbolic links unavailable: ${error.code}`);
+          return;
+        }
+        throw error;
+      }
+
+      const result = runRuns([
+        'start',
+        '--graph', graphPath,
+        '--runs', runsDir,
+        '--task', 'task-001',
+        '--run-id', 'run-envelope-symlink',
+        '--agent-tool', 'codex',
+        '--workspace', tempRoot,
+      ]);
+      assert.equal(result.status, 1);
+      assert.match(result.stderr, /execution envelope path must not traverse a symbolic link/);
+      assert.deepEqual(readdirSync(outsideRoot), []);
+      assert.equal(existsSync(path.join(runsDir, 'run-index.json')), false);
+    } finally {
+      rmSync(tempRoot, { recursive: true, force: true });
+      rmSync(outsideRoot, { recursive: true, force: true });
     }
   });
 
@@ -819,6 +905,15 @@ describe('iteration-partitioned run layout', () => {
 
       const runPath = runFilePath(runsDir, runId);
       const legacyRun = JSON.parse(readFileSync(runPath, 'utf8'));
+      const envelopeRef = executionEnvelopeStoreRef(
+        legacyRun,
+        legacyRun.executionEnvelopeRef.sha256,
+      );
+      legacyRun.executionEnvelope = JSON.parse(
+        readFileSync(path.join(runsDir, envelopeRef), 'utf8'),
+      );
+      delete legacyRun.executionEnvelopeRef;
+      rmSync(path.join(runsDir, envelopeRef));
       legacyRun.schema_version = 'p2a.run.v1';
       delete legacyRun.taskContractSha256;
       writeJson(runPath, legacyRun);
@@ -829,7 +924,9 @@ describe('iteration-partitioned run layout', () => {
       ]);
       assert.equal(dryRun.status, 0, dryRun.stderr);
       assert.match(dryRun.stdout, /p2a\.run\.v1 -> p2a\.run\.v2/);
+      assert.match(dryRun.stdout, /inline envelope -> content-addressed reference/);
       assert.equal(JSON.parse(readFileSync(runPath, 'utf8')).schema_version, 'p2a.run.v1');
+      assert.equal(existsSync(path.join(runsDir, envelopeRef)), false);
 
       const migration = runRuns([
         'migrate-schema', '--runs', runsDir, '--run-id', runId, '--yes',
@@ -839,6 +936,14 @@ describe('iteration-partitioned run layout', () => {
       const graph = JSON.parse(readFileSync(graphPath, 'utf8'));
       assert.equal(upgradedRun.schema_version, 'p2a.run.v2');
       assert.equal(upgradedRun.taskContractSha256, taskContractSha256(graph.tasks[0]));
+      assert.equal(Object.hasOwn(upgradedRun, 'executionEnvelope'), false);
+      assert.deepEqual(upgradedRun.executionEnvelopeRef, {
+        sha256: upgradedRun.executionEnvelopeSha256,
+      });
+      assert.equal(existsSync(path.join(
+        runsDir,
+        executionEnvelopeStoreRef(upgradedRun, upgradedRun.executionEnvelopeRef.sha256),
+      )), true);
       validateRunsDir(runsDir);
     } finally {
       rmSync(tempRoot, { recursive: true, force: true });
@@ -856,6 +961,11 @@ describe('iteration-partitioned run layout', () => {
         sourceLayout: 'graph',
         taskGraphRef: graphPath,
       };
+      const legacyEnvelope = executionEnvelopeFixture();
+      legacyRun.executionEnvelopeSha256 = createHash('sha256')
+        .update(JSON.stringify(legacyEnvelope))
+        .digest('hex');
+      legacyRun.executionEnvelopeRef = { sha256: legacyRun.executionEnvelopeSha256 };
       const globalRun = {
         ...startedRun('run-global-history'),
         taskId: 'task-002',
@@ -865,6 +975,10 @@ describe('iteration-partitioned run layout', () => {
       };
       writeJson(graphPath, taskGraph());
       writeJson(path.join(legacyRunsDir, `${legacyRun.runId}.json`), legacyRun);
+      writeJson(path.join(
+        legacyRunsDir,
+        executionEnvelopeStoreRef(legacyRun, legacyRun.executionEnvelopeRef.sha256),
+      ), legacyEnvelope);
       const legacyIndex = runIndex(legacyRun);
       legacyIndex.retrospective = {
         iterations: [{
@@ -919,6 +1033,10 @@ describe('iteration-partitioned run layout', () => {
       assert.equal(migration.status, 0, migration.stderr);
       assert.equal(existsSync(path.join(legacyRunsDir, 'run-index.json')), false);
       assert.equal(existsSync(path.join(runsDir, ITERATION_ID, `${legacyRun.runId}.json`)), true);
+      assert.equal(existsSync(path.join(
+        runsDir,
+        executionEnvelopeStoreRef(legacyRun, legacyRun.executionEnvelopeRef.sha256),
+      )), true);
       assert.equal(existsSync(path.join(runsDir, ITERATION_ID, `${legacyRun.runId}.style-verdict.json`)), true);
       assert.equal(existsSync(path.join(runsDir, '.run-id-reservations', 'run-reserved.json')), true);
       const redirect = JSON.parse(readFileSync(path.join(legacyRunsDir, RUN_STORE_REDIRECT_FILE), 'utf8'));

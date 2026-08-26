@@ -716,7 +716,7 @@ function assertVisualReviewDoneEvidence(args, task, run) {
   try {
     const runsDir = runsDirForTaskArgs(args);
     const artifactRoot = path.dirname(path.resolve(runsDir));
-    const source = validateRunTaskContract(run, artifactRoot);
+    const source = validateRunTaskContract(run, artifactRoot, { runsDir });
     readRequiredVisualReview(runsDir, run, {
       artifactRoot,
       sourceArtifactRoot: source.sourceArtifactRoot,

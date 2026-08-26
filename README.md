@@ -116,7 +116,13 @@ the current development bundle remains reviewable and portable, while opening th
 removes archived iteration runs. When a retry replaces a run, `run-index.json` keeps only bounded
 retrospective counters—never commands, output tails, notes, or run IDs—and drops those counters when
 the next iteration opens. Approved specs, close metadata, and Git remain the durable history.
-Set `runTracking.persistence` to `persistent` only when long-lived local run evidence is required.
+Unmined failed or blocked runs remain available to the proposal flow. Use `p2a runs gc --dry-run`
+to review indexed and orphan evidence before cleanup; persistent projects require an explicit
+`--force`. Each Git-backed run also records its current HEAD, branch, and dirty state. Set
+`runTracking.persistence` to `persistent` only when long-lived local run evidence is required.
+New runs store the Gate-derived execution envelope once by content hash and reference it from each
+run record, avoiding repeated copies while preserving hash-verified fail-closed validation. Existing
+inline records remain readable and `p2a runs migrate-schema` converts them in place.
 
 ## Core workflow
 

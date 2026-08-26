@@ -15,7 +15,11 @@ import { allocateRunId, previewRunId } from '../scripts/p2a_project_config.mjs';
 import { canonicalRunRef, canonicalTaskGraphRef, runFilePath } from '../scripts/p2a_run_paths.mjs';
 import { runWriteTransactionPath, withRunStoreLocks } from '../scripts/p2a_run_store.mjs';
 import { assertStartTaskSourceUnchanged } from '../scripts/p2a_runs.mjs';
-import { validateRunData } from '../scripts/validate_artifacts.mjs';
+import {
+  resolveRunExecutionEnvelope,
+  validateRunData,
+  validateRunTaskContract,
+} from '../scripts/validate_artifacts.mjs';
 import {
   E2E_FIXTURE_ROOT,
   EXECUTE_CLI,
@@ -1251,27 +1255,41 @@ test('creates a fresh worktree before validating the same path passed as workspa
 
     assert.equal(result.status, 0, result.stderr);
     assert.equal(existsSync(worktree), true);
+    const runsDir = path.join(root, 'runs');
     const run = JSON.parse(
-      readFileSync(runFilePath(path.join(root, 'runs'), 'run-fresh-worktree-workspace'), 'utf8'),
+      readFileSync(runFilePath(runsDir, 'run-fresh-worktree-workspace'), 'utf8'),
     );
+    const executionEnvelope = resolveRunExecutionEnvelope(run, runsDir);
     assert.equal(run.workspacePath, path.resolve(worktree));
     assert.equal(run.isolation.created, true);
-    assert.equal(run.executionEnvelope.objective.includes('webhook ingestion service'), true);
-    assert.deepEqual(run.executionEnvelope.mustPreserve, [
+    assert.equal(Object.hasOwn(run, 'executionEnvelope'), false);
+    assert.deepEqual(run.executionEnvelopeRef, { sha256: run.executionEnvelopeSha256 });
+    assert.equal(executionEnvelope.objective.includes('webhook ingestion service'), true);
+    assert.deepEqual(executionEnvelope.mustPreserve, [
       'Preserve raw-body signature verification before payload parsing',
       'Preserve the provider-neutral queue and dead-letter adapter boundaries',
     ]);
-    assert.equal(run.executionEnvelope.sourceGateRefs[0].path, 'fixtures/webhook-api-service/spec.approved.json');
+    assert.equal(executionEnvelope.sourceGateRefs[0].path, 'fixtures/webhook-api-service/spec.approved.json');
     assert.equal(
       run.executionEnvelopeSha256,
-      createHash('sha256').update(JSON.stringify(run.executionEnvelope)).digest('hex'),
+      createHash('sha256').update(JSON.stringify(executionEnvelope)).digest('hex'),
     );
     const envelopeMissing = structuredClone(run);
-    delete envelopeMissing.executionEnvelope;
+    delete envelopeMissing.executionEnvelopeRef;
     delete envelopeMissing.executionEnvelopeSha256;
     assert.throws(
       () => validateRunData(envelopeMissing),
-      /non-maintenance run mode requires a Gate B executionEnvelope/,
+      /non-maintenance run mode requires a Gate B executionEnvelope reference/,
+    );
+    assert.throws(
+      () => validateRunTaskContract(envelopeMissing, root, { runsDir }),
+      /requires its Gate B execution envelope for contract validation/,
+    );
+    const conflictingEnvelope = structuredClone(run);
+    conflictingEnvelope.executionEnvelope = executionEnvelope;
+    assert.throws(
+      () => validateRunTaskContract(conflictingEnvelope, root, { runsDir }),
+      /either executionEnvelope or executionEnvelopeRef, not both/,
     );
   } finally {
     rmSync(root, { recursive: true, force: true });

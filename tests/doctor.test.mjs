@@ -337,3 +337,43 @@ test('doctor excludes external harness files from managed runtime drift', () => 
     rmSync(targetRoot, { recursive: true, force: true });
   }
 });
+
+test('doctor reports orphan run evidence with gc guidance', () => {
+  const targetRoot = scaffoldDoctorTarget('p2a-doctor-run-orphans-');
+  try {
+    const artifactRoot = path.join(targetRoot, 'artifacts', 'sample');
+    const runsDir = path.join(artifactRoot, 'runs');
+    mkdirSync(path.join(artifactRoot, 'iterations', 'v1'), { recursive: true });
+    mkdirSync(path.join(runsDir, 'v1'), { recursive: true });
+    writeFileSync(path.join(artifactRoot, 'current-spec.json'), `${JSON.stringify({
+      project_id: 'sample',
+      active_iteration: 'v1',
+    }, null, 2)}\n`, 'utf8');
+    writeFileSync(path.join(runsDir, 'run-index.json'), `${JSON.stringify({
+      schema_version: 'p2a.run_index.v1',
+      projectId: 'sample',
+      runs: [],
+      tasks: [],
+    }, null, 2)}\n`, 'utf8');
+    writeFileSync(
+      path.join(runsDir, 'v1', 'run-orphan.monitor-verdict.json'),
+      '{}\n',
+      'utf8',
+    );
+
+    let result = runDoctor(['--target', targetRoot, '--json']);
+    assert.equal(result.status, 0, formatCommandResult(result));
+    const report = JSON.parse(result.stdout);
+    const orphanCheck = report.checks.find((check) => check.id === 'run_evidence_orphans');
+    assert.equal(orphanCheck.status, 'warn');
+    assert.deepEqual(orphanCheck.orphanRefs, ['v1/run-orphan.monitor-verdict.json']);
+    assert.ok(report.nextActions.some((action) => action.includes('p2a runs gc --dry-run')));
+
+    result = runDoctor(['--target', targetRoot]);
+    assert.equal(result.status, 0, formatCommandResult(result));
+    assert.match(result.stdout, /Run evidence orphans.*p2a runs gc --dry-run/);
+    assert.match(result.stdout, /orphan run evidence: 1/);
+  } finally {
+    rmSync(targetRoot, { recursive: true, force: true });
+  }
+});

@@ -437,7 +437,7 @@ p2a iteration init \
 
 1. `p2a next --json --contract v2`로 상태 기반 다음 행동을 확인한다. Gate 승인 전 행동은 승인을 요구하고, 승인된 개발·검증·필수 review loop는 즉시 실행 가능하다. Iteration close는 완료 시점의 구조화된 review-or-close decision 안에서만 제공된다.
 2. Gate C가 없고 execution mode가 `adaptive|direct|planned`이면 실행 AI가 repository를 조사해 Direct/Planned/Orchestrated를 고른다. Direct/Planned는 `p2a execute prepare --mode ... --selection-rationale ...`로 준비하며 Planned만 2–5개 milestone을 선언한다. 이는 추가 승인 Gate가 아니다.
-3. `p2a execute start`는 ready work item의 run을 만들고 Gate B에서 파생한 `executionEnvelope`를 source hash와 함께 고정하며 mode와 선택 근거도 기록한다. dependency가 완료되지 않은 work item은 시작할 수 없다.
+3. `p2a execute start`는 ready work item의 run을 만들고 Gate B에서 파생한 실행 계약을 content-addressed envelope로 저장한 뒤 `executionEnvelopeRef`와 source hash를 run에 고정하며 mode와 선택 근거도 기록한다. dependency가 완료되지 않은 work item은 시작할 수 없다.
 4. Launcher prompt는 envelope를 먼저 보여 주고 task는 실행/재개 경계로만 제시한다. 별도 확인이 필요하면 `p2a tasks prompt --artifacts .plan2agent/artifacts/<project_id> <task-id>`로 같은 계약을 다시 볼 수 있다.
 5. Direct와 일반 단일-owner Planned는 현재 write-capable owner가 현재 workspace에서 직접 구현하고 기본 isolation `none`을 사용한다. Orchestrated/batch, 동시 write owner, 명시 정책 또는 구체적인 rollback 위험이 있을 때만 별도 implementer와 worktree를 만든다. Planned는 각 outcome 뒤 `p2a runs checkpoint --milestone <id>`로 선언된 명령을 순서대로 실행하며 `resume`은 다음 pending checkpoint를 보여 준다. Gemini CLI는 현재 review/monitor 같은 read-only 보조로만 사용한다.
 6. UI task의 `visualImpact`는 구현 중 확인할 screen/state 범위만 알려 준다. 일반 구현 run에는 visual sidecar를 만들지 않으며, 승인 prototype은 구현 방향으로 사용하되 구현 증거로 재사용하지 않는다. 구현 뒤에는 run을 열어 둔 채 실행 owner가 영향 route/state/viewport를 렌더링하고 drift를 수정해 통과할 때까지 반복한다. 사용자에게 task별 UI 승인을 요청하지 않는다. 이 비게이팅·무기록 루프는 추가 run, sidecar, hash, verdict를 만들지 않는다.
