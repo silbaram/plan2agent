@@ -14,7 +14,7 @@ import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
-import { pruneIndexedRunEvidence } from '../scripts/p2a_runs.mjs';
+import { captureGitState, pruneIndexedRunEvidence } from '../scripts/p2a_runs.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const ITERATION_CLI = path.join(ROOT, 'scripts', 'p2a_iteration.mjs');
@@ -118,6 +118,34 @@ function initializedIterationProject(persistence) {
   assert.equal(initialized.status, 0, `${initialized.stdout}${initialized.stderr}`);
   return artifactRoot;
 }
+
+function initializedCanonicalIterationProject(persistence) {
+  const projectRoot = mkdtempSync(path.join(tmpdir(), 'p2a-run-retention-canonical-'));
+  const artifactRoot = path.join(projectRoot, '.plan2agent', 'artifacts', 'webhook-api-service');
+  mkdirSync(path.dirname(artifactRoot), { recursive: true });
+  cpSync(E2E_FIXTURE, artifactRoot, { recursive: true });
+  writeFileSync(path.join(projectRoot, '.plan2agent', 'project.config.json'), `${JSON.stringify({
+    runTracking: { persistence },
+    devExecution: { reviewPasses: { acceptance: 'off' } },
+  }, null, 2)}\n`, 'utf8');
+  const initialized = runCli(ITERATION_CLI, [
+    'init',
+    '--artifacts', artifactRoot,
+    '--iteration-id', 'v1-mvp',
+  ]);
+  assert.equal(initialized.status, 0, `${initialized.stdout}${initialized.stderr}`);
+  return { projectRoot, artifactRoot };
+}
+
+test('Git metadata capture treats a spawn error as unavailable even when status is zero', () => {
+  const spawnError = Object.assign(new Error('spawnSync git EPERM'), { code: 'EPERM' });
+  assert.equal(captureGitState('.', () => ({
+    status: 0,
+    stdout: null,
+    stderr: null,
+    error: spawnError,
+  })), null);
+});
 
 function closeCurrentIteration(artifactRoot) {
   const graphPath = path.join(
@@ -383,6 +411,64 @@ test('runs gc requires force in persistent mode and never removes started eviden
     assert.equal(existsSync(path.join(runsDir, started.runRef)), true);
   } finally {
     rmSync(artifactRoot, { recursive: true, force: true });
+  }
+});
+
+test('runs gc resolves active-only persistence from the canonical project config', () => {
+  const { projectRoot, artifactRoot } = initializedCanonicalIterationProject('active_only');
+  try {
+    const runsDir = path.join(artifactRoot, 'runs');
+    mkdirSync(runsDir, { recursive: true });
+    const finished = runEntry(
+      'run-canonical-config',
+      'task-001',
+      'v1-mvp',
+      'finished',
+      'v1-mvp/run-canonical-config.json',
+    );
+    writeIndex(runsDir, [finished], 'webhook-api-service');
+    writeEvidence(runsDir, finished);
+
+    const collected = runCli(RUNS_CLI, ['gc', '--artifacts', artifactRoot]);
+    assert.equal(collected.status, 0, `${collected.stdout}${collected.stderr}`);
+    assert.match(collected.stdout, /persistence: active_only/);
+    assert.equal(existsSync(path.join(runsDir, finished.runRef)), false);
+  } finally {
+    rmSync(projectRoot, { recursive: true, force: true });
+  }
+});
+
+test('runs gc refuses an unindexed started run left by an interrupted index commit', () => {
+  const artifactRoot = initializedIterationProject('active_only');
+  const workspace = mkdtempSync(path.join(tmpdir(), 'p2a-run-gc-unindexed-started-'));
+  try {
+    const started = runCli(EXECUTE_CLI, [
+      'start',
+      '--artifacts', artifactRoot,
+      '--task', 'task-001',
+      '--agent-tool', 'manual',
+      '--workspace', workspace,
+    ]);
+    assert.equal(started.status, 0, `${started.stdout}${started.stderr}`);
+
+    const runsDir = path.join(artifactRoot, 'runs');
+    const index = JSON.parse(readFileSync(path.join(runsDir, 'run-index.json'), 'utf8'));
+    const startedEntry = index.runs.at(-1);
+    const runPath = path.join(runsDir, startedEntry.runRef);
+    writeIndex(runsDir, [], index.projectId);
+
+    const refused = runCli(RUNS_CLI, ['gc', '--artifacts', artifactRoot]);
+    assert.equal(refused.status, 1, `${refused.stdout}${refused.stderr}`);
+    assert.match(
+      `${refused.stdout}${refused.stderr}`,
+      /cannot gc active run evidence.*restore the index.*started run\(s\)/,
+    );
+    assert.equal(existsSync(runPath), true);
+    const unchangedIndex = JSON.parse(readFileSync(path.join(runsDir, 'run-index.json'), 'utf8'));
+    assert.deepEqual(unchangedIndex.runs, []);
+  } finally {
+    rmSync(artifactRoot, { recursive: true, force: true });
+    rmSync(workspace, { recursive: true, force: true });
   }
 });
 

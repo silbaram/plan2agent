@@ -8,7 +8,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Added
 
-- Add `p2a runs gc` with dry-run previews, iteration scoping, final-run retention, persistent-mode protection, and orphan evidence cleanup; surface orphan cleanup guidance through `p2a doctor`.
+- Add `p2a runs gc` with dry-run previews, iteration scoping, final-run retention, persistent-mode protection, and orphan evidence cleanup while refusing both indexed and crash-orphaned started runs; surface orphan cleanup guidance through `p2a doctor`.
 - Record optional Git HEAD, branch, and dirty state metadata when a run starts and refresh it when the run finishes.
 
 ### Changed

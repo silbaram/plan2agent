@@ -64,6 +64,7 @@ import {
   DEFAULT_RUNS_DIR,
   defaultArtifactRootForGraph,
   indexedRunRef,
+  isRunRecordFile,
   legacyRunRef,
   legacyRunsDirForGraph,
   orphanRunEvidenceRefs,
@@ -1191,6 +1192,9 @@ export function pruneIndexedRunEvidence(runsDir, options = {}) {
 
 function gcProjectConfig(args, runsDir) {
   const candidates = uniqueStrings([
+    args.artifacts
+      ? path.join(canonicalWorkspacePathForArtifactRoot(args.artifacts), P2A_PROJECT_CONFIG)
+      : null,
     args.artifacts ? path.join(path.resolve(args.artifacts), P2A_PROJECT_CONFIG) : null,
     path.join(path.dirname(runsDir), P2A_PROJECT_CONFIG),
     path.join(process.cwd(), P2A_PROJECT_CONFIG),
@@ -1222,6 +1226,23 @@ function gcOrphanRefs(runsDir, index, iterationId = null) {
   const refs = orphanRunEvidenceRefs(runsDir, index);
   if (!iterationId) return refs;
   return refs.filter((ref) => ref.startsWith(`${iterationId}/`));
+}
+
+function orphanStartedRunIds(runsDir, refs) {
+  const runIds = [];
+  for (const ref of refs) {
+    const evidencePath = path.join(runsDir, ref);
+    if (!isRunRecordFile(evidencePath)) continue;
+    try {
+      const run = loadJson(evidencePath);
+      if (run.status === 'started') {
+        runIds.push(typeof run.runId === 'string' && run.runId.trim() ? run.runId : ref);
+      }
+    } catch {
+      // Malformed orphan evidence is eligible for explicit gc cleanup.
+    }
+  }
+  return uniqueStrings(runIds);
 }
 
 function removeOrphanRunEvidence(runsDir, refs) {
@@ -1278,9 +1299,15 @@ function gcRunEvidence(args) {
       ? index.runs.filter((entry) => entry.iterationId === args.iterationId)
       : [...index.runs];
     const started = scoped.filter((entry) => entry.status === 'started');
-    if (started.length) {
+    const initialOrphans = gcOrphanRefs(runsDir, index, args.iterationId);
+    const orphanStarted = orphanStartedRunIds(runsDir, initialOrphans);
+    if (started.length || orphanStarted.length) {
+      const startedRunIds = uniqueStrings([
+        ...started.map((entry) => entry.runId),
+        ...orphanStarted,
+      ]);
       throw new Error(
-        `cannot gc active run evidence; finish or block started run(s): ${started.map((entry) => entry.runId).join(', ')}`,
+        `cannot gc active run evidence; finish, block, or restore the index for started run(s): ${startedRunIds.join(', ')}`,
       );
     }
     const keepRunIds = args.keepFinal ? gcKeepFinalRunIds(scoped) : [];
@@ -1288,7 +1315,6 @@ function gcRunEvidence(args) {
     const selectedRunIds = scoped
       .filter((entry) => !keepSet.has(entry.runId))
       .map((entry) => entry.runId);
-    const initialOrphans = gcOrphanRefs(runsDir, index, args.iterationId);
     if (args.dryRun) {
       printGcPlan({
         dryRun: true,
@@ -1658,19 +1684,21 @@ function gitCommandResult(args, cwd) {
   return spawnSync('git', args, { cwd, encoding: 'utf8', maxBuffer: 1024 * 1024 * 10 });
 }
 
-function gitBranchName(cwd) {
-  const result = gitCommandResult(['symbolic-ref', '--quiet', '--short', 'HEAD'], cwd);
-  return result.status === 0 ? result.stdout.trim() : null;
+function gitBranchName(cwd, commandRunner = gitCommandResult) {
+  const result = commandRunner(['symbolic-ref', '--quiet', '--short', 'HEAD'], cwd);
+  return !result.error && result.status === 0 && typeof result.stdout === 'string'
+    ? result.stdout.trim() || null
+    : null;
 }
 
-function captureGitState(cwd) {
-  const head = gitCommandResult(['rev-parse', '--verify', 'HEAD'], cwd);
-  if (head.status !== 0 || !head.stdout.trim()) return null;
-  const status = gitCommandResult(['status', '--porcelain=v1', '--untracked-files=all'], cwd);
-  if (status.status !== 0) return null;
+export function captureGitState(cwd, commandRunner = gitCommandResult) {
+  const head = commandRunner(['rev-parse', '--verify', 'HEAD'], cwd);
+  if (head.error || head.status !== 0 || typeof head.stdout !== 'string' || !head.stdout.trim()) return null;
+  const status = commandRunner(['status', '--porcelain=v1', '--untracked-files=all'], cwd);
+  if (status.error || status.status !== 0 || typeof status.stdout !== 'string') return null;
   return {
     headSha: head.stdout.trim(),
-    branch: gitBranchName(cwd),
+    branch: gitBranchName(cwd, commandRunner),
     dirty: status.stdout.length > 0,
   };
 }
