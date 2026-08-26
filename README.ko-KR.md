@@ -120,6 +120,9 @@ run을 정리합니다. proposal로 아직 mining하지 않은 실패·차단 ru
 시점 HEAD, branch, dirty 상태도 기록합니다. 장기 이력은 승인 spec, close metadata, Git에
 남습니다. 로컬 run evidence를 장기 보존해야 할 때만 `runTracking.persistence`를
 `persistent`로 설정합니다.
+새 run은 Gate B에서 파생한 execution envelope를 content hash별로 한 번만 저장하고 각 run은
+그 참조와 검증용 SHA-256만 가집니다. 기존 인라인 run도 계속 읽을 수 있으며
+`p2a runs migrate-schema`로 참조형으로 전환할 수 있습니다.
 
 ## 핵심 workflow
 

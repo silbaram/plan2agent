@@ -19,6 +19,7 @@ export { DEFAULT_RUNS_DIR };
 
 const RUN_ID_PATTERN = /^run-[A-Za-z0-9._-]+$/;
 const RUN_PARTITION_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+const SHA256_PATTERN = /^[a-f0-9]{64}$/;
 const UNSCOPED_RUN_PARTITION = 'unscoped';
 export const RUN_SIDECAR_SUFFIXES = [
   '.orchestration.json',
@@ -339,6 +340,13 @@ export function canonicalRunRef(runOrEntry) {
   return `${runPartitionId(runOrEntry?.iterationId)}/${runOrEntry.runId}.json`;
 }
 
+export function executionEnvelopeStoreRef(runOrEntry, sha256) {
+  if (!SHA256_PATTERN.test(sha256 ?? '')) {
+    throw new Error(`execution envelope sha256 must be 64 lowercase hexadecimal characters, got ${JSON.stringify(sha256)}`);
+  }
+  return `${runPartitionId(runOrEntry?.iterationId)}/envelopes/${sha256}.json`;
+}
+
 export function artifactRunRef(runRef) {
   return `runs/${normalizeIndexedRunRef(runRef)}`;
 }
@@ -483,6 +491,14 @@ export function orphanRunEvidenceRefs(runsDir, index) {
     for (const suffix of RUN_SIDECAR_SUFFIXES) {
       expected.add(runSidecarRef(runRef, suffix));
     }
+    try {
+      const runData = JSON.parse(readFileSync(path.join(resolvedRunsDir, runRef), 'utf8'));
+      if (runData.executionEnvelopeRef?.sha256) {
+        expected.add(executionEnvelopeStoreRef(runData, runData.executionEnvelopeRef.sha256));
+      }
+    } catch {
+      // Missing or malformed indexed runs are reported by run-store validation.
+    }
   }
   const refs = [];
   const inspectDirectory = (dirPath, prefix = '') => {
@@ -496,7 +512,15 @@ export function orphanRunEvidenceRefs(runsDir, index) {
   inspectDirectory(resolvedRunsDir);
   for (const entry of readdirSync(resolvedRunsDir, { withFileTypes: true })) {
     if (!entry.isDirectory() || entry.name.startsWith('.') || !RUN_PARTITION_PATTERN.test(entry.name)) continue;
-    inspectDirectory(path.join(resolvedRunsDir, entry.name), entry.name);
+    const partitionPath = path.join(resolvedRunsDir, entry.name);
+    inspectDirectory(partitionPath, entry.name);
+    const envelopesPath = path.join(partitionPath, 'envelopes');
+    if (!existsSync(envelopesPath) || !lstatSync(envelopesPath).isDirectory()) continue;
+    for (const envelope of readdirSync(envelopesPath, { withFileTypes: true })) {
+      if (!envelope.isFile() || !SHA256_PATTERN.test(envelope.name.slice(0, -'.json'.length)) || !envelope.name.endsWith('.json')) continue;
+      const ref = `${entry.name}/envelopes/${envelope.name}`;
+      if (!expected.has(ref)) refs.push(ref);
+    }
   }
   return refs.sort();
 }

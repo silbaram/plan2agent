@@ -54,7 +54,12 @@ import {
   P2A_SCRIPTS_DIR,
   resolveP2aPaths,
 } from './p2a_paths.mjs';
-import { artifactRunRef, legacyRunRef, runSidecarRef } from './p2a_run_paths.mjs';
+import {
+  artifactRunRef,
+  executionEnvelopeStoreRef,
+  legacyRunRef,
+  runSidecarRef,
+} from './p2a_run_paths.mjs';
 import {
   assertCanonicalPortableRun,
   closeReadyAcceptanceReviewRunIds,
@@ -2129,6 +2134,19 @@ function pushMilestoneReviewBundleIfExists(
             }
           : {},
       );
+      if (runData.executionEnvelopeRef) {
+        const envelopeRef = executionEnvelopeStoreRef(
+          runData,
+          runData.executionEnvelopeRef.sha256,
+        );
+        const envelope = resolveMilestoneBundleReference(
+          artifactsRoot,
+          envelopeRef,
+          `${checkpoint} run-index ${indexedRun.runId} execution envelope`,
+          path.dirname(runIndex.sourcePath),
+        );
+        pushBundleFile(envelope.sourcePath, envelope.relativePath, evidenceFiles);
+      }
       pushRunSourceBundle(sourceBundle, portableSourceSpecRef);
       const monitorGateRef = runSidecarRef(indexedRun.runRef, '.monitor-gate.json');
       const monitorGateSourcePath = path.resolve(path.dirname(runIndex.sourcePath), monitorGateRef);

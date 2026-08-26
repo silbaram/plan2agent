@@ -352,6 +352,9 @@ test('runs gc dry-run lists indexed and orphan evidence before removing it while
     writeEvidence(runsDir, finalRun);
     const orphanRef = 'v1-mvp/run-gc-orphan.acceptance-review.json';
     writeFileSync(path.join(runsDir, orphanRef), '{}\n', 'utf8');
+    const orphanEnvelopeRef = `v1-mvp/envelopes/${'0'.repeat(64)}.json`;
+    mkdirSync(path.dirname(path.join(runsDir, orphanEnvelopeRef)), { recursive: true });
+    writeFileSync(path.join(runsDir, orphanEnvelopeRef), '{}\n', 'utf8');
 
     const preview = runCli(RUNS_CLI, [
       'gc',
@@ -364,10 +367,12 @@ test('runs gc dry-run lists indexed and orphan evidence before removing it while
     assert.match(preview.stdout, /Run evidence gc preview/);
     assert.match(preview.stdout, /run-gc-old/);
     assert.match(preview.stdout, /run-gc-orphan\.acceptance-review\.json/);
+    assert.match(preview.stdout, /envelopes\/0{64}\.json/);
     assert.match(preview.stdout, /final runs kept: 1/);
     assert.equal(existsSync(path.join(runsDir, oldRun.runRef)), true);
     assert.equal(existsSync(path.join(runsDir, finalRun.runRef)), true);
     assert.equal(existsSync(path.join(runsDir, orphanRef)), true);
+    assert.equal(existsSync(path.join(runsDir, orphanEnvelopeRef)), true);
 
     const collected = runCli(RUNS_CLI, [
       'gc',
@@ -379,6 +384,7 @@ test('runs gc dry-run lists indexed and orphan evidence before removing it while
     assert.equal(existsSync(path.join(runsDir, oldRun.runRef)), false);
     assert.equal(existsSync(path.join(runsDir, finalRun.runRef)), true);
     assert.equal(existsSync(path.join(runsDir, orphanRef)), false);
+    assert.equal(existsSync(path.join(runsDir, orphanEnvelopeRef)), false);
     const index = JSON.parse(readFileSync(path.join(runsDir, 'run-index.json'), 'utf8'));
     assert.deepEqual(index.runs.map((entry) => entry.runId), ['run-gc-final']);
   } finally {

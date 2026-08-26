@@ -210,7 +210,8 @@ dirty, unmerged, failed, blocked task 또는 integration-candidate worktree는 �
 | 파일 | 역할 |
 | --- | --- |
 | `.plan2agent/artifacts/<project>/runs/run-index.json` | run 목록과 최신 상태 index. `active_only`가 상세 재시도를 지울 때 텍스트 없는 제한 회고 집계도 임시 보존 |
-| `.plan2agent/artifacts/<project>/runs/<iterationId>/<runId>.json` | Gate-derived `executionEnvelope`, task 실행 기록, changedFiles, verification, failureClass |
+| `.plan2agent/artifacts/<project>/runs/<iterationId>/<runId>.json` | Gate-derived `executionEnvelopeRef`/hash, task 실행 기록, changedFiles, verification, failureClass |
+| `.plan2agent/artifacts/<project>/runs/<iterationId>/envelopes/<sha256>.json` | 내용 주소화한 Gate B 실행 계약. 같은 계약을 쓰는 run들이 공유 |
 | `.plan2agent/artifacts/<project>/runs/<iterationId>/<runId>.orchestration.json` | shared mental model, role assignment, communication log, runtime phase |
 | `.plan2agent/artifacts/<project>/runs/<iterationId>/<runId>.monitor-gate.json` | 실행 당시 monitor 정책, verdict 경로와 규칙 계약 snapshot |
 | `.plan2agent/artifacts/<project>/runs/<iterationId>/<runId>.visual-review.json` | iteration 최종 review run의 실제 렌더링·접근성 증거와 `confirm_ui|block` verdict. 해당 review run의 성공 finish를 차단함 |

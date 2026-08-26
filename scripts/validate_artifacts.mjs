@@ -26,6 +26,7 @@ import {
   artifactRunRef,
   canonicalRunRef,
   defaultArtifactRootForGraph,
+  executionEnvelopeStoreRef,
   isRunRecordFile,
   isSupportedRunRef,
   legacyRunRef,
@@ -3693,6 +3694,65 @@ export function executionEnvelopeSha256(envelope) {
   return createHash('sha256').update(JSON.stringify(envelope)).digest('hex');
 }
 
+function validateExecutionEnvelopeData(envelope) {
+  validateSchema(envelope, loadJson(SCHEMA_PATHS.run).properties.executionEnvelope);
+  const visualContract = envelope.visualContract;
+  if (!visualContract) return envelope;
+  const extendedFields = [
+    'prototypeManifestRef',
+    'prototypeManifestSha256',
+    'screens',
+    'viewports',
+    'accessibilityStandard',
+    'visualInvariants',
+  ];
+  const presentExtendedFields = extendedFields.filter((field) => visualContract[field] !== undefined);
+  if (presentExtendedFields.length > 0 && presentExtendedFields.length !== extendedFields.length) {
+    throw new ValidationError(
+      `executionEnvelope.visualContract extended fields must be recorded together: ${extendedFields.join(', ')}`,
+    );
+  }
+  return envelope;
+}
+
+export function resolveRunExecutionEnvelope(runData, runsDir) {
+  if (runData.executionEnvelope !== undefined) {
+    if (executionEnvelopeSha256(runData.executionEnvelope) !== runData.executionEnvelopeSha256) {
+      throw new ValidationError(`run ${runData.runId} executionEnvelopeSha256 does not match executionEnvelope`);
+    }
+    return validateExecutionEnvelopeData(runData.executionEnvelope);
+  }
+  if (runData.executionEnvelopeRef === undefined) return null;
+  let envelopeRef;
+  try {
+    envelopeRef = executionEnvelopeStoreRef(runData, runData.executionEnvelopeRef.sha256);
+  } catch (error) {
+    throw new ValidationError(error instanceof Error ? error.message : String(error));
+  }
+  const resolvedRunsDir = path.resolve(runsDir);
+  const envelopePath = path.resolve(resolvedRunsDir, envelopeRef);
+  const relative = path.relative(resolvedRunsDir, envelopePath);
+  if (!relative || relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+    throw new ValidationError(`run ${runData.runId} executionEnvelopeRef escapes the runs directory`);
+  }
+  if (!existsSync(envelopePath)) {
+    throw new ValidationError(`run ${runData.runId} execution envelope is missing: ${envelopeRef}`);
+  }
+  const envelopeStat = lstatSync(envelopePath);
+  if (!envelopeStat.isFile() || envelopeStat.isSymbolicLink()) {
+    throw new ValidationError(`run ${runData.runId} execution envelope must be a regular non-symbolic-link file: ${envelopeRef}`);
+  }
+  const envelope = loadJson(envelopePath);
+  const actualSha256 = executionEnvelopeSha256(envelope);
+  if (
+    actualSha256 !== runData.executionEnvelopeRef.sha256
+    || actualSha256 !== runData.executionEnvelopeSha256
+  ) {
+    throw new ValidationError(`run ${runData.runId} execution envelope content hash does not match executionEnvelopeRef`);
+  }
+  return validateExecutionEnvelopeData(envelope);
+}
+
 export function approvedExecutionEnvelope(specPath, sourceSpecRef, artifactRoot = null, options = {}) {
   const specReference = loadJson(specPath);
   const sourceIntakePath = resolveSpecSourceIntake(specPath, specReference);
@@ -4126,36 +4186,30 @@ export function validateRunData(data) {
     && !data.monitorVerdictEvidenceSha256) {
     throw new ValidationError(`${data.status} run ${data.runId} with monitor failure must include monitorVerdictEvidenceSha256`);
   }
-  if ((data.executionEnvelope !== undefined) !== (data.executionEnvelopeSha256 !== undefined)) {
-    throw new ValidationError('executionEnvelope and executionEnvelopeSha256 must be recorded together');
+  const hasInlineExecutionEnvelope = data.executionEnvelope !== undefined;
+  const hasReferencedExecutionEnvelope = data.executionEnvelopeRef !== undefined;
+  const hasExecutionEnvelope = hasInlineExecutionEnvelope || hasReferencedExecutionEnvelope;
+  if (hasInlineExecutionEnvelope && hasReferencedExecutionEnvelope) {
+    throw new ValidationError('run must record either executionEnvelope or executionEnvelopeRef, not both');
   }
-  if (hasMode && data.sourceLayout !== 'maintenance' && data.executionEnvelope === undefined) {
-    throw new ValidationError('non-maintenance run mode requires a Gate B executionEnvelope and executionEnvelopeSha256');
+  if (hasExecutionEnvelope !== (data.executionEnvelopeSha256 !== undefined)) {
+    throw new ValidationError('executionEnvelope or executionEnvelopeRef and executionEnvelopeSha256 must be recorded together');
   }
-  if (data.sourceLayout === 'maintenance' && data.executionEnvelope !== undefined) {
-    throw new ValidationError('maintenance run must not record a Gate B executionEnvelope');
+  if (hasMode && data.sourceLayout !== 'maintenance' && !hasExecutionEnvelope) {
+    throw new ValidationError('non-maintenance run mode requires a Gate B executionEnvelope reference and executionEnvelopeSha256');
+  }
+  if (data.sourceLayout === 'maintenance' && hasExecutionEnvelope) {
+    throw new ValidationError('maintenance run must not record a Gate B executionEnvelope or executionEnvelopeRef');
+  }
+  if (hasReferencedExecutionEnvelope
+    && data.executionEnvelopeRef.sha256 !== data.executionEnvelopeSha256) {
+    throw new ValidationError('executionEnvelopeRef.sha256 must match executionEnvelopeSha256');
   }
   if (data.executionEnvelope !== undefined
     && data.executionEnvelopeSha256 !== executionEnvelopeSha256(data.executionEnvelope)) {
     throw new ValidationError('executionEnvelopeSha256 does not match executionEnvelope');
   }
-  const visualContract = data.executionEnvelope?.visualContract;
-  if (visualContract) {
-    const extendedFields = [
-      'prototypeManifestRef',
-      'prototypeManifestSha256',
-      'screens',
-      'viewports',
-      'accessibilityStandard',
-      'visualInvariants',
-    ];
-    const presentExtendedFields = extendedFields.filter((field) => visualContract[field] !== undefined);
-    if (presentExtendedFields.length > 0 && presentExtendedFields.length !== extendedFields.length) {
-      throw new ValidationError(
-        `executionEnvelope.visualContract extended fields must be recorded together: ${extendedFields.join(', ')}`,
-      );
-    }
-  }
+  if (data.executionEnvelope !== undefined) validateExecutionEnvelopeData(data.executionEnvelope);
   if (data.status === 'started' && data.finishedAt !== null) {
     throw new ValidationError('started run must have finishedAt null');
   }
@@ -5022,13 +5076,11 @@ export function validateRunTaskContract(runData, artifactRoot, options = {}) {
       );
     }
   }
-  const hasExecutionEnvelope = runData.executionEnvelope !== undefined;
-  const hasExecutionEnvelopeHash = runData.executionEnvelopeSha256 !== undefined;
-  if (hasExecutionEnvelope !== hasExecutionEnvelopeHash) {
-    throw new ValidationError(
-      `finished run ${runData.runId} executionEnvelope and executionEnvelopeSha256 must be recorded together`,
-    );
-  }
+  const executionEnvelope = resolveRunExecutionEnvelope(
+    runData,
+    options.runsDir ?? path.join(path.resolve(artifactRoot), 'runs'),
+  );
+  const hasExecutionEnvelope = executionEnvelope !== null;
   if (hasExecutionEnvelope) {
     if (maintenanceSource) {
       throw new ValidationError(
@@ -5051,17 +5103,17 @@ export function validateRunTaskContract(runData, artifactRoot, options = {}) {
         }
       : null;
     if (
-      !sameJson(runData.executionEnvelope, expectedEnvelope)
-      && (!legacyExpectedEnvelope || !sameJson(runData.executionEnvelope, legacyExpectedEnvelope))
+      !sameJson(executionEnvelope, expectedEnvelope)
+      && (!legacyExpectedEnvelope || !sameJson(executionEnvelope, legacyExpectedEnvelope))
     ) {
       throw new ValidationError(
         `finished run ${runData.runId} executionEnvelope does not match its approved Gate B specification`,
       );
     }
-    const expectedEnvelopeSha256 = executionEnvelopeSha256(runData.executionEnvelope);
+    const expectedEnvelopeSha256 = executionEnvelopeSha256(executionEnvelope);
     if (runData.executionEnvelopeSha256 !== expectedEnvelopeSha256) {
       throw new ValidationError(
-        `finished run ${runData.runId} executionEnvelopeSha256 does not match executionEnvelope`,
+        `finished run ${runData.runId} executionEnvelopeSha256 does not match resolved execution envelope`,
       );
     }
   }
@@ -5136,6 +5188,7 @@ export function validateRunsDir(runsDir, options = {}) {
     const runPath = path.join(runsDir, normalizedRunRef);
     assertFile(runPath, run.runRef);
     const runData = validateRun(runPath);
+    resolveRunExecutionEnvelope(runData, runsDir);
     for (const field of ['runId', 'taskId', 'iterationId', 'status', 'agentTool', 'workspaceRef', 'taskGraphRef', 'startedAt', 'finishedAt']) {
       if (JSON.stringify(run[field]) !== JSON.stringify(runData[field])) {
         throw new ValidationError(`run-index ${run.runId}.${field} does not match run file`);
@@ -5154,7 +5207,7 @@ export function validateRunsDir(runsDir, options = {}) {
       ? validateRunTaskContract(
           runData,
           path.dirname(path.resolve(runsDir)),
-          { validationSession },
+          { validationSession, runsDir },
         )
       : null;
     if (runData.monitorGate?.required) {
@@ -5342,8 +5395,20 @@ export function validateRunsDir(runsDir, options = {}) {
     if (!entry.isDirectory() || entry.name.startsWith('.')) continue;
     for (const child of readdirSync(path.join(runsDir, entry.name), { withFileTypes: true })) {
       const childRef = `${entry.name}/${child.name}`;
-      if (child.isFile()) candidateRunFiles.push(childRef);
-      else unsupportedEntries.push(childRef);
+      if (child.isFile()) {
+        candidateRunFiles.push(childRef);
+        continue;
+      }
+      if (child.isDirectory() && child.name === 'envelopes') {
+        for (const envelope of readdirSync(path.join(runsDir, childRef), { withFileTypes: true })) {
+          const envelopeRef = `${childRef}/${envelope.name}`;
+          if (!envelope.isFile() || !/^[a-f0-9]{64}\.json$/.test(envelope.name)) {
+            unsupportedEntries.push(envelopeRef);
+          }
+        }
+        continue;
+      }
+      unsupportedEntries.push(childRef);
     }
   }
   if (unsupportedEntries.length) {

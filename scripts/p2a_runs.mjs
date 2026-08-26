@@ -28,6 +28,7 @@ import {
   approvedVisualReviewContract,
   executionEnvelopeSha256,
   loadJson,
+  resolveRunExecutionEnvelope,
   resolveRunTaskGraphPath,
   validateConstitution,
   validateRunTaskContract,
@@ -63,6 +64,7 @@ import {
   canonicalRunRef,
   DEFAULT_RUNS_DIR,
   defaultArtifactRootForGraph,
+  executionEnvelopeStoreRef,
   indexedRunRef,
   isRunRecordFile,
   legacyRunRef,
@@ -1190,6 +1192,30 @@ export function pruneIndexedRunEvidence(runsDir, options = {}) {
     : withRunStoreLocks([resolvedRunsDir], prune);
 }
 
+function ensureExecutionEnvelopeStored(runsDir, run, envelope) {
+  const sha256 = executionEnvelopeSha256(envelope);
+  if (
+    run.executionEnvelopeSha256 !== sha256
+    || run.executionEnvelopeRef?.sha256 !== sha256
+  ) {
+    throw new Error(`run ${run.runId} execution envelope hash does not match its content-addressed reference`);
+  }
+  const envelopeRef = executionEnvelopeStoreRef(run, sha256);
+  const envelopePath = path.join(runsDir, envelopeRef);
+  if (existsSync(envelopePath)) {
+    const existing = loadJson(envelopePath);
+    if (
+      executionEnvelopeSha256(existing) !== sha256
+      || JSON.stringify(existing) !== JSON.stringify(envelope)
+    ) {
+      throw new Error(`execution envelope store collision or corruption at ${displayPath(envelopePath)}`);
+    }
+    return envelopeRef;
+  }
+  atomicWriteJson(envelopePath, envelope);
+  return envelopeRef;
+}
+
 function gcProjectConfig(args, runsDir) {
   const candidates = uniqueStrings([
     args.artifacts
@@ -1507,6 +1533,10 @@ function writeRun(runsDir, run, options = {}) {
   return withRunStoreLocks([runsDir], () => {
     assertNoPendingRunMigration(runsDir);
     recoverPendingRunWrite(runsDir);
+    if (options.executionEnvelope) {
+      ensureExecutionEnvelopeStored(runsDir, run, options.executionEnvelope);
+    }
+    resolveRunExecutionEnvelope(run, runsDir);
     const index = loadIndex(runsDir, run.projectId);
     const existing = index.runs.find((entry) => entry.runId === run.runId);
     const legacyRef = legacyRunRef(run.runId);
@@ -2348,7 +2378,7 @@ function startRun(args) {
     selectionRationale: strategy.selectionRationale,
     ...(strategy.milestones ? { milestones: strategy.milestones } : {}),
     ...(executionEnvelope ? {
-      executionEnvelope,
+      executionEnvelopeRef: { sha256: executionEnvelopeSha256(executionEnvelope) },
       executionEnvelopeSha256: executionEnvelopeSha256(executionEnvelope),
     } : {}),
     agentTool: args.agentTool,
@@ -2396,6 +2426,7 @@ function startRun(args) {
       monitorGateRequired: args.requireMonitor,
       monitorRuleContract: ruleContract,
       reservationToken: allocation.reservationToken,
+      executionEnvelope,
     });
   });
   console.log(`Plan2Agent run started: ${run.runId}`);
@@ -2461,7 +2492,7 @@ function verifyRun(args) {
     throw new Error(`run ${run.runId} is already ${run.status}; verification commands only run while a run is started`);
   }
   if (run.schema_version === 'p2a.run.v2' || run.mode !== undefined) {
-    validateRunTaskContract(run, path.dirname(path.resolve(runsDir)));
+    validateRunTaskContract(run, path.dirname(path.resolve(runsDir)), { runsDir });
   }
   const workspacePath = args.workspace ? path.resolve(args.workspace) : path.resolve(run.workspacePath);
   assertDirectory(workspacePath, 'run workspace');
@@ -2496,7 +2527,7 @@ function checkpointRun(args) {
   const { run, expectedRun } = readRunForUpdate(runsDir, args.runId);
   if (source) assertRunMatchesSourceContext(run, source);
   if (run.status !== 'started') throw new Error(`run ${run.runId} is already ${run.status}`);
-  validateRunTaskContract(run, path.dirname(path.resolve(runsDir)));
+  validateRunTaskContract(run, path.dirname(path.resolve(runsDir)), { runsDir });
   if (run.mode !== 'planned' || !run.milestones) {
     throw new Error(`run ${run.runId} does not use planned execution checkpoints`);
   }
@@ -2606,7 +2637,7 @@ function finishRun(args) {
     }
   }
   const validatedSource = finalStatus === 'finished'
-    ? validateRunTaskContract(run, path.dirname(path.resolve(runsDir)))
+    ? validateRunTaskContract(run, path.dirname(path.resolve(runsDir)), { runsDir })
     : null;
   const visualReviewCutoff = new Date().toISOString();
   if (finalStatus === 'finished') {
@@ -3088,6 +3119,27 @@ function planAndMigrateRunLayout(args, targetRunsDir, legacyRunsDirs) {
         if (!existsSync(source)) continue;
         files.push({ suffix, source, target: path.join(targetRunsDir, runSidecarRef(targetRef, suffix)) });
       }
+      const runData = loadJson(files[0].source);
+      if (runData.executionEnvelopeRef) {
+        const envelopeRef = executionEnvelopeStoreRef(
+          runData,
+          runData.executionEnvelopeRef.sha256,
+        );
+        const envelopeSource = path.join(state.runsDir, envelopeRef);
+        const envelopeTarget = path.join(targetRunsDir, envelopeRef);
+        assertFile(envelopeSource, `${entry.runId} execution envelope`);
+        if (path.resolve(envelopeSource) !== path.resolve(envelopeTarget)) {
+          const normalizedTarget = path.resolve(envelopeTarget);
+          if (existsSync(envelopeTarget)) {
+            const targetEnvelope = loadJson(envelopeTarget);
+            if (executionEnvelopeSha256(targetEnvelope) !== runData.executionEnvelopeRef.sha256) {
+              throw new Error(`migrate-layout execution envelope target is corrupt: ${displayPath(envelopeTarget)}`);
+            }
+          } else if (!plannedTargets.has(normalizedTarget)) {
+            files.push({ suffix: '.execution-envelope.json', source: envelopeSource, target: envelopeTarget });
+          }
+        }
+      }
       for (const file of files) {
         const normalizedTarget = path.resolve(file.target);
         if (plannedTargets.has(normalizedTarget) || existsSync(file.target)) {
@@ -3208,29 +3260,47 @@ function migrateRunSchema(args) {
       throw new Error(`unknown run id: ${args.runId}`);
     }
 
-    const upgrades = [];
+    const migrations = [];
     const skipped = [];
     const artifactRoot = path.dirname(path.resolve(runsDir));
     for (const entry of selectedEntries) {
       const run = readRun(runsDir, entry.runId);
-      if (run.schema_version === 'p2a.run.v2') {
-        skipped.push({ runId: run.runId, reason: 'already p2a.run.v2' });
+      const migrateVersion = run.schema_version === 'p2a.run.v1' && run.status === 'finished';
+      const migrateEnvelope = run.executionEnvelope !== undefined;
+      if (!migrateVersion && !migrateEnvelope) {
+        skipped.push({ runId: run.runId, reason: 'schema and execution envelope storage are current' });
         continue;
       }
-      if (run.status !== 'finished') {
+      if (run.schema_version === 'p2a.run.v1' && run.status !== 'finished' && !migrateEnvelope) {
         skipped.push({ runId: run.runId, reason: `status ${run.status}; only finished evidence is migrated` });
         continue;
       }
-      const source = validateRunTaskContract(run, artifactRoot);
-      const upgraded = {
-        ...run,
-        schema_version: 'p2a.run.v2',
-        taskContractSha256: taskContractSha256(source.task),
-      };
-      validateRunData(upgraded);
-      validateRunTaskContract(upgraded, artifactRoot);
-      upgrades.push({
-        run: upgraded,
+      const source = migrateVersion
+        ? validateRunTaskContract(run, artifactRoot, { runsDir })
+        : null;
+      const migrated = { ...run };
+      if (migrateVersion) {
+        migrated.schema_version = 'p2a.run.v2';
+        migrated.taskContractSha256 = taskContractSha256(source.task);
+      }
+      const inlineEnvelope = migrateEnvelope ? run.executionEnvelope : null;
+      if (migrateEnvelope) {
+        delete migrated.executionEnvelope;
+        migrated.executionEnvelopeRef = { sha256: run.executionEnvelopeSha256 };
+      }
+      validateRunData(migrated);
+      if (run.status === 'finished') {
+        const contractCandidate = migrateEnvelope
+          ? { ...migrated, executionEnvelope: inlineEnvelope }
+          : migrated;
+        if (migrateEnvelope) delete contractCandidate.executionEnvelopeRef;
+        validateRunTaskContract(contractCandidate, artifactRoot, { runsDir });
+      }
+      migrations.push({
+        run: migrated,
+        inlineEnvelope,
+        migrateVersion,
+        migrateEnvelope,
         expectedRun: JSON.stringify(run),
         runRef: indexedRunRef(runsDir, run.runId, runIndex),
       });
@@ -3238,8 +3308,14 @@ function migrateRunSchema(args) {
 
     console.log('Plan2Agent run schema migration');
     console.log(`- runs: ${displayPath(runsDir)}`);
-    console.log(`- upgrades: ${upgrades.length}`);
-    for (const upgrade of upgrades) console.log(`- ${upgrade.run.runId}: p2a.run.v1 -> p2a.run.v2`);
+    console.log(`- migrations: ${migrations.length}`);
+    for (const migration of migrations) {
+      const changes = [
+        migration.migrateVersion ? 'p2a.run.v1 -> p2a.run.v2' : null,
+        migration.migrateEnvelope ? 'inline envelope -> content-addressed reference' : null,
+      ].filter(Boolean);
+      console.log(`- ${migration.run.runId}: ${changes.join(', ')}`);
+    }
     for (const item of skipped) console.log(`- skip ${item.runId}: ${item.reason}`);
     if (args.dryRun) {
       console.log('- result: dry-run; source provenance validated; no files changed');
@@ -3247,16 +3323,20 @@ function migrateRunSchema(args) {
     }
 
     const mutableIndex = loadIndex(runsDir);
-    for (const upgrade of upgrades) {
-      const current = loadJson(path.join(runsDir, upgrade.runRef));
-      if (JSON.stringify(current) !== upgrade.expectedRun) {
-        throw new Error(`run ${upgrade.run.runId} changed while preparing schema migration`);
+    for (const migration of migrations) {
+      const current = loadJson(path.join(runsDir, migration.runRef));
+      if (JSON.stringify(current) !== migration.expectedRun) {
+        throw new Error(`run ${migration.run.runId} changed while preparing schema migration`);
       }
-      upsertIndexRun(runsDir, mutableIndex, upgrade.run, upgrade.runRef);
-      commitRunWrite(runsDir, upgrade.runRef, upgrade.run, mutableIndex);
+      if (migration.inlineEnvelope) {
+        ensureExecutionEnvelopeStored(runsDir, migration.run, migration.inlineEnvelope);
+      }
+      resolveRunExecutionEnvelope(migration.run, runsDir);
+      upsertIndexRun(runsDir, mutableIndex, migration.run, migration.runRef);
+      commitRunWrite(runsDir, migration.runRef, migration.run, mutableIndex);
     }
     validateRunsDir(runsDir);
-    console.log(`- result: migrated ${upgrades.length} finished run(s) and validated`);
+    console.log(`- result: migrated ${migrations.length} run(s) and validated`);
     return 0;
   });
 }

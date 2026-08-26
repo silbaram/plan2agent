@@ -1486,7 +1486,7 @@ function buildNextDecisionContext(
       validateRunTaskContract(
         startedRun,
         path.dirname(path.resolve(detail.runs.runsDir)),
-        { validationSession },
+        { validationSession, runsDir: detail.runs.runsDir },
       );
     } catch (error) {
       startedRunContractError = error instanceof Error ? error.message : String(error);

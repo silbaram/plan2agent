@@ -1126,7 +1126,9 @@ function assertRunMatchesSourceContext(run, source) {
 
 function assertRunExecutionContractCurrent(run, source, operation) {
   try {
-    validateRunTaskContract(run, path.dirname(path.resolve(source.runsDir)));
+    validateRunTaskContract(run, path.dirname(path.resolve(source.runsDir)), {
+      runsDir: source.runsDir,
+    });
   } catch (error) {
     throw new Error(
       `${operation} blocked because run ${run.runId} no longer matches its recorded execution contract: ${error.message}`,

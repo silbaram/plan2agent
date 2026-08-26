@@ -6,6 +6,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+## [0.5.15] - 2026-08-26
+
 ### Added
 
 - Add `p2a runs gc` with dry-run previews, iteration scoping, final-run retention, persistent-mode protection, and orphan evidence cleanup while refusing both indexed and crash-orphaned started runs; surface orphan cleanup guidance through `p2a doctor`.
@@ -14,6 +16,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 ### Changed
 
 - Preserve failed or blocked active-only runs until proposal mining records their `sourceRunId`, preventing direct retries from silently discarding self-improvement input.
+- Store new Gate-derived execution envelopes once per content hash under the iteration run partition and keep only `executionEnvelopeRef` plus the verified SHA-256 in each run; retain inline run compatibility and migrate it with `p2a runs migrate-schema`.
 
 ## [0.5.14] - 2026-08-26
 
@@ -243,7 +246,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Add package-runtime project initialization, managed provider assets, artifact validation, handoff, supervised execution, evaluation, and proposal workflows.
 - Ship canonical and generated integrations for Codex, Claude Code, and Gemini CLI.
 
-[Unreleased]: https://github.com/silbaram/plan2agent/compare/v0.5.14...HEAD
+[Unreleased]: https://github.com/silbaram/plan2agent/compare/v0.5.15...HEAD
+[0.5.15]: https://github.com/silbaram/plan2agent/compare/v0.5.14...v0.5.15
 [0.5.14]: https://github.com/silbaram/plan2agent/compare/v0.5.13...v0.5.14
 [0.5.13]: https://github.com/silbaram/plan2agent/compare/v0.5.12...v0.5.13
 [0.5.12]: https://github.com/silbaram/plan2agent/compare/v0.5.11...v0.5.12
