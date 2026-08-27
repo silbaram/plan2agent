@@ -279,10 +279,15 @@ function retryCandidates(projectId, iterationId, runs, summary, policy) {
     }));
   }
   const summarizedRetries = safeCount(summary?.reasonCounts?.superseded);
+  const summarizedRetryCause = (
+    safeCount(summary?.statusCounts?.failed) > 0
+    || safeCount(summary?.verificationStatusCounts?.failed) > 0
+    || safeCount(summary?.verificationStatusCounts?.unavailable) > 0
+  );
   if (
     summarizedRetries >= policy.retryThreshold - 1
     && !candidates.length
-    && runs.some((run) => FAILURE_RETRY_CLASSES.has(run.failure?.class))
+    && summarizedRetryCause
   ) {
     candidates.push(candidate({
       projectId,
@@ -293,10 +298,18 @@ function retryCandidates(projectId, iterationId, runs, summary, policy) {
       unit: 'count',
       observed: summarizedRetries,
       threshold: policy.retryThreshold - 1,
-      runs: runs.filter((run) => FAILURE_RETRY_CLASSES.has(run.failure?.class)),
+      runs: [],
       counts: candidateCounts(runs, {
         runs: safeCountSum(runs.length, summary?.runCount),
         retries: summarizedRetries,
+        failed: safeCountSum(
+          runs.filter((run) => run.status === 'failed').length,
+          summary?.statusCounts?.failed,
+        ),
+        blocked: safeCountSum(
+          runs.filter((run) => run.status === 'blocked').length,
+          summary?.statusCounts?.blocked,
+        ),
       }),
       targetArea: 'execution_process',
       recommendedChange: 'Reduce full-scope retry overhead by adding an earlier environment, flake, or verification preflight.',

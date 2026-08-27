@@ -809,6 +809,11 @@ test('successful direct retry retains an unmined failed run until proposal minin
     assert.ok(failedCandidate, 'the bounded closeout should retain the mined failure signal');
     assert.equal(failedCandidate.measurement.observed, 1);
     validateRetrospectiveCandidateData(failedCandidate);
+    const retryCandidate = candidates.find((candidate) => candidate.signal === 'retry_overhead');
+    assert.ok(retryCandidate, 'the bounded closeout should retain the mined retry signal');
+    assert.equal(retryCandidate.measurement.observed, 1);
+    assert.equal(retryCandidate.counts.failed, 1);
+    validateRetrospectiveCandidateData(retryCandidate);
   } finally {
     rmSync(artifactRoot, { recursive: true, force: true });
     rmSync(workspace, { recursive: true, force: true });

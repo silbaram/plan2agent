@@ -111,7 +111,7 @@ function addMalformedHistory(artifactRoot, count) {
   return created;
 }
 
-function linkLegacyCompositionHistory(artifactRoot, iterationRoots) {
+function linkLegacyCompositionHistory(artifactRoot, iterationRoots, options = {}) {
   if (iterationRoots.length === 0) return;
   const currentSpecPath = path.join(artifactRoot, 'current-spec.json');
   const currentSpec = JSON.parse(readFileSync(currentSpecPath, 'utf8'));
@@ -133,7 +133,7 @@ function linkLegacyCompositionHistory(artifactRoot, iterationRoots) {
       task_graph_ref: `iterations/${iterationId}/gate-c-task-graph/task-graph.json`,
     };
   });
-  currentSpec.effective_spec_ref = 'current-spec.json';
+  currentSpec.effective_spec_ref = options.effectiveSpecRef ?? 'current-spec.json';
   currentSpec.composed_from = sources.map((source) => source.iteration_id);
   currentSpec.source_specs = sources;
   currentSpec.effective_product = activeSpec.product;
@@ -377,9 +377,14 @@ test('direct task transitions and iteration close stay current-only with linked 
   const fixture = currentDevelopmentFixture({ planned: true });
   try {
     const archived = addMalformedHistory(fixture.artifactRoot, 20);
-    linkLegacyCompositionHistory(fixture.artifactRoot, archived);
+    linkLegacyCompositionHistory(fixture.artifactRoot, archived, {
+      effectiveSpecRef: 'iterations/archived-1/gate-b-spec/spec.json',
+    });
     const historicalRoots = archived.map((iterationRoot) => path.resolve(iterationRoot));
     const runId = 'run-current-only-task-transitions';
+    for (const iterationRoot of archived) {
+      rmSync(iterationRoot, { recursive: true, force: true });
+    }
 
     let traced = tracedCommand(runExecute, [
       'start',

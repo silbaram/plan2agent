@@ -142,6 +142,44 @@ test('retry and repeated defect signals use current runs plus bounded active-onl
   for (const candidate of candidates) validateRetrospectiveCandidateData(candidate);
 });
 
+test('bounded active-only summary retains retry overhead after the failed run is pruned', () => {
+  const candidates = buildRetrospectiveCandidates({
+    projectId: 'sample',
+    iterationId: 'v20',
+    runs: [run({ runId: 'run-task-001-002' })],
+    retrospective: {
+      iterations: [{
+        iterationId: 'v20',
+        runCount: 1,
+        reasonCounts: { superseded: 1, completed_maintenance: 0 },
+        statusCounts: { finished: 0, failed: 1, blocked: 0 },
+        verificationCount: 0,
+        verificationDuration: { sampleCount: 0, totalMs: 0, maxMs: 0 },
+        verificationStatusCounts: {
+          passed: 0,
+          failed: 0,
+          skipped: 0,
+          not_run: 0,
+          unavailable: 0,
+        },
+        interruptionCounts: {
+          implementation_decision: 0,
+          user_correction: 0,
+          gate_return_valid: 0,
+          gate_return_invalid: 0,
+        },
+      }],
+    },
+    policy: policy({ retryThreshold: 2 }),
+  });
+  const retry = candidates.find((candidate) => candidate.signal === 'retry_overhead');
+  assert.ok(retry, 'summary-only failed retry should remain visible at closeout');
+  assert.equal(retry.measurement.observed, 1);
+  assert.equal(retry.counts.failed, 1);
+  assert.deepEqual(retry.binding, { taskIds: [], runIds: [] });
+  validateRetrospectiveCandidateData(retry);
+});
+
 test('disabled retrospective policy produces no closeout candidates', () => {
   assert.deepEqual(buildRetrospectiveCandidates({
     projectId: 'sample',

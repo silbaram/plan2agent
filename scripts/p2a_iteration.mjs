@@ -3509,11 +3509,6 @@ export function validateCloseReadyFullVerificationEvidence({
   return 1;
 }
 
-function loadReadyIterationFacts(artifactRoot) {
-  const state = resolveCurrentDevelopmentState(artifactRoot);
-  return { state, taskGraph: state.taskGraph };
-}
-
 function validateActiveSpecWithOptionalIntake(state) {
   assertActivePlanningContract(state);
   const intakePath = activeIntakePath(state);
@@ -4114,11 +4109,10 @@ function validateIteration(args) {
   return 0;
 }
 
-function closeLocked(args, artifactRoot) {
+function closeLocked(args, artifactRoot, facts) {
   const requestedIteration = args.iterationIdProvided ? args.iterationId : 'active';
   if (requestedIteration !== 'active') assertSafeIterationId(requestedIteration);
 
-  const facts = loadReadyIterationFacts(artifactRoot);
   assertCloseReadyTasks(facts.taskGraph);
   const reviewPasses = projectReviewPasses(canonicalWorkspacePathForArtifactRoot(artifactRoot));
   validateCloseReadyVisualEvidence({
@@ -4190,7 +4184,10 @@ function closeLocked(args, artifactRoot) {
 
 function close(args) {
   const artifactRoot = normalizeArtifactPath(args.artifacts);
-  const initialState = resolveIterationState(artifactRoot, { requireReady: false });
+  const initialState = resolveIterationState(artifactRoot, {
+    requireReady: false,
+    requireEffectiveSpec: false,
+  });
   return withRunStoreLocks(
     [
       artifactStateLockDir(artifactRoot),
@@ -4198,17 +4195,24 @@ function close(args) {
       path.join(artifactRoot, 'runs'),
     ],
     () => {
-      const lockedState = resolveIterationState(artifactRoot, { requireReady: false });
+      const lockedPointerState = resolveIterationState(artifactRoot, {
+        requireReady: false,
+        requireEffectiveSpec: false,
+      });
       if (
-        lockedState.activeIteration !== initialState.activeIteration
-        || path.resolve(lockedState.taskGraphPath)
+        lockedPointerState.activeIteration !== initialState.activeIteration
+        || path.resolve(lockedPointerState.taskGraphPath)
           !== path.resolve(initialState.taskGraphPath)
       ) {
         throw new ValidationError(
           'active iteration changed while close was waiting for state locks; retry the command',
         );
       }
-      return closeLocked(args, artifactRoot);
+      const lockedState = resolveCurrentDevelopmentState(artifactRoot);
+      return closeLocked(args, artifactRoot, {
+        state: lockedState,
+        taskGraph: lockedState.taskGraph,
+      });
     },
   );
 }
@@ -4730,15 +4734,19 @@ function pruneArchivedRunEvidenceAfterOpen(facts) {
 }
 
 function openLocked(args, artifactRoot, idea, options = {}) {
-  const openingState = resolveIterationState(artifactRoot, { requireReady: false });
-  validateActiveIterationArchiveConsistency(openingState);
-  if (openingState.currentSpec.pending_iteration) {
+  const openingPointerState = resolveIterationState(artifactRoot, {
+    requireReady: false,
+    requireEffectiveSpec: false,
+  });
+  validateActiveIterationArchiveConsistency(openingPointerState);
+  if (openingPointerState.currentSpec.pending_iteration) {
     throw new ValidationError(
       'open requires no pending_iteration; finish or discard the active planning iteration first',
     );
   }
-  const facts = loadReadyIterationFacts(artifactRoot);
-  const currentDevelopment = resolveCurrentDevelopmentState(artifactRoot);
+  const openingState = resolveCurrentDevelopmentState(artifactRoot);
+  const facts = { state: openingState, taskGraph: openingState.taskGraph };
+  const currentDevelopment = openingState;
   assertCloseReadyTasks(facts.taskGraph);
   assertArchivedBaselineForOpen(facts.state);
   if (facts.state.activeIteration === args.iterationId) {
