@@ -340,6 +340,10 @@ function renderNextOptionLines(option) {
       lines.push(`    Remediation approval required: ${option.action.remediation.requiresApproval ? 'yes' : 'no'}`);
     }
   }
+  if (option.action?.report?.display) {
+    lines.push(`    Retrospective report: ${option.action.report.path}`);
+    lines.push(`    Report approval required: ${option.action.report.requiresApproval ? 'yes' : 'no'}`);
+  }
   if (option.action?.proposalMining?.display) {
     lines.push(`    Proposal mining: ${option.action.proposalMining.display}`);
     lines.push(`    Proposal mining approval required: ${option.action.proposalMining.requiresApproval ? 'yes' : 'no'}`);
@@ -438,11 +442,12 @@ function humanNextSummary(next, context) {
       ];
     case 'iteration_review_or_close_required':
       return [
-        '개발이 끝났습니다. 결과를 한 번 더 살펴볼지, 현재 작업 묶음을 완료 처리할지 선택합니다.',
+        '개발이 끝났습니다. 제품 결과를 검토할지, P2A 개발 과정을 회고할지, 현재 작업 묶음을 완료할지 선택합니다.',
         ...(next.retrospective?.candidateCount
-          ? [`현재 실행 증거에서 회고 후보 ${next.retrospective.candidateCount}개를 찾았습니다. 후보 검토는 선택 사항입니다.`]
-          : []),
-        '검토를 선택하면 → 문제가 있으면 수정하고, 없으면 다시 완료 여부를 묻습니다.',
+          ? [`현재 실행 증거에서 P2A 회고 후보 ${next.retrospective.candidateCount}개를 찾았습니다.`]
+          : ['자동으로 발견된 P2A 문제는 없습니다. 회고를 선택하면 체감한 지연·오류·잘못된 안내가 있었는지 한 번 묻습니다.']),
+        '제품 검토를 선택하면 → 문제가 있으면 수정하고, 없으면 다시 완료 여부를 묻습니다.',
+        'P2A 회고를 선택하면 → 발견된 신호나 사용자 경험을 짧게 정리한 뒤 회고 진행 여부를 묻습니다.',
         '완료를 선택하면 → 현재 작업 묶음을 닫습니다.',
       ];
     case 'ready_task_available':
@@ -483,6 +488,50 @@ function humanNextSummary(next, context) {
   }
 }
 
+function humanDuration(milliseconds) {
+  if (!Number.isSafeInteger(milliseconds) || milliseconds < 0) return `${milliseconds}ms`;
+  if (milliseconds < 1000) return `${milliseconds}ms`;
+  const seconds = milliseconds / 1000;
+  return `${Number.isInteger(seconds) ? seconds : seconds.toFixed(1)}초`;
+}
+
+function verificationLabel(category) {
+  return ({
+    test: '테스트',
+    lint: '린트',
+    typecheck: '타입 검사',
+    custom: '사용자 검증',
+  })[category] ?? category;
+}
+
+function humanRetrospectiveCandidate(candidate) {
+  const observed = candidate.measurement?.observed;
+  const threshold = candidate.measurement?.threshold;
+  const category = candidate.measurement?.category;
+  switch (candidate.signal) {
+    case 'slow_verification':
+      return `${verificationLabel(category)}가 ${humanDuration(observed)} 걸려 설정한 예산 ${humanDuration(threshold)}를 넘었습니다.`;
+    case 'performance_regression':
+      return `${verificationLabel(category)}가 ${humanDuration(observed)} 걸려 허용 기준 ${humanDuration(threshold)}보다 느려졌습니다.`;
+    case 'failed_run':
+      return `개발 실행이 ${observed}회 실패했습니다.`;
+    case 'blocked_run':
+      return `개발 실행이 ${observed}회 중단되었습니다.`;
+    case 'verification_gap':
+      return `검증 기록 없이 완료된 실행이 ${observed}개 있습니다.`;
+    case 'retry_overhead':
+      return `실패나 검증 문제로 재시도가 ${observed}회 발생했습니다.`;
+    case 'explicit_correction':
+      return `사용자가 진행 방향을 바로잡은 기록이 ${observed}회 있습니다.`;
+    case 'repeated_process_defect':
+      return `같은 종류의 실행 문제가 ${observed}회 반복됐습니다.`;
+    case 'monitor_mismatch':
+      return `모니터 판정과 실행 종료 상태가 맞지 않은 기록이 ${observed}개 있습니다.`;
+    default:
+      return `${candidate.signal}: ${verificationLabel(category)} ${observed} (확인 기준 ${threshold})`;
+  }
+}
+
 function humanCommandDisplay(next) {
   const display = next.command?.display ?? '';
   if (next.command?.kind !== 'approval') return display;
@@ -511,11 +560,9 @@ export function renderNextHuman(next, context = humanNextArtifactContext(next)) 
     for (const option of next.command.options) lines.push(...renderNextOptionLines(option));
   }
   if (Array.isArray(next.retrospective?.candidates) && next.retrospective.candidates.length) {
-    lines.push('Retrospective candidates:');
+    lines.push('감지된 회고 내용:');
     for (const candidate of next.retrospective.candidates) {
-      lines.push(
-        `  - ${candidate.signal}: ${candidate.measurement.category} observed=${candidate.measurement.observed} threshold=${candidate.measurement.threshold}`,
-      );
+      lines.push(`  - ${humanRetrospectiveCandidate(candidate)}`);
     }
   }
   lines.push('', '[세부 계약]', `- target: ${next.target}`);

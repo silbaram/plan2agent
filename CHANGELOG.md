@@ -6,6 +6,16 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+### Added
+
+- Add a dedicated P2A retrospective choice beside product review and iteration close, reusing bounded current-iteration signals and the existing approval-gated proposal flow.
+
+### Changed
+
+- When no automatic retrospective signal is found, guide the agent to ask once about user-observed P2A delay, errors, wrong routing, or unnecessary steps and create nothing when the user reports no issue.
+- Enable bounded read-only process-signal detection by default, keep performance thresholds opt-in, and render detected closeout signals as plain-language user-facing findings.
+- Bind an explicitly approved retrospective to one minimal project report path, keep proposal mining separately approved, and present the same optional closeout choices once after the final maintenance task.
+
 ## [0.5.17] - 2026-08-27
 
 ### Added

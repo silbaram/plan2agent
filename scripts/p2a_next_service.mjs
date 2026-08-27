@@ -1207,7 +1207,7 @@ function approvalNextAction(state, reason, display, options = null) {
   };
 }
 
-function reviewOrCloseOptions(context) {
+function completionOptions(context) {
   const remediationArgv = [
     'tasks',
     'todo',
@@ -1238,6 +1238,15 @@ function reviewOrCloseOptions(context) {
         requiresApproval: true,
       }
     : null;
+  const reportPath = commandProjectPath(
+    context.targetRoot,
+    path.join(
+      context.targetRoot,
+      'docs',
+      'retrospective',
+      `${context.projectId}-${context.detail.activeIteration}.md`,
+    ),
+  );
   return [
     {
       id: 'review',
@@ -1251,6 +1260,25 @@ function reviewOrCloseOptions(context) {
           argv: remediationArgv,
           display: p2aCommandLine(P2A_PATHS, remediationArgv),
           requiresApproval: false,
+        },
+      },
+    },
+    {
+      id: 'retrospective',
+      label: 'Review development process',
+      description: context.retrospectiveCandidates.length
+        ? `Review ${context.retrospectiveCandidates.length} detected development performance or P2A process signal(s) before deciding whether to continue the retrospective.`
+        : 'No automatic development process signal was found. Ask once whether the user experienced delay, errors, wrong routing, or unnecessary steps.',
+      action: {
+        kind: 'retrospective',
+        display: context.retrospectiveCandidates.length
+          ? 'Report the bounded development-process retrospective candidates in plain language, distinguish product verification from P2A workflow signals, then ask whether to continue the retrospective. Keep product review and iteration close separate.'
+          : 'Ask once whether the user experienced any P2A delay, error, wrong routing, or unnecessary step. If not, return to this decision without creating a report.',
+        report: {
+          kind: 'artifact',
+          path: reportPath,
+          display: `After the user explicitly continues the retrospective, write the minimal report to ${reportPath}.`,
+          requiresApproval: true,
         },
         ...(proposalMining ? { proposalMining } : {}),
       },
@@ -2490,17 +2518,17 @@ export const NEXT_DECISION_RULES = [
     ),
     reason: (context) => (
       context.detail.layout.kind === 'iteration'
-        ? `Every task in the active iteration is done and the iteration is still open. ${context.retrospectiveCandidates.length} bounded retrospective candidate(s) were found. The user must explicitly choose review and remediation or close. Candidate proposal writes require separate approval, while a clean review or rejected proposal keeps close available.`
+        ? `Every task in the active iteration is done and the iteration is still open. ${context.retrospectiveCandidates.length} bounded retrospective candidate(s) were found. The user must explicitly choose product review, P2A retrospective, or close. Retrospective writes require separate approval, while skipping retrospective keeps close available.`
         : 'Every task in the handed-off flat artifact bundle is done; this layout has no iteration state to close.'
     ),
     command: (context) => (
       context.detail.layout.kind === 'iteration'
-        ? 'Choose review and remediation to keep the active iteration open, or choose close to archive it.'
+        ? 'Choose product review, P2A retrospective, or close the completed iteration.'
         : `Review the completed task and run evidence under ${context.artifactArg}; no iteration close is required for this flat handoff.`
     ),
     options: (context) => (
       context.detail.layout.kind === 'iteration'
-        ? reviewOrCloseOptions(context)
+        ? completionOptions(context)
         : null
     ),
   },

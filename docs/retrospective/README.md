@@ -13,18 +13,32 @@ p2a 하네스로 개발할 때 "하네스가 도움이 되는가, 방해가 되�
 먼저 삭제되더라도 `run-index.json.retrospective`에는 텍스트 없는 횟수·시간 집계가 남는다.
 회고는 현재 run 상세와 이 집계를 함께 읽을 수 있는 close 직전에 끝내야 한다.
 
-`runTracking.retrospectiveSignals.enabled: true`인 프로젝트는 같은 시점에 `p2a next
---json --contract v2`가 성능 예산, 회귀 baseline, retry, failed/blocked, 명시적 correction,
-반복 process defect, verification gap, monitor mismatch를 최대 32개의 구조화된 후보로 보여준다.
+같은 시점에 `p2a next --json --contract v2`는 retry, failed/blocked, 명시적 correction,
+반복 process defect, verification gap, monitor mismatch를 기본으로 탐지하고, 설정된 성능 예산과
+회귀 baseline도 최대 32개의 구조화된 후보로 보여준다. 자동 탐지가 필요 없으면
+`runTracking.retrospectiveSignals.enabled: false`로 끌 수 있다.
 후보는 현재 iteration과 텍스트 없는 제한 집계만 사용하며 원본 command, output, note,
 source 값을 보존하지 않는다. 이 자동 요약은 아래 5분 회고를 대체하지 않고 우선순위를
-잡는 근거다. Proposal 저장은 사용자가 별도로 승인해야 하며 거절해도 close할 수 있다.
+잡는 근거다. 완료 선택의 `P2A 회고`는 후보를 짧게 보고하고, 후보가 없으면 사용자 체감
+마찰이 있었는지 한 번만 묻는다. 사용자가 회고 진행을 승인하면 장문 템플릿 대신 관찰된
+문제·사용자 영향·개선 제안·간단한 근거만 `action.report.path`에 먼저 기록할 수 있다.
+Proposal 저장은 다시 별도 승인이 필요하며 회고를 건너뛰거나 저장을 거절해도 close할 수 있다.
 
 ```
 사이클 완료 → [회고 5분] → p2a iteration open
 ```
 
 ## 어떻게 하는가
+
+완료 선택에서 승인한 짧은 회고는 반환된 경로에 아래 네 항목만 기록한다. 이미 파일이
+있으면 덮어쓰지 않는다.
+
+- Observed issue
+- User impact
+- Suggested improvement
+- Evidence
+
+아래 전체 템플릿은 사용자가 5분 상세 회고를 요청한 경우에만 사용한다.
 
 1. [cycle-template.md](./cycle-template.md)를 복사해
    `docs/retrospective/<project_id>-v<N>.md`로 만든다.

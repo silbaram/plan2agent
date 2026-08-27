@@ -698,6 +698,33 @@ function currentSourceGraph(source) {
   return { ...source, graph };
 }
 
+function maintenanceRetrospectiveReportPath(source, taskId) {
+  const workspaceRoot = canonicalWorkspacePathForArtifactRoot(source.artifactRoot);
+  return path.join(
+    workspaceRoot,
+    'docs',
+    'retrospective',
+    `${source.projectId}-maintenance-${taskId}.md`,
+  );
+}
+
+function printMaintenanceCompletionChoices(source, run) {
+  if (source.sourceLayout !== 'maintenance' || run.status !== 'finished') return;
+  try {
+    const current = currentSourceGraph(source);
+    if (!current.graph.tasks.length || current.graph.tasks.some((task) => task.status !== 'done')) return;
+    const reportPath = maintenanceRetrospectiveReportPath(current, run.taskId);
+    console.log('');
+    console.log('Maintenance development is complete. Choose one:');
+    console.log('1. Review the completed maintenance changes and remediate any material finding.');
+    console.log('2. Review the P2A development process; ask once about delay, errors, wrong routing, or unnecessary steps.');
+    console.log(`   After explicit approval, write the minimal retrospective report to ${reportPath}`);
+    console.log('3. Finish maintenance without an optional review or retrospective.');
+  } catch (error) {
+    console.error(`warning: maintenance completion choices were not rendered: ${error.message}`);
+  }
+}
+
 function claimTaskForRunStart(source, task) {
   task.status = 'in_progress';
   delete task.blockReason;
@@ -1430,6 +1457,7 @@ function recoverAfterClosedRun(args, source, run) {
   const status = transitionTaskAfterFinishedRun(args, source, run, 0);
   if (status === 0 && !args.noTaskTransition) {
     pruneSupersededRunHistory(source, run, { quiet: args.json });
+    printMaintenanceCompletionChoices(source, run);
   }
   printClosedRunFooter(source, run);
   return status;
@@ -2034,6 +2062,7 @@ function runFinish(args) {
   const status = transitionTaskAfterFinishedRun(args, source, run, finishResult.status ?? 0);
   if (status === 0 && !args.noTaskTransition) {
     pruneSupersededRunHistory(source, run, { quiet: args.json });
+    printMaintenanceCompletionChoices(source, run);
   }
   printClosedRunFooter(source, run);
   return status;

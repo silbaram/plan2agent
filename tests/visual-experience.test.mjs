@@ -1928,7 +1928,7 @@ describe('visual experience artifacts', () => {
       const nextPayload = JSON.parse(nextResult.stdout);
       assert.equal(nextPayload.state, 'iteration_review_or_close_required');
       assert.equal(nextPayload.command.kind, 'approval');
-      assert.deepEqual(nextPayload.command.options.map((option) => option.id), ['review', 'close']);
+      assert.deepEqual(nextPayload.command.options.map((option) => option.id), ['review', 'retrospective', 'close']);
       const closeOption = nextPayload.command.options.find((option) => option.id === 'close');
       assert.deepEqual(closeOption.action.argv, [
         'iteration',
