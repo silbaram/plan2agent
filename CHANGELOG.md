@@ -6,6 +6,15 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+### Changed
+
+- Route active task transitions and iteration close from the bounded current development contract, and task-authoring context from active planning artifacts, instead of replaying historical composition sources.
+- Keep deep historical composition and archive checks available through explicit `p2a iteration validate` and doctor/audit workflows while allowing current development to continue when archived source artifacts are missing or malformed.
+
+### Fixed
+
+- Revalidate the current contract and task bindings after acquiring task-transition locks so concurrent current-state drift fails closed without restoring historical validation.
+
 ## [0.5.16] - 2026-08-27
 
 ### Added

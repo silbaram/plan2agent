@@ -633,7 +633,6 @@ function statusIterationIds(currentSpec) {
       ids.push(iterationId);
     }
   };
-  for (const iterationId of currentSpec.composed_from ?? []) add(iterationId);
   for (const closed of currentSpec.closed_iterations ?? []) add(closed?.iteration_id);
   add(currentSpec.last_closed_iteration?.iteration_id);
   add(currentSpec.pending_iteration?.iteration_id);
@@ -3511,10 +3510,8 @@ export function validateCloseReadyFullVerificationEvidence({
 }
 
 function loadReadyIterationFacts(artifactRoot) {
-  const state = resolveIterationState(artifactRoot);
-  const spec = validateActiveSpecWithOptionalIntake(state);
-  const taskGraph = validateTaskGraph(state.taskGraphPath, state.specPath);
-  return { state, spec, taskGraph };
+  const state = resolveCurrentDevelopmentState(artifactRoot);
+  return { state, taskGraph: state.taskGraph };
 }
 
 function validateActiveSpecWithOptionalIntake(state) {
@@ -3602,6 +3599,7 @@ function gateCTaskGraphDraftMetaPath(state) {
 
 function activeBaselineEffectiveSpecRef(state) {
   return state.currentSpec.pending_iteration?.baseline_effective_spec_ref
+    ?? state.currentDevelopmentContract?.bindings.activeSpec.ref
     ?? state.currentSpec.effective_spec_ref
     ?? null;
 }
@@ -3648,14 +3646,10 @@ function loadContextEffectiveSpec(state) {
   const visualExperience = activeSpec?.visual_experience
     ? { visual_experience: cloneJson(activeSpec.visual_experience) }
     : {};
-  if (state.currentSpec.effective_product && state.currentSpec.effective_implementation) {
-    return {
-      product: cloneJson(state.currentSpec.effective_product),
-      implementation: cloneJson(state.currentSpec.effective_implementation),
-      ...visualExperience,
-    };
-  }
-  const fallbackPath = existsSync(state.effectiveSpecPath) ? state.effectiveSpecPath : state.specPath;
+  const baselineRef = state.currentSpec.pending_iteration?.baseline_effective_spec_ref;
+  const fallbackPath = baselineRef
+    ? resolveArtifactFileReference(baselineRef, state.artifactRoot)
+    : state.specPath;
   const data = loadJson(fallbackPath);
   return {
     product: cloneJson(data.product ?? {}),
@@ -3665,14 +3659,13 @@ function loadContextEffectiveSpec(state) {
 }
 
 function contextSpecFieldChanges(state) {
-  if (!existsSync(state.specPath) || !existsSync(state.effectiveSpecPath)) return [];
+  if (!existsSync(state.specPath)) return [];
   const activeSpec = loadJson(state.specPath);
-  const baselineSpec = state.currentSpec.effective_product && state.currentSpec.effective_implementation
-    ? {
-        product: state.currentSpec.effective_product,
-        implementation: state.currentSpec.effective_implementation,
-      }
-    : loadEffectiveBaselineSpec(state.effectiveSpecPath, state.artifactRoot);
+  const baselineRef = state.currentSpec.pending_iteration?.baseline_effective_spec_ref;
+  const baselinePath = baselineRef
+    ? resolveArtifactFileReference(baselineRef, state.artifactRoot)
+    : state.specPath;
+  const baselineSpec = loadEffectiveBaselineSpec(baselinePath, state.artifactRoot);
   return collectSpecFieldChanges(baselineSpec, activeSpec);
 }
 

@@ -22,6 +22,7 @@ import {
 } from './p2a_monitor_gate.mjs';
 import { readRequiredVisualReview } from './p2a_visual_review_gate.mjs';
 import {
+  resolveCurrentDevelopmentState,
   resolveIterationState,
   validateMaintenanceTaskGraphProject,
 } from './p2a_iteration_state.mjs';
@@ -151,8 +152,9 @@ function resolveTaskInputs(args) {
     warnGraphMode();
     return args;
   }
-  const requireReady = !args.maintenance;
-  const iterationState = resolveIterationState(args.artifactsPath, { requireReady });
+  const iterationState = args.maintenance
+    ? resolveIterationState(args.artifactsPath, { requireReady: false })
+    : resolveCurrentDevelopmentState(args.artifactsPath);
   if (args.maintenance) {
     const graphPath = path.join(iterationState.artifactRoot, 'iterations', 'maintenance', 'gate-c-task-graph', 'task-graph.json');
     if (!existsSync(graphPath)) {
@@ -927,8 +929,9 @@ async function buildInteractiveArgv(rl) {
       interactiveArtifactsDefault(),
     );
     if (!artifactsPath) return null;
-    const requireReady = source.mode !== 'maintenance';
-    const iterationState = resolveIterationState(artifactsPath, { requireReady });
+    const iterationState = source.mode === 'maintenance'
+      ? resolveIterationState(artifactsPath, { requireReady: false })
+      : resolveCurrentDevelopmentState(artifactsPath);
     if (source.mode === 'maintenance') {
       graphPath = path.join(iterationState.artifactRoot, 'iterations', 'maintenance', 'gate-c-task-graph', 'task-graph.json');
       if (!existsSync(graphPath)) {
@@ -1037,13 +1040,33 @@ export function main(argv = process.argv.slice(2)) {
         lockDirs.push(path.join(args.iterationState.artifactRoot, 'iterations'));
       }
       const task = withRunStoreLocks(lockDirs, () => {
-        const graph = loadGraph(args.graphPath);
+        const lockedState = args.artifactsPath
+          ? (args.maintenance
+              ? resolveIterationState(args.artifactsPath, { requireReady: false })
+              : resolveCurrentDevelopmentState(args.artifactsPath))
+          : null;
+        if (
+          lockedState
+          && (
+            lockedState.activeIteration !== args.iterationState.activeIteration
+            || path.resolve(
+              args.maintenance
+                ? path.join(lockedState.artifactRoot, 'iterations', 'maintenance', 'gate-c-task-graph', 'task-graph.json')
+                : lockedState.taskGraphPath,
+            ) !== path.resolve(args.graphPath)
+          )
+        ) {
+          throw new ValidationError(
+            'active task graph changed while the task transition was waiting for its lock; retry the command',
+          );
+        }
+        if (lockedState) args.iterationState = lockedState;
+        const graph = !args.maintenance && lockedState?.taskGraph
+          ? structuredClone(lockedState.taskGraph)
+          : loadGraph(args.graphPath);
         validateTaskGraphData(graph);
         if (args.maintenance) {
-          const currentState = resolveIterationState(args.artifactsPath, {
-            requireReady: false,
-          });
-          validateMaintenanceTaskGraphProject(currentState, graph);
+          validateMaintenanceTaskGraphProject(lockedState, graph);
         }
         const currentTask = requireTask(graph, args.taskId);
         transitionTask(graph, currentTask, args.command, args);
