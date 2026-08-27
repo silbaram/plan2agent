@@ -115,14 +115,22 @@ Generated Markdown is a human-readable view. Run evidence is temporary execution
 the current development bundle remains reviewable and portable, while opening the next iteration
 removes archived iteration runs. When a retry replaces a run, `run-index.json` keeps only bounded
 retrospective counters—never commands, output tails, notes, or run IDs—and drops those counters when
-the next iteration opens. Approved specs, close metadata, and Git remain the durable history.
+the next iteration opens. Git and optional BuildLore projection are the durable history; archived P2A
+Gate documents are not runtime dependencies for current development.
 Unmined failed or blocked runs remain available to the proposal flow. Use `p2a runs gc --dry-run`
 to review indexed and orphan evidence before cleanup; persistent projects require an explicit
 `--force`. Each Git-backed run also records its current HEAD, branch, and dirty state. Set
 `runTracking.persistence` to `persistent` only when long-lived local run evidence is required.
-New runs store the Gate-derived execution envelope once by content hash and reference it from each
-run record, avoiding repeated copies while preserving hash-verified fail-closed validation. Existing
-inline records remain readable and `p2a runs migrate-schema` converts them in place.
+New iterations materialize `current-development-contract.json` from the approved current state. It
+contains only the objective, scope, architecture and code rules, preservation constraints,
+acceptance, verification, authority, and current task bindings required for implementation. `p2a
+next` and the normal run lifecycle validate that contract, the current task graph, constitution, and
+active run without traversing archived iteration documents. Existing iterative projects can run
+`p2a iteration migrate-current-contract --artifacts <artifact-root>` once.
+
+New runs store the current-contract execution envelope once by content hash and reference it from
+each run record, avoiding repeated copies while preserving hash-verified fail-closed validation.
+Existing inline records remain readable and `p2a runs migrate-schema` converts them in place.
 
 ## Core workflow
 
@@ -135,7 +143,7 @@ uncertainty as an assumption or user decision rather than inventing a requiremen
 
 ### 2. Execute the approved objective
 
-After Gate B approval, use `p2a next` to start the next action authorized by the approved contract. New projects default to `adaptive`, while existing configs without an execution mode continue to resolve as `orchestrated`; explicit `adaptive`, `direct`, `planned`, and `orchestrated` policies remain supported without another mode approval. Planned mode records 2–5 ordered, command-verified resume checkpoints. New runs bind a Gate-derived execution envelope containing objective, source hash, scope, preservation conditions, non-goals, acceptance, verification, and authority boundaries.
+After Gate B approval, use `p2a next` to start the next action authorized by the current development contract. New projects default to `adaptive`, while existing configs without an execution mode continue to resolve as `orchestrated`; explicit `adaptive`, `direct`, `planned`, and `orchestrated` policies remain supported without another mode approval. Planned mode records 2–5 ordered, command-verified resume checkpoints. New runs bind an execution envelope containing objective, current-contract hash, scope, architecture and code rules, preservation conditions, non-goals, acceptance, verification, and authority boundaries.
 
 For direct control of a prepared work item:
 
@@ -172,7 +180,9 @@ local comparisons.
 ### 5. Keep optional long-term knowledge with BuildLore
 
 [BuildLore](https://github.com/silbaram/buildlore) is a local-first, Git-backed knowledge tool.
-Plan2Agent artifacts remain the local execution source of truth.
+The current Plan2Agent contract remains the local execution source of truth. BuildLore owns optional
+long-term knowledge projected from completed development; normal first-attempt execution does not
+query it and remains available when BuildLore or an LLM Wiki is unavailable.
 
 After attaching a BuildLore `knowledge/` repository and registering the same project ID, enable the
 adapter and preview projection from `.plan2agent/artifacts/<project-id>/`:

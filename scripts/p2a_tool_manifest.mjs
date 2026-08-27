@@ -62,6 +62,7 @@ export const PROJECT_RUNTIME_SCHEMA_FILES = [
   'reference-bundle-snapshot.schema.json',
   'reference-bundle-usage.schema.json',
   'constitution.schema.json',
+  'current-development-contract.schema.json',
   'decisions.schema.json',
   'intake.schema.json',
   'spec.schema.json',

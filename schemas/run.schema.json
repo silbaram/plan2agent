@@ -84,6 +84,14 @@
       "type": "string",
       "pattern": "^[a-f0-9]{64}$"
     },
+    "currentDevelopmentContractRef": {
+      "type": "string",
+      "minLength": 1
+    },
+    "currentDevelopmentContractSha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
     "executionEnvelope": {
       "type": "object",
       "required": [
@@ -119,6 +127,22 @@
           "type": "array",
           "items": { "type": "string", "minLength": 1 }
         },
+        "architecture": {
+          "type": "array",
+          "maxItems": 10,
+          "items": { "type": "object" }
+        },
+        "stack": {
+          "type": "array",
+          "maxItems": 10,
+          "items": { "type": "object" }
+        },
+        "prohibitions": {
+          "type": "array",
+          "maxItems": 10,
+          "items": { "type": "object" }
+        },
+        "style": { "type": "object" },
         "mustPreserve": {
           "type": "array",
           "items": { "type": "string", "minLength": 1 }
@@ -860,7 +884,7 @@
             "properties": {
               "ref": {
                 "type": "string",
-                "pattern": "^product\\.(core_flows|success_criteria)\\[[0-9]+\\]$"
+                "pattern": "^(product\\.(core_flows|success_criteria)|current\\.acceptance)\\[[0-9]+\\]$"
               },
               "text": {
                 "type": "string",

@@ -29,6 +29,7 @@ export function runIteration(args, options = {}) {
   return spawnSync(process.execPath, [ITERATION_CLI, ...args], {
     cwd: options.cwd ?? ROOT,
     encoding: 'utf8',
+    env: options.env ?? process.env,
   });
 }
 
@@ -41,15 +42,23 @@ export function runTasksFrom(cwd, args) {
 }
 
 export function runRuns(args, options = {}) {
-  return spawnSync(process.execPath, [RUNS_CLI, ...args], { cwd: options.cwd ?? ROOT, encoding: 'utf8' });
+  return spawnSync(process.execPath, [RUNS_CLI, ...args], {
+    cwd: options.cwd ?? ROOT,
+    encoding: 'utf8',
+    env: options.env ?? process.env,
+  });
 }
 
 export function runRunsFrom(cwd, args) {
   return runRuns(args, { cwd });
 }
 
-export function runExecute(args) {
-  return spawnSync(process.execPath, [EXECUTE_CLI, ...args], { cwd: ROOT, encoding: 'utf8' });
+export function runExecute(args, options = {}) {
+  return spawnSync(process.execPath, [EXECUTE_CLI, ...args], {
+    cwd: options.cwd ?? ROOT,
+    encoding: 'utf8',
+    env: options.env ?? process.env,
+  });
 }
 
 export function runProposals(args) {
@@ -83,8 +92,12 @@ export function runDoctor(args) {
   return spawnSync(process.execPath, [DOCTOR_CLI, ...args], { cwd: ROOT, encoding: 'utf8' });
 }
 
-export function runP2a(args) {
-  return spawnSync(process.execPath, [P2A_CLI, ...args], { cwd: ROOT, encoding: 'utf8' });
+export function runP2a(args, options = {}) {
+  return spawnSync(process.execPath, [P2A_CLI, ...args], {
+    cwd: options.cwd ?? ROOT,
+    encoding: 'utf8',
+    env: options.env ?? process.env,
+  });
 }
 
 export function runP2aFrom(cwd, args) {

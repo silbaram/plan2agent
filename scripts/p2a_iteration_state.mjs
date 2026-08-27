@@ -6,13 +6,21 @@ import { createHash } from 'node:crypto';
 import path from 'node:path';
 import process from 'node:process';
 import {
+  approvedExecutionEnvelope,
+  currentDevelopmentContractSha256,
+  executionEnvelopeFromCurrentDevelopmentContract,
   loadJson,
   resolveSpecSourceIntake,
+  validateConstitution,
+  validateCurrentDevelopmentContract,
+  validateCurrentDevelopmentContractData,
   validateCurrentSpecGateBApprovalAudit,
   validateSpec,
   validateTaskGraph,
+  validateTaskGraphData,
   ValidationError,
 } from './validate_artifacts.mjs';
+import { taskContractSha256 } from './p2a_run_paths.mjs';
 import { resolveP2aPaths } from './p2a_paths.mjs';
 import {
   composeCanonicalSpecSources,
@@ -27,6 +35,7 @@ import {
 
 const P2A_PATHS = resolveP2aPaths(import.meta.url);
 export const ROOT = P2A_PATHS.projectRoot;
+export const CURRENT_DEVELOPMENT_CONTRACT_FILENAME = 'current-development-contract.json';
 
 function assertDirectory(dirPath, label) {
   if (!existsSync(dirPath)) throw new ValidationError(`${label} does not exist: ${dirPath}`);
@@ -984,6 +993,210 @@ function assertSameFile(actualPath, expectedPath, label) {
 
 function fileSha256(filePath) {
   return createHash('sha256').update(readFileSync(filePath)).digest('hex');
+}
+
+function projectConstitutionPath(artifactRoot) {
+  let current = path.resolve(artifactRoot);
+  while (true) {
+    const candidate = path.basename(current) === '.plan2agent'
+      ? path.join(current, 'constitution.json')
+      : path.join(current, '.plan2agent', 'constitution.json');
+    if (existsSync(candidate) && lstatSync(candidate).isFile()) return candidate;
+    const parent = path.dirname(current);
+    if (parent === current) break;
+    current = parent;
+  }
+  return null;
+}
+
+function emptyConstitution(projectId) {
+  return {
+    schema_version: 'p2a.constitution.v1',
+    projectId,
+    architecture: [],
+    stack: [],
+    prohibitions: [],
+    style: {},
+  };
+}
+
+function currentDevelopmentRef(artifactRoot, filePath) {
+  return normalizeDisplayPath(path.relative(artifactRoot, filePath)).replace(/^\.\//, '');
+}
+
+export function currentDevelopmentContractPath(artifactRoot) {
+  return path.join(path.resolve(artifactRoot), CURRENT_DEVELOPMENT_CONTRACT_FILENAME);
+}
+
+export function materializeCurrentDevelopmentContract(state, options = {}) {
+  assertFile(state.specPath, `iterations/${state.activeIteration}/gate-b-spec/spec.json`);
+  assertFile(state.taskGraphPath, `iterations/${state.activeIteration}/gate-c-task-graph/task-graph.json`);
+  const activeSpecRef = currentDevelopmentRef(state.artifactRoot, state.specPath);
+  const taskGraphRef = currentDevelopmentRef(state.artifactRoot, state.taskGraphPath);
+  const constitutionPath = projectConstitutionPath(state.artifactRoot);
+  const constitution = constitutionPath
+    ? validateConstitution(constitutionPath, {
+        requireApproved: true,
+        projectId: state.projectId,
+      })
+    : emptyConstitution(state.projectId);
+  const graph = validateTaskGraph(state.taskGraphPath, state.specPath, {
+    artifactRoot: state.artifactRoot,
+    validationSession: options.validationSession,
+  });
+  const envelope = approvedExecutionEnvelope(
+    state.specPath,
+    activeSpecRef,
+    state.artifactRoot,
+    options,
+  );
+  const contract = {
+    schema_version: 'p2a.current_development_contract.v1',
+    projectId: state.projectId,
+    iterationId: state.activeIteration,
+    objective: envelope.objective,
+    scope: envelope.scope,
+    architecture: structuredClone(constitution.architecture),
+    stack: structuredClone(constitution.stack),
+    prohibitions: structuredClone(constitution.prohibitions),
+    style: structuredClone(constitution.style),
+    mustPreserve: envelope.mustPreserve,
+    nonGoals: envelope.nonGoals,
+    acceptance: envelope.acceptance,
+    verification: envelope.verification,
+    authority: {
+      workspace: 'project_root',
+      externalWrites: false,
+      mayChoose: envelope.executionAuthority.mayChoose,
+      mustReturnToGate: envelope.executionAuthority.mustReturnToGate,
+    },
+    ...(envelope.visualContract ? {
+      visualContract: structuredClone(envelope.visualContract),
+    } : {}),
+    bindings: {
+      constitution: {
+        ref: constitutionPath ? '.plan2agent/constitution.json' : null,
+        sha256: constitutionPath ? fileSha256(constitutionPath) : null,
+      },
+      activeSpec: {
+        ref: activeSpecRef,
+        sha256: fileSha256(state.specPath),
+      },
+      taskGraph: {
+        ref: taskGraphRef,
+        tasks: graph.tasks.map((task) => ({
+          taskId: task.id,
+          sha256: taskContractSha256(task),
+        })),
+      },
+    },
+  };
+  validateCurrentDevelopmentContractDataForState(contract, state, constitution, graph);
+  return contract;
+}
+
+function validateCurrentDevelopmentContractDataForState(contract, state, constitution, graph) {
+  validateCurrentDevelopmentContractData(contract, {
+    projectId: state.projectId,
+    iterationId: state.activeIteration,
+  });
+  if (contract.projectId !== state.projectId || contract.iterationId !== state.activeIteration) {
+    throw new ValidationError('current development contract identity does not match current-spec.json');
+  }
+  for (const field of ['architecture', 'stack', 'prohibitions', 'style']) {
+    if (!jsonEqual(contract[field], constitution[field])) {
+      throw new ValidationError(`current development contract ${field} does not match the current constitution`);
+    }
+  }
+  const expectedTaskBindings = graph.tasks.map((task) => ({
+    taskId: task.id,
+    sha256: taskContractSha256(task),
+  }));
+  if (!jsonEqual(contract.bindings.taskGraph.tasks, expectedTaskBindings)) {
+    throw new ValidationError('current development contract task bindings do not match the current task graph');
+  }
+  return contract;
+}
+
+export function resolveCurrentDevelopmentState(artifactPath, options = {}) {
+  const state = resolveIterationState(artifactPath, {
+    requireReady: false,
+    cwd: options.cwd,
+  });
+  const contractPath = currentDevelopmentContractPath(state.artifactRoot);
+  assertFile(contractPath, CURRENT_DEVELOPMENT_CONTRACT_FILENAME);
+  const contract = validateCurrentDevelopmentContract(contractPath, {
+    projectId: state.projectId,
+    iterationId: state.activeIteration,
+    validationSession: options.validationSession,
+  });
+  const expectedSpecRef = currentDevelopmentRef(state.artifactRoot, state.specPath);
+  const expectedTaskGraphRef = currentDevelopmentRef(state.artifactRoot, state.taskGraphPath);
+  if (normalizeDisplayPath(contract.bindings.activeSpec.ref).replace(/^\.\//, '') !== expectedSpecRef) {
+    throw new ValidationError(
+      `current development contract activeSpec.ref must be ${expectedSpecRef}`,
+    );
+  }
+  if (normalizeDisplayPath(contract.bindings.taskGraph.ref).replace(/^\.\//, '') !== expectedTaskGraphRef) {
+    throw new ValidationError(
+      `current development contract taskGraph.ref must be ${expectedTaskGraphRef}`,
+    );
+  }
+  const constitutionPath = projectConstitutionPath(state.artifactRoot);
+  const constitutionBinding = contract.bindings.constitution;
+  if (constitutionBinding.ref === null) {
+    if (constitutionPath) {
+      throw new ValidationError(
+        'current development contract was created without a constitution, but .plan2agent/constitution.json now exists',
+      );
+    }
+  } else {
+    if (!constitutionPath) {
+      throw new ValidationError('current development contract constitution binding is missing');
+    }
+    if (constitutionBinding.ref !== '.plan2agent/constitution.json') {
+      throw new ValidationError('current development contract constitution ref is invalid');
+    }
+    if (fileSha256(constitutionPath) !== constitutionBinding.sha256) {
+      throw new ValidationError('current development contract constitution binding changed');
+    }
+  }
+  const constitution = constitutionPath
+    ? validateConstitution(constitutionPath, {
+        requireApproved: true,
+        projectId: state.projectId,
+      })
+    : emptyConstitution(state.projectId);
+  assertFile(state.taskGraphPath, `iterations/${state.activeIteration}/gate-c-task-graph/task-graph.json`);
+  const graph = loadJson(state.taskGraphPath);
+  validateTaskGraphData(graph, null, {
+    artifactPath: state.taskGraphPath,
+    artifactRoot: state.artifactRoot,
+    ...(constitutionPath ? { constitutionPath } : {}),
+    projectId: state.projectId,
+  });
+  if (graph.projectId !== state.projectId) {
+    throw new ValidationError('current task graph projectId does not match the current development contract');
+  }
+  const graphSourceSpecPath = path.resolve(path.dirname(state.taskGraphPath), graph.sourceSpec);
+  if (path.resolve(graphSourceSpecPath) !== path.resolve(state.specPath)) {
+    throw new ValidationError('current task graph sourceSpec does not match the current development contract activeSpec.ref');
+  }
+  validateCurrentDevelopmentContractDataForState(contract, state, constitution, graph);
+  return {
+    ...state,
+    constitutionPath,
+    constitution,
+    taskGraph: graph,
+    currentDevelopmentContractPath: contractPath,
+    currentDevelopmentContractRef: currentDevelopmentRef(state.artifactRoot, contractPath),
+    currentDevelopmentContract: contract,
+    currentDevelopmentContractSha256: currentDevelopmentContractSha256(contract),
+    executionEnvelope: executionEnvelopeFromCurrentDevelopmentContract(
+      contract,
+      currentDevelopmentRef(state.artifactRoot, contractPath),
+    ),
+  };
 }
 
 export function normalizeDisplayPath(reference) {

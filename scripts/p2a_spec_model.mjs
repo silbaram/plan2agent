@@ -585,6 +585,16 @@ export function canonicalComposedBaselineSnapshotRef(iterationId) {
   return `iterations/${iterationId}/baseline/current-spec.json`;
 }
 
+export function canonicalCurrentDevelopmentBaselineSpecRef(iterationId) {
+  return `iterations/${iterationId}/baseline/gate-b-spec/spec.json`;
+}
+
+export function isCurrentDevelopmentBaselineReference(reference) {
+  return /^iterations\/[A-Za-z0-9._-]+\/baseline\/gate-b-spec\/spec\.json$/.test(
+    normalizedReference(reference),
+  );
+}
+
 export function isComposedBaselineReference(reference) {
   const normalized = normalizedReference(reference);
   return normalized === 'current-spec.json'
@@ -630,6 +640,21 @@ export function compositionSourceContractError(sources) {
     }
     const precedingBaselineRefs = [];
     for (const baselineRef of lineageRefs) {
+      if (isCurrentDevelopmentBaselineReference(baselineRef)) {
+        const expectedRef = canonicalCurrentDevelopmentBaselineSpecRef(source.iteration_id);
+        if (baselineRef !== expectedRef) {
+          return `source ${source.iteration_id} current development baseline must be ${expectedRef}, got ${baselineRef}`;
+        }
+        const baselineIterationId = source.metadata?.baseline?.iteration_id;
+        const baselineIterationIndex = sources.findIndex(
+          (candidate) => candidate.iteration_id === baselineIterationId,
+        );
+        if (baselineIterationIndex === -1 || baselineIterationIndex >= index) {
+          return `source ${source.iteration_id} current development baseline iteration ${baselineIterationId} must precede it in composition order`;
+        }
+        precedingBaselineRefs.push(baselineRef);
+        continue;
+      }
       if (isComposedBaselineReference(baselineRef)) {
         if (index === 0) {
           return `source ${source.iteration_id} composed baseline ${baselineRef} requires its preceding composition source closure`;
@@ -706,7 +731,10 @@ function hasStaleCompositionBaseline(source, appliedSources) {
   const baselineRef = compositionBaselineRef(source);
   const lastAppliedSource = appliedSources[appliedSources.length - 1];
   if (!baselineRef) return false;
-  if (isComposedBaselineReference(baselineRef)) {
+  if (
+    isComposedBaselineReference(baselineRef)
+    || isCurrentDevelopmentBaselineReference(baselineRef)
+  ) {
     const baselineIterationId = source.metadata?.baseline?.iteration_id;
     return (
       typeof baselineIterationId === 'string'

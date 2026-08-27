@@ -11,8 +11,10 @@ import { normalizePath, resolveP2aPaths } from './p2a_paths.mjs';
 import { p2aCommandLine } from './p2a_run_commands.mjs';
 import {
   auditArchivedIterationArtifacts,
+  currentDevelopmentContractPath,
   iterationCompositionRequirement,
   resolveIterationState,
+  resolveCurrentDevelopmentState,
   validateActiveGateBPromotionBinding,
   validateActiveIterationArchiveConsistency,
   validateActiveIterationPlanningContract,
@@ -329,6 +331,29 @@ function hydrateActiveRunRoutingRecords(runs, activeIteration) {
     });
 }
 
+function inspectCurrentRunRouting(targetRoot, artifactRoot, activeIteration) {
+  const indexedRuns = inspectRunIndex(targetRoot, artifactRoot);
+  if (!indexedRuns.valid || !indexedRuns.runsDir) return indexedRuns;
+  try {
+    const records = hydrateActiveRunRoutingRecords(indexedRuns, activeIteration);
+    return {
+      ...indexedRuns,
+      records,
+      summary: summarizeRunRecords(
+        targetRoot,
+        path.join(indexedRuns.runsDir, 'run-index.json'),
+        records,
+      ),
+    };
+  } catch (error) {
+    return {
+      ...indexedRuns,
+      valid: false,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
 function closedIterationReviewRoutingRequired(
   artifactRoot,
   iterationState,
@@ -561,6 +586,162 @@ function inspectArtifact(targetRoot, artifactRoot, isScaffoldProject, options = 
   const layout = artifactLayout(artifactRoot, isScaffoldProject);
   const currentSpecPath = path.join(artifactRoot, 'current-spec.json');
   const currentSpec = readJsonObject(currentSpecPath);
+  if (layout.kind === 'iteration' && currentSpec) {
+    const activeIteration = stringValue(currentSpec.active_iteration);
+    const contractPath = currentDevelopmentContractPath(artifactRoot);
+    const currentTaskGraphPath = activeIteration
+      ? path.join(
+          artifactRoot,
+          'iterations',
+          activeIteration,
+          'gate-c-task-graph',
+          'task-graph.json',
+        )
+      : null;
+    if (isFile(contractPath)) {
+      tracePhase(trace, 'current:read', relativeToTarget(targetRoot, currentSpecPath));
+      tracePhase(trace, 'current:read', relativeToTarget(targetRoot, contractPath));
+      try {
+        const currentState = resolveCurrentDevelopmentState(artifactRoot, {
+          validationSession,
+        });
+        if (currentState.constitutionPath) {
+          tracePhase(
+            trace,
+            'current:read',
+            relativeToTarget(targetRoot, currentState.constitutionPath),
+          );
+        }
+        tracePhase(
+          trace,
+          'current:read',
+          relativeToTarget(targetRoot, currentState.taskGraphPath),
+        );
+        tracePhase(trace, 'historical:reads', '0');
+        const runs = inspectCurrentRunRouting(
+          targetRoot,
+          artifactRoot,
+          currentState.activeIteration,
+        );
+        return {
+          projectId: currentState.projectId,
+          artifactRoot,
+          layout,
+          activeIteration: currentState.activeIteration,
+          currentSpec,
+          currentSpecReadable: true,
+          currentSpecValid: true,
+          currentSpecValidationError: null,
+          gateBPromotionValid: true,
+          gateBPromotionValidationError: null,
+          entry: null,
+          currentDevelopmentRouting: {
+            eligible: true,
+            missing: false,
+            state: currentState,
+          },
+          gates: {
+            intakePath: contractPath,
+            intake: { status: 'ready_for_spec', approval_audit: { current_contract: true } },
+            intakeValid: true,
+            intakeValidationError: null,
+            specPath: contractPath,
+            spec: {
+              approval: 'approved',
+              approval_audit: { current_contract: true },
+              product: {
+                goals: currentState.currentDevelopmentContract.scope,
+              },
+            },
+            specValid: true,
+            specValidationError: null,
+            taskGraphPath: currentState.taskGraphPath,
+            taskGraph: currentState.taskGraph,
+            taskGraphValid: true,
+            taskGraphValidationError: null,
+          },
+          tasks: currentState.taskGraph.tasks,
+          runs,
+        };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        tracePhase(trace, 'current:invalid', message);
+        tracePhase(trace, 'historical:reads', '0');
+        return {
+          projectId: stringValue(currentSpec.project_id) ?? path.basename(artifactRoot),
+          artifactRoot,
+          layout,
+          activeIteration,
+          currentSpec,
+          currentSpecReadable: true,
+          currentSpecValid: false,
+          currentSpecValidationError: message,
+          gateBPromotionValid: false,
+          gateBPromotionValidationError: message,
+          entry: null,
+          currentDevelopmentRouting: {
+            eligible: false,
+            missing: false,
+            error: message,
+          },
+          gates: {
+            intakePath: contractPath,
+            intake: null,
+            intakeValid: false,
+            intakeValidationError: message,
+            specPath: contractPath,
+            spec: null,
+            specValid: false,
+            specValidationError: message,
+            taskGraphPath: currentTaskGraphPath,
+            taskGraph: currentTaskGraphPath ? readJsonObject(currentTaskGraphPath) : null,
+            taskGraphValid: false,
+            taskGraphValidationError: message,
+          },
+          tasks: [],
+          runs: inspectCurrentRunRouting(targetRoot, artifactRoot, activeIteration),
+        };
+      }
+    }
+    if (currentTaskGraphPath && isFile(currentTaskGraphPath)) {
+      tracePhase(trace, 'current:contract-missing', relativeToTarget(targetRoot, contractPath));
+      tracePhase(trace, 'historical:reads', '0');
+      const taskGraph = readJsonObject(currentTaskGraphPath);
+      return {
+        projectId: stringValue(currentSpec.project_id) ?? path.basename(artifactRoot),
+        artifactRoot,
+        layout,
+        activeIteration,
+        currentSpec,
+        currentSpecReadable: true,
+        currentSpecValid: true,
+        currentSpecValidationError: null,
+        gateBPromotionValid: true,
+        gateBPromotionValidationError: null,
+        entry: null,
+        currentDevelopmentRouting: {
+          eligible: false,
+          missing: true,
+        },
+        gates: {
+          intakePath: null,
+          intake: null,
+          intakeValid: null,
+          intakeValidationError: null,
+          specPath: null,
+          spec: null,
+          specValid: null,
+          specValidationError: null,
+          taskGraphPath: currentTaskGraphPath,
+          taskGraph,
+          taskGraphValid: Boolean(taskGraph),
+          taskGraphValidationError: taskGraph ? null : 'The current task graph is unreadable.',
+        },
+        tasks: jsonRecords(taskGraph?.tasks),
+        runs: inspectCurrentRunRouting(targetRoot, artifactRoot, activeIteration),
+      };
+    }
+  }
   let iterationState = null;
   let currentSpecValidationError = null;
   if (layout.kind === 'iteration') {
@@ -1395,7 +1576,9 @@ function buildNextDecisionContext(
   const detail = inspectionForArtifact(targetRoot, selected.artifact, inspectedArtifacts);
   if (!detail) throw new Error(`artifact inspection is unavailable: ${artifactRoot}`);
   const { gates } = detail;
-  const decisions = inspectDecisions(artifactRoot);
+  const decisions = detail.currentDevelopmentRouting?.eligible
+    ? { path: decisionLedgerPath(artifactRoot), exists: false, valid: true, records: [], error: null }
+    : inspectDecisions(artifactRoot);
   const entry = explicitEntry ?? detail.entry;
   const artifactArg = commandArtifact(targetRoot, artifactRoot);
   if (detail.closedRouting) {
@@ -1495,16 +1678,22 @@ function buildNextDecisionContext(
   }
   const taskCounts = countTasks(gates.taskGraph);
   const allTasksDone = taskCounts.total > 0 && taskCounts.done === taskCounts.total;
-  const compositionRequirement = iterationCompositionRequirement(detail.currentSpec);
-  const hasRequiredVisualContract = Boolean(
-    gates.specValid
-    && gates.specPath
-    && approvedVisualReviewContract(
-      gates.specPath,
-      artifactRoot,
-      { validationSession },
-    ),
-  );
+  const compositionRequirement = detail.currentDevelopmentRouting?.eligible
+    ? { required: false, missingClosedIterations: [] }
+    : iterationCompositionRequirement(detail.currentSpec);
+  const hasRequiredVisualContract = detail.currentDevelopmentRouting?.eligible
+    ? Boolean(
+        detail.currentDevelopmentRouting.state.currentDevelopmentContract.visualContract,
+      )
+    : Boolean(
+        gates.specValid
+        && gates.specPath
+        && approvedVisualReviewContract(
+          gates.specPath,
+          artifactRoot,
+          { validationSession },
+        ),
+      );
   const acceptanceReviewActivated = (
     reviewPasses.acceptance === 'opt_in'
     && activeRuns.some((run) => run.runKind === 'final_acceptance_review')
@@ -1548,7 +1737,17 @@ function buildNextDecisionContext(
     )
   ) {
     try {
-      validateRunsDir(detail.runs.runsDir, { validationSession });
+      if (detail.currentDevelopmentRouting?.eligible) {
+        if (!detail.runs.valid) {
+          throw new Error(detail.runs.error ?? 'The canonical run index is invalid.');
+        }
+        validateRunsDir(detail.runs.runsDir, {
+          validationSession,
+          iterationId: detail.activeIteration,
+        });
+      } else {
+        validateRunsDir(detail.runs.runsDir, { validationSession });
+      }
     } catch (error) {
       runEvidenceValidationError = error instanceof Error
         ? error.message
@@ -1601,7 +1800,15 @@ function buildNextDecisionContext(
         error: `constitution projectId ${JSON.stringify(context.constitution.data.projectId)} does not match selected project ${JSON.stringify(detail.projectId)}`,
     }
     : context.constitution;
-  if (constitution.valid && decisions.valid && constitution.exists) {
+  if (detail.currentDevelopmentRouting?.eligible) {
+    constitution = {
+      ...constitution,
+      valid: true,
+      approved: true,
+      approvalSource: 'current_development_contract',
+      approvalDecision: null,
+    };
+  } else if (constitution.valid && decisions.valid && constitution.exists) {
     const approval = constitutionApprovalState(
       decisions.records,
       rawFileSha256(constitution.path),
@@ -1621,7 +1828,9 @@ function buildNextDecisionContext(
   const specScopeRef = gates.specPath
     ? normalizePath(path.relative(artifactRoot, gates.specPath))
     : null;
-  const gateAApproval = gates.intakePath && decisions.valid
+  const gateAApproval = detail.currentDevelopmentRouting?.eligible
+    ? { approved: true, source: 'current_development_contract', event: null }
+    : gates.intakePath && decisions.valid
     ? scopeApprovalState(
         decisions.records,
         intakeScopeRef,
@@ -1630,7 +1839,9 @@ function buildNextDecisionContext(
         { allowLegacyFallback: !decisions.exists },
       )
     : { approved: false, source: 'approval_audit', event: null };
-  const gateBApproval = gates.specPath && decisions.valid
+  const gateBApproval = detail.currentDevelopmentRouting?.eligible
+    ? { approved: true, source: 'current_development_contract', event: null }
+    : gates.specPath && decisions.valid
     ? scopeApprovalState(
         decisions.records,
         specScopeRef,
@@ -1671,6 +1882,12 @@ function buildNextDecisionContext(
     gateBPromoted: detail.layout.kind !== 'iteration' || detail.gateBPromotionValid,
     gateBPromotionValidationError: detail.gateBPromotionValidationError,
     gateAInvalidatesGateB: gateAInvalidatesGateB(gates),
+    currentDevelopmentContractMissing: detail.currentDevelopmentRouting?.missing === true,
+    currentDevelopmentContractInvalid: Boolean(
+      detail.currentDevelopmentRouting
+      && !detail.currentDevelopmentRouting.eligible
+      && !detail.currentDevelopmentRouting.missing
+    ),
     gateCExists: Boolean(gates.taskGraphPath),
     gateCReadable: Boolean(gates.taskGraph),
     gateCValid: gates.taskGraphValid === true,
@@ -1763,6 +1980,50 @@ export const NEXT_DECISION_RULES = [
     when: (context) => context.detail.layout.hasIncompleteIterationLayout,
     reason: () => 'current-spec.json and iterations/ do not form a complete iteration layout.',
     command: (context) => ['iteration', 'validate', '--artifacts', context.artifactArg],
+  },
+  {
+    state: 'started_run_contract_drift',
+    kind: 'approval',
+    when: (context) => Boolean(
+      context.startedRun
+      && context.startedRunContractError
+    ),
+    reason: (context) => (
+      `Run ${context.startedRun.runId} cannot resume because its recorded execution contract no longer matches the current development source: ${context.startedRunContractError}`
+    ),
+    command: (context) => (
+      `Restore the recorded current contract/task graph for run ${context.startedRun.runId}, or close that run as failed/blocked with structured evidence before approving and starting replacement work.`
+    ),
+  },
+  {
+    state: 'current_development_contract_required',
+    kind: 'cli',
+    requiresApproval: false,
+    when: (context) => context.currentDevelopmentContractMissing === true,
+    reason: () => (
+      'The approved current task graph predates the current-development-first runtime and needs one deterministic contract migration.'
+    ),
+    command: (context) => [
+      'iteration',
+      'migrate-current-contract',
+      '--artifacts',
+      context.artifactArg,
+    ],
+  },
+  {
+    state: 'invalid_current_development_contract',
+    kind: 'cli',
+    requiresApproval: false,
+    when: (context) => context.currentDevelopmentContractInvalid === true,
+    reason: (context) => (
+      `The current development contract or one of its current bindings is invalid: ${context.currentSpecValidationError ?? 'validation failed'}`
+    ),
+    command: (context) => [
+      'iteration',
+      'migrate-current-contract',
+      '--artifacts',
+      context.artifactArg,
+    ],
   },
   {
     state: 'invalid_iteration_state',
@@ -1912,21 +2173,6 @@ export const NEXT_DECISION_RULES = [
               : 'gate-b-draft',
           ]
         : ['validate', '--artifact-root', context.artifactArg]
-    ),
-  },
-  {
-    state: 'started_run_contract_drift',
-    kind: 'approval',
-    when: (context) => Boolean(
-      context.startedRun
-      && context.startedRunContractError
-      && (!context.gateCExists || context.gateCValid),
-    ),
-    reason: (context) => (
-      `Run ${context.startedRun.runId} cannot resume because its recorded execution contract no longer matches the current Gate B/Gate C source: ${context.startedRunContractError}`
-    ),
-    command: (context) => (
-      `Restore the recorded Gate B/Gate C source for run ${context.startedRun.runId}, or close that run as failed/blocked with structured evidence before approving and starting replacement work.`
     ),
   },
   {
@@ -2370,15 +2616,23 @@ export function buildNext(
 }
 
 function nextActionContractSources(context) {
+  const currentDevelopment = context.detail?.currentDevelopmentRouting?.eligible
+    ? context.detail.currentDevelopmentRouting.state
+    : null;
   const candidates = [
     path.join(context.targetRoot, '.plan2agent', 'manifest.json'),
     path.join(context.targetRoot, '.plan2agent', 'project.config.json'),
     path.join(context.targetRoot, '.plan2agent', 'constitution.json'),
-    context.artifactRoot ? path.join(context.artifactRoot, 'decisions.jsonl') : null,
-    context.artifactRoot ? path.join(context.artifactRoot, 'current-spec.json') : null,
+    currentDevelopment?.currentDevelopmentContractPath ?? null,
+    !currentDevelopment && context.artifactRoot
+      ? path.join(context.artifactRoot, 'decisions.jsonl')
+      : null,
+    !currentDevelopment && context.artifactRoot
+      ? path.join(context.artifactRoot, 'current-spec.json')
+      : null,
     context.entry?.path ?? null,
-    context.gates?.intakePath ?? null,
-    context.gates?.specPath ?? null,
+    !currentDevelopment ? context.gates?.intakePath ?? null : null,
+    !currentDevelopment ? context.gates?.specPath ?? null : null,
     context.gates?.taskGraphPath ?? null,
   ];
   return [...new Set(candidates.filter(Boolean).map((filePath) => path.resolve(filePath)))]

@@ -6,6 +6,25 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+## [0.5.16] - 2026-08-27
+
+### Added
+
+- Add a canonical `current-development-contract.json` that materializes the active objective, scope, architecture, code rules, acceptance, verification, authority, and immutable current task bindings.
+- Add `p2a iteration migrate-current-contract` for deterministic existing-project migration and bind active iteration runs to the materialized contract hash.
+
+### Changed
+
+- Route `p2a next` and normal `execute`/`runs` lifecycle commands from the current contract, current task graph, current constitution, and active run evidence without validating or replaying archived iteration documents.
+- Treat archived intake/spec/task graph content, composition metadata, archive receipts, and historical digest state as non-authoritative for current development; `p2a next --trace` now reports zero historical reads on the current route.
+- Open each new iteration from a compact spec snapshot derived only from the previous current contract, and stop using archived task graphs for rework inference.
+- Keep normal first-attempt development independent of BuildLore/LLM Wiki retrieval while preserving explicit, optional knowledge commands.
+- Include the current development contract in portable handoff bundles and allow acceptance review evidence to reference current contract criteria directly.
+
+### Fixed
+
+- Fail closed when an open current-contract run observes contract, constitution, or current task binding drift, while retaining legacy graph-run status compatibility.
+
 ## [0.5.15] - 2026-08-26
 
 ### Added
@@ -251,7 +270,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Add package-runtime project initialization, managed provider assets, artifact validation, handoff, supervised execution, evaluation, and proposal workflows.
 - Ship canonical and generated integrations for Codex, Claude Code, and Gemini CLI.
 
-[Unreleased]: https://github.com/silbaram/plan2agent/compare/v0.5.15...HEAD
+[Unreleased]: https://github.com/silbaram/plan2agent/compare/v0.5.16...HEAD
+[0.5.16]: https://github.com/silbaram/plan2agent/compare/v0.5.15...v0.5.16
 [0.5.15]: https://github.com/silbaram/plan2agent/compare/v0.5.14...v0.5.15
 [0.5.14]: https://github.com/silbaram/plan2agent/compare/v0.5.13...v0.5.14
 [0.5.13]: https://github.com/silbaram/plan2agent/compare/v0.5.12...v0.5.13
