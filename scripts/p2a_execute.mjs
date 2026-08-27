@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /** Supervise one Plan2Agent task lifecycle with the existing task/run CLIs. */
 
-import { existsSync, lstatSync, readFileSync, realpathSync } from 'node:fs';
+import { existsSync, lstatSync, readFileSync, realpathSync, unlinkSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import process from 'node:process';
@@ -27,6 +27,9 @@ import {
   readMonitorGateSidecar,
 } from './p2a_monitor_gate.mjs';
 import {
+  currentDevelopmentContractPath,
+  materializeCurrentDevelopmentContract,
+  resolveCurrentDevelopmentState,
   resolveIterationState,
   validateActiveGateBPromotionBinding,
   validateMaintenanceTaskGraphProject,
@@ -514,7 +517,9 @@ function pruneSupersededRunHistory(source, run, { quiet = false } = {}) {
 
 function resolveSource(args) {
   if (args.artifacts) {
-    const state = resolveIterationState(args.artifacts, { requireReady: !args.maintenance });
+    const state = args.maintenance
+      ? resolveIterationState(args.artifacts, { requireReady: false })
+      : resolveCurrentDevelopmentState(args.artifacts);
     if (args.maintenance) {
       const graphPath = path.join(state.artifactRoot, 'iterations', 'maintenance', 'gate-c-task-graph', 'task-graph.json');
       assertFile(graphPath, 'maintenance task graph');
@@ -534,8 +539,7 @@ function resolveSource(args) {
         taskGraphRef: artifactRelativePath(state.artifactRoot, graphPath),
       };
     }
-    const graph = loadJson(state.taskGraphPath);
-    validateTaskGraphData(graph);
+    const graph = state.taskGraph;
     return {
       projectId: state.projectId,
       sourceArgs: ['--artifacts', args.artifacts],
@@ -544,6 +548,10 @@ function resolveSource(args) {
       artifactRoot: state.artifactRoot,
       graphPath: state.taskGraphPath,
       specPath: state.specPath,
+      currentDevelopmentContractPath: state.currentDevelopmentContractPath,
+      currentDevelopmentContractRef: state.currentDevelopmentContractRef,
+      currentDevelopmentContract: state.currentDevelopmentContract,
+      currentDevelopmentContractSha256: state.currentDevelopmentContractSha256,
       graph,
       runsDir: resolveRunsDir({ artifacts: args.artifacts }),
       taskGraphRef: artifactRelativePath(state.artifactRoot, state.taskGraphPath),
@@ -646,6 +654,9 @@ function sourceSpecPath(source) {
 
 function sourceHasRequiredVisualContract(source) {
   if (source.sourceLayout === 'maintenance') return false;
+  if (source.currentDevelopmentContract) {
+    return Boolean(source.currentDevelopmentContract.visualContract);
+  }
   return Boolean(approvedVisualReviewContract(
     sourceSpecPath(source),
     source.sourceLayout === 'graph' ? null : source.artifactRoot,
@@ -1564,10 +1575,24 @@ function runPrepare(args) {
       projectId,
     });
     atomicWriteJson(lockedState.taskGraphPath, graph);
+    if (iterative) {
+      try {
+        atomicWriteJson(
+          currentDevelopmentContractPath(lockedState.artifactRoot),
+          materializeCurrentDevelopmentContract(lockedState),
+        );
+      } catch (error) {
+        unlinkSync(lockedState.taskGraphPath);
+        throw error;
+      }
+    }
     console.log('Prepared adaptive execution');
     console.log(`- mode: ${args.mode}`);
     console.log(`- rationale: ${args.selectionRationale}`);
     console.log(`- graph: ${displayPath(lockedState.taskGraphPath)}`);
+    if (iterative) {
+      console.log(`- current contract: ${displayPath(currentDevelopmentContractPath(lockedState.artifactRoot))}`);
+    }
     if (args.mode === 'planned') console.log(`- milestones: ${args.milestones.map((milestone) => milestone.id).join(', ')}`);
     const next = iterative
       ? commandLine('p2a_execute.mjs', ['start', '--artifacts', args.artifacts])
@@ -1888,6 +1913,9 @@ function runStatus(args) {
   const runId = explicitRun?.runId ?? (task ? latestRunIdForTask(source.runsDir, task.id, source) : null);
   const run = runId ? (explicitRun ?? readRun(source.runsDir, runId)) : null;
   if (run) assertRunMatchesSourceContext(run, source);
+  if (run?.status === 'started' && run.currentDevelopmentContractRef) {
+    assertRunExecutionContractCurrent(run, source, 'status');
+  }
   if (approvalLink.taskId && run && run.taskId !== approvalLink.taskId) {
     console.error(`status refused: run ${run.runId} belongs to ${run.taskId}, not approval task ${approvalLink.taskId}`);
     return 1;

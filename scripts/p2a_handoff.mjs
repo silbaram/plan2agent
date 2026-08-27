@@ -4545,6 +4545,14 @@ function buildPlan(paths, args, artifactsRoot, targetRoot, sourceInfo, options =
       pushArtifact(plan, sourceInfo.currentSpecPath, targetRoot, path.join('.plan2agent', 'current-spec.json'));
     }
   }
+  if (sourceInfo.kind === 'iteration') {
+    pushArtifactIfExists(
+      plan,
+      path.join(artifactsRoot, 'current-development-contract.json'),
+      targetRoot,
+      path.join(artifactTargetDir, 'current-development-contract.json'),
+    );
+  }
 
   const codexProfile = resolveCodexAgentProfile(args.codexProfile);
   if (legacyRuntime) {

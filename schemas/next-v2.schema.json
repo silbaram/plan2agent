@@ -188,6 +188,8 @@
         "gate_what",
         "entry_missing",
         "incomplete_iteration_layout",
+        "current_development_contract_required",
+        "invalid_current_development_contract",
         "invalid_iteration_state",
         "invalid_decisions",
         "invalid_gate_a",

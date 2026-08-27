@@ -5433,12 +5433,13 @@ function validateIterationCurrentFixtureCases() {
         existsSync(draftSpecPath)
         || Object.hasOwn(scopeDraft, 'interview')
         || !scopeDraft.baseline_context
-        || !scopeDraft.baseline_context.reused_answers.length
-        || !scopeDraft.baseline_context.reused_question_dispositions.length
+        || scopeDraft.baseline_context.reused_answers.length !== 0
+        || scopeDraft.baseline_context.reused_question_dispositions.length !== 0
+        || scopeDraft.baseline_context.spec_ref !== 'iterations/iter-002/baseline/gate-b-spec/spec.json'
         || !baselineDeltaQuestion?.question.includes('baseline')
         || existsSync(draftIntakeViewPath)
       ) {
-        console.error(`iteration Gate A scope draft did not enforce silent JSON-only persistence or baseline reuse context: ${caseData.id}`);
+        console.error(`iteration Gate A scope draft did not use the current-contract-only baseline context: ${caseData.id}`);
         console.error(JSON.stringify(scopeDraft, null, 2));
         return { status: 1, checks };
       }
@@ -5531,7 +5532,10 @@ function validateIterationCurrentFixtureCases() {
       }
 
       const draftCurrentSpec = JSON.parse(readFileSync(state.currentSpecPath, 'utf8'));
-      if (draftCurrentSpec.pending_iteration?.status !== 'gate_b_draft' || draftCurrentSpec.effective_spec_ref !== 'iterations/v1-mvp/gate-b-spec/spec.json') {
+      if (
+        draftCurrentSpec.pending_iteration?.status !== 'gate_b_draft'
+        || draftCurrentSpec.effective_spec_ref !== 'iterations/iter-002/baseline/gate-b-spec/spec.json'
+      ) {
         console.error(`iteration draft did not preserve baseline pointer with Gate B draft status: ${caseData.id}`);
         console.error(JSON.stringify(draftCurrentSpec, null, 2));
         return { status: 1, checks };
@@ -5621,11 +5625,12 @@ function validateIterationCurrentFixtureCases() {
       }
       const promotedIter2CurrentSpec = JSON.parse(readFileSync(state.currentSpecPath, 'utf8'));
       if (
-        promotedIter2CurrentSpec.effective_spec_ref !== 'iterations/v1-mvp/gate-b-spec/spec.json'
-        || JSON.stringify(promotedIter2CurrentSpec.composed_from) !== JSON.stringify(['v1-mvp'])
+        promotedIter2CurrentSpec.effective_spec_ref !== 'iterations/iter-002/gate-b-spec/spec.json'
+        || JSON.stringify(promotedIter2CurrentSpec.composed_from) !== JSON.stringify(['iter-002'])
+        || promotedIter2CurrentSpec.source_specs !== undefined
         || promotedIter2CurrentSpec.pending_iteration?.status !== 'gate_b_approved'
       ) {
-        console.error(`iteration promote-spec should preserve baseline composition before compose: ${caseData.id}`);
+        console.error(`iteration promote-spec should replace baseline composition with the current spec pointer: ${caseData.id}`);
         console.error(JSON.stringify(promotedIter2CurrentSpec, null, 2));
         return { status: 1, checks };
       }
@@ -5664,10 +5669,11 @@ function validateIterationCurrentFixtureCases() {
         iter2DraftGraph.tasks.length >= 16
         || !iter2VerificationTask
         || JSON.stringify(iter2VerificationTask.dependencies) !== JSON.stringify(iter2ImplementationTaskIds)
-        || !iter2DraftGraph.tasks.some((task) => task.title.startsWith('Rework '))
-        || !iter2DraftGraph.tasks.some((task) => task.description.includes('Rework previous completed task'))
+        || iter2DraftGraph.tasks.some((task) => task.title.startsWith('Rework '))
+        || iter2DraftGraph.tasks.some((task) => task.description.includes('Rework previous completed task'))
+        || !iter2DraftGraph.tasks.every((task) => task.suggestedAgentPrompt.includes('No completed task overlap was detected'))
       ) {
-        console.error(`iteration diff-tasks did not generate expected semantic/rework graph: ${caseData.id}`);
+        console.error(`iteration diff-tasks used historical task overlap instead of the current baseline: ${caseData.id}`);
         console.error(JSON.stringify(iter2DraftGraph, null, 2));
         return { status: 1, checks };
       }
@@ -5922,11 +5928,20 @@ function validateIterationCurrentFixtureCases() {
         return { status: 1, checks };
       }
 
-      result = runIteration(['open', '--artifacts', artifactRoot, '--iteration-id', 'iter-before-compose', '--idea', 'Should not open before composition']);
+      const noComposeOpenArtifactRoot = path.join(tempRoot, 'current-contract-open-without-compose');
+      cpSync(artifactRoot, noComposeOpenArtifactRoot, { recursive: true });
+      result = runIteration(['open', '--artifacts', noComposeOpenArtifactRoot, '--iteration-id', 'iter-before-compose', '--idea', 'Open directly from the current contract']);
       checks += 1;
-      const beforeComposeOpenOutput = `${result.stdout ?? ''}${result.stderr ?? ''}`;
-      if (result.status === 0 || !beforeComposeOpenOutput.includes('run `p2a iteration compose` first')) {
-        console.error(`iteration open fixture did not require composition after multiple closes: ${caseData.id}`);
+      const noComposeCurrentSpec = JSON.parse(readFileSync(
+        path.join(noComposeOpenArtifactRoot, 'current-spec.json'),
+        'utf8',
+      ));
+      if (
+        result.status !== 0
+        || noComposeCurrentSpec.pending_iteration?.baseline_effective_spec_ref
+          !== 'iterations/iter-before-compose/baseline/gate-b-spec/spec.json'
+      ) {
+        console.error(`iteration open fixture did not use the current contract without composition: ${caseData.id}`);
         writeResultOutput(result);
         return { status: 1, checks };
       }
@@ -6543,23 +6558,13 @@ function validateIterationCurrentFixtureCases() {
         'intake.json',
       );
       const composedDependentIntake = JSON.parse(readFileSync(composedDependentIntakePath, 'utf8'));
-      composedDependentIntake.baseline_context.spec_sha256 = hashText(composedVisualSpecText);
-      const composedDependentIntakeText = `${JSON.stringify(composedDependentIntake, null, 2)}\n`;
-      writeFileSync(composedDependentIntakePath, composedDependentIntakeText, 'utf8');
-      const composedDependentSpecPath = path.join(
-        milestoneHandoffArtifactRoot,
-        'iterations',
-        'iter-002',
-        'gate-b-spec',
-        'spec.json',
-      );
-      const composedDependentSpec = JSON.parse(readFileSync(composedDependentSpecPath, 'utf8'));
-      composedDependentSpec.source_intake_sha256 = hashText(composedDependentIntakeText);
-      writeFileSync(
-        composedDependentSpecPath,
-        `${JSON.stringify(composedDependentSpec, null, 2)}\n`,
-        'utf8',
-      );
+      if (
+        composedDependentIntake.baseline_context.spec_ref
+          !== 'iterations/iter-002/baseline/gate-b-spec/spec.json'
+      ) {
+        console.error(`milestone handoff fixture lost its current-contract baseline: ${caseData.id}`);
+        return { status: 1, checks };
+      }
       const composedVisualArtifactRefs = [
         `iterations/${composedVisualIterationId}/gate-b-spec/experience-spec.json`,
         `iterations/${composedVisualIterationId}/gate-b-spec/visual-design/VD-1/prototype.json`,
@@ -8549,9 +8554,10 @@ function validateIterationCurrentFixtureCases() {
       if (
         existsSync(iter3SpecPath)
         || Object.hasOwn(iter3Scope, 'interview')
-        || !iter3Scope.baseline_context?.reused_answers.length
+        || iter3Scope.baseline_context?.reused_answers.length !== 0
+        || iter3Scope.baseline_context?.reused_question_dispositions.length !== 0
       ) {
-        console.error(`composed baseline Gate A scope did not preserve reusable answer provenance: ${caseData.id}`);
+        console.error(`current-contract baseline Gate A scope included historical answer provenance: ${caseData.id}`);
         console.error(JSON.stringify(iter3Scope, null, 2));
         return { status: 1, checks };
       }
@@ -8612,11 +8618,12 @@ function validateIterationCurrentFixtureCases() {
 
       const promotedIter3CurrentSpec = JSON.parse(readFileSync(state.currentSpecPath, 'utf8'));
       if (
-        JSON.stringify(promotedIter3CurrentSpec.composed_from) !== JSON.stringify(['v1-mvp', 'iter-002'])
-        || promotedIter3CurrentSpec.source_specs?.length !== 2
+        JSON.stringify(promotedIter3CurrentSpec.composed_from) !== JSON.stringify(['iter-003'])
+        || promotedIter3CurrentSpec.source_specs !== undefined
+        || promotedIter3CurrentSpec.effective_spec_ref !== 'iterations/iter-003/gate-b-spec/spec.json'
         || promotedIter3CurrentSpec.pending_iteration?.status !== 'gate_b_approved'
       ) {
-        console.error(`iteration promote-spec after compose should preserve composed source set: ${caseData.id}`);
+        console.error(`iteration promote-spec did not replace composition history with the current spec pointer: ${caseData.id}`);
         console.error(JSON.stringify(promotedIter3CurrentSpec, null, 2));
         return { status: 1, checks };
       }
@@ -8919,23 +8926,30 @@ function validateIterationCurrentFixtureCases() {
         return { status: failureStatus(result), checks };
       }
 
+      const thirdNoComposeArtifactRoot = path.join(tempRoot, 'current-contract-third-open-without-compose');
+      cpSync(artifactRoot, thirdNoComposeArtifactRoot, { recursive: true });
       result = runIteration([
         'open',
         '--artifacts',
-        artifactRoot,
+        thirdNoComposeArtifactRoot,
         '--iteration-id',
         'iter-before-third-compose',
         '--idea',
         'Must not skip the latest closed iteration',
       ]);
       checks += 1;
-      const staleThirdOpenOutput = `${result.stdout ?? ''}${result.stderr ?? ''}`;
       if (
-        result.status === 0
-        || !staleThirdOpenOutput.includes('missing ["iter-003"]')
-        || !staleThirdOpenOutput.includes('iteration compose')
+        result.status !== 0
+        || !existsSync(path.join(
+          thirdNoComposeArtifactRoot,
+          'iterations',
+          'iter-before-third-compose',
+          'baseline',
+          'gate-b-spec',
+          'spec.json',
+        ))
       ) {
-        console.error(`iteration open skipped the latest closed composition source: ${caseData.id}`);
+        console.error(`iteration open did not use the latest current contract without composition: ${caseData.id}`);
         writeResultOutput(result);
         return { status: 1, checks };
       }
@@ -8991,7 +9005,7 @@ function validateIterationCurrentFixtureCases() {
         return { status: failureStatus(result), checks };
       }
       const iter4CurrentSpec = JSON.parse(readFileSync(state.currentSpecPath, 'utf8'));
-      const iter4BaselineRef = `iterations/${iter4Id}/baseline/current-spec.json`;
+      const iter4BaselineRef = `iterations/${iter4Id}/baseline/gate-b-spec/spec.json`;
       const iter4BaselinePath = path.join(artifactRoot, iter4BaselineRef);
       if (
         iter4CurrentSpec.pending_iteration?.baseline_effective_spec_ref !== iter4BaselineRef
@@ -8999,7 +9013,7 @@ function validateIterationCurrentFixtureCases() {
         || iter4CurrentSpec.pending_iteration?.baseline_effective_spec_sha256
           !== hashText(readFileSync(iter4BaselinePath))
       ) {
-        console.error(`iteration open did not persist an immutable composed baseline snapshot: ${caseData.id}`);
+        console.error(`iteration open did not persist an immutable current-contract baseline snapshot: ${caseData.id}`);
         console.error(JSON.stringify(iter4CurrentSpec.pending_iteration, null, 2));
         return { status: 1, checks };
       }

@@ -51,6 +51,7 @@ import {
 import { readRequiredVisualReviewEvidence } from './p2a_visual_review_gate.mjs';
 import { readRequiredAcceptanceReviewEvidence } from './p2a_acceptance_review_gate.mjs';
 import {
+  resolveCurrentDevelopmentState,
   resolveIterationState,
   validateMaintenanceTaskGraphProject,
 } from './p2a_iteration_state.mjs';
@@ -555,20 +556,34 @@ export function assertStartTaskSourceUnchanged(source, expectedFingerprint, runI
   }
   if (expectedExecutionEnvelope !== undefined) {
     let currentExecutionEnvelope;
+    const contractLabel = source.currentDevelopmentContract
+      ? 'current development contract'
+      : 'Gate B execution contract';
     try {
-      currentExecutionEnvelope = approvedExecutionEnvelope(
-        taskSourceSpecPath(source),
-        source.sourceSpecRef,
-        source.sourceLayout === 'graph' ? null : source.artifactRoot,
-      );
+      if (source.currentDevelopmentContract) {
+        const current = resolveCurrentDevelopmentState(source.artifactRoot);
+        currentExecutionEnvelope = current.executionEnvelope;
+        if (
+          current.currentDevelopmentContractSha256
+          !== source.currentDevelopmentContractSha256
+        ) {
+          throw new Error('current development contract changed');
+        }
+      } else {
+        currentExecutionEnvelope = approvedExecutionEnvelope(
+          taskSourceSpecPath(source),
+          source.sourceSpecRef,
+          source.sourceLayout === 'graph' ? null : source.artifactRoot,
+        );
+      }
     } catch (error) {
       throw new Error(
-        `Gate B execution contract changed or became unavailable while run ${runId} was preparing isolation; no run was written: ${error.message}`,
+        `${contractLabel} changed or became unavailable while run ${runId} was preparing isolation; no run was written: ${error.message}`,
       );
     }
     if (JSON.stringify(currentExecutionEnvelope) !== JSON.stringify(expectedExecutionEnvelope)) {
       throw new Error(
-        `Gate B execution contract changed while run ${runId} was preparing isolation; no run was written. Re-read the approved spec and start the task again.`,
+        `${contractLabel} changed while run ${runId} was preparing isolation; no run was written. Re-read the current contract and start the task again.`,
       );
     }
   }
@@ -710,7 +725,9 @@ function taskSourceSpecPath(source) {
 function resolveTaskSource(args) {
   if (args.artifacts) {
     const artifactRoot = path.resolve(args.artifacts);
-    const state = resolveIterationState(artifactRoot, { requireReady: !args.maintenance });
+    const state = args.maintenance
+      ? resolveIterationState(artifactRoot, { requireReady: false })
+      : resolveCurrentDevelopmentState(artifactRoot);
     if (args.maintenance) {
       const graphPath = path.join(state.artifactRoot, 'iterations', 'maintenance', 'gate-c-task-graph', 'task-graph.json');
       const graph = loadTaskGraph(graphPath);
@@ -727,7 +744,7 @@ function resolveTaskSource(args) {
         runsDir: resolveRunsDir(args),
       };
     }
-    const graph = loadTaskGraph(state.taskGraphPath);
+    const graph = state.taskGraph;
     return {
       projectId: state.projectId,
       sourceLayout: 'iteration',
@@ -737,6 +754,11 @@ function resolveTaskSource(args) {
       graph,
       taskGraphRef: artifactRelativePath(state.artifactRoot, state.taskGraphPath),
       sourceSpecRef: graph.sourceSpec,
+      currentDevelopmentContractPath: state.currentDevelopmentContractPath,
+      currentDevelopmentContractRef: state.currentDevelopmentContractRef,
+      currentDevelopmentContract: state.currentDevelopmentContract,
+      currentDevelopmentContractSha256: state.currentDevelopmentContractSha256,
+      executionEnvelope: state.executionEnvelope,
       runsDir: resolveRunsDir(args),
     };
   }
@@ -1610,13 +1632,16 @@ function writeRun(runsDir, run, options = {}) {
   });
 }
 
-export function loadRunsForArtifactRoot(artifactRoot) {
+export function loadRunsForArtifactRoot(artifactRoot, options = {}) {
   const runsDir = path.join(path.resolve(artifactRoot), 'runs');
   if (!existsSync(runsDir) || !lstatSync(runsDir).isDirectory()) return [];
   const indexFile = indexPath(runsDir);
   if (!existsSync(indexFile)) return [];
   const index = loadIndex(runsDir);
-  return index.runs
+  const indexedRuns = options.iterationId === undefined
+    ? index.runs
+    : index.runs.filter((run) => run.iterationId === options.iterationId);
+  return indexedRuns
     .map((run) => {
       try {
         return readRun(runsDir, run.runId);
@@ -2486,20 +2511,42 @@ function startRun(args) {
     }
   }
   const visualReview = args.runKind === 'final_visual_review'
-    ? approvedVisualReviewContract(
-        taskSourceSpecPath(source),
-        source.sourceLayout === 'graph' ? null : source.artifactRoot,
-      )
+    ? source.currentDevelopmentContract
+      ? source.currentDevelopmentContract.visualContract ? {
+          required: true,
+          experienceSpecRef: source.currentDevelopmentContract.visualContract.experienceSpecRef,
+          experienceSpecSha256: source.currentDevelopmentContract.visualContract.experienceSpecSha256,
+          prototypeManifestRef: source.currentDevelopmentContract.visualContract.prototypeManifestRef,
+          prototypeManifestSha256: source.currentDevelopmentContract.visualContract.prototypeManifestSha256,
+          screenStates: source.currentDevelopmentContract.visualContract.screens.map((screen) => ({
+            screenId: screen.screenId,
+            states: structuredClone(screen.states),
+          })),
+          viewports: structuredClone(source.currentDevelopmentContract.visualContract.viewports),
+          accessibilityStandard: source.currentDevelopmentContract.visualContract.accessibilityStandard,
+        } : null
+      : approvedVisualReviewContract(
+          taskSourceSpecPath(source),
+          source.sourceLayout === 'graph' ? null : source.artifactRoot,
+        )
     : null;
   if (args.runKind === 'final_visual_review' && !visualReview) {
     throw new Error('final visual review run requires an approved full current-iteration visual contract');
   }
   const acceptanceReview = args.runKind === 'final_acceptance_review'
-    ? acceptanceReviewContract(taskSourceSpecPath(source), source.artifactRoot)
+    ? source.currentDevelopmentContract
+      ? {
+          required: true,
+          criteria: source.currentDevelopmentContract.acceptance.map((text, index) => ({
+            ref: `current.acceptance[${index}]`,
+            text,
+          })),
+        }
+      : acceptanceReviewContract(taskSourceSpecPath(source), source.artifactRoot)
     : null;
   const executionEnvelope = source.sourceLayout === 'maintenance'
     ? null
-    : approvedExecutionEnvelope(
+    : source.executionEnvelope ?? approvedExecutionEnvelope(
         taskSourceSpecPath(source),
         source.sourceSpecRef,
         source.sourceLayout === 'graph' ? null : source.artifactRoot,
@@ -2543,6 +2590,10 @@ function startRun(args) {
     sourceLayout: source.sourceLayout,
     taskGraphRef: source.taskGraphRef,
     sourceSpecRef: source.sourceSpecRef,
+    ...(source.currentDevelopmentContract ? {
+      currentDevelopmentContractRef: source.currentDevelopmentContractRef,
+      currentDevelopmentContractSha256: source.currentDevelopmentContractSha256,
+    } : {}),
     ...(args.runKind ? { runKind: args.runKind } : {}),
     taskContractSha256: taskContractSha256(task),
     mode: strategy.mode,

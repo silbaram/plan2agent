@@ -41,7 +41,7 @@
         "properties": {
           "criterion_ref": {
             "type": "string",
-            "pattern": "^product\\.(core_flows|success_criteria)\\[[0-9]+\\]$"
+            "pattern": "^(product\\.(core_flows|success_criteria)|current\\.acceptance)\\[[0-9]+\\]$"
           },
           "command": {
             "type": "string",

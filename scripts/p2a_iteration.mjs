@@ -26,6 +26,7 @@ import {
   validateSpec,
   validateEvalMaintenanceDraftData,
   validateRunIndexData,
+  validateRunData,
   validateRunsDir,
   validateTaskGraph,
   validateTaskContextData,
@@ -40,12 +41,15 @@ import {
   assertPendingBaselineIntegrity,
   closedIterationRequiredArtifactRefs,
   closedIterationVisualArtifactRefs,
+  currentDevelopmentContractPath,
   formatIterationState,
   initialMaintenanceTaskGraph,
   iterationCompositionRequirement,
   maintenanceTaskGraphPath,
   nextMaintenanceTaskId,
   normalizeDisplayPath,
+  materializeCurrentDevelopmentContract,
+  resolveCurrentDevelopmentState,
   resolveIterationState,
   serializeIterationState,
   validateActiveGateBPromotionBinding,
@@ -72,7 +76,7 @@ import {
   applyBaselineSupersessions,
   asStringArray,
   buildInitialCanonicalSections,
-  canonicalComposedBaselineSnapshotRef,
+  canonicalCurrentDevelopmentBaselineSpecRef,
   cloneJson,
   compositionOpenDecisions,
   composeCanonicalSpecSources,
@@ -93,6 +97,7 @@ import {
   compareRunEvidence,
   taskGraphContextForGraph,
   taskGraphRefMatchesGraph,
+  runFilePath,
 } from './p2a_run_paths.mjs';
 import {
   appendDecisionEventsLocked,
@@ -108,7 +113,7 @@ const STATUS_ORDER = ['todo', 'in_progress', 'done', 'blocked'];
 const DEFAULT_ITERATION_ID = 'v1-mvp';
 const INIT_REBASED_SOURCE_INTAKE = '../gate-a-intake/intake.json';
 const INIT_REBASED_SOURCE_SPEC = '../gate-b-spec/spec.json';
-const COMMANDS = new Set(['init', 'current', 'validate', 'close', 'open', 'draft', 'context', 'promote-spec', 'promote-tasks', 'diff-tasks', 'compose', 'maintenance']);
+const COMMANDS = new Set(['init', 'current', 'validate', 'close', 'open', 'draft', 'context', 'promote-spec', 'promote-tasks', 'diff-tasks', 'compose', 'migrate-current-contract', 'maintenance']);
 const MAINTENANCE_ACTIONS = new Set(['add']);
 const CONTEXT_SCOPES = new Set(['feature', 'maintenance']);
 const VALIDATE_STAGES = new Set(['ready', 'gate-a', 'gate-b-draft', 'gate-b-approved', 'gate-c-draft']);
@@ -129,6 +134,7 @@ function usage() {
     '  p2a iteration promote-tasks --artifacts <iterative-project-dir> [--replace-existing]',
     '  p2a iteration diff-tasks --artifacts <iterative-project-dir> [--force]',
     '  p2a iteration compose --artifacts <iterative-project-dir> [--allow-conflicts]',
+    '  p2a iteration migrate-current-contract --artifacts <iterative-project-dir>',
     '  p2a iteration maintenance add --artifacts <iterative-project-dir> --title <text> --accept <text> [--accept <text> ...] [--description <text>] [--area <text>] [--prompt <text>] [--ref <value> ...] [--depends <task-id> ...] [--dry-run]',
     '  p2a iteration maintenance add --artifacts <iterative-project-dir> --from-draft <path> [--dry-run|--yes]',
     '',
@@ -144,6 +150,7 @@ function usage() {
     '  promote-tasks         Promote a validated Gate C draft task graph to the canonical graph.',
     '  diff-tasks            Generate a task graph draft from active spec changes against the baseline.',
     '  compose               Rebuild current-spec.json as a composed effective spec view.',
+    '  migrate-current-contract  Materialize the current execution authority once from the approved active state.',
     '  maintenance           Manage the always-on maintenance task graph (currently: add).',
     '',
     'Common options:',
@@ -605,6 +612,8 @@ function closedIterationArtifactRefs(iterationId, artifactRoot) {
     .filter((reference) => reference !== experienceRef);
   return [
     ...closedIterationRequiredArtifactRefs(iterationId),
+    `iterations/${iterationId}/baseline/gate-a-intake/intake.json`,
+    `iterations/${iterationId}/baseline/gate-b-spec/spec.json`,
     ...visualRefs,
   ];
 }
@@ -617,7 +626,7 @@ function artifactHashes(artifactRoot, references) {
   return hashes;
 }
 
-function statusIterationIds(artifactRoot, currentSpec) {
+function statusIterationIds(currentSpec) {
   const ids = [];
   const add = (iterationId) => {
     if (typeof iterationId === 'string' && iterationId && iterationId !== 'maintenance' && !ids.includes(iterationId)) {
@@ -630,12 +639,6 @@ function statusIterationIds(artifactRoot, currentSpec) {
   add(currentSpec.pending_iteration?.iteration_id);
   add(currentSpec.active_iteration);
 
-  const iterationsRoot = path.join(artifactRoot, 'iterations');
-  if (existsSync(iterationsRoot) && lstatSync(iterationsRoot).isDirectory()) {
-    for (const entry of readdirSync(iterationsRoot, { withFileTypes: true })) {
-      if (entry.isDirectory()) add(entry.name);
-    }
-  }
   return ids;
 }
 
@@ -646,6 +649,26 @@ function statusForIterationId(currentSpec, iterationId) {
   if (closed) return closed.status ?? 'archived';
   if (iterationId === currentSpec.active_iteration) return 'active';
   return 'archived';
+}
+
+function closedTaskSummary(currentSpec, iterationId) {
+  const closed = (currentSpec.closed_iterations ?? []).find(
+    (record) => record?.iteration_id === iterationId,
+  );
+  if (!closed) return null;
+  const counts = closed.task_status_counts ?? {};
+  return `${closed.task_count ?? 0}(todo ${counts.todo ?? 0}·in_progress ${counts.in_progress ?? 0}·done ${counts.done ?? 0}·blocked ${counts.blocked ?? 0})`;
+}
+
+function statusTaskSummary(artifactRoot, currentSpec, iterationId) {
+  return closedTaskSummary(currentSpec, iterationId)
+    ?? taskSummaryIfPresent(path.join(artifactRoot, taskGraphRef(iterationId)));
+}
+
+function statusGateSummary(artifactRoot, currentSpec, iterationId) {
+  return closedTaskSummary(currentSpec, iterationId) === null
+    ? gateSummaryIfPresent(artifactRoot, iterationId)
+    : 'A✅ B✅(approved) C✅';
 }
 
 function statusMaintenanceSummary(artifactRoot) {
@@ -805,8 +828,8 @@ export function renderIterationIndexMarkdown(artifactRoot, currentSpec) {
     '| 반복 | 상태 | task | 게이트 | 위치 |',
     '| --- | --- | --- | --- | --- |',
   ];
-  for (const iterationId of statusIterationIds(artifactRoot, currentSpec)) {
-    rows.push(`| ${iterationId} | ${statusForIterationId(currentSpec, iterationId)} | ${taskSummaryIfPresent(path.join(artifactRoot, taskGraphRef(iterationId)))} | ${gateSummaryIfPresent(artifactRoot, iterationId)} | iterations/${iterationId}/ |`);
+  for (const iterationId of statusIterationIds(currentSpec)) {
+    rows.push(`| ${iterationId} | ${statusForIterationId(currentSpec, iterationId)} | ${statusTaskSummary(artifactRoot, currentSpec, iterationId)} | ${statusGateSummary(artifactRoot, currentSpec, iterationId)} | iterations/${iterationId}/ |`);
   }
   rows.push(`| maintenance | 상시 active | ${statusMaintenanceSummary(artifactRoot)} | task graph only | iterations/maintenance/ |`);
 
@@ -927,9 +950,23 @@ function currentSpecForOpen(
   baselineSpecRef,
   baselineSpecSha256,
 ) {
+  const historicalSummary = {};
+  for (const field of [
+    'closed_iterations',
+    'last_closed_iteration',
+    'gate_b_approval_audits',
+    'gate_b_promotion_bindings',
+  ]) {
+    if (currentSpec[field] !== undefined) {
+      historicalSummary[field] = cloneJson(currentSpec[field]);
+    }
+  }
   return {
-    ...currentSpec,
+    schema_version: 'p2a.current_spec.v1',
+    project_id: currentSpec.project_id,
     active_iteration: nextIterationId,
+    effective_spec_ref: baselineSpecRef,
+    ...historicalSummary,
     pending_iteration: {
       iteration_id: nextIterationId,
       status: 'active_planning',
@@ -941,6 +978,7 @@ function currentSpecForOpen(
         ? { baseline_effective_spec_sha256: baselineSpecSha256 }
         : {}),
     },
+    note: 'Current-state pointer. The planning baseline is materialized from the prior current development contract; historical Gate artifacts are not execution authority.',
   };
 }
 
@@ -980,7 +1018,7 @@ function currentSpecForClose(currentSpec, iterationId, record) {
 }
 
 function assertArchivedBaselineForOpen(state) {
-  const { currentSpec, artifactRoot, activeIteration: iterationId } = state;
+  const { currentSpec, activeIteration: iterationId } = state;
   const archiveState = validateActiveIterationArchiveConsistency(state);
   if (currentSpec.pending_iteration) {
     throw new ValidationError('open requires no pending_iteration; finish or discard the active planning iteration first');
@@ -1005,19 +1043,6 @@ function assertArchivedBaselineForOpen(state) {
     throw new ValidationError(`open requires active iteration ${JSON.stringify(iterationId)} to be current-spec.json.last_closed_iteration`);
   }
 
-  const compositionRequirement = iterationCompositionRequirement(currentSpec);
-  if (compositionRequirement.requiresComposedEffectiveSpec) {
-    throw new ValidationError('open requires current-spec.json composition after multiple closed iterations; run `p2a iteration compose` first');
-  }
-  validateCurrentSpecCompositionData(currentSpec, artifactRoot, { requireNoOpenDecisions: true });
-  if (
-    compositionRequirement.required
-    && compositionRequirement.missingClosedIterations.length
-  ) {
-    throw new ValidationError(
-      `open requires every closed iteration in the current composition; missing ${JSON.stringify(compositionRequirement.missingClosedIterations)}. Run \`p2a iteration compose\` first`,
-    );
-  }
 }
 
 function maintenanceReadme() {
@@ -1071,6 +1096,11 @@ function withCurrentIterationArtifactManifest(metadata) {
   const effectiveSpecRef = metadata?.baseline?.effective_spec_ref;
   if (isComposedBaselineReference(effectiveSpecRef) && effectiveSpecRef !== 'current-spec.json') {
     requiredArtifacts.unshift('baseline/current-spec.json');
+  } else if (/^iterations\/[A-Za-z0-9._-]+\/baseline\/gate-b-spec\/spec\.json$/.test(effectiveSpecRef ?? '')) {
+    requiredArtifacts.unshift(
+      'baseline/gate-a-intake/intake.json',
+      'baseline/gate-b-spec/spec.json',
+    );
   }
   const previousOptional = Array.isArray(metadata?.optional_artifacts)
     ? metadata.optional_artifacts.filter((item) => typeof item === 'string')
@@ -1654,6 +1684,13 @@ export function buildDeltaSpec({ projectId, iterationId, idea, baselineSpec, bas
   }
   const product = baselineMerge.product;
   const implementation = baselineMerge.implementation;
+  const visualExperience = inferredVisualExperience(idea, intake);
+  if (
+    visualExperience.has_visual_interface
+    && (!Array.isArray(product.screens_or_interfaces) || product.screens_or_interfaces.length === 0)
+  ) {
+    product.screens_or_interfaces = [`Iteration ${iterationId} visual interface: ${idea}`];
+  }
   const baselineWebEvidence = Array.isArray(baselineSpec.evidence)
     ? baselineSpec.evidence
         .filter((item) => typeof item?.source_id === 'string' && item.source_id.startsWith('WEB-'))
@@ -1668,7 +1705,7 @@ export function buildDeltaSpec({ projectId, iterationId, idea, baselineSpec, bas
     source_intake: '../gate-a-intake/intake.json',
     product: cloneJson(product),
     implementation: cloneJson(implementation),
-    visual_experience: inferredVisualExperience(idea, intake),
+    visual_experience: visualExperience,
     clarifying_question_disposition: intakeQuestionDispositions(
       intake,
       'The confirmed Gate A delta intake carries this question into Gate B as an explicit assumption.',
@@ -2072,24 +2109,30 @@ function currentSpecForPromotedSpec(
   gateBApprovalAudit,
   gateBPromotionBinding,
 ) {
+  const compositionFields = [
+    'source_specs',
+    'effective_product',
+    'effective_implementation',
+    'product_sources',
+    'implementation_sources',
+    'superseded_refs',
+    'composition_conflicts',
+    'skipped_iterations',
+    'composed_at',
+  ];
   let next = {
     ...currentSpec,
     active_iteration: iterationId,
+    composed_from: [iterationId],
+    effective_spec_ref: sourceSpecRef(iterationId),
     gate_b_promoted_at: promotedAt,
     gate_b_promotion_bindings: {
       ...(currentSpec.gate_b_promotion_bindings ?? {}),
       [iterationId]: gateBPromotionBinding,
     },
   };
-  const activeSpecRef = sourceSpecRef(iterationId);
-  const hasNoEffectiveSpec = !currentSpec.effective_spec_ref;
-
-  if (hasNoEffectiveSpec) {
-    next.composed_from = appendUnique(currentSpec.composed_from, [iterationId]);
-    next.effective_spec_ref = activeSpecRef;
-  } else if (currentSpec.effective_spec_ref === activeSpecRef) {
-    next.effective_spec_ref = activeSpecRef;
-  }
+  for (const field of compositionFields) delete next[field];
+  next.open_decisions = [];
   if (next.pending_iteration?.iteration_id === iterationId) {
     next.pending_iteration = {
       ...next.pending_iteration,
@@ -2822,7 +2865,11 @@ function loadOptionalIterationMetadata(artifactRoot, iterationId) {
 }
 
 function sortIterationIds(iterationIds, artifactRoot, currentSpec) {
-  const composedOrder = new Map((currentSpec.composed_from ?? []).map((iterationId, index) => [iterationId, index]));
+  const authoritativeOrder = currentSpec.effective_spec_ref === 'current-spec.json'
+    && Array.isArray(currentSpec.source_specs)
+    ? currentSpec.composed_from ?? []
+    : (currentSpec.closed_iterations ?? []).map((closed) => closed?.iteration_id).filter(Boolean);
+  const composedOrder = new Map(authoritativeOrder.map((iterationId, index) => [iterationId, index]));
   return [...iterationIds].sort((left, right) => {
     const leftKnown = composedOrder.has(left);
     const rightKnown = composedOrder.has(right);
@@ -3254,10 +3301,18 @@ function init(args) {
 
     let rebound = [];
     applyPlan(paths, args.iterationId, plan, {
-      rollbackFiles: decisionBindings.length ? [decisionLedgerPath(artifactRoot)] : [],
+      rollbackFiles: [
+        currentDevelopmentContractPath(artifactRoot),
+        ...(decisionBindings.length ? [decisionLedgerPath(artifactRoot)] : []),
+      ],
       afterApply: () => {
         validateMoved(paths);
-        resolveIterationState(artifactRoot);
+        const state = resolveIterationState(artifactRoot);
+        atomicWriteJson(
+          currentDevelopmentContractPath(artifactRoot),
+          materializeCurrentDevelopmentContract(state),
+        );
+        resolveCurrentDevelopmentState(artifactRoot);
         rebound = appendMovedDecisionBindings(
           artifactRoot,
           args.iterationId,
@@ -3267,6 +3322,7 @@ function init(args) {
     });
     console.log(`Plan2Agent iteration init passed: ${toRelativeFromRoot(artifactRoot)} -> iterations/${args.iterationId}/`);
     console.log('Moved artifacts revalidated: spec approved, task graph valid, Gate B approval audit present.');
+    console.log(`Current development contract: ${toRelativeFromRoot(currentDevelopmentContractPath(artifactRoot))}`);
     if (rebound.length) console.log(`Decision ledger rebound: ${rebound.length} moved Gate approval(s).`);
     console.log('Maintenance is lazy: no empty task-graph.json was created.');
     return 0;
@@ -3321,9 +3377,9 @@ export function validateCloseReadyVisualEvidence({
   const visualContract = approvedTaskGraphVisualContract(artifactRoot, taskGraphPath, taskGraph);
   if (!visualContract) return 0;
   const runsDir = path.join(path.resolve(artifactRoot), 'runs');
-  validateRunsDir(runsDir);
+  validateRunsDir(runsDir, { iterationId: activeIteration });
   const expectedSourceLayout = taskGraphContextForGraph(taskGraphPath).sourceLayout;
-  const currentRuns = loadRunsForArtifactRoot(artifactRoot)
+  const currentRuns = loadRunsForArtifactRoot(artifactRoot, { iterationId: activeIteration })
     .filter((run) => (
       run.iterationId === activeIteration
       && run.sourceLayout === expectedSourceLayout
@@ -3375,9 +3431,9 @@ export function validateCloseReadyAcceptanceEvidence({
     console.log('- acceptance review: skipped (reviewPasses.acceptance=opt_in; no review was started)');
     return 0;
   }
-  validateRunsDir(runsDir);
+  validateRunsDir(runsDir, { iterationId: activeIteration });
   const expectedSourceLayout = taskGraphContextForGraph(taskGraphPath).sourceLayout;
-  const currentRuns = loadRunsForArtifactRoot(artifactRoot)
+  const currentRuns = loadRunsForArtifactRoot(artifactRoot, { iterationId: activeIteration })
     .filter((run) => (
       run.iterationId === activeIteration
       && run.sourceLayout === expectedSourceLayout
@@ -3424,9 +3480,9 @@ export function validateCloseReadyFullVerificationEvidence({
       `close-ready full verification failed: runs directory is missing. Run p2a execute verify-final --artifacts ${artifactRoot}.`,
     );
   }
-  validateRunsDir(runsDir);
+  validateRunsDir(runsDir, { iterationId: activeIteration });
   const expectedSourceLayout = taskGraphContextForGraph(taskGraphPath).sourceLayout;
-  const currentRuns = loadRunsForArtifactRoot(artifactRoot)
+  const currentRuns = loadRunsForArtifactRoot(artifactRoot, { iterationId: activeIteration })
     .filter((run) => (
       run.iterationId === activeIteration
       && run.sourceLayout === expectedSourceLayout
@@ -3680,9 +3736,9 @@ export function collectCodeFileTree(codeRoot, limit = CODE_SIGNAL_FILE_TREE_LIMI
   };
 }
 
-function recentRunChanges(artifactRoot) {
+function recentRunChanges(artifactRoot, iterationId) {
   try {
-    return loadRunsForArtifactRoot(artifactRoot).map((run) => ({
+    return loadRunsForArtifactRoot(artifactRoot, { iterationId }).map((run) => ({
       taskId: run.taskId,
       runId: run.runId,
       status: run.status,
@@ -3698,7 +3754,7 @@ function collectCodeSignals(args, state) {
   const fileSignals = collectCodeFileTree(args.codeRoot ?? process.cwd());
   return {
     ...fileSignals,
-    recent_changes: recentRunChanges(state.artifactRoot),
+    recent_changes: recentRunChanges(state.artifactRoot, state.activeIteration),
   };
 }
 
@@ -4338,12 +4394,14 @@ function promoteTasksLocked(args) {
   };
   const promotedDraftPath = `${draftPath}.promoted`;
   const statusPath = path.join(state.artifactRoot, 'status.md');
+  const developmentContractPath = currentDevelopmentContractPath(state.artifactRoot);
   const stateSnapshot = captureRollbackFiles([
     metaPath,
     state.taskGraphPath,
     draftPath,
     promotedDraftPath,
     statusPath,
+    developmentContractPath,
   ]);
   try {
     atomicWriteJson(
@@ -4355,6 +4413,10 @@ function promoteTasksLocked(args) {
       ),
     );
     atomicWriteJson(state.taskGraphPath, promoted);
+    atomicWriteJson(
+      developmentContractPath,
+      materializeCurrentDevelopmentContract(state),
+    );
     renameSync(draftPath, promotedDraftPath);
     const nextStatus = renderIterationIndexMarkdown(
       state.artifactRoot,
@@ -4374,6 +4436,7 @@ function promoteTasksLocked(args) {
 
   console.log(`Plan2Agent tasks promoted: ${promoted.tasks.length} task(s)`);
   console.log(`- graph: ${toRelativeFromRoot(state.taskGraphPath)}`);
+  console.log(`- current contract: ${toRelativeFromRoot(developmentContractPath)}`);
   console.log('- promoted from: task-graph.draft.json');
   console.log(`- provenance: ${toRelativeFromRoot(metaPath)}`);
   return 0;
@@ -4426,34 +4489,6 @@ function loadExistingTaskGraphIfPresent(taskGraphPath) {
   return graph;
 }
 
-function historicalCompletedTasks(state) {
-  const tasks = [];
-  const seenGraphRefs = new Set();
-  const addTasksFromGraphRef = (graphRef, iterationId) => {
-    if (!graphRef || seenGraphRefs.has(graphRef)) return;
-    seenGraphRefs.add(graphRef);
-    const graphPath = resolveArtifactFileReference(graphRef, state.artifactRoot);
-    if (!existsSync(graphPath) || !lstatSync(graphPath).isFile()) return;
-    const graph = loadJson(graphPath);
-    validateTaskGraphData(graph);
-    for (const task of graph.tasks ?? []) {
-      if (task.status === 'done') tasks.push({ ...task, iterationId });
-    }
-  };
-
-  for (const closed of state.currentSpec.closed_iterations ?? []) {
-    const iterationId = closed?.iteration_id;
-    if (!iterationId) continue;
-    addTasksFromGraphRef(closed.task_graph_ref ?? taskGraphRef(iterationId), iterationId);
-  }
-  for (const source of state.currentSpec.source_specs ?? []) {
-    const iterationId = source?.iteration_id;
-    if (!iterationId) continue;
-    addTasksFromGraphRef(taskGraphRef(iterationId), iterationId);
-  }
-  return tasks;
-}
-
 function semanticGraphStats(graph) {
   const tasks = graph.tasks ?? [];
   return {
@@ -4502,7 +4537,7 @@ function diffTasksLocked(args) {
     baselineSpec,
     baselineRef,
     existingTaskGraph,
-    historicalTasks: historicalCompletedTasks(state),
+    historicalTasks: [],
     visualContract: approvedVisualReviewContract(state.specPath, state.artifactRoot),
   });
   const draft = {
@@ -4567,32 +4602,105 @@ function projectRunPersistence(projectRoot = ROOT) {
   }
 }
 
-function createOpenBaselineSnapshot(currentSpec, artifactRoot, iterationId) {
-  const currentEffectiveRef = currentSpec.effective_spec_ref;
-  const currentEffectivePath = resolveArtifactFileReference(currentEffectiveRef, artifactRoot);
-  assertFile(currentEffectivePath, 'current-spec.json effective_spec_ref');
-  assertFileInsideArtifactRoot(
-    currentEffectivePath,
-    artifactRoot,
-    'current-spec.json effective_spec_ref',
-  );
-  if (currentEffectiveRef !== 'current-spec.json') {
-    return {
-      ref: currentEffectiveRef,
-      sha256: fileSha256(currentEffectivePath),
-    };
-  }
-
-  const snapshotRef = canonicalComposedBaselineSnapshotRef(iterationId);
-  const snapshotPath = path.join(artifactRoot, snapshotRef);
-  mkdirSync(path.dirname(snapshotPath), { recursive: true });
-  writeJson(snapshotPath, currentSpec);
-  validateCurrentSpecCompositionData(loadJson(snapshotPath), artifactRoot, {
-    requireNoOpenDecisions: true,
-  });
+function baselineContractIntake(contract, iterationId, openedAt, intakeRef) {
   return {
-    ref: snapshotRef,
-    sha256: fileSha256(snapshotPath),
+    schema_version: 'p2a.intake.v1',
+    idea: contract.objective,
+    summary: `Current development baseline for ${iterationId}, materialized without historical Gate documents.`,
+    known_facts: [
+      `The baseline authority is current-development-contract.json from iteration ${contract.iterationId}.`,
+      'Historical iteration documents are non-authoritative and are not inputs to this baseline.',
+    ],
+    assumptions: [],
+    clarifying_questions: [],
+    needs_user_decision: [],
+    status: 'ready_for_spec',
+    approval_audit: {
+      approved_by: 'current-development-contract',
+      approved_at: openedAt,
+      approved_artifacts: [intakeRef],
+      approval_note: 'Deterministically materialized from the previously approved current development contract.',
+    },
+    evidence: [],
+  };
+}
+
+function contractRuleText(item) {
+  return `${item.id}: ${item.rule} (${item.rationale})`;
+}
+
+function baselineContractSpec(contract, openedAt, intakeRef, intakeSha256, specRef) {
+  const visualScreens = (contract.visualContract?.screens ?? []).map((screen) => (
+    screen.route ? `${screen.screenId}: ${screen.route}` : screen.screenId
+  ));
+  const visualConstraints = contract.visualContract
+    ? [
+        `Accessibility standard: ${contract.visualContract.accessibilityStandard}`,
+        ...(contract.visualContract.visualInvariants ?? []),
+      ]
+    : [];
+  return {
+    schema_version: 'p2a.spec.v1',
+    project_id: contract.projectId,
+    source_intake: path.posix.relative(path.posix.dirname(specRef), intakeRef),
+    source_intake_sha256: intakeSha256,
+    product: {
+      problem: contract.objective,
+      target_users: [],
+      goals: cloneJson(contract.scope),
+      must_preserve: cloneJson(contract.mustPreserve),
+      non_goals: cloneJson(contract.nonGoals),
+      core_flows: cloneJson(contract.acceptance),
+      screens_or_interfaces: visualScreens,
+      data_model_draft: [],
+      external_integrations: [],
+      success_criteria: cloneJson(contract.acceptance),
+      constraints: [
+        ...contract.prohibitions.map(contractRuleText),
+        ...visualConstraints,
+        'External writes remain prohibited unless the user explicitly grants authority.',
+      ],
+    },
+    implementation: {
+      architecture: contract.architecture.map(contractRuleText),
+      interfaces: [],
+      data_flow: [],
+      dependencies: contract.stack.map((item) => `${item.id}: ${item.choice} (${item.rationale})`),
+      edge_cases: [],
+      verification: cloneJson(contract.verification),
+    },
+    clarifying_question_disposition: [],
+    open_decisions: [],
+    approval: 'approved',
+    approval_audit: {
+      approved_by: 'current-development-contract',
+      approved_at: openedAt,
+      approved_artifacts: [specRef],
+      approval_note: 'Deterministically materialized from the previously approved current development contract.',
+    },
+    evidence: [],
+  };
+}
+
+function createOpenBaselineSnapshot(contract, artifactRoot, iterationId, openedAt) {
+  const baselineRootRef = `iterations/${iterationId}/baseline`;
+  const intakeRef = `${baselineRootRef}/gate-a-intake/intake.json`;
+  const specRef = canonicalCurrentDevelopmentBaselineSpecRef(iterationId);
+  const intakePath = path.join(artifactRoot, intakeRef);
+  const specPath = path.join(artifactRoot, specRef);
+  const intake = baselineContractIntake(contract, iterationId, openedAt, intakeRef);
+  mkdirSync(path.dirname(intakePath), { recursive: true });
+  mkdirSync(path.dirname(specPath), { recursive: true });
+  writeJson(intakePath, intake);
+  validateIntake(intakePath, { artifactRoot });
+  writeJson(
+    specPath,
+    baselineContractSpec(contract, openedAt, intakeRef, fileSha256(intakePath), specRef),
+  );
+  validateSpec(specPath, intakePath, { artifactRoot });
+  return {
+    ref: specRef,
+    sha256: fileSha256(specPath),
   };
 }
 
@@ -4616,19 +4724,9 @@ function openLocked(args, artifactRoot, idea, options = {}) {
     );
   }
   const facts = loadReadyIterationFacts(artifactRoot);
+  const currentDevelopment = resolveCurrentDevelopmentState(artifactRoot);
   assertCloseReadyTasks(facts.taskGraph);
   assertArchivedBaselineForOpen(facts.state);
-  const closedIterations = facts.state.currentSpec.closed_iterations ?? [];
-  const hasArchivedArtifactAudits = closedIterations.length > 0
-    && closedIterations.every((closed) => (
-      closed?.artifact_hashes
-      && typeof closed.artifact_hashes === 'object'
-      && !Array.isArray(closed.artifact_hashes)
-    ));
-  if (hasArchivedArtifactAudits) {
-    auditArchivedIterationArtifacts(facts.state.currentSpec, facts.state.artifactRoot);
-  }
-
   if (facts.state.activeIteration === args.iterationId) {
     throw new Error(`--iteration-id must differ from current active iteration ${JSON.stringify(facts.state.activeIteration)}`);
   }
@@ -4641,6 +4739,10 @@ function openLocked(args, artifactRoot, idea, options = {}) {
   const statusBefore = existsSync(statusPath)
     ? readFileSync(statusPath, 'utf8')
     : null;
+  const developmentContractPath = currentDevelopmentContractPath(artifactRoot);
+  const developmentContractBefore = existsSync(developmentContractPath)
+    ? readFileSync(developmentContractPath, 'utf8')
+    : null;
   const openedAt = new Date().toISOString();
   const projectId = facts.state.projectId;
   let iterationCreated = false;
@@ -4652,9 +4754,10 @@ function openLocked(args, artifactRoot, idea, options = {}) {
       iterationCreated = true;
     }
     const baseline = createOpenBaselineSnapshot(
-      facts.state.currentSpec,
+      currentDevelopment.currentDevelopmentContract,
       artifactRoot,
       args.iterationId,
+      openedAt,
     );
     writeFileSync(
       path.join(iterationRoot, 'iteration.json'),
@@ -4689,6 +4792,11 @@ function openLocked(args, artifactRoot, idea, options = {}) {
     stateWriteStarted = true;
     atomicWriteJson(facts.state.currentSpecPath, nextCurrentSpec);
     writeIterationStatus(artifactRoot, nextCurrentSpec);
+    // The closed iteration contract remains the source for the explicit open
+    // transition only. Once the active pointer moves to planning, it must not
+    // masquerade as the execution authority for the new iteration. Gate C
+    // promotion will materialize the replacement current contract.
+    if (existsSync(developmentContractPath)) unlinkSync(developmentContractPath);
 
     const cleanup = options.pruneArchivedRuns
       ? pruneArchivedRunEvidenceAfterOpen(facts)
@@ -4720,6 +4828,12 @@ function openLocked(args, artifactRoot, idea, options = {}) {
         else writeFileSync(statusPath, statusBefore, 'utf8');
       } catch (rollbackError) {
         rollbackFailures.push(`status.md: ${rollbackError.message}`);
+      }
+      try {
+        if (developmentContractBefore === null) rmSync(developmentContractPath, { force: true });
+        else writeFileSync(developmentContractPath, developmentContractBefore, 'utf8');
+      } catch (rollbackError) {
+        rollbackFailures.push(`current-development-contract.json: ${rollbackError.message}`);
       }
     }
     if (iterationCreated || existsSync(iterationRoot)) {
@@ -5217,6 +5331,50 @@ function compose(args) {
   );
 }
 
+function migrateCurrentContract(args) {
+  const state = resolveIterationState(args.artifacts);
+  const contract = materializeCurrentDevelopmentContract(state);
+  const contractPath = currentDevelopmentContractPath(state.artifactRoot);
+  const contractSha256 = createHash('sha256')
+    .update(JSON.stringify(contract))
+    .digest('hex');
+  const runsDir = path.join(state.artifactRoot, 'runs');
+  const activeRuns = loadRunsForArtifactRoot(state.artifactRoot, {
+    iterationId: state.activeIteration,
+  }).filter((run) => run.sourceLayout === 'iteration');
+  const runPaths = activeRuns.map((run) => runFilePath(runsDir, run.runId));
+  const snapshot = captureRollbackFiles([contractPath, ...runPaths]);
+  try {
+    atomicWriteJson(contractPath, contract);
+    for (const [index, run] of activeRuns.entries()) {
+      const migrated = {
+        ...run,
+        currentDevelopmentContractRef: 'current-development-contract.json',
+        currentDevelopmentContractSha256: contractSha256,
+      };
+      validateRunData(migrated);
+      atomicWriteJson(runPaths[index], migrated);
+    }
+  } catch (error) {
+    const rollbackFailures = restoreRollbackFiles(snapshot);
+    if (rollbackFailures.length) {
+      throw new Error(
+        `${error.message}; current contract migration rollback failed: ${rollbackFailures.join('; ')}`,
+        { cause: error },
+      );
+    }
+    throw error;
+  }
+  const resolved = resolveCurrentDevelopmentState(state.artifactRoot);
+  console.log(`Plan2Agent current development contract materialized: ${toRelativeFromRoot(contractPath)}`);
+  console.log(`- project: ${resolved.projectId}`);
+  console.log(`- iteration: ${resolved.activeIteration}`);
+  console.log(`- tasks: ${resolved.taskGraph.tasks.length}`);
+  console.log(`- rebound runs: ${activeRuns.length}`);
+  console.log(`- sha256: ${resolved.currentDevelopmentContractSha256}`);
+  return 0;
+}
+
 export function main(argv = process.argv.slice(2)) {
   let args;
   try {
@@ -5236,6 +5394,7 @@ export function main(argv = process.argv.slice(2)) {
     if (args.command === 'promote-tasks') return promoteTasks(args);
     if (args.command === 'diff-tasks') return diffTasks(args);
     if (args.command === 'compose') return compose(args);
+    if (args.command === 'migrate-current-contract') return migrateCurrentContract(args);
     if (args.command === 'maintenance') return maintenance(args);
     throw new Error(`unknown command: ${args.command}`);
   } catch (error) {

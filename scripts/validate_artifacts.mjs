@@ -62,6 +62,7 @@ export { ValidationError, validateSchema } from './p2a_schema.mjs';
 const P2A_PATHS = resolveP2aPaths(import.meta.url);
 const SCHEMA_PATHS = {
   constitution: path.join(P2A_PATHS.schemasDir, 'constitution.schema.json'),
+  current_development_contract: path.join(P2A_PATHS.schemasDir, 'current-development-contract.schema.json'),
   decisions: path.join(P2A_PATHS.schemasDir, 'decisions.schema.json'),
   intake: path.join(P2A_PATHS.schemasDir, 'intake.schema.json'),
   spec: path.join(P2A_PATHS.schemasDir, 'spec.schema.json'),
@@ -1846,6 +1847,80 @@ export function validateConstitutionData(data, options = {}) {
 
 export function validateConstitution(filePath, options = {}) {
   return validateConstitutionData(loadJson(filePath), options);
+}
+
+export function currentDevelopmentContractSha256(contract) {
+  return createHash('sha256').update(JSON.stringify(contract)).digest('hex');
+}
+
+export function validateCurrentDevelopmentContractData(data, options = {}) {
+  validateSchema(data, loadJson(SCHEMA_PATHS.current_development_contract));
+  const taskIds = data.bindings.taskGraph.tasks.map((task) => task.taskId);
+  if (taskIds.length !== new Set(taskIds).size) {
+    throw new ValidationError('current development contract task bindings must use unique taskId values');
+  }
+  for (const field of ['scope', 'mustPreserve', 'nonGoals', 'acceptance', 'verification']) {
+    validateNonBlankStrings(data[field], `current development contract ${field}`);
+  }
+  validateConstitutionData({
+    schema_version: 'p2a.constitution.v1',
+    projectId: data.projectId,
+    architecture: data.architecture,
+    stack: data.stack,
+    prohibitions: data.prohibitions,
+    style: data.style,
+  });
+  if (options.projectId && data.projectId !== options.projectId) {
+    throw new ValidationError(
+      `current development contract projectId must match ${JSON.stringify(options.projectId)}, got ${JSON.stringify(data.projectId)}`,
+    );
+  }
+  if (options.iterationId && data.iterationId !== options.iterationId) {
+    throw new ValidationError(
+      `current development contract iterationId must match ${JSON.stringify(options.iterationId)}, got ${JSON.stringify(data.iterationId)}`,
+    );
+  }
+  return data;
+}
+
+export function validateCurrentDevelopmentContract(filePath, options = {}) {
+  const key = validationSessionKey('current-development-contract', filePath, options);
+  const cached = cachedValidation(options, key);
+  if (cached) return cached.value;
+  recordValidationRun(options, 'current-development-contract');
+  return cacheValidation(
+    options,
+    key,
+    validateCurrentDevelopmentContractData(loadValidationJson(filePath, options), options),
+  );
+}
+
+export function executionEnvelopeFromCurrentDevelopmentContract(contract, sourceRef) {
+  validateCurrentDevelopmentContractData(contract);
+  const envelope = {
+    objective: contract.objective,
+    sourceGateRefs: [{
+      path: sourceRef,
+      sha256: currentDevelopmentContractSha256(contract),
+    }],
+    scope: structuredClone(contract.scope),
+    architecture: structuredClone(contract.architecture),
+    stack: structuredClone(contract.stack),
+    prohibitions: structuredClone(contract.prohibitions),
+    style: structuredClone(contract.style),
+    mustPreserve: structuredClone(contract.mustPreserve),
+    nonGoals: structuredClone(contract.nonGoals),
+    acceptance: structuredClone(contract.acceptance),
+    verification: structuredClone(contract.verification),
+    executionAuthority: {
+      mayChoose: structuredClone(contract.authority.mayChoose),
+      mustReturnToGate: structuredClone(contract.authority.mustReturnToGate),
+    },
+    ...(contract.visualContract ? {
+      visualContract: structuredClone(contract.visualContract),
+    } : {}),
+  };
+  return validateExecutionEnvelopeData(envelope);
 }
 
 export function decisionRecordSha256(record) {
@@ -4255,6 +4330,14 @@ export function validateRunData(data) {
     throw new ValidationError('executionEnvelopeSha256 does not match executionEnvelope');
   }
   if (data.executionEnvelope !== undefined) validateExecutionEnvelopeData(data.executionEnvelope);
+  if (
+    (data.currentDevelopmentContractRef !== undefined)
+    !== (data.currentDevelopmentContractSha256 !== undefined)
+  ) {
+    throw new ValidationError(
+      'currentDevelopmentContractRef and currentDevelopmentContractSha256 must be recorded together',
+    );
+  }
   if (data.status === 'started' && data.finishedAt !== null) {
     throw new ValidationError('started run must have finishedAt null');
   }
@@ -4596,6 +4679,8 @@ const MILESTONE_IMMUTABLE_RUN_FIELDS = [
   'sourceSpecRef',
   'runKind',
   'taskContractSha256',
+  'currentDevelopmentContractRef',
+  'currentDevelopmentContractSha256',
   'agentTool',
   'workspaceRef',
   'workspacePath',
@@ -5009,6 +5094,170 @@ export function resolveRunTaskGraphPath(runData, artifactRoot) {
   return graphPath;
 }
 
+function resolveRunCurrentDevelopmentContract(
+  runData,
+  artifactRoot,
+  taskGraphPath,
+  graphData,
+  options = {},
+) {
+  const hasRef = runData.currentDevelopmentContractRef !== undefined;
+  const hasSha256 = runData.currentDevelopmentContractSha256 !== undefined;
+  if (hasRef !== hasSha256) {
+    throw new ValidationError(
+      `run ${runData.runId} current development contract ref and SHA-256 must be recorded together`,
+    );
+  }
+  if (!hasRef) return null;
+  if (runData.sourceLayout !== 'iteration') {
+    throw new ValidationError(
+      `run ${runData.runId} current development contract binding is only valid for iteration runs`,
+    );
+  }
+  const normalizedRef = normalizeReference(runData.currentDevelopmentContractRef);
+  if (normalizedRef !== 'current-development-contract.json') {
+    throw new ValidationError(
+      `run ${runData.runId} currentDevelopmentContractRef must be current-development-contract.json`,
+    );
+  }
+  const contractPath = path.resolve(artifactRoot, normalizedRef);
+  assertFile(contractPath, `run ${runData.runId} current development contract`);
+  assertFileInsideArtifactRoot(
+    contractPath,
+    artifactRoot,
+    `run ${runData.runId} current development contract`,
+  );
+  const contract = validateCurrentDevelopmentContract(contractPath, {
+    projectId: runData.projectId,
+    validationSession: options.validationSession,
+  });
+  if (contract.iterationId !== runData.iterationId) {
+    const currentSpecPath = path.join(artifactRoot, 'current-spec.json');
+    if (existsSync(currentSpecPath) && lstatSync(currentSpecPath).isFile()) {
+      const currentSpec = loadJson(currentSpecPath);
+      if (currentSpec.active_iteration === runData.iterationId) {
+        throw new ValidationError(
+          `current development contract iterationId must match ${JSON.stringify(runData.iterationId)}, got ${JSON.stringify(contract.iterationId)}`,
+        );
+      }
+    }
+    // A single root contract intentionally advances with current development.
+    // Historical run validation therefore falls back to its sealed envelope
+    // and original task/spec provenance instead of treating today's contract
+    // as authority for an older iteration.
+    return null;
+  }
+  const contractSha256 = currentDevelopmentContractSha256(contract);
+  if (runData.currentDevelopmentContractSha256 !== contractSha256) {
+    throw new ValidationError(
+      `run ${runData.runId} current development contract changed after start`,
+    );
+  }
+  if (!taskGraphRefMatchesGraph(contract.bindings.taskGraph.ref, taskGraphPath, artifactRoot)) {
+    throw new ValidationError(
+      `run ${runData.runId} current development contract task graph binding does not match taskGraphRef`,
+    );
+  }
+  const graphSourceSpecPath = path.resolve(path.dirname(taskGraphPath), graphData.sourceSpec);
+  const contractSpecPath = path.resolve(artifactRoot, contract.bindings.activeSpec.ref);
+  if (graphSourceSpecPath !== contractSpecPath) {
+    throw new ValidationError(
+      `run ${runData.runId} current task graph sourceSpec does not match the current development contract`,
+    );
+  }
+  const constitutionPath = projectConstitutionPathFrom(taskGraphPath);
+  const constitutionBinding = contract.bindings.constitution;
+  if (constitutionBinding.ref === null && constitutionPath) {
+    throw new ValidationError(
+      `run ${runData.runId} current constitution appeared after contract materialization`,
+    );
+  }
+  if (constitutionBinding.ref !== null && !constitutionPath) {
+    throw new ValidationError(`run ${runData.runId} current constitution is missing`);
+  }
+  const constitution = constitutionPath
+    ? validateConstitution(constitutionPath, {
+        requireApproved: true,
+        projectId: runData.projectId,
+      })
+    : {
+        schema_version: 'p2a.constitution.v1',
+        projectId: runData.projectId,
+        architecture: [],
+        stack: [],
+        prohibitions: [],
+        style: {},
+      };
+  if (
+    constitutionPath
+    && rawFileSha256(constitutionPath) !== constitutionBinding.sha256
+  ) {
+    throw new ValidationError(
+      `run ${runData.runId} current constitution changed after contract materialization`,
+    );
+  }
+  for (const field of ['architecture', 'stack', 'prohibitions', 'style']) {
+    if (!sameJson(contract[field], constitution[field])) {
+      throw new ValidationError(
+        `run ${runData.runId} current development contract ${field} does not match the constitution`,
+      );
+    }
+  }
+  const expectedTaskBindings = graphData.tasks.map((task) => ({
+    taskId: task.id,
+    sha256: taskContractSha256(task),
+  }));
+  if (!sameJson(contract.bindings.taskGraph.tasks, expectedTaskBindings)) {
+    throw new ValidationError(
+      `run ${runData.runId} current development contract task bindings do not match the task graph`,
+    );
+  }
+  return {
+    contract,
+    contractPath,
+    constitutionPath,
+    envelope: executionEnvelopeFromCurrentDevelopmentContract(contract, normalizedRef),
+  };
+}
+
+function currentContractVisualReview(contract) {
+  const visual = contract.visualContract;
+  if (!visual) return null;
+  return {
+    required: true,
+    experienceSpecRef: visual.experienceSpecRef,
+    experienceSpecSha256: visual.experienceSpecSha256,
+    prototypeManifestRef: visual.prototypeManifestRef,
+    prototypeManifestSha256: visual.prototypeManifestSha256,
+    screenStates: visual.screens.map((screen) => ({
+      screenId: screen.screenId,
+      states: structuredClone(screen.states),
+    })),
+    viewports: structuredClone(visual.viewports),
+    accessibilityStandard: visual.accessibilityStandard,
+  };
+}
+
+function currentContractAcceptanceReview(contract) {
+  return {
+    required: true,
+    criteria: contract.acceptance.map((text, index) => ({
+      ref: `current.acceptance[${index}]`,
+      text,
+    })),
+  };
+}
+
+function acceptanceReviewTextEquivalent(actual, expected) {
+  return actual?.required === expected?.required
+    && Array.isArray(actual?.criteria)
+    && Array.isArray(expected?.criteria)
+    && actual.criteria.length === expected.criteria.length
+    && actual.criteria.every((criterion, index) => (
+      criterion?.text === expected.criteria[index]?.text
+    ));
+}
+
 export function validateRunTaskContract(runData, artifactRoot, options = {}) {
   const taskGraphPath = resolveRunTaskGraphPath(runData, artifactRoot);
   let sourceArtifactRoot = runData.sourceLayout === 'graph'
@@ -5017,36 +5266,56 @@ export function validateRunTaskContract(runData, artifactRoot, options = {}) {
   const graphData = loadJson(taskGraphPath);
   const rawVisualContract = Boolean(runData.visualReview?.required);
   const rawAcceptanceContract = Boolean(runData.acceptanceReview?.required);
+  const currentDevelopment = resolveRunCurrentDevelopmentContract(
+    runData,
+    sourceArtifactRoot,
+    taskGraphPath,
+    graphData,
+    options,
+  );
   let sourceSpecPath = null;
   let maintenanceSource = false;
-  try {
-    sourceSpecPath = resolveVisualReviewSourceSpec({
-      source_spec_ref: runData.sourceSpecRef,
-      task_graph_ref: taskGraphPath,
-    }, sourceArtifactRoot, {
-      requireInsideArtifactRoot: runData.sourceLayout !== 'graph',
-    });
-    if (runData.sourceLayout === 'graph') {
-      sourceArtifactRoot = visualArtifactRoot(sourceSpecPath);
-    }
-    if (runData.sourceLayout === 'maintenance') {
-      const sourceData = loadJson(sourceSpecPath);
-      if (sourceData.schema_version !== 'p2a.current_spec.v1') {
-        throw new ValidationError(
-          `finished maintenance run ${runData.runId} sourceSpecRef must reference current-spec.json`,
-        );
+  if (!currentDevelopment) {
+    try {
+      sourceSpecPath = resolveVisualReviewSourceSpec({
+        source_spec_ref: runData.sourceSpecRef,
+        task_graph_ref: taskGraphPath,
+      }, sourceArtifactRoot, {
+        requireInsideArtifactRoot: runData.sourceLayout !== 'graph',
+      });
+      if (runData.sourceLayout === 'graph') {
+        sourceArtifactRoot = visualArtifactRoot(sourceSpecPath);
       }
-      if (sourceData.project_id !== runData.projectId) {
-        throw new ValidationError(
-          `finished maintenance run ${runData.runId} projectId does not match current-spec.json`,
-        );
+      if (runData.sourceLayout === 'maintenance') {
+        const sourceData = loadJson(sourceSpecPath);
+        if (sourceData.schema_version !== 'p2a.current_spec.v1') {
+          throw new ValidationError(
+            `finished maintenance run ${runData.runId} sourceSpecRef must reference current-spec.json`,
+          );
+        }
+        if (sourceData.project_id !== runData.projectId) {
+          throw new ValidationError(
+            `finished maintenance run ${runData.runId} projectId does not match current-spec.json`,
+          );
+        }
+        maintenanceSource = true;
       }
-      maintenanceSource = true;
+    } catch (error) {
+      if (rawVisualContract || rawAcceptanceContract || runData.schema_version === 'p2a.run.v2') {
+        throw error;
+      }
     }
-  } catch (error) {
-    if (rawVisualContract || rawAcceptanceContract || runData.schema_version === 'p2a.run.v2') throw error;
   }
-  const graph = validateTaskGraphData(graphData, maintenanceSource ? null : sourceSpecPath);
+  const graph = currentDevelopment
+    ? validateTaskGraphData(graphData, null, {
+        artifactPath: taskGraphPath,
+        artifactRoot: sourceArtifactRoot,
+        ...(currentDevelopment.constitutionPath
+          ? { constitutionPath: currentDevelopment.constitutionPath }
+          : {}),
+        projectId: runData.projectId,
+      })
+    : validateTaskGraphData(graphData, maintenanceSource ? null : sourceSpecPath);
   const task = graph.tasks.find((candidate) => candidate.id === runData.taskId);
   if (!task) {
     throw new ValidationError(
@@ -5097,7 +5366,7 @@ export function validateRunTaskContract(runData, artifactRoot, options = {}) {
       `finished run ${runData.runId} taskContractSha256 does not match the immutable task contract recorded at start`,
     );
   }
-  if (sourceSpecPath) {
+  if (sourceSpecPath && !currentDevelopment) {
     const artifactRelativeGraphSpec = path.resolve(sourceArtifactRoot, graph.sourceSpec);
     const graphSourceSpecPath = resolveExistingFileReference(
       graph.sourceSpec,
@@ -5143,7 +5412,7 @@ export function validateRunTaskContract(runData, artifactRoot, options = {}) {
         `finished maintenance run ${runData.runId} must not record a Gate B execution envelope`,
       );
     }
-    const expectedEnvelope = approvedExecutionEnvelope(
+    const expectedEnvelope = currentDevelopment?.envelope ?? approvedExecutionEnvelope(
       sourceSpecPath,
       runData.sourceSpecRef,
       runData.sourceLayout === 'graph' ? null : sourceArtifactRoot,
@@ -5158,12 +5427,39 @@ export function validateRunTaskContract(runData, artifactRoot, options = {}) {
           },
         }
       : null;
+    const currentContractLegacyEnvelope = (
+      currentDevelopment
+      || runData.currentDevelopmentContractRef !== undefined
+    )
+      ? {
+          objective: expectedEnvelope.objective,
+          sourceGateRefs: structuredClone(executionEnvelope.sourceGateRefs),
+          scope: structuredClone(expectedEnvelope.scope),
+          ...(['architecture', 'stack', 'prohibitions', 'style'].reduce(
+            (fields, field) => {
+              const value = expectedEnvelope[field] ?? executionEnvelope[field];
+              if (value !== undefined) fields[field] = structuredClone(value);
+              return fields;
+            },
+            {},
+          )),
+          mustPreserve: structuredClone(expectedEnvelope.mustPreserve),
+          nonGoals: structuredClone(expectedEnvelope.nonGoals),
+          acceptance: structuredClone(expectedEnvelope.acceptance),
+          verification: structuredClone(expectedEnvelope.verification),
+          executionAuthority: structuredClone(expectedEnvelope.executionAuthority),
+          ...(expectedEnvelope.visualContract ? {
+            visualContract: structuredClone(expectedEnvelope.visualContract),
+          } : {}),
+        }
+      : null;
     if (
       !sameJson(executionEnvelope, expectedEnvelope)
       && (!legacyExpectedEnvelope || !sameJson(executionEnvelope, legacyExpectedEnvelope))
+      && (!currentContractLegacyEnvelope || !sameJson(executionEnvelope, currentContractLegacyEnvelope))
     ) {
       throw new ValidationError(
-        `finished run ${runData.runId} executionEnvelope does not match its approved Gate B specification`,
+        `finished run ${runData.runId} executionEnvelope does not match its current development contract`,
       );
     }
     const expectedEnvelopeSha256 = executionEnvelopeSha256(executionEnvelope);
@@ -5183,11 +5479,9 @@ export function validateRunTaskContract(runData, artifactRoot, options = {}) {
         `finished run ${runData.runId} visualReview is only allowed for runKind final_visual_review`,
       );
     }
-    const expectedVisualReview = approvedVisualReviewContract(
-      sourceSpecPath,
-      sourceArtifactRoot,
-      options,
-    );
+    const expectedVisualReview = currentDevelopment
+      ? currentContractVisualReview(currentDevelopment.contract)
+      : approvedVisualReviewContract(sourceSpecPath, sourceArtifactRoot, options);
     if (!expectedVisualReview || !sameJson(actualVisualReview, expectedVisualReview)) {
       throw new ValidationError(
         `finished run ${runData.runId} visualReview must match the complete approved iteration visual contract`,
@@ -5206,11 +5500,12 @@ export function validateRunTaskContract(runData, artifactRoot, options = {}) {
         `finished acceptance review run ${runData.runId} must use the iteration source layout`,
       );
     }
-    const acceptanceContracts = acceptanceReviewContracts(
-      sourceSpecPath,
-      sourceArtifactRoot,
-      options,
-    );
+    const acceptanceContracts = currentDevelopment
+      ? {
+          current: currentContractAcceptanceReview(currentDevelopment.contract),
+          full: currentContractAcceptanceReview(currentDevelopment.contract),
+        }
+      : acceptanceReviewContracts(sourceSpecPath, sourceArtifactRoot, options);
     const legacyFullAcceptanceReview = acceptanceContracts.full;
     const expectedAcceptanceReview = acceptanceContracts.current.criteria.length
       ? acceptanceContracts.current
@@ -5218,6 +5513,13 @@ export function validateRunTaskContract(runData, artifactRoot, options = {}) {
     if (
       !sameJson(actualAcceptanceReview, expectedAcceptanceReview)
       && !sameJson(actualAcceptanceReview, legacyFullAcceptanceReview)
+      && !(
+        currentDevelopment
+        && acceptanceReviewTextEquivalent(
+          actualAcceptanceReview,
+          expectedAcceptanceReview,
+        )
+      )
     ) {
       throw new ValidationError(
         `finished run ${runData.runId} acceptanceReview must match the approved current-iteration behavior contract`,
@@ -5239,7 +5541,10 @@ export function validateRunsDir(runsDir, options = {}) {
   assertFile(indexPath, 'run-index.json');
   const index = validateRunIndex(indexPath);
   const validationSession = options.validationSession ?? createValidationSession();
-  for (const run of index.runs) {
+  const runsToValidate = options.iterationId === undefined
+    ? index.runs
+    : index.runs.filter((run) => run.iterationId === options.iterationId);
+  for (const run of runsToValidate) {
     const normalizedRunRef = normalizeIndexedRunRef(run.runRef, run.runId);
     const runPath = path.join(runsDir, normalizedRunRef);
     assertFile(runPath, run.runRef);
@@ -5440,6 +5745,12 @@ export function validateRunsDir(runsDir, options = {}) {
       }
     }
   }
+  // Current-development routing deliberately validates only the selected
+  // iteration. Directory-wide orphan discovery remains an explicit runs
+  // administration concern because walking archived partitions would make
+  // historical evidence a normal runtime dependency again.
+  if (options.iterationId !== undefined) return index;
+
   const indexedRunFiles = new Set(index.runs.map((run) => normalizeIndexedRunRef(run.runRef, run.runId)));
   const candidateRunFiles = [];
   const unsupportedEntries = [];
@@ -5795,6 +6106,7 @@ function usage() {
     '  --entry <path>                     Validate a Markdown/text entry document.',
     '  --artifact-root <dir>               Validate a Gate A-C artifact root.',
     '  --constitution <path>                Validate a project constitution.',
+    '  --current-development-contract <path> Validate the canonical current execution contract.',
     '  --decisions [path]                   Validate a decision ledger; defaults to <artifact-root>/decisions.jsonl.',
     '  --require-approved-constitution      Require its Gate ② approval audit.',
     '  --project-id <id>                   Expected project id for --artifact-root.',
@@ -5837,6 +6149,7 @@ function parseArgs(argv) {
     else if (arg === '--status') args.status = argv[++index];
     else if (arg === '--artifact-root' || arg === '--artifacts') args.artifactRoot = argv[++index];
     else if (arg === '--constitution') args.constitution = argv[++index];
+    else if (arg === '--current-development-contract') args.currentDevelopmentContract = argv[++index];
     else if (arg === '--decisions') {
       const candidate = argv[index + 1];
       if (candidate && !candidate.startsWith('-')) {
@@ -5887,6 +6200,11 @@ export function main(argv = process.argv.slice(2)) {
       return 0;
     }
     if (args.entry) validateEntryDocument(args.entry);
+    if (args.currentDevelopmentContract) {
+      validateCurrentDevelopmentContract(args.currentDevelopmentContract, {
+        projectId: args.projectId,
+      });
+    }
     if (args.constitution) {
       validateConstitution(args.constitution, {
         requireApproved: args.requireApprovedConstitution,

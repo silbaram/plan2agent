@@ -1,0 +1,205 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://plan2agent.local/schemas/current-development-contract.schema.json",
+  "title": "Plan2Agent Current Development Contract",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "projectId",
+    "iterationId",
+    "objective",
+    "scope",
+    "architecture",
+    "stack",
+    "prohibitions",
+    "style",
+    "mustPreserve",
+    "nonGoals",
+    "acceptance",
+    "verification",
+    "authority",
+    "bindings"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "const": "p2a.current_development_contract.v1" },
+    "projectId": { "type": "string", "minLength": 1 },
+    "iterationId": { "type": "string", "pattern": "^[A-Za-z0-9._-]+$" },
+    "objective": { "type": "string", "minLength": 1 },
+    "scope": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "uniqueItems": true
+    },
+    "architecture": {
+      "type": "array",
+      "maxItems": 10,
+      "items": {
+        "type": "object",
+        "required": ["id", "rule", "rationale", "scope"],
+        "additionalProperties": false,
+        "properties": {
+          "id": { "type": "string", "pattern": "^ARCH-[1-9][0-9]*$" },
+          "rule": { "type": "string", "minLength": 1 },
+          "rationale": { "type": "string", "minLength": 1 },
+          "scope": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "stack": {
+      "type": "array",
+      "maxItems": 10,
+      "items": {
+        "type": "object",
+        "required": ["id", "choice", "rationale", "evidence"],
+        "additionalProperties": false,
+        "properties": {
+          "id": { "type": "string", "pattern": "^STACK-[1-9][0-9]*$" },
+          "choice": { "type": "string", "minLength": 1 },
+          "rationale": { "type": "string", "minLength": 1 },
+          "evidence": {
+            "type": "array",
+            "items": { "type": "string", "minLength": 1 },
+            "uniqueItems": true
+          }
+        }
+      }
+    },
+    "prohibitions": {
+      "type": "array",
+      "maxItems": 10,
+      "items": {
+        "type": "object",
+        "required": ["id", "rule", "rationale"],
+        "additionalProperties": false,
+        "properties": {
+          "id": { "type": "string", "pattern": "^NO-[1-9][0-9]*$" },
+          "rule": { "type": "string", "minLength": 1 },
+          "rationale": { "type": "string", "minLength": 1 },
+          "enforcement": { "enum": ["validator", "review", "advisory"] },
+          "targets": {
+            "type": "array",
+            "minItems": 1,
+            "items": { "enum": ["spec", "task_graph"] },
+            "uniqueItems": true
+          },
+          "forbidden_terms": {
+            "type": "array",
+            "minItems": 1,
+            "items": { "type": "string", "minLength": 1 },
+            "uniqueItems": true
+          }
+        }
+      }
+    },
+    "style": { "type": "object" },
+    "mustPreserve": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "uniqueItems": true
+    },
+    "nonGoals": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "uniqueItems": true
+    },
+    "acceptance": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "string", "minLength": 1 },
+      "uniqueItems": true
+    },
+    "verification": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "string", "minLength": 1 },
+      "uniqueItems": true
+    },
+    "authority": {
+      "type": "object",
+      "required": ["workspace", "externalWrites", "mayChoose", "mustReturnToGate"],
+      "additionalProperties": false,
+      "properties": {
+        "workspace": { "const": "project_root" },
+        "externalWrites": { "const": false },
+        "mayChoose": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string", "minLength": 1 },
+          "uniqueItems": true
+        },
+        "mustReturnToGate": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string", "minLength": 1 },
+          "uniqueItems": true
+        }
+      }
+    },
+    "visualContract": { "type": "object" },
+    "bindings": {
+      "type": "object",
+      "required": ["constitution", "activeSpec", "taskGraph"],
+      "additionalProperties": false,
+      "properties": {
+        "constitution": {
+          "type": "object",
+          "required": ["ref", "sha256"],
+          "additionalProperties": false,
+          "properties": {
+            "ref": {
+              "type": ["string", "null"]
+            },
+            "sha256": {
+              "type": ["string", "null"]
+            }
+          },
+          "oneOf": [
+            {
+              "properties": {
+                "ref": { "const": ".plan2agent/constitution.json" },
+                "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+              }
+            },
+            {
+              "properties": {
+                "ref": { "const": null },
+                "sha256": { "const": null }
+              }
+            }
+          ]
+        },
+        "activeSpec": {
+          "type": "object",
+          "required": ["ref", "sha256"],
+          "additionalProperties": false,
+          "properties": {
+            "ref": { "type": "string", "minLength": 1 },
+            "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+          }
+        },
+        "taskGraph": {
+          "type": "object",
+          "required": ["ref", "tasks"],
+          "additionalProperties": false,
+          "properties": {
+            "ref": { "type": "string", "minLength": 1 },
+            "tasks": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "object",
+                "required": ["taskId", "sha256"],
+                "additionalProperties": false,
+                "properties": {
+                  "taskId": { "type": "string", "pattern": "^task-[0-9]+$" },
+                  "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

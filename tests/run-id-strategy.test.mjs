@@ -158,7 +158,7 @@ function initializedArtifactRoot(label) {
   return artifactRoot;
 }
 
-test('p2a execute start rejects an invalid composed current spec before claiming work', () => {
+test('p2a execute start ignores historical current-spec composition after materialization', () => {
   const artifactRoot = initializedArtifactRoot('execute-invalid-composition');
   const currentSpecPath = path.join(artifactRoot, 'current-spec.json');
   const graphPath = path.join(
@@ -189,17 +189,13 @@ test('p2a execute start rejects an invalid composed current spec before claiming
       '--workspace',
       workspace,
     ]);
-    assert.equal(result.status, 1, `${result.stdout}${result.stderr}`);
-    assert.match(
-      `${result.stdout}${result.stderr}`,
-      /current-spec\.json source_specs must be a non-empty array for composition/,
-    );
+    assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
     const graph = JSON.parse(readFileSync(graphPath, 'utf8'));
     assert.equal(
       graph.tasks.find((task) => task.id === 'task-001')?.status,
-      'todo',
+      'in_progress',
     );
-    assert.equal(existsSync(path.join(artifactRoot, 'runs', 'run-index.json')), false);
+    assert.equal(existsSync(path.join(artifactRoot, 'runs', 'run-index.json')), true);
   } finally {
     rmSync(artifactRoot, { recursive: true, force: true });
     rmSync(workspace, { recursive: true, force: true });
@@ -240,7 +236,7 @@ test('p2a execute start rejects a current-spec project mismatch before claiming 
     assert.equal(result.status, 1, `${result.stdout}${result.stderr}`);
     assert.match(
       `${result.stdout}${result.stderr}`,
-      /spec\.project_id .* to match current-spec\.json project_id/,
+      /current development contract projectId must match "other-project"/,
     );
     const graph = JSON.parse(readFileSync(graphPath, 'utf8'));
     assert.equal(
@@ -755,7 +751,7 @@ test('handoff applies the same readiness validation to default and explicit acti
   }
 });
 
-test('p2a execute start rejects a stale active intake baseline before claiming work', () => {
+test('p2a execute start ignores a stale historical intake baseline after materialization', () => {
   const artifactRoot = initializedArtifactRoot('execute-stale-intake-baseline');
   const workspace = tempRoot('execute-stale-intake-baseline-workspace');
   try {
@@ -803,17 +799,13 @@ test('p2a execute start rejects a stale active intake baseline before claiming w
       '--workspace',
       workspace,
     ]);
-    assert.equal(result.status, 1, `${result.stdout}${result.stderr}`);
-    assert.match(
-      `${result.stdout}${result.stderr}`,
-      /baseline_context\.spec_ref .* must match pending baseline/,
-    );
-    const unchangedGraph = JSON.parse(readFileSync(graphPath, 'utf8'));
+    assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+    const changedGraph = JSON.parse(readFileSync(graphPath, 'utf8'));
     assert.equal(
-      unchangedGraph.tasks.find((task) => task.id === 'task-001')?.status,
-      'todo',
+      changedGraph.tasks.find((task) => task.id === 'task-001')?.status,
+      'in_progress',
     );
-    assert.equal(readFileSync(runIndexPath, 'utf8'), runIndexBefore);
+    assert.notEqual(readFileSync(runIndexPath, 'utf8'), runIndexBefore);
   } finally {
     rmSync(artifactRoot, { recursive: true, force: true });
     rmSync(workspace, { recursive: true, force: true });
@@ -994,6 +986,13 @@ function prepareCloseReadySecondIteration(artifactRoot) {
     promoted_at: '2026-07-30T00:00:00.000Z',
   };
   writeFileSync(currentSpecPath, `${JSON.stringify(currentSpec, null, 2)}\n`, 'utf8');
+  const migrateResult = spawnSync(process.execPath, [
+    ITERATION_CLI,
+    'migrate-current-contract',
+    '--artifacts',
+    artifactRoot,
+  ], { cwd: ROOT, encoding: 'utf8' });
+  assert.equal(migrateResult.status, 0, `${migrateResult.stdout}${migrateResult.stderr}`);
   prepareCloseReadyIteration(artifactRoot, secondIterationId);
   return { currentSpecPath, secondIterationId };
 }
@@ -1672,7 +1671,7 @@ test('Gate B promotion participates in the artifact-state lock', async () => {
   }
 });
 
-test('Gate C entry points reject an unpromoted Gate B and recover after deterministic promotion', () => {
+test('Gate C authoring entry points reject an unpromoted Gate B and recover after deterministic promotion', () => {
   const artifactRoot = initializedArtifactRoot('gate-b-promotion-guard');
   try {
     const iterationId = 'v1-mvp';
@@ -1703,28 +1702,6 @@ test('Gate C entry points reject an unpromoted Gate B and recover after determin
     delete currentSpec.gate_b_promotion_bindings?.[iterationId];
     delete currentSpec.gate_b_promoted_at;
     writeFileSync(currentSpecPath, `${JSON.stringify(currentSpec, null, 2)}\n`, 'utf8');
-
-    const graphBeforeBlockedStart = readFileSync(graphPath, 'utf8');
-    const draftBeforeBlockedStart = readFileSync(draftPath, 'utf8');
-    const runsDir = path.join(artifactRoot, 'runs');
-    const runsDirExistedBeforeStart = existsSync(runsDir);
-    const blockedRunId = 'run-unpromoted-gate-b';
-    const blockedStart = executeCli([
-      'start',
-      '--artifacts', artifactRoot,
-      '--task', graph.tasks[0].id,
-      '--run-id', blockedRunId,
-      '--workspace', artifactRoot,
-    ], artifactRoot);
-    assert.notEqual(blockedStart.status, 0);
-    assert.match(
-      `${blockedStart.stdout}${blockedStart.stderr}`,
-      /gate_b_approval_audits|gate_b_promotion_bindings/,
-    );
-    assert.equal(readFileSync(graphPath, 'utf8'), graphBeforeBlockedStart);
-    assert.equal(readFileSync(draftPath, 'utf8'), draftBeforeBlockedStart);
-    assert.equal(existsSync(runsDir), runsDirExistedBeforeStart);
-    assert.equal(existsSync(runFilePath(runsDir, blockedRunId)), false);
 
     rmSync(graphPath);
 
@@ -3222,9 +3199,9 @@ test('direct run start rejects a task graph replaced while isolation is preparin
   assert.equal(JSON.parse(readFileSync(graphPath, 'utf8')).tasks[0].title, draft.tasks[0].title);
 });
 
-test('direct run start rejects Gate B drift while isolation is preparing', async () => {
-  const artifactRoot = initializedArtifactRoot('run-start-gate-b-drift');
-  const specPath = path.join(artifactRoot, 'iterations', 'v1-mvp', 'gate-b-spec', 'spec.json');
+test('direct run start rejects current contract drift while isolation is preparing', async () => {
+  const artifactRoot = initializedArtifactRoot('run-start-current-contract-drift');
+  const contractPath = path.join(artifactRoot, 'current-development-contract.json');
   const runsDir = path.join(artifactRoot, 'runs');
   const workspaceRoot = tempRoot('run-start-gate-b-drift-workspace');
   const workspace = path.join(workspaceRoot, 'workspace');
@@ -3250,9 +3227,9 @@ test('direct run start rejects Gate B drift while isolation is preparing', async
 
   try {
     await waitForPath(readyPath);
-    const spec = JSON.parse(readFileSync(specPath, 'utf8'));
-    spec.product.problem = `${spec.product.problem} Changed during isolation preparation.`;
-    writeFileSync(specPath, `${JSON.stringify(spec, null, 2)}\n`, 'utf8');
+    const contract = JSON.parse(readFileSync(contractPath, 'utf8'));
+    contract.objective = `${contract.objective} Changed during isolation preparation.`;
+    writeFileSync(contractPath, `${JSON.stringify(contract, null, 2)}\n`, 'utf8');
   } finally {
     writeFileSync(releasePath, 'release\n', 'utf8');
   }
@@ -3260,7 +3237,7 @@ test('direct run start rejects Gate B drift while isolation is preparing', async
   try {
     const startResult = await startPromise;
     assert.equal(startResult.status, 1, startResult.stderr);
-    assert.match(startResult.stderr, /Gate B execution contract changed while run .* was preparing isolation/i);
+    assert.match(startResult.stderr, /current development contract changed(?: or became unavailable)? while run .* was preparing isolation/i);
     assert.equal(existsSync(runFilePath(runsDir, runId)), false);
     assert.equal(existsSync(path.join(runsDir, 'run-index.json')), false);
   } finally {

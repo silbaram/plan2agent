@@ -10,7 +10,10 @@ import { validateSchema } from '../scripts/p2a_schema.mjs';
 import { NEXT_DECISION_RULES } from '../scripts/p2a.mjs';
 import { buildNext } from '../scripts/p2a_next_service.mjs';
 import {
+  auditArchivedIterationArtifacts,
   iterationCompositionRequirement,
+  materializeCurrentDevelopmentContract,
+  resolveIterationState,
   validateCurrentSpecCompositionData,
 } from '../scripts/p2a_iteration_state.mjs';
 import {
@@ -159,8 +162,13 @@ function writeGateB(
 }
 
 function writeGateC(artifactRoot, tasks, iterationId = null) {
+  const graphPath = join(
+    gateRoot(artifactRoot, iterationId),
+    'gate-c-task-graph',
+    'task-graph.json',
+  );
   writeJson(
-    join(gateRoot(artifactRoot, iterationId), 'gate-c-task-graph', 'task-graph.json'),
+    graphPath,
     {
       schema_version: 'p2a.task_graph.v1',
       projectId: currentProjectId(artifactRoot) ?? 'cache-library',
@@ -169,6 +177,17 @@ function writeGateC(artifactRoot, tasks, iterationId = null) {
       tasks,
     },
   );
+  if (iterationId && currentProjectId(artifactRoot)) {
+    try {
+      const state = resolveIterationState(artifactRoot);
+      writeJson(
+        join(artifactRoot, 'current-development-contract.json'),
+        materializeCurrentDevelopmentContract(state),
+      );
+    } catch {
+      // Intentionally incomplete or invalid fixtures remain on the planning/recovery path.
+    }
+  }
 }
 
 function writeGateD(artifactRoot, blockingIssues = [], iterationId = null) {
@@ -968,15 +987,16 @@ test('next chooses one read-only action for every primary state', () => {
       ]],
     },
     {
-      id: 'closed iteration composes a missing latest baseline source',
+      id: 'closed iteration ignores historical composition gaps',
       setup: () => {
         const root = project();
         const rootArtifact = artifact(root);
         writeClosedIterationWithCompositionGap(rootArtifact);
         return root;
       },
-      expected: (root) => ['iteration_composition_required', 'cli', [
-        'iteration', 'compose', '--artifacts', artifactPath(root),
+      expected: (root) => ['iteration_complete', 'cli', [
+        'iteration', 'open', '--artifacts', artifactPath(root),
+        '--iteration-id', '<id>', '--idea', '<change idea>',
       ]],
     },
     {
@@ -1088,7 +1108,7 @@ test('the explicit close option archives a completed iteration without an option
   }
 });
 
-test('audited closed history including final verification uses bounded routing without run hydration', () => {
+test('closed current development routes without archive audit or run hydration', () => {
   const root = project();
   try {
     const rootArtifact = artifact(root);
@@ -1125,8 +1145,9 @@ test('audited closed history including final verification uses bounded routing w
         '--idea', '<change idea>',
       ],
     );
-    assert.match(result.stderr, /closed-route:archive-audit/);
-    assert.match(result.stderr, /closed-route:ready: iteration complete/);
+    assert.match(result.stderr, /current:read/);
+    assert.match(result.stderr, /historical:reads: 0/);
+    assert.doesNotMatch(result.stderr, /closed-route:/);
     assert.doesNotMatch(result.stderr, /artifact:deep-validation/);
     assert.doesNotMatch(result.stderr, /runs:hydrate/);
   } finally {
@@ -1134,7 +1155,7 @@ test('audited closed history including final verification uses bounded routing w
   }
 });
 
-test('audited closed routing rejects archive tampering before deep provenance replay', () => {
+test('closed current development ignores archived spec byte drift', () => {
   const root = project();
   try {
     const rootArtifact = artifact(root);
@@ -1157,21 +1178,18 @@ test('audited closed routing rejects archive tampering before deep provenance re
     ]);
     assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
     const payload = JSON.parse(result.stdout);
-    assertAction(
-      payload,
-      'invalid_iteration_state',
-      'cli',
-      ['iteration', 'validate', '--artifacts', artifactPath(root)],
-    );
-    assert.match(payload.reason, /artifact changed after close/);
-    assert.match(result.stderr, /closed-route:invalid/);
+    assertAction(payload, 'iteration_complete', 'cli', [
+      'iteration', 'open', '--artifacts', artifactPath(root),
+      '--iteration-id', '<id>', '--idea', '<change idea>',
+    ]);
+    assert.match(result.stderr, /historical:reads: 0/);
     assert.doesNotMatch(result.stderr, /artifact:deep-validation/);
   } finally {
     remove(root);
   }
 });
 
-test('audited closed routing rejects incomplete artifact hash coverage', () => {
+test('closed current development ignores historical artifact hash coverage', () => {
   const root = project();
   try {
     const rootArtifact = artifact(root);
@@ -1191,14 +1209,11 @@ test('audited closed routing rejects incomplete artifact hash coverage', () => {
     ]);
     assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
     const payload = JSON.parse(result.stdout);
-    assertAction(
-      payload,
-      'invalid_iteration_state',
-      'cli',
-      ['iteration', 'validate', '--artifacts', artifactPath(root)],
-    );
-    assert.match(payload.reason, /artifact_hashes is missing required reference/);
-    assert.match(result.stderr, /closed-route:invalid/);
+    assertAction(payload, 'iteration_complete', 'cli', [
+      'iteration', 'open', '--artifacts', artifactPath(root),
+      '--iteration-id', '<id>', '--idea', '<change idea>',
+    ]);
+    assert.match(result.stderr, /historical:reads: 0/);
   } finally {
     remove(root);
   }
@@ -1231,9 +1246,9 @@ test('audited closed routing preserves acceptance review evidence validation', (
       'cli',
       ['runs', 'validate', '--artifacts', artifactPath(root)],
     );
-    assert.match(result.stderr, /closed-route:fallback: active review run/);
-    assert.match(result.stderr, /artifact:deep-validation/);
-    assert.match(result.stderr, /runs:hydrate/);
+    assert.match(result.stderr, /historical:reads: 0/);
+    assert.doesNotMatch(result.stderr, /artifact:deep-validation/);
+    assert.doesNotMatch(result.stderr, /runs:hydrate/);
   } finally {
     remove(root);
   }
@@ -1265,14 +1280,11 @@ test('audited closed routing rejects declared runKind drift for an active review
     ]);
     assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
     const payload = JSON.parse(result.stdout);
-    assertAction(
-      payload,
-      'invalid_iteration_state',
-      'cli',
-      ['validate', '--runs-dir', join(rootArtifact, 'runs')],
-    );
+    assertAction(payload, 'invalid_run_evidence', 'cli', [
+      'runs', 'validate', '--artifacts', artifactPath(root),
+    ]);
     assert.match(payload.reason, /runKind does not match its run file/);
-    assert.match(result.stderr, /closed-route:invalid/);
+    assert.match(result.stderr, /historical:reads: 0/);
     assert.doesNotMatch(result.stderr, /artifact:deep-validation/);
 
     writeRuns(rootArtifact, [{
@@ -1293,7 +1305,7 @@ test('audited closed routing rejects declared runKind drift for an active review
   }
 });
 
-test('BuildLore-shaped 11-iteration history stays within a generous routing bound', () => {
+test('BuildLore-shaped history routes from the current contract only', () => {
   const root = project();
   try {
     const rootArtifact = artifact(root);
@@ -1320,7 +1332,8 @@ test('BuildLore-shaped 11-iteration history stays within a generous routing boun
       ],
     );
     assert.ok(durationMs < 5_000, `closed routing took ${durationMs.toFixed(1)}ms`);
-    assert.match(result.stderr, /closed-route:archive-audit: 11 iteration\(s\)/);
+    assert.match(result.stderr, /historical:reads: 0/);
+    assert.doesNotMatch(result.stderr, /closed-route:/);
     assert.doesNotMatch(result.stderr, /artifact:deep-validation/);
     assert.doesNotMatch(result.stderr, /runs:hydrate/);
     assert.equal(activeIteration, 'v11');
@@ -1329,7 +1342,7 @@ test('BuildLore-shaped 11-iteration history stays within a generous routing boun
   }
 });
 
-test('audited closed routing rejects semantic composition drift and extra sources', () => {
+test('current development routing ignores historical composition drift and extra sources', () => {
   const root = project();
   try {
     const rootArtifact = artifact(root);
@@ -1344,15 +1357,11 @@ test('audited closed routing rejects semantic composition drift and extra source
     ]);
     assert.equal(semanticResult.status, 0, `${semanticResult.stdout}${semanticResult.stderr}`);
     const semanticPayload = JSON.parse(semanticResult.stdout);
-    assertAction(
-      semanticPayload,
-      'invalid_iteration_state',
-      'cli',
-      ['iteration', 'validate', '--artifacts', artifactPath(root)],
-    );
-    assert.match(semanticPayload.reason, /effective sections must exactly match/);
-    assert.match(semanticResult.stderr, /closed-route:composition/);
-    assert.match(semanticResult.stderr, /closed-route:invalid/);
+    assertAction(semanticPayload, 'iteration_complete', 'cli', [
+      'iteration', 'open', '--artifacts', artifactPath(root),
+      '--iteration-id', '<id>', '--idea', '<change idea>',
+    ]);
+    assert.match(semanticResult.stderr, /historical:reads: 0/);
     assert.doesNotMatch(semanticResult.stderr, /artifact:deep-validation/);
 
     const extraSourceSpec = JSON.parse(readFileSync(currentSpecPath, 'utf8'));
@@ -1374,19 +1383,17 @@ test('audited closed routing rejects semantic composition drift and extra source
     ]);
     assert.equal(extraResult.status, 0, `${extraResult.stdout}${extraResult.stderr}`);
     const extraPayload = JSON.parse(extraResult.stdout);
-    assertAction(
-      extraPayload,
-      'invalid_iteration_state',
-      'cli',
-      ['iteration', 'validate', '--artifacts', artifactPath(root)],
-    );
-    assert.match(extraPayload.reason, /not closed: v12-extra/);
+    assertAction(extraPayload, 'iteration_complete', 'cli', [
+      'iteration', 'open', '--artifacts', artifactPath(root),
+      '--iteration-id', '<id>', '--idea', '<change idea>',
+    ]);
+    assert.match(extraResult.stderr, /historical:reads: 0/);
   } finally {
     remove(root);
   }
 });
 
-test('BuildLore-shaped composed fallback reuses validation within a bounded request', () => {
+test('BuildLore-shaped current routing keeps validator work constant', () => {
   const root = project();
   try {
     const rootArtifact = artifact(root);
@@ -1405,17 +1412,18 @@ test('BuildLore-shaped composed fallback reuses validation within a bounded requ
     const durationMs = performance.now() - startedAt;
     assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
     assert.ok(durationMs < 5_000, `composed fallback took ${durationMs.toFixed(1)}ms`);
-    assert.match(result.stderr, /closed-route:fallback: active run/);
-    assert.match(result.stderr, /artifact:deep-validation/);
+    assert.match(result.stderr, /historical:reads: 0/);
+    assert.doesNotMatch(result.stderr, /artifact:deep-validation/);
 
     const routingSession = createValidationSession();
     const routed = buildNext(root, null, null, 'v2', {
       validationSession: routingSession,
     });
     assert.equal(routed.state, 'iteration_complete');
-    assert.equal(routingSession.stats.validatorRuns.intake, 11);
-    assert.equal(routingSession.stats.validatorRuns.spec, 11);
-    assert.equal(routingSession.stats.validatorRuns['task-graph'], 11);
+    assert.equal(routingSession.stats.validatorRuns['current-development-contract'], 1);
+    assert.equal(routingSession.stats.validatorRuns.intake ?? 0, 0);
+    assert.equal(routingSession.stats.validatorRuns.spec ?? 0, 0);
+    assert.equal(routingSession.stats.validatorRuns['task-graph'] ?? 0, 0);
 
     const activeIntakePath = join(
       rootArtifact,
@@ -1540,7 +1548,7 @@ test('ValidationSession caches each unique validator and JSON read by content SH
   }
 });
 
-test('iteration open rechecks audited archive hashes before mutation', () => {
+test('iteration open ignores historical archive drift while explicit administration still detects it', () => {
   const root = project();
   try {
     const rootArtifact = artifact(root);
@@ -1555,19 +1563,26 @@ test('iteration open rechecks audited archive hashes before mutation', () => {
       'utf8',
     );
 
+    assert.throws(
+      () => auditArchivedIterationArtifacts(
+        JSON.parse(readFileSync(join(rootArtifact, 'current-spec.json'), 'utf8')),
+        rootArtifact,
+      ),
+      /artifact appeared after close/,
+    );
+
     const result = runP2a([
       'iteration', 'open', '--artifacts', rootArtifact,
       '--iteration-id', 'v2', '--idea', 'Open only from an immutable archive',
     ]);
-    assert.notEqual(result.status, 0);
-    assert.match(`${result.stdout}${result.stderr}`, /artifact appeared after close/);
-    assert.equal(existsSync(join(rootArtifact, 'iterations', 'v2')), false);
+    assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+    assert.equal(existsSync(join(rootArtifact, 'iterations', 'v2')), true);
   } finally {
     remove(root);
   }
 });
 
-test('audited closed routing falls back when an active failed run needs proposal evidence', () => {
+test('current routing finds failed run proposal evidence without historical fallback', () => {
   const root = project({ proposals: true });
   try {
     const rootArtifact = artifact(root);
@@ -1598,15 +1613,15 @@ test('audited closed routing falls back when an active failed run needs proposal
         '--proposals', join(root, '.plan2agent', 'proposals'),
       ],
     );
-    assert.match(result.stderr, /closed-route:fallback: active run/);
-    assert.match(result.stderr, /artifact:deep-validation/);
-    assert.match(result.stderr, /runs:hydrate/);
+    assert.match(result.stderr, /historical:reads: 0/);
+    assert.doesNotMatch(result.stderr, /artifact:deep-validation/);
+    assert.doesNotMatch(result.stderr, /runs:hydrate/);
   } finally {
     remove(root);
   }
 });
 
-test('audited closed routing detects composition gaps and rejects malformed composition metadata', () => {
+test('current routing ignores composition gaps and malformed historical composition metadata', () => {
   const root = project();
   try {
     const rootArtifact = artifact(root);
@@ -1617,13 +1632,11 @@ test('audited closed routing detects composition gaps and rejects malformed comp
       'next', '--target', root, '--json', '--contract', 'v2', '--trace',
     ]);
     assert.equal(gapResult.status, 0, `${gapResult.stdout}${gapResult.stderr}`);
-    assertAction(
-      JSON.parse(gapResult.stdout),
-      'iteration_composition_required',
-      'cli',
-      ['iteration', 'compose', '--artifacts', artifactPath(root)],
-    );
-    assert.match(gapResult.stderr, /closed-route:ready: composition required/);
+    assertAction(JSON.parse(gapResult.stdout), 'iteration_complete', 'cli', [
+      'iteration', 'open', '--artifacts', artifactPath(root),
+      '--iteration-id', '<id>', '--idea', '<change idea>',
+    ]);
+    assert.match(gapResult.stderr, /historical:reads: 0/);
     assert.doesNotMatch(gapResult.stderr, /artifact:deep-validation/);
 
     const currentSpecPath = join(rootArtifact, 'current-spec.json');
@@ -1640,19 +1653,17 @@ test('audited closed routing detects composition gaps and rejects malformed comp
       `${invalidResult.stdout}${invalidResult.stderr}`,
     );
     const invalidPayload = JSON.parse(invalidResult.stdout);
-    assertAction(
-      invalidPayload,
-      'invalid_iteration_state',
-      'cli',
-      ['iteration', 'validate', '--artifacts', artifactPath(root)],
-    );
-    assert.match(invalidPayload.reason, /spec_ref must be/);
+    assertAction(invalidPayload, 'iteration_complete', 'cli', [
+      'iteration', 'open', '--artifacts', artifactPath(root),
+      '--iteration-id', '<id>', '--idea', '<change idea>',
+    ]);
+    assert.match(invalidResult.stderr, /historical:reads: 0/);
   } finally {
     remove(root);
   }
 });
 
-test('next, compose, and open agree when archived iteration metadata is reopened', () => {
+test('next ignores reopened archived metadata while mutation commands still reject it', () => {
   const root = project();
   try {
     const rootArtifact = artifact(root);
@@ -1675,13 +1686,13 @@ test('next, compose, and open agree when archived iteration metadata is reopened
     };
 
     const payload = next(root);
-    assertAction(payload, 'invalid_iteration_state', 'cli', [
-      'iteration', 'validate', '--artifacts', artifactPath(root),
+    assertAction(payload, 'iteration_complete', 'cli', [
+      'iteration', 'open', '--artifacts', artifactPath(root),
+      '--iteration-id', '<id>', '--idea', '<change idea>',
     ]);
-    assert.match(payload.reason, /archive consistency requires .* status archived/);
 
     for (const command of [
-      payload.command.argv,
+      ['iteration', 'validate', '--artifacts', artifactPath(root)],
       ['iteration', 'compose', '--artifacts', artifactPath(root)],
       [
         'iteration', 'open', '--artifacts', artifactPath(root),
@@ -1701,7 +1712,7 @@ test('next, compose, and open agree when archived iteration metadata is reopened
   }
 });
 
-test('next, compose, and open reject pending planning state on an archived active iteration', () => {
+test('next ignores archived planning metadata while mutation commands still reject it', () => {
   const root = project();
   try {
     const rootArtifact = artifact(root);
@@ -1727,13 +1738,13 @@ test('next, compose, and open reject pending planning state on an archived activ
     };
 
     const payload = next(root);
-    assertAction(payload, 'invalid_iteration_state', 'cli', [
-      'iteration', 'validate', '--artifacts', artifactPath(root), '--allow-planning',
+    assertAction(payload, 'iteration_complete', 'cli', [
+      'iteration', 'open', '--artifacts', artifactPath(root),
+      '--iteration-id', '<id>', '--idea', '<change idea>',
     ]);
-    assert.match(payload.reason, /pending_iteration to be absent for archived active iteration/);
 
     for (const command of [
-      payload.command.argv,
+      ['iteration', 'validate', '--artifacts', artifactPath(root), '--allow-planning'],
       ['iteration', 'compose', '--artifacts', artifactPath(root)],
       [
         'iteration', 'open', '--artifacts', artifactPath(root),
@@ -2179,32 +2190,33 @@ test('next routes an unreadable or structurally invalid current spec to iteratio
   }
 });
 
-test('next routes full iteration readiness failures before recommending task execution', () => {
+test('next ignores historical composition fields but fail-closes current identity drift', () => {
   const cases = [
     {
       id: 'invalid composition',
       mutate: (currentSpec) => {
         currentSpec.effective_spec_ref = 'current-spec.json';
       },
-      error: /current-spec\.json source_specs must be a non-empty array for composition/,
+      state: 'ready_task_available',
     },
     {
       id: 'project mismatch',
       mutate: (currentSpec) => {
         currentSpec.project_id = 'other-project';
       },
-      error: /spec\.project_id .* to match current-spec\.json project_id/,
+      state: 'invalid_current_development_contract',
+      error: /projectId must match "other-project"/,
     },
     {
       id: 'missing project identity',
       mutate: (currentSpec) => {
         delete currentSpec.project_id;
       },
+      state: 'invalid_current_development_contract',
       error: /current-spec\.json project_id must be a non-empty string/,
     },
     {
       id: 'stale pending baseline',
-      allowPlanning: true,
       mutate: (currentSpec, iterationId) => {
         currentSpec.pending_iteration = {
           iteration_id: iterationId,
@@ -2213,7 +2225,7 @@ test('next routes full iteration readiness failures before recommending task exe
           baseline_effective_spec_ref: `iterations/${iterationId}/gate-b-spec/spec.json`,
         };
       },
-      error: /iteration metadata baseline iteration null must match pending baseline iteration "v0"/,
+      state: 'ready_task_available',
     },
   ];
 
@@ -2233,21 +2245,11 @@ test('next routes full iteration readiness failures before recommending task exe
       writeJson(currentSpecPath, currentSpec);
 
       const payload = next(root);
-      assertAction(payload, 'invalid_iteration_state', 'cli', [
-        'iteration',
-        'validate',
-        '--artifacts',
-        rootArtifact,
-        ...(caseData.allowPlanning ? ['--allow-planning'] : []),
-      ]);
-      assert.match(payload.reason, caseData.error);
-
-      const validation = runP2a(payload.command.argv);
-      assert.notEqual(validation.status, 0, caseData.id);
-      assert.match(
-        `${validation.stdout}${validation.stderr}`,
-        caseData.error,
-      );
+      const expectedCommand = caseData.state === 'ready_task_available'
+        ? ['execute', 'start', '--artifacts', rootArtifact, '--task', 'task-001']
+        : ['iteration', 'migrate-current-contract', '--artifacts', rootArtifact];
+      assertAction(payload, caseData.state, 'cli', expectedCommand);
+      if (caseData.error) assert.match(payload.reason, caseData.error);
     } finally {
       remove(root);
     }
@@ -2509,7 +2511,7 @@ test('info keeps its JSON contract and points human output to next', () => {
 });
 
 test('next keeps the ordered decision rules required by the contract', () => {
-  assert.equal(NEXT_DECISION_RULES.length, 30);
+  assert.equal(NEXT_DECISION_RULES.length, 32);
   for (const rule of NEXT_DECISION_RULES) {
     assert.equal(typeof rule.when, 'function');
     assert.equal(typeof rule.reason, 'function');
@@ -2553,7 +2555,7 @@ test('next and iteration open share the closed composition requirement', () => {
   );
 });
 
-test('next returns executable compose and open commands across a composition gap', () => {
+test('next skips historical composition while explicit administration can still compose', () => {
   const root = project();
   try {
     const rootArtifact = artifact(root);
@@ -2563,16 +2565,20 @@ test('next returns executable compose and open commands across a composition gap
     assert.equal(legacyResult.status, 0, `${legacyResult.stdout}${legacyResult.stderr}`);
     const legacyBeforeCompose = JSON.parse(legacyResult.stdout);
     assert.doesNotThrow(() => validateSchema(legacyBeforeCompose, NEXT_V1_SCHEMA));
-    assert.equal(legacyBeforeCompose.state, 'iteration_composition_required');
+    assert.equal(legacyBeforeCompose.state, 'iteration_complete');
     assert.deepEqual(legacyBeforeCompose.command.argv, [
-      'iteration', 'compose', '--artifacts', artifactPath(root),
+      'iteration', 'open', '--artifacts', artifactPath(root),
+      '--iteration-id', '<id>', '--idea', '<change idea>',
     ]);
 
     const beforeCompose = next(root);
-    assertAction(beforeCompose, 'iteration_composition_required', 'cli', [
+    assertAction(beforeCompose, 'iteration_complete', 'cli', [
+      'iteration', 'open', '--artifacts', artifactPath(root),
+      '--iteration-id', '<id>', '--idea', '<change idea>',
+    ]);
+    const composeResult = runP2a([
       'iteration', 'compose', '--artifacts', artifactPath(root),
     ]);
-    const composeResult = runP2a(beforeCompose.command.argv);
     assert.equal(composeResult.status, 0, `${composeResult.stdout}${composeResult.stderr}`);
     const composedSpec = JSON.parse(readFileSync(
       join(rootArtifact, 'current-spec.json'),
@@ -2603,7 +2609,7 @@ test('next returns executable compose and open commands across a composition gap
     assert.equal(currentSpec.pending_iteration?.baseline_iteration, 'v2');
     assert.match(
       currentSpec.pending_iteration?.baseline_effective_spec_ref ?? '',
-      /^iterations\/v3\/baseline\/current-spec\.json$/,
+      /^iterations\/v3\/baseline\/gate-b-spec\/spec\.json$/,
     );
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -2758,13 +2764,11 @@ test('next routes iterative approved Gate B through canonical promotion before e
       ));
       assert.equal(
         promotedCurrentSpec.effective_spec_ref,
-        caseData.baselineBacked
-          ? 'iterations/v1/gate-b-spec/spec.json'
-          : `iterations/${iterationId}/gate-b-spec/spec.json`,
+        `iterations/${iterationId}/gate-b-spec/spec.json`,
       );
       assert.deepEqual(
         promotedCurrentSpec.composed_from,
-        caseData.baselineBacked ? ['v1'] : [iterationId],
+        [iterationId],
       );
       assert.equal(promotedCurrentSpec.pending_iteration?.status, 'gate_b_approved');
       assertAction(next(root), caseData.downstream, 'skill');
