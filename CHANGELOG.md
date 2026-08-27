@@ -6,10 +6,16 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+### Added
+
+- Add bounded `p2a.retrospective_candidate.v1` closeout signals for configured verification budgets/baselines, retry overhead, repeated process defects, explicit corrections, failed/blocked runs, verification gaps, and monitor mismatches.
+- Expose current-iteration retrospective candidates in `p2a next --json --contract v2` and offer iteration-scoped proposal mining as a separately approved review action without blocking iteration close.
+
 ### Changed
 
 - Route active task transitions and iteration close from the bounded current development contract, and task-authoring context from active planning artifacts, instead of replaying historical composition sources.
 - Keep deep historical composition and archive checks available through explicit `p2a iteration validate` and doctor/audit workflows while allowing current development to continue when archived source artifacts are missing or malformed.
+- Keep retrospective candidate and proposal evidence numeric and category-based; raw verification output, notes, task prose, and source values are not copied into the closeout summary.
 
 ### Fixed
 

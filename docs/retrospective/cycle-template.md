@@ -103,6 +103,7 @@ Gate A/②/B 또는 완료 조건에서, 그 경계가 없었다면 잘못된 �
 | 검증 실행 횟수 / 평균·최대 durationMs | | run.verification[] + retrospective verification* |
 | 실패·재시도 run 수 | | run-index status + retrospective reasonCounts.superseded |
 | 확인된 skill / subagent 사용 수 | | provider 세션 기록/tool trace (없으면 확인 불가) |
+| 구조화된 회고 후보 수 / signal | | `p2a next --json --contract v2`의 retrospective (활성화된 경우) |
 
 ## F. 다음 사이클 결정
 

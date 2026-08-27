@@ -575,7 +575,8 @@ function writeRuns(artifactRoot, runs) {
       finishedAt,
       changedFiles: [],
       verification: run.verification ?? [],
-      notes: [],
+      interruptions: run.interruptions ?? [],
+      notes: run.notes ?? [],
       ...(run.runKind ? { runKind: run.runKind } : {}),
       ...(run.workspaceRevisionSha256 ? { workspaceRevisionSha256: run.workspaceRevisionSha256 } : {}),
       ...(['failed', 'blocked'].includes(run.status) ? {
@@ -691,7 +692,7 @@ function next(root, args = []) {
 function assertAction(payload, state, kind, argv = null, requiresApproval = null) {
   assert.doesNotThrow(() => validateSchema(payload, NEXT_SCHEMA));
   assert.equal(payload.schema_version, 'p2a.next.v2');
-  assert.equal(payload.state, state);
+  assert.equal(payload.state, state, payload.reason);
   assert.equal(payload.reasonCode, state);
   assert.equal(payload.command.kind, kind);
   assert.equal(typeof payload.command.display, 'string');
@@ -730,6 +731,7 @@ function assertReviewOrCloseDecision(payload, artifactRoot) {
   assert.equal(close.action.kind, 'cli');
   assert.deepEqual(close.action.argv, ['iteration', 'close', '--artifacts', artifactRoot]);
   assert.equal(close.action.requiresApproval, true);
+  assert.equal(payload.retrospective.candidateCount, payload.retrospective.candidates.length);
   return { review, close };
 }
 
@@ -1046,6 +1048,100 @@ test('completed iterations expose structured review and close options without mu
     const currentSpec = JSON.parse(readFileSync(join(rootArtifact, 'current-spec.json'), 'utf8'));
     assert.equal(currentSpec.active_iteration, iterationId);
     assert.equal(currentSpec.closed_iterations, undefined);
+  } finally {
+    remove(root);
+  }
+});
+
+test('completed iteration exposes bounded retrospective candidates without blocking close', () => {
+  const root = project();
+  try {
+    writeJson(join(root, '.plan2agent', 'project.config.json'), {
+      runTracking: {
+        retrospectiveSignals: {
+          enabled: true,
+          verificationBudgetsMs: {},
+          verificationBaselinesMs: {},
+          performanceRegressionPercent: 25,
+          retryThreshold: 2,
+          repeatedDefectThreshold: 2,
+        },
+      },
+    });
+    const rootArtifact = artifact(root);
+    const iterationId = writeIteration(rootArtifact);
+    writeGateA(rootArtifact, 'ready_for_spec', iterationId);
+    writeGateB(rootArtifact, 'approved', iterationId);
+    writeGateC(rootArtifact, [task('task-001', 'done')], iterationId);
+    writeGateD(rootArtifact, [], iterationId);
+    writeFinalVerification(root, rootArtifact, iterationId);
+    const finalRun = JSON.parse(readFileSync(
+      join(rootArtifact, 'runs', 'run-final-verification.json'),
+      'utf8',
+    ));
+    writeRuns(rootArtifact, [
+      {
+        runId: 'run-implementation',
+        iterationId,
+        status: 'finished',
+        verification: [{
+          type: 'test',
+          command: 'token=SECRET_RETRO_VALUE npm test',
+          status: 'passed',
+          exitCode: 0,
+          durationMs: 1,
+          startedAt: '2026-07-31T00:00:00.000Z',
+          finishedAt: '2026-07-31T00:00:00.001Z',
+          stdoutTail: 'SECRET_RETRO_VALUE',
+          stderrTail: '',
+          source: 'command',
+        }],
+        interruptions: [{
+          recordedAt: '2026-07-31T00:00:00.001Z',
+          type: 'user_correction',
+          summary: 'SECRET_RETRO_VALUE',
+          assessment: 'not_applicable',
+        }],
+        notes: ['SECRET_RETRO_VALUE'],
+      },
+      {
+        runId: finalRun.runId,
+        iterationId,
+        status: finalRun.status,
+        runKind: finalRun.runKind,
+        workspaceRef: finalRun.workspaceRef,
+        workspacePath: finalRun.workspacePath,
+        workspaceRevisionSha256: finalRun.workspaceRevisionSha256,
+        verification: finalRun.verification,
+      },
+    ]);
+
+    const before = snapshotHarness(root);
+    const payload = next(root);
+    const { review, close } = assertReviewOrCloseDecision(payload, artifactPath(root));
+    assert.equal(payload.retrospective.enabled, true);
+    assert.equal(payload.retrospective.candidateCount, 1);
+    assert.equal(payload.retrospective.candidates[0].signal, 'explicit_correction');
+    assert.doesNotMatch(JSON.stringify(payload.retrospective), /SECRET_RETRO_VALUE/);
+    assert.equal(review.action.proposalMining.requiresApproval, true);
+    assert.deepEqual(review.action.proposalMining.argv, [
+      'proposals', 'mine', '--artifacts', artifactPath(root),
+      '--iteration', iterationId,
+      '--proposals', join(root, '.plan2agent', 'proposals'),
+    ]);
+    assert.equal(close.action.requiresApproval, true);
+    const preview = runP2a([
+      ...review.action.proposalMining.argv,
+      '--dry-run',
+      '--json',
+    ]);
+    assert.equal(preview.status, 0, `${preview.stdout}${preview.stderr}`);
+    const previewPayload = JSON.parse(preview.stdout);
+    assert.equal(previewPayload.candidates.length, 1);
+    assert.match(previewPayload.candidates[0].proposalId, /explicit_correction/);
+    assert.equal(previewPayload.candidates[0].action, 'dry-run');
+    assert.doesNotMatch(preview.stdout, /SECRET_RETRO_VALUE/);
+    assert.deepEqual(snapshotHarness(root), before);
   } finally {
     remove(root);
   }
@@ -3094,6 +3190,11 @@ test('next schema declares the CLI, skill, and approval command shapes', () => {
           },
         },
       ],
+    },
+    retrospective: {
+      enabled: false,
+      candidateCount: 0,
+      candidates: [],
     },
     continuation: null,
   };

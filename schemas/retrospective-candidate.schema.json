@@ -1,0 +1,99 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://plan2agent.local/schemas/retrospective-candidate.schema.json",
+  "title": "Plan2Agent Retrospective Candidate",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "candidateId",
+    "projectId",
+    "iterationId",
+    "signal",
+    "domain",
+    "binding",
+    "measurement",
+    "counts",
+    "targetArea",
+    "recommendedChange"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "const": "p2a.retrospective_candidate.v1" },
+    "candidateId": { "type": "string", "pattern": "^retro-[A-Za-z0-9._-]+$" },
+    "projectId": { "type": "string", "minLength": 1 },
+    "iterationId": { "type": "string", "minLength": 1 },
+    "signal": {
+      "enum": [
+        "performance_regression",
+        "slow_verification",
+        "retry_overhead",
+        "repeated_process_defect",
+        "explicit_correction",
+        "failed_run",
+        "blocked_run",
+        "verification_gap",
+        "monitor_mismatch"
+      ]
+    },
+    "domain": { "enum": ["product_code", "p2a_process"] },
+    "binding": {
+      "type": "object",
+      "required": ["taskIds", "runIds"],
+      "additionalProperties": false,
+      "properties": {
+        "taskIds": {
+          "type": "array",
+          "maxItems": 64,
+          "items": { "type": "string", "pattern": "^task-[0-9]+$" },
+          "uniqueItems": true
+        },
+        "runIds": {
+          "type": "array",
+          "maxItems": 64,
+          "items": { "type": "string", "pattern": "^run-[A-Za-z0-9._-]+$" },
+          "uniqueItems": true
+        }
+      }
+    },
+    "measurement": {
+      "type": "object",
+      "required": ["category", "unit", "baseline", "budget", "observed", "delta", "threshold"],
+      "additionalProperties": false,
+      "properties": {
+        "category": {
+          "enum": [
+            "test",
+            "lint",
+            "typecheck",
+            "custom",
+            "retry_attempts",
+            "failure_pattern",
+            "interruption_pattern",
+            "run_status",
+            "monitor_verdict"
+          ]
+        },
+        "unit": { "enum": ["milliseconds", "count"] },
+        "baseline": { "type": ["integer", "null"], "minimum": 0, "maximum": 9007199254740991 },
+        "budget": { "type": ["integer", "null"], "minimum": 0, "maximum": 9007199254740991 },
+        "observed": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+        "delta": { "type": ["integer", "null"], "minimum": -9007199254740991, "maximum": 9007199254740991 },
+        "threshold": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 }
+      }
+    },
+    "counts": {
+      "type": "object",
+      "required": ["runs", "retries", "failed", "blocked", "interruptions"],
+      "additionalProperties": false,
+      "properties": {
+        "runs": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+        "retries": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+        "failed": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+        "blocked": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+        "interruptions": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 }
+      }
+    },
+    "targetArea": { "enum": ["product_verification", "execution_process"] },
+    "recommendedChange": { "type": "string", "minLength": 1, "maxLength": 240 }
+  }
+}

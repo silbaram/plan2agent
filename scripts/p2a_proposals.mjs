@@ -15,6 +15,7 @@ import {
   validateProposalDraftApprovalData,
   validateProposalCurationData,
   validateProposalReviewData,
+  validateRetrospectiveCandidateData,
   validateSkillProposal,
   validateSkillProposalData,
   validateTaskGraphData,
@@ -23,10 +24,16 @@ import {
 import {
   DEFAULT_RUNS_DIR,
   indexedRunRef,
+  canonicalWorkspacePathForArtifactRoot,
   resolveRunsDir,
   runFilePath,
   runSidecarPath,
 } from './p2a_run_paths.mjs';
+import { resolveRetrospectiveSignals } from './p2a_project_config.mjs';
+import {
+  buildRetrospectiveCandidates,
+  retrospectiveMonitorMismatchRunIds,
+} from './p2a_retrospective.mjs';
 import {
   assertNoUninitializedScaffoldArtifactRoots,
   assertNotUninitializedScaffoldGraph,
@@ -62,7 +69,7 @@ const PROPOSAL_TARGETS = new Set(['project', 'p2a_toolkit', 'companion_project']
 function usage() {
   return [
     'Usage:',
-    '  p2a proposals mine (--artifacts <dir>|--runs <dir>|--graph <path>) [--run-id <run-id>] [--proposals <dir>] [--target <kind>] [--target-repo <url>] [--target-area <area>] [--upstream-reason <text>] [--dry-run] [--overwrite] [--json]',
+    '  p2a proposals mine (--artifacts <dir>|--runs <dir>|--graph <path>) [--iteration <id>] [--run-id <run-id>] [--proposals <dir>] [--target <kind>] [--target-repo <url>] [--target-area <area>] [--upstream-reason <text>] [--dry-run] [--overwrite] [--json]',
     '  p2a proposals list [--proposals <dir>] [--json]',
     '  p2a proposals show (--proposal <path>|--proposal-id <id>) [--proposals <dir>]',
     '  p2a proposals validate [--proposal <path>|--proposals <dir>]',
@@ -96,6 +103,7 @@ function usage() {
     '  --approval-note <text> Optional approval note recorded for approve-draft.',
     '  --allow-local-upstream-task Allow approve-draft to append a local maintenance task for non-project targets.',
     '  --output <path>     Review/curation/patch-draft/approval output path.',
+    '  --iteration <id>    Limit mine to runs from one iteration.',
     '  --run-id <run-id>   Limit mine to one run.',
     '  --target <kind>     Proposal target for mine: project, p2a_toolkit, or companion_project. Default: project.',
     `  --target-repo <url> Upstream repository for companion_project proposals. p2a_toolkit always uses ${DEFAULT_P2A_TOOLKIT_REPO}.`,
@@ -129,6 +137,7 @@ function parseArgs(argv) {
     approvedBy: null,
     approvalNote: null,
     output: null,
+    iterationId: null,
     runId: null,
     target: null,
     targetRepo: null,
@@ -157,6 +166,7 @@ function parseArgs(argv) {
     else if (arg === '--approved-by') args.approvedBy = requiredValue(argv, ++index, '--approved-by');
     else if (arg === '--approval-note') args.approvalNote = requiredValue(argv, ++index, '--approval-note');
     else if (arg === '--output') args.output = requiredValue(argv, ++index, '--output');
+    else if (arg === '--iteration') args.iterationId = requiredValue(argv, ++index, '--iteration');
     else if (arg === '--run-id') args.runId = requiredValue(argv, ++index, '--run-id');
     else if (arg === '--target') args.target = normalizeProposalTarget(requiredValue(argv, ++index, '--target'));
     else if (arg === '--target-repo') args.targetRepo = nonBlankOption(requiredValue(argv, ++index, '--target-repo'), '--target-repo');
@@ -208,6 +218,10 @@ function parseArgs(argv) {
     throw new Error('--output is only supported by review, curate, draft-patch, or approve-draft');
   }
   if (args.runId) assertSafeRunId(args.runId);
+  if (args.iterationId) {
+    assertSafeIterationId(args.iterationId);
+    if (args.command !== 'mine') throw new Error('--iteration is only supported by mine');
+  }
   if ((args.target || args.targetRepo || args.targetArea || args.upstreamReason) && args.command !== 'mine') {
     throw new Error('--target, --target-repo, --target-area, and --upstream-reason are only supported by mine');
   }
@@ -251,6 +265,12 @@ function normalizeProposalTarget(value) {
 function assertSafeRunId(runId) {
   if (!/^run-[A-Za-z0-9._-]+$/.test(runId ?? '')) {
     throw new Error(`run id must match run-[A-Za-z0-9._-]+, got ${JSON.stringify(runId)}`);
+  }
+}
+
+function assertSafeIterationId(iterationId) {
+  if (!/^[A-Za-z0-9._-]+$/.test(iterationId ?? '') || iterationId === '.' || iterationId === '..') {
+    throw new Error(`iteration id must be a safe path segment, got ${JSON.stringify(iterationId)}`);
   }
 }
 
@@ -300,12 +320,16 @@ function readRunForMining(runsDir, runId) {
   }
 }
 
-function readRunsForMining(runsDir, runId = null) {
+function readRunsForMining(runsDir, runId = null, iterationId = null) {
   if (runId) {
     const result = readRunForMining(runsDir, runId);
+    const matchesIteration = result.run && (!iterationId || result.run.iterationId === iterationId);
+    const iterationMismatch = result.run && !matchesIteration
+      ? { runId, reason: `run does not belong to iteration ${iterationId}` }
+      : null;
     return {
-      runs: result.run ? [result.run] : [],
-      skippedRuns: result.skipped ? [result.skipped] : [],
+      runs: matchesIteration ? [result.run] : [],
+      skippedRuns: result.skipped ? [result.skipped] : (iterationMismatch ? [iterationMismatch] : []),
       totalRunRefs: 1,
     };
   }
@@ -314,12 +338,15 @@ function readRunsForMining(runsDir, runId = null) {
   const index = validateRunIndexData(loadJson(indexFile));
   const runs = [];
   const skippedRuns = [];
-  for (const entry of index.runs) {
+  const entries = iterationId
+    ? index.runs.filter((entry) => entry.iterationId === iterationId)
+    : index.runs;
+  for (const entry of entries) {
     const result = readRunForMining(runsDir, entry.runId);
     if (result.run) runs.push(result.run);
     else skippedRuns.push(result.skipped);
   }
-  return { runs, skippedRuns, totalRunRefs: index.runs.length };
+  return { runs, skippedRuns, totalRunRefs: entries.length };
 }
 
 function readOrchestrationSidecar(runsDir, runId) {
@@ -411,7 +438,7 @@ function safeIdPart(value) {
 function failedVerificationEvidence(run) {
   return run.verification
     .filter((item) => item.status === 'failed')
-    .map((item) => `failed verification: ${item.type} (${item.command})`);
+    .map((item) => `failed verification: type=${item.type} scope=${item.scope ?? 'full'} status=failed`);
 }
 
 function monitorVerdictEvidence(verdict) {
@@ -419,9 +446,9 @@ function monitorVerdictEvidence(verdict) {
   const evidence = [`monitor verdict: ${verdict.verdict}`];
   if (verdict.failureSignal && verdict.failureSignal !== verdict.verdict) evidence.push(`monitor failure signal: ${verdict.failureSignal}`);
   for (const [field, values] of Object.entries(verdict.concerns ?? {})) {
-    if (Array.isArray(values) && values.length) evidence.push(`monitor ${field}: ${values.join('; ')}`);
+    if (Array.isArray(values) && values.length) evidence.push(`monitor ${field}: ${values.length} item(s)`);
   }
-  if (verdict.note) evidence.push(`monitor note: ${verdict.note}`);
+  if (verdict.note) evidence.push('monitor note: present (content omitted)');
   return evidence;
 }
 
@@ -458,15 +485,6 @@ function structuredDetailEvidence(run) {
     `structured detail: reproduction=${summary.reproduction} localization=${summary.localization} fixSummary=${summary.fixSummary} guard=${summary.guard}`,
     summary.missing.length ? `structured detail missing: ${summary.missing.join(', ')}` : null,
   ].filter(Boolean);
-}
-
-function runDetailEvidence(prefix, value) {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return [];
-  return Object.entries(value)
-    .flatMap(([key, item]) => Array.isArray(item)
-      ? item.map((entry) => `${prefix} ${key}: ${entry}`)
-      : [`${prefix} ${key}: ${item}`])
-    .filter((item) => typeof item === 'string' && item.trim());
 }
 
 function proposalQualityCriterion(passed, detail) {
@@ -624,15 +642,12 @@ function buildFailureProposal(run, sidecar, verdict, targetOptions) {
   if (!['failed', 'blocked'].includes(run.status) || !run.failure) return null;
   const evidence = [
     `runId: ${run.runId}`,
-    `task: ${run.taskId} - ${run.taskTitle}`,
+    `task: ${run.taskId}`,
     `failure: ${run.failure.class} retryable=${run.failure.retryable} needsUserDecision=${run.failure.needsUserDecision} source=${run.failure.source}`,
     ...failedVerificationEvidence(run),
     ...structuredDetailEvidence(run),
-    ...runDetailEvidence('reproduction', run.reproduction),
-    ...runDetailEvidence('localization', run.localization),
-    ...runDetailEvidence('guard', run.guard),
   ];
-  if (sidecar) evidence.push(`orchestration: ${sidecar.mode} ${sidecar.planId}`);
+  if (sidecar) evidence.push(`orchestration mode: ${sidecar.mode}`);
   evidence.push(...monitorVerdictEvidence(verdict));
   const proposal = {
     schema_version: 'p2a.skill_proposal.v1',
@@ -659,7 +674,7 @@ function buildVerificationGapProposal(run, targetOptions) {
     problem: `Run ${run.runId} finished without recorded verification.`,
     evidence: [
       `runId: ${run.runId}`,
-      `task: ${run.taskId} - ${run.taskTitle}`,
+      `task: ${run.taskId}`,
       `changedFiles: ${run.changedFiles.length}`,
       'verification: none recorded',
     ],
@@ -677,7 +692,7 @@ function buildMonitorProposal(run, orchestrationSidecar, gate, verdict, targetOp
   if (!gate?.required || !verdict || gate.acceptedVerdicts.includes(verdict.verdict)) return null;
   if (run.failure?.source === 'monitor') return null;
   const orchestrationEvidence = orchestrationSidecar
-    ? [`orchestration: ${orchestrationSidecar.mode} ${orchestrationSidecar.planId}`]
+    ? [`orchestration mode: ${orchestrationSidecar.mode}`]
     : [];
   const proposal = {
     schema_version: 'p2a.skill_proposal.v1',
@@ -686,8 +701,8 @@ function buildMonitorProposal(run, orchestrationSidecar, gate, verdict, targetOp
     problem: `Monitor gate returned ${verdict.failureSignal} for run ${run.runId} but the run was not closed by monitor failure metadata.`,
     evidence: [
       `runId: ${run.runId}`,
-      `task: ${run.taskId} - ${run.taskTitle}`,
-      `monitor gate: ${gate.verdictPath}`,
+      `task: ${run.taskId}`,
+      'monitor gate: mismatched verdict binding detected',
       ...orchestrationEvidence,
       ...monitorVerdictEvidence(verdict),
     ],
@@ -720,6 +735,72 @@ function proposalsForRun(runsDir, run, targetOptions) {
     ].filter(Boolean),
     warnings,
   };
+}
+
+function retrospectiveProposal(candidate, targetOptions) {
+  const evidence = [
+    `retrospective candidate: ${candidate.candidateId}`,
+    `iteration: ${candidate.iterationId}`,
+    `signal: ${candidate.signal} domain=${candidate.domain}`,
+    `measurement: ${candidate.measurement.category} ${candidate.measurement.unit} observed=${candidate.measurement.observed} threshold=${candidate.measurement.threshold}`,
+    `counts: runs=${candidate.counts.runs} retries=${candidate.counts.retries} failed=${candidate.counts.failed} blocked=${candidate.counts.blocked} interruptions=${candidate.counts.interruptions}`,
+  ];
+  if (candidate.measurement.baseline !== null) {
+    evidence.push(`baseline: ${candidate.measurement.baseline} delta=${candidate.measurement.delta}`);
+  }
+  if (candidate.measurement.budget !== null) {
+    evidence.push(`budget: ${candidate.measurement.budget} delta=${candidate.measurement.delta}`);
+  }
+  const processSignal = candidate.domain === 'p2a_process';
+  const proposal = {
+    schema_version: 'p2a.skill_proposal.v1',
+    proposalId: proposalIdForTarget(`proposal-${candidate.candidateId}`, targetOptions),
+    sourceRunId: candidate.binding.runIds[0] ?? null,
+    problem: `${candidate.signal} was detected in iteration ${candidate.iterationId}.`,
+    evidence,
+    recommendedChange: candidate.recommendedChange,
+    targetFiles: processSignal
+      ? ['.agents/skills/p2a-dev-execution/SKILL.md', '.plan2agent/project.config.json']
+      : ['.plan2agent/project.config.json'],
+    risk: 'medium',
+    riskRationale: processSignal
+      ? 'Changing execution guidance can affect later run routing and retry behavior.'
+      : 'Changing performance budgets or verification behavior can hide or introduce regressions.',
+    status: 'proposed',
+    note: 'Generated from a bounded current-iteration retrospective candidate without raw command output or notes.',
+  };
+  return validateSkillProposalData(withProposalQuality(withProposalTarget(proposal, targetOptions)));
+}
+
+function retrospectiveProposalsForMine(args, runsDir, runScan, targetOptions) {
+  if (!args.artifacts || args.runId) return [];
+  const artifactRoot = path.resolve(args.artifacts);
+  const workspaceRoot = canonicalWorkspacePathForArtifactRoot(artifactRoot);
+  const configPath = path.join(workspaceRoot, '.plan2agent', 'project.config.json');
+  const config = existsSync(configPath) ? loadJson(configPath) : {};
+  const policy = resolveRetrospectiveSignals(config);
+  if (!policy.enabled) return [];
+  const state = resolveIterationState(artifactRoot, { requireReady: false });
+  if (args.iterationId && args.iterationId !== state.activeIteration) return [];
+  const index = existsSync(runIndexPath(runsDir)) ? loadJson(runIndexPath(runsDir)) : null;
+  if (index) validateRunIndexData(index);
+  const candidates = buildRetrospectiveCandidates({
+    projectId: state.projectId,
+    iterationId: state.activeIteration,
+    runs: runScan.runs,
+    retrospective: index?.retrospective ?? null,
+    policy,
+    monitorMismatchRunIds: retrospectiveMonitorMismatchRunIds(runsDir, runScan.runs),
+  }).map(validateRetrospectiveCandidateData);
+  const existingProposalSignals = new Set([
+    'failed_run',
+    'blocked_run',
+    'verification_gap',
+    'monitor_mismatch',
+  ]);
+  return candidates
+    .filter((candidate) => !existingProposalSignals.has(candidate.signal))
+    .map((candidate) => retrospectiveProposal(candidate, targetOptions));
 }
 
 function uniqueByProposalId(proposals) {
@@ -1555,10 +1636,13 @@ function runMine(args) {
   const runsDir = resolveRunsDirForProposals(args);
   const proposalsDir = resolveProposalDir(args);
   const targetOptions = proposalTargetOptions(args);
-  const runScan = readRunsForMining(runsDir, args.runId);
+  const runScan = readRunsForMining(runsDir, args.runId, args.iterationId);
   const proposalScan = runScan.runs.map((run) => proposalsForRun(runsDir, run, targetOptions));
   const warnings = proposalScan.flatMap((result) => result.warnings);
-  const candidates = uniqueByProposalId(proposalScan.flatMap((result) => result.proposals));
+  const candidates = uniqueByProposalId([
+    ...proposalScan.flatMap((result) => result.proposals),
+    ...retrospectiveProposalsForMine(args, runsDir, runScan, targetOptions),
+  ]);
   const results = candidates.map((proposal) => {
     if (args.dryRun) return { proposal, action: 'dry-run', filePath: proposalPath(proposalsDir, proposal.proposalId) };
     const writeResult = writeProposal(proposalsDir, proposal, args.overwrite);

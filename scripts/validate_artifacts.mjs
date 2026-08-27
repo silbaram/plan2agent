@@ -78,6 +78,7 @@ const SCHEMA_PATHS = {
   visual_review: path.join(P2A_PATHS.schemasDir, 'visual-review.schema.json'),
   acceptance_review: path.join(P2A_PATHS.schemasDir, 'acceptance-review.schema.json'),
   milestone_review: path.join(P2A_PATHS.schemasDir, 'milestone-review.schema.json'),
+  retrospective_candidate: path.join(P2A_PATHS.schemasDir, 'retrospective-candidate.schema.json'),
   skill_proposal: path.join(P2A_PATHS.schemasDir, 'skill-proposal.schema.json'),
   proposal_review: path.join(P2A_PATHS.schemasDir, 'proposal-review.schema.json'),
   proposal_curation: path.join(P2A_PATHS.schemasDir, 'proposal-curation.schema.json'),
@@ -4839,6 +4840,11 @@ export function validateSkillProposalData(data) {
   validateNonBlankStrings(data.targetFiles, `${data.proposalId}.targetFiles`);
   if (data.evidence) validateNonBlankStrings(data.evidence, `${data.proposalId}.evidence`);
   validateProposalTargetMetadata(data, data.proposalId, { requireUpstreamReason: true });
+  return data;
+}
+
+export function validateRetrospectiveCandidateData(data) {
+  validateSchema(data, loadJson(SCHEMA_PATHS.retrospective_candidate));
   return data;
 }
 

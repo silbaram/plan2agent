@@ -382,6 +382,25 @@ Git workspace에서 시작한 run은 시작 시점의 `headSha`/`branch`/`dirty`
 
 proposals가 켜진 프로젝트에서는 queue에 `sourceRunId`가 아직 기록되지 않은 failed/blocked run을 mining 전까지 superseded cleanup에서 자동 보존한다. 사용자가 `p2a next`를 거치지 않고 직접 재시도해도 자기개선 입력이 조용히 사라지지 않는다.
 
+선택적인 closeout 회고 신호는 `.plan2agent/project.config.json`의 `runTracking.retrospectiveSignals`에서 설정한다. 이 항목을 생략하면 `enabled: false`로 해석되어 기존 close 흐름과 저장 상태를 바꾸지 않는다. 활성화하면 현재 iteration의 run과 텍스트 없는 active-only 집계만 사용해 최대 32개의 구조화된 후보를 계산한다. `verificationBudgetsMs`는 절대 시간 예산, `verificationBaselinesMs`와 `performanceRegressionPercent`는 상대 회귀 기준이며, `retryThreshold`와 `repeatedDefectThreshold`는 각각 2 이상이어야 한다. 지원 verification 범주는 `test`, `lint`, `typecheck`, `custom`이다.
+
+```json
+{
+  "runTracking": {
+    "retrospectiveSignals": {
+      "enabled": true,
+      "verificationBudgetsMs": { "test": 60000 },
+      "verificationBaselinesMs": { "test": 45000 },
+      "performanceRegressionPercent": 25,
+      "retryThreshold": 2,
+      "repeatedDefectThreshold": 2
+    }
+  }
+}
+```
+
+`p2a next --json --contract v2`의 `iteration_review_or_close_required` 응답은 후보 수와 안전하게 정규화된 수치·범주를 `retrospective`에 포함한다. 제품 verification 시간 신호는 `product_code`, retry·실패·개입·monitor 신호는 `p2a_process`로 구분한다. 후보가 있으면 review 옵션에 `requiresApproval: true`인 `p2a proposals mine --iteration <active-id>` 행동이 추가되지만, 사용자가 저장을 거절하거나 후보가 없어도 close 옵션은 그대로 사용할 수 있다. 후보와 proposal에는 stdout/stderr, command 원문, note, task prose 또는 source 값을 복사하지 않는다.
+
 `--tools`를 지정하면 공통 P2A 원본인 `.agents/skills`, `.agents/agents`와 선택한 CLI별 mirror를 함께 복사한다. `codex`는 `.codex/agents`, `claude`는 `.claude/skills`와 `.claude/agents`, `gemini`는 `.gemini/agents`와 `.gemini/commands/p2a`를 추가한다. 복사된 파일과 선택한 CLI 범위는 `.plan2agent/manifest.json`의 `aiToolTargets`, `aiToolFiles`, `toolFiles`에 기록된다.
 
 `--include-team-bigfive`를 지정하면 `.plan2agent/team-harnesses/team-bigfive/source-manifest.json`과 `adaptation-notes.md`를 생성하고, 선택한 CLI별 adapter entrypoint를 설치한다. Codex는 `.agents/skills/team-bigfive-kickoff/`와 `.codex/agents/team-bigfive-coordinator.toml`, Claude는 `.claude/skills/team-bigfive-kickoff/`와 `.claude/agents/team-bigfive-coordinator.md`, Gemini는 `.agents/skills/team-bigfive-kickoff/`, `.gemini/agents/team-bigfive-coordinator.md`, `.gemini/commands/p2a/team-bigfive.toml`을 사용한다. local source이고 Claude target이 포함되면 안전 필터를 통과한 원본 파일도 `.claude-plugin/team-bigfive/source/`에 복사한다. 설치 내역은 `manifest.json.externalHarnesses`, `externalHarnessFiles`, `project.config.json.teamBigFive`에 기록된다.

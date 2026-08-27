@@ -340,6 +340,10 @@ function renderNextOptionLines(option) {
       lines.push(`    Remediation approval required: ${option.action.remediation.requiresApproval ? 'yes' : 'no'}`);
     }
   }
+  if (option.action?.proposalMining?.display) {
+    lines.push(`    Proposal mining: ${option.action.proposalMining.display}`);
+    lines.push(`    Proposal mining approval required: ${option.action.proposalMining.requiresApproval ? 'yes' : 'no'}`);
+  }
   return lines;
 }
 
@@ -435,6 +439,9 @@ function humanNextSummary(next, context) {
     case 'iteration_review_or_close_required':
       return [
         '개발이 끝났습니다. 결과를 한 번 더 살펴볼지, 현재 작업 묶음을 완료 처리할지 선택합니다.',
+        ...(next.retrospective?.candidateCount
+          ? [`현재 실행 증거에서 회고 후보 ${next.retrospective.candidateCount}개를 찾았습니다. 후보 검토는 선택 사항입니다.`]
+          : []),
         '검토를 선택하면 → 문제가 있으면 수정하고, 없으면 다시 완료 여부를 묻습니다.',
         '완료를 선택하면 → 현재 작업 묶음을 닫습니다.',
       ];
@@ -502,6 +509,14 @@ export function renderNextHuman(next, context = humanNextArtifactContext(next)) 
   if (Array.isArray(next.command.options) && next.command.options.length) {
     lines.push('Options:');
     for (const option of next.command.options) lines.push(...renderNextOptionLines(option));
+  }
+  if (Array.isArray(next.retrospective?.candidates) && next.retrospective.candidates.length) {
+    lines.push('Retrospective candidates:');
+    for (const candidate of next.retrospective.candidates) {
+      lines.push(
+        `  - ${candidate.signal}: ${candidate.measurement.category} observed=${candidate.measurement.observed} threshold=${candidate.measurement.threshold}`,
+      );
+    }
   }
   lines.push('', '[세부 계약]', `- target: ${next.target}`);
   if (next.projectId) lines.push(`- projectId: ${next.projectId}`);

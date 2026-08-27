@@ -15,6 +15,9 @@ import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 import { captureGitState, pruneIndexedRunEvidence } from '../scripts/p2a_runs.mjs';
+import { defaultRetrospectiveSignals } from '../scripts/p2a_project_config.mjs';
+import { buildRetrospectiveCandidates } from '../scripts/p2a_retrospective.mjs';
+import { validateRetrospectiveCandidateData } from '../scripts/validate_artifacts.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const ITERATION_CLI = path.join(ROOT, 'scripts', 'p2a_iteration.mjs');
@@ -788,6 +791,24 @@ test('successful direct retry retains an unmined failed run until proposal minin
     assert.equal(minedRecovery.status, 0, `${minedRecovery.stdout}${minedRecovery.stderr}`);
     assert.match(minedRecovery.stdout, /removed 1 superseded run/);
     assert.equal(existsSync(path.join(runsDir, failedEntry.runRef)), false);
+    const retainedIndex = JSON.parse(readFileSync(indexPath, 'utf8'));
+    assert.equal(
+      retainedIndex.retrospective.iterations[0].statusCounts.failed,
+      1,
+      'mined cleanup should retain a text-free failed count for closeout',
+    );
+    const retainedCurrentRun = JSON.parse(readFileSync(currentRunPath, 'utf8'));
+    const candidates = buildRetrospectiveCandidates({
+      projectId: retainedIndex.projectId,
+      iterationId: currentEntry.iterationId,
+      runs: [retainedCurrentRun],
+      retrospective: retainedIndex.retrospective,
+      policy: { ...defaultRetrospectiveSignals(), enabled: true },
+    });
+    const failedCandidate = candidates.find((candidate) => candidate.signal === 'failed_run');
+    assert.ok(failedCandidate, 'the bounded closeout should retain the mined failure signal');
+    assert.equal(failedCandidate.measurement.observed, 1);
+    validateRetrospectiveCandidateData(failedCandidate);
   } finally {
     rmSync(artifactRoot, { recursive: true, force: true });
     rmSync(workspace, { recursive: true, force: true });
