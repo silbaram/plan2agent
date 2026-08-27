@@ -46,7 +46,7 @@ The packet supplies canonical references; it does not grant approval, write, fin
 5. Execute configured or explicit verification. Planned runs also verify every checkpoint in order.
 6. Apply only the conditional visual, acceptance, or monitor path selected by policy and the approved contract.
 7. Finish through `p2a execute finish`, preserving changed-file attribution and structured failure evidence.
-8. Run a retrospective only after failure, retry, explicit correction, or a repeated process defect; proposal writes require separate approval.
+8. At iteration closeout, surface configured bounded retrospective signals from the current iteration. Failure, retry, explicit correction, repeated process defects, and configured performance thresholds can create candidates; proposal writes always require separate approval and rejected or absent candidates never block close.
 
 Return to Gate B instead of implementing only when satisfying the objective requires changing product meaning, acceptance, approved scope, constitution, or an external authority boundary.
 

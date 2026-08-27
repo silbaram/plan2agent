@@ -81,6 +81,32 @@
                       "properties": {
                         "kind": { "const": "review" },
                         "display": { "type": "string", "minLength": 1 },
+                        "proposalMining": {
+                          "type": "object",
+                          "required": ["kind", "argv", "display", "requiresApproval"],
+                          "additionalProperties": false,
+                          "properties": {
+                            "kind": { "const": "cli" },
+                            "requiresApproval": { "const": true },
+                            "argv": {
+                              "type": "array",
+                              "minItems": 8,
+                              "maxItems": 8,
+                              "prefixItems": [
+                                { "const": "proposals" },
+                                { "const": "mine" },
+                                { "const": "--artifacts" },
+                                { "type": "string", "minLength": 1 },
+                                { "const": "--iteration" },
+                                { "type": "string", "pattern": "^[A-Za-z0-9._-]+$" },
+                                { "const": "--proposals" },
+                                { "type": "string", "minLength": 1 }
+                              ],
+                              "items": false
+                            },
+                            "display": { "type": "string", "minLength": 1 }
+                          }
+                        },
                         "remediation": {
                           "type": "object",
                           "required": ["kind", "argv", "display", "requiresApproval"],
@@ -150,7 +176,21 @@
         }
       ]
     },
-    "continuation": { "$ref": "#/$defs/continuation" }
+    "continuation": { "$ref": "#/$defs/continuation" },
+    "retrospective": {
+      "type": "object",
+      "required": ["enabled", "candidateCount", "candidates"],
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "candidateCount": { "type": "integer", "minimum": 0, "maximum": 32 },
+        "candidates": {
+          "type": "array",
+          "maxItems": 32,
+          "items": { "$ref": "#/$defs/retrospectiveCandidate" }
+        }
+      }
+    }
   },
   "allOf": [
     {
@@ -161,6 +201,7 @@
         }
       },
       "then": {
+        "required": ["retrospective"],
         "properties": {
           "command": {
             "required": ["options"],
@@ -181,6 +222,102 @@
     }
   ],
   "$defs": {
+    "retrospectiveCandidate": {
+      "type": "object",
+      "required": [
+        "schema_version",
+        "candidateId",
+        "projectId",
+        "iterationId",
+        "signal",
+        "domain",
+        "binding",
+        "measurement",
+        "counts",
+        "targetArea",
+        "recommendedChange"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": { "const": "p2a.retrospective_candidate.v1" },
+        "candidateId": { "type": "string", "pattern": "^retro-[A-Za-z0-9._-]+$" },
+        "projectId": { "type": "string", "minLength": 1 },
+        "iterationId": { "type": "string", "minLength": 1 },
+        "signal": {
+          "enum": [
+            "performance_regression",
+            "slow_verification",
+            "retry_overhead",
+            "repeated_process_defect",
+            "explicit_correction",
+            "failed_run",
+            "blocked_run",
+            "verification_gap",
+            "monitor_mismatch"
+          ]
+        },
+        "domain": { "enum": ["product_code", "p2a_process"] },
+        "binding": {
+          "type": "object",
+          "required": ["taskIds", "runIds"],
+          "additionalProperties": false,
+          "properties": {
+            "taskIds": {
+              "type": "array",
+              "maxItems": 64,
+              "items": { "type": "string", "pattern": "^task-[0-9]+$" },
+              "uniqueItems": true
+            },
+            "runIds": {
+              "type": "array",
+              "maxItems": 64,
+              "items": { "type": "string", "pattern": "^run-[A-Za-z0-9._-]+$" },
+              "uniqueItems": true
+            }
+          }
+        },
+        "measurement": {
+          "type": "object",
+          "required": ["category", "unit", "baseline", "budget", "observed", "delta", "threshold"],
+          "additionalProperties": false,
+          "properties": {
+            "category": {
+              "enum": [
+                "test",
+                "lint",
+                "typecheck",
+                "custom",
+                "retry_attempts",
+                "failure_pattern",
+                "interruption_pattern",
+                "run_status",
+                "monitor_verdict"
+              ]
+            },
+            "unit": { "enum": ["milliseconds", "count"] },
+            "baseline": { "type": ["integer", "null"], "minimum": 0, "maximum": 9007199254740991 },
+            "budget": { "type": ["integer", "null"], "minimum": 0, "maximum": 9007199254740991 },
+            "observed": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+            "delta": { "type": ["integer", "null"], "minimum": -9007199254740991, "maximum": 9007199254740991 },
+            "threshold": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 }
+          }
+        },
+        "counts": {
+          "type": "object",
+          "required": ["runs", "retries", "failed", "blocked", "interruptions"],
+          "additionalProperties": false,
+          "properties": {
+            "runs": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+            "retries": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+            "failed": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+            "blocked": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+            "interruptions": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 }
+          }
+        },
+        "targetArea": { "enum": ["product_verification", "execution_process"] },
+        "recommendedChange": { "type": "string", "minLength": 1, "maxLength": 240 }
+      }
+    },
     "state": {
       "enum": [
         "uninitialized",

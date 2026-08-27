@@ -6,6 +6,25 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+## [0.5.17] - 2026-08-27
+
+### Added
+
+- Add bounded `p2a.retrospective_candidate.v1` closeout signals for configured verification budgets/baselines, retry overhead, repeated process defects, explicit corrections, failed/blocked runs, verification gaps, and monitor mismatches.
+- Expose current-iteration retrospective candidates in `p2a next --json --contract v2` and offer iteration-scoped proposal mining as a separately approved review action without blocking iteration close.
+
+### Changed
+
+- Route active task transitions and iteration close from the bounded current development contract, and task-authoring context from active planning artifacts, instead of replaying historical composition sources.
+- Keep deep historical composition and archive checks available through explicit `p2a iteration validate` and doctor/audit workflows while allowing current development to continue when archived source artifacts are missing or malformed.
+- Keep retrospective candidate and proposal evidence numeric and category-based; raw verification output, notes, task prose, and source values are not copied into the closeout summary.
+
+### Fixed
+
+- Revalidate the current contract and task bindings after acquiring task-transition locks so concurrent current-state drift fails closed without restoring historical validation.
+- Retain `retry_overhead` closeout candidates and accurate failed-run counts after active-only cleanup prunes a mined failed retry.
+- Ignore deleted in-root legacy effective-spec targets on current-only lifecycle routes while continuing to reject external references and preserve deterministic concurrent open/close behavior.
+
 ## [0.5.16] - 2026-08-27
 
 ### Added
@@ -270,7 +289,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Add package-runtime project initialization, managed provider assets, artifact validation, handoff, supervised execution, evaluation, and proposal workflows.
 - Ship canonical and generated integrations for Codex, Claude Code, and Gemini CLI.
 
-[Unreleased]: https://github.com/silbaram/plan2agent/compare/v0.5.16...HEAD
+[Unreleased]: https://github.com/silbaram/plan2agent/compare/v0.5.17...HEAD
+[0.5.17]: https://github.com/silbaram/plan2agent/compare/v0.5.16...v0.5.17
 [0.5.16]: https://github.com/silbaram/plan2agent/compare/v0.5.15...v0.5.16
 [0.5.15]: https://github.com/silbaram/plan2agent/compare/v0.5.14...v0.5.15
 [0.5.14]: https://github.com/silbaram/plan2agent/compare/v0.5.13...v0.5.14

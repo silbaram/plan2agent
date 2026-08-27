@@ -121,6 +121,9 @@ Unmined failed or blocked runs remain available to the proposal flow. Use `p2a r
 to review indexed and orphan evidence before cleanup; persistent projects require an explicit
 `--force`. Each Git-backed run also records its current HEAD, branch, and dirty state. Set
 `runTracking.persistence` to `persistent` only when long-lived local run evidence is required.
+Optional `runTracking.retrospectiveSignals` thresholds let `p2a next --json --contract v2`
+surface bounded current-iteration performance and process candidates before close. The feature is
+inactive when omitted; proposal writes remain separately approved and declining them never blocks close.
 New iterations materialize `current-development-contract.json` from the approved current state. It
 contains only the objective, scope, architecture and code rules, preservation constraints,
 acceptance, verification, authority, and current task bindings required for implementation. `p2a

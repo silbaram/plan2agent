@@ -18,14 +18,14 @@
 | greenfield -> iteration 변환 | `p2a iteration init` | 기존 Gate A-C 산출물을 `iterations/<iter-id>/gate-*`로 이동하고, 이동된 spec/task를 재검증하며 원장 승인을 새 경로에 재결합한다. |
 | root index 생성 | `current-spec.json`, generated `status.md`, `iterations/maintenance/README.md` | thin current-spec pointer와 optional status view를 생성한다. |
 | active iteration 해석 | `p2a iteration current` | `current-spec.json.active_iteration`을 정본으로 active 경로를 출력한다. |
-| task CLI 반복 적응 | `p2a tasks --artifacts` | active 반복의 `task-graph.json`을 자동 선택해 ready/prompt/start/done 전이를 수행하고, `--maintenance`로 maintenance 레인도 선택할 수 있다. |
+| task CLI 반복 적응 | `p2a tasks --artifacts` | current development contract에서 active 반복의 `task-graph.json`을 선택해 ready/prompt/start/done 전이를 수행하고, 쓰기 직전 current binding을 다시 확인한다. 과거 composition은 일반 전환에서 읽지 않으며 `--maintenance`로 maintenance 레인도 선택할 수 있다. |
 | agent run 추적 | `p2a runs start/verify/finish` | `runs/`에 task별 runId, changedFiles, verification, agentTool, workspaceRef, branch/worktree 격리 기준을 기록한다. |
 | Gate B/C ready 검증 | `p2a iteration validate` | active 반복의 approved spec, task graph, task dependency를 검증한다. |
 | close-ready 검증 | `p2a iteration validate --require-close-ready` | active 반복의 모든 task가 `done`인지 확인하고, visual evidence가 이후 task 변경보다 최신인지 검증한다. |
 | planning stage 검증 | `p2a iteration validate --allow-planning`, `--stage` | Gate A-ready, Gate B draft, Gate B approved 상태를 Gate B/C 누락 실패 없이 검증한다. |
-| 반복 close | `p2a iteration close` | close-ready active 반복을 `archived` metadata로 표시하고 `current-spec.json.closed_iterations`에 기록한다. |
+| 반복 close | `p2a iteration close` | current development contract와 현재 task/run 증거만으로 close-ready를 판정해 active 반복을 `archived` metadata로 표시하고 `current-spec.json.closed_iterations`에 기록한다. 과거 composition source의 존재 여부는 close를 차단하지 않는다. |
 | archived 감사 | `p2a iteration validate` | close 시 기록한 artifact 존재 여부/hash와 현재 파일 상태를 기본 검증으로 비교한다. legacy/migration 상황은 `--skip-archive-audit`로 우회한다. |
-| 다음 반복 open | `p2a iteration open` | archived current iteration의 `current-development-contract.json`을 작은 baseline spec으로 materialize하고 새 active 반복 skeleton과 `pending_iteration`을 생성한다. |
+| 다음 반복 open | `p2a iteration open` | archived current iteration의 `current-development-contract.json`을 작은 baseline spec으로 materialize하고 새 active 반복 skeleton과 `pending_iteration`을 생성한다. legacy composition source의 존재나 정합성은 일반 open을 차단하지 않는다. |
 | Gate A/B draft | `p2a iteration draft` | Gate A-only 초기 반복은 승인된 scope intake로 Gate B 초안을 만들고, baseline이 있는 반복은 먼저 delta scope를 확인받은 뒤 delta Gate B를 생성한다. |
 | Gate B 승인 반영 | `p2a iteration promote-spec` | approved active spec을 기록하고, 초기 반복처럼 baseline이 없던 경우 `effective_spec_ref`를 설정한다. |
 | agent 저작 Gate C backbone | `p2a iteration context`, `validate --stage gate-c-draft`, `promote-tasks` | task 작성용 context JSON 출력, draft task graph 검증, validator 통과 후 canonical task graph 승격을 제공한다. 상세 계약은 §10이다. |
@@ -339,7 +339,7 @@ p2a iteration open \
   --idea "<change idea>"
 ```
 
-`open`은 현재 active 반복이 `close`로 archived 되었고 `current-spec.json.closed_iterations`/`last_closed_iteration`에 기록된 경우에만 새 반복 skeleton을 생성한다. `compose`는 필요하지 않다. 직전 `current-development-contract.json`에서 새 반복의 `baseline/gate-a-intake/intake.json`과 `baseline/gate-b-spec/spec.json`을 materialize하고 SHA-256을 pending state와 iteration metadata에 기록한다. 과거 Gate 문서나 archived hash를 baseline 입력으로 읽지 않는다. 새 반복에는 `iteration.json`, `README.md`, Gate A-C 디렉터리, Gate A/B 작성 위치 안내가 생기며, `current-spec.json`은 새 active iteration과 baseline spec만 가리킨다. Gate B/C 정본이 생기기 전까지 기본 `validate`는 실패한다.
+`open`은 현재 active 반복이 `close`로 archived 되었고 `current-spec.json.closed_iterations`/`last_closed_iteration`에 기록된 경우에만 새 반복 skeleton을 생성한다. `compose`는 필요하지 않다. 직전 `current-development-contract.json`에서 새 반복의 `baseline/gate-a-intake/intake.json`과 `baseline/gate-b-spec/spec.json`을 materialize하고 SHA-256을 pending state와 iteration metadata에 기록한다. 새 contract는 승인된 WEB 근거를 최대 10개까지 보존하고, 이전 contract는 stack evidence에 포함된 공식 URL만 bounded하게 복원한다. 과거 Gate 문서나 archived hash를 baseline 입력으로 읽지 않는다. 새 반복에는 `iteration.json`, `README.md`, Gate A-C 디렉터리, Gate A/B 작성 위치 안내가 생기며, `current-spec.json`은 새 active iteration과 baseline spec만 가리킨다. Gate B/C 정본이 생기기 전까지 기본 `validate`는 실패한다.
 
 ```bash
 p2a iteration draft \

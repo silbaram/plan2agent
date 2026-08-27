@@ -61,6 +61,26 @@ function assertFileInsideArtifactRoot(filePath, artifactRoot, label) {
   }
 }
 
+function assertReferenceInsideArtifactRoot(reference, artifactRoot, label) {
+  if (!reference) return;
+  assertString(reference, label);
+  if (path.win32.isAbsolute(reference) && !path.isAbsolute(reference)) {
+    throw new ValidationError(`${label} must resolve inside the artifact root`);
+  }
+  const resolvedPath = path.isAbsolute(reference)
+    ? path.resolve(reference)
+    : path.resolve(artifactRoot, ...reference.replaceAll('\\', '/').split('/'));
+  const relativePath = path.relative(path.resolve(artifactRoot), resolvedPath);
+  if (
+    !relativePath
+    || relativePath === '..'
+    || relativePath.startsWith(`..${path.sep}`)
+    || path.isAbsolute(relativePath)
+  ) {
+    throw new ValidationError(`${label} must resolve inside the artifact root`);
+  }
+}
+
 function assertSafeIterationId(
   iterationId,
   label = 'current-spec.json active_iteration',
@@ -1050,6 +1070,10 @@ export function materializeCurrentDevelopmentContract(state, options = {}) {
     state.artifactRoot,
     options,
   );
+  const technologyEvidence = (loadJson(state.specPath).evidence ?? [])
+    .filter((item) => typeof item?.source_id === 'string' && item.source_id.startsWith('WEB-'))
+    .slice(0, 10)
+    .map((item) => structuredClone(item));
   const contract = {
     schema_version: 'p2a.current_development_contract.v1',
     projectId: state.projectId,
@@ -1073,6 +1097,7 @@ export function materializeCurrentDevelopmentContract(state, options = {}) {
     ...(envelope.visualContract ? {
       visualContract: structuredClone(envelope.visualContract),
     } : {}),
+    ...(technologyEvidence.length ? { technologyEvidence } : {}),
     bindings: {
       constitution: {
         ref: constitutionPath ? '.plan2agent/constitution.json' : null,
@@ -1121,6 +1146,7 @@ function validateCurrentDevelopmentContractDataForState(contract, state, constit
 export function resolveCurrentDevelopmentState(artifactPath, options = {}) {
   const state = resolveIterationState(artifactPath, {
     requireReady: false,
+    requireEffectiveSpec: false,
     cwd: options.cwd,
   });
   const contractPath = currentDevelopmentContractPath(state.artifactRoot);
@@ -1732,7 +1758,11 @@ function parseStatusActiveIteration(statusPath) {
 }
 
 export function resolveIterationState(artifactPath, options = {}) {
-  const { requireReady = true, cwd = process.cwd() } = options;
+  const {
+    requireReady = true,
+    requireEffectiveSpec = true,
+    cwd = process.cwd(),
+  } = options;
   const artifactRoot = normalizeArtifactRoot(artifactPath, cwd);
   assertDirectory(artifactRoot, '--artifacts');
 
@@ -1761,15 +1791,25 @@ export function resolveIterationState(artifactPath, options = {}) {
   const gateCTaskGraphRoot = path.join(iterationRoot, 'gate-c-task-graph');
   const specPath = path.join(gateBSpecRoot, 'spec.json');
   const taskGraphPath = path.join(gateCTaskGraphRoot, 'task-graph.json');
-  const effectiveSpecPath = resolveEffectiveSpecPath(currentSpec, artifactRoot, currentSpecPath);
+  const effectiveSpecPath = requireEffectiveSpec
+    ? resolveEffectiveSpecPath(currentSpec, artifactRoot, currentSpecPath)
+    : currentSpecPath;
 
   assertDirectory(iterationRoot, `iterations/${activeIteration}`);
-  assertFile(effectiveSpecPath, 'current-spec.json effective_spec_ref');
-  assertFileInsideArtifactRoot(
-    effectiveSpecPath,
-    artifactRoot,
-    'current-spec.json effective_spec_ref',
-  );
+  if (requireEffectiveSpec) {
+    assertFile(effectiveSpecPath, 'current-spec.json effective_spec_ref');
+    assertFileInsideArtifactRoot(
+      effectiveSpecPath,
+      artifactRoot,
+      'current-spec.json effective_spec_ref',
+    );
+  } else {
+    assertReferenceInsideArtifactRoot(
+      currentSpec.effective_spec_ref,
+      artifactRoot,
+      'current-spec.json effective_spec_ref',
+    );
+  }
   if (requireReady) {
     assertFile(specPath, `iterations/${activeIteration}/gate-b-spec/spec.json`);
     assertFile(taskGraphPath, `iterations/${activeIteration}/gate-c-task-graph/task-graph.json`);

@@ -19,6 +19,95 @@ export const RUN_ID_RESERVATION_DIR = '.run-id-reservations';
 const REVIEW_PASS_KEYS = ['monitor', 'visual', 'acceptance'];
 const LEGACY_REVIEW_PASS_KEYS = ['style', 'milestone'];
 const RELATED_VERIFICATION_TYPES = new Set(['test', 'lint', 'typecheck', 'custom']);
+const RETROSPECTIVE_MEASUREMENT_CATEGORIES = new Set(['test', 'lint', 'typecheck', 'custom']);
+
+export function defaultRetrospectiveSignals() {
+  return {
+    enabled: false,
+    verificationBudgetsMs: {},
+    verificationBaselinesMs: {},
+    performanceRegressionPercent: 25,
+    retryThreshold: 2,
+    repeatedDefectThreshold: 2,
+  };
+}
+
+function retrospectiveDurations(value, label) {
+  if (value === undefined) return {};
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error(`project config runTracking.retrospectiveSignals.${label} must be an object`);
+  }
+  const unknown = Object.keys(value).filter((key) => !RETROSPECTIVE_MEASUREMENT_CATEGORIES.has(key));
+  if (unknown.length) {
+    throw new Error(
+      `project config runTracking.retrospectiveSignals.${label} has unknown verification type(s): ${unknown.sort().join(', ')}`,
+    );
+  }
+  return Object.fromEntries(Object.entries(value).map(([key, duration]) => {
+    if (!Number.isSafeInteger(duration) || duration <= 0) {
+      throw new Error(
+        `project config runTracking.retrospectiveSignals.${label}.${key} must be a positive safe integer`,
+      );
+    }
+    return [key, duration];
+  }));
+}
+
+export function resolveRetrospectiveSignals(config = {}) {
+  const runTracking = config?.runTracking;
+  if (runTracking !== undefined && (
+    !runTracking
+    || typeof runTracking !== 'object'
+    || Array.isArray(runTracking)
+  )) {
+    throw new Error('project config runTracking must be an object');
+  }
+  const configured = runTracking?.retrospectiveSignals;
+  const defaults = defaultRetrospectiveSignals();
+  if (configured === undefined) return defaults;
+  if (!configured || typeof configured !== 'object' || Array.isArray(configured)) {
+    throw new Error('project config runTracking.retrospectiveSignals must be an object');
+  }
+  const allowed = new Set(Object.keys(defaults));
+  const unknown = Object.keys(configured).filter((key) => !allowed.has(key));
+  if (unknown.length) {
+    throw new Error(
+      `project config runTracking.retrospectiveSignals has unknown key(s): ${unknown.sort().join(', ')}`,
+    );
+  }
+  if (configured.enabled !== undefined && typeof configured.enabled !== 'boolean') {
+    throw new Error('project config runTracking.retrospectiveSignals.enabled must be a boolean');
+  }
+  const policy = {
+    ...defaults,
+    ...configured,
+    verificationBudgetsMs: retrospectiveDurations(
+      configured.verificationBudgetsMs,
+      'verificationBudgetsMs',
+    ),
+    verificationBaselinesMs: retrospectiveDurations(
+      configured.verificationBaselinesMs,
+      'verificationBaselinesMs',
+    ),
+  };
+  if (
+    !Number.isSafeInteger(policy.performanceRegressionPercent)
+    || policy.performanceRegressionPercent < 1
+    || policy.performanceRegressionPercent > 1000
+  ) {
+    throw new Error(
+      'project config runTracking.retrospectiveSignals.performanceRegressionPercent must be an integer between 1 and 1000',
+    );
+  }
+  for (const key of ['retryThreshold', 'repeatedDefectThreshold']) {
+    if (!Number.isSafeInteger(policy[key]) || policy[key] < 2 || policy[key] > 1000) {
+      throw new Error(
+        `project config runTracking.retrospectiveSignals.${key} must be an integer between 2 and 1000`,
+      );
+    }
+  }
+  return policy;
+}
 
 export function relatedVerificationCommands(config = {}) {
   const commands = config?.relatedVerification;

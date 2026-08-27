@@ -18,6 +18,7 @@ import {
   runIteration,
   runP2a,
   runRuns,
+  runTasks,
 } from './helpers/fixtures.mjs';
 import {
   createValidationSession,
@@ -57,7 +58,12 @@ function currentDevelopmentFixture(options = {}) {
         rationale: 'Untrusted payloads must not enter internal processing first.',
         scope: 'webhook ingestion',
       }],
-      stack: [],
+      stack: options.technologyConstitution ? [{
+        id: 'STACK-1',
+        choice: 'Use the Node.js runtime for the reference implementation.',
+        rationale: 'Keep the fixture aligned with the approved runtime contract.',
+        evidence: ['https://nodejs.org/en/about/previous-releases'],
+      }] : [],
       prohibitions: [],
       style: { modules: 'small and explicit' },
       approval_audit: {
@@ -103,6 +109,36 @@ function addMalformedHistory(artifactRoot, count) {
     created.push(iterationRoot);
   }
   return created;
+}
+
+function linkLegacyCompositionHistory(artifactRoot, iterationRoots, options = {}) {
+  if (iterationRoots.length === 0) return;
+  const currentSpecPath = path.join(artifactRoot, 'current-spec.json');
+  const currentSpec = JSON.parse(readFileSync(currentSpecPath, 'utf8'));
+  const activeSpec = JSON.parse(readFileSync(path.join(
+    artifactRoot,
+    'iterations',
+    currentSpec.active_iteration,
+    'gate-b-spec',
+    'spec.json',
+  ), 'utf8'));
+  const sources = iterationRoots.map((iterationRoot) => {
+    const iterationId = path.basename(iterationRoot);
+    return {
+      iteration_id: iterationId,
+      status: 'archived',
+      approval: 'approved',
+      spec_ref: `iterations/${iterationId}/gate-b-spec/spec.json`,
+      intake_ref: `iterations/${iterationId}/gate-a-intake/intake.json`,
+      task_graph_ref: `iterations/${iterationId}/gate-c-task-graph/task-graph.json`,
+    };
+  });
+  currentSpec.effective_spec_ref = options.effectiveSpecRef ?? 'current-spec.json';
+  currentSpec.composed_from = sources.map((source) => source.iteration_id);
+  currentSpec.source_specs = sources;
+  currentSpec.effective_product = activeSpec.product;
+  currentSpec.effective_implementation = activeSpec.implementation;
+  writeJson(currentSpecPath, currentSpec);
 }
 
 function removeFixture(fixture) {
@@ -167,7 +203,10 @@ function archiveCurrentFixture(fixture, iterationId = 'v20') {
 }
 
 function tracedCommand(runner, args, fixture, historicalRoots) {
-  const tracePath = path.join(fixture.workspaceRoot, 'fs-read-trace.log');
+  const tracePath = path.join(
+    tmpdir(),
+    `p2a-fs-read-trace-${path.basename(fixture.workspaceRoot)}.log`,
+  );
   writeFileSync(tracePath, '', 'utf8');
   const preload = path.join(ROOT, 'tests', 'helpers', 'trace-fs-reads.cjs');
   const nodeOptions = [process.env.NODE_OPTIONS, `--require=${preload}`]
@@ -192,6 +231,7 @@ function tracedCommand(runner, args, fixture, historicalRoots) {
   const historicalReads = reads.filter((filePath) => historicalRoots.some((root) => (
     filePath === root || filePath.startsWith(`${root}${path.sep}`)
   )));
+  rmSync(tracePath, { force: true });
   assert.deepEqual(
     historicalReads,
     [],
@@ -204,10 +244,12 @@ test('0, 20, and 100 archived iteration directories produce identical current va
   const observations = [];
   const fileReadCounts = [];
   const contextReadCounts = [];
+  const taskTransitionReadCounts = [];
   for (const historyCount of [0, 20, 100]) {
     const fixture = currentDevelopmentFixture();
     try {
       const archived = addMalformedHistory(fixture.artifactRoot, historyCount);
+      linkLegacyCompositionHistory(fixture.artifactRoot, archived);
       const validationSession = createValidationSession();
       const state = resolveCurrentDevelopmentState(fixture.artifactRoot, {
         validationSession,
@@ -245,6 +287,18 @@ test('0, 20, and 100 archived iteration directories produce identical current va
       contextReadCounts.push(tracedContext.reads.filter(
         (filePath) => filePath.startsWith(`${fixture.artifactRoot}${path.sep}`),
       ).length);
+
+      const tracedTask = tracedCommand(runTasks, [
+        'start', '--artifacts', fixture.artifactRoot, 'task-001',
+      ], fixture, archived.map((iterationRoot) => path.resolve(iterationRoot)));
+      assert.equal(
+        tracedTask.result.status,
+        0,
+        `${tracedTask.result.stdout}\n${tracedTask.result.stderr}`,
+      );
+      taskTransitionReadCounts.push(tracedTask.reads.filter(
+        (filePath) => filePath.startsWith(`${fixture.artifactRoot}${path.sep}`),
+      ).length);
     } finally {
       removeFixture(fixture);
     }
@@ -253,6 +307,11 @@ test('0, 20, and 100 archived iteration directories produce identical current va
   assert.deepEqual(observations[2], observations[0]);
   assert.deepEqual(fileReadCounts, [fileReadCounts[0], fileReadCounts[0], fileReadCounts[0]]);
   assert.deepEqual(contextReadCounts, [contextReadCounts[0], contextReadCounts[0], contextReadCounts[0]]);
+  assert.deepEqual(taskTransitionReadCounts, [
+    taskTransitionReadCounts[0],
+    taskTransitionReadCounts[0],
+    taskTransitionReadCounts[0],
+  ]);
   assert.deepEqual(observations[0].validatorRuns, {
     'current-development-contract': 1,
   });
@@ -262,6 +321,7 @@ test('current lifecycle commands continue after archived artifacts are deleted',
   const fixture = currentDevelopmentFixture({ planned: true });
   try {
     const archived = addMalformedHistory(fixture.artifactRoot, 20);
+    linkLegacyCompositionHistory(fixture.artifactRoot, archived);
     const historicalRoots = archived.map((iterationRoot) => path.resolve(iterationRoot));
     const runId = 'run-current-only-lifecycle';
     let { result } = tracedCommand(runExecute, [
@@ -308,6 +368,99 @@ test('current lifecycle commands continue after archived artifacts are deleted',
       'current-development-contract.json',
     ]);
     assert.doesNotMatch(JSON.stringify(envelope), /archived-|source_specs|gate-a-intake/);
+  } finally {
+    removeFixture(fixture);
+  }
+});
+
+test('direct task transitions and iteration close stay current-only with linked legacy composition', () => {
+  const fixture = currentDevelopmentFixture({ planned: true });
+  try {
+    const archived = addMalformedHistory(fixture.artifactRoot, 20);
+    linkLegacyCompositionHistory(fixture.artifactRoot, archived, {
+      effectiveSpecRef: 'iterations/archived-1/gate-b-spec/spec.json',
+    });
+    const historicalRoots = archived.map((iterationRoot) => path.resolve(iterationRoot));
+    const runId = 'run-current-only-task-transitions';
+    for (const iterationRoot of archived) {
+      rmSync(iterationRoot, { recursive: true, force: true });
+    }
+
+    let traced = tracedCommand(runExecute, [
+      'start',
+      '--artifacts', fixture.artifactRoot,
+      '--run-id', runId,
+      '--agent-tool', 'codex',
+      '--workspace', fixture.workspaceRoot,
+    ], fixture, historicalRoots);
+    assert.equal(traced.result.status, 0, `${traced.result.stdout}\n${traced.result.stderr}`);
+    for (const milestone of ['milestone-current-implementation', 'milestone-current-regression']) {
+      traced = tracedCommand(runRuns, [
+        'checkpoint',
+        '--artifacts', fixture.artifactRoot,
+        '--run-id', runId,
+        '--milestone', milestone,
+      ], fixture, historicalRoots);
+      assert.equal(traced.result.status, 0, `${traced.result.stdout}\n${traced.result.stderr}`);
+    }
+    traced = tracedCommand(runExecute, [
+      'finish', '--artifacts', fixture.artifactRoot, '--run-id', runId,
+    ], fixture, historicalRoots);
+    assert.equal(traced.result.status, 0, `${traced.result.stdout}\n${traced.result.stderr}`);
+
+    for (const transition of [
+      ['todo', '--artifacts', fixture.artifactRoot, 'task-001', '--reopen', '--note', 'Exercise current-only reopen.'],
+      ['start', '--artifacts', fixture.artifactRoot, 'task-001'],
+      ['block', '--artifacts', fixture.artifactRoot, 'task-001', '--note', 'Exercise current-only block.'],
+      ['todo', '--artifacts', fixture.artifactRoot, 'task-001'],
+      ['start', '--artifacts', fixture.artifactRoot, 'task-001'],
+      ['done', '--artifacts', fixture.artifactRoot, 'task-001'],
+    ]) {
+      traced = tracedCommand(runTasks, transition, fixture, historicalRoots);
+      assert.equal(traced.result.status, 0, `${traced.result.stdout}\n${traced.result.stderr}`);
+    }
+
+    const finalRunId = 'run-current-only-final-verification';
+    traced = tracedCommand(runExecute, [
+      'verify-final',
+      '--artifacts', fixture.artifactRoot,
+      '--task', 'task-001',
+      '--run-id', finalRunId,
+      '--agent-tool', 'manual',
+    ], fixture, historicalRoots);
+    assert.equal(traced.result.status, 0, `${traced.result.stdout}\n${traced.result.stderr}`);
+    traced = tracedCommand(runRuns, [
+      'verify',
+      '--artifacts', fixture.artifactRoot,
+      '--run-id', finalRunId,
+      '--test-command', `${JSON.stringify(process.execPath)} -e "process.exit(0)"`,
+    ], fixture, historicalRoots);
+    assert.equal(traced.result.status, 0, `${traced.result.stdout}\n${traced.result.stderr}`);
+    traced = tracedCommand(runExecute, [
+      'finish', '--artifacts', fixture.artifactRoot, '--run-id', finalRunId,
+    ], fixture, historicalRoots);
+    assert.equal(traced.result.status, 0, `${traced.result.stdout}\n${traced.result.stderr}`);
+
+    traced = tracedCommand(runIteration, [
+      'close', '--artifacts', fixture.artifactRoot,
+    ], fixture, historicalRoots);
+    assert.equal(traced.result.status, 0, `${traced.result.stdout}\n${traced.result.stderr}`);
+    assert.match(traced.result.stdout, /iteration closed/);
+  } finally {
+    removeFixture(fixture);
+  }
+});
+
+test('explicit iteration validation still audits linked historical composition', () => {
+  const fixture = currentDevelopmentFixture();
+  try {
+    const archived = addMalformedHistory(fixture.artifactRoot, 20);
+    linkLegacyCompositionHistory(fixture.artifactRoot, archived);
+    const audited = runIteration([
+      'validate', '--artifacts', fixture.artifactRoot,
+    ]);
+    assert.equal(audited.status, 1, `${audited.stdout}\n${audited.stderr}`);
+    assert.match(audited.stderr, /Expected property name|valid JSON/);
   } finally {
     removeFixture(fixture);
   }
@@ -406,15 +559,20 @@ test('existing iterative projects migrate to a deterministic current contract', 
 });
 
 test('opening a new iteration snapshots only the current contract and survives deletion of the prior iteration', () => {
-  const fixture = currentDevelopmentFixture();
+  const fixture = currentDevelopmentFixture({
+    constitution: true,
+    technologyConstitution: true,
+  });
   try {
     archiveCurrentFixture(fixture);
     const archived = addMalformedHistory(fixture.artifactRoot, 19);
+    linkLegacyCompositionHistory(fixture.artifactRoot, archived);
     const historicalRoots = archived.map((iterationRoot) => path.resolve(iterationRoot));
-    const contract = JSON.parse(readFileSync(
-      path.join(fixture.artifactRoot, 'current-development-contract.json'),
-      'utf8',
-    ));
+    const contractPath = path.join(fixture.artifactRoot, 'current-development-contract.json');
+    const contract = JSON.parse(readFileSync(contractPath, 'utf8'));
+    assert.equal(contract.technologyEvidence?.[0]?.source_id, 'WEB-1');
+    delete contract.technologyEvidence;
+    writeJson(contractPath, contract);
     const { result: opened } = tracedCommand(runIteration, [
       'open',
       '--artifacts', fixture.artifactRoot,
@@ -454,6 +612,11 @@ test('opening a new iteration snapshots only the current contract and survives d
     assert.deepEqual(baselineSpec.product.non_goals, contract.nonGoals);
     assert.deepEqual(baselineSpec.product.success_criteria, contract.acceptance);
     assert.deepEqual(baselineSpec.implementation.verification, contract.verification);
+    assert.equal(baselineSpec.evidence[0]?.source_id, 'WEB-1');
+    assert.equal(
+      baselineSpec.evidence[0]?.url,
+      'https://nodejs.org/en/about/previous-releases',
+    );
     assert.doesNotMatch(JSON.stringify(baselineSpec), /iterations\/v20\/gate-/);
 
     const previousIterationRoot = path.join(fixture.artifactRoot, 'iterations', 'v20');

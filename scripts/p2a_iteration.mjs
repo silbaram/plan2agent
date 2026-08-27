@@ -633,7 +633,6 @@ function statusIterationIds(currentSpec) {
       ids.push(iterationId);
     }
   };
-  for (const iterationId of currentSpec.composed_from ?? []) add(iterationId);
   for (const closed of currentSpec.closed_iterations ?? []) add(closed?.iteration_id);
   add(currentSpec.last_closed_iteration?.iteration_id);
   add(currentSpec.pending_iteration?.iteration_id);
@@ -3510,13 +3509,6 @@ export function validateCloseReadyFullVerificationEvidence({
   return 1;
 }
 
-function loadReadyIterationFacts(artifactRoot) {
-  const state = resolveIterationState(artifactRoot);
-  const spec = validateActiveSpecWithOptionalIntake(state);
-  const taskGraph = validateTaskGraph(state.taskGraphPath, state.specPath);
-  return { state, spec, taskGraph };
-}
-
 function validateActiveSpecWithOptionalIntake(state) {
   assertActivePlanningContract(state);
   const intakePath = activeIntakePath(state);
@@ -3602,6 +3594,7 @@ function gateCTaskGraphDraftMetaPath(state) {
 
 function activeBaselineEffectiveSpecRef(state) {
   return state.currentSpec.pending_iteration?.baseline_effective_spec_ref
+    ?? state.currentDevelopmentContract?.bindings.activeSpec.ref
     ?? state.currentSpec.effective_spec_ref
     ?? null;
 }
@@ -3648,14 +3641,10 @@ function loadContextEffectiveSpec(state) {
   const visualExperience = activeSpec?.visual_experience
     ? { visual_experience: cloneJson(activeSpec.visual_experience) }
     : {};
-  if (state.currentSpec.effective_product && state.currentSpec.effective_implementation) {
-    return {
-      product: cloneJson(state.currentSpec.effective_product),
-      implementation: cloneJson(state.currentSpec.effective_implementation),
-      ...visualExperience,
-    };
-  }
-  const fallbackPath = existsSync(state.effectiveSpecPath) ? state.effectiveSpecPath : state.specPath;
+  const baselineRef = state.currentSpec.pending_iteration?.baseline_effective_spec_ref;
+  const fallbackPath = baselineRef
+    ? resolveArtifactFileReference(baselineRef, state.artifactRoot)
+    : state.specPath;
   const data = loadJson(fallbackPath);
   return {
     product: cloneJson(data.product ?? {}),
@@ -3665,14 +3654,13 @@ function loadContextEffectiveSpec(state) {
 }
 
 function contextSpecFieldChanges(state) {
-  if (!existsSync(state.specPath) || !existsSync(state.effectiveSpecPath)) return [];
+  if (!existsSync(state.specPath)) return [];
   const activeSpec = loadJson(state.specPath);
-  const baselineSpec = state.currentSpec.effective_product && state.currentSpec.effective_implementation
-    ? {
-        product: state.currentSpec.effective_product,
-        implementation: state.currentSpec.effective_implementation,
-      }
-    : loadEffectiveBaselineSpec(state.effectiveSpecPath, state.artifactRoot);
+  const baselineRef = state.currentSpec.pending_iteration?.baseline_effective_spec_ref;
+  const baselinePath = baselineRef
+    ? resolveArtifactFileReference(baselineRef, state.artifactRoot)
+    : state.specPath;
+  const baselineSpec = loadEffectiveBaselineSpec(baselinePath, state.artifactRoot);
   return collectSpecFieldChanges(baselineSpec, activeSpec);
 }
 
@@ -4121,11 +4109,10 @@ function validateIteration(args) {
   return 0;
 }
 
-function closeLocked(args, artifactRoot) {
+function closeLocked(args, artifactRoot, facts) {
   const requestedIteration = args.iterationIdProvided ? args.iterationId : 'active';
   if (requestedIteration !== 'active') assertSafeIterationId(requestedIteration);
 
-  const facts = loadReadyIterationFacts(artifactRoot);
   assertCloseReadyTasks(facts.taskGraph);
   const reviewPasses = projectReviewPasses(canonicalWorkspacePathForArtifactRoot(artifactRoot));
   validateCloseReadyVisualEvidence({
@@ -4197,7 +4184,10 @@ function closeLocked(args, artifactRoot) {
 
 function close(args) {
   const artifactRoot = normalizeArtifactPath(args.artifacts);
-  const initialState = resolveIterationState(artifactRoot, { requireReady: false });
+  const initialState = resolveIterationState(artifactRoot, {
+    requireReady: false,
+    requireEffectiveSpec: false,
+  });
   return withRunStoreLocks(
     [
       artifactStateLockDir(artifactRoot),
@@ -4205,17 +4195,24 @@ function close(args) {
       path.join(artifactRoot, 'runs'),
     ],
     () => {
-      const lockedState = resolveIterationState(artifactRoot, { requireReady: false });
+      const lockedPointerState = resolveIterationState(artifactRoot, {
+        requireReady: false,
+        requireEffectiveSpec: false,
+      });
       if (
-        lockedState.activeIteration !== initialState.activeIteration
-        || path.resolve(lockedState.taskGraphPath)
+        lockedPointerState.activeIteration !== initialState.activeIteration
+        || path.resolve(lockedPointerState.taskGraphPath)
           !== path.resolve(initialState.taskGraphPath)
       ) {
         throw new ValidationError(
           'active iteration changed while close was waiting for state locks; retry the command',
         );
       }
-      return closeLocked(args, artifactRoot);
+      const lockedState = resolveCurrentDevelopmentState(artifactRoot);
+      return closeLocked(args, artifactRoot, {
+        state: lockedState,
+        taskGraph: lockedState.taskGraph,
+      });
     },
   );
 }
@@ -4629,6 +4626,27 @@ function contractRuleText(item) {
   return `${item.id}: ${item.rule} (${item.rationale})`;
 }
 
+function baselineContractTechnologyEvidence(contract) {
+  if (contract.technologyEvidence?.length) {
+    return cloneJson(contract.technologyEvidence);
+  }
+  const urls = [];
+  for (const stackItem of contract.stack ?? []) {
+    for (const source of stackItem.evidence ?? []) {
+      if (typeof source !== 'string' || !/^https?:\/\//i.test(source)) continue;
+      if (!urls.some((item) => item.url === source)) {
+        urls.push({ stackId: stackItem.id, url: source });
+      }
+    }
+  }
+  return urls.slice(0, 10).map((item, index) => ({
+    source_id: `WEB-${index + 1}`,
+    title: `${item.stackId} approved technology evidence`,
+    url: item.url,
+    used_for: `Recovered from ${item.stackId} evidence in the legacy current development contract.`,
+  }));
+}
+
 function baselineContractSpec(contract, openedAt, intakeRef, intakeSha256, specRef) {
   const visualScreens = (contract.visualContract?.screens ?? []).map((screen) => (
     screen.route ? `${screen.screenId}: ${screen.route}` : screen.screenId
@@ -4678,7 +4696,7 @@ function baselineContractSpec(contract, openedAt, intakeRef, intakeSha256, specR
       approved_artifacts: [specRef],
       approval_note: 'Deterministically materialized from the previously approved current development contract.',
     },
-    evidence: [],
+    evidence: baselineContractTechnologyEvidence(contract),
   };
 }
 
@@ -4716,15 +4734,19 @@ function pruneArchivedRunEvidenceAfterOpen(facts) {
 }
 
 function openLocked(args, artifactRoot, idea, options = {}) {
-  const openingState = resolveIterationState(artifactRoot, { requireReady: false });
-  validateActiveIterationArchiveConsistency(openingState);
-  if (openingState.currentSpec.pending_iteration) {
+  const openingPointerState = resolveIterationState(artifactRoot, {
+    requireReady: false,
+    requireEffectiveSpec: false,
+  });
+  validateActiveIterationArchiveConsistency(openingPointerState);
+  if (openingPointerState.currentSpec.pending_iteration) {
     throw new ValidationError(
       'open requires no pending_iteration; finish or discard the active planning iteration first',
     );
   }
-  const facts = loadReadyIterationFacts(artifactRoot);
-  const currentDevelopment = resolveCurrentDevelopmentState(artifactRoot);
+  const openingState = resolveCurrentDevelopmentState(artifactRoot);
+  const facts = { state: openingState, taskGraph: openingState.taskGraph };
+  const currentDevelopment = openingState;
   assertCloseReadyTasks(facts.taskGraph);
   assertArchivedBaselineForOpen(facts.state);
   if (facts.state.activeIteration === args.iterationId) {

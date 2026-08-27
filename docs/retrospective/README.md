@@ -13,6 +13,13 @@ p2a 하네스로 개발할 때 "하네스가 도움이 되는가, 방해가 되�
 먼저 삭제되더라도 `run-index.json.retrospective`에는 텍스트 없는 횟수·시간 집계가 남는다.
 회고는 현재 run 상세와 이 집계를 함께 읽을 수 있는 close 직전에 끝내야 한다.
 
+`runTracking.retrospectiveSignals.enabled: true`인 프로젝트는 같은 시점에 `p2a next
+--json --contract v2`가 성능 예산, 회귀 baseline, retry, failed/blocked, 명시적 correction,
+반복 process defect, verification gap, monitor mismatch를 최대 32개의 구조화된 후보로 보여준다.
+후보는 현재 iteration과 텍스트 없는 제한 집계만 사용하며 원본 command, output, note,
+source 값을 보존하지 않는다. 이 자동 요약은 아래 5분 회고를 대체하지 않고 우선순위를
+잡는 근거다. Proposal 저장은 사용자가 별도로 승인해야 하며 거절해도 close할 수 있다.
+
 ```
 사이클 완료 → [회고 5분] → p2a iteration open
 ```
@@ -23,6 +30,8 @@ p2a 하네스로 개발할 때 "하네스가 도움이 되는가, 방해가 되�
    `docs/retrospective/<project_id>-v<N>.md`로 만든다.
 2. 각 질문에 체감 그대로 답한다. 가능하면 run id 또는 명령명을 근거로 남긴다.
 3. 모르면 비워둔다. 추측으로 채우지 않는다.
+4. 구조화된 후보가 있으면 signal/domain/observed/threshold를 수집 요약에 옮기되,
+   후보가 없다는 사실만으로 개선점이 없다고 단정하지 않는다.
 
 ## 판정 규칙 (3회 축적 후)
 

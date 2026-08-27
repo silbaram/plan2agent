@@ -34,11 +34,16 @@ export function runIteration(args, options = {}) {
 }
 
 export function runTasks(args, options = {}) {
-  return spawnSync(process.execPath, [TASKS_CLI, ...args], { cwd: ROOT, encoding: 'utf8', input: options.input });
+  return spawnSync(process.execPath, [TASKS_CLI, ...args], {
+    cwd: options.cwd ?? ROOT,
+    encoding: 'utf8',
+    env: options.env ?? process.env,
+    input: options.input,
+  });
 }
 
 export function runTasksFrom(cwd, args) {
-  return spawnSync(process.execPath, [TASKS_CLI, ...args], { cwd, encoding: 'utf8' });
+  return runTasks(args, { cwd });
 }
 
 export function runRuns(args, options = {}) {

@@ -6,7 +6,12 @@ import { existsSync, lstatSync, readFileSync, readdirSync, realpathSync } from '
 import path from 'node:path';
 import process from 'node:process';
 import { DEFAULT_RUNS_DIR, GATE_FILES, GREENFIELD_REQUIRED_FILES } from './p2a_constants.mjs';
-import { resolveExecutionModePolicy, resolveOrchestrationAgentTool, resolveReviewPasses } from './p2a_project_config.mjs';
+import {
+  resolveExecutionModePolicy,
+  resolveOrchestrationAgentTool,
+  resolveRetrospectiveSignals,
+  resolveReviewPasses,
+} from './p2a_project_config.mjs';
 import { normalizePath, resolveP2aPaths } from './p2a_paths.mjs';
 import { p2aCommandLine } from './p2a_run_commands.mjs';
 import {
@@ -37,6 +42,10 @@ import { assertFinalAcceptanceReviewRunReady } from './p2a_acceptance_review_gat
 import { minedProposalRunIds } from './p2a_proposal_mining.mjs';
 import { iterationFullVerificationNeeded } from './p2a_final_verification_gate.mjs';
 import {
+  buildRetrospectiveCandidates,
+  retrospectiveMonitorMismatchRunIds,
+} from './p2a_retrospective.mjs';
+import {
   discoverEntryDocument,
   discoverFeatureRadarPreflightRuns,
 } from './p2a_radar_preflight.mjs';
@@ -46,6 +55,7 @@ import {
   validateConstitution,
   validateIntake,
   validateRunIndexData,
+  validateRetrospectiveCandidateData,
   validateRunsDir,
   validateRunTaskContract,
   validateSpec,
@@ -257,6 +267,7 @@ function inspectRunIndex(targetRoot, artifactRoot) {
       valid: false,
       error: 'The canonical run-index.json is unreadable.',
       summary: summarizeRunRecords(targetRoot, runIndexPath, []),
+      retrospective: null,
     };
   }
   try {
@@ -269,6 +280,7 @@ function inspectRunIndex(targetRoot, artifactRoot) {
       valid: false,
       error: error instanceof Error ? error.message : String(error),
       summary: summarizeRunRecords(targetRoot, runIndexPath, []),
+      retrospective: null,
     };
   }
   const records = jsonRecords(runIndex.runs);
@@ -279,6 +291,7 @@ function inspectRunIndex(targetRoot, artifactRoot) {
     valid: true,
     error: null,
     summary: summarizeRunRecords(targetRoot, runIndexPath, records),
+    retrospective: runIndex.retrospective ?? null,
   };
 }
 
@@ -424,6 +437,7 @@ function inspectRuns(targetRoot, artifactRoot, trace = null) {
     valid: Boolean(runIndex),
     error: runIndex ? null : 'The canonical run-index.json is unreadable.',
     summary: summarizeRunRecords(targetRoot, runIndexPath, runs),
+    retrospective: runIndex?.retrospective ?? null,
   };
 }
 
@@ -1205,6 +1219,25 @@ function reviewOrCloseOptions(context) {
     '<review finding>',
   ];
   const closeArgv = ['iteration', 'close', '--artifacts', context.artifactArg];
+  const proposalArgv = [
+    'proposals',
+    'mine',
+    '--artifacts',
+    context.artifactArg,
+    '--iteration',
+    context.detail.activeIteration,
+    '--proposals',
+    context.proposalQueueArg,
+  ];
+  const proposalMining = context.retrospectiveCandidates.length
+    && context.proposalQueueArg
+    ? {
+        kind: 'cli',
+        argv: proposalArgv,
+        display: p2aCommandLine(P2A_PATHS, proposalArgv),
+        requiresApproval: true,
+      }
+    : null;
   return [
     {
       id: 'review',
@@ -1219,6 +1252,7 @@ function reviewOrCloseOptions(context) {
           display: p2aCommandLine(P2A_PATHS, remediationArgv),
           requiresApproval: false,
         },
+        ...(proposalMining ? { proposalMining } : {}),
       },
     },
     {
@@ -1529,6 +1563,7 @@ function buildNextDecisionContext(
   inspectedArtifacts,
   reviewPasses,
   executionModePolicy,
+  retrospectivePolicy,
   explicitEntry,
   validationSession,
 ) {
@@ -1539,6 +1574,7 @@ function buildNextDecisionContext(
     hasHarness,
     reviewPasses,
     executionModePolicy,
+    retrospectivePolicy,
     entry: explicitEntry,
     entryArg: explicitEntry ? commandProjectPath(targetRoot, explicitEntry.path) : null,
     projectId: requestedProjectId,
@@ -1757,6 +1793,22 @@ function buildNextDecisionContext(
   const unminedFailedOrBlockedRun = runEvidenceValidationError
     ? null
     : failedOrBlockedRunCandidate;
+  const retrospectiveCandidates = (
+    retrospectivePolicy.enabled
+    && allTasksDone
+    && detail.layout.kind === 'iteration'
+    && !runEvidenceValidationError
+  ) ? buildRetrospectiveCandidates({
+      projectId: detail.projectId,
+      iterationId: detail.activeIteration,
+      runs: activeRuns,
+      retrospective: detail.runs.retrospective,
+      policy: retrospectivePolicy,
+      monitorMismatchRunIds: retrospectiveMonitorMismatchRunIds(
+        detail.runs.runsDir,
+        activeRuns,
+      ),
+    }).map(validateRetrospectiveCandidateData) : [];
   const fullVerificationNeeded = (
     needsCloseReadyFullVerificationAudit
     && !runEvidenceValidationError
@@ -1900,15 +1952,20 @@ function buildNextDecisionContext(
     acceptanceReviewNeeded,
     acceptanceReviewActivated,
     fullVerificationNeeded,
+    retrospectiveCandidates,
     readyIds: readyTaskIds(gates.taskGraph),
     blockedTaskIds: taskIdsWithStatus(detail.tasks, 'blocked'),
     allTasksDone,
     closedIteration: isClosedIteration(detail.currentSpec, detail.activeIteration),
     iterationCompositionRequired: compositionRequirement.required,
     missingClosedCompositionIterations: compositionRequirement.missingClosedIterations,
-    proposalQueueArg: proposals.enabled
-      ? commandProjectPath(targetRoot, resolveProjectRelativePath(targetRoot, proposals.queueDir))
-      : null,
+    proposalQueueArg: commandProjectPath(
+      targetRoot,
+      resolveProjectRelativePath(
+        targetRoot,
+        proposals.enabled ? proposals.queueDir : '.plan2agent/proposals',
+      ),
+    ),
     runEvidenceValidationError,
     unminedFailedOrBlockedRun,
   };
@@ -2433,7 +2490,7 @@ export const NEXT_DECISION_RULES = [
     ),
     reason: (context) => (
       context.detail.layout.kind === 'iteration'
-        ? 'Every task in the active iteration is done and the iteration is still open. The user must explicitly choose review and remediation or close. A clean review keeps the iteration open and returns to this decision; only the close choice authorizes iteration close.'
+        ? `Every task in the active iteration is done and the iteration is still open. ${context.retrospectiveCandidates.length} bounded retrospective candidate(s) were found. The user must explicitly choose review and remediation or close. Candidate proposal writes require separate approval, while a clean review or rejected proposal keeps close available.`
         : 'Every task in the handed-off flat artifact bundle is done; this layout has no iteration state to close.'
     ),
     command: (context) => (
@@ -2559,6 +2616,7 @@ function resolveNextDecision(
     snapshot.inspectedArtifacts,
     snapshot.reviewPasses,
     snapshot.executionModePolicy,
+    snapshot.retrospectivePolicy,
     snapshot.explicitEntry,
     snapshot.validationSession,
   );
@@ -2595,6 +2653,13 @@ function resolveNextDecision(
   if (contract === 'v2') {
     payload.reasonCode = action.state;
     payload.continuation = action.continuation ?? null;
+    if (action.state === 'iteration_review_or_close_required') {
+      payload.retrospective = {
+        enabled: context.retrospectivePolicy.enabled,
+        candidateCount: context.retrospectiveCandidates.length,
+        candidates: context.retrospectiveCandidates,
+      };
+    }
   }
   return { context, payload };
 }
@@ -2666,6 +2731,7 @@ function buildInfoSnapshot(targetRootInput, options = {}) {
   const config = readJsonObject(path.join(targetRoot, '.plan2agent', 'project.config.json'));
   const reviewPasses = resolveReviewPasses(config);
   const executionModePolicy = resolveExecutionModePolicy(config);
+  const retrospectivePolicy = resolveRetrospectiveSignals(config);
   const isScaffoldProject = ['init', 'scaffold'].includes(manifest?.provenance?.mode);
   const validationSession = options.validationSession ?? createValidationSession();
   const inspectedArtifacts = discoverArtifactRoots(targetRoot)
@@ -2788,6 +2854,7 @@ function buildInfoSnapshot(targetRootInput, options = {}) {
     inspectedArtifacts,
     reviewPasses,
     executionModePolicy,
+    retrospectivePolicy,
     explicitEntry,
     validationSession,
   };
