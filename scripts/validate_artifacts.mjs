@@ -1859,6 +1859,10 @@ export function validateCurrentDevelopmentContractData(data, options = {}) {
   if (taskIds.length !== new Set(taskIds).size) {
     throw new ValidationError('current development contract task bindings must use unique taskId values');
   }
+  const technologyEvidenceIds = (data.technologyEvidence ?? []).map((item) => item.source_id);
+  if (technologyEvidenceIds.length !== new Set(technologyEvidenceIds).size) {
+    throw new ValidationError('current development contract technologyEvidence must use unique source_id values');
+  }
   for (const field of ['scope', 'mustPreserve', 'nonGoals', 'acceptance', 'verification']) {
     validateNonBlankStrings(data[field], `current development contract ${field}`);
   }

@@ -137,6 +137,21 @@
       }
     },
     "visualContract": { "type": "object" },
+    "technologyEvidence": {
+      "type": "array",
+      "maxItems": 10,
+      "items": {
+        "type": "object",
+        "required": ["source_id", "title", "url", "used_for"],
+        "additionalProperties": false,
+        "properties": {
+          "source_id": { "type": "string", "pattern": "^WEB-[0-9]+$" },
+          "title": { "type": "string", "minLength": 1 },
+          "url": { "type": "string" },
+          "used_for": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
     "bindings": {
       "type": "object",
       "required": ["constitution", "activeSpec", "taskGraph"],

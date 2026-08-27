@@ -58,7 +58,12 @@ function currentDevelopmentFixture(options = {}) {
         rationale: 'Untrusted payloads must not enter internal processing first.',
         scope: 'webhook ingestion',
       }],
-      stack: [],
+      stack: options.technologyConstitution ? [{
+        id: 'STACK-1',
+        choice: 'Use the Node.js runtime for the reference implementation.',
+        rationale: 'Keep the fixture aligned with the approved runtime contract.',
+        evidence: ['https://nodejs.org/en/about/previous-releases'],
+      }] : [],
       prohibitions: [],
       style: { modules: 'small and explicit' },
       approval_audit: {
@@ -549,15 +554,20 @@ test('existing iterative projects migrate to a deterministic current contract', 
 });
 
 test('opening a new iteration snapshots only the current contract and survives deletion of the prior iteration', () => {
-  const fixture = currentDevelopmentFixture();
+  const fixture = currentDevelopmentFixture({
+    constitution: true,
+    technologyConstitution: true,
+  });
   try {
     archiveCurrentFixture(fixture);
     const archived = addMalformedHistory(fixture.artifactRoot, 19);
+    linkLegacyCompositionHistory(fixture.artifactRoot, archived);
     const historicalRoots = archived.map((iterationRoot) => path.resolve(iterationRoot));
-    const contract = JSON.parse(readFileSync(
-      path.join(fixture.artifactRoot, 'current-development-contract.json'),
-      'utf8',
-    ));
+    const contractPath = path.join(fixture.artifactRoot, 'current-development-contract.json');
+    const contract = JSON.parse(readFileSync(contractPath, 'utf8'));
+    assert.equal(contract.technologyEvidence?.[0]?.source_id, 'WEB-1');
+    delete contract.technologyEvidence;
+    writeJson(contractPath, contract);
     const { result: opened } = tracedCommand(runIteration, [
       'open',
       '--artifacts', fixture.artifactRoot,
@@ -597,6 +607,11 @@ test('opening a new iteration snapshots only the current contract and survives d
     assert.deepEqual(baselineSpec.product.non_goals, contract.nonGoals);
     assert.deepEqual(baselineSpec.product.success_criteria, contract.acceptance);
     assert.deepEqual(baselineSpec.implementation.verification, contract.verification);
+    assert.equal(baselineSpec.evidence[0]?.source_id, 'WEB-1');
+    assert.equal(
+      baselineSpec.evidence[0]?.url,
+      'https://nodejs.org/en/about/previous-releases',
+    );
     assert.doesNotMatch(JSON.stringify(baselineSpec), /iterations\/v20\/gate-/);
 
     const previousIterationRoot = path.join(fixture.artifactRoot, 'iterations', 'v20');

@@ -1050,6 +1050,10 @@ export function materializeCurrentDevelopmentContract(state, options = {}) {
     state.artifactRoot,
     options,
   );
+  const technologyEvidence = (loadJson(state.specPath).evidence ?? [])
+    .filter((item) => typeof item?.source_id === 'string' && item.source_id.startsWith('WEB-'))
+    .slice(0, 10)
+    .map((item) => structuredClone(item));
   const contract = {
     schema_version: 'p2a.current_development_contract.v1',
     projectId: state.projectId,
@@ -1073,6 +1077,7 @@ export function materializeCurrentDevelopmentContract(state, options = {}) {
     ...(envelope.visualContract ? {
       visualContract: structuredClone(envelope.visualContract),
     } : {}),
+    ...(technologyEvidence.length ? { technologyEvidence } : {}),
     bindings: {
       constitution: {
         ref: constitutionPath ? '.plan2agent/constitution.json' : null,

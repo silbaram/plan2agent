@@ -2589,9 +2589,17 @@ function validateIterationCurrentFixtureCases() {
       writeFileSync(state.currentSpecPath, `${JSON.stringify(currentSpecWithOpenDecision, null, 2)}\n`, 'utf8');
       result = runTasks(['ready', '--artifacts', artifactRoot]);
       checks += 1;
-      const currentSpecOpenOutput = `${result.stdout ?? ''}${result.stderr ?? ''}`;
-      if (result.status === 0 || !currentSpecOpenOutput.includes('current-spec.json open_decisions')) {
-        console.error(`p2a_tasks ready fixture did not reject current-spec open_decisions: ${caseData.id}`);
+      if (result.status !== 0) {
+        console.error(`p2a_tasks ready fixture replayed current-spec composition: ${caseData.id}`);
+        writeResultOutput(result);
+        writeFileSync(state.currentSpecPath, currentSpecText, 'utf8');
+        return { status: failureStatus(result), checks };
+      }
+      result = runIteration(['validate', '--artifacts', artifactRoot]);
+      checks += 1;
+      const explicitCurrentSpecOutput = `${result.stdout ?? ''}${result.stderr ?? ''}`;
+      if (result.status === 0 || !explicitCurrentSpecOutput.includes('current-spec.json open_decisions')) {
+        console.error(`explicit iteration validation did not reject current-spec open_decisions: ${caseData.id}`);
         writeResultOutput(result);
         writeFileSync(state.currentSpecPath, currentSpecText, 'utf8');
         return { status: 1, checks };

@@ -4622,6 +4622,27 @@ function contractRuleText(item) {
   return `${item.id}: ${item.rule} (${item.rationale})`;
 }
 
+function baselineContractTechnologyEvidence(contract) {
+  if (contract.technologyEvidence?.length) {
+    return cloneJson(contract.technologyEvidence);
+  }
+  const urls = [];
+  for (const stackItem of contract.stack ?? []) {
+    for (const source of stackItem.evidence ?? []) {
+      if (typeof source !== 'string' || !/^https?:\/\//i.test(source)) continue;
+      if (!urls.some((item) => item.url === source)) {
+        urls.push({ stackId: stackItem.id, url: source });
+      }
+    }
+  }
+  return urls.slice(0, 10).map((item, index) => ({
+    source_id: `WEB-${index + 1}`,
+    title: `${item.stackId} approved technology evidence`,
+    url: item.url,
+    used_for: `Recovered from ${item.stackId} evidence in the legacy current development contract.`,
+  }));
+}
+
 function baselineContractSpec(contract, openedAt, intakeRef, intakeSha256, specRef) {
   const visualScreens = (contract.visualContract?.screens ?? []).map((screen) => (
     screen.route ? `${screen.screenId}: ${screen.route}` : screen.screenId
@@ -4671,7 +4692,7 @@ function baselineContractSpec(contract, openedAt, intakeRef, intakeSha256, specR
       approved_artifacts: [specRef],
       approval_note: 'Deterministically materialized from the previously approved current development contract.',
     },
-    evidence: [],
+    evidence: baselineContractTechnologyEvidence(contract),
   };
 }
 
