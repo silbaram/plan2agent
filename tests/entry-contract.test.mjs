@@ -1031,7 +1031,7 @@ test('a confirmed entry proceeds through Gate A-C execution and opens a baseline
     next = runNext(root, ['--entry', 'idea.md', '--contract', 'v2']);
     assert.equal(next.state, 'iteration_review_or_close_required');
     assert.equal(next.command.kind, 'approval');
-    assert.deepEqual(next.command.options.map((option) => option.id), ['review', 'close']);
+    assert.deepEqual(next.command.options.map((option) => option.id), ['review', 'retrospective', 'close']);
     const reviewOption = next.command.options[0];
     assert.equal(reviewOption.action.kind, 'review');
 

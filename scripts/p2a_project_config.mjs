@@ -23,7 +23,7 @@ const RETROSPECTIVE_MEASUREMENT_CATEGORIES = new Set(['test', 'lint', 'typecheck
 
 export function defaultRetrospectiveSignals() {
   return {
-    enabled: false,
+    enabled: true,
     verificationBudgetsMs: {},
     verificationBaselinesMs: {},
     performanceRegressionPercent: 25,

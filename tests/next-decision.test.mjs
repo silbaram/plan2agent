@@ -717,22 +717,36 @@ function assertAction(payload, state, kind, argv = null, requiresApproval = null
   }
 }
 
-function assertReviewOrCloseDecision(payload, artifactRoot) {
+function assertCompletionDecision(payload, artifactRoot) {
   assertAction(payload, 'iteration_review_or_close_required', 'approval');
-  assert.match(payload.reason, /explicitly choose review and remediation or close/i);
-  assert.deepEqual(payload.command.options.map((option) => option.id), ['review', 'close']);
-  const [review, close] = payload.command.options;
+  assert.match(payload.reason, /explicitly choose product review, P2A retrospective, or close/i);
+  assert.deepEqual(payload.command.options.map((option) => option.id), ['review', 'retrospective', 'close']);
+  const [review, retrospective, close] = payload.command.options;
   assert.equal(review.action.kind, 'review');
   assert.deepEqual(review.action.remediation.argv, [
     'tasks', 'todo', '--artifacts', artifactRoot, '<task-id>',
     '--reopen', '--note', '<review finding>',
   ]);
   assert.equal(review.action.remediation.requiresApproval, false);
+  assert.equal(retrospective.action.kind, 'retrospective');
+  assert.match(retrospective.action.display, /development-process|P2A/i);
+  assert.equal(retrospective.action.report.kind, 'artifact');
+  assert.equal(
+    retrospective.action.report.path,
+    join(payload.target, 'docs', 'retrospective', `${payload.projectId}-v1.md`),
+  );
+  assert.equal(retrospective.action.report.requiresApproval, true);
+  if (payload.retrospective.candidateCount === 0) {
+    assert.match(retrospective.description, /No automatic development process signal was found/i);
+    assert.equal('proposalMining' in retrospective.action, false);
+  } else {
+    assert.match(retrospective.description, new RegExp(`Review ${payload.retrospective.candidateCount} detected`, 'i'));
+  }
   assert.equal(close.action.kind, 'cli');
   assert.deepEqual(close.action.argv, ['iteration', 'close', '--artifacts', artifactRoot]);
   assert.equal(close.action.requiresApproval, true);
   assert.equal(payload.retrospective.candidateCount, payload.retrospective.candidates.length);
-  return { review, close };
+  return { review, retrospective, close };
 }
 
 function artifactPath(root, projectId = 'sample') {
@@ -1031,7 +1045,7 @@ test('next chooses one read-only action for every primary state', () => {
   }
 });
 
-test('completed iterations expose structured review and close options without mutating state', () => {
+test('completed iterations expose product review, P2A retrospective, and close without mutating state', () => {
   const root = project();
   try {
     const rootArtifact = artifact(root);
@@ -1042,8 +1056,8 @@ test('completed iterations expose structured review and close options without mu
     writeGateD(rootArtifact, [], iterationId);
     writeFinalVerification(root, rootArtifact, iterationId);
     const before = snapshotHarness(root);
-    assertReviewOrCloseDecision(next(root), artifactPath(root));
-    assertReviewOrCloseDecision(next(root), artifactPath(root));
+    assertCompletionDecision(next(root), artifactPath(root));
+    assertCompletionDecision(next(root), artifactPath(root));
     assert.deepEqual(snapshotHarness(root), before);
     const currentSpec = JSON.parse(readFileSync(join(rootArtifact, 'current-spec.json'), 'utf8'));
     assert.equal(currentSpec.active_iteration, iterationId);
@@ -1118,20 +1132,21 @@ test('completed iteration exposes bounded retrospective candidates without block
 
     const before = snapshotHarness(root);
     const payload = next(root);
-    const { review, close } = assertReviewOrCloseDecision(payload, artifactPath(root));
+    const { review, retrospective, close } = assertCompletionDecision(payload, artifactPath(root));
     assert.equal(payload.retrospective.enabled, true);
     assert.equal(payload.retrospective.candidateCount, 1);
     assert.equal(payload.retrospective.candidates[0].signal, 'explicit_correction');
     assert.doesNotMatch(JSON.stringify(payload.retrospective), /SECRET_RETRO_VALUE/);
-    assert.equal(review.action.proposalMining.requiresApproval, true);
-    assert.deepEqual(review.action.proposalMining.argv, [
+    assert.equal('proposalMining' in review.action, false);
+    assert.equal(retrospective.action.proposalMining.requiresApproval, true);
+    assert.deepEqual(retrospective.action.proposalMining.argv, [
       'proposals', 'mine', '--artifacts', artifactPath(root),
       '--iteration', iterationId,
       '--proposals', join(root, '.plan2agent', 'proposals'),
     ]);
     assert.equal(close.action.requiresApproval, true);
     const preview = runP2a([
-      ...review.action.proposalMining.argv,
+      ...retrospective.action.proposalMining.argv,
       '--dry-run',
       '--json',
     ]);
@@ -1141,6 +1156,11 @@ test('completed iteration exposes bounded retrospective candidates without block
     assert.match(previewPayload.candidates[0].proposalId, /explicit_correction/);
     assert.equal(previewPayload.candidates[0].action, 'dry-run');
     assert.doesNotMatch(preview.stdout, /SECRET_RETRO_VALUE/);
+    const human = runP2a(['next', '--target', root]);
+    assert.equal(human.status, 0, `${human.stdout}${human.stderr}`);
+    assert.match(human.stdout, /감지된 회고 내용:/);
+    assert.match(human.stdout, /사용자가 진행 방향을 바로잡은 기록이 1회 있습니다/);
+    assert.doesNotMatch(human.stdout, /explicit_correction|SECRET_RETRO_VALUE/);
     assert.deepEqual(snapshotHarness(root), before);
   } finally {
     remove(root);
@@ -1165,6 +1185,10 @@ test('human next output defaults to actionable v2 options while unqualified JSON
     assert.match(human.stdout, /Review and remediate \(review\)/);
     assert.match(human.stdout, /Remediation: .*tasks todo .*--reopen.*--note/);
     assert.match(human.stdout, /Remediation approval required: no/);
+    assert.match(human.stdout, /Review development process \(retrospective\)/);
+    assert.match(human.stdout, /No automatic development process signal was found/);
+    assert.match(human.stdout, /Retrospective report: .*docs[/\\]retrospective[/\\]sample-v1\.md/);
+    assert.match(human.stdout, /Report approval required: yes/);
     assert.match(human.stdout, /Close iteration \(close\)/);
     assert.match(human.stdout, /Action: .*iteration close/);
     assert.match(human.stdout, /Approval required: yes/);
@@ -1191,7 +1215,7 @@ test('the explicit close option archives a completed iteration without an option
     writeGateD(rootArtifact, [], iterationId);
     writeFinalVerification(root, rootArtifact, iterationId);
 
-    const { close } = assertReviewOrCloseDecision(next(root), artifactPath(root));
+    const { close } = assertCompletionDecision(next(root), artifactPath(root));
     const result = runP2a(close.action.argv);
     assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
     const metadata = JSON.parse(readFileSync(
@@ -3179,6 +3203,21 @@ test('next schema declares the CLI, skill, and approval command shapes', () => {
           },
         },
         {
+          id: 'retrospective',
+          label: 'Review development process',
+          description: 'No automatic development process signal was found. Ask once about process friction.',
+          action: {
+            kind: 'retrospective',
+            display: 'Ask once whether the user experienced any P2A process friction.',
+            report: {
+              kind: 'artifact',
+              path: 'docs/retrospective/sample-iter-001.md',
+              display: 'Write the approved minimal retrospective report.',
+              requiresApproval: true,
+            },
+          },
+        },
+        {
           id: 'close',
           label: 'Close iteration',
           description: 'Close after an explicit choice.',
@@ -3192,13 +3231,20 @@ test('next schema declares the CLI, skill, and approval command shapes', () => {
       ],
     },
     retrospective: {
-      enabled: false,
+      enabled: true,
       candidateCount: 0,
       candidates: [],
     },
     continuation: null,
   };
   assert.doesNotThrow(() => validateSchema(reviewOrClosePayload, NEXT_SCHEMA));
+
+  const missingRetrospectiveReport = structuredClone(reviewOrClosePayload);
+  delete missingRetrospectiveReport.command.options[1].action.report;
+  assert.throws(
+    () => validateSchema(missingRetrospectiveReport, NEXT_SCHEMA),
+    /oneOf/,
+  );
 
   const missingOptions = structuredClone(reviewOrClosePayload);
   delete missingOptions.command.options;
@@ -3221,6 +3267,21 @@ test('next schema declares the CLI, skill, and approval command shapes', () => {
     /oneOf/,
   );
 
+  const proposalMiningOnProductReview = structuredClone(reviewOrClosePayload);
+  proposalMiningOnProductReview.command.options[0].action.proposalMining = {
+    kind: 'cli',
+    argv: [
+      'proposals', 'mine', '--artifacts', '.plan2agent/artifacts/sample',
+      '--iteration', 'iter-001', '--proposals', '.plan2agent/proposals',
+    ],
+    display: 'p2a proposals mine',
+    requiresApproval: true,
+  };
+  assert.throws(
+    () => validateSchema(proposalMiningOnProductReview, NEXT_SCHEMA),
+    /oneOf/,
+  );
+
   const optionsOnAnotherState = structuredClone(reviewOrClosePayload);
   optionsOnAnotherState.state = 'gate_a_needs_approval';
   optionsOnAnotherState.reasonCode = 'gate_a_needs_approval';
@@ -3230,8 +3291,8 @@ test('next schema declares the CLI, skill, and approval command shapes', () => {
   );
 
   assert.doesNotThrow(() => validateSchema(
-    ['review', 'close'],
-    { type: 'array', prefixItems: [{ const: 'review' }, { const: 'close' }], items: false },
+    ['review', 'retrospective', 'close'],
+    { type: 'array', prefixItems: [{ const: 'review' }, { const: 'retrospective' }, { const: 'close' }], items: false },
   ));
   assert.throws(
     () => validateSchema(
@@ -3406,5 +3467,6 @@ test('p2a-next skill delegates to the CLI without duplicating decision rules', (
   assert.match(skill, /kind: approval/);
   assert.match(skill, /structured option/);
   assert.match(skill, /action\.remediation/);
+  assert.match(skill, /action\.report\.path/);
   assert.doesNotMatch(skill, /gate-a|ready task|iteration init/i);
 });

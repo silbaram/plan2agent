@@ -31,8 +31,19 @@ function run(overrides = {}) {
   };
 }
 
-test('retrospective signal policy defaults inactive and validates deterministic thresholds', () => {
-  assert.deepEqual(resolveRetrospectiveSignals({}), defaultRetrospectiveSignals());
+test('retrospective signal policy defaults to bounded process detection and validates deterministic thresholds', () => {
+  const defaults = resolveRetrospectiveSignals({});
+  assert.deepEqual(defaults, defaultRetrospectiveSignals());
+  assert.equal(defaults.enabled, true);
+  assert.deepEqual(
+    buildRetrospectiveCandidates({
+      projectId: 'sample',
+      iterationId: 'v20',
+      runs: [run({ status: 'failed' })],
+      policy: defaults,
+    }).map((candidate) => candidate.signal),
+    ['failed_run'],
+  );
   assert.throws(
     () => resolveRetrospectiveSignals({ runTracking: 'invalid' }),
     /runTracking must be an object/,
@@ -185,6 +196,6 @@ test('disabled retrospective policy produces no closeout candidates', () => {
     projectId: 'sample',
     iterationId: 'v20',
     runs: [run({ status: 'failed' })],
-    policy: defaultRetrospectiveSignals(),
+    policy: { ...defaultRetrospectiveSignals(), enabled: false },
   }), []);
 });

@@ -591,7 +591,25 @@ test('starting the next maintenance task removes completed maintenance run histo
     assert.equal(existsSync(path.join(runsDir, completedRun.runRef)), false);
     const index = JSON.parse(readFileSync(path.join(runsDir, 'run-index.json'), 'utf8'));
     assert.equal(index.runs.some((entry) => entry.runId === completedRun.runId), false);
-    assert.equal(index.runs.some((entry) => entry.taskId === graph.tasks[1].id && entry.status === 'started'), true);
+    const activeEntry = index.runs.find((entry) => entry.taskId === graph.tasks[1].id && entry.status === 'started');
+    assert.ok(activeEntry);
+
+    const finished = runCli(EXECUTE_CLI, [
+      'finish',
+      '--artifacts', artifactRoot,
+      '--maintenance',
+      '--run-id', activeEntry.runId,
+      '--verify-command', 'custom:true',
+    ]);
+    assert.equal(finished.status, 0, `${finished.stdout}${finished.stderr}`);
+    assert.match(finished.stdout, /Maintenance development is complete\. Choose one:/);
+    assert.match(finished.stdout, /Review the completed maintenance changes/);
+    assert.match(finished.stdout, /Review the P2A development process/);
+    assert.match(
+      finished.stdout,
+      new RegExp(`docs[/\\\\]retrospective[/\\\\]${graph.projectId}-maintenance-${graph.tasks[1].id}\\.md`),
+    );
+    assert.match(finished.stdout, /Finish maintenance without an optional review or retrospective/);
   } finally {
     rmSync(artifactRoot, { recursive: true, force: true });
     rmSync(workspace, { recursive: true, force: true });

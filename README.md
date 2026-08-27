@@ -122,8 +122,14 @@ to review indexed and orphan evidence before cleanup; persistent projects requir
 `--force`. Each Git-backed run also records its current HEAD, branch, and dirty state. Set
 `runTracking.persistence` to `persistent` only when long-lived local run evidence is required.
 Optional `runTracking.retrospectiveSignals` thresholds let `p2a next --json --contract v2`
-surface bounded current-iteration performance and process candidates before close. The feature is
-inactive when omitted; proposal writes remain separately approved and declining them never blocks close.
+surface bounded current-iteration performance and process candidates before close. Safe process
+signals are detected by default; projects can set `enabled: false` to disable them, while performance
+budgets remain opt-in. At closeout, product review, P2A retrospective, and close are separate choices;
+when no automatic signal exists, retrospective asks once about user-observed P2A friction. Proposal
+writes remain separately approved and skipping retrospective never blocks close. Continuing the
+retrospective writes one short `docs/retrospective/<project>-<iteration>.md` report only after
+approval. The final maintenance task prints the same review/retrospective/finish choice without
+adding a persistent maintenance close state.
 New iterations materialize `current-development-contract.json` from the approved current state. It
 contains only the objective, scope, architecture and code rules, preservation constraints,
 acceptance, verification, authority, and current task bindings required for implementation. `p2a
