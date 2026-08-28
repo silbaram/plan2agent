@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -254,6 +254,25 @@ test('close-ready full evidence is canonical, final-run-only, and revision bound
     assert.equal(ready.run.runId, run.runId);
     assert.equal(ready.verification.length, 1);
 
+    let revisionRuns = 0;
+    const retainedRuns = Array.from({ length: 20 }, (_, index) => ({
+      ...structuredClone(run),
+      runId: `run-final-verification-retained-${index + 1}`,
+    }));
+    const retainedReady = assertFinalFullVerificationReady({
+      runsDir,
+      runs: retainedRuns,
+      artifactRoot,
+      graphPath,
+      activeIteration: 'v1',
+      workspaceRevisionProvider: (...revisionArgs) => {
+        revisionRuns += 1;
+        return workspaceRevisionSha256(...revisionArgs);
+      },
+    });
+    assert.equal(retainedReady.verification.length, 1);
+    assert.equal(revisionRuns, 1);
+
     const newerFailedFull = structuredClone(run);
     newerFailedFull.runId = 'run-final-verification-newer-failed';
     newerFailedFull.status = 'failed';
@@ -297,6 +316,62 @@ test('close-ready full evidence is canonical, final-run-only, and revision bound
       }),
       /stale/,
     );
+  } finally {
+    rmSync(workspace, { recursive: true, force: true });
+  }
+});
+
+test('retrospective report exclusions stay stable before and after a final run finishes', () => {
+  const workspace = mkdtempSync(path.join(tmpdir(), 'p2a-retrospective-revision-'));
+  try {
+    const artifactRoot = path.join(workspace, '.plan2agent', 'artifacts', 'sample');
+    const runsDir = path.join(artifactRoot, 'runs');
+    const reportDir = path.join(workspace, 'docs', 'retrospective');
+    mkdirSync(runsDir, { recursive: true });
+    mkdirSync(reportDir, { recursive: true });
+    writeFileSync(path.join(workspace, 'product.js'), 'export const value = 1;\n', 'utf8');
+
+    const existingReportPath = path.join(reportDir, 'sample-v1.md');
+    writeFileSync(existingReportPath, '# Existing retrospective\n', 'utf8');
+    const existingBoundary = Date.now() + 1000;
+    const existingRun = {
+      projectId: 'sample',
+      iterationId: 'v1',
+      sourceLayout: 'iteration',
+      workspacePath: workspace,
+      startedAt: new Date(existingBoundary).toISOString(),
+    };
+    const revisionFor = (run) => workspaceRevisionSha256(
+      workspace,
+      workspaceRevisionExcludedPathsForRun(runsDir, run, {
+        artifactRoot,
+        workspacePath: workspace,
+      }),
+    );
+    const beforeFinish = revisionFor(existingRun);
+    existingRun.finishedAt = new Date(existingBoundary + 1000).toISOString();
+    assert.equal(revisionFor(existingRun), beforeFinish);
+    writeFileSync(existingReportPath, '# Updated retrospective\n', 'utf8');
+    const updatedReportTime = new Date(existingBoundary + 500);
+    utimesSync(existingReportPath, updatedReportTime, updatedReportTime);
+    assert.equal(revisionFor(existingRun), beforeFinish);
+
+    rmSync(existingReportPath);
+    const emptyDirectoryBoundary = Date.now() + 2000;
+    const newReportRun = {
+      projectId: 'sample',
+      iterationId: 'v2',
+      sourceLayout: 'iteration',
+      workspacePath: workspace,
+      startedAt: new Date(emptyDirectoryBoundary).toISOString(),
+      finishedAt: new Date(emptyDirectoryBoundary + 2000).toISOString(),
+    };
+    const beforeReport = revisionFor(newReportRun);
+    const newReportPath = path.join(reportDir, 'sample-v2.md');
+    writeFileSync(newReportPath, '# New retrospective\n', 'utf8');
+    const reportTime = new Date(emptyDirectoryBoundary + 1000);
+    utimesSync(newReportPath, reportTime, reportTime);
+    assert.equal(revisionFor(newReportRun), beforeReport);
   } finally {
     rmSync(workspace, { recursive: true, force: true });
   }

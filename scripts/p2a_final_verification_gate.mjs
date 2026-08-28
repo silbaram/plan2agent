@@ -42,21 +42,22 @@ function verificationTime(item, run) {
   return 0;
 }
 
-function latestFullVerificationAttempt(runEntries, workspaceRevision) {
+function latestFullVerificationAttempt(runEntries) {
   const attempts = [];
-  runEntries.forEach(({ run, runOrder }) => {
+  runEntries.forEach(({ run, runOrder, currentWorkspaceRevision }) => {
     (run.verification ?? []).forEach((item, itemOrder) => {
       if (
         item.type === 'custom'
         || item.scope !== 'full'
         || (item.source !== 'config' && item.source !== 'command')
-        || item.workspaceRevisionSha256 !== workspaceRevision
+        || item.workspaceRevisionSha256 !== currentWorkspaceRevision
       ) return;
       attempts.push({
         run,
         item,
         runOrder,
         itemOrder,
+        currentWorkspaceRevision,
         timestamp: verificationTime(item, run),
       });
     });
@@ -85,6 +86,7 @@ export function assertFinalFullVerificationReady({
   artifactRoot,
   graphPath,
   activeIteration,
+  workspaceRevisionProvider = workspaceRevisionSha256,
 }) {
   const resolvedArtifactRoot = path.resolve(artifactRoot);
   const canonicalWorkspacePath = canonicalWorkspacePathForArtifactRoot(resolvedArtifactRoot);
@@ -96,39 +98,46 @@ export function assertFinalFullVerificationReady({
     && run.sourceLayout === 'iteration'
     && taskGraphRefMatchesGraph(run.taskGraphRef, graphPath, resolvedArtifactRoot)
   ));
-  const referenceRun = currentRuns[0] ?? {
-    sourceLayout: 'iteration',
-    workspacePath: canonicalWorkspacePath,
-  };
-  const currentRevision = workspaceRevisionSha256(
-    canonicalWorkspacePath,
-    workspaceRevisionExcludedPathsForRun(runsDir, referenceRun, {
+  const workspaceRevisionCache = new Map();
+  const currentWorkspaceRevisionForRun = (run) => {
+    const excludedPaths = workspaceRevisionExcludedPathsForRun(runsDir, run, {
       artifactRoot: resolvedArtifactRoot,
       graphPath,
       workspacePath: canonicalWorkspacePath,
-    }),
-  );
+    });
+    const cacheKey = JSON.stringify(
+      [...new Set(excludedPaths.filter(Boolean).map((filePath) => path.resolve(filePath)))].sort(),
+    );
+    if (!workspaceRevisionCache.has(cacheKey)) {
+      workspaceRevisionCache.set(
+        cacheKey,
+        workspaceRevisionProvider(canonicalWorkspacePath, excludedPaths),
+      );
+    }
+    return workspaceRevisionCache.get(cacheKey);
+  };
   const canonicalRuns = currentRuns
     .map((run, runOrder) => ({ run, runOrder }))
-    .filter(({ run }) => canonicalFinalRun(run, canonicalWorkspacePath));
-  const latestAttempt = latestFullVerificationAttempt(
-    canonicalRuns,
-    currentRevision,
-  );
+    .filter(({ run }) => canonicalFinalRun(run, canonicalWorkspacePath))
+    .map((entry) => ({
+      ...entry,
+      currentWorkspaceRevision: currentWorkspaceRevisionForRun(entry.run),
+    }));
+  const latestAttempt = latestFullVerificationAttempt(canonicalRuns);
   const matched = latestAttempt
     && latestAttempt.run.status === 'finished'
-    && latestAttempt.run.workspaceRevisionSha256 === currentRevision
+    && latestAttempt.run.workspaceRevisionSha256 === latestAttempt.currentWorkspaceRevision
     && latestAttempt.item.status === 'passed'
     && latestAttempt.item.exitCode === 0
-    ? { run: latestAttempt.run }
+    ? latestAttempt
     : null;
   if (!matched) {
     const latest = [...canonicalRuns]
       .filter(({ run }) => run.status === 'finished')
-      .sort(compareRunEvidence)[0]?.run;
-    if (latest && latest.workspaceRevisionSha256 !== currentRevision) {
+      .sort(compareRunEvidence)[0];
+    if (latest && latest.run.workspaceRevisionSha256 !== latest.currentWorkspaceRevision) {
       throw new Error(
-        `latest final verification evidence ${latest.runId} is stale for the current canonical workspace revision`,
+        `latest final verification evidence ${latest.run.runId} is stale for the current canonical workspace revision`,
       );
     }
     throw new Error(
@@ -137,8 +146,8 @@ export function assertFinalFullVerificationReady({
   }
   return {
     run: matched.run,
-    workspaceRevisionSha256: currentRevision,
-    verification: passedFullVerificationItems(matched.run, currentRevision),
+    workspaceRevisionSha256: matched.currentWorkspaceRevision,
+    verification: passedFullVerificationItems(matched.run, matched.currentWorkspaceRevision),
   };
 }
 

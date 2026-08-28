@@ -50,8 +50,10 @@ import {
   discoverFeatureRadarPreflightRuns,
 } from './p2a_radar_preflight.mjs';
 import {
+  acceptanceReviewContract,
   approvedVisualReviewContract,
   createValidationSession,
+  currentDevelopmentAcceptanceReviewContract,
   validateConstitution,
   validateIntake,
   validateRunIndexData,
@@ -1251,10 +1253,10 @@ function completionOptions(context) {
     {
       id: 'review',
       label: 'Review and remediate',
-      description: 'Keep the active iteration open, review the completed implementation, and reopen the owning completed task when a finding requires code changes.',
+      description: 'Keep the active iteration open, review the completed implementation read-only using current final verification evidence, and reopen the owning completed task only when a finding requires code changes.',
       action: {
         kind: 'review',
-        display: 'Review the completed implementation while keeping the active iteration open. A clean review returns to this same decision without closing the iteration.',
+        display: 'Review the completed implementation read-only while keeping the active iteration open. Inspect the diff, code, tests, and current final verification evidence without rerunning product commands. A clean review returns to this same decision; remediation changes use the normal verification lifecycle.',
         remediation: {
           kind: 'cli',
           argv: remediationArgv,
@@ -1762,7 +1764,37 @@ function buildNextDecisionContext(
     reviewPasses.acceptance === 'opt_in'
     && activeRuns.some((run) => run.runKind === 'final_acceptance_review')
   );
-  const acceptanceReviewEnabled = reviewPasses.acceptance === 'on' || acceptanceReviewActivated;
+  let acceptanceReviewApplicable = false;
+  if (
+    reviewPasses.acceptance === 'on'
+    && !hasRequiredVisualContract
+    && allTasksDone
+    && detail.layout.kind === 'iteration'
+    && gates.specValid
+  ) {
+    try {
+      const currentAcceptance = detail.currentDevelopmentRouting?.eligible
+        ? currentDevelopmentAcceptanceReviewContract(
+            detail.currentDevelopmentRouting.state.currentDevelopmentContract,
+            artifactRoot,
+            { validationSession, allowEmpty: true },
+          )
+        : acceptanceReviewContract(
+            gates.specPath,
+            artifactRoot,
+            { validationSession, allowEmpty: true },
+          );
+      acceptanceReviewApplicable = currentAcceptance.criteria.length > 0;
+    } catch {
+      // Preserve the existing fail-closed route for malformed acceptance inputs.
+      // Only a valid, explicitly empty current-iteration contract is not applicable.
+      acceptanceReviewApplicable = true;
+    }
+  }
+  const acceptanceReviewEnabled = acceptanceReviewActivated || (
+    reviewPasses.acceptance === 'on'
+    && acceptanceReviewApplicable
+  );
   const needsCloseReadyVisualAudit = (
     hasRequiredVisualContract
     && allTasksDone
@@ -1979,6 +2011,7 @@ function buildNextDecisionContext(
     hasRequiredVisualContract,
     acceptanceReviewNeeded,
     acceptanceReviewActivated,
+    acceptanceReviewApplicable,
     fullVerificationNeeded,
     retrospectiveCandidates,
     readyIds: readyTaskIds(gates.taskGraph),

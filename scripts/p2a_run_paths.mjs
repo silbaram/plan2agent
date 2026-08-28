@@ -11,6 +11,7 @@ import {
   readlinkSync,
   readSync,
   realpathSync,
+  statSync,
 } from 'node:fs';
 import path from 'node:path';
 import { DEFAULT_RUNS_DIR } from './p2a_constants.mjs';
@@ -126,6 +127,57 @@ function resolvedRealPath(candidatePath) {
   } catch {
     return resolved;
   }
+}
+
+function safeReportPathSegment(value) {
+  return typeof value === 'string'
+    && value.length > 0
+    && value !== '.'
+    && value !== '..'
+    && path.basename(value) === value;
+}
+
+function retrospectiveReportPathForRun(run, workspacePath) {
+  if (!safeReportPathSegment(run?.projectId)) return null;
+  let reportName = null;
+  if (run.sourceLayout === 'iteration' && safeReportPathSegment(run.iterationId)) {
+    reportName = `${run.projectId}-${run.iterationId}.md`;
+  } else if (run.sourceLayout === 'maintenance' && safeReportPathSegment(run.taskId)) {
+    reportName = `${run.projectId}-maintenance-${run.taskId}.md`;
+  }
+  return reportName
+    ? path.join(workspacePath, 'docs', 'retrospective', reportName)
+    : null;
+}
+
+function retrospectiveReportExclusion(run, workspacePath) {
+  const reportPath = retrospectiveReportPathForRun(run, workspacePath);
+  if (!reportPath || !existsSync(reportPath)) return reportPath;
+  const revisionBoundary = Date.parse(run?.startedAt ?? run?.finishedAt ?? '');
+  const resolvedWorkspace = resolvedRealPath(workspacePath);
+  let exclusion = reportPath;
+  let childPath = reportPath;
+  let directory = path.dirname(reportPath);
+  while (directory !== resolvedWorkspace && pathIsInside(resolvedWorkspace, directory)) {
+    try {
+      const entries = readdirSync(directory);
+      const createdAt = statSync(directory).birthtimeMs;
+      if (
+        entries.length !== 1
+        || resolvedRealPath(path.join(directory, entries[0])) !== resolvedRealPath(childPath)
+        || Number.isNaN(revisionBoundary)
+        || !Number.isFinite(createdAt)
+        || createdAt <= 0
+        || createdAt <= revisionBoundary
+      ) break;
+    } catch {
+      break;
+    }
+    exclusion = directory;
+    childPath = directory;
+    directory = path.dirname(directory);
+  }
+  return exclusion;
 }
 
 function hashFileInChunks(hash, filePath) {
@@ -300,12 +352,16 @@ export function workspaceRevisionExcludedPathsForRun(
         options.graphPath
         ?? (path.isAbsolute(run?.taskGraphRef ?? '') ? run.taskGraphRef : null)
       );
-  return workspaceRevisionExcludedPaths(
-    runsDir,
-    artifactRoot,
-    graphPath,
-    options.workspacePath ?? run?.workspacePath ?? null,
-  );
+  const workspacePath = options.workspacePath ?? run?.workspacePath ?? null;
+  return [
+    ...workspaceRevisionExcludedPaths(
+      runsDir,
+      artifactRoot,
+      graphPath,
+      workspacePath,
+    ),
+    workspacePath ? retrospectiveReportExclusion(run, workspacePath) : null,
+  ];
 }
 
 export function assertSafeRunId(runId) {
