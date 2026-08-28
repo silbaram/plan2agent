@@ -3604,7 +3604,26 @@ function acceptanceReviewContracts(specPath, artifactRoot = null, options = {}) 
 export function acceptanceReviewContract(specPath, artifactRoot = null, options = {}) {
   const contracts = acceptanceReviewContracts(specPath, artifactRoot, options);
   const contract = options.scope === 'full' ? contracts.full : contracts.current;
-  if (!contract.criteria.length) {
+  if (!contract.criteria.length && options.allowEmpty !== true) {
+    throw new ValidationError(
+      'functional acceptance requires at least one current-iteration core flow or success criterion not already present in the baseline',
+    );
+  }
+  return contract;
+}
+
+export function currentDevelopmentAcceptanceReviewContract(
+  currentDevelopmentContract,
+  artifactRoot,
+  options = {},
+) {
+  const contracts = currentIterationAcceptanceReviewContracts(
+    { contract: currentDevelopmentContract },
+    artifactRoot,
+    options,
+  );
+  const contract = options.scope === 'full' ? contracts.full : contracts.current;
+  if (!contract.criteria.length && options.allowEmpty !== true) {
     throw new ValidationError(
       'functional acceptance requires at least one current-iteration core flow or success criterion not already present in the baseline',
     );
@@ -5258,6 +5277,21 @@ function currentContractAcceptanceReview(contract) {
   };
 }
 
+function currentIterationAcceptanceReviewContracts(currentDevelopment, artifactRoot, options = {}) {
+  const activeSpecRef = currentDevelopment.contract.bindings.activeSpec.ref;
+  const activeSpecPath = path.resolve(artifactRoot, activeSpecRef);
+  assertFile(activeSpecPath, 'current-iteration functional acceptance spec');
+  assertFileInsideArtifactRoot(
+    activeSpecPath,
+    artifactRoot,
+    'current-iteration functional acceptance spec',
+  );
+  if (rawFileSha256(activeSpecPath) !== currentDevelopment.contract.bindings.activeSpec.sha256) {
+    throw new ValidationError('current-iteration functional acceptance spec changed after contract materialization');
+  }
+  return acceptanceReviewContracts(activeSpecPath, artifactRoot, options);
+}
+
 function acceptanceReviewTextEquivalent(actual, expected) {
   return actual?.required === expected?.required
     && Array.isArray(actual?.criteria)
@@ -5511,15 +5545,18 @@ export function validateRunTaskContract(runData, artifactRoot, options = {}) {
       );
     }
     const acceptanceContracts = currentDevelopment
-      ? {
-          current: currentContractAcceptanceReview(currentDevelopment.contract),
-          full: currentContractAcceptanceReview(currentDevelopment.contract),
-        }
+      ? currentIterationAcceptanceReviewContracts(
+          currentDevelopment,
+          sourceArtifactRoot,
+          options,
+        )
       : acceptanceReviewContracts(sourceSpecPath, sourceArtifactRoot, options);
-    const legacyFullAcceptanceReview = acceptanceContracts.full;
+    const legacyFullAcceptanceReview = currentDevelopment
+      ? currentContractAcceptanceReview(currentDevelopment.contract)
+      : acceptanceContracts.full;
     const expectedAcceptanceReview = acceptanceContracts.current.criteria.length
       ? acceptanceContracts.current
-      : legacyFullAcceptanceReview;
+      : acceptanceContracts.full;
     if (
       !sameJson(actualAcceptanceReview, expectedAcceptanceReview)
       && !sameJson(actualAcceptanceReview, legacyFullAcceptanceReview)

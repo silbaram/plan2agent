@@ -12,14 +12,24 @@ import {
   loadJson,
   resolveSpecSourceIntake,
   validateProposalDraftApprovalData,
+  validateAcceptanceReview,
   validateRunData,
   validateRunIndexData,
   validateRunTaskContract,
   validateSchema,
   validateSpec,
   validateTaskGraphData,
+  validateVisualReview,
   ValidationError,
 } from './validate_artifacts.mjs';
+import {
+  ACCEPTANCE_REVIEW_SIDECAR_SUFFIX,
+  expectedAcceptanceReviewContract,
+} from './p2a_acceptance_review_gate.mjs';
+import {
+  expectedVisualReviewContract,
+  VISUAL_REVIEW_SIDECAR_SUFFIX,
+} from './p2a_visual_review_gate.mjs';
 import {
   assertRunMonitorGateBinding,
   monitorGateSidecarPath,
@@ -44,6 +54,7 @@ import {
   compareRunIndexEvidence,
   resolveRunsDir,
   runFilePath,
+  runSidecarPath,
   runMatchesSourceContext,
   taskGraphRefMatchesGraph,
 } from './p2a_run_paths.mjs';
@@ -88,6 +99,11 @@ const FAILURE_SOURCES = new Set(['owner', 'monitor', 'implementer']);
 const USAGE_SOURCES = new Set(['provider', 'manual']);
 const IMPLEMENTER_AGENT_TOOLS = new Set(['codex', 'claude', 'manual']);
 const REVIEWER_AGENT_TOOLS = new Set(['codex', 'claude', 'gemini', 'manual']);
+const FINAL_EVIDENCE_RUN_KINDS = new Set([
+  'final_verification',
+  'final_visual_review',
+  'final_acceptance_review',
+]);
 const DEFAULT_PROJECT_CONFIG = path.join('.plan2agent', 'project.config.json');
 const EXECUTION_RESULT_SCHEMA = JSON.parse(readFileSync(
   new URL('../schemas/execution-result.schema.json', import.meta.url),
@@ -937,9 +953,23 @@ function runScript(scriptName, scriptArgs, options = {}) {
   });
 }
 
+export function childProcessFailed(result) {
+  return Boolean(result?.error) || result?.status !== 0;
+}
+
+export function childProcessExitStatus(result) {
+  return result?.error ? 1 : (result?.status ?? 1);
+}
+
 function printChildResult(result, options = {}) {
   if (result.stdout && !options.suppressStdout) process.stdout.write(result.stdout);
   if (result.stderr) process.stderr.write(result.stderr);
+  if (result.error) {
+    const message = result.error instanceof Error ? result.error.message : String(result.error);
+    if (!String(result.stderr ?? '').includes(message)) {
+      console.error(`child process could not start: ${message}`);
+    }
+  }
 }
 
 function recordExecutionResult(args, command, run) {
@@ -984,6 +1014,109 @@ function reopenTaskAfterFinalReviewArgs(source, run) {
     '--note',
     `Final ${reviewLabel} run ${run.runId} ended ${run.status} (${failureClass}); implementation remediation is required before another final pass.`,
   ];
+}
+
+function isEnvironmentOnlyFinalReviewFailure(source, run) {
+  return (
+    run.status !== 'finished'
+    && run.failure?.class === 'environment_failure'
+    && FINAL_EVIDENCE_RUN_KINDS.has(run.runKind)
+    && !run.verification.some((item) => item.status === 'failed')
+    && !blockingFinalReviewEvidence(source, run)
+  );
+}
+
+function hasOnlyUnavailableFinalEvidence(run) {
+  return (
+    FINAL_EVIDENCE_RUN_KINDS.has(run.runKind)
+    && run.verification.some((item) => item.status === 'unavailable')
+    && !run.verification.some((item) => item.status === 'failed')
+  );
+}
+
+function blockingFinalReviewEvidence(source, run) {
+  let suffix = null;
+  let label = null;
+  if (run.runKind === 'final_acceptance_review') {
+    suffix = ACCEPTANCE_REVIEW_SIDECAR_SUFFIX;
+    label = 'acceptance';
+  } else if (run.runKind === 'final_visual_review') {
+    suffix = VISUAL_REVIEW_SIDECAR_SUFFIX;
+    label = 'visual';
+  } else {
+    return null;
+  }
+  const sidecarPath = runSidecarPath(source.runsDir, run.runId, suffix);
+  if (!existsSync(sidecarPath) || !lstatSync(sidecarPath).isFile()) return null;
+  try {
+    const artifactRoot = path.dirname(path.resolve(source.runsDir));
+    const validatedSource = validateRunTaskContract(run, artifactRoot, {
+      runsDir: source.runsDir,
+    });
+    const review = run.runKind === 'final_acceptance_review'
+      ? validateAcceptanceReview(sidecarPath, expectedAcceptanceReviewContract(run))
+      : validateVisualReview(sidecarPath, expectedVisualReviewContract(run), {
+          artifactRoot,
+          sourceArtifactRoot: validatedSource.sourceArtifactRoot,
+        });
+    if (review.verdict !== 'block') return null;
+    return {
+      label,
+      findings: run.runKind === 'final_acceptance_review'
+        ? review.unmet
+        : review.concerns,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function addUnavailableEnvironmentFailureDetails(args, run) {
+  const unavailable = run.verification.filter((item) => item.status === 'unavailable');
+  if (!args.reproductionSteps.length && !args.reproductionCommands.length && !args.reproductionNotes.length) {
+    args.reproductionCommands = uniqueStrings(unavailable.map((item) => item.command));
+  }
+  if (!args.localizationFindings.length && !args.localizedFiles.length) {
+    const reasons = uniqueStrings(unavailable.map((item) => item.failureReason));
+    args.localizationFindings.push(
+      `Final evidence command could not start${reasons.length ? ` (${reasons.join(', ')})` : ''}.`,
+    );
+  }
+  if (!args.guardChecks.length && !args.guardNotes.length) {
+    args.guardChecks.push('Retry only the final evidence run after command execution is available.');
+  }
+}
+
+function addChildProcessEnvironmentFailureDetails(args, scriptName, scriptArgs, error) {
+  if (!args.reproductionSteps.length && !args.reproductionCommands.length && !args.reproductionNotes.length) {
+    args.reproductionCommands.push(commandLine(scriptName, scriptArgs));
+  }
+  if (!args.localizationFindings.length && !args.localizedFiles.length) {
+    const code = typeof error?.code === 'string' ? ` (${error.code})` : '';
+    const message = error instanceof Error ? error.message : String(error);
+    args.localizationFindings.push(
+      `Plan2Agent child process could not start${code}: ${message}`,
+    );
+  }
+  if (!args.guardChecks.length && !args.guardNotes.length) {
+    args.guardChecks.push('Retry only the final evidence run after child process execution is available.');
+  }
+}
+
+function addBlockingReviewFailureDetails(args, blockingReview) {
+  if (!args.reproductionSteps.length && !args.reproductionCommands.length && !args.reproductionNotes.length) {
+    args.reproductionNotes.push(`Final ${blockingReview.label} review returned a product-blocking verdict.`);
+  }
+  if (!args.localizationFindings.length && !args.localizedFiles.length) {
+    args.localizationFindings.push(
+      blockingReview.findings.length
+        ? blockingReview.findings.join(' | ')
+        : `Final ${blockingReview.label} review did not confirm the product.`,
+    );
+  }
+  if (!args.guardChecks.length && !args.guardNotes.length) {
+    args.guardChecks.push(`Correct the final ${blockingReview.label} review findings before retrying final evidence.`);
+  }
 }
 
 function sourceRunArgs(args) {
@@ -1333,7 +1466,8 @@ function printFinalVerificationInstructions(source, task, run, workspacePath) {
   console.log('');
   console.log('Next:');
   console.log(`1. Run every configured full verification command once: ${commandLine('p2a_runs.mjs', ['verify', ...source.sourceArgs, '--run-id', run.runId])}`);
-  console.log(`2. Finish the evidence run; failure reopens the remediation owner: ${commandLine('p2a_execute.mjs', ['finish', ...source.sourceArgs, '--run-id', run.runId])}`);
+  console.log(`2. Finish the evidence run: ${commandLine('p2a_execute.mjs', ['finish', ...source.sourceArgs, '--run-id', run.runId])}`);
+  console.log('   A product verification failure reopens implementation. Unavailable commands are recorded as environment_failure so only final verification is retried.');
 }
 
 function acceptanceCandidateEvidenceCount(run) {
@@ -1366,7 +1500,8 @@ function printFinalAcceptanceReviewInstructions(source, task, run, workspacePath
   console.log(`3. Preflight the exact ${criteriaCount}-criterion current-iteration run contract. Do not substitute the cumulative product spec or a summarized subset; map every criterion ref to relevant verbatim command evidence.`);
   console.log('4. If any criterion lacks relevant evidence, record more behavior evidence or block the run without invoking the acceptance reviewer.');
   console.log('5. Only after the preflight passes, give the exact run contract and recorded verification output to the read-only acceptance reviewer; write <runId>.acceptance-review.json beside the run.');
-  console.log(`6. Finish the review; confirmation keeps the task done, while blocked/failed status reopens the remediation owner: ${commandLine('p2a_execute.mjs', ['finish', ...source.sourceArgs, '--run-id', runId])}`);
+  console.log(`6. Finish the review: ${commandLine('p2a_execute.mjs', ['finish', ...source.sourceArgs, '--run-id', runId])}`);
+  console.log('   Confirmation keeps the task done. Product failure reopens implementation; environment_failure retries only this final review.');
 }
 
 function verifyRequested(args) {
@@ -1400,6 +1535,15 @@ function transitionTaskAfterFinishedRun(args, source, run, successStatus = 0) {
       console.log(`Task transition already applied: ${task.id} remains done after final ${reviewLabel} review`);
       return successStatus;
     }
+    if (isEnvironmentOnlyFinalReviewFailure(source, run)) {
+      if (task.status !== 'done') {
+        console.error(`final ${reviewLabel} environment retry skipped: ${task.id} must remain done; current status is ${task.status}`);
+        return 1;
+      }
+      console.log(`Task transition already applied: ${task.id} remains done after final ${reviewLabel} environment failure`);
+      console.log(`Retry only the final ${reviewLabel} run after correcting the execution environment.`);
+      return successStatus;
+    }
     if (task.status === 'todo' || task.status === 'in_progress') {
       console.log(`Final ${reviewLabel} review remediation already started: ${task.id} status is ${task.status}`);
       return successStatus;
@@ -1414,7 +1558,7 @@ function transitionTaskAfterFinishedRun(args, source, run, successStatus = 0) {
       reopenTaskAfterFinalReviewArgs(source, run),
     );
     printChildResult(reopenResult);
-    if (reopenResult.status !== 0) return reopenResult.status ?? 1;
+    if (childProcessFailed(reopenResult)) return childProcessExitStatus(reopenResult);
     return successStatus;
   }
   if (task.status === expectedTaskStatus) {
@@ -1428,7 +1572,7 @@ function transitionTaskAfterFinishedRun(args, source, run, successStatus = 0) {
   console.log(`Marking task ${run.status === 'finished' ? 'done' : 'blocked'}...`);
   const taskResult = runScript('p2a_tasks.mjs', finishTaskArgs(source, task.id, run.status));
   printChildResult(taskResult);
-  if (taskResult.status !== 0) return taskResult.status ?? 1;
+  if (childProcessFailed(taskResult)) return childProcessExitStatus(taskResult);
   return successStatus;
 }
 
@@ -1464,6 +1608,7 @@ function recoverAfterClosedRun(args, source, run) {
 }
 
 function finishResultAllowsTaskTransition(result, requestedStatus, run) {
+  if (result.error) return false;
   if (run.status === 'started') return false;
   if (result.status === 0) return true;
   if (requestedStatus === 'failed' && result.status === 1 && run.status === 'failed') return true;
@@ -1663,7 +1808,7 @@ function runStart(args) {
     console.log('Task marked in_progress. Starting run...');
     const runResult = runScript('p2a_runs.mjs', startRunArgs(args, task, runId, defaults, approvalLink.approval));
     printChildResult(runResult, { suppressStdout: args.json });
-    if (runResult.status !== 0) {
+    if (childProcessFailed(runResult)) {
       if (rollbackTaskRunStartClaim(source, task.id)) {
         console.error(`Task transition rolled back: ${task.id} returned to todo because run ${runId} did not start.`);
       } else {
@@ -1671,7 +1816,7 @@ function runStart(args) {
       }
       console.error('Run start failed before lifecycle setup completed. Correct the reported cause, then retry with the same reserved run id:');
       console.error(commandLine('p2a_execute.mjs', executeStartArgs(args, task, runId, defaults)));
-      return runResult.status ?? 1;
+      return childProcessExitStatus(runResult);
     }
     if (args.requireMonitor) {
       console.log(`Attached monitor gate sidecar: ${displayPath(monitorGateSidecarPath(source.runsDir, runId))}`);
@@ -1730,7 +1875,7 @@ function runVerifyFinal(args) {
       startRunArgs(args, task, runId, defaults),
     );
     printChildResult(runResult, { suppressStdout: args.json });
-    if (runResult.status !== 0) {
+    if (childProcessFailed(runResult)) {
       console.error('Final verification run did not start. Correct the cause, then retry with the same reserved run id:');
       console.error(commandLine('p2a_execute.mjs', [
         'verify-final',
@@ -1740,7 +1885,7 @@ function runVerifyFinal(args) {
         '--workspace', workspacePath,
         ...(identity.reservationToken ? ['--run-reservation-token', identity.reservationToken] : []),
       ]));
-      return runResult.status ?? 1;
+      return childProcessExitStatus(runResult);
     }
     const startedRun = readRun(source.runsDir, runId);
     assertRunExecutionContractCurrent(startedRun, source, 'final verification');
@@ -1789,7 +1934,7 @@ function runReview(args) {
       startRunArgs(args, task, runId, defaults),
     );
     printChildResult(runResult, { suppressStdout: args.json });
-    if (runResult.status !== 0) {
+    if (childProcessFailed(runResult)) {
       console.error('Final visual review run did not start. Correct the cause, then retry with the same reserved run id:');
       console.error(commandLine('p2a_execute.mjs', [
         'review',
@@ -1799,7 +1944,7 @@ function runReview(args) {
         '--workspace', workspacePath,
         ...(identity.reservationToken ? ['--run-reservation-token', identity.reservationToken] : []),
       ]));
-      return runResult.status ?? 1;
+      return childProcessExitStatus(runResult);
     }
     const startedRun = readRun(source.runsDir, runId);
     assertRunExecutionContractCurrent(startedRun, source, 'final visual review');
@@ -1848,7 +1993,7 @@ function runAccept(args) {
       startRunArgs(args, task, runId, defaults),
     );
     printChildResult(runResult, { suppressStdout: args.json });
-    if (runResult.status !== 0) {
+    if (childProcessFailed(runResult)) {
       console.error('Final acceptance review run did not start. Correct the cause, then retry with the same reserved run id:');
       console.error(commandLine('p2a_execute.mjs', [
         'accept',
@@ -1858,7 +2003,7 @@ function runAccept(args) {
         '--workspace', workspacePath,
         ...(identity.reservationToken ? ['--run-reservation-token', identity.reservationToken] : []),
       ]));
-      return runResult.status ?? 1;
+      return childProcessExitStatus(runResult);
     }
     const startedRun = readRun(source.runsDir, runId);
     assertRunExecutionContractCurrent(startedRun, source, 'final acceptance review');
@@ -2016,16 +2161,53 @@ function runFinish(args) {
     console.log('- finishNote: runtime is closed but run is still started; continuing run closeout without appending runtime events.');
   }
   let verificationFailed = false;
+  let verificationSpawnError = null;
   if (verifyRequested(args)) {
     console.log('Running verification...');
-    const verifyResult = runScript('p2a_runs.mjs', verifyRunArgs(args));
+    const verifyArgs = verifyRunArgs(args);
+    const verifyResult = runScript('p2a_runs.mjs', verifyArgs);
     printChildResult(verifyResult);
-    verificationFailed = verifyResult.status !== 0;
+    verificationFailed = childProcessFailed(verifyResult);
+    verificationSpawnError = verifyResult.error ?? null;
+    if (verificationSpawnError) {
+      addChildProcessEnvironmentFailureDetails(
+        args,
+        'p2a_runs.mjs',
+        verifyArgs,
+        verificationSpawnError,
+      );
+    }
   }
 
-  const requestedBeforeMonitor = args.status ?? (verificationFailed ? 'failed' : null);
+  const evidenceRun = verifyRequested(args)
+    ? readRun(source.runsDir, args.runId)
+    : existingRun;
+  const unavailableFinalEvidence = hasOnlyUnavailableFinalEvidence(evidenceRun);
+  const unavailableChildProcessEvidence = (
+    Boolean(verificationSpawnError)
+    && FINAL_EVIDENCE_RUN_KINDS.has(evidenceRun.runKind)
+    && !evidenceRun.verification.some((item) => item.status === 'failed')
+  );
+  const blockingReview = (unavailableFinalEvidence || unavailableChildProcessEvidence)
+    ? blockingFinalReviewEvidence(source, evidenceRun)
+    : null;
+  const unavailableEnvironmentFailure = (
+    (!args.status || args.status === 'failed')
+    && (!args.failureClass || args.failureClass === 'environment_failure')
+    && unavailableFinalEvidence
+    && !blockingReview
+  );
+  const childProcessEnvironmentFailure = (
+    unavailableChildProcessEvidence
+    && (!args.failureClass || args.failureClass === 'environment_failure')
+    && !blockingReview
+  );
+  const environmentFailure = unavailableEnvironmentFailure || childProcessEnvironmentFailure;
+  const requestedBeforeMonitor = blockingReview
+    ? 'failed'
+    : (args.status ?? ((verificationFailed || environmentFailure) ? 'failed' : null));
   if (!verificationFailed && (!requestedBeforeMonitor || requestedBeforeMonitor === 'finished')) {
-    const monitorResult = applyMonitorGate(args, source, existingRun);
+    const monitorResult = applyMonitorGate(args, source, evidenceRun);
     if (monitorResult) {
       if (monitorResult.accepted) {
         console.log(`Monitor gate accepted: ${monitorResult.verdict}`);
@@ -2035,9 +2217,25 @@ function runFinish(args) {
     }
   }
 
-  const requestedStatus = args.status ?? (verificationFailed ? 'failed' : null);
-  const finalFailureClass = requestedStatus === 'failed' && !args.failureClass ? 'verification_failed' : args.failureClass;
-  if (finalFailureClass && !args.failureClass) args.failureClass = finalFailureClass;
+  const requestedStatus = blockingReview
+    ? (args.status === 'blocked' ? 'blocked' : 'failed')
+    : childProcessEnvironmentFailure
+      ? 'failed'
+      : (args.status ?? ((verificationFailed || environmentFailure) ? 'failed' : null));
+  const finalFailureClass = blockingReview
+    ? 'implementation_incomplete'
+    : requestedStatus === 'failed' && !args.failureClass
+      ? (environmentFailure ? 'environment_failure' : 'verification_failed')
+      : args.failureClass;
+  if (finalFailureClass && (!args.failureClass || blockingReview)) args.failureClass = finalFailureClass;
+  if (blockingReview) {
+    addBlockingReviewFailureDetails(args, blockingReview);
+    console.log(`Blocking final ${blockingReview.label} review evidence overrides the unavailable environment evidence.`);
+  }
+  if (environmentFailure && finalFailureClass === 'environment_failure') {
+    if (unavailableEnvironmentFailure) addUnavailableEnvironmentFailureDetails(args, evidenceRun);
+    console.log('Unavailable final evidence execution was classified as environment_failure; implementation remains complete.');
+  }
 
   console.log('Finishing run...');
   const finishResult = runScript('p2a_runs.mjs', finishRunArgs(args, requestedStatus, approvalLink.approval));
@@ -2047,7 +2245,7 @@ function runFinish(args) {
     if (run.status === 'started') {
       console.error(`run finish did not close ${run.runId}; task transition skipped to keep run/task state consistent.`);
     }
-    return finishResult.status ?? 1;
+    return childProcessExitStatus(finishResult);
   }
   try {
     const runtimeUpdate = updateOrchestrationRuntimeAfterFinish(source, run);

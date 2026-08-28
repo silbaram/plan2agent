@@ -647,6 +647,8 @@ function writeFinalVerification(root, artifactRoot, iterationId) {
   );
   const runsDir = join(artifactRoot, 'runs');
   const revisionRun = {
+    projectId: currentProjectId(artifactRoot),
+    iterationId,
     sourceLayout: 'iteration',
     workspacePath,
   };
@@ -723,6 +725,8 @@ function assertCompletionDecision(payload, artifactRoot) {
   assert.deepEqual(payload.command.options.map((option) => option.id), ['review', 'retrospective', 'close']);
   const [review, retrospective, close] = payload.command.options;
   assert.equal(review.action.kind, 'review');
+  assert.match(review.action.display, /read-only/i);
+  assert.match(review.action.display, /without rerunning product commands/i);
   assert.deepEqual(review.action.remediation.argv, [
     'tasks', 'todo', '--artifacts', artifactRoot, '<task-id>',
     '--reopen', '--note', '<review finding>',
@@ -1062,6 +1066,35 @@ test('completed iterations expose product review, P2A retrospective, and close w
     const currentSpec = JSON.parse(readFileSync(join(rootArtifact, 'current-spec.json'), 'utf8'));
     assert.equal(currentSpec.active_iteration, iterationId);
     assert.equal(currentSpec.closed_iterations, undefined);
+  } finally {
+    remove(root);
+  }
+});
+
+test('a generated retrospective report does not stale final verification but other retrospective files do', () => {
+  const root = project();
+  try {
+    const rootArtifact = artifact(root);
+    const iterationId = writeIteration(rootArtifact);
+    writeGateA(rootArtifact, 'ready_for_spec', iterationId);
+    writeGateB(rootArtifact, 'approved', iterationId);
+    writeGateC(rootArtifact, [task('task-001', 'done')], iterationId);
+    writeGateD(rootArtifact, [], iterationId);
+    writeFinalVerification(root, rootArtifact, iterationId);
+
+    const reportPath = join(root, 'docs', 'retrospective', `sample-${iterationId}.md`);
+    mkdirSync(dirname(reportPath), { recursive: true });
+    writeFileSync(reportPath, '# P2A retrospective\n', 'utf8');
+    assertCompletionDecision(next(root), artifactPath(root));
+
+    writeFileSync(
+      join(root, 'docs', 'retrospective', 'manual-product-note.md'),
+      '# Product note\n',
+      'utf8',
+    );
+    assertAction(next(root), 'final_verification_required', 'cli', [
+      'execute', 'verify-final', '--artifacts', artifactPath(root),
+    ]);
   } finally {
     remove(root);
   }

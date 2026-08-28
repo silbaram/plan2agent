@@ -10,6 +10,10 @@ import {
   normalizeProjectLocalLauncherCommand,
   runVerificationCommand,
 } from '../scripts/p2a_runs.mjs';
+import {
+  childProcessExitStatus,
+  childProcessFailed,
+} from '../scripts/p2a_execute.mjs';
 import { RUNS_CLI } from './helpers/fixtures.mjs';
 
 test('classifies spawn ENOENT as unavailable', () => {
@@ -18,6 +22,17 @@ test('classifies spawn ENOENT as unavailable', () => {
     reason: 'spawn_enoent',
     hint: 'verification command could not be started (ENOENT)',
   });
+});
+
+test('execute lifecycle treats a child spawn error as failure even with status zero', () => {
+  const result = {
+    error: { code: 'EPERM', message: 'spawnSync node EPERM' },
+    status: 0,
+    stdout: '',
+    stderr: '',
+  };
+  assert.equal(childProcessFailed(result), true);
+  assert.equal(childProcessExitStatus(result), 1);
 });
 
 test('classifies a spawn error as unavailable even when status is zero', () => {

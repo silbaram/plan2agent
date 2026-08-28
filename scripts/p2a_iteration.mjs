@@ -19,6 +19,7 @@ import path from 'node:path';
 import process from 'node:process';
 import { pathToFileURL } from 'node:url';
 import {
+  acceptanceReviewContract,
   loadJson,
   resolveSpecSourceIntake,
   validateIntake,
@@ -3424,6 +3425,16 @@ export function validateCloseReadyAcceptanceEvidence({
   if (acceptancePolicy === 'off') {
     console.log('- acceptance review: skipped (reviewPasses.acceptance=off)');
     return 0;
+  }
+  if (acceptancePolicy === 'on') {
+    const sourceSpecPath = path.resolve(path.dirname(taskGraphPath), taskGraph.sourceSpec);
+    const currentContract = acceptanceReviewContract(sourceSpecPath, artifactRoot, {
+      allowEmpty: true,
+    });
+    if (currentContract.criteria.length === 0) {
+      console.log('- acceptance review: skipped (no new current-iteration behavior criteria)');
+      return 0;
+    }
   }
   const runsDir = path.join(path.resolve(artifactRoot), 'runs');
   if (acceptancePolicy === 'opt_in' && !existsSync(runsDir)) {

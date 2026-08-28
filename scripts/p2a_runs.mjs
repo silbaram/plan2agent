@@ -2534,15 +2534,10 @@ function startRun(args) {
     throw new Error('final visual review run requires an approved full current-iteration visual contract');
   }
   const acceptanceReview = args.runKind === 'final_acceptance_review'
-    ? source.currentDevelopmentContract
-      ? {
-          required: true,
-          criteria: source.currentDevelopmentContract.acceptance.map((text, index) => ({
-            ref: `current.acceptance[${index}]`,
-            text,
-          })),
-        }
-      : acceptanceReviewContract(taskSourceSpecPath(source), source.artifactRoot)
+    ? acceptanceReviewContract(
+        taskSourceSpecPath(source),
+        source.sourceLayout === 'graph' ? null : source.artifactRoot,
+      )
     : null;
   const executionEnvelope = source.sourceLayout === 'maintenance'
     ? null

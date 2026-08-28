@@ -6,6 +6,19 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+## [0.5.19] - 2026-08-28
+
+### Changed
+
+- Scope new final acceptance reviews to the current iteration delta while preserving validation compatibility for legacy cumulative review records.
+
+### Fixed
+
+- Keep completed implementation closed when final verification or review cannot start because of an environment failure, retry only the affected final evidence run, and let validated blocking review findings take precedence over unrelated unavailable commands.
+- Skip functional acceptance when the current iteration adds no new behavior criteria, reject environment labels that hide executed product failures, and fail child-process spawn errors even when they report exit status zero.
+- Cache identical canonical workspace revisions across retained final runs so closeout checks do not rehash the workspace once per run.
+- Keep P2A-generated retrospective reports from invalidating current final verification evidence before or after a final run closes, including projects with pre-existing report directories, and make optional product review reuse that evidence without rerunning product commands.
+
 ## [0.5.18] - 2026-08-27
 
 ### Added
@@ -301,7 +314,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Add package-runtime project initialization, managed provider assets, artifact validation, handoff, supervised execution, evaluation, and proposal workflows.
 - Ship canonical and generated integrations for Codex, Claude Code, and Gemini CLI.
 
-[Unreleased]: https://github.com/silbaram/plan2agent/compare/v0.5.18...HEAD
+[Unreleased]: https://github.com/silbaram/plan2agent/compare/v0.5.19...HEAD
+[0.5.19]: https://github.com/silbaram/plan2agent/compare/v0.5.18...v0.5.19
 [0.5.18]: https://github.com/silbaram/plan2agent/compare/v0.5.17...v0.5.18
 [0.5.17]: https://github.com/silbaram/plan2agent/compare/v0.5.16...v0.5.17
 [0.5.16]: https://github.com/silbaram/plan2agent/compare/v0.5.15...v0.5.16
